@@ -5,6 +5,7 @@ import jax.lax
 import jax.numpy as jnp
 import chex
 import pygame
+from gymnax.environments import spaces
 
 from jaxatari.rendering import atraJaxis as aj
 from jaxatari.environment import JaxEnvironment
@@ -103,7 +104,7 @@ def get_human_action() -> chex.Array:
 
 
 # immutable state container
-class State(NamedTuple):
+class PongState(NamedTuple):
     player_y: chex.Array
     player_speed: chex.Array
     ball_x: chex.Array
@@ -117,6 +118,7 @@ class State(NamedTuple):
     step_counter: chex.Array
     acceleration_counter: chex.Array
     buffer: chex.Array
+    obs_stack: chex.ArrayTree
 
 
 class EntityPosition(NamedTuple):
@@ -136,6 +138,7 @@ class PongObservation(NamedTuple):
 
 class PongInfo(NamedTuple):
     time: jnp.ndarray
+    all_rewards: chex.Array
 
 @partial(jax.jit, static_argnums=(0,))
 def player_step(
@@ -225,7 +228,7 @@ def player_step(
 
 
 def ball_step(
-    state: State,
+    state: PongState,
     action,
 ):
     # update the balls position
@@ -375,7 +378,7 @@ def enemy_step(state, step_counter, ball_y, ball_speed_y):
 
 @jax.jit
 def _reset_ball_after_goal(
-    state_and_goal: Tuple[State, bool]
+    state_and_goal: Tuple[PongState, bool]
 ) -> Tuple[chex.Array, chex.Array, chex.Array, chex.Array]:
     """
     Determines new ball position and velocity after a goal.
@@ -406,17 +409,29 @@ def _reset_ball_after_goal(
     )
 
 
-class JaxPong(JaxEnvironment[State, PongObservation, PongInfo]):
-    def __init__(self, frameskip=0):
+class JaxPong(JaxEnvironment[PongState, PongObservation, PongInfo]):
+    def __init__(self, frameskip: int = 0, reward_funcs: list[callable]=None):
         super().__init__()
         self.frameskip = frameskip + 1
+        self.frame_stack_size = 4
+        if reward_funcs is not None:
+            reward_funcs = tuple(reward_funcs)
+        self.reward_funcs = reward_funcs
+        self.action_set = {
+            NOOP,
+            FIRE,
+            RIGHT,
+            LEFT,
+        }
+        self.obs_size = 3*4+1+1
 
-    def reset(self) -> State:
+
+    def reset(self) -> PongState:
         """
         Resets the game state to the initial state.
         Returns the initial state and the reward (i.e. 0)
         """
-        state = State(
+        state = PongState(
             player_y=jnp.array(96).astype(jnp.int32),
             player_speed=jnp.array(0.0).astype(jnp.int32),
             ball_x=jnp.array(78).astype(jnp.int32),
@@ -430,11 +445,22 @@ class JaxPong(JaxEnvironment[State, PongObservation, PongInfo]):
             step_counter=jnp.array(0).astype(jnp.int32),
             acceleration_counter=jnp.array(0).astype(jnp.int32),
             buffer=jnp.array(96).astype(jnp.int32),
+            obs_stack=None
         )
-        return state, self._get_observation(state)
+        initial_obs = self._get_observation(state)
+
+        def expand_and_copy(x):
+            x_expanded = jnp.expand_dims(x, axis=0)
+            return jnp.concatenate([x_expanded] * self.frame_stack_size, axis=0)
+
+        # Apply transformation to each leaf in the pytree
+        initial_obs = jax.tree.map(expand_and_copy, initial_obs)
+
+        new_state = state._replace(obs_stack=initial_obs)
+        return new_state, initial_obs 
 
     @partial(jax.jit, static_argnums=(0,))
-    def step(self, state: State, action: chex.Array) -> State:
+    def step(self, state: PongState, action: chex.Array) -> Tuple[PongState, PongObservation, float, bool, PongInfo]:
         # Step 1: Update player position and speed
         # only execute player step on even steps (base implementation only moves the player every second tick)
         new_player_y, player_speed_b, new_acceleration_counter = player_step(
@@ -526,7 +552,7 @@ class JaxPong(JaxEnvironment[State, PongObservation, PongInfo]):
             operand=ball_y_final,
         )
 
-        new_state = State(
+        new_state = PongState(
             player_y=player_y,
             player_speed=player_speed,
             ball_x=ball_x_final,
@@ -540,17 +566,23 @@ class JaxPong(JaxEnvironment[State, PongObservation, PongInfo]):
             step_counter=step_counter,
             acceleration_counter=new_acceleration_counter,
             buffer=buffer,
+            obs_stack=state.obs_stack, # old for now
         )
 
         done = self._get_done(new_state)
-        reward = self._get_reward(state, new_state)
-        obs = self._get_observation(new_state)
-        info = self._get_info(new_state)
+        env_reward = self._get_env_reward(state, new_state)
+        all_rewards = self._get_all_reward(state, new_state)
+        info = self._get_info(new_state, all_rewards)
 
-        return new_state, obs, reward, done, info
+        observation = self._get_observation(new_state)
+        # stack the new observation, remove the oldest one
+        observation = jax.tree.map(lambda stack, obs: jnp.concatenate([stack[1:], jnp.expand_dims(obs, axis=0)], axis=0), new_state.obs_stack, observation)
+        new_state = new_state._replace(obs_stack=observation)
+
+        return new_state, new_state.obs_stack, env_reward, done, info
 
     @partial(jax.jit, static_argnums=(0,))
-    def _get_observation(self, state: State):
+    def _get_observation(self, state: PongState):
         # create player
         player = EntityPosition(
             x=jnp.array(PLAYER_X),
@@ -601,19 +633,39 @@ class JaxPong(JaxEnvironment[State, PongObservation, PongInfo]):
             ]
            )
 
+    def action_space(self) -> spaces.Discrete:
+        return spaces.Discrete(len(self.action_set))
+
+    def observation_space(self) -> spaces.Box:
+        return spaces.Box(
+            low=0,
+            high=255,
+            shape=None,
+            dtype=jnp.uint8,
+        )
+
 
     @partial(jax.jit, static_argnums=(0,))
-    def _get_info(self, state: State) -> PongInfo:
-        return PongInfo(time=state.step_counter)
+    def _get_info(self, state: PongState, all_rewards: chex.Array) -> PongInfo:
+        return PongInfo(time=state.step_counter, all_rewards=all_rewards)
 
     @partial(jax.jit, static_argnums=(0,))
-    def _get_reward(self, previous_state: State, state: State):
+    def _get_env_reward(self, previous_state: PongState, state: PongState):
         return (state.player_score - state.enemy_score) - (
             previous_state.player_score - previous_state.enemy_score
         )
 
     @partial(jax.jit, static_argnums=(0,))
-    def _get_done(self, state: State) -> bool:
+    def _get_all_reward(self, previous_state: PongState, state: PongState):
+        if self.reward_funcs is None:
+            return jnp.zeros(1)
+        rewards = jnp.array(
+            [reward_func(previous_state, state) for reward_func in self.reward_funcs]
+        )
+        return rewards 
+
+    @partial(jax.jit, static_argnums=(0,))
+    def _get_done(self, state: PongState) -> bool:
         return jnp.logical_or(
             jnp.greater_equal(state.player_score, 20),
             jnp.greater_equal(state.enemy_score, 20),
@@ -679,7 +731,7 @@ class Renderer_AtraJaxisPong:
         Renders the current game state using JAX operations.
 
         Args:
-            state: A State object containing the current game state.
+            state: A PongState object containing the current game state.
 
         Returns:
             A JAX array representing the rendered frame.

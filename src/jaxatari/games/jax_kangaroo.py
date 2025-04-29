@@ -1664,7 +1664,7 @@ def monkey_controller(state: KangarooState, punching: chex.Array):
 
 
 # -------- Game Interface for Reset and Step --------
-class Kangaroo(JaxEnvironment[KangarooState, KangarooObservation, KangarooInfo]):
+class JaxKangaroo(JaxEnvironment[KangarooState, KangarooObservation, KangarooInfo]):
     def __init__(self, frameskip: int = 1, reward_funcs: list[callable]=None):
         self.frameskip = frameskip
         self.frame_stack_size = 4
@@ -2421,7 +2421,7 @@ class Renderer_AtraJaxis(AtraJaxisRenderer):
 
 if __name__ == "__main__":
     pygame.init()
-    game = Kangaroo()
+    game = JaxKangaroo()
 
     scaling = 4
 

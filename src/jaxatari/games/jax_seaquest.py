@@ -2593,7 +2593,7 @@ class JaxSeaquest(JaxEnvironment[SeaquestState, SeaquestObservation, SeaquestInf
             return jnp.concatenate([x_expanded] * self.frame_stack_size, axis=0)
 
         # Apply transformation to each leaf in the pytree
-        initial_obs = jax.tree_map(expand_and_copy, initial_obs)
+        initial_obs = jax.tree.tree_map(expand_and_copy, initial_obs)
         reset_state = reset_state._replace(obs_stack=initial_obs)
         return reset_state, initial_obs
 
@@ -2958,7 +2958,7 @@ class JaxSeaquest(JaxEnvironment[SeaquestState, SeaquestObservation, SeaquestInf
         all_rewards = self._get_all_rewards(previous_state, return_state)
         info = self._get_info(return_state, all_rewards)
 
-        observation = jax.tree_map(lambda stack, obs: jnp.concatenate([stack[1:], jnp.expand_dims(obs, axis=0)], axis=0), return_state.obs_stack, observation)
+        observation = jax.tree.tree_map(lambda stack, obs: jnp.concatenate([stack[1:], jnp.expand_dims(obs, axis=0)], axis=0), return_state.obs_stack, observation)
         return_state = return_state._replace(obs_stack=observation)
 
         # once done, reset the env
