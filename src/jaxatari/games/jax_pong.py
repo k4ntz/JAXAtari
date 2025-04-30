@@ -140,7 +140,7 @@ class PongInfo(NamedTuple):
     time: jnp.ndarray
     all_rewards: chex.Array
 
-@partial(jax.jit, static_argnums=(0,))
+@jax.jit
 def player_step(
     state_player_y, state_player_speed, acceleration_counter, action: chex.Array
 ):

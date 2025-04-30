@@ -567,7 +567,7 @@ if __name__ == "__main__":
     parser = ArgumentParser(description="OCAtari remgui.py Argument Setter")
 
     parser.add_argument(
-        "-g", "--game", type=str, default="Seaquest", help="Game to be run"
+        "-g", "--game", type=str, default="Pong", help="Game to be run"
     )
     parser.add_argument(
         "-hu", "--human", action="store_true", help="Let user play the game."
