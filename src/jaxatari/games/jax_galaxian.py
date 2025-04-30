@@ -13,8 +13,8 @@ class GalaxianState(NamedTuple):
     player_x: chex.Array
     player_y: chex.Array
     player_shooting_cooldown: chex.Array
-    enemy_grid_x: chex.Array
-    enemy_grid_y: chex.Array
+    enemy_grid: chex.Array
+    enemy_grid_alive: chex.Array
     enemy_grid_direction: chex.Array
 
 class Action(NamedTuple):
@@ -27,8 +27,8 @@ def update_player_position(state: GalaxianState, action: Action) -> GalaxianStat
         player_x=new_x,
         player_y=state.player_y,
         player_shooting_cooldown=state.player_shooting_cooldown,
-        enemy_grid_x=state.enemy_grid_x,
-        enemy_grid_y=state.enemy_grid_y,
+        enemy_grid=state.enemy_grid,
+        enemy_grid_alive=state.enemy_grid_alive,
         enemy_grid_direction=state.enemy_grid_direction
     )
 
@@ -42,11 +42,20 @@ def step(state: GalaxianState, action: Action) -> GalaxianState:
 
 
 def init_state():
+    grid_rows = 5
+    grid_cols = 7
+    enemy_spacing_x = 20
+    start_x = 100
+
+    x_positions = jnp.arange(grid_cols) * enemy_spacing_x + start_x #arange schreibt so 0 1 2 3....
+    enemy_grid = jnp.tile(x_positions, (grid_rows, 1))    #kopiert die zeile untereinander
+    enemy_alive = jnp.ones((grid_rows, grid_cols), dtype=bool) #alles auf 1
+
     return GalaxianState(player_x=jnp.array(50),
                          player_y=jnp.array(20),
                          player_shooting_cooldown=jnp.array(0),
-                         enemy_grid_x=jnp.array(50),
-                         enemy_grid_y=jnp.array(300),
+                         enemy_grid=enemy_grid,
+                         enemy_grid_alive=enemy_alive,
                          enemy_grid_direction=jnp.array(20))
 
 
@@ -63,6 +72,19 @@ def get_action_from_keyboard():
         return Action(player_move_dir=jnp.array(0))
 
 
+def draw(screen, state: GalaxianState):
+    player_rect = pygame.Rect(int(state.player_x), int(600 - state.player_y), 20, 10)
+    pygame.draw.rect(screen, (0, 255, 0), player_rect)
+
+    for i in range(state.enemy_grid.shape[0]):
+        for j in range(state.enemy_grid.shape[1]):
+            if state.enemy_grid_alive[i, j]:
+                x = int(state.enemy_grid[i, j])
+                y = 100 + i * 30
+                enemy_rect = pygame.Rect(x, y, 15, 10)
+                pygame.draw.rect(screen, (255, 0, 0), enemy_rect)
+
+
 if __name__ == "__main__":  #run with: python -m jaxatari.games.jax_galaxian
     pygame.init()
     screen = pygame.display.set_mode((800, 600))
@@ -76,6 +98,7 @@ if __name__ == "__main__":  #run with: python -m jaxatari.games.jax_galaxian
             if event.type == pygame.QUIT:
                 running = False
         screen.fill((0, 0, 0))
+        draw(screen, state)
         pygame.display.flip()
         action = get_action_from_keyboard()
         state = step(state, action)
