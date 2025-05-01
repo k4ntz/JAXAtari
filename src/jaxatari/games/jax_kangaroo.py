@@ -2027,12 +2027,6 @@ class JaxKangaroo(JaxEnvironment[KangarooState, KangarooObservation, KangarooInf
         observation = jax.tree.map(lambda stack, obs: jnp.concatenate([stack[1:], jnp.expand_dims(obs, axis=0)], axis=0), new_state.obs_stack, observation)
         new_state = new_state._replace(obs_stack=observation)
 
-        new_state = jax.lax.cond(
-            done,
-            lambda: self.reset_level(1),
-            lambda: new_state,
-        )
-
         return new_state, new_state.obs_stack, env_reward, done, info
 
     @partial(jax.jit, static_argnums=(0,))

@@ -89,31 +89,50 @@ class AtariWrapper(GymnaxWrapper):
 
     @functools.partial(jax.jit, static_argnums=(0,))
     def step(self, key: chex.PRNGKey, state: AtariState, action: Union[int, float]) -> Tuple[chex.Array, EnvState, float, bool, Dict[Any, Any]]:
-
+        new_action = action
         if self.sticky_actions:
             # With probability 0.25, we repeat the previous action
-            repeat_prev_action_mask = jax.random.uniform(key, shape=action.shape) < 0.25
+            key, repeat_key = jax.random.split(key)
+            repeat_prev_action_mask = jax.random.uniform(repeat_key, shape=action.shape) < 0.25
             new_action = jnp.where(repeat_prev_action_mask, state.prev_action, action)
-        
-        # if episode is longer than max_episode_length, reset the env
-        # max_episode_mask = state.step < self.max_episode_length
 
-        # new_env_state = jax.lax.cond(
-        #     max_episode_mask,
-        #     lambda _: state.env_state,
-        #     lambda _: self._env.reset(key)[1],
-        #     None,
-        # )
+        # use scan to step the env for frame_skip times
+        def body_fn(carry, _):
+            env_state, action = carry
+            obs, new_env_state, reward, done, info = self._env.step(key, env_state, action) 
+            return (new_env_state, action), (obs, reward, done, info)
 
-        # NOTE: frame_skipping is currently naiv: just step N times.
-        # def step_fn(env_state, action):
-        #     _, new_env_state, _, _, _ = self._env.step(key, env_state, action)
-        #     return new_env_state 
+        (new_env_state, new_action), (obs, rewards, dones, infos) = jax.lax.scan(
+            body_fn,
+            (state.env_state, new_action),
+            None,
+            length=self.frame_skip,
+        )
+        new_obs = obs[-1]
+        reward = jnp.sum(rewards)
 
-        # # -1, because the last step is done outside the loop        
-        # new_env_state = jax.lax.fori_loop(0, self.frame_skip-1, lambda i, env_state: step_fn(env_state, action), new_env_state)
-        new_obs, new_env_state, reward, done, info = self._env.step(key, state.env_state, new_action)
+        done = jnp.logical_or(dones.any(), state.step >= self.max_episode_length)
+
+        def reduce_info(k, v):
+            if k == "all_rewards":
+                return v.sum(axis=0)
+            else:
+                return v[-1]
+
+        info = {
+            k: reduce_info(k, v) for k, v in infos.items()
+        }
+
         new_state = AtariState(new_env_state, state.step + 1, new_action)
+
+        # Reset the environment if done
+        new_obs, new_state = jax.lax.cond(
+            done,
+            lambda _: self.reset(key),
+            lambda _: (new_obs, new_state),
+            operand=None
+        )
+
         return new_obs, new_state, reward, done, info
         
 

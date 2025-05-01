@@ -42,12 +42,13 @@ Using an environment:
 import jax
 
 from jaxatari.games.jax_seaquest import JaxSeaquest
-from jaxatari.wrappers import FlattenObservationWrapper
+from jaxatari.wrappers import FlattenObservationWrapper, AtariWrapper
 
 rng = jax.random.PRNGKey(0)
 
 env = JaxSeaquest()
 env = FlattenObservationWrapper(env)
+env = AtariWrapper(env)
 
 vmap_reset = lambda n_envs: lambda rng: jax.vmap(env.reset)(
     jax.random.split(rng, n_envs)

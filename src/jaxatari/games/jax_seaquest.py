@@ -2961,14 +2961,6 @@ class JaxSeaquest(JaxEnvironment[SeaquestState, SeaquestObservation, SeaquestInf
         observation = jax.tree.map(lambda stack, obs: jnp.concatenate([stack[1:], jnp.expand_dims(obs, axis=0)], axis=0), return_state.obs_stack, observation)
         return_state = return_state._replace(obs_stack=observation)
 
-        # once done, reset the env
-        return_state, observation = jax.lax.cond(
-            done, 
-            lambda _: self.reset(),
-            lambda _: (return_state, observation),
-            operand=None
-        )
-
         # Choose between death animation and normal game step
         return return_state, observation, env_reward, done, info
 
