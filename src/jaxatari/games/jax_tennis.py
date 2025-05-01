@@ -1887,13 +1887,15 @@ class Renderer_AJ:
         raster = jnp.zeros((COURT_WIDTH, COURT_HEIGHT, 3))
         raster = aj.render_at(raster, 0, 0, BG)
 
+        flip_player = state.ball_x <= state.player_x
+        flip_enemy = state.ball_x <= state.enemy_x
         # render player
         raster = aj.render_at(
             raster,
             state.player_y,
             state.player_x,
             PL_R[animator_state.r_f // 4],
-            flip_horizontal=state.player_direction,
+            flip_horizontal=flip_player,
         )
 
         # render enemy
@@ -1902,7 +1904,7 @@ class Renderer_AJ:
             state.enemy_y,
             state.enemy_x,
             PL_B[animator_state.b_f // 4],
-            flip_horizontal=state.enemy_direction,
+            flip_horizontal=flip_enemy,
         )
 
         # render ball
@@ -1916,7 +1918,7 @@ class Renderer_AJ:
         r_bat_x, r_bat_y = self.bat_position(
             state.player_x,
             state.player_y,
-            state.player_direction,
+            flip_player,
             animator_state.r_bat_f,
         )
 
@@ -1925,20 +1927,20 @@ class Renderer_AJ:
             r_bat_y,
             r_bat_x,
             BAT_R[animator_state.r_bat_f // 4],
-            flip_horizontal=state.player_direction,
+            flip_horizontal=flip_player,
         )
 
         # render enemy bat
 
         b_bat_x, b_bat_y = self.bat_position(
-            state.enemy_x, state.enemy_y, state.enemy_direction, animator_state.b_bat_f
+            state.enemy_x, state.enemy_y, flip_enemy, animator_state.b_bat_f
         )
         raster = aj.render_at(
             raster,
             b_bat_y,
             b_bat_x,
             BAT_B[animator_state.b_bat_f // 4],
-            flip_horizontal=state.enemy_direction,
+            flip_horizontal=flip_enemy,
         )
 
         # render scores
