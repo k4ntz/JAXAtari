@@ -28,12 +28,12 @@ building = create_simple_sprite(32, 32, (114, 114, 114))
 np.save(os.path.join(sprites_dir, "building.npy"), building)
 print("Saved building sprite")
 
-# Create enemy sprites
+# Create enemy sprites with consistent dimensions
 enemy_types = {
-    "enemy25": (18, 16, (135, 135, 135)),
-    "enemy50": (16, 14, (129, 129, 129)),
-    "enemy75": (16, 14, (86, 86, 186)),
-    "enemy100": (14, 14, (137, 137, 137))
+    "enemy25": (18, 18, (135, 135, 135)),  # Make all enemies 18x18
+    "enemy50": (18, 18, (129, 129, 129)),
+    "enemy75": (18, 18, (86, 86, 186)),
+    "enemy100": (18, 18, (137, 137, 137))
 }
 
 for name, (h, w, color) in enemy_types.items():

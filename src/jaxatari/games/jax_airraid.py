@@ -250,6 +250,7 @@ def update_enemies(state: AirRaidState) -> Tuple[chex.Array, chex.Array, chex.Ar
     # Extract state components
     enemy_y = state.enemy_y
     enemy_active = state.enemy_active
+    enemy_type = state.enemy_type  # Add this line to extract enemy_type
     building_damage = state.building_damage
     
     # Move active enemies down
@@ -346,9 +347,6 @@ def fire_enemy_missiles(state: AirRaidState) -> Tuple[chex.Array, chex.Array, ch
     enemy_missile_y = state.enemy_missile_y
     enemy_missile_active = state.enemy_missile_active
     
-    # Find active enemies
-    active_enemies = jnp.where(state.enemy_active == 1)[0]
-    
     # Find the first inactive missile
     inactive_missile_mask = 1 - enemy_missile_active
     inactive_indices = jnp.where(inactive_missile_mask, jnp.arange(NUM_ENEMY_MISSILES), -1)
@@ -357,20 +355,43 @@ def fire_enemy_missiles(state: AirRaidState) -> Tuple[chex.Array, chex.Array, ch
     # Generate random values for firing decision and which enemy fires
     rng, fire_key, enemy_key = random.split(rng, 3)
     fire_prob = random.uniform(fire_key)
-    enemy_index = random.randint(enemy_key, shape=(), minval=0, maxval=jnp.sum(state.enemy_active))
     
-    # Only fire if probability is met, enemy slot is available and there's an inactive missile slot
-    enemy_available = jnp.sum(state.enemy_active) > 0
+    # Count active enemies without using nonzero
+    active_enemy_count = jnp.sum(state.enemy_active)
+    
+    # Randomly select an enemy index (0 to TOTAL_ENEMIES-1)
+    random_enemy_idx = random.randint(enemy_key, shape=(), minval=0, maxval=TOTAL_ENEMIES)
+    
+    # We'll iterate through the enemies and select the first active one after our random index
+    # This is a workaround since we can't use jnp.nonzero in jitted code
+    
+    # This function finds a valid active enemy starting from random_idx
+    def find_active_enemy(random_idx, enemy_active):
+        # Create a shifted array where we start checking from random_idx
+        indices = (random_idx + jnp.arange(TOTAL_ENEMIES)) % TOTAL_ENEMIES
+        
+        # For each index, check if it's active and compute a score
+        # The first active enemy will have the highest score
+        scores = jnp.where(
+            enemy_active[indices] == 1, 
+            TOTAL_ENEMIES - jnp.arange(TOTAL_ENEMIES), 
+            -1
+        )
+        
+        # Find the index with the highest score (first active enemy)
+        best_idx = indices[jnp.argmax(scores)]
+        
+        # Return the best enemy index, or 0 if none found
+        return jnp.where(jnp.max(scores) >= 0, best_idx, 0)
+    
+    # Find a valid active enemy
+    firing_enemy_idx = find_active_enemy(random_enemy_idx, state.enemy_active)
+    
+    # Only fire if probability is met, enemy is available and there's an inactive missile slot
+    enemy_available = active_enemy_count > 0
     can_fire = jnp.logical_and(
         jnp.logical_and(fire_prob < ENEMY_FIRE_PROB, first_inactive >= 0),
         enemy_available
-    )
-    
-    # Get the firing enemy's position (default to first enemy if none active)
-    firing_enemy_idx = jnp.where(
-        enemy_available,
-        active_enemies[jnp.minimum(enemy_index, jnp.sum(state.enemy_active) - 1)],
-        0
     )
     
     enemy_width = jnp.where(
@@ -392,7 +413,7 @@ def fire_enemy_missiles(state: AirRaidState) -> Tuple[chex.Array, chex.Array, ch
             can_fire,
             state.enemy_y[firing_enemy_idx] + (
                 jnp.where(state.enemy_type[firing_enemy_idx] == 0, 18, 
-                          jnp.where(state.enemy_type[firing_enemy_idx] < 3, 16, 14))
+                      jnp.where(state.enemy_type[firing_enemy_idx] < 3, 16, 14))
             ),
             enemy_missile_y[first_inactive]
         )
@@ -445,7 +466,7 @@ def update_missiles(state: AirRaidState) -> Tuple[chex.Array, chex.Array, chex.A
     return player_missile_y, player_missile_active, enemy_missile_y, enemy_missile_active
 
 @jax.jit
-def detect_collisions(state: AirRaidState) -> Tuple[chex.Array, chex.Array, chex.Array, chex.Array, chex.Array, chex.Array]:
+def detect_collisions(state: AirRaidState) -> Tuple[chex.Array, chex.Array, chex.Array, chex.Array, chex.Array]:
     """
     Detects all collisions between game objects and updates the game state accordingly.
     
@@ -462,69 +483,84 @@ def detect_collisions(state: AirRaidState) -> Tuple[chex.Array, chex.Array, chex
     player_lives = state.player_lives
     
     # Check player missiles hitting enemies
+    # Vectorized approach - no if statements needed
     for pm in range(NUM_PLAYER_MISSILES):
-        if state.player_missile_active[pm] == 1:
-            for e in range(TOTAL_ENEMIES):
-                if state.enemy_active[e] == 1:
-                    # Get enemy width and height based on type
-                    enemy_width = jnp.where(
-                        state.enemy_type[e] == 0, 16,  # Enemy25 width
-                        jnp.where(state.enemy_type[e] < 3, 14, 14)  # Enemy50/75 width, Enemy100 width
-                    )
-                    
-                    enemy_height = jnp.where(
-                        state.enemy_type[e] == 0, 18,  # Enemy25 height
-                        jnp.where(state.enemy_type[e] < 3, 16, 14)  # Enemy50/75 height, Enemy100 height
-                    )
-                    
-                    # Check collision
-                    collision = jnp.logical_and(
-                        jnp.logical_and(
-                            state.player_missile_x[pm] < state.enemy_x[e] + enemy_width,
-                            state.player_missile_x[pm] + MISSILE_WIDTH > state.enemy_x[e]
-                        ),
-                        jnp.logical_and(
-                            state.player_missile_y[pm] < state.enemy_y[e] + enemy_height,
-                            state.player_missile_y[pm] + MISSILE_HEIGHT > state.enemy_y[e]
-                        )
-                    )
-                    
-                    # Update state on collision
-                    enemy_active = enemy_active.at[e].set(
-                        jnp.where(collision, 0, enemy_active[e])
-                    )
-                    
-                    player_missile_active = player_missile_active.at[pm].set(
-                        jnp.where(collision, 0, player_missile_active[pm])
-                    )
-                    
-                    # Award score based on enemy type
-                    score_values = jnp.array([25, 50, 75, 100])
-                    score_to_add = score_values[state.enemy_type[e]]
-                    score = jnp.where(collision, score + score_to_add, score)
-    
-    # Check enemy missiles hitting player
-    for em in range(NUM_ENEMY_MISSILES):
-        if state.enemy_missile_active[em] == 1:
-            # Check collision with player
+        # Use the active flag directly rather than in an if condition
+        is_missile_active = player_missile_active[pm]
+        
+        for e in range(TOTAL_ENEMIES):
+            is_enemy_active = enemy_active[e]
+            
+            # Get enemy width and height based on type
+            enemy_width = jnp.where(
+                state.enemy_type[e] == 0, 16,
+                jnp.where(state.enemy_type[e] < 3, 14, 14)
+            )
+            
+            enemy_height = jnp.where(
+                state.enemy_type[e] == 0, 18,
+                jnp.where(state.enemy_type[e] < 3, 16, 14)
+            )
+            
+            # Check collision
             collision = jnp.logical_and(
                 jnp.logical_and(
-                    state.enemy_missile_x[em] < state.player_x + PLAYER_WIDTH,
-                    state.enemy_missile_x[em] + MISSILE_WIDTH > state.player_x
+                    state.player_missile_x[pm] < state.enemy_x[e] + enemy_width,
+                    state.player_missile_x[pm] + MISSILE_WIDTH > state.enemy_x[e]
                 ),
                 jnp.logical_and(
-                    state.enemy_missile_y[em] < state.player_y + PLAYER_HEIGHT,
-                    state.enemy_missile_y[em] + MISSILE_HEIGHT > state.player_y
+                    state.player_missile_y[pm] < state.enemy_y[e] + enemy_height,
+                    state.player_missile_y[pm] + MISSILE_HEIGHT > state.enemy_y[e]
                 )
             )
             
-            # Update state on collision
-            enemy_missile_active = enemy_missile_active.at[em].set(
-                jnp.where(collision, 0, enemy_missile_active[em])
+            # Only count collision if both objects are active
+            effective_collision = jnp.logical_and(
+                jnp.logical_and(collision, is_missile_active == 1),
+                is_enemy_active == 1
             )
             
-            # Reduce player lives
-            player_lives = jnp.where(collision, player_lives - 1, player_lives)
+            # Update state on collision
+            enemy_active = enemy_active.at[e].set(
+                jnp.where(effective_collision, 0, enemy_active[e])
+            )
+            
+            player_missile_active = player_missile_active.at[pm].set(
+                jnp.where(effective_collision, 0, player_missile_active[pm])
+            )
+            
+            # Award score based on enemy type
+            score_values = jnp.array([25, 50, 75, 100])
+            score_to_add = score_values[state.enemy_type[e]]
+            score = jnp.where(effective_collision, score + score_to_add, score)
+    
+    # Check enemy missiles hitting player
+    for em in range(NUM_ENEMY_MISSILES):
+        # Use is_active logic instead of if statement
+        is_missile_active = enemy_missile_active[em]
+        
+        # Check collision with player
+        collision = jnp.logical_and(
+            jnp.logical_and(
+                state.enemy_missile_x[em] < state.player_x + PLAYER_WIDTH,
+                state.enemy_missile_x[em] + MISSILE_WIDTH > state.player_x
+            ),
+            jnp.logical_and(
+                state.enemy_missile_y[em] < state.player_y + PLAYER_HEIGHT,
+                state.enemy_missile_y[em] + MISSILE_HEIGHT > state.player_y
+            )
+        )
+        
+        # Only count collision if missile is active
+        effective_collision = jnp.logical_and(collision, is_missile_active == 1)
+        
+        # Update state on collision
+        enemy_missile_active = enemy_missile_active.at[em].set(
+            jnp.where(effective_collision, 0, enemy_missile_active[em])
+        )
+        
+        # Reduce player lives
+        player_lives = jnp.where(effective_collision, player_lives - 1, player_lives)
     
     return enemy_active, player_missile_active, enemy_missile_active, score, player_lives
 
@@ -1044,40 +1080,69 @@ class Renderer_AtraJaxisAirRaid:
         frame_bg = aj.get_sprite_frame(self.SPRITE_BG, 0)
         raster = aj.render_at(raster, 0, 0, frame_bg)
 
-        # Render buildings with a different approach - pre-sliced building sprites
+        # Render buildings using static masks
         def render_building(i, raster_in):
             frame_building = aj.get_sprite_frame(self.SPRITE_BUILDING, 0)
-        
-            # Get the building's damage level
             damage_level = state.building_damage[i]
         
-            # Instead of trying to slice dynamically, use a selection approach with static masks
-            # For each possible damage level, create a boolean mask and select the right sprite
+            # Create a completely static way to handle the building appearance
+            # Instead of dynamic slicing, use pre-computed masks for each damage level
         
-            # Create a static list of building sprites for all possible damage levels
-            building_sprites = []
-            building_positions = []
-        
+            # These masks are all static and known at compile time
+            masks = []
             for d in range(15):  # MAX_BUILDING_DAMAGE + 1
-                # Create mask for each damage level - this is statically known at compile time
+                # Create a static mask for this damage level (not using a range with a dynamic stop)
+                # Instead use a fully static approach
                 mask = jnp.zeros((32, 32, 4), dtype=jnp.bool_)
-                mask = mask.at[:BUILDING_HEIGHTS[d], :, :].set(True)
             
-                # Apply mask to create a properly sized sprite
-                masked_sprite = frame_building * mask
-                building_sprites.append(masked_sprite)
-                building_positions.append(BUILDING_Y_POSITIONS[d])
+                # We need to avoid dynamic slicing entirely
+                if d == 0:
+                    mask = mask.at[:32, :, :].set(True)  # Full height = 32
+                elif d == 1:
+                    mask = mask.at[:29, :, :].set(True)  # Height = 29 
+                elif d == 2:
+                    mask = mask.at[:29, :, :].set(True)  # Height = 29
+                elif d == 3:
+                    mask = mask.at[:29, :, :].set(True)  # Height = 29
+                elif d == 4:
+                    mask = mask.at[:27, :, :].set(True)  # Height = 27
+                elif d == 5:
+                    mask = mask.at[:23, :, :].set(True)  # Height = 23
+                elif d == 6:
+                    mask = mask.at[:21, :, :].set(True)  # Height = 21
+                elif d == 7:
+                    mask = mask.at[:19, :, :].set(True)  # Height = 19
+                elif d == 8:
+                    mask = mask.at[:15, :, :].set(True)  # Height = 15
+                elif d == 9:
+                    mask = mask.at[:19, :, :].set(True)  # Height = 19
+                elif d == 10:
+                    mask = mask.at[:23, :, :].set(True)  # Height = 23
+                elif d == 11:
+                    mask = mask.at[:25, :, :].set(True)  # Height = 25
+                elif d == 12:
+                    mask = mask.at[:25, :, :].set(True)  # Height = 25
+                elif d == 13:
+                    mask = mask.at[:8, :, :].set(True)   # Height = 8
+                else:  # d == 14
+                    mask = mask.at[:32, :, :].set(True)  # Height = 32
+                
+                masks.append(mask)
         
-            # Create building sprite by selecting the right one based on damage level
-            building_sprites = jnp.stack(building_sprites)
-            building_positions = jnp.stack(building_positions)
+            # Stack all masks for vectorized selection
+            masks = jnp.stack(masks)
         
-            # Select the correct sprite and position using JAX's indexing
-            selected_sprite = building_sprites[damage_level]
-            selected_y = building_positions[damage_level]
+            # Select the mask for this damage level
+            selected_mask = masks[damage_level]
+        
+            # Apply mask to the building sprite
+            masked_sprite = frame_building * selected_mask
+        
+            # Get the correct Y position for this damage level
+            building_y = BUILDING_Y_POSITIONS[damage_level]
         
             # Render building
-            return aj.render_at(raster_in, selected_y, state.building_x[i], selected_sprite)
+            return aj.render_at(raster_in, building_y, state.building_x[i], masked_sprite)
     
         # Use loop to render all buildings
         raster = jax.lax.fori_loop(0, NUM_BUILDINGS, lambda i, r: render_building(i, r), raster)
@@ -1145,11 +1210,23 @@ class Renderer_AtraJaxisAirRaid:
             life_start_x = 10
             life_y = 5
             life_color = jnp.array([236, 236, 236], dtype=jnp.uint8)
-        
-            icon_x = life_start_x + i * life_spacing
-            result = raster_in.at[icon_x:icon_x+life_icon_width, life_y:life_y+life_icon_height, :].set(life_color)
-            return jnp.where(i < state.player_lives, result, raster_in)
     
+            # Create a small icon of the correct size
+            life_icon = jnp.ones((life_icon_width, life_icon_height, 3), dtype=jnp.uint8) * life_color
+    
+            # Calculate position
+            icon_x = life_start_x + i * life_spacing
+    
+            # Use dynamic_update_slice instead of .at[...].set()
+            result = jax.lax.dynamic_update_slice(
+                raster_in,
+                life_icon,
+                (icon_x, life_y, 0)  # start indices for each dimension
+            )
+    
+            # Only show the life icon if the player has enough lives
+            return jnp.where(i < state.player_lives, result, raster_in)
+
         raster = jax.lax.fori_loop(0, 5, lambda i, r: render_life(i, r), raster)
 
         return raster
