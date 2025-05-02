@@ -32,6 +32,7 @@ BALL_START_Z = 7  # of course there is no real z, but using the shadow it is sug
 PLAYER_WIDTH = 13
 PLAYER_HEIGHT = 23
 BALL_SIZE = 2
+RACKET_WIDTH = 5 # including racket grip
 
 WAIT_AFTER_GOAL = 0  # number of ticks that are waited after a goal was scored
 
