@@ -14,25 +14,30 @@ from jaxatari.environment import JaxEnvironment
 # Constants for game environment
 WIDTH = 160
 HEIGHT = 210
+PLAYABLE_HEIGHT = HEIGHT - 30  # Playable area excludes the bottom black bar
 
 # Constants for player
 PLAYER_WIDTH = 14
 PLAYER_HEIGHT = 12
 PLAYER_SPEED = 3
 PLAYER_INITIAL_X = 80
-PLAYER_INITIAL_Y = 157
+PLAYER_INITIAL_Y = 120
 PLAYER_COLOR = (169, 169, 169)
 
 # Constants for buildings
 NUM_BUILDINGS = 3
 BUILDING_WIDTH = 32
 BUILDING_HEIGHT = 32
-BUILDING_INITIAL_Y = 178
+BUILDING_INITIAL_Y = PLAYABLE_HEIGHT - 30 # Ensure buildings stay above black bar
 BUILDING_COLOR = (114, 114, 114)
 MAX_BUILDING_DAMAGE = 14
 # Height and Y position based on damage level
 BUILDING_HEIGHTS = jnp.array([32, 29, 29, 29, 27, 23, 21, 19, 15, 19, 23, 25, 25, 8, 32])
-BUILDING_Y_POSITIONS = jnp.array([178, 181, 181, 181, 183, 187, 189, 191, 195, 191, 187, 185, 185, 202, 178])
+# BUILDING_Y_POSITIONS = jnp.array([178, 181, 181, 181, 183, 187, 189, 191, 195, 191, 187, 185, 185, 202, 178])
+BUILDING_Y_POSITIONS = jnp.array([PLAYABLE_HEIGHT - 32, PLAYABLE_HEIGHT - 29, PLAYABLE_HEIGHT - 29, PLAYABLE_HEIGHT - 29, 
+                              PLAYABLE_HEIGHT - 27, PLAYABLE_HEIGHT - 23, PLAYABLE_HEIGHT - 21, PLAYABLE_HEIGHT - 19, 
+                              PLAYABLE_HEIGHT - 15, PLAYABLE_HEIGHT - 19, PLAYABLE_HEIGHT - 23, PLAYABLE_HEIGHT - 25, 
+                              PLAYABLE_HEIGHT - 25, PLAYABLE_HEIGHT - 8, PLAYABLE_HEIGHT - 32])
 
 # Constants for enemies
 NUM_ENEMIES_PER_TYPE = 3
@@ -1084,6 +1089,14 @@ class Renderer_AtraJaxisAirRaid:
         frame_bg = aj.get_sprite_frame(self.SPRITE_BG, 0)
         raster = aj.render_at(raster, 0, 0, frame_bg)
 
+        # Add black bar at the bottom (140px height)
+        black_bar_height = 30
+        black_bar_y = HEIGHT - black_bar_height
+        #black_bar = jnp.zeros((WIDTH, black_bar_height, 4), dtype=jnp.uint8)
+        #black_bar = black_bar.at[:, :, 3].set(255)  # Set alpha channel to fully opaque
+        #raster = aj.render_at(raster, black_bar_y, 0, black_bar)
+        raster = raster.at[:, black_bar_y:, :].set(0)  # Set to black (0,0,0)
+
         # Render buildings using static masks
         def render_building(i, raster_in):
             frame_building = aj.get_sprite_frame(self.SPRITE_BUILDING, 0)
@@ -1201,9 +1214,10 @@ class Renderer_AtraJaxisAirRaid:
         raster = jax.lax.fori_loop(0, NUM_ENEMY_MISSILES, lambda i, r: render_enemy_missile(i, r), raster)
 
         # Render score
-        score_digits = aj.int_to_digits(state.score, max_digits=6)
+        display_score = (state.score // 25) * 25
+        score_digits = aj.int_to_digits(display_score, max_digits=3)  # Reduce max_digits to 3
         digit_width = 8
-        score_x = WIDTH - len(score_digits) * digit_width - 10
+        score_x = WIDTH - len(score_digits) * digit_width - 5
         raster = aj.render_label(raster, 5, score_x, score_digits, self.DIGIT_SPRITES)
 
         # Render lives
@@ -1211,17 +1225,17 @@ class Renderer_AtraJaxisAirRaid:
             life_sprite = aj.get_sprite_frame(self.SPRITE_LIFE, 0)
             life_width = life_sprite.shape[0]
             life_spacing = life_width + 3  # Add some spacing between lives
-            
-            # Position at bottom of screen
-            life_start_x = 10
-            life_y = HEIGHT - life_sprite.shape[1] - 5  # 5 pixels from bottom
-            
+
+            # Position at 166px in x, 100px up from bottom
+            life_start_x = 50
+            life_y = HEIGHT - 23  # 100px up from bottom
+
             # Calculate position
             icon_x = life_start_x + i * life_spacing
-            
+
             # Render life sprite
             result = aj.render_at(raster_in, life_y, icon_x, life_sprite)
-            
+
             # Only show the life icon if the player has enough lives
             return jnp.where(i < state.player_lives, result, raster_in)
 
