@@ -7,18 +7,23 @@ import chex
 import pygame
 from gymnax.environments import spaces
 
-from jaxatari.games.jax_kangaroo import SCREEN_WIDTH
+from src.jaxatari.games.jax_kangaroo import SCREEN_HEIGHT
+
+#from jaxatari.games.jax_kangaroo import SCREEN_WIDTH
 
 
 # -------- Game constants --------
 SHOOTING_COOLDOWN = 20
-ENEMY_MOVE_SPEED = 0.01
+ENEMY_MOVE_SPEED = 0.05
+BULLET_MOVE_SPEED = 2
 
 class GalaxianState(NamedTuple):
     player_x: chex.Array
     player_y: chex.Array
     player_shooting: chex.Array
     player_shooting_cooldown: chex.Array
+    bullet_x: chex.Array
+    bullet_y: chex.Array
     enemy_grid: chex.Array
     enemy_grid_alive: chex.Array
     enemy_grid_direction: chex.Array
@@ -52,6 +57,8 @@ def init_state():
                          player_y=jnp.array(20),
                          player_shooting_cooldown=jnp.array(0),
                          player_shooting=jnp.array(0),
+                         bullet_x=jnp.array([]),
+                         bullet_y=jnp.array([]),
                          enemy_grid=enemy_grid,
                          enemy_grid_alive=enemy_alive,
                          enemy_grid_direction=jnp.array(20))
@@ -80,17 +87,40 @@ def get_action_from_keyboard():
     return Action(player_move_dir=move_dir, player_shooting=shoot)
 
 
-# TODO implement bullet
+
 def handleShooting(state: GalaxianState, action: Action) -> GalaxianState:
     if action.player_shooting and state.player_shooting_cooldown == 0:
-        state = state._replace(player_shooting_cooldown=jnp.array(SHOOTING_COOLDOWN))
+        new_bullet_x = jnp.append(state.bullet_x, state.player_x)
+        new_bullet_y = jnp.append(state.bullet_y, state.player_y)
+        return state._replace(
+            bullet_x=new_bullet_x,
+            bullet_y=new_bullet_y,
+            player_shooting_cooldown=jnp.array(SHOOTING_COOLDOWN)
+        )
     elif state.player_shooting_cooldown > 0:
-        state = state._replace(player_shooting_cooldown=state.player_shooting_cooldown - 1)
+        return state._replace(player_shooting_cooldown=state.player_shooting_cooldown - 1)
     return state
+
+
+
+def updateBullets(state: GalaxianState) -> GalaxianState:
+    new_bullets_y = jax.vmap(lambda bullet_y: (bullet_y + BULLET_MOVE_SPEED))
+    return state._replace(bullet_y=new_bullets_y(state.bullet_y))
+
+def removeBullets(state: GalaxianState) -> GalaxianState:
+    top_cutoff = state.bullet_y <= 500
+    new_bullet_y = state.bullet_y[top_cutoff]
+    new_bullet_x = state.bullet_x[top_cutoff]
+    return state._replace(bullet_y=new_bullet_y, bullet_x=new_bullet_x)
 
 def draw(screen, state: GalaxianState):
     player_rect = pygame.Rect(int(state.player_x), int(600 - state.player_y), 20, 10)
     pygame.draw.rect(screen, (0, 255, 0), player_rect)
+
+    for i in range(state.bullet_x.shape[0]):
+        if state.bullet_x[i] > 0:
+            bullet_rect = pygame.Rect(int(state.bullet_x[i]), int(600 - state.bullet_y[i]), 5, 10)
+            pygame.draw.rect(screen, (255, 255, 0), bullet_rect)
 
     for i in range(state.enemy_grid.shape[0]):
         for j in range(state.enemy_grid.shape[1]):
@@ -105,6 +135,8 @@ def step(state: GalaxianState, action: Action) -> GalaxianState:
     newState = update_player_position(state, action)
     newState = handleShooting(newState, action)
     newState = update_enemy_positions(newState)
+    newState = updateBullets(newState)
+    newState = removeBullets(newState)
     return  newState
 
 
