@@ -7,15 +7,21 @@ import chex
 import pygame
 from gymnax.environments import spaces
 
-from src.jaxatari.games.jax_kangaroo import SCREEN_HEIGHT
+from src.jaxatari.games.jax_kangaroo import SCREEN_HEIGHT, SCREEN_WIDTH
 
 #from jaxatari.games.jax_kangaroo import SCREEN_WIDTH
 
 
 # -------- Game constants --------
 SHOOTING_COOLDOWN = 20
-ENEMY_MOVE_SPEED = 0.05
+ENEMY_MOVE_SPEED = 1
 BULLET_MOVE_SPEED = 2
+SCREEN_HEIGHT = 600
+SCREEN_WIDTH = 800
+GRID_ROWS = 5
+GRID_COLS = 7
+ENEMY_SPACING_X = 20
+START_X = 100
 
 class GalaxianState(NamedTuple):
     player_x: chex.Array
@@ -34,26 +40,38 @@ class Action(NamedTuple):
 
 
 def update_player_position(state: GalaxianState, action: Action) -> GalaxianState:
-    new_x = state.player_x + action.player_move_dir * 5
+    new_x = jnp.clip(state.player_x + action.player_move_dir * 5, 0, SCREEN_WIDTH)
     return state._replace(player_x=new_x)
 
-# TODO implement direction change at border
+
 def update_enemy_positions(state: GalaxianState) -> GalaxianState:
+    if state.enemy_grid[0, state.enemy_grid.shape[1]] > SCREEN_WIDTH:
+        new_enemy_grid_direction = -1
+        print("change direction yeeeet")
+    elif state.enemy_grid[0, 0] < 0:
+        new_enemy_grid_direction = 1
+        print("change direction")
+    else:
+        new_enemy_grid_direction = state.enemy_grid_direction
+
+
     new_enemy_grid = state.enemy_grid + ENEMY_MOVE_SPEED * state.enemy_grid_direction
-    return state._replace(enemy_grid=new_enemy_grid)
+    print (new_enemy_grid)
+    print (new_enemy_grid_direction)
+    return state._replace(enemy_grid=new_enemy_grid, enemy_grid_direction=new_enemy_grid_direction)
 
 
 def init_state():
-    grid_rows = 5
-    grid_cols = 7
-    enemy_spacing_x = 20
-    start_x = 100
+    grid_rows = GRID_ROWS
+    grid_cols = GRID_COLS
+    enemy_spacing_x = ENEMY_SPACING_X
+    start_x = START_X
 
     x_positions = jnp.arange(grid_cols) * enemy_spacing_x + start_x #arange schreibt so 0 1 2 3....
     enemy_grid = jnp.tile(x_positions, (grid_rows, 1))    #kopiert die zeile untereinander
     enemy_alive = jnp.ones((grid_rows, grid_cols), dtype=bool) #alles auf 1
 
-    return GalaxianState(player_x=jnp.array(50),
+    return GalaxianState(player_x=jnp.array(SCREEN_WIDTH / 2),
                          player_y=jnp.array(20),
                          player_shooting_cooldown=jnp.array(0),
                          player_shooting=jnp.array(0),
@@ -61,7 +79,7 @@ def init_state():
                          bullet_y=jnp.array([]),
                          enemy_grid=enemy_grid,
                          enemy_grid_alive=enemy_alive,
-                         enemy_grid_direction=jnp.array(20))
+                         enemy_grid_direction=jnp.array(1))
 
 
 
@@ -79,9 +97,9 @@ def get_action_from_keyboard():
     else:
         move_dir = jnp.array(0)
 
-    if (shoot):
+    if shoot:
         shoot = jnp.array(1)
-    else :
+    else:
         shoot = jnp.array(0)
 
     return Action(player_move_dir=move_dir, player_shooting=shoot)
@@ -142,7 +160,7 @@ def step(state: GalaxianState, action: Action) -> GalaxianState:
 
 if __name__ == "__main__":  #run with: python -m jaxatari.games.jax_galaxian
     pygame.init()
-    screen = pygame.display.set_mode((800, 600))
+    screen = pygame.display.set_mode((SCREEN_WIDTH, SCREEN_HEIGHT))
     pygame.display.set_caption("Galaxian")
     clock = pygame.time.Clock()
 
