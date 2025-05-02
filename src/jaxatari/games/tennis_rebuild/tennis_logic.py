@@ -1,6 +1,7 @@
 from functools import partial
 from typing import Tuple
 from jaxatari.environment import JaxEnvironment
+from tennis_logic_updates import check_collision, ball_step, before_serve
 import jax
 import jax.numpy as jnp
 import chex
@@ -607,7 +608,7 @@ def player_step(
 
     # check if the player is trying to move right
     player_x = jnp.where(
-        jnp.logical_and(right, new_player_x < COURT_WIDTH - 13),
+        jnp.logical_and(right, new_player_x < COURT_WIDTH - 13), # TODO maybe change 13 to PLAYER_WIDTH (not original todo)
         new_player_x + 1,
         player_x,
     )
@@ -623,7 +624,7 @@ def player_step(
 
     # check if the player is trying to move down
     player_y = jnp.where(
-        jnp.logical_and(down, state_player_y < COURT_HEIGHT - 23),
+        jnp.logical_and(down, state_player_y < COURT_HEIGHT - 23), # TODO maybe change 23 to PLAYER_HEIGHT (not original todo)
         state_player_y + 1,
         player_y,
     )
