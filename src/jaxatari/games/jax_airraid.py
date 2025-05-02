@@ -1038,7 +1038,7 @@ def load_sprites():
     # Load digits for scores
     DIGIT_SPRITES = aj.load_and_pad_digits(
         os.path.join(MODULE_DIR, "sprites/airraid/score_{}.npy"),
-        num_chars=10,
+        num_chars=11, # we added 1 so that we can have an invisible sprite
     )
     
     return (
@@ -1089,13 +1089,6 @@ class Renderer_AtraJaxisAirRaid:
         frame_bg = aj.get_sprite_frame(self.SPRITE_BG, 0)
         raster = aj.render_at(raster, 0, 0, frame_bg)
 
-        # Add black bar at the bottom (140px height)
-        black_bar_height = 30
-        black_bar_y = HEIGHT - black_bar_height
-        #black_bar = jnp.zeros((WIDTH, black_bar_height, 4), dtype=jnp.uint8)
-        #black_bar = black_bar.at[:, :, 3].set(255)  # Set alpha channel to fully opaque
-        #raster = aj.render_at(raster, black_bar_y, 0, black_bar)
-        raster = raster.at[:, black_bar_y:, :].set(0)  # Set to black (0,0,0)
 
         # Render buildings using static masks
         def render_building(i, raster_in):
@@ -1165,7 +1158,6 @@ class Renderer_AtraJaxisAirRaid:
         raster = jax.lax.fori_loop(0, NUM_BUILDINGS, lambda i, r: render_building(i, r), raster)
 
 
-
         # Render enemies using functional style
         def render_enemy(i, raster_in):
             # Create conditions for each enemy type
@@ -1213,7 +1205,14 @@ class Renderer_AtraJaxisAirRaid:
     
         raster = jax.lax.fori_loop(0, NUM_ENEMY_MISSILES, lambda i, r: render_enemy_missile(i, r), raster)
 
-        # In the render method, replace the score rendering section:
+
+        # Add black bar at the bottom (140px height)
+        black_bar_height = 30
+        black_bar_y = HEIGHT - black_bar_height
+        #black_bar = jnp.zeros((WIDTH, black_bar_height, 4), dtype=jnp.uint8)
+        #black_bar = black_bar.at[:, :, 3].set(255)  # Set alpha channel to fully opaque
+        #raster = aj.render_at(raster, black_bar_y, 0, black_bar)
+        raster = raster.at[:, black_bar_y:, :].set(0)  # Set to black (0,0,0)
 
         # Render score - Mimicking OCAtari alignment via fixed-width rendering
         # Ensure score is multiple of 25
@@ -1239,46 +1238,48 @@ class Renderer_AtraJaxisAirRaid:
         )
 
         # --- Start: Conditional Visibility Logic ---
-        # Determine which digits should be visible
+        # Determine which digits should be visible based on score value
         is_score_zero = (score_value == 0)
-        indices = jnp.arange(max_digits_render)
+        indices = jnp.arange(max_digits_render) # [0, 1, 2, 3, 4, 5]
 
-        # A digit is significant if it's > 0
+        # Find the index of the first significant digit (first non-zero)
         is_significant = (padded_digits_render > 0)
-
-        # Find the index of the first significant digit (or the last index if all are zero)
-        # Create a large value where not significant
+        # Assign a large index (max_digits_render) if a digit is not significant
         temp_indices = jnp.where(is_significant, indices, max_digits_render)
+        # The minimum of these temp indices is the index of the first significant digit
+        # If score is 0, all digits are 0, is_significant is all False,
+        # temp_indices is all 6, and first_significant_idx becomes 6.
         first_significant_idx = jnp.min(temp_indices)
 
-        # A digit position `i` should be visible if:
-        # 1. The score is zero AND it's the last digit (i == 5)
-        # OR
-        # 2. The score is non-zero AND it's at or after the first significant digit (i >= first_significant_idx)
-        should_be_visible = jnp.where(
-            is_score_zero,
-            indices == (max_digits_render - 1), # Only last digit visible if score is 0
-            indices >= first_significant_idx    # All digits from first significant onwards if score > 0
-        )
+        # Determine visibility mask:
+        # If score is 0, only the last digit (index 5) should be visible (as '0').
+        visible_if_zero = (indices == max_digits_render - 1)
+        # If score is > 0, digits from the first significant one onwards should be visible.
+        visible_if_nonzero = (indices >= first_significant_idx)
 
-        # Use 10 as the index for the invisible/transparent sprite
-        invisible_digit_index = 10
+        # Combine conditions using jnp.where based on whether the score is zero
+        should_be_visible = jnp.where(is_score_zero, visible_if_zero, visible_if_nonzero)
+
+        # Select final digit indices to render
+        invisible_digit_index = 10 # The index of our transparent/background sprite
         final_digits_to_render = jnp.where(
             should_be_visible,
-            padded_digits_render,      # Use the actual digit if visible
+            padded_digits_render,      # Use the actual calculated digit if visible
             invisible_digit_index      # Use the invisible index if not visible
         )
         # --- End: Conditional Visibility Logic ---
 
         # Render using the 6 potentially modified digits and the fixed start x position.
-        # The invisible digits (index 10) will be rendered transparently.
+        # The invisible digits (index 10) will be rendered transparently/as background.
+        # Actual zeros within the score (e.g., in 600) or the single 0 for score=0 will use index 0.
         raster = aj.render_label(
             raster,
             score_y,
             score_x_start,
-            final_digits_to_render, # Pass the array with invisible indices
-            self.DIGIT_SPRITES      # Ensure DIGIT_SPRITES[10] is transparent/bg color
+            final_digits_to_render, # Pass the array with potentially invisible indices
+            self.DIGIT_SPRITES      # Ensure DIGIT_SPRITES[10] is the invisible sprite
         )
+
 
         # Render lives
         def render_life(i, raster_in):
