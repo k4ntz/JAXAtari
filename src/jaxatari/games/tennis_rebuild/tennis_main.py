@@ -10,6 +10,7 @@ import pygame
 import jaxatari.rendering.atraJaxis as aj
 from jaxatari.games.jax_tennis import COURT_WIDTH, COURT_HEIGHT, JaxTennis, Renderer_AJ, AnimatorState
 from util import *
+from tennis_logic import JaxTennis
 
 BG, PL_R, BAT_R, PL_B, BAT_B, BALL, BALL_SHADE, DIGITS_R, DIGITS_B = load_sprites()
 
