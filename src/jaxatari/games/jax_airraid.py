@@ -1017,6 +1017,7 @@ def load_sprites():
     enemy100 = aj.loadFrame(os.path.join(MODULE_DIR, "sprites/airraid/enemy100.npy"), transpose=True)
     missile = aj.loadFrame(os.path.join(MODULE_DIR, "sprites/airraid/missile.npy"), transpose=True)
     bg = aj.loadFrame(os.path.join(MODULE_DIR, "sprites/airraid/background.npy"), transpose=True)
+    life = aj.loadFrame(os.path.join(MODULE_DIR, "sprites/airraid/life.npy"), transpose=True)
     
     # Convert all sprites to the expected format (add frame dimension)
     SPRITE_BG = jnp.expand_dims(bg, axis=0)
@@ -1027,6 +1028,7 @@ def load_sprites():
     SPRITE_ENEMY75 = jnp.expand_dims(enemy75, axis=0)
     SPRITE_ENEMY100 = jnp.expand_dims(enemy100, axis=0)
     SPRITE_MISSILE = jnp.expand_dims(missile, axis=0)
+    SPRITE_LIFE = jnp.expand_dims(life, axis=0)
     
     # Load digits for scores
     DIGIT_SPRITES = aj.load_and_pad_digits(
@@ -1043,6 +1045,7 @@ def load_sprites():
         SPRITE_ENEMY75,
         SPRITE_ENEMY100,
         SPRITE_MISSILE,
+        SPRITE_LIFE,
         DIGIT_SPRITES
     )
 
@@ -1059,6 +1062,7 @@ class Renderer_AtraJaxisAirRaid:
             self.SPRITE_ENEMY75,
             self.SPRITE_ENEMY100,
             self.SPRITE_MISSILE,
+            self.SPRITE_LIFE,
             self.DIGIT_SPRITES
         ) = load_sprites()
 
@@ -1204,26 +1208,20 @@ class Renderer_AtraJaxisAirRaid:
 
         # Render lives
         def render_life(i, raster_in):
-            life_icon_width = 7
-            life_icon_height = 7
-            life_spacing = 10
+            life_sprite = aj.get_sprite_frame(self.SPRITE_LIFE, 0)
+            life_width = life_sprite.shape[0]
+            life_spacing = life_width + 3  # Add some spacing between lives
+            
+            # Position at bottom of screen
             life_start_x = 10
-            life_y = 5
-            life_color = jnp.array([236, 236, 236], dtype=jnp.uint8)
-    
-            # Create a small icon of the correct size
-            life_icon = jnp.ones((life_icon_width, life_icon_height, 3), dtype=jnp.uint8) * life_color
-    
+            life_y = HEIGHT - life_sprite.shape[1] - 5  # 5 pixels from bottom
+            
             # Calculate position
             icon_x = life_start_x + i * life_spacing
-    
-            # Use dynamic_update_slice instead of .at[...].set()
-            result = jax.lax.dynamic_update_slice(
-                raster_in,
-                life_icon,
-                (icon_x, life_y, 0)  # start indices for each dimension
-            )
-    
+            
+            # Render life sprite
+            result = aj.render_at(raster_in, life_y, icon_x, life_sprite)
+            
             # Only show the life icon if the player has enough lives
             return jnp.where(i < state.player_lives, result, raster_in)
 
