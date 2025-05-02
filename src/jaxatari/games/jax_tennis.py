@@ -8,6 +8,8 @@ import chex
 import numpy as np
 import pygame
 import jaxatari.rendering.atraJaxis as aj
+from jaxatari.games.jax_kangaroo import ENEMY_WIDTH, ENEMY_HEIGHT
+
 
 def load_sprites():
     MODULE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -1898,6 +1900,49 @@ class Renderer_AJ:
             flip_horizontal=flip_player,
         )
 
+        # TODO remove
+        def get_bounding_box(width, height, border_color=(255, 0, 0, 255), border_thickness=1):
+            """
+            Creates a bounding box sprite with transparent interior and colored border.
+
+            Args:
+                width: Width of the bounding box (static)
+                height: Height of the bounding box (static)
+                border_color: RGBA tuple for border color (default: red)
+                border_thickness: Pixel width of the border (default: 1)
+
+            Returns:
+                Array of shape (height, width, 4) with RGBA values
+            """
+            # Create empty RGBA array
+            sprite = jnp.zeros((width, height, 4), dtype=jnp.uint8)
+
+            # Create border mask
+            border_mask = jnp.zeros((width, height), dtype=bool)
+
+            # Set border pixels to True
+            border_mask = border_mask.at[:border_thickness, :].set(True)  # Top border
+            border_mask = border_mask.at[-border_thickness:, :].set(True)  # Bottom border
+            border_mask = border_mask.at[:, :border_thickness].set(True)  # Left border
+            border_mask = border_mask.at[:, -border_thickness:].set(True)  # Right border
+
+            # Apply border color where mask is True
+            sprite = jnp.where(
+                border_mask[..., None],  # Expand for RGBA channels
+                jnp.array(border_color, dtype=jnp.uint8),
+                sprite
+            )
+
+            return sprite
+
+
+        raster = aj.render_at(
+            raster,
+            state.player_y,
+            state.player_x,
+            get_bounding_box(PLAYER_WIDTH, PLAYER_HEIGHT),
+        )
+
         # render enemy
         raster = aj.render_at(
             raster,
@@ -1907,9 +1952,15 @@ class Renderer_AJ:
             flip_horizontal=flip_enemy,
         )
 
+        raster = aj.render_at(
+            raster,
+            state.enemy_y,
+            state.enemy_x,
+            get_bounding_box(ENEMY_WIDTH, ENEMY_HEIGHT),
+        )
+
         # render ball
         raster = aj.render_at(raster, state.ball_y, state.ball_x, BALL)
-
         # render ball shade
 
         raster = aj.render_at(raster, state.shadow_y, state.shadow_x, BALL_SHADE)
