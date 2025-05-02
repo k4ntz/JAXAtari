@@ -61,16 +61,17 @@ def check_collision(
     ) 
     """
 
+    player_start_x = jnp.where(state.player_direction == 0, player_x, player_x - RACKET_WIDTH)
     player_overlap = jnp.logical_and(
         # check x axis
         jnp.logical_or(
             # check left side of ball inside player bounds
             jnp.logical_and(
-                state.ball_x > player_x, state.ball_x < player_x + PLAYER_WIDTH
+                state.ball_x > player_start_x, state.ball_x < player_start_x + PLAYER_WIDTH
             ),
             # check right side of ball inside player bounds
             jnp.logical_and(
-                state.ball_x + BALL_SIZE > player_x, state.ball_x + BALL_SIZE < player_x + PLAYER_WIDTH
+                state.ball_x + BALL_SIZE > player_start_x, state.ball_x + BALL_SIZE < player_start_x + PLAYER_WIDTH
             )
         ),
         # check y axis
@@ -99,16 +100,17 @@ def check_collision(
     )
     """
 
+    enemy_start_x = jnp.where(state.enemy_direction == 0, state.enemy_x, state.enemy_x - RACKET_WIDTH)
     enemy_overlap = jnp.logical_and(
         # check x axis
         jnp.logical_or(
             # check left side of ball inside enemy bounds
             jnp.logical_and(
-                state.ball_x > state.enemy_x, state.ball_x < state.enemy_x + PLAYER_WIDTH
+                state.ball_x > enemy_start_x, state.ball_x < enemy_start_x + PLAYER_WIDTH
             ),
             # check right side of ball inside enemy bounds
             jnp.logical_and(
-                state.ball_x + BALL_SIZE > state.enemy_x, state.ball_x + BALL_SIZE < state.enemy_x + PLAYER_WIDTH
+                state.ball_x + BALL_SIZE > enemy_start_x, state.ball_x + BALL_SIZE < enemy_start_x + PLAYER_WIDTH
             )
         ),
         # check y axis
