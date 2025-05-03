@@ -444,7 +444,7 @@ class JaxPong(JaxEnvironment[PongState, PongObservation, PongInfo]):
         return initial_obs, state
 
     @partial(jax.jit, static_argnums=(0,))
-    def step(self, state: PongState, action: chex.Array) -> Tuple[PongObservation, PongState, float, bool, PongInfo]:
+    def step(self, state: PongState, action: chex.Array) -> Tuple[PongState, PongObservation, float, bool, PongInfo]:
         # Step 1: Update player position and speed
         # only execute player step on even steps (base implementation only moves the player every second tick)
         new_player_y, player_speed_b, new_acceleration_counter = player_step(
@@ -833,7 +833,7 @@ if __name__ == "__main__":
             # i.e. get human (game) action
             if counter % frameskip == 0:
                 action = get_human_action()
-                obs, curr_state, reward, done, info = jitted_step(curr_state, action)
+                curr_state, obs, reward, done, info = jitted_step(curr_state, action)
 
         # Render and display
         raster = renderer.render(curr_state)

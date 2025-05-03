@@ -10,7 +10,10 @@ import pickle as pkl
 import atexit
 import matplotlib.pyplot as plt
 import sys
+<<<<<<< HEAD
 import os # Import os module
+=======
+>>>>>>> 1a9b968 (Added comments to pong, added RAM extraction GUI script for ALE implementations)
 
 # Constants for RAM panel layout (will be scaled)
 RAM_N_COLS = 8
@@ -31,6 +34,7 @@ class Renderer:
     env: gym.Env
     ale: ALEInterface
 
+<<<<<<< HEAD
     # Add render_scale and screenshot_dir parameters
     def __init__(self, env_name, no_render=[], render_scale=4, screenshot_dir=None):
         self.render_scale = render_scale # Store the desired scale factor
@@ -80,6 +84,11 @@ class Renderer:
             self.frame_counter = 1 # If screenshot_dir is None or creation failed, start from 1
 
 
+=======
+    # Add render_scale parameter
+    def __init__(self, env_name, no_render=[], render_scale=4):
+        self.render_scale = render_scale # Store the desired scale factor
+>>>>>>> 1a9b968 (Added comments to pong, added RAM extraction GUI script for ALE implementations)
         try:
             self.env = gym.make(
                 f"ALE/{env_name}-v5",
@@ -115,6 +124,7 @@ class Renderer:
         try:
              action_meanings = self.env.unwrapped.get_action_meanings()
              print(f"Action meanings: {action_meanings}")
+<<<<<<< HEAD
              self.keys2actions = {(): 0}  # NOOP action
              if 'UP' in action_meanings: self.keys2actions[tuple(sorted([pygame.K_UP]))] = action_meanings.index('UP')
              if 'DOWN' in action_meanings: self.keys2actions[tuple(sorted([pygame.K_DOWN]))] = action_meanings.index('DOWN')
@@ -135,6 +145,14 @@ class Renderer:
              if 'DOWNLEFT' in action_meanings: self.keys2actions[tuple(sorted([pygame.K_DOWN, pygame.K_LEFT]))] = action_meanings.index('DOWNLEFT')
              if 'UPRIGHTFIRE' in action_meanings: self.keys2actions[tuple(sorted([pygame.K_UP, pygame.K_RIGHT, pygame.K_SPACE]))] = action_meanings.index('UPRIGHTFIRE')
 
+=======
+             self.keys2actions = {(): 0}
+             if 'UP' in action_meanings: self.keys2actions[(pygame.K_UP,)] = action_meanings.index('UP')
+             if 'DOWN' in action_meanings: self.keys2actions[(pygame.K_DOWN,)] = action_meanings.index('DOWN')
+             if 'LEFT' in action_meanings: self.keys2actions[(pygame.K_LEFT,)] = action_meanings.index('LEFT')
+             if 'RIGHT' in action_meanings: self.keys2actions[(pygame.K_RIGHT,)] = action_meanings.index('RIGHT')
+             if 'FIRE' in action_meanings: self.keys2actions[(pygame.K_SPACE,)] = action_meanings.index('FIRE')
+>>>>>>> 1a9b968 (Added comments to pong, added RAM extraction GUI script for ALE implementations)
              # Add more complex combos if needed, check action_meanings list first
              print(f"Key to action mapping: {self.keys2actions}")
         except AttributeError:
@@ -161,10 +179,13 @@ class Renderer:
         self.recorded_ram_states = {}
         self.game_name = env_name
 
+<<<<<<< HEAD
         # Create screenshot directory if it doesn't exist
         if self.screenshot_dir:
             os.makedirs(self.screenshot_dir, exist_ok=True)
 
+=======
+>>>>>>> 1a9b968 (Added comments to pong, added RAM extraction GUI script for ALE implementations)
 
     def _get_ram(self):
         if self.ale:
@@ -241,6 +262,7 @@ class Renderer:
         self.ram_grid_anchor_left = self.game_display_width + self.effective_ram_grid_anchor_padding
         self.ram_grid_anchor_top = self.effective_ram_grid_anchor_padding
 
+<<<<<<< HEAD
     # --- Add the save_frame method from frame_extractor.py ---
     def save_frame(self, frame: np.ndarray) -> None:
         if not self.screenshot_dir:
@@ -260,6 +282,8 @@ class Renderer:
     # --- End of save_frame method ---
 
 
+=======
+>>>>>>> 1a9b968 (Added comments to pong, added RAM extraction GUI script for ALE implementations)
     def run(self):
         self.running = True
         i = 0
@@ -329,8 +353,13 @@ class Renderer:
             self.clock.tick(30)
 
             i += 1
+<<<<<<< HEAD
             # Removed the FPS print to avoid cluttering the terminal with RAM prints
 
+=======
+            if i % 120 == 0:
+                print(f"Current FPS: {self.clock.get_fps()}")
+>>>>>>> 1a9b968 (Added comments to pong, added RAM extraction GUI script for ALE implementations)
 
         self.env.close()
         pygame.quit()
@@ -339,12 +368,18 @@ class Renderer:
 
     def _get_action(self):
         pressed_keys = tuple(sorted(list(self.current_keys_down)))
+<<<<<<< HEAD
         print(f"Pressed keys: {[pygame.key.name(k) for k in pressed_keys]}")
+=======
+>>>>>>> 1a9b968 (Added comments to pong, added RAM extraction GUI script for ALE implementations)
         action = self.keys2actions.get(pressed_keys, 0)
         if self.env.action_space.contains(action):
             return action
         else:
+<<<<<<< HEAD
             print(f"Invalid action {action}, defaulting to NOOP")
+=======
+>>>>>>> 1a9b968 (Added comments to pong, added RAM extraction GUI script for ALE implementations)
             return 0
 
 
@@ -361,6 +396,7 @@ class Renderer:
                     # Check if click is within the scaled game display area
                     if self.current_mouse_pos[0] < self.game_display_width and self.current_mouse_pos[1] < self.game_display_height :
                         # Calculate click coordinates relative to the original ALE screen size
+<<<<<<< HEAD
                         # Use self.env.observation_space.shape for native dims if it exists and is correct
                         try:
                             native_h, native_w, _ = self.env.observation_space.shape
@@ -377,6 +413,22 @@ class Renderer:
                         except AttributeError:
                              print("Could not get observation space shape for game click coordinates.")
 
+=======
+                        native_h, native_w, _ = self.env.observation_space.shape # Get native dims if possible
+                        scale_x = self.game_display_width / native_w
+                        scale_y = self.game_display_height / native_h
+
+                        if scale_x > 0 and scale_y > 0:
+                            game_x = int(self.current_mouse_pos[0] / scale_x)
+                            game_y = int(self.current_mouse_pos[1] / scale_y)
+                            print(f"Clicked on game screen at approx original coords: ({game_x}, {game_y})")
+                            if self.ale:
+                                 self.find_causative_ram(game_x, game_y)
+                            else:
+                                 print("Cannot run find_causative_ram, ALE interface not available.")
+                        else:
+                            print("Could not determine scaling factor for game click coordinates.")
+>>>>>>> 1a9b968 (Added comments to pong, added RAM extraction GUI script for ALE implementations)
 
                     # Click on RAM Panel
                     else:
@@ -388,6 +440,7 @@ class Renderer:
                                 if cell_idx in self.recorded_ram_states:
                                     recorded_states = self.recorded_ram_states[cell_idx]
                                     if len(recorded_states) > 2:
+<<<<<<< HEAD
                                         # Plotting logic remains, requires matplotlib
                                         try:
                                             first_derivative = [int(recorded_states[i+1]) - int(recorded_states[i]) for i in range(len(recorded_states)-1)]
@@ -408,17 +461,43 @@ class Renderer:
                                             fig.tight_layout(); plt.show()
                                         except Exception as e:
                                             print(f"Error plotting data for cell {cell_idx}: {e}")
+=======
+                                        first_derivative = [int(recorded_states[i+1]) - int(recorded_states[i]) for i in range(len(recorded_states)-1)]
+                                        second_derivative = [int(first_derivative[i+1]) - int(first_derivative[i]) for i in range(len(first_derivative)-1)]
+
+                                        print(f"Cell {cell_idx} Recorded States ({len(recorded_states)}): {recorded_states}")
+                                        print(f"Cell {cell_idx} First Derivative ({len(first_derivative)}): {first_derivative}")
+                                        print(f"Cell {cell_idx} Second Derivative ({len(second_derivative)}): {second_derivative}")
+
+                                        fig, (ax1, ax2, ax3) = plt.subplots(3, 1, figsize=(10, 8), sharex=True)
+                                        ax1.plot(recorded_states, marker='o', linestyle='-', label="Recorded States")
+                                        ax1.set_title(f"RAM Cell {cell_idx}: Recorded State & Derivatives")
+                                        ax1.set_ylabel("State Value"); ax1.grid(True); ax1.legend()
+                                        ax2.plot(first_derivative, marker='o', linestyle='-', color='orange', label="First Derivative")
+                                        ax2.set_ylabel("1st Deriv."); ax2.grid(True); ax2.legend()
+                                        ax3.plot(second_derivative, marker='o', linestyle='-', color='green', label="Second Derivative")
+                                        ax3.set_xlabel("Time (Frames)"); ax3.set_ylabel("2nd Deriv."); ax3.grid(True); ax3.legend()
+                                        fig.tight_layout(); plt.show()
+>>>>>>> 1a9b968 (Added comments to pong, added RAM extraction GUI script for ALE implementations)
                                     else:
                                         print(f"Not enough data ({len(recorded_states)}) for cell {cell_idx} to plot derivatives.")
                                     del self.recorded_ram_states[cell_idx]
                             else:
+<<<<<<< HEAD
                                 if len(self.clicked_cells) == 0: # Only allow recording one cell at a time
+=======
+                                if len(self.clicked_cells) == 0:
+>>>>>>> 1a9b968 (Added comments to pong, added RAM extraction GUI script for ALE implementations)
                                     self.clicked_cells.append(cell_idx)
                                     self.recorded_ram_states[cell_idx] = []
                                     print(f"Started recording RAM values for cell {cell_idx}")
                                 else:
+<<<<<<< HEAD
                                      print("Another cell is already selected for recording. Click it again to stop recording first.")
 
+=======
+                                    print("Another cell is already selected for recording. Click it again to stop recording first.")
+>>>>>>> 1a9b968 (Added comments to pong, added RAM extraction GUI script for ALE implementations)
 
                 elif event.button == 3: # Right Click -> Hide/Unhide
                     cell_idx = self._get_cell_under_mouse()
@@ -439,7 +518,10 @@ class Renderer:
                     cell_idx = self._get_cell_under_mouse()
                     if cell_idx is not None and self.ale: self._decrement_ram_value_at(cell_idx)
 
+<<<<<<< HEAD
 
+=======
+>>>>>>> 1a9b968 (Added comments to pong, added RAM extraction GUI script for ALE implementations)
             elif event.type == pygame.KEYDOWN:
                 if event.key == pygame.K_p: self.paused = not self.paused; print(f"{'Paused' if self.paused else 'Resumed'}")
                 elif event.key == pygame.K_f: self.frame_by_frame = not self.frame_by_frame; self.next_frame = False; print(f"{'Frame-by-frame' if self.frame_by_frame else 'Continuous'}")
@@ -485,6 +567,7 @@ class Renderer:
                      elif not self.ale: print("Cannot save state, ALE not available.")
                      elif not self.paused: print("Pause the game ('P') before saving state ('C').")
 
+<<<<<<< HEAD
                 # --- Add Key Binding for Save Frame ('S') ---
                 elif event.key == pygame.K_s:
                     print("Save frame key pressed. Calling save_frame...")
@@ -492,6 +575,8 @@ class Renderer:
                 # --- End of Save Frame Key Binding ---
 
 
+=======
+>>>>>>> 1a9b968 (Added comments to pong, added RAM extraction GUI script for ALE implementations)
                 elif event.key == pygame.K_ESCAPE:
                     if self.active_cell_idx is not None: self._unselect_active_cell()
 
@@ -512,21 +597,31 @@ class Renderer:
                 else: # Handle Action keys
                     key_tuple = (event.key,)
                     is_action_key = False
+<<<<<<< HEAD
                     # Check if the key is part of any action combination
                     for keys in self.keys2actions.keys():
                          if isinstance(keys, tuple) and event.key in keys: is_action_key = True; break
                     # If it's a single key mapping, check that
                     if not is_action_key and key_tuple in self.keys2actions: is_action_key = True
 
+=======
+                    if key_tuple in self.keys2actions: is_action_key = True
+                    else:
+                        for keys in self.keys2actions.keys():
+                            if isinstance(keys, tuple) and event.key in keys: is_action_key = True; break
+>>>>>>> 1a9b968 (Added comments to pong, added RAM extraction GUI script for ALE implementations)
                     if is_action_key: self.current_keys_down.add(event.key)
 
             elif event.type == pygame.KEYUP:
                  if event.key in self.current_keys_down: self.current_keys_down.remove(event.key)
 
 
+<<<<<<< HEAD
         return True  # Continue the game loop
 
 
+=======
+>>>>>>> 1a9b968 (Added comments to pong, added RAM extraction GUI script for ALE implementations)
     def _render(self):
         self.window.fill((0, 0, 0))
         self._render_game_screen() # Renders the scaled game screen
@@ -541,12 +636,16 @@ class Renderer:
             try:
                 # Create surface from the frame data (usually H, W, C)
                 # Transpose to (W, H, C) for make_surface
+<<<<<<< HEAD
                 # frame_surface = pygame.surfarray.make_surface(np.transpose(self.current_frame, (1, 0, 2)))
                 # Using pixelcopy might be slightly faster
                 native_h, native_w, _ = self.current_frame.shape
                 frame_surface = pygame.Surface((native_w, native_h))
                 pygame.pixelcopy.array_to_surface(frame_surface, self.current_frame.swapaxes(0, 1))
 
+=======
+                frame_surface = pygame.surfarray.make_surface(np.transpose(self.current_frame, (1, 0, 2)))
+>>>>>>> 1a9b968 (Added comments to pong, added RAM extraction GUI script for ALE implementations)
 
                 # Scale the surface to the target display size
                 scaled_surface = pygame.transform.scale(frame_surface, (self.game_display_width, self.game_display_height))
@@ -691,9 +790,49 @@ class Renderer:
              self.current_active_cell_input = ""
 
 
+<<<<<<< HEAD
     # find_causative_ram method removed as it relies on specific OCAtari analysis
 
 # --- Main Execution ---
+=======
+    def find_causative_ram(self, x, y):
+        if not self.ale: print("find_causative_ram requires direct ALE access."); return
+
+        print(f"Finding RAM cells causing changes at original pixel ({x}, {y})...")
+        original_ram = deepcopy(self._get_ram())
+        original_state = self._clone_state()
+        if original_ram is None or original_state is None: print("Could not get original RAM or state."); return
+
+        original_screen_ale = self.ale.getScreenRGB()
+        if not (0 <= y < original_screen_ale.shape[0] and 0 <= x < original_screen_ale.shape[1]):
+             print(f"Error: Pixel coords ({x}, {y}) out of bounds for ALE screen ({original_screen_ale.shape[1]}x{original_screen_ale.shape[0]})")
+             return
+        original_pixel_value = original_screen_ale[y, x].copy()
+
+        self.candidate_cell_ids = []
+        test_value = 5
+
+        for i in tqdm(range(len(original_ram)), desc="Testing RAM Cells", ncols=80):
+            self._restore_state(original_state)
+            original_cell_value = original_ram[i]
+            if original_cell_value == test_value: continue
+
+            self.ale.setRAM(i, test_value)
+            self.ale.act(0) # NOOP
+            new_screen_ale = self.ale.getScreenRGB()
+            new_pixel_value = new_screen_ale[y, x]
+
+            if np.any(new_pixel_value != original_pixel_value):
+                # print(f"RAM[{i}] change ({original_cell_value} -> {test_value}) affected pixel ({x},{y}) -> {original_pixel_value} vs {new_pixel_value}")
+                self.candidate_cell_ids.append(i)
+
+        self._restore_state(original_state)
+        self.ram = self._get_ram()
+        print(f"Found {len(self.candidate_cell_ids)} candidate RAM cells: {sorted(self.candidate_cell_ids)}")
+        self._render()
+
+
+>>>>>>> 1a9b968 (Added comments to pong, added RAM extraction GUI script for ALE implementations)
 if __name__ == "__main__":
     from argparse import ArgumentParser
 
@@ -704,6 +843,7 @@ if __name__ == "__main__":
     parser.add_argument("-ls", "--load_state", type=str, default=None, help="Path to a pickled ALE state file (.pkl) to load.")
     parser.add_argument("-nr", "--no_render", type=int, default=[], nargs="+", help="List of RAM cell indices (0-127) to hide.")
     parser.add_argument("-nra", "--no_render_all", action="store_true", help="Hide all RAM cells.")
+<<<<<<< HEAD
     # Add screenshot-dir argument
     parser.add_argument('--screenshot-dir', type=str, default=None, help='Directory to save screenshots as .npy files (optional)')
 
@@ -719,6 +859,15 @@ if __name__ == "__main__":
 
     # Pass scale and screenshot_dir arguments to Renderer
     renderer = Renderer(env_name=args.game, no_render=args.no_render, render_scale=args.scale, screenshot_dir=args.screenshot_dir)
+=======
+    args = parser.parse_args()
+
+    if args.no_render_all:
+        args.no_render = list(range(128))
+
+    # Pass scale argument to Renderer
+    renderer = Renderer(env_name=args.game, no_render=args.no_render, render_scale=args.scale)
+>>>>>>> 1a9b968 (Added comments to pong, added RAM extraction GUI script for ALE implementations)
 
     if args.load_state:
         if renderer.ale:
