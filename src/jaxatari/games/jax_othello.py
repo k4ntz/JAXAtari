@@ -5,6 +5,7 @@ import jax.lax
 import jax.numpy as jnp
 import chex
 import pygame
+import enum
 from gymnax.environments import spaces
 
 from jaxatari.rendering import atraJaxis as aj
@@ -52,23 +53,30 @@ def get_human_action() -> chex.Array:
 
 
 # state container
-class 
+class FieldColor(enum.IntEnum):
+    EMPTY = 0
+    WHITE = 1
+    BLACK = 2
 
-class OthelloState(NameTuple):
+class Field(NamedTuple):
+    filed_id: chex.Array
+    field_color: chex.Array
+
+class OthelloState(NamedTuple):
     player_score: chex.Array
     enemy_score: chex.Array
-    step_counter = chex.Array
+    step_counter: chex.Array
+    field: Field
+    field_place: chex.Array
 
 class OthelloObservation(NamedTuple):
-    # player: EntityPosition
-    # enemy: EntityPosition
+    field: Field
     score_player: jnp.ndarray
     score_enemy: jnp.ndarray
 
 class OthelloInfo(NamedTuple):
     time: jnp.ndarray
     all_rewards: chex.Array
-
 
 
 class JaxOthello(JaxEnvironment[OthelloState, OthelloObservation, OthelloInfo]):
@@ -79,13 +87,39 @@ class JaxOthello(JaxEnvironment[OthelloState, OthelloObservation, OthelloInfo]):
         if reward_funcs is not None:
             reward_funcs = tuple(reward_funcs)
         self.reward_funcs = reward_funcs
-        self.action_set = {
-            NOOP,
-            FIRE,
-            RIGHT,
-            LEFT,
-        }
-        self.obs_size = 3*4+1+1
+        self.action_set = set(range(64)) | {NOOP}
+        self.obs_size = 130
+
+
+    def reset(self) -> OthelloState:
+        """ Reset the game state to the initial state """
+        field_color_init = jnp.full((8, 8), FieldColor.EMPTY.value, dtype=jnp.int32)
+        field_color_init = field_color_init.at[3,3].set(FiledColor.BLACK.value)
+        field_color_init = field_color_init.at[4,3].set(FiledColor.WHITE.value)
+        field_color_init = field_color_init.at[3,4].set(FiledColor.WHITE.value)
+        field_color_init = field_color_init.at[4,4].set(FiledColor.BLACK.value)
+
+        state = OthelloState(
+            player_score = jnp.array(2).astype(jnp.int32),
+            enemy_score = jnp.array(2).astype(jnp.int32),
+            step_counter =jnp.array(0).astype(jnp.int32),
+            field = Field(
+                field_id = jnp.array(64, dtype=jnp.int32).reshape((8,8)),
+                field_color = field_color_init
+            ),
+            field_place = jnp.array(63).astype(jnp.int32)
+        )
+        initial_obs = self._get_observation(state)
+
+
+    @partial(jax.jit, static_argnums=(0,))
+    def _get_observation(self, state: OthelloState):
+        return OthelloObservation(
+            field=state.field,
+            score_enemy=field.score_enemy,
+            score_player=field.score_player
+        )
+
 
 
 
@@ -164,14 +198,26 @@ if __name__ == "__main__":
     screen = pygame.display.set_mode((WINDOW_WIDTH, WINDOW_HEIGHT))
     pygame.display.set_caption("Othello Game")
 
+    game = JaxOthello(frameskip=1)
+
     # Create the JAX renderer
     renderer = Renderer_AtraJaxisOthello()
 
 
+
+
     # Game Loop
     running = True
+    frameskip = 4
+    counter = 1
 
     while running:
+        for event in pygame.event.get():
+            if event.type == pygame.QUIT:
+                running = False     
+        
+        if counter % frameskip == 0:
+            action = get_human_action()
 
 
         # Render and display
