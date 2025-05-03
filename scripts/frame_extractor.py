@@ -2,449 +2,485 @@ import pygame
 import numpy as np
 import os
 import argparse
-from typing import Dict, Tuple, List
+import gymnasium as gym
+import ale_py
+from typing import Dict, Tuple, List, Set
 import time
-from ocatari.core import OCAtari, UPSCALE_FACTOR, AVAILABLE_GAMES
+import traceback
 
+# UPSCALE_FACTOR = 4 # Example if needed elsewhere, but args.scale is used
 
-class OCAtariPlayer:
+def _build_dynamic_key_map(env: gym.Env) -> Dict[Tuple[int, ...], int]:
     """
-    A generalized Atari game player using OCAtari, which handles ROM loading automatically.
+    Builds a Pygame Key -> ALE Action Integer mapping based on the
+    semantic meanings provided by the environment.
+
+    Args:
+        env: The Gymnasium Atari environment instance.
+
+    Returns:
+        A dictionary where keys are sorted tuples of pygame.K_* constants
+        and values are the corresponding action integers for the loaded game.
+    """
+    # 1. Define the DESIRED semantic mappings (Key -> Meaning String)
+    # Use sorted tuples for key combinations to ensure consistency.
+    desired_semantic_map: Dict[Tuple[int, ...], str] = {
+        # Single Keys
+        (pygame.K_UP,):    'UP',
+        (pygame.K_DOWN,):  'DOWN',
+        (pygame.K_LEFT,):  'LEFT',
+        (pygame.K_RIGHT,): 'RIGHT',
+        (pygame.K_SPACE,): 'FIRE', # Primary action button
+
+        # Combined Keys (Map to standard combined meanings)
+        # Sorting ensures (UP, RIGHT) is treated the same as (RIGHT, UP)
+        tuple(sorted((pygame.K_UP, pygame.K_RIGHT))): 'UPRIGHT',
+        tuple(sorted((pygame.K_UP, pygame.K_LEFT))):  'UPLEFT',
+        tuple(sorted((pygame.K_DOWN, pygame.K_RIGHT))):'DOWNRIGHT',
+        tuple(sorted((pygame.K_DOWN, pygame.K_LEFT))): 'DOWNLEFT',
+        tuple(sorted((pygame.K_UP, pygame.K_SPACE))):  'UPFIRE',
+        tuple(sorted((pygame.K_DOWN, pygame.K_SPACE))):'DOWNFIRE',
+        tuple(sorted((pygame.K_LEFT, pygame.K_SPACE))):'LEFTFIRE',
+        tuple(sorted((pygame.K_RIGHT, pygame.K_SPACE))):'RIGHTFIRE',
+
+        # Three-key combinations (less common, but possible)
+        tuple(sorted((pygame.K_UP, pygame.K_RIGHT, pygame.K_SPACE))): 'UPRIGHTFIRE',
+        tuple(sorted((pygame.K_UP, pygame.K_LEFT, pygame.K_SPACE))):  'UPLEFTFIRE',
+        tuple(sorted((pygame.K_DOWN, pygame.K_RIGHT, pygame.K_SPACE))):'DOWNRIGHTFIRE',
+        tuple(sorted((pygame.K_DOWN, pygame.K_LEFT, pygame.K_SPACE))): 'DOWNLEFTFIRE',
+    }
+
+    # 2. Get ACTUAL action meanings from the environment
+    try:
+        action_meanings: List[str] = env.unwrapped.get_action_meanings()
+    except AttributeError:
+        print("Warning: env.unwrapped.get_action_meanings() not found. Cannot build dynamic map.")
+        # Fallback to a very basic map or raise error? For now, return empty.
+        return {}
+    except Exception as e:
+        print(f"Warning: Error getting action meanings: {e}. Cannot build dynamic map.")
+        return {}
+
+    # 3. Create a reverse lookup: Meaning String -> Action Integer
+    meaning_to_int: Dict[str, int] = {
+        meaning: idx for idx, meaning in enumerate(action_meanings)
+    }
+
+    # 4. Build the final map: Pygame Keys Tuple -> Action Integer
+    final_key_to_action_map: Dict[Tuple[int, ...], int] = {}
+    mapped_keys: Set[int] = set() # Keep track of individual keys used
+
+    print("\n--- Building Dynamic Key Map ---")
+    for key_tuple, desired_meaning in desired_semantic_map.items():
+        if desired_meaning in meaning_to_int:
+            action_int = meaning_to_int[desired_meaning]
+            final_key_to_action_map[key_tuple] = action_int
+            # Add the individual keys from this tuple to our set
+            mapped_keys.update(key_tuple)
+            # Optional: print successful mappings
+            # key_names = tuple(pygame.key.name(k) for k in key_tuple)
+            # print(f"  Mapped {key_names} -> {desired_meaning} (Action {action_int})")
+        # else:
+            # Optional: print warnings for desired meanings not found in this game
+            # key_names = tuple(pygame.key.name(k) for k in key_tuple)
+            # print(f"  Info: Desired meaning '{desired_meaning}' for keys {key_names} not found in this game's actions.")
+
+    # Add NOOP mapping (empty tuple for no keys pressed maps to action 0)
+    # Note: The _get_action method already defaults to 0 if no match is found,
+    # so explicitly adding this might be redundant depending on that logic,
+    # but it's clearer. Check if action 0 is indeed NOOP.
+    if 0 < len(action_meanings) and action_meanings[0] == 'NOOP':
+         # Add mapping for "no relevant keys pressed" -> NOOP (Action 0)
+         # This isn't strictly needed if _get_action() defaults to 0,
+         # but helps conceptually. We won't add it directly to the map used
+         # for key press lookups, but confirm NOOP=0 exists.
+         print("  Confirmed: Action 0 is NOOP.")
+         pass # NOOP handled by default in _get_action
+    elif 0 in meaning_to_int.values():
+        print(f"  Warning: Action 0 exists but is not 'NOOP' (it's '{action_meanings[0]}'). Default action might be unexpected.")
+    else:
+        print(f"  Warning: Action 0 not found in action space ({len(action_meanings)} actions total). Defaulting to 0 may error.")
+
+    print("--- Dynamic Key Map Build Complete ---")
+
+    # Store the set of relevant keys for faster checking in input handler
+    final_key_to_action_map['_relevant_keys_'] = mapped_keys # Use a special key
+
+    return final_key_to_action_map
+
+class AtariPlayer:
+    """
+    A generalized Atari game player using Gymnasium and ALE-Py,
+    correctly handling single and combined key inputs.
     """
 
     def __init__(self,
-                 game_name: str = "Boxing",
-                 mode: str = "ram",
-                 hud: bool = True,
-                 obs_mode: str = "ori",
-                 render_scale: int = None,
+                 game_name: str = "Pong",
+                 render_scale: int = 4,
                  screenshot_dir: str = None,
                  fps: int = 30):
-        """
-        Initialize the OCAtari game player.
-
-        Args:
-            game_name: Name of the Atari game to load (e.g., 'Boxing', 'Breakout', 'Pong')
-            mode: OCAtari mode ('ram', 'vision', or 'both')
-            hud: Whether to include HUD elements in object detection
-            obs_mode: Observation mode ('ori', 'dqn', or 'obj')
-            render_scale: Scale factor for rendering (defaults to OCAtari's UPSCALE_FACTOR)
-            screenshot_dir: Directory to save frame screenshots (None = no screenshots)
-            fps: Target frames per second
-        """
-        # Create the OCAtari environment
         self.game_name = game_name
+        self.render_scale = render_scale
 
         try:
-            # Create OCAtari environment
-            self.env = OCAtari(
-                game_name,
-                mode=mode,
-                hud=hud,
-                render_mode="rgb_array",
-                #render_oc_overlay=True,
-                obs_mode=obs_mode,
-                frameskip=1,
-            )
+            # Create Gymnasium ALE environment
+            self.env = gym.make(f"ALE/{game_name}-v5", render_mode="rgb_array", frameskip=1)
+            # No need to get self.ale explicitly unless using direct ALE calls not in Gym wrapper
 
             # Reset environment to get initial observation
-            self.env.reset()
+            self.env.reset(seed=42)
             self.current_frame = self.env.render()
-
-            # Initialize rendering attributes
-            self.render_scale = render_scale if render_scale is not None else UPSCALE_FACTOR
+            if self.current_frame is None:
+                raise RuntimeError("env.render() returned None. Check render_mode.")
 
             # Initialize pygame
             pygame.init()
-            self.env_render_shape = self.current_frame.shape[:2]
-            self.screen_width = int(self.env_render_shape[1] * self.render_scale)  # Note the swap for typical Atari orientation
-            self.screen_height = int(self.env_render_shape[0] * self.render_scale) # Note the swap for typical Atari orientation
+            pygame.font.init() # Keep if drawing text overlays
+
+            self.env_render_shape_h_w = self.current_frame.shape[:2]
+            self.screen_width = int(self.env_render_shape_h_w[1] * self.render_scale)
+            self.screen_height = int(self.env_render_shape_h_w[0] * self.render_scale)
+
             self.screen = pygame.display.set_mode((self.screen_width, self.screen_height))
-            pygame.display.set_caption(f"OCAtari Player: {game_name}")
+            pygame.display.set_caption(f"Gymnasium Atari Player: {game_name}")
             self.clock = pygame.time.Clock()
             self.fps = fps
 
-            # Initialize frame saving
             self.screenshot_dir = screenshot_dir
             if screenshot_dir:
                 os.makedirs(screenshot_dir, exist_ok=True)
             self.frame_counter = 1
 
-            # Input handling attributes
-            self.current_keys_down = set()
+            self.current_keys_down = set() # Stores pygame.K_* constants currently pressed
             self.current_mouse_pos = None
 
-            # Get action mappings and ensure they're valid
-            self.keys2actions = self._get_valid_key_mappings()
+            # --- CRITICAL CHANGE: Build dynamic key mappings ---
+            # Call the new function after env is created
+            self.keys2actions = _build_dynamic_key_map(self.env)
+            # Extract the set of relevant keys for input handling
+            self.relevant_keys = self.keys2actions.pop('_relevant_keys_', set())
+            # ---
 
-            # Game state attributes
             self.paused = False
             self.frame_by_frame = False
             self.next_frame = False
 
-            # Initialize RAM editing tools - track which RAM positions are important
-            self.ram_positions = self._get_game_ram_positions()
+            print(f"\nLoaded {game_name} environment")
+            print(f"Raw observation shape (H, W, C): {self.current_frame.shape}")
+            print(f"Scaled display size (W, H): {self.screen_width}x{self.screen_height}")
+            print(f"Action space size: {self.env.action_space.n}")
 
-            # Print information about the environment
-            print(f"Loaded {game_name} environment")
-            print(f"Observation shape: {self.env_render_shape}")
-            print(f"Action space: {self.env.action_space}")
+            # Print the actual mappings being used (updated to use dynamic map)
             self._print_action_meanings_and_key_mappings()
-
-            # Print RAM manipulation instructions
-            self._print_ram_instructions()
 
         except Exception as e:
             pygame.quit()
-            raise e
+            print(f"\nError during initialization: {e}")
+            print("Ensure the game ROM is installed (e.g., `ale-import-roms /path/to/roms`)")
+            print("Or try 'pip install gymnasium[accept-rom-license]'")
+            traceback.print_exc()
+            raise
 
-    def _get_game_ram_positions(self):
+    # --- REMOVE the old _get_valid_key_mappings ---
+    # def _get_valid_key_mappings(self): ... # DELETE THIS FUNCTION
+
+    # --- Helper method to print mappings (Modified slightly) ---
+    def _print_action_meanings_and_key_mappings(self):
         """
-        Get the important RAM positions for the current game.
-        This helps us know which RAM positions to modify for specific functionality.
+        Print the available actions and their corresponding key mappings.
         """
-        # Default is an empty dictionary
-        ram_positions = {}
+        print("\n--- Action Meanings and Key Mappings (Dynamically Generated) ---")
+        try:
+            action_meanings = self.env.unwrapped.get_action_meanings()
+            print(f"Available actions ({self.env.action_space.n}):")
+            for i, meaning in enumerate(action_meanings):
+                print(f"  Action {i}: {meaning}")
 
-        # Game-specific RAM positions
-        if self.game_name.lower() == "pong":
-            ram_positions = {
-                "player_score": 14,  # RAM position for player score
-                "enemy_score": 13,  # RAM position for enemy score
-                "ball_x": 49,  # Ball X position
-                "ball_y": 54,  # Ball Y position
-                "player_y": 51,  # Player Y position
-                "enemy_y": 50,  # Enemy Y position
-            }
-        # Add more games here as needed
-        elif self.game_name.lower() == "breakout":
-            ram_positions = {
-                "score_1": 84,  # Score digit 1
-                "score_2": 85,  # Score digit 2
-                "score_3": 86,  # Score digit 3
-                "lives": 73,  # Number of lives
-                "ball_x": 99,  # Ball X position
-                "ball_y": 101,  # Ball Y position
-            }
-        elif self.game_name.lower() == "boxing":
-            ram_positions = {
-                "player_score": 3,  # Player score
-                "enemy_score": 2,  # Enemy score
-            }
+            if not self.keys2actions:  # Check the actual map now
+                print("\nKey mappings: None generated (check warnings during build).")
+                return
 
-        return ram_positions
+            print(f"\nKey mappings:")
+            # Sort by action number for clarity
+            sorted_mappings = sorted(self.keys2actions.items(), key=lambda item: item[1])
 
-    def _print_ram_instructions(self):
-        """
-        Print game-specific RAM manipulation instructions.
-        """
-        print("\nRAM Manipulation Controls:")
-        print("  Middle Mouse Button: Increase player score by 1")
+            for keys, action in sorted_mappings:
+                # Ensure action is valid before accessing meanings list
+                if 0 <= action < len(action_meanings):
+                    key_names = [pygame.key.name(key).upper() for key in keys]
+                    action_meaning = action_meanings[action]  # Use action index directly
+                    print(f"  {' + '.join(key_names):<25} -> Action {action} ({action_meaning})")
+                else:
+                    # This case *shouldn't* happen with the dynamic builder, but good to check
+                    key_names = [pygame.key.name(key).upper() for key in keys]
+                    print(f"  {' + '.join(key_names):<25} -> Invalid Action Index ({action})")
 
-        # Game-specific instructions
-        if self.game_name.lower() == "pong":
-            print("  In Pong, this modifies RAM position 14")
-        elif self.game_name.lower() == "breakout":
-            print("  In Breakout, this modifies RAM positions 84-86")
-        elif self.game_name.lower() == "boxing":
-            print("  In Boxing, this modifies RAM position 3")
+        except AttributeError:
+            print("Action meanings: env.unwrapped.get_action_meanings() not found.")
+        except Exception as e:
+            print(f"Warning: Could not print action meanings: {e}")
+        print("-------------------------------------------------------------")
 
     def _get_valid_key_mappings(self):
         """
         Get the valid key to action mappings from the environment.
         This function ensures we only use actions that are valid for the current game.
         """
-        try:
-            keys2actions = self.env.unwrapped.get_keys_to_action()
-            action_meanings = self.env.unwrapped.get_action_meanings()
+        # create a default mapping
+        mapping = {
+            (pygame.K_UP,): 2,
+            (pygame.K_RIGHT,): 3,
+            (pygame.K_LEFT,): 4,
+            (pygame.K_DOWN,): 5,
+            (pygame.K_SPACE,): 1,
+            (pygame.K_UP, pygame.K_RIGHT): 6,
+            (pygame.K_UP, pygame.K_LEFT): 7,
+            (pygame.K_DOWN, pygame.K_RIGHT): 8,
+            (pygame.K_DOWN, pygame.K_LEFT): 9,
+            (pygame.K_UP, pygame.K_SPACE): 10,
+            (pygame.K_RIGHT, pygame.K_SPACE): 11,
+            (pygame.K_LEFT, pygame.K_SPACE): 12,
+            (pygame.K_DOWN, pygame.K_SPACE): 13,
+            (pygame.K_UP, pygame.K_RIGHT, pygame.K_SPACE): 14,
+            (pygame.K_UP, pygame.K_LEFT, pygame.K_SPACE): 15,
+            (pygame.K_DOWN, pygame.K_RIGHT, pygame.K_SPACE): 16,
+            (pygame.K_DOWN, pygame.K_LEFT, pygame.K_SPACE): 17,
+        }
 
-            # Filter out any actions that are outside the valid range
-            valid_keys2actions = {}
-            for keys, action in keys2actions.items():
-                if 0 <= action < len(action_meanings):
-                    valid_keys2actions[keys] = action
+        # sort all keys in the mapping to ensure invariance to order of pressed keys
+        temp = {}
+        for keys in mapping.keys():
+            sorted_keys = tuple(sorted(keys))
+            temp[sorted_keys] = mapping[keys]
 
-            return valid_keys2actions
-        except Exception as e:
-            print(f"Warning: Could not get valid key mappings: {e}")
-            # Return a default mapping if the original fails
-            return {
-                (pygame.K_UP,): 2,  # UP
-                (pygame.K_DOWN,): 3,  # DOWN
-                (pygame.K_LEFT,): 4,  # LEFT
-                (pygame.K_RIGHT,): 5,  # RIGHT
-                (pygame.K_SPACE,): 1,  # FIRE
-            }
+        # filter out invalid actions
+        valid_keys = set()
+        for keys, action in temp.items():
+            if action < self.env.action_space.n:
+                valid_keys.add(keys)
 
+        # create a new mapping with only valid actions
+        temp = {keys: action for keys, action in temp.items() if keys in valid_keys}
+
+        return temp
+
+    # --- Helper method to print mappings ---
     def _print_action_meanings_and_key_mappings(self):
         """
-        Print the available actions and their key mappings.
-        This function handles the case where the action index is out of range.
+        Print the available actions and their corresponding key mappings.
         """
+        print("\n--- Action Meanings and Key Mappings ---")
         try:
             action_meanings = self.env.unwrapped.get_action_meanings()
-            print(f"Available actions: {action_meanings}")
+            print(f"Available actions ({self.env.action_space.n}): {action_meanings}")
+
+            if not self.keys2actions:
+                print("Key mappings: None found or defined.")
+                return
 
             print(f"Key mappings:")
-            for keys, action in self.keys2actions.items():
-                if 0 <= action < len(action_meanings):
-                    key_names = [pygame.key.name(key).upper() for key in keys]
-                    action_meaning = action_meanings[action]
-                    print(f"  {' + '.join(key_names)} -> {action_meaning} (action {action})")
-                else:
-                    key_names = [pygame.key.name(key).upper() for key in keys]
-                    print(f"  {' + '.join(key_names)} -> Unknown action (index {action} out of range)")
+            # Sort by action number for clarity
+            sorted_mappings = sorted(self.keys2actions.items(), key=lambda item: item[1])
+
+            for keys, action in sorted_mappings:
+                 # Ensure action is valid before accessing meanings list
+                 if 0 <= action < len(action_meanings):
+                     key_names = [pygame.key.name(key).upper() for key in keys]
+                     action_meaning = action_meanings[action]
+                     print(f"  {' + '.join(key_names):<20} -> {action_meaning} (Action {action})")
+                 else:
+                     # This case should have been filtered by _get_valid_key_mappings
+                     key_names = [pygame.key.name(key).upper() for key in keys]
+                     print(f"  {' + '.join(key_names):<20} -> Invalid Action Index ({action})")
+
+        except AttributeError:
+             print("Action meanings: env.unwrapped.get_action_meanings() not found.")
         except Exception as e:
             print(f"Warning: Could not print action meanings: {e}")
+        print("----------------------------------------")
 
+    # --- Frame Saving (Unchanged) ---
     def save_frame(self, frame: np.ndarray) -> None:
-        """
-        Save the current frame as a NumPy array.
+        if not self.screenshot_dir: return
+        if frame is None: print("Warning: Cannot save None frame."); return
+        try:
+            filepath = os.path.join(self.screenshot_dir, f"frame_{self.frame_counter:05d}.npy")
+            np.save(filepath, frame)
+            self.frame_counter += 1
+        except Exception as e: print(f"Error saving frame: {e}")
 
-        Args:
-            frame: Frame to save
+    # --- Action Determination (Unchanged - Relies on correct keys2actions) ---
+    def _get_action(self) -> int:
         """
-        if not self.screenshot_dir:
-            return
-
-        filepath = os.path.join(self.screenshot_dir, f"frame_{self.frame_counter}.npy")
-        np.save(filepath, frame)
-        print(f"Frame saved as NumPy array: {filepath}")
-        self.frame_counter += 1
-
-    def _get_action(self):
+        Get the action based on the currently pressed keys by looking up
+        the sorted tuple of keys in the dynamically generated keys2actions dictionary.
+        Defaults to action 0 (assumed NOOP) if no matching combination is pressed.
         """
-        Get the action based on the currently pressed keys.
-        """
-        pressed_keys = list(self.current_keys_down)
-        pressed_keys.sort()
-        pressed_keys = tuple(pressed_keys)
-        if pressed_keys in self.keys2actions.keys():
-            return self.keys2actions[pressed_keys]
-        else:
-            return 0  # NOOP
+        # Get the set of *relevant* keys currently held down
+        pressed_relevant_keys = self.current_keys_down.intersection(self.relevant_keys)
 
-    def _handle_user_input(self):
+        # Sort the set of keys currently pressed to ensure consistent tuple representation
+        # Use the intersection to only consider keys that are part of our map
+        pressed_keys_tuple = tuple(sorted(list(pressed_relevant_keys)))
+
+        # Look up this exact tuple in the dictionary
+        # Default to NOOP (0) if combination not found or tuple is empty
+        return self.keys2actions.get(pressed_keys_tuple, 0)
+
+    # --- Input Handling (Logic remains correct, checks against fetched keys2actions) ---
+    def _handle_user_input(self) -> bool:
         """
         Handle user input via keyboard and mouse.
+        Updates self.current_keys_down based on keys defined as relevant
+        by the dynamic mapping process. Handles non-gameplay keys.
         """
-        self.current_mouse_pos = np.asarray(pygame.mouse.get_pos())
+        self.current_mouse_pos = np.asarray(pygame.mouse.get_pos())  # If needed
 
         for event in pygame.event.get():
             if event.type == pygame.QUIT:
                 return False  # Signal to stop the game loop
 
-            elif event.type == pygame.MOUSEBUTTONDOWN:
-                if event.button == 1:  # Left mouse button
-                    # Click handling logic can be added here
-                    pass
-                elif event.button == 2:
-                    # TODO: here you can put ram manipulations to get the sprites faster (for example increasing the score manually)
-                    self.env.set_ram(16, 10)
+            # --- MOUSE (Keep existing logic if needed) ---
+            # ...
 
+            # --- KEY DOWN ---
             elif event.type == pygame.KEYDOWN:
-                if event.key == pygame.K_p:  # Pause/resume
-                    self.paused = not self.paused
-                    print("Game " + ("paused" if self.paused else "resumed"))
+                key = event.key
+                # Non-action keys first
+                if key == pygame.K_p:
+                    self.paused = not self.paused; print(f"Game {'paused' if self.paused else 'resumed'}")
+                elif key == pygame.K_f:
+                    self.frame_by_frame = not self.frame_by_frame; self.next_frame = False; print(
+                        f"Frame-by-frame {'enabled' if self.frame_by_frame else 'disabled'}")
+                elif key == pygame.K_n and self.frame_by_frame:
+                    self.next_frame = True; print("Next frame")
+                elif key == pygame.K_r:
+                    print("Resetting environment...");
+                    try:
+                        self.env.reset(seed=42);
+                        self.current_frame = self._safe_render()
+                        print("Game reset")
+                    except Exception as e:
+                        print(f"Error resetting environment: {e}")
+                elif key == pygame.K_s:
+                    print("Saving frame..."); self.save_frame(self.current_frame)
 
-                elif event.key == pygame.K_f:  # Frame by frame mode
-                    self.frame_by_frame = not self.frame_by_frame
-                    self.next_frame = False
-                    print("Frame-by-frame mode " + ("enabled" if self.frame_by_frame else "disabled"))
+                # Check if the pressed key is one of the keys relevant to gameplay actions
+                elif key in self.relevant_keys:
+                    self.current_keys_down.add(key)  # Add to the set of currently held keys
 
-                elif event.key == pygame.K_n:  # Next frame in frame-by-frame mode
-                    self.next_frame = True
-                    print("Next frame")
-
-                elif event.key == pygame.K_r:  # Reset game
-                    self.env.reset()
-                    print("Game reset")
-
-                elif event.key == pygame.K_s:  # Save screenshot
-                    self.save_frame(self.current_frame)
-
-                elif event.key == pygame.K_d:  # Debug RAM (print current RAM state)
-                    ram = self.env.get_ram()
-                    print(f"\nRAM state for important positions:")
-                    for name, pos in self.ram_positions.items():
-                        print(f"  {name}: {ram[pos]} (position {pos})")
-
-                elif [x for x in self.keys2actions.keys() if event.key in x]:
-                    # Environment action key pressed
-                    self.current_keys_down.add(event.key)
-
+            # --- KEY UP ---
             elif event.type == pygame.KEYUP:
-                if [x for x in self.keys2actions.keys() if event.key in x]:
-                    # Environment action key released
-                    if event.key in self.current_keys_down:
-                        self.current_keys_down.remove(event.key)
+                key = event.key
+                # Check if the released key is relevant to gameplay actions
+                if key in self.relevant_keys:
+                    self.current_keys_down.discard(key)  # Remove from the set
 
         return True  # Continue the game loop
 
+    # --- Rendering (Unchanged) ---
     def _safe_render(self):
-        """
-        Safely render the current frame, handling any errors that might occur.
-        This addresses the overflow error that can happen during rendering.
-        """
         try:
-            return self.env.render()
-        except OverflowError as e:
-            print(f"Warning: Rendering error detected ({e}). Applying workaround...")
-
-            # Try to fix by manually adjusting problematic objects in the environment
-            for obj in self.env.objects:
-                # Cap object positions to reasonable values (0-200)
-                x, y = obj.xy
-                w, h = obj.wh
-
-                # Cap position values to prevent overflow
-                if x > 200 or y > 200:
-                    obj._xy = min(x, 200), min(y, 200)
-                    print(f"Fixed object position: {x},{y} -> {obj.xy}")
-
-                # Cap width/height values to prevent overflow
-                if w > 100 or h > 100:
-                    obj.wh = min(w, 100), min(h, 100)
-                    print(f"Fixed object size: {w},{h} -> {obj.wh}")
-
-            # Try rendering again with fixed objects
-            try:
-                return self.env.render()
-            except Exception as e2:
-                print(f"Still cannot render. Using previous frame. ({e2})")
-                # Return the previous frame as a fallback
-                return self.current_frame
+            frame = self.env.render()
+            if frame is None: print("Warning: env.render() returned None. Using previous."); return self.current_frame
+            return frame
+        except Exception as e: print(f"Warning: Rendering error ({e}). Using previous."); return self.current_frame
 
     def run(self) -> None:
-        """Main game loop."""
         running = True
         total_reward = 0
         steps = 0
-
-        print("\nGame Controls:")
-        print("  P: Pause/resume game")
-        print("  F: Toggle frame-by-frame mode")
-        print("  N: Next frame (when in frame-by-frame mode)")
-        print("  R: Reset game")
-        print("  S: Save current frame as NumPy array")
-        print("  D: Debug RAM (print important RAM values)")
-        print("  Game-specific controls are listed above\n")
+        # Print controls once at the start
+        print("\n--- Game Controls ---")
+        print("  P: Pause/resume | F: Frame-by-frame | N: Next frame | R: Reset | S: Save Frame")
+        print("  Use keys listed in 'Key Mappings' above for gameplay.")
+        print("--------------------\n")
 
         try:
             while running:
-                # Handle user input
-                running = self._handle_user_input()
-                if not running:
-                    break
+                running = self._handle_user_input()  # Updates self.current_keys_down
+                if not running: break
 
-                # Process game logic if not paused
-                if not (self.frame_by_frame and not self.next_frame) and not self.paused:
-                    # Get action based on pressed keys
-                    action = self._get_action()
+                if not self.paused and not (self.frame_by_frame and not self.next_frame):
+                    action = self._get_action()  # Gets action based on current self.current_keys_down
 
-                    # Execute action
-                    obs, reward, truncated, terminated, info = self.env.step(action)
+                    obs, reward, terminated, truncated, info = self.env.step(action)
                     total_reward += reward
                     steps += 1
-
-                    # Update the current frame with safe rendering
                     self.current_frame = self._safe_render()
-
-                    # Reset the next_frame flag
                     self.next_frame = False
 
-                    # Update the window title with game information
-                    score_text = f"{self.game_name} | Score: {total_reward:.1f} | Steps: {steps}"
-                    pygame.display.set_caption(score_text)
-
-                    # Check for game over
-                    if terminated or truncated:
-                        print(f"Game over! Final score: {total_reward}")
-                        self.env.reset()
-                        total_reward = 0
-                        steps = 0
-
-                # Render the current frame to the screen
-                try:
-                    frame_surface = pygame.Surface(self.env_render_shape)
-                    pygame.pixelcopy.array_to_surface(frame_surface, self.current_frame)
-                    scaled_surface = pygame.transform.scale(frame_surface, (self.screen_width, self.screen_height))
-                    self.screen.blit(scaled_surface, (0, 0))
-                    pygame.display.flip()
-                except Exception as e:
-                    print(self.env_render_shape)
-
-                    print(f"Error rendering to screen: {e}")
-                    # Try to recover by re-initializing the surface
+                    # Update Title (Score display logic unchanged)
+                    score_display = f"{total_reward:.0f}"
                     try:
-                        self.screen = pygame.display.set_mode((self.screen_width, self.screen_height))
-                    except:
+                        ram = self.ale.getRAM()  # Get fresh RAM state
+                        # This score logic is game-dependent and might need adjustment per game
+                        if 'player_score' in self.ram_positions and self.ram_positions['player_score'] < len(ram):
+                            score_display = f"{ram[self.ram_positions['player_score']]}"
+                        elif 'score_1' in self.ram_positions:  # Example: Breakout BCD score (simplistic representation)
+                            s1, s2, s3 = ram[self.ram_positions['score_1']], ram[self.ram_positions['score_2']], ram[
+                                self.ram_positions['score_3']]
+                            score_display = f"{s1:X}{s2:X}{s3:X}"  # Display as hex BCD digits
+                    except Exception:
                         pass
+                    pygame.display.set_caption(f"{self.game_name} | Score: {score_display} | Steps: {steps}")
 
-                # Cap the framerate
+                    if terminated or truncated:
+                        print(
+                            f"--- Episode Finished (Score: {score_display}, Reward: {total_reward:.2f}, Steps: {steps}) ---")
+                        print("Resetting...")
+                        self.env.reset(seed=42);
+                        self.current_frame = self.env.render()
+                        total_reward = 0;
+                        steps = 0
+                        pygame.display.set_caption(f"{self.game_name} | Score: 0 | Steps: 0")
+
+                # Rendering (Logic unchanged)
+                if self.current_frame is not None:
+                    try:
+                        frame_surface = pygame.Surface((self.env_render_shape_h_w[1], self.env_render_shape_h_w[0]))
+                        pygame.pixelcopy.array_to_surface(frame_surface, self.current_frame.swapaxes(0, 1))
+                        scaled_surface = pygame.transform.scale(frame_surface, (self.screen_width, self.screen_height))
+                        self.screen.blit(scaled_surface, (0, 0))
+                        pygame.display.flip()
+                    except Exception as e:
+                        print(f"Error during pygame rendering: {e}")
+                else:
+                    self.screen.fill((0, 0, 0)); pygame.display.flip()
+
                 self.clock.tick(self.fps)
         except Exception as e:
-            print(f"Error during game execution: {e}")
-            import traceback
-            traceback.print_exc()
+            print(f"\n--- Error during game run: {e} ---"); traceback.print_exc()
+        finally:
+            self.close()
 
+    # --- Cleanup (Unchanged) ---
     def close(self):
-        """Clean up resources."""
-        try:
-            self.env.close()
-        except:
-            pass
+        print("Closing environment and quitting pygame.")
+        try: self.env.close()
+        except Exception as e: print(f"Error closing environment: {e}")
         pygame.quit()
 
-
+# --- Main Execution (Unchanged) ---
 def main():
-    """Parse command line arguments and run the game."""
-    parser = argparse.ArgumentParser(description='Play any Atari game using OCAtari')
-    parser.add_argument('--game', type=str, default='Pong',
-                        help='Name of the Atari game to play (e.g., Boxing, Breakout, Pong)')
-    parser.add_argument('--mode', type=str, default='ram', choices=['ram', 'vision', 'both'],
-                        help='OCAtari mode for object detection')
-    parser.add_argument('--no-hud', action='store_true', default=False,  # Changed default to False for clarity
-                        help='Exclude HUD elements in object detection')
-    parser.add_argument('--obs-mode', type=str, default='ori', choices=['ori', 'dqn', 'obj'],
-                        help='Observation mode')
-    parser.add_argument('--scale', type=int, default=4,
-                        help='Scale factor for the display window')
-    parser.add_argument('--fps', type=int, default=30,
-                        help='Target frames per second')
-    parser.add_argument('--screenshot-dir', type=str, default="new_screenshots",
-                        help='Directory to save screenshots (optional)')
-
+    parser = argparse.ArgumentParser(description='Play Atari games using Gymnasium')
+    parser.add_argument('-g', '--game', type=str, default='Pong', help='Name of the Atari game ROM (e.g., Pong, Breakout)')
+    parser.add_argument('--scale', type=int, default=4, help='Scale factor for the display window')
+    parser.add_argument('--fps', type=int, default=30, help='Target frames per second')
+    parser.add_argument('--screenshot-dir', type=str, default=None, help='Directory to save screenshots as .npy files (optional)')
     args = parser.parse_args()
 
-    # Print available games if requested
-    if args.game.lower() == 'list':
-        print("Available Atari games in OCAtari:")
-        for game in sorted(AVAILABLE_GAMES):
-            print(f"  {game}")
-        return
+    # if the screenshot_dir is None, set it to {game_name}_screenshots
+    if args.screenshot_dir is None:
+        args.screenshot_dir = f"{args.game}_screenshots"
 
+    player = None
     try:
-        player = OCAtariPlayer(
-            game_name=args.game,
-            mode=args.mode,
-            hud=not args.no_hud,
-            obs_mode=args.obs_mode,
-            render_scale=args.scale,
-            screenshot_dir=args.screenshot_dir,
-            fps=args.fps
-        )
+        player = AtariPlayer(game_name=args.game, render_scale=args.scale, screenshot_dir=args.screenshot_dir, fps=args.fps)
         player.run()
-    except KeyboardInterrupt:
-        print("Exiting by user request")
-    except Exception as e:
-        print(f"Error: {e}")
-        import traceback
-        traceback.print_exc()
-    finally:
-        if 'player' in locals():
-            player.close()
-
+    except KeyboardInterrupt: print("\nExiting by user request.")
+    except Exception as e: pass # Error already handled within Player class
+    # No finally block needed here as player.close() is called in player.run()'s finally
 
 if __name__ == "__main__":
     main()
