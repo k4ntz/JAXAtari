@@ -461,6 +461,9 @@ class JaxPong(JaxEnvironment[PongState, PongObservation, PongInfo]):
 
     @partial(jax.jit, static_argnums=(0,))
     def step(self, state: PongState, action: chex.Array) -> Tuple[PongState, PongObservation, float, bool, PongInfo]:
+        # chex provides jax with additional debug/testing functionality.
+        # Probably best to use it instead of simply jnp.array
+
         # Step 1: Update player position and speed
         # only execute player step on even steps (base implementation only moves the player every second tick)
         new_player_y, player_speed_b, new_acceleration_counter = player_step(
@@ -830,6 +833,7 @@ if __name__ == "__main__":
     counter = 1
 
     while running:
+        # Event loop that checks display settings (QUIT, frame-by-frame-mode toggled, next for frame-by-frame mode)
         for event in pygame.event.get():
             if event.type == pygame.QUIT:
                 running = False
@@ -841,14 +845,19 @@ if __name__ == "__main__":
             ):
                 if event.key == pygame.K_n and frame_by_frame:
                     if counter % frameskip == 0:
+                        # If frame-by-frame mode activated and next frame is requested,
+                        # get human (game) action and perform step 
                         action = get_human_action()
                         curr_state, obs, reward, done, info = jitted_step(
                             curr_state, action
                         )
 
         if not frame_by_frame:
+            # If not in frame-by-frame mode perform step at each clock-tick
+            # i.e. get human (game) action
             if counter % frameskip == 0:
                 action = get_human_action()
+                # Update game step
                 curr_state, obs, reward, done, info = jitted_step(curr_state, action)
 
         # Render and display
