@@ -19,6 +19,75 @@ HEIGHT = 210
 WINDOW_WIDTH = 160 * 3
 WINDOW_HEIGHT = 210 * 3
 
+# Actions constants
+NOOP = 0
+UP = 1
+DOWN = 2
+LEFT = 3
+RIGHT = 4
+PLACE = 5
+DIFFICULTY = 6
+RESET = 7
+
+
+def get_human_action() -> chex.Array:
+    keys = pygame.key.get_pressed()
+    if keys[pygame.K_1]:
+        return jnp.array(DIFFICULTY)
+    elif keys[pygame.K_2]:
+        return jnp.array(RESET)
+    elif keys[pygame.K_w]:
+        return jnp.array(UP)
+    elif keys[pygame.K_s]:
+        return jnp.array(DOWN)
+    elif keys[pygame.K_a]:
+        return jnp.array(LEFT)
+    elif keys[pygame.K_d]:
+        return jnp.array(RIGHT)
+    elif keys[pygame.K_LCTRL]:
+        return jnp.array(PLACE)
+    else:
+        return jnp.array(NOOP)
+
+
+
+# state container
+class 
+
+class OthelloState(NameTuple):
+    player_score: chex.Array
+    enemy_score: chex.Array
+    step_counter = chex.Array
+
+class OthelloObservation(NamedTuple):
+    # player: EntityPosition
+    # enemy: EntityPosition
+    score_player: jnp.ndarray
+    score_enemy: jnp.ndarray
+
+class OthelloInfo(NamedTuple):
+    time: jnp.ndarray
+    all_rewards: chex.Array
+
+
+
+class JaxOthello(JaxEnvironment[OthelloState, OthelloObservation, OthelloInfo]):
+    def __init__(self, frameskip: int = 0, reward_funcs: list[callable]=None):
+        super().__init__()
+        self.frameskip = frameskip + 1
+        self.frame_stack_size = 4
+        if reward_funcs is not None:
+            reward_funcs = tuple(reward_funcs)
+        self.reward_funcs = reward_funcs
+        self.action_set = {
+            NOOP,
+            FIRE,
+            RIGHT,
+            LEFT,
+        }
+        self.obs_size = 3*4+1+1
+
+
 
 def load_sprites():
     """Load all sprites required for Pong rendering."""
@@ -37,7 +106,6 @@ def load_sprites():
     SPRITE_BG = jnp.expand_dims(bg, axis=0)
     SPRITE_PLAYER = jnp.expand_dims(player, axis=0)
     SPRITE_ENEMY = jnp.expand_dims(enemy, axis=0)
-    # SPRITE_BALL = jnp.expand_dims(ball, axis=0)
 
     # Load digits for scores
     # PLAYER_DIGIT_SPRITES = aj.load_and_pad_digits(
@@ -53,7 +121,6 @@ def load_sprites():
         SPRITE_BG,
         SPRITE_PLAYER,
         SPRITE_ENEMY,
-        # SPRITE_BALL,
         # PLAYER_DIGIT_SPRITES,
         # ENEMY_DIGIT_SPRITES
     )
@@ -66,7 +133,6 @@ class Renderer_AtraJaxisOthello:
             self.SPRITE_BG,
             self.SPRITE_PLAYER,
             self.SPRITE_ENEMY,
-            # self.SPRITE_BALL,
             # self.PLAYER_DIGIT_SPRITES,
             # self.ENEMY_DIGIT_SPRITES,
         ) = load_sprites()
