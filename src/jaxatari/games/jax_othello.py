@@ -15,6 +15,8 @@ from jaxatari.environment import JaxEnvironment
 # Game Environment
 WIDTH = 160
 HEIGHT = 210
+FIELD_WIDTH = 8
+FIELD_HEIGHT = 8
 
 # Pygame window dimensions
 WINDOW_WIDTH = 160 * 3
@@ -340,12 +342,42 @@ class Renderer_AtraJaxisOthello:
         frame_bg = aj.get_sprite_frame(self.SPRITE_BG, 0)
         raster = aj.render_at(raster, 0, 0, frame_bg)
 
+        # Render the disc which shows the current player choice -> is not a fixed disc
         frame_player = aj.get_sprite_frame(self.SPRITE_PLAYER, 0)
         current_player_choice = render_point_of_disc(state.field_choice_player)
         raster = aj.render_at(raster, current_player_choice[0], current_player_choice[1], frame_player)
 
+        # Render all fixed discs
         frame_enemy = aj.get_sprite_frame(self.SPRITE_ENEMY, 0)
-        raster = aj.render_at(raster, 0, 0, frame_enemy)
+
+        def set_discs_to_the_raster(raster, field_color):
+            def outer_loop(i, carry):
+                def inner_loop(j, carry):
+                    raster = carry
+                    color = field_color[i, j]
+                    render_point = render_point_of_disc(jnp.array([i,j], dtype=jnp.int32))
+
+                    def set_value(c):
+                        return raster.at[i, j].set(c)
+
+                    return jax.lax.cond(
+                        color == FieldColor.EMPTY, 
+                        lambda x: raster,
+                        lambda x: jax.lax.cond(
+                            color == FieldColor.WHITE,
+                            lambda x: aj.render_at(raster, render_point[0], render_point[1], frame_player),
+                            lambda x: aj.render_at(raster, render_point[0], render_point[1], frame_enemy),
+                            x
+                        ),
+                        color
+                    )
+
+                return jax.lax.fori_loop(0, FIELD_HEIGHT, inner_loop, carry)
+
+            current_raster = raster
+            return jax.lax.fori_loop(0, FIELD_WIDTH, outer_loop, current_raster)
+
+        raster = set_discs_to_the_raster(raster, state.field.field_color)
 
         return raster
 
@@ -380,7 +412,7 @@ if __name__ == "__main__":
         if counter % frameskip == 0:
             action = get_human_action()
             curr_state, obs, reward, done, info = jitted_step(curr_state, action, is_human=True)
-            # curr_state, obs, reward, done, info = game.step(curr_state, action, True)
+            # print(curr_state.field.field_color[4,3])
 
 
         # Render and display
