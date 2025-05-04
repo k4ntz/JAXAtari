@@ -59,7 +59,7 @@ class FieldColor(enum.IntEnum):
     BLACK = 2
 
 class Field(NamedTuple):
-    filed_id: chex.Array
+    field_id: chex.Array
     field_color: chex.Array
 
 class OthelloState(NamedTuple):
@@ -67,16 +67,130 @@ class OthelloState(NamedTuple):
     enemy_score: chex.Array
     step_counter: chex.Array
     field: Field
-    field_place: chex.Array
+    field_choice_player: chex.Array
+    difficulty: chex.Array
 
 class OthelloObservation(NamedTuple):
     field: Field
-    score_player: jnp.ndarray
-    score_enemy: jnp.ndarray
+    player_score: jnp.ndarray
+    enemy_score: jnp.ndarray
 
 class OthelloInfo(NamedTuple):
     time: jnp.ndarray
     all_rewards: chex.Array
+
+
+@jax.jit
+def has_human_player_decided_field(field_choice_player, action: chex.Array):
+    
+    is_place = jnp.equal(action, PLACE)
+    is_up = jnp.equal(action, UP)
+    is_right = jnp.equal(action, RIGHT)
+    is_down = jnp.equal(action, DOWN)
+    is_left = jnp.equal(action, LEFT)
+    
+    def place_disc(field_choice_player):
+        return True, field_choice_player
+
+    def move_disc_up(field_choice_player):
+        cond = field_choice_player[0] > 0
+
+        new_value = jax.lax.cond(
+            cond, 
+            lambda _: field_choice_player[0] - 1,
+            lambda _: jnp.array(7).astype(jnp.int32),
+            operand=None
+        )
+        field_choice_player = field_choice_player.at[0].set(new_value)
+        return False, field_choice_player
+
+    def move_disc_right(field_choice_player):
+        cond = field_choice_player[1] < 7
+
+        new_value = jax.lax.cond(
+            cond,
+            lambda _: field_choice_player[1] + 1,
+            lambda _: jnp.array(0).astype(jnp.int32),
+            operand=None
+        )
+        field_choice_player = field_choice_player.at[1].set(new_value)
+        return False, field_choice_player
+    
+    def move_disc_down(field_choice_player):
+        cond = field_choice_player[0] < 7
+
+        new_value = jax.lax.cond(
+            cond,
+            lambda _: field_choice_player[0] + 1,
+            lambda _: jnp.array(0).astype(jnp.int32),
+            operand=None
+        )
+        field_choice_player = field_choice_player.at[0].set(new_value)
+        return False, field_choice_player
+
+    def move_disc_left(field_choice_player):
+        cond = field_choice_player[1] > 0
+
+        new_value = jax.lax.cond(
+            cond,
+            lambda _: field_choice_player[1] - 1,
+            lambda _: jnp.array(7).astype(jnp.int32),
+            operand=None
+        )
+        field_choice_player = field_choice_player.at[1].set(new_value)
+        return False, field_choice_player
+
+    return jax.lax.cond(
+        is_place,
+        lambda x: place_disc(x),
+        lambda x: jax.lax.cond(
+            is_up,
+            lambda x: move_disc_up(x),
+            lambda x: jax.lax.cond(
+                is_right,
+                lambda x: move_disc_right(x),
+                lambda x: jax.lax.cond(
+                    is_down,
+                    lambda x: move_disc_down(x),
+                    lambda x: jax.lax.cond(
+                        is_left,
+                        lambda x: move_disc_left(x),
+                        lambda x: (False, x),
+                        x
+                    ),
+                    x
+                ),
+                x
+            ),
+            x
+        ),
+        field_choice_player
+    )
+
+    # if action == PLACE:
+    #     return True, field_choice_player
+    # if action == UP:
+    #     if field_choice_player[0] > 0:
+    #         field_choice_player = field_choice_player.at[0].set(field_choice_player[0] - 1)
+    #     elif field_choice_player[0] == 0:
+    #         field_choice_player = field_choice_player.at[0].set(7)
+    # if action == RIGHT:
+    #     if field_choice_player[1] < 7:
+    #         field_choice_player = field_choice_player.at[1].set(field_choice_player[1] + 1)
+    #     elif field_choice_player[1] == 7:
+    #         field_choice_player = field_choice_player.at[1].set(0)
+    # if action == DOWN:
+    #     if field_choice_player[0] < 7:
+    #         field_choice_player = field_choice_player.at[0].set(field_choice_player[0] + 1)
+    #     elif field_choice_player[0] == 7:
+    #         field_choice_player = field_choice_player.at[0].set(0)
+    # if action == LEFT:
+    #     if field_choice_player[1] > 0:
+    #         field_choice_player = field_choice_player.at[1].set(field_choice_player[1] - 1)
+    #     elif field_choice_player[1] == 0:
+    #         field_choice_player = field_choice_player.at[1].set(7)      
+    # return False, field_choice_player
+
 
 
 class JaxOthello(JaxEnvironment[OthelloState, OthelloObservation, OthelloInfo]):
@@ -94,30 +208,69 @@ class JaxOthello(JaxEnvironment[OthelloState, OthelloObservation, OthelloInfo]):
     def reset(self) -> OthelloState:
         """ Reset the game state to the initial state """
         field_color_init = jnp.full((8, 8), FieldColor.EMPTY.value, dtype=jnp.int32)
-        field_color_init = field_color_init.at[3,3].set(FiledColor.BLACK.value)
-        field_color_init = field_color_init.at[4,3].set(FiledColor.WHITE.value)
-        field_color_init = field_color_init.at[3,4].set(FiledColor.WHITE.value)
-        field_color_init = field_color_init.at[4,4].set(FiledColor.BLACK.value)
+        field_color_init = field_color_init.at[3,3].set(FieldColor.BLACK.value)
+        field_color_init = field_color_init.at[4,3].set(FieldColor.WHITE.value)
+        field_color_init = field_color_init.at[3,4].set(FieldColor.WHITE.value)
+        field_color_init = field_color_init.at[4,4].set(FieldColor.BLACK.value)
 
         state = OthelloState(
             player_score = jnp.array(2).astype(jnp.int32),
             enemy_score = jnp.array(2).astype(jnp.int32),
             step_counter =jnp.array(0).astype(jnp.int32),
             field = Field(
-                field_id = jnp.array(64, dtype=jnp.int32).reshape((8,8)),
+                field_id = jnp.arange(64, dtype=jnp.int32).reshape((8,8)),
                 field_color = field_color_init
             ),
-            field_place = jnp.array(63).astype(jnp.int32)
+            field_choice_player = jnp.array([7, 7], dtype=jnp.int32),
+            difficulty = jnp.array(1).astype(jnp.int32)
         )
         initial_obs = self._get_observation(state)
+        return state, initial_obs
+
+    
+    @partial(jax.jit, static_argnums=0, static_argnames=["is_human"])
+    def step(self, state: OthelloState, action: chex.Array, is_human: bool) -> Tuple[OthelloState, OthelloObservation, float, bool, OthelloInfo]:
+        # human player has actions like moving the "cursor" to decide which empty field they want the disc to be placed
+        # an agent decides directly with field id 0 - 63.
+        
+        is_human_condition = jax.lax.convert_element_type(is_human, bool)
+        new_field_choice = jax.lax.cond(
+            is_human_condition,  # Bedingung
+            lambda _: has_human_player_decided_field(state.field_choice_player, action),  # Wenn wahr
+            lambda _: (False, state.field_choice_player),  # Wenn falsch
+            operand=None
+        )
+        decided, new_field_choice = new_field_choice
+    
+        
+        
+        # create new state here:
+        field_color_init = jnp.full((8, 8), FieldColor.EMPTY.value, dtype=jnp.int32)
+        field_color_init = field_color_init.at[3,3].set(FieldColor.BLACK.value)
+        field_color_init = field_color_init.at[4,3].set(FieldColor.WHITE.value)
+        field_color_init = field_color_init.at[3,4].set(FieldColor.WHITE.value)
+        field_color_init = field_color_init.at[4,4].set(FieldColor.BLACK.value)
+        new_state = OthelloState(
+            player_score = jnp.array(2).astype(jnp.int32),
+            enemy_score = jnp.array(2).astype(jnp.int32),
+            step_counter =jnp.array(0).astype(jnp.int32),
+            field = Field(
+                field_id = jnp.arange(64, dtype=jnp.int32).reshape((8,8)),
+                field_color = field_color_init
+            ),
+            field_choice_player = new_field_choice,
+            difficulty = jnp.array(1).astype(jnp.int32)
+        )
+
+        return new_state, None, 0.0, False, None        
 
 
     @partial(jax.jit, static_argnums=(0,))
     def _get_observation(self, state: OthelloState):
         return OthelloObservation(
             field=state.field,
-            score_enemy=field.score_enemy,
-            score_player=field.score_player
+            enemy_score=state.enemy_score,
+            player_score=state.player_score
         )
 
 
@@ -159,6 +312,10 @@ def load_sprites():
         # ENEMY_DIGIT_SPRITES
     )
 
+@jax.jit
+def render_point_of_disc(id):
+    return jnp.array([22 + 22 * id[0], 18 + 16 * id[1]], dtype=jnp.int32)
+
 
 class Renderer_AtraJaxisOthello:
 
@@ -184,10 +341,11 @@ class Renderer_AtraJaxisOthello:
         raster = aj.render_at(raster, 0, 0, frame_bg)
 
         frame_player = aj.get_sprite_frame(self.SPRITE_PLAYER, 0)
-        raster = aj.render_at(raster, 0, 0, frame_player)
+        current_player_choice = render_point_of_disc(state.field_choice_player)
+        raster = aj.render_at(raster, current_player_choice[0], current_player_choice[1], frame_player)
 
         frame_enemy = aj.get_sprite_frame(self.SPRITE_ENEMY, 0)
-        raster = aj.render_at(raster, 50, 50, frame_enemy)
+        raster = aj.render_at(raster, 0, 0, frame_enemy)
 
         return raster
 
@@ -203,25 +361,32 @@ if __name__ == "__main__":
     # Create the JAX renderer
     renderer = Renderer_AtraJaxisOthello()
 
+    # get jitted functions
+    jitted_step = jax.jit(game.step)
+    jitted_reset = jax.jit(game.reset)
 
-
+    curr_state, obs = jitted_reset()
 
     # Game Loop
     running = True
-    frameskip = 4
+    frameskip = 180
     counter = 1
 
     while running:
         for event in pygame.event.get():
             if event.type == pygame.QUIT:
                 running = False     
-        
+
         if counter % frameskip == 0:
             action = get_human_action()
+            curr_state, obs, reward, done, info = jitted_step(curr_state, action, is_human=True)
+            # curr_state, obs, reward, done, info = game.step(curr_state, action, True)
 
 
         # Render and display
-        raster = renderer.render(None)
+        raster = renderer.render(curr_state)
         aj.update_pygame(screen, raster, 3, WIDTH, HEIGHT)
+
+        counter += 1
 
     pygame.quit()
