@@ -13,7 +13,7 @@ class OCAtariPlayer:
     """
 
     def __init__(self,
-                 game_name: str = "Boxing",
+                 game_name: str = "Assault",
                  mode: str = "ram",
                  hud: bool = True,
                  obs_mode: str = "ori",
@@ -400,7 +400,7 @@ class OCAtariPlayer:
 def main():
     """Parse command line arguments and run the game."""
     parser = argparse.ArgumentParser(description='Play any Atari game using OCAtari')
-    parser.add_argument('--game', type=str, default='Pong',
+    parser.add_argument('--game', type=str, default='Assault',
                         help='Name of the Atari game to play (e.g., Boxing, Breakout, Pong)')
     parser.add_argument('--mode', type=str, default='ram', choices=['ram', 'vision', 'both'],
                         help='OCAtari mode for object detection')

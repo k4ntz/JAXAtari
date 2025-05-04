@@ -11,6 +11,9 @@ from gymnax.environments import spaces
 from jaxatari.rendering import atraJaxis as aj
 from jaxatari.environment import JaxEnvironment
 
+WIDTH = 160
+HEIGHT = 210
+
 NOOP = 0
 FIRE = 1
 RIGHT = 2
@@ -381,6 +384,132 @@ class JaxAssault(JaxEnvironment[AssaultState, AssaultObservation, AssaultInfo]):
             jnp.greater_equal(state.enemy_score, 20),
         )
     
+
+
+def load_assault_sprites():
+    """
+    Load all sprites required for Assault rendering.
+    Assumes files are named enemy.npy, life.npy, mothership.npy, player.npy
+    and are located in sprites/assault relative to this file.
+    """
+    MODULE_DIR = os.path.dirname(os.path.abspath(__file__))
+    SPRITES_DIR = os.path.join(MODULE_DIR, "sprites", "assault")
+
+    background = aj.loadFrame(os.path.join(SPRITES_DIR, "background.npy"), transpose=True)
+    enemy = aj.loadFrame(os.path.join(SPRITES_DIR, "enemy_0.npy"), transpose=True)
+    #life = aj.loadFrame(os.path.join(SPRITES_DIR, "life.npy"), transpose=True)
+    mothership = aj.loadFrame(os.path.join(SPRITES_DIR, "mothership_0.npy"), transpose=True)
+    player = aj.loadFrame(os.path.join(SPRITES_DIR, "player.npy"), transpose=True)
+    player_projectile = aj.loadFrame(os.path.join(SPRITES_DIR, "player_projectile.npy"), transpose=True)
+    enemy_projectile = aj.loadFrame(os.path.join(SPRITES_DIR, "enemy_projectile.npy"), transpose=True)
+
+    # Optionally expand dims if you want a batch/frame dimension
+    BACKGROUND_SPRITE = jnp.expand_dims(background, axis=0)
+    ENEMY_SPRITE = jnp.expand_dims(enemy, axis=0)
+    #LIFE_SPRITE = jnp.expand_dims(life, axis=0)
+    MOTHERSHIP_SPRITE = jnp.expand_dims(mothership, axis=0)
+    PLAYER_SPRITE = jnp.expand_dims(player, axis=0)
+    PLAYER_PROJECTILE= jnp.expand_dims(player_projectile, axis=0)
+    ENEMY_PROJECTILE = jnp.expand_dims(enemy_projectile, axis=0)
+
+    DIGIT_SPRITES = aj.load_and_pad_digits(
+        os.path.join(MODULE_DIR, os.path.join(SPRITES_DIR, "number_{}.npy")),
+        num_chars=10,
+    )
+
+    return BACKGROUND_SPRITE,ENEMY_SPRITE, MOTHERSHIP_SPRITE, PLAYER_SPRITE, DIGIT_SPRITES, PLAYER_PROJECTILE,ENEMY_PROJECTILE
+
+class Renderer_AtraJaxisAssault:
+    """JAX-based Assault game renderer, optimized with JIT compilation."""
+
+    def __init__(self):
+        (
+            self.SPRITE_BG,
+            self.SPRITE_ENEMY,
+            self.SPRITE_MOTHERSHIP,
+            self.SPRITE_PLAYER,
+            self.DIGIT_SPRITES,
+            self.PLAYER_PROJECTILE,
+            self.ENEMY_PROJECTILE
+        ) = load_assault_sprites()  # You need to implement this in atraJaxis
+
+    @partial(jax.jit, static_argnums=(0,))
+    def render(self, state):
+        """
+        Renders the current Assault game state using JAX operations.
+
+        Args:
+            state: An AssaultState object containing the current game state.
+
+        Returns:
+            A JAX array representing the rendered frame.
+        """
+        raster = jnp.zeros((WIDTH, HEIGHT, 3), dtype=jnp.uint8)
+
+        # Render background
+        frame_bg = aj.get_sprite_frame(self.SPRITE_BG, 0)
+        raster = aj.render_at(raster, 0, 0, frame_bg)
+
+        # Render mothership
+        frame_mothership = aj.get_sprite_frame(self.SPRITE_MOTHERSHIP, 0)
+        raster = aj.render_at(raster, MOTHERSHIP_Y, state.mothership_x, frame_mothership)
+
+        # Render player
+        frame_player = aj.get_sprite_frame(self.SPRITE_PLAYER, 0)
+        raster = aj.render_at(raster, PLAYER_Y, state.player_x, frame_player)
+
+        # Render enemies (unrolled manually for JIT compatibility)
+        frame_enemy = aj.get_sprite_frame(self.SPRITE_ENEMY, 0)
+        raster = aj.render_at(raster, state.enemy_1_y, state.enemy_1_x, frame_enemy)
+        raster = aj.render_at(raster, state.enemy_2_y, state.enemy_2_x, frame_enemy)
+        raster = aj.render_at(raster, state.enemy_3_y, state.enemy_3_x, frame_enemy)
+        raster = aj.render_at(raster, state.enemy_4_y, state.enemy_4_x, frame_enemy)
+        raster = aj.render_at(raster, state.enemy_5_y, state.enemy_5_x, frame_enemy)
+        raster = aj.render_at(raster, state.enemy_6_y, state.enemy_6_x, frame_enemy)
+         # Render player projectile using lax.cond
+        def render_player_proj(_):
+            frame_proj = aj.get_sprite_frame(self.PLAYER_PROJECTILE, 0)
+            return aj.render_at(raster, state.player_projectile_y, state.player_projectile_x, frame_proj)
+
+        def skip_player_proj(_):
+            return raster
+
+        raster = jax.lax.cond(
+            jnp.greater_equal(state.player_projectile_y, 0),
+            render_player_proj,
+            skip_player_proj,
+            operand=None
+        )
+
+        # Render enemy projectile using lax.cond
+        def render_enemy_proj(_):
+            frame_proj = aj.get_sprite_frame(self.ENEMY_PROJECTILE, 0)
+            return aj.render_at(raster, state.enemy_projectile_y, state.enemy_projectile_x, frame_proj)
+
+        def skip_enemy_proj(_):
+            return raster
+
+        raster = jax.lax.cond(
+            jnp.greater_equal(state.enemy_projectile_y, 0),
+            render_enemy_proj,
+            skip_enemy_proj,
+            operand=None
+        )
+
+        # Render score (top left)
+        score_digits = aj.int_to_digits(state.score, max_digits=4)
+        raster = aj.render_label_selective(
+            raster, 5, 5, score_digits, self.DIGIT_SPRITES, 0, len(score_digits), spacing=12
+        )
+
+        # Render lives (top right)
+        lives_digits = aj.int_to_digits(state.player_lives, max_digits=1)
+        raster = aj.render_label_selective(
+            raster, 5, WIDTH - 20, lives_digits, self.DIGIT_SPRITES, 0, len(lives_digits), spacing=12
+        )
+
+        return raster
+    
 if __name__ == "__main__":
     # Initialize Pygame
     pygame.init()
@@ -391,7 +520,7 @@ if __name__ == "__main__":
     game = JaxAssault()
 
     # Create the JAX renderer
-    #renderer = Renderer_AtraJaxisPong()
+    renderer = Renderer_AtraJaxisAssault()
 
     # Get jitted functions
     jitted_step = jax.jit(game.step)
@@ -428,9 +557,9 @@ if __name__ == "__main__":
                 curr_state, obs, reward, done, info = jitted_step(curr_state, action)
 
         # Render and display
-        #raster = renderer.render(curr_state)
+        raster = renderer.render(curr_state)
 
-        #aj.update_pygame(screen, raster, 3, WIDTH, HEIGHT)
+        aj.update_pygame(screen, raster, 3, WIDTH, HEIGHT)
 
         counter += 1
         clock.tick(60)
