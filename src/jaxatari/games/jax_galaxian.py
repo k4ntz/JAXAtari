@@ -21,6 +21,8 @@ SCREEN_WIDTH = 800
 GRID_ROWS = 5
 GRID_COLS = 7
 ENEMY_SPACING_X = 20
+ENEMY_SPACING_Y = 20
+ENEMY_GRID_Y = 300
 START_X = 100
 
 class GalaxianState(NamedTuple):
@@ -47,17 +49,14 @@ def update_player_position(state: GalaxianState, action: Action) -> GalaxianStat
 def update_enemy_positions(state: GalaxianState) -> GalaxianState:
     if state.enemy_grid[0, state.enemy_grid.shape[1]] > SCREEN_WIDTH:
         new_enemy_grid_direction = -1
-        print("change direction yeeeet")
     elif state.enemy_grid[0, 0] < 0:
         new_enemy_grid_direction = 1
-        print("change direction")
     else:
         new_enemy_grid_direction = state.enemy_grid_direction
 
-
     new_enemy_grid = state.enemy_grid + ENEMY_MOVE_SPEED * state.enemy_grid_direction
-    print (new_enemy_grid)
-    print (new_enemy_grid_direction)
+    #print (new_enemy_grid)
+    #print (new_enemy_grid_direction)
     return state._replace(enemy_grid=new_enemy_grid, enemy_grid_direction=new_enemy_grid_direction)
 
 
@@ -131,6 +130,17 @@ def removeBullets(state: GalaxianState) -> GalaxianState:
     new_bullet_x = state.bullet_x[top_cutoff]
     return state._replace(bullet_y=new_bullet_y, bullet_x=new_bullet_x)
 
+def bulletCollision(state: GalaxianState) -> GalaxianState:
+    for i in range(state.bullet_x.shape[0]):
+        for j in range(state.enemy_grid.shape[0]):
+            for k in range(state.enemy_grid.shape[1]):
+                if abs(state.bullet_x[i] - state.enemy_grid[j, k]) <= 10 and abs(state.bullet_y[i] - (ENEMY_GRID_Y - j * ENEMY_SPACING_Y)) <= 10 and state.enemy_grid_alive[j, k]:
+                    new_enemy_grid_alive = state.enemy_grid_alive.at[j, k].set(False)
+                    new_bullet_x = jnp.delete(state.bullet_x, i)
+                    new_bullet_y = jnp.delete(state.bullet_y, i)
+                    return state._replace(enemy_grid_alive=new_enemy_grid_alive, bullet_x=new_bullet_x, bullet_y=new_bullet_y)
+    return state
+
 def draw(screen, state: GalaxianState):
     player_rect = pygame.Rect(int(state.player_x), int(600 - state.player_y), 20, 10)
     pygame.draw.rect(screen, (0, 255, 0), player_rect)
@@ -144,7 +154,7 @@ def draw(screen, state: GalaxianState):
         for j in range(state.enemy_grid.shape[1]):
             if state.enemy_grid_alive[i, j]:
                 x = int(state.enemy_grid[i, j])
-                y = 100 + i * 30
+                y = ENEMY_GRID_Y + i * ENEMY_SPACING_Y
                 enemy_rect = pygame.Rect(x, y, 15, 10)
                 pygame.draw.rect(screen, (255, 0, 0), enemy_rect)
 
@@ -155,6 +165,7 @@ def step(state: GalaxianState, action: Action) -> GalaxianState:
     newState = update_enemy_positions(newState)
     newState = updateBullets(newState)
     newState = removeBullets(newState)
+    newState = bulletCollision(newState)
     return  newState
 
 
