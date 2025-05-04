@@ -1,15 +1,8 @@
-import os
-from functools import partial
 from typing import NamedTuple, Tuple
-import jax.lax
 import jax.numpy as jnp
 import chex
 import pygame
-from gymnax.environments import spaces
-from jax import jit
-from src.jaxatari.games.jax_kangaroo import SCREEN_HEIGHT, SCREEN_WIDTH
 
-#from jaxatari.games.jax_kangaroo import SCREEN_WIDTH
 
 
 # -------- Game constants --------
