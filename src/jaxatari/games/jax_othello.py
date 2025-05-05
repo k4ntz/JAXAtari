@@ -169,31 +169,6 @@ def has_human_player_decided_field(field_choice_player, action: chex.Array):
         field_choice_player
     )
 
-    # if action == PLACE:
-    #     return True, field_choice_player
-    # if action == UP:
-    #     if field_choice_player[0] > 0:
-    #         field_choice_player = field_choice_player.at[0].set(field_choice_player[0] - 1)
-    #     elif field_choice_player[0] == 0:
-    #         field_choice_player = field_choice_player.at[0].set(7)
-    # if action == RIGHT:
-    #     if field_choice_player[1] < 7:
-    #         field_choice_player = field_choice_player.at[1].set(field_choice_player[1] + 1)
-    #     elif field_choice_player[1] == 7:
-    #         field_choice_player = field_choice_player.at[1].set(0)
-    # if action == DOWN:
-    #     if field_choice_player[0] < 7:
-    #         field_choice_player = field_choice_player.at[0].set(field_choice_player[0] + 1)
-    #     elif field_choice_player[0] == 7:
-    #         field_choice_player = field_choice_player.at[0].set(0)
-    # if action == LEFT:
-    #     if field_choice_player[1] > 0:
-    #         field_choice_player = field_choice_player.at[1].set(field_choice_player[1] - 1)
-    #     elif field_choice_player[1] == 0:
-    #         field_choice_player = field_choice_player.at[1].set(7)      
-    # return False, field_choice_player
-
-
 
 class JaxOthello(JaxEnvironment[OthelloState, OthelloObservation, OthelloInfo]):
     def __init__(self, frameskip: int = 0, reward_funcs: list[callable]=None):
@@ -234,17 +209,32 @@ class JaxOthello(JaxEnvironment[OthelloState, OthelloObservation, OthelloInfo]):
     def step(self, state: OthelloState, action: chex.Array, is_human: bool) -> Tuple[OthelloState, OthelloObservation, float, bool, OthelloInfo]:
         # human player has actions like moving the "cursor" to decide which empty field they want the disc to be placed
         # an agent decides directly with field id 0 - 63.
-        
+    
         is_human_condition = jax.lax.convert_element_type(is_human, bool)
         new_field_choice = jax.lax.cond(
-            is_human_condition,  # Bedingung
-            lambda _: has_human_player_decided_field(state.field_choice_player, action),  # Wenn wahr
-            lambda _: (False, state.field_choice_player),  # Wenn falsch
+            is_human_condition,  
+            lambda _: has_human_player_decided_field(state.field_choice_player, action), 
+            lambda _: (False, state.field_choice_player),  
             operand=None
         )
-        decided, new_field_choice = new_field_choice
-    
+        decided, new_field_choice = new_field_choice  # 2D Array new_field_choice[i, j]
+
+        # if agent is activated, convert his action into 2D array new_field_choice
+        def convert_1d_id_to_2d(action):
+            return jnp.array([action // FIELD_WIDTH, action % FIELD_HEIGHT])
+
+        new_field_choice = jax.lax.cond(
+            is_human_condition,
+            lambda _: new_field_choice,
+            lambda x: convert_1d_id_to_2d(x),
+            action
+        ) 
+
+        # now human player and agent are on the same "page"
+        # difference: decided must be True for human player to place his disc
+        # check if the new_field_choice is a valid option
         
+
         
         # create new state here:
         field_color_init = jnp.full((8, 8), FieldColor.EMPTY.value, dtype=jnp.int32)
@@ -320,7 +310,6 @@ def render_point_of_disc(id):
 
 
 class Renderer_AtraJaxisOthello:
-
     def __init__(self):
         (
             self.SPRITE_BG,
@@ -331,8 +320,7 @@ class Renderer_AtraJaxisOthello:
         ) = load_sprites()
 
     @partial(jax.jit, static_argnums=(0,))
-    def render(self, state):
-
+    def render(self, state, counter):
         # Create empty raster with CORRECT orientation for atraJaxis framework
         # Note: For pygame, the raster is expected to be (width, height, channels)
         # where width corresponds to the horizontal dimension of the screen
@@ -342,14 +330,11 @@ class Renderer_AtraJaxisOthello:
         frame_bg = aj.get_sprite_frame(self.SPRITE_BG, 0)
         raster = aj.render_at(raster, 0, 0, frame_bg)
 
-        # Render the disc which shows the current player choice -> is not a fixed disc
+        # disc sprites
         frame_player = aj.get_sprite_frame(self.SPRITE_PLAYER, 0)
-        current_player_choice = render_point_of_disc(state.field_choice_player)
-        raster = aj.render_at(raster, current_player_choice[0], current_player_choice[1], frame_player)
-
-        # Render all fixed discs
         frame_enemy = aj.get_sprite_frame(self.SPRITE_ENEMY, 0)
 
+        # Render all fixed discs
         def set_discs_to_the_raster(raster, field_color):
             def outer_loop(i, carry):
                 def inner_loop(j, carry):
@@ -376,8 +361,16 @@ class Renderer_AtraJaxisOthello:
 
             current_raster = raster
             return jax.lax.fori_loop(0, FIELD_WIDTH, outer_loop, current_raster)
-
         raster = set_discs_to_the_raster(raster, state.field.field_color)
+
+        # Render the disc which shows the current player choice -> is not a fixed disc
+        current_player_choice = render_point_of_disc(state.field_choice_player)
+        raster = jax.lax.cond(
+            counter % 2 == 0,
+            lambda x: aj.render_at(x, current_player_choice[0], current_player_choice[1], frame_player),
+            lambda x: raster,
+            raster
+        ) 
 
         return raster
 
@@ -416,7 +409,7 @@ if __name__ == "__main__":
 
 
         # Render and display
-        raster = renderer.render(curr_state)
+        raster = renderer.render(curr_state, counter)
         aj.update_pygame(screen, raster, 3, WIDTH, HEIGHT)
 
         counter += 1
