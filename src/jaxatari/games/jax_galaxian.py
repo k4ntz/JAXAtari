@@ -2,12 +2,17 @@ from typing import NamedTuple, Tuple
 import jax.numpy as jnp
 import chex
 import pygame
+from jax import lax
+import jax.lax
+
+
+
 
 
 
 # -------- Game constants --------
 SHOOTING_COOLDOWN = 80
-ENEMY_MOVE_SPEED = 1
+ENEMY_MOVE_SPEED = 10
 BULLET_MOVE_SPEED = 2
 SCREEN_HEIGHT = 600
 SCREEN_WIDTH = 800
@@ -33,23 +38,24 @@ class Action(NamedTuple):
     player_move_dir: chex.Array
     player_shooting: chex.Array
 
-
+@jax.jit
 def update_player_position(state: GalaxianState, action: Action) -> GalaxianState:
     new_x = jnp.clip(state.player_x + action.player_move_dir * 5, 0, SCREEN_WIDTH)
     return state._replace(player_x=new_x)
 
-
+@jax.jit
 def update_enemy_positions(state: GalaxianState) -> GalaxianState:
-    if state.enemy_grid_x[0, state.enemy_grid_x.shape[1]] > SCREEN_WIDTH:
-        new_enemy_grid_direction = -1
-    elif state.enemy_grid_x[0, 0] < 0:
-        new_enemy_grid_direction = 1
-    else:
-        new_enemy_grid_direction = state.enemy_grid_direction
+    def move_left():
+        return -1
 
+    def move_right():
+        return 1
+
+    def keep_direction():
+        return state.enemy_grid_direction
+
+    new_enemy_grid_direction = lax.cond(state.enemy_grid_x[0, state.enemy_grid_x.shape[1]] > SCREEN_WIDTH, move_left, lambda: lax.cond(state.enemy_grid_x[0, 0] < 0, move_right, keep_direction))
     new_enemy_grid_x = state.enemy_grid_x + ENEMY_MOVE_SPEED * state.enemy_grid_direction
-    #print (new_enemy_grid)
-    #print (new_enemy_grid_direction)
     return state._replace(enemy_grid_x=new_enemy_grid_x, enemy_grid_direction=new_enemy_grid_direction)
 
 def init_action():
@@ -121,10 +127,10 @@ def handle_shooting(state: GalaxianState, action: Action) -> GalaxianState:
     return state
 
 
-
 def update_bullets(state: GalaxianState) -> GalaxianState:
     new_bullets_y = jnp.array(state.bullet_y + BULLET_MOVE_SPEED)
     return state._replace(bullet_y=new_bullets_y)
+
 
 def remove_bullets(state: GalaxianState) -> GalaxianState:
     if state.bullet_y > 500:
@@ -133,21 +139,42 @@ def remove_bullets(state: GalaxianState) -> GalaxianState:
         return state._replace(bullet_y=new_bullet_y, bullet_x=new_bullet_x)
     return state
 
-
+@jax.jit
 def bullet_collision(state: GalaxianState) -> GalaxianState:
     x_diff = jnp.abs(state.bullet_x - state.enemy_grid_x)
     y_diff = jnp.abs(state.bullet_y - state.enemy_grid_y)
 
     collision_mask = (x_diff <= 10) & (y_diff <= 10) & state.enemy_grid_alive
-    collision_indices = jnp.where(collision_mask)
+    max_collisions_size = state.enemy_grid_alive.size
+    collision_indices = jnp.where(
+        collision_mask,
+        size=max_collisions_size,
+        fill_value=-1
+    )
 
-    if collision_indices[0].size > 0:
-        new_enemy_grid_alive = state.enemy_grid_alive.at[collision_indices[0][0], collision_indices[1][0]].set(False)
-        new_bullet_x = jnp.array(-1)
-        new_bullet_y = jnp.array(-1)
-        return state._replace(enemy_grid_alive=new_enemy_grid_alive, bullet_x=new_bullet_x, bullet_y=new_bullet_y)
+    hit = jnp.any(collision_mask)
 
-    return state
+    def process_hit(operands):
+        current_state, indices = operands
+        row_indices, col_indices = indices
+        new_enemy_grid_alive = current_state.enemy_grid_alive.at[row_indices, col_indices].set(False)
+        new_bullet_x = jnp.array(-1, dtype=state.bullet_x.dtype)
+        new_bullet_y = jnp.array(-1, dtype=state.bullet_y.dtype)
+
+        return state._replace(
+            enemy_grid_alive=new_enemy_grid_alive,
+            bullet_x=new_bullet_x,
+            bullet_y=new_bullet_y
+        )
+
+
+    def process_none(operands):
+        current_state, _ = operands
+        return current_state
+
+    return lax.cond(hit, process_hit, process_none, operand=(state, collision_indices))
+
+
 
 def draw(screen, state: GalaxianState):
     player_rect = pygame.Rect(int(state.player_x), int(600 - state.player_y), 20, 10)
