@@ -2064,13 +2064,13 @@ class JaxKangaroo(JaxEnvironment[KangarooState, KangarooObservation, KangarooInf
         return state.score - previous_state.score
 
     @partial(jax.jit, static_argnums=(0,))
-    def _get_all_rewards(self, previous_state: KangarooState, state: KangarooState) -> chex.Array: 
+    def _get_all_rewards(self, previous_state: KangarooState, state: KangarooState) -> chex.Array:
         if self.reward_funcs is None:
             return jnp.zeros(1)
         rewards = jnp.array(
             [reward_func(previous_state, state) for reward_func in self.reward_funcs]
         )
-        return rewards 
+        return rewards
 
     @partial(jax.jit, static_argnums=(0,))
     def _get_done(self, state: KangarooState) -> bool:

@@ -662,7 +662,7 @@ class JaxPong(JaxEnvironment[PongState, PongObservation, PongInfo]):
         rewards = jnp.array(
             [reward_func(previous_state, state) for reward_func in self.reward_funcs]
         )
-        return rewards 
+        return rewards
 
     @partial(jax.jit, static_argnums=(0,))
     def _get_done(self, state: PongState) -> bool:

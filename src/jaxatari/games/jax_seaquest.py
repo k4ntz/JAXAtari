@@ -2414,12 +2414,12 @@ class JaxSeaquest(JaxEnvironment[SeaquestState, SeaquestObservation, SeaquestInf
         super().__init__()
         if reward_funcs is not None:
             reward_funcs = tuple(reward_funcs)
-        self.reward_funcs = reward_funcs 
-        self.action_set = { 
+        self.reward_funcs = reward_funcs
+        self.action_set = {
             NOOP,
             FIRE,
             UP,
-            RIGHT, 
+            RIGHT,
             LEFT,
             DOWN,
         }
@@ -2545,7 +2545,7 @@ class JaxSeaquest(JaxEnvironment[SeaquestState, SeaquestObservation, SeaquestInf
         )
 
     @partial(jax.jit, static_argnums=(0,))
-    def _get_env_reward(self, previous_state: SeaquestState, state: SeaquestState): 
+    def _get_env_reward(self, previous_state: SeaquestState, state: SeaquestState):
         return state.score - previous_state.score
 
     @partial(jax.jit, static_argnums=(0,))
@@ -2553,7 +2553,7 @@ class JaxSeaquest(JaxEnvironment[SeaquestState, SeaquestObservation, SeaquestInf
         if self.reward_funcs is None:
             return jnp.zeros(1)
         rewards = jnp.array([reward_func(previous_state, state) for reward_func in self.reward_funcs])
-        return rewards 
+        return rewards
 
     @partial(jax.jit, static_argnums=(0,))
     def _get_done(self, state: SeaquestState) -> bool:
