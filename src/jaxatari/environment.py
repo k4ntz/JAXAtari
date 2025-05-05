@@ -20,7 +20,7 @@ class JaxEnvironment(Generic[EnvState, EnvObs, EnvInfo]):
     def __init__(self):
         pass
 
-    def reset(self, key: jrandom.PRNGKey=None) -> Tuple[EnvState, EnvObs]:
+    def reset(self, key: jrandom.PRNGKey=None) -> Tuple[EnvObs, EnvState]:
         """
         Resets the environment to the initial state.
         Returns: The initial observation and the initial environment state.
