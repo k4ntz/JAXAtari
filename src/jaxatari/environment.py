@@ -1,5 +1,6 @@
 from typing import Tuple, Generic, TypeVar
 import jax.numpy as jnp
+import jax.random as jrandom
 
 
 EnvObs = TypeVar("EnvObs")
@@ -19,7 +20,7 @@ class JaxEnvironment(Generic[EnvState, EnvObs, EnvInfo]):
     def __init__(self):
         pass
 
-    def reset(self) -> Tuple[EnvState, EnvObs]:
+    def reset(self, key: jrandom.PRNGKey=None) -> Tuple[EnvState, EnvObs]:
         """
         Resets the environment to the initial state.
         Returns: The initial observation and the initial environment state.
@@ -29,7 +30,7 @@ class JaxEnvironment(Generic[EnvState, EnvObs, EnvInfo]):
 
     def step(
         self, state: EnvState, action
-    ) -> Tuple[EnvState, EnvObs, float, bool, EnvInfo]:
+    ) -> Tuple[EnvObs, EnvState, float, bool, EnvInfo]:
         """
         Takes a step in the environment.
         Args:

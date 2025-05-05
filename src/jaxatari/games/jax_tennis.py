@@ -1336,9 +1336,8 @@ def before_serve(state: TennisState) -> Tuple[chex.Array, chex.Array, chex.Array
 
 
 class JaxTennis(JaxEnvironment[TennisState, TennisObservation, TennisInfo]):
-    def __init__(self, frameskip=0):
+    def __init__(self):
         super().__init__()
-        self.frameskip = frameskip
 
     @partial(jax.jit, static_argnums=(0,))
     def _get_observation(
@@ -1462,7 +1461,7 @@ class JaxTennis(JaxEnvironment[TennisState, TennisObservation, TennisInfo]):
         return jnp.where(counter < 2, 0, 1)  # First two states = top serve
 
     @partial(jax.jit, static_argnums=(0,))
-    def reset(self) -> Tuple[TennisState, TennisObservation]:
+    def reset(self, key=None) -> Tuple[TennisObservation, TennisState]:
         # Use provided internal_counter or default to 0
         internal_counter = jnp.array(0)
 
@@ -1532,11 +1531,11 @@ class JaxTennis(JaxEnvironment[TennisState, TennisObservation, TennisInfo]):
             player_hit=jnp.array(False),
             enemy_hit=jnp.array(False),
         )
-        return reset_state, self._get_observation(reset_state)
+        return self._get_observation(reset_state), reset_state
 
     @partial(jax.jit, static_argnums=(0,))
     def step(self, state: TennisState, action: chex.Array) -> Tuple[
-        TennisState, TennisObservation, float, bool, TennisInfo]:
+        TennisObservation, TennisState, float, bool, TennisInfo]:
         def normal_play():
             """Executes one game step."""
             # Update player position
@@ -1684,7 +1683,7 @@ class JaxTennis(JaxEnvironment[TennisState, TennisObservation, TennisInfo]):
                 enemy_game_score
             )
 
-            reset_state, _ = self.reset()
+            _, reset_state = self.reset()
 
             # Check if player side has changed
             side_changed = jnp.not_equal(state.player_side, new_player_side)
@@ -1822,11 +1821,11 @@ class JaxTennis(JaxEnvironment[TennisState, TennisObservation, TennisInfo]):
                 lambda: calculated_state,
             )
 
-            return returned_state, self._get_observation(returned_state), self._get_reward(state, returned_state), self._get_done(returned_state), self._get_info(returned_state)
+            return  self._get_observation(returned_state), returned_state, self._get_reward(state, returned_state), self._get_done(returned_state), self._get_info(returned_state)
 
         def game_over_freeze():
             """Freezes the game after it's over."""
-            return state, self._get_observation(state), self._get_reward(state, state), jnp.bool(True), self._get_info(
+            return self._get_observation(state), state, self._get_reward(state, state), jnp.bool(True), self._get_info(
                 state)
 
         return jax.lax.cond(
@@ -1848,8 +1847,9 @@ class AnimatorState(NamedTuple):
 
 OFFSET_BAT_Y = jnp.array([7, 7, 5, 3])
 
+from jaxatari.renderers import AtraJaxisRenderer
 
-class Renderer_AJ:
+class TennisRenderer(AtraJaxisRenderer):
 
     @partial(jax.jit, static_argnums=(0,))
     def next_body_frame(self, diff_x, diff_y, frame):
@@ -1894,8 +1894,8 @@ class Renderer_AJ:
         # render player
         raster = aj.render_at(
             raster,
-            state.player_y,
             state.player_x,
+            state.player_y,
             PL_R[animator_state.r_f // 4],
             flip_horizontal=flip_player,
         )
@@ -1946,8 +1946,8 @@ class Renderer_AJ:
         # render enemy
         raster = aj.render_at(
             raster,
-            state.enemy_y,
             state.enemy_x,
+            state.enemy_y,
             PL_B[animator_state.b_f // 4],
             flip_horizontal=flip_enemy,
         )
@@ -1960,10 +1960,11 @@ class Renderer_AJ:
         )
 
         # render ball
-        raster = aj.render_at(raster, state.ball_y, state.ball_x, BALL)
+        raster = aj.render_at(raster, state.ball_x, state.ball_y, BALL)
+
         # render ball shade
 
-        raster = aj.render_at(raster, state.shadow_y, state.shadow_x, BALL_SHADE)
+        raster = aj.render_at(raster, state.shadow_x, state.shadow_y, BALL_SHADE)
 
         # render player bat
         r_bat_x, r_bat_y = self.bat_position(
@@ -1975,8 +1976,8 @@ class Renderer_AJ:
 
         raster = aj.render_at(
             raster,
-            r_bat_y,
             r_bat_x,
+            r_bat_y,
             BAT_R[animator_state.r_bat_f // 4],
             flip_horizontal=flip_player,
         )
@@ -1988,8 +1989,8 @@ class Renderer_AJ:
         )
         raster = aj.render_at(
             raster,
-            b_bat_y,
             b_bat_x,
+            b_bat_y,
             BAT_B[animator_state.b_bat_f // 4],
             flip_horizontal=flip_enemy,
         )
@@ -1999,8 +2000,8 @@ class Renderer_AJ:
         r_score_array = aj.int_to_digits(state.player_round_score, max_digits = 2)
         b_score_array = aj.int_to_digits(state.enemy_round_score, max_digits = 2)
         
-        raster = aj.render_label(raster, 10, 60, r_score_array, DIGITS_R, spacing=7)
-        raster = aj.render_label(raster, 10, 90, b_score_array, DIGITS_B, spacing=7)
+        raster = aj.render_label(raster, 60, 10, r_score_array, DIGITS_R, spacing=7)
+        raster = aj.render_label(raster, 90, 10, b_score_array, DIGITS_B, spacing=7)
 
         # state transition
 
@@ -2037,10 +2038,10 @@ if __name__ == "__main__":
     clock = pygame.time.Clock()
 
     # Create game instance
-    game = JaxTennis(frameskip=1)
+    game = JaxTennis()
 
     # Initialize renderer
-    renderer = Renderer_AJ()
+    renderer = TennisRenderer()
     animator_state = AnimatorState(
         r_x=0, r_y=0, r_f=12, r_bat_f=0, b_x=0, b_y=0, b_f=12, b_bat_f=0
     )
@@ -2050,10 +2051,10 @@ if __name__ == "__main__":
     jitted_reset = jax.jit(game.reset)
 
     # Main game loop structure
-    curr_state, curr_obs = jitted_reset()
+    curr_obs, curr_state = jitted_reset()
     running = True
     frame_by_frame = False
-    frameskip = game.frameskip
+    frameskip = 1
     counter = 1
 
     list_of_y = []
@@ -2072,7 +2073,7 @@ if __name__ == "__main__":
                 if event.key == pygame.K_n and frame_by_frame:
                     if counter % frameskip == 0:
                         action = get_human_action()
-                        curr_state, obs, reward, done, info = jitted_step(curr_state, action)
+                        obs, curr_state, reward, done, info = jitted_step(curr_state, action)
                         # print the current game scores
                         print(f"Player: {curr_state.player_score} - Enemy: {curr_state.enemy_score}")
 
@@ -2080,7 +2081,7 @@ if __name__ == "__main__":
             if counter % frameskip == 0:
                 # Get action (to be implemented with proper controls)
                 action = get_human_action()
-                curr_state, obs, reward, done, info = jitted_step(curr_state, action)
+                obs, curr_state, reward, done, info = jitted_step(curr_state, action)
 
         raster, animator_state = renderer.render(curr_state, animator_state)
         aj.update_pygame(screen, raster, 4, COURT_WIDTH, COURT_HEIGHT)

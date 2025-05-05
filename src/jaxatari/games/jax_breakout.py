@@ -570,13 +570,12 @@ def check_block_collision(state, ball_x, ball_y, ball_speed_idx, ball_direction_
         operand=None
     )
 
-class Game(JaxEnvironment[State, BreakoutObservation, BreakoutInfo]):
-    def __init__(self, frameskip=1):
+class JaxBreakout(JaxEnvironment[State, BreakoutObservation, BreakoutInfo]):
+    def __init__(self):
         super().__init__()
-        self.frameskip = frameskip
 
     @partial(jax.jit, static_argnums=(0,))
-    def reset(self) -> tuple[State, BreakoutObservation]:
+    def reset(self, key = None) -> tuple[BreakoutObservation, State]:
         """Initialize game state"""
         init_speed_idx = 0
         init_direction_idx = 0
@@ -604,18 +603,18 @@ class Game(JaxEnvironment[State, BreakoutObservation, BreakoutInfo]):
             all_blocks_cleared=jnp.array(False),
         )
 
-        return state, self._get_observation(state)
+        return self._get_observation(state), state
 
     @partial(jax.jit, static_argnums=(0,))
     def step(self, state: State, action: chex.Array) -> Tuple[
-        State, BreakoutObservation, chex.Array, chex.Array, BreakoutInfo]:
+        BreakoutObservation, State, chex.Array, chex.Array, BreakoutInfo]:
         prev_score = state.score
         new_state = self._step(state, action)
         obs = self._get_observation(new_state)
         reward = self._get_reward(prev_score, new_state.score)
         done = self._get_done(new_state)
         info = self._get_info(new_state)
-        return new_state, obs, reward, done, info
+        return obs, new_state, reward, done, info
 
     @partial(jax.jit, static_argnums=(0,))
     def _step(self, state: State, action: chex.Array) -> State:
@@ -814,18 +813,18 @@ class Renderer:
 
 if __name__ == "__main__":
     # Initialize game and renderer
-    game = Game(frameskip=1)
+    game = JaxBreakout()
     renderer = Renderer()
 
     # Get jitted functions
     jitted_step = jax.jit(game.step)
     jitted_reset = jax.jit(game.reset)
 
-    curr_state, obs = jitted_reset()
+    obs, curr_state = jitted_reset()
 
     # Game loop
     running = True
-    frameskip = game.frameskip
+    frameskip = 1
     frame_by_frame = False
     counter = 1
 
@@ -842,14 +841,14 @@ if __name__ == "__main__":
                 if event.key == pygame.K_n and frame_by_frame:
                     if counter % frameskip == 0:
                         action = get_human_action()
-                        curr_state, obs, reward, done, info = jitted_step(curr_state, action)
+                        obs, curr_state, reward, done, info = jitted_step(curr_state, action)
                         if done:
                             running = False
 
         if not frame_by_frame:
             if counter % frameskip == 0:
                 action = get_human_action()
-                curr_state, obs, reward, done, info = jitted_step(curr_state, action)
+                obs, curr_state, reward, done, info = jitted_step(curr_state, action)
                 if done:
                     running = False
 

@@ -16,8 +16,6 @@ RIGHT = 2
 BOTTOM_BORDER = 176
 TOP_BORDER = 23
 
-RANDOM_KEY = jax.random.key(1701)
-
 
 @dataclass
 class GameConfig:
@@ -78,15 +76,16 @@ class SkiingInfo(NamedTuple):
     time: jnp.ndarray
 
 
-class SkiingGameLogic(JaxEnvironment[GameState, SkiingObservation, SkiingInfo]):
+class JaxSkiing(JaxEnvironment[GameState, SkiingObservation, SkiingInfo]):
     def __init__(self):
         super().__init__()
         self.config = GameConfig()
         self.state = self.reset()
 
-    def reset(self) -> Tuple[GameState, SkiingObservation]:
+    def reset(self, key: jax.random.PRNGKey = jax.random.key(1701)) -> Tuple[SkiingObservation, GameState]:
         """Initialize a new game state"""
         flags = []
+
         y_spacing = (
             self.config.screen_height - 4 * self.config.flag_height
         ) / self.config.max_num_flags
@@ -137,11 +136,11 @@ class SkiingGameLogic(JaxEnvironment[GameState, SkiingObservation, SkiingInfo]):
             time=jnp.array(0),
             direction_change_counter=jnp.array(0),
             game_over=jnp.array(False),
-            key=RANDOM_KEY,
+            key=key,
         )
         obs = self._get_observation(state)
 
-        return state, obs
+        return obs, state
 
     def _create_new_objs(self, state, new_flags, new_trees, new_rocks):
         k, k1, k2, k3, k4 = jax.random.split(state.key, num=5)
@@ -224,7 +223,7 @@ class SkiingGameLogic(JaxEnvironment[GameState, SkiingObservation, SkiingInfo]):
         return flags, trees, rocks, k
 
     @partial(jax.jit, static_argnums=(0,))
-    def step(self, state: GameState, action: int) -> GameState:
+    def step(self, state: GameState, action: int) -> tuple[SkiingObservation, GameState, float, bool, SkiingInfo]:
         #                              -->  --_      \     |     |    /    _-- <--
         side_speed = jnp.array(
             [-1.0, -0.5, -0.333, 0.0, 0.0, 0.333, 0.5, 1], jnp.float32
@@ -427,7 +426,7 @@ class SkiingGameLogic(JaxEnvironment[GameState, SkiingObservation, SkiingInfo]):
         obs = self._get_observation(new_state)
         info = self._get_info(new_state)
 
-        return new_state, obs, reward, done, info
+        return obs, new_state, reward, done, info
 
     @partial(jax.jit, static_argnums=(0,))
     def _get_observation(self, state: GameState):
@@ -787,8 +786,8 @@ def main():
     render_config = RenderConfig()
 
     # Initialize game and renderer
-    game = SkiingGameLogic()
-    state, _ = game.reset()
+    game = JaxSkiing()
+    _, state = game.reset()
     renderer = GameRenderer(game_config, render_config)
 
     # Setup game loop
@@ -811,7 +810,7 @@ def main():
             action = NOOP
 
         # Update game state
-        state, obs, reward, done, info = game.step(state, action)
+        obs, state, reward, done, info = game.step(state, action)
 
         # Render
         renderer.render(state)

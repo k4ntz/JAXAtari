@@ -2410,9 +2410,8 @@ def calculate_kill_points(successful_rescues: chex.Array) -> chex.Array:
 
 
 class JaxSeaquest(JaxEnvironment[SeaquestState, SeaquestObservation, SeaquestInfo]):
-    def __init__(self, frameskip: int = 1, reward_funcs: list[callable] =None):
+    def __init__(self, reward_funcs: list[callable] =None):
         super().__init__()
-        self.frameskip = frameskip
         if reward_funcs is not None:
             reward_funcs = tuple(reward_funcs)
         self.reward_funcs = reward_funcs 
@@ -2561,7 +2560,7 @@ class JaxSeaquest(JaxEnvironment[SeaquestState, SeaquestObservation, SeaquestInf
         return state.lives < 0
 
     @partial(jax.jit, static_argnums=(0,))
-    def reset(self) -> Tuple[SeaquestState, SeaquestObservation]:
+    def reset(self, key: jax.random.PRNGKey = jax.random.PRNGKey(42)) -> Tuple[SeaquestObservation, SeaquestState]:
         """Initialize game state"""
         reset_state = SeaquestState(
             player_x=jnp.array(PLAYER_START_X),
@@ -2583,7 +2582,7 @@ class JaxSeaquest(JaxEnvironment[SeaquestState, SeaquestObservation, SeaquestInf
             successful_rescues=jnp.array(0),
             death_counter=jnp.array(0),
             obs_stack=None, #fill later
-            rng_key=jax.random.PRNGKey(42),
+            rng_key=key,
         )
 
         initial_obs = self._get_observation(reset_state)
@@ -2595,15 +2594,15 @@ class JaxSeaquest(JaxEnvironment[SeaquestState, SeaquestObservation, SeaquestInf
         # Apply transformation to each leaf in the pytree
         initial_obs = jax.tree.map(expand_and_copy, initial_obs)
         reset_state = reset_state._replace(obs_stack=initial_obs)
-        return reset_state, initial_obs
+        return initial_obs, reset_state
 
     @partial(jax.jit, static_argnums=(0, ))
     def step(
         self, state: SeaquestState, action: chex.Array
-    ) -> Tuple[SeaquestState, SeaquestObservation, float, bool, SeaquestInfo]:
+    ) -> Tuple[SeaquestObservation, SeaquestState, float, bool, SeaquestInfo]:
 
         previous_state = state
-        reset_state, _ = self.reset()
+        _, reset_state = self.reset()
 
         # First handle death animation if active
         def handle_death_animation():
@@ -2962,11 +2961,11 @@ class JaxSeaquest(JaxEnvironment[SeaquestState, SeaquestObservation, SeaquestInf
         return_state = return_state._replace(obs_stack=observation)
 
         # Choose between death animation and normal game step
-        return return_state, observation, env_reward, done, info
+        return observation, return_state, env_reward, done, info
 
 from jaxatari.renderers import AtraJaxisRenderer
 
-class Renderer_AtraJaxis(AtraJaxisRenderer):
+class SeaquestRenderer(AtraJaxisRenderer):
     @partial(jax.jit, static_argnums=(0,))
     def render(self, state):
         raster = jnp.zeros((WIDTH, HEIGHT, 3))
@@ -2979,8 +2978,8 @@ class Renderer_AtraJaxis(AtraJaxisRenderer):
         frame_pl_sub = aj.get_sprite_frame(SPRITE_PL_SUB, state.step_counter)
         raster = aj.render_at(
             raster,
-            state.player_y,
             state.player_x,
+            state.player_y,
             frame_pl_sub,
             flip_horizontal=state.player_direction == FACE_LEFT,
         )
@@ -2992,8 +2991,8 @@ class Renderer_AtraJaxis(AtraJaxisRenderer):
             should_render,
             lambda r: aj.render_at(
                 r,
-                state.player_missile_position[1],
                 state.player_missile_position[0],
+                state.player_missile_position[1],
                 frame_pl_torp,
                 flip_horizontal=state.player_missile_position[2] == FACE_LEFT,
             ),
@@ -3011,8 +3010,8 @@ class Renderer_AtraJaxis(AtraJaxisRenderer):
                 should_render,
                 lambda r: aj.render_at(
                     r,
-                    diver_positions[i][1],
                     diver_positions[i][0],
+                    diver_positions[i][1],
                     frame_diver,
                     flip_horizontal=(diver_positions[i][2] == FACE_LEFT),
                 ),
@@ -3031,8 +3030,8 @@ class Renderer_AtraJaxis(AtraJaxisRenderer):
                 should_render,
                 lambda r: aj.render_at(
                     r,
-                    state.shark_positions[i][1],
                     state.shark_positions[i][0],
+                    state.shark_positions[i][1],
                     frame_shark,
                     flip_horizontal=(state.shark_positions[i][2] == FACE_LEFT),
                 ),
@@ -3052,8 +3051,8 @@ class Renderer_AtraJaxis(AtraJaxisRenderer):
                 should_render,
                 lambda r: aj.render_at(
                     r,
-                    state.sub_positions[i][1],
                     state.sub_positions[i][0],
+                    state.sub_positions[i][1],
                     frame_enemy_sub,
                     flip_horizontal=(state.sub_positions[i][2] == FACE_LEFT),
                 ),
@@ -3069,8 +3068,8 @@ class Renderer_AtraJaxis(AtraJaxisRenderer):
                 should_render,
                 lambda r: aj.render_at(
                     r,
-                    state.surface_sub_position[1],
                     state.surface_sub_position[0],
+                    state.surface_sub_position[1],
                     frame_enemy_sub,
                     flip_horizontal=(state.surface_sub_position[2] == FACE_LEFT),
                 ),
@@ -3090,8 +3089,8 @@ class Renderer_AtraJaxis(AtraJaxisRenderer):
                 should_render,
                 lambda r: aj.render_at(
                     r,
-                    state.enemy_missile_positions[i][1],
                     state.enemy_missile_positions[i][0],
+                    state.enemy_missile_positions[i][1],
                     frame_enemy_torp,
                     flip_horizontal=(state.enemy_missile_positions[i][2] == FACE_LEFT),
                 ),
@@ -3102,19 +3101,26 @@ class Renderer_AtraJaxis(AtraJaxisRenderer):
         raster = jax.lax.fori_loop(0, MAX_ENEMY_MISSILES, render_enemy_torp, raster)
 
         # show the scores
-        score_array = aj.int_to_digits(state.score)
+        score_array = aj.int_to_digits(state.score, max_digits=8)
         # convert the score to a list of digits
         raster = aj.render_label(raster, 10, 10, score_array, DIGITS, spacing=7)
         raster = aj.render_indicator(
-            raster, 20, 10, state.lives, LIFE_INDICATOR, spacing=10
+            raster, 10, 20, state.lives, LIFE_INDICATOR, spacing=10
         )
         raster = aj.render_indicator(
-            raster, 178, 49, state.divers_collected, DIVER_INDICATOR, spacing=10
+            raster, 49, 178, state.divers_collected, DIVER_INDICATOR, spacing=10
         )
 
         raster = aj.render_bar(
-            raster, 170, 49, state.oxygen, 64, 63, 5, OXYGEN_BAR_COLOR, (0, 0, 0, 0)
+            raster, 49, 170, state.oxygen, 64, 63, 5, OXYGEN_BAR_COLOR, (0, 0, 0, 0)
         )
+
+        # Force the first 8 columns (x=0 to x=7) to be black
+        bar_width = 8
+        # Assuming raster shape is (Height, Width, Channels)
+        # Select all rows (:), the first 'bar_width' columns (0:bar_width), and all channels (:)
+        raster = raster.at[0:bar_width, :, :].set(0)
+
         return raster
 
 
@@ -3174,23 +3180,23 @@ def get_human_action() -> chex.Array:
 
 if __name__ == "__main__":
     # Initialize game and renderer
-    game = JaxSeaquest(frameskip=1)
+    game = JaxSeaquest()
     pygame.init()
     screen = pygame.display.set_mode((WIDTH * SCALING_FACTOR, HEIGHT * SCALING_FACTOR))
     clock = pygame.time.Clock()
 
-    renderer_AtraJaxis = Renderer_AtraJaxis()
+    renderer_AtraJaxis = SeaquestRenderer()
 
     # Get jitted functions
     jitted_step = jax.jit(game.step)
     jitted_reset = jax.jit(game.reset)
 
-    curr_state, curr_obs = jitted_reset()
+    curr_obs, curr_state = jitted_reset()
 
     # Game loop with rendering
     running = True
     frame_by_frame = False
-    frameskip = game.frameskip
+    frameskip = 1
     counter = 1
 
     while running:
@@ -3206,7 +3212,7 @@ if __name__ == "__main__":
                 if event.key == pygame.K_n and frame_by_frame:
                     if counter % frameskip == 0:
                         action = get_human_action()
-                        curr_state, curr_obs, reward, done, info = jitted_step(
+                        curr_obs, curr_state, reward, done, info = jitted_step(
                             curr_state, action
                         )
                         print(f"Observations: {curr_obs}")
@@ -3215,7 +3221,7 @@ if __name__ == "__main__":
         if not frame_by_frame:
             if counter % frameskip == 0:
                 action = get_human_action()
-                curr_state, curr_obs, reward, done, info = jitted_step(
+                curr_obs, curr_state, reward, done, info = jitted_step(
                     curr_state, action
                 )
 

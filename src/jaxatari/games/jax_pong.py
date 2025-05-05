@@ -7,6 +7,7 @@ import chex
 import pygame
 from gymnax.environments import spaces
 
+from jaxatari.renderers import AtraJaxisRenderer
 from jaxatari.rendering import atraJaxis as aj
 from jaxatari.environment import JaxEnvironment
 
@@ -410,9 +411,8 @@ def _reset_ball_after_goal(
 
 
 class JaxPong(JaxEnvironment[PongState, PongObservation, PongInfo]):
-    def __init__(self, frameskip: int = 0, reward_funcs: list[callable]=None):
+    def __init__(self, reward_funcs: list[callable]=None):
         super().__init__()
-        self.frameskip = frameskip + 1
         self.frame_stack_size = 4
         if reward_funcs is not None:
             reward_funcs = tuple(reward_funcs)
@@ -426,7 +426,7 @@ class JaxPong(JaxEnvironment[PongState, PongObservation, PongInfo]):
         self.obs_size = 3*4+1+1
 
 
-    def reset(self) -> PongState:
+    def reset(self, key=None) -> Tuple[PongObservation, PongState]:
         """
         Resets the game state to the initial state.
         Returns the initial state and the reward (i.e. 0)
@@ -457,10 +457,10 @@ class JaxPong(JaxEnvironment[PongState, PongObservation, PongInfo]):
         initial_obs = jax.tree.map(expand_and_copy, initial_obs)
 
         new_state = state._replace(obs_stack=initial_obs)
-        return new_state, initial_obs 
+        return initial_obs, new_state
 
     @partial(jax.jit, static_argnums=(0,))
-    def step(self, state: PongState, action: chex.Array) -> Tuple[PongState, PongObservation, float, bool, PongInfo]:
+    def step(self, state: PongState, action: chex.Array) -> Tuple[PongObservation, PongState, float, bool, PongInfo]:
         # Step 1: Update player position and speed
         # only execute player step on even steps (base implementation only moves the player every second tick)
         new_player_y, player_speed_b, new_acceleration_counter = player_step(
@@ -579,7 +579,7 @@ class JaxPong(JaxEnvironment[PongState, PongObservation, PongInfo]):
         observation = jax.tree.map(lambda stack, obs: jnp.concatenate([stack[1:], jnp.expand_dims(obs, axis=0)], axis=0), new_state.obs_stack, observation)
         new_state = new_state._replace(obs_stack=observation)
 
-        return new_state, new_state.obs_stack, env_reward, done, info
+        return new_state.obs_stack, new_state, env_reward, done, info
 
     @partial(jax.jit, static_argnums=(0,))
     def _get_observation(self, state: PongState):
@@ -683,9 +683,6 @@ def load_sprites():
 
     bg = aj.loadFrame(os.path.join(MODULE_DIR, "sprites/pong/background.npy"), transpose=True)
 
-    # TODO: get a correctly sized background image / resize the saved image..
-    #bg = jax.image.resize(bg, (WIDTH, HEIGHT, 4), method='bicubic')
-
     # Convert all sprites to the expected format (add frame dimension)
     SPRITE_BG = jnp.expand_dims(bg, axis=0)
     SPRITE_PLAYER = jnp.expand_dims(player, axis=0)
@@ -712,7 +709,7 @@ def load_sprites():
     )
 
 
-class Renderer_AtraJaxisPong:
+class PongRenderer(AtraJaxisRenderer):
     """JAX-based Pong game renderer, optimized with JIT compilation."""
 
     def __init__(self):
@@ -748,15 +745,15 @@ class Renderer_AtraJaxisPong:
         # Render player paddle - IMPORTANT: Swap x and y coordinates
         # render_at takes (raster, y, x, sprite) but we need to swap them due to transposition
         frame_player = aj.get_sprite_frame(self.SPRITE_PLAYER, 0)
-        raster = aj.render_at(raster, state.player_y, PLAYER_X, frame_player)
+        raster = aj.render_at(raster, PLAYER_X, state.player_y, frame_player)
 
         # Render enemy paddle - same swap needed
         frame_enemy = aj.get_sprite_frame(self.SPRITE_ENEMY, 0)
-        raster = aj.render_at(raster, state.enemy_y, ENEMY_X, frame_enemy)
+        raster = aj.render_at(raster, ENEMY_X,state.enemy_y, frame_enemy)
 
         # Render ball - ball position is (ball_x, ball_y) but needs to be swapped
         frame_ball = aj.get_sprite_frame(self.SPRITE_BALL, 0)
-        raster = aj.render_at(raster,  state.ball_y, state.ball_x, frame_ball)
+        raster = aj.render_at(raster, state.ball_x, state.ball_y, frame_ball)
 
         wall_color = jnp.array(WALL_COLOR, dtype=jnp.uint8)
         # Top Wall: Full width (x=0 to WIDTH), y from WALL_TOP_Y to WALL_TOP_Y + WALL_TOP_HEIGHT
@@ -783,7 +780,7 @@ class Renderer_AtraJaxisPong:
                                          120)
 
         # 3. Render player score using the selective renderer
-        raster = aj.render_label_selective(raster, 3, player_render_x,
+        raster = aj.render_label_selective(raster, player_render_x, 3,
                                             player_score_digits, self.PLAYER_DIGIT_SPRITES,
                                             player_start_index, player_num_to_render,
                                             spacing=16)
@@ -797,7 +794,7 @@ class Renderer_AtraJaxisPong:
                                         10)
 
         # 5. Render enemy score
-        raster = aj.render_label_selective(raster, 3, enemy_render_x,
+        raster = aj.render_label_selective(raster, enemy_render_x, 3,
                                            enemy_score_digits, self.ENEMY_DIGIT_SPRITES,
                                            enemy_start_index, enemy_num_to_render,
                                            spacing=16)
@@ -812,21 +809,21 @@ if __name__ == "__main__":
     pygame.display.set_caption("Pong Game")
     clock = pygame.time.Clock()
 
-    game = JaxPong(frameskip=1)
+    game = JaxPong()
 
     # Create the JAX renderer
-    renderer = Renderer_AtraJaxisPong()
+    renderer = PongRenderer()
 
     # Get jitted functions
     jitted_step = jax.jit(game.step)
     jitted_reset = jax.jit(game.reset)
 
-    curr_state, obs = jitted_reset()
+    obs, curr_state = jitted_reset()
 
     # Game loop
     running = True
     frame_by_frame = False
-    frameskip = game.frameskip
+    frameskip = 1
     counter = 1
 
     while running:
@@ -842,14 +839,14 @@ if __name__ == "__main__":
                 if event.key == pygame.K_n and frame_by_frame:
                     if counter % frameskip == 0:
                         action = get_human_action()
-                        curr_state, obs, reward, done, info = jitted_step(
+                        obs, curr_state, reward, done, info = jitted_step(
                             curr_state, action
                         )
 
         if not frame_by_frame:
             if counter % frameskip == 0:
                 action = get_human_action()
-                curr_state, obs, reward, done, info = jitted_step(curr_state, action)
+                obs, curr_state, reward, done, info = jitted_step(curr_state, action)
 
         # Render and display
         raster = renderer.render(curr_state)
