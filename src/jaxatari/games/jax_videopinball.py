@@ -11,20 +11,8 @@ from jaxatari.rendering import atraJaxis as aj
 from jaxatari.environment import JaxEnvironment
 
 # Constants for game environment
-MAX_SPEED = 12
-BALL_SPEED = jnp.array([-1, 1])  # Ball speed in x and y direction
-ENEMY_STEP_SIZE = 2
 WIDTH = 160
 HEIGHT = 210
-
-# Constants for ball physics
-BASE_BALL_SPEED = 1
-BALL_MAX_SPEED = 4  # Maximum ball speed cap
-
-# constants for paddle speed influence
-MIN_BALL_SPEED = 1
-
-PLAYER_ACCELERATION = jnp.array([6, 3, 1, -1, 1, -1, 0, 0, 1, 0, -1, 0, 1])
 
 # Action constants
 NOOP = 0
@@ -34,29 +22,29 @@ LEFT = 3
 RIGHTFIRE = 4
 LEFTFIRE = 5
 
-BALL_START_X = jnp.array(78)
-BALL_START_Y = jnp.array(115)
+# Physics constants
+GRAVITY = 0.12
+BALL_MAX_SPEED = 6.0
+FLIPPER_STRENGTH = 4
+PLUNGER_MAX_STRENGTH = 8
+
+# Game layout constants
+BALL_SIZE = (4, 4)
+FLIPPER_LEFT_POS = (30, 180)
+FLIPPER_RIGHT_POS = (110, 180)
+PLUNGER_POS = (150, 120)
+
+
 
 # Background color and object colors
-BACKGROUND_COLOR = 144, 72, 17
-PLAYER_COLOR = 92, 186, 92
-ENEMY_COLOR = 213, 130, 74
-BALL_COLOR = 236, 236, 236  # White ball
-WALL_COLOR = 236, 236, 236  # White walls
-SCORE_COLOR = 236, 236, 236  # White score
+BACKGROUND_COLOR = 0, 0, 0  
+BALL_COLOR = 255, 255, 255  #ball
+FLIPPER_COLOR = 255, 0, 0   #flipper
+TEXT_COLOR = 255, 255, 255  #text
 
-# Player and enemy paddle positions
-PLAYER_X = 140
-ENEMY_X = 16
-
-# Object sizes (width, height)
-PLAYER_SIZE = (4, 16)
-BALL_SIZE = (2, 4)
-ENEMY_SIZE = (4, 16)
-WALL_TOP_Y = 24
-WALL_TOP_HEIGHT = 10
-WALL_BOTTOM_Y = 194
-WALL_BOTTOM_HEIGHT = 16
+# Starting at plunger position
+BALL_START_X = jnp.array(150)  
+BALL_START_Y = jnp.array(120)
 
 # Pygame window dimensions
 WINDOW_WIDTH = 160 * 3
@@ -65,19 +53,20 @@ WINDOW_HEIGHT = 210 * 3
 # define the positions of the state information
 # define the positions of the state information
 STATE_TRANSLATOR: dict = {
-    0: "player_y",
-    1: "player_speed",
-    2: "ball_x",
-    3: "ball_y",
-    4: "enemy_y",
-    5: "enemy_speed",
-    6: "ball_vel_x",
-    7: "ball_vel_y",
-    8: "player_score",
-    9: "enemy_score",
-    10: "step_counter",
-    11: "acceleration_counter",
-    12: "buffer",
+    0: "ball_x",
+    1: "ball_y",
+    2: "ball_vel_x",
+    3: "ball_vel_y",
+    4: "left_flipper_angle",
+    5: "right_flipper_angle",
+    6: "plunger_position", 
+    7: "score",
+    8: "lives",
+    9: "bonus_multiplier",
+    10: "bumpers_active",
+    11: "targets_hit",
+    12: "step_counter",
+    13: "ball_in_play"
 }
 
 
@@ -104,22 +93,22 @@ def get_human_action() -> chex.Array:
 
 
 # immutable state container
-class PongState(NamedTuple):
-    player_y: chex.Array
-    player_speed: chex.Array
+class VideoPinballState(NamedTuple):
     ball_x: chex.Array
     ball_y: chex.Array
-    enemy_y: chex.Array
-    enemy_speed: chex.Array
     ball_vel_x: chex.Array
     ball_vel_y: chex.Array
-    player_score: chex.Array
-    enemy_score: chex.Array
+    left_flipper_angle: chex.Array  
+    right_flipper_angle: chex.Array 
+    plunger_position: chex.Array  
+    score: chex.Array
+    lives: chex.Array
+    bonus_multiplier: chex.Array
+    bumpers_active: chex.Array  
+    targets_hit: chex.Array  
     step_counter: chex.Array
-    acceleration_counter: chex.Array
-    buffer: chex.Array
+    ball_in_play: chex.Array 
     obs_stack: chex.ArrayTree
-
 
 class EntityPosition(NamedTuple):
     x: jnp.ndarray
@@ -128,15 +117,19 @@ class EntityPosition(NamedTuple):
     height: jnp.ndarray
 
 
-class PongObservation(NamedTuple):
-    player: EntityPosition
-    enemy: EntityPosition
+class VideoPinballObservation(NamedTuple):
     ball: EntityPosition
-    score_player: jnp.ndarray
-    score_enemy: jnp.ndarray
+    left_flipper: EntityPosition
+    right_flipper: EntityPosition
+    plunger: EntityPosition
+    bumpers: jnp.ndarray  #bumper states array
+    targets: jnp.ndarray  #target states array
+    score: jnp.ndarray
+    lives: jnp.ndarray
+    bonus_multiplier: jnp.ndarray
 
 
-class PongInfo(NamedTuple):
+class VideoPinballInfo(NamedTuple):
     time: jnp.ndarray
     all_rewards: chex.Array
 
