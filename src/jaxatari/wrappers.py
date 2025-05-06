@@ -49,7 +49,7 @@ class FlattenObservationWrapper(GymnaxWrapper):
         self, key: chex.PRNGKey
     ) -> Tuple[chex.Array, EnvState]:
         # state, obs, = self._env.reset(key)
-        state, obs, = self._env.reset()
+        obs, state = self._env.reset()
         obs = self._env.obs_to_flat_array(obs)
         chex.assert_shape(obs, (self._env.obs_size * self._env.frame_stack_size,))
         return obs, state
@@ -62,7 +62,7 @@ class FlattenObservationWrapper(GymnaxWrapper):
         action: Union[int, float],
     ) -> Tuple[chex.Array, EnvState, float, bool, Any]:  # dict]:
         # state, obs, reward, done, info = self._env.step(key, state, action)
-        state, obs, reward, done, info = self._env.step(state, action)
+        obs, state, reward, done, info = self._env.step(state, action)
         obs = self._env.obs_to_flat_array(obs)
         info = info._asdict()
         return obs, state, reward, done, info

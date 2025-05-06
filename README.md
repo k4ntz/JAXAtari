@@ -85,11 +85,12 @@ python3 -m jaxatari.games.jax_seaquest
 
 ## Supported Games
 
-| Game      | Supported |
-|-----------|-----------|
-| Seaquest  | ✅        |
-| Pong      | ✅        |
-| Kangaroo  | ✅        |
+| Game     | Supported |
+|----------|-----------|
+| Seaquest | ✅        |
+| Pong     | ✅        |
+| Kangaroo | ✅        |
+| Freeway  | ✅        |
 
 > More games can be added via the uniform wrapper system.
 
