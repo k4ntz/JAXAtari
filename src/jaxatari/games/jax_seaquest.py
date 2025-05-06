@@ -155,7 +155,6 @@ class SeaquestState(NamedTuple):
         chex.Array
     )  # Number of times the player has surfaced with all six divers
     death_counter: chex.Array  # Counter for tracking death animation
-    obs_stack: chex.ArrayTree  # Observation stack for frame stacking
     rng_key: chex.PRNGKey
 
 
@@ -2576,19 +2575,10 @@ class JaxSeaquest(JaxEnvironment[SeaquestState, SeaquestObservation, SeaquestInf
             just_surfaced=jnp.array(-1),
             successful_rescues=jnp.array(0),
             death_counter=jnp.array(0),
-            obs_stack=None, #fill later
             rng_key=key,
         )
 
         initial_obs = self._get_observation(reset_state)
-
-        def expand_and_copy(x):
-            x_expanded = jnp.expand_dims(x, axis=0)
-            return jnp.concatenate([x_expanded] * self.frame_stack_size, axis=0)
-
-        # Apply transformation to each leaf in the pytree
-        initial_obs = jax.tree.map(expand_and_copy, initial_obs)
-        reset_state = reset_state._replace(obs_stack=initial_obs)
         return initial_obs, reset_state
 
     @partial(jax.jit, static_argnums=(0, ))
@@ -2890,7 +2880,6 @@ class JaxSeaquest(JaxEnvironment[SeaquestState, SeaquestObservation, SeaquestInf
                 just_surfaced=new_just_surfaced,
                 successful_rescues=state_updated.successful_rescues,
                 death_counter=jnp.array(0),
-                obs_stack=state_updated.obs_stack,
                 rng_key=new_rng_key,
             )
 
@@ -2951,9 +2940,6 @@ class JaxSeaquest(JaxEnvironment[SeaquestState, SeaquestObservation, SeaquestInf
         env_reward = self._get_env_reward(previous_state, return_state)
         all_rewards = self._get_all_rewards(previous_state, return_state)
         info = self._get_info(return_state, all_rewards)
-
-        observation = jax.tree.map(lambda stack, obs: jnp.concatenate([stack[1:], jnp.expand_dims(obs, axis=0)], axis=0), return_state.obs_stack, observation)
-        return_state = return_state._replace(obs_stack=observation)
 
         # Choose between death animation and normal game step
         return observation, return_state, env_reward, done, info

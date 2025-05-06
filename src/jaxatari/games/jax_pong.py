@@ -111,7 +111,6 @@ class PongState(NamedTuple):
     step_counter: chex.Array
     acceleration_counter: chex.Array
     buffer: chex.Array
-    obs_stack: chex.ArrayTree
 
 
 class EntityPosition(NamedTuple):
@@ -439,19 +438,10 @@ class JaxPong(JaxEnvironment[PongState, PongObservation, PongInfo]):
             step_counter=jnp.array(0).astype(jnp.int32),
             acceleration_counter=jnp.array(0).astype(jnp.int32),
             buffer=jnp.array(96).astype(jnp.int32),
-            obs_stack=None
         )
         initial_obs = self._get_observation(state)
 
-        def expand_and_copy(x):
-            x_expanded = jnp.expand_dims(x, axis=0)
-            return jnp.concatenate([x_expanded] * self.frame_stack_size, axis=0)
-
-        # Apply transformation to each leaf in the pytree
-        initial_obs = jax.tree.map(expand_and_copy, initial_obs)
-
-        new_state = state._replace(obs_stack=initial_obs)
-        return initial_obs, new_state
+        return initial_obs, state
 
     @partial(jax.jit, static_argnums=(0,))
     def step(self, state: PongState, action: chex.Array) -> Tuple[PongObservation, PongState, float, bool, PongInfo]:
@@ -560,20 +550,15 @@ class JaxPong(JaxEnvironment[PongState, PongObservation, PongInfo]):
             step_counter=step_counter,
             acceleration_counter=new_acceleration_counter,
             buffer=buffer,
-            obs_stack=state.obs_stack, # old for now
         )
 
         done = self._get_done(new_state)
         env_reward = self._get_env_reward(state, new_state)
         all_rewards = self._get_all_reward(state, new_state)
         info = self._get_info(new_state, all_rewards)
-
         observation = self._get_observation(new_state)
-        # stack the new observation, remove the oldest one
-        observation = jax.tree.map(lambda stack, obs: jnp.concatenate([stack[1:], jnp.expand_dims(obs, axis=0)], axis=0), new_state.obs_stack, observation)
-        new_state = new_state._replace(obs_stack=observation)
 
-        return new_state.obs_stack, new_state, env_reward, done, info
+        return observation, new_state, env_reward, done, info
 
     @partial(jax.jit, static_argnums=(0,))
     def _get_observation(self, state: PongState):
