@@ -9,7 +9,7 @@ from gymnax.environments import spaces
 
 from jaxatari.renderers import AtraJaxisRenderer
 from jaxatari.rendering import atraJaxis as aj
-from jaxatari.environment import JaxEnvironment
+from jaxatari.environment import JaxEnvironment, JAXAtariAction as Action
 
 # Constants for game environment
 MAX_SPEED = 12
@@ -26,14 +26,6 @@ BALL_MAX_SPEED = 4  # Maximum ball speed cap
 MIN_BALL_SPEED = 1
 
 PLAYER_ACCELERATION = jnp.array([6, 3, 1, -1, 1, -1, 0, 0, 1, 0, -1, 0, 1])
-
-# Action constants
-NOOP = 0
-FIRE = 1
-RIGHT = 2
-LEFT = 3
-RIGHTFIRE = 4
-LEFTFIRE = 5
 
 BALL_START_X = jnp.array(78)
 BALL_START_Y = jnp.array(115)
@@ -91,17 +83,17 @@ def get_human_action() -> chex.Array:
     """
     keys = pygame.key.get_pressed()
     if keys[pygame.K_a] and keys[pygame.K_SPACE]:
-        return jnp.array(LEFTFIRE)
+        return jnp.array(Action.LEFTFIRE)
     elif keys[pygame.K_d] and keys[pygame.K_SPACE]:
-        return jnp.array(RIGHTFIRE)
+        return jnp.array(Action.RIGHTFIRE)
     elif keys[pygame.K_a]:
-        return jnp.array(LEFT)
+        return jnp.array(Action.LEFT)
     elif keys[pygame.K_d]:
-        return jnp.array(RIGHT)
+        return jnp.array(Action.RIGHT)
     elif keys[pygame.K_SPACE]:
-        return jnp.array(FIRE)
+        return jnp.array(Action.FIRE)
     else:
-        return jnp.array(NOOP)
+        return jnp.array(Action.NOOP)
 
 
 # immutable state container
@@ -145,8 +137,8 @@ def player_step(
     state_player_y, state_player_speed, acceleration_counter, action: chex.Array
 ):
     # check if one of the buttons is pressed
-    up = jnp.logical_or(action == LEFT, action == LEFTFIRE)
-    down = jnp.logical_or(action == RIGHT, action == RIGHTFIRE)
+    up = jnp.logical_or(action == Action.LEFT, action == Action.LEFTFIRE)
+    down = jnp.logical_or(action == Action.RIGHT, action == Action.RIGHTFIRE)
 
     # get the current acceleration
     acceleration = PLAYER_ACCELERATION[acceleration_counter]
@@ -338,8 +330,8 @@ def ball_step(
     boost_triggered = jnp.logical_and(
         player_paddle_hit,
         jnp.logical_or(
-            jnp.logical_or(action == LEFTFIRE, action == RIGHTFIRE),
-            action == FIRE,
+            jnp.logical_or(action == Action.LEFTFIRE, action == Action.RIGHTFIRE),
+            action == Action.FIRE,
         ),
     )
     # and check if the paddle hit the ball at MAX speed
@@ -416,12 +408,14 @@ class JaxPong(JaxEnvironment[PongState, PongObservation, PongInfo]):
         if reward_funcs is not None:
             reward_funcs = tuple(reward_funcs)
         self.reward_funcs = reward_funcs
-        self.action_set = {
-            NOOP,
-            FIRE,
-            RIGHT,
-            LEFT,
-        }
+        self.action_set = [
+            Action.NOOP,
+            Action.FIRE,
+            Action.RIGHT,
+            Action.LEFT,
+            Action.RIGHTFIRE,
+            Action.LEFTFIRE,
+        ]
         self.obs_size = 3*4+1+1
 
 
@@ -620,6 +614,9 @@ class JaxPong(JaxEnvironment[PongState, PongObservation, PongInfo]):
 
     def action_space(self) -> spaces.Discrete:
         return spaces.Discrete(len(self.action_set))
+
+    def get_action_space(self) -> jnp.ndarray:
+        return jnp.array(self.action_set)
 
     def observation_space(self) -> spaces.Box:
         return spaces.Box(
