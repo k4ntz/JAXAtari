@@ -9,7 +9,7 @@ import jaxatari.rendering.atraJaxis as aj
 import numpy as np
 from gymnax.environments import spaces
 
-from jaxatari.environment import JaxEnvironment
+from jaxatari.environment import JaxEnvironment, JAXAtariAction as Action
 
 # TODO: surface submarine at 6 divers collected + difficulty 1
 # Game Constants
@@ -67,26 +67,6 @@ MAX_COLLECTED_DIVERS = 6
 # define object orientations
 FACE_LEFT = -1
 FACE_RIGHT = 1
-
-# Define action space
-NOOP = 0
-FIRE = 1
-UP = 2
-RIGHT = 3
-LEFT = 4
-DOWN = 5
-UPRIGHT = 6
-UPLEFT = 7
-DOWNRIGHT = 8
-DOWNLEFT = 9
-UPFIRE = 10
-RIGHTFIRE = 11
-LEFTFIRE = 12
-DOWNFIRE = 13
-UPRIGHTFIRE = 14
-UPLEFTFIRE = 15
-DOWNRIGHTFIRE = 16
-DOWNLEFTFIRE = 17
 
 SPAWN_POSITIONS_Y = jnp.array([71, 95, 119, 139])  # submarines at y=69?
 SUBMARINE_Y_OFFSET = 2
@@ -2138,15 +2118,15 @@ def player_missile_step(
     fire = jnp.any(
         jnp.array(
             [
-                action == FIRE,
-                action == UPRIGHTFIRE,
-                action == UPLEFTFIRE,
-                action == DOWNFIRE,
-                action == DOWNRIGHTFIRE,
-                action == DOWNLEFTFIRE,
-                action == RIGHTFIRE,
-                action == LEFTFIRE,
-                action == UPFIRE,
+                action == Action.FIRE,
+                action == Action.UPRIGHTFIRE,
+                action == Action.UPLEFTFIRE,
+                action == Action.DOWNFIRE,
+                action == Action.DOWNRIGHTFIRE,
+                action == Action.DOWNLEFTFIRE,
+                action == Action.RIGHTFIRE,
+                action == Action.LEFTFIRE,
+                action == Action.UPFIRE,
             ]
         )
     )
@@ -2323,48 +2303,48 @@ def player_step(
     up = jnp.any(
         jnp.array(
             [
-                action == UP,
-                action == UPRIGHT,
-                action == UPLEFT,
-                action == UPFIRE,
-                action == UPRIGHTFIRE,
-                action == UPLEFTFIRE,
+                action == Action.UP,
+                action == Action.UPRIGHT,
+                action == Action.UPLEFT,
+                action == Action.UPFIRE,
+                action == Action.UPRIGHTFIRE,
+                action == Action.UPLEFTFIRE,
             ]
         )
     )
     down = jnp.any(
         jnp.array(
             [
-                action == DOWN,
-                action == DOWNRIGHT,
-                action == DOWNLEFT,
-                action == DOWNFIRE,
-                action == DOWNRIGHTFIRE,
-                action == DOWNLEFTFIRE,
+                action == Action.DOWN,
+                action == Action.DOWNRIGHT,
+                action == Action.DOWNLEFT,
+                action == Action.DOWNFIRE,
+                action == Action.DOWNRIGHTFIRE,
+                action == Action.DOWNLEFTFIRE,
             ]
         )
     )
     left = jnp.any(
         jnp.array(
             [
-                action == LEFT,
-                action == UPLEFT,
-                action == DOWNLEFT,
-                action == LEFTFIRE,
-                action == UPLEFTFIRE,
-                action == DOWNLEFTFIRE,
+                action == Action.LEFT,
+                action == Action.UPLEFT,
+                action == Action.DOWNLEFT,
+                action == Action.LEFTFIRE,
+                action == Action.UPLEFTFIRE,
+                action == Action.DOWNLEFTFIRE,
             ]
         )
     )
     right = jnp.any(
         jnp.array(
             [
-                action == RIGHT,
-                action == UPRIGHT,
-                action == DOWNRIGHT,
-                action == RIGHTFIRE,
-                action == UPRIGHTFIRE,
-                action == DOWNRIGHTFIRE,
+                action == Action.RIGHT,
+                action == Action.UPRIGHT,
+                action == Action.DOWNRIGHT,
+                action == Action.RIGHTFIRE,
+                action == Action.UPRIGHTFIRE,
+                action == Action.DOWNRIGHTFIRE,
             ]
         )
     )
@@ -2415,14 +2395,26 @@ class JaxSeaquest(JaxEnvironment[SeaquestState, SeaquestObservation, SeaquestInf
         if reward_funcs is not None:
             reward_funcs = tuple(reward_funcs)
         self.reward_funcs = reward_funcs
-        self.action_set = {
-            NOOP,
-            FIRE,
-            UP,
-            RIGHT,
-            LEFT,
-            DOWN,
-        }
+        self.action_set = [
+            Action.NOOP,
+            Action.FIRE,
+            Action.UP,
+            Action.RIGHT,
+            Action.LEFT,
+            Action.DOWN,
+            Action.UPRIGHT,
+            Action.UPLEFT,
+            Action.DOWNRIGHT,
+            Action.DOWNLEFT,
+            Action.UPFIRE,
+            Action.RIGHTFIRE,
+            Action.LEFTFIRE,
+            Action.DOWNFIRE,
+            Action.UPRIGHTFIRE,
+            Action.UPLEFTFIRE,
+            Action.DOWNRIGHTFIRE,
+            Action.DOWNLEFTFIRE
+        ]
         self.frame_stack_size = 4
         self.obs_size = 5 + 12 * 5 + 12 * 5 + 4 * 5 + 4 * 5 + 5 + 5 + 4
 
@@ -2448,6 +2440,9 @@ class JaxSeaquest(JaxEnvironment[SeaquestState, SeaquestObservation, SeaquestInf
 
     def action_space(self) -> spaces.Discrete:
         return spaces.Discrete(len(self.action_set))
+
+    def get_action_space(self) -> jnp.ndarray:
+        return jnp.array(self.action_set)
 
     def observation_space(self) -> spaces.Box:
         return spaces.Box(
@@ -2718,7 +2713,7 @@ class JaxSeaquest(JaxEnvironment[SeaquestState, SeaquestObservation, SeaquestInf
             player_y = jnp.where(
                 should_block, jnp.array(46, dtype=jnp.int32), state.player_y
             )
-            action_mod = jnp.where(should_block, jnp.array(NOOP), action)
+            action_mod = jnp.where(should_block, jnp.array(Action.NOOP), action)
 
             # Now calculate movement using potentially modified positions and action
             next_x, next_y, player_direction = player_step(
@@ -3135,47 +3130,47 @@ def get_human_action() -> chex.Array:
 
     # Diagonal movements with fire
     if up and right and fire:
-        return jnp.array(UPRIGHTFIRE)
+        return jnp.array(Action.UPRIGHTFIRE)
     if up and left and fire:
-        return jnp.array(UPLEFTFIRE)
+        return jnp.array(Action.UPLEFTFIRE)
     if down and right and fire:
-        return jnp.array(DOWNRIGHTFIRE)
+        return jnp.array(Action.DOWNRIGHTFIRE)
     if down and left and fire:
-        return jnp.array(DOWNLEFTFIRE)
+        return jnp.array(Action.DOWNLEFTFIRE)
 
     # Cardinal directions with fire
     if up and fire:
-        return jnp.array(UPFIRE)
+        return jnp.array(Action.UPFIRE)
     if down and fire:
-        return jnp.array(DOWNFIRE)
+        return jnp.array(Action.DOWNFIRE)
     if left and fire:
-        return jnp.array(LEFTFIRE)
+        return jnp.array(Action.LEFTFIRE)
     if right and fire:
-        return jnp.array(RIGHTFIRE)
+        return jnp.array(Action.RIGHTFIRE)
 
     # Diagonal movements
     if up and right:
-        return jnp.array(UPRIGHT)
+        return jnp.array(Action.UPRIGHT)
     if up and left:
-        return jnp.array(UPLEFT)
+        return jnp.array(Action.UPLEFT)
     if down and right:
-        return jnp.array(DOWNRIGHT)
+        return jnp.array(Action.DOWNRIGHT)
     if down and left:
-        return jnp.array(DOWNLEFT)
+        return jnp.array(Action.DOWNLEFT)
 
     # Cardinal directions
     if up:
-        return jnp.array(UP)
+        return jnp.array(Action.UP)
     if down:
-        return jnp.array(DOWN)
+        return jnp.array(Action.DOWN)
     if left:
-        return jnp.array(LEFT)
+        return jnp.array(Action.LEFT)
     if right:
-        return jnp.array(RIGHT)
+        return jnp.array(Action.RIGHT)
     if fire:
-        return jnp.array(FIRE)
+        return jnp.array(Action.FIRE)
 
-    return jnp.array(NOOP)
+    return jnp.array(Action.NOOP)
 
 
 if __name__ == "__main__":
