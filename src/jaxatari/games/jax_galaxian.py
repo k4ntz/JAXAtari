@@ -109,6 +109,7 @@ def update_enemy_attack_state(state: GalaxianState) -> GalaxianState:
         enemy_attack_respawn_timer=new_enemy_attack_respawn_timer
     )
 
+@jax.jit
 def update_enemy_attack_direction(state: GalaxianState) -> GalaxianState:
 
     enemy_attack_state = state.enemy_attack_state
@@ -164,55 +165,79 @@ def init_galaxian_state():
                          enemy_attack_respawn_timer=jnp.array(20))
 
 
-
 def get_action_from_keyboard():
     keys = pygame.key.get_pressed()
     left = keys[pygame.K_a] or keys[pygame.K_LEFT]
     right = keys[pygame.K_d] or keys[pygame.K_RIGHT]
-    shoot = keys[pygame.K_SPACE]
+    shooting = keys[pygame.K_SPACE]
     move_dir = jnp.array(0)
 
-    if left and not right:
-        move_dir = jnp.array(-1)
-    elif right and not left:
-        move_dir = jnp.array(1)
-    else:
-        move_dir = jnp.array(0)
+    left_cond =  jnp.logical_and(left, ~right)
+    right_cond = jnp.logical_and(right, ~left)
 
-    if shoot:
-        shoot = jnp.array(1)
-    else:
-        shoot = jnp.array(0)
+    move_dir = lax.cond(
+        left_cond,
+        lambda _: jnp.array(-1),
+        lambda _: lax.cond(
+            right_cond,
+            lambda _: jnp.array(1),
+            lambda _: jnp.array(0),
+            operand=None
+        ),
+        operand=None
+    )
+
+    shoot = lax.cond(shooting, lambda _: jnp.array(1), lambda _: jnp.array(0), operand=None)
 
     return Action(player_move_dir=move_dir, player_shooting=shoot)
 
 
-
+@jax.jit
 def handle_shooting(state: GalaxianState, action: Action) -> GalaxianState:
-    if action.player_shooting and state.player_shooting_cooldown == 0:
-        new_bullet_x = jnp.array(state.player_x)
-        new_bullet_y = jnp.array(state.player_y)
+    def shoot(_):
         return state._replace(
-            bullet_x=new_bullet_x,
-            bullet_y=new_bullet_y,
+            bullet_x=jnp.array(state.player_x, dtype=state.bullet_x.dtype),
+            bullet_y=jnp.array(state.player_y),
             player_shooting_cooldown=jnp.array(SHOOTING_COOLDOWN)
         )
-    elif state.player_shooting_cooldown > 0:
-        return state._replace(player_shooting_cooldown=state.player_shooting_cooldown - 1)
-    return state
+
+    def decrease_cooldown(_):
+        return state._replace(
+            player_shooting_cooldown=state.player_shooting_cooldown - 1
+        )
+
+    def idle(_):
+        return state
+
+    can_shoot = jnp.logical_and(action.player_shooting, state.player_shooting_cooldown == 0)
+    on_cooldown = jnp.logical_not(can_shoot) & (state.player_shooting_cooldown > 0)
+
+    return lax.cond(
+        can_shoot,
+        shoot,
+        lambda _: lax.cond(on_cooldown, decrease_cooldown, idle, operand=None),
+        operand=None
+    )
 
 
+@jax.jit
 def update_bullets(state: GalaxianState) -> GalaxianState:
     new_bullets_y = jnp.array(state.bullet_y + BULLET_MOVE_SPEED)
     return state._replace(bullet_y=new_bullets_y)
 
 
+@jax.jit
 def remove_bullets(state: GalaxianState) -> GalaxianState:
-    if state.bullet_y > 500:
+    def reset_bullet(_):
         new_bullet_y = jnp.array(-1)
         new_bullet_x = jnp.array(-1)
         return state._replace(bullet_y=new_bullet_y, bullet_x=new_bullet_x)
-    return state
+
+    def idle(_):
+        return state
+
+    return lax.cond(state.bullet_y > 500, reset_bullet, idle, operand=None)
+
 
 @jax.jit
 def bullet_collision(state: GalaxianState) -> GalaxianState:
@@ -273,8 +298,7 @@ def draw(screen, state: GalaxianState):
                 pygame.draw.rect(screen, (255, 0, 0), enemy_rect)
 
 
-
-
+@jax.jit
 def step(state: GalaxianState, action: Action) -> GalaxianState:
     newState = update_player_position(state, action)
     newState = handle_shooting(newState, action)
