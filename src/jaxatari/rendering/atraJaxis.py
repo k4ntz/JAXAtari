@@ -428,6 +428,23 @@ def pad_to_match(sprites):
 
     return padded_sprites
 
+@jax.jit
+def pad_to_match_top(sprites):
+    max_height = max(sprite.shape[0] for sprite in sprites)
+    max_width = max(sprite.shape[1] for sprite in sprites)
+
+    def pad_sprite(sprite):
+        pad_height = max_height - sprite.shape[0]
+        pad_width = max_width - sprite.shape[1]
+        return jnp.pad(
+            sprite,
+            ((pad_height, 0), (pad_width, 0), (0, 0)),
+            mode="constant",
+            constant_values=0,
+        )
+
+    return [pad_sprite(sprite) for sprite in sprites]
+
 
 @partial(jax.jit, static_argnames=["max_digits"])
 def int_to_digits(n, max_digits=8):
