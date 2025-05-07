@@ -15,39 +15,22 @@ from jaxatari.environment import JaxEnvironment, JAXAtariAction as Action
 
 # Constants for game environment
 MAX_SPEED = 12
-BALL_SPEED = jnp.array([-1, 1])  # Ball speed in x and y direction
 ENEMY_STEP_SIZE = 2
 WIDTH = 160
 HEIGHT = 210
 
-# Constants for ball physics
-BASE_BALL_SPEED = 1
-BALL_MAX_SPEED = 4  # Maximum ball speed cap
-
-# constants for paddle speed influence
-MIN_BALL_SPEED = 1
-
-PLAYER_ACCELERATION = jnp.array([6, 3, 1, -1, 1, -1, 0, 0, 1, 0, -1, 0, 1])
-
-BALL_START_X = jnp.array(78)
-BALL_START_Y = jnp.array(115)
-
 # Background color and object colors
 BACKGROUND_COLOR = 144, 72, 17
 PLAYER_COLOR = 92, 186, 92
-ENEMY_COLOR = 213, 130, 74
 BALL_COLOR = 236, 236, 236  # White ball
 WALL_COLOR = 236, 236, 236  # White walls
 SCORE_COLOR = 236, 236, 236  # White score
 
 # Player and enemy paddle positions
 PLAYER_X = 140
-ENEMY_X = 16
 
 # Object sizes (width, height)
 PLAYER_SIZE = (4, 16)
-BALL_SIZE = (2, 4)
-ENEMY_SIZE = (4, 16)
 WALL_TOP_Y = 24
 WALL_TOP_HEIGHT = 10
 WALL_BOTTOM_Y = 194
