@@ -23,14 +23,14 @@ LEFTFIRE = 5
 
 SPEED = 2
 MOTHERSHIP_Y = 32
-PLAYER_Y = 192
+PLAYER_Y = 175
 MAX_HEAT = 100
 MAX_LIVES = 3
 
 ENEMY_Y_POSITIONS = (64, 96, 128)
 
-PLAYER_SIZE = (4, 16)
-ENEMY_SIZE = (4, 16)
+PLAYER_SIZE = (8, 8)
+ENEMY_SIZE = (16, 8)
 MOTHERSHIP_SIZE = (32, 16)
 
 WINDOW_WIDTH = 160 * 3
@@ -164,17 +164,38 @@ def player_step(
     move_left = jnp.logical_or(action == LEFT, action == LEFTFIRE)
     move_right = jnp.logical_or(action == RIGHT, action == RIGHTFIRE)
     speed = jnp.where(move_left, -SPEED, jnp.where(move_right, SPEED, 0))
-    new_x = jnp.clip(state_player_x + speed, 0, 160 - PLAYER_SIZE[0])
+    new_x = jnp.clip(state_player_x + speed, 0, 160 - int(PLAYER_SIZE[0]/2))
     return new_x, speed
+
+@jax.jit
+def player_projectile_step(
+    projectile_x, projectile_y, projectile_dir, player_x, action
+):
+    # If projectile is inactive, check for fire action to spawn it
+    fire_action = jnp.logical_or(action == FIRE, jnp.logical_or(action == LEFTFIRE, action == RIGHTFIRE))
+    can_fire = projectile_y < 0
+    spawn_proj = jnp.logical_and(fire_action, can_fire)
+    # Spawn at player's current x, just above the player
+    new_proj_x = jnp.where(spawn_proj, player_x, projectile_x)
+    new_proj_y = jnp.where(spawn_proj, PLAYER_Y - 4, projectile_y)
+    new_proj_dir = jnp.where(spawn_proj, -1, projectile_dir)
+    # Move projectile if active
+    moving = new_proj_y >= 0
+    moved_proj_y = jnp.where(moving, new_proj_y + new_proj_dir * 6, new_proj_y)
+    # Deactivate if off screen
+    final_proj_y = jnp.where(moved_proj_y < 0, jnp.array(-1), moved_proj_y)
+    final_proj_x = jnp.where(moved_proj_y < 0, jnp.array(-1), new_proj_x)
+    final_proj_dir = jnp.where(moved_proj_y < 0, jnp.array(0), new_proj_dir)
+    return final_proj_x, final_proj_y, final_proj_dir
 
 @jax.jit
 def enemy_step(state):
     def move_enemy(x, dir):
         # If at left border, go right; if at right border, go left
         at_left = jnp.greater_equal(0, x)
-        at_right = jnp.greater_equal(x, 160 - ENEMY_SIZE[0])
+        at_right = jnp.greater_equal(x, 160 - int(ENEMY_SIZE[0]/2))
         new_dir = jnp.where(at_left, 1, jnp.where(at_right, -1, dir))
-        new_x = jnp.clip(x + new_dir * SPEED, 0, 160 - ENEMY_SIZE[0])
+        new_x = jnp.clip(x + new_dir * SPEED, 0, 160 - int(ENEMY_SIZE[0]/2))
         return new_x, new_dir
 
     e1_x, e1_dir = move_enemy(state.enemy_1_x, state.enemy_1_dir)
@@ -202,9 +223,18 @@ def mothership_step(state):
         new_dir = jnp.where(at_left, 1, jnp.where(at_right, -1, dir))
         new_x = jnp.clip(x + new_dir * SPEED, 0, 160 - MOTHERSHIP_SIZE[0])
         return new_x, new_dir
+
     # Move mothership left/right, clamp to screen
     mothership_x, mothership_dir = move_mothership(state.mothership_x, state.mothership_dir)
     return state._replace(mothership_x=mothership_x, mothership_dir=mothership_dir)
+
+@jax.jit
+def check_collision(px, py, ex, ey, ew, eh):
+    # Returns True if (px, py) is inside the enemy box
+    return jnp.logical_and(
+        jnp.logical_and(px >= ex, px < ex + ew),
+        jnp.logical_and(py >= ey, py < ey + eh)
+    )
 
 class JaxAssault(JaxEnvironment[AssaultState, AssaultObservation, AssaultInfo]):
 
@@ -225,22 +255,22 @@ class JaxAssault(JaxEnvironment[AssaultState, AssaultObservation, AssaultInfo]):
             enemy_projectile_dir=jnp.array(0).astype(jnp.int32),
             mothership_x=jnp.array(64).astype(jnp.int32),
             mothership_dir=jnp.array(1).astype(jnp.int32),
-            enemy_1_x=jnp.array(20).astype(jnp.int32),
+            enemy_1_x=jnp.array(-1).astype(jnp.int32),
             enemy_1_y=jnp.array(ENEMY_Y_POSITIONS[0]).astype(jnp.int32),
             enemy_1_dir=jnp.array(1).astype(jnp.int32),
-            enemy_2_x=jnp.array(40).astype(jnp.int32),
+            enemy_2_x=jnp.array(-1).astype(jnp.int32),
             enemy_2_y=jnp.array(ENEMY_Y_POSITIONS[0]).astype(jnp.int32),
             enemy_2_dir=jnp.array(1).astype(jnp.int32),
-            enemy_3_x=jnp.array(60).astype(jnp.int32),
+            enemy_3_x=jnp.array(-1).astype(jnp.int32),
             enemy_3_y=jnp.array(ENEMY_Y_POSITIONS[1]).astype(jnp.int32),
             enemy_3_dir=jnp.array(1).astype(jnp.int32),
-            enemy_4_x=jnp.array(80).astype(jnp.int32),
+            enemy_4_x=jnp.array(-1).astype(jnp.int32),
             enemy_4_y=jnp.array(ENEMY_Y_POSITIONS[1]).astype(jnp.int32),
             enemy_4_dir=jnp.array(1).astype(jnp.int32),
-            enemy_5_x=jnp.array(100).astype(jnp.int32),
+            enemy_5_x=jnp.array(-1).astype(jnp.int32),
             enemy_5_y=jnp.array(ENEMY_Y_POSITIONS[2]).astype(jnp.int32),
             enemy_5_dir=jnp.array(1).astype(jnp.int32),
-            enemy_6_x=jnp.array(120).astype(jnp.int32),
+            enemy_6_x=jnp.array(-1).astype(jnp.int32),
             enemy_6_y=jnp.array(ENEMY_Y_POSITIONS[2]).astype(jnp.int32),
             enemy_6_dir=jnp.array(1).astype(jnp.int32),
             player_projectile_x=jnp.array(-1).astype(jnp.int32),
@@ -267,10 +297,54 @@ class JaxAssault(JaxEnvironment[AssaultState, AssaultObservation, AssaultInfo]):
         new_player_x, new_player_speed = player_step(state.player_x, action)
         # Enemy step (stub)
 
+        new_proj_x, new_proj_y, new_proj_dir = player_projectile_step(
+        state.player_projectile_x, state.player_projectile_y, state.player_projectile_dir, new_player_x, action
+        )
+
+        def kill_enemy(ex, ey, ew, eh, proj_x, proj_y):
+            hit = check_collision(proj_x, proj_y, ex, ey, ew, eh)
+            new_ex = jnp.where(hit, -1, ex)
+            new_ey = jnp.where(hit, -1, ey)
+            return new_ex, new_ey, hit
+
+        # Enemy 1
+        e1_x, e1_y, hit1 = kill_enemy(state.enemy_1_x, state.enemy_1_y, ENEMY_SIZE[0], ENEMY_SIZE[1], new_proj_x, new_proj_y)
+        # Enemy 2
+        e2_x, e2_y, hit2 = kill_enemy(state.enemy_2_x, state.enemy_2_y, ENEMY_SIZE[0], ENEMY_SIZE[1], new_proj_x, new_proj_y)
+        # Enemy 3
+        e3_x, e3_y, hit3 = kill_enemy(state.enemy_3_x, state.enemy_3_y, ENEMY_SIZE[0], ENEMY_SIZE[1], new_proj_x, new_proj_y)
+        # Enemy 4
+        e4_x, e4_y, hit4 = kill_enemy(state.enemy_4_x, state.enemy_4_y, ENEMY_SIZE[0], ENEMY_SIZE[1], new_proj_x, new_proj_y)
+        # Enemy 5
+        e5_x, e5_y, hit5 = kill_enemy(state.enemy_5_x, state.enemy_5_y, ENEMY_SIZE[0], ENEMY_SIZE[1], new_proj_x, new_proj_y)
+        # Enemy 6
+        e6_x, e6_y, hit6 = kill_enemy(state.enemy_6_x, state.enemy_6_y, ENEMY_SIZE[0], ENEMY_SIZE[1], new_proj_x, new_proj_y)
+
+        # If any enemy was hit, remove projectile
+        any_hit = hit1 | hit2 | hit3 | hit4 | hit5 | hit6
+        new_proj_x = jnp.where(any_hit, -1, new_proj_x)
+        new_proj_y = jnp.where(any_hit, -1, new_proj_y)
+        new_proj_dir = jnp.where(any_hit, 0, new_proj_dir)
+
+        # Increase score for each enemy hit (e.g., +1 per enemy)
+        score_incr = hit1.astype(jnp.int32) + hit2.astype(jnp.int32) + hit3.astype(jnp.int32) + \
+                    hit4.astype(jnp.int32) + hit5.astype(jnp.int32) + hit6.astype(jnp.int32)
+        new_score = state.score + score_incr
+
         new_state = state._replace(
             player_x=new_player_x,
             player_speed=new_player_speed,
-            # TODO: update enemies, projectiles, collisions, score, etc.
+            player_projectile_x=new_proj_x,
+            player_projectile_y=new_proj_y,
+            player_projectile_dir=new_proj_dir,
+            enemy_1_x=e1_x, enemy_1_y=e1_y,
+            enemy_2_x=e2_x, enemy_2_y=e2_y,
+            enemy_3_x=e3_x, enemy_3_y=e3_y,
+            enemy_4_x=e4_x, enemy_4_y=e4_y,
+            enemy_5_x=e5_x, enemy_5_y=e5_y,
+            enemy_6_x=e6_x, enemy_6_y=e6_y,
+            score=new_score,
+            # TODO: update other fields as needed
         )
         new_state = enemy_step(new_state)
         new_state = mothership_step(new_state)
@@ -466,7 +540,8 @@ class Renderer_AtraJaxisAssault:
         raster = aj.render_at(raster, state.enemy_4_y, state.enemy_4_x, frame_enemy)
         raster = aj.render_at(raster, state.enemy_5_y, state.enemy_5_x, frame_enemy)
         raster = aj.render_at(raster, state.enemy_6_y, state.enemy_6_x, frame_enemy)
-         # Render player projectile using lax.cond
+
+        # Render player projectile using lax.cond
         def render_player_proj(_):
             frame_proj = aj.get_sprite_frame(self.PLAYER_PROJECTILE, 0)
             return aj.render_at(raster, state.player_projectile_y, state.player_projectile_x, frame_proj)
