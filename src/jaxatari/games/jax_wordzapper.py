@@ -89,28 +89,61 @@ def get_human_action() -> chex.Array:
 
 
 class WordZapperState(NamedTuple):
-    #TODO
-    pass
+    player_x: chex.Array
+    player_y: chex.Array
+    player_speed: chex.Array
+    cooldown_timer: chex.Array
 
+    asteroid_x: chex.Array
+    asteroid_y: chex.Array
+    asteroid_speed: chex.Array
+    asteroid_alive: chex.Array
+
+    letters_x: chex.Array # letters at the top
+    letters_y: chex.Array
+    letters_char: chex.Array
+    letters_alive: chex.Array
+    letters_speed: chex.Array
+
+    current_word: chex.Array # the actual word
+    current_letter_index: chex.Array
+
+    player_score: chex.Array
+    timer: chex.Array
+    step_counter: chex.Array
+    buffer: chex.Array # TODO: do we need this?
 
 class EntityPosition(NamedTuple):
-    #TODO : review
     x: jnp.ndarray
     y: jnp.ndarray
     width: jnp.ndarray
     height: jnp.ndarray
 
-    
+class EntityBatchPosition(NamedTuple):
+    x: jnp.ndarray
+    y: jnp.ndarray
+    width: jnp.ndarray
+    height: jnp.ndarray
 
 class WordZapperObservation(NamedTuple):
-    #TODO
-    pass
+    player: EntityPosition
+    asteroids: EntityBatchPosition
+    letters: EntityBatchPosition
 
+    letters_char: jnp.ndarray 
+    letters_alive: jnp.ndarray  # active letters
+
+    current_word: jnp.ndarray  # word to form
+    current_letter_index: jnp.ndarray  # current position in word
+
+    cooldown_timer: jnp.ndarray
+    timer: jnp.ndarray
+    player_lives: jnp.ndarray
 
 class WordZapperInfo(NamedTuple):
-    #TODO : review
-    time: jnp.ndarray
-    all_rewards: chex.Array
+    timer: jnp.ndarray
+    current_word: jnp.ndarray
+    game_over: jnp.ndarray
 
 
 @jax.jit
