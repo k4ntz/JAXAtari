@@ -58,9 +58,26 @@ WINDOW_WIDTH = 160 * 3
 WINDOW_HEIGHT = 210 * 3
 
 # define the positions of the state information
-# define the positions of the state information
 STATE_TRANSLATOR: dict = {
-    #TODO
+    0: "player_x",
+    1: "player_y",
+    2: "player_speed",
+    3: "cooldown_timer",
+    4: "asteroid_x",
+    5: "asteroid_y",
+    6: "asteroid_speed",
+    7: "asteroid_alive",
+    8: "letters_x",
+    9: "letters_y",
+    10: "letters_char",
+    11: "letters_alive",
+    12: "letters_speed",
+    13: "current_word",
+    14: "current_letter_index",
+    15: "player_score",
+    16: "timer",
+    17: "step_counter",
+    18: "buffer",
 }
 
 
