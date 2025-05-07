@@ -171,7 +171,6 @@ class KangarooState(NamedTuple):
     reset_coords: chex.Array
     levelup: chex.Array
     lives: chex.Array
-    obs_stack: chex.ArrayTree
 
 
 class KangarooObservation(NamedTuple):
@@ -1708,7 +1707,8 @@ class JaxKangaroo(JaxEnvironment[KangarooState, KangarooObservation, KangarooInf
     @partial(jax.jit, static_argnums=(0,))
     def reset(self, key = None) -> Tuple[KangarooObservation, KangarooState, ]:
         state = self.reset_level(1)
-        return state.obs_stack, state
+        obs = self._get_observation(state)
+        return obs, state
 
     @partial(jax.jit, static_argnums=(0))
     def reset_level(self, next_level=1) -> KangarooState:
@@ -1777,17 +1777,7 @@ class JaxKangaroo(JaxEnvironment[KangarooState, KangarooObservation, KangarooInf
             reset_coords=jnp.array(False),
             levelup=jnp.array(False),
             lives=jnp.array(3),
-            obs_stack=None #fill later
         )
-        initial_obs = self._get_observation(new_state)
-
-        def expand_and_copy(x):
-            x_expanded = jnp.expand_dims(x, axis=0)
-            return jnp.concatenate([x_expanded] * self.frame_stack_size, axis=0)
-
-        # Apply transformation to each leaf in the pytree
-        initial_obs = jax.tree.map(expand_and_copy, initial_obs)
-        new_state = new_state._replace(obs_stack=initial_obs)
         return new_state
 
 
@@ -1997,7 +1987,6 @@ class JaxKangaroo(JaxEnvironment[KangarooState, KangarooObservation, KangarooInf
         #             reset_coords=new_reset_coords,
         #             levelup=new_levelup,
         #             lives=new_lives,
-        #             obs_stack=state.obs_stack,
         #         ),
         #     ),
         # )
@@ -2015,7 +2004,6 @@ class JaxKangaroo(JaxEnvironment[KangarooState, KangarooObservation, KangarooInf
                 reset_coords=new_reset_coords,
                 levelup=new_levelup,
                 lives=new_lives,
-                obs_stack=state.obs_stack,
             ),
         )
         done = self._get_done(new_state)
@@ -2024,10 +2012,8 @@ class JaxKangaroo(JaxEnvironment[KangarooState, KangarooObservation, KangarooInf
         info = self._get_info(new_state, all_rewards)
 
         observation = self._get_observation(new_state)
-        observation = jax.tree.map(lambda stack, obs: jnp.concatenate([stack[1:], jnp.expand_dims(obs, axis=0)], axis=0), new_state.obs_stack, observation)
-        new_state = new_state._replace(obs_stack=observation)
 
-        return new_state.obs_stack, new_state, env_reward, done, info
+        return observation, new_state, env_reward, done, info
 
     @partial(jax.jit, static_argnums=(0,))
     def _get_observation(self, state: KangarooState) -> KangarooObservation:

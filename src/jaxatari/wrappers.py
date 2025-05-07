@@ -25,12 +25,8 @@ class GymnaxWrapper(object):
 
 class FlattenObservationWrapper(GymnaxWrapper):
     """Transform the observations of the environment into jnp arrays and flatten.
-    Also changes position of state in the return tuple to comply with gymnax.
-    Always apply this wrapper first.
+    Apply this wrapper after the AtariWrapper.
     """
-
-    #   def __init__(self, env: env.env):
-    #     super().__init__(env)
 
     def observation_space(self) -> spaces.Box:
         assert isinstance(
@@ -48,8 +44,7 @@ class FlattenObservationWrapper(GymnaxWrapper):
     def reset(
         self, key: chex.PRNGKey
     ) -> Tuple[chex.Array, EnvState]:
-        # state, obs, = self._env.reset(key)
-        obs, state = self._env.reset()
+        obs, state = self._env.reset(key)
         obs = self._env.obs_to_flat_array(obs)
         chex.assert_shape(obs, (self._env.obs_size * self._env.frame_stack_size,))
         return obs, state
@@ -61,10 +56,8 @@ class FlattenObservationWrapper(GymnaxWrapper):
         state: EnvState,
         action: Union[int, float],
     ) -> Tuple[chex.Array, EnvState, float, bool, Any]:  # dict]:
-        # state, obs, reward, done, info = self._env.step(key, state, action)
-        obs, state, reward, done, info = self._env.step(state, action)
+        obs, state, reward, done, info = self._env.step(key, state, action)
         obs = self._env.obs_to_flat_array(obs)
-        info = info._asdict()
         return obs, state, reward, done, info
 
 @struct.dataclass 
@@ -72,11 +65,13 @@ class AtariState:
     env_state: EnvState 
     step: int
     prev_action: int
+    obs_stack: chex.Array
     
 class AtariWrapper(GymnaxWrapper):
-    def __init__(self, env, sticky_actions: bool = True, frame_skip: int = 4, max_episode_length: int = 10_000):
+    def __init__(self, env, sticky_actions: bool = True, frame_stack_size: int = 4, frame_skip: int = 4, max_episode_length: int = 10_000):
         super().__init__(env)
         self.sticky_actions = sticky_actions
+        self.frame_stack_size = frame_stack_size
         self.frame_skip = frame_skip
         self.max_episode_length = max_episode_length
 
@@ -85,7 +80,15 @@ class AtariWrapper(GymnaxWrapper):
         obs, env_state = self._env.reset(key)
         step = jnp.array(0)
         prev_action = jnp.array(0)
-        return obs, AtariState(env_state, step, prev_action)
+
+        def expand_and_copy(x):
+            x_expanded = jnp.expand_dims(x, axis=0)
+            return jnp.concatenate([x_expanded] * self.frame_stack_size, axis=0)
+
+        # Apply transformation to each leaf in the pytree
+        obs = jax.tree.map(expand_and_copy, obs)
+
+        return obs, AtariState(env_state, step, prev_action, obs)
 
     @functools.partial(jax.jit, static_argnums=(0,))
     def step(self, key: chex.PRNGKey, state: AtariState, action: Union[int, float]) -> Tuple[chex.Array, EnvState, float, bool, Dict[Any, Any]]:
@@ -97,9 +100,10 @@ class AtariWrapper(GymnaxWrapper):
             new_action = jnp.where(repeat_prev_action_mask, state.prev_action, action)
 
         # use scan to step the env for frame_skip times
+
         def body_fn(carry, _):
             env_state, action = carry
-            obs, new_env_state, reward, done, info = self._env.step(key, env_state, action) 
+            obs, new_env_state, reward, done, info = self._env.step(env_state, action) 
             return (new_env_state, action), (obs, reward, done, info)
 
         (new_env_state, new_action), (obs, rewards, dones, infos) = jax.lax.scan(
@@ -108,7 +112,11 @@ class AtariWrapper(GymnaxWrapper):
             None,
             length=self.frame_skip,
         )
-        new_obs = obs[-1]
+        # all results are now shaped: (env_num, frame_skip, obs_size)
+        latest_obs = jax.tree.map(lambda x: x[-1], obs)
+        # push latest obs into the stack 
+        new_obs = jax.tree.map(lambda stack, obs: jnp.concatenate([stack[1:], jnp.expand_dims(obs, axis=0)], axis=0), state.obs_stack, latest_obs)
+
         reward = jnp.sum(rewards)
 
         done = jnp.logical_or(dones.any(), state.step >= self.max_episode_length)
@@ -120,10 +128,10 @@ class AtariWrapper(GymnaxWrapper):
                 return v[-1]
 
         info = {
-            k: reduce_info(k, v) for k, v in infos.items()
+            k: reduce_info(k, v) for k, v in infos._asdict().items()
         }
 
-        new_state = AtariState(new_env_state, state.step + 1, new_action)
+        new_state = AtariState(new_env_state, state.step + 1, new_action, new_obs)
 
         # Reset the environment if done
         new_obs, new_state = jax.lax.cond(
