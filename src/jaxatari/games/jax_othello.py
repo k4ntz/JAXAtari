@@ -170,6 +170,68 @@ def has_human_player_decided_field(field_choice_player, action: chex.Array):
     )
 
 
+@jax.jit
+def field_step(field_choice, curr_state, white_player):  # -> valid_choice, new_state
+    x, y = field_choice
+    enemy_color = jax.lax.cond(
+        white_player,
+        lambda _: FieldColor.BLACK,
+        lambda _: FieldColor.WHITE,
+        operand=None
+    )
+    friedly_color = jax.lax.cond(
+        white_player,
+        lambda _: FieldColor.WHITE,
+        lambda _: FieldColor.BLACK,
+        operand=None
+    )
+
+    def if_empty(_):
+        # new state after player's move
+        # it needs to check, if the disc is a valid choice by the rules of othello
+        valid_choice = False
+
+        jax.debug.print("x = {}, y = {}", x, y)
+        # upper disc - are they flippable?
+        discs_flippable = False
+        break_cond = False
+        def loop_upper_discs(i, dummy_state):
+            return dummy_state
+
+        discs_flippable = jax.lax.fori_loop(0, x, loop_upper_discs, curr_state)
+        
+
+        field_color_init = jnp.full((8, 8), FieldColor.EMPTY.value, dtype=jnp.int32)
+        field_color_init = field_color_init.at[3,3].set(FieldColor.BLACK.value)
+        field_color_init = field_color_init.at[4,3].set(FieldColor.WHITE.value)
+        field_color_init = field_color_init.at[3,4].set(FieldColor.WHITE.value)
+        field_color_init = field_color_init.at[4,4].set(FieldColor.BLACK.value)
+        new_state = OthelloState(
+            player_score = jnp.array(2).astype(jnp.int32),
+            enemy_score = jnp.array(2).astype(jnp.int32),
+            step_counter =jnp.array(0).astype(jnp.int32),
+            field = Field(
+                field_id = jnp.arange(64, dtype=jnp.int32).reshape((8,8)),
+                field_color = field_color_init
+            ),
+            field_choice_player = curr_state.field_choice_player,
+            difficulty = jnp.array(1).astype(jnp.int32)
+        )
+        return valid_choice, new_state
+
+
+    def if_not_empty(_):
+        # disc can't be set, field is not empty. state will not change in this case
+        return False, curr_state
+
+    return jax.lax.cond(
+        curr_state.field.field_color[x, y] == FieldColor.EMPTY,
+        if_empty,
+        if_not_empty,
+        operand=None
+    )
+
+
 class JaxOthello(JaxEnvironment[OthelloState, OthelloObservation, OthelloInfo]):
     def __init__(self, frameskip: int = 0, reward_funcs: list[callable]=None):
         super().__init__()
@@ -214,7 +276,7 @@ class JaxOthello(JaxEnvironment[OthelloState, OthelloObservation, OthelloInfo]):
         new_field_choice = jax.lax.cond(
             is_human_condition,  
             lambda _: has_human_player_decided_field(state.field_choice_player, action), 
-            lambda _: (False, state.field_choice_player),  
+            lambda _: (True, state.field_choice_player),  
             operand=None
         )
         decided, new_field_choice = new_field_choice  # 2D Array new_field_choice[i, j]
@@ -233,6 +295,14 @@ class JaxOthello(JaxEnvironment[OthelloState, OthelloObservation, OthelloInfo]):
         # now human player and agent are on the same "page"
         # difference: decided must be True for human player to place his disc
         # check if the new_field_choice is a valid option
+        valid_choice, new_states = jax.lax.cond(
+            decided,
+            lambda _: field_step(new_field_choice, state, True),
+            lambda _: (False, state),
+            operand=None
+        )
+
+
         
 
         
@@ -242,7 +312,7 @@ class JaxOthello(JaxEnvironment[OthelloState, OthelloObservation, OthelloInfo]):
         field_color_init = field_color_init.at[4,3].set(FieldColor.WHITE.value)
         field_color_init = field_color_init.at[3,4].set(FieldColor.WHITE.value)
         field_color_init = field_color_init.at[4,4].set(FieldColor.BLACK.value)
-        new_state = OthelloState(
+        new_state2 = OthelloState(
             player_score = jnp.array(2).astype(jnp.int32),
             enemy_score = jnp.array(2).astype(jnp.int32),
             step_counter =jnp.array(0).astype(jnp.int32),
@@ -254,7 +324,7 @@ class JaxOthello(JaxEnvironment[OthelloState, OthelloObservation, OthelloInfo]):
             difficulty = jnp.array(1).astype(jnp.int32)
         )
 
-        return new_state, None, 0.0, False, None        
+        return new_state2, None, 0.0, False, None        
 
 
     @partial(jax.jit, static_argnums=(0,))
