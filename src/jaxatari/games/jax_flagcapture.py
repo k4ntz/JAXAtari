@@ -17,14 +17,14 @@ from jaxatari.environment import JaxEnvironment
 
 # region Constants
 # Constants for game environment
-WIDTH = 160
-HEIGHT = 210
+WIDTH = 210
+HEIGHT = 160
 # endregion
 
 # region Pygame Constants
 # Pygame window dimensions
-WINDOW_WIDTH = 160 * 3
-WINDOW_HEIGHT = 210 * 3
+WINDOW_WIDTH = 210 * 3
+WINDOW_HEIGHT = 160 * 3
 # endregion
 
 # region Action Space
@@ -115,7 +115,8 @@ class PlayerEntity(NamedTuple):
 
 
 class FlagCaptureState(NamedTuple):
-    player: PlayerEntity
+    player_x: chex.Array
+    player_y: chex.Array
     time: chex.Array
     score: chex.Array
     field: chex.Array  # Shape (9, 7)
@@ -129,7 +130,7 @@ class FlagCaptureObservation(NamedTuple):
 class FlagCaptureInfo(NamedTuple):
     time: chex.Array
     score: chex.Array
-    hints: chex.Array
+    all_rewards: chex.Array
 
 
 class JaxFlagCapture(JaxEnvironment[FlagCaptureState, FlagCaptureObservation, FlagCaptureInfo]):
@@ -160,11 +161,65 @@ class JaxFlagCapture(JaxEnvironment[FlagCaptureState, FlagCaptureObservation, Fl
             DOWNLEFTFIRE
         }
 
-    def reset(self):
-        pass
+    def reset(self, key=None) -> Tuple[FlagCaptureObservation, FlagCaptureState]:
+        """
+        Resets the game state to the initial state.
+        Returns the initial state and the reward (i.e. 0)
+        """
 
-    def step(self):
-        pass
+        # generate new random field
+        #TODO
+        state = FlagCaptureState(
+            player_x=jnp.array(0).astype(jnp.int32),
+            player_y=jnp.array(0).astype(jnp.int32),
+        time=jnp.array(75).astype(jnp.int32),
+        score=jnp.array(0).astype(jnp.int32),
+        field=jnp.zeros((NUM_FIELDS_X, NUM_FIELDS_Y), dtype=jnp.int32)
+        )
+        initial_obs = self._get_observation(state)
+
+        def expand_and_copy(x):
+            x_expanded = jnp.expand_dims(x, axis=0)
+            return jnp.concatenate([x_expanded] * self.frame_stack_size, axis=0)
+
+        # Apply transformation to each leaf in the pytree
+        initial_obs = jax.tree.map(expand_and_copy, initial_obs)
+
+        return initial_obs, state
+
+    @partial(jax.jit, static_argnums=(0,))
+    def _get_observation(self, state: FlagCaptureState):
+        # create player
+        return FlagCaptureObservation(
+            player=PlayerEntity(
+                x=state.player_x, #TODO this is currently 0-9 not screenspace
+                y=state.player_y, #TODO this is currently 0-7 not screenspace
+                width=jnp.array(FIELD_WIDTH).astype(jnp.int32),
+                height=jnp.array(FIELD_HEIGHT).astype(jnp.int32),
+                status=jnp.array(PLAYER_STATUS_ALIVE).astype(jnp.int32),
+            ),
+            score=state.score
+        )
+
+    @partial(jax.jit, static_argnums=(0,))
+    def step(self, state:FlagCaptureState, action: chex.Array) -> Tuple[FlagCaptureObservation, FlagCaptureState, float, bool, FlagCaptureInfo]:
+
+        new_state = FlagCaptureState(
+            player_x=state.player_x,
+            player_y=state.player_y,
+            time=state.time,
+            score=state.score,
+            field=state.field,
+        )
+
+        done = self._get_done(new_state)
+        env_reward = self._get_env_reward(state, new_state)
+        all_rewards = self._get_all_reward(state, new_state)
+        info = self._get_info(new_state, all_rewards)
+
+        observation = self._get_observation(new_state)
+
+        return observation, new_state, env_reward, done, info
 
     def get_action_space(self) -> Tuple:
         return self.action_set
@@ -172,8 +227,49 @@ class JaxFlagCapture(JaxEnvironment[FlagCaptureState, FlagCaptureObservation, Fl
     def reset_player(self):
         pass
 
+    @partial(jax.jit, static_argnums=(0,))
+    def _get_info(self, state: FlagCaptureState, all_rewards: chex.Array) -> FlagCaptureInfo:
+        return FlagCaptureInfo(time=state.time, all_rewards=all_rewards, score=state.score)
+
+    @partial(jax.jit, static_argnums=(0,))
+    def _get_env_reward(self, previous_state: FlagCaptureState, state: FlagCaptureState):
+        return state.score - previous_state.score
+
+    @partial(jax.jit, static_argnums=(0,))
+    def _get_all_reward(self, previous_state: FlagCaptureState, state: FlagCaptureState):
+        if self.reward_funcs is None:
+            return jnp.zeros(1)
+        rewards = jnp.array(
+            [reward_func(previous_state, state) for reward_func in self.reward_funcs]
+        )
+        return rewards
+
+    @partial(jax.jit, static_argnums=(0,))
+    def _get_done(self, state: FlagCaptureState) -> bool:
+        return jnp.less_equal(state.time, 0)
+
+def load_sprites():
+    """Load all sprites required for Flag Capture rendering."""
+    MODULE_DIR = os.path.dirname(os.path.abspath(__file__))
+
+    background = aj.loadFrame(os.path.join(MODULE_DIR, "sprites/flagcapture/background.npy"), transpose=True)
+
+    # Convert all sprites to the expected format (add frame dimension)
+    SPRITE_BG = jnp.expand_dims(background, axis=0)
+
+    # print the shape of SPRITE_BG
+    print("SPRITE_BG shape:", SPRITE_BG.shape)
+
+    return (
+        SPRITE_BG,
+    )
 
 class FlagCaptureRenderer(AtraJaxisRenderer):
+    def __init__(self):
+        (
+            self.SPRITE_BG
+        ) = load_sprites()
+
     def render(self, state):
         """
         Renders the current game state using JAX operations.
@@ -194,9 +290,14 @@ class FlagCaptureRenderer(AtraJaxisRenderer):
         score_color = jnp.array(SCORE_COLOR, dtype=jnp.uint8)
         timer_color = jnp.array(TIMER_COLOR, dtype=jnp.uint8)
 
-        # Draw the background
-        raster = raster.at[:, :, :].set(background_color)
 
+        # Draw the background
+        # raster = raster.at[:, :, :].set(background_color)
+
+        print("sprite:", self.SPRITE_BG)
+        print("sprite shape:", self.SPRITE_BG[0].shape)
+        frame_bg = aj.get_sprite_frame(self.SPRITE_BG[0], 0)
+        raster = aj.render_at(raster, 0, 0, frame_bg)
 
         # Draw the player
         def render_player_sprite(raster_base,sprite):
@@ -219,6 +320,7 @@ class FlagCaptureRenderer(AtraJaxisRenderer):
 
             return _render_player
 
+        """
         dummysprite = jnp.array(BACKGROUND_COLOR, dtype=jnp.uint8)
         player_sprite_cases = {
             PLAYER_STATUS_ALIVE: render_player_sprite(raster,dummysprite),
@@ -255,6 +357,7 @@ class FlagCaptureRenderer(AtraJaxisRenderer):
         # Draw the timer
         time = state.time
         #TODO
+        """
 
         return raster
 
