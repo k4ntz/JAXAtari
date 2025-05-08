@@ -193,75 +193,72 @@ def field_step(field_choice, curr_state, white_player):  # -> valid_choice, new_
 
         jax.debug.print("x = {}, y = {}", x, y)
         # upper disc - are they flippable?
-        discs_flippable = False
-        break_cond = False
-        def loop_upper_discs(i, dummy_state):
+        def loop_upper_discs(i, value):
             idx = x - i - 1
+            dummy_state = value[0]
+            discs_flippable = value[1]
+            break_cond = value[2]
 
             def empty_field(dummy_state):
                 break_cond = True
-                return dummy_state
+                return (dummy_state[0], discs_flippable, break_cond)
 
             def friendly_field(dummy_state):
                 discs_flippable = True
-                valid_choice = True
                 break_cond = True
-                return dummy_state
+                return (dummy_state[0], discs_flippable, break_cond)
 
             def enemy_field(dummy_state):
-                dummy_state = dummy_state._replace(
-                    field=dummy_state.field._replace(
-                        field_color=dummy_state.field.field_color.at[idx, y].set(friendly_color)
+                dummy_state = dummy_state[0]._replace(
+                    field=dummy_state[0].field._replace(
+                        field_color=dummy_state[0].field.field_color.at[idx, y].set(friendly_color)
                     )
                 )
-                return dummy_state
+                return (dummy_state, discs_flippable, break_cond)
 
+    
             return jax.lax.cond(
                 break_cond,
-                lambda _: dummy_state,
+                lambda _: (dummy_state, discs_flippable, break_cond),
                 lambda _: jax.lax.cond(
                     dummy_state.field.field_color[idx, y] == FieldColor.EMPTY,
-                    lambda _: empty_field(dummy_state),
+                    lambda _: empty_field((dummy_state, _, _)),
                     lambda _: jax.lax.cond(
                         dummy_state.field.field_color[idx, y] == friendly_color,
-                        lambda _: friendly_field(dummy_state),
-                        lambda _: enemy_field(dummy_state),
+                        lambda _: friendly_field((dummy_state, _, _)),
+                        lambda _: enemy_field((dummy_state, _, _)),
                         operand=None
                     ),
                     operand=None
                 ),
                 operand=None
             )
-        new_state = jax.lax.fori_loop(0, x, loop_upper_discs, curr_state)
+        new_state, discs_flippable, _ = jax.lax.fori_loop(0, x, loop_upper_discs, (curr_state, False, False))
         # in case, that the the discs aren't flippable (== False) reverse the state back
-        jax.debug.print("flippable = {}", discs_flippable)
         new_state = jax.lax.cond(
             discs_flippable,
             lambda _: new_state,
             lambda _: curr_state,
             operand=None
         )
+        valid_choice = valid_choice | discs_flippable
 
         # upper discs are now flipped, do for all discs on the bottom side
 
-        
 
-        field_color_init = jnp.full((8, 8), FieldColor.EMPTY.value, dtype=jnp.int32)
-        field_color_init = field_color_init.at[3,3].set(FieldColor.BLACK.value)
-        field_color_init = field_color_init.at[4,3].set(FieldColor.WHITE.value)
-        field_color_init = field_color_init.at[3,4].set(FieldColor.WHITE.value)
-        field_color_init = field_color_init.at[4,4].set(FieldColor.BLACK.value)
-        new_state2 = OthelloState(
-            player_score = jnp.array(2).astype(jnp.int32),
-            enemy_score = jnp.array(2).astype(jnp.int32),
-            step_counter =jnp.array(0).astype(jnp.int32),
-            field = Field(
-                field_id = jnp.arange(64, dtype=jnp.int32).reshape((8,8)),
-                field_color = field_color_init
+
+        # if the choice is valid, the empty field is now set in the friendly (human player = white color) color.
+        new_state = jax.lax.cond(
+            valid_choice,
+            lambda _: new_state._replace(
+                field=new_state.field._replace(
+                    field_color=new_state.field.field_color.at[x, y].set(friendly_color)
+                )
             ),
-            field_choice_player = curr_state.field_choice_player,
-            difficulty = jnp.array(1).astype(jnp.int32)
+            lambda _: new_state,
+            operand=None
         )
+
         return valid_choice, new_state
 
     return jax.lax.cond(
@@ -292,7 +289,7 @@ class JaxOthello(JaxEnvironment[OthelloState, OthelloObservation, OthelloInfo]):
         field_color_init = field_color_init.at[3,4].set(FieldColor.WHITE.value)
         field_color_init = field_color_init.at[4,4].set(FieldColor.BLACK.value)
         
-        #field_color_init = field_color_init.at[5,4].set(FieldColor.BLACK.value)
+        field_color_init = field_color_init.at[5,4].set(FieldColor.BLACK.value)
         field_color_init = field_color_init.at[6,4].set(FieldColor.BLACK.value)
 
         state = OthelloState(
@@ -508,7 +505,7 @@ if __name__ == "__main__":
 
     # Game Loop
     running = True
-    frameskip = 180
+    frameskip = 145
     counter = 1
 
     while running:
