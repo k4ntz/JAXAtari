@@ -71,8 +71,8 @@ def ball_step(state: BallState) -> BallState:
     Returns:
     - List of integer Z positions for each frame, ending with two 0s
     """
-    # 2.2 is initial velocity, 0.12 is gravity per frame
-    new_ball_velocity_z_fp = jnp.where(state.ball_z == 0, 21 + random.uniform(rand_key) * 2, state.ball_velocity_z_fp - 1.2)
+    # 2.2 is initial velocity, 0.11 is gravity per frame
+    new_ball_velocity_z_fp = jnp.where(state.ball_z == 0, 21 + random.uniform(rand_key) * 2, state.ball_velocity_z_fp - 1.1)
 
     new_ball_z_fp = state.ball_z_fp + new_ball_velocity_z_fp
     new_ball_z = new_ball_z_fp // 10
