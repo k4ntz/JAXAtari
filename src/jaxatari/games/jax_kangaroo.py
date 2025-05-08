@@ -7,7 +7,7 @@ import chex
 import pygame
 from jax import Array
 from gymnax.environments import spaces
-from jaxatari.environment import JaxEnvironment
+from jaxatari.environment import JaxEnvironment, JAXAtariAction as Action
 
 from jaxatari.games.kangaroo_levels import (
     LevelConstants,
@@ -16,18 +16,6 @@ from jaxatari.games.kangaroo_levels import (
     Kangaroo_Level_3,
 )
 
-# -------- Action constants --------
-NOOP, FIRE, UP, RIGHT, LEFT, DOWN, UPRIGHT, UPLEFT, DOWNRIGHT, DOWNLEFT = range(10)
-(
-    UPFIRE,
-    RIGHTFIRE,
-    LEFTFIRE,
-    DOWNFIRE,
-    UPRIGHTFIRE,
-    UPLEFTFIRE,
-    DOWNRIGHTFIRE,
-    DOWNLEFTFIRE,
-) = range(10, 18)
 RESET = 18
 
 # -------- Game constants --------
@@ -234,36 +222,36 @@ def get_human_action() -> chex.Array:
 
     if fire:
         if x == -1 and y == -1:
-            return jnp.array(DOWNLEFTFIRE)
+            return jnp.array(Action.DOWNLEFTFIRE)
         elif x == -1 and y == 1:
-            return jnp.array(UPLEFTFIRE)
+            return jnp.array(Action.UPLEFTFIRE)
         elif x == 1 and y == -1:
-            return jnp.array(DOWNRIGHTFIRE)
+            return jnp.array(Action.DOWNRIGHTFIRE)
         elif x == 1 and y == 1:
-            return jnp.array(UPRIGHTFIRE)
+            return jnp.array(Action.UPRIGHTFIRE)
         elif x == 0 and y == -1:
-            return jnp.array(DOWNFIRE)
+            return jnp.array(Action.DOWNFIRE)
         else:
-            return jnp.array(FIRE)
+            return jnp.array(Action.FIRE)
     else:
         if x == -1 and y == -1:
-            return jnp.array(DOWNLEFT)
+            return jnp.array(Action.DOWNLEFT)
         elif x == -1 and y == 1:
-            return jnp.array(UPLEFT)
+            return jnp.array(Action.UPLEFT)
         elif x == 1 and y == -1:
-            return jnp.array(DOWNRIGHT)
+            return jnp.array(Action.DOWNRIGHT)
         elif x == 1 and y == 1:
-            return jnp.array(UPRIGHT)
+            return jnp.array(Action.UPRIGHT)
         elif x == -1:
-            return jnp.array(LEFT)
+            return jnp.array(Action.LEFT)
         elif x == 1:
-            return jnp.array(RIGHT)
+            return jnp.array(Action.RIGHT)
         elif y == -1:
-            return jnp.array(DOWN)
+            return jnp.array(Action.DOWN)
         elif y == 1:
-            return jnp.array(UP)
+            return jnp.array(Action.UP)
 
-    return jnp.array(NOOP)
+    return jnp.array(Action.NOOP)
 
 
 @partial(jax.jit, static_argnums=())
@@ -886,32 +874,32 @@ def player_step(state: KangarooState, action: chex.Array):
 
     # Get inputs
     press_right = jnp.any(
-        jnp.array([action == RIGHT, action == UPRIGHT, action == DOWNRIGHT])
+        jnp.array([action == Action.RIGHT, action == Action.UPRIGHT, action == Action.DOWNRIGHT])
     )
 
     press_left = jnp.any(
-        jnp.array([action == LEFT, action == UPLEFT, action == DOWNLEFT])
+        jnp.array([action == Action.LEFT, action == Action.UPLEFT, action == Action.DOWNLEFT])
     )
 
-    press_up = jnp.any(jnp.array([action == UP, action == UPRIGHT, action == UPLEFT]))
+    press_up = jnp.any(jnp.array([action == Action.UP, action == Action.UPRIGHT, action == Action.UPLEFT]))
 
     press_fire = jnp.any(
         jnp.array(
             [
-                action == FIRE,
-                action == DOWNFIRE,
-                action == UPLEFTFIRE,
-                action == UPRIGHTFIRE,
-                action == DOWNLEFTFIRE,
-                action == DOWNRIGHTFIRE,
+                action == Action.FIRE,
+                action == Action.DOWNFIRE,
+                action == Action.UPLEFTFIRE,
+                action == Action.UPRIGHTFIRE,
+                action == Action.DOWNLEFTFIRE,
+                action == Action.DOWNRIGHTFIRE,
             ]
         )
     )
 
-    press_down_fire = jnp.any(jnp.array(action == DOWNFIRE))
+    press_down_fire = jnp.any(jnp.array(action == Action.DOWNFIRE))
 
     press_down = jnp.any(
-        jnp.array([action == DOWN, action == DOWNLEFT, action == DOWNRIGHT])
+        jnp.array([action == Action.DOWN, action == Action.DOWNLEFT, action == Action.DOWNRIGHT])
     )
 
     press_down = jnp.where(state.player.is_jumping, False, press_down)
@@ -1670,18 +1658,26 @@ class JaxKangaroo(JaxEnvironment[KangarooState, KangarooObservation, KangarooInf
         if reward_funcs is not None:
             reward_funcs = tuple(reward_funcs)
         self.reward_funcs = reward_funcs
-        self.action_set = {
-            NOOP,
-            FIRE,
-            UP,
-            RIGHT,
-            LEFT,
-            DOWN,
-            UPRIGHT,
-            UPLEFT,
-            DOWNRIGHT,
-            DOWNLEFT 
-        }
+        self.action_set = [
+            Action.NOOP,
+            Action.FIRE,
+            Action.UP,
+            Action.RIGHT,
+            Action.LEFT,
+            Action.DOWN,
+            Action.UPRIGHT,
+            Action.UPLEFT,
+            Action.DOWNRIGHT,
+            Action.DOWNLEFT,
+            Action.UPFIRE,
+            Action.RIGHTFIRE,
+            Action.LEFTFIRE,
+            Action.DOWNFIRE,
+            Action.UPRIGHTFIRE,
+            Action.UPLEFTFIRE,
+            Action.DOWNRIGHTFIRE,
+            Action.DOWNLEFTFIRE
+        ]
         self.obs_size = 205
         # self.obs_size = 3+2*2*MAX_PLATFORMS+2*2*MAX_LADDERS+2*MAX_FRUITS+MAX_FRUITS+MAX_FRUITS+2*MAX_BELLS+2*MAX_CHILD+2+4+2*4+2*4+4
 
@@ -1694,6 +1690,9 @@ class JaxKangaroo(JaxEnvironment[KangarooState, KangarooObservation, KangarooInf
 
     def action_space(self) -> spaces.Discrete:
         return spaces.Discrete(len(self.action_set))
+
+    def get_action_space(self) -> jnp.ndarray:
+        return jnp.array(self.action_set)
 
     def observation_space(self) -> spaces.Box:
         return spaces.Box(
@@ -1929,10 +1928,10 @@ class JaxKangaroo(JaxEnvironment[KangarooState, KangarooObservation, KangarooInf
         # if one of the walk buttons is pressed, increase the walk animation
         currently_walking = jnp.logical_or(
                 jnp.logical_or(
-                    jnp.logical_or(action == RIGHT, action == LEFT),
-                    jnp.logical_or(action == UPRIGHT, action == UPLEFT)
+                    jnp.logical_or(action == Action.RIGHT, action == Action.LEFT),
+                    jnp.logical_or(action == Action.UPRIGHT, action == Action.UPLEFT)
                 ),
-                jnp.logical_or(action == DOWNRIGHT, action == DOWNLEFT)
+                jnp.logical_or(action == Action.DOWNRIGHT, action == Action.DOWNLEFT)
             )
         new_walk_counter = jnp.where(
             currently_walking,
