@@ -7,7 +7,7 @@ import chex
 import pygame
 from jax import Array
 from gymnax.environments import spaces
-from jaxatari.environment import JaxEnvironment
+from jaxatari.environment import JaxEnvironment, JAXAtariAction as Action
 
 from jaxatari.games.kangaroo_levels import (
     LevelConstants,
@@ -16,18 +16,6 @@ from jaxatari.games.kangaroo_levels import (
     Kangaroo_Level_3,
 )
 
-# -------- Action constants --------
-NOOP, FIRE, UP, RIGHT, LEFT, DOWN, UPRIGHT, UPLEFT, DOWNRIGHT, DOWNLEFT = range(10)
-(
-    UPFIRE,
-    RIGHTFIRE,
-    LEFTFIRE,
-    DOWNFIRE,
-    UPRIGHTFIRE,
-    UPLEFTFIRE,
-    DOWNRIGHTFIRE,
-    DOWNLEFTFIRE,
-) = range(10, 18)
 RESET = 18
 
 # -------- Game constants --------
@@ -171,7 +159,6 @@ class KangarooState(NamedTuple):
     reset_coords: chex.Array
     levelup: chex.Array
     lives: chex.Array
-    obs_stack: chex.ArrayTree
 
 
 class KangarooObservation(NamedTuple):
@@ -235,36 +222,36 @@ def get_human_action() -> chex.Array:
 
     if fire:
         if x == -1 and y == -1:
-            return jnp.array(DOWNLEFTFIRE)
+            return jnp.array(Action.DOWNLEFTFIRE)
         elif x == -1 and y == 1:
-            return jnp.array(UPLEFTFIRE)
+            return jnp.array(Action.UPLEFTFIRE)
         elif x == 1 and y == -1:
-            return jnp.array(DOWNRIGHTFIRE)
+            return jnp.array(Action.DOWNRIGHTFIRE)
         elif x == 1 and y == 1:
-            return jnp.array(UPRIGHTFIRE)
+            return jnp.array(Action.UPRIGHTFIRE)
         elif x == 0 and y == -1:
-            return jnp.array(DOWNFIRE)
+            return jnp.array(Action.DOWNFIRE)
         else:
-            return jnp.array(FIRE)
+            return jnp.array(Action.FIRE)
     else:
         if x == -1 and y == -1:
-            return jnp.array(DOWNLEFT)
+            return jnp.array(Action.DOWNLEFT)
         elif x == -1 and y == 1:
-            return jnp.array(UPLEFT)
+            return jnp.array(Action.UPLEFT)
         elif x == 1 and y == -1:
-            return jnp.array(DOWNRIGHT)
+            return jnp.array(Action.DOWNRIGHT)
         elif x == 1 and y == 1:
-            return jnp.array(UPRIGHT)
+            return jnp.array(Action.UPRIGHT)
         elif x == -1:
-            return jnp.array(LEFT)
+            return jnp.array(Action.LEFT)
         elif x == 1:
-            return jnp.array(RIGHT)
+            return jnp.array(Action.RIGHT)
         elif y == -1:
-            return jnp.array(DOWN)
+            return jnp.array(Action.DOWN)
         elif y == 1:
-            return jnp.array(UP)
+            return jnp.array(Action.UP)
 
-    return jnp.array(NOOP)
+    return jnp.array(Action.NOOP)
 
 
 @partial(jax.jit, static_argnums=())
@@ -887,32 +874,32 @@ def player_step(state: KangarooState, action: chex.Array):
 
     # Get inputs
     press_right = jnp.any(
-        jnp.array([action == RIGHT, action == UPRIGHT, action == DOWNRIGHT])
+        jnp.array([action == Action.RIGHT, action == Action.UPRIGHT, action == Action.DOWNRIGHT])
     )
 
     press_left = jnp.any(
-        jnp.array([action == LEFT, action == UPLEFT, action == DOWNLEFT])
+        jnp.array([action == Action.LEFT, action == Action.UPLEFT, action == Action.DOWNLEFT])
     )
 
-    press_up = jnp.any(jnp.array([action == UP, action == UPRIGHT, action == UPLEFT]))
+    press_up = jnp.any(jnp.array([action == Action.UP, action == Action.UPRIGHT, action == Action.UPLEFT]))
 
     press_fire = jnp.any(
         jnp.array(
             [
-                action == FIRE,
-                action == DOWNFIRE,
-                action == UPLEFTFIRE,
-                action == UPRIGHTFIRE,
-                action == DOWNLEFTFIRE,
-                action == DOWNRIGHTFIRE,
+                action == Action.FIRE,
+                action == Action.DOWNFIRE,
+                action == Action.UPLEFTFIRE,
+                action == Action.UPRIGHTFIRE,
+                action == Action.DOWNLEFTFIRE,
+                action == Action.DOWNRIGHTFIRE,
             ]
         )
     )
 
-    press_down_fire = jnp.any(jnp.array(action == DOWNFIRE))
+    press_down_fire = jnp.any(jnp.array(action == Action.DOWNFIRE))
 
     press_down = jnp.any(
-        jnp.array([action == DOWN, action == DOWNLEFT, action == DOWNRIGHT])
+        jnp.array([action == Action.DOWN, action == Action.DOWNLEFT, action == Action.DOWNRIGHT])
     )
 
     press_down = jnp.where(state.player.is_jumping, False, press_down)
@@ -1671,18 +1658,26 @@ class JaxKangaroo(JaxEnvironment[KangarooState, KangarooObservation, KangarooInf
         if reward_funcs is not None:
             reward_funcs = tuple(reward_funcs)
         self.reward_funcs = reward_funcs
-        self.action_set = {
-            NOOP,
-            FIRE,
-            UP,
-            RIGHT,
-            LEFT,
-            DOWN,
-            UPRIGHT,
-            UPLEFT,
-            DOWNRIGHT,
-            DOWNLEFT 
-        }
+        self.action_set = [
+            Action.NOOP,
+            Action.FIRE,
+            Action.UP,
+            Action.RIGHT,
+            Action.LEFT,
+            Action.DOWN,
+            Action.UPRIGHT,
+            Action.UPLEFT,
+            Action.DOWNRIGHT,
+            Action.DOWNLEFT,
+            Action.UPFIRE,
+            Action.RIGHTFIRE,
+            Action.LEFTFIRE,
+            Action.DOWNFIRE,
+            Action.UPRIGHTFIRE,
+            Action.UPLEFTFIRE,
+            Action.DOWNRIGHTFIRE,
+            Action.DOWNLEFTFIRE
+        ]
         self.obs_size = 205
         # self.obs_size = 3+2*2*MAX_PLATFORMS+2*2*MAX_LADDERS+2*MAX_FRUITS+MAX_FRUITS+MAX_FRUITS+2*MAX_BELLS+2*MAX_CHILD+2+4+2*4+2*4+4
 
@@ -1696,6 +1691,9 @@ class JaxKangaroo(JaxEnvironment[KangarooState, KangarooObservation, KangarooInf
     def action_space(self) -> spaces.Discrete:
         return spaces.Discrete(len(self.action_set))
 
+    def get_action_space(self) -> jnp.ndarray:
+        return jnp.array(self.action_set)
+
     def observation_space(self) -> spaces.Box:
         return spaces.Box(
             low=0,
@@ -1706,9 +1704,10 @@ class JaxKangaroo(JaxEnvironment[KangarooState, KangarooObservation, KangarooInf
 
 
     @partial(jax.jit, static_argnums=(0,))
-    def reset(self) -> Tuple[KangarooState, KangarooObservation]:
+    def reset(self, key = None) -> Tuple[KangarooObservation, KangarooState, ]:
         state = self.reset_level(1)
-        return state, state.obs_stack
+        obs = self._get_observation(state)
+        return obs, state
 
     @partial(jax.jit, static_argnums=(0))
     def reset_level(self, next_level=1) -> KangarooState:
@@ -1777,24 +1776,14 @@ class JaxKangaroo(JaxEnvironment[KangarooState, KangarooObservation, KangarooInf
             reset_coords=jnp.array(False),
             levelup=jnp.array(False),
             lives=jnp.array(3),
-            obs_stack=None #fill later
         )
-        initial_obs = self._get_observation(new_state)
-
-        def expand_and_copy(x):
-            x_expanded = jnp.expand_dims(x, axis=0)
-            return jnp.concatenate([x_expanded] * self.frame_stack_size, axis=0)
-
-        # Apply transformation to each leaf in the pytree
-        initial_obs = jax.tree.map(expand_and_copy, initial_obs)
-        new_state = new_state._replace(obs_stack=initial_obs)
         return new_state
 
 
     @partial(jax.jit, static_argnums=(0), donate_argnums=(1))
     def step(
         self, state: KangarooState, action: chex.Array
-    ) -> Tuple[KangarooState, KangarooObservation, float, bool, KangarooInfo]:
+    ) -> Tuple[KangarooObservation, KangarooState, float, bool, KangarooInfo]:
         reset_cond = jnp.any(jnp.array([action == RESET]))
 
         # Update player state
@@ -1939,10 +1928,10 @@ class JaxKangaroo(JaxEnvironment[KangarooState, KangarooObservation, KangarooInf
         # if one of the walk buttons is pressed, increase the walk animation
         currently_walking = jnp.logical_or(
                 jnp.logical_or(
-                    jnp.logical_or(action == RIGHT, action == LEFT),
-                    jnp.logical_or(action == UPRIGHT, action == UPLEFT)
+                    jnp.logical_or(action == Action.RIGHT, action == Action.LEFT),
+                    jnp.logical_or(action == Action.UPRIGHT, action == Action.UPLEFT)
                 ),
-                jnp.logical_or(action == DOWNRIGHT, action == DOWNLEFT)
+                jnp.logical_or(action == Action.DOWNRIGHT, action == Action.DOWNLEFT)
             )
         new_walk_counter = jnp.where(
             currently_walking,
@@ -1997,7 +1986,6 @@ class JaxKangaroo(JaxEnvironment[KangarooState, KangarooObservation, KangarooInf
         #             reset_coords=new_reset_coords,
         #             levelup=new_levelup,
         #             lives=new_lives,
-        #             obs_stack=state.obs_stack,
         #         ),
         #     ),
         # )
@@ -2015,7 +2003,6 @@ class JaxKangaroo(JaxEnvironment[KangarooState, KangarooObservation, KangarooInf
                 reset_coords=new_reset_coords,
                 levelup=new_levelup,
                 lives=new_lives,
-                obs_stack=state.obs_stack,
             ),
         )
         done = self._get_done(new_state)
@@ -2024,10 +2011,8 @@ class JaxKangaroo(JaxEnvironment[KangarooState, KangarooObservation, KangarooInf
         info = self._get_info(new_state, all_rewards)
 
         observation = self._get_observation(new_state)
-        observation = jax.tree.map(lambda stack, obs: jnp.concatenate([stack[1:], jnp.expand_dims(obs, axis=0)], axis=0), new_state.obs_stack, observation)
-        new_state = new_state._replace(obs_stack=observation)
 
-        return new_state, new_state.obs_stack, env_reward, done, info
+        return observation, new_state, env_reward, done, info
 
     @partial(jax.jit, static_argnums=(0,))
     def _get_observation(self, state: KangarooState) -> KangarooObservation:
@@ -2064,13 +2049,13 @@ class JaxKangaroo(JaxEnvironment[KangarooState, KangarooObservation, KangarooInf
         return state.score - previous_state.score
 
     @partial(jax.jit, static_argnums=(0,))
-    def _get_all_rewards(self, previous_state: KangarooState, state: KangarooState) -> chex.Array: 
+    def _get_all_rewards(self, previous_state: KangarooState, state: KangarooState) -> chex.Array:
         if self.reward_funcs is None:
             return jnp.zeros(1)
         rewards = jnp.array(
             [reward_func(previous_state, state) for reward_func in self.reward_funcs]
         )
-        return rewards 
+        return rewards
 
     @partial(jax.jit, static_argnums=(0,))
     def _get_done(self, state: KangarooState) -> bool:
@@ -2079,7 +2064,7 @@ class JaxKangaroo(JaxEnvironment[KangarooState, KangarooObservation, KangarooInf
 import jaxatari.rendering.atraJaxis as aj
 from jaxatari.renderers import AtraJaxisRenderer
 
-class Renderer_AtraJaxis(AtraJaxisRenderer):
+class KangarooRenderer(AtraJaxisRenderer):
     # Type hint for sprites dictionary
     sprites: Dict[str, Any]
 
@@ -2223,7 +2208,7 @@ class Renderer_AtraJaxis(AtraJaxisRenderer):
             should_draw = jnp.logical_and(fruit_actives[i], fruit_sprite is not None)
             pos = fruit_positions[i]
             def render_fruit_sprite(raster_to_update):
-                return aj.render_at(raster_to_update, pos[1].astype(int), pos[0].astype(int), aj.get_sprite_frame(fruit_sprite, 0))
+                return aj.render_at(raster_to_update, pos[0].astype(int), pos[1].astype(int), aj.get_sprite_frame(fruit_sprite, 0))
             return jax.lax.cond(should_draw, render_fruit_sprite, lambda r: r, current_raster)
 
         num_fruits_to_draw = fruit_positions.shape[0]
@@ -2254,7 +2239,7 @@ class Renderer_AtraJaxis(AtraJaxisRenderer):
         should_draw_bell = jnp.logical_and(jnp.logical_and(not_all_fruits_collected, bell_pos_valid), sprite_is_valid)
 
         def draw_bell_func(current_raster):
-            return aj.render_at(current_raster, bell_pos[1].astype(int), bell_pos[0].astype(int), aj.get_sprite_frame(bell_sprite, 0), flip_horizontal=bell_in_range_left)
+            return aj.render_at(current_raster, bell_pos[0].astype(int), bell_pos[1].astype(int), aj.get_sprite_frame(bell_sprite, 0), flip_horizontal=bell_in_range_left)
         raster = jax.lax.cond(should_draw_bell, draw_bell_func, lambda r: r, raster)
 
         # --- Draw monkeys (Apes) ---
@@ -2300,7 +2285,7 @@ class Renderer_AtraJaxis(AtraJaxisRenderer):
             sprite_is_valid = monkey_sprite is not None
             should_draw = jnp.logical_and(should_draw, sprite_is_valid)
             def render_monkey_sprite(raster_to_update):
-                return aj.render_at(raster_to_update, pos[1].astype(int), pos[0].astype(int), aj.get_sprite_frame(monkey_sprite, 0), flip_horizontal=flip_h)
+                return aj.render_at(raster_to_update, pos[0].astype(int), pos[1].astype(int), aj.get_sprite_frame(monkey_sprite, 0), flip_horizontal=flip_h)
             return jax.lax.cond(should_draw, render_monkey_sprite, lambda r: r, current_raster)
 
         num_monkeys_to_draw = monkey_positions.shape[0]
@@ -2355,7 +2340,7 @@ class Renderer_AtraJaxis(AtraJaxisRenderer):
         player_sprite = sprite_lambda
         sprite_is_valid = player_sprite is not None
         def render_player_sprite(raster_to_update):
-             return aj.render_at(raster_to_update, player_pos_y.astype(int), player_pos_x.astype(int), aj.get_sprite_frame(player_sprite, 0), flip_horizontal=flip_player)
+             return aj.render_at(raster_to_update, player_pos_x.astype(int), player_pos_y.astype(int), aj.get_sprite_frame(player_sprite, 0), flip_horizontal=flip_player)
         raster = jax.lax.cond(sprite_is_valid, render_player_sprite, lambda r: r, raster)
 
         # --- Draw Child ---
@@ -2369,7 +2354,7 @@ class Renderer_AtraJaxis(AtraJaxisRenderer):
         child_sprite = child_sprite_lambda
         should_draw_child = jnp.logical_and(child_pos[0] != -1, child_sprite is not None)
         def draw_child_func(current_raster):
-            return aj.render_at(current_raster, child_pos[1].astype(int), child_pos[0].astype(int), aj.get_sprite_frame(child_sprite, 0), child_flip)
+            return aj.render_at(current_raster, child_pos[0].astype(int), child_pos[1].astype(int), aj.get_sprite_frame(child_sprite, 0), child_flip)
         raster = jax.lax.cond(should_draw_child, draw_child_func, lambda r: r, raster)
 
         # --- Draw falling coconut ---
@@ -2377,7 +2362,7 @@ class Renderer_AtraJaxis(AtraJaxisRenderer):
         coco_sprite = self.sprites.get('thrown_coconut', None)
         should_draw_falling_coco = jnp.logical_and(falling_coco_pos[1] != -1, coco_sprite is not None)
         def draw_falling_coco_func(current_raster):
-            return aj.render_at(current_raster, falling_coco_pos[1].astype(int), falling_coco_pos[0].astype(int), aj.get_sprite_frame(coco_sprite, 0))
+            return aj.render_at(current_raster, falling_coco_pos[0].astype(int), falling_coco_pos[1].astype(int), aj.get_sprite_frame(coco_sprite, 0))
         raster = jax.lax.cond(should_draw_falling_coco, draw_falling_coco_func, lambda r: r, raster)
 
         # --- Draw thrown coconuts ---
@@ -2388,7 +2373,7 @@ class Renderer_AtraJaxis(AtraJaxisRenderer):
             should_draw = jnp.logical_and(coco_states[i] != 0, coco_sprite is not None)
             pos = coco_positions[i]
             def render_coco_sprite(raster_to_update):
-                return aj.render_at(raster_to_update, pos[1].astype(int), pos[0].astype(int), aj.get_sprite_frame(coco_sprite, 0))
+                return aj.render_at(raster_to_update, pos[0].astype(int), pos[1].astype(int), aj.get_sprite_frame(coco_sprite, 0))
             return jax.lax.cond(should_draw, render_coco_sprite, lambda r: r, current_raster)
         num_cocos_to_draw = coco_positions.shape[0]
         raster = jax.lax.fori_loop(0, num_cocos_to_draw, _draw_coco, raster)
@@ -2397,18 +2382,18 @@ class Renderer_AtraJaxis(AtraJaxisRenderer):
         # Score
         digit_sprites = self.sprites.get('digits', None)
         score_digits_indices = aj.int_to_digits(state.score, max_digits=6)
-        raster = aj.render_label(raster, 182, 105, score_digits_indices, digit_sprites[0], spacing=8)
+        raster = aj.render_label(raster, 105, 182, score_digits_indices, digit_sprites[0], spacing=8)
 
         # Lives
         life_sprite = self.sprites.get('kangaroo_lives', None)
         lives_count = jnp.maximum(state.lives.astype(int) - 1, 0)
-        raster = aj.render_indicator(raster, 182, 15, lives_count, life_sprite[0], spacing=8)
+        raster = aj.render_indicator(raster, 15, 182, lives_count, life_sprite[0], spacing=8)
 
         # Timer
         time_digit_sprites = self.sprites.get('time_digits', None)
         timer_val = jnp.maximum(state.level.timer.astype(int), 0)
         timer_digits_indices = aj.int_to_digits(timer_val, max_digits=4)
-        raster = aj.render_label(raster, 190, 80, timer_digits_indices, time_digit_sprites[0], spacing=4)
+        raster = aj.render_label(raster, 80, 190, timer_digits_indices, time_digit_sprites[0], spacing=4)
 
         # Ensure the final raster has the correct dtype
         return raster.astype(jnp.uint8)
@@ -2423,10 +2408,10 @@ if __name__ == "__main__":
     pygame.display.set_caption("Kangaroo")
     clock = pygame.time.Clock()
 
-    renderer = Renderer_AtraJaxis()
+    renderer = KangarooRenderer()
     jitted_step = jax.jit(game.step)
     jitted_reset = jax.jit(game.reset)
-    (curr_state, _) = jitted_reset()
+    (_, curr_state) = jitted_reset()
     running = True
     frame_by_frame = False
     frameskip = game.frameskip
@@ -2445,12 +2430,12 @@ if __name__ == "__main__":
                 if event.key == pygame.K_n and frame_by_frame:
                     if counter % frameskip == 0:
                         action = get_human_action()
-                        (curr_state, _, _, _, _) = jitted_step(curr_state, action)
+                        (_, curr_state, _, _, _) = jitted_step(curr_state, action)
 
         if not frame_by_frame:
             if counter % frameskip == 0:
                 action = get_human_action()
-                (curr_state, _, _, _, _) = jitted_step(curr_state, action)
+                (_, curr_state, _, _, _) = jitted_step(curr_state, action)
 
         # Render and display
         raster = renderer.render(curr_state)
