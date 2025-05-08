@@ -6,6 +6,7 @@ import chex
 import jax.lax
 from functools import partial
 import jax.numpy as jnp
+import jax.random as random
 
 FRAME_WIDTH = 152
 FRAME_HEIGHT = 206
@@ -22,30 +23,67 @@ GAME_OFFSET_TOP = 43 # don't use 44, because that is on the line and playing on 
 GAME_WIDTH = FIELD_WIDTH_BOTTOM
 GAME_HEIGHT = FIELD_HEIGHT
 
+rand_key = random.PRNGKey(0)
+
+class BallState(NamedTuple):
+    ball_x: chex.Array
+    ball_y: chex.Array
+    ball_z: chex.Array
+    ball_z_fp: chex.Array
+    ball_velocity_z_fp: chex.Array
+
 class TennisState(NamedTuple):
     player_x: chex.Array
     player_y: chex.Array
-    ball_x: chex.Array
-    ball_y: chex.Array
-    ball_z: chex.Array = 0.0
-    ball_direction: chex.Array = 0
+    ball_state: chex.Array = BallState(50, 0, 0, 0, 0)
     counter : chex.Array = 0
 
 
 #@partial(jax.jit, static_argnums=(0,))
 def tennis_step(state: TennisState) -> TennisState:
+    new_ball_state = ball_step(state.ball_state)
+
+    return TennisState(state.player_x, state.player_y, new_ball_state, state.counter + 1)
     # new_player_x = jnp.where(state.player_x < FRAME_WIDTH, state.player_x + 1, state.player_x - 1)
-    new_ball_x = jnp.where(state.ball_direction == 0, state.ball_x + 1, state.ball_x - 1)
+    #new_ball_x = jnp.where(state.ball_direction == 0, state.ball_x + 1, state.ball_x - 1)
+    #new_ball_z = jnp.where(state.ball_z_direction == 0, state.ball_z + 1, state.ball_z - 1)
 
-    new_direction = jnp.where(state.ball_x >= GAME_WIDTH, 1, state.ball_direction)
-    new_direction = jnp.where(state.ball_x <= 0, 0, new_direction)
+    #new_z_direction = jnp.where(state.ball_z >= 10, 1, state.ball_z_direction)
+    #new_z_direction = jnp.where(state.ball_z <= 0, 0, new_z_direction)
 
-    new_ball_y = jnp.where(state.counter % 4 == 0, state.ball_y + 1, state.ball_y)
+    #new_direction = jnp.where(state.ball_x >= GAME_WIDTH, 1, state.ball_direction)
+    #new_direction = jnp.where(state.ball_x <= 0, 0, new_direction)
 
-    return TennisState(state.player_x, state.player_y, new_ball_x, new_ball_y, ball_direction=new_direction, counter=state.counter + 1)
+    #new_ball_y = jnp.where(state.counter % 4 == 0, state.ball_y + 1, state.ball_y)
+
+    #return TennisState(state.player_x, state.player_y, new_ball_x, new_ball_y, ball_z=new_ball_z, ball_direction=new_direction, ball_z_direction=new_z_direction, counter=state.counter + 1)
+
+def ball_step(state: BallState) -> BallState:
+    """
+    Generate a symmetrical Atari-style jump arc using fixed-point math.
+
+    Parameters:
+    - v0_fp: initial velocity in float (e.g., 2.2)
+    - gravity_fp: gravity per frame in float (e.g., 0.12)
+    - total_frames: number of frames to simulate (default 42)
+    - scale: fixed-point scale factor (e.g., 10 means 1.0 = 10)
+
+    Returns:
+    - List of integer Z positions for each frame, ending with two 0s
+    """
+    # 2.2 is initial velocity, 0.12 is gravity per frame
+    new_ball_velocity_z_fp = jnp.where(state.ball_z == 0, 21 + random.uniform(rand_key) * 2, state.ball_velocity_z_fp - 1.2)
+
+    new_ball_z_fp = state.ball_z_fp + new_ball_velocity_z_fp
+    new_ball_z = new_ball_z_fp // 10
+
+    new_ball_z = jnp.where(new_ball_z <= 0, 0, new_ball_z)
+    new_ball_z_fp = jnp.where(new_ball_z <= 0, 0, new_ball_z_fp)
+
+    return BallState(state.ball_x, state.ball_y, new_ball_z, new_ball_z_fp, new_ball_velocity_z_fp)
 
 def tennis_reset() -> TennisState:
-    return TennisState(0.0, 100.0, 0.0, 0.0)
+    return TennisState(0.0, 100.0)
 
 if __name__ == "__main__":
     pygame.init()

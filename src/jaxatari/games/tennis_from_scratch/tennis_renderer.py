@@ -26,12 +26,16 @@ class TennisRenderer:
         frame_bg = aj.get_sprite_frame(self.BG, 0)
         raster = aj.render_at(raster, 0, 0, frame_bg)
 
-        frame_ball = aj.get_sprite_frame(self.BALL, 0)
+        frame_ball_shadow = aj.get_sprite_frame(self.BALL_SHADOW, 0)
         # calculate screen coordinates of ball
-        screen_x, screen_y = self.perspective_transform2(state.ball_x, state.ball_y)
-        # calculate screen offset from left of frame
-        screen_offset_x, _ = self.perspective_transform2(GAME_OFFSET_LEFT_BOTTOM, state.ball_y)
+        ball_screen_x, ball_screen_y = self.perspective_transform(state.ball_state.ball_x, state.ball_state.ball_y)
+        raster = aj.render_at(raster, ball_screen_y, ball_screen_x, frame_ball_shadow)
 
+        frame_ball = aj.get_sprite_frame(self.BALL, 0)
+        # apply flat y offset depending on z value
+        raster = aj.render_at(raster, ball_screen_y - state.ball_state.ball_z, ball_screen_x, frame_ball)
+
+        # visualize perspective transform
         """for i in range(0, GAME_HEIGHT):
             rec_left, _ = self.perspective_transform2(0, i)
             rec_right, _ = self.perspective_transform2(GAME_WIDTH, i)
@@ -43,34 +47,33 @@ class TennisRenderer:
             raster = aj.render_at(raster, i + GAME_OFFSET_TOP, rec_left + 2, rectangle)"""
 
         #raster = aj.render_at(raster, screen_x, screen_y, frame_ball)
-        raster = aj.render_at(raster, screen_y, screen_x, frame_ball)
 
         top_left_rec = jnp.zeros((2, 2, 4))
         top_left_rec = top_left_rec.at[:, :, 1].set(255)  # Yellow
         top_left_rec = top_left_rec.at[:, :, 0].set(255)  # Yellow
         top_left_rec = top_left_rec.at[:, :, 3].set(255)  # Alpha
-        top_left_corner_coords = self.perspective_transform2(0, 0)
+        top_left_corner_coords = self.perspective_transform(0, 0)
 
         raster = aj.render_at(raster, top_left_corner_coords[1], top_left_corner_coords[0], top_left_rec)
 
         top_right_rec = jnp.zeros((2, 2, 4))
         top_right_rec = top_right_rec.at[:, :, 2].set(255)  # Blue
         top_right_rec = top_right_rec.at[:, :, 3].set(255)  # Alpha
-        top_right_corner_coords = self.perspective_transform2(GAME_WIDTH, 0)
+        top_right_corner_coords = self.perspective_transform(GAME_WIDTH, 0)
 
         raster = aj.render_at(raster, top_right_corner_coords[1], top_right_corner_coords[0], top_right_rec)
 
         bottom_left_rec = jnp.zeros((2, 2, 4))
         bottom_left_rec = bottom_left_rec.at[:, :, 1].set(255)  # Green
         bottom_left_rec = bottom_left_rec.at[:, :, 3].set(255)  # Alpha
-        bottom_left_corner_coords = self.perspective_transform2(0, GAME_HEIGHT)
+        bottom_left_corner_coords = self.perspective_transform(0, GAME_HEIGHT)
 
         raster = aj.render_at(raster, bottom_left_corner_coords[1], bottom_left_corner_coords[0], bottom_left_rec)
 
         bottom_right_rec = jnp.zeros((2, 2, 4))
         bottom_right_rec = bottom_right_rec.at[:, :, 0].set(255)  # Red
         bottom_right_rec = bottom_right_rec.at[:, :, 3].set(255)  # Alpha
-        bottom_right_corner_coords = self.perspective_transform2(GAME_WIDTH, GAME_HEIGHT)
+        bottom_right_corner_coords = self.perspective_transform(GAME_WIDTH, GAME_HEIGHT)
 
         raster = aj.render_at(raster, bottom_right_corner_coords[1], bottom_right_corner_coords[0], bottom_right_rec)
 
@@ -79,21 +82,7 @@ class TennisRenderer:
         return raster
 
     # we always use coordinates including the lines
-
-    def perspective_transform(self, x, y, width_top = 79.0, width_bottom = 111.0, height = 130.0):
-        normalized_y = y / height
-
-        # interpolate between bottom and top width to get current width
-        current_width = width_bottom * (1 - normalized_y) + width_top * normalized_y
-
-        # assume width_bottom is the "unskewed" width, meaning x needs to be scaled down for width_top
-        normalized_x = x / width_bottom
-
-        screen_x = (1 - current_width) / 2 + normalized_x * current_width
-
-        return screen_x * width_bottom, y
-
-    def perspective_transform2(self, x, y, apply_offsets = True, width_top = 79.0, width_bottom = 111.0, height = 130.0):
+    def perspective_transform(self, x, y, apply_offsets = True, width_top = 79.0, width_bottom = 111.0, height = 130.0):
         # Normalize y: 0 at top (far), 1 at bottom (near)
         y_norm = y / height
 
@@ -109,7 +98,7 @@ class TennisRenderer:
 
         # Compute final x position
         x_screen = offset + x_norm * current_width
-        y_screen = y  # No vertical scaling (unless you want depth stretching)
+        y_screen = y  # No vertical scaling
 
         if apply_offsets:
             return x_screen + GAME_OFFSET_LEFT_BOTTOM, y_screen + GAME_OFFSET_TOP
