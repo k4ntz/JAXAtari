@@ -97,8 +97,6 @@ def has_human_player_decided_field(field_choice_player, action: chex.Array):
     def move_disc_up(field_choice_player):
         cond = field_choice_player[0] > 0
 
-        jax.debug.print("UP")
-
         new_value = jax.lax.cond(
             cond, 
             lambda _: field_choice_player[0] - 1,
@@ -235,6 +233,17 @@ def field_step(field_choice, curr_state, white_player):  # -> valid_choice, new_
                 operand=None
             )
         new_state = jax.lax.fori_loop(0, x, loop_upper_discs, curr_state)
+        # in case, that the the discs aren't flippable (== False) reverse the state back
+        jax.debug.print("flippable = {}", discs_flippable)
+        new_state = jax.lax.cond(
+            discs_flippable,
+            lambda _: new_state,
+            lambda _: curr_state,
+            operand=None
+        )
+
+        # upper discs are now flipped, do for all discs on the bottom side
+
         
 
         field_color_init = jnp.full((8, 8), FieldColor.EMPTY.value, dtype=jnp.int32)
@@ -282,6 +291,9 @@ class JaxOthello(JaxEnvironment[OthelloState, OthelloObservation, OthelloInfo]):
         field_color_init = field_color_init.at[4,3].set(FieldColor.WHITE.value)
         field_color_init = field_color_init.at[3,4].set(FieldColor.WHITE.value)
         field_color_init = field_color_init.at[4,4].set(FieldColor.BLACK.value)
+        
+        #field_color_init = field_color_init.at[5,4].set(FieldColor.BLACK.value)
+        field_color_init = field_color_init.at[6,4].set(FieldColor.BLACK.value)
 
         state = OthelloState(
             player_score = jnp.array(2).astype(jnp.int32),
