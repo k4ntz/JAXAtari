@@ -97,6 +97,8 @@ def has_human_player_decided_field(field_choice_player, action: chex.Array):
     def move_disc_up(field_choice_player):
         cond = field_choice_player[0] > 0
 
+        jax.debug.print("UP")
+
         new_value = jax.lax.cond(
             cond, 
             lambda _: field_choice_player[0] - 1,
@@ -179,14 +181,14 @@ def field_step(field_choice, curr_state, white_player):  # -> valid_choice, new_
         lambda _: FieldColor.WHITE,
         operand=None
     )
-    friedly_color = jax.lax.cond(
+    friendly_color = jax.lax.cond(
         white_player,
         lambda _: FieldColor.WHITE,
         lambda _: FieldColor.BLACK,
         operand=None
     )
 
-    def if_empty(_):
+    def if_empty(curr_state):
         # new state after player's move
         # it needs to check, if the disc is a valid choice by the rules of othello
         valid_choice = False
@@ -196,9 +198,43 @@ def field_step(field_choice, curr_state, white_player):  # -> valid_choice, new_
         discs_flippable = False
         break_cond = False
         def loop_upper_discs(i, dummy_state):
-            return dummy_state
+            idx = x - i - 1
 
-        discs_flippable = jax.lax.fori_loop(0, x, loop_upper_discs, curr_state)
+            def empty_field(dummy_state):
+                break_cond = True
+                return dummy_state
+
+            def friendly_field(dummy_state):
+                discs_flippable = True
+                valid_choice = True
+                break_cond = True
+                return dummy_state
+
+            def enemy_field(dummy_state):
+                dummy_state = dummy_state._replace(
+                    field=dummy_state.field._replace(
+                        field_color=dummy_state.field.field_color.at[idx, y].set(friendly_color)
+                    )
+                )
+                return dummy_state
+
+            return jax.lax.cond(
+                break_cond,
+                lambda _: dummy_state,
+                lambda _: jax.lax.cond(
+                    dummy_state.field.field_color[idx, y] == FieldColor.EMPTY,
+                    lambda _: empty_field(dummy_state),
+                    lambda _: jax.lax.cond(
+                        dummy_state.field.field_color[idx, y] == friendly_color,
+                        lambda _: friendly_field(dummy_state),
+                        lambda _: enemy_field(dummy_state),
+                        operand=None
+                    ),
+                    operand=None
+                ),
+                operand=None
+            )
+        new_state = jax.lax.fori_loop(0, x, loop_upper_discs, curr_state)
         
 
         field_color_init = jnp.full((8, 8), FieldColor.EMPTY.value, dtype=jnp.int32)
@@ -206,7 +242,7 @@ def field_step(field_choice, curr_state, white_player):  # -> valid_choice, new_
         field_color_init = field_color_init.at[4,3].set(FieldColor.WHITE.value)
         field_color_init = field_color_init.at[3,4].set(FieldColor.WHITE.value)
         field_color_init = field_color_init.at[4,4].set(FieldColor.BLACK.value)
-        new_state = OthelloState(
+        new_state2 = OthelloState(
             player_score = jnp.array(2).astype(jnp.int32),
             enemy_score = jnp.array(2).astype(jnp.int32),
             step_counter =jnp.array(0).astype(jnp.int32),
@@ -219,16 +255,11 @@ def field_step(field_choice, curr_state, white_player):  # -> valid_choice, new_
         )
         return valid_choice, new_state
 
-
-    def if_not_empty(_):
-        # disc can't be set, field is not empty. state will not change in this case
-        return False, curr_state
-
     return jax.lax.cond(
         curr_state.field.field_color[x, y] == FieldColor.EMPTY,
-        if_empty,
-        if_not_empty,
-        operand=None
+        lambda x: if_empty(x),
+        lambda x: (False, x),
+        curr_state
     )
 
 
@@ -291,17 +322,18 @@ class JaxOthello(JaxEnvironment[OthelloState, OthelloObservation, OthelloInfo]):
             lambda x: convert_1d_id_to_2d(x),
             action
         ) 
+        state = state._replace(field_choice_player=new_field_choice)
+
 
         # now human player and agent are on the same "page"
         # difference: decided must be True for human player to place his disc
         # check if the new_field_choice is a valid option
-        valid_choice, new_states = jax.lax.cond(
+        valid_choice, new_state = jax.lax.cond(
             decided,
             lambda _: field_step(new_field_choice, state, True),
             lambda _: (False, state),
             operand=None
         )
-
 
         
 
@@ -324,7 +356,7 @@ class JaxOthello(JaxEnvironment[OthelloState, OthelloObservation, OthelloInfo]):
             difficulty = jnp.array(1).astype(jnp.int32)
         )
 
-        return new_state2, None, 0.0, False, None        
+        return new_state, None, 0.0, False, None        
 
 
     @partial(jax.jit, static_argnums=(0,))
