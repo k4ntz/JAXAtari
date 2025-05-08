@@ -11,6 +11,20 @@ from jaxatari.renderers import AtraJaxisRenderer
 from jaxatari.rendering import atraJaxis as aj
 from jaxatari.environment import JaxEnvironment, JAXAtariAction as Action
 
+from enum import IntEnum
+
+class JAXAtariAction(IntEnum):
+    NOOP = 0
+    FIRE = 1
+    UP = 2
+    DOWN = 3
+    LEFT = 4
+    RIGHT = 5
+    LEFTFIRE = 6
+    RIGHTFIRE = 7
+    UPFIRE = 8  # New action
+    DOWNFIRE = 9  # New action
+
 # TODO : remove unnecessary constants
 
 # Constants for game environment
@@ -69,9 +83,8 @@ def get_human_action() -> chex.Array:
     Records if UP or DOWN is being pressed and returns the corresponding action.
 
     Returns:
-        action: int, action taken by the player (LEFT, RIGHT, FIRE, LEFTFIRE, RIGHTFIRE, NOOP).
+        action: int, action taken by the player (LEFT, RIGHT, FIRE, LEFTFIRE, RIGHTFIRE, UP, DOWN, NOOP, UPFIRE, DOWNFIRE).
     """
-    # TODO : Add W S keys
     keys = pygame.key.get_pressed()
     if keys[pygame.K_a] and keys[pygame.K_SPACE]:
         return jnp.array(Action.LEFTFIRE)
@@ -83,6 +96,14 @@ def get_human_action() -> chex.Array:
         return jnp.array(Action.RIGHT)
     elif keys[pygame.K_SPACE]:
         return jnp.array(Action.FIRE)
+    elif keys[pygame.K_w] and keys[pygame.K_SPACE]:  # W + SPACE for UPFIRE
+        return jnp.array(Action.UPFIRE)
+    elif keys[pygame.K_s] and keys[pygame.K_SPACE]:  # S + SPACE for DOWNFIRE
+        return jnp.array(Action.DOWNFIRE)
+    elif keys[pygame.K_w]:  # W key for UP
+        return jnp.array(Action.UP)
+    elif keys[pygame.K_s]:  # S key for DOWN
+        return jnp.array(Action.DOWN)
     else:
         return jnp.array(Action.NOOP)
     
