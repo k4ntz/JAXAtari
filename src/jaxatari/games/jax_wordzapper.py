@@ -201,7 +201,6 @@ def load_sprites():
     #TODO
     pass
 
-<<<<<<< HEAD
 class JaxWordZapper(JaxEnvironment[WordZapperState, WordZapperObservation, WordZapperInfo]) :
     def __init__(self, reward_funcs: list[callable] =None):
         super().__init__()
@@ -232,7 +231,7 @@ class JaxWordZapper(JaxEnvironment[WordZapperState, WordZapperObservation, WordZ
         self.obs_size = 3*4 + 1 + 1 = 14
 
 class JaxWordZapper() :
-    
+
     @partial(jax.jit, static_argnums=(0,))
     def reset(self, key: jax.random.PRNGKey = jax.random.PRNGKey(42)) -> Tuple["WordZapperObservation", "WordZapperState"]:
         """Reset the Word Zapper environment state with a new word and initial player/letter positions."""
