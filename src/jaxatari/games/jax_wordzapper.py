@@ -174,7 +174,7 @@ def player_step(
     return player_x, new_player_y, player_speed, new_cooldown_timer, fired
 
 def shooting_letter(letters_x):
-
+    pass
 
 def scrolling_letters(letters_x, letters_speed, letters_alive):
     letters_x = letters_x - letters_speed
@@ -201,9 +201,34 @@ def load_sprites():
     #TODO
     pass
 
-class JaxWordZapper() :
-    #TODO
-    pass
+class JaxWordZapper(JaxEnvironment[WordZapperState, WordZapperObservation, WordZapperInfo]) :
+    def __init__(self, reward_funcs: list[callable] =None):
+        super().__init__()
+        if reward_funcs is not None:
+            reward_funcs = tuple(reward_funcs)
+        self.reward_funcs = reward_funcs
+        self.action_set = [
+            Action.NOOP,
+            Action.FIRE,
+            Action.UP,
+            Action.RIGHT,
+            Action.LEFT,
+            Action.DOWN,
+            Action.UPRIGHT,
+            Action.UPLEFT,
+            Action.DOWNRIGHT,
+            Action.DOWNLEFT,
+            Action.UPFIRE,
+            Action.RIGHTFIRE,
+            Action.LEFTFIRE,
+            Action.DOWNFIRE,
+            Action.UPRIGHTFIRE,
+            Action.UPLEFTFIRE,
+            Action.DOWNRIGHTFIRE,
+            Action.DOWNLEFTFIRE
+        ]
+        self.frame_stack_size = 4
+        self.obs_size = 3*4 + 1 + 1 = 14
 
 
 
