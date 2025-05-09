@@ -201,6 +201,7 @@ def load_sprites():
     #TODO
     pass
 
+<<<<<<< HEAD
 class JaxWordZapper(JaxEnvironment[WordZapperState, WordZapperObservation, WordZapperInfo]) :
     def __init__(self, reward_funcs: list[callable] =None):
         super().__init__()
@@ -230,7 +231,89 @@ class JaxWordZapper(JaxEnvironment[WordZapperState, WordZapperObservation, WordZ
         self.frame_stack_size = 4
         self.obs_size = 3*4 + 1 + 1 = 14
 
+class JaxWordZapper() :
+    
+    @partial(jax.jit, static_argnums=(0,))
+    def reset(self, key: jax.random.PRNGKey = jax.random.PRNGKey(42)) -> Tuple["WordZapperObservation", "WordZapperState"]:
+        """Reset the Word Zapper environment state with a new word and initial player/letter positions."""
+        
+        # Define dictionary of words (1 to 5 letters each)
+        WORD_DICT = ["CAT", "MOON", "SUN", "ZAP", "ROBOT", "AXE", "JAX", "FIRE", "COLD", "FLUX", "BYTE", "RAY"]
+        MAX_WORD_LEN = 5
+        MAX_WORDS = len(WORD_DICT)
 
+        # Convert dictionary to jax-friendly format
+        def encode_words(word_list):
+        padded_array = jnp.zeros((len(word_list), MAX_WORD_LEN), dtype=jnp.int32)
+        word_lengths = []
+        for i, word in enumerate(word_list):
+        ascii_vals = [ord(c) for c in word]
+        padded_array = padded_array.at[i, :len(ascii_vals)].set(jnp.array(ascii_vals))
+        word_lengths.append(len(word))
+        return padded_array, jnp.array(word_lengths)
+
+        ENCODED_WORDS, WORD_LENGTHS = encode_words(WORD_DICT)
+
+        # Sample a random word
+        word_idx = jax.random.randint(key, (), 0, MAX_WORDS)
+        word = ENCODED_WORDS[word_idx]
+        word_len = WORD_LENGTHS[word_idx]
+
+        # Prepare current word with padding
+        current_word = jnp.zeros(MAX_WORD_LEN, dtype=jnp.int32).at[:word_len].set(word[:word_len])
+
+        # Initialize letter scrolling positions (example: one letter per word character)
+        letters_x = jnp.linspace(160, 160 + 20 * word_len, num=word_len, dtype=jnp.int32)
+        letters_y = jnp.full((word_len,), 32, dtype=jnp.int32)
+        letters_char = word[:word_len]
+        letters_alive = jnp.ones((word_len,), dtype=jnp.int32)
+        letters_speed = jnp.full((word_len,), 1, dtype=jnp.int32)
+
+        # Initialize player state
+        player_x = jnp.array(PLAYER_X)
+        player_y = jnp.array(HEIGHT // 2)
+        player_speed = jnp.array(0)
+        cooldown_timer = jnp.array(0)
+
+        # Asteroid placeholder (can be extended later)
+        asteroid_x = jnp.array(0)
+        asteroid_y = jnp.array(0)
+        asteroid_speed = jnp.array(0)
+        asteroid_alive = jnp.array(0)
+
+        # Other state variables
+        player_score = jnp.array(0)
+        timer = jnp.array(0)
+        step_counter = jnp.array(0)
+        buffer = jnp.zeros((5,), dtype=jnp.int32)
+
+        # Construct state object
+        state = WordZapperState(
+        player_x=player_x,
+        player_y=player_y,
+        player_speed=player_speed,
+        cooldown_timer=cooldown_timer,
+        asteroid_x=asteroid_x,
+        asteroid_y=asteroid_y,
+        asteroid_speed=asteroid_speed,
+        asteroid_alive=asteroid_alive,
+        letters_x=letters_x,
+        letters_y=letters_y,
+        letters_char=letters_char,
+        letters_alive=letters_alive,
+        letters_speed=letters_speed,
+        current_word=current_word,
+        current_letter_index=jnp.array(0),
+        player_score=player_score,
+        timer=timer,
+        step_counter=step_counter,
+        buffer=buffer,
+        )
+
+        # Observation builder (you would define this based on your state model)
+        obs = self._get_observation(state)
+
+        return obs, state
 
 class WordZapperRenderer() :
     #TODO
