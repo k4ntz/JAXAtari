@@ -193,7 +193,7 @@ def field_step(field_choice, curr_state, white_player):  # -> valid_choice, new_
 
         jax.debug.print("x = {}, y = {}", x, y)
         # upper disc - are they flippable?
-        def loop_upper_discs(i, value):
+        def loop_up_side_discs(i, value):
             idx = x - i - 1
             dummy_state = value[0]
             discs_flippable = value[1]
@@ -233,7 +233,7 @@ def field_step(field_choice, curr_state, white_player):  # -> valid_choice, new_
                 ),
                 operand=None
             )
-        new_state, discs_flippable, _ = jax.lax.fori_loop(0, x, loop_upper_discs, (curr_state, False, False))
+        new_state, discs_flippable, _ = jax.lax.fori_loop(0, x, loop_up_side_discs, (curr_state, False, False))
         # in case, that the the discs aren't flippable (== False) reverse the state back
         new_state = jax.lax.cond(
             discs_flippable,
@@ -246,7 +246,7 @@ def field_step(field_choice, curr_state, white_player):  # -> valid_choice, new_
         # upper discs are now flipped, do for all discs on the bottom side
         curr_state = new_state
 
-        def loop_lower_discs(i, value):
+        def loop_down_side_discs(i, value):
             idx = x + i + 1
             dummy_state = value[0]
             discs_flippable = value[1]
@@ -285,7 +285,7 @@ def field_step(field_choice, curr_state, white_player):  # -> valid_choice, new_
                 ),
                 operand=None
             )
-        new_state, discs_flippable, _ = jax.lax.fori_loop(0, FIELD_HEIGHT - x - 1, loop_lower_discs, (curr_state, False, False))
+        new_state, discs_flippable, _ = jax.lax.fori_loop(0, FIELD_HEIGHT - x - 1, loop_down_side_discs, (curr_state, False, False))
         # in case, that the the discs aren't flippable (== False) reverse the state back
         new_state = jax.lax.cond(
             discs_flippable,
@@ -295,7 +295,109 @@ def field_step(field_choice, curr_state, white_player):  # -> valid_choice, new_
         )
         valid_choice = valid_choice | discs_flippable
 
-        ###################
+        # now for all discs on the right hand side
+        curr_state = new_state
+
+        def loop_right_side_discs(i, value):
+            idy = y + i + 1
+            dummy_state = value[0]
+            discs_flippable = value[1]
+            break_cond = value[2]
+
+            def empty_field(dummy_state):
+                break_cond = True
+                return (dummy_state[0], discs_flippable, break_cond)
+
+            def friendly_field(dummy_state):
+                discs_flippable = True
+                break_cond = True
+                return (dummy_state[0], discs_flippable, break_cond)
+
+            def enemy_field(dummy_state):
+                dummy_state = dummy_state[0]._replace(
+                    field=dummy_state[0].field._replace(
+                        field_color=dummy_state[0].field.field_color.at[x, idy].set(friendly_color)
+                    )
+                )
+                return (dummy_state, discs_flippable, break_cond)
+
+            return jax.lax.cond(
+                break_cond,
+                lambda _: (dummy_state, discs_flippable, break_cond),
+                lambda _: jax.lax.cond(
+                    dummy_state.field.field_color[x, idy] == FieldColor.EMPTY,
+                    lambda _: empty_field((dummy_state, _, _)),
+                    lambda _: jax.lax.cond(
+                        dummy_state.field.field_color[x, idy] == friendly_color,
+                        lambda _: friendly_field((dummy_state, _, _)),
+                        lambda _: enemy_field((dummy_state, _, _)),
+                        operand=None
+                    ),
+                    operand=None
+                ),
+                operand=None
+            )
+        new_state, discs_flippable, _ = jax.lax.fori_loop(0, FIELD_WIDTH - y - 1, loop_right_side_discs, (curr_state, False, False))
+        # in case, that the the discs aren't flippable (== False) reverse the state back
+        new_state = jax.lax.cond(
+            discs_flippable,
+            lambda _: new_state,
+            lambda _: curr_state,
+            operand=None
+        )
+        valid_choice = valid_choice | discs_flippable
+
+        # now the left side
+        curr_state = new_state
+
+        def loop_left_side_discs(i, value):
+            idy = y - i - 1
+            dummy_state = value[0]
+            discs_flippable = value[1]
+            break_cond = value[2]
+
+            def empty_field(dummy_state):
+                break_cond = True
+                return (dummy_state[0], discs_flippable, break_cond)
+
+            def friendly_field(dummy_state):
+                discs_flippable = True
+                break_cond = True
+                return (dummy_state[0], discs_flippable, break_cond)
+
+            def enemy_field(dummy_state):
+                dummy_state = dummy_state[0]._replace(
+                    field=dummy_state[0].field._replace(
+                        field_color=dummy_state[0].field.field_color.at[x, idy].set(friendly_color)
+                    )
+                )
+                return (dummy_state, discs_flippable, break_cond)
+
+            return jax.lax.cond(
+                break_cond,
+                lambda _: (dummy_state, discs_flippable, break_cond),
+                lambda _: jax.lax.cond(
+                    dummy_state.field.field_color[x, idy] == FieldColor.EMPTY,
+                    lambda _: empty_field((dummy_state, _, _)),
+                    lambda _: jax.lax.cond(
+                        dummy_state.field.field_color[x, idy] == friendly_color,
+                        lambda _: friendly_field((dummy_state, _, _)),
+                        lambda _: enemy_field((dummy_state, _, _)),
+                        operand=None
+                    ),
+                    operand=None
+                ),
+                operand=None
+            )
+        new_state, discs_flippable, _ = jax.lax.fori_loop(0, y, loop_left_side_discs, (curr_state, False, False))
+        # in case, that the the discs aren't flippable (== False) reverse the state back
+        new_state = jax.lax.cond(
+            discs_flippable,
+            lambda _: new_state,
+            lambda _: curr_state,
+            operand=None
+        )
+        valid_choice = valid_choice | discs_flippable
 
 
         # if the choice is valid, the empty field is now set in the friendly (human player = white color) color.
@@ -341,8 +443,9 @@ class JaxOthello(JaxEnvironment[OthelloState, OthelloObservation, OthelloInfo]):
         field_color_init = field_color_init.at[4,4].set(FieldColor.BLACK.value)
         
         #################### Testing
-        field_color_init = field_color_init.at[5,4].set(FieldColor.BLACK.value)
-        field_color_init = field_color_init.at[6,4].set(FieldColor.BLACK.value)
+        field_color_init = field_color_init.at[3,2].set(FieldColor.BLACK.value)
+        field_color_init = field_color_init.at[3,1].set(FieldColor.BLACK.value)
+        field_color_init = field_color_init.at[3,4].set(FieldColor.BLACK.value)
         
         
         
