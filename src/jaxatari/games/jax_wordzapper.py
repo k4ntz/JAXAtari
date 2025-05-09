@@ -243,13 +243,13 @@ class JaxWordZapper() :
 
         # Convert dictionary to jax-friendly format
         def encode_words(word_list):
-        padded_array = jnp.zeros((len(word_list), MAX_WORD_LEN), dtype=jnp.int32)
-        word_lengths = []
-        for i, word in enumerate(word_list):
-        ascii_vals = [ord(c) for c in word]
-        padded_array = padded_array.at[i, :len(ascii_vals)].set(jnp.array(ascii_vals))
-        word_lengths.append(len(word))
-        return padded_array, jnp.array(word_lengths)
+            padded_array = jnp.zeros((len(word_list), MAX_WORD_LEN), dtype=jnp.int32)
+            word_lengths = []
+            for i, word in enumerate(word_list):
+                ascii_vals = [ord(c) for c in word]
+                padded_array = padded_array.at[i, :len(ascii_vals)].set(jnp.array(ascii_vals))
+                word_lengths.append(len(word))
+            return padded_array, jnp.array(word_lengths)
 
         ENCODED_WORDS, WORD_LENGTHS = encode_words(WORD_DICT)
 
@@ -312,7 +312,9 @@ class JaxWordZapper() :
         # Observation builder (you would define this based on your state model)
         obs = self._get_observation(state)
 
-        return obs, state    @partial(jax.jit, static_argnums=(0,))
+        return obs, state   
+    
+    @partial(jax.jit, static_argnums=(0,))
     def step(
         self, state: WordZapperState, action: chex.Array
     ) -> Tuple[WordZapperObservation, WordZapperState, float, bool, WordZapperInfo]:
