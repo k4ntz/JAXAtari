@@ -11,7 +11,6 @@ from jaxatari.renderers import AtraJaxisRenderer
 from jaxatari.rendering import atraJaxis as aj
 from jaxatari.environment import JaxEnvironment, JAXAtariAction as Action
 
-from enum import IntEnum
 
 
 # TODO : remove unnecessary constants
@@ -67,34 +66,52 @@ STATE_TRANSLATOR: dict = {
 }
 
 
-def get_human_action() -> chex.Array:
+def get_human_action() -> list:
     """
-    Records if UP or DOWN is being pressed and returns the corresponding action.
+    Records if multiple keys are being pressed and returns the corresponding actions.
 
     Returns:
-        action: int, action taken by the player (LEFT, RIGHT, FIRE, LEFTFIRE, RIGHTFIRE, UP, DOWN, NOOP, UPFIRE, DOWNFIRE).
+        actions: A list of actions taken by the player (e.g., LEFT, RIGHT, UP, DOWN, FIRE, etc.).
     """
     keys = pygame.key.get_pressed()
-    if keys[pygame.K_a] and keys[pygame.K_SPACE]:
-        return jnp.array(Action.LEFTFIRE)
-    elif keys[pygame.K_d] and keys[pygame.K_SPACE]:
-        return jnp.array(Action.RIGHTFIRE)
-    elif keys[pygame.K_a]:
-        return jnp.array(Action.LEFT)
-    elif keys[pygame.K_d]:
-        return jnp.array(Action.RIGHT)
-    elif keys[pygame.K_SPACE]:
-        return jnp.array(Action.FIRE)
-    elif keys[pygame.K_w] and keys[pygame.K_SPACE]:  # W + SPACE for UPFIRE
-        return jnp.array(Action.UPFIRE)
-    elif keys[pygame.K_s] and keys[pygame.K_SPACE]:  # S + SPACE for DOWNFIRE
-        return jnp.array(Action.DOWNFIRE)
-    elif keys[pygame.K_w]:  # W key for UP
-        return jnp.array(Action.UP)
-    elif keys[pygame.K_s]:  # S key for DOWN
-        return jnp.array(Action.DOWN)
-    else:
-        return jnp.array(Action.NOOP)
+    actions = []
+
+    # Movement keys
+    if keys[pygame.K_a]:
+        actions.append("LEFT")
+    if keys[pygame.K_d]:
+        actions.append("RIGHT")
+    if keys[pygame.K_w]:
+        actions.append("UP")
+    if keys[pygame.K_s]:
+        actions.append("DOWN")
+
+    # Firing keys with diagonal combinations
+    if keys[pygame.K_SPACE]:
+        if keys[pygame.K_a] and keys[pygame.K_w]:
+            actions.append("UPLEFTFIRE")
+        elif keys[pygame.K_d] and keys[pygame.K_w]:
+            actions.append("UPRIGHTFIRE")
+        elif keys[pygame.K_a] and keys[pygame.K_s]:
+            actions.append("DOWNLEFTFIRE")
+        elif keys[pygame.K_d] and keys[pygame.K_s]:
+            actions.append("DOWNRIGHTFIRE")
+        elif keys[pygame.K_a]:
+            actions.append("LEFTFIRE")
+        elif keys[pygame.K_d]:
+            actions.append("RIGHTFIRE")
+        elif keys[pygame.K_w]:
+            actions.append("UPFIRE")
+        elif keys[pygame.K_s]:
+            actions.append("DOWNFIRE")
+        else:
+            actions.append("FIRE")
+
+    # If no keys are pressed, return NOOP
+    if not actions:
+        actions.append("NOOP")
+
+    return actions
     
 
 
