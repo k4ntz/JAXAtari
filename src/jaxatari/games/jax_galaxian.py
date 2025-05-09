@@ -6,6 +6,16 @@ from absl.testing.parameterized import parameters
 from jax import lax
 import jax.lax
 from pandas.core.interchange import column
+from gymnax.environments import spaces
+
+from src.jaxatari.environment import JaxEnvironment
+
+# Action constants
+NOOP = 0
+FIRE = 1
+RIGHT = 2
+LEFT = 3
+
 
 # -------- Game constants --------
 SHOOTING_COOLDOWN = 80
@@ -440,10 +450,84 @@ def step(state: GalaxianState, action: Action) -> GalaxianState:
     return  newState
 
 
+
+class GalaxianObservation(NamedTuple):
+    player_x: chex.Array
+    player_y: chex.Array
+    bullet_x: chex.Array
+    bullet_y: chex.Array
+    enemy_grid_x: chex.Array
+    enemy_grid_y: chex.Array
+    enemy_grid_alive: chex.Array  # 0: dead, 1: alive, 2: attacking
+    enemy_attack_pos: chex.Array
+    enemy_attack_x: chex.Array
+    enemy_attack_y: chex.Array
+
+class GalaxianInfo(NamedTuple):
+    time: jnp.ndarray
+    all_rewards: chex.Array
+
+class JaxGalaxian(JaxEnvironment[GalaxianState, GalaxianObservation, GalaxianInfo]):
+    def __init__(self, frameskip: int = 0, reward_funcs: list[callable]=None):
+        super().__init__()
+        self.frameskip = frameskip + 1  #den stuff kp hab copy paste aus pong
+        self.frame_stack_size = 4
+        if reward_funcs is not None:
+            reward_funcs = tuple(reward_funcs)
+        self.reward_funcs = reward_funcs
+        self.action_set = {
+            NOOP,
+            FIRE,
+            RIGHT,
+            LEFT,
+        }
+        self.obs_size = 3*2+1
+        #Größe der Beobachtungsdaten
+        #3*4 = 3 entitys mit je 2 werten: enemy, player, bullet -> x,y
+        # +1 ein extra wert für den score
+        # sind erstmal nur temporary values
+
+    def reset(self) -> GalaxianState:
+        return init_galaxian_state()
+
+    #alles aus galaxianState was man aus Spielersicht wahrnimmt
+    def _get_observation(self, state: GalaxianState) -> GalaxianObservation:
+        return GalaxianObservation(
+            player_x=state.player_x,
+            player_y=state.player_y,
+            bullet_x=state.bullet_x,
+            bullet_y=state.bullet_y,
+            enemy_grid_x=state.enemy_grid_x,
+            enemy_grid_y=state.enemy_grid_y,
+            enemy_grid_alive=state.enemy_grid_alive,
+            enemy_attack_pos=state.enemy_attack_pos,
+            enemy_attack_x=state.enemy_attack_x,
+            enemy_attack_y=state.enemy_attack_y
+        )
+
+
+    def action_space(self) -> spaces.Discrete:
+        return spaces.Discrete(len(self.action_set))
+
+    def observation_space(self) -> spaces.Box:
+        return spaces.Box(
+            low=0,
+            high=255,
+            shape=None,
+            dtype=jnp.uint8,
+        )
+
+    def step(
+            self, state: GalaxianState, action: chex.Array
+    ) -> Tuple[GalaxianState, GalaxianObservation, float, bool, GalaxianInfo]:
+        print("yöööööt")
+
+
+
 if __name__ == "__main__":  #run with: python -m jaxatari.games.jax_galaxian
     pygame.init()
     state = init_galaxian_state()
-    # jit causes first shot to lag, might need better solution
+    # jit causes first shot to lag, TODO jitted step
     dummy_action = init_action()._replace(player_shooting=jnp.array(1))
     state = step(state, dummy_action)
     state = init_galaxian_state()
