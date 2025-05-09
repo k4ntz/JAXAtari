@@ -13,17 +13,6 @@ from jaxatari.environment import JaxEnvironment, JAXAtariAction as Action
 
 from enum import IntEnum
 
-class JAXAtariAction(IntEnum):
-    NOOP = 0
-    FIRE = 1
-    UP = 2
-    DOWN = 3
-    LEFT = 4
-    RIGHT = 5
-    LEFTFIRE = 6
-    RIGHTFIRE = 7
-    UPFIRE = 8  # New action
-    DOWNFIRE = 9  # New action
 
 # TODO : remove unnecessary constants
 
