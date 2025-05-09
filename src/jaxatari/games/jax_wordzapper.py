@@ -17,39 +17,22 @@ from jaxatari.environment import JaxEnvironment, JAXAtariAction as Action
 
 # Constants for game environment
 MAX_SPEED = 12
-BALL_SPEED = jnp.array([-1, 1])  # Ball speed in x and y direction
 ENEMY_STEP_SIZE = 2
 WIDTH = 160
 HEIGHT = 210
 
-# Constants for ball physics
-BASE_BALL_SPEED = 1
-BALL_MAX_SPEED = 4  # Maximum ball speed cap
-
-# constants for paddle speed influence
-MIN_BALL_SPEED = 1
-
-PLAYER_ACCELERATION = jnp.array([6, 3, 1, -1, 1, -1, 0, 0, 1, 0, -1, 0, 1])
-
-BALL_START_X = jnp.array(78)
-BALL_START_Y = jnp.array(115)
-
 # Background color and object colors
 BACKGROUND_COLOR = 144, 72, 17
 PLAYER_COLOR = 92, 186, 92
-ENEMY_COLOR = 213, 130, 74
 BALL_COLOR = 236, 236, 236  # White ball
 WALL_COLOR = 236, 236, 236  # White walls
 SCORE_COLOR = 236, 236, 236  # White score
 
 # Player and enemy paddle positions
 PLAYER_X = 140
-ENEMY_X = 16
 
 # Object sizes (width, height)
 PLAYER_SIZE = (4, 16)
-BALL_SIZE = (2, 4)
-ENEMY_SIZE = (4, 16)
 WALL_TOP_Y = 24
 WALL_TOP_HEIGHT = 10
 WALL_BOTTOM_Y = 194
@@ -60,9 +43,26 @@ WINDOW_WIDTH = 160 * 3
 WINDOW_HEIGHT = 210 * 3
 
 # define the positions of the state information
-# define the positions of the state information
 STATE_TRANSLATOR: dict = {
-    #TODO
+    0: "player_x",
+    1: "player_y",
+    2: "player_speed",
+    3: "cooldown_timer",
+    4: "asteroid_x",
+    5: "asteroid_y",
+    6: "asteroid_speed",
+    7: "asteroid_alive",
+    8: "letters_x",
+    9: "letters_y",
+    10: "letters_char",
+    11: "letters_alive",
+    12: "letters_speed",
+    13: "current_word",
+    14: "current_letter_index",
+    15: "player_score",
+    16: "timer",
+    17: "step_counter",
+    18: "buffer",
 }
 
 
@@ -116,28 +116,61 @@ def get_human_action() -> list:
 
 
 class WordZapperState(NamedTuple):
-    #TODO
-    pass
+    player_x: chex.Array
+    player_y: chex.Array
+    player_speed: chex.Array
+    cooldown_timer: chex.Array
 
+    asteroid_x: chex.Array
+    asteroid_y: chex.Array
+    asteroid_speed: chex.Array
+    asteroid_alive: chex.Array
+
+    letters_x: chex.Array # letters at the top
+    letters_y: chex.Array
+    letters_char: chex.Array
+    letters_alive: chex.Array
+    letters_speed: chex.Array
+
+    current_word: chex.Array # the actual word
+    current_letter_index: chex.Array
+
+    player_score: chex.Array
+    timer: chex.Array
+    step_counter: chex.Array
+    buffer: chex.Array # TODO: do we need this?
 
 class EntityPosition(NamedTuple):
-    #TODO : review
     x: jnp.ndarray
     y: jnp.ndarray
     width: jnp.ndarray
     height: jnp.ndarray
 
-    
+class EntityBatchPosition(NamedTuple):
+    x: jnp.ndarray
+    y: jnp.ndarray
+    width: jnp.ndarray
+    height: jnp.ndarray
 
 class WordZapperObservation(NamedTuple):
-    #TODO
-    pass
+    player: EntityPosition
+    asteroids: EntityBatchPosition
+    letters: EntityBatchPosition
 
+    letters_char: jnp.ndarray 
+    letters_alive: jnp.ndarray  # active letters
+
+    current_word: jnp.ndarray  # word to form
+    current_letter_index: jnp.ndarray  # current position in word
+
+    cooldown_timer: jnp.ndarray
+    timer: jnp.ndarray
+    player_lives: jnp.ndarray
 
 class WordZapperInfo(NamedTuple):
-    #TODO : review
-    time: jnp.ndarray
-    all_rewards: chex.Array
+    timer: jnp.ndarray
+    current_word: jnp.ndarray
+    game_over: jnp.ndarray
 
 
 @jax.jit
