@@ -81,6 +81,8 @@ class OthelloState(NamedTuple):
     field: Field
     field_choice_player: chex.Array
     difficulty: chex.Array
+    render_helper_field_before_player_step: chex.Array
+    render_helper_field_after_player_step: chex.Array
 
 class OthelloObservation(NamedTuple):
     field: Field
@@ -201,8 +203,6 @@ def field_step(field_choice, curr_state, white_player):  # -> valid_choice, new_
         # it needs to check, if the disc is a valid choice by the rules of othello
         valid_choice = False
 
-        jax.debug.print("x = {}, y = {}", x, y)
-
         def loop_horizontal_and_vertical_line_to_flip_discs(i, value):
             dummy_state = value[0]
             discs_flippable = value[1]
@@ -316,6 +316,16 @@ def field_step(field_choice, curr_state, white_player):  # -> valid_choice, new_
             operand=None
         )
 
+        # update scores
+        player_score = jnp.sum(new_state.field.field_color == FieldColor.WHITE)
+        enemy_score = jnp.sum(new_state.field.field_color == FieldColor.BLACK)
+        new_state = new_state._replace(
+            player_score=player_score
+        )
+        new_state = new_state._replace(
+            enemy_score=enemy_score
+        )
+
         return valid_choice, new_state
 
     return jax.lax.cond(
@@ -348,12 +358,12 @@ class JaxOthello(JaxEnvironment[OthelloState, OthelloObservation, OthelloInfo]):
         
         #################### Testing
         
-        field_color_init = field_color_init.at[0,0].set(FieldColor.WHITE.value)
-        field_color_init = field_color_init.at[1,1].set(FieldColor.BLACK.value)
-        field_color_init = field_color_init.at[2,2].set(FieldColor.BLACK.value)
-        field_color_init = field_color_init.at[3,3].set(FieldColor.EMPTY.value)
-        field_color_init = field_color_init.at[4,4].set(FieldColor.BLACK.value)
-        field_color_init = field_color_init.at[5,5].set(FieldColor.BLACK.value)
+        # field_color_init = field_color_init.at[0,0].set(FieldColor.WHITE.value)
+        # field_color_init = field_color_init.at[1,1].set(FieldColor.BLACK.value)
+        # field_color_init = field_color_init.at[2,2].set(FieldColor.BLACK.value)
+        # field_color_init = field_color_init.at[3,3].set(FieldColor.EMPTY.value)
+        # field_color_init = field_color_init.at[4,4].set(FieldColor.BLACK.value)
+        # field_color_init = field_color_init.at[5,5].set(FieldColor.BLACK.value)
         
         
         
@@ -368,7 +378,9 @@ class JaxOthello(JaxEnvironment[OthelloState, OthelloObservation, OthelloInfo]):
                 field_color = field_color_init
             ),
             field_choice_player = jnp.array([7, 7], dtype=jnp.int32),
-            difficulty = jnp.array(1).astype(jnp.int32)
+            difficulty = jnp.array(1).astype(jnp.int32),
+            render_helper_field_before_player_step = field_color_init,
+            render_helper_field_after_player_step = field_color_init
         )
         initial_obs = self._get_observation(state)
         return state, initial_obs
@@ -562,7 +574,6 @@ if __name__ == "__main__":
         if counter % frameskip == 0:
             action = get_human_action()
             curr_state, obs, reward, done, info = jitted_step(curr_state, action, is_human=True)
-            # print(curr_state.field.field_color[4,3])
 
 
         # Render and display
