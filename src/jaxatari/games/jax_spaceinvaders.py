@@ -18,6 +18,8 @@ WINDOW_WIDTH = WIDTH * 3
 WINDOW_HEIGHT = HEIGHT * 3
 
 BULLET_SPEED = 1
+PLAYER_Y = 50 
+PLAYER_SIZE = (7, 10)
 
 def get_human_action():
     keys = pygame.key.get_pressed()
@@ -31,7 +33,9 @@ def get_human_action():
 
 class SpaceInvadersState(NamedTuple):
     player_x: chex.Array
-    player_speed: chex.Array 
+    player_speed: chex.Array
+    step_counter: chex.Array 
+    player_score: chex.Array
 
 class EntityPosition(NamedTuple):
     x: jnp.ndarray
@@ -41,14 +45,24 @@ class EntityPosition(NamedTuple):
 
 class SpaceInvadersObservation(NamedTuple):
     player: EntityPosition
-    enemy: EntityPosition
-    ball: EntityPosition
     score_player: jnp.ndarray
-    score_enemy: jnp.ndarray
 
 class SpaceInvadersInfo(NamedTuple):
     time: jnp.ndarray
     all_rewards: chex.Array
+
+
+@jax.jit
+def player_step(state_player_x, state_player_speed, action: chex.Array):
+    left = jnp.logical_or(action == Action.LEFT, action == Action.LEFTFIRE)
+    right = jnp.logical_or(action == Action.RIGHT, action == Action.RIGHTFIRE)
+    
+    player_x = jnp.clip(
+        state_player_x + 1,
+        0,
+        WIDTH,
+    )
+    return player_x
 
 class JaxSpaceInvaders(JaxEnvironment[SpaceInvadersState, SpaceInvadersObservation, SpaceInvadersInfo]):
     def __init__(self, reward_funcs: list[callable]=None):
@@ -74,7 +88,9 @@ class JaxSpaceInvaders(JaxEnvironment[SpaceInvadersState, SpaceInvadersObservati
         """
         state = SpaceInvadersState(
             player_x=jnp.array(96).astype(jnp.int32),
-            player_speed=jnp.array(0.0).astype(jnp.int32)
+            player_speed=jnp.array(0.0).astype(jnp.int32),
+            step_counter=jnp.array(0).astype(jnp.int32),
+            player_score=jnp.array(0).astype(jnp.int32),
         )
         initial_obs = self._get_observation(state)
 
@@ -82,11 +98,67 @@ class JaxSpaceInvaders(JaxEnvironment[SpaceInvadersState, SpaceInvadersObservati
 
     @partial(jax.jit, static_argnums=(0,))
     def step(self, state: SpaceInvadersState, action: chex.Array) -> Tuple[SpaceInvadersObservation, SpaceInvadersState, float, bool, SpaceInvadersInfo]:
-        pass 
+        new_player_x = player_step(
+            state.player_x, state.player_speed, action
+        )
+
+        step_counter = jax.lax.cond(
+            False,
+            lambda s: jnp.array(0),
+            lambda s: s + 1,
+            operand=state.step_counter,
+        )
+
+        new_state = SpaceInvadersState(
+            player_x=new_player_x,
+            player_speed=state.player_speed,
+            step_counter=step_counter,
+            player_score=state.player_score
+        )
+
+        done = self._get_done(new_state)
+        env_reward = self._get_env_reward(state, new_state)
+        all_rewards = self._get_all_reward(state, new_state)
+        info = self._get_info(new_state, all_rewards)
+        observation = self._get_observation(new_state)
+
+        return observation, new_state, env_reward, done, info
 
     @partial(jax.jit, static_argnums=(0,))
     def _get_observation(self, state: SpaceInvadersState):
-        pass 
+        player = EntityPosition(
+            x=state.player_x,
+            y=PLAYER_Y,
+            width=jnp.array(PLAYER_SIZE[0]),
+            height=jnp.array(PLAYER_SIZE[1]),
+        )
+        
+        return SpaceInvadersObservation(
+            player=player,
+            score_player=state.player_score,
+        )
+
+
+    @partial(jax.jit, static_argnums=(0,))
+    def _get_info(self, state: SpaceInvadersState, all_rewards: chex.Array) -> SpaceInvadersInfo:
+        return SpaceInvadersInfo(time=state.step_counter, all_rewards=all_rewards)
+
+    @partial(jax.jit, static_argnums=(0,))
+    def _get_env_reward(self, previous_state: SpaceInvadersState, state: SpaceInvadersState):
+        return state.player_score - previous_state.player_score
+
+    @partial(jax.jit, static_argnums=(0,))
+    def _get_all_reward(self, previous_state: SpaceInvadersState, state: SpaceInvadersState):
+        if self.reward_funcs is None:
+            return jnp.zeros(1)
+        rewards = jnp.array(
+            [reward_func(previous_state, state) for reward_func in self.reward_funcs]
+        )
+        return rewards
+
+    @partial(jax.jit, static_argnums=(0,))
+    def _get_done(self, state: SpaceInvadersState) -> bool:
+        return jnp.greater_equal(state.player_score, 20)
 
 
 def load_sprites():
@@ -95,7 +167,7 @@ def load_sprites():
     player = aj.loadFrame(os.path.join(MODULE_DIR, "sprites/spaceinvaders/player.npy"), transpose=True)
     SPRITE_PLAYER = jnp.expand_dims(player, axis=0)
 
-    return (SPRITE_PLAYER)
+    return SPRITE_PLAYER
 
 class SpaceInvadersRenderer(AtraJaxisRenderer):
     """
@@ -103,11 +175,14 @@ class SpaceInvadersRenderer(AtraJaxisRenderer):
     """
 
     def __init__(self):
-        _ = load_sprites()
+        self.SPRITE_PLAYER = load_sprites()
 
     @partial(jax.jit, static_argnums=(0,))
     def render(self, state: SpaceInvadersState) -> chex.Array:
         raster = jnp.zeros((WIDTH, HEIGHT, 3))
+
+        frame_player = aj.get_sprite_frame(self.SPRITE_PLAYER, 0)
+        raster = aj.render_at(raster, WIDTH - state.player_x, HEIGHT - PLAYER_Y, frame_player)
 
         return raster 
 
@@ -132,7 +207,7 @@ if __name__ == "__main__":
 
     # Game loop
     running = True
-    frame_by_frame = False
+    frame_by_frame = False 
     frameskip = 1
     counter = 1
 
@@ -156,7 +231,7 @@ if __name__ == "__main__":
         if not frame_by_frame:
             if counter % frameskip == 0:
                 action = get_human_action()
-                #obs, curr_state, reward, done, info = jitted_step(curr_state, action)
+                obs, curr_state, reward, done, info = jitted_step(curr_state, action)
 
         # Render and display
         raster = renderer.render(curr_state)
