@@ -312,7 +312,50 @@ class JaxWordZapper() :
         # Observation builder (you would define this based on your state model)
         obs = self._get_observation(state)
 
-        return obs, state
+        return obs, state    @partial(jax.jit, static_argnums=(0,))
+    def step(
+        self, state: WordZapperState, action: chex.Array
+    ) -> Tuple[WordZapperObservation, WordZapperState, float, bool, WordZapperInfo]:
+        super().step(state, action)
+
+        previous_state = state
+        _, reset_state = self.reset()
+
+        # First handle death animation 
+        def handle_death_animation():
+            pass
+        
+        def handle_score_freeze():
+            pass
+        
+        # Normal game logic starts here
+        def normal_game_step():
+            pass
+
+
+        return_state = jax.lax.cond(
+            state.death_counter > 0,
+            lambda _: handle_death_animation(),
+            lambda _: jax.lax.cond(
+                state.death_counter < 0,
+                lambda _: handle_score_freeze(),
+                lambda _: normal_game_step(),
+                operand=None,
+            ),
+            operand=None,
+        )
+
+        # Get observation and info
+        observation = self._get_observation(return_state)
+
+        done = self._get_done(return_state)
+        env_reward = self._get_env_reward(previous_state, return_state)
+        all_rewards = self._get_all_rewards(previous_state, return_state)
+        info = self._get_info(return_state, all_rewards)
+
+        # Choose between death animation and normal game step
+        return observation, return_state, env_reward, done, info
+
 
 class WordZapperRenderer() :
     #TODO
