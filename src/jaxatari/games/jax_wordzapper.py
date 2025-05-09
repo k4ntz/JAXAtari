@@ -66,7 +66,7 @@ STATE_TRANSLATOR: dict = {
 }
 
 
-def get_human_action() -> list:
+def get_human_action() -> list: ## TODO make this return chex.Array !
     """
     Records if multiple keys are being pressed and returns the corresponding actions.
 
@@ -256,6 +256,10 @@ if __name__ == "__main__":
     screen = pygame.display.set_mode((WINDOW_WIDTH, WINDOW_HEIGHT))
     pygame.display.set_caption("Word Zapper")
     clock = pygame.time.Clock()
+
+
+    ##     game = JaxWordZapper() <-- eventual game
+
 
     # Initialize the renderer
     renderer = WordZapperRenderer(screen)
