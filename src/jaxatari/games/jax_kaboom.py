@@ -17,7 +17,7 @@ MAX_STEPS = 10000
 BUCKET_WIDTH = 8
 BUCKET_HEIGHT = 6
 BUCKET_START_X = WIDTH // 2
-BUCKET_START_Y = HEIGHT - 20
+BUCKET_START_Y = HEIGHT - 30  # Changed from HEIGHT - 70 to HEIGHT - 30
 BUCKET_SPEED = 4
 
 # Bomber (mad bomber) settings
@@ -233,24 +233,60 @@ def update_bombs(
         bomb_y
     )
     
-    # Check for catches - bombs that hit the bucket
+    # Common bucket properties for all buckets (same width and horizontal position)
     bucket_left = bucket_x
     bucket_right = bucket_x + BUCKET_WIDTH
-    bucket_top = BUCKET_START_Y
     
-    caught = jnp.logical_and(
-        bomb_active == 1,
-        jnp.logical_and(
+    # Initialize a tensor to track if each bomb is caught by any bucket
+    caught = jnp.zeros_like(bomb_active, dtype=jnp.bool_)
+    
+    # Check for catches with each visible bucket (player bucket + extra life buckets)
+    def check_bucket_collision(bucket_index, caught_bombs):
+        # Calculate the Y position of this bucket
+        # bucket_index 0 = player bucket, 1 = first extra bucket, 2 = second extra bucket
+        spacing = 5
+        
+        # For player bucket (index 0), use BUCKET_START_Y
+        # For life buckets (1 and 2), calculate position below player bucket
+        is_player_bucket = bucket_index == 0
+        
+        bucket_top = jnp.where(
+            is_player_bucket,
+            BUCKET_START_Y,
+            BUCKET_START_Y + BUCKET_HEIGHT + spacing + ((bucket_index - 1) * (BUCKET_HEIGHT + spacing))
+        )
+        
+        bucket_bottom = bucket_top + BUCKET_HEIGHT
+        
+        # Only check collision if this bucket should be visible
+        # Player bucket (0) is visible if lives >= 1
+        # First extra bucket (1) is visible if lives >= 2
+        # Second extra bucket (2) is visible if lives >= 3
+        bucket_visible = bucket_index < lives
+        
+        # Check collision with this bucket
+        bucket_collision = jnp.logical_and(
+            bomb_active == 1,
             jnp.logical_and(
-                new_bomb_y + BOMB_HEIGHT >= bucket_top,
-                new_bomb_y <= bucket_top + BUCKET_HEIGHT
-            ),
-            jnp.logical_and(
-                bomb_x + BOMB_WIDTH >= bucket_left,
-                bomb_x <= bucket_right
+                jnp.logical_and(
+                    new_bomb_y + BOMB_HEIGHT >= bucket_top,
+                    new_bomb_y <= bucket_bottom
+                ),
+                jnp.logical_and(
+                    bomb_x + BOMB_WIDTH >= bucket_left,
+                    bomb_x <= bucket_right
+                )
             )
         )
-    )
+        
+        # Only count catches for buckets that should be visible
+        valid_catches = jnp.logical_and(bucket_collision, bucket_visible)
+        
+        # Update the caught bombs array
+        return jnp.logical_or(caught_bombs, valid_catches)
+    
+    # Check collisions with all possible buckets (player + up to 2 life buckets)
+    caught = jax.lax.fori_loop(0, INITIAL_LIVES, check_bucket_collision, caught)
     
     # Check for misses - bombs that fall off screen
     missed = jnp.logical_and(
@@ -572,6 +608,51 @@ def render_frame(state: KaboomState) -> jnp.ndarray:
     # Draw a simple score indicator (a line at the top)
     score_band = jnp.ones((8, WIDTH, 3), dtype=jnp.uint8) * jnp.array(TEXT_COLOR, dtype=jnp.uint8)
     frame = jax.lax.dynamic_update_slice(frame, score_band, (0, 0, 0))
+    
+    # Draw lives as vertical buckets below the player
+    # They follow the player's horizontal position
+    
+    # Define life bucket dimensions
+    LIFE_BUCKET_HEIGHT = BUCKET_HEIGHT
+    LIFE_BUCKET_WIDTH = BUCKET_WIDTH
+    LIFE_SPACING = 5  # Consistent spacing between all buckets
+    
+    # The main player bucket is considered the top-most life bucket
+    # So we only need to draw additional buckets for lives > 1
+    
+    def draw_extra_life(i, f):
+        # i=0 is the middle bucket (second life)
+        # i=1 is the bottom bucket (third life)
+        
+        # Only draw if player has enough lives (i+2 because player bucket is the first life)
+        life_number = i + 2  # life 2 or 3 (player bucket is life 1)
+        has_life = life_number <= state.lives
+        
+        # Position lives vertically BELOW the player bucket, with same x-position
+        life_x = state.bucket_x.astype(jnp.int32)  # Align with player bucket
+        
+        # Consistent spacing between all buckets
+        spacing = 5
+        
+        # Start from the position immediately below the player bucket
+        # Each subsequent bucket is positioned with consistent spacing
+        life_y = BUCKET_START_Y + BUCKET_HEIGHT + spacing + (i * (LIFE_BUCKET_HEIGHT + spacing))
+        
+        # Create a bucket for each life
+        life_rect = jnp.ones((LIFE_BUCKET_HEIGHT, LIFE_BUCKET_WIDTH, 3), dtype=jnp.uint8) * jnp.array(BUCKET_COLOR, dtype=jnp.uint8)
+        
+        # Use lax.cond for conditional rendering
+        f = jax.lax.cond(
+            has_life,
+            lambda _: jax.lax.dynamic_update_slice(f, life_rect, (life_y, life_x, 0)),
+            lambda _: f,
+            operand=None
+        )
+        
+        return f
+    
+    # Draw extra life indicators (up to 2 more buckets below the player bucket)
+    frame = jax.lax.fori_loop(0, INITIAL_LIVES - 1, draw_extra_life, frame)
     
     return frame
 
