@@ -31,6 +31,7 @@ ENEMY_Y_POSITIONS = (64, 96, 128)
 
 PLAYER_SIZE = (8, 8)
 ENEMY_SIZE = (16, 8)
+Y_STEP_DELAY = 70
 MOTHERSHIP_SIZE = (32, 16)
 
 WINDOW_WIDTH = 160 * 3
@@ -137,6 +138,8 @@ class AssaultState(NamedTuple):
     obs_stack: chex.ArrayTree
     occupied_y: chex.Array
     step_counter: chex.Array
+    enemies_killed: chex.Array
+    current_stage:  chex.Array
 
 
 class AssaultObservation(NamedTuple):
@@ -198,6 +201,18 @@ def player_projectile_step(
     )
     
 
+""" @jax.jit
+def enemy_projectile_step(
+    state, action: chex.Array
+):
+    def spawn_projectile(x,y):
+    # If projectile is inactive, check for fire action to spawn it
+    occupied_y = state.occupied_y
+    fire_action = jnp.where(1 == jax.random.uniform( shape=(100,)),1,0)
+    can_fire = state.enemy_projectile_y < 0 """
+    
+
+
 @jax.jit
 def enemy_step(state):     
     occupied_y = state.occupied_y
@@ -241,14 +256,13 @@ def enemy_step(state):
         def spawn():
             # Generate a random x position between 0 and (160 - ENEMY_SIZE[0]/2)
             # Using hash of the current game state for deterministic randomness
-            random_seed = jnp.sum(state.player_x) + jnp.sum(state.score) + jnp.sum(has_moved)
-            random_x = jnp.mod(random_seed * 48271, 160 - int(ENEMY_SIZE[0]/2))
+            x_pos = state.mothership_x
             
             # Mark row 0 as occupied and place enemy there
             new_occupied = occupied_y.at[0].set(1)
             # No downward movement occurred
             # Return the random x as well
-            return ENEMY_Y_POSITIONS[0], new_occupied, has_moved, random_x
+            return ENEMY_Y_POSITIONS[0], new_occupied, jnp.array(1), jnp.array(1)
         
         def move_down():
             # Clear current row, mark next row
@@ -286,24 +300,24 @@ def enemy_step(state):
     e6_x, e6_dir = move_enemy_x(state.enemy_6_x, state.enemy_6_dir)
 
     # Pass and update the has_moved_down flag for each enemy
-    e1_y, occupied_y, has_moved_down, random_x1 = move_enemy_y(state.enemy_1_y, occupied_y, has_moved_down)
+    e1_y, occupied_y, has_moved_down, has_spawned = move_enemy_y(state.enemy_1_y, occupied_y, has_moved_down)
     # Update e1_x with random_x if needed
-    e1_x = jnp.where(random_x1 >= 0, random_x1, e1_x)
+    e1_x = jnp.where(has_spawned >= 0, state.mothership_x, e1_x)
     
-    e2_y, occupied_y, has_moved_down, random_x2 = move_enemy_y(state.enemy_2_y, occupied_y, has_moved_down)
-    e2_x = jnp.where(random_x2 >= 0, random_x2, e2_x)
+    e2_y, occupied_y, has_moved_down, has_spawned = move_enemy_y(state.enemy_2_y, occupied_y, has_moved_down)
+    e2_x = jnp.where(has_spawned >= 0, state.mothership_x, e2_x)
     
-    e3_y, occupied_y, has_moved_down, random_x3 = move_enemy_y(state.enemy_3_y, occupied_y, has_moved_down)
-    e3_x = jnp.where(random_x3 >= 0, random_x3, e3_x)
+    e3_y, occupied_y, has_moved_down, has_spawned = move_enemy_y(state.enemy_3_y, occupied_y, has_moved_down)
+    e3_x = jnp.where(has_spawned >= 0, state.mothership_x, e3_x)
     
-    e4_y, occupied_y, has_moved_down, random_x4 = move_enemy_y(state.enemy_4_y, occupied_y, has_moved_down)
-    e4_x = jnp.where(random_x4 >= 0, random_x4, e4_x)
+    e4_y, occupied_y, has_moved_down, has_spawned = move_enemy_y(state.enemy_4_y, occupied_y, has_moved_down)
+    e4_x = jnp.where(has_spawned >= 0, state.mothership_x, e4_x)
     
-    e5_y, occupied_y, has_moved_down, random_x5 = move_enemy_y(state.enemy_5_y, occupied_y, has_moved_down)
-    e5_x = jnp.where(random_x5 >= 0, random_x5, e5_x)
+    e5_y, occupied_y, has_moved_down, has_spawned = move_enemy_y(state.enemy_5_y, occupied_y, has_moved_down)
+    e5_x = jnp.where(has_spawned >= 0, state.mothership_x, e5_x)
     
-    e6_y, occupied_y, has_moved_down, random_x6 = move_enemy_y(state.enemy_6_y, occupied_y, has_moved_down)
-    e6_x = jnp.where(random_x6 >= 0, random_x6, e6_x)
+    e6_y, occupied_y, has_moved_down, has_spawned = move_enemy_y(state.enemy_6_y, occupied_y, has_moved_down)
+    e6_x = jnp.where(has_spawned >= 0, state.mothership_x, e6_x)
 
     return state._replace(
         enemy_1_x=e1_x, enemy_1_y=e1_y, enemy_1_dir=e1_dir,
@@ -387,7 +401,9 @@ class JaxAssault(JaxEnvironment[AssaultState, AssaultObservation, AssaultInfo]):
             buffer=jnp.array(0).astype(jnp.int32),
             obs_stack=None,
             occupied_y=jnp.array([0, 0, 0]),
-            step_counter=jnp.array(0).astype(jnp.int32)
+            step_counter=jnp.array(0).astype(jnp.int32),
+            enemies_killed=jnp.array(0).astype(jnp.int32),
+            current_stage=jnp.array(0).astype(jnp.int32),
         )
         obs = self._get_observation(state)
         def expand_and_copy(x):
@@ -403,8 +419,7 @@ class JaxAssault(JaxEnvironment[AssaultState, AssaultObservation, AssaultInfo]):
         new_state = player_step(state, action)
         # Enemy step (stub)
 
-        new_step_counter = jnp.mod(state.step_counter + 1, 1000)
-        new_state = new_state._replace(step_counter=new_step_counter)
+        
 
         new_state = player_projectile_step(new_state,action)
         
@@ -444,15 +459,22 @@ class JaxAssault(JaxEnvironment[AssaultState, AssaultObservation, AssaultInfo]):
         
         # If any enemy was hit, remove projectile
         any_hit = hit1 | hit2 | hit3 | hit4 | hit5 | hit6
+        
         new_proj_x = jnp.where(any_hit, -1, new_state.player_projectile_x)
         new_proj_y = jnp.where(any_hit, -1, new_state.player_projectile_y)
         new_proj_dir = jnp.where(any_hit, 0, new_state.player_projectile_dir)
+
 
         # Increase score for each enemy hit (e.g., +1 per enemy)
         score_incr = hit1.astype(jnp.int32) + hit2.astype(jnp.int32) + hit3.astype(jnp.int32) + \
                     hit4.astype(jnp.int32) + hit5.astype(jnp.int32) + hit6.astype(jnp.int32)
         new_score = state.score + score_incr
 
+        new_enemies_killed = state.enemies_killed + score_incr
+        stage_complete = jnp.greater_equal(new_enemies_killed, 6)
+        new_current_stage = jnp.where(stage_complete, state.current_stage + 1, state.current_stage)
+        new_enemies_killed = jnp.where(stage_complete, 0, new_enemies_killed)
+        
         new_state = new_state._replace(
             player_projectile_x=new_proj_x,
             player_projectile_y=new_proj_y,
@@ -464,6 +486,8 @@ class JaxAssault(JaxEnvironment[AssaultState, AssaultObservation, AssaultInfo]):
             enemy_5_x=e5_x, enemy_5_y=e5_y,
             enemy_6_x=e6_x, enemy_6_y=e6_y,
             score=new_score,
+            enemies_killed=new_enemies_killed,
+            current_stage=new_current_stage,
             occupied_y=occupied_y,
             # TODO: update other fields as needed
         )
@@ -489,7 +513,12 @@ class JaxAssault(JaxEnvironment[AssaultState, AssaultObservation, AssaultInfo]):
         
         # Print occupied_y using jax.debug.print
         jax.debug.print("Occupied rows: {}", state.occupied_y)
+        jax.debug.print("current_stage: {}", state.current_stage)
+        jax.debug.print("Enemies killed: {}", state.enemies_killed)
         jax.debug.print("----------------------------------------")
+
+        new_step_counter = jnp.mod(state.step_counter + 1, Y_STEP_DELAY * 100000)
+        new_state = new_state._replace(step_counter=new_step_counter)
 
         return new_state, obs_stack, reward, done, info
 
@@ -642,6 +671,40 @@ class Renderer_AtraJaxisAssault:
         ) = load_assault_sprites()  # You need to implement this in atraJaxis
 
     @partial(jax.jit, static_argnums=(0,))
+    def apply_color_transform(self, sprite, stage):
+        """Apply a color transformation by permuting RGB channels based on stage."""
+        # Get the number of channels
+        num_channels = sprite.shape[-1]
+        
+        # Extract channels
+        r = sprite[..., 0]
+        g = sprite[..., 1]
+        b = sprite[..., 2]
+        
+        # Handle alpha channel if present
+        has_alpha = num_channels >= 4
+        alpha = jnp.ones_like(r) if not has_alpha else sprite[..., 3]
+        
+        # Use modulo to cycle through 3 permutation patterns (0-2)
+        stage_mod = jnp.mod(stage, 3)
+        
+        # Use simple conditional logic with clean transitions
+        final_r = jnp.where(stage_mod == 0, r, 
+                    jnp.where(stage_mod == 1, g, b))
+        
+        final_g = jnp.where(stage_mod == 0, g, 
+                    jnp.where(stage_mod == 1, r, g))
+        
+        final_b = jnp.where(stage_mod == 0, b, 
+                    jnp.where(stage_mod == 1, b, r))
+        
+        # Stack channels back together with alpha if it exists
+        if has_alpha:
+            return jnp.stack([final_r, final_g, final_b, alpha], axis=-1).astype(jnp.uint8)
+        else:
+            return jnp.stack([final_r, final_g, final_b], axis=-1).astype(jnp.uint8)
+    
+    @partial(jax.jit, static_argnums=(0,))
     def render(self, state):
         """
         Renders the current Assault game state using JAX operations.
@@ -667,7 +730,9 @@ class Renderer_AtraJaxisAssault:
         raster = aj.render_at(raster, PLAYER_Y, state.player_x, frame_player)
 
         # Render enemies (unrolled manually for JIT compatibility)
-        frame_enemy = aj.get_sprite_frame(self.SPRITE_ENEMY, 0)
+        frame_enemy_original = aj.get_sprite_frame(self.SPRITE_ENEMY, 0)
+        frame_enemy = self.apply_color_transform(frame_enemy_original, state.current_stage)
+
         raster = jax.lax.cond( state.enemy_1_y < HEIGHT+1, lambda _: aj.render_at(raster, state.enemy_1_y, state.enemy_1_x, frame_enemy), lambda _: raster, operand=None)
         raster = jax.lax.cond( state.enemy_2_y < HEIGHT+1, lambda _: aj.render_at(raster, state.enemy_2_y, state.enemy_2_x, frame_enemy), lambda _: raster, operand=None)
         raster = jax.lax.cond( state.enemy_3_y < HEIGHT+1, lambda _: aj.render_at(raster, state.enemy_3_y, state.enemy_3_x, frame_enemy), lambda _: raster, operand=None)
