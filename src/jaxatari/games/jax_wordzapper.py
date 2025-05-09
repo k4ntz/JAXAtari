@@ -147,14 +147,40 @@ class WordZapperInfo(NamedTuple):
 
 
 @jax.jit
-def player_step():
-    #TODO
-    pass
+def player_step(
+    player_x: chex.Array,
+    player_y: chex.Array,
+    player_speed: chex.Array,
+    cooldown_timer: chex.Array,
+    action: chex.Array
+) -> Tuple[chex.Array, chex.Array, chex.Array, chex.Array, chex.Array]:
+    MOVE_UP = jnp.array([Action.UP, Action.UPFIRE, Action.UPLEFTFIRE, Action.UPRIGHTFIRE])
+    MOVE_DOWN = jnp.array([Action.DOWN, Action.DOWNFIRE, Action.DOWNLEFTFIRE, Action.DOWNRIGHTFIRE])
+    FIRE_ACTIONS = jnp.array([Action.FIRE, Action.LEFTFIRE, Action.RIGHTFIRE])
+
+    move_up = jnp.any(jnp.equal(action, MOVE_UP))
+    move_down = jnp.any(jnp.equal(action, MOVE_DOWN))
+    is_firing = jnp.any(jnp.equal(action, FIRE_ACTIONS))
+
+    # Movement logic
+    delta_y = jnp.where(move_up, -player_speed, jnp.where(move_down, player_speed, 0))
+    new_player_y = jnp.clip(player_y + delta_y, 0, HEIGHT - PLAYER_SIZE[1])
+
+    # Firing and cooldown
+    can_fire = cooldown_timer == 0
+    fired = jnp.logical_and(is_firing, can_fire)
+    new_cooldown_timer = jnp.where(fired, 8, jnp.maximum(cooldown_timer - 1, 0))
+
+    return player_x, new_player_y, player_speed, new_cooldown_timer, fired
+
+def shooting_letter(letters_x):
 
 
-def ball_step():
-    #TODO
-    pass
+def scrolling_letters(letters_x, letters_speed, letters_alive):
+    letters_x = letters_x - letters_speed
+    wrapped_x = jnp.where(letters_x < -8, 160, letters_x)
+    updated_x = jnp.where(letters_alive == 1, wrapped_x, letters_x)
+    return updated_x
 
 
 def enemy_step():
