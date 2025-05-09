@@ -230,8 +230,6 @@ class JaxWordZapper(JaxEnvironment[WordZapperState, WordZapperObservation, WordZ
         self.frame_stack_size = 4
         self.obs_size = 3*4 + 1 + 1 = 14
 
-class JaxWordZapper() :
-
     @partial(jax.jit, static_argnums=(0,))
     def reset(self, key: jax.random.PRNGKey = jax.random.PRNGKey(42)) -> Tuple["WordZapperObservation", "WordZapperState"]:
         """Reset the Word Zapper environment state with a new word and initial player/letter positions."""
