@@ -28,7 +28,7 @@ LEFTFIRE = 5
 GRAVITY = 3  # 0.12
 BALL_MAX_SPEED = 6.0
 FLIPPER_MAX_STRENGTH = 3
-PLUNGER_MAX_STRENGTH = 20
+PLUNGER_MAX_POSITION = 20
 
 # Game layout constants
 # TODO: check if these are correct
@@ -158,55 +158,43 @@ class VideoPinballInfo(NamedTuple):
 
 
 @jax.jit
-def plunger_step(state_plunger_position: chex.Array, action: chex.Array) -> chex.Array:
+def plunger_step(state: VideoPinballState, action: chex.Array) -> chex.Array:
     """
     Update the plunger position based on the current state and action.
     And set the plunger power to 2 * plunger_position.
     """
-    # check if the plunger is pulled
-    # TODO: We also need to check if it allowed to fire
-    # TODO: Also if the ball lands in the plunger area during play it is allowed to fire again even if no reset occured
-    plunger_pulled = jnp.logical_or(action == FIRE, action == LEFTFIRE)
 
-    # Reset plunger power
-    plunger_power = jnp.array(0)  # Reset after each step
+    # if ball is not in play and DOWN was clicked, move plunger down
+    plunger_position = jax.lax.cond(
+        jnp.logical_and(state.plunger_position < PLUNGER_MAX_POSITION, jnp.logical_and(action == Action.DOWN, jnp.logical_not(state.ball_in_play))),
+        lambda s: s + 1,
+        lambda s: s,
+        operand=state.plunger_position
+    )
 
-    # Calculate the plunger power by its position
-    # Formula is plunger_power = 2 * plunger_position
+    # same for UP
+    plunger_position = jax.lax.cond(
+        jnp.logical_and(state.plunger_position > 0, jnp.logical_and(action == Action.UP, jnp.logical_not(state.ball_in_play))),
+        lambda s: s - 1,
+        lambda s: s,
+        operand=state.plunger_position
+    )
 
-    # update the plunger position
-    # 0 after plunger release
+    # If FIRE
+    plunger_power = jax.lax.cond(
+        jnp.logical_and(action == Action.FIRE, jnp.logical_not(state.ball_in_play)),
+        lambda s: s * 2,
+        lambda s: 0,
+        operand=state.plunger_position
+    )
 
     return plunger_position, plunger_power
 
 
 @jax.jit
-def player_step(
+def flipper_step(
     state: VideoPinballState, action: chex.Array
 ):
-    # if ball is not in play and DOWN was clicked, move plunger down
-    plunger_strength = jax.lax.cond(
-        jnp.logical_and(state.plunger_strength < PLUNGER_MAX_STRENGTH, jnp.logical_and(action == Action.DOWN, jnp.logical_not(state.ball_in_play))),
-        lambda s: s + 1,
-        lambda s: s,
-        operand=state.plunger_strength
-    )
-
-    # same for UP
-    plunger_strength = jax.lax.cond(
-        jnp.logical_and(state.plunger_strength > 0, jnp.logical_and(action == Action.UP, jnp.logical_not(state.ball_in_play))),
-        lambda s: s - 1,
-        lambda s: s,
-        operand=state.plunger_strength
-    )
-
-    # If FIRE
-    plunger_strength = jax.lax.cond(
-        jnp.logical_and(action == Action.FIRE, jnp.logical_not(state.ball_in_play)),
-        lambda s: 0,
-        lambda s: s,
-        operand=state.plunger_strength
-    )
 
     left_flipper_angle = jax.lax.cond(
         jnp.logical_and(action == Action.LEFT, state.left_flipper_angle < FLIPPER_MAX_STRENGTH),
@@ -229,7 +217,7 @@ def player_step(
 
 
     
-    return plunger_strength, left_flipper_angle, right_flipper_angle, _ball_property_
+    return left_flipper_angle, right_flipper_angle, _ball_property_
 
 
 @jax.jit
@@ -326,6 +314,7 @@ def ball_step(
     ball_vel_x = jnp.where(state.ball_in_play, ball_vel_x, jnp.array(0))
     ball_vel_y = jnp.where(state.ball_in_play, ball_vel_y, jnp.array(0))
 
+    # TODO add ball_in_play to return and if plunger hit set to True
     return ball_x, ball_y, ball_direction, ball_vel_x, ball_vel_y
 
 
