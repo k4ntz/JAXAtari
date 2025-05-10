@@ -168,17 +168,15 @@ def plunger_step(state_plunger_position: chex.Array, action: chex.Array) -> chex
     # TODO: Also if the ball lands in the plunger area during play it is allowed to fire again even if no reset occured
     plunger_pulled = jnp.logical_or(action == FIRE, action == LEFTFIRE)
 
+    # Reset plunger power
+    plunger_power = jnp.array(0)  # Reset after each step
+
     # Calculate the plunger power by its position
     # Formula is plunger_power = 2 * plunger_position
-    plunger_power = jnp.array(0)
 
     # update the plunger position
-    plunger_position = jax.lax.cond(
-        plunger_pulled,
-        lambda s: jnp.minimum(s + 1, PLUNGER_MAX_HEIGHT),
-        lambda s: s,
-        operand=state_plunger_position,
-    )
+    # 0 after plunger release
+
     return plunger_position, plunger_power
 
 
@@ -292,37 +290,78 @@ def ball_step(
     """
     Update the pinballs position and velocity based on the current state and action.
     """
-    # update the balls position
-    # Account for the balls direction
-    invert_x_vel = jnp.logical_or(state.ball_direction == 2, state.ball_direction == 3)
-    invert_y_vel = jnp.logical_or(state.ball_direction == 1, state.ball_direction == 3)
-    signed_ball_vel_x = jnp.where(invert_x_vel, -state.ball_vel_x, state.ball_vel_x)
-    signed_ball_vel_y = jnp.where(invert_y_vel, -state.ball_vel_y, state.ball_vel_y)
 
-    ball_x = state.ball_x + signed_ball_vel_x
-    ball_y = state.ball_y + signed_ball_vel_y
+    ball_vel_x = state.ball_vel_x
+    ball_vel_y = state.ball_vel_y
+    ball_direction = state.ball_direction
 
+    """
+    Plunger calculation
+    """
     # Add plunger power to the ball velocity, only set to non-zero value once fired
-    ball_vel_y = state.ball_vel_y + state.plunger_power
+    ball_vel_y = jax.lax.cond(
+        state.plunger_power > 0,
+        ball_vel_y + state.plunger_power,
+        ball_vel_y,
+    )
 
-    # TODO: Test if the ball ever has velocity of state.plunger_power because right now we always
-    # immediately deduct the gravity from the velocity
-
+    """
+    Paddle calculation
+    """
     # Check if the ball is hitting a paddle
 
+    """
+    Obstacle hit calculation
+    """
     # Iterate over all other rigid objects in the game and check if the ball is hitting them
 
-    # Deduct gravity from the ball velocity
-    ball_vel_y = jnp.where(state.ball_in_play, ball_vel_y - GRAVITY, ball_vel_y)
+    """
+    Gravity calculation
+    """
+    # TODO: Test if the ball ever has velocity of state.plunger_power because right now we always
+    # immediately deduct the gravity from the velocity
+    # Direction has to be figured into the gravity calculation
+    gravity_delta = jnp.where(
+        jnp.logical_or(ball_direction == 0, ball_direction == 2), -GRAVITY, GRAVITY
+    )  # Subtract gravity if the ball is moving up otherwise add it
+    ball_vel_y = jnp.where(state.ball_in_play, ball_vel_y + gravity_delta, ball_vel_y)
+    ball_direction = jnp.where(
+        ball_vel_y < 0,
+        ball_direction + 1,
+        ball_direction,
+    )  # Change y direction if the y velocity should be negative i.e. ball now falling
+    ball_vel_y = jnp.where(
+        ball_vel_y < 0, -ball_vel_y, ball_vel_y
+    )  # Make sure y velocity is positive
 
-    # # invert ball_vel_x if a paddle was hit
-    # ball_vel_x = jnp.where(
-    #     paddle_hit,
-    #     -ball_vel_x,
-    #     ball_vel_x,
-    # )
+    """
+    Ball movement calculation observing its direction 
+    """
+    should_invert_x_vel = jnp.logical_or(ball_direction == 2, ball_direction == 3)
+    should_invert_y_vel = jnp.logical_or(ball_direction == 1, ball_direction == 3)
+    signed_ball_vel_x = jnp.where(should_invert_x_vel, -ball_vel_x, ball_vel_x)
+    signed_ball_vel_y = jnp.where(should_invert_y_vel, -ball_vel_y, ball_vel_y)
 
-    return ball_x, ball_y, ball_vel_x, ball_vel_y
+    # Only change position, direction and velocity if the ball is in play
+    ball_x = jnp.where(
+        state.ball_in_play, state.ball_x + signed_ball_vel_x, BALL_START_X
+    )
+    ball_y = jnp.where(
+        state.ball_in_play, state.ball_y + signed_ball_vel_y, BALL_START_Y
+    )
+    # Clip the ball velocity to the maximum speed
+    ball_vel_x = jnp.clip(ball_vel_x, 0, BALL_MAX_SPEED)
+    ball_vel_y = jnp.clip(ball_vel_y, 0, BALL_MAX_SPEED)
+
+    """
+    Check if ball is in play if not ignore the calculations
+    """
+    # TODO: Maybe do the stuff above in a function that is called if we are in play
+    ball_direction = jnp.where(state.ball_in_play, ball_direction, BALL_START_DIRECTION)
+    ball_vel_x = jnp.where(state.ball_in_play, ball_vel_x, jnp.array(0))
+    ball_vel_y = jnp.where(state.ball_in_play, ball_vel_y, jnp.array(0))
+
+    return ball_x, ball_y, ball_direction, ball_vel_x, ball_vel_y
 
 
 def enemy_step(state, step_counter, ball_y, ball_speed_y):
