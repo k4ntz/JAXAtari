@@ -8,7 +8,7 @@ import pygame
 from gymnax.environments import spaces
 
 from jaxatari.rendering import atraJaxis as aj
-from jaxatari.environment import JaxEnvironment
+from jaxatari.environment import JaxEnvironment, JAXAtariAction as Action
 
 # Constants for game environment
 WIDTH = 160
@@ -27,8 +27,8 @@ LEFTFIRE = 5
 # TODO: check if these are correct
 GRAVITY = 3  # 0.12
 BALL_MAX_SPEED = 6.0
-FLIPPER_STRENGTH = 4
-PLUNGER_MAX_STRENGTH = 8
+FLIPPER_MAX_STRENGTH = 3
+PLUNGER_MAX_STRENGTH = 20
 
 # Game layout constants
 # TODO: check if these are correct
@@ -182,89 +182,54 @@ def plunger_step(state_plunger_position: chex.Array, action: chex.Array) -> chex
 
 @jax.jit
 def player_step(
-    state_player_y, state_player_speed, acceleration_counter, action: chex.Array
+    state: VideoPinballState, action: chex.Array
 ):
-    # check if one of the buttons is pressed
-    up = jnp.logical_or(action == LEFT, action == LEFTFIRE)
-    down = jnp.logical_or(action == RIGHT, action == RIGHTFIRE)
-
-    # get the current acceleration
-    acceleration = PLAYER_ACCELERATION[acceleration_counter]
-
-    # perform the deceleration checks first, since in the base game
-    # on a direction switch the player is first decelerated and then accelerated in the new direction
-    # check if the player touches a wall
-    touches_wall = jnp.logical_or(
-        state_player_y < WALL_TOP_Y,
-        state_player_y + PLAYER_SIZE[1] > WALL_BOTTOM_Y,
-    )
-
-    player_speed = state_player_speed
-
-    # if no button was clicked OR the paddle touched a wall and there is a speed, apply deceleration (halfing the speed every tick)
-    player_speed = jax.lax.cond(
-        jnp.logical_or(jnp.logical_not(jnp.logical_or(up, down)), touches_wall),
-        lambda s: jnp.round(s / 2).astype(jnp.int32),
+    # if ball is not in play and DOWN was clicked, move plunger down
+    plunger_strength = jax.lax.cond(
+        jnp.logical_and(state.plunger_strength < PLUNGER_MAX_STRENGTH, jnp.logical_and(action == Action.DOWN, jnp.logical_not(state.ball_in_play))),
+        lambda s: s + 1,
         lambda s: s,
-        operand=player_speed,
+        operand=state.plunger_strength
     )
 
-    direction_change_up = jnp.logical_and(up, state_player_speed > 0)
-    # also apply deceleration if the direction is changed
-    player_speed = jax.lax.cond(
-        direction_change_up,
+    # same for UP
+    plunger_strength = jax.lax.cond(
+        jnp.logical_and(state.plunger_strength > 0, jnp.logical_and(action == Action.UP, jnp.logical_not(state.ball_in_play))),
+        lambda s: s - 1,
+        lambda s: s,
+        operand=state.plunger_strength
+    )
+
+    # If FIRE
+    plunger_strength = jax.lax.cond(
+        jnp.logical_and(action == Action.FIRE, jnp.logical_not(state.ball_in_play)),
         lambda s: 0,
         lambda s: s,
-        operand=player_speed,
-    )
-    direction_change_down = jnp.logical_and(down, state_player_speed < 0)
-
-    player_speed = jax.lax.cond(
-        direction_change_down,
-        lambda s: 0,
-        lambda s: s,
-        operand=player_speed,
+        operand=state.plunger_strength
     )
 
-    # reset the acceleration counter on a direction change
-    direction_change = jnp.logical_or(direction_change_up, direction_change_down)
-    acceleration_counter = jax.lax.cond(
-        direction_change,
-        lambda _: 0,
-        lambda s: s,
-        operand=acceleration_counter,
+    left_flipper_angle = jax.lax.cond(
+        jnp.logical_and(action == Action.LEFT, state.left_flipper_angle < FLIPPER_MAX_STRENGTH),
+        lambda a: a + 1,
+        lambda a: a,
+        operand=state.left_flipper_angle
     )
 
-    # add the current acceleration to the speed (positive if up, negative if down)
-    player_speed = jax.lax.cond(
-        up,
-        lambda s: jnp.maximum(s - acceleration, -MAX_SPEED),
-        lambda s: s,
-        operand=player_speed,
+    right_flipper_angle = jax.lax.cond(
+        jnp.logical_and(action == Action.RIGHT, state.right_flipper_angle < FLIPPER_MAX_STRENGTH),
+        lambda a: a + 1,
+        lambda a: a,
+        operand=state.right_flipper_angle
     )
 
-    player_speed = jax.lax.cond(
-        down,
-        lambda s: jnp.minimum(s + acceleration, MAX_SPEED),
-        lambda s: s,
-        operand=player_speed,
-    )
+    # TODO update angles based on step phase?
 
-    # reset or increment the acceleration counter here
-    new_acceleration_counter = jax.lax.cond(
-        jnp.logical_or(up, down),  # If moving in either direction
-        lambda s: jnp.minimum(s + 1, 15),  # Increment counter
-        lambda s: 0,  # Reset if no movement
-        operand=acceleration_counter,
-    )
+    # TODO ball acceleration should be computed from current and new plunger/flipper states or some other way
+    _ball_property_ = ...
 
-    # calculate the new player position
-    player_y = jnp.clip(
-        state_player_y + player_speed,
-        WALL_TOP_Y + WALL_TOP_HEIGHT - 10,
-        WALL_BOTTOM_Y - 4,
-    )
-    return player_y, player_speed, new_acceleration_counter
+
+    
+    return plunger_strength, left_flipper_angle, right_flipper_angle, _ball_property_
 
 
 @jax.jit
