@@ -26,6 +26,9 @@ MOTHERSHIP_Y = 32
 PLAYER_Y = 175
 MAX_HEAT = 100
 MAX_LIVES = 3
+LIVES_Y = 200
+LIFE_ONE_X = 25
+LIFE_OFFSET = 20
 
 ENEMY_Y_POSITIONS = (64, 96, 128)
 
@@ -639,6 +642,7 @@ def load_assault_sprites():
     player = aj.loadFrame(os.path.join(SPRITES_DIR, "player.npy"), transpose=True)
     player_projectile = aj.loadFrame(os.path.join(SPRITES_DIR, "player_projectile.npy"), transpose=True)
     enemy_projectile = aj.loadFrame(os.path.join(SPRITES_DIR, "enemy_projectile.npy"), transpose=True)
+    life = aj.loadFrame(os.path.join(SPRITES_DIR, "life.npy"), transpose=True)
 
     # Optionally expand dims if you want a batch/frame dimension
     BACKGROUND_SPRITE = jnp.expand_dims(background, axis=0)
@@ -648,13 +652,14 @@ def load_assault_sprites():
     PLAYER_SPRITE = jnp.expand_dims(player, axis=0)
     PLAYER_PROJECTILE= jnp.expand_dims(player_projectile, axis=0)
     ENEMY_PROJECTILE = jnp.expand_dims(enemy_projectile, axis=0)
+    LIFE_SPRITE = jnp.squeeze(life)
 
     DIGIT_SPRITES = aj.load_and_pad_digits(
         os.path.join(MODULE_DIR, os.path.join(SPRITES_DIR, "number_{}.npy")),
         num_chars=10,
     )
 
-    return BACKGROUND_SPRITE,ENEMY_SPRITE, MOTHERSHIP_SPRITE, PLAYER_SPRITE, DIGIT_SPRITES, PLAYER_PROJECTILE,ENEMY_PROJECTILE
+    return BACKGROUND_SPRITE,ENEMY_SPRITE, MOTHERSHIP_SPRITE, PLAYER_SPRITE, DIGIT_SPRITES, PLAYER_PROJECTILE,ENEMY_PROJECTILE, LIFE_SPRITE
 
 class Renderer_AtraJaxisAssault:
     """JAX-based Assault game renderer, optimized with JIT compilation."""
@@ -667,7 +672,8 @@ class Renderer_AtraJaxisAssault:
             self.SPRITE_PLAYER,
             self.DIGIT_SPRITES,
             self.PLAYER_PROJECTILE,
-            self.ENEMY_PROJECTILE
+            self.ENEMY_PROJECTILE,
+            self.LIFE_SPRITE
         ) = load_assault_sprites()  # You need to implement this in atraJaxis
 
     @partial(jax.jit, static_argnums=(0,))
@@ -782,6 +788,11 @@ class Renderer_AtraJaxisAssault:
         raster = aj.render_label_selective(
             raster, 5, WIDTH - 20, lives_digits, self.DIGIT_SPRITES, 0, len(lives_digits), spacing=12
         )
+
+        # Render lives (bottom left)
+        def lives_fn(i, raster):
+            return aj.render_at(raster, LIVES_Y, LIFE_ONE_X + i * LIFE_OFFSET, self.LIFE_SPRITE)
+        raster = jax.lax.fori_loop(0, state.player_lives, lives_fn, raster)
 
         return raster
     
