@@ -339,6 +339,30 @@ class JaxWordZapper(JaxEnvironment[WordZapperState, WordZapperObservation, WordZ
 
         return obs, state   
     
+    
+    def get_action_space(self) -> jnp.ndarray:
+        pass
+
+    @partial(jax.jit, static_argnums=(0, ))
+    def _get_observation(self, state: WordZapperState) -> WordZapperObservation:
+        pass
+    
+    @partial(jax.jit, static_argnums=(0,))
+    def _get_done(self, state: WordZapperState) -> bool:
+        pass
+
+    @partial(jax.jit, static_argnums=(0,))
+    def _get_env_reward(self, previous_state: WordZapperState, state: WordZapperState):
+        pass
+    
+    @partial(jax.jit, static_argnums=(0,))
+    def _get_all_rewards(self, previous_state: WordZapperState, state: WordZapperState) -> jnp.ndarray:
+        pass
+
+    @partial(jax.jit, static_argnums=(0,))
+    def _get_info(self, state: WordZapperState, all_rewards: jnp.ndarray) -> WordZapperInfo:
+        pass
+
     @partial(jax.jit, static_argnums=(0,))
     def step(
         self, state: WordZapperState, action: chex.Array
