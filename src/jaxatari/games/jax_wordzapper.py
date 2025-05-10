@@ -28,11 +28,17 @@ BALL_COLOR = 236, 236, 236  # White ball
 WALL_COLOR = 236, 236, 236  # White walls
 SCORE_COLOR = 236, 236, 236  # White score
 
-# Player and enemy paddle positions
-PLAYER_X = 140
+# Player and letter positions
+PLAYER_START_X = 140
+PLAYER_START_Y = 46
+
+LETTERS_Y = 20
 
 # Object sizes (width, height)
 PLAYER_SIZE = (4, 16)
+ASTEROID_SIZE = (8, 7)
+MISSILE_SIZE = (8, 1)
+LETTER_SIZE = (8,7)
 WALL_TOP_Y = 24
 WALL_TOP_HEIGHT = 10
 WALL_BOTTOM_Y = 194
@@ -125,12 +131,18 @@ class WordZapperState(NamedTuple):
     asteroid_y: chex.Array
     asteroid_speed: chex.Array
     asteroid_alive: chex.Array
+    asteroid_positions: (
+        chex.Array
+    ) # (12, 3) array for asteroids - separated into 4 lanes, 3 slots per lane [left to right]
 
     letters_x: chex.Array # letters at the top
     letters_y: chex.Array
     letters_char: chex.Array
     letters_alive: chex.Array
     letters_speed: chex.Array
+    letters_positions: (
+        chex.Array
+    ) # (26,1) y coorinate does not change and deined in LETTERS_Y
 
     current_word: chex.Array # the actual word
     current_letter_index: chex.Array
@@ -145,17 +157,13 @@ class EntityPosition(NamedTuple):
     y: jnp.ndarray
     width: jnp.ndarray
     height: jnp.ndarray
+    active: jnp.ndarray
 
-class EntityBatchPosition(NamedTuple):
-    x: jnp.ndarray
-    y: jnp.ndarray
-    width: jnp.ndarray
-    height: jnp.ndarray
 
 class WordZapperObservation(NamedTuple):
     player: EntityPosition
-    asteroids: EntityBatchPosition
-    letters: EntityBatchPosition
+    asteroids: jnp.ndarray  # Shape (12, 5) - 12 asteroids each with x,y,w,h,active
+    letters: jnp.ndarray # Shape (26, 5) - 26 letters each with x,y,w,h,active
 
     letters_char: jnp.ndarray 
     letters_alive: jnp.ndarray  # active letters
@@ -163,9 +171,10 @@ class WordZapperObservation(NamedTuple):
     current_word: jnp.ndarray  # word to form
     current_letter_index: jnp.ndarray  # current position in word
 
+    player_missile: EntityPosition
+
     cooldown_timer: jnp.ndarray
     timer: jnp.ndarray
-    player_lives: jnp.ndarray
 
 class WordZapperInfo(NamedTuple):
     timer: jnp.ndarray
@@ -367,7 +376,7 @@ class JaxWordZapper(JaxEnvironment[WordZapperState, WordZapperObservation, WordZ
         letters_speed = jnp.full((word_len,), 1, dtype=jnp.int32)
 
         # Initialize player state
-        player_x = jnp.array(PLAYER_X)
+        player_x = jnp.array(PLAYER_START_X)
         player_y = jnp.array(HEIGHT // 2)
         player_speed = jnp.array(0)
         cooldown_timer = jnp.array(0)
@@ -414,11 +423,58 @@ class JaxWordZapper(JaxEnvironment[WordZapperState, WordZapperObservation, WordZ
     
     
     def get_action_space(self) -> jnp.ndarray:
-        pass
+        return jnp.array(self.action_set)
 
-    @partial(jax.jit, static_argnums=(0, ))
+    @partial(jax.jit, static_argnums=(0,))
     def _get_observation(self, state: WordZapperState) -> WordZapperObservation:
-        pass
+        # Create player (already scalar, no need for vectorization)
+        player = EntityPosition(
+            x=state.player_x,
+            y=state.player_y,
+            width=jnp.array(PLAYER_SIZE[0]),
+            height=jnp.array(PLAYER_SIZE[1]),
+            active=jnp.array(1),  # Player is always active
+        )
+
+        # Define a function to convert entity position data into the correct format
+        def convert_to_entity(pos, size):
+            return jnp.array([
+                pos[0],  # x position
+                pos[1],  # y position
+                size[0],  # width
+                size[1],  # height
+                pos[2] != 0,  # active flag
+            ])
+
+        # Apply conversion to asteroid positions
+        asteroids = jax.vmap(lambda pos: convert_to_entity(pos, ASTEROID_SIZE))(state.asteroid_positions)
+
+        # Convert letter positions into the correct entity format
+        letters = jax.vmap(lambda pos: convert_to_entity(pos, LETTER_SIZE))(state.letters_positions)
+
+        # Convert player missile position into the correct entity format
+        missile_pos = state.player_missile_position
+        player_missile = EntityPosition(
+            x=missile_pos[0],
+            y=missile_pos[1],
+            width=jnp.array(MISSILE_SIZE[0]),
+            height=jnp.array(MISSILE_SIZE[1]),
+            active=jnp.array(missile_pos[2] != 0),
+        )
+
+        return WordZapperObservation(
+            player=player,
+            asteroids=asteroids,
+            letters=letters,
+            letters_char=state.letters_char,
+            letters_alive=state.letters_alive,
+            current_word=state.current_word,
+            current_letter_index=state.current_letter_index,
+            player_missile=player_missile,
+            cooldown_timer=state.cooldown_timer,
+            timer=state.timer,
+        )
+
     
     @partial(jax.jit, static_argnums=(0,))
     def _get_done(self, state: WordZapperState) -> bool:
