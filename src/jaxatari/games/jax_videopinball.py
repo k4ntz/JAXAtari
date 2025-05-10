@@ -46,9 +46,8 @@ FLIPPER_COLOR = 255, 0, 0  # flipper
 TEXT_COLOR = 255, 255, 255  # text
 
 # Starting at plunger position
-# TODO: check if these are correct
-BALL_START_X = jnp.array(150)
-BALL_START_Y = jnp.array(120)
+BALL_START_X = jnp.array(149)
+BALL_START_Y = jnp.array(129)
 BALL_START_DIRECTION = jnp.array(0)
 
 # Pygame window dimensions
@@ -114,15 +113,10 @@ class VideoPinballState(NamedTuple):
     ball_y: chex.Array
     ball_vel_x: chex.Array
     ball_vel_y: chex.Array
-    ball_direction: chex.Array  # 0: left/up, 1:left/down , 2: right/up, 3: right/down
+    ball_direction: chex.Array  # 0: left/up, 1:left/down , 2: right/up, 3: right/down (Shouldn't this be a function?)
     left_flipper_angle: chex.Array
     right_flipper_angle: chex.Array
-    plunger_position: (
-        chex.Array
-    )  # Value between 0 and 20 where 20 means that the plunger is fully pulled
-    plunger_power: (
-        chex.Array
-    )  # Should be 2 * plunger_position and only be set when the plunger is released
+    plunger_position: chex.Array  # Value between 0 and 20 where 20 means that the plunger is fully pulled
     score: chex.Array
     lives: chex.Array
     bonus_multiplier: chex.Array
@@ -130,7 +124,7 @@ class VideoPinballState(NamedTuple):
     targets_hit: chex.Array
     step_counter: chex.Array
     ball_in_play: chex.Array
-    obs_stack: chex.ArrayTree
+    # obs_stack: chex.ArrayTree     What is this for? Pong doesnt have this right?
 
 
 class EntityPosition(NamedTuple):
@@ -213,11 +207,11 @@ def flipper_step(
     # TODO update angles based on step phase?
 
     # TODO ball acceleration should be computed from current and new plunger/flipper states or some other way
-    _ball_property_ = ...
+    # _ball_property_ = ...
 
 
     
-    return left_flipper_angle, right_flipper_angle, _ball_property_
+    return left_flipper_angle, right_flipper_angle
 
 
 @jax.jit
@@ -228,7 +222,7 @@ def hit_obstacle_to_left(
     Check if the ball is hitting an obstacle to the left.
     """
     return jnp.logical_and(
-        ball_x < obstacle_x,
+        ball_x < 7, # I changed this obstacle_x variable so the code runs
         jnp.logical_and(
             ball_y > WALL_TOP_Y,
             ball_y < WALL_BOTTOM_Y,
@@ -252,9 +246,9 @@ def ball_step(
     Plunger calculation
     """
     # Add plunger power to the ball velocity, only set to non-zero value once fired
-    ball_vel_y = jax.lax.cond(
-        state.plunger_power > 0,
-        ball_vel_y + state.plunger_power,
+    ball_vel_y = jnp.where(
+        state.plunger_position * 2 > 0,
+        ball_vel_y + state.plunger_position * 2,
         ball_vel_y,
     )
 
@@ -318,55 +312,19 @@ def ball_step(
     return ball_x, ball_y, ball_direction, ball_vel_x, ball_vel_y
 
 
-def enemy_step(state, step_counter, ball_y, ball_speed_y):
-    # Skip movement every 8th step
-    should_move = step_counter % 8 != 0
 
-    # Calculate direction (-1 for up, 0 for stay, 1 for down)
-    direction = jnp.sign(ball_y - state.enemy_y)
-
-    # Calculate new position
-    new_y = state.enemy_y + (direction * ENEMY_STEP_SIZE).astype(jnp.int32)
-    # Return either new position or current position based on should_move
-    return jax.lax.cond(
-        should_move, lambda _: new_y, lambda _: state.enemy_y, operand=None
-    )
 
 
 @jax.jit
-def _reset_ball_after_goal(
-    state_and_goal: Tuple[VideoPinballState, bool],
-) -> Tuple[chex.Array, chex.Array, chex.Array, chex.Array]:
+def _reset_ball_after_losing_life(state: VideoPinballState):
     """
-    Determines new ball position and velocity after a goal.
-    Args:
-        state_and_goal: Tuple of (current state, whether goal was scored on right side)
-    Returns:
-        Tuple of (ball_x, ball_y, ball_vel_x, ball_vel_y) as int32 arrays
+    When the ball goes into the gutter and you lose a life, respawn the ball on the launcher
+    and possibly adjust the ball/life counter
     """
-    state, scored_right = state_and_goal
-
-    # Determine Y velocity direction based on ball position
-    ball_vel_y = jnp.where(
-        state.ball_y > BALL_START_Y,
-        1,  # Ball was in lower half, go down
-        -1,  # Ball was in upper half, go up
-    ).astype(jnp.int32)
-
-    # X velocity is always towards the side that just got scored on
-    ball_vel_x = jnp.where(
-        scored_right, 1, -1  # Ball moves right  # Ball moves left
-    ).astype(jnp.int32)
-
-    return (
-        BALL_START_X.astype(jnp.int32),
-        BALL_START_Y.astype(jnp.int32),
-        ball_vel_x.astype(jnp.int32),
-        ball_vel_y.astype(jnp.int32),
-    )
+    return BALL_START_X, BALL_START_Y, 0, 0
 
 
-class JaxPong(
+class JaxVideoPinball(
     JaxEnvironment[VideoPinballState, VideoPinballObservation, VideoPinballInfo]
 ):
     def __init__(self, frameskip: int = 0, reward_funcs: list[callable] = None):
@@ -384,38 +342,32 @@ class JaxPong(
         }
         self.obs_size = 3 * 4 + 1 + 1
 
-    def reset(self) -> VideoPinballState:
+    def reset(self) -> Tuple[VideoPinballState, VideoPinballObservation]:
         """
         Resets the game state to the initial state.
         Returns the initial state and the reward (i.e. 0)
         """
         state = VideoPinballState(
-            player_y=jnp.array(96).astype(jnp.int32),
-            player_speed=jnp.array(0.0).astype(jnp.int32),
-            ball_x=jnp.array(78).astype(jnp.int32),
-            ball_y=jnp.array(115).astype(jnp.int32),
-            enemy_y=jnp.array(115).astype(jnp.int32),
-            enemy_speed=jnp.array(0.0).astype(jnp.int32),
-            ball_vel_x=BALL_SPEED[0].astype(jnp.int32),
-            ball_vel_y=BALL_SPEED[1].astype(jnp.int32),
-            player_score=jnp.array(0).astype(jnp.int32),
-            enemy_score=jnp.array(0).astype(jnp.int32),
+            ball_x=jnp.array(BALL_START_X).astype(jnp.int32),
+            ball_y=jnp.array(BALL_START_Y).astype(jnp.int32),
+            ball_vel_x=jnp.array(0).astype(jnp.int32),
+            ball_vel_y=jnp.array(0).astype(jnp.int32),
+            ball_direction=jnp.array(0).astype(jnp.int32), # Necessary?
+            left_flipper_angle=jnp.array(0).astype(jnp.int32),
+            right_flipper_angle=jnp.array(0).astype(jnp.int32),
+            plunger_position=jnp.array(0).astype(jnp.int32),
+            score=jnp.array(0).astype(jnp.int32),
+            lives=jnp.array(1).astype(jnp.int32),
+            bonus_multiplier=jnp.array(1).astype(jnp.int32),
+            bumpers_active=jnp.array([1,1,1]).astype(jnp.int32),
+            targets_hit=jnp.array([1,1,1]).astype(jnp.int32),
             step_counter=jnp.array(0).astype(jnp.int32),
-            acceleration_counter=jnp.array(0).astype(jnp.int32),
-            buffer=jnp.array(96).astype(jnp.int32),
-            obs_stack=None,
+            ball_in_play=jnp.array(True).astype(jnp.bool),
         )
         initial_obs = self._get_observation(state)
+        return state, initial_obs #, initial_obs
 
-        def expand_and_copy(x):
-            x_expanded = jnp.expand_dims(x, axis=0)
-            return jnp.concatenate([x_expanded] * self.frame_stack_size, axis=0)
 
-        # Apply transformation to each leaf in the pytree
-        initial_obs = jax.tree.map(expand_and_copy, initial_obs)
-
-        new_state = state._replace(obs_stack=initial_obs)
-        return new_state, initial_obs
 
     @partial(jax.jit, static_argnums=(0,))
     def step(
@@ -426,52 +378,25 @@ class JaxPong(
         # chex provides jax with additional debug/testing functionality.
         # Probably best to use it instead of simply jnp.array
 
-        # Step 1: Update player position and speed
-        # only execute player step on even steps (base implementation only moves the player every second tick)
-        new_player_y, player_speed_b, new_acceleration_counter = player_step(
-            state.player_y, state.player_speed, state.acceleration_counter, action
-        )
+        # Step 1: Update ball position and velocity
+        ball_x, ball_y, ball_direction, ball_vel_x, ball_vel_y = ball_step(state, action)
 
-        new_player_y, player_speed, new_acceleration_counter = jax.lax.cond(
-            state.step_counter % 2 == 0,
-            lambda _: (new_player_y, player_speed_b, new_acceleration_counter),
-            lambda _: (state.player_y, state.player_speed, state.acceleration_counter),
-            operand=None,
-        )
+        # Step 2: Check if ball is in the gutter
+        ball_reset = ball_y > 192
 
-        buffer = jax.lax.cond(
-            jax.lax.eq(state.buffer, state.player_y),
-            lambda _: new_player_y,
-            lambda _: state.buffer,
-            operand=None,
-        )
-        player_y = state.buffer
-
-        enemy_y = enemy_step(state, state.step_counter, state.ball_y, state.ball_y)
-
-        # Step 2: Update ball position and velocity
-        ball_x, ball_y, ball_vel_x, ball_vel_y = ball_step(state, action)
-
-        # Step 3: Score and goal detection
-        player_goal = ball_x < 4
-        enemy_goal = ball_x > 156
-        ball_reset = jnp.logical_or(enemy_goal, player_goal)
+        # Step 3: Update Plunger and Flippers
+        plunger_position, plunger_strength = plunger_step(state, action)
+        left_flipper_angle, right_flipper_angle = flipper_step(state, action)
 
         # Step 4: Update scores
-        player_score = jax.lax.cond(
-            player_goal,
-            lambda s: s + 1,
-            lambda s: s,
-            operand=state.player_score,
-        )
-        enemy_score = jax.lax.cond(
-            enemy_goal,
-            lambda s: s + 1,
-            lambda s: s,
-            operand=state.enemy_score,
-        )
+        score = jnp.array(0).astype(jnp.int32)
+        bonus_multiplier = jnp.array(1).astype(jnp.int32)
 
-        # Step 5: Reset ball if goal was scored
+        # Step 5: Update Objects on Hit (like Bumpers and Targets)
+        bumpers_active = jnp.array([1, 1, 1]).astype(jnp.int32)
+        targets_hit = jnp.array([1, 1, 1]).astype(jnp.int32)
+
+        # Step 5: Reset ball if it went down the gutter
         current_values = (
             ball_x.astype(jnp.int32),
             ball_y.astype(jnp.int32),
@@ -480,58 +405,36 @@ class JaxPong(
         )
         ball_x_final, ball_y_final, ball_vel_x_final, ball_vel_y_final = jax.lax.cond(
             ball_reset,
-            lambda x: _reset_ball_after_goal((state, enemy_goal)),
+            lambda x: _reset_ball_after_losing_life(state),
             lambda x: x,
             operand=current_values,
         )
 
-        # Step 6: Update step counter for game freeze after goal
-        step_counter = jax.lax.cond(
+        lives = jax.lax.cond(
             ball_reset,
-            lambda s: jnp.array(0),
-            lambda s: s + 1,
-            operand=state.step_counter,
+            lambda x: x + 1, #Because it's not really lives but more like a ball count? You start at 1 and it goes up to 3
+            lambda x: x,
+            operand=state.lives,
         )
 
-        # Step 7: Update enemy position and speed
 
-        # Step 8: Reset enemy position on goal
-        enemy_y_final = jax.lax.cond(
-            ball_reset,
-            lambda s: BALL_START_Y.astype(jnp.int32),
-            lambda s: enemy_y.astype(jnp.int32),
-            operand=None,
-        )
-
-        # Step 9: Handle ball position during game freeze
-        ball_x_final = jax.lax.cond(
-            step_counter < 60,
-            lambda s: BALL_START_X.astype(jnp.int32),
-            lambda s: s,
-            operand=ball_x_final,
-        )
-        ball_y_final = jax.lax.cond(
-            step_counter < 60,
-            lambda s: BALL_START_Y.astype(jnp.int32),
-            lambda s: s,
-            operand=ball_y_final,
-        )
-
-        new_state = PongState(
-            player_y=player_y,
-            player_speed=player_speed,
+        new_state = VideoPinballState(
             ball_x=ball_x_final,
             ball_y=ball_y_final,
-            enemy_y=enemy_y_final,
-            enemy_speed=0,
             ball_vel_x=ball_vel_x_final,
             ball_vel_y=ball_vel_y_final,
-            player_score=player_score,
-            enemy_score=enemy_score,
-            step_counter=step_counter,
-            acceleration_counter=new_acceleration_counter,
-            buffer=buffer,
-            obs_stack=state.obs_stack,  # old for now
+            ball_direction=ball_direction,  # Necessary?
+            left_flipper_angle=left_flipper_angle,
+            right_flipper_angle=right_flipper_angle,
+            plunger_position=plunger_position,
+            score=score,
+            lives=lives,
+            bonus_multiplier=bonus_multiplier,
+            bumpers_active=bumpers_active,
+            targets_hit=targets_hit,
+            step_counter=jnp.array(state.step_counter + 1).astype(jnp.int32),
+            ball_in_play=True, # Necessary?
+            # obs_stack=None,
         )
 
         done = self._get_done(new_state)
@@ -541,34 +444,19 @@ class JaxPong(
 
         observation = self._get_observation(new_state)
         # stack the new observation, remove the oldest one
-        observation = jax.tree.map(
-            lambda stack, obs: jnp.concatenate(
-                [stack[1:], jnp.expand_dims(obs, axis=0)], axis=0
-            ),
-            new_state.obs_stack,
-            observation,
-        )
-        new_state = new_state._replace(obs_stack=observation)
+        # observation = jax.tree.map(
+        #     lambda stack, obs: jnp.concatenate(
+        #         [stack[1:], jnp.expand_dims(obs, axis=0)], axis=0
+        #     ),
+        #     new_state.obs_stack,
+        #     observation,
+        # )
+        # new_state = new_state._replace(obs_stack=observation)
 
-        return new_state, new_state.obs_stack, env_reward, done, info
+        return new_state, observation, env_reward, done, info
 
     @partial(jax.jit, static_argnums=(0,))
-    def _get_observation(self, state: PongState):
-        # create player
-        player = EntityPosition(
-            x=jnp.array(PLAYER_X),
-            y=state.player_y,
-            width=jnp.array(PLAYER_SIZE[0]),
-            height=jnp.array(PLAYER_SIZE[1]),
-        )
-
-        # create enemy
-        enemy = EntityPosition(
-            x=jnp.array(ENEMY_X),
-            y=state.enemy_y,
-            width=jnp.array(ENEMY_SIZE[0]),
-            height=jnp.array(ENEMY_SIZE[1]),
-        )
+    def _get_observation(self, state: VideoPinballState):
 
         ball = EntityPosition(
             x=state.ball_x,
@@ -576,34 +464,68 @@ class JaxPong(
             width=jnp.array(BALL_SIZE[0]),
             height=jnp.array(BALL_SIZE[1]),
         )
-        return PongObservation(
-            player=player,
-            enemy=enemy,
-            ball=ball,
-            score_player=state.player_score,
-            score_enemy=state.enemy_score,
+
+
+        # TODO: Implement proper positions and sizes for flippers and plunger
+        left_flipper = EntityPosition(
+            x=state.ball_x,
+            y=state.ball_y,
+            width=jnp.array(BALL_SIZE[0]),
+            height=jnp.array(BALL_SIZE[1]),
+        )
+
+        right_flipper = EntityPosition(
+            x=state.ball_x,
+            y=state.ball_y,
+            width=jnp.array(BALL_SIZE[0]),
+            height=jnp.array(BALL_SIZE[1]),
+        )
+
+        plunger = EntityPosition(
+            x=state.ball_x,
+            y=state.ball_y,
+            width=jnp.array(BALL_SIZE[0]),
+            height=jnp.array(BALL_SIZE[1]),
+        )
+
+        return VideoPinballObservation(
+            ball = ball,
+            left_flipper = left_flipper,
+            right_flipper = right_flipper,
+            plunger = plunger,
+            bumpers = state.bumpers_active,  # bumper states array
+            targets = state.targets_hit, # target states array
+            score = state.score,
+            lives = state.lives,
+            bonus_multiplier = state.bonus_multiplier
         )
 
     @partial(jax.jit, static_argnums=(0,))
-    def obs_to_flat_array(self, obs: PongObservation) -> jnp.ndarray:
+    def obs_to_flat_array(self, obs: VideoPinballObservation) -> jnp.ndarray:
         return jnp.concatenate(
             [
-                obs.player.x.flatten(),
-                obs.player.y.flatten(),
-                obs.player.height.flatten(),
-                obs.player.width.flatten(),
-                obs.enemy.x.flatten(),
-                obs.enemy.y.flatten(),
-                obs.enemy.height.flatten(),
-                obs.enemy.width.flatten(),
                 obs.ball.x.flatten(),
                 obs.ball.y.flatten(),
                 obs.ball.height.flatten(),
                 obs.ball.width.flatten(),
-                obs.score_player.flatten(),
-                obs.score_enemy.flatten(),
+                obs.left_flipper.x.flatten(),
+                obs.left_flipper.y.flatten(),
+                obs.left_flipper.height.flatten(),
+                obs.left_flipper.width.flatten(),
+                obs.right_flipper.x.flatten(),
+                obs.right_flipper.y.flatten(),
+                obs.right_flipper.height.flatten(),
+                obs.right_flipper.width.flatten(),
+                obs.bumpers.flatten(),
+                obs.targets.flatten(),
+                obs.score.flatten(),
+                obs.lives.flatten(),
+                obs.bonus_multiplier.flatten(),
+
+
             ]
         )
+
 
     def action_space(self) -> spaces.Discrete:
         return spaces.Discrete(len(self.action_set))
@@ -617,17 +539,15 @@ class JaxPong(
         )
 
     @partial(jax.jit, static_argnums=(0,))
-    def _get_info(self, state: PongState, all_rewards: chex.Array) -> PongInfo:
-        return PongInfo(time=state.step_counter, all_rewards=all_rewards)
+    def _get_info(self, state: VideoPinballState, all_rewards: chex.Array) -> VideoPinballInfo:
+        return VideoPinballInfo(time=state.step_counter, all_rewards=all_rewards)
 
     @partial(jax.jit, static_argnums=(0,))
-    def _get_env_reward(self, previous_state: PongState, state: PongState):
-        return (state.player_score - state.enemy_score) - (
-            previous_state.player_score - previous_state.enemy_score
-        )
+    def _get_env_reward(self, previous_state: VideoPinballState, state: VideoPinballState):
+        return 0
 
     @partial(jax.jit, static_argnums=(0,))
-    def _get_all_reward(self, previous_state: PongState, state: PongState):
+    def _get_all_reward(self, previous_state: VideoPinballState, state: VideoPinballState):
         if self.reward_funcs is None:
             return jnp.zeros(1)
         rewards = jnp.array(
@@ -636,11 +556,8 @@ class JaxPong(
         return rewards
 
     @partial(jax.jit, static_argnums=(0,))
-    def _get_done(self, state: PongState) -> bool:
-        return jnp.logical_or(
-            jnp.greater_equal(state.player_score, 20),
-            jnp.greater_equal(state.enemy_score, 20),
-        )
+    def _get_done(self, state: VideoPinballState) -> bool:
+        return False
 
 
 def load_sprites():
@@ -771,7 +688,6 @@ def load_sprites():
         num_chars=10,  # For digits 0 through 9
     )
 
-    # TODO: Check if this works, might require a dummy fieldnumber0 sprite
     sprites_field_numbers = aj.load_and_pad_digits(
         os.path.join(SPRITES_BASE_DIR, "FieldNumber{}.npy"),
         num_chars=10,  # Load 0-9, even if you only use 1-9
@@ -924,7 +840,7 @@ if __name__ == "__main__":
     pygame.display.set_caption("Pong Game")
     clock = pygame.time.Clock()
 
-    game = JaxPong(frameskip=1)
+    game = JaxVideoPinball(frameskip=1)
 
     # Create the JAX renderer
     renderer = Renderer_AtraJaxisVideoPinball()
