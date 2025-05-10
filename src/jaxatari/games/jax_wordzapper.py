@@ -39,8 +39,8 @@ WALL_BOTTOM_Y = 194
 WALL_BOTTOM_HEIGHT = 16
 
 # Pygame window dimensions
-WINDOW_WIDTH = 160 * 3
-WINDOW_HEIGHT = 210 * 3
+WINDOW_WIDTH = 210 * 3
+WINDOW_HEIGHT = 160 * 3
 
 # define the positions of the state information
 STATE_TRANSLATOR: dict = {
