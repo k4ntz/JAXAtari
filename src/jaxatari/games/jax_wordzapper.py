@@ -291,20 +291,6 @@ def shooting_letter():
     pass
 
 
-
-def enemy_step():
-    #TODO
-    pass
-
-
-@jax.jit
-def _reset_ball_after_goal():
-    #TODO : give a better name 
-    #TODO
-    pass
-
-
-
 def load_sprites():
     """Load all sprites required for Word Zapper rendering."""
     #TODO
