@@ -762,70 +762,70 @@ class Renderer_AtraJaxisVideoPinball:
         raster = aj.render_at(raster, 0, 0, frame_bg)
 
         frame_walls = aj.get_sprite_frame(self.sprites["walls"], 0)
-        raster = aj.render_at(raster, 16, 0, frame_walls)
+        raster = aj.render_at(raster, 0, 16, frame_walls)
 
 
         # Render animated objects TODO: (unfinished, game_state implementation needed)
         frame_flipper_left = aj.get_sprite_frame(self.sprites["flipper_left"], 0)
-        raster = aj.render_at(raster, 184, 64, frame_flipper_left)
+        raster = aj.render_at(raster, 64, 184, frame_flipper_left)
 
         frame_flipper_right = aj.get_sprite_frame(self.sprites["flipper_right"], 0)
-        raster = aj.render_at(raster, 184, 83, frame_flipper_right)
+        raster = aj.render_at(raster, 83, 184, frame_flipper_right)
 
         frame_plunger = aj.get_sprite_frame(self.sprites["plunger"], 0)
-        raster = aj.render_at(raster, 133, 148, frame_plunger)
+        raster = aj.render_at(raster, 148, 133, frame_plunger)
 
         frame_spinner = aj.get_sprite_frame(self.sprites["spinner"], state.step_counter % 8)
-        raster = aj.render_at(raster, 90, 30, frame_spinner)
-        raster = aj.render_at(raster, 90, 126, frame_spinner)
+        raster = aj.render_at(raster, 30, 90, frame_spinner)
+        raster = aj.render_at(raster, 126, 90, frame_spinner)
 
         frame_ball = aj.get_sprite_frame(self.sprites["ball"], 0)
-        raster = aj.render_at(raster, state.ball_y, state.ball_x, frame_ball)
+        raster = aj.render_at(raster, state.ball_x, state.ball_y, frame_ball)
 
 
         # Render score TODO: (unfinished, game_state implementation needed)
         frame_unknown = aj.get_sprite_frame(self.sprites["score_number_digits"], 1)
-        raster = aj.render_at(raster, 3, 4, frame_unknown)
+        raster = aj.render_at(raster, 4, 3, frame_unknown)
 
         frame_ball_count = aj.get_sprite_frame(self.sprites["score_number_digits"], 1)
-        raster = aj.render_at(raster, 3, 36, frame_ball_count)
+        raster = aj.render_at(raster, 36, 3, frame_ball_count)
 
         frame_score1 = aj.get_sprite_frame(self.sprites["score_number_digits"], 0)
-        raster = aj.render_at(raster, 3, 64, frame_score1)
+        raster = aj.render_at(raster, 64, 3, frame_score1)
         frame_score2 = aj.get_sprite_frame(self.sprites["score_number_digits"], 0)
-        raster = aj.render_at(raster, 3, 80, frame_score2)
+        raster = aj.render_at(raster, 80, 3, frame_score2)
         frame_score3 = aj.get_sprite_frame(self.sprites["score_number_digits"], 0)
-        raster = aj.render_at(raster, 3, 96, frame_score3)
+        raster = aj.render_at(raster, 96, 3, frame_score3)
         frame_score4 = aj.get_sprite_frame(self.sprites["score_number_digits"], 0)
-        raster = aj.render_at(raster, 3, 112, frame_score4)
+        raster = aj.render_at(raster, 112, 3, frame_score4)
         frame_score5 = aj.get_sprite_frame(self.sprites["score_number_digits"], 0)
-        raster = aj.render_at(raster, 3, 128, frame_score5)
+        raster = aj.render_at(raster, 128, 3, frame_score5)
         frame_score6 = aj.get_sprite_frame(self.sprites["score_number_digits"], 0)
-        raster = aj.render_at(raster, 3, 144, frame_score6)
+        raster = aj.render_at(raster, 144, 3, frame_score6)
 
 
 
 
         # Render special yellow field objects TODO: (unfinished, game_state implementation needed)
         frame_bumper_left = aj.get_sprite_frame(self.sprites["field_number_digits"], 1)
-        raster = aj.render_at(raster, 122, 46, frame_bumper_left)
+        raster = aj.render_at(raster, 46, 122, frame_bumper_left)
         frame_bumper_middle = aj.get_sprite_frame(self.sprites["field_number_digits"], 1)
-        raster = aj.render_at(raster, 58, 78, frame_bumper_middle)
+        raster = aj.render_at(raster, 78, 58, frame_bumper_middle)
         frame_bumper_right = aj.get_sprite_frame(self.sprites["field_number_digits"], 1)
-        raster = aj.render_at(raster, 122, 110, frame_bumper_right)
+        raster = aj.render_at(raster, 110, 122, frame_bumper_right)
 
         frame_dropper_left = aj.get_sprite_frame(self.sprites["field_number_digits"], 1)
-        raster = aj.render_at(raster, 58, 46, frame_dropper_left)
+        raster = aj.render_at(raster, 46, 58, frame_dropper_left)
         frame_dropper_right = aj.get_sprite_frame(self.sprites["atari_logo"], 0)
-        raster = aj.render_at(raster, 58, 109, frame_dropper_right)
+        raster = aj.render_at(raster, 109, 58, frame_dropper_right)
 
         frame_diamond = aj.get_sprite_frame(self.sprites["yellow_diamond_top"], 0)
-        raster = aj.render_at(raster, 24, 60, frame_diamond)
-        raster = aj.render_at(raster, 24, 76, frame_diamond)
-        raster = aj.render_at(raster, 24, 92, frame_diamond)
+        raster = aj.render_at(raster, 60, 24, frame_diamond)
+        raster = aj.render_at(raster, 76, 24, frame_diamond)
+        raster = aj.render_at(raster, 92, 24, frame_diamond)
 
         frame_special_diamond = aj.get_sprite_frame(self.sprites["yellow_diamond_bottom"], 0)
-        raster = aj.render_at(raster, 120, 76, frame_special_diamond)
+        raster = aj.render_at(raster, 76, 120, frame_special_diamond)
 
 
         return raster
