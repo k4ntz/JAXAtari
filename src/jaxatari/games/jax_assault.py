@@ -183,20 +183,31 @@ def player_projectile_step(
     state, action: chex.Array
 ):
     # If projectile is inactive, check for fire action to spawn it
-    fire_action = jnp.logical_or(action == FIRE, jnp.logical_or(action == LEFTFIRE, action == RIGHTFIRE))
+    fire_up_action = action == FIRE
+    fire_left_action = action == LEFTFIRE
+    fire_right_action = action == RIGHTFIRE
+    fire_action = fire_up_action + fire_left_action * 2 + fire_right_action * 3
     can_fire = state.player_projectile_y < 0
-    spawn_proj = jnp.logical_and(fire_action, can_fire)
+    fire_action = fire_action * can_fire
+    spawn_proj = jnp.logical_and(fire_action>0, can_fire)
     # Spawn at player's current x, just above the player
-    new_proj_x = jnp.where(spawn_proj, state.player_x, state.player_projectile_x)
-    new_proj_y = jnp.where(spawn_proj, PLAYER_Y - 4, state.player_projectile_y)
-    new_proj_dir = jnp.where(spawn_proj, -1, state.player_projectile_dir)
+    spawn_x = jnp.array([state.player_projectile_x, state.player_x, state.player_x + 12, state.player_x - 4])
+    spawn_y = jnp.array([state.player_projectile_y, PLAYER_Y - 4, PLAYER_Y, PLAYER_Y])
+
+    new_proj_x = spawn_x[fire_action]
+    new_proj_y = spawn_y[fire_action]
+    new_proj_dir = jnp.where(spawn_proj, fire_action, state.player_projectile_dir)
     # Move projectile if active
-    moving = new_proj_y >= 0
-    moved_proj_y = jnp.where(moving, new_proj_y + new_proj_dir * 6, new_proj_y)
+    moving_y = jnp.logical_and(new_proj_y >= 0, new_proj_dir == 1)
+    moving_x = jnp.logical_and.reduce(jnp.array([new_proj_x >= 0, new_proj_x <= WIDTH, new_proj_dir > 1]))
+    moved_proj_y = jnp.where(moving_y, new_proj_y - 6, new_proj_y)
+    x_dir = jnp.where(new_proj_dir == 2, -1, 1)
+    moved_proj_x = jnp.where(moving_x, new_proj_x + x_dir * 6, new_proj_x)
     # Deactivate if off screen
-    final_proj_y = jnp.where(moved_proj_y < 0, jnp.array(-1), moved_proj_y)
-    final_proj_x = jnp.where(moved_proj_y < 0, jnp.array(-1), new_proj_x)
-    final_proj_dir = jnp.where(moved_proj_y < 0, jnp.array(0), new_proj_dir)
+    out_of_bounds = jnp.logical_or.reduce(jnp.array([moved_proj_y < 0,moved_proj_x < 0, moved_proj_x > WIDTH]))
+    final_proj_y = jnp.where(out_of_bounds, jnp.array(-1), moved_proj_y)
+    final_proj_x = jnp.where(out_of_bounds, jnp.array(-1), moved_proj_x)
+    final_proj_dir = jnp.where(out_of_bounds, jnp.array(0), new_proj_dir)
     return state._replace(
         player_projectile_x=final_proj_x,
         player_projectile_y=final_proj_y,
