@@ -183,31 +183,104 @@ def player_step(
 ) -> Tuple[chex.Array, chex.Array, chex.Array, chex.Array, chex.Array]:
     MOVE_UP = jnp.array([Action.UP, Action.UPFIRE, Action.UPLEFTFIRE, Action.UPRIGHTFIRE])
     MOVE_DOWN = jnp.array([Action.DOWN, Action.DOWNFIRE, Action.DOWNLEFTFIRE, Action.DOWNRIGHTFIRE])
-    FIRE_ACTIONS = jnp.array([Action.FIRE, Action.LEFTFIRE, Action.RIGHTFIRE])
+    FIRE_ACTIONS = jnp.array([
+        Action.FIRE, Action.UPFIRE, Action.DOWNFIRE,
+        Action.LEFTFIRE, Action.RIGHTFIRE,
+        Action.UPLEFTFIRE, Action.UPRIGHTFIRE,
+        Action.DOWNLEFTFIRE, Action.DOWNRIGHTFIRE
+    ])
 
     move_up = jnp.any(jnp.equal(action, MOVE_UP))
     move_down = jnp.any(jnp.equal(action, MOVE_DOWN))
     is_firing = jnp.any(jnp.equal(action, FIRE_ACTIONS))
 
-    # Movement logic
     delta_y = jnp.where(move_up, -player_speed, jnp.where(move_down, player_speed, 0))
     new_player_y = jnp.clip(player_y + delta_y, 0, HEIGHT - PLAYER_SIZE[1])
 
-    # Firing and cooldown
     can_fire = cooldown_timer == 0
     fired = jnp.logical_and(is_firing, can_fire)
     new_cooldown_timer = jnp.where(fired, 8, jnp.maximum(cooldown_timer - 1, 0))
 
     return player_x, new_player_y, player_speed, new_cooldown_timer, fired
 
-def shooting_letter(letters_x):
-    pass
-
+@jax.jit
 def scrolling_letters(letters_x, letters_speed, letters_alive):
     letters_x = letters_x - letters_speed
     wrapped_x = jnp.where(letters_x < -8, 160, letters_x)
     updated_x = jnp.where(letters_alive == 1, wrapped_x, letters_x)
     return updated_x
+
+@jax.jit
+def player_missile_step(
+    missile_pos: chex.Array,
+    player_x: chex.Array,
+    player_y: chex.Array,
+    action: chex.Array,
+    cooldown_timer: chex.Array
+) -> Tuple[chex.Array, chex.Array]:
+    """
+    Handle firing logic and missile movement for Word Zapper.
+
+    missile_pos: [x, y, dx, dy] or [0, 0, 0, 0] if inactive
+    Returns: new missile position, new cooldown timer
+    """
+    # Define direction for each firing action
+    DIRECTION_MAP = {
+        Action.FIRE: (0, -1),
+        Action.UPFIRE: (0, -1),
+        Action.LEFTFIRE: (-1, 0),
+        Action.RIGHTFIRE: (1, 0),
+        Action.UPLEFTFIRE: (-1, -1),
+        Action.UPRIGHTFIRE: (1, -1),
+        Action.DOWNLEFTFIRE: (-1, 1),
+        Action.DOWNRIGHTFIRE: (1, 1),
+        Action.DOWNFIRE: (0, 1),
+    }
+
+    fire = jnp.any(jnp.array([action in DIRECTION_MAP and cooldown_timer == 0]))
+
+    def fire_missile():
+        dx, dy = DIRECTION_MAP[action]
+        new_pos = jnp.array([player_x + 2, player_y + 2, dx, dy], dtype=jnp.int32)
+        return new_pos
+
+    # If no active missile, allow firing
+    is_active = missile_pos[2] != 0 or missile_pos[3] != 0
+    can_fire = jnp.logical_and(~is_active, fire)
+
+    # Either fire or update missile
+    new_missile = jax.lax.cond(
+        can_fire,
+        fire_missile,
+        lambda: jnp.where(
+            is_active,
+            jnp.array([
+                missile_pos[0] + missile_pos[2] * 4,
+                missile_pos[1] + missile_pos[3] * 4,
+                missile_pos[2],
+                missile_pos[3],
+            ]),
+            missile_pos
+        )
+    )
+
+    # Check if missile out of bounds
+    out_of_bounds = jnp.logical_or(
+        jnp.logical_or(new_missile[0] < 0, new_missile[0] > WIDTH),
+        jnp.logical_or(new_missile[1] < 0, new_missile[1] > HEIGHT)
+    )
+
+    final_missile = jnp.where(out_of_bounds, jnp.array([0, 0, 0, 0]), new_missile)
+
+    # Update cooldown
+    new_cooldown = jnp.where(fire, 6, jnp.maximum(cooldown_timer - 1, 0))
+
+    return final_missile, new_cooldown
+
+
+def shooting_letter():
+    pass
+
 
 
 def enemy_step():
@@ -370,41 +443,38 @@ class JaxWordZapper(JaxEnvironment[WordZapperState, WordZapperObservation, WordZ
         super().step(state, action)
 
         previous_state = state
-        _, reset_state = self.reset()
 
-        # First handle death animation 
-        def handle_death_animation():
-            pass
-        
-        def handle_score_freeze():
-            pass
-        
-        # Normal game logic starts here
         def normal_game_step():
-            pass
+            # Step player
+            new_player_x, new_player_y, new_player_speed, new_cooldown_timer, fired = player_step(
+                state.player_x,
+                state.player_y,
+                state.player_speed,
+                state.cooldown_timer,
+                action,
+            )
 
+            # Step letters
+            new_letters_x = scrolling_letters(state.letters_x, state.letters_speed, state.letters_alive)
 
-        return_state = jax.lax.cond(
-            state.death_counter > 0,
-            lambda _: handle_death_animation(),
-            lambda _: jax.lax.cond(
-                state.death_counter < 0,
-                lambda _: handle_score_freeze(),
-                lambda _: normal_game_step(),
-                operand=None,
-            ),
-            operand=None,
-        )
+            new_state = state._replace(
+                player_x=new_player_x,
+                player_y=new_player_y,
+                player_speed=new_player_speed,
+                cooldown_timer=new_cooldown_timer,
+                letters_x=new_letters_x,
+                step_counter=state.step_counter + 1,
+            )
+            return new_state
 
-        # Get observation and info
+        return_state = normal_game_step()
+
         observation = self._get_observation(return_state)
-
         done = self._get_done(return_state)
         env_reward = self._get_env_reward(previous_state, return_state)
         all_rewards = self._get_all_rewards(previous_state, return_state)
         info = self._get_info(return_state, all_rewards)
 
-        # Choose between death animation and normal game step
         return observation, return_state, env_reward, done, info
 
 
