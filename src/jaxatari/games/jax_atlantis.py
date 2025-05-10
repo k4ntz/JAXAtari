@@ -1,4 +1,6 @@
 import os
+from dataclasses import dataclass
+
 import jax.lax
 import jax.numpy as jnp
 import chex
@@ -7,29 +9,18 @@ from typing import Dict, Any, Optional, NamedTuple, Tuple
 from functools import partial
 
 from jaxatari.rendering import atraJaxis as aj
-from jaxatari.environment import JaxEnvironment
+from jaxatari.environment import JaxEnvironment, JAXAtariAction as Action
 
-# pygame window size
-WINDOW_WIDTH = 160 * 3
-WINDOW_HEIGHT = 210 * 3
+@dataclass(frozen=True)
+class GameConfig:
+    """ Game configuration parameters"""
+    screen_width: int = 160
+    screen_height: int = 210
+    scaling_factor: int = 3
 
-# Constants for
-WIDTH = 160
-HEIGHT = 210
-
-# Action constants
-NOOP = 0
-FIRE = 1
-RIGHTFIRE = 2
-LEFTFIRE = 3
-
-
-######
-# Hier die Klassendefinitionen
-######
-class AtlantisState(NamedTuple):
-    score: chex.Array
-    obs_stack: chex.ArrayTree
+# Positions of the cannons
+CANNON_X = jnp.array([20, 80, 140], dtype=jnp.int32)
+CANNON_Y = 200
 
 class EntityPosition(NamedTuple):
     x: jnp.ndarray
@@ -37,17 +28,23 @@ class EntityPosition(NamedTuple):
     width: jnp.ndarray
     height: jnp.ndarray
 
+
+class AtlantisState(NamedTuple):
+    score: chex.Array
+    block_position: chex.Array
+
 class AtlantisObservation(NamedTuple):
-    player: EntityPosition
+    score: jnp.ndarray
+    block_position: chex.Array
 
 class AtlantisInfo(NamedTuple):
     time: jnp.ndarray
-    all_rewards: chex.Array
 
 class Renderer_AtraJaxis:
     sprites: Dict[str, Any]
 
-    def __init__(self):
+    def __init__(self, config: GameConfig = None):
+        self.config = config
         self.sprite_path = f"{os.path.dirname(os.path.abspath(__file__))}/sprites/atlantis"
         self.sprites = self._load_sprites()
 
@@ -83,80 +80,75 @@ class Renderer_AtraJaxis:
 
     @partial(jax.jit, static_argnums=(0,))
     def render(self, state: AtlantisState):
-        # Blank rgb frame
-        return jnp.zeros((HEIGHT, WIDTH, 3), dtype=jnp.uint8)
+        H = self.config.screen_height
+        W = self.config.screen_width
+
+        # Set green background
+        green = jnp.array([0,255,0], dtype=jnp.uint8)
+        raster = jnp.broadcast_to(green, (W,H,3))
+
+        # define black block
+        BLOCK_H, BLOCK_W = 10, 10
+        block_color = jnp.array([255, 255, 255], dtype=jnp.uint8)  # white blocks
+        block_sprite = jnp.broadcast_to(block_color, (BLOCK_W, BLOCK_H, 3))
+
+        # 3) draw each block in turn
+        def _draw_one(i, img):
+            x, y = state.block_position[i]   # (x,y)
+            return jax.lax.dynamic_update_slice(img, block_sprite, (x, y, 0))
+
+        return jax.lax.fori_loop(0,
+                                 state.block_position.shape[0],
+                                 _draw_one,
+                                 raster)
 
 class JaxAtlantis(JaxEnvironment[AtlantisState, AtlantisObservation, AtlantisInfo]):
-    def __init__(self, frameskip: int = 1, reward_funcs: list[callable] = None):
-        # Andere rufen hier super().__init__() auf. warum? Die functionis leer
+    def __init__(self, frameskip: int = 1, reward_funcs: list[callable] = None, config: GameConfig = None):
+        super().__init__()
+        self.config = config
         self.frameskip = frameskip
         self.frame_stack_size = 4
         if reward_funcs is not None:
             reward_funcs = tuple(reward_funcs)
         self.reward_funcs = reward_funcs
-        self.action_set = {
-            NOOP,
-            FIRE,
-            RIGHTFIRE,
-            LEFTFIRE,
-        }
-        # Keine Ahnung was das macht. Probieren wir mal 10...
-        self.obs_size = 10
 
-    def reset(self) -> AtlantisState:
-        state = AtlantisState(
-            score=0,
-            obs_stack=None
+    def reset(self) -> Tuple[AtlantisObservation, AtlantisState]:
+        two_blocks = jnp.array([[50, 50],
+                                [100, 150]], dtype=jnp.int32)
+        new_state = AtlantisState(
+            score=jnp.array(0, dtype=jnp.int32),
+            block_position=two_blocks
         )
-        initial_obs = self._get_observation(state)
-
-
-        def expand_and_copy(x):
-            x_expanded = jnp.expand_dims(x, axis=0)
-            return jnp.concatenate([x_expanded] * self.frame_stack_size, axis=0)
-
-        # Apply transformation to each leaf in the pytree
-        initial_obs = jax.tree.map(expand_and_copy, initial_obs)
-
-        new_state = state._replace(obs_stack=initial_obs)
-        return new_state, initial_obs
+        obs = self._get_observation(new_state)
+        return obs, new_state
 
     @partial(jax.jit, static_argnums=(0,))
     def step(self, state: AtlantisState, action: chex.Array) -> Tuple[AtlantisState, AtlantisObservation, float, bool, AtlantisInfo]:
-        """ PLACEHOLDER !!"""
-        # Create a dummy player observation at (0,0) with zero size
-        player = EntityPosition(
-            x=jnp.array(0, dtype=jnp.int32),
-            y=jnp.array(0, dtype=jnp.int32),
-            width=jnp.array(0, dtype=jnp.int32),
-            height=jnp.array(0, dtype=jnp.int32)
-        )
-        observation = AtlantisObservation(player=player)
+        # state.block_positions has shape (N,2) where [:,0] = x, [:,1] = y
+        delta = jnp.array([1, 1], dtype=jnp.int32)  # +1 in x (right), -1 in y (up)
+        updated_positions = state.block_position + delta  # broadcast: adds [1, -1] to each row
 
-        # Dummy reward and termination flag
+        new_state = AtlantisState(
+            score=jnp.array(0, dtype=jnp.int32),
+            block_position=updated_positions,
+        )
+        observation = self._get_observation(new_state)
+
         reward = 0.0
         done = False
 
-        # Dummy info with zero time and zero rewards
         info = AtlantisInfo(
             time=jnp.array(0, dtype=jnp.int32),
-            all_rewards=jnp.zeros((1,), dtype=jnp.float32)
         )
 
-        return state, observation, reward, done, info
+        return new_state, observation, reward, done, info
 
     @partial(jax.jit, static_argnums=(0,))
     def _get_observation(self, state: AtlantisState) -> AtlantisObservation:
-        """
-        Placeholder observation: wraps state into minimal AtlantisObservation.
-        """
-        player = EntityPosition(
-            x=jnp.array(0, dtype=jnp.int32),
-            y=jnp.array(0, dtype=jnp.int32),
-            width=jnp.array(0, dtype=jnp.int32),
-            height=jnp.array(0, dtype=jnp.int32)
+        return AtlantisObservation(
+            score=jnp.array(0, dtype=jnp.int32),
+            block_position=state.block_position
         )
-        return AtlantisObservation(player=player)
 
     @partial(jax.jit, static_argnums=(0,))
     def _get_info(self, state: AtlantisState) -> AtlantisInfo:
@@ -165,7 +157,6 @@ class JaxAtlantis(JaxEnvironment[AtlantisState, AtlantisObservation, AtlantisInf
         """
         return AtlantisInfo(
             time=jnp.array(0, dtype=jnp.int32),
-            all_rewards=jnp.zeros((1,), dtype=jnp.float32)
         )
 
     @partial(jax.jit, static_argnums=(0,))
@@ -197,25 +188,28 @@ def get_human_action() -> chex.Array:
     fire = keys[pygame.K_SPACE]
 
     if right and fire:
-        return jnp.array(RIGHTFIRE)
+        return jnp.array(Action.RIGHTFIRE)
     if left and fire:
-        return jnp.array(LEFTFIRE)
+        return jnp.array(Action.LEFTFIRE)
     if fire:
-        return jnp.array(FIRE)
+        return jnp.array(Action.FIRE)
 
-    return jnp.array(NOOP)
+    return jnp.array(Action.NOOP)
 
 
 def main():
+    config = GameConfig()
     pygame.init()
-    screen = pygame.display.set_mode((WINDOW_WIDTH, WINDOW_HEIGHT))
+    screen = pygame.display.set_mode((
+        config.screen_width * config.scaling_factor,
+        config.screen_height * config.scaling_factor
+    ))
     pygame.display.set_caption("Atlantis")
     clock = pygame.time.Clock()
-    scaling_factor = 3
 
-    game = JaxAtlantis()
+    game = JaxAtlantis(config=config)
 
-    renderer = Renderer_AtraJaxis()
+    renderer = Renderer_AtraJaxis(config=config)
     jitted_step = jax.jit(game.step)
     jitted_reset = jax.jit(game.reset)
 
@@ -251,10 +245,17 @@ def main():
         # Render and display
         raster = renderer.render(curr_state)
 
-        aj.update_pygame(screen, raster, scaling_factor, WINDOW_WIDTH, WINDOW_HEIGHT)
+        aj.update_pygame(
+            screen,
+            raster,
+            config.scaling_factor,
+            config.screen_width,
+            config.screen_height
+        )
 
         counter += 1
-        pygame.time.Clock().tick(60)
+        # FPS
+        clock.tick(60)
 
     pygame.quit()
 
