@@ -19,38 +19,54 @@ NOOP = 0
 FIRE = 1
 RIGHT = 2
 LEFT = 3
+# TODO: What are these actions?
 RIGHTFIRE = 4
 LEFTFIRE = 5
 
 # Physics constants
-GRAVITY = 0.12
+# TODO: check if these are correct
+GRAVITY = 3  # 0.12
 BALL_MAX_SPEED = 6.0
 FLIPPER_STRENGTH = 4
 PLUNGER_MAX_STRENGTH = 8
 
 # Game layout constants
+# TODO: check if these are correct
 BALL_SIZE = (4, 4)
 FLIPPER_LEFT_POS = (30, 180)
 FLIPPER_RIGHT_POS = (110, 180)
 PLUNGER_POS = (150, 120)
-
+PLUNGER_MAX_HEIGHT = 20  # Taken from RAM values (67-87)
 
 
 # Background color and object colors
-BACKGROUND_COLOR = 0, 0, 0  
-BALL_COLOR = 255, 255, 255  #ball
-FLIPPER_COLOR = 255, 0, 0   #flipper
-TEXT_COLOR = 255, 255, 255  #text
+BACKGROUND_COLOR = 0, 0, 0
+BALL_COLOR = 255, 255, 255  # ball
+FLIPPER_COLOR = 255, 0, 0  # flipper
+TEXT_COLOR = 255, 255, 255  # text
 
 # Starting at plunger position
-BALL_START_X = jnp.array(150)  
+# TODO: check if these are correct
+BALL_START_X = jnp.array(150)
 BALL_START_Y = jnp.array(120)
+BALL_START_DIRECTION = jnp.array(0)
 
 # Pygame window dimensions
 WINDOW_WIDTH = 160 * 3
 WINDOW_HEIGHT = 210 * 3
 
-# define the positions of the state information
+# TODO: check if these are correct
+WALL_TOP_Y = 16
+WALL_LEFT_X = 0
+WALL_RIGHT_X = 160
+WALL_BOTTOM_Y = 200
+
+# TODO: check if these are correct
+WALL_TOP_HEIGHT = 5
+WALL_BOTTOM_HEIGHT = 5
+WALL_LEFT_HEIGHT = 5
+WALL_RIGHT_HEIGHT = 5
+
 # define the positions of the state information
 STATE_TRANSLATOR: dict = {
     0: "ball_x",
@@ -59,14 +75,14 @@ STATE_TRANSLATOR: dict = {
     3: "ball_vel_y",
     4: "left_flipper_angle",
     5: "right_flipper_angle",
-    6: "plunger_position", 
+    6: "plunger_position",
     7: "score",
     8: "lives",
     9: "bonus_multiplier",
     10: "bumpers_active",
     11: "targets_hit",
     12: "step_counter",
-    13: "ball_in_play"
+    13: "ball_in_play",
 }
 
 
@@ -98,17 +114,24 @@ class VideoPinballState(NamedTuple):
     ball_y: chex.Array
     ball_vel_x: chex.Array
     ball_vel_y: chex.Array
-    left_flipper_angle: chex.Array  
-    right_flipper_angle: chex.Array 
-    plunger_position: chex.Array  
+    ball_direction: chex.Array
+    left_flipper_angle: chex.Array
+    right_flipper_angle: chex.Array
+    plunger_position: (
+        chex.Array
+    )  # Value between 0 and 20 where 20 means that the plunger is fully pulled
+    plunger_power: (
+        chex.Array
+    )  # Should be 2 * plunger_position and only be set when the plunger is released
     score: chex.Array
     lives: chex.Array
     bonus_multiplier: chex.Array
-    bumpers_active: chex.Array  
-    targets_hit: chex.Array  
+    bumpers_active: chex.Array
+    targets_hit: chex.Array
     step_counter: chex.Array
-    ball_in_play: chex.Array 
+    ball_in_play: chex.Array
     obs_stack: chex.ArrayTree
+
 
 class EntityPosition(NamedTuple):
     x: jnp.ndarray
@@ -122,8 +145,8 @@ class VideoPinballObservation(NamedTuple):
     left_flipper: EntityPosition
     right_flipper: EntityPosition
     plunger: EntityPosition
-    bumpers: jnp.ndarray  #bumper states array
-    targets: jnp.ndarray  #target states array
+    bumpers: jnp.ndarray  # bumper states array
+    targets: jnp.ndarray  # target states array
     score: jnp.ndarray
     lives: jnp.ndarray
     bonus_multiplier: jnp.ndarray
@@ -132,6 +155,28 @@ class VideoPinballObservation(NamedTuple):
 class VideoPinballInfo(NamedTuple):
     time: jnp.ndarray
     all_rewards: chex.Array
+
+
+@jax.jit
+def plunger_step(state_plunger_position: chex.Array, action: chex.Array) -> chex.Array:
+    """
+    Update the plunger position based on the current state and action.
+    And set the plunger power to 2 * plunger_position.
+    """
+    # check if the plunger is pulled
+    plunger_pulled = jnp.logical_or(action == FIRE, action == LEFTFIRE)
+
+    # Calculate the plunger power by its position
+    plunger_power = jnp.array(0)
+
+    # update the plunger position
+    plunger_position = jax.lax.cond(
+        plunger_pulled,
+        lambda s: jnp.minimum(s + 1, PLUNGER_MAX_HEIGHT),
+        lambda s: s,
+        operand=state_plunger_position,
+    )
+    return plunger_position, plunger_power
 
 
 @jax.jit
@@ -222,136 +267,177 @@ def player_step(
 
 
 def ball_step(
-    state: PongState,
+    state: VideoPinballState,
     action,
 ):
+    """
+    Update the pinballs position and velocity based on the current state and action.
+    """
     # update the balls position
     ball_x = state.ball_x + state.ball_vel_x
     ball_y = state.ball_y + state.ball_vel_y
 
-    wall_bounce = jnp.logical_or(
-        ball_y <= WALL_TOP_Y + WALL_TOP_HEIGHT - BALL_SIZE[1],
-        ball_y >= WALL_BOTTOM_Y,
-    )
-    # calculate bounces on top and bottom walls
-    ball_vel_y = jnp.where(wall_bounce, -state.ball_vel_y, state.ball_vel_y)
+    # Check if the ball is hit by the plunger
 
-    # Calculate paddle hits
-    player_paddle_hit = jnp.logical_and(
-        jnp.logical_and(PLAYER_X <= ball_x, ball_x <= PLAYER_X + PLAYER_SIZE[0]),
-        state.ball_vel_x > 0,
-    )
+    # The plunger is hit if the ball is in the plunger area and the plunger is pulled
 
-    player_paddle_hit = jnp.logical_and(
-        player_paddle_hit,
-        jnp.logical_and(
-            state.player_y - BALL_SIZE[1] <= ball_y,
-            ball_y <= state.player_y + PLAYER_SIZE[1] + BALL_SIZE[1],
-        ),
+    plunger_hit_ball = jnp.logical_and(
+        state.plunger_position > 0, state.ball_x >= PLUNGER_POS[0]
+    )
+    ball_vel_y = jnp.where(
+        plunger_hit_ball,
+        state.ball_vel_y + state.plunger_position * 2,
+        state.ball_vel_y,
     )
 
-    enemy_paddle_hit = jnp.logical_and(
-        jnp.logical_and(ENEMY_X <= ball_x, ball_x <= ENEMY_X + ENEMY_SIZE[0] - 1),
-        state.ball_vel_x < 0,
-    )
+    # TODO: Test if the ball ever has velocity of state.plunger_power because right now we always
+    # immediately deduct the gravity from the velocity
 
-    enemy_paddle_hit = jnp.logical_and(
-        enemy_paddle_hit,
-        jnp.logical_and(
-            state.enemy_y - BALL_SIZE[1] <= ball_y,
-            ball_y <= state.enemy_y + ENEMY_SIZE[1] + BALL_SIZE[1],
-        ),
-    )
+    # Check if the ball is hitting a paddle
 
-    paddle_hit = jnp.logical_or(player_paddle_hit, enemy_paddle_hit)
+    # Iterate over all other rigid objects in the game and check if the ball is hitting them
 
-    # Calculate hit position on paddle (divide paddle into 5 equal sections)
-    section_height = PLAYER_SIZE[1] / 5  # Each section is 1/5 of paddle height
+    # Deduct gravity from the ball velocity
+    ball_vel_y = jnp.where(state.ball_in_play, ball_vel_y - GRAVITY, ball_vel_y)
 
-    # Calculate relative hit position (int between -2 and 2, which is also the relevant y speed depending on the hit paddle)
-    hit_position = jnp.where(
-        paddle_hit,
-        jnp.where(
-            player_paddle_hit,
-            # For player paddle
-            jnp.where(
-                ball_y < state.player_y + section_height,
-                -2.0,  # Top section -> strong up
-                jnp.where(
-                    ball_y < state.player_y + 2 * section_height,
-                    -1.0,  # Upper middle -> medium up
-                    jnp.where(
-                        ball_y < state.player_y + 3 * section_height,
-                        0.0,  # Center section -> straight
-                        jnp.where(
-                            ball_y < state.player_y + 4 * section_height,
-                            1.0,  # Lower middle -> medium down
-                            2.0,  # Bottom section -> strong down
-                        ),
-                    ),
-                ),
-            ),
-            # For enemy paddle (same logic)
-            jnp.where(
-                ball_y < state.enemy_y + section_height,
-                -2.0,
-                jnp.where(
-                    ball_y < state.enemy_y + 2 * section_height,
-                    -1.0,
-                    jnp.where(
-                        ball_y < state.enemy_y + 3 * section_height,
-                        0.0,
-                        jnp.where(
-                            ball_y < state.enemy_y + 4 * section_height,
-                            1.0,
-                            2.0,
-                        ),
-                    ),
-                ),
-            ),
-        ),
-        0.0,
-    )
+    # # Check if we have to reflect the ball in x direction
+    # side_wall_bounce = jnp.logical_or(
+    #     ball_x <= WALL_LEFT_X,
+    #     ball_x >= WALL_RIGHT_X - BALL_SIZE[0],  # ball is rendered at lower left
+    # )
 
-    # Get relevant paddle speed based on which paddle was hit
-    paddle_speed = jnp.where(
-        player_paddle_hit,
-        state.player_speed,
-        jnp.where(
-            enemy_paddle_hit,
-            state.enemy_speed,
-            0.0,
-        ),
-    )
+    # # Check if we have to reflect the ball in y direction
+    # ceiling_floor_bounce = jnp.logical_or(
+    #     ball_y
+    #     <= WALL_TOP_Y
+    #     + WALL_TOP_HEIGHT
+    #     - BALL_SIZE[1],  # ball is rendered at lower left
+    #     ball_y >= WALL_BOTTOM_Y,
+    # )
 
-    # Calculate new y velocity
-    ball_vel_y = jnp.where(paddle_hit, hit_position, ball_vel_y)
+    # # On wall bounce, invert the x velocity
+    # ball_vel_x = jnp.where(side_wall_bounce, -state.ball_vel_x, state.ball_vel_y)
 
-    # calculate the new ball_vel_x position depending on 1. if a boost was hit or 2. the ball was hit with max velocity by the player (eval tbd?)
-    # first check the paddle
-    boost_triggered = jnp.logical_and(
-        player_paddle_hit,
-        jnp.logical_or(
-            jnp.logical_or(action == LEFTFIRE, action == RIGHTFIRE),
-            action == FIRE,
-        ),
-    )
-    # and check if the paddle hit the ball at MAX speed
-    player_max_hit = jnp.logical_and(player_paddle_hit, state.player_speed == MAX_SPEED)
-    # if any of the two is true, increase/decrease the ball_vel_x by 1 based on current direction
-    ball_vel_x = jnp.where(
-        jnp.logical_or(boost_triggered, player_max_hit),
-        state.ball_vel_x
-        + jnp.sign(state.ball_vel_x),  # Add/subtract 1 based on direction
-        state.ball_vel_x,
-    )
+    # # On ceiling/floor bounce, invert the y velocity
+    # ball_vel_y = jnp.where(ceiling_floor_bounce, -state.ball_vel_y, state.ball_vel_y)
 
-    # invert ball_vel_x if a paddle was hit
-    ball_vel_x = jnp.where(
-        paddle_hit,
-        -ball_vel_x,
-        ball_vel_x,
-    )
+    # Calculate flipper hits
+
+    # player_paddle_hit = jnp.logical_and(
+    #     jnp.logical_and(PLAYER_X <= ball_x, ball_x <= PLAYER_X + PLAYER_SIZE[0]),
+    #     state.ball_vel_x > 0,
+    # )
+
+    # player_paddle_hit = jnp.logical_and(
+    #     player_paddle_hit,
+    #     jnp.logical_and(
+    #         state.player_y - BALL_SIZE[1] <= ball_y,
+    #         ball_y <= state.player_y + PLAYER_SIZE[1] + BALL_SIZE[1],
+    #     ),
+    # )
+
+    # enemy_paddle_hit = jnp.logical_and(
+    #     jnp.logical_and(ENEMY_X <= ball_x, ball_x <= ENEMY_X + ENEMY_SIZE[0] - 1),
+    #     state.ball_vel_x < 0,
+    # )
+
+    # enemy_paddle_hit = jnp.logical_and(
+    #     enemy_paddle_hit,
+    #     jnp.logical_and(
+    #         state.enemy_y - BALL_SIZE[1] <= ball_y,
+    #         ball_y <= state.enemy_y + ENEMY_SIZE[1] + BALL_SIZE[1],
+    #     ),
+    # )
+
+    # paddle_hit = jnp.logical_or(player_paddle_hit, enemy_paddle_hit)
+
+    # # Calculate hit position on paddle (divide paddle into 5 equal sections)
+    # section_height = PLAYER_SIZE[1] / 5  # Each section is 1/5 of paddle height
+
+    # # Calculate relative hit position (int between -2 and 2, which is also the relevant y speed depending on the hit paddle)
+    # hit_position = jnp.where(
+    #     paddle_hit,
+    #     jnp.where(
+    #         player_paddle_hit,
+    #         # For player paddle
+    #         jnp.where(
+    #             ball_y < state.player_y + section_height,
+    #             -2.0,  # Top section -> strong up
+    #             jnp.where(
+    #                 ball_y < state.player_y + 2 * section_height,
+    #                 -1.0,  # Upper middle -> medium up
+    #                 jnp.where(
+    #                     ball_y < state.player_y + 3 * section_height,
+    #                     0.0,  # Center section -> straight
+    #                     jnp.where(
+    #                         ball_y < state.player_y + 4 * section_height,
+    #                         1.0,  # Lower middle -> medium down
+    #                         2.0,  # Bottom section -> strong down
+    #                     ),
+    #                 ),
+    #             ),
+    #         ),
+    #         # For enemy paddle (same logic)
+    #         jnp.where(
+    #             ball_y < state.enemy_y + section_height,
+    #             -2.0,
+    #             jnp.where(
+    #                 ball_y < state.enemy_y + 2 * section_height,
+    #                 -1.0,
+    #                 jnp.where(
+    #                     ball_y < state.enemy_y + 3 * section_height,
+    #                     0.0,
+    #                     jnp.where(
+    #                         ball_y < state.enemy_y + 4 * section_height,
+    #                         1.0,
+    #                         2.0,
+    #                     ),
+    #                 ),
+    #             ),
+    #         ),
+    #     ),
+    #     0.0,
+    # )
+
+    # # Get relevant paddle speed based on which paddle was hit
+    # paddle_speed = jnp.where(
+    #     player_paddle_hit,
+    #     state.player_speed,
+    #     jnp.where(
+    #         enemy_paddle_hit,
+    #         state.enemy_speed,
+    #         0.0,
+    #     ),
+    # )
+
+    # # Calculate new y velocity
+    # ball_vel_y = jnp.where(paddle_hit, hit_position, ball_vel_y)
+
+    # # calculate the new ball_vel_x position depending on 1. if a boost was hit or 2. the ball was hit with max velocity by the player (eval tbd?)
+    # # first check the paddle
+    # boost_triggered = jnp.logical_and(
+    #     player_paddle_hit,
+    #     jnp.logical_or(
+    #         jnp.logical_or(action == LEFTFIRE, action == RIGHTFIRE),
+    #         action == FIRE,
+    #     ),
+    # )
+    # # and check if the paddle hit the ball at MAX speed
+    # player_max_hit = jnp.logical_and(player_paddle_hit, state.player_speed == MAX_SPEED)
+    # # if any of the two is true, increase/decrease the ball_vel_x by 1 based on current direction
+    # ball_vel_x = jnp.where(
+    #     jnp.logical_or(boost_triggered, player_max_hit),
+    #     state.ball_vel_x
+    #     + jnp.sign(state.ball_vel_x),  # Add/subtract 1 based on direction
+    #     state.ball_vel_x,
+    # )
+
+    # # invert ball_vel_x if a paddle was hit
+    # ball_vel_x = jnp.where(
+    #     paddle_hit,
+    #     -ball_vel_x,
+    #     ball_vel_x,
+    # )
 
     return ball_x, ball_y, ball_vel_x, ball_vel_y
 
@@ -373,7 +459,7 @@ def enemy_step(state, step_counter, ball_y, ball_speed_y):
 
 @jax.jit
 def _reset_ball_after_goal(
-    state_and_goal: Tuple[PongState, bool],
+    state_and_goal: Tuple[VideoPinballState, bool],
 ) -> Tuple[chex.Array, chex.Array, chex.Array, chex.Array]:
     """
     Determines new ball position and velocity after a goal.
