@@ -636,27 +636,27 @@ def load_sprites():
 
 
 
-    # sprites_plunger = jnp.concatenate([
-    #     jnp.repeat(sprites_plunger[0][None], 1, axis=0),
-    #     jnp.repeat(sprites_plunger[1][None], 1, axis=0),
-    #     jnp.repeat(sprites_plunger[2][None], 1, axis=0),
-    #     jnp.repeat(sprites_plunger[3][None], 1, axis=0),
-    #     jnp.repeat(sprites_plunger[4][None], 1, axis=0),
-    #     jnp.repeat(sprites_plunger[5][None], 1, axis=0),
-    #     jnp.repeat(sprites_plunger[6][None], 1, axis=0),
-    #     jnp.repeat(sprites_plunger[7][None], 1, axis=0),
-    #     jnp.repeat(sprites_plunger[8][None], 1, axis=0),
-    #     jnp.repeat(sprites_plunger[9][None], 1, axis=0),
-    #     jnp.repeat(sprites_plunger[10][None], 1, axis=0),
-    #     jnp.repeat(sprites_plunger[11][None], 1, axis=0),
-    #     jnp.repeat(sprites_plunger[12][None], 1, axis=0),
-    #     jnp.repeat(sprites_plunger[13][None], 1, axis=0),
-    #     jnp.repeat(sprites_plunger[14][None], 1, axis=0),
-    #     jnp.repeat(sprites_plunger[15][None], 1, axis=0),
-    #     jnp.repeat(sprites_plunger[16][None], 1, axis=0),
-    #     jnp.repeat(sprites_plunger[17][None], 1, axis=0),
-    #     jnp.repeat(sprites_plunger[18][None], 1, axis=0)
-    # ])
+    sprites_plunger = jnp.concatenate([
+        jnp.repeat(sprites_plunger[0][None], 3, axis=0),
+        jnp.repeat(sprites_plunger[1][None], 2, axis=0),
+        jnp.repeat(sprites_plunger[2][None], 1, axis=0),
+        jnp.repeat(sprites_plunger[3][None], 1, axis=0),
+        jnp.repeat(sprites_plunger[4][None], 1, axis=0),
+        jnp.repeat(sprites_plunger[5][None], 1, axis=0),
+        jnp.repeat(sprites_plunger[6][None], 1, axis=0),
+        jnp.repeat(sprites_plunger[7][None], 1, axis=0),
+        jnp.repeat(sprites_plunger[8][None], 1, axis=0),
+        jnp.repeat(sprites_plunger[9][None], 1, axis=0),
+        jnp.repeat(sprites_plunger[10][None], 1, axis=0),
+        jnp.repeat(sprites_plunger[11][None], 1, axis=0),
+        jnp.repeat(sprites_plunger[12][None], 1, axis=0),
+        jnp.repeat(sprites_plunger[13][None], 1, axis=0),
+        jnp.repeat(sprites_plunger[14][None], 1, axis=0),
+        jnp.repeat(sprites_plunger[15][None], 1, axis=0),
+        jnp.repeat(sprites_plunger[16][None], 1, axis=0),
+        jnp.repeat(sprites_plunger[17][None], 1, axis=0),
+        jnp.repeat(sprites_plunger[18][None], 1, axis=0)
+    ])
 
     sprites_flipper_left = aj.pad_to_match([sprite_flipper_left0, sprite_flipper_left1,
                                             sprite_flipper_left2, sprite_flipper_left3])
@@ -766,13 +766,13 @@ class Renderer_AtraJaxisVideoPinball:
 
 
         # Render animated objects TODO: (unfinished, game_state implementation needed)
-        frame_flipper_left = aj.get_sprite_frame(self.sprites["flipper_left"], 0)
+        frame_flipper_left = aj.get_sprite_frame(self.sprites["flipper_left"], state.left_flipper_angle)
         raster = aj.render_at(raster, 64, 184, frame_flipper_left)
 
-        frame_flipper_right = aj.get_sprite_frame(self.sprites["flipper_right"], 0)
+        frame_flipper_right = aj.get_sprite_frame(self.sprites["flipper_right"], state.right_flipper_angle)
         raster = aj.render_at(raster, 83, 184, frame_flipper_right)
 
-        frame_plunger = aj.get_sprite_frame(self.sprites["plunger"], 0)
+        frame_plunger = aj.get_sprite_frame(self.sprites["plunger"], state.plunger_position.astype(int)) # Still slightly inaccurate
         raster = aj.render_at(raster, 148, 133, frame_plunger)
 
         frame_spinner = aj.get_sprite_frame(self.sprites["spinner"], state.step_counter % 8)
