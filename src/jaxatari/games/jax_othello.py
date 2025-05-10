@@ -335,6 +335,59 @@ def field_step(field_choice, curr_state, white_player):  # -> valid_choice, new_
         curr_state
     )
 
+def get_bot_move(game_field: Field, difficulty: chex.Array, player_score: chex.Array, enemy_score: chex.Array):
+    game_score = player_score+enemy_score
+
+    best_move_score = -2147483648
+    list_of_chosen_moves = None
+
+    list_of_all_moves = jnp.arange(64)
+
+    #Iterate over the game field using vmap
+    vectorized_compute_score_of_tiles = jax.vmap(compute_score_of_tiles, in_axes=(0, None, None, None))
+    list_of_all_move_values = vectorized_compute_score_of_tiles(list_of_all_moves, game_field, game_score)
+
+def compute_score_of_tiles(i, game_field, game_score):
+    # Decode tile position
+    tile_x = jnp.floor_divide(i, 8)
+    tile_y = jnp.mod(i, 8)
+
+    # If tile is already taken, set invalid move (return very low score)
+    score_of_tile = jax.lax.cond(
+        game_field.field.field_color[tile_x, tile_y] != FieldColor.EMPTY,
+        lambda _: -2147483648,  
+        lambda _: compute_score_of_tile_1(tile_x, tile_y, game_score),  
+        None
+    )
+    return score_of_tile
+
+def compute_score_of_tile_1(tile_x, tile_y, game_score):
+    # Placeholder: Implement logic for counting flipped tiles here
+    flipped_tiles = 0  # Placeholder: Implement the actual tile flipping logic
+
+    # If no tiles were flipped, set invalid move (return very low score)
+    score_of_tile = jax.lax.cond(
+        flipped_tiles == 0,
+        lambda _: -2147483648,  
+        lambda _: 0,  
+        None
+    )
+
+    # Adjust for game stage
+    score_of_tile = jax.lax.cond(
+        score_of_tile == -2147483648,
+        lambda _: score_of_tile,  
+        lambda _: jax.lax.cond(  
+            jnp.logical_or(game_score < 18, game_score > 41),  
+            lambda _: -flipped_tiles - 1,  
+            lambda _: flipped_tiles,  
+            None
+        ),
+        None
+    )
+
+    return score_of_tile
+
 
 class JaxOthello(JaxEnvironment[OthelloState, OthelloObservation, OthelloInfo]):
     def __init__(self, frameskip: int = 0, reward_funcs: list[callable]=None):
