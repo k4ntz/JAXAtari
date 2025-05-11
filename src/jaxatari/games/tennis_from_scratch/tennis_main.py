@@ -1,6 +1,7 @@
 import pygame
 import tennis_renderer as renderer
 from jaxatari.rendering import atraJaxis as aj
+from jaxatari.environment import JAXAtariAction
 from typing import NamedTuple
 import chex
 import jax.lax
@@ -41,8 +42,9 @@ class TennisState(NamedTuple):
 #@partial(jax.jit, static_argnums=(0,))
 def tennis_step(state: TennisState, action) -> TennisState:
     new_ball_state = ball_step(state.ball_state)
+    new_state_after_player_step = player_step(state, action)
 
-    return TennisState(state.player_x, state.player_y, new_ball_state, state.counter + 1)
+    return TennisState(new_state_after_player_step.player_x, new_state_after_player_step.player_y, new_ball_state, state.counter + 1)
     # new_player_x = jnp.where(state.player_x < FRAME_WIDTH, state.player_x + 1, state.player_x - 1)
     #new_ball_x = jnp.where(state.ball_direction == 0, state.ball_x + 1, state.ball_x - 1)
     #new_ball_z = jnp.where(state.ball_z_direction == 0, state.ball_z + 1, state.ball_z - 1)
@@ -80,6 +82,35 @@ def ball_step(state: BallState) -> BallState:
     new_ball_z_fp = jnp.where(new_ball_z <= 0, 0, new_ball_z_fp)
 
     return BallState(state.ball_x, state.ball_y, new_ball_z, new_ball_z_fp, new_ball_velocity_z_fp)
+
+def player_step(state: TennisState, action) -> TennisState:
+    should_move_right = jnp.logical_and(
+        action == JAXAtariAction.RIGHT,
+        state.player_x <= GAME_WIDTH,
+    )
+
+    should_move_left = jnp.logical_and(
+        action == JAXAtariAction.LEFT,
+        state.player_x >= 0,
+    )
+
+    new_player_x = jnp.where(should_move_right, state.player_x + 1, state.player_x)
+    new_player_x = jnp.where(should_move_left, state.player_x - 1, new_player_x)
+
+    should_move_up = jnp.logical_and(
+        action == JAXAtariAction.UP,
+        state.player_y >= 0,
+    )
+
+    should_move_down = jnp.logical_and(
+        action == JAXAtariAction.DOWN,
+        state.player_y<= GAME_HEIGHT,
+    )
+
+    new_player_y = jnp.where(should_move_up, state.player_y - 1, state.player_y)
+    new_player_y = jnp.where(should_move_down, state.player_y + 1, new_player_y)
+
+    return TennisState(new_player_x, new_player_y, state.ball_state, state.counter)
 
 def tennis_reset() -> TennisState:
     return TennisState(0.0, 100.0)
