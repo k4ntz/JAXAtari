@@ -20,7 +20,7 @@ class TennisRenderer:
         (self.BG, self.BALL, self.BALL_SHADOW) = load_sprites()
 
     #@partial(jax.jit, static_argnums=(0,))
-    def render(self, state: TennisState):
+    def render(self, state: TennisState) -> jnp.ndarray:
         raster = jnp.zeros((FRAME_WIDTH, FRAME_HEIGHT, 3))
 
         frame_bg = aj.get_sprite_frame(self.BG, 0)
@@ -29,11 +29,11 @@ class TennisRenderer:
         frame_ball_shadow = aj.get_sprite_frame(self.BALL_SHADOW, 0)
         # calculate screen coordinates of ball
         ball_screen_x, ball_screen_y = self.perspective_transform(state.ball_state.ball_x, state.ball_state.ball_y)
-        raster = aj.render_at(raster, ball_screen_y, ball_screen_x, frame_ball_shadow)
+        raster = aj.render_at(raster, ball_screen_x, ball_screen_y, frame_ball_shadow)
 
         frame_ball = aj.get_sprite_frame(self.BALL, 0)
         # apply flat y offset depending on z value
-        raster = aj.render_at(raster, ball_screen_y - state.ball_state.ball_z, ball_screen_x, frame_ball)
+        raster = aj.render_at(raster, ball_screen_x, ball_screen_y - state.ball_state.ball_z, frame_ball)
 
         # visualize perspective transform
         """for i in range(0, GAME_HEIGHT):
@@ -54,28 +54,28 @@ class TennisRenderer:
         top_left_rec = top_left_rec.at[:, :, 3].set(255)  # Alpha
         top_left_corner_coords = self.perspective_transform(0, 0)
 
-        raster = aj.render_at(raster, top_left_corner_coords[1], top_left_corner_coords[0], top_left_rec)
+        raster = aj.render_at(raster, top_left_corner_coords[0], top_left_corner_coords[1], top_left_rec)
 
         top_right_rec = jnp.zeros((2, 2, 4))
         top_right_rec = top_right_rec.at[:, :, 2].set(255)  # Blue
         top_right_rec = top_right_rec.at[:, :, 3].set(255)  # Alpha
         top_right_corner_coords = self.perspective_transform(GAME_WIDTH, 0)
 
-        raster = aj.render_at(raster, top_right_corner_coords[1], top_right_corner_coords[0], top_right_rec)
+        raster = aj.render_at(raster, top_right_corner_coords[0], top_right_corner_coords[1], top_right_rec)
 
         bottom_left_rec = jnp.zeros((2, 2, 4))
         bottom_left_rec = bottom_left_rec.at[:, :, 1].set(255)  # Green
         bottom_left_rec = bottom_left_rec.at[:, :, 3].set(255)  # Alpha
         bottom_left_corner_coords = self.perspective_transform(0, GAME_HEIGHT)
 
-        raster = aj.render_at(raster, bottom_left_corner_coords[1], bottom_left_corner_coords[0], bottom_left_rec)
+        raster = aj.render_at(raster, bottom_left_corner_coords[0], bottom_left_corner_coords[1], bottom_left_rec)
 
         bottom_right_rec = jnp.zeros((2, 2, 4))
         bottom_right_rec = bottom_right_rec.at[:, :, 0].set(255)  # Red
         bottom_right_rec = bottom_right_rec.at[:, :, 3].set(255)  # Alpha
         bottom_right_corner_coords = self.perspective_transform(GAME_WIDTH, GAME_HEIGHT)
 
-        raster = aj.render_at(raster, bottom_right_corner_coords[1], bottom_right_corner_coords[0], bottom_right_rec)
+        raster = aj.render_at(raster, bottom_right_corner_coords[0], bottom_right_corner_coords[1], bottom_right_rec)
 
         #raster = aj.render_at(raster, 0, 0, rectangle)
 
