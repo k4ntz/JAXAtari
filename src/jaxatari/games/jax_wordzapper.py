@@ -18,8 +18,6 @@ from jaxatari.environment import JaxEnvironment, JAXAtariAction as Action
 # Constants for game environment
 MAX_SPEED = 12
 ENEMY_STEP_SIZE = 2
-WIDTH = 160
-HEIGHT = 210
 
 # Background color and object colors
 BACKGROUND_COLOR = 144, 72, 17
@@ -45,8 +43,12 @@ WALL_BOTTOM_Y = 194
 WALL_BOTTOM_HEIGHT = 16
 
 # Pygame window dimensions
-WINDOW_WIDTH = 210 * 3
-WINDOW_HEIGHT = 160 * 3
+WINDOW_WIDTH = 160 * 3
+WINDOW_HEIGHT = 210 * 3
+
+WIDTH = 160
+HEIGHT = 210
+SCALING_FACTOR = 3
 
 # define the positions of the state information
 STATE_TRANSLATOR: dict = {
@@ -600,77 +602,117 @@ if __name__ == "__main__":
     clock = pygame.time.Clock()
 
 
-    ##     game = JaxWordZapper() <-- eventual game
-
+    game = JaxWordZapper() # <-- eventual game
 
     # Initialize the renderer
-    renderer = WordZapperRenderer(screen)
+    renderer = WordZapperRenderer(screen) # TODO screen must not be a parameter eventually, see seaquest
 
-    # Define the spaceship rectangle
-    spaceship_rect = pygame.Rect(111, 365, 50, 30)  # Use Pygame Rect for rendering
+        # Get jitted functions
+    jitted_step = jax.jit(game.step)
+    jitted_reset = jax.jit(game.reset)
 
-    # Game loop
+    # # Define the spaceship rectangle
+    # spaceship_rect = pygame.Rect(111, 365, 50, 30)  # Use Pygame Rect for rendering
+
+    # # Game loop
+    # running = True
+    # while running:
+    #     for event in pygame.event.get():
+    #         if event.type == pygame.QUIT:
+    #             running = False
+
+    #     # Get player actions
+    #     actions = get_human_action()
+    #     for action in actions:
+    #         if action == "LEFT":
+    #             spaceship_rect.x -= 5
+    #         elif action == "RIGHT":
+    #             spaceship_rect.x += 5
+    #         elif action == "UP":
+    #             spaceship_rect.y -= 5
+    #         elif action == "DOWN":
+    #             spaceship_rect.y += 5
+    #         elif action == "FIRE":
+    #             print("FIRE")
+    #         elif action == "UPFIRE":
+    #             print("UPFIRE")
+    #         elif action == "DOWNFIRE":
+    #             print("DOWNFIRE")
+    #         elif action == "LEFTFIRE":
+    #             print("LEFTFIRE")
+    #         elif action == "RIGHTFIRE":
+    #             print("RIGHTFIRE")
+    #         elif action == "UPLEFTFIRE":
+    #             spaceship_rect.x -= 2.5
+    #             spaceship_rect.y -= 2.5
+    #             print("UPLEFTFIRE")
+    #         elif action == "UPRIGHTFIRE":
+    #             spaceship_rect.x += 2.5
+    #             spaceship_rect.y -= 2.5
+    #             print("UPRIGHTFIRE")
+    #         elif action == "DOWNLEFTFIRE":
+    #             spaceship_rect.x -= 2.5
+    #             spaceship_rect.y += 2.5
+    #             print("DOWNLEFTFIRE")
+    #         elif action == "DOWNRIGHTFIRE":
+    #             spaceship_rect.x += 2.5
+    #             spaceship_rect.y += 2.5
+    #             print("DOWNRIGHTFIRE")
+
+    #     # Prevent the spaceship from going out of bounds
+    #     if spaceship_rect.x < 0:
+    #         spaceship_rect.x = 0
+    #     if spaceship_rect.x > WINDOW_WIDTH - spaceship_rect.width:
+    #         spaceship_rect.x = WINDOW_WIDTH - spaceship_rect.width
+    #     if spaceship_rect.y < 0:
+    #         spaceship_rect.y = 0
+    #     if spaceship_rect.y > WINDOW_HEIGHT - spaceship_rect.height:
+    #         spaceship_rect.y = WINDOW_HEIGHT - spaceship_rect.height
+
+    #     current_time = 90 - pygame.time.get_ticks() // 1000
+            # Render the game
+    #     renderer.render(spaceship_rect, current_time)
+
+    #         # Initialize game and renderer
+
+    curr_obs, curr_state = jitted_reset()
+
+    # Game loop with rendering
     running = True
+    frame_by_frame = False
+    frameskip = 1
+    counter = 1
+
     while running:
         for event in pygame.event.get():
             if event.type == pygame.QUIT:
                 running = False
+            elif event.type == pygame.KEYDOWN:
+                if event.key == pygame.K_f:
+                    frame_by_frame = not frame_by_frame
+            elif event.type == pygame.KEYDOWN or (
+                event.type == pygame.KEYUP and event.key == pygame.K_n
+            ):
+                if event.key == pygame.K_n and frame_by_frame:
+                    if counter % frameskip == 0:
+                        action = get_human_action()
+                        curr_obs, curr_state, reward, done, info = jitted_step(
+                            curr_state, action
+                        )
+                        print(f"Observations: {curr_obs}")
+                        print(f"Reward: {reward}, Done: {done}, Info: {info}")
 
-        # Get player actions
-        actions = get_human_action()
-        for action in actions:
-            if action == "LEFT":
-                spaceship_rect.x -= 5
-            elif action == "RIGHT":
-                spaceship_rect.x += 5
-            elif action == "UP":
-                spaceship_rect.y -= 5
-            elif action == "DOWN":
-                spaceship_rect.y += 5
-            elif action == "FIRE":
-                print("FIRE")
-            elif action == "UPFIRE":
-                print("UPFIRE")
-            elif action == "DOWNFIRE":
-                print("DOWNFIRE")
-            elif action == "LEFTFIRE":
-                print("LEFTFIRE")
-            elif action == "RIGHTFIRE":
-                print("RIGHTFIRE")
-            elif action == "UPLEFTFIRE":
-                spaceship_rect.x -= 2.5
-                spaceship_rect.y -= 2.5
-                print("UPLEFTFIRE")
-            elif action == "UPRIGHTFIRE":
-                spaceship_rect.x += 2.5
-                spaceship_rect.y -= 2.5
-                print("UPRIGHTFIRE")
-            elif action == "DOWNLEFTFIRE":
-                spaceship_rect.x -= 2.5
-                spaceship_rect.y += 2.5
-                print("DOWNLEFTFIRE")
-            elif action == "DOWNRIGHTFIRE":
-                spaceship_rect.x += 2.5
-                spaceship_rect.y += 2.5
-                print("DOWNRIGHTFIRE")
+        if not frame_by_frame:
+            if counter % frameskip == 0:
+                action = get_human_action()
+                curr_obs, curr_state, reward, done, info = jitted_step(
+                    curr_state, action
+                )
 
-        # Prevent the spaceship from going out of bounds
-        if spaceship_rect.x < 0:
-            spaceship_rect.x = 0
-        if spaceship_rect.x > WINDOW_WIDTH - spaceship_rect.width:
-            spaceship_rect.x = WINDOW_WIDTH - spaceship_rect.width
-        if spaceship_rect.y < 0:
-            spaceship_rect.y = 0
-        if spaceship_rect.y > WINDOW_HEIGHT - spaceship_rect.height:
-            spaceship_rect.y = WINDOW_HEIGHT - spaceship_rect.height
-
-        # Calculate the current time
-        current_time = 90 - pygame.time.get_ticks() // 1000
-
-        # Render the game
-        renderer.render(spaceship_rect, current_time)
-
-        # Control the frame rate
+        # render and update pygame
+        raster = renderer.render(curr_state)
+        aj.update_pygame(screen, raster, SCALING_FACTOR, WIDTH, HEIGHT)
+        counter += 1
         clock.tick(60)
 
         current_time = 90 - pygame.time.get_ticks() // 1000
