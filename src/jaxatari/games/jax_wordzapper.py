@@ -520,32 +520,31 @@ class JaxWordZapper(JaxEnvironment[WordZapperState, WordZapperObservation, WordZ
     def step(
         self, state: WordZapperState, action: chex.Array
     ) -> Tuple[WordZapperObservation, WordZapperState, float, bool, WordZapperInfo]:
-        
+        super().step(state, action)
+
         previous_state = state
         _, reset_state = self.reset()
 
         def normal_game_step():
             # Step player
-            new_player_x, new_player_y, new_palyer_direction = player_step(
-                state,
+            new_player_x, new_player_y, new_player_speed, new_cooldown_timer, fired = player_step(
+                state.player_x,
+                state.player_y,
+                state.player_speed,
+                state.cooldown_timer,
                 action,
             )
 
             # Step letters
-            #new_letters_x = scrolling_letters(state.letters_x, state.letters_speed, state.letters_alive)
-
-            new_step_counter = jnp.where(
-                state.step_counter == 1024,
-                jnp.array(0),
-                state.step_counter + 1,
-            )
+            new_letters_x = scrolling_letters(state.letters_x, state.letters_speed, state.letters_alive)
 
             new_state = state._replace(
                 player_x=new_player_x,
                 player_y=new_player_y,
-                player_direction=new_palyer_direction,
-                #letters_x=new_letters_x,
-                step_counter=new_step_counter,
+                player_speed=new_player_speed,
+                cooldown_timer=new_cooldown_timer,
+                letters_x=new_letters_x,
+                step_counter=state.step_counter + 1,
             )
             return new_state
 
@@ -557,7 +556,7 @@ class JaxWordZapper(JaxEnvironment[WordZapperState, WordZapperObservation, WordZ
         all_rewards = self._get_all_rewards(previous_state, return_state)
         info = self._get_info(return_state, all_rewards)
 
-        return observation, return_state, env_reward, done, info
+        return observation, new_state, env_reward, done, info
 
 
 class WordZapperRenderer(AtraJaxisRenderer):
