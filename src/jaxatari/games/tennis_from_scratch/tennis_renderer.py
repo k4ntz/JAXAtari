@@ -48,6 +48,14 @@ class TennisRenderer:
 
         #raster = aj.render_at(raster, screen_x, screen_y, frame_ball)
 
+        player_rec = jnp.zeros((5, 5, 4))
+        player_rec = player_rec.at[:, :, 1].set(255)  # Yellow
+        player_rec = player_rec.at[:, :, 0].set(255)  # Yellow
+        player_rec = player_rec.at[:, :, 3].set(255)  # Alpha
+        player_coords = self.perspective_transform(state.player_x, state.player_y)
+
+        raster = aj.render_at(raster, player_coords[0], player_coords[1], player_rec)
+
         top_left_rec = jnp.zeros((2, 2, 4))
         top_left_rec = top_left_rec.at[:, :, 1].set(255)  # Yellow
         top_left_rec = top_left_rec.at[:, :, 0].set(255)  # Yellow
