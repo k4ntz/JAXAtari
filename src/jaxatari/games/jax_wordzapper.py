@@ -144,6 +144,8 @@ class WordZapperState(NamedTuple):
         chex.Array
     ) # (26,1) y coorinate does not change and deined in LETTERS_Y
 
+    player_missile_position: chex.Array  # shape: (3,) -> [x, y, direction]
+
     current_word: chex.Array # the actual word
     current_letter_index: chex.Array
 
@@ -464,7 +466,9 @@ class JaxWordZapper(JaxEnvironment[WordZapperState, WordZapperObservation, WordZ
     
     @partial(jax.jit, static_argnums=(0,))
     def _get_done(self, state: WordZapperState) -> bool:
-        pass
+        """Check if the game should end due to timer expiring."""
+        MAX_TIME = 60 * 90  # 90 seconds at 60 FPS
+        return state.timer >= MAX_TIME
 
     @partial(jax.jit, static_argnums=(0,))
     def _get_env_reward(self, previous_state: WordZapperState, state: WordZapperState):
@@ -540,26 +544,52 @@ class WordZapperRenderer(AtraJaxisRenderer):
         self.wordzapper_rect = jnp.array([0, 0, 800, 100])  # Title bar
         self.spaceship_rect = jnp.array([111, 365, 50, 30])  # Spaceship
 
-    def render(self, spaceship_rect, current_time):
+    def render(self, state: WordZapperState):
         """
-        Render all game elements on the screen.
+        Render all game elements based on current WordZapperState (JAX).
         """
-        # Fill the screen with the background color
-        self.screen.fill(self.background_color)  # Use Pygame's fill method
+        self.screen.fill(self.background_color)
 
-        # Render the title bar
-        pygame.draw.rect(self.screen, self.title_color, self.wordzapper_rect)
+        # 🎯 Draw the player spaceship
+        player_rect = pygame.Rect(
+            int(state.player_x.item()),
+            int(state.player_y.item()),
+            PLAYER_SIZE[0],
+            PLAYER_SIZE[1],
+        )
+        pygame.draw.rect(self.screen, self.spaceship_color, player_rect)
 
-        # Render the spaceship
-        pygame.draw.rect(self.screen, self.spaceship_color, spaceship_rect)
+        # 🚀 Draw player missile if active
+        missile_x, missile_y, direction = state.player_missile_position
+        if missile_x > 0 and missile_y > 0 and direction != 0:
+            missile_rect = pygame.Rect(int(missile_x.item()), int(missile_y.item()), 2, 6)
+            pygame.draw.rect(self.screen, (255, 255, 0), missile_rect)  # Yellow
 
-        # Render the time
+        # 🔡 Draw scrolling letters
+        for i in range(len(state.letters_x)):
+            if state.letters_alive[i] == 1:
+                char_code = int(state.letters_char[i].item())
+                letter_x = int(state.letters_x[i].item())
+                letter_y = int(state.letters_y[i].item())
+                letter_char = chr(char_code)
+
+                font = pygame.font.SysFont(None, 24)
+                letter_surface = font.render(letter_char, True, self.text_color)
+                self.screen.blit(letter_surface, (letter_x, letter_y))
+
+        # 🧱 Draw asteroid if alive
+        if state.asteroid_alive.item() == 1:
+            asteroid_rect = pygame.Rect(
+                int(state.asteroid_x.item()), int(state.asteroid_y.item()), 8, 8
+            )
+            pygame.draw.rect(self.screen, (128, 128, 128), asteroid_rect)
+
+        # 🕒 Draw timer
         font = pygame.font.SysFont(None, 36)
-        time_surf = font.render(f"TIME: {current_time}", True, self.text_color)
-        self.screen.blit(time_surf, (400, 50))
+        time_surface = font.render(f"TIME: {int(state.timer.item())}", True, self.text_color)
+        self.screen.blit(time_surface, (10, 10))
 
-        # Update the display
-        pygame.display.update()  # Use Pygame's display update method
+        pygame.display.update()
 
 
 if __name__ == "__main__":
@@ -642,5 +672,8 @@ if __name__ == "__main__":
 
         # Control the frame rate
         clock.tick(60)
+
+        current_time = 90 - pygame.time.get_ticks() // 1000
+        renderer.render(curr_state, current_time)
 
     pygame.quit()
