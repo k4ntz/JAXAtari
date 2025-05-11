@@ -251,178 +251,15 @@ def flipper_step(state: VideoPinballState, action: chex.Array):
 
 @jax.jit
 def _check_all_obstacle_hits(
-    ball_x: chex.Array,
-    ball_y: chex.Array,
+    old_ball_x: chex.Array,
+    old_ball_y: chex.Array,
+    new_ball_x: chex.Array,
+    new_ball_y: chex.Array,
     ball_direction: chex.Array,
 ) -> bool:
     """
     Check if the ball is hitting an obstacle.
-    """
 
-    # TOP_WALL
-    top_wall_hit = check_specific_object_hit(
-        ball_x=ball_x,
-        ball_y=ball_y,
-        ball_direction=ball_direction,
-        hit_box_matrix=TOP_WALL_BOUNDING_BOX,
-        hit_box_offset=TOP_WALL_OFFSET,
-    )
-
-    # Use vmap
-
-
-@jax.jit
-def _calc_bounding_box_border_distance(
-    ball_x: chex.Array,
-    ball_y: chex.Array,
-    hit_box_matrix: chex.Array,
-    hit_box_offset: chex.Array,
-) -> chex.Array:
-    """
-    Calculate the distance between the ball center and each outer bounding box border.
-    """
-
-    # Calc distance top border
-    dist_top_border = ball_y - hit_box_offset[1]
-    # Calc distance bottom border
-    dist_bottom_border = hit_box_offset[1] + hit_box_matrix.shape[-1] - ball_y
-    # Calc distance left border
-    dist_left_border = ball_x - hit_box_offset[0]
-    # Calc distance right border
-    dist_right_border = hit_box_offset[0] + hit_box_matrix.shape[-2] - ball_x
-
-    return dist_top_border, dist_right_border, dist_bottom_border, dist_left_border
-
-
-@jax.jit
-def _calc_hit_bounding_box_borders(
-    ball_x: chex.Array,
-    ball_y: chex.Array,
-    ball_direction: chex.Array,
-    hit_box_matrix: chex.Array,
-    hit_box_offset: chex.Array,
-) -> chex.Array:
-    """
-    Calculate which borders were hit by the ball.
-    
-    We do this by checking which direction is coming from and then check for the two relevant borders,
-    i.e. those facing the direction of the ball which border is closer to the ball.
-    This border is assumed as the one that was hit.
-    """
-
-    dist_top_border, dist_right_border, dist_bottom_border, dist_left_border = (
-        _calc_bounding_box_border_distance(
-            ball_x, ball_y, hit_box_matrix, hit_box_offset
-        )
-    )
-    distances_array = jnp.array(
-        [dist_top_border, dist_right_border, dist_bottom_border, dist_left_border]
-    )
-
-    # Relevant borders
-    # For direction 0: right, bottom
-    # For direction 1: top, right
-    # For direction 2: left, bottom
-    # For direction 3: top, left
-
-    border_relevancy = jax.lax.switch(
-        index=ball_direction,
-        branches=[
-            lambda x: jnp.array([False, True, True, False]),  # right, bottom
-            lambda x: jnp.array([True, True, False, False]),  # top, right
-            lambda x: jnp.array([False, False, True, True]),  # left, bottom
-            lambda x: jnp.array([True, False, False, True]),  # top, left
-        ],
-        operand=jnp.array(
-            [dist_top_border, dist_right_border, dist_bottom_border, dist_left_border]
-        ),
-    )
-    is_dist_relevant_borders_equal = (
-        distances_array[border_relevancy][0] == distances_array[border_relevancy][1]
-    )
-
-    smaller_distance_index = jnp.argmin(distances_array[border_relevancy], axis=0)
-
-    # Create an array for each of the branches above, one version where the first True is set to False and one where the second True is set to False
-    top_border_hit = jnp.array([True, False, False, False])
-    right_border_hit = jnp.array([False, True, False, False])
-    bottom_border_hit = jnp.array([False, False, True, False])
-    left_border_hit = jnp.array([False, False, False, True])
-
-    """
-    If border_relevancy is right bottom and the smaller_distance_index is 0, then the ball hit the right border
-    If border_relevancy is right bottom and the smaller_distance_index is 1, then the ball hit the bottom border
-    If border_relevancy is top right and the smaller_distance_index is 0, then the ball hit the top border
-    If border_relevancy is top right and the smaller_distance_index is 1, then the ball hit the right border
-    If border_relevancy is left bottom and the smaller_distance_index is 0, then the ball hit the bottom border
-    If border_relevancy is left bottom and the smaller_distance_index is 1, then the ball hit the left border
-    If border_relevancy is top left and the smaller_distance_index is 0, then the ball hit the top border
-    If border_relevancy is top left and the smaller_distance_index is 1, then the ball hit the left border
-    """
-
-    # Do an and operation between the border_relevancy and the xxx_border_hit array relevant
-    single_border_relevancy = jax.lax.switch(
-        index=ball_direction * 2 + smaller_distance_index,
-        branches=[
-            lambda x: jnp.logical_and(
-                border_relevancy, right_border_hit
-            ),  # right, bottom
-            lambda x: jnp.logical_and(
-                border_relevancy, bottom_border_hit
-            ),  # right, bottom
-            lambda x: jnp.logical_and(border_relevancy, top_border_hit),  # top, right
-            lambda x: jnp.logical_and(border_relevancy, right_border_hit),  # top, right
-            lambda x: jnp.logical_and(
-                border_relevancy, bottom_border_hit
-            ),  # left, bottom
-            lambda x: jnp.logical_and(
-                border_relevancy, left_border_hit
-            ),  # left, bottom
-            lambda x: jnp.logical_and(border_relevancy, top_border_hit),  # top, left
-            lambda x: jnp.logical_and(border_relevancy, left_border_hit),  # top, left
-        ],
-    )
-
-    return jnp.lax.cond(
-        is_dist_relevant_borders_equal, border_relevancy, single_border_relevancy
-    )
-
-
-@jax.jit
-def _check_specific_object_hit(
-    ball_x: chex.Array,
-    ball_y: chex.Array,
-    ball_direction: chex.Array,
-    hit_box_matrix: chex.Array,
-    hit_box_offset: chex.Array,
-) -> chex.Array:
-    """
-    Check if the ball is hitting the specific object.
-    """
-
-    is_south_east_of_top_left_bounding_point = jnp.logical_and(
-        ball_x > hit_box_offset[0], ball_y > hit_box_offset_y
-    )
-    is_north_west_of_bottom_right_bounding_point = jnp.logical_and(
-        ball_x < hit_box_offset_x + hit_box_matrix.shape[-2],
-        ball_y < hit_box_offset_y + hit_box_matrix.shape[-1],
-    )
-    is_ball_inside_bounding_box = jnp.logical_and(
-        is_south_east_of_top_left_bounding_point,
-        is_north_west_of_bottom_right_bounding_point,
-    )
-
-    # Check which bounding box borders were hit (allows multiple at the same time)
-    return jnp.cond(
-        is_ball_inside_bounding_box,
-        lambda x: _calc_hit_bounding_box_borders(x),
-        lambda x: jnp.array([False, False, False, False]),
-        operand=(ball_x, ball_y, ball_direction, hit_box_matrix, hit_box_offset),
-    )
-
-
-@jax.jit
-def _calculate_wall_hit(ball_x, ball_y, ball_direction):
     # top, left, right bottom, outer walls
 
     # left, right inner walls
@@ -433,7 +270,80 @@ def _calculate_wall_hit(ball_x, ball_y, ball_direction):
     # lit up targets
     # rollovers (left & atari)
     # spinner
-    pass
+    """
+
+    # TOP_WALL
+    top_wall_hit = _check_specific_object_hit(
+    old_ball_x: chex.Array,
+    old_ball_y: chex.Array,
+    new_ball_x: chex.Array,
+    new_ball_y: chex.Array,
+        ball_direction=ball_direction,
+        hit_box_matrix=TOP_WALL_BOUNDING_BOX,
+        hit_box_offset=TOP_WALL_OFFSET,
+    )
+
+
+@jax.jit
+def _calc_hit_bounding_box_borders(
+    old_ball_x: chex.Array,
+    old_ball_y: chex.Array,
+    new_ball_x: chex.Array,
+    new_ball_y: chex.Array,
+    ball_direction: chex.Array,
+    hit_box_matrix: chex.Array,
+    hit_box_offset: chex.Array,
+) -> chex.Array:
+    """
+    Calculate which borders were hit by the ball.
+    """
+
+
+@jax.jit
+def _calc_hit_point(
+    old_ball_x: chex.Array,
+    old_ball_y: chex.Array,
+    new_ball_x: chex.Array,
+    new_ball_y: chex.Array,
+    ball_direction: chex.Array,
+    hit_box_matrix: chex.Array,
+    hit_box_offset: chex.Array,
+) -> chex.Array:
+    """
+    Calculate the hit point of the ball with the bounding box.
+    Uses the slab method also known as ray AABB collision.
+    """
+    
+    # Calculate trajectory of the ball in x and y direction
+    trajectory_x = new_ball_x - old_ball_x
+    trajectory_y = new_ball_y - old_ball_y
+    
+    # Force non-zero trajectory values to avoid division by zero
+    trajectory_x = jax.lax.cond(trajectory_x == 0, lambda x: jnp.array(1e-8), lambda x: x, operand=trajectory_x)
+    trajectory_y = jax.lax.cond(trajectory_y == 0, lambda x: jnp.array(1e-8), lambda x: x, operand=trajectory_y)
+    
+    tx1 = (hit_box_offset[0] - old_ball_x) / trajectory_x
+    tx2 = (hit_box_offset[0] + hit_box_matrix.shape[-2] - old_ball_x) / trajectory_x
+    ty1 = (hit_box_offset[1] - old_ball_y) / trajectory_y
+    ty2 = (hit_box_offset[1] + hit_box_matrix.shape[-1] - old_ball_y) / trajectory_y
+
+    # Calculate the time of intersection with the bounding box
+    tmin_x = jnp.minimum(tx1, tx2)
+    tmax_x = jnp.maximum(tx1, tx2) 
+    tmin_y = jnp.minimum(ty1, ty2)
+    tmax_y = jnp.maximum(ty1, ty2)
+
+    # Calculate the time of entry and exit
+    t_entry = jnp.maximum(tmin_x, tmin_y)
+    t_exit = jnp.minimum(tmax_x, tmax_y)
+
+    # t_entry > t_exit means that the ball is not colliding with the bounding box, because it has already passed it
+    no_collision = jnp.logical_or(t_entry > t_exit, t_entry > 1)    
+    no_collision = jnp.logical_or(no_collision, t_entry < 0)
+    
+    hit_point = jnp.array([old_ball_x + t_entry * trajectory_x, old_ball_y + t_entry * trajectory_y])
+    
+    return jax.lax.cond(no_collision, lambda _: jnp.array([-1, -1]), lambda _: hit_point)
 
 
 @jax.jit
