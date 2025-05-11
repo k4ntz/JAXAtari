@@ -19,7 +19,7 @@ HEIGHT = 210
 # TODO: check if these are correct
 GRAVITY = 3  # 0.12
 BALL_MAX_SPEED = 6.0
-FLIPPER_MAX_STRENGTH = 3
+FLIPPER_MAX_ANGLE = 3
 PLUNGER_MAX_POSITION = 20
 
 # Game layout constants
@@ -46,17 +46,25 @@ BALL_START_DIRECTION = jnp.array(0)
 WINDOW_WIDTH = 160 * 3
 WINDOW_HEIGHT = 210 * 3
 
-# TODO: check if these are correct
 WALL_TOP_Y = 16
 WALL_LEFT_X = 0
-WALL_RIGHT_X = 160
-WALL_BOTTOM_Y = 200
+WALL_RIGHT_X = 159
+WALL_BOTTOM_Y = 191
 
-# TODO: check if these are correct
-WALL_TOP_HEIGHT = 5
-WALL_BOTTOM_HEIGHT = 5
-WALL_LEFT_HEIGHT = 5
-WALL_RIGHT_HEIGHT = 5
+OUTER_WALL_THICKNESS = 8
+
+WALL_CORNER_BLOCK_WIDTH = 4
+WALL_CORNER_BLOCK_HEIGHT = 8
+
+INNER_WALL_TOP_Y = 56
+INNER_WALL_TOP_X = 12
+
+INNER_WALL_THICKNESS = 4
+
+MIDDLE_BAR_Y = 72
+MIDDLE_BAR_X = 104
+MIDDLE_BAR_WIDTH = 16
+MIDDLE_BAR_HEIGHT = 8
 
 # define the positions of the state information
 STATE_TRANSLATOR: dict = {
@@ -192,7 +200,7 @@ def flipper_step(state: VideoPinballState, action: chex.Array):
 
     left_flipper_angle = jax.lax.cond(
         jnp.logical_and(
-            action == Action.LEFT, state.left_flipper_angle < FLIPPER_MAX_STRENGTH
+            action == Action.LEFT, state.left_flipper_angle < FLIPPER_MAX_ANGLE
         ),
         lambda a: a + 1,
         lambda a: a,
@@ -201,7 +209,7 @@ def flipper_step(state: VideoPinballState, action: chex.Array):
 
     right_flipper_angle = jax.lax.cond(
         jnp.logical_and(
-            action == Action.RIGHT, state.right_flipper_angle < FLIPPER_MAX_STRENGTH
+            action == Action.RIGHT, state.right_flipper_angle < FLIPPER_MAX_ANGLE
         ),
         lambda a: a + 1,
         lambda a: a,
@@ -231,9 +239,32 @@ def hit_obstacle_to_left(
         ),
     )
 
+@jax.jit
+def _tmp(
+    
+):
+    pass
+
+@jax.jit
+def _calculate_wall_hit(
+    ball_x,
+    ball_y,
+    ball_direction
+):
+    # top, left, right bottom, outer walls
+
+    # left, right inner walls
+    # middle bar
+    # corner boxes top left, right, bottom left, right
+    # bumper
+    # drop targets
+    # lit up targets
+    # rollovers (left & atari)
+    # spinner
 
 def ball_step(
     state: VideoPinballState,
+    plunger_power,
     action,
 ):
     """
@@ -249,20 +280,20 @@ def ball_step(
     """
     # Add plunger power to the ball velocity, only set to non-zero value once fired
     ball_vel_y = jnp.where(
-        state.plunger_position * 2 > 0,
-        ball_vel_y + state.plunger_position * 2,
+        plunger_power > 0,
+        ball_vel_y + plunger_power,
         ball_vel_y,
     )
 
     """
-    Paddle calculation
+    Flipper calculation
     """
     # Check if the ball is hitting a paddle
 
     """
     Obstacle hit calculation
     """
-    # Iterate over all other rigid objects in the game and check if the ball is hitting them
+    new_ball_direction, _ball_vel_x, _ball_vel_y = _get_obstacle_hit_direction()
 
     """
     Gravity calculation
@@ -271,7 +302,7 @@ def ball_step(
     # immediately deduct the gravity from the velocity
     # Direction has to be figured into the gravity calculation
     gravity_delta = jnp.where(
-        jnp.logical_or(ball_direction == 0, ball_direction == 2), -GRAVITY, GRAVITY
+        jnp.logical_or(ball_direction == 0, ball_direction == 2), GRAVITY, -GRAVITY
     )  # Subtract gravity if the ball is moving up otherwise add it
     ball_vel_y = jnp.where(state.ball_in_play, ball_vel_y + gravity_delta, ball_vel_y)
     ball_direction = jnp.where(
@@ -311,14 +342,14 @@ def ball_step(
     ball_vel_y = jnp.where(state.ball_in_play, ball_vel_y, jnp.array(0))
 
     # TODO add ball_in_play to return and if plunger hit set to True
-    return ball_x, ball_y, ball_direction, ball_vel_x, ball_vel_y
+    return ball_x, ball_y, ball_direction, ball_vel_x, ball_vel_y, 
 
 
 @jax.jit
-def _reset_ball_after_losing_life(state: VideoPinballState):
+def _reset_ball(state: VideoPinballState):
     """
-    When the ball goes into the gutter and you lose a life, respawn the ball on the launcher
-    and possibly adjust the ball/life counter
+    When the ball goes into the gutter or into the plunger hole,
+    respawn the ball on the launcher.
     """
     return BALL_START_X, BALL_START_Y, 0, 0
 
@@ -353,7 +384,7 @@ class JaxVideoPinball(
             ball_y=jnp.array(BALL_START_Y).astype(jnp.int32),
             ball_vel_x=jnp.array(0).astype(jnp.int32),
             ball_vel_y=jnp.array(0).astype(jnp.int32),
-            ball_direction=jnp.array(0).astype(jnp.int32),  # Necessary?
+            ball_direction=jnp.array(0).astype(jnp.int32),
             left_flipper_angle=jnp.array(0).astype(jnp.int32),
             right_flipper_angle=jnp.array(0).astype(jnp.int32),
             plunger_position=jnp.array(0).astype(jnp.int32),
@@ -363,10 +394,10 @@ class JaxVideoPinball(
             bumpers_active=jnp.array([1, 1, 1]).astype(jnp.int32),
             targets_hit=jnp.array([1, 1, 1]).astype(jnp.int32),
             step_counter=jnp.array(0).astype(jnp.int32),
-            ball_in_play=jnp.array(True).astype(jnp.bool),
+            ball_in_play=jnp.array(False).astype(jnp.bool),
         )
         initial_obs = self._get_observation(state)
-        return state, initial_obs  # , initial_obs
+        return initial_obs, state  # , initial_obs
 
     @partial(jax.jit, static_argnums=(0,))
     def step(
@@ -377,17 +408,21 @@ class JaxVideoPinball(
         # chex provides jax with additional debug/testing functionality.
         # Probably best to use it instead of simply jnp.array
 
-        # Step 1: Update ball position and velocity
+        # Step 1: Update Plunger and Flippers
+        plunger_position, plunger_power = plunger_step(state, action)
+        left_flipper_angle, right_flipper_angle = flipper_step(state, action)
+
+        # Step 2: Update ball position and velocity
         ball_x, ball_y, ball_direction, ball_vel_x, ball_vel_y = ball_step(
-            state, action
+            state, plunger_power, action
         )
 
-        # Step 2: Check if ball is in the gutter
-        ball_reset = ball_y > 192
-
-        # Step 3: Update Plunger and Flippers
-        plunger_position, plunger_strength = plunger_step(state, action)
-        left_flipper_angle, right_flipper_angle = flipper_step(state, action)
+        # Step 3: Check if ball is in the gutter or in plunger hole
+        ball_in_gutter = ball_y > 192
+        ball_reset = jnp.logical_or(
+            ball_in_gutter,
+            jnp.logical_and(jnp.logical_and(ball_x > 148, ball_y > 128, state.ball_in_play))
+        )
 
         # Step 4: Update scores
         score = jnp.array(0).astype(jnp.int32)
@@ -406,13 +441,13 @@ class JaxVideoPinball(
         )
         ball_x_final, ball_y_final, ball_vel_x_final, ball_vel_y_final = jax.lax.cond(
             ball_reset,
-            lambda x: _reset_ball_after_losing_life(state),
+            lambda x: _reset_ball(state),
             lambda x: x,
             operand=current_values,
         )
 
         lives = jax.lax.cond(
-            ball_reset,
+            ball_in_gutter,
             lambda x: x
             + 1,  # Because it's not really lives but more like a ball count? You start at 1 and it goes up to 3
             lambda x: x,
@@ -454,7 +489,7 @@ class JaxVideoPinball(
         # )
         # new_state = new_state._replace(obs_stack=observation)
 
-        return new_state, observation, env_reward, done, info
+        return observation, new_state, env_reward, done, info
 
     @partial(jax.jit, static_argnums=(0,))
     def _get_observation(self, state: VideoPinballState):
@@ -965,7 +1000,7 @@ if __name__ == "__main__":
     jitted_step = jax.jit(game.step)
     jitted_reset = jax.jit(game.reset)
 
-    curr_state, obs = jitted_reset(prng_key=prng_key)
+    obs, curr_state = jitted_reset(prng_key=prng_key)
 
     # Game loop
     running = True
@@ -989,7 +1024,7 @@ if __name__ == "__main__":
                         # If frame-by-frame mode activated and next frame is requested,
                         # get human (game) action and perform step
                         action = get_human_action()
-                        curr_state, obs, reward, done, info = jitted_step(
+                        obs, curr_state, reward, done, info = jitted_step(
                             curr_state, action
                         )
 
@@ -999,7 +1034,7 @@ if __name__ == "__main__":
             if counter % frameskip == 0:
                 action = get_human_action()
                 # Update game step
-                curr_state, obs, reward, done, info = jitted_step(curr_state, action)
+                obs, curr_state, reward, done, info = jitted_step(curr_state, action)
 
         # Render and display
         raster = renderer.render(curr_state)
