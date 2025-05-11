@@ -11,6 +11,7 @@ from gymnax.environments import spaces
 from jaxatari.rendering import atraJaxis as aj
 from jaxatari.environment import JaxEnvironment
 
+import json
 
 # Game Environment
 WIDTH = 160
@@ -327,6 +328,10 @@ def field_step(field_choice, curr_state, white_player):  # -> valid_choice, new_
         )
 
         return valid_choice, new_state
+    
+    #jax.debug.print(str(curr_state.player_score))
+    #TODO make bot only run, when player move is valid && handle return
+    get_bot_move(curr_state.field, curr_state.difficulty, curr_state.player_score, curr_state.enemy_score)
 
     return jax.lax.cond(
         curr_state.field.field_color[x, y] == FieldColor.EMPTY,
@@ -345,55 +350,59 @@ def get_bot_move(game_field: Field, difficulty: chex.Array, player_score: chex.A
     list_of_all_moves = jnp.arange(64)
 
     #Iterate over the game field using vmap
-    vectorized_compute_score_of_tiles = jax.vmap(compute_score_of_tiles, in_axes=(0, None, None, None))
+    vectorized_compute_score_of_tiles = jax.vmap(compute_score_of_tiles, in_axes=(0, None, None))
     list_of_all_move_values = vectorized_compute_score_of_tiles(list_of_all_moves, game_field, game_score)
+    #TODO Determine best move amongst list_of_all_move_values
+    return 0
 
-    def compute_score_of_tiles(i, game_field, game_score):
-        # Decode tile position
-        tile_x = jnp.floor_divide(i, 8)
-        tile_y = jnp.mod(i, 8)
+def compute_score_of_tiles(i, game_field, game_score):
+    # Decode tile position
+    tile_x = jnp.floor_divide(i, 8)
+    tile_y = jnp.mod(i, 8)
 
-        # If tile is already taken, set invalid move (return very low score)
-        score_of_tile = jax.lax.cond(
-            game_field.field.field_color[tile_x, tile_y] != FieldColor.EMPTY,
-            lambda _: -2147483648,  
-            lambda _: compute_score_of_tile_1(tile_x, tile_y,game_field game_score),  
-            None
-        )
-        return score_of_tile
-
-    def compute_score_of_tile_1(tile_x, tile_y, game_field, game_score):
-        #compute flipped tiles by each direction
-        list_of_all_directions = jnp.arange(8)
-        vectorised_flipped_tiles_by_direction = jax.vmap(compute_flipped_tiles_by_direction,in_axes=(0, None, None, None))
-        flipped_tiles_by_direction = vectorized_compute_score_of_tiles(list_of_all_directions, tile_x, tile_y, game_field)
-
-        flipped_tiles = jnp.sum(flipped_tiles_by_direction)
-        # If no tiles were flipped, set invalid move (return very low score)
-        score_of_tile = jax.lax.cond(
-            flipped_tiles == 0,
-            lambda _: -2147483648,  
-            lambda _: 0,  
-            None
-        )
-
-        # Adjust for game stage
-        score_of_tile = jax.lax.cond(
-            score_of_tile == -2147483648,
-            lambda _: score_of_tile,  
-            lambda _: jax.lax.cond(  
-                jnp.logical_or(game_score < 18, game_score > 41),  
-                lambda _: -flipped_tiles - 1,  
-                lambda _: flipped_tiles,  
-                None
-            ),
-            None
-        )
-
+    # If tile is already taken, set invalid move (return very low score)
+    score_of_tile = jax.lax.cond(
+        game_field.field_color[tile_x, tile_y] != FieldColor.EMPTY,
+        lambda _: jnp.int32(-2147483648),  
+        lambda _: jnp.int32(compute_score_of_tile_1(tile_x, tile_y,game_field, game_score)),  
+        None
+    )
     return score_of_tile
 
-def compute_flipped_tiles_by_direction():
-    #TODO implement
+def compute_score_of_tile_1(tile_x, tile_y, game_field, game_score):
+    #compute flipped tiles by each direction
+    list_of_all_directions = jnp.arange(8)
+    vectorised_flipped_tiles_by_direction = jax.vmap(compute_flipped_tiles_by_direction,in_axes=(0, None, None, None))
+    flipped_tiles_by_direction = vectorised_flipped_tiles_by_direction(list_of_all_directions, tile_x, tile_y, game_field)
+
+    flipped_tiles = jnp.sum(flipped_tiles_by_direction)
+    # If no tiles were flipped, set invalid move (return very low score)
+    score_of_tile = jax.lax.cond(
+        flipped_tiles == 0,
+        lambda _: -2147483648,  
+        lambda _: 0,  
+        None
+    )
+
+    # Adjust for game stage
+    score_of_tile = jax.lax.cond(
+        score_of_tile == -2147483648,
+        lambda _: score_of_tile,  
+        lambda _: jax.lax.cond(  
+            jnp.logical_or(game_score < 18, game_score > 41),  
+            lambda _: -flipped_tiles - 1,  
+            lambda _: flipped_tiles,  
+            None
+        ),
+        None
+    )
+    return score_of_tile
+    
+
+
+def compute_flipped_tiles_by_direction(i, tile_x, tile_y, game_field):
+    #TODO implement 
+
     return 0
 
 
