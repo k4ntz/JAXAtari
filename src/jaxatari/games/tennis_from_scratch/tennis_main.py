@@ -38,9 +38,8 @@ class TennisState(NamedTuple):
     ball_state: chex.Array = BallState(50, 0, 0, 0, 0)
     counter : chex.Array = 0
 
-
 #@partial(jax.jit, static_argnums=(0,))
-def tennis_step(state: TennisState) -> TennisState:
+def tennis_step(state: TennisState, action) -> TennisState:
     new_ball_state = ball_step(state.ball_state)
 
     return TennisState(state.player_x, state.player_y, new_ball_state, state.counter + 1)
@@ -106,7 +105,7 @@ if __name__ == "__main__":
                 running = False
 
         # Update logic
-        current_state = jitted_step(current_state)
+        current_state = jitted_step(current_state, 0)
 
         # Render and display
         raster = renderer.render(current_state)
