@@ -423,7 +423,7 @@ class JaxVideoPinball(
             ball_y=ball_y_final,
             ball_vel_x=ball_vel_x_final,
             ball_vel_y=ball_vel_y_final,
-            ball_direction=ball_direction,  # Necessary?
+            ball_direction=ball_direction,
             left_flipper_angle=left_flipper_angle,
             right_flipper_angle=right_flipper_angle,
             plunger_position=plunger_position,
@@ -837,7 +837,7 @@ if __name__ == "__main__":
     # Initialize Pygame
     pygame.init()
     screen = pygame.display.set_mode((WINDOW_WIDTH, WINDOW_HEIGHT))
-    pygame.display.set_caption("Pong Game")
+    pygame.display.set_caption("VideoPinball Game")
     clock = pygame.time.Clock()
 
     game = JaxVideoPinball(frameskip=1)
