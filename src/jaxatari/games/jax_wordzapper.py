@@ -36,7 +36,8 @@ LETTERS_Y = 20
 PLAYER_SIZE = (4, 16)
 ASTEROID_SIZE = (8, 7)
 MISSILE_SIZE = (8, 1)
-LETTER_SIZE = (8,7)
+LETTER_SIZE = (8, 7)
+TIMER_SIZE = (8, 8)
 WALL_TOP_Y = 24
 WALL_TOP_HEIGHT = 10
 WALL_BOTTOM_Y = 194
@@ -186,6 +187,33 @@ class WordZapperInfo(NamedTuple):
     game_over: jnp.ndarray
 
 
+def load_sprites():
+    """Load all sprites required for Word Zapper rendering."""
+    def make_rect(h, w, color):
+        return jnp.ones((h, w, 3), dtype=jnp.uint8) * jnp.array(color, dtype=jnp.uint8)
+
+    ## TODO for now just rectangles, no sprites
+    SPRITE_BG = make_rect(WINDOW_WIDTH, WINDOW_HEIGHT, [0, 0, 0]) 
+
+    SPRITE_PLAYER = make_rect(PLAYER_SIZE[0], PLAYER_SIZE[1], [0, 0, 255]) 
+
+    TIMER_INDICATOR = make_rect(TIMER_SIZE[0], TIMER_SIZE[1], [0, 255, 0]) 
+    
+    return (
+        SPRITE_BG,
+        SPRITE_PLAYER,
+        TIMER_INDICATOR,
+    )
+
+
+# Load sprites once at module level
+(
+    SPRITE_BG,
+    SPRITE_PLAYER,
+    TIMER_INDICATOR,
+) = load_sprites()
+
+
 @jax.jit
 def player_step(
     player_x: chex.Array,
@@ -292,12 +320,6 @@ def player_missile_step(
 
 
 def shooting_letter():
-    pass
-
-
-def load_sprites():
-    """Load all sprites required for Word Zapper rendering."""
-    #TODO
     pass
 
 class JaxWordZapper(JaxEnvironment[WordZapperState, WordZapperObservation, WordZapperInfo]) :
@@ -594,6 +616,22 @@ class WordZapperRenderer(AtraJaxisRenderer):
         pygame.display.update()
 
 
+    # @partial(jax.jit, static_argnums=(0,))
+    # def render(self, state):
+    #     raster = jnp.zeros((WIDTH, HEIGHT, 3))
+
+    #     # Render the spaceship
+    #     pygame.draw.rect(self.screen, self.spaceship_color, spaceship_rect)
+
+    #     # render background
+    #     frame_bg = aj.get_sprite_frame(SPRITE_BG, 0)
+    #     raster = aj.render_at(raster, 0, 0, frame_bg)
+    
+    #     return raster
+
+
+
+
 if __name__ == "__main__":
     # Initialize Pygame
     pygame.init()
@@ -602,118 +640,121 @@ if __name__ == "__main__":
     clock = pygame.time.Clock()
 
 
-    game = JaxWordZapper() # <-- eventual game
+    #game = JaxWordZapper() # <-- eventual game
 
     # Initialize the renderer
     renderer = WordZapperRenderer(screen) # TODO screen must not be a parameter eventually, see seaquest
 
         # Get jitted functions
-    jitted_step = jax.jit(game.step)
-    jitted_reset = jax.jit(game.reset)
+    # jitted_step = jax.jit(game.step)
+    # jitted_reset = jax.jit(game.reset)
 
-    # # Define the spaceship rectangle
-    # spaceship_rect = pygame.Rect(111, 365, 50, 30)  # Use Pygame Rect for rendering
+    # Define the spaceship rectangle
+    spaceship_rect = pygame.Rect(111, 365, 50, 30)  # Use Pygame Rect for rendering
 
-    # # Game loop
-    # running = True
-    # while running:
-    #     for event in pygame.event.get():
-    #         if event.type == pygame.QUIT:
-    #             running = False
-
-    #     # Get player actions
-    #     actions = get_human_action()
-    #     for action in actions:
-    #         if action == "LEFT":
-    #             spaceship_rect.x -= 5
-    #         elif action == "RIGHT":
-    #             spaceship_rect.x += 5
-    #         elif action == "UP":
-    #             spaceship_rect.y -= 5
-    #         elif action == "DOWN":
-    #             spaceship_rect.y += 5
-    #         elif action == "FIRE":
-    #             print("FIRE")
-    #         elif action == "UPFIRE":
-    #             print("UPFIRE")
-    #         elif action == "DOWNFIRE":
-    #             print("DOWNFIRE")
-    #         elif action == "LEFTFIRE":
-    #             print("LEFTFIRE")
-    #         elif action == "RIGHTFIRE":
-    #             print("RIGHTFIRE")
-    #         elif action == "UPLEFTFIRE":
-    #             spaceship_rect.x -= 2.5
-    #             spaceship_rect.y -= 2.5
-    #             print("UPLEFTFIRE")
-    #         elif action == "UPRIGHTFIRE":
-    #             spaceship_rect.x += 2.5
-    #             spaceship_rect.y -= 2.5
-    #             print("UPRIGHTFIRE")
-    #         elif action == "DOWNLEFTFIRE":
-    #             spaceship_rect.x -= 2.5
-    #             spaceship_rect.y += 2.5
-    #             print("DOWNLEFTFIRE")
-    #         elif action == "DOWNRIGHTFIRE":
-    #             spaceship_rect.x += 2.5
-    #             spaceship_rect.y += 2.5
-    #             print("DOWNRIGHTFIRE")
-
-    #     # Prevent the spaceship from going out of bounds
-    #     if spaceship_rect.x < 0:
-    #         spaceship_rect.x = 0
-    #     if spaceship_rect.x > WINDOW_WIDTH - spaceship_rect.width:
-    #         spaceship_rect.x = WINDOW_WIDTH - spaceship_rect.width
-    #     if spaceship_rect.y < 0:
-    #         spaceship_rect.y = 0
-    #     if spaceship_rect.y > WINDOW_HEIGHT - spaceship_rect.height:
-    #         spaceship_rect.y = WINDOW_HEIGHT - spaceship_rect.height
-
-    #     current_time = 90 - pygame.time.get_ticks() // 1000
-            # Render the game
-    #     renderer.render(spaceship_rect, current_time)
-
-    #         # Initialize game and renderer
-
-    curr_obs, curr_state = jitted_reset()
-
-    # Game loop with rendering
+    # Game loop
     running = True
-    frame_by_frame = False
-    frameskip = 1
-    counter = 1
-
     while running:
         for event in pygame.event.get():
             if event.type == pygame.QUIT:
                 running = False
-            elif event.type == pygame.KEYDOWN:
-                if event.key == pygame.K_f:
-                    frame_by_frame = not frame_by_frame
-            elif event.type == pygame.KEYDOWN or (
-                event.type == pygame.KEYUP and event.key == pygame.K_n
-            ):
-                if event.key == pygame.K_n and frame_by_frame:
-                    if counter % frameskip == 0:
-                        action = get_human_action()
-                        curr_obs, curr_state, reward, done, info = jitted_step(
-                            curr_state, action
-                        )
-                        print(f"Observations: {curr_obs}")
-                        print(f"Reward: {reward}, Done: {done}, Info: {info}")
 
-        if not frame_by_frame:
-            if counter % frameskip == 0:
-                action = get_human_action()
-                curr_obs, curr_state, reward, done, info = jitted_step(
-                    curr_state, action
-                )
+        # Get player actions
+        actions = get_human_action()
+        for action in actions:
+            if action == "LEFT":
+                spaceship_rect.x -= 5
+            elif action == "RIGHT":
+                spaceship_rect.x += 5
+            elif action == "UP":
+                spaceship_rect.y -= 5
+            elif action == "DOWN":
+                spaceship_rect.y += 5
+            elif action == "FIRE":
+                print("FIRE")
+            elif action == "UPFIRE":
+                print("UPFIRE")
+            elif action == "DOWNFIRE":
+                print("DOWNFIRE")
+            elif action == "LEFTFIRE":
+                print("LEFTFIRE")
+            elif action == "RIGHTFIRE":
+                print("RIGHTFIRE")
+            elif action == "UPLEFTFIRE":
+                spaceship_rect.x -= 2.5
+                spaceship_rect.y -= 2.5
+                print("UPLEFTFIRE")
+            elif action == "UPRIGHTFIRE":
+                spaceship_rect.x += 2.5
+                spaceship_rect.y -= 2.5
+                print("UPRIGHTFIRE")
+            elif action == "DOWNLEFTFIRE":
+                spaceship_rect.x -= 2.5
+                spaceship_rect.y += 2.5
+                print("DOWNLEFTFIRE")
+            elif action == "DOWNRIGHTFIRE":
+                spaceship_rect.x += 2.5
+                spaceship_rect.y += 2.5
+                print("DOWNRIGHTFIRE")
 
-        # render and update pygame
-        raster = renderer.render(curr_state)
-        aj.update_pygame(screen, raster, SCALING_FACTOR, WIDTH, HEIGHT)
-        counter += 1
-        clock.tick(60)
+        # Prevent the spaceship from going out of bounds
+        if spaceship_rect.x < 0:
+            spaceship_rect.x = 0
+        if spaceship_rect.x > WINDOW_WIDTH - spaceship_rect.width:
+            spaceship_rect.x = WINDOW_WIDTH - spaceship_rect.width
+        if spaceship_rect.y < 0:
+            spaceship_rect.y = 0
+        if spaceship_rect.y > WINDOW_HEIGHT - spaceship_rect.height:
+            spaceship_rect.y = WINDOW_HEIGHT - spaceship_rect.height
+
+        current_time = 90 - pygame.time.get_ticks() // 1000
+        renderer.render(spaceship_rect, current_time)
+
+
+
+    # # Initialize game and renderer
+
+    # curr_obs, curr_state = jitted_reset()
+
+    # # Game loop with rendering
+    # running = True
+    # frame_by_frame = False
+    # frameskip = 1
+    # counter = 1
+
+    # while running:
+    #     for event in pygame.event.get():
+    #         if event.type == pygame.QUIT:
+    #             running = False
+    #         elif event.type == pygame.KEYDOWN:
+    #             if event.key == pygame.K_f:
+    #                 frame_by_frame = not frame_by_frame
+    #         elif event.type == pygame.KEYDOWN or (
+    #             event.type == pygame.KEYUP and event.key == pygame.K_n
+    #         ):
+    #             if event.key == pygame.K_n and frame_by_frame:
+    #                 if counter % frameskip == 0:
+    #                     action = get_human_action()
+    #                     curr_obs, curr_state, reward, done, info = jitted_step(
+    #                         curr_state, action
+    #                     )
+    #                     print(f"Observations: {curr_obs}")
+    #                     print(f"Reward: {reward}, Done: {done}, Info: {info}")
+
+    #     if not frame_by_frame:
+    #         if counter % frameskip == 0:
+    #             action = get_human_action()
+    #             curr_obs, curr_state, reward, done, info = jitted_step(
+    #                 curr_state, action
+    #             )
+
+    #     # render and update pygame
+    #     raster = renderer.render(curr_state)
+    #     aj.update_pygame(screen, raster, SCALING_FACTOR, WIDTH, HEIGHT)
+    #     counter += 1
+
+
+    clock.tick(60)
 
         current_time = 90 - pygame.time.get_ticks() // 1000
         renderer.render(curr_state, current_time)
