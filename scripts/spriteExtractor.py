@@ -1,7 +1,7 @@
 import numpy as np
 import matplotlib.pyplot as plt
 
-filename = 'number_0.npy'  # Replace with your actual file name
+filename = 'projectile_wide.npy'  # Replace with your actual file name
 # Load the image data
 file_path = 'new_screenshots/' + filename # Replace with your actual file path
 image = np.load(file_path)
