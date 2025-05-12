@@ -396,6 +396,17 @@ def _calc_hit_point(
 
 
 @jax.jit
+def _reflect_ball(
+
+) -> tuple[chex.Array]:
+    """
+    From the previous ball position, a hit point, the ball_direction, and the velocity,
+    computes the new ball position and direction after reflection off of the obstacle
+    hit.
+    """
+    pass
+
+@jax.jit
 def _check_all_obstacle_hits(
     old_ball_x: chex.Array,
     old_ball_y: chex.Array,
@@ -482,6 +493,9 @@ def ball_step(
     """
     Obstacle hit calculation
     """
+    # Calculate whether and where obstacles are hit
+    # If a reflecting obstacle is hit, reflect the ball
+    # If a non-reflecting obstacle is hit, proceed with usual ball position calculation
     # new_ball_direction, _ball_vel_x, _ball_vel_y = _get_obstacle_hit_direction()
 
     """
@@ -512,6 +526,7 @@ def ball_step(
     signed_ball_vel_y = jnp.where(should_invert_y_vel, -ball_vel_y, ball_vel_y)
 
     # Only change position, direction and velocity if the ball is in play
+    # TODO override ball_x, ball_y if obstacle hit (_reflect_ball)
     ball_x = jnp.where(
         ball_in_play, state.ball_x + signed_ball_vel_x, BALL_START_X
     )
@@ -530,7 +545,7 @@ def ball_step(
     ball_vel_x = jnp.where(ball_in_play, ball_vel_x, jnp.array(0))
     ball_vel_y = jnp.where(ball_in_play, ball_vel_y, jnp.array(0))
 
-    # TODO add ball_in_play to return and if plunger hit set to True
+    
     return (
         ball_x,
         ball_y,
