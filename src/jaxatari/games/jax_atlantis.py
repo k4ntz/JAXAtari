@@ -1,9 +1,11 @@
 import os
 from dataclasses import dataclass
 
+from jax import config
 import jax.lax
 import jax.numpy as jnp
 import chex
+from numpy import array
 import pygame
 from typing import Dict, Any, Optional, NamedTuple, Tuple
 from functools import partial
@@ -17,11 +19,21 @@ class GameConfig:
     screen_width: int = 160
     screen_height: int = 210
     scaling_factor: int = 3
+    bullet_height: int = 5
+    bullet_width: int = 5
+    bullet_speed: int = 3
+    cannon_height: int = 10
+    cannon_width: int = 10
+    cannon_y: int = 200
+    cannon_x: jnp.ndarray  = field(
+        default_factory=lambda: jnp.array([20, 80, 140], dtype=jnp.int32)
+    )
+    max_bullets: int = 20
+    max_enemies: int = 20
 
-# Positions of the cannons
-CANNON_X = jnp.array([20, 80, 140], dtype=jnp.int32)
-CANNON_Y = 200
 
+# Each value of this class is a list.
+# e.g. if i have 3 entities, then each of these lists would have a length of 3
 class EntityPosition(NamedTuple):
     x: jnp.ndarray
     y: jnp.ndarray
@@ -31,11 +43,23 @@ class EntityPosition(NamedTuple):
 
 class AtlantisState(NamedTuple):
     score: chex.Array
-    block_position: chex.Array
+
+    # columns = [ x,  y,  dx,   type_id,  active_flag ]
+    #   x, y        → position
+    #   dx          → horizontal speed (positive or negative)
+    #   type_id     → integer index into your enemy_specs dict
+    #   active_flag → 1 if on-screen, 0 otherwise
+    enemies: chex.Array # shape: (max_enemies, 5)
+
+    # columns = [ x, y, dx, dy]. dx and dy is the velocity
+    bullets: chex.Array # shape: (max_bullets, 4)
+    bullets_alive: chex.Array # stores all the active bullets as bools
+
 
 class AtlantisObservation(NamedTuple):
     score: jnp.ndarray
-    block_position: chex.Array
+    enemy: EntityPosition
+    bullet: EntityPosition
 
 class AtlantisInfo(NamedTuple):
     time: jnp.ndarray
@@ -64,12 +88,6 @@ class Renderer_AtraJaxis:
         # Backgrounds + Dynamic elements + UI elements
         sprite_names = [
             # 'background_0', 'background_1', 'background_2',
-            # 'ape_climb_left', 'ape_climb_right', 'ape_moving', 'ape_standing',
-            # 'bell', 'ringing_bell', 'child_jump', 'child', 'coconut', 'kangaroo',
-            # 'kangaroo_climb', 'kangaroo_dead', 'kangaroo_ducking',
-            # 'kangaroo_jump_high', 'kangaroo_jump', 'kangaroo_lives',
-            # 'kangaroo_walk', 'kangaroo_boxing',
-            # 'strawberry', 'throwing_ape', 'thrown_coconut', 'time_dash',
         ]
         for name in sprite_names:
             loaded_sprite = _load_sprite_frame(name)
@@ -83,24 +101,39 @@ class Renderer_AtraJaxis:
         H = self.config.screen_height
         W = self.config.screen_width
 
+
         # Set green background
-        green = jnp.array([0,255,0], dtype=jnp.uint8)
-        raster = jnp.broadcast_to(green, (W,H,3))
+        blue = jnp.array([0,0,255], dtype=jnp.uint8)
+        raster = jnp.broadcast_to(blue, (W,H,3))
 
-        # define black block
-        BLOCK_H, BLOCK_W = 10, 10
-        block_color = jnp.array([255, 255, 255], dtype=jnp.uint8)  # white blocks
-        block_sprite = jnp.broadcast_to(block_color, (BLOCK_W, BLOCK_H, 3))
+        # get the cannons from the config
+        cannon_xs = self.config.cannon_x
+        cannon_y   = self.config.cannon_y
 
-        # 3) draw each block in turn
-        def _draw_one(i, img):
-            x, y = state.block_position[i]   # (x,y)
-            return jax.lax.dynamic_update_slice(img, block_sprite, (x, y, 0))
-
-        return jax.lax.fori_loop(0,
-                                 state.block_position.shape[0],
-                                 _draw_one,
-                                 raster)
+        # define cannons
+        cannon_color = jnp.array([255, 255, 255], dtype=jnp.uint8)  # white blocks
+        block_sprite = jnp.broadcast_to(
+            cannon_color,
+            (self.config.cannon_width,
+             self.config.cannon_height,
+             3)
+        )
+        # 2) define a small loop body that pastes block_sprite at each (x,y)
+        def draw_one(i, img):
+            x = cannon_xs[i]
+            return jax.lax.dynamic_update_slice(
+                img,
+                block_sprite,
+                (x, cannon_y, 0)     # start at (axis0=x, axis1=y, axis2=0)
+            )
+    
+        # 3) run the loop over all cannon positions
+        return jax.lax.fori_loop(
+            0,
+            cannon_xs.shape[0],     # 3 cannons
+            draw_one,
+            raster
+        )
 
 class JaxAtlantis(JaxEnvironment[AtlantisState, AtlantisObservation, AtlantisInfo]):
     def __init__(self, frameskip: int = 1, reward_funcs: list[callable] = None, config: GameConfig = None):
@@ -113,17 +146,64 @@ class JaxAtlantis(JaxEnvironment[AtlantisState, AtlantisObservation, AtlantisInf
         self.reward_funcs = reward_funcs
 
     def reset(self) -> Tuple[AtlantisObservation, AtlantisState]:
-        two_blocks = jnp.array([[50, 50],
-                                [100, 150]], dtype=jnp.int32)
-        new_state = AtlantisState(
-            score=jnp.array(0, dtype=jnp.int32),
-            block_position=two_blocks
+        # --- empty tables ---
+        empty_enemies = jnp.zeros(
+            (self.config.max_enemies, 5),
+            dtype=jnp.int32
         )
+        empty_bullets = jnp.zeros(
+            (self.config.max_bullets, 4),
+            dtype=jnp.int32
+        )
+        empty_bullets_alive = jnp.zeros(
+            (self.config.max_bullets,),
+            dtype=jnp.bool_
+        )
+
+        # --- initial state ---
+        new_state = AtlantisState(
+            score         = jnp.array(0, dtype=jnp.int32),
+            enemies       = empty_enemies,
+            bullets       = empty_bullets,
+            bullets_alive = empty_bullets_alive
+        )
+
         obs = self._get_observation(new_state)
         return obs, new_state
 
     @partial(jax.jit, static_argnums=(0,))
     def step(self, state: AtlantisState, action: chex.Array) -> Tuple[AtlantisState, AtlantisObservation, float, bool, AtlantisInfo]:
+
+        def spawn_bullet(state: AtlantisState, cannon_id: int):
+            # To identify which slots are free
+            # bullets_alive is a boolean array. If an entry is true, then it holds an active bullet
+            # ~ inverts the boolean array, such that a slot is free, when bullets_alive[i] == False
+            free_slots = ~state.bullets_alive
+
+            # get the index of the first true entry. If none is True, returns 0.
+            free_idx = jnp.argmax(free_slots)
+
+            # Compute bullet velocity based on the cannon index.
+            # left = 0, center = 1, right = 2
+            dx = jnp.where(
+                cannon_id == 0,
+                self.config.bullet_speed, # left cannon shoots
+                jnp.where(
+                    cannon_id == 2,
+                    -self.config.bullet_speed, # right cannon shoots
+                    0 # center cannon shoots
+                )
+            )
+
+            #    • bullet_speed is a small integer like 3.
+            #    • For c_idx==0, dx=+speed  (45° up-right)
+            #      For c_idx==2, dx=–speed  (45° up-left)
+            #      For c_idx==1 (centre), dx=0 and dy=–speed i.e. straight up.
+            dy = -bullet_speed
+
+            # create a 
+
+
         # state.block_positions has shape (N,2) where [:,0] = x, [:,1] = y
         delta = jnp.array([1, 1], dtype=jnp.int32)  # +1 in x (right), -1 in y (up)
         updated_positions = state.block_position + delta  # broadcast: adds [1, -1] to each row
