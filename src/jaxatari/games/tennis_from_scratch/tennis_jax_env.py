@@ -42,7 +42,7 @@ class TennisJaxEnv(JaxEnvironment[TennisState, TennisObs, TennisInfo]):
         return renderer.render(state)
 
     def get_action_space(self) -> jnp.ndarray:
-        return [JAXAtariAction.RIGHT, JAXAtariAction.LEFT, JAXAtariAction.UP, JAXAtariAction.DOWN]
+        return [JAXAtariAction.RIGHT, JAXAtariAction.LEFT, JAXAtariAction.UP, JAXAtariAction.DOWN, JAXAtariAction.FIRE]
 
     def get_observation_space(self) -> Tuple:
         pass
