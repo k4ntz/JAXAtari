@@ -45,3 +45,29 @@ np.save("player_white_disc.npy", player_frame)
 enemy_frame = np.full((enemy_black_disc_height, enemy_black_disc_width, 4), black_rgba, dtype=np.uint8)
 np.save("enemy_black_disc.npy", enemy_frame)
 
+
+# Numbers
+height=10
+width=12
+
+#1 
+frame = np.full((height, width, 4), green_rgba, dtype=np.uint8)
+frame[0:4, 4:7] = green_rgba
+frame[6:11, 0:7] = green_rgba
+np.save("number_1_player.npy", frame)
+frame[0:4, 4:7] = black_rgba
+frame[6:11, 0:7] = black_rgba
+np.save("number_1_enemy.npy", frame)
+
+#2
+
+#3
+
+#4
+frame = np.full((height, width, 4), white_turquoise_rgba, dtype=np.uint8)
+frame[0:4, 4:7] = green_rgba
+frame[6:11, 0:7] = green_rgba
+np.save("number_4_player.npy", frame)
+frame[0:4, 4:7] = black_rgba
+frame[6:11, 0:7] = black_rgba
+np.save("number_4_enemy.npy", frame)
