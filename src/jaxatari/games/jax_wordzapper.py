@@ -47,6 +47,12 @@ WALL_BOTTOM_HEIGHT = 16
 WINDOW_WIDTH = 160 * 3
 WINDOW_HEIGHT = 210 * 3
 
+MIN_BOUND = (0,0)
+MAX_BOUND = (WINDOW_WIDTH, WINDOW_HEIGHT)
+
+WINDOW_WIDTH = 160 * 3
+WINDOW_HEIGHT = 210 * 3
+
 WIDTH = 160
 HEIGHT = 210
 SCALING_FACTOR = 3
@@ -75,52 +81,58 @@ STATE_TRANSLATOR: dict = {
 }
 
 
-def get_human_action() -> list: ## TODO make this return chex.Array !
-    """
-    Records if multiple keys are being pressed and returns the corresponding actions.
-
-    Returns:
-        actions: A list of actions taken by the player (e.g., LEFT, RIGHT, UP, DOWN, FIRE, etc.).
-    """
+def get_human_action() -> chex.Array:
+    """Get human action from keyboard with support for diagonal movement and combined fire"""
     keys = pygame.key.get_pressed()
-    actions = []
+    up = keys[pygame.K_UP] or keys[pygame.K_w]
+    down = keys[pygame.K_DOWN] or keys[pygame.K_s]
+    left = keys[pygame.K_LEFT] or keys[pygame.K_a]
+    right = keys[pygame.K_RIGHT] or keys[pygame.K_d]
+    fire = keys[pygame.K_SPACE]
 
-    # Movement keys
-    if keys[pygame.K_a]:
-        actions.append("LEFT")
-    if keys[pygame.K_d]:
-        actions.append("RIGHT")
-    if keys[pygame.K_w]:
-        actions.append("UP")
-    if keys[pygame.K_s]:
-        actions.append("DOWN")
+    # Diagonal movements with fire
+    if up and right and fire:
+        return jnp.array(Action.UPRIGHTFIRE)
+    if up and left and fire:
+        return jnp.array(Action.UPLEFTFIRE)
+    if down and right and fire:
+        return jnp.array(Action.DOWNRIGHTFIRE)
+    if down and left and fire:
+        return jnp.array(Action.DOWNLEFTFIRE)
 
-    # Firing keys with diagonal combinations
-    if keys[pygame.K_SPACE]:
-        if keys[pygame.K_a] and keys[pygame.K_w]:
-            actions.append("UPLEFTFIRE")
-        elif keys[pygame.K_d] and keys[pygame.K_w]:
-            actions.append("UPRIGHTFIRE")
-        elif keys[pygame.K_a] and keys[pygame.K_s]:
-            actions.append("DOWNLEFTFIRE")
-        elif keys[pygame.K_d] and keys[pygame.K_s]:
-            actions.append("DOWNRIGHTFIRE")
-        elif keys[pygame.K_a]:
-            actions.append("LEFTFIRE")
-        elif keys[pygame.K_d]:
-            actions.append("RIGHTFIRE")
-        elif keys[pygame.K_w]:
-            actions.append("UPFIRE")
-        elif keys[pygame.K_s]:
-            actions.append("DOWNFIRE")
-        else:
-            actions.append("FIRE")
+    # Cardinal directions with fire
+    if up and fire:
+        return jnp.array(Action.UPFIRE)
+    if down and fire:
+        return jnp.array(Action.DOWNFIRE)
+    if left and fire:
+        return jnp.array(Action.LEFTFIRE)
+    if right and fire:
+        return jnp.array(Action.RIGHTFIRE)
 
-    # If no keys are pressed, return NOOP
-    if not actions:
-        actions.append("NOOP")
+    # Diagonal movements
+    if up and right:
+        return jnp.array(Action.UPRIGHT)
+    if up and left:
+        return jnp.array(Action.UPLEFT)
+    if down and right:
+        return jnp.array(Action.DOWNRIGHT)
+    if down and left:
+        return jnp.array(Action.DOWNLEFT)
 
-    return actions
+    # Cardinal directions
+    if up:
+        return jnp.array(Action.UP)
+    if down:
+        return jnp.array(Action.DOWN)
+    if left:
+        return jnp.array(Action.LEFT)
+    if right:
+        return jnp.array(Action.RIGHT)
+    if fire:
+        return jnp.array(Action.FIRE)
+
+    return jnp.array(Action.NOOP)
     
 
 
@@ -128,6 +140,7 @@ class WordZapperState(NamedTuple):
     player_x: chex.Array
     player_y: chex.Array
     player_speed: chex.Array
+    player_direction: chex.Array
     cooldown_timer: chex.Array
 
     asteroid_x: chex.Array
@@ -216,33 +229,91 @@ def load_sprites():
 
 @jax.jit
 def player_step(
-    player_x: chex.Array,
-    player_y: chex.Array,
-    player_speed: chex.Array,
-    cooldown_timer: chex.Array,
-    action: chex.Array
-) -> Tuple[chex.Array, chex.Array, chex.Array, chex.Array, chex.Array]:
-    MOVE_UP = jnp.array([Action.UP, Action.UPFIRE, Action.UPLEFTFIRE, Action.UPRIGHTFIRE])
-    MOVE_DOWN = jnp.array([Action.DOWN, Action.DOWNFIRE, Action.DOWNLEFTFIRE, Action.DOWNRIGHTFIRE])
-    FIRE_ACTIONS = jnp.array([
-        Action.FIRE, Action.UPFIRE, Action.DOWNFIRE,
-        Action.LEFTFIRE, Action.RIGHTFIRE,
-        Action.UPLEFTFIRE, Action.UPRIGHTFIRE,
-        Action.DOWNLEFTFIRE, Action.DOWNRIGHTFIRE
-    ])
+    state: WordZapperState, action: chex.Array
+) -> tuple[chex.Array, chex.Array, chex.Array]:
+    # implement all the possible movement directions for the player, the mapping is:
+    # anything with left in it, add -1 to the x position
+    # anything with right in it, add 1 to the x position
+    # anything with up in it, add -1 to the y position
+    # anything with down in it, add 1 to the y position
+    up = jnp.any(
+        jnp.array(
+            [
+                action == Action.UP,
+                action == Action.UPRIGHT,
+                action == Action.UPLEFT,
+                action == Action.UPFIRE,
+                action == Action.UPRIGHTFIRE,
+                action == Action.UPLEFTFIRE,
+            ]
+        )
+    )
+    down = jnp.any(
+        jnp.array(
+            [
+                action == Action.DOWN,
+                action == Action.DOWNRIGHT,
+                action == Action.DOWNLEFT,
+                action == Action.DOWNFIRE,
+                action == Action.DOWNRIGHTFIRE,
+                action == Action.DOWNLEFTFIRE,
+            ]
+        )
+    )
+    left = jnp.any(
+        jnp.array(
+            [
+                action == Action.LEFT,
+                action == Action.UPLEFT,
+                action == Action.DOWNLEFT,
+                action == Action.LEFTFIRE,
+                action == Action.UPLEFTFIRE,
+                action == Action.DOWNLEFTFIRE,
+            ]
+        )
+    )
+    right = jnp.any(
+        jnp.array(
+            [
+                action == Action.RIGHT,
+                action == Action.UPRIGHT,
+                action == Action.DOWNRIGHT,
+                action == Action.RIGHTFIRE,
+                action == Action.UPRIGHTFIRE,
+                action == Action.DOWNRIGHTFIRE,
+            ]
+        )
+    )
 
-    move_up = jnp.any(jnp.equal(action, MOVE_UP))
-    move_down = jnp.any(jnp.equal(action, MOVE_DOWN))
-    is_firing = jnp.any(jnp.equal(action, FIRE_ACTIONS))
+    player_x = jnp.where(
+        right, state.player_x + 5, jnp.where(left, state.player_x - 5, state.player_x)
+    )
 
-    delta_y = jnp.where(move_up, -player_speed, jnp.where(move_down, player_speed, 0))
-    new_player_y = jnp.clip(player_y + delta_y, 0, HEIGHT - PLAYER_SIZE[1])
+    player_y = jnp.where(
+        down, state.player_y + 5, jnp.where(up, state.player_y - 5, state.player_y)
+    )
 
-    can_fire = cooldown_timer == 0
-    fired = jnp.logical_and(is_firing, can_fire)
-    new_cooldown_timer = jnp.where(fired, 8, jnp.maximum(cooldown_timer - 1, 0))
+    # set the direction according to the movement
+    player_direction = jnp.where(right, 1, jnp.where(left, -1, state.player_direction))
 
-    return player_x, new_player_y, player_speed, new_cooldown_timer, fired
+    # perform out of bounds checks
+    player_x = jnp.where(
+        player_x < MIN_BOUND[0],
+        MIN_BOUND[0],  # Clamp to min player bound
+        jnp.where(
+            player_x > MAX_BOUND[0],
+            MAX_BOUND[0],  # Clamp to max player bound
+            player_x,
+        ),
+    )
+
+    player_y = jnp.where(
+        player_y < MIN_BOUND[1],
+        0,
+        jnp.where(player_y > MAX_BOUND[1], MAX_BOUND[1], player_y),
+    )
+
+    return player_x, player_y, player_direction
 
 @jax.jit
 def scrolling_letters(letters_x, letters_speed, letters_alive):
@@ -610,6 +681,11 @@ class WordZapperRenderer(AtraJaxisRenderer):
 
         # 🕒 Draw timer
         font = pygame.font.SysFont(None, 36)
+        time_surf = font.render(f"TIME: {current_time}", True, self.text_color)
+        self.screen.blit(time_surf, (300, 40))
+
+        # Update the display
+        pygame.display.update()  # Use Pygame's display update method
         time_surface = font.render(f"TIME: {int(state.timer.item())}", True, self.text_color)
         self.screen.blit(time_surface, (10, 10))
 
@@ -634,6 +710,7 @@ class WordZapperRenderer(AtraJaxisRenderer):
 
 if __name__ == "__main__":
     # Initialize Pygame
+    game = JaxWordZapper()
     pygame.init()
     screen = pygame.display.set_mode((WINDOW_WIDTH, WINDOW_HEIGHT))
     pygame.display.set_caption("Word Zapper")
@@ -643,6 +720,12 @@ if __name__ == "__main__":
     #game = JaxWordZapper() # <-- eventual game
 
     # Initialize the renderer
+    renderer = WordZapperRenderer(screen)
+
+    # Define the initial player state
+    player_x = 111
+    player_y = 365
+    player_direction = 0  # 0 for no direction, -1 for left, 1 for right
     renderer = WordZapperRenderer(screen) # TODO screen must not be a parameter eventually, see seaquest
 
         # Get jitted functions
@@ -650,7 +733,7 @@ if __name__ == "__main__":
     # jitted_reset = jax.jit(game.reset)
 
     # Define the spaceship rectangle
-    spaceship_rect = pygame.Rect(111, 365, 50, 30)  # Use Pygame Rect for rendering
+    spaceship_rect = pygame.Rect(player_x, player_y, 50, 30)  # Use Pygame Rect for rendering
 
     # Game loop
     running = True
@@ -659,43 +742,39 @@ if __name__ == "__main__":
             if event.type == pygame.QUIT:
                 running = False
 
-        # Get player actions
-        actions = get_human_action()
-        for action in actions:
-            if action == "LEFT":
-                spaceship_rect.x -= 5
-            elif action == "RIGHT":
-                spaceship_rect.x += 5
-            elif action == "UP":
-                spaceship_rect.y -= 5
-            elif action == "DOWN":
-                spaceship_rect.y += 5
-            elif action == "FIRE":
-                print("FIRE")
-            elif action == "UPFIRE":
-                print("UPFIRE")
-            elif action == "DOWNFIRE":
-                print("DOWNFIRE")
-            elif action == "LEFTFIRE":
-                print("LEFTFIRE")
-            elif action == "RIGHTFIRE":
-                print("RIGHTFIRE")
-            elif action == "UPLEFTFIRE":
-                spaceship_rect.x -= 2.5
-                spaceship_rect.y -= 2.5
-                print("UPLEFTFIRE")
-            elif action == "UPRIGHTFIRE":
-                spaceship_rect.x += 2.5
-                spaceship_rect.y -= 2.5
-                print("UPRIGHTFIRE")
-            elif action == "DOWNLEFTFIRE":
-                spaceship_rect.x -= 2.5
-                spaceship_rect.y += 2.5
-                print("DOWNLEFTFIRE")
-            elif action == "DOWNRIGHTFIRE":
-                spaceship_rect.x += 2.5
-                spaceship_rect.y += 2.5
-                print("DOWNRIGHTFIRE")
+        # Get player action
+        action = get_human_action()
+
+        # Update player position using player_step
+        player_x, player_y, player_direction = player_step(
+            WordZapperState(
+                player_x=jnp.array(player_x),
+                player_y=jnp.array(player_y),
+                player_speed=jnp.array(0),
+                player_direction=jnp.array(player_direction),
+                cooldown_timer=jnp.array(0),
+                asteroid_x=jnp.array(0),
+                asteroid_y=jnp.array(0),
+                asteroid_speed=jnp.array(0),
+                asteroid_alive=jnp.array(0),
+                letters_x=jnp.array([0]),
+                letters_y=jnp.array([0]),
+                letters_char=jnp.array([0]),
+                letters_alive=jnp.array([0]),
+                letters_speed=jnp.array([0]),
+                current_word=jnp.array([0]),
+                current_letter_index=jnp.array(0),
+                player_score=jnp.array(0),
+                timer=jnp.array(0),
+                step_counter=jnp.array(0),
+                buffer=jnp.array([0]),
+            ),
+            action,
+        )
+
+        # Update the spaceship rectangle position
+        spaceship_rect.x = int(player_x)
+        spaceship_rect.y = int(player_y)
 
         # Prevent the spaceship from going out of bounds
         if spaceship_rect.x < 0:
