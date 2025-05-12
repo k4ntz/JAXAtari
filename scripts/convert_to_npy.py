@@ -13,7 +13,9 @@ def traverse_dir(root:str):
             file_path = Path(root, file)
             if file_path.suffix == ".png":
                 img = cv2.imread(str(file_path), cv2.IMREAD_UNCHANGED)
-                print(f"Converting {file_path} to npy")
+                if img is not None:
+                    img = cv2.cvtColor(img, cv2.COLOR_BGRA2RGBA)
+                print(f"Converting {file_path} to npy (shape: {img.shape})")
                 np.save(file_path.with_suffix(".npy"), img)
             else:
                 print(f"Skipping {file_path} as it is not a png file")
