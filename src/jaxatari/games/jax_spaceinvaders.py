@@ -21,6 +21,11 @@ BULLET_SPEED = 1
 PLAYER_Y = 50 
 PLAYER_SIZE = (7, 10)
 
+NUMBER_SIZE = (12, 9)
+NUMBER_YELLOW_OFFSET = 83
+
+PATH_SPRITES = "sprites/spaceinvaders"
+
 def get_human_action():
     keys = pygame.key.get_pressed()
     if keys[pygame.K_RIGHT]:
@@ -164,10 +169,33 @@ class JaxSpaceInvaders(JaxEnvironment[SpaceInvadersState, SpaceInvadersObservati
 def load_sprites():
     MODULE_DIR = os.path.dirname(os.path.abspath(__file__))
 
-    player = aj.loadFrame(os.path.join(MODULE_DIR, "sprites/spaceinvaders/player.npy"), transpose=True)
+    # Player
+    player = aj.loadFrame(os.path.join(MODULE_DIR, PATH_SPRITES, "player.npy"), transpose=True)
     SPRITE_PLAYER = jnp.expand_dims(player, axis=0)
 
-    return SPRITE_PLAYER
+    # Background
+    background = aj.loadFrame(os.path.join(MODULE_DIR, PATH_SPRITES, "background.npy"), transpose=True)
+    SPRITE_BACKGROUND = jnp.expand_dims(background, axis=0)
+
+    # Score
+    zero_green = aj.loadFrame(os.path.join(MODULE_DIR, PATH_SPRITES, "numbers/zero_green.npy"), transpose=True)
+    SPRITE_ZERO_GREEN = jnp.expand_dims(zero_green, axis=0)
+    zero_yellow = aj.loadFrame(os.path.join(MODULE_DIR, PATH_SPRITES, "numbers/zero_yellow.npy"), transpose=True)
+    SPRITE_ZERO_YELLOW = jnp.expand_dims(zero_yellow, axis=0)
+
+    # Defense
+    defense = aj.loadFrame(os.path.join(MODULE_DIR, PATH_SPRITES, "defense.npy"), transpose=True)
+    SPRITE_DEFENSE = jnp.expand_dims(defense, axis=0)
+
+    return (SPRITE_BACKGROUND, SPRITE_PLAYER, SPRITE_ZERO_GREEN, SPRITE_ZERO_YELLOW, SPRITE_DEFENSE)
+
+(
+    SPRITE_BACKGROUND, 
+    SPRITE_PLAYER,
+    SPRITE_ZERO_GREEN,
+    SPRITE_ZERO_YELLOW,
+    SPRITE_DEFENSE
+) = load_sprites()
 
 class SpaceInvadersRenderer(AtraJaxisRenderer):
     """
@@ -175,14 +203,40 @@ class SpaceInvadersRenderer(AtraJaxisRenderer):
     """
 
     def __init__(self):
-        self.SPRITE_PLAYER = load_sprites()
+        self.SPRITE_PLAYER = SPRITE_PLAYER
 
     @partial(jax.jit, static_argnums=(0,))
     def render(self, state: SpaceInvadersState) -> chex.Array:
         raster = jnp.zeros((WIDTH, HEIGHT, 3))
 
+        # Load Background
+        background = aj.get_sprite_frame(SPRITE_BACKGROUND, 0)
+        raster = aj.render_at(raster, 0, HEIGHT - 15, background)
+
+        # Load Player
         frame_player = aj.get_sprite_frame(self.SPRITE_PLAYER, 0)
-        raster = aj.render_at(raster, WIDTH - state.player_x, HEIGHT - PLAYER_Y, frame_player)
+        raster = aj.render_at(raster, WIDTH - state.player_x, 185, frame_player)
+
+        # Load Initial Score
+        # Green Numbers
+        frame_zero_green = aj.get_sprite_frame(SPRITE_ZERO_GREEN, 0)
+        raster = aj.render_at(raster, 3, 9, frame_zero_green)
+        raster = aj.render_at(raster, 6 + NUMBER_SIZE[0], 10, frame_zero_green)
+        raster = aj.render_at(raster, 9 + 2 * NUMBER_SIZE[0], 10, frame_zero_green)
+        raster = aj.render_at(raster, 12 + 3 * NUMBER_SIZE[0], 9, frame_zero_green)
+
+        # Yellow Numbers
+        frame_zero_yellow = aj.get_sprite_frame(SPRITE_ZERO_YELLOW, 0)
+        raster = aj.render_at(raster, NUMBER_YELLOW_OFFSET, 9, frame_zero_yellow)
+        raster = aj.render_at(raster, NUMBER_YELLOW_OFFSET + 3 + NUMBER_SIZE[0], 10, frame_zero_yellow)
+        raster = aj.render_at(raster, NUMBER_YELLOW_OFFSET + 6 + 2 * NUMBER_SIZE[0], 10, frame_zero_yellow)
+        raster = aj.render_at(raster, NUMBER_YELLOW_OFFSET + 9 + 3 * NUMBER_SIZE[0], 9, frame_zero_yellow)
+
+        # Load Defense Object
+        frame_defense = aj.get_sprite_frame(SPRITE_DEFENSE, 0)
+        raster = aj.render_at(raster, 41, HEIGHT - 53, frame_defense)
+        raster = aj.render_at(raster, 73, HEIGHT - 53, frame_defense)
+        raster = aj.render_at(raster, 105, HEIGHT - 53, frame_defense)
 
         return raster 
 
