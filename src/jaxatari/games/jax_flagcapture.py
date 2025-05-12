@@ -6,6 +6,7 @@ import jax.numpy as jnp
 import chex
 import pygame
 from gymnax.environments import spaces
+from jaxatari.environment import JAXAtariAction
 
 from jaxatari.renderers import AtraJaxisRenderer
 from jaxatari.rendering import atraJaxis as aj
@@ -33,6 +34,7 @@ WINDOW_HEIGHT = HEIGHT * SCALING_FACTOR
 
 # region Action Space
 # Define action space
+"""
 NOOP = 0
 FIRE = 1
 UP = 2
@@ -51,6 +53,7 @@ UPRIGHTFIRE = 14
 UPLEFTFIRE = 15
 DOWNRIGHTFIRE = 16
 DOWNLEFTFIRE = 17
+"""
 # endregion
 
 # region Player Status
@@ -101,6 +104,7 @@ NUMBER_HEIGHT = 5
 NUM_BOMBS = 3
 NUM_NUMBER_CLUES = 29
 NUM_DIRECTION_CLUES = 29
+MOVE_COOLDOWN = 15
 
 
 # endregion
@@ -113,8 +117,8 @@ class FlagCaptureState(NamedTuple):
     is_checking: chex.Array
     score: chex.Array
     field: chex.Array  # Shape (9, 7)
+    player_move_cooldown: chex.Array
     rng_key: chex.PRNGKey
-
 
 class PlayerEntity(NamedTuple):
     x: chex.Array
@@ -167,19 +171,19 @@ def generate_field(field, rng_key, n_bombs, n_number_clues, n_direction_clues):
 
 
 @jax.jit
-def player_step(player_x, player_y, is_checking, action):
+def player_step(player_x, player_y, is_checking,player_move_cooldown, action):
     """
     Updates the player's position and state based on the action taken.
 
     """
     # check if the player is firing(checking). This is any action like FIRE, UPFIRE, DOWNFIRE, etc.
     # do this by checking if the action is 1 (FIRE) or between 10 and 17 (UPFIRE, DOWNFIRE, etc.)
-    new_is_checking = jax.lax.cond(jnp.logical_or(jnp.equal(action, FIRE),jnp.logical_and(jnp.greater_equal(action, UPRIGHTFIRE), jnp.less_equal(action, DOWNLEFTFIRE))),lambda : 1, lambda: 0)
+    new_is_checking = jax.lax.cond(jnp.logical_or(jnp.equal(action, JAXAtariAction.FIRE),jnp.logical_and(jnp.greater_equal(action, JAXAtariAction.UPRIGHTFIRE), jnp.less_equal(action, JAXAtariAction.DOWNLEFTFIRE))),lambda : 1, lambda: 0)
     # check if the player is moving upwards. This is any action like UP, UPRIGHT, UPLEFT, UPFIRE, UPRIGHTFIRE, UPLEFTFIRE
-    is_up = jnp.logical_or(jnp.equal(action, UP), jnp.logical_or(jnp.equal(action, UPFIRE), jnp.logical_or(jnp.equal(action, UPRIGHT), jnp.logical_or(jnp.equal(action, UPLEFT), jnp.logical_or(jnp.equal(action, UPRIGHTFIRE), jnp.equal(action, UPLEFTFIRE))))))
-    is_down = jnp.logical_or(jnp.equal(action, DOWN), jnp.logical_or(jnp.equal(action, DOWNFIRE), jnp.logical_or(jnp.equal(action, DOWNRIGHT), jnp.logical_or(jnp.equal(action, DOWNLEFT), jnp.logical_or(jnp.equal(action, DOWNRIGHTFIRE), jnp.equal(action, DOWNLEFTFIRE))))))
-    is_left = jnp.logical_or(jnp.equal(action, LEFT), jnp.logical_or(jnp.equal(action, UPLEFT), jnp.logical_or(jnp.equal(action, DOWNLEFT), jnp.logical_or(jnp.equal(action, LEFTFIRE), jnp.logical_or(jnp.equal(action, UPLEFTFIRE), jnp.equal(action, DOWNLEFTFIRE))))))
-    is_right = jnp.logical_or(jnp.equal(action, RIGHT), jnp.logical_or(jnp.equal(action, UPRIGHT), jnp.logical_or(jnp.equal(action, DOWNRIGHT), jnp.logical_or(jnp.equal(action, RIGHTFIRE), jnp.logical_or(jnp.equal(action, UPRIGHTFIRE), jnp.equal(action, DOWNRIGHTFIRE))))))
+    is_up = jnp.logical_or(jnp.equal(action, JAXAtariAction.UP), jnp.logical_or(jnp.equal(action, JAXAtariAction.UPFIRE), jnp.logical_or(jnp.equal(action, JAXAtariAction.UPRIGHT), jnp.logical_or(jnp.equal(action, JAXAtariAction.UPLEFT), jnp.logical_or(jnp.equal(action, JAXAtariAction.UPRIGHTFIRE), jnp.equal(action, JAXAtariAction.UPLEFTFIRE))))))
+    is_down = jnp.logical_or(jnp.equal(action, JAXAtariAction.DOWN), jnp.logical_or(jnp.equal(action, JAXAtariAction.DOWNFIRE), jnp.logical_or(jnp.equal(action, JAXAtariAction.DOWNRIGHT), jnp.logical_or(jnp.equal(action, JAXAtariAction.DOWNLEFT), jnp.logical_or(jnp.equal(action, JAXAtariAction.DOWNRIGHTFIRE), jnp.equal(action, JAXAtariAction.DOWNLEFTFIRE))))))
+    is_left = jnp.logical_or(jnp.equal(action, JAXAtariAction.LEFT), jnp.logical_or(jnp.equal(action, JAXAtariAction.UPLEFT), jnp.logical_or(jnp.equal(action, JAXAtariAction.DOWNLEFT), jnp.logical_or(jnp.equal(action, JAXAtariAction.LEFTFIRE), jnp.logical_or(jnp.equal(action, JAXAtariAction.UPLEFTFIRE), jnp.equal(action, JAXAtariAction.DOWNLEFTFIRE))))))
+    is_right = jnp.logical_or(jnp.equal(action, JAXAtariAction.RIGHT), jnp.logical_or(jnp.equal(action, JAXAtariAction.UPRIGHT), jnp.logical_or(jnp.equal(action, JAXAtariAction.DOWNRIGHT), jnp.logical_or(jnp.equal(action, JAXAtariAction.RIGHTFIRE), jnp.logical_or(jnp.equal(action, JAXAtariAction.UPRIGHTFIRE), jnp.equal(action, JAXAtariAction.DOWNRIGHTFIRE))))))
 
     # if player is moving down add 1 to player_y
     new_player_y = jax.lax.cond(is_down, lambda: player_y + 1, lambda: player_y)
@@ -190,10 +194,13 @@ def player_step(player_x, player_y, is_checking, action):
     # if player is moving right add 1 to player_x
     new_player_x = jax.lax.cond(is_right, lambda: player_x + 1, lambda: new_player_x)
     # modulo the player_x and player_y to be on the field
-    new_player_x = jnp.mod(new_player_x, NUM_FIELDS_X)
-    new_player_y = jnp.mod(new_player_y, NUM_FIELDS_Y)
+    new_player_x = jax.lax.cond(jnp.less_equal(player_move_cooldown, 0),lambda: jnp.mod(new_player_x, NUM_FIELDS_X),lambda: player_x)
+    new_player_y = jax.lax.cond(jnp.less_equal(player_move_cooldown, 0),lambda: jnp.mod(new_player_y, NUM_FIELDS_Y),lambda: player_y)
 
-    return new_player_x, new_player_y, new_is_checking
+    # if cooldown is <= 0 set it to MOVE_COOLDOWN else subtract 1
+    new_player_move_cooldown = jax.lax.cond(jnp.less_equal(player_move_cooldown, 0), lambda: MOVE_COOLDOWN, lambda: player_move_cooldown - 1)
+
+    return new_player_x, new_player_y, new_is_checking, new_player_move_cooldown
 
 
 class JaxFlagCapture(JaxEnvironment[FlagCaptureState, FlagCaptureObservation, FlagCaptureInfo]):
@@ -204,24 +211,24 @@ class JaxFlagCapture(JaxEnvironment[FlagCaptureState, FlagCaptureObservation, Fl
             reward_funcs = tuple(reward_funcs)
         self.reward_funcs = reward_funcs
         self.action_set = {
-            NOOP,
-            FIRE,
-            UP,
-            RIGHT,
-            LEFT,
-            DOWN,
-            UPRIGHT,
-            UPLEFT,
-            DOWNRIGHT,
-            DOWNLEFT,
-            UPFIRE,
-            RIGHTFIRE,
-            LEFTFIRE,
-            DOWNFIRE,
-            UPRIGHTFIRE,
-            UPLEFTFIRE,
-            DOWNRIGHTFIRE,
-            DOWNLEFTFIRE
+            JAXAtariAction.NOOP,
+            JAXAtariAction.FIRE,
+            JAXAtariAction.UP,
+            JAXAtariAction.RIGHT,
+            JAXAtariAction.LEFT,
+            JAXAtariAction.DOWN,
+            JAXAtariAction.UPRIGHT,
+            JAXAtariAction.UPLEFT,
+            JAXAtariAction.DOWNRIGHT,
+            JAXAtariAction.DOWNLEFT,
+            JAXAtariAction.UPFIRE,
+            JAXAtariAction.RIGHTFIRE,
+            JAXAtariAction.LEFTFIRE,
+            JAXAtariAction.DOWNFIRE,
+            JAXAtariAction.UPRIGHTFIRE,
+            JAXAtariAction.UPLEFTFIRE,
+            JAXAtariAction.DOWNRIGHTFIRE,
+            JAXAtariAction.DOWNLEFTFIRE
         }
 
     def reset(self, key: jax.random.PRNGKey = jax.random.PRNGKey(187)) -> Tuple[
@@ -233,11 +240,12 @@ class JaxFlagCapture(JaxEnvironment[FlagCaptureState, FlagCaptureObservation, Fl
         generated_field = generate_field(jnp.zeros((NUM_FIELDS_X, NUM_FIELDS_Y), dtype=jnp.int32), key, NUM_BOMBS,
                                          NUM_NUMBER_CLUES, NUM_DIRECTION_CLUES)
         state = FlagCaptureState(
-            player_x=jnp.array(2).astype(jnp.int32),
-            player_y=jnp.array(4).astype(jnp.int32),
-            time=jnp.array(75).astype(jnp.int32),
-            score=jnp.array(28).astype(jnp.int32),
+            player_x=jnp.array(0).astype(jnp.int32),
+            player_y=jnp.array(0).astype(jnp.int32),
+            time=jnp.array(0).astype(jnp.int32),
+            score=jnp.array(0).astype(jnp.int32),
             is_checking=jnp.array(1).astype(jnp.int32),
+            player_move_cooldown=jnp.array(0).astype(jnp.int32),
             field=generated_field,
             rng_key=key,
         )
@@ -270,10 +278,12 @@ class JaxFlagCapture(JaxEnvironment[FlagCaptureState, FlagCaptureObservation, Fl
     def step(self, state: FlagCaptureState, action: chex.Array) -> Tuple[
         FlagCaptureObservation, FlagCaptureState, float, bool, FlagCaptureInfo]:
 
-        new_player_x, player_speed_y, new_is_checking = player_step(
+
+        new_player_x, player_speed_y, new_is_checking, new_player_move_cooldown = player_step(
             state.player_x,
             state.player_y,
             state.is_checking,
+            state.player_move_cooldown,
             action,
         )
 
@@ -284,6 +294,7 @@ class JaxFlagCapture(JaxEnvironment[FlagCaptureState, FlagCaptureObservation, Fl
             is_checking=new_is_checking,
             score=state.score,
             field=state.field,
+            player_move_cooldown=new_player_move_cooldown,
             rng_key=state.rng_key,
         )
 
@@ -296,8 +307,9 @@ class JaxFlagCapture(JaxEnvironment[FlagCaptureState, FlagCaptureObservation, Fl
 
         return observation, new_state, env_reward, done, info
 
-    def get_action_space(self) -> Tuple:
-        return self.action_set
+    @partial(jax.jit, static_argnums=(0,))
+    def get_action_space(self):
+        return jnp.array(list(self.action_set), dtype=jnp.int32)
 
     def reset_player(self):
         pass
@@ -332,9 +344,9 @@ def load_sprites():
 
     # Convert all sprites to the expected format (add frame dimension)
     SPRITE_BG = jnp.expand_dims(background, axis=0)
-    SPRITE_PLAYER = aj.load_and_pad_digits("./sprites/flagcapture/player_states/player_{}.npy", num_chars=19)
-    SPRITE_SCORE = aj.load_and_pad_digits("./sprites/flagcapture/green_digits/{}.npy", num_chars=10)
-    SPRITE_TIMER = aj.load_and_pad_digits("./sprites/flagcapture/red_digits/{}.npy", num_chars=10)
+    SPRITE_PLAYER = aj.load_and_pad_digits(os.path.join(MODULE_DIR,"sprites/flagcapture/player_states/player_{}.npy"), num_chars=19)
+    SPRITE_SCORE = aj.load_and_pad_digits(os.path.join(MODULE_DIR,"sprites/flagcapture/green_digits/{}.npy"), num_chars=10)
+    SPRITE_TIMER = aj.load_and_pad_digits(os.path.join(MODULE_DIR,"sprites/flagcapture/red_digits/{}.npy"), num_chars=10)
 
     return (
         SPRITE_BG,
@@ -438,48 +450,48 @@ def get_human_action() -> chex.Array:
         pressed_buttons += 1
     if pressed_buttons > 3:
         print("You have pressed a physically impossible combination of buttons")
-        return jnp.array(NOOP)
+        return jnp.array(JAXAtariAction.NOOP)
 
     if keys[pygame.K_SPACE]:
         # All actions with fire
         if keys[pygame.K_w] and keys[pygame.K_a]:
-            return jnp.array(UPLEFTFIRE)
+            return jnp.array(JAXAtariAction.UPLEFTFIRE)
         elif keys[pygame.K_w] and keys[pygame.K_d]:
-            return jnp.array(UPRIGHTFIRE)
+            return jnp.array(JAXAtariAction.UPRIGHTFIRE)
         elif keys[pygame.K_s] and keys[pygame.K_a]:
-            return jnp.array(DOWNLEFTFIRE)
+            return jnp.array(JAXAtariAction.DOWNLEFTFIRE)
         elif keys[pygame.K_s] and keys[pygame.K_d]:
-            return jnp.array(DOWNRIGHTFIRE)
+            return jnp.array(JAXAtariAction.DOWNRIGHTFIRE)
         elif keys[pygame.K_w]:
-            return jnp.array(UPFIRE)
+            return jnp.array(JAXAtariAction.UPFIRE)
         elif keys[pygame.K_a]:
-            return jnp.array(LEFTFIRE)
+            return jnp.array(JAXAtariAction.LEFTFIRE)
         elif keys[pygame.K_d]:
-            return jnp.array(RIGHTFIRE)
+            return jnp.array(JAXAtariAction.RIGHTFIRE)
         elif keys[pygame.K_s]:
-            return jnp.array(DOWNFIRE)
+            return jnp.array(JAXAtariAction.DOWNFIRE)
         else:
-            return jnp.array(FIRE)
+            return jnp.array(JAXAtariAction.FIRE)
     else:
         # All actions without fire
         if keys[pygame.K_w] and keys[pygame.K_a]:
-            return jnp.array(UPLEFT)
+            return jnp.array(JAXAtariAction.UPLEFT)
         elif keys[pygame.K_w] and keys[pygame.K_d]:
-            return jnp.array(UPRIGHT)
+            return jnp.array(JAXAtariAction.UPRIGHT)
         elif keys[pygame.K_s] and keys[pygame.K_a]:
-            return jnp.array(DOWNLEFT)
+            return jnp.array(JAXAtariAction.DOWNLEFT)
         elif keys[pygame.K_s] and keys[pygame.K_d]:
-            return jnp.array(DOWNRIGHT)
+            return jnp.array(JAXAtariAction.DOWNRIGHT)
         elif keys[pygame.K_w]:
-            return jnp.array(UP)
+            return jnp.array(JAXAtariAction.UP)
         elif keys[pygame.K_a]:
-            return jnp.array(LEFT)
+            return jnp.array(JAXAtariAction.LEFT)
         elif keys[pygame.K_d]:
-            return jnp.array(RIGHT)
+            return jnp.array(JAXAtariAction.RIGHT)
         elif keys[pygame.K_s]:
-            return jnp.array(DOWN)
+            return jnp.array(JAXAtariAction.DOWN)
         else:
-            return jnp.array(NOOP)
+            return jnp.array(JAXAtariAction.NOOP)
 
 
 if __name__ == "__main__":
