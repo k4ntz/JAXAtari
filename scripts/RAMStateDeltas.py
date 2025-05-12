@@ -1,6 +1,6 @@
 import numpy as np
 import pygame
-from ocatari.core import OCAtari, UPSCALE_FACTOR
+from ocatari.core import OCAtari
 from tqdm import tqdm
 from collections import deque
 from copy import deepcopy
@@ -20,6 +20,7 @@ The script has been modified to include the following features:
 - The script allows the user to record the RAM states of certain cells and observe the first and second derivatives of the recorded RAM states.
 
 """
+UPSCALE_FACTOR = 2
 RAM_RENDER_WIDTH = round(1000 * (UPSCALE_FACTOR / 2))
 RAM_N_COLS = 8
 RAM_CELL_WIDTH = round(115 * (UPSCALE_FACTOR / 2))
@@ -117,6 +118,7 @@ class Renderer:
                     )
                 )  # ram, state, image (rgb)
                 action = self._get_action()
+                print(f"Action: {action}")
                 reward = self.env.step(action)[1]
 
                 self.current_frame = self.env.render().copy()
