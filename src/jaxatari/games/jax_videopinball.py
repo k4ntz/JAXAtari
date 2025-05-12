@@ -30,6 +30,8 @@ HEIGHT = 210
 GRAVITY = 3  # 0.12
 BALL_MAX_SPEED = 6.0
 FLIPPER_MAX_ANGLE = 3
+FLIPPER_ANIMATION_Y_OFFSETS = jnp.array([0, 0, 3, 7]) # This is a little scuffed, it would be cleaner to just fix the sprites but this works fine
+FLIPPER_ANIMATION_X_OFFSETS = jnp.array([0, 0, 0, 1]) # Only for the right flipper
 PLUNGER_MAX_POSITION = 20
 
 # Game layout constants
@@ -173,9 +175,9 @@ def get_human_action() -> chex.Array:
         return jnp.array(Action.RIGHT)
     elif keys[pygame.K_SPACE]:
         return jnp.array(Action.FIRE)
-    elif keys[pygame.K_UP]:
+    elif keys[pygame.K_w]:
         return jnp.array(Action.UP)
-    elif keys[pygame.K_DOWN]:
+    elif keys[pygame.K_s]:
         return jnp.array(Action.DOWN)
     else:
         return jnp.array(Action.NOOP)
@@ -255,7 +257,7 @@ def plunger_step(state: VideoPinballState, action: chex.Array) -> chex.Array:
         ),
         lambda s: s - 1,
         lambda s: s,
-        operand=state.plunger_position,
+        operand=plunger_position,
     )
 
     # If FIRE
@@ -297,6 +299,24 @@ def flipper_step(state: VideoPinballState, action: chex.Array):
         lambda a: a + 1,
         lambda a: a,
         operand=state.right_flipper_angle,
+    )
+
+    left_flipper_angle = jax.lax.cond(
+        jnp.logical_and(
+            jnp.logical_not(action == Action.LEFT), state.left_flipper_angle > 0
+        ),
+        lambda a: a - 1,
+        lambda a: a,
+        operand=left_flipper_angle,
+    )
+
+    right_flipper_angle = jax.lax.cond(
+        jnp.logical_and(
+            jnp.logical_not(action == Action.RIGHT), state.right_flipper_angle > 0
+        ),
+        lambda a: a - 1,
+        lambda a: a,
+        operand=right_flipper_angle,
     )
 
     # TODO update angles based on step phase?
@@ -625,8 +645,7 @@ class JaxVideoPinball(
 
         lives = jax.lax.cond(
             ball_in_gutter,
-            lambda x: x
-            + 1,  # Because it's not really lives but more like a ball count? You start at 1 and it goes up to 3
+            lambda x: x + 1,  # Because it's not really lives but more like a ball count? You start at 1 and it goes up to 3
             lambda x: x,
             operand=state.lives,
         )
@@ -646,7 +665,7 @@ class JaxVideoPinball(
             bumpers_active=bumpers_active,
             targets_hit=targets_hit,
             step_counter=jnp.array(state.step_counter + 1).astype(jnp.int32),
-            ball_in_play=True,  # Necessary?
+            ball_in_play=ball_in_play,
             # obs_stack=None,
         )
 
@@ -1090,15 +1109,15 @@ class Renderer_AtraJaxisVideoPinball:
         frame_flipper_left = aj.get_sprite_frame(
             self.sprites["flipper_left"], state.left_flipper_angle
         )
-        raster = aj.render_at(raster, 64, 184, frame_flipper_left)
+        raster = aj.render_at(raster, 64, 184 - FLIPPER_ANIMATION_Y_OFFSETS[state.left_flipper_angle], frame_flipper_left)
 
         frame_flipper_right = aj.get_sprite_frame(
             self.sprites["flipper_right"], state.right_flipper_angle
         )
-        raster = aj.render_at(raster, 83, 184, frame_flipper_right)
+        raster = aj.render_at(raster, 83 + FLIPPER_ANIMATION_X_OFFSETS[state.right_flipper_angle], 184 - FLIPPER_ANIMATION_Y_OFFSETS[state.right_flipper_angle], frame_flipper_right)
 
         frame_plunger = aj.get_sprite_frame(
-            self.sprites["plunger"], state.plunger_position.astype(int)
+            self.sprites["plunger"], state.plunger_position
         )  # Still slightly inaccurate
         raster = aj.render_at(raster, 148, 133, frame_plunger)
 
