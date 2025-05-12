@@ -5,7 +5,6 @@ import jax.lax
 import jax.numpy as jnp
 import chex
 import pygame
-from gymnax.environments import spaces
 
 from jaxatari.renderers import AtraJaxisRenderer
 from jaxatari.rendering import atraJaxis as aj
@@ -18,12 +17,18 @@ WINDOW_WIDTH = WIDTH * 3
 WINDOW_HEIGHT = HEIGHT * 3
 
 BULLET_SPEED = 1
-PLAYER_Y = 50 
+PLAYER_Y = 195 
 PLAYER_SIZE = (7, 10)
 
 NUMBER_SIZE = (12, 9)
 NUMBER_YELLOW_OFFSET = 83
 
+WALL_LEFT_X = 0
+WALL_RIGHT_X = WIDTH
+
+MAX_SPEED = 2
+ACCELERATION = 1
+    
 PATH_SPRITES = "sprites/spaceinvaders"
 
 def get_human_action():
@@ -62,12 +67,39 @@ def player_step(state_player_x, state_player_speed, action: chex.Array):
     left = jnp.logical_or(action == Action.LEFT, action == Action.LEFTFIRE)
     right = jnp.logical_or(action == Action.RIGHT, action == Action.RIGHTFIRE)
     
-    player_x = jnp.clip(
-        state_player_x + 1,
-        0,
-        WIDTH,
+    touches_wall_left = state_player_x <= WALL_LEFT_X
+    touches_wall_right = state_player_x >= WALL_RIGHT_X - PLAYER_SIZE[0]
+    touches_wall = jnp.logical_or(touches_wall_left, touches_wall_right)
+
+    player_speed = jax.lax.cond(
+        jnp.logical_or(jnp.logical_not(jnp.logical_or(left, right)), touches_wall),
+        lambda s: jnp.round(s / 2).astype(jnp.int32),
+        lambda s: s,
+        operand=state_player_speed,
     )
-    return player_x
+
+    player_speed = jax.lax.cond(
+        left,
+        lambda s: jnp.minimum(s + ACCELERATION, MAX_SPEED),
+        lambda s: s,
+        operand=player_speed,
+    )
+
+    player_speed = jax.lax.cond(
+        right,
+        lambda s: jnp.maximum(s - ACCELERATION, -MAX_SPEED),
+        lambda s: s,
+        operand=player_speed,
+    )
+
+    player_x = jnp.clip(
+        state_player_x + player_speed,
+        WALL_LEFT_X,
+        WALL_RIGHT_X - PLAYER_SIZE[0]
+    )
+    
+    return player_x, player_speed
+
 
 class JaxSpaceInvaders(JaxEnvironment[SpaceInvadersState, SpaceInvadersObservation, SpaceInvadersInfo]):
     def __init__(self, reward_funcs: list[callable]=None):
@@ -103,7 +135,7 @@ class JaxSpaceInvaders(JaxEnvironment[SpaceInvadersState, SpaceInvadersObservati
 
     @partial(jax.jit, static_argnums=(0,))
     def step(self, state: SpaceInvadersState, action: chex.Array) -> Tuple[SpaceInvadersObservation, SpaceInvadersState, float, bool, SpaceInvadersInfo]:
-        new_player_x = player_step(
+        new_player_x, new_player_speed = player_step(
             state.player_x, state.player_speed, action
         )
 
@@ -116,9 +148,9 @@ class JaxSpaceInvaders(JaxEnvironment[SpaceInvadersState, SpaceInvadersObservati
 
         new_state = SpaceInvadersState(
             player_x=new_player_x,
-            player_speed=state.player_speed,
+            player_speed=new_player_speed,
             step_counter=step_counter,
-            player_score=state.player_score
+            player_score=state.player_score,
         )
 
         done = self._get_done(new_state)
@@ -215,7 +247,7 @@ class SpaceInvadersRenderer(AtraJaxisRenderer):
 
         # Load Player
         frame_player = aj.get_sprite_frame(self.SPRITE_PLAYER, 0)
-        raster = aj.render_at(raster, WIDTH - state.player_x, 185, frame_player)
+        raster = aj.render_at(raster, WIDTH - state.player_x - PLAYER_SIZE[0], PLAYER_Y - PLAYER_SIZE[1], frame_player)
 
         # Load Initial Score
         # Green Numbers
