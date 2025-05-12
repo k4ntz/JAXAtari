@@ -299,62 +299,6 @@ def flipper_step(state: VideoPinballState, action: chex.Array):
 
 
 @jax.jit
-def _check_all_obstacle_hits(
-    old_ball_x: chex.Array,
-    old_ball_y: chex.Array,
-    new_ball_x: chex.Array,
-    new_ball_y: chex.Array,
-    ball_direction: chex.Array,
-) -> bool:
-    """
-    Check if the ball is hitting an obstacle.
-
-    # top, left, right bottom, outer walls
-
-    # left, right inner walls
-    # middle bar
-    # corner boxes top left, right, bottom left, right
-    # bumper
-    # drop targets
-    # lit up targets
-    # rollovers (left & atari)
-    # spinner
-    """
-
-    ball_movement = BallMovement(
-        old_ball_x=old_ball_x,
-        old_ball_y=old_ball_y,
-        new_ball_x=new_ball_x,
-        new_ball_y=new_ball_y,
-    )
-
-    # Calculate the hit points for all objects
-    vmap_calc_hit_point = jax.vmap(
-        _calc_hit_point, in_axes=(None, 0)
-    )  # Use same ball_movement for each scene object
-
-    hit_points = vmap_calc_hit_point(ball_movement, SCENE_OBJECTS_STACKED)
-
-    entry_times = jnp.array(
-        [
-            top_wall_hit[0],
-            bottom_wall_hit[0],
-            left_wall_hit[0],
-            right_wall_hit[0],
-            # inner_wall_hit[0],
-        ]
-    )
-
-    # Determine the order of the hits that occured according to the time of entry t_entry
-    order_of_hits = jnp.argsort(entry_times)
-
-    # Find the first object that reflects and send the ball on its new path based on the reflection
-
-    # For all objects with t_entry <= t_entry of first reflecting object, call the objects hit functions in that order
-    # The last one, i.e. the reflecting object then gives the new direction and velocity of the ball
-
-
-@jax.jit
 def _calc_hit_point(
     ball_movement: BallMovement,
     scene_object: SceneObject,
@@ -420,6 +364,60 @@ def _calc_hit_point(
     return jax.lax.cond(
         no_collision, lambda _: jnp.array([9999, -1, -1]), lambda _: hit_point
     )
+
+
+@jax.jit
+def _check_all_obstacle_hits(
+    old_ball_x: chex.Array,
+    old_ball_y: chex.Array,
+    new_ball_x: chex.Array,
+    new_ball_y: chex.Array,
+    ball_direction: chex.Array,
+) -> bool:
+    """
+    Check if the ball is hitting an obstacle.
+
+    # top, left, right bottom, outer walls
+
+    # left, right inner walls
+    # middle bar
+    # corner boxes top left, right, bottom left, right
+    # bumper
+    # drop targets
+    # lit up targets
+    # rollovers (left & atari)
+    # spinner
+    """
+
+    ball_movement = BallMovement(
+        old_ball_x=old_ball_x,
+        old_ball_y=old_ball_y,
+        new_ball_x=new_ball_x,
+        new_ball_y=new_ball_y,
+    )
+
+    # Calculate the hit points for all objects
+    vmap_calc_hit_point = jax.vmap(
+        _calc_hit_point, in_axes=(None, 0)
+    )  # Use same ball_movement for each scene object
+
+    hit_points = vmap_calc_hit_point(ball_movement, SCENE_OBJECTS_STACKED)
+
+    # Get the indices of the stacked scene objects in order of entry time
+    sorted_scene_object_indices = jnp.argsort(hit_points[:, 0])
+    
+    # Get the index of the first object that reflects
+    first_reflecting_object_index = jnp.argmax(
+        SCENE_OBJECTS_STACKED.reflecting[sorted_scene_object_indices]
+    )
+
+    # Determine the order of the hits that occured according to the time of entry t_entry
+    order_of_hits = jnp.argsort(entry_times)
+
+    # Find the first object that reflects and send the ball on its new path based on the reflection
+
+    # For all objects with t_entry <= t_entry of first reflecting object, call the objects hit functions in that order
+    # The last one, i.e. the reflecting object then gives the new direction and velocity of the ball
 
 
 @jax.jit
