@@ -370,8 +370,8 @@ def get_bot_move(game_field: Field, difficulty: chex.Array, player_score: chex.A
 
 def compute_score_of_tiles(i, game_field, game_score):
     # Decode tile position
-    tile_x = jnp.floor_divide(i, 8)
-    tile_y = jnp.mod(i, 8)
+    tile_y = jnp.floor_divide(i, 8)
+    tile_x = jnp.mod(i, 8)
 
     # If tile is already taken, set invalid move (return very low score)
     score_of_tile = jax.lax.cond(
@@ -413,10 +413,46 @@ def compute_score_of_tile_1(tile_x, tile_y, game_field, game_score):
     
 
 
-def compute_flipped_tiles_by_direction(i, tile_x, tile_y, game_field):
+def compute_flipped_tiles_by_direction(i, tile_x: int, tile_y: int, game_field: Field):
     #TODO implement 
+    args = (tile_x,tile_y,game_field)
 
-    return 0
+    branches = [
+        lambda args: compute_flipped_tiles_top(args),
+        lambda args: compute_flipped_tiles_top_rigth(args),
+        lambda args: compute_flipped_tiles_rigth(args),
+        lambda args: compute_flipped_tiles_bottom_rigth(args),
+        lambda args: compute_flipped_tiles_bottom(args),
+        lambda args: compute_flipped_tiles_bottom_left(args),
+        lambda args: compute_flipped_tiles_left(args),
+        lambda args: compute_flipped_tiles_top_left(args),
+    ]
+
+    def compute_flipped_tiles_top(input): 
+        return 0
+
+    def compute_flipped_tiles_rigth(input):
+        return 0
+    def compute_flipped_tiles_bottom(input):
+        return 0
+    
+    def compute_flipped_tiles_left(input):
+        return 0
+
+    def compute_flipped_tiles_top_rigth(input):
+        return 0
+
+    def compute_flipped_tiles_bottom_rigth(input):
+        return 0
+
+    def compute_flipped_tiles_bottom_left(input):
+        return 0
+
+    def compute_flipped_tiles_top_left(input):
+        return 0
+
+    return jax.lax.switch(i, branches, args)
+
 
 
 class JaxOthello(JaxEnvironment[OthelloState, OthelloObservation, OthelloInfo]):
