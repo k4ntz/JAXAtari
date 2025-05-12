@@ -697,7 +697,7 @@ class Renderer:
 if __name__ == "__main__":
     from argparse import ArgumentParser
 
-    parser = ArgumentParser(description="Gymnasium ALE RAM Explorer with Frame Saving") # Updated description
+    parser = ArgumentParser(description="Gymnasium ALE RAM Explorer")
     parser.add_argument("-g", "--game", type=str, default="VideoPinball", help="Name of the Atari game (e.g., 'Pong', 'Breakout').")
     # Add scale argument
     parser.add_argument('--scale', type=int, default=4, help='Scale factor for the game display window')
