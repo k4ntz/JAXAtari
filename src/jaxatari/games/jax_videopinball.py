@@ -65,16 +65,16 @@ BOTTOM_WALL_TOP_Y_OFFSET = 184
 
 OUTER_WALL_THICKNESS = 8
 
-TOP_WALL_BOUNDING_BOX = jnp.ones(OUTER_WALL_THICKNESS, 160).astype(jnp.bool)
+TOP_WALL_BOUNDING_BOX = jnp.ones((OUTER_WALL_THICKNESS, 160)).astype(jnp.bool)
 TOP_WALL_OFFSET = jnp.array([TOP_WALL_LEFT_X_OFFSET, TOP_WALL_TOP_Y_OFFSET])
 
-BOTTOM_WALL_BOUNDING_BOX = jnp.ones(OUTER_WALL_THICKNESS, 160).astype(jnp.bool)
+BOTTOM_WALL_BOUNDING_BOX = jnp.ones((OUTER_WALL_THICKNESS, 160)).astype(jnp.bool)
 BOTTOM_WALL_OFFSET = jnp.array([TOP_WALL_LEFT_X_OFFSET, BOTTOM_WALL_TOP_Y_OFFSET])
 
-LEFT_WALL_BOUNDING_BOX = jnp.ones(176, OUTER_WALL_THICKNESS).astype(jnp.bool)
+LEFT_WALL_BOUNDING_BOX = jnp.ones((176, OUTER_WALL_THICKNESS)).astype(jnp.bool)
 LEFT_WALL_OFFSET = jnp.array([TOP_WALL_LEFT_X_OFFSET, TOP_WALL_TOP_Y_OFFSET])
 
-RIGHT_WALL_BOUNDING_BOX = jnp.ones(176, OUTER_WALL_THICKNESS).astype(jnp.bool)
+RIGHT_WALL_BOUNDING_BOX = jnp.ones((176, OUTER_WALL_THICKNESS)).astype(jnp.bool)
 RIGHT_WALL_OFFSET = jnp.array([RIGHT_WALL_LEFT_X_OFFSET, TOP_WALL_TOP_Y_OFFSET])
 
 
@@ -134,11 +134,11 @@ SCENE_OBJECT_LIST = [
     LEFT_WALL_SCENE_OBJECT,
     RIGHT_WALL_SCENE_OBJECT,
 ]
-SCENE_OBJECTS_STACKED = SceneObject(
-    hit_box_matrix=jnp.stack([obj.hit_box_matrix for obj in SCENE_OBJECT_LIST]),
-    hit_box_offset=jnp.stack([obj.hit_box_offset for obj in SCENE_OBJECT_LIST]),
-    reflecting=jnp.stack([obj.reflecting for obj in SCENE_OBJECT_LIST]),
-)
+# SCENE_OBJECTS_STACKED = SceneObject(
+#     hit_box_matrix=jnp.stack([obj.hit_box_matrix for obj in SCENE_OBJECT_LIST]),
+#     hit_box_offset=jnp.stack([obj.hit_box_offset for obj in SCENE_OBJECT_LIST]),
+#     reflecting=jnp.stack([obj.reflecting for obj in SCENE_OBJECT_LIST]),
+# )
 
 # define the positions of the state information
 STATE_TRANSLATOR: dict = {
@@ -405,7 +405,7 @@ def _check_all_obstacle_hits(
 
     # Get the indices of the stacked scene objects in order of entry time
     sorted_scene_object_indices = jnp.argsort(hit_points[:, 0])
-    
+
     # Get the index of the first object that reflects
     first_reflecting_object_index = jnp.argmax(
         SCENE_OBJECTS_STACKED.reflecting[sorted_scene_object_indices]
@@ -452,7 +452,7 @@ def ball_step(
     """
     Obstacle hit calculation
     """
-    new_ball_direction, _ball_vel_x, _ball_vel_y = _get_obstacle_hit_direction()
+    # new_ball_direction, _ball_vel_x, _ball_vel_y = _get_obstacle_hit_direction()
 
     """
     Gravity calculation
@@ -587,7 +587,7 @@ class JaxVideoPinball(
         ball_reset = jnp.logical_or(
             ball_in_gutter,
             jnp.logical_and(
-                jnp.logical_and(ball_x > 148, ball_y > 128, state.ball_in_play)
+                jnp.logical_and(ball_x > 148, ball_y > 128), state.ball_in_play
             ),
         )
 
