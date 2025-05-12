@@ -4,7 +4,7 @@ import jax.numpy as jnp
 import jaxatari.rendering.atraJaxis as aj
 import os
 
-from tennis_main import FRAME_WIDTH, FRAME_HEIGHT, GAME_OFFSET_LEFT_BOTTOM, GAME_OFFSET_TOP, GAME_HEIGHT, GAME_WIDTH, TennisState
+from tennis_main import FRAME_WIDTH, FRAME_HEIGHT, GAME_OFFSET_LEFT_BOTTOM, GAME_OFFSET_TOP, GAME_HEIGHT, GAME_WIDTH, TennisState, PLAYER_WIDTH, PLAYER_HEIGHT
 
 def load_sprites():
     MODULE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -14,10 +14,48 @@ def load_sprites():
 
     return BG, BALL, BALL_SHADOW
 
+
+# ToDo remove
+def get_bounding_box(width, height, border_color=(255, 0, 0, 255), border_thickness=1):
+    """
+    Creates a bounding box sprite with transparent interior and colored border.
+
+    Args:
+        width: Width of the bounding box (static)
+        height: Height of the bounding box (static)
+        border_color: RGBA tuple for border color (default: red)
+        border_thickness: Pixel width of the border (default: 1)
+
+    Returns:
+        Array of shape (height, width, 4) with RGBA values
+    """
+    # Create empty RGBA array
+    sprite = jnp.zeros((width, height, 4), dtype=jnp.uint8)
+
+    # Create border mask
+    border_mask = jnp.zeros((width, height), dtype=bool)
+
+    # Set border pixels to True
+    border_mask = border_mask.at[:border_thickness, :].set(True)  # Top border
+    border_mask = border_mask.at[-border_thickness:, :].set(True)  # Bottom border
+    border_mask = border_mask.at[:, :border_thickness].set(True)  # Left border
+    border_mask = border_mask.at[:, -border_thickness:].set(True)  # Right border
+
+    # Apply border color where mask is True
+    sprite = jnp.where(
+        border_mask[..., None],  # Expand for RGBA channels
+        jnp.array(border_color, dtype=jnp.uint8),
+        sprite
+    )
+
+    return sprite[jnp.newaxis, ...]
+
 class TennisRenderer:
 
     def __init__(self):
         (self.BG, self.BALL, self.BALL_SHADOW) = load_sprites()
+        # use bounding box as mockup
+        self.PLAYER = get_bounding_box(PLAYER_WIDTH, PLAYER_HEIGHT)
 
     #@partial(jax.jit, static_argnums=(0,))
     def render(self, state: TennisState) -> jnp.ndarray:
@@ -35,6 +73,14 @@ class TennisRenderer:
         # apply flat y offset depending on z value
         raster = aj.render_at(raster, ball_screen_x, ball_screen_y - state.ball_state.ball_z, frame_ball)
 
+        #player_screen_x, player_screen_y = self.perspective_transform(state.player_state.player_x, state.player_state.player_y)
+        #player_screen_x, player_screen_y = self.perspective_transform(0, -20)
+        frame_player = aj.get_sprite_frame(self.PLAYER, 0)
+        raster = aj.render_at(raster, state.player_state.player_x, state.player_state.player_y, frame_player)
+        #print(state.player_state.player_x, state.player_state.player_y)
+        #frame_player = aj.get_sprite_frame(self.PLAYER, 0)
+        #raster = aj.render_at(raster, 0, 0, frame_player)
+
         # visualize perspective transform
         """for i in range(0, GAME_HEIGHT):
             rec_left, _ = self.perspective_transform2(0, i)
@@ -47,14 +93,14 @@ class TennisRenderer:
             raster = aj.render_at(raster, i + GAME_OFFSET_TOP, rec_left + 2, rectangle)"""
 
         #raster = aj.render_at(raster, screen_x, screen_y, frame_ball)
-
+        """
         player_rec = jnp.zeros((5, 5, 4))
         player_rec = player_rec.at[:, :, 1].set(255)  # Yellow
         player_rec = player_rec.at[:, :, 0].set(255)  # Yellow
         player_rec = player_rec.at[:, :, 3].set(255)  # Alpha
         player_coords = self.perspective_transform(state.player_x, state.player_y)
 
-        raster = aj.render_at(raster, player_coords[0], player_coords[1], player_rec)
+        raster = aj.render_at(raster, player_coords[0], player_coords[1], player_rec)"""
 
         top_left_rec = jnp.zeros((2, 2, 4))
         top_left_rec = top_left_rec.at[:, :, 1].set(255)  # Yellow
