@@ -445,8 +445,9 @@ class JaxPong(JaxEnvironment[PongState, PongObservation, PongInfo]):
 
     @partial(jax.jit, static_argnums=(0,))
     def step(self, state: PongState, action: chex.Array) -> Tuple[PongState, PongObservation, float, bool, PongInfo]:
+        # chex provides jax with additional debug/testing functionality.
+        # Probably best to use it instead of simply jnp.array
         # Step 1: Update player position and speed
-        # only execute player step on even steps (base implementation only moves the player every second tick)
         new_player_y, player_speed_b, new_acceleration_counter = player_step(
             state.player_y, state.player_speed, state.acceleration_counter, action
         )
