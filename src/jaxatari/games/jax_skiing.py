@@ -6,6 +6,7 @@ import jax.numpy as jnp
 from dataclasses import dataclass
 from typing import Tuple, NamedTuple
 import random
+import os
 
 from jaxatari.environment import JaxEnvironment
 
@@ -554,38 +555,23 @@ class GameRenderer:
         self.font = pygame.font.Font(None, 36)
 
     def _create_skier_sprite(self) -> list[pygame.Surface]:
-        sprites = []
-        for i in range(16):
-            size = (
+        repo_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
+
+        img_path = os.path.join(repo_root, "jaxatari", "assets", "skiing", "skier_picture.jpg")
+
+        img = pygame.image.load(img_path).convert_alpha()
+        img = pygame.transform.scale(
+            img,
+            (
                 self.game_config.skier_width * self.render_config.scale_factor,
                 self.game_config.skier_height * self.render_config.scale_factor,
             )
-            sprite = pygame.Surface(size, pygame.SRCALPHA)
+        )
 
-            scaled_width = size[0]
-            scaled_height = size[1]
+        # 4. Gib Sprite mehrfach zurück (für `skier_pos`-Kompatibilität)
+        return [img for _ in range(16)]
 
-            pygame.draw.polygon(
-                sprite,
-                self.render_config.skier_color[i],
-                [
-                    (scaled_width // 2, 0),
-                    (0, scaled_height),
-                    (scaled_width, scaled_height),
-                ],
-            )
 
-            pygame.draw.line(
-                sprite,
-                self.render_config.text_color,
-                (0, scaled_height),
-                (scaled_width, scaled_height),
-                2,
-            )
-
-            sprites.append(sprite)
-
-        return sprites
 
     def _create_flag_sprite(self) -> pygame.Surface:
         size = (
@@ -698,7 +684,16 @@ class GameRenderer:
                 * self.render_config.scale_factor
             ),
         )
-        self.screen.blit(self.skier_sprite[state.skier_pos], skier_pos)
+
+        direction = state.skier_pos
+        if direction < 3:
+            index = 0  # left
+        elif direction > 5:
+            index = 2  # right
+        else:
+            index = 1  # straight
+
+        self.screen.blit(self.skier_sprite[index], skier_pos)
 
         # Draw flags
         for fx, fy in state.flags:
