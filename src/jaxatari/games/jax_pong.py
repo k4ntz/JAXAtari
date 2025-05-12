@@ -9,7 +9,7 @@ from gymnax.environments import spaces
 
 from jaxatari.renderers import AtraJaxisRenderer
 from jaxatari.rendering import atraJaxis as aj
-from jaxatari.environment import JaxEnvironment
+from jaxatari.environment import JaxEnvironment, JAXAtariAction as Action
 
 # Constants for game environment
 MAX_SPEED = 12
@@ -26,14 +26,6 @@ BALL_MAX_SPEED = 4  # Maximum ball speed cap
 MIN_BALL_SPEED = 1
 
 PLAYER_ACCELERATION = jnp.array([6, 3, 1, -1, 1, -1, 0, 0, 1, 0, -1, 0, 1])
-
-# Action constants
-NOOP = 0
-FIRE = 1
-RIGHT = 2
-LEFT = 3
-RIGHTFIRE = 4
-LEFTFIRE = 5
 
 BALL_START_X = jnp.array(78)
 BALL_START_Y = jnp.array(115)
@@ -91,17 +83,17 @@ def get_human_action() -> chex.Array:
     """
     keys = pygame.key.get_pressed()
     if keys[pygame.K_a] and keys[pygame.K_SPACE]:
-        return jnp.array(LEFTFIRE)
+        return jnp.array(Action.LEFTFIRE)
     elif keys[pygame.K_d] and keys[pygame.K_SPACE]:
-        return jnp.array(RIGHTFIRE)
+        return jnp.array(Action.RIGHTFIRE)
     elif keys[pygame.K_a]:
-        return jnp.array(LEFT)
+        return jnp.array(Action.LEFT)
     elif keys[pygame.K_d]:
-        return jnp.array(RIGHT)
+        return jnp.array(Action.RIGHT)
     elif keys[pygame.K_SPACE]:
-        return jnp.array(FIRE)
+        return jnp.array(Action.FIRE)
     else:
-        return jnp.array(NOOP)
+        return jnp.array(Action.NOOP)
 
 
 # immutable state container
@@ -119,7 +111,6 @@ class PongState(NamedTuple):
     step_counter: chex.Array
     acceleration_counter: chex.Array
     buffer: chex.Array
-    obs_stack: chex.ArrayTree
 
 
 class EntityPosition(NamedTuple):
@@ -146,8 +137,8 @@ def player_step(
     state_player_y, state_player_speed, acceleration_counter, action: chex.Array
 ):
     # check if one of the buttons is pressed
-    up = jnp.logical_or(action == LEFT, action == LEFTFIRE)
-    down = jnp.logical_or(action == RIGHT, action == RIGHTFIRE)
+    up = jnp.logical_or(action == Action.LEFT, action == Action.LEFTFIRE)
+    down = jnp.logical_or(action == Action.RIGHT, action == Action.RIGHTFIRE)
 
     # get the current acceleration
     acceleration = PLAYER_ACCELERATION[acceleration_counter]
@@ -339,8 +330,8 @@ def ball_step(
     boost_triggered = jnp.logical_and(
         player_paddle_hit,
         jnp.logical_or(
-            jnp.logical_or(action == LEFTFIRE, action == RIGHTFIRE),
-            action == FIRE,
+            jnp.logical_or(action == Action.LEFTFIRE, action == Action.RIGHTFIRE),
+            action == Action.FIRE,
         ),
     )
     # and check if the paddle hit the ball at MAX speed
@@ -417,12 +408,14 @@ class JaxPong(JaxEnvironment[PongState, PongObservation, PongInfo]):
         if reward_funcs is not None:
             reward_funcs = tuple(reward_funcs)
         self.reward_funcs = reward_funcs
-        self.action_set = {
-            NOOP,
-            FIRE,
-            RIGHT,
-            LEFT,
-        }
+        self.action_set = [
+            Action.NOOP,
+            Action.FIRE,
+            Action.RIGHT,
+            Action.LEFT,
+            Action.RIGHTFIRE,
+            Action.LEFTFIRE,
+        ]
         self.obs_size = 3*4+1+1
 
 
@@ -445,19 +438,10 @@ class JaxPong(JaxEnvironment[PongState, PongObservation, PongInfo]):
             step_counter=jnp.array(0).astype(jnp.int32),
             acceleration_counter=jnp.array(0).astype(jnp.int32),
             buffer=jnp.array(96).astype(jnp.int32),
-            obs_stack=None
         )
         initial_obs = self._get_observation(state)
 
-        def expand_and_copy(x):
-            x_expanded = jnp.expand_dims(x, axis=0)
-            return jnp.concatenate([x_expanded] * self.frame_stack_size, axis=0)
-
-        # Apply transformation to each leaf in the pytree
-        initial_obs = jax.tree.map(expand_and_copy, initial_obs)
-
-        new_state = state._replace(obs_stack=initial_obs)
-        return initial_obs, new_state
+        return initial_obs, state
 
     @partial(jax.jit, static_argnums=(0,))
     def step(self, state: PongState, action: chex.Array) -> Tuple[PongObservation, PongState, float, bool, PongInfo]:
@@ -566,20 +550,15 @@ class JaxPong(JaxEnvironment[PongState, PongObservation, PongInfo]):
             step_counter=step_counter,
             acceleration_counter=new_acceleration_counter,
             buffer=buffer,
-            obs_stack=state.obs_stack, # old for now
         )
 
         done = self._get_done(new_state)
         env_reward = self._get_env_reward(state, new_state)
         all_rewards = self._get_all_reward(state, new_state)
         info = self._get_info(new_state, all_rewards)
-
         observation = self._get_observation(new_state)
-        # stack the new observation, remove the oldest one
-        observation = jax.tree.map(lambda stack, obs: jnp.concatenate([stack[1:], jnp.expand_dims(obs, axis=0)], axis=0), new_state.obs_stack, observation)
-        new_state = new_state._replace(obs_stack=observation)
 
-        return new_state.obs_stack, new_state, env_reward, done, info
+        return observation, new_state, env_reward, done, info
 
     @partial(jax.jit, static_argnums=(0,))
     def _get_observation(self, state: PongState):
@@ -635,6 +614,9 @@ class JaxPong(JaxEnvironment[PongState, PongObservation, PongInfo]):
 
     def action_space(self) -> spaces.Discrete:
         return spaces.Discrete(len(self.action_set))
+
+    def get_action_space(self) -> jnp.ndarray:
+        return jnp.array(self.action_set)
 
     def observation_space(self) -> spaces.Box:
         return spaces.Box(

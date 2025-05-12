@@ -7,13 +7,7 @@ import jax.numpy as jnp
 from dataclasses import dataclass
 from typing import Tuple, NamedTuple, List, Dict, Optional, Any
 
-from jaxatari.environment import JaxEnvironment
-
-# Actions
-NOOP = 0
-UP = 1
-DOWN = 2
-
+from jaxatari.environment import JaxEnvironment, JAXAtariAction as Action
 
 @dataclass
 class GameConfig:
@@ -129,7 +123,7 @@ class JaxFreeway(JaxEnvironment[GameState, FreewayObservation, FreewayInfo]):
         state = GameState(
             chicken_y=jnp.array(chicken_y),
             cars=jnp.array(cars),
-            score=jnp.array(10),
+            score=jnp.array(0),
             time=jnp.array(0),
             cooldown=jnp.array(0),
             walking_frames=jnp.array(0),
@@ -145,7 +139,7 @@ class JaxFreeway(JaxEnvironment[GameState, FreewayObservation, FreewayInfo]):
         dy = jnp.where(
             jnp.logical_and(state.cooldown > 30, state.cooldown < 54), # throw the chicken back for 24 frames
             1.0,
-            jnp.where(action == UP, -1.0, jnp.where(action == DOWN, 1.0, 0.0)),
+            jnp.where(action == Action.UP, -1.0, jnp.where(action == Action.DOWN, 1.0, 0.0)),
         )
 
         dy = jnp.where(
@@ -295,6 +289,11 @@ class JaxFreeway(JaxEnvironment[GameState, FreewayObservation, FreewayInfo]):
     @partial(jax.jit, static_argnums=(0,))
     def _get_done(self, state: GameState) -> bool:
         return state.game_over
+
+    @partial(jax.jit, static_argnums=(0,))
+    def get_action_space(self):
+        return jnp.array([Action.NOOP, Action.UP, Action.DOWN])
+
 
 
 from jaxatari.renderers import AtraJaxisRenderer
@@ -524,11 +523,11 @@ def main():
         # Handle input
         keys = pygame.key.get_pressed()
         if keys[pygame.K_w]:
-            action = UP
+            action = Action.UP
         elif keys[pygame.K_s]:
-            action = DOWN
+            action = Action.DOWN
         else:
-            action = NOOP
+            action = Action.NOOP
 
         # Update game state
         obs, state, reward, done, info = (jitted_step(state, action))
