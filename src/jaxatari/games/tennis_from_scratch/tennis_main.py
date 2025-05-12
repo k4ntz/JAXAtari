@@ -1,7 +1,7 @@
 import pygame
 import tennis_renderer as renderer
-from jaxatari.rendering import atraJaxis as aj
 from jaxatari.environment import JAXAtariAction
+from jaxatari.rendering import atraJaxis as aj
 from typing import NamedTuple
 import chex
 import jax.lax
@@ -24,6 +24,22 @@ GAME_OFFSET_TOP = 43 # don't use 44, because that is on the line and playing on 
 GAME_WIDTH = FIELD_WIDTH_BOTTOM
 GAME_HEIGHT = FIELD_HEIGHT
 
+PLAYER_WIDTH = 13 # player flips side so total covered x section is greater
+PLAYER_HEIGHT = 23
+
+PLAYER_MIN_X = 10#17
+PLAYER_MAX_X = 130#142
+
+# lower y-axis values are towards the top in our case, opposite in original game
+PLAYER_Y_LOWER_BOUND_BOTTOM = 180#206-2-PLAYER_HEIGHT
+PLAYER_Y_UPPER_BOUND_BOTTOM = 109#206-53-PLAYER_HEIGHT
+PLAYER_Y_LOWER_BOUND_TOP = 72#206-91-PLAYER_HEIGHT
+PLAYER_Y_UPPER_BOUND_TOP = 0#206-148-PLAYER_HEIGHT
+PLAYER_START_X = 20
+PLAYER_START_Y = 20
+PLAYER_START_DIRECTION = 1 # 1 right, -1 left
+PLAYER_START_FIELD = 1 #1 top, -1 bottom
+
 rand_key = random.PRNGKey(0)
 
 class BallState(NamedTuple):
@@ -37,18 +53,23 @@ class BallState(NamedTuple):
     ball_hit_target_x: chex.Array
     ball_hit_target_y: chex.Array
 
-class TennisState(NamedTuple):
+class PlayerState(NamedTuple):
     player_x: chex.Array
     player_y: chex.Array
-    ball_state: chex.Array = BallState(GAME_WIDTH / 2.0 - 2.5, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, GAME_WIDTH / 2.0 - 2.5, 0.0)
-    counter : chex.Array = 0
+    player_direction: chex.Array
+    player_field: chex.Array #top or bottom field
+
+class TennisState(NamedTuple):
+    player_state: PlayerState = PlayerState(jnp.array(PLAYER_START_X), jnp.array(PLAYER_START_Y), jnp.array(PLAYER_START_DIRECTION), jnp.array(PLAYER_START_FIELD))
+    ball_state: BallState = BallState(jnp.array(GAME_WIDTH / 2.0 - 2.5), jnp.array(0.0), jnp.array(0.0), jnp.array(0.0), jnp.array(0.0), jnp.array(0.0), jnp.array(0.0), jnp.array(GAME_WIDTH / 2.0 - 2.5), jnp.array(0.0))
+    counter : chex.Array = jnp.array(0)
 
 #@partial(jax.jit, static_argnums=(0,))
 def tennis_step(state: TennisState, action) -> TennisState:
     new_ball_state = ball_step(state, action)
-    new_state_after_player_step = player_step(state, action)
+    new_player_state = player_step(state, action)
 
-    return TennisState(new_state_after_player_step.player_x, new_state_after_player_step.player_y, new_ball_state, state.counter + 1)
+    return TennisState(new_player_state, new_ball_state, state.counter + 1)
     # new_player_x = jnp.where(state.player_x < FRAME_WIDTH, state.player_x + 1, state.player_x - 1)
     #new_ball_x = jnp.where(state.ball_direction == 0, state.ball_x + 1, state.ball_x - 1)
     #new_ball_z = jnp.where(state.ball_z_direction == 0, state.ball_z + 1, state.ball_z - 1)
@@ -62,6 +83,58 @@ def tennis_step(state: TennisState, action) -> TennisState:
     #new_ball_y = jnp.where(state.counter % 4 == 0, state.ball_y + 1, state.ball_y)
 
     #return TennisState(state.player_x, state.player_y, new_ball_x, new_ball_y, ball_z=new_ball_z, ball_direction=new_direction, ball_z_direction=new_z_direction, counter=state.counter + 1)
+
+def player_step(state: TennisState, action: chex.Array) -> PlayerState:
+    """Update the player position based on coodinates and action"""
+    player_state = update_player_pos(state.player_state, action)
+    # todo add turning etc.
+    return player_state
+
+
+def update_player_pos(state: PlayerState, action: chex.Array) -> PlayerState:
+    up = jnp.any(jnp.array([action == JAXAtariAction.UP, action == JAXAtariAction.UPRIGHT, action == JAXAtariAction.UPLEFT, action == JAXAtariAction.UPFIRE, action == JAXAtariAction.UPRIGHTFIRE,
+                            action == JAXAtariAction.UPLEFTFIRE]))
+    down = jnp.any(jnp.array(
+        [action == JAXAtariAction.DOWN, action == JAXAtariAction.DOWNRIGHT, action == JAXAtariAction.DOWNLEFT, action == JAXAtariAction.DOWNFIRE, action == JAXAtariAction.DOWNRIGHTFIRE,
+         action == JAXAtariAction.DOWNLEFTFIRE]))
+    left = jnp.any(jnp.array(
+        [action == JAXAtariAction.LEFT, action == JAXAtariAction.UPLEFT, action == JAXAtariAction.DOWNLEFT, action == JAXAtariAction.LEFTFIRE, action == JAXAtariAction.UPLEFTFIRE,
+         action == JAXAtariAction.DOWNLEFTFIRE]))
+    right = jnp.any(jnp.array(
+        [action == JAXAtariAction.RIGHT, action == JAXAtariAction.UPRIGHT, action == JAXAtariAction.DOWNRIGHT, action == JAXAtariAction.RIGHTFIRE, action == JAXAtariAction.UPRIGHTFIRE,
+         action == JAXAtariAction.DOWNRIGHTFIRE]))
+
+    # check if the player is trying to move left
+    player_x = jnp.where(
+        left,
+        state.player_x - 1,
+        state.player_x,
+    )
+    # check if the player is trying to move right
+    player_x = jnp.where(
+        right,
+        state.player_x + 1,
+        player_x,
+    )
+
+    player_x = jnp.clip(player_x, PLAYER_MIN_X, PLAYER_MAX_X)
+
+    # check if the player is trying to move up
+    player_y = jnp.where(
+        up,
+        state.player_y - 1,
+        state.player_y,
+    )
+
+    # check if the player is trying to move down
+    player_y = jnp.where(
+        down,
+        state.player_y + 1,
+        player_y,
+    )
+    player_y = jnp.where(state.player_field == 1 , jnp.clip(player_y, PLAYER_Y_UPPER_BOUND_TOP, PLAYER_Y_LOWER_BOUND_TOP), jnp.clip(player_y, PLAYER_Y_UPPER_BOUND_BOTTOM, PLAYER_Y_LOWER_BOUND_BOTTOM))
+    return PlayerState(player_x, player_y, state.player_direction, state.player_field)
+
 
 def ball_step(state: TennisState, action) -> BallState:
     # 2.2 is initial velocity, 0.11 is gravity per frame
@@ -88,25 +161,27 @@ def ball_step(state: TennisState, action) -> BallState:
     #BallState(new_ball_state.ball_x, new_ball_state.ball_y, new_ball_z, new_ball_z_fp, new_ball_velocity_z_fp, new_ball_state.new_ball_hit_start_x, new_ball_state.new_ball_hit_start_y, new_ball_state.new_ball_hit_target_x, new_ball_state.new_ball_hit_target_y)
 
     # todo fix hardcoded values (2 is ball width, 5 is player width)
+    player_state = state.player_state
+
     player_overlap_ball_x = jnp.logical_or(
         jnp.logical_or(
             jnp.logical_and(
-                state.player_x >= ball_state.ball_x - 1,
-                state.player_x <= ball_state.ball_x + 2 + 1
+                player_state.player_x >= ball_state.ball_x - 1,
+                player_state.player_x <= ball_state.ball_x + 2 + 1
             ),
             jnp.logical_and(
-                ball_state.ball_x >= state.player_x - 1,
-                ball_state.ball_x <= state.player_x + 5 + 1
+                ball_state.ball_x >= player_state.player_x - 1,
+                ball_state.ball_x <= player_state.player_x + 5 + 1
             )
         ),
         jnp.logical_or(
             jnp.logical_and(
-                state.player_x + 5 >= ball_state.ball_x - 1,
-                state.player_x + 5 <= ball_state.ball_x + 2 + 1
+                player_state.player_x + 5 >= ball_state.ball_x - 1,
+                player_state.player_x + 5 <= ball_state.ball_x + 2 + 1
             ),
             jnp.logical_and(
-                ball_state.ball_x + 2 >= state.player_x - 1,
-                ball_state.ball_x + 2 <= state.player_x + 5 + 1
+                ball_state.ball_x + 2 >= player_state.player_x - 1,
+                ball_state.ball_x + 2 <= player_state.player_x + 5 + 1
             )
         )
     )
@@ -132,7 +207,7 @@ def handle_ball_fire(state: TennisState) -> BallState:
     ball_width = 2.0
     max_dist = player_width / 2 + ball_width / 2
 
-    angle = -1 * ((state.player_x - state.ball_state.ball_x) / max_dist)
+    angle = -1 * ((state.player_state.player_x - state.ball_state.ball_x) / max_dist)
     # calc x landing position depending on player hit angle
     #angle = 0 # neutral angle, between -1...1
     left_offset = -39
@@ -144,37 +219,10 @@ def handle_ball_fire(state: TennisState) -> BallState:
 
     return BallState(state.ball_state.ball_x, state.ball_state.ball_y, state.ball_state.ball_z, state.ball_state.ball_z_fp, state.ball_state.ball_velocity_z_fp, new_ball_hit_start_x, new_ball_hit_start_y, new_ball_hit_target_x, new_ball_hit_target_y)
 
-def player_step(state: TennisState, action) -> TennisState:
-    should_move_right = jnp.logical_and(
-        action == JAXAtariAction.RIGHT,
-        state.player_x <= GAME_WIDTH,
-    )
-
-    should_move_left = jnp.logical_and(
-        action == JAXAtariAction.LEFT,
-        state.player_x >= 0,
-    )
-
-    new_player_x = jnp.where(should_move_right, state.player_x + 1, state.player_x)
-    new_player_x = jnp.where(should_move_left, state.player_x - 1, new_player_x)
-
-    should_move_up = jnp.logical_and(
-        action == JAXAtariAction.UP,
-        state.player_y >= 0,
-    )
-
-    should_move_down = jnp.logical_and(
-        action == JAXAtariAction.DOWN,
-        state.player_y<= GAME_HEIGHT,
-    )
-
-    new_player_y = jnp.where(should_move_up, state.player_y - 1, state.player_y)
-    new_player_y = jnp.where(should_move_down, state.player_y + 1, new_player_y)
-
-    return TennisState(new_player_x, new_player_y, state.ball_state, state.counter)
-
 def tennis_reset() -> TennisState:
-    return TennisState(0.0, 100.0)
+    player_state = PlayerState(jnp.array(PLAYER_START_X), jnp.array(PLAYER_START_Y), jnp.array(PLAYER_START_DIRECTION), jnp.array(PLAYER_START_FIELD))
+    ball_state = BallState(jnp.array(GAME_WIDTH / 2.0 - 2.5), jnp.array(0.0), jnp.array(0.0), jnp.array(0.0), jnp.array(0.0), jnp.array(0.0), jnp.array(0.0), jnp.array(GAME_WIDTH / 2.0 - 2.5), jnp.array(0.0))
+    return TennisState(player_state, ball_state, jnp.array(0))
 
 if __name__ == "__main__":
     pygame.init()

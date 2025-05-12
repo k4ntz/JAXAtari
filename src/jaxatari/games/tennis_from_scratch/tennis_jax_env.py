@@ -1,10 +1,10 @@
-from jaxatari.environment import JaxEnvironment, EnvState, EnvObs, EnvInfo, JAXAtariAction
+from jaxatari.environment import JaxEnvironment, EnvState, EnvObs, EnvInfo
 from jaxatari.games.tennis_from_scratch.tennis_main import TennisState
 from typing import NamedTuple, Tuple
 import jax.numpy as jnp
 
 from jaxatari.renderers import AtraJaxisRenderer
-from tennis_main import tennis_step, GAME_WIDTH
+from tennis_main import tennis_step, tennis_reset
 from tennis_renderer import TennisRenderer as tr
 
 renderer = tr()
@@ -23,8 +23,7 @@ class AtraJaxisTennisRenderer(AtraJaxisRenderer):
 class TennisJaxEnv(JaxEnvironment[TennisState, TennisObs, TennisInfo]):
 
     def reset(self, key) -> Tuple[TennisObs, TennisState]:
-        # center player by subtracting half player width, hardcode for now todo fix
-        reset_state = TennisState(GAME_WIDTH / 2.0 - 2.5, 0.0)
+        reset_state = tennis_reset()
         reset_obs = self._get_observation(reset_state)
 
         return reset_obs, reset_state
@@ -42,7 +41,7 @@ class TennisJaxEnv(JaxEnvironment[TennisState, TennisObs, TennisInfo]):
         return renderer.render(state)
 
     def get_action_space(self) -> jnp.ndarray:
-        return [JAXAtariAction.RIGHT, JAXAtariAction.LEFT, JAXAtariAction.UP, JAXAtariAction.DOWN, JAXAtariAction.FIRE]
+        return jnp.array([0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17])
 
     def get_observation_space(self) -> Tuple:
         pass
