@@ -12,6 +12,7 @@ from typing import Dict, Any, Optional, NamedTuple, Tuple
 from functools import partial
 
 from jaxatari.rendering import atraJaxis as aj
+from jaxatari.renderers import AtraJaxisRenderer
 from jaxatari.environment import JaxEnvironment, JAXAtariAction as Action
 
 @dataclass(frozen=True)
@@ -68,11 +69,12 @@ class AtlantisObservation(NamedTuple):
 class AtlantisInfo(NamedTuple):
     time: jnp.ndarray
 
-class Renderer_AtraJaxis:
+class Renderer_AtraJaxis(AtraJaxisRenderer):
     sprites: Dict[str, Any]
 
-    def __init__(self, config: GameConfig = None):
-        self.config = config
+    def __init__(self, config: GameConfig | None = None):
+        super().__init__()
+        self.config = config or GameConfig()
         self.sprite_path = f"{os.path.dirname(os.path.abspath(__file__))}/sprites/atlantis"
         self.sprites = self._load_sprites()
 
@@ -141,16 +143,17 @@ class Renderer_AtraJaxis:
         return raster
 
 class JaxAtlantis(JaxEnvironment[AtlantisState, AtlantisObservation, AtlantisInfo]):
-    def __init__(self, frameskip: int = 1, reward_funcs: list[callable] = None, config: GameConfig = None):
+    def __init__(self, frameskip: int = 1, reward_funcs: list[callable] = None, config: GameConfig | None = None):
         super().__init__()
-        self.config = config
+        # if no config was provided, instantiate the default one
+        self.config = config or GameConfig()
         self.frameskip = frameskip
         self.frame_stack_size = 4
         if reward_funcs is not None:
             reward_funcs = tuple(reward_funcs)
         self.reward_funcs = reward_funcs
 
-    def reset(self) -> Tuple[AtlantisObservation, AtlantisState]:
+    def reset(self, key: jax.random.PRNGKey = jax.random.PRNGKey(42)) -> Tuple[AtlantisObservation, AtlantisState]:
         # --- empty tables ---
         empty_enemies = jnp.zeros(
             (self.config.max_enemies, 5),
@@ -292,7 +295,7 @@ class JaxAtlantis(JaxEnvironment[AtlantisState, AtlantisObservation, AtlantisInf
 
 
     @partial(jax.jit, static_argnums=(0,))
-    def step(self, state: AtlantisState, action: chex.Array) -> Tuple[AtlantisState, AtlantisObservation, float, bool, AtlantisInfo]:
+    def step(self, state: AtlantisState, action: chex.Array) -> Tuple[AtlantisObservation, AtlantisState, float, bool, AtlantisInfo]:
         # input handling
         fire_pressed,  cannon_idx = self._interpret_action(state, action)
 
@@ -310,7 +313,7 @@ class JaxAtlantis(JaxEnvironment[AtlantisState, AtlantisObservation, AtlantisInf
         reward = 0.0      # Placeholder: no scoring yet
         done = False    # Never terminates for now
 
-        return state, observation, reward, done, info
+        return observation, state, reward, done, info
 
 
     @partial(jax.jit, static_argnums=(0,))
@@ -358,6 +361,14 @@ class JaxAtlantis(JaxEnvironment[AtlantisState, AtlantisObservation, AtlantisInf
         Placeholder done: never terminates.
         """
         return False
+
+    @partial(jax.jit, static_argnums=(0,))
+    def get_action_space(self) -> jnp.ndarray:
+        """
+        Placeholder done: never terminates.
+        """
+        return jnp.array([], dtype=jnp.int32)
+
 
 
 # Keyboard inputs
