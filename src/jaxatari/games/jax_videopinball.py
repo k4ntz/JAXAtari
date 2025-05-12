@@ -91,6 +91,55 @@ MIDDLE_BAR_X = 104
 MIDDLE_BAR_WIDTH = 16
 MIDDLE_BAR_HEIGHT = 8
 
+
+@chex.dataclass
+class BallMovement:
+    old_ball_x: chex.Array
+    old_ball_y: chex.Array
+    new_ball_x: chex.Array
+    new_ball_y: chex.Array
+
+
+@chex.dataclass
+class SceneObject:
+    hit_box_matrix: chex.Array
+    hit_box_offset: chex.Array
+    reflecting: chex.Array  # 0: no reflection, 1: reflection
+
+
+TOP_WALL_SCENE_OBJECT = SceneObject(
+    hit_box_matrix=TOP_WALL_BOUNDING_BOX,
+    hit_box_offset=TOP_WALL_OFFSET,
+    reflecting=jnp.array(1),
+)
+BOTTOM_WALL_SCENE_OBJECT = SceneObject(
+    hit_box_matrix=BOTTOM_WALL_BOUNDING_BOX,
+    hit_box_offset=BOTTOM_WALL_OFFSET,
+    reflecting=jnp.array(1),
+)
+LEFT_WALL_SCENE_OBJECT = SceneObject(
+    hit_box_matrix=LEFT_WALL_BOUNDING_BOX,
+    hit_box_offset=LEFT_WALL_OFFSET,
+    reflecting=jnp.array(1),
+)
+RIGHT_WALL_SCENE_OBJECT = SceneObject(
+    hit_box_matrix=RIGHT_WALL_BOUNDING_BOX,
+    hit_box_offset=RIGHT_WALL_OFFSET,
+    reflecting=jnp.array(1),
+)
+
+SCENE_OBJECT_LIST = [
+    TOP_WALL_SCENE_OBJECT,
+    BOTTOM_WALL_SCENE_OBJECT,
+    LEFT_WALL_SCENE_OBJECT,
+    RIGHT_WALL_SCENE_OBJECT,
+]
+SCENE_OBJECTS_STACKED = SceneObject(
+    hit_box_matrix=jnp.stack([obj.hit_box_matrix for obj in SCENE_OBJECT_LIST]),
+    hit_box_offset=jnp.stack([obj.hit_box_offset for obj in SCENE_OBJECT_LIST]),
+    reflecting=jnp.stack([obj.reflecting for obj in SCENE_OBJECT_LIST]),
+)
+
 # define the positions of the state information
 STATE_TRANSLATOR: dict = {
     0: "ball_x",
@@ -272,64 +321,83 @@ def _check_all_obstacle_hits(
     # spinner
     """
 
-    # TOP_WALL
-    top_wall_hit = _check_specific_object_hit(
-    old_ball_x: chex.Array,
-    old_ball_y: chex.Array,
-    new_ball_x: chex.Array,
-    new_ball_y: chex.Array,
-        ball_direction=ball_direction,
-        hit_box_matrix=TOP_WALL_BOUNDING_BOX,
-        hit_box_offset=TOP_WALL_OFFSET,
+    ball_movement = BallMovement(
+        old_ball_x=old_ball_x,
+        old_ball_y=old_ball_y,
+        new_ball_x=new_ball_x,
+        new_ball_y=new_ball_y,
     )
 
+    # Calculate the hit points for all objects
+    vmap_calc_hit_point = jax.vmap(
+        _calc_hit_point, in_axes=(None, 0)
+    )  # Use same ball_movement for each scene object
 
-@jax.jit
-def _calc_hit_bounding_box_borders(
-    old_ball_x: chex.Array,
-    old_ball_y: chex.Array,
-    new_ball_x: chex.Array,
-    new_ball_y: chex.Array,
-    ball_direction: chex.Array,
-    hit_box_matrix: chex.Array,
-    hit_box_offset: chex.Array,
-) -> chex.Array:
-    """
-    Calculate which borders were hit by the ball.
-    """
+    hit_points = vmap_calc_hit_point(ball_movement, SCENE_OBJECTS_STACKED)
+
+    entry_times = jnp.array(
+        [
+            top_wall_hit[0],
+            bottom_wall_hit[0],
+            left_wall_hit[0],
+            right_wall_hit[0],
+            # inner_wall_hit[0],
+        ]
+    )
+
+    # Determine the order of the hits that occured according to the time of entry t_entry
+    order_of_hits = jnp.argsort(entry_times)
+
+    # Find the first object that reflects and send the ball on its new path based on the reflection
+
+    # For all objects with t_entry <= t_entry of first reflecting object, call the objects hit functions in that order
+    # The last one, i.e. the reflecting object then gives the new direction and velocity of the ball
 
 
 @jax.jit
 def _calc_hit_point(
-    old_ball_x: chex.Array,
-    old_ball_y: chex.Array,
-    new_ball_x: chex.Array,
-    new_ball_y: chex.Array,
-    ball_direction: chex.Array,
-    hit_box_matrix: chex.Array,
-    hit_box_offset: chex.Array,
+    ball_movement: BallMovement,
+    scene_object: SceneObject,
 ) -> chex.Array:
     """
     Calculate the hit point of the ball with the bounding box.
     Uses the slab method also known as ray AABB collision.
+
+    Returns:
+        hit_point: jnp.ndarray, the time and hit point of the ball with the bounding box.
+        hit_point[0]: jnp.ndarray, the time of entry
+        hit_point[1]: jnp.ndarray, the x position of the hit point
+        hit_point[2]: jnp.ndarray, the y position of the hit point
     """
-    
+
     # Calculate trajectory of the ball in x and y direction
-    trajectory_x = new_ball_x - old_ball_x
-    trajectory_y = new_ball_y - old_ball_y
-    
+    trajectory_x = ball_movement.new_ball_x - ball_movement.old_ball_x
+    trajectory_y = ball_movement.new_ball_y - ball_movement.old_ball_y
+
     # Force non-zero trajectory values to avoid division by zero
-    trajectory_x = jax.lax.cond(trajectory_x == 0, lambda x: jnp.array(1e-8), lambda x: x, operand=trajectory_x)
-    trajectory_y = jax.lax.cond(trajectory_y == 0, lambda x: jnp.array(1e-8), lambda x: x, operand=trajectory_y)
-    
-    tx1 = (hit_box_offset[0] - old_ball_x) / trajectory_x
-    tx2 = (hit_box_offset[0] + hit_box_matrix.shape[-2] - old_ball_x) / trajectory_x
-    ty1 = (hit_box_offset[1] - old_ball_y) / trajectory_y
-    ty2 = (hit_box_offset[1] + hit_box_matrix.shape[-1] - old_ball_y) / trajectory_y
+    trajectory_x = jax.lax.cond(
+        trajectory_x == 0, lambda x: jnp.array(1e-8), lambda x: x, operand=trajectory_x
+    )
+    trajectory_y = jax.lax.cond(
+        trajectory_y == 0, lambda x: jnp.array(1e-8), lambda x: x, operand=trajectory_y
+    )
+
+    tx1 = (scene_object.hit_box_offset[0] - ball_movement.old_ball_x) / trajectory_x
+    tx2 = (
+        scene_object.hit_box_offset[0]
+        + scene_object.hit_box_matrix.shape[-2]
+        - ball_movement.old_ball_x
+    ) / trajectory_x
+    ty1 = (scene_object.hit_box_offset[1] - ball_movement.old_ball_y) / trajectory_y
+    ty2 = (
+        scene_object.hit_box_offset[1]
+        + scene_object.hit_box_matrix.shape[-1]
+        - ball_movement.old_ball_y
+    ) / trajectory_y
 
     # Calculate the time of intersection with the bounding box
     tmin_x = jnp.minimum(tx1, tx2)
-    tmax_x = jnp.maximum(tx1, tx2) 
+    tmax_x = jnp.maximum(tx1, tx2)
     tmin_y = jnp.minimum(ty1, ty2)
     tmax_y = jnp.maximum(ty1, ty2)
 
@@ -338,12 +406,20 @@ def _calc_hit_point(
     t_exit = jnp.minimum(tmax_x, tmax_y)
 
     # t_entry > t_exit means that the ball is not colliding with the bounding box, because it has already passed it
-    no_collision = jnp.logical_or(t_entry > t_exit, t_entry > 1)    
+    no_collision = jnp.logical_or(t_entry > t_exit, t_entry > 1)
     no_collision = jnp.logical_or(no_collision, t_entry < 0)
-    
-    hit_point = jnp.array([old_ball_x + t_entry * trajectory_x, old_ball_y + t_entry * trajectory_y])
-    
-    return jax.lax.cond(no_collision, lambda _: jnp.array([-1, -1]), lambda _: hit_point)
+
+    hit_point = jnp.array(
+        [
+            t_entry,
+            ball_movement.old_ball_x + t_entry * trajectory_x,
+            ball_movement.old_ball_y + t_entry * trajectory_y,
+        ]
+    )
+
+    return jax.lax.cond(
+        no_collision, lambda _: jnp.array([9999, -1, -1]), lambda _: hit_point
+    )
 
 
 @jax.jit
