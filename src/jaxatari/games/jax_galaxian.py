@@ -144,8 +144,8 @@ def update_enemy_positions(state: GalaxianState) -> GalaxianState:
 @jax.jit
 def update_enemy_attack(state: GalaxianState) -> GalaxianState:
 
-    jax.debug.print("grid: {}", state.enemy_grid_alive[tuple(state.enemy_attack_pos)])
-    jax.debug.print("state: {}", state.enemy_attack_state)
+    #jax.debug.print("grid: {}", state.enemy_grid_alive[tuple(state.enemy_attack_pos)])
+    #jax.debug.print("state: {}", state.enemy_attack_state)
     new_enemy_attack_state = jnp.where(
         # enemy was killed, and state has not been reset yet, transitions to state 0
         jnp.logical_and(state.enemy_grid_alive[tuple(state.enemy_attack_pos)] == 0,state.enemy_attack_state != 0),
@@ -386,25 +386,25 @@ def bullet_collision_attack(state: GalaxianState) -> GalaxianState:
 
 def draw(screen, state):
     # Spieler zeichnen
-    player_rect = pygame.Rect(int(state.player_x.item()), int(state.player_y.item()), 20, 10)
+    player_rect = pygame.Rect(int(state.player_x), int(state.player_y), 20, 10)
     pygame.draw.rect(screen, (0, 255, 0), player_rect)
 
     # Kugel zeichnen
-    if state.bullet_x.item() > -1:
-        bullet_rect = pygame.Rect(int(state.bullet_x.item() - 2.5), int(state.bullet_y.item() - 5), 5, 10)
+    if state.bullet_x > -1:
+        bullet_rect = pygame.Rect(int(state.bullet_x - 2.5), int(state.bullet_y - 5), 5, 10)
         pygame.draw.rect(screen, (255, 255, 0), bullet_rect)
 
     # Angreifenden Feind zeichnen
     if jnp.all(state.enemy_attack_pos >= 0):
-        enemy_attack_rect = pygame.Rect(int(state.enemy_attack_x.item() - 7.5), int(state.enemy_attack_y.item() - 5), 15, 10)
+        enemy_attack_rect = pygame.Rect(int(state.enemy_attack_x - 7.5), int(state.enemy_attack_y - 5), 15, 10)
         pygame.draw.rect(screen, (255, 0, 0), enemy_attack_rect)
 
     # Feindgitter zeichnen
     for i in range(state.enemy_grid_x.shape[0]):
         for j in range(state.enemy_grid_x.shape[1]):
             if state.enemy_grid_alive[i, j] == 1:
-                x = int(state.enemy_grid_x[i, j].item() - 7.5)
-                y = int(state.enemy_grid_y[i, j].item() - 5)
+                x = int(state.enemy_grid_x[i, j] - 7.5)
+                y = int(state.enemy_grid_y[i, j] - 5)
                 enemy_rect = pygame.Rect(x, y, 15, 10)
                 pygame.draw.rect(screen, (255, 0, 0), enemy_rect)
 
@@ -485,7 +485,6 @@ class JaxGalaxian(JaxEnvironment[GalaxianState, GalaxianObservation, GalaxianInf
 
         initial_obs = self._get_observation(state)
 
-        #print("obs in reset (initial): ", initial_obs)
 
         def expand_and_copy(x):
             x_expanded = jnp.expand_dims(x, axis=0)
@@ -493,7 +492,6 @@ class JaxGalaxian(JaxEnvironment[GalaxianState, GalaxianObservation, GalaxianInf
 
         # Apply transformation to each leaf in the pytree
         stacked_obs = jax.tree.map(expand_and_copy, initial_obs)
-        #print("obs in reset (stacked): ", stacked_obs)
 
         new_state = state._replace(obs_stack=stacked_obs)
         return new_state, stacked_obs
@@ -547,6 +545,8 @@ class JaxGalaxian(JaxEnvironment[GalaxianState, GalaxianObservation, GalaxianInf
         info = self._get_info(new_state, all_rewards)
 
         observation = self._get_observation(new_state)
+        jax.debug.print("obs: {}", observation)
+
         # stack the new observation, remove the oldest one
         observation = jax.tree.map(lambda stack, obs: jnp.concatenate([stack[1:], jnp.expand_dims(obs, axis=0)], axis=0), new_state.obs_stack, observation)
         new_state = new_state._replace(obs_stack=observation)
@@ -605,52 +605,5 @@ if __name__ == "__main__":
     pygame.quit()
 
 
-#TODO: remove, kept for reference/testing
-"""
-def init_galaxian_state():
-    grid_rows = GRID_ROWS
-    grid_cols = GRID_COLS
-    enemy_spacing_x = ENEMY_SPACING_X
-    start_x = START_X
 
-    x_positions = jnp.arange(grid_cols) * enemy_spacing_x + start_x #arange schreibt so 0 1 2 3....
-    enemy_grid = jnp.tile(x_positions, (grid_rows, 1))    #kopiert die zeile untereinander
-
-    row_indices = jnp.arange(grid_rows).reshape(-1, 1)  # erzeugt 1. enemy jeder zeile
-    enemy_y_rows = ENEMY_GRID_Y - row_indices * ENEMY_SPACING_Y  # jeweils y pos
-    enemy_grid_y = jnp.broadcast_to(enemy_y_rows, (
-    grid_rows, grid_cols))  # kopiert die werte für 1. enemy auf die rechts in der zeile
-
-    enemy_alive = jnp.ones((grid_rows, grid_cols)) #alles auf 1
-
-
-    return GalaxianState(player_x=jnp.array(SCREEN_WIDTH / 2),
-                         player_y=jnp.array(SCREEN_HEIGHT - 20),
-                         player_shooting_cooldown=jnp.array(0),
-                         bullet_x=jnp.array(-1),
-                         bullet_y=jnp.array(-1),
-                         enemy_grid_x=enemy_grid,
-                         enemy_grid_y=enemy_grid_y,
-                         enemy_grid_alive=enemy_alive,
-                         enemy_grid_direction=jnp.array(1),
-                         enemy_attack_state=jnp.array(0),
-                         enemy_attack_pos=jnp.array((-1,-1)),
-                         enemy_attack_x=jnp.array(-1),
-                         enemy_attack_y=jnp.array(-1),
-                         enemy_attack_respawn_timer=jnp.array(20),
-                         random_key=jax.random.PRNGKey(0))
-                         
-@jax.jit
-def step(state: GalaxianState, action: Action) -> GalaxianState:
-    newState = update_player_position(state, action)
-    newState = handle_shooting(newState, action)
-    newState = update_enemy_positions(newState)
-    newState = update_bullets(newState)
-    newState = remove_bullets(newState)
-    newState = bullet_collision(newState)
-    newState = bullet_collision_attack(newState)
-    newState = update_enemy_attack(newState)
-    return  newState                
-
-"""
 
