@@ -9,3 +9,7 @@ results/
 .DS_Store
 docs/build/
 
+.wslvenv
+scripts/new_screenshots/*
+saved_states/*
+
