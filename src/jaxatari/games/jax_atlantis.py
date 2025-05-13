@@ -202,9 +202,19 @@ class JaxAtlantis(JaxEnvironment[AtlantisState, AtlantisObservation, AtlantisInf
 
         cannon_idx = jnp.where(
             can_shoot,
-            jnp.where(action == Action.LEFTFIRE,  0,
-            jnp.where(action == Action.FIRE,      1,
-            jnp.where(action == Action.RIGHTFIRE, 2, -1))),
+            jnp.where(
+                action == Action.LEFTFIRE,
+                0,
+                jnp.where(
+                    action == Action.FIRE,
+                    1,
+                    jnp.where(
+                        action == Action.RIGHTFIRE, 
+                        2, 
+                        -1
+                    )
+                )
+            ),
             -1
         )
         return fire_pressed, cannon_idx
