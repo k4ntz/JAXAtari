@@ -5,7 +5,7 @@ import jax.lax
 import jax.numpy as jnp
 import chex
 import pygame
-from gymnax.environments import spaces
+
 from jaxatari.environment import JAXAtariAction
 
 from jaxatari.renderers import AtraJaxisRenderer
@@ -15,6 +15,15 @@ from jaxatari.environment import JaxEnvironment
 #
 # by Tim Morgner and Jan Larionow
 #
+
+# TODO:
+# - Aufdecken
+# - Spielfeld generieren
+# - Flagge handlen -> Score+ neues Spielfeld
+# - Bomben handlen
+# - Funktionen mit Docstrings versehen
+# - play.py geht nur im Debugger
+
 
 # region Constants
 # Constants for game environment
@@ -105,8 +114,7 @@ NUM_BOMBS = 3
 NUM_NUMBER_CLUES = 29
 NUM_DIRECTION_CLUES = 29
 MOVE_COOLDOWN = 15
-
-
+STEPS_PER_SECOND = 30
 # endregion
 
 
@@ -178,7 +186,7 @@ def player_step(player_x, player_y, is_checking,player_move_cooldown, action):
     """
     # check if the player is firing(checking). This is any action like FIRE, UPFIRE, DOWNFIRE, etc.
     # do this by checking if the action is 1 (FIRE) or between 10 and 17 (UPFIRE, DOWNFIRE, etc.)
-    new_is_checking = jax.lax.cond(jnp.logical_or(jnp.equal(action, JAXAtariAction.FIRE),jnp.logical_and(jnp.greater_equal(action, JAXAtariAction.UPRIGHTFIRE), jnp.less_equal(action, JAXAtariAction.DOWNLEFTFIRE))),lambda : 1, lambda: 0)
+    new_is_checking = jax.lax.cond(jnp.logical_or(jnp.equal(action, JAXAtariAction.FIRE),jnp.logical_and(jnp.greater_equal(action, JAXAtariAction.UPFIRE), jnp.less_equal(action, JAXAtariAction.DOWNLEFTFIRE))),lambda : 1, lambda: 0)
     # check if the player is moving upwards. This is any action like UP, UPRIGHT, UPLEFT, UPFIRE, UPRIGHTFIRE, UPLEFTFIRE
     is_up = jnp.logical_or(jnp.equal(action, JAXAtariAction.UP), jnp.logical_or(jnp.equal(action, JAXAtariAction.UPFIRE), jnp.logical_or(jnp.equal(action, JAXAtariAction.UPRIGHT), jnp.logical_or(jnp.equal(action, JAXAtariAction.UPLEFT), jnp.logical_or(jnp.equal(action, JAXAtariAction.UPRIGHTFIRE), jnp.equal(action, JAXAtariAction.UPLEFTFIRE))))))
     is_down = jnp.logical_or(jnp.equal(action, JAXAtariAction.DOWN), jnp.logical_or(jnp.equal(action, JAXAtariAction.DOWNFIRE), jnp.logical_or(jnp.equal(action, JAXAtariAction.DOWNRIGHT), jnp.logical_or(jnp.equal(action, JAXAtariAction.DOWNLEFT), jnp.logical_or(jnp.equal(action, JAXAtariAction.DOWNRIGHTFIRE), jnp.equal(action, JAXAtariAction.DOWNLEFTFIRE))))))
@@ -194,11 +202,15 @@ def player_step(player_x, player_y, is_checking,player_move_cooldown, action):
     # if player is moving right add 1 to player_x
     new_player_x = jax.lax.cond(is_right, lambda: player_x + 1, lambda: new_player_x)
     # modulo the player_x and player_y to be on the field
-    new_player_x = jax.lax.cond(jnp.less_equal(player_move_cooldown, 0),lambda: jnp.mod(new_player_x, NUM_FIELDS_X),lambda: player_x)
-    new_player_y = jax.lax.cond(jnp.less_equal(player_move_cooldown, 0),lambda: jnp.mod(new_player_y, NUM_FIELDS_Y),lambda: player_y)
+    # This adds the movement cooldown, border wrapping and prevents moving while checking
+    new_player_x = jax.lax.cond(jnp.logical_or(new_is_checking,jnp.greater(player_move_cooldown, 0)),lambda: player_x,lambda: jnp.mod(new_player_x, NUM_FIELDS_X))
+    new_player_y = jax.lax.cond(jnp.logical_or(new_is_checking,jnp.greater(player_move_cooldown, 0)),lambda: player_y,lambda: jnp.mod(new_player_y, NUM_FIELDS_Y))
 
     # if cooldown is <= 0 set it to MOVE_COOLDOWN else subtract 1
     new_player_move_cooldown = jax.lax.cond(jnp.less_equal(player_move_cooldown, 0), lambda: MOVE_COOLDOWN, lambda: player_move_cooldown - 1)
+
+    #TODO: check if the player is_checking and if so check if the player is on a bomb or flag
+
 
     return new_player_x, new_player_y, new_is_checking, new_player_move_cooldown
 
@@ -242,7 +254,7 @@ class JaxFlagCapture(JaxEnvironment[FlagCaptureState, FlagCaptureObservation, Fl
         state = FlagCaptureState(
             player_x=jnp.array(0).astype(jnp.int32),
             player_y=jnp.array(0).astype(jnp.int32),
-            time=jnp.array(0).astype(jnp.int32),
+            time=jnp.array(75*STEPS_PER_SECOND).astype(jnp.int32),
             score=jnp.array(0).astype(jnp.int32),
             is_checking=jnp.array(1).astype(jnp.int32),
             player_move_cooldown=jnp.array(0).astype(jnp.int32),
@@ -333,7 +345,7 @@ class JaxFlagCapture(JaxEnvironment[FlagCaptureState, FlagCaptureObservation, Fl
 
     @partial(jax.jit, static_argnums=(0,))
     def _get_done(self, state: FlagCaptureState) -> bool:
-        return state.time < 0
+        return state.time <= 0
 
 
 def load_sprites():
@@ -398,7 +410,7 @@ class FlagCaptureRenderer(AtraJaxisRenderer):
                               )
 
         raster = render_header(state.score, raster, self.SPRITE_SCORE, 32, 16, 3)
-        raster = render_header(state.time, raster, self.SPRITE_TIMER, 112, 96, 3)
+        raster = render_header(state.time // STEPS_PER_SECOND, raster, self.SPRITE_TIMER, 112, 96, 3)
 
         return raster
 
@@ -546,6 +558,6 @@ if __name__ == "__main__":
         aj.update_pygame(screen, raster, 3, WIDTH, HEIGHT)
 
         counter += 1
-        clock.tick(60)
+        clock.tick(30)
 
     pygame.quit()
