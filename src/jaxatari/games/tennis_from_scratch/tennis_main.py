@@ -20,7 +20,7 @@ FIELD_HEIGHT = 130
 
 # these values are used for the actual gameplay calculations
 GAME_OFFSET_LEFT_BOTTOM = 15 + 1 # don't use 16, because that is on the line and playing on the line still counts todo: check if that is actually true
-GAME_OFFSET_TOP = 43 # don't use 44, because that is on the line and playing on the line still counts todo: check if that is actually true
+GAME_OFFSET_TOP = 43.0 # don't use 44, because that is on the line and playing on the line still counts todo: check if that is actually true
 GAME_WIDTH = FIELD_WIDTH_BOTTOM
 GAME_HEIGHT = FIELD_HEIGHT
 
@@ -61,7 +61,7 @@ class PlayerState(NamedTuple):
 
 class TennisState(NamedTuple):
     player_state: PlayerState = PlayerState(jnp.array(PLAYER_START_X), jnp.array(PLAYER_START_Y), jnp.array(PLAYER_START_DIRECTION), jnp.array(PLAYER_START_FIELD))
-    ball_state: BallState = BallState(jnp.array(GAME_WIDTH / 2.0 - 2.5), jnp.array(0.0), jnp.array(0.0), jnp.array(0.0), jnp.array(0.0), jnp.array(0.0), jnp.array(0.0), jnp.array(GAME_WIDTH / 2.0 - 2.5), jnp.array(0.0))
+    ball_state: BallState = BallState(jnp.array(GAME_WIDTH / 2.0 - 2.5), jnp.array(GAME_OFFSET_TOP), jnp.array(0.0), jnp.array(0.0), jnp.array(0.0), jnp.array(0.0), jnp.array(0.0), jnp.array(GAME_WIDTH / 2.0 - 2.5), jnp.array(GAME_OFFSET_TOP))
     counter : chex.Array = jnp.array(0)
 
 #@partial(jax.jit, static_argnums=(0,))
@@ -230,9 +230,10 @@ def handle_ball_fire(state: TennisState) -> BallState:
     return BallState(state.ball_state.ball_x, state.ball_state.ball_y, state.ball_state.ball_z, state.ball_state.ball_z_fp, state.ball_state.ball_velocity_z_fp, new_ball_hit_start_x, new_ball_hit_start_y, new_ball_hit_target_x, new_ball_hit_target_y)
 
 def tennis_reset() -> TennisState:
-    player_state = PlayerState(jnp.array(PLAYER_START_X), jnp.array(PLAYER_START_Y), jnp.array(PLAYER_START_DIRECTION), jnp.array(PLAYER_START_FIELD))
-    ball_state = BallState(jnp.array(GAME_WIDTH / 2.0 - 2.5), jnp.array(0.0), jnp.array(0.0), jnp.array(0.0), jnp.array(0.0), jnp.array(0.0), jnp.array(0.0), jnp.array(GAME_WIDTH / 2.0 - 2.5), jnp.array(0.0))
-    return TennisState(player_state, ball_state, jnp.array(0))
+    #player_state = PlayerState(jnp.array(PLAYER_START_X), jnp.array(PLAYER_START_Y), jnp.array(PLAYER_START_DIRECTION), jnp.array(PLAYER_START_FIELD))
+    #ball_state = BallState(jnp.array(GAME_WIDTH / 2.0 - 2.5), jnp.array(GAME_OFFSET_TOP), jnp.array(0.0), jnp.array(0.0), jnp.array(0.0), jnp.array(0.0), jnp.array(0.0), jnp.array(GAME_WIDTH / 2.0 - 2.5), jnp.array(0.0))
+    #return TennisState(player_state, ball_state, jnp.array(0))
+    return TennisState()
 
 if __name__ == "__main__":
     pygame.init()

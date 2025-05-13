@@ -66,24 +66,24 @@ class TennisRenderer:
 
         frame_ball_shadow = aj.get_sprite_frame(self.BALL_SHADOW, 0)
         # calculate screen coordinates of ball
-        ball_screen_x, ball_screen_y = self.perspective_transform(state.ball_state.ball_x, state.ball_state.ball_y)
-        raster = aj.render_at(raster, ball_screen_x, ball_screen_y, frame_ball_shadow)
+        #ball_screen_x, ball_screen_y = self.perspective_transform(state.ball_state.ball_x, state.ball_state.ball_y)
+        raster = aj.render_at(raster, state.ball_state.ball_x, state.ball_state.ball_y, frame_ball_shadow)
 
         frame_ball = aj.get_sprite_frame(self.BALL, 0)
         # apply flat y offset depending on z value
-        raster = aj.render_at(raster, ball_screen_x, ball_screen_y - state.ball_state.ball_z, frame_ball)
+        raster = aj.render_at(raster, state.ball_state.ball_x, state.ball_state.ball_y - state.ball_state.ball_z, frame_ball)
 
-        player_screen_x, player_screen_y = self.perspective_transform(state.player_state.player_x, state.player_state.player_y)
+        #player_screen_x, player_screen_y = self.perspective_transform(state.player_state.player_x, state.player_state.player_y)
         #player_screen_x, player_screen_y = self.perspective_transform(0, -20)
         frame_player = aj.get_sprite_frame(self.PLAYER, 0)
-        raster = aj.render_at(raster, player_screen_x, player_screen_y, frame_player)
+        raster = aj.render_at(raster, state.player_state.player_x, state.player_state.player_y, frame_player)
 
         player_x_rec = jnp.zeros((2, 2, 4))
         player_x_rec = player_x_rec.at[:, :, 1].set(255)  # Yellow
         player_x_rec = player_x_rec.at[:, :, 2].set(255)  # Yellow
         player_x_rec = player_x_rec.at[:, :, 3].set(255)  # Alpha
 
-        raster = aj.render_at(raster, player_screen_x, player_screen_y, player_x_rec)
+        raster = aj.render_at(raster, state.player_state.player_x, state.player_state.player_y, player_x_rec)
 
         #print(state.player_state.player_x, state.player_state.player_y)
         #frame_player = aj.get_sprite_frame(self.PLAYER, 0)
