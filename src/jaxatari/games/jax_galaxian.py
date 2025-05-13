@@ -385,29 +385,26 @@ def bullet_collision_attack(state: GalaxianState) -> GalaxianState:
 
 
 def draw(screen, state):
-    # Extrahiere die letzte Beobachtung aus dem Stapel
-    observation = state.obs_stack[-1]
-
     # Spieler zeichnen
-    player_rect = pygame.Rect(int(observation.player_x), int(observation.player_y), 20, 10)
+    player_rect = pygame.Rect(int(state.player_x.item()), int(state.player_y.item()), 20, 10)
     pygame.draw.rect(screen, (0, 255, 0), player_rect)
 
     # Kugel zeichnen
-    if observation.bullet_x > 0:
-        bullet_rect = pygame.Rect(int(observation.bullet_x), int(observation.bullet_y), 5, 10)
+    if state.bullet_x.item() > -1:
+        bullet_rect = pygame.Rect(int(state.bullet_x.item() - 2.5), int(state.bullet_y.item() - 5), 5, 10)
         pygame.draw.rect(screen, (255, 255, 0), bullet_rect)
 
     # Angreifenden Feind zeichnen
-    if jnp.any(observation.enemy_attack_pos) == 1:
-        enemy_attack_rect = pygame.Rect(int(observation.enemy_attack_x), int(observation.enemy_attack_y), 15, 10)
+    if jnp.all(state.enemy_attack_pos >= 0):
+        enemy_attack_rect = pygame.Rect(int(state.enemy_attack_x.item() - 7.5), int(state.enemy_attack_y.item() - 5), 15, 10)
         pygame.draw.rect(screen, (255, 0, 0), enemy_attack_rect)
 
     # Feindgitter zeichnen
-    for i in range(observation.enemy_grid_x.shape[0]):
-        for j in range(observation.enemy_grid_x.shape[1]):
-            if observation.enemy_grid_alive[i, j] == 1:
-                x = int(observation.enemy_grid_x[i, j])
-                y = ENEMY_GRID_Y - i * ENEMY_SPACING_Y
+    for i in range(state.enemy_grid_x.shape[0]):
+        for j in range(state.enemy_grid_x.shape[1]):
+            if state.enemy_grid_alive[i, j] == 1:
+                x = int(state.enemy_grid_x[i, j].item() - 7.5)
+                y = int(state.enemy_grid_y[i, j].item() - 5)
                 enemy_rect = pygame.Rect(x, y, 15, 10)
                 pygame.draw.rect(screen, (255, 0, 0), enemy_rect)
 
@@ -488,15 +485,18 @@ class JaxGalaxian(JaxEnvironment[GalaxianState, GalaxianObservation, GalaxianInf
 
         initial_obs = self._get_observation(state)
 
+        #print("obs in reset (initial): ", initial_obs)
+
         def expand_and_copy(x):
             x_expanded = jnp.expand_dims(x, axis=0)
             return jnp.concatenate([x_expanded] * self.frame_stack_size, axis=0)
 
         # Apply transformation to each leaf in the pytree
-        initial_obs = jax.tree.map(expand_and_copy, initial_obs)
+        stacked_obs = jax.tree.map(expand_and_copy, initial_obs)
+        #print("obs in reset (stacked): ", stacked_obs)
 
-        new_state = state._replace(obs_stack=initial_obs)
-        return new_state, initial_obs
+        new_state = state._replace(obs_stack=stacked_obs)
+        return new_state, stacked_obs
 
         #alles aus galaxianState was man aus Spielersicht wahrnimmt
     def _get_observation(self, state: GalaxianState) -> GalaxianObservation:
@@ -577,15 +577,14 @@ class JaxGalaxian(JaxEnvironment[GalaxianState, GalaxianObservation, GalaxianInf
         return GalaxianInfo(time=state.step_counter, all_rewards=all_rewards)
 
 
-
-if __name__ == "__main__":  #run with: python -m jaxatari.games.jax_galaxian
+ #run with: python -m jaxatari.games.jax_galaxian
+if __name__ == "__main__":
     pygame.init()
 
     game = JaxGalaxian(frameskip=1)
-    # just use step and init_galaxian_state for old logic
     jitted_step = jax.jit(game.step)
     jitted_reset = jax.jit(game.reset)
-    state = jitted_reset()
+    state, initial_observation = jitted_reset()  # Unpack the tuple
 
     screen = pygame.display.set_mode((SCREEN_WIDTH, SCREEN_HEIGHT))
     pygame.display.set_caption("Galaxian")
@@ -597,12 +596,11 @@ if __name__ == "__main__":  #run with: python -m jaxatari.games.jax_galaxian
             if event.type == pygame.QUIT:
                 running = False
         screen.fill((0, 0, 0))
-        draw(screen, state)     #broken with environment logic
+        draw(screen, state)
         pygame.display.flip()
         action = get_action_from_keyboard()
-        state = jitted_step(state, action)
+        state, observation, reward, done, info = jitted_step(state, action)  # Unpack the tuple
         clock.tick(30)
-
 
     pygame.quit()
 
