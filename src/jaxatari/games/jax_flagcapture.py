@@ -19,8 +19,8 @@ from jaxatari.environment import JaxEnvironment
 # TODO:
 # - Aufdecken (implementiert aber ungetestet)
 # - Spielfeld generieren
-# - Flagge handlen -> Score+ neues Spielfeld (implementiert aber ungetestet) (noch keine Animation)
-# - Bomben handlen (implementiert aber ungetestet) (noch keine Animation)
+# - Flagge handlen -> Score+ neues Spielfeld (implementiert aber ungetestet) (frame mod 2 animation)
+# - Bomben handlen (implementiert aber ungetestet) (frame mod 2 animation)
 # - Funktionen mit Docstrings versehen
 # - play.py geht nur im Debugger
 
@@ -364,11 +364,11 @@ class JaxFlagCapture(JaxEnvironment[FlagCaptureState, FlagCaptureObservation, Fl
             jnp.equal(state.animation_type, ANIMATION_TYPE_FLAG)
         )
         new_player_x = jax.lax.cond(jnp.logical_or(bomb_animation_over, flag_animation_over),
-                                     lambda: 0,
-                                     lambda: new_player_x)
+                                    lambda: 0,
+                                    lambda: new_player_x)
         new_player_y = jax.lax.cond(jnp.logical_or(bomb_animation_over, flag_animation_over),
-                                        lambda: 0,
-                                        lambda: new_player_y)
+                                    lambda: 0,
+                                    lambda: new_player_y)
         new_animation_type = jax.lax.cond(
             jnp.logical_or(bomb_animation_over, flag_animation_over),
             lambda: ANIMATION_TYPE_NONE,
@@ -385,7 +385,6 @@ class JaxFlagCapture(JaxEnvironment[FlagCaptureState, FlagCaptureObservation, Fl
                                    NUM_BOMBS, NUM_NUMBER_CLUES, NUM_DIRECTION_CLUES),
             lambda: state.field
         )
-
 
         # Check if the player is checking (firing) and if the current field is a bomb or a flag (only if the animation_type is currently none)
         # If the player is checking and the field is a bomb or flag, set the animation type
@@ -523,16 +522,40 @@ class FlagCaptureRenderer(AtraJaxisRenderer):
         player_x = FIELD_PADDING_LEFT + (state.player_x * FIELD_WIDTH) + (state.player_x * FIELD_GAP_X)
         player_y = FIELD_PADDING_TOP + (state.player_y * FIELD_HEIGHT) + (state.player_y * FIELD_GAP_Y)
 
+        # Wenn keine Animation läuft:
         # Wenn is_checking == 1, dann ist die Spieler Sprite >= 1 (Bombe, Flag, Zahl, ect.)
         # Die genaue Sprite wird durch den wert von field[x][y] bestimmt
         # Ansonsten ist die Spieler Sprite == 0 aka Männchen
-        raster = jax.lax.cond(jax.lax.eq(state.is_checking, 0),
-                              lambda: aj.render_at(raster, player_x, player_y, self.SPRITE_PLAYER[0]),
-                              lambda: aj.render_at(raster, player_x, player_y,
-                                                   self.SPRITE_PLAYER[state.field[player_x][player_y]]),
+        # Wenn eine Animation läuft dann bei jedem ungraden animation_cooldown frame nichts rendern (das ist die "animation")
+        raster = jax.lax.cond(jax.lax.eq(state.animation_type, ANIMATION_TYPE_NONE),
+                              lambda: jax.lax.cond(jax.lax.eq(state.is_checking, 0),
+                                                   lambda: aj.render_at(raster, player_x, player_y,
+                                                                        self.SPRITE_PLAYER[0]),
+                                                   lambda: aj.render_at(raster, player_x, player_y,
+                                                                        self.SPRITE_PLAYER[
+                                                                            state.field[player_x][player_y]]),
+                                                   ),
+                              lambda: jax.lax.cond(jax.lax.eq(state.animation_type, ANIMATION_TYPE_EXPLOSION),
+                                                   lambda: jax.lax.cond(
+                                                       jax.lax.eq(jnp.mod(state.animation_cooldown, 2), 0),
+                                                       lambda: aj.render_at(raster, player_x, player_y,
+                                                                            self.SPRITE_PLAYER[1]),
+                                                       lambda: raster),
+                                                   lambda: jax.lax.cond(
+                                                       jax.lax.eq(state.animation_type, ANIMATION_TYPE_FLAG),
+                                                       lambda: jax.lax.cond(
+                                                           jax.lax.eq(jnp.mod(state.animation_cooldown, 2), 0),
+                                                           lambda: aj.render_at(raster, player_x, player_y,
+                                                                                self.SPRITE_PLAYER[2]),
+                                                           lambda: raster),
+                                                       lambda: raster),
+                                                   )
                               )
 
-        raster = render_header(state.score, raster, self.SPRITE_SCORE, 32, 16, 3)
+        raster = render_header(state.score, raster, self.SPRITE_SCORE,
+                               32, 16,
+                               3)
+
         raster = render_header(state.time // STEPS_PER_SECOND, raster, self.SPRITE_TIMER, 112, 96, 3)
 
         return raster
