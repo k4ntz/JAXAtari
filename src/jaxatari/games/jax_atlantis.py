@@ -429,12 +429,12 @@ def main():
                 if event.key == pygame.K_n and frame_by_frame:
                     if counter % frameskip == 0:
                         action = get_human_action()
-                        (curr_state, _, _, _, _) = jitted_step(curr_state, action)
+                        (obs, curr_state, _, _, _) = jitted_step(curr_state, action)
 
         if not frame_by_frame:
             if counter % frameskip == 0:
                 action = get_human_action()
-                (curr_state, _, _, _, _) = jitted_step(curr_state, action)
+                (obs, curr_state, _, _, _) = jitted_step(curr_state, action)
 
         # Render and display
         raster = renderer.render(curr_state)
