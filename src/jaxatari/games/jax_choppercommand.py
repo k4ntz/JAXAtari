@@ -67,6 +67,7 @@ TRUCK_SPAWN_POSITIONS = 156
 
 class SpawnState(NamedTuple): # For documentation look jax.seaquest.py
     difficulty: chex.Array # TODO: implement
+    """
     lane_dependent_pattern: chex.Array
     to_be_spawned: (
         chex.Array
@@ -80,25 +81,28 @@ class SpawnState(NamedTuple): # For documentation look jax.seaquest.py
     lane_directions: (
         chex.Array
     ) # in case directions for each lane are initially the same per wave
+    """
 
 def initialize_spawn_state() -> SpawnState:
     return SpawnState(
         difficulty=jnp.array(0), # TODO: implement
-        lane_dependent_pattern=jnp.zeros(3, dtype=jnp.int32),
-        to_be_spawned=jnp.zeros(9, dtype=jnp.int32),
-        survived=jnp.zeros(9, dtype=jnp.int32),
-        prev_chopper=jnp.zeros(9, dtype=jnp.int32),
-        spawn_timers=jnp.array(
-            [277, 277, 277 + 60], dtype=jnp.int32
-        ),
-        trucks_to_spawn=jnp.array(3),
-        lane_directions=jnp.zeros(3, dtype=jnp.int32),
-    )
+        # lane_dependent_pattern=jnp.zeros(3, dtype=jnp.int32),
+        # to_be_spawned=jnp.zeros(9, dtype=jnp.int32),
+        # survived=jnp.zeros(9, dtype=jnp.int32),
+        # prev_chopper=jnp.zeros(9, dtype=jnp.int32),
+        # spawn_timers=jnp.array(
+        #     [277, 277, 277 + 60], dtype=jnp.int32
+        # ),
+        # trucks_to_spawn=jnp.array(3),
+        # lane_directions=jnp.zeros(3, dtype=jnp.int32),
 
+    )
+"""
 def soft_reset_spawn_state(spawn_state: SpawnState) -> SpawnState:
     return spawn_state._replace(
         spawn_timers=jnp.array([277, 277, 277 + 60], dtype=jnp.int32),
     )
+"""
 
 class ChopperCommandState(NamedTuple):
     player_x: chex.Array
@@ -108,6 +112,7 @@ class ChopperCommandState(NamedTuple):
     player_facing_direction: chex.Array
     score: chex.Array
     lives: chex.Array
+    spawn_state: SpawnState
     truck_positions: chex.Array # (MAX_TRUCKS, 3) array for trucks
     jet_positions: chex.Array # (MAX_JETS, 3) array for enemy jets
     chopper_positions: chex.Array  # (MAX_ENEMIES, 3) array for enemy choppers
@@ -609,6 +614,37 @@ def step_truck_movement(
     return final_positions, rng
 
 @jax.jit
+def spawn_step(
+        state,
+        spawn_state: SpawnState,
+        jet_positions: chex.Array,
+        chopper_positions: chex.Array,
+        truck_positions: chex.Array,
+        rng: chex.PRNGKey,
+) -> Tuple[SpawnState, chex.Array, chex.Array, chex.Array, chex.PRNGKey]:
+    # Update enemy spawns
+    new_spawn_state, new_jet_positions, new_chopper_positions, new_key = (
+        spawn_state,
+        jet_positions,
+        chopper_positions,
+        rng,
+    )
+
+    # Spawn new trucks
+    new_truck_positions, new_spawn_state = (
+        truck_positions,
+        spawn_state,
+    )
+
+    return (
+        new_spawn_state,
+        new_jet_positions,
+        new_chopper_positions,
+        new_truck_positions,
+        new_key,
+    )
+
+@jax.jit
 def enemy_missiles_step(
     curr_enemy_positions, curr_enemy_missile_positions, step_counter
 ) -> chex.Array:
@@ -1022,6 +1058,7 @@ class JaxChopperCommand(JaxEnvironment[ChopperCommandState, ChopperCommandObserv
             player_facing_direction=jnp.array(1),
             score=jnp.array(0),
             lives=jnp.array(3),
+            spawn_state=initialize_spawn_state(),
             truck_positions=jnp.asarray([[110, 156, -1], [140, 156, -1], [170, 156, -1]]), # test for truck movement, to be replaced
             jet_positions=jnp.zeros((MAX_JETS, 3)), # x, y, direction
             chopper_positions=jnp.zeros((MAX_CHOPPERS, 3)),
@@ -1056,17 +1093,6 @@ class JaxChopperCommand(JaxEnvironment[ChopperCommandState, ChopperCommandObserv
         # Normal game logic starts here
         def normal_game_step():
             # TODO: Update truck positions
-            new_truck_positions, new_rng_key = (
-                step_truck_movement(
-                    state.truck_positions,
-                    state.jet_positions,
-                    state.chopper_positions,
-                    state.player_x,
-                    state.player_y,
-                    state.step_counter,
-                    state.rng_key,
-                )
-            )
 
             # Update jet and chopper positions
             new_jet_positions, new_chopper_positions, new_rng_key = step_enemy_movement(
@@ -1096,8 +1122,41 @@ class JaxChopperCommand(JaxEnvironment[ChopperCommandState, ChopperCommandObserv
                 new_rng_key,
             )
 
+            (
+                new_spawn_state,
+                new_jet_positions,
+                new_chopper_positions,
+                new_truck_positions,
+                new_rng_key,
+            ) = spawn_step(
+                state,
+                state.spawn_state,
+                new_jet_positions,
+                new_chopper_positions,
+                state.truck_positions,
+                new_rng_key,
+            )
+
+            new_truck_positions, new_rng_key = (
+                step_truck_movement(
+                    state.truck_positions,
+                    state.jet_positions,
+                    state.chopper_positions,
+                    state.player_x,
+                    state.player_y,
+                    state.step_counter,
+                    state.rng_key,
+                )
+            )
+
             # Update player position
-            new_player_x, new_player_y, new_player_velocity_x, new_local_player_offset, new_player_facing_direction = player_step(
+            (
+                new_player_x,
+                new_player_y,
+                new_player_velocity_x,
+                new_local_player_offset,
+                new_player_facing_direction
+            ) = player_step(
                 state, action
             )
 
@@ -1130,6 +1189,7 @@ class JaxChopperCommand(JaxEnvironment[ChopperCommandState, ChopperCommandObserv
                 player_facing_direction=new_player_facing_direction,
                 score=new_score,
                 lives=new_lives,
+                spawn_state=new_spawn_state,
                 truck_positions=new_truck_positions, # TODO: process trucks
                 jet_positions=new_enemy_positions,
                 chopper_positions=new_chopper_positions,
