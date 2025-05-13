@@ -201,15 +201,123 @@ def player_projectile_step(
     )
     
 
-""" @jax.jit
+@jax.jit
 def enemy_projectile_step(
-    state, action: chex.Array
+    state
 ):
-    def spawn_projectile(x,y):
-    # If projectile is inactive, check for fire action to spawn it
-    occupied_y = state.occupied_y
-    fire_action = jnp.where(1 == jax.random.uniform( shape=(100,)),1,0)
-    can_fire = state.enemy_projectile_y < 0 """
+    # If projectile is inactive, check for random fire opportunity
+    can_fire = state.enemy_projectile_y < 0
+    
+    # Random chance of firing (1% probability)
+    # Note: In a complete implementation, you would use a proper PRNG key
+    fire_random = jax.random.uniform(jax.random.PRNGKey(state.step_counter), shape=())
+    fire_action = fire_random < 0.05
+    #jax.debug.print(f"Can Fire : {can_fire}, Random fire chance: {fire_random}, Fire action: {fire_action}")
+    spawn_proj = jnp.logical_and(fire_action, can_fire)
+    
+    # Initialize with default values
+    chosen_enemy_x = jnp.array(0)
+    chosen_enemy_y = jnp.array(-1)  # Default value if no enemies are active
+    
+    # Check each enemy individually and keep track of the one with largest y
+    # Enemy 1
+    e1_active = state.enemy_1_y < HEIGHT
+    is_better = jnp.logical_and(e1_active, state.enemy_1_y > chosen_enemy_y)
+    chosen_enemy_x = jnp.where(is_better, state.enemy_1_x, chosen_enemy_x)
+    chosen_enemy_y = jnp.where(is_better, state.enemy_1_y, chosen_enemy_y)
+    
+    # Enemy 2
+    e2_active = state.enemy_2_y < HEIGHT
+    is_better = jnp.logical_and(e2_active, state.enemy_2_y > chosen_enemy_y)
+    chosen_enemy_x = jnp.where(is_better, state.enemy_2_x, chosen_enemy_x)
+    chosen_enemy_y = jnp.where(is_better, state.enemy_2_y, chosen_enemy_y)
+    
+    # Enemy 3
+    e3_active = state.enemy_3_y < HEIGHT
+    is_better = jnp.logical_and(e3_active, state.enemy_3_y > chosen_enemy_y)
+    chosen_enemy_x = jnp.where(is_better, state.enemy_3_x, chosen_enemy_x)
+    chosen_enemy_y = jnp.where(is_better, state.enemy_3_y, chosen_enemy_y)
+    
+    # Enemy 4
+    e4_active = state.enemy_4_y < HEIGHT
+    is_better = jnp.logical_and(e4_active, state.enemy_4_y > chosen_enemy_y)
+    chosen_enemy_x = jnp.where(is_better, state.enemy_4_x, chosen_enemy_x)
+    chosen_enemy_y = jnp.where(is_better, state.enemy_4_y, chosen_enemy_y)
+    
+    # Enemy 5
+    e5_active = state.enemy_5_y < HEIGHT
+    is_better = jnp.logical_and(e5_active, state.enemy_5_y > chosen_enemy_y)
+    chosen_enemy_x = jnp.where(is_better, state.enemy_5_x, chosen_enemy_x)
+    chosen_enemy_y = jnp.where(is_better, state.enemy_5_y, chosen_enemy_y)
+    
+    # Enemy 6
+    e6_active = state.enemy_6_y < HEIGHT
+    is_better = jnp.logical_and(e6_active, state.enemy_6_y > chosen_enemy_y)
+    chosen_enemy_x = jnp.where(is_better, state.enemy_6_x, chosen_enemy_x)
+    chosen_enemy_y = jnp.where(is_better, state.enemy_6_y, chosen_enemy_y)
+    
+    # Only spawn projectile if we have an active enemy
+    has_active_enemy = chosen_enemy_y >= 0
+    effective_spawn = jnp.logical_and(spawn_proj, has_active_enemy)
+    
+    # Spawn projectile at the chosen enemy's position
+    new_proj_x = jnp.where(effective_spawn, chosen_enemy_x + ENEMY_SIZE[0]//2, state.enemy_projectile_x)
+    new_proj_y = jnp.where(effective_spawn, chosen_enemy_y + ENEMY_SIZE[1], state.enemy_projectile_y)
+    new_proj_dir = jnp.where(effective_spawn, 1, state.enemy_projectile_dir)  # Moving down
+    
+    # Move projectile if active
+    moving = new_proj_y >= 0
+     # Check if this is a special stage (every third stage: 2, 5, 8, etc.)
+    # Since current_stage is 0-indexed (0=stage 1, 1=stage 2), we need stages where (current_stage + 1) % 3 == 2
+    is_special_stage = jnp.equal(jnp.mod(state.current_stage + 1, 4), 0)
+    
+    # Check if projectile is near player's y-level
+    near_player_level = jnp.logical_and(
+        new_proj_y >= PLAYER_Y - 5,  # Within 20 pixels above player
+        new_proj_y <= PLAYER_Y + 5       # Not past player
+    )
+    
+    # Should we apply horizontal tracking?
+    should_track = jnp.logical_and(is_special_stage, near_player_level)
+    
+    # Calculate direction toward player (left=-1, right=1)
+    player_direction = jnp.sign(state.player_x - new_proj_x)
+    
+    # Apply vertical movement
+    moved_proj_y = jnp.where(jnp.logical_and(moving,should_track), PLAYER_Y, new_proj_y + new_proj_dir * 4)
+    
+    # Apply horizontal movement only if tracking is enabled
+    moved_proj_x = jnp.where(
+        jnp.logical_and(should_track, moving),
+        new_proj_x + player_direction * 2,  # Move 2 pixels toward player
+        new_proj_x
+    )
+    
+    # Deactivate if off screen (below screen height)
+    final_proj_y = jnp.where(moved_proj_y > HEIGHT, -1, moved_proj_y)
+    final_proj_x = jnp.where(moved_proj_y > HEIGHT, -1, moved_proj_x)
+    final_proj_dir = jnp.where(moved_proj_y > HEIGHT, 0, new_proj_dir)
+    
+    # Check for collision with player 
+    player_hit = check_collision(
+        final_proj_x, final_proj_y, 
+        state.player_x, PLAYER_Y, 
+        PLAYER_SIZE[0], PLAYER_SIZE[1]
+    )
+    
+    # If hit player, deactivate projectile and reduce player lives
+    final_proj_y = jnp.where(player_hit, -1, final_proj_y)
+    final_proj_x = jnp.where(player_hit, -1, final_proj_x)
+    final_proj_dir = jnp.where(player_hit, 0, final_proj_dir)
+    new_lives = jnp.where(player_hit, state.player_lives - 1, state.player_lives)
+    
+    return state._replace(
+        enemy_projectile_x=final_proj_x,
+        enemy_projectile_y=final_proj_y,
+        enemy_projectile_dir=final_proj_dir,
+        player_lives=new_lives
+    )
+    
     
 
 
@@ -369,7 +477,7 @@ class JaxAssault(JaxEnvironment[AssaultState, AssaultObservation, AssaultInfo]):
             player_x=jnp.array(80).astype(jnp.int32),
             player_speed=jnp.array(0).astype(jnp.int32),
             enemy_projectile_x=jnp.array(0).astype(jnp.int32),
-            enemy_projectile_y=jnp.array(0).astype(jnp.int32),
+            enemy_projectile_y=jnp.array(-1).astype(jnp.int32),
             enemy_projectile_dir=jnp.array(0).astype(jnp.int32),
             mothership_x=jnp.array(64).astype(jnp.int32),
             mothership_dir=jnp.array(1).astype(jnp.int32),
@@ -422,7 +530,7 @@ class JaxAssault(JaxEnvironment[AssaultState, AssaultObservation, AssaultInfo]):
         
 
         new_state = player_projectile_step(new_state,action)
-        
+        new_state = enemy_projectile_step(new_state)
         new_state = enemy_step(new_state)
         new_state = mothership_step(new_state)
 
@@ -471,7 +579,7 @@ class JaxAssault(JaxEnvironment[AssaultState, AssaultObservation, AssaultInfo]):
         new_score = state.score + score_incr
 
         new_enemies_killed = state.enemies_killed + score_incr
-        stage_complete = jnp.greater_equal(new_enemies_killed, 6)
+        stage_complete = jnp.greater_equal(new_enemies_killed, 10)
         new_current_stage = jnp.where(stage_complete, state.current_stage + 1, state.current_stage)
         new_enemies_killed = jnp.where(stage_complete, 0, new_enemies_killed)
         
@@ -639,6 +747,10 @@ def load_assault_sprites():
     player = aj.loadFrame(os.path.join(SPRITES_DIR, "player.npy"), transpose=True)
     player_projectile = aj.loadFrame(os.path.join(SPRITES_DIR, "player_projectile.npy"), transpose=True)
     enemy_projectile = aj.loadFrame(os.path.join(SPRITES_DIR, "enemy_projectile.npy"), transpose=True)
+    enemy_projectile = aj.loadFrame(os.path.join(SPRITES_DIR, "enemy_projectile.npy"), transpose=True)
+    enemy_rain = aj.loadFrame(os.path.join(SPRITES_DIR, "proj_wide.npy"), transpose=True)
+    enemy_sphere = aj.loadFrame(os.path.join(SPRITES_DIR, "proj_sphere.npy"), transpose=True)
+    enemy_projectile_lateral = aj.loadFrame(os.path.join(SPRITES_DIR, "proj_lateral.npy"), transpose=True)
 
     # Optionally expand dims if you want a batch/frame dimension
     BACKGROUND_SPRITE = jnp.expand_dims(background, axis=0)
@@ -648,13 +760,16 @@ def load_assault_sprites():
     PLAYER_SPRITE = jnp.expand_dims(player, axis=0)
     PLAYER_PROJECTILE= jnp.expand_dims(player_projectile, axis=0)
     ENEMY_PROJECTILE = jnp.expand_dims(enemy_projectile, axis=0)
+    ENEMY_RAIN = jnp.expand_dims(enemy_rain, axis=0)
+    ENEMY_SPHERE = jnp.expand_dims(enemy_sphere, axis=0)
+    ENEMY_PROJECTILE_LATERAL = jnp.expand_dims(enemy_projectile_lateral, axis=0)
 
     DIGIT_SPRITES = aj.load_and_pad_digits(
         os.path.join(MODULE_DIR, os.path.join(SPRITES_DIR, "number_{}.npy")),
         num_chars=10,
     )
 
-    return BACKGROUND_SPRITE,ENEMY_SPRITE, MOTHERSHIP_SPRITE, PLAYER_SPRITE, DIGIT_SPRITES, PLAYER_PROJECTILE,ENEMY_PROJECTILE
+    return BACKGROUND_SPRITE,ENEMY_SPRITE, MOTHERSHIP_SPRITE, PLAYER_SPRITE, DIGIT_SPRITES, PLAYER_PROJECTILE,ENEMY_PROJECTILE, ENEMY_RAIN, ENEMY_SPHERE, ENEMY_PROJECTILE_LATERAL
 
 class Renderer_AtraJaxisAssault:
     """JAX-based Assault game renderer, optimized with JIT compilation."""
@@ -667,7 +782,10 @@ class Renderer_AtraJaxisAssault:
             self.SPRITE_PLAYER,
             self.DIGIT_SPRITES,
             self.PLAYER_PROJECTILE,
-            self.ENEMY_PROJECTILE
+            self.ENEMY_PROJECTILE,
+            self.ENEMY_RAIN,
+            self.ENEMY_SPHERE,
+            self.ENEMY_PROJECTILE_LATERAL
         ) = load_assault_sprites()  # You need to implement this in atraJaxis
 
     @partial(jax.jit, static_argnums=(0,))
@@ -685,25 +803,28 @@ class Renderer_AtraJaxisAssault:
         has_alpha = num_channels >= 4
         alpha = jnp.ones_like(r) if not has_alpha else sprite[..., 3]
         
-        # Use modulo to cycle through 3 permutation patterns (0-2)
-        stage_mod = jnp.mod(stage, 3)
+        # Use modulo to cycle through 4 permutation patterns (0-3)
+        stage_mod = jnp.mod(stage, 4)
         
-        # Use simple conditional logic with clean transitions
+        # Use conditional logic with 4 color patterns
         final_r = jnp.where(stage_mod == 0, r, 
-                    jnp.where(stage_mod == 1, g, b))
+                    jnp.where(stage_mod == 1, g, 
+                    jnp.where(stage_mod == 2, b, g)))
         
         final_g = jnp.where(stage_mod == 0, g, 
-                    jnp.where(stage_mod == 1, r, g))
+                    jnp.where(stage_mod == 1, r, 
+                    jnp.where(stage_mod == 2, g, b)))
         
         final_b = jnp.where(stage_mod == 0, b, 
-                    jnp.where(stage_mod == 1, b, r))
+                    jnp.where(stage_mod == 1, b, 
+                    jnp.where(stage_mod == 2, r, r)))
         
         # Stack channels back together with alpha if it exists
         if has_alpha:
             return jnp.stack([final_r, final_g, final_b, alpha], axis=-1).astype(jnp.uint8)
         else:
             return jnp.stack([final_r, final_g, final_b], axis=-1).astype(jnp.uint8)
-    
+        
     @partial(jax.jit, static_argnums=(0,))
     def render(self, state):
         """
@@ -755,15 +876,59 @@ class Renderer_AtraJaxisAssault:
             skip_player_proj,
             operand=None
         )
-
         # Render enemy projectile using lax.cond
         def render_enemy_proj(_):
-            frame_proj = aj.get_sprite_frame(self.ENEMY_PROJECTILE, 0)
-            return aj.render_at(raster, state.enemy_projectile_y, state.enemy_projectile_x, frame_proj)
+            is_stage_4 = jnp.equal(jnp.mod(state.current_stage + 1, 4), 0)
+            is_stage_3 = jnp.equal(jnp.mod(state.current_stage + 2, 4), 0)
+            is_lateral = jnp.equal(state.enemy_projectile_y, PLAYER_Y)
+            
+            # First, check if it's stage 3, since that takes priority
+            def stage3_proj(_):
+                return aj.render_at(raster, state.enemy_projectile_y, state.enemy_projectile_x, 
+                                aj.get_sprite_frame(self.ENEMY_RAIN, 0))
+            
+            def other_stages(_):
+                # If not stage 3, then check if it's stage 4
+                def stage4_proj(_):
+                    # For stage 4, check if it's lateral
+                    def lateral_proj(_):
+                        return aj.render_at(raster, state.enemy_projectile_y, state.enemy_projectile_x,
+                                        aj.get_sprite_frame(self.ENEMY_PROJECTILE_LATERAL, 0))
+                    
+                    def sphere_proj(_):
+                        return aj.render_at(raster, state.enemy_projectile_y, state.enemy_projectile_x,
+                                        aj.get_sprite_frame(self.ENEMY_SPHERE, 0))
+                    
+                    return jax.lax.cond(
+                        is_lateral,
+                        lateral_proj,
+                        sphere_proj,
+                        operand=None
+                    )
+                
+                def standard_proj(_):
+                    return aj.render_at(raster, state.enemy_projectile_y, state.enemy_projectile_x,
+                                    aj.get_sprite_frame(self.ENEMY_PROJECTILE, 0))
+                
+                # Choose between stage 4 logic and standard
+                return jax.lax.cond(
+                    is_stage_4,
+                    stage4_proj,
+                    standard_proj,
+                    operand=None
+                )
+            
+            # Final choice between stage 3 and other stages
+            return jax.lax.cond(
+                is_stage_3,
+                stage3_proj,
+                other_stages,
+                operand=None
+            )
 
         def skip_enemy_proj(_):
             return raster
-
+        
         raster = jax.lax.cond(
             jnp.greater_equal(state.enemy_projectile_y, 0),
             render_enemy_proj,
