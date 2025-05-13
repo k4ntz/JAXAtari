@@ -62,26 +62,6 @@ TRUCK_REPEAT_DISTANCE = 500
 FACE_LEFT = -1
 FACE_RIGHT = 1
 
-# Define action space
-NOOP = 0
-FIRE = 1
-UP = 2
-RIGHT = 3
-LEFT = 4
-DOWN = 5
-UPRIGHT = 6
-UPLEFT = 7
-DOWNRIGHT = 8
-DOWNLEFT = 9
-UPFIRE = 10
-RIGHTFIRE = 11
-LEFTFIRE = 12
-DOWNFIRE = 13
-UPRIGHTFIRE = 14
-UPLEFTFIRE = 15
-DOWNRIGHTFIRE = 16
-DOWNLEFTFIRE = 17
-
 SPAWN_POSITIONS_Y = jnp.array([60, 90, 120])
 TRUCK_SPAWN_POSITIONS = 156
 
@@ -103,7 +83,7 @@ class SpawnState(NamedTuple): # For documentation look jax.seaquest.py
 
 def initialize_spawn_state() -> SpawnState:
     return SpawnState(
-        difficulty=jnp.array(0),
+        difficulty=jnp.array(0), # TODO: implement
         lane_dependent_pattern=jnp.zeros(3, dtype=jnp.int32),
         to_be_spawned=jnp.zeros(9, dtype=jnp.int32),
         survived=jnp.zeros(9, dtype=jnp.int32),
@@ -203,7 +183,7 @@ def load_sprites():
 
     # Background sprite (no padding needed)
     SPRITE_BG = jnp.concatenate(bg_sprites, axis=0) # jnp.expand_dims(bg1, axis=0)
-    print(SPRITE_BG)
+    # print(SPRITE_BG)
 
     # Player helicopter sprites
     SPRITE_PL_HELI = jnp.concatenate(
@@ -770,9 +750,15 @@ MISSILE_SPEED = 6
 def player_missile_step(state: ChopperCommandState, curr_player_x, curr_player_y, action: chex.Array):
     fire = jnp.any(
         jnp.array([
-            action == FIRE, action == UPRIGHTFIRE, action == UPLEFTFIRE,
-            action == DOWNFIRE, action == DOWNRIGHTFIRE, action == DOWNLEFTFIRE,
-            action == RIGHTFIRE, action == LEFTFIRE, action == UPFIRE,
+            action == Action.FIRE,
+            action == Action.UPRIGHTFIRE,
+            action == Action.UPLEFTFIRE,
+            action == Action.DOWNFIRE,
+            action == Action.DOWNRIGHTFIRE,
+            action == Action.DOWNLEFTFIRE,
+            action == Action.RIGHTFIRE,
+            action == Action.LEFTFIRE,
+            action == Action.UPFIRE,
         ])
     )
 
@@ -830,10 +816,38 @@ def player_step(
     state: ChopperCommandState, action: chex.Array
 ) -> tuple[chex.Array, chex.Array, chex.Array, chex.Array, chex.Array]:
     # Bewegungsrichtung bestimmen
-    up = jnp.isin(action, jnp.array([UP, UPRIGHT, UPLEFT, UPFIRE, UPRIGHTFIRE, UPLEFTFIRE]))
-    down = jnp.isin(action, jnp.array([DOWN, DOWNRIGHT, DOWNLEFT, DOWNFIRE, DOWNRIGHTFIRE, DOWNLEFTFIRE]))
-    left = jnp.isin(action, jnp.array([LEFT, UPLEFT, DOWNLEFT, LEFTFIRE, UPLEFTFIRE, DOWNLEFTFIRE]))
-    right = jnp.isin(action, jnp.array([RIGHT, UPRIGHT, DOWNRIGHT, RIGHTFIRE, UPRIGHTFIRE, DOWNRIGHTFIRE]))
+    up = jnp.isin(action, jnp.array([
+        Action.UP,
+        Action.UPRIGHT,
+        Action.UPLEFT,
+        Action.UPFIRE,
+        Action.UPRIGHTFIRE,
+        Action.UPLEFTFIRE
+    ]))
+    down = jnp.isin(action, jnp.array([
+        Action.DOWN,
+        Action.DOWNRIGHT,
+        Action.DOWNLEFT,
+        Action.DOWNFIRE,
+        Action.DOWNRIGHTFIRE,
+        Action.DOWNLEFTFIRE
+    ]))
+    left = jnp.isin(action, jnp.array([
+        Action.LEFT,
+        Action.UPLEFT,
+        Action.DOWNLEFT,
+        Action.LEFTFIRE,
+        Action.UPLEFTFIRE,
+        Action.DOWNLEFTFIRE
+    ]))
+    right = jnp.isin(action, jnp.array([
+        Action.RIGHT,
+        Action.UPRIGHT,
+        Action.DOWNRIGHT,
+        Action.RIGHTFIRE,
+        Action.UPRIGHTFIRE,
+        Action.DOWNRIGHTFIRE
+    ]))
 
 
     # Ziel-Beschleunigung basierend auf Eingabe
@@ -873,12 +887,12 @@ class JaxChopperCommand(JaxEnvironment[ChopperCommandState, ChopperCommandObserv
             reward_funcs = tuple(reward_funcs)
         self.reward_funcs = reward_funcs
         self.action_set = {
-            NOOP,
-            FIRE,
-            UP,
-            RIGHT,
-            LEFT,
-            DOWN,
+            Action.NOOP,
+            Action.FIRE,
+            Action.UP,
+            Action.RIGHT,
+            Action.LEFT,
+            Action.DOWN,
         }
         self.frame_stack_size = 4
         self.obs_size = 5 + MAX_CHOPPERS * 5 + MAX_MISSILES * 5 + 5 + 5
@@ -998,7 +1012,7 @@ class JaxChopperCommand(JaxEnvironment[ChopperCommandState, ChopperCommandObserv
 
 
     @partial(jax.jit, static_argnums=(0,))
-    def reset(self) -> Tuple[ChopperCommandState, ChopperCommandObservation]:
+    def reset(self, key: jax.random.PRNGKey = jax.random.PRNGKey(42)) -> Tuple[ChopperCommandState, ChopperCommandObservation]:
         """Initialize game state"""
         reset_state = ChopperCommandState(
             player_x=jnp.array(PLAYER_START_X),
@@ -1296,47 +1310,47 @@ def get_human_action() -> chex.Array:
 
     # Diagonal movements with fire
     if up and right and fire:
-        return jnp.array(UPRIGHTFIRE)
+        return jnp.array(Action.UPRIGHTFIRE)
     if up and left and fire:
-        return jnp.array(UPLEFTFIRE)
+        return jnp.array(Action.UPLEFTFIRE)
     if down and right and fire:
-        return jnp.array(DOWNRIGHTFIRE)
+        return jnp.array(Action.DOWNRIGHTFIRE)
     if down and left and fire:
-        return jnp.array(DOWNLEFTFIRE)
+        return jnp.array(Action.DOWNLEFTFIRE)
 
     # Cardinal directions with fire
     if up and fire:
-        return jnp.array(UPFIRE)
+        return jnp.array(Action.UPFIRE)
     if down and fire:
-        return jnp.array(DOWNFIRE)
+        return jnp.array(Action.DOWNFIRE)
     if left and fire:
-        return jnp.array(LEFTFIRE)
+        return jnp.array(Action.LEFTFIRE)
     if right and fire:
-        return jnp.array(RIGHTFIRE)
+        return jnp.array(Action.RIGHTFIRE)
 
     # Diagonal movements
     if up and right:
-        return jnp.array(UPRIGHT)
+        return jnp.array(Action.UPRIGHT)
     if up and left:
-        return jnp.array(UPLEFT)
+        return jnp.array(Action.UPLEFT)
     if down and right:
-        return jnp.array(DOWNRIGHT)
+        return jnp.array(Action.DOWNRIGHT)
     if down and left:
-        return jnp.array(DOWNLEFT)
+        return jnp.array(Action.DOWNLEFT)
 
     # Cardinal directions
     if up:
-        return jnp.array(UP)
+        return jnp.array(Action.UP)
     if down:
-        return jnp.array(DOWN)
+        return jnp.array(Action.DOWN)
     if left:
-        return jnp.array(LEFT)
+        return jnp.array(Action.LEFT)
     if right:
-        return jnp.array(RIGHT)
+        return jnp.array(Action.RIGHT)
     if fire:
-        return jnp.array(FIRE)
+        return jnp.array(Action.FIRE)
 
-    return jnp.array(NOOP)
+    return jnp.array(Action.NOOP)
 
 if __name__ == "__main__":
     # Initialize game and renderer
