@@ -22,7 +22,6 @@ TOP_BORDER = 23
 @dataclass
 class GameConfig:
     """Game configuration parameters"""
-
     screen_width: int = 160
     screen_height: int = 210
     skier_width: int = 10
@@ -535,6 +534,7 @@ class RenderConfig:
 
 class GameRenderer:
     def __init__(self, game_config: GameConfig, render_config: RenderConfig):
+        
         self.game_config = game_config
         self.render_config = render_config
 
@@ -572,7 +572,7 @@ class GameRenderer:
     #     return [img for _ in range(16)]
 
     def _create_skier_sprite(self) -> list[pygame.Surface]:
-        # Basispfad relativ zum Projekt-Root
+        # Base path relative to the project root
         base_path = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
         sprite_dir = os.path.join(base_path, "jaxatari", "assets", "skiing")
 
@@ -595,17 +595,17 @@ class GameRenderer:
             )
             sprites[direction] = img
 
-            # Map skier_pos (0–7) auf eine Richtung
-            sprite_list = []
-            for i in range(8):
-                if i <= 2:
-                    sprite_list.append(sprites["left"])
-                elif i >= 5:
-                    sprite_list.append(sprites["left"])
-                else:
-                    sprite_list.append(sprites["left"])
-
-            return sprite_list
+        # Map skier_pos (0-7) to a direction
+        sprite_list = []
+        for i in range(8):
+            if i <= 2:
+                sprite_list.append(sprites["left"])
+            elif i >= 5:
+                sprite_list.append(sprites["right"])
+            else:
+                sprite_list.append(sprites["front"])
+        
+        return sprite_list
 
 
     def _create_flag_sprite(self) -> pygame.Surface:
@@ -720,15 +720,15 @@ class GameRenderer:
             ),
         )
 
-        direction = state.skier_pos
-        if direction < 3:
-            index = 0  # left
-        elif direction > 5:
-            index = 2  # right
-        else:
-            index = 1  # straight
-
-        self.screen.blit(self.skier_sprite[index], skier_pos)
+        # Use skier position to determine which sprite to display
+        direction_index = int(state.skier_pos)
+        # Make sure the index is valid for our sprite list
+        if direction_index < 0:
+            direction_index = 0
+        elif direction_index >= len(self.skier_sprite):
+            direction_index = len(self.skier_sprite) - 1
+            
+        self.screen.blit(self.skier_sprite[direction_index], skier_pos)
 
         # Draw flags
         for fx, fy in state.flags:
@@ -788,7 +788,7 @@ class GameRenderer:
 
         if state.game_over:
             game_over_text = self.font.render(
-                "Game Over!", True, self.render_config.game_over_color
+                "You Won!", True, self.render_config.game_over_color
             )
             text_rect = game_over_text.get_rect(
                 center=(
@@ -801,7 +801,7 @@ class GameRenderer:
                 )
             )
             self.screen.blit(game_over_text, text_rect)
-
+        
         pygame.display.flip()
 
     def close(self):
@@ -832,12 +832,11 @@ def main():
 
         # Handle input
         keys = pygame.key.get_pressed()
+        action = NOOP
         if keys[pygame.K_a]:
             action = LEFT
         elif keys[pygame.K_d]:
             action = RIGHT
-        else:
-            action = NOOP
 
         # Update game state
         obs, state, reward, done, info = game.step(state, action)
