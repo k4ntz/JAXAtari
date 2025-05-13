@@ -17,6 +17,7 @@ from jaxatari.environment import JaxEnvironment, JAXAtariAction as Action
 
 # Constants for game environment
 MAX_SPEED = 12
+MAX_ASTEROIDS_COUNT = 6 #TODO not sure about value
 ENEMY_STEP_SIZE = 2
 
 # Background color and object colors
@@ -151,24 +152,23 @@ class WordZapperState(NamedTuple):
         chex.Array
     ) # (12, 3) array for asteroids - separated into 4 lanes, 3 slots per lane [left to right]
 
-    letters_x: chex.Array # letters at the top
-    letters_y: chex.Array
-    letters_char: chex.Array
-    letters_alive: chex.Array
-    letters_speed: chex.Array
-    letters_positions: (
-        chex.Array
-    ) # (26,1) y coorinate does not change and deined in LETTERS_Y
+    # letters_x: chex.Array # letters at the top
+    # letters_y: chex.Array
+    # letters_char: chex.Array
+    # letters_alive: chex.Array
+    # letters_speed: chex.Array
+    # letters_positions: (
+    #     chex.Array
+    # ) # (26,1) y coorinate does not change and deined in LETTERS_Y
 
     player_missile_position: chex.Array  # shape: (3,) -> [x, y, direction]
 
-    current_word: chex.Array # the actual word
-    current_letter_index: chex.Array
+    # current_word: chex.Array # the actual word
+    # current_letter_index: chex.Array
 
-    player_score: chex.Array
     timer: chex.Array
     step_counter: chex.Array
-    buffer: chex.Array # TODO: do we need this?
+    rng_key: chex.PRNGKey
 
 class EntityPosition(NamedTuple):
     x: jnp.ndarray
@@ -181,13 +181,13 @@ class EntityPosition(NamedTuple):
 class WordZapperObservation(NamedTuple):
     player: EntityPosition
     asteroids: jnp.ndarray  # Shape (12, 5) - 12 asteroids each with x,y,w,h,active
-    letters: jnp.ndarray # Shape (26, 5) - 26 letters each with x,y,w,h,active
+    # letters: jnp.ndarray # Shape (26, 5) - 26 letters each with x,y,w,h,active
 
-    letters_char: jnp.ndarray 
-    letters_alive: jnp.ndarray  # active letters
+    # letters_char: jnp.ndarray 
+    # letters_alive: jnp.ndarray  # active letters
 
-    current_word: jnp.ndarray  # word to form
-    current_letter_index: jnp.ndarray  # current position in word
+    # current_word: jnp.ndarray  # word to form
+    # current_letter_index: jnp.ndarray  # current position in word
 
     player_missile: EntityPosition
 
@@ -390,9 +390,6 @@ def player_missile_step(
     return final_missile, new_cooldown
 
 
-def shooting_letter():
-    pass
-
 class JaxWordZapper(JaxEnvironment[WordZapperState, WordZapperObservation, WordZapperInfo]) :
     def __init__(self, reward_funcs: list[callable] =None):
         super().__init__()
@@ -423,86 +420,28 @@ class JaxWordZapper(JaxEnvironment[WordZapperState, WordZapperObservation, WordZ
         self.obs_size = 3*4 + 1 + 1
 
     @partial(jax.jit, static_argnums=(0,))
-    def reset(self, key: jax.random.PRNGKey = jax.random.PRNGKey(42)) -> Tuple["WordZapperObservation", "WordZapperState"]:
-        """Reset the Word Zapper environment state with a new word and initial player/letter positions."""
-        
-        # Define dictionary of words (1 to 5 letters each)
-        WORD_DICT = ["CAT", "MOON", "SUN", "ZAP", "ROBOT", "AXE", "JAX", "FIRE", "COLD", "FLUX", "BYTE", "RAY"]
-        MAX_WORD_LEN = 5
-        MAX_WORDS = len(WORD_DICT)
-
-        # Convert dictionary to jax-friendly format
-        def encode_words(word_list):
-            padded_array = jnp.zeros((len(word_list), MAX_WORD_LEN), dtype=jnp.int32)
-            word_lengths = []
-            for i, word in enumerate(word_list):
-                ascii_vals = [ord(c) for c in word]
-                padded_array = padded_array.at[i, :len(ascii_vals)].set(jnp.array(ascii_vals))
-                word_lengths.append(len(word))
-            return padded_array, jnp.array(word_lengths)
-
-        ENCODED_WORDS, WORD_LENGTHS = encode_words(WORD_DICT)
-
-        # Sample a random word
-        word_idx = jax.random.randint(key, (), 0, MAX_WORDS)
-        word = ENCODED_WORDS[word_idx]
-        word_len = WORD_LENGTHS[word_idx]
-
-        # Prepare current word with padding
-        current_word = jnp.zeros(MAX_WORD_LEN, dtype=jnp.int32).at[:word_len].set(word[:word_len])
-
-        # Initialize letter scrolling positions (example: one letter per word character)
-        letters_x = jnp.linspace(160, 160 + 20 * word_len, num=word_len, dtype=jnp.int32)
-        letters_y = jnp.full((word_len,), 32, dtype=jnp.int32)
-        letters_char = word[:word_len]
-        letters_alive = jnp.ones((word_len,), dtype=jnp.int32)
-        letters_speed = jnp.full((word_len,), 1, dtype=jnp.int32)
-
-        # Initialize player state
-        player_x = jnp.array(PLAYER_START_X)
-        player_y = jnp.array(HEIGHT // 2)
-        player_speed = jnp.array(0)
-        cooldown_timer = jnp.array(0)
-
-        # Asteroid placeholder (can be extended later)
-        asteroid_x = jnp.array(0)
-        asteroid_y = jnp.array(0)
-        asteroid_speed = jnp.array(0)
-        asteroid_alive = jnp.array(0)
-
-        # Other state variables
-        player_score = jnp.array(0)
-        timer = jnp.array(0)
-        step_counter = jnp.array(0)
-        buffer = jnp.zeros((5,), dtype=jnp.int32)
-
-        # Construct state object
-        state = WordZapperState(
-        player_x=player_x,
-        player_y=player_y,
-        player_speed=player_speed,
-        cooldown_timer=cooldown_timer,
-        asteroid_x=asteroid_x,
-        asteroid_y=asteroid_y,
-        asteroid_speed=asteroid_speed,
-        asteroid_alive=asteroid_alive,
-        letters_x=letters_x,
-        letters_y=letters_y,
-        letters_char=letters_char,
-        letters_alive=letters_alive,
-        letters_speed=letters_speed,
-        current_word=current_word,
-        current_letter_index=jnp.array(0),
-        player_score=player_score,
-        timer=timer,
-        step_counter=step_counter,
-        buffer=buffer,
+    def reset(self, key: jax.random.PRNGKey = jax.random.PRNGKey(42)) -> Tuple[WordZapperObservation, WordZapperState]:
+        """Initialize game state"""
+        reset_state = WordZapperState(
+            player_x=jnp.array(PLAYER_START_X),
+            player_y=jnp.array(PLAYER_START_Y),
+            player_speed=jnp.array(0),
+            player_direction=jnp.array(0),
+            cooldown_timer=jnp.array(0),
+            asteroid_x=jnp.array(0),
+            asteroid_y=jnp.array(0),
+            asteroid_speed=jnp.array(0), ## TODO these values are not clear, some need change
+            asteroid_alive=jnp.array(0),
+            asteroid_positions=jnp.zeros((MAX_ASTEROIDS_COUNT, 3)),
+            #spawn_state=initialize_spawn_state(), 
+            player_missile_position=jnp.zeros(3),  # x,y,direction
+            timer=jnp.array(90),
+            step_counter=jnp.array(0),
+            rng_key=key,
         )
 
-        # Observation builder (you would define this based on your state model)
-        obs = self._get_observation(state)
-
-        return obs, state   
+        initial_obs = self._get_observation(reset_state)
+        return initial_obs, reset_state
     
     
     def get_action_space(self) -> jnp.ndarray:
@@ -533,7 +472,7 @@ class JaxWordZapper(JaxEnvironment[WordZapperState, WordZapperObservation, WordZ
         asteroids = jax.vmap(lambda pos: convert_to_entity(pos, ASTEROID_SIZE))(state.asteroid_positions)
 
         # Convert letter positions into the correct entity format
-        letters = jax.vmap(lambda pos: convert_to_entity(pos, LETTER_SIZE))(state.letters_positions)
+        # letters = jax.vmap(lambda pos: convert_to_entity(pos, LETTER_SIZE))(state.letters_positions)
 
         # Convert player missile position into the correct entity format
         missile_pos = state.player_missile_position
@@ -548,11 +487,11 @@ class JaxWordZapper(JaxEnvironment[WordZapperState, WordZapperObservation, WordZ
         return WordZapperObservation(
             player=player,
             asteroids=asteroids,
-            letters=letters,
-            letters_char=state.letters_char,
-            letters_alive=state.letters_alive,
-            current_word=state.current_word,
-            current_letter_index=state.current_letter_index,
+            # letters=letters,
+            # letters_char=state.letters_char,
+            # letters_alive=state.letters_alive,
+            # current_word=state.current_word,
+            # current_letter_index=state.current_letter_index,
             player_missile=player_missile,
             cooldown_timer=state.cooldown_timer,
             timer=state.timer,
@@ -581,30 +520,32 @@ class JaxWordZapper(JaxEnvironment[WordZapperState, WordZapperObservation, WordZ
     def step(
         self, state: WordZapperState, action: chex.Array
     ) -> Tuple[WordZapperObservation, WordZapperState, float, bool, WordZapperInfo]:
-        super().step(state, action)
-
+        
         previous_state = state
+        _, reset_state = self.reset()
 
         def normal_game_step():
             # Step player
-            new_player_x, new_player_y, new_player_speed, new_cooldown_timer, fired = player_step(
-                state.player_x,
-                state.player_y,
-                state.player_speed,
-                state.cooldown_timer,
+            new_player_x, new_player_y, new_palyer_direction = player_step(
+                state,
                 action,
             )
 
             # Step letters
-            new_letters_x = scrolling_letters(state.letters_x, state.letters_speed, state.letters_alive)
+            #new_letters_x = scrolling_letters(state.letters_x, state.letters_speed, state.letters_alive)
+
+            new_step_counter = jnp.where(
+                state.step_counter == 1024,
+                jnp.array(0),
+                state.step_counter + 1,
+            )
 
             new_state = state._replace(
                 player_x=new_player_x,
                 player_y=new_player_y,
-                player_speed=new_player_speed,
-                cooldown_timer=new_cooldown_timer,
-                letters_x=new_letters_x,
-                step_counter=state.step_counter + 1,
+                player_direction=new_palyer_direction,
+                #letters_x=new_letters_x,
+                step_counter=new_step_counter,
             )
             return new_state
 
@@ -620,90 +561,15 @@ class JaxWordZapper(JaxEnvironment[WordZapperState, WordZapperObservation, WordZ
 
 
 class WordZapperRenderer(AtraJaxisRenderer):
-    def __init__(self, screen):
-        """
-        Initialize the renderer with all necessary rectangles and colors.
-        """
-        super().__init__()  # No arguments passed to AtraJaxisRenderer's __init__
+    @partial(jax.jit, static_argnums=(0,))
+    def render(self, state):
+        raster = jnp.zeros((WIDTH, HEIGHT, 3))
 
-        # Store the screen (Pygame surface)
-        self.screen = screen
-
-        # Define colors
-        self.background_color = (0, 0, 0)  # Black
-        self.spaceship_color = (255, 0, 0)  # Red
-        self.title_color = (0, 0, 255)  # Blue
-        self.text_color = (255, 255, 255)  # White
-
-        # Define rectangles
-        self.wordzapper_rect = jnp.array([0, 0, 800, 100])  # Title bar
-        self.spaceship_rect = jnp.array([111, 365, 50, 30])  # Spaceship
-
-    def render(self, state: WordZapperState):
-        """
-        Render all game elements based on current WordZapperState (JAX).
-        """
-        self.screen.fill(self.background_color)
-
-        # 🎯 Draw the player spaceship
-        player_rect = pygame.Rect(
-            int(state.player_x.item()),
-            int(state.player_y.item()),
-            PLAYER_SIZE[0],
-            PLAYER_SIZE[1],
-        )
-        pygame.draw.rect(self.screen, self.spaceship_color, player_rect)
-
-        # 🚀 Draw player missile if active
-        missile_x, missile_y, direction = state.player_missile_position
-        if missile_x > 0 and missile_y > 0 and direction != 0:
-            missile_rect = pygame.Rect(int(missile_x.item()), int(missile_y.item()), 2, 6)
-            pygame.draw.rect(self.screen, (255, 255, 0), missile_rect)  # Yellow
-
-        # 🔡 Draw scrolling letters
-        for i in range(len(state.letters_x)):
-            if state.letters_alive[i] == 1:
-                char_code = int(state.letters_char[i].item())
-                letter_x = int(state.letters_x[i].item())
-                letter_y = int(state.letters_y[i].item())
-                letter_char = chr(char_code)
-
-                font = pygame.font.SysFont(None, 24)
-                letter_surface = font.render(letter_char, True, self.text_color)
-                self.screen.blit(letter_surface, (letter_x, letter_y))
-
-        # 🧱 Draw asteroid if alive
-        if state.asteroid_alive.item() == 1:
-            asteroid_rect = pygame.Rect(
-                int(state.asteroid_x.item()), int(state.asteroid_y.item()), 8, 8
-            )
-            pygame.draw.rect(self.screen, (128, 128, 128), asteroid_rect)
-
-        # 🕒 Draw timer
-        font = pygame.font.SysFont(None, 36)
-        time_surf = font.render(f"TIME: {current_time}", True, self.text_color)
-        self.screen.blit(time_surf, (300, 40))
-
-        # Update the display
-        pygame.display.update()  # Use Pygame's display update method
-        time_surface = font.render(f"TIME: {int(state.timer.item())}", True, self.text_color)
-        self.screen.blit(time_surface, (10, 10))
-
-        pygame.display.update()
-
-
-    # @partial(jax.jit, static_argnums=(0,))
-    # def render(self, state):
-    #     raster = jnp.zeros((WIDTH, HEIGHT, 3))
-
-    #     # Render the spaceship
-    #     pygame.draw.rect(self.screen, self.spaceship_color, spaceship_rect)
-
-    #     # render background
-    #     frame_bg = aj.get_sprite_frame(SPRITE_BG, 0)
-    #     raster = aj.render_at(raster, 0, 0, frame_bg)
+        # render background
+        # frame_bg = aj.get_sprite_frame(SPRITE_BG, 0)
+        # raster = aj.render_at(raster, 0, 0, SPRITE_BG)
     
-    #     return raster
+        return raster
 
 
 
@@ -717,125 +583,56 @@ if __name__ == "__main__":
     clock = pygame.time.Clock()
 
 
-    #game = JaxWordZapper() # <-- eventual game
+    game = JaxWordZapper() # <-- eventual game
 
     # Initialize the renderer
-    renderer = WordZapperRenderer(screen)
+    renderer = WordZapperRenderer()
 
-    # Define the initial player state
-    player_x = 111
-    player_y = 365
-    player_direction = 0  # 0 for no direction, -1 for left, 1 for right
-    renderer = WordZapperRenderer(screen) # TODO screen must not be a parameter eventually, see seaquest
 
-        # Get jitted functions
-    # jitted_step = jax.jit(game.step)
-    # jitted_reset = jax.jit(game.reset)
+    # Get jitted functions
+    jitted_step = jax.jit(game.step)
+    jitted_reset = jax.jit(game.reset)
 
-    # Define the spaceship rectangle
-    spaceship_rect = pygame.Rect(player_x, player_y, 50, 30)  # Use Pygame Rect for rendering
 
-    # Game loop
+    curr_obs, curr_state = jitted_reset()
+
+    # Game loop with rendering
     running = True
+    frame_by_frame = False
+    frameskip = 1
+    counter = 1
+
     while running:
         for event in pygame.event.get():
             if event.type == pygame.QUIT:
                 running = False
+            elif event.type == pygame.KEYDOWN:
+                if event.key == pygame.K_f:
+                    frame_by_frame = not frame_by_frame
+            elif event.type == pygame.KEYDOWN or (
+                event.type == pygame.KEYUP and event.key == pygame.K_n
+            ):
+                if event.key == pygame.K_n and frame_by_frame:
+                    if counter % frameskip == 0:
+                        action = get_human_action()
+                        curr_obs, curr_state, reward, done, info = jitted_step(
+                            curr_state, action
+                        )
+                        print(f"Observations: {curr_obs}")
+                        print(f"Reward: {reward}, Done: {done}, Info: {info}")
 
-        # Get player action
-        action = get_human_action()
+        if not frame_by_frame:
+            if counter % frameskip == 0:
+                action = get_human_action()
+                curr_obs, curr_state, reward, done, info = jitted_step(
+                    curr_state, action
+                )
 
-        # Update player position using player_step
-        player_x, player_y, player_direction = player_step(
-            WordZapperState(
-                player_x=jnp.array(player_x),
-                player_y=jnp.array(player_y),
-                player_speed=jnp.array(0),
-                player_direction=jnp.array(player_direction),
-                cooldown_timer=jnp.array(0),
-                asteroid_x=jnp.array(0),
-                asteroid_y=jnp.array(0),
-                asteroid_speed=jnp.array(0),
-                asteroid_alive=jnp.array(0),
-                letters_x=jnp.array([0]),
-                letters_y=jnp.array([0]),
-                letters_char=jnp.array([0]),
-                letters_alive=jnp.array([0]),
-                letters_speed=jnp.array([0]),
-                current_word=jnp.array([0]),
-                current_letter_index=jnp.array(0),
-                player_score=jnp.array(0),
-                timer=jnp.array(0),
-                step_counter=jnp.array(0),
-                buffer=jnp.array([0]),
-            ),
-            action,
-        )
+        # render and update pygame
+        raster = renderer.render(curr_state)
+        aj.update_pygame(screen, raster, SCALING_FACTOR, WIDTH, HEIGHT)
+        counter += 1
 
-        # Update the spaceship rectangle position
-        spaceship_rect.x = int(player_x)
-        spaceship_rect.y = int(player_y)
-
-        # Prevent the spaceship from going out of bounds
-        if spaceship_rect.x < 0:
-            spaceship_rect.x = 0
-        if spaceship_rect.x > WINDOW_WIDTH - spaceship_rect.width:
-            spaceship_rect.x = WINDOW_WIDTH - spaceship_rect.width
-        if spaceship_rect.y < 0:
-            spaceship_rect.y = 0
-        if spaceship_rect.y > WINDOW_HEIGHT - spaceship_rect.height:
-            spaceship_rect.y = WINDOW_HEIGHT - spaceship_rect.height
-
-        current_time = 90 - pygame.time.get_ticks() // 1000
-        renderer.render(spaceship_rect, current_time)
-
-
-
-    # # Initialize game and renderer
-
-    # curr_obs, curr_state = jitted_reset()
-
-    # # Game loop with rendering
-    # running = True
-    # frame_by_frame = False
-    # frameskip = 1
-    # counter = 1
-
-    # while running:
-    #     for event in pygame.event.get():
-    #         if event.type == pygame.QUIT:
-    #             running = False
-    #         elif event.type == pygame.KEYDOWN:
-    #             if event.key == pygame.K_f:
-    #                 frame_by_frame = not frame_by_frame
-    #         elif event.type == pygame.KEYDOWN or (
-    #             event.type == pygame.KEYUP and event.key == pygame.K_n
-    #         ):
-    #             if event.key == pygame.K_n and frame_by_frame:
-    #                 if counter % frameskip == 0:
-    #                     action = get_human_action()
-    #                     curr_obs, curr_state, reward, done, info = jitted_step(
-    #                         curr_state, action
-    #                     )
-    #                     print(f"Observations: {curr_obs}")
-    #                     print(f"Reward: {reward}, Done: {done}, Info: {info}")
-
-    #     if not frame_by_frame:
-    #         if counter % frameskip == 0:
-    #             action = get_human_action()
-    #             curr_obs, curr_state, reward, done, info = jitted_step(
-    #                 curr_state, action
-    #             )
-
-    #     # render and update pygame
-    #     raster = renderer.render(curr_state)
-    #     aj.update_pygame(screen, raster, SCALING_FACTOR, WIDTH, HEIGHT)
-    #     counter += 1
-
-
-    clock.tick(60)
-
-        current_time = 90 - pygame.time.get_ticks() // 1000
-        renderer.render(curr_state, current_time)
+        clock.tick(60)
 
     pygame.quit()
