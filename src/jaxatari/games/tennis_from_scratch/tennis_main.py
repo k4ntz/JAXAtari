@@ -147,6 +147,7 @@ def ball_step(state: TennisState, action) -> BallState:
     new_ball_z = jnp.where(new_ball_z <= 0, 0, new_ball_z)
     new_ball_z_fp = jnp.where(new_ball_z <= 0, 0, new_ball_z_fp)
 
+    # ball movement in x/y direction is linear, no velocity involved
     dx = ball_state.ball_hit_target_x - ball_state.ball_x
     dy = ball_state.ball_hit_target_y - ball_state.ball_y
     dist = jnp.sqrt(dx**2 + dy**2) + 1e-8  # Add epsilon to avoid divide-by-zero
@@ -171,17 +172,17 @@ def ball_step(state: TennisState, action) -> BallState:
             ),
             jnp.logical_and(
                 ball_state.ball_x >= player_state.player_x - 1,
-                ball_state.ball_x <= player_state.player_x + 5 + 1
+                ball_state.ball_x <= player_state.player_x + PLAYER_WIDTH + 1
             )
         ),
         jnp.logical_or(
             jnp.logical_and(
-                player_state.player_x + 5 >= ball_state.ball_x - 1,
-                player_state.player_x + 5 <= ball_state.ball_x + 2 + 1
+                player_state.player_x + PLAYER_WIDTH >= ball_state.ball_x - 1,
+                player_state.player_x + PLAYER_WIDTH <= ball_state.ball_x + 2 + 1
             ),
             jnp.logical_and(
                 ball_state.ball_x + 2 >= player_state.player_x - 1,
-                ball_state.ball_x + 2 <= player_state.player_x + 5 + 1
+                ball_state.ball_x + 2 <= player_state.player_x + PLAYER_WIDTH + 1
             )
         )
     )
@@ -203,9 +204,9 @@ def handle_ball_fire(state: TennisState) -> BallState:
     new_ball_hit_start_y = state.ball_state.ball_y
 
     # todo fix hardcoded values
-    player_width = 5.0
+    # todo this is incorrect, it assumes the player_x is in the center of the player
     ball_width = 2.0
-    max_dist = player_width / 2 + ball_width / 2
+    max_dist = PLAYER_WIDTH / 2 + ball_width / 2
 
     angle = -1 * ((state.player_state.player_x - state.ball_state.ball_x) / max_dist)
     # calc x landing position depending on player hit angle
@@ -215,7 +216,7 @@ def handle_ball_fire(state: TennisState) -> BallState:
     offset = ((angle + 1) / 2) * (right_offset - left_offset) + left_offset
 
     new_ball_hit_target_x = new_ball_hit_start_x + offset
-    new_ball_hit_target_y = new_ball_hit_start_y + 80
+    new_ball_hit_target_y = new_ball_hit_start_y + 91
 
     return BallState(state.ball_state.ball_x, state.ball_state.ball_y, state.ball_state.ball_z, state.ball_state.ball_z_fp, state.ball_state.ball_velocity_z_fp, new_ball_hit_start_x, new_ball_hit_start_y, new_ball_hit_target_x, new_ball_hit_target_y)
 
