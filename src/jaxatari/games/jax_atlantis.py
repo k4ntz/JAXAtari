@@ -152,6 +152,12 @@ class JaxAtlantis(JaxEnvironment[AtlantisState, AtlantisObservation, AtlantisInf
         if reward_funcs is not None:
             reward_funcs = tuple(reward_funcs)
         self.reward_funcs = reward_funcs
+        self.action_set = [
+            Action.NOOP,
+            Action.FIRE,        # centre cannon
+            Action.LEFTFIRE,    # left cannon
+            Action.RIGHTFIRE    # right cannon
+        ]
 
     def reset(self, key: jax.random.PRNGKey = jax.random.PRNGKey(42)) -> Tuple[AtlantisObservation, AtlantisState]:
         # --- empty tables ---
@@ -377,7 +383,7 @@ class JaxAtlantis(JaxEnvironment[AtlantisState, AtlantisObservation, AtlantisInf
         """
         Placeholder done: never terminates.
         """
-        return jnp.array([], dtype=jnp.int32)
+        return jnp.array(self.action_set)
 
 
 
