@@ -17,10 +17,10 @@ from jaxatari.environment import JaxEnvironment
 #
 
 # TODO:
-# - Aufdecken
+# - Aufdecken (implementiert aber ungetestet)
 # - Spielfeld generieren
-# - Flagge handlen -> Score+ neues Spielfeld
-# - Bomben handlen
+# - Flagge handlen -> Score+ neues Spielfeld (implementiert aber ungetestet) (noch keine Animation)
+# - Bomben handlen (implementiert aber ungetestet) (noch keine Animation)
 # - Funktionen mit Docstrings versehen
 # - play.py geht nur im Debugger
 
@@ -117,6 +117,12 @@ MOVE_COOLDOWN = 15
 STEPS_PER_SECOND = 30
 # endregion
 
+# region Animation Constants
+# Define animation constants
+ANIMATION_TYPE_NONE = 0
+ANIMATION_TYPE_EXPLOSION = 1
+ANIMATION_TYPE_FLAG = 2
+
 
 class FlagCaptureState(NamedTuple):
     player_x: chex.Array
@@ -126,7 +132,10 @@ class FlagCaptureState(NamedTuple):
     score: chex.Array
     field: chex.Array  # Shape (9, 7)
     player_move_cooldown: chex.Array
+    animation_cooldown: chex.Array
+    animation_type: chex.Array
     rng_key: chex.PRNGKey
+
 
 class PlayerEntity(NamedTuple):
     x: chex.Array
@@ -179,19 +188,50 @@ def generate_field(field, rng_key, n_bombs, n_number_clues, n_direction_clues):
 
 
 @jax.jit
-def player_step(player_x, player_y, is_checking,player_move_cooldown, action):
+def player_step(player_x, player_y, is_checking, player_move_cooldown, animation_type, action):
     """
     Updates the player's position and state based on the action taken.
 
     """
     # check if the player is firing(checking). This is any action like FIRE, UPFIRE, DOWNFIRE, etc.
     # do this by checking if the action is 1 (FIRE) or between 10 and 17 (UPFIRE, DOWNFIRE, etc.)
-    new_is_checking = jax.lax.cond(jnp.logical_or(jnp.equal(action, JAXAtariAction.FIRE),jnp.logical_and(jnp.greater_equal(action, JAXAtariAction.UPFIRE), jnp.less_equal(action, JAXAtariAction.DOWNLEFTFIRE))),lambda : 1, lambda: 0)
+    new_is_checking = jax.lax.cond(jnp.logical_or(jnp.equal(action, JAXAtariAction.FIRE),
+                                                  jnp.logical_and(jnp.greater_equal(action, JAXAtariAction.UPFIRE),
+                                                                  jnp.less_equal(action, JAXAtariAction.DOWNLEFTFIRE))),
+                                   lambda: 1, lambda: 0)
     # check if the player is moving upwards. This is any action like UP, UPRIGHT, UPLEFT, UPFIRE, UPRIGHTFIRE, UPLEFTFIRE
-    is_up = jnp.logical_or(jnp.equal(action, JAXAtariAction.UP), jnp.logical_or(jnp.equal(action, JAXAtariAction.UPFIRE), jnp.logical_or(jnp.equal(action, JAXAtariAction.UPRIGHT), jnp.logical_or(jnp.equal(action, JAXAtariAction.UPLEFT), jnp.logical_or(jnp.equal(action, JAXAtariAction.UPRIGHTFIRE), jnp.equal(action, JAXAtariAction.UPLEFTFIRE))))))
-    is_down = jnp.logical_or(jnp.equal(action, JAXAtariAction.DOWN), jnp.logical_or(jnp.equal(action, JAXAtariAction.DOWNFIRE), jnp.logical_or(jnp.equal(action, JAXAtariAction.DOWNRIGHT), jnp.logical_or(jnp.equal(action, JAXAtariAction.DOWNLEFT), jnp.logical_or(jnp.equal(action, JAXAtariAction.DOWNRIGHTFIRE), jnp.equal(action, JAXAtariAction.DOWNLEFTFIRE))))))
-    is_left = jnp.logical_or(jnp.equal(action, JAXAtariAction.LEFT), jnp.logical_or(jnp.equal(action, JAXAtariAction.UPLEFT), jnp.logical_or(jnp.equal(action, JAXAtariAction.DOWNLEFT), jnp.logical_or(jnp.equal(action, JAXAtariAction.LEFTFIRE), jnp.logical_or(jnp.equal(action, JAXAtariAction.UPLEFTFIRE), jnp.equal(action, JAXAtariAction.DOWNLEFTFIRE))))))
-    is_right = jnp.logical_or(jnp.equal(action, JAXAtariAction.RIGHT), jnp.logical_or(jnp.equal(action, JAXAtariAction.UPRIGHT), jnp.logical_or(jnp.equal(action, JAXAtariAction.DOWNRIGHT), jnp.logical_or(jnp.equal(action, JAXAtariAction.RIGHTFIRE), jnp.logical_or(jnp.equal(action, JAXAtariAction.UPRIGHTFIRE), jnp.equal(action, JAXAtariAction.DOWNRIGHTFIRE))))))
+    is_up = jnp.logical_or(jnp.equal(action, JAXAtariAction.UP),
+                           jnp.logical_or(jnp.equal(action, JAXAtariAction.UPFIRE),
+                                          jnp.logical_or(jnp.equal(action, JAXAtariAction.UPRIGHT),
+                                                         jnp.logical_or(jnp.equal(action, JAXAtariAction.UPLEFT),
+                                                                        jnp.logical_or(jnp.equal(action,
+                                                                                                 JAXAtariAction.UPRIGHTFIRE),
+                                                                                       jnp.equal(action,
+                                                                                                 JAXAtariAction.UPLEFTFIRE))))))
+    is_down = jnp.logical_or(jnp.equal(action, JAXAtariAction.DOWN),
+                             jnp.logical_or(jnp.equal(action, JAXAtariAction.DOWNFIRE),
+                                            jnp.logical_or(jnp.equal(action, JAXAtariAction.DOWNRIGHT),
+                                                           jnp.logical_or(jnp.equal(action, JAXAtariAction.DOWNLEFT),
+                                                                          jnp.logical_or(jnp.equal(action,
+                                                                                                   JAXAtariAction.DOWNRIGHTFIRE),
+                                                                                         jnp.equal(action,
+                                                                                                   JAXAtariAction.DOWNLEFTFIRE))))))
+    is_left = jnp.logical_or(jnp.equal(action, JAXAtariAction.LEFT),
+                             jnp.logical_or(jnp.equal(action, JAXAtariAction.UPLEFT),
+                                            jnp.logical_or(jnp.equal(action, JAXAtariAction.DOWNLEFT),
+                                                           jnp.logical_or(jnp.equal(action, JAXAtariAction.LEFTFIRE),
+                                                                          jnp.logical_or(jnp.equal(action,
+                                                                                                   JAXAtariAction.UPLEFTFIRE),
+                                                                                         jnp.equal(action,
+                                                                                                   JAXAtariAction.DOWNLEFTFIRE))))))
+    is_right = jnp.logical_or(jnp.equal(action, JAXAtariAction.RIGHT),
+                              jnp.logical_or(jnp.equal(action, JAXAtariAction.UPRIGHT),
+                                             jnp.logical_or(jnp.equal(action, JAXAtariAction.DOWNRIGHT),
+                                                            jnp.logical_or(jnp.equal(action, JAXAtariAction.RIGHTFIRE),
+                                                                           jnp.logical_or(jnp.equal(action,
+                                                                                                    JAXAtariAction.UPRIGHTFIRE),
+                                                                                          jnp.equal(action,
+                                                                                                    JAXAtariAction.DOWNRIGHTFIRE))))))
 
     # if player is moving down add 1 to player_y
     new_player_y = jax.lax.cond(is_down, lambda: player_y + 1, lambda: player_y)
@@ -202,15 +242,19 @@ def player_step(player_x, player_y, is_checking,player_move_cooldown, action):
     # if player is moving right add 1 to player_x
     new_player_x = jax.lax.cond(is_right, lambda: player_x + 1, lambda: new_player_x)
     # modulo the player_x and player_y to be on the field
-    # This adds the movement cooldown, border wrapping and prevents moving while checking
-    new_player_x = jax.lax.cond(jnp.logical_or(new_is_checking,jnp.greater(player_move_cooldown, 0)),lambda: player_x,lambda: jnp.mod(new_player_x, NUM_FIELDS_X))
-    new_player_y = jax.lax.cond(jnp.logical_or(new_is_checking,jnp.greater(player_move_cooldown, 0)),lambda: player_y,lambda: jnp.mod(new_player_y, NUM_FIELDS_Y))
+    # This adds the movement cooldown, border wrapping and prevents moving while checking or animating
+    new_player_x = jax.lax.cond(jnp.logical_or(new_is_checking,
+                                               jnp.logical_or(jnp.not_equal(animation_type, ANIMATION_TYPE_NONE),
+                                                              jnp.greater(player_move_cooldown, 0))), lambda: player_x,
+                                lambda: jnp.mod(new_player_x, NUM_FIELDS_X))
+    new_player_y = jax.lax.cond(jnp.logical_or(new_is_checking,
+                                               jnp.logical_or(jnp.not_equal(animation_type, ANIMATION_TYPE_NONE),
+                                                              jnp.greater(player_move_cooldown, 0))), lambda: player_y,
+                                lambda: jnp.mod(new_player_y, NUM_FIELDS_Y))
 
     # if cooldown is <= 0 set it to MOVE_COOLDOWN else subtract 1
-    new_player_move_cooldown = jax.lax.cond(jnp.less_equal(player_move_cooldown, 0), lambda: MOVE_COOLDOWN, lambda: player_move_cooldown - 1)
-
-    #TODO: check if the player is_checking and if so check if the player is on a bomb or flag
-
+    new_player_move_cooldown = jax.lax.cond(jnp.less_equal(player_move_cooldown, 0), lambda: MOVE_COOLDOWN,
+                                            lambda: player_move_cooldown - 1)
 
     return new_player_x, new_player_y, new_is_checking, new_player_move_cooldown
 
@@ -254,10 +298,12 @@ class JaxFlagCapture(JaxEnvironment[FlagCaptureState, FlagCaptureObservation, Fl
         state = FlagCaptureState(
             player_x=jnp.array(0).astype(jnp.int32),
             player_y=jnp.array(0).astype(jnp.int32),
-            time=jnp.array(75*STEPS_PER_SECOND).astype(jnp.int32),
+            time=jnp.array(75 * STEPS_PER_SECOND).astype(jnp.int32),
             score=jnp.array(0).astype(jnp.int32),
             is_checking=jnp.array(1).astype(jnp.int32),
             player_move_cooldown=jnp.array(0).astype(jnp.int32),
+            animation_cooldown=jnp.array(0).astype(jnp.int32),
+            animation_type=jnp.array(0).astype(jnp.int32),
             field=generated_field,
             rng_key=key,
         )
@@ -290,23 +336,97 @@ class JaxFlagCapture(JaxEnvironment[FlagCaptureState, FlagCaptureObservation, Fl
     def step(self, state: FlagCaptureState, action: chex.Array) -> Tuple[
         FlagCaptureObservation, FlagCaptureState, float, bool, FlagCaptureInfo]:
 
-
-        new_player_x, player_speed_y, new_is_checking, new_player_move_cooldown = player_step(
+        new_player_x, new_player_y, new_is_checking, new_player_move_cooldown = player_step(
             state.player_x,
             state.player_y,
             state.is_checking,
             state.player_move_cooldown,
+            state.animation_type,
             action,
         )
 
+        new_animation_cooldown = jnp.where(
+            jnp.logical_and(jnp.equal(state.field[new_player_x, new_player_y], PLAYER_STATUS_BOMB),
+                            jnp.equal(new_is_checking, 1)),
+            state.animation_cooldown - 1,
+            state.animation_cooldown,
+        )
+
+        # Check if the animation cooldown is less or equal to 0 and a animation type is set
+        # If the animation type is bomb, reset the player position
+        # If the animation type is flag, reset the player position, set the score to 1 and generate a new field
+        bomb_animation_over = jnp.logical_and(
+            jnp.less_equal(new_animation_cooldown, 0),
+            jnp.equal(state.animation_type, ANIMATION_TYPE_EXPLOSION)
+        )
+        flag_animation_over = jnp.logical_and(
+            jnp.less_equal(new_animation_cooldown, 0),
+            jnp.equal(state.animation_type, ANIMATION_TYPE_FLAG)
+        )
+        new_player_x = jax.lax.cond(jnp.logical_or(bomb_animation_over, flag_animation_over),
+                                     lambda: 0,
+                                     lambda: new_player_x)
+        new_player_y = jax.lax.cond(jnp.logical_or(bomb_animation_over, flag_animation_over),
+                                        lambda: 0,
+                                        lambda: new_player_y)
+        new_animation_type = jax.lax.cond(
+            jnp.logical_or(bomb_animation_over, flag_animation_over),
+            lambda: ANIMATION_TYPE_NONE,
+            lambda: state.animation_type
+        )
+        new_score = jax.lax.cond(
+            flag_animation_over,
+            lambda: state.score + 1,
+            lambda: state.score
+        )
+        new_field = jax.lax.cond(
+            flag_animation_over,
+            lambda: generate_field(jnp.zeros((NUM_FIELDS_X, NUM_FIELDS_Y), dtype=jnp.int32), state.rng_key,
+                                   NUM_BOMBS, NUM_NUMBER_CLUES, NUM_DIRECTION_CLUES),
+            lambda: state.field
+        )
+
+
+        # Check if the player is checking (firing) and if the current field is a bomb or a flag (only if the animation_type is currently none)
+        # If the player is checking and the field is a bomb or flag, set the animation type
+
+        new_animation_type = jax.lax.cond(
+            jnp.logical_and(jnp.equal(state.field[new_player_x, new_player_y], PLAYER_STATUS_BOMB),
+                            jnp.logical_and(
+                                jnp.equal(new_is_checking, 1),
+                                jnp.equal(state.animation_type, ANIMATION_TYPE_NONE))),
+            lambda: ANIMATION_TYPE_EXPLOSION,
+            lambda: jax.lax.cond(
+                jnp.logical_and(jnp.equal(state.field[new_player_x, new_player_y], PLAYER_STATUS_FLAG),
+                                jnp.logical_and(
+                                    jnp.equal(new_is_checking, 1),
+                                    jnp.equal(state.animation_type, ANIMATION_TYPE_NONE))),
+                lambda: ANIMATION_TYPE_FLAG,
+                lambda: new_animation_type))
+
+        # if the animation type changed from none to explosion or flag, set the animation cooldown to 30 or 60
+        new_animation_cooldown = jax.lax.cond(
+            jnp.logical_and(jnp.not_equal(state.animation_type, ANIMATION_TYPE_NONE),
+                            jnp.equal(new_animation_type, ANIMATION_TYPE_EXPLOSION)),
+            lambda: 30,
+            lambda: jax.lax.cond(
+                jnp.logical_and(jnp.not_equal(state.animation_type, ANIMATION_TYPE_NONE),
+                                jnp.equal(new_animation_type, ANIMATION_TYPE_FLAG)),
+                lambda: 60,
+                lambda: 0))
+
+        new_time = state.time - 1
+
         new_state = FlagCaptureState(
             player_x=new_player_x,
-            player_y=player_speed_y,
-            time=state.time - 1,
+            player_y=new_player_y,
+            time=new_time,
             is_checking=new_is_checking,
-            score=state.score,
-            field=state.field,
+            score=new_score,
+            field=new_field,
             player_move_cooldown=new_player_move_cooldown,
+            animation_cooldown=new_animation_cooldown,
+            animation_type=new_animation_type,
             rng_key=state.rng_key,
         )
 
@@ -356,9 +476,12 @@ def load_sprites():
 
     # Convert all sprites to the expected format (add frame dimension)
     SPRITE_BG = jnp.expand_dims(background, axis=0)
-    SPRITE_PLAYER = aj.load_and_pad_digits(os.path.join(MODULE_DIR,"sprites/flagcapture/player_states/player_{}.npy"), num_chars=19)
-    SPRITE_SCORE = aj.load_and_pad_digits(os.path.join(MODULE_DIR,"sprites/flagcapture/green_digits/{}.npy"), num_chars=10)
-    SPRITE_TIMER = aj.load_and_pad_digits(os.path.join(MODULE_DIR,"sprites/flagcapture/red_digits/{}.npy"), num_chars=10)
+    SPRITE_PLAYER = aj.load_and_pad_digits(os.path.join(MODULE_DIR, "sprites/flagcapture/player_states/player_{}.npy"),
+                                           num_chars=19)
+    SPRITE_SCORE = aj.load_and_pad_digits(os.path.join(MODULE_DIR, "sprites/flagcapture/green_digits/{}.npy"),
+                                          num_chars=10)
+    SPRITE_TIMER = aj.load_and_pad_digits(os.path.join(MODULE_DIR, "sprites/flagcapture/red_digits/{}.npy"),
+                                          num_chars=10)
 
     return (
         SPRITE_BG,
