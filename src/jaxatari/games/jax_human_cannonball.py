@@ -35,10 +35,10 @@ HUMAN_SIZE = (4, 4)
 CANNON_HIGH_SIZE = (16, 31)
 CANNON_MID_SIZE = (17, 28)
 CANNON_LOW_SIZE = (20, 23)
+
 WATER_TOWER_SIZE = (10, 31)
 
 WATER_TOWER_WALL_HEIGHT = 30
-WATER_SURFACE_WIDTH = 8
 
 # Colors
 PILLAR_COLOR = (0, 0, 0)
@@ -49,15 +49,16 @@ GROUND_COLOR = (110, 156, 66)
 STATE_TRANSLATOR: dict = {
     0: "human_x",
     1: "human_y",
-    2: "human_speed",
-    3: "water_tower_x",
-    4: "water_tower_y",
-    5: "angle",
-    6: "mph",
-    7: "score",
-    8: "misses",
-    9: "step_counter",
-    10: "buffer",
+    2: "human_y_vel",
+    3: "human_launched",
+    4: "water_tower_x",
+    5: "water_tower_y",
+    6: "angle",
+    7: "mph",
+    8: "score",
+    9: "misses",
+    10: "step_counter",
+    11: "buffer",
 }
 
 
@@ -65,7 +66,8 @@ STATE_TRANSLATOR: dict = {
 class HumanCannonballState(NamedTuple):
     human_x: chex.Array
     human_y: chex.Array
-    human_speed: chex.Array
+    human_y_vel: chex.Array
+    human_launched: chex.Array
     water_tower_x: chex.Array
     water_tower_y: chex.Array
     angle: chex.Array
@@ -102,9 +104,30 @@ class HumanCannonballInfo(NamedTuple):
 # Step functions
 @jax.jit
 def human_step(
-        state_human_x, state_human_y, state_water_tower_x, state_water_tower_y, state_mph, state_angle, step_counter
+        state_human_x, state_human_y, state_human_y_vel, state_human_launched, state_water_tower_x, state_water_tower_y, state_mph, state_angle, step_counter
 ):
-    should_update = jax.mod(step_counter, 2) == 0
+    #Only update the human position every 2 steps #TODO: Look into this again
+    #should_update = jax.mod(step_counter, 2) == 0
+
+    #Calculate the horizontal and vertical velocity
+    x_vel = jnp.cos(state_angle) * state_mph
+
+    y_vel = jax.lax.cond(
+        state_human_launched,  # If human is already launched
+        lambda _: state_human_y_vel - GRAVITY * DT,  # Update the old velocity
+        lambda _: jnp.sin(state_angle) * state_mph - GRAVITY * DT,  # Else, calculate the initial velocity
+    )
+
+    # Update the human position based on the velocity and the time step (DT)
+    human_x = state_human_x + x_vel * DT
+    human_y = state_human_y + y_vel * DT - 0.5 * GRAVITY * DT ** 2  # account for gravity
+
+    # TODO: Add collision detection with the water tower
+
+    # Set the launch status to True for subsequent steps
+    human_launched = True
+
+    return human_x, human_y, y_vel, human_launched
 
 
 if __name__ == "__main__":
