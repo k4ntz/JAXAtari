@@ -20,11 +20,10 @@ The script has been modified to include the following features:
 - The script allows the user to record the RAM states of certain cells and observe the first and second derivatives of the recorded RAM states.
 
 """
-
-RAM_RENDER_WIDTH = round(1000 * (UPSCALE_FACTOR / 4))
+RAM_RENDER_WIDTH = round(1000 * (UPSCALE_FACTOR / 2))
 RAM_N_COLS = 8
-RAM_CELL_WIDTH = round(115 * (UPSCALE_FACTOR / 4))
-RAM_CELL_HEIGHT = round(45 * (UPSCALE_FACTOR / 4))
+RAM_CELL_WIDTH = round(115 * (UPSCALE_FACTOR / 2))
+RAM_CELL_HEIGHT = round(45 * (UPSCALE_FACTOR / 2))
 
 
 class Renderer:
@@ -567,7 +566,7 @@ if __name__ == "__main__":
     parser = ArgumentParser(description="OCAtari remgui.py Argument Setter")
 
     parser.add_argument(
-        "-g", "--game", type=str, default="Seaquest", help="Game to be run"
+        "-g", "--game", type=str, default="Pong", help="Game to be run"
     )
     parser.add_argument(
         "-hu", "--human", action="store_true", help="Let user play the game."
