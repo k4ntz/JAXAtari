@@ -14,6 +14,7 @@ from jaxatari.environment import JaxEnvironment
 NOOP = 0
 LEFT = 1
 RIGHT = 2
+JUMP = 3  # New action for jumping
 
 BOTTOM_BORDER = 176
 TOP_BORDER = 23
@@ -38,11 +39,12 @@ class GameConfig:
     max_num_trees: int = 4
     max_num_rocks: int = 3
     speed: float = 1.0
+    jump_duration: int = 30  # Duration of jump in frames (adjust if needed)
+    jump_scale_factor: float = 1.5  # Maximum size increase during jump
 
 
 class GameState(NamedTuple):
     """Represents the current state of the game"""
-
     skier_x: chex.Array
     skier_pos: chex.Array  # --> --_  \   |   |   /  _-- <-- States are doubles in ALE
     skier_fell: chex.Array
@@ -56,7 +58,8 @@ class GameState(NamedTuple):
     direction_change_counter: chex.Array
     game_over: chex.Array
     key: chex.Array
-
+    jumping: chex.Array  # Is the skier currently jumping?
+    jump_timer: chex.Array  # Frames left in current jump
 
 class EntityPosition(NamedTuple):
     x: jnp.ndarray
@@ -71,6 +74,8 @@ class SkiingObservation(NamedTuple):
     trees: jnp.ndarray
     rocks: jnp.ndarray
     score: jnp.ndarray
+    jumping: jnp.ndarray
+    jump_timer: jnp.ndarray
 
 
 class SkiingInfo(NamedTuple):
@@ -138,6 +143,8 @@ class JaxSkiing(JaxEnvironment[GameState, SkiingObservation, SkiingInfo]):
             direction_change_counter=jnp.array(0),
             game_over=jnp.array(False),
             key=key,
+            jumping=jnp.array(False),
+            jump_timer=jnp.array(0),
         )
         obs = self._get_observation(state)
 
@@ -236,7 +243,35 @@ class JaxSkiing(JaxEnvironment[GameState, SkiingObservation, SkiingInfo]):
         )
 
         """Take a step in the game given an action"""
+        # Handle jump action
+        jumping = state.jumping
+        jump_timer = state.jump_timer
 
+        # If JUMP action and not currently jumping, start a jump
+        jumping, jump_timer = jax.lax.cond(
+            jnp.logical_and(jnp.equal(action, JUMP), jnp.logical_not(jumping)),
+            lambda _: (jnp.array(True), jnp.array(self.config.jump_duration)),
+            lambda _: (state.jumping, state.jump_timer),
+            operand=None,
+        )
+        
+        # If already jumping, decrement timer
+        jump_timer = jax.lax.cond(
+            jumping,
+            lambda t: jnp.maximum(t - 1, 0),
+            lambda t: t,
+            operand=jump_timer,
+        )
+        
+        # End jump if timer reaches 0
+        jumping = jax.lax.cond(
+            jnp.equal(jump_timer, 0),
+            lambda _: jnp.array(False),
+            lambda _: jumping,
+            operand=None,
+        )
+
+        # Handle left/right movement
         new_skier_pos = jax.lax.cond(
             jnp.equal(action, LEFT),
             lambda _: state.skier_pos - 1,
@@ -263,17 +298,18 @@ class JaxSkiing(JaxEnvironment[GameState, SkiingObservation, SkiingInfo]):
                 jnp.not_equal(skier_pos, state.skier_pos),
                 jnp.equal(direction_change_counter, 0),
             ),
-            lambda _: 16,
+            lambda _: jnp.array(16),
             lambda _: direction_change_counter,
             operand=None,
         )
 
         dy = down_speed.at[skier_pos].get()
-
         dx = side_speed.at[skier_pos].get()
 
         new_skier_x_speed = state.skier_x_speed + ((dx - state.skier_x_speed) * 0.1)
 
+        # IMPORTANT FIX: Don't increase vertical speed during jumps
+        # Instead, maintain normal vertical speed but handle the visual effect separately
         new_skier_y_speed = state.skier_y_speed + ((dy - state.skier_y_speed) * 0.05)
 
         new_x = jnp.clip(
@@ -282,6 +318,7 @@ class JaxSkiing(JaxEnvironment[GameState, SkiingObservation, SkiingInfo]):
             self.config.screen_width - self.config.skier_width / 2,
         )
 
+        # Move objects at normal speed regardless of jumping state
         new_trees = state.trees
         for i in range(len(state.trees)):
             new_trees = new_trees.at[i, 1].set(state.trees[i][1] - new_skier_y_speed)
@@ -325,7 +362,12 @@ class JaxSkiing(JaxEnvironment[GameState, SkiingObservation, SkiingInfo]):
             dx = jnp.abs(new_x - x)
             dy = jnp.abs(jnp.round(self.config.skier_y) - jnp.round(y))
 
-            return jnp.logical_and(dx < x_distance, dy < y_distance)
+            # No collision with rocks when jumping
+            return jnp.logical_and(
+                jnp.logical_and(dx < x_distance, dy < y_distance),
+                jnp.logical_not(jumping)  # This ensures no collision when jumping
+            )
+
 
         new_flags, new_trees, new_rocks, new_key = self._create_new_objs(
             state, new_flags, new_trees, new_rocks
@@ -420,6 +462,8 @@ class JaxSkiing(JaxEnvironment[GameState, SkiingObservation, SkiingInfo]):
             direction_change_counter=direction_change_counter,
             game_over=game_over,
             key=new_key,
+            jumping=jumping,
+            jump_timer=jump_timer,
         )
 
         done = self._get_done(new_state)
@@ -485,7 +529,7 @@ class JaxSkiing(JaxEnvironment[GameState, SkiingObservation, SkiingInfo]):
             )
 
         return SkiingObservation(
-            skier=skier, trees=trees, flags=flags, rocks=rocks, score=state.score
+            skier=skier, trees=trees, flags=flags, rocks=rocks, score=state.score, jumping=state.jumping, jump_timer=state.jump_timer
         )
 
     @partial(jax.jit, static_argnums=(0,))
@@ -530,6 +574,8 @@ class RenderConfig:
     tree_color: Tuple[int, int, int] = (0, 100, 0)
     rock_color: Tuple[int, int, int] = (128, 128, 128)
     game_over_color: Tuple[int, int, int] = (255, 0, 0)
+    jump_text_color: Tuple[int, int, int] = (0, 0, 255)
+
 
 
 class GameRenderer:
@@ -550,26 +596,54 @@ class GameRenderer:
 
         # Create sprites
         self.skier_sprite = self._create_skier_sprite()
+        self.skier_jump_sprite = self._create_skier_jump_sprite()  # Add jump sprite
         self.flag_sprite = self._create_flag_sprite()
         self.rock_sprite = self._create_rock_sprite()
         self.tree_sprite = self._create_tree_sprite()
         self.font = pygame.font.Font(None, 36)
 
-    # def _create_skier_sprite(self) -> list[pygame.Surface]:
-    #     repo_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
+    def _create_skier_jump_sprite(self) -> pygame.Surface:
+        # Base path relative to the project root
+        base_path = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
+        sprite_dir = os.path.join(base_path, "jaxatari", "assets", "skiing")
+        
+        # Load jump sprite
+        full_path = os.path.join(sprite_dir, "skiier_jump.png")
+        img = pygame.image.load(full_path).convert_alpha()
+        img = pygame.transform.scale(
+            img,
+            (
+                self.game_config.skier_width * self.render_config.scale_factor,
+                self.game_config.skier_height * self.render_config.scale_factor,
+            )
+        )
+        return img
 
-    #     img_path = os.path.join(repo_root, "jaxatari", "assets", "skiing", "skiier_front.jpg")
-    #     img = pygame.image.load(img_path).convert_alpha()
-    #     img = pygame.transform.scale(
-    #         img,
-    #         (
-    #             self.game_config.skier_width * self.render_config.scale_factor,
-    #             self.game_config.skier_height * self.render_config.scale_factor,
-    #         )
-    #     )
+    def get_path_center(self, world_y: float) -> float:
+        # Returns center X of the path at given world Y
+        return 80 + 30 * jnp.sin(world_y / 30.0)
 
-    #     # 4. Gib Sprite mehrfach zurück (für `skier_pos`-Kompatibilität)
-    #     return [img for _ in range(16)]
+
+    def _draw_blue_path(self, skier_y_pos: float):
+        path_width = 40
+        scale = self.render_config.scale_factor
+        screen_height = self.game_config.screen_height
+
+        for screen_y in range(0, screen_height, 4):
+            world_y = skier_y_pos + screen_y
+            x_center = float(80 + 30 * jnp.sin(world_y / 30.0))  # Use environment logic
+            y_pos = float(screen_y)
+
+            left_x = int((x_center - (path_width / 2)) * scale)
+            right_x = int((x_center + (path_width / 2)) * scale)
+            y_scaled = int(y_pos * scale)
+
+            pygame.draw.line(
+                self.screen, (0, 0, 255), (left_x, y_scaled), (right_x, y_scaled), 1
+            )
+
+
+
 
     def _create_skier_sprite(self) -> list[pygame.Surface]:
         # Base path relative to the project root
@@ -708,6 +782,9 @@ class GameRenderer:
         """Render the current game state"""
         self.screen.fill(self.render_config.background_color)
 
+        # Draw blue path
+        # self._draw_blue_path(state.skier_x)
+
         # Draw skier
         skier_pos = (
             int(
@@ -720,15 +797,38 @@ class GameRenderer:
             ),
         )
 
-        # Use skier position to determine which sprite to display
-        direction_index = int(state.skier_pos)
-        # Make sure the index is valid for our sprite list
-        if direction_index < 0:
-            direction_index = 0
-        elif direction_index >= len(self.skier_sprite):
-            direction_index = len(self.skier_sprite) - 1
+        # Calculate scale factor based on jump state
+        scale_factor = 1.0
+        if state.jumping:
+            # Calculate scale based on jump progress
+            # Use a parabolic curve for the scale: start normal, grow to max at middle, return to normal
+            jump_progress = state.jump_timer / self.game_config.jump_duration
+            # This creates a parabolic curve that peaks in the middle of the jump
+            scale_factor = 1.0 + (self.game_config.jump_scale_factor - 1.0) * (4 * jump_progress * (1 - jump_progress))
+
+        # Choose sprite based on jumping state
+        if state.jumping:
+            # Scale the jump sprite based on jump progress
+            scaled_width = int(self.game_config.skier_width * self.render_config.scale_factor * scale_factor)
+            scaled_height = int(self.game_config.skier_height * self.render_config.scale_factor * scale_factor)
             
-        self.screen.blit(self.skier_sprite[direction_index], skier_pos)
+            # Adjust position to keep skier centered when scaled
+            adjusted_x = skier_pos[0] - (scaled_width - self.game_config.skier_width * self.render_config.scale_factor) // 2
+            adjusted_y = skier_pos[1] - (scaled_height - self.game_config.skier_height * self.render_config.scale_factor) // 2
+            
+            # Scale the jump sprite
+            scaled_sprite = pygame.transform.scale(self.skier_jump_sprite, (scaled_width, scaled_height))
+            self.screen.blit(scaled_sprite, (adjusted_x, adjusted_y))
+        else:
+            # Use regular skier sprite based on direction
+            direction_index = int(state.skier_pos)
+            # Make sure the index is valid for our sprite list
+            if direction_index < 0:
+                direction_index = 0
+            elif direction_index >= len(self.skier_sprite):
+                direction_index = len(self.skier_sprite) - 1
+                
+            self.screen.blit(self.skier_sprite[direction_index], skier_pos)
 
         # Draw flags
         for fx, fy in state.flags:
@@ -809,7 +909,6 @@ class GameRenderer:
         pygame.quit()
 
 
-# main.py
 def main():
     # Create configurations
     game_config = GameConfig()
@@ -833,7 +932,11 @@ def main():
         # Handle input
         keys = pygame.key.get_pressed()
         action = NOOP
-        if keys[pygame.K_a]:
+        
+        # Check for space bar first to prioritize jumping
+        if keys[pygame.K_SPACE]:
+            action = JUMP
+        elif keys[pygame.K_a]:
             action = LEFT
         elif keys[pygame.K_d]:
             action = RIGHT
@@ -843,6 +946,10 @@ def main():
 
         # Render
         renderer.render(state)
+
+        # Print debug info to verify jump action is being sent
+        if action == JUMP:
+            print("JUMP action sent, jumping:", state.jumping, "timer:", state.jump_timer)
 
         # Cap at 60 FPS
         clock.tick(60)
