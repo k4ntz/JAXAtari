@@ -52,6 +52,8 @@ class BallState(NamedTuple):
     ball_hit_start_y: chex.Array
     ball_hit_target_x: chex.Array
     ball_hit_target_y: chex.Array
+    move_x: chex.Array
+    move_y: chex.Array
 
 class PlayerState(NamedTuple):
     player_x: chex.Array
@@ -60,8 +62,9 @@ class PlayerState(NamedTuple):
     player_field: chex.Array #top or bottom field
 
 class TennisState(NamedTuple):
+    is_serving: chex.Array = False
     player_state: PlayerState = PlayerState(jnp.array(PLAYER_START_X), jnp.array(PLAYER_START_Y), jnp.array(PLAYER_START_DIRECTION), jnp.array(PLAYER_START_FIELD))
-    ball_state: BallState = BallState(jnp.array(GAME_WIDTH / 2.0 - 2.5), jnp.array(GAME_OFFSET_TOP), jnp.array(0.0), jnp.array(0.0), jnp.array(0.0), jnp.array(0.0), jnp.array(0.0), jnp.array(GAME_WIDTH / 2.0 - 2.5), jnp.array(GAME_OFFSET_TOP))
+    ball_state: BallState = BallState(jnp.array(GAME_WIDTH / 2.0 - 2.5), jnp.array(GAME_OFFSET_TOP), jnp.array(0.0), jnp.array(0.0), jnp.array(0.0), jnp.array(0.0), jnp.array(0.0), jnp.array(GAME_WIDTH / 2.0 - 2.5), jnp.array(GAME_OFFSET_TOP), 0.0, 0.0)
     counter : chex.Array = jnp.array(0)
 
 #@partial(jax.jit, static_argnums=(0,))
@@ -69,7 +72,7 @@ def tennis_step(state: TennisState, action) -> TennisState:
     new_ball_state = ball_step(state, action)
     new_player_state = player_step(state, action)
 
-    return TennisState(new_player_state, new_ball_state, state.counter + 1)
+    return TennisState(state.is_serving, new_player_state, new_ball_state, state.counter + 1)
     # new_player_x = jnp.where(state.player_x < FRAME_WIDTH, state.player_x + 1, state.player_x - 1)
     #new_ball_x = jnp.where(state.ball_direction == 0, state.ball_x + 1, state.ball_x - 1)
     #new_ball_z = jnp.where(state.ball_z_direction == 0, state.ball_z + 1, state.ball_z - 1)
@@ -148,44 +151,17 @@ def ball_step(state: TennisState, action) -> BallState:
     new_ball_z_fp = jnp.where(new_ball_z <= 0, 0, new_ball_z_fp)
 
     # ball movement in x/y direction is linear, no velocity involved
-    dx = ball_state.ball_hit_target_x - ball_state.ball_x
-    dy = ball_state.ball_hit_target_y - ball_state.ball_y
-    dist = jnp.sqrt(dx**2 + dy**2) + 1e-8  # Add epsilon to avoid divide-by-zero
 
-    norm_dx = dx / dist
-    norm_dy = dy / dist
 
-    new_ball_x = jnp.where(ball_state.ball_x != ball_state.ball_hit_target_x, ball_state.ball_x + norm_dx, ball_state.ball_x)
-    new_ball_y = jnp.where(ball_state.ball_y != ball_state.ball_hit_target_y, ball_state.ball_y + norm_dy,
+    new_ball_x = jnp.where(ball_state.ball_x != ball_state.ball_hit_target_x, ball_state.ball_x + ball_state.move_x, ball_state.ball_x)
+    new_ball_y = jnp.where(ball_state.ball_y != ball_state.ball_hit_target_y, ball_state.ball_y + ball_state.move_y,
                            ball_state.ball_y)
     #new_ball_state = jnp.where(action == JAXAtariAction.FIRE, handle_ball_fire(state), state.ball_state)
     #BallState(new_ball_state.ball_x, new_ball_state.ball_y, new_ball_z, new_ball_z_fp, new_ball_velocity_z_fp, new_ball_state.new_ball_hit_start_x, new_ball_state.new_ball_hit_start_y, new_ball_state.new_ball_hit_target_x, new_ball_state.new_ball_hit_target_y)
 
-    # todo fix hardcoded values (2 is ball width, 5 is player width)
+    # todo fix hardcoded values (2 is ball width)
     player_state = state.player_state
 
-    """player_overlap_ball_x = jnp.logical_or(
-        jnp.logical_or(
-            jnp.logical_and(
-                player_state.player_x >= ball_state.ball_x - 1,
-                player_state.player_x <= ball_state.ball_x + 2 + 1
-            ),
-            jnp.logical_and(
-                ball_state.ball_x >= player_state.player_x - 1,
-                ball_state.ball_x <= player_state.player_x + PLAYER_WIDTH + 1
-            )
-        ),
-        jnp.logical_or(
-            jnp.logical_and(
-                player_state.player_x + PLAYER_WIDTH >= ball_state.ball_x - 1,
-                player_state.player_x + PLAYER_WIDTH <= ball_state.ball_x + 2 + 1
-            ),
-            jnp.logical_and(
-                ball_state.ball_x + 2 >= player_state.player_x - 1,
-                ball_state.ball_x + 2 <= player_state.player_x + PLAYER_WIDTH + 1
-            )
-        )
-    )"""
     player_end = player_state.player_x + PLAYER_WIDTH
     ball_end = ball_state.ball_x + 2
     player_overlap_ball_x = jnp.logical_not(
@@ -195,17 +171,63 @@ def ball_step(state: TennisState, action) -> BallState:
         )
     )
 
-    should_fire = jnp.logical_and(
+    should_serve = jnp.logical_and(
         action == JAXAtariAction.FIRE,
-        player_overlap_ball_x
+        state.is_serving
     )
 
     return jax.lax.cond(
-        should_fire, lambda _: handle_ball_fire(state), lambda _: BallState(new_ball_x, new_ball_y, new_ball_z, new_ball_z_fp, new_ball_velocity_z_fp, ball_state.ball_hit_start_x, ball_state.ball_hit_start_y, ball_state.ball_hit_target_x, ball_state.ball_hit_target_y), None
+        player_overlap_ball_x,
+        lambda _: jax.lax.cond(
+            should_serve, lambda _: handle_ball_serve(state), lambda _: handle_ball_fire(state), None
+        ),
+        lambda _: BallState(new_ball_x, new_ball_y, new_ball_z, new_ball_z_fp, new_ball_velocity_z_fp,
+                            ball_state.ball_hit_start_x, ball_state.ball_hit_start_y, ball_state.ball_hit_target_x,
+                            ball_state.ball_hit_target_y, ball_state.move_x, ball_state.move_y),
+        None
     )
 
-
 def handle_ball_fire(state: TennisState) -> BallState:
+    # new_ball_x = state.player_x
+    # new_ball_y = state.player_y
+
+    new_ball_hit_start_x = state.ball_state.ball_x
+    new_ball_hit_start_y = state.ball_state.ball_y
+
+    # todo fix hardcoded values
+    # todo this is incorrect, it assumes the player_x is in the center of the player
+    ball_width = 2.0
+    max_dist = PLAYER_WIDTH / 2 + ball_width / 2
+
+    angle = -1 * (((state.player_state.player_x + PLAYER_WIDTH / 2) - (state.ball_state.ball_x + 2 / 2)) / max_dist)
+    # calc x landing position depending on player hit angle
+    # angle = 0 # neutral angle, between -1...1
+    left_offset = -39
+    right_offset = 39
+    offset = ((angle + 1) / 2) * (right_offset - left_offset) + left_offset
+
+    new_ball_hit_target_x = new_ball_hit_start_x + offset
+    new_ball_hit_target_y = new_ball_hit_start_y + 91
+
+    hit_vel = 24.0
+
+    dx = new_ball_hit_target_x - state.ball_state.ball_x
+    dy = new_ball_hit_target_y - state.ball_state.ball_y
+    #dist = jnp.sqrt(dx**2 + dy**2) + 1e-8  # Add epsilon to avoid divide-by-zero
+    dist = jnp.linalg.norm(jnp.array([dx, dy])) + 1e-8
+
+    norm_dx = dx / dist
+    norm_dy = dy / dist
+
+    move_x = norm_dx * 2.1
+    move_y = norm_dy * 2.1
+
+    return BallState(state.ball_state.ball_x, state.ball_state.ball_y, 14.0,
+                     140.0, hit_vel, new_ball_hit_start_x,
+                     new_ball_hit_start_y, new_ball_hit_target_x, new_ball_hit_target_y, move_x, move_y)
+
+
+def handle_ball_serve(state: TennisState) -> BallState:
     #new_ball_x = state.player_x
     #new_ball_y = state.player_y
 
@@ -227,7 +249,7 @@ def handle_ball_fire(state: TennisState) -> BallState:
     new_ball_hit_target_x = new_ball_hit_start_x + offset
     new_ball_hit_target_y = new_ball_hit_start_y + 91
 
-    return BallState(state.ball_state.ball_x, state.ball_state.ball_y, state.ball_state.ball_z, state.ball_state.ball_z_fp, state.ball_state.ball_velocity_z_fp, new_ball_hit_start_x, new_ball_hit_start_y, new_ball_hit_target_x, new_ball_hit_target_y)
+    return BallState(state.ball_state.ball_x, state.ball_state.ball_y, state.ball_state.ball_z, state.ball_state.ball_z_fp, state.ball_state.ball_velocity_z_fp, new_ball_hit_start_x, new_ball_hit_start_y, new_ball_hit_target_x, new_ball_hit_target_y, state.ball_state.move_x, state.ball_state.move_y)
 
 def tennis_reset() -> TennisState:
     #player_state = PlayerState(jnp.array(PLAYER_START_X), jnp.array(PLAYER_START_Y), jnp.array(PLAYER_START_DIRECTION), jnp.array(PLAYER_START_FIELD))

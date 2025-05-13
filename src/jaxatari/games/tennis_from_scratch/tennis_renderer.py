@@ -73,6 +73,8 @@ class TennisRenderer:
         # apply flat y offset depending on z value
         raster = aj.render_at(raster, state.ball_state.ball_x, state.ball_state.ball_y - state.ball_state.ball_z, frame_ball)
 
+        print("x ball: {:0.2f}., y ball: {:0.2f}, z ball: {:0.2f}, vel: {:0.2f}".format(state.ball_state.ball_x, state.ball_state.ball_y, state.ball_state.ball_z, state.ball_state.ball_velocity_z_fp))
+
         #player_screen_x, player_screen_y = self.perspective_transform(state.player_state.player_x, state.player_state.player_y)
         #player_screen_x, player_screen_y = self.perspective_transform(0, -20)
         frame_player = aj.get_sprite_frame(self.PLAYER, 0)
