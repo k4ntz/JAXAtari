@@ -13,23 +13,28 @@ from jaxatari.environment import JaxEnvironment, JAXAtariAction as Action
 WIDTH = 160
 HEIGHT = 210
 
-WINDOW_WIDTH = WIDTH * 3
-WINDOW_HEIGHT = HEIGHT * 3
+SCALING_FACTOR = 4
+WINDOW_WIDTH = WIDTH * SCALING_FACTOR
+WINDOW_HEIGHT = HEIGHT * SCALING_FACTOR
 
 BULLET_SPEED = 1
-PLAYER_Y = 195 
 PLAYER_SIZE = (7, 10)
 
 NUMBER_SIZE = (12, 9)
 NUMBER_YELLOW_OFFSET = 83
 
-WALL_LEFT_X = 0
-WALL_RIGHT_X = WIDTH
+WALL_LEFT_X = 34
+WALL_RIGHT_X = 123
 
-MAX_SPEED = 2
+MAX_SPEED = 1
 ACCELERATION = 1
     
 PATH_SPRITES = "sprites/spaceinvaders"
+
+WALL_SIZE = (2, 4)
+BACKGROUND_SIZE_Y = 15 
+
+PLAYER_Y = HEIGHT - PLAYER_SIZE[1] - BACKGROUND_SIZE_Y
 
 def get_human_action():
     keys = pygame.key.get_pressed()
@@ -68,7 +73,7 @@ def player_step(state_player_x, state_player_speed, action: chex.Array):
     right = jnp.logical_or(action == Action.RIGHT, action == Action.RIGHTFIRE)
     
     touches_wall_left = state_player_x <= WALL_LEFT_X
-    touches_wall_right = state_player_x >= WALL_RIGHT_X - PLAYER_SIZE[0]
+    touches_wall_right = state_player_x + PLAYER_SIZE[0] >= WALL_RIGHT_X 
     touches_wall = jnp.logical_or(touches_wall_left, touches_wall_right)
 
     player_speed = jax.lax.cond(
@@ -79,14 +84,14 @@ def player_step(state_player_x, state_player_speed, action: chex.Array):
     )
 
     player_speed = jax.lax.cond(
-        left,
+        right,
         lambda s: jnp.minimum(s + ACCELERATION, MAX_SPEED),
         lambda s: s,
         operand=player_speed,
     )
 
     player_speed = jax.lax.cond(
-        right,
+        left,
         lambda s: jnp.maximum(s - ACCELERATION, -MAX_SPEED),
         lambda s: s,
         operand=player_speed,
@@ -94,8 +99,8 @@ def player_step(state_player_x, state_player_speed, action: chex.Array):
 
     player_x = jnp.clip(
         state_player_x + player_speed,
-        WALL_LEFT_X,
-        WALL_RIGHT_X - PLAYER_SIZE[0]
+        WALL_LEFT_X + PLAYER_SIZE[0],
+        WALL_RIGHT_X
     )
     
     return player_x, player_speed
@@ -139,8 +144,15 @@ class JaxSpaceInvaders(JaxEnvironment[SpaceInvadersState, SpaceInvadersObservati
             state.player_x, state.player_speed, action
         )
 
+        new_player_x, new_player_speed = jax.lax.cond(
+            state.step_counter % 2 == 0,
+            lambda _: (new_player_x, new_player_speed),
+            lambda _: (state.player_x, state.player_speed),
+            operand=None,
+        )
+
         step_counter = jax.lax.cond(
-            False,
+            state.step_counter > 255,
             lambda s: jnp.array(0),
             lambda s: s + 1,
             operand=state.step_counter,
@@ -243,11 +255,11 @@ class SpaceInvadersRenderer(AtraJaxisRenderer):
 
         # Load Background
         background = aj.get_sprite_frame(SPRITE_BACKGROUND, 0)
-        raster = aj.render_at(raster, 0, HEIGHT - 15, background)
+        raster = aj.render_at(raster, 0, HEIGHT - BACKGROUND_SIZE_Y, background)
 
         # Load Player
         frame_player = aj.get_sprite_frame(self.SPRITE_PLAYER, 0)
-        raster = aj.render_at(raster, WIDTH - state.player_x - PLAYER_SIZE[0], PLAYER_Y - PLAYER_SIZE[1], frame_player)
+        raster = aj.render_at(raster, state.player_x - PLAYER_SIZE[0], PLAYER_Y, frame_player)
 
         # Load Initial Score
         # Green Numbers
@@ -322,9 +334,9 @@ if __name__ == "__main__":
         # Render and display
         raster = renderer.render(curr_state)
 
-        aj.update_pygame(screen, raster, 3, WIDTH, HEIGHT)
+        aj.update_pygame(screen, raster, SCALING_FACTOR, WIDTH, HEIGHT)
 
         counter += 1
-        clock.tick(60)
+        clock.tick(30)
 
     pygame.quit()
