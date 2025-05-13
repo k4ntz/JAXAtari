@@ -43,17 +43,20 @@ TRUCK_SIZE = (16, 16)  # TODO: insert real size
 ENEMY_SIZE = (16, 16)   # TODO: insert real size
 MISSILE_SIZE = (2, 8)
 
-PLAYER_START_X = 2**20
+PLAYER_START_X = 0
 PLAYER_START_Y = 100
 
 X_BORDERS = (0, 160)
 PLAYER_BOUNDS = (0, 160), (45, 150)
 
 # Maximum number of objects
-MAX_TRUCKS = 2
+MAX_TRUCKS = 3
 MAX_JETS = 6
 MAX_CHOPPERS = 6
 MAX_MISSILES = 4
+
+#Object rendering
+TRUCK_REPEAT_DISTANCE = 500
 
 # define object orientations
 FACE_LEFT = -1
@@ -607,13 +610,15 @@ def step_truck_movement(
 
         new_x = truck_pos[0] + movement_x
 
-        out_of_bounds = jnp.logical_or(new_x < -16, new_x >= 176)
+        out_of_bounds = jnp.logical_or(new_x < -2000000, new_x >= 176)
 
         new_pos = jnp.where(
             jnp.logical_or(~is_active, out_of_bounds),
             jnp.zeros(3),
             jnp.array([new_x, truck_pos[1], truck_pos[2]]),
         )
+
+
 
         return positions.at[i].set(new_pos)
 
@@ -1003,7 +1008,7 @@ class JaxChopperCommand(JaxEnvironment[ChopperCommandState, ChopperCommandObserv
             player_facing_direction=jnp.array(1),
             score=jnp.array(0),
             lives=jnp.array(3),
-            truck_positions=jnp.asarray([[160, 156, -1], [172, 156, -1]]), # test for truck movement, to be replaced
+            truck_positions=jnp.asarray([[110, 156, -1], [140, 156, -1], [170, 156, -1]]), # test for truck movement, to be replaced
             jet_positions=jnp.zeros((MAX_JETS, 3)), # x, y, direction
             chopper_positions=jnp.zeros((MAX_CHOPPERS, 3)),
             enemy_missile_positions=jnp.zeros((MAX_MISSILES, 3)),
@@ -1202,14 +1207,25 @@ class Renderer_AtraJaxis(AtraJaxisRenderer):
         # jax.debug.print("Truck positions: {pos}", pos=state.truck_positions)
         frame_friendly_truck = aj.get_sprite_frame(SPRITE_FRIENDLY_TRUCK, state.step_counter)
 
-        def render_truck(i, raster_base):
-            should_render = state.truck_positions[i][0] > 0
+        def render_truck(i, raster_base): #TODO: repeat rendering of trucks every 2000? pixel (there are 4 fleets in total)
+            should_render = state.truck_positions[i][0] != 0
+            '''
+            original_truck_x = state.truck_positions[i][0]
+
+            repeated_truck_x = ((state.player_x - original_truck_x) % TRUCK_REPEAT_DISTANCE) + original_truck_x
+            truck_screen_x = repeated_truck_x - state.player_x + chopper_position
+            '''
+            truck_screen_x = state.truck_positions[i][0] - state.player_x + chopper_position
+            truck_screen_y = state.truck_positions[i][1]
+
+            jax.debug.print("{x}", x=state.truck_positions[i][0])
+
             return jax.lax.cond(
                 should_render,
                 lambda r: aj.render_at(
                     r,
-                    state.truck_positions[i][0],
-                    state.truck_positions[i][1],
+                    truck_screen_x,
+                    truck_screen_y,
                     frame_friendly_truck,
                     flip_horizontal=(state.truck_positions[i][2] == -1),
                 ),
