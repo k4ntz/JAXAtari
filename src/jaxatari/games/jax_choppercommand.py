@@ -1151,7 +1151,7 @@ class Renderer_AtraJaxis(AtraJaxisRenderer):
         raster = jnp.zeros((WIDTH, HEIGHT, 3))
         scroll_offset_x = jnp.mod(-state.player_x, 160) #TODO: Ich bin mir unsicher ob wir das noch brauchen, vielleicht kann mann alle anderen sprites auch so implementieren wie den Heli
 
-        # Render Hintergrund
+        # Render Background
         frame_idx = jnp.asarray(state.local_player_offset + (-state.player_x % WIDTH), dtype=jnp.int32) #local_player_offset = ob Heli links oder rechts auf Bildschirm ist, -state.player_x % WIDTH = Scrollen vom Hintergrund
         frame_bg = aj.get_sprite_frame(SPRITE_BG, frame_idx)
 
@@ -1163,8 +1163,8 @@ class Renderer_AtraJaxis(AtraJaxisRenderer):
         frame_pl_heli = aj.get_sprite_frame(SPRITE_PL_HELI, state.step_counter)
         raster = aj.render_at(
             raster,
-            state.player_y,
             chopper_position,
+            state.player_y,
             frame_pl_heli,
             flip_horizontal=state.player_facing_direction < 0,
         )
@@ -1183,8 +1183,8 @@ class Renderer_AtraJaxis(AtraJaxisRenderer):
                 missile_active,
                 lambda r: aj.render_at(
                     r,
-                    missile_screen_y,
                     missile_screen_x,
+                    missile_screen_y,
                     frame_pl_missile,
                     flip_horizontal=(missile[2] == -1),
                 ),
@@ -1208,8 +1208,8 @@ class Renderer_AtraJaxis(AtraJaxisRenderer):
                 should_render,
                 lambda r: aj.render_at(
                     r,
-                    state.truck_positions[i][1],
                     state.truck_positions[i][0],
+                    state.truck_positions[i][1],
                     frame_friendly_truck,
                     flip_horizontal=(state.truck_positions[i][2] == -1),
                 ),
@@ -1228,8 +1228,8 @@ class Renderer_AtraJaxis(AtraJaxisRenderer):
                 should_render,
                 lambda r: aj.render_at(
                     r,
+                    state.jet_positions[i][0],  # - scroll_offset_x,
                     state.jet_positions[i][1],
-                    state.jet_positions[i][0], # - scroll_offset_x,
                     frame_enemy_jet,
                     flip_horizontal=(state.jet_positions[i][2] == -1),
                 ),
@@ -1248,8 +1248,8 @@ class Renderer_AtraJaxis(AtraJaxisRenderer):
                 should_render,
                 lambda r: aj.render_at(
                     r,
-                    state.enemy_missile_positions[i][1],
                     state.enemy_missile_positions[i][0] - scroll_offset_x,
+                    state.enemy_missile_positions[i][1],
                     frame_enemy_missile,
                     flip_horizontal=(state.enemy_missile_positions[i][2] == -1),
                 ),
@@ -1262,9 +1262,9 @@ class Renderer_AtraJaxis(AtraJaxisRenderer):
         # Show the scores
         score_array = aj.int_to_digits(state.score, 6)
         # Convert the score to a list of digits
-        raster = aj.render_label(raster, 2, 16, score_array, DIGITS, spacing=8)
+        raster = aj.render_label(raster, 16, 2, score_array, DIGITS, spacing=8)
         raster = aj.render_indicator(
-            raster, 10, 16, state.lives, LIFE_INDICATOR, spacing=9
+            raster, 16, 10, state.lives, LIFE_INDICATOR, spacing=9
         )
 
         return raster
