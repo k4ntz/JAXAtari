@@ -164,7 +164,7 @@ def ball_step(state: TennisState, action) -> BallState:
     # todo fix hardcoded values (2 is ball width, 5 is player width)
     player_state = state.player_state
 
-    player_overlap_ball_x = jnp.logical_or(
+    """player_overlap_ball_x = jnp.logical_or(
         jnp.logical_or(
             jnp.logical_and(
                 player_state.player_x >= ball_state.ball_x - 1,
@@ -185,7 +185,16 @@ def ball_step(state: TennisState, action) -> BallState:
                 ball_state.ball_x + 2 <= player_state.player_x + PLAYER_WIDTH + 1
             )
         )
+    )"""
+    player_end = player_state.player_x + PLAYER_WIDTH
+    ball_end = ball_state.ball_x + 2
+    player_overlap_ball_x = jnp.logical_not(
+        jnp.logical_or(
+            player_end <= ball_state.ball_x,
+            ball_end <= player_state.player_x
+        )
     )
+
     should_fire = jnp.logical_and(
         action == JAXAtariAction.FIRE,
         player_overlap_ball_x
@@ -208,7 +217,7 @@ def handle_ball_fire(state: TennisState) -> BallState:
     ball_width = 2.0
     max_dist = PLAYER_WIDTH / 2 + ball_width / 2
 
-    angle = -1 * ((state.player_state.player_x - state.ball_state.ball_x) / max_dist)
+    angle = -1 * (((state.player_state.player_x + PLAYER_WIDTH / 2) - (state.ball_state.ball_x + 2 / 2)) / max_dist)
     # calc x landing position depending on player hit angle
     #angle = 0 # neutral angle, between -1...1
     left_offset = -39
