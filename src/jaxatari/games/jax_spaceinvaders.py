@@ -35,6 +35,9 @@ PLAYER_SIZE = (7, 10)
 WALL_SIZE = (2, 4)
 BACKGROUND_SIZE = (WIDTH, 15)
 NUMBER_SIZE = (12, 9)
+OPPONENT_SIZE = (8, 10)
+START_OPPONENT = (23, 31)
+OFFSET_OPPONENT = (8, 8)
 
 PLAYER_Y = HEIGHT - PLAYER_SIZE[1] - BACKGROUND_SIZE[1]
 
@@ -235,15 +238,35 @@ def load_sprites():
     # Defense
     defense = aj.loadFrame(os.path.join(MODULE_DIR, PATH_SPRITES, "defense.npy"), transpose=True)
     SPRITE_DEFENSE = jnp.expand_dims(defense, axis=0)
+    
+    # Enemies
+    opponent_1 = aj.loadFrame(os.path.join(MODULE_DIR, PATH_SPRITES, "opponents/opponent_1.npy"), transpose=True)
+    SPRITE_OPPONENT_1 = jnp.expand_dims(opponent_1, axis=0)
+    opponent_2 = aj.loadFrame(os.path.join(MODULE_DIR, PATH_SPRITES, "opponents/opponent_2_a.npy"), transpose=True)
+    SPRITE_OPPONENT_2 = jnp.expand_dims(opponent_2, axis=0)
+    opponent_3 = aj.loadFrame(os.path.join(MODULE_DIR, PATH_SPRITES, "opponents/opponent_3_a.npy"), transpose=True)
+    SPRITE_OPPONENT_3 = jnp.expand_dims(opponent_3, axis=0)
+    opponent_4 = aj.loadFrame(os.path.join(MODULE_DIR, PATH_SPRITES, "opponents/opponent_4_a.npy"), transpose=True)
+    SPRITE_OPPONENT_4 = jnp.expand_dims(opponent_4, axis=0)
+    opponent_5 = aj.loadFrame(os.path.join(MODULE_DIR, PATH_SPRITES, "opponents/opponent_5.npy"), transpose=True)
+    SPRITE_OPPONENT_5 = jnp.expand_dims(opponent_5, axis=0)
+    opponent_6 = aj.loadFrame(os.path.join(MODULE_DIR, PATH_SPRITES, "opponents/opponent_6.npy"), transpose=True)
+    SPRITE_OPPONENT_6 = jnp.expand_dims(opponent_6, axis=0)
 
-    return (SPRITE_BACKGROUND, SPRITE_PLAYER, SPRITE_ZERO_GREEN, SPRITE_ZERO_YELLOW, SPRITE_DEFENSE)
+    return (SPRITE_BACKGROUND, SPRITE_PLAYER, SPRITE_ZERO_GREEN, SPRITE_ZERO_YELLOW, SPRITE_DEFENSE, SPRITE_OPPONENT_1, SPRITE_OPPONENT_2, SPRITE_OPPONENT_3, SPRITE_OPPONENT_4, SPRITE_OPPONENT_5, SPRITE_OPPONENT_6)
 
 (
     SPRITE_BACKGROUND, 
     SPRITE_PLAYER,
     SPRITE_ZERO_GREEN,
     SPRITE_ZERO_YELLOW,
-    SPRITE_DEFENSE
+    SPRITE_DEFENSE,
+    SPRITE_OPPONENT_1,
+    SPRITE_OPPONENT_2,
+    SPRITE_OPPONENT_3,
+    SPRITE_OPPONENT_4,
+    SPRITE_OPPONENT_5,
+    SPRITE_OPPONENT_6
 ) = load_sprites()
 
 class SpaceInvadersRenderer(AtraJaxisRenderer):
@@ -287,7 +310,28 @@ class SpaceInvadersRenderer(AtraJaxisRenderer):
         raster = aj.render_at(raster, 73, HEIGHT - 53, frame_defense)
         raster = aj.render_at(raster, 105, HEIGHT - 53, frame_defense)
 
+        # Load Opponent Sprites
+        frame_opponent_1 = aj.get_sprite_frame(SPRITE_OPPONENT_1, 0)
+        frame_opponent_2 = aj.get_sprite_frame(SPRITE_OPPONENT_2, 0)
+        frame_opponent_3 = aj.get_sprite_frame(SPRITE_OPPONENT_3, 0)
+        frame_opponent_4 = aj.get_sprite_frame(SPRITE_OPPONENT_4, 0)
+        frame_opponent_5 = aj.get_sprite_frame(SPRITE_OPPONENT_5, 0)
+        frame_opponent_6 = aj.get_sprite_frame(SPRITE_OPPONENT_6, 0)
+
+        def body(i, raster):
+            raster = aj.render_at(raster, START_OPPONENT[0] + i * (OFFSET_OPPONENT[0] + OPPONENT_SIZE[0]), START_OPPONENT[1], frame_opponent_1)
+            raster = aj.render_at(raster, START_OPPONENT[0] + i * (OFFSET_OPPONENT[0] + OPPONENT_SIZE[0]), START_OPPONENT[1] + (OFFSET_OPPONENT[1] + OPPONENT_SIZE[1]), frame_opponent_2)
+            raster = aj.render_at(raster, START_OPPONENT[0] + i * (OFFSET_OPPONENT[0] + OPPONENT_SIZE[0]), START_OPPONENT[1] + 2 * (OFFSET_OPPONENT[1] + OPPONENT_SIZE[1]), frame_opponent_3)
+            raster = aj.render_at(raster, START_OPPONENT[0] + i * (OFFSET_OPPONENT[0] + OPPONENT_SIZE[0]), START_OPPONENT[1] + 3 * (OFFSET_OPPONENT[1] + OPPONENT_SIZE[1]), frame_opponent_4)
+            raster = aj.render_at(raster, START_OPPONENT[0] + i * (OFFSET_OPPONENT[0] + OPPONENT_SIZE[0]), START_OPPONENT[1] + 4 * (OFFSET_OPPONENT[1] + OPPONENT_SIZE[1]), frame_opponent_5)
+            raster = aj.render_at(raster, START_OPPONENT[0] + i * (OFFSET_OPPONENT[0] + OPPONENT_SIZE[0]), START_OPPONENT[1] + 5 * (OFFSET_OPPONENT[1] + OPPONENT_SIZE[1]), frame_opponent_6)
+
+            return raster
+        
+        raster = jax.lax.fori_loop(0, 6, body, raster)
+
         return raster 
+
 
 
 if __name__ == "__main__":
