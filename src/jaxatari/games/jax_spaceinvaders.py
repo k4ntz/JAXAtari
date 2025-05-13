@@ -13,14 +13,13 @@ from jaxatari.environment import JaxEnvironment, JAXAtariAction as Action
 WIDTH = 160
 HEIGHT = 210
 
+FPS = 30 
 SCALING_FACTOR = 4
 WINDOW_WIDTH = WIDTH * SCALING_FACTOR
 WINDOW_HEIGHT = HEIGHT * SCALING_FACTOR
 
 BULLET_SPEED = 1
-PLAYER_SIZE = (7, 10)
 
-NUMBER_SIZE = (12, 9)
 NUMBER_YELLOW_OFFSET = 83
 
 WALL_LEFT_X = 34
@@ -31,10 +30,13 @@ ACCELERATION = 1
     
 PATH_SPRITES = "sprites/spaceinvaders"
 
+# Sizes
+PLAYER_SIZE = (7, 10)
 WALL_SIZE = (2, 4)
-BACKGROUND_SIZE_Y = 15 
+BACKGROUND_SIZE = (WIDTH, 15)
+NUMBER_SIZE = (12, 9)
 
-PLAYER_Y = HEIGHT - PLAYER_SIZE[1] - BACKGROUND_SIZE_Y
+PLAYER_Y = HEIGHT - PLAYER_SIZE[1] - BACKGROUND_SIZE[1]
 
 def get_human_action():
     keys = pygame.key.get_pressed()
@@ -72,13 +74,16 @@ def player_step(state_player_x, state_player_speed, action: chex.Array):
     left = jnp.logical_or(action == Action.LEFT, action == Action.LEFTFIRE)
     right = jnp.logical_or(action == Action.RIGHT, action == Action.RIGHTFIRE)
     
-    touches_wall_left = state_player_x <= WALL_LEFT_X
-    touches_wall_right = state_player_x + PLAYER_SIZE[0] >= WALL_RIGHT_X 
+    bounds_left = WALL_LEFT_X + PLAYER_SIZE[0]
+    bounds_right = WALL_RIGHT_X 
+
+    touches_wall_left = state_player_x <= bounds_left
+    touches_wall_right = state_player_x >= bounds_right  
     touches_wall = jnp.logical_or(touches_wall_left, touches_wall_right)
 
     player_speed = jax.lax.cond(
         jnp.logical_or(jnp.logical_not(jnp.logical_or(left, right)), touches_wall),
-        lambda s: jnp.round(s / 2).astype(jnp.int32),
+        lambda s: 0,
         lambda s: s,
         operand=state_player_speed,
     )
@@ -99,8 +104,8 @@ def player_step(state_player_x, state_player_speed, action: chex.Array):
 
     player_x = jnp.clip(
         state_player_x + player_speed,
-        WALL_LEFT_X + PLAYER_SIZE[0],
-        WALL_RIGHT_X
+        bounds_left,
+        bounds_right 
     )
     
     return player_x, player_speed
@@ -255,7 +260,7 @@ class SpaceInvadersRenderer(AtraJaxisRenderer):
 
         # Load Background
         background = aj.get_sprite_frame(SPRITE_BACKGROUND, 0)
-        raster = aj.render_at(raster, 0, HEIGHT - BACKGROUND_SIZE_Y, background)
+        raster = aj.render_at(raster, 0, HEIGHT - BACKGROUND_SIZE[1], background)
 
         # Load Player
         frame_player = aj.get_sprite_frame(self.SPRITE_PLAYER, 0)
@@ -337,6 +342,6 @@ if __name__ == "__main__":
         aj.update_pygame(screen, raster, SCALING_FACTOR, WIDTH, HEIGHT)
 
         counter += 1
-        clock.tick(30)
+        clock.tick(FPS)
 
     pygame.quit()
