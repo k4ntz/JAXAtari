@@ -1,8 +1,8 @@
 import jax
 import jax.numpy as jnp
-from typing import NamedTuple, Tuple, Any
-from ..environment import JaxEnvironment
-
+from typing import NamedTuple, Tuple, Any, List
+from ..environment import JaxEnvironment, EnvState
+from ..renderers import AtraJaxisRenderer
 
 # Constants for game Environment
 NUM_POINTS = 24
@@ -17,9 +17,18 @@ BLACK = -1
 
 class BackgammonState(NamedTuple):
     board: jnp.ndarray  # (2, 26)
-    dice: jnp.ndarray   # (2,)
+    dice: jnp.ndarray  # (2,)
     current_player: int
     is_game_over: bool
+
+
+class BackgammonInfo(NamedTuple):
+    time: jnp.ndarray
+
+
+class BackgammonObservation(NamedTuple):
+    bar_counts: jnp.ndarray
+    home_counts: jnp.ndarray
 
 
 class JaxBackgammonEnv(JaxEnvironment[BackgammonState, jnp.ndarray, dict]):
@@ -53,11 +62,10 @@ class JaxBackgammonEnv(JaxEnvironment[BackgammonState, jnp.ndarray, dict]):
         player = state.current_player
         player_idx = self.get_player_index(player)
         opponent_idx = 1 - player_idx
+
         has_piece = board[player_idx, from_point] > 0
         in_bounds = (0 <= from_point) & (from_point < 24) & (0 <= to_point) & (to_point < 24)
-        distance = jax.lax.cond(
-            player == WHITE, lambda _: from_point - to_point, lambda _: to_point - from_point, operand=None
-        )
+        distance = jax.lax.cond(player == WHITE, lambda _: from_point - to_point, lambda _: to_point - from_point, None)
         correct_direction = distance > 0
         dice_match = (state.dice[0] == distance) | (state.dice[1] == distance)
         not_blocked = board[opponent_idx, to_point] <= 1
@@ -107,13 +115,14 @@ class JaxBackgammonEnv(JaxEnvironment[BackgammonState, jnp.ndarray, dict]):
         all_dice_used = (new_dice[0] == 0) & (new_dice[1] == 0)
 
         def next_turn(key):
-            next_dice, _ = self.roll_dice(key)
-            return next_dice, -state.current_player
+            next_dice, new_key = self.roll_dice(key)
+            self.key = new_key
+            return next_dice, -state.current_player, new_key
 
         def same_turn(key):
-            return new_dice, state.current_player
+            return new_dice, state.current_player, key
 
-        next_dice, next_player = jax.lax.cond(all_dice_used, next_turn, same_turn, self.key)
+        next_dice, next_player, self.key = jax.lax.cond(all_dice_used, next_turn, same_turn, self.key)
 
         white_won = new_board[0, HOME_INDEX] == NUM_CHECKERS
         black_won = new_board[1, HOME_INDEX] == NUM_CHECKERS
@@ -131,10 +140,6 @@ class JaxBackgammonEnv(JaxEnvironment[BackgammonState, jnp.ndarray, dict]):
         done = self._get_done(new_state)
         info = self._get_info(new_state)
         return obs, new_state, reward, done, info
-
-    def render(self, state: BackgammonState) -> jnp.ndarray:
-        print(self._render_ascii(state))
-        return jnp.array([])
 
     def get_action_space(self) -> jnp.ndarray:
         return jnp.array([(i, j) for i in range(NUM_POINTS) for j in range(NUM_POINTS)])
@@ -161,76 +166,120 @@ class JaxBackgammonEnv(JaxEnvironment[BackgammonState, jnp.ndarray, dict]):
     def _get_done(self, state: BackgammonState) -> bool:
         return state.is_game_over
 
-    def _render_ascii(self, state: BackgammonState) -> str:
-        """Render the current state of the game in ASCII format. Used ChatGPT to generate this function."""
-        board = state.board
+    def get_valid_moves(self, state: BackgammonState) -> List[Tuple[int, int]]:
+        """Return a list of all valid moves for the current state."""
+        valid_moves = []
+        for i in range(0, NUM_POINTS + 1):
+            for j in range(0, NUM_POINTS + 1):
+                if self.is_valid_move(state, i, j):
+                    valid_moves.append((i, j))
+        return valid_moves
 
-        # Create a string buffer for the output
+    def render(self, state: EnvState) -> Tuple[jnp.ndarray]:
+        return
+
+class BackgammonRenderer(AtraJaxisRenderer):
+    def __init__(self, env: JaxBackgammonEnv):
+        self.env = env
+
+    def render(self, state: BackgammonState) -> str:
+        """Render the current state of the game in ASCII format."""
+        board = state.board
         output = []
 
-        # Add board header
+        # Board header
         output.append("  12 11 10  9  8  7  |   6  5  4  3  2  1")
         output.append("  -------------------------------------------------")
 
-        # Render the board top row (points 12-1)
-        top_row = ["  "]
-        for i in range(12, 0, -1):
-            point_idx = i - 1
-            white = board[0, point_idx]
-            black = board[1, point_idx]
+        def render_row(indices: range, split_at: int):
+            row = ["  "]
+            for i in indices:
+                point_idx = i - 1
+                white = board[0, point_idx]
+                black = board[1, point_idx]
 
-            if white > 0:
-                top_row.append("W{} ".format(white))
-            elif black > 0:
-                top_row.append("B{} ".format(black))
-            else:
-                top_row.append("•  ")
+                if white > 0:
+                    row.append(f"W{white} ")
+                elif black > 0:
+                    row.append(f"B{black} ")
+                else:
+                    row.append("•  ")
 
-            if i == 7:
-                top_row.append(" |   ")
-        output.append("".join(top_row))
+                if i == split_at:
+                    row.append(" |   ")
+            return "".join(row)
 
-        # Add middle divider
+        # Top row (points 12–1)
+        output.append(render_row(range(12, 0, -1), 7))
+
+        # Middle divider
         output.append("  -------------------------------------------------")
 
-        # Render the board bottom row (points 13-24)
-        bottom_row = ["  "]
-        for i in range(13, 25):
-            point_idx = i - 1
-            white = board[0, point_idx]
-            black = board[1, point_idx]
+        # Bottom row (points 13–24)
+        output.append(render_row(range(13, 25), 18))
 
-            if white > 0:
-                bottom_row.append("W{} ".format(white))
-            elif black > 0:
-                bottom_row.append("B{} ".format(black))
-            else:
-                bottom_row.append("•  ")
-
-            if i == 18:
-                bottom_row.append(" |   ")
-        output.append("".join(bottom_row))
-
-        # Add board footer
+        # Footer
         output.append("  -------------------------+------------------------")
         output.append("  13 14 15 16 17 18  |   19 20 21 22 23 24")
 
-        # Add bar and home information
+        # Bar and Home
         output.append("")
-        output.append("Bar: White: {}, Black: {}".format(board[0, BAR_INDEX], board[1, BAR_INDEX]))
-        output.append("Home: White: {}, Black: {}".format(board[0, HOME_INDEX], board[1, HOME_INDEX]))
+        output.append(f"Bar: White: {board[0, BAR_INDEX]}, Black: {board[1, BAR_INDEX]}")
+        output.append(f"Home: White: {board[0, HOME_INDEX]}, Black: {board[1, HOME_INDEX]}")
 
-        # Add current player and dice information
+        # Game status
         output.append("")
-        output.append("Current player: {}".format("White" if state.current_player == WHITE else "Black"))
-        output.append("Dice: {}".format(state.dice))
-        output.append("Game over: {}".format(state.is_game_over))
+        output.append(f"Current player: {'White' if state.current_player == WHITE else 'Black'}")
+        output.append(f"Dice: {state.dice}")
+        output.append(f"Game over: {state.is_game_over}")
 
         return "\n".join(output)
 
-def run_game(key: jax.Array, max_steps=20):
+    def display(self, state: BackgammonState) -> None:
+        """Print the rendered state to the console."""
+        print(self.render(state))
+
+    def close(self):
+        pass
+
+
+def get_user_move(state: BackgammonState, env: JaxBackgammonEnv) -> Tuple[int, int]:
+    """Get a move from the user via keyboard input."""
+    valid_moves = env.get_valid_moves(state)
+
+    if not valid_moves:
+        print("No valid moves available. Press Enter to continue to next player's turn.")
+        input()
+        return None
+
+    # Display valid moves with numbers for selection
+    print("\nValid moves:")
+    for i, move in enumerate(valid_moves):
+        from_point, to_point = move
+        from_display = "BAR" if from_point == BAR_INDEX else str(from_point + 1)
+        to_display = "HOME" if to_point == HOME_INDEX else str(to_point + 1)
+        print(f"{i + 1}: {from_display} → {to_display}")
+
+    # Get user input
+    while True:
+        try:
+            choice = input("\nEnter move number (or 'q' to quit): ")
+            if choice.lower() == 'q':
+                return 'quit'
+
+            choice_idx = int(choice) - 1
+            if 0 <= choice_idx < len(valid_moves):
+                return valid_moves[choice_idx]
+            else:
+                print(f"Please enter a number between 1 and {len(valid_moves)}")
+        except ValueError:
+            print("Please enter a valid number")
+
+def run_game_without_input(key: jax.Array, max_steps=20):
     env = JaxBackgammonEnv(key)
     obs, state = env.reset()
+    renderer = BackgammonRenderer(env)
+    env.renderer = renderer
 
     for i in range(max_steps):
         if state.is_game_over:
@@ -255,7 +304,7 @@ def run_game(key: jax.Array, max_steps=20):
         idx = jax.random.randint(move_key, (), 0, len(valid_moves))
         action = valid_moves[idx]
 
-        env.render(state)
+        renderer.display(state)
         print(f"\nMove: {action[0] + 1} → {action[1] + 1}")
         obs, state, reward, done, info = env.step(state, action)
 
@@ -265,9 +314,64 @@ def run_game(key: jax.Array, max_steps=20):
 
     return state
 
+def run_game_with_input(key: jax.Array, max_steps=100):
+    """Run the backgammon game with keyboard input for moves."""
+    env = JaxBackgammonEnv(key)
+    # Create and attach the renderer
+    renderer = BackgammonRenderer(env)
+    env.renderer = renderer
+
+    obs, state = env.reset()
+
+    print("\n==== Welcome to JAX Backgammon ====")
+    print("Points are numbered 1-24, with 1-6 on the white home board.")
+    print("BAR refers to the bar, and HOME refers to moving pieces off the board.")
+
+    step_count = 0
+    while step_count < max_steps and not state.is_game_over:
+        # Use the renderer to display the board
+        renderer.display(state)
+
+        # Get move from the user
+        action = get_user_move(state, env)
+
+        if action == 'quit':
+            print("\nGame ended by user.")
+            break
+
+        if action is None:
+            # No valid moves, roll new dice and switch players
+            new_dice, new_key = env.roll_dice(env.key)
+            env.key = new_key
+            state = state._replace(
+                dice=new_dice,
+                current_player=-state.current_player
+            )
+            continue
+
+        # Execute the move
+        from_display = "BAR" if action[0] == BAR_INDEX else str(action[0] + 1)
+        to_display = "HOME" if action[1] == HOME_INDEX else str(action[1] + 1)
+        print(f"\nExecuting move: {from_display} → {to_display}")
+        obs, state, reward, done, info = env.step(state, action)
+
+        step_count += 1
+
+        if done:
+            renderer.display(state)
+            winner = "White" if state.board[0, HOME_INDEX] == NUM_CHECKERS else "Black"
+            print(f"\n==== Game Over! {winner} wins! ====")
+
+    if step_count >= max_steps:
+        print("\nMaximum steps reached. Game ended.")
+
+    renderer.close()
+    return state
+
 def main():
     key = jax.random.PRNGKey(0)
-    run_game(key, max_steps=10)
+    # run_game_without_input(key)
+    run_game_with_input(key)
 
 
 if __name__ == "__main__":
