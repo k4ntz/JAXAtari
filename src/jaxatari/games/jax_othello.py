@@ -506,9 +506,43 @@ class JaxOthello(JaxEnvironment[OthelloState, OthelloObservation, OthelloInfo]):
             operand=None
         )
 
-        
+        # now enemy step are required
 
-        return new_state, None, 0.0, False, None        
+        # for now - choose a random field if a given step by agent/human was valid
+        def condition_fun(value):
+            valid_choice, new_state, _ = value
+            valid_choice = jnp.logical_not(valid_choice)
+            return valid_choice
+
+        def body_fun(value):
+            valid_choice, state, key = value
+
+            key, subkey = jax.random.split(key)  # neuen Key erzeugen
+            rand_vals = jax.random.randint(subkey, shape=(2,), minval=0, maxval=7)
+
+            valid_choice, new_state = field_step(rand_vals, state, False)
+
+            jax.debug.print("rand_vals: {} {}", rand_vals[0], rand_vals[1])
+
+            return jax.lax.cond(
+                valid_choice,
+                lambda _: (True, new_state, key),
+                lambda _: (False, state, key),
+                operand=None
+            )
+
+
+        key = jax.random.PRNGKey(0)
+        initial_x_y = (False, new_state, key)
+        valid_choice, final__step_state, _ = jax.lax.cond(
+            valid_choice, 
+            lambda _: jax.lax.while_loop(condition_fun, body_fun, initial_x_y),
+            lambda _: (valid_choice, new_state, key),
+            operand=None
+        )
+
+
+        return final__step_state, None, 0.0, False, None        
 
     @partial(jax.jit, static_argnums=(0,))
     def _get_observation(self, state: OthelloState):
@@ -763,7 +797,7 @@ if __name__ == "__main__":
 
     # Game Loop
     running = True
-    frameskip = 200
+    frameskip = 120
     counter = 1
 
     while running:
