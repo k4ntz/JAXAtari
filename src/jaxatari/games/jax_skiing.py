@@ -1,3 +1,4 @@
+
 from functools import partial
 import pygame
 import chex
@@ -554,23 +555,57 @@ class GameRenderer:
         self.tree_sprite = self._create_tree_sprite()
         self.font = pygame.font.Font(None, 36)
 
+    # def _create_skier_sprite(self) -> list[pygame.Surface]:
+    #     repo_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
+
+    #     img_path = os.path.join(repo_root, "jaxatari", "assets", "skiing", "skiier_front.jpg")
+    #     img = pygame.image.load(img_path).convert_alpha()
+    #     img = pygame.transform.scale(
+    #         img,
+    #         (
+    #             self.game_config.skier_width * self.render_config.scale_factor,
+    #             self.game_config.skier_height * self.render_config.scale_factor,
+    #         )
+    #     )
+
+    #     # 4. Gib Sprite mehrfach zurück (für `skier_pos`-Kompatibilität)
+    #     return [img for _ in range(16)]
+
     def _create_skier_sprite(self) -> list[pygame.Surface]:
-        repo_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
+        # Basispfad relativ zum Projekt-Root
+        base_path = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
+        sprite_dir = os.path.join(base_path, "jaxatari", "assets", "skiing")
 
-        img_path = os.path.join(repo_root, "jaxatari", "assets", "skiing", "skier_picture.jpg")
+        filenames = {
+            "left": "skiier_left.png",
+            "front": "skiier_front.png",
+            "right": "skiier_right.png"
+        }
 
-        img = pygame.image.load(img_path).convert_alpha()
-        img = pygame.transform.scale(
-            img,
-            (
-                self.game_config.skier_width * self.render_config.scale_factor,
-                self.game_config.skier_height * self.render_config.scale_factor,
+        sprites = {}
+        for direction, filename in filenames.items():
+            full_path = os.path.join(sprite_dir, filename)
+            img = pygame.image.load(full_path).convert_alpha()
+            img = pygame.transform.scale(
+                img,
+                (
+                    self.game_config.skier_width * self.render_config.scale_factor,
+                    self.game_config.skier_height * self.render_config.scale_factor,
+                )
             )
-        )
+            sprites[direction] = img
 
-        # 4. Gib Sprite mehrfach zurück (für `skier_pos`-Kompatibilität)
-        return [img for _ in range(16)]
+            # Map skier_pos (0–7) auf eine Richtung
+            sprite_list = []
+            for i in range(8):
+                if i <= 2:
+                    sprite_list.append(sprites["left"])
+                elif i >= 5:
+                    sprite_list.append(sprites["left"])
+                else:
+                    sprite_list.append(sprites["left"])
 
+            return sprite_list
 
 
     def _create_flag_sprite(self) -> pygame.Surface:
