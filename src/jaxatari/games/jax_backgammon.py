@@ -3,7 +3,7 @@ import jax.numpy as jnp
 from typing import NamedTuple, Tuple, Any, List
 from ..environment import JaxEnvironment, EnvState
 from ..renderers import AtraJaxisRenderer
-
+#
 # Constants for game Environment
 NUM_POINTS = 24
 NUM_CHECKERS = 15
