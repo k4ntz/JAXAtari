@@ -588,7 +588,7 @@ class JaxAirRaid(JaxEnvironment[AirRaidState, AirRaidObservation, AirRaidInfo]):
         }
         self.obs_size = 3*4+1+1  # Similar to Pong observation size
     
-    def reset(self) -> Tuple[AirRaidState, AirRaidObservation]:
+    def reset(self, key=None) -> Tuple[AirRaidObservation, AirRaidState]:
         """
         Resets the game state to the initial state.
         
@@ -651,7 +651,7 @@ class JaxAirRaid(JaxEnvironment[AirRaidState, AirRaidObservation, AirRaidInfo]):
         initial_obs = jax.tree.map(expand_and_copy, initial_obs)
         
         new_state = state._replace(obs_stack=initial_obs)
-        return new_state, initial_obs
+        return initial_obs, new_state
     
     @partial(jax.jit, static_argnums=(0,))
     def step(self, state: AirRaidState, action: chex.Array) -> Tuple[AirRaidState, AirRaidObservation, float, bool, AirRaidInfo]:
@@ -1152,7 +1152,7 @@ class Renderer_AtraJaxisAirRaid:
             building_y = BUILDING_Y_POSITIONS[damage_level]
         
             # Render building
-            return aj.render_at(raster_in, building_y, state.building_x[i], masked_sprite)
+            return aj.render_at(raster_in, state.building_x[i], building_y, masked_sprite)
     
         # Use loop to render all buildings
         raster = jax.lax.fori_loop(0, NUM_BUILDINGS, lambda i, r: render_building(i, r), raster)
@@ -1179,7 +1179,7 @@ class Renderer_AtraJaxisAirRaid:
                         jnp.where(is_type2, sprite_75, sprite_100)))
         
             # Render only if active
-            render_result = aj.render_at(raster_in, state.enemy_y[i], state.enemy_x[i], enemy_sprite)
+            render_result = aj.render_at(raster_in, state.enemy_x[i], state.enemy_y[i], enemy_sprite)
             return jnp.where(is_active, render_result, raster_in)
     
         # Render all enemies
@@ -1187,12 +1187,12 @@ class Renderer_AtraJaxisAirRaid:
 
         # Render player
         frame_player = aj.get_sprite_frame(self.SPRITE_PLAYER, 0)
-        raster = aj.render_at(raster, state.player_y, state.player_x, frame_player)
+        raster = aj.render_at(raster, state.player_x, state.player_y, frame_player)
 
         # Render player missiles
         def render_player_missile(i, raster_in):
             frame_missile = aj.get_sprite_frame(self.SPRITE_MISSILE, 0)
-            render_result = aj.render_at(raster_in, state.player_missile_y[i], state.player_missile_x[i], frame_missile)
+            render_result = aj.render_at(raster_in, state.player_missile_x[i], state.player_missile_y[i], frame_missile)
             return jnp.where(state.player_missile_active[i] == 1, render_result, raster_in)
     
         raster = jax.lax.fori_loop(0, NUM_PLAYER_MISSILES, lambda i, r: render_player_missile(i, r), raster)
@@ -1200,7 +1200,7 @@ class Renderer_AtraJaxisAirRaid:
         # Render enemy missiles
         def render_enemy_missile(i, raster_in):
             frame_missile = aj.get_sprite_frame(self.SPRITE_MISSILE, 0)
-            render_result = aj.render_at(raster_in, state.enemy_missile_y[i], state.enemy_missile_x[i], frame_missile)
+            render_result = aj.render_at(raster_in, state.enemy_missile_x[i], state.enemy_missile_y[i], frame_missile)
             return jnp.where(state.enemy_missile_active[i] == 1, render_result, raster_in)
     
         raster = jax.lax.fori_loop(0, NUM_ENEMY_MISSILES, lambda i, r: render_enemy_missile(i, r), raster)
@@ -1211,7 +1211,7 @@ class Renderer_AtraJaxisAirRaid:
         black_bar_y = HEIGHT - black_bar_height
         #black_bar = jnp.zeros((WIDTH, black_bar_height, 4), dtype=jnp.uint8)
         #black_bar = black_bar.at[:, :, 3].set(255)  # Set alpha channel to fully opaque
-        #raster = aj.render_at(raster, black_bar_y, 0, black_bar)
+        #raster = aj.render_at(raster, 0, black_bar_y, black_bar)
         raster = raster.at[:, black_bar_y:, :].set(0)  # Set to black (0,0,0)
 
         # Render score - Mimicking OCAtari alignment via fixed-width rendering
@@ -1295,7 +1295,7 @@ class Renderer_AtraJaxisAirRaid:
             icon_x = life_start_x + i * life_spacing
 
             # Render life sprite
-            result = aj.render_at(raster_in, life_y, icon_x, life_sprite)
+            result = aj.render_at(raster_in, icon_x, life_y, life_sprite)
 
             # Only show the life icon if the player has enough lives
             return jnp.where(i < state.player_lives, result, raster_in)
@@ -1325,7 +1325,7 @@ if __name__ == "__main__":
     jitted_reset = jax.jit(game.reset)
 
     # Initialize game state
-    curr_state, obs = jitted_reset()
+    obs, curr_state = jitted_reset()
 
     # Game loop
     running = True
@@ -1357,7 +1357,7 @@ if __name__ == "__main__":
                 
                 # Reset if game is done
                 if done:
-                    curr_state, obs = jitted_reset()
+                    obs, curr_state = jitted_reset()
 
         # Render and display
         raster = renderer.render(curr_state)
