@@ -9,8 +9,10 @@ import enum
 import time
 from gymnax.environments import spaces
 
+from jaxatari.renderers import AtraJaxisRenderer
 from jaxatari.rendering import atraJaxis as aj
 from jaxatari.environment import JaxEnvironment
+from jaxatari.environment import JaxEnvironment, JAXAtariAction as Action
 
 import json
 
@@ -25,12 +27,12 @@ WINDOW_WIDTH = 160 * 3
 WINDOW_HEIGHT = 210 * 3
 
 # Actions constants
-NOOP = 0
-UP = 1
-DOWN = 2
-LEFT = 3
-RIGHT = 4
-PLACE = 5
+NOOP = Action.NOOP
+UP = Action.UP
+DOWN = Action.DOWN
+LEFT = Action.LEFT
+RIGHT = Action.RIGHT
+PLACE = Action.FIRE
 DIFFICULTY = 6
 RESET = 7
 
@@ -97,7 +99,10 @@ class OthelloInfo(NamedTuple):
 
 
 @jax.jit
-def has_human_player_decided_field(field_choice_player, action: chex.Array):
+def has_player_decided_field(field_choice_player, action: chex.Array):
+    # field_choice_player: the current positioning of the disc -> it is not jet placed down
+    # action may include the action FIRE to place the disc down
+    
     is_place = jnp.equal(action, PLACE)
     is_up = jnp.equal(action, UP)
     is_right = jnp.equal(action, RIGHT)
@@ -422,11 +427,18 @@ class JaxOthello(JaxEnvironment[OthelloState, OthelloObservation, OthelloInfo]):
         if reward_funcs is not None:
             reward_funcs = tuple(reward_funcs)
         self.reward_funcs = reward_funcs
-        self.action_set = set(range(64)) | {NOOP}
+        self.action_set = self.action_set = [
+            NOOP,
+            PLACE,
+            RIGHT,
+            LEFT,
+            UP,
+            DOWN
+        ]
         self.obs_size = 130
 
 
-    def reset(self) -> OthelloState:
+    def reset(self, key=None) -> OthelloState:
         """ Reset the game state to the initial state """
         field_color_init = jnp.full((8, 8), FieldColor.EMPTY.value, dtype=jnp.int32)
         field_color_init = field_color_init.at[3,3].set(FieldColor.BLACK.value)
@@ -461,32 +473,15 @@ class JaxOthello(JaxEnvironment[OthelloState, OthelloObservation, OthelloInfo]):
             render_helper_field_after_player_step = field_color_init
         )
         initial_obs = self._get_observation(state)
-        return state, initial_obs
+        return initial_obs, state
 
-    @partial(jax.jit, static_argnums=0, static_argnames=["is_human"])
-    def step(self, state: OthelloState, action: chex.Array, is_human: bool) -> Tuple[OthelloState, OthelloObservation, float, bool, OthelloInfo]:
-        # human player has actions like moving the "cursor" to decide which empty field they want the disc to be placed
-        # an agent decides directly with field id 0 - 63.
-    
-        is_human_condition = jax.lax.convert_element_type(is_human, bool)
-        new_field_choice = jax.lax.cond(
-            is_human_condition,  
-            lambda _: has_human_player_decided_field(state.field_choice_player, action), 
-            lambda _: (True, state.field_choice_player),  
-            operand=None
-        )
-        decided, new_field_choice = new_field_choice  # 2D Array new_field_choice[i, j]
+    @partial(jax.jit, static_argnums=0)
+    def step(self, state: OthelloState, action: chex.Array) -> Tuple[OthelloObservation, OthelloState, float, bool, OthelloInfo]:
 
-        # if agent is activated, convert his action into 2D array new_field_choice
-        def convert_1d_id_to_2d(action):
-            return jnp.array([action // FIELD_WIDTH, action % FIELD_HEIGHT])
+        state = state._replace(step_counter=state.step_counter+1)
 
-        new_field_choice = jax.lax.cond(
-            is_human_condition,
-            lambda _: new_field_choice,
-            lambda x: convert_1d_id_to_2d(x),
-            action
-        ) 
+        decided, new_field_choice = has_player_decided_field(state.field_choice_player, action)  # 2D Array new_field_choice[i, j]
+
         state = state._replace(field_choice_player=new_field_choice)
 
         # now human player and agent are on the same "page"
@@ -522,8 +517,6 @@ class JaxOthello(JaxEnvironment[OthelloState, OthelloObservation, OthelloInfo]):
 
             valid_choice, new_state = field_step(rand_vals, state, False)
 
-            jax.debug.print("rand_vals: {} {}", rand_vals[0], rand_vals[1])
-
             return jax.lax.cond(
                 valid_choice,
                 lambda _: (True, new_state, key),
@@ -542,7 +535,7 @@ class JaxOthello(JaxEnvironment[OthelloState, OthelloObservation, OthelloInfo]):
         )
 
 
-        return final__step_state, None, 0.0, False, None        
+        return None, final__step_state, 0.0, False, None        
 
     @partial(jax.jit, static_argnums=(0,))
     def _get_observation(self, state: OthelloState):
@@ -551,6 +544,9 @@ class JaxOthello(JaxEnvironment[OthelloState, OthelloObservation, OthelloInfo]):
             enemy_score=state.enemy_score,
             player_score=state.player_score
         )
+
+    def get_action_space(self) -> jnp.ndarray:
+        return jnp.array(self.action_set)
 
 
 
@@ -597,10 +593,10 @@ def load_sprites():
 
 @jax.jit
 def render_point_of_disc(id):
-    return jnp.array([22 + 22 * id[0], 18 + 16 * id[1]], dtype=jnp.int32)
+    return jnp.array([18 + 16 * id[1], 22 + 22 * id[0]], dtype=jnp.int32)
 
 
-class Renderer_AtraJaxisOthello:
+class OthelloRenderer(AtraJaxisRenderer):
     def __init__(self):
         (
             self.SPRITE_BG,
@@ -611,7 +607,7 @@ class Renderer_AtraJaxisOthello:
         ) = load_sprites()
 
     @partial(jax.jit, static_argnums=(0,))
-    def render(self, state, counter):
+    def render(self, state):
         # Create empty raster with CORRECT orientation for atraJaxis framework
         # Note: For pygame, the raster is expected to be (width, height, channels)
         # where width corresponds to the horizontal dimension of the screen
@@ -625,8 +621,7 @@ class Renderer_AtraJaxisOthello:
         frame_player = aj.get_sprite_frame(self.SPRITE_PLAYER, 0)
         frame_enemy = aj.get_sprite_frame(self.SPRITE_ENEMY, 0)
         
-
-
+        
         # get the index of the white disc which was putted on the last game step
         # this function will be used to do better rendering
         # returns False rendering is made also if a game step is not finished jet
@@ -722,58 +717,13 @@ class Renderer_AtraJaxisOthello:
             return jax.lax.fori_loop(0, FIELD_WIDTH, outer_loop, current_raster)
         raster = set_discs_to_the_raster(raster, state.field.field_color)
 
-        return raster
-
-
-    @partial(jax.jit, static_argnums=(0,))
-    def render_disc_ping(self, state, counter):
-        raster = jnp.zeros((WIDTH, HEIGHT, 3))
-
-        # Render Background - (0, 0) is top-left corner
-        frame_bg = aj.get_sprite_frame(self.SPRITE_BG, 0)
-        raster = aj.render_at(raster, 0, 0, frame_bg)
-
-        # disc sprites
-        frame_player = aj.get_sprite_frame(self.SPRITE_PLAYER, 0)
-        frame_enemy = aj.get_sprite_frame(self.SPRITE_ENEMY, 0)
-
-        # Render all fixed discs
-        def set_discs_to_the_raster(raster, field_color):
-            def outer_loop(i, carry):
-                def inner_loop(j, carry):
-                    raster = carry
-                    color = field_color[i, j]
-                    render_point = render_point_of_disc(jnp.array([i,j], dtype=jnp.int32))
-
-                    return jax.lax.cond(
-                        color == FieldColor.EMPTY, 
-                        lambda x: raster,
-                        lambda x: jax.lax.cond(
-                            color == FieldColor.WHITE,
-                            lambda x: aj.render_at(raster, render_point[0], render_point[1], frame_player),
-                            lambda x: aj.render_at(raster, render_point[0], render_point[1], frame_enemy),
-                            x
-                        ),
-                        color
-                    )
-
-                return jax.lax.fori_loop(0, FIELD_HEIGHT, inner_loop, carry)
-
-            current_raster = raster
-            return jax.lax.fori_loop(0, FIELD_WIDTH, outer_loop, current_raster)
-        raster = set_discs_to_the_raster(raster, state.field.field_color)
-
-        # Render the disc which shows the current player choice -> is not a fixed disc
         current_player_choice = render_point_of_disc(state.field_choice_player)
         raster = jax.lax.cond(
-            counter % 2 == 0,
+            state.step_counter % 2 == 0,
             lambda x: aj.render_at(x, current_player_choice[0], current_player_choice[1], frame_player),
             lambda x: raster,
             raster
         ) 
-
-        # render scores
-        raster = aj.render_at(raster, 0, 0, aj.get_sprite_frame(self.PLAYER_DIGIT_SPRITES, 0))
 
         return raster
 
@@ -787,33 +737,33 @@ if __name__ == "__main__":
     game = JaxOthello(frameskip=1)
 
     # Create the JAX renderer
-    renderer = Renderer_AtraJaxisOthello()
+    renderer = OthelloRenderer()
 
     # get jitted functions
     jitted_step = jax.jit(game.step)
     jitted_reset = jax.jit(game.reset)
 
-    curr_state, obs = jitted_reset()
+    obs, curr_state = jitted_reset()
 
     # Game Loop
     running = True
-    frameskip = 120
-    counter = 1
+    move_delay = 0.15
+    last_move_time = 0
 
     while running:
+        now = time.time()
+
         for event in pygame.event.get():
             if event.type == pygame.QUIT:
                 running = False     
 
-        if counter % frameskip == 0:
+        if (now - last_move_time) > move_delay:
             action = get_human_action()
-            curr_state, obs, reward, done, info = jitted_step(curr_state, action, is_human=True)
-            # Render and display
-            raster = renderer.render(curr_state, counter)
-            aj.update_pygame(screen, raster, 3, WIDTH, HEIGHT)
-
-        raster = renderer.render_disc_ping(curr_state, counter)
+            obs, curr_state, reward, done, info = jitted_step(curr_state, action)
+            last_move_time = now
+            
+        # Render and display
+        raster = renderer.render(curr_state)
         aj.update_pygame(screen, raster, 3, WIDTH, HEIGHT)
-        counter += 1
 
     pygame.quit()
