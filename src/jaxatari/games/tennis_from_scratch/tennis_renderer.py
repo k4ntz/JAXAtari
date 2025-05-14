@@ -6,7 +6,7 @@ import os
 # Todo remove
 import csv, uuid
 
-from tennis_main import FRAME_WIDTH, FRAME_HEIGHT, GAME_OFFSET_LEFT_BOTTOM, GAME_OFFSET_TOP, GAME_HEIGHT, GAME_WIDTH, TennisState, PLAYER_WIDTH, PLAYER_HEIGHT
+from tennis_main import FRAME_WIDTH, FRAME_HEIGHT, GAME_OFFSET_LEFT_BOTTOM, GAME_OFFSET_TOP, GAME_HEIGHT, GAME_WIDTH, TennisState, PLAYER_WIDTH, PLAYER_HEIGHT, perspective_transform
 
 def load_sprites():
     MODULE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -128,54 +128,31 @@ class TennisRenderer:
         top_left_rec = top_left_rec.at[:, :, 1].set(255)  # Yellow
         top_left_rec = top_left_rec.at[:, :, 0].set(255)  # Yellow
         top_left_rec = top_left_rec.at[:, :, 3].set(255)  # Alpha
-        top_left_corner_coords = self.perspective_transform(0, 0)
+        top_left_corner_coords = perspective_transform(0, 0)
 
         raster = aj.render_at(raster, top_left_corner_coords[0], top_left_corner_coords[1], top_left_rec)
 
         top_right_rec = jnp.zeros((2, 2, 4))
         top_right_rec = top_right_rec.at[:, :, 2].set(255)  # Blue
         top_right_rec = top_right_rec.at[:, :, 3].set(255)  # Alpha
-        top_right_corner_coords = self.perspective_transform(GAME_WIDTH, 0)
+        top_right_corner_coords = perspective_transform(GAME_WIDTH, 0)
 
         raster = aj.render_at(raster, top_right_corner_coords[0], top_right_corner_coords[1], top_right_rec)
 
         bottom_left_rec = jnp.zeros((2, 2, 4))
         bottom_left_rec = bottom_left_rec.at[:, :, 1].set(255)  # Green
         bottom_left_rec = bottom_left_rec.at[:, :, 3].set(255)  # Alpha
-        bottom_left_corner_coords = self.perspective_transform(0, GAME_HEIGHT)
+        bottom_left_corner_coords = perspective_transform(0, GAME_HEIGHT)
 
         raster = aj.render_at(raster, bottom_left_corner_coords[0], bottom_left_corner_coords[1], bottom_left_rec)
 
         bottom_right_rec = jnp.zeros((2, 2, 4))
         bottom_right_rec = bottom_right_rec.at[:, :, 0].set(255)  # Red
         bottom_right_rec = bottom_right_rec.at[:, :, 3].set(255)  # Alpha
-        bottom_right_corner_coords = self.perspective_transform(GAME_WIDTH, GAME_HEIGHT)
+        bottom_right_corner_coords = perspective_transform(GAME_WIDTH, GAME_HEIGHT)
 
         raster = aj.render_at(raster, bottom_right_corner_coords[0], bottom_right_corner_coords[1], bottom_right_rec)
 
         #raster = aj.render_at(raster, 0, 0, rectangle)
 
         return raster
-
-    # we always use coordinates including the lines
-    def perspective_transform(self, x, y, apply_offsets = True, width_top = 79.0, width_bottom = 111.0, height = 130.0):
-        # Normalize y: 0 at top (far), 1 at bottom (near)
-        y_norm = y / height
-
-        # Interpolate width at this y level
-        current_width = width_top * (1 - y_norm) + width_bottom * y_norm
-
-        # Horizontal offset to center the perspective slice
-        offset = (width_bottom - current_width) / 2
-        #offset = 0
-
-        # Normalize x based on bottom width (field space)
-        x_norm = x / width_bottom
-
-        # Compute final x position
-        x_screen = offset + x_norm * current_width
-        y_screen = y  # No vertical scaling
-
-        if apply_offsets:
-            return x_screen + GAME_OFFSET_LEFT_BOTTOM, y_screen + GAME_OFFSET_TOP
-        return x_screen, y_screen

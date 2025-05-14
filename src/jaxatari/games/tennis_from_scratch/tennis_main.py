@@ -443,8 +443,11 @@ def handle_ball_fire(state: TennisState, hitting_entity_x, direction: int) -> Ba
     right_offset = 39
     offset = ((angle + 1) / 2) * (right_offset - left_offset) + left_offset
 
-    new_ball_hit_target_x = new_ball_hit_start_x + offset
+
     new_ball_hit_target_y = new_ball_hit_start_y + (91 * direction)
+    field_min_x = 32
+    field_max_x = 32 + FIELD_WIDTH_TOP
+    new_ball_hit_target_x = jnp.clip(new_ball_hit_start_x + offset, field_min_x, field_max_x)
 
     hit_vel = 24.0
 
@@ -509,6 +512,28 @@ def handle_ball_serve(state: TennisState) -> BallState:
         state.ball_state.move_x,
         state.ball_state.move_y
     )
+
+def perspective_transform(x, y, width_top = 79.0, width_bottom = 111.0, height = 130.0):
+    # Normalize y: 0 at top (far), 1 at bottom (near)
+    y_norm = y / height
+
+    # Interpolate width at this y level
+    current_width = width_top * (1 - y_norm) + width_bottom * y_norm
+
+    # Horizontal offset to center the perspective slice
+    offset = (width_bottom - current_width) / 2
+    #offset = 0
+
+    # Normalize x based on bottom width (field space)
+    x_norm = x / width_bottom
+
+    # Compute final x position
+    x_screen = offset + x_norm * current_width
+    y_screen = y  # No vertical scaling
+
+    #if apply_offsets:
+    #return x_screen + GAME_OFFSET_LEFT_BOTTOM, y_screen + GAME_OFFSET_TOP
+    return x_screen, y_screen
 
 def tennis_reset() -> TennisState:
     """
