@@ -632,6 +632,62 @@ if __name__ == "__main__":
         aj.update_pygame(screen, raster, SCALING_FACTOR, WIDTH, HEIGHT)
         counter += 1
 
+
+        # Get player actions
+        actions = get_human_action()
+        for action in actions:
+            if action == "LEFT":
+                spaceship_rect.x -= 5
+            elif action == "RIGHT":
+                spaceship_rect.x += 5
+            elif action == "UP":
+                spaceship_rect.y -= 5
+            elif action == "DOWN":
+                spaceship_rect.y += 5
+            elif action == "FIRE":
+                print("FIRE")
+            elif action == "UPFIRE":
+                print("UPFIRE")
+            elif action == "DOWNFIRE":
+                print("DOWNFIRE")
+            elif action == "LEFTFIRE":
+                print("LEFTFIRE")
+            elif action == "RIGHTFIRE":
+                print("RIGHTFIRE")
+            elif action == "UPLEFTFIRE":
+                spaceship_rect.x -= 2.5
+                spaceship_rect.y -= 2.5
+                print("UPLEFTFIRE")
+            elif action == "UPRIGHTFIRE":
+                spaceship_rect.x += 2.5
+                spaceship_rect.y -= 2.5
+                print("UPRIGHTFIRE")
+            elif action == "DOWNLEFTFIRE":
+                spaceship_rect.x -= 2.5
+                spaceship_rect.y += 2.5
+                print("DOWNLEFTFIRE")
+            elif action == "DOWNRIGHTFIRE":
+                spaceship_rect.x += 2.5
+                spaceship_rect.y += 2.5
+                print("DOWNRIGHTFIRE")
+
+        # Prevent the spaceship from going out of bounds
+        if spaceship_rect.x < 0:
+            spaceship_rect.x = 0
+        if spaceship_rect.x > WINDOW_WIDTH - spaceship_rect.width:
+            spaceship_rect.x = WINDOW_WIDTH - spaceship_rect.width
+        if spaceship_rect.y < 0:
+            spaceship_rect.y = 0
+        if spaceship_rect.y > WINDOW_HEIGHT - spaceship_rect.height:
+            spaceship_rect.y = WINDOW_HEIGHT - spaceship_rect.height
+
+        # Calculate the current time
+        current_time = 90 - pygame.time.get_ticks() // 1000
+
+        # Render the game
+        renderer.render(state)
+
+        # Control the frame rate
         clock.tick(60)
 
     pygame.quit()
