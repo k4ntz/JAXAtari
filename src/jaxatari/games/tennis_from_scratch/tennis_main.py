@@ -112,11 +112,11 @@ def tennis_step(state: TennisState, action) -> TennisState:
         TennisState: The updated state of the game.
     """
 
-    new_ball_state = ball_step(state, action)
-    new_player_state = player_step(state, action)
-    new_enemy_state = enemy_step(state)
+    new_state_after_ball_step = ball_step(state, action)
+    new_player_state = player_step(new_state_after_ball_step, action)
+    new_enemy_state = enemy_step(new_state_after_ball_step)
 
-    return TennisState(state.is_serving, new_player_state, new_enemy_state, new_ball_state, state.counter + 1)
+    return TennisState(new_state_after_ball_step.is_serving, new_player_state, new_enemy_state, new_state_after_ball_step.ball_state, new_state_after_ball_step.counter + 1)
 
 # todo needs docs
 def player_step(state: TennisState, action: chex.Array) -> PlayerState:
@@ -224,7 +224,7 @@ def enemy_step(state: TennisState) -> EnemyState:
         state.enemy_state.enemy_y
     )
 
-def ball_step(state: TennisState, action) -> BallState:
+def ball_step(state: TennisState, action) -> TennisState:
     """
     Updates ball position by applying velocity and gravity. Also handles player-ball collisions
     and fires the ball if the provided action contains FIRE.
