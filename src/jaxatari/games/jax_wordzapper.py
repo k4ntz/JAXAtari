@@ -27,6 +27,11 @@ BALL_COLOR = 236, 236, 236  # White ball
 WALL_COLOR = 236, 236, 236  # White walls
 SCORE_COLOR = 236, 236, 236  # White score
 
+
+# define object orientations
+FACE_LEFT = -1
+FACE_RIGHT = 1
+
 # Player and letter positions
 PLAYER_START_X = 140
 PLAYER_START_Y = 46
@@ -202,28 +207,48 @@ class WordZapperInfo(NamedTuple):
 
 def load_sprites():
     """Load all sprites required for Word Zapper rendering."""
-    def make_rect(h, w, color):
-        return jnp.ones((h, w, 3), dtype=jnp.uint8) * jnp.array(color, dtype=jnp.uint8)
+    # def make_rect(h, w, color):
+    #     return jnp.ones((h, w, 3), dtype=jnp.uint8) * jnp.array(color, dtype=jnp.uint8)
 
-    ## TODO for now just rectangles, no sprites
-    SPRITE_BG = make_rect(WINDOW_WIDTH, WINDOW_HEIGHT, [0, 0, 0]) 
+    # ## TODO for now just rectangles, no sprites
+    # SPRITE_BG = make_rect(WINDOW_WIDTH, WINDOW_HEIGHT, [0, 0, 0]) 
 
-    SPRITE_PLAYER = make_rect(PLAYER_SIZE[0], PLAYER_SIZE[1], [0, 0, 255]) 
+    # SPRITE_PLAYER = make_rect(PLAYER_SIZE[0], PLAYER_SIZE[1], [0, 0, 255]) 
 
-    TIMER_INDICATOR = make_rect(TIMER_SIZE[0], TIMER_SIZE[1], [0, 255, 0]) 
-    
+    # TIMER_INDICATOR = make_rect(TIMER_SIZE[0], TIMER_SIZE[1], [0, 255, 0])
+
+    MODULE_DIR = os.path.dirname(os.path.abspath(__file__))
+    # Load sprites - no padding needed for background since it's already full size
+    bg1 = aj.loadFrame(os.path.join(MODULE_DIR, "sprites/seaquest/bg/1.npy"))
+    pl_sub1 = aj.loadFrame(os.path.join(MODULE_DIR, "sprites/seaquest/player_sub/1.npy"))
+    pl_sub2 = aj.loadFrame(os.path.join(MODULE_DIR, "sprites/seaquest/player_sub/2.npy"))
+    pl_sub3 = aj.loadFrame(os.path.join(MODULE_DIR, "sprites/seaquest/player_sub/3.npy"))
+
+    # Pad player submarine sprites to match each other
+    pl_sub_sprites = aj.pad_to_match([pl_sub1, pl_sub2, pl_sub3])
+
+
+    SPRITE_BG = jnp.expand_dims(bg1, axis=0)
+
+    # Player submarine sprites
+    SPRITE_PL_SUB = jnp.concatenate(
+        [
+            jnp.repeat(pl_sub_sprites[0][None], 4, axis=0),
+            jnp.repeat(pl_sub_sprites[1][None], 4, axis=0),
+            jnp.repeat(pl_sub_sprites[2][None], 4, axis=0),
+        ]
+    )
+
     return (
         SPRITE_BG,
-        SPRITE_PLAYER,
-        TIMER_INDICATOR,
+        SPRITE_PL_SUB
     )
 
 
 # Load sprites once at module level
 (
     SPRITE_BG,
-    SPRITE_PLAYER,
-    TIMER_INDICATOR,
+    SPRITE_PL_SUB
 ) = load_sprites()
 
 
@@ -565,9 +590,18 @@ class WordZapperRenderer(AtraJaxisRenderer):
     def render(self, state):
         raster = jnp.zeros((WIDTH, HEIGHT, 3))
 
-        # render background
-        # frame_bg = aj.get_sprite_frame(SPRITE_BG, 0)
-        # raster = aj.render_at(raster, 0, 0, SPRITE_BG)
+        ## render background
+        frame_bg = aj.get_sprite_frame(SPRITE_BG, 0)
+        raster = aj.render_at(raster, 0, 0, frame_bg)
+
+        frame_pl_sub = aj.get_sprite_frame(SPRITE_PL_SUB, state.step_counter)
+        raster = aj.render_at(
+            raster,
+            state.player_x,
+            state.player_y,
+            frame_pl_sub,
+            flip_horizontal=state.player_direction == FACE_LEFT,
+        )
     
         return raster
 
@@ -583,7 +617,7 @@ if __name__ == "__main__":
     clock = pygame.time.Clock()
 
 
-    game = JaxWordZapper() # <-- eventual game
+    game = JaxWordZapper()
 
     # Initialize the renderer
     renderer = WordZapperRenderer()
