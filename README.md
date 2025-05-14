@@ -47,8 +47,8 @@ from jaxatari.wrappers import FlattenObservationWrapper, AtariWrapper
 rng = jax.random.PRNGKey(0)
 
 env = JaxSeaquest()
-env = FlattenObservationWrapper(env)
 env = AtariWrapper(env)
+env = FlattenObservationWrapper(env)
 
 vmap_reset = lambda n_envs: lambda rng: jax.vmap(env.reset)(
     jax.random.split(rng, n_envs)
@@ -85,11 +85,12 @@ python3 -m jaxatari.games.jax_seaquest
 
 ## Supported Games
 
-| Game      | Supported |
-|-----------|-----------|
-| Seaquest  | ✅        |
-| Pong      | ✅        |
-| Kangaroo  | ✅        |
+| Game     | Supported |
+|----------|-----------|
+| Seaquest | ✅        |
+| Pong     | ✅        |
+| Kangaroo | ✅        |
+| Freeway  | ✅        |
 
 > More games can be added via the uniform wrapper system.
 

@@ -19,7 +19,7 @@ class NPYImageEditor:
         self.current_mouse_position.set("x=--, y=--")
 
         self.image = None
-        self.zoom_level = 1
+        self.zoom_level = 20
         self.current_color = [0, 0, 0, 255]  # Default color: black with full opacity
         self.selected_rgba_color = self.current_color  # Store the selected RGBA color
 
