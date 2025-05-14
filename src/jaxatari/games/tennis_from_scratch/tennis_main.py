@@ -287,17 +287,19 @@ def ball_step(state: TennisState, action) -> BallState:
         )
     )
 
-    # check if ball should be served or hit regularly todo is there even a difference?
-    should_serve = jnp.logical_and(
-        action == JAXAtariAction.FIRE, # todo allow for other FIRE actions, like LEFTFIRE
-        state.is_serving
-    )
+    # check if fire is pressed
+    fire = jnp.any(jnp.array([action == JAXAtariAction.FIRE, action == JAXAtariAction.LEFTFIRE, action == JAXAtariAction.DOWNLEFTFIRE, action == JAXAtariAction.DOWNFIRE,
+                              action == JAXAtariAction.DOWNRIGHTFIRE, action == JAXAtariAction.RIGHTFIRE, action == JAXAtariAction.UPRIGHTFIRE, action == JAXAtariAction.UPFIRE,
+                              action == JAXAtariAction.UPLEFTFIRE]))
+
+    def check_collision():
+        return player_overlap_ball_x
+
+    should_hit = jnp.logical_and(check_collision(), jnp.logical_or(jnp.logical_not(state.is_serving), fire))
 
     return jax.lax.cond(
-        player_overlap_ball_x,
-        lambda _: jax.lax.cond(
-            should_serve, lambda _: handle_ball_serve(state), lambda _: handle_ball_fire(state), None
-        ),
+        should_hit,
+        lambda _: handle_ball_fire(state),
         lambda _: BallState(
             new_ball_x,
             new_ball_y,
