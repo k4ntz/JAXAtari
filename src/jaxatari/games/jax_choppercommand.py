@@ -29,6 +29,7 @@ DISTANCE_WHEN_FLYING = 10 # DEFAULT: 10 | How far the chopper moves towards the 
 PLAYER_MISSILE_WIDTH = 80 # Sprite size_x
 MISSILE_COOLDOWN_FRAMES = 8  # DEFAULT: 8 | How fast Chopper can shoot  TODO: Das müssen wir ändern und höher machen bei dem schweren Schwierigkeitsgrad
 MISSILE_SPEED = 10 # DEFAULT: 10 | Missile speed #TODO: tweak MISSILE_SPEED and MISSILE_COOLDOWN_FRAMES to match real game (already almost perfect)
+MISSILE_ANIMATION_SPEED = 6 # DEFAULT: 6 | Rate at which missile changes sprite textures (based on traveled distance of missile)
 
 # Colors
 BACKGROUND_COLOR = (0, 0, 139)  # Dark blue for sky
@@ -165,7 +166,7 @@ def load_sprites():
         bg_sprites[i - 1] = jnp.expand_dims(bg_sprites[i - 1], axis=0)
 
     pl_missile_sprites_temp = []
-    for i in range(0, 15):
+    for i in range(0, 16):
         temp = aj.loadFrame(os.path.join(MODULE_DIR, f"sprites/choppercommand/player_missiles/missile_{i}.npy"))
         pl_missile_sprites_temp.append(temp)
         pl_missile_sprites_temp[i] = jnp.expand_dims(pl_missile_sprites_temp[i], axis=0)
@@ -1299,9 +1300,9 @@ class Renderer_AtraJaxis(AtraJaxisRenderer):
 
             def get_pl_missile_frame():
                 delta_curr_missile_spawn = jnp.abs(missile[0] - missile[4])
-                index = jnp.floor_divide(delta_curr_missile_spawn, 10)
-                return jnp.clip(index, 0, 15).astype(jnp.int32)
-
+                index = jnp.floor_divide(delta_curr_missile_spawn, MISSILE_ANIMATION_SPEED)
+                index = jnp.clip(index, 0, 15)
+                return index
             frame_pl_missile = aj.get_sprite_frame(SPRITE_PL_MISSILE, get_pl_missile_frame())
 
 
