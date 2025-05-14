@@ -8,6 +8,7 @@ from dataclasses import dataclass
 from typing import Tuple, NamedTuple
 import random
 import os
+from sys import maxsize
 
 from jaxatari.environment import JaxEnvironment
 
@@ -460,7 +461,7 @@ class JaxSkiing(JaxEnvironment[GameState, SkiingObservation, SkiingInfo]):
             operand=None,
         )
         new_time = jax.lax.cond(
-            jnp.greater(state.time, 254),
+            jnp.greater(state.time, 9223372036854775807/2),
             lambda _: 0,
             lambda _: state.time + 1,
             operand=None,
@@ -899,11 +900,22 @@ class GameRenderer:
         score_text = self.font.render(
             f"Score: {state.score}", True, self.render_config.text_color
         )
-        time_text = self.font.render(
-            f"Time: {state.time:.1f}", True, self.render_config.text_color
-        )
-        self.screen.blit(score_text, (10, 10))
-        self.screen.blit(time_text, (10, 40))
+                # Zeit formatieren wie 00:00.00
+        total_time = int(state.time)
+        minutes = total_time // (60 * 60)
+        seconds = (total_time // 60) % 60
+        hundredths = total_time % 60
+        time_str = f"{minutes:02}:{seconds:02}.{hundredths:02}"
+        time_text = self.font.render(time_str, True, self.render_config.text_color)
+
+        # Score mittig oben, Zeit darunter mittig
+        screen_width_px = self.game_config.screen_width * self.render_config.scale_factor
+
+        score_rect = score_text.get_rect(center=(screen_width_px // 2, 10 + score_text.get_height() // 2))
+        time_rect = time_text.get_rect(center=(screen_width_px // 2, 10 + score_text.get_height() + time_text.get_height() // 2))
+        
+        self.screen.blit(score_text, score_rect)
+        self.screen.blit(time_text, time_rect)
 
         if state.game_over:
             game_over_text = self.font.render(
