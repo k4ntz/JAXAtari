@@ -319,12 +319,14 @@ class SpaceInvadersRenderer(AtraJaxisRenderer):
         frame_opponent_6 = aj.get_sprite_frame(SPRITE_OPPONENT_6, 0)
 
         def body(i, raster):
-            raster = aj.render_at(raster, START_OPPONENT[0] + i * (OFFSET_OPPONENT[0] + OPPONENT_SIZE[0]), START_OPPONENT[1], frame_opponent_1)
-            raster = aj.render_at(raster, START_OPPONENT[0] + i * (OFFSET_OPPONENT[0] + OPPONENT_SIZE[0]), START_OPPONENT[1] + (OFFSET_OPPONENT[1] + OPPONENT_SIZE[1]), frame_opponent_2)
-            raster = aj.render_at(raster, START_OPPONENT[0] + i * (OFFSET_OPPONENT[0] + OPPONENT_SIZE[0]), START_OPPONENT[1] + 2 * (OFFSET_OPPONENT[1] + OPPONENT_SIZE[1]), frame_opponent_3)
-            raster = aj.render_at(raster, START_OPPONENT[0] + i * (OFFSET_OPPONENT[0] + OPPONENT_SIZE[0]), START_OPPONENT[1] + 3 * (OFFSET_OPPONENT[1] + OPPONENT_SIZE[1]), frame_opponent_4)
-            raster = aj.render_at(raster, START_OPPONENT[0] + i * (OFFSET_OPPONENT[0] + OPPONENT_SIZE[0]), START_OPPONENT[1] + 4 * (OFFSET_OPPONENT[1] + OPPONENT_SIZE[1]), frame_opponent_5)
-            raster = aj.render_at(raster, START_OPPONENT[0] + i * (OFFSET_OPPONENT[0] + OPPONENT_SIZE[0]), START_OPPONENT[1] + 5 * (OFFSET_OPPONENT[1] + OPPONENT_SIZE[1]), frame_opponent_6)
+            x_cord = START_OPPONENT[0] + i * (OFFSET_OPPONENT[0] + OPPONENT_SIZE[0])
+
+            raster = aj.render_at(raster, x_cord, START_OPPONENT[1], frame_opponent_1)
+            raster = aj.render_at(raster, x_cord, START_OPPONENT[1] + (OFFSET_OPPONENT[1] + OPPONENT_SIZE[1]), frame_opponent_2)
+            raster = aj.render_at(raster, x_cord, START_OPPONENT[1] + 2 * (OFFSET_OPPONENT[1] + OPPONENT_SIZE[1]), frame_opponent_3)
+            raster = aj.render_at(raster, x_cord, START_OPPONENT[1] + 3 * (OFFSET_OPPONENT[1] + OPPONENT_SIZE[1]), frame_opponent_4)
+            raster = aj.render_at(raster, x_cord, START_OPPONENT[1] + 4 * (OFFSET_OPPONENT[1] + OPPONENT_SIZE[1]), frame_opponent_5)
+            raster = aj.render_at(raster, x_cord, START_OPPONENT[1] + 5 * (OFFSET_OPPONENT[1] + OPPONENT_SIZE[1]), frame_opponent_6)
 
             return raster
         
