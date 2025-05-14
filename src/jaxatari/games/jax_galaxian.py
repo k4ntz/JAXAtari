@@ -1,3 +1,4 @@
+import os
 from typing import NamedTuple, Tuple
 import jax.numpy as jnp
 import chex
@@ -6,6 +7,10 @@ from functools import partial
 from jax import lax
 import jax.lax
 from gymnax.environments import spaces
+
+from jaxatari.games.jax_seaquest import SPRITE_BG
+from jaxatari.renderers import AtraJaxisRenderer
+from jaxatari.rendering import atraJaxis as aj
 
 from src.jaxatari.environment import JaxEnvironment
 
@@ -18,17 +23,24 @@ LEFT = 3
 
 # -------- Game constants --------
 SHOOTING_COOLDOWN = 80
-ENEMY_MOVE_SPEED = 2
-BULLET_MOVE_SPEED = 5
+ENEMY_MOVE_SPEED = 0.5
+BULLET_MOVE_SPEED = 2
 SCREEN_HEIGHT = 600
 SCREEN_WIDTH = 800
 GRID_ROWS = 6
 GRID_COLS = 7
-ENEMY_SPACING_X = 20
-ENEMY_SPACING_Y = 20
-ENEMY_GRID_Y = 300
-START_X = 100
-ENEMY_ATTACK_SPEED = 5
+NATIVE_GAME_WIDTH = 224
+NATIVE_GAME_HEIGHT = 288
+PYGAME_SCALE_FACTOR = 3
+PYGAME_WINDOW_WIDTH = NATIVE_GAME_WIDTH * PYGAME_SCALE_FACTOR
+PYGAME_WINDOW_HEIGHT = NATIVE_GAME_HEIGHT * PYGAME_SCALE_FACTOR
+ENEMY_SPACING_X = 7
+ENEMY_SPACING_Y = 7
+ENEMY_GRID_Y = 40
+START_X = NATIVE_GAME_WIDTH // 4
+START_Y = NATIVE_GAME_HEIGHT - 20
+ENEMY_ATTACK_SPEED = 1
+
 
 class GalaxianState(NamedTuple):
     player_x: chex.Array
@@ -282,7 +294,7 @@ def handle_shooting(state: GalaxianState, action: Action) -> GalaxianState:
     def shoot(_):
         return state._replace(
             bullet_x=jnp.array(state.player_x, dtype=state.bullet_x.dtype),
-            bullet_y=jnp.array(state.player_y),
+            bullet_y=jnp.array(state.player_y, dtype=state.bullet_y.dtype),
             player_shooting_cooldown=jnp.array(SHOOTING_COOLDOWN)
         )
 
@@ -314,8 +326,8 @@ def update_bullets(state: GalaxianState) -> GalaxianState:
 @jax.jit
 def remove_bullets(state: GalaxianState) -> GalaxianState:
     def reset_bullet(_):
-        new_bullet_y = jnp.array(-1)
-        new_bullet_x = jnp.array(-1)
+        new_bullet_y = jnp.array(-1,dtype=jnp.float32)
+        new_bullet_x = jnp.array(-1,dtype=jnp.float32)
         return state._replace(bullet_y=new_bullet_y, bullet_x=new_bullet_x)
 
     def idle(_):
@@ -465,19 +477,19 @@ class JaxGalaxian(JaxEnvironment[GalaxianState, GalaxianObservation, GalaxianInf
 
 
 
-        state = GalaxianState(player_x=jnp.array(SCREEN_WIDTH / 2),
-                             player_y=jnp.array(SCREEN_HEIGHT - 20),
+        state = GalaxianState(player_x=jnp.array(NATIVE_GAME_WIDTH / 2.0),
+                             player_y=jnp.array(NATIVE_GAME_HEIGHT - 20.0),
                              player_shooting_cooldown=jnp.array(0),
-                             bullet_x=jnp.array(-1),
-                             bullet_y=jnp.array(-1),
-                             enemy_grid_x=enemy_grid,
-                             enemy_grid_y=enemy_grid_y,
+                             bullet_x=jnp.array(-1.0,dtype=jnp.float32),
+                             bullet_y=jnp.array(-1.0,dtype=jnp.float32),
+                             enemy_grid_x=enemy_grid.astype(jnp.float32),
+                             enemy_grid_y=enemy_grid_y.astype(jnp.float32),
                              enemy_grid_alive=enemy_alive,
                              enemy_grid_direction=jnp.array(1),
                              enemy_attack_state=jnp.array(0),
                              enemy_attack_pos=jnp.array((-1, -1)),
-                             enemy_attack_x=jnp.array(-1),
-                             enemy_attack_y=jnp.array(-1),
+                             enemy_attack_x=jnp.array(-1.0, dtype=jnp.float32),
+                             enemy_attack_y=jnp.array(-1.0, dtype=jnp.float32),
                              enemy_attack_respawn_timer=jnp.array(20),
                              random_key=jax.random.PRNGKey(0),
                              step_counter=jnp.array(0),
@@ -525,35 +537,43 @@ class JaxGalaxian(JaxEnvironment[GalaxianState, GalaxianObservation, GalaxianInf
 
     @partial(jax.jit, static_argnums=(0,))
     def step(
-            self, state: GalaxianState, action: chex.Array
+            self, state: GalaxianState, action_int: chex.Array  # Renamed for clarity
     ) -> Tuple[GalaxianState, GalaxianObservation, float, bool, GalaxianInfo]:
-        #TODO: refactor like the other games
-        # create new state instead of replacing old state step by step
-        new_state = update_player_position(state, action)
-        new_state = handle_shooting(new_state, action)
+
+        # Convert integer action to Action NamedTuple
+        move_dir = jnp.where(action_int == LEFT, -1, jnp.where(action_int == RIGHT, 1, 0))
+        shooting = jnp.where(action_int == FIRE, 1, 0)
+        current_action = Action(player_move_dir=jnp.array(move_dir), player_shooting=jnp.array(shooting))
+
+        new_state = update_player_position(state, current_action)  # Use current_action
+        new_state = handle_shooting(new_state, current_action)  # Use current_action
+        # ... rest of your step function
         new_state = update_enemy_positions(new_state)
         new_state = update_bullets(new_state)
         new_state = remove_bullets(new_state)
         new_state = bullet_collision(new_state)
         new_state = bullet_collision_attack(new_state)
-        new_state = update_enemy_attack(new_state)
+        new_state = update_enemy_attack(new_state)  # This was missing from your step
         new_state = new_state._replace(step_counter=new_state.step_counter + 1)
 
         done = self._get_done(new_state)
-        env_reward = self._get_env_reward(state, new_state)
-        all_rewards = self._get_all_reward(state, new_state)
+        env_reward = self._get_env_reward(state, new_state)  # previous_state is 'state' here
+        all_rewards = self._get_all_reward(state, new_state)  # previous_state is 'state' here
         info = self._get_info(new_state, all_rewards)
 
         observation = self._get_observation(new_state)
-        jax.debug.print("obs: {}", observation)
+        # jax.debug.print("obs: {}", observation) # Be careful with debug prints in jitted functions
 
         # stack the new observation, remove the oldest one
-        observation = jax.tree.map(lambda stack, obs: jnp.concatenate([stack[1:], jnp.expand_dims(obs, axis=0)], axis=0), new_state.obs_stack, observation)
-        new_state = new_state._replace(obs_stack=observation)
+        # Ensure initial_obs_stack is correctly initialized in reset
+        stacked_observation = jax.tree.map(
+            lambda stack, obs: jnp.concatenate([stack[1:], jnp.expand_dims(obs, axis=0)], axis=0),
+            new_state.obs_stack,
+            observation
+        )
+        new_state = new_state._replace(obs_stack=stacked_observation)
 
         return new_state, new_state.obs_stack, env_reward, done, info
-
-
     @partial(jax.jit, static_argnums=(0,))
     def _get_env_reward(self, previous_state: GalaxianState, state: GalaxianState):
         return 420 #TODO: implement reward function (after score is implemented)
@@ -577,29 +597,203 @@ class JaxGalaxian(JaxEnvironment[GalaxianState, GalaxianObservation, GalaxianInf
         return GalaxianInfo(time=state.step_counter, all_rewards=all_rewards)
 
 
- #run with: python -m jaxatari.games.jax_galaxian
+def load_sprites():
+    MODULE_DIR = os.path.dirname(os.path.abspath(__file__))
+
+    # load sprites
+    bg = aj.loadFrame(os.path.join(MODULE_DIR, "sprites/galaxian/background.npy"),transpose=True)
+    player = aj.loadFrame(os.path.join(MODULE_DIR, "sprites/galaxian/player.npy"),transpose=True)
+    bullet = aj.loadFrame(os.path.join(MODULE_DIR, "sprites/galaxian/bullet.npy"),transpose=True)
+    enemy_white = aj.loadFrame(os.path.join(MODULE_DIR, "sprites/galaxian/white_enemy_1.npy"),transpose=True)  # Assuming you have enemy.npy
+
+    SPRITE_BG = jnp.expand_dims(bg, axis = 0)
+    SPRITE_PLAYER = jnp.expand_dims(player, axis = 0)
+    SPRITE_BULLET = jnp.expand_dims(bullet, axis = 0)
+    SPRITE_ENEMY_WHITE = jnp.expand_dims(enemy_white, axis=0)
+
+    return(
+        SPRITE_BG,
+        SPRITE_PLAYER,
+        SPRITE_BULLET,
+        SPRITE_ENEMY_WHITE
+    )
+
+class GalaxianRenderer(AtraJaxisRenderer):
+    def __init__(self):
+        (
+        self.SPRITE_BG,
+        self.SPRITE_PLAYER,
+        self.SPRITE_BULLET,
+        self.SPRITE_ENEMY_WHITE
+        ) = load_sprites()
+
+    @partial(jax.jit, static_argnums=(0,))
+    def render(self, state: GalaxianState):  # Added type hint for clarity
+        raster = jnp.zeros((NATIVE_GAME_WIDTH, NATIVE_GAME_HEIGHT, 3))
+
+        # Render background
+        frame_bg = aj.get_sprite_frame(self.SPRITE_BG, 0)
+        raster = aj.render_at(raster, 0, 0, frame_bg)
+
+        # Render player spaceship
+        frame_player = aj.get_sprite_frame(self.SPRITE_PLAYER, 0)
+        # Ensure player_x and player_y are scalars or 0-dim arrays for render_at
+        raster = aj.render_at(raster, jnp.round(state.player_x).astype(jnp.int32),
+                              jnp.round(state.player_y).astype(jnp.int32), frame_player)
+
+        # Render bullet
+        # Ensure bullet_x and bullet_y are scalars or 0-dim arrays
+        # You might need to adjust sprite centering by subtracting half its width/height from pos
+        def render_bullet_fn(raster, state):
+            frame_bullet = aj.get_sprite_frame(self.SPRITE_BULLET, 0)
+            return aj.render_at(raster, jnp.round(state.bullet_x).astype(jnp.int32),
+                                jnp.round(state.bullet_y).astype(jnp.int32), frame_bullet)
+
+        def identity_fn(raster, state):
+            return raster
+
+        # Conditionally render bullet if it's active (e.g., bullet_y > 0)
+        raster = lax.cond(
+            state.bullet_y > 0,  # Condition for bullet being active
+            render_bullet_fn,
+            identity_fn,
+            raster,
+            state
+        )
+
+        # Render enemy grid (this is more complex due to the loop)
+        # For jitted rendering of multiple enemies, you'd typically use lax.scan or vmap if possible,
+        # or unroll the loop if the number of enemies is fixed and small.
+        # A simpler, but potentially less performant if not optimized by JAX, way is a loop:
+        # However, Python loops are not JIT-compatible in this way directly for changing raster.
+        # For full JAX compatibility, you'd need a more advanced approach.
+        # For now, let's demonstrate one enemy for simplicity or how you might structure it.
+
+        # --- Rendering attacking enemy ---
+        def render_attacking_enemy_fn(raster, state):
+            frame_enemy = aj.get_sprite_frame(self.SPRITE_ENEMY_WHITE, 0)  # Assuming you have an enemy sprite
+            return aj.render_at(raster, jnp.round(state.enemy_attack_x).astype(jnp.int32),
+                                jnp.round(state.enemy_attack_y).astype(jnp.int32), frame_enemy)
+
+        raster = lax.cond(
+            jnp.all(state.enemy_attack_pos >= 0),  # If an enemy is attacking
+            render_attacking_enemy_fn,
+            identity_fn,  # identity_fn needs to accept raster and state
+            raster,
+            state
+        )
+
+        # --- Rendering enemy grid (conceptual) ---
+        # This part is tricky to do efficiently and correctly in a JIT-compiled render function
+        # with a dynamic number of alive enemies.
+        # One approach for a fixed grid size:
+        # Create a mask of alive enemies.
+        # Get coordinates of all enemies.
+        # Use lax.fori_loop to iterate and render.
+
+        # A simplified version for demonstration (might be slow or not fully JIT-friendly without care):
+        # For rendering the grid, you would ideally use lax.fori_loop or lax.scan
+        # This is a complex part. For a start, you might focus on one or a few enemies.
+        # A full grid rendering with JAX requires careful construction.
+        # Example of rendering just the first enemy in the grid if alive:
+        def render_first_grid_enemy(params):
+            raster_in, state_in, i, j = params
+            frame_enemy = aj.get_sprite_frame(self.SPRITE_ENEMY_WHITE, 0)
+
+            # Example: render enemy at grid cell (i,j) if alive
+            def render_this_enemy(r):
+                return aj.render_at(r,
+                                    jnp.round(state_in.enemy_grid_x[i, j]).astype(jnp.int32),
+                                    jnp.round(state_in.enemy_grid_y[i, j]).astype(jnp.int32),
+                                    frame_enemy)
+
+            def do_nothing(r):
+                return r
+
+            return lax.cond(state_in.enemy_grid_alive[i, j] == 1,
+                            render_this_enemy(raster_in),
+                            do_nothing(raster_in))
+
+        # To iterate over the grid (this is illustrative and needs to be done carefully for JIT)
+        # for i in range(GRID_ROWS): # Python loops are problematic for JIT
+        #    for j in range(GRID_COLS):
+        #        raster = lax.cond(state.enemy_grid_alive[i,j] == 1,
+        #                          lambda r: aj.render_at(r, state.enemy_grid_x[i,j], state.enemy_grid_y[i,j], enemy_frame), # pseudo
+        #                          lambda r: r,
+        #                          raster)
+
+        # A more JAX-idiomatic way for the grid would involve `lax.fori_loop` for rows and columns
+        # or `vmap` if positions and sprites can be batched.
+
+        def row_loop_body(i, current_raster):
+            def col_loop_body(j, inner_raster):
+                frame_enemy = aj.get_sprite_frame(self.SPRITE_ENEMY_WHITE, 0)
+
+                def render_it(r):
+                    return aj.render_at(r,
+                                        jnp.round(state.enemy_grid_x[i, j]).astype(jnp.int32),
+                                        jnp.round(state.enemy_grid_y[i, j]).astype(jnp.int32),
+                                        frame_enemy)
+
+                def skip_it(r):
+                    return r
+
+                return lax.cond(state.enemy_grid_alive[i, j] == 1,
+                                render_it,
+                                skip_it,
+                                inner_raster)
+
+            return lax.fori_loop(0, GRID_COLS, col_loop_body, current_raster)
+
+        raster = lax.fori_loop(0, GRID_ROWS, row_loop_body, raster)
+
+        return raster
+
+
+# run with: python -m jaxatari.games.jax_galaxian
 if __name__ == "__main__":
     pygame.init()
 
-    game = JaxGalaxian(frameskip=1)
-    jitted_step = jax.jit(game.step)
-    jitted_reset = jax.jit(game.reset)
-    state, initial_observation = jitted_reset()  # Unpack the tuple
+    game = JaxGalaxian(frameskip=1) # frameskip=0 if you handle it manually
 
-    screen = pygame.display.set_mode((SCREEN_WIDTH, SCREEN_HEIGHT))
+    screen = pygame.display.set_mode((PYGAME_WINDOW_WIDTH, PYGAME_WINDOW_HEIGHT))
     pygame.display.set_caption("Galaxian")
     clock = pygame.time.Clock()
 
+    renderer = GalaxianRenderer()
+
+    # Get jitted functions (reset doesn't need to be jitted if only called once)
+    # state, initial_observation = game.reset() # Call reset directly
+    state, initial_observation = jax.jit(game.reset)() # If you want to jit it
+
+    jitted_step = game.step # Already jitted using partial in class
+
     running = True
     while running:
+        action_int = NOOP # Default action
         for event in pygame.event.get():
             if event.type == pygame.QUIT:
                 running = False
-        screen.fill((0, 0, 0))
-        draw(screen, state)
-        pygame.display.flip()
-        action = get_action_from_keyboard()
-        state, observation, reward, done, info = jitted_step(state, action)  # Unpack the tuple
+
+        # Get integer action from keyboard for the main loop
+        keys = pygame.key.get_pressed()
+        if keys[pygame.K_a] or keys[pygame.K_LEFT]:
+            action_int = LEFT
+        elif keys[pygame.K_d] or keys[pygame.K_RIGHT]:
+            action_int = RIGHT
+        if keys[pygame.K_SPACE]: # Could be FIRE, or if moving LEFTFIRE/RIGHTFIRE
+            action_int = FIRE # Simplification: FIRE overrides movement for this key check
+                               # Or handle combined actions if your env supports them
+
+        # Pass the integer action
+        state, obs_stack, reward, done, info = jitted_step(state, jnp.array(action_int))
+
+        # The renderer expects state, not obs_stack for rendering game entities.
+        # obs_stack is for the agent.
+        render_output = renderer.render(state)
+        aj.update_pygame(screen, render_output, PYGAME_SCALE_FACTOR, NATIVE_GAME_WIDTH, NATIVE_GAME_HEIGHT) # Assuming scale factor 1
+
+        pygame.display.flip() # Make sure to flip the display
         clock.tick(30)
 
     pygame.quit()
