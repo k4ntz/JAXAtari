@@ -56,6 +56,8 @@ WINDOW_HEIGHT = 210 * 3
 MIN_BOUND = (0,0)
 MAX_BOUND = (WINDOW_WIDTH, WINDOW_HEIGHT)
 
+X_BORDERS = (0, 160)
+
 WINDOW_WIDTH = 160 * 3
 WINDOW_HEIGHT = 210 * 3
 
@@ -166,7 +168,7 @@ class WordZapperState(NamedTuple):
     #     chex.Array
     # ) # (26,1) y coorinate does not change and deined in LETTERS_Y
 
-    player_missile_position: chex.Array  # shape: (3,) -> [x, y, direction]
+    player_missile_position: chex.Array  # shape: (1,3) -> [x, y, direction]
 
     # current_word: chex.Array # the actual word
     # current_letter_index: chex.Array
@@ -224,11 +226,15 @@ def load_sprites():
     pl_sub2 = aj.loadFrame(os.path.join(MODULE_DIR, "sprites/seaquest/player_sub/2.npy"))
     pl_sub3 = aj.loadFrame(os.path.join(MODULE_DIR, "sprites/seaquest/player_sub/3.npy"))
 
+    pl_torp = aj.loadFrame(os.path.join(MODULE_DIR, "sprites/seaquest/player_torp/1.npy"))
+
     # Pad player submarine sprites to match each other
     pl_sub_sprites = aj.pad_to_match([pl_sub1, pl_sub2, pl_sub3])
-
+    # Pad player torpedo sprites to match each other
+    pl_torp_sprites = [pl_torp]
 
     SPRITE_BG = jnp.expand_dims(bg1, axis=0)
+    SPRITE_PL_TORP = jnp.repeat(pl_torp_sprites[0][None], 1, axis=0)
 
     # Player submarine sprites
     SPRITE_PL_SUB = jnp.concatenate(
@@ -241,14 +247,16 @@ def load_sprites():
 
     return (
         SPRITE_BG,
-        SPRITE_PL_SUB
+        SPRITE_PL_SUB,
+        SPRITE_PL_TORP
     )
 
 
 # Load sprites once at module level
 (
     SPRITE_BG,
-    SPRITE_PL_SUB
+    SPRITE_PL_SUB,
+    SPRITE_PL_TORP
 ) = load_sprites()
 
 
@@ -349,71 +357,59 @@ def scrolling_letters(letters_x, letters_speed, letters_alive):
 
 @jax.jit
 def player_missile_step(
-    missile_pos: chex.Array,
-    player_x: chex.Array,
-    player_y: chex.Array,
-    action: chex.Array,
-    cooldown_timer: chex.Array
-) -> Tuple[chex.Array, chex.Array]:
-    """
-    Handle firing logic and missile movement for Word Zapper.
-
-    missile_pos: [x, y, dx, dy] or [0, 0, 0, 0] if inactive
-    Returns: new missile position, new cooldown timer
-    """
-    # Define direction for each firing action
-    DIRECTION_MAP = {
-        Action.FIRE: (0, -1),
-        Action.UPFIRE: (0, -1),
-        Action.LEFTFIRE: (-1, 0),
-        Action.RIGHTFIRE: (1, 0),
-        Action.UPLEFTFIRE: (-1, -1),
-        Action.UPRIGHTFIRE: (1, -1),
-        Action.DOWNLEFTFIRE: (-1, 1),
-        Action.DOWNRIGHTFIRE: (1, 1),
-        Action.DOWNFIRE: (0, 1),
-    }
-
-    fire = jnp.any(jnp.array([action in DIRECTION_MAP and cooldown_timer == 0]))
-
-    def fire_missile():
-        dx, dy = DIRECTION_MAP[action]
-        new_pos = jnp.array([player_x + 2, player_y + 2, dx, dy], dtype=jnp.int32)
-        return new_pos
-
-    # If no active missile, allow firing
-    is_active = missile_pos[2] != 0 or missile_pos[3] != 0
-    can_fire = jnp.logical_and(~is_active, fire)
-
-    # Either fire or update missile
-    new_missile = jax.lax.cond(
-        can_fire,
-        fire_missile,
-        lambda: jnp.where(
-            is_active,
-            jnp.array([
-                missile_pos[0] + missile_pos[2] * 4,
-                missile_pos[1] + missile_pos[3] * 4,
-                missile_pos[2],
-                missile_pos[3],
-            ]),
-            missile_pos
+    state: WordZapperState, curr_player_x, curr_player_y, action: chex.Array
+) -> chex.Array:
+    # check if the player shot this frame
+    fire = jnp.any(
+        jnp.array(
+            [
+                action == Action.FIRE,
+                action == Action.UPRIGHTFIRE,
+                action == Action.UPLEFTFIRE,
+                action == Action.DOWNFIRE,
+                action == Action.DOWNRIGHTFIRE,
+                action == Action.DOWNLEFTFIRE,
+                action == Action.RIGHTFIRE,
+                action == Action.LEFTFIRE,
+                action == Action.UPFIRE,
+            ]
         )
     )
 
-    # Check if missile out of bounds
-    out_of_bounds = jnp.logical_or(
-        jnp.logical_or(new_missile[0] < 0, new_missile[0] > WIDTH),
-        jnp.logical_or(new_missile[1] < 0, new_missile[1] > HEIGHT)
+    # IMPORTANT: do not change the order of this check, since the missile does not move in its first frame!!
+    # also check if there is currently a missile in frame by checking if the player_missile_position is empty
+    missile_exists = state.player_missile_position[2] != 0
+
+    # if the player shot and there is no missile in frame, then we can shoot a missile
+    # the missile y is the current player y position + 7
+    # the missile x is either player x + 3 if facing left or player x + 13 if facing right
+    new_missile = jnp.where(
+        jnp.logical_and(fire, jnp.logical_not(missile_exists)),
+        jnp.where(
+            state.player_direction == -1,
+            jnp.array([curr_player_x + 3, curr_player_y + 7, -1]),
+            jnp.array([curr_player_x + 13, curr_player_y + 7, 1]),
+        ),
+        state.player_missile_position,
     )
 
-    final_missile = jnp.where(out_of_bounds, jnp.array([0, 0, 0, 0]), new_missile)
+    # if a missile is in frame and exists, we move the missile further in the specified direction (5 per tick), also always put the missile at the current player y position
+    new_missile = jnp.where(
+        missile_exists,
+        jnp.array(
+            [new_missile[0] + new_missile[2] * 5, curr_player_y + 7, new_missile[2]]
+        ),
+        new_missile,
+    )
 
-    # Update cooldown
-    new_cooldown = jnp.where(fire, 6, jnp.maximum(cooldown_timer - 1, 0))
+    # check if the new positions are still in bounds
+    new_missile = jnp.where(
+        new_missile[0] < X_BORDERS[0],
+        jnp.array([0, 0, 0]),
+        jnp.where(new_missile[0] > X_BORDERS[1], jnp.array([0, 0, 0]), new_missile),
+    )
 
-    return final_missile, new_cooldown
-
+    return new_missile
 
 class JaxWordZapper(JaxEnvironment[WordZapperState, WordZapperObservation, WordZapperInfo]) :
     def __init__(self, reward_funcs: list[callable] =None):
@@ -556,8 +552,9 @@ class JaxWordZapper(JaxEnvironment[WordZapperState, WordZapperObservation, WordZ
                 action,
             )
 
-            # Step letters
-            #new_letters_x = scrolling_letters(state.letters_x, state.letters_speed, state.letters_alive)
+            player_missile_position = player_missile_step(
+                state, new_player_x, new_player_y, action
+            )
 
             new_step_counter = jnp.where(
                 state.step_counter == 1024,
@@ -569,7 +566,7 @@ class JaxWordZapper(JaxEnvironment[WordZapperState, WordZapperObservation, WordZ
                 player_x=new_player_x,
                 player_y=new_player_y,
                 player_direction=new_palyer_direction,
-                #letters_x=new_letters_x,
+                player_missile_position=player_missile_position,
                 step_counter=new_step_counter,
             )
             return new_state
@@ -602,6 +599,25 @@ class WordZapperRenderer(AtraJaxisRenderer):
             frame_pl_sub,
             flip_horizontal=state.player_direction == FACE_LEFT,
         )
+
+        # render player torpedo
+        frame_pl_torp = aj.get_sprite_frame(SPRITE_PL_TORP, state.step_counter)
+
+        should_render = state.player_missile_position[0] > 0
+        
+        raster = jax.lax.cond(
+            should_render,
+            lambda r: aj.render_at(
+                r,
+                state.player_missile_position[0],
+                state.player_missile_position[1],
+                frame_pl_torp,
+                flip_horizontal=state.player_missile_position[2] == FACE_LEFT,
+            ),
+            lambda r: r,
+            raster,
+        )
+
     
         return raster
 
