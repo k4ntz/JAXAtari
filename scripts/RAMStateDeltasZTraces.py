@@ -146,6 +146,12 @@ class Renderer:
                     )  # Convert to Python int
                     if selected_cell in self.recorded_ram_states:
                         self.recorded_ram_states[selected_cell].append(current_value)
+                        if 15 not in self.recorded_ram_states or not isinstance(self.recorded_ram_states[15], list):
+                            self.recorded_ram_states[15] = []
+                        if 16 not in self.recorded_ram_states or not isinstance(self.recorded_ram_states[16], list):
+                            self.recorded_ram_states[16] = []
+                        self.recorded_ram_states[15].append(int(self.ram[15]))
+                        self.recorded_ram_states[16].append(int(self.ram[16]))
 
                 self._render()
                 self.next_frame = False
@@ -210,12 +216,17 @@ class Renderer:
                                     )
                                     # Prepare CSV output
                                     os.makedirs("saved_states", exist_ok=True)
-                                    csv_path = os.path.join("saved_states", f"cell_{cell_idx}{uuid.uuid4()}.csv")
+                                    csv_path = os.path.join("saved_states", f"cell_{cell_idx}{os.getpid()}.csv")
 
                                     with open(csv_path, "w", newline="") as csvfile:
                                         writer = csv.writer(csvfile)
-                                        for value in recorded_states:
-                                            writer.writerow([value])  # Each value in its own row
+                                        min_len = min(len(self.recorded_ram_states[16]), len(self.recorded_ram_states[17]), len(self.recorded_ram_states[15]))
+                                        y_trace = self.recorded_ram_states[15][(len(self.recorded_ram_states[15]) - min_len):]
+                                        x_trace = self.recorded_ram_states[16][(len(self.recorded_ram_states[16]) - min_len):]
+                                        z_trace = self.recorded_ram_states[17][(len(self.recorded_ram_states[17]) - min_len):]
+                                        assert len(y_trace) == len(x_trace) == len(z_trace)
+                                        for row in zip (x_trace, y_trace, z_trace):
+                                            writer.writerow(row)  # Each value in its own row
 
                                     print(f"Saved RAM state values to {csv_path}")
                                     print(
