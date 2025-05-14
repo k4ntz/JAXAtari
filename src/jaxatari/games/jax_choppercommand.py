@@ -169,7 +169,7 @@ def load_sprites():
     # bg_sprites = aj.pad_to_match(bg_array)
 
     # Pad player helicopter sprites to match each other
-    pl_heli_sprites = aj.pad_to_match([pl_chopper1, pl_chopper2])
+    pl_chopper_sprites = aj.pad_to_match([pl_chopper1, pl_chopper2])
 
     # Pad friendly truck sprites to match each other
     friendly_truck_sprites = aj.pad_to_match([friendly_truck1, friendly_truck2])
@@ -191,10 +191,10 @@ def load_sprites():
     # print(SPRITE_BG)
 
     # Player helicopter sprites
-    SPRITE_PL_HELI = jnp.concatenate(
+    SPRITE_PL_CHOPPER = jnp.concatenate(
         [
-            jnp.repeat(pl_heli_sprites[0][None], 4, axis=0),
-            jnp.repeat(pl_heli_sprites[1][None], 4, axis=0),
+            jnp.repeat(pl_chopper_sprites[0][None], 4, axis=0),
+            jnp.repeat(pl_chopper_sprites[1][None], 4, axis=0),
         ]
     )
 
@@ -228,7 +228,7 @@ def load_sprites():
 
     return (
         SPRITE_BG,
-        SPRITE_PL_HELI,
+        SPRITE_PL_CHOPPER,
         SPRITE_FRIENDLY_TRUCK,
         SPRITE_ENEMY_JET,
         SPRITE_ENEMY_CHOPPER,
@@ -241,7 +241,7 @@ def load_sprites():
 # Load sprites once at module level
 (
     SPRITE_BG,
-    SPRITE_PL_HELI,
+    SPRITE_PL_CHOPPER,
     SPRITE_FRIENDLY_TRUCK,
     SPRITE_ENEMY_JET,
     SPRITE_ENEMY_HELI,
@@ -562,6 +562,37 @@ def step_enemy_movement(
     return new_jet_positions, chopper_positions, final_rng
 
 @jax.jit
+def spawn_trucks(
+        truck_positions: chex.Array,
+        state_player_x: chex.Array,
+) -> chex.Array:
+
+    def cond_fn (truck_positions: chex.Array):
+        return jnp.sum(truck_positions[:, 2] == 0) >= 3
+
+    def spawn_truck_triple(
+            truck_positions: chex.Array,
+    ) -> chex.Array:
+        first_truck = jnp.min(truck_positions[:, 0])
+        last_truck = jnp.max(truck_positions[:, 0])
+
+        anchor = jnp.where(
+            jnp.abs(first_truck - state_player_x) < jnp.abs(last_truck - state_player_x),
+            first_truck - 248, # distance 240px + truck width
+            last_truck + 248,
+        )
+
+        empty_rows = jnp.where(truck_positions[:, 2] == 0)[0]
+
+        new_truck_positions = truck_positions.at[empty_rows[0]].set(jnp.array([anchor, 156, -1]))
+        new_truck_positions = new_truck_positions.at[empty_rows[1]].set(jnp.array([anchor + 32, 156, -1]))
+        new_truck_positions = new_truck_positions.at[empty_rows[2]].set(jnp.array([anchor + 64, 156, -1]))
+
+        return new_truck_positions
+
+    return jax.lax.while_loop(cond_fn, spawn_truck_triple, truck_positions)
+
+@jax.jit
 def step_truck_movement(
         truck_positions: chex.Array,
         jet_positions: chex.Array,
@@ -595,7 +626,7 @@ def step_truck_movement(
 
         new_x = truck_pos[0] + movement_x
 
-        out_of_bounds = jnp.logical_or(new_x < -2000000, new_x >= 176)
+        out_of_bounds = jnp.logical_or(new_x < -2**20, new_x >= 2**20)
 
         new_pos = jnp.where(
             jnp.logical_or(~is_active, out_of_bounds),
@@ -1059,7 +1090,7 @@ class JaxChopperCommand(JaxEnvironment[ChopperCommandState, ChopperCommandObserv
             score=jnp.array(0),
             lives=jnp.array(3),
             spawn_state=initialize_spawn_state(),
-            truck_positions=jnp.asarray([[110, 156, -1], [140, 156, -1], [170, 156, -1]]), # test for truck movement, to be replaced
+            truck_positions=jnp.asarray([[128, 156, -1], [160, 156, -1], [192, 156, -1]]), # test for truck movement, to be replaced
             jet_positions=jnp.zeros((MAX_JETS, 3)), # x, y, direction
             chopper_positions=jnp.zeros((MAX_CHOPPERS, 3)),
             enemy_missile_positions=jnp.zeros((MAX_MISSILES, 3)),
@@ -1234,17 +1265,18 @@ class Renderer_AtraJaxis(AtraJaxisRenderer):
         frame_idx = jnp.asarray(state.local_player_offset + (-state.player_x % WIDTH), dtype=jnp.int32) #local_player_offset = ob Heli links oder rechts auf Bildschirm ist, -state.player_x % WIDTH = Scrollen vom Hintergrund
         frame_bg = aj.get_sprite_frame(SPRITE_BG, frame_idx)
 
+        # Local position of player on screen
         chopper_position = (WIDTH // 2) - 8 + state.local_player_offset + (state.player_velocity_x * DISTANCE_WHEN_FLYING)  # (WIDTH // 2) - 8 = Heli mittig platzieren, state.local_player_offset = ob Heli links oder rechts auf Bildschirm, state.player_velocity_x * DISTANCE_WHEN_FLYING = Bewegen von Heli richtung Mitte wenn er fliegt
 
         raster = aj.render_at(raster, 0, 0, frame_bg)
 
         # Render Player
-        frame_pl_heli = aj.get_sprite_frame(SPRITE_PL_HELI, state.step_counter)
+        frame_pl_chopper = aj.get_sprite_frame(SPRITE_PL_CHOPPER, state.step_counter)
         raster = aj.render_at(
             raster,
             chopper_position,
             state.player_y,
-            frame_pl_heli,
+            frame_pl_chopper,
             flip_horizontal=state.player_facing_direction < 0,
         )
 
