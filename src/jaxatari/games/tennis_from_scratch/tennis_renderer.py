@@ -3,6 +3,8 @@ import jax
 import jax.numpy as jnp
 import jaxatari.rendering.atraJaxis as aj
 import os
+# Todo remove
+import csv, uuid
 
 from tennis_main import FRAME_WIDTH, FRAME_HEIGHT, GAME_OFFSET_LEFT_BOTTOM, GAME_OFFSET_TOP, GAME_HEIGHT, GAME_WIDTH, TennisState, PLAYER_WIDTH, PLAYER_HEIGHT
 
@@ -72,6 +74,14 @@ class TennisRenderer:
         frame_ball = aj.get_sprite_frame(self.BALL, 0)
         # apply flat y offset depending on z value
         raster = aj.render_at(raster, state.ball_state.ball_x, state.ball_state.ball_y - state.ball_state.ball_z, frame_ball)
+
+        # Prepare CSV output
+        #os.makedirs("saved_traces", exist_ok=True)
+        #csv_path = os.path.join("saved_traces", f"{os.getpid()}.csv")
+
+        #with open(csv_path, "a", newline="") as csvfile:
+        #    writer = csv.writer(csvfile)
+        #    writer.writerow([state.ball_state.ball_x, state.ball_state.ball_y, state.ball_state.ball_z])
 
         print("x ball: {:0.2f}., y ball: {:0.2f}, z ball: {:0.2f}, vel: {:0.2f}".format(state.ball_state.ball_x, state.ball_state.ball_y, state.ball_state.ball_z, state.ball_state.ball_velocity_z_fp))
 
