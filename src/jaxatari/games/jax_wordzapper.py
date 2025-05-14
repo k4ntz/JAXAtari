@@ -319,11 +319,11 @@ def player_step(
     )
 
     player_x = jnp.where(
-        right, state.player_x + 5, jnp.where(left, state.player_x - 5, state.player_x)
+        right, state.player_x + 2, jnp.where(left, state.player_x - 2, state.player_x)
     )
 
     player_y = jnp.where(
-        down, state.player_y + 5, jnp.where(up, state.player_y - 5, state.player_y)
+        down, state.player_y + 2, jnp.where(up, state.player_y - 2, state.player_y)
     )
 
     # set the direction according to the movement
