@@ -82,8 +82,8 @@ class TennisState(NamedTuple):
         jnp.array(PLAYER_START_FIELD)
     )
     enemy_state: EnemyState = EnemyState( # all enemy-related data
-        jnp.array(0),
-        jnp.array(0)
+        jnp.array(0.0),
+        jnp.array(150.0)
     )
     ball_state: BallState = BallState( # all ball-related data
         jnp.array(GAME_WIDTH / 2.0 - 2.5),
@@ -114,8 +114,9 @@ def tennis_step(state: TennisState, action) -> TennisState:
 
     new_ball_state = ball_step(state, action)
     new_player_state = player_step(state, action)
+    new_enemy_state = enemy_step(state)
 
-    return TennisState(state.is_serving, new_player_state, state.enemy_state, new_ball_state, state.counter + 1)
+    return TennisState(state.is_serving, new_player_state, new_enemy_state, new_ball_state, state.counter + 1)
 
 # todo needs docs
 def player_step(state: TennisState, action: chex.Array) -> PlayerState:
@@ -205,6 +206,24 @@ def update_player_pos(state: PlayerState, action: chex.Array) -> PlayerState:
         state.player_field
     )
 
+def enemy_step(state: TennisState) -> EnemyState:
+    new_enemy_x = jnp.where(
+        state.enemy_state.enemy_x < state.ball_state.ball_x,
+        state.enemy_state.enemy_x + 1,
+        state.enemy_state.enemy_x
+    )
+
+    new_enemy_x = jnp.where(
+        state.enemy_state.enemy_x > state.ball_state.ball_x,
+        state.enemy_state.enemy_x - 1,
+        new_enemy_x
+    )
+
+    return EnemyState(
+        new_enemy_x,
+        state.enemy_state.enemy_y
+    )
+
 def ball_step(state: TennisState, action) -> BallState:
     """
     Updates ball position by applying velocity and gravity. Also handles player-ball collisions
@@ -241,9 +260,9 @@ def ball_step(state: TennisState, action) -> BallState:
     # calculate actual z value using floor division by 10, because fixed-point value has exactly one point
     new_ball_z = new_ball_z_fp // 10
 
-    # apply lower bounding box
-    new_ball_z = jnp.clip(new_ball_z, 0, new_ball_z)
-    new_ball_z_fp = jnp.clip(new_ball_z_fp, 0, new_ball_z_fp)
+    # apply lower bounding box (500 is effectively no MAX bound)d
+    new_ball_z = jnp.clip(new_ball_z, 0, 500)
+    new_ball_z_fp = jnp.clip(new_ball_z_fp, 0, 500)
 
     # ball movement in x/y direction is linear, no velocity involved
     new_ball_x = jnp.where(
