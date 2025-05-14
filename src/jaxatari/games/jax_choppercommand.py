@@ -50,7 +50,7 @@ X_BORDERS = (0, 160)
 PLAYER_BOUNDS = (0, 160), (45, 150)
 
 # Maximum number of objects
-MAX_TRUCKS = 3
+MAX_TRUCKS = 16
 MAX_JETS = 6
 MAX_CHOPPERS = 6
 MAX_MISSILES = 4
@@ -188,7 +188,6 @@ def load_sprites():
 
     # Background sprite (no padding needed)
     SPRITE_BG = jnp.concatenate(bg_sprites, axis=0) # jnp.expand_dims(bg1, axis=0)
-    # print(SPRITE_BG)
 
     # Player helicopter sprites
     SPRITE_PL_CHOPPER = jnp.concatenate(
@@ -566,6 +565,7 @@ def spawn_trucks(
         truck_positions: chex.Array,
         state_player_x: chex.Array,
 ) -> chex.Array:
+    # TODO: might not spawn trucks if player is too far away
 
     def cond_fn (truck_positions: chex.Array):
         return jnp.sum(truck_positions[:, 2] == 0) >= 3
@@ -582,7 +582,7 @@ def spawn_trucks(
             last_truck + 248,
         )
 
-        empty_rows = jnp.where(truck_positions[:, 2] == 0)[0]
+        empty_rows = jnp.nonzero(truck_positions[:, 2] == 0, size=3)[0]
 
         new_truck_positions = truck_positions.at[empty_rows[0]].set(jnp.array([anchor, 156, -1]))
         new_truck_positions = new_truck_positions.at[empty_rows[1]].set(jnp.array([anchor + 32, 156, -1]))
@@ -590,18 +590,18 @@ def spawn_trucks(
 
         return new_truck_positions
 
+    # jax.debug.print("truck positions: {x}, player position: {y}", x=truck_positions[:, 2], y=state_player_x)
+
     return jax.lax.while_loop(cond_fn, spawn_truck_triple, truck_positions)
 
 @jax.jit
 def step_truck_movement(
         truck_positions: chex.Array,
-        jet_positions: chex.Array,
-        chopper_positions: chex.Array,
+        # jet_positions: chex.Array, maybe add later again
+        # chopper_positions: chex.Array,
         state_player_x: chex.Array,
         state_player_y: chex.Array,
-        step_counter: chex.Array,
-        rng: chex.PRNGKey,
-) -> Tuple[chex.Array, chex.PRNGKey]:
+) -> chex.Array:
 
     def move_single_truck(i, positions):
         truck_pos = positions[i]
@@ -626,7 +626,7 @@ def step_truck_movement(
 
         new_x = truck_pos[0] + movement_x
 
-        out_of_bounds = jnp.logical_or(new_x < -2**20, new_x >= 2**20)
+        out_of_bounds = jnp.abs(truck_pos[0] - state_player_x) > 1024 # jnp.logical_or(new_x < -2**20, new_x >= 2**20)
 
         new_pos = jnp.where(
             jnp.logical_or(~is_active, out_of_bounds),
@@ -642,7 +642,7 @@ def step_truck_movement(
         0, truck_positions.shape[0], move_single_truck, truck_positions
     )
 
-    return final_positions, rng
+    return final_positions
 
 @jax.jit
 def spawn_step(
@@ -662,10 +662,8 @@ def spawn_step(
     )
 
     # Spawn new trucks
-    new_truck_positions, new_spawn_state = (
-        truck_positions,
-        spawn_state,
-    )
+    new_truck_positions = spawn_trucks(truck_positions, state.player_x)
+    # jax.debug.print("{x}", x=new_truck_positions[:, 0])
 
     return (
         new_spawn_state,
@@ -1090,7 +1088,7 @@ class JaxChopperCommand(JaxEnvironment[ChopperCommandState, ChopperCommandObserv
             score=jnp.array(0),
             lives=jnp.array(3),
             spawn_state=initialize_spawn_state(),
-            truck_positions=jnp.asarray([[128, 156, -1], [160, 156, -1], [192, 156, -1]]), # test for truck movement, to be replaced
+            truck_positions=jnp.zeros((MAX_TRUCKS, 3)),     # asarray([[128, 156, -1], [160, 156, -1], [192, 156, -1]]), # test for truck movement, to be replaced
             jet_positions=jnp.zeros((MAX_JETS, 3)), # x, y, direction
             chopper_positions=jnp.zeros((MAX_CHOPPERS, 3)),
             enemy_missile_positions=jnp.zeros((MAX_MISSILES, 3)),
@@ -1124,6 +1122,16 @@ class JaxChopperCommand(JaxEnvironment[ChopperCommandState, ChopperCommandObserv
         # Normal game logic starts here
         def normal_game_step():
             # TODO: Update truck positions
+            # Update player position
+            (
+                new_player_x,
+                new_player_y,
+                new_player_velocity_x,
+                new_local_player_offset,
+                new_player_facing_direction
+            ) = player_step(
+                state, action
+            )
 
             # Update jet and chopper positions
             new_jet_positions, new_chopper_positions, new_rng_key = step_enemy_movement(
@@ -1143,7 +1151,7 @@ class JaxChopperCommand(JaxEnvironment[ChopperCommandState, ChopperCommandObserv
             # Check missile collisions
             (
                 new_player_missile_position,
-                new_enemy_positions,
+                new_jet_positions,
                 new_score,
                 new_rng_key,
             ) = check_missile_collisions(
@@ -1168,34 +1176,22 @@ class JaxChopperCommand(JaxEnvironment[ChopperCommandState, ChopperCommandObserv
                 new_rng_key,
             )
 
-            new_truck_positions, new_rng_key = (
+            new_truck_positions = (
                 step_truck_movement(
-                    state.truck_positions,
-                    state.jet_positions,
-                    state.chopper_positions,
+                    new_truck_positions,
+                    # state.jet_positions, maybe add again later
+                    # state.chopper_positions,
                     state.player_x,
                     state.player_y,
-                    state.step_counter,
-                    state.rng_key,
                 )
             )
-
-            # Update player position
-            (
-                new_player_x,
-                new_player_y,
-                new_player_velocity_x,
-                new_local_player_offset,
-                new_player_facing_direction
-            ) = player_step(
-                state, action
-            )
+            jax.debug.print("{x}", x=new_truck_positions[:, 0])
 
             # Check player collision
             player_collision, collision_points = check_player_collision(
                 new_player_x,
                 new_player_y,
-                new_enemy_positions,
+                new_jet_positions,
                 new_enemy_missile_positions,
                 new_score,
             )
@@ -1222,7 +1218,7 @@ class JaxChopperCommand(JaxEnvironment[ChopperCommandState, ChopperCommandObserv
                 lives=new_lives,
                 spawn_state=new_spawn_state,
                 truck_positions=new_truck_positions, # TODO: process trucks
-                jet_positions=new_enemy_positions,
+                jet_positions=new_jet_positions,
                 chopper_positions=new_chopper_positions,
                 enemy_missile_positions=new_enemy_missile_positions,
                 player_missile_positions=new_player_missile_position,
@@ -1323,8 +1319,9 @@ class Renderer_AtraJaxis(AtraJaxisRenderer):
             '''
             truck_screen_x = state.truck_positions[i][0] - state.player_x + chopper_position
             truck_screen_y = state.truck_positions[i][1]
+            # jax.debug.print("truck pos: {x}", x=truck_screen_x)
 
-            jax.debug.print("{x}", x=state.truck_positions[i][0])
+            # jax.debug.print("{x}", x=state.truck_positions[:, 0])
 
             return jax.lax.cond(
                 should_render,
