@@ -6,7 +6,7 @@ import os
 # Todo remove
 import csv, uuid
 
-from tennis_main import FRAME_WIDTH, FRAME_HEIGHT, GAME_OFFSET_LEFT_BOTTOM, GAME_OFFSET_TOP, GAME_HEIGHT, GAME_WIDTH, TennisState, PLAYER_WIDTH, PLAYER_HEIGHT, perspective_transform
+from tennis_main import FRAME_WIDTH, FRAME_HEIGHT, GAME_OFFSET_LEFT_BOTTOM, GAME_OFFSET_TOP, GAME_HEIGHT, GAME_WIDTH, TennisState, PLAYER_WIDTH, PLAYER_HEIGHT
 
 def load_sprites():
     MODULE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -51,6 +51,30 @@ def get_bounding_box(width, height, border_color=(255, 0, 0, 255), border_thickn
     )
 
     return sprite[jnp.newaxis, ...]
+
+
+def perspective_transform(x, y, apply_offsets = True, width_top = 79.0, width_bottom = 111.0, height = 130.0):
+    # Normalize y: 0 at top (far), 1 at bottom (near)
+    y_norm = y / height
+
+    # Interpolate width at this y level
+    current_width = width_top * (1 - y_norm) + width_bottom * y_norm
+
+    # Horizontal offset to center the perspective slice
+    offset = (width_bottom - current_width) / 2
+    #offset = 0
+
+    # Normalize x based on bottom width (field space)
+    x_norm = x / width_bottom
+
+    # Compute final x position
+    x_screen = offset + x_norm * current_width
+    y_screen = y  # No vertical scaling
+
+    if apply_offsets:
+        return x_screen + GAME_OFFSET_LEFT_BOTTOM, y_screen + GAME_OFFSET_TOP
+    return x_screen, y_screen
+
 
 class TennisRenderer:
 
@@ -156,3 +180,5 @@ class TennisRenderer:
         #raster = aj.render_at(raster, 0, 0, rectangle)
 
         return raster
+
+    # we always use coordinates including the lines
