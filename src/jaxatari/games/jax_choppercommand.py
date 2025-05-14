@@ -5,9 +5,6 @@ import jax
 import jax.numpy as jnp
 import chex
 import pygame
-from jax import Array
-from numpy.lib.format import descr_to_dtype
-
 import jaxatari.rendering.atraJaxis as aj
 import numpy as np
 from gymnax.environments import spaces
@@ -23,12 +20,15 @@ HEIGHT = 192
 SCALING_FACTOR = 3
 
 # Chopper Constants
-ACCEL = 0.05  # how fast the chopper accelerates
-FRICTION = 0.02  # how fast the chopper decelerates
-MAX_VELOCITY = 3.0  # maximum speed
-DISTANCE_WHEN_FLYING = 10 # How far the chopper moves towards the middle when flying for a longer amount of time
-PLAYER_MISSILE_WIDTH = 32
-MISSILE_COOLDOWN_FRAMES = 10  # How fast Chopper can shoot TODO: Das müssen wir ändern und höher machen bei dem schweren Schwierigkeitsgrad
+ACCEL = 0.05  # DEFAULT: 0.05 | how fast the chopper accelerates
+FRICTION = 0.02  # DEFAULT: 0.02 | how fast the chopper decelerates
+MAX_VELOCITY = 3.0  # DEFAULT: 3.0 | maximum speed
+DISTANCE_WHEN_FLYING = 10 # DEFAULT: 10 | How far the chopper moves towards the middle when flying for a longer amount of time
+
+# Player Missile Constants
+PLAYER_MISSILE_WIDTH = 80 # Sprite size_x
+MISSILE_COOLDOWN_FRAMES = 8  # DEFAULT: 8 | How fast Chopper can shoot  TODO: Das müssen wir ändern und höher machen bei dem schweren Schwierigkeitsgrad
+MISSILE_SPEED = 10 # DEFAULT: 10 | Missile speed #TODO: tweak MISSILE_SPEED and MISSILE_COOLDOWN_FRAMES to match real game (already almost perfect)
 
 # Colors
 BACKGROUND_COLOR = (0, 0, 139)  # Dark blue for sky
@@ -43,7 +43,7 @@ TRUCK_SIZE = (16, 16)  # TODO: insert real size
 ENEMY_SIZE = (16, 16)   # TODO: insert real size
 MISSILE_SIZE = (2, 8)
 
-PLAYER_START_X = 2**20
+PLAYER_START_X = 0
 PLAYER_START_Y = 100
 
 X_BORDERS = (0, 160)
@@ -53,7 +53,7 @@ PLAYER_BOUNDS = (0, 160), (45, 150)
 MAX_TRUCKS = 2
 MAX_JETS = 6
 MAX_CHOPPERS = 6
-MAX_MISSILES = 4
+MAX_MISSILES = 2
 
 # define object orientations
 FACE_LEFT = -1
@@ -161,7 +161,6 @@ class ChopperCommandInfo(NamedTuple):
 def load_sprites():
     MODULE_DIR = os.path.dirname(os.path.abspath(__file__))
     # Load sprites - no padding needed for background since it's already full size
-    bg1 = aj.loadFrame(os.path.join(MODULE_DIR, "sprites/choppercommand/bg/1.npy"))
     pl_chopper1 = aj.loadFrame(os.path.join(MODULE_DIR, "sprites/choppercommand/player_chopper/1.npy"))
     pl_chopper2 = aj.loadFrame(os.path.join(MODULE_DIR, "sprites/choppercommand/player_chopper/2.npy"))
     friendly_truck1 = aj.loadFrame(os.path.join(MODULE_DIR, "sprites/choppercommand/friendly_truck/1.npy"))
@@ -169,7 +168,6 @@ def load_sprites():
     enemy_jet = aj.loadFrame(os.path.join(MODULE_DIR, "sprites/choppercommand/enemy_jet/normal.npy"))
     enemy_chopper1 = aj.loadFrame(os.path.join(MODULE_DIR, "sprites/choppercommand/enemy_chopper/1.npy"))
     enemy_chopper2 = aj.loadFrame(os.path.join(MODULE_DIR, "sprites/choppercommand/enemy_chopper/2.npy"))
-    pl_missile = aj.loadFrame(os.path.join(MODULE_DIR, "sprites/choppercommand/player_chopper/missile.npy"))
     enemy_bomb = aj.loadFrame(os.path.join(MODULE_DIR, "sprites/choppercommand/bomb/1.npy"))
 
     bg_sprites = []
@@ -178,7 +176,12 @@ def load_sprites():
         bg_sprites.append(temp)
         bg_sprites[i - 1] = jnp.expand_dims(bg_sprites[i - 1], axis=0)
 
-    # bg_sprites = aj.pad_to_match(bg_array)
+    pl_missile_sprites_temp = []
+    for i in range(0, 15):
+        temp = aj.loadFrame(os.path.join(MODULE_DIR, f"sprites/choppercommand/player_missiles/missile_{i}.npy"))
+        pl_missile_sprites_temp.append(temp)
+        pl_missile_sprites_temp[i] = jnp.expand_dims(pl_missile_sprites_temp[i], axis=0)
+
 
     # Pad player helicopter sprites to match each other
     pl_heli_sprites = aj.pad_to_match([pl_chopper1, pl_chopper2])
@@ -193,14 +196,13 @@ def load_sprites():
     enemy_heli_sprites = aj.pad_to_match([enemy_chopper1, enemy_chopper2])
 
     # Pad player missile sprites to match each other
-    pl_missile_sprites = [pl_missile]
+    pl_missile_sprites = pl_missile_sprites_temp
 
     # Pad enemy missile sprites to match each other
     enemy_missile_sprites = [enemy_bomb]
 
     # Background sprite (no padding needed)
     SPRITE_BG = jnp.concatenate(bg_sprites, axis=0) # jnp.expand_dims(bg1, axis=0)
-    print(SPRITE_BG)
 
     # Player helicopter sprites
     SPRITE_PL_HELI = jnp.concatenate(
@@ -233,7 +235,7 @@ def load_sprites():
     LIFE_INDICATOR = aj.loadFrame(os.path.join(MODULE_DIR, "sprites/choppercommand/score/chopper.npy"))
 
     # Player missile sprites
-    SPRITE_PL_MISSILE = jnp.repeat(pl_missile_sprites[0][None], 1, axis=0)
+    SPRITE_PL_MISSILE = jnp.concatenate(pl_missile_sprites, axis=0)
 
     # Enemy missile sprites
     SPRITE_ENEMY_MISSILE = jnp.repeat(enemy_missile_sprites[0][None], 1, axis=0)
@@ -360,7 +362,7 @@ def check_missile_collisions(
             score_add = jnp.where(collision, 100, 0)
 
             # Missile deaktivieren bei Treffer
-            new_missile = jnp.where(collision, jnp.array([0, 0, 0], dtype=missile.dtype), missile)
+            new_missile = jnp.where(collision, jnp.array([0, 0, 0, 0], dtype=missile.dtype), missile) #Achtung array hat jetzt 4 Einträge pro missile
 
             # Apply updates
             updated_enemies = enemy_positions.at[enemy_idx].set(new_enemy_pos)
@@ -757,10 +759,6 @@ def enemy_missiles_step(
     return new_missile_positions
 
 
-MAX_MISSILES = 4
-MISSILE_SPEED = 6
-
-
 @jax.jit
 def player_missile_step(state: ChopperCommandState, curr_player_x, curr_player_y, action: chex.Array):
     fire = jnp.any(
@@ -778,15 +776,21 @@ def player_missile_step(state: ChopperCommandState, curr_player_x, curr_player_y
         def body(i, carry):
             missiles, did_spawn = carry
             missile = missiles[i]
-            free = missile[2] == 0
+            free = missile[2] == 0  # direction == 0 -> inactive
             should_spawn = jnp.logical_and(free, jnp.logical_not(did_spawn))
 
             spawn_x = jnp.where(
                 state.player_facing_direction < 0,
                 curr_player_x - PLAYER_MISSILE_WIDTH,
-                curr_player_x + (PLAYER_MISSILE_WIDTH // 2),
+                curr_player_x + PLAYER_SIZE[0],
             )
-            new_missile = jnp.array([spawn_x, missile_y, state.player_facing_direction], dtype=jnp.int32)
+
+            new_missile = jnp.array([
+                spawn_x, # x
+                missile_y, # y
+                state.player_facing_direction, # dir
+                spawn_x # x_spawn
+            ], dtype=jnp.int32)
 
             updated_missile = jnp.where(should_spawn, new_missile, missile)
             missiles = missiles.at[i].set(updated_missile)
@@ -804,14 +808,20 @@ def player_missile_step(state: ChopperCommandState, curr_player_x, curr_player_y
     def update_missile(missile):
         exists = missile[2] != 0
         new_x = missile[0] + missile[2] * MISSILE_SPEED + state.player_velocity_x
-        updated = jnp.array([new_x, missile[1], missile[2]])
+
+        updated = jnp.array([
+            new_x,        # updated x
+            missile[1],   # y stays
+            missile[2],   # direction stays
+            missile[3]    # x_spawn stays
+        ], dtype=jnp.int32)
 
         chopper_pos = (WIDTH // 2) - 8 + state.local_player_offset + (state.player_velocity_x * DISTANCE_WHEN_FLYING)
-        left_bound = state.player_x - chopper_pos
-        right_bound = state.player_x + (WIDTH - chopper_pos) - PLAYER_MISSILE_WIDTH
+        left_bound = state.player_x - chopper_pos - PLAYER_MISSILE_WIDTH
+        right_bound = state.player_x + (WIDTH - chopper_pos)
 
         out_of_bounds = jnp.logical_or(updated[0] < left_bound, updated[0] > right_bound)
-        return jnp.where(jnp.logical_and(exists, ~out_of_bounds), updated, jnp.array([0, 0, 0], dtype=jnp.int32))
+        return jnp.where(jnp.logical_and(exists, ~out_of_bounds), updated, jnp.array([0, 0, 0, 0], dtype=jnp.int32))
 
     updated_missiles = jax.vmap(update_missile)(state.player_missile_positions)
     updated_missiles, did_spawn = spawn_if_possible(updated_missiles)
@@ -1007,7 +1017,7 @@ class JaxChopperCommand(JaxEnvironment[ChopperCommandState, ChopperCommandObserv
             jet_positions=jnp.zeros((MAX_JETS, 3)), # x, y, direction
             chopper_positions=jnp.zeros((MAX_CHOPPERS, 3)),
             enemy_missile_positions=jnp.zeros((MAX_MISSILES, 3)),
-            player_missile_positions=jnp.zeros((MAX_MISSILES, 3)),
+            player_missile_positions=jnp.zeros((MAX_MISSILES, 4)), #for one missile: [x, y, dir, x_spawn]
             player_missile_cooldown=jnp.array(0),
             step_counter=jnp.array(0),
             rng_key=jax.random.PRNGKey(42),
@@ -1149,7 +1159,6 @@ class Renderer_AtraJaxis(AtraJaxisRenderer):
 
         #Initialisierung
         raster = jnp.zeros((WIDTH, HEIGHT, 3))
-        scroll_offset_x = jnp.mod(-state.player_x, 160) #TODO: Ich bin mir unsicher ob wir das noch brauchen, vielleicht kann mann alle anderen sprites auch so implementieren wie den Heli
 
         # Render Background
         frame_idx = jnp.asarray(state.local_player_offset + (-state.player_x % WIDTH), dtype=jnp.int32) #local_player_offset = ob Heli links oder rechts auf Bildschirm ist, -state.player_x % WIDTH = Scrollen vom Hintergrund
@@ -1169,15 +1178,24 @@ class Renderer_AtraJaxis(AtraJaxisRenderer):
             flip_horizontal=state.player_facing_direction < 0,
         )
 
-        # Render player missile, TODO: make it render outside initial borders (0, 160)
-        frame_pl_missile = aj.get_sprite_frame(SPRITE_PL_MISSILE, state.step_counter)
+        # Render player missiles
+
 
         def render_single_missile(i, raster):
             missile = state.player_missile_positions[i]  #Indexierung IN der Funktion
             missile_active = missile[2] != 0
 
+
             missile_screen_x = missile[0] - state.player_x + chopper_position
             missile_screen_y = missile[1]
+
+            def get_pl_missile_frame():
+                delta_curr_missile_spawn = jnp.abs(missile[0] - missile[4])
+                index = jnp.floor_divide(delta_curr_missile_spawn, 10)
+                return jnp.clip(index, 0, 15).astype(jnp.int32)
+
+            frame_pl_missile = aj.get_sprite_frame(SPRITE_PL_MISSILE, get_pl_missile_frame())
+
 
             return jax.lax.cond(
                 missile_active,
@@ -1192,6 +1210,7 @@ class Renderer_AtraJaxis(AtraJaxisRenderer):
                 raster,
             )
 
+        #Render all missiles (iterate over single missile function)
         raster = jax.lax.fori_loop(
             0,
             state.player_missile_positions.shape[0],
@@ -1248,7 +1267,7 @@ class Renderer_AtraJaxis(AtraJaxisRenderer):
                 should_render,
                 lambda r: aj.render_at(
                     r,
-                    state.enemy_missile_positions[i][0] - scroll_offset_x,
+                    state.enemy_missile_positions[i][0], # "- scroll_offset_x entfernt, implementierung sollte trotzdem simpel sein
                     state.enemy_missile_positions[i][1],
                     frame_enemy_missile,
                     flip_horizontal=(state.enemy_missile_positions[i][2] == -1),
