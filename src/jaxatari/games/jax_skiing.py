@@ -60,6 +60,7 @@ class GameState(NamedTuple):
     key: chex.Array
     jumping: chex.Array  # Is the skier currently jumping?
     jump_timer: chex.Array  # Frames left in current jump
+    collision_type: chex.Array  # 0 = keine, 1 = Baum, 2 = Stein, 3 = Flagge
 
 class EntityPosition(NamedTuple):
     x: jnp.ndarray
@@ -145,6 +146,7 @@ class JaxSkiing(JaxEnvironment[GameState, SkiingObservation, SkiingInfo]):
             key=key,
             jumping=jnp.array(False),
             jump_timer=jnp.array(0),
+            collision_type=jnp.array(0)
         )
         obs = self._get_observation(state)
 
@@ -385,6 +387,22 @@ class JaxSkiing(JaxEnvironment[GameState, SkiingObservation, SkiingInfo]):
             + jnp.sum(collisions_flag)
         )
 
+        # Bestimme, wodurch die erste Kollision verursacht wurde
+        collision_type = jax.lax.select(
+            jnp.sum(collisions_tree) > 0,
+            jnp.array(1),  # Baum
+            jax.lax.select(
+                jnp.sum(collisions_rocks) > 0,
+                jnp.array(2),  # Stein
+                jax.lax.select(
+                    jnp.sum(collisions_flag) > 0,
+                    jnp.array(3),  # Flagge
+                    jnp.array(0),  # Keine
+                ),
+            ),
+        )
+
+
         (
             new_x,
             skier_fell,
@@ -464,6 +482,7 @@ class JaxSkiing(JaxEnvironment[GameState, SkiingObservation, SkiingInfo]):
             key=new_key,
             jumping=jumping,
             jump_timer=jump_timer,
+            collision_type=collision_type
         )
 
         done = self._get_done(new_state)
@@ -909,56 +928,95 @@ class GameRenderer:
         pygame.quit()
 
 
+def show_game_over_popup(screen, scale_factor):
+    popup_width = 300
+    popup_height = 150
+    popup_surface = pygame.Surface((popup_width, popup_height))
+    popup_surface.fill((200, 200, 200))
+    pygame.draw.rect(popup_surface, (0, 0, 0), popup_surface.get_rect(), 2)
+
+    font = pygame.font.Font(None, 36)
+    restart_button = pygame.Rect(50, 90, 90, 40)
+    close_button = pygame.Rect(160, 90, 90, 40)
+
+    popup_surface.blit(font.render("Game Over!", True, (0, 0, 0)), (80, 20))
+    pygame.draw.rect(popup_surface, (100, 255, 100), restart_button)
+    pygame.draw.rect(popup_surface, (255, 100, 100), close_button)
+    popup_surface.blit(font.render("Restart", True, (0, 0, 0)), (55, 95))
+    popup_surface.blit(font.render("Close", True, (0, 0, 0)), (170, 95))
+
+    screen.blit(
+        popup_surface,
+        (
+            (screen.get_width() - popup_width) // 2,
+            (screen.get_height() - popup_height) // 2,
+        ),
+    )
+    pygame.display.flip()
+
+    while True:
+        for event in pygame.event.get():
+            if event.type == pygame.QUIT:
+                return "quit"
+            if event.type == pygame.MOUSEBUTTONDOWN:
+                mouse_pos = event.pos
+                abs_restart = restart_button.move(
+                    (screen.get_width() - popup_width) // 2,
+                    (screen.get_height() - popup_height) // 2,
+                )
+                abs_close = close_button.move(
+                    (screen.get_width() - popup_width) // 2,
+                    (screen.get_height() - popup_height) // 2,
+                )
+                if abs_restart.collidepoint(mouse_pos):
+                    return "restart"
+                elif abs_close.collidepoint(mouse_pos):
+                    return "quit"
+        pygame.time.wait(100)
+
+
 def main():
     # Create configurations
     game_config = GameConfig()
     render_config = RenderConfig()
 
-    # Initialize game and renderer
-    game = JaxSkiing()
-    _, state = game.reset()
-    renderer = GameRenderer(game_config, render_config)
+    while True:
+        # Initialize game and renderer
+        game = JaxSkiing()
+        _, state = game.reset()
+        renderer = GameRenderer(game_config, render_config)
 
-    # Setup game loop
-    clock = pygame.time.Clock()
-    running = True
+        clock = pygame.time.Clock()
+        running = True
+        while running and not state.game_over:
+            for event in pygame.event.get():
+                if event.type == pygame.QUIT:
+                    running = False
 
-    while running and not state.game_over:
-        # Handle events
-        for event in pygame.event.get():
-            if event.type == pygame.QUIT:
-                running = False
+            keys = pygame.key.get_pressed()
+            action = NOOP
+            if keys[pygame.K_SPACE]:
+                action = JUMP
+            elif keys[pygame.K_a]:
+                action = LEFT
+            elif keys[pygame.K_d]:
+                action = RIGHT
 
-        # Handle input
-        keys = pygame.key.get_pressed()
-        action = NOOP
-        
-        # Check for space bar first to prioritize jumping
-        if keys[pygame.K_SPACE]:
-            action = JUMP
-        elif keys[pygame.K_a]:
-            action = LEFT
-        elif keys[pygame.K_d]:
-            action = RIGHT
+            obs, state, reward, done, info = game.step(state, action)
+            renderer.render(state)
 
-        # Update game state
-        obs, state, reward, done, info = game.step(state, action)
+            if state.skier_fell > 0 and state.collision_type in (1, 2):  # Nur Baum oder Stein
+                # Trigger popup on collision
+                result = show_game_over_popup(renderer.screen, render_config.scale_factor)
+                if result == "restart":
+                    running = False  # Exit inner loop to restart
+                elif result == "quit":
+                    pygame.quit()
+                    return
 
-        # Render
-        renderer.render(state)
+            clock.tick(60)
 
-        # Print debug info to verify jump action is being sent
-        if action == JUMP:
-            print("JUMP action sent, jumping:", state.jumping, "timer:", state.jump_timer)
-
-        # Cap at 60 FPS
-        clock.tick(60)
-
-    # If game over, wait before closing
-    if state.game_over:
-        pygame.time.wait(2000)
-
-    renderer.close()
+        renderer.close()
 
 
 if __name__ == "__main__":
