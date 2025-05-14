@@ -339,13 +339,7 @@ def field_step(field_choice, curr_state, white_player):  # -> valid_choice, new_
         new_state = new_state._replace(
             enemy_score=enemy_score
         )
-
         return valid_choice, new_state
-    
-    #jax.debug.print(str(curr_state.player_score))
-    #TODO make bot only run, when player move is valid && handle return
-    get_bot_move(curr_state.field, curr_state.difficulty, curr_state.player_score, curr_state.enemy_score)
-
     return jax.lax.cond(
         curr_state.field.field_color[x, y] == FieldColor.EMPTY,
         lambda x: if_empty(x),
@@ -354,7 +348,7 @@ def field_step(field_choice, curr_state, white_player):  # -> valid_choice, new_
     )
 
 @jax.jit
-def get_bot_move(game_field: Field, difficulty: chex.Array, player_score: chex.Array, enemy_score: chex.Array):
+def get_bot_move(game_field: Field, difficulty: chex.Array, player_score: chex.Array, enemy_score: chex.Array)-> jnp.array:
     game_score = player_score+enemy_score
     list_of_all_moves = jnp.arange(64)
 
