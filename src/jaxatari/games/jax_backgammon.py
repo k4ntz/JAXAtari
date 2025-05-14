@@ -1,8 +1,8 @@
 import jax
 import jax.numpy as jnp
 from typing import NamedTuple, Tuple, Any, List
-from ..environment import JaxEnvironment, EnvState
-from ..renderers import AtraJaxisRenderer
+from jaxatari.environment import JaxEnvironment, EnvState
+from jaxatari.renderers import AtraJaxisRenderer
 
 # Constants for game Environment
 NUM_POINTS = 24
@@ -14,6 +14,8 @@ MAX_DICE = 2
 WHITE = 1
 BLACK = -1
 
+WIDTH = 160
+HEIGHT = 210
 
 class BackgammonState(NamedTuple):
     board: jnp.ndarray  # (2, 26)
@@ -69,7 +71,67 @@ class JaxBackgammonEnv(JaxEnvironment[BackgammonState, jnp.ndarray, dict]):
         correct_direction = distance > 0
         dice_match = (state.dice[0] == distance) | (state.dice[1] == distance)
         not_blocked = board[opponent_idx, to_point] <= 1
-        return has_piece & in_bounds & correct_direction & dice_match & not_blocked
+        all_in_home = jax.lax.cond(
+            player == WHITE,
+            lambda _: jnp.sum(board[player_idx, :18]) == 0,
+            lambda _: jnp.sum(board[player_idx, 6:]) == 0,
+            operand=None
+        )
+
+        highest_point = jax.lax.cond(
+            player == WHITE,
+            lambda _: jnp.max(jnp.where(board[player_idx, 18:24] > 0, jnp.arange(18, 24), -1)),
+            lambda _: jnp.max(jnp.where(board[player_idx, 0:6] > 0, jnp.arange(0, 6), -1)),
+            operand=None
+        )
+
+        can_bear_off_high = jax.lax.cond(
+            player == WHITE,
+            lambda _: (to_point == HOME_INDEX) & (from_point == highest_point) & (
+                        distance < jnp.min(state.dice[state.dice > 0] + 1, initial=100)
+),
+            lambda _: (to_point == HOME_INDEX) & (from_point == highest_point) & (
+                        distance < jnp.min(state.dice[state.dice > 0] + 1, initial=100)
+),
+            operand=None
+        )
+
+        is_bear_off_valid = all_in_home & ((to_point == HOME_INDEX) & (dice_match | can_bear_off_high))
+
+        return has_piece & in_bounds & correct_direction & not_blocked & (dice_match | is_bear_off_valid)
+    """"# Berechne alle Indizes, bei denen state.dice > 0
+    positive_dice = state.dice[state.dice > 0]
+    
+    # Wenn es positive Würfelergebnisse gibt, berechne das Minimum plus 1
+    dice_min = jnp.min(positive_dice + 1, initial=100) if positive_dice.size > 0 else 100
+    
+    all_in_home = jax.lax.cond(
+        player == WHITE,
+        lambda _: jnp.sum(board[player_idx, :18]) == 0,
+        lambda _: jnp.sum(board[player_idx, 6:]) == 0,
+        operand=None
+    )
+
+    highest_point = jax.lax.cond(
+        player == WHITE,
+        lambda _: jnp.max(jnp.where(board[player_idx, 18:24] > 0, jnp.arange(18, 24), -1)),
+        lambda _: jnp.max(jnp.where(board[player_idx, 0:6] > 0, jnp.arange(0, 6), -1)),
+        operand=None
+    )
+
+    # Abtragen des höchsten Steins nur möglich, wenn er auf dem höchsten Punkt ist und der Würfelwurf stimmt
+    can_bear_off_high = jax.lax.cond(
+        player == WHITE,
+        lambda _: (to_point == HOME_INDEX) & (from_point == highest_point) & (distance < dice_min),
+        lambda _: (to_point == HOME_INDEX) & (from_point == highest_point) & (distance < dice_min),
+        operand=None
+    )
+
+    # Gültigkeit des Abtragens
+    is_bear_off_valid = all_in_home & ((to_point == HOME_INDEX) & (dice_match | can_bear_off_high))
+
+    # Endgültige Überprüfung der Gültigkeit des Zuges
+    return has_piece & in_bounds & correct_direction & not_blocked & (dice_match | is_bear_off_valid)"""
 
     def step(self, state: BackgammonState, action: Tuple[int, int]) -> Tuple[jnp.ndarray, BackgammonState, float, bool, dict]:
         from_point, to_point = action
@@ -370,8 +432,8 @@ def run_game_with_input(key: jax.Array, max_steps=100):
 
 def main():
     key = jax.random.PRNGKey(0)
-    # run_game_without_input(key)
-    run_game_with_input(key)
+    run_game_without_input(key)
+    #run_game_with_input(key)
 
 
 if __name__ == "__main__":
