@@ -136,27 +136,42 @@ def bucket_step(bucket_x: chex.Array, action: chex.Array) -> chex.Array:
     return bucket_x
 
 @jax.jit
-def bomber_step(bomber_x: chex.Array, bomber_direction: chex.Array) -> Tuple[chex.Array, chex.Array]:
-    """Update bomber position and direction."""
-    # Move bomber based on current direction
-    new_bomber_x = bomber_x + (bomber_direction * BOMBER_SPEED)
+def bomber_step(key: chex.PRNGKey, bomber_x: chex.Array, bomber_direction: chex.Array) -> Tuple[chex.PRNGKey, chex.Array, chex.Array]:
+    """Update bomber position with random movement."""
+    # Split the random key for multiple uses
+    key, subkey = jax.random.split(key)
+    
+    # Randomly change direction with 10% probability
+    change_direction_prob = 0.1
+    random_value = jax.random.uniform(subkey, shape=())
+    should_change_direction = random_value < change_direction_prob
+    
+    # Potentially change direction randomly
+    new_bomber_direction = jnp.where(
+        should_change_direction,
+        -bomber_direction,  # Flip direction
+        bomber_direction    # Keep current direction
+    )
+    
+    # Move bomber based on direction
+    new_bomber_x = bomber_x + (new_bomber_direction * BOMBER_SPEED)
     
     # Check if bomber reached screen edge and needs to change direction
     hit_left_edge = new_bomber_x <= BOMBER_MIN_X
     hit_right_edge = new_bomber_x >= BOMBER_MAX_X
     hit_edge = jnp.logical_or(hit_left_edge, hit_right_edge)
     
-    # Reverse direction if hit edge
+    # Always reverse direction if hit edge
     new_bomber_direction = jnp.where(
         hit_edge,
-        -bomber_direction,
-        bomber_direction
+        -new_bomber_direction,
+        new_bomber_direction
     )
     
-    # Clamp bomber position
+    # Clamp bomber position to screen bounds
     new_bomber_x = jnp.clip(new_bomber_x, BOMBER_MIN_X, BOMBER_MAX_X)
     
-    return new_bomber_x, new_bomber_direction
+    return key, new_bomber_x, new_bomber_direction
 
 @jax.jit
 def drop_bomb(
@@ -315,13 +330,16 @@ def update_bombs(
     return new_bomb_active, bomb_x, new_bomb_y, bomb_speed, new_score, new_lives, new_level
 
 @jax.jit
-def step_fn(state: KaboomState, action: chex.Array) -> Tuple[KaboomState, chex.Array, chex.Array, KaboomInfo]:
+def step_fn(key: chex.PRNGKey, state: KaboomState, action: chex.Array) -> Tuple[chex.PRNGKey, KaboomState, chex.Array, chex.Array, KaboomInfo]:
     """Advance the game state by one step."""
+    # Split the random key for multiple uses
+    key, bomber_key = jax.random.split(key)
+    
     # Update bucket position based on action
     new_bucket_x = bucket_step(state.bucket_x, action)
     
-    # Update bomber position and direction
-    new_bomber_x, new_bomber_direction = bomber_step(state.bomber_x, state.bomber_direction)
+    # Update bomber position and direction with randomness
+    bomber_key, new_bomber_x, new_bomber_direction = bomber_step(bomber_key, state.bomber_x, state.bomber_direction)
     
     # Try dropping a new bomb
     new_bomb_active, new_bomb_x, new_bomb_y, new_bomb_speed, new_drop_timer = drop_bomb(
@@ -367,7 +385,7 @@ def step_fn(state: KaboomState, action: chex.Array) -> Tuple[KaboomState, chex.A
         level=new_level
     )
     
-    return new_state, reward, done, info
+    return key, new_state, reward, done, info
 
 @jax.jit
 def reset_fn(key: chex.PRNGKey) -> KaboomState:
@@ -415,9 +433,9 @@ class JaxKaboom(JaxEnvironment[KaboomState, KaboomObservation, KaboomInfo]):
     
     def step_env(
         self, key: chex.PRNGKey, state: KaboomState, action: chex.Array
-    ) -> Tuple[chex.Array, KaboomState, chex.Array, chex.Array, KaboomInfo]:
+    ) -> Tuple[chex.PRNGKey, KaboomState, chex.Array, chex.Array, KaboomInfo]:
         """Take a step in the environment."""
-        next_state, reward, done, info = step_fn(state, action)
+        key, next_state, reward, done, info = step_fn(key, state, action)
         return key, next_state, reward, done, info
     
     def reset_env(self, key: chex.PRNGKey) -> Tuple[chex.PRNGKey, KaboomState]:
