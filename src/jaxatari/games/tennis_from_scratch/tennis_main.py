@@ -74,7 +74,7 @@ class EnemyState(NamedTuple):
     enemy_y: chex.Array # y-coordinate of the enemy
 
 class TennisState(NamedTuple):
-    is_serving: chex.Array = False # whether the game is currently in serving state (ball bouncing on one side until player hits)
+    is_serving: chex.Array = True # whether the game is currently in serving state (ball bouncing on one side until player hits)
     player_state: PlayerState = PlayerState( # all player-related data
         jnp.array(PLAYER_START_X),
         jnp.array(PLAYER_START_Y),
@@ -208,13 +208,13 @@ def update_player_pos(state: PlayerState, action: chex.Array) -> PlayerState:
 
 def enemy_step(state: TennisState) -> EnemyState:
     new_enemy_x = jnp.where(
-        state.enemy_state.enemy_x < state.ball_state.ball_x,
+        state.enemy_state.enemy_x + PLAYER_WIDTH / 2 < state.ball_state.ball_x,
         state.enemy_state.enemy_x + 1,
         state.enemy_state.enemy_x
     )
 
     new_enemy_x = jnp.where(
-        state.enemy_state.enemy_x > state.ball_state.ball_x,
+        state.enemy_state.enemy_x + PLAYER_WIDTH / 2 > state.ball_state.ball_x,
         state.enemy_state.enemy_x - 1,
         new_enemy_x
     )
@@ -286,20 +286,86 @@ def ball_step(state: TennisState, action) -> BallState:
             ball_end <= player_state.player_x
         )
     )
+    enemy_state = state.enemy_state
+
+    upper_entity_x = jnp.where(
+        player_state.player_field == 1,
+        player_state.player_x,
+        enemy_state.enemy_x
+    )
+    upper_entity_y = jnp.where(
+        player_state.player_field == 1,
+        player_state.player_y,
+        enemy_state.enemy_y
+    )
+
+    lower_entity_x = jnp.where(
+        player_state.player_field == -1,
+        player_state.player_x,
+        enemy_state.enemy_x
+    )
+    lower_entity_y = jnp.where(
+        player_state.player_field == -1,
+        player_state.player_y,
+        enemy_state.enemy_y
+    )
+
+    upper_entity_overlapping_ball = jnp.logical_and(
+        is_overlapping(
+            upper_entity_x,
+            PLAYER_WIDTH,
+            0, # this is z pos
+            PLAYER_HEIGHT,
+            ball_state.ball_x,
+            BALL_WIDTH,
+            ball_state.ball_z,
+            BALL_WIDTH # todo rename to BALL_SIZE because ball is square
+        ),
+        jnp.absolute(upper_entity_y + PLAYER_HEIGHT - ball_state.ball_y) <= 3
+    )
+
+    lower_entity_overlapping_ball = jnp.logical_and(
+        is_overlapping(
+            lower_entity_x,
+            PLAYER_WIDTH,
+            0,
+            PLAYER_HEIGHT,
+            ball_state.ball_x,
+            BALL_WIDTH,
+            ball_state.ball_z,
+            BALL_WIDTH
+        ),
+        jnp.absolute(lower_entity_y + PLAYER_HEIGHT - ball_state.ball_y) <= 3
+    )
 
     # check if fire is pressed
     fire = jnp.any(jnp.array([action == JAXAtariAction.FIRE, action == JAXAtariAction.LEFTFIRE, action == JAXAtariAction.DOWNLEFTFIRE, action == JAXAtariAction.DOWNFIRE,
                               action == JAXAtariAction.DOWNRIGHTFIRE, action == JAXAtariAction.RIGHTFIRE, action == JAXAtariAction.UPRIGHTFIRE, action == JAXAtariAction.UPFIRE,
                               action == JAXAtariAction.UPLEFTFIRE]))
 
-    def check_collision():
-        return player_overlap_ball_x
+    any_collision = jnp.logical_or(
+        upper_entity_overlapping_ball,
+        lower_entity_overlapping_ball
+    )
+    should_hit = jnp.logical_and(any_collision, jnp.logical_or(jnp.logical_not(state.is_serving), fire))
+    new_is_serving = jnp.where(should_hit, False, state.is_serving)
 
-    should_hit = jnp.logical_and(check_collision(), jnp.logical_or(jnp.logical_not(state.is_serving), fire))
+    # no need to check whether the lower entity is actually overlapping because this variable won't be used if it isn't
+    ball_fire_direction = jnp.where(
+        upper_entity_overlapping_ball,
+        1,
+        -1
+    )
+    # no need to check whether the lower entity is actually overlapping because this variable won't be used if it isn't
+    hitting_entity_x = jnp.where(
+        upper_entity_overlapping_ball,
+        upper_entity_x,
+        lower_entity_x
+    )
 
-    return jax.lax.cond(
+    ball_state_after_fire = jax.lax.cond(
         should_hit,
-        lambda _: handle_ball_fire(state),
+        lambda _: handle_ball_fire(state, hitting_entity_x, ball_fire_direction),
         lambda _: BallState(
             new_ball_x,
             new_ball_y,
@@ -316,8 +382,52 @@ def ball_step(state: TennisState, action) -> BallState:
         None
     )
 
+    return TennisState(
+        new_is_serving,
+        player_state,
+        enemy_state,
+        BallState(
+            new_ball_x,
+            new_ball_y,
+            ball_state_after_fire.ball_z,
+            ball_state_after_fire.ball_z_fp,
+            ball_state_after_fire.ball_velocity_z_fp,
+            ball_state_after_fire.ball_hit_start_x,
+            ball_state_after_fire.ball_hit_start_y,
+            ball_state_after_fire.ball_hit_target_x,
+            ball_state_after_fire.ball_hit_target_y,
+            ball_state_after_fire.move_x,
+            ball_state_after_fire.move_y
+        ),
+        state.counter
+    )
+
+def is_overlapping(entity1_x, entity1_w, entity1_y, entity1_h, entity2_x, entity2_w, entity2_y, entity2_h) -> chex.Array:
+    entity1_end_x = entity1_x + entity1_w
+    entity2_end_x = entity2_x + entity2_w
+    is_overlapping_x = jnp.logical_not(
+        jnp.logical_or(
+            entity1_end_x <= entity2_x,
+            entity2_end_x <= entity1_x
+        )
+    )
+
+    entity1_end_y = entity1_y + entity1_h
+    entity2_end_y = entity2_y + entity2_h
+    is_overlapping_y = jnp.logical_not(
+        jnp.logical_or(
+            entity1_end_y <= entity2_y,
+            entity2_end_y <= entity1_y
+        )
+    )
+
+    return jnp.logical_and(is_overlapping_x, is_overlapping_y)
+
 # todo needs docs
-def handle_ball_fire(state: TennisState) -> BallState:
+def handle_ball_fire(state: TennisState, hitting_entity_x, direction: int) -> BallState:
+    # direction = 1 from top side to bottom
+    # direction = -1 from bottom side to top
+    # direction = 0 (dont do this)
     new_ball_hit_start_x = state.ball_state.ball_x
     new_ball_hit_start_y = state.ball_state.ball_y
 
@@ -326,7 +436,7 @@ def handle_ball_fire(state: TennisState) -> BallState:
     ball_width = 2.0
     max_dist = PLAYER_WIDTH / 2 + ball_width / 2
 
-    angle = -1 * (((state.player_state.player_x + PLAYER_WIDTH / 2) - (state.ball_state.ball_x + 2 / 2)) / max_dist)
+    angle = -1 * (((hitting_entity_x + PLAYER_WIDTH / 2) - (state.ball_state.ball_x + 2 / 2)) / max_dist) * direction
     # calc x landing position depending on player hit angle
     # angle = 0 # neutral angle, between -1...1
     left_offset = -39
@@ -334,7 +444,7 @@ def handle_ball_fire(state: TennisState) -> BallState:
     offset = ((angle + 1) / 2) * (right_offset - left_offset) + left_offset
 
     new_ball_hit_target_x = new_ball_hit_start_x + offset
-    new_ball_hit_target_y = new_ball_hit_start_y + 91
+    new_ball_hit_target_y = new_ball_hit_start_y + (91 * direction)
 
     hit_vel = 24.0
 
