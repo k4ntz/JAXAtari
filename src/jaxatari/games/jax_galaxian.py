@@ -6,15 +6,17 @@ from functools import partial
 from jax import lax
 import jax.lax
 from gymnax.environments import spaces
+from jaxatari.environment import JaxEnvironment, JAXAtariAction as Action
 
 from src.jaxatari.environment import JaxEnvironment
 
+"""
 # Action constants
 NOOP = 0
 FIRE = 1
 RIGHT = 2
 LEFT = 3
-
+"""
 
 # -------- Game constants --------
 SHOOTING_COOLDOWN = 80
@@ -49,13 +51,20 @@ class GalaxianState(NamedTuple):
     step_counter: chex.Array
     obs_stack: chex.ArrayTree
 
-class Action(NamedTuple):
-    player_move_dir: chex.Array
-    player_shooting: chex.Array
 
 @jax.jit
-def update_player_position(state: GalaxianState, action: Action) -> GalaxianState:
-    new_x = jnp.clip(state.player_x + action.player_move_dir * 5, 0, SCREEN_WIDTH)
+def update_player_position(state: GalaxianState, action) -> GalaxianState:
+
+    press_right = jnp.any(
+        jnp.array([action == Action.RIGHT, action == Action.RIGHTFIRE])
+    )
+
+    press_left = jnp.any(
+        jnp.array([action == Action.LEFT, action == Action.LEFTFIRE])
+    )
+
+    new_x = jnp.clip(state.player_x + press_right * 5, 0, SCREEN_WIDTH)
+    new_x = jnp.clip(new_x - press_left * 5, 0, SCREEN_WIDTH)
     return state._replace(player_x=new_x)
 
 @jax.jit
@@ -244,41 +253,35 @@ def update_enemy_attack(state: GalaxianState) -> GalaxianState:
     )
 
 
-def init_action():
-    return Action(player_move_dir=jnp.array(0),
-                  player_shooting=jnp.array(0))
-
-
 
 def get_action_from_keyboard():
     keys = pygame.key.get_pressed()
     left = keys[pygame.K_a] or keys[pygame.K_LEFT]
     right = keys[pygame.K_d] or keys[pygame.K_RIGHT]
     shooting = keys[pygame.K_SPACE]
-    move_dir = jnp.array(0)
 
-    left_cond =  jnp.logical_and(left, not right)
-    right_cond = jnp.logical_and(right, not left)
+    left_only = left and not right
+    right_only = right and not left
 
-    move_dir = lax.cond(
-        left_cond,
-        lambda _: jnp.array(-1),
-        lambda _: lax.cond(
-            right_cond,
-            lambda _: jnp.array(1),
-            lambda _: jnp.array(0),
-            operand=None
-        ),
-        operand=None
-    )
+    if shooting:
+        if left_only:
+            return Action.LEFTFIRE
+        elif right_only:
+            return Action.RIGHTFIRE
+        else:
+            return Action.FIRE
+    else:
+        if left_only:
+            return Action.LEFT
+        elif right_only:
+            return Action.RIGHT
+        else:
+            return Action.NOOP
 
-    shoot = lax.cond(shooting, lambda _: jnp.array(1), lambda _: jnp.array(0), operand=None)
-
-    return Action(player_move_dir=move_dir, player_shooting=shoot)
 
 
 @jax.jit
-def handle_shooting(state: GalaxianState, action: Action) -> GalaxianState:
+def handle_shooting(state: GalaxianState, action) -> GalaxianState:
     def shoot(_):
         return state._replace(
             bullet_x=jnp.array(state.player_x, dtype=state.bullet_x.dtype),
@@ -294,7 +297,17 @@ def handle_shooting(state: GalaxianState, action: Action) -> GalaxianState:
     def idle(_):
         return state
 
-    can_shoot = jnp.logical_and(action.player_shooting, state.player_shooting_cooldown == 0)
+    shooting = jnp.any(
+        jnp.array(
+            [
+                action == Action.FIRE,
+                action == Action.RIGHTFIRE,
+                action == Action.LEFTFIRE,
+            ]
+        )
+    )
+
+    can_shoot = jnp.logical_and(shooting, state.player_shooting_cooldown == 0)
     on_cooldown = jnp.logical_not(can_shoot) & (state.player_shooting_cooldown > 0)
 
     return lax.cond(
@@ -436,10 +449,12 @@ class JaxGalaxian(JaxEnvironment[GalaxianState, GalaxianObservation, GalaxianInf
             reward_funcs = tuple(reward_funcs)
         self.reward_funcs = reward_funcs
         self.action_set = {
-            NOOP,
-            FIRE,
-            RIGHT,
-            LEFT,
+            Action.NOOP,
+            Action.FIRE,
+            Action.RIGHT,
+            Action.LEFT,
+            Action.RIGHTFIRE,
+            Action.LEFTFIRE
         }
         self.obs_size = 3*2+1
         #Größe der Beobachtungsdaten
@@ -510,6 +525,10 @@ class JaxGalaxian(JaxEnvironment[GalaxianState, GalaxianObservation, GalaxianInf
             enemy_attack_x=state.enemy_attack_x,
             enemy_attack_y=state.enemy_attack_y
         )
+
+    @partial(jax.jit, static_argnums=(0,))
+    def get_action_space(self):
+        return jnp.array([Action.NOOP, Action.LEFT, Action.RIGHT])
 
 
     def action_space(self) -> spaces.Discrete:
