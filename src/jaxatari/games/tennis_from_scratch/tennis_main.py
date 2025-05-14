@@ -48,7 +48,7 @@ BALL_SERVING_BOUNCE_VELOCITY_BASE = 21
 BALL_SERVING_BOUNCE_VELOCITY_RANDOM_OFFSET = 2
 BALL_WIDTH = 2.0
 
-rand_key = random.PRNGKey(0)
+rand_key = random.key(0)
 
 class BallState(NamedTuple):
     ball_x: chex.Array # x-coordinate of the ball
@@ -236,7 +236,6 @@ def ball_step(state: TennisState, action) -> BallState:
     Returns:
         BallState: The updated ball state.
     """
-
     def get_serving_bounce_velocity() -> int:
         """
         Applies a random offset to the base serving bounce velocity.
