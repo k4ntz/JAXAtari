@@ -29,7 +29,7 @@ HEIGHT = 210
 # Physics constants
 # TODO: check if these are correct
 GRAVITY = 3  # 0.12
-BALL_MAX_SPEED = 6.0
+BALL_MAX_SPEED = 40.0
 FLIPPER_MAX_ANGLE = 3
 FLIPPER_ANIMATION_Y_OFFSETS = jnp.array([0, 0, 3, 7]) # This is a little scuffed, it would be cleaner to just fix the sprites but this works fine
 FLIPPER_ANIMATION_X_OFFSETS = jnp.array([0, 0, 0, 1]) # Only for the right flipper
@@ -366,13 +366,13 @@ def _calc_hit_point(
     tx1 = (scene_object.hit_box_offset[0] - ball_movement.old_ball_x) / trajectory_x
     tx2 = (
         scene_object.hit_box_offset[0]
-        + scene_object.hit_box_matrix.shape[-2]
+        + scene_object.hit_box_matrix.shape[1]
         - ball_movement.old_ball_x
     ) / trajectory_x
     ty1 = (scene_object.hit_box_offset[1] - ball_movement.old_ball_y) / trajectory_y
     ty2 = (
         scene_object.hit_box_offset[1]
-        + scene_object.hit_box_matrix.shape[-1]
+        + scene_object.hit_box_matrix.shape[0]
         - ball_movement.old_ball_y
     ) / trajectory_y
 
@@ -436,9 +436,6 @@ def _reflect_ball(
     reflected_velocity_x = velocity_x - 2 * velocity_normal_prod * surface_normal_x
     reflected_velocity_y = velocity_y - 2 * velocity_normal_prod * surface_normal_y
 
-    reflected_velocity_x = reflected_velocity_x * VELOCITY_RETENTION_FACTOR
-    reflected_velocity_y = reflected_velocity_y * VELOCITY_RETENTION_FACTOR
-
     d_hit_point = jnp.sqrt(jnp.square(trajectory_to_hit_point_x) + jnp.square(trajectory_to_hit_point_y))
     d_trajectory = jnp.sqrt(jnp.square(velocity_x) + jnp.square(velocity_y))
 
@@ -447,7 +444,7 @@ def _reflect_ball(
     new_ball_x = hit_point[1] + r * reflected_velocity_x
     new_ball_y = hit_point[2] + r * reflected_velocity_y
 
-    return jnp.round(new_ball_x), jnp.round(new_ball_y), reflected_velocity_x, reflected_velocity_y
+    return jnp.round(new_ball_x), jnp.round(new_ball_y)
 
 
 
@@ -469,6 +466,7 @@ def _check_reflecting_obstacle_hits(
     # rollovers (left & atari)
     # spinner
     """
+    # Jax should be able to optimize this (?) (also with a for loop ???)
     hit_points = jnp.stack([
         _calc_hit_point(ball_movement, TOP_WALL_SCENE_OBJECT),
         _calc_hit_point(ball_movement, RIGHT_WALL_SCENE_OBJECT),
@@ -479,7 +477,7 @@ def _check_reflecting_obstacle_hits(
     # Get and return first object hit (argmin entry time)
     lowest_entry_time_index = jnp.argmin(hit_points[:,0])
     hit_point = hit_points[lowest_entry_time_index]
-    # TODO Can I do this?
+
     scene_object = jax.lax.switch(
         lowest_entry_time_index,
         (
@@ -497,14 +495,14 @@ def _get_signed_ball_directions(
     ball_direction
 ) -> tuple[chex.Array, chex.Array]:
     x_sign = jnp.where(
-        jnp.logical_or(ball_direction == 1, ball_direction == 2),
+        jnp.logical_or(ball_direction == 2, ball_direction == 3),
         jnp.array(1.),
         jnp.array(-1.)
     )
     y_sign = jnp.where(
-        jnp.logical_or(ball_direction == 0, ball_direction == 1),
-        jnp.array(1.),
-        jnp.array(-1.)
+        jnp.logical_or(ball_direction == 0, ball_direction == 2),
+        jnp.array(-1.),
+        jnp.array(1.)
     )
     return x_sign, y_sign
 
@@ -513,18 +511,13 @@ def _get_ball_direction(
     signed_vel_x,
     signed_vel_y
 ) -> chex.Array:
-    direction = jnp.where(
-        signed_vel_x > 0,
-        jnp.array(1.),
-        jnp.array(3.)
-    )
-    direction = jax.lax.cond(
-        signed_vel_y > 0,
-        lambda d: (d + 1) % 4,
-        lambda d: d,
-        operand=direction
-    )
-    return direction
+    top_left = jnp.logical_and(signed_vel_x <= 0, signed_vel_y > 0)     # 0
+    top_right = jnp.logical_and(signed_vel_x > 0, signed_vel_y > 0)     # 2
+    bottom_right = jnp.logical_and(signed_vel_x > 0, signed_vel_y <= 0) # 3
+    bottom_left = jnp.logical_and(signed_vel_x <= 0, signed_vel_y <= 0) # 1
+
+    bool_array = jnp.array([top_left, bottom_left, top_right, bottom_right])
+    return jnp.argmax(bool_array)
 
 
 @jax.jit
@@ -537,22 +530,21 @@ def ball_step(
     """
     Update the pinballs position and velocity based on the current state and action.
     """
-
+    ball_x = state.ball_x
+    ball_y = state.ball_y
     ball_vel_x = state.ball_vel_x
     ball_vel_y = state.ball_vel_y
     ball_direction = state.ball_direction
-
+    jax.debug.print("Ball Step, Initial Ball x {ball_x}, y , {ball_y}, vel_x {ball_vel_x}, vel_y {ball_vel_y}, direction {ball_direction}", ball_x=ball_x, ball_y=ball_y, ball_vel_x=ball_vel_x, ball_vel_y=ball_vel_y, ball_direction=ball_direction)
     """
     Plunger calculation
     """
-    jax.debug.print("Initial {x} {y}", x=ball_vel_x, y=ball_vel_y)
     # Add plunger power to the ball velocity, only set to non-zero value once fired
     ball_vel_y = jnp.where(
         plunger_power > 0,
         ball_vel_y + plunger_power,
         ball_vel_y,
     )
-    jax.debug.print("After plunger {x} {y}", x=ball_vel_x, y=ball_vel_y)
     """
     Flipper calculation
     """
@@ -565,29 +557,27 @@ def ball_step(
     # immediately deduct the gravity from the velocity
     # Direction has to be figured into the gravity calculation
     gravity_delta = jnp.where(
-        jnp.logical_or(ball_direction == 2, ball_direction == 3), GRAVITY, -GRAVITY
+        jnp.logical_or(ball_direction == 0, ball_direction == 2), -GRAVITY, GRAVITY
     )  # Subtract gravity if the ball is moving up otherwise add it
     ball_vel_y = ball_vel_y + gravity_delta
     ball_direction = jnp.where(
-        jnp.logical_and(ball_vel_y < 0, ball_direction == 0),
-        jnp.array(3),   # if ball direction was towards upper left
-        jnp.array(2)    # if ball direction was towards upper right
+        ball_vel_y < 0,
+        ball_direction + 1,   # if ball direction was towards upper left
+        ball_direction
     )
     ball_vel_y = jnp.abs(ball_vel_y)
-    jax.debug.print("After gravity {x} {y}", x=ball_vel_x, y=ball_vel_y)
+    jax.debug.print("Ball Step, After Gravity Ball x {ball_x}, y , {ball_y}, vel_x {ball_vel_x}, vel_y {ball_vel_y}, direction {ball_direction}", ball_x=ball_x, ball_y=ball_y, ball_vel_x=ball_vel_x, ball_vel_y=ball_vel_y, ball_direction=ball_direction)
     """
     Ball movement calculation observing its direction 
     """
     sign_x, sign_y = _get_signed_ball_directions(ball_direction)
     signed_ball_vel_x = sign_x * ball_vel_x
     signed_ball_vel_y = sign_y * ball_vel_y
-    jax.debug.print("Signed {x} {y}", x=ball_vel_x, y=ball_vel_y)
     # Only change position, direction and velocity if the ball is in play
     # TODO override ball_x, ball_y if obstacle hit (_reflect_ball)
     ball_x = state.ball_x + signed_ball_vel_x
     ball_y = state.ball_y + signed_ball_vel_y
-    jax.debug.print("Initial ball {x} {y}", x=ball_x, y=ball_y)
-
+    jax.debug.print("Ball Step, After Ball Update x {ball_x}, y , {ball_y}, vel_x {ball_vel_x}, vel_y {ball_vel_y}, direction {ball_direction}", ball_x=ball_x, ball_y=ball_y, ball_vel_x=ball_vel_x, ball_vel_y=ball_vel_y, ball_direction=ball_direction)
     """
     Obstacle hit calculation
     """
@@ -601,31 +591,34 @@ def ball_step(
         new_ball_x=ball_x,
         new_ball_y=ball_y,
     )
-    hit_point, scene_object_horizontal = _check_reflecting_obstacle_hits(ball_movement)
-    jax.debug.print("Hit point {x}", x=hit_point)
-    reflected_ball_x, reflected_ball_y, reflected_ball_vel_x, reflected_ball_vel_y = _reflect_ball(ball_movement, hit_point, scene_object_horizontal)
+    hit_data, scene_object_horizontal = _check_reflecting_obstacle_hits(ball_movement)
+    reflected_ball_x, reflected_ball_y = _reflect_ball(ball_movement, hit_data, scene_object_horizontal)
+
+    reflection_trajectory_x = reflected_ball_x - hit_data[1]
+    reflection_trajectory_y = reflected_ball_y - hit_data[2]
 
     ball_x = jnp.where(
-        hit_point[0] == T_ENTRY_NO_COLLISION,
+        hit_data[0] == T_ENTRY_NO_COLLISION,
         ball_x,
         reflected_ball_x
     )
     ball_y = jnp.where(
-        hit_point[0] == T_ENTRY_NO_COLLISION,
+        hit_data[0] == T_ENTRY_NO_COLLISION,
         ball_y,
         reflected_ball_y
     )
-    signed_ball_vel_x = jnp.where(
-        hit_point[0] == T_ENTRY_NO_COLLISION,
-        ball_vel_x,
-        reflected_ball_vel_x
+    ball_trajectory_x = jnp.where(
+        hit_data[0] == T_ENTRY_NO_COLLISION,
+        signed_ball_vel_x,
+        reflection_trajectory_x
     )
-    signed_ball_vel_y = jnp.where(
-        hit_point[0] == T_ENTRY_NO_COLLISION,
-        ball_vel_y,
-        reflected_ball_vel_y
+    ball_trajectory_y = jnp.where(
+        hit_data[0] == T_ENTRY_NO_COLLISION,
+        signed_ball_vel_y,
+        reflection_trajectory_y
     )
-    jax.debug.print("New Ball, velocity {x} {y} {z} {v}", x=ball_x, y=ball_y, z=signed_ball_vel_x, v=signed_ball_vel_y)
+    jax.debug.print("Ball Step, After Obstacle Update x {ball_x}, y , {ball_y}, vel_x {ball_vel_x}, vel_y {ball_vel_y}, direction {ball_direction}", ball_x=ball_x, ball_y=ball_y, ball_vel_x=ball_vel_x, ball_vel_y=ball_vel_y, ball_direction=ball_direction)
+
 
     """
     Some final calculations
@@ -633,20 +626,18 @@ def ball_step(
     # Clip the ball velocity to the maximum speed
     ball_vel_x = jnp.clip(jnp.abs(signed_ball_vel_x), 0, BALL_MAX_SPEED)
     ball_vel_y = jnp.clip(jnp.abs(signed_ball_vel_y), 0, BALL_MAX_SPEED)
-    ball_direction = _get_ball_direction(signed_ball_vel_x, signed_ball_vel_y)
+    ball_direction = _get_ball_direction(ball_trajectory_x, ball_trajectory_y)
 
     """
     Check if ball is in play if not ignore the calculations
     """
     # TODO: Maybe do the stuff above in a function that is called if we are in play
-    jax.debug.print("Ball in play {x}", x=ball_in_play)
     ball_direction = jnp.where(ball_in_play, ball_direction, BALL_START_DIRECTION)
     ball_x = jnp.where(ball_in_play, ball_x, BALL_START_X)
     ball_y = jnp.where(ball_in_play, ball_y, BALL_START_Y)
     ball_vel_x = jnp.where(ball_in_play, ball_vel_x, jnp.array(0.))
     ball_vel_y = jnp.where(ball_in_play, ball_vel_y, jnp.array(0.))
-    
-    jax.debug.print("Final {x} {y}", x=ball_vel_x, y=ball_vel_y)
+    jax.debug.print("Ball Step, Final Ball x {ball_x}, y , {ball_y}, vel_x {ball_vel_x}, vel_y {ball_vel_y}, direction {ball_direction}", ball_x=ball_x, ball_y=ball_y, ball_vel_x=ball_vel_x, ball_vel_y=ball_vel_y, ball_direction=ball_direction)
     return (
         ball_x,
         ball_y,
@@ -721,12 +712,10 @@ class JaxVideoPinball(
 
         # Step 1: Update Plunger and Flippers
         plunger_position, plunger_power = plunger_step(state, action)
-        jax.debug.print("Plunger Power/Position {x}/{y}", x=plunger_power, y=plunger_position)
         left_flipper_angle, right_flipper_angle = flipper_step(state, action)
 
         # Step 2: Update ball position and velocity
         ball_in_play = jnp.logical_or(state.ball_in_play, plunger_power > 0)
-        jax.debug.print("Ball in play after plunger {x}", x=ball_in_play)
         ball_x, ball_y, ball_direction, ball_vel_x, ball_vel_y = ball_step(
             state, plunger_power, ball_in_play, action, 
         )
@@ -806,7 +795,7 @@ class JaxVideoPinball(
         #     observation,
         # )
         # new_state = new_state._replace(obs_stack=observation)
-
+        jax.debug.print("------------------------------------------")
         return observation, new_state, env_reward, done, info
 
     @partial(jax.jit, static_argnums=(0,))
