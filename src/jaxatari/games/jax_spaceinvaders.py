@@ -25,10 +25,17 @@ NUMBER_YELLOW_OFFSET = 83
 WALL_LEFT_X = 34
 WALL_RIGHT_X = 123
 
+# Borders for opponent movement
+OPPONENT_LIMIT_X = (22, 136)
+OPPONENT_LIMIT_Y = (31, None)
+
 MAX_SPEED = 1
 ACCELERATION = 1
     
 PATH_SPRITES = "sprites/spaceinvaders"
+
+# Rate of Opponent Movement and Animation
+MOVEMENT_RATE = 32
 
 # Sizes
 PLAYER_SIZE = (7, 10)
@@ -36,7 +43,6 @@ WALL_SIZE = (2, 4)
 BACKGROUND_SIZE = (WIDTH, 15)
 NUMBER_SIZE = (12, 9)
 OPPONENT_SIZE = (8, 10)
-START_OPPONENT = (23, 31)
 OFFSET_OPPONENT = (8, 8)
 
 PLAYER_Y = HEIGHT - PLAYER_SIZE[1] - BACKGROUND_SIZE[1]
@@ -56,6 +62,13 @@ class SpaceInvadersState(NamedTuple):
     player_speed: chex.Array
     step_counter: chex.Array 
     player_score: chex.Array
+    # Holds a list of destroyed opponents by their index (row, column)
+    destroyed: chex.Array
+    opponent_current_x: int
+    opponent_current_y: int
+    # Defines a bounding rect around the visible opponents
+    opponent_bounding_rect: NamedTuple
+    opponent_direction: int
 
 class EntityPosition(NamedTuple):
     x: jnp.ndarray
@@ -137,10 +150,15 @@ class JaxSpaceInvaders(JaxEnvironment[SpaceInvadersState, SpaceInvadersObservati
         Returns the initial state and the reward (i.e. 0)
         """
         state = SpaceInvadersState(
-            player_x=jnp.array(96).astype(jnp.int32),
-            player_speed=jnp.array(0.0).astype(jnp.int32),
-            step_counter=jnp.array(0).astype(jnp.int32),
-            player_score=jnp.array(0).astype(jnp.int32),
+            player_x = jnp.array(96).astype(jnp.int32),
+            player_speed = jnp.array(0.0).astype(jnp.int32),
+            step_counter = jnp.array(0).astype(jnp.int32),
+            player_score = jnp.array(0).astype(jnp.int32),
+            destroyed = jnp.array(36).astype(jnp.bool),
+            opponent_current_x = OPPONENT_LIMIT_X[0],
+            opponent_current_y = OPPONENT_LIMIT_Y[0],
+            opponent_bounding_rect = (OPPONENT_SIZE[0] * 6 + OFFSET_OPPONENT[0] * 5, OPPONENT_SIZE[1] * 6 + OFFSET_OPPONENT[1] * 5),
+            opponent_direction = 1
         )
         initial_obs = self._get_observation(state)
 
@@ -166,12 +184,50 @@ class JaxSpaceInvaders(JaxEnvironment[SpaceInvadersState, SpaceInvadersObservati
             operand=state.step_counter,
         )
 
+        def get_opponent_position(): 
+            """
+            Calculates the opponents movement depending on the current state, the limits and the current bounding rect.
+            The Bounding Rect should be the minimum size of a box required to contain all the (not destroyed) opponent sprites.
+
+            @return Returns the direction that the opponents should move now and the new position.
+            """
+            direction = jax.lax.cond(
+                state.opponent_direction < 0,
+                # Checking left side borders as opponents are moving to the left
+                lambda: jax.lax.cond(
+                    OPPONENT_LIMIT_X[0] < state.opponent_current_x,
+                    lambda: -1,
+                    lambda: 1
+                ),
+                # Checking right side borders as opponents are moving to the right
+                lambda: jax.lax.cond(
+                    OPPONENT_LIMIT_X[1] > state.opponent_current_x + state.opponent_bounding_rect[0],
+                    lambda: 1,
+                    lambda: -1
+                )
+            )
+
+            new_position = state.opponent_current_x + direction
+
+            return (direction, new_position)
+
+        # Opponents should not move in every game step
+        is_opponent_step = state.step_counter % MOVEMENT_RATE == 0
+        (direction, position) = jax.lax.cond(is_opponent_step, lambda: get_opponent_position(), lambda: (state.opponent_direction, state.opponent_current_x))
+
         new_state = SpaceInvadersState(
-            player_x=new_player_x,
-            player_speed=new_player_speed,
-            step_counter=step_counter,
-            player_score=state.player_score,
+            player_x = new_player_x,
+            player_speed = new_player_speed,
+            step_counter = step_counter,
+            player_score = state.player_score,
+            destroyed = state.destroyed,
+            opponent_current_x = position,
+            opponent_current_y = state.opponent_current_y,
+            opponent_bounding_rect = state.opponent_bounding_rect,
+            opponent_direction = direction
         )
+
+        # TODO: Adjust the opponenet_bounding_rect depending on the destroyed enemies. If all the enemies of a outer column are destroyed the rect should shrink accordingly.
 
         done = self._get_done(new_state)
         env_reward = self._get_env_reward(state, new_state)
@@ -240,20 +296,32 @@ def load_sprites():
     SPRITE_DEFENSE = jnp.expand_dims(defense, axis=0)
     
     # Enemies
-    opponent_1 = aj.loadFrame(os.path.join(MODULE_DIR, PATH_SPRITES, "opponents/opponent_1.npy"), transpose=True)
-    SPRITE_OPPONENT_1 = jnp.expand_dims(opponent_1, axis=0)
-    opponent_2 = aj.loadFrame(os.path.join(MODULE_DIR, PATH_SPRITES, "opponents/opponent_2_a.npy"), transpose=True)
-    SPRITE_OPPONENT_2 = jnp.expand_dims(opponent_2, axis=0)
-    opponent_3 = aj.loadFrame(os.path.join(MODULE_DIR, PATH_SPRITES, "opponents/opponent_3_a.npy"), transpose=True)
-    SPRITE_OPPONENT_3 = jnp.expand_dims(opponent_3, axis=0)
-    opponent_4 = aj.loadFrame(os.path.join(MODULE_DIR, PATH_SPRITES, "opponents/opponent_4_a.npy"), transpose=True)
-    SPRITE_OPPONENT_4 = jnp.expand_dims(opponent_4, axis=0)
+    opponent_1_a = aj.loadFrame(os.path.join(MODULE_DIR, PATH_SPRITES, "opponents/opponent_1_a.npy"), transpose=True)
+    SPRITE_OPPONENT_1_A = jnp.expand_dims(opponent_1_a, axis=0)
+    opponent_1_b = aj.loadFrame(os.path.join(MODULE_DIR, PATH_SPRITES, "opponents/opponent_1_b.npy"), transpose=True)
+    SPRITE_OPPONENT_1_B = jnp.expand_dims(opponent_1_b, axis=0)
+    opponent_2_a = aj.loadFrame(os.path.join(MODULE_DIR, PATH_SPRITES, "opponents/opponent_2_a.npy"), transpose=True)
+    SPRITE_OPPONENT_2_A = jnp.expand_dims(opponent_2_a, axis=0)
+    opponent_2_b = aj.loadFrame(os.path.join(MODULE_DIR, PATH_SPRITES, "opponents/opponent_2_b.npy"), transpose=True)
+    SPRITE_OPPONENT_2_B = jnp.expand_dims(opponent_2_b, axis=0)
+    opponent_3_a = aj.loadFrame(os.path.join(MODULE_DIR, PATH_SPRITES, "opponents/opponent_3_a.npy"), transpose=True)
+    SPRITE_OPPONENT_3_A = jnp.expand_dims(opponent_3_a, axis=0)
+    opponent_3_b = aj.loadFrame(os.path.join(MODULE_DIR, PATH_SPRITES, "opponents/opponent_3_b.npy"), transpose=True)
+    SPRITE_OPPONENT_3_B = jnp.expand_dims(opponent_3_b, axis=0)
+    SPRITE_OPPONENT_3_B = jax.numpy.pad(SPRITE_OPPONENT_3_B, ((0,0), (0,0), (0,1), (0,0)))
+    opponent_4_a = aj.loadFrame(os.path.join(MODULE_DIR, PATH_SPRITES, "opponents/opponent_4_a.npy"), transpose=True)
+    SPRITE_OPPONENT_4_A = jnp.expand_dims(opponent_4_a, axis=0)
+    opponent_4_b = aj.loadFrame(os.path.join(MODULE_DIR, PATH_SPRITES, "opponents/opponent_4_b.npy"), transpose=True)
+    SPRITE_OPPONENT_4_B = jnp.expand_dims(opponent_4_b, axis=0)
+    SPRITE_OPPONENT_4_B = jax.numpy.pad(SPRITE_OPPONENT_4_B, ((0,0), (0,0), (0,1), (0,0)))
     opponent_5 = aj.loadFrame(os.path.join(MODULE_DIR, PATH_SPRITES, "opponents/opponent_5.npy"), transpose=True)
     SPRITE_OPPONENT_5 = jnp.expand_dims(opponent_5, axis=0)
-    opponent_6 = aj.loadFrame(os.path.join(MODULE_DIR, PATH_SPRITES, "opponents/opponent_6.npy"), transpose=True)
-    SPRITE_OPPONENT_6 = jnp.expand_dims(opponent_6, axis=0)
+    opponent_6_a = aj.loadFrame(os.path.join(MODULE_DIR, PATH_SPRITES, "opponents/opponent_6_a.npy"), transpose=True)
+    SPRITE_OPPONENT_6_A = jnp.expand_dims(opponent_6_a, axis=0)
+    opponent_6_b = aj.loadFrame(os.path.join(MODULE_DIR, PATH_SPRITES, "opponents/opponent_6_b.npy"), transpose=True)
+    SPRITE_OPPONENT_6_B = jnp.expand_dims(opponent_6_b, axis=0)
 
-    return (SPRITE_BACKGROUND, SPRITE_PLAYER, SPRITE_ZERO_GREEN, SPRITE_ZERO_YELLOW, SPRITE_DEFENSE, SPRITE_OPPONENT_1, SPRITE_OPPONENT_2, SPRITE_OPPONENT_3, SPRITE_OPPONENT_4, SPRITE_OPPONENT_5, SPRITE_OPPONENT_6)
+    return (SPRITE_BACKGROUND, SPRITE_PLAYER, SPRITE_ZERO_GREEN, SPRITE_ZERO_YELLOW, SPRITE_DEFENSE, SPRITE_OPPONENT_1_A, SPRITE_OPPONENT_1_B, SPRITE_OPPONENT_2_A, SPRITE_OPPONENT_2_B, SPRITE_OPPONENT_3_A, SPRITE_OPPONENT_3_B, SPRITE_OPPONENT_4_A, SPRITE_OPPONENT_4_B, SPRITE_OPPONENT_5, SPRITE_OPPONENT_6_A, SPRITE_OPPONENT_6_B)
 
 (
     SPRITE_BACKGROUND, 
@@ -261,12 +329,17 @@ def load_sprites():
     SPRITE_ZERO_GREEN,
     SPRITE_ZERO_YELLOW,
     SPRITE_DEFENSE,
-    SPRITE_OPPONENT_1,
-    SPRITE_OPPONENT_2,
-    SPRITE_OPPONENT_3,
-    SPRITE_OPPONENT_4,
+    SPRITE_OPPONENT_1_A,
+    SPRITE_OPPONENT_1_B,
+    SPRITE_OPPONENT_2_A,
+    SPRITE_OPPONENT_2_B,
+    SPRITE_OPPONENT_3_A,
+    SPRITE_OPPONENT_3_B,
+    SPRITE_OPPONENT_4_A,
+    SPRITE_OPPONENT_4_B,
     SPRITE_OPPONENT_5,
-    SPRITE_OPPONENT_6
+    SPRITE_OPPONENT_6_A,
+    SPRITE_OPPONENT_6_B,
 ) = load_sprites()
 
 class SpaceInvadersRenderer(AtraJaxisRenderer):
@@ -311,22 +384,39 @@ class SpaceInvadersRenderer(AtraJaxisRenderer):
         raster = aj.render_at(raster, 105, HEIGHT - 53, frame_defense)
 
         # Load Opponent Sprites
-        frame_opponent_1 = aj.get_sprite_frame(SPRITE_OPPONENT_1, 0)
-        frame_opponent_2 = aj.get_sprite_frame(SPRITE_OPPONENT_2, 0)
-        frame_opponent_3 = aj.get_sprite_frame(SPRITE_OPPONENT_3, 0)
-        frame_opponent_4 = aj.get_sprite_frame(SPRITE_OPPONENT_4, 0)
-        frame_opponent_5 = aj.get_sprite_frame(SPRITE_OPPONENT_5, 0)
-        frame_opponent_6 = aj.get_sprite_frame(SPRITE_OPPONENT_6, 0)
+        fo_5 = aj.get_sprite_frame(SPRITE_OPPONENT_5, 0)
+        
+        # Defines wether or not the sprites is getting flipped
+        flip = jax.numpy.floor(state.step_counter / MOVEMENT_RATE) % 2 == 1
+
+        # Loading sprites depending on the current animation step
+        (fo_1, fo_2, fo_3, fo_4, fo_6) = jax.lax.cond(
+            flip, 
+            lambda: (
+                aj.get_sprite_frame(SPRITE_OPPONENT_1_B, 0), 
+                aj.get_sprite_frame(SPRITE_OPPONENT_2_B, 0), 
+                aj.get_sprite_frame(SPRITE_OPPONENT_3_B, 0),
+                aj.get_sprite_frame(SPRITE_OPPONENT_4_B, 0),
+                aj.get_sprite_frame(SPRITE_OPPONENT_6_B, 0)
+            ),
+            lambda: (
+                aj.get_sprite_frame(SPRITE_OPPONENT_1_A, 0), 
+                aj.get_sprite_frame(SPRITE_OPPONENT_2_A, 0), 
+                aj.get_sprite_frame(SPRITE_OPPONENT_3_A, 0),
+                aj.get_sprite_frame(SPRITE_OPPONENT_4_A, 0),
+                aj.get_sprite_frame(SPRITE_OPPONENT_6_A, 0)
+            )
+        )
 
         def body(i, raster):
-            x_cord = START_OPPONENT[0] + i * (OFFSET_OPPONENT[0] + OPPONENT_SIZE[0])
+            x_cord = state.opponent_current_x + i * (OFFSET_OPPONENT[0] + OPPONENT_SIZE[0])
 
-            raster = aj.render_at(raster, x_cord, START_OPPONENT[1], frame_opponent_1)
-            raster = aj.render_at(raster, x_cord, START_OPPONENT[1] + (OFFSET_OPPONENT[1] + OPPONENT_SIZE[1]), frame_opponent_2)
-            raster = aj.render_at(raster, x_cord, START_OPPONENT[1] + 2 * (OFFSET_OPPONENT[1] + OPPONENT_SIZE[1]), frame_opponent_3)
-            raster = aj.render_at(raster, x_cord, START_OPPONENT[1] + 3 * (OFFSET_OPPONENT[1] + OPPONENT_SIZE[1]), frame_opponent_4)
-            raster = aj.render_at(raster, x_cord, START_OPPONENT[1] + 4 * (OFFSET_OPPONENT[1] + OPPONENT_SIZE[1]), frame_opponent_5)
-            raster = aj.render_at(raster, x_cord, START_OPPONENT[1] + 5 * (OFFSET_OPPONENT[1] + OPPONENT_SIZE[1]), frame_opponent_6)
+            raster = aj.render_at(raster, x_cord, state.opponent_current_y, fo_1)
+            raster = aj.render_at(raster, x_cord, state.opponent_current_y + (OFFSET_OPPONENT[1] + OPPONENT_SIZE[1]), fo_2)
+            raster = aj.render_at(raster, x_cord, state.opponent_current_y + 2 * (OFFSET_OPPONENT[1] + OPPONENT_SIZE[1]), fo_3)
+            raster = aj.render_at(raster, x_cord, state.opponent_current_y + 3 * (OFFSET_OPPONENT[1] + OPPONENT_SIZE[1]), fo_4)
+            raster = aj.render_at(raster, x_cord, state.opponent_current_y + 4 * (OFFSET_OPPONENT[1] + OPPONENT_SIZE[1]), fo_5, flip)
+            raster = aj.render_at(raster, x_cord, state.opponent_current_y + 5 * (OFFSET_OPPONENT[1] + OPPONENT_SIZE[1]), fo_6)
 
             return raster
         
