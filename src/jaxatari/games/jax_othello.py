@@ -843,10 +843,9 @@ class JaxOthello(JaxEnvironment[OthelloState, OthelloObservation, OthelloInfo]):
         def body_fun(value):
             valid_choice, state, key = value
 
-            key, subkey = jax.random.split(key)  # neuen Key erzeugen
-            rand_vals = jax.random.randint(subkey, shape=(2,), minval=0, maxval=7)
+            best_val = get_bot_move(state.field,state.difficulty, state.player_score,state.enemy_score)
 
-            valid_choice, new_state = field_step(rand_vals, state, False)
+            valid_choice, new_state = field_step(best_val, state, False)
 
             return jax.lax.cond(
                 valid_choice,
