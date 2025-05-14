@@ -80,6 +80,8 @@ class TennisRenderer:
         frame_player = aj.get_sprite_frame(self.PLAYER, 0)
         raster = aj.render_at(raster, state.player_state.player_x, state.player_state.player_y, frame_player)
 
+        raster = aj.render_at(raster, state.enemy_state.enemy_x, state.enemy_state.enemy_y, frame_player)
+
         player_x_rec = jnp.zeros((2, 2, 4))
         player_x_rec = player_x_rec.at[:, :, 1].set(255)  # Yellow
         player_x_rec = player_x_rec.at[:, :, 2].set(255)  # Yellow
