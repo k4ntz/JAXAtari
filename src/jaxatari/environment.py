@@ -1,11 +1,46 @@
+from enum import Enum
 from typing import Tuple, Generic, TypeVar
 import jax.numpy as jnp
+import jax.random as jrandom
 
 
 EnvObs = TypeVar("EnvObs")
 EnvState = TypeVar("EnvState")
 EnvInfo = TypeVar("EnvInfo")
 
+class JAXAtariAction:
+    """
+    "Namespace" for Atari action integer constants.
+    These are directly usable in JAX arrays.
+    """
+    NOOP: int = 0
+    FIRE: int = 1
+    UP: int = 2
+    RIGHT: int = 3
+    LEFT: int = 4
+    DOWN: int = 5
+    UPRIGHT: int = 6
+    UPLEFT: int = 7
+    DOWNRIGHT: int = 8
+    DOWNLEFT: int = 9
+    UPFIRE: int = 10
+    RIGHTFIRE: int = 11
+    LEFTFIRE: int = 12
+    DOWNFIRE: int = 13
+    UPRIGHTFIRE: int = 14
+    UPLEFTFIRE: int = 15
+    DOWNRIGHTFIRE: int = 16
+    DOWNLEFTFIRE: int = 17
+
+    @classmethod
+    def get_all_values(cls) -> jnp.ndarray:
+        # For fixed action sets, explicit listing is safest and clearest.
+        return jnp.array([
+            cls.NOOP, cls.FIRE, cls.UP, cls.RIGHT, cls.LEFT, cls.DOWN,
+            cls.UPRIGHT, cls.UPLEFT, cls.DOWNRIGHT, cls.DOWNLEFT,
+            cls.UPFIRE, cls.RIGHTFIRE, cls.LEFTFIRE, cls.DOWNFIRE,
+            cls.UPRIGHTFIRE, cls.UPLEFTFIRE, cls.DOWNRIGHTFIRE, cls.DOWNLEFTFIRE
+        ], dtype=jnp.int32)
 
 class JaxEnvironment(Generic[EnvState, EnvObs, EnvInfo]):
     """
@@ -19,7 +54,7 @@ class JaxEnvironment(Generic[EnvState, EnvObs, EnvInfo]):
     def __init__(self):
         pass
 
-    def reset(self) -> Tuple[EnvState, EnvObs]:
+    def reset(self, key: jrandom.PRNGKey=None) -> Tuple[EnvObs, EnvState]:
         """
         Resets the environment to the initial state.
         Returns: The initial observation and the initial environment state.
@@ -29,7 +64,7 @@ class JaxEnvironment(Generic[EnvState, EnvObs, EnvInfo]):
 
     def step(
         self, state: EnvState, action
-    ) -> Tuple[EnvState, EnvObs, float, bool, EnvInfo]:
+    ) -> Tuple[EnvObs, EnvState, float, bool, EnvInfo]:
         """
         Takes a step in the environment.
         Args:
@@ -52,10 +87,10 @@ class JaxEnvironment(Generic[EnvState, EnvObs, EnvInfo]):
         """
         raise NotImplementedError("Abstract method")
 
-    def get_action_space(self) -> Tuple:
+    def get_action_space(self) -> jnp.ndarray:
         """
-        Returns the action space of the environment.
-        Returns: The action space of the environment as a tuple.
+        Returns the action space of the environment as an array containing the actions that can be taken.
+        Returns: The action space of the environment as an array.
         """
         raise NotImplementedError("Abstract method")
 
