@@ -23,12 +23,12 @@ class GameConfig:
     screen_width: int = 160
     screen_height: int = 210
     scaling_factor: int = 3
-    bullet_height: int = 5
-    bullet_width: int = 5
+    bullet_height: int = 1
+    bullet_width: int = 1
     bullet_speed: int = 3
     cannon_height: int = 10
     cannon_width: int = 10
-    cannon_y: int = 200
+    cannon_y: int = 140
     cannon_x: jnp.ndarray = field(
         default_factory=lambda: jnp.array([20, 80, 140], dtype=jnp.int32)
     )
@@ -37,7 +37,7 @@ class GameConfig:
     fire_cooldown_frames: int = 10  # delay between shots
     # y-coordinates of the different enemy paths/heights
     enemy_paths: jnp.ndarray = field(
-        default_factory=lambda: jnp.array([20, 40, 60], dtype=jnp.int32)
+        default_factory=lambda: jnp.array([10, 30, 50], dtype=jnp.int32)
     )
     enemy_width: int = 10
     enemy_height: int = 10
@@ -481,6 +481,63 @@ class JaxAtlantis(JaxEnvironment[AtlantisState, AtlantisObservation, AtlantisInf
         return state._replace(enemies=enemies)
 
     @partial(jax.jit, static_argnums=(0,))
+    def _check_bullet_enemy_collision(self, state: AtlantisState) -> AtlantisState:
+        """
+        Collision check between bullets and enemies
+
+        Each bulllet/enemyis an axis-aligned rectangle. Now:
+        1. compute the four edges (lefet, right, top, bottom) for every bullet and every enemy
+        2. Build two (BxE) boolean matrices for x-overlap and y-overlap
+        3. compute AND of the two matrices and build the hit_matrix[b,e]. An entry is true, when bullet b and enemy e overlap in both X and Y
+        4. ignore inactive bullets/enemies (through masking)
+        5. reduce hit_mtarix to per-bullet and per_enemy "was hit?" flags
+        6. deactive those objects
+        """
+        cfg = self.config
+
+        bullet_x, bullet_y = state.bullets[:, 0], state.bullets[:, 1]  # (B,)
+        enemy_x, enemy_y = state.enemies[:, 0], state.enemies[:, 1]  # (E,)
+
+        # compute edge coordinates  for all rectangles
+        # broadcasting with none inserts singleton axes so every
+        # bullet is paired with every enemy
+        b_left = bullet_x[:, None]
+        b_right = (bullet_x + cfg.bullet_width)[:, None]
+        b_top = bullet_y[:, None]
+        b_bottom = (bullet_y + cfg.bullet_height)[:, None]
+
+        # Enemy edges
+        e_left = enemy_x[None, :]
+        e_right = (enemy_x + cfg.enemy_width)[None, :]
+        e_top = enemy_y[None, :]
+        e_bottom = (enemy_y + cfg.enemy_height)[None, :]
+
+        # True where bullets left < enemies right AND bullets right >  enemies left
+        overlap_x = (b_left < e_right) & (b_right > e_left)
+        # ...
+        overlap_y = (b_top < e_bottom) & (b_bottom > e_top)
+
+        # True when both horizontal and vertical overlaps occur
+        hit_matrix = overlap_x & overlap_y
+
+        # Ignore inactive objects right away
+        hit_matrix &= state.bullets_alive[:, None]
+        hit_matrix &= (state.enemies[:, 4] == 1)[None, :]
+
+        # check if bullet collided with any enemy
+        bullet_hit = jnp.any(hit_matrix, axis=1)  # (B,)
+        # check if enemy was hit by any bullet
+        enemy_hit = jnp.any(hit_matrix, axis=0)  # (E,)
+
+        # deactivate bullets and enemies
+        new_bullet_alive = state.bullets_alive & (~bullet_hit)
+
+        new_enemy_flags = (state.enemies[:, 4] == 1) & (~enemy_hit)
+        enemies_updated = state.enemies.at[:, 4].set(new_enemy_flags.astype(jnp.int32))
+
+        return state._replace(bullets_alive=new_bullet_alive, enemies=enemies_updated)
+
+    @partial(jax.jit, static_argnums=(0,))
     def step(
         self, state: AtlantisState, action: chex.Array
     ) -> Tuple[AtlantisObservation, AtlantisState, float, bool, AtlantisInfo]:
@@ -500,7 +557,7 @@ class JaxAtlantis(JaxEnvironment[AtlantisState, AtlantisObservation, AtlantisInf
         state = self._spawn_enemy(state)
         state = self._move_enemies(state)
 
-        # state = self._check_bullet_enemy_collision(state)
+        state = self._check_bullet_enemy_collision(state)
 
         observation = self._get_observation(state)
         info = AtlantisInfo(time=jnp.array(0, dtype=jnp.int32))
