@@ -25,7 +25,7 @@ class GameConfig:
     scaling_factor: int = 3
     bullet_height: int = 1
     bullet_width: int = 1
-    bullet_speed: int = 5 #for side cannon 3 in x 2 in y
+    bullet_speed: int = 3 #for side cannon 3 in x 2 in y middle 3 in y
     cannon_height: int = 8
     cannon_width: int = 8
     cannon_y: int = 160
@@ -42,7 +42,7 @@ class GameConfig:
     enemy_width: int = 15 # 3 different lengths 15, 16, 9
     enemy_height: int = 8
     enemy_speed: int = 1 # changes throughout the game
-    enemy_spawn_min_frames: int = 60 # just 1 enemy per row, enemies wait til row is clear+offset of 17 Frames
+    enemy_spawn_min_frames: int = 60 # just 1 enemy per row
     enemy_spawn_max_frames: int = 120
 
 
@@ -58,12 +58,13 @@ class EntityPosition(NamedTuple):
 class AtlantisState(NamedTuple):
     score: chex.Array
 
-    # columns = [ x,  y,  dx,   type_id,  active_flag ]
+    # columns = [ x,  y,  dx,   type_id, lane, active_flag ]
     #   x, y        → position
     #   dx          → horizontal speed (positive or negative)
     #   type_id     → integer index into your enemy_specs dict
+    #   lane        → current lane the enemy is on
     #   active_flag → 1 if on-screen, 0 otherwise
-    enemies: chex.Array  # shape: (max_enemies, 5)
+    enemies: chex.Array  # shape: (max_enemies, 6)
 
     # columns = [ x, y, dx, dy]. dx and dy is the velocity
     bullets: chex.Array  # shape: (max_bullets, 4)
@@ -176,7 +177,7 @@ class Renderer_AtraJaxis(AtraJaxisRenderer):
         enemy_sprite = _solid_sprite(cfg.enemy_width, cfg.enemy_height, (255, 0, 0))
 
         def _draw_enemy(i, ras):
-            active = state.enemies[i, 4] == 1
+            active = state.enemies[i, 5] == 1
             ex = state.enemies[i, 0].astype(jnp.int32)
             ey = state.enemies[i, 1].astype(jnp.int32)
             flip = state.enemies[i, 2] < 0  # dx < 0 -> facing left
@@ -307,9 +308,9 @@ class JaxAtlantis(JaxEnvironment[AtlantisState, AtlantisObservation, AtlantisInf
                 ),
             )
 
-            # vertcal componend dy:
-            # - all bullets move up at the same speed. Because origin is in top left, its negative
-            dy = -cfg.bullet_speed
+            # vertical component dy:
+            # - side bullets move slightly slower up than middle bullet Because origin is in top left, its negative
+            dy = jnp.where(jnp.logical_or(cannon_idx == 0, cannon_idx==2), -(cfg.bullet_speed-1), -cfg.bullet_speed)
 
             new_bullet = jnp.array(
                 [cfg.cannon_x[cannon_idx], cfg.cannon_y, dx, dy],  # velocity
@@ -358,7 +359,7 @@ class JaxAtlantis(JaxEnvironment[AtlantisState, AtlantisObservation, AtlantisInf
             & (positions[:, 1] < cfg.screen_height)
         )
 
-        # abullet only remains alive if it was already alive and still on-screen
+        # a bullet only remains alive if it was already alive and still on-screen
         alive = state.bullets_alive & in_bounds
         return state._replace(bullets=moved, bullets_alive=alive)
 
@@ -368,7 +369,8 @@ class JaxAtlantis(JaxEnvironment[AtlantisState, AtlantisObservation, AtlantisInf
         • Decrement spawn-timer every frame.
         • When it reaches 0, try to insert one enemy into the first free
           slot of state.enemies
-        • Pick lane and direction with prng
+        • set to first lane
+        • Pick direction with prng
         • After spawning (or if the screen is full) reset the timer to a
           new random value in min, max and advance the rng
         """
@@ -400,33 +402,28 @@ class JaxAtlantis(JaxEnvironment[AtlantisState, AtlantisObservation, AtlantisInf
 
         def _spawn(s):
 
-            # enemy has 5 entries, the last one (index 4) is the actve_flag
-            # if this value is 0, it means an enemy isnt active anymore
+            # enemy has 5 entries, the last one (index 4) is the active_flag
+            # if this value is 0, it means an enemy isn't active anymore
             # this can be because he either left the screen, or he was shot
-            # the code returns an boolean array (active_flag == 0 -> true)
-            free = s.enemies[:, 4] == 0
+            # the code returns a boolean array (active_flag == 0 -> true)
+            free = s.enemies[:, 5] == 0
             # check if at least one entry is true
             have_slot = jnp.any(free)
             # get free slot index
             slot_idx = jnp.argmax(free)
 
             # Choose a lane (rows in cfg.enemy_paths) and a direction.
-            lane_idx = jax.random.randint(
-                rng_spawn,  # prgn key
-                (),  # defines te shape. here just a scalar
-                0,  # start range
-                cfg.enemy_paths.shape[0],  # end range (length of line array)
-            )
+            lane_idx = 0
             lane_y = cfg.enemy_paths[lane_idx]
 
             # randomy decide the direction of the enemies, left or right
             go_left = jax.random.bernoulli(rng_spawn)  # True == left
-            # iif go_left is True, then set start x to the window_size + enemey_width
+            # iif go_left is True, then set start x to the window_size + enemy_width
             # this ensures, that the enemy will spawn outside the visible area
             # if the value is false, spawn outside the visible area on the left side
             start_x = jnp.where(
                 go_left,
-                cfg.screen_width + cfg.enemy_width,
+                cfg.screen_width,
                 -cfg.enemy_width,
             )
             # Set the direction
@@ -436,7 +433,7 @@ class JaxAtlantis(JaxEnvironment[AtlantisState, AtlantisObservation, AtlantisInf
             # TODO: change later
             # also sets the enemy to be active (last entry is 1)
             new_enemy = jnp.array(
-                [start_x, lane_y, dx, 0, 1],
+                [start_x, lane_y, dx, 0,  1],
                 dtype=jnp.int32,
             )
 
