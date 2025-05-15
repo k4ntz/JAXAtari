@@ -407,10 +407,11 @@ class SpaceInvadersRenderer(AtraJaxisRenderer):
         frame_player = aj.get_sprite_frame(self.SPRITE_PLAYER, 0)
         raster = aj.render_at(raster, state.player_x - PLAYER_SIZE[0], PLAYER_Y, frame_player)
 
-        # Render bullet every even frame 
+        # Render bullet every even frame (TODO not sure if the blinking is just a render or logic thing)
+        frame_bullet = aj.get_sprite_frame(SPRITE_BULLET, 0)
         raster = jax.lax.cond(
-            jnp.logical_and(state.step_counter % 2 == 0, state.bullet_active),
-            lambda r: aj.render_at(r, state.bullet_x, state.bullet_y, aj.get_sprite_frame(SPRITE_BULLET, 0)),
+            (state.step_counter % 2 == 0) & (state.bullet_active),
+            lambda r: aj.render_at(r, state.bullet_x, state.bullet_y, frame_bullet),
             lambda r: r,
             raster
         )
