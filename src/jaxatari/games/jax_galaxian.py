@@ -7,19 +7,25 @@ from functools import partial
 from jax import lax
 import jax.lax
 from gymnax.environments import spaces
+from jaxatari.environment import JaxEnvironment, JAXAtariAction as Action
 
 from jaxatari.games.jax_seaquest import SPRITE_BG
 from jaxatari.renderers import AtraJaxisRenderer
 from jaxatari.rendering import atraJaxis as aj
 
 from src.jaxatari.environment import JaxEnvironment
+from jaxatari.environment import JaxEnvironment
 
+"""
 # Action constants
 NOOP = 0
 FIRE = 1
 RIGHT = 2
 LEFT = 3
+"""
 
+if not pygame.get_init():
+    pygame.init()
 
 # -------- Game constants --------
 SHOOTING_COOLDOWN = 80
@@ -41,6 +47,17 @@ START_X = NATIVE_GAME_WIDTH // 4
 START_Y = NATIVE_GAME_HEIGHT - 20
 ENEMY_ATTACK_SPEED = 1
 
+ENEMY_SPACING_X = 20
+ENEMY_SPACING_Y = 20
+ENEMY_GRID_Y = 300
+START_X = 100
+ENEMY_ATTACK_SPEED = 2
+ENEMY_ATTACK_TURN_TIME = 30
+ENEMY_ATTACK_BULLET_SPEED = 10
+ENEMY_ATTACK_BULLET_DELAY = 50
+ENEMY_ATTACK_MAX_BULLETS = 2
+LIVES = 3
+PLAYER_DEATH_DELAY = 50
 
 class GalaxianState(NamedTuple):
     player_x: chex.Array
@@ -56,18 +73,35 @@ class GalaxianState(NamedTuple):
     enemy_attack_pos: chex.Array
     enemy_attack_x: chex.Array
     enemy_attack_y: chex.Array
+    enemy_attack_direction: chex.Array  # -1: left, 1: right
+    enemy_attack_turning: chex.Array    # -1: turning left, 1: turning right, 0: no turning
+    enemy_attack_turn_timer: chex.Array
     enemy_attack_respawn_timer: chex.Array
+    enemy_attack_bullet_x: chex.Array
+    enemy_attack_bullet_y: chex.Array
+    enemy_attack_bullet_timer: chex.Array
+    lives: chex.Array
+    player_alive: chex.Array
+    player_respawn_timer: chex.Array
+
     random_key: chex.Array
     step_counter: chex.Array
-    obs_stack: chex.ArrayTree
+    #obs_stack: chex.ArrayTree
 
-class Action(NamedTuple):
-    player_move_dir: chex.Array
-    player_shooting: chex.Array
 
 @jax.jit
-def update_player_position(state: GalaxianState, action: Action) -> GalaxianState:
-    new_x = jnp.clip(state.player_x + action.player_move_dir * 5, 0, SCREEN_WIDTH)
+def update_player_position(state: GalaxianState, action) -> GalaxianState:
+
+    press_right = jnp.any(
+        jnp.array([action == Action.RIGHT, action == Action.RIGHTFIRE])
+    )
+
+    press_left = jnp.any(
+        jnp.array([action == Action.LEFT, action == Action.LEFTFIRE])
+    )
+
+    new_x = jnp.clip(state.player_x + press_right * 5, 0, SCREEN_WIDTH)
+    new_x = jnp.clip(new_x - press_left * 5, 0, SCREEN_WIDTH)
     return state._replace(player_x=new_x)
 
 @jax.jit
@@ -85,77 +119,12 @@ def update_enemy_positions(state: GalaxianState) -> GalaxianState:
     new_enemy_grid_x = state.enemy_grid_x + ENEMY_MOVE_SPEED * state.enemy_grid_direction
     return state._replace(enemy_grid_x=new_enemy_grid_x, enemy_grid_direction=new_enemy_grid_direction)
 
-# @jax.jit
-# def update_enemy_attack_state(state: GalaxianState) -> GalaxianState:
-#
-#   #  enemy_attack_state = state.enemy_attack_state # 0: init, 1: attack, 2: respawn
-#   #  enemy_attack_pos = state.enemy_attack_pos
-#   #  enemy_attack_x = state.enemy_attack_x
-#   #  enemy_attack_y = state.enemy_attack_y
-#     enemy_attack_respawn_timer = state.enemy_attack_respawn_timer
-#     enemy_grid_alive = state.enemy_grid_alive
-#     enemy_grid_x = state.enemy_grid_x
-#     enemy_grid_y = state.enemy_grid_y
-#
-#     def start_attack(s):
-#         enemy_attack_state, enemy_attack_pos, enemy_attack_x, enemy_attack_y, enemy_attack_respawn_timer, enemy_grid_alive, enemy_grid_x, enemy_grid_y = s
-#
-#         row = 0
-#         column = 0
-#
-#         lax.while_loop(
-#             lambda s: enemy_grid_alive[s[0],s[1]] != 1,
-#             lambda s: jax.lax.cond(
-#                 s[0] >= GRID_ROWS,
-#                 lambda u: (s[0] + 1, 0),
-#                 lambda u: (s[0], s[1] + 1),
-#                 s
-#             ),
-#             (row, column)
-#         )
-#
-#         return 1, jnp.array([row, column]), enemy_grid_x[row, column], enemy_grid_y[row, column], enemy_attack_respawn_timer, enemy_grid_alive.at[row, column].set(2)
-#
-#     new_enemy_attack_state, new_enemy_attack_pos, new_enemy_attack_x, new_enemy_attack_y, new_enemy_attack_respawn_timer, new_enemy_grid_alive = jax.lax.cond(
-#         enemy_attack_state == 0,
-#         start_attack,
-#         lambda s: jax.lax.cond(
-#             enemy_attack_state == 1,
-#             lambda t: jax.lax.cond(
-#                 enemy_grid_alive[enemy_attack_pos] == 0,
-#                 lambda u: (0, t[1], t[2], t[3], 20, t[5]),
-#                 lambda u: lax.cond(
-#                     enemy_attack_y > SCREEN_HEIGHT,
-#                     lambda v: (2, u[1], u[2], u[3], u[4], u[5].at[0,0].set(1)),
-#                     lambda v: (u[0], u[1],u[2], u[3] + ENEMY_ATTACK_SPEED, u[4], u[5]),
-#             u
-#                 ),
-#                 t,
-#             ),
-#             # enemy attack state == 2
-#             lambda t: jax.lax.cond(
-#                 enemy_attack_respawn_timer <= 0,
-#                 lambda u: (0, t[1], t[2], t[3], 20, t[5]),
-#                 lambda u: (t[0], t[1], t[2], t[3], t[4] - 1, t[5]),
-#                 t
-#             ),
-#             s
-#         ),
-#         (enemy_attack_state, enemy_attack_pos, enemy_attack_x, enemy_attack_y, enemy_attack_respawn_timer, enemy_grid_alive, enemy_grid_x, enemy_grid_y)
-#     )
-#
-#     return state._replace(
-#         enemy_attack_state=new_enemy_attack_state,
-#         enemy_attack_pos=new_enemy_attack_pos,
-#         enemy_attack_x=new_enemy_attack_x,
-#         enemy_attack_y=new_enemy_attack_y,
-#         enemy_grid_alive=new_enemy_grid_alive,
-#         enemy_attack_respawn_timer=new_enemy_attack_respawn_timer
-#     )
+
 
 @jax.jit
 def update_enemy_attack(state: GalaxianState) -> GalaxianState:
 
+    enemy_out_of_bounds = (state.enemy_attack_y > SCREEN_HEIGHT) | (state.enemy_attack_x <= -10) | (state.enemy_attack_x >= SCREEN_WIDTH + 10)
     #jax.debug.print("grid: {}", state.enemy_grid_alive[tuple(state.enemy_attack_pos)])
     #jax.debug.print("state: {}", state.enemy_attack_state)
     new_enemy_attack_state = jnp.where(
@@ -183,7 +152,7 @@ def update_enemy_attack(state: GalaxianState) -> GalaxianState:
     def determine_enemy_pos(_):
         row = 0
         column = 0
-        jax.debug.print("grid determine: {}", state.enemy_grid_alive[0,0])
+        #jax.debug.print("grid determine: {}", state.enemy_grid_alive[0,0])
         position = lax.while_loop(
             lambda s: state.enemy_grid_alive[s] != 1,
             lambda s: jax.lax.cond(
@@ -195,7 +164,7 @@ def update_enemy_attack(state: GalaxianState) -> GalaxianState:
             (row, column)
         )
 
-        jax.debug.print("new pos: {}, {}", row, column)
+        #jax.debug.print("new pos: {}, {}", row, column)
         return jnp.array(position)
 
     new_enemy_attack_pos = lax.cond(
@@ -213,19 +182,47 @@ def update_enemy_attack(state: GalaxianState) -> GalaxianState:
         operand=None
     )
 
+    #jax.debug.print("direction: {}",state.enemy_attack_direction)
+    #jax.debug.print("turning: {}", state.enemy_attack_turning)
+    #jax.debug.print("timer: {}", state.enemy_attack_turn_timer)
+    new_enemy_attack_direction = jnp.where(
+        (state.enemy_attack_turning != 0) & (state.enemy_attack_turn_timer == 0),
+        state.enemy_attack_turning,
+        state.enemy_attack_direction
+    )
+
+
+    player_right = state.enemy_attack_x < state.player_x
+    player_left = state.enemy_attack_x > state.player_x
+    new_enemy_attack_turning = jnp.where(
+        (state.enemy_attack_turning == 0) & (state.enemy_attack_turn_timer == ENEMY_ATTACK_TURN_TIME) & ((player_right) & (state.enemy_attack_direction == -1) | (player_left) & (state.enemy_attack_direction == 1)),
+        -state.enemy_attack_direction,
+        jnp.where(
+            (state.enemy_attack_turn_timer == 0) | (state.enemy_attack_state == 0),
+            0,
+            state.enemy_attack_turning)
+    )
+
+
+    new_enemy_attack_turn_timer = jnp.where(
+        (state.enemy_attack_turn_timer == 0) | (state.enemy_attack_state == 0),
+        ENEMY_ATTACK_TURN_TIME,
+        jnp.where(
+            state.enemy_attack_turning != 0,
+            state.enemy_attack_turn_timer -1,
+            state.enemy_attack_turn_timer
+        )
+    )
+
     delta_x = jnp.where(
         state.enemy_attack_state == 1,
-        jnp.where(
-            state.enemy_attack_x < state.player_x,
-            ENEMY_ATTACK_SPEED,
-            -ENEMY_ATTACK_SPEED
-        ),
+        ENEMY_ATTACK_SPEED * state.enemy_attack_direction,
         0
     )
 
     delta_y = jnp.where(
         state.enemy_attack_state == 1,
-        1,
+        int(ENEMY_ATTACK_SPEED/2),
         0
     )
 
@@ -246,19 +243,62 @@ def update_enemy_attack(state: GalaxianState) -> GalaxianState:
         )
     )
 
+    new_enemy_attack_bullet_timer = jnp.where(
+        state.enemy_attack_bullet_timer <= 0,
+        ENEMY_ATTACK_BULLET_DELAY,
+        state.enemy_attack_bullet_timer -1,
+    )
+
     return state._replace(
         enemy_attack_state=new_enemy_attack_state,
         enemy_attack_x=new_enemy_attack_x + delta_x,
         enemy_attack_y=new_enemy_attack_y + delta_y,
         enemy_attack_pos=new_enemy_attack_pos,
+        enemy_attack_direction=new_enemy_attack_direction,
+        enemy_attack_turning=new_enemy_attack_turning,
+        enemy_attack_turn_timer=new_enemy_attack_turn_timer,
         enemy_attack_respawn_timer=new_enemy_attack_respawn_timer,
-        enemy_grid_alive=new_enemy_grid_alive
+        enemy_grid_alive=new_enemy_grid_alive,
+        enemy_attack_bullet_timer = new_enemy_attack_bullet_timer,
     )
 
+def update_enemy_bullets(state: GalaxianState) -> GalaxianState:
 
-def init_action():
-    return Action(player_move_dir=jnp.array(0),
-                  player_shooting=jnp.array(0))
+    bullet_available = (state.enemy_attack_bullet_timer == 0) & (state.enemy_attack_bullet_y == -1)
+    new_enemy_attack_bullet_x = jnp.where(
+        bullet_available,
+        state.enemy_attack_x,
+        state.enemy_attack_bullet_x
+    )
+    new_enemy_attack_bullet_y = jnp.where(
+        bullet_available,
+        state.enemy_attack_y,
+        state.enemy_attack_bullet_y
+    )
+
+    bullet_exists = (state.enemy_attack_bullet_y != -1)
+    new_enemy_attack_bullet_y = jnp.where(
+        bullet_exists,
+        state.enemy_attack_bullet_y + ENEMY_ATTACK_BULLET_SPEED,
+        new_enemy_attack_bullet_y
+    )
+
+    bullet_out_of_bounds = (state.enemy_attack_bullet_y > SCREEN_HEIGHT)
+    new_enemy_attack_bullet_x = jnp.where(
+        bullet_out_of_bounds,
+        -1,
+        new_enemy_attack_bullet_x
+    )
+    new_enemy_attack_bullet_y = jnp.where(
+        bullet_out_of_bounds,
+        -1,
+        new_enemy_attack_bullet_y
+    )
+
+    return state._replace(
+        enemy_attack_bullet_x=new_enemy_attack_bullet_x,
+        enemy_attack_bullet_y=new_enemy_attack_bullet_y,
+    )
 
 
 
@@ -267,30 +307,29 @@ def get_action_from_keyboard():
     left = keys[pygame.K_a] or keys[pygame.K_LEFT]
     right = keys[pygame.K_d] or keys[pygame.K_RIGHT]
     shooting = keys[pygame.K_SPACE]
-    move_dir = jnp.array(0)
 
-    left_cond =  jnp.logical_and(left, not right)
-    right_cond = jnp.logical_and(right, not left)
+    left_only = left and not right
+    right_only = right and not left
 
-    move_dir = lax.cond(
-        left_cond,
-        lambda _: jnp.array(-1),
-        lambda _: lax.cond(
-            right_cond,
-            lambda _: jnp.array(1),
-            lambda _: jnp.array(0),
-            operand=None
-        ),
-        operand=None
-    )
+    if shooting:
+        if left_only:
+            return Action.LEFTFIRE
+        elif right_only:
+            return Action.RIGHTFIRE
+        else:
+            return Action.FIRE
+    else:
+        if left_only:
+            return Action.LEFT
+        elif right_only:
+            return Action.RIGHT
+        else:
+            return Action.NOOP
 
-    shoot = lax.cond(shooting, lambda _: jnp.array(1), lambda _: jnp.array(0), operand=None)
-
-    return Action(player_move_dir=move_dir, player_shooting=shoot)
 
 
 @jax.jit
-def handle_shooting(state: GalaxianState, action: Action) -> GalaxianState:
+def handle_shooting(state: GalaxianState, action) -> GalaxianState:
     def shoot(_):
         return state._replace(
             bullet_x=jnp.array(state.player_x, dtype=state.bullet_x.dtype),
@@ -306,7 +345,18 @@ def handle_shooting(state: GalaxianState, action: Action) -> GalaxianState:
     def idle(_):
         return state
 
-    can_shoot = jnp.logical_and(action.player_shooting, state.player_shooting_cooldown == 0)
+
+    shooting = jnp.any(
+        jnp.array(
+            [
+                action == Action.FIRE,
+                action == Action.RIGHTFIRE,
+                action == Action.LEFTFIRE,
+            ]
+        )
+    )
+
+    can_shoot = jnp.logical_and(shooting, state.player_shooting_cooldown == 0)
     on_cooldown = jnp.logical_not(can_shoot) & (state.player_shooting_cooldown > 0)
 
     return lax.cond(
@@ -395,6 +445,41 @@ def bullet_collision_attack(state: GalaxianState) -> GalaxianState:
 
     return lax.cond(hit, process_hit, process_none, operand=state)
 
+@jax.jit
+def check_player_death_by_enemy(state: GalaxianState) -> GalaxianState:
+
+    x_diff = jnp.abs(state.player_x - state.enemy_attack_x)
+    y_diff = jnp.abs(state.player_y - state.enemy_attack_y)
+
+    collision = (x_diff <= 10) & (y_diff <= 10) & (state.enemy_grid_alive[tuple(state.enemy_attack_pos)] != 0)
+    hit = jnp.any(collision)
+
+    def process_hit(operands):
+        current_state = operands
+        new_lives = current_state.lives - 1
+        new_enemy_grid_alive = current_state.enemy_grid_alive.at[tuple(current_state.enemy_attack_pos)].set(0)
+
+        return state._replace(lives=new_lives, enemy_grid_alive=new_enemy_grid_alive)
+
+    return lax.cond(hit, process_hit, lambda _: state, operand=state)
+
+def check_player_death_by_bullet(state: GalaxianState) -> GalaxianState:
+
+    x_diff = jnp.abs(state.player_x - state.enemy_attack_bullet_x)
+    y_diff = jnp.abs(state.player_y - state.enemy_attack_bullet_y)
+
+    collision = (x_diff <= 10) & (y_diff <= 10)
+    hit = jnp.any(collision)
+
+    def process_hit(operands):
+        current_state = operands
+        new_lives = current_state.lives - 1
+        new_enemy_attack_bullet_x = jnp.array(-1)
+        new_enemy_attack_bullet_y = jnp.array(-1)
+
+        return state._replace(lives=new_lives, enemy_attack_bullet_x=new_enemy_attack_bullet_x,enemy_attack_bullet_y=new_enemy_attack_bullet_y)
+
+    return lax.cond(hit, process_hit, lambda _: state, operand=state)
 
 def draw(screen, state):
     # Spieler zeichnen
@@ -411,6 +496,11 @@ def draw(screen, state):
         enemy_attack_rect = pygame.Rect(int(state.enemy_attack_x - 7.5), int(state.enemy_attack_y - 5), 15, 10)
         pygame.draw.rect(screen, (255, 0, 0), enemy_attack_rect)
 
+   # Feindliche Kugel zeichnen
+    if state.enemy_attack_bullet_x > -1:
+       bullet_rect = pygame.Rect(int(state.enemy_attack_bullet_x - 2.5), int(state.enemy_attack_bullet_y - 5), 5, 10)
+       pygame.draw.rect(screen, (255, 255, 0), bullet_rect)
+
     # Feindgitter zeichnen
     for i in range(state.enemy_grid_x.shape[0]):
         for j in range(state.enemy_grid_x.shape[1]):
@@ -419,6 +509,12 @@ def draw(screen, state):
                 y = int(state.enemy_grid_y[i, j] - 5)
                 enemy_rect = pygame.Rect(x, y, 15, 10)
                 pygame.draw.rect(screen, (255, 0, 0), enemy_rect)
+
+    # Leben zeichnen
+    for i in range(state.lives):
+        x = SCREEN_WIDTH - 20 - i * 20
+        y = SCREEN_HEIGHT - 20
+        pygame.draw.rect(screen, (100, 255, 100), pygame.Rect(x, y, 10, 20))
 
 
 
@@ -448,10 +544,12 @@ class JaxGalaxian(JaxEnvironment[GalaxianState, GalaxianObservation, GalaxianInf
             reward_funcs = tuple(reward_funcs)
         self.reward_funcs = reward_funcs
         self.action_set = {
-            NOOP,
-            FIRE,
-            RIGHT,
-            LEFT,
+            Action.NOOP,
+            Action.FIRE,
+            Action.RIGHT,
+            Action.LEFT,
+            Action.RIGHTFIRE,
+            Action.LEFTFIRE
         }
         self.obs_size = 3*2+1
         #Größe der Beobachtungsdaten
@@ -459,7 +557,7 @@ class JaxGalaxian(JaxEnvironment[GalaxianState, GalaxianObservation, GalaxianInf
         # +1 ein extra wert für den score
         # sind erstmal nur temporary values
 
-    def reset(self) -> GalaxianState:
+    def reset(self, key = None) -> Tuple[GalaxianObservation, GalaxianState]:
         grid_rows = GRID_ROWS
         grid_cols = GRID_COLS
         enemy_spacing_x = ENEMY_SPACING_X
@@ -488,25 +586,37 @@ class JaxGalaxian(JaxEnvironment[GalaxianState, GalaxianObservation, GalaxianInf
                              enemy_grid_direction=jnp.array(1),
                              enemy_attack_state=jnp.array(0),
                              enemy_attack_pos=jnp.array((-1, -1)),
+
+                             enemy_attack_direction=jnp.array(1),
+                             enemy_attack_turning=jnp.array(0),
+                             enemy_attack_turn_timer=jnp.array(ENEMY_ATTACK_TURN_TIME),
                              enemy_attack_x=jnp.array(-1.0, dtype=jnp.float32),
                              enemy_attack_y=jnp.array(-1.0, dtype=jnp.float32),
                              enemy_attack_respawn_timer=jnp.array(20),
+                             enemy_attack_bullet_x=jnp.array(-1),
+                             enemy_attack_bullet_y=jnp.array(-1),
+                             #enemy_attack_bullet_x=jnp.full((ENEMY_ATTACK_MAX_BULLETS,), -1),
+                             #enemy_attack_bullet_y=jnp.full((ENEMY_ATTACK_MAX_BULLETS,), -1),
+                             enemy_attack_bullet_timer = jnp.array(ENEMY_ATTACK_BULLET_DELAY),
+                             lives=jnp.array(3),
+                             player_alive=jnp.array(True),
+                             player_respawn_timer=jnp.array(PLAYER_DEATH_DELAY),
                              random_key=jax.random.PRNGKey(0),
                              step_counter=jnp.array(0),
-                             obs_stack=None)
+                             )
 
         initial_obs = self._get_observation(state)
 
 
-        def expand_and_copy(x):
-            x_expanded = jnp.expand_dims(x, axis=0)
-            return jnp.concatenate([x_expanded] * self.frame_stack_size, axis=0)
-
-        # Apply transformation to each leaf in the pytree
-        stacked_obs = jax.tree.map(expand_and_copy, initial_obs)
-
-        new_state = state._replace(obs_stack=stacked_obs)
-        return new_state, stacked_obs
+        # def expand_and_copy(x):
+        #     x_expanded = jnp.expand_dims(x, axis=0)
+        #     return jnp.concatenate([x_expanded] * self.frame_stack_size, axis=0)
+        #
+        # # Apply transformation to each leaf in the pytree
+        # stacked_obs = jax.tree.map(expand_and_copy, initial_obs)
+        #
+        # new_state = state._replace(obs_stack=stacked_obs)
+        return initial_obs, state
 
         #alles aus galaxianState was man aus Spielersicht wahrnimmt
     def _get_observation(self, state: GalaxianState) -> GalaxianObservation:
@@ -520,8 +630,12 @@ class JaxGalaxian(JaxEnvironment[GalaxianState, GalaxianObservation, GalaxianInf
             enemy_grid_alive=state.enemy_grid_alive,
             enemy_attack_pos=state.enemy_attack_pos,
             enemy_attack_x=state.enemy_attack_x,
-            enemy_attack_y=state.enemy_attack_y
+            enemy_attack_y=state.enemy_attack_y,
         )
+
+    @partial(jax.jit, static_argnums=(0,))
+    def get_action_space(self):
+        return jnp.array([Action.NOOP, Action.LEFT, Action.RIGHT])
 
 
     def action_space(self) -> spaces.Discrete:
@@ -537,22 +651,21 @@ class JaxGalaxian(JaxEnvironment[GalaxianState, GalaxianObservation, GalaxianInf
 
     @partial(jax.jit, static_argnums=(0,))
     def step(
-            self, state: GalaxianState, action_int: chex.Array  # Renamed for clarity
-    ) -> Tuple[GalaxianState, GalaxianObservation, float, bool, GalaxianInfo]:
-
-        # Convert integer action to Action NamedTuple
-        move_dir = jnp.where(action_int == LEFT, -1, jnp.where(action_int == RIGHT, 1, 0))
-        shooting = jnp.where(action_int == FIRE, 1, 0)
-        current_action = Action(player_move_dir=jnp.array(move_dir), player_shooting=jnp.array(shooting))
-
-        new_state = update_player_position(state, current_action)  # Use current_action
-        new_state = handle_shooting(new_state, current_action)  # Use current_action
-        # ... rest of your step function
+            self, state: GalaxianState, action: chex.Array
+    ) -> Tuple[GalaxianObservation, GalaxianState, float, bool, GalaxianInfo]:
+        #TODO: refactor like the other games
+        # create new state instead of replacing old state step by step
+        new_state = update_player_position(state, action)
+        new_state = handle_shooting(new_state, action)
         new_state = update_enemy_positions(new_state)
         new_state = update_bullets(new_state)
         new_state = remove_bullets(new_state)
         new_state = bullet_collision(new_state)
         new_state = bullet_collision_attack(new_state)
+        new_state = update_enemy_attack(new_state)
+        new_state = update_enemy_bullets(new_state)
+        new_state = check_player_death_by_enemy(new_state)
+        new_state = check_player_death_by_bullet(new_state)
         new_state = update_enemy_attack(new_state)  # This was missing from your step
         new_state = new_state._replace(step_counter=new_state.step_counter + 1)
 
@@ -563,17 +676,15 @@ class JaxGalaxian(JaxEnvironment[GalaxianState, GalaxianObservation, GalaxianInf
 
         observation = self._get_observation(new_state)
         # jax.debug.print("obs: {}", observation) # Be careful with debug prints in jitted functions
+        #jax.debug.print("obs: {}", observation)
 
         # stack the new observation, remove the oldest one
-        # Ensure initial_obs_stack is correctly initialized in reset
-        stacked_observation = jax.tree.map(
-            lambda stack, obs: jnp.concatenate([stack[1:], jnp.expand_dims(obs, axis=0)], axis=0),
-            new_state.obs_stack,
-            observation
-        )
-        new_state = new_state._replace(obs_stack=stacked_observation)
+        # observation = jax.tree.map(lambda stack, obs: jnp.concatenate([stack[1:], jnp.expand_dims(obs, axis=0)], axis=0), new_state.obs_stack, observation)
+        # new_state = new_state._replace(obs_stack=observation)
 
-        return new_state, new_state.obs_stack, env_reward, done, info
+        return observation, new_state, env_reward, done, info
+
+
     @partial(jax.jit, static_argnums=(0,))
     def _get_env_reward(self, previous_state: GalaxianState, state: GalaxianState):
         return 420 #TODO: implement reward function (after score is implemented)
@@ -754,7 +865,10 @@ class GalaxianRenderer(AtraJaxisRenderer):
 if __name__ == "__main__":
     pygame.init()
 
-    game = JaxGalaxian(frameskip=1) # frameskip=0 if you handle it manually
+    game = JaxGalaxian(frameskip=1)
+    jitted_step = jax.jit(game.step)
+    jitted_reset = jax.jit(game.reset)
+    initial_observation, state  = jitted_reset()  # Unpack the tuple
 
     screen = pygame.display.set_mode((PYGAME_WINDOW_WIDTH, PYGAME_WINDOW_HEIGHT))
     pygame.display.set_caption("Galaxian")
@@ -770,30 +884,20 @@ if __name__ == "__main__":
 
     running = True
     while running:
-        action_int = NOOP # Default action
+        action_int = Action.NOOP # Default action
         for event in pygame.event.get():
             if event.type == pygame.QUIT:
                 running = False
-
-        # Get integer action from keyboard for the main loop
-        keys = pygame.key.get_pressed()
-        if keys[pygame.K_a] or keys[pygame.K_LEFT]:
-            action_int = LEFT
-        elif keys[pygame.K_d] or keys[pygame.K_RIGHT]:
-            action_int = RIGHT
-        if keys[pygame.K_SPACE]: # Could be FIRE, or if moving LEFTFIRE/RIGHTFIRE
-            action_int = FIRE # Simplification: FIRE overrides movement for this key check
-                               # Or handle combined actions if your env supports them
-
-        # Pass the integer action
-        state, obs_stack, reward, done, info = jitted_step(state, jnp.array(action_int))
-
-        # The renderer expects state, not obs_stack for rendering game entities.
-        # obs_stack is for the agent.
+        screen.fill((0, 0, 0))
+        draw(screen, state)
+        pygame.display.flip()
+        action = get_action_from_keyboard()
+        state, observation, reward, done, info = jitted_step(state, action)  # Unpack the tuple
         render_output = renderer.render(state)
-        aj.update_pygame(screen, render_output, PYGAME_SCALE_FACTOR, NATIVE_GAME_WIDTH, NATIVE_GAME_HEIGHT) # Assuming scale factor 1
+        aj.update_pygame(screen, render_output, PYGAME_SCALE_FACTOR, NATIVE_GAME_WIDTH,
+                         NATIVE_GAME_HEIGHT)  # Assuming scale factor 1
 
-        pygame.display.flip() # Make sure to flip the display
+        pygame.display.flip()
         clock.tick(30)
 
     pygame.quit()
