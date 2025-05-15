@@ -2,8 +2,8 @@ import jax
 import jax.numpy as jnp
 from functools import partial
 from typing import NamedTuple, Tuple, Any, List
-from ..environment import JaxEnvironment, EnvState
-from ..renderers import AtraJaxisRenderer
+from jaxatari.environment import JaxEnvironment, EnvState
+from jaxatari.renderers import AtraJaxisRenderer
 
 """
 JAX Backgammon Environment
@@ -493,8 +493,8 @@ def run_game_with_input(key: jax.Array, max_steps=100):
 
 def main():
     key = jax.random.PRNGKey(0)
-    # run_game_without_input(key)
-    run_game_with_input(key)
+    run_game_without_input(key)
+    #run_game_with_input(key)
 
 
 if __name__ == "__main__":
