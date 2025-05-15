@@ -1,8 +1,8 @@
 import jax
 import jax.numpy as jnp
 from typing import NamedTuple, Tuple, Any, List
-from ..environment import JaxEnvironment, EnvState
-from ..renderers import AtraJaxisRenderer
+from jaxatari.environment import JaxEnvironment, EnvState
+from jaxatari.renderers import AtraJaxisRenderer
 
 # Constants for game Environment
 NUM_POINTS = 24
@@ -41,7 +41,34 @@ class JaxBackgammonEnv(JaxEnvironment[BackgammonState, jnp.ndarray, dict]):
         board = board.at[0, 0].set(2).at[0, 11].set(5).at[0, 16].set(3).at[0, 18].set(5)
         board = board.at[1, 23].set(2).at[1, 12].set(5).at[1, 7].set(3).at[1, 5].set(5)
         dice = jnp.zeros(2, dtype=jnp.int32)
-        return BackgammonState(board=board, dice=dice, current_player=WHITE, is_game_over=False)
+
+        #The condition for the while loop
+        def cond_fun(carry):
+            white_roll, black_roll, key = carry
+            return white_roll == black_roll
+        #The code to be run in the while loop
+        def body_fun(carry):
+            _, _, key = carry
+            key, subkey1, subkey2 = jax.random.split(key, 3)
+            white_roll = jax.random.randint(subkey1, (), 1, 7)
+            black_roll = jax.random.randint(subkey2, (), 1, 7)
+            return (white_roll, black_roll, key)
+
+        # Generate the first dice throw
+        key, subkey1, subkey2 = jax.random.split(self.key, 3)
+        white_roll = jax.random.randint(subkey1, (), 1, 7)
+        black_roll = jax.random.randint(subkey2, (), 1, 7)
+        carry = (white_roll, black_roll, key)
+
+        white_roll, black_roll, key = jax.lax.while_loop(cond_fun, body_fun, carry)
+
+        return BackgammonState(board=board, dice=dice, current_player=jax.lax.cond(
+            white_roll > black_roll,
+            lambda _: WHITE,
+            lambda _: BLACK,
+            operand=None
+        ), is_game_over=False)
+
 
     def reset(self) -> Tuple[jnp.ndarray, BackgammonState]:
         state = self.init_state()
@@ -69,7 +96,7 @@ class JaxBackgammonEnv(JaxEnvironment[BackgammonState, jnp.ndarray, dict]):
         correct_direction = distance > 0
         dice_match = (state.dice[0] == distance) | (state.dice[1] == distance)
         not_blocked = board[opponent_idx, to_point] <= 1
-        return has_piece & in_bounds & correct_direction & dice_match & not_blocked
+        return has_piece & in_bounds & correct_direction & not_blocked & dice_match
 
     def step(self, state: BackgammonState, action: Tuple[int, int]) -> Tuple[jnp.ndarray, BackgammonState, float, bool, dict]:
         from_point, to_point = action
@@ -280,6 +307,10 @@ def run_game_without_input(key: jax.Array, max_steps=20):
     obs, state = env.reset()
     renderer = BackgammonRenderer(env)
     env.renderer = renderer
+    env.key = key
+
+    print(f"Initial roll: White {state.dice[0]}, Black {state.dice[1]}")
+    print(f"{'White' if state.current_player == WHITE else 'Black'} will start the game!")
 
     for i in range(max_steps):
         if state.is_game_over:
@@ -327,6 +358,8 @@ def run_game_with_input(key: jax.Array, max_steps=100):
     print("Points are numbered 1-24, with 1-6 on the white home board.")
     print("BAR refers to the bar, and HOME refers to moving pieces off the board.")
 
+    print(f"Initial roll: White {state.dice[0]}, Black {state.dice[1]}")
+    print(f"{'White' if state.current_player == WHITE else 'Black'} will start the game!")
     step_count = 0
     while step_count < max_steps and not state.is_game_over:
         # Use the renderer to display the board
@@ -370,8 +403,8 @@ def run_game_with_input(key: jax.Array, max_steps=100):
 
 def main():
     key = jax.random.PRNGKey(0)
-    # run_game_without_input(key)
-    run_game_with_input(key)
+    run_game_without_input(key)
+    #run_game_with_input(key)
 
 
 if __name__ == "__main__":
