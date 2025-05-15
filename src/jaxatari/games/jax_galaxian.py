@@ -709,7 +709,7 @@ if __name__ == "__main__":
         draw(screen, state)
         pygame.display.flip()
         action = get_action_from_keyboard()
-        state, observation, reward, done, info = jitted_step(state, action)  # Unpack the tuple
+        observation, state, reward, done, info = jitted_step(state, action)  # Unpack the tuple
         clock.tick(30)
 
     pygame.quit()
