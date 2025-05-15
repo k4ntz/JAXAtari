@@ -27,8 +27,8 @@ PLAYER_COLOR = (169, 169, 169)
 # Constants for buildings
 # Constants for buildings
 NUM_BUILDINGS = 3
-BUILDING_WIDTH = 24
-BUILDING_HEIGHT = 24
+BUILDING_WIDTH = 25
+BUILDING_HEIGHT = 25
 BUILDING_COLOR = (114, 114, 114)
 MAX_BUILDING_DAMAGE = 14
 BUILDING_INITIAL_Y = 160  # Changed to be lower, just above black bar
@@ -36,26 +36,10 @@ BUILDING_VELOCITY = 1  # pixels per frame
 BUILDING_SPACING = 70
 
 # Height and Y position based on damage level
-BUILDING_HEIGHTS = jnp.array([24, 22, 20, 18, 16, 14, 12, 10, 9, 8, 7, 6, 5, 4, 3])
+BUILDING_HEIGHTS = jnp.array([225, 23, 21, 19, 17, 15, 13, 11, 9, 7, 5, 3, 1, 0])
 
 # Updated Y positions for buildings to sit directly on black bar
-BUILDING_Y_POSITIONS = jnp.array([
-    160,    # Position for damage level 0 (full height building)
-    160,    # Position for damage level 1
-    160,    # Position for damage level 2
-    160,    # Position for damage level 3
-    160,    # Position for damage level 4
-    160,    # Position for damage level 5
-    160,    # Position for damage level 6
-    160,    # Position for damage level 7
-    160,    # Position for damage level 8
-    160,    # Position for damage level 9
-    160,    # Position for damage level 10
-    160,    # Position for damage level 11
-    160,    # Position for damage level 12
-    160,    # Position for damage level 13 (most damaged)
-    160     # Position for damage level 14
-])
+BUILDING_Y_POSITIONS = jnp.array([ 160, 163, 168, 170, 172, 174, 176, 178, 180, 182, 184, 186, 188, 190])
 
 # Constants for enemies
 NUM_ENEMIES_PER_TYPE = 3
@@ -517,8 +501,35 @@ def detect_collisions(state: AirRaidState) -> Tuple[chex.Array, chex.Array, chex
     for em in range(NUM_ENEMY_MISSILES):
         is_missile_active = enemy_missile_active[em]
         
-        # Check collision with player
-        collision = jnp.logical_and(
+        # First check collision with buildings
+        for b in range(NUM_BUILDINGS):
+            # Check collision between missile and building
+            collision = jnp.logical_and(
+                jnp.logical_and(
+                    state.enemy_missile_x[em] >= state.building_x[b],
+                    state.enemy_missile_x[em] < state.building_x[b] + BUILDING_WIDTH
+                ),
+                jnp.logical_and(
+                    state.enemy_missile_y[em] >= BUILDING_Y_POSITIONS[building_damage[b]],
+                    state.enemy_missile_y[em] < BUILDING_Y_POSITIONS[building_damage[b]] + BUILDING_HEIGHTS[building_damage[b]]
+                )
+            )
+            
+            # Only count collision if missile is active
+            effective_collision = jnp.logical_and(collision, is_missile_active == 1)
+            
+            # Update building damage and deactivate missile on collision
+            building_damage = building_damage.at[b].set(
+                jnp.where(effective_collision, 
+                         jnp.minimum(building_damage[b] + 1, MAX_BUILDING_DAMAGE),
+                         building_damage[b])
+            )
+            enemy_missile_active = enemy_missile_active.at[em].set(
+                jnp.where(effective_collision, 0, enemy_missile_active[em])
+            )
+        
+        # Then check collision with player
+        player_collision = jnp.logical_and(
             jnp.logical_and(
                 state.enemy_missile_x[em] < state.player_x + PLAYER_WIDTH,
                 state.enemy_missile_x[em] + MISSILE_WIDTH > state.player_x
@@ -530,18 +541,18 @@ def detect_collisions(state: AirRaidState) -> Tuple[chex.Array, chex.Array, chex
         )
         
         # Only count collision if missile is active
-        effective_collision = jnp.logical_and(collision, is_missile_active == 1)
+        effective_player_collision = jnp.logical_and(player_collision, is_missile_active == 1)
         
         # Update state on collision
         enemy_missile_active = enemy_missile_active.at[em].set(
-            jnp.where(effective_collision, 0, enemy_missile_active[em])
+            jnp.where(effective_player_collision, 0, enemy_missile_active[em])
         )
         
         # Reduce player lives
-        player_lives = jnp.where(effective_collision, player_lives - 1, player_lives)
+        player_lives = jnp.where(effective_player_collision, player_lives - 1, player_lives)
 
     return enemy_active, player_missile_active, enemy_missile_active, score, player_lives, building_damage
-    
+
 
 class JaxAirRaid(JaxEnvironment[AirRaidState, AirRaidObservation, AirRaidInfo]):
     def __init__(self, frameskip: int = 0, reward_funcs: list = None):
