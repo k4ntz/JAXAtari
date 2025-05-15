@@ -28,9 +28,9 @@ HEIGHT = 210
 
 # Physics constants
 # TODO: check if these are correct
-GRAVITY = 3  # 0.12
-VELOCITY_DAMPENING_VALUE = 24
-BALL_MAX_SPEED = 40.0
+GRAVITY = 1  # 0.12
+VELOCITY_DAMPENING_VALUE = 0#24
+BALL_MAX_SPEED = 16.0
 FLIPPER_MAX_ANGLE = 3
 FLIPPER_ANIMATION_Y_OFFSETS = jnp.array(
     [0, 0, 3, 7]
@@ -50,7 +50,7 @@ FLIPPER_RIGHT_POS = (110, 180)
 PLUNGER_POS = (150, 120)
 PLUNGER_MAX_HEIGHT = 20  # Taken from RAM values (67-87)
 INVISIBLE_BLOCK_REFLECTION_FACTOR = (
-    8  # 8 times the plunger power is added to ball_vel_x
+    2  # 8 times the plunger power is added to ball_vel_x
 )
 
 
@@ -67,8 +67,8 @@ WINDOW_HEIGHT = 210 * 3
 
 
 # Positions/dimensions
-BALL_START_X = jnp.array(149)
-BALL_START_Y = jnp.array(129)
+BALL_START_X = jnp.array(149.)
+BALL_START_Y = jnp.array(129.)
 BALL_START_DIRECTION = jnp.array(0)
 
 GAME_BOTTOM_Y = 191
@@ -104,6 +104,9 @@ INNER_WALL_TOP_X = 12
 
 INNER_WALL_THICKNESS = 4
 
+INVISIBLE_BLOCK_BOUNDING_BOX = jnp.ones((2, INNER_WALL_THICKNESS)).astype(jnp.bool)
+INVISIBLE_BLOCK_OFFSET = jnp.array([INVISIBLE_BLOCK_LEFT_X_OFFSET, INVISIBLE_BLOCK_TOP_Y_OFFSET])
+
 MIDDLE_BAR_Y = 72
 MIDDLE_BAR_X = 104
 MIDDLE_BAR_WIDTH = 16
@@ -124,6 +127,14 @@ class SceneObject:
     hit_box_offset: chex.Array
     reflecting: chex.Array  # 0: no reflection, 1: reflection
     horizontal: chex.Array  # 0: vertical, 1: horizontal
+
+
+INVISIBLE_BLOCK_SCENE_OBJECT = SceneObject(
+    hit_box_matrix=INVISIBLE_BLOCK_BOUNDING_BOX,
+    hit_box_offset=INVISIBLE_BLOCK_OFFSET,
+    reflecting=jnp.array(1),
+    horizontal=jnp.array(1)
+)
 
 
 TOP_WALL_SCENE_OBJECT = SceneObject(
@@ -295,8 +306,8 @@ def plunger_step(state: VideoPinballState, action: chex.Array) -> chex.Array:
     # If FIRE
     plunger_power = jax.lax.cond(
         jnp.logical_and(action == Action.FIRE, jnp.logical_not(state.ball_in_play)),
-        lambda s: s * 2,
-        lambda s: 0,
+        lambda s: jnp.round(s / PLUNGER_MAX_POSITION * BALL_MAX_SPEED),
+        lambda s: 0.,
         operand=plunger_position,
     )
 
@@ -539,12 +550,29 @@ def _get_ball_direction(signed_vel_x, signed_vel_y) -> chex.Array:
     bool_array = jnp.array([top_left, bottom_left, top_right, bottom_right])
     return jnp.argmax(bool_array)
 
+@jax.jit
+def _calc_ball_change(
+    ball_x,
+    ball_y,
+    ball_vel_x,
+    ball_vel_y,
+    ball_direction
+):
+    sign_x, sign_y = _get_signed_ball_directions(ball_direction)
+    ball_vel_x = jnp.clip(ball_vel_x, 0, BALL_MAX_SPEED)
+    ball_vel_y = jnp.clip(ball_vel_y, 0, BALL_MAX_SPEED)
+    signed_ball_vel_x = sign_x * ball_vel_x
+    signed_ball_vel_y = sign_y * ball_vel_y
+    # Only change position, direction and velocity if the ball is in play
+    # TODO override ball_x, ball_y if obstacle hit (_reflect_ball)
+    ball_x = ball_x + signed_ball_vel_x
+    ball_y = ball_y + signed_ball_vel_y
+    return ball_x, ball_y, ball_vel_x, ball_vel_y, signed_ball_vel_x, signed_ball_vel_y
 
 @jax.jit
 def ball_step(
     state: VideoPinballState,
     plunger_power,
-    ball_in_play,
     action,
 ):
     """
@@ -555,6 +583,7 @@ def ball_step(
     ball_vel_x = state.ball_vel_x
     ball_vel_y = state.ball_vel_y
     ball_direction = state.ball_direction
+    ball_in_play = state.ball_in_play
     jax.debug.print(
         "Ball Step, Initial Ball x {ball_x}, y , {ball_y}, vel_x {ball_vel_x}, vel_y {ball_vel_y}, direction {ball_direction}",
         ball_x=ball_x,
@@ -608,33 +637,15 @@ def ball_step(
     )
 
     """
-    Check if the ball is hitting the invisible block at the plunger hole
-    """
-    is_invisible_block_hit = jnp.logical_and(
-        jnp.logical_not(ball_in_play),
-        jnp.logical_and(
-            ball_x >= INVISIBLE_BLOCK_LEFT_X_OFFSET,
-            ball_y <= INVISIBLE_BLOCK_TOP_Y_OFFSET,
-        ),
-    )
-    # If so add plunger_power * INVISIBLE_BLOCK_REFLECTION_FACTOR to the ball velocity in x direction
-    ball_vel_x = jnp.where(
-        is_invisible_block_hit,
-        ball_vel_x + INVISIBLE_BLOCK_REFLECTION_FACTOR * plunger_power,
-        ball_vel_x,
-    )
-    ball_in_play = state.ball_in_play
-
-    """
     Ball movement calculation observing its direction 
     """
-    sign_x, sign_y = _get_signed_ball_directions(ball_direction)
-    signed_ball_vel_x = sign_x * ball_vel_x
-    signed_ball_vel_y = sign_y * ball_vel_y
-    # Only change position, direction and velocity if the ball is in play
-    # TODO override ball_x, ball_y if obstacle hit (_reflect_ball)
-    ball_x = state.ball_x + signed_ball_vel_x
-    ball_y = state.ball_y + signed_ball_vel_y
+    ball_x, ball_y, ball_vel_x, ball_vel_y, signed_ball_vel_x, signed_ball_vel_y = _calc_ball_change(
+        state.ball_x,
+        state.ball_y,
+        ball_vel_x,
+        ball_vel_y,
+        ball_direction
+    )
     jax.debug.print(
         "Ball Step, After Ball Update x {ball_x}, y , {ball_y}, vel_x {ball_vel_x}, vel_y {ball_vel_y}, direction {ball_direction}",
         ball_x=ball_x,
@@ -644,13 +655,66 @@ def ball_step(
         ball_direction=ball_direction,
     )
     """
+    Check if the ball is hitting the invisible block at the plunger hole
+    """
+    ball_movement = BallMovement(
+        old_ball_x=state.ball_x,
+        old_ball_y=state.ball_y,
+        new_ball_x=ball_x,
+        new_ball_y=ball_y,
+    )
+    invisible_block_hit_data = _calc_hit_point(ball_movement, INVISIBLE_BLOCK_SCENE_OBJECT)
+    is_invisible_block_hit = jnp.logical_and(
+        jnp.logical_not(ball_in_play),
+        invisible_block_hit_data[0] != T_ENTRY_NO_COLLISION,
+    )
+    jax.debug.print(
+        "Ball Step, invisible ball hit {invis_ball_hit}, ball in play {bip}, plunger_power {pp}", invis_ball_hit=is_invisible_block_hit, bip=ball_in_play, pp=plunger_power
+    )
+    # set x vel to y vel and divide vel y by 5
+    ball_vel_x = jnp.where(
+        is_invisible_block_hit,
+        ball_vel_y,
+        ball_vel_x,
+    )
+    ball_vel_y = jnp.where(
+        is_invisible_block_hit,
+        ball_vel_y / 5,
+        ball_vel_y
+    )
+    # set ball_x, ball_y to below invisible element and proceed with new ball_movement
+    ball_x = jnp.where(
+        is_invisible_block_hit,
+        jnp.array(INVISIBLE_BLOCK_LEFT_X_OFFSET, dtype=jnp.float32),
+        ball_x,
+    )
+    ball_y = jnp.where(
+        is_invisible_block_hit,
+        jnp.array(INVISIBLE_BLOCK_TOP_Y_OFFSET, dtype=jnp.float32),
+        ball_y
+    )
+    new_ball_direction = jnp.where(
+        (plunger_power // 2) % 2 == 0, # semi random y direction
+        0,
+        1
+    )
+    ball_direction = jnp.where(
+        is_invisible_block_hit,
+        new_ball_direction,
+        ball_direction
+    )
+    sign_x, sign_y = _get_signed_ball_directions(ball_direction)
+    signed_ball_vel_x = sign_x * ball_vel_x
+    signed_ball_vel_y = sign_y * ball_vel_y
+    ball_in_play = jnp.logical_or(ball_in_play, is_invisible_block_hit)
+
+    """
     Obstacle hit calculation
     """
     # Calculate whether and where obstacles are hit
     # If a reflecting obstacle is hit, reflect the ball
     # If a non-reflecting obstacle is hit, proceed with usual ball position calculation
     # new_ball_direction, _ball_vel_x, _ball_vel_y = _get_obstacle_hit_direction()
-
     ball_movement = BallMovement(
         old_ball_x=state.ball_x,
         old_ball_y=state.ball_y,
@@ -659,6 +723,7 @@ def ball_step(
     )
 
     hit_data, scene_object_horizontal = _check_reflecting_obstacle_hits(ball_movement)
+    # TODO what happens if the ball is reflected into another reflecting object => maybe a while-loop
     reflected_ball_x, reflected_ball_y = _reflect_ball(
         ball_movement, hit_data, scene_object_horizontal
     )
@@ -728,7 +793,7 @@ def _reset_ball(state: VideoPinballState):
     When the ball goes into the gutter or into the plunger hole,
     respawn the ball on the launcher.
     """
-    return BALL_START_X, BALL_START_Y, 0, 0
+    return BALL_START_X, BALL_START_Y, jnp.array(0.), jnp.array(0.)
 
 
 class JaxVideoPinball(
@@ -757,15 +822,15 @@ class JaxVideoPinball(
         Returns the initial state and the reward (i.e. 0)
         """
         state = VideoPinballState(
-            ball_x=jnp.array(BALL_START_X).astype(jnp.int32),
-            ball_y=jnp.array(BALL_START_Y).astype(jnp.int32),
+            ball_x=jnp.array(BALL_START_X).astype(jnp.float32),
+            ball_y=jnp.array(BALL_START_Y).astype(jnp.float32),
             ball_vel_x=jnp.array(0.0),
             ball_vel_y=jnp.array(0.0),
             ball_direction=jnp.array(0).astype(jnp.int32),
             left_flipper_angle=jnp.array(0).astype(jnp.int32),
             right_flipper_angle=jnp.array(0).astype(jnp.int32),
             plunger_position=jnp.array(0).astype(jnp.int32),
-            plunger_power=jnp.array(0).astype(jnp.int32),
+            plunger_power=jnp.array(0).astype(jnp.float32),
             score=jnp.array(0).astype(jnp.int32),
             lives=jnp.array(1).astype(jnp.int32),
             bonus_multiplier=jnp.array(1).astype(jnp.int32),
@@ -805,13 +870,10 @@ class JaxVideoPinball(
         )
 
         # Step 2: Update ball position and velocity
-        # ball_in_play = jnp.logical_or(state.ball_in_play, plunger_power > 0)
-        ball_in_play = state.ball_in_play
         ball_x, ball_y, ball_direction, ball_vel_x, ball_vel_y, ball_in_play = (
             ball_step(
                 state,
                 new_plunger_power,
-                ball_in_play,
                 action,
             )
         )
@@ -835,10 +897,10 @@ class JaxVideoPinball(
 
         # Step 5: Reset ball if it went down the gutter
         current_values = (
-            ball_x.astype(jnp.int32),
-            ball_y.astype(jnp.int32),
-            ball_vel_x.astype(jnp.int32),
-            ball_vel_y.astype(jnp.int32),
+            ball_x,
+            ball_y,
+            ball_vel_x,
+            ball_vel_y,
         )
         ball_x_final, ball_y_final, ball_vel_x_final, ball_vel_y_final = jax.lax.cond(
             ball_reset,
