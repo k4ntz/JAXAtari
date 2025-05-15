@@ -2,8 +2,8 @@ import jax
 import jax.numpy as jnp
 from functools import partial
 from typing import NamedTuple, Tuple, Any, List
-from jaxatari.environment import JaxEnvironment, EnvState
-from jaxatari.renderers import AtraJaxisRenderer
+from ..environment import JaxEnvironment, EnvState
+from ..renderers import AtraJaxisRenderer
 
 """
 JAX Backgammon Environment
@@ -54,7 +54,7 @@ class JaxBackgammonEnv(JaxEnvironment[BackgammonState, jnp.ndarray, dict]):
 
     @staticmethod
     @jax.jit
-    def init_state() -> BackgammonState:
+    def init_state(key) -> BackgammonState:
         board = jnp.zeros((2, 26), dtype=jnp.int32)
         board = board.at[0, 0].set(2).at[0, 11].set(5).at[0, 16].set(3).at[0, 18].set(5)
         board = board.at[1, 23].set(2).at[1, 12].set(5).at[1, 7].set(3).at[1, 5].set(5)
@@ -73,7 +73,7 @@ class JaxBackgammonEnv(JaxEnvironment[BackgammonState, jnp.ndarray, dict]):
             return (white_roll, black_roll, key)
 
         # Generate the first dice throw
-        key, subkey1, subkey2 = jax.random.split(self.key, 3)
+        key, subkey1, subkey2 = jax.random.split(key, 3)
         white_roll = jax.random.randint(subkey1, (), 1, 7)
         black_roll = jax.random.randint(subkey2, (), 1, 7)
         carry = (white_roll, black_roll, key)
@@ -87,10 +87,8 @@ class JaxBackgammonEnv(JaxEnvironment[BackgammonState, jnp.ndarray, dict]):
             operand=None
         ), is_game_over=False)
 
-
-
     def reset(self) -> Tuple[jnp.ndarray, BackgammonState]:
-        state = self.init_state()
+        state = self.init_state(self.key)
         dice, self.key = self.roll_dice(self.key)
         state = state._replace(dice=dice)
         return self._get_observation(state), state
@@ -495,8 +493,8 @@ def run_game_with_input(key: jax.Array, max_steps=100):
 
 def main():
     key = jax.random.PRNGKey(0)
-    run_game_without_input(key)
-    #run_game_with_input(key)
+    # run_game_without_input(key)
+    run_game_with_input(key)
 
 
 if __name__ == "__main__":
