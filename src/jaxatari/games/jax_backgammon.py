@@ -1,44 +1,10 @@
 import jax
 import jax.numpy as jnp
 from typing import NamedTuple, Tuple, Any, List
-from ..environment import JaxEnvironment, EnvState
-from ..renderers import AtraJaxisRenderer
-
-# Constants for game Environment
-NUM_POINTS = 24
-NUM_CHECKERS = 15
-BAR_INDEX = 24
-HOME_INDEX = 25
-MAX_DICE = 2
-
-WHITE = 1
-BLACK = -1
-
-
-class BackgammonState(NamedTuple):
-    board: jnp.ndarray  # (2, 26)
-    dice: jnp.ndarray  # (2,)
-    current_player: int
-    is_game_over: bool
-
-
-class BackgammonInfo(NamedTuple):
-    time: jnp.ndarray
-
-
-class BackgammonObservation(NamedTuple):
-    bar_counts: jnp.ndarray
-    home_counts: jnp.ndarray
-
-
-import jax
-import jax.numpy as jnp
-from typing import NamedTuple, Tuple, Any, List
 from functools import partial
 from ..environment import JaxEnvironment, EnvState
 from ..renderers import AtraJaxisRenderer
 
-# Constants for game Environment
 NUM_POINTS = 24
 NUM_CHECKERS = 15
 BAR_INDEX = 24
@@ -50,8 +16,8 @@ BLACK = -1
 
 
 class BackgammonState(NamedTuple):
-    board: jnp.ndarray  # (2, 26)
-    dice: jnp.ndarray  # (2,)
+    board: jnp.ndarray
+    dice: jnp.ndarray
     current_player: int
     is_game_over: bool
 
@@ -69,31 +35,22 @@ class JaxBackgammonEnv(JaxEnvironment[BackgammonState, jnp.ndarray, dict]):
     def __init__(self, key: jax.Array):
         super().__init__()
         self.key = key
-        # Pre-compute all possible moves for fast validation
         self.action_space = jnp.array([(i, j) for i in range(26) for j in range(26)], dtype=jnp.int32)
 
     @staticmethod
     @jax.jit
-    def init_state_impl() -> BackgammonState:
+    def init_state() -> BackgammonState:
         board = jnp.zeros((2, 26), dtype=jnp.int32)
         board = board.at[0, 0].set(2).at[0, 11].set(5).at[0, 16].set(3).at[0, 18].set(5)
         board = board.at[1, 23].set(2).at[1, 12].set(5).at[1, 7].set(3).at[1, 5].set(5)
         dice = jnp.zeros(2, dtype=jnp.int32)
         return BackgammonState(board=board, dice=dice, current_player=WHITE, is_game_over=False)
 
-    def init_state(self) -> BackgammonState:
-        return JaxBackgammonEnv.init_state_impl()
-
-    @partial(jax.jit, static_argnums=(0,))
-    def reset_impl(self, key):
-        state = self.init_state()
-        dice, new_key = JaxBackgammonEnv.roll_dice(key)
-        state = state._replace(dice=dice)
-        return self._get_observation(state), state, new_key
-
     def reset(self) -> Tuple[jnp.ndarray, BackgammonState]:
-        obs, state, self.key = self.reset_impl(self.key)
-        return obs, state
+        state = self.init_state()
+        state_dice, self.key = self.roll_dice(self.key)
+        state = state._replace(dice=state_dice)
+        return self._get_observation(state), state
 
     @staticmethod
     @jax.jit
@@ -110,7 +67,7 @@ class JaxBackgammonEnv(JaxEnvironment[BackgammonState, jnp.ndarray, dict]):
     @staticmethod
     @jax.jit
     def is_valid_move(state: BackgammonState, move: Tuple[int, int]) -> bool:
-        from_point, to_point = move[0], move[1]
+        from_point, to_point = move
         board = state.board
         player = state.current_player
         player_idx = JaxBackgammonEnv.get_player_index(player)
@@ -118,26 +75,17 @@ class JaxBackgammonEnv(JaxEnvironment[BackgammonState, jnp.ndarray, dict]):
 
         has_piece = board[player_idx, from_point] > 0
         in_bounds = (0 <= from_point) & (from_point < 24) & (0 <= to_point) & (to_point < 24)
-
-        # Efficient move distance calculation
-        distance = jax.lax.select(
-            player == WHITE,
-            from_point - to_point,
-            to_point - from_point
-        )
-
+        distance = jax.lax.select(player == WHITE, from_point - to_point, to_point - from_point)
         correct_direction = distance > 0
         dice_match = (state.dice[0] == distance) | (state.dice[1] == distance)
         not_blocked = board[opponent_idx, to_point] <= 1
+
         return has_piece & in_bounds & correct_direction & dice_match & not_blocked
 
     @staticmethod
     @jax.jit
     def execute_move(board, player_idx, opponent_idx, from_point, to_point):
-        """Execute a single move on the board."""
         opponent_pieces = board[opponent_idx, to_point]
-
-        # Handle home point or capturing
         board = jax.lax.cond(
             to_point == HOME_INDEX,
             lambda b: b.at[player_idx, HOME_INDEX].add(1),
@@ -149,8 +97,6 @@ class JaxBackgammonEnv(JaxEnvironment[BackgammonState, jnp.ndarray, dict]):
             ),
             board
         )
-
-        # Move the piece
         board = board.at[player_idx, from_point].add(-1)
         board = board.at[player_idx, to_point].add(1)
         return board
@@ -158,7 +104,6 @@ class JaxBackgammonEnv(JaxEnvironment[BackgammonState, jnp.ndarray, dict]):
     @staticmethod
     @jax.jit
     def compute_distance(player, from_point, to_point):
-        """Compute move distance based on player and points."""
         return jax.lax.cond(
             from_point == BAR_INDEX,
             lambda a: jax.lax.select(a[0] == WHITE, 25 - a[1], a[1]),
@@ -169,7 +114,6 @@ class JaxBackgammonEnv(JaxEnvironment[BackgammonState, jnp.ndarray, dict]):
     @staticmethod
     @jax.jit
     def update_dice(dice, is_valid, distance):
-        """Update dice after a move."""
         return jax.lax.cond(
             is_valid & (dice[0] == distance),
             lambda d: jnp.array([0, d[1]]),
@@ -182,69 +126,50 @@ class JaxBackgammonEnv(JaxEnvironment[BackgammonState, jnp.ndarray, dict]):
             dice
         )
 
-    @partial(jax.jit, static_argnums=(0,))
-    def step_impl(self, state: BackgammonState, action: Tuple[int, int], key: jax.Array) -> Tuple[
-        jnp.ndarray, BackgammonState, float, bool, dict, jax.Array]:
+    def step(self, state: BackgammonState, action: Tuple[int, int]) -> Tuple[jnp.ndarray, BackgammonState, float, bool, dict]:
         from_point, to_point = action
         board = state.board
         player = state.current_player
-        player_idx = JaxBackgammonEnv.get_player_index(player)
+        player_idx = self.get_player_index(player)
         opponent_idx = 1 - player_idx
 
-        # Use the vectorized is_valid_move function with a single move
-        is_valid = JaxBackgammonEnv.is_valid_move(state, jnp.array([from_point, to_point]))
-
-        # Execute the move if valid
+        is_valid = self.is_valid_move(state, jnp.array([from_point, to_point]))
         new_board = jax.lax.cond(
             is_valid,
-            lambda _: JaxBackgammonEnv.execute_move(board, player_idx, opponent_idx, from_point, to_point),
+            lambda _: self.execute_move(board, player_idx, opponent_idx, from_point, to_point),
             lambda _: board,
             operand=None
         )
 
-        # Calculate move distance
-        distance = JaxBackgammonEnv.compute_distance(player, from_point, to_point)
-
-        # Update dice based on the move
-        new_dice = JaxBackgammonEnv.update_dice(state.dice, is_valid, distance)
-
-        # Check if all dice are used
+        distance = self.compute_distance(player, from_point, to_point)
+        new_dice = self.update_dice(state.dice, is_valid, distance)
         all_dice_used = (new_dice[0] == 0) & (new_dice[1] == 0)
 
-        # Prepare for next turn if necessary
         def next_turn(k):
-            next_dice, new_key = JaxBackgammonEnv.roll_dice(k)
+            next_dice, new_key = self.roll_dice(k)
             return next_dice, -state.current_player, new_key
 
         def same_turn(k):
             return new_dice, state.current_player, k
 
-        next_dice, next_player, new_key = jax.lax.cond(all_dice_used, next_turn, same_turn, key)
+        new_dice, next_player, self.key = jax.lax.cond(all_dice_used, next_turn, same_turn, self.key)
 
-        # Check for game over
         white_won = new_board[0, HOME_INDEX] == NUM_CHECKERS
         black_won = new_board[1, HOME_INDEX] == NUM_CHECKERS
         game_over = white_won | black_won
 
-        # Create new state
         new_state = BackgammonState(
             board=new_board,
-            dice=next_dice,
+            dice=new_dice,
             current_player=next_player,
             is_game_over=game_over
         )
 
-        # Prepare return values
         obs = self._get_observation(new_state)
         reward = self._get_reward(state, new_state)
         done = self._get_done(new_state)
         info = self._get_info(new_state)
 
-        return obs, new_state, reward, done, info, new_key
-
-    def step(self, state: BackgammonState, action: Tuple[int, int]) -> Tuple[
-        jnp.ndarray, BackgammonState, float, bool, dict]:
-        obs, new_state, reward, done, info, self.key = self.step_impl(state, action, self.key)
         return obs, new_state, reward, done, info
 
     def get_action_space(self) -> jnp.ndarray:
@@ -256,7 +181,6 @@ class JaxBackgammonEnv(JaxEnvironment[BackgammonState, jnp.ndarray, dict]):
     @staticmethod
     @jax.jit
     def _get_observation(state: BackgammonState) -> jnp.ndarray:
-        """Convert state to observation vector."""
         return jnp.concatenate([
             state.board.flatten(),
             state.dice,
@@ -283,22 +207,13 @@ class JaxBackgammonEnv(JaxEnvironment[BackgammonState, jnp.ndarray, dict]):
     def _get_done(state: BackgammonState) -> bool:
         return state.is_game_over
 
-    @partial(jax.jit, static_argnums=(0,))
-    def _check_all_moves(self, state: BackgammonState) -> jnp.ndarray:
-        """Create a boolean mask of valid moves."""
-        batch_is_valid = jax.vmap(lambda move: JaxBackgammonEnv.is_valid_move(state, move))
-        return batch_is_valid(self.action_space)
-
-    def get_valid_moves_jit(self, state: BackgammonState) -> jnp.ndarray:
-        """Get all valid moves for the current state using JAX."""
-        # Get boolean mask of valid moves
-        valid_mask = self._check_all_moves(state)
-        # Use numpy to perform the indexing outside of JIT
-        return jnp.array(self.action_space)[jnp.array(valid_mask)]
-
     def get_valid_moves(self, state: BackgammonState) -> List[Tuple[int, int]]:
-        """Convert valid moves from array to list of tuples."""
-        valid_moves_array = self.get_valid_moves_jit(state)
+        @jax.jit
+        def _check_all_moves(state):
+            return jax.vmap(lambda move: self.is_valid_move(state, move))(self.action_space)
+
+        valid_mask = _check_all_moves(state)
+        valid_moves_array = self.action_space[jnp.array(valid_mask)]
         return [tuple(map(int, move)) for move in valid_moves_array]
 
     def render(self, state: EnvState) -> Tuple[jnp.ndarray]:
@@ -378,7 +293,6 @@ def get_user_move(state: BackgammonState, env: JaxBackgammonEnv) -> Tuple[int, i
         input()
         return None
 
-    # Display valid moves with numbers for selection
     print("\nValid moves:")
     for i, move in enumerate(valid_moves):
         from_point, to_point = move
@@ -386,7 +300,6 @@ def get_user_move(state: BackgammonState, env: JaxBackgammonEnv) -> Tuple[int, i
         to_display = "HOME" if to_point == HOME_INDEX else str(to_point + 1)
         print(f"{i + 1}: {from_display} → {to_display}")
 
-    # Get user input
     while True:
         try:
             choice = input("\nEnter move number (or 'q' to quit): ")
