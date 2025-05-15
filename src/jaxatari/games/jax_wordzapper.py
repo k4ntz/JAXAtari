@@ -393,7 +393,7 @@ def player_missile_step(
     new_missile = jnp.where(
         missile_exists,
         jnp.array(
-            [new_missile[0] + new_missile[2] * 5, curr_player_y + 7, new_missile[2]]
+            [new_missile[0] + new_missile[2] * 5, new_missile[1], new_missile[2]]
         ),
         new_missile,
     )
@@ -438,7 +438,7 @@ def player_zapper_step(
     # the missile x is either player x + 3 if facing left or player x + 13 if facing right
     new_zapper = jnp.where(
         jnp.logical_and(fire, jnp.logical_not(zapper_exists)),
-        jnp.array([curr_player_x, curr_player_y - 7, 1, state.step_counter]),
+        jnp.array([curr_player_x, curr_player_y, 1, state.step_counter]),
         state.player_zapper_position,
     )
 
