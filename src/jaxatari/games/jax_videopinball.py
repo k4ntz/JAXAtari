@@ -50,6 +50,10 @@ FLIPPER_RIGHT_POS = (110, 180)
 PLUNGER_POS = (150, 120)
 PLUNGER_MAX_HEIGHT = 20  # Taken from RAM values (67-87)
 
+INVISIBLE_BLOCK_REFLECTION_FACTOR = (
+    8  # 8 times the plunger power is added to ball_vel_x
+)
+
 
 # Background color and object colors
 BACKGROUND_COLOR = 0, 0, 0
@@ -441,7 +445,7 @@ def _reflect_ball(
     velocity_normal_prod = velocity_x * surface_normal_x + velocity_y * surface_normal_y
     velocity_normal_prod = (
         velocity_normal_prod - VELOCITY_DAMPENING_VALUE
-    )  # Dampen the velocity a bit (taken from RAM values)
+    )  # Dampen the velocity a bit (value taken from RAM values)
 
     reflected_velocity_x = velocity_x - 2 * velocity_normal_prod * surface_normal_x
     reflected_velocity_y = velocity_y - 2 * velocity_normal_prod * surface_normal_y
@@ -773,12 +777,10 @@ class JaxVideoPinball(
         ball_in_gutter = ball_y > 192
         # TODO if ball is back in plunger hole reset, not instantly
         ball_reset = ball_in_gutter
-        # ball_reset = jnp.logical_or(
-        #    ball_in_gutter,
-        #    jnp.logical_and(
-        #        jnp.logical_and(ball_x > 148, ball_y > 128), ball_in_play
-        #    ),
-        # )
+        ball_reset = jnp.logical_or(
+            ball_in_gutter,
+            jnp.logical_and(jnp.logical_and(ball_x > 148, ball_y > 128), ball_in_play),
+        )
 
         # Step 4: Update scores
         score = jnp.array(0).astype(jnp.int32)
