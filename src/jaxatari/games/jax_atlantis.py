@@ -30,7 +30,7 @@ class GameConfig:
     cannon_width: int = 10
     cannon_y: int = 200
     cannon_x: jnp.ndarray = field(
-        default_factory=lambda: jnp.array([20, 80, 140], dtype=jnp.int32)
+        default_factory=lambda: jnp.array([10, 75, 140], dtype=jnp.int32)
     )
     max_bullets: int = 20
     max_enemies: int = 20
