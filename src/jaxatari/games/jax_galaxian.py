@@ -8,15 +8,10 @@ import jax.lax
 from gymnax.environments import spaces
 from jaxatari.environment import JaxEnvironment, JAXAtariAction as Action
 
-from src.jaxatari.environment import JaxEnvironment
+from jaxatari.environment import JaxEnvironment
 
-"""
-# Action constants
-NOOP = 0
-FIRE = 1
-RIGHT = 2
-LEFT = 3
-"""
+if not pygame.get_init():
+    pygame.init()
 
 # -------- Game constants --------
 SHOOTING_COOLDOWN = 80
@@ -82,79 +77,11 @@ def update_enemy_positions(state: GalaxianState) -> GalaxianState:
     new_enemy_grid_x = state.enemy_grid_x + ENEMY_MOVE_SPEED * state.enemy_grid_direction
     return state._replace(enemy_grid_x=new_enemy_grid_x, enemy_grid_direction=new_enemy_grid_direction)
 
-# @jax.jit
-# def update_enemy_attack_state(state: GalaxianState) -> GalaxianState:
-#
-#   #  enemy_attack_state = state.enemy_attack_state # 0: init, 1: attack, 2: respawn
-#   #  enemy_attack_pos = state.enemy_attack_pos
-#   #  enemy_attack_x = state.enemy_attack_x
-#   #  enemy_attack_y = state.enemy_attack_y
-#     enemy_attack_respawn_timer = state.enemy_attack_respawn_timer
-#     enemy_grid_alive = state.enemy_grid_alive
-#     enemy_grid_x = state.enemy_grid_x
-#     enemy_grid_y = state.enemy_grid_y
-#
-#     def start_attack(s):
-#         enemy_attack_state, enemy_attack_pos, enemy_attack_x, enemy_attack_y, enemy_attack_respawn_timer, enemy_grid_alive, enemy_grid_x, enemy_grid_y = s
-#
-#         row = 0
-#         column = 0
-#
-#         lax.while_loop(
-#             lambda s: enemy_grid_alive[s[0],s[1]] != 1,
-#             lambda s: jax.lax.cond(
-#                 s[0] >= GRID_ROWS,
-#                 lambda u: (s[0] + 1, 0),
-#                 lambda u: (s[0], s[1] + 1),
-#                 s
-#             ),
-#             (row, column)
-#         )
-#
-#         return 1, jnp.array([row, column]), enemy_grid_x[row, column], enemy_grid_y[row, column], enemy_attack_respawn_timer, enemy_grid_alive.at[row, column].set(2)
-#
-#     new_enemy_attack_state, new_enemy_attack_pos, new_enemy_attack_x, new_enemy_attack_y, new_enemy_attack_respawn_timer, new_enemy_grid_alive = jax.lax.cond(
-#         enemy_attack_state == 0,
-#         start_attack,
-#         lambda s: jax.lax.cond(
-#             enemy_attack_state == 1,
-#             lambda t: jax.lax.cond(
-#                 enemy_grid_alive[enemy_attack_pos] == 0,
-#                 lambda u: (0, t[1], t[2], t[3], 20, t[5]),
-#                 lambda u: lax.cond(
-#                     enemy_attack_y > SCREEN_HEIGHT,
-#                     lambda v: (2, u[1], u[2], u[3], u[4], u[5].at[0,0].set(1)),
-#                     lambda v: (u[0], u[1],u[2], u[3] + ENEMY_ATTACK_SPEED, u[4], u[5]),
-#             u
-#                 ),
-#                 t,
-#             ),
-#             # enemy attack state == 2
-#             lambda t: jax.lax.cond(
-#                 enemy_attack_respawn_timer <= 0,
-#                 lambda u: (0, t[1], t[2], t[3], 20, t[5]),
-#                 lambda u: (t[0], t[1], t[2], t[3], t[4] - 1, t[5]),
-#                 t
-#             ),
-#             s
-#         ),
-#         (enemy_attack_state, enemy_attack_pos, enemy_attack_x, enemy_attack_y, enemy_attack_respawn_timer, enemy_grid_alive, enemy_grid_x, enemy_grid_y)
-#     )
-#
-#     return state._replace(
-#         enemy_attack_state=new_enemy_attack_state,
-#         enemy_attack_pos=new_enemy_attack_pos,
-#         enemy_attack_x=new_enemy_attack_x,
-#         enemy_attack_y=new_enemy_attack_y,
-#         enemy_grid_alive=new_enemy_grid_alive,
-#         enemy_attack_respawn_timer=new_enemy_attack_respawn_timer
-#     )
+
 
 @jax.jit
 def update_enemy_attack(state: GalaxianState) -> GalaxianState:
 
-    #jax.debug.print("grid: {}", state.enemy_grid_alive[tuple(state.enemy_attack_pos)])
-    #jax.debug.print("state: {}", state.enemy_attack_state)
     new_enemy_attack_state = jnp.where(
         # enemy was killed, and state has not been reset yet, transitions to state 0
         jnp.logical_and(state.enemy_grid_alive[tuple(state.enemy_attack_pos)] == 0,state.enemy_attack_state != 0),
@@ -279,9 +206,11 @@ def get_action_from_keyboard():
             return Action.NOOP
 
 
-
 @jax.jit
 def handle_shooting(state: GalaxianState, action) -> GalaxianState:
+    # Ensure action is treated as a single value
+    single_action = action[0] if action.ndim > 0 else action
+
     def shoot(_):
         return state._replace(
             bullet_x=jnp.array(state.player_x, dtype=state.bullet_x.dtype),
@@ -297,14 +226,9 @@ def handle_shooting(state: GalaxianState, action) -> GalaxianState:
     def idle(_):
         return state
 
-    shooting = jnp.any(
-        jnp.array(
-            [
-                action == Action.FIRE,
-                action == Action.RIGHTFIRE,
-                action == Action.LEFTFIRE,
-            ]
-        )
+    shooting = jnp.logical_or(
+        jnp.logical_or(single_action == Action.FIRE, single_action == Action.RIGHTFIRE),
+        single_action == Action.LEFTFIRE
     )
 
     can_shoot = jnp.logical_and(shooting, state.player_shooting_cooldown == 0)
@@ -435,6 +359,7 @@ class GalaxianObservation(NamedTuple):
     enemy_attack_pos: chex.Array
     enemy_attack_x: chex.Array
     enemy_attack_y: chex.Array
+    player_shooting_cooldown: chex.Array
 
 class GalaxianInfo(NamedTuple):
     time: jnp.ndarray
@@ -462,7 +387,7 @@ class JaxGalaxian(JaxEnvironment[GalaxianState, GalaxianObservation, GalaxianInf
         # +1 ein extra wert für den score
         # sind erstmal nur temporary values
 
-    def reset(self) -> GalaxianState:
+    def reset(self, key = None) -> GalaxianState:
         grid_rows = GRID_ROWS
         grid_cols = GRID_COLS
         enemy_spacing_x = ENEMY_SPACING_X
@@ -523,7 +448,8 @@ class JaxGalaxian(JaxEnvironment[GalaxianState, GalaxianObservation, GalaxianInf
             enemy_grid_alive=state.enemy_grid_alive,
             enemy_attack_pos=state.enemy_attack_pos,
             enemy_attack_x=state.enemy_attack_x,
-            enemy_attack_y=state.enemy_attack_y
+            enemy_attack_y=state.enemy_attack_y,
+            player_shooting_cooldown=state.player_shooting_cooldown
         )
 
     @partial(jax.jit, static_argnums=(0,))
