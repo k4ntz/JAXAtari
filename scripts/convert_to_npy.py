@@ -6,6 +6,9 @@ from pathlib import Path
 import cv2
 import numpy as np
 
+#
+# by Tim Morgner and Jan Larionow
+#
 
 def traverse_dir(root:str):
     for root, dirs, files in os.walk(root):

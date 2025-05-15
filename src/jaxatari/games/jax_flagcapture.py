@@ -16,10 +16,9 @@ from jaxatari.environment import JaxEnvironment
 # by Tim Morgner and Jan Larionow
 #
 
-# TODO:
-# - Funktionen mit Docstrings versehen
-# - play.py geht nur im Debugger
-
+# Note
+# For us, play.py does not work consistently and sometimes freezes. However, based on the Mattermost
+# messages, we assume that it works for you. We have not modified play.py.
 
 # region Constants
 # Constants for game environment
@@ -247,7 +246,7 @@ def generate_field(rng_key, n_bombs, n_number_clues, n_direction_clues):
 
     # This calls vectorized_resolve for every cell in the field and returns a new field from the result
     field = jnp.fromfunction(vectorized_resolve, (NUM_FIELDS_X, NUM_FIELDS_Y), dtype=jnp.int32)
-    #jax.debug.print("field after:\n{field}", field=field)
+    # jax.debug.print("field after:\n{field}", field=field)
 
     return field
 
@@ -414,8 +413,12 @@ class JaxFlagCapture(JaxEnvironment[FlagCaptureState, FlagCaptureObservation, Fl
         # create player
         return FlagCaptureObservation(
             player=PlayerEntity(
-                x=state.player_x,  # TODO this is currently 0-9 not screenspace
-                y=state.player_y,  # TODO this is currently 0-7 not screenspace
+                x=jnp.array(
+                    FIELD_PADDING_LEFT + (state.player_x * FIELD_WIDTH) + (state.player_x * FIELD_GAP_X)).astype(
+                    jnp.int32),
+                y=jnp.array(
+                    FIELD_PADDING_TOP + (state.player_y * FIELD_HEIGHT) + (state.player_y * FIELD_GAP_Y)).astype(
+                    jnp.int32),
                 width=jnp.array(FIELD_WIDTH).astype(jnp.int32),
                 height=jnp.array(FIELD_HEIGHT).astype(jnp.int32),
                 status=jnp.array(PLAYER_STATUS_ALIVE).astype(jnp.int32),
@@ -513,7 +516,7 @@ class JaxFlagCapture(JaxEnvironment[FlagCaptureState, FlagCaptureObservation, Fl
 
         new_time = state.time - 1
 
-        new_state = jax.lax.cond(jax.lax.le(state.time,0),
+        new_state = jax.lax.cond(jax.lax.le(state.time, 0),
                                  lambda: FlagCaptureState(
                                      player_x=state.player_x,
                                      player_y=state.player_y,
