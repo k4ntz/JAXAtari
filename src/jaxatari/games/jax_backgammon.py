@@ -2,8 +2,8 @@ import jax
 import jax.numpy as jnp
 from functools import partial
 from typing import NamedTuple, Tuple, Any, List
-from ..environment import JaxEnvironment, EnvState
-from ..renderers import AtraJaxisRenderer
+from jaxatari.environment import JaxEnvironment, EnvState
+from jaxatari.renderers import AtraJaxisRenderer
 
 """
 JAX Backgammon Environment
@@ -56,8 +56,8 @@ class JaxBackgammonEnv(JaxEnvironment[BackgammonState, jnp.ndarray, dict]):
     @jax.jit
     def init_state(key) -> BackgammonState:
         board = jnp.zeros((2, 26), dtype=jnp.int32)
-        board = board.at[0, 0].set(2).at[0, 11].set(5).at[0, 16].set(3).at[0, 18].set(5)
-        board = board.at[1, 23].set(2).at[1, 12].set(5).at[1, 7].set(3).at[1, 5].set(5)
+        board = board.at[0, 0].set(2)
+        board = board.at[1, 23].set(2)
         dice = jnp.zeros(2, dtype=jnp.int32)
 
         #The condition for the while loop
@@ -128,7 +128,41 @@ class JaxBackgammonEnv(JaxEnvironment[BackgammonState, jnp.ndarray, dict]):
         correct_direction = distance > 0
         dice_match = (state.dice[0] == distance) | (state.dice[1] == distance)
         not_blocked = board[opponent_idx, to_point] <= 1
-        return has_piece & in_bounds & correct_direction & not_blocked & dice_match
+
+        dice_array = jnp.array(state.dice)
+        masked_dice = jnp.where(dice_array > 0, dice_array, 1000)
+        dice_min = jnp.min(masked_dice)
+
+        all_in_home = jax.lax.cond(
+            player == BLACK,
+            lambda _: jnp.sum(board[player_idx, :18]) == 0,
+            lambda _: jnp.sum(board[player_idx, 6:24]) == 0,
+            operand=None
+        )
+
+        furthest_point = jax.lax.cond(
+            player == BLACK,
+            lambda _: jnp.min(jnp.where(board[player_idx, 18:24] > 0, jnp.arange(18, 24), -1)),
+            lambda _: jnp.max(jnp.where(board[player_idx, 0:6] > 0, jnp.arange(0, 6), -1)),
+            operand=None
+        )
+        # might need to check the conditions here
+        can_bear_off_high = jax.lax.cond(
+            player == WHITE,
+            lambda _: (to_point == HOME_INDEX) & (from_point == furthest_point) & (distance > dice_min),#from_point - to_point : 5-25 = 20
+            lambda _: (to_point == HOME_INDEX) & (from_point == furthest_point) & (distance < dice_min),#to_point - from_point : 25 - 18
+            operand=None
+        )
+
+        # check if I am using the smallest dice first
+
+        is_bear_off_valid = all_in_home & ((to_point == HOME_INDEX) & (dice_match | can_bear_off_high))
+
+        return has_piece & in_bounds & correct_direction & not_blocked & (dice_match | is_bear_off_valid)
+
+
+
+        #return has_piece & in_bounds & correct_direction & not_blocked & dice_match
 
     @staticmethod
     @jax.jit
