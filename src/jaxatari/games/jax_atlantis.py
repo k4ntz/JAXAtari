@@ -21,28 +21,28 @@ class GameConfig:
     """Game configuration parameters"""
 
     screen_width: int = 160
-    screen_height: int = 210
+    screen_height: int = 250
     scaling_factor: int = 3
     bullet_height: int = 1
     bullet_width: int = 1
-    bullet_speed: int = 3
-    cannon_height: int = 10
-    cannon_width: int = 10
-    cannon_y: int = 140
+    bullet_speed: int = 5 #for side cannon 3 in x 2 in y
+    cannon_height: int = 8
+    cannon_width: int = 8
+    cannon_y: int = 160
     cannon_x: jnp.ndarray = field(
-        default_factory=lambda: jnp.array([10, 75, 140], dtype=jnp.int32)
+        default_factory=lambda: jnp.array([0,72,152], dtype=jnp.int32)
     )
-    max_bullets: int = 20
-    max_enemies: int = 20
-    fire_cooldown_frames: int = 10  # delay between shots
+    max_bullets: int = 2
+    max_enemies: int = 20  # max 1 per line
+    fire_cooldown_frames: int = 9  # delay between shots
     # y-coordinates of the different enemy paths/heights
     enemy_paths: jnp.ndarray = field(
-        default_factory=lambda: jnp.array([10, 30, 50], dtype=jnp.int32)
+        default_factory=lambda: jnp.array([60, 80, 100, 120], dtype=jnp.int32)
     )
-    enemy_width: int = 10
-    enemy_height: int = 10
-    enemy_speed: int = 1
-    enemy_spawn_min_frames: int = 60
+    enemy_width: int = 15 # 3 different lengths 15, 16, 9
+    enemy_height: int = 8
+    enemy_speed: int = 1 # changes throughout the game
+    enemy_spawn_min_frames: int = 60 # just 1 enemy per row, enemies wait til row is clear+offset of 17 Frames
     enemy_spawn_max_frames: int = 120
 
 
@@ -72,6 +72,8 @@ class AtlantisState(NamedTuple):
     fire_button_prev: chex.Array  # was fire button down last frame
     enemy_spawn_timer: chex.Array  # frames until next spawn
     rng: chex.Array  # PRNG state
+    #command_post_alive: chex.Array # is command post alive (middle cannon)
+    #installations: chex.Array # should store all current installations and their coordinates
 
 
 class AtlantisObservation(NamedTuple):
