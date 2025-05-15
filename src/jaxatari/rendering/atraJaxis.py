@@ -291,7 +291,7 @@ def render_label(raster, x, y, text_digits, char_sprites, spacing=15):
     return raster
 
 
-@partial(jax.jit, static_argnames=["spacing", "num_to_render"])
+@jax.jit
 def render_label_selective(raster, x, y,
                            all_digits,    # JAX array (e.g., length 2 or more)
                            char_sprites,  # (10, W, H, C)
