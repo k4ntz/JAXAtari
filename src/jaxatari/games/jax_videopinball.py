@@ -29,6 +29,7 @@ HEIGHT = 210
 # Physics constants
 # TODO: check if these are correct
 GRAVITY = 3  # 0.12
+VELOCITY_DAMPENING_VALUE = 24
 BALL_MAX_SPEED = 40.0
 FLIPPER_MAX_ANGLE = 3
 FLIPPER_ANIMATION_Y_OFFSETS = jnp.array(
@@ -173,6 +174,14 @@ STATE_TRANSLATOR: dict = {
     12: "step_counter",
     13: "ball_in_play",
 }
+
+
+# Todo: Switch to a data class
+@chex.dataclass
+class HitPoint:
+    t_entry: chex.Array
+    x: chex.Array
+    y: chex.Array
 
 
 def get_human_action() -> chex.Array:
@@ -420,13 +429,19 @@ def _reflect_ball(
     velocity_x = ball_movement.new_ball_x - ball_movement.old_ball_x
     velocity_y = ball_movement.new_ball_y - ball_movement.old_ball_y
 
+    # Calculate the trajectory of the ball to the hit point
     trajectory_to_hit_point_x = ball_movement.new_ball_x - hit_point[1]
     trajectory_to_hit_point_y = ball_movement.new_ball_y - hit_point[2]
 
+    # Calculate the surface normal of the hit point
     surface_normal_x = jnp.where(scene_object_horizontal, jnp.array(0), jnp.array(1))
     surface_normal_y = jnp.where(scene_object_horizontal, jnp.array(1), jnp.array(0))
 
+    # Calculate the dot product of the velocity and the surface normal
     velocity_normal_prod = velocity_x * surface_normal_x + velocity_y * surface_normal_y
+    velocity_normal_prod = (
+        velocity_normal_prod - VELOCITY_DAMPENING_VALUE
+    )  # Dampen the velocity a bit (taken from RAM values)
 
     reflected_velocity_x = velocity_x - 2 * velocity_normal_prod * surface_normal_x
     reflected_velocity_y = velocity_y - 2 * velocity_normal_prod * surface_normal_y
