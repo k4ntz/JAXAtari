@@ -18,8 +18,6 @@ SCALING_FACTOR = 4
 WINDOW_WIDTH = WIDTH * SCALING_FACTOR
 WINDOW_HEIGHT = HEIGHT * SCALING_FACTOR
 
-BULLET_SPEED = 1
-
 NUMBER_YELLOW_OFFSET = 83
 
 WALL_LEFT_X = 34
@@ -31,7 +29,8 @@ OPPONENT_LIMIT_Y = (31, None)
 
 MAX_SPEED = 1
 ACCELERATION = 1
-    
+BULLET_SPEED = 1     
+
 PATH_SPRITES = "sprites/spaceinvaders"
 
 # Rate of Opponent Movement and Animation
@@ -49,7 +48,11 @@ PLAYER_Y = HEIGHT - PLAYER_SIZE[1] - BACKGROUND_SIZE[1]
 
 def get_human_action():
     keys = pygame.key.get_pressed()
-    if keys[pygame.K_RIGHT]:
+    if keys[pygame.K_RIGHT] and keys[pygame.K_SPACE]:
+        return jnp.array(Action.RIGHTFIRE)
+    elif keys[pygame.K_LEFT] and keys[pygame.K_SPACE]:
+        return jnp.array(Action.LEFTFIRE)
+    elif keys[pygame.K_RIGHT]:
         return jnp.array(Action.RIGHT)
     elif keys[pygame.K_LEFT]:
         return jnp.array(Action.LEFT)
@@ -69,6 +72,10 @@ class SpaceInvadersState(NamedTuple):
     # Defines a bounding rect around the visible opponents
     opponent_bounding_rect: NamedTuple
     opponent_direction: int
+    # Player bullet (there can only be one at a time)
+    bullet_active: chex.Array   
+    bullet_x: chex.Array
+    bullet_y: chex.Array
 
 class EntityPosition(NamedTuple):
     x: jnp.ndarray
@@ -87,8 +94,8 @@ class SpaceInvadersInfo(NamedTuple):
 
 @jax.jit
 def player_step(state_player_x, state_player_speed, action: chex.Array):
-    left = jnp.logical_or(action == Action.LEFT, action == Action.LEFTFIRE)
-    right = jnp.logical_or(action == Action.RIGHT, action == Action.RIGHTFIRE)
+    left = (action == Action.LEFT) | (action == Action.LEFTFIRE)
+    right = (action == Action.RIGHT) | (action == Action.RIGHTFIRE)
     
     bounds_left = WALL_LEFT_X + PLAYER_SIZE[0]
     bounds_right = WALL_RIGHT_X 
@@ -98,7 +105,7 @@ def player_step(state_player_x, state_player_speed, action: chex.Array):
     touches_wall = jnp.logical_or(touches_wall_left, touches_wall_right)
 
     player_speed = jax.lax.cond(
-        jnp.logical_or(jnp.logical_not(jnp.logical_or(left, right)), touches_wall),
+        jnp.logical_not(jnp.logical_or(left, right)) | touches_wall,
         lambda s: 0,
         lambda s: s,
         operand=state_player_speed,
@@ -125,6 +132,32 @@ def player_step(state_player_x, state_player_speed, action: chex.Array):
     )
     
     return player_x, player_speed
+
+@jax.jit
+def player_bullet_step(state: SpaceInvadersState, action: chex.Array):
+    fired = (action == Action.FIRE) | (action == Action.RIGHTFIRE) | (action == Action.LEFTFIRE)
+    
+    new_bullet_active, new_bullet_x, new_bullet_y = jax.lax.cond(
+        state.bullet_active,
+        # if bullet is active: update position and check boundaries
+        lambda: jax.lax.cond(
+            (state.bullet_y - BULLET_SPEED) < 0,
+            lambda: (False, state.bullet_x, state.bullet_y),
+            lambda: (True, state.bullet_x, state.bullet_y - BULLET_SPEED)
+        ),
+        # if bullet is inactive: check fire action
+        lambda: jax.lax.cond(
+            fired,
+            lambda: (
+                True,
+                state.player_x - (PLAYER_SIZE[0] // 2),
+                PLAYER_Y - PLAYER_SIZE[1]
+            ),
+            lambda: (False, state.bullet_x, state.bullet_y)
+        )
+    )
+    
+    return new_bullet_active, new_bullet_x, new_bullet_y
 
 
 class JaxSpaceInvaders(JaxEnvironment[SpaceInvadersState, SpaceInvadersObservation, SpaceInvadersInfo]):
@@ -158,7 +191,10 @@ class JaxSpaceInvaders(JaxEnvironment[SpaceInvadersState, SpaceInvadersObservati
             opponent_current_x = OPPONENT_LIMIT_X[0],
             opponent_current_y = OPPONENT_LIMIT_Y[0],
             opponent_bounding_rect = (OPPONENT_SIZE[0] * 6 + OFFSET_OPPONENT[0] * 5, OPPONENT_SIZE[1] * 6 + OFFSET_OPPONENT[1] * 5),
-            opponent_direction = 1
+            opponent_direction = 1,
+            bullet_active=jnp.array(0).astype(jnp.int32),
+            bullet_x=jnp.array(78).astype(jnp.int32),
+            bullet_y=jnp.array(78).astype(jnp.int32)
         )
         initial_obs = self._get_observation(state)
 
@@ -176,6 +212,8 @@ class JaxSpaceInvaders(JaxEnvironment[SpaceInvadersState, SpaceInvadersObservati
             lambda _: (state.player_x, state.player_speed),
             operand=None,
         )
+
+        new_bullet_active, new_bullet_x, new_bullet_y = player_bullet_step(state, action)
 
         step_counter = jax.lax.cond(
             state.step_counter > 255,
@@ -224,7 +262,10 @@ class JaxSpaceInvaders(JaxEnvironment[SpaceInvadersState, SpaceInvadersObservati
             opponent_current_x = position,
             opponent_current_y = state.opponent_current_y,
             opponent_bounding_rect = state.opponent_bounding_rect,
-            opponent_direction = direction
+            opponent_direction = direction,
+            bullet_active=new_bullet_active,
+            bullet_x=new_bullet_x,
+            bullet_y=new_bullet_y
         )
 
         # TODO: Adjust the opponenet_bounding_rect depending on the destroyed enemies. If all the enemies of a outer column are destroyed the rect should shrink accordingly.
@@ -321,11 +362,15 @@ def load_sprites():
     opponent_6_b = aj.loadFrame(os.path.join(MODULE_DIR, PATH_SPRITES, "opponents/opponent_6_b.npy"), transpose=True)
     SPRITE_OPPONENT_6_B = jnp.expand_dims(opponent_6_b, axis=0)
 
-    return (SPRITE_BACKGROUND, SPRITE_PLAYER, SPRITE_ZERO_GREEN, SPRITE_ZERO_YELLOW, SPRITE_DEFENSE, SPRITE_OPPONENT_1_A, SPRITE_OPPONENT_1_B, SPRITE_OPPONENT_2_A, SPRITE_OPPONENT_2_B, SPRITE_OPPONENT_3_A, SPRITE_OPPONENT_3_B, SPRITE_OPPONENT_4_A, SPRITE_OPPONENT_4_B, SPRITE_OPPONENT_5, SPRITE_OPPONENT_6_A, SPRITE_OPPONENT_6_B)
+    bullet = aj.loadFrame(os.path.join(MODULE_DIR, PATH_SPRITES, "bullet.npy"), transpose=True)
+    SPRITE_BULLET = jnp.expand_dims(bullet, axis=0) 
+
+    return (SPRITE_BACKGROUND, SPRITE_PLAYER, SPRITE_BULLET, SPRITE_ZERO_GREEN, SPRITE_ZERO_YELLOW, SPRITE_DEFENSE, SPRITE_OPPONENT_1_A, SPRITE_OPPONENT_1_B, SPRITE_OPPONENT_2_A, SPRITE_OPPONENT_2_B, SPRITE_OPPONENT_3_A, SPRITE_OPPONENT_3_B, SPRITE_OPPONENT_4_A, SPRITE_OPPONENT_4_B, SPRITE_OPPONENT_5, SPRITE_OPPONENT_6_A, SPRITE_OPPONENT_6_B)
 
 (
     SPRITE_BACKGROUND, 
     SPRITE_PLAYER,
+    SPRITE_BULLET,
     SPRITE_ZERO_GREEN,
     SPRITE_ZERO_YELLOW,
     SPRITE_DEFENSE,
@@ -361,6 +406,14 @@ class SpaceInvadersRenderer(AtraJaxisRenderer):
         # Load Player
         frame_player = aj.get_sprite_frame(self.SPRITE_PLAYER, 0)
         raster = aj.render_at(raster, state.player_x - PLAYER_SIZE[0], PLAYER_Y, frame_player)
+
+        # Render bullet every even frame 
+        raster = jax.lax.cond(
+            jnp.logical_and(state.step_counter % 2 == 0, state.bullet_active),
+            lambda r: aj.render_at(r, state.bullet_x, state.bullet_y, aj.get_sprite_frame(SPRITE_BULLET, 0)),
+            lambda r: r,
+            raster
+        )
 
         # Load Initial Score
         # Green Numbers
