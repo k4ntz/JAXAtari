@@ -215,43 +215,41 @@ def load_sprites():
 
     MODULE_DIR = os.path.dirname(os.path.abspath(__file__))
     # Load sprites - no padding needed for background since it's already full size
-    bg1 = aj.loadFrame(os.path.join(MODULE_DIR, "sprites/seaquest/bg/1.npy"))
+    bg1 = aj.loadFrame(os.path.join(MODULE_DIR, "sprites/wordzapper/bg/1.npy"))
 
-    pl_sub1 = aj.loadFrame(os.path.join(MODULE_DIR, "sprites/seaquest/player_sub/1.npy"))
-    pl_sub2 = aj.loadFrame(os.path.join(MODULE_DIR, "sprites/seaquest/player_sub/2.npy"))
-    pl_sub3 = aj.loadFrame(os.path.join(MODULE_DIR, "sprites/seaquest/player_sub/3.npy"))
+    pl_1 = aj.loadFrame(os.path.join(MODULE_DIR, "sprites/wordzapper/player/1.npy"))
+    pl_2 = aj.loadFrame(os.path.join(MODULE_DIR, "sprites/wordzapper/player/2.npy"))
 
-    pl_torp = aj.loadFrame(os.path.join(MODULE_DIR, "sprites/seaquest/player_torp/1.npy"))
+    pl_missile = aj.loadFrame(os.path.join(MODULE_DIR, "sprites/wordzapper/bullet/1.npy"))
 
     # Pad player ship sprites to match each other
-    pl_sub_sprites = aj.pad_to_match([pl_sub1, pl_sub2, pl_sub3])
+    pl_sub_sprites = aj.pad_to_match([pl_1, pl_2])
     # Pad player torpedo sprites to match each other
-    pl_torp_sprites = [pl_torp]
+    pl_torp_sprites = [pl_missile]
 
     SPRITE_BG = jnp.expand_dims(bg1, axis=0)
-    SPRITE_PL_TORP = jnp.repeat(pl_torp_sprites[0][None], 1, axis=0)
+    SPRITE_PL_MISSILE = jnp.repeat(pl_torp_sprites[0][None], 1, axis=0)
 
     # Player ship sprites
-    SPRITE_PL_SUB = jnp.concatenate(
+    SPRITE_PL = jnp.concatenate(
         [
             jnp.repeat(pl_sub_sprites[0][None], 4, axis=0),
             jnp.repeat(pl_sub_sprites[1][None], 4, axis=0),
-            jnp.repeat(pl_sub_sprites[2][None], 4, axis=0),
         ]
     )
 
     return (
         SPRITE_BG,
-        SPRITE_PL_SUB,
-        SPRITE_PL_TORP
+        SPRITE_PL,
+        SPRITE_PL_MISSILE
     )
 
 
 # Load sprites once at module level
 (
     SPRITE_BG,
-    SPRITE_PL_SUB,
-    SPRITE_PL_TORP
+    SPRITE_PL,
+    SPRITE_PL_MISSILE
 ) = load_sprites()
 
 
@@ -438,7 +436,8 @@ def player_zapper_step(
     # the missile x is either player x + 3 if facing left or player x + 13 if facing right
     new_zapper = jnp.where(
         jnp.logical_and(fire, jnp.logical_not(zapper_exists)),
-        jnp.array([curr_player_x, curr_player_y, 1, state.step_counter]),
+        # TODO remove hard-coded values below
+        jnp.array([curr_player_x+4, curr_player_y-5, 1, state.step_counter]),
         state.player_zapper_position,
     )
 
@@ -647,7 +646,7 @@ class WordZapperRenderer(AtraJaxisRenderer):
         raster = aj.render_at(raster, 0, 0, frame_bg)
 
         ## render player
-        frame_pl_sub = aj.get_sprite_frame(SPRITE_PL_SUB, state.step_counter)
+        frame_pl_sub = aj.get_sprite_frame(SPRITE_PL, state.step_counter)
         raster = aj.render_at(
             raster,
             state.player_x,
@@ -657,7 +656,8 @@ class WordZapperRenderer(AtraJaxisRenderer):
         )
 
         # render player missile
-        frame_pl_torp = aj.get_sprite_frame(SPRITE_PL_TORP, state.step_counter)
+        frame_pl_torp = aj.get_sprite_frame(SPRITE_PL_MISSILE, state.step_counter)
+
 
         should_render_torp = state.player_missile_position[0] > 0
         
@@ -675,7 +675,7 @@ class WordZapperRenderer(AtraJaxisRenderer):
         )
 
         # render player zapper
-        frame_pl_zapper = aj.get_sprite_frame(SPRITE_PL_TORP, state.step_counter)
+        frame_pl_zapper = aj.get_sprite_frame(SPRITE_PL_MISSILE, state.step_counter)
 
         raster = jax.lax.cond(
             state.player_zapper_position[2], # check active
