@@ -18,6 +18,9 @@ RIGHT = 2
 LEFT = 3
 """
 
+if not pygame.get_init():
+    pygame.init()
+
 # -------- Game constants --------
 SHOOTING_COOLDOWN = 80
 ENEMY_MOVE_SPEED = 2
@@ -65,7 +68,7 @@ class GalaxianState(NamedTuple):
 
     random_key: chex.Array
     step_counter: chex.Array
-    obs_stack: chex.ArrayTree
+    #obs_stack: chex.ArrayTree
 
 
 @jax.jit
@@ -324,6 +327,7 @@ def handle_shooting(state: GalaxianState, action) -> GalaxianState:
     def idle(_):
         return state
 
+
     shooting = jnp.any(
         jnp.array(
             [
@@ -508,7 +512,6 @@ class GalaxianObservation(NamedTuple):
     enemy_attack_pos: chex.Array
     enemy_attack_x: chex.Array
     enemy_attack_y: chex.Array
-    player_shooting_cooldown: chex.Array
 
 class GalaxianInfo(NamedTuple):
     time: jnp.ndarray
@@ -536,7 +539,7 @@ class JaxGalaxian(JaxEnvironment[GalaxianState, GalaxianObservation, GalaxianInf
         # +1 ein extra wert für den score
         # sind erstmal nur temporary values
 
-    def reset(self, key = None) -> GalaxianState:
+    def reset(self, key = None) -> Tuple[GalaxianObservation, GalaxianState]:
         grid_rows = GRID_ROWS
         grid_cols = GRID_COLS
         enemy_spacing_x = ENEMY_SPACING_X
@@ -581,20 +584,20 @@ class JaxGalaxian(JaxEnvironment[GalaxianState, GalaxianObservation, GalaxianInf
                              player_respawn_timer=jnp.array(PLAYER_DEATH_DELAY),
                              random_key=jax.random.PRNGKey(0),
                              step_counter=jnp.array(0),
-                             obs_stack=None)
+                             )
 
         initial_obs = self._get_observation(state)
 
 
-        def expand_and_copy(x):
-            x_expanded = jnp.expand_dims(x, axis=0)
-            return jnp.concatenate([x_expanded] * self.frame_stack_size, axis=0)
-
-        # Apply transformation to each leaf in the pytree
-        stacked_obs = jax.tree.map(expand_and_copy, initial_obs)
-
-        new_state = state._replace(obs_stack=stacked_obs)
-        return new_state, stacked_obs
+        # def expand_and_copy(x):
+        #     x_expanded = jnp.expand_dims(x, axis=0)
+        #     return jnp.concatenate([x_expanded] * self.frame_stack_size, axis=0)
+        #
+        # # Apply transformation to each leaf in the pytree
+        # stacked_obs = jax.tree.map(expand_and_copy, initial_obs)
+        #
+        # new_state = state._replace(obs_stack=stacked_obs)
+        return initial_obs, state
 
         #alles aus galaxianState was man aus Spielersicht wahrnimmt
     def _get_observation(self, state: GalaxianState) -> GalaxianObservation:
@@ -609,7 +612,6 @@ class JaxGalaxian(JaxEnvironment[GalaxianState, GalaxianObservation, GalaxianInf
             enemy_attack_pos=state.enemy_attack_pos,
             enemy_attack_x=state.enemy_attack_x,
             enemy_attack_y=state.enemy_attack_y,
-            player_shooting_cooldown=state.player_shooting_cooldown
         )
 
     @partial(jax.jit, static_argnums=(0,))
@@ -631,7 +633,7 @@ class JaxGalaxian(JaxEnvironment[GalaxianState, GalaxianObservation, GalaxianInf
     @partial(jax.jit, static_argnums=(0,))
     def step(
             self, state: GalaxianState, action: chex.Array
-    ) -> Tuple[GalaxianState, GalaxianObservation, float, bool, GalaxianInfo]:
+    ) -> Tuple[GalaxianObservation, GalaxianState, float, bool, GalaxianInfo]:
         #TODO: refactor like the other games
         # create new state instead of replacing old state step by step
         new_state = update_player_position(state, action)
@@ -656,10 +658,10 @@ class JaxGalaxian(JaxEnvironment[GalaxianState, GalaxianObservation, GalaxianInf
         #jax.debug.print("obs: {}", observation)
 
         # stack the new observation, remove the oldest one
-        observation = jax.tree.map(lambda stack, obs: jnp.concatenate([stack[1:], jnp.expand_dims(obs, axis=0)], axis=0), new_state.obs_stack, observation)
-        new_state = new_state._replace(obs_stack=observation)
+        # observation = jax.tree.map(lambda stack, obs: jnp.concatenate([stack[1:], jnp.expand_dims(obs, axis=0)], axis=0), new_state.obs_stack, observation)
+        # new_state = new_state._replace(obs_stack=observation)
 
-        return new_state, new_state.obs_stack, env_reward, done, info
+        return observation, new_state, env_reward, done, info
 
 
     @partial(jax.jit, static_argnums=(0,))
@@ -692,7 +694,7 @@ if __name__ == "__main__":
     game = JaxGalaxian(frameskip=1)
     jitted_step = jax.jit(game.step)
     jitted_reset = jax.jit(game.reset)
-    state, initial_observation = jitted_reset()  # Unpack the tuple
+    initial_observation, state  = jitted_reset()  # Unpack the tuple
 
     screen = pygame.display.set_mode((SCREEN_WIDTH, SCREEN_HEIGHT))
     pygame.display.set_caption("Galaxian")
