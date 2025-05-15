@@ -106,7 +106,7 @@ class Renderer_AtraJaxis(AtraJaxisRenderer):
             if isinstance(frame, jnp.ndarray) and frame.ndim >= 2:
                 return frame.astype(jnp.uint8)
 
-        # --- Load Sprites ---
+        # Load Sprites
         # Backgrounds + Dynamic elements + UI elements
         sprite_names = [
             # 'background_0', 'background_1', 'background_2',
@@ -214,7 +214,7 @@ class JaxAtlantis(JaxEnvironment[AtlantisState, AtlantisObservation, AtlantisInf
     def reset(
         self, key: jax.random.PRNGKey = jax.random.PRNGKey(42)
     ) -> Tuple[AtlantisObservation, AtlantisState]:
-        # --- empty tables ---
+        # empty tables
         empty_enemies = jnp.zeros((self.config.max_enemies, 5), dtype=jnp.int32)
         empty_bullets = jnp.zeros((self.config.max_bullets, 4), dtype=jnp.int32)
         empty_bullets_alive = jnp.zeros((self.config.max_bullets,), dtype=jnp.bool_)
@@ -222,7 +222,7 @@ class JaxAtlantis(JaxEnvironment[AtlantisState, AtlantisObservation, AtlantisInf
         # split the PRNGkey so we get one subkey for the spawn-timer and one to carry forward in state.rng
         key, sub = jax.random.split(key)
 
-        # --- initial state ---
+        # initial state
         new_state = AtlantisState(
             score=jnp.array(0, dtype=jnp.int32),
             enemies=empty_enemies,
