@@ -487,40 +487,48 @@ class JaxAtlantis(JaxEnvironment[AtlantisState, AtlantisObservation, AtlantisInf
             cfg.screen_width,
             -cfg.enemy_width
         )
-
+        # Get the current lane for all enemies
+        current_lanes = state.enemies[:, 4]
+        is_active = enemies[:,5]
+        next_lanes = jnp.where(is_active,current_lanes+1,0)
+        next_lane_free = jnp.logical_or(
+            ~is_active,  # Inactive enemies don't need a free lane
+            jnp.logical_and(
+                next_lanes < state.lanes_free.shape[0],  # Check lane is in bounds
+                state.lanes_free[next_lanes]  # Check if the lane is free
+            )
+        )
         # Apply the new x positions only where off_screen_enemies is True
         updated_x = jnp.where(
-            off_screen_enemies,
+            (off_screen_enemies & next_lane_free),
             new_x,
             enemies[:, 0]  # Keep original x positions for on-screen enemies
         )
 
         # Update all enemies with the new x positions
-        updatedx_enemies = enemies.at[:, 0].set(updated_x)
+        updated_enemies = enemies.at[:, 0].set(updated_x)
 
-        # Get the current lane for all enemies
-        current_lanes = state.enemies[:, 4]
         # Then update the lanes
         updated_lanes = jnp.where(
-            off_screen_enemies,
+            (off_screen_enemies & next_lane_free),
             current_lanes + 1,
             current_lanes
         )
 
         # Save the new lane values (this doesn't modify the state yet)
-        updatedl_enemies = updatedx_enemies.at[:,4].set(updated_lanes)
+        updated_enemies = updated_enemies.at[:,4].set(updated_lanes)
 
         # Get the lane indices as a separate array first
-        lane_indices = updatedl_enemies[:, 4]
+        lane_indices = updated_enemies[:, 4]
         # combine previous active flag with check for last lane
         # any enemy that's went through all four lanes gets deactivated
         flags = enemies[:, 5] & (lane_indices < len(cfg.enemy_paths))
         # write updated active flag
-        updatedf_enemies = updatedl_enemies.at[:, 5].set(flags)
+        updated_enemies = updated_enemies.at[:, 5].set(flags)
         # Get the corresponding y-positions from enemy_paths
         lane_y_positions = jnp.where(lane_indices<len(cfg.enemy_paths),cfg.enemy_paths[lane_indices], 0-cfg.enemy_height)
         # Update the enemies array with these y-positions
-        updated_enemies = updatedf_enemies.at[:, 1].set(lane_y_positions)
+        updated_enemies = updated_enemies.at[:, 1].set(lane_y_positions)
         #check if lanes are free now
         lane_masks = []
         for i in range(len(cfg.enemy_paths)):
@@ -537,7 +545,7 @@ class JaxAtlantis(JaxEnvironment[AtlantisState, AtlantisObservation, AtlantisInf
         """
         Collision check between bullets and enemies
 
-        Each bulllet/enemyis an axis-aligned rectangle. Now:
+        Each bulllet/enemy an axis-aligned rectangle. Now:
         1. compute the four edges (lefet, right, top, bottom) for every bullet and every enemy
         2. Build two (BxE) boolean matrices for x-overlap and y-overlap
         3. compute AND of the two matrices and build the hit_matrix[b,e]. An entry is true, when bullet b and enemy e overlap in both X and Y
