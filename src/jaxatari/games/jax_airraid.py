@@ -1427,3 +1427,70 @@ class AirRaidRenderer(AtraJaxisRenderer):
         raster = jax.lax.fori_loop(0, 5, render_life, raster)
 
         return raster
+
+if __name__ == "__main__":
+    # Initialize Pygame
+    pygame.init()
+    WINDOW_WIDTH = 160 * 3
+    WINDOW_HEIGHT = 210 * 3
+    screen = pygame.display.set_mode((WINDOW_WIDTH, WINDOW_HEIGHT))
+    pygame.display.set_caption("Air Raid Game")
+    clock = pygame.time.Clock()
+
+    # Create the game instance
+    game = JaxAirRaid(frameskip=1)
+
+    # Create the JAX renderer
+    renderer = AirRaidRenderer()
+
+    # Get jitted functions
+    jitted_step = jax.jit(game.step)
+    jitted_reset = jax.jit(game.reset)
+
+    # Initialize game state
+    obs, curr_state = jitted_reset()
+
+    # Game loop
+    running = True
+    frame_by_frame = False
+    frameskip = game.frameskip
+    counter = 1
+
+    while running:
+        for event in pygame.event.get():
+            if event.type == pygame.QUIT:
+                running = False
+            elif event.type == pygame.KEYDOWN:
+                if event.key == pygame.K_f:
+                    frame_by_frame = not frame_by_frame
+            elif event.type == pygame.KEYDOWN and event.key == pygame.K_n: # Ensure it's KEYDOWN for 'n'
+                if frame_by_frame: # Only step if in frame_by_frame mode
+                    if counter % frameskip == 0: # Respect frameskip
+                        action = get_human_action()
+                        obs, curr_state, reward, done, info = jitted_step(
+                            curr_state, action
+                        )
+                        # Reset if game is done
+                        if done:
+                           obs, curr_state = jitted_reset()
+
+
+        if not frame_by_frame:
+            if counter % frameskip == 0:
+                action = get_human_action()
+                obs, curr_state, reward, done, info = jitted_step(curr_state, action)
+                
+                # Reset if game is done
+                if done:
+                    obs, curr_state = jitted_reset()
+                   
+        # Render and display
+        raster = renderer.render(curr_state)
+
+        # Update pygame display
+        aj.update_pygame(screen, raster, 3, WIDTH, HEIGHT)
+
+        counter += 1
+        clock.tick(60)
+
+    pygame.quit()
