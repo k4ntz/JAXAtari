@@ -15,7 +15,7 @@ Implemented features:
 - Accurate and jit-compatible rendering for implemented mechanics
 - Ball respawning upon failure and life counter
 - Wall collisions
-- Rudimentary ball physics (IMPORTANT: Don't pull the plunger back all the way when testing)
+- Rudimentary ball physics (IMPORTANT: Pull the plunger back all the way when testing)
 
 Justification for the state of the ball physics:
 Video Pinball has extremely complicated ball physics. Launch angles, when hitting (close to) corners are
@@ -24,7 +24,8 @@ when a slow balls hit walls at certain angles, etc...
 These properties are impossible to read from the RAM state and need to be investigated
 frame by frame in various scenarios. Thus, the physics are far from perfect.
 There is still a physics bug when calculating multiple wall collisions during a single step which unfortunately
-gets triggered when the plunger is pulled all the way down. When testing, avoid pulling it all the way down.
+gets triggered when the plunger is pulled all the way down. When testing, pulling it all the way down, this is the only
+way we found so far to mitigate this issue until we match the physics to the Atari original.
 
 Additional notes:
 The renderer requires a custom function that was implemented in atraJaxis.py
@@ -70,9 +71,9 @@ HEIGHT = 210
 
 # Physics constants
 # TODO: check if these are correct
-GRAVITY = 1  # 0.12
+GRAVITY = 0.5  # 0.12
 VELOCITY_DAMPENING_VALUE = 0  # 24
-BALL_MAX_SPEED = 16.0
+BALL_MAX_SPEED = 10.0
 FLIPPER_MAX_ANGLE = 3
 FLIPPER_ANIMATION_Y_OFFSETS = jnp.array(
     [0, 0, 3, 7]
