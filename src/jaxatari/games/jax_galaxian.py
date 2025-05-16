@@ -40,20 +40,16 @@ NATIVE_GAME_HEIGHT = 288
 PYGAME_SCALE_FACTOR = 3
 PYGAME_WINDOW_WIDTH = NATIVE_GAME_WIDTH * PYGAME_SCALE_FACTOR
 PYGAME_WINDOW_HEIGHT = NATIVE_GAME_HEIGHT * PYGAME_SCALE_FACTOR
-ENEMY_SPACING_X = 7
-ENEMY_SPACING_Y = 7
-ENEMY_GRID_Y = 40
-START_X = NATIVE_GAME_WIDTH // 4
-START_Y = NATIVE_GAME_HEIGHT - 20
-ENEMY_ATTACK_SPEED = 1
-
 ENEMY_SPACING_X = 20
 ENEMY_SPACING_Y = 20
-ENEMY_GRID_Y = 300
-START_X = 100
+ENEMY_GRID_Y = 100
+START_X = NATIVE_GAME_WIDTH // 4
+START_Y = NATIVE_GAME_HEIGHT - 50
+ENEMY_ATTACK_SPEED = 1
+
 ENEMY_ATTACK_SPEED = 2
 ENEMY_ATTACK_TURN_TIME = 30
-ENEMY_ATTACK_BULLET_SPEED = 10
+ENEMY_ATTACK_BULLET_SPEED = 20
 ENEMY_ATTACK_BULLET_DELAY = 50
 ENEMY_ATTACK_MAX_BULLETS = 2
 LIVES = 3
@@ -100,8 +96,8 @@ def update_player_position(state: GalaxianState, action) -> GalaxianState:
         jnp.array([action == Action.LEFT, action == Action.LEFTFIRE])
     )
 
-    new_x = jnp.clip(state.player_x + press_right * 5, 0, SCREEN_WIDTH)
-    new_x = jnp.clip(new_x - press_left * 5, 0, SCREEN_WIDTH)
+    new_x = jnp.clip(state.player_x + press_right * 5, 0, NATIVE_GAME_WIDTH)
+    new_x = jnp.clip(new_x - press_left * 5, 0, NATIVE_GAME_WIDTH)
     return state._replace(player_x=new_x)
 
 @jax.jit
@@ -115,7 +111,7 @@ def update_enemy_positions(state: GalaxianState) -> GalaxianState:
     def keep_direction():
         return state.enemy_grid_direction
 
-    new_enemy_grid_direction = lax.cond(state.enemy_grid_x[0, state.enemy_grid_x.shape[1]] > SCREEN_WIDTH, move_left, lambda: lax.cond(state.enemy_grid_x[0, 0] < 0, move_right, keep_direction))
+    new_enemy_grid_direction = lax.cond(state.enemy_grid_x[0, state.enemy_grid_x.shape[1]] > NATIVE_GAME_WIDTH, move_left, lambda: lax.cond(state.enemy_grid_x[0, 0] < 0, move_right, keep_direction))
     new_enemy_grid_x = state.enemy_grid_x + ENEMY_MOVE_SPEED * state.enemy_grid_direction
     return state._replace(enemy_grid_x=new_enemy_grid_x, enemy_grid_direction=new_enemy_grid_direction)
 
@@ -124,7 +120,7 @@ def update_enemy_positions(state: GalaxianState) -> GalaxianState:
 @jax.jit
 def update_enemy_attack(state: GalaxianState) -> GalaxianState:
 
-    enemy_out_of_bounds = (state.enemy_attack_y > SCREEN_HEIGHT) | (state.enemy_attack_x <= -10) | (state.enemy_attack_x >= SCREEN_WIDTH + 10)
+    enemy_out_of_bounds = (state.enemy_attack_y > NATIVE_GAME_HEIGHT) | (state.enemy_attack_x <= -10) | (state.enemy_attack_x >= NATIVE_GAME_WIDTH + 10)
     #jax.debug.print("grid: {}", state.enemy_grid_alive[tuple(state.enemy_attack_pos)])
     #jax.debug.print("state: {}", state.enemy_attack_state)
     new_enemy_attack_state = jnp.where(
@@ -137,7 +133,7 @@ def update_enemy_attack(state: GalaxianState) -> GalaxianState:
             1,
             jnp.where(
                 # state 1, transitions to state 2 if out of screen, otherwise transitions to state 1
-                jnp.logical_and(state.enemy_attack_state == 1, state.enemy_attack_y > SCREEN_HEIGHT),
+                jnp.logical_and(state.enemy_attack_state == 1, state.enemy_attack_y > NATIVE_GAME_HEIGHT),
                 2,
                 jnp.where(
                     # state 2, transitions to state 0 if respawn timer is 0, otherwise transitions to state 2
@@ -222,8 +218,8 @@ def update_enemy_attack(state: GalaxianState) -> GalaxianState:
 
     delta_y = jnp.where(
         state.enemy_attack_state == 1,
-        int(ENEMY_ATTACK_SPEED/2),
-        0
+        int(ENEMY_ATTACK_SPEED/2.0),
+        0.0
     )
 
     new_enemy_attack_respawn_timer = jnp.where(
@@ -237,7 +233,7 @@ def update_enemy_attack(state: GalaxianState) -> GalaxianState:
         state.enemy_attack_state == 0,
         state.enemy_grid_alive.at[tuple(new_enemy_attack_pos)].set(2),
         jnp.where(
-            jnp.logical_and(state.enemy_attack_state == 1, state.enemy_attack_y > SCREEN_HEIGHT),
+            jnp.logical_and(state.enemy_attack_state == 1, state.enemy_attack_y > NATIVE_GAME_HEIGHT),
             state.enemy_grid_alive.at[tuple(new_enemy_attack_pos)].set(1),
             state.enemy_grid_alive
         )
@@ -283,7 +279,7 @@ def update_enemy_bullets(state: GalaxianState) -> GalaxianState:
         new_enemy_attack_bullet_y
     )
 
-    bullet_out_of_bounds = (state.enemy_attack_bullet_y > SCREEN_HEIGHT)
+    bullet_out_of_bounds = (state.enemy_attack_bullet_y > NATIVE_GAME_HEIGHT)
     new_enemy_attack_bullet_x = jnp.where(
         bullet_out_of_bounds,
         -1,
@@ -474,8 +470,8 @@ def check_player_death_by_bullet(state: GalaxianState) -> GalaxianState:
     def process_hit(operands):
         current_state = operands
         new_lives = current_state.lives - 1
-        new_enemy_attack_bullet_x = jnp.array(-1)
-        new_enemy_attack_bullet_y = jnp.array(-1)
+        new_enemy_attack_bullet_x = jnp.array(-1,dtype=jnp.float32)
+        new_enemy_attack_bullet_y = jnp.array(-1,dtype=jnp.float32)
 
         return state._replace(lives=new_lives, enemy_attack_bullet_x=new_enemy_attack_bullet_x,enemy_attack_bullet_y=new_enemy_attack_bullet_y)
 
@@ -717,7 +713,7 @@ def load_sprites():
     bullet = aj.loadFrame(os.path.join(MODULE_DIR, "sprites/galaxian/bullet.npy"),transpose=True)
     enemy_white = aj.loadFrame(os.path.join(MODULE_DIR, "sprites/galaxian/white_enemy_1.npy"),transpose=True)  # Assuming you have enemy.npy
 
-    SPRITE_BG = jnp.expand_dims(bg, axis = 0)
+    SPRITE_BG = jnp.expand_dims(bg, axis= 0)
     SPRITE_PLAYER = jnp.expand_dims(player, axis = 0)
     SPRITE_BULLET = jnp.expand_dims(bullet, axis = 0)
     SPRITE_ENEMY_WHITE = jnp.expand_dims(enemy_white, axis=0)
@@ -878,7 +874,7 @@ if __name__ == "__main__":
 
     # Get jitted functions (reset doesn't need to be jitted if only called once)
     # state, initial_observation = game.reset() # Call reset directly
-    state, initial_observation = jax.jit(game.reset)() # If you want to jit it
+    initial_observation, state = jax.jit(game.reset)() # If you want to jit it
 
     jitted_step = game.step # Already jitted using partial in class
 
@@ -889,10 +885,9 @@ if __name__ == "__main__":
             if event.type == pygame.QUIT:
                 running = False
         screen.fill((0, 0, 0))
-        draw(screen, state)
         pygame.display.flip()
         action = get_action_from_keyboard()
-        state, observation, reward, done, info = jitted_step(state, action)  # Unpack the tuple
+        observation, state, reward, done, info = jitted_step(state, action)  # Unpack the tuple
         render_output = renderer.render(state)
         aj.update_pygame(screen, render_output, PYGAME_SCALE_FACTOR, NATIVE_GAME_WIDTH,
                          NATIVE_GAME_HEIGHT)  # Assuming scale factor 1
