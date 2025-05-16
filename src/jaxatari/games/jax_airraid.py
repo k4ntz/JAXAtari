@@ -822,7 +822,14 @@ class JaxAirRaid(JaxEnvironment[AirRaidState, AirRaidObservation, AirRaidInfo]):
         final_new_state = new_state._replace(obs_stack=observation_stack) # Use a different variable name to avoid confusion
         
         # Return (observation, new_state, reward, done, info) - Correct order for play.py
-        return observation, final_new_state, env_reward, done, info
+        def do_reset(_):
+            obs, reset_state = self.reset(new_state.rng)
+            return obs, reset_state, env_reward, False, info
+
+        def no_reset(_):
+            return observation, final_new_state, env_reward, done, info
+
+        return jax.lax.cond(done, do_reset, no_reset, operand=None)
     
     @partial(jax.jit, static_argnums=(0,))
     def _get_observation(self, state: AirRaidState) -> AirRaidObservation:
