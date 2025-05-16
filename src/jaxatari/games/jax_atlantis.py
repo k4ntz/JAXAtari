@@ -56,7 +56,9 @@ class EntityPosition(NamedTuple):
 
 
 class AtlantisState(NamedTuple):
-    score: chex.Array
+    score: chex.Array # tracks the current score
+    score_spent: chex.Array # tracks how much was spent on repair
+    wave: chex.Array #tracks which wave we are in
 
     # columns = [ x,  y,  dx,   type_id, lane, active_flag ]
     #   x, y        → position
@@ -230,6 +232,8 @@ class JaxAtlantis(JaxEnvironment[AtlantisState, AtlantisObservation, AtlantisInf
         # --- initial state ---
         new_state = AtlantisState(
             score=jnp.array(0, dtype=jnp.int32),
+            score_spent=jnp.array(0, dtype=jnp.int32),
+            wave=jnp.array(0, dtype=jnp.int32),
             enemies=empty_enemies,
             bullets=empty_bullets,
             bullets_alive=empty_bullets_alive,
