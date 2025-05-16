@@ -18,6 +18,9 @@ NUM_CHECKERS = 15
 BAR_INDEX = 24
 HOME_INDEX = 25
 MAX_DICE = 2
+WHITE_HOME = jnp.array(range(0, 6))
+BLACK_HOME = jnp.array(range(19, 25))
+
 
 WHITE = 1
 BLACK = -1
@@ -109,25 +112,70 @@ class JaxBackgammonEnv(JaxEnvironment[BackgammonState, jnp.ndarray, dict]):
     @staticmethod
     @jax.jit
     def is_valid_move(state: BackgammonState, move: Tuple[int, int]) -> bool:
-        """Determine if a given move is valid for the current player based on game rules."""
-        from_point, to_point = move[0], move[1]
+        from_point, to_point = move
         board = state.board
         player = state.current_player
         player_idx = JaxBackgammonEnv.get_player_index(player)
         opponent_idx = 1 - player_idx
 
+        # Detect direction and basic validity
+        base_distance = jax.lax.select(player == WHITE, from_point - to_point, to_point - from_point)
         has_piece = board[player_idx, from_point] > 0
-        in_bounds = (0 <= from_point) & (from_point < 24) & (0 <= to_point) & (to_point < 24)
-
-        distance = jax.lax.select(
-            player == WHITE,
-            from_point - to_point,
-            to_point - from_point
-        )
-        correct_direction = distance > 0
-        dice_match = (state.dice[0] == distance) | (state.dice[1] == distance)
+        in_bounds = (0 <= from_point) & (from_point < 24) & (0 <= to_point) & (to_point <= HOME_INDEX)
+        correct_direction = base_distance > 0
         not_blocked = board[opponent_idx, to_point] <= 1
-        return has_piece & in_bounds & correct_direction & dice_match & not_blocked
+
+        # Determine if we're bearing off
+        is_bearing_off = to_point == HOME_INDEX
+        can_bear_off = JaxBackgammonEnv.check_bearing_off(state, player)
+
+        # Compute effective distance
+        bearing_off_distance = jax.lax.select(player == WHITE, from_point + 1, NUM_POINTS - from_point)
+        effective_distance = jax.lax.select(is_bearing_off, bearing_off_distance, base_distance)
+
+        def check_bearing_off_valid(_):
+            exact_match = (state.dice[0] == effective_distance) | (state.dice[1] == effective_distance)
+
+            point_indices = jnp.arange(24)
+
+            white_mask = point_indices > from_point
+            black_mask = point_indices < from_point
+
+            higher_points = jax.lax.select(
+                player == WHITE,
+                white_mask,
+                black_mask
+            )
+
+            player_row = board[player_idx, :24]
+            no_higher = jnp.all(jnp.where(higher_points, player_row, 0) == 0)
+
+            larger_die = jnp.maximum(state.dice[0], state.dice[1]) > effective_distance
+            return exact_match | (larger_die & no_higher)
+
+        def check_normal_move(_):
+            return (state.dice[0] == effective_distance) | (state.dice[1] == effective_distance)
+
+        dice_match = jax.lax.cond(
+            is_bearing_off & can_bear_off,
+            check_bearing_off_valid,
+            check_normal_move,
+            operand=None
+        )
+
+        return has_piece & in_bounds & correct_direction & dice_match & not_blocked & (~is_bearing_off | can_bear_off)
+    @staticmethod
+    def check_bearing_off(state: BackgammonState, player: int) -> bool:
+        """check for bearing off using lax.cond instead of if statements."""
+        board = state.board
+        player_idx = jax.lax.cond(player == WHITE, lambda _: 0, lambda _: 1, operand=None)
+
+        home_range = jax.lax.cond(player == WHITE, lambda _: WHITE_HOME, lambda _: BLACK_HOME, operand=None)
+
+        all_in_home_board = jnp.sum(board[player_idx, home_range]) == NUM_CHECKERS
+        none_on_bar = board[player_idx, BAR_INDEX] == 0
+
+        return all_in_home_board & none_on_bar
 
     @staticmethod
     @jax.jit
@@ -409,10 +457,12 @@ def run_game_without_input(key: jax.Array, max_steps=200):
             break
 
         valid_moves = env.get_valid_moves(state)
+        new_dice, new_key  = env.roll_dice(key) # change the RNG key to get better randomness
+        env.key = new_key
 
         if len(valid_moves) == 0:
             state = state._replace(
-                dice=env._roll_dice(),
+                dice=new_dice,
                 current_player=-state.current_player
             )
             env.render(state)
