@@ -76,6 +76,21 @@ for i in range(MAX_BOMBS):
     STATE_TRANSLATOR[base_idx + 2] = f"bomb_{i}_y"
     STATE_TRANSLATOR[base_idx + 3] = f"bomb_{i}_speed"
 
+# Bomb group constants
+BOMB_GROUPS = [
+    {"count": 10, "points": 1, "drop_interval": 25, "speed_multiplier": 1.0},    # Group 1: 10 bombs, 1 point each
+    {"count": 20, "points": 2, "drop_interval": 22, "speed_multiplier": 1.2},    # Group 2: 20 bombs, 2 points each
+    {"count": 30, "points": 3, "drop_interval": 19, "speed_multiplier": 1.4},    # Group 3: 30 bombs, 3 points each
+    {"count": 40, "points": 4, "drop_interval": 17, "speed_multiplier": 1.6},    # Group 4: 40 bombs, 4 points each
+    {"count": 50, "points": 5, "drop_interval": 15, "speed_multiplier": 1.8},    # Group 5: 50 bombs, 5 points each
+    {"count": 75, "points": 6, "drop_interval": 13, "speed_multiplier": 2.0},    # Group 6: 75 bombs, 6 points each
+    {"count": 100, "points": 7, "drop_interval": 11, "speed_multiplier": 2.2},   # Group 7: 100 bombs, 7 points each
+    {"count": 150, "points": 8, "drop_interval": 9, "speed_multiplier": 2.5},    # Group 8: 150 bombs, 8 points each
+]
+
+# Calculate cumulative bombs to reach each group
+BOMB_GROUP_THRESHOLDS = jnp.array([0] + [sum(group["count"] for group in BOMB_GROUPS[:i]) for i in range(1, len(BOMB_GROUPS) + 1)])
+
 # Immutable state container
 class KaboomState(NamedTuple):
     bucket_x: chex.Array          # Bucket x-position
@@ -91,6 +106,9 @@ class KaboomState(NamedTuple):
     bomb_speed: chex.Array        # Speed of each bomb
     drop_timer: chex.Array        # Timer for dropping new bombs
     obs_stack: chex.ArrayTree     # Observation stack for rendering
+    bombs_caught: chex.Array      # Total bombs caught
+    bomb_group: chex.Array        # Current bomb group (0-7)
+    bombs_in_group: chex.Array    # Bombs caught in current group
 
 class EntityPosition(NamedTuple):
     x: jnp.ndarray
@@ -112,6 +130,9 @@ class KaboomInfo(NamedTuple):
     lives: jnp.ndarray
     score: jnp.ndarray
     level: jnp.ndarray
+    bombs_caught: jnp.ndarray
+    bomb_group: jnp.ndarray
+    bombs_in_group: jnp.ndarray
 
 @jax.jit
 def bucket_step(bucket_x: chex.Array, action: chex.Array) -> chex.Array:
@@ -182,6 +203,7 @@ def drop_bomb(
     bomber_x: chex.Array,
     level: chex.Array,
     drop_timer: chex.Array,
+    bomb_group: chex.Array,
 ) -> Tuple[chex.Array, chex.Array, chex.Array, chex.Array, chex.Array]:
     """Potentially drop a new bomb."""
     # Decrement drop timer
@@ -198,16 +220,39 @@ def drop_bomb(
     can_drop = jnp.sum(bomb_active) < MAX_BOMBS
     will_drop = jnp.logical_and(should_drop, can_drop)
     
+    # Create arrays of drop intervals and speed multipliers from BOMB_GROUPS
+    # This is JAX-friendly - avoiding direct indexing with traced values
+    drop_intervals = jnp.array([group["drop_interval"] for group in BOMB_GROUPS])
+    speed_multipliers = jnp.array([group["speed_multiplier"] for group in BOMB_GROUPS])
+    
+    # Use safe indexing with jnp.clip to ensure we stay within bounds
+    safe_group_idx = jnp.clip(bomb_group, 0, len(BOMB_GROUPS) - 1)
+    
+    # Get the drop interval and speed multiplier using JAX indexing
+    current_drop_interval = jnp.where(
+        bomb_group < len(BOMB_GROUPS),
+        drop_intervals[safe_group_idx],
+        drop_intervals[-1]  # Last group for higher groups
+    )
+    
+    current_speed_multiplier = jnp.where(
+        bomb_group < len(BOMB_GROUPS),
+        speed_multipliers[safe_group_idx],
+        speed_multipliers[-1]  # Last group for higher groups
+    )
+    
     # Reset timer if dropping
     new_drop_timer = jnp.where(
         will_drop,
-        # Drop timer decreases with level (bombs drop more frequently)
-        jnp.maximum(20 - level * 2, 5),
+        current_drop_interval,
         new_drop_timer
     )
     
-    # Calculate base speed based on level
-    base_speed = jnp.minimum(BOMB_SPEED_INITIAL + level * BOMB_SPEED_INCREMENT, BOMB_SPEED_MAX)
+    # Calculate base speed based on group
+    base_speed = BOMB_SPEED_INITIAL * current_speed_multiplier
+    
+    # Speed still increases slightly with level within each group
+    adjusted_speed = jnp.minimum(base_speed + level * 0.05, BOMB_SPEED_MAX)
     
     # Update bomb arrays if dropping
     new_bomb_active = bomb_active.at[first_inactive].set(
@@ -223,7 +268,7 @@ def drop_bomb(
     )
     
     new_bomb_speed = bomb_speed.at[first_inactive].set(
-        jnp.where(will_drop, base_speed, bomb_speed[first_inactive])
+        jnp.where(will_drop, adjusted_speed, bomb_speed[first_inactive])
     )
     
     return new_bomb_active, new_bomb_x, new_bomb_y, new_bomb_speed, new_drop_timer
@@ -238,7 +283,10 @@ def update_bombs(
     score: chex.Array,
     lives: chex.Array,
     level: chex.Array,
-) -> Tuple[chex.Array, chex.Array, chex.Array, chex.Array, chex.Array, chex.Array, chex.Array]:
+    bombs_caught: chex.Array,
+    bomb_group: chex.Array,
+    bombs_in_group: chex.Array,
+) -> Tuple[chex.Array, chex.Array, chex.Array, chex.Array, chex.Array, chex.Array, chex.Array, chex.Array, chex.Array, chex.Array]:
     """Update positions of active bombs and check for catches/misses."""
     
     # Move active bombs down
@@ -316,18 +364,82 @@ def update_bombs(
         bomb_active
     )
     
-    # Calculate rewards and update score
+    # Get number of bombs caught this step
     catches = jnp.sum(caught)
-    new_score = score + catches * POINTS_PER_CATCH
+    
+    # Create arrays of point values and bomb counts from BOMB_GROUPS
+    # This is JAX-friendly - avoiding direct indexing with traced values
+    points_per_group = jnp.array([group["points"] for group in BOMB_GROUPS])
+    count_per_group = jnp.array([group["count"] for group in BOMB_GROUPS])
+    
+    # Use safe indexing with jnp.clip to ensure we stay within bounds
+    safe_group_idx = jnp.clip(bomb_group, 0, len(BOMB_GROUPS) - 1)
+    
+    # Calculate current points per bomb based on group
+    current_points_per_bomb = jnp.where(
+        bomb_group < len(BOMB_GROUPS),
+        points_per_group[safe_group_idx],
+        points_per_group[-1]  # Max points for groups beyond the defined ones
+    )
+    
+    # Calculate points earned this step
+    points_earned = catches * current_points_per_bomb
+    
+    # Update score
+    new_score = score + points_earned
+    
+    # Update bombs caught
+    new_bombs_caught = bombs_caught + catches
+    
+    # Update bombs caught in current group
+    new_bombs_in_group = bombs_in_group + catches
+    
+    # Check if we should advance to next bomb group
+    current_group_bomb_limit = jnp.where(
+        bomb_group < len(BOMB_GROUPS),
+        count_per_group[safe_group_idx],
+        jnp.inf  # No limit for the final group
+    )
+    
+    advance_group = new_bombs_in_group >= current_group_bomb_limit
+    
+    # Update bomb group if needed
+    new_bomb_group = jnp.where(
+        advance_group,
+        bomb_group + 1,
+        bomb_group
+    )
+    
+    # Reset bombs in group counter if we advanced
+    new_bombs_in_group = jnp.where(
+        advance_group,
+        0,
+        new_bombs_in_group
+    )
     
     # Update lives based on misses
     misses = jnp.sum(missed)
     new_lives = lives - misses
     
+    # If any bomb was missed, reset scoring to beginning of current group
+    # This matches the original game behavior
+    any_missed = misses > 0
+    
     # Update level based on score milestones
     new_level = jnp.floor(new_score / 100) + 1
     
-    return new_bomb_active, bomb_x, new_bomb_y, bomb_speed, new_score, new_lives, new_level
+    return (
+        new_bomb_active, 
+        bomb_x, 
+        new_bomb_y, 
+        bomb_speed, 
+        new_score, 
+        new_lives, 
+        new_level, 
+        new_bombs_caught, 
+        new_bomb_group, 
+        new_bombs_in_group
+    )
 
 @jax.jit
 def step_fn(key: chex.PRNGKey, state: KaboomState, action: chex.Array) -> Tuple[chex.PRNGKey, KaboomState, chex.Array, chex.Array, KaboomInfo]:
@@ -344,13 +456,14 @@ def step_fn(key: chex.PRNGKey, state: KaboomState, action: chex.Array) -> Tuple[
     # Try dropping a new bomb
     new_bomb_active, new_bomb_x, new_bomb_y, new_bomb_speed, new_drop_timer = drop_bomb(
         state.bomb_active, state.bomb_x, state.bomb_y, state.bomb_speed,
-        new_bomber_x, state.level, state.drop_timer
+        new_bomber_x, state.level, state.drop_timer, state.bomb_group
     )
     
     # Update all active bombs and check for catches/misses
-    new_bomb_active, new_bomb_x, new_bomb_y, new_bomb_speed, new_score, new_lives, new_level = update_bombs(
+    new_bomb_active, new_bomb_x, new_bomb_y, new_bomb_speed, new_score, new_lives, new_level, new_bombs_caught, new_bomb_group, new_bombs_in_group = update_bombs(
         new_bomb_active, new_bomb_x, new_bomb_y, new_bomb_speed,
-        new_bucket_x, state.score, state.lives, state.level
+        new_bucket_x, state.score, state.lives, state.level,
+        state.bombs_caught, state.bomb_group, state.bombs_in_group
     )
     
     # Calculate reward (points gained in this step)
@@ -373,7 +486,10 @@ def step_fn(key: chex.PRNGKey, state: KaboomState, action: chex.Array) -> Tuple[
         bomb_y=new_bomb_y,
         bomb_speed=new_bomb_speed,
         drop_timer=new_drop_timer,
-        obs_stack=state.obs_stack  # Will be updated in the environment class
+        obs_stack=state.obs_stack,  # Will be updated in the environment class
+        bombs_caught=new_bombs_caught,
+        bomb_group=new_bomb_group,
+        bombs_in_group=new_bombs_in_group
     )
     
     # Create info struct
@@ -382,7 +498,10 @@ def step_fn(key: chex.PRNGKey, state: KaboomState, action: chex.Array) -> Tuple[
         all_rewards=reward,
         lives=new_lives,
         score=new_score,
-        level=new_level
+        level=new_level,
+        bombs_caught=new_bombs_caught,
+        bomb_group=new_bomb_group,
+        bombs_in_group=new_bombs_in_group
     )
     
     return key, new_state, reward, done, info
@@ -414,8 +533,11 @@ def reset_fn(key: chex.PRNGKey) -> KaboomState:
         bomb_x=bomb_x,
         bomb_y=bomb_y,
         bomb_speed=bomb_speed,
-        drop_timer=jnp.array(10, dtype=jnp.int32),  # Initial timer for first bomb drop
-        obs_stack=None  # Will be initialized in the environment class
+        drop_timer=jnp.array(BOMB_GROUPS[0]["drop_interval"], dtype=jnp.int32),  # Initial timer based on group 1
+        obs_stack=None,  # Will be initialized in the environment class
+        bombs_caught=jnp.array(0, dtype=jnp.int32),
+        bomb_group=jnp.array(0, dtype=jnp.int32),  # Start at group 0 (first group)
+        bombs_in_group=jnp.array(0, dtype=jnp.int32)  # Start with 0 bombs in group
     )
     
     return state
@@ -699,9 +821,17 @@ def display_game(screen, state, fps_clock=None):
     lives_text = font.render(f"Lives: {int(state.lives)}", True, TEXT_COLOR)
     level_text = font.render(f"Level: {int(state.level)}", True, TEXT_COLOR)
     
+    # Add bomb group information - this function is NOT jitted so we can use regular Python indexing
+    group_idx = min(int(state.bomb_group), len(BOMB_GROUPS) - 1)
+    points_per_bomb = BOMB_GROUPS[group_idx]["points"]
+    bombs_text = font.render(f"Bombs: {int(state.bombs_caught)}", True, TEXT_COLOR)
+    group_text = font.render(f"Group: {int(state.bomb_group)+1} ({points_per_bomb} pts/bomb)", True, TEXT_COLOR)
+    
     screen.blit(score_text, (10 * scale, 10))
     screen.blit(lives_text, ((WIDTH - 60) * scale, 10))
     screen.blit(level_text, ((WIDTH // 2 - 20) * scale, 10))
+    screen.blit(bombs_text, (10 * scale, 40))
+    screen.blit(group_text, (10 * scale, 70))
     
     # Update display
     pygame.display.flip()
