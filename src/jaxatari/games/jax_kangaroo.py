@@ -98,6 +98,8 @@ class PlayerState(NamedTuple):
     punch_right: chex.Array
     last_stood_on_platform_y: chex.Array
     walk_animation: chex.Array
+    punch_counter: chex.Array  # New field to track consecutive punches
+    needs_release: chex.Array  # New field to track if spacebar needs to be released
 
 
 class LevelState(NamedTuple):
@@ -883,7 +885,8 @@ def player_step(state: KangarooState, action: chex.Array):
 
     press_up = jnp.any(jnp.array([action == Action.UP, action == Action.UPRIGHT, action == Action.UPLEFT]))
 
-    press_fire = jnp.any(
+    # Store original fire press state before any modifications
+    original_press_fire = jnp.any(
         jnp.array(
             [
                 action == Action.FIRE,
@@ -903,9 +906,9 @@ def player_step(state: KangarooState, action: chex.Array):
     )
 
     press_down = jnp.where(state.player.is_jumping, False, press_down)
-    press_fire = jnp.where(state.player.is_jumping, False, press_fire)
-    press_fire = jnp.where(state.player.is_climbing, False, press_fire)
-    press_fire = jnp.where(press_down_fire, False, press_fire)
+    original_press_fire = jnp.where(state.player.is_jumping, False, original_press_fire)
+    original_press_fire = jnp.where(state.player.is_climbing, False, original_press_fire)
+    original_press_fire = jnp.where(press_down_fire, False, original_press_fire)
 
     press_up = jnp.where(press_down_fire, False, press_up)
 
@@ -915,6 +918,43 @@ def player_step(state: KangarooState, action: chex.Array):
 
     is_looking_left = state.player.orientation == -1
     is_looking_right = state.player.orientation == 1
+
+    # Update punch counter
+    new_punch_counter = jnp.where(
+        original_press_fire,
+        state.player.punch_counter + 1,
+        state.player.punch_counter
+    )
+    
+    # Reset counter when fire is released
+    new_punch_counter = jnp.where(
+        ~original_press_fire & (state.player.punch_counter > 0),
+        0,
+        new_punch_counter
+    )
+
+    # Set needs_release flag when counter reaches 28 and keep it true until spacebar is released
+    new_needs_release = jnp.where(
+        new_punch_counter >= 28,
+        True,  # Need to release spacebar
+        jnp.where(
+            ~original_press_fire,  # If spacebar is released
+            False,  # Reset the flag
+            state.player.needs_release  # Otherwise keep current state
+        )
+    )
+
+    # Only allow punching if either:
+    # 1. Counter is below 28, or
+    # 2. Spacebar has been released after hitting 28
+    can_punch = jnp.logical_and(
+        new_punch_counter < 28,
+        ~new_needs_release
+    )
+
+    # Update fire press based on can_punch
+    press_fire = jnp.where(can_punch, original_press_fire, False)
+
     is_punching_left = (
         jnp.logical_and(press_fire, is_looking_left) & ~state.player.is_crashing
     )
@@ -1061,6 +1101,8 @@ def player_step(state: KangarooState, action: chex.Array):
         is_punching_right,
         new_cooldown_counter,
         level_finished,
+        new_punch_counter,
+        new_needs_release,
     )
 
 
@@ -1111,8 +1153,20 @@ def lives_controller(state: KangarooState):
     # monkey touch check
 
     def check_monkey_collision(p_x, p_y, p_w, p_h, m_x, m_y, m_w, m_h, m_state):
+        # Add a small delay before re-enabling collision detection
+        # Only check collision if monkey state is not 0 and not in the process of being punched
         return jnp.logical_and(
-            entities_collide(p_x, p_y, p_w, p_h, m_x, m_y, m_w, m_h), m_state != 0
+            entities_collide(p_x, p_y, p_w, p_h, m_x, m_y, m_w, m_h),
+            jnp.logical_and(
+                m_state != 0,
+                jnp.logical_not(jnp.logical_and(
+                    m_state == 0,
+                    jnp.logical_and(
+                        m_x == 152,  # If monkey is at spawn position
+                        m_y == 5
+                    )
+                ))
+            )
         )
 
     monkey_collision = jax.vmap(
@@ -1351,75 +1405,37 @@ def monkey_controller(state: KangarooState, punching: chex.Array):
         (new_monkey_states == 1) & transition_1_to_2, 2, new_monkey_states
     )
 
-    ### It might be possible for the monkey to change from 1 to 5 if the player is on a higher platform...?
-
     # State 1 -> 5
-
-    # Vectorized implementation for state 1 -> 5 transition
-    # Create a mask for monkeys in state 1
     in_state_1 = new_monkey_states == 1
-
-    # Check which monkeys should transition (y + height >= 172)
     should_transition = (state.level.monkey_positions[:, 1] + MONKEY_HEIGHT) >= 172
-
-    # Combine conditions and update states
-    # Only monkeys that are in state 1 AND meet the transition condition should change to state 5
     new_monkey_states = jnp.where(
         in_state_1 & should_transition,
-        5,  # New state for monkeys meeting the condition
-        new_monkey_states,  # Keep original state for others
+        5,
+        new_monkey_states,
     )
 
     # State 2 -> 3
-    ## Not sure about the correct condition but something like: is the monkey close to the player (x-wise)
-    ## OR the monkey is already too far left (there might be a max x coordinate == 107)
-    ### If so, change state to 3
-    ### If not, keep state 2
-
-    # Vectorized implementation for state 2 -> 3 transition
-    # Create a mask for monkeys in state 2
     in_state_2 = new_monkey_states == 2
-
-    # Check which monkeys have reached the threshold x position
     monkey_x_positions = state.level.monkey_positions[:, 0]
     min_x_reached = monkey_x_positions <= 107
-
-    # Combine conditions and update states
-    # Only monkeys that are in state 2 AND meet the transition condition should change to state 3
     new_monkey_states = jnp.where(
         in_state_2 & min_x_reached,
-        3,  # New state for monkeys meeting the condition
-        new_monkey_states,  # Keep original state for others
+        3,
+        new_monkey_states,
     )
 
     # State 3 -> 4
-    ## If the waiting timer is over, change state to 4
-
-    # Create mask for monkeys in state 3
     in_state_3 = new_monkey_states == 3
-
-    # Check which monkeys have their throw timer at 0
     timer_is_zero = state.level.monkey_throw_timers == 0
-
-    # Combine conditions for state transition (from 3 to 4 when timer is 0)
     should_transition = in_state_3 & timer_is_zero & (state.level.monkey_states == 3)
-
-    # Update states all at once: change to state 4 for monkeys that should transition
     new_monkey_states = jnp.where(should_transition, 4, new_monkey_states)
 
     # State 4 -> 5
-    ## If the monkey is at x == 130 wait for 8 frames and then change state to 5
-
-    # Vectorized implementation for state 4 -> 5 transition
-    # Create a mask for monkeys in state 4
     in_state_4 = new_monkey_states == 4
 
     # Check which monkeys have reached the threshold x position
     monkey_x_positions = state.level.monkey_positions[:, 0]
     reached_right_position = monkey_x_positions >= 146
-
-    # Combine conditions and update states all at once
-    # Only monkeys that are in state 4 AND have reached position should change to state 5
     new_monkey_states = jnp.where(
         in_state_4 & reached_right_position,
         5,  # New state for monkeys meeting both conditions
@@ -1440,46 +1456,8 @@ def monkey_controller(state: KangarooState, punching: chex.Array):
     # Update states in a single vectorized operation
     new_monkey_states = jnp.where(
         in_state_5 & reached_top_position,
-        0,  # New state for monkeys meeting transition conditions
-        new_monkey_states,  # Keep original state for others
-    )
-
-    # Additional
-    ## If monkey is punched by player (collision with player + player punch in right direction) -> change state to 0 and reset position
-
-    fist_x = jnp.where(
-        state.player.orientation > 0, state.player.x + PLAYER_WIDTH, state.player.x - 3
-    )
-    fist_y = state.player.y + 8
-    fist_w = 3
-    fist_h = 4
-
-    def check_punch(f_x, f_y, f_w, f_h, m_x, m_y, m_w, m_h, m_state, punching):
-        return jnp.logical_and(
-            entities_collide(f_x, f_y, f_w, f_h, m_x, m_y, m_w, m_h),
-            jnp.logical_and(m_state != 0, punching),
-        )
-
-    monkeys_punched = jax.vmap(
-        check_punch,
-        in_axes=(None, None, None, None, 0, 0, None, None, 0, None),
-    )(
-        fist_x,
-        fist_y,
-        fist_w,
-        fist_h,
-        state.level.monkey_positions[:, 0],
-        state.level.monkey_positions[:, 1],
-        MONKEY_WIDTH,
-        MONKEY_HEIGHT,
-        state.level.monkey_states,
-        punching,
-    )
-
-    score_addition = jnp.sum(monkeys_punched) * 200
-
-    new_monkey_states = jax.vmap(lambda a, b: jnp.where(b, 0, a), in_axes=(0, 0))(
-        new_monkey_states, monkeys_punched
+        0,
+        new_monkey_states,
     )
 
     # Update monkey positions using vectorization
@@ -1556,8 +1534,6 @@ def monkey_controller(state: KangarooState, punching: chex.Array):
     )
 
     # update monkey throw timers
-
-    # Vectorized update of monkey throw timers
     def update_timer(new_state, old_state, current_timer, step_counter):
         """Update a single monkey throw timer."""
         return jnp.where(
@@ -1636,6 +1612,47 @@ def monkey_controller(state: KangarooState, punching: chex.Array):
         state.level.coco_positions,
         new_monkey_positions,
     )
+
+    # Handle punching at the very end, after all other state transitions to avoid race conditions
+    fist_x = jnp.where(
+        state.player.orientation > 0, state.player.x + PLAYER_WIDTH, state.player.x - 3
+    )
+    fist_y = state.player.y + 8
+    fist_w = 3
+    fist_h = 4
+
+    def check_punch(f_x, f_y, f_w, f_h, m_x, m_y, m_w, m_h, m_state, punching):
+        return jnp.logical_and(
+            entities_collide(f_x, f_y, f_w, f_h, m_x, m_y, m_w, m_h),
+            jnp.logical_and(m_state != 0, punching),
+        )
+
+    monkeys_punched = jax.vmap(
+        check_punch,
+        in_axes=(None, None, None, None, 0, 0, None, None, 0, None),
+    )(
+        fist_x,
+        fist_y,
+        fist_w,
+        fist_h,
+        state.level.monkey_positions[:, 0],
+        state.level.monkey_positions[:, 1],
+        MONKEY_WIDTH,
+        MONKEY_HEIGHT,
+        state.level.monkey_states,
+        punching,
+    )
+
+    score_addition = jnp.sum(monkeys_punched) * 200
+
+    # Set punched monkeys to state 0 and reset their positions
+    new_monkey_states = jax.vmap(lambda a, b: jnp.where(b, 0, a), in_axes=(0, 0))(
+        new_monkey_states, monkeys_punched
+    )
+    new_monkey_positions = jax.vmap(
+        lambda pos, punched: jnp.where(punched, jnp.array([152, 5]), pos),
+        in_axes=(0, 0)
+    )(new_monkey_positions, monkeys_punched)
 
     flip = jnp.any((state.level.monkey_states != 3) & (new_monkey_states == 3))
 
@@ -1738,6 +1755,8 @@ class JaxKangaroo(JaxEnvironment[KangarooState, KangarooObservation, KangarooInf
                 is_crashing=jnp.array(False),
                 last_stood_on_platform_y=jnp.array(1000),
                 walk_animation=jnp.array(0),
+                punch_counter=jnp.array(0),  # Initialize punch counter
+                needs_release=jnp.array(False),  # Initialize needs_release flag
             ),
             level=LevelState(
                 bell_position=level_constants.bell_position,
@@ -1806,6 +1825,8 @@ class JaxKangaroo(JaxEnvironment[KangarooState, KangarooObservation, KangarooInf
             punch_right,
             cooldown_counter,
             level_finished,
+            punch_counter,
+            needs_release,
         ) = player_step(state, action)
 
         new_current_level, new_levelup_timer, new_reset_coords, new_levelup = (
@@ -1967,28 +1988,10 @@ class JaxKangaroo(JaxEnvironment[KangarooState, KangarooObservation, KangarooInf
                 is_crashing=new_is_crashing,
                 last_stood_on_platform_y=new_last_stood_on_platform_y,
                 walk_animation=new_walk_counter,
+                punch_counter=punch_counter,
+                needs_release=needs_release,
             ),
         )
-
-        # new_state = jax.lax.cond(
-        #     reset_cond,
-        #     lambda: self.reset_level(1),
-        #     lambda: jax.lax.cond(
-        #         state.lives <= 0,
-        #         lambda: state,
-        #         lambda: KangarooState(
-        #             player=new_player_state,
-        #             level=new_level_state,
-        #             score=state.score + score_addition,
-        #             current_level=new_current_level,
-        #             level_finished=level_finished,
-        #             levelup_timer=new_levelup_timer,
-        #             reset_coords=new_reset_coords,
-        #             levelup=new_levelup,
-        #             lives=new_lives,
-        #         ),
-        #     ),
-        # )
 
         new_state = jax.lax.cond(
             reset_cond,
