@@ -18,6 +18,7 @@ import chex
 import pygame
 from gymnax.environments import spaces
 
+from jaxatari.renderers import AtraJaxisRenderer
 from jaxatari.rendering import atraJaxis as aj
 from jaxatari.environment import JaxEnvironment, JAXAtariAction as Action
 
@@ -1488,7 +1489,7 @@ def load_sprites():
     }
 
 
-class Renderer_AtraJaxisVideoPinball:
+class VideoPinballRenderer(AtraJaxisRenderer):
     """JAX-based Video Pinball game renderer, optimized with JIT compilation."""
 
     def __init__(self):
