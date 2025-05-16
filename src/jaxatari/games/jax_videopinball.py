@@ -19,7 +19,8 @@ Implemented features:
 
 Justification for the state of the ball physics:
 Video Pinball has extremely complicated ball physics. Launch angles, when hitting (close to) corners are
-seemingly random and velocity calculation has a variety of strange quirks
+seemingly random and velocity calculation has a variety of strange quirks like strong spontaneous acceleration
+when a slow balls hit walls at certain angles, etc...
 These properties are impossible to read from the RAM state and need to be investigated
 frame by frame in various scenarios. Thus, the physics are far from perfect.
 There is still a physics bug when calculating multiple wall collision which unfortunately gets triggered
