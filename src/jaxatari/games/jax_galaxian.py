@@ -30,9 +30,7 @@ if not pygame.get_init():
 # -------- Game constants --------
 SHOOTING_COOLDOWN = 80
 ENEMY_MOVE_SPEED = 0.5
-BULLET_MOVE_SPEED = 2
-SCREEN_HEIGHT = 600
-SCREEN_WIDTH = 800
+BULLET_MOVE_SPEED = 5
 GRID_ROWS = 6
 GRID_COLS = 7
 NATIVE_GAME_WIDTH = 160
@@ -44,12 +42,10 @@ ENEMY_SPACING_X = 20
 ENEMY_SPACING_Y = 20
 ENEMY_GRID_Y = 100
 START_X = NATIVE_GAME_WIDTH // 4
-START_Y = NATIVE_GAME_HEIGHT - 50
-ENEMY_ATTACK_SPEED = 1
-
+START_Y = NATIVE_GAME_HEIGHT
 ENEMY_ATTACK_SPEED = 2
 ENEMY_ATTACK_TURN_TIME = 30
-ENEMY_ATTACK_BULLET_SPEED = 20
+ENEMY_ATTACK_BULLET_SPEED = 5
 ENEMY_ATTACK_BULLET_DELAY = 50
 ENEMY_ATTACK_MAX_BULLETS = 2
 LIVES = 3
@@ -79,7 +75,7 @@ class GalaxianState(NamedTuple):
     lives: chex.Array
     player_alive: chex.Array
     player_respawn_timer: chex.Array
-
+    score: chex.Array
     random_key: chex.Array
     step_counter: chex.Array
     #obs_stack: chex.ArrayTree
@@ -379,7 +375,7 @@ def remove_bullets(state: GalaxianState) -> GalaxianState:
     def idle(_):
         return state
 
-    return lax.cond(state.bullet_y < 100, reset_bullet, idle, operand=None)
+    return lax.cond(state.bullet_y < 0, reset_bullet, idle, operand=None)
 
 
 @jax.jit
@@ -401,16 +397,13 @@ def bullet_collision(state: GalaxianState) -> GalaxianState:
         current_state, indices = operands
         row_indices, col_indices = indices
         new_enemy_grid_alive = current_state.enemy_grid_alive.at[row_indices, col_indices].set(0)
-        new_bullet_x = jnp.array(-1, dtype=state.bullet_x.dtype)
-        new_bullet_y = jnp.array(-1, dtype=state.bullet_y.dtype)
-
+        new_score = current_state.score + 30  # 30 points per kill
         return state._replace(
             enemy_grid_alive=new_enemy_grid_alive,
-            bullet_x=new_bullet_x,
-            bullet_y=new_bullet_y
+            bullet_x=jnp.array(-1, dtype=state.bullet_x.dtype),
+            bullet_y=jnp.array(-1, dtype=state.bullet_y.dtype),
+            score=new_score
         )
-
-
     def process_none(operands):
         current_state, _ = operands
         return current_state
@@ -508,8 +501,8 @@ def draw(screen, state):
 
     # Leben zeichnen
     for i in range(state.lives):
-        x = SCREEN_WIDTH - 20 - i * 20
-        y = SCREEN_HEIGHT - 20
+        x = NATIVE_GAME_WIDTH - 20 - i * 20
+        y = NATIVE_GAME_HEIGHT - 20
         pygame.draw.rect(screen, (100, 255, 100), pygame.Rect(x, y, 10, 20))
 
 
@@ -582,7 +575,6 @@ class JaxGalaxian(JaxEnvironment[GalaxianState, GalaxianObservation, GalaxianInf
                              enemy_grid_direction=jnp.array(1),
                              enemy_attack_state=jnp.array(0),
                              enemy_attack_pos=jnp.array((-1, -1)),
-
                              enemy_attack_direction=jnp.array(1),
                              enemy_attack_turning=jnp.array(0),
                              enemy_attack_turn_timer=jnp.array(ENEMY_ATTACK_TURN_TIME),
@@ -597,6 +589,7 @@ class JaxGalaxian(JaxEnvironment[GalaxianState, GalaxianObservation, GalaxianInf
                              lives=jnp.array(3),
                              player_alive=jnp.array(True),
                              player_respawn_timer=jnp.array(PLAYER_DEATH_DELAY),
+                              score=jnp.array(0, dtype=jnp.int32),
                              random_key=jax.random.PRNGKey(0),
                              step_counter=jnp.array(0),
                              )
@@ -711,18 +704,22 @@ def load_sprites():
     bg = aj.loadFrame(os.path.join(MODULE_DIR, "sprites/galaxian/background.npy"),transpose=True)
     player = aj.loadFrame(os.path.join(MODULE_DIR, "sprites/galaxian/player.npy"),transpose=True)
     bullet = aj.loadFrame(os.path.join(MODULE_DIR, "sprites/galaxian/bullet.npy"),transpose=True)
-    enemy_white = aj.loadFrame(os.path.join(MODULE_DIR, "sprites/galaxian/white_enemy_1.npy"),transpose=True)  # Assuming you have enemy.npy
-
+    enemy_gray = aj.loadFrame(os.path.join(MODULE_DIR, "sprites/galaxian/gray_enemy_1.npy"),transpose=True)
+    life = aj.loadFrame(os.path.join(MODULE_DIR, "sprites/galaxian/life.npy"),transpose=True)
+    enemy_bullet = aj.loadFrame(os.path.join(MODULE_DIR, "sprites/galaxian/enemy_bullet.npy"),transpose=True)
     SPRITE_BG = jnp.expand_dims(bg, axis= 0)
     SPRITE_PLAYER = jnp.expand_dims(player, axis = 0)
     SPRITE_BULLET = jnp.expand_dims(bullet, axis = 0)
-    SPRITE_ENEMY_WHITE = jnp.expand_dims(enemy_white, axis=0)
-
+    SPRITE_ENEMY_GRAY = jnp.expand_dims(enemy_gray, axis=0)
+    SPRITE_LIFE = jnp.expand_dims(life, axis=0)
+    SPRITE_ENEMY_BULLET = jnp.expand_dims(enemy_bullet, axis=0)
     return(
         SPRITE_BG,
         SPRITE_PLAYER,
         SPRITE_BULLET,
-        SPRITE_ENEMY_WHITE
+        SPRITE_ENEMY_GRAY,
+        SPRITE_LIFE,
+        SPRITE_ENEMY_BULLET
     )
 
 class GalaxianRenderer(AtraJaxisRenderer):
@@ -731,26 +728,35 @@ class GalaxianRenderer(AtraJaxisRenderer):
         self.SPRITE_BG,
         self.SPRITE_PLAYER,
         self.SPRITE_BULLET,
-        self.SPRITE_ENEMY_WHITE
+        self.SPRITE_ENEMY_GRAY,
+        self.SPRITE_LIFE,
+        self.SPRITE_ENEMY_BULLET
         ) = load_sprites()
 
+
+        life_frame = jnp.squeeze(self.SPRITE_LIFE, axis=0)  # shape (H,W,3)
+        self.life_h, self.life_w, _ = life_frame.shape
+
+        self.life_spacing = 5
+
     @partial(jax.jit, static_argnums=(0,))
-    def render(self, state: GalaxianState):  # Added type hint for clarity
-        raster = jnp.zeros((NATIVE_GAME_WIDTH, NATIVE_GAME_HEIGHT, 3))
+    def render(self, state: GalaxianState):
+        raster = jnp.zeros((160, 210, 3), dtype=jnp.uint8)
 
         # Render background
         frame_bg = aj.get_sprite_frame(self.SPRITE_BG, 0)
         raster = aj.render_at(raster, 0, 0, frame_bg)
 
+        # Render life
+        life_frame = aj.get_sprite_frame(self.SPRITE_LIFE, 0)
         # Render player spaceship
         frame_player = aj.get_sprite_frame(self.SPRITE_PLAYER, 0)
-        # Ensure player_x and player_y are scalars or 0-dim arrays for render_at
+
         raster = aj.render_at(raster, jnp.round(state.player_x).astype(jnp.int32),
                               jnp.round(state.player_y).astype(jnp.int32), frame_player)
 
         # Render bullet
-        # Ensure bullet_x and bullet_y are scalars or 0-dim arrays
-        # You might need to adjust sprite centering by subtracting half its width/height from pos
+
         def render_bullet_fn(raster, state):
             frame_bullet = aj.get_sprite_frame(self.SPRITE_BULLET, 0)
             return aj.render_at(raster, jnp.round(state.bullet_x).astype(jnp.int32),
@@ -768,6 +774,19 @@ class GalaxianRenderer(AtraJaxisRenderer):
             state
         )
 
+        def draw_enemy_bullet(r):
+            eb = aj.get_sprite_frame(self.SPRITE_ENEMY_BULLET, 0)
+            x = jnp.round(state.enemy_attack_bullet_x).astype(jnp.int32)
+            y = jnp.round(state.enemy_attack_bullet_y).astype(jnp.int32)
+            return aj.render_at(r, x, y, eb)
+
+        raster = lax.cond(
+            state.enemy_attack_bullet_y >= 0,  # oder > -1
+            draw_enemy_bullet,
+            lambda r: r,
+            raster
+        )
+
         # Render enemy grid (this is more complex due to the loop)
         # For jitted rendering of multiple enemies, you'd typically use lax.scan or vmap if possible,
         # or unroll the loop if the number of enemies is fixed and small.
@@ -778,7 +797,7 @@ class GalaxianRenderer(AtraJaxisRenderer):
 
         # --- Rendering attacking enemy ---
         def render_attacking_enemy_fn(raster, state):
-            frame_enemy = aj.get_sprite_frame(self.SPRITE_ENEMY_WHITE, 0)  # Assuming you have an enemy sprite
+            frame_enemy = aj.get_sprite_frame(self.SPRITE_ENEMY_GRAY, 0)  # Assuming you have an enemy sprite
             return aj.render_at(raster, jnp.round(state.enemy_attack_x).astype(jnp.int32),
                                 jnp.round(state.enemy_attack_y).astype(jnp.int32), frame_enemy)
 
@@ -805,7 +824,7 @@ class GalaxianRenderer(AtraJaxisRenderer):
         # Example of rendering just the first enemy in the grid if alive:
         def render_first_grid_enemy(params):
             raster_in, state_in, i, j = params
-            frame_enemy = aj.get_sprite_frame(self.SPRITE_ENEMY_WHITE, 0)
+            frame_enemy = aj.get_sprite_frame(self.SPRITE_ENEMY_GRAY, 0)
 
             # Example: render enemy at grid cell (i,j) if alive
             def render_this_enemy(r):
@@ -834,7 +853,7 @@ class GalaxianRenderer(AtraJaxisRenderer):
 
         def row_loop_body(i, current_raster):
             def col_loop_body(j, inner_raster):
-                frame_enemy = aj.get_sprite_frame(self.SPRITE_ENEMY_WHITE, 0)
+                frame_enemy = aj.get_sprite_frame(self.SPRITE_ENEMY_GRAY, 0)
 
                 def render_it(r):
                     return aj.render_at(r,
@@ -860,6 +879,7 @@ class GalaxianRenderer(AtraJaxisRenderer):
 # run with: python -m jaxatari.games.jax_galaxian
 if __name__ == "__main__":
     pygame.init()
+    font = pygame.font.Font(None, 24)
 
     game = JaxGalaxian(frameskip=1)
     jitted_step = jax.jit(game.step)
@@ -890,7 +910,21 @@ if __name__ == "__main__":
         observation, state, reward, done, info = jitted_step(state, action)  # Unpack the tuple
         render_output = renderer.render(state)
         aj.update_pygame(screen, render_output, PYGAME_SCALE_FACTOR, NATIVE_GAME_WIDTH,
-                         NATIVE_GAME_HEIGHT)  # Assuming scale factor 1
+                         NATIVE_GAME_HEIGHT)
+        score_surf = font.render(f"Score: {int(state.score)}", True, (255, 255, 255))
+        screen.blit(score_surf, (10, 10))
+
+        font = pygame.font.Font(None, 24)
+
+        # 1) Score
+        score_surf = font.render(f"Score: {int(state.score)}", True, (255, 255, 255))
+        screen.blit(score_surf, (10, 10))
+
+        # 2) Leben (als kleine Rechtecke oder Icons)
+        for i in range(int(state.lives)):
+            x = 10 + i * 20
+            y = PYGAME_WINDOW_HEIGHT - 30
+            pygame.draw.rect(screen, (255, 0, 0), pygame.Rect(x, y, 15, 15))
 
         pygame.display.flip()
         clock.tick(30)
