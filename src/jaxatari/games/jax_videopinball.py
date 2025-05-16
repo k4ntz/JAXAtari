@@ -23,8 +23,8 @@ seemingly random and velocity calculation has a variety of strange quirks like s
 when a slow balls hit walls at certain angles, etc...
 These properties are impossible to read from the RAM state and need to be investigated
 frame by frame in various scenarios. Thus, the physics are far from perfect.
-There is still a physics bug when calculating multiple wall collision which unfortunately gets triggered
-when the plunger is pulled all the way down. When testing, avoid pulling it all the way down.
+There is still a physics bug when calculating multiple wall collisions during a single step which unfortunately
+gets triggered when the plunger is pulled all the way down. When testing, avoid pulling it all the way down.
 
 Additional notes:
 The renderer requires a custom function that was implemented in atraJaxis.py
