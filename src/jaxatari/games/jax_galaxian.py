@@ -6,25 +6,17 @@ import pygame
 from functools import partial
 from jax import lax
 import jax.lax
+
 from gymnax.environments import spaces
+
 from jaxatari.environment import JaxEnvironment, JAXAtariAction as Action
-import jax.image as jimg
 from jaxatari.renderers import AtraJaxisRenderer
 from jaxatari.rendering import atraJaxis as aj
-
-from jaxatari.environment import JaxEnvironment
 from jaxatari.environment import JaxEnvironment
 
-"""
-# Action constants
-NOOP = 0
-FIRE = 1
-RIGHT = 2
-LEFT = 3
-"""
 
-if not pygame.get_init():
-    pygame.init()
+
+
 
 # -------- Game constants --------
 SHOOTING_COOLDOWN = 80
@@ -83,7 +75,6 @@ class GalaxianState(NamedTuple):
     score: chex.Array
     random_key: chex.Array
     step_counter: chex.Array
-    #obs_stack: chex.ArrayTree
 
 
 @jax.jit
@@ -457,43 +448,6 @@ def check_player_death_by_bullet(state: GalaxianState) -> GalaxianState:
 
     return lax.cond(hit, process_hit, lambda _: state, operand=state)
 
-def draw(screen, state):
-    # Spieler zeichnen
-    player_rect = pygame.Rect(int(state.player_x), int(state.player_y), 20, 10)
-    pygame.draw.rect(screen, (0, 255, 0), player_rect)
-
-    # Kugel zeichnen
-    if state.bullet_x > -1:
-        bullet_rect = pygame.Rect(int(state.bullet_x - 2.5), int(state.bullet_y - 5), 5, 10)
-        pygame.draw.rect(screen, (255, 255, 0), bullet_rect)
-
-    # Angreifenden Feind zeichnen
-    if jnp.all(state.enemy_attack_pos >= 0):
-        enemy_attack_rect = pygame.Rect(int(state.enemy_attack_x - 7.5), int(state.enemy_attack_y - 5), 15, 10)
-        pygame.draw.rect(screen, (255, 0, 0), enemy_attack_rect)
-
-   # Feindliche Kugel zeichnen
-    if state.enemy_attack_bullet_x > -1:
-       bullet_rect = pygame.Rect(int(state.enemy_attack_bullet_x - 2.5), int(state.enemy_attack_bullet_y - 5), 5, 10)
-       pygame.draw.rect(screen, (255, 255, 0), bullet_rect)
-
-    # Feindgitter zeichnen
-    for i in range(state.enemy_grid_x.shape[0]):
-        for j in range(state.enemy_grid_x.shape[1]):
-            if state.enemy_grid_alive[i, j] == 1:
-                x = int(state.enemy_grid_x[i, j] - 7.5)
-                y = int(state.enemy_grid_y[i, j] - 5)
-                enemy_rect = pygame.Rect(x, y, 15, 10)
-                pygame.draw.rect(screen, (255, 0, 0), enemy_rect)
-
-    # Leben zeichnen
-    for i in range(state.lives):
-        x = NATIVE_GAME_WIDTH - 20 - i * 20
-        y = NATIVE_GAME_HEIGHT - 20
-        pygame.draw.rect(screen, (100, 255, 100), pygame.Rect(x, y, 10, 20))
-
-
-
 
 class GalaxianObservation(NamedTuple):
     player_x: chex.Array
@@ -570,32 +524,18 @@ class JaxGalaxian(JaxEnvironment[GalaxianState, GalaxianObservation, GalaxianInf
                              enemy_attack_respawn_timer=jnp.array(20),
                              enemy_attack_bullet_x=jnp.array(-1, dtype=jnp.float32),
                              enemy_attack_bullet_y=jnp.array(-1, dtype=jnp.float32),
-                             #enemy_attack_bullet_x=jnp.full((ENEMY_ATTACK_MAX_BULLETS,), -1),
-                             #enemy_attack_bullet_y=jnp.full((ENEMY_ATTACK_MAX_BULLETS,), -1),
                               enemy_attack_bullet_timer=jnp.array(ENEMY_ATTACK_BULLET_DELAY),
                               lives=jnp.array(3),
                               player_alive=jnp.array(True),
                               player_respawn_timer=jnp.array(PLAYER_DEATH_DELAY),
                               score=jnp.array(0, dtype=jnp.int32),
-
                               enemy_attack_target_x=jnp.array(-1.0, dtype=jnp.float32),
-                              enemy_attack_target_y=jnp.array(-1.0, dtype=jnp.float32),  # neu!
-
+                              enemy_attack_target_y=jnp.array(-1.0, dtype=jnp.float32),
                               random_key=jax.random.PRNGKey(0),
                               step_counter=jnp.array(0),
                              )
 
         initial_obs = self._get_observation(state)
-
-
-        # def expand_and_copy(x):
-        #     x_expanded = jnp.expand_dims(x, axis=0)
-        #     return jnp.concatenate([x_expanded] * self.frame_stack_size, axis=0)
-        #
-        # # Apply transformation to each leaf in the pytree
-        # stacked_obs = jax.tree.map(expand_and_copy, initial_obs)
-        #
-        # new_state = state._replace(obs_stack=stacked_obs)
         return initial_obs, state
 
         #alles aus galaxianState was man aus Spielersicht wahrnimmt
@@ -615,7 +555,7 @@ class JaxGalaxian(JaxEnvironment[GalaxianState, GalaxianObservation, GalaxianInf
 
     @partial(jax.jit, static_argnums=(0,))
     def get_action_space(self):
-        return jnp.array([Action.NOOP, Action.LEFT, Action.RIGHT])
+        return jnp.array([Action.NOOP, Action.LEFT, Action.RIGHT, Action.FIRE, Action.LEFTFIRE, Action.RIGHTFIRE])
 
 
     def action_space(self) -> spaces.Discrete:
@@ -646,28 +586,22 @@ class JaxGalaxian(JaxEnvironment[GalaxianState, GalaxianObservation, GalaxianInf
         new_state = update_enemy_bullets(new_state)
         new_state = check_player_death_by_enemy(new_state)
         new_state = check_player_death_by_bullet(new_state)
-        new_state = update_enemy_attack(new_state)  # This was missing from your step
+        new_state = update_enemy_attack(new_state)
         new_state = new_state._replace(step_counter=new_state.step_counter + 1)
 
         done = self._get_done(new_state)
-        env_reward = self._get_env_reward(state, new_state)  # previous_state is 'state' here
-        all_rewards = self._get_all_reward(state, new_state)  # previous_state is 'state' here
+        env_reward = self._get_env_reward(state, new_state)
+        all_rewards = self._get_all_reward(state, new_state)
         info = self._get_info(new_state, all_rewards)
 
         observation = self._get_observation(new_state)
-        # jax.debug.print("obs: {}", observation) # Be careful with debug prints in jitted functions
-        #jax.debug.print("obs: {}", observation)
-
-        # stack the new observation, remove the oldest one
-        # observation = jax.tree.map(lambda stack, obs: jnp.concatenate([stack[1:], jnp.expand_dims(obs, axis=0)], axis=0), new_state.obs_stack, observation)
-        # new_state = new_state._replace(obs_stack=observation)
 
         return observation, new_state, env_reward, done, info
 
 
     @partial(jax.jit, static_argnums=(0,))
     def _get_env_reward(self, previous_state: GalaxianState, state: GalaxianState):
-        return 420 #TODO: implement reward function (after score is implemented)
+        return state.score - previous_state.score
 
 
     @partial(jax.jit, static_argnums=(0,))
@@ -801,6 +735,7 @@ class GalaxianRenderer(AtraJaxisRenderer):
         return raster
 
 # run with: python -m jaxatari.games.jax_galaxian
+# run with: python scripts/play.py --game src/jaxatari/games/jax_galaxian.py --record my_record_file.npz
 if __name__ == "__main__":
     pygame.init()
     font = pygame.font.Font(None, 24)
@@ -808,7 +743,7 @@ if __name__ == "__main__":
     game = JaxGalaxian(frameskip=1)
     jitted_step = jax.jit(game.step)
     jitted_reset = jax.jit(game.reset)
-    initial_observation, state  = jitted_reset()  # Unpack the tuple
+    initial_observation, state  = jitted_reset()
 
     screen = pygame.display.set_mode((PYGAME_WINDOW_WIDTH, PYGAME_WINDOW_HEIGHT))
     pygame.display.set_caption("Galaxian")
@@ -816,22 +751,20 @@ if __name__ == "__main__":
 
     renderer = GalaxianRenderer()
 
-    # Get jitted functions (reset doesn't need to be jitted if only called once)
-    # state, initial_observation = game.reset() # Call reset directly
-    initial_observation, state = jax.jit(game.reset)() # If you want to jit it
+    initial_observation, state = jax.jit(game.reset)()
 
-    jitted_step = game.step # Already jitted using partial in class
+    jitted_step = game.step
 
     running = True
     while running:
-        action_int = Action.NOOP # Default action
+        action_int = Action.NOOP
         for event in pygame.event.get():
             if event.type == pygame.QUIT:
                 running = False
         screen.fill((0, 0, 0))
         pygame.display.flip()
         action = get_action_from_keyboard()
-        observation, state, reward, done, info = jitted_step(state, action)  # Unpack the tuple
+        observation, state, reward, done, info = jitted_step(state, action)
 
         render_output = renderer.render(state)
         aj.update_pygame(screen, render_output, PYGAME_SCALE_FACTOR, NATIVE_GAME_WIDTH,
