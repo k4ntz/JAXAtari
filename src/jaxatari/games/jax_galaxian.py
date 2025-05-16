@@ -45,7 +45,7 @@ START_Y = NATIVE_GAME_HEIGHT
 ENEMY_ATTACK_SPEED = 2
 ENEMY_ATTACK_TURN_TIME = 30
 ENEMY_ATTACK_BULLET_SPEED = 5
-ENEMY_ATTACK_BULLET_DELAY = 90
+ENEMY_ATTACK_BULLET_DELAY = 75
 ENEMY_ATTACK_MAX_BULLETS = 2
 LIVES = 3
 PLAYER_DEATH_DELAY = 50
@@ -390,23 +390,31 @@ def bullet_collision(state: GalaxianState) -> GalaxianState:
 
 @jax.jit
 def bullet_collision_attack(state: GalaxianState) -> GalaxianState:
+    # Abstände
     x_diff = jnp.abs(state.bullet_x - state.enemy_attack_x)
     y_diff = jnp.abs(state.bullet_y - state.enemy_attack_y)
-    collision = (x_diff <= 10) & (y_diff <= 10)
-    hit = jnp.any(collision)
+    # Kollisionsmaske: innerhalb 10px und aktuell angreifend (state 1)
+    hit = jnp.any((x_diff <= 10) & (y_diff <= 10) & (state.enemy_attack_state == 1))
 
-    def process_hit(s: GalaxianState):
-        pos = s.enemy_attack_pos
-        new_alive = s.enemy_grid_alive.at[tuple(pos)].set(0)
+    def process_hit(s: GalaxianState) -> GalaxianState:
+        # Als getötet markieren
+        pos      = s.enemy_attack_pos
+        new_grid = s.enemy_grid_alive.at[tuple(pos)].set(0)
+        # Score erhöhen und Angreifer zurücksetzen
         return s._replace(
-            enemy_grid_alive       = new_alive,
-            bullet_x               = jnp.array(-1.0, dtype=jnp.float32),
-            bullet_y               = jnp.array(-1.0, dtype=jnp.float32),
-            enemy_attack_state     = jnp.array(0),    # Angreifer tot → zurück auf State 0
+            enemy_grid_alive       = new_grid,
+            bullet_x               = jnp.array(-1.0, dtype=s.bullet_x.dtype),
+            bullet_y               = jnp.array(-1.0, dtype=s.bullet_y.dtype),
+            player_shooting_cooldown = jnp.array(0, dtype=s.player_shooting_cooldown.dtype),
+            enemy_attack_state     = jnp.array(0),                  # zurück auf State 0
+            score                  = s.score + jnp.array(50, dtype=s.score.dtype)  # z.B. 50 Punkte
         )
 
-    # wenn kein Hit, gib unverändertes s zurück
-    return lax.cond(hit, process_hit, lambda s: s, state)
+    # Kein Hit → unverändert zurückgeben
+    def no_hit(s: GalaxianState) -> GalaxianState:
+        return s
+
+    return lax.cond(hit, process_hit, no_hit, state)
 
 @jax.jit
 def check_player_death_by_enemy(state: GalaxianState) -> GalaxianState:
@@ -669,7 +677,9 @@ class JaxGalaxian(JaxEnvironment[GalaxianState, GalaxianObservation, GalaxianInf
     @partial(jax.jit, static_argnums=(0,))
     def _get_done(self, state: GalaxianState) -> bool:
         # Game over, wenn alle Leben weg sind
-        return state.lives <= 0
+        no_lives = state.lives <= 0
+        no_enemies = jnp.all(state.enemy_grid_alive == 0)
+        return jnp.logical_or(no_lives, no_enemies)
 
     @partial(jax.jit, static_argnums=(0,))
     def _get_info(self, state: GalaxianState, all_rewards: chex.Array) -> GalaxianInfo:
@@ -816,9 +826,7 @@ if __name__ == "__main__":
         pygame.display.flip()
         action = get_action_from_keyboard()
         observation, state, reward, done, info = jitted_step(state, action)  # Unpack the tuple
-        if done:
-            print("Game Over")
-            break
+
         render_output = renderer.render(state)
         aj.update_pygame(screen, render_output, PYGAME_SCALE_FACTOR, NATIVE_GAME_WIDTH,
                          NATIVE_GAME_HEIGHT)
@@ -832,6 +840,7 @@ if __name__ == "__main__":
         screen.blit(score_surf, (10, 10))
 
         pygame.display.flip()
+
         clock.tick(30)
 
     pygame.quit()
