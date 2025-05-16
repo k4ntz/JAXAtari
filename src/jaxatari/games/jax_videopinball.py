@@ -1613,7 +1613,7 @@ if __name__ == "__main__":
     game = JaxVideoPinball(frameskip=1)
 
     # Create the JAX renderer
-    renderer = Renderer_AtraJaxisVideoPinball()
+    renderer = VideoPinballRenderer()
 
     # Get jitted functions
     jitted_step = jax.jit(game.step)
