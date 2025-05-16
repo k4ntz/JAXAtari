@@ -207,8 +207,7 @@ class WordZapperInfo(NamedTuple):
     game_over: jnp.ndarray
 
 
-def load_sprites(bg_file="sprites/seaquest/bg/1.npy"):
-
+def load_sprites():
     """Load all sprites required for Word Zapper rendering."""
     # def make_rect(h, w, color):
     #     return jnp.ones((h, w, 3), dtype=jnp.uint8) * jnp.array(color, dtype=jnp.uint8)
@@ -223,6 +222,7 @@ def load_sprites(bg_file="sprites/seaquest/bg/1.npy"):
     MODULE_DIR = os.path.dirname(os.path.abspath(__file__))
     # Load sprites - no padding needed for background since it's already full size
     bg1 = aj.loadFrame(os.path.join(MODULE_DIR, "sprites/seaquest/bg/1.npy"))
+
     pl_sub1 = aj.loadFrame(os.path.join(MODULE_DIR, "sprites/seaquest/player_sub/1.npy"))
     pl_sub2 = aj.loadFrame(os.path.join(MODULE_DIR, "sprites/seaquest/player_sub/2.npy"))
     pl_sub3 = aj.loadFrame(os.path.join(MODULE_DIR, "sprites/seaquest/player_sub/3.npy"))
@@ -259,6 +259,7 @@ def load_sprites(bg_file="sprites/seaquest/bg/1.npy"):
     SPRITE_PL_SUB,
     SPRITE_PL_TORP
 ) = load_sprites()
+
 
 
 @jax.jit
