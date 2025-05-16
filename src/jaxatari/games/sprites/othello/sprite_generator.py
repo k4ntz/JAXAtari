@@ -47,27 +47,147 @@ np.save("enemy_black_disc.npy", enemy_frame)
 
 
 # Numbers
-height=10
-width=12
+height=12
+width=10
+
+#0 we dont need numer zero
+frame = np.full((height, width, 4), green_rgba, dtype=np.uint8)
+frame[0:12, 0:2] = white_turquoise_rgba
+frame[0:12, 8:10] = white_turquoise_rgba
+frame[0:2, 2:8] = white_turquoise_rgba
+frame[10:12, 2:8] = white_turquoise_rgba
+np.save("number_0_player.npy", frame)
+frame[0:12, 0:2] = black_rgba
+frame[0:12, 8:10] = black_rgba
+frame[0:2, 2:8] = black_rgba
+frame[10:12, 2:8] = black_rgba
+np.save("number_0_enemy.npy", frame)
 
 #1 
 frame = np.full((height, width, 4), green_rgba, dtype=np.uint8)
-frame[0:4, 4:7] = green_rgba
-frame[6:11, 0:7] = green_rgba
+frame[2:4, 0:4] = white_turquoise_rgba
+frame[0:10, 4:6] = white_turquoise_rgba
+frame[10:12, 0:10] = white_turquoise_rgba
 np.save("number_1_player.npy", frame)
-frame[0:4, 4:7] = black_rgba
-frame[6:11, 0:7] = black_rgba
+frame[2:4, 0:4] = black_rgba
+frame[0:10, 4:6] = black_rgba
+frame[10:12, 0:10] = black_rgba
 np.save("number_1_enemy.npy", frame)
 
 #2
+frame = np.full((height, width, 4), green_rgba, dtype=np.uint8)
+frame[0:1, 0:10] = white_turquoise_rgba
+frame[1:5, 7:10] = white_turquoise_rgba
+frame[5:6, 0:10] = white_turquoise_rgba
+frame[6:10, 0:2] = white_turquoise_rgba
+frame[10:12, 0:10] = white_turquoise_rgba
+np.save("number_2_player.npy", frame)
+frame[0:1, 0:10] = black_rgba
+frame[1:5, 7:10] = black_rgba
+frame[5:6, 0:10] = black_rgba
+frame[6:10, 0:2] = black_rgba
+frame[10:12, 0:10] = black_rgba
+np.save("number_2_enemy.npy", frame)
 
 #3
+frame = np.full((height, width, 4), green_rgba, dtype=np.uint8)
+frame[0:1, 0:10] = white_turquoise_rgba
+frame[5:6, 4:10] = white_turquoise_rgba
+frame[10:12, 0:10] = white_turquoise_rgba
+frame[0:12, 7:10] = white_turquoise_rgba
+np.save("number_3_player.npy", frame)
+frame[0:1, 0:10] = black_rgba
+frame[5:6, 4:10] = black_rgba
+frame[10:12, 0:10] = black_rgba
+frame[0:12, 7:10] = black_rgba
+np.save("number_3_enemy.npy", frame)
 
 #4
-frame = np.full((height, width, 4), white_turquoise_rgba, dtype=np.uint8)
-frame[0:4, 4:7] = green_rgba
-frame[6:11, 0:7] = green_rgba
+frame = np.full((height, width, 4), green_rgba, dtype=np.uint8)
+frame[0:7, 0:3] = white_turquoise_rgba
+frame[6:7, 3:10] = white_turquoise_rgba
+frame[0:12, 7:10] = white_turquoise_rgba
 np.save("number_4_player.npy", frame)
-frame[0:4, 4:7] = black_rgba
-frame[6:11, 0:7] = black_rgba
+frame[0:7, 0:3] = black_rgba
+frame[6:7, 3:10] = black_rgba
+frame[0:12, 7:10] = black_rgba
 np.save("number_4_enemy.npy", frame)
+
+#5
+frame = np.full((height, width, 4), green_rgba, dtype=np.uint8)
+frame[0:2, 0:10] = white_turquoise_rgba
+frame[2:5, 0:2] = white_turquoise_rgba
+frame[5:6, 0:10] = white_turquoise_rgba
+frame[6:9, 7:10] = white_turquoise_rgba
+frame[9:12, 0:10] = white_turquoise_rgba
+np.save("number_5_player.npy", frame)
+frame[0:2, 0:10] = black_rgba
+frame[2:5, 0:2] = black_rgba
+frame[5:6, 0:10] = black_rgba
+frame[6:9, 7:10] = black_rgba
+frame[9:12, 0:10] = black_rgba
+np.save("number_5_enemy.npy", frame)
+
+#6
+frame = np.full((height, width, 4), green_rgba, dtype=np.uint8)
+frame[0:1, 0:10] = white_turquoise_rgba
+frame[1:5, 0:3] = white_turquoise_rgba
+frame[5:6, 0:10] = white_turquoise_rgba
+frame[6:10, 0:3] = white_turquoise_rgba
+frame[6:10, 7:10] = white_turquoise_rgba
+frame[10:12, 0:10] = white_turquoise_rgba
+np.save("number_6_player.npy", frame)
+frame[0:1, 0:10] = black_rgba
+frame[1:5, 0:3] = black_rgba
+frame[5:6, 0:10] = black_rgba
+frame[6:10, 0:3] = black_rgba
+frame[6:10, 7:10] = black_rgba
+frame[10:12, 0:10] = black_rgba
+np.save("number_6_enemy.npy", frame)
+
+#7
+frame = np.full((height, width, 4), green_rgba, dtype=np.uint8)
+frame[0:3, 0:10] = white_turquoise_rgba
+frame[3:11, 6:10] = white_turquoise_rgba
+np.save("number_7_player.npy", frame)
+frame[0:3, 0:10] = black_rgba
+frame[3:11, 6:10] = black_rgba
+np.save("number_7_enemy.npy", frame)
+
+
+#8
+frame = np.full((height, width, 4), green_rgba, dtype=np.uint8)
+frame[0:1, 0:10] = white_turquoise_rgba
+frame[1:5, 0:3] = white_turquoise_rgba
+frame[1:5, 7:10] = white_turquoise_rgba
+frame[5:6, 0:10] = white_turquoise_rgba
+frame[6:10, 0:3] = white_turquoise_rgba
+frame[6:10, 7:10] = white_turquoise_rgba
+frame[10:12, 0:10] = white_turquoise_rgba
+np.save("number_8_player.npy", frame)
+frame[0:1, 0:10] = black_rgba
+frame[1:5, 0:3] = black_rgba
+frame[1:5, 7:10] = black_rgba
+frame[5:6, 0:10] = black_rgba
+frame[6:10, 0:3] = black_rgba
+frame[6:10, 7:10] = black_rgba
+frame[10:12, 0:10] = black_rgba
+np.save("number_8_enemy.npy", frame)
+
+
+#9
+frame = np.full((height, width, 4), green_rgba, dtype=np.uint8)
+frame[0:2, 0:10] = white_turquoise_rgba
+frame[2:5, 0:2] = white_turquoise_rgba
+frame[2:5, 7:10] = white_turquoise_rgba
+frame[5:6, 0:10] = white_turquoise_rgba
+frame[6:10, 7:10] = white_turquoise_rgba
+frame[10:12, 0:10] = white_turquoise_rgba
+np.save("number_9_player.npy", frame)
+frame[0:2, 0:10] = black_rgba
+frame[2:5, 0:2] = black_rgba
+frame[2:5, 7:10] = black_rgba
+frame[5:6, 0:10] = black_rgba
+frame[6:10, 7:10] = black_rgba
+frame[10:12, 0:10] = black_rgba
+np.save("number_9_enemy.npy", frame)

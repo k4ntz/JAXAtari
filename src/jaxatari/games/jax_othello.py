@@ -570,19 +570,15 @@ def load_sprites():
     SPRITE_ENEMY = jnp.expand_dims(enemy, axis=0)
 
     # Load digits for scores
-    # PLAYER_DIGIT_SPRITES = aj.load_and_pad_digits(
-    #     os.path.join(MODULE_DIR, "sprites/othello/number_{}_player.npy"),
-    #     num_chars=1,
-    # )
-    # ENEMY_DIGIT_SPRITES = aj.load_and_pad_digits(
-    #     os.path.join(MODULE_DIR, "sprites/othello/number_{}_enemy.npy"),
-    #     num_chars=1,
-    # )
+    PLAYER_DIGIT_SPRITES = aj.load_and_pad_digits(
+        os.path.join(MODULE_DIR, "sprites/othello/number_{}_player.npy"),
+        num_chars=10,
+    )
+    ENEMY_DIGIT_SPRITES = aj.load_and_pad_digits(
+        os.path.join(MODULE_DIR, "sprites/othello/number_{}_enemy.npy"),
+        num_chars=10,
+    )
 
-    number_player = aj.loadFrame(os.path.join(MODULE_DIR, "sprites/othello/number_4_player.npy"), transpose=True)
-    number_enemy = aj.loadFrame(os.path.join(MODULE_DIR, "sprites/othello/number_4_enemy.npy"), transpose=True)
-    PLAYER_DIGIT_SPRITES = jnp.expand_dims(number_player, axis=0)
-    ENEMY_DIGIT_SPRITES = jnp.expand_dims(number_enemy, axis=0)
     return (
         SPRITE_BG,
         SPRITE_PLAYER,
@@ -590,6 +586,7 @@ def load_sprites():
         PLAYER_DIGIT_SPRITES,
         ENEMY_DIGIT_SPRITES
     )
+
 
 @jax.jit
 def render_point_of_disc(id):
@@ -724,6 +721,37 @@ class OthelloRenderer(AtraJaxisRenderer):
             lambda x: raster,
             raster
         ) 
+
+        first_digit_player_score = state.player_score % 10
+        second_digit_player_score = state.player_score // 10
+        first_digit_enemy_score = state.enemy_score % 10
+        second_digit_enemy_score = state.enemy_score // 10
+
+        # jnp.array([18 + 16 * id[1], 22 + 22 * id[0]], dtype=jnp.int32)
+        digit_render_y = 2
+        first_digit_player_x = 17 + 16 * 1
+        second_digit_player_x = 17 + 16 * 0
+        first_digit_enemy_x = 17 + 16 * 6
+        second_digit_enemy_x = 17 + 16 * 5
+
+        frame_player_digit = aj.get_sprite_frame(self.PLAYER_DIGIT_SPRITES, first_digit_player_score)
+        raster = aj.render_at(raster, first_digit_player_x, digit_render_y, frame_player_digit)
+        frame_player_digit = aj.get_sprite_frame(self.PLAYER_DIGIT_SPRITES, second_digit_player_score)
+        raster = jax.lax.cond(
+            second_digit_player_score == 0,
+            lambda _: raster,
+            lambda _: aj.render_at(raster, second_digit_player_x, digit_render_y, frame_player_digit),
+            operand=None
+        )
+        frame_player_digit = aj.get_sprite_frame(self.ENEMY_DIGIT_SPRITES, first_digit_enemy_score)
+        raster = aj.render_at(raster, first_digit_enemy_x, digit_render_y, frame_player_digit)
+        frame_player_digit = aj.get_sprite_frame(self.ENEMY_DIGIT_SPRITES, second_digit_enemy_score)
+        raster = jax.lax.cond(
+            second_digit_enemy_score == 0,
+            lambda _: raster,
+            lambda _: aj.render_at(raster, second_digit_enemy_x, digit_render_y, frame_player_digit),
+            operand=None
+        )
 
         return raster
 
