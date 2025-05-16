@@ -6,7 +6,10 @@ Authors:
     - Michael Olenberger <michael.olenberger@stud.tu-darmstadt.de>
     - Maximilian Roth <maximilian.roth@stud.tu-darmstadt.de>
     - Jonas Neumann <jonas.neumann@stud.tu-darmstadt.de>
-    - Kun Yuddhish <kun.yuddhish@stud.tu-darmstadt.de>
+    - Yuddhish Chooah <yuddhish.chooah@stud.tu-darmstadt.de>
+
+We recorded a sequence of game play and have added the interpretations of the RAM values as
+a CSV file with the RAM registers and their meaning and possible values.
 
 Implemented features:
 - Working Game state, reset() and step() functions
@@ -17,7 +20,7 @@ Implemented features:
 - Wall collisions
 - Rudimentary ball physics (IMPORTANT: Pull the plunger back all the way when testing)
 
-Justification for the state of the ball physics:
+Why the ball physics are not yet perfect:
 Video Pinball has extremely complicated ball physics. Launch angles, when hitting (close to) corners are
 seemingly random and velocity calculation has a variety of strange quirks like strong spontaneous acceleration
 when a slow balls hit walls at certain angles, etc...
@@ -47,7 +50,6 @@ def pad_to_match_top(sprites):
         )
 
     return [pad_sprite(sprite) for sprite in sprites]
-
 """
 
 import os
@@ -384,15 +386,15 @@ def get_human_action() -> chex.Array:
         action: int, action taken by the player (LEFT, RIGHT, FIRE, LEFTFIRE, RIGHTFIRE, NOOP).
     """
     keys = pygame.key.get_pressed()
-    if keys[pygame.K_a]:
+    if keys[pygame.K_LEFT]:
         return jnp.array(Action.LEFT)
-    elif keys[pygame.K_d]:
+    elif keys[pygame.K_RIGHT]:
         return jnp.array(Action.RIGHT)
     elif keys[pygame.K_SPACE]:
         return jnp.array(Action.FIRE)
-    elif keys[pygame.K_w]:
+    elif keys[pygame.K_UP]:
         return jnp.array(Action.UP)
-    elif keys[pygame.K_s]:
+    elif keys[pygame.K_DOWN]:
         return jnp.array(Action.DOWN)
     else:
         return jnp.array(Action.NOOP)

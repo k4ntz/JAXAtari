@@ -25,8 +25,8 @@ Register,Desciption,Values
 23,,
 24,,
 25,Balls Played Top Middle Digit,"0,...,9"
-26,Counter ? (completing 0-255 increments #27),"0,...,255"
-27,Counter ? (incremented by #26),"0,...,?"
+26,Clock? (completing 0-255 increments #27),"0,...,255"
+27,Clock ? (incremented by #26),"0,...,?"
 28,,
 29,,
 30,,
@@ -55,8 +55,8 @@ Register,Desciption,Values
 53,,
 54,,
 55,,
-56,Ball Velocity x,0...255
-57,Ball Velocity y,0...255
+56,Ball Velocity x indicator (actual divided by 8?),0...255
+57,Ball Velocity y indicator,0...255
 58,Ball direction,"0, 64, 128, 192"
 59,Something with ball dynamics and initial plunger strength (changing this value from 0 to anything starts the game),Mostly values >220
 60,,
@@ -64,7 +64,7 @@ Register,Desciption,Values
 62,,
 63,,
 64,Color special effect counter,
-65,Color special effect specifier,
+65,"Color special effect specifier (incremented by #27 if ball not in play, unintended?)",
 66,,
 67,Ball Position x,
 68,Ball Position y,
@@ -86,9 +86,9 @@ Register,Desciption,Values
 84,"Atari Special Target row 4, left sprite specifier","8, 16, 24, ..."
 85,"Atari Special Target row 4, left sprite specifier","8, 16, 24, ..."
 86,"Atari Special Target row 4, left sprite specifier","8, 16, 24, ..."
-87,,
+87,Gravity constant?,3
 88,,
-89,,
+89,Timer when hitting something?,
 90,,
 91,,
 92,,
