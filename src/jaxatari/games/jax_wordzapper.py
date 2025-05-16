@@ -11,22 +11,8 @@ from jaxatari.renderers import AtraJaxisRenderer
 from jaxatari.rendering import atraJaxis as aj
 from jaxatari.environment import JaxEnvironment, JAXAtariAction as Action
 
-
-
-# TODO : remove unnecessary constants
-
 # Constants for game environment
-MAX_SPEED = 12
 MAX_ASTEROIDS_COUNT = 6 #TODO not sure about value
-ENEMY_STEP_SIZE = 2
-
-# Background color and object colors
-BACKGROUND_COLOR = 144, 72, 17
-PLAYER_COLOR = 92, 186, 92
-BALL_COLOR = 236, 236, 236  # White ball
-WALL_COLOR = 236, 236, 236  # White walls
-SCORE_COLOR = 236, 236, 236  # White score
-
 
 # define object orientations
 FACE_LEFT = -1
@@ -36,19 +22,11 @@ FACE_RIGHT = 1
 PLAYER_START_X = 80
 PLAYER_START_Y = 110
 
-LETTERS_Y = 20
-
 # Object sizes (width, height)
 PLAYER_SIZE = (4, 16)
 ASTEROID_SIZE = (8, 7)
 MISSILE_SIZE = (8, 1)
 ZAPPER_SIZE = (8, 1)
-LETTER_SIZE = (8, 7)
-TIMER_SIZE = (8, 8)
-WALL_TOP_Y = 24
-WALL_TOP_HEIGHT = 10
-WALL_BOTTOM_Y = 194
-WALL_BOTTOM_HEIGHT = 16
 
 # Pygame window dimensions
 WINDOW_WIDTH = 160 * 3
@@ -257,11 +235,13 @@ def load_sprites():
 def player_step(
     state: WordZapperState, action: chex.Array
 ) -> tuple[chex.Array, chex.Array, chex.Array]:
-    # implement all the possible movement directions for the player, the mapping is:
-    # anything with left in it, add -1 to the x position
-    # anything with right in it, add 1 to the x position
-    # anything with up in it, add -1 to the y position
-    # anything with down in it, add 1 to the y position
+    '''
+    implement all the possible movement directions for the player, the mapping is:
+    anything with left in it, add -2 to the x position
+    anything with right in it, add 2 to the x position
+    anything with up in it, add -2 to the y position
+    anything with down in it, add 2 to the y position
+    '''
     up = jnp.any(
         jnp.array(
             [
