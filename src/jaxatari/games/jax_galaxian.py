@@ -30,16 +30,16 @@ if not pygame.get_init():
 SHOOTING_COOLDOWN = 80
 ENEMY_MOVE_SPEED = 0.5
 BULLET_MOVE_SPEED = 5
-GRID_ROWS = 6
-GRID_COLS = 7
+GRID_ROWS = 5
+GRID_COLS = 5
 NATIVE_GAME_WIDTH = 160
 NATIVE_GAME_HEIGHT = 210
 PYGAME_SCALE_FACTOR = 3
 PYGAME_WINDOW_WIDTH = NATIVE_GAME_WIDTH * PYGAME_SCALE_FACTOR
 PYGAME_WINDOW_HEIGHT = NATIVE_GAME_HEIGHT * PYGAME_SCALE_FACTOR
 ENEMY_SPACING_X = 20
-ENEMY_SPACING_Y = 20
-ENEMY_GRID_Y = 100
+ENEMY_SPACING_Y = 12
+ENEMY_GRID_Y = 70
 START_X = NATIVE_GAME_WIDTH // 4
 START_Y = NATIVE_GAME_HEIGHT
 ENEMY_ATTACK_SPEED = 2
@@ -49,6 +49,8 @@ ENEMY_ATTACK_BULLET_DELAY = 50
 ENEMY_ATTACK_MAX_BULLETS = 2
 LIVES = 3
 PLAYER_DEATH_DELAY = 50
+ENEMY_LEFT_BOUND = 17
+ENEMY_RIGHT_BOUND = NATIVE_GAME_WIDTH - 25
 
 class GalaxianState(NamedTuple):
     player_x: chex.Array
@@ -92,24 +94,31 @@ def update_player_position(state: GalaxianState, action) -> GalaxianState:
         jnp.array([action == Action.LEFT, action == Action.LEFTFIRE])
     )
 
-    new_x = jnp.clip(state.player_x + press_right * 5, 0, NATIVE_GAME_WIDTH)
-    new_x = jnp.clip(new_x - press_left * 5, 0, NATIVE_GAME_WIDTH)
+    # rohe neue X-Position
+    new_x = state.player_x + (press_right * 5) - (press_left * 5)
+
+    # clamp zwischen 0 und (SCREEN_WIDTH − PLAYER_WIDTH)
+    new_x = jnp.clip(new_x, 17, NATIVE_GAME_WIDTH - 25)
     return state._replace(player_x=new_x)
 
 @jax.jit
 def update_enemy_positions(state: GalaxianState) -> GalaxianState:
-    def move_left():
-        return -1
 
-    def move_right():
-        return 1
+    new_x = state.enemy_grid_x + ENEMY_MOVE_SPEED * state.enemy_grid_direction
 
-    def keep_direction():
-        return state.enemy_grid_direction
+    # clamp auf [LEFT, RIGHT]
+    new_x = jnp.clip(new_x, ENEMY_LEFT_BOUND, ENEMY_RIGHT_BOUND)
 
-    new_enemy_grid_direction = lax.cond(state.enemy_grid_x[0, state.enemy_grid_x.shape[1]] > NATIVE_GAME_WIDTH, move_left, lambda: lax.cond(state.enemy_grid_x[0, 0] < 0, move_right, keep_direction))
-    new_enemy_grid_x = state.enemy_grid_x + ENEMY_MOVE_SPEED * state.enemy_grid_direction
-    return state._replace(enemy_grid_x=new_enemy_grid_x, enemy_grid_direction=new_enemy_grid_direction)
+    # Rand-Bounce wie gehabt
+    hit_left = jnp.any(new_x <= ENEMY_LEFT_BOUND)
+    hit_right = jnp.any(new_x >= ENEMY_RIGHT_BOUND)
+    new_dir = jnp.where(hit_left, 1,
+                        jnp.where(hit_right, -1, state.enemy_grid_direction))
+
+    return state._replace(
+        enemy_grid_x=new_x,
+        enemy_grid_direction=new_dir
+    )
 
 
 
