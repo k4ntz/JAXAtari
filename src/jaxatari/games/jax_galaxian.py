@@ -145,6 +145,8 @@ def update_enemy_attack(state: GalaxianState) -> GalaxianState:
             (False, jnp.array((0, 0), jnp.int32))
         )
         return pos
+    # Prüfe ob noch mindestens ein Gegner lebt
+    any_alive = jnp.any(state.enemy_grid_alive == 1)
 
     # Start‐Attack
     def start_attack(s):
@@ -163,10 +165,13 @@ def update_enemy_attack(state: GalaxianState) -> GalaxianState:
             enemy_attack_bullet_y     = jnp.array(-1.0, dtype=jnp.float32),
             enemy_attack_bullet_timer = jnp.array(ENEMY_ATTACK_BULLET_DELAY),
         )
-    s1 = lax.cond(state.enemy_attack_state == 0,
-                  start_attack,
-                  lambda s: s,
-                  state)
+
+    s1 = lax.cond(
+        (state.enemy_attack_state == 0) & any_alive,
+        start_attack,
+        lambda s: s,
+        state
+    )
 
     # Do Dive
     def do_dive(s):
@@ -676,8 +681,9 @@ class JaxGalaxian(JaxEnvironment[GalaxianState, GalaxianObservation, GalaxianInf
 
     @partial(jax.jit, static_argnums=(0,))
     def _get_done(self, state: GalaxianState) -> bool:
-        # Game over, wenn alle Leben weg sind
+        # Game Over, wenn alle Leben weg sind
         no_lives = state.lives <= 0
+        # You Win, wenn **keine** lebenden Enemies (==1) mehr da sind
         no_enemies = jnp.all(state.enemy_grid_alive == 0)
         return jnp.logical_or(no_lives, no_enemies)
 
@@ -840,7 +846,19 @@ if __name__ == "__main__":
         screen.blit(score_surf, (10, 10))
 
         pygame.display.flip()
-
+        if done:
+            # Win vs. Game Over
+            if int(state.lives) > 0:
+                text = "You Win!"
+            else:
+                text = "Game Over!"
+            msg = font.render(text, True, (255, 255, 255))
+            x = (PYGAME_WINDOW_WIDTH - msg.get_width()) // 2
+            y = (PYGAME_WINDOW_HEIGHT - msg.get_height()) // 2
+            screen.blit(msg, (x, y))
+            pygame.display.flip()
+            pygame.time.wait(2000)
+            break
         clock.tick(30)
 
     pygame.quit()
