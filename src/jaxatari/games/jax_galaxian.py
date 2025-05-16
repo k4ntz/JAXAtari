@@ -378,7 +378,6 @@ def bullet_collision(state: GalaxianState) -> GalaxianState:
         s, _ = s_and_idx
         return s
 
-    # wir müssen rows, cols extrahieren, darum zuerst indices berechnen
     max_hits = state.enemy_grid_alive.size
     collision_indices = jnp.where(mask, size=max_hits, fill_value=-1)
     rows = collision_indices[0]
