@@ -6,7 +6,9 @@ from ..environment import JaxEnvironment, EnvState
 from ..renderers import AtraJaxisRenderer
 
 """
-JAX Backgammon Environment
+Contribuors: Ayush Bansal, Mahta Mollaeian, Anh Tuan Nguyen, Abdallah Siwar  
+
+Game: JAX Backgammon
 
 This module defines a JAX-accelerated backgammon environment for reinforcement learning and simulation.
 It includes the environment class, state structures, move validation and execution logic, rendering, and user interaction.
@@ -18,8 +20,8 @@ NUM_CHECKERS = 15
 BAR_INDEX = 24
 HOME_INDEX = 25
 MAX_DICE = 2
-WHITE_HOME = jnp.array(range(0, 6))
-BLACK_HOME = jnp.array(range(19, 25))
+WHITE_HOME = jnp.array(range(19, 25))
+BLACK_HOME = jnp.array(range(0, 6))
 
 
 WHITE = 1
@@ -29,7 +31,7 @@ BLACK = -1
 class BackgammonState(NamedTuple):
     """Represents the complete state of a backgammon game."""
     board: jnp.ndarray  # (2, 26)
-    dice: jnp.ndarray  # (2,)
+    dice: jnp.ndarray  # (4,)
     current_player: int
     is_game_over: bool
 
@@ -153,7 +155,7 @@ class JaxBackgammonEnv(JaxEnvironment[BackgammonState, jnp.ndarray, dict]):
         opponent_idx = 1 - player_idx
 
         # Detect direction and basic validity
-        base_distance = jax.lax.select(player == WHITE, from_point - to_point, to_point - from_point)
+        base_distance = jax.lax.select(player == WHITE, to_point - from_point, from_point - to_point)
         has_piece = board[player_idx, from_point] > 0
         in_bounds = (0 <= from_point) & (from_point < 24) & (0 <= to_point) & (to_point <= HOME_INDEX)
         correct_direction = base_distance > 0
@@ -169,7 +171,7 @@ class JaxBackgammonEnv(JaxEnvironment[BackgammonState, jnp.ndarray, dict]):
 
         # If moving from bar, must land on valid entry point based on dice
         def is_valid_entry(die_val: int) -> bool:
-            expected_entry = jax.lax.select(player == WHITE, 24 - die_val, die_val - 1)
+            expected_entry = jax.lax.select(player == WHITE, die_val - 1,  24 - die_val)
             matches_entry = to_point == expected_entry
             entry_open = board[opponent_idx, expected_entry] <= 1
             return matches_entry & entry_open
@@ -186,7 +188,7 @@ class JaxBackgammonEnv(JaxEnvironment[BackgammonState, jnp.ndarray, dict]):
         effective_distance = jax.lax.select(is_bearing_off, bearing_off_distance, base_distance)
 
         def check_bearing_off_valid(_):
-            exact_match = (state.dice[0] == effective_distance) | (state.dice[1] == effective_distance)
+            exact_match = jnp.any(state.dice == effective_distance)
 
             point_indices = jnp.arange(24)
 
@@ -202,11 +204,11 @@ class JaxBackgammonEnv(JaxEnvironment[BackgammonState, jnp.ndarray, dict]):
             player_row = board[player_idx, :24]
             no_higher = jnp.all(jnp.where(higher_points, player_row, 0) == 0)
 
-            larger_die = jnp.maximum(state.dice[0], state.dice[1]) > effective_distance
+            larger_die = jnp.any(state.dice > effective_distance)
             return exact_match | (larger_die & no_higher)
 
         def check_normal_move(_):
-            return (state.dice[0] == effective_distance) | (state.dice[1] == effective_distance)
+            return jnp.any(state.dice == effective_distance)
 
         dice_match = jax.lax.cond(
             is_bearing_off & can_bear_off,
@@ -257,8 +259,8 @@ class JaxBackgammonEnv(JaxEnvironment[BackgammonState, jnp.ndarray, dict]):
         """Compute move distance based on player and points."""
         return jax.lax.cond(
             from_point == BAR_INDEX,
-            lambda a: jax.lax.select(a[0] == WHITE, 25 - a[1], a[1]),
-            lambda a: jax.lax.select(a[0] == WHITE, a[1] - a[2], a[2] - a[1]),
+            lambda a: jax.lax.select(a[0] == WHITE, a[2] + 1, 24 - a[2]),
+            lambda a: jax.lax.select(a[0] == WHITE, a[2] - a[1], a[1] - a[2]),
             (player, from_point, to_point)
         )
 
@@ -312,7 +314,7 @@ class JaxBackgammonEnv(JaxEnvironment[BackgammonState, jnp.ndarray, dict]):
         new_dice = JaxBackgammonEnv.update_dice(state.dice, is_valid, distance)
 
         # check if all dice are used
-        all_dice_used = (new_dice[0] == 0) & (new_dice[1] == 0)
+        all_dice_used = jnp.all(new_dice == 0)
 
         # prepare for next turn based on the outcome
         def next_turn(k):
