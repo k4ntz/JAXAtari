@@ -339,13 +339,7 @@ def field_step(field_choice, curr_state, white_player):  # -> valid_choice, new_
         new_state = new_state._replace(
             enemy_score=enemy_score
         )
-
         return valid_choice, new_state
-    
-    #jax.debug.print(str(curr_state.player_score))
-    #TODO make bot only run, when player move is valid && handle return
-    get_bot_move(curr_state.field, curr_state.difficulty, curr_state.player_score, curr_state.enemy_score)
-
     return jax.lax.cond(
         curr_state.field.field_color[x, y] == FieldColor.EMPTY,
         lambda x: if_empty(x),
@@ -354,41 +348,41 @@ def field_step(field_choice, curr_state, white_player):  # -> valid_choice, new_
     )
 
 @jax.jit
-def get_bot_move(game_field: Field, difficulty: chex.Array, player_score: chex.Array, enemy_score: chex.Array):
+def get_bot_move(game_field: Field, difficulty: chex.Array, player_score: chex.Array, enemy_score: chex.Array)-> jnp.array:
     game_score = player_score+enemy_score
-
-    best_move_score = -2147483648
-    list_of_chosen_moves = None
-
     list_of_all_moves = jnp.arange(64)
 
     #Iterate over the game field using vmap
     vectorized_compute_score_of_tiles = jax.vmap(compute_score_of_tiles, in_axes=(0, None, None))
     list_of_all_move_values = vectorized_compute_score_of_tiles(list_of_all_moves, game_field, game_score)
-    #TODO Determine best move amongst list_of_all_move_values
-    return 0
+    #TODO Introduce Randomness amongst best moves, not only choose first
+    d1_max_index = jnp.argmax(list_of_all_move_values)
+    return jnp.array([jnp.floor_divide(d1_max_index, 8), jnp.mod(d1_max_index, 8)])
 
 def compute_score_of_tiles(i, game_field, game_score):
     # Decode tile position
-    tile_x = jnp.floor_divide(i, 8)
-    tile_y = jnp.mod(i, 8)
+    tile_y = jnp.floor_divide(i, 8)
+    tile_x = jnp.mod(i, 8)
+
 
     # If tile is already taken, set invalid move (return very low score)
+    #TODO enable Lazyloading by replacing cond to improve performence
     score_of_tile = jax.lax.cond(
-        game_field.field_color[tile_x, tile_y] != FieldColor.EMPTY,
-        lambda _: jnp.int32(-2147483648),  
-        lambda _: jnp.int32(compute_score_of_tile_1(tile_x, tile_y,game_field, game_score)),  
+        game_field.field_color[tile_y, tile_x] != FieldColor.EMPTY,
+        lambda _: -2147483648,  
+        lambda _: compute_score_of_tile_1(tile_y, tile_x,game_field, game_score),  
         None
     )
     return score_of_tile
 
-def compute_score_of_tile_1(tile_x, tile_y, game_field, game_score):
+@jax.jit
+def compute_score_of_tile_1(tile_y, tile_x, game_field, game_score):
     #compute flipped tiles by each direction
     list_of_all_directions = jnp.arange(8)
     vectorised_flipped_tiles_by_direction = jax.vmap(compute_flipped_tiles_by_direction,in_axes=(0, None, None, None))
-    flipped_tiles_by_direction = vectorised_flipped_tiles_by_direction(list_of_all_directions, tile_x, tile_y, game_field)
+    flipped_tiles_by_direction = vectorised_flipped_tiles_by_direction(list_of_all_directions, tile_y, tile_x, game_field)
 
-    flipped_tiles = jnp.sum(flipped_tiles_by_direction)
+    flipped_tiles = jnp.nansum(flipped_tiles_by_direction)
     # If no tiles were flipped, set invalid move (return very low score)
     score_of_tile = jax.lax.cond(
         flipped_tiles == 0,
@@ -402,7 +396,7 @@ def compute_score_of_tile_1(tile_x, tile_y, game_field, game_score):
         score_of_tile == -2147483648,
         lambda _: score_of_tile,  
         lambda _: jax.lax.cond(  
-            jnp.logical_or(game_score < 18, game_score > 41),  
+            jnp.squeeze(jnp.logical_and(game_score > 18, game_score < 41)),  
             lambda _: -flipped_tiles - 1,  
             lambda _: flipped_tiles,  
             None
@@ -412,11 +406,348 @@ def compute_score_of_tile_1(tile_x, tile_y, game_field, game_score):
     return score_of_tile
     
 
-
-def compute_flipped_tiles_by_direction(i, tile_x, tile_y, game_field):
+@jax.jit
+def compute_flipped_tiles_by_direction(i, tile_y: int, tile_x: int, game_field: Field):
     #TODO implement 
+    args = (tile_y,tile_x,game_field)
 
-    return 0
+    branches = [
+        lambda args: compute_flipped_tiles_top(args),
+        lambda args: compute_flipped_tiles_top_rigth(args),
+        lambda args: compute_flipped_tiles_rigth(args),
+        lambda args: compute_flipped_tiles_bottom_rigth(args),
+        lambda args: compute_flipped_tiles_bottom(args),
+        lambda args: compute_flipped_tiles_bottom_left(args),
+        lambda args: compute_flipped_tiles_left(args),
+        lambda args: compute_flipped_tiles_top_left(args),
+    ]
+
+    return jax.lax.switch(i, branches, args)
+
+@jax.jit   
+def compute_flipped_tiles_top(input) -> int:
+    # Returns the number of tiles to be flipped (only flipped tiles, same color tiles are disregarded)
+
+    #checks wether the first element in the direction of look-up is invalid, becasause its already taken by bot, sets it to nan, to prevent while loop from running
+    args = jax.lax.cond(
+        input[2].field_color[input[0]-1][input[1]] == FieldColor.BLACK,
+        lambda input: (input[0] - 1, input[1], input[2], jnp.nan, 0),
+        lambda input: (input[0] - 1, input[1], input[2], 0.0, 0),
+        input
+    ) 
+
+    #args has the following structure: tile_y, tile_x, game_field, flipped, tmp_flipped
+    def while_cond(args):
+        #check if to be checked field is still part of game field
+        check_for_outside_borders_of_game_field = jnp.all(
+            jnp.array([args[0] >= 0, args[0] < 8, args[1] >= 0, args[1] < 8, args[3] != jnp.nan])
+        )
+        return check_for_outside_borders_of_game_field
+
+    def while_body(args):
+        #when we encounter a not black field increase tmp_flipped, when we encounter a black field add the tmp_flipped (tiles we encountered before black field:= tiles to be flipped) to flipped tiles      
+        return jax.lax.cond(
+            args[2].field_color[args[0], args[1]] == FieldColor.EMPTY,  
+            lambda args: (-2, args[1], args[2], args[3],  args[4]),#if field is empthy, no further tiles can be flipped use set y to -2 to exit next loop iteration
+            lambda args: (jax.lax.cond(
+                args[2].field_color[args[0], args[1]] == FieldColor.BLACK,  
+                lambda args: (args[0]-1, args[1], args[2], args[3] + args[4], 0),
+                lambda args: (args[0]-1, args[1], args[2], args[3], args[4] + 1),
+                args
+                )),
+            args
+        )
+
+    return jax.lax.cond(
+        input[0] < 0,
+        lambda args: jnp.int32(0.0),
+        lambda args: jnp.int32(jax.lax.while_loop(while_cond, while_body, args)[3]),  
+        args
+    )
+@jax.jit
+def compute_flipped_tiles_rigth(input) -> int:
+    # Returns the number of tiles to be flipped (only flipped tiles, same color tiles are disregarded)
+
+    #checks wether the first element in the direction of look-up is invalid, becasause its already taken by bot, sets it to nan, to prevent while loop from running
+    args = jax.lax.cond(
+        input[2].field_color[input[0]][input[1]+1] == FieldColor.BLACK,
+        lambda input: (input[0], input[1]+1, input[2], jnp.nan, 0),
+        lambda input: (input[0], input[1]+1, input[2], 0.0, 0),
+        input
+    ) 
+
+    #args has the following structure: tile_y, tile_x, game_field, flipped, tmp_flipped
+    def while_cond(args):
+        #check if to be checked field is still part of game field
+        check_for_outside_borders_of_game_field = jnp.all(
+            jnp.array([args[0] >= 0, args[0] < 8, args[1] >= 0, args[1] < 8, args[3] != jnp.nan])
+        )
+        return check_for_outside_borders_of_game_field
+
+    def while_body(args):
+        #when we encounter a not black field increase tmp_flipped, when we encounter a black field add the tmp_flipped (tiles we encountered before black field:= tiles to be flipped) to flipped tiles      
+        return jax.lax.cond(
+            args[2].field_color[args[0], args[1]] == FieldColor.EMPTY,  
+            lambda args: (-2, args[1], args[2], args[3],  args[4]),#if field is empthy, no further tiles can be flipped use set y to -2 to exit next loop iteration
+            lambda args: (jax.lax.cond(
+                args[2].field_color[args[0], args[1]] == FieldColor.BLACK,  
+                lambda args: (args[0], args[1]+1, args[2], args[3] + args[4], 0),
+                lambda args: (args[0], args[1]+1, args[2], args[3], args[4] + 1),
+                args
+                )),
+            args
+        )
+
+    return jax.lax.cond(
+        input[1] > 7,
+        lambda args: jnp.int32(0.0),
+        lambda args: jnp.int32(jax.lax.while_loop(while_cond, while_body, args)[3]),  
+        args
+    )
+@jax.jit
+def compute_flipped_tiles_bottom(input) -> int:
+    # Returns the number of tiles to be flipped (only flipped tiles, same color tiles are disregarded)
+
+    #checks wether the first element in the direction of look-up is invalid, becasause its already taken by bot, sets it to nan, to prevent while loop from running
+    args = jax.lax.cond(
+        input[2].field_color[input[0]+1][input[1]] == FieldColor.BLACK,
+        lambda input: (input[0] + 1, input[1], input[2], jnp.nan, 0),
+        lambda input: (input[0] + 1, input[1], input[2], 0.0, 0),
+        input
+    ) 
+
+    #args has the following structure: tile_y, tile_x, game_field, flipped, tmp_flipped
+    def while_cond(args):
+        #check if to be checked field is still part of game field
+        check_for_outside_borders_of_game_field = jnp.all(
+            jnp.array([args[0] >= 0, args[0] < 8, args[1] >= 0, args[1] < 8, args[3] != jnp.nan])
+        )
+        return check_for_outside_borders_of_game_field
+
+    def while_body(args):
+        #when we encounter a not black field increase tmp_flipped, when we encounter a black field add the tmp_flipped (tiles we encountered before black field:= tiles to be flipped) to flipped tiles      
+        return jax.lax.cond(
+            args[2].field_color[args[0], args[1]] == FieldColor.EMPTY,  
+            lambda args: (-2, args[1], args[2], args[3],  args[4]),#if field is empthy, no further tiles can be flipped use set y to -2 to exit next loop iteration
+            lambda args: (jax.lax.cond(
+                args[2].field_color[args[0], args[1]] == FieldColor.BLACK,  
+                lambda args: (args[0]+1, args[1], args[2], args[3] + args[4], 0),
+                lambda args: (args[0]+1, args[1], args[2], args[3], args[4] + 1),
+                args
+                )),
+            args
+        )
+
+    return jax.lax.cond(
+        input[0] > 7,
+        lambda args: jnp.int32(0.0),
+        lambda args: jnp.int32(jax.lax.while_loop(while_cond, while_body, args)[3]),  
+        args
+    )
+@jax.jit
+def compute_flipped_tiles_left(input) -> int:
+    # Returns the number of tiles to be flipped (only flipped tiles, same color tiles are disregarded)
+
+    #checks wether the first element in the direction of look-up is invalid, becasause its already taken by bot, sets it to nan, to prevent while loop from running
+    args = jax.lax.cond(
+        input[2].field_color[input[0]][input[1]-1] == FieldColor.BLACK,
+        lambda input: (input[0], input[1]-1, input[2], jnp.nan, 0),
+        lambda input: (input[0], input[1]-1, input[2], 0.0, 0),
+        input
+    ) 
+
+    #args has the following structure: tile_y, tile_x, game_field, flipped, tmp_flipped
+    def while_cond(args):
+        #check if to be checked field is still part of game field
+        check_for_outside_borders_of_game_field = jnp.all(
+            jnp.array([args[0] >= 0, args[0] < 8, args[1] >= 0, args[1] < 8, args[3] != jnp.nan])
+        )
+        return check_for_outside_borders_of_game_field
+
+    def while_body(args):
+        #when we encounter a not black field increase tmp_flipped, when we encounter a black field add the tmp_flipped (tiles we encountered before black field:= tiles to be flipped) to flipped tiles      
+        return jax.lax.cond(
+            args[2].field_color[args[0], args[1]] == FieldColor.EMPTY,  
+            lambda args: (-2, args[1], args[2], args[3],  args[4]),#if field is empthy, no further tiles can be flipped use set y to -2 to exit next loop iteration
+            lambda args: (jax.lax.cond(
+                args[2].field_color[args[0], args[1]] == FieldColor.BLACK,  
+                lambda args: (args[0], args[1]-1, args[2], args[3] + args[4], 0),
+                lambda args: (args[0], args[1]-1, args[2], args[3], args[4] + 1),
+                args
+                )),
+            args
+        )
+
+    return jax.lax.cond(
+        input[0] > 7,        
+        lambda args: jnp.int32(0.0),
+        lambda args: jnp.int32(jax.lax.while_loop(while_cond, while_body, args)[3]),  
+        args
+    )
+@jax.jit
+def compute_flipped_tiles_top_rigth(input) -> int:
+    # Returns the number of tiles to be flipped (only flipped tiles, same color tiles are disregarded)
+
+    #checks wether the first element in the direction of look-up is invalid, becasause its already taken by bot, sets it to nan, to prevent while loop from running
+    args = jax.lax.cond(
+        input[2].field_color[input[0]-1][input[1]+1] == FieldColor.BLACK,
+        lambda input: (input[0]-1, input[1]+1, input[2], jnp.nan, 0),
+        lambda input: (input[0]-1, input[1]+1, input[2], 0.0, 0),
+        input
+    ) 
+
+    #args has the following structure: tile_y, tile_x, game_field, flipped, tmp_flipped
+    def while_cond(args):
+        #check if to be checked field is still part of game field
+        check_for_outside_borders_of_game_field = jnp.all(
+            jnp.array([args[0] >= 0, args[0] < 8, args[1] >= 0, args[1] < 8, args[3] != jnp.nan])
+        )
+        return check_for_outside_borders_of_game_field
+
+    def while_body(args):
+        #when we encounter a not black field increase tmp_flipped, when we encounter a black field add the tmp_flipped (tiles we encountered before black field:= tiles to be flipped) to flipped tiles      
+        return jax.lax.cond(
+            args[2].field_color[args[0], args[1]] == FieldColor.EMPTY,  
+            lambda args: (-2, args[1], args[2], args[3],  args[4]),#if field is empthy, no further tiles can be flipped use set y to -2 to exit next loop iteration
+            lambda args: (jax.lax.cond(
+                args[2].field_color[args[0], args[1]] == FieldColor.BLACK,  
+                lambda args: (args[0]-1, args[1]+1, args[2], args[3] + args[4], 0),
+                lambda args: (args[0]-1, args[1]+1, args[2], args[3], args[4] + 1),
+                args
+                )),
+            args
+        )
+
+    return jax.lax.cond(
+        jnp.logical_and(input[0] < 0, input[1]>7),
+        lambda args: jnp.int32(0.0),
+        lambda args: jnp.int32(jax.lax.while_loop(while_cond, while_body, args)[3]),  
+        args
+    )
+@jax.jit
+def compute_flipped_tiles_bottom_rigth(input) -> int:
+    # Returns the number of tiles to be flipped (only flipped tiles, same color tiles are disregarded)
+
+    #checks wether the first element in the direction of look-up is invalid, becasause its already taken by bot, sets it to nan, to prevent while loop from running
+    args = jax.lax.cond(
+        input[2].field_color[input[0]+1][input[1]+1] == FieldColor.BLACK,
+        lambda input: (input[0]+1, input[1]+1, input[2], jnp.nan, 0),
+        lambda input: (input[0]+1, input[1]+1, input[2], 0.0, 0),
+        input
+    ) 
+
+    #args has the following structure: tile_y, tile_x, game_field, flipped, tmp_flipped
+    def while_cond(args):
+        #check if to be checked field is still part of game field
+        check_for_outside_borders_of_game_field = jnp.all(
+            jnp.array([args[0] >= 0, args[0] < 8, args[1] >= 0, args[1] < 8, args[3] != jnp.nan])
+        )
+        return check_for_outside_borders_of_game_field
+
+    def while_body(args):
+        #when we encounter a not black field increase tmp_flipped, when we encounter a black field add the tmp_flipped (tiles we encountered before black field:= tiles to be flipped) to flipped tiles      
+        return jax.lax.cond(
+            args[2].field_color[args[0], args[1]] == FieldColor.EMPTY,  
+            lambda args: (-2, args[1], args[2], args[3],  args[4]),#if field is empthy, no further tiles can be flipped use set y to -2 to exit next loop iteration
+            lambda args: (jax.lax.cond(
+                args[2].field_color[args[0], args[1]] == FieldColor.BLACK,  
+                lambda args: (args[0]+1, args[1]+1, args[2], args[3] + args[4], 0),
+                lambda args: (args[0]+1, args[1]+1, args[2], args[3], args[4] + 1),
+                args
+                )),
+            args
+        )
+
+    return jax.lax.cond(
+        jnp.logical_and(input[0] > 7, input[1]>7),
+        lambda args: jnp.int32(0.0),
+        lambda args: jnp.int32(jax.lax.while_loop(while_cond, while_body, args)[3]),  
+        args
+    )
+@jax.jit
+def compute_flipped_tiles_bottom_left(input) -> int:
+    # Returns the number of tiles to be flipped (only flipped tiles, same color tiles are disregarded)
+
+    #checks wether the first element in the direction of look-up is invalid, becasause its already taken by bot, sets it to nan, to prevent while loop from running
+    args = jax.lax.cond(
+        input[2].field_color[input[0]+1][input[1]-1] == FieldColor.BLACK,
+        lambda input: (input[0]+1, input[1]-1, input[2], jnp.nan, 0),
+        lambda input: (input[0]+1, input[1]-1, input[2], 0.0, 0),
+        input
+    ) 
+
+    #args has the following structure: tile_y, tile_x, game_field, flipped, tmp_flipped
+    def while_cond(args):
+        #check if to be checked field is still part of game field
+        check_for_outside_borders_of_game_field = jnp.all(
+            jnp.array([args[0] >= 0, args[0] < 8, args[1] >= 0, args[1] < 8, args[3] != jnp.nan])
+        )
+        return check_for_outside_borders_of_game_field
+
+    def while_body(args):
+        #when we encounter a not black field increase tmp_flipped, when we encounter a black field add the tmp_flipped (tiles we encountered before black field:= tiles to be flipped) to flipped tiles      
+        return jax.lax.cond(
+            args[2].field_color[args[0], args[1]] == FieldColor.EMPTY,  
+            lambda args: (-2, args[1], args[2], args[3],  args[4]),#if field is empthy, no further tiles can be flipped use set y to -2 to exit next loop iteration
+            lambda args: (jax.lax.cond(
+                args[2].field_color[args[0], args[1]] == FieldColor.BLACK,  
+                lambda args: (args[0]+1, args[1]-1, args[2], args[3] + args[4], 0),
+                lambda args: (args[0]+1, args[1]-1, args[2], args[3], args[4] + 1),
+                args
+                )),
+            args
+        )
+
+    return jax.lax.cond(
+        jnp.logical_and(input[0] <0, input[1]>7),
+        lambda args: jnp.int32(0.0),
+        lambda args: jnp.int32(jax.lax.while_loop(while_cond, while_body, args)[3]),  
+        args
+    )
+@jax.jit
+def compute_flipped_tiles_top_left(input) -> int:
+    # Returns the number of tiles to be flipped (only flipped tiles, same color tiles are disregarded)
+
+    #checks wether the first element in the direction of look-up is invalid, becasause its already taken by bot, sets it to nan, to prevent while loop from running
+    args = jax.lax.cond(
+        input[2].field_color[input[0]-1][input[1]-1] == FieldColor.BLACK,
+        lambda input: (input[0]-1, input[1]-1, input[2], jnp.nan, 0),
+        lambda input: (input[0]-1, input[1]-1, input[2], 0.0, 0),
+        input
+    ) 
+
+    #args has the following structure: tile_y, tile_x, game_field, flipped, tmp_flipped
+    def while_cond(args):
+        #check if to be checked field is still part of game field
+        check_for_outside_borders_of_game_field = jnp.all(
+            jnp.array([args[0] >= 0, args[0] < 8, args[1] >= 0, args[1] < 8, args[3] != jnp.nan])
+        )
+        return check_for_outside_borders_of_game_field
+
+    def while_body(args):
+        #when we encounter a not black field increase tmp_flipped, when we encounter a black field add the tmp_flipped (tiles we encountered before black field:= tiles to be flipped) to flipped tiles      
+        return jax.lax.cond(
+            args[2].field_color[args[0], args[1]] == FieldColor.EMPTY,  
+            lambda args: (-2, args[1], args[2], args[3],  args[4]),#if field is empthy, no further tiles can be flipped use set y to -2 to exit next loop iteration
+            lambda args: (jax.lax.cond(
+                args[2].field_color[args[0], args[1]] == FieldColor.BLACK,  
+                lambda args: (args[0]-1, args[1]-1, args[2], args[3] + args[4], 0),
+                lambda args: (args[0]-1, args[1]-1, args[2], args[3], args[4] + 1),
+                args
+                )),
+            args
+        )
+
+    return jax.lax.cond(
+        jnp.logical_and(input[0]<0, input[1]<0),
+        lambda args: jnp.int32(0.0),
+        lambda args: jnp.int32(jax.lax.while_loop(while_cond, while_body, args)[3]),  
+        args
+    )
+
+
+    
+
 
 
 class JaxOthello(JaxEnvironment[OthelloState, OthelloObservation, OthelloInfo]):
@@ -512,10 +843,9 @@ class JaxOthello(JaxEnvironment[OthelloState, OthelloObservation, OthelloInfo]):
         def body_fun(value):
             valid_choice, state, key = value
 
-            key, subkey = jax.random.split(key)  # neuen Key erzeugen
-            rand_vals = jax.random.randint(subkey, shape=(2,), minval=0, maxval=7)
+            best_val = get_bot_move(state.field,state.difficulty, state.player_score,state.enemy_score)
 
-            valid_choice, new_state = field_step(rand_vals, state, False)
+            valid_choice, new_state = field_step(best_val, state, False)
 
             return jax.lax.cond(
                 valid_choice,
