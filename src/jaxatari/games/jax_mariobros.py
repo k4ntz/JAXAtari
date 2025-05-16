@@ -9,52 +9,54 @@ from jax import Array
 from gymnax.environments import spaces
 from jaxatari.environment import JaxEnvironment, JAXAtariAction as Action
 
-# --- Bildschirmgröße ---
+# --- Screen params---
 SCREEN_WIDTH = 160
 SCREEN_HEIGHT = 210
-WINDOW_SCALE = 3  # Optional zum Hochskalieren
+WINDOW_SCALE = 3
 
-# --- Physik-Parameter ---
+# --- Physik params ---
 MOVE_SPEED = 1
 ASCEND_VY     = -2.0         # ↑ 2 px / frame
 DESCEND_VY    =  2.0         # ↓ 2 px / frame
 ASCEND_FRAMES = 21         # 42 px tall jump (21 × 2)
 
-# -------- pattern management ----------------------------------
+# -------- Movement params ----------------------------------
 movement_pattern        = jnp.array([1, 1, 0, 1, 0, 1, 1, 0, 1, 1, 0],dtype=jnp.float32)
 pat_len        = movement_pattern.shape[0]
 
+
+# -------- Break params ----------------------------------
 BRAKE_DURATION = 10           # in Frames
 BRAKE_TOTAL_DISTANCE = 7.0    # in Pixels
 BRAKE_SPEED = jnp.array(BRAKE_TOTAL_DISTANCE / BRAKE_DURATION, dtype=jnp.float32)  # ≈ 0.7 px/frame
 
-# --- Spieler-und-Enemy-Größe ---
+# --- Player/Enemy/Plattform params ---
 PLAYER_SIZE = (9, 21)  # w, h
 PLAYER_COLOR = (181, 83, 40)
 PLAYER_START_X, PLAYER_START_Y = 37.0, 74.0
 ENEMY_SIZE = (8, 8)  # w, h
 
 PLATFORMS = jnp.array([
-    [0, 168, 160, 24],   # Boden
-    [0, 57, 64, 3],   # Plattform 1
-    [96, 57, 68, 3],  # Plattform 2
-    [31, 95, 97, 3],  # Plattform 3 (hier könnte der Pow Block sein)
-    [0, 95, 16, 3],   # Plattform 4
-    [144, 95, 18, 3], # Plattform 5
-    [0, 135, 48, 3],  # Plattform 6
-    [112, 135, 48, 3] # Plattform 7
+    [0, 168, 160, 24],  # Ground x, y, w, h
+    [0, 57, 64, 3],     # 3.FLoor Left
+    [96, 57, 68, 3],    # 3.Floor Right
+    [31, 95, 97, 3],    # 2.Floor Middle
+    [0, 95, 16, 3],     # 2.Floor Left
+    [144, 95, 18, 3],   # 2.Floor Right
+    [0, 135, 48, 3],    # 1.Floor Left
+    [112, 135, 48, 3]   # 1.Floor Right
 ])
 
 # --- Pow_Block ---
 POW_BLOCK = jnp.array([[72, 135, 16, 7]])  # x, y, w, h
 
-class GameState(NamedTuple):
-    enemy_pos: jnp.ndarray  # shape (N, 2)
-    enemy_vel: jnp.ndarray  # shape (N, 2)
+class GameState(NamedTuple):    #Enemy movement
+    enemy_pos: jnp.ndarray
+    enemy_vel: jnp.ndarray
 
-class PlayerState(NamedTuple):
-    pos: jnp.ndarray     # [x, y]
-    vel: jnp.ndarray     # [vx, vy]
+class PlayerState(NamedTuple):  # Player movement
+    pos: jnp.ndarray
+    vel: jnp.ndarray
     on_ground: bool
     jump_phase: chex.Array
     ascend_frames: chex.Array
@@ -72,89 +74,16 @@ class MarioBrosState(NamedTuple):
     game: GameState
     lives: chex.Array
 
-class MarioBrosObservation(NamedTuple):
+class MarioBrosObservation(NamedTuple): # Copied from jax_kangaroo.py ln.166-168
     player_x: chex.Array
     player_y: chex.Array
 
-class MarioBrosInfo(NamedTuple):
+class MarioBrosInfo(NamedTuple):    # Copied from jax_kangaroo.py ln.186-187
     score: chex.Array
 
-def get_human_action() -> jax.numpy.ndarray: # Or chex.Array if you use chex
-    """
-    Get human action from keyboard with support for diagonal movement and combined fire,
-    using Action constants.
-    Returns a JAX array containing a single integer action.
-    """
-    # Important: Process Pygame events to allow window to close, etc.
-    for event in pygame.event.get():
-        if event.type == pygame.QUIT:
-            pygame.quit()
-            raise SystemExit("Pygame window closed by user.")
-        # You could handle other events here if needed (e.g., KEYDOWN for one-shot actions)
-
-    keys = pygame.key.get_pressed()
-
-    # Consolidate key checks
-    up = keys[pygame.K_UP] or keys[pygame.K_w]
-    down = keys[pygame.K_DOWN] or keys[pygame.K_s]
-    left = keys[pygame.K_LEFT] or keys[pygame.K_a]
-    right = keys[pygame.K_RIGHT] or keys[pygame.K_d]
-    fire = keys[pygame.K_SPACE]
-
-    action_to_take: int # Explicitly declare the type for clarity
-
-    # The order of these checks is crucial for prioritizing actions
-    # (e.g., UPRIGHTFIRE before UPFIRE or UPRIGHT)
-
-    # Diagonal movements with fire (3 keys)
-    if up and right and fire:
-        action_to_take = Action.UPRIGHTFIRE
-    elif up and left and fire:
-        action_to_take = Action.UPLEFTFIRE
-    elif down and right and fire:
-        action_to_take = Action.DOWNRIGHTFIRE
-    elif down and left and fire:
-        action_to_take = Action.DOWNLEFTFIRE
-
-    # Cardinal directions with fire (2 keys)
-    elif up and fire:
-        action_to_take = Action.UPFIRE
-    elif down and fire:
-        action_to_take = Action.DOWNFIRE
-    elif left and fire:
-        action_to_take = Action.LEFTFIRE
-    elif right and fire:
-        action_to_take = Action.RIGHTFIRE
-
-    # Diagonal movements (2 keys)
-    elif up and right:
-        action_to_take = Action.UPRIGHT
-    elif up and left:
-        action_to_take = Action.UPLEFT
-    elif down and right:
-        action_to_take = Action.DOWNRIGHT
-    elif down and left:
-        action_to_take = Action.DOWNLEFT
-
-    # Cardinal directions (1 key for movement)
-    elif up:
-        action_to_take = Action.UP
-    elif down:
-        action_to_take = Action.DOWN
-    elif left:
-        action_to_take = Action.LEFT
-    elif right:
-        action_to_take = Action.RIGHT
-    # Fire alone (1 key)
-    elif fire:
-        action_to_take = Action.FIRE
-    # No relevant keys pressed
-    else:
-        action_to_take = Action.NOOP
-
-    return jax.numpy.array(action_to_take, dtype=jax.numpy.int32)
-
 def check_collision(pos: jnp.ndarray, vel: jnp.ndarray, platforms: jnp.ndarray, pow_block: jnp.ndarray):
+    # checks Player collision with all Platforms or Pow_Block
+
     x, y = pos
     vx, vy = vel
     w, h = PLAYER_SIZE
@@ -162,7 +91,7 @@ def check_collision(pos: jnp.ndarray, vel: jnp.ndarray, platforms: jnp.ndarray, 
     left, right = x, x + w
     top, bottom = y, y + h
 
-    # Plattformen
+    # Platforms
     px, py, pw, ph = platforms[:, 0], platforms[:, 1], platforms[:, 2], platforms[:, 3]
     p_left, p_right = px, px + pw
     p_top, p_bottom = py, py + ph
@@ -195,6 +124,8 @@ def check_collision(pos: jnp.ndarray, vel: jnp.ndarray, platforms: jnp.ndarray, 
     return jnp.any(landed), jnp.any(bumped | pow_bumped), new_y_land, jnp.maximum(new_y_bump, pow_y_new), pow_bumped
 
 def check_enemy_collision(player_pos, enemy_pos):
+    # checks Player collision with enemys
+
     px, py = player_pos
     pw, ph = PLAYER_SIZE
     ex, ey = enemy_pos[:, 0], enemy_pos[:, 1]
@@ -204,7 +135,10 @@ def check_enemy_collision(player_pos, enemy_pos):
     overlap_y = (py < ey + eh) & (py + ph > ey)
     return jnp.any(overlap_x & overlap_y)
 
+@jax.jit
 def movement(state: PlayerState, action: jnp.ndarray) -> PlayerState:
+    # Calculates movement of Player based on given state and action taken
+
     move, jump_btn = action[0], action[1].astype(jnp.int32)
     vx = MOVE_SPEED * move
     # -------- phase / frame bookkeeping --------------------------
@@ -265,13 +199,16 @@ def movement(state: PlayerState, action: jnp.ndarray) -> PlayerState:
         brake_frames_left=state.brake_frames_left
     )
 
-def player_step(state: MarioBrosState, action: chex.Array):
+def player_step(state: PlayerState, action: chex.Array):
+    # Calculates next state based on given PlayerState and action taken
+
     # Determine presses
     press_fire = jnp.logical_or(
         action == Action.FIRE,
         jnp.logical_or(action == Action.LEFTFIRE, action == Action.RIGHTFIRE)
     )
 
+    # resets movement after jump for new movement callculations
     def reset_ground(s):
         return s._replace(move=0.0, jump=0, jumpL=False, jumpR=False)
 
@@ -350,49 +287,46 @@ def player_step(state: MarioBrosState, action: chex.Array):
 import jaxatari.rendering.atraJaxis as aj
 from jaxatari.renderers import AtraJaxisRenderer
 
-class MarioBrosRenderer(AtraJaxisRenderer):
-    """
-    Offscreen-Renderer, der in Original-Auflösung rendert.
-    Das Play-Skript skaliert das Bild später um UPSCALE_FACTOR.
-    """
+class MarioBrosRenderer(AtraJaxisRenderer): 
+    # holds functions to render given Gamestates
+
     def __init__(self):
         pass
 
     def draw_rect(self, surface, color, rect):
-        # Zeichnet direkt in Original-Koordinaten
         r = pygame.Rect(rect)
         pygame.draw.rect(surface, color, r)
 
     def render(self, state: MarioBrosState) -> jnp.ndarray:
-        # Neues Offscreen Surface in Originalgröße
+       
         surf = pygame.Surface((SCREEN_WIDTH, SCREEN_HEIGHT))
-        # Hintergrund
+        # Background
         surf.fill((0, 0, 0))
 
-        # Spieler in Original-Koordinaten zeichnen
+        # Player
         px, py = state.player.pos.tolist()
         color = (255, 0, 0) if state.player.brake_frames_left > 0 else PLAYER_COLOR
         self.draw_rect(surf, color, (px, py, *PLAYER_SIZE))
 
-        # Plattformen und POW-Block
+        # Platforms + Pow-Block
         for plat in PLATFORMS:
             self.draw_rect(surf, (228, 111, 111), plat.tolist())
         self.draw_rect(surf, (201, 164, 74), POW_BLOCK[0].tolist())
 
-        # Gegner
+        # Enemy
         for ep in state.game.enemy_pos:
             ex, ey = ep.tolist()
             self.draw_rect(surf, (255, 0, 0), (ex, ey, *ENEMY_SIZE))
 
-        # Flip für Pygame-Fenster (falls nötig)
-        # pygame.display.flip()
+        
 
-        # Surface zu Array konvertieren (W, H, 3) und Achsen tauschen -> (H, W, 3)
+        
         arr = pygame.surfarray.array3d(surf)
         return arr
 
 
-class JaxMarioBros(JaxEnvironment[MarioBrosState, MarioBrosObservation, MarioBrosInfo]):
+class JaxMarioBros(JaxEnvironment[MarioBrosState, MarioBrosObservation, MarioBrosInfo]):    # copied and adapted from jax_kangaroo.py ln.1671
+    # holds reset and main step function
 
     def __init__(self):
         self.action_set = [
@@ -442,7 +376,7 @@ class JaxMarioBros(JaxEnvironment[MarioBrosState, MarioBrosObservation, MarioBro
         
         new_state = MarioBrosState(
             player= PlayerState(
-                pos=jnp.array([PLAYER_START_X, PLAYER_START_Y]),   # 37,74 passt zur mittleren Plattform
+                pos=jnp.array([PLAYER_START_X, PLAYER_START_Y]),
                 vel=jnp.array([0.0, 0.0]),
                 on_ground=False,
                 jump_phase=jnp.int32(0),
@@ -466,12 +400,19 @@ class JaxMarioBros(JaxEnvironment[MarioBrosState, MarioBrosObservation, MarioBro
         return new_state
     
     def step(self, state: MarioBrosState, action: chex.Array) -> Tuple[MarioBrosObservation, MarioBrosState, float, bool, MarioBrosInfo]:
-        pstate =  player_step(state.player, action)
-        return self._get_observation(state), MarioBrosState(
-            player=pstate,
+        # calls player_step function and check for collision with enemy
+        def enemy_collision(s):
+            obs, rS = self.reset()
+            return obs, rS, 0.0, True, self._get_info(rS)
+
+        def no_enemy_collision(s):
+            return self._get_observation(state), MarioBrosState(
+            player=s,
             game=state.game,
             lives=state.lives
         ), 0.0, True, self._get_info(state)
+        
+        return jax.lax.cond(check_enemy_collision(state.player.pos, state.game.enemy_pos), enemy_collision, no_enemy_collision, player_step(state.player, action))
 
 
 # run game with: python scripts\play.py --game src\jaxatari\games\jax_mariobros.py --play
@@ -489,7 +430,7 @@ if __name__ == "__main__":
     running = True
     
     while running:
-        _,state,_,_,_ = game.step(state, get_human_action())
+    #    _,state,_,_,_ = game.step(state, ) 
         renderer.render(state)
     
         clock.tick(60)
