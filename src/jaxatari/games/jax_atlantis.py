@@ -492,11 +492,11 @@ class JaxAtlantis(JaxEnvironment[AtlantisState, AtlantisObservation, AtlantisInf
         updated_x = jnp.where(
             off_screen_enemies,
             new_x,
-            enemies[:, 1]  # Keep original x positions for on-screen enemies
+            enemies[:, 0]  # Keep original x positions for on-screen enemies
         )
 
         # Update all enemies with the new x positions
-        updatedx_enemies = enemies.at[:, 1].set(updated_x)
+        updatedx_enemies = enemies.at[:, 0].set(updated_x)
 
         # Get the current lane for all enemies
         current_lanes = state.enemies[:, 4]
@@ -574,7 +574,7 @@ class JaxAtlantis(JaxEnvironment[AtlantisState, AtlantisObservation, AtlantisInf
 
         # Ignore inactive objects right away
         hit_matrix &= state.bullets_alive[:, None]
-        hit_matrix &= (state.enemies[:, 4] == 1)[None, :]
+        hit_matrix &= (state.enemies[:, 5] == 1)[None, :]
 
         # check if bullet collided with any enemy
         bullet_hit = jnp.any(hit_matrix, axis=1)  # (B,)
@@ -584,8 +584,8 @@ class JaxAtlantis(JaxEnvironment[AtlantisState, AtlantisObservation, AtlantisInf
         # deactivate bullets and enemies
         new_bullet_alive = state.bullets_alive & (~bullet_hit)
 
-        new_enemy_flags = (state.enemies[:, 4] == 1) & (~enemy_hit)
-        enemies_updated = state.enemies.at[:, 4].set(new_enemy_flags.astype(jnp.int32))
+        new_enemy_flags = (state.enemies[:, 5] == 1) & (~enemy_hit)
+        enemies_updated = state.enemies.at[:, 5].set(new_enemy_flags.astype(jnp.int32))
 
         return state._replace(bullets_alive=new_bullet_alive, enemies=enemies_updated)
 
