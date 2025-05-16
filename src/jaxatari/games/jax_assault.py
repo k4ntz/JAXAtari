@@ -574,14 +574,14 @@ class JaxAssault(JaxEnvironment[AssaultState, AssaultObservation, AssaultInfo]):
             return stage > -1
 
         def kill_enemy(arr):
-            ex, ey, ew, eh, proj_x, proj_y, occupied_y = arr
+            ex, ey, ew, eh, proj_x, proj_y, occupied_y, linked_y = arr
             hit = check_collision(proj_x, proj_y, ex, ey, ew, eh)
             matches = jnp.array(ENEMY_Y_POSITIONS) == ey
             has_match = jnp.any(matches)
             idx = jnp.argmax(matches)
             new_occupied_y = jax.lax.cond(
-                jnp.logical_and(hit, has_match), 
-                lambda _: occupied_y.at[idx].set(occupied_y[idx]-1), 
+                jnp.logical_and.reduce(jnp.array([hit, has_match, linked_y > HEIGHT])), 
+                lambda _: occupied_y.at[idx].set(0), 
                 lambda _: occupied_y, 
                 operand=None
             )
@@ -593,7 +593,7 @@ class JaxAssault(JaxEnvironment[AssaultState, AssaultObservation, AssaultInfo]):
         # Function to split enemy into two
         def split_enemy(arr):
             print("---- Am splitting! ----")
-            ex, ey, ew, eh, proj_x, proj_y, occupied_y = arr
+            ex, ey, ew, eh, proj_x, proj_y, occupied_y, _ = arr
             hit = check_collision(proj_x, proj_y, ex, ey, ew, eh)
             new_ex = jnp.where(hit, ex-ENEMY_SIZE[0], ex)
             
@@ -612,21 +612,21 @@ class JaxAssault(JaxEnvironment[AssaultState, AssaultObservation, AssaultInfo]):
         splitting_enemies = split_condition(state.current_stage)
 
         # Enemy 1
-        arg_1 = [new_state.enemy_1_x, new_state.enemy_1_y, ENEMY_SIZE[0], ENEMY_SIZE[1], new_state.player_projectile_x, new_state.player_projectile_y, occupied_y]
+        arg_1 = [new_state.enemy_1_x, new_state.enemy_1_y, ENEMY_SIZE[0], ENEMY_SIZE[1], new_state.player_projectile_x, new_state.player_projectile_y, occupied_y, new_state.enemy_4_y]
         e1_x, e1_y, hit1, occupied_y = jax.lax.cond(jnp.logical_and(splitting_enemies, jnp.logical_not(state.enemy_1_split)),
                                                     split_enemy,
                                                     kill_enemy, 
                                                     operand = arg_1)
         e1_split = jnp.where(jnp.logical_and(hit1, e1_y < HEIGHT+1), 1, 0)
         # Enemy 2
-        arg2 = [new_state.enemy_2_x, new_state.enemy_2_y, ENEMY_SIZE[0], ENEMY_SIZE[1], new_state.player_projectile_x, new_state.player_projectile_y, occupied_y]
+        arg2 = [new_state.enemy_2_x, new_state.enemy_2_y, ENEMY_SIZE[0], ENEMY_SIZE[1], new_state.player_projectile_x, new_state.player_projectile_y, occupied_y, new_state.enemy_5_y]
         e2_x, e2_y, hit2, occupied_y = jax.lax.cond(jnp.logical_and(splitting_enemies, jnp.logical_not(state.enemy_2_split)),
                                                     split_enemy,
                                                     kill_enemy,
                                                     operand=arg2)
         e2_split = jnp.where(jnp.logical_and(hit2, e2_y < HEIGHT+1), 1, 0)
         # Enemy 3
-        arg3 = [new_state.enemy_3_x, new_state.enemy_3_y, ENEMY_SIZE[0], ENEMY_SIZE[1], new_state.player_projectile_x, new_state.player_projectile_y, occupied_y]
+        arg3 = [new_state.enemy_3_x, new_state.enemy_3_y, ENEMY_SIZE[0], ENEMY_SIZE[1], new_state.player_projectile_x, new_state.player_projectile_y, occupied_y, new_state.enemy_6_y]
         e3_x, e3_y, hit3, occupied_y = jax.lax.cond(jnp.logical_and(splitting_enemies, jnp.logical_not(state.enemy_3_split)),
                                                     split_enemy,
                                                     kill_enemy,
@@ -637,7 +637,7 @@ class JaxAssault(JaxEnvironment[AssaultState, AssaultObservation, AssaultInfo]):
         xy4 = jnp.array([new_state.enemy_4_x, new_state.enemy_4_y])
         spawn4 = jnp.array([e1_x, e1_y])
         arr4 = jnp.where(jnp.logical_and(splitting_enemies, jnp.logical_and(hit1, was_split)), spawn4, xy4)
-        arg4 = [arr4[0], arr4[1], ENEMY_SIZE[0], ENEMY_SIZE[1], new_state.player_projectile_x, new_state.player_projectile_y, occupied_y]
+        arg4 = [arr4[0], arr4[1], ENEMY_SIZE[0], ENEMY_SIZE[1], new_state.player_projectile_x, new_state.player_projectile_y, occupied_y, new_state.enemy_1_y]
         
         e4_x, e4_y, hit4, occupied_y = jax.lax.cond(jnp.logical_and(hit1, was_split),
                                                     spawn_enemy,
@@ -648,7 +648,7 @@ class JaxAssault(JaxEnvironment[AssaultState, AssaultObservation, AssaultInfo]):
         xy5 = jnp.array([new_state.enemy_5_x, new_state.enemy_5_y])
         spawn5 = jnp.array([e2_x, e2_y])
         arr5 = jnp.where(jnp.logical_and(splitting_enemies, jnp.logical_and(hit2, was_split)), spawn5, xy5)
-        arg5 = [arr5[0], arr5[1], ENEMY_SIZE[0], ENEMY_SIZE[1], new_state.player_projectile_x, new_state.player_projectile_y, occupied_y]
+        arg5 = [arr5[0], arr5[1], ENEMY_SIZE[0], ENEMY_SIZE[1], new_state.player_projectile_x, new_state.player_projectile_y, occupied_y, new_state.enemy_2_y]
         e5_x, e5_y, hit5, occupied_y = jax.lax.cond(jnp.logical_and(hit2, was_split),
                                                     spawn_enemy,
                                                     kill_enemy,
@@ -657,7 +657,7 @@ class JaxAssault(JaxEnvironment[AssaultState, AssaultObservation, AssaultInfo]):
         xy6 = jnp.array([new_state.enemy_6_x, new_state.enemy_6_y])
         spawn6 = jnp.array([e3_x, e3_y])
         arr6 = jnp.where(jnp.logical_and(splitting_enemies, jnp.logical_and(hit3, was_split)), spawn6, xy6)
-        arg6 = [arr6[0], arr6[1], ENEMY_SIZE[0], ENEMY_SIZE[1], new_state.player_projectile_x, new_state.player_projectile_y, occupied_y]
+        arg6 = [arr6[0], arr6[1], ENEMY_SIZE[0], ENEMY_SIZE[1], new_state.player_projectile_x, new_state.player_projectile_y, occupied_y, new_state.enemy_3_y]
         e6_x, e6_y, hit6, occupied_y = jax.lax.cond(jnp.logical_and(hit3, was_split),
                                                     spawn_enemy,
                                                     kill_enemy,
