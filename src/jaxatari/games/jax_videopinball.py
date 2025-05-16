@@ -85,10 +85,26 @@ INNER_WALL_TOP_Y_OFFSET = 56
 LEFT_INNER_WALL_TOP_X_OFFSET = 12
 RIGHT_INNER_WALL_TOP_X_OFFSET = 144
 
+QUADRUPLE_STEP_Y_OFFSET = 152
+TRIPLE_STEP_Y_OFFSET = 160
+DOUBLE_STEP_Y_OFFSET = 168
+SINGLE_STEP_Y_OFFSET = 176
+
+LEFT_QUADRUPLE_STEP_X_OFFSET = 16
+RIGHT_QUADRUPLE_STEP_X_OFFSET = 140
+LEFT_TRIPLE_STEP_X_OFFSET = 20
+RIGHT_TRIPLE_STEP_X_OFFSET = 136
+LEFT_DOUBLE_STEP_X_OFFSET = 24
+RIGHT_DOUBLE_STEP_X_OFFSET = 132
+LEFT_SINGLE_STEP_X_OFFSET = 28
+RIGHT_SINGLE_STEP_X_OFFSET = 128
+
 OUTER_WALL_THICKNESS = 8
 INNER_WALL_THICKNESS = 4
 WALL_CORNER_BLOCK_WIDTH = 4
 WALL_CORNER_BLOCK_HEIGHT = 8
+STEP_HEIGHT = 8
+STEP_WIDTH = 4
 
 TOP_WALL_BOUNDING_BOX = jnp.ones((OUTER_WALL_THICKNESS, 160)).astype(jnp.bool)
 TOP_WALL_OFFSET = jnp.array([TOP_WALL_LEFT_X_OFFSET, TOP_WALL_TOP_Y_OFFSET])
@@ -115,6 +131,34 @@ RIGHT_INNER_WALL_OFFSET = jnp.array(
 RIGHT_INNER_WALL_BOUNDING_BOX = jnp.ones((135, INNER_WALL_THICKNESS)).astype(
     jnp.bool
 )  # 135 = 191 - 56 (height of inner wall)
+
+QUADRUPLE_STEP_BOUNDING_BOX = jnp.ones((4 * STEP_HEIGHT, STEP_WIDTH)).astype(
+    jnp.bool
+)  # (4*8) x 4
+LEFT_QUADRUPLE_STEP_OFFSET = jnp.array(
+    [LEFT_QUADRUPLE_STEP_X_OFFSET, QUADRUPLE_STEP_Y_OFFSET]
+)
+RIGHT_QUADRUPLE_STEP_OFFSET = jnp.array(
+    [RIGHT_QUADRUPLE_STEP_X_OFFSET, QUADRUPLE_STEP_Y_OFFSET]
+)
+
+TRIPLE_STEP_BOUNDING_BOX = jnp.ones((3 * STEP_HEIGHT, STEP_WIDTH)).astype(
+    jnp.bool
+)  # (3*8) x 4
+LEFT_TRIPLE_STEP_OFFSET = jnp.array([LEFT_TRIPLE_STEP_X_OFFSET, TRIPLE_STEP_Y_OFFSET])
+RIGHT_TRIPLE_STEP_OFFSET = jnp.array([RIGHT_TRIPLE_STEP_X_OFFSET, TRIPLE_STEP_Y_OFFSET])
+
+DOUBLE_STEP_BOUNDING_BOX = jnp.ones((2 * STEP_HEIGHT, STEP_WIDTH)).astype(
+    jnp.bool
+)  # (2*8) x 4
+LEFT_DOUBLE_STEP_OFFSET = jnp.array([LEFT_DOUBLE_STEP_X_OFFSET, DOUBLE_STEP_Y_OFFSET])
+RIGHT_DOUBLE_STEP_OFFSET = jnp.array([RIGHT_DOUBLE_STEP_X_OFFSET, DOUBLE_STEP_Y_OFFSET])
+
+SINGLE_STEP_BOUNDING_BOX = jnp.ones((1 * STEP_HEIGHT, STEP_WIDTH)).astype(
+    jnp.bool
+)  # (1*8) x 4
+LEFT_SINGLE_STEP_OFFSET = jnp.array([LEFT_SINGLE_STEP_X_OFFSET, SINGLE_STEP_Y_OFFSET])
+RIGHT_SINGLE_STEP_OFFSET = jnp.array([RIGHT_SINGLE_STEP_X_OFFSET, SINGLE_STEP_Y_OFFSET])
 
 INVISIBLE_BLOCK_BOUNDING_BOX = jnp.ones((2, INNER_WALL_THICKNESS)).astype(jnp.bool)
 INVISIBLE_BLOCK_OFFSET = jnp.array(
@@ -190,6 +234,55 @@ RIGHT_INNER_WALL_SCENE_OBJECT = SceneObject(
     horizontal=jnp.array(0),
 )
 
+LEFT_QUADRUPLE_STEP_SCENE_OBJECT = SceneObject(
+    hit_box_matrix=QUADRUPLE_STEP_BOUNDING_BOX,
+    hit_box_offset=LEFT_QUADRUPLE_STEP_OFFSET,
+    reflecting=jnp.array(1),
+    horizontal=jnp.array(0),
+)
+RIGHT_QUADRUPLE_STEP_SCENE_OBJECT = SceneObject(
+    hit_box_matrix=QUADRUPLE_STEP_BOUNDING_BOX,
+    hit_box_offset=RIGHT_QUADRUPLE_STEP_OFFSET,
+    reflecting=jnp.array(1),
+    horizontal=jnp.array(0),
+)
+LEFT_TRIPLE_STEP_SCENE_OBJECT = SceneObject(
+    hit_box_matrix=TRIPLE_STEP_BOUNDING_BOX,
+    hit_box_offset=LEFT_TRIPLE_STEP_OFFSET,
+    reflecting=jnp.array(1),
+    horizontal=jnp.array(0),
+)
+RIGHT_TRIPLE_STEP_SCENE_OBJECT = SceneObject(
+    hit_box_matrix=TRIPLE_STEP_BOUNDING_BOX,
+    hit_box_offset=RIGHT_TRIPLE_STEP_OFFSET,
+    reflecting=jnp.array(1),
+    horizontal=jnp.array(0),
+)
+LEFT_DOUBLE_STEP_SCENE_OBJECT = SceneObject(
+    hit_box_matrix=DOUBLE_STEP_BOUNDING_BOX,
+    hit_box_offset=LEFT_DOUBLE_STEP_OFFSET,
+    reflecting=jnp.array(1),
+    horizontal=jnp.array(0),
+)
+RIGHT_DOUBLE_STEP_SCENE_OBJECT = SceneObject(
+    hit_box_matrix=DOUBLE_STEP_BOUNDING_BOX,
+    hit_box_offset=RIGHT_DOUBLE_STEP_OFFSET,
+    reflecting=jnp.array(1),
+    horizontal=jnp.array(0),
+)
+LEFT_SINGLE_STEP_SCENE_OBJECT = SceneObject(
+    hit_box_matrix=SINGLE_STEP_BOUNDING_BOX,
+    hit_box_offset=LEFT_SINGLE_STEP_OFFSET,
+    reflecting=jnp.array(1),
+    horizontal=jnp.array(0),
+)
+RIGHT_SINGLE_STEP_SCENE_OBJECT = SceneObject(
+    hit_box_matrix=SINGLE_STEP_BOUNDING_BOX,
+    hit_box_offset=RIGHT_SINGLE_STEP_OFFSET,
+    reflecting=jnp.array(1),
+    horizontal=jnp.array(0),
+)
+
 REFLECTING_SCENE_OBJECT_LIST = [
     TOP_WALL_SCENE_OBJECT,
     BOTTOM_WALL_SCENE_OBJECT,
@@ -197,6 +290,15 @@ REFLECTING_SCENE_OBJECT_LIST = [
     RIGHT_WALL_SCENE_OBJECT,
     LEFT_INNER_WALL_SCENE_OBJECT,
     RIGHT_INNER_WALL_SCENE_OBJECT,
+    LEFT_QUADRUPLE_STEP_SCENE_OBJECT,
+    RIGHT_QUADRUPLE_STEP_SCENE_OBJECT,
+    LEFT_TRIPLE_STEP_SCENE_OBJECT,
+    RIGHT_TRIPLE_STEP_SCENE_OBJECT,
+    LEFT_DOUBLE_STEP_SCENE_OBJECT,
+    RIGHT_DOUBLE_STEP_SCENE_OBJECT,
+    LEFT_SINGLE_STEP_SCENE_OBJECT,
+    RIGHT_SINGLE_STEP_SCENE_OBJECT,
+    # INVISIBLE_BLOCK_SCENE_OBJECT,
 ]
 # SCENE_OBJECTS_STACKED = SceneObject(
 #     hit_box_matrix=jnp.stack([obj.hit_box_matrix for obj in SCENE_OBJECT_LIST]),
@@ -536,6 +638,14 @@ def _check_reflecting_obstacle_hits(
             _calc_hit_point(ball_movement, LEFT_WALL_SCENE_OBJECT),
             _calc_hit_point(ball_movement, LEFT_INNER_WALL_SCENE_OBJECT),
             _calc_hit_point(ball_movement, RIGHT_INNER_WALL_SCENE_OBJECT),
+            _calc_hit_point(ball_movement, LEFT_QUADRUPLE_STEP_SCENE_OBJECT),
+            _calc_hit_point(ball_movement, RIGHT_QUADRUPLE_STEP_SCENE_OBJECT),
+            _calc_hit_point(ball_movement, LEFT_TRIPLE_STEP_SCENE_OBJECT),
+            _calc_hit_point(ball_movement, RIGHT_TRIPLE_STEP_SCENE_OBJECT),
+            _calc_hit_point(ball_movement, LEFT_DOUBLE_STEP_SCENE_OBJECT),
+            _calc_hit_point(ball_movement, RIGHT_DOUBLE_STEP_SCENE_OBJECT),
+            _calc_hit_point(ball_movement, LEFT_SINGLE_STEP_SCENE_OBJECT),
+            _calc_hit_point(ball_movement, RIGHT_SINGLE_STEP_SCENE_OBJECT),
         ],
         axis=0,
     )
@@ -553,6 +663,14 @@ def _check_reflecting_obstacle_hits(
             lambda: LEFT_WALL_SCENE_OBJECT.horizontal,
             lambda: LEFT_INNER_WALL_SCENE_OBJECT.horizontal,
             lambda: RIGHT_INNER_WALL_SCENE_OBJECT.horizontal,
+            lambda: LEFT_QUADRUPLE_STEP_SCENE_OBJECT.horizontal,
+            lambda: RIGHT_QUADRUPLE_STEP_SCENE_OBJECT.horizontal,
+            lambda: LEFT_TRIPLE_STEP_SCENE_OBJECT.horizontal,
+            lambda: RIGHT_TRIPLE_STEP_SCENE_OBJECT.horizontal,
+            lambda: LEFT_DOUBLE_STEP_SCENE_OBJECT.horizontal,
+            lambda: RIGHT_DOUBLE_STEP_SCENE_OBJECT.horizontal,
+            lambda: LEFT_SINGLE_STEP_SCENE_OBJECT.horizontal,
+            lambda: RIGHT_SINGLE_STEP_SCENE_OBJECT.horizontal,
         ),
     )
     return hit_point, scene_object
@@ -904,7 +1022,7 @@ class JaxVideoPinball(
         )
 
         # Step 3: Check if ball is in the gutter or in plunger hole
-        ball_in_gutter = ball_y > 192
+        ball_in_gutter = ball_y > 209
         # TODO if ball is back in plunger hole reset, not instantly
         ball_reset = ball_in_gutter
         ball_reset = jnp.logical_or(
