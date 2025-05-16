@@ -583,7 +583,7 @@ class JaxAssault(JaxEnvironment[AssaultState, AssaultObservation, AssaultInfo]):
             return jnp.concatenate([x_expanded] * self.frame_stack_size, axis=0)
         obs_stack = jax.tree.map(expand_and_copy, obs)
         state = state._replace(obs_stack=obs_stack)
-        return state, obs_stack
+        return  obs_stack, state
 
     @partial(jax.jit, static_argnums=(0,))
     def step(self, state: AssaultState, action: chex.Array) -> Tuple[AssaultState, AssaultObservation, float, bool, AssaultInfo]:
@@ -764,7 +764,7 @@ class JaxAssault(JaxEnvironment[AssaultState, AssaultObservation, AssaultInfo]):
         new_step_counter = jnp.mod(state.step_counter + 1, Y_STEP_DELAY * 100000)
         new_state = new_state._replace(step_counter=new_step_counter)
 
-        return new_state, obs_stack, reward, done, info
+        return obs_stack, new_state, reward, done, info
 
     @partial(jax.jit, static_argnums=(0,))
     def _get_observation(self, state: AssaultState):
@@ -980,17 +980,21 @@ class Renderer_AtraJaxisAssault:
         """
         raster = jnp.zeros((WIDTH, HEIGHT, 3), dtype=jnp.uint8)
 
+        # last minute change to make render work with newest upstream version without changing all 12 calls
+        def render_at(raster, y, x, frame):
+            return aj.render_at(raster, x, y, frame)
+        
         # Render background
         frame_bg = aj.get_sprite_frame(self.SPRITE_BG, 0)
-        raster = aj.render_at(raster, 0, 0, frame_bg)
+        raster = render_at(raster, 0, 0, frame_bg)
 
         # Render mothership
         frame_mothership = aj.get_sprite_frame(self.SPRITE_MOTHERSHIP, 0)
-        raster = aj.render_at(raster, MOTHERSHIP_Y, state.mothership_x, frame_mothership)
+        raster = render_at(raster, MOTHERSHIP_Y, state.mothership_x, frame_mothership)
 
         # Render player
         frame_player = aj.get_sprite_frame(self.SPRITE_PLAYER, 0)
-        raster = aj.render_at(raster, PLAYER_Y, state.player_x, frame_player)
+        raster = render_at(raster, PLAYER_Y, state.player_x, frame_player)
 
         # Render enemies (unrolled manually for JIT compatibility)
         frame_enemy_original = aj.get_sprite_frame(self.SPRITE_ENEMY, 0)
@@ -1000,22 +1004,22 @@ class Renderer_AtraJaxisAssault:
 
         def render_split_enemy(xy):
             x,y, raster = xy
-            return jax.lax.cond(y < HEIGHT+1, lambda _: aj.render_at(raster, y, x, frame_enemy_tiny), lambda _: raster, operand=None)
+            return jax.lax.cond(y < HEIGHT+1, lambda _: render_at(raster, y, x, frame_enemy_tiny), lambda _: raster, operand=None)
         def render_enemy(xy):
             x,y, raster = xy
-            return jax.lax.cond(y < HEIGHT+1, lambda _: aj.render_at(raster, y, x, frame_enemy), lambda _: raster, operand=None)
+            return jax.lax.cond(y < HEIGHT+1, lambda _: render_at(raster, y, x, frame_enemy), lambda _: raster, operand=None)
         raster = jax.lax.cond( state.enemy_1_split == 1, render_split_enemy,render_enemy, [state.enemy_1_x,state.enemy_1_y, raster])
         raster = jax.lax.cond( state.enemy_2_split == 1, render_split_enemy,render_enemy, [state.enemy_2_x, state.enemy_2_y, raster])
         raster = jax.lax.cond( state.enemy_3_split == 1, render_split_enemy,render_enemy, [state.enemy_3_x, state.enemy_3_y, raster])
-        raster = jax.lax.cond( state.enemy_4_y < HEIGHT+1, lambda _: aj.render_at(raster, state.enemy_4_y, state.enemy_4_x, frame_enemy_tiny), lambda _: raster, operand=None)
-        raster = jax.lax.cond( state.enemy_5_y < HEIGHT+1, lambda _: aj.render_at(raster, state.enemy_5_y, state.enemy_5_x, frame_enemy_tiny), lambda _: raster, operand=None)
-        raster = jax.lax.cond( state.enemy_6_y < HEIGHT+1, lambda _: aj.render_at(raster, state.enemy_6_y, state.enemy_6_x, frame_enemy_tiny), lambda _: raster, operand=None)
+        raster = jax.lax.cond( state.enemy_4_y < HEIGHT+1, lambda _: render_at(raster, state.enemy_4_y, state.enemy_4_x, frame_enemy_tiny), lambda _: raster, operand=None)
+        raster = jax.lax.cond( state.enemy_5_y < HEIGHT+1, lambda _: render_at(raster, state.enemy_5_y, state.enemy_5_x, frame_enemy_tiny), lambda _: raster, operand=None)
+        raster = jax.lax.cond( state.enemy_6_y < HEIGHT+1, lambda _: render_at(raster, state.enemy_6_y, state.enemy_6_x, frame_enemy_tiny), lambda _: raster, operand=None)
         
 
         # Render player projectile using lax.cond
         def render_player_proj(_):
             frame_proj = aj.get_sprite_frame(self.PLAYER_PROJECTILE, 0)
-            return aj.render_at(raster, state.player_projectile_y, state.player_projectile_x, frame_proj)
+            return render_at(raster, state.player_projectile_y, state.player_projectile_x, frame_proj)
 
         def skip_player_proj(_):
             return raster
@@ -1034,7 +1038,7 @@ class Renderer_AtraJaxisAssault:
             
             # First, check if it's stage 3, since that takes priority
             def stage3_proj(_):
-                return aj.render_at(raster, state.enemy_projectile_y, state.enemy_projectile_x, 
+                return render_at(raster, state.enemy_projectile_y, state.enemy_projectile_x, 
                                 aj.get_sprite_frame(self.ENEMY_RAIN, 0))
             
             def other_stages(_):
@@ -1042,11 +1046,11 @@ class Renderer_AtraJaxisAssault:
                 def stage4_proj(_):
                     # For stage 4, check if it's lateral
                     def lateral_proj(_):
-                        return aj.render_at(raster, state.enemy_projectile_y, state.enemy_projectile_x,
+                        return render_at(raster, state.enemy_projectile_y, state.enemy_projectile_x,
                                         aj.get_sprite_frame(self.ENEMY_PROJECTILE_LATERAL, 0))
                     
                     def sphere_proj(_):
-                        return aj.render_at(raster, state.enemy_projectile_y, state.enemy_projectile_x,
+                        return render_at(raster, state.enemy_projectile_y, state.enemy_projectile_x,
                                         aj.get_sprite_frame(self.ENEMY_SPHERE, 0))
                     
                     return jax.lax.cond(
@@ -1057,7 +1061,7 @@ class Renderer_AtraJaxisAssault:
                     )
                 
                 def standard_proj(_):
-                    return aj.render_at(raster, state.enemy_projectile_y, state.enemy_projectile_x,
+                    return render_at(raster, state.enemy_projectile_y, state.enemy_projectile_x,
                                     aj.get_sprite_frame(self.ENEMY_PROJECTILE, 0))
                 
                 # Choose between stage 4 logic and standard
@@ -1100,7 +1104,7 @@ class Renderer_AtraJaxisAssault:
 
         # Render lives (bottom left)
         def lives_fn(i, raster):
-            return aj.render_at(raster, LIVES_Y, LIFE_ONE_X + i * LIFE_OFFSET, self.LIFE_SPRITE)
+            return render_at(raster, LIVES_Y, LIFE_ONE_X + i * LIFE_OFFSET, self.LIFE_SPRITE)
         raster = jax.lax.fori_loop(0, state.player_lives, lives_fn, raster)
 
         return raster
@@ -1121,7 +1125,7 @@ if __name__ == "__main__":
     jitted_step = jax.jit(game.step)
     jitted_reset = jax.jit(game.reset)
 
-    curr_state, obs = jitted_reset()
+    obs, curr_state = jitted_reset()
 
     # Game loop
     running = True
@@ -1142,14 +1146,14 @@ if __name__ == "__main__":
                 if event.key == pygame.K_n and frame_by_frame:
                     if counter % frameskip == 0:
                         action = get_human_action()
-                        curr_state, obs, reward, done, info = jitted_step(
+                        obs, curr_state, reward, done, info = jitted_step(
                             curr_state, action
                         )
 
         if not frame_by_frame:
             if counter % frameskip == 0:
                 action = get_human_action()
-                curr_state, obs, reward, done, info = jitted_step(curr_state, action)
+                obs, curr_state, reward, done, info = jitted_step(curr_state, action)
 
         # Render and display
         raster = renderer.render(curr_state)
