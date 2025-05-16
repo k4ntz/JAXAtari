@@ -112,7 +112,7 @@ class Renderer_AtraJaxis(AtraJaxisRenderer):
             if isinstance(frame, jnp.ndarray) and frame.ndim >= 2:
                 return frame.astype(jnp.uint8)
 
-        # --- Load Sprites ---
+        # Load Sprites
         # Backgrounds + Dynamic elements + UI elements
         sprite_names = [
             # 'background_0', 'background_1', 'background_2',
@@ -229,7 +229,7 @@ class JaxAtlantis(JaxEnvironment[AtlantisState, AtlantisObservation, AtlantisInf
         # split the PRNGkey so we get one subkey for the spawn-timer and one to carry forward in state.rng
         key, sub = jax.random.split(key)
 
-        # --- initial state ---
+        # initial state
         new_state = AtlantisState(
             score=jnp.array(0, dtype=jnp.int32),
             score_spent=jnp.array(0, dtype=jnp.int32),
