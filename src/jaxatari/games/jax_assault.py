@@ -11,6 +11,36 @@ from gymnax.environments import spaces
 from jaxatari.rendering import atraJaxis as aj
 from jaxatari.environment import JaxEnvironment
 
+"""
+Things that have been implemented:
+- Player movement
+- Player shooting
+- Enemy movement
+- Enemy shooting
+- Enemy splitting and collision detection
+- Mothership movement
+- Player lives and score tracking
+- Stage progression
+- Enemy spawning
+
+Things that need to be implemented:
+- Heat tracking
+- Enemy invisibility
+- Setting correct constants for the game
+- Game over conditions
+- Stop spawning enemies when 10 have been spawned
+- Game accurate player projectile movement
+- Delays for enemy projectile firing
+- Enemy random direction changes
+
+Things that "should" be implemented:
+- Use arrays for enemy positions and states instead of individual variables
+
+Things that could be implemented:
+- loading more sprites to be more similar to the original game
+- Transition to linking enemy y positions to enemy_index
+"""
+
 WIDTH = 160
 HEIGHT = 210
 
@@ -592,14 +622,12 @@ class JaxAssault(JaxEnvironment[AssaultState, AssaultObservation, AssaultInfo]):
         was_split = False
         # Function to split enemy into two
         def split_enemy(arr):
-            print("---- Am splitting! ----")
             ex, ey, ew, eh, proj_x, proj_y, occupied_y, _ = arr
             hit = check_collision(proj_x, proj_y, ex, ey, ew, eh)
             new_ex = jnp.where(hit, ex-ENEMY_SIZE[0], ex)
             
             return new_ex, ey, hit, occupied_y
         def spawn_enemy(arr):
-            print("---- Am spawning! ----")
             ex,ey = arr[:2]
             new_ex = jnp.where(ex+3 >= WIDTH, WIDTH, ex+ENEMY_SIZE[0])
             new_ey = ey
