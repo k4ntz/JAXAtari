@@ -8,8 +8,7 @@ from jax import lax
 import jax.lax
 from gymnax.environments import spaces
 from jaxatari.environment import JaxEnvironment, JAXAtariAction as Action
-
-from jaxatari.games.jax_seaquest import SPRITE_BG
+import jax.image as jimg
 from jaxatari.renderers import AtraJaxisRenderer
 from jaxatari.rendering import atraJaxis as aj
 
@@ -65,7 +64,8 @@ class GalaxianState(NamedTuple):
     enemy_attack_pos: chex.Array
     enemy_attack_x: chex.Array
     enemy_attack_y: chex.Array
-    enemy_attack_direction: chex.Array  # -1: left, 1: right
+    enemy_attack_direction: chex.Array
+    enemy_attack_target_x: chex.Array# -1: left, 1: right
     enemy_attack_turning: chex.Array    # -1: turning left, 1: turning right, 0: no turning
     enemy_attack_turn_timer: chex.Array
     enemy_attack_respawn_timer: chex.Array
@@ -565,7 +565,7 @@ class JaxGalaxian(JaxEnvironment[GalaxianState, GalaxianObservation, GalaxianInf
 
 
         state = GalaxianState(player_x=jnp.array(NATIVE_GAME_WIDTH / 2.0),
-                             player_y=jnp.array(NATIVE_GAME_HEIGHT - 20.0),
+                             player_y=jnp.array(NATIVE_GAME_HEIGHT - 40.0),
                              player_shooting_cooldown=jnp.array(0),
                              bullet_x=jnp.array(-1.0,dtype=jnp.float32),
                              bullet_y=jnp.array(-1.0,dtype=jnp.float32),
@@ -592,6 +592,7 @@ class JaxGalaxian(JaxEnvironment[GalaxianState, GalaxianObservation, GalaxianInf
                               score=jnp.array(0, dtype=jnp.int32),
                              random_key=jax.random.PRNGKey(0),
                              step_counter=jnp.array(0),
+                            enemy_attack_target_x=jnp.array(-1.0, dtype=jnp.float32),
                              )
 
         initial_obs = self._get_observation(state)
@@ -725,156 +726,85 @@ def load_sprites():
 class GalaxianRenderer(AtraJaxisRenderer):
     def __init__(self):
         (
-        self.SPRITE_BG,
-        self.SPRITE_PLAYER,
-        self.SPRITE_BULLET,
-        self.SPRITE_ENEMY_GRAY,
-        self.SPRITE_LIFE,
-        self.SPRITE_ENEMY_BULLET
+            self.SPRITE_BG,
+            self.SPRITE_PLAYER,
+            self.SPRITE_BULLET,
+            self.SPRITE_ENEMY_GRAY,
+            self.SPRITE_LIFE,
+            self.SPRITE_ENEMY_BULLET,
         ) = load_sprites()
 
-
-        life_frame = jnp.squeeze(self.SPRITE_LIFE, axis=0)  # shape (H,W,3)
+        # Sprite-Dimensionen für Life-Icons
+        life_frame = jnp.squeeze(self.SPRITE_LIFE, axis=0)  # (h, w, 4)
         self.life_h, self.life_w, _ = life_frame.shape
-
         self.life_spacing = 5
 
     @partial(jax.jit, static_argnums=(0,))
     def render(self, state: GalaxianState):
-        raster = jnp.zeros((160, 210, 3), dtype=jnp.uint8)
+        # Hintergrund
+        raster = jnp.zeros((NATIVE_GAME_WIDTH, NATIVE_GAME_HEIGHT, 3), dtype=jnp.uint8)
+        bg_frame = aj.get_sprite_frame(self.SPRITE_BG, 0)
+        raster = aj.render_at(raster, 0, 0, bg_frame)
 
-        # Render background
-        frame_bg = aj.get_sprite_frame(self.SPRITE_BG, 0)
-        raster = aj.render_at(raster, 0, 0, frame_bg)
+        # Spieler
+        player_frame = aj.get_sprite_frame(self.SPRITE_PLAYER, 0)
+        px = jnp.round(state.player_x).astype(jnp.int32)
+        py = jnp.round(state.player_y).astype(jnp.int32)
+        raster = aj.render_at(raster, px, py, player_frame)
 
-        # Render life
-        life_frame = aj.get_sprite_frame(self.SPRITE_LIFE, 0)
-        # Render player spaceship
-        frame_player = aj.get_sprite_frame(self.SPRITE_PLAYER, 0)
+        # Spieler-Kugel
+        def draw_bullet(r):
+            b = aj.get_sprite_frame(self.SPRITE_BULLET, 0)
+            bx = jnp.round(state.bullet_x).astype(jnp.int32)
+            by = jnp.round(state.bullet_y).astype(jnp.int32)
+            return aj.render_at(r, bx, by, b)
+        raster = lax.cond(state.bullet_y > 0, draw_bullet, lambda r: r, raster)
 
-        raster = aj.render_at(raster, jnp.round(state.player_x).astype(jnp.int32),
-                              jnp.round(state.player_y).astype(jnp.int32), frame_player)
-
-        # Render bullet
-
-        def render_bullet_fn(raster, state):
-            frame_bullet = aj.get_sprite_frame(self.SPRITE_BULLET, 0)
-            return aj.render_at(raster, jnp.round(state.bullet_x).astype(jnp.int32),
-                                jnp.round(state.bullet_y).astype(jnp.int32), frame_bullet)
-
-        def identity_fn(raster, state):
-            return raster
-
-        # Conditionally render bullet if it's active (e.g., bullet_y > 0)
-        raster = lax.cond(
-            state.bullet_y > 0,  # Condition for bullet being active
-            render_bullet_fn,
-            identity_fn,
-            raster,
-            state
-        )
-
+        # Feind-Kugel
         def draw_enemy_bullet(r):
             eb = aj.get_sprite_frame(self.SPRITE_ENEMY_BULLET, 0)
-            x = jnp.round(state.enemy_attack_bullet_x).astype(jnp.int32)
-            y = jnp.round(state.enemy_attack_bullet_y).astype(jnp.int32)
-            return aj.render_at(r, x, y, eb)
+            ex = jnp.round(state.enemy_attack_bullet_x).astype(jnp.int32)
+            ey = jnp.round(state.enemy_attack_bullet_y).astype(jnp.int32)
+            return aj.render_at(r, ex, ey, eb)
+        raster = lax.cond(state.enemy_attack_bullet_y >= 0, draw_enemy_bullet, lambda r: r, raster)
 
-        raster = lax.cond(
-            state.enemy_attack_bullet_y >= 0,  # oder > -1
-            draw_enemy_bullet,
-            lambda r: r,
-            raster
-        )
+        # Angreifender Feind
+        def draw_attacker(r):
+            e = aj.get_sprite_frame(self.SPRITE_ENEMY_GRAY, 0)
+            ex = jnp.round(state.enemy_attack_x).astype(jnp.int32)
+            ey = jnp.round(state.enemy_attack_y).astype(jnp.int32)
+            return aj.render_at(r, ex, ey, e)
+        raster = lax.cond(jnp.all(state.enemy_attack_pos >= 0), draw_attacker, lambda r: r, raster)
 
-        # Render enemy grid (this is more complex due to the loop)
-        # For jitted rendering of multiple enemies, you'd typically use lax.scan or vmap if possible,
-        # or unroll the loop if the number of enemies is fixed and small.
-        # A simpler, but potentially less performant if not optimized by JAX, way is a loop:
-        # However, Python loops are not JIT-compatible in this way directly for changing raster.
-        # For full JAX compatibility, you'd need a more advanced approach.
-        # For now, let's demonstrate one enemy for simplicity or how you might structure it.
+        # Feindgitter
+        def row_body(i, r_acc):
+            def col_body(j, r_inner):
+                e = aj.get_sprite_frame(self.SPRITE_ENEMY_GRAY, 0)
+                cond = state.enemy_grid_alive[i, j] == 1
+                def draw(r0):
+                    x = jnp.round(state.enemy_grid_x[i, j]).astype(jnp.int32)
+                    y = jnp.round(state.enemy_grid_y[i, j]).astype(jnp.int32)
+                    return aj.render_at(r0, x, y, e)
+                return lax.cond(cond, draw, lambda r0: r0, r_inner)
+            return lax.fori_loop(0, GRID_COLS, col_body, r_acc)
+        raster = lax.fori_loop(0, GRID_ROWS, row_body, raster)
 
-        # --- Rendering attacking enemy ---
-        def render_attacking_enemy_fn(raster, state):
-            frame_enemy = aj.get_sprite_frame(self.SPRITE_ENEMY_GRAY, 0)  # Assuming you have an enemy sprite
-            return aj.render_at(raster, jnp.round(state.enemy_attack_x).astype(jnp.int32),
-                                jnp.round(state.enemy_attack_y).astype(jnp.int32), frame_enemy)
-
-        raster = lax.cond(
-            jnp.all(state.enemy_attack_pos >= 0),  # If an enemy is attacking
-            render_attacking_enemy_fn,
-            identity_fn,  # identity_fn needs to accept raster and state
-            raster,
-            state
-        )
-
-        # --- Rendering enemy grid (conceptual) ---
-        # This part is tricky to do efficiently and correctly in a JIT-compiled render function
-        # with a dynamic number of alive enemies.
-        # One approach for a fixed grid size:
-        # Create a mask of alive enemies.
-        # Get coordinates of all enemies.
-        # Use lax.fori_loop to iterate and render.
-
-        # A simplified version for demonstration (might be slow or not fully JIT-friendly without care):
-        # For rendering the grid, you would ideally use lax.fori_loop or lax.scan
-        # This is a complex part. For a start, you might focus on one or a few enemies.
-        # A full grid rendering with JAX requires careful construction.
-        # Example of rendering just the first enemy in the grid if alive:
-        def render_first_grid_enemy(params):
-            raster_in, state_in, i, j = params
-            frame_enemy = aj.get_sprite_frame(self.SPRITE_ENEMY_GRAY, 0)
-
-            # Example: render enemy at grid cell (i,j) if alive
-            def render_this_enemy(r):
-                return aj.render_at(r,
-                                    jnp.round(state_in.enemy_grid_x[i, j]).astype(jnp.int32),
-                                    jnp.round(state_in.enemy_grid_y[i, j]).astype(jnp.int32),
-                                    frame_enemy)
-
-            def do_nothing(r):
-                return r
-
-            return lax.cond(state_in.enemy_grid_alive[i, j] == 1,
-                            render_this_enemy(raster_in),
-                            do_nothing(raster_in))
-
-        # To iterate over the grid (this is illustrative and needs to be done carefully for JIT)
-        # for i in range(GRID_ROWS): # Python loops are problematic for JIT
-        #    for j in range(GRID_COLS):
-        #        raster = lax.cond(state.enemy_grid_alive[i,j] == 1,
-        #                          lambda r: aj.render_at(r, state.enemy_grid_x[i,j], state.enemy_grid_y[i,j], enemy_frame), # pseudo
-        #                          lambda r: r,
-        #                          raster)
-
-        # A more JAX-idiomatic way for the grid would involve `lax.fori_loop` for rows and columns
-        # or `vmap` if positions and sprites can be batched.
-
-        def row_loop_body(i, current_raster):
-            def col_loop_body(j, inner_raster):
-                frame_enemy = aj.get_sprite_frame(self.SPRITE_ENEMY_GRAY, 0)
-
-                def render_it(r):
-                    return aj.render_at(r,
-                                        jnp.round(state.enemy_grid_x[i, j]).astype(jnp.int32),
-                                        jnp.round(state.enemy_grid_y[i, j]).astype(jnp.int32),
-                                        frame_enemy)
-
-                def skip_it(r):
-                    return r
-
-                return lax.cond(state.enemy_grid_alive[i, j] == 1,
-                                render_it,
-                                skip_it,
-                                inner_raster)
-
-            return lax.fori_loop(0, GRID_COLS, col_loop_body, current_raster)
-
-        raster = lax.fori_loop(0, GRID_ROWS, row_loop_body, raster)
+        # Lebens-Icons unten rechts
+        life_sprite = aj.get_sprite_frame(self.SPRITE_LIFE, 0)
+        def life_loop_body(i, r_acc):
+            # nur zeichnen, wenn Leben vorhanden
+            def draw(r0):
+                x0 = jnp.int32(
+                    NATIVE_GAME_WIDTH - (i + 1) * (self.life_w + self.life_spacing)
+                )
+                y0 = jnp.int32(
+                    NATIVE_GAME_HEIGHT - self.life_h - self.life_spacing
+                )
+                return aj.render_at(r0, x0, y0, life_sprite)
+            return lax.cond(i < state.lives, draw, lambda r0: r0, r_acc)
+        raster = lax.fori_loop(0, LIVES, life_loop_body, raster)
 
         return raster
-
 
 # run with: python -m jaxatari.games.jax_galaxian
 if __name__ == "__main__":
@@ -916,15 +846,9 @@ if __name__ == "__main__":
 
         font = pygame.font.Font(None, 24)
 
-        # 1) Score
+        # Score
         score_surf = font.render(f"Score: {int(state.score)}", True, (255, 255, 255))
         screen.blit(score_surf, (10, 10))
-
-        # 2) Leben (als kleine Rechtecke oder Icons)
-        for i in range(int(state.lives)):
-            x = 10 + i * 20
-            y = PYGAME_WINDOW_HEIGHT - 30
-            pygame.draw.rect(screen, (255, 0, 0), pygame.Rect(x, y, 15, 15))
 
         pygame.display.flip()
         clock.tick(30)
