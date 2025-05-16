@@ -338,15 +338,20 @@ def update_bullets(state: GalaxianState) -> GalaxianState:
 
 @jax.jit
 def remove_bullets(state: GalaxianState) -> GalaxianState:
-    def reset_bullet(_):
-        new_bullet_y = jnp.array(-1,dtype=jnp.float32)
-        new_bullet_x = jnp.array(-1,dtype=jnp.float32)
-        return state._replace(bullet_y=new_bullet_y, bullet_x=new_bullet_x)
+    # Wenn die Spieler-Kugel den Bildschirm (y<0) verlässt, reset Kugel + Cooldown
+    def reset(s: GalaxianState) -> GalaxianState:
+        return s._replace(
+            bullet_x                = jnp.array(-1.0, dtype=s.bullet_x.dtype),
+            bullet_y                = jnp.array(-1.0, dtype=s.bullet_y.dtype),
+            player_shooting_cooldown= jnp.array(0,   dtype=s.player_shooting_cooldown.dtype),
+        )
+    def keep(s: GalaxianState) -> GalaxianState:
+        return s
 
-    def idle(_):
-        return state
-
-    return lax.cond(state.bullet_y < 0, reset_bullet, idle, operand=None)
+    return lax.cond(state.bullet_y < 0,
+                    reset,
+                    keep,
+                    state)
 
 
 @jax.jit
@@ -354,32 +359,35 @@ def bullet_collision(state: GalaxianState) -> GalaxianState:
     x_diff = jnp.abs(state.bullet_x - state.enemy_grid_x)
     y_diff = jnp.abs(state.bullet_y - state.enemy_grid_y)
 
-    collision_mask = (x_diff <= 10) & (y_diff <= 10) & (state.enemy_grid_alive == 1)
-    max_collisions_size = state.enemy_grid_alive.size
-    collision_indices = jnp.where(
-        collision_mask,
-        size=max_collisions_size,
-        fill_value=-1
-    )
+    mask = (x_diff <= 10) & (y_diff <= 10) & (state.enemy_grid_alive == 1)
+    hit  = jnp.any(mask)
 
-    hit = jnp.any(collision_mask)
-
-    def process_hit(operands):
-        current_state, indices = operands
-        row_indices, col_indices = indices
-        new_enemy_grid_alive = current_state.enemy_grid_alive.at[row_indices, col_indices].set(0)
-        new_score = current_state.score + 30  # 30 points per kill
-        return state._replace(
-            enemy_grid_alive=new_enemy_grid_alive,
-            bullet_x=jnp.array(-1, dtype=state.bullet_x.dtype),
-            bullet_y=jnp.array(-1, dtype=state.bullet_y.dtype),
-            score=new_score
+    def process_hit(s_and_idx):
+        s, (rows, cols) = s_and_idx
+        # setze alle getroffenen auf dead
+        new_alive = s.enemy_grid_alive.at[rows, cols].set(0)
+        return s._replace(
+            enemy_grid_alive         = new_alive,
+            bullet_x                 = jnp.array(-1.0, dtype=s.bullet_x.dtype),
+            bullet_y                 = jnp.array(-1.0, dtype=s.bullet_y.dtype),
+            player_shooting_cooldown = jnp.array(0,    dtype=s.player_shooting_cooldown.dtype),
+            score                    = s.score + 30,
         )
-    def process_none(operands):
-        current_state, _ = operands
-        return current_state
 
-    return lax.cond(hit, process_hit, process_none, operand=(state, collision_indices))
+    def no_hit(s_and_idx):
+        s, _ = s_and_idx
+        return s
+
+    # wir müssen rows, cols extrahieren, darum zuerst indices berechnen
+    max_hits = state.enemy_grid_alive.size
+    collision_indices = jnp.where(mask, size=max_hits, fill_value=-1)
+    rows = collision_indices[0]
+    cols = collision_indices[1]
+
+    return lax.cond(hit,
+                    process_hit,
+                    no_hit,
+                    (state, (rows, cols)))
 
 @jax.jit
 def bullet_collision_attack(state: GalaxianState) -> GalaxianState:
@@ -661,7 +669,8 @@ class JaxGalaxian(JaxEnvironment[GalaxianState, GalaxianObservation, GalaxianInf
 
     @partial(jax.jit, static_argnums=(0,))
     def _get_done(self, state: GalaxianState) -> bool:
-        return False #TODO: implement done function (test if game over)
+        # Game over, wenn alle Leben weg sind
+        return state.lives <= 0
 
     @partial(jax.jit, static_argnums=(0,))
     def _get_info(self, state: GalaxianState, all_rewards: chex.Array) -> GalaxianInfo:
@@ -808,6 +817,9 @@ if __name__ == "__main__":
         pygame.display.flip()
         action = get_action_from_keyboard()
         observation, state, reward, done, info = jitted_step(state, action)  # Unpack the tuple
+        if done:
+            print("Game Over")
+            break
         render_output = renderer.render(state)
         aj.update_pygame(screen, render_output, PYGAME_SCALE_FACTOR, NATIVE_GAME_WIDTH,
                          NATIVE_GAME_HEIGHT)
