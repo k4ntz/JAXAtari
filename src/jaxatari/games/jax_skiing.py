@@ -9,6 +9,7 @@ from typing import Tuple, NamedTuple
 import random
 import os
 from sys import maxsize
+import numpy as np
 
 from jaxatari.environment import JaxEnvironment
 
@@ -89,6 +90,16 @@ class JaxSkiing(JaxEnvironment[GameState, SkiingObservation, SkiingInfo]):
         super().__init__()
         self.config = GameConfig()
         self.state = self.reset()
+        
+    def _npy_to_surface(self, npy_path, width, height):
+        arr = np.load(npy_path)  # Erwartet (H, W, 4) RGBA
+        arr = arr.astype(np.uint8)
+        surf = pygame.Surface((arr.shape[1], arr.shape[0]), pygame.SRCALPHA)
+        pygame.surfarray.pixels3d(surf)[:, :, :] = arr[..., :3]
+        pygame.surfarray.pixels_alpha(surf)[:, :] = arr[..., 3]
+        surf = pygame.transform.rotate(surf)  # <--- Kopf zeigt jetzt nach oben
+        surf = pygame.transform.scale(surf, (width, height))
+        return surf
 
     def reset(self, key: jax.random.PRNGKey = jax.random.key(1701)) -> Tuple[SkiingObservation, GameState]:
         """Initialize a new game state"""
@@ -621,23 +632,25 @@ class GameRenderer:
         self.rock_sprite = self._create_rock_sprite()
         self.tree_sprite = self._create_tree_sprite()
         self.font = pygame.font.Font(None, 36)
+        
+    def _npy_to_surface(self, npy_path, width, height):
+        arr = np.load(npy_path)  # Erwartet (H, W, 4) RGBA
+        arr = arr.astype(np.uint8)
+        surf = pygame.Surface((arr.shape[1], arr.shape[0]), pygame.SRCALPHA)
+        pygame.surfarray.pixels3d(surf)[:, :, :] = arr[..., :3]
+        pygame.surfarray.pixels_alpha(surf)[:, :] = arr[..., 3]
+        surf = pygame.transform.scale(surf, (width, height))
+        return surf
 
     def _create_skier_jump_sprite(self) -> pygame.Surface:
-        # Base path relative to the project root
         base_path = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
-        sprite_dir = os.path.join(base_path, "jaxatari", "assets", "skiing")
-        
-        # Load jump sprite
-        full_path = os.path.join(sprite_dir, "skiier_jump.png")
-        img = pygame.image.load(full_path).convert_alpha()
-        img = pygame.transform.scale(
-            img,
-            (
-                self.game_config.skier_width * self.render_config.scale_factor,
-                self.game_config.skier_height * self.render_config.scale_factor,
-            )
+        sprite_dir = os.path.join(base_path, "jaxatari", "games", "sprites", "skiing")
+        full_path = os.path.join(sprite_dir, "skiier_jump.npy")
+        return self._npy_to_surface(
+            full_path,
+            self.game_config.skier_width * self.render_config.scale_factor,
+            self.game_config.skier_height * self.render_config.scale_factor,
         )
-        return img
 
     def get_path_center(self, world_y: float) -> float:
         # Returns center X of the path at given world Y
@@ -668,26 +681,22 @@ class GameRenderer:
     def _create_skier_sprite(self) -> list[pygame.Surface]:
         # Base path relative to the project root
         base_path = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
-        sprite_dir = os.path.join(base_path, "jaxatari", "assets", "skiing")
+        sprite_dir = os.path.join(base_path, "jaxatari", "games", "sprites", "skiing")
 
         filenames = {
-            "left": "skiier_left.png",
-            "front": "skiier_front.png",
-            "right": "skiier_right.png"
+            "left": "skiier_left.npy",
+            "front": "skiier_front.npy",
+            "right": "skiier_right.npy"
         }
 
         sprites = {}
         for direction, filename in filenames.items():
             full_path = os.path.join(sprite_dir, filename)
-            img = pygame.image.load(full_path).convert_alpha()
-            img = pygame.transform.scale(
-                img,
-                (
-                    self.game_config.skier_width * self.render_config.scale_factor,
-                    self.game_config.skier_height * self.render_config.scale_factor,
-                )
+            sprites[direction] = self._npy_to_surface(
+                full_path,
+                self.game_config.skier_width * self.render_config.scale_factor,
+                self.game_config.skier_height * self.render_config.scale_factor,
             )
-            sprites[direction] = img
 
         # Map skier_pos (0-7) to a direction
         sprite_list = []
