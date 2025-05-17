@@ -1,11 +1,55 @@
 """
 Project: JAXAtari VideoPinball
-Description: Brief description of the module.
+Description: Our team's JAX implementation of Video Pinball.
 
 Authors:
-    - Team Alpha <team.alpha@example.com>
-    - Team Beta <team.beta@example.com>
-    - John Doe <johndoe@example.com>
+    - Michael Olenberger <michael.olenberger@stud.tu-darmstadt.de>
+    - Maximilian Roth <maximilian.roth@stud.tu-darmstadt.de>
+    - Jonas Neumann <jonas.neumann@stud.tu-darmstadt.de>
+    - Yuddhish Chooah <yuddhish.chooah@stud.tu-darmstadt.de>
+
+We recorded a sequence of game play and have added the interpretations of the RAM values as
+a CSV file with the RAM registers and their meaning and possible values.
+
+Implemented features:
+- Working Game state, reset() and step() functions
+- Plunger and Flipper movement logic
+- Plunger physics
+- Accurate and jit-compatible rendering for implemented mechanics
+- Ball respawning upon failure and life counter
+- Wall collisions
+- Rudimentary ball physics (IMPORTANT: Pull the plunger back all the way when testing)
+
+Why the ball physics are not yet perfect:
+Video Pinball has extremely complicated ball physics. Launch angles, when hitting (close to) corners are
+seemingly random and velocity calculation has a variety of strange quirks like strong spontaneous acceleration
+when a slow balls hit walls at certain angles, etc...
+These properties are impossible to read from the RAM state and need to be investigated
+frame by frame in various scenarios. Thus, the physics are far from perfect.
+There is still a physics bug when calculating multiple wall collisions during a single step which unfortunately
+gets triggered when the plunger is pulled all the way down. When testing, pulling it all the way down, this is the only
+way we found so far to mitigate this issue until we match the physics to the Atari original.
+
+Additional notes:
+The renderer requires a custom function that was implemented in atraJaxis.py
+If the game.py files are tested separately, this function needs to be included manually:
+
+@jax.jit
+def pad_to_match_top(sprites):
+    max_height = max(sprite.shape[0] for sprite in sprites)
+    max_width = max(sprite.shape[1] for sprite in sprites)
+
+    def pad_sprite(sprite):
+        pad_height = max_height - sprite.shape[0]
+        pad_width = max_width - sprite.shape[1]
+        return jnp.pad(
+            sprite,
+            ((pad_height, 0), (pad_width, 0), (0, 0)),
+            mode="constant",
+            constant_values=0,
+        )
+
+    return [pad_sprite(sprite) for sprite in sprites]
 """
 
 import os
@@ -18,6 +62,7 @@ import chex
 import pygame
 from gymnax.environments import spaces
 
+from jaxatari.renderers import AtraJaxisRenderer
 from jaxatari.rendering import atraJaxis as aj
 from jaxatari.environment import JaxEnvironment, JAXAtariAction as Action
 
@@ -28,9 +73,9 @@ HEIGHT = 210
 
 # Physics constants
 # TODO: check if these are correct
-GRAVITY = 1  # 0.12
+GRAVITY = 0.5  # 0.12
 VELOCITY_DAMPENING_VALUE = 0  # 24
-BALL_MAX_SPEED = 16.0
+BALL_MAX_SPEED = 10.0
 FLIPPER_MAX_ANGLE = 3
 FLIPPER_ANIMATION_Y_OFFSETS = jnp.array(
     [0, 0, 3, 7]
@@ -341,15 +386,15 @@ def get_human_action() -> chex.Array:
         action: int, action taken by the player (LEFT, RIGHT, FIRE, LEFTFIRE, RIGHTFIRE, NOOP).
     """
     keys = pygame.key.get_pressed()
-    if keys[pygame.K_a]:
+    if keys[pygame.K_LEFT]:
         return jnp.array(Action.LEFT)
-    elif keys[pygame.K_d]:
+    elif keys[pygame.K_RIGHT]:
         return jnp.array(Action.RIGHT)
     elif keys[pygame.K_SPACE]:
         return jnp.array(Action.FIRE)
-    elif keys[pygame.K_w]:
+    elif keys[pygame.K_UP]:
         return jnp.array(Action.UP)
-    elif keys[pygame.K_s]:
+    elif keys[pygame.K_DOWN]:
         return jnp.array(Action.DOWN)
     else:
         return jnp.array(Action.NOOP)
@@ -1488,7 +1533,7 @@ def load_sprites():
     }
 
 
-class Renderer_AtraJaxisVideoPinball:
+class VideoPinballRenderer(AtraJaxisRenderer):
     """JAX-based Video Pinball game renderer, optimized with JIT compilation."""
 
     def __init__(self):
@@ -1612,7 +1657,7 @@ if __name__ == "__main__":
     game = JaxVideoPinball(frameskip=1)
 
     # Create the JAX renderer
-    renderer = Renderer_AtraJaxisVideoPinball()
+    renderer = VideoPinballRenderer()
 
     # Get jitted functions
     jitted_step = jax.jit(game.step)
