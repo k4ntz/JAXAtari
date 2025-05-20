@@ -189,13 +189,6 @@ def has_player_decided_field(field_choice_player, action: chex.Array):
 
 
 @jax.jit
-def enemy_step(state):
-
-
-    return 0, 0
-
-
-@jax.jit
 def field_step(field_choice, curr_state, white_player):  # -> valid_choice, new_state
     x, y = field_choice
     enemy_color = jax.lax.cond(
@@ -346,6 +339,118 @@ def field_step(field_choice, curr_state, white_player):  # -> valid_choice, new_
         lambda x: (False, x),
         curr_state
     )
+
+
+@jax.jit
+def field_step_2(curr_state, white_player):
+    # white_player == True --> player
+    # white_player == False --> enemy
+    enemy_color = jax.lax.cond(
+        white_player,
+        lambda _: FieldColor.BLACK,
+        lambda _: FieldColor.WHITE,
+        operand=None
+    )
+    friendly_color = jax.lax.cond(
+        white_player,
+        lambda _: FieldColor.WHITE,
+        lambda _: FieldColor.BLACK,
+        operand=None
+    )
+
+    # If True is returned -> there will be atleast a valid choice which can be made
+    # Use loop to check for every field places
+    valid_field = False
+    def outer_loop(i, carry): 
+        valid_field = carry
+        def inner_loop(j, carry):
+            def if_empty(valid_field):
+                def check_horizontal_vertical_and_diagonal_line(i, value):
+                    valid_field = value[0]
+                    break_cond = value[1]
+                    side_in_which_discs_are_flipped = value[2]
+
+                    # FLIP_UP, FLIP_DOWN, FLIP_RIGHT, FLIP_LEFT, FLIP_UP_RIGHT, FLIP_DOWN_RIGHT, FLIP_DOWN_LEFT, FLIP_UP_LEFT
+                    idx, idy = jax.lax.switch(side_in_which_discs_are_flipped, [lambda:(x-i-1, y), lambda:(x+i+1, y), lambda:(x, y+i+1), lambda:(x, y-i-1),
+                                                                                lambda:(x-i-1, y+i+1), lambda:(x+i+1, y+i+1), lambda:(x+i+1, y-i-1), lambda:(x-i-1,y-i-1)])
+
+                    def empty_field(value):
+                        break_cond = True
+                        return (valid_field, break_cond, side_in_which_discs_are_flipped)
+
+                    def friendly_field(value):
+                        valid_field = jax.lax.cond(i == 0, lambda _: False, lambda _: True, operand=None)
+                        break_cond = True
+                        return (valid_field, break_cond, side_in_which_discs_are_flipped)
+
+                    def enemy_field(value):
+                        return (valid_field, break_cond, side_in_which_discs_are_flipped)
+
+                    return jax.lax.cond(
+                        break_cond | valid_field,
+                        lambda _: (valid_field, break_cond, side_in_which_discs_are_flipped),
+                        lambda _: jax.lax.cond(
+                            jnp.equal(curr_state.field.field_color[idx, idy], FieldColor.EMPTY),
+                            lambda _: empty_field((_, _, _)),
+                            lambda _: jax.lax.cond(
+                                curr_state.field.field_color[idx, idy] == friendly_color,
+                                lambda _: friendly_field((_, _, _)),
+                                lambda _: enemy_field((_, _, _)),
+                                operand=None
+                            ),
+                            operand=None
+                        ),
+                        operand=None
+                    )
+
+                x = i
+                y = j
+
+                # check disc on the upper side
+                valid_field, _, _ = jax.lax.fori_loop(0, x, check_horizontal_vertical_and_diagonal_line,  (valid_field, False, FLIP_UP_SIDE))
+
+                # check disc on the down side
+                valid_field, _, _ = jax.lax.fori_loop(0, FIELD_HEIGHT - x - 1, check_horizontal_vertical_and_diagonal_line, (valid_field, False, FLIP_DOWN_SIDE))
+
+                # check disc on the right side
+                valid_field, _, _ = jax.lax.fori_loop(0, FIELD_WIDTH - y - 1, check_horizontal_vertical_and_diagonal_line, (valid_field, False, FLIP_RIGHT_SIDE))
+                
+                # check disc on the left side
+                valid_field, _, _ = jax.lax.fori_loop(0, y, check_horizontal_vertical_and_diagonal_line, (valid_field, False, FLIP_LEFT_SIDE))
+                
+                # check disc on upper right side
+                gap_upper_border, gap_right_border = x, FIELD_WIDTH - y - 1
+                it_number = jax.lax.cond((gap_upper_border < gap_right_border), lambda _: gap_upper_border, lambda _: gap_right_border, operand=None)
+                valid_field, _, _ = jax.lax.fori_loop(0, it_number, check_horizontal_vertical_and_diagonal_line, (valid_field, False, FLIP_UP_RIGHT_SIDE))
+                
+                # check disc on down right side
+                gap_down_border, gap_right_border = FIELD_WIDTH - x - 1, FIELD_WIDTH - y - 1
+                it_number = jax.lax.cond((gap_down_border < gap_right_border), lambda _: gap_down_border, lambda _: gap_right_border, operand=None)
+                valid_field, _, _ = jax.lax.fori_loop(0, it_number, check_horizontal_vertical_and_diagonal_line, (valid_field, False, FLIP_DOWN_RIGHT_SIDE))
+                
+                # check disc on down left side
+                gap_down_border, gap_left_border = FIELD_WIDTH - x - 1, y
+                it_number = jax.lax.cond((gap_down_border < gap_left_border), lambda _: gap_down_border, lambda _: gap_left_border, operand=None)
+                valid_field, _, _ = jax.lax.fori_loop(0, it_number, check_horizontal_vertical_and_diagonal_line, (valid_field, False, FLIP_DOWN_LEFT_SIDE))
+                
+                # check disc on up left side
+                gap_upper_border, gap_left_border = x, y
+                it_number = jax.lax.cond((gap_upper_border < gap_left_border), lambda _: gap_upper_border, lambda _: gap_left_border, operand=None)
+                valid_field, _, _ = jax.lax.fori_loop(0, it_number, check_horizontal_vertical_and_diagonal_line, (valid_field, False, FLIP_UP_LEFT_SIDE))
+                
+                return valid_field
+
+            valid_field = carry
+            return jax.lax.cond(
+                jnp.logical_and(curr_state.field.field_color[i, j] == FieldColor.EMPTY, jnp.logical_not(valid_field)),
+                lambda x: if_empty(x),
+                lambda x: x,
+                valid_field
+            )
+        return jax.lax.fori_loop(0, FIELD_WIDTH, inner_loop, (valid_field))
+    valid_field = jax.lax.fori_loop(0, FIELD_HEIGHT, outer_loop, (valid_field))
+    return (curr_state, valid_field)
+
 
 @jax.jit
 def get_bot_move(game_field: Field, difficulty: chex.Array, player_score: chex.Array, enemy_score: chex.Array)-> jnp.array:
@@ -772,19 +877,20 @@ class JaxOthello(JaxEnvironment[OthelloState, OthelloObservation, OthelloInfo]):
     def reset(self, key=None) -> OthelloState:
         """ Reset the game state to the initial state """
         field_color_init = jnp.full((8, 8), FieldColor.EMPTY.value, dtype=jnp.int32)
-        field_color_init = field_color_init.at[3,3].set(FieldColor.BLACK.value)
-        field_color_init = field_color_init.at[4,3].set(FieldColor.WHITE.value)
-        field_color_init = field_color_init.at[3,4].set(FieldColor.WHITE.value)
-        field_color_init = field_color_init.at[4,4].set(FieldColor.BLACK.value)
+        # field_color_init = field_color_init.at[3,3].set(FieldColor.BLACK.value)
+        # field_color_init = field_color_init.at[4,3].set(FieldColor.WHITE.value)
+        # field_color_init = field_color_init.at[3,4].set(FieldColor.WHITE.value)
+        # field_color_init = field_color_init.at[4,4].set(FieldColor.BLACK.value)
         
         #################### Testing
         
-        # field_color_init = field_color_init.at[0,0].set(FieldColor.WHITE.value)
-        # field_color_init = field_color_init.at[1,1].set(FieldColor.BLACK.value)
-        # field_color_init = field_color_init.at[2,2].set(FieldColor.BLACK.value)
-        # field_color_init = field_color_init.at[3,3].set(FieldColor.EMPTY.value)
-        # field_color_init = field_color_init.at[4,4].set(FieldColor.BLACK.value)
-        # field_color_init = field_color_init.at[5,5].set(FieldColor.BLACK.value)
+        field_color_init = field_color_init.at[0,0].set(FieldColor.BLACK.value)
+        field_color_init = field_color_init.at[1,1].set(FieldColor.WHITE.value)
+        field_color_init = field_color_init.at[2,2].set(FieldColor.WHITE.value)
+        field_color_init = field_color_init.at[3,3].set(FieldColor.EMPTY.value)
+        field_color_init = field_color_init.at[4,4].set(FieldColor.WHITE.value)
+        field_color_init = field_color_init.at[5,5].set(FieldColor.WHITE.value)
+
         
         
         
@@ -815,8 +921,11 @@ class JaxOthello(JaxEnvironment[OthelloState, OthelloObservation, OthelloInfo]):
 
         state = state._replace(field_choice_player=new_field_choice)
 
-        # now human player and agent are on the same "page"
-        # difference: decided must be True for human player to place his disc
+
+        # first, it need to be checked if there is a valid place on the field the disc to be set
+        _, valid_field = field_step_2(state, white_player=True)
+        jax.debug.print("valid field: {}", valid_field)
+
         # check if the new_field_choice is a valid option
         valid_choice, new_state = jax.lax.cond(
             decided,
@@ -833,7 +942,6 @@ class JaxOthello(JaxEnvironment[OthelloState, OthelloObservation, OthelloInfo]):
         )
 
         # now enemy step are required
-
         # for now - choose a random field if a given step by agent/human was valid
         def condition_fun(value):
             valid_choice, new_state, _ = value
