@@ -85,14 +85,13 @@ class OthelloState(NamedTuple):
     field: Field
     field_choice_player: chex.Array
     difficulty: chex.Array
-    render_helper_field_before_player_step: chex.Array
-    render_helper_field_after_player_step: chex.Array
     end_of_game_reached: chex.Array
 
 class OthelloObservation(NamedTuple):
     field: Field
     player_score: jnp.ndarray
     enemy_score: jnp.ndarray
+    field_choice_player: jnp.ndarray
 
 class OthelloInfo(NamedTuple):
     time: jnp.ndarray
@@ -318,7 +317,8 @@ def field_step(field_choice, curr_state, white_player):  # -> valid_choice, new_
             lambda _: new_state._replace(
                 field=new_state.field._replace(
                     field_color=new_state.field.field_color.at[x, y].set(friendly_color)
-                )
+                ),
+                field_choice_player=field_choice
             ),
             lambda _: new_state,
             operand=None
@@ -903,8 +903,6 @@ class JaxOthello(JaxEnvironment[OthelloState, OthelloObservation, OthelloInfo]):
             ),
             field_choice_player = jnp.array([7, 7], dtype=jnp.int32),
             difficulty = jnp.array(1).astype(jnp.int32),
-            render_helper_field_before_player_step = field_color_init,
-            render_helper_field_after_player_step = field_color_init,
             end_of_game_reached = False
         )
         initial_obs = self._get_observation(state)
@@ -928,13 +926,6 @@ class JaxOthello(JaxEnvironment[OthelloState, OthelloObservation, OthelloInfo]):
             decided,
             lambda _: field_step(new_field_choice, state, True),
             lambda _: (False, state),
-            operand=None
-        )
-
-        new_state = jax.lax.cond(
-            valid_choice,
-            lambda _: new_state._replace(render_helper_field_before_player_step=state.field.field_color),
-            lambda _: new_state._replace(render_helper_field_before_player_step=new_state.field.field_color),
             operand=None
         )
 
@@ -985,18 +976,48 @@ class JaxOthello(JaxEnvironment[OthelloState, OthelloObservation, OthelloInfo]):
                 return ended
             return jax.lax.fori_loop(0, FIELD_WIDTH, inner_loop, ended)
         has_game_ended = jax.lax.fori_loop(0, FIELD_HEIGHT, outer_loop, True)
+        has_game_ended = jax.lax.cond(
+            jnp.logical_or(final__step_state.player_score == 0, final__step_state.enemy_score == 0),
+            lambda _: True,
+            lambda x: x,
+            has_game_ended
+        )
         final__step_state = final__step_state._replace(end_of_game_reached=has_game_ended)
 
-        return None, final__step_state, 0.0, False, None        
+        env_reward = self._get_env_reward(state, final__step_state)
+        all_rewards = self._get_all_reward(state, final__step_state)
+        info = self._get_info(new_state, all_rewards)
+        observation = self._get_observation(final__step_state)
 
+        return observation, final__step_state, env_reward, has_game_ended, info        
+
+    @partial(jax.jit, static_argnums=(0,))
+    def _get_info(self, state: OthelloState, all_rewards: chex.Array) -> OthelloInfo:
+        return OthelloInfo(time=state.step_counter, all_rewards=all_rewards)
+
+    @partial(jax.jit, static_argnums=(0,))
+    def _get_env_reward(self, previous_state: OthelloState, state: OthelloState):
+        return (state.player_score - state.enemy_score) - (
+            previous_state.player_score - previous_state.enemy_score
+        )
 
     @partial(jax.jit, static_argnums=(0,))
     def _get_observation(self, state: OthelloState):
         return OthelloObservation(
             field=state.field,
             enemy_score=state.enemy_score,
-            player_score=state.player_score
+            player_score=state.player_score,
+            field_choice_player=state.field_choice_player
         )
+
+    @partial(jax.jit, static_argnums=(0,))
+    def _get_all_reward(self, previous_state: OthelloState, state: OthelloState):
+        if self.reward_funcs is None:
+            return jnp.zeros(1)
+        rewards = jnp.array(
+            [reward_func(previous_state, state) for reward_func in self.reward_funcs]
+        )
+        return rewards
 
     def get_action_space(self) -> jnp.ndarray:
         return jnp.array(self.action_set)
