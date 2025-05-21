@@ -51,7 +51,7 @@ X_BORDERS = (0, 160)
 PLAYER_BOUNDS = (0, 160), (45, 150)
 
 # Maximum number of objects
-MAX_TRUCKS = 16
+MAX_TRUCKS = 12
 MAX_JETS = 6
 MAX_CHOPPERS = 6
 MAX_MISSILES = 2
@@ -565,54 +565,28 @@ def step_enemy_movement(
     return new_jet_positions, chopper_positions, final_rng
 
 @jax.jit
-def spawn_trucks(
-        truck_positions: chex.Array,
-        state_player_x: chex.Array,
-        state_player_velocity: chex.Array,
-) -> chex.Array:
+def initialize_truck_positions() -> chex.Array:
+    initial_truck_positions = jnp.zeros((MAX_TRUCKS, 3))
+    anchor = -748
+    carry = (initial_truck_positions, anchor)
 
-    def cond_fn (cond_truck_positions: chex.Array):
-        return jnp.sum(cond_truck_positions[:, 2] == 0) >= 3
+    def spawn_truck_triple(i, carry):
+        truck_positions, anchor = carry
 
-    def spawn_truck_triple(
-            spawn_truck_positions: chex.Array,
-    ) -> chex.Array:
-        first_truck = jnp.min(spawn_truck_positions[:, 0])
-        last_truck = jnp.max(spawn_truck_positions[:, 0])
-
-        # TODO: fix bug that spawns too many trucks when spawned relative to player
-        # calculate spawn point of first truck of convoy
-        anchor = jnp.where( # if existing trucks are close enough to player
-            jnp.minimum(jnp.abs(first_truck - state_player_x), jnp.abs(last_truck - state_player_x)) < 512,
-            jnp.where( # choose at which side to be spawned
-                jnp.abs(first_truck - state_player_x) < jnp.abs(last_truck - state_player_x),
-                first_truck - TRUCK_SPAWN_DISTANCE,
-                last_truck + TRUCK_SPAWN_DISTANCE,
-            ),
-            jnp.where( # choose at which side to be spawned
-                state_player_velocity >= 0,
-                state_player_x + TRUCK_SPAWN_DISTANCE,
-                state_player_x - TRUCK_SPAWN_DISTANCE,
-            ),
+        anchor = jnp.where(
+            i % 3 == 0,
+            anchor + 248,
+            anchor + 32,
         )
+        truck_positions = truck_positions.at[i].set(jnp.array([anchor, 156, -1]))
+        return truck_positions, anchor
 
-        empty_rows = jnp.nonzero(spawn_truck_positions[:, 2] == 0, size=3)[0]
-
-        # spawn convoy
-        new_truck_positions = spawn_truck_positions.at[empty_rows[0]].set(jnp.array([anchor, 156, -1]))
-        new_truck_positions = new_truck_positions.at[empty_rows[1]].set(jnp.array([anchor + 32, 156, -1]))
-        new_truck_positions = new_truck_positions.at[empty_rows[2]].set(jnp.array([anchor + 64, 156, -1]))
-
-        return new_truck_positions
-
-    # jax.debug.print("truck positions: {x}, player position: {y}", x=truck_positions[:, 2], y=state_player_x)
-
-    return jax.lax.while_loop(cond_fn, spawn_truck_triple, truck_positions)
+    return jax.lax.fori_loop(0, 12, spawn_truck_triple, carry)[0]
 
 @jax.jit
 def step_truck_movement(
         truck_positions: chex.Array,
-        # jet_positions: chex.Array, maybe add later again
+        # jet_positions: chex.Array, # maybe add later again
         # chopper_positions: chex.Array,
         state_player_x: chex.Array,
         state_player_y: chex.Array,
@@ -639,14 +613,18 @@ def step_truck_movement(
 
         movement_x = truck_pos[2] * 0.5 # maybe add variable speed
 
-        new_x = truck_pos[0] + movement_x
+        out_of_bounds = jnp.abs(state_player_x - truck_pos[0]) > 624 # jnp.logical_or(new_x < -2**20, new_x >= 2**20)
 
-        out_of_bounds = jnp.abs(truck_pos[0] - state_player_x) > 1024 # jnp.logical_or(new_x < -2**20, new_x >= 2**20)
+        new_x = jnp.where(
+            out_of_bounds,
+            truck_pos[0] + jnp.clip(state_player_x - truck_pos[0], -1, 1) * 1248 + movement_x,
+            truck_pos[0] + movement_x,
+        )
 
         new_pos = jnp.where(
-            jnp.logical_or(~is_active, out_of_bounds),
-            jnp.zeros(3),
+            is_active,
             jnp.array([new_x, truck_pos[1], truck_pos[2]]),
+            jnp.zeros(3),
         )
 
 
@@ -665,9 +643,9 @@ def spawn_step(
         # spawn_state: SpawnState,
         jet_positions: chex.Array,
         chopper_positions: chex.Array,
-        truck_positions: chex.Array,
+        # truck_positions: chex.Array,
         # rng: chex.PRNGKey,
-) -> Tuple[chex.Array, chex.Array, chex.Array]:
+) -> Tuple[chex.Array, chex.Array]:
     # Update enemy spawns
     new_jet_positions, new_chopper_positions= (
         # spawn_state,
@@ -675,15 +653,15 @@ def spawn_step(
         chopper_positions,
     )
 
-    # Spawn new trucks
-    new_truck_positions = spawn_trucks(truck_positions, state.player_x, state.player_velocity_x)
+    # not needed anymore, initially spawn_trucks
+    # new_truck_positions = spawn_trucks(truck_positions, state.player_x, state.player_velocity_x)
     # jax.debug.print("{x}", x=new_truck_positions[:, 0])
 
     return (
         # new_spawn_state,
         new_jet_positions,
         new_chopper_positions,
-        new_truck_positions,
+        # new_truck_positions,
         # new_key,
     )
 
@@ -1110,7 +1088,7 @@ class JaxChopperCommand(JaxEnvironment[ChopperCommandState, ChopperCommandObserv
             score=jnp.array(0),
             lives=jnp.array(3),
             spawn_state=initialize_spawn_state(),
-            truck_positions=jnp.zeros((MAX_TRUCKS, 3)),     # asarray([[128, 156, -1], [160, 156, -1], [192, 156, -1]]), # test for truck movement, to be replaced
+            truck_positions=initialize_truck_positions(),     # asarray([[128, 156, -1], [160, 156, -1], [192, 156, -1]]), # test for truck movement, to be replaced
             jet_positions=jnp.zeros((MAX_JETS, 3)), # x, y, direction
             chopper_positions=jnp.zeros((MAX_CHOPPERS, 3)),
             enemy_missile_positions=jnp.zeros((MAX_MISSILES, 3)),
@@ -1184,19 +1162,20 @@ class JaxChopperCommand(JaxEnvironment[ChopperCommandState, ChopperCommandObserv
             )
 
             new_spawn_state = state.spawn_state # remove if used in spawn_step()
+            new_truck_positions = state.truck_positions
 
             (
                 # new_spawn_state,
                 new_jet_positions,
                 new_chopper_positions,
-                new_truck_positions,
+                # new_truck_positions,
                 # new_rng_key,
             ) = spawn_step(
                 state,
                 # state.spawn_state,
                 new_jet_positions,
                 new_chopper_positions,
-                state.truck_positions,
+                # state.truck_positions,
                 # new_rng_key,
             )
 
