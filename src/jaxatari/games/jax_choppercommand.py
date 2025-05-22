@@ -1,3 +1,9 @@
+"""
+
+Lukas Bergholz, Linus Orlob, Vincent Jahn
+
+"""
+
 import os
 from functools import partial
 from typing import Tuple, NamedTuple
@@ -27,8 +33,8 @@ DISTANCE_WHEN_FLYING = 10 # DEFAULT: 10 | How far the chopper moves towards the 
 
 # Player Missile Constants
 PLAYER_MISSILE_WIDTH = 80 # Sprite size_x
-MISSILE_COOLDOWN_FRAMES = 8  # DEFAULT: 8 | How fast Chopper can shoot  TODO: Das müssen wir ändern und höher machen bei dem schweren Schwierigkeitsgrad
-MISSILE_SPEED = 10 # DEFAULT: 10 | Missile speed #TODO: tweak MISSILE_SPEED and MISSILE_COOLDOWN_FRAMES to match real game (already almost perfect)
+MISSILE_COOLDOWN_FRAMES = 8  # DEFAULT: 8 | How fast Chopper can shoot (higher is slower) TODO: Das müssen wir ändern und höher machen bei dem schweren Schwierigkeitsgrad
+MISSILE_SPEED = 10 # DEFAULT: 10 | Missile speed (higher is faster)#TODO: tweak MISSILE_SPEED and MISSILE_COOLDOWN_FRAMES to match real game (already almost perfect)
 MISSILE_ANIMATION_SPEED = 6 # DEFAULT: 6 | Rate at which missile changes sprite textures (based on traveled distance of missile)
 
 # Colors
@@ -56,6 +62,15 @@ MAX_JETS = 6
 MAX_CHOPPERS = 6
 MAX_MISSILES = 2
 
+# Minimap
+MINIMAP_WIDTH = 48
+MINIMAP_HEIGHT = 16
+
+MINIMAP_POSITION_X = (WIDTH // 2) - (MINIMAP_WIDTH // 2)  #TODO: Im echten Game wird die Minimap nicht mittig, sondern weiter links gerendert. Wir müssen besprechen ob wir das auch machen, dann müsste man nur diese Zahl hier ändern (finde es aber so schöner)
+MINIMAP_POSITION_Y = 165
+
+DOWNSCALING_FACTOR_WIDTH = WIDTH // MINIMAP_WIDTH
+DOWNSCALING_FACTOR_HEIGHT = HEIGHT // MINIMAP_HEIGHT
 #Object rendering
 TRUCK_SPAWN_DISTANCE = 248 # distance 240px + truck width
 
@@ -171,6 +186,11 @@ def load_sprites():
         pl_missile_sprites_temp.append(temp)
         pl_missile_sprites_temp[i] = jnp.expand_dims(pl_missile_sprites_temp[i], axis=0)
 
+    minimap_mountains_temp = []
+    for i in range(1, 9):
+        temp = aj.loadFrame(os.path.join(MODULE_DIR, f"sprites/choppercommand/minimap/mountains/{i}.npy"))
+        minimap_mountains_temp.append(temp)
+        minimap_mountains_temp[i - 1] = jnp.expand_dims(minimap_mountains_temp[i - 1], axis=0)
 
     # Pad player helicopter sprites to match each other
     pl_chopper_sprites = aj.pad_to_match([pl_chopper1, pl_chopper2])
@@ -229,6 +249,14 @@ def load_sprites():
     # Enemy missile sprites
     SPRITE_ENEMY_MISSILE = jnp.repeat(enemy_missile_sprites[0][None], 1, axis=0)
 
+    #Everything having to do with the minimap
+    MINIMAP_BG = aj.loadFrame(os.path.join(MODULE_DIR, "sprites/choppercommand/minimap/background.npy"))
+    MINIMAP_PLAYER = aj.loadFrame(os.path.join(MODULE_DIR, "sprites/choppercommand/minimap/player.npy"))
+    MINIMAP_TRUCK = aj.loadFrame(os.path.join(MODULE_DIR, "sprites/choppercommand/minimap/truck.npy"))
+    MINIMAP_ACTIVISION_LOGO = aj.loadFrame(os.path.join(MODULE_DIR, "sprites/choppercommand/minimap/activision_logo.npy")) #delete if necessary
+    MINIMAP_MOUNTAINS = jnp.concatenate(minimap_mountains_temp, axis=0)
+
+
     return (
         SPRITE_BG,
         SPRITE_PL_CHOPPER,
@@ -239,6 +267,11 @@ def load_sprites():
         SPRITE_ENEMY_MISSILE,
         DIGITS,
         LIFE_INDICATOR,
+        MINIMAP_BG,
+        MINIMAP_MOUNTAINS,
+        MINIMAP_PLAYER,
+        MINIMAP_TRUCK,
+        MINIMAP_ACTIVISION_LOGO, #delete if necessary
     )
 
 # Load sprites once at module level
@@ -252,6 +285,11 @@ def load_sprites():
     SPRITE_ENEMY_MISSILE,
     DIGITS,
     LIFE_INDICATOR,
+    MINIMAP_BG,
+    MINIMAP_MOUNTAINS,
+    MINIMAP_PLAYER,
+    MINIMAP_TRUCK,
+    MINIMAP_ACTIVISION_LOGO, #delete if necessary
 ) = load_sprites()
 
 @jax.jit
@@ -655,7 +693,6 @@ def spawn_step(
 
     # not needed anymore, initially spawn_trucks
     # new_truck_positions = spawn_trucks(truck_positions, state.player_x, state.player_velocity_x)
-    # jax.debug.print("{x}", x=new_truck_positions[:, 0])
 
     return (
         # new_spawn_state,
@@ -1188,7 +1225,7 @@ class JaxChopperCommand(JaxEnvironment[ChopperCommandState, ChopperCommandObserv
                     state.player_y,
                 )
             )
-            jax.debug.print("{x}", x=new_truck_positions[:, 0])
+            #jax.debug.print("{x}", x=new_truck_positions[:, 0])
 
             # Check player collision
             player_collision, collision_points = check_player_collision(
@@ -1398,6 +1435,84 @@ class Renderer_AtraJaxis(AtraJaxisRenderer):
             raster, 16, 10, state.lives, LIFE_INDICATOR, spacing=9
         )
 
+        raster = self.render_minimap(chopper_position, raster, state)
+
+        return raster
+
+    def render_minimap(self, chopper_position, raster, state):
+        # Render minimap background
+        raster = aj.render_at(
+            raster,
+            MINIMAP_POSITION_X,
+            MINIMAP_POSITION_Y,
+            MINIMAP_BG,
+        )
+
+        # Render minimap mountains
+        def get_minimap_mountains_frame():
+            return jnp.asarray(((-state.player_x // (DOWNSCALING_FACTOR_WIDTH * 7)) % 8), dtype=jnp.int32)
+
+        frame_minimap_mountains = aj.get_sprite_frame(MINIMAP_MOUNTAINS, get_minimap_mountains_frame())
+        raster = aj.render_at(
+            raster,
+            MINIMAP_POSITION_X,
+            MINIMAP_POSITION_Y + 3,
+            frame_minimap_mountains,
+        )
+
+        # Render player on minimap
+        raster = aj.render_at(
+            raster,
+            MINIMAP_POSITION_X + 16 + (chopper_position // (DOWNSCALING_FACTOR_WIDTH * 7)),
+            MINIMAP_POSITION_Y + 6 + (state.player_y // (DOWNSCALING_FACTOR_HEIGHT + 7)),
+            MINIMAP_PLAYER,
+        )
+
+        # Render trucks on minimap
+        def render_truck_minimap(i, raster_base):
+            weird_offset = 16  # TODO: Check if truck shown on minimap is actually truck in game (should be though)
+            truck_world_x = state.truck_positions[i][0]
+            minimap_x = weird_offset + (
+                        (truck_world_x - state.player_x + chopper_position) // DOWNSCALING_FACTOR_WIDTH // 6)
+
+            should_render = jnp.logical_and(
+                truck_world_x != 0,
+                jnp.logical_and(
+                    minimap_x >= 0,
+                    minimap_x < MINIMAP_WIDTH
+                )
+            )
+
+            def do_render(r):
+                truck_world_x = state.truck_positions[i][0]
+                truck_world_y = state.truck_positions[i][1]
+
+                # Downscaling
+                minimap_x = weird_offset + (
+                            (truck_world_x - state.player_x + chopper_position) // DOWNSCALING_FACTOR_WIDTH // 6)
+                minimap_y = (truck_world_y // DOWNSCALING_FACTOR_HEIGHT)
+
+                return aj.render_at(
+                    r,
+                    MINIMAP_POSITION_X + minimap_x,
+                    MINIMAP_POSITION_Y + 1 + minimap_y,
+                    MINIMAP_TRUCK
+                )
+
+            return jax.lax.cond(should_render, do_render, lambda r: r, raster_base)
+
+        raster = jax.lax.fori_loop(0, MAX_TRUCKS, render_truck_minimap, raster)
+
+        # TODO: Render enemies on minimap
+
+        # Render Activision logo (delete if necessary)
+        raster = aj.render_at(
+            raster,
+            MINIMAP_POSITION_X + (MINIMAP_WIDTH - 32) // 2,
+            HEIGHT - 7 - 1, #7 = Sprite Height 1=One pixel headroom
+            MINIMAP_ACTIVISION_LOGO,
+        )
+
         return raster
 
 def get_human_action() -> chex.Array:
@@ -1490,8 +1605,8 @@ if __name__ == "__main__":
                         curr_state, curr_obs, reward, done, info = jitted_step(
                             curr_state, action
                         )
-                        print(f"Observations: {curr_obs}")
-                        print(f"Reward: {reward}, Done: {done}, Info: {info}")
+                        #print(f"Observations: {curr_obs}")
+                        #print(f"Reward: {reward}, Done: {done}, Info: {info}")
 
         if not frame_by_frame:
             if counter % frameskip == 0:
