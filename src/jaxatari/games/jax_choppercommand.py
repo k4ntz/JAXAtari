@@ -6,7 +6,7 @@ Lukas Bergholz, Linus Orlob, Vincent Jahn
 
 import os
 from functools import partial
-from typing import Tuple, NamedTuple
+from typing import Tuple, NamedTuple, Callable
 import jax
 import jax.numpy as jnp
 import chex
@@ -14,7 +14,6 @@ import pygame
 import jaxatari.rendering.atraJaxis as aj
 import numpy as np
 from gymnax.environments import spaces
-
 from jaxatari.environment import JaxEnvironment, JAXAtariAction as Action
 
 # Game Constants
@@ -71,6 +70,7 @@ MINIMAP_POSITION_Y = 165
 
 DOWNSCALING_FACTOR_WIDTH = WIDTH // MINIMAP_WIDTH
 DOWNSCALING_FACTOR_HEIGHT = HEIGHT // MINIMAP_HEIGHT
+
 #Object rendering
 TRUCK_SPAWN_DISTANCE = 248 # distance 240px + truck width
 
@@ -678,21 +678,14 @@ def step_truck_movement(
 @jax.jit
 def spawn_step(
         state,
-        # spawn_state: SpawnState,
         jet_positions: chex.Array,
         chopper_positions: chex.Array,
-        # truck_positions: chex.Array,
-        # rng: chex.PRNGKey,
 ) -> Tuple[chex.Array, chex.Array]:
     # Update enemy spawns
     new_jet_positions, new_chopper_positions= (
-        # spawn_state,
         jet_positions,
         chopper_positions,
     )
-
-    # not needed anymore, initially spawn_trucks
-    # new_truck_positions = spawn_trucks(truck_positions, state.player_x, state.player_velocity_x)
 
     return (
         # new_spawn_state,
@@ -722,8 +715,7 @@ def enemy_missiles_step(
         is_diff_0 = step_counter == 0
 
         # Create position bracket array for each pattern
-        pos_brackets = jnp.array(
-            [
+        pos_brackets = [
                 jnp.logical_and(
                     position_in_tier >= 0, position_in_tier <= 2
                 ),  # 0-2: 6.25%
@@ -747,11 +739,9 @@ def enemy_missiles_step(
                 ),  # 13-14: 93.75%
                 position_in_tier == 15,  # 15: 100%
             ]
-        )
 
         # Create array of higher speed patterns
-        higher_speed_patterns = jnp.array(
-            [
+        higher_speed_patterns = [
                 (step_counter % 16) == 0,  # 6.25%
                 (step_counter % 8) == 0,  # 12.5%
                 (step_counter % 4) == 0,  # 25%
@@ -761,7 +751,6 @@ def enemy_missiles_step(
                 (step_counter % 16) != 0,  # 93.75%
                 True,  # 100%
             ]
-        )
 
         # Use jnp.select to choose the pattern
         use_higher_speed = jnp.select(
@@ -772,8 +761,11 @@ def enemy_missiles_step(
         higher_speed = base_speed + 1
 
         # Handle difficulty 0 special case
-        return jnp.where(
-            is_diff_0, 1, jnp.where(use_higher_speed, higher_speed, base_speed)
+        return jax.lax.cond(
+            is_diff_0,
+            lambda _: jnp.array(1),
+            lambda _: jnp.where(use_higher_speed, higher_speed, base_speed),
+            operand=None
         )
 
     def single_missile_step(i, carry):
@@ -982,7 +974,7 @@ def player_step(
 
 
 class JaxChopperCommand(JaxEnvironment[ChopperCommandState, ChopperCommandObservation, ChopperCommandInfo]):
-    def __init__(self, frameskip: int = 1, reward_funcs: list[callable] =None):
+    def __init__(self, frameskip: int = 1, reward_funcs: list[Callable] =None):
         super().__init__()
         self.frameskip = frameskip
         if reward_funcs is not None:
@@ -1002,11 +994,10 @@ class JaxChopperCommand(JaxEnvironment[ChopperCommandState, ChopperCommandObserv
     def flatten_entity_position(self, entity: EntityPosition) -> jnp.ndarray:
         return jnp.concatenate([entity.x, entity.y, entity.width, entity.height, entity.active])
 
-    @partial(jax.jit, static_argnums=(0,))
-    def obs_to_flat_array(self, obs: ChopperCommandObservation) -> jnp.ndarray:
+    def obs_to_flat_array(self, obs: ChopperCommandObservation, enemies: jnp.ndarray) -> jnp.ndarray:
         return jnp.concatenate([
             self.flatten_entity_position(obs.player),
-            obs.enemies.flatten(),
+            enemies.flatten(),
             obs.enemy_missiles.flatten(),
             self.flatten_entity_position(obs.player_missile),
             obs.player_score.flatten(),
@@ -1151,7 +1142,7 @@ class JaxChopperCommand(JaxEnvironment[ChopperCommandState, ChopperCommandObserv
     @partial(jax.jit, static_argnums=(0,))
     def step(
             self, state: ChopperCommandState, action: chex.Array
-    ) -> Tuple[ChopperCommandState, ChopperCommandObservation, float, bool, ChopperCommandInfo]:
+    ) -> Tuple[ChopperCommandState, ChopperCommandObservation, jnp.ndarray, bool, ChopperCommandInfo]:
 
         previous_state = state
         reset_state, _ = self.reset()
@@ -1202,30 +1193,21 @@ class JaxChopperCommand(JaxEnvironment[ChopperCommandState, ChopperCommandObserv
             new_truck_positions = state.truck_positions
 
             (
-                # new_spawn_state,
                 new_jet_positions,
                 new_chopper_positions,
-                # new_truck_positions,
-                # new_rng_key,
             ) = spawn_step(
                 state,
-                # state.spawn_state,
                 new_jet_positions,
                 new_chopper_positions,
-                # state.truck_positions,
-                # new_rng_key,
             )
 
             new_truck_positions = (
                 step_truck_movement(
                     new_truck_positions,
-                    # state.jet_positions, maybe add again later
-                    # state.chopper_positions,
                     state.player_x,
                     state.player_y,
                 )
             )
-            #jax.debug.print("{x}", x=new_truck_positions[:, 0])
 
             # Check player collision
             player_collision, collision_points = check_player_collision(
@@ -1316,8 +1298,6 @@ class Renderer_AtraJaxis(AtraJaxisRenderer):
         )
 
         # Render player missiles
-
-
         def render_single_missile(i, raster):
             missile = state.player_missile_positions[i]  #Indexierung IN der Funktion
             missile_active = missile[2] != 0
@@ -1355,7 +1335,6 @@ class Renderer_AtraJaxis(AtraJaxisRenderer):
             raster,
         )
 
-        # jax.debug.print("Truck positions: {pos}", pos=state.truck_positions)
         frame_friendly_truck = aj.get_sprite_frame(SPRITE_FRIENDLY_TRUCK, state.step_counter)
 
         def render_truck(i, raster_base): #TODO: repeat rendering of trucks every 2000? pixel (there are 4 fleets in total)
@@ -1368,9 +1347,6 @@ class Renderer_AtraJaxis(AtraJaxisRenderer):
             '''
             truck_screen_x = state.truck_positions[i][0] - state.player_x + chopper_position
             truck_screen_y = state.truck_positions[i][1]
-            # jax.debug.print("truck pos: {x}", x=truck_screen_x)
-
-            # jax.debug.print("{x}", x=state.truck_positions[:, 0])
 
             return jax.lax.cond(
                 should_render,
@@ -1605,8 +1581,6 @@ if __name__ == "__main__":
                         curr_state, curr_obs, reward, done, info = jitted_step(
                             curr_state, action
                         )
-                        #print(f"Observations: {curr_obs}")
-                        #print(f"Reward: {reward}, Done: {done}, Info: {info}")
 
         if not frame_by_frame:
             if counter % frameskip == 0:
