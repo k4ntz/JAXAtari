@@ -462,8 +462,12 @@ def get_bot_move(game_field: Field, difficulty: chex.Array, player_score: chex.A
     vectorized_compute_score_of_tiles = jax.vmap(compute_score_of_tiles, in_axes=(0, None, None))
     list_of_all_move_values = vectorized_compute_score_of_tiles(list_of_all_moves, game_field, game_score)
     #TODO Introduce Randomness amongst best moves, not only choose first
-    d1_max_index = jnp.argmax(list_of_all_move_values)
-    return jnp.array([jnp.floor_divide(d1_max_index, 8), jnp.mod(d1_max_index, 8)])
+    # d1_max_index = jnp.argmax(list_of_all_move_values)
+    key = jax.random.PRNGKey(1)
+    random_chosen_max_index = random_max_index(list_of_all_move_values,key)
+
+    
+    return jnp.array([jnp.floor_divide(random_chosen_max_index, 8), jnp.mod(random_chosen_max_index, 8)])
 
 def compute_score_of_tiles(i, game_field, game_score):
     # Decode tile position
@@ -472,7 +476,6 @@ def compute_score_of_tiles(i, game_field, game_score):
 
 
     # If tile is already taken, set invalid move (return very low score)
-    #TODO enable Lazyloading by replacing cond to improve performence
     score_of_tile = jax.lax.cond(
         game_field.field_color[tile_y, tile_x] != FieldColor.EMPTY,
         lambda _: -2147483648,  
@@ -511,6 +514,42 @@ def compute_score_of_tile_1(tile_y, tile_x, game_field, game_score):
     )
     return score_of_tile
     
+# array size fixed at 64!!
+@jax.jit
+def random_max_index(array, key:int):
+    max_value:int  = jnp.max(array)
+    max_value_count:int = 0
+    max_values = jnp.zeros_like(array)
+    index:int = 0
+    init_val = (index, array, max_value, max_value_count, max_values)
+
+    # loop that iterates over all 64 possible moves and checks, how many top moves are there, returns a touple with:
+    # (  index(to be disregarded) array(the input array), max_value(the maximum value within the array), max_value_count(how often the maxmium appeared), max_values(array where max values are marked with their index, everythin else is zero))
+    def count_max_value(i, val):
+        array, max_value = val[1],  val[2]
+        tmp = jax.lax.cond(array[i] == max_value, lambda val: true_fun(val), lambda val: false_fun(val),val)
+        return tmp
+
+    def true_fun(val):
+        index, array,  max_value, max_value_count, max_values = val
+        max_values = max_values.at[index].set(index+1)
+        index+=1
+        max_value_count+=1
+        return (index, array, max_value, max_value_count, max_values)
+
+    def false_fun(val):
+        index= val[0]
+        index+=1
+        return (index, val[1], val[2], val[3], val[4])
+    
+    _, _, _, max_value_count, max_indexes = jax.lax.fori_loop(0, array.size, count_max_value, init_val)
+
+    #sorts all max Value indexes to the left, then generates a "random" number and takes the max value at the random index
+    max_indexes_for_random = jnp.nonzero(max_indexes, size= 64, fill_value=-1)[0]
+    rand_index = jax.random.randint(key, shape=(), minval=jnp.array(0), maxval=max_value_count)
+
+    return jnp.take(max_indexes_for_random, rand_index, mode="clip")
+
 
 @jax.jit
 def compute_flipped_tiles_by_direction(i, tile_y: int, tile_x: int, game_field: Field):
