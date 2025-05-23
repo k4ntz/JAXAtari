@@ -86,6 +86,7 @@ class OthelloState(NamedTuple):
     field_choice_player: chex.Array
     difficulty: chex.Array
     end_of_game_reached: chex.Array
+    random_key: int
 
 class OthelloObservation(NamedTuple):
     field: Field
@@ -454,17 +455,15 @@ def check_if_there_is_a_valid_choice(curr_state, white_player):
 
 
 @jax.jit
-def get_bot_move(game_field: Field, difficulty: chex.Array, player_score: chex.Array, enemy_score: chex.Array)-> jnp.array:
+def get_bot_move(game_field: Field, difficulty: chex.Array, player_score: chex.Array, enemy_score: chex.Array, random_key: int)-> jnp.array:
     game_score = player_score+enemy_score
     list_of_all_moves = jnp.arange(64)
 
     #Iterate over the game field using vmap
     vectorized_compute_score_of_tiles = jax.vmap(compute_score_of_tiles, in_axes=(0, None, None))
     list_of_all_move_values = vectorized_compute_score_of_tiles(list_of_all_moves, game_field, game_score)
-    #TODO Introduce Randomness amongst best moves, not only choose first
-    # d1_max_index = jnp.argmax(list_of_all_move_values)
-    key = jax.random.PRNGKey(1)
-    random_chosen_max_index = random_max_index(list_of_all_move_values,key)
+    
+    random_chosen_max_index = random_max_index(list_of_all_move_values,random_key)
 
     
     return jnp.array([jnp.floor_divide(random_chosen_max_index, 8), jnp.mod(random_chosen_max_index, 8)])
@@ -553,7 +552,6 @@ def random_max_index(array, key:int):
 
 @jax.jit
 def compute_flipped_tiles_by_direction(i, tile_y: int, tile_x: int, game_field: Field):
-    #TODO implement 
     args = (tile_y,tile_x,game_field)
 
     branches = [
@@ -910,7 +908,7 @@ class JaxOthello(JaxEnvironment[OthelloState, OthelloObservation, OthelloInfo]):
         self.obs_size = 130
 
 
-    def reset(self, key=None) -> OthelloState:
+    def reset(self, key = [0,0]) -> OthelloState:
         """ Reset the game state to the initial state """
         field_color_init = jnp.full((8, 8), FieldColor.EMPTY.value, dtype=jnp.int32)
         field_color_init = field_color_init.at[3,3].set(FieldColor.BLACK.value)
@@ -929,8 +927,6 @@ class JaxOthello(JaxEnvironment[OthelloState, OthelloObservation, OthelloInfo]):
 
         
         
-        
-        #######################
 
         state = OthelloState(
             player_score = jnp.array(2).astype(jnp.int32),
@@ -942,7 +938,9 @@ class JaxOthello(JaxEnvironment[OthelloState, OthelloObservation, OthelloInfo]):
             ),
             field_choice_player = jnp.array([7, 7], dtype=jnp.int32),
             difficulty = jnp.array(1).astype(jnp.int32),
-            end_of_game_reached = False
+            end_of_game_reached = False,
+            # TODO Figure out why key has shape (2,)
+            random_key = jax.random.PRNGKey(key[0])
         )
         initial_obs = self._get_observation(state)
         return initial_obs, state
@@ -978,7 +976,7 @@ class JaxOthello(JaxEnvironment[OthelloState, OthelloObservation, OthelloInfo]):
         def body_fun(value):
             valid_choice, state, key = value
 
-            best_val = get_bot_move(state.field,state.difficulty, state.player_score,state.enemy_score)
+            best_val = get_bot_move(state.field,state.difficulty, state.player_score,state.enemy_score,state.random_key)
 
             valid_choice, new_state = field_step(best_val, state, False)
 
@@ -991,7 +989,7 @@ class JaxOthello(JaxEnvironment[OthelloState, OthelloObservation, OthelloInfo]):
 
         _, valid_field_enemy = check_if_there_is_a_valid_choice(new_state, white_player=False)
 
-        key = jax.random.PRNGKey(0)
+        key = state.random_key
         initial_x_y = (False, new_state, key)
         _, final__step_state, _ = jax.lax.cond(
             jnp.logical_and(
