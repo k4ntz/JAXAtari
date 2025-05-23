@@ -348,14 +348,13 @@ def update_bullets(state: GalaxianState) -> GalaxianState:
 @jax.jit
 def remove_bullets(state: GalaxianState) -> GalaxianState:
     # Wenn die Spieler-Kugel den Bildschirm (y<0) verlässt, reset Kugel + Cooldown
-    def reset(s: GalaxianState) -> GalaxianState:
-        return s._replace(
-            bullet_x                = jnp.array(-1.0, dtype=s.bullet_x.dtype),
-            bullet_y                = jnp.array(-1.0, dtype=s.bullet_y.dtype),
-            player_shooting_cooldown= jnp.array(0,   dtype=s.player_shooting_cooldown.dtype),
+    def reset(state: GalaxianState) -> GalaxianState:
+        return state._replace(
+            bullet_x                = jnp.array(-1.0, dtype=state.bullet_x.dtype),
+            bullet_y                = jnp.array(-1.0, dtype=state.bullet_y.dtype),
         )
-    def keep(s: GalaxianState) -> GalaxianState:
-        return s
+    def keep(state: GalaxianState) -> GalaxianState:
+        return state
 
     return lax.cond(state.bullet_y < 0,
                     reset,
@@ -374,28 +373,27 @@ def bullet_collision(state: GalaxianState) -> GalaxianState:
     def process_hit(s_and_idx):
         s, (rows, cols) = s_and_idx
         # setze alle getroffenen auf dead
-        new_alive = s.enemy_grid_alive.at[rows, cols].set(0)
-        return s._replace(
+        new_alive = state.enemy_grid_alive.at[rows, cols].set(0)
+        return state._replace(
             enemy_grid_alive         = new_alive,
             bullet_x                 = jnp.array(-1.0, dtype=s.bullet_x.dtype),
             bullet_y                 = jnp.array(-1.0, dtype=s.bullet_y.dtype),
-            player_shooting_cooldown = jnp.array(0,    dtype=s.player_shooting_cooldown.dtype),
             score                    = s.score + 30,
         )
 
-    def no_hit(s_and_idx):
-        s, _ = s_and_idx
-        return s
+    def no_hit(state_and_idx):
+        state, _ = state_and_idx
+        return state
 
-    max_hits = state.enemy_grid_alive.size
-    collision_indices = jnp.where(mask, size=max_hits, fill_value=-1)
-    rows = collision_indices[0]
-    cols = collision_indices[1]
+    max_size = state.enemy_grid_alive.size
+    collision_indices = jnp.where(mask, size=max_size, fill_value=-1)
+    hit_rows = collision_indices[0]
+    hit_cols = collision_indices[1]
 
     return lax.cond(hit,
                     process_hit,
                     no_hit,
-                    (state, (rows, cols)))
+                    (state, (hit_rows, hit_cols)))
 
 @jax.jit
 def bullet_collision_attack(state: GalaxianState) -> GalaxianState:
@@ -405,23 +403,22 @@ def bullet_collision_attack(state: GalaxianState) -> GalaxianState:
     # Kollisionsmaske: innerhalb 10px und aktuell angreifend (state 1)
     hit = jnp.any((x_diff <= 10) & (y_diff <= 10) & (state.enemy_attack_state == 1))
 
-    def process_hit(s: GalaxianState) -> GalaxianState:
+    def process_hit(state: GalaxianState) -> GalaxianState:
         # Als getötet markieren
-        pos      = s.enemy_attack_pos
-        new_grid = s.enemy_grid_alive.at[tuple(pos)].set(0)
+        pos      = state.enemy_attack_pos
+        new_grid = state.enemy_grid_alive.at[tuple(pos)].set(0)
         # Score erhöhen und Angreifer zurücksetzen
-        return s._replace(
+        return state._replace(
             enemy_grid_alive       = new_grid,
-            bullet_x               = jnp.array(-1.0, dtype=s.bullet_x.dtype),
-            bullet_y               = jnp.array(-1.0, dtype=s.bullet_y.dtype),
-            player_shooting_cooldown = jnp.array(0, dtype=s.player_shooting_cooldown.dtype),
+            bullet_x               = jnp.array(-1.0, dtype=state.bullet_x.dtype),
+            bullet_y               = jnp.array(-1.0, dtype=state.bullet_y.dtype),
             enemy_attack_state     = jnp.array(0),                  # zurück auf State 0
-            score                  = s.score + jnp.array(50, dtype=s.score.dtype)  # z.B. 50 Punkte
+            score                  =state.score + jnp.array(50, dtype=state.score.dtype)  # z.B. 50 Punkte
         )
 
     # Kein Hit → unverändert zurückgeben
-    def no_hit(s: GalaxianState) -> GalaxianState:
-        return s
+    def no_hit(state: GalaxianState) -> GalaxianState:
+        return state
 
     return lax.cond(hit, process_hit, no_hit, state)
 
