@@ -57,9 +57,11 @@ PLAYER_BOUNDS = (0, 160), (45, 150)
 
 # Maximum number of objects
 MAX_TRUCKS = 12
-MAX_JETS = 6
+MAX_JETS = 12
 MAX_CHOPPERS = 6
 MAX_MISSILES = 2
+
+SPAWN_JETS = 3
 
 # Minimap
 MINIMAP_WIDTH = 48
@@ -538,69 +540,91 @@ def update_enemy_spawns(
     return final_enemy_positions, final_rng
 
 @jax.jit
+def initialize_jet_positions() -> chex.Array:
+    initial = jnp.zeros((MAX_JETS, 3))
+    anchor_x = WIDTH // 2  # z.B. 80
+    spacing = 30  # vertikaler Abstand
+    mid_y = HEIGHT // 2  # z.B. 96
+    offset = (SPAWN_JETS // 2) * spacing
+    start_y = mid_y - offset
+
+    carry = (initial, start_y)
+
+    def spawn_enemy(i, carry):
+        positions, y_anchor = carry
+        direction = jnp.int32(-1)  # jnp.where(i % 2 == 0, -1, 1)
+        positions = positions.at[i].set(jnp.array([anchor_x, y_anchor, direction]))
+        return positions, y_anchor + spacing
+
+    # loop nur über die ersten SPAWN_JETS, der Rest bleibt [0,0,0]
+    spawned, _ = jax.lax.fori_loop(0, SPAWN_JETS, spawn_enemy, carry)
+    return spawned
+
+@jax.jit
 def step_enemy_movement(
     jet_positions: chex.Array,
     chopper_positions: chex.Array,
     step_counter: chex.Array,
     rng: chex.PRNGKey,
+    state_player_x: chex.Array,
+    state_player_y: chex.Array,
 ) -> Tuple[chex.Array, chex.Array, chex.PRNGKey]:
-    """Update enemy positions based on their patterns"""
-    # Split RNG key for direction randomization
+    """Bewegt alle aktiven Enemies (Jets) horizontal.
+    Entfernt Enemies bei Spielfeldgrenze und vergibt neue Richtung."""
+
     rng, direction_rng = jax.random.split(rng)
 
-    def move_enemy(pos, slot_idx):
-        """Move enemy based on pattern."""
+    def is_slot_empty(pos: chex.Array) -> bool:
+        return jnp.all(pos == 0)
+
+    def move_enemy(pos: chex.Array, slot_idx: int) -> Tuple[chex.Array, chex.Array]:
         is_active = jnp.logical_not(is_slot_empty(pos))
-        moving_left = pos[2] < 0
+        direction = pos[2]
 
-        # Calculate movement speed for this frame
-        movement_speed = 1  # Constant speed for simplicity
+        movement_speed = 0.5
+        new_x = pos[0] + direction * movement_speed
+        new_pos = jnp.where(is_active, jnp.array([new_x, pos[1], direction]), pos)
 
-        # Apply direction
-        velocity_x = jnp.where(moving_left, -movement_speed, movement_speed)
+        jax.debug.print("{x}", x= pos[0])
 
-        # Calculate new position
-        new_pos = jnp.where(
-            is_active, jnp.array([pos[0] + velocity_x, pos[1], pos[2]]), pos
-        )
 
-        # Check bounds
-        out_of_bounds = jnp.logical_or(new_pos[0] <= -8, new_pos[0] >= 168)
-        return jnp.where(out_of_bounds, jnp.zeros_like(new_pos), new_pos), out_of_bounds
+        out_of_bounds = jnp.abs(state_player_x - pos[0]) > 624
 
-    new_jet_positions = jnp.zeros_like(jet_positions)
-    new_survived = jnp.zeros(MAX_JETS, dtype=jnp.int32)
+        new_pos = jnp.where(out_of_bounds, jnp.zeros_like(new_pos), new_pos)
+
+        return new_pos, out_of_bounds
 
     def process_jet(i, carry):
-        new_jet_positions, new_survived, direction_rng = carry
+        new_positions, survived_flags, rng_key = carry
 
-        # Get current enemy position
-        enemy_pos = jet_positions[i]
+        current_pos = jet_positions[i]
+        new_pos, out_of_bounds = move_enemy(current_pos, i)
 
-        # Move enemy and check if it's out of bounds
-        new_pos, out_of_bounds = move_enemy(enemy_pos, i)
-
-        # Update positions and survived status
-        new_jet_positions = new_jet_positions.at[i].set(new_pos)
-        new_survived = new_survived.at[i].set(jnp.where(out_of_bounds, 0, 1))
-
-        # Randomize direction if enemy went out of bounds
-        direction_rng, next_rng = jax.random.split(direction_rng)
+        rng_key, subkey = jax.random.split(rng_key)
         new_direction = jnp.where(
             out_of_bounds,
-            jax.random.bernoulli(next_rng, 0.5).astype(jnp.int32),
-            enemy_pos[2],
+            jax.random.choice(subkey, jnp.array([-1, 1])),
+            new_pos[2]
         )
-        new_jet_positions = new_jet_positions.at[i, 2].set(new_direction)
+        new_pos = new_pos.at[2].set(new_direction)
 
-        return new_jet_positions, new_survived, next_rng
+        new_positions = new_positions.at[i].set(new_pos)
+        survived_flags = survived_flags.at[i].set(jnp.where(out_of_bounds, 0, 1))
 
-    # Use lax.scan to process all enemies
-    new_enemy_positions, new_survived, final_rng = jax.lax.fori_loop(
-        0, MAX_CHOPPERS, process_jet, (new_jet_positions, new_survived, direction_rng)
+        return new_positions, survived_flags, rng_key
+
+    # Init carry
+    new_jet_positions = jnp.zeros_like(jet_positions)
+    survived_flags = jnp.zeros(jet_positions.shape[0], dtype=jnp.int32)
+
+    new_jet_positions, _, rng = jax.lax.fori_loop(
+        0, jet_positions.shape[0], process_jet,
+        (new_jet_positions, survived_flags, direction_rng)
     )
 
-    return new_jet_positions, chopper_positions, final_rng
+    # Chopper positions werden (noch) nicht verändert → einfach durchreichen
+    return new_jet_positions, chopper_positions, rng
+
 
 @jax.jit
 def initialize_truck_positions() -> chex.Array:
@@ -1117,7 +1141,7 @@ class JaxChopperCommand(JaxEnvironment[ChopperCommandState, ChopperCommandObserv
             lives=jnp.array(3),
             spawn_state=initialize_spawn_state(),
             truck_positions=initialize_truck_positions(),     # asarray([[128, 156, -1], [160, 156, -1], [192, 156, -1]]), # test for truck movement, to be replaced
-            jet_positions=jnp.zeros((MAX_JETS, 3)), # x, y, direction
+            jet_positions=initialize_jet_positions(), # x, y, direction
             chopper_positions=jnp.zeros((MAX_CHOPPERS, 3)),
             enemy_missile_positions=jnp.zeros((MAX_MISSILES, 3)),
             player_missile_positions=jnp.zeros((MAX_MISSILES, 4)), #for one missile: [x, y, dir, x_spawn]
@@ -1163,7 +1187,12 @@ class JaxChopperCommand(JaxEnvironment[ChopperCommandState, ChopperCommandObserv
 
             # Update jet and chopper positions
             new_jet_positions, new_chopper_positions, new_rng_key = step_enemy_movement(
-                state.jet_positions, state.chopper_positions, state.step_counter, state.rng_key
+                state.jet_positions,
+                state.chopper_positions,
+                state.step_counter,
+                state.rng_key,
+                state.player_x,
+                state.player_y,
             )
 
             # Update enemy missile positions
@@ -1367,13 +1396,19 @@ class Renderer_AtraJaxis(AtraJaxisRenderer):
         frame_enemy_jet = aj.get_sprite_frame(SPRITE_ENEMY_JET, state.step_counter)
 
         def render_enemy(i, raster_base): # TODO: add render_chopper and refactor
-            should_render = state.jet_positions[i][0] > 0
+            should_render = state.jet_positions[i][0] != 0
+
+            jet_screen_x = state.jet_positions[i][0] - state.player_x + chopper_position
+            jet_screen_y = state.jet_positions[i][1]
+
+            #jax.debug.print("{x}", x=jet_screen_x, y=jet_screen_y)
+
             return jax.lax.cond(
                 should_render,
                 lambda r: aj.render_at(
                     r,
-                    state.jet_positions[i][0],  # - scroll_offset_x,
-                    state.jet_positions[i][1],
+                    jet_screen_x,  # - scroll_offset_x,
+                    jet_screen_y,
                     frame_enemy_jet,
                     flip_horizontal=(state.jet_positions[i][2] == -1),
                 ),
@@ -1424,7 +1459,7 @@ class Renderer_AtraJaxis(AtraJaxisRenderer):
             MINIMAP_BG,
         )
 
-        # Render minimap mountains
+        # Render minimap mountainsy
         def get_minimap_mountains_frame():
             return jnp.asarray(((-state.player_x // (DOWNSCALING_FACTOR_WIDTH * 7)) % 8), dtype=jnp.int32)
 
