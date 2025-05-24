@@ -61,7 +61,6 @@ MAX_JETS = 12
 MAX_CHOPPERS = 6
 MAX_MISSILES = 2
 
-SPAWN_JETS = 3
 
 # Minimap
 MINIMAP_WIDTH = 48
@@ -485,80 +484,37 @@ def is_slot_empty(pos: chex.Array) -> chex.Array:
     return pos[2] == 0
 
 @jax.jit
-def update_enemy_spawns(
-    enemy_positions: chex.Array,
-    step_counter: chex.Array,
-    rng: chex.PRNGKey = None,
-) -> Tuple[chex.Array, chex.PRNGKey]:
-    """Update enemy spawns using pattern-based system matching original game."""
-    # count down the spawn timers
-    new_spawn_timers = jnp.where(
-        step_counter % 60 == 0,
-        jnp.zeros_like(enemy_positions[:, 2]),
-        enemy_positions[:, 2],
-    )
-
-    # Define a function for jax.lax.scan to process each lane
-    def scan_lanes(carry, lane_idx):
-        curr_enemy_positions, curr_rng = carry
-
-        # Check if this lane needs an update
-        needs_update = new_spawn_timers[lane_idx] == 0
-
-        # Process the lane if needed
-        new_carry = jax.lax.cond(
-            needs_update,
-            lambda x: process_lane(lane_idx, x),
-            lambda x: x,
-            (curr_enemy_positions, curr_rng),
-        )
-
-        return new_carry, None  # None for outputs as we only care about final state
-
-    def process_lane(lane_idx, carry):
-        enemy_positions, rng = carry
-
-        # Split RNG key for this lane
-        rng, lane_rng = jax.random.split(rng)
-
-        # Get spawn position for this lane
-        base_pos = get_spawn_position(jax.random.bernoulli(lane_rng), lane_idx)
-
-        # Update enemy position
-        new_enemy_positions = enemy_positions.at[lane_idx].set(base_pos)
-
-        return new_enemy_positions, rng
-
-    # Replace the manual loop with lax.scan
-    lane_indices = jnp.arange(MAX_CHOPPERS)
-    (final_enemy_positions, final_rng), _ = jax.lax.scan(
-        scan_lanes,
-        (enemy_positions, rng if rng is not None else jax.random.PRNGKey(42)),
-        lane_indices
-    )
-
-    return final_enemy_positions, final_rng
-
-@jax.jit
 def initialize_jet_positions() -> chex.Array:
-    initial = jnp.zeros((MAX_JETS, 3))
-    anchor_x = WIDTH // 2  # z.B. 80
-    spacing = 30  # vertikaler Abstand
-    mid_y = HEIGHT // 2  # z.B. 96
-    offset = (SPAWN_JETS // 2) * spacing
-    start_y = mid_y - offset
+    initial_positions = jnp.zeros((MAX_JETS, 3))
 
-    carry = (initial, start_y)
+    # Konfigurierbare Parameter
+    fleet_start_x = -780     # Startposition der ersten Flotte
+    fleet_spacing_x = 312    # Abstand zwischen zwei Flotten
+    fleet_count = 4          # Anzahl der Flotten
+    jets_per_fleet = 3       # Anzahl Jets pro Flotte
+    vertical_spacing = 30    # Vertikaler Abstand zwischen Jets
 
-    def spawn_enemy(i, carry):
-        positions, y_anchor = carry
-        direction = jnp.int32(-1)  # jnp.where(i % 2 == 0, -1, 1)
-        positions = positions.at[i].set(jnp.array([anchor_x, y_anchor, direction]))
-        return positions, y_anchor + spacing
+    y_start = HEIGHT // 2 - (jets_per_fleet // 2) * vertical_spacing
 
-    # loop nur über die ersten SPAWN_JETS, der Rest bleibt [0,0,0]
-    spawned, _ = jax.lax.fori_loop(0, SPAWN_JETS, spawn_enemy, carry)
-    return spawned
+    carry = (initial_positions, 0)  # (positions, current_jet_index)
+
+    def spawn_fleet(fleet_index, carry):
+        positions, jet_idx = carry
+        anchor_x = fleet_start_x + fleet_index * fleet_spacing_x
+
+        def spawn_jet_in_fleet(j, inner_carry):
+            positions, jet_idx = inner_carry
+            y = y_start + j * vertical_spacing
+            positions = positions.at[jet_idx].set(jnp.array([anchor_x, y, -1]))
+            return positions, jet_idx + 1
+
+        return jax.lax.fori_loop(0, jets_per_fleet, spawn_jet_in_fleet, (positions, jet_idx))
+
+    final_positions, _ = jax.lax.fori_loop(0, fleet_count, spawn_fleet, carry)
+    return final_positions
+
+
+
 
 @jax.jit
 def step_enemy_movement(
@@ -585,12 +541,13 @@ def step_enemy_movement(
         new_x = pos[0] + direction * movement_speed
         new_pos = jnp.where(is_active, jnp.array([new_x, pos[1], direction]), pos)
 
-        jax.debug.print("{x}", x= pos[0])
-
 
         out_of_bounds = jnp.abs(state_player_x - pos[0]) > 624
 
-        new_pos = jnp.where(out_of_bounds, jnp.zeros_like(new_pos), new_pos)
+        wrapped_x = pos[0] + jnp.clip(state_player_x - pos[0], -1, 1) * 1248 + direction * movement_speed
+        wrapped_pos = jnp.array([wrapped_x, pos[1], direction])
+
+        new_pos = jnp.where(out_of_bounds, wrapped_pos, new_pos)
 
         return new_pos, out_of_bounds
 
@@ -600,13 +557,8 @@ def step_enemy_movement(
         current_pos = jet_positions[i]
         new_pos, out_of_bounds = move_enemy(current_pos, i)
 
-        rng_key, subkey = jax.random.split(rng_key)
-        new_direction = jnp.where(
-            out_of_bounds,
-            jax.random.choice(subkey, jnp.array([-1, 1])),
-            new_pos[2]
-        )
-        new_pos = new_pos.at[2].set(new_direction)
+        # Richtung NICHT mehr ändern – einfach beibehalten
+        # (new_pos[2] bleibt gleich)
 
         new_positions = new_positions.at[i].set(new_pos)
         survived_flags = survived_flags.at[i].set(jnp.where(out_of_bounds, 0, 1))
@@ -1367,7 +1319,7 @@ class Renderer_AtraJaxis(AtraJaxisRenderer):
         frame_friendly_truck = aj.get_sprite_frame(SPRITE_FRIENDLY_TRUCK, state.step_counter)
 
         def render_truck(i, raster_base): #TODO: repeat rendering of trucks every 2000? pixel (there are 4 fleets in total)
-            should_render = state.truck_positions[i][0] != 0
+            should_render = state.truck_positions[i][2] != 0
             '''
             original_truck_x = state.truck_positions[i][0]
 
@@ -1396,7 +1348,7 @@ class Renderer_AtraJaxis(AtraJaxisRenderer):
         frame_enemy_jet = aj.get_sprite_frame(SPRITE_ENEMY_JET, state.step_counter)
 
         def render_enemy(i, raster_base): # TODO: add render_chopper and refactor
-            should_render = state.jet_positions[i][0] != 0
+            should_render = state.jet_positions[i][2] != 0
 
             jet_screen_x = state.jet_positions[i][0] - state.player_x + chopper_position
             jet_screen_y = state.jet_positions[i][1]
