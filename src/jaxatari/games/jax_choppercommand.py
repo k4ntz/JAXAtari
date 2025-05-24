@@ -43,11 +43,15 @@ ENEMY_COLOR = (170, 170, 170)  # Gray for enemy helicopters
 MISSILE_COLOR = (255, 255, 255)  # White for missiles
 SCORE_COLOR = (210, 210, 64)  # Score color
 
-# Object sizes and initial positions
-PLAYER_SIZE = (16, 16)  # Width, Height
-TRUCK_SIZE = (16, 16)  # TODO: insert real size
-ENEMY_SIZE = (16, 16)   # TODO: insert real size
-MISSILE_SIZE = (2, 8)
+# Object sizes and initial positions (Width, Height)
+PLAYER_SIZE = (16, 9)
+TRUCK_SIZE = (16, 16)
+ENEMY_SIZE = (8, 8) #TODO: insert real size (maybe make it variable for jet and chopper for exact hitboxes)
+#Actually, jet is 8x6 and chopper is 8x9
+JET_SIZE = (8, 6) #unused
+CHOPPER_SIZE = (8, 9) #unused
+
+MISSILE_SIZE = (1, 1)
 
 PLAYER_START_X = 0
 PLAYER_START_Y = 100
@@ -135,7 +139,7 @@ class ChopperCommandState(NamedTuple):
     jet_positions: chex.Array # (MAX_JETS, 3) array for enemy jets
     chopper_positions: chex.Array  # (MAX_ENEMIES, 3) array for enemy choppers
     enemy_missile_positions: chex.Array  # (MAX_MISSILES, 3) array for enemy missiles
-    player_missile_positions: chex.Array # (MAX_MISSILES, 3) array for player missiles
+    player_missile_positions: chex.Array # (MAX_MISSILES, 4) array for player missiles (x, y, direction, spawn_x)
     player_missile_cooldown: chex.Array
     step_counter: chex.Array
     # death_counter TODO: implement death animation
@@ -256,6 +260,7 @@ def load_sprites():
     MINIMAP_PLAYER = aj.loadFrame(os.path.join(MODULE_DIR, "sprites/choppercommand/minimap/player.npy"))
     MINIMAP_TRUCK = aj.loadFrame(os.path.join(MODULE_DIR, "sprites/choppercommand/minimap/truck.npy"))
     MINIMAP_ACTIVISION_LOGO = aj.loadFrame(os.path.join(MODULE_DIR, "sprites/choppercommand/minimap/activision_logo.npy")) #delete if necessary
+    MINIMAP_ENEMY = aj.loadFrame(os.path.join(MODULE_DIR, "sprites/choppercommand/minimap/enemy.npy"))
     MINIMAP_MOUNTAINS = jnp.concatenate(minimap_mountains_temp, axis=0)
 
 
@@ -273,6 +278,7 @@ def load_sprites():
         MINIMAP_MOUNTAINS,
         MINIMAP_PLAYER,
         MINIMAP_TRUCK,
+        MINIMAP_ENEMY,
         MINIMAP_ACTIVISION_LOGO, #delete if necessary
     )
 
@@ -291,6 +297,7 @@ def load_sprites():
     MINIMAP_MOUNTAINS,
     MINIMAP_PLAYER,
     MINIMAP_TRUCK,
+    MINIMAP_ENEMY,
     MINIMAP_ACTIVISION_LOGO, #delete if necessary
 ) = load_sprites()
 
@@ -356,7 +363,7 @@ def check_collision_batch(pos1, size1, pos2_array, size2):
 
 @jax.jit
 def check_missile_collisions(
-    missile_positions: chex.Array,  # (MAX_MISSILES, 3)
+    missile_positions: chex.Array,  # (MAX_MISSILES, 4)
     enemy_positions: chex.Array,    # (N_ENEMIES, 2)
     score: chex.Array,
     rng_key: chex.PRNGKey,
@@ -367,52 +374,48 @@ def check_missile_collisions(
         missile_positions, enemy_positions, score, rng_key = carry
 
         missile = missile_positions[missile_idx]
-        missile_rect_pos = missile[:2]
+
+        missile_x, missile_y, direction, _ = missile
+
+        offset_x = jnp.where(direction == -1, 80, 0)
+        missile_rect_pos = jnp.array([missile_x + offset_x, missile_y])
+
         missile_active = missile[2] != 0
 
-        def check_single_enemy(enemy_idx, inner_carry):
-            missile_positions, enemy_positions, score, rng_key = inner_carry
+        def check_enemy_loop(enemy_idx, inner_carry):
+            enemy_positions, score, missile, missile_active = inner_carry
             enemy_pos = enemy_positions[enemy_idx]
 
             collision = jnp.logical_and(
                 missile_active,
-                check_collision_single(
-                    missile_rect_pos,
-                    MISSILE_SIZE,
-                    enemy_pos,
-                    ENEMY_SIZE,
-                )
+                check_collision_single(missile_rect_pos, MISSILE_SIZE, enemy_pos, ENEMY_SIZE)
             )
 
-            # Entferne Gegner bei Treffer
             new_enemy_pos = jnp.where(collision, jnp.zeros_like(enemy_pos), enemy_pos)
+            enemy_positions = enemy_positions.at[enemy_idx].set(new_enemy_pos)
 
-            # Punkte vergeben
-            score_add = jnp.where(collision, 100, 0)
+            # Score nur beim ersten Treffer erhöhen
+            score += jnp.where(collision, 100, 0)
 
-            # Missile deaktivieren bei Treffer
-            new_missile = jnp.where(collision, jnp.array([0, 0, 0, 0], dtype=missile.dtype), missile) #Achtung array hat jetzt 4 Einträge pro missile
+            # Missile deaktivieren nach erstem Treffer
+            missile = jnp.where(collision, jnp.array([0, 0, 0, 0], dtype=missile.dtype), missile)
+            missile_active = jnp.where(collision, False, missile_active)
 
-            # Apply updates
-            updated_enemies = enemy_positions.at[enemy_idx].set(new_enemy_pos)
-            updated_missiles = missile_positions.at[missile_idx].set(new_missile)
+            return enemy_positions, score, missile, missile_active
 
-            return (
-                updated_missiles,
-                updated_enemies,
-                score + score_add,
-                rng_key,
-            )
-
-        # Schleife über alle Gegner für eine Missile
-        return jax.lax.fori_loop(
+        # Für diesen missile über alle enemies iterieren
+        enemy_positions, score, new_missile, _ = jax.lax.fori_loop(
             0,
             enemy_positions.shape[0],
-            check_single_enemy,
-            (missile_positions, enemy_positions, score, rng_key),
+            check_enemy_loop,
+            (enemy_positions, score, missile, missile_active),
         )
 
-    # Schleife über alle Missiles
+        missile_positions = missile_positions.at[missile_idx].set(new_missile)
+
+        return missile_positions, enemy_positions, score, rng_key
+
+    # Alle Missiles verarbeiten
     return jax.lax.fori_loop(
         0,
         missile_positions.shape[0],
@@ -456,7 +459,7 @@ def check_player_collision(
     )
 
     return (
-        jnp.any(
+        jnp.any( #???
             jnp.array(
                 [
                     enemy_collisions,
@@ -563,7 +566,7 @@ def step_enemy_movement(
     rng, direction_rng = jax.random.split(rng)
 
     def is_slot_empty(pos: chex.Array) -> bool:
-        return jnp.all(pos == 0)
+        return pos == 0
 
     def move_enemy(pos: chex.Array, movement_speed: float) -> chex.Array:
         is_active = jnp.logical_not(is_slot_empty(pos))
@@ -646,7 +649,7 @@ def step_truck_movement(
             )
         )
 
-        # TODO: handle truck collision
+        # TODO: handle truck collision -> This should be in normal_game_step
 
         movement_x = truck_pos[2] * 0.5 # maybe add variable speed
 
@@ -1153,6 +1156,7 @@ class JaxChopperCommand(JaxEnvironment[ChopperCommandState, ChopperCommandObserv
         # Normal game logic starts here
         def normal_game_step():
             # TODO: Update truck positions
+
             # Update player position
             (
                 new_player_x,
@@ -1184,7 +1188,12 @@ class JaxChopperCommand(JaxEnvironment[ChopperCommandState, ChopperCommandObserv
                 state, state.player_x, state.player_y, action
             )
 
-            # Check missile collisions
+            #chopper_position = (WIDTH // 2) - 8 + state.local_player_offset + (state.player_velocity_x * DISTANCE_WHEN_FLYING)  # (WIDTH // 2) - 8 = Heli mittig platzieren, state.local_player_offset = ob Heli links oder rechts auf Bildschirm, state.player_velocity_x * DISTANCE_WHEN_FLYING = Bewegen von Heli richtung Mitte wenn er fliegt
+            #shifted_jet_positions = new_jet_positions.at[0, :].add(chopper_position)
+            #shifted_chopper_positions = new_chopper_positions.at[0, :].add(chopper_position)
+            #Maybe still need all of this for correct misisle collision detection
+
+            # Check player missile collisions with jets
             (
                 new_player_missile_position,
                 new_jet_positions,
@@ -1192,7 +1201,20 @@ class JaxChopperCommand(JaxEnvironment[ChopperCommandState, ChopperCommandObserv
                 new_rng_key,
             ) = check_missile_collisions(
                 new_player_missile_positions,
-                new_jet_positions,  # TODO: make work for jets AND choppers
+                new_jet_positions,
+                state.score,
+                new_rng_key,
+            )
+
+            # Check player missile collisions with choppers
+            (
+                new_player_missile_position,
+                new_chopper_positions,
+                new_score,
+                new_rng_key,
+            ) = check_missile_collisions(
+                new_player_missile_positions,
+                new_chopper_positions,
                 state.score,
                 new_rng_key,
             )
@@ -1482,6 +1504,7 @@ class Renderer_AtraJaxis(AtraJaxisRenderer):
             MINIMAP_PLAYER,
         )
 
+
         # Render trucks on minimap
         def render_truck_minimap(i, raster_base):
             weird_offset = 16  # TODO: Check if truck shown on minimap is actually truck in game (should be though)
@@ -1517,8 +1540,68 @@ class Renderer_AtraJaxis(AtraJaxisRenderer):
 
         raster = jax.lax.fori_loop(0, MAX_TRUCKS, render_truck_minimap, raster)
 
-        # TODO: Render enemies on minimap
 
+
+        def render_entities_on_minimap(
+                raster_base,
+                entity_positions: chex.Array,
+                entity_sprite: chex.Array,
+                max_entities: int,
+                downscale_factor_width: int,
+                downscale_factor_height: int,
+                weird_offset: int = 16,
+        ):
+            def render_single_entity(i, raster_base_inner):
+                entity_world_x = entity_positions[i][0]
+                minimap_x = weird_offset + (
+                        (entity_world_x - state.player_x + chopper_position) //
+                        downscale_factor_width // 6
+                )
+
+                should_render = jnp.logical_and(
+                    entity_world_x != 0,
+                    jnp.logical_and(
+                        minimap_x >= 0,
+                        minimap_x < MINIMAP_WIDTH
+                    )
+                )
+
+                def do_render(r):
+                    entity_world_y = entity_positions[i][1]
+                    minimap_y = entity_world_y // (downscale_factor_height + 1)
+
+                    return aj.render_at(
+                        r,
+                        MINIMAP_POSITION_X + minimap_x,
+                        MINIMAP_POSITION_Y + 3 + minimap_y, #TODO: Make y_pos rendering based on lane of enemy
+                        entity_sprite
+                    )
+
+                return jax.lax.cond(should_render, do_render, lambda r: r, raster_base_inner)
+
+            return jax.lax.fori_loop(0, max_entities, render_single_entity, raster_base)
+
+        #Render enemy jets
+        raster = render_entities_on_minimap(
+            raster,
+            state.jet_positions,
+            MINIMAP_ENEMY,
+            MAX_JETS,
+            DOWNSCALING_FACTOR_WIDTH,
+            DOWNSCALING_FACTOR_HEIGHT,
+        )
+
+        #Render enemy choppers
+        raster = render_entities_on_minimap(
+            raster,
+            state.chopper_positions,
+            MINIMAP_ENEMY,
+            MAX_CHOPPERS,
+            DOWNSCALING_FACTOR_WIDTH,
+            DOWNSCALING_FACTOR_HEIGHT,
+        )
+
+        #Render Activision logo
         raster = aj.render_at(
             raster,
             MINIMAP_POSITION_X + (MINIMAP_WIDTH - 32) // 2,
