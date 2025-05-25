@@ -53,13 +53,13 @@ ENEMY_SIZE = (8, 8)   #TODO: insert real size (maybe make it variable for jet an
 JET_SIZE = (8, 6) #unused
 CHOPPER_SIZE = (8, 9) #unused
 
-MISSILE_SIZE = (1, 3)
+MISSILE_SIZE = (80, 1) #Default (80, 1)
 
 PLAYER_START_X = 0
-PLAYER_START_Y = 30#100
+PLAYER_START_Y = 100
 
 X_BORDERS = (0, 160)
-PLAYER_BOUNDS = (0, 160), (0, 150) #45
+PLAYER_BOUNDS = (0, 160), (45, 150)
 
 # Maximum number of objects
 MAX_TRUCKS = 12
@@ -369,6 +369,8 @@ def check_missile_collisions(
     enemy_positions: chex.Array,    # (N_ENEMIES, 2)
     score: chex.Array,
     rng_key: chex.PRNGKey,
+    chopper_position: chex.Array,
+    player_x: chex.Array,
 ) -> tuple[chex.Array, chex.Array, chex.Array, chex.PRNGKey]:
     """Check for collisions between player missiles and enemies."""
 
@@ -380,21 +382,21 @@ def check_missile_collisions(
         missile_active = missile[2] != 0
         missile_x, missile_y, direction, _ = missile
 
-        offset_x = jnp.where(direction == -1, 80, 0)
-        missile_rect_pos = jnp.array([missile_x + offset_x, missile_y])
-
         def check_single_enemy(enemy_idx, inner_carry):
             missile_positions, enemy_positions, score, rng_key = inner_carry
             enemy_pos = enemy_positions[enemy_idx]
 
+            missile_out_of_bounds = jnp.logical_or(
+                missile_x > player_x + WIDTH - chopper_position - MISSILE_SIZE[0],
+                missile_x < player_x - chopper_position,
+            )
+
             collision = jnp.logical_and(
-                missile_active,
-                check_collision_single(
-                    missile_rect_pos,
-                    MISSILE_SIZE,
-                    enemy_pos,
-                    ENEMY_SIZE,
-                )
+                jnp.logical_and(
+                    missile_active,
+                    check_collision_single(missile_rect_pos, MISSILE_SIZE, enemy_pos, ENEMY_SIZE,)
+                ),
+                jnp.logical_not(missile_out_of_bounds)
             )
 
             # Entferne Gegner bei Treffer
@@ -1201,17 +1203,21 @@ class JaxChopperCommand(JaxEnvironment[ChopperCommandState, ChopperCommandObserv
                 state, state.player_x, state.player_y, action
             )
 
-            # Check missile collisions
+            chopper_position = (WIDTH // 2) - 8 + new_local_player_offset + (new_player_velocity_x * DISTANCE_WHEN_FLYING)
+
+            # Check missile collisions with jets
             (
                 new_player_missile_position,
                 new_jet_positions,
-                new_score,
+                new_score_jet,
                 new_rng_key,
             ) = check_missile_collisions(
                 new_player_missile_positions,
-                new_jet_positions,  # TODO: make work for jets AND choppers
+                new_jet_positions,
                 state.score,
                 new_rng_key,
+                chopper_position,
+                new_player_x
             )
 
             # Check player missile collisions with choppers
@@ -1223,8 +1229,10 @@ class JaxChopperCommand(JaxEnvironment[ChopperCommandState, ChopperCommandObserv
             ) = check_missile_collisions(
                 new_player_missile_positions,
                 new_chopper_positions,
-                state.score,
+                new_score_jet,
                 new_rng_key,
+                chopper_position,
+                new_player_x,
             )
 
             new_spawn_state = state.spawn_state # remove if used in spawn_step()
@@ -1248,7 +1256,7 @@ class JaxChopperCommand(JaxEnvironment[ChopperCommandState, ChopperCommandObserv
             )
 
             # Check player collision
-            player_collision, collision_points = check_player_collision(
+            player_collision_jet, collision_points_jet = check_player_collision(
                 new_player_x,
                 new_player_y,
                 new_jet_positions,
@@ -1256,13 +1264,16 @@ class JaxChopperCommand(JaxEnvironment[ChopperCommandState, ChopperCommandObserv
                 new_score,
             )
 
-            player_collision, collision_points = check_player_collision(
+            player_collision_chopper, collision_points_chopper = check_player_collision(
                 new_player_x,
                 new_player_y,
                 new_chopper_positions,
                 new_enemy_missile_positions,
                 new_score,
             )
+
+            player_collision = player_collision_jet + player_collision_chopper
+            collision_points = collision_points_jet + collision_points_chopper
 
             # Update score with collision points
             new_score += collision_points
