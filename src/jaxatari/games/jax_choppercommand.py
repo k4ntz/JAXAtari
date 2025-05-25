@@ -365,38 +365,53 @@ def check_collision_batch(pos1, size1, pos2_array, size2):
 
 @jax.jit
 def check_missile_collisions(
-    missile_positions: chex.Array,  # (MAX_MISSILES, 3)
+    missile_positions: chex.Array,  # (MAX_MISSILES, 4)
     enemy_positions: chex.Array,    # (N_ENEMIES, 2)
     score: chex.Array,
     rng_key: chex.PRNGKey,
     chopper_position: chex.Array,
     player_x: chex.Array,
 ) -> tuple[chex.Array, chex.Array, chex.Array, chex.PRNGKey]:
-    """Check for collisions between player missiles and enemies."""
+    """Check for collisions between player missiles and enemies, mit dynamischer Breitenanpassung."""
 
     def check_single_missile(missile_idx, carry):
         missile_positions, enemy_positions, score, rng_key = carry
 
         missile = missile_positions[missile_idx]
-        missile_rect_pos = missile[:2]
-        missile_active = missile[2] != 0
         missile_x, missile_y, direction, _ = missile
+        missile_active = missile[2] != 0
 
         def check_single_enemy(enemy_idx, inner_carry):
             missile_positions, enemy_positions, score, rng_key = inner_carry
             enemy_pos = enemy_positions[enemy_idx]
 
-            missile_out_of_bounds = jnp.logical_or(
-                missile_x > player_x + WIDTH - chopper_position - MISSILE_SIZE[0],
-                missile_x < player_x - chopper_position,
-            )
+            # Sichtfeldgrenzen
+            left_bound = player_x - chopper_position
+            right_bound = left_bound + WIDTH
+
+            missile_left = missile_x
+            missile_right = missile_x + MISSILE_SIZE[0]
+
+            # Dynamische Breite berechnen
+            clipped_left = jnp.maximum(missile_left, left_bound)
+            clipped_right = jnp.minimum(missile_right, right_bound)
+
+            # Neue Breite
+            clipped_width = jnp.maximum(0, clipped_right - clipped_left)
+
+            # Missile ist zu klein → keine Kollision möglich
+            too_small = clipped_width <= 0
+
+            # Neue Position für Kollisionstest
+            adjusted_pos = jnp.array([clipped_left, missile_y])
+            adjusted_size = jnp.array([clipped_width, MISSILE_SIZE[1]])
 
             collision = jnp.logical_and(
                 jnp.logical_and(
                     missile_active,
-                    check_collision_single(missile_rect_pos, MISSILE_SIZE, enemy_pos, ENEMY_SIZE,)
+                    jnp.logical_not(too_small)
                 ),
-                jnp.logical_not(missile_out_of_bounds)
+                check_collision_single(adjusted_pos, adjusted_size, enemy_pos, ENEMY_SIZE)
             )
 
             # Entferne Gegner bei Treffer
@@ -406,7 +421,11 @@ def check_missile_collisions(
             score_add = jnp.where(collision, 100, 0)
 
             # Missile deaktivieren bei Treffer
-            new_missile = jnp.where(collision, jnp.array([0, 0, 0, 0], dtype=missile.dtype), missile) #Achtung array hat jetzt 4 Einträge pro missile
+            new_missile = jnp.where(
+                collision,
+                jnp.array([0, 0, 0, 0], dtype=missile.dtype),
+                missile
+            )
 
             # Apply updates
             updated_enemies = enemy_positions.at[enemy_idx].set(new_enemy_pos)
