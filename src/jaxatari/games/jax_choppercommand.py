@@ -1496,15 +1496,6 @@ class Renderer_AtraJaxis(AtraJaxisRenderer):
             frame_minimap_mountains,
         )
 
-        # Render player on minimap
-        raster = aj.render_at(
-            raster,
-            MINIMAP_POSITION_X + 16 + (chopper_position // (DOWNSCALING_FACTOR_WIDTH * 7)),
-            MINIMAP_POSITION_Y + 6 + (state.player_y // (DOWNSCALING_FACTOR_HEIGHT + 7)),
-            MINIMAP_PLAYER,
-        )
-
-
         # Render trucks on minimap
         def render_truck_minimap(i, raster_base):
             weird_offset = 16  # TODO: Check if truck shown on minimap is actually truck in game (should be though)
@@ -1599,6 +1590,14 @@ class Renderer_AtraJaxis(AtraJaxisRenderer):
             MAX_CHOPPERS,
             DOWNSCALING_FACTOR_WIDTH,
             DOWNSCALING_FACTOR_HEIGHT,
+        )
+
+        # Render player on minimap
+        raster = aj.render_at(
+            raster,
+            MINIMAP_POSITION_X + 16 + (chopper_position // (DOWNSCALING_FACTOR_WIDTH * 7)),
+            MINIMAP_POSITION_Y + 6 + (state.player_y // (DOWNSCALING_FACTOR_HEIGHT + 7)),
+            MINIMAP_PLAYER,
         )
 
         #Render Activision logo
