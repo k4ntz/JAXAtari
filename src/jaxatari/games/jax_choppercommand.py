@@ -557,8 +557,6 @@ def initialize_enemy_positions(rng: chex.PRNGKey) -> Tuple[chex.Array, chex.Arra
         0, fleet_count, spawn_fleet, carry
     )
 
-    print("initialize")
-
     return jet_positions, chopper_positions
 
 
