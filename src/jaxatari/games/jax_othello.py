@@ -32,9 +32,12 @@ UP = Action.UP
 DOWN = Action.DOWN
 LEFT = Action.LEFT
 RIGHT = Action.RIGHT
+UPRIGHT = Action.UPRIGHT
+UPLEFT = Action.UPLEFT
+DOWNRIGHT = Action.DOWNRIGHT
+DOWNLEFT = Action.DOWNLEFT
 PLACE = Action.FIRE
-DIFFICULTY = 6
-RESET = 7
+
 
 # Constants to decide in which side the discs will be flipped
 FLIP_UP_SIDE = 0
@@ -49,10 +52,14 @@ FLIP_UP_LEFT_SIDE = 7
 
 def get_human_action() -> chex.Array:
     keys = pygame.key.get_pressed()
-    if keys[pygame.K_1]:
-        return jnp.array(DIFFICULTY)
-    elif keys[pygame.K_2]:
-        return jnp.array(RESET)
+    if keys[pygame.K_w] and keys[pygame.K_a]:
+        return jnp.array(UPLEFT)
+    elif keys[pygame.K_w] and keys[pygame.K_d]:
+        return jnp.array(UPRIGHT)
+    elif keys[pygame.K_s] and keys[pygame.K_a]:
+        return jnp.array(DOWNLEFT)
+    elif keys[pygame.K_s] and keys[pygame.K_d]:
+        return jnp.array(DOWNRIGHT)
     elif keys[pygame.K_w]:
         return jnp.array(UP)
     elif keys[pygame.K_s]:
@@ -109,6 +116,10 @@ def has_player_decided_field(field_choice_player, action: chex.Array):
     is_right = jnp.equal(action, RIGHT)
     is_down = jnp.equal(action, DOWN)
     is_left = jnp.equal(action, LEFT)
+    is_upleft = jnp.equal(action, UPLEFT)
+    is_upright = jnp.equal(action, UPRIGHT)
+    is_downleft = jnp.equal(action, DOWNLEFT)
+    is_downright = jnp.equal(action, DOWNRIGHT)
     
     def place_disc(field_choice_player):
         return True, field_choice_player
@@ -160,6 +171,22 @@ def has_player_decided_field(field_choice_player, action: chex.Array):
         )
         field_choice_player = field_choice_player.at[1].set(new_value)
         return False, field_choice_player
+    
+    def move_disc_upleft(field_choice_player):
+        _, field_choice_player = move_disc_left(field_choice_player)
+        return move_disc_up(field_choice_player)
+
+    def move_disc_upright(field_choice_player):
+        _, field_choice_player = move_disc_right(field_choice_player)
+        return move_disc_up(field_choice_player)   
+
+    def move_disc_downleft(field_choice_player):
+        _, field_choice_player = move_disc_left(field_choice_player)
+        return move_disc_down(field_choice_player)
+    
+    def move_disc_downright(field_choice_player):
+        _, field_choice_player = move_disc_right(field_choice_player)
+        return move_disc_down(field_choice_player)
 
     return jax.lax.cond(
         is_place,
@@ -176,7 +203,27 @@ def has_player_decided_field(field_choice_player, action: chex.Array):
                     lambda x: jax.lax.cond(
                         is_left,
                         lambda x: move_disc_left(x),
-                        lambda x: (False, x),
+                        lambda x: jax.lax.cond(
+                            is_upleft,
+                            lambda x: move_disc_upleft(x),
+                            lambda x: jax.lax.cond(
+                                is_upright,
+                                lambda x: move_disc_upright(x),
+                                lambda x: jax.lax.cond(
+                                    is_downleft,
+                                    lambda x: move_disc_downleft(x),
+                                    lambda x: jax.lax.cond(
+                                        is_downright,
+                                        lambda x: move_disc_downright(x),
+                                        lambda x: (False, x),
+                                        x
+                                    ),
+                                    x
+                                ),
+                                x
+                            ),
+                            x
+                        ),
                         x
                     ),
                     x
