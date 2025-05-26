@@ -48,7 +48,6 @@ ENEMY_GRID_Y = 70
 START_X = NATIVE_GAME_WIDTH // 4
 START_Y = NATIVE_GAME_HEIGHT
 ENEMY_ATTACK_SPEED = 2
-ENEMY_ATTACK_TURN_TIME = 30
 ENEMY_ATTACK_BULLET_SPEED = 5
 ENEMY_ATTACK_BULLET_DELAY = 75
 ENEMY_ATTACK_MAX_BULLETS = 2
@@ -76,8 +75,6 @@ class GalaxianState(NamedTuple):
     enemy_attack_direction: chex.Array
     enemy_attack_target_x: chex.Array# -1: left, 1: right
     enemy_attack_target_y: chex.Array
-    enemy_attack_turning: chex.Array    # -1: turning left, 1: turning right, 0: no turning
-    enemy_attack_turn_timer: chex.Array
     enemy_attack_respawn_timer: chex.Array
     enemy_attack_bullet_x: chex.Array
     enemy_attack_bullet_y: chex.Array
@@ -86,7 +83,6 @@ class GalaxianState(NamedTuple):
     player_alive: chex.Array
     player_respawn_timer: chex.Array
     score: chex.Array
-    random_key: chex.Array
     step_counter: chex.Array
 
 
@@ -348,7 +344,7 @@ def update_bullets(state: GalaxianState) -> GalaxianState:
 @jax.jit
 def remove_bullets(state: GalaxianState) -> GalaxianState:
     # Wenn die Spieler-Kugel den Bildschirm (y<0) verlässt, reset Kugel + Cooldown
-    def reset(state: GalaxianState) -> GalaxianState:
+    def bullet_reset(state: GalaxianState) -> GalaxianState:
         return state._replace(
             bullet_x                = jnp.array(-1.0, dtype=state.bullet_x.dtype),
             bullet_y                = jnp.array(-1.0, dtype=state.bullet_y.dtype),
@@ -357,7 +353,7 @@ def remove_bullets(state: GalaxianState) -> GalaxianState:
         return state
 
     return lax.cond(state.bullet_y < 0,
-                    reset,
+                    bullet_reset,
                     keep,
                     state)
 
@@ -516,24 +512,22 @@ class JaxGalaxian(JaxEnvironment[GalaxianState, GalaxianObservation, GalaxianInf
 
 
         state = GalaxianState(player_x=jnp.array(NATIVE_GAME_WIDTH / 2.0),
-                             player_y=jnp.array(NATIVE_GAME_HEIGHT - 40.0),
-                             player_shooting_cooldown=jnp.array(0),
-                             bullet_x=jnp.array(-1.0,dtype=jnp.float32),
-                             bullet_y=jnp.array(-1.0,dtype=jnp.float32),
-                             enemy_grid_x=enemy_grid.astype(jnp.float32),
-                             enemy_grid_y=enemy_grid_y.astype(jnp.float32),
-                             enemy_grid_alive=enemy_alive,
-                             enemy_grid_direction=jnp.array(1),
-                             enemy_attack_state=jnp.array(0),
-                             enemy_attack_pos=jnp.array((-1, -1)),
-                             enemy_attack_direction=jnp.array(1),
-                             enemy_attack_turning=jnp.array(0),
-                             enemy_attack_turn_timer=jnp.array(ENEMY_ATTACK_TURN_TIME),
-                             enemy_attack_x=jnp.array(-1.0, dtype=jnp.float32),
-                             enemy_attack_y=jnp.array(-1.0, dtype=jnp.float32),
-                             enemy_attack_respawn_timer=jnp.array(20),
-                             enemy_attack_bullet_x=jnp.array(-1, dtype=jnp.float32),
-                             enemy_attack_bullet_y=jnp.array(-1, dtype=jnp.float32),
+                              player_y=jnp.array(NATIVE_GAME_HEIGHT - 40.0),
+                              player_shooting_cooldown=jnp.array(0),
+                              bullet_x=jnp.array(-1.0,dtype=jnp.float32),
+                              bullet_y=jnp.array(-1.0,dtype=jnp.float32),
+                              enemy_grid_x=enemy_grid.astype(jnp.float32),
+                              enemy_grid_y=enemy_grid_y.astype(jnp.float32),
+                              enemy_grid_alive=enemy_alive,
+                              enemy_grid_direction=jnp.array(1),
+                              enemy_attack_state=jnp.array(0),
+                              enemy_attack_pos=jnp.array((-1, -1)),
+                              enemy_attack_direction=jnp.array(1),
+                              enemy_attack_x=jnp.array(-1.0, dtype=jnp.float32),
+                              enemy_attack_y=jnp.array(-1.0, dtype=jnp.float32),
+                              enemy_attack_respawn_timer=jnp.array(20),
+                              enemy_attack_bullet_x=jnp.array(-1, dtype=jnp.float32),
+                              enemy_attack_bullet_y=jnp.array(-1, dtype=jnp.float32),
                               enemy_attack_bullet_timer=jnp.array(ENEMY_ATTACK_BULLET_DELAY),
                               lives=jnp.array(3),
                               player_alive=jnp.array(True),
@@ -541,7 +535,6 @@ class JaxGalaxian(JaxEnvironment[GalaxianState, GalaxianObservation, GalaxianInf
                               score=jnp.array(0, dtype=jnp.int32),
                               enemy_attack_target_x=jnp.array(-1.0, dtype=jnp.float32),
                               enemy_attack_target_y=jnp.array(-1.0, dtype=jnp.float32),
-                              random_key=jax.random.PRNGKey(0),
                               step_counter=jnp.array(0),
                              )
 
