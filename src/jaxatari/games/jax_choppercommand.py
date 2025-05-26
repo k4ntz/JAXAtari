@@ -81,6 +81,7 @@ DOWNSCALING_FACTOR_HEIGHT = HEIGHT // MINIMAP_HEIGHT
 
 #Object rendering
 TRUCK_SPAWN_DISTANCE = 248 # distance 240px + truck width
+FRAMES_DEATH_ANIMATION = 16
 
 # define object orientations
 FACE_LEFT = -1
@@ -138,8 +139,8 @@ class ChopperCommandState(NamedTuple):
     lives: chex.Array
     spawn_state: SpawnState
     truck_positions: chex.Array # (MAX_TRUCKS, 3) array for trucks
-    jet_positions: chex.Array # (MAX_JETS, 3) array for enemy jets
-    chopper_positions: chex.Array  # (MAX_ENEMIES, 3) array for enemy choppers
+    jet_positions: chex.Array # (MAX_JETS, 4) array for enemy jets (x, y, direction (active), death timer)
+    chopper_positions: chex.Array  # (MAX_ENEMIES, 4) array for enemy choppers (x, y, direction (active), death timer)
     enemy_missile_positions: chex.Array  # (MAX_MISSILES, 3) array for enemy missiles
     player_missile_positions: chex.Array # (MAX_MISSILES, 3) array for player missiles
     player_missile_cooldown: chex.Array
@@ -251,6 +252,11 @@ def load_sprites():
     DIGITS = aj.load_and_pad_digits(os.path.join(MODULE_DIR, "./sprites/choppercommand/score/{}.npy"))
     LIFE_INDICATOR = aj.loadFrame(os.path.join(MODULE_DIR, "sprites/choppercommand/score/chopper.npy"))
 
+    #Death Sprites
+    PLAYER_DEATH = aj.loadFrame(os.path.join(MODULE_DIR, "sprites/choppercommand/player_chopper/death"".npy"))
+    ENEMY_CHOPPER_DEATH = aj.loadFrame(os.path.join(MODULE_DIR, "sprites/choppercommand/enemy_chopper/death"".npy"))
+    ENEMY_JET_DEATH = aj.loadFrame(os.path.join(MODULE_DIR, "sprites/choppercommand/enemy_jet/death"".npy"))
+
     # Player missile sprites
     SPRITE_PL_MISSILE = jnp.concatenate(pl_missile_sprites, axis=0)
 
@@ -276,6 +282,9 @@ def load_sprites():
         SPRITE_ENEMY_MISSILE,
         DIGITS,
         LIFE_INDICATOR,
+        PLAYER_DEATH,
+        ENEMY_CHOPPER_DEATH,
+        ENEMY_JET_DEATH,
         MINIMAP_BG,
         MINIMAP_MOUNTAINS,
         MINIMAP_PLAYER,
@@ -295,6 +304,9 @@ def load_sprites():
     SPRITE_ENEMY_MISSILE,
     DIGITS,
     LIFE_INDICATOR,
+    PLAYER_DEATH,
+    ENEMY_CHOPPER_DEATH,
+    ENEMY_JET_DEATH,
     MINIMAP_BG,
     MINIMAP_MOUNTAINS,
     MINIMAP_PLAYER,
@@ -379,11 +391,12 @@ def check_missile_collisions(
 
         missile = missile_positions[missile_idx]
         missile_x, missile_y, direction, _ = missile
-        missile_active = missile[2] != 0
+        missile_active = missile[3] != 0
 
         def check_single_enemy(enemy_idx, inner_carry):
             missile_positions, enemy_positions, score, rng_key = inner_carry
             enemy_pos = enemy_positions[enemy_idx]
+            enemy_active = enemy_pos[3] > FRAMES_DEATH_ANIMATION
 
             # Sichtfeldgrenzen
             left_bound = player_x - chopper_position
@@ -408,17 +421,20 @@ def check_missile_collisions(
 
             collision = jnp.logical_and(
                 jnp.logical_and(
-                    missile_active,
+                    jnp.logical_and(
+                        missile_active,
+                        enemy_active
+                    ),
                     jnp.logical_not(too_small)
                 ),
                 check_collision_single(adjusted_pos, adjusted_size, enemy_pos, ENEMY_SIZE)
             )
 
-            # Entferne Gegner bei Treffer
-            new_enemy_pos = jnp.where(collision, jnp.zeros_like(enemy_pos), enemy_pos)
+            #Kill initialisieren (nicht endgültig tot)
+            new_enemy_pos = jnp.where(collision, jnp.array([enemy_pos[0], enemy_pos[1], enemy_pos[2], FRAMES_DEATH_ANIMATION]), enemy_pos)
 
             # Punkte vergeben
-            score_add = jnp.where(collision, 100, 0)
+            score_add = jnp.where(jnp.logical_and(collision, enemy_pos[3] > FRAMES_DEATH_ANIMATION), 100, 0)
 
             # Missile deaktivieren bei Treffer
             new_missile = jnp.where(
@@ -464,42 +480,45 @@ def check_player_collision(
     enemy_missile_list,
     score,
 ) -> Tuple[chex.Array, chex.Array]:
-    # check if the player has collided with any of the enemies
+
+    # Prüfe ob Gegner leben (death_timer > FRAMES_DEATH_ANIMATION)
+    active_enemies_mask = enemy_list[:, 3] > FRAMES_DEATH_ANIMATION
+
+    # Ersetze inaktive Einträge durch unkritische Werte (Maskierung)
+    safe_position = jnp.array([-999999.0, -999999.0])
+    masked_enemy_positions = jnp.where(
+        active_enemies_mask[:, None],
+        enemy_list[:, :2],
+        safe_position
+    )
+
+    # Kollisionsprüfung
     enemy_collisions = jnp.any(
         check_collision_batch(
-            jnp.array([player_x, player_y]), PLAYER_SIZE, enemy_list, ENEMY_SIZE
+            jnp.array([player_x, player_y]),
+            PLAYER_SIZE,
+            masked_enemy_positions,
+            ENEMY_SIZE,
         )
     )
 
-    # check if the player has collided with any of the enemy missiles
     missile_collisions = jnp.any(
         check_collision_batch(
             jnp.array([player_x, player_y]), PLAYER_SIZE, enemy_missile_list, MISSILE_SIZE
         )
     )
 
-    # Calculate points for collisions.
     collision_points = jnp.where(
-        enemy_collisions,
-        0,  # No points for colliding with an enemy
-        jnp.where(
-            missile_collisions,
-            0,  # No points for colliding with a missile
-            0,
-        ),
+        jnp.logical_or(enemy_collisions, missile_collisions),
+        0,
+        0,
     )
 
     return (
-        jnp.any(
-            jnp.array(
-                [
-                    enemy_collisions,
-                    missile_collisions,
-                ]
-            )
-        ),
+        jnp.logical_or(enemy_collisions, missile_collisions),
         collision_points,
     )
+
 
 @jax.jit
 def get_spawn_position(moving_left: chex.Array, slot: chex.Array) -> chex.Array:
@@ -520,8 +539,8 @@ def is_slot_empty(pos: chex.Array) -> chex.Array:
 
 @jax.jit
 def initialize_enemy_positions(rng: chex.PRNGKey) -> Tuple[chex.Array, chex.Array]:
-    jet_positions = jnp.zeros((MAX_ENEMIES, 3))
-    chopper_positions = jnp.zeros((MAX_ENEMIES, 3))
+    jet_positions = jnp.zeros((MAX_ENEMIES, 4))
+    chopper_positions = jnp.zeros((MAX_ENEMIES, 4))
 
     fleet_start_x = -780
     fleet_spacing_x = 312
@@ -545,7 +564,7 @@ def initialize_enemy_positions(rng: chex.PRNGKey) -> Tuple[chex.Array, chex.Arra
         def place_unit(i, unit_carry):
             jet_positions, chopper_positions, jet_idx, chopper_idx = unit_carry
             y = y_start + i * vertical_spacing
-            pos = jnp.array([anchor_x, y, -1])  # All units start with direction -1
+            pos = jnp.array([anchor_x, y, -1, FRAMES_DEATH_ANIMATION + 1])  # direction = -1 (links), death_timer = alive
 
             is_chopper = i < chopper_count
             chopper_positions = jax.lax.cond(
@@ -596,20 +615,17 @@ def step_enemy_movement(
 
     rng, direction_rng = jax.random.split(rng)
 
-    def is_slot_empty(pos: chex.Array) -> Array:
-        return jnp.all(pos == 0)
-
     def move_enemy(pos: chex.Array, movement_speed: float) -> chex.Array:
-        is_active = jnp.logical_not(is_slot_empty(pos))
         direction = pos[2]
+        is_active = direction != 0
 
         new_x = pos[0] + direction * movement_speed
-        new_pos = jnp.where(is_active, jnp.array([new_x, pos[1], direction]), pos)
+        new_pos = jnp.where(is_active, jnp.array([new_x, pos[1], direction, pos[3]]), pos)
 
         out_of_bounds = jnp.abs(state_player_x - pos[0]) > 624
 
         wrapped_x = pos[0] + jnp.clip(state_player_x - pos[0], -1, 1) * 1248 + direction * movement_speed
-        wrapped_pos = jnp.array([wrapped_x, pos[1], direction])
+        wrapped_pos = jnp.array([wrapped_x, pos[1], direction, pos[3]])
 
         return jnp.where(out_of_bounds, wrapped_pos, new_pos)
 
@@ -635,6 +651,25 @@ def step_enemy_movement(
 
     return new_jet_positions, new_chopper_positions, rng
 
+
+def update_enemy_death(enemy_array):
+    def update_enemy(i, carry):
+        enemies = carry
+        enemy = enemies[i]
+        direction, timer = enemy[2], enemy[3]
+
+        #Wenn tot initialisiert (also noch aktiv) und timer > 0 & timer <= FRAMES_DEATH_ANIMATION, dann dekrementieren
+        new_timer = jnp.where(jnp.logical_and(timer > 0, timer <= FRAMES_DEATH_ANIMATION), timer - 1, timer)
+
+        #Nach Ablauf von death_timer Enemy deaktivieren/entfernen
+        new_enemy = jnp.where(new_timer == 0,
+            jnp.array([0, 0, 0, 0], dtype=enemy.dtype),
+            enemy.at[3].set(new_timer)
+        )
+
+        return enemies.at[i].set(new_enemy)
+
+    return jax.lax.fori_loop(0, enemy_array.shape[0], update_enemy, enemy_array)
 
 
 @jax.jit
@@ -1252,6 +1287,10 @@ class JaxChopperCommand(JaxEnvironment[ChopperCommandState, ChopperCommandObserv
                 new_player_x,
             )
 
+            #Update enemy death
+            new_chopper_positions = update_enemy_death(new_chopper_positions)
+            new_jet_positions = update_enemy_death(new_jet_positions)
+
             new_spawn_state = state.spawn_state # remove if used in spawn_step()
             new_truck_positions = state.truck_positions
 
@@ -1406,7 +1445,7 @@ class Renderer_AtraJaxis(AtraJaxisRenderer):
                     r,
                     jet_screen_x,  # - scroll_offset_x,
                     jet_screen_y,
-                    frame_enemy_jet,
+                    jnp.where(state.jet_positions[i][3] <= FRAMES_DEATH_ANIMATION, ENEMY_JET_DEATH, frame_enemy_jet), #TODO: Fade out (mit transparenz und/oder verschiedenen sprites) bei death implementieren (auch für chopper)
                     flip_horizontal=(state.jet_positions[i][2] == -1),
                 ),
                 lambda r: r,
@@ -1430,7 +1469,7 @@ class Renderer_AtraJaxis(AtraJaxisRenderer):
                     r,
                     chopper_screen_x,
                     chopper_screen_y,
-                    frame_enemy_chopper,
+                    jnp.where(state.chopper_positions[i][3] <= FRAMES_DEATH_ANIMATION, ENEMY_CHOPPER_DEATH, frame_enemy_chopper),
                     flip_horizontal=(state.chopper_positions[i][2] == -1),
                 ),
                 lambda r: r,
