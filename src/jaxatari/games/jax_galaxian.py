@@ -88,7 +88,7 @@ class GalaxianState(NamedTuple):
     player_respawn_timer: chex.Array
     score: chex.Array
     step_counter: chex.Array
-    diving_probability= chex.Array
+    dive_probability: chex.Array
 
 
 @jax.jit
@@ -132,23 +132,21 @@ def update_enemy_positions(state: GalaxianState) -> GalaxianState:
 
 @jax.jit
 def update_enemy_attack(state: GalaxianState) -> GalaxianState:
-    # neuer dive überhaupt möglich?
-    jax.lax.cond(MAX_DIVERS - jnp.sum(state.enemy_attack_states == 0) > 0, lambda: test_for_new_dive(), lambda: continue_active_dives(state), state)
-
     # random ob gedived wird
     # falls ja, gehe erst zu initialise_new_dive und im anschluss zu continue_active_dives(state)
     # falls nein, gehe direkt zu continue_active_dives(state)
     def test_for_new_dive(state):
         key = jax.random.PRNGKey(state.step_counter)
-        do_new_dive = jax.random.uniform(key, shape=(), minval=0, maxval=100) < state.diving_probability
-        jax.lax.cond(do_new_dive, initialise_new_dive, lambda _: continue_active_dives(state), state)
+        do_new_dive = jax.random.uniform(key, shape=(), minval=0, maxval=100) < state.dive_probability
+        return jax.lax.cond(do_new_dive, lambda state: initialise_new_dive(state), lambda state: continue_active_dives(state), state)
+
 
     def initialise_new_dive(state):
         key = jax.random.PRNGKey(state.step_counter + 100)
         key_choice, key_dir_if_zero = jax.random.split(key)
 
         # finde freien slot im diver array und nimm einfach den ersten (es muss einen geben, weil wir vorher geprüft haben, dass noch Platz ist)
-        available_slots_indices = jnp.where(state.enemy_attack_states == 0, size=MAX_DIVERS, fill_value=-1)[0]
+        available_slots_indices = jnp.where(jnp.atleast_1d(state.enemy_attack_states == 0), size=MAX_DIVERS, fill_value=-1)[0]
         diver_idx = available_slots_indices[0]
 
         # finde zufälligen Angreifer
@@ -159,9 +157,8 @@ def update_enemy_attack(state: GalaxianState) -> GalaxianState:
         grid_rows_indices, grid_cols_indices = jnp.where(alive_grid_mask, size=GRID_ROWS * GRID_COLS, fill_value=-1)
 
         # Filter fill values
-        valid_indices_mask = (grid_rows_indices != -1)
-        valid_rows = grid_rows_indices[valid_indices_mask]
-        valid_cols = grid_cols_indices[valid_indices_mask]
+        valid_rows = jnp.where(grid_rows_indices != -1, grid_rows_indices, 0)
+        valid_cols = jnp.where(grid_rows_indices != -1, grid_cols_indices, 0)
 
         # random selection
         random_choice_idx = jax.random.randint(key_choice, shape=(), minval=0, maxval=num_alive_in_grid)
@@ -206,10 +203,18 @@ def update_enemy_attack(state: GalaxianState) -> GalaxianState:
             enemy_attack_bullet_timer=new_attack_bullet_timer,
         )
 
+    # neuer dive überhaupt möglich?
+    return jax.lax.cond(MAX_DIVERS - jnp.sum(state.enemy_attack_states == 0) > 0, lambda state: test_for_new_dive(state), lambda state: continue_active_dives(state), state)
+
+
+
+
+
 
 
 def continue_active_dives(state: GalaxianState) -> GalaxianState:
     print("yee")
+    return state
 
 
 
@@ -381,7 +386,7 @@ def bullet_collision_attack(state: GalaxianState) -> GalaxianState:
     x_diff = jnp.abs(state.bullet_x - state.enemy_attack_x)
     y_diff = jnp.abs(state.bullet_y - state.enemy_attack_y)
     # Kollisionsmaske: innerhalb 10px und aktuell angreifend (state 1)
-    hit = jnp.any((x_diff <= 10) & (y_diff <= 10) & (state.enemy_attack_state == 1))
+    hit = jnp.any((x_diff <= 10) & (y_diff <= 10) & (state.enemy_attack_states == 1))
 
     def process_hit(state: GalaxianState) -> GalaxianState:
         # Als getötet markieren
@@ -504,23 +509,23 @@ class JaxGalaxian(JaxEnvironment[GalaxianState, GalaxianObservation, GalaxianInf
                               enemy_grid_y=enemy_grid_y.astype(jnp.float32),
                               enemy_grid_alive=enemy_alive,
                               enemy_grid_direction=jnp.array(1),
-                              enemy_attack_state=jnp.array(0),
-                              enemy_attack_pos=jnp.array((-1, -1)),
-                              enemy_attack_direction=jnp.array(1),
-                              enemy_attack_turning=jnp.array(0),
-                              enemy_attack_turn_timer=jnp.array(ENEMY_ATTACK_TURN_TIME),
-                              enemy_attack_x=jnp.array(-1.0, dtype=jnp.float32),
-                              enemy_attack_y=jnp.array(-1.0, dtype=jnp.float32),
-                              enemy_attack_respawn_timer=jnp.array(20),
-                              enemy_attack_bullet_x=jnp.array(-1, dtype=jnp.float32),
-                              enemy_attack_bullet_y=jnp.array(-1, dtype=jnp.float32),
-                              enemy_attack_bullet_timer=jnp.array(ENEMY_ATTACK_BULLET_DELAY),   #TODO fill max divers für alle relevanten
+                              enemy_attack_states=jnp.zeros(MAX_DIVERS),
+                              enemy_attack_pos=jnp.full((MAX_DIVERS, 2), -1, dtype=jnp.int32),
+                              enemy_attack_direction=jnp.zeros(MAX_DIVERS),
+                              enemy_attack_turning=jnp.zeros(MAX_DIVERS),
+                              enemy_attack_turn_timer=jnp.zeros(MAX_DIVERS),
+                              enemy_attack_x=jnp.zeros(MAX_DIVERS),
+                              enemy_attack_y=jnp.zeros(MAX_DIVERS),
+                              enemy_attack_respawn_timer=jnp.zeros(MAX_DIVERS),
+                              enemy_attack_bullet_x=jnp.zeros(MAX_DIVERS),
+                              enemy_attack_bullet_y=jnp.zeros(MAX_DIVERS),
+                              enemy_attack_bullet_timer=jnp.zeros(MAX_DIVERS),
                               lives=jnp.array(3),
                               player_alive=jnp.array(True),
                               player_respawn_timer=jnp.array(PLAYER_DEATH_DELAY),
                               score=jnp.array(0, dtype=jnp.int32),
-                              enemy_attack_target_x=jnp.array(-1.0, dtype=jnp.float32),
-                              enemy_attack_target_y=jnp.array(-1.0, dtype=jnp.float32),
+                              enemy_attack_target_x=jnp.zeros(MAX_DIVERS),
+                              enemy_attack_target_y=jnp.zeros(MAX_DIVERS),
                               step_counter=jnp.array(0),
                               dive_probability=jnp.array(10)
                              )
@@ -569,13 +574,13 @@ class JaxGalaxian(JaxEnvironment[GalaxianState, GalaxianObservation, GalaxianInf
         new_state = handle_shooting(new_state, action)
         new_state = update_enemy_positions(new_state)
         new_state = update_bullets(new_state)
-        new_state = remove_bullets(new_state)
+        #new_state = remove_bullets(new_state)
         new_state = bullet_collision(new_state)
-        new_state = bullet_collision_attack(new_state)
+        #new_state = bullet_collision_attack(new_state)
         new_state = update_enemy_attack(new_state)
         new_state = update_enemy_bullets(new_state)
-        new_state = check_player_death_by_enemy(new_state)
-        new_state = check_player_death_by_bullet(new_state)
+        #new_state = check_player_death_by_enemy(new_state) # TODO rewrite commented methods
+        #new_state = check_player_death_by_bullet(new_state)
         new_state = update_enemy_attack(new_state)
         new_state = new_state._replace(step_counter=new_state.step_counter + 1)
 
@@ -678,13 +683,15 @@ class GalaxianRenderer(AtraJaxisRenderer):
             return aj.render_at(r, bx, by, b)
         raster = lax.cond(state.bullet_y > 0, draw_bullet, lambda r: r, raster)
 
+        '''
         # Feind-Kugel
         def draw_enemy_bullet(r):
             eb = aj.get_sprite_frame(self.SPRITE_ENEMY_BULLET, 0)
             ex = jnp.round(state.enemy_attack_bullet_x).astype(jnp.int32)
             ey = jnp.round(state.enemy_attack_bullet_y).astype(jnp.int32)
             return aj.render_at(r, ex, ey, eb)
-        raster = lax.cond(state.enemy_attack_bullet_y >= 0, draw_enemy_bullet, lambda r: r, raster)
+        raster = lax.cond(state.enemy_attack_bullet_y >= 0, draw_enemy_bullet, lambda r: r, raster) 
+       
 
         # Angreifender Feind
         def draw_attacker(r):
@@ -693,6 +700,7 @@ class GalaxianRenderer(AtraJaxisRenderer):
             ey = jnp.round(state.enemy_attack_y).astype(jnp.int32)
             return aj.render_at(r, ex, ey, e)
         raster = lax.cond(jnp.all(state.enemy_attack_pos >= 0), draw_attacker, lambda r: r, raster)
+         '''
 
         # Feindgitter
         def row_body(i, r_acc):
