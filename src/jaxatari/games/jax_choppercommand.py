@@ -149,6 +149,8 @@ class ChopperCommandState(NamedTuple):
     # death_counter TODO: implement death animation
     obs_stack: chex.ArrayTree
     rng_key: chex.PRNGKey
+    previous_player_x: chex.Array
+    previous_player_y: chex.Array
 
 class EntityPosition(NamedTuple):
     x: jnp.ndarray
@@ -1206,7 +1208,9 @@ class JaxChopperCommand(JaxEnvironment[ChopperCommandState, ChopperCommandObserv
             player_missile_cooldown=jnp.array(0),
             step_counter=jnp.array(0),
             rng_key=jax.random.PRNGKey(42),
-            obs_stack=jnp.zeros((self.frame_stack_size, self.obs_size))  # Initialize obs_stack
+            obs_stack=jnp.zeros((self.frame_stack_size, self.obs_size)),  # Initialize obs_stack
+            previous_player_x=jnp.array(PLAYER_START_X),
+            previous_player_y=jnp.array(PLAYER_START_Y),
         )
 
         initial_obs = self._get_observation(reset_state)
@@ -1377,7 +1381,9 @@ class JaxChopperCommand(JaxEnvironment[ChopperCommandState, ChopperCommandObserv
                 player_missile_cooldown=new_cooldown,
                 step_counter=new_step_counter,
                 rng_key=new_rng_key,
-                obs_stack=state.obs_stack# Include obs_stack in the state
+                obs_stack=state.obs_stack,# Include obs_stack in the state
+                previous_player_x=state.player_x,
+                previous_player_y=state.player_y,
             )
 
             return normal_returned_state
