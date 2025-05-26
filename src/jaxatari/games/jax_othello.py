@@ -950,7 +950,11 @@ class JaxOthello(JaxEnvironment[OthelloState, OthelloObservation, OthelloInfo]):
             RIGHT,
             LEFT,
             UP,
-            DOWN
+            DOWN,
+            UPLEFT,
+            UPRIGHT,
+            DOWNLEFT,
+            DOWNRIGHT
         ]
         self.obs_size = 130
 
