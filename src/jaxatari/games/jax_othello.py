@@ -1072,12 +1072,13 @@ class JaxOthello(JaxEnvironment[OthelloState, OthelloObservation, OthelloInfo]):
         )
         final__step_state = final__step_state._replace(end_of_game_reached=has_game_ended)
 
+        done = self._get_done(final__step_state)
         env_reward = self._get_env_reward(state, final__step_state)
         all_rewards = self._get_all_reward(state, final__step_state)
         info = self._get_info(new_state, all_rewards)
         observation = self._get_observation(final__step_state)
 
-        return observation, final__step_state, env_reward, has_game_ended, info        
+        return observation, final__step_state, env_reward, done, info        
 
     @partial(jax.jit, static_argnums=(0,))
     def _get_info(self, state: OthelloState, all_rewards: chex.Array) -> OthelloInfo:
@@ -1107,9 +1108,20 @@ class JaxOthello(JaxEnvironment[OthelloState, OthelloObservation, OthelloInfo]):
         )
         return rewards
 
+    @partial(jax.jit, static_argnums=(0,))
+    def _get_done(self, state: OthelloState) -> bool:
+        return state.end_of_game_reached
+
     def get_action_space(self) -> jnp.ndarray:
         return jnp.array(self.action_set)
 
+    def get_observation_space(self) -> spaces.Box:
+        return spaces.Box(
+            low=0,
+            high=2,
+            shape=(FIELD_HEIGHT, FIELD_WIDTH),
+            dtype=jnp.uint8,
+        )
 
 
 
