@@ -485,6 +485,7 @@ def check_player_collision_enemy(
     player_y,
     enemy_list,
     enemy_size,
+    player_velocity
 ) -> Tuple[chex.Array, chex.Array]:
 
     player_pos = jnp.array([player_x, player_y])
@@ -501,6 +502,10 @@ def check_player_collision_enemy(
     def check_single(i, carry):
         any_collision_inner, updated_enemies = carry
         enemy_pos = masked_enemy_positions[i]
+
+        offset = (PLAYER_SIZE[0] // 2 - JET_SIZE[0] // 2) - (player_velocity * DISTANCE_WHEN_FLYING)
+
+        enemy_pos = [enemy_pos[0] + offset, enemy_pos[1]]
 
         collision = check_collision_single(
             player_pos,
@@ -1316,7 +1321,8 @@ class JaxChopperCommand(JaxEnvironment[ChopperCommandState, ChopperCommandObserv
                 new_player_x,
                 new_player_y,
                 new_jet_positions,
-                JET_SIZE
+                JET_SIZE,
+                new_player_velocity_x,
             )
             new_jet_positions = player_collision_new_jet_pos
 
@@ -1324,7 +1330,8 @@ class JaxChopperCommand(JaxEnvironment[ChopperCommandState, ChopperCommandObserv
                 new_player_x,
                 new_player_y,
                 new_chopper_positions,
-                CHOPPER_SIZE
+                CHOPPER_SIZE,
+                new_player_velocity_x,
             )
             new_chopper_positions = player_collision_new_chopper_pos
 
@@ -1332,7 +1339,8 @@ class JaxChopperCommand(JaxEnvironment[ChopperCommandState, ChopperCommandObserv
             #    new_player_x,
             #    new_player_y,
             #    new_truck_positions,
-            #    TRUCK_SIZE
+            #    TRUCK_SIZE,
+            #    new_player_velocity_x
             #)
 
             player_collision = jnp.logical_or(
@@ -1405,7 +1413,7 @@ class Renderer_AtraJaxis(AtraJaxisRenderer):
     def render(self, state):
 
         # Local position of player on screen
-        chopper_position = (WIDTH // 2) - 8 + state.local_player_offset + (state.player_velocity_x * DISTANCE_WHEN_FLYING)  # (WIDTH // 2) - 8 = Heli mittig platzieren, state.local_player_offset = ob Heli links oder rechts auf Bildschirm, state.player_velocity_x * DISTANCE_WHEN_FLYING = Bewegen von Heli richtung Mitte wenn er fliegt
+        chopper_position = (WIDTH // 2) + state.local_player_offset + (state.player_velocity_x * DISTANCE_WHEN_FLYING) - (PLAYER_SIZE[0] // 2) # (WIDTH // 2) - 8 = Heli mittig platzieren, state.local_player_offset = ob Heli links oder rechts auf Bildschirm, state.player_velocity_x * DISTANCE_WHEN_FLYING = Bewegen von Heli richtung Mitte wenn er fliegt
 
         # Bildschirmmitte relativ zur Scrollrichtung des Spielers
         static_center_x_jet = (WIDTH // 2) + state.local_player_offset - (JET_SIZE[0] // 2)
