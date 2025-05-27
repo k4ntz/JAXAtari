@@ -48,12 +48,9 @@ SCORE_COLOR = (210, 210, 64)  # Score color
 
 # Object sizes and initial positions
 PLAYER_SIZE = (16, 9)  # Width, Height
-TRUCK_SIZE = (16, 16)  # TODO: insert real size
-ENEMY_SIZE = (8, 8)   #TODO: insert real size (maybe make it variable for jet and chopper for exact hitboxes)
-#Actually, jet is 8x6 and chopper is 8x9
-JET_SIZE = (8, 6) #unused
-CHOPPER_SIZE = (8, 9) #unused
-
+TRUCK_SIZE = (8, 7)
+JET_SIZE = (8, 6)
+CHOPPER_SIZE = (8, 9)
 MISSILE_SIZE = (80, 1) #Default (80, 1)
 
 PLAYER_START_X = 0
@@ -392,6 +389,7 @@ def check_missile_collisions(
     rng_key: chex.PRNGKey,
     chopper_position: chex.Array,
     player_x: chex.Array,
+    enemy_size: chex.Array,
 ) -> tuple[chex.Array, chex.Array, chex.Array, chex.PRNGKey]:
     """Check for collisions between player missiles and enemies, mit dynamischer Breitenanpassung."""
 
@@ -436,7 +434,7 @@ def check_missile_collisions(
                     ),
                     jnp.logical_not(too_small)
                 ),
-                check_collision_single(adjusted_pos, adjusted_size, enemy_pos, ENEMY_SIZE)
+                check_collision_single(adjusted_pos, adjusted_size, enemy_pos, enemy_size)
             )
 
             #Kill initialisieren (nicht endgültig tot)
@@ -486,6 +484,7 @@ def check_player_collision_enemy(
     player_x,
     player_y,
     enemy_list,
+    enemy_size,
 ) -> Tuple[chex.Array, chex.Array]:
 
     player_pos = jnp.array([player_x, player_y])
@@ -507,7 +506,7 @@ def check_player_collision_enemy(
             player_pos,
             PLAYER_SIZE,
             enemy_pos,
-            ENEMY_SIZE
+            enemy_size
         )
 
         # Wenn Kollision: Gegner markieren
@@ -702,8 +701,6 @@ def initialize_truck_positions() -> chex.Array:
 @jax.jit
 def step_truck_movement(
         truck_positions: chex.Array,
-        # jet_positions: chex.Array, # maybe add later again
-        # chopper_positions: chex.Array,
         state_player_x: chex.Array,
         state_player_y: chex.Array,
 ) -> chex.Array:
@@ -720,20 +717,18 @@ def step_truck_movement(
             check_collision_single(
                 jnp.array([state_player_x, state_player_y]),
                 PLAYER_SIZE,
-                jnp.array([truck_pos[0], truck_pos[1]]),
+                truck_pos[:2],
                 TRUCK_SIZE,
             )
-        )
+        ) #TODO: Implement. (Maybe not in here, but in normal_game_step. See jet and chopper collisions)
 
-        # TODO: handle truck collision
+        movement_x = truck_pos[2] * 0.5  # Geschwindigkeit 0.5 pro Frame
 
-        movement_x = truck_pos[2] * 0.5 # maybe add variable speed
-
-        out_of_bounds = jnp.abs(state_player_x - truck_pos[0]) > 624 # jnp.logical_or(new_x < -2**20, new_x >= 2**20)
+        out_of_bounds = jnp.abs(state_player_x - truck_pos[0]) > 624
 
         new_x = jnp.where(
             out_of_bounds,
-            truck_pos[0] + jnp.clip(state_player_x - truck_pos[0], -1, 1) * 1248 + movement_x,
+            truck_pos[0] + jnp.sign(state_player_x - truck_pos[0]) * 1248 + movement_x,
             truck_pos[0] + movement_x,
         )
 
@@ -742,7 +737,6 @@ def step_truck_movement(
             jnp.array([new_x, truck_pos[1], truck_pos[2]]),
             jnp.zeros(3),
         )
-
 
 
         return positions.at[i].set(new_pos)
@@ -1117,17 +1111,17 @@ class JaxChopperCommand(JaxEnvironment[ChopperCommandState, ChopperCommandObserv
         # Apply conversion to each type of entity using vmap
 
         # Enemy jets
-        jets = jax.vmap(lambda pos: convert_to_entity(pos, ENEMY_SIZE))(
+        jets = jax.vmap(lambda pos: convert_to_entity(pos, JET_SIZE))(
             state.jet_positions
         )
 
         # Friendly trucks
-        trucks = jax.vmap(lambda pos: convert_to_entity(pos, ENEMY_SIZE))(
+        trucks = jax.vmap(lambda pos: convert_to_entity(pos, TRUCK_SIZE))(
             state.truck_positions
         )
 
         # Enemy choppers
-        choppers = jax.vmap(lambda pos: convert_to_entity(pos, ENEMY_SIZE))(
+        choppers = jax.vmap(lambda pos: convert_to_entity(pos, CHOPPER_SIZE))(
             state.chopper_positions
         )
 
@@ -1277,7 +1271,8 @@ class JaxChopperCommand(JaxEnvironment[ChopperCommandState, ChopperCommandObserv
                 state.score,
                 new_rng_key,
                 chopper_position,
-                new_player_x
+                new_player_x,
+                JET_SIZE
             )
 
             # Check player missile collisions with choppers
@@ -1293,6 +1288,7 @@ class JaxChopperCommand(JaxEnvironment[ChopperCommandState, ChopperCommandObserv
                 new_rng_key,
                 chopper_position,
                 new_player_x,
+                CHOPPER_SIZE
             )
 
             new_spawn_state = state.spawn_state # remove if used in spawn_step()
@@ -1320,6 +1316,7 @@ class JaxChopperCommand(JaxEnvironment[ChopperCommandState, ChopperCommandObserv
                 new_player_x,
                 new_player_y,
                 new_jet_positions,
+                JET_SIZE
             )
             new_jet_positions = player_collision_new_jet_pos
 
@@ -1327,6 +1324,7 @@ class JaxChopperCommand(JaxEnvironment[ChopperCommandState, ChopperCommandObserv
                 new_player_x,
                 new_player_y,
                 new_chopper_positions,
+                CHOPPER_SIZE
             )
             new_chopper_positions = player_collision_new_chopper_pos
 
@@ -1334,6 +1332,7 @@ class JaxChopperCommand(JaxEnvironment[ChopperCommandState, ChopperCommandObserv
             #    new_player_x,
             #    new_player_y,
             #    new_truck_positions,
+            #    TRUCK_SIZE
             #)
 
             player_collision = jnp.logical_or(
@@ -1405,15 +1404,20 @@ class Renderer_AtraJaxis(AtraJaxisRenderer):
     @partial(jax.jit, static_argnums=(0,))
     def render(self, state):
 
+        # Local position of player on screen
+        chopper_position = (WIDTH // 2) - 8 + state.local_player_offset + (state.player_velocity_x * DISTANCE_WHEN_FLYING)  # (WIDTH // 2) - 8 = Heli mittig platzieren, state.local_player_offset = ob Heli links oder rechts auf Bildschirm, state.player_velocity_x * DISTANCE_WHEN_FLYING = Bewegen von Heli richtung Mitte wenn er fliegt
+
+        # Bildschirmmitte relativ zur Scrollrichtung des Spielers
+        static_center_x_jet = (WIDTH // 2) + state.local_player_offset - (JET_SIZE[0] // 2)
+        static_center_x_chopper = (WIDTH // 2) + state.local_player_offset - (CHOPPER_SIZE[0] // 2)
+        static_center_x_truck = (WIDTH // 2) + state.local_player_offset - (TRUCK_SIZE[0] // 2)
+
         #Initialisierung
         raster = jnp.zeros((WIDTH, HEIGHT, 3))
 
         # Render Background
         frame_idx = jnp.asarray(state.local_player_offset + (-state.player_x % WIDTH), dtype=jnp.int32) #local_player_offset = ob Heli links oder rechts auf Bildschirm ist, -state.player_x % WIDTH = Scrollen vom Hintergrund
         frame_bg = aj.get_sprite_frame(SPRITE_BG, frame_idx)
-
-        # Local position of player on screen
-        chopper_position = (WIDTH // 2) - 8 + state.local_player_offset + (state.player_velocity_x * DISTANCE_WHEN_FLYING)  # (WIDTH // 2) - 8 = Heli mittig platzieren, state.local_player_offset = ob Heli links oder rechts auf Bildschirm, state.player_velocity_x * DISTANCE_WHEN_FLYING = Bewegen von Heli richtung Mitte wenn er fliegt
 
         raster = aj.render_at(raster, 0, 0, frame_bg)
 
@@ -1427,7 +1431,7 @@ class Renderer_AtraJaxis(AtraJaxisRenderer):
             repeated_truck_x = ((state.player_x - original_truck_x) % TRUCK_REPEAT_DISTANCE) + original_truck_x
             truck_screen_x = repeated_truck_x - state.player_x + chopper_position
             '''
-            truck_screen_x = state.truck_positions[i][0] - state.player_x + chopper_position
+            truck_screen_x = state.truck_positions[i][0] - state.player_x + static_center_x_truck
             truck_screen_y = state.truck_positions[i][1]
 
             return jax.lax.cond(
@@ -1451,7 +1455,7 @@ class Renderer_AtraJaxis(AtraJaxisRenderer):
         def render_enemy_jet(i, raster_base):
             should_render = state.jet_positions[i][2] != 0
 
-            jet_screen_x = state.jet_positions[i][0] - state.player_x + chopper_position
+            jet_screen_x = state.jet_positions[i][0] - state.player_x + static_center_x_jet
             jet_screen_y = state.jet_positions[i][1]
 
             #jax.debug.print("{x}", x=jet_screen_x, y=jet_screen_y)
@@ -1477,7 +1481,7 @@ class Renderer_AtraJaxis(AtraJaxisRenderer):
         def render_enemy_chopper(i, raster_base):
             should_render = state.chopper_positions[i][2] != 0
 
-            chopper_screen_x = state.chopper_positions[i][0] - state.player_x + chopper_position
+            chopper_screen_x = state.chopper_positions[i][0] - state.player_x + static_center_x_chopper
             chopper_screen_y = state.chopper_positions[i][1]
 
             return jax.lax.cond(
@@ -1504,7 +1508,7 @@ class Renderer_AtraJaxis(AtraJaxisRenderer):
                 should_render,
                 lambda r: aj.render_at(
                     r,
-                    state.enemy_missile_positions[i][0], # "- scroll_offset_x entfernt, implementierung sollte trotzdem simpel sein
+                    state.enemy_missile_positions[i][0],
                     state.enemy_missile_positions[i][1],
                     frame_enemy_missile,
                     flip_horizontal=(state.enemy_missile_positions[i][2] == -1),
