@@ -558,7 +558,7 @@ def initialize_enemy_positions(rng: chex.PRNGKey) -> Tuple[chex.Array, chex.Arra
     jet_positions = jnp.zeros((MAX_ENEMIES, 4))
     chopper_positions = jnp.zeros((MAX_ENEMIES, 4))
 
-    fleet_start_x = -780
+    fleet_start_x = -720
     fleet_spacing_x = 312
     fleet_count = 4
     units_per_fleet = 3
@@ -626,46 +626,52 @@ def step_enemy_movement(
     state_player_x: chex.Array,
     state_player_y: chex.Array,
 ) -> Tuple[chex.Array, chex.Array, chex.PRNGKey]:
-    """Bewegt alle aktiven Enemies (Jets) horizontal.
-    Entfernt Enemies bei Spielfeldgrenze und vergibt neue Richtung."""
+    """Bewegt alle aktiven Enemies (Jets und Chopper) horizontal.
+    Richtungswechsel erfolgt zeitgesteuert: 4s links (1.5), 2s rechts (0.75) zyklisch."""
 
     rng, direction_rng = jax.random.split(rng)
 
-    def move_enemy(pos: chex.Array, movement_speed: float) -> chex.Array:
-        direction = pos[2]
-        is_active = direction != 0
+    def get_direction_and_speed(step_counter: chex.Array) -> Tuple[float, float]:
+        cycle_step = step_counter % 360  # 4s + 2s = 360 Frames
 
-        new_x = pos[0] + direction * movement_speed
+        # Linke Phase: 0–239 (4 Sekunden)
+        left_phase = cycle_step < 240
+        direction = jnp.where(left_phase, -1.0, 1.0)
+        speed = jnp.where(left_phase, 1.0, 0.5)
+        return direction, speed
+
+    def move_enemy(pos: chex.Array, direction: float, speed: float) -> chex.Array:
+        is_active = pos[2] != 0
+        new_x = pos[0] + direction * speed
         new_pos = jnp.where(is_active, jnp.array([new_x, pos[1], direction, pos[3]]), pos)
 
         out_of_bounds = jnp.abs(state_player_x - pos[0]) > 624
-
-        wrapped_x = pos[0] + jnp.clip(state_player_x - pos[0], -1, 1) * 1248 + direction * movement_speed
+        wrapped_x = pos[0] + jnp.clip(state_player_x - pos[0], -1, 1) * 1248 + direction * speed
         wrapped_pos = jnp.array([wrapped_x, pos[1], direction, pos[3]])
 
         return jnp.where(out_of_bounds, wrapped_pos, new_pos)
 
-    # --- JET-Loop ---
+    direction, speed = get_direction_and_speed(step_counter)
+
     def process_jet(i, new_positions):
         current_pos = jet_positions[i]
-        new_pos = move_enemy(current_pos, movement_speed=0.5)
+        new_pos = move_enemy(current_pos, direction, speed)
         return new_positions.at[i].set(new_pos)
 
     new_jet_positions = jnp.zeros_like(jet_positions)
     new_jet_positions = jax.lax.fori_loop(0, jet_positions.shape[0], process_jet, new_jet_positions)
 
-    # --- CHOPPER-Loop ---
     def process_chopper(i, new_positions):
         current_pos = chopper_positions[i]
-        new_pos = move_enemy(current_pos, movement_speed=0.5)
+        new_pos = move_enemy(current_pos, direction, speed)
         return new_positions.at[i].set(new_pos)
 
     new_chopper_positions = jnp.zeros_like(chopper_positions)
     new_chopper_positions = jax.lax.fori_loop(0, chopper_positions.shape[0], process_chopper, new_chopper_positions)
 
-    #print("step")
-
     return new_jet_positions, new_chopper_positions, rng
+
+
 
 
 def update_entity_death(entity_array, death_timer):
