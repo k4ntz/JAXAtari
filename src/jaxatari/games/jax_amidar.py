@@ -11,6 +11,7 @@ from jaxatari.environment import JaxEnvironment, JAXAtariAction as Action
 from jaxatari.renderers import AtraJaxisRenderer
 from jaxatari.rendering import atraJaxis as aj
 
+# next TODO: add player direction to make it easier to move through the maze 
 
 WIDTH = 160
 HEIGHT = 210
@@ -200,6 +201,50 @@ VERTICAL_PATH_EDGES = jnp.array(
 
 PATH_EDGES = jnp.concatenate((HORIZONTAL_PATH_EDGES, VERTICAL_PATH_EDGES), axis=0)
 
+@jax.jit
+def generate_path_mask():
+    """Generates a mask for the path edges using Bresenham's line algorithm.
+    Args:
+        path_edges: JAX array of shape (N, 2, 2) representing the path edges.
+    """
+    # Create an empty mask 
+    mask = jnp.zeros((WIDTH, HEIGHT), dtype=jnp.int32)
+
+    def add_horizontal_edge(i, mask):
+        start, end = HORIZONTAL_PATH_EDGES[i]
+
+        x1, y1 = start
+        x2, y2 = end
+
+        def loop(x, carry):
+            mask, y = carry
+            mask = mask.at[x, y].set(1)
+            return (mask, y)
+        
+        mask, _ = jax.lax.fori_loop(x1, x2 + 1, loop, (mask, y1))
+        return mask
+    
+    def add_vertical_edge(i, mask):
+        start, end = VERTICAL_PATH_EDGES[i]
+
+        x1, y1 = start
+        x2, y2 = end
+
+        def loop(y, carry):
+            mask, x = carry
+            mask = mask.at[x, y].set(1)
+            return (mask, x)
+        
+        mask, _ = jax.lax.fori_loop(y1, y2 + 1, loop, (mask, x1))
+        return mask
+    
+    mask = jax.lax.fori_loop(0, jnp.shape(HORIZONTAL_PATH_EDGES)[0], add_horizontal_edge, mask)
+    mask = jax.lax.fori_loop(0, jnp.shape(VERTICAL_PATH_EDGES)[0], add_vertical_edge, mask)
+
+    return mask
+
+PATH_MASK = generate_path_mask()
+
 # immutable state container
 class AmidarState(NamedTuple):
     player_x: chex.Array
@@ -236,6 +281,15 @@ def player_step(state: AmidarState, action: chex.Array) -> tuple[chex.Array, che
 
     new_x = state.player_x + jnp.where(left, -1, 0) + jnp.where(right, 1, 0)
     new_y = state.player_y + jnp.where(up, -1, 0) + jnp.where(down, 1, 0)
+
+    # jax.debug.print("new player position: ({}, {})", new_x, new_y)
+    # jax.debug.print("Path mask at new position: {}", PATH_MASK[new_x, new_y])
+
+    # only move if new position is on the path
+    # add 2 to x and y to account for the offset of the top left corner of the player sprite in relation to the path mask
+    new_x = jnp.where(PATH_MASK[new_x+2, new_y+2] == 1, new_x, state.player_x)
+    new_y = jnp.where(PATH_MASK[new_x+2, new_y+2] == 1, new_y, state.player_y)
+
     return new_x, new_y, 0
 
 
@@ -273,6 +327,9 @@ class JaxAmidar(JaxEnvironment[AmidarState, AmidarObservation, AmidarInfo]):
             enemy_types=INITIAL_ENEMY_TYPES,
         )
         initial_obs = self._get_observation(state)
+
+        # jnp.set_printoptions(threshold=jnp.inf)
+        # jax.debug.print("{m}", m=PATH_MASK)
 
         return initial_obs, state
     
@@ -390,6 +447,8 @@ class AmidarRenderer(AtraJaxisRenderer):
         raster = aj.render_at(raster, 0, 0, frame_bg)
 
         # Render paths - The Top Left corner of the path is (16, 15)
+        # TODO render the paths that have been walked on
+        # TODO make adaptable to different configurations?
         frame_paths = aj.get_sprite_frame(self.SPRITE_PATHS, 0)
         raster = aj.render_at(raster, 16, 15, frame_paths)
 
@@ -408,9 +467,9 @@ class AmidarRenderer(AtraJaxisRenderer):
         
         raster = jax.lax.fori_loop(0, MAX_ENEMIES, render_enemy, raster)
 
-        # Render movement paths - The Top Left corner of the path is (15, 15)
-        # TODO render the paths that have been walked on
-        
+        ###### For DEBUGGING #######
+
+        # Render path edges
         def render_path(i, raster):
             path = jnp.array(PATH_EDGES[i])
 
@@ -419,6 +478,10 @@ class AmidarRenderer(AtraJaxisRenderer):
             return raster
 
         raster = jax.lax.fori_loop(0, jnp.shape(PATH_EDGES)[0], render_path, raster)
+
+        #render mask
+        all_white = jnp.full_like(raster, 255, dtype=jnp.uint8)
+        raster = jnp.where(PATH_MASK[:, :, None] == 1, all_white, raster)
 
         return raster
 
