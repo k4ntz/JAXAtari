@@ -255,8 +255,10 @@ def load_sprites():
 
     #Death Sprites
     PLAYER_DEATH = aj.loadFrame(os.path.join(MODULE_DIR, "sprites/choppercommand/player_chopper/death"".npy"))
-    ENEMY_CHOPPER_DEATH = aj.loadFrame(os.path.join(MODULE_DIR, "sprites/choppercommand/enemy_chopper/death"".npy"))
-    ENEMY_JET_DEATH = aj.loadFrame(os.path.join(MODULE_DIR, "sprites/choppercommand/enemy_jet/death"".npy"))
+
+    ENEMY_DEATH_1 = aj.loadFrame(os.path.join(MODULE_DIR, "sprites/choppercommand/enemy_death/death_1.npy"))
+    ENEMY_DEATH_2 = aj.loadFrame(os.path.join(MODULE_DIR, "sprites/choppercommand/enemy_death/death_2.npy"))
+    ENEMY_DEATH_3 = aj.loadFrame(os.path.join(MODULE_DIR, "sprites/choppercommand/enemy_death/death_3.npy"))
 
     # Player missile sprites
     SPRITE_PL_MISSILE = jnp.concatenate(pl_missile_sprites, axis=0)
@@ -284,8 +286,9 @@ def load_sprites():
         DIGITS,
         LIFE_INDICATOR,
         PLAYER_DEATH,
-        ENEMY_CHOPPER_DEATH,
-        ENEMY_JET_DEATH,
+        ENEMY_DEATH_1,
+        ENEMY_DEATH_2,
+        ENEMY_DEATH_3,
         MINIMAP_BG,
         MINIMAP_MOUNTAINS,
         MINIMAP_PLAYER,
@@ -306,8 +309,9 @@ def load_sprites():
     DIGITS,
     LIFE_INDICATOR,
     PLAYER_DEATH,
-    ENEMY_CHOPPER_DEATH,
-    ENEMY_JET_DEATH,
+    ENEMY_CHOPPER_DEATH_1,
+    ENEMY_CHOPPER_DEATH_2,
+    ENEMY_CHOPPER_DEATH_3,
     MINIMAP_BG,
     MINIMAP_MOUNTAINS,
     MINIMAP_PLAYER,
@@ -1465,7 +1469,7 @@ class Renderer_AtraJaxis(AtraJaxisRenderer):
 
         raster = jax.lax.fori_loop(0, MAX_TRUCKS, render_truck, raster)
 
-        # Render enemies
+        # -- JET Rendering --
         frame_enemy_jet = aj.get_sprite_frame(SPRITE_ENEMY_JET, state.step_counter)
 
         def render_enemy_jet(i, raster_base):
@@ -1474,15 +1478,38 @@ class Renderer_AtraJaxis(AtraJaxisRenderer):
             jet_screen_x = state.jet_positions[i][0] - state.player_x + static_center_x_jet
             jet_screen_y = state.jet_positions[i][1]
 
+            death_timer = state.jet_positions[i][3]
+
+            phase0 = death_timer > (2 * FRAMES_DEATH_ANIMATION_ENEMY) // 3
+            phase1 = jnp.logical_and(
+                death_timer <= (2 * FRAMES_DEATH_ANIMATION_ENEMY) // 3,
+                death_timer > FRAMES_DEATH_ANIMATION_ENEMY // 3
+            )
+            death_sprite = jnp.where(
+                phase0, ENEMY_CHOPPER_DEATH_1,
+                jnp.where(phase1, ENEMY_CHOPPER_DEATH_2, ENEMY_CHOPPER_DEATH_3)
+            )
+
+            def render_true(r):
+                # je nach death_timer richtigen Sprite rendern
+                return jax.lax.cond(
+                    death_timer <= FRAMES_DEATH_ANIMATION_ENEMY,
+                    # Wenn in Death-Phase
+                    lambda rr: aj.render_at(
+                        rr, jet_screen_x, jet_screen_y - 2, death_sprite,
+                        flip_horizontal=(state.jet_positions[i][2] == -1)
+                    ),
+                    # Wenn jet lebt
+                    lambda rr: aj.render_at(
+                        rr, jet_screen_x, jet_screen_y, frame_enemy_jet,
+                        flip_horizontal=(state.jet_positions[i][2] == -1)
+                    ),
+                    raster_base
+                )
+
             return jax.lax.cond(
                 should_render,
-                lambda r: aj.render_at(
-                    r,
-                    jet_screen_x,
-                    jet_screen_y,
-                    jnp.where(state.jet_positions[i][3] <= FRAMES_DEATH_ANIMATION_ENEMY, ENEMY_JET_DEATH, frame_enemy_jet), #TODO: Fade out (mit transparenz und/oder verschiedenen sprites) bei death implementieren (auch für chopper)
-                    flip_horizontal=(state.jet_positions[i][2] == -1),
-                ),
+                render_true,
                 lambda r: r,
                 raster_base,
             )
@@ -1498,13 +1525,30 @@ class Renderer_AtraJaxis(AtraJaxisRenderer):
             chopper_screen_x = state.chopper_positions[i][0] - state.player_x + static_center_x_chopper
             chopper_screen_y = state.chopper_positions[i][1]
 
+            death_timer = state.chopper_positions[i][3]
+
+            phase0 = death_timer > (2 * FRAMES_DEATH_ANIMATION_ENEMY) // 3
+            phase1 = jnp.logical_and(
+                death_timer <= (2 * FRAMES_DEATH_ANIMATION_ENEMY) // 3,
+                death_timer > FRAMES_DEATH_ANIMATION_ENEMY // 3
+            )
+
+            death_sprite = jnp.where(
+                phase0, ENEMY_CHOPPER_DEATH_1,
+                jnp.where(phase1, ENEMY_CHOPPER_DEATH_2, ENEMY_CHOPPER_DEATH_3)
+            )
+
             return jax.lax.cond(
                 should_render,
                 lambda r: aj.render_at(
                     r,
                     chopper_screen_x,
                     chopper_screen_y,
-                    jnp.where(state.chopper_positions[i][3] <= FRAMES_DEATH_ANIMATION_ENEMY, ENEMY_CHOPPER_DEATH, frame_enemy_chopper),
+                    jnp.where(
+                        death_timer <= FRAMES_DEATH_ANIMATION_ENEMY,
+                        death_sprite,
+                        frame_enemy_chopper
+                    ),
                     flip_horizontal=(state.chopper_positions[i][2] == -1),
                 ),
                 lambda r: r,
