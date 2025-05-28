@@ -11,8 +11,6 @@ from jaxatari.environment import JaxEnvironment, JAXAtariAction as Action
 from jaxatari.renderers import AtraJaxisRenderer
 from jaxatari.rendering import atraJaxis as aj
 
-# next TODO: add player direction to make it easier to move through the maze 
-
 WIDTH = 160
 HEIGHT = 210
 
@@ -273,7 +271,12 @@ class AmidarInfo(NamedTuple):
 def player_step(state: AmidarState, action: chex.Array) -> tuple[chex.Array, chex.Array, chex.Array]:
     """Updates the player position based on the action taken.
     Returns the new player x and y coordinates and the direction."""
-    # TODO do i need to have a direction? 
+
+    def on_path(x, y):
+        """Checks if the given coordinates are on the path."""
+        # add 1 to x and y to account for the offset of the top left corner of the player sprite in relation to the path mask
+        return PATH_MASK[x+1, y+1] == 1
+
     up = jnp.logical_or( action == Action.UP, action == Action.UPFIRE)
     down = jnp.logical_or( action == Action.DOWN, action == Action.DOWNFIRE)
     left = jnp.logical_or( action == Action.LEFT, action == Action.LEFTFIRE)
@@ -285,12 +288,29 @@ def player_step(state: AmidarState, action: chex.Array) -> tuple[chex.Array, che
     # jax.debug.print("new player position: ({}, {})", new_x, new_y)
     # jax.debug.print("Path mask at new position: {}", PATH_MASK[new_x, new_y])
 
-    # only move if new position is on the path
-    # add 2 to x and y to account for the offset of the top left corner of the player sprite in relation to the path mask
-    new_x = jnp.where(PATH_MASK[new_x+2, new_y+2] == 1, new_x, state.player_x)
-    new_y = jnp.where(PATH_MASK[new_x+2, new_y+2] == 1, new_y, state.player_y)
+    new_x = jnp.where(on_path(new_x, new_y), new_x, state.player_x)
+    new_y = jnp.where(on_path(new_x, new_y), new_y, state.player_y)
 
-    return new_x, new_y, 0
+    # if the direction is not possiple to move in, try moving in the previous direction
+    def move_in_previous_direction(direction):
+        new_x = state.player_x + jnp.where(direction == 2, -1, 0) + jnp.where(direction == 3, 1, 0)
+        new_y = state.player_y + jnp.where(direction == 0, -1, 0) + jnp.where(direction == 1, 1, 0)
+        # only move if new position is on the path
+        new_x = jnp.where(on_path(new_x, new_y), new_x, state.player_x)
+        new_y = jnp.where(on_path(new_x, new_y), new_y, state.player_y)
+        return new_x, new_y
+    
+    has_not_moved = jnp.logical_and(new_x == state.player_x, new_y == state.player_y)
+    movement_key_pressed = jnp.logical_or(up, jnp.logical_or(down, jnp.logical_or(left, right)))
+    new_x, new_y = jax.lax.cond(jnp.logical_and(has_not_moved, movement_key_pressed), move_in_previous_direction, lambda direction: (new_x, new_y), state.player_direction)
+        
+    player_direction = jnp.select([new_x > state.player_x, new_x < state.player_x, new_y > state.player_y, new_y < state.player_y],
+                                  [3, 2, 1, 0], default=state.player_direction)
+
+    # TODO: correct allignment of the player on the path on the bottom (maybe move the path if this aplies to the enemies equally)
+    # TODO: replicate slight stopping at corners 
+    # TODO: check if the behavior is correct/according to the original game
+    return new_x, new_y, player_direction
 
 
 class JaxAmidar(JaxEnvironment[AmidarState, AmidarObservation, AmidarInfo]):
