@@ -1174,7 +1174,7 @@ class JaxChopperCommand(JaxEnvironment[ChopperCommandState, ChopperCommandObserv
             player_missile_cooldown=jnp.array(0),
             player_collision=jnp.array(False),
             step_counter=jnp.array(0).astype(jnp.int32),
-            death_pause=jnp.array(DEATH_PAUSE_FRAMES + 1).astype(jnp.int32),
+            death_pause=jnp.array(DEATH_PAUSE_FRAMES + 1).astype(jnp.int32), #TODO: Rename field to pause_timer for all occurrences in this file
             rng_key=jax.random.PRNGKey(42),
             obs_stack=jnp.zeros((self.frame_stack_size, self.obs_size)),  # Initialize obs_stack
         )
@@ -1372,13 +1372,12 @@ class JaxChopperCommand(JaxEnvironment[ChopperCommandState, ChopperCommandObserv
             )
 
             def get_paused_state():
-                # Things that have to be updated in the pause ------------------
-                # death_pause - this is required for ending the pause
-                # truck_positions[i][3] - this is required for rendering truck death animation
                 in_pause = jnp.logical_and(state.death_pause <= DEATH_PAUSE_FRAMES, state.death_pause > 0)
 
                 # death counter
                 new_death_pause = jnp.where(in_pause, state.death_pause - 1, state.death_pause)
+                # Freeze death counter if player has no lives left
+                new_death_pause = jnp.where(state.lives == 0, jnp.maximum(new_death_pause, 1), new_death_pause)
 
                 # truck deaths
                 temp_truck_positions = (
@@ -1415,7 +1414,13 @@ class JaxChopperCommand(JaxEnvironment[ChopperCommandState, ChopperCommandObserv
 
                 new_player_missile_position = new_player_missile_position.astype(jnp.float32)
 
-                # Replacing the things that should be updated while in the pause
+                # Things that have to be updated in the pause
+                # death_pause               - this is required for ending the pause
+                # jet_positions[i][3]       - this is required for rendering jet death animation while paused
+                # chopper_positions[i][3]   - this is required for rendering chopper death animation while paused
+                # truck_positions[i][3]     - this is required for rendering truck death animation while paused
+                # player_missile_positions  - this is required to let player missile travel while paused
+                # player_missile_cooldown   - this is a dependency for player_missile_positions
                 paused_state = state._replace(
                     death_pause=new_death_pause,
                     jet_positions=new_jet_positions_pause,
@@ -1427,11 +1432,13 @@ class JaxChopperCommand(JaxEnvironment[ChopperCommandState, ChopperCommandObserv
 
                 return paused_state
 
-            # Normal game step or pause
+            # Normal game step or pause (Enter/Stay in pause when...
             returned_state = jax.lax.cond(
                 jnp.logical_or(
-                state.death_pause <= DEATH_PAUSE_FRAMES,
-                get_prev_fields,
+                    state.death_pause <= DEATH_PAUSE_FRAMES, # ...already in pause)
+                    jnp.logical_or(
+                        get_prev_fields, # ...the pause state (soft reset state) is requested)
+                        state.lives == 0), # ...player has no lives left)
                 ),
                 lambda: get_paused_state(),
                 lambda: normal_state,
@@ -1454,10 +1461,14 @@ class JaxChopperCommand(JaxEnvironment[ChopperCommandState, ChopperCommandObserv
         new_chopper_positions = merge_jet_positions(hard_reset_state.chopper_positions, soft_reset_state.chopper_positions)
         new_truck_positions = merge_jet_positions(hard_reset_state.truck_positions, soft_reset_state.truck_positions)
 
+        #Everything that needs to be replaced (taken from previous run) or hard reset when respawning because of death
         #Take player x and y from hard reset state and score, lives, truck deaths, jet deaths and chopper deaths from previous run
         respawn_state = hard_reset_state._replace(
+            #hard resets
             player_x=hard_reset_state.player_x, #TODO: Player needs to spawn one truck fleet to the right when respawning
             player_y=hard_reset_state.player_y,
+
+            #soft resets
             score=soft_reset_state.score,
             lives=soft_reset_state.lives,
             jet_positions=new_jet_positions,
@@ -1466,11 +1477,21 @@ class JaxChopperCommand(JaxEnvironment[ChopperCommandState, ChopperCommandObserv
         )
 
         just_died = jnp.logical_and(pause_or_continue_state.player_collision, pause_or_continue_state.death_pause > DEATH_PAUSE_FRAMES)
+        all_enemies_dead = jnp.logical_and(jnp.all(pause_or_continue_state.jet_positions == 0), jnp.all(pause_or_continue_state.chopper_positions == 0))
 
-        #Pause initialisieren (nur wenn gerade gestorben)
+        all_enemies_dead_initial_step = jnp.logical_and(all_enemies_dead, pause_or_continue_state.death_pause > DEATH_PAUSE_FRAMES)
+        all_enemies_dead_timer_zero = jnp.logical_and(all_enemies_dead, pause_or_continue_state.death_pause == 0)
+
+        #Everything that needs a hard reset when all enemies are dead (Already includes everything replaced above)
+        respawn_state = respawn_state._replace(
+            jet_positions=jnp.where(all_enemies_dead_timer_zero, hard_reset_state.jet_positions, respawn_state.jet_positions),
+            chopper_positions=jnp.where(all_enemies_dead_timer_zero, hard_reset_state.chopper_positions, respawn_state.chopper_positions),
+        )
+
+        #Pause initialisieren/updaten (nur wenn gerade gestorben, alle enemies tot oder keine Leben mehr)
         pause_or_continue_state = pause_or_continue_state._replace(
         death_pause=jnp.where(
-        just_died,
+        jnp.logical_or(just_died, all_enemies_dead_initial_step),
         jnp.array(DEATH_PAUSE_FRAMES, dtype=pause_or_continue_state.death_pause.dtype),
         pause_or_continue_state.death_pause
             )
@@ -1682,7 +1703,7 @@ class Renderer_AtraJaxis(AtraJaxisRenderer):
         frame_pl_heli = aj.get_sprite_frame(SPRITE_PL_CHOPPER, state.step_counter)
 
         death_timer = state.death_pause
-        should_render = death_timer != 0
+        should_render = jnp.logical_and(death_timer != 0, death_timer != 1)
 
         # Schwellen berechnen
         phase0_cutoff = jnp.array(PLAYER_FADE_OUT_START_THRESHOLD_0 * DEATH_PAUSE_FRAMES).astype(jnp.int32)
@@ -1701,6 +1722,8 @@ class Renderer_AtraJaxis(AtraJaxisRenderer):
             jnp.where(phase1, PLAYER_DEATH_2, PLAYER_DEATH_3)
         )
 
+        all_enemies_dead = jnp.logical_and(jnp.all(state.jet_positions == 0), jnp.all(state.chopper_positions == 0))
+
         # Cond. Rendern
         raster = jax.lax.cond(
             should_render,
@@ -1709,7 +1732,7 @@ class Renderer_AtraJaxis(AtraJaxisRenderer):
                 chopper_position,
                 state.player_y,
                 jnp.where(
-                    death_timer > DEATH_PAUSE_FRAMES,
+                    jnp.logical_or(death_timer > DEATH_PAUSE_FRAMES, all_enemies_dead),
                     frame_pl_heli,
                     death_sprite
                 ),
