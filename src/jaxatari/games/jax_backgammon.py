@@ -190,6 +190,7 @@ class JaxBackgammonEnv(JaxEnvironment[BackgammonState, jnp.ndarray, dict]):
             operand=None
         )
 
+
         # Compute effective distance
         bearing_off_distance = jax.lax.select(player == WHITE, from_point + 1, NUM_POINTS - from_point)
         effective_distance = jax.lax.select(is_bearing_off, bearing_off_distance, base_distance)
