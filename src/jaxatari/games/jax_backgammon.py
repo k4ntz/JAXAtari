@@ -157,8 +157,7 @@ class JaxBackgammonEnv(JaxEnvironment[BackgammonState, jnp.ndarray, dict]):
         # Detect direction and basic validity
         base_distance = jax.lax.select(player == WHITE, to_point - from_point, from_point - to_point)
         has_piece = board[player_idx, from_point] > 0
-        in_bounds = (0 <= from_point) & (from_point < 24) & (0 <= to_point) & (to_point <= HOME_INDEX)
-        correct_direction = base_distance > 0
+        in_bounds = (0 <= from_point) & (from_point < 25) & (0 <= to_point) & (to_point <= HOME_INDEX)
         not_blocked = board[opponent_idx, to_point] <= 1
 
         # Determine if we're bearing off
@@ -171,7 +170,7 @@ class JaxBackgammonEnv(JaxEnvironment[BackgammonState, jnp.ndarray, dict]):
 
         # If moving from bar, must land on valid entry point based on dice
         def is_valid_entry(die_val: int) -> bool:
-            expected_entry = jax.lax.select(player == WHITE, die_val - 1,  24 - die_val)
+            expected_entry = jax.lax.select(player == WHITE, die_val - 1,  25 - die_val)
             matches_entry = to_point == expected_entry
             entry_open = board[opponent_idx, expected_entry] <= 1
             return matches_entry & entry_open
@@ -182,6 +181,15 @@ class JaxBackgammonEnv(JaxEnvironment[BackgammonState, jnp.ndarray, dict]):
             lambda _: True,
             operand=None
         )
+        correct_direction = jax.lax.cond(
+            from_point == BAR_INDEX,
+            # Von der Bar: Es muss ein gültiger Punkt basierend auf dem Spieler und den Würfeln sein
+            lambda _: jnp.any(jax.vmap(is_valid_entry)(state.dice)),
+            # Reguläre Bewegung: Basierend auf der Differenz der Punkte
+            lambda _: base_distance > 0,
+            operand=None
+        )
+
 
         # Compute effective distance
         bearing_off_distance = jax.lax.select(player == WHITE, from_point + 1, NUM_POINTS - from_point)
