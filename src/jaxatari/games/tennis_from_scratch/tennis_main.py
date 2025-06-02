@@ -87,8 +87,11 @@ class EnemyState(NamedTuple):
 class GameState(NamedTuple):
     is_serving: chex.Array  # whether the game is currently in serving state (ball bouncing on one side until player hits)
     pause_counter: chex.Array  # delay between restart of game
-    player_score: chex.Array
+    player_score: chex.Array # The score line within the current set
     enemy_score: chex.Array
+    player_game_score: chex.Array # Number of won sets
+    enemy_game_score: chex.Array
+    is_finished: chex.Array # True if the game is finished (Player or enemy has won the game)
 
 
 class TennisState(NamedTuple):
@@ -120,7 +123,10 @@ class TennisState(NamedTuple):
         jnp.array(True),
         jnp.array(0),
         jnp.array(0),
-        jnp.array(0)
+        jnp.array(0),
+        jnp.array(0),
+        jnp.array(0),
+        jnp.array(False),
     )
     counter: chex.Array = jnp.array(
         0)  # not currently used, just a counter that is increased by one each frame todo evaluate if we can remove this
@@ -173,7 +179,7 @@ def check_score(state: TennisState) -> TennisState:
     )
 
     # update the scores and start pause of game
-    new_game_state = jax.lax.cond(
+    increased_score_state = jax.lax.cond(
         jnp.logical_or(
             jnp.logical_and(  # If player is top field and ball is bottom field the player scores
                 state.ball_state.ball_y >= GAME_MIDDLE,
@@ -220,7 +226,8 @@ def check_score(state: TennisState) -> TennisState:
                 jnp.array(0.0),
                 jnp.array(0)
             ),
-            new_game_state,
+            # Check if a set has ended and if the game has ended
+            check_end(check_set(increased_score_state)),
             state.counter
         ),
         lambda _: TennisState(state.player_state, state.enemy_state, BallState(  # no one has scored yet
@@ -239,6 +246,37 @@ def check_score(state: TennisState) -> TennisState:
         ), state.game_state, state.counter),
         None
     )
+
+# Cheks whether the current set has ended and updates the score accordingly
+@jax.jit
+def check_set(state: GameState) -> GameState:
+    player_won_set = jnp.logical_and(state.player_score >= 4, state.player_score >= state.enemy_score + 2)
+    enemy_won_set = jnp.logical_and(state.enemy_score >= 4, state.enemy_score >= state.player_score + 2)
+
+    return jax.lax.cond(
+        # Check if set has ended
+        jnp.logical_or(player_won_set, enemy_won_set),
+        # Set has ended
+        lambda _: jnp.lax.cond(
+            player_won_set,
+            # Player has won set
+            lambda _: GameState(state.is_serving, state.pause_counter, jnp.array(0), jnp.array(0), state.player_game_score + 1, state.enemy_game_score),
+            # Enemy has won set
+            lambda _: GameState(state.is_serving, state.pause_counter, jnp.array(0), jnp.array(0), state.player_game_score, state.enemy_game_score + 1),
+            None
+        ),
+        # Set is still ongoing
+        lambda _: state,
+        None
+    )
+
+# Checks whether the entire game is over
+@jax.jit
+def check_end(state: GameState) -> GameState:
+    player_won = jnp.logical_and(state.player_game_score >= 6, state.player_game_score >= state.enemy_game_score + 2)
+    enemy_won = jnp.logical_and(state.enemy_game_score >= 6, state.enemy_game_score >= state.player_game_score + 2)
+    is_finished = jnp.where(jnp.logical_or(player_won, enemy_won),True, False)
+    return GameState(state.is_serving, state.pause_counter, state.player_score, state.enemy_score, state.player_game_score, state.enemy_game_score, is_finished)
 
 
 # todo needs docs
@@ -625,7 +663,7 @@ def handle_ball_fire(state: TennisState, hitting_entity_x, direction) -> BallSta
 
 
 # todo needs docs
-
+@jax.jit
 def handle_ball_serve(state: TennisState) -> BallState:
     # new_ball_x = state.player_x
     # new_ball_y = state.player_y
@@ -663,7 +701,7 @@ def handle_ball_serve(state: TennisState) -> BallState:
         jnp.array(0)
     )
 
-
+@jax.jit
 def tennis_reset() -> TennisState:
     """
     Provides the initial state for the game. For that purpose, we use the default values assigned in TennisState.
