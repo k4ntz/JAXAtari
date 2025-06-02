@@ -38,6 +38,19 @@ DOWNRIGHT = Action.DOWNRIGHT
 DOWNLEFT = Action.DOWNLEFT
 PLACE = Action.FIRE
 
+# index of cells first covers x-axis, then y-axis (a = 0 -> (0,0), a = 1 -> (0,1), a = 8 -> (1,0), ..., a = 63 -> (7,7))
+STRATEGIC_TILE_SCORE_CASES = 
+[0,1,1,1,1,1,1,2,
+ 6,3,4,4,4,4,5,11,
+ 6,7,8,9,9,8,10,11,
+ 6,7,9,9,9,9,10,11,
+ 6,7,8,9,9,8,10,11,
+ 6,7,8,9,9,8,10,11,
+ 6,12,13,13,13,13,14,11,
+ 15,16,16,16,16,16,16,18
+]
+
+
 
 # Constants to decide in which side the discs will be flipped
 FLIP_UP_SIDE = 0
@@ -504,12 +517,21 @@ def check_if_there_is_a_valid_choice(curr_state, white_player):
 @jax.jit
 def get_bot_move(game_field: Field, difficulty: chex.Array, player_score: chex.Array, enemy_score: chex.Array, random_key: int)-> jnp.array:
     game_score = player_score+enemy_score
-    list_of_all_moves = jnp.arange(64)
+    list_of_all_mov
+    
+    es = jnp.arange(64)
 
-    #Iterate over the game field using vmap
+    #calculate flipped tiles for all possible moves and adjust score based on game stage
     vectorized_compute_score_of_tiles = jax.vmap(compute_score_of_tiles, in_axes=(0, None, None))
     list_of_all_move_values = vectorized_compute_score_of_tiles(list_of_all_moves, game_field, game_score)
-    
+
+    #Calculate the strategic value (score) of the current_square itself
+
+    #Re-evaluate or combine with a secondary related square's score
+
+    #Combine the score from flipped pieces and the strategic tile score
+
+    #Randomly choose one of the best moves    
     random_chosen_max_index = random_max_index(list_of_all_move_values,random_key)
 
     
@@ -935,6 +957,164 @@ def compute_flipped_tiles_top_left(input) -> int:
         args
     )
 
+@jax.jit
+def calculate_strategic_tile_score(tile_index: int, game_field: Field, unknown_arg, difficulty: int):
+    #determine the position of the tile within the game field
+    args = (tile_index // 8, tile_index % 8, game_field, unknown_arg, difficulty)
+    branches = [
+        lambda args: compute_strategic_score_top_left(args), 
+        lambda args: compute_strategic_score_top(args),  
+        lambda args: compute_strategic_score_top_right(args),  
+        lambda args: compute_strategic_score_top_left_inner(args),
+        lambda args: compute_strategic_score_top_inner(args), 
+        lambda args: compute_strategic_score_top_right_inner(args),
+        lambda args: compute_strategic_score_left(args),
+        lambda args: compute_strategic_score_left_inner(args),
+        lambda args: compute_strategic_score_center_corner(args),
+        lambda args: compute_strategic_score_center(args),
+        lambda args: compute_strategic_score_right_inner(args),
+        lambda args: compute_strategic_score_right(args),
+        lambda args: compute_strategic_score_bottom_left_inner(args),
+        lambda args: compute_strategic_score_bottom_inner(args),
+        lambda args: compute_strategic_score_bottom_right_inner(args),
+        lambda args: compute_strategic_score_bottom_left(args),
+        lambda args: compute_strategic_score_bottom(args),
+        lambda args: compute_strategic_score_bottom_right(args),
+    ]
+
+    return jax.lax.switch(tile_index, branches, args)
+
+    def compute_strategic_score_top_left(args):
+        tile_y, tile_x, game_field, unknown_arg, difficulty = args
+        #TODO implement the strategic score for the top left corner
+
+        return ((None, None), None)
+
+    def compute_strategic_score_top(args):
+        tile_y, tile_x, game_field, unknown_arg, difficulty = args
+        #TODO implement the strategic score for the top side
+
+        return ((None, None), None)
+
+    def compute_strategic_score_top_right(args):
+        tile_y, tile_x, game_field, unknown_arg, difficulty = args
+        #TODO implement the strategic score for the top right corner
+
+        return ((None, None), None)
+    
+    def compute_strategic_score_top_left_inner(args):
+        tile_y, tile_x, game_field, unknown_arg, difficulty = args
+        #TODO implement the strategic score for the top left inner corner
+
+        return ((None, None), None)
+    
+    def compute_strategic_score_top_inner(args):
+        #Strategic score for top inner field is influenced by the field above it
+        tile_y, tile_x, game_field, _, _ = args 
+        return ((css_check_tile_up(tile_y, tile_x, game_field), None), False)
+
+    def compute_strategic_score_top_right_inner(args):
+        tile_y, tile_x, game_field, unknown_arg, difficulty = args
+        #TODO implement the strategic score for the top right inner corner
+
+        return ((None, None), None)
+
+    def compute_strategic_score_left(args):
+        tile_y, tile_x, game_field, unknown_arg, difficulty = args
+        #TODO implement the strategic score for the left side
+
+        return ((None, None), None)
+
+    def compute_strategic_score_left_inner(args):
+        #Strategic score for left inner field is influenced by the field to the left of it
+        tile_y, tile_x, game_field, _, _ = args
+        return ((css_check_tile_left(tile_y, tile_x, game_field), None), False)
+
+    def compute_strategic_score_center_corner(args):
+        # Center corner has a fixed score of 4, no further explanation needed
+        return ((4, None), False)
+
+    def compute_strategic_score_center(args):
+        #center has a fixed score of 0, no further evaluation needed
+        return (0, None), False
+
+    def compute_strategic_score_right_inner(args):
+        #Strategic score for right inner field is influenced by the field to the right of it
+        tile_y, tile_x, game_field, unknown_arg, difficulty = args
+        return ((css_check_tile_right(tile_y, tile_x, game_field), None), False)
+
+    def compute_strategic_score_right(args):
+        tile_y, tile_x, game_field, unknown_arg, difficulty = args
+        #TODO implement the strategic score for the right side
+
+        return ((None, None), None)
+
+    def compute_strategic_score_bottom_left_inner(args):
+        tile_y, tile_x, game_field, unknown_arg, difficulty = args
+        #TODO implement the strategic score for the bottom left inner corner
+
+        return ((None, None), None)
+
+    def compute_strategic_score_bottom_inner(args):
+        #Strategic score for bottom inner field is influenced by the field below it
+        tile_y, tile_x, game_field, _, _ = args
+        return ((css_check_tile_down(tile_y, tile_x, game_field), None), False)
+
+    def compute_strategic_score_bottom_right_inner(args):
+        tile_y, tile_x, game_field, unknown_arg, difficulty = args
+        #TODO implement the strategic score for the bottom right inner corner
+
+        return ((None, None), None)
+
+    def compute_strategic_score_bottom_left(args):
+        tile_y, tile_x, game_field, unknown_arg, difficulty = args
+        #TODO implement the strategic score for the bottom left corner
+
+        return ((None, None), None)
+
+    def compute_strategic_score_bottom(args):
+        tile_y, tile_x, game_field, unknown_arg, difficulty = args
+        #TODO implement the strategic score for the bottom side
+
+        return ((None, None), None)
+
+    def compute_strategic_score_bottom_right(args):
+        tile_y, tile_x, game_field, unknown_arg, difficulty = args
+        #TODO implement the strategic score for the bottom right corner
+
+        return ((None, None), None)
+
+def css_check_tile_down(tile_y: int, tile_x: int, game_field: Field) -> int:
+    # If field below has the same color as the current tile, return 4, else return -8
+    return jax.lax.cond(
+        game_field.field_color[tile_y + 1, tile_x] == game_field.field_color[tile_y , tile_x],
+        lambda _: 4,
+        lambda _: -8,
+        None)
+
+def css_check_tile_up(tile_y: int, tile_x: int, game_field: Field) -> int:
+    # If field above has the same color as the current tile, return 4, else return -8
+    return jax.lax.cond(
+        game_field.field_color[tile_y - 1, tile_x] == game_field.field_color[tile_y , tile_x],
+        lambda _: 4,
+        lambda _: -8,
+        None)
+
+def css_check_tile_left(tile_y: int, tile_x: int, game_field: Field) -> int:
+    # If field to the left has the same color as the current tile, return 4, else return -8
+    return jax.lax.cond(
+        game_field.field_color[tile_y, tile_x - 1] == game_field.field_color[tile_y , tile_x],
+        lambda _: 4,
+        lambda _: -8,
+        None)
+
+def css_check_tile_right(tile_y: int, tile_x: int, game_field: Field) -> int:
+    # If field to the right has the same color as the current tile, return 4, else return -8
+    return jax.lax.cond(
+        game_field.field_color[tile_y, tile_x + 1] == game_field.field_color[tile_y , tile_x],
+        lambda _: 4,
+        lambda _: -8,
+        None)
 
 class JaxOthello(JaxEnvironment[OthelloState, OthelloObservation, OthelloInfo]):
     def __init__(self, frameskip: int = 0, reward_funcs: list[callable]=None):
