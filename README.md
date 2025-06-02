@@ -35,6 +35,15 @@ python3 -m pip install -U pip
 pip3 install -e .
 ```
 
+#### On Windows
+```bash
+python3 -m venv .venv
+.\.venv\Scripts\activate
+
+python3 -m pip install -U pip
+pip3 install -e .
+```
+
 ## Usage
 
 Using an environment:
