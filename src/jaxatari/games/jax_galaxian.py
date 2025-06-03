@@ -35,16 +35,16 @@ play.py call: python scripts/play.py --game src/jaxatari/games/jax_galaxian.py -
 SHOOTING_COOLDOWN = 0 #TODO set back to 80 before merge
 ENEMY_MOVE_SPEED = 0.5
 BULLET_MOVE_SPEED = 5
-GRID_ROWS = 5
-GRID_COLS = 5
+GRID_ROWS = 6
+GRID_COLS = 5 #TODO needs to be 7, but >5 is clamping right
 NATIVE_GAME_WIDTH = 160
 NATIVE_GAME_HEIGHT = 210
 PYGAME_SCALE_FACTOR = 3
 PYGAME_WINDOW_WIDTH = NATIVE_GAME_WIDTH * PYGAME_SCALE_FACTOR
 PYGAME_WINDOW_HEIGHT = NATIVE_GAME_HEIGHT * PYGAME_SCALE_FACTOR
 ENEMY_SPACING_X = 20
-ENEMY_SPACING_Y = 12
-ENEMY_GRID_Y = 70
+ENEMY_SPACING_Y = 11
+ENEMY_GRID_Y = 80
 START_X = NATIVE_GAME_WIDTH // 4
 START_Y = NATIVE_GAME_HEIGHT
 ENEMY_ATTACK_SPEED = 2
@@ -691,13 +691,16 @@ def load_sprites():
     enemy_gray = aj.loadFrame(os.path.join(MODULE_DIR, "sprites/galaxian/gray_enemy_1.npy"),transpose=True)
     life = aj.loadFrame(os.path.join(MODULE_DIR, "sprites/galaxian/life.npy"),transpose=True)
     enemy_bullet = aj.loadFrame(os.path.join(MODULE_DIR, "sprites/galaxian/enemy_bullet.npy"),transpose=True)
-    #enemy_red = aj.loadFrame(os.path.join(MODULE_DIR, "sprites/galaxian/red_eorange_enemy1.npy"),transpose=True)
-    #enemy_blue = aj.loadFrame(os.path.join(MODULE_DIR, "sprites/galaxian/pruple_blue_enemy1.npy"),transpose=True)
-    #enemy_white = aj.loadFrame(os.path.join(MODULE_DIR, "sprites/galaxian/white_enemy1.npy"),transpose=True)
+    enemy_red = aj.loadFrame(os.path.join(MODULE_DIR, "sprites/galaxian/red_orange_enemy_1.npy"),transpose=True)
+    enemy_blue = aj.loadFrame(os.path.join(MODULE_DIR, "sprites/galaxian/purple_blue_enemy_1.npy"),transpose=True)
+    enemy_white = aj.loadFrame(os.path.join(MODULE_DIR, "sprites/galaxian/white_enemy_1.npy"),transpose=True)
     SPRITE_BG = jnp.expand_dims(bg, axis= 0)
     SPRITE_PLAYER = jnp.expand_dims(player, axis = 0)
     SPRITE_BULLET = jnp.expand_dims(bullet, axis = 0)
     SPRITE_ENEMY_GRAY = jnp.expand_dims(enemy_gray, axis=0)
+    SPRITE_ENEMY_RED = jnp.expand_dims(enemy_red, axis=0)
+    SPRITE_ENEMY_BLUE = jnp.expand_dims(enemy_blue, axis=0)
+    SPRITE_ENEMY_WHITE = jnp.expand_dims(enemy_white, axis=0)
     SPRITE_LIFE = jnp.expand_dims(life, axis=0)
     SPRITE_ENEMY_BULLET = jnp.expand_dims(enemy_bullet, axis=0)
     return(
@@ -705,6 +708,9 @@ def load_sprites():
         SPRITE_PLAYER,
         SPRITE_BULLET,
         SPRITE_ENEMY_GRAY,
+        SPRITE_ENEMY_RED,
+        SPRITE_ENEMY_BLUE,
+        SPRITE_ENEMY_WHITE,
         SPRITE_LIFE,
         SPRITE_ENEMY_BULLET
     )
@@ -716,6 +722,9 @@ class GalaxianRenderer(AtraJaxisRenderer):
             self.SPRITE_PLAYER,
             self.SPRITE_BULLET,
             self.SPRITE_ENEMY_GRAY,
+            self.SPRITE_ENEMY_RED,
+            self.SPRITE_ENEMY_BLUE,
+            self.SPRITE_ENEMY_WHITE,
             self.SPRITE_LIFE,
             self.SPRITE_ENEMY_BULLET,
         ) = load_sprites()
@@ -785,15 +794,26 @@ class GalaxianRenderer(AtraJaxisRenderer):
         raster = lax.cond(jnp.any(state.enemy_attack_states != 0), draw_attackers, lambda r: r, raster)
 
 
-        # Feindgitter
+       # Feindgitter
         def row_body(i, r_acc):
             def col_body(j, r_inner):
-                e = aj.get_sprite_frame(self.SPRITE_ENEMY_GRAY, 0)
+                conditions = [
+                    i == 5,
+                    i == 4,
+                    i == 3
+                ]
+                choices = [
+                    aj.get_sprite_frame(self.SPRITE_ENEMY_WHITE, 0),
+                    aj.get_sprite_frame(self.SPRITE_ENEMY_RED, 0),
+                    aj.get_sprite_frame(self.SPRITE_ENEMY_GRAY, 0) #TODO make purple after sprite is fixed
+                ]
+                default_choice = aj.get_sprite_frame(self.SPRITE_ENEMY_GRAY, 0)
+                enemy_sprite = jnp.select(conditions, choices, default_choice)
                 cond = state.enemy_grid_alive[i, j] == 1
                 def draw(r0):
                     x = jnp.round(state.enemy_grid_x[i, j]).astype(jnp.int32)
                     y = jnp.round(state.enemy_grid_y[i, j]).astype(jnp.int32)
-                    return aj.render_at(r0, x, y, e)
+                    return aj.render_at(r0, x, y, enemy_sprite)
                 return lax.cond(cond, draw, lambda r0: r0, r_inner)
             return lax.fori_loop(0, GRID_COLS, col_body, r_acc)
         raster = lax.fori_loop(0, GRID_ROWS, row_body, raster)
