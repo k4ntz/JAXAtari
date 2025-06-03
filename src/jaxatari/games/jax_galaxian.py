@@ -32,7 +32,7 @@ play.py call: python scripts/play.py --game src/jaxatari/games/jax_galaxian.py -
 
 
 # -------- Game constants --------
-SHOOTING_COOLDOWN = 80
+SHOOTING_COOLDOWN = 0 #TODO set back to 80 before merge
 ENEMY_MOVE_SPEED = 0.5
 BULLET_MOVE_SPEED = 5
 GRID_ROWS = 5
@@ -59,6 +59,7 @@ ENEMY_RIGHT_BOUND = NATIVE_GAME_WIDTH - 25
 DIVE_KILL_Y = 175
 DIVE_SPEED = 0.5
 MAX_DIVERS = 5
+BASE_DIVE_PROBABILITY = 5
 
 class GalaxianState(NamedTuple):
     player_x: chex.Array
@@ -89,6 +90,7 @@ class GalaxianState(NamedTuple):
     score: chex.Array
     step_counter: chex.Array
     dive_probability: chex.Array
+    enemy_bullet_max_cooldown: chex.Array
 
 
 @jax.jit
@@ -278,7 +280,7 @@ def update_enemy_bullets(state: 'GalaxianState') -> 'GalaxianState':
     timer_dtype = state.enemy_attack_bullet_timer.dtype
     final_bullet_timers = jnp.where(
         can_spawn_new_bullet_mask,
-        jnp.array(ENEMY_ATTACK_BULLET_DELAY, dtype=timer_dtype),
+        jnp.array(state.enemy_bullet_max_cooldown, dtype=timer_dtype),
         decremented_bullet_timers
     )
 
@@ -491,6 +493,14 @@ def check_player_death_by_bullet(state: GalaxianState) -> GalaxianState:
 
     return lax.cond(hit, process_hit, lambda s: s, state)
 
+@jax.jit
+def enter_new_wave(state: GalaxianState) -> GalaxianState:
+    new_grid = jnp.ones(state.enemy_grid_alive.shape)
+    new_prop = jnp.array(state.dive_probability * 1.1, dtype=state.dive_probability.dtype)
+    new_attack_bullet_cd = jnp.array(state.enemy_bullet_max_cooldown * 0.9, dtype=state.enemy_bullet_max_cooldown.dtype)
+    return state._replace(enemy_grid_alive=new_grid,
+                          dive_probability=new_prop)
+
 
 class GalaxianObservation(NamedTuple):
     player_x: chex.Array
@@ -575,7 +585,8 @@ class JaxGalaxian(JaxEnvironment[GalaxianState, GalaxianObservation, GalaxianInf
                               enemy_attack_target_x=jnp.zeros(MAX_DIVERS),
                               enemy_attack_target_y=jnp.zeros(MAX_DIVERS),
                               step_counter=jnp.array(0),
-                              dive_probability=jnp.array(10)
+                              dive_probability=jnp.array(BASE_DIVE_PROBABILITY),
+                              enemy_bullet_max_cooldown=ENEMY_ATTACK_BULLET_DELAY
                              )
 
         initial_obs = self._get_observation(state)
@@ -631,6 +642,8 @@ class JaxGalaxian(JaxEnvironment[GalaxianState, GalaxianObservation, GalaxianInf
         new_state = check_player_death_by_bullet(new_state)
         new_state = new_state._replace(step_counter=new_state.step_counter + 1)
 
+        new_state = jax.lax.cond(jnp.logical_not(jnp.any(state.enemy_grid_alive == 1)), lambda new_state: enter_new_wave(new_state), lambda s: s, new_state)
+
         done = self._get_done(new_state)
         env_reward = self._get_env_reward(state, new_state)
         all_rewards = self._get_all_reward(state, new_state)
@@ -678,6 +691,9 @@ def load_sprites():
     enemy_gray = aj.loadFrame(os.path.join(MODULE_DIR, "sprites/galaxian/gray_enemy_1.npy"),transpose=True)
     life = aj.loadFrame(os.path.join(MODULE_DIR, "sprites/galaxian/life.npy"),transpose=True)
     enemy_bullet = aj.loadFrame(os.path.join(MODULE_DIR, "sprites/galaxian/enemy_bullet.npy"),transpose=True)
+    #enemy_red = aj.loadFrame(os.path.join(MODULE_DIR, "sprites/galaxian/red_eorange_enemy1.npy"),transpose=True)
+    #enemy_blue = aj.loadFrame(os.path.join(MODULE_DIR, "sprites/galaxian/pruple_blue_enemy1.npy"),transpose=True)
+    #enemy_white = aj.loadFrame(os.path.join(MODULE_DIR, "sprites/galaxian/white_enemy1.npy"),transpose=True)
     SPRITE_BG = jnp.expand_dims(bg, axis= 0)
     SPRITE_PLAYER = jnp.expand_dims(player, axis = 0)
     SPRITE_BULLET = jnp.expand_dims(bullet, axis = 0)
