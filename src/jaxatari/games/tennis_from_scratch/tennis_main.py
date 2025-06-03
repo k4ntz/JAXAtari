@@ -87,11 +87,11 @@ class EnemyState(NamedTuple):
 class GameState(NamedTuple):
     is_serving: chex.Array  # whether the game is currently in serving state (ball bouncing on one side until player hits)
     pause_counter: chex.Array  # delay between restart of game
-    player_score: chex.Array # The score line within the current set
+    player_score: chex.Array  # The score line within the current set
     enemy_score: chex.Array
-    player_game_score: chex.Array # Number of won sets
+    player_game_score: chex.Array  # Number of won sets
     enemy_game_score: chex.Array
-    is_finished: chex.Array # True if the game is finished (Player or enemy has won the game)
+    is_finished: chex.Array  # True if the game is finished (Player or enemy has won the game)
 
 
 class TennisState(NamedTuple):
@@ -131,6 +131,7 @@ class TennisState(NamedTuple):
     counter: chex.Array = jnp.array(
         0)  # not currently used, just a counter that is increased by one each frame todo evaluate if we can remove this
 
+
 @jax.jit
 def normal_step(state: TennisState, action) -> TennisState:
     new_state_after_score_check = check_score(state)
@@ -139,6 +140,7 @@ def normal_step(state: TennisState, action) -> TennisState:
     new_enemy_state = enemy_step(new_state_after_ball_step)
     return TennisState(new_player_state, new_enemy_state, new_state_after_ball_step.ball_state,
                        new_state_after_ball_step.game_state, new_state_after_ball_step.counter + 1)
+
 
 @jax.jit
 def tennis_step(state: TennisState, action) -> TennisState:
@@ -153,17 +155,27 @@ def tennis_step(state: TennisState, action) -> TennisState:
         TennisState: The updated state of the game.
     """
 
-    return jax.lax.cond(state.game_state.pause_counter > 0,
-                        lambda _: TennisState(state.player_state, state.enemy_state, state.ball_state,
-                                              GameState(
-                                                  state.game_state.is_serving,
-                                                  state.game_state.pause_counter - 1,
-                                                  state.game_state.player_score,
-                                                  state.game_state.enemy_score),
-                                              state.counter + 1),
-                        lambda _: normal_step(state, action),
+    return jax.lax.cond(state.game_state.is_finished,
+                        lambda _: state,
+                        lambda _: jax.lax.cond(state.game_state.pause_counter > 0,
+                                               lambda _: TennisState(state.player_state, state.enemy_state,
+                                                                     state.ball_state,
+                                                                     GameState(
+                                                                         state.game_state.is_serving,
+                                                                         state.game_state.pause_counter - 1,
+                                                                         state.game_state.player_score,
+                                                                         state.game_state.enemy_score,
+                                                                         state.game_state.player_game_score,
+                                                                         state.game_state.enemy_game_score,
+                                                                         state.game_state.is_finished,
+                                                                     ),
+                                                                     state.counter + 1),
+                                               lambda _: normal_step(state, action),
+                                               None
+                                               ),
                         None
                         )
+
 
 @jax.jit
 def check_score(state: TennisState) -> TennisState:
@@ -191,9 +203,11 @@ def check_score(state: TennisState) -> TennisState:
             )
         ),
         lambda _: GameState(jnp.array(True), jnp.array(PAUSE_DURATION), state.game_state.player_score + 1,
-                            state.game_state.enemy_score),
+                            state.game_state.enemy_score, state.game_state.player_game_score,
+                            state.game_state.enemy_game_score, state.game_state.is_finished),
         lambda _: GameState(jnp.array(True), jnp.array(PAUSE_DURATION), state.game_state.player_score,
-                            state.game_state.enemy_score + 1),
+                            state.game_state.enemy_score + 1, state.game_state.player_game_score,
+                            state.game_state.enemy_game_score, state.game_state.is_finished),
         None
     )
 
@@ -247,6 +261,7 @@ def check_score(state: TennisState) -> TennisState:
         None
     )
 
+
 # Cheks whether the current set has ended and updates the score accordingly
 @jax.jit
 def check_set(state: GameState) -> GameState:
@@ -257,12 +272,14 @@ def check_set(state: GameState) -> GameState:
         # Check if set has ended
         jnp.logical_or(player_won_set, enemy_won_set),
         # Set has ended
-        lambda _: jnp.lax.cond(
+        lambda _: jax.lax.cond(
             player_won_set,
             # Player has won set
-            lambda _: GameState(state.is_serving, state.pause_counter, jnp.array(0), jnp.array(0), state.player_game_score + 1, state.enemy_game_score),
+            lambda _: GameState(state.is_serving, state.pause_counter, jnp.array(0), jnp.array(0),
+                                state.player_game_score + 1, state.enemy_game_score, state.is_finished),
             # Enemy has won set
-            lambda _: GameState(state.is_serving, state.pause_counter, jnp.array(0), jnp.array(0), state.player_game_score, state.enemy_game_score + 1),
+            lambda _: GameState(state.is_serving, state.pause_counter, jnp.array(0), jnp.array(0),
+                                state.player_game_score, state.enemy_game_score + 1, state.is_finished),
             None
         ),
         # Set is still ongoing
@@ -270,13 +287,15 @@ def check_set(state: GameState) -> GameState:
         None
     )
 
+
 # Checks whether the entire game is over
 @jax.jit
 def check_end(state: GameState) -> GameState:
     player_won = jnp.logical_and(state.player_game_score >= 6, state.player_game_score >= state.enemy_game_score + 2)
     enemy_won = jnp.logical_and(state.enemy_game_score >= 6, state.enemy_game_score >= state.player_game_score + 2)
-    is_finished = jnp.where(jnp.logical_or(player_won, enemy_won),True, False)
-    return GameState(state.is_serving, state.pause_counter, state.player_score, state.enemy_score, state.player_game_score, state.enemy_game_score, is_finished)
+    is_finished = jnp.where(jnp.logical_or(player_won, enemy_won), True, False)
+    return GameState(state.is_serving, state.pause_counter, state.player_score, state.enemy_score,
+                     state.player_game_score, state.enemy_game_score, is_finished)
 
 
 # todo needs docs
@@ -285,6 +304,7 @@ def player_step(state: TennisState, action: chex.Array) -> PlayerState:
     player_state = update_player_pos(state.player_state, action)
     # todo add turning etc.
     return player_state
+
 
 @jax.jit
 def update_player_pos(state: PlayerState, action: chex.Array) -> PlayerState:
@@ -373,6 +393,7 @@ def update_player_pos(state: PlayerState, action: chex.Array) -> PlayerState:
         state.player_field
     )
 
+
 @jax.jit
 def enemy_step(state: TennisState) -> EnemyState:
     new_enemy_x = jnp.where(
@@ -391,6 +412,7 @@ def enemy_step(state: TennisState) -> EnemyState:
         new_enemy_x,
         state.enemy_state.enemy_y
     )
+
 
 @jax.jit
 def ball_step(state: TennisState, action) -> TennisState:
@@ -579,9 +601,13 @@ def ball_step(state: TennisState, action) -> TennisState:
             state.game_state.pause_counter,
             state.game_state.player_score,
             state.game_state.enemy_score,
+            state.game_state.player_game_score,
+            state.game_state.enemy_game_score,
+            state.game_state.is_finished
         ),
         state.counter
     )
+
 
 @jax.jit
 def is_overlapping(entity1_x, entity1_w, entity1_y, entity1_h, entity2_x, entity2_w, entity2_y,
@@ -700,6 +726,7 @@ def handle_ball_serve(state: TennisState) -> BallState:
         state.ball_state.move_y,
         jnp.array(0)
     )
+
 
 @jax.jit
 def tennis_reset() -> TennisState:
