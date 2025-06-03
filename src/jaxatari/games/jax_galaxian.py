@@ -59,7 +59,7 @@ ENEMY_RIGHT_BOUND = NATIVE_GAME_WIDTH - 25
 DIVE_KILL_Y = 175
 DIVE_SPEED = 0.5
 MAX_DIVERS = 5
-BASE_DIVE_PROBABILITY = 5
+BASE_DIVE_PROBABILITY = 30 #TODO back to 5 before merge
 
 class GalaxianState(NamedTuple):
     player_x: chex.Array
@@ -210,7 +210,7 @@ def update_enemy_attack(state: GalaxianState) -> GalaxianState:
 
     @jax.jit
     def continue_active_dives(state: GalaxianState) -> GalaxianState:
-        # e.g. is_attacking: [ True  False  True  False  True] (secound killed by player)
+        # e.g. is_attacking: [True, False, True, False, True] (second killed by player)
         is_attacking = (state.enemy_attack_states == 1)
         target_x = state.player_x
         target_y = state.player_y
@@ -218,19 +218,54 @@ def update_enemy_attack(state: GalaxianState) -> GalaxianState:
         curr_x = state.enemy_attack_x
         curr_y = state.enemy_attack_y
 
-        dx = target_x - curr_x
-        dy = target_y - curr_y
-        norm = jnp.sqrt(dx ** 2 + dy ** 2) + 1e-6  #TODO sinnvoller dive
+        def grey_dive(state: GalaxianState, i: int) -> GalaxianState:
+            #jax.debug.print("grey")
+            dx = target_x - curr_x
+            dy = target_y - curr_y
+            norm = jnp.sqrt(dx ** 2 + dy ** 2) + 1e-6  # TODO sinnvoller dive
 
-        step_x = curr_x + (dx / norm) * DIVE_SPEED
-        step_y = curr_y + (dy / norm) * DIVE_SPEED
+            step_x = curr_x + (dx / norm) * DIVE_SPEED
+            step_y = curr_y + (dy / norm) * DIVE_SPEED
 
-        new_attack_x = jnp.where(is_attacking, step_x, curr_x)
-        new_attack_y = jnp.where(is_attacking, step_y, curr_y)
+            new_attack_x = jnp.where(is_attacking, step_x, curr_x)
+            new_attack_y = jnp.where(is_attacking, step_y, curr_y)
 
-        return state._replace(
-            enemy_attack_x=new_attack_x,
-            enemy_attack_y=new_attack_y
+            return state._replace(
+                enemy_attack_x=new_attack_x,
+                enemy_attack_y=new_attack_y
+            )
+
+        def red_dive(state: GalaxianState, i: int) -> GalaxianState:
+            #jax.debug.print("red")
+            return grey_dive(state, i)
+
+        def purple_dive(state: GalaxianState, i: int) -> GalaxianState:
+            #jax.debug.print("purple")
+            return grey_dive(state, i)
+
+        def white_dive(state: GalaxianState, i: int) -> GalaxianState:
+            #jax.debug.print("white")
+            return grey_dive(state, i)
+
+        return lax.fori_loop(
+            0, MAX_DIVERS,
+            lambda i, state: jax.lax.cond(
+                state.enemy_attack_pos[i, 0] == 5,
+                lambda state: white_dive(state, i),
+                lambda state: jax.lax.cond(
+                    state.enemy_attack_pos[i, 0] == 4,
+                    lambda state: red_dive(state, i),
+                    lambda state: jax.lax.cond(
+                        state.enemy_attack_pos[i, 0] == 3,
+                        lambda state: purple_dive(state, i),
+                        lambda state: grey_dive(state, i),
+                        state
+                    ),
+                    state
+                ),
+                state
+            ),
+            state
         )
 
     def respawn_finished_dives(state: GalaxianState) -> GalaxianState:
