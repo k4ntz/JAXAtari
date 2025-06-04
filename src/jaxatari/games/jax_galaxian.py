@@ -268,17 +268,64 @@ def update_enemy_attack(state: GalaxianState) -> GalaxianState:
             state
         )
 
+    @jax.jit
     def respawn_finished_dives(state: GalaxianState) -> GalaxianState:
-        return 420;
+        def body(i, new_state):
+
+            #diver unter dem player werden auf respawn gesetzt
+            new_state = jax.lax.cond(
+                new_state.enemy_attack_y[i] > DIVE_KILL_Y - 30,
+                lambda state: state._replace(
+                    enemy_attack_states=state.enemy_attack_states.at[i].set(2),
+                    enemy_attack_x=state.enemy_attack_x.at[i].set(state.enemy_attack_pos[i, 0].astype(state.enemy_attack_x.dtype)),
+                    enemy_attack_y=state.enemy_attack_y.at[i].set(-10)
+                ),
+                lambda state: state,
+                new_state
+            )
+
+            #continue respawnende diver
+            new_state = jax.lax.cond(
+                new_state.enemy_attack_states[i] == 2,
+                lambda state: state._replace(
+                    enemy_attack_x=state.enemy_attack_x.at[i].set(
+                        state.enemy_attack_pos[i, 0].astype(state.enemy_attack_x.dtype)),
+                    enemy_attack_y=state.enemy_attack_y.at[i].set(
+                        lax.clamp(
+                            jnp.array(-10, dtype=state.enemy_attack_y.dtype),
+                            (state.enemy_attack_y[i] + 5).astype(state.enemy_attack_y.dtype),
+                            state.enemy_attack_pos[i, 1].astype(state.enemy_attack_y.dtype)
+                        )
+                    ),
+                ),
+                lambda state: state,
+                new_state
+            )
+
+            # beende respawn
+            new_state = jax.lax.cond(
+                (new_state.enemy_attack_states[i] == 2) &
+                (new_state.enemy_attack_x[i] == new_state.enemy_attack_pos[i, 0]) &  #TODO pos ist zeile/spalte im array und kein x/y
+                (new_state.enemy_attack_y[i] == new_state.enemy_attack_pos[i, 1]),
+                lambda state: state._replace(
+                    enemy_attack_states=state.enemy_attack_states.at[i].set(0),
+                    enemy_grid_alive=state.enemy_grid_alive.at[tuple(state.enemy_attack_pos[i])].set(1)
+                ),
+                lambda state: state,
+                new_state
+            )
+            return new_state
+
+        return lax.fori_loop(0, MAX_DIVERS, body, state)
 
 
-    #new_state = respawn_finished_dives(state)
+    new_state = respawn_finished_dives(state)
     free_slots = jnp.sum(state.enemy_attack_states == 0)
     return jax.lax.cond(
         free_slots > 0,
         lambda state: test_for_new_dive(state),
         lambda state: continue_active_dives(state),
-        state
+        new_state
     )
 
 
