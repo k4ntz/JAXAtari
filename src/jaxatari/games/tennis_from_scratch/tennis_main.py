@@ -70,6 +70,7 @@ class BallState(NamedTuple):
     move_x: chex.Array  # Normalized distance from ball_x to ball_hit_target_x, updated on hit
     move_y: chex.Array  # Normalized distance from ball_y to ball_hit_target_y, updated on hit
     bounces: chex.Array  # how many times the ball has hit the ground since it was last hit by an entity
+    last_hit: chex.Array  # 0 if last hit was performed by player, 1 if last hit was by enemy
 
 
 class PlayerState(NamedTuple):
@@ -118,6 +119,7 @@ class TennisState(NamedTuple):
         jnp.array(0.0),
         jnp.array(0.0),
         jnp.array(0),
+        jnp.array(0)
     )
     game_state: GameState = GameState(
         jnp.array(True),
@@ -238,6 +240,7 @@ def check_score(state: TennisState) -> TennisState:
                 jnp.array(GAME_OFFSET_TOP),
                 jnp.array(0.0),
                 jnp.array(0.0),
+                jnp.array(0),
                 jnp.array(0)
             ),
             # Check if a set has ended and if the game has ended
@@ -257,6 +260,7 @@ def check_score(state: TennisState) -> TennisState:
             state.ball_state.move_x,
             state.ball_state.move_y,
             new_bounces,
+            state.ball_state.last_hit
         ), state.game_state, state.counter),
         None
     )
@@ -394,8 +398,26 @@ def update_player_pos(state: PlayerState, action: chex.Array) -> PlayerState:
     )
 
 
+"""
+enemy strategy:
+x - coordinate:
+    - just follow x of the ball
+    - keep ball at center of sprite so that sprite does not flip often
+y - coordinate:
+    - rush towards net after hitting ball
+    - stay at net for some time
+    - turning point (does not quite line up with player hitting ball, usually slightly earlier)
+    - move as far away from net as possible
+    - after reaching limit sometimes starts moving towards net again
+
+
+"""
+
+
 @jax.jit
 def enemy_step(state: TennisState) -> EnemyState:
+    # x-coordinate
+    # simply track balls x-coordinate
     new_enemy_x = jnp.where(
         state.enemy_state.enemy_x + PLAYER_WIDTH / 2 < state.ball_state.ball_x,
         state.enemy_state.enemy_x + 1,
@@ -408,9 +430,32 @@ def enemy_step(state: TennisState) -> EnemyState:
         new_enemy_x
     )
 
+    # y-coordinate
+
+    normal_step_y = jnp.where(
+        state.ball_state.last_hit == 1,
+        # last hit was enemy, rush the net
+        jnp.where(jnp.logical_and(state.enemy_state.enemy_y != PLAYER_Y_LOWER_BOUND_TOP,
+                                  state.enemy_state.enemy_y != PLAYER_Y_UPPER_BOUND_BOTTOM),
+                  state.enemy_state.enemy_y - state.player_state.player_field,
+                  state.enemy_state.enemy_y
+                  ),
+        # last hit was player, move away from net
+        jnp.where(jnp.logical_and(state.enemy_state.enemy_y != PLAYER_Y_UPPER_BOUND_TOP,
+                                  state.enemy_state.enemy_y != PLAYER_Y_LOWER_BOUND_BOTTOM),
+                  state.enemy_state.enemy_y + state.player_state.player_field,
+                  state.enemy_state.enemy_y
+                  )
+    )
+
+    new_enemy_y = jnp.where(state.game_state.is_serving,
+                            state.enemy_state.enemy_y,
+                            normal_step_y
+                            )
+
     return EnemyState(
         new_enemy_x,
-        state.enemy_state.enemy_y
+        new_enemy_y
     )
 
 
@@ -511,7 +556,7 @@ def ball_step(state: TennisState, action) -> TennisState:
             PLAYER_HEIGHT,
             ball_state.ball_x,
             BALL_WIDTH,
-            ball_state.ball_z,
+            ball_state.ball_y,
             BALL_WIDTH  # todo rename to BALL_SIZE because ball is square
         ),
         jnp.absolute(upper_entity_y + PLAYER_HEIGHT - ball_state.ball_y) <= 3
@@ -525,7 +570,7 @@ def ball_step(state: TennisState, action) -> TennisState:
             PLAYER_HEIGHT,
             ball_state.ball_x,
             BALL_WIDTH,
-            ball_state.ball_z,
+            ball_state.ball_y,
             BALL_WIDTH
         ),
         jnp.absolute(lower_entity_y + PLAYER_HEIGHT - ball_state.ball_y) <= 3
@@ -559,6 +604,18 @@ def ball_step(state: TennisState, action) -> TennisState:
         lower_entity_x
     )
 
+    # record which entity hit the ball most recently
+    new_last_hit = jnp.where(should_hit,
+                             # player hit
+                             jnp.where(jnp.logical_or(
+                                 jnp.logical_and(upper_entity_overlapping_ball, player_state.player_field == 1),
+                                 jnp.logical_and(lower_entity_overlapping_ball, player_state.player_field == -1)),
+                                 0,
+                                 1
+                             ),
+                             state.ball_state.last_hit
+                             )
+
     ball_state_after_fire = jax.lax.cond(
         should_hit,
         lambda _: handle_ball_fire(state, hitting_entity_x, ball_fire_direction),
@@ -574,7 +631,8 @@ def ball_step(state: TennisState, action) -> TennisState:
             ball_state.ball_hit_target_y,
             ball_state.move_x,
             ball_state.move_y,
-            ball_state.bounces
+            ball_state.bounces,
+            new_last_hit,
         ),
         None
     )
@@ -582,20 +640,7 @@ def ball_step(state: TennisState, action) -> TennisState:
     return TennisState(
         player_state,
         enemy_state,
-        BallState(
-            new_ball_x,
-            new_ball_y,
-            ball_state_after_fire.ball_z,
-            ball_state_after_fire.ball_z_fp,
-            ball_state_after_fire.ball_velocity_z_fp,
-            ball_state_after_fire.ball_hit_start_x,
-            ball_state_after_fire.ball_hit_start_y,
-            ball_state_after_fire.ball_hit_target_x,
-            ball_state_after_fire.ball_hit_target_y,
-            ball_state_after_fire.move_x,
-            ball_state_after_fire.move_y,
-            ball_state_after_fire.bounces
-        ),
+        ball_state_after_fire,
         GameState(
             new_is_serving,
             state.game_state.pause_counter,
@@ -675,16 +720,17 @@ def handle_ball_fire(state: TennisState, hitting_entity_x, direction) -> BallSta
     return BallState(
         state.ball_state.ball_x,
         state.ball_state.ball_y,
-        14.0,
-        140.0,
-        hit_vel,
+        jnp.array(14.0),
+        jnp.array(140.0),
+        jnp.array(hit_vel),
         new_ball_hit_start_x,
         new_ball_hit_start_y,
         new_ball_hit_target_x,
         new_ball_hit_target_y,
         move_x,
         move_y,
-        jnp.array(0)  # ball has not bounced after last hit
+        jnp.array(0),  # ball has not bounced after last hit
+        state.ball_state.last_hit
     )
 
 
@@ -724,7 +770,8 @@ def handle_ball_serve(state: TennisState) -> BallState:
         new_ball_hit_target_y,
         state.ball_state.move_x,
         state.ball_state.move_y,
-        jnp.array(0)
+        jnp.array(0),
+        state.ball_state.last_hit
     )
 
 
