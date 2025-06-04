@@ -33,7 +33,8 @@ MAX_VELOCITY = 3.0  # DEFAULT: 3.0 | maximum speed
 DISTANCE_WHEN_FLYING = 10 # DEFAULT: 10 | How far the chopper moves towards the middle when flying for a longer amount of time
 
 # Score
-SCORE_PER_KILL = 200
+SCORE_PER_JET_KILL = 200
+SCORE_PER_CHOPPER_KILL = 100
 
 # Player Missile Constants
 PLAYER_MISSILE_WIDTH = 80 # Sprite size_x
@@ -370,7 +371,7 @@ def check_missile_collisions(
     enemy_positions: chex.Array,    # (N_ENEMIES, 2)
     score: chex.Array,
     rng_key: chex.PRNGKey,
-    chopper_position: chex.Array,
+    on_screen_position: chex.Array,
     player_x: chex.Array,
     enemy_size: chex.Array,
 ) -> tuple[chex.Array, chex.Array, chex.Array, chex.PRNGKey]:
@@ -389,7 +390,7 @@ def check_missile_collisions(
             enemy_active = enemy_pos[3] > FRAMES_DEATH_ANIMATION_ENEMY
 
             # Sichtfeldgrenzen
-            left_bound = player_x - chopper_position
+            left_bound = player_x - on_screen_position
             right_bound = left_bound + WIDTH
 
             missile_left = missile_x
@@ -424,7 +425,16 @@ def check_missile_collisions(
             new_enemy_pos = jnp.where(collision, kill_entity(enemy_pos, FRAMES_DEATH_ANIMATION_ENEMY), enemy_pos)
 
             # Punkte vergeben
-            score_add = jnp.where(jnp.logical_and(collision, enemy_pos[3] > FRAMES_DEATH_ANIMATION_ENEMY), SCORE_PER_KILL, 0)
+            is_jet = enemy_size[1] == 6
+            score_add = jnp.where(
+                jnp.logical_and(collision, enemy_pos[3] > FRAMES_DEATH_ANIMATION_ENEMY),
+                jnp.where(
+                    is_jet,
+                    SCORE_PER_JET_KILL,
+                    SCORE_PER_CHOPPER_KILL
+                ),
+                0
+            )
 
             # Missile deaktivieren bei Treffer
             new_missile = jnp.where(
@@ -1180,7 +1190,7 @@ class JaxChopperCommand(JaxEnvironment[ChopperCommandState, ChopperCommandObserv
             local_player_offset=jnp.array(0).astype(jnp.float32),
             player_facing_direction=jnp.array(1).astype(jnp.int32),
             score=jnp.array(0).astype(jnp.int32),
-            lives=jnp.array(3).astype(jnp.int32),
+            lives=jnp.array(2).astype(jnp.int32),
             truck_positions=initialize_truck_positions().astype(jnp.float32),     # asarray([[128, 156, -1], [160, 156, -1], [192, 156, -1]]), # test for truck movement, to be replaced
             jet_positions=jet_positions, # x, y, direction
             chopper_positions=chopper_positions,
@@ -1246,7 +1256,7 @@ class JaxChopperCommand(JaxEnvironment[ChopperCommandState, ChopperCommandObserv
                     state, state.player_x, state.player_y, action
                 )
 
-                chopper_position = (WIDTH // 2) - 8 + new_local_player_offset + (new_player_velocity_x * DISTANCE_WHEN_FLYING)
+                on_screen_position = (WIDTH // 2) - 8 + new_local_player_offset + (new_player_velocity_x * DISTANCE_WHEN_FLYING)
 
                 # Check missile collisions with jets
                 (
@@ -1259,7 +1269,7 @@ class JaxChopperCommand(JaxEnvironment[ChopperCommandState, ChopperCommandObserv
                     new_jet_positions,
                     state.score,
                     new_rng_key,
-                    chopper_position,
+                    on_screen_position,
                     new_player_x,
                     JET_SIZE
                 )
@@ -1275,7 +1285,7 @@ class JaxChopperCommand(JaxEnvironment[ChopperCommandState, ChopperCommandObserv
                     new_chopper_positions,
                     new_score_jet,
                     new_rng_key,
-                    chopper_position,
+                    on_screen_position,
                     new_player_x,
                     CHOPPER_SIZE
                 )
@@ -1343,8 +1353,9 @@ class JaxChopperCommand(JaxEnvironment[ChopperCommandState, ChopperCommandObserv
                 new_truck_positions = update_entity_death(new_truck_positions, FRAMES_DEATH_ANIMATION_TRUCK)
 
                 # Update score with collision points
-                new_score = jnp.where(jnp.logical_or(player_collision_jet, player_collision_chopper),
-                                      new_score + SCORE_PER_KILL, new_score)
+                new_score = jnp.where(player_collision_jet, new_score + SCORE_PER_JET_KILL, new_score)
+
+                new_score = jnp.where(player_collision_chopper, new_score + SCORE_PER_CHOPPER_KILL, new_score)
 
                 # Update lives if player collides with an enemy or enemy missile
                 new_lives = jnp.where(
