@@ -672,7 +672,7 @@ def initialize_truck_positions() -> chex.Array:
     anchor = -748
     carry = (initial_truck_positions, anchor)
 
-    def spawn_truck_triple(i, carry):
+    def spawn_trucks(i, carry):
         truck_positions, anchor = carry
 
         anchor = jnp.where(
@@ -683,7 +683,7 @@ def initialize_truck_positions() -> chex.Array:
         truck_positions = truck_positions.at[i].set(jnp.array([anchor, 156, -1, FRAMES_DEATH_ANIMATION_TRUCK + 1]))
         return truck_positions, anchor
 
-    return jax.lax.fori_loop(0, 12, spawn_truck_triple, carry)[0]
+    return jax.lax.fori_loop(0, 12, spawn_trucks, carry)[0]
 
 @jax.jit
 def step_truck_movement(
@@ -692,7 +692,7 @@ def step_truck_movement(
 ) -> chex.Array:
 
     def move_single_truck(i, positions):
-        truck_pos = positions[i]
+        truck_pos = positions[i]             
 
         # Only process active trucks (direction != 0)
         is_active = jnp.logical_or(truck_pos[2] != 0, truck_pos[3] != 0)
@@ -1027,14 +1027,26 @@ class JaxChopperCommand(JaxEnvironment[ChopperCommandState, ChopperCommandObserv
         if reward_funcs is not None:
             reward_funcs = tuple(reward_funcs)
         self.reward_funcs = reward_funcs
-        self.action_set = {
+        self.action_set = [
             Action.NOOP,
             Action.FIRE,
             Action.UP,
             Action.RIGHT,
             Action.LEFT,
             Action.DOWN,
-        }
+            Action.UPRIGHT,
+            Action.UPLEFT,
+            Action.DOWNRIGHT,
+            Action.DOWNLEFT,
+            Action.UPFIRE,
+            Action.RIGHTFIRE,
+            Action.LEFTFIRE,
+            Action.DOWNFIRE,
+            Action.UPRIGHTFIRE,
+            Action.UPLEFTFIRE,
+            Action.DOWNRIGHTFIRE,
+            Action.DOWNLEFTFIRE
+        ]
         self.frame_stack_size = 4
         self.obs_size = 5 + MAX_CHOPPERS * 5 + MAX_MISSILES * 5 + 5 + 5
 
@@ -1053,6 +1065,9 @@ class JaxChopperCommand(JaxEnvironment[ChopperCommandState, ChopperCommandObserv
 
     def action_space(self) -> spaces.Discrete:
         return spaces.Discrete(len(self.action_set))
+
+    def get_action_space(self) -> jnp.ndarray:
+        return jnp.array(self.action_set)
 
     def observation_space(self) -> spaces.Box:
         return spaces.Box(
@@ -1152,7 +1167,7 @@ class JaxChopperCommand(JaxEnvironment[ChopperCommandState, ChopperCommandObserv
 
 
     @partial(jax.jit, static_argnums=(0,))
-    def reset(self, key: jax.random.PRNGKey = jax.random.PRNGKey(27)) -> Tuple[ChopperCommandState, ChopperCommandObservation]:
+    def reset(self, key: jax.random.PRNGKey = jax.random.PRNGKey(27)) -> Tuple[ChopperCommandObservation, ChopperCommandState]:
         """Initialize game state"""
 
         jet_positions, _ = initialize_enemy_positions(key)
@@ -1188,7 +1203,7 @@ class JaxChopperCommand(JaxEnvironment[ChopperCommandState, ChopperCommandObserv
         # Apply transformation to each leaf in the pytree
         initial_obs = jax.tree.map(expand_and_copy, initial_obs)
         reset_state = reset_state._replace(obs_stack=initial_obs)
-        return reset_state, initial_obs
+        return initial_obs, reset_state
 
 
     @partial(jax.jit, static_argnums=(0,))
@@ -1448,7 +1463,7 @@ class JaxChopperCommand(JaxEnvironment[ChopperCommandState, ChopperCommandObserv
 
         pause_or_continue_state = normal_game_step(False)
         soft_reset_state = normal_game_step(True)
-        hard_reset_state, _ = self.reset()
+        _, hard_reset_state = self.reset()
 
         def merge_jet_positions(reset_pos, soft_reset_pos):
             def body(i, acc):
@@ -1517,7 +1532,7 @@ class JaxChopperCommand(JaxEnvironment[ChopperCommandState, ChopperCommandObserv
             pause_or_continue_state.obs_stack, observation)
         pause_or_continue_state = pause_or_continue_state._replace(obs_stack=observation)
 
-        return pause_or_continue_state, observation, env_reward, done, info
+        return observation, pause_or_continue_state, env_reward, done, info
 
 
 class Renderer_AtraJaxis(AtraJaxisRenderer):
@@ -2006,7 +2021,7 @@ if __name__ == "__main__":
     jitted_step = jax.jit(game.step)
     jitted_reset = jax.jit(game.reset)
 
-    curr_state, curr_obs = jitted_reset()
+    curr_obs, curr_state = jitted_reset()
 
     # Game loop with rendering
     running = True
@@ -2027,14 +2042,14 @@ if __name__ == "__main__":
                 if event.key == pygame.K_n and frame_by_frame:
                     if counter % frameskip == 0:
                         action = get_human_action()
-                        curr_state, curr_obs, reward, done, info = jitted_step(
+                        curr_obs, curr_state, reward, done, info = jitted_step(
                             curr_state, action
                         )
 
         if not frame_by_frame:
             if counter % frameskip == 0:
                 action = get_human_action()
-                curr_state, curr_obs, reward, done, info = jitted_step(
+                curr_obs, curr_state, reward, done, info = jitted_step(
                     curr_state, action
                 )
 
