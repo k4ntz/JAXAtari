@@ -28,7 +28,7 @@ class TennisJaxEnv(JaxEnvironment[TennisState, TennisObs, TennisInfo]):
 
         return reset_obs, reset_state
 
-    def step( self, state: TennisState, action) -> Tuple[TennisObs, TennisState, float, bool, TennisInfo]:
+    def step(self, state: TennisState, action) -> Tuple[TennisObs, TennisState, float, bool, TennisInfo]:
         new_state = tennis_step(state, action)
         new_obs = self._get_observation(new_state)
         reward = self._get_reward(state, new_state)
