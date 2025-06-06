@@ -31,15 +31,16 @@ GAME_OFFSET_BOTTOM = GAME_OFFSET_TOP + GAME_HEIGHT
 PAUSE_DURATION = 100
 
 # player constants
+PLAYER_CONST = 0
 PLAYER_WIDTH = 13  # player flips side so total covered x section is greater
 PLAYER_HEIGHT = 23
 PLAYER_MIN_X = 10  # 17
 PLAYER_MAX_X = 130  # 142
 # lower y-axis values are towards the top in our case, opposite in original game
-PLAYER_Y_LOWER_BOUND_BOTTOM = 180  # 206-2-PLAYER_HEIGHT
+PLAYER_Y_LOWER_BOUND_BOTTOM = 160 #180  # 206-2-PLAYER_HEIGHT
 PLAYER_Y_UPPER_BOUND_BOTTOM = 109  # 206-53-PLAYER_HEIGHT
-PLAYER_Y_LOWER_BOUND_TOP = 72  # 206-91-PLAYER_HEIGHT
-PLAYER_Y_UPPER_BOUND_TOP = 0  # 206-148-PLAYER_HEIGHT
+PLAYER_Y_LOWER_BOUND_TOP = 70 #72  # 206-91-PLAYER_HEIGHT
+PLAYER_Y_UPPER_BOUND_TOP = 15 #35  # 206-148-PLAYER_HEIGHT
 
 START_X = GAME_OFFSET_LEFT_BOTTOM + 0.5 * GAME_WIDTH - 0.5 * PLAYER_WIDTH
 PLAYER_START_Y = GAME_OFFSET_TOP - PLAYER_HEIGHT
@@ -53,6 +54,11 @@ BALL_GRAVITY_PER_FRAME = 1.1
 BALL_SERVING_BOUNCE_VELOCITY_BASE = 21
 BALL_SERVING_BOUNCE_VELOCITY_RANDOM_OFFSET = 2
 BALL_WIDTH = 2.0
+LONG_HIT_THRESHOLD_TOP = 30
+LONG_HIT_THRESHOLD_BOTTOM = 30
+
+# enemy constants
+ENEMY_CONST = 1
 
 rand_key = random.key(0)
 
@@ -83,6 +89,7 @@ class PlayerState(NamedTuple):
 class EnemyState(NamedTuple):
     enemy_x: chex.Array  # x-coordinate of the enemy
     enemy_y: chex.Array  # y-coordinate of the enemy
+    prev_walking_direction: chex.Array # previous walking direction (in x-direction) of the enemy, -1 = towards x=min, 1 = towards x=max
 
 
 class GameState(NamedTuple):
@@ -104,7 +111,8 @@ class TennisState(NamedTuple):
     )
     enemy_state: EnemyState = EnemyState(  # all enemy-related data
         jnp.array(START_X),
-        jnp.array(ENEMY_START_Y)
+        jnp.array(ENEMY_START_Y),
+        jnp.array(0.0)
     )
     ball_state: BallState = BallState(  # all ball-related data
         jnp.array(GAME_WIDTH / 2.0 - 2.5),
@@ -119,7 +127,7 @@ class TennisState(NamedTuple):
         jnp.array(0.0),
         jnp.array(0.0),
         jnp.array(0),
-        jnp.array(0)
+        jnp.array(-1)
     )
     game_state: GameState = GameState(
         jnp.array(True),
@@ -226,7 +234,8 @@ def check_score(state: TennisState) -> TennisState:
             EnemyState(
                 jnp.array(START_X),
                 jnp.where(state.player_state.player_field == 1, jnp.array(ENEMY_START_Y),
-                          jnp.array(PLAYER_START_Y))
+                          jnp.array(PLAYER_START_Y)),
+                jnp.array(0.0)
             ),
             BallState(
                 jnp.array(GAME_WIDTH / 2.0 - 2.5),
@@ -241,7 +250,7 @@ def check_score(state: TennisState) -> TennisState:
                 jnp.array(0.0),
                 jnp.array(0.0),
                 jnp.array(0),
-                jnp.array(0)
+                jnp.array(-1)
             ),
             # Check if a set has ended and if the game has ended
             check_end(check_set(increased_score_state)),
@@ -418,17 +427,41 @@ y - coordinate:
 def enemy_step(state: TennisState) -> EnemyState:
     # x-coordinate
     # simply track balls x-coordinate
+    ball_tracking_tolerance = 1
+    enemy_hit_offset = state.enemy_state.prev_walking_direction * 5 * -1 * 0
+    enemy_x_hit_point = state.enemy_state.enemy_x + PLAYER_WIDTH / 2 + enemy_hit_offset
     new_enemy_x = jnp.where(
-        state.enemy_state.enemy_x + PLAYER_WIDTH / 2 < state.ball_state.ball_x,
+        enemy_x_hit_point < state.ball_state.ball_x,
         state.enemy_state.enemy_x + 1,
         state.enemy_state.enemy_x
     )
 
     new_enemy_x = jnp.where(
-        state.enemy_state.enemy_x + PLAYER_WIDTH / 2 > state.ball_state.ball_x,
+        enemy_x_hit_point > state.ball_state.ball_x,
         state.enemy_state.enemy_x - 1,
         new_enemy_x
     )
+
+    cur_walking_direction = jnp.where(
+        new_enemy_x - state.enemy_state.enemy_x < 0,
+        -1,
+        state.enemy_state.prev_walking_direction
+    )
+    cur_walking_direction = jnp.where(
+        new_enemy_x - state.enemy_state.enemy_x > 0,
+        1,
+        cur_walking_direction
+    )
+
+        #jnp.clip(new_enemy_x - state.enemy_state.enemy_x, -1, 1))
+
+    should_perform_direction_change = jnp.logical_or(
+        jnp.abs((enemy_x_hit_point) - state.ball_state.ball_x) >= ball_tracking_tolerance,
+        #state.enemy_state.prev_walking_direction == cur_walking_direction
+        False
+    )
+
+    new_enemy_x = jnp.where(should_perform_direction_change, new_enemy_x, state.enemy_state.enemy_x)
 
     # y-coordinate
 
@@ -450,12 +483,14 @@ def enemy_step(state: TennisState) -> EnemyState:
 
     new_enemy_y = jnp.where(state.game_state.is_serving,
                             state.enemy_state.enemy_y,
-                            normal_step_y
+                            normal_step_y,
+                            #jnp.clip(normal_step_y, 0, ENEMY_START_Y)
                             )
 
     return EnemyState(
         new_enemy_x,
-        new_enemy_y
+        new_enemy_y,
+        cur_walking_direction,
     )
 
 
@@ -497,7 +532,7 @@ def ball_step(state: TennisState, action) -> TennisState:
     # calculate actual z value using floor division by 10, because fixed-point value has exactly one point
     new_ball_z = new_ball_z_fp // 10
 
-    # apply lower bounding box (500 is effectively no MAX bound)d
+    # apply lower bounding box (500 is effectively no MAX bound)
     new_ball_z = jnp.clip(new_ball_z, 0, 500)
     new_ball_z_fp = jnp.clip(new_ball_z_fp, 0, 500)
 
@@ -552,11 +587,11 @@ def ball_step(state: TennisState, action) -> TennisState:
         is_overlapping(
             upper_entity_x,
             PLAYER_WIDTH,
-            0,  # this is z pos
+            0, # this is z pos
             PLAYER_HEIGHT,
             ball_state.ball_x,
             BALL_WIDTH,
-            ball_state.ball_y,
+            ball_state.ball_z,
             BALL_WIDTH  # todo rename to BALL_SIZE because ball is square
         ),
         jnp.absolute(upper_entity_y + PLAYER_HEIGHT - ball_state.ball_y) <= 3
@@ -566,14 +601,32 @@ def ball_step(state: TennisState, action) -> TennisState:
         is_overlapping(
             lower_entity_x,
             PLAYER_WIDTH,
-            0,
+            0, # this is z pos
             PLAYER_HEIGHT,
             ball_state.ball_x,
             BALL_WIDTH,
-            ball_state.ball_y,
+            ball_state.ball_z,
             BALL_WIDTH
         ),
         jnp.absolute(lower_entity_y + PLAYER_HEIGHT - ball_state.ball_y) <= 3
+    )
+
+    lower_entity_performed_last_hit = jnp.logical_or(
+        jnp.logical_and(
+            state.player_state.player_field == -1, state.ball_state.last_hit != ENEMY_CONST
+        ),
+        jnp.logical_and(
+            state.player_state.player_field == 1, state.ball_state.last_hit != PLAYER_CONST
+        )
+    )
+
+    upper_entity_performed_last_hit = jnp.logical_or(
+        jnp.logical_and(
+            state.player_state.player_field == 1, state.ball_state.last_hit != ENEMY_CONST
+        ),
+        jnp.logical_and(
+            state.player_state.player_field == -1, state.ball_state.last_hit != PLAYER_CONST
+        )
     )
 
     # check if fire is pressed
@@ -584,11 +637,19 @@ def ball_step(state: TennisState, action) -> TennisState:
          action == JAXAtariAction.UPRIGHTFIRE, action == JAXAtariAction.UPFIRE,
          action == JAXAtariAction.UPLEFTFIRE]))
 
-    any_collision = jnp.logical_or(
-        upper_entity_overlapping_ball,
-        lower_entity_overlapping_ball
+    any_entity_ready_to_fire = jnp.logical_or(
+        jnp.logical_and(
+            upper_entity_overlapping_ball,
+            lower_entity_performed_last_hit
+        ),
+        jnp.logical_and(
+            lower_entity_overlapping_ball,
+            upper_entity_performed_last_hit
+        )
     )
-    should_hit = jnp.logical_and(any_collision, jnp.logical_or(jnp.logical_not(state.game_state.is_serving), fire))
+
+
+    should_hit = jnp.logical_and(any_entity_ready_to_fire, jnp.logical_or(jnp.logical_not(state.game_state.is_serving), fire))
     new_is_serving = jnp.where(should_hit, False, state.game_state.is_serving)
 
     # no need to check whether the lower entity is actually overlapping because this variable won't be used if it isn't
@@ -604,21 +665,29 @@ def ball_step(state: TennisState, action) -> TennisState:
         lower_entity_x
     )
 
+    hitting_entity_y = jnp.where(
+        upper_entity_overlapping_ball,
+        upper_entity_x,
+        upper_entity_y
+    )
+
     # record which entity hit the ball most recently
     new_last_hit = jnp.where(should_hit,
                              # player hit
-                             jnp.where(jnp.logical_or(
-                                 jnp.logical_and(upper_entity_overlapping_ball, player_state.player_field == 1),
-                                 jnp.logical_and(lower_entity_overlapping_ball, player_state.player_field == -1)),
-                                 0,
-                                 1
+                             jnp.where(
+                                jnp.logical_or(
+                                    jnp.logical_and(upper_entity_overlapping_ball, player_state.player_field == 1),
+                                    jnp.logical_and(lower_entity_overlapping_ball, player_state.player_field == -1)
+                                ),
+                                0,
+                                1
                              ),
                              state.ball_state.last_hit
                              )
 
     ball_state_after_fire = jax.lax.cond(
         should_hit,
-        lambda _: handle_ball_fire(state, hitting_entity_x, ball_fire_direction),
+        lambda _: handle_ball_fire(state, hitting_entity_x, hitting_entity_y, ball_fire_direction),
         lambda _: BallState(
             new_ball_x,
             new_ball_y,
@@ -640,7 +709,21 @@ def ball_step(state: TennisState, action) -> TennisState:
     return TennisState(
         player_state,
         enemy_state,
-        ball_state_after_fire,
+        BallState(
+            ball_state_after_fire.ball_x,
+            ball_state_after_fire.ball_y,
+            ball_state_after_fire.ball_z,
+            ball_state_after_fire.ball_z_fp,
+            ball_state_after_fire.ball_velocity_z_fp,
+            ball_state_after_fire.ball_hit_start_x,
+            ball_state_after_fire.ball_hit_start_y,
+            ball_state_after_fire.ball_hit_target_x,
+            ball_state_after_fire.ball_hit_target_y,
+            ball_state_after_fire.move_x,
+            ball_state_after_fire.move_y,
+            ball_state_after_fire.bounces,
+            new_last_hit,
+        ),
         GameState(
             new_is_serving,
             state.game_state.pause_counter,
@@ -680,7 +763,7 @@ def is_overlapping(entity1_x, entity1_w, entity1_y, entity1_h, entity2_x, entity
 
 # todo needs docs
 @jax.jit
-def handle_ball_fire(state: TennisState, hitting_entity_x, direction) -> BallState:
+def handle_ball_fire(state: TennisState, hitting_entity_x, hitting_entity_y, direction) -> BallState:
     # direction = 1 from top side to bottom
     # direction = -1 from bottom side to top
     # direction = 0 (dont do this)
@@ -698,6 +781,10 @@ def handle_ball_fire(state: TennisState, hitting_entity_x, direction) -> BallSta
     left_offset = -39
     right_offset = 39
     offset = ((angle + 1) / 2) * (right_offset - left_offset) + left_offset
+
+    #y_distance = jnp.where(
+    #    direction ,
+   # )
 
     new_ball_hit_target_y = new_ball_hit_start_y + (91 * direction)
     field_min_x = 32
