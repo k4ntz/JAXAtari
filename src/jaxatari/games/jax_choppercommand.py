@@ -70,7 +70,8 @@ MAX_TRUCKS = 12
 MAX_JETS = 12
 MAX_CHOPPERS = 12
 MAX_ENEMIES = 12
-MAX_MISSILES = 2
+MAX_PLAYER_MISSILES = 2
+MAX_ENEMY_MISSILES = 5
 
 
 # Minimap
@@ -748,144 +749,37 @@ def spawn_step(
     )
 
     return (
-        # new_spawn_state,
         new_jet_positions,
         new_chopper_positions,
-        # new_truck_positions,
-        # new_key,
     )
+
 
 @jax.jit
 def enemy_missiles_step(
-    curr_enemy_positions, curr_enemy_missile_positions, step_counter
+        curr_enemy_positions: chex.Array,  # (MAX_ENEMIES, 3)
+        missile_states: chex.Array,  # (MAX_ENEMY_MISSILES, 4): [x, y, y_dir, age]
+        rng: chex.PRNGKey,
+        spawn_prob: float = 0.1,  # probability per frame per enemy
+        split_age: int = 10,  # age at which missiles split
+        y_dir_min: float = -1.0,  # min vertical speed
+        y_dir_max: float = 1.0  # max vertical speed
 ) -> chex.Array:
 
-    def calculate_missile_speed(step_counter):
-        """JAX-compatible missile speed calculation function"""
-        # Base tier size is 16 difficulty levels
-        tier_size = 16
+    enemies = curr_enemy_positions
+    missiles = missile_states
+    #jax.debug.print("awdawdawddw")
 
-        # Determine base speed (1, 2, 3, etc.) based on difficulty tier
-        base_speed = 1 + (step_counter // tier_size)
+    def step_one(i, carry):
 
-        # Calculate position within the current tier (0-15)
-        position_in_tier = step_counter % tier_size
+        #jax.debug.print("{x}",x=i)
+        #jax.debug.print("{x}",x=carry)
 
-        # Special case for difficulty 0
-        is_diff_0 = step_counter == 0
+        return carry
 
-        # Create position bracket array for each pattern
-        pos_brackets = [
-                jnp.logical_and(
-                    position_in_tier >= 0, position_in_tier <= 2
-                ),  # 0-2: 6.25%
-                jnp.logical_and(
-                    position_in_tier >= 3, position_in_tier <= 4
-                ),  # 3-4: 12.5%
-                jnp.logical_and(
-                    position_in_tier >= 5, position_in_tier <= 6
-                ),  # 5-6: 25%
-                jnp.logical_and(
-                    position_in_tier >= 7, position_in_tier <= 8
-                ),  # 7-8: 50%
-                jnp.logical_and(
-                    position_in_tier >= 9, position_in_tier <= 10
-                ),  # 9-10: 75%
-                jnp.logical_and(
-                    position_in_tier >= 11, position_in_tier <= 12
-                ),  # 11-12: 87.5%
-                jnp.logical_and(
-                    position_in_tier >= 13, position_in_tier <= 14
-                ),  # 13-14: 93.75%
-                position_in_tier == 15,  # 15: 100%
-            ]
-
-        # Create array of higher speed patterns
-        higher_speed_patterns = [
-                (step_counter % 16) == 0,  # 6.25%
-                (step_counter % 8) == 0,  # 12.5%
-                (step_counter % 4) == 0,  # 25%
-                (step_counter % 2) == 0,  # 50%
-                (step_counter % 4) != 0,  # 75%
-                (step_counter % 8) != 0,  # 87.5%
-                (step_counter % 16) != 0,  # 93.75%
-                True,  # 100%
-            ]
-
-        # Use jnp.select to choose the pattern
-        use_higher_speed = jnp.select(
-            pos_brackets, higher_speed_patterns, default=False
-        )
-
-        # Higher speed is base_speed + 1
-        higher_speed = base_speed + 1
-
-        # Handle difficulty 0 special case
-        return jax.lax.cond(
-            is_diff_0,
-            lambda _: jnp.array(1),
-            lambda _: jnp.where(use_higher_speed, higher_speed, base_speed),
-            operand=None
-        )
-
-    def single_missile_step(i, carry):
-        # Input i is the loop index, carry is the full array of missile positions
-        # Get current enemy and missile for this index
-        missile_pos = carry[i]
-
-        # get the current enemy position
-        enemy_pos = curr_enemy_positions[i]
-
-        # check if the missile is in frame
-        missile_exists = missile_pos[2] != 0
-
-        # check if the missile should be spawned
-        should_spawn = jnp.logical_and(
-            jnp.logical_not(missile_exists),
-            jnp.logical_and(
-                enemy_pos[0] >= 0,
-                enemy_pos[0] <= 160,
-            ),
-        )
-
-        # Calculate new missile position ( x -/+ 4 (depending on direction), y = enemy y + 8, direction = enemy direction)
-        new_missile_x = enemy_pos[0]
-        new_missile_y = enemy_pos[1] + 8
-        new_missile = jnp.where(
-            should_spawn,
-            jnp.array(
-                [new_missile_x, new_missile_y, enemy_pos[2]]
-            ),  # Use enemy's direction
-            missile_pos,
-        )
-
-        movement_speed = calculate_missile_speed(
-            step_counter
-        )
-        velocity = movement_speed * new_missile[2]
-
-        new_missile = jnp.where(
-            missile_exists,
-            jnp.array([new_missile[0] + velocity, new_missile[1], new_missile[2]]),
-            new_missile,
-        )
-
-        # Check bounds
-        new_missile = jnp.where(
-            new_missile[0] < X_BORDERS[0],
-            jnp.array([0, 0, 0]),
-            jnp.where(new_missile[0] > X_BORDERS[1], jnp.array([0, 0, 0]), new_missile),
-        )
-
-        # Update the missile position in the full array
-        return carry.at[i].set(new_missile)
-
-    # Update all missile positions maintaining the array shape
-    new_missile_positions = jax.lax.fori_loop(
-        0, MAX_CHOPPERS, single_missile_step, curr_enemy_missile_positions
+    updated = jax.lax.fori_loop(
+        0, MAX_ENEMY_MISSILES, step_one, missiles
     )
-
-    return new_missile_positions
+    return updated
 
 
 @jax.jit
@@ -1061,7 +955,7 @@ class JaxChopperCommand(JaxEnvironment[ChopperCommandState, ChopperCommandObserv
             Action.DOWNLEFTFIRE
         ]
         self.frame_stack_size = 4
-        self.obs_size = 5 + MAX_CHOPPERS * 5 + MAX_MISSILES * 5 + 5 + 5
+        self.obs_size = 5 + MAX_CHOPPERS * 5 + MAX_PLAYER_MISSILES * 5 + 5 + 5
 
     def flatten_entity_position(self, entity: EntityPosition) -> jnp.ndarray:
         return jnp.concatenate([entity.x, entity.y, entity.width, entity.height, entity.active])
@@ -1191,15 +1085,15 @@ class JaxChopperCommand(JaxEnvironment[ChopperCommandState, ChopperCommandObserv
             player_x=jnp.array(PLAYER_START_X).astype(jnp.float32),             # Initial horizontal spawn position of the player in world space. Sets where the chopper starts.
             player_y=jnp.array(PLAYER_START_Y).astype(jnp.int32),               # Initial vertical spawn position of the player. Ensures the chopper appears above ground level.
             player_velocity_x=jnp.array(0).astype(jnp.float32),                 # Player starts at rest horizontally — no momentum on the first frame.
-            local_player_offset=jnp.array(0).astype(jnp.float32),               # No screen offset initially; the screen is centered on the player's start. This changes direct while in the no_move_pause.
+            local_player_offset=jnp.array(50).astype(jnp.float32),              # Initial screen offset. This is for the no_move_pause animation when starting the game and respawning.
             player_facing_direction=jnp.array(1).astype(jnp.int32),             # # Player begins facing right (1).
             score=jnp.array(0).astype(jnp.int32),                               # Game always starts with a score of 0.
             lives=jnp.array(2).astype(jnp.int32),                               # Standard number of starting lives.
             truck_positions=initialize_truck_positions().astype(jnp.float32),   # Trucks are initialized with predefined starting positions and inactive death timers.
             jet_positions=jet_positions,                                        # Jets are initialized with predefined starting positions and inactive death timers.
             chopper_positions=chopper_positions,                                # Choppers are initialized with predefined starting positions and inactive death timers.
-            enemy_missile_positions=jnp.zeros((MAX_MISSILES, 3)),               # All enemy missile slots are zeroed out, meaning no missiles are in play at start.
-            player_missile_positions=jnp.zeros((MAX_MISSILES, 4)),              # All player missile slots are zeroed out; meaning no missiles are in play at start.
+            enemy_missile_positions=jnp.zeros((MAX_PLAYER_MISSILES, 4)),        # All enemy missile slots are zeroed out, meaning no missiles are in play at start.
+            player_missile_positions=jnp.zeros((MAX_PLAYER_MISSILES, 4)),       # All player missile slots are zeroed out; meaning no missiles are in play at start.
             player_missile_cooldown=jnp.array(0),                               # Cooldown timer is 0, so the player is allowed to shoot immediately.
             player_collision=jnp.array(False),                                  # Player has not collided with anything on game start.
             step_counter=jnp.array(0).astype(jnp.int32),                        # Frame counter starts from 0.
@@ -1227,360 +1121,390 @@ class JaxChopperCommand(JaxEnvironment[ChopperCommandState, ChopperCommandObserv
 
         previous_state = state
 
-        # Normal game logic starts here
-        def normal_game_step(get_prev_fields: bool):
+        #The normal_game_state is one step (e.g. one frame) of the normally ongoing game
+        def get_normal_game_state(state, action):
+            # Update player position
+            (
+                new_player_x,
+                new_player_y,
+                new_player_velocity_x,
+                new_local_player_offset,
+                new_player_facing_direction
+            ) = player_step(
+                state, action
+            )
 
-            #The normal_game_state is one step (e.g. one frame) of the normally ongoing game
-            def get_normal_game_state():
-                # Update player position
-                (
-                    new_player_x,
-                    new_player_y,
-                    new_player_velocity_x,
-                    new_local_player_offset,
-                    new_player_facing_direction
-                ) = player_step(
-                    state, action
-                )
+            # Update jet and chopper positions
+            new_jet_positions, new_chopper_positions, new_rng_key = step_enemy_movement(
+                state.jet_positions,
+                state.chopper_positions,
+                state.step_counter,
+                state.rng_key,
+                state.player_x,
+            )
 
-                # Update jet and chopper positions
-                new_jet_positions, new_chopper_positions, new_rng_key = step_enemy_movement(
-                    state.jet_positions,
-                    state.chopper_positions,
-                    state.step_counter,
-                    state.rng_key,
+            # Update enemy missile positions
+            new_enemy_missile_positions = enemy_missiles_step(  # TODO: make work for jets AND choppers
+                new_jet_positions, state.enemy_missile_positions, state.rng_key
+            )
+
+            # Update player missile position
+            new_player_missile_positions, new_cooldown = player_missile_step(
+                state, state.player_x, state.player_y, action
+            )
+
+            on_screen_position = (WIDTH // 2) - 8 + new_local_player_offset + (new_player_velocity_x * DISTANCE_WHEN_FLYING)
+
+            # Check missile collisions with jets
+            (
+                new_player_missile_position,
+                new_jet_positions,
+                new_score_jet,
+                new_rng_key,
+            ) = check_missile_collisions(
+                new_player_missile_positions,
+                new_jet_positions,
+                state.score,
+                new_rng_key,
+                on_screen_position,
+                new_player_x,
+                JET_SIZE
+            )
+
+            # Check player missile collisions with choppers
+            (
+                new_player_missile_position,
+                new_chopper_positions,
+                new_score,
+                new_rng_key,
+            ) = check_missile_collisions(
+                new_player_missile_positions,
+                new_chopper_positions,
+                new_score_jet,
+                new_rng_key,
+                on_screen_position,
+                new_player_x,
+                CHOPPER_SIZE
+            )
+
+            new_truck_positions = state.truck_positions
+
+            (
+                new_jet_positions,
+                new_chopper_positions,
+            ) = spawn_step(
+                state,
+                new_jet_positions,
+                new_chopper_positions,
+            )
+
+            new_truck_positions = (
+                step_truck_movement(
+                    new_truck_positions,
                     state.player_x,
                 )
+            )
 
-                # Update enemy missile positions
-                new_enemy_missile_positions = enemy_missiles_step(  # TODO: make work for jets AND choppers
-                    new_jet_positions, state.enemy_missile_positions, state.step_counter
-                )
+            # Check player collision
+            player_collision_jet, player_collision_new_jet_pos = check_player_collision_enemy(
+                new_player_x,
+                new_player_y,
+                new_player_velocity_x,
+                new_jet_positions,
+                JET_SIZE,
+                FRAMES_DEATH_ANIMATION_ENEMY,
+            )
+            new_jet_positions = player_collision_new_jet_pos
 
-                # Update player missile position
-                new_player_missile_positions, new_cooldown = player_missile_step(
-                    state, state.player_x, state.player_y, action
-                )
+            player_collision_chopper, player_collision_new_chopper_pos = check_player_collision_enemy(
+                new_player_x,
+                new_player_y,
+                new_player_velocity_x,
+                new_chopper_positions,
+                CHOPPER_SIZE,
+                FRAMES_DEATH_ANIMATION_ENEMY,
+            )
+            new_chopper_positions = player_collision_new_chopper_pos
 
-                on_screen_position = (WIDTH // 2) - 8 + new_local_player_offset + (new_player_velocity_x * DISTANCE_WHEN_FLYING)
+            player_collision_truck, player_collision_new_truck_pos = check_player_collision_enemy(
+                new_player_x,
+                new_player_y,
+                new_player_velocity_x,
+                new_truck_positions,
+                TRUCK_SIZE,
+                FRAMES_DEATH_ANIMATION_TRUCK,
+            )
+            new_truck_positions = player_collision_new_truck_pos
 
-                # Check missile collisions with jets
-                (
-                    new_player_missile_position,
-                    new_jet_positions,
-                    new_score_jet,
-                    new_rng_key,
-                ) = check_missile_collisions(
-                    new_player_missile_positions,
-                    new_jet_positions,
-                    state.score,
-                    new_rng_key,
-                    on_screen_position,
-                    new_player_x,
-                    JET_SIZE
-                )
-
-                # Check player missile collisions with choppers
-                (
-                    new_player_missile_position,
-                    new_chopper_positions,
-                    new_score,
-                    new_rng_key,
-                ) = check_missile_collisions(
-                    new_player_missile_positions,
-                    new_chopper_positions,
-                    new_score_jet,
-                    new_rng_key,
-                    on_screen_position,
-                    new_player_x,
-                    CHOPPER_SIZE
-                )
-
-                new_truck_positions = state.truck_positions
-
-                (
-                    new_jet_positions,
-                    new_chopper_positions,
-                ) = spawn_step(
-                    state,
-                    new_jet_positions,
-                    new_chopper_positions,
-                )
-
-                new_truck_positions = (
-                    step_truck_movement(
-                        new_truck_positions,
-                        state.player_x,
-                    )
-                )
-
-                # Check player collision
-                player_collision_jet, player_collision_new_jet_pos = check_player_collision_enemy(
-                    new_player_x,
-                    new_player_y,
-                    new_player_velocity_x,
-                    new_jet_positions,
-                    JET_SIZE,
-                    FRAMES_DEATH_ANIMATION_ENEMY,
-                )
-                new_jet_positions = player_collision_new_jet_pos
-
-                player_collision_chopper, player_collision_new_chopper_pos = check_player_collision_enemy(
-                    new_player_x,
-                    new_player_y,
-                    new_player_velocity_x,
-                    new_chopper_positions,
-                    CHOPPER_SIZE,
-                    FRAMES_DEATH_ANIMATION_ENEMY,
-                )
-                new_chopper_positions = player_collision_new_chopper_pos
-
-                player_collision_truck, player_collision_new_truck_pos = check_player_collision_enemy(
-                    new_player_x,
-                    new_player_y,
-                    new_player_velocity_x,
-                    new_truck_positions,
-                    TRUCK_SIZE,
-                    FRAMES_DEATH_ANIMATION_TRUCK,
-                )
-                new_truck_positions = player_collision_new_truck_pos
-
-                player_collision = jnp.logical_or(
-                    player_collision_jet,
-                    jnp.logical_or(
-                        player_collision_chopper,
-                        player_collision_truck
-                    )
-                )
-
-                # Update enemy death
-                new_chopper_positions = update_entity_death(new_chopper_positions, FRAMES_DEATH_ANIMATION_ENEMY)
-                new_jet_positions = update_entity_death(new_jet_positions, FRAMES_DEATH_ANIMATION_ENEMY)
-                new_truck_positions = update_entity_death(new_truck_positions, FRAMES_DEATH_ANIMATION_TRUCK)
-
-                # Update score with collision points
-                new_score = jnp.where(player_collision_jet, new_score + SCORE_PER_JET_KILL, new_score)
-
-                new_score = jnp.where(player_collision_chopper, new_score + SCORE_PER_CHOPPER_KILL, new_score)
-
-                # Update lives if player collides with an enemy or enemy missile
-                new_lives = jnp.where(
-                    player_collision, state.lives - 1, state.lives
-                )
-
-                # Update step counter
-                new_step_counter = state.step_counter + 1
-
-                # Create the normal returned state
-                inner_normal_returned_state = ChopperCommandState(
-                    player_x=new_player_x,
-                    player_y=new_player_y,
-                    player_velocity_x=new_player_velocity_x,
-                    local_player_offset=new_local_player_offset,
-                    player_facing_direction=new_player_facing_direction,
-                    score=new_score,
-                    lives=new_lives,
-                    truck_positions=new_truck_positions,
-                    jet_positions=new_jet_positions,
-                    chopper_positions=new_chopper_positions,
-                    enemy_missile_positions=new_enemy_missile_positions,
-                    player_missile_positions=new_player_missile_position,
-                    player_missile_cooldown=new_cooldown,
-                    player_collision=player_collision,
-                    step_counter=new_step_counter,
-                    pause_timer=state.pause_timer,
-                    rng_key=new_rng_key,
-                    obs_stack=state.obs_stack,  # Include obs_stack in the state
-                )
-                return inner_normal_returned_state
-
-            # The death_pause is the pause that occurs right after the death of the chopper
-            def get_death_pause_state():
-                in_pause = jnp.logical_and(state.pause_timer <= DEATH_PAUSE_FRAMES, state.pause_timer > 0)
-
-                # pause counter
-                new_pause_timer = jnp.where(in_pause, state.pause_timer - 1, state.pause_timer)
-                # Freeze pause counter if player has no lives left
-                new_pause_timer = jnp.where(state.lives == 0, jnp.maximum(new_pause_timer, 1), new_pause_timer)
-
-                # truck deaths
-                temp_truck_positions = (
-                    step_truck_movement(
-                        normal_state.truck_positions,
-                        normal_state.player_x,
-                    )
-                )
-
-                updated_truck_death_timers = temp_truck_positions[:, 3]  # neue Timer
-                new_truck_positions = state.truck_positions.at[:, 3].set(updated_truck_death_timers)
-
-                # Enemy deaths
-                temp_jet_positions, temp_chopper_positions, _ = (
-                    step_enemy_movement(
-                        normal_state.jet_positions,
-                        normal_state.chopper_positions,
-                        normal_state.step_counter,
-                        normal_state.rng_key,
-                        normal_state.player_x,
-                    )
-                )
-
-                updated_jet_death_timers = temp_jet_positions[:, 3]  # neue Timer
-                updated_chopper_death_timers = temp_chopper_positions[:, 3]  # neue Timer
-
-                new_jet_positions_pause = state.jet_positions.at[:, 3].set(updated_jet_death_timers)
-                new_chopper_positions_pause = state.chopper_positions.at[:, 3].set(updated_chopper_death_timers)
-
-
-                new_player_missile_position, new_cooldown = player_missile_step(
-                    normal_state, normal_state.player_x, normal_state.player_y, action
-                )
-
-                new_player_missile_position = new_player_missile_position.astype(jnp.float32)
-
-                # Things that have to be updated in the pause
-                # pause_timer               - this is required for ending the pause
-                # jet_positions[i][3]       - this is required for rendering jet death animation while paused
-                # chopper_positions[i][3]   - this is required for rendering chopper death animation while paused
-                # truck_positions[i][3]     - this is required for rendering truck death animation while paused
-                # player_missile_positions  - this is required to let player missile travel while paused
-                # player_missile_cooldown   - this is a dependency for player_missile_positions
-                paused_state = state._replace(
-                    pause_timer=new_pause_timer,
-                    jet_positions=new_jet_positions_pause,
-                    chopper_positions=new_chopper_positions_pause,
-                    truck_positions=new_truck_positions,
-                    player_missile_positions=new_player_missile_position,
-                    player_missile_cooldown=new_cooldown,
-                )
-
-                return paused_state
-
-            # The no_move_pause is the pause between the pause that occurs instantly after death and the first input
-            def get_no_move_pause_state():
-                no_input = jnp.isin(action, Action.NOOP)
-
-                on_screen_position = (WIDTH // 2) - 8 + state.local_player_offset + (state.player_velocity_x * DISTANCE_WHEN_FLYING)
-                chopper_at_desired_point = on_screen_position <= ALLOW_MOVE_OFFSET
-
-                # Things that have to be updated in the no_move_pause
-                # local_player_offset - this is required for moving the chopper to the left of the screen, since we are not calling player_step anymore
-                # pause_timer         - this is required for keeping the game paused until chopper is at the desired location and an input is made
-                no_move_state = state._replace(
-                    local_player_offset=jnp.where(chopper_at_desired_point,
-                                                  state.local_player_offset,
-                                                  state.local_player_offset - LOCAL_PLAYER_OFFSET_SPEED
-                                                  ),
-                    pause_timer=jnp.where(jnp.logical_and(chopper_at_desired_point, jnp.logical_not(no_input)),
-                                          jnp.array(DEATH_PAUSE_FRAMES + 1),
-                                          jnp.array(state.pause_timer) #Stay in no_move_pause
-                                          )
-                )
-
-                return no_move_state
-
-            normal_state = get_normal_game_state()
-
-            # dtype-Mismatch fix
-            normal_state = jax.tree.map(
-                lambda new, old: new.astype(old.dtype),
-                normal_state,
-                state
-            ) #TODO: Find the cause of needing this. This is probably just a type mismatch error in one or more of the fields of normal_state and state
-
-            # Normal game step or pause (Enter/Stay in pause when...
-            returned_state = jax.lax.cond(
+            player_collision = jnp.logical_or(
+                player_collision_jet,
                 jnp.logical_or(
-                    state.pause_timer <= DEATH_PAUSE_FRAMES, # ...already in pause)
-                    jnp.logical_or(
-                        get_prev_fields, # ...the pause state (soft reset state) is requested)
-                        state.lives == 0), # ...player has no lives left)
-                ),
-                lambda: get_death_pause_state(),
-                lambda: normal_state,
+                    player_collision_chopper,
+                    player_collision_truck
+                )
             )
 
-            # Normal game step, pause (picked above) or no_move_pause.
-            returned_state = jax.lax.cond(
-                state.pause_timer == DEATH_PAUSE_FRAMES + 2,
-                lambda: get_no_move_pause_state(),
-                lambda: returned_state,
+            # Update enemy death
+            new_chopper_positions = update_entity_death(new_chopper_positions, FRAMES_DEATH_ANIMATION_ENEMY)
+            new_jet_positions = update_entity_death(new_jet_positions, FRAMES_DEATH_ANIMATION_ENEMY)
+            new_truck_positions = update_entity_death(new_truck_positions, FRAMES_DEATH_ANIMATION_TRUCK)
+
+            # Update score with collision points
+            new_score = jnp.where(player_collision_jet, new_score + SCORE_PER_JET_KILL, new_score)
+
+            new_score = jnp.where(player_collision_chopper, new_score + SCORE_PER_CHOPPER_KILL, new_score)
+
+            # Update lives if player collides with an enemy or enemy missile
+            new_lives = jnp.where(
+                player_collision, state.lives - 1, state.lives
             )
 
-            return returned_state
+            # Update step counter
+            new_step_counter = state.step_counter + 1
 
-        pause_or_continue_state = normal_game_step(False)
-        soft_reset_state = normal_game_step(True)
+            # Create the normal returned state
+            inner_normal_returned_state = ChopperCommandState(
+                player_x=new_player_x,
+                player_y=new_player_y,
+                player_velocity_x=new_player_velocity_x,
+                local_player_offset=new_local_player_offset,
+                player_facing_direction=new_player_facing_direction,
+                score=new_score,
+                lives=new_lives,
+                truck_positions=new_truck_positions,
+                jet_positions=new_jet_positions,
+                chopper_positions=new_chopper_positions,
+                enemy_missile_positions=new_enemy_missile_positions,
+                player_missile_positions=new_player_missile_position,
+                player_missile_cooldown=new_cooldown,
+                player_collision=player_collision,
+                step_counter=new_step_counter,
+                pause_timer=state.pause_timer,
+                rng_key=new_rng_key,
+                obs_stack=state.obs_stack,  # Include obs_stack in the state
+            )
+            return inner_normal_returned_state
+
+        # The death_pause is the pause that occurs right after the death of the chopper
+        def get_death_pause_state(state, normal_state, action):
+            in_pause = jnp.logical_and(state.pause_timer <= DEATH_PAUSE_FRAMES, state.pause_timer > 0)
+
+            # pause counter
+            new_pause_timer = jnp.where(in_pause, state.pause_timer - 1, state.pause_timer)
+            # Freeze pause counter if player has no lives left
+            new_pause_timer = jnp.where(state.lives == 0, jnp.maximum(new_pause_timer, 1), new_pause_timer)
+
+            # truck deaths
+            temp_truck_positions = (
+                step_truck_movement(
+                    normal_state.truck_positions,
+                    normal_state.player_x,
+                )
+            )
+
+            updated_truck_death_timers = temp_truck_positions[:, 3]  # neue Timer
+            new_truck_positions = state.truck_positions.at[:, 3].set(updated_truck_death_timers)
+
+            # Enemy deaths
+            temp_jet_positions, temp_chopper_positions, _ = (
+                step_enemy_movement(
+                    normal_state.jet_positions,
+                    normal_state.chopper_positions,
+                    normal_state.step_counter,
+                    normal_state.rng_key,
+                    normal_state.player_x,
+                )
+            )
+
+            updated_jet_death_timers = temp_jet_positions[:, 3]  # neue Timer
+            updated_chopper_death_timers = temp_chopper_positions[:, 3]  # neue Timer
+
+            new_jet_positions_pause = state.jet_positions.at[:, 3].set(updated_jet_death_timers)
+            new_chopper_positions_pause = state.chopper_positions.at[:, 3].set(updated_chopper_death_timers)
+
+
+            new_player_missile_position, new_cooldown = player_missile_step(
+                normal_state, normal_state.player_x, normal_state.player_y, action
+            )
+
+            new_player_missile_position = new_player_missile_position.astype(jnp.float32)
+
+            # Things that have to be updated in the pause
+            # pause_timer               - this is required for ending the pause
+            # jet_positions[i][3]       - this is required for rendering jet death animation while paused
+            # chopper_positions[i][3]   - this is required for rendering chopper death animation while paused
+            # truck_positions[i][3]     - this is required for rendering truck death animation while paused
+            # player_missile_positions  - this is required to let player missile travel while paused
+            # player_missile_cooldown   - this is a dependency for player_missile_positions
+            paused_state = state._replace(
+                pause_timer=new_pause_timer,
+                jet_positions=new_jet_positions_pause,
+                chopper_positions=new_chopper_positions_pause,
+                truck_positions=new_truck_positions,
+                player_missile_positions=new_player_missile_position,
+                player_missile_cooldown=new_cooldown,
+            )
+
+            return paused_state
+
+        # The no_move_pause is the pause between the pause that occurs instantly after death and the first input
+        def get_no_move_pause_state(state, action):
+            no_input = jnp.isin(action, Action.NOOP)
+
+            on_screen_position = (WIDTH // 2) - 8 + state.local_player_offset + (state.player_velocity_x * DISTANCE_WHEN_FLYING)
+            chopper_at_desired_point = on_screen_position <= ALLOW_MOVE_OFFSET
+
+            # Things that have to be updated in the no_move_pause
+            # local_player_offset - this is required for moving the chopper to the left of the screen, since we are not calling player_step anymore
+            # pause_timer         - this is required for keeping the game paused until chopper is at the desired location and an input is made
+            no_move_state = state._replace(
+                local_player_offset=jnp.where(chopper_at_desired_point,
+                                              state.local_player_offset,
+                                              state.local_player_offset - LOCAL_PLAYER_OFFSET_SPEED
+                                              ),
+                pause_timer=jnp.where(jnp.logical_and(chopper_at_desired_point, jnp.logical_not(no_input)),
+                                      jnp.array(DEATH_PAUSE_FRAMES + 1),
+                                      jnp.array(state.pause_timer) #Stay in no_move_pause
+                                      )
+            )
+
+            return no_move_state
+
+
+        # Calculate all possible next states
+        normal_state = get_normal_game_state(state, action)
+        death_pause_state = get_death_pause_state(state, normal_state, action)
+        no_move_state = get_no_move_pause_state(state, action)
+
+        # dtype-Mismatch fix
+        normal_state = jax.tree.map(
+            lambda new, old: new.astype(old.dtype),
+            normal_state,
+            state
+        ) #TODO: Find the cause of needing these. This is probably just a type mismatch error in one or more of the fields of normal_state and statev
+
+        # dtype-Mismatch fix
+        death_pause_state = jax.tree.map(
+            lambda new, old: new.astype(old.dtype),
+            death_pause_state,
+            state,
+        ) #TODO: Find the cause of needing these. This is probably just a type mismatch error in one or more of the fields of normal_state and statev
+
+        # dtype-Mismatch fix
+        no_move_state = jax.tree.map(
+            lambda new, old: new.astype(old.dtype),
+            no_move_state,
+            state
+        ) #TODO: Find the cause of needing these. This is probably just a type mismatch error in one or more of the fields of normal_state and statev
+
+        # Pick correct state
+        step_state = jax.lax.cond(
+            state.pause_timer <= DEATH_PAUSE_FRAMES, #Pick the death_pause if Pause was initiated
+            lambda _: death_pause_state,
+            lambda _: normal_state,
+            operand=None
+        )
+
+        step_state = jax.lax.cond(
+            state.pause_timer == DEATH_PAUSE_FRAMES + 2, #Pick the no_move_pause if no move pause was initiated
+            lambda _: no_move_state,
+            lambda _: step_state,
+            operand=None
+        )
+
+        # Soft- und Hard-Reset-Logik
+        # Soft-Reset (früher war das normal_game_step(get_prev_fields=True))
+        soft_reset_state = death_pause_state
+        soft_reset_state = jax.lax.cond(
+            state.pause_timer == DEATH_PAUSE_FRAMES + 2,
+            lambda _: no_move_state,
+            lambda _: soft_reset_state,
+            operand=None
+        )
+        # Hard-Reset von Env.reset()
         _, hard_reset_state = self.reset()
 
-        def merge_jet_positions(reset_pos, soft_reset_pos):
+        # Merge von Todes-Timern in den Hard-Reset-Zuständen
+        def merge_death_timers(reset_pos, soft_pos):
             def body(i, acc):
-                new_row = acc[i].at[3].set(soft_reset_pos[i, 3])
+                new_row = acc[i].at[3].set(soft_pos[i, 3])
                 return acc.at[i].set(new_row)
 
             return jax.lax.fori_loop(0, reset_pos.shape[0], body, reset_pos)
 
-        new_jet_positions = merge_jet_positions(hard_reset_state.jet_positions, soft_reset_state.jet_positions)
-        new_chopper_positions = merge_jet_positions(hard_reset_state.chopper_positions, soft_reset_state.chopper_positions)
-        new_truck_positions = merge_jet_positions(hard_reset_state.truck_positions, soft_reset_state.truck_positions)
+        merged_jet_pos = merge_death_timers(hard_reset_state.jet_positions, soft_reset_state.jet_positions)
+        merged_chop_pos = merge_death_timers(hard_reset_state.chopper_positions, soft_reset_state.chopper_positions)
+        merged_truck_pos = merge_death_timers(hard_reset_state.truck_positions, soft_reset_state.truck_positions)
 
-        #Everything that needs to be replaced (taken from previous run) or hard reset when respawning because of death
-        #Take player x and y from hard reset state and score, lives, truck deaths, jet deaths and chopper deaths from previous run
+        # Erstelle respawn_state
         respawn_state = hard_reset_state._replace(
-            #hard resets
-            player_x=hard_reset_state.player_x, #TODO: Player needs to spawn one truck fleet to the right when respawning
+            # hard Resets
+            player_x=hard_reset_state.player_x,
             player_y=hard_reset_state.player_y,
-
-            #soft resets
+            # soft Resets
             score=soft_reset_state.score,
             lives=soft_reset_state.lives,
-            jet_positions=new_jet_positions,
-            chopper_positions=new_chopper_positions,
-            truck_positions=new_truck_positions,
+            jet_positions=merged_jet_pos,
+            chopper_positions=merged_chop_pos,
+            truck_positions=merged_truck_pos,
         )
 
-        just_died = jnp.logical_and(pause_or_continue_state.player_collision, pause_or_continue_state.pause_timer > DEATH_PAUSE_FRAMES)
-        all_enemies_dead = jnp.logical_and(jnp.all(pause_or_continue_state.jet_positions == 0), jnp.all(pause_or_continue_state.chopper_positions == 0))
+        # Pause-Initialisierung und Update
+        just_died = jnp.logical_and(
+            step_state.player_collision,
+            step_state.pause_timer > DEATH_PAUSE_FRAMES
+        )
+        all_enemies_dead = jnp.logical_and(
+            jnp.all(step_state.jet_positions == 0),
+            jnp.all(step_state.chopper_positions == 0)
+        )
+        initial_dead_pause = jnp.logical_and(all_enemies_dead, step_state.pause_timer > DEATH_PAUSE_FRAMES)
 
-        all_enemies_dead_initial_step = jnp.logical_and(all_enemies_dead, pause_or_continue_state.pause_timer > DEATH_PAUSE_FRAMES)
-        all_enemies_dead_timer_zero = jnp.logical_and(all_enemies_dead, pause_or_continue_state.pause_timer == 0)
-
-        #Everything that needs a hard reset when all enemies are dead (Already includes everything replaced above)
         respawn_state = respawn_state._replace(
-            jet_positions=jnp.where(all_enemies_dead_timer_zero, hard_reset_state.jet_positions, respawn_state.jet_positions),
-            chopper_positions=jnp.where(all_enemies_dead_timer_zero, hard_reset_state.chopper_positions, respawn_state.chopper_positions),
+            jet_positions=jnp.where(
+                jnp.logical_and(all_enemies_dead, step_state.pause_timer == 0),
+                hard_reset_state.jet_positions,
+                respawn_state.jet_positions
+            ),
+            chopper_positions=jnp.where(
+                jnp.logical_and(all_enemies_dead, step_state.pause_timer == 0),
+                hard_reset_state.chopper_positions,
+                respawn_state.chopper_positions
+            ),
         )
 
-        #Pause initialisieren/updaten (nur wenn gerade gestorben, alle enemies tot oder keine Leben mehr)
-        pause_or_continue_state = pause_or_continue_state._replace(
-        pause_timer=jnp.where(
-        jnp.logical_or(just_died, all_enemies_dead_initial_step),
-        jnp.array(DEATH_PAUSE_FRAMES),
-        pause_or_continue_state.pause_timer
+        step_state = step_state._replace(
+            pause_timer=jnp.where(
+                jnp.logical_or(just_died, initial_dead_pause),
+                jnp.array(DEATH_PAUSE_FRAMES),
+                step_state.pause_timer
             )
         )
 
-        # Weitermachen mit pause/normal_game_step oder respawnen
-        pause_or_continue_state = jax.lax.cond(
+        # Weitermachen oder Respawn
+        step_state = jax.lax.cond(
             state.pause_timer != 0,
-            lambda: pause_or_continue_state,
-            lambda: respawn_state,
+            lambda _: step_state,
+            lambda _: respawn_state,
+            operand=None
         )
 
+        # Observation, Reward, Done, Info
+        observation = self._get_observation(step_state)
+        done = self._get_done(step_state)
+        env_reward = self._get_env_reward(previous_state, step_state)
+        all_rewards = self._get_all_rewards(previous_state, step_state)
+        info = self._get_info(step_state, all_rewards)
 
-        # Get observation and info
-        observation = self._get_observation(pause_or_continue_state)
-        done = self._get_done(pause_or_continue_state)
-        env_reward = self._get_env_reward(previous_state, pause_or_continue_state)
-        all_rewards = self._get_all_rewards(previous_state, pause_or_continue_state)
-        info = self._get_info(pause_or_continue_state, all_rewards)
+        # Obs-Stack aktualisieren
+        new_obs_stack = jax.tree_map(
+            lambda stack, obs: jnp.concatenate([stack[1:], jnp.expand_dims(obs, 0)], axis=0),
+            step_state.obs_stack,
+            observation
+        )
+        step_state = step_state._replace(obs_stack=new_obs_stack)
 
-        observation = jax.tree.map(
-            lambda stack, obs: jnp.concatenate([stack[1:], jnp.expand_dims(obs, axis=0)], axis=0),
-            pause_or_continue_state.obs_stack, observation)
-        pause_or_continue_state = pause_or_continue_state._replace(obs_stack=observation)
-
-        return observation, pause_or_continue_state, env_reward, done, info
+        return new_obs_stack, step_state, env_reward, done, info
 
 
 class Renderer_AtraJaxis(AtraJaxisRenderer):
@@ -1752,7 +1676,7 @@ class Renderer_AtraJaxis(AtraJaxisRenderer):
                 raster_base,
             )
 
-        raster = jax.lax.fori_loop(0, MAX_MISSILES, render_enemy_missile, raster)
+        raster = jax.lax.fori_loop(0, MAX_PLAYER_MISSILES, render_enemy_missile, raster)
 
         # Show the scores
         score_array = aj.int_to_digits(state.score, 6)
