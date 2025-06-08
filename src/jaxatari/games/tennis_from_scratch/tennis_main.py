@@ -56,8 +56,8 @@ BALL_SERVING_BOUNCE_VELOCITY_RANDOM_OFFSET = 2
 BALL_WIDTH = 2.0
 LONG_HIT_THRESHOLD_TOP = 52
 LONG_HIT_THRESHOLD_BOTTOM = 121
-LONG_HIT_DISTANCE = 91
-SHORT_HIT_DISTANCE = 10
+LONG_HIT_DISTANCE = 110 # previously 91
+SHORT_HIT_DISTANCE = 50
 
 # enemy constants
 ENEMY_CONST = 1
@@ -852,13 +852,13 @@ def handle_ball_fire(state: TennisState, hitting_entity_x, hitting_entity_y, dir
     field_min_x = 32
     field_max_x = 32 + FIELD_WIDTH_TOP
     new_ball_hit_target_x = jnp.clip(new_ball_hit_start_x + offset, field_min_x, field_max_x)
-
+# ==================================
     hit_vel = 24.0
 
     dx = new_ball_hit_target_x - state.ball_state.ball_x
     dy = new_ball_hit_target_y - state.ball_state.ball_y
-    # dist = jnp.sqrt(dx**2 + dy**2)
-    dist = jnp.linalg.norm(jnp.array([dx, dy])) + 1e-8
+    #dist = jnp.sqrt(dx**2 + dy**2)
+    dist = jnp.linalg.norm(jnp.array([dx, dy, 38 * 2])) #+ 1e-8
 
     norm_dx = dx / dist
     norm_dy = dy / dist
