@@ -56,8 +56,8 @@ BALL_SERVING_BOUNCE_VELOCITY_RANDOM_OFFSET = 2
 BALL_WIDTH = 2.0
 LONG_HIT_THRESHOLD_TOP = 52
 LONG_HIT_THRESHOLD_BOTTOM = 121
-LONG_HIT_DISTANCE = 110 # previously 91
-SHORT_HIT_DISTANCE = 50
+LONG_HIT_DISTANCE = 91 # previously 91
+SHORT_HIT_DISTANCE = 40
 
 # enemy constants
 ENEMY_CONST = 1
@@ -585,14 +585,17 @@ def ball_step(state: TennisState, action) -> TennisState:
     new_ball_z = jnp.clip(new_ball_z, 0, 500)
     new_ball_z_fp = jnp.clip(new_ball_z_fp, 0, 500)
 
+    #new_ball_x = ball_state.ball_x + ball_state.move_x
+    #new_ball_y = ball_state.ball_y + ball_state.move_y
     # ball movement in x/y direction is linear, no velocity involved
+
     new_ball_x = jnp.where(
-        ball_state.ball_x != ball_state.ball_hit_target_x,
+        jnp.absolute(ball_state.ball_x - ball_state.ball_hit_target_x) <= 1,
         ball_state.ball_x + ball_state.move_x,
         ball_state.ball_x
     )
     new_ball_y = jnp.where(
-        ball_state.ball_y != ball_state.ball_hit_target_y,
+        jnp.absolute(ball_state.ball_y - ball_state.ball_hit_target_y) <= 1,
         ball_state.ball_y + ball_state.move_y,
         ball_state.ball_y
     )
@@ -853,18 +856,54 @@ def handle_ball_fire(state: TennisState, hitting_entity_x, hitting_entity_y, dir
     field_max_x = 32 + FIELD_WIDTH_TOP
     new_ball_hit_target_x = jnp.clip(new_ball_hit_start_x + offset, field_min_x, field_max_x)
 # ==================================
+
+    @jax.jit
+    def compute_ball_landing_frame(z_fp0, v0_fp, gravity_fp):
+        """
+        Computes the number of frames until the ball hits the ground (z == 0).
+
+        Parameters:
+            z_fp0: jnp.ndarray or float - Initial z fixed-point position (e.g., 0)
+            v0_fp: jnp.ndarray or float - Initial z fixed-point velocity (e.g., 140)
+            gravity_fp: jnp.ndarray or float - Gravity per frame in fixed-point (e.g., 4)
+
+        Returns:
+            t_landing: jnp.ndarray - Number of frames until ball hits the ground
+        """
+        A = -gravity_fp
+        B = 2 * v0_fp + gravity_fp
+        C = 2 * (z_fp0 - 10)  # '10' comes from floor(z_fp / 10) == 0  → z_fp < 10
+
+        discriminant = B ** 2 - 4 * A * C
+        sqrt_discriminant = jnp.sqrt(discriminant)
+
+        # Only consider the positive root (when the ball actually hits the ground)
+        t = (-B - sqrt_discriminant) / (2 * A)
+
+        # Floor to get the last integer frame before hitting ground
+        t_landing = jnp.floor(t).astype(jnp.int32)
+
+        return t_landing
+
+
     hit_vel = 24.0
 
     dx = new_ball_hit_target_x - state.ball_state.ball_x
     dy = new_ball_hit_target_y - state.ball_state.ball_y
     #dist = jnp.sqrt(dx**2 + dy**2)
-    dist = jnp.linalg.norm(jnp.array([dx, dy, 38 * 2])) #+ 1e-8
+    #dist = jnp.linalg.norm(jnp.array([dx, dy])) #+ 1e-8
 
-    norm_dx = dx / dist
-    norm_dy = dy / dist
+    #norm_dist = dist / compute_ball_landing_frame(14, 24.0, BALL_GRAVITY_PER_FRAME)
 
-    move_x = norm_dx * 2.1
-    move_y = norm_dy * 2.1
+    #norm_dx = dx / dist
+   #norm_dy = dy / dist
+
+    #move_x = norm_dx #* 2.1
+    #move_y = norm_dy #* 2.1
+    steps = compute_ball_landing_frame(14, 24.0, BALL_GRAVITY_PER_FRAME)
+
+    move_x = dx / steps
+    move_y = dy / steps
 
     return BallState(
         state.ball_state.ball_x,
