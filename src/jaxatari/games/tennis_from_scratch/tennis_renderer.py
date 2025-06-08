@@ -3,6 +3,8 @@ import jax
 import jax.numpy as jnp
 import jaxatari.rendering.atraJaxis as aj
 import os
+from typing import NamedTuple
+import chex
 # Todo remove
 import csv, uuid
 
@@ -13,8 +15,16 @@ def load_sprites():
     BG = jnp.expand_dims(aj.loadFrame(os.path.join(MODULE_DIR, "tennis_from_scratch/sprites/background.npy")), axis=0)
     BALL = jnp.expand_dims(aj.loadFrame(os.path.join(MODULE_DIR, "tennis_from_scratch/sprites/ball.npy")), axis=0)
     BALL_SHADOW = jnp.expand_dims(aj.loadFrame(os.path.join(MODULE_DIR, "tennis_from_scratch/sprites/ball_shadow.npy")), axis=0)
+    PLAYER_0 = jnp.expand_dims(aj.loadFrame(os.path.join(MODULE_DIR, "tennis_from_scratch/sprites/player_no_racket.npy")), axis=0)
+    PLAYER_1 = jnp.expand_dims(
+        aj.loadFrame(os.path.join(MODULE_DIR, "tennis_from_scratch/sprites/player_no_racket_1.npy")), axis=0)
+    PLAYER_2 = jnp.expand_dims(
+        aj.loadFrame(os.path.join(MODULE_DIR, "tennis_from_scratch/sprites/player_no_racket_2.npy")), axis=0)
+    PLAYER_3 = jnp.expand_dims(
+        aj.loadFrame(os.path.join(MODULE_DIR, "tennis_from_scratch/sprites/player_no_racket_3.npy")), axis=0)
+    RACKET = jnp.expand_dims(aj.loadFrame(os.path.join(MODULE_DIR, "tennis_from_scratch/sprites/racket_no_player.npy")), axis=0)
 
-    return BG, BALL, BALL_SHADOW
+    return BG, BALL, BALL_SHADOW, [PLAYER_0, PLAYER_1, PLAYER_2, PLAYER_3], RACKET
 
 
 # ToDo remove
@@ -79,9 +89,9 @@ def perspective_transform(x, y, apply_offsets = True, width_top = 79.0, width_bo
 class TennisRenderer:
 
     def __init__(self):
-        (self.BG, self.BALL, self.BALL_SHADOW) = load_sprites()
+        (self.BG, self.BALL, self.BALL_SHADOW, self.PLAYER, self.RACKET) = load_sprites()
         # use bounding box as mockup
-        self.PLAYER = get_bounding_box(PLAYER_WIDTH, PLAYER_HEIGHT)
+        self.BOUNDING_BOX = get_bounding_box(PLAYER_WIDTH, PLAYER_HEIGHT)
 
     #@partial(jax.jit, static_argnums=(0,))
     def render(self, state: TennisState) -> jnp.ndarray:
@@ -111,10 +121,17 @@ class TennisRenderer:
 
         #player_screen_x, player_screen_y = self.perspective_transform(state.player_state.player_x, state.player_state.player_y)
         #player_screen_x, player_screen_y = self.perspective_transform(0, -20)
-        frame_player = aj.get_sprite_frame(self.PLAYER, 0)
-        raster = aj.render_at(raster, state.player_state.player_x, state.player_state.player_y, frame_player)
+        frame_player = aj.get_sprite_frame(self.PLAYER[state.animator_state.player_frame], 0)
+        frame_enemy = aj.get_sprite_frame(self.PLAYER[state.animator_state.enemy_frame], 0)
+        raster = aj.render_at(raster, state.player_state.player_x - 2, state.player_state.player_y, frame_player)
 
-        raster = aj.render_at(raster, state.enemy_state.enemy_x, state.enemy_state.enemy_y, frame_player)
+        frame_racket = aj.get_sprite_frame(self.RACKET, 0)
+        raster = aj.render_at(raster, state.player_state.player_x + 8 - 2, state.player_state.player_y + 2, frame_racket)
+
+        frame_bounding_box = aj.get_sprite_frame(self.BOUNDING_BOX, 0)
+        raster = aj.render_at(raster, state.player_state.player_x, state.player_state.player_y, frame_bounding_box)
+
+        raster = aj.render_at(raster, state.enemy_state.enemy_x, state.enemy_state.enemy_y, frame_enemy)
 
         player_x_rec = jnp.zeros((2, 2, 4))
         player_x_rec = player_x_rec.at[:, :, 1].set(255)  # Yellow
@@ -178,7 +195,6 @@ class TennisRenderer:
         raster = aj.render_at(raster, bottom_right_corner_coords[0], bottom_right_corner_coords[1], bottom_right_rec)
 
         #raster = aj.render_at(raster, 0, 0, rectangle)
-
         return raster
 
     # we always use coordinates including the lines

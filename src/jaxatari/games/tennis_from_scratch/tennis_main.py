@@ -101,6 +101,9 @@ class GameState(NamedTuple):
     enemy_game_score: chex.Array
     is_finished: chex.Array  # True if the game is finished (Player or enemy has won the game)
 
+class AnimatorState(NamedTuple):
+    player_frame: chex.Array = 0
+    enemy_frame: chex.Array = 0
 
 class TennisState(NamedTuple):
     player_state: PlayerState = PlayerState(  # all player-related data
@@ -140,17 +143,7 @@ class TennisState(NamedTuple):
     )
     counter: chex.Array = jnp.array(
         0)  # not currently used, just a counter that is increased by one each frame todo evaluate if we can remove this
-
-
-@jax.jit
-def normal_step(state: TennisState, action) -> TennisState:
-    new_state_after_score_check = check_score(state)
-    new_state_after_ball_step = ball_step(new_state_after_score_check, action)
-    new_player_state = player_step(new_state_after_ball_step, action)
-    new_enemy_state = enemy_step(new_state_after_ball_step)
-    return TennisState(new_player_state, new_enemy_state, new_state_after_ball_step.ball_state,
-                       new_state_after_ball_step.game_state, new_state_after_ball_step.counter + 1)
-
+    animator_state: AnimatorState = AnimatorState()
 
 @jax.jit
 def tennis_step(state: TennisState, action) -> TennisState:
@@ -186,6 +179,60 @@ def tennis_step(state: TennisState, action) -> TennisState:
                         None
                         )
 
+@jax.jit
+def normal_step(state: TennisState, action) -> TennisState:
+    new_state_after_score_check = check_score(state)
+    new_state_after_ball_step = ball_step(new_state_after_score_check, action)
+    new_player_state = player_step(new_state_after_ball_step, action)
+    new_enemy_state = enemy_step(new_state_after_ball_step)
+    new_animator_state = animator_step(state, new_player_state, new_enemy_state)
+
+    return TennisState(new_player_state, new_enemy_state, new_state_after_ball_step.ball_state,
+                       new_state_after_ball_step.game_state, new_state_after_ball_step.counter + 1, new_animator_state)
+
+@jax.jit
+def animator_step(state: TennisState, new_player_state, new_enemy_state) -> AnimatorState:
+    # Change player/enemy frame every 4 ticks
+    player_enemy_frame_change_ready = state.counter % 4 == 0
+
+    @jax.jit
+    def check_has_moved(prev_x, cur_x, prev_y, cur_y):
+        return jnp.logical_or(
+            prev_x != cur_x,
+            prev_y != cur_y,
+        )
+
+    # Animations for player
+    has_player_moved = check_has_moved(state.player_state.player_x, new_player_state.player_x, state.player_state.player_y, new_player_state.player_y)
+    new_player_frame = jnp.where(
+        # only update if player has moved, otherwise reset to frame 0
+        has_player_moved,
+        jnp.where(
+            # only update every 4 ticks
+            state.counter % 4 == 0,
+            state.animator_state.player_frame + 1,
+            state.animator_state.player_frame,
+        ),
+        0
+    )
+
+    # Animations for enemy
+    has_enemy_moved = check_has_moved(state.enemy_state.enemy_x, new_enemy_state.enemy_x, state.enemy_state.enemy_y, new_enemy_state.enemy_y)
+    new_enemy_frame = jnp.where(
+        # only update if enemy has moved, otherwise reset to frame 0
+        has_enemy_moved,
+        jnp.where(
+            # only update every 4 ticks
+            state.counter % 4 == 0,
+            state.animator_state.enemy_frame + 1,
+            state.animator_state.enemy_frame,
+        ),
+        0
+    )
+
+    new_animator_state = AnimatorState(new_player_frame % 4, new_enemy_frame % 4)
+
+    return new_animator_state
 
 @jax.jit
 def check_score(state: TennisState) -> TennisState:
