@@ -54,8 +54,10 @@ BALL_GRAVITY_PER_FRAME = 1.1
 BALL_SERVING_BOUNCE_VELOCITY_BASE = 21
 BALL_SERVING_BOUNCE_VELOCITY_RANDOM_OFFSET = 2
 BALL_WIDTH = 2.0
-LONG_HIT_THRESHOLD_TOP = 30
-LONG_HIT_THRESHOLD_BOTTOM = 30
+LONG_HIT_THRESHOLD_TOP = 52
+LONG_HIT_THRESHOLD_BOTTOM = 121
+LONG_HIT_DISTANCE = 91
+SHORT_HIT_DISTANCE = 10
 
 # enemy constants
 ENEMY_CONST = 1
@@ -714,8 +716,8 @@ def ball_step(state: TennisState, action) -> TennisState:
 
     hitting_entity_y = jnp.where(
         upper_entity_overlapping_ball,
-        upper_entity_x,
-        upper_entity_y
+        upper_entity_y,
+        lower_entity_y
     )
 
     # record which entity hit the ball most recently
@@ -829,11 +831,24 @@ def handle_ball_fire(state: TennisState, hitting_entity_x, hitting_entity_y, dir
     right_offset = 39
     offset = ((angle + 1) / 2) * (right_offset - left_offset) + left_offset
 
-    #y_distance = jnp.where(
-    #    direction ,
-   # )
+    y_dist = jnp.where(
+        direction > 0,
+        # hitting from top to bottom
+        jnp.where(
+            hitting_entity_y > LONG_HIT_THRESHOLD_TOP,
+            SHORT_HIT_DISTANCE,
+            LONG_HIT_DISTANCE
+        ),
+        # hitting from bottom to top
+        jnp.where(
+            hitting_entity_y < LONG_HIT_THRESHOLD_BOTTOM,
+            SHORT_HIT_DISTANCE,
+            LONG_HIT_DISTANCE
+        )
+    )
 
-    new_ball_hit_target_y = new_ball_hit_start_y + (91 * direction)
+
+    new_ball_hit_target_y = new_ball_hit_start_y + (y_dist * direction)
     field_min_x = 32
     field_max_x = 32 + FIELD_WIDTH_TOP
     new_ball_hit_target_x = jnp.clip(new_ball_hit_start_x + offset, field_min_x, field_max_x)
@@ -842,7 +857,7 @@ def handle_ball_fire(state: TennisState, hitting_entity_x, hitting_entity_y, dir
 
     dx = new_ball_hit_target_x - state.ball_state.ball_x
     dy = new_ball_hit_target_y - state.ball_state.ball_y
-    # dist = jnp.sqrt(dx**2 + dy**2) + 1e-8  # Add epsilon to avoid divide-by-zero
+    # dist = jnp.sqrt(dx**2 + dy**2)
     dist = jnp.linalg.norm(jnp.array([dx, dy])) + 1e-8
 
     norm_dx = dx / dist
@@ -867,7 +882,7 @@ def handle_ball_fire(state: TennisState, hitting_entity_x, hitting_entity_y, dir
         state.ball_state.last_hit
     )
 
-
+"""
 # todo needs docs
 @jax.jit
 def handle_ball_serve(state: TennisState) -> BallState:
@@ -907,7 +922,7 @@ def handle_ball_serve(state: TennisState) -> BallState:
         jnp.array(0),
         state.ball_state.last_hit
     )
-
+"""
 
 @jax.jit
 def tennis_reset() -> TennisState:
