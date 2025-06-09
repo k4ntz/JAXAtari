@@ -117,7 +117,8 @@ class TennisRenderer:
         #    writer = csv.writer(csvfile)
         #    writer.writerow([state.ball_state.ball_x, state.ball_state.ball_y, state.ball_state.ball_z])
 
-        print("x ball: {:0.2f}., y ball: {:0.2f}, z ball: {:0.2f}, vel: {:0.2f}".format(state.ball_state.ball_x, state.ball_state.ball_y, state.ball_state.ball_z, state.ball_state.ball_velocity_z_fp))
+        #print("x ball: {:0.2f}., y ball: {:0.2f}, z ball: {:0.2f}, vel: {:0.2f}".format(state.ball_state.ball_x, state.ball_state.ball_y, state.ball_state.ball_z, state.ball_state.ball_velocity_z_fp))
+        print("x ball: {:0.2f}, x ball target: {:0.2f}, y ball: {:0.2f}, y ball target: {:0.2f}".format(state.ball_state.ball_x, state.ball_state.ball_hit_target_x, state.ball_state.ball_y, state.ball_state.ball_hit_target_y))
 
         #player_screen_x, player_screen_y = self.perspective_transform(state.player_state.player_x, state.player_state.player_y)
         #player_screen_x, player_screen_y = self.perspective_transform(0, -20)
