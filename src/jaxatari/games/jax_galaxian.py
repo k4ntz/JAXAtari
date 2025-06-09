@@ -274,10 +274,12 @@ def update_enemy_attack(state: GalaxianState) -> GalaxianState:
 
             #diver unter dem player werden auf respawn gesetzt
             new_state = jax.lax.cond(
-                new_state.enemy_attack_y[i] > DIVE_KILL_Y - 30,
+                jnp.logical_and(new_state.enemy_attack_y[i] > DIVE_KILL_Y - 30, new_state.enemy_attack_states[i] == 1),
                 lambda state: state._replace(
                     enemy_attack_states=state.enemy_attack_states.at[i].set(2),
-                    enemy_attack_x=state.enemy_attack_x.at[i].set(state.enemy_attack_pos[i, 0].astype(state.enemy_attack_x.dtype)),
+                    enemy_attack_x=state.enemy_attack_x.at[i].set(
+                        state.enemy_grid_x[state.enemy_attack_pos[i, 0], state.enemy_attack_pos[i, 1]]
+                    ),
                     enemy_attack_y=state.enemy_attack_y.at[i].set(-10)
                 ),
                 lambda state: state,
@@ -288,15 +290,16 @@ def update_enemy_attack(state: GalaxianState) -> GalaxianState:
             new_state = jax.lax.cond(
                 new_state.enemy_attack_states[i] == 2,
                 lambda state: state._replace(
-                    enemy_attack_x=state.enemy_attack_x.at[i].set(
-                        state.enemy_attack_pos[i, 0].astype(state.enemy_attack_x.dtype)),
                     enemy_attack_y=state.enemy_attack_y.at[i].set(
                         lax.clamp(
                             jnp.array(-10, dtype=state.enemy_attack_y.dtype),
-                            (state.enemy_attack_y[i] + 5).astype(state.enemy_attack_y.dtype),
-                            state.enemy_attack_pos[i, 1].astype(state.enemy_attack_y.dtype)
+                            (state.enemy_attack_y[i] + 0.5).astype(state.enemy_attack_y.dtype),
+                            state.enemy_grid_y[state.enemy_attack_pos[i, 0], state.enemy_attack_pos[i, 1]],
                         )
                     ),
+                    enemy_attack_x=state.enemy_attack_x.at[i].set(
+                        state.enemy_grid_x[state.enemy_attack_pos[i, 0], state.enemy_attack_pos[i, 1]]
+                    )
                 ),
                 lambda state: state,
                 new_state
@@ -305,8 +308,10 @@ def update_enemy_attack(state: GalaxianState) -> GalaxianState:
             # beende respawn
             new_state = jax.lax.cond(
                 (new_state.enemy_attack_states[i] == 2) &
-                (new_state.enemy_attack_x[i] == new_state.enemy_attack_pos[i, 0]) &  #TODO pos ist zeile/spalte im array und kein x/y
-                (new_state.enemy_attack_y[i] == new_state.enemy_attack_pos[i, 1]),
+                (new_state.enemy_attack_x[i] == new_state.enemy_grid_x[
+                    new_state.enemy_attack_pos[i, 0], new_state.enemy_attack_pos[i, 1]]) &
+                (new_state.enemy_attack_y[i] == new_state.enemy_grid_y[
+                    new_state.enemy_attack_pos[i, 0], new_state.enemy_attack_pos[i, 1]]),
                 lambda state: state._replace(
                     enemy_attack_states=state.enemy_attack_states.at[i].set(0),
                     enemy_grid_alive=state.enemy_grid_alive.at[tuple(state.enemy_attack_pos[i])].set(1)
@@ -857,7 +862,7 @@ class GalaxianRenderer(AtraJaxisRenderer):
             e = aj.get_sprite_frame(self.SPRITE_ENEMY_GRAY, 0)
 
             def draw_single_attacker(r, i):
-                cond = state.enemy_attack_states[i] == 1
+                cond = state.enemy_attack_states[i] >= 1
 
                 def true_fn(r):
                     ex = jnp.round(state.enemy_attack_x[i]).astype(jnp.int32)
