@@ -590,12 +590,12 @@ def ball_step(state: TennisState, action) -> TennisState:
     # ball movement in x/y direction is linear, no velocity involved
 
     new_ball_x = jnp.where(
-        jnp.absolute(ball_state.ball_x - ball_state.ball_hit_target_x) <= 1,
+        jnp.absolute(ball_state.ball_x - ball_state.ball_hit_target_x) > 1,
         ball_state.ball_x + ball_state.move_x,
         ball_state.ball_x
     )
     new_ball_y = jnp.where(
-        jnp.absolute(ball_state.ball_y - ball_state.ball_hit_target_y) <= 1,
+        jnp.absolute(ball_state.ball_y - ball_state.ball_hit_target_y) > 1,
         ball_state.ball_y + ball_state.move_y,
         ball_state.ball_y
     )
