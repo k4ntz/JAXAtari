@@ -22,6 +22,10 @@ MAX_ENEMIES = 6
 
 PLAYER_PATH_OFFSET = (1, 1) # Offset for the player sprite in relation to the path mask
 
+# Values to calculate how many points an Edge is worth based on how long it is
+PIXELS_PER_POINT_HORIZONTAL = 4
+PIXELS_PER_POINT_VERTICAL = 30 # Each vertical edge is worth 1 point, since they are 30 pixels long
+
 INITIAL_ENEMY_POSITIONS = jnp.array(
     [
         [15, 14],  # Enemy 1
@@ -247,6 +251,7 @@ PATH_MASK = generate_path_mask()
 
 # immutable state container
 class AmidarState(NamedTuple):
+    score: chex.Array
     player_x: chex.Array
     player_y: chex.Array
     player_direction: chex.Array # 0=up, 1=down, 2=left, 3=right
@@ -322,27 +327,41 @@ def player_step(state: AmidarState, action: chex.Array) -> tuple[chex.Array, che
             match_forward = jnp.all(edges == edge, axis=(1, 2))
             match_reverse = jnp.all(edges == edge[::-1], axis=(1, 2))
             matches = jnp.logical_or(match_forward, match_reverse)
-            # # Get the index of the first match, or -1 if not found
-            # idx = jnp.where(matches, size=1, fill_value=-1)[0]
-            return matches
-        matches = find_edge(jnp.array([[new_x+PLAYER_PATH_OFFSET[0], new_y+PLAYER_PATH_OFFSET[1]], state.last_walked_corner]), PATH_EDGES)
-        walked_on_paths = jnp.where(matches, matches, state.walked_on_paths)
+            # Get the index of the first match, or -1 if not found
+            idx = jnp.argmax(matches)
+            found = jnp.any(matches)
+            idx = jnp.where(found, idx, -1)
+            return idx
+        match_idx = find_edge(jnp.array([[new_x+PLAYER_PATH_OFFSET[0], new_y+PLAYER_PATH_OFFSET[1]], state.last_walked_corner]), PATH_EDGES)
+
+        def score_points():
+            """Scores points based on the edge walked on."""
+            # Calculate the points scored based on the edge walked on
+            edge = PATH_EDGES[match_idx]
+            points_scored = jax.lax.cond(edge[0, 0] == edge[1, 0],  # Vertical edge
+                         lambda: ((edge[1, 1] - edge[0, 1]) // PIXELS_PER_POINT_VERTICAL),  # Vertical edge
+                         lambda: ((edge[1, 0] - edge[0, 0]) // PIXELS_PER_POINT_HORIZONTAL))  # Horizontal edge
+            # Ensure points_scored is an integer
+            points_scored = points_scored.astype(jnp.int32)
+            # Update the walked on paths
+            walked_on_paths = state.walked_on_paths.at[match_idx].set(1)
+            return points_scored, walked_on_paths
+
+        points_scored, walked_on_paths = jax.lax.cond(jnp.logical_and(match_idx >= 0, state.walked_on_paths[match_idx] == 0), score_points, lambda: (0, state.walked_on_paths))
 
         last_walked_corner = [new_x+PLAYER_PATH_OFFSET[0], new_y+PLAYER_PATH_OFFSET[1]]  # Update the last walked corner to the new position
 
-        jax.debug.print("walked_on_paths: {walked_on_paths}", walked_on_paths=walked_on_paths)
-        return last_walked_corner, walked_on_paths
+        # jax.debug.print("walked_on_paths: {walked_on_paths}", walked_on_paths=walked_on_paths)
+        # jax.debug.print("points_scored: {points_scored}", points_scored=points_scored)
+        return points_scored, last_walked_corner, walked_on_paths
 
 
     is_corner = jnp.any(jnp.all(PATH_CORNERS == jnp.array([new_x+PLAYER_PATH_OFFSET[0], new_y+PLAYER_PATH_OFFSET[1]]), axis=1))
-    last_walked_corner, walked_on_paths = jax.lax.cond(is_corner, corner_handeling, lambda: ([state.last_walked_corner[0], state.last_walked_corner[1]], state.walked_on_paths))
+    points_scored, last_walked_corner, walked_on_paths = jax.lax.cond(is_corner, corner_handeling, lambda: (0, [state.last_walked_corner[0], state.last_walked_corner[1]], state.walked_on_paths))
 
-    # TODO: correct allignment of the player on the path on the bottom (maybe move the path if this aplies to the enemies equally)
-    # TODO: replicate slight stopping at corners 
-    # TODO: check if the behavior is correct/according to the original game
-    # TODO: Add Scoring
-    # TODO: Add checking if all edges are walked on
-    return new_x, new_y, player_direction, last_walked_corner, walked_on_paths
+    # TODO: Box completed handling -> bonus points for completing a box
+    # TODO: Add checking if all edges(next level)/corner edges(chickens) are walked on
+    return points_scored, new_x, new_y, player_direction, last_walked_corner, walked_on_paths
 
 
 
@@ -373,6 +392,7 @@ class JaxAmidar(JaxEnvironment[AmidarState, AmidarObservation, AmidarInfo]):
         Returns the initial state and the reward (i.e. 0)
         """
         state = AmidarState(
+            score=jnp.array(0).astype(jnp.int32),  # Initial score
             player_x=jnp.array(139).astype(jnp.int32),
             player_y=jnp.array(88).astype(jnp.int32),
             player_direction=jnp.array(0).astype(jnp.int32),
@@ -392,8 +412,9 @@ class JaxAmidar(JaxEnvironment[AmidarState, AmidarObservation, AmidarInfo]):
     def step(self, state: AmidarState, action: chex.Array) -> Tuple[AmidarObservation, AmidarState, float, bool, AmidarInfo]:
         observation = self._get_observation(state)
         player_state = player_step(state, action)
-        (player_x, player_y, player_direction, last_walked_corner, walked_on_paths) = player_state
+        (points_scored, player_x, player_y, player_direction, last_walked_corner, walked_on_paths) = player_state
         new_state = AmidarState(
+            score=state.score + points_scored, # Could possibly change in multiple functions, so it is not calculated in the function based on the previous state
             player_x=player_x,
             player_y=player_y,
             player_direction=player_direction,
@@ -450,6 +471,9 @@ def load_sprites():
     MODULE_DIR = os.path.dirname(os.path.abspath(__file__))
 
     # Load sprites
+
+    DIGITS = aj.load_and_pad_digits(os.path.join(MODULE_DIR, "./sprites/amidar/score/{}.npy"))
+
     player = aj.loadFrame(os.path.join(MODULE_DIR, "sprites/amidar/player_ghost.npy"), transpose=True)
 
     bg = aj.loadFrame(os.path.join(MODULE_DIR, "sprites/amidar/background.npy"), transpose=True)
@@ -466,6 +490,7 @@ def load_sprites():
 
     return (
         SPRITE_BG,
+        DIGITS,
         SPRITE_PATHS,
         SPRITE_PLAYER,
         SPRITE_WARRIOR,
@@ -478,6 +503,7 @@ class AmidarRenderer(AtraJaxisRenderer):
     def __init__(self):
         (
             self.SPRITE_BG,
+            self.DIGITS,
             self.SPRITE_PATHS,
             self.SPRITE_PLAYER,
             self.SPRITE_WARRIOR,
@@ -508,6 +534,21 @@ class AmidarRenderer(AtraJaxisRenderer):
         # TODO make adaptable to different configurations?
         frame_paths = aj.get_sprite_frame(self.SPRITE_PATHS, 0)
         raster = aj.render_at(raster, 16, 15, frame_paths)
+
+        # Render score
+        score_array = aj.int_to_digits(state.score, max_digits=8)
+        # convert the score to a list of digits
+        number_of_digits = (jnp.log10(state.score)+1).astype(jnp.int32)
+        def render_char(i, current_raster):
+            # i is the loop index (0 up to num_to_render-1)
+            digit_index_in_array = 8 - number_of_digits + i
+            digit_value = score_array[digit_index_in_array]
+            sprite_to_render = self.DIGITS[digit_value] # Gets (W, H, C) sprite
+            render_x = 103-(number_of_digits * 8) + i * 8 # Calculate x position based on loop index
+            return aj.render_at(current_raster, render_x, 176, sprite_to_render)
+
+        raster = jax.lax.fori_loop(0, number_of_digits, render_char, raster)
+
 
         # Render player - IMPORTANT: Swap x and y coordinates
         # render_at takes (raster, y, x, sprite) but we need to swap them due to transposition
