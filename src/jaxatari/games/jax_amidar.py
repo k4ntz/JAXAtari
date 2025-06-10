@@ -20,6 +20,8 @@ ENEMY_SIZE = (7, 7)
 
 MAX_ENEMIES = 6
 
+PLAYER_PATH_OFFSET = (1, 1) # Offset for the player sprite in relation to the path mask
+
 INITIAL_ENEMY_POSITIONS = jnp.array(
     [
         [15, 14],  # Enemy 1
@@ -248,6 +250,8 @@ class AmidarState(NamedTuple):
     player_x: chex.Array
     player_y: chex.Array
     player_direction: chex.Array # 0=up, 1=down, 2=left, 3=right
+    last_walked_corner: chex.Array # (2,) -> (x, y) of the last corner walked on
+    walked_on_paths: chex.Array
     enemy_positions: chex.Array # (MAX_ENEMIES, 2) -> (x, y) for each enemy TODO possibly add direction?
     enemy_types: chex.Array # (MAX_ENEMIES, 1) -> type of each enemy (Warrior, Pig, Shadow, Chicken)
 
@@ -275,7 +279,7 @@ def player_step(state: AmidarState, action: chex.Array) -> tuple[chex.Array, che
     def on_path(x, y):
         """Checks if the given coordinates are on the path."""
         # add 1 to x and y to account for the offset of the top left corner of the player sprite in relation to the path mask
-        return PATH_MASK[x+1, y+1] == 1
+        return PATH_MASK[x+PLAYER_PATH_OFFSET[0], y+PLAYER_PATH_OFFSET[1]] == 1
 
     up = jnp.logical_or( action == Action.UP, action == Action.UPFIRE)
     down = jnp.logical_or( action == Action.DOWN, action == Action.DOWNFIRE)
@@ -306,11 +310,40 @@ def player_step(state: AmidarState, action: chex.Array) -> tuple[chex.Array, che
         
     player_direction = jnp.select([new_x > state.player_x, new_x < state.player_x, new_y > state.player_y, new_y < state.player_y],
                                   [3, 2, 1, 0], default=state.player_direction)
+    
+    # Check if the new position is a corner, in witch case check if a new path edge is walked on
+
+    def corner_handeling():
+        # Set the walked on paths
+        # last walked corner -> (new_x, new_y)
+        def find_edge(edge, edges):
+            # edge: shape (2, 2)
+            # edges: shape (N, 2, 2)
+            match_forward = jnp.all(edges == edge, axis=(1, 2))
+            match_reverse = jnp.all(edges == edge[::-1], axis=(1, 2))
+            matches = jnp.logical_or(match_forward, match_reverse)
+            # # Get the index of the first match, or -1 if not found
+            # idx = jnp.where(matches, size=1, fill_value=-1)[0]
+            return matches
+        matches = find_edge(jnp.array([[new_x+PLAYER_PATH_OFFSET[0], new_y+PLAYER_PATH_OFFSET[1]], state.last_walked_corner]), PATH_EDGES)
+        walked_on_paths = jnp.where(matches, matches, state.walked_on_paths)
+
+        last_walked_corner = [new_x+PLAYER_PATH_OFFSET[0], new_y+PLAYER_PATH_OFFSET[1]]  # Update the last walked corner to the new position
+
+        jax.debug.print("walked_on_paths: {walked_on_paths}", walked_on_paths=walked_on_paths)
+        return last_walked_corner, walked_on_paths
+
+
+    is_corner = jnp.any(jnp.all(PATH_CORNERS == jnp.array([new_x+PLAYER_PATH_OFFSET[0], new_y+PLAYER_PATH_OFFSET[1]]), axis=1))
+    last_walked_corner, walked_on_paths = jax.lax.cond(is_corner, corner_handeling, lambda: ([state.last_walked_corner[0], state.last_walked_corner[1]], state.walked_on_paths))
 
     # TODO: correct allignment of the player on the path on the bottom (maybe move the path if this aplies to the enemies equally)
     # TODO: replicate slight stopping at corners 
     # TODO: check if the behavior is correct/according to the original game
-    return new_x, new_y, player_direction
+    # TODO: Add Scoring
+    # TODO: Add checking if all edges are walked on
+    return new_x, new_y, player_direction, last_walked_corner, walked_on_paths
+
 
 
 class JaxAmidar(JaxEnvironment[AmidarState, AmidarObservation, AmidarInfo]):
@@ -343,6 +376,8 @@ class JaxAmidar(JaxEnvironment[AmidarState, AmidarObservation, AmidarInfo]):
             player_x=jnp.array(139).astype(jnp.int32),
             player_y=jnp.array(88).astype(jnp.int32),
             player_direction=jnp.array(0).astype(jnp.int32),
+            last_walked_corner=jnp.array([0, 0]).astype(jnp.int32),  # Last corner walked on
+            walked_on_paths=jnp.zeros(jnp.shape(PATH_EDGES)[0], dtype=jnp.int32),  # Initialize walked on paths
             enemy_positions=INITIAL_ENEMY_POSITIONS,
             enemy_types=INITIAL_ENEMY_TYPES,
         )
@@ -357,11 +392,13 @@ class JaxAmidar(JaxEnvironment[AmidarState, AmidarObservation, AmidarInfo]):
     def step(self, state: AmidarState, action: chex.Array) -> Tuple[AmidarObservation, AmidarState, float, bool, AmidarInfo]:
         observation = self._get_observation(state)
         player_state = player_step(state, action)
-        (player_x, player_y, player_direction) = player_state
+        (player_x, player_y, player_direction, last_walked_corner, walked_on_paths) = player_state
         new_state = AmidarState(
             player_x=player_x,
             player_y=player_y,
             player_direction=player_direction,
+            last_walked_corner=last_walked_corner,
+            walked_on_paths=walked_on_paths,
             enemy_positions=state.enemy_positions,
             enemy_types=state.enemy_types,
         )
@@ -478,7 +515,7 @@ class AmidarRenderer(AtraJaxisRenderer):
         raster = aj.render_at(raster, state.player_x, state.player_y, frame_player)
 
         # Render enemies - IMPORTANT: Swap x and y coordinates
-        # TODO differevtiatte enemy types and if they should be rendered or not
+        # TODO differentiate enemy types and if they should be rendered or not
         frame_enemy = aj.get_sprite_frame(self.SPRITE_WARRIOR, 0)
         enemy_positions = state.enemy_positions
 
@@ -489,19 +526,35 @@ class AmidarRenderer(AtraJaxisRenderer):
 
         ###### For DEBUGGING #######
 
-        # Render path edges
-        def render_path(i, raster):
-            path = jnp.array(PATH_EDGES[i])
+        # # Render path edges
+        # def render_path(i, raster):
+        #     path = jnp.array(PATH_EDGES[i])
 
-            raster = render_line(raster, path, (255, 0, 0))
+        #     raster = render_line(raster, path, (255, 0, 0))
+
+        #     return raster
+
+        # raster = jax.lax.fori_loop(0, jnp.shape(PATH_EDGES)[0], render_path, raster)
+
+        # #render mask
+        # all_white = jnp.full_like(raster, 255, dtype=jnp.uint8)
+        # raster = jnp.where(PATH_MASK[:, :, None] == 1, all_white, raster)
+
+        # Render walked on paths
+        def render_walked_paths(i, raster):
+            # Check if the path edge has been walked on
+            walked_on = state.walked_on_paths[i] == 1   
+            
+            raster = jax.lax.cond(
+                walked_on,
+                lambda raster: render_line(raster, PATH_EDGES[i], (0, 255, 0)),  # Render in green if walked on
+                lambda raster: raster,  # Otherwise, do nothing
+                raster
+            )
 
             return raster
 
-        raster = jax.lax.fori_loop(0, jnp.shape(PATH_EDGES)[0], render_path, raster)
-
-        #render mask
-        all_white = jnp.full_like(raster, 255, dtype=jnp.uint8)
-        raster = jnp.where(PATH_MASK[:, :, None] == 1, all_white, raster)
+        raster = jax.lax.fori_loop(0, jnp.shape(PATH_EDGES)[0], render_walked_paths, raster)
 
         return raster
 
