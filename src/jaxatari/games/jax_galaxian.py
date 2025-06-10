@@ -141,7 +141,7 @@ def update_enemy_attack(state: GalaxianState) -> GalaxianState:
     def test_for_new_dive(state):
         key = jax.random.PRNGKey(state.step_counter)
         do_new_dive = jax.random.uniform(key, shape=(), minval=0, maxval=100) < state.dive_probability / 10
-        return jax.lax.cond(do_new_dive, lambda state: initialise_new_dive(state), lambda state: continue_active_dives(state), state)
+        return jax.lax.cond(do_new_dive & jnp.any(state.enemy_grid_alive == 1), lambda state: initialise_new_dive(state), lambda state: continue_active_dives(state), state)
 
     @jax.jit
     def initialise_new_dive(state):
@@ -729,7 +729,7 @@ class JaxGalaxian(JaxEnvironment[GalaxianState, GalaxianObservation, GalaxianInf
         new_state = check_player_death_by_bullet(new_state)
         new_state = new_state._replace(step_counter=new_state.step_counter + 1)
 
-        new_state = jax.lax.cond(jnp.logical_not(jnp.any(state.enemy_grid_alive == 1)), lambda new_state: enter_new_wave(new_state), lambda s: s, new_state)
+        new_state = jax.lax.cond(jnp.logical_and(jnp.logical_not(jnp.any(state.enemy_grid_alive == 1)), jnp.logical_not(jnp.any(state.enemy_attack_states != 0))), lambda new_state: enter_new_wave(new_state), lambda s: s, new_state)
 
         done = self._get_done(new_state)
         env_reward = self._get_env_reward(state, new_state)
