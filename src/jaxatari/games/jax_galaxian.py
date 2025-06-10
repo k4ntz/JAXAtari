@@ -48,7 +48,7 @@ ENEMY_GRID_Y = 80
 START_X = NATIVE_GAME_WIDTH // 4
 START_Y = NATIVE_GAME_HEIGHT
 ENEMY_ATTACK_SPEED = 2
-ENEMY_ATTACK_TURN_TIME = 30
+ENEMY_ATTACK_TURN_TIME = 32
 ENEMY_ATTACK_BULLET_SPEED = 5
 ENEMY_ATTACK_BULLET_DELAY = 75
 ENEMY_ATTACK_MAX_BULLETS = 2
@@ -60,6 +60,19 @@ DIVE_KILL_Y = 175
 DIVE_SPEED = 0.5
 MAX_DIVERS = 5
 BASE_DIVE_PROBABILITY = 30 #TODO back to 5 before merge
+
+ATTACK_MOVE_PATTERN = jnp.array([
+    [1,1],[0,1],[1,1],[1,1],[0,1],[1,1],[1,1],[0,1],[1,1],[1,1],[1,1],[0,1],[1,1],[1,1],[0,1]
+])
+
+ATTACK_TURN_PATTERN = jnp.array([
+    [-1,1],[0,1],[-1,1],[0,1],[0,1],[-1,1],[0,1],[0,1],[-1,1],[0,1],[0,1],[0,1],[-1,1],[0,1],[0,1],[0,1],
+    [0,1],[0,1],[0,1],[1,1],[0,1],[0,1],[0,1],[1,1],[0,1],[0,1],[1,1],[0,1],[0,1],[1,1],[0,1],[0,1],[1,1]
+])
+
+ATTACK_PAUSE_PATTERN = jnp.array([
+    1,0,1,0,1,1,1,0
+])
 
 class GalaxianState(NamedTuple):
     player_x: chex.Array
@@ -75,20 +88,22 @@ class GalaxianState(NamedTuple):
     enemy_attack_pos: chex.Array
     enemy_attack_x: chex.Array
     enemy_attack_y: chex.Array
-    enemy_attack_direction: chex.Array
-    enemy_attack_target_x: chex.Array# -1: left, 1: right
+    enemy_attack_direction: chex.Array  # -1: left, 1: right
+    enemy_attack_target_x: chex.Array
     enemy_attack_target_y: chex.Array
     enemy_attack_turning: chex.Array    # -1: turning left, 1: turning right, 0: no turning
-    enemy_attack_turn_timer: chex.Array
+    enemy_attack_turn_step: chex.Array
+    enemy_attack_move_step: chex.Array
     enemy_attack_respawn_timer: chex.Array
     enemy_attack_bullet_x: chex.Array
     enemy_attack_bullet_y: chex.Array
     enemy_attack_bullet_timer: chex.Array
+    enemy_attack_pause_step: chex.Array
     lives: chex.Array
     player_alive: chex.Array
     player_respawn_timer: chex.Array
     score: chex.Array
-    step_counter: chex.Array
+    turn_step: chex.Array
     dive_probability: chex.Array
     enemy_bullet_max_cooldown: chex.Array
 
@@ -139,19 +154,18 @@ def update_enemy_attack(state: GalaxianState) -> GalaxianState:
     # falls nein, gehe direkt zu continue_active_dives(state)
     @jax.jit
     def test_for_new_dive(state):
-        key = jax.random.PRNGKey(state.step_counter)
+        key = jax.random.PRNGKey(state.turn_step)
         do_new_dive = jax.random.uniform(key, shape=(), minval=0, maxval=100) < state.dive_probability / 10
         return jax.lax.cond(do_new_dive, lambda state: initialise_new_dive(state), lambda state: continue_active_dives(state), state)
 
     @jax.jit
     def initialise_new_dive(state):
-        key = jax.random.PRNGKey(state.step_counter + 101)  # currently deterministic
+        key = jax.random.PRNGKey(state.turn_step + 101)  # currently deterministic
         key_choice, key_dir_if_zero = jax.random.split(key)
 
         # finde freien slot im diver array und nimm einfach den ersten (es muss einen geben, weil wir vorher geprüft haben, dass noch Platz ist)
         available_slots_indices = jnp.where(jnp.atleast_1d(state.enemy_attack_states == 0), size=MAX_DIVERS, fill_value=-1)[0]
         diver_idx = available_slots_indices[0]
-
 
         # finde zufälligen Angreifer
         alive_grid_mask = (state.enemy_grid_alive == 1)
@@ -184,9 +198,12 @@ def update_enemy_attack(state: GalaxianState) -> GalaxianState:
         new_attack_x = state.enemy_attack_x.at[diver_idx].set(start_dive_x)
         new_attack_y = state.enemy_attack_y.at[diver_idx].set(start_dive_y)
 
-        # timer
+        # Richtung
+        new_enemy_attack_direction = jnp.where(state.player_x < new_attack_x, -1.0, 1.0)
         new_attack_turning = state.enemy_attack_turning.at[diver_idx].set(0)
-        new_attack_turn_timer = state.enemy_attack_turn_timer.at[diver_idx].set(ENEMY_ATTACK_TURN_TIME)
+        new_attack_turn_step = state.enemy_attack_turn_step.at[diver_idx].set(0)
+
+        # timer
         new_attack_respawn_timer = state.enemy_attack_respawn_timer.at[diver_idx].set(0)
 
         # Reset bullet
@@ -200,8 +217,9 @@ def update_enemy_attack(state: GalaxianState) -> GalaxianState:
             enemy_attack_x=new_attack_x,
             enemy_attack_y=new_attack_y,
             enemy_grid_alive=new_grid_alive,
+            enemy_attack_direction = new_enemy_attack_direction,
             enemy_attack_turning=new_attack_turning,
-            enemy_attack_turn_timer=new_attack_turn_timer,
+            enemy_attack_turn_step=new_attack_turn_step,
             enemy_attack_respawn_timer=new_attack_respawn_timer,
             enemy_attack_bullet_x=new_attack_bullet_x,
             enemy_attack_bullet_y=new_attack_bullet_y,
@@ -219,21 +237,83 @@ def update_enemy_attack(state: GalaxianState) -> GalaxianState:
         curr_y = state.enemy_attack_y
 
         def grey_dive(state: GalaxianState, i: int) -> GalaxianState:
-            #jax.debug.print("grey")
-            dx = target_x - curr_x
-            dy = target_y - curr_y
-            norm = jnp.sqrt(dx ** 2 + dy ** 2) + 1e-6  # TODO sinnvoller dive
 
-            step_x = curr_x + (dx / norm) * DIVE_SPEED
-            step_y = curr_y + (dy / norm) * DIVE_SPEED
+            def update_enemy_state(state: GalaxianState) -> GalaxianState:
+                new_enemy_attack_direction = jnp.where(
+                    (state.enemy_attack_turning != 0) & (state.enemy_attack_turn_step == ENEMY_ATTACK_TURN_TIME), # change the direction, if the enemy is currently turning and the turn is over
+                    state.enemy_attack_turning,
+                    state.enemy_attack_direction
+                )
 
-            new_attack_x = jnp.where(is_attacking, step_x, curr_x)
-            new_attack_y = jnp.where(is_attacking, step_y, curr_y)
+                player_right = state.enemy_attack_x < state.player_x-10
+                player_left = state.enemy_attack_x > state.player_x+10
 
-            return state._replace(
-                enemy_attack_x=new_attack_x,
-                enemy_attack_y=new_attack_y
-            )
+                new_enemy_attack_turning = jnp.where(
+                    (state.enemy_attack_turning == 0) & (state.enemy_attack_turn_step == 0) & (
+                                player_right & (state.enemy_attack_direction == -1) | player_left & (state.enemy_attack_direction == 1)),
+                    -state.enemy_attack_direction,  # change turning to the opposite of the current direction
+                    jnp.where(
+                        (state.enemy_attack_turn_step == ENEMY_ATTACK_TURN_TIME) | (state.enemy_attack_states == 0),
+                        0,                         # reset turning, if turn is over or the enemy died
+                        state.enemy_attack_turning)
+                )
+
+                new_enemy_attack_turn_step = jnp.where(
+                    (state.enemy_attack_turn_step == ENEMY_ATTACK_TURN_TIME) | (state.enemy_attack_states == 0),
+                    0,
+                    jnp.where(
+                        state.enemy_attack_turning != 0,
+                        state.enemy_attack_turn_step + 1,
+                        state.enemy_attack_turn_step
+                    )
+                )
+
+                new_enemy_attack_move_step = jnp.where(
+                    (state.enemy_attack_move_step == 15) | (state.enemy_attack_states == 0),
+                    0,
+                    jnp.where(
+                        state.enemy_attack_turning == 0,
+                        state.enemy_attack_move_step + 1,
+                        state.enemy_attack_move_step
+                    )
+                )
+
+                return state._replace(
+                    enemy_attack_direction=new_enemy_attack_direction,
+                    enemy_attack_turning=new_enemy_attack_turning,
+                    enemy_attack_turn_step=new_enemy_attack_turn_step,
+                    enemy_attack_move_step=new_enemy_attack_move_step
+                )
+
+            def update_enemy_position(state: GalaxianState) -> GalaxianState:
+
+                delta_x = jnp.where(
+                    state.enemy_attack_states == 1,
+                    jnp.where(
+                        state.enemy_attack_turning == 0,
+                        ATTACK_MOVE_PATTERN[state.enemy_attack_move_step, 0] * state.enemy_attack_direction,
+                        ATTACK_TURN_PATTERN[state.enemy_attack_turn_step, 0] * state.enemy_attack_turning,
+                    ),
+                    0
+                )
+
+                delta_y = jnp.where(
+                    state.enemy_attack_states == 1,
+                    1,
+                    0
+                )
+
+
+                #jax.debug.print("turn: {t}", t=state.enemy_attack_turning)
+                jax.debug.print("delta x {x}", x = delta_x)
+                return state._replace(
+                     enemy_attack_x=curr_x + delta_x,
+                     enemy_attack_y=curr_y + delta_y,
+                 )
+
+            state = update_enemy_state(state)
+            state = update_enemy_position(state)
+            return state
 
         def red_dive(state: GalaxianState, i: int) -> GalaxianState:
             #jax.debug.print("red")
@@ -247,24 +327,42 @@ def update_enemy_attack(state: GalaxianState) -> GalaxianState:
             #jax.debug.print("white")
             return grey_dive(state, i)
 
-        return lax.fori_loop(
-            0, MAX_DIVERS,
-            lambda i, state: jax.lax.cond(
-                state.enemy_attack_pos[i, 0] == 5,
-                lambda state: white_dive(state, i),
-                lambda state: jax.lax.cond(
-                    state.enemy_attack_pos[i, 0] == 4,
-                    lambda state: red_dive(state, i),
+        new_pause_step = jnp.where(
+            state.enemy_attack_pause_step < 7,
+            state.enemy_attack_pause_step + 1,
+        0
+        )
+
+        state = state._replace(
+            enemy_attack_pause_step= new_pause_step,
+        )
+
+        def dive_loop(state):
+            return lax.fori_loop(
+                0, MAX_DIVERS,
+                lambda i, state: jax.lax.cond(
+                    state.enemy_attack_pos[i, 0] == 5,
+                    lambda state: white_dive(state, i),
                     lambda state: jax.lax.cond(
-                        state.enemy_attack_pos[i, 0] == 3,
-                        lambda state: purple_dive(state, i),
-                        lambda state: grey_dive(state, i),
+                        state.enemy_attack_pos[i, 0] == 4,
+                        lambda state: red_dive(state, i),
+                        lambda state: jax.lax.cond(
+                            state.enemy_attack_pos[i, 0] == 3,
+                            lambda state: purple_dive(state, i),
+                            lambda state: grey_dive(state, i),
+                            state
+                        ),
                         state
                     ),
                     state
                 ),
                 state
-            ),
+            )
+
+        return jax.lax.cond(
+            ATTACK_PAUSE_PATTERN[new_pause_step] == 1,
+            lambda state: dive_loop(state),
+            lambda state: state,
             state
         )
 
@@ -606,20 +704,22 @@ class JaxGalaxian(JaxEnvironment[GalaxianState, GalaxianObservation, GalaxianInf
                               enemy_attack_pos=jnp.full((MAX_DIVERS, 2), -1, dtype=jnp.int32),
                               enemy_attack_direction=jnp.zeros(MAX_DIVERS),
                               enemy_attack_turning=jnp.zeros(MAX_DIVERS),
-                              enemy_attack_turn_timer=jnp.zeros(MAX_DIVERS),
+                              enemy_attack_turn_step=jnp.zeros(MAX_DIVERS, dtype=jnp.int32),
+                              enemy_attack_move_step=jnp.zeros(MAX_DIVERS, dtype=jnp.int32),
                               enemy_attack_x=jnp.zeros(MAX_DIVERS),
                               enemy_attack_y=jnp.zeros(MAX_DIVERS),
                               enemy_attack_respawn_timer=jnp.zeros(MAX_DIVERS),
                               enemy_attack_bullet_x=jnp.zeros(MAX_DIVERS),
                               enemy_attack_bullet_y=jnp.zeros(MAX_DIVERS),
                               enemy_attack_bullet_timer=jnp.zeros(MAX_DIVERS),
+                              enemy_attack_pause_step=jnp.array(0),
                               lives=jnp.array(3),
                               player_alive=jnp.array(True),
                               player_respawn_timer=jnp.array(PLAYER_DEATH_DELAY),
                               score=jnp.array(0, dtype=jnp.int32),
                               enemy_attack_target_x=jnp.zeros(MAX_DIVERS),
                               enemy_attack_target_y=jnp.zeros(MAX_DIVERS),
-                              step_counter=jnp.array(0),
+                              turn_step=jnp.array(0),
                               dive_probability=jnp.array(BASE_DIVE_PROBABILITY),
                               enemy_bullet_max_cooldown=ENEMY_ATTACK_BULLET_DELAY
                              )
@@ -675,7 +775,7 @@ class JaxGalaxian(JaxEnvironment[GalaxianState, GalaxianObservation, GalaxianInf
         new_state = update_enemy_bullets(new_state)
         new_state = check_player_death_by_enemy(new_state)
         new_state = check_player_death_by_bullet(new_state)
-        new_state = new_state._replace(step_counter=new_state.step_counter + 1)
+        new_state = new_state._replace(turn_step=new_state.turn_step + 1)
 
         new_state = jax.lax.cond(jnp.logical_not(jnp.any(state.enemy_grid_alive == 1)), lambda new_state: enter_new_wave(new_state), lambda s: s, new_state)
 
@@ -713,7 +813,7 @@ class JaxGalaxian(JaxEnvironment[GalaxianState, GalaxianObservation, GalaxianInf
 
     @partial(jax.jit, static_argnums=(0,))
     def _get_info(self, state: GalaxianState, all_rewards: chex.Array) -> GalaxianInfo:
-        return GalaxianInfo(time=state.step_counter, all_rewards=all_rewards)
+        return GalaxianInfo(time=state.turn_step, all_rewards=all_rewards)
 
 
 def load_sprites():
