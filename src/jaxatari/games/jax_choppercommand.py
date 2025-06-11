@@ -27,7 +27,7 @@ HEIGHT = 192
 SCALING_FACTOR = 3
 
 # Chopper Constants TODO: Tweak these to match feeling of real game
-ACCEL = 0.05  # DEFAULT: 0.05 | how fast the chopper accelerates
+ACCEL = 0.03  # DEFAULT: 0.05 | how fast the chopper accelerates
 FRICTION = 0.02  # DEFAULT: 0.02 | how fast the chopper decelerates
 MAX_VELOCITY = 3.0  # DEFAULT: 3.0 | maximum speed
 DISTANCE_WHEN_FLYING = 10 # DEFAULT: 10 | How far the chopper moves towards the middle when flying for a longer amount of time
@@ -540,6 +540,7 @@ def is_slot_empty(pos: chex.Array) -> chex.Array:
     """Check if a position slot is empty (0,0,0)"""
     return pos[2] == 0
 
+# Todo: make random spawn per cluster
 @jax.jit
 def initialize_enemy_positions(rng: chex.PRNGKey) -> Tuple[chex.Array, chex.Array]:
     jet_positions = jnp.zeros((MAX_ENEMIES, 4))
@@ -1088,7 +1089,7 @@ class JaxChopperCommand(JaxEnvironment[ChopperCommandState, ChopperCommandObserv
             local_player_offset=jnp.array(50).astype(jnp.float32),              # Initial screen offset. This is for the no_move_pause animation when starting the game and respawning.
             player_facing_direction=jnp.array(1).astype(jnp.int32),             # # Player begins facing right (1).
             score=jnp.array(0).astype(jnp.int32),                               # Game always starts with a score of 0.
-            lives=jnp.array(2).astype(jnp.int32),                               # Standard number of starting lives.
+            lives=jnp.array(3).astype(jnp.int32),                               # Standard number of starting lives.
             truck_positions=initialize_truck_positions().astype(jnp.float32),   # Trucks are initialized with predefined starting positions and inactive death timers.
             jet_positions=jet_positions,                                        # Jets are initialized with predefined starting positions and inactive death timers.
             chopper_positions=chopper_positions,                                # Choppers are initialized with predefined starting positions and inactive death timers.
@@ -1683,7 +1684,7 @@ class Renderer_AtraJaxis(AtraJaxisRenderer):
         # Convert the score to a list of digits
         raster = aj.render_label(raster, 16, 2, score_array, DIGITS, spacing=8)
         raster = aj.render_indicator(
-            raster, 16, 10, state.lives, LIFE_INDICATOR, spacing=9
+            raster, 16, 10, state.lives-1, LIFE_INDICATOR, spacing=9
         )
 
         # Render Player
