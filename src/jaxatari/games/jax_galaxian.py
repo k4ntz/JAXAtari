@@ -156,7 +156,7 @@ def update_enemy_attack(state: GalaxianState) -> GalaxianState:
     def test_for_new_dive(state):
         key = jax.random.PRNGKey(state.turn_step)
         do_new_dive = jax.random.uniform(key, shape=(), minval=0, maxval=100) < state.dive_probability / 10
-        return jax.lax.cond(do_new_dive, lambda state: initialise_new_dive(state), lambda state: continue_active_dives(state), state)
+        return jax.lax.cond(do_new_dive & jnp.any(state.enemy_grid_alive == 1), lambda state: initialise_new_dive(state), lambda state: continue_active_dives(state), state)
 
     @jax.jit
     def initialise_new_dive(state):
@@ -366,17 +366,69 @@ def update_enemy_attack(state: GalaxianState) -> GalaxianState:
             state
         )
 
+    @jax.jit
     def respawn_finished_dives(state: GalaxianState) -> GalaxianState:
-        return 420;
+        def body(i, new_state):
+
+            #diver unter dem player werden auf respawn gesetzt
+            new_state = jax.lax.cond(
+                jnp.logical_and(new_state.enemy_attack_y[i] > DIVE_KILL_Y - 30, new_state.enemy_attack_states[i] == 1),
+                lambda state: state._replace(
+                    enemy_attack_states=state.enemy_attack_states.at[i].set(2),
+                    enemy_attack_x=state.enemy_attack_x.at[i].set(
+                        state.enemy_grid_x[state.enemy_attack_pos[i, 0], state.enemy_attack_pos[i, 1]]
+                    ),
+                    enemy_attack_y=state.enemy_attack_y.at[i].set(-10)
+                ),
+                lambda state: state,
+                new_state
+            )
+
+            #continue respawnende diver
+            new_state = jax.lax.cond(
+                new_state.enemy_attack_states[i] == 2,
+                lambda state: state._replace(
+                    enemy_attack_y=state.enemy_attack_y.at[i].set(
+                        lax.clamp(
+                            jnp.array(-10, dtype=state.enemy_attack_y.dtype),
+                            (state.enemy_attack_y[i] + 0.5).astype(state.enemy_attack_y.dtype),
+                            state.enemy_grid_y[state.enemy_attack_pos[i, 0], state.enemy_attack_pos[i, 1]],
+                        )
+                    ),
+                    enemy_attack_x=state.enemy_attack_x.at[i].set(
+                        state.enemy_grid_x[state.enemy_attack_pos[i, 0], state.enemy_attack_pos[i, 1]]
+                    )
+                ),
+                lambda state: state,
+                new_state
+            )
+
+            # beende respawn
+            new_state = jax.lax.cond(
+                (new_state.enemy_attack_states[i] == 2) &
+                (new_state.enemy_attack_x[i] == new_state.enemy_grid_x[
+                    new_state.enemy_attack_pos[i, 0], new_state.enemy_attack_pos[i, 1]]) &
+                (new_state.enemy_attack_y[i] == new_state.enemy_grid_y[
+                    new_state.enemy_attack_pos[i, 0], new_state.enemy_attack_pos[i, 1]]),
+                lambda state: state._replace(
+                    enemy_attack_states=state.enemy_attack_states.at[i].set(0),
+                    enemy_grid_alive=state.enemy_grid_alive.at[tuple(state.enemy_attack_pos[i])].set(1)
+                ),
+                lambda state: state,
+                new_state
+            )
+            return new_state
+
+        return lax.fori_loop(0, MAX_DIVERS, body, state)
 
 
-    #new_state = respawn_finished_dives(state)
+    new_state = respawn_finished_dives(state)
     free_slots = jnp.sum(state.enemy_attack_states == 0)
     return jax.lax.cond(
         free_slots > 0,
         lambda state: test_for_new_dive(state),
         lambda state: continue_active_dives(state),
-        state
+        new_state
     )
 
 
@@ -777,7 +829,7 @@ class JaxGalaxian(JaxEnvironment[GalaxianState, GalaxianObservation, GalaxianInf
         new_state = check_player_death_by_bullet(new_state)
         new_state = new_state._replace(turn_step=new_state.turn_step + 1)
 
-        new_state = jax.lax.cond(jnp.logical_not(jnp.any(state.enemy_grid_alive == 1)), lambda new_state: enter_new_wave(new_state), lambda s: s, new_state)
+        new_state = jax.lax.cond(jnp.logical_and(jnp.logical_not(jnp.any(state.enemy_grid_alive == 1)), jnp.logical_not(jnp.any(state.enemy_attack_states != 0))), lambda new_state: enter_new_wave(new_state), lambda s: s, new_state)
 
         done = self._get_done(new_state)
         env_reward = self._get_env_reward(state, new_state)
@@ -910,7 +962,7 @@ class GalaxianRenderer(AtraJaxisRenderer):
             e = aj.get_sprite_frame(self.SPRITE_ENEMY_GRAY, 0)
 
             def draw_single_attacker(r, i):
-                cond = state.enemy_attack_states[i] == 1
+                cond = state.enemy_attack_states[i] >= 1
 
                 def true_fn(r):
                     ex = jnp.round(state.enemy_attack_x[i]).astype(jnp.int32)
