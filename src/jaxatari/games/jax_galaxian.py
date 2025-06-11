@@ -766,8 +766,8 @@ class JaxGalaxian(JaxEnvironment[GalaxianState, GalaxianObservation, GalaxianInf
                               enemy_attack_x=jnp.zeros(MAX_DIVERS),
                               enemy_attack_y=jnp.zeros(MAX_DIVERS),
                               enemy_attack_respawn_timer=jnp.zeros(MAX_DIVERS),
-                              enemy_attack_bullet_x=jnp.zeros(MAX_DIVERS),
-                              enemy_attack_bullet_y=jnp.zeros(MAX_DIVERS),
+                              enemy_attack_bullet_x=jnp.full(MAX_DIVERS, -1.0),
+                              enemy_attack_bullet_y=jnp.full(MAX_DIVERS, -1.0),
                               enemy_attack_bullet_timer=jnp.zeros(MAX_DIVERS),
                               enemy_attack_pause_step=jnp.array(0),
                               lives=jnp.array(3),
@@ -887,7 +887,7 @@ def load_sprites():
     SPRITE_BULLET = jnp.expand_dims(bullet, axis = 0)
     SPRITE_ENEMY_GRAY = jnp.expand_dims(enemy_gray, axis=0)
     SPRITE_ENEMY_RED = jnp.expand_dims(enemy_red, axis=0)
-    SPRITE_ENEMY_BLUE = jnp.expand_dims(enemy_blue, axis=0)
+    SPRITE_ENEMY_PURPLE = jnp.expand_dims(enemy_blue, axis=0)
     SPRITE_ENEMY_WHITE = jnp.expand_dims(enemy_white, axis=0)
     SPRITE_LIFE = jnp.expand_dims(life, axis=0)
     SPRITE_ENEMY_BULLET = jnp.expand_dims(enemy_bullet, axis=0)
@@ -897,7 +897,7 @@ def load_sprites():
         SPRITE_BULLET,
         SPRITE_ENEMY_GRAY,
         SPRITE_ENEMY_RED,
-        SPRITE_ENEMY_BLUE,
+        SPRITE_ENEMY_PURPLE,
         SPRITE_ENEMY_WHITE,
         SPRITE_LIFE,
         SPRITE_ENEMY_BULLET
@@ -911,7 +911,7 @@ class GalaxianRenderer(AtraJaxisRenderer):
             self.SPRITE_BULLET,
             self.SPRITE_ENEMY_GRAY,
             self.SPRITE_ENEMY_RED,
-            self.SPRITE_ENEMY_BLUE,
+            self.SPRITE_ENEMY_PURPLE,
             self.SPRITE_ENEMY_WHITE,
             self.SPRITE_LIFE,
             self.SPRITE_ENEMY_BULLET,
@@ -993,7 +993,7 @@ class GalaxianRenderer(AtraJaxisRenderer):
                 choices = [
                     aj.get_sprite_frame(self.SPRITE_ENEMY_WHITE, 0),
                     aj.get_sprite_frame(self.SPRITE_ENEMY_RED, 0),
-                    aj.get_sprite_frame(self.SPRITE_ENEMY_GRAY, 0) #TODO make purple after sprite is fixed
+                    aj.get_sprite_frame(self.SPRITE_ENEMY_PURPLE, 0)
                 ]
                 default_choice = aj.get_sprite_frame(self.SPRITE_ENEMY_GRAY, 0)
                 enemy_sprite = jnp.select(conditions, choices, default_choice)
