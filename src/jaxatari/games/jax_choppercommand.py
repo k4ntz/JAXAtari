@@ -3,6 +3,7 @@
 Lukas Bergholz, Linus Orlob, Vincent Jahn
 
 """
+#TODO: replace fori_loops with vmap where possible
 
 import os
 from functools import partial
@@ -24,7 +25,7 @@ DEATH_PAUSE_FRAMES = 60
 
 WIDTH = 160
 HEIGHT = 192
-SCALING_FACTOR = 3
+SCALING_FACTOR = 5
 
 # Chopper Constants TODO: Tweak these to match feeling of real game
 ACCEL = 0.03  # DEFAULT: 0.05 | how fast the chopper accelerates
@@ -63,7 +64,7 @@ PLAYER_START_X = 0
 PLAYER_START_Y = 100
 
 X_BORDERS = (0, 160)
-PLAYER_BOUNDS = (0, 160), (45, 150)
+PLAYER_BOUNDS = (0, 160), (52, 150)
 
 # Maximum number of objects
 MAX_TRUCKS = 12
@@ -540,7 +541,7 @@ def is_slot_empty(pos: chex.Array) -> chex.Array:
     """Check if a position slot is empty (0,0,0)"""
     return pos[2] == 0
 
-# Todo: make random spawn per cluster
+# Todo: randomize spawn positions in one line
 @jax.jit
 def initialize_enemy_positions(rng: chex.PRNGKey) -> Tuple[chex.Array, chex.Array]:
     jet_positions = jnp.zeros((MAX_ENEMIES, 4))
@@ -706,9 +707,8 @@ def step_truck_movement(
         state_player_x: chex.Array,
 ) -> chex.Array:
 
-    def move_single_truck(i, positions):
-        truck_pos = positions[i]             
-
+    # TODO: simplify if possible
+    def move_single_truck(truck_pos):
         # Only process active trucks (direction != 0)
         is_active = jnp.logical_or(truck_pos[2] != 0, truck_pos[3] != 0)
 
@@ -728,14 +728,9 @@ def step_truck_movement(
             jnp.zeros(4),
         )
 
+        return new_pos
 
-        return positions.at[i].set(new_pos)
-
-    final_positions = jax.lax.fori_loop(
-        0, truck_positions.shape[0], move_single_truck, truck_positions
-    )
-
-    return final_positions
+    return jax.vmap(move_single_truck)(truck_positions)
 
 @jax.jit
 def spawn_step(
@@ -1498,7 +1493,7 @@ class JaxChopperCommand(JaxEnvironment[ChopperCommandState, ChopperCommandObserv
         info = self._get_info(step_state, all_rewards)
 
         # Obs-Stack aktualisieren
-        new_obs_stack = jax.tree_map(
+        new_obs_stack = jax.tree.map(
             lambda stack, obs: jnp.concatenate([stack[1:], jnp.expand_dims(obs, 0)], axis=0),
             step_state.obs_stack,
             observation
@@ -1680,6 +1675,7 @@ class Renderer_AtraJaxis(AtraJaxisRenderer):
         raster = jax.lax.fori_loop(0, MAX_PLAYER_MISSILES, render_enemy_missile, raster)
 
         # Show the scores
+        # num_digits = jnp.log10(state.score) TODO: make number of digits dynamic
         score_array = aj.int_to_digits(state.score, 6)
         # Convert the score to a list of digits
         raster = aj.render_label(raster, 16, 2, score_array, DIGITS, spacing=8)
