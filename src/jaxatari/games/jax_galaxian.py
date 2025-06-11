@@ -882,6 +882,13 @@ def load_sprites():
     enemy_red = aj.loadFrame(os.path.join(MODULE_DIR, "sprites/galaxian/red_orange_enemy_1.npy"),transpose=True)
     enemy_blue = aj.loadFrame(os.path.join(MODULE_DIR, "sprites/galaxian/purple_blue_enemy_1.npy"),transpose=True)
     enemy_white = aj.loadFrame(os.path.join(MODULE_DIR, "sprites/galaxian/white_enemy_1.npy"),transpose=True)
+    death_enemy_1 = aj.loadFrame(os.path.join(MODULE_DIR, "sprites/galaxian/death_enemy_1.npy"),transpose=True)
+    death_enemy_2 = aj.loadFrame(os.path.join(MODULE_DIR, "sprites/galaxian/death_enemy_2.npy"),transpose=True)
+    death_enemy_3 = aj.loadFrame(os.path.join(MODULE_DIR, "sprites/galaxian/death_enemy_3.npy"),transpose=True)
+    death_enemy_4 = aj.loadFrame(os.path.join(MODULE_DIR, "sprites/galaxian/death_enemy_4.npy"),transpose=True)
+    death_enemy_5 = aj.loadFrame(os.path.join(MODULE_DIR, "sprites/galaxian/death_enemy_5.npy"),transpose=True)
+
+
     SPRITE_BG = jnp.expand_dims(bg, axis= 0)
     SPRITE_PLAYER = jnp.expand_dims(player, axis = 0)
     SPRITE_BULLET = jnp.expand_dims(bullet, axis = 0)
@@ -891,6 +898,11 @@ def load_sprites():
     SPRITE_ENEMY_WHITE = jnp.expand_dims(enemy_white, axis=0)
     SPRITE_LIFE = jnp.expand_dims(life, axis=0)
     SPRITE_ENEMY_BULLET = jnp.expand_dims(enemy_bullet, axis=0)
+    SPRITE_ENEMY_DEATH_1 = jnp.expand_dims(death_enemy_1, axis=0)
+    SPRITE_ENEMY_DEATH_2 = jnp.expand_dims(death_enemy_2, axis=0)
+    SPRITE_ENEMY_DEATH_3 = jnp.expand_dims(death_enemy_3, axis=0)
+    SPRITE_ENEMY_DEATH_4 = jnp.expand_dims(death_enemy_4, axis=0)
+    SPRITE_ENEMY_DEATH_5 = jnp.expand_dims(death_enemy_5, axis=0)
     return(
         SPRITE_BG,
         SPRITE_PLAYER,
@@ -900,7 +912,12 @@ def load_sprites():
         SPRITE_ENEMY_PURPLE,
         SPRITE_ENEMY_WHITE,
         SPRITE_LIFE,
-        SPRITE_ENEMY_BULLET
+        SPRITE_ENEMY_BULLET,
+        SPRITE_ENEMY_DEATH_1,
+        SPRITE_ENEMY_DEATH_2,
+        SPRITE_ENEMY_DEATH_3,
+        SPRITE_ENEMY_DEATH_4,
+        SPRITE_ENEMY_DEATH_5
     )
 
 class GalaxianRenderer(AtraJaxisRenderer):
@@ -915,6 +932,11 @@ class GalaxianRenderer(AtraJaxisRenderer):
             self.SPRITE_ENEMY_WHITE,
             self.SPRITE_LIFE,
             self.SPRITE_ENEMY_BULLET,
+            self.SPRITE_ENEMY_DEATH_1,
+            self.SPRITE_ENEMY_DEATH_2,
+            self.SPRITE_ENEMY_DEATH_3,
+            self.SPRITE_ENEMY_DEATH_4,
+            self.SPRITE_ENEMY_DEATH_5
         ) = load_sprites()
 
         # Sprite-Dimensionen für Life-Icons
