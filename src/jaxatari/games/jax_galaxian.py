@@ -370,9 +370,14 @@ def update_enemy_attack(state: GalaxianState) -> GalaxianState:
     def respawn_finished_dives(state: GalaxianState) -> GalaxianState:
         def body(i, new_state):
 
-            #diver unter dem player werden auf respawn gesetzt
+            #diver unter dem player und außerhalb window werden auf respawn gesetzt
+            respawn_condition = jnp.logical_and(jnp.logical_or(new_state.enemy_attack_y[i] > DIVE_KILL_Y - 30,
+                                               jnp.logical_or(new_state.enemy_attack_x[i] < ENEMY_LEFT_BOUND,
+                                                              new_state.enemy_attack_x[i] > ENEMY_RIGHT_BOUND)),
+                                                  new_state.enemy_attack_states[i] == 1)
+
             new_state = jax.lax.cond(
-                jnp.logical_and(new_state.enemy_attack_y[i] > DIVE_KILL_Y - 30, new_state.enemy_attack_states[i] == 1),
+                respawn_condition,
                 lambda state: state._replace(
                     enemy_attack_states=state.enemy_attack_states.at[i].set(2),
                     enemy_attack_x=state.enemy_attack_x.at[i].set(
@@ -391,7 +396,7 @@ def update_enemy_attack(state: GalaxianState) -> GalaxianState:
                     enemy_attack_y=state.enemy_attack_y.at[i].set(
                         lax.clamp(
                             jnp.array(-10, dtype=state.enemy_attack_y.dtype),
-                            (state.enemy_attack_y[i] + 0.5).astype(state.enemy_attack_y.dtype),
+                            (state.enemy_attack_y[i] + 1).astype(state.enemy_attack_y.dtype),
                             state.enemy_grid_y[state.enemy_attack_pos[i, 0], state.enemy_attack_pos[i, 1]],
                         )
                     ),
@@ -663,7 +668,7 @@ def check_player_death_by_bullet(state: GalaxianState) -> GalaxianState:
 
     def process_hit(current_state):
         # reset bullets
-        hit_indices = jnp.where(collision_mask, size=MAX_DIVERS * 5, fill_value=-1)[0]  # size müsste man irgendwann vllt anpassen
+        hit_indices = jnp.where(collision_mask, size=MAX_DIVERS, fill_value=-1)[0]  # size müsste man irgendwann vllt anpassen
         new_bullet_x = current_state.enemy_attack_bullet_x.at[hit_indices].set(-1.0)
         new_bullet_y = current_state.enemy_attack_bullet_y.at[hit_indices].set(-1.0)
 
@@ -857,11 +862,7 @@ class JaxGalaxian(JaxEnvironment[GalaxianState, GalaxianObservation, GalaxianInf
 
     @partial(jax.jit, static_argnums=(0,))
     def _get_done(self, state: GalaxianState) -> bool:
-        # Game Over, wenn alle Leben weg sind
-        no_lives = state.lives <= 0
-        # You Win, wenn **keine** lebenden Enemies (==1) mehr da sind
-        no_enemies = jnp.all(state.enemy_grid_alive == 0)
-        return jnp.logical_or(no_lives, no_enemies)
+        return state.lives <= 0
 
     @partial(jax.jit, static_argnums=(0,))
     def _get_info(self, state: GalaxianState, all_rewards: chex.Array) -> GalaxianInfo:
