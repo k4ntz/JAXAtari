@@ -542,35 +542,38 @@ def is_slot_empty(pos: chex.Array) -> chex.Array:
     """Check if a position slot is empty (0,0,0)"""
     return pos[2] == 0
 
-# Todo: randomize spawn positions in one line
 @jax.jit
 def initialize_enemy_positions(rng: chex.PRNGKey) -> Tuple[chex.Array, chex.Array]:
     jet_positions = jnp.zeros((MAX_ENEMIES, 4))
     chopper_positions = jnp.zeros((MAX_ENEMIES, 4))
 
-    fleet_start_x = -720
+    fleet_start_x = -780
     fleet_spacing_x = 312
     fleet_count = 4
     units_per_fleet = 3
     vertical_spacing = 30
     y_start = HEIGHT // 2 - (units_per_fleet // 2) * vertical_spacing
 
-    carry = (jet_positions, chopper_positions, 0)  # (jets, choppers, global_index)
+    carry = (jet_positions, chopper_positions, 0)
     rngs = jax.random.split(rng, fleet_count)
 
     def spawn_fleet(fleet_idx, carry):
         jet_positions, chopper_positions, global_idx = carry
         anchor_x = fleet_start_x + fleet_idx * fleet_spacing_x
 
-        # Random chopper count [0, 3]
         fleet_rng = rngs[fleet_idx]
+        fleet_rng, offset_rng = jax.random.split(fleet_rng)
         chopper_count = jax.random.randint(fleet_rng, (), 0, units_per_fleet + 1)
-        jet_count = units_per_fleet - chopper_count
+
+        # Erzeuge zufällige X-Offsets für jede Einheit: -32, 0 oder +32
+        offset_choices = jnp.array([-32, 0, 32])
+        x_offsets = jax.random.choice(offset_rng, offset_choices, shape=(units_per_fleet,), replace=True)
 
         def place_unit(i, unit_carry):
             jet_positions, chopper_positions, jet_idx, chopper_idx = unit_carry
             y = y_start + i * vertical_spacing
-            pos = jnp.array([anchor_x, y, -1, FRAMES_DEATH_ANIMATION_ENEMY + 1])  # direction = -1 (links), death_timer = alive
+            offset_x = x_offsets[i]
+            pos = jnp.array([anchor_x + offset_x, y, -1, FRAMES_DEATH_ANIMATION_ENEMY + 1])
 
             is_chopper = i < chopper_count
             chopper_positions = jax.lax.cond(
@@ -1167,7 +1170,7 @@ class JaxChopperCommand(JaxEnvironment[ChopperCommandState, ChopperCommandObserv
 
 
     @partial(jax.jit, static_argnums=(0,))
-    def reset(self, key: jax.random.PRNGKey = jax.random.PRNGKey(27)) -> Tuple[ChopperCommandObservation, ChopperCommandState]:
+    def reset(self, key: jax.random.PRNGKey = jax.random.PRNGKey(30)) -> Tuple[ChopperCommandObservation, ChopperCommandState]:
         """Initialize game state"""
 
         jet_positions, _ = initialize_enemy_positions(key)
