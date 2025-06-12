@@ -69,6 +69,7 @@ class JaxBackgammonEnv(JaxEnvironment[BackgammonState, jnp.ndarray, dict]):
         def cond_fun(carry):
             white_roll, black_roll, key = carry
             return white_roll == black_roll
+
         #The code to be run in the while loop
         def body_fun(carry):
             _, _, key = carry
