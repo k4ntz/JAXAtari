@@ -147,85 +147,86 @@ class JaxBackgammonEnv(JaxEnvironment[BackgammonState, jnp.ndarray, dict]):
     @staticmethod
     @jax.jit
     def is_valid_move(state: BackgammonState, move: Tuple[int, int]) -> bool:
-        """Determine if a given move is valid for the current player based on game rules."""
-        from_point, to_point = move[0], move[1]
+        from_point, to_point = move
         board = state.board
         player = state.current_player
         player_idx = JaxBackgammonEnv.get_player_index(player)
         opponent_idx = 1 - player_idx
 
-        # Detect direction and basic validity
-        base_distance = jax.lax.select(player == WHITE, to_point - from_point, from_point - to_point)
-        has_piece = board[player_idx, from_point] > 0
         in_bounds = (0 <= from_point) & (from_point < 25) & (0 <= to_point) & (to_point <= HOME_INDEX)
-        not_blocked = board[opponent_idx, to_point] <= 1
-
-        # Determine if we're bearing off
-        is_bearing_off = to_point == HOME_INDEX
-        can_bear_off = JaxBackgammonEnv.check_bearing_off(state, player)
-
-        # If player has checkers on bar, must play them first
+        same_point = from_point == to_point
         has_bar_checkers = board[player_idx, BAR_INDEX] > 0
-        must_move_from_bar = jnp.logical_not(has_bar_checkers) | (from_point == BAR_INDEX)
+        moving_from_bar = from_point == BAR_INDEX
+        must_move_from_bar = (~moving_from_bar) & has_bar_checkers
 
-        # If moving from bar, must land on valid entry point based on dice
-        def is_valid_entry(die_val: int) -> bool:
-            expected_entry = jax.lax.select(player == WHITE, die_val - 1,  25 - die_val)
-            matches_entry = to_point == expected_entry
-            entry_open = board[opponent_idx, expected_entry] <= 1
-            return matches_entry & entry_open
+        early_invalid = (~in_bounds) | must_move_from_bar | same_point
 
-        bar_entry_valid = jax.lax.cond(
-            from_point == BAR_INDEX,
-            lambda _: jnp.any(jax.vmap(is_valid_entry)(state.dice)),
-            lambda _: True,
-            operand=None
-        )
-        correct_direction = jax.lax.cond(
-            from_point == BAR_INDEX,
-            # Von der Bar: Es muss ein gültiger Punkt basierend auf dem Spieler und den Würfeln sein
-            lambda _: jnp.any(jax.vmap(is_valid_entry)(state.dice)),
-            # Reguläre Bewegung: Basierend auf der Differenz der Punkte
-            lambda _: base_distance > 0,
-            operand=None
-        )
+        def return_false(_):
+            return False
 
+        def continue_check(_):
+            def bar_case(_):
+                def is_valid_entry(die_val: int) -> bool:
+                    expected_entry = jax.lax.select(player == WHITE, die_val - 1, 24 - die_val)
+                    matches_entry = to_point == expected_entry
+                    entry_open = board[opponent_idx, expected_entry] <= 1
+                    return matches_entry & entry_open
 
-        # Compute effective distance
-        bearing_off_distance = jax.lax.select(player == WHITE, from_point + 1, NUM_POINTS - from_point)
-        effective_distance = jax.lax.select(is_bearing_off, bearing_off_distance, base_distance)
+                bar_has_checker = board[player_idx, BAR_INDEX] > 0
+                bar_entry_valid = jnp.any(jax.vmap(is_valid_entry)(state.dice))
+                return bar_has_checker & bar_entry_valid
 
-        def check_bearing_off_valid(_):
-            exact_match = jnp.any(state.dice == effective_distance)
+            def bearing_off_case(_):
+                can_bear_off = JaxBackgammonEnv.check_bearing_off(state, player)
+                has_piece = board[player_idx, from_point] > 0
 
-            point_indices = jnp.arange(24)
+                bearing_off_distance = jax.lax.cond(
+                    player == WHITE,
+                    lambda _: HOME_INDEX - from_point,
+                    lambda _: from_point + 1,
+                    operand=None
+                )
 
-            white_mask = point_indices > from_point
-            black_mask = point_indices < from_point
+                dice_match = jnp.any(state.dice == bearing_off_distance)
 
-            higher_points = jax.lax.select(
-                player == WHITE,
-                white_mask,
-                black_mask
+                point_indices = jnp.arange(24)
+
+                higher_mask = jax.lax.cond(
+                    player == WHITE,
+                    lambda _: point_indices > from_point,
+                    lambda _: point_indices < from_point,
+                    operand=None
+                )
+
+                higher_checkers = jnp.any(jnp.where(higher_mask, board[player_idx, :24], 0) > 0)
+                larger_die = jnp.any(state.dice > bearing_off_distance)
+
+                valid_bear = dice_match | ((~higher_checkers) & larger_die)
+
+                return can_bear_off & has_piece & valid_bear
+
+            def normal_case(_):
+                has_piece = board[player_idx, from_point] > 0
+                not_blocked = board[opponent_idx, to_point] <= 1
+                base_distance = jax.lax.select(player == WHITE, to_point - from_point, from_point - to_point)
+                correct_direction = base_distance > 0
+                dice_match = jnp.any(state.dice == base_distance)
+                return has_piece & not_blocked & correct_direction & dice_match
+
+            return jax.lax.cond(
+                moving_from_bar,
+                bar_case,
+                lambda _: jax.lax.cond(
+                    to_point == HOME_INDEX,
+                    bearing_off_case,
+                    normal_case,
+                    operand=None
+                ),
+                operand=None
             )
 
-            player_row = board[player_idx, :24]
-            no_higher = jnp.all(jnp.where(higher_points, player_row, 0) == 0)
+        return jax.lax.cond(early_invalid, return_false, continue_check, operand=None)
 
-            larger_die = jnp.any(state.dice > effective_distance)
-            return exact_match | (larger_die & no_higher)
-
-        def check_normal_move(_):
-            return jnp.any(state.dice == effective_distance)
-
-        dice_match = jax.lax.cond(
-            is_bearing_off & can_bear_off,
-            check_bearing_off_valid,
-            check_normal_move,
-            operand=None
-        )
-
-        return has_piece & in_bounds & correct_direction & dice_match & not_blocked & must_move_from_bar & bar_entry_valid & (~is_bearing_off | can_bear_off)
     @staticmethod
     def check_bearing_off(state: BackgammonState, player: int) -> bool:
         """check for bearing off using lax.cond instead of if statements."""
@@ -264,14 +265,35 @@ class JaxBackgammonEnv(JaxEnvironment[BackgammonState, jnp.ndarray, dict]):
     @staticmethod
     @jax.jit
     def compute_distance(player, from_point, to_point):
-        """Compute move distance based on player and points."""
-        return jax.lax.cond(
-            from_point == BAR_INDEX,
-            lambda a: jax.lax.select(a[0] == WHITE, a[2] + 1, 24 - a[2]),
-            lambda a: jax.lax.select(a[0] == WHITE, a[2] - a[1], a[1] - a[2]),
-            (player, from_point, to_point)
+        """Compute move distance based on player and points, including bearing off."""
+        is_from_bar = from_point == BAR_INDEX
+
+        bar_distance = jax.lax.cond(
+            player == WHITE,
+            lambda _: to_point + 1,          
+            lambda _: 24 - to_point,
+            operand=None
         )
 
+        regular_distance = jax.lax.cond(
+            to_point == HOME_INDEX,
+            lambda _: jax.lax.cond(
+                player == WHITE,
+                lambda _: HOME_INDEX - from_point,
+                lambda _: from_point + 1,
+                operand=None
+            ),
+            lambda _: jax.lax.cond(
+                player == WHITE,
+                lambda _: to_point - from_point,
+                lambda _: from_point - to_point,
+                operand=None
+            ),
+            operand=None
+        )
+
+        return jax.lax.cond(is_from_bar, lambda _: bar_distance, lambda _: regular_distance, operand=None)
+    
     @staticmethod
     @jax.jit
     def update_dice(dice: jnp.ndarray, is_valid: bool, distance: int) -> jnp.ndarray:
