@@ -82,7 +82,8 @@ class GalaxianState(NamedTuple):
     bullet_y: chex.Array
     enemy_grid_x: chex.Array
     enemy_grid_y: chex.Array
-    enemy_grid_alive: chex.Array        # 0: dead, 1: alive, 2: attacking
+    enemy_grid_alive: chex.Array # 0: dead, 1: alive, 2: attacking
+    enemy_death_frame: chex.Array  # 0 = not-dying, 1–5 = which death sprite to show
     enemy_grid_direction: chex.Array
     enemy_attack_states: chex.Array      # 0: noop, 1: attack, 2: respawn
     enemy_attack_pos: chex.Array
@@ -106,6 +107,7 @@ class GalaxianState(NamedTuple):
     turn_step: chex.Array
     dive_probability: chex.Array
     enemy_bullet_max_cooldown: chex.Array
+
 
 
 @jax.jit
@@ -756,6 +758,7 @@ class JaxGalaxian(JaxEnvironment[GalaxianState, GalaxianObservation, GalaxianInf
                               enemy_grid_x=enemy_grid.astype(jnp.float32),
                               enemy_grid_y=enemy_grid_y.astype(jnp.float32),
                               enemy_grid_alive=enemy_alive,
+                              enemy_death_frame=jnp.zeros((GRID_ROWS, GRID_COLS), dtype=jnp.int32),
                               enemy_grid_direction=jnp.array(1),
                               enemy_attack_states=jnp.zeros(MAX_DIVERS),
                               enemy_attack_pos=jnp.full((MAX_DIVERS, 2), -1, dtype=jnp.int32),
