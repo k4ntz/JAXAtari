@@ -111,6 +111,7 @@ class ChopperCommandState(NamedTuple):
     player_facing_direction: chex.Array  # current facing direction of the player’s chopper: -1 = facing left, +1 = facing right, 0 = invalid
     score: chex.Array                    # current game score/points
     lives: chex.Array                    # number of remaining lives for the player
+    save_lives: chex.Array               # keeps track of how often the player was granted a life for reaching another 10000 score points
     truck_positions: chex.Array          # shape (MAX_TRUCKS, 4): for each truck, stores [x, y, direction (active flag), death_timer]
     jet_positions: chex.Array            # shape (MAX_JETS, 4): for each enemy jet, stores [x, y, direction (active flag), death_timer]
     chopper_positions: chex.Array        # shape (MAX_ENEMIES, 4): for each enemy chopper, stores [x, y, direction (active flag), death_timer]
@@ -1002,6 +1003,22 @@ def player_step(
 
     return player_x, player_y, velocity_x, new_player_offset, new_player_facing_direction
 
+def lives_step(
+        player_collision: chex.Array,
+        current_score: jnp.int32,
+        save_lives: jnp.int32,
+) -> tuple[jnp.int32, jnp.int32]:
+
+    current_score = jnp.where(current_score == 0, 1, current_score)
+    num_to_add = jnp.where(player_collision, -1, 0)
+
+    num_to_add = jnp.where((current_score // 10000) > save_lives, num_to_add + 1, num_to_add)
+    new_save_lives = jnp.where((current_score // 10000) > save_lives, save_lives + 1, save_lives)
+
+    jax.debug.print("{x}", x=new_save_lives)
+
+    return num_to_add, new_save_lives
+
 
 class JaxChopperCommand(JaxEnvironment[ChopperCommandState, ChopperCommandObservation, ChopperCommandInfo]):
     def __init__(self, frameskip: int = 1, reward_funcs: list[Callable] =None):
@@ -1165,6 +1182,7 @@ class JaxChopperCommand(JaxEnvironment[ChopperCommandState, ChopperCommandObserv
             player_facing_direction=jnp.array(1).astype(jnp.int32),             # # Player begins facing right (1).
             score=jnp.array(0).astype(jnp.int32),                               # Game always starts with a score of 0.
             lives=jnp.array(3).astype(jnp.int32),                               # Standard number of starting lives.
+            save_lives=jnp.array(0).astype(jnp.int32),                          # Player starts with no lives granted for every 10000 points reached
             truck_positions=initialize_truck_positions().astype(jnp.float32),   # Trucks are initialized with predefined starting positions and inactive death timers.
             jet_positions=jet_positions,                                        # Jets are initialized with predefined starting positions and inactive death timers.
             chopper_positions=chopper_positions,                                # Choppers are initialized with predefined starting positions and inactive death timers.
@@ -1330,10 +1348,9 @@ class JaxChopperCommand(JaxEnvironment[ChopperCommandState, ChopperCommandObserv
 
             new_score = jnp.where(player_collision_chopper, new_score + SCORE_PER_CHOPPER_KILL, new_score)
 
-            # Update lives if player collides with an enemy or enemy missile
-            new_lives = jnp.where(
-                player_collision, state.lives - 1, state.lives
-            )
+            # Update lives if player collides with an enemy or enemy missile and add one life for every 10000 points
+            new_lives_to_add, new_save_lives = lives_step(player_collision, state.score, state.save_lives)
+            new_lives = state.lives + new_lives_to_add #TODO: Make score and lives update match real game
 
             # Update step counter
             new_step_counter = state.step_counter + 1
@@ -1347,6 +1364,7 @@ class JaxChopperCommand(JaxEnvironment[ChopperCommandState, ChopperCommandObserv
                 player_facing_direction=new_player_facing_direction,
                 score=new_score,
                 lives=new_lives,
+                save_lives=new_save_lives,
                 truck_positions=new_truck_positions,
                 jet_positions=new_jet_positions,
                 chopper_positions=new_chopper_positions,
@@ -1520,6 +1538,7 @@ class JaxChopperCommand(JaxEnvironment[ChopperCommandState, ChopperCommandObserv
             # soft Resets
             score=soft_reset_state.score,
             lives=soft_reset_state.lives,
+            save_lives=soft_reset_state.save_lives,
             jet_positions=merged_jet_pos,
             chopper_positions=merged_chop_pos,
             truck_positions=merged_truck_pos,
