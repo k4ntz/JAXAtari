@@ -216,10 +216,15 @@ def load_sprites():
         ]
     )
 
+    # Loading Digit Sprites
+    DIGITS = aj.load_and_pad_digits(
+    os.path.join(MODULE_DIR, "sprites/wordzapper/digits/{}.npy")
+)
     return (
         SPRITE_BG,
         SPRITE_PL,
-        SPRITE_PL_MISSILE
+        SPRITE_PL_MISSILE,
+        DIGITS
     )
 
 
@@ -227,7 +232,8 @@ def load_sprites():
 (
     SPRITE_BG,
     SPRITE_PL,
-    SPRITE_PL_MISSILE
+    SPRITE_PL_MISSILE,
+    DIGITS
 ) = load_sprites()
 
 
@@ -474,7 +480,7 @@ class JaxWordZapper(JaxEnvironment[WordZapperState, WordZapperObservation, WordZ
             #spawn_state=initialize_spawn_state(), 
             player_missile_position=jnp.zeros(3),  # x,y,direction
             player_zapper_position=jnp.zeros(4),
-            timer=jnp.array(90),
+            timer=jnp.array(99),
             step_counter=jnp.array(0),
             rng_key=key,
         )
@@ -550,7 +556,7 @@ class JaxWordZapper(JaxEnvironment[WordZapperState, WordZapperObservation, WordZ
     @partial(jax.jit, static_argnums=(0,))
     def _get_done(self, state: WordZapperState) -> bool:
         """Check if the game should end due to timer expiring."""
-        MAX_TIME = 60 * 90  # 90 seconds at 60 FPS
+        MAX_TIME = 60 * 99  # 90 seconds at 60 FPS
         return state.timer >= MAX_TIME
 
     @partial(jax.jit, static_argnums=(0,))
@@ -580,6 +586,12 @@ class JaxWordZapper(JaxEnvironment[WordZapperState, WordZapperObservation, WordZ
                 action,
             )
 
+            new_timer = jnp.where(
+            (state.step_counter % 60 == 0) & (state.step_counter > 0) & (state.timer > 0),
+            state.timer - 1,
+            state.timer,
+            )
+
             player_missile_position = player_missile_step(
                 state, new_player_x, new_player_y, action
             )
@@ -601,6 +613,7 @@ class JaxWordZapper(JaxEnvironment[WordZapperState, WordZapperObservation, WordZ
                 player_missile_position=player_missile_position,
                 player_zapper_position=player_zapper_position,
                 step_counter=new_step_counter,
+                timer=new_timer,
             )
             return new_state
 
@@ -623,6 +636,10 @@ class WordZapperRenderer(AtraJaxisRenderer):
         ## render background
         frame_bg = aj.get_sprite_frame(SPRITE_BG, 0)
         raster = aj.render_at(raster, 0, 0, frame_bg)
+
+        # show the countdown timer
+        timer_array = aj.int_to_digits(state.timer, max_digits=2)
+        raster = aj.render_label(raster, 70, 10, timer_array, DIGITS, spacing=10)
 
         ## render player
         frame_pl_sub = aj.get_sprite_frame(SPRITE_PL, state.step_counter)
@@ -706,6 +723,8 @@ if __name__ == "__main__":
         for event in pygame.event.get():
             if event.type == pygame.QUIT:
                 running = False
+            elif event.type == pygame.MOUSEMOTION:
+                print(event.pos)
             elif event.type == pygame.KEYDOWN:
                 if event.key == pygame.K_f:
                     frame_by_frame = not frame_by_frame
