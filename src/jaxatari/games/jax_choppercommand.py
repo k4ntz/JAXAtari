@@ -722,7 +722,9 @@ def step_enemy_movement(
         state_player_x: chex.Array,
         local_player_offset: chex.Array,
 ) -> Tuple[chex.Array, chex.Array, chex.PRNGKey]:
-    rng, direction_rng = jax.random.split(rng)
+
+    rng0, direction_rng = jax.random.split(rng)
+    rng1, next_rng = jax.random.split(rng0)
 
     def move_enemy_x(pos: chex.Array, is_jet, is_in_range) -> chex.Array:
         is_active = pos[2] != 0
@@ -840,6 +842,25 @@ def step_enemy_movement(
 
         return jnp.where(out_of_bounds, wrapped_pos, new_pos)
 
+    def move_enemy_y(pos: chex.Array, i: chex.Array):
+        is_active = pos[2] != 0 # Sollte klappen
+        should_switch = jax.random.bernoulli(rng, p = ENEMY_LANE_SWITCH_PROBABILITY) # Falscher Key
+        is_on_a_lane = jnp.any(jnp.abs(pos[1] - ALL_LANES) <= 1) # Funktioniert vlt nicht richtig
+
+        def get_unchanged():
+            return pos[1], pos[3]
+
+        def get_next_pos():
+            return pos[1], pos[3] #TODO: Hier anfangen mit y-step Logik. Statt return pos[1], pos[3]: return jax.lax.cond...
+
+        (new_y, death_timer_or_lane_flag) = jax.lax.cond( # move_enemy_y
+            pos[3] > FRAMES_DEATH_ANIMATION_ENEMY,
+            lambda _: get_next_pos(),   # If pos[3] is interpreted as the lane handler
+            lambda _: get_unchanged(),  # If pos[3] is interpreted as the death timer
+            operand=None
+        )
+
+        return jnp.array([pos[0], new_y, pos[2], death_timer_or_lane_flag], dtype=pos.dtype)
 
     def is_in_range_checker(pos: chex.Array) -> chex.Array:
         all_middle_trucks_x = jnp.array(
@@ -867,7 +888,7 @@ def step_enemy_movement(
     def process_jet(i, new_positions):
         current_pos = jet_positions[i]
         new_pos = move_enemy_x(current_pos, jnp.array(True), is_in_range_checker(current_pos))
-        new_pos = new_pos
+        new_pos = move_enemy_y(new_pos, i)
         return new_positions.at[i].set(new_pos)
 
     new_jet_positions = jnp.zeros_like(jet_positions)
@@ -876,14 +897,13 @@ def step_enemy_movement(
     def process_chopper(i, new_positions):
         current_pos = chopper_positions[i]
         new_pos = move_enemy_x(current_pos, jnp.array(False), is_in_range_checker(current_pos))
-        new_pos = new_pos
+        new_pos = move_enemy_y(new_pos, i)
         return new_positions.at[i].set(new_pos)
 
     new_chopper_positions = jnp.zeros_like(chopper_positions)
     new_chopper_positions = jax.lax.fori_loop(0, chopper_positions.shape[0], process_chopper, new_chopper_positions)
 
-    return new_jet_positions, new_chopper_positions, rng
-
+    return new_jet_positions, new_chopper_positions, rng1
 
 def update_entity_death(entity_array, death_timer, is_truck):
     def update_entity(i, carry):
