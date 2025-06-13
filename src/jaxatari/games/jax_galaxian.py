@@ -85,7 +85,8 @@ class GalaxianState(NamedTuple):
     bullet_y: chex.Array
     enemy_grid_x: chex.Array
     enemy_grid_y: chex.Array
-    enemy_grid_alive: chex.Array        # 0: dead, 1: alive, 2: attacking
+    enemy_grid_alive: chex.Array # 0: dead, 1: alive, 2: attacking
+    enemy_death_frame: chex.Array  # 0 = not-dying, 1–5 = which death sprite to show
     enemy_grid_direction: chex.Array
     enemy_attack_states: chex.Array      # 0: noop, 1: attack, 2: respawn
     enemy_attack_pos: chex.Array
@@ -109,6 +110,7 @@ class GalaxianState(NamedTuple):
     turn_step: chex.Array
     dive_probability: chex.Array
     enemy_bullet_max_cooldown: chex.Array
+
 
 
 @jax.jit
@@ -735,6 +737,7 @@ class JaxGalaxian(JaxEnvironment[GalaxianState, GalaxianObservation, GalaxianInf
                               enemy_grid_x=enemy_grid.astype(jnp.float32),
                               enemy_grid_y=enemy_grid_y.astype(jnp.float32),
                               enemy_grid_alive=enemy_alive,
+                              enemy_death_frame=jnp.zeros((GRID_ROWS, GRID_COLS), dtype=jnp.int32),
                               enemy_grid_direction=jnp.array(1),
                               enemy_attack_states=jnp.zeros(MAX_DIVERS),
                               enemy_attack_pos=jnp.full((MAX_DIVERS, 2), -1, dtype=jnp.int32),
@@ -745,8 +748,8 @@ class JaxGalaxian(JaxEnvironment[GalaxianState, GalaxianObservation, GalaxianInf
                               enemy_attack_x=jnp.zeros(MAX_DIVERS),
                               enemy_attack_y=jnp.zeros(MAX_DIVERS),
                               enemy_attack_respawn_timer=jnp.zeros(MAX_DIVERS),
-                              enemy_attack_bullet_x=jnp.zeros(MAX_DIVERS),
-                              enemy_attack_bullet_y=jnp.zeros(MAX_DIVERS),
+                              enemy_attack_bullet_x=jnp.full(MAX_DIVERS, -1.0),
+                              enemy_attack_bullet_y=jnp.full(MAX_DIVERS, -1.0),
                               enemy_attack_bullet_timer=jnp.zeros(MAX_DIVERS),
                               enemy_attack_pause_step=jnp.array(0),
                               lives=jnp.array(3),
@@ -859,25 +862,42 @@ def load_sprites():
     enemy_red = aj.loadFrame(os.path.join(MODULE_DIR, "sprites/galaxian/red_orange_enemy_1.npy"),transpose=True)
     enemy_blue = aj.loadFrame(os.path.join(MODULE_DIR, "sprites/galaxian/purple_blue_enemy_1.npy"),transpose=True)
     enemy_white = aj.loadFrame(os.path.join(MODULE_DIR, "sprites/galaxian/white_enemy_1.npy"),transpose=True)
+    death_enemy_1 = aj.loadFrame(os.path.join(MODULE_DIR, "sprites/galaxian/death_enemy_1.npy"),transpose=True)
+    death_enemy_2 = aj.loadFrame(os.path.join(MODULE_DIR, "sprites/galaxian/death_enemy_2.npy"),transpose=True)
+    death_enemy_3 = aj.loadFrame(os.path.join(MODULE_DIR, "sprites/galaxian/death_enemy_3.npy"),transpose=True)
+    death_enemy_4 = aj.loadFrame(os.path.join(MODULE_DIR, "sprites/galaxian/death_enemy_4.npy"),transpose=True)
+    death_enemy_5 = aj.loadFrame(os.path.join(MODULE_DIR, "sprites/galaxian/death_enemy_5.npy"),transpose=True)
+
+
     SPRITE_BG = jnp.expand_dims(bg, axis= 0)
     SPRITE_PLAYER = jnp.expand_dims(player, axis = 0)
     SPRITE_BULLET = jnp.expand_dims(bullet, axis = 0)
     SPRITE_ENEMY_GRAY = jnp.expand_dims(enemy_gray, axis=0)
     SPRITE_ENEMY_RED = jnp.expand_dims(enemy_red, axis=0)
-    SPRITE_ENEMY_BLUE = jnp.expand_dims(enemy_blue, axis=0)
+    SPRITE_ENEMY_PURPLE = jnp.expand_dims(enemy_blue, axis=0)
     SPRITE_ENEMY_WHITE = jnp.expand_dims(enemy_white, axis=0)
     SPRITE_LIFE = jnp.expand_dims(life, axis=0)
     SPRITE_ENEMY_BULLET = jnp.expand_dims(enemy_bullet, axis=0)
+    SPRITE_ENEMY_DEATH_1 = jnp.expand_dims(death_enemy_1, axis=0)
+    SPRITE_ENEMY_DEATH_2 = jnp.expand_dims(death_enemy_2, axis=0)
+    SPRITE_ENEMY_DEATH_3 = jnp.expand_dims(death_enemy_3, axis=0)
+    SPRITE_ENEMY_DEATH_4 = jnp.expand_dims(death_enemy_4, axis=0)
+    SPRITE_ENEMY_DEATH_5 = jnp.expand_dims(death_enemy_5, axis=0)
     return(
         SPRITE_BG,
         SPRITE_PLAYER,
         SPRITE_BULLET,
         SPRITE_ENEMY_GRAY,
         SPRITE_ENEMY_RED,
-        SPRITE_ENEMY_BLUE,
+        SPRITE_ENEMY_PURPLE,
         SPRITE_ENEMY_WHITE,
         SPRITE_LIFE,
-        SPRITE_ENEMY_BULLET
+        SPRITE_ENEMY_BULLET,
+        SPRITE_ENEMY_DEATH_1,
+        SPRITE_ENEMY_DEATH_2,
+        SPRITE_ENEMY_DEATH_3,
+        SPRITE_ENEMY_DEATH_4,
+        SPRITE_ENEMY_DEATH_5
     )
 
 class GalaxianRenderer(AtraJaxisRenderer):
@@ -888,10 +908,15 @@ class GalaxianRenderer(AtraJaxisRenderer):
             self.SPRITE_BULLET,
             self.SPRITE_ENEMY_GRAY,
             self.SPRITE_ENEMY_RED,
-            self.SPRITE_ENEMY_BLUE,
+            self.SPRITE_ENEMY_PURPLE,
             self.SPRITE_ENEMY_WHITE,
             self.SPRITE_LIFE,
             self.SPRITE_ENEMY_BULLET,
+            self.SPRITE_ENEMY_DEATH_1,
+            self.SPRITE_ENEMY_DEATH_2,
+            self.SPRITE_ENEMY_DEATH_3,
+            self.SPRITE_ENEMY_DEATH_4,
+            self.SPRITE_ENEMY_DEATH_5
         ) = load_sprites()
 
         # Sprite-Dimensionen für Life-Icons
@@ -975,7 +1000,7 @@ class GalaxianRenderer(AtraJaxisRenderer):
                 choices = [
                     aj.get_sprite_frame(self.SPRITE_ENEMY_WHITE, 0),
                     aj.get_sprite_frame(self.SPRITE_ENEMY_RED, 0),
-                    aj.get_sprite_frame(self.SPRITE_ENEMY_GRAY, 0) #TODO make purple after sprite is fixed
+                    aj.get_sprite_frame(self.SPRITE_ENEMY_PURPLE, 0)
                 ]
                 default_choice = aj.get_sprite_frame(self.SPRITE_ENEMY_GRAY, 0)
                 enemy_sprite = jnp.select(conditions, choices, default_choice)
