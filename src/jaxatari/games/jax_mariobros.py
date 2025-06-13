@@ -1,11 +1,13 @@
+# Team Mario Bros: Sai Aakaash, Sam Diehl, Jonas Rudolph, Harshith Salanke
+
 import os
 from functools import partial
-from typing import NamedTuple, Tuple, Dict, Any, Optional
+from typing import NamedTuple, Tuple
 import jax
 import jax.numpy as jnp
 import chex
 import pygame
-from jax import Array
+from jax import lax
 from gymnax.environments import spaces
 from jaxatari.environment import JaxEnvironment, JAXAtariAction as Action
 
@@ -30,14 +32,19 @@ BRAKE_DURATION = 10           # in Frames
 BRAKE_TOTAL_DISTANCE = 7.0    # in Pixels
 BRAKE_SPEED = jnp.array(BRAKE_TOTAL_DISTANCE / BRAKE_DURATION, dtype=jnp.float32)  # ≈ 0.7 px/frame
 
-# --- Player/Enemy/Plattform params ---
+# --- Player params ---------------
 PLAYER_SIZE = (9, 21)  # w, h
 PLAYER_COLOR = (181, 83, 40)
 PLAYER_START_X, PLAYER_START_Y = 37.0, 74.0
-ENEMY_SIZE = (8, 8)  # w, h
 
+# --- Enemies params ---
+ENEMY_SIZE = (8, 8)  # w, h
+ENEMY_SPAWN_FRAMES = jnp.array([200, 0])  # example delays for each enemy in frames
+
+
+# --- Platform params---
 PLATFORMS = jnp.array([
-    [0, 168, 160, 24],  # Ground x, y, w, h
+    [0, 175, 160, 23],  # Ground x, y, w, h
     [0, 57, 64, 3],     # 3.FLoor Left
     [96, 57, 68, 3],    # 3.Floor Right
     [31, 95, 97, 3],    # 2.Floor Middle
@@ -47,12 +54,17 @@ PLATFORMS = jnp.array([
     [112, 135, 48, 3]   # 1.Floor Right
 ])
 
-# --- Pow_Block ---
-POW_BLOCK = jnp.array([[72, 135, 16, 7]])  # x, y, w, h
+# --- Pow_Block params ---
+POW_BLOCK = jnp.array([[72, 141, 16, 7]])  # x, y, w, h
 
 class GameState(NamedTuple):    #Enemy movement
-    enemy_pos: jnp.ndarray
-    enemy_vel: jnp.ndarray
+    enemy_pos: jnp.ndarray # shape (N,2): x/y positions
+    enemy_vel: jnp.ndarray # shape (N,2): x/y velocities
+    enemy_platform_idx: jnp.ndarray # shape (N,): index of current platform the enemy is on
+    enemy_timer: jnp.ndarray # shape (N,): frame count until next patrol/teleport decision
+    enemy_initial_sides: jnp.ndarray # shape (N,): 0=spawned on left, 1=spawned on right
+    enemy_delay_timer: jnp.ndarray # shape (N,), counts frames until enemy starts moving
+    pow_hits: int # scalar: number of times the POW block has been hit (0–3)
 
 class PlayerState(NamedTuple):  # Player movement
     pos: jnp.ndarray
@@ -136,6 +148,154 @@ def check_enemy_collision(player_pos, enemy_pos):
     return jnp.any(overlap_x & overlap_y)
 
 @jax.jit
+def enemy_step(enemy_pos, enemy_vel, enemy_platform_idx, enemy_timer, platforms, initial_sides, active_mask):
+    ew, eh = ENEMY_SIZE
+    TOP_PLATFORMS = jnp.array([1, 2], dtype=jnp.int32)  # indices of top platforms
+    ENEMY_TOP_START_IDX = jnp.array([1, 2], dtype=jnp.int32)  # which top platform each enemy starts from
+
+    def platform_below_at(x_pos, current_y):
+        px, py, pw, ph = platforms[:, 0], platforms[:, 1], platforms[:, 2], platforms[:, 3]
+        left = px
+        right = px + pw
+        supported_x = (x_pos + ew > left) & (x_pos < right)
+        below_y = py > current_y
+        candidates = supported_x & below_y
+        return jnp.where(candidates, py, jnp.inf)
+
+    def step_one(pos, vel, p_idx, timer, side, i):
+        x, y = pos
+        vx, vy = vel
+        platform = platforms[p_idx]
+        plat_x, plat_y, plat_w, _ = platform
+        plat_left = plat_x
+        plat_right = plat_x + plat_w
+
+        new_x = x + vx
+
+        walking_off_left = new_x < plat_left
+        walking_off_right = new_x + ew > plat_right
+        walking_off_edge = walking_off_left | walking_off_right
+
+        fall_x = jnp.where(walking_off_left, plat_left - ew, plat_right)
+
+        platforms_below_y = platform_below_at(fall_x, y + eh)
+        min_platform_below_y = jnp.min(platforms_below_y)
+        has_platform_below = min_platform_below_y != jnp.inf
+
+        platform_edges_x = jnp.array([plat_left, plat_right - ew])
+        platforms_below_any_left = jnp.min(platform_below_at(platform_edges_x[0], y + eh))
+        platforms_below_any_right = jnp.min(platform_below_at(platform_edges_x[1], y + eh))
+        is_lowest_platform = (platforms_below_any_left == jnp.inf) & (platforms_below_any_right == jnp.inf)
+
+        timer = jnp.asarray(timer + 1, dtype=jnp.int32)
+
+        def teleport_down(pos_x, vx, side, ew, eh, platforms, min_platform_below_y):
+            # Mask of platforms at the target Y level
+            same_y_mask = platforms[:, 1] == min_platform_below_y
+
+            # Find platforms under the current x
+            plat_lefts = platforms[:, 0]
+            plat_rights = platforms[:, 0] + platforms[:, 2]
+
+            inside_x_mask = (pos_x >= plat_lefts) & (pos_x <= plat_rights)
+            valid_mask = same_y_mask & inside_x_mask
+
+            # Choose first matching platform index or fallback
+            horizontal_distance = jnp.where(valid_mask, 0.0, 1e6)
+            idx_below = jnp.argmin(horizontal_distance)
+
+            new_pos_x = jnp.array(pos_x, dtype=jnp.float32)
+            new_pos_y = jnp.array(platforms[idx_below, 1] - eh, dtype=jnp.float32)
+
+            new_vx_down = vx  # Preserve horizontal velocity
+            new_timer = jnp.array(0, dtype=jnp.int32)
+            new_side = jnp.array(side, dtype=jnp.int32)
+
+            return (new_pos_x, new_pos_y, new_vx_down, idx_below, new_timer, new_side)
+
+        def teleport_up(side, target_top_idx):
+            def pos_and_vel_for_top(idx):
+                left_side_x = platforms[idx, 0] + 5.0
+                right_side_x = platforms[idx, 0] + platforms[idx, 2] - ew - 5.0
+                start_x = jnp.where(side == 1, right_side_x, left_side_x)
+                start_vx = jnp.where(side == 1, -0.5, 0.5)
+                start_y = platforms[idx, 1] - eh
+                return (start_x.astype(jnp.float32), start_y.astype(jnp.float32), start_vx.astype(jnp.float32))
+
+            new_pos_x, new_pos_y, new_vx_up = pos_and_vel_for_top(target_top_idx)
+            new_timer = jnp.array(0, dtype=jnp.int32)
+            new_side = jnp.array(side, dtype=jnp.int32)
+
+            return (new_pos_x, new_pos_y, new_vx_up, target_top_idx, new_timer, new_side)
+
+        new_x_final = new_x
+        new_y_final = y
+        new_vx_final = vx
+        new_p_idx = p_idx
+        new_side = side
+
+        # Teleport down if walking off edge and platform below exists
+        new_x_final, new_y_final, new_vx_final, new_p_idx, timer, new_side = jax.lax.cond(
+            walking_off_edge & has_platform_below,
+            lambda _: teleport_down(new_x, vx, side, ew, eh, platforms, min_platform_below_y),
+            lambda _: (new_x, y, vx, p_idx, timer, side),
+            operand=None
+        )
+
+        TELEPORT_WAIT = 100
+
+        def wait_and_teleport_up():
+            def do_teleport():
+                # Use enemy index i to pick correct top platform start idx
+                return teleport_up(side, ENEMY_TOP_START_IDX[i])
+
+            def keep_patrol():
+                return (new_x_final, new_y_final, -new_vx_final, new_p_idx, timer, new_side)
+
+            return jax.lax.cond(timer >= TELEPORT_WAIT, do_teleport, keep_patrol)
+
+        # Teleport up condition: walking off edge, no platform below, and on lowest platform
+        new_x_final, new_y_final, new_vx_final, new_p_idx, timer, new_side = jax.lax.cond(
+            walking_off_edge & (~has_platform_below) & is_lowest_platform,
+            wait_and_teleport_up,
+            lambda: (new_x_final, new_y_final, new_vx_final, new_p_idx, timer, new_side)
+        )
+
+        # Reverse direction if walking off edge but not on lowest platform and no platform below
+        def reverse_dir():
+            return (new_x_final, new_y_final, -new_vx_final, new_p_idx, timer, new_side)
+
+        new_x_final, new_y_final, new_vx_final, new_p_idx, timer, new_side = jax.lax.cond(
+            walking_off_edge & (~has_platform_below) & (~is_lowest_platform),
+            reverse_dir,
+            lambda: (new_x_final, new_y_final, new_vx_final, new_p_idx, timer, new_side)
+        )
+
+        return (jnp.array([new_x_final, new_y_final]),
+                jnp.array([new_vx_final, 0.0]),
+                new_p_idx,
+                timer,
+                new_side)
+
+    def conditional_step(pos, vel, idx, timer, side, i, active):
+        return jax.lax.cond(
+            active,
+            lambda _: step_one(pos, vel, idx, timer, side, i),
+            lambda _: (pos, vel, idx, timer, side),
+            operand=None
+        )
+
+    # Prepare index array to pass enemy indices to step_one
+    indices = jnp.arange(enemy_pos.shape[0])
+
+    new_pos, new_vel, new_idx, new_timer, new_sides = jax.vmap(
+        conditional_step, in_axes=(0, 0, 0, 0, 0, 0, 0)
+    )(enemy_pos, enemy_vel, enemy_platform_idx, enemy_timer, initial_sides, indices, active_mask)
+
+    return new_pos, new_vel, new_idx, new_timer, new_sides
+
+
+@jax.jit
 def movement(state: PlayerState, action: jnp.ndarray) -> PlayerState:
     # Calculates movement of Player based on given state and action taken
 
@@ -199,90 +359,92 @@ def movement(state: PlayerState, action: jnp.ndarray) -> PlayerState:
         brake_frames_left=state.brake_frames_left
     )
 
-def player_step(state: PlayerState, action: chex.Array):
-    # Calculates next state based on given PlayerState and action taken
 
-    # Determine presses
-    press_fire = jnp.logical_or(
-        action == Action.FIRE,
-        jnp.logical_or(action == Action.LEFTFIRE, action == Action.RIGHTFIRE)
+@jax.jit
+def player_step(state: PlayerState, action: chex.Array) -> PlayerState:
+    # 1) decode buttons
+    press_fire  = (action == Action.FIRE) | (action == Action.LEFTFIRE)  | (action == Action.RIGHTFIRE)
+    press_right = (action == Action.RIGHT)| (action == Action.RIGHTFIRE)
+    press_left  = (action == Action.LEFT) | (action == Action.LEFTFIRE)
+
+    # 2) reset horizontal/jump input on ground
+    state0 = lax.cond(
+        state.on_ground,
+        lambda s: s._replace(move=0.0, jump=0, jumpL=False, jumpR=False),
+        lambda s: s,
+        state
     )
 
-    # resets movement after jump for new movement callculations
-    def reset_ground(s):
-        return s._replace(move=0.0, jump=0, jumpL=False, jumpR=False)
+    # 3) set jump flag
+    state1 = state0._replace(jump = jnp.where(press_fire, 1, state0.jump))
 
-    state = jax.lax.cond(state.on_ground, reset_ground, lambda s: s, state)
-
-    press_right = jnp.logical_or(action == Action.RIGHT, action == Action.RIGHTFIRE)
-    press_left = jnp.logical_or(action == Action.LEFT, action == Action.LEFTFIRE)
-
-    # Jump logic
-    state = state._replace(jump=jnp.where(press_fire, 1, state.jump))
-
+    # 4) walking/braking vs. jumping
     def walk_or_brake(s):
-        # on ground and not jumping
-        def move_right(ss):
+        # move right
+        def mr(ss):
             return ss._replace(
-                move=movement_pattern[ss.idx_right],
-                idx_right=(ss.idx_right + 1) % pat_len,
-                idx_left=0,
-                last_dir=1,
-                brake_frames_left=0
+                move = movement_pattern[ss.idx_right],
+                idx_right = (ss.idx_right + 1) % pat_len,
+                idx_left = 0,
+                last_dir = 1,
+                brake_frames_left = 0
             )
-        def move_left(ss):
+        # move left
+        def ml(ss):
             return ss._replace(
-                move=-movement_pattern[ss.idx_left],
-                idx_left=(ss.idx_left + 1) % pat_len,
-                idx_right=0,
-                last_dir=-1,
-                brake_frames_left=0
+                move = -movement_pattern[ss.idx_left],
+                idx_left = (ss.idx_left + 1) % pat_len,
+                idx_right = 0,
+                last_dir = -1,
+                brake_frames_left = 0
             )
-        def brake(ss):
-            def apply_brake(ss_inner):
-                new_move = ss_inner.last_dir * BRAKE_SPEED
-                new_brake = ss_inner.brake_frames_left - 1
-                new_last = jnp.where(new_brake == 0, 0, ss_inner.last_dir)
-                return ss_inner._replace(move=new_move, brake_frames_left=new_brake, last_dir=new_last)
-            ss = ss._replace(brake_frames_left=jnp.where(
-                jnp.logical_and(ss.last_dir != 0, ss.brake_frames_left == 0), BRAKE_DURATION, ss.brake_frames_left
-            ))
-            return jax.lax.cond(ss.brake_frames_left > 0, apply_brake, lambda x: x._replace(move=0.0), ss)
+        # apply brake
+        def br(ss):
+            ss2 = ss._replace(
+                brake_frames_left = jnp.where((ss.last_dir != 0) & (ss.brake_frames_left == 0),
+                                              BRAKE_DURATION, ss.brake_frames_left)
+            )
+            def do_brake(x):
+                nb = x.brake_frames_left - 1
+                return x._replace(
+                    move = x.last_dir * BRAKE_SPEED,
+                    brake_frames_left = nb,
+                    last_dir = jnp.where(nb==0, 0, x.last_dir)
+                )
+            return lax.cond(ss2.brake_frames_left>0, do_brake, lambda x: x._replace(move=0.0), ss2)
 
-        return jax.lax.cond(press_right, move_right,
-               lambda ss: jax.lax.cond(press_left, move_left, brake, ss), s)
+        return lax.cond(press_right, mr,
+               lambda ss: lax.cond(press_left, ml, br, ss), s)
 
     def jump_move(s):
-        # mid-jump or jump start
-        def jump_right(ss):
+        # mid-air jumping momentum
+        def jr(ss):
             return ss._replace(
-                move=movement_pattern[ss.idx_right],
-                idx_right=(ss.idx_right + 1) % pat_len,
-                idx_left=0,
+                move = movement_pattern[ss.idx_right],
+                idx_right = (ss.idx_right + 1) % pat_len,
+                idx_left = 0,
                 jumpR=True,
                 brake_frames_left=0,
                 last_dir=0
             )
-        def jump_left(ss):
+        def jl(ss):
             return ss._replace(
-                move=-movement_pattern[ss.idx_left],
-                idx_left=(ss.idx_left + 1) % pat_len,
-                idx_right=0,
+                move = -movement_pattern[ss.idx_left],
+                idx_left = (ss.idx_left + 1) % pat_len,
+                idx_right = 0,
                 jumpL=True,
                 brake_frames_left=0,
                 last_dir=0
             )
-        condR = jnp.logical_or(press_right, s.jumpR)
-        condL = jnp.logical_or(press_left, s.jumpL)
-        return jax.lax.cond(condR, jump_right,
-               lambda ss: jax.lax.cond(condL, jump_left, lambda x: x, ss), s)
+        condR = press_right | s.jumpR
+        condL = press_left  | s.jumpL
+        return lax.cond(condR, jr,
+               lambda ss: lax.cond(condL, jl, lambda x: x, ss), s)
 
-    # Choose between walk/brake and jump move
-    state = jax.lax.cond(state.jump == 0, walk_or_brake, jump_move, state)
+    state2 = lax.cond(state1.jump==0, walk_or_brake, jump_move, state1)
 
-    # Final movement application
-    return movement(state, jnp.array([state.move, state.jump], dtype=jnp.int32))
-
+    # 5) apply physics
+    return movement(state2, jnp.array([state2.move, state2.jump], dtype=jnp.int32))
 
 import jaxatari.rendering.atraJaxis as aj
 from jaxatari.renderers import AtraJaxisRenderer
@@ -291,7 +453,10 @@ class MarioBrosRenderer(AtraJaxisRenderer):
     # holds functions to render given Gamestates
 
     def __init__(self):
-        pass
+        if not pygame.get_init():
+            pygame.init()
+        pygame.font.init()
+        self.font = pygame.font.SysFont(None, 36)
 
     def draw_rect(self, surface, color, rect):
         r = pygame.Rect(rect)
@@ -309,14 +474,20 @@ class MarioBrosRenderer(AtraJaxisRenderer):
         self.draw_rect(surf, color, (px, py, *PLAYER_SIZE))
 
         # Platforms + Pow-Block
-        for plat in PLATFORMS:
+        for plat in PLATFORMS[1:]:
             self.draw_rect(surf, (228, 111, 111), plat.tolist())
+        self.draw_rect(surf, (181, 83, 40), PLATFORMS[0].tolist()) # Ground
         self.draw_rect(surf, (201, 164, 74), POW_BLOCK[0].tolist())
 
         # Enemy
         for ep in state.game.enemy_pos:
             ex, ey = ep.tolist()
             self.draw_rect(surf, (255, 0, 0), (ex, ey, *ENEMY_SIZE))
+
+
+        # Lives
+        lives_text = self.font.render(f'Lives: {state.lives}', True, (228, 111, 111))
+        surf.blit(lives_text, (5, 5))
 
         
 
@@ -373,6 +544,9 @@ class JaxMarioBros(JaxEnvironment[MarioBrosState, MarioBrosObservation, MarioBro
         return obs, game
     
     def reset_game(self) -> MarioBrosState:
+
+        p1_y = PLATFORMS[1,1]
+        p2_y = PLATFORMS[2,1]
         
         new_state = MarioBrosState(
             player= PlayerState(
@@ -391,15 +565,20 @@ class JaxMarioBros(JaxEnvironment[MarioBrosState, MarioBrosObservation, MarioBro
                 brake_frames_left=jnp.int32(0)
             ),
             game = GameState(
-                enemy_pos = jnp.array([[50.0, 160.0], [120.0, 160.0]]),
-                enemy_vel = jnp.array([[0.5, 0.0], [-0.5, 0.0]])
+                enemy_pos = jnp.array([[5.0, p1_y-ENEMY_SIZE[1]], [130.0, p2_y-ENEMY_SIZE[1]]]),
+                enemy_vel = jnp.array([[0.5, 0.0], [-0.5, 0.0]]),
+                enemy_platform_idx= jnp.array([1,2]),
+                enemy_timer = jnp.array([0, 0]),
+                enemy_initial_sides = jnp.array([0, 1]),
+                enemy_delay_timer = jnp.array([0, 200]),
+                pow_hits = jnp.int32(0)
             ),
             lives = jnp.int32(4)
         )
 
         return new_state
     
-    def step(self, state: MarioBrosState, action: chex.Array) -> Tuple[MarioBrosObservation, MarioBrosState, float, bool, MarioBrosInfo]:
+    def old_step(self, state: MarioBrosState, action: chex.Array) -> Tuple[MarioBrosObservation, MarioBrosState, float, bool, MarioBrosInfo]:
         # calls player_step function and check for collision with enemy
         def enemy_collision(s):
             obs, rS = self.reset()
@@ -413,6 +592,74 @@ class JaxMarioBros(JaxEnvironment[MarioBrosState, MarioBrosObservation, MarioBro
         ), 0.0, True, self._get_info(state)
         
         return jax.lax.cond(check_enemy_collision(state.player.pos, state.game.enemy_pos), enemy_collision, no_enemy_collision, player_step(state.player, action))
+
+
+    from functools import partial
+    @partial(jax.jit, static_argnums=0)
+    def step(self, state: MarioBrosState, action: chex.Array) -> Tuple[MarioBrosObservation, MarioBrosState, float, bool, MarioBrosInfo]:
+        # 1) advance player state
+        new_player = player_step(state.player, action)
+
+        # 2) check for enemy collision
+        hit_enemy = check_enemy_collision(new_player.pos, state.game.enemy_pos)
+
+        # on hit enemy, reset game
+        def on_hit(_):
+            new_lives = jnp.maximum(state.lives - 1, 0)
+            obs_reset, state_reset = self.reset()
+            game_over = (new_lives <= 0)
+
+            
+            return obs_reset, state_reset, 0.0, game_over, self._get_info(state_reset)
+        
+        # no hit enemy, continue with game state
+        def on_no_hit(_):
+            # enemy patrol
+            active_mask = state.game.enemy_delay_timer >= ENEMY_SPAWN_FRAMES
+            ep, ev, idx, timer, sides = enemy_step(
+                state.game.enemy_pos,
+                state.game.enemy_vel,
+                state.game.enemy_platform_idx,
+                state.game.enemy_timer,
+                PLATFORMS,
+                state.game.enemy_initial_sides,
+                active_mask
+            )
+
+            # bump the delay timer
+            new_enemy_delay_timer = jnp.minimum(state.game.enemy_delay_timer + 1, ENEMY_SPAWN_FRAMES)
+
+            # detect POW block hits
+            _, _, _, _, pow_bumped = check_collision(new_player.pos, new_player.vel, PLATFORMS, POW_BLOCK)
+
+            pow_hit = jnp.any(pow_bumped)
+            new_pow_hits = jnp.minimum(state.game.pow_hits + pow_hit, 3)
+
+            # assemble new game state
+            new_game = GameState(
+                enemy_pos=ep,
+                enemy_vel=ev,
+                enemy_platform_idx=idx,
+                enemy_timer=timer,
+                enemy_initial_sides=sides,
+                enemy_delay_timer=new_enemy_delay_timer,
+                pow_hits=new_pow_hits
+            )
+
+            new_state = MarioBrosState(
+                player=new_player,
+                game=new_game,
+                lives=state.lives
+            )
+
+            obs = MarioBrosObservation(
+                player_x=new_player.pos[0],
+                player_y=new_player.pos[1]
+            )
+
+            return obs, new_state, 0.0, False, self._get_info(new_state)
+        
+        return jax.lax.cond(hit_enemy, on_hit, on_no_hit, new_player)
 
 
 # run game with: python scripts\play.py --game src\jaxatari\games\jax_mariobros.py --play
