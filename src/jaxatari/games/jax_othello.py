@@ -38,19 +38,45 @@ DOWNRIGHT = Action.DOWNRIGHT
 DOWNLEFT = Action.DOWNLEFT
 PLACE = Action.FIRE
 
-# index of cells first covers x-axis, then y-axis (a = 0 -> (0,0), a = 1 -> (0,1), a = 8 -> (1,0), ..., a = 63 -> (7,7))
-STRATEGIC_TILE_SCORE_CASES = 
-[0,1,1,1,1,1,1,2,
- 6,3,4,4,4,4,5,11,
- 6,7,8,9,9,8,10,11,
- 6,7,9,9,9,9,10,11,
- 6,7,8,9,9,8,10,11,
- 6,7,8,9,9,8,10,11,
- 6,12,13,13,13,13,14,11,
- 15,16,16,16,16,16,16,18
+# attribution of cases for the strategic tile score //starting at bottom right, then going left und and then up
+STRATEGIC_TILE_SCORE_CASES = [
+ 17, 16, 16, 16, 16, 16, 16, 15,
+ 11, 14, 13, 13, 13, 13, 12, 6,
+ 11, 10, 8, 9, 9, 8, 7, 6,
+ 11, 10, 9, 9, 9, 9, 7, 6,
+ 11, 10, 9, 9, 9, 9, 7, 6,
+ 11, 10, 8, 9, 9, 8, 7, 6,
+ 11, 5, 4, 4, 4, 4, 3, 6,
+ 2, 1, 1, 1, 1, 1, 1, 0
 ]
 
 
+__F3BA = jnp.array([
+    0x60, 0x40, 0x42, 0x40, 0x00, 0x00, 0x00, 0x46, 0x46, 0x44, 0x04, 0x08, 0x0c, 0x0a, 0x08,
+    0x04, 0x10, 0x14, 0xbe, 0x9e, 0x02, 0x02, 0x02, 0x12, 0x48, 0x28, 0x10, 0x08, 0x18, 0x38,
+    0x40, 0x00, 0x02, 0x02
+], dtype=jnp.uint8)
+
+__F3DC = jnp.array([
+    0x14, 0x28, 0x28, 0x2c, 0x46, 0x44, 0x40, 0x20, 0x08, 0x20, 0x60, 0x40, 0x40, 0x40, 0x42,
+    0x40, 0x40, 0x40, 0x40, 0x60, 0x20, 0x28, 0x2c, 0x24, 0x32, 0x12, 0x4c, 0xf2, 0xe2, 0xc2,
+    0x02, 0xbe, 0x18, 0x48
+], dtype=jnp.uint8)
+
+__F3FE = jnp.array([
+    0x30, 0x30, 0x30, 0x30, 0xc0, 0xc0, 0xc0, 0x30, 0x30, 0x30, 0xbb, 0xbb, 0xbb, 0xbb, 0xbb,
+    0xbb, 0xbb, 0xbb, 0x60, 0x60, 0x40, 0x30, 0x30, 0x50, 0xe0, 0xbb, 0xbb, 0xd0, 0xd0, 0xd0,
+    0xd0, 0xd8, 0xf0, 0xf0
+], dtype=jnp.uint8)
+
+BIT_MASKS_LOW_TO_HIGH = jnp.array([1, 2, 4, 8, 16, 32, 64, 128], dtype=jnp.uint8)
+
+BIT_MASKS_HIGH_TO_LOW = jnp.array([0x80, 0x40, 0x20, 0x10, 8, 4, 2, 1], dtype=jnp.uint8)
+
+__F7EC = jnp.array([
+    0x20, 0x20, 0x20, 0x20, 0x20, 0x10, 0x40, 0xe0, 0x20, 0x40, 0x15, 0xe0, 0x20, 0xe0, 0xe0,
+    0x50, 0x00, 0xf0, 0xb0
+], dtype=jnp.uint8)
 
 # Constants to decide in which side the discs will be flipped
 FLIP_UP_SIDE = 0
@@ -517,9 +543,7 @@ def check_if_there_is_a_valid_choice(curr_state, white_player):
 @jax.jit
 def get_bot_move(game_field: Field, difficulty: chex.Array, player_score: chex.Array, enemy_score: chex.Array, random_key: int)-> jnp.array:
     game_score = player_score+enemy_score
-    list_of_all_mov
-    
-    es = jnp.arange(64)
+    list_of_all_moves = jnp.arange(64)
 
     #calculate flipped tiles for all possible moves and adjust score based on game stage
     vectorized_compute_score_of_tiles = jax.vmap(compute_score_of_tiles, in_axes=(0, None, None))
@@ -960,7 +984,7 @@ def compute_flipped_tiles_top_left(input) -> int:
 @jax.jit
 def calculate_strategic_tile_score(tile_index: int, game_field: Field, unknown_arg, difficulty: int):
     #determine the position of the tile within the game field
-    args = (tile_index // 8, tile_index % 8, game_field, unknown_arg, difficulty)
+    args = (7 - tile_index // 8, 7 - tile_index % 8, game_field, unknown_arg, difficulty)
     branches = [
         lambda args: compute_strategic_score_top_left(args), 
         lambda args: compute_strategic_score_top(args),  
@@ -982,8 +1006,6 @@ def calculate_strategic_tile_score(tile_index: int, game_field: Field, unknown_a
         lambda args: compute_strategic_score_bottom_right(args),
     ]
 
-    return jax.lax.switch(tile_index, branches, args)
-
     def compute_strategic_score_top_left(args):
         tile_y, tile_x, game_field, unknown_arg, difficulty = args
         #TODO implement the strategic score for the top left corner
@@ -1003,21 +1025,17 @@ def calculate_strategic_tile_score(tile_index: int, game_field: Field, unknown_a
         return ((None, None), None)
     
     def compute_strategic_score_top_left_inner(args):
-        tile_y, tile_x, game_field, unknown_arg, difficulty = args
-        #TODO implement the strategic score for the top left inner corner
+        _, _, game_field, _, _ = args
+        return ((css_check_three_tiles(game_field, 0xf, 0x39, 0x3f), None), False)
 
-        return ((None, None), None)
-    
     def compute_strategic_score_top_inner(args):
         #Strategic score for top inner field is influenced by the field above it
         tile_y, tile_x, game_field, _, _ = args 
         return ((css_check_tile_up(tile_y, tile_x, game_field), None), False)
 
     def compute_strategic_score_top_right_inner(args):
-        tile_y, tile_x, game_field, unknown_arg, difficulty = args
-        #TODO implement the strategic score for the top right inner corner
-
-        return ((None, None), None)
+        _, _, game_field, _, _ = args
+        return ((css_check_three_tiles(game_field, 0x8, 0x3e, 0x38), None), False)
 
     def compute_strategic_score_left(args):
         tile_y, tile_x, game_field, unknown_arg, difficulty = args
@@ -1050,10 +1068,8 @@ def calculate_strategic_tile_score(tile_index: int, game_field: Field, unknown_a
         return ((None, None), None)
 
     def compute_strategic_score_bottom_left_inner(args):
-        tile_y, tile_x, game_field, unknown_arg, difficulty = args
-        #TODO implement the strategic score for the bottom left inner corner
-
-        return ((None, None), None)
+        _, _, game_field, _, _ = args
+        return ((css_check_three_tiles(game_field, 0x1, 0x37, 0x7), None), None)
 
     def compute_strategic_score_bottom_inner(args):
         #Strategic score for bottom inner field is influenced by the field below it
@@ -1061,10 +1077,8 @@ def calculate_strategic_tile_score(tile_index: int, game_field: Field, unknown_a
         return ((css_check_tile_down(tile_y, tile_x, game_field), None), False)
 
     def compute_strategic_score_bottom_right_inner(args):
-        tile_y, tile_x, game_field, unknown_arg, difficulty = args
-        #TODO implement the strategic score for the bottom right inner corner
-
-        return ((None, None), None)
+        _, _, game_field, _, _ = args
+        return ((css_check_three_tiles(game_field, 0x6, 0x30, 0x0), None), None)
 
     def compute_strategic_score_bottom_left(args):
         tile_y, tile_x, game_field, unknown_arg, difficulty = args
@@ -1083,6 +1097,8 @@ def calculate_strategic_tile_score(tile_index: int, game_field: Field, unknown_a
         #TODO implement the strategic score for the bottom right corner
 
         return ((None, None), None)
+
+    return jax.lax.switch(tile_index, branches, args)
 
 def css_check_tile_down(tile_y: int, tile_x: int, game_field: Field) -> int:
     # If field below has the same color as the current tile, return 4, else return -8
@@ -1115,6 +1131,257 @@ def css_check_tile_right(tile_y: int, tile_x: int, game_field: Field) -> int:
         lambda _: 4,
         lambda _: -8,
         None)
+
+def css_check_three_tiles(game_field: Field, field_1: int, field_2: int, field_3: int) -> int:
+    # checks for colors of the fields and returns a score based on the colors
+    # field_1, field_2 are are on the opposing line end of the to be checked field, field_3 is in the opposing corner
+    secondary_condition = jnp.logical_or(game_field.field_color[7 - (field_1 % 8),7- field_1 // 8 ] == FieldColor.WHITE,
+        game_field.field_color[7 - (field_2 % 8),7- field_2 // 8 ] == FieldColor.WHITE)
+
+    return jax.lax.cond(game_field.field_color[7 - (field_3 % 8),7- field_3 // 8 ] == FieldColor.EMPTY,
+        lambda secondary_condition: 0,
+        lambda secondary_condition: jax.lax.cond(
+            secondary_condition, 
+            lambda _: -68, 
+            lambda _: -80, 
+            _)
+        secondary_condition)
+
+def css__f2d3_count_tiles_in_line(game_field: Field, array_of_tiles, pos, default_pos, difficulty: int):
+    return_value = ((None, None), False) # (Touple to be returned, Aborted)
+
+    return_value = jax.lax.cond(difficulty == 1,
+        lambda _: ((0, None), True),
+        lambda _: return_value,
+        None)
+
+    reversed_array_of_tiles = jnp.flip(array_of_tiles.field_color)
+
+    left_state, left_pos_opt = css_sub_f5c1_count_tiles_in_line_descending(array_of_tiles, pos)
+    right_state, right_pos_opt = css_sub_f5c1_count_tiles_in_line_ascending(reversed_array_of_tiles, 7 - pos)
+
+    left_pos = jax.lax.cond(left_pos_opt != -1, 
+        lambda _: left_pos_opt, 
+        lambda _: default_pos, 
+        None)
+    right_pos = jax.lax.cond(right_pos_opt != -1, 
+        lambda _: right_pos_opt, 
+        lambda _: left_pos,
+        None) #TODO check in assembly if left_pos is the correct value
+
+    combined_state = (left_state << 2) | right_state
+
+    returned_value = jax.lax.cond(jnp.logical_and(
+        returned_value[1] == False),
+        jnp.logical_and(
+            combined_state == 0b0101, 
+            jnp.logical_or(
+                reversed_array_of_tiles.field_color[0] != FieldColor.EMPTY, 
+                reversed_array_of_tiles.field_color[7] != FieldColor.EMPTY)),
+        lambda _: ((-40, right_pos), True),
+        lambda _: returned_value,
+        None)
+
+    returned_value = jax.lax.cond(jnp.logical_and(
+        returned_value[1] == False),
+        jnp.logical_and(
+            jnp.logical_or(combined_state == 0b0111, combined_state == 0b1101),
+            jnp.logical_or(right_pos == 7, right_pos == 0)),
+        lambda _: ((-96, right_pos), True),
+        lambda _: returned_value,
+        None)
+
+    reverse_pos = 7 - pos
+    flag = True
+    condition_break = False
+
+
+    #Simulate if-else structure without using nesting
+    flag, condition_break= jax.lax.cond(jnp.logical_or(reverse_pos == 0, reverse_pos == 7),
+        lambda _: (False, True),
+        lambda _: (flag, False),
+        None)
+
+    flag, condition_break = jax.lax.cond(jnp.logical_and(condition_break == False, reverse_pos <2),
+        lambda _: (True, True),
+        lambda _: (flag, False),
+        None)
+
+    flag, condition_break = jax.lax.cond(jnp.logical_and(
+        condition_break == False, 
+        jnp.logical_and(
+            reversed_array_of_tiles.field_color[rev_pos - 1] != FieldColor.EMPTY, 
+            reversed_array_of_tiles.field_color[rev_pos-2] == FieldColor.EMPTY)),
+            lambda _: (True, True),
+            lambda _: (flag, False),
+            None)
+
+    flag, condition_break, combined_score = jax.lax.cond(jnp.logical_and(condition_break == False, reverse_pos <2),
+        lambda _: (True, True, 18),
+        lambda _: (flag, False, combined_score),
+        None)
+
+
+    conditions = jnp.logical_and.reduce(
+        jnp.array(
+            [flag,
+            reverse_pos < 6,
+            reversed_array_of_tiles.field_color[reverse_pos + 1] == FieldColor.EMPTY,
+            reversed_array_of_tiles.field_color[reverse_pos + 2] != FieldColor.WHITE,
+            reversed_array_of_tiles.field_color[reverse_pos + 2] != FieldColor.EMPTY,
+        ]
+    ))
+
+    combined_score = jax.lax.cond(conditions,
+        lambda _: 18,
+        lambda _: combined_score,
+        None
+    )
+
+
+
+
+
+@jax.jit
+def css_sub_f5c1_count_tiles_in_line_descending(array_of_tiles, start_index: int) ->(int, int):
+    adjacent_index = start_index-1
+
+    args = (array_of_tiles, adjacent_index)
+    return jax.lax.cond(adjacent_index < 0,
+    lambda args: (0b00, -1),
+    lambda args: css_sub_f5c1_count_tiles_in_line_descending_not_first_tile(args),
+    args
+)
+
+def css_sub_f5c1_count_tiles_in_line_descending_not_first_tile(args) ->(int, int):
+    array_of_tiles, adjacent_index = args
+
+    return jax.lax.cond(
+        array_of_tiles.field_color[adjacent_index] == FieldColor.EMPTY,
+        lambda args: (0b01, adjacent_index),
+        lambda args: jax.lax.cond(
+            array_of_tiles.field_color[adjacent_index] == FieldColor.WHITE,
+            lambda args: css_sub_f5c1_count_tiles_in_line_descending_handle_white(args),
+            lambda args: css_sub_f5c1_count_tiles_in_line_descending_handle_black(args),
+            args
+        ),
+        args
+    )
+
+def css_sub_f5c1_count_tiles_in_line_descending_handle_white(args) -> (int, int):
+    array_of_tiles, adjacent_index = args
+    init_val = array_of_tiles, (-1, -1), adjacent_index-1
+
+    output = jax.lax.fori_loop(
+        0,
+        adjacent_index,
+        lambda i, init_val: css_sub_f5c1_count_tiles_in_line_descending_handle_white_loop(i, init_val),
+        init_val
+    )
+
+    return jax.lax.cond(output[1][0] == -1,
+        lambda _: (0b11, -1),
+        lambda _: output[1],
+        None
+    )
+
+def css_sub_f5c1_count_tiles_in_line_descending_handle_white_loop(i, loop_vals) -> (int, int):
+    array_of_tiles, touple, custom_iterator = loop_vals
+
+    touple = jax.lax.cond(
+        jnp.logical_or(array_of_tiles.field_color[custom_iterator] == FieldColor.WHITE, jnp.logical_or(touple[0] == 0b11, jnp.logical_or(touple[0] == 0b10, touple[0] == 0b00))),
+        lambda loop_vals: touple , # interrrupt the loop if there is an empty space before a Black tile
+        lambda loop_vals: jax.lax.cond(
+            array_of_tiles.field_color[custom_iterator] == FieldColor.EMPTY,
+            lambda loop_vals: (0b11, -1), # do nothing for white tiles
+            lambda loop_vals: css_sub_f5c1_count_tiles_in_line_descending_handle_white_loop_black_tile(loop_vals), 
+            loop_vals
+        ),
+        loop_vals
+    )
+
+    custom_iterator -= 1
+    return (array_of_tiles, touple, custom_iterator)
+
+def css_sub_f5c1_count_tiles_in_line_descending_handle_white_loop_black_tile(args) -> (int, int):
+    #guard against us being already in the last iteration
+    _, _, custom_iterator = args
+    return jax.lax.cond(custom_iterator != 0,
+        lambda args: css_sub_f5c1_count_tiles_in_line_descending_handle_white_loop_black_tile_2(args),
+        lambda args: (0b00, -1),   # Black found at end (possible valid reversal pattern)
+        args
+    )
+
+def css_sub_f5c1_count_tiles_in_line_descending_handle_white_loop_black_tile_2(args) -> (int, int):
+    array_of_tiles, _, custom_iterator = args
+
+    init_val = array_of_tiles, (-1, -1), custom_iterator
+
+    output = jax.lax.fori_loop(
+        0,
+        custom_iterator+1,
+        lambda i, init_val: css_sub_f5c1_count_tiles_in_line_descending_handle_white_loop_black_tile_loop(i, init_val),
+        init_val
+    )
+    # if the next tile is black, increase the count of white tiles
+    return jax.lax.cond(output[1][0] == -1,
+        lambda _: (0b00, -1),
+        lambda _: output[1],
+        None
+    )
+
+def css_sub_f5c1_count_tiles_in_line_descending_handle_white_loop_black_tile_loop(i, loop_vals) -> (int, int):
+    array_of_tiles, touple, custom_iterator_2 = loop_vals
+    jax.debug.print("custom_iterator_2: {}", custom_iterator_2)
+    touple = jax.lax.cond(
+        jnp.logical_or(array_of_tiles.field_color[custom_iterator_2] == FieldColor.BLACK, jnp.logical_or(touple[0] == 0b10, touple[0] == 0b11)),
+        # assure the interuption found in previuos iteration is not overwritten
+        lambda _: touple,  # do nothing if we encounter a black tile, or if we already have an interruption
+        lambda _: jax.lax.cond(
+            array_of_tiles.field_color[custom_iterator_2] == FieldColor.WHITE,
+            lambda _: (0b11, -1),  # interrupt the loop if we encounter a white tile
+            lambda _: (0b10, -1),  # interrupt the loop if we encounter an empty tile
+            None
+        ),
+        None
+    )
+    custom_iterator_2 -= 1
+    return (array_of_tiles, touple, custom_iterator_2)
+
+def css_sub_f5c1_count_tiles_in_line_descending_handle_black(args) -> (int, int):
+    array_of_tiles, adjacent_index = args
+    init_val = array_of_tiles, (-1, -1), adjacent_index-1
+
+    output = jax.lax.fori_loop(
+        0,
+        adjacent_index,
+        lambda i, init_val: css_sub_f5c1_count_tiles_in_line_descending_handle_black_loop(i, init_val),
+        init_val
+    )
+    return jax.lax.cond(output[1][0] == -1,
+        lambda _: (0b00, -1),
+        lambda _: output[1],
+        None
+    )
+
+def css_sub_f5c1_count_tiles_in_line_descending_handle_black_loop(i, loop_vals) -> (int, int):
+    array_of_tiles, touple, custom_iterator = loop_vals
+    touple = jax.lax.cond(
+            jnp.logical_or(array_of_tiles.field_color[custom_iterator] == FieldColor.BLACK, jnp.logical_or(touple[0] == 0b01, touple[0] == 0b11)),
+            # assure the interuption found in previuos iteration is not overwritten
+        lambda _: touple, # do nothing if we encounter a black tile, or if we already have an interruption
+        lambda _: jax.lax.cond(
+            array_of_tiles.field_color[custom_iterator] == FieldColor.WHITE,
+            lambda _: (0b11, -1), # interrupt the loop if we encounter a white tile
+            lambda _: (0b01, custom_iterator), # interrupt the loop if we encounter an empty tile
+            None
+        ),
+        None
+    )
+
+    custom_iterator -= 1
+    return (array_of_tiles, touple, custom_iterator)
+
 
 class JaxOthello(JaxEnvironment[OthelloState, OthelloObservation, OthelloInfo]):
     def __init__(self, frameskip: int = 0, reward_funcs: list[callable]=None):
