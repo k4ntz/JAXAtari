@@ -12,7 +12,7 @@ from gymnax.environments import spaces
 from jaxatari.environment import JaxEnvironment, JAXAtariAction as Action
 from jaxatari.renderers import AtraJaxisRenderer
 from jaxatari.rendering import atraJaxis as aj
-
+from jaxatari.rendering.atraJaxis import render_at, get_sprite_frame
 
 """
 README README README README README README README 
@@ -582,13 +582,17 @@ def bullet_collision(state: GalaxianState) -> GalaxianState:
 
     def process_hit(s_and_idx):
         s, (rows, cols) = s_and_idx
+        hit_rows = rows[0] # first hit
+        hit_cols = cols[0]
         # setze alle getroffenen auf dead
-        new_alive = state.enemy_grid_alive.at[rows, cols].set(0)
-        return state._replace(
-            enemy_grid_alive         = new_alive,
-            bullet_x                 = jnp.array(-1.0, dtype=s.bullet_x.dtype),
-            bullet_y                 = jnp.array(-1.0, dtype=s.bullet_y.dtype),
-            score                    = s.score + 30,
+        new_death = s.enemy_death_frame.at[hit_rows, hit_cols].set(1)
+
+        new_alive = s.enemy_grid_alive.at[hit_rows, hit_cols].set(2)  # 2 = dying
+        return s._replace(
+            enemy_grid_alive=new_alive,
+            enemy_death_frame=new_death,
+            bullet_x=-1.0, bullet_y=-1.0,
+            score=s.score + 30
         )
 
     def no_hit(state_and_idx):
@@ -604,6 +608,20 @@ def bullet_collision(state: GalaxianState) -> GalaxianState:
                     process_hit,
                     no_hit,
                     (state, (hit_rows, hit_cols)))
+@jax.jit
+def update_death_frames(state: GalaxianState) -> GalaxianState:
+    def advance_cell(frame):
+        # if in 1..5, increment or then clear
+        return jnp.where(frame == 0, 0,
+                         jnp.where(frame < 5, frame + 1, 0))
+    new_frames = jax.vmap(jax.vmap(advance_cell))(state.enemy_death_frame)
+    # once frame wraps to 0, also mark the cell fully dead
+    cleared_mask = (state.enemy_death_frame == 5)
+    new_alive = jnp.where(cleared_mask, 0, state.enemy_grid_alive)
+    return state._replace(
+        enemy_death_frame=new_frames,
+        enemy_grid_alive=new_alive
+    )
 
 @jax.jit
 def bullet_collision_attack(state: GalaxianState) -> GalaxianState:
@@ -831,6 +849,7 @@ class JaxGalaxian(JaxEnvironment[GalaxianState, GalaxianObservation, GalaxianInf
         new_state = remove_bullets(new_state)
         new_state = bullet_collision(new_state)
         new_state = bullet_collision_attack(new_state)
+        new_state = update_death_frames(new_state)
         new_state = update_enemy_attack(new_state)
         new_state = update_enemy_bullets(new_state)
         new_state = check_player_death_by_enemy(new_state)
@@ -871,6 +890,31 @@ class JaxGalaxian(JaxEnvironment[GalaxianState, GalaxianObservation, GalaxianInf
     def _get_info(self, state: GalaxianState, all_rewards: chex.Array) -> GalaxianInfo:
         return GalaxianInfo(time=state.turn_step, all_rewards=all_rewards)
 
+# helper function to normalize frame dimensions to a target shape
+def normalize_frame(frame: jnp.ndarray, target_shape: Tuple[int, int, int]) -> jnp.ndarray:
+    h, w, c = frame.shape
+    th, tw, tc = target_shape
+    assert c == tc, f"Channel mismatch: {c} vs {tc}"
+
+    # Pad or crop vertically
+    if h < th:
+        top = (th - h) // 2
+        bottom = th - h - top
+        frame = jnp.pad(frame, ((top, bottom), (0, 0), (0, 0)), constant_values=0)
+    elif h > th:
+        crop = (h - th) // 2
+        frame = frame[crop:crop + th, :, :]
+
+    # Pad or crop horizontally
+    if w < tw:
+        left = (tw - w) // 2
+        right = tw - w - left
+        frame = jnp.pad(frame, ((0, 0), (left, right), (0, 0)), constant_values=0)
+    elif w > tw:
+        crop = (w - tw) // 2
+        frame = frame[:, crop:crop + tw, :]
+
+    return frame
 
 def load_sprites():
     MODULE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -883,7 +927,7 @@ def load_sprites():
     life = aj.loadFrame(os.path.join(MODULE_DIR, "sprites/galaxian/life.npy"),transpose=True)
     enemy_bullet = aj.loadFrame(os.path.join(MODULE_DIR, "sprites/galaxian/enemy_bullet.npy"),transpose=True)
     enemy_red = aj.loadFrame(os.path.join(MODULE_DIR, "sprites/galaxian/red_orange_enemy_1.npy"),transpose=True)
-    enemy_blue = aj.loadFrame(os.path.join(MODULE_DIR, "sprites/galaxian/purple_blue_enemy_1.npy"),transpose=True)
+    enemy_purple = aj.loadFrame(os.path.join(MODULE_DIR, "sprites/galaxian/purple_blue_enemy_1.npy"),transpose=True)
     enemy_white = aj.loadFrame(os.path.join(MODULE_DIR, "sprites/galaxian/white_enemy_1.npy"),transpose=True)
     death_enemy_1 = aj.loadFrame(os.path.join(MODULE_DIR, "sprites/galaxian/death_enemy_1.npy"),transpose=True)
     death_enemy_2 = aj.loadFrame(os.path.join(MODULE_DIR, "sprites/galaxian/death_enemy_2.npy"),transpose=True)
@@ -891,21 +935,25 @@ def load_sprites():
     death_enemy_4 = aj.loadFrame(os.path.join(MODULE_DIR, "sprites/galaxian/death_enemy_4.npy"),transpose=True)
     death_enemy_5 = aj.loadFrame(os.path.join(MODULE_DIR, "sprites/galaxian/death_enemy_5.npy"),transpose=True)
 
+    # normalize frames to the same shape
+    target_shape = enemy_gray.shape
+    death_enemy_1 = normalize_frame(death_enemy_1, target_shape)
+    death_enemy_2 = normalize_frame(death_enemy_2, target_shape)
+    death_enemy_3 = normalize_frame(death_enemy_3, target_shape)
+    death_enemy_4 = normalize_frame(death_enemy_4, target_shape)
+    death_enemy_5 = normalize_frame(death_enemy_5, target_shape)
 
-    SPRITE_BG = jnp.expand_dims(bg, axis= 0)
-    SPRITE_PLAYER = jnp.expand_dims(player, axis = 0)
-    SPRITE_BULLET = jnp.expand_dims(bullet, axis = 0)
-    SPRITE_ENEMY_GRAY = jnp.expand_dims(enemy_gray, axis=0)
-    SPRITE_ENEMY_RED = jnp.expand_dims(enemy_red, axis=0)
-    SPRITE_ENEMY_PURPLE = jnp.expand_dims(enemy_blue, axis=0)
-    SPRITE_ENEMY_WHITE = jnp.expand_dims(enemy_white, axis=0)
-    SPRITE_LIFE = jnp.expand_dims(life, axis=0)
-    SPRITE_ENEMY_BULLET = jnp.expand_dims(enemy_bullet, axis=0)
-    SPRITE_ENEMY_DEATH_1 = jnp.expand_dims(death_enemy_1, axis=0)
-    SPRITE_ENEMY_DEATH_2 = jnp.expand_dims(death_enemy_2, axis=0)
-    SPRITE_ENEMY_DEATH_3 = jnp.expand_dims(death_enemy_3, axis=0)
-    SPRITE_ENEMY_DEATH_4 = jnp.expand_dims(death_enemy_4, axis=0)
-    SPRITE_ENEMY_DEATH_5 = jnp.expand_dims(death_enemy_5, axis=0)
+    SPRITE_BG = bg[jnp.newaxis, ...]
+    SPRITE_PLAYER = player[jnp.newaxis, ...]
+    SPRITE_BULLET = bullet[jnp.newaxis, ...]
+    SPRITE_ENEMY_GRAY = enemy_gray[jnp.newaxis, ...]
+    SPRITE_ENEMY_RED = enemy_red[jnp.newaxis, ...]
+    SPRITE_ENEMY_PURPLE = enemy_purple[jnp.newaxis, ...]
+    SPRITE_ENEMY_WHITE = enemy_white[jnp.newaxis, ...]
+    SPRITE_LIFE = life[jnp.newaxis, ...]
+    SPRITE_ENEMY_BULLET = enemy_bullet[jnp.newaxis, ...]
+    SPRITE_ENEMY_DEATH = jnp.stack([death_enemy_1, death_enemy_2, death_enemy_3,
+                                    death_enemy_4, death_enemy_5], axis=0)
     return(
         SPRITE_BG,
         SPRITE_PLAYER,
@@ -916,11 +964,7 @@ def load_sprites():
         SPRITE_ENEMY_WHITE,
         SPRITE_LIFE,
         SPRITE_ENEMY_BULLET,
-        SPRITE_ENEMY_DEATH_1,
-        SPRITE_ENEMY_DEATH_2,
-        SPRITE_ENEMY_DEATH_3,
-        SPRITE_ENEMY_DEATH_4,
-        SPRITE_ENEMY_DEATH_5
+        SPRITE_ENEMY_DEATH
     )
 
 class GalaxianRenderer(AtraJaxisRenderer):
@@ -935,11 +979,7 @@ class GalaxianRenderer(AtraJaxisRenderer):
             self.SPRITE_ENEMY_WHITE,
             self.SPRITE_LIFE,
             self.SPRITE_ENEMY_BULLET,
-            self.SPRITE_ENEMY_DEATH_1,
-            self.SPRITE_ENEMY_DEATH_2,
-            self.SPRITE_ENEMY_DEATH_3,
-            self.SPRITE_ENEMY_DEATH_4,
-            self.SPRITE_ENEMY_DEATH_5
+            self.SPRITE_ENEMY_DEATH
         ) = load_sprites()
 
         # Sprite-Dimensionen für Life-Icons
@@ -1010,25 +1050,40 @@ class GalaxianRenderer(AtraJaxisRenderer):
        # Feindgitter
         def row_body(i, r_acc):
             def col_body(j, r_inner):
-                conditions = [
-                    i == 5,
-                    i == 4,
-                    i == 3
-                ]
-                choices = [
-                    aj.get_sprite_frame(self.SPRITE_ENEMY_WHITE, 0),
-                    aj.get_sprite_frame(self.SPRITE_ENEMY_RED, 0),
-                    aj.get_sprite_frame(self.SPRITE_ENEMY_PURPLE, 0)
-                ]
-                default_choice = aj.get_sprite_frame(self.SPRITE_ENEMY_GRAY, 0)
-                enemy_sprite = jnp.select(conditions, choices, default_choice)
-                cond = state.enemy_grid_alive[i, j] == 1
-                def draw(r0):
+                death_frame = state.enemy_death_frame[i, j].astype(jnp.int32)
+                alive = (state.enemy_grid_alive[i, j] == 1)
+
+
+                def draw_death(r0):
+                    sprite = get_sprite_frame(self.SPRITE_ENEMY_DEATH, death_frame - 1)
                     x = jnp.round(state.enemy_grid_x[i, j]).astype(jnp.int32)
                     y = jnp.round(state.enemy_grid_y[i, j]).astype(jnp.int32)
-                    return aj.render_at(r0, x, y, enemy_sprite)
-                return lax.cond(cond, draw, lambda r0: r0, r_inner)
+                    return render_at(r0, x, y, sprite)
+
+
+                def draw_alive(r0):
+                    conds = [i == 5, i == 4, i == 3]
+                    choices = [
+                        get_sprite_frame(self.SPRITE_ENEMY_WHITE, 0),
+                        get_sprite_frame(self.SPRITE_ENEMY_RED, 0),
+                        get_sprite_frame(self.SPRITE_ENEMY_PURPLE, 0),
+                    ]
+                    default = get_sprite_frame(self.SPRITE_ENEMY_GRAY, 0)
+                    sprite = jnp.select(conds, choices, default)
+                    x = jnp.round(state.enemy_grid_x[i, j]).astype(jnp.int32)
+                    y = jnp.round(state.enemy_grid_y[i, j]).astype(jnp.int32)
+                    return render_at(r0, x, y, sprite)
+
+                # choose: death‐anim if df>0; else alive‐sprite if alive; else no draw
+                return lax.cond(
+                    death_frame > 0,
+                    draw_death,
+                    lambda r0: lax.cond(alive, draw_alive, lambda r1: r1, r0),
+                    r_inner
+                )
+
             return lax.fori_loop(0, GRID_COLS, col_body, r_acc)
+
         raster = lax.fori_loop(0, GRID_ROWS, row_body, raster)
 
         # Lebens-Icons unten rechts
