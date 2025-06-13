@@ -1136,15 +1136,14 @@ def css_check_three_tiles(game_field: Field, field_1: int, field_2: int, field_3
     # checks for colors of the fields and returns a score based on the colors
     # field_1, field_2 are are on the opposing line end of the to be checked field, field_3 is in the opposing corner
     secondary_condition = jnp.logical_or(game_field.field_color[7 - (field_1 % 8),7- field_1 // 8 ] == FieldColor.WHITE,
-        game_field.field_color[7 - (field_2 % 8),7- field_2 // 8 ] == FieldColor.WHITE)
+    game_field.field_color[7 - (field_2 % 8),7- field_2 // 8 ] == FieldColor.WHITE)
 
     return jax.lax.cond(game_field.field_color[7 - (field_3 % 8),7- field_3 // 8 ] == FieldColor.EMPTY,
         lambda secondary_condition: 0,
-        lambda secondary_condition: jax.lax.cond(
-            secondary_condition, 
+        lambda secondary_condition: jax.lax.cond(secondary_condition, 
             lambda _: -68, 
             lambda _: -80, 
-            _)
+            None),
         secondary_condition)
 
 def css__f2d3_count_tiles_in_line(game_field: Field, array_of_tiles, pos, default_pos, difficulty: int):
