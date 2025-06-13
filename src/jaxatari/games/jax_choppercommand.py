@@ -80,6 +80,7 @@ MAX_CHOPPERS = 12
 MAX_ENEMIES = 12
 MAX_PLAYER_MISSILES = 2 #TODO: I think the real game uses one player missile max on screen. This feels nicer though
 MAX_ENEMY_MISSILES = MAX_ENEMIES * 2 * 2 # Two missiles for every enemy (jets and choppers) (this does not mean, that there are always this many missiles on the screen/in the game)
+ENEMY_LANE_SWITCH_PROBABILITY = 0.5
 
 # Enemies movement
 JET_VELOCITY_LEFT = 1.5
@@ -88,6 +89,30 @@ CHOPPER_VELOCITY_LEFT = 0.8
 CHOPPER_VELOCITY_RIGHT = 0.5
 OUT_OF_CYCLE_RIGHT = 64
 OUT_OF_CYCLE_LEFT = 128
+
+# Enemy Lanes
+
+ENEMY_LANE_OFFSET = 5
+
+ENEMY_LANE_7 = 66
+ENEMY_LANE_8 = ENEMY_LANE_7 - ENEMY_LANE_OFFSET
+ENEMY_LANE_6 = ENEMY_LANE_7 + ENEMY_LANE_OFFSET
+
+ENEMY_LANE_4 = 96
+ENEMY_LANE_5 = ENEMY_LANE_4 - ENEMY_LANE_OFFSET
+ENEMY_LANE_3 = ENEMY_LANE_4 + ENEMY_LANE_OFFSET
+
+ENEMY_LANE_1 = 126
+ENEMY_LANE_2 = ENEMY_LANE_1 - ENEMY_LANE_OFFSET
+ENEMY_LANE_0 = ENEMY_LANE_1 + ENEMY_LANE_OFFSET
+
+BOTTOM_LANES = jnp.array([ENEMY_LANE_0, ENEMY_LANE_1, ENEMY_LANE_2])
+MIDDLE_LANES = jnp.array([ENEMY_LANE_3, ENEMY_LANE_4, ENEMY_LANE_5])
+TOP_LANES = jnp.array([ENEMY_LANE_6, ENEMY_LANE_7, ENEMY_LANE_8])
+
+ALL_LANES = jnp.array([ENEMY_LANE_0, ENEMY_LANE_1, ENEMY_LANE_2, ENEMY_LANE_3, ENEMY_LANE_4, ENEMY_LANE_5, ENEMY_LANE_6, ENEMY_LANE_7, ENEMY_LANE_8])
+
+
 
 # Minimap
 MINIMAP_WIDTH = 48
@@ -655,7 +680,7 @@ def initialize_enemy_positions(rng: chex.PRNGKey) -> Tuple[chex.Array, chex.Arra
             offset_x = x_offset_array[i]
             #offset_x = offset_x
             direction = directions[i]
-            pos = jnp.array([anchor_x + offset_x, y, direction, FRAMES_DEATH_ANIMATION_ENEMY + 1])
+            pos = jnp.array([anchor_x + offset_x, y, direction, FRAMES_DEATH_ANIMATION_ENEMY + 5])
 
             is_chopper = i < chopper_count
             chopper_positions = jax.lax.cond(
@@ -688,19 +713,18 @@ def initialize_enemy_positions(rng: chex.PRNGKey) -> Tuple[chex.Array, chex.Arra
 
     return jet_positions, chopper_positions
 
-#TODO: implement just one fleet moving
 @jax.jit
 def step_enemy_movement(
         truck_positions: chex.Array,
         jet_positions: chex.Array,
         chopper_positions: chex.Array,
-        step_counter: chex.Array,
         rng: chex.PRNGKey,
         state_player_x: chex.Array,
+        local_player_offset: chex.Array,
 ) -> Tuple[chex.Array, chex.Array, chex.PRNGKey]:
     rng, direction_rng = jax.random.split(rng)
 
-    def move_enemy(pos: chex.Array, is_jet, is_in_range) -> chex.Array:
+    def move_enemy_x(pos: chex.Array, is_jet, is_in_range) -> chex.Array:
         is_active = pos[2] != 0
 
         def is_out_of_cycle(enemy_pos: chex.Array) -> chex.Array:
@@ -726,84 +750,89 @@ def step_enemy_movement(
                                   enemy_pos[0] < nearest_middle_truck - OUT_OF_CYCLE_LEFT)
 
 
-        def is_jet_function():
+        def is_in_range_function():
 
-            def out_of_cycle_jet_function():
+            def check_if_out_of_cycle_jet_function():
 
-                def out_of_cycle_jet_yes_function():
+                def jet_is_out_of_cycle_function():
 
-                    return jax.lax.cond( # out_of_cycle_jet_yes_function
+                    return jax.lax.cond( # jet_is_out_of_cycle_function
                         pos[2] == -1,
-                        lambda _: jnp.array([pos[0] + pos[2] * -1 * JET_VELOCITY_LEFT - 1, pos[1], pos[2] * -1, pos[3]], dtype=jnp.float32),
-                        lambda _: jnp.array([pos[0] + pos[2] * -1 * JET_VELOCITY_RIGHT - 1, pos[1], pos[2] * -1, pos[3]], dtype=jnp.float32),
+                        lambda _: jnp.array([pos[0] + pos[2] * -1 * JET_VELOCITY_LEFT - 1, pos[1], pos[2] * -1, pos[3]], dtype=jnp.float32), # if enemy direction is -1 and position out of bounds turn around by multiply direction with -1 (LEFT -> RIGHT) and adding the LEFT_VELOCITY * direction to the position
+                        lambda _: jnp.array([pos[0] + pos[2] * -1 * JET_VELOCITY_RIGHT - 1, pos[1], pos[2] * -1, pos[3]], dtype=jnp.float32), # if enemy direction is not -1 and position out of bounds turn around by multiply direction with -1 (RIGHT -> LEFT) and adding the RIGHT_VELOCITY * direction to the position
                         operand=None
                     )
 
-                def out_of_cycle_jet_no_function():
+                def jet_is_not_out_of_cycle_function():
 
-                    return jax.lax.cond( # out_of_cycle_jet_no_function
+                    return jax.lax.cond( # jet_is_not_out_of_cycle_function
                         pos[2] == -1,
-                        lambda _: jnp.array([pos[0] + pos[2] * JET_VELOCITY_LEFT, pos[1], pos[2], pos[3]], dtype=jnp.float32),
-                        lambda _: jnp.array([pos[0] + pos[2] * JET_VELOCITY_RIGHT, pos[1], pos[2], pos[3]], dtype=jnp.float32),
+                        lambda _: jnp.array([pos[0] + pos[2] * JET_VELOCITY_LEFT, pos[1], pos[2], pos[3]], dtype=jnp.float32), # if enemy direction is -1 and position is not out of bounds just add the LEFT_VELOCITY * direction onto the position
+                        lambda _: jnp.array([pos[0] + pos[2] * JET_VELOCITY_RIGHT, pos[1], pos[2], pos[3]], dtype=jnp.float32), # if enemy direction is not -1 and position is not out of bounds just add the RIGHT_VELOCITY * direction onto the position
                         operand=None
                     )
 
 
-                return jax.lax.cond( # is_jet_function
-                    is_out_of_cycle(pos),
-                    lambda _: out_of_cycle_jet_yes_function(),
-                    lambda _: out_of_cycle_jet_no_function(),
+                return jax.lax.cond( # is_in_range_function
+                    is_out_of_cycle(pos),                               # checks if enemy is out of cycle
+                    lambda _: jet_is_out_of_cycle_function(),           # Jet is indeed out of bounds
+                    lambda _: jet_is_not_out_of_cycle_function(),       # Jet is inside of bounds
                     operand=None
                 )
 
 
-            def out_of_cycle_chopper_function():
+            def check_if_out_of_cycle_chopper_function():
 
-                def out_of_cycle_chopper_yes_function():
+                def chopper_is_out_of_cycle_function():
 
-                    return jax.lax.cond( # out_of_cycle_chopper_yes_function
+                    return jax.lax.cond( # chopper_is_out_of_cycle_function
                         pos[2] == -1,
-                        lambda _: jnp.array([pos[0] + pos[2] * -1 * CHOPPER_VELOCITY_LEFT - 1, pos[1], pos[2] * -1, pos[3]], dtype=jnp.float32),
-                        lambda _: jnp.array([pos[0] + pos[2] * -1 * CHOPPER_VELOCITY_RIGHT - 1, pos[1], pos[2] * -1, pos[3]], dtype=jnp.float32),
+                        lambda _: jnp.array([pos[0] + pos[2] * -1 * CHOPPER_VELOCITY_LEFT - 1, pos[1], pos[2] * -1, pos[3]], dtype=jnp.float32),  # Since chopper is out of bounds, change its direction from left to right and do one step to the right + 1 to escape cycle (bounds) boundry
+                        lambda _: jnp.array([pos[0] + pos[2] * -1 * CHOPPER_VELOCITY_RIGHT - 1, pos[1], pos[2] * -1, pos[3]], dtype=jnp.float32), # Since chopper is out of bounds, change its direction from right to left and do one step to the left + 1 to escape cycle (bounds) boundry
                         operand=None
                     )
 
-                def out_of_cycle_chopper_no_function():
+                def chopper_is_not_out_of_cycle_function():
 
-                    return jax.lax.cond( # out_of_cycle_chopper_no_function
+                    return jax.lax.cond( # chopper_is_not_out_of_cycle_function
                         pos[2] == -1,
-                        lambda _: jnp.array([pos[0] + pos[2] * CHOPPER_VELOCITY_LEFT, pos[1], pos[2], pos[3]], dtype=jnp.float32),
-                        lambda _: jnp.array([pos[0] + pos[2] * CHOPPER_VELOCITY_RIGHT, pos[1], pos[2], pos[3]], dtype=jnp.float32),
+                        lambda _: jnp.array([pos[0] + pos[2] * CHOPPER_VELOCITY_LEFT, pos[1], pos[2], pos[3]], dtype=jnp.float32),  # Since chopper is inside of bounds, move chopper to the left by the defined speed
+                        lambda _: jnp.array([pos[0] + pos[2] * CHOPPER_VELOCITY_RIGHT, pos[1], pos[2], pos[3]], dtype=jnp.float32), # Since chopper is inside of bounds, move chopper to the right by the defined speed
                         operand=None
                     )
 
 
-                return jax.lax.cond( # out_of_cycle_chopper_function
+                return jax.lax.cond( # check_if_out_of_cycle_chopper_function
                     is_out_of_cycle(pos),
-                    lambda _: out_of_cycle_chopper_yes_function(),
-                    lambda _: out_of_cycle_chopper_no_function(),
+                    lambda _: chopper_is_out_of_cycle_function(),     # Chopper is indeed out of bounds
+                    lambda _: chopper_is_not_out_of_cycle_function(), # Chopper is inside of bounds
                     operand=None
                 )
 
 
-            return jax.lax.cond( # is_jet_function
+            return jax.lax.cond( # is_in_range_function
                 is_jet,
-                lambda _: out_of_cycle_jet_function(),
-                lambda _: out_of_cycle_chopper_function(),
+                lambda _: check_if_out_of_cycle_jet_function(),       # Check if jet is out of bounds
+                lambda _: check_if_out_of_cycle_chopper_function(),   # Check if chopper is out of bounds
                 operand=None
             )
 
 
+        def not_active_or_not_in_range(): # looks for in_range and active enemies from all fleets
+            return jax.lax.cond(
+                is_in_range,
+                lambda _: pos,                                                      # is dead -> does not move at all
+                lambda _: jnp.array([pos[0] - 0.5, pos[1], pos[2], pos[3]]),        # moves the same speed as trucks to the left (fleet + trucks stay freezed)
+                operand=None
+            )
+
         new_pos = jax.lax.cond(
-            is_active,
-            lambda _: is_jet_function(),
-            lambda _: pos,
+            jnp.logical_and(is_active, is_in_range),
+            lambda _: is_in_range_function(),           # Enemy is alive and is in the nearest fleet to the player
+            lambda _: not_active_or_not_in_range(),     # Enemy is either dead or not part of the nearest fleet to the player.
             operand=None
         )
 
-        #new_pos = jnp.where(is_active, jnp.array([new_x, pos[1], pos[2], pos[3]]), pos)
-
-        #pos[0] + pos[2] * JET_VELOCITY
 
         out_of_bounds = jnp.abs(state_player_x - pos[0]) > 624
         wrapped_x = pos[0] + jnp.clip(state_player_x - pos[0], -1, 1) * 1248  # + pos[2] * 0.5
@@ -813,12 +842,32 @@ def step_enemy_movement(
 
 
     def is_in_range_checker(pos: chex.Array) -> chex.Array:
-        return jnp.array(0)
+        all_middle_trucks_x = jnp.array(
+            [
+                truck_positions[1][0],
+                truck_positions[4][0],
+                truck_positions[7][0],
+                truck_positions[10][0],
+            ]
+        )
+
+        # nearest_middle_truck = x-coordinate of middle truck closest to enemy with given pos
+        distance_to_enemy = jnp.abs(all_middle_trucks_x - pos[0])
+        min_index = jnp.argmin(distance_to_enemy)
+        nearest_middle_truck = all_middle_trucks_x[min_index]
+
+        # nearest_middle_truck_player = x-coordinate of middle truck closest to player
+        distance_to_player = jnp.abs(all_middle_trucks_x - state_player_x + local_player_offset)
+        min_index_player = jnp.argmin(distance_to_player)
+        nearest_middle_truck_player = all_middle_trucks_x[min_index_player]
+
+        return jnp.where(nearest_middle_truck == nearest_middle_truck_player, jnp.array(True), jnp.array(False))
 
 
     def process_jet(i, new_positions):
         current_pos = jet_positions[i]
-        new_pos = move_enemy(current_pos, jnp.array(True), is_in_range_checker(current_pos))
+        new_pos = move_enemy_x(current_pos, jnp.array(True), is_in_range_checker(current_pos))
+        new_pos = new_pos
         return new_positions.at[i].set(new_pos)
 
     new_jet_positions = jnp.zeros_like(jet_positions)
@@ -826,7 +875,8 @@ def step_enemy_movement(
 
     def process_chopper(i, new_positions):
         current_pos = chopper_positions[i]
-        new_pos = move_enemy(current_pos, jnp.array(False), is_in_range_checker(current_pos))
+        new_pos = move_enemy_x(current_pos, jnp.array(False), is_in_range_checker(current_pos))
+        new_pos = new_pos
         return new_positions.at[i].set(new_pos)
 
     new_chopper_positions = jnp.zeros_like(chopper_positions)
@@ -1423,9 +1473,9 @@ class JaxChopperCommand(JaxEnvironment[ChopperCommandState, ChopperCommandObserv
                 state.truck_positions,
                 state.jet_positions,
                 state.chopper_positions,
-                state.step_counter,
                 state.rng_key,
                 state.player_x,
+                state.local_player_offset, # Needed to find the nearest enemy fleet correctly
             )
 
             #Update truck positions
@@ -1631,9 +1681,9 @@ class JaxChopperCommand(JaxEnvironment[ChopperCommandState, ChopperCommandObserv
                     normal_state.truck_positions,
                     normal_state.jet_positions,
                     normal_state.chopper_positions,
-                    normal_state.step_counter,
                     normal_state.rng_key,
                     normal_state.player_x,
+                    normal_state.local_player_offset
                 )
             )
 
