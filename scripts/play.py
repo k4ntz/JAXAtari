@@ -179,11 +179,14 @@ def main():
         default=42,
         help="Random seed for JAX PRNGKey and random action generation.",
     )
+    parser.add_argument(
+        "--fps",
+        type=int,
+        default=None,
+        help="Frame rate for the game.",
+    )
 
     args = parser.parse_args()
-
-    # set the frame rate
-    frame_rate = 30
 
     execute_without_rendering = False
     # Load the game environment
@@ -220,7 +223,7 @@ def main():
 
     save_keys = {}
     playing = True
-
+    frame_rate = 30
     if args.replay:
         with open(args.replay, "rb") as f:
             # Load the saved data
@@ -231,12 +234,11 @@ def main():
             seed = save_data['seed']
             loaded_frame_rate = save_data['frame_rate']
 
+            frame_rate = loaded_frame_rate
+
             # Reset environment with the saved seed
             key = jrandom.PRNGKey(seed)
             obs, state = jitted_reset(key)
-
-            # Use the saved frame rate
-            clock.tick(loaded_frame_rate)
         
         # loop over all the actions and play the game
         for action in actions_array:
@@ -255,6 +257,10 @@ def main():
         
         pygame.quit()
         sys.exit(0)
+
+    # set the frame rate
+    if args.fps is not None:
+        frame_rate = args.fps
 
     # main game loop
     while playing:
