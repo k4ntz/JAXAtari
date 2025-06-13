@@ -44,6 +44,8 @@ WIDTH = 160
 HEIGHT = 210
 SCALING_FACTOR = 3
 
+TIME = 99
+
 # define the positions of the state information
 STATE_TRANSLATOR: dict = {
     0: "player_x",
@@ -480,7 +482,7 @@ class JaxWordZapper(JaxEnvironment[WordZapperState, WordZapperObservation, WordZ
             #spawn_state=initialize_spawn_state(), 
             player_missile_position=jnp.zeros(3),  # x,y,direction
             player_zapper_position=jnp.zeros(4),
-            timer=jnp.array(99),
+            timer=jnp.array(TIME),
             step_counter=jnp.array(0),
             rng_key=key,
         )
@@ -556,7 +558,7 @@ class JaxWordZapper(JaxEnvironment[WordZapperState, WordZapperObservation, WordZ
     @partial(jax.jit, static_argnums=(0,))
     def _get_done(self, state: WordZapperState) -> bool:
         """Check if the game should end due to timer expiring."""
-        MAX_TIME = 60 * 99  # 90 seconds at 60 FPS
+        MAX_TIME = 60 * TIME  # 90 seconds at 60 FPS
         return state.timer >= MAX_TIME
 
     @partial(jax.jit, static_argnums=(0,))
@@ -587,9 +589,9 @@ class JaxWordZapper(JaxEnvironment[WordZapperState, WordZapperObservation, WordZ
             )
 
             new_timer = jnp.where(
-            (state.step_counter % 60 == 0) & (state.step_counter > 0) & (state.timer > 0),
-            state.timer - 1,
-            state.timer,
+                jnp.bitwise_and(jnp.bitwise_and((state.step_counter % 60 == 0), (state.step_counter > 0)), (state.timer > 0)),
+                state.timer - 1,
+                state.timer,
             )
 
             player_missile_position = player_missile_step(
@@ -723,8 +725,6 @@ if __name__ == "__main__":
         for event in pygame.event.get():
             if event.type == pygame.QUIT:
                 running = False
-            elif event.type == pygame.MOUSEMOTION:
-                print(event.pos)
             elif event.type == pygame.KEYDOWN:
                 if event.key == pygame.K_f:
                     frame_by_frame = not frame_by_frame
