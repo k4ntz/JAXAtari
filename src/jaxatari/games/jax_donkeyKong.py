@@ -28,9 +28,25 @@ GIRLFRIEND_X = 62
 GIRLFRIEND_Y = 17
 
 # Life Bar positions
-LIFE_BAR_1_X = 116
-LIFE_BAR_2_X = 124
+LEVEL_1_LIFE_BAR_1_X = 116
+LEVEL_1_LIFE_BAR_2_X = 124
+LEVEL_2_LIFE_BAR_1_X = 112
+LEVEL_2_LIFE_BAR_2_X = 120
 LIFE_BAR_Y = 23
+
+# Hammer default position
+LEVEL_1_HAMMER_X = 39
+LEVEL_1_HAMMER_Y = 68
+LEVEL_2_HAMMER_X = 78
+LEVEL_2_HAMMER_Y = 68
+
+# Drop Pit position
+DP_LEFT_X = 52
+DP_RIGHT_X = 104
+DP_FLOOR_2_Y = 144
+DP_FLOOR_3_Y = 116
+DP_FLOOR_4_Y = 88
+DP_FLOOR_5_Y = 60
 
 
 
@@ -39,48 +55,74 @@ def load_sprites():
     MODULE_DIR = os.path.dirname(os.path.abspath(__file__))
 
     # Load sprites
-    bg = aj.loadFrame(os.path.join(MODULE_DIR, "sprites/donkeyKong/donkeyKong_background.npy"), transpose=True)
+    bg_level_1 = aj.loadFrame(os.path.join(MODULE_DIR, "sprites/donkeyKong/donkeyKong_background_level_1.npy"), transpose=True)
+    bg_level_2 = aj.loadFrame(os.path.join(MODULE_DIR, "sprites/donkeyKong/donkeyKong_background_level_2.npy"), transpose=True)
 
     donkeyKong_pose_1 = aj.loadFrame(os.path.join(MODULE_DIR, "sprites/donkeyKong/donkeyKong1.npy"), transpose=True)
     donkeyKong_pose_2 = aj.loadFrame(os.path.join(MODULE_DIR, "sprites/donkeyKong/donkeyKong2.npy"), transpose=True)
 
     girlfriend = aj.loadFrame(os.path.join(MODULE_DIR, "sprites/donkeyKong/girlfriend.npy"), transpose=True)
 
-    life_bar = aj.loadFrame(os.path.join(MODULE_DIR, "sprites/donkeyKong/life_bar.npy"), transpose=True)
+    level_1_life_bar = aj.loadFrame(os.path.join(MODULE_DIR, "sprites/donkeyKong/level_1_life_bar.npy"), transpose=True)
+    level_2_life_bar = aj.loadFrame(os.path.join(MODULE_DIR, "sprites/donkeyKong/level_2_life_bar.npy"), transpose=True)
 
     mario_standing_right = aj.loadFrame(os.path.join(MODULE_DIR, "sprites/donkeyKong/mario_standing_right.npy"), transpose=True)
     mario_standing_left = aj.loadFrame(os.path.join(MODULE_DIR, "sprites/donkeyKong/mario_standing_left.npy"), transpose=True)
     mario_jumping_right = aj.loadFrame(os.path.join(MODULE_DIR, "sprites/donkeyKong/mario_jumping_right.npy"), transpose=True)
     mario_jumping_left = aj.loadFrame(os.path.join(MODULE_DIR, "sprites/donkeyKong/mario_jumping_left.npy"), transpose=True)
+    mario_walking_1_right = aj.loadFrame(os.path.join(MODULE_DIR, "sprites/donkeyKong/mario_walking_1_right.npy"), transpose=True)
+    mario_walking_1_left = aj.loadFrame(os.path.join(MODULE_DIR, "sprites/donkeyKong/mario_walking_1_left.npy"), transpose=True)
+    mario_walking_2_right = aj.loadFrame(os.path.join(MODULE_DIR, "sprites/donkeyKong/mario_walking_2_right.npy"), transpose=True)
+    mario_walking_2_left = aj.loadFrame(os.path.join(MODULE_DIR, "sprites/donkeyKong/mario_walking_2_left.npy"), transpose=True)
+    mario_climbing_right = aj.loadFrame(os.path.join(MODULE_DIR, "sprites/donkeyKong/mario_climbing_right.npy"), transpose=True)
+    mario_climbing_left = aj.loadFrame(os.path.join(MODULE_DIR, "sprites/donkeyKong/mario_climbing_left.npy"), transpose=True)
+
+    hammer_up_level_1 = aj.loadFrame(os.path.join(MODULE_DIR, "sprites/donkeyKong/hammer_up_level_1.npy"), transpose=True)
+    hammer_up_level_2 = aj.loadFrame(os.path.join(MODULE_DIR, "sprites/donkeyKong/hammer_up_level_2.npy"), transpose=True)
+    hammer_down_right_level_1 = aj.loadFrame(os.path.join(MODULE_DIR, "sprites/donkeyKong/hammer_down_right_level_1.npy"), transpose=True)
+    hammer_down_left_level_1 = aj.loadFrame(os.path.join(MODULE_DIR, "sprites/donkeyKong/hammer_down_left_level_1.npy"), transpose=True)
+    hammer_down_right_level_2 = aj.loadFrame(os.path.join(MODULE_DIR, "sprites/donkeyKong/hammer_down_right_level_2.npy"), transpose=True)
+    hammer_down_left_level_2 = aj.loadFrame(os.path.join(MODULE_DIR, "sprites/donkeyKong/hammer_down_left_level_2.npy"), transpose=True)
+
+    ghost = aj.loadFrame(os.path.join(MODULE_DIR, "sprites/donkeyKong/ghost.npy"), transpose=True)
+
+    drop_pit = aj.loadFrame(os.path.join(MODULE_DIR, "sprites/donkeyKong/drop_pit.npy"), transpose=True)
 
     # Convert all sprites to the expected format (add frame dimension)
-    SPRITE_BG = jnp.expand_dims(bg, axis=0)
+    SPRITES_BG = jnp.stack([bg_level_1, bg_level_2], axis=0)
     SPRITES_DONKEYKONG = jnp.stack([donkeyKong_pose_1, donkeyKong_pose_2], axis=0)
     SPRITE_GIRLFRIEND = jnp.expand_dims(girlfriend, axis=0)
-    SPRITE_LIFEBAR = jnp.expand_dims(life_bar, axis=0)
-    SPRITES_MARIO = jnp.stack([mario_standing_right, mario_standing_left, mario_jumping_right], axis=0)
+    SPRITES_LIFEBAR = jnp.stack([level_1_life_bar, level_2_life_bar], axis=0)
+    SPRITES_MARIO_STANDING = jnp.stack([mario_standing_right, mario_standing_left], axis=0)
+    SPRITES_MARIO_JUMPING = jnp.stack([mario_jumping_right, mario_jumping_left], axis=0)
+    SPRITES_MARIO_WALKING_1 = jnp.stack([mario_walking_1_right, mario_walking_1_left], axis=0)
+    SPRITES_MARIO_WALKING_2 = jnp.stack([mario_walking_2_right, mario_walking_2_left], axis=0)
+    SPRITES_MARIO_CLIMBING = jnp.stack([mario_climbing_right, mario_climbing_left], axis=0)
+    SPRITES_HAMMER_UP = jnp.stack([hammer_up_level_1, hammer_up_level_2], axis=0)
+    SPRITES_HAMMER_DOWN = jnp.stack([hammer_down_right_level_1, hammer_down_left_level_1, hammer_down_right_level_2, hammer_down_left_level_2], axis=0)
+    SPRITE_GHOST = jnp.expand_dims(ghost, axis=0)
+    SPRITE_DROP_PIT = jnp.expand_dims(drop_pit, axis=0)
 
     SPRITES_BARREL = aj.load_and_pad_digits(
         os.path.join(MODULE_DIR, "sprites/donkeyKong/barrel{}.npy"),
         num_chars=3,
     )
 
-    # SPRITE_PLAYER = jnp.expand_dims(player, axis=0)
-    # SPRITE_ENEMY = jnp.expand_dims(enemy, axis=0)
-    # SPRITE_BALL = jnp.expand_dims(ball, axis=0)
-
     return (
-        SPRITE_BG,
+        SPRITES_BG,
         SPRITES_DONKEYKONG,
         SPRITE_GIRLFRIEND,
         SPRITES_BARREL,
-        SPRITE_LIFEBAR,
-        SPRITES_MARIO,
-        # SPRITE_PLAYER,
-        # SPRITE_ENEMY,
-        # SPRITE_BALL,
-        # PLAYER_DIGIT_SPRITES,
-        # ENEMY_DIGIT_SPRITES
+        SPRITES_LIFEBAR,
+        SPRITES_MARIO_STANDING,
+        SPRITES_MARIO_JUMPING,
+        SPRITES_MARIO_WALKING_1,
+        SPRITES_MARIO_WALKING_2,
+        SPRITES_MARIO_CLIMBING,
+        SPRITES_HAMMER_UP,
+        SPRITES_HAMMER_DOWN,
+        SPRITE_GHOST,
+        SPRITE_DROP_PIT,
     )
 
 
@@ -89,17 +131,20 @@ class DonkeyKongRenderer(AtraJaxisRenderer):
 
     def __init__(self):
         (
-            self.SPRITE_BG,
+            self.SPRITES_BG,
             self.SPRITES_DONKEYKONG,
             self.SPRITE_GIRLFRIEND,
             self.SPRITES_BARREL,
-            self.SPRITE_LIFEBAR,
-            self.SPRITES_MARIO,
-            # self.SPRITE_PLAYER,
-            # self.SPRITE_ENEMY,
-            # self.SPRITE_BALL,
-            # self.PLAYER_DIGIT_SPRITES,
-            # self.ENEMY_DIGIT_SPRITES,
+            self.SPRITES_LIFEBAR,
+            self.SPRITES_MARIO_STANDING,
+            self.SPRITES_MARIO_JUMPING,
+            self.SPRITES_MARIO_WALKING_1,
+            self.SPRITES_MARIO_WALKING_2,
+            self.SPRITES_MARIO_CLIMBING,
+            self.SPRITES_HAMMER_UP,
+            self.SPRITES_HAMMER_DOWN,
+            self.SPRITE_GHOST,
+            self.SPRITE_DROP_PIT,
         ) = load_sprites()
 
     
@@ -114,11 +159,33 @@ class DonkeyKongRenderer(AtraJaxisRenderer):
         Returns:
             A JAX array representing the rendered frame.
         """
+
+        def create_bg_raster_for_level_2_regarding_drop_pits(raster):
+            frame_bg = aj.get_sprite_frame(self.SPRITES_BG, 1)
+            raster = aj.render_at(raster, 0, 0, frame_bg)
+            frame_drop_pit = aj.get_sprite_frame(self.SPRITE_DROP_PIT, 0)
+
+            # some drop pits might be already triggered - in that case, drop pits at those position will not be rendered
+            raster = aj.render_at(raster, DP_LEFT_X, DP_FLOOR_2_Y, frame_drop_pit)
+            raster = aj.render_at(raster, DP_LEFT_X, DP_FLOOR_3_Y, frame_drop_pit)
+            raster = aj.render_at(raster, DP_LEFT_X, DP_FLOOR_4_Y, frame_drop_pit)
+            raster = aj.render_at(raster, DP_LEFT_X, DP_FLOOR_5_Y, frame_drop_pit)
+            raster = aj.render_at(raster, DP_RIGHT_X, DP_FLOOR_2_Y, frame_drop_pit)
+            raster = aj.render_at(raster, DP_RIGHT_X, DP_FLOOR_3_Y, frame_drop_pit)
+            raster = aj.render_at(raster, DP_RIGHT_X, DP_FLOOR_4_Y, frame_drop_pit)
+            raster = aj.render_at(raster, DP_RIGHT_X, DP_FLOOR_5_Y, frame_drop_pit)
+            return raster            
+
         raster = jnp.zeros((WIDTH, HEIGHT, 3))
 
         # Background raster
-        frame_bg = aj.get_sprite_frame(self.SPRITE_BG, 0)
-        raster = aj.render_at(raster, 0, 0, frame_bg)
+        level = 1
+        raster = jax.lax.cond(
+            level == 1,
+            lambda _: aj.render_at(raster, 0, 0, aj.get_sprite_frame(self.SPRITES_BG, 0)),
+            lambda x: create_bg_raster_for_level_2_regarding_drop_pits(x),
+            raster 
+        )
 
         # DonkeyKong
         frame_donkeyKong = aj.get_sprite_frame(self.SPRITES_DONKEYKONG, 0)
@@ -129,9 +196,13 @@ class DonkeyKongRenderer(AtraJaxisRenderer):
         raster = aj.render_at(raster, GIRLFRIEND_X, GIRLFRIEND_Y, frame_girlfriend)
 
         # Life Bars - depending if lifes are still given 
-        frame_life_bar = aj.get_sprite_frame(self.SPRITE_LIFEBAR, 0)
-        raster = aj.render_at(raster, LIFE_BAR_1_X, LIFE_BAR_Y, frame_life_bar)
-        raster = aj.render_at(raster, LIFE_BAR_2_X, LIFE_BAR_Y, frame_life_bar)
+        frame_life_bar = aj.get_sprite_frame(self.SPRITES_LIFEBAR, 0)
+        raster = aj.render_at(raster, LEVEL_1_LIFE_BAR_1_X, LIFE_BAR_Y, frame_life_bar)
+        raster = aj.render_at(raster, LEVEL_1_LIFE_BAR_2_X, LIFE_BAR_Y, frame_life_bar)
+
+        # Hammer
+        frame_hammer = aj.get_sprite_frame(self.SPRITES_HAMMER_UP, 0)
+        raster = aj.render_at(raster, LEVEL_1_HAMMER_X, LEVEL_1_HAMMER_Y, frame_hammer)
 
 
         # Barrels - example for now
@@ -142,15 +213,47 @@ class DonkeyKongRenderer(AtraJaxisRenderer):
         frame_barrel = aj.get_sprite_frame(self.SPRITES_BARREL, 2)
         raster = aj.render_at(raster, 5, 25, frame_barrel)
 
-        # Mario
-        frame_mario = aj.get_sprite_frame(self.SPRITES_MARIO, 0)
+        # Mario - example raster on the left of the screen
+        frame_mario = aj.get_sprite_frame(self.SPRITES_MARIO_STANDING, 0)
         raster = aj.render_at(raster, 5, 35, frame_mario)
-        frame_mario = aj.get_sprite_frame(self.SPRITES_MARIO, 1)
+        frame_mario = aj.get_sprite_frame(self.SPRITES_MARIO_STANDING, 1)
         raster = aj.render_at(raster, 15, 35, frame_mario)
-        frame_mario = aj.get_sprite_frame(self.SPRITES_MARIO, 2)
+
+        frame_mario = aj.get_sprite_frame(self.SPRITES_MARIO_JUMPING, 0)
         raster = aj.render_at(raster, 5, 55, frame_mario)
-        # frame_mario = aj.get_sprite_frame(self.SPRITES_MARIO, 3)
-        # raster = aj.render_at(raster, 15, 55, frame_mario)
+        frame_mario = aj.get_sprite_frame(self.SPRITES_MARIO_JUMPING, 1)
+        raster = aj.render_at(raster, 15, 55, frame_mario)
+
+        frame_mario = aj.get_sprite_frame(self.SPRITES_MARIO_WALKING_1, 0)
+        raster = aj.render_at(raster, 5, 75, frame_mario)
+        frame_mario = aj.get_sprite_frame(self.SPRITES_MARIO_WALKING_1, 1)
+        raster = aj.render_at(raster, 15, 75, frame_mario)
+
+        frame_mario = aj.get_sprite_frame(self.SPRITES_MARIO_WALKING_2, 0)
+        raster = aj.render_at(raster, 5, 95, frame_mario)
+        frame_mario = aj.get_sprite_frame(self.SPRITES_MARIO_WALKING_2, 1)
+        raster = aj.render_at(raster, 15, 95, frame_mario)
+
+        frame_mario = aj.get_sprite_frame(self.SPRITES_MARIO_CLIMBING, 0)
+        raster = aj.render_at(raster, 5, 115, frame_mario)
+        frame_mario = aj.get_sprite_frame(self.SPRITES_MARIO_CLIMBING, 1)
+        raster = aj.render_at(raster, 15, 115, frame_mario)
+
+        # Hammer down examples
+        frame_hammer_down = aj.get_sprite_frame(self.SPRITES_HAMMER_DOWN, 0)
+        raster = aj.render_at(raster, 5, 135, frame_hammer_down)
+        frame_hammer_down = aj.get_sprite_frame(self.SPRITES_HAMMER_DOWN, 1)
+        raster = aj.render_at(raster, 15, 135, frame_hammer_down)
+        frame_hammer_up_level_2 = aj.get_sprite_frame(self.SPRITES_HAMMER_UP, 1)
+        raster = aj.render_at(raster, 5, 145, frame_hammer_up_level_2)
+        frame_hammer_down = aj.get_sprite_frame(self.SPRITES_HAMMER_DOWN, 2)
+        raster = aj.render_at(raster, 5, 155, frame_hammer_down)
+        frame_hammer_down = aj.get_sprite_frame(self.SPRITES_HAMMER_DOWN, 3)
+        raster = aj.render_at(raster, 15, 155, frame_hammer_down)
+
+        # Ghost
+        frame_ghost = aj.get_sprite_frame(self.SPRITE_GHOST, 0)
+        raster = aj.render_at(raster, 5, 165, frame_ghost)
 
         return raster
 
