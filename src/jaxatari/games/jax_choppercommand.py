@@ -484,50 +484,50 @@ def check_missile_collisions(
 
 
 @jax.jit
-def check_player_collision_enemy(
+def check_player_collision_entity(
     player_x: chex.Array,
     player_y: chex.Array,
     player_velocity: chex.Array,
-    enemy_list: chex.Array,
-    enemy_size: Tuple[int, int],
+    entity_list: chex.Array,
+    entity_size: Tuple[int, int],
     death_threshold: chex.Array,
     ) -> Tuple[chex.Array, chex.Array]:
 
     player_pos = jnp.array([player_x, player_y])
-    offset = (PLAYER_SIZE[0] // 2 - enemy_size[0] // 2) - (player_velocity * DISTANCE_WHEN_FLYING)
+    offset = (PLAYER_SIZE[0] // 2 - entity_size[0] // 2) - (player_velocity * DISTANCE_WHEN_FLYING)
 
     def check_single(i, carry):
-        any_collision_inner, updated_enemies = carry
+        any_collision_inner, updated_entities = carry
 
-        world_x, world_y = enemy_list[i, 0], enemy_list[i, 1]
-        direction_flag   = enemy_list[i, 3]
-        is_active = direction_flag > death_threshold
+        world_x, world_y = entity_list[i, 0], entity_list[i, 1]
+        death_timer = entity_list[i, 3]
+        is_active = death_timer > death_threshold
 
         # Passe die Position an, wie sie auch im Renderer korrigiert wird
-        adjusted_enemy_pos = jnp.array([world_x + offset, world_y])
+        adjusted_entity_pos = jnp.array([world_x + offset, world_y])
 
         # Prüfe Kollision nur bei aktiven Gegnern
         collision = jnp.logical_and(
             is_active,
-            check_collision_single(player_pos, PLAYER_SIZE, adjusted_enemy_pos, enemy_size)
+            check_collision_single(player_pos, PLAYER_SIZE, adjusted_entity_pos, entity_size)
         )
 
         # Markiere getroffenen Gegner
-        new_enemy = jnp.where(collision, kill_entity(enemy_list[i], death_threshold), enemy_list[i])
-        updated_enemies = updated_enemies.at[i].set(new_enemy)
+        new_entity = jnp.where(collision, kill_entity(entity_list[i], death_threshold), entity_list[i])
+        updated_entities = updated_entities.at[i].set(new_entity)
 
         any_collision_inner = jnp.logical_or(any_collision_inner, collision)
-        return any_collision_inner, updated_enemies
+        return any_collision_inner, updated_entities
 
-    initial_carry = (False, enemy_list)
-    any_collision, updated_enemy_list = jax.lax.fori_loop(
+    initial_carry = (False, entity_list)
+    any_collision, updated_entity_list = jax.lax.fori_loop(
         0,
-        enemy_list.shape[0],
+        entity_list.shape[0],
         check_single,
         initial_carry
     )
 
-    return any_collision, updated_enemy_list
+    return any_collision, updated_entity_list
 
 @jax.jit
 def is_slot_empty(pos: chex.Array) -> chex.Array:
@@ -656,10 +656,8 @@ def step_enemy_movement(
     return new_jet_positions, new_chopper_positions, rng
 
 
-
-
-def update_entity_death(entity_array, death_timer):
-    def update_enemy(i, carry):
+def update_entity_death(entity_array, death_timer, is_truck):
+    def update_entity(i, carry):
         entities = carry
         entity = entities[i]
         direction, timer = entity[2], entity[3]
@@ -668,14 +666,19 @@ def update_entity_death(entity_array, death_timer):
         new_timer = jnp.where(jnp.logical_and(timer > 0, timer <= death_timer), timer - 1, timer)
 
         #Nach Ablauf von death_timer Enemy deaktivieren/entfernen
-        new_entity = jnp.where(new_timer == 0,
-            jnp.array([0, 0, 0, 0], dtype=entity.dtype),
+        new_entity = jnp.where(
+            new_timer == 0,
+                    jnp.where(
+                        is_truck,
+                        jnp.array([entity[0], entity[1], 0, 0], dtype=entity.dtype),
+                        jnp.array([0, 0, 0, 0], dtype=entity.dtype)
+                    ),
             entity.at[3].set(new_timer)
         )
 
         return entities.at[i].set(new_entity)
 
-    return jax.lax.fori_loop(0, entity_array.shape[0], update_enemy, entity_array)
+    return jax.lax.fori_loop(0, entity_array.shape[0], update_entity, entity_array)
 
 
 @jax.jit
@@ -705,10 +708,7 @@ def step_truck_movement(
 
     # TODO: simplify if possible
     def move_single_truck(truck_pos):
-        # Only process active trucks (direction != 0)
-        is_active = jnp.logical_or(truck_pos[2] != 0, truck_pos[3] != 0)
-
-        movement_x = truck_pos[2] * 0.5  # Geschwindigkeit 0.5 pro Frame
+        movement_x = -1 * 0.5  # Geschwindigkeit 0.5 pro Frame, egal ob tot oder nicht, weil wir die Position noch für die enemy positions brauchen
 
         out_of_bounds = jnp.abs(state_player_x - truck_pos[0]) > 624
 
@@ -718,11 +718,7 @@ def step_truck_movement(
             truck_pos[0] + movement_x,
         )
 
-        new_pos = jnp.where(
-            is_active,
-            jnp.array([new_x, truck_pos[1], truck_pos[2], truck_pos[3]]),
-            jnp.zeros(4),
-        )
+        new_pos = jnp.array([new_x, truck_pos[1], truck_pos[2], truck_pos[3]])
 
         return new_pos
 
@@ -1309,8 +1305,6 @@ class JaxChopperCommand(JaxEnvironment[ChopperCommandState, ChopperCommandObserv
                 CHOPPER_SIZE
             )
 
-            new_truck_positions = state.truck_positions
-
             (
                 new_jet_positions,
                 new_chopper_positions,
@@ -1322,13 +1316,13 @@ class JaxChopperCommand(JaxEnvironment[ChopperCommandState, ChopperCommandObserv
 
             new_truck_positions = (
                 step_truck_movement(
-                    new_truck_positions,
+                    state.truck_positions,
                     state.player_x,
                 )
             )
 
             # Check player collision
-            player_collision_jet, player_collision_new_jet_pos = check_player_collision_enemy(
+            player_collision_jet, player_collision_new_jet_pos = check_player_collision_entity(
                 new_player_x,
                 new_player_y,
                 new_player_velocity_x,
@@ -1338,7 +1332,7 @@ class JaxChopperCommand(JaxEnvironment[ChopperCommandState, ChopperCommandObserv
             )
             new_jet_positions = player_collision_new_jet_pos
 
-            player_collision_chopper, player_collision_new_chopper_pos = check_player_collision_enemy(
+            player_collision_chopper, player_collision_new_chopper_pos = check_player_collision_entity(
                 new_player_x,
                 new_player_y,
                 new_player_velocity_x,
@@ -1348,7 +1342,7 @@ class JaxChopperCommand(JaxEnvironment[ChopperCommandState, ChopperCommandObserv
             )
             new_chopper_positions = player_collision_new_chopper_pos
 
-            player_collision_truck, player_collision_new_truck_pos = check_player_collision_enemy(
+            player_collision_truck, player_collision_new_truck_pos = check_player_collision_entity(
                 new_player_x,
                 new_player_y,
                 new_player_velocity_x,
@@ -1367,9 +1361,9 @@ class JaxChopperCommand(JaxEnvironment[ChopperCommandState, ChopperCommandObserv
             )
 
             # Update enemy death
-            new_chopper_positions = update_entity_death(new_chopper_positions, FRAMES_DEATH_ANIMATION_ENEMY)
-            new_jet_positions = update_entity_death(new_jet_positions, FRAMES_DEATH_ANIMATION_ENEMY)
-            new_truck_positions = update_entity_death(new_truck_positions, FRAMES_DEATH_ANIMATION_TRUCK)
+            new_chopper_positions = update_entity_death(new_chopper_positions, FRAMES_DEATH_ANIMATION_ENEMY, jnp.array(False))
+            new_jet_positions = update_entity_death(new_jet_positions, FRAMES_DEATH_ANIMATION_ENEMY, jnp.array(False))
+            new_truck_positions = update_entity_death(new_truck_positions, FRAMES_DEATH_ANIMATION_TRUCK, jnp.array(True))
 
             # Update score with collision points
             new_score = jnp.where(player_collision_jet, new_score + SCORE_PER_JET_KILL, new_score)
