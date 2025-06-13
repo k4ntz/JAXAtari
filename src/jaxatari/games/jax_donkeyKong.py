@@ -48,6 +48,12 @@ DP_FLOOR_3_Y = 116
 DP_FLOOR_4_Y = 88
 DP_FLOOR_5_Y = 60
 
+# Digits position
+DIGIT_Y = 7
+FIRST_DIGIT_X = 96
+DISTANCE_DIGIT_X = 8
+NUMBER_OF_DIGITS_FOR_GAME_SCORE = 6
+NUMBER_OF_DIGITS_FOR_TIMER_SCORE = 4
 
 
 def load_sprites():
@@ -108,6 +114,15 @@ def load_sprites():
         num_chars=3,
     )
 
+    SPRITES_BLUE_DIGITS = aj.load_and_pad_digits(
+        os.path.join(MODULE_DIR, "sprites/donkeyKong/digits/blue_score_{}.npy"),
+        num_chars=10,
+    )
+    SPRITES_YELLOW_DIGITS = aj.load_and_pad_digits(
+        os.path.join(MODULE_DIR, "sprites/donkeyKong/digits/yellow_score_{}.npy"),
+        num_chars=10,
+    )
+
     return (
         SPRITES_BG,
         SPRITES_DONKEYKONG,
@@ -123,6 +138,8 @@ def load_sprites():
         SPRITES_HAMMER_DOWN,
         SPRITE_GHOST,
         SPRITE_DROP_PIT,
+        SPRITES_BLUE_DIGITS,
+        SPRITES_YELLOW_DIGITS,
     )
 
 
@@ -145,6 +162,8 @@ class DonkeyKongRenderer(AtraJaxisRenderer):
             self.SPRITES_HAMMER_DOWN,
             self.SPRITE_GHOST,
             self.SPRITE_DROP_PIT,
+            self.SPRITES_BLUE_DIGITS,
+            self.SPRITES_YELLOW_DIGITS,
         ) = load_sprites()
 
     
@@ -204,6 +223,26 @@ class DonkeyKongRenderer(AtraJaxisRenderer):
         frame_hammer = aj.get_sprite_frame(self.SPRITES_HAMMER_UP, 0)
         raster = aj.render_at(raster, LEVEL_1_HAMMER_X, LEVEL_1_HAMMER_Y, frame_hammer)
 
+
+        # Scores
+        score = 5000
+        show_game_score = False
+        def create_score_in_raster(i, raster):
+            digit = score // (10 ** i)
+            pos_x = FIRST_DIGIT_X - DISTANCE_DIGIT_X * i
+            pos_y = DIGIT_Y
+            return jax.lax.cond(
+                show_game_score == True,
+                lambda _: aj.render_at(raster, pos_x, pos_y, aj.get_sprite_frame(self.SPRITES_BLUE_DIGITS, digit)),
+                lambda _: aj.render_at(raster, pos_x, pos_y, aj.get_sprite_frame(self.SPRITES_YELLOW_DIGITS, digit)),
+                operand=None
+            )
+        raster = jax.lax.cond(
+            show_game_score == True,
+            lambda x: jax.lax.fori_loop(0, NUMBER_OF_DIGITS_FOR_GAME_SCORE, create_score_in_raster, x),
+            lambda x: jax.lax.fori_loop(0, NUMBER_OF_DIGITS_FOR_TIMER_SCORE, create_score_in_raster, x),
+            raster
+        )
 
         # Barrels - example for now
         frame_barrel = aj.get_sprite_frame(self.SPRITES_BARREL, 0)
