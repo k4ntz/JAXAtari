@@ -27,6 +27,10 @@ WIDTH = 160
 HEIGHT = 192
 SCALING_FACTOR = 4
 
+# difficuly
+#GAME_DIFFICULTY = 1
+GAME_DIFFICULTY = 2
+
 # Chopper Constants TODO: Tweak these to match feeling of real game
 ACCEL = 0.03  # DEFAULT: 0.05 | how fast the chopper accelerates
 FRICTION = 0.02  # DEFAULT: 0.02 | how fast the chopper decelerates
@@ -143,25 +147,27 @@ TRUCK_SPAWN_POSITIONS = 156
 
 
 class ChopperCommandState(NamedTuple):
-    player_x: chex.Array                 # x-coordinate of the player’s chopper in world space
-    player_y: chex.Array                 # y-coordinate of the player’s chopper in world space
-    player_velocity_x: chex.Array        # horizontal velocity (momentum) of the player’s chopper; positive = moving right, negative = moving left
-    local_player_offset: chex.Array      # offset of the player’s chopper from the screen center (used for scrolling logic and chopper’s on-screen position)
-    player_facing_direction: chex.Array  # current facing direction of the player’s chopper: -1 = facing left, +1 = facing right, 0 = invalid
-    score: chex.Array                    # current game score/points
-    lives: chex.Array                    # number of remaining lives for the player
-    save_lives: chex.Array               # keeps track of how often the player was granted a life for reaching another 10000 score points
-    truck_positions: chex.Array          # shape (MAX_TRUCKS, 4): for each truck, stores [x, y, direction (active flag), death_timer]
-    jet_positions: chex.Array            # shape (MAX_JETS, 4): for each enemy jet, stores [x, y, direction (active flag), death_timer]
-    chopper_positions: chex.Array        # shape (MAX_ENEMIES, 4): for each enemy chopper, stores [x, y, direction (active flag), death_timer]
-    enemy_missile_positions: chex.Array  # shape (MAX_MISSILES, 4): for each enemy missile, stores [x, y, direction, did_split_flag]
-    player_missile_positions: chex.Array # shape (MAX_MISSILES, 4): for each player missile, stores [x, y, direction, x_coordinate of spawn point]
-    player_missile_cooldown: chex.Array  # cooldown timer until the player can fire the next missile
-    player_collision: chex.Array         # boolean flag indicating whether the player has collided this frame
-    step_counter: chex.Array             # total number of game ticks/frames elapsed so far
-    pause_timer: chex.Array              # counter for how many frames remain in the game pause before respawning; 0 = fully dead, respawn initiated, 1 = either no lives left, infinite pause or ->, 1 - DEATH_PAUSE_FRAMES: counting down for the duration of pause, DEATH_PAUSE_FRAMES + 1 = death_pause, DEATH_PAUSE_FRAMES + 2 = no_move_pause
-    obs_stack: chex.ArrayTree            # stacked sequence of past observations (for frame‐stacking in the agent)
-    rng_key: chex.PRNGKey                # current PRNG key for any stochastic operations (e.g., random enemy spawns)
+    player_x: chex.Array                    # x-coordinate of the player’s chopper in world space
+    player_y: chex.Array                    # y-coordinate of the player’s chopper in world space
+    player_velocity_x: chex.Array           # horizontal velocity (momentum) of the player’s chopper; positive = moving right, negative = moving left
+    local_player_offset: chex.Array         # offset of the player’s chopper from the screen center (used for scrolling logic and chopper’s on-screen position)
+    player_facing_direction: chex.Array     # current facing direction of the player’s chopper: -1 = facing left, +1 = facing right, 0 = invalid
+    score: chex.Array                       # current game score/points
+    lives: chex.Array                       # number of remaining lives for the player
+    save_lives: chex.Array                  # keeps track of how often the player was granted a life for reaching another 10000 score points
+    truck_positions: chex.Array             # shape (MAX_TRUCKS, 4): for each truck, stores [x, y, direction (active flag), death_timer]
+    jet_positions: chex.Array               # shape (MAX_JETS, 4): for each enemy jet, stores [x, y, direction (active flag), death_timer]
+    chopper_positions: chex.Array           # shape (MAX_ENEMIES, 4): for each enemy chopper, stores [x, y, direction (active flag), death_timer]
+    enemy_missile_positions: chex.Array     # shape (MAX_MISSILES, 4): for each enemy missile, stores [x, y, direction, did_split_flag]
+    player_missile_positions: chex.Array    # shape (MAX_MISSILES, 4): for each player missile, stores [x, y, direction, x_coordinate of spawn point]
+    player_missile_cooldown: chex.Array     # cooldown timer until the player can fire the next missile
+    player_collision: chex.Array            # boolean flag indicating whether the player has collided this frame
+    step_counter: chex.Array                # total number of game ticks/frames elapsed so far
+    pause_timer: chex.Array                 # counter for how many frames remain in the game pause before respawning; 0 = fully dead, respawn initiated, 1 = either no lives left, infinite pause or ->, 1 - DEATH_PAUSE_FRAMES: counting down for the duration of pause, DEATH_PAUSE_FRAMES + 1 = death_pause, DEATH_PAUSE_FRAMES + 2 = no_move_pause
+    obs_stack: chex.ArrayTree               # stacked sequence of past observations (for frame‐stacking in the agent)
+    rng_key: chex.PRNGKey                   # current PRNG key for any stochastic operations (e.g., random enemy spawns)
+    difficulty: chex.Array                  # states the difficulty which can be either 1 or 2
+    enemy_speed: chex.Array                 # states the speed of the enemies e.g. all enemies are killed
 
 class EntityPosition(NamedTuple):
     x: jnp.ndarray
@@ -714,6 +720,10 @@ def initialize_enemy_positions(rng: chex.PRNGKey) -> Tuple[chex.Array, chex.Arra
     return jet_positions, chopper_positions
 
 @jax.jit
+def emit_enemy_speed(speed: chex.Array) -> chex.Array:
+    return True
+
+@jax.jit
 def step_enemy_movement(
         truck_positions: chex.Array,
         jet_positions: chex.Array,
@@ -721,11 +731,23 @@ def step_enemy_movement(
         rng: chex.PRNGKey,
         state_player_x: chex.Array,
         local_player_offset: chex.Array,
+        difficulty: chex.Array,
+        enemy_speed: chex.Array,
 ) -> Tuple[chex.Array, chex.Array, chex.PRNGKey]:
 
     rng0, direction_rng = jax.random.split(rng)
     rng1, process_jet_rng = jax.random.split(rng0)
     return_rng, process_chopper_rng = jax.random.split(rng1)
+
+    def emit_velocity() -> chex.Array:
+        difficulty_value = jnp.where(difficulty == 1, 1, 1.5)
+        jet_speed_right = (JET_VELOCITY_RIGHT + enemy_speed) * difficulty_value
+        jet_speed_left = (JET_VELOCITY_RIGHT + enemy_speed) * difficulty_value
+        chopper_speed_right = (CHOPPER_VELOCITY_RIGHT + enemy_speed) * difficulty_value
+        chopper_speed_left = (CHOPPER_VELOCITY_LEFT + enemy_speed) * difficulty_value
+
+        return jnp.array([jet_speed_right, jet_speed_left, chopper_speed_right, chopper_speed_left])
+
 
     def move_enemy_x(pos: chex.Array, is_jet, move_x_is_in_range) -> chex.Array:
         is_active = pos[2] != 0
@@ -759,8 +781,8 @@ def step_enemy_movement(
 
                     return jax.lax.cond( # jet_is_out_of_cycle_function
                         pos[2] == -1,
-                        lambda _: jnp.array([pos[0] + pos[2] * -1 * JET_VELOCITY_LEFT - 1, pos[1], pos[2] * -1, pos[3]], dtype=jnp.float32), # if enemy direction is -1 and position out of bounds turn around by multiply direction with -1 (LEFT -> RIGHT) and adding the LEFT_VELOCITY * direction to the position
-                        lambda _: jnp.array([pos[0] + pos[2] * -1 * JET_VELOCITY_RIGHT - 1, pos[1], pos[2] * -1, pos[3]], dtype=jnp.float32), # if enemy direction is not -1 and position out of bounds turn around by multiply direction with -1 (RIGHT -> LEFT) and adding the RIGHT_VELOCITY * direction to the position
+                        lambda _: jnp.array([pos[0] + pos[2] * -1 * emit_velocity()[1] - 1, pos[1], pos[2] * -1, pos[3]], dtype=jnp.float32), # if enemy direction is -1 and position out of bounds turn around by multiply direction with -1 (LEFT -> RIGHT) and adding the LEFT_VELOCITY * direction to the position
+                        lambda _: jnp.array([pos[0] + pos[2] * -1 * emit_velocity()[0] - 1, pos[1], pos[2] * -1, pos[3]], dtype=jnp.float32), # if enemy direction is not -1 and position out of bounds turn around by multiply direction with -1 (RIGHT -> LEFT) and adding the RIGHT_VELOCITY * direction to the position
                         operand=None
                     )
 
@@ -768,8 +790,8 @@ def step_enemy_movement(
 
                     return jax.lax.cond( # jet_is_not_out_of_cycle_function
                         pos[2] == -1,
-                        lambda _: jnp.array([pos[0] + pos[2] * JET_VELOCITY_LEFT, pos[1], pos[2], pos[3]], dtype=jnp.float32), # if enemy direction is -1 and position is not out of bounds just add the LEFT_VELOCITY * direction onto the position
-                        lambda _: jnp.array([pos[0] + pos[2] * JET_VELOCITY_RIGHT, pos[1], pos[2], pos[3]], dtype=jnp.float32), # if enemy direction is not -1 and position is not out of bounds just add the RIGHT_VELOCITY * direction onto the position
+                        lambda _: jnp.array([pos[0] + pos[2] * emit_velocity()[1], pos[1], pos[2], pos[3]], dtype=jnp.float32), # if enemy direction is -1 and position is not out of bounds just add the LEFT_VELOCITY * direction onto the position
+                        lambda _: jnp.array([pos[0] + pos[2] * emit_velocity()[0], pos[1], pos[2], pos[3]], dtype=jnp.float32), # if enemy direction is not -1 and position is not out of bounds just add the RIGHT_VELOCITY * direction onto the position
                         operand=None
                     )
 
@@ -788,8 +810,8 @@ def step_enemy_movement(
 
                     return jax.lax.cond( # chopper_is_out_of_cycle_function
                         pos[2] == -1,
-                        lambda _: jnp.array([pos[0] + pos[2] * -1 * CHOPPER_VELOCITY_LEFT - 1, pos[1], pos[2] * -1, pos[3]], dtype=jnp.float32),  # Since chopper is out of bounds, change its direction from left to right and do one step to the right + 1 to escape cycle (bounds) boundry
-                        lambda _: jnp.array([pos[0] + pos[2] * -1 * CHOPPER_VELOCITY_RIGHT - 1, pos[1], pos[2] * -1, pos[3]], dtype=jnp.float32), # Since chopper is out of bounds, change its direction from right to left and do one step to the left + 1 to escape cycle (bounds) boundry
+                        lambda _: jnp.array([pos[0] + pos[2] * -1 * emit_velocity()[3] - 1, pos[1], pos[2] * -1, pos[3]], dtype=jnp.float32),  # Since chopper is out of bounds, change its direction from left to right and do one step to the right + 1 to escape cycle (bounds) boundry
+                        lambda _: jnp.array([pos[0] + pos[2] * -1 * emit_velocity()[2] - 1, pos[1], pos[2] * -1, pos[3]], dtype=jnp.float32), # Since chopper is out of bounds, change its direction from right to left and do one step to the left + 1 to escape cycle (bounds) boundry
                         operand=None
                     )
 
@@ -797,8 +819,8 @@ def step_enemy_movement(
 
                     return jax.lax.cond( # chopper_is_not_out_of_cycle_function
                         pos[2] == -1,
-                        lambda _: jnp.array([pos[0] + pos[2] * CHOPPER_VELOCITY_LEFT, pos[1], pos[2], pos[3]], dtype=jnp.float32),  # Since chopper is inside of bounds, move chopper to the left by the defined speed
-                        lambda _: jnp.array([pos[0] + pos[2] * CHOPPER_VELOCITY_RIGHT, pos[1], pos[2], pos[3]], dtype=jnp.float32), # Since chopper is inside of bounds, move chopper to the right by the defined speed
+                        lambda _: jnp.array([pos[0] + pos[2] * emit_velocity()[3], pos[1], pos[2], pos[3]], dtype=jnp.float32),  # Since chopper is inside of bounds, move chopper to the left by the defined speed
+                        lambda _: jnp.array([pos[0] + pos[2] * emit_velocity()[2], pos[1], pos[2], pos[3]], dtype=jnp.float32), # Since chopper is inside of bounds, move chopper to the right by the defined speed
                         operand=None
                     )
 
@@ -1497,6 +1519,8 @@ class JaxChopperCommand(JaxEnvironment[ChopperCommandState, ChopperCommandObserv
             pause_timer=jnp.array(DEATH_PAUSE_FRAMES + 2).astype(jnp.int32),    # The game starts in the no_move_pause (DEATH_PAUSE_FRAMES + 2) to allow for visual startup or intro.
             rng_key=key,                                                        # Pseudo random number generator seed.
             obs_stack=jnp.zeros((self.frame_stack_size, self.obs_size)),        # Observation stack starts empty (zeros). Used for agent state.
+            difficulty=jnp.array(GAME_DIFFICULTY).astype(jnp.float32),
+            enemy_speed=jnp.array(0).astype(jnp.float32),
         )
 
         initial_obs = self._get_observation(reset_state)
@@ -1543,6 +1567,8 @@ class JaxChopperCommand(JaxEnvironment[ChopperCommandState, ChopperCommandObserv
                 state.rng_key,
                 state.player_x,
                 state.local_player_offset, # Needed to find the nearest enemy fleet correctly
+                state.difficulty,
+                state.enemy_speed,
             )
 
             #Update truck positions
@@ -1718,6 +1744,8 @@ class JaxChopperCommand(JaxEnvironment[ChopperCommandState, ChopperCommandObserv
                 pause_timer=state.pause_timer,
                 rng_key=new_rng_key,
                 obs_stack=state.obs_stack,  # Include obs_stack in the state
+                difficulty=state.difficulty,
+                enemy_speed=state.enemy_speed,
             )
 
             return inner_normal_returned_state
@@ -1750,7 +1778,9 @@ class JaxChopperCommand(JaxEnvironment[ChopperCommandState, ChopperCommandObserv
                     normal_state.chopper_positions,
                     normal_state.rng_key,
                     normal_state.player_x,
-                    normal_state.local_player_offset
+                    normal_state.local_player_offset,
+                    normal_state.difficulty,
+                    normal_state.enemy_speed,
                 )
             )
 
@@ -1890,6 +1920,7 @@ class JaxChopperCommand(JaxEnvironment[ChopperCommandState, ChopperCommandObserv
             jet_positions=merged_jet_pos,
             chopper_positions=merged_chop_pos,
             truck_positions=merged_truck_pos,
+            enemy_speed=soft_reset_state.enemy_speed,
         )
 
         # Pause-Initialisierung und Update
@@ -1918,6 +1949,11 @@ class JaxChopperCommand(JaxEnvironment[ChopperCommandState, ChopperCommandObserv
                 jnp.logical_and(all_enemies_dead, step_state.pause_timer == 0),
                 hard_reset_state.truck_positions,
                 respawn_state.truck_positions
+            ),
+            enemy_speed=jnp.where(
+                jnp.logical_and(all_enemies_dead, step_state.pause_timer == 0),
+                soft_reset_state.enemy_speed + 0.5,
+                respawn_state.enemy_speed
             )
         )
 
