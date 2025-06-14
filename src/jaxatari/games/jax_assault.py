@@ -24,14 +24,19 @@ Things that have been implemented:
 - Enemy spawning
 
 Things that need to be implemented:
-- Heat tracking
-- Enemy invisibility
-- Setting correct constants for the game
-- Game over conditions
-- Stop spawning enemies when 10 have been spawned
-- Game accurate player projectile movement
-- Delays for enemy projectile firing
-- Enemy random direction changes
+- Enemy random direction changes Ema
+- Enemy invisibility Ema
+- Stop spawning enemies when 10 have been spawned Ema
+- Delays for enemy projectile firing Ema
+
+
+- Heat tracking Milan
+- Game accurate player projectile movement Milan
+- Game over conditions Milan
+- Setting correct constants for the game Milan
+
+
+
 
 Things that "should" be implemented:
 - Use arrays for enemy positions and states instead of individual variables
@@ -179,6 +184,7 @@ class AssaultState(NamedTuple):
     step_counter: chex.Array
     enemies_killed: chex.Array
     current_stage:  chex.Array
+    enemies_spawned_this_stage: chex.Array
 
 
 class AssaultObservation(NamedTuple):
@@ -400,11 +406,15 @@ def enemy_step(state):
         has_match = jnp.any(matches)
         idx = jnp.argmax(matches)  # Returns 0 if no match
         
+        can_spawn_more = jnp.less(state.enemies_spawned_this_stage, 10)
+
+
         # Determine which action to take - only move down if no other enemy has moved
         should_spawn = jnp.logical_and.reduce(jnp.array([
             jnp.logical_and(is_inactive, occupied_y[0] == 0),
             jnp.logical_and(has_moved == 0, allow_y_movement),
-            jnp.logical_not(linked_enemy_lives)
+            jnp.logical_not(linked_enemy_lives),
+            can_spawn_more
         ]))
         
         should_move_down = jnp.logical_and(
@@ -467,14 +477,22 @@ def enemy_step(state):
     # Update e1_x with random_x if needed
     e1_x = jnp.where(has_spawned >= 0, state.mothership_x, e1_x)
     e1_split = jnp.where(has_spawned == 1, 0, state.enemy_1_split)
+    enemy_1_spawned = jnp.where(has_spawned == 1, 1, 0) # Count spawns for enemy 1
 
     e2_y, occupied_y, has_moved_down, has_spawned = move_enemy_y(state.enemy_2_y, occupied_y, has_moved_down, jnp.less_equal(state.enemy_5_y, HEIGHT))
     e2_x = jnp.where(has_spawned >= 0, state.mothership_x, e2_x)
     e2_split = jnp.where(has_spawned == 1, 0, state.enemy_2_split)
+    enemy_2_spawned = jnp.where(has_spawned == 1, 1, 0) # Count spawns for enemy 2
+
 
     e3_y, occupied_y, has_moved_down, has_spawned = move_enemy_y(state.enemy_3_y, occupied_y, has_moved_down, jnp.less_equal(state.enemy_6_y, HEIGHT))
     e3_x = jnp.where(has_spawned >= 0, state.mothership_x, e3_x)
     e3_split = jnp.where(has_spawned == 1, 0, state.enemy_3_split)
+    enemy_3_spawned = jnp.where(has_spawned == 1, 1, 0) # Count spawns for enemy 3
+
+    total_spawned_this_frame = enemy_1_spawned + enemy_2_spawned + enemy_3_spawned
+    new_enemies_spawned_this_stage = state.enemies_spawned_this_stage + total_spawned_this_frame
+
     
     e4_y, occupied_y, has_moved_down, has_spawned = move_enemy_y(state.enemy_4_y, occupied_y, has_moved_down, True)
     #e4_x = jnp.where(has_spawned >= 0, state.mothership_x, e4_x)
@@ -496,7 +514,8 @@ def enemy_step(state):
         enemy_5_x=e5_x, enemy_5_y=e5_y, enemy_5_dir=e5_dir,
         enemy_6_x=e6_x, enemy_6_y=e6_y, enemy_6_dir=e6_dir,
         enemy_1_split=e1_split, enemy_2_split=e2_split, enemy_3_split=e3_split,
-        occupied_y=occupied_y  
+        occupied_y=occupied_y,
+        enemies_spawned_this_stage=new_enemies_spawned_this_stage  # Update spawn count here
     )
 
 @jax.jit
@@ -576,6 +595,8 @@ class JaxAssault(JaxEnvironment[AssaultState, AssaultObservation, AssaultInfo]):
             step_counter=jnp.array(0).astype(jnp.int32),
             enemies_killed=jnp.array(0).astype(jnp.int32),
             current_stage=jnp.array(0).astype(jnp.int32),
+            enemies_spawned_this_stage=jnp.array(0).astype(jnp.int32),
+
         )
         obs = self._get_observation(state)
         def expand_and_copy(x):
@@ -703,12 +724,15 @@ class JaxAssault(JaxEnvironment[AssaultState, AssaultObservation, AssaultInfo]):
         # Increase score for each enemy hit (e.g., +1 per enemy)
         score_incr = hit1.astype(jnp.int32) + hit2.astype(jnp.int32) + hit3.astype(jnp.int32) + \
                     hit4.astype(jnp.int32) + hit5.astype(jnp.int32) + hit6.astype(jnp.int32)
-        new_score = state.score + score_incr
+        kills_incr = hit1.astype(jnp.int32) + hit2.astype(jnp.int32) + hit3.astype(jnp.int32)
 
-        new_enemies_killed = state.enemies_killed + score_incr
-        stage_complete = jnp.greater_equal(new_enemies_killed, 10)
-        new_current_stage = jnp.where(stage_complete, state.current_stage + 1, state.current_stage)
+        
+        new_score = state.score + score_incr
+        new_enemies_killed = state.enemies_killed + kills_incr
+        stage_complete = jnp.equal(jnp.mod(new_enemies_killed, 10), 0) & (new_enemies_killed > 0)
         new_enemies_killed = jnp.where(stage_complete, 0, new_enemies_killed)
+        new_enemies_spawned_this_stage = jnp.where(stage_complete, 0, new_state.enemies_spawned_this_stage)
+        new_current_stage = jnp.where(stage_complete, state.current_stage + 1, state.current_stage)
         
         new_state = new_state._replace(
             player_projectile_x=new_proj_x,
@@ -733,6 +757,7 @@ class JaxAssault(JaxEnvironment[AssaultState, AssaultObservation, AssaultInfo]):
             enemies_killed=new_enemies_killed,
             current_stage=new_current_stage,
             occupied_y=occupied_y,
+            enemies_spawned_this_stage=new_enemies_spawned_this_stage,
             # TODO: update other fields as needed
         )
         
