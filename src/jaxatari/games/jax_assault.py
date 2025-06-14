@@ -31,7 +31,7 @@ Emanuele
 - Delays for enemy projectile firing
 
 Milan
-- Heat tracking
+- Heat tracking [x]
 - Setting correct constants for the game
 - Game over conditions
 - Game accurate player projectile movement
@@ -57,7 +57,8 @@ LEFTFIRE = 5
 SPEED = 1
 MOTHERSHIP_Y = 32
 PLAYER_Y = 175
-MAX_HEAT = 100
+MAX_HEAT = 15
+COOLDOWN_STEPS = 30
 MAX_LIVES = 3
 LIVES_Y = 200
 LIFE_ONE_X = 25
@@ -106,7 +107,7 @@ STATE_TRANSLATOR: dict = {
     29: "player_projectile_dir",
     30: "score",
     31: "player_lives",
-    32: "bottom_health",
+    32: "heat",
     33: "stage",
     34: "buffer",
 }
@@ -182,6 +183,8 @@ class AssaultState(NamedTuple):
     step_counter: chex.Array
     enemies_killed: chex.Array
     current_stage:  chex.Array
+    cooldown: chex.Array
+    fired: chex.Array
 
 
 class AssaultObservation(NamedTuple):
@@ -232,7 +235,7 @@ def player_projectile_step(
     # Spawn at player's current x, just above the player
     spawn_x = jnp.array([state.player_projectile_x, state.player_x, state.player_x + 12, state.player_x - 4])
     spawn_y = jnp.array([state.player_projectile_y, PLAYER_Y - 4, PLAYER_Y, PLAYER_Y])
-
+    new_fired = jnp.where(spawn_proj, jnp.array(1), state.fired)
     new_proj_x = spawn_x[fire_action]
     new_proj_y = spawn_y[fire_action]
     new_proj_dir = jnp.where(spawn_proj, fire_action, state.player_projectile_dir)
@@ -251,8 +254,30 @@ def player_projectile_step(
         player_projectile_x=final_proj_x,
         player_projectile_y=final_proj_y,
         player_projectile_dir=final_proj_dir,
+        fired=new_fired
     )
     
+@jax.jit
+def cooldown_step(
+    state
+):
+    # Cooldown logic: if heat is above 0, decrease cooldown
+    new_cooldown = jnp.where(state.cooldown > 0, state.cooldown - 1, state.cooldown)
+    # If cooldown is 0 and heat is above 0, reset heat
+    new_heat = jnp.where(jnp.logical_and(state.fired,new_cooldown == 0), state.heat +1, state.heat)
+    new_heat = jnp.where(jnp.logical_and(jnp.logical_not(state.fired),new_cooldown == 0), jnp.maximum(state.heat-1,0), new_heat)
+    new_fired = jnp.where(new_cooldown == 0, jnp.array(0), state.fired)
+    overheat = new_heat > MAX_HEAT
+    # If overheat, reset heat and set cooldown to COOLDOWN_STEPS
+    new_heat = jnp.where(overheat, jnp.array(0), new_heat)
+    new_lives = jnp.where(overheat, jnp.maximum(state.player_lives - 1, 0), state.player_lives)
+    new_cooldown = jnp.where(new_cooldown==0, COOLDOWN_STEPS, new_cooldown)
+    return state._replace(
+        heat=new_heat,
+        cooldown=new_cooldown,
+        player_lives=new_lives,
+        fired=new_fired
+    )    
 
 @jax.jit
 def enemy_projectile_step(
@@ -579,6 +604,8 @@ class JaxAssault(JaxEnvironment[AssaultState, AssaultObservation, AssaultInfo]):
             step_counter=jnp.array(0).astype(jnp.int32),
             enemies_killed=jnp.array(0).astype(jnp.int32),
             current_stage=jnp.array(0).astype(jnp.int32),
+            cooldown=jnp.array(0).astype(jnp.int32),
+            fired=jnp.array(0).astype(jnp.int32)
         )
         obs = self._get_observation(state)
         def expand_and_copy(x):
@@ -600,7 +627,7 @@ class JaxAssault(JaxEnvironment[AssaultState, AssaultObservation, AssaultInfo]):
         new_state = enemy_projectile_step(new_state)
         new_state = enemy_step(new_state)
         new_state = mothership_step(new_state)
-
+        new_state = cooldown_step(new_state)
         occupied_y = new_state.occupied_y
 
         def split_condition(stage):
@@ -1018,19 +1045,31 @@ class Renderer_AtraJaxisAssault:
         raster = jax.lax.cond( state.enemy_5_y < HEIGHT+1, lambda _: render_at(raster, state.enemy_5_y, state.enemy_5_x, frame_enemy_tiny), lambda _: raster, operand=None)
         raster = jax.lax.cond( state.enemy_6_y < HEIGHT+1, lambda _: render_at(raster, state.enemy_6_y, state.enemy_6_x, frame_enemy_tiny), lambda _: raster, operand=None)
         
-
+        self.PLAYER_PROJECTILE_SIDEWAYS = jnp.array([[[[236, 236, 236, 255]]]*7])
+        
         # Render player projectile using lax.cond
         def render_player_proj(_):
+            
             frame_proj = aj.get_sprite_frame(self.PLAYER_PROJECTILE, 0)
             return render_at(raster, state.player_projectile_y, state.player_projectile_x, frame_proj)
+        
+        def render_player_proj_sideways(_):
+            frame_proj = aj.get_sprite_frame(self.PLAYER_PROJECTILE_SIDEWAYS, 0)
+            return render_at(raster, PLAYER_Y+2, state.player_projectile_x, frame_proj)
 
         def skip_player_proj(_):
             return raster
 
         raster = jax.lax.cond(
-            jnp.greater_equal(state.player_projectile_y, 0),
+            jnp.logical_and(jnp.greater_equal(state.player_projectile_y, 0),jnp.not_equal(state.player_projectile_y, PLAYER_Y)),
             render_player_proj,
             skip_player_proj,
+            operand=None
+        )
+        raster = jax.lax.cond(
+            jnp.equal(state.player_projectile_y, PLAYER_Y),
+            render_player_proj_sideways,
+            lambda _: raster,
             operand=None
         )
         # Render enemy projectile using lax.cond
@@ -1110,6 +1149,15 @@ class Renderer_AtraJaxisAssault:
             return render_at(raster, LIVES_Y, LIFE_ONE_X + i * LIFE_OFFSET, self.LIFE_SPRITE)
         raster = jax.lax.fori_loop(0, state.player_lives, lives_fn, raster)
 
+        # Render heat bar(bottom right)
+        def heat_bar_fn(heat, raster):
+            color = (0, 255, 0, 255)
+            background_color = (0, 0, 0, 255)
+            return aj.render_bar(
+                raster, WIDTH-60, LIVES_Y,heat+1,MAX_HEAT+1,48,5,color,background_color
+            )
+        raster = heat_bar_fn(state.heat, raster)
+        print(self.PLAYER_PROJECTILE)
         return raster
     
 if __name__ == "__main__":
