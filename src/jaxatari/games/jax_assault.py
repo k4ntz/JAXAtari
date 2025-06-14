@@ -24,14 +24,17 @@ Things that have been implemented:
 - Enemy spawning
 
 Things that need to be implemented:
-- Heat tracking
+Emanuele
+- Enemy random direction changes
 - Enemy invisibility
+- Stop spawning enemies when 10 have been spawned
+- Delays for enemy projectile firing
+
+Milan
+- Heat tracking
 - Setting correct constants for the game
 - Game over conditions
-- Stop spawning enemies when 10 have been spawned
 - Game accurate player projectile movement
-- Delays for enemy projectile firing
-- Enemy random direction changes
 
 Things that "should" be implemented:
 - Use arrays for enemy positions and states instead of individual variables
