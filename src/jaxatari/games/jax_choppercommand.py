@@ -116,7 +116,22 @@ TOP_LANES = jnp.array([ENEMY_LANE_6, ENEMY_LANE_7, ENEMY_LANE_8])
 
 ALL_LANES = jnp.array([ENEMY_LANE_0, ENEMY_LANE_1, ENEMY_LANE_2, ENEMY_LANE_3, ENEMY_LANE_4, ENEMY_LANE_5, ENEMY_LANE_6, ENEMY_LANE_7, ENEMY_LANE_8])
 
+"""
+Correct arrangement of lanes by height is:
 
+ENEMY_LANE_8
+ENEMY_LANE_7
+ENEMY_LANE_6
+
+ENEMY_LANE_5
+ENEMY_LANE_4
+ENEMY_LANE_3
+
+ENEMY_LANE_2
+ENEMY_LANE_1
+ENEMY_LANE_0
+
+"""
 
 # Minimap
 MINIMAP_WIDTH = 48
@@ -1912,7 +1927,6 @@ class JaxChopperCommand(JaxEnvironment[ChopperCommandState, ChopperCommandObserv
         respawn_state = hard_reset_state._replace(
             # hard Resets
             player_x=hard_reset_state.player_x,
-            player_y=hard_reset_state.player_y,
             # soft Resets
             score=soft_reset_state.score,
             lives=soft_reset_state.lives,
@@ -2373,10 +2387,17 @@ class Renderer_AtraJaxis(AtraJaxisRenderer):
                 jet_world_x = state.jet_positions[i][0]
                 jet_world_y = state.jet_positions[i][1]
 
+                is_in_top_lane = jnp.logical_and(jet_world_y <= ENEMY_LANE_6, jet_world_y >= ENEMY_LANE_8)
+                is_in_middle_lane = jnp.logical_and(jet_world_y <= ENEMY_LANE_3, jet_world_y >= ENEMY_LANE_5)
+
+                lane_world_y = jnp.where(is_in_top_lane,
+                                         ENEMY_LANE_7, jnp.where(is_in_middle_lane,
+                                                                 ENEMY_LANE_4, ENEMY_LANE_1))
+
                 # Downscaling
                 minimap_x = weird_offset + (
                             (jet_world_x - state.player_x + chopper_position) // DOWNSCALING_FACTOR_WIDTH // 6)
-                minimap_y = (jet_world_y // (DOWNSCALING_FACTOR_HEIGHT + 1))
+                minimap_y = (lane_world_y // (DOWNSCALING_FACTOR_HEIGHT + 1))
 
                 return aj.render_at(
                     r,
@@ -2411,10 +2432,17 @@ class Renderer_AtraJaxis(AtraJaxisRenderer):
                 chopper_world_x = state.chopper_positions[i][0]
                 chopper_world_y = state.chopper_positions[i][1]
 
+                is_in_top_lane = jnp.logical_and(chopper_world_y <= ENEMY_LANE_6, chopper_world_y >= ENEMY_LANE_8)
+                is_in_middle_lane = jnp.logical_and(chopper_world_y <= ENEMY_LANE_3, chopper_world_y >= ENEMY_LANE_5)
+
+                lane_world_y = jnp.where(is_in_top_lane,
+                                         ENEMY_LANE_7, jnp.where(is_in_middle_lane,
+                                                                 ENEMY_LANE_4, ENEMY_LANE_1))
+
                 # Downscaling
                 minimap_x = weird_offset + (
                             (chopper_world_x - state.player_x + chopper_position) // DOWNSCALING_FACTOR_WIDTH // 6)
-                minimap_y = (chopper_world_y // (DOWNSCALING_FACTOR_HEIGHT + 1))
+                minimap_y = (lane_world_y // (DOWNSCALING_FACTOR_HEIGHT + 1))
 
                 return aj.render_at(
                     r,
