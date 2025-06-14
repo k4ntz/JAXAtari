@@ -17,6 +17,7 @@ import numpy as np
 from gymnax.environments import spaces
 from jaxatari.environment import JaxEnvironment, JAXAtariAction as Action
 from jaxatari.renderers import AtraJaxisRenderer
+import time
 
 # Game Constants
 WINDOW_WIDTH = 160 * 3
@@ -1506,7 +1507,7 @@ class JaxChopperCommand(JaxEnvironment[ChopperCommandState, ChopperCommandObserv
 
 
     @partial(jax.jit, static_argnums=(0,))
-    def reset(self, key: jax.random.PRNGKey = jax.random.PRNGKey(30)) -> Tuple[ChopperCommandObservation, ChopperCommandState]:
+    def reset(self, key: jax.random.PRNGKey = jax.random.PRNGKey(time.time_ns() % (2**32))) -> Tuple[ChopperCommandObservation, ChopperCommandState]:
         """Initialize game state"""
 
         jet_positions, _ = initialize_enemy_positions(key)
@@ -1534,8 +1535,8 @@ class JaxChopperCommand(JaxEnvironment[ChopperCommandState, ChopperCommandObserv
             pause_timer=jnp.array(DEATH_PAUSE_FRAMES + 2).astype(jnp.int32),    # The game starts in the no_move_pause (DEATH_PAUSE_FRAMES + 2) to allow for visual startup or intro.
             rng_key=key,                                                        # Pseudo random number generator seed.
             obs_stack=jnp.zeros((self.frame_stack_size, self.obs_size)),        # Observation stack starts empty (zeros). Used for agent state.
-            difficulty=jnp.array(GAME_DIFFICULTY).astype(jnp.float32),
-            enemy_speed=jnp.array(0).astype(jnp.float32),
+            difficulty=jnp.array(GAME_DIFFICULTY).astype(jnp.float32),          # difficulty of game
+            enemy_speed=jnp.array(0).astype(jnp.float32),                       # enemy_speed which is 0 on start
         )
 
         initial_obs = self._get_observation(reset_state)
