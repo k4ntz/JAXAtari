@@ -33,7 +33,7 @@ Emanuele
 Milan
 - Heat tracking
 - Setting correct constants for the game
-- Game over conditions
+- Game over conditions -> done
 - Game accurate player projectile movement
 
 Things that "should" be implemented:
@@ -616,9 +616,6 @@ class JaxAssault(JaxEnvironment[AssaultState, AssaultObservation, AssaultInfo]):
     def step(self, state: AssaultState, action: chex.Array) -> Tuple[AssaultState, AssaultObservation, float, bool, AssaultInfo]:
         # Player step
         new_state = player_step(state, action)
-        # Enemy step (stub)
-
-        
 
         new_state = player_projectile_step(new_state,action)
         new_state = enemy_projectile_step(new_state)
@@ -626,6 +623,44 @@ class JaxAssault(JaxEnvironment[AssaultState, AssaultObservation, AssaultInfo]):
         new_state = mothership_step(new_state)
 
         occupied_y = new_state.occupied_y
+
+        player_proj_active = jnp.greater_equal(new_state.player_projectile_y, 0)
+        enemy_proj_active = jnp.greater_equal(new_state.enemy_projectile_y, 0)
+        enemy_proj_lateral = jnp.equal(new_state.enemy_projectile_y, PLAYER_Y)  # Only lateral projectiles
+
+        current_x_distance = new_state.player_projectile_x - new_state.enemy_projectile_x
+        enemy_horizontal_dir = jnp.sign(state.player_x - new_state.enemy_projectile_x)
+        enemy_prev_x = new_state.enemy_projectile_x - enemy_horizontal_dir * 2  # Enemy was 2 pixels away in opposite direction
+        
+        # Calculate previous distances
+        prev_x_distance = new_state.player_projectile_x - enemy_prev_x
+        x_sign_changed = jnp.not_equal(jnp.sign(current_x_distance), jnp.sign(prev_x_distance))
+
+        projectiles_intersecting = jnp.logical_and.reduce(jnp.array([
+            player_proj_active,
+            enemy_proj_active,
+            enemy_proj_lateral,
+            x_sign_changed,      # X distance changed sign (crossed horizontally)
+        ]))
+        
+        projectile_collision = jnp.logical_and.reduce(jnp.array([
+            player_proj_active,
+            enemy_proj_active,
+            enemy_proj_lateral,  # Only allow collision when enemy projectile is lateral
+            check_collision(
+                new_state.player_projectile_x, new_state.player_projectile_y,
+                new_state.enemy_projectile_x, new_state.enemy_projectile_y,
+                4, 4  # Collision box size
+            )
+        ]))
+
+        new_player_proj_x = jnp.where(projectile_collision, -1, new_state.player_projectile_x)
+        new_player_proj_y = jnp.where(projectile_collision, -1, new_state.player_projectile_y)
+        new_player_proj_dir = jnp.where(projectile_collision, 0, new_state.player_projectile_dir)
+        
+        new_enemy_proj_x = jnp.where(projectile_collision, -1, new_state.enemy_projectile_x)
+        new_enemy_proj_y = jnp.where(projectile_collision, -1, new_state.enemy_projectile_y)
+        new_enemy_proj_dir = jnp.where(projectile_collision, 0, new_state.enemy_projectile_dir)
 
         def split_condition(stage):
             return stage > -1
@@ -724,9 +759,9 @@ class JaxAssault(JaxEnvironment[AssaultState, AssaultObservation, AssaultInfo]):
         # If any enemy was hit, remove projectile
         any_hit = hit1 | hit2 | hit3 | hit4 | hit5 | hit6
         
-        new_proj_x = jnp.where(any_hit, -1, new_state.player_projectile_x)
-        new_proj_y = jnp.where(any_hit, -1, new_state.player_projectile_y)
-        new_proj_dir = jnp.where(any_hit, 0, new_state.player_projectile_dir)
+        new_player_proj_x = jnp.where(jnp.logical_and(any_hit, jnp.logical_not(projectile_collision)), -1, new_state.player_projectile_x)
+        new_player_proj_y = jnp.where(jnp.logical_and(any_hit, jnp.logical_not(projectile_collision)), -1, new_state.player_projectile_y)
+        new_player_proj_dir = jnp.where(jnp.logical_and(any_hit, jnp.logical_not(projectile_collision)), 0, new_state.player_projectile_dir)
 
 
         # Increase score for each enemy hit (e.g., +1 per enemy)
@@ -762,12 +797,16 @@ class JaxAssault(JaxEnvironment[AssaultState, AssaultObservation, AssaultInfo]):
             lambda _: jnp.array(False),
             operand=None
         )
+        enemies_invisible = jnp.where(invis_action, jnp.logical_not(state.enemies_invisible), state.enemies_invisible)
+        enemies_invisible = jnp.where(stage_complete, jnp.array(0), enemies_invisible)
 
-        
         new_state = new_state._replace(
-            player_projectile_x=new_proj_x,
-            player_projectile_y=new_proj_y,
-            player_projectile_dir=new_proj_dir,
+            player_projectile_x=new_player_proj_x,
+            player_projectile_y=new_player_proj_y,
+            player_projectile_dir=new_player_proj_dir,
+            enemy_projectile_x=new_enemy_proj_x,
+            enemy_projectile_y=new_enemy_proj_y,
+            enemy_projectile_dir=new_enemy_proj_dir,
             enemy_1_x=e1_x, enemy_1_y=e1_y,
             enemy_1_split=jnp.logical_or(new_state.enemy_1_split, e1_split),
             enemy_1_dir=jnp.where(e1_split,-1, new_state.enemy_1_dir),
@@ -788,7 +827,7 @@ class JaxAssault(JaxEnvironment[AssaultState, AssaultObservation, AssaultInfo]):
             current_stage=new_current_stage,
             occupied_y=occupied_y,
             enemies_spawned_this_stage=new_enemies_spawned_this_stage,
-            enemies_invisible=jnp.where(invis_action, jnp.logical_not(state.enemies_invisible), state.enemies_invisible),
+            enemies_invisible=enemies_invisible,
             # TODO: update other fields as needed
         )
         
@@ -1214,11 +1253,20 @@ if __name__ == "__main__":
                         obs, curr_state, reward, done, info = jitted_step(
                             curr_state, action
                         )
+        game_over = jnp.logical_or(
+            jnp.less_equal(curr_state.player_lives, 0),  # Player has 0 or fewer lives
+            jnp.greater_equal(curr_state.score, 999999)  # Score reached 999999
+        )
+        if game_over:
+            print(f"Game Over! Final Score: {curr_state.score}, Lives: {curr_state.player_lives}")
+            running = False
 
         if not frame_by_frame:
             if counter % frameskip == 0:
                 action = get_human_action()
                 obs, curr_state, reward, done, info = jitted_step(curr_state, action)
+
+        
 
         # Render and display
         raster = renderer.render(curr_state)
