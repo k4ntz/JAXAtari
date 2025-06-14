@@ -43,14 +43,14 @@ SCORE_PER_CHOPPER_KILL = 100
 # Player Missile Constants
 PLAYER_MISSILE_WIDTH = 80 # Sprite size_x
 MISSILE_COOLDOWN_FRAMES = 8  # DEFAULT: 8 | How fast Chopper can shoot (higher is slower) TODO: Das müssen wir ändern und höher machen bei dem schweren Schwierigkeitsgrad
-MISSILE_SPEED = 10 # DEFAULT: 10 | Missile speed (higher is faster)#TODO: tweak MISSILE_SPEED and MISSILE_COOLDOWN_FRAMES to match real game (already almost perfect)
+MISSILE_SPEED = 10 # DEFAULT: 10 | Missile speed (higher is faster) TODO: tweak MISSILE_SPEED and MISSILE_COOLDOWN_FRAMES to match real game (already almost perfect)
 MISSILE_ANIMATION_SPEED = 6 # DEFAULT: 6 | Rate at which missile changes sprite textures (based on traveled distance of missile)
 
 # Enemy Missile Constants
 ENEMY_MISSILE_SPAWN_PROBABILITY = 0.01 # The probability that an enemy missiles spawns at one of the living enemies in each frame, if the missile of the giving enemy is not "alive". (Meaning that for 0.01 for example, an enemy shoots a missile on average 100 frames after its previous missile died).
 ENEMY_MISSILE_SPLIT_PROBABILITY = 0.01 # The probability that an enemy missiles splits in a frame
 ENEMY_MISSILE_MAXIMUM_Y_SPEED_BEFORE_SPLIT = 0.75 # Maximum speed (+ and -) of a missile before split. This means that for 2 for example, the missiles will have speeds between -2 and 2 (chosen randomly).
-ENEMY_MISSILE_Y_SPEED_AFTER_SPLIT = 2.5 #TODO: Make match real game
+ENEMY_MISSILE_Y_SPEED_AFTER_SPLIT = 2.5 # TODO: Make match real game
 
 # Colors
 BACKGROUND_COLOR = (0, 0, 139)  # Dark blue for sky
@@ -74,25 +74,25 @@ X_BORDERS = (0, 160)
 PLAYER_BOUNDS = (0, 160), (52, 150)
 
 # Maximum number of objects
-MAX_TRUCKS = 12
-MAX_JETS = 12
-MAX_CHOPPERS = 12
-MAX_ENEMIES = 12
-MAX_PLAYER_MISSILES = 2 #TODO: I think the real game uses one player missile max on screen. This feels nicer though
+MAX_TRUCKS = 12 # DEFAULT: 12 | How much trucks are spawned
+MAX_JETS = 12 # DEFAULT: 12 | the maximum amount of jets that can be spawned
+MAX_CHOPPERS = 12 # DEFAULT: 12 | the maximum amount of choppers that can be spawned
+MAX_ENEMIES = 12 # DEFAULT: 12 | the amount of enemies that are spawned
+MAX_PLAYER_MISSILES = 2 # TODO: I think the real game uses one player missile max on screen. This feels nicer though
 MAX_ENEMY_MISSILES = MAX_ENEMIES * 2 * 2 # Two missiles for every enemy (jets and choppers) (this does not mean, that there are always this many missiles on the screen/in the game)
-ENEMY_LANE_SWITCH_PROBABILITY = 0.5
+ENEMY_LANE_SWITCH_PROBABILITY = 0.05 # DEFAULT: 7 | how likely is it that en enemy switches a lane
 
 # Enemies movement
-JET_VELOCITY_LEFT = 1.5
-JET_VELOCITY_RIGHT = 1
-CHOPPER_VELOCITY_LEFT = 0.8
-CHOPPER_VELOCITY_RIGHT = 0.5
-OUT_OF_CYCLE_RIGHT = 64
-OUT_OF_CYCLE_LEFT = 128
+JET_VELOCITY_LEFT = 1.5 # DEFAULT: 1.5 | How fast do jets fly to the left
+JET_VELOCITY_RIGHT = 1 # DEFAULT: 1 | How fast do jets fly to the right
+CHOPPER_VELOCITY_LEFT = 0.8 # DEFAULT: 0.8 | How fast do choppers fly to the right
+CHOPPER_VELOCITY_RIGHT = 0.5 # DEFAULT: 0.5 | How fast do choppers fly to the right
+OUT_OF_CYCLE_RIGHT = 64 # DEFAULT: 64 | How far can enemies fly around the truck fleet to the right
+OUT_OF_CYCLE_LEFT = 128 # DEFAULT: 128 | How far can enemies fly around the truck fleet to the left
 
 # Enemy Lanes
 
-ENEMY_LANE_OFFSET = 5
+ENEMY_LANE_OFFSET = 7 # DEFAULT: 7 | How much apart bottom and top lanes are from the middle lane
 
 ENEMY_LANE_7 = 66
 ENEMY_LANE_8 = ENEMY_LANE_7 - ENEMY_LANE_OFFSET
@@ -118,7 +118,7 @@ ALL_LANES = jnp.array([ENEMY_LANE_0, ENEMY_LANE_1, ENEMY_LANE_2, ENEMY_LANE_3, E
 MINIMAP_WIDTH = 48
 MINIMAP_HEIGHT = 16
 
-MINIMAP_POSITION_X = (WIDTH // 2) - (MINIMAP_WIDTH // 2) #TODO: Im echten Game wird die Minimap nicht mittig, sondern weiter links gerendert. Wir müssen besprechen ob wir das auch machen, dann müsste man nur diese Zahl hier ändern (finde es aber so schöner)
+MINIMAP_POSITION_X = (WIDTH // 2) - (MINIMAP_WIDTH // 2) # TODO: Im echten Game wird die Minimap nicht mittig, sondern weiter links gerendert. Wir müssen besprechen ob wir das auch machen, dann müsste man nur diese Zahl hier ändern (finde es aber so schöner)
 MINIMAP_POSITION_Y = 165
 
 DOWNSCALING_FACTOR_WIDTH = WIDTH // MINIMAP_WIDTH
@@ -128,8 +128,8 @@ DOWNSCALING_FACTOR_HEIGHT = HEIGHT // MINIMAP_HEIGHT
 TRUCK_SPAWN_DISTANCE = 248 # distance 240px + truck width
 
 FRAMES_DEATH_ANIMATION_ENEMY = 16
-FRAMES_DEATH_ANIMATION_TRUCK = 32 #TODO: Make match real game
-TRUCK_FLICKER_RATE = 3 #TODO: Make match real game
+FRAMES_DEATH_ANIMATION_TRUCK = 32 # TODO: Make match real game
+TRUCK_FLICKER_RATE = 3 # TODO: Make match real game
 
 PLAYER_FADE_OUT_START_THRESHOLD_0 = 0.25
 PLAYER_FADE_OUT_START_THRESHOLD_1 = 0.125
@@ -724,9 +724,10 @@ def step_enemy_movement(
 ) -> Tuple[chex.Array, chex.Array, chex.PRNGKey]:
 
     rng0, direction_rng = jax.random.split(rng)
-    rng1, next_rng = jax.random.split(rng0)
+    rng1, process_jet_rng = jax.random.split(rng0)
+    return_rng, process_chopper_rng = jax.random.split(rng1)
 
-    def move_enemy_x(pos: chex.Array, is_jet, is_in_range) -> chex.Array:
+    def move_enemy_x(pos: chex.Array, is_jet, move_x_is_in_range) -> chex.Array:
         is_active = pos[2] != 0
 
         def is_out_of_cycle(enemy_pos: chex.Array) -> chex.Array:
@@ -753,9 +754,7 @@ def step_enemy_movement(
 
 
         def is_in_range_function():
-
             def check_if_out_of_cycle_jet_function():
-
                 def jet_is_out_of_cycle_function():
 
                     return jax.lax.cond( # jet_is_out_of_cycle_function
@@ -822,14 +821,14 @@ def step_enemy_movement(
 
         def not_active_or_not_in_range(): # looks for in_range and active enemies from all fleets
             return jax.lax.cond(
-                is_in_range,
+                move_x_is_in_range,
                 lambda _: pos,                                                      # is dead -> does not move at all
                 lambda _: jnp.array([pos[0] - 0.5, pos[1], pos[2], pos[3]]),        # moves the same speed as trucks to the left (fleet + trucks stay freezed)
                 operand=None
             )
 
         new_pos = jax.lax.cond(
-            jnp.logical_and(is_active, is_in_range),
+            jnp.logical_and(is_active, move_x_is_in_range),
             lambda _: is_in_range_function(),           # Enemy is alive and is in the nearest fleet to the player
             lambda _: not_active_or_not_in_range(),     # Enemy is either dead or not part of the nearest fleet to the player.
             operand=None
@@ -842,21 +841,65 @@ def step_enemy_movement(
 
         return jnp.where(out_of_bounds, wrapped_pos, new_pos)
 
-    def move_enemy_y(pos: chex.Array, i: chex.Array):
-        is_active = pos[2] != 0 # Sollte klappen
-        should_switch = jax.random.bernoulli(rng, p = ENEMY_LANE_SWITCH_PROBABILITY) # Falscher Key
-        is_on_a_lane = jnp.any(jnp.abs(pos[1] - ALL_LANES) <= 1) # Funktioniert vlt nicht richtig
+    def move_enemy_y(pos: chex.Array, i: chex.Array, move_y_rng_keys: chex.Array, move_y_is_in_range: chex.Array):
+        is_active = pos[2] != 0
+        is_on_correct_lane = jnp.logical_or(pos[1] == (pos[3] - FRAMES_DEATH_ANIMATION_ENEMY), pos[3] == FRAMES_DEATH_ANIMATION_ENEMY + 5) # If enemy is on the lane defined in its lane flag, except if lane flag equals the reset state
 
-        def get_unchanged():
+        def dont_touch_position():
             return pos[1], pos[3]
 
+        def move_or_dont():
+            def dont_move_and_reset_lane_flag():
+                return pos[1], FRAMES_DEATH_ANIMATION_ENEMY + 5.0
+
+            def move():
+                def get_go_up():
+                    return pos[1] - 0.5, pos[3]
+                def get_go_down():
+                    return pos[1] + 0.5, pos[3]
+
+                lane_is_below = pos[1] < (pos[3] - FRAMES_DEATH_ANIMATION_ENEMY)
+                return jax.lax.cond(lane_is_below,
+                                    lambda _: get_go_down(),  # If lane is below, do one step towards ground
+                                    lambda _: get_go_up(),    # If lane is above, do one step towards sky
+                                    operand=None)
+
+            return jax.lax.cond( # move_or_dont
+                is_on_correct_lane,
+                lambda _: dont_move_and_reset_lane_flag(),   # Enemy is on desired lane (allow new lane to be picked)
+                lambda _: move(),                            # Move enemy towards desired lane
+                operand=None
+            )
+
         def get_next_pos():
-            return pos[1], pos[3] #TODO: Hier anfangen mit y-step Logik. Statt return pos[1], pos[3]: return jax.lax.cond...
+            def pick_desired_lane():
+                is_in_top_lane = jnp.any(pos[1] == TOP_LANES)           # If enemy is in the global top lane
+                is_in_middle_lane = jnp.any(pos[1] == MIDDLE_LANES)     # If enemy is in the glocal middle lane
+
+                new_lane = FRAMES_DEATH_ANIMATION_ENEMY + jnp.where( # Pick a valid lane for the enemy. (Pick one local lane from the global lane the enemy is on)
+                    is_in_top_lane,
+                    jax.random.choice(move_y_rng_keys[i], TOP_LANES).astype(jnp.float32),   # RNG FOR LANE PICK IS NOT FULLY RANDOM, LIKE IN REAL GAME. CHANGE ALL OCCURRENCES OF move_y_rng_keys[1] to move_y_rng_keys[i] FOR IT TO BE FULLY RANDOM
+                    jnp.where(
+                        is_in_middle_lane,
+                        jax.random.choice(move_y_rng_keys[1], MIDDLE_LANES).astype(jnp.float32),
+                        jax.random.choice(move_y_rng_keys[i], BOTTOM_LANES).astype(jnp.float32)  # If not in top or middle, enemy has to be in the bottom lane
+                    )
+                )
+                return pos[1], new_lane
+
+
+            should_switch = jax.random.bernoulli(move_y_rng_keys[1], p=ENEMY_LANE_SWITCH_PROBABILITY)
+            return jax.lax.cond( # get_next_pos
+                jnp.logical_and(should_switch, is_on_correct_lane),
+                lambda _: pick_desired_lane(),  # Since enemy is on its desired lane and should_switch is triggered, we need to update the lane handler to the desired lane
+                lambda _: move_or_dont(),       # Move enemy if not on desired lane or don't move if on the desired lane
+                operand=None
+            )
 
         (new_y, death_timer_or_lane_flag) = jax.lax.cond( # move_enemy_y
-            pos[3] > FRAMES_DEATH_ANIMATION_ENEMY,
-            lambda _: get_next_pos(),   # If pos[3] is interpreted as the lane handler
-            lambda _: get_unchanged(),  # If pos[3] is interpreted as the death timer
+            jnp.logical_and((pos[3] > FRAMES_DEATH_ANIMATION_ENEMY + 4), jnp.logical_and(is_active, move_y_is_in_range)),
+            lambda _: get_next_pos(),           # If pos[3] is interpreted as the lane handler
+            lambda _: dont_touch_position(),    # If pos[3] is interpreted as the death timer, also used for logic where the y position should not be changed
             operand=None
         )
 
@@ -886,24 +929,28 @@ def step_enemy_movement(
 
 
     def process_jet(i, new_positions):
-        current_pos = jet_positions[i]
-        new_pos = move_enemy_x(current_pos, jnp.array(True), is_in_range_checker(current_pos))
-        new_pos = move_enemy_y(new_pos, i)
+        current_pos = jet_positions[i]                                                                      # Get current position
+        jet_is_in_range = is_in_range_checker(current_pos)                                                  # If jet is in "render distance". If not, it does not move
+        new_pos = move_enemy_x(current_pos, jnp.array(True), jet_is_in_range)                               # Calculate new x position
+        keys_for_process_jet = jax.random.split(process_jet_rng, jet_positions.shape[0])                    # Generate rng-key for every chopper there is. THIS IS NOT FULLY USED, SINCE MOVEMENT IS NOT FULLY RANDOM.
+        new_pos = move_enemy_y(new_pos, i, keys_for_process_jet, jet_is_in_range)                           # Calculate new y position
         return new_positions.at[i].set(new_pos)
 
     new_jet_positions = jnp.zeros_like(jet_positions)
     new_jet_positions = jax.lax.fori_loop(0, jet_positions.shape[0], process_jet, new_jet_positions)
 
     def process_chopper(i, new_positions):
-        current_pos = chopper_positions[i]
-        new_pos = move_enemy_x(current_pos, jnp.array(False), is_in_range_checker(current_pos))
-        new_pos = move_enemy_y(new_pos, i)
+        current_pos = chopper_positions[i]                                                                  # Get current position
+        chopper_is_in_range = is_in_range_checker(current_pos)                                              # If chopper is in "render distance". If not, it does not move
+        new_pos = move_enemy_x(current_pos, jnp.array(False), chopper_is_in_range)                          # Calculate new x position
+        keys_for_process_chopper = jax.random.split(process_chopper_rng, chopper_positions.shape[0])        # Generate rng-key for every chopper there is. THIS IS NOT FULLY USED, SINCE MOVEMENT IS NOT FULLY RANDOM.
+        new_pos = move_enemy_y(new_pos, i, keys_for_process_chopper, chopper_is_in_range)                   # Calculate new y position
         return new_positions.at[i].set(new_pos)
 
     new_chopper_positions = jnp.zeros_like(chopper_positions)
     new_chopper_positions = jax.lax.fori_loop(0, chopper_positions.shape[0], process_chopper, new_chopper_positions)
 
-    return new_jet_positions, new_chopper_positions, rng1
+    return new_jet_positions, new_chopper_positions, return_rng
 
 def update_entity_death(entity_array, death_timer, is_truck):
     def update_entity(i, carry):
@@ -1776,21 +1823,21 @@ class JaxChopperCommand(JaxEnvironment[ChopperCommandState, ChopperCommandObserv
             lambda new, old: new.astype(old.dtype),
             normal_state,
             state
-        ) #TODO: Find the cause of needing these. This is probably just a type mismatch error in one or more of the fields of normal_state and statev
+        ) # TODO: Find the cause of needing these. This is probably just a type mismatch error in one or more of the fields of normal_state and statev
 
         # dtype-Mismatch fix
         death_pause_state = jax.tree.map(
             lambda new, old: new.astype(old.dtype),
             death_pause_state,
             state,
-        ) #TODO: Find the cause of needing these. This is probably just a type mismatch error in one or more of the fields of normal_state and statev
+        ) # TODO: Find the cause of needing these. This is probably just a type mismatch error in one or more of the fields of normal_state and statev
 
         # dtype-Mismatch fix
         no_move_state = jax.tree.map(
             lambda new, old: new.astype(old.dtype),
             no_move_state,
             state
-        ) #TODO: Find the cause of needing these. This is probably just a type mismatch error in one or more of the fields of normal_state and statev
+        ) # TODO: Find the cause of needing these. This is probably just a type mismatch error in one or more of the fields of normal_state and statev
 
         # Pick correct state
         step_state = jax.lax.cond(
