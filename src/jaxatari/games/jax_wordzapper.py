@@ -29,20 +29,27 @@ MISSILE_SIZE = (8, 1)
 ZAPPER_SIZE = (8, 1)
 
 # Pygame window dimensions
+WIDTH = 160
+HEIGHT = 210
+SCALING_FACTOR = 3
+
 WINDOW_WIDTH = 160 * 3
 WINDOW_HEIGHT = 210 * 3
 
 MIN_BOUND = (0,0)
-MAX_BOUND = (WINDOW_WIDTH, WINDOW_HEIGHT)
+MAX_BOUND = (WIDTH, HEIGHT)
 
 X_BORDERS = (0, 160)
 
-WINDOW_WIDTH = 160 * 3
-WINDOW_HEIGHT = 210 * 3
+# Enemies
+MAX_ENEMIES = 6
+ENEMY_MIN_X = -16
+ENEMY_MAX_X = WIDTH + 16  
+ENEMY_Y_MIN = 50
+ENEMY_Y_MAX = 150
+ENEMY_ANIM_SWITCH_RATE = 15
+ENEMY_Y_MIN_SEPARATION = 16  
 
-WIDTH = 160
-HEIGHT = 210
-SCALING_FACTOR = 3
 
 TIME = 99
 
@@ -151,6 +158,11 @@ class WordZapperState(NamedTuple):
 
     player_missile_position: chex.Array  # shape: (1,3) -> [x, y, direction]
     player_zapper_position: chex.Array # shape: (1,4) -> x, y, active, cooldown
+    enemy_positions: chex.Array  # shape (MAX_ENEMIES, 4): x, y, type, vx
+    enemy_active: chex.Array     # shape (MAX_ENEMIES,)
+    enemy_global_spawn_timer: chex.Array
+
+
 
     # current_word: chex.Array # the actual word
     # current_letter_index: chex.Array
@@ -178,6 +190,7 @@ class WordZapperObservation(NamedTuple):
     # current_word: jnp.ndarray  # word to form
     # current_letter_index: jnp.ndarray  # current position in word
 
+    enemies: jnp.ndarray 
     player_missile: EntityPosition
     player_zapper: EntityPosition
 
@@ -194,27 +207,58 @@ def load_sprites():
     """Load all sprites required for Word Zapper rendering."""
 
     MODULE_DIR = os.path.dirname(os.path.abspath(__file__))
-    # Load sprites - no padding needed for background since it's already full size
+
+    # Background
     bg1 = aj.loadFrame(os.path.join(MODULE_DIR, "sprites/wordzapper/bg/1.npy"))
 
+    # Player
     pl_1 = aj.loadFrame(os.path.join(MODULE_DIR, "sprites/wordzapper/player/1.npy"))
     pl_2 = aj.loadFrame(os.path.join(MODULE_DIR, "sprites/wordzapper/player/2.npy"))
 
     pl_missile = aj.loadFrame(os.path.join(MODULE_DIR, "sprites/wordzapper/bullet/1.npy"))
 
-    # Pad player ship sprites to match each other
+    # Enemies Bonker
+    bonker_1 = aj.loadFrame(os.path.join(MODULE_DIR, "sprites/wordzapper/enemies/bonker/1.npy"))
+    bonker_2 = aj.loadFrame(os.path.join(MODULE_DIR, "sprites/wordzapper/enemies/bonker/2.npy"))
+
+    # Enemies Zonker
+    zonker_1 = aj.loadFrame(os.path.join(MODULE_DIR, "sprites/wordzapper/enemies/zonker/1.npy"))
+    zonker_2 = aj.loadFrame(os.path.join(MODULE_DIR, "sprites/wordzapper/enemies/zonker/2.npy"))
+
+    # Pad player sprites to match
     pl_sub_sprites = aj.pad_to_match([pl_1, pl_2])
-    # Pad player torpedo sprites to match each other
-    pl_torp_sprites = [pl_missile]
+    
+    pl_missile_sprites = [pl_missile]
+
+    # Pad bonker sprites to match 
+    bonker_sprites = aj.pad_to_match([bonker_1, bonker_2])
+
+    #Pad zonker sprites to match
+    zonker_sprites = aj.pad_to_match([zonker_1, zonker_2])
+
 
     SPRITE_BG = jnp.expand_dims(bg1, axis=0)
-    SPRITE_PL_MISSILE = jnp.repeat(pl_torp_sprites[0][None], 1, axis=0)
+    
+    SPRITE_PL_MISSILE = jnp.repeat(pl_missile_sprites[0][None], 1, axis=0)
 
-    # Player ship sprites
     SPRITE_PL = jnp.concatenate(
         [
             jnp.repeat(pl_sub_sprites[0][None], 4, axis=0),
             jnp.repeat(pl_sub_sprites[1][None], 4, axis=0),
+        ]
+    )
+    
+    SPRITE_BONKER = jnp.concatenate(
+        [
+            jnp.repeat(bonker_sprites[0][None], 4, axis=0),
+            jnp.repeat(bonker_sprites[1][None], 4, axis=0),
+        ]
+    )
+
+    SPRITE_ZONKER = jnp.concatenate(
+        [
+            jnp.repeat(zonker_sprites[0][None], 4, axis=0),
+            jnp.repeat(zonker_sprites[1][None], 4, axis=0),
         ]
     )
 
@@ -226,17 +270,20 @@ def load_sprites():
         SPRITE_BG,
         SPRITE_PL,
         SPRITE_PL_MISSILE,
-        DIGITS
+        SPRITE_BONKER,
+        SPRITE_ZONKER,
+        DIGITS,
     )
-
-
-# Load sprites once at module level
 (
     SPRITE_BG,
     SPRITE_PL,
     SPRITE_PL_MISSILE,
-    DIGITS
+    SPRITE_BONKER,
+    SPRITE_ZONKER,
+    DIGITS,
 ) = load_sprites()
+
+
 
 
 @jax.jit
@@ -436,6 +483,55 @@ def player_zapper_step(
 
     return new_zapper
 
+@jax.jit
+def enemy_step(state: WordZapperState) -> Tuple[chex.Array, chex.PRNGKey]:
+    rng_key, subkey = jax.random.split(state.rng_key)
+
+    # Move enemies left
+    enemy_positions = state.enemy_positions
+
+    new_x = enemy_positions[:, 0] - enemy_positions[:, 2]
+    new_active = jnp.where(new_x < -16, 0, enemy_positions[:, 4])
+
+    new_frame_index = (state.step_counter // 30) % 2
+
+    updated_enemy_positions = jnp.stack(
+        [
+            new_x,
+            enemy_positions[:, 1],
+            enemy_positions[:, 2],
+            jnp.full_like(enemy_positions[:, 3], new_frame_index),
+            new_active,
+        ],
+        axis=1,
+    )
+
+    # Spawn logic
+    spawn_chance = jax.random.uniform(subkey) < 0.1
+
+    empty_slot = jnp.argmax(enemy_positions[:, 4] == 0)
+
+    spawn_x = jnp.array(WIDTH + 16)
+    spawn_y = jax.random.randint(subkey, (), 40, HEIGHT - 40)
+    spawn_speed = jnp.array(2)
+    spawn_frame = jnp.array(0)
+    spawn_active = jnp.array(1)
+
+    def do_spawn(pos):
+        return pos.at[empty_slot].set(
+            jnp.array([spawn_x, spawn_y, spawn_speed, spawn_frame, spawn_active])
+        )
+
+    updated_enemy_positions = jax.lax.cond(
+        spawn_chance,
+        do_spawn,
+        lambda pos: pos,
+        updated_enemy_positions,
+    )
+
+    return updated_enemy_positions, rng_key
+
+
 class JaxWordZapper(JaxEnvironment[WordZapperState, WordZapperObservation, WordZapperInfo]) :
     def __init__(self, reward_funcs: list[callable] =None):
         super().__init__()
@@ -476,19 +572,27 @@ class JaxWordZapper(JaxEnvironment[WordZapperState, WordZapperObservation, WordZ
             cooldown_timer=jnp.array(0),
             asteroid_x=jnp.array(0),
             asteroid_y=jnp.array(0),
-            asteroid_speed=jnp.array(0), ## TODO these values are not clear, some need change
+            asteroid_speed=jnp.array(0),  
             asteroid_alive=jnp.array(0),
             asteroid_positions=jnp.zeros((MAX_ASTEROIDS_COUNT, 3)),
-            #spawn_state=initialize_spawn_state(), 
-            player_missile_position=jnp.zeros(3),  # x,y,direction
+            
+            enemy_positions=jnp.zeros((MAX_ENEMIES, 5)),          
+            enemy_active=jnp.zeros((MAX_ENEMIES,), dtype=jnp.int32), 
+            enemy_global_spawn_timer=jnp.array(60),  # start with 60 frames wait
+
+
+            player_missile_position=jnp.zeros(3), 
             player_zapper_position=jnp.zeros(4),
+            
             timer=jnp.array(TIME),
+
             step_counter=jnp.array(0),
             rng_key=key,
         )
 
         initial_obs = self._get_observation(reset_state)
         return initial_obs, reset_state
+
     
     
     def get_action_space(self) -> jnp.ndarray:
@@ -517,6 +621,18 @@ class JaxWordZapper(JaxEnvironment[WordZapperState, WordZapperObservation, WordZ
 
         # Apply conversion to asteroid positions
         asteroids = jax.vmap(lambda pos: convert_to_entity(pos, ASTEROID_SIZE))(state.asteroid_positions)
+        # Enemies
+        def convert_enemy(pos, active):
+            return jnp.array([
+                pos[0],  # x
+                pos[1],  # y
+                16,      # width (you can adjust this to your enemy sprite size)
+                16,      # height
+                active,  # active flag
+            ])
+
+        enemies = jax.vmap(convert_enemy)(state.enemy_positions, state.enemy_active)
+
 
         # Convert letter positions into the correct entity format
         # letters = jax.vmap(lambda pos: convert_to_entity(pos, LETTER_SIZE))(state.letters_positions)
@@ -543,6 +659,7 @@ class JaxWordZapper(JaxEnvironment[WordZapperState, WordZapperObservation, WordZ
         return WordZapperObservation(
             player=player,
             asteroids=asteroids,
+            enemies=enemies,
             # letters=letters,
             # letters_char=state.letters_char,
             # letters_alive=state.letters_alive,
@@ -577,13 +694,14 @@ class JaxWordZapper(JaxEnvironment[WordZapperState, WordZapperObservation, WordZ
     def step(
         self, state: WordZapperState, action: chex.Array
     ) -> Tuple[WordZapperObservation, WordZapperState, float, bool, WordZapperInfo]:
-        
+
         previous_state = state
         _, reset_state = self.reset()
 
         def normal_game_step():
-            # Step player
-            new_player_x, new_player_y, new_palyer_direction = player_step(
+
+            # ----------------- Player movement -----------------
+            new_player_x, new_player_y, new_player_direction = player_step(
                 state,
                 action,
             )
@@ -598,27 +716,123 @@ class JaxWordZapper(JaxEnvironment[WordZapperState, WordZapperObservation, WordZ
                 state, new_player_x, new_player_y, action
             )
 
+            player_zapper_position = player_zapper_step(
+                state, new_player_x, new_player_y, action
+            )
+
             new_step_counter = jnp.where(
                 state.step_counter == 1024,
                 jnp.array(0),
                 state.step_counter + 1,
             )
-            
-            player_zapper_position = player_zapper_step(
-                state, new_player_x, new_player_y, action
+
+            # ----------------- Enemies movement -----------------
+            new_enemy_positions = state.enemy_positions.at[:,0].add(state.enemy_positions[:,3] * 1.2)  # reduced speed 20%
+
+            # Out of screen → deactivate
+            new_enemy_active = jnp.where(
+                jnp.logical_or(
+                    new_enemy_positions[:,0] < ENEMY_MIN_X - 16,
+                    new_enemy_positions[:,0] > ENEMY_MAX_X + 16
+                ),
+                0,
+                state.enemy_active
+            )
+
+            # ----------------- Enemy spawn logic -----------------
+            # Decrease global spawn timer
+            new_enemy_global_spawn_timer = state.enemy_global_spawn_timer - 1
+            new_enemy_global_spawn_timer = jnp.clip(new_enemy_global_spawn_timer, 0, 9999)
+
+            # Check if any inactive enemies exist
+            has_free_slot = jnp.any(new_enemy_active == 0)
+
+            # Cond: spawn if timer == 0 and there is a free slot
+            spawn_cond = jnp.logical_and(new_enemy_global_spawn_timer == 0, has_free_slot)
+
+            # Define spawn_one_enemy_fn with Y overlap protection
+            def spawn_one_enemy_fn(rng_key_in, existing_enemy_positions, existing_enemy_active):
+                rng_key_out, subkey_dir = jax.random.split(rng_key_in)
+                rng_key_out, subkey_y = jax.random.split(rng_key_out)
+                rng_key_out, subkey_type = jax.random.split(rng_key_out)
+
+                direction = jax.random.choice(subkey_dir, jnp.array([-1.0, 1.0]))
+
+                # Fix → x_pos based on direction:
+                x_pos = jnp.where(direction == 1.0, ENEMY_MIN_X, ENEMY_MAX_X)
+
+                # Y position sampling with collision avoidance (same as before):
+                def sample_valid_y(subkey_y_inner):
+                    def body_fn(val):
+                        y_candidate, subkey_y_inner = val
+                        subkey_y_inner, next_subkey = jax.random.split(subkey_y_inner)
+                        y_candidate_new = jax.random.randint(next_subkey, shape=(), minval=ENEMY_Y_MIN, maxval=ENEMY_Y_MAX)
+
+                        dists = jnp.abs(existing_enemy_positions[:,1] - y_candidate_new)
+                        collision = jnp.any(jnp.logical_and(existing_enemy_active == 1, dists < 16))
+
+                        y_candidate_new = jnp.where(collision, y_candidate, y_candidate_new)
+                        return (y_candidate_new, next_subkey)
+
+                    def cond_fn(val):
+                        y_candidate, subkey = val
+                        dists = jnp.abs(existing_enemy_positions[:,1] - y_candidate)
+                        collision = jnp.any(jnp.logical_and(existing_enemy_active == 1, dists < 16))
+                        return collision
+
+                    init_y = jax.random.randint(subkey_y_inner, shape=(), minval=ENEMY_Y_MIN, maxval=ENEMY_Y_MAX)
+                    final_y, _ = jax.lax.while_loop(cond_fn, body_fn, (init_y, subkey_y_inner))
+                    return final_y
+
+                y_pos = sample_valid_y(subkey_y)
+
+                enemy_type = jax.random.randint(subkey_type, shape=(), minval=0, maxval=2)
+
+                new_enemy = jnp.array([x_pos, y_pos, enemy_type, direction, 1.0])
+                return new_enemy, rng_key_out
+
+
+            def spawn_enemy_branch(carry):
+                positions, active, global_timer, rng_key_inner = carry
+
+                free_idx = jnp.argmax(active == 0)
+
+                new_enemy, rng_key_out = spawn_one_enemy_fn(rng_key_inner, positions, active)
+
+                positions = positions.at[free_idx].set(new_enemy)
+                active = active.at[free_idx].set(1)
+                global_timer = jax.random.randint(rng_key_out, shape=(), minval=30, maxval=120)
+
+                return positions, active, global_timer, rng_key_out
+
+            def no_spawn_branch(carry):
+                return carry
+
+            # Apply conditional spawn
+            positions, active, global_timer, rng_key = jax.lax.cond(
+                spawn_cond,
+                spawn_enemy_branch,
+                no_spawn_branch,
+                (new_enemy_positions, new_enemy_active, new_enemy_global_spawn_timer, state.rng_key)
             )
 
             new_state = state._replace(
                 player_x=new_player_x,
                 player_y=new_player_y,
-                player_direction=new_palyer_direction,
+                player_direction=new_player_direction,
                 player_missile_position=player_missile_position,
                 player_zapper_position=player_zapper_position,
+                enemy_positions=positions,
+                enemy_active=active,
+                enemy_global_spawn_timer=global_timer,
                 step_counter=new_step_counter,
+                rng_key=rng_key,
                 timer=new_timer,
             )
+
             return new_state
 
+        # Apply game step
         return_state = normal_game_step()
 
         observation = self._get_observation(return_state)
@@ -629,15 +843,17 @@ class JaxWordZapper(JaxEnvironment[WordZapperState, WordZapperObservation, WordZ
 
         return observation, return_state, env_reward, done, info
 
-
 class WordZapperRenderer(AtraJaxisRenderer):
     @partial(jax.jit, static_argnums=(0,))
     def render(self, state):
         raster = jnp.zeros((WIDTH, HEIGHT, 3))
 
-        ## render background
+        # render background
         frame_bg = aj.get_sprite_frame(SPRITE_BG, 0)
         raster = aj.render_at(raster, 0, 0, frame_bg)
+
+
+        # render player
 
         # show the countdown timer
         timer_array = aj.int_to_digits(state.timer, max_digits=2)
@@ -655,7 +871,6 @@ class WordZapperRenderer(AtraJaxisRenderer):
 
         # render player missile
         frame_pl_torp = aj.get_sprite_frame(SPRITE_PL_MISSILE, state.step_counter)
-
 
         should_render_torp = state.player_missile_position[0] > 0
         
@@ -687,8 +902,33 @@ class WordZapperRenderer(AtraJaxisRenderer):
             raster,
         )
 
-    
+        # render enemies
+        frame_bonker = aj.get_sprite_frame(SPRITE_BONKER, state.step_counter)
+        frame_zonker = aj.get_sprite_frame(SPRITE_ZONKER ,state.step_counter)
+
+        def body_fn(i, raster):
+            should_render_enemy = state.enemy_active[i]
+            x = state.enemy_positions[i, 0]
+            y = state.enemy_positions[i, 1]
+            enemy_type = state.enemy_positions[i, 2].astype(jnp.int32)
+
+            raster = jax.lax.cond(
+                should_render_enemy,
+                lambda r: jax.lax.cond(
+                    enemy_type == 0,
+                    lambda rr: aj.render_at(rr, x, y, frame_bonker),
+                    lambda rr: aj.render_at(rr, x, y, frame_zonker),
+                    r
+                ),
+                lambda r: r,
+                raster
+            )
+            return raster
+
+        raster = jax.lax.fori_loop(0, MAX_ENEMIES, body_fn, raster)
+        
         return raster
+
 
 
 
@@ -706,7 +946,6 @@ if __name__ == "__main__":
 
     # Initialize the renderer
     renderer = WordZapperRenderer()
-
 
     # Get jitted functions
     jitted_step = jax.jit(game.step)
