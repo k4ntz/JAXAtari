@@ -583,9 +583,7 @@ class JaxWordZapper(JaxEnvironment[WordZapperState, WordZapperObservation, WordZ
 
             player_missile_position=jnp.zeros(3), 
             player_zapper_position=jnp.zeros(4),
-         
-            timer=jnp.array(90),
-
+            
             timer=jnp.array(TIME),
 
             step_counter=jnp.array(0),
