@@ -17,7 +17,7 @@ MAX_ASTEROIDS_COUNT = 6 #TODO not sure about value
 # define object orientations
 FACE_LEFT = -1
 FACE_RIGHT = 1
- 
+
 # Player and letter positions
 PLAYER_START_X = 80
 PLAYER_START_Y = 110
@@ -28,21 +28,18 @@ ASTEROID_SIZE = (8, 7)
 MISSILE_SIZE = (8, 1)
 ZAPPER_SIZE = (8, 1)
 
-# Game logical screen size
+# Pygame window dimensions
 WIDTH = 160
 HEIGHT = 210
-
-# Pygame window scaling
-WINDOW_WIDTH = WIDTH * 3
-WINDOW_HEIGHT = HEIGHT * 3
-
-# Bounds
-MIN_BOUND = (0, 0)
-MAX_BOUND = (WIDTH, HEIGHT)   # <- use logical game size for bounds (not window size)
-
-X_BORDERS = (0, WIDTH)
-
 SCALING_FACTOR = 3
+
+WINDOW_WIDTH = 160 * 3
+WINDOW_HEIGHT = 210 * 3
+
+MIN_BOUND = (0,0)
+MAX_BOUND = (WIDTH, HEIGHT)
+
+X_BORDERS = (0, 160)
 
 # Enemies
 MAX_ENEMIES = 6
@@ -208,35 +205,39 @@ def load_sprites():
     """Load all sprites required for Word Zapper rendering."""
 
     MODULE_DIR = os.path.dirname(os.path.abspath(__file__))
-    SPRITES_DIR = os.path.join(MODULE_DIR, "sprites", "wordzapper")
-
 
     # Background
-    bg1 = aj.loadFrame(os.path.join(SPRITES_DIR, "bg", "1.npy"))
+    bg1 = aj.loadFrame(os.path.join(MODULE_DIR, "sprites/wordzapper/bg/1.npy"))
 
     # Player
-    pl_1 = aj.loadFrame(os.path.join(SPRITES_DIR, "player", "1.npy"))
-    pl_2 = aj.loadFrame(os.path.join(SPRITES_DIR, "player", "2.npy"))
+    pl_1 = aj.loadFrame(os.path.join(MODULE_DIR, "sprites/wordzapper/player/1.npy"))
+    pl_2 = aj.loadFrame(os.path.join(MODULE_DIR, "sprites/wordzapper/player/2.npy"))
 
-    pl_missile = aj.loadFrame(os.path.join(SPRITES_DIR, "bullet", "1.npy"))
+    pl_missile = aj.loadFrame(os.path.join(MODULE_DIR, "sprites/wordzapper/bullet/1.npy"))
 
-    # Enemies Bonkers
-    bonkers_1 = aj.loadFrame(os.path.join(SPRITES_DIR, "enemies", "bonkers", "1.npy"))
-    bonkers_2 = aj.loadFrame(os.path.join(SPRITES_DIR, "enemies", "bonkers", "2.npy"))
+    # Enemies Bonker
+    bonker_1 = aj.loadFrame(os.path.join(MODULE_DIR, "sprites/wordzapper/enemies/bonker/1.npy"))
+    bonker_2 = aj.loadFrame(os.path.join(MODULE_DIR, "sprites/wordzapper/enemies/bonker/2.npy"))
 
-    # Enemies Zonkers
-    zonkers_1 = aj.loadFrame(os.path.join(SPRITES_DIR, "enemies", "zonkers", "1.npy"))
-    zonkers_2 = aj.loadFrame(os.path.join(SPRITES_DIR, "enemies", "zonkers", "2.npy"))
+    # Enemies Zonker
+    zonker_1 = aj.loadFrame(os.path.join(MODULE_DIR, "sprites/wordzapper/enemies/zonker/1.npy"))
+    zonker_2 = aj.loadFrame(os.path.join(MODULE_DIR, "sprites/wordzapper/enemies/zonker/2.npy"))
 
-    SPRITE_BONKERS = jnp.stack([bonkers_1, bonkers_2], axis=0)
-    SPRITE_ZONKERS = jnp.stack([zonkers_1, zonkers_2], axis=0)
-
-    # Player ship sprites
+    # Pad player sprites to match
     pl_sub_sprites = aj.pad_to_match([pl_1, pl_2])
-    pl_torp_sprites = [pl_missile]
+    
+    pl_missile_sprites = [pl_missile]
+
+    # Pad bonker sprites to match 
+    bonker_sprites = aj.pad_to_match([bonker_1, bonker_2])
+
+    #Pad zonker sprites to match
+    zonker_sprites = aj.pad_to_match([zonker_1, zonker_2])
+
 
     SPRITE_BG = jnp.expand_dims(bg1, axis=0)
-    SPRITE_PL_MISSILE = jnp.repeat(pl_torp_sprites[0][None], 1, axis=0)
+    
+    SPRITE_PL_MISSILE = jnp.repeat(pl_missile_sprites[0][None], 1, axis=0)
 
     SPRITE_PL = jnp.concatenate(
         [
@@ -244,20 +245,34 @@ def load_sprites():
             jnp.repeat(pl_sub_sprites[1][None], 4, axis=0),
         ]
     )
+    
+    SPRITE_BONKER = jnp.concatenate(
+        [
+            jnp.repeat(bonker_sprites[0][None], 4, axis=0),
+            jnp.repeat(bonker_sprites[1][None], 4, axis=0),
+        ]
+    )
+
+    SPRITE_ZONKER = jnp.concatenate(
+        [
+            jnp.repeat(zonker_sprites[0][None], 4, axis=0),
+            jnp.repeat(zonker_sprites[1][None], 4, axis=0),
+        ]
+    )
 
     return (
         SPRITE_BG,
         SPRITE_PL,
         SPRITE_PL_MISSILE,
-        SPRITE_BONKERS,
-        SPRITE_ZONKERS
+        SPRITE_BONKER,
+        SPRITE_ZONKER
     )
 (
     SPRITE_BG,
     SPRITE_PL,
     SPRITE_PL_MISSILE,
-    SPRITE_BONKERS,
-    SPRITE_ZONKERS
+    SPRITE_BONKER,
+    SPRITE_ZONKER
 ) = load_sprites()
 
 
@@ -813,23 +828,16 @@ class JaxWordZapper(JaxEnvironment[WordZapperState, WordZapperObservation, WordZ
         return observation, return_state, env_reward, done, info
 
 class WordZapperRenderer(AtraJaxisRenderer):
-    def __init__(self, sprite_bg, sprite_pl, sprite_pl_missile, sprite_bonkers, sprite_zonkers):
-        self.sprite_bg = sprite_bg
-        self.sprite_pl = sprite_pl
-        self.sprite_pl_missile = sprite_pl_missile
-        self.sprite_bonkers = sprite_bonkers
-        self.sprite_zonkers = sprite_zonkers
-
     @partial(jax.jit, static_argnums=(0,))
     def render(self, state):
         raster = jnp.zeros((WIDTH, HEIGHT, 3))
 
         # render background
-        frame_bg = aj.get_sprite_frame(self.sprite_bg, 0)
+        frame_bg = aj.get_sprite_frame(SPRITE_BG, 0)
         raster = aj.render_at(raster, 0, 0, frame_bg)
 
         # render player
-        frame_pl_sub = aj.get_sprite_frame(self.sprite_pl, state.step_counter)
+        frame_pl_sub = aj.get_sprite_frame(SPRITE_PL, state.step_counter)
         raster = aj.render_at(
             raster,
             state.player_x,
@@ -839,7 +847,7 @@ class WordZapperRenderer(AtraJaxisRenderer):
         )
 
         # render player missile
-        frame_pl_torp = aj.get_sprite_frame(self.sprite_pl_missile, state.step_counter)
+        frame_pl_torp = aj.get_sprite_frame(SPRITE_PL_MISSILE, state.step_counter)
 
         should_render_torp = state.player_missile_position[0] > 0
         
@@ -857,7 +865,7 @@ class WordZapperRenderer(AtraJaxisRenderer):
         )
 
         # render player zapper
-        frame_pl_zapper = aj.get_sprite_frame(self.sprite_pl_missile, state.step_counter)
+        frame_pl_zapper = aj.get_sprite_frame(SPRITE_PL_MISSILE, state.step_counter)
 
         raster = jax.lax.cond(
             state.player_zapper_position[2], # check active
@@ -870,11 +878,12 @@ class WordZapperRenderer(AtraJaxisRenderer):
             lambda r: r,
             raster,
         )
-        # Enemy frame index: alternate every 30 frames (~0.5 sec at 60 FPS)
-        frame_idx = (state.step_counter // 5) % 2
 
-        # Render loop:
-        for i in range(MAX_ENEMIES):
+        # render enemies
+        frame_bonker = aj.get_sprite_frame(SPRITE_BONKER, state.step_counter)
+        frame_zonker = aj.get_sprite_frame(SPRITE_ZONKER ,state.step_counter)
+
+        def body_fn(i, raster):
             should_render_enemy = state.enemy_active[i]
             x = state.enemy_positions[i, 0]
             y = state.enemy_positions[i, 1]
@@ -883,14 +892,18 @@ class WordZapperRenderer(AtraJaxisRenderer):
             raster = jax.lax.cond(
                 should_render_enemy,
                 lambda r: jax.lax.cond(
-                    enemy_type == 0,  # Bonkers
-                    lambda rr: aj.render_at(rr, x, y, SPRITE_BONKERS[frame_idx]),
-                    lambda rr: aj.render_at(rr, x, y, SPRITE_ZONKERS[frame_idx]),
+                    enemy_type == 0,
+                    lambda rr: aj.render_at(rr, x, y, frame_bonker),
+                    lambda rr: aj.render_at(rr, x, y, frame_zonker),
                     r
                 ),
                 lambda r: r,
                 raster
             )
+            return raster
+
+        raster = jax.lax.fori_loop(0, MAX_ENEMIES, body_fn, raster)
+        
         return raster
 
 
@@ -909,15 +922,7 @@ if __name__ == "__main__":
     game = JaxWordZapper()
 
     # Initialize the renderer
-    renderer = WordZapperRenderer(
-        SPRITE_BG,
-        SPRITE_PL,
-        SPRITE_PL_MISSILE,
-        SPRITE_BONKERS,
-        SPRITE_ZONKERS
-    )
-
-
+    renderer = WordZapperRenderer()
 
     # Get jitted functions
     jitted_step = jax.jit(game.step)
