@@ -28,8 +28,7 @@ WIDTH = 160
 HEIGHT = 192
 SCALING_FACTOR = 4
 
-# difficuly
-#GAME_DIFFICULTY = 1
+# difficulty
 GAME_DIFFICULTY = 2
 
 # Chopper Constants TODO: Tweak these to match feeling of real game
@@ -44,6 +43,7 @@ PLAYER_ROTOR_SPEED = 3 # DEFAULT: 3 | The smaller this value, the faster the rot
 # Score
 SCORE_PER_JET_KILL = 200
 SCORE_PER_CHOPPER_KILL = 100
+SCORE_PER_TRUCK_ALIVE = 100
 
 # Player Missile Constants
 PLAYER_MISSILE_WIDTH = 80 # Sprite size_x
@@ -83,7 +83,7 @@ MAX_TRUCKS = 12 # DEFAULT: 12 | How much trucks are spawned
 MAX_JETS = 12 # DEFAULT: 12 | the maximum amount of jets that can be spawned
 MAX_CHOPPERS = 12 # DEFAULT: 12 | the maximum amount of choppers that can be spawned
 MAX_ENEMIES = 12 # DEFAULT: 12 | the amount of enemies that are spawned
-MAX_PLAYER_MISSILES = 2 # TODO: I think the real game uses one player missile max on screen. This feels nicer though
+MAX_PLAYER_MISSILES = 1 # DEFAULT: 1 | the original game allows only one missile per screen. The player_missile_step logic is adjusted automatically, if this is changed to more than 1.
 MAX_ENEMY_MISSILES = MAX_ENEMIES * 2 * 2 # Two missiles for every enemy (jets and choppers) (this does not mean, that there are always this many missiles on the screen/in the game)
 ENEMY_LANE_SWITCH_PROBABILITY = 0.05 # DEFAULT: 7 | how likely is it that en enemy switches a lane
 
@@ -141,6 +141,8 @@ MINIMAP_HEIGHT = 16
 MINIMAP_POSITION_X = (WIDTH // 2) - (MINIMAP_WIDTH // 2) # TODO: Im echten Game wird die Minimap nicht mittig, sondern weiter links gerendert. Wir müssen besprechen ob wir das auch machen, dann müsste man nur diese Zahl hier ändern (finde es aber so schöner)
 MINIMAP_POSITION_Y = 165
 
+MINIMAP_RENDER_TRUCK_REFRESH_RATE = 8 # Higher is slower (Does not fully work yet)
+
 DOWNSCALING_FACTOR_WIDTH = WIDTH // MINIMAP_WIDTH
 DOWNSCALING_FACTOR_HEIGHT = HEIGHT // MINIMAP_HEIGHT
 
@@ -160,6 +162,11 @@ FACE_RIGHT = 1
 
 SPAWN_POSITIONS_Y = jnp.array([60, 90, 120])
 TRUCK_SPAWN_POSITIONS = 156
+
+# Debugging
+
+ENABLE_PLAYER_COLLISION = True
+ENABLE_ENEMY_MISSILE_TRUCK_COLLISION = True
 
 
 class ChopperCommandState(NamedTuple):
@@ -436,7 +443,6 @@ def kill_entity(
 def check_missile_collisions(
     missile_positions: chex.Array,  # (MAX_MISSILES, 4)
     enemy_positions: chex.Array,    # (N_ENEMIES, 2)
-    score: chex.Array,
     rng_key: chex.PRNGKey,
     on_screen_position: chex.Array,
     player_x: chex.Array,
@@ -534,7 +540,7 @@ def check_missile_collisions(
         0,
         missile_positions.shape[0],
         check_single_missile,
-        (missile_positions, enemy_positions, score, rng_key),
+        (missile_positions, enemy_positions, 0, rng_key),
     )
 
 
@@ -758,7 +764,7 @@ def step_enemy_movement(
     def emit_velocity() -> chex.Array:
         difficulty_value = jnp.where(difficulty == 1, 1, 1.5)
         jet_speed_right = (JET_VELOCITY_RIGHT + enemy_speed) * difficulty_value
-        jet_speed_left = (JET_VELOCITY_RIGHT + enemy_speed) * difficulty_value
+        jet_speed_left = (JET_VELOCITY_LEFT + enemy_speed) * difficulty_value
         chopper_speed_right = (CHOPPER_VELOCITY_RIGHT + enemy_speed) * difficulty_value
         chopper_speed_left = (CHOPPER_VELOCITY_LEFT + enemy_speed) * difficulty_value
 
@@ -1225,7 +1231,9 @@ def player_missile_step(state: ChopperCommandState, curr_player_x, curr_player_y
             missiles, did_spawn = carry
             missile = missiles[i]
             free = missile[2] == 0  # direction == 0 -> inactive
-            should_spawn = jnp.logical_and(free, jnp.logical_not(did_spawn))
+            should_spawn = jnp.where(MAX_PLAYER_MISSILES > 1,
+                                     jnp.logical_and(free, jnp.logical_not(did_spawn)),
+                                     jnp.array(True))
 
             spawn_x = jnp.where(
                 state.player_facing_direction == -1,
@@ -1456,7 +1464,7 @@ class JaxChopperCommand(JaxEnvironment[ChopperCommandState, ChopperCommandObserv
         )
 
         # Enemy missiles
-        enemy_missiles = jax.vmap(lambda pos: convert_to_entity(pos, PLAYER_MISSILE_SIZE))(
+        enemy_missiles = jax.vmap(lambda pos: convert_to_entity(pos, ENEMY_MISSILE_SIZE))(
             state.enemy_missile_positions
         )
 
@@ -1614,12 +1622,11 @@ class JaxChopperCommand(JaxEnvironment[ChopperCommandState, ChopperCommandObserv
             (
                 new_player_missile_position,
                 new_jet_positions,
-                new_score_jet,
+                score_to_add_jet,
                 new_rng_key,
             ) = check_missile_collisions(
                 new_player_missile_positions,
                 new_jet_positions,
-                state.score,
                 new_rng_key,
                 on_screen_chopper_position,
                 new_player_x,
@@ -1630,12 +1637,11 @@ class JaxChopperCommand(JaxEnvironment[ChopperCommandState, ChopperCommandObserv
             (
                 new_player_missile_position,
                 new_chopper_positions,
-                new_score,
+                score_to_add_chopper,
                 new_rng_key,
             ) = check_missile_collisions(
                 new_player_missile_positions,
                 new_chopper_positions,
-                new_score_jet,
                 new_rng_key,
                 on_screen_chopper_position,
                 new_player_x,
@@ -1696,7 +1702,7 @@ class JaxChopperCommand(JaxEnvironment[ChopperCommandState, ChopperCommandObserv
                 ENEMY_MISSILE_SIZE
             )
 
-            new_truck_positions = mis_tru_collision_truck_positions
+            new_truck_positions = jnp.where(ENABLE_ENEMY_MISSILE_TRUCK_COLLISION, mis_tru_collision_truck_positions, new_truck_positions)
             new_enemy_missile_positions = mis_tru_collision_missile_positions
 
 
@@ -1711,6 +1717,10 @@ class JaxChopperCommand(JaxEnvironment[ChopperCommandState, ChopperCommandObserv
                     )
                 )
             )
+            player_collision = jnp.where(ENABLE_PLAYER_COLLISION,
+                                         player_collision,
+                                         jnp.array(False)
+                                         )
 
 
             # --------------- DEATH UPDATES ---------------
@@ -1724,8 +1734,11 @@ class JaxChopperCommand(JaxEnvironment[ChopperCommandState, ChopperCommandObserv
             # --------------- SCORE AND LIFE UPDATES ---------------
 
             # Update score with collision points
-            new_score = jnp.where(player_collision_jet, new_score + SCORE_PER_JET_KILL, new_score)
-            new_score = jnp.where(player_collision_chopper, new_score + SCORE_PER_CHOPPER_KILL, new_score)
+            new_score = state.score                                                                                     # Get current score
+            new_score = new_score + score_to_add_chopper + score_to_add_jet                                             # Add scores from enemy kills by player missile
+            new_score = jnp.where(player_collision_jet, new_score + SCORE_PER_JET_KILL, new_score)                      # Add scores from enemy kills by collision with jet
+            new_score = jnp.where(player_collision_chopper, new_score + SCORE_PER_CHOPPER_KILL, new_score)              # Add scores from enemy kills by collision with chopper
+            new_score = jnp.minimum(new_score, 999999)                                                               # Score cannot be greater than 999999
 
             # Update lives if player collides with an enemy or enemy missile and add one life for every 10000 points
             new_lives_to_add, new_save_lives = lives_step(player_collision, state.score, state.save_lives)
@@ -1775,16 +1788,71 @@ class JaxChopperCommand(JaxEnvironment[ChopperCommandState, ChopperCommandObserv
             # Freeze pause counter if player has no lives left
             new_pause_timer = jnp.where(state.lives == 0, jnp.maximum(new_pause_timer, 1), new_pause_timer)
 
-            # truck deaths
-            temp_truck_positions = (
-                step_truck_movement(
-                    normal_state.truck_positions,
-                    normal_state.player_x,
-                )
+            all_enemies_dead = jnp.logical_and(
+                jnp.all(state.jet_positions == 0),
+                jnp.all(state.chopper_positions == 0)
             )
 
-            updated_truck_death_timers = temp_truck_positions[:, 3]  # neue Timer
-            new_truck_positions = state.truck_positions.at[:, 3].set(updated_truck_death_timers)
+            # Normal truck step
+            def death_pause_truck_step_normal():
+                # truck deaths
+                temp_truck_positions = (
+                    step_truck_movement(
+                        normal_state.truck_positions,
+                        normal_state.player_x,
+                    )
+                )
+
+                updated_truck_death_timers = temp_truck_positions[:, 3]  # neue Timer
+                return state.truck_positions.at[:, 3].set(updated_truck_death_timers), 0
+
+            # Truck reset animation and score animation
+            def death_pause_truck_step_give_points():
+                # Starts killing trucks at this index TODO: Change this to the index of the truck that is the furthest to the left of the player (This changes bc of the wrap around)
+                start_idx = 6
+
+                elapsed = DEATH_PAUSE_FRAMES - state.pause_timer
+                frames_per_kill = DEATH_PAUSE_FRAMES // MAX_TRUCKS
+
+                num_remove_now = jnp.clip(elapsed // frames_per_kill, 0, MAX_TRUCKS)        # Number of trucks to remove in this frame
+                num_remove_prev = jnp.clip((elapsed - 1) // frames_per_kill, 0, MAX_TRUCKS) # Number of trucks that were removed last frame
+
+                id = jnp.arange(MAX_TRUCKS)
+                rel_idx = jnp.mod(id - start_idx, MAX_TRUCKS)
+
+                # Mask: Who should be dead now? Who was already dead?
+                kill_mask_now = rel_idx < num_remove_now
+                kill_mask_prev = rel_idx < num_remove_prev
+
+                # Killed in this frame
+                newly_killed = jnp.logical_and(kill_mask_now, jnp.logical_not(kill_mask_prev))
+
+                directions = state.truck_positions[:, 2]
+                alive_before = directions != 0
+
+                # Only give points if truck was alive
+                valid_kill = jnp.logical_and(newly_killed, alive_before)
+
+                # Give points
+                num_valid_kills = jnp.sum(valid_kill)
+                add_to_score = num_valid_kills * SCORE_PER_TRUCK_ALIVE
+
+                # Delete trucks
+                zero_truck = jnp.zeros_like(state.truck_positions)
+                new_trucks = jnp.where(kill_mask_now[:, None], zero_truck, state.truck_positions)
+
+                return new_trucks, add_to_score
+
+            # Decides if trucks should be all killed and given points for or just rendered as the death_animation (in the render function)
+            new_truck_positions, new_add_to_score = jax.lax.cond(all_enemies_dead,
+                                               lambda _: death_pause_truck_step_give_points(),
+                                               lambda _:death_pause_truck_step_normal(),
+                                               operand=None
+                                               )
+            new_score = state.score + new_add_to_score
+
+
+
 
             # Enemy deaths
             temp_jet_positions, temp_chopper_positions, _ = (
@@ -1824,6 +1892,7 @@ class JaxChopperCommand(JaxEnvironment[ChopperCommandState, ChopperCommandObserv
             # player_missile_cooldown   - this is a dependency for player_missile_positions
             # pause_timer               - this is required for ending the pause
             paused_state = state._replace(
+                score=new_score,
                 truck_positions=new_truck_positions,
                 jet_positions=new_jet_positions_pause,
                 chopper_positions=new_chopper_positions_pause,
@@ -2328,43 +2397,68 @@ class Renderer_AtraJaxis(AtraJaxisRenderer):
         )
 
         # Render trucks on minimap
-        def render_truck_minimap(i, raster_base):
-            x, y, direction, death_timer = state.truck_positions[i]
+        def render_trucks_minimap(i, raster_base):
+            timing_clock = state.step_counter % MINIMAP_RENDER_TRUCK_REFRESH_RATE
+            update_trigger = timing_clock == 0
 
-            # Nur wirklich lebende Trucks (nicht in Death-Phase) anzeigen
-            is_alive = jnp.logical_and(direction != 0,
-                                       death_timer > FRAMES_DEATH_ANIMATION_TRUCK)
+            truck_world_x = state.truck_positions[6][0]
+
+            truck_world_x = jnp.where(update_trigger,
+                                      truck_world_x,
+                                      truck_world_x + (0.5 * timing_clock)
+                                      )
 
             weird_offset = 16
-            minimap_x = weird_offset + (
-                    (x - state.player_x + chopper_position)
-                    // DOWNSCALING_FACTOR_WIDTH // 6
-            )
+            parent_x = weird_offset + (
+                    (truck_world_x - state.player_x + chopper_position)
+                    // DOWNSCALING_FACTOR_WIDTH // 6)
 
-            should_render = jnp.logical_and(
-                is_alive,
+            minimap_x = 2 * i + parent_x
+
+            is_in_first_fleet = i < 3
+            is_in_second_fleet = jnp.logical_and(i >= 3, i <= 5)
+            is_in_third_fleet = jnp.logical_and(i >= 6, i <= 8)
+            is_in_fourth_fleet = jnp.logical_and(i >= 9, i <= 11)
+
+            add = 11.5
+            add_to_first = jnp.where(is_in_first_fleet,
+                                     -3 * add,#-1 * add,
+                                     0)
+            add_to_second = jnp.where(is_in_second_fleet,
+                                      -2 * add,
+                                      0)
+
+            add_to_third = jnp.where(is_in_third_fleet,
+                                     -1 * add,
+                                     0)
+            add_to_fourth = jnp.where(is_in_fourth_fleet,
+                                      0 * add,
+                                      0)
+
+            minimap_x = minimap_x + add_to_first + add_to_second + add_to_third + add_to_fourth
+            minimap_x = jnp.mod(minimap_x, 6 * add)
+
+            minimap_y = (state.truck_positions[i][1] // DOWNSCALING_FACTOR_HEIGHT)
+
+            should_render_rest = jnp.logical_and(
+                state.truck_positions[i][3] != 0,
                 jnp.logical_and(minimap_x >= 0, minimap_x < MINIMAP_WIDTH)
             )
 
-            def do_render(r):
-                truck_world_x = state.truck_positions[i][0]
-                truck_world_y = state.truck_positions[i][1]
-
-                # Downscaling
-                minimap_x = weird_offset + (
-                            (truck_world_x - state.player_x + chopper_position) // DOWNSCALING_FACTOR_WIDTH // 6)
-                minimap_y = (truck_world_y // DOWNSCALING_FACTOR_HEIGHT)
-
-                return aj.render_at(
+            raster_base = jax.lax.cond(
+                should_render_rest,
+                lambda r: aj.render_at(
                     r,
                     MINIMAP_POSITION_X + minimap_x,
                     MINIMAP_POSITION_Y + 1 + minimap_y,
                     MINIMAP_TRUCK
-                )
+                ),
+                lambda r: r,
+                raster_base,
+            )
+            return raster_base
 
-            return jax.lax.cond(should_render, do_render, lambda r: r, raster_base)
-
-        raster = jax.lax.fori_loop(0, MAX_TRUCKS, render_truck_minimap, raster)
+        raster = jax.lax.fori_loop(0, MAX_TRUCKS, render_trucks_minimap, raster)
 
 
         # Render jets on minimap
