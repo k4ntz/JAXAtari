@@ -55,6 +55,66 @@ DISTANCE_DIGIT_X = 8
 NUMBER_OF_DIGITS_FOR_GAME_SCORE = 6
 NUMBER_OF_DIGITS_FOR_TIMER_SCORE = 4
 
+# Mario start position
+MARIO_START_X = 49
+MARIO_START_Y = 48
+
+
+class DonkeyKongState(NamedTuple):
+    mario_x: chex.Array
+    mario_y: chex.Array
+
+
+class DonkeyKongObservation(NamedTuple):
+    total_score: jnp.ndarray
+
+
+class DonkeyKongInfo(NamedTuple):
+    time: jnp.ndarray
+    all_rewards: chex.Array
+
+
+
+class JaxDonkeyKong(JaxEnvironment[DonkeyKongState, DonkeyKongObservation, DonkeyKongInfo]):
+    def __init__(self, reward_funcs: list[callable]=None):
+        super().__init__()
+        self.frame_stack_size = 4
+        if reward_funcs is not None:
+            reward_funcs = tuple(reward_funcs)
+        self.reward_funcs = reward_funcs
+        self.action_set = [
+            Action.NOOP,
+            Action.FIRE,
+            Action.RIGHT,
+            Action.LEFT,
+            Action.UP,
+            Action.DOWN
+        ]
+        self.obs_size = 0
+
+    def reset(self, key=None) -> Tuple[DonkeyKongObservation, DonkeyKongState]:
+        """
+        Resets the game state to the initial state.
+        Returns the initial state and the reward (i.e. 0)
+        """
+
+        state = DonkeyKongState(
+            mario_x=jnp.array(MARIO_START_X).astype(jnp.int32),
+            mario_y=jnp.array(MARIO_START_Y).astype(jnp.int32),
+        )
+        initial_obs = self._get_observation(state)
+
+        return initial_obs, state
+
+    
+    @partial(jax.jit, static_argnums=(0,))
+    def _get_observation(self, state: DonkeyKongState):
+        
+        return DonkeyKongObservation(
+            total_score = 0,
+        )
+
+
 
 def load_sprites():
     """Load all sprites required for Pong rendering."""
@@ -219,6 +279,11 @@ class DonkeyKongRenderer(AtraJaxisRenderer):
         raster = aj.render_at(raster, LEVEL_1_LIFE_BAR_1_X, LIFE_BAR_Y, frame_life_bar)
         raster = aj.render_at(raster, LEVEL_1_LIFE_BAR_2_X, LIFE_BAR_Y, frame_life_bar)
 
+        # Mario
+        frame_mario = aj.get_sprite_frame(self.SPRITES_MARIO_STANDING, 0)
+        raster = aj.render_at(raster, state.mario_x, state.mario_y, frame_mario)
+
+
         # Hammer
         frame_hammer = aj.get_sprite_frame(self.SPRITES_HAMMER_UP, 0)
         raster = aj.render_at(raster, LEVEL_1_HAMMER_X, LEVEL_1_HAMMER_Y, frame_hammer)
@@ -304,19 +369,22 @@ if __name__ == "__main__":
     pygame.display.set_caption("Donkey Kong Game")
     clock = pygame.time.Clock()
 
+    game = JaxDonkeyKong()
+
     # Create the JAX renderer
     renderer = DonkeyKongRenderer()
 
+    # Get jitted functions
+    jitted_reset = jax.jit(game.reset)
 
-
+    obs, curr_state = jitted_reset()
 
     # Game Loop
     running = True
-
-
     while running:
+
         # Render and Display
-        raster = renderer.render(state=None)
+        raster = renderer.render(state=curr_state)
         aj.update_pygame(screen, raster, 3, WIDTH, HEIGHT)
 
     pygame.quit()
