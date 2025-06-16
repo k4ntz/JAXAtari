@@ -153,7 +153,7 @@ class JaxBackgammonEnv(JaxEnvironment[BackgammonState, jnp.ndarray, dict]):
         player_idx = JaxBackgammonEnv.get_player_index(player)
         opponent_idx = 1 - player_idx
 
-        in_bounds = (0 <= from_point) & (from_point < 25) & (0 <= to_point) & (to_point <= HOME_INDEX)
+        in_bounds = ((0 <= from_point) & (from_point <= 24) & (0 <= to_point) & (to_point <= HOME_INDEX) & (to_point != BAR_INDEX))
         same_point = from_point == to_point
         has_bar_checkers = board[player_idx, BAR_INDEX] > 0
         moving_from_bar = from_point == BAR_INDEX
