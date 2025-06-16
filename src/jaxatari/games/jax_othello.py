@@ -76,7 +76,7 @@ BIT_MASKS_HIGH_TO_LOW = jnp.array([0x80, 0x40, 0x20, 0x10, 8, 4, 2, 1], dtype=jn
 __F7EC = jnp.array([
     0x20, 0x20, 0x20, 0x20, 0x20, 0x10, 0x40, 0xe0, 0x20, 0x40, 0x15, 0xe0, 0x20, 0xe0, 0xe0,
     0x50, 0x00, 0xf0, 0xb0
-], dtype=jnp.uint8)
+], dtype=jnp.uint8) #TODO difference to np.int8
 
 # Constants to decide in which side the discs will be flipped
 FLIP_UP_SIDE = 0
@@ -1146,18 +1146,21 @@ def css_check_three_tiles(game_field: Field, field_1: int, field_2: int, field_3
             None),
         secondary_condition)
 
-def css__f2d3_count_tiles_in_line(game_field: Field, array_of_tiles, pos, default_pos, difficulty: int):
-    return_value = ((None, None), False) # (Touple to be returned, Aborted)
+def css__f2d3_count_tiles_in_line(array_of_tiles, pos: int, default_pos: int, difficulty: int):
+    return_value = ((-1, -1), False) # (Touple to be returned, Aborted)
 
     return_value = jax.lax.cond(difficulty == 1,
-        lambda _: ((0, None), True),
+        lambda _: ((0, -1), True),
         lambda _: return_value,
         None)
 
-    reversed_array_of_tiles = jnp.flip(array_of_tiles.field_color)
+    reversed_array_of_tiles = Field(
+        field_id=jnp.flip(array_of_tiles.field_id),
+        field_color=jnp.flip(array_of_tiles.field_color)
+    )
 
     left_state, left_pos_opt = css_sub_f5c1_count_tiles_in_line_descending(array_of_tiles, pos)
-    right_state, right_pos_opt = css_sub_f5c1_count_tiles_in_line_ascending(reversed_array_of_tiles, 7 - pos)
+    right_state, right_pos_opt = css_sub_f5c1_count_tiles_in_line_descending(reversed_array_of_tiles, 7 - pos)
 
     left_pos = jax.lax.cond(left_pos_opt != -1, 
         lambda _: left_pos_opt, 
@@ -1170,24 +1173,24 @@ def css__f2d3_count_tiles_in_line(game_field: Field, array_of_tiles, pos, defaul
 
     combined_state = (left_state << 2) | right_state
 
-    returned_value = jax.lax.cond(jnp.logical_and(
-        returned_value[1] == False),
+    return_value = jax.lax.cond(jnp.logical_and(
+        return_value[1] == False,
         jnp.logical_and(
             combined_state == 0b0101, 
             jnp.logical_or(
                 reversed_array_of_tiles.field_color[0] != FieldColor.EMPTY, 
-                reversed_array_of_tiles.field_color[7] != FieldColor.EMPTY)),
+                reversed_array_of_tiles.field_color[7] != FieldColor.EMPTY))),
         lambda _: ((-40, right_pos), True),
-        lambda _: returned_value,
+        lambda _: return_value,
         None)
 
-    returned_value = jax.lax.cond(jnp.logical_and(
-        returned_value[1] == False),
+    return_value = jax.lax.cond(jnp.logical_and(
+        return_value[1] == False,
         jnp.logical_and(
             jnp.logical_or(combined_state == 0b0111, combined_state == 0b1101),
-            jnp.logical_or(right_pos == 7, right_pos == 0)),
+            jnp.logical_or(right_pos == 7, right_pos == 0))),
         lambda _: ((-96, right_pos), True),
-        lambda _: returned_value,
+        lambda _: return_value,
         None)
 
     reverse_pos = 7 - pos
@@ -1209,15 +1212,15 @@ def css__f2d3_count_tiles_in_line(game_field: Field, array_of_tiles, pos, defaul
     flag, condition_break = jax.lax.cond(jnp.logical_and(
         condition_break == False, 
         jnp.logical_and(
-            reversed_array_of_tiles.field_color[rev_pos - 1] != FieldColor.EMPTY, 
-            reversed_array_of_tiles.field_color[rev_pos-2] == FieldColor.EMPTY)),
+            reversed_array_of_tiles.field_color[reverse_pos - 1] != FieldColor.EMPTY, 
+            reversed_array_of_tiles.field_color[reverse_pos-2] == FieldColor.EMPTY)),
             lambda _: (True, True),
             lambda _: (flag, False),
             None)
 
-    flag, condition_break, combined_score = jax.lax.cond(jnp.logical_and(condition_break == False, reverse_pos <2),
+    flag, condition_break, combined_state = jax.lax.cond(jnp.logical_and(condition_break == False, reverse_pos <2),
         lambda _: (True, True, 18),
-        lambda _: (flag, False, combined_score),
+        lambda _: (flag, False, combined_state),
         None)
 
 
@@ -1231,16 +1234,69 @@ def css__f2d3_count_tiles_in_line(game_field: Field, array_of_tiles, pos, defaul
         ]
     ))
 
-    combined_score = jax.lax.cond(conditions,
+    combined_state = jax.lax.cond(conditions,
         lambda _: 18,
-        lambda _: combined_score,
+        lambda _: combined_state,
         None
     )
 
+    return_value = jax.lax.cond(difficulty == 2,
+        lambda _: ((__F7EC[combined_state], right_pos), True),
+        lambda _: return_value,
+        None,)
+    
+    black_mask_low = 1 << reverse_pos
+    black_mask_high = 1 << (7-reverse_pos)
+    white_mask_low = 0
+    white_mask_high = 0
 
+    init_val = (reversed_array_of_tiles, black_mask_low, black_mask_high, white_mask_low,white_mask_high)
 
+    def css_sub_f5c1_count_tiles_in_line_loop_mask_tiles(i, loop_vals):
+        _, black_mask_low, black_mask_high, white_mask_low, white_mask_high = loop_vals
 
+        black_mask_low, black_mask_high = jax.lax.cond( reversed_array_of_tiles.field_color[i] == FieldColor.BLACK,
+            lambda _: (black_mask_low | 1 << i, black_mask_high | 1 << (7 - i)),
+            lambda _: (black_mask_low, black_mask_high),
+            None
+        )
 
+        white_mask_low, white_mask_high = jax.lax.cond( reversed_array_of_tiles.field_color[i] == FieldColor.WHITE,
+            lambda _: (white_mask_low | 1 << i, white_mask_high | 1 << (7 - i)),
+            lambda _: (white_mask_low, white_mask_high),
+            None
+        )
+
+        return (loop_vals[0], black_mask_low, black_mask_high, white_mask_low, white_mask_high)
+
+    _, black_mask_low, black_mask_high, white_mask_low, white_mask_high = jax.lax.fori_loop(0,8, css_sub_f5c1_count_tiles_in_line_loop_mask_tiles, init_val)
+
+    init_val2 = (return_value, black_mask_low, black_mask_high,white_mask_low,white_mask_high)
+
+    def css_sub_f5c1_count_tiles_in_line_loop_check_masks(i, loop_vals):
+        #TODO can be vectorised
+        return_value, black_mask_low, black_mask_high, white_mask_low, white_mask_high = loop_vals
+        return_value = jax.lax.cond(
+            jnp.logical_and(__F3BA[33-i] == white_mask_low, __F3DC[33-i] == black_mask_low),
+            lambda _: ((__F3FE[33-i], white_mask_high),True),
+            lambda _: return_value,
+            None)
+        
+        return_value = jax.lax.cond(
+            jnp.logical_and(return_value[1] == False, 
+                jnp.logical_and(__F3BA[33-i] == white_mask_high, __F3DC[33-i] == black_mask_high)),
+            lambda _: ((__F3FE[33-i], white_mask_high),True), #TODO check in Assembly for correctnes!
+            lambda _: return_value,
+            None)
+        
+        return (return_value, black_mask_low, black_mask_high, white_mask_low, white_mask_high)
+
+    return_value, _, _, _, _ = jax.lax.cond(return_value[1] == False, 
+                                            lambda init_val2: jax.lax.fori_loop(0,34, css_sub_f5c1_count_tiles_in_line_loop_check_masks, init_val2),
+                                            lambda init_val2: (return_value, black_mask_low, black_mask_high, white_mask_low, white_mask_high),
+                                            init_val2)
+
+   
 @jax.jit
 def css_sub_f5c1_count_tiles_in_line_descending(array_of_tiles, start_index: int) ->(int, int):
     adjacent_index = start_index-1
