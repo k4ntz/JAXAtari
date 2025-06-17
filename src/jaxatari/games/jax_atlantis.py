@@ -44,6 +44,8 @@ class GameConfig:
     enemy_speed: int = 1 # changes throughout the game
     enemy_spawn_min_frames: int = 5
     enemy_spawn_max_frames: int = 50
+    wave_end_cooldown: int = 150 # cooldown of 150 frames after wave-end, before spawning new enemies
+    wave_start_enemy_count: int = 10 # number of enemies in the first wave
 
 
 # Each value of this class is a list.
@@ -77,6 +79,8 @@ class AtlantisState(NamedTuple):
     rng: chex.Array  # PRNG state
     lanes_free: chex.Array # bool for each lane
     command_post_alive: chex.Array # is command post alive (middle cannon)
+    number_enemies_wave_remaining: chex.Array # number of remaining enemies per wave
+    wave_end_cooldown_remaining: chex.Array
     #installations: chex.Array # should store all current installations and their coordinates
 
 
@@ -233,7 +237,7 @@ class JaxAtlantis(JaxEnvironment[AtlantisState, AtlantisObservation, AtlantisInf
         new_state = AtlantisState(
             score=jnp.array(0, dtype=jnp.int32),
             score_spent=jnp.array(0, dtype=jnp.int32),
-            wave=jnp.array(0, dtype=jnp.int32),
+            wave=jnp.array(0, dtype=jnp.int32), # start with wave-number 0
             enemies=empty_enemies,
             bullets=empty_bullets,
             bullets_alive=empty_bullets_alive,
@@ -249,6 +253,8 @@ class JaxAtlantis(JaxEnvironment[AtlantisState, AtlantisObservation, AtlantisInf
             rng=key,
             lanes_free=empty_lanes,
             command_post_alive=jnp.array(True, dtype=jnp.bool_),
+            number_enemies_wave_remaining=jnp.array(self.config.wave_start_enemy_count, dtype=jnp.int32),
+            wave_end_cooldown_remaining=jnp.array(0, dtype=jnp.int32),
         )
 
         obs = self._get_observation(new_state)
@@ -395,7 +401,7 @@ class JaxAtlantis(JaxEnvironment[AtlantisState, AtlantisObservation, AtlantisInf
                 cfg.enemy_spawn_max_frames + 1,
                 dtype=jnp.int32,
             )
-        #check if the lane is free
+        # check if the first lane is free
         lane_free = state.lanes_free[0]
         # Count down the timer if lane is free
         timer = jnp.where(lane_free, state.enemy_spawn_timer - 1, state.enemy_spawn_timer)
@@ -406,10 +412,10 @@ class JaxAtlantis(JaxEnvironment[AtlantisState, AtlantisObservation, AtlantisInf
         rng_spawn, rng_after = jax.random.split(state.rng, 2)
 
         # if the timer is still bigger than 0, just update the timer and rng state
-        def _no_spawn(s):
+        def _no_spawn(s: AtlantisState) -> AtlantisState:
             return s._replace(enemy_spawn_timer=timer, rng=rng_after)
 
-        def _spawn(s):
+        def _spawn(s: AtlantisState) -> AtlantisState:
 
             # enemy has 5 entries, the last one (index 5) is the active_flag
             # if this value is 0, it means an enemy isn't active anymore
@@ -459,12 +465,16 @@ class JaxAtlantis(JaxEnvironment[AtlantisState, AtlantisObservation, AtlantisInf
             # set first lane to full
             new_lanes = s.lanes_free.at[0].set(False)
 
+            # decrease counter of spawnable enemies per wave
+            updated_state = updated_state._replace(number_enemies_wave_remaining=(s.number_enemies_wave_remaining - 1))
+
             return updated_state._replace(enemy_spawn_timer=new_timer, rng=rng_after, lanes_free=new_lanes)
 
+        spawn_allowed = (timer <= 0) & (state.number_enemies_wave_remaining > 0)
         return jax.lax.cond(
-            timer > 0,  # condition
-            _no_spawn,  # true. if timer > 0
-            _spawn,  # if timer is 0, spawn a new enemy
+            spawn_allowed,  # condition
+            _spawn,  # If there are remaining enemies in the wave and time is 0, spawn
+            _no_spawn,  # do not spawn
             state,
         )  # operands for the two functions
 
@@ -601,6 +611,38 @@ class JaxAtlantis(JaxEnvironment[AtlantisState, AtlantisObservation, AtlantisInf
 
         return state._replace(bullets_alive=new_bullet_alive, enemies=enemies_updated)
 
+    # @partial(jax.jit, static_argnums=(0,))
+    # def _maybe_step(self, state: AtlantisState) -> AtlantisState:
+    #     cfg = self.config
+
+    @partial(jax.jit, static_argnums=(0,))
+    def _update_wave(self, state: AtlantisState) -> AtlantisState:
+        cfg = self.config
+
+        def _new_wave(s: AtlantisState) -> AtlantisState:
+            new_wave = s.wave + 1
+            # compute how many enemies next wave should have
+            next_count = cfg.wave_start_enemy_count + new_wave * 2
+            return s._replace(
+                wave=new_wave,
+                wave_end_cooldown_remaining=jnp.array(cfg.wave_end_cooldown, jnp.int32),
+                number_enemies_wave_remaining=next_count,
+            )
+
+        def _same_wave(s: AtlantisState) -> AtlantisState:
+            return s
+
+        # if no enemies are remaining, start new wave
+        return jax.lax.cond(
+            state.number_enemies_wave_remaining == 0,
+            _new_wave,
+            _same_wave,
+            state,
+        )
+
+
+
+
     @partial(jax.jit, static_argnums=(0,))
     def step(
         self, state: AtlantisState, action: chex.Array
@@ -614,14 +656,16 @@ class JaxAtlantis(JaxEnvironment[AtlantisState, AtlantisObservation, AtlantisInf
         state = self._update_cooldown(state, cannon_idx)._replace(
             fire_button_prev=fire_pressed
         )
-
         state = self._move_bullets(state)
+        # jax.debug.print("Enemies remaining: {}", state.number_enemies_wave_remaining)
 
         # Spawn enemies
         state = self._spawn_enemy(state)
         state = self._move_enemies(state)
 
         state = self._check_bullet_enemy_collision(state)
+
+        state = self._update_wave(state)
 
         observation = self._get_observation(state)
         info = AtlantisInfo(time=jnp.array(0, dtype=jnp.int32))
@@ -745,6 +789,8 @@ def main():
             if counter % frameskip == 0:
                 action = get_human_action()
                 (obs, curr_state, _, _, _) = jitted_step(curr_state, action)
+                print("Enemies remaining:", int(curr_state.number_enemies_wave_remaining))
+                print("Current wave: ", int(curr_state.wave))
 
         # Render and display
         raster = renderer.render(curr_state)
