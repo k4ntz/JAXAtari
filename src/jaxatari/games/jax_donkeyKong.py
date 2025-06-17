@@ -56,13 +56,68 @@ NUMBER_OF_DIGITS_FOR_GAME_SCORE = 6
 NUMBER_OF_DIGITS_FOR_TIMER_SCORE = 4
 
 # Mario start position
-MARIO_START_X = 49
-MARIO_START_Y = 48
+MARIO_START_X = 48
+MARIO_START_Y = 162
+
+# Barrel Start Position
+BARREL_START_X = 34
+BARREL_START_Y = 52
+BARREL_SPRITE_FALL = 0
+BARREL_SPRITE_RIGHT = 1
+BARREL_SPRITE_LEFT = 2
+
+# Hit Boxes RANGES
+MARIO_HIT_BOX_X = 7
+MARIO_HIT_BOX_Y = 17
+BARREL_HIT_BOX_X = 8
+BARREL_HIT_BOX_Y = 8
+
+# Moving Directions
+MOVING_UP = 0
+MOVING_RIGHT = 1
+MOVING_DOWN = 2
+MOVING_LEFT = 3
+
+
+def get_human_action() -> chex.Array:
+    """
+    Records if UP or DOWN is being pressed and returns the corresponding action.
+
+    Returns:
+        action: int, action taken by the player (LEFT, RIGHT, FIRE, LEFTFIRE, RIGHTFIRE, NOOP).
+    """
+    keys = pygame.key.get_pressed()
+    if keys[pygame.K_a] and keys[pygame.K_SPACE]:
+        return jnp.array(Action.LEFTFIRE)
+    elif keys[pygame.K_d] and keys[pygame.K_SPACE]:
+        return jnp.array(Action.RIGHTFIRE)
+    elif keys[pygame.K_a]:
+        return jnp.array(Action.LEFT)
+    elif keys[pygame.K_d]:
+        return jnp.array(Action.RIGHT)
+    elif keys[pygame.K_s]:
+        return jnp.array(Action.DOWN)
+    elif keys[pygame.K_w]:
+        return jnp.array(Action.UP)
+    elif keys[pygame.K_SPACE]:
+        return jnp.array(Action.FIRE)
+    else:
+        return jnp.array(Action.NOOP)
+
+
+class BarrelPosition(NamedTuple):
+    barrel_x: chex.Array
+    barrel_y: chex.Array
+    sprite: chex.Array
+    moving_direction: chex.Array
 
 
 class DonkeyKongState(NamedTuple):
+    level: chex.Array
+    step_counter: chex.Array
     mario_x: chex.Array
     mario_y: chex.Array
+    barrels: BarrelPosition
 
 
 class DonkeyKongObservation(NamedTuple):
@@ -73,6 +128,65 @@ class DonkeyKongInfo(NamedTuple):
     time: jnp.ndarray
     all_rewards: chex.Array
 
+
+def barrel_step(state):
+    step_counter = state.step_counter
+    
+    # pick other sprite for animation after 8 frames
+    should_pick_next_sprite = step_counter % 8 == 0
+    
+    new_state = state
+    # calculate new position
+    def update_single_barrel(x, y, direction, sprite):
+        # change sprite animation
+        def flip_sprite(sprite):
+            return jax.lax.cond(
+                jnp.logical_and(sprite != BARREL_SPRITE_FALL, sprite == BARREL_SPRITE_RIGHT),
+                lambda _: BARREL_SPRITE_LEFT,
+                lambda _: BARREL_SPRITE_RIGHT,
+                operand=None
+            )
+        
+        new_sprite = jax.lax.cond(
+            should_pick_next_sprite, 
+            lambda _: flip_sprite(sprite),
+            lambda _: sprite,
+            operand=None
+        )
+        
+        # change position
+        new_x = x + 1
+        new_y = y
+        direction = direction
+        return new_x, new_y, direction, new_sprite
+    update_all_barrels = jax.vmap(update_single_barrel)
+
+    barrels = new_state.barrels
+    new_barrel_x, new_barrel_y, new_barrel_moving_direction, sprite = update_all_barrels(
+        barrels.barrel_x, barrels.barrel_y, barrels.moving_direction, barrels.sprite
+    )
+
+    barrels = barrels._replace(
+        barrel_x = new_barrel_x,
+        barrel_y = new_barrel_y,
+        moving_direction = new_barrel_moving_direction,
+        sprite = sprite,
+    )
+
+    new_state = new_state._replace(
+        barrels=barrels
+    )
+
+    
+
+
+    # Skip every second frame
+    should_move = step_counter % 2 == 0
+
+    # return either new position or old position because of frame skip/ step counter
+    return jax.lax.cond(
+        should_move, lambda _: new_state, lambda _: state, operand=None
+    )
 
 
 class JaxDonkeyKong(JaxEnvironment[DonkeyKongState, DonkeyKongObservation, DonkeyKongInfo]):
@@ -88,7 +202,9 @@ class JaxDonkeyKong(JaxEnvironment[DonkeyKongState, DonkeyKongObservation, Donke
             Action.RIGHT,
             Action.LEFT,
             Action.UP,
-            Action.DOWN
+            Action.DOWN,
+            Action.RIGHTFIRE,
+            Action.LEFTFIRE,
         ]
         self.obs_size = 0
 
@@ -99,12 +215,36 @@ class JaxDonkeyKong(JaxEnvironment[DonkeyKongState, DonkeyKongObservation, Donke
         """
 
         state = DonkeyKongState(
-            mario_x=jnp.array(MARIO_START_X).astype(jnp.int32),
-            mario_y=jnp.array(MARIO_START_Y).astype(jnp.int32),
+            level = 1,
+            step_counter=jnp.array(1).astype(jnp.int32),
+            mario_x=jnp.array([MARIO_START_X]).astype(jnp.int32),
+            mario_y=jnp.array([MARIO_START_Y]).astype(jnp.int32),
+
+            barrels = BarrelPosition(
+                barrel_x = jnp.array([BARREL_START_X]).astype(jnp.int32),
+                barrel_y = jnp.array([BARREL_START_Y]).astype(jnp.int32), 
+                sprite = jnp.array([BARREL_SPRITE_RIGHT]).astype(jnp.int32),
+                moving_direction = jnp.array([MOVING_RIGHT]).astype(jnp.int32),
+            )
         )
         initial_obs = self._get_observation(state)
 
         return initial_obs, state
+
+    @partial(jax.jit, static_argnums=(0,))
+    def step(self, state: DonkeyKongState, action: chex.Array) -> Tuple[DonkeyKongObservation, DonkeyKongState, float, bool, DonkeyKongInfo]:
+        # First search for colision
+
+        new_state = state
+
+        # If there is no colision: game will continue
+        new_state = barrel_step(state)
+
+        new_state = new_state._replace(step_counter=new_state.step_counter+1)
+        
+
+        observation = self._get_observation(new_state)
+        return observation, new_state, None, False, None
 
     
     @partial(jax.jit, static_argnums=(0,))
@@ -239,6 +379,22 @@ class DonkeyKongRenderer(AtraJaxisRenderer):
             A JAX array representing the rendered frame.
         """
 
+        def render_at_transparent(raster, x, y, sprite):
+            # Falls sprite RGBA ist, auf RGB reduzieren
+            if sprite.shape[-1] > 3:
+                sprite = sprite[:, :, :3]
+            
+            h, w, _ = sprite.shape
+            sub_raster = jax.lax.dynamic_slice(raster, (x, y, 0), (h, w, 3))
+
+            # Transparente Pixel = alles wo ALLE Kanäle 0 sind
+            mask = jnp.any(sprite != 0, axis=-1, keepdims=True)
+            mask = jnp.broadcast_to(mask, sprite.shape)
+
+            blended = jnp.where(mask, sprite, sub_raster)
+
+            return jax.lax.dynamic_update_slice(raster, blended, (x, y, 0))
+
         def create_bg_raster_for_level_2_regarding_drop_pits(raster):
             frame_bg = aj.get_sprite_frame(self.SPRITES_BG, 1)
             raster = aj.render_at(raster, 0, 0, frame_bg)
@@ -258,7 +414,7 @@ class DonkeyKongRenderer(AtraJaxisRenderer):
         raster = jnp.zeros((WIDTH, HEIGHT, 3))
 
         # Background raster
-        level = 1
+        level = state.level
         raster = jax.lax.cond(
             level == 1,
             lambda _: aj.render_at(raster, 0, 0, aj.get_sprite_frame(self.SPRITES_BG, 0)),
@@ -282,6 +438,12 @@ class DonkeyKongRenderer(AtraJaxisRenderer):
         # Mario
         frame_mario = aj.get_sprite_frame(self.SPRITES_MARIO_STANDING, 0)
         raster = aj.render_at(raster, state.mario_x, state.mario_y, frame_mario)
+
+        # Barrels if there are some on the field
+        barrels = state.barrels
+        for barrel_x, barrel_y, sprite_id in zip(barrels.barrel_x, barrels.barrel_y, barrels.sprite):
+            frame_barrel = aj.get_sprite_frame(self.SPRITES_BARREL, sprite_id)
+            raster = render_at_transparent(raster, barrel_x, barrel_y, frame_barrel)
 
 
         # Hammer
@@ -376,15 +538,22 @@ if __name__ == "__main__":
 
     # Get jitted functions
     jitted_reset = jax.jit(game.reset)
+    jitted_step = jax.jit(game.step)
 
     obs, curr_state = jitted_reset()
 
     # Game Loop
     running = True
+    frame_by_frame = False
     while running:
+
+        if not frame_by_frame:
+            action = None
+            obs, curr_state, reward, done, info = jitted_step(curr_state, action)
 
         # Render and Display
         raster = renderer.render(state=curr_state)
         aj.update_pygame(screen, raster, 3, WIDTH, HEIGHT)
+        clock.tick(30)
 
     pygame.quit()
