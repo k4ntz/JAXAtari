@@ -75,7 +75,7 @@ BARREL_HIT_BOX_Y = 8
 # Moving Directions
 MOVING_UP = 0
 MOVING_RIGHT = 1
-MOVING_DOWN = 2
+MOVING_DOWN = 2  # Falling Barrel
 MOVING_LEFT = 3
 
 
@@ -104,12 +104,43 @@ def get_human_action() -> chex.Array:
     else:
         return jnp.array(Action.NOOP)
 
+class Ladder(NamedTuple):
+    stage: chex.Array
+    climbable: chex.Array
+    start_x: chex.Array
+    start_y: chex.Array
+    end_x: chex.Array
+    end_y: chex.Array
+
+@jax.jit
+def init_ladders_for_level(level: int) -> Ladder:
+    # Ladder positions for level 1
+    Ladder_level_1 = Ladder(
+        stage=jnp.array([5, 1, 1], dtype=jnp.int32),
+        climbable=jnp.array([False, False, True]),
+        start_x=jnp.array([74, 70, 106], dtype=jnp.int32),
+        start_y=jnp.array([77, 185, 185], dtype=jnp.int32),
+        end_x=jnp.array([74, 70, 106], dtype=jnp.int32),
+        end_y=jnp.array([53, 161, 164], dtype=jnp.int32),
+    )
+
+    # Ladder positions for level 2
+    Ladder_level_2 = Ladder_level_1
+
+    return jax.lax.cond(
+        level == 1,
+        lambda _: Ladder_level_1,
+        lambda _: Ladder_level_2,
+        operand=None
+    )
+
 
 class BarrelPosition(NamedTuple):
     barrel_x: chex.Array
     barrel_y: chex.Array
     sprite: chex.Array
     moving_direction: chex.Array
+    stage: chex.Array
 
 
 class DonkeyKongState(NamedTuple):
@@ -118,6 +149,7 @@ class DonkeyKongState(NamedTuple):
     mario_x: chex.Array
     mario_y: chex.Array
     barrels: BarrelPosition
+    ladders: Ladder
 
 
 class DonkeyKongObservation(NamedTuple):
@@ -129,6 +161,7 @@ class DonkeyKongInfo(NamedTuple):
     all_rewards: chex.Array
 
 
+@jax.jit
 def barrel_step(state):
     step_counter = state.step_counter
     
@@ -137,7 +170,9 @@ def barrel_step(state):
     
     new_state = state
     # calculate new position
-    def update_single_barrel(x, y, direction, sprite):
+    def update_single_barrel(x, y, direction, sprite, stage):
+        ladders = state.ladders
+
         # change sprite animation
         def flip_sprite(sprite):
             return jax.lax.cond(
@@ -155,24 +190,38 @@ def barrel_step(state):
         )
         
         # change position
+        # check if barrel can fall (ladder or end of bar)
+        def check_if_barrel_will_fall(x, y, direction, sprite, stage):        
+            some_prob = 0.5
+            
+            # check first if barrel is positioned on top of a ladder
+            curr_stage = stage - 1
+            mask = jnp.logical_and(ladders.stage == curr_stage, ladders.end_x == x)
+
+            barrel_is_on_ladder = jnp.any(mask)
+            jax.debug.print("{}", barrel_is_on_ladder)
+
+            return x, y, direction, sprite, stage
+
+        check_if_barrel_will_fall(x, y, direction, sprite, stage)
+
         new_x = x + 1
         new_y = y
         direction = direction
-        return new_x, new_y, direction, new_sprite
+        return new_x, new_y, direction, new_sprite, stage
     update_all_barrels = jax.vmap(update_single_barrel)
 
     barrels = new_state.barrels
-    new_barrel_x, new_barrel_y, new_barrel_moving_direction, sprite = update_all_barrels(
-        barrels.barrel_x, barrels.barrel_y, barrels.moving_direction, barrels.sprite
+    new_barrel_x, new_barrel_y, new_barrel_moving_direction, sprite, new_stage = update_all_barrels(
+        barrels.barrel_x, barrels.barrel_y, barrels.moving_direction, barrels.sprite, barrels.stage
     )
-
     barrels = barrels._replace(
         barrel_x = new_barrel_x,
         barrel_y = new_barrel_y,
         moving_direction = new_barrel_moving_direction,
         sprite = sprite,
+        stage=new_stage
     )
-
     new_state = new_state._replace(
         barrels=barrels
     )
@@ -213,7 +262,7 @@ class JaxDonkeyKong(JaxEnvironment[DonkeyKongState, DonkeyKongObservation, Donke
         Resets the game state to the initial state.
         Returns the initial state and the reward (i.e. 0)
         """
-
+        ladders = init_ladders_for_level(level=1)
         state = DonkeyKongState(
             level = 1,
             step_counter=jnp.array(1).astype(jnp.int32),
@@ -225,7 +274,10 @@ class JaxDonkeyKong(JaxEnvironment[DonkeyKongState, DonkeyKongObservation, Donke
                 barrel_y = jnp.array([BARREL_START_Y]).astype(jnp.int32), 
                 sprite = jnp.array([BARREL_SPRITE_RIGHT]).astype(jnp.int32),
                 moving_direction = jnp.array([MOVING_RIGHT]).astype(jnp.int32),
-            )
+                stage = jnp.array([6]).astype(jnp.int32),
+            ),
+
+            ladders=ladders,
         )
         initial_obs = self._get_observation(state)
 
@@ -380,14 +432,13 @@ class DonkeyKongRenderer(AtraJaxisRenderer):
         """
 
         def render_at_transparent(raster, x, y, sprite):
-            # Falls sprite RGBA ist, auf RGB reduzieren
             if sprite.shape[-1] > 3:
                 sprite = sprite[:, :, :3]
             
             h, w, _ = sprite.shape
             sub_raster = jax.lax.dynamic_slice(raster, (x, y, 0), (h, w, 3))
 
-            # Transparente Pixel = alles wo ALLE Kanäle 0 sind
+            # Transparent Pixel = every channel with value 0
             mask = jnp.any(sprite != 0, axis=-1, keepdims=True)
             mask = jnp.broadcast_to(mask, sprite.shape)
 
