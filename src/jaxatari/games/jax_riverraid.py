@@ -10,6 +10,7 @@ import jax.lax
 from gymnax.environments import spaces
 
 from jaxatari.environment import JaxEnvironment, JAXAtariAction as Action
+from jaxatari.games.jax_pong import WIDTH
 from jaxatari.renderers import AtraJaxisRenderer
 from jaxatari.rendering import atraJaxis as aj
 
@@ -17,20 +18,25 @@ from jaxatari.rendering import atraJaxis as aj
 # -------- Game constants --------
 
 
+
 class RiverraidState(NamedTuple):
     turn_step: chex.Array
     player_x: chex.Array
+    river_left: chex.Array
+    river_right: chex.Array
+
 
 class RiverraidInfo(NamedTuple):
     time: jnp.ndarray
     all_rewards: chex.Array
+
 
 class RiverraidObservation(NamedTuple):
     player_x: chex.Array
 
 
 class JaxRiverraid(JaxEnvironment):
-    def __init__(self, frameskip: int = 0, reward_funcs: list[callable]=None):
+    def __init__(self, frameskip: int = 0, reward_funcs: list[callable] = None):
         super().__init__()
         self.frameskip = frameskip + 1
         self.frame_stack_size = 4
@@ -47,15 +53,15 @@ class JaxRiverraid(JaxEnvironment):
         }
         self.obs_size = 420
 
-
-
     def _get_observation(self, state: RiverraidState) -> RiverraidObservation:
         observation = RiverraidObservation(player_x=state.player_x)
         return observation
 
-    def reset(self, key = None) -> Tuple[RiverraidObservation, RiverraidState]:
+    def reset(self, key=None) -> Tuple[RiverraidObservation, RiverraidState]:
         state = RiverraidState(turn_step=0,
-                               player_x=jnp.array(10))
+                               player_x=jnp.array(10),
+                               river_left=jnp.array(50),
+                               river_right=jnp.array(50))
         observation = self._get_observation(state)
         return observation, state
 
@@ -63,17 +69,16 @@ class JaxRiverraid(JaxEnvironment):
     def get_action_space(self):
         return jnp.array([Action.NOOP, Action.LEFT, Action.RIGHT, Action.FIRE, Action.LEFTFIRE, Action.RIGHTFIRE])
 
-
     def action_space(self) -> spaces.Discrete:
         return spaces.Discrete(len(self.action_set))
 
     def step(self, state: RiverraidState, action: Action) -> Tuple[RiverraidObservation, RiverraidState, RiverraidInfo]:
-        observation = self._get_observation(state)
-        reward = self._get_env_reward(state, state)
-        done = self._get_done(state)
-        info = self._get_info(state, jnp.zeros(1))
-
         new_state = state._replace(turn_step=state.turn_step + 1)
+
+        observation = self._get_observation(new_state)
+        reward = self._get_env_reward(state, new_state)
+        done = self._get_done(new_state)
+        info = self._get_info(new_state, jnp.zeros(1))
 
         return observation, new_state, reward, done, info
 
@@ -108,9 +113,20 @@ class JaxRiverraid(JaxEnvironment):
 
 
 class RiverraidRenderer(AtraJaxisRenderer):
-    @partial(jax.jit, static_argnums=(0,))
     def render(self, state: RiverraidState):
-        raster = jnp.zeros((160, 210, 3), dtype=jnp.uint8)  # Placeholder-Größe
+        game_width = 160
+        game_height = 210
+
+        green_banks = jnp.array([26, 132, 26], dtype=jnp.uint8)
+        blue_river = jnp.array([42, 42, 189], dtype=jnp.uint8)
+
+        raster = jnp.full((game_height, game_width, 3), green_banks, dtype=jnp.uint8)
+
+        river_start = state.river_left
+        river_end = WIDTH - state.river_right
+
+        raster = raster.at[river_start:river_end, :].set(blue_river)
+
         return raster
 
 
@@ -120,12 +136,15 @@ if __name__ == "__main__":
 
     game = JaxRiverraid(frameskip=1)
     renderer = RiverraidRenderer()
-    jitted_reset = game.reset
-    jitted_step = game.step
+
+    jitted_reset = jax.jit(game.reset)
+    jitted_step = jax.jit(game.step)
+    jitted_render = jax.jit(renderer.render)
 
     initial_observation, state = jitted_reset()
 
-    screen = pygame.display.set_mode((800, 600))
+
+    screen = pygame.display.set_mode((160 * 3, 210 * 3))
     pygame.display.set_caption("Riverraid")
     clock = pygame.time.Clock()
 
@@ -134,15 +153,14 @@ if __name__ == "__main__":
         for event in pygame.event.get():
             if event.type == pygame.QUIT:
                 running = False
-        action = Action.NOOP
-        observation, state, info = jitted_step(state, action)
 
-        render_output = renderer.render(state)
+        action = Action.NOOP
+        observation, state, reward, done, info = jitted_step(state, action)
+
+        render_output = jitted_render(state)
         aj.update_pygame(screen, render_output, 3, 160, 210)
 
         pygame.display.flip()
-        clock.tick(30)
+        clock.tick(60)
 
     pygame.quit()
-
-
