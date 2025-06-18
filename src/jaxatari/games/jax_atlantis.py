@@ -647,44 +647,40 @@ class JaxAtlantis(JaxEnvironment[AtlantisState, AtlantisObservation, AtlantisInf
     def step(
         self, state: AtlantisState, action: chex.Array
     ) -> Tuple[AtlantisObservation, AtlantisState, float, bool, AtlantisInfo]:
-        # input handling
-        fire_pressed, cannon_idx = self._interpret_action(state, action)
-
-        # only spawn bullets when not in wave-pause
-        state = jax.lax.cond(
-            self._cooldown_finished(state),
-            lambda s: self._spawn_bullet(s, cannon_idx),
-            lambda s: s,
-            state,
-        )
-
-
-        # update cooldown and remember current button state
-        state = self._update_cooldown(state, cannon_idx)._replace(
-            fire_button_prev=fire_pressed
-        )
-
-        # decrease wave_end_cooldown
-        state = state._replace(
-            wave_end_cooldown_remaining=jnp.maximum(
-                state.wave_end_cooldown_remaining - 1, 0
+        def _pause_step(s: AtlantisState) -> AtlantisState:
+            # reduce pause cooldown
+            s = s._replace(
+                wave_end_cooldown_remaining=jnp.maximum(s.wave_end_cooldown_remaining - 1, 0)
             )
-        )
-        state = self._move_bullets(state)
+            return self._update_wave(s)
 
-        # only spawn enemies when not in pause
+        def _wave_step(s: AtlantisState) -> AtlantisState:
+            # input handling
+            fire_pressed, cannon_idx = self._interpret_action(s, action)
+
+            # bullets
+            s = self._spawn_bullet(s, cannon_idx)
+            s = self._update_cooldown(s, cannon_idx) \
+                ._replace(fire_button_prev=fire_pressed)
+
+            # enemies
+            s = self._spawn_enemy(s)
+
+            # motion & collisions
+            s = self._move_bullets(s)
+            s = self._move_enemies(s)
+            s = self._check_bullet_enemy_collision(s)
+
+            # check if wave quota exhausted → start pause
+            s = self._update_wave(s)
+            return s
+
         state = jax.lax.cond(
             self._cooldown_finished(state),
-            self._spawn_enemy,
-            lambda s: s,
-            state,
+            _wave_step,
+            _pause_step,
+            state
         )
-
-        state = self._move_enemies(state)
-
-        state = self._check_bullet_enemy_collision(state)
-
-        state = self._update_wave(state)
 
         observation = self._get_observation(state)
         info = AtlantisInfo(time=jnp.array(0, dtype=jnp.int32))
