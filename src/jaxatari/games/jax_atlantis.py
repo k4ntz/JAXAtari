@@ -1,7 +1,7 @@
 import os
 from dataclasses import dataclass, field
 
-from jax import config
+from jax import config, Array
 from jax._src.dtypes import dtype
 import jax.lax
 import jax.numpy as jnp
@@ -611,9 +611,7 @@ class JaxAtlantis(JaxEnvironment[AtlantisState, AtlantisObservation, AtlantisInf
 
         return state._replace(bullets_alive=new_bullet_alive, enemies=enemies_updated)
 
-    # @partial(jax.jit, static_argnums=(0,))
-    # def _maybe_step(self, state: AtlantisState) -> AtlantisState:
-    #     cfg = self.config
+
 
     @partial(jax.jit, static_argnums=(0,))
     def _update_wave(self, state: AtlantisState) -> AtlantisState:
@@ -632,15 +630,17 @@ class JaxAtlantis(JaxEnvironment[AtlantisState, AtlantisObservation, AtlantisInf
         def _same_wave(s: AtlantisState) -> AtlantisState:
             return s
 
-        # if no enemies are remaining, start new wave
+        # if no enemies are remaining and the screen is empty, start a new wave
         return jax.lax.cond(
-            state.number_enemies_wave_remaining == 0,
+            (state.number_enemies_wave_remaining == 0) & (~jnp.any(state.enemies[:, 5] == 1)),
             _new_wave,
             _same_wave,
             state,
         )
 
-
+    @partial(jax.jit, static_argnums=(0,))
+    def _cooldown_finished(self, state: AtlantisState) -> Array:
+        return state.wave_end_cooldown_remaining == 0
 
 
     @partial(jax.jit, static_argnums=(0,))
@@ -650,17 +650,36 @@ class JaxAtlantis(JaxEnvironment[AtlantisState, AtlantisObservation, AtlantisInf
         # input handling
         fire_pressed, cannon_idx = self._interpret_action(state, action)
 
-        state = self._spawn_bullet(state, cannon_idx)
+        # only spawn bullets when not in wave-pause
+        state = jax.lax.cond(
+            self._cooldown_finished(state),
+            lambda s: self._spawn_bullet(s, cannon_idx),
+            lambda s: s,
+            state,
+        )
+
 
         # update cooldown and remember current button state
         state = self._update_cooldown(state, cannon_idx)._replace(
             fire_button_prev=fire_pressed
         )
-        state = self._move_bullets(state)
-        # jax.debug.print("Enemies remaining: {}", state.number_enemies_wave_remaining)
 
-        # Spawn enemies
-        state = self._spawn_enemy(state)
+        # decrease wave_end_cooldown
+        state = state._replace(
+            wave_end_cooldown_remaining=jnp.maximum(
+                state.wave_end_cooldown_remaining - 1, 0
+            )
+        )
+        state = self._move_bullets(state)
+
+        # only spawn enemies when not in pause
+        state = jax.lax.cond(
+            self._cooldown_finished(state),
+            self._spawn_enemy,
+            lambda s: s,
+            state,
+        )
+
         state = self._move_enemies(state)
 
         state = self._check_bullet_enemy_collision(state)
@@ -791,6 +810,7 @@ def main():
                 (obs, curr_state, _, _, _) = jitted_step(curr_state, action)
                 print("Enemies remaining:", int(curr_state.number_enemies_wave_remaining))
                 print("Current wave: ", int(curr_state.wave))
+                print(f"Timout: {int(curr_state.wave_end_cooldown_remaining)}")
 
         # Render and display
         raster = renderer.render(curr_state)
