@@ -60,6 +60,11 @@ DIVE_KILL_Y = 175
 DIVE_SPEED = 0.5
 MAX_DIVERS = 5
 BASE_DIVE_PROBABILITY = 30 #TODO back to 5 before merge
+MAX_SHOTS_PER_VOLLEY = 4
+VOLLEY_SHOT_DELAY = 10
+
+PLAYER_BULLET_Y_OFFSET = 3
+PLAYER_BULLET_X_OFFSET = 3
 
 ATTACK_MOVE_PATTERN = jnp.array([
     [1,1],[0,1],[1,1],[1,1],[0,1],[1,1],[1,1],[0,1],[1,1],[1,1],[1,1],[0,1],[1,1],[1,1],[0,1]
@@ -107,7 +112,9 @@ class GalaxianState(NamedTuple):
     turn_step: chex.Array
     dive_probability: chex.Array
     enemy_bullet_max_cooldown: chex.Array
-
+    enemy_attack_shot_timer: chex.Array
+    enemy_attack_shots_fired: chex.Array
+    enemy_attack_volley_size: chex.Array
 
 
 @jax.jit
@@ -163,7 +170,7 @@ def update_enemy_attack(state: GalaxianState) -> GalaxianState:
     @jax.jit
     def initialise_new_dive(state):
         key = jax.random.PRNGKey(state.turn_step + 101)  # currently deterministic
-        key_choice, key_dir_if_zero = jax.random.split(key)
+        key_choice, key_volley, key_shot_delay = jax.random.split(key, 3)
 
         # finde freien slot im diver array und nimm einfach den ersten (es muss einen geben, weil wir vorher geprüft haben, dass noch Platz ist)
         available_slots_indices = jnp.where(jnp.atleast_1d(state.enemy_attack_states == 0), size=MAX_DIVERS, fill_value=-1)[0]
@@ -187,6 +194,9 @@ def update_enemy_attack(state: GalaxianState) -> GalaxianState:
 
         # e.g. enemy_attack_states=[1. 0. 0. 1. 1.] -> enemy_attack_states=[1. 1. 0. 1. 1.]
         new_attack_states = state.enemy_attack_states.at[diver_idx].set(1)  # 1: actively attacking
+        new_shots_fired = state.enemy_attack_shots_fired.at[diver_idx].set(0)
+        random_initial_delay = jax.random.randint(key_shot_delay, shape=(), minval=30, maxval=91)
+        new_shot_timer = state.enemy_attack_shot_timer.at[diver_idx].set(random_initial_delay)
 
         # alte Position für respawn speichern
         new_attack_pos = state.enemy_attack_pos.at[diver_idx].set(
@@ -208,10 +218,8 @@ def update_enemy_attack(state: GalaxianState) -> GalaxianState:
         # timer
         new_attack_respawn_timer = state.enemy_attack_respawn_timer.at[diver_idx].set(0)
 
-        # Reset bullet
-        new_attack_bullet_x = state.enemy_attack_bullet_x.at[diver_idx].set(-1.0)
-        new_attack_bullet_y = state.enemy_attack_bullet_y.at[diver_idx].set(-1.0)
-        new_attack_bullet_timer = state.enemy_attack_bullet_timer.at[diver_idx].set(ENEMY_ATTACK_BULLET_DELAY)
+        random_volley_size = jax.random.randint(key_volley, shape=(), minval=1, maxval=MAX_SHOTS_PER_VOLLEY + 1)
+        new_volley_size = state.enemy_attack_volley_size.at[diver_idx].set(random_volley_size)
 
         return state._replace(
             enemy_attack_states=new_attack_states,
@@ -223,9 +231,9 @@ def update_enemy_attack(state: GalaxianState) -> GalaxianState:
             enemy_attack_turning=new_attack_turning,
             enemy_attack_turn_step=new_attack_turn_step,
             enemy_attack_respawn_timer=new_attack_respawn_timer,
-            enemy_attack_bullet_x=new_attack_bullet_x,
-            enemy_attack_bullet_y=new_attack_bullet_y,
-            enemy_attack_bullet_timer=new_attack_bullet_timer,
+            enemy_attack_shots_fired=new_shots_fired,
+            enemy_attack_shot_timer=new_shot_timer,
+            enemy_attack_volley_size=new_volley_size
         )
 
     @jax.jit
@@ -306,8 +314,6 @@ def update_enemy_attack(state: GalaxianState) -> GalaxianState:
                 )
 
 
-                #jax.debug.print("turn: {t}", t=state.enemy_attack_turning)
-                jax.debug.print("delta x {x}", x = delta_x)
                 return state._replace(
                      enemy_attack_x=curr_x + delta_x,
                      enemy_attack_y=curr_y + delta_y,
@@ -441,46 +447,69 @@ def update_enemy_attack(state: GalaxianState) -> GalaxianState:
 
 @jax.jit
 def update_enemy_bullets(state: 'GalaxianState') -> 'GalaxianState':
-    bullet_x = state.enemy_attack_bullet_x
-    bullet_y = state.enemy_attack_bullet_y
-    bullet_timers = state.enemy_attack_bullet_timer
+
+    #volley timer
+    new_timers = jnp.maximum(0, state.enemy_attack_shot_timer - 1)
 
     # continue active bullets
-    is_active_bullet_mask = bullet_y >= 0.0
-    moved_bullet_y = jnp.where(is_active_bullet_mask, bullet_y + ENEMY_ATTACK_BULLET_SPEED, bullet_y)
-    moved_bullet_x = bullet_x # X position usually doesn't change
+    is_active_mask = state.enemy_attack_bullet_y >= 0.0
+    moved_y = jnp.where(is_active_mask, state.enemy_attack_bullet_y + ENEMY_ATTACK_BULLET_SPEED, -1.0)
+    moved_x = jnp.where(is_active_mask, state.enemy_attack_bullet_x, -1.0)
 
-    # remove bullets at the bottom
-    off_screen_mask = moved_bullet_y > NATIVE_GAME_HEIGHT
-    current_bullet_x_after_move = jnp.where(off_screen_mask, -1.0, moved_bullet_x)
-    current_bullet_y_after_move = jnp.where(off_screen_mask, -1.0, moved_bullet_y)
+    # despawn bullets below player
+    off_screen_mask = moved_y > NATIVE_GAME_HEIGHT
+    bullets_y_after_move = jnp.where(off_screen_mask, -1.0, moved_y)
+    bullets_x_after_move = jnp.where(off_screen_mask, -1.0, moved_x)
 
-    # lower timers
-    is_diver_attacking_mask = (state.enemy_attack_states == 1)
-    decremented_bullet_timers = jnp.where(is_diver_attacking_mask, bullet_timers - 1.0, bullet_timers)
-    decremented_bullet_timers = jnp.maximum(decremented_bullet_timers, 0.0)
-
-
-    # always shoots when ready
-    ready_to_shoot_timer_wise = jnp.logical_and(is_diver_attacking_mask, decremented_bullet_timers <= 0.0)
-    slot_is_free_mask = current_bullet_y_after_move < 0.0
-    can_spawn_new_bullet_mask = jnp.logical_and(ready_to_shoot_timer_wise, slot_is_free_mask)
-
-    final_bullet_x = jnp.where(can_spawn_new_bullet_mask, state.enemy_attack_x, current_bullet_x_after_move)
-    final_bullet_y = jnp.where(can_spawn_new_bullet_mask, state.enemy_attack_y, current_bullet_y_after_move)
-
-    timer_dtype = state.enemy_attack_bullet_timer.dtype
-    final_bullet_timers = jnp.where(
-        can_spawn_new_bullet_mask,
-        jnp.array(state.enemy_bullet_max_cooldown, dtype=timer_dtype),
-        decremented_bullet_timers
+    # continue volley
+    can_shoot_mask = (
+        (state.enemy_attack_states == 1) &
+        (state.enemy_attack_shots_fired < state.enemy_attack_volley_size) &
+        (new_timers <= 0)
     )
 
+    # select new shooters
+    potential_shooter_indices = jnp.where(can_shoot_mask, jnp.arange(MAX_DIVERS), MAX_DIVERS)
+    sorted_shooter_indices = jnp.sort(potential_shooter_indices)
+
+
+    def _spawn_one_shot(shooter_idx, carry):
+        #find empty slot
+        (current_x, current_y, current_shots_fired, current_timers) = carry
+        available_bullet_slots = jnp.where(current_y == -1.0, size=1, fill_value=-1)[0]
+        target_bullet_slot = available_bullet_slots[0]
+        can_spawn = (shooter_idx < MAX_DIVERS) & (target_bullet_slot != -1)
+
+        def _do_spawn(x, y, shots_fired, timers):
+            new_x = x.at[target_bullet_slot].set(state.enemy_attack_x[shooter_idx])
+            new_y = y.at[target_bullet_slot].set(state.enemy_attack_y[shooter_idx])
+            new_shots_fired = shots_fired.at[shooter_idx].set(shots_fired[shooter_idx] + 1)
+            new_timers = timers.at[shooter_idx].set(VOLLEY_SHOT_DELAY)
+            return new_x, new_y, new_shots_fired, new_timers
+
+        def _do_not_spawn(x, y, shots_fired, timers):
+            return x, y, shots_fired, timers
+
+        return lax.cond(
+            can_spawn,
+            lambda: _do_spawn(current_x, current_y, current_shots_fired, current_timers),
+            lambda: _do_not_spawn(current_x, current_y, current_shots_fired, current_timers)
+        )
+
+    initial_carry = (bullets_x_after_move, bullets_y_after_move, state.enemy_attack_shots_fired, new_timers)
+
+
+    final_bullet_x, final_bullet_y, final_shots_fired, final_timers = lax.fori_loop(
+        0, MAX_DIVERS,
+        lambda i, carry: _spawn_one_shot(sorted_shooter_indices[i], carry),
+        initial_carry
+    )
 
     return state._replace(
-        enemy_attack_bullet_x=final_bullet_x.astype(state.enemy_attack_bullet_x.dtype),
-        enemy_attack_bullet_y=final_bullet_y.astype(state.enemy_attack_bullet_y.dtype),
-        enemy_attack_bullet_timer=final_bullet_timers.astype(timer_dtype)
+        enemy_attack_bullet_x=final_bullet_x,
+        enemy_attack_bullet_y=final_bullet_y,
+        enemy_attack_shots_fired=final_shots_fired,
+        enemy_attack_shot_timer=final_timers
     )
 
 
@@ -511,65 +540,42 @@ def get_action_from_keyboard():
 
 
 @jax.jit
-def handle_shooting(state: GalaxianState, action) -> GalaxianState:
-    def shoot(_):
-        return state._replace(
-            bullet_x=jnp.array(state.player_x, dtype=state.bullet_x.dtype),
-            bullet_y=jnp.array(state.player_y, dtype=state.bullet_y.dtype),
-            player_shooting_cooldown=jnp.array(SHOOTING_COOLDOWN)
-        )
-
-    def decrease_cooldown(_):
-        return state._replace(
-            player_shooting_cooldown=state.player_shooting_cooldown - 1
-        )
-
-    def idle(_):
-        return state
-
-
-    shooting = jnp.any(
-        jnp.array(
-            [
-                action == Action.FIRE,
-                action == Action.RIGHTFIRE,
-                action == Action.LEFTFIRE,
-            ]
-        )
+def update_player_bullet(state: GalaxianState, action: chex.Array) -> GalaxianState:
+    is_shooting_action = jnp.any(
+        jnp.array([
+            action == Action.FIRE,
+            action == Action.RIGHTFIRE,
+            action == Action.LEFTFIRE,
+        ])
     )
 
-    can_shoot = jnp.logical_and(shooting, state.player_shooting_cooldown == 0)
-    on_cooldown = jnp.logical_not(can_shoot) & (state.player_shooting_cooldown > 0)
+    bullet_is_inactive = state.bullet_y < 0
+
+    def fire_new_bullet(state: GalaxianState) -> GalaxianState:
+        return state._replace(
+            bullet_x=state.player_x + PLAYER_BULLET_X_OFFSET,
+            bullet_y=state.player_y - PLAYER_BULLET_Y_OFFSET
+        )
+
+    def move_active_bullet(state: GalaxianState) -> GalaxianState:
+        new_y = state.bullet_y - BULLET_MOVE_SPEED
+
+        return state._replace(
+            bullet_x=jnp.where(new_y < 0, -1.0, state.bullet_x),
+            bullet_y=jnp.where(new_y < 0, -1.0, new_y)
+        )
 
     return lax.cond(
-        can_shoot,
-        shoot,
-        lambda _: lax.cond(on_cooldown, decrease_cooldown, idle, operand=None),
-        operand=None
+        bullet_is_inactive,
+        lambda state: lax.cond(
+            is_shooting_action,
+            fire_new_bullet,
+            lambda state: state,
+            state
+        ),
+        move_active_bullet,
+        state
     )
-
-
-@jax.jit
-def update_bullets(state: GalaxianState) -> GalaxianState:
-    new_bullets_y = jnp.array(state.bullet_y - BULLET_MOVE_SPEED)
-    return state._replace(bullet_y=new_bullets_y)
-
-
-@jax.jit
-def remove_bullets(state: GalaxianState) -> GalaxianState:
-    # Wenn die Spieler-Kugel den Bildschirm (y<0) verlässt, reset Kugel + Cooldown
-    def bullet_reset(state: GalaxianState) -> GalaxianState:
-        return state._replace(
-            bullet_x                = jnp.array(-1.0, dtype=state.bullet_x.dtype),
-            bullet_y                = jnp.array(-1.0, dtype=state.bullet_y.dtype),
-        )
-    def keep(state: GalaxianState) -> GalaxianState:
-        return state
-
-    return lax.cond(state.bullet_y < 0,
-                    bullet_reset,
-                    keep,
-                    state)
 
 
 @jax.jit
@@ -799,7 +805,10 @@ class JaxGalaxian(JaxEnvironment[GalaxianState, GalaxianObservation, GalaxianInf
                               enemy_attack_target_y=jnp.zeros(MAX_DIVERS),
                               turn_step=jnp.array(0),
                               dive_probability=jnp.array(BASE_DIVE_PROBABILITY),
-                              enemy_bullet_max_cooldown=ENEMY_ATTACK_BULLET_DELAY
+                              enemy_bullet_max_cooldown=ENEMY_ATTACK_BULLET_DELAY,
+                              enemy_attack_shot_timer=jnp.zeros(MAX_DIVERS),
+                              enemy_attack_shots_fired=jnp.zeros(MAX_DIVERS, dtype=jnp.int32),
+                              enemy_attack_volley_size=jnp.zeros(MAX_DIVERS, dtype=jnp.int32)
                              )
 
         initial_obs = self._get_observation(state)
@@ -843,10 +852,8 @@ class JaxGalaxian(JaxEnvironment[GalaxianState, GalaxianObservation, GalaxianInf
         #TODO: refactor like the other games
         # create new state instead of replacing old state step by step
         new_state = update_player_position(state, action)
-        new_state = handle_shooting(new_state, action)
+        new_state = update_player_bullet(new_state, action)
         new_state = update_enemy_positions(new_state)
-        new_state = update_bullets(new_state)
-        new_state = remove_bullets(new_state)
         new_state = bullet_collision(new_state)
         new_state = bullet_collision_attack(new_state)
         new_state = update_death_frames(new_state)
@@ -1001,12 +1008,17 @@ class GalaxianRenderer(AtraJaxisRenderer):
         raster = aj.render_at(raster, px, py, player_frame)
 
         # Spieler-Kugel
-        def draw_bullet(r):
-            b = aj.get_sprite_frame(self.SPRITE_BULLET, 0)
-            bx = jnp.round(state.bullet_x).astype(jnp.int32)
-            by = jnp.round(state.bullet_y).astype(jnp.int32)
-            return aj.render_at(r, bx, by, b)
-        raster = lax.cond(state.bullet_y > 0, draw_bullet, lambda r: r, raster)
+        def draw_bullet_active(r):
+            bullet = aj.get_sprite_frame(self.SPRITE_BULLET, 0)
+            bullet_x = jnp.round(state.bullet_x).astype(jnp.int32)
+            bullet_y = jnp.round(state.bullet_y).astype(jnp.int32)
+            return aj.render_at(r, bullet_x, bullet_y, bullet)
+        def draw_bullet_inactive(r):
+            bullet = aj.get_sprite_frame(self.SPRITE_BULLET, 0)
+            bullet_x = jnp.round(state.player_x + PLAYER_BULLET_X_OFFSET).astype(jnp.int32)
+            bullet_y = jnp.round(state.player_y - PLAYER_BULLET_Y_OFFSET).astype(jnp.int32)
+            return aj.render_at(r, bullet_x, bullet_y, bullet)
+        raster = lax.cond(state.bullet_y > 0, draw_bullet_active, draw_bullet_inactive, raster)
 
         enemy_bullet_sprite = aj.get_sprite_frame(self.SPRITE_ENEMY_BULLET, 0)
 
