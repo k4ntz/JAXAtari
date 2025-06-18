@@ -170,7 +170,7 @@ def update_enemy_attack(state: GalaxianState) -> GalaxianState:
     @jax.jit
     def initialise_new_dive(state):
         key = jax.random.PRNGKey(state.turn_step + 101)  # currently deterministic
-        key_choice, key_dir_if_zero = jax.random.split(key)
+        key_choice, key_volley, key_shot_delay = jax.random.split(key, 3)
 
         # finde freien slot im diver array und nimm einfach den ersten (es muss einen geben, weil wir vorher geprüft haben, dass noch Platz ist)
         available_slots_indices = jnp.where(jnp.atleast_1d(state.enemy_attack_states == 0), size=MAX_DIVERS, fill_value=-1)[0]
@@ -195,7 +195,8 @@ def update_enemy_attack(state: GalaxianState) -> GalaxianState:
         # e.g. enemy_attack_states=[1. 0. 0. 1. 1.] -> enemy_attack_states=[1. 1. 0. 1. 1.]
         new_attack_states = state.enemy_attack_states.at[diver_idx].set(1)  # 1: actively attacking
         new_shots_fired = state.enemy_attack_shots_fired.at[diver_idx].set(0)
-        new_shot_timer = state.enemy_attack_shot_timer.at[diver_idx].set(0)
+        random_initial_delay = jax.random.randint(key_shot_delay, shape=(), minval=30, maxval=91)
+        new_shot_timer = state.enemy_attack_shot_timer.at[diver_idx].set(random_initial_delay)
 
         # alte Position für respawn speichern
         new_attack_pos = state.enemy_attack_pos.at[diver_idx].set(
@@ -217,8 +218,6 @@ def update_enemy_attack(state: GalaxianState) -> GalaxianState:
         # timer
         new_attack_respawn_timer = state.enemy_attack_respawn_timer.at[diver_idx].set(0)
 
-
-        key_choice, key_volley = jax.random.split(key)
         random_volley_size = jax.random.randint(key_volley, shape=(), minval=1, maxval=MAX_SHOTS_PER_VOLLEY + 1)
         new_volley_size = state.enemy_attack_volley_size.at[diver_idx].set(random_volley_size)
 
