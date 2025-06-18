@@ -1160,14 +1160,14 @@ def css__f2d3_count_tiles_in_line(array_of_tiles, pos: int, default_pos: int, di
     )
 
     left_state, left_pos_opt = css_sub_f5c1_count_tiles_in_line_descending(array_of_tiles, pos)
-    right_state, right_pos_opt = css_sub_f5c1_count_tiles_in_line_descending(reversed_array_of_tiles, 7 - pos)
+    right_state, right_pos_opt = css_sub_f5c1_count_tiles_in_line_descending(reversed_array_of_tiles,7 - pos)
 
     left_pos = jax.lax.cond(left_pos_opt != -1, 
         lambda _: left_pos_opt, 
         lambda _: default_pos, 
         None)
     right_pos = jax.lax.cond(right_pos_opt != -1, 
-        lambda _: right_pos_opt, 
+        lambda _: 7-right_pos_opt, #TODO check for correctnes in assembly (reconverts right pos from flipped array to normal array)
         lambda _: left_pos,
         None) #TODO check in assembly if left_pos is the correct value
 
@@ -1180,7 +1180,7 @@ def css__f2d3_count_tiles_in_line(array_of_tiles, pos: int, default_pos: int, di
             jnp.logical_or(
                 reversed_array_of_tiles.field_color[0] != FieldColor.EMPTY, 
                 reversed_array_of_tiles.field_color[7] != FieldColor.EMPTY))),
-        lambda _: ((-40, right_pos), True),
+        lambda _: ((-40, right_pos), True), #TODO check why right_pos is used and if correct
         lambda _: return_value,
         None)
 
@@ -1189,7 +1189,7 @@ def css__f2d3_count_tiles_in_line(array_of_tiles, pos: int, default_pos: int, di
         jnp.logical_and(
             jnp.logical_or(combined_state == 0b0111, combined_state == 0b1101),
             jnp.logical_or(right_pos == 7, right_pos == 0))),
-        lambda _: ((-96, right_pos), True),
+        lambda _: ((-96, right_pos), True), #TODO check why right_pos is used and if correct (randomness?)
         lambda _: return_value,
         None)
 
@@ -1204,22 +1204,22 @@ def css__f2d3_count_tiles_in_line(array_of_tiles, pos: int, default_pos: int, di
         lambda _: (flag, False),
         None)
 
-    flag, condition_break = jax.lax.cond(jnp.logical_and(condition_break == False, reverse_pos <2),
+    flag, condition_break = jax.lax.cond(jnp.logical_and(condition_break == False, reverse_pos < 2), #TODO check if <> is correct
         lambda _: (True, True),
         lambda _: (flag, False),
         None)
 
     flag, condition_break = jax.lax.cond(jnp.logical_and(
         condition_break == False, 
-        jnp.logical_and(
+        jnp.logical_or(
             reversed_array_of_tiles.field_color[reverse_pos - 1] != FieldColor.EMPTY, 
-            reversed_array_of_tiles.field_color[reverse_pos-2] == FieldColor.EMPTY)),
+            reversed_array_of_tiles.field_color[reverse_pos - 2] == FieldColor.EMPTY)),
             lambda _: (True, True),
             lambda _: (flag, False),
             None)
 
-    flag, condition_break, combined_state = jax.lax.cond(jnp.logical_and(condition_break == False, reverse_pos <2),
-        lambda _: (True, True, 18),
+    flag, condition_break, combined_state = jax.lax.cond(jnp.logical_and(condition_break == False, reversed_array_of_tiles.field_color[reverse_pos - 2] != FieldColor.WHITE),
+        lambda _: (False, True, 18),
         lambda _: (flag, False, combined_state),
         None)
 
@@ -1240,17 +1240,19 @@ def css__f2d3_count_tiles_in_line(array_of_tiles, pos: int, default_pos: int, di
         None
     )
 
-    return_value = jax.lax.cond(difficulty == 2,
+    return_value = jax.lax.cond(jnp.logical_and(difficulty == 2, return_value[1] == False),
         lambda _: ((__F7EC[combined_state], right_pos), True),
         lambda _: return_value,
-        None,)
-    
+        None,
+    )
+
     black_mask_low = 1 << reverse_pos
     black_mask_high = 1 << (7-reverse_pos)
     white_mask_low = 0
     white_mask_high = 0
 
     init_val = (reversed_array_of_tiles, black_mask_low, black_mask_high, white_mask_low,white_mask_high)
+
 
     def css_sub_f5c1_count_tiles_in_line_loop_mask_tiles(i, loop_vals):
         _, black_mask_low, black_mask_high, white_mask_low, white_mask_high = loop_vals
@@ -1296,6 +1298,10 @@ def css__f2d3_count_tiles_in_line(array_of_tiles, pos: int, default_pos: int, di
                                             lambda init_val2: (return_value, black_mask_low, black_mask_high, white_mask_low, white_mask_high),
                                             init_val2)
 
+    return jax.lax.cond(return_value[1] == True,
+        lambda _: return_value[0],
+        lambda _: (__F3FE[combined_state], white_mask_high),
+        None)
    
 @jax.jit
 def css_sub_f5c1_count_tiles_in_line_descending(array_of_tiles, start_index: int) ->(int, int):
