@@ -62,6 +62,7 @@ MAX_DIVERS = 5
 BASE_DIVE_PROBABILITY = 30 #TODO back to 5 before merge
 MAX_SHOTS_PER_VOLLEY = 4
 VOLLEY_SHOT_DELAY = 10
+VOLLEY_PROBABILITIES = jnp.array([0.4, 0.3, 0.2, 0.1])
 
 PLAYER_BULLET_Y_OFFSET = 3
 PLAYER_BULLET_X_OFFSET = 3
@@ -218,7 +219,8 @@ def update_enemy_attack(state: GalaxianState) -> GalaxianState:
         # timer
         new_attack_respawn_timer = state.enemy_attack_respawn_timer.at[diver_idx].set(0)
 
-        random_volley_size = jax.random.randint(key_volley, shape=(), minval=1, maxval=MAX_SHOTS_PER_VOLLEY + 1)
+        chosen_index = jax.random.categorical(key_volley, jnp.log(VOLLEY_PROBABILITIES))
+        random_volley_size = chosen_index + 1
         new_volley_size = state.enemy_attack_volley_size.at[diver_idx].set(random_volley_size)
 
         return state._replace(
