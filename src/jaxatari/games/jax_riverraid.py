@@ -45,22 +45,24 @@ class RiverraidObservation(NamedTuple):
 def update_river_banks(state: RiverraidState) -> RiverraidState:
     def select_alternation(state: RiverraidState):
         key = jax.random.PRNGKey(state.turn_step)
-        new_river_state = jax.random.randint(key, (), 1, 6) # 1 bis 5
-        alternation_length = jax.random.randint(key, (), 1, 6)
+        new_river_state = jax.random.randint(key, (), 0, 6) # 1 bis 5
+        alternation_length = jax.random.randint(key, (), 1, 4)
         return state._replace(river_state=new_river_state,
                               river_alternation_length=alternation_length)
 
-
-
     def alter_expanse(state: RiverraidState) -> RiverraidState:
-        new_river_left = state.river_left + 3
-        new_river_right = state.river_right + 3
+        new_top_left = state.river_left[1] - 3
+        new_top_right = state.river_right[1] + 3
+
+        new_river_left = state.river_left.at[0].set(new_top_left)
+        new_river_right = state.river_right.at[0].set(new_top_right)
+
+
         new_alter_length = state.river_alternation_length - 1
         new_river_state = jax.lax.cond(
             new_alter_length <= 0,
-            lambda state: jnp.array(0),
-            lambda state: state.river_state,
-            state
+            lambda: jnp.array(0),
+            lambda: state.river_state
         )
         return state._replace(river_state=new_river_state,
                               river_left=new_river_left,
@@ -68,27 +70,63 @@ def update_river_banks(state: RiverraidState) -> RiverraidState:
                               river_alternation_length=new_alter_length)
 
     def alter_shrink(state: RiverraidState) -> RiverraidState:
-        return state
+        new_top_left = state.river_left[1] + 3
+        new_top_right = state.river_right[1] - 3
+
+        new_river_left = state.river_left.at[0].set(new_top_left)
+        new_river_right = state.river_right.at[0].set(new_top_right)
+
+        new_alter_length = state.river_alternation_length - 1
+        new_river_state = jax.lax.cond(
+            new_alter_length <= 0,
+            lambda: jnp.array(0),
+            lambda: state.river_state
+        )
+        return state._replace(river_state=new_river_state,
+                              river_left=new_river_left,
+                              river_right=new_river_right,
+                              river_alternation_length=new_alter_length)
 
     def alter_splitted_straight(state: RiverraidState) -> RiverraidState:
-        return state
+        return alter_expanse(state)
 
     def alter_splitted_expanse(state: RiverraidState) -> RiverraidState:
-        return state
+        return alter_shrink(state)
 
     def alter_splitted_shrink(state: RiverraidState) -> RiverraidState:
-        return state
+        return alter_expanse(state)
 
+    # Scroll the screen down
+    scrolled_left = jnp.roll(state.river_left, 1)
+    scrolled_right = jnp.roll(state.river_right, 1)
+    state = state._replace(river_left=scrolled_left,
+                   river_right=scrolled_right)
 
+    # determine IF the river is to be altered
     key = jax.random.PRNGKey(state.turn_step)
-    alter_river = jax.random.bernoulli(key, p=0.9)
+    alter_river = jax.random.bernoulli(key, p=0.01)
 
-    state = jax.lax.cond(alter_river, lambda state: select_alternation(state), lambda state: state, operand=state)
+    # If the river is to be altered, select the type of alteration
+    state = jax.lax.cond(alter_river, lambda state: select_alternation(state),
+                         lambda state: state._replace(river_left=state.river_left.at[0].set(state.river_left[1]), river_right=state.river_right.at[0].set(state.river_right[1])),
+                         operand=state)
 
-    state = lax.switch(
-        state.river_state,
-        [alter_expanse, alter_shrink, alter_splitted_straight, alter_splitted_expanse, alter_splitted_shrink],
-        state
+    # If an alternation is in progress, continue with the alteration
+    state = jax.lax.cond(
+        state.river_state > 0,
+        lambda state: lax.switch(
+            state.river_state,
+            [
+                alter_expanse,
+                alter_shrink,
+                alter_splitted_straight,
+                alter_splitted_expanse,
+                alter_splitted_shrink,
+            ],
+            state,
+        ),
+        lambda state: state,
+        operand=state,
     )
 
     return state
@@ -119,11 +157,12 @@ class JaxRiverraid(JaxEnvironment):
 
     def reset(self, key=None) -> Tuple[RiverraidObservation, RiverraidState]:
         river_start_x = (SCREEN_WIDTH - DEFAULT_RIVER_WIDTH) // 2
+        river_end_x = river_start_x + DEFAULT_RIVER_WIDTH
 
         state = RiverraidState(turn_step=0,
                                player_x=jnp.array(10),
-                               river_left=jnp.array(river_start_x),
-                               river_right=jnp.array(river_start_x + DEFAULT_RIVER_WIDTH),
+                               river_left=jnp.full((SCREEN_HEIGHT,), river_start_x, dtype=jnp.int32),
+                               river_right=jnp.full((SCREEN_HEIGHT,), river_end_x, dtype=jnp.int32),
                                river_inner_left=jnp.array(60),
                                river_inner_right=jnp.array(60),
                                river_state=jnp.array(0),
@@ -181,18 +220,20 @@ class JaxRiverraid(JaxEnvironment):
 
 class RiverraidRenderer(AtraJaxisRenderer):
     def render(self, state: RiverraidState):
+        green_banks = jnp.array([26, 132, 26], dtype=jnp.uint8)
+        blue_river = jnp.array([42, 42, 189], dtype=jnp.uint8)
 
-        green_banks = jnp.array([26, 132, 26])
-        blue_river = jnp.array([42, 42, 189])
+        left_banks = state.river_left[:, None]
+        right_banks = state.river_right[:, None]
 
-        raster = jnp.full((SCREEN_WIDTH, SCREEN_HEIGHT, 3), green_banks)
+        x_coords = jnp.arange(SCREEN_WIDTH)
+        is_river = (x_coords > left_banks) & (x_coords < right_banks)
 
-        river_start = state.river_left
-        river_end = state.river_right
+        # The raster is  (HEIGHT, WIDTH, 3)
+        raster = jnp.where(is_river[..., None], blue_river, green_banks)
 
-        raster = raster.at[river_start:river_end, :].set(blue_river)
-
-        return raster
+        # transpose it to (WIDTH, HEIGHT, 3)
+        return jnp.transpose(raster, (1, 0, 2))
 
 
 if __name__ == "__main__":
