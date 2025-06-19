@@ -859,7 +859,7 @@ def main():
                 # print("Enemies remaining:", int(curr_state.number_enemies_wave_remaining))
                 # print("Current wave: ", int(curr_state.wave))
                 # print(f"Timout: {int(curr_state.wave_end_cooldown_remaining)}")
-                dx_list = curr_state.enemies[:, 2][curr_state.enemies[:, 5] == 1].tolist()
+                # dx_list = curr_state.enemies[:, 2][curr_state.enemies[:, 5] == 1].tolist()
                 # print("Active enemy dx’s:", dx_list)
 
         # Render and display
