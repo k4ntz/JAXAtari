@@ -265,7 +265,10 @@ def load_sprites():
     # Loading Digit Sprites
     DIGITS = aj.load_and_pad_digits(
     os.path.join(MODULE_DIR, "sprites/wordzapper/digits/{}.npy")
-)
+    )
+
+    LETTERS = [aj.loadFrame(os.path.join(MODULE_DIR, f"sprites/wordzapper/letters/normal_letters/{chr(i)}.npy")) for i in range(ord('a'), ord('z') + 1)]
+
     return (
         SPRITE_BG,
         SPRITE_PL,
@@ -273,6 +276,7 @@ def load_sprites():
         SPRITE_BONKER,
         SPRITE_ZONKER,
         DIGITS,
+        LETTERS,
     )
 (
     SPRITE_BG,
@@ -281,6 +285,7 @@ def load_sprites():
     SPRITE_BONKER,
     SPRITE_ZONKER,
     DIGITS,
+    LETTERS,
 ) = load_sprites()
 
 
@@ -905,6 +910,11 @@ class WordZapperRenderer(AtraJaxisRenderer):
         # render enemies
         frame_bonker = aj.get_sprite_frame(SPRITE_BONKER, state.step_counter)
         frame_zonker = aj.get_sprite_frame(SPRITE_ZONKER ,state.step_counter)
+
+
+        #Testing Letter Rendering
+        letter_A = LETTERS[0]
+        raster = aj.render_at(raster, 50, 50, letter_A)
 
         def body_fn(i, raster):
             should_render_enemy = state.enemy_active[i]
