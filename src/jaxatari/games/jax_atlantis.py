@@ -379,15 +379,20 @@ class JaxAtlantis(JaxEnvironment[AtlantisState, AtlantisObservation, AtlantisInf
 
     @staticmethod
     @jax.jit
-    def _sample_speed(rng, wave, max_speed=3):
+    def _sample_speed(rng, wave):
         """
-        Draws a positive integer in {1 … max_speed}
-        from a Poisson distribution whose mean grows with the wave number.
+        Returns speed with a long left tail (mostly slow, rare fast).
+        Uses a geometric distribution, shifting as wave increases.
         """
-        lam =  1 + wave / 6.0
-        # Poisson draw, then clip to [1 , max_speed]
-        speed_raw = 1 + jax.random.poisson(rng, lam).astype(jnp.int32)
-        return jnp.minimum(speed_raw, max_speed)  # scalar int32
+        # Higher waves -> lower p -> more fast enemies
+        base_p = 0.8
+
+        # adjust probability p for the geometric distribution
+        # clip p to always stay between 0.3 and 0.95
+        p = jnp.clip(base_p - 0.03 * wave, 0.3, 0.95)
+        speed = jax.random.geometric(rng, p)
+        max_speed = wave + 1 # limit speed. wave=0 -> max speed 1. wave=1 -> 2,...
+        return jnp.minimum(speed, max_speed)
 
     @partial(jax.jit, static_argnums=(0,))
     def _spawn_enemy(self, state: AtlantisState) -> AtlantisState:
@@ -852,10 +857,10 @@ def main():
                 action = get_human_action()
                 (obs, curr_state, _, _, _) = jitted_step(curr_state, action)
                 # print("Enemies remaining:", int(curr_state.number_enemies_wave_remaining))
-                print("Current wave: ", int(curr_state.wave))
+                # print("Current wave: ", int(curr_state.wave))
                 # print(f"Timout: {int(curr_state.wave_end_cooldown_remaining)}")
                 dx_list = curr_state.enemies[:, 2][curr_state.enemies[:, 5] == 1].tolist()
-                print("Active enemy dx’s:", dx_list)
+                # print("Active enemy dx’s:", dx_list)
 
         # Render and display
         raster = renderer.render(curr_state)
