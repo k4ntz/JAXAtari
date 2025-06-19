@@ -16,7 +16,9 @@ from jaxatari.rendering import atraJaxis as aj
 
 
 # -------- Game constants --------
-
+SCREEN_WIDTH = 160
+SCREEN_HEIGHT = 200
+DEFAULT_RIVER_WIDTH = 50
 
 
 class RiverraidState(NamedTuple):
@@ -24,6 +26,10 @@ class RiverraidState(NamedTuple):
     player_x: chex.Array
     river_left: chex.Array
     river_right: chex.Array
+    river_inner_left: chex.Array
+    river_inner_right: chex.Array
+    river_state: chex.Array # 0 keep straight, 1 expanse, 2 shrinking, 3 splitted straight, 4 splitted expanse, 5 splitted shrinking
+    river_alternation_length: chex.Array
 
 
 class RiverraidInfo(NamedTuple):
@@ -33,6 +39,60 @@ class RiverraidInfo(NamedTuple):
 
 class RiverraidObservation(NamedTuple):
     player_x: chex.Array
+
+
+@jax.jit
+def update_river_banks(state: RiverraidState) -> RiverraidState:
+    def select_alternation(state: RiverraidState):
+        key = jax.random.PRNGKey(state.turn_step)
+        new_river_state = jax.random.randint(key, (), 1, 6) # 1 bis 5
+        alternation_length = jax.random.randint(key, (), 1, 6)
+        return state._replace(river_state=new_river_state,
+                              river_alternation_length=alternation_length)
+
+
+
+    def alter_expanse(state: RiverraidState) -> RiverraidState:
+        new_river_left = state.river_left + 3
+        new_river_right = state.river_right + 3
+        new_alter_length = state.river_alternation_length - 1
+        new_river_state = jax.lax.cond(
+            new_alter_length <= 0,
+            lambda state: jnp.array(0),
+            lambda state: state.river_state,
+            state
+        )
+        return state._replace(river_state=new_river_state,
+                              river_left=new_river_left,
+                              river_right=new_river_right,
+                              river_alternation_length=new_alter_length)
+
+    def alter_shrink(state: RiverraidState) -> RiverraidState:
+        return state
+
+    def alter_splitted_straight(state: RiverraidState) -> RiverraidState:
+        return state
+
+    def alter_splitted_expanse(state: RiverraidState) -> RiverraidState:
+        return state
+
+    def alter_splitted_shrink(state: RiverraidState) -> RiverraidState:
+        return state
+
+
+    key = jax.random.PRNGKey(state.turn_step)
+    alter_river = jax.random.bernoulli(key, p=0.9)
+
+    state = jax.lax.cond(alter_river, lambda state: select_alternation(state), lambda state: state, operand=state)
+
+    state = lax.switch(
+        state.river_state,
+        [alter_expanse, alter_shrink, alter_splitted_straight, alter_splitted_expanse, alter_splitted_shrink],
+        state
+    )
+
+    return state
+
 
 
 class JaxRiverraid(JaxEnvironment):
@@ -58,10 +118,16 @@ class JaxRiverraid(JaxEnvironment):
         return observation
 
     def reset(self, key=None) -> Tuple[RiverraidObservation, RiverraidState]:
+        river_start_x = (SCREEN_WIDTH - DEFAULT_RIVER_WIDTH) // 2
+
         state = RiverraidState(turn_step=0,
                                player_x=jnp.array(10),
-                               river_left=jnp.array(50),
-                               river_right=jnp.array(50))
+                               river_left=jnp.array(river_start_x),
+                               river_right=jnp.array(river_start_x + DEFAULT_RIVER_WIDTH),
+                               river_inner_left=jnp.array(60),
+                               river_inner_right=jnp.array(60),
+                               river_state=jnp.array(0),
+                               river_alternation_length=jnp.array(0))
         observation = self._get_observation(state)
         return observation, state
 
@@ -74,6 +140,7 @@ class JaxRiverraid(JaxEnvironment):
 
     def step(self, state: RiverraidState, action: Action) -> Tuple[RiverraidObservation, RiverraidState, RiverraidInfo]:
         new_state = state._replace(turn_step=state.turn_step + 1)
+        new_state = update_river_banks(new_state)
 
         observation = self._get_observation(new_state)
         reward = self._get_env_reward(state, new_state)
@@ -114,16 +181,14 @@ class JaxRiverraid(JaxEnvironment):
 
 class RiverraidRenderer(AtraJaxisRenderer):
     def render(self, state: RiverraidState):
-        game_width = 160
-        game_height = 210
 
-        green_banks = jnp.array([26, 132, 26], dtype=jnp.uint8)
-        blue_river = jnp.array([42, 42, 189], dtype=jnp.uint8)
+        green_banks = jnp.array([26, 132, 26])
+        blue_river = jnp.array([42, 42, 189])
 
-        raster = jnp.full((game_height, game_width, 3), green_banks, dtype=jnp.uint8)
+        raster = jnp.full((SCREEN_WIDTH, SCREEN_HEIGHT, 3), green_banks)
 
         river_start = state.river_left
-        river_end = WIDTH - state.river_right
+        river_end = state.river_right
 
         raster = raster.at[river_start:river_end, :].set(blue_river)
 
@@ -144,7 +209,7 @@ if __name__ == "__main__":
     initial_observation, state = jitted_reset()
 
 
-    screen = pygame.display.set_mode((160 * 3, 210 * 3))
+    screen = pygame.display.set_mode((SCREEN_WIDTH, SCREEN_HEIGHT))
     pygame.display.set_caption("Riverraid")
     clock = pygame.time.Clock()
 
@@ -158,7 +223,7 @@ if __name__ == "__main__":
         observation, state, reward, done, info = jitted_step(state, action)
 
         render_output = jitted_render(state)
-        aj.update_pygame(screen, render_output, 3, 160, 210)
+        aj.update_pygame(screen, render_output, 1, SCREEN_WIDTH, SCREEN_HEIGHT)
 
         pygame.display.flip()
         clock.tick(60)
