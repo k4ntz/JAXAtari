@@ -176,19 +176,32 @@ def barrel_step(state):
         # change sprite animation
         def flip_sprite(sprite):
             return jax.lax.cond(
-                jnp.logical_and(sprite != BARREL_SPRITE_FALL, sprite == BARREL_SPRITE_RIGHT),
+                sprite == BARREL_SPRITE_RIGHT,
                 lambda _: BARREL_SPRITE_LEFT,
                 lambda _: BARREL_SPRITE_RIGHT,
                 operand=None
             )
         
-        new_sprite = jax.lax.cond(
-            should_pick_next_sprite, 
+        sprite = jax.lax.cond(
+            jnp.logical_and(should_pick_next_sprite, direction != MOVING_DOWN), 
             lambda _: flip_sprite(sprite),
             lambda _: sprite,
             operand=None
         )
-        
+
+        # change y position if the barrel is still falling
+        # if barrel is landed on the down stage, change the moving direction
+        def change_y_if_barrel_is_falling(x, y, direction, sprite, stage):
+            new_y = y + 2
+
+            return jax.lax.cond(
+                direction == MOVING_DOWN,
+                lambda _: (x, new_y, direction, sprite, stage),
+                lambda _: (x, y, direction, sprite, stage),
+                operand=None
+            )
+        x, y, direction, sprite, stage = change_y_if_barrel_is_falling(x, y, direction, sprite, stage)
+
         # change position
         # check if barrel can fall (ladder or end of bar)
         def check_if_barrel_will_fall(x, y, direction, sprite, stage):        
@@ -197,29 +210,43 @@ def barrel_step(state):
             # check first if barrel is positioned on top of a ladder
             curr_stage = stage - 1
             mask = jnp.logical_and(ladders.stage == curr_stage, ladders.end_x == x)
-
             barrel_is_on_ladder = jnp.any(mask)
-            jax.debug.print("{}", barrel_is_on_ladder)
 
-            return x, y, direction, sprite, stage
+            new_direction = MOVING_DOWN
+            new_sprite = BARREL_SPRITE_FALL
+            new_y = y + 1
 
-        check_if_barrel_will_fall(x, y, direction, sprite, stage)
+            return jax.lax.cond(
+                jnp.logical_and(barrel_is_on_ladder, direction != MOVING_DOWN),
+                lambda _: (x, new_y, new_direction, new_sprite, stage),
+                lambda _: (x, y, direction, sprite, stage),
+                operand=None
+            )
+        x, y, direction, sprite, stage = check_if_barrel_will_fall(x, y, direction, sprite, stage)
 
-        new_x = x + 1
-        new_y = y
-        direction = direction
-        return new_x, new_y, direction, new_sprite, stage
+        # change x (y) positions when barrel is rolling on stage
+        def barrel_rolling_on_a_stage(x, y, direction, sprite, stage):
+            new_x = x + 1
+            return jax.lax.cond(
+                direction != MOVING_DOWN,
+                lambda _: (new_x, y, direction, sprite, stage),
+                lambda _: (x, y, direction, sprite, stage),
+                operand=None
+            )
+        x, y, direction, sprite, stage = barrel_rolling_on_a_stage(x, y, direction, sprite, stage)
+
+        return x, y, direction, sprite, stage
     update_all_barrels = jax.vmap(update_single_barrel)
 
     barrels = new_state.barrels
-    new_barrel_x, new_barrel_y, new_barrel_moving_direction, sprite, new_stage = update_all_barrels(
+    new_barrel_x, new_barrel_y, new_barrel_moving_direction, new_sprite, new_stage = update_all_barrels(
         barrels.barrel_x, barrels.barrel_y, barrels.moving_direction, barrels.sprite, barrels.stage
     )
     barrels = barrels._replace(
         barrel_x = new_barrel_x,
         barrel_y = new_barrel_y,
         moving_direction = new_barrel_moving_direction,
-        sprite = sprite,
+        sprite = new_sprite,
         stage=new_stage
     )
     new_state = new_state._replace(
