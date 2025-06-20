@@ -3,6 +3,7 @@
 Lukas Bergholz, Linus Orlob, Vincent Jahn
 
 """
+import os
 from functools import partial
 from typing import Tuple, NamedTuple
 
@@ -17,13 +18,29 @@ from jaxatari.renderers import AtraJaxisRenderer
 # -------- Game constants --------
 WIDTH = 160
 HEIGHT = 210
-SCALING_FACTOR = 3
+SCALING_FACTOR = 4
 
+SCROLL_SPEED = 1
+
+# -------- Player constants --------
+PLAYER_SIZE = (8, 6) # Width, Height
+PLAYER_COLOR = (85, 92, 197, 255)
+PLAYER_BOUNDS = (20, WIDTH - 20 - PLAYER_SIZE[0]), (21, 88)
+
+PLAYER_START_X = 20
+PLAYER_START_Y = 20
+
+MAX_VELOCITY_Y = 1.5
+MAX_VELOCITY_X = 1.5
+
+# -------- Enemy Missile constants --------
+ENEMY_MISSILE_COLOR = (85, 92, 197, 255)
 
 # -------- States --------
 class LaserGatesState(NamedTuple):
     player_x: chex.Array
     player_y: chex.Array
+    player_facing_direction: chex.Array
     score: chex.Array
     lives: chex.Array
     step_counter: chex.Array
@@ -51,11 +68,85 @@ class LaserGatesInfo(NamedTuple):
 
 # -------- Render Constants --------
 def load_sprites():
-    return ()
+    MODULE_DIR = os.path.dirname(os.path.abspath(__file__))
 
-() = load_sprites()
+    background = aj.loadFrame(os.path.join(MODULE_DIR, "sprites/lasergates/background/background.npy"))
+    player = aj.loadFrame(os.path.join(MODULE_DIR, "sprites/lasergates/player/player.npy"))
+
+
+    SPRITE_BACKGROUND = background
+    SPRITE_PLAYER = player
+
+    return (
+        SPRITE_BACKGROUND,
+        SPRITE_PLAYER,
+    )
+
+(
+    SPRITE_BACKGROUND,
+    SPRITE_PLAYER,
+) = load_sprites()
 
 # -------- Game Logic --------
+
+
+
+@jax.jit
+def player_step(
+        state: LaserGatesState, action: chex.Array
+) -> tuple[chex.Array, chex.Array, chex.Array]:
+    up = jnp.isin(action, jnp.array([
+        Action.UP,
+        Action.UPRIGHT,
+        Action.UPLEFT,
+        Action.UPFIRE,
+        Action.UPRIGHTFIRE,
+        Action.UPLEFTFIRE
+    ]))
+    down = jnp.isin(action, jnp.array([
+        Action.DOWN,
+        Action.DOWNRIGHT,
+        Action.DOWNLEFT,
+        Action.DOWNFIRE,
+        Action.DOWNRIGHTFIRE,
+        Action.DOWNLEFTFIRE
+    ]))
+    left = jnp.isin(action, jnp.array([
+        Action.LEFT,
+        Action.UPLEFT,
+        Action.DOWNLEFT,
+        Action.LEFTFIRE,
+        Action.UPLEFTFIRE,
+        Action.DOWNLEFTFIRE
+    ]))
+    right = jnp.isin(action, jnp.array([
+        Action.RIGHT,
+        Action.UPRIGHT,
+        Action.DOWNRIGHT,
+        Action.RIGHTFIRE,
+        Action.UPRIGHTFIRE,
+        Action.DOWNRIGHTFIRE
+    ]))
+
+    # Move x
+    delta_x = jnp.where(left, -MAX_VELOCITY_X, jnp.where(right, MAX_VELOCITY_X, 0))
+    player_x = jnp.clip(state.player_x + delta_x, PLAYER_BOUNDS[0][0], PLAYER_BOUNDS[0][1])
+
+    # Move y
+    delta_y = jnp.where(up, -MAX_VELOCITY_Y, jnp.where(down, MAX_VELOCITY_Y, 0))
+    player_y = jnp.clip(state.player_y + delta_y, PLAYER_BOUNDS[1][0], PLAYER_BOUNDS[1][1])
+
+    # Player facing direction
+    new_player_facing_direction = jnp.where(right, 1, jnp.where(left, -1, state.player_facing_direction))
+
+    no_x_input = jnp.logical_and(
+        jnp.logical_not(left), jnp.logical_not(right)
+        )
+
+    # SCROLL LEFT
+    player_x = jnp.where(no_x_input, player_x - SCROLL_SPEED, player_x)
+
+    return player_x, player_y, new_player_facing_direction
 
 
 class JaxLaserGates(JaxEnvironment[LaserGatesState, LaserGatesObservation, LaserGatesInfo]):
@@ -133,6 +224,7 @@ class JaxLaserGates(JaxEnvironment[LaserGatesState, LaserGatesObservation, Laser
         reset_state = LaserGatesState( # TODO: fill
             player_x=jnp.array(0),
             player_y=jnp.array(0),
+            player_facing_direction=jnp.array(1),
             score=jnp.array(0),
             lives=jnp.array(3),
             step_counter=jnp.array(0),
@@ -147,7 +239,16 @@ class JaxLaserGates(JaxEnvironment[LaserGatesState, LaserGatesObservation, Laser
     ) -> Tuple[LaserGatesObservation, LaserGatesState, float, bool, LaserGatesInfo]:
         # TODO: fill
 
-        return_state = state._replace(step_counter=state.step_counter + 1)
+        # -------- Move player --------
+        new_player_x, new_player_y, new_player_facing_direction = player_step(state, action)
+
+
+        return_state = state._replace(
+            player_x=new_player_x,
+            player_y=new_player_y,
+            player_facing_direction=new_player_facing_direction,
+            step_counter=state.step_counter + 1
+        )
 
         obs = self._get_observation(return_state)
         all_rewards = self._get_all_rewards(state, return_state)
@@ -159,6 +260,38 @@ class LaserGatesRenderer(AtraJaxisRenderer):
     @partial(jax.jit, static_argnums=(0,))
     def render(self, state):
         raster = jnp.zeros((WIDTH, HEIGHT, 3))
+
+        def recolor_sprite(sprite: jnp.ndarray, color: jnp.ndarray) -> jnp.ndarray:
+            assert sprite.ndim == 3 and sprite.shape[2] in (3, 4), "Sprite must be HxWx3 or HxWx4"
+            assert color.shape[0] == sprite.shape[2], "Color channels must match sprite channels"
+
+            # Define a visibility mask: pixel is visible if any of its channels > 0
+            visible_mask = jnp.any(sprite != 0, axis=-1)  # (H, W)
+            visible_mask = visible_mask[:, :, None]  # (H, W, 1) for broadcasting
+
+            # Broadcast color to the same shape as sprite
+            color_broadcasted = jnp.broadcast_to(color, sprite.shape)
+
+            # Where visible, use the new color; otherwise keep black (zeros)
+            return jnp.where(visible_mask, color_broadcasted, 0)
+
+        # -------- Render background --------
+        raster = aj.render_at(
+            raster,
+            0,
+            0,
+            SPRITE_BACKGROUND,
+        )
+
+        # -------- Render player --------
+        frame_player = recolor_sprite(SPRITE_PLAYER, jnp.array(PLAYER_COLOR))
+        raster = aj.render_at(
+            raster,
+            state.player_x,
+            state.player_y,
+            frame_player,
+            flip_horizontal=state.player_facing_direction < 0,
+        )
 
         return raster
 
