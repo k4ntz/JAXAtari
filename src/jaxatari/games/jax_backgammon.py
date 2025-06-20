@@ -612,6 +612,7 @@ def run_game_with_input(key: jax.Array, max_steps=100):
             )
             continue
 
+
         # Execute the move
         from_display = "BAR" if action[0] == BAR_INDEX else str(action[0] + 1)
         to_display = "HOME" if action[1] == HOME_INDEX else str(action[1] + 1)
