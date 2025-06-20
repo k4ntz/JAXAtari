@@ -2,11 +2,13 @@ import jax
 import jax.numpy as jnp
 from functools import partial
 from typing import NamedTuple, Tuple, Any, List
-from ..environment import JaxEnvironment, EnvState
-from ..renderers import AtraJaxisRenderer
+from jaxatari.environment import JaxEnvironment, EnvState
+from jaxatari.renderers import AtraJaxisRenderer
 
 """
-JAX Backgammon Environment
+Contribuors: Ayush Bansal, Mahta Mollaeian, Anh Tuan Nguyen, Abdallah Siwar  
+
+Game: JAX Backgammon
 
 This module defines a JAX-accelerated backgammon environment for reinforcement learning and simulation.
 It includes the environment class, state structures, move validation and execution logic, rendering, and user interaction.
@@ -18,8 +20,8 @@ NUM_CHECKERS = 15
 BAR_INDEX = 24
 HOME_INDEX = 25
 MAX_DICE = 2
-WHITE_HOME = jnp.array(range(0, 6))
-BLACK_HOME = jnp.array(range(19, 25))
+WHITE_HOME = jnp.array(range(19, 25))
+BLACK_HOME = jnp.array(range(0, 6))
 
 
 WHITE = 1
@@ -29,7 +31,7 @@ BLACK = -1
 class BackgammonState(NamedTuple):
     """Represents the complete state of a backgammon game."""
     board: jnp.ndarray  # (2, 26)
-    dice: jnp.ndarray  # (2,)
+    dice: jnp.ndarray  # (4,)
     current_player: int
     is_game_over: bool
 
@@ -61,7 +63,7 @@ class JaxBackgammonEnv(JaxEnvironment[BackgammonState, jnp.ndarray, dict]):
         board = jnp.zeros((2, 26), dtype=jnp.int32)
         board = board.at[0, 0].set(2).at[0, 11].set(5).at[0, 16].set(3).at[0, 18].set(5)
         board = board.at[1, 23].set(2).at[1, 12].set(5).at[1, 7].set(3).at[1, 5].set(5)
-        dice = jnp.zeros(2, dtype=jnp.int32)
+        dice = jnp.zeros(4, dtype=jnp.int32)
 
         #The condition for the while loop
         def cond_fun(carry):
@@ -83,12 +85,32 @@ class JaxBackgammonEnv(JaxEnvironment[BackgammonState, jnp.ndarray, dict]):
 
         white_roll, black_roll, key = jax.lax.while_loop(cond_fun, body_fun, carry)
 
-        return BackgammonState(board=board, dice=dice, current_player=jax.lax.cond(
-            white_roll > black_roll,
-            lambda _: WHITE,
-            lambda _: BLACK,
+        # Set the player who rolled higher
+        current_player = jax.lax.cond(
+        white_roll > black_roll,
+        lambda _: WHITE,
+        lambda _: BLACK,
+        operand=None
+        )
+
+        # Prepare initial dice values for that player
+        first_die = jax.lax.cond(current_player == WHITE, lambda _: white_roll, lambda _: black_roll, operand=None)
+        second_die = jax.lax.cond(current_player == WHITE, lambda _: black_roll, lambda _: white_roll, operand=None)
+
+        is_double = first_die == second_die
+        dice = jax.lax.cond(
+            is_double,
+            lambda _: jnp.array([first_die] * 4),
+            lambda _: jnp.array([first_die, second_die, 0, 0]),
             operand=None
-        ), is_game_over=False)
+        )
+
+        return BackgammonState(
+            board=board,
+            dice=dice,
+            current_player=current_player,
+            is_game_over=False
+        )
 
     def reset(self) -> Tuple[jnp.ndarray, BackgammonState]:
         state = self.init_state(self.key)
@@ -99,10 +121,23 @@ class JaxBackgammonEnv(JaxEnvironment[BackgammonState, jnp.ndarray, dict]):
     @staticmethod
     @jax.jit
     def roll_dice(key: jax.Array) -> Tuple[jnp.ndarray, jax.Array]:
-        """Roll two dice with values in [1, 6]."""
+        """
+        Roll two dice and expand to shape (4,):
+        - If not a double: [d1, d2, 0, 0]
+        - If a double:     [d, d, d, d]
+        """
         key, subkey = jax.random.split(key)
-        dice = jax.random.randint(subkey, (MAX_DICE,), 1, 7)
-        return dice, key
+        dice = jax.random.randint(subkey, (2,), 1, 7)
+        is_double = dice[0] == dice[1]
+
+        expanded_dice = jax.lax.cond(
+            is_double,
+            lambda d: jnp.array([d[0], d[0], d[0], d[0]]),  # use all 4 moves
+            lambda d: jnp.array([d[0], d[1], 0, 0]),         # only 2 dice used
+            operand=dice
+        )
+
+        return expanded_dice, key
 
     @staticmethod
     @jax.jit
@@ -118,52 +153,80 @@ class JaxBackgammonEnv(JaxEnvironment[BackgammonState, jnp.ndarray, dict]):
         player_idx = JaxBackgammonEnv.get_player_index(player)
         opponent_idx = 1 - player_idx
 
-        # Detect direction and basic validity
-        base_distance = jax.lax.select(player == WHITE, from_point - to_point, to_point - from_point)
-        has_piece = board[player_idx, from_point] > 0
-        in_bounds = (0 <= from_point) & (from_point < 24) & (0 <= to_point) & (to_point <= HOME_INDEX)
-        correct_direction = base_distance > 0
-        not_blocked = board[opponent_idx, to_point] <= 1
+        in_bounds = ((0 <= from_point) & (from_point <= 24) & (0 <= to_point) & (to_point <= HOME_INDEX) & (to_point != BAR_INDEX))
+        same_point = from_point == to_point
+        has_bar_checkers = board[player_idx, BAR_INDEX] > 0
+        moving_from_bar = from_point == BAR_INDEX
+        must_move_from_bar = (~moving_from_bar) & has_bar_checkers
 
-        # Determine if we're bearing off
-        is_bearing_off = to_point == HOME_INDEX
-        can_bear_off = JaxBackgammonEnv.check_bearing_off(state, player)
+        early_invalid = (~in_bounds) | must_move_from_bar | same_point
 
-        # Compute effective distance
-        bearing_off_distance = jax.lax.select(player == WHITE, from_point + 1, NUM_POINTS - from_point)
-        effective_distance = jax.lax.select(is_bearing_off, bearing_off_distance, base_distance)
+        def return_false(_):
+            return False
 
-        def check_bearing_off_valid(_):
-            exact_match = (state.dice[0] == effective_distance) | (state.dice[1] == effective_distance)
+        def continue_check(_):
+            def bar_case(_):
+                def is_valid_entry(die_val: int) -> bool:
+                    expected_entry = jax.lax.select(player == WHITE, die_val - 1, 24 - die_val)
+                    matches_entry = to_point == expected_entry
+                    entry_open = board[opponent_idx, expected_entry] <= 1
+                    return matches_entry & entry_open
 
-            point_indices = jnp.arange(24)
+                bar_has_checker = board[player_idx, BAR_INDEX] > 0
+                bar_entry_valid = jnp.any(jax.vmap(is_valid_entry)(state.dice))
+                return bar_has_checker & bar_entry_valid
 
-            white_mask = point_indices > from_point
-            black_mask = point_indices < from_point
+            def bearing_off_case(_):
+                can_bear_off = JaxBackgammonEnv.check_bearing_off(state, player)
+                has_piece = board[player_idx, from_point] > 0
 
-            higher_points = jax.lax.select(
-                player == WHITE,
-                white_mask,
-                black_mask
+                bearing_off_distance = jax.lax.cond(
+                    player == WHITE,
+                    lambda _: HOME_INDEX - from_point,
+                    lambda _: from_point + 1,
+                    operand=None
+                )
+
+                dice_match = jnp.any(state.dice == bearing_off_distance)
+
+                point_indices = jnp.arange(24)
+
+                higher_mask = jax.lax.cond(
+                    player == WHITE,
+                    lambda _: point_indices > from_point,
+                    lambda _: point_indices < from_point,
+                    operand=None
+                )
+
+                higher_checkers = jnp.any(jnp.where(higher_mask, board[player_idx, :24], 0) > 0)
+                larger_die = jnp.any(state.dice > bearing_off_distance)
+
+                valid_bear = dice_match | ((~higher_checkers) & larger_die)
+
+                return can_bear_off & has_piece & valid_bear
+
+            def normal_case(_):
+                has_piece = board[player_idx, from_point] > 0
+                not_blocked = board[opponent_idx, to_point] <= 1
+                base_distance = jax.lax.select(player == WHITE, to_point - from_point, from_point - to_point)
+                correct_direction = base_distance > 0
+                dice_match = jnp.any(state.dice == base_distance)
+                return has_piece & not_blocked & correct_direction & dice_match
+
+            return jax.lax.cond(
+                moving_from_bar,
+                bar_case,
+                lambda _: jax.lax.cond(
+                    to_point == HOME_INDEX,
+                    bearing_off_case,
+                    normal_case,
+                    operand=None
+                ),
+                operand=None
             )
 
-            player_row = board[player_idx, :24]
-            no_higher = jnp.all(jnp.where(higher_points, player_row, 0) == 0)
+        return jax.lax.cond(early_invalid, return_false, continue_check, operand=None)
 
-            larger_die = jnp.maximum(state.dice[0], state.dice[1]) > effective_distance
-            return exact_match | (larger_die & no_higher)
-
-        def check_normal_move(_):
-            return (state.dice[0] == effective_distance) | (state.dice[1] == effective_distance)
-
-        dice_match = jax.lax.cond(
-            is_bearing_off & can_bear_off,
-            check_bearing_off_valid,
-            check_normal_move,
-            operand=None
-        )
-
-        return has_piece & in_bounds & correct_direction & dice_match & not_blocked & (~is_bearing_off | can_bear_off)
     @staticmethod
     def check_bearing_off(state: BackgammonState, player: int) -> bool:
         """check for bearing off using lax.cond instead of if statements."""
@@ -202,29 +265,57 @@ class JaxBackgammonEnv(JaxEnvironment[BackgammonState, jnp.ndarray, dict]):
     @staticmethod
     @jax.jit
     def compute_distance(player, from_point, to_point):
-        """Compute move distance based on player and points."""
-        return jax.lax.cond(
-            from_point == BAR_INDEX,
-            lambda a: jax.lax.select(a[0] == WHITE, 25 - a[1], a[1]),
-            lambda a: jax.lax.select(a[0] == WHITE, a[1] - a[2], a[2] - a[1]),
-            (player, from_point, to_point)
+        """Compute move distance based on player and points, including bearing off."""
+        is_from_bar = from_point == BAR_INDEX
+
+        bar_distance = jax.lax.cond(
+            player == WHITE,
+            lambda _: to_point + 1,          
+            lambda _: 24 - to_point,
+            operand=None
         )
 
+        regular_distance = jax.lax.cond(
+            to_point == HOME_INDEX,
+            lambda _: jax.lax.cond(
+                player == WHITE,
+                lambda _: HOME_INDEX - from_point,
+                lambda _: from_point + 1,
+                operand=None
+            ),
+            lambda _: jax.lax.cond(
+                player == WHITE,
+                lambda _: to_point - from_point,
+                lambda _: from_point - to_point,
+                operand=None
+            ),
+            operand=None
+        )
+
+        return jax.lax.cond(is_from_bar, lambda _: bar_distance, lambda _: regular_distance, operand=None)
+    
     @staticmethod
     @jax.jit
-    def update_dice(dice, is_valid, distance):
-        """Update dice after a move."""
-        return jax.lax.cond(
-            is_valid & (dice[0] == distance),
-            lambda d: jnp.array([0, d[1]]),
-            lambda d: jax.lax.cond(
-                is_valid & (d[1] == distance),
-                lambda d2: jnp.array([d2[0], 0]),
-                lambda d2: d2,
-                d
-            ),
-            dice
-        )
+    def update_dice(dice: jnp.ndarray, is_valid: bool, distance: int) -> jnp.ndarray:
+        """Consume one matching die (only the first match). Works with up to 4 dice."""
+
+        def consume_one(dice):
+            def scan_fn(carry, i):
+                d, used = carry
+                should_consume = (~used) & (d[i] == distance)
+                new_d = jax.lax.cond(
+                    should_consume,
+                    lambda _: d.at[i].set(0),
+                    lambda _: d,
+                    operand=None
+                )
+                new_used = used | should_consume
+                return (new_d, new_used), None
+
+            (updated_dice, _), _ = jax.lax.scan(scan_fn, (dice, False), jnp.arange(4))
+            return updated_dice
+
+        return jax.lax.cond(is_valid, consume_one, lambda d: d, dice)
 
     @partial(jax.jit, static_argnums=(0,))
     def step_impl(self, state: BackgammonState, action: Tuple[int, int], key: jax.Array) -> Tuple[jnp.ndarray, BackgammonState, float, bool, dict, jax.Array]:
@@ -253,7 +344,7 @@ class JaxBackgammonEnv(JaxEnvironment[BackgammonState, jnp.ndarray, dict]):
         new_dice = JaxBackgammonEnv.update_dice(state.dice, is_valid, distance)
 
         # check if all dice are used
-        all_dice_used = (new_dice[0] == 0) & (new_dice[1] == 0)
+        all_dice_used = jnp.all(new_dice == 0)
 
         # prepare for next turn based on the outcome
         def next_turn(k):
@@ -280,6 +371,7 @@ class JaxBackgammonEnv(JaxEnvironment[BackgammonState, jnp.ndarray, dict]):
             is_game_over=game_over
         )
 
+        # Prepare return values
         obs = self._get_observation(new_state)
         reward = self._get_reward(state, new_state)
         done = self._get_done(new_state)
@@ -298,7 +390,7 @@ class JaxBackgammonEnv(JaxEnvironment[BackgammonState, jnp.ndarray, dict]):
 
     def get_observation_space(self) -> Tuple:
         """Return the observation space for the environment."""
-        return (2, 26), (2,), (), ()
+        return (2, 26), (4,), (), ()
 
     @staticmethod
     @jax.jit
@@ -519,6 +611,7 @@ def run_game_with_input(key: jax.Array, max_steps=100):
                 current_player=-state.current_player
             )
             continue
+
 
         # Execute the move
         from_display = "BAR" if action[0] == BAR_INDEX else str(action[0] + 1)
