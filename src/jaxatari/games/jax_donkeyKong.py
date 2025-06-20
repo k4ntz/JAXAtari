@@ -61,10 +61,15 @@ MARIO_START_Y = 162
 
 # Barrel Start Position
 BARREL_START_X = 34
-BARREL_START_Y = 52
+BARREL_START_Y = 53
+
+# Barrel Sprite Index
 BARREL_SPRITE_FALL = 0
 BARREL_SPRITE_RIGHT = 1
 BARREL_SPRITE_LEFT = 2
+
+# Prob Barrel rolls down a ladder
+BASE_PROBABILITY_BARREL_ROLLING_A_LADDER_DOWN = 0.6
 
 # Hit Boxes RANGES
 MARIO_HIT_BOX_X = 7
@@ -78,13 +83,54 @@ MOVING_RIGHT = 1
 MOVING_DOWN = 2  # Falling Barrel
 MOVING_LEFT = 3
 
+# Bar Start and End Positions
+BAR_LEFT_X = 32
+BAR_RIGHT_X = 120
+BAR_1_LEFT_Y = 185
+BAR_1_RIGHT_Y = 185
+BAR_2_LEFT_Y = 157
+BAR_2_RIGHT_Y = 164
+BAR_3_LEFT_Y = 136
+BAR_3_RIGHT_Y = 129
+BAR_4_LEFT_Y = 101
+BAR_4_RIGHT_Y = 108
+BAR_5_LEFT_Y = 80
+BAR_5_RIGHT_Y = 73
+BAR_6_LEFT_Y = 52
+BAR_6_RIGHT_Y = 52
+
+# Steps counter until next Barrel will spawn
+SPAWN_STEP_COUNTER_BARREL = 236
+
+
+
+
+# Bars as lienar functions
+def bar_linear_equation(stage, x):
+    x_1 = BAR_LEFT_X
+    x_2 = BAR_RIGHT_X
+
+    y_1_values = [BAR_1_LEFT_Y, BAR_2_LEFT_Y, BAR_3_LEFT_Y, BAR_4_LEFT_Y, BAR_5_LEFT_Y, BAR_6_LEFT_Y]
+    y_2_values = [BAR_1_RIGHT_Y, BAR_2_RIGHT_Y, BAR_3_RIGHT_Y, BAR_4_RIGHT_Y, BAR_5_RIGHT_Y, BAR_6_RIGHT_Y]
+
+    index = stage - 1
+    branches = [lambda _, v=val: jnp.array(v) for val in y_1_values]
+    y_1 = jax.lax.switch(index, branches, operand=None)
+    branches = [lambda _, v=val: jnp.array(v) for val in y_2_values]
+    y_2 = jax.lax.switch(index, branches, operand=None)
+
+    m = (y_2 - y_1) / (x_2 - x_1)
+    b = y_1 - m * x_1
+
+    y = m * x + b
+    return y
+
+
 
 def get_human_action() -> chex.Array:
     """
-    Records if UP or DOWN is being pressed and returns the corresponding action.
-
     Returns:
-        action: int, action taken by the player (LEFT, RIGHT, FIRE, LEFTFIRE, RIGHTFIRE, NOOP).
+        action: int, action taken by the player (LEFT, RIGHT, FIRE, LEFTFIRE, RIGHTFIRE, NOOP, UP, DOWN).
     """
     keys = pygame.key.get_pressed()
     if keys[pygame.K_a] and keys[pygame.K_SPACE]:
@@ -116,12 +162,12 @@ class Ladder(NamedTuple):
 def init_ladders_for_level(level: int) -> Ladder:
     # Ladder positions for level 1
     Ladder_level_1 = Ladder(
-        stage=jnp.array([5, 1, 1], dtype=jnp.int32),
-        climbable=jnp.array([False, False, True]),
-        start_x=jnp.array([74, 70, 106], dtype=jnp.int32),
-        start_y=jnp.array([77, 185, 185], dtype=jnp.int32),
-        end_x=jnp.array([74, 70, 106], dtype=jnp.int32),
-        end_y=jnp.array([53, 161, 164], dtype=jnp.int32),
+        stage=jnp.array([5, 5, 4, 4, 4, 3, 3, 3, 2, 2, 1, 1], dtype=jnp.int32),
+        climbable=jnp.array([False, True, True, True, False, False, True, True, True, True, False, True]),
+        start_x=jnp.array([74, 106, 46, 66, 98, 62, 86, 106, 46, 78, 70, 106], dtype=jnp.int32),
+        start_y=jnp.array([77, 74, 102, 104, 106, 134, 132, 130, 158, 161, 185, 185], dtype=jnp.int32),
+        end_x=jnp.array([74, 106, 46, 66, 98, 62, 86, 106, 46, 78, 70, 106], dtype=jnp.int32),
+        end_y=jnp.array([53, 53, 79, 78, 76, 104, 106, 108, 135, 133, 161, 164], dtype=jnp.int32),
     )
 
     # Ladder positions for level 2
@@ -141,6 +187,7 @@ class BarrelPosition(NamedTuple):
     sprite: chex.Array
     moving_direction: chex.Array
     stage: chex.Array
+    reached_the_end: chex.Array
 
 
 class DonkeyKongState(NamedTuple):
@@ -150,6 +197,8 @@ class DonkeyKongState(NamedTuple):
     mario_y: chex.Array
     barrels: BarrelPosition
     ladders: Ladder
+    random_key: int
+    frames_since_last_barrel_spawn: int
 
 
 class DonkeyKongObservation(NamedTuple):
@@ -170,7 +219,7 @@ def barrel_step(state):
     
     new_state = state
     # calculate new position
-    def update_single_barrel(x, y, direction, sprite, stage):
+    def update_single_barrel(x, y, direction, sprite, stage, reached_the_end):
         ladders = state.ladders
 
         # change sprite animation
@@ -194,9 +243,28 @@ def barrel_step(state):
         def change_y_if_barrel_is_falling(x, y, direction, sprite, stage):
             new_y = y + 2
 
+            bar_y = jnp.round(bar_linear_equation(stage, x)).astype(int)
+            new_direction = jax.lax.cond(
+                new_y >= bar_y,
+                lambda _: jax.lax.cond(
+                    stage % 2 == 0,
+                    lambda _: MOVING_RIGHT,
+                    lambda _: MOVING_LEFT,
+                    operand=None
+                ),
+                lambda _: direction,
+                operand=None
+            )
+            new_sprite = jax.lax.cond(
+                new_y >= bar_y,
+                lambda _: BARREL_SPRITE_RIGHT,
+                lambda _: sprite,
+                operand=None
+            )
+
             return jax.lax.cond(
                 direction == MOVING_DOWN,
-                lambda _: (x, new_y, direction, sprite, stage),
+                lambda _: (x, new_y, new_direction, new_sprite, stage),
                 lambda _: (x, y, direction, sprite, stage),
                 operand=None
             )
@@ -205,59 +273,151 @@ def barrel_step(state):
         # change position
         # check if barrel can fall (ladder or end of bar)
         def check_if_barrel_will_fall(x, y, direction, sprite, stage):        
-            some_prob = 0.5
+            prob_barrel_rolls_down_a_ladder = BASE_PROBABILITY_BARREL_ROLLING_A_LADDER_DOWN
             
             # check first if barrel is positioned on top of a ladder
             curr_stage = stage - 1
             mask = jnp.logical_and(ladders.stage == curr_stage, ladders.end_x == x)
             barrel_is_on_ladder = jnp.any(mask)
+            roll_down_prob = jax.random.bernoulli(state.random_key, prob_barrel_rolls_down_a_ladder)
 
             new_direction = MOVING_DOWN
             new_sprite = BARREL_SPRITE_FALL
             new_y = y + 1
+            new_stage = stage - 1
+
+            # check secondly if barrel is positioned at the end of a bar
+            bar_x = jax.lax.cond(
+                stage % 2 == 0,
+                lambda _: BAR_RIGHT_X,
+                lambda _: BAR_LEFT_X,
+                operand=None
+            )
+            new_direction_2 = MOVING_DOWN
+            new_stage_2 = stage - 1
+            barrel_is_over_the_bar = jax.lax.cond(
+                stage % 2 == 0,
+                lambda _: jax.lax.cond(
+                    x >= BAR_RIGHT_X,
+                    lambda _: True,
+                    lambda _: False,
+                    operand=None
+                ),
+                lambda _: jax.lax.cond(
+                    x <= BAR_LEFT_X,
+                    lambda _: True,
+                    lambda _: False,
+                    operand=None
+                ),
+                operand=None
+            )
 
             return jax.lax.cond(
-                jnp.logical_and(barrel_is_on_ladder, direction != MOVING_DOWN),
-                lambda _: (x, new_y, new_direction, new_sprite, stage),
-                lambda _: (x, y, direction, sprite, stage),
+                jnp.logical_and(barrel_is_on_ladder, jnp.logical_and(direction != MOVING_DOWN, roll_down_prob)),
+                lambda _: (x, new_y, new_direction, new_sprite, new_stage),
+                lambda _: jax.lax.cond(
+                    barrel_is_over_the_bar,
+                    lambda _: (x, y, new_direction_2, sprite, new_stage_2),
+                    lambda _: (x, y, direction, sprite, stage),
+                    operand=None
+                ),
                 operand=None
             )
         x, y, direction, sprite, stage = check_if_barrel_will_fall(x, y, direction, sprite, stage)
 
-        # change x (y) positions when barrel is rolling on stage
-        def barrel_rolling_on_a_stage(x, y, direction, sprite, stage):
-            new_x = x + 1
+        # change x (y) positions when barrel is rolling on bar
+        def barrel_rolling_on_a_bar(x, y, direction, sprite, stage):
+            new_x = jax.lax.cond(
+                direction == MOVING_RIGHT,
+                lambda _: x + 1,
+                lambda _: x - 1,
+                operand=None
+            )
+            new_y = jnp.round(bar_linear_equation(stage, new_x)).astype(int)
             return jax.lax.cond(
                 direction != MOVING_DOWN,
-                lambda _: (new_x, y, direction, sprite, stage),
+                lambda _: (new_x, new_y, direction, sprite, stage),
                 lambda _: (x, y, direction, sprite, stage),
                 operand=None
             )
-        x, y, direction, sprite, stage = barrel_rolling_on_a_stage(x, y, direction, sprite, stage)
+        x, y, direction, sprite, stage = barrel_rolling_on_a_bar(x, y, direction, sprite, stage)
 
-        return x, y, direction, sprite, stage
+        # mark x = y = -1 as a barrel reaches the end
+        def mark_barrel_if_cheached_end(x, y, direction, sprite, stage, reached_the_end):
+            return jax.lax.cond(
+                jnp.logical_and(stage == 1, x <= BAR_LEFT_X),
+                lambda _: (-1, -1, direction, sprite, stage, True),
+                lambda _: (x, y, direction, sprite, stage, reached_the_end),
+                operand=None
+            )
+        x, y, direction, sprite, stage, reached_the_end = mark_barrel_if_cheached_end(x, y, direction, sprite, stage, reached_the_end)
+
+        return jax.lax.cond(
+            reached_the_end == False,
+            lambda _: (x, y, direction, sprite, stage, reached_the_end),
+            lambda _: (-1, -1, direction, sprite, stage, reached_the_end),
+            operand=None
+        )
     update_all_barrels = jax.vmap(update_single_barrel)
 
     barrels = new_state.barrels
-    new_barrel_x, new_barrel_y, new_barrel_moving_direction, new_sprite, new_stage = update_all_barrels(
-        barrels.barrel_x, barrels.barrel_y, barrels.moving_direction, barrels.sprite, barrels.stage
+    new_barrel_x, new_barrel_y, new_barrel_moving_direction, new_sprite, new_stage, new_reached_the_end = update_all_barrels(
+        barrels.barrel_x, barrels.barrel_y, barrels.moving_direction, barrels.sprite, barrels.stage, barrels.reached_the_end
     )
     barrels = barrels._replace(
         barrel_x = new_barrel_x,
         barrel_y = new_barrel_y,
         moving_direction = new_barrel_moving_direction,
         sprite = new_sprite,
-        stage=new_stage
+        stage=new_stage,
+        reached_the_end=new_reached_the_end
     )
     new_state = new_state._replace(
         barrels=barrels
     )
 
-    
+    # new random key
+    key, subkey = jax.random.split(state.random_key)
+    new_state = new_state._replace(random_key=key)
 
 
     # Skip every second frame
     should_move = step_counter % 2 == 0
+
+    # spawn a new barrel if posible
+    def spawn_new_barrel(state):
+        barrels = state.barrels
+
+        new_barrel_x = BARREL_START_X
+        new_barrel_y = BARREL_START_Y
+        new_moving_direction = MOVING_RIGHT
+        new_stage = 6
+        new_sprite = BARREL_SPRITE_RIGHT
+        new_reached_the_end = False
+
+        barrel_x = jnp.append(barrels.barrel_x, new_barrel_x)
+        barrel_y = jnp.append(barrels.barrel_y, new_barrel_y)
+        moving_direction = jnp.append(barrels.moving_direction, new_moving_direction)
+        sprite = jnp.append(barrels.sprite, new_sprite)
+        stage = jnp.append(barrels.stage, new_stage)
+        reached_the_end = jnp.append(barrels.reached_the_end, new_reached_the_end)
+
+        barrels = barrels._replace(
+            barrel_x=barrel_x,
+            barrel_y=barrel_y,
+            moving_direction=moving_direction,
+            sprite=sprite,
+            stage=stage,
+        )
+
+        new_state = state._replace(
+            barrels=barrels,
+            frames_since_last_barrel_spawn=0,
+        )
+        
+
+        return state
+    new_state = spawn_new_barrel(new_state)
 
     # return either new position or old position because of frame skip/ step counter
     return jax.lax.cond(
@@ -284,7 +444,7 @@ class JaxDonkeyKong(JaxEnvironment[DonkeyKongState, DonkeyKongObservation, Donke
         ]
         self.obs_size = 0
 
-    def reset(self, key=None) -> Tuple[DonkeyKongObservation, DonkeyKongState]:
+    def reset(self, key = [0,0]) -> Tuple[DonkeyKongObservation, DonkeyKongState]:
         """
         Resets the game state to the initial state.
         Returns the initial state and the reward (i.e. 0)
@@ -293,6 +453,7 @@ class JaxDonkeyKong(JaxEnvironment[DonkeyKongState, DonkeyKongObservation, Donke
         state = DonkeyKongState(
             level = 1,
             step_counter=jnp.array(1).astype(jnp.int32),
+            frames_since_last_barrel_spawn=jnp.array(0).astype(jnp.int32),
             mario_x=jnp.array([MARIO_START_X]).astype(jnp.int32),
             mario_y=jnp.array([MARIO_START_Y]).astype(jnp.int32),
 
@@ -302,9 +463,11 @@ class JaxDonkeyKong(JaxEnvironment[DonkeyKongState, DonkeyKongObservation, Donke
                 sprite = jnp.array([BARREL_SPRITE_RIGHT]).astype(jnp.int32),
                 moving_direction = jnp.array([MOVING_RIGHT]).astype(jnp.int32),
                 stage = jnp.array([6]).astype(jnp.int32),
+                reached_the_end=jnp.array([False]).astype(bool)
             ),
 
             ladders=ladders,
+            random_key = jax.random.PRNGKey(key[0]),
         )
         initial_obs = self._get_observation(state)
 
@@ -318,6 +481,7 @@ class JaxDonkeyKong(JaxEnvironment[DonkeyKongState, DonkeyKongObservation, Donke
 
         # If there is no colision: game will continue
         new_state = barrel_step(state)
+  
 
         new_state = new_state._replace(step_counter=new_state.step_counter+1)
         
@@ -519,10 +683,14 @@ class DonkeyKongRenderer(AtraJaxisRenderer):
 
         # Barrels if there are some on the field
         barrels = state.barrels
-        for barrel_x, barrel_y, sprite_id in zip(barrels.barrel_x, barrels.barrel_y, barrels.sprite):
+        for barrel_x, barrel_y, sprite_id, reached_the_end in zip(barrels.barrel_x, barrels.barrel_y, barrels.sprite, barrels.reached_the_end):
             frame_barrel = aj.get_sprite_frame(self.SPRITES_BARREL, sprite_id)
-            raster = render_at_transparent(raster, barrel_x, barrel_y, frame_barrel)
-
+            raster = jax.lax.cond(
+                reached_the_end,
+                lambda _: raster,
+                lambda _: render_at_transparent(raster, barrel_x, barrel_y, frame_barrel),
+                operand=None
+            )
 
         # Hammer
         frame_hammer = aj.get_sprite_frame(self.SPRITES_HAMMER_UP, 0)
