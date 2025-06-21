@@ -2,6 +2,7 @@ from enum import Enum
 from typing import Tuple, Generic, TypeVar
 import jax.numpy as jnp
 import jax.random as jrandom
+from jaxatari.spaces import Space
 
 
 EnvObs = TypeVar("EnvObs")
@@ -52,6 +53,8 @@ class JaxEnvironment(Generic[EnvState, EnvObs, EnvInfo]):
     """
 
     def __init__(self):
+        self.mode = 0
+        self.difficulty = 0
         pass
 
     def reset(self, key: jrandom.PRNGKey=None) -> Tuple[EnvObs, EnvState]:
@@ -87,17 +90,24 @@ class JaxEnvironment(Generic[EnvState, EnvObs, EnvInfo]):
         """
         raise NotImplementedError("Abstract method")
 
-    def get_action_space(self) -> jnp.ndarray:
+    def action_space(self) -> Space:
         """
         Returns the action space of the environment as an array containing the actions that can be taken.
         Returns: The action space of the environment as an array.
         """
         raise NotImplementedError("Abstract method")
 
-    def get_observation_space(self) -> Tuple:
+    def observation_space(self) -> Space:
         """
         Returns the observation space of the environment.
-        Returns: The observation space of the environment as a tuple.
+        Returns: The observation space of the environment.
+        """
+        raise NotImplementedError("Abstract method")
+    
+    def image_space(self) -> Space:
+        """
+        Returns the image space of the environment.
+        Returns: The image space of the environment.
         """
         raise NotImplementedError("Abstract method")
 
@@ -109,6 +119,14 @@ class JaxEnvironment(Generic[EnvState, EnvObs, EnvInfo]):
 
         Returns: observation
 
+        """
+        raise NotImplementedError("Abstract method")
+
+    def obs_to_flat_array(self, obs: EnvObs) -> jnp.ndarray:
+        """
+        Converts the observation to a flat array.
+        Args:
+            obs: The observation.
         """
         raise NotImplementedError("Abstract method")
 

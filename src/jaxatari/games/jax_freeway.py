@@ -8,6 +8,7 @@ from dataclasses import dataclass
 from typing import Tuple, NamedTuple, List, Dict, Optional, Any
 
 from jaxatari.environment import JaxEnvironment, JAXAtariAction as Action
+import jaxatari.spaces as spaces
 
 @dataclass
 class GameConfig:
@@ -98,6 +99,7 @@ class JaxFreeway(JaxEnvironment[GameState, FreewayObservation, FreewayInfo]):
         super().__init__()
         self.config = GameConfig()
         self.state = self.reset()
+        self.renderer = FreewayRenderer()
 
     def reset(self, key: jax.random.PRNGKey = None) -> Tuple[FreewayObservation, GameState]:
         """Initialize a new game state"""
@@ -121,13 +123,13 @@ class JaxFreeway(JaxEnvironment[GameState, FreewayObservation, FreewayInfo]):
             cars.append([x, lane_y])
 
         state = GameState(
-            chicken_y=jnp.array(chicken_y),
-            cars=jnp.array(cars),
-            score=jnp.array(0),
-            time=jnp.array(0),
-            cooldown=jnp.array(0),
-            walking_frames=jnp.array(0),
-            game_over=jnp.array(False),
+            chicken_y=jnp.array(chicken_y, dtype=jnp.int32),
+            cars=jnp.array(cars, dtype=jnp.int32),
+            score=jnp.array(0, dtype=jnp.int32),
+            time=jnp.array(0, dtype=jnp.int32),
+            cooldown=jnp.array(0, dtype=jnp.int32),
+            walking_frames=jnp.array(0, dtype=jnp.int32),
+            game_over=jnp.array(False, dtype=jnp.bool_),
         )
 
         return self._get_observation(state), state
@@ -155,10 +157,10 @@ class JaxFreeway(JaxEnvironment[GameState, FreewayObservation, FreewayInfo]):
         new_walking_frames = jnp.where(new_walking_frames >= 8, 0, new_walking_frames)
 
         new_y = jnp.clip(
-            state.chicken_y + dy,
+            state.chicken_y + dy.astype(jnp.int32),
             self.config.top_border,
             self.config.bottom_border + self.config.chicken_height - 1,
-        )
+        ).astype(jnp.int32)
 
         # Update car positions
         new_cars = state.cars
@@ -182,7 +184,7 @@ class JaxFreeway(JaxEnvironment[GameState, FreewayObservation, FreewayInfo]):
                 jnp.where(
                     new_x < -self.config.car_width, self.config.screen_width, new_x
                 ),
-            )
+            ).astype(jnp.int32)
 
             new_cars = new_cars.at[lane, 0].set(new_x)
 
@@ -212,22 +214,22 @@ class JaxFreeway(JaxEnvironment[GameState, FreewayObservation, FreewayInfo]):
             any_collision,
             24 + 30,  # Set cooldown frames after collision (24 frames of flying backwards, 30 frames of being "stunned")
             jnp.maximum(0, state.cooldown - 1),
-        )
+        ).astype(jnp.int32)
 
         # Update score if chicken reaches top
         new_score = jnp.where(
             new_y <= self.config.top_border, state.score + 1, state.score
-        )
+        ).astype(jnp.int32)
 
         # Reset chicken position if scored
         new_y = jnp.where(
             new_y <= self.config.top_border,
             self.config.bottom_border + self.config.chicken_height - 1,
             new_y,
-        )
+        ).astype(jnp.int32)
 
         # Update time
-        new_time = state.time + 1
+        new_time = (state.time + 1).astype(jnp.int32)
 
         # Check game over (optional: could be based on time or score limit)
         game_over = jnp.where(
@@ -242,7 +244,7 @@ class JaxFreeway(JaxEnvironment[GameState, FreewayObservation, FreewayInfo]):
             score=new_score,
             time=new_time,
             cooldown=new_cooldown,
-            walking_frames=new_walking_frames,
+            walking_frames=new_walking_frames.astype(jnp.int32),
             game_over=game_over,
         )
         done = self._get_done(new_state)
@@ -256,14 +258,14 @@ class JaxFreeway(JaxEnvironment[GameState, FreewayObservation, FreewayInfo]):
     def _get_observation(self, state: GameState):
         # create chicken
         chicken = EntityPosition(
-            x=jnp.array(self.config.chicken_x),
+            x=jnp.array(self.config.chicken_x, dtype=jnp.int32),
             y=state.chicken_y,
-            width=jnp.array(self.config.chicken_width),
-            height=jnp.array(self.config.chicken_height),
+            width=jnp.array(self.config.chicken_width, dtype=jnp.int32),
+            height=jnp.array(self.config.chicken_height, dtype=jnp.int32),
         )
 
         # create cars
-        cars = jnp.zeros((self.config.num_lanes, 4))
+        cars = jnp.zeros((self.config.num_lanes, 4), dtype=jnp.int32)
         for i in range(self.config.num_lanes):
             car_pos = state.cars.at[i].get()
             cars = cars.at[i].set(
@@ -273,7 +275,8 @@ class JaxFreeway(JaxEnvironment[GameState, FreewayObservation, FreewayInfo]):
                         car_pos.at[1].get(),  # y position
                         self.config.car_width,  # width
                         self.config.car_height,  # height
-                    ]
+                    ],
+                    dtype=jnp.int32
                 )
             )
         return FreewayObservation(chicken=chicken, car=cars, score=state.score)
@@ -290,9 +293,66 @@ class JaxFreeway(JaxEnvironment[GameState, FreewayObservation, FreewayInfo]):
     def _get_done(self, state: GameState) -> bool:
         return state.game_over
 
-    @partial(jax.jit, static_argnums=(0,))
-    def get_action_space(self):
-        return jnp.array([Action.NOOP, Action.UP, Action.DOWN])
+    def action_space(self) -> spaces.Discrete:
+        """Returns the action space for Freeway.
+        Actions are:
+        0: NOOP
+        1: UP
+        2: DOWN
+        """
+        return spaces.Discrete(3)
+
+    def observation_space(self) -> spaces.Dict:
+        """Returns the observation space for Freeway.
+        The observation contains:
+        - chicken: EntityPosition (x, y, width, height)
+        - car: array of shape (10, 4) with x,y,width,height for each car
+        - score: int (0-99)
+        """
+        return spaces.Dict({
+            "chicken": spaces.Dict({
+                "x": spaces.Box(low=0, high=160, shape=(), dtype=jnp.int32),
+                "y": spaces.Box(low=0, high=210, shape=(), dtype=jnp.int32),
+                "width": spaces.Box(low=0, high=160, shape=(), dtype=jnp.int32),
+                "height": spaces.Box(low=0, high=210, shape=(), dtype=jnp.int32),
+            }),
+            "car": spaces.Box(low=0, high=160, shape=(10, 4), dtype=jnp.int32),
+            "score": spaces.Box(low=0, high=99, shape=(), dtype=jnp.int32),
+        })
+
+    def image_space(self) -> spaces.Box:
+        """Returns the image space for Freeway.
+        The image is a RGB image with shape (160, 210, 3).
+        """
+        return spaces.Box(
+            low=0,
+            high=255,
+            shape=(160, 210, 3),
+            dtype=jnp.uint8
+        )
+    
+    def render(self, state: GameState) -> jnp.ndarray:
+        """Render the game state to a raster image."""
+        return self.renderer.render(state)
+
+    def obs_to_flat_array(self, obs: FreewayObservation) -> jnp.ndarray:
+        """Convert observation to a flat array."""
+        # Flatten chicken position and dimensions
+        chicken_flat = jnp.concatenate([
+            obs.chicken.x.reshape(-1),
+            obs.chicken.y.reshape(-1),
+            obs.chicken.width.reshape(-1),
+            obs.chicken.height.reshape(-1)
+        ])
+        
+        # Flatten car positions and dimensions
+        cars_flat = obs.car.reshape(-1)
+        
+        # Flatten score
+        score_flat = obs.score.reshape(-1)
+        
+        # Concatenate all components
+        return jnp.concatenate([chicken_flat, cars_flat, score_flat]).astype(jnp.int32)
 
 
 
