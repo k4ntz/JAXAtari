@@ -22,25 +22,46 @@ SCALING_FACTOR = 4
 
 SCROLL_SPEED = 1
 
+# -------- Mountains constants --------
+MOUNTAIN_SIZE = (60, 12) # Width, Height
+
+LOWER_MOUNTAINS_Y = 82 # Y Spawn position of lower mountains. This does not change
+UPPER_MOUNTAINS_Y = 21 # Y Spawn position of upper mountains. This does not change
+
+LOWER_MOUNTAINS_START_X = -44 # X Spawn position of lower mountains.
+UPPER_MOUNTAINS_START_X = -4 # X Spawn position of upper mountains.
+
+MOUNTAINS_DISTANCE = 20 # Distance between two given mountains
+
+UPDATE_EVERY = 4 # The mountain position is updated every UPDATE_EVERY-th frame.
+
 # -------- Player constants --------
 PLAYER_SIZE = (8, 6) # Width, Height
 PLAYER_COLOR = (85, 92, 197, 255)
 PLAYER_BOUNDS = (20, WIDTH - 20 - PLAYER_SIZE[0]), (21, 88)
 
-PLAYER_START_X = 20
-PLAYER_START_Y = 20
+PLAYER_START_X = 20 # X Spawn position of player
+PLAYER_START_Y = 20 # Y Spawn position of player
 
-MAX_VELOCITY_Y = 1.5
-MAX_VELOCITY_X = 1.5
+PLAYER_VELOCITY_Y = 1.5 # Y Velocity of player
+PLAYER_VELOCITY_X = 1.5 # X Velocity of player
 
 # -------- Enemy Missile constants --------
 ENEMY_MISSILE_COLOR = (85, 92, 197, 255)
 
 # -------- States --------
+class MountainState(NamedTuple):
+    x1: chex.Array
+    x2: chex.Array
+    x3: chex.Array
+    y: chex.Array
+
 class LaserGatesState(NamedTuple):
     player_x: chex.Array
     player_y: chex.Array
     player_facing_direction: chex.Array
+    lower_mountains: MountainState
+    upper_mountains: MountainState
     score: chex.Array
     lives: chex.Array
     step_counter: chex.Array
@@ -71,24 +92,51 @@ def load_sprites():
     MODULE_DIR = os.path.dirname(os.path.abspath(__file__))
 
     background = aj.loadFrame(os.path.join(MODULE_DIR, "sprites/lasergates/background/background.npy"))
+    lower_mountain = aj.loadFrame(os.path.join(MODULE_DIR, "sprites/lasergates/background/mountains/lower_mountain.npy"))
+    upper_mountain = aj.loadFrame(os.path.join(MODULE_DIR, "sprites/lasergates/background/mountains/upper_mountain.npy"))
     player = aj.loadFrame(os.path.join(MODULE_DIR, "sprites/lasergates/player/player.npy"))
 
 
     SPRITE_BACKGROUND = background
+    SPRITE_LOWER_MOUNTAIN = lower_mountain
+    SPRITE_UPPER_MOUNTAIN = upper_mountain
     SPRITE_PLAYER = player
 
     return (
         SPRITE_BACKGROUND,
         SPRITE_PLAYER,
+        SPRITE_LOWER_MOUNTAIN,
+        SPRITE_UPPER_MOUNTAIN,
     )
 
 (
     SPRITE_BACKGROUND,
     SPRITE_PLAYER,
+    SPRITE_LOWER_MOUNTAIN,
+    SPRITE_UPPER_MOUNTAIN,
 ) = load_sprites()
 
 # -------- Game Logic --------
 
+@jax.jit
+def mountains_step(
+        mountain_state: MountainState, step_counter: jnp.ndarray
+) -> MountainState:
+
+    # If this is true, update the position
+    update_tick = step_counter % UPDATE_EVERY == 0
+
+    # Update x positions
+    new_x1 = jnp.where(update_tick, mountain_state.x1 - UPDATE_EVERY * SCROLL_SPEED, mountain_state.x1)
+    new_x2 = jnp.where(update_tick, mountain_state.x2 - UPDATE_EVERY * SCROLL_SPEED, mountain_state.x2)
+    new_x3 = jnp.where(update_tick, mountain_state.x3 - UPDATE_EVERY * SCROLL_SPEED, mountain_state.x3)
+
+    # If completely behind left border, set x position to the right again
+    new_x1 = jnp.where(new_x1 < 0 - MOUNTAIN_SIZE[0], new_x3 + MOUNTAIN_SIZE[0] + MOUNTAINS_DISTANCE, new_x1)
+    new_x2 = jnp.where(new_x2 < 0 - MOUNTAIN_SIZE[0], new_x1 + MOUNTAIN_SIZE[0] + MOUNTAINS_DISTANCE, new_x2)
+    new_x3 = jnp.where(new_x3 < 0 - MOUNTAIN_SIZE[0], new_x2 + MOUNTAIN_SIZE[0] + MOUNTAINS_DISTANCE, new_x3)
+
+    return MountainState(x1=new_x1, x2=new_x2, x3=new_x3, y=mountain_state.y)
 
 
 @jax.jit
@@ -129,11 +177,11 @@ def player_step(
     ]))
 
     # Move x
-    delta_x = jnp.where(left, -MAX_VELOCITY_X, jnp.where(right, MAX_VELOCITY_X, 0))
+    delta_x = jnp.where(left, -PLAYER_VELOCITY_X, jnp.where(right, PLAYER_VELOCITY_X, 0))
     player_x = jnp.clip(state.player_x + delta_x, PLAYER_BOUNDS[0][0], PLAYER_BOUNDS[0][1])
 
     # Move y
-    delta_y = jnp.where(up, -MAX_VELOCITY_Y, jnp.where(down, MAX_VELOCITY_Y, 0))
+    delta_y = jnp.where(up, -PLAYER_VELOCITY_Y, jnp.where(down, PLAYER_VELOCITY_Y, 0))
     player_y = jnp.clip(state.player_y + delta_y, PLAYER_BOUNDS[1][0], PLAYER_BOUNDS[1][1])
 
     # Player facing direction
@@ -221,10 +269,27 @@ class JaxLaserGates(JaxEnvironment[LaserGatesState, LaserGatesObservation, Laser
     @partial(jax.jit, static_argnums=(0, ))
     def reset(self) -> Tuple[LaserGatesObservation, LaserGatesState]:
         """Initialize game state"""
+
+        initial_lower_mountains = MountainState(
+            x1=jnp.array(LOWER_MOUNTAINS_START_X),
+            x2=jnp.array(LOWER_MOUNTAINS_START_X + MOUNTAIN_SIZE[0] + MOUNTAINS_DISTANCE),
+            x3=jnp.array(LOWER_MOUNTAINS_START_X + 2 * MOUNTAIN_SIZE[0] + 2 * MOUNTAINS_DISTANCE),
+            y=jnp.array(LOWER_MOUNTAINS_Y)
+        )
+
+        initial_upper_mountains = MountainState(
+            x1=jnp.array(UPPER_MOUNTAINS_START_X),
+            x2=jnp.array(UPPER_MOUNTAINS_START_X + MOUNTAIN_SIZE[0] + MOUNTAINS_DISTANCE),
+            x3=jnp.array(UPPER_MOUNTAINS_START_X + 2 * MOUNTAIN_SIZE[0] + 2 * MOUNTAINS_DISTANCE),
+            y=jnp.array(UPPER_MOUNTAINS_Y)
+        )
+
         reset_state = LaserGatesState( # TODO: fill
             player_x=jnp.array(0),
             player_y=jnp.array(0),
             player_facing_direction=jnp.array(1),
+            lower_mountains=initial_lower_mountains,
+            upper_mountains=initial_upper_mountains,
             score=jnp.array(0),
             lives=jnp.array(3),
             step_counter=jnp.array(0),
@@ -242,11 +307,15 @@ class JaxLaserGates(JaxEnvironment[LaserGatesState, LaserGatesObservation, Laser
         # -------- Move player --------
         new_player_x, new_player_y, new_player_facing_direction = player_step(state, action)
 
+        new_lower_mountains_state = mountains_step(state.lower_mountains, state.step_counter)
+        new_upper_mountains_state = mountains_step(state.upper_mountains, state.step_counter)
 
         return_state = state._replace(
             player_x=new_player_x,
             player_y=new_player_y,
             player_facing_direction=new_player_facing_direction,
+            lower_mountains=new_lower_mountains_state,
+            upper_mountains=new_upper_mountains_state,
             step_counter=state.step_counter + 1
         )
 
@@ -281,6 +350,52 @@ class LaserGatesRenderer(AtraJaxisRenderer):
             0,
             0,
             SPRITE_BACKGROUND,
+        )
+
+        # -------- Render mountains --------
+
+        # Lower mountains
+        raster = aj.render_at(
+            raster,
+            state.lower_mountains.x1,
+            state.lower_mountains.y,
+            SPRITE_LOWER_MOUNTAIN,
+        )
+
+        raster = aj.render_at(
+            raster,
+            state.lower_mountains.x2,
+            state.lower_mountains.y,
+            SPRITE_LOWER_MOUNTAIN,
+        )
+
+        raster = aj.render_at(
+            raster,
+            state.lower_mountains.x3,
+            state.lower_mountains.y,
+            SPRITE_LOWER_MOUNTAIN,
+        )
+
+        # Upper mountains
+        raster = aj.render_at(
+            raster,
+            state.upper_mountains.x1,
+            state.upper_mountains.y,
+            SPRITE_UPPER_MOUNTAIN,
+        )
+
+        raster = aj.render_at(
+            raster,
+            state.upper_mountains.x2,
+            state.upper_mountains.y,
+            SPRITE_UPPER_MOUNTAIN,
+        )
+
+        raster = aj.render_at(
+            raster,
+            state.upper_mountains.x3,
+            state.upper_mountains.y,
+            SPRITE_UPPER_MOUNTAIN,
         )
 
         # -------- Render player --------
