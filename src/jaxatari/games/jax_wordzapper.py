@@ -1,6 +1,7 @@
 import os
 from functools import partial
 from typing import NamedTuple, Tuple
+from jax._src.core import stash_axis_env
 import jax.lax
 import jax.numpy as jnp
 import chex
@@ -49,6 +50,12 @@ ENEMY_Y_MIN = 50
 ENEMY_Y_MAX = 150
 ENEMY_ANIM_SWITCH_RATE = 15
 ENEMY_Y_MIN_SEPARATION = 16  
+
+# zapper
+ZAPPER_COLOR = (204,104,104,255)
+MAX_ZAPPER_POS = 49
+ZAPPER_SPR_WIDTH = 8
+ZAPPER_SPR_HEIGHT = 200 # this is approximate, can also be changed, but this works fine
 
 
 TIME = 99
@@ -888,17 +895,18 @@ class WordZapperRenderer(AtraJaxisRenderer):
         )
 
         # render player zapper
-        frame_pl_zapper = aj.get_sprite_frame(SPRITE_PL_MISSILE, state.step_counter)
+        zapper_spr = jnp.full((ZAPPER_SPR_WIDTH, ZAPPER_SPR_HEIGHT, 4), jnp.asarray(ZAPPER_COLOR, dtype=jnp.uint8), dtype=jnp.uint8)
 
         raster = jax.lax.cond(
-            state.player_zapper_position[2], # check active
-            lambda r: aj.render_at(
+            state.player_zapper_position[2],
+            lambda r : aj.render_at(
                 r,
                 state.player_zapper_position[0],
-                state.player_zapper_position[1],
-                frame_pl_zapper,
+                MAX_ZAPPER_POS,
+                zapper_spr * (jnp.arange(ZAPPER_SPR_HEIGHT) < state.player_zapper_position[1] - MAX_ZAPPER_POS).astype(jnp.uint8)[None, :, None]
+                
             ),
-            lambda r: r,
+            lambda r : r,
             raster,
         )
 
