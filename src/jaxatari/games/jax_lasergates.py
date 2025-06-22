@@ -41,13 +41,23 @@ PLAYER_COLOR = (85, 92, 197, 255)
 PLAYER_BOUNDS = (20, WIDTH - 20 - PLAYER_SIZE[0]), (21, 88)
 
 PLAYER_START_X = 20 # X Spawn position of player
-PLAYER_START_Y = 20 # Y Spawn position of player
+PLAYER_START_Y = 52 # Y Spawn position of player
 
 PLAYER_VELOCITY_Y = 1.5 # Y Velocity of player
 PLAYER_VELOCITY_X = 1.5 # X Velocity of player
 
+# -------- Player missile constants --------
+PLAYER_MISSILE_SIZE = (16, 1)
+PLAYER_MISSILE_COLOR = (54, 46, 200, 255)
+
+PLAYER_MISSILE_INITIAL_VELOCITY = 2.5
+PLAYER_MISSILE_VELOCITY_MULTIPLIER = 1.1
+
 # -------- Enemy Missile constants --------
 ENEMY_MISSILE_COLOR = (85, 92, 197, 255)
+
+# -------- GUI constants --------
+
 
 # -------- States --------
 class MountainState(NamedTuple):
@@ -56,10 +66,17 @@ class MountainState(NamedTuple):
     x3: chex.Array
     y: chex.Array
 
+class PlayerMissileState(NamedTuple):
+    x: chex.Array
+    y: chex.Array
+    direction: chex.Array
+    velocity: chex.Array
+
 class LaserGatesState(NamedTuple):
     player_x: chex.Array
     player_y: chex.Array
     player_facing_direction: chex.Array
+    player_missile: PlayerMissileState
     lower_mountains: MountainState
     upper_mountains: MountainState
     score: chex.Array
@@ -95,16 +112,19 @@ def load_sprites():
     lower_mountain = aj.loadFrame(os.path.join(MODULE_DIR, "sprites/lasergates/background/mountains/lower_mountain.npy"))
     upper_mountain = aj.loadFrame(os.path.join(MODULE_DIR, "sprites/lasergates/background/mountains/upper_mountain.npy"))
     player = aj.loadFrame(os.path.join(MODULE_DIR, "sprites/lasergates/player/player.npy"))
+    player_missile = aj.loadFrame(os.path.join(MODULE_DIR, "sprites/lasergates/missiles/player_missile.npy"))
 
 
     SPRITE_BACKGROUND = background
+    SPRITE_PLAYER = player
+    SPRITE_PLAYER_MISSILE = player_missile
     SPRITE_LOWER_MOUNTAIN = lower_mountain
     SPRITE_UPPER_MOUNTAIN = upper_mountain
-    SPRITE_PLAYER = player
 
     return (
         SPRITE_BACKGROUND,
         SPRITE_PLAYER,
+        SPRITE_PLAYER_MISSILE,
         SPRITE_LOWER_MOUNTAIN,
         SPRITE_UPPER_MOUNTAIN,
     )
@@ -112,6 +132,7 @@ def load_sprites():
 (
     SPRITE_BACKGROUND,
     SPRITE_PLAYER,
+    SPRITE_PLAYER_MISSILE,
     SPRITE_LOWER_MOUNTAIN,
     SPRITE_UPPER_MOUNTAIN,
 ) = load_sprites()
@@ -195,6 +216,62 @@ def player_step(
     player_x = jnp.where(no_x_input, player_x - SCROLL_SPEED, player_x)
 
     return player_x, player_y, new_player_facing_direction
+
+@jax.jit
+def player_missile_step(
+        state: LaserGatesState, action: chex.Array
+) -> PlayerMissileState:
+
+    fire = jnp.isin(action, jnp.array([
+        Action.FIRE,
+        Action.UPFIRE,
+        Action.RIGHTFIRE,
+        Action.LEFTFIRE,
+        Action.DOWNFIRE,
+        Action.UPRIGHTFIRE,
+        Action.UPLEFTFIRE,
+        Action.DOWNRIGHTFIRE,
+        Action.DOWNLEFTFIRE
+    ]))
+
+
+    is_alive = state.player_missile.direction != 0
+    out_of_bounds = jnp.logical_or(
+        state.player_missile.x < 0 - PLAYER_MISSILE_SIZE[0],
+        state.player_missile.x > WIDTH
+    )
+    kill = jnp.logical_and(is_alive, out_of_bounds)
+
+    # Kill missile
+    new_x = jnp.where(kill, 0, state.player_missile.x)
+    new_y = jnp.where(kill, 0, state.player_missile.y)
+    new_direction = jnp.where(kill, 0, state.player_missile.direction)
+    new_velocity = jnp.where(kill, 0, state.player_missile.velocity)
+
+    # Move missile
+    new_x = jnp.where(
+        is_alive,
+        new_x + jnp.where(new_direction > 0, state.player_missile.velocity, -state.player_missile.velocity),
+        new_x
+    ) # Move by the velocity in state
+    new_velocity = jnp.where(
+        is_alive,
+        new_velocity * PLAYER_MISSILE_VELOCITY_MULTIPLIER,
+        new_velocity
+    ) # Multiply velocity by given constant
+
+    # Spawn missile
+    spawn = jnp.logical_and(jnp.logical_not(is_alive), fire)
+    new_x = jnp.where(spawn, jnp.where(
+        state.player_facing_direction > 0,
+        state.player_x + PLAYER_SIZE[0],
+        state.player_x - 2 * PLAYER_SIZE[0] - 1
+    ), new_x)
+    new_y = jnp.where(spawn, state.player_y + 4, new_y)
+    new_direction = jnp.where(spawn, state.player_facing_direction, new_direction)
+    new_velocity = jnp.where(spawn, PLAYER_MISSILE_INITIAL_VELOCITY, new_velocity)
+
+    return PlayerMissileState(x=new_x, y=new_y, direction=new_direction, velocity=new_velocity)
 
 
 class JaxLaserGates(JaxEnvironment[LaserGatesState, LaserGatesObservation, LaserGatesInfo]):
@@ -284,10 +361,18 @@ class JaxLaserGates(JaxEnvironment[LaserGatesState, LaserGatesObservation, Laser
             y=jnp.array(UPPER_MOUNTAINS_Y)
         )
 
+        initial_player_missile = PlayerMissileState(
+            x=jnp.array(0),
+            y=jnp.array(0),
+            direction=jnp.array(0),
+            velocity=jnp.array(0),
+        )
+
         reset_state = LaserGatesState( # TODO: fill
-            player_x=jnp.array(0),
-            player_y=jnp.array(0),
+            player_x=jnp.array(PLAYER_START_X),
+            player_y=jnp.array(PLAYER_START_Y),
             player_facing_direction=jnp.array(1),
+            player_missile=initial_player_missile,
             lower_mountains=initial_lower_mountains,
             upper_mountains=initial_upper_mountains,
             score=jnp.array(0),
@@ -310,10 +395,13 @@ class JaxLaserGates(JaxEnvironment[LaserGatesState, LaserGatesObservation, Laser
         new_lower_mountains_state = mountains_step(state.lower_mountains, state.step_counter)
         new_upper_mountains_state = mountains_step(state.upper_mountains, state.step_counter)
 
+        new_player_missile_state = player_missile_step(state, action)
+
         return_state = state._replace(
             player_x=new_player_x,
             player_y=new_player_y,
             player_facing_direction=new_player_facing_direction,
+            player_missile=new_player_missile_state,
             lower_mountains=new_lower_mountains_state,
             upper_mountains=new_upper_mountains_state,
             step_counter=state.step_counter + 1
@@ -407,6 +495,20 @@ class LaserGatesRenderer(AtraJaxisRenderer):
             frame_player,
             flip_horizontal=state.player_facing_direction < 0,
         )
+
+        # -------- Render player missile --------
+        frame_player = recolor_sprite(SPRITE_PLAYER_MISSILE, jnp.array(PLAYER_MISSILE_COLOR))
+
+        raster = jnp.where(state.player_missile.direction != 0,
+                      aj.render_at(
+                      raster,
+                      state.player_missile.x,
+                      state.player_missile.y,
+                      frame_player,
+                      flip_horizontal=state.player_missile.direction < 0,
+                      ),
+                  raster
+                  )
 
         return raster
 
