@@ -481,14 +481,37 @@ def player_zapper_step(
         jnp.array([curr_player_x+4, curr_player_y-5, 1, state.step_counter]),
         state.player_zapper_position,
     )
+    
+    new_deactive_zapper = jnp.array([
+        state.player_zapper_position[0],
+        state.player_zapper_position[1],
+        0,
+        state.player_zapper_position[3]
+    ]) 
+    new_active_zapper = jnp.array([
+        state.player_zapper_position[0],
+        state.player_zapper_position[1],
+        1,
+        state.player_zapper_position[3]
+    ]) 
+    #####
+    delta = jnp.abs(state.step_counter - new_zapper[3])
 
-    new_zapper = jnp.where(
-        jnp.abs(state.step_counter - new_zapper[3]) > 10, # TODO find this value exactly
-        jnp.array([0, 0, 0, 0]),
+    out_zapper = jnp.where(
+        delta < 10,
         new_zapper,
+        jnp.where(
+            delta < 25,
+            new_deactive_zapper,
+            jnp.where(
+                delta < 40,
+                new_active_zapper,
+                jnp.array([0, 0, 0, 0])
+            )
+        )
     )
 
-    return new_zapper
+    return out_zapper
 
 @jax.jit
 def enemy_step(state: WordZapperState) -> Tuple[chex.Array, chex.PRNGKey]:
