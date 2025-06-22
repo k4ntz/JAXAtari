@@ -46,6 +46,7 @@ class GameConfig:
     enemy_spawn_max_frames: int = 50
     wave_end_cooldown: int = 150 # cooldown of 150 frames after wave-end, before spawning new enemies
     wave_start_enemy_count: int = 10 # number of enemies in the first wave
+    max_digits_for_score: int = 9  # highest possible score has length of 9; lower limit is always possible
 
 
 # Each value of this class is a list.
@@ -104,6 +105,7 @@ class Renderer_AtraJaxis(AtraJaxisRenderer):
             f"{os.path.dirname(os.path.abspath(__file__))}/sprites/atlantis"
         )
         self.sprites = self._load_sprites()
+        self.score_digit_sprites = self.sprites.get('score_digit_sprites')
 
     def _load_sprites(self) -> dict[str, Any]:
         """Loads all necessary sprites from .npy files."""
@@ -126,6 +128,11 @@ class Renderer_AtraJaxis(AtraJaxisRenderer):
             if loaded_sprite is not None:
                 sprites[name] = loaded_sprite
 
+        # digits for score
+        sprites["score_digit_sprites"] = aj.load_and_pad_digits(
+            os.path.join(self.sprite_path, "score_{}.npy"),
+            num_chars=10
+        )
         return sprites
 
     @partial(jax.jit, static_argnums=(0,))
@@ -196,6 +203,28 @@ class Renderer_AtraJaxis(AtraJaxisRenderer):
 
         raster = jax.lax.fori_loop(0, cfg.max_enemies, _draw_enemy, raster)
 
+        # render the score
+        max_digits = GameConfig.max_digits_for_score  # max amount of digits
+        num_digits = jnp.where(state.score > 0, (jnp.ceil(jnp.log10(state.score.astype(jnp.float32) + 1.)).astype(jnp.int32)), 1)  # actual amount of digits
+
+        score_digits = aj.int_to_digits(state.score, max_digits=max_digits)  # get digit array
+
+        # Position (centered on top)
+        digit_w = 8
+        total_w = digit_w * num_digits
+        score_x = (self.config.screen_width - total_w) // 2
+        score_y = 5
+
+        # Render score using the selective renderer
+        raster = aj.render_label_selective(
+            raster,
+            score_x, score_y,
+            score_digits,
+            self.score_digit_sprites,
+            max_digits-num_digits,  # skip 0s in front of score
+            num_digits,             # show that many digits
+            spacing=digit_w
+        )
         return raster
 
 
@@ -450,7 +479,7 @@ class JaxAtlantis(JaxEnvironment[AtlantisState, AtlantisObservation, AtlantisInf
 
             # randomy decide the direction of the enemies, left or right
             go_left = jax.random.bernoulli(rng_spawn)  # True == left
-            # iif go_left is True, then set start x to the window_size + enemy_width
+            # if go_left is True, then set start x to the window_size + enemy_width
             # this ensures, that the enemy will spawn outside the visible area
             # if the value is false, spawn outside the visible area on the left side
             start_x = jnp.where(
@@ -616,33 +645,35 @@ class JaxAtlantis(JaxEnvironment[AtlantisState, AtlantisObservation, AtlantisInf
         4. ignore inactive bullets/enemies (through masking)
         5. reduce hit_mtarix to per-bullet and per_enemy "was hit?" flags
         6. deactive those objects
+        7. update score
         """
         cfg = self.config
 
-        bullet_x, bullet_y = state.bullets[:, 0], state.bullets[:, 1]  # (B,)
-        enemy_x, enemy_y = state.enemies[:, 0], state.enemies[:, 1]  # (E,)
+        bullets_x, bullets_y = state.bullets[:, 0], state.bullets[:, 1]  # (B,)
+        enemies_x, enemies_y = state.enemies[:, 0], state.enemies[:, 1]  # (E,)
 
         # compute edge coordinates  for all rectangles
         # broadcasting with none inserts singleton axes so every
         # bullet is paired with every enemy
-        b_left = bullet_x[:, None]
-        b_right = (bullet_x + cfg.bullet_width)[:, None]
-        b_top = bullet_y[:, None]
-        b_bottom = (bullet_y + cfg.bullet_height)[:, None]
+        b_left = bullets_x[:, None]
+        b_right = (bullets_x + cfg.bullet_width)[:, None]
+        b_top = bullets_y[:, None]
+        b_bottom = (bullets_y + cfg.bullet_height)[:, None]
 
         # Enemy edges
-        e_left = enemy_x[None, :]
-        e_right = (enemy_x + cfg.enemy_width)[None, :]
-        e_top = enemy_y[None, :]
-        e_bottom = (enemy_y + cfg.enemy_height)[None, :]
+        e_left = enemies_x[None, :]
+        e_right = (enemies_x + cfg.enemy_width)[None, :]
+        e_top = enemies_y[None, :]
+        e_bottom = (enemies_y + cfg.enemy_height)[None, :]
 
         # True where bullets left < enemies right AND bullets right >  enemies left
-        overlap_x = (b_left < e_right) & (b_right > e_left)
+        overlaps_x = (b_left < e_right) & (b_right > e_left)
         # ...
-        overlap_y = (b_top < e_bottom) & (b_bottom > e_top)
+        overlaps_y = (b_top < e_bottom) & (b_bottom > e_top)
 
+        # Matrix containing all enemies & bullets
         # True when both horizontal and vertical overlaps occur
-        hit_matrix = overlap_x & overlap_y
+        hit_matrix = overlaps_x & overlaps_y
 
         # Ignore inactive objects right away
         hit_matrix &= state.bullets_alive[:, None]
@@ -659,7 +690,24 @@ class JaxAtlantis(JaxEnvironment[AtlantisState, AtlantisObservation, AtlantisInf
         new_enemy_flags = (state.enemies[:, 5] == 1) & (~enemy_hit)
         enemies_updated = state.enemies.at[:, 5].set(new_enemy_flags.astype(jnp.int32))
 
-        return state._replace(bullets_alive=new_bullet_alive, enemies=enemies_updated)
+        # which cannon was used (check horizontal velocity)
+        dx = state.bullets[:, 2]
+        side_cannon_hit = jnp.any(hit_matrix & (dx[:, None] != 0), axis=0)  # vector containing hits made with a side cannon
+
+        # score calculation
+        types = state.enemies[:, 3]  # get all enemy types
+        # calculate points per enemy (no matter if it was hit or not)
+        # enemy type 0: center=100, side=200
+        points_per_enemy = jnp.where(types == 0, jnp.where(side_cannon_hit, 200, 100), 0)
+        # enemy type 1: center=1000, side=2000
+        points_per_enemy += jnp.where(types == 1, jnp.where(side_cannon_hit, 2000, 1000), 0)
+
+        # multiply points per enemy with enemy_hit to only get points of hit enemies; then sum points up
+        points = jnp.sum(points_per_enemy * enemy_hit.astype(jnp.int32))
+        # update score
+        new_score = state.score + points
+
+        return state._replace(bullets_alive=new_bullet_alive, enemies=enemies_updated, score=new_score)
 
 
 
