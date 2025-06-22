@@ -179,11 +179,14 @@ def main():
         default=42,
         help="Random seed for JAX PRNGKey and random action generation.",
     )
+    parser.add_argument(
+        "--fps",
+        type=int,
+        default=None,
+        help="Frame rate for the game.",
+    )
 
     args = parser.parse_args()
-
-    # set the frame rate
-    frame_rate = 30
 
     execute_without_rendering = False
     # Load the game environment
@@ -202,7 +205,7 @@ def main():
     key = jrandom.PRNGKey(args.seed)
     jitted_reset = jax.jit(env.reset)
     jitted_step = jax.jit(env.step)
-    # TODO: for now, we do not test jitted rendering
+    jitted_render = jax.jit(renderer.render)
 
     # initialize the environment
     obs, state = jitted_reset(key)
@@ -211,16 +214,15 @@ def main():
     if not execute_without_rendering:
         pygame.init()
         pygame.display.set_caption("JAXAtari Game")
-        env_render_shape = renderer.render(state).shape[:2]
+        env_render_shape = jitted_render(state).shape[:2]
         window = pygame.display.set_mode((env_render_shape[0] * UPSCALE_FACTOR, env_render_shape[1] * UPSCALE_FACTOR))
         clock = pygame.time.Clock()
 
-    # get the action space of the current game (i.e. which actions are available)
-    action_space = env.get_action_space()
+    action_space = env.action_space()
 
     save_keys = {}
     playing = True
-
+    frame_rate = 30
     if args.replay:
         with open(args.replay, "rb") as f:
             # Load the saved data
@@ -231,19 +233,18 @@ def main():
             seed = save_data['seed']
             loaded_frame_rate = save_data['frame_rate']
 
+            frame_rate = loaded_frame_rate
+
             # Reset environment with the saved seed
             key = jrandom.PRNGKey(seed)
             obs, state = jitted_reset(key)
-
-            # Use the saved frame rate
-            clock.tick(loaded_frame_rate)
         
         # loop over all the actions and play the game
         for action in actions_array:
             # Convert numpy action to JAX array
             action = jax.numpy.array(action, dtype=jax.numpy.int32)
             obs, state, reward, done, info = jitted_step(state, action)
-            image = renderer.render(state)
+            image = jitted_render(state)
             aj.update_pygame(window, image, UPSCALE_FACTOR, 160, 210)
             clock.tick(frame_rate)
             
@@ -256,6 +257,10 @@ def main():
         pygame.quit()
         sys.exit(0)
 
+    # set the frame rate
+    if args.fps is not None:
+        frame_rate = args.fps
+
     # main game loop
     while playing:
         action = Action.NOOP
@@ -264,7 +269,7 @@ def main():
             action = get_human_action()
 
             # Check if the action is valid (otherwise send NOOP)
-            if action not in action_space:
+            if not action_space.contains(action):
                 action = Action.NOOP
 
             # Save the action to the save_keys dictionary
@@ -274,7 +279,7 @@ def main():
 
         elif args.random:
             # sample an action from the action space array
-            action = jax.random.choice(key, action_space)
+            action = action_space.sample(key)
             key, subkey = jax.random.split(key)
 
         else:
@@ -286,7 +291,7 @@ def main():
 
         # Render the environment
         if not execute_without_rendering:
-            image = renderer.render(state)
+            image = jitted_render(state)
 
             aj.update_pygame(window, image, UPSCALE_FACTOR, 160, 210)
 
