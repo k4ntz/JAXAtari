@@ -93,6 +93,7 @@ class AtlantisObservation(NamedTuple):
 
 class AtlantisInfo(NamedTuple):
     time: jnp.ndarray
+    score: chex.Array
 
 
 class Renderer_AtraJaxis(AtraJaxisRenderer):
@@ -760,6 +761,7 @@ class JaxAtlantis(JaxEnvironment[AtlantisState, AtlantisObservation, AtlantisInf
     def step(
         self, state: AtlantisState, action: chex.Array
     ) -> Tuple[AtlantisObservation, AtlantisState, float, bool, AtlantisInfo]:
+        previous_state = state
         def _pause_step(s: AtlantisState) -> AtlantisState:
             # reduce pause cooldown
             s = s._replace(
@@ -795,11 +797,11 @@ class JaxAtlantis(JaxEnvironment[AtlantisState, AtlantisObservation, AtlantisInf
             _pause_step,
             state
         )
-
         observation = self._get_observation(state)
-        info = AtlantisInfo(time=jnp.array(0, dtype=jnp.int32))
-        reward = 0.0  # Placeholder: no scoring yet
-        done = False  # Never terminates for now
+        info = AtlantisInfo(time=jnp.array(0, dtype=jnp.int32), score=state.score)
+        reward = state.score - previous_state.score
+        # done = False  # Never terminates for now
+        done = jnp.where(state.score < 10**GameConfig.max_digits_for_score, False, True)  # if score > max displayable value -> done = true
 
         return observation, state, reward, done, info
 
@@ -829,6 +831,7 @@ class JaxAtlantis(JaxEnvironment[AtlantisState, AtlantisObservation, AtlantisInf
         """
         return AtlantisInfo(
             time=jnp.array(0, dtype=jnp.int32),
+            score=state.score,
         )
 
     @partial(jax.jit, static_argnums=(0,))
