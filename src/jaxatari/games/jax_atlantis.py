@@ -187,17 +187,21 @@ class Renderer_AtraJaxis(AtraJaxisRenderer):
 
         raster = jax.lax.fori_loop(0, cfg.max_bullets, _draw_bullet, raster)
 
-        # add red enemies
-        enemy_sprite = _solid_sprite(cfg.enemy_width, cfg.enemy_height, (255, 0, 0))
+        # add red & blue enemies
+        enemy_sprite_red = _solid_sprite(cfg.enemy_width, cfg.enemy_height, (255, 0, 0))
+        enemy_sprite_blue = _solid_sprite(cfg.enemy_width, cfg.enemy_height, (0, 0, 255))
 
         def _draw_enemy(i, ras):
             active = state.enemies[i, 5] == 1
             ex = state.enemies[i, 0].astype(jnp.int32)
             ey = state.enemies[i, 1].astype(jnp.int32)
             flip = state.enemies[i, 2] < 0  # dx < 0 -> facing left
+            enemy_type = state.enemies[i, 3]
 
             def _do(r):
-                return aj.render_at(r, ex, ey, enemy_sprite, flip_horizontal=flip)
+                sprite = jax.lax.cond(enemy_type == 0, lambda _: enemy_sprite_blue,  # if enemy_type == 0 -> sprite = blue sprite
+                                      lambda _: enemy_sprite_red, None)  # else -> sprite = red sprite
+                return aj.render_at(r, ex, ey, sprite, flip_horizontal=flip)
 
             return jax.lax.cond(active, _do, lambda r: r, ras)
 
@@ -455,7 +459,7 @@ class JaxAtlantis(JaxEnvironment[AtlantisState, AtlantisObservation, AtlantisInf
         # Split the current PRNG key into two new, independent keys
         #   rng_spawn will be used to draw random values for spawning enemies
         #   rng_after will be stored for the next frame’s randomness
-        rng_spawn, rng_speed, rng_after = jax.random.split(state.rng, 3)
+        rng_spawn, rng_speed, rng_type, rng_after = jax.random.split(state.rng, 4)
 
         # if the timer is still bigger than 0, just update the timer and rng state
         def _no_spawn(s: AtlantisState) -> AtlantisState:
@@ -492,11 +496,12 @@ class JaxAtlantis(JaxEnvironment[AtlantisState, AtlantisObservation, AtlantisInf
             dx = jnp.where(go_left, -speed, speed)
             # dx = jnp.where(go_left, -cfg.enemy_speed, cfg.enemy_speed)
 
-            # assemble the enemy. for now  the type will always be 0
+            # assemble the enemy. for now  the type will randomly chosen without further probability logics/...
             # TODO: change later
+            type_id = jax.random.randint(rng_type, (), 0, 2, dtype=jnp.int32)
             # also sets the enemy to be active (last entry is 1)
             new_enemy = jnp.array(
-                [start_x, lane_y, dx, 0, 0, 1],
+                [start_x, lane_y, dx, type_id, 0, 1],
                 dtype=jnp.int32,
             )
 
