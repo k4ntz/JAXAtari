@@ -20,7 +20,8 @@ WIDTH = 160
 HEIGHT = 210
 SCALING_FACTOR = 4
 
-SCROLL_SPEED = 1
+SCROLL_SPEED = 1 # Normal scroll speed
+SCROLL_MULTIPLIER = 1.5 # When at the right player bound, multiply scroll speed by this constant
 
 # -------- Mountains constants --------
 MOUNTAIN_SIZE = (60, 12) # Width, Height
@@ -50,8 +51,8 @@ PLAYER_VELOCITY_X = 1.5 # X Velocity of player
 PLAYER_MISSILE_SIZE = (16, 1)
 PLAYER_MISSILE_COLOR = (54, 46, 200, 255)
 
-PLAYER_MISSILE_INITIAL_VELOCITY = 2.5
-PLAYER_MISSILE_VELOCITY_MULTIPLIER = 1.1
+PLAYER_MISSILE_INITIAL_VELOCITY = 2.5 # Starting speed of player missile
+PLAYER_MISSILE_VELOCITY_MULTIPLIER = 1.1 # Multiply the current speed at a given moment of the player missile by this number
 
 # -------- Enemy Missile constants --------
 ENEMY_MISSILE_COLOR = (85, 92, 197, 255)
@@ -81,6 +82,7 @@ class LaserGatesState(NamedTuple):
     upper_mountains: MountainState
     score: chex.Array
     lives: chex.Array
+    scroll_speed: chex.Array
     step_counter: chex.Array
     # TODO: fill
 
@@ -141,16 +143,16 @@ def load_sprites():
 
 @jax.jit
 def mountains_step(
-        mountain_state: MountainState, step_counter: jnp.ndarray
+        mountain_state: MountainState, state: LaserGatesState
 ) -> MountainState:
 
     # If this is true, update the position
-    update_tick = step_counter % UPDATE_EVERY == 0
+    update_tick = state.step_counter % UPDATE_EVERY == 0
 
     # Update x positions
-    new_x1 = jnp.where(update_tick, mountain_state.x1 - UPDATE_EVERY * SCROLL_SPEED, mountain_state.x1)
-    new_x2 = jnp.where(update_tick, mountain_state.x2 - UPDATE_EVERY * SCROLL_SPEED, mountain_state.x2)
-    new_x3 = jnp.where(update_tick, mountain_state.x3 - UPDATE_EVERY * SCROLL_SPEED, mountain_state.x3)
+    new_x1 = jnp.where(update_tick, mountain_state.x1 - UPDATE_EVERY * state.scroll_speed, mountain_state.x1)
+    new_x2 = jnp.where(update_tick, mountain_state.x2 - UPDATE_EVERY * state.scroll_speed, mountain_state.x2)
+    new_x3 = jnp.where(update_tick, mountain_state.x3 - UPDATE_EVERY * state.scroll_speed, mountain_state.x3)
 
     # If completely behind left border, set x position to the right again
     new_x1 = jnp.where(new_x1 < 0 - MOUNTAIN_SIZE[0], new_x3 + MOUNTAIN_SIZE[0] + MOUNTAINS_DISTANCE, new_x1)
@@ -377,6 +379,7 @@ class JaxLaserGates(JaxEnvironment[LaserGatesState, LaserGatesObservation, Laser
             upper_mountains=initial_upper_mountains,
             score=jnp.array(0),
             lives=jnp.array(3),
+            scroll_speed=jnp.array(SCROLL_SPEED),
             step_counter=jnp.array(0),
         )
 
@@ -392,10 +395,12 @@ class JaxLaserGates(JaxEnvironment[LaserGatesState, LaserGatesObservation, Laser
         # -------- Move player --------
         new_player_x, new_player_y, new_player_facing_direction = player_step(state, action)
 
-        new_lower_mountains_state = mountains_step(state.lower_mountains, state.step_counter)
-        new_upper_mountains_state = mountains_step(state.upper_mountains, state.step_counter)
+        new_lower_mountains_state = mountains_step(state.lower_mountains, state)
+        new_upper_mountains_state = mountains_step(state.upper_mountains, state)
 
         new_player_missile_state = player_missile_step(state, action)
+
+        new_scroll_speed = jnp.where(state.player_x != PLAYER_BOUNDS[0][1], SCROLL_SPEED, SCROLL_SPEED * SCROLL_MULTIPLIER)
 
         return_state = state._replace(
             player_x=new_player_x,
@@ -404,6 +409,7 @@ class JaxLaserGates(JaxEnvironment[LaserGatesState, LaserGatesObservation, Laser
             player_missile=new_player_missile_state,
             lower_mountains=new_lower_mountains_state,
             upper_mountains=new_upper_mountains_state,
+            scroll_speed=new_scroll_speed,
             step_counter=state.step_counter + 1
         )
 
