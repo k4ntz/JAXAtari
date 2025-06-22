@@ -5,7 +5,7 @@ import jax.lax
 import jax.numpy as jnp
 import chex
 import pygame
-from gymnax.environments import spaces
+import jaxatari.spaces as spaces
 
 from jaxatari.renderers import AtraJaxisRenderer
 from jaxatari.rendering import atraJaxis as aj
@@ -54,25 +54,6 @@ WALL_BOTTOM_HEIGHT = 16
 # Pygame window dimensions
 WINDOW_WIDTH = 160 * 3
 WINDOW_HEIGHT = 210 * 3
-
-# define the positions of the state information
-# define the positions of the state information
-STATE_TRANSLATOR: dict = {
-    0: "player_y",
-    1: "player_speed",
-    2: "ball_x",
-    3: "ball_y",
-    4: "enemy_y",
-    5: "enemy_speed",
-    6: "ball_vel_x",
-    7: "ball_vel_y",
-    8: "player_score",
-    9: "enemy_score",
-    10: "step_counter",
-    11: "acceleration_counter",
-    12: "buffer",
-}
-
 
 def get_human_action() -> chex.Array:
     """
@@ -404,7 +385,7 @@ def _reset_ball_after_goal(
 class JaxPong(JaxEnvironment[PongState, PongObservation, PongInfo]):
     def __init__(self, reward_funcs: list[callable]=None):
         super().__init__()
-        self.frame_stack_size = 4
+        self.renderer = PongRenderer()
         if reward_funcs is not None:
             reward_funcs = tuple(reward_funcs)
         self.reward_funcs = reward_funcs
@@ -560,6 +541,10 @@ class JaxPong(JaxEnvironment[PongState, PongObservation, PongInfo]):
 
         return observation, new_state, env_reward, done, info
 
+
+    def render(self, state: PongState) -> jnp.ndarray:
+        return self.renderer.render(state)
+
     @partial(jax.jit, static_argnums=(0,))
     def _get_observation(self, state: PongState):
         # create player
@@ -613,19 +598,59 @@ class JaxPong(JaxEnvironment[PongState, PongObservation, PongInfo]):
            )
 
     def action_space(self) -> spaces.Discrete:
-        return spaces.Discrete(len(self.action_set))
+        """Returns the action space for Pong.
+        Actions are:
+        0: NOOP
+        1: FIRE
+        2: RIGHT
+        3: LEFT
+        4: RIGHTFIRE
+        5: LEFTFIRE
+        """
+        return spaces.Discrete(6)
 
-    def get_action_space(self) -> jnp.ndarray:
-        return jnp.array(self.action_set)
+    def observation_space(self) -> spaces:
+        """Returns the observation space for Pong.
+        The observation contains:
+        - player: EntityPosition (x, y, width, height)
+        - enemy: EntityPosition (x, y, width, height)
+        - ball: EntityPosition (x, y, width, height)
+        - score_player: int (0-20)
+        - score_enemy: int (0-20)
+        """
+        return spaces.Dict({
+            "player": spaces.Dict({
+                "x": spaces.Box(low=0, high=160, shape=(), dtype=jnp.int32),
+                "y": spaces.Box(low=0, high=210, shape=(), dtype=jnp.int32),
+                "width": spaces.Box(low=0, high=160, shape=(), dtype=jnp.int32),
+                "height": spaces.Box(low=0, high=210, shape=(), dtype=jnp.int32),
+            }),
+            "enemy": spaces.Dict({
+                "x": spaces.Box(low=0, high=160, shape=(), dtype=jnp.int32),
+                "y": spaces.Box(low=0, high=210, shape=(), dtype=jnp.int32),
+                "width": spaces.Box(low=0, high=160, shape=(), dtype=jnp.int32),
+                "height": spaces.Box(low=0, high=210, shape=(), dtype=jnp.int32),
+            }),
+            "ball": spaces.Dict({
+                "x": spaces.Box(low=0, high=160, shape=(), dtype=jnp.int32),
+                "y": spaces.Box(low=0, high=210, shape=(), dtype=jnp.int32),
+                "width": spaces.Box(low=0, high=160, shape=(), dtype=jnp.int32),
+                "height": spaces.Box(low=0, high=210, shape=(), dtype=jnp.int32),
+            }),
+            "score_player": spaces.Box(low=0, high=20, shape=(), dtype=jnp.int32),
+            "score_enemy": spaces.Box(low=0, high=20, shape=(), dtype=jnp.int32),
+        })
 
-    def observation_space(self) -> spaces.Box:
+    def image_space(self) -> spaces.Box:
+        """Returns the image space for Pong.
+        The image is a RGB image with shape (160, 210, 3).
+        """
         return spaces.Box(
             low=0,
             high=255,
-            shape=None,
-            dtype=jnp.uint8,
+            shape=(160, 210, 3),
+            dtype=jnp.uint8
         )
-
 
     @partial(jax.jit, static_argnums=(0,))
     def _get_info(self, state: PongState, all_rewards: chex.Array) -> PongInfo:
