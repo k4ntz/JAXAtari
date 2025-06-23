@@ -69,7 +69,7 @@ BARREL_SPRITE_RIGHT = 1
 BARREL_SPRITE_LEFT = 2
 
 # Prob Barrel rolls down a ladder
-BASE_PROBABILITY_BARREL_ROLLING_A_LADDER_DOWN = 0.6
+BASE_PROBABILITY_BARREL_ROLLING_A_LADDER_DOWN = 0.0
 
 # Hit Boxes RANGES
 MARIO_HIT_BOX_X = 7
@@ -150,6 +150,7 @@ def get_human_action() -> chex.Array:
     else:
         return jnp.array(Action.NOOP)
 
+
 class Ladder(NamedTuple):
     stage: chex.Array
     climbable: chex.Array
@@ -157,6 +158,7 @@ class Ladder(NamedTuple):
     start_y: chex.Array
     end_x: chex.Array
     end_y: chex.Array
+
 
 @jax.jit
 def init_ladders_for_level(level: int) -> Ladder:
@@ -384,39 +386,49 @@ def barrel_step(state):
     # Skip every second frame
     should_move = step_counter % 2 == 0
 
-    # spawn a new barrel if posible
+    # spawn a new barrel if possible
     def spawn_new_barrel(state):
         barrels = state.barrels
 
-        new_barrel_x = BARREL_START_X
-        new_barrel_y = BARREL_START_Y
-        new_moving_direction = MOVING_RIGHT
-        new_stage = 6
-        new_sprite = BARREL_SPRITE_RIGHT
-        new_reached_the_end = False
-
-        barrel_x = jnp.append(barrels.barrel_x, new_barrel_x)
-        barrel_y = jnp.append(barrels.barrel_y, new_barrel_y)
-        moving_direction = jnp.append(barrels.moving_direction, new_moving_direction)
-        sprite = jnp.append(barrels.sprite, new_sprite)
-        stage = jnp.append(barrels.stage, new_stage)
-        reached_the_end = jnp.append(barrels.reached_the_end, new_reached_the_end)
-
-        barrels = barrels._replace(
-            barrel_x=barrel_x,
-            barrel_y=barrel_y,
-            moving_direction=moving_direction,
-            sprite=sprite,
-            stage=stage,
+        # check if there are less than 4 barrels in game right here because max barrels in Donkey Kong is 4.
+        def is_max_number_of_barrels_reached(i, idx):
+            changable_idx = i
+            return jax.lax.cond(
+                jnp.logical_and(idx == -1, barrels.reached_the_end[i] == True),
+                lambda _: changable_idx,
+                lambda _: idx,
+                operand=None
+            )
+        idx = jax.lax.fori_loop(0, len(barrels), is_max_number_of_barrels_reached, -1)
+        # if idx != -1 means a new barrel can be theoretically spawn
+        # we only now need to check if there is enough space between the new barrel and the earlier barrel
+        def update_barrels(barrels, idx):
+            return BarrelPosition(
+                barrel_x=barrels.barrel_x.at[idx].set(BARREL_START_X),
+                barrel_y=barrels.barrel_y.at[idx].set(BARREL_START_Y),
+                sprite=barrels.sprite.at[idx].set(BARREL_SPRITE_RIGHT),
+                moving_direction=barrels.moving_direction.at[idx].set(MOVING_RIGHT),
+                stage=barrels.stage.at[idx].set(6),
+                reached_the_end=barrels.reached_the_end.at[idx].set(False),
+            )
+        new_barrels = jax.lax.cond(
+            idx != -1,
+            lambda _: update_barrels(barrels, idx),
+            lambda _: barrels,
+            operand=None
         )
 
         new_state = state._replace(
-            barrels=barrels,
-            frames_since_last_barrel_spawn=0,
+            barrels=new_barrels,
+            frames_since_last_barrel_spawn=1,
         )
-        
 
-        return state
+        return jax.lax.cond(
+            jnp.logical_and(state.frames_since_last_barrel_spawn >= SPAWN_STEP_COUNTER_BARREL, idx != -1),
+            lambda _: new_state,
+            lambda _: state,
+            operand=None
+        )
     new_state = spawn_new_barrel(new_state)
 
     # return either new position or old position because of frame skip/ step counter
@@ -458,12 +470,12 @@ class JaxDonkeyKong(JaxEnvironment[DonkeyKongState, DonkeyKongObservation, Donke
             mario_y=jnp.array([MARIO_START_Y]).astype(jnp.int32),
 
             barrels = BarrelPosition(
-                barrel_x = jnp.array([BARREL_START_X]).astype(jnp.int32),
-                barrel_y = jnp.array([BARREL_START_Y]).astype(jnp.int32), 
-                sprite = jnp.array([BARREL_SPRITE_RIGHT]).astype(jnp.int32),
-                moving_direction = jnp.array([MOVING_RIGHT]).astype(jnp.int32),
-                stage = jnp.array([6]).astype(jnp.int32),
-                reached_the_end=jnp.array([False]).astype(bool)
+                barrel_x = jnp.array([BARREL_START_X, -1, -1, -1]).astype(jnp.int32),
+                barrel_y = jnp.array([BARREL_START_Y, -1, -1, -1]).astype(jnp.int32), 
+                sprite = jnp.array([BARREL_SPRITE_RIGHT, BARREL_SPRITE_RIGHT, BARREL_SPRITE_RIGHT, BARREL_SPRITE_RIGHT]).astype(jnp.int32),
+                moving_direction = jnp.array([MOVING_RIGHT, MOVING_RIGHT, MOVING_RIGHT, MOVING_RIGHT]).astype(jnp.int32),
+                stage = jnp.array([6, 6, 6, 6]).astype(jnp.int32),
+                reached_the_end=jnp.array([False, True, True, True]).astype(bool)
             ),
 
             ladders=ladders,
@@ -483,7 +495,10 @@ class JaxDonkeyKong(JaxEnvironment[DonkeyKongState, DonkeyKongObservation, Donke
         new_state = barrel_step(state)
   
 
-        new_state = new_state._replace(step_counter=new_state.step_counter+1)
+        new_state = new_state._replace(
+            step_counter=new_state.step_counter+1,
+            frames_since_last_barrel_spawn=new_state.frames_since_last_barrel_spawn+1,
+        )
         
 
         observation = self._get_observation(new_state)
