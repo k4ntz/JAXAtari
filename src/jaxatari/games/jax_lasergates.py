@@ -53,7 +53,8 @@ MAX_DTIME = 1000
 
 # -------- Player missile constants --------
 PLAYER_MISSILE_SIZE = (16, 1)
-PLAYER_MISSILE_COLOR = jnp.array((54, 46, 200, 255))
+PLAYER_MISSILE_BASE_COLOR = jnp.array((140, 79, 24, 255)) # Initial color of player missile. Every value except for transparency is incremented by the missiles velocity * PLAYER_MISSILE_COLOR_CHANGE_SPEED
+PLAYER_MISSILE_COLOR_CHANGE_SPEED = 10 # Defines how fast the player missile changes its color towards white.
 
 PLAYER_MISSILE_INITIAL_VELOCITY = 2.5 # Starting speed of player missile
 PLAYER_MISSILE_VELOCITY_MULTIPLIER = 1.1 # Multiply the current speed at a given moment of the player missile by this number
@@ -366,7 +367,7 @@ def check_collision_single(pos1, size1, pos2, size2):
     return jnp.logical_and(horizontal_overlap, vertical_overlap)
 
 
-
+@jax.jit
 def any_collision_for_group(player_pos: jnp.ndarray,
                             player_size: jnp.ndarray,
                             group_xs: jnp.ndarray,
@@ -622,11 +623,13 @@ class JaxLaserGates(JaxEnvironment[LaserGatesState, LaserGatesObservation, Laser
 
         upper_col, lower_col = check_player_collision(state)
 
-        new_player_y = jnp.where(upper_col, new_player_y + 3, new_player_y)
-        new_player_y = jnp.where(lower_col, new_player_y - 3, new_player_y)
+        new_player_y = jnp.where(upper_col, new_player_y + 4, new_player_y)
+        new_player_y = jnp.where(lower_col, new_player_y - 4, new_player_y)
 
         new_energy = state.energy - 1
         new_score = state.score + 1
+
+        new_shields = jnp.where(jnp.logical_or(upper_col, lower_col), state.shields - 1, state.shields)
 
         return_state = state._replace(
             player_x=new_player_x,
@@ -636,8 +639,9 @@ class JaxLaserGates(JaxEnvironment[LaserGatesState, LaserGatesObservation, Laser
             lower_mountains=new_lower_mountains_state,
             upper_mountains=new_upper_mountains_state,
             scroll_speed=new_scroll_speed,
-            energy=new_energy,
             score=new_score,
+            energy=new_energy,
+            shields=new_shields,
             step_counter=state.step_counter + 1
         )
 
@@ -926,7 +930,16 @@ class LaserGatesRenderer(AtraJaxisRenderer):
         )
 
         # -------- Render player missile --------
-        colored_player_missile = recolor_sprite(SPRITE_PLAYER_MISSILE, PLAYER_MISSILE_COLOR)
+
+        base_r, base_g, base_b, base_t = PLAYER_MISSILE_BASE_COLOR
+        color_change = state.player_missile.velocity * PLAYER_MISSILE_COLOR_CHANGE_SPEED
+
+        r = jnp.clip(base_r + color_change, 0, 255)
+        g = jnp.clip(base_g + color_change, 0, 255)
+        b = jnp.clip(base_b + color_change, 0, 255)
+        t = jnp.clip(base_t + color_change, 0, 255)
+
+        colored_player_missile = recolor_sprite(SPRITE_PLAYER_MISSILE, jnp.array((r, g, b, t)))
         raster = jnp.where(state.player_missile.direction != 0,
                       aj.render_at(
                       raster,
