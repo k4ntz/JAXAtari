@@ -210,23 +210,26 @@ class Renderer_AtraJaxis(AtraJaxisRenderer):
 
         # render the score
         max_digits = GameConfig.max_digits_for_score  # max amount of digits
-        # num_digits = jnp.where(state.score > 0, (jnp.ceil(jnp.log10(state.score.astype(jnp.float32) + 1.)).astype(jnp.int32)), 1)  # actual amount of digits  # needed to get rid of leading 0s
+        num_digits = jnp.where(state.score > 0, (jnp.ceil(jnp.log10(state.score.astype(jnp.float32) + 1.)).astype(jnp.int32)), 1)  # actual amount of digits
 
-        score_digits = aj.int_to_digits(state.score, max_digits=max_digits)   # get digit array
-        # score_digits = jax.lax.dynamic_slice(score_digits, max_digits - num_digits, num_digits)  # needed to get rid of leading 0s
+        score_digits = aj.int_to_digits(state.score, max_digits=max_digits)  # get digit array
 
         # Position (centered on top)
         digit_w = 8
-        total_w = digit_w * max_digits  # num_digits  # multiply with num_digits instead of max_digits to get rid of leading 0s
+        total_w = digit_w * num_digits
         score_x = (self.config.screen_width - total_w) // 2
         score_y = 5
 
-        raster = aj.render_label(raster,
-                                 score_x, score_y,
-                                 score_digits,
-                                 self.score_digit_sprites,
-                                 spacing=digit_w)
-
+        # Render score using the selective renderer
+        raster = aj.render_label_selective(
+            raster,
+            score_x, score_y,
+            score_digits,
+            self.score_digit_sprites,
+            max_digits-num_digits,  # skip 0s in front of score
+            num_digits,             # show that many digits
+            spacing=digit_w
+        )
         return raster
 
 
