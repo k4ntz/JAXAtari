@@ -12,16 +12,12 @@ Quentin Delfosse, Daniel Kirn, Dominik Mandok, Paul Seitz, Lars Teubner, Sebasti
 <!-- --- -->
 
 ## Features
-- Object-centric extraction of Atari game states.
-- JAX-based vectorized execution with GPU support.
-- Compatible API with ALE to ease integration.
-- Benchmarking tools.
+- **Object-centric extraction** of Atari game states with structured observations
+- **JAX-based vectorized execution** with full GPU support and JIT compilation
+- **Comprehensive wrapper system** for different observation types (pixel, object-centric, combined)
 
 
 📘 [Read the Documentation](https://jaxatari.readthedocs.io/en/latest/) 
-
-
-<!-- [**📘 JAXAtari Documentation**] -->
 
 ## Getting Started
 
@@ -35,38 +31,98 @@ python3 -m pip install -U pip
 pip3 install -e .
 ```
 
+**Note**: This will install JAX without GPU acceleration.
+
+**CUDA Users** should run the following to add GPU support:
+```bash
+pip install -U "jax[cuda12]"
+```
+
+For other accelerator types, please follow the instructions [here](https://docs.jax.dev/en/latest/installation.html).
+
 ## Usage
 
-Using an environment:
+### Basic Environment Creation
+
+The main entry point is the `make()` function:
+
 ```python
 import jax
+import jaxatari
 
-from jaxatari.games.jax_seaquest import JaxSeaquest
-from jaxatari.wrappers import FlattenObservationWrapper, AtariWrapper
+# Create an environment
+env = jaxatari.make("pong")  # or "seaquest", "kangaroo", "freeway", etc.
+
+# Get available games
+available_games = jaxatari.list_available_games()
+print(f"Available games: {available_games}")
+```
+
+### Using Wrappers
+
+JAXAtari provides a comprehensive wrapper system for different use cases:
+
+```python
+import jax
+import jaxatari
+from jaxatari.wrappers import (
+    AtariWrapper, 
+    ObjectCentricWrapper, 
+    PixelObsWrapper,
+    PixelAndObjectCentricWrapper,
+    FlattenObservationWrapper,
+    LogWrapper
+)
+
+# Create base environment
+base_env = jaxatari.make("pong")
+
+# Apply wrappers for different observation types
+env = AtariWrapper(base_env, frame_stack_size=4, frame_skip=4)
+env = ObjectCentricWrapper(env)  # Returns flattened object features
+# OR
+env = PixelObsWrapper(AtariWrapper(base_env))  # Returns pixel observations
+# OR
+env = PixelAndObjectCentricWrapper(AtariWrapper(base_env))  # Returns both
+# OR
+env = FlattenObservationWrapper(ObjectCentricWrapper(AtariWrapper(base_env)))  # Returns flattened observations
+
+# Add logging wrapper for training
+env = LogWrapper(env)
+```
+
+### Vectorized Training Example
+
+```python
+import jax
+import jaxatari
+from jaxatari.wrappers import AtariWrapper, ObjectCentricWrapper
+
+# Create environment with wrappers
+base_env = jaxatari.make("pong")
+env = FlattenObservationWrapper(ObjectCentricWrapper(AtariWrapper(base_env)))
 
 rng = jax.random.PRNGKey(0)
 
-env = JaxSeaquest()
-env = AtariWrapper(env)
-env = FlattenObservationWrapper(env)
-
+# Vectorized reset and step functions
 vmap_reset = lambda n_envs: lambda rng: jax.vmap(env.reset)(
     jax.random.split(rng, n_envs)
 )
-vmap_step = lambda n_envs: lambda rng, env_state, action: jax.vmap(
+vmap_step = lambda n_envs: lambda env_state, action: jax.vmap(
     env.step
-)(jax.random.split(rng, n_envs), env_state, action)
+)(env_state, action)
 
+# Initialize 128 parallel environments
 init_obs, env_state = vmap_reset(128)(rng)
 action = jax.random.randint(rng, (128,), 0, env.action_space().n)
 
 # Take one step
-new_obs, new_env_state, reward, done, info = vmap_step(128)(rng, env_state, action)
+new_obs, new_env_state, reward, done, info = vmap_step(128)(env_state, action)
 
 # Take 100 steps with scan
 def step_fn(carry, unused):
     _, env_state = carry
-    new_obs, new_env_state, reward, done, info = vmap_step(128)(rng, env_state, action)
+    new_obs, new_env_state, reward, done, info = vmap_step(128)(env_state, action)
     return (new_obs, new_env_state), (reward, done, info)
 
 carry = (init_obs, env_state)
@@ -75,8 +131,9 @@ _, (rewards, dones, infos) = jax.lax.scan(
 )
 ```
 
+### Manual Game Play
 
-Running a game manually:
+Run a game manually with human input:
 ```bash
 python3 -m jaxatari.games.jax_seaquest
 ```
@@ -93,6 +150,38 @@ python3 -m jaxatari.games.jax_seaquest
 | Freeway  | ✅        |
 
 > More games can be added via the uniform wrapper system.
+
+---
+
+## Wrapper System
+
+JAXAtari provides several wrappers to customize environment behavior:
+
+- **`AtariWrapper`**: Base wrapper with frame stacking, frame skipping, and sticky actions
+- **`ObjectCentricWrapper`**: Returns flattened object-centric features (2D array: `[frame_stack, features]`)
+- **`PixelObsWrapper`**: Returns pixel observations (4D array: `[frame_stack, height, width, channels]`)
+- **`PixelAndObjectCentricWrapper`**: Returns both pixel and object-centric observations
+- **`FlattenObservationWrapper`**: Flattens any observation structure to a single 1D array
+- **`LogWrapper`**: Tracks episode returns and lengths for training
+- **`MultiRewardLogWrapper`**: Tracks multiple reward components separately
+
+### Wrapper Usage Patterns
+
+```python
+# For pure RL with object-centric features (recommended)
+env = ObjectCentricWrapper(AtariWrapper(jaxatari.make("pong")))
+
+# For computer vision approaches
+env = PixelObsWrapper(AtariWrapper(jaxatari.make("pong")))
+
+# For multi-modal approaches
+env = PixelAndObjectCentricWrapper(AtariWrapper(jaxatari.make("pong")))
+
+# For training with logging
+env = LogWrapper(ObjectCentricWrapper(AtariWrapper(jaxatari.make("pong"))))
+
+# All wrapper combinations can be flattened using the FlattenObservationWrapper
+```
 
 ---
 
