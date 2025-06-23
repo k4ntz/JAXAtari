@@ -18,7 +18,7 @@ from jaxatari.renderers import AtraJaxisRenderer
 # -------- Game constants --------
 WIDTH = 160
 HEIGHT = 210
-SCALING_FACTOR = 4
+SCALING_FACTOR = 5
 
 SCROLL_SPEED = 1 # Normal scroll speed
 SCROLL_MULTIPLIER = 1.5 # When at the right player bound, multiply scroll speed by this constant
@@ -145,6 +145,8 @@ def load_sprites():
     gui_text_energy = aj.loadFrame(os.path.join(MODULE_DIR, "sprites/lasergates/gui/text/energy.npy"))
     gui_text_shields = aj.loadFrame(os.path.join(MODULE_DIR, "sprites/lasergates/gui/text/shields.npy"))
     gui_text_dtime = aj.loadFrame(os.path.join(MODULE_DIR, "sprites/lasergates/gui/text/dtime.npy"))
+    gui_score_digits = aj.load_and_pad_digits(os.path.join(MODULE_DIR, "sprites/lasergates/gui/score_numbers/{}.npy"))
+    gui_score_comma = aj.loadFrame(os.path.join(MODULE_DIR, "sprites/lasergates/gui/score_numbers/comma.npy"))
 
 
 
@@ -160,6 +162,8 @@ def load_sprites():
     SPRITE_GUI_TEXT_ENERGY = gui_text_energy
     SPRITE_GUI_TEXT_SHIELDS = gui_text_shields
     SPRITE_GUI_TEXT_DTIME = gui_text_dtime
+    SPRITE_GUI_SCORE_DIGITS = gui_score_digits
+    SPRITE_GUI_SCORE_COMMA = gui_score_comma
 
     return (
         SPRITE_BACKGROUND,
@@ -173,6 +177,8 @@ def load_sprites():
         SPRITE_GUI_TEXT_ENERGY,
         SPRITE_GUI_TEXT_SHIELDS,
         SPRITE_GUI_TEXT_DTIME,
+        SPRITE_GUI_SCORE_DIGITS,
+        SPRITE_GUI_SCORE_COMMA,
     )
 
 (
@@ -187,6 +193,8 @@ def load_sprites():
     SPRITE_GUI_TEXT_ENERGY,
     SPRITE_GUI_TEXT_SHIELDS,
     SPRITE_GUI_TEXT_DTIME,
+    SPRITE_GUI_SCORE_DIGITS,
+    SPRITE_GUI_SCORE_COMMA,
 ) = load_sprites()
 
 # -------- Game Logic --------
@@ -393,7 +401,7 @@ class JaxLaserGates(JaxEnvironment[LaserGatesState, LaserGatesObservation, Laser
 
     @jax.jit
     def _get_done(self, state: LaserGatesState) -> bool:
-        return state.lives < 0
+        return state.shields <= 0
 
     @partial(jax.jit, static_argnums=(0, ))
     def reset(self) -> Tuple[LaserGatesObservation, LaserGatesState]:
@@ -455,6 +463,7 @@ class JaxLaserGates(JaxEnvironment[LaserGatesState, LaserGatesObservation, Laser
         new_scroll_speed = jnp.where(state.player_x != PLAYER_BOUNDS[0][1], SCROLL_SPEED, SCROLL_SPEED * SCROLL_MULTIPLIER)
 
         new_energy = state.energy - 1
+        new_score = state.score + 1
 
         return_state = state._replace(
             player_x=new_player_x,
@@ -465,6 +474,7 @@ class JaxLaserGates(JaxEnvironment[LaserGatesState, LaserGatesObservation, Laser
             upper_mountains=new_upper_mountains_state,
             scroll_speed=new_scroll_speed,
             energy=new_energy,
+            score=new_score,
             step_counter=state.step_counter + 1
         )
 
@@ -556,101 +566,114 @@ class LaserGatesRenderer(AtraJaxisRenderer):
 
         # Colored backgrounds ---------------
 
+        # Colored background for score
         score_col_bg_y = 111 + GUI_Y_SPACE_BETWEEN_PLAYING_FIELD
         raster = aj.render_at(
             raster,
             16,
             score_col_bg_y,
             sprite_gui_colored_background_blue_bg,
-        ) # Colored background for score
+        )
 
+        # Colored background for energy
         energy_col_bg_y = 111 + GUI_Y_SPACE_BETWEEN_PLAYING_FIELD + GUI_COLORED_BACKGROUND_SIZE[1] + GUI_Y_SPACE_BETWEEN_BACKGROUNDS
         raster = aj.render_at(
             raster,
             16,
             energy_col_bg_y,
             sprite_gui_colored_background_green_bg,
-        ) # Colored background for energy
+        )
 
+        # Colored background for shields
         shields_col_bg_y = 111 + GUI_Y_SPACE_BETWEEN_PLAYING_FIELD + 2 * GUI_COLORED_BACKGROUND_SIZE[1] + 2 * GUI_Y_SPACE_BETWEEN_BACKGROUNDS
         raster = aj.render_at(
             raster,
             16,
             shields_col_bg_y,
             sprite_gui_colored_background_green_bg,
-        ) # Colored background for shields
+        )
 
+        # Colored background for d-time # TODO: Implement color rendering logic
         dtime_col_bg_y = 111 + GUI_Y_SPACE_BETWEEN_PLAYING_FIELD + 3 * GUI_COLORED_BACKGROUND_SIZE[1] + 3 * GUI_Y_SPACE_BETWEEN_BACKGROUNDS
         raster = aj.render_at(
             raster,
             16,
             dtime_col_bg_y,
             sprite_gui_colored_background_green_bg,
-        ) # Colored background for d-time # TODO: Implement color rendering logic
+        )
 
         # Black backgrounds ---------------
 
+        # Black background for score
         raster = aj.render_at(
             raster,
             16 + GUI_BLACK_BACKGROUND_X_OFFSET,
             score_col_bg_y + 1,
             SPRITE_GUI_BLACK_BACKGROUND,
-        ) # Black background for score
+        )
 
+        # Black background for energy
         raster = aj.render_at(
             raster,
             16 + GUI_BLACK_BACKGROUND_X_OFFSET,
             energy_col_bg_y + 1,
             SPRITE_GUI_BLACK_BACKGROUND,
-        ) # Black background for energy
+        )
 
+        # Black background for shields
         raster = aj.render_at(
             raster,
             16 + GUI_BLACK_BACKGROUND_X_OFFSET,
             shields_col_bg_y + 1,
             SPRITE_GUI_BLACK_BACKGROUND,
-        ) # Black background for shields
+        )
 
+        # Black background for d-time
         raster = aj.render_at(
             raster,
             16 + GUI_BLACK_BACKGROUND_X_OFFSET,
             dtime_col_bg_y + 1,
             SPRITE_GUI_BLACK_BACKGROUND,
-        ) # Black background for d-time
+        )
 
         # Text ---------------
 
+        # score text
         required_text_and_bar_color = jnp.where(jnp.array(True), GUI_TEXT_COLOR_GRAY, GUI_TEXT_COLOR_BEIGE)
         raster = aj.render_at(
             raster,
             16 + GUI_BLACK_BACKGROUND_X_OFFSET + 5,
             score_col_bg_y + 2,
             recolor_sprite(SPRITE_GUI_TEXT_SCORE, required_text_and_bar_color),
-        ) # score text
+        )
 
+        # energy text
         raster = aj.render_at(
             raster,
             16 + GUI_BLACK_BACKGROUND_X_OFFSET + 5,
             energy_col_bg_y + 2,
             recolor_sprite(SPRITE_GUI_TEXT_ENERGY, required_text_and_bar_color),
-        ) # energy text
+        )
 
+        # shields text
         raster = aj.render_at(
             raster,
             16 + GUI_BLACK_BACKGROUND_X_OFFSET + 5,
             shields_col_bg_y + 2,
             recolor_sprite(SPRITE_GUI_TEXT_SHIELDS, required_text_and_bar_color),
-        ) # shields text
+        )
 
+        # d-time text
         raster = aj.render_at(
             raster,
             16 + GUI_BLACK_BACKGROUND_X_OFFSET + 5,
             dtime_col_bg_y + 2,
             recolor_sprite(SPRITE_GUI_TEXT_DTIME, required_text_and_bar_color),
-        ) # d-time text
+        )
 
         # Bars ---------------
 
+        # energy bar
         raster = aj.render_bar(
             raster, # raster
             16 + GUI_BLACK_BACKGROUND_X_OFFSET + 4, # x pos
@@ -661,8 +684,9 @@ class LaserGatesRenderer(AtraJaxisRenderer):
             2, # height
             required_text_and_bar_color, # color of filled part
             jnp.array((0, 0, 0, 0)) # color of unfilled part
-        ) # energy bar
+        )
 
+        # shields bar
         raster = aj.render_bar(
             raster, # raster
             16 + GUI_BLACK_BACKGROUND_X_OFFSET + 4, # x pos
@@ -673,8 +697,9 @@ class LaserGatesRenderer(AtraJaxisRenderer):
             2, # height
             required_text_and_bar_color, # color of filled part
             jnp.array((0, 0, 0, 0)) # color of unfilled part
-        ) # shields bar
+        )
 
+        # d-time bar TODO: Implement correct color picking
         raster = aj.render_bar(
             raster, # raster
             16 + GUI_BLACK_BACKGROUND_X_OFFSET + 4, # x pos
@@ -685,7 +710,47 @@ class LaserGatesRenderer(AtraJaxisRenderer):
             2, # height
             required_text_and_bar_color, # color of filled part
             jnp.array((0, 0, 0, 0)) # color of unfilled part
-        ) # d-time bar TODO: Implement correct color picking
+        )
+
+        # Score ---------------
+
+        # digits of score
+        score_array = aj.int_to_digits(state.score, 6) # Convert integer to array with its digits
+
+        recolor_single = lambda sprite_idx: recolor_sprite(sprite_idx, required_text_and_bar_color)
+        recolored_sprites = jax.vmap(recolor_single)(SPRITE_GUI_SCORE_DIGITS) # Vmap over all digit sprites and recolor to desired color
+
+        first_non_zero = jnp.argmax(score_array != 0) # Index of first element in score_array that is not zero
+        num_to_render = score_array.shape[0] - first_non_zero # number of digits we have to render
+        base_x = 16 + GUI_BLACK_BACKGROUND_X_OFFSET + 52 # base x position
+        number_spacing = 4 # Spacing of digits (including digit itself)
+        score_numbers_x = base_x - number_spacing * num_to_render # Subtrating offset of x position, since we want the score to be right-aligned
+
+        raster = jnp.where(state.score > 0, # Render only if score is more than 0
+                           aj.render_label_selective(
+                               raster,
+                               score_numbers_x,
+                               score_col_bg_y + 3,
+                               score_array,
+                               recolored_sprites,
+                               first_non_zero,
+                               num_to_render,
+                               number_spacing
+                           ),
+                           raster
+                           )
+
+        # Comma, render only if score > 999
+        raster = jnp.where(state.score > 999,
+                           aj.render_at(
+                               raster,
+                               base_x - 14,
+                               score_col_bg_y + 8,
+                               recolor_sprite(SPRITE_GUI_SCORE_COMMA, required_text_and_bar_color),
+                           ),
+                           raster
+                           )
+
 
         # -------- Render player --------
         colored_player = recolor_sprite(SPRITE_PLAYER, jnp.array(PLAYER_COLOR))
