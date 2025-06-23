@@ -267,6 +267,7 @@ class JaxAtlantis(JaxEnvironment[AtlantisState, AtlantisObservation, AtlantisInf
         # initial state
         new_state = AtlantisState(
             score=jnp.array(0, dtype=jnp.int32),
+            reward=jnp.array(0, dtype=jnp.int32),
             score_spent=jnp.array(0, dtype=jnp.int32),
             wave=jnp.array(0, dtype=jnp.int32), # start with wave-number 0
             enemies=empty_enemies,
@@ -796,8 +797,8 @@ class JaxAtlantis(JaxEnvironment[AtlantisState, AtlantisObservation, AtlantisInf
         )
         observation = self._get_observation(state)
         info = AtlantisInfo(time=jnp.array(0, dtype=jnp.int32), score=state.score)
-        state.reward = state.score - previous_state.score
-        # done = False  # Never terminates for now
+        state._replace(reward = state.score - previous_state.score)
+        # done = False  # Never terminates for now 
         done = jnp.where(state.score < 10**GameConfig.max_digits_for_score, False, True)  # if score > max displayable value -> done = true
 
         return observation, state, state.reward, done, info
