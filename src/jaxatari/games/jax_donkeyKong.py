@@ -56,12 +56,14 @@ NUMBER_OF_DIGITS_FOR_GAME_SCORE = 6
 NUMBER_OF_DIGITS_FOR_TIMER_SCORE = 4
 
 # Mario start position
-MARIO_START_X = 48
-MARIO_START_Y = 162
+MARIO_START_X = 45
+MARIO_START_Y = 176
+MARIO_JUMPING_HEIGHT = 5
+MARIO_JUMPING_FRAME_DURATION = 32
 
 # Barrel Start Position
 BARREL_START_X = 34
-BARREL_START_Y = 53
+BARREL_START_Y = 52
 
 # Barrel Sprite Index
 BARREL_SPRITE_FALL = 0
@@ -193,10 +195,16 @@ class BarrelPosition(NamedTuple):
 
 
 class DonkeyKongState(NamedTuple):
+    game_started: bool
     level: chex.Array
     step_counter: chex.Array
-    mario_x: chex.Array
-    mario_y: chex.Array
+    
+    mario_x: int
+    mario_y: int
+    mario_jumping: bool
+    start_frame_when_mario_jumped: int
+    
+
     barrels: BarrelPosition
     ladders: Ladder
     random_key: int
@@ -437,6 +445,65 @@ def barrel_step(state):
     )
 
 
+@jax.jit
+def mario_step(state, action: chex.Array):
+    # need some frame skip here because mario is much slower than fires and barrels
+    
+
+    # there are multiple action which mario/player can execute
+
+    # Jumping with Action.FIRE
+    # one things needs to be considered --> While mario is jumping --> Action.FIRE does nothing
+    def jumping_on_spot(state):
+        new_state = state
+
+        # Action.FIRE
+        start_frame_when_mario_jumped = state.step_counter
+        mario_jumping = True
+        mario_y = state.mario_y - MARIO_JUMPING_HEIGHT
+        new_state = new_state._replace(
+            start_frame_when_mario_jumped=start_frame_when_mario_jumped,
+            mario_jumping=mario_jumping,
+            mario_y=mario_y,
+        )
+
+        return jax.lax.cond(
+            jnp.logical_and(action == Action.FIRE, state.mario_jumping == False),
+            lambda _: new_state,
+            lambda _: state,
+            operand=None
+        )
+    new_state = jumping_on_spot(state)
+
+    # reset jumping after a certain time
+    def reset_jumping(state):
+        new_state = state._replace(
+            mario_jumping = False,
+            mario_y = state.mario_y + MARIO_JUMPING_HEIGHT,
+        )
+
+        return jax.lax.cond(
+            jnp.logical_and(state.step_counter - state.start_frame_when_mario_jumped >= MARIO_JUMPING_FRAME_DURATION, state.mario_jumping == True),
+            lambda _: new_state,
+            lambda _: state,
+            operand=None
+        )
+    new_state = reset_jumping(new_state)
+
+    def mario_walking_to_right(state):
+        new_state = state
+
+
+        return jax.lax.cond(
+            jnp.logical_and(state.mario_jumping == False, action == Action.RIGHT),
+            lambda _: new_state,
+            lambda _: state,
+            operand=None
+        )
+
+    return new_state
+
+
 class JaxDonkeyKong(JaxEnvironment[DonkeyKongState, DonkeyKongObservation, DonkeyKongInfo]):
     def __init__(self, reward_funcs: list[callable]=None):
         super().__init__()
@@ -463,19 +530,23 @@ class JaxDonkeyKong(JaxEnvironment[DonkeyKongState, DonkeyKongObservation, Donke
         """
         ladders = init_ladders_for_level(level=1)
         state = DonkeyKongState(
+            game_started = False,
             level = 1,
             step_counter=jnp.array(1).astype(jnp.int32),
             frames_since_last_barrel_spawn=jnp.array(0).astype(jnp.int32),
-            mario_x=jnp.array([MARIO_START_X]).astype(jnp.int32),
-            mario_y=jnp.array([MARIO_START_Y]).astype(jnp.int32),
+
+            mario_x=MARIO_START_X,
+            mario_y=MARIO_START_Y,
+            mario_jumping=False,
+            start_frame_when_mario_jumped=-1,
 
             barrels = BarrelPosition(
-                barrel_x = jnp.array([BARREL_START_X, -1, -1, -1]).astype(jnp.int32),
-                barrel_y = jnp.array([BARREL_START_Y, -1, -1, -1]).astype(jnp.int32), 
+                barrel_x = jnp.array([-1, -1, -1, -1]).astype(jnp.int32),
+                barrel_y = jnp.array([-1, -1, -1, -1]).astype(jnp.int32), 
                 sprite = jnp.array([BARREL_SPRITE_RIGHT, BARREL_SPRITE_RIGHT, BARREL_SPRITE_RIGHT, BARREL_SPRITE_RIGHT]).astype(jnp.int32),
                 moving_direction = jnp.array([MOVING_RIGHT, MOVING_RIGHT, MOVING_RIGHT, MOVING_RIGHT]).astype(jnp.int32),
                 stage = jnp.array([6, 6, 6, 6]).astype(jnp.int32),
-                reached_the_end=jnp.array([False, True, True, True]).astype(bool)
+                reached_the_end=jnp.array([True, True, True, True]).astype(bool)
             ),
 
             ladders=ladders,
@@ -492,14 +563,45 @@ class JaxDonkeyKong(JaxEnvironment[DonkeyKongState, DonkeyKongObservation, Donke
         new_state = state
 
         # If there is no colision: game will continue
+        # enemy_step --> maybe later write a enemy_step function which calls eighter barrel_step oder fire_step
         new_state = barrel_step(state)
   
+        # mario step / player step
+        new_state = mario_step(new_state, action)
 
+        # increase timer / frame counter
         new_state = new_state._replace(
             step_counter=new_state.step_counter+1,
             frames_since_last_barrel_spawn=new_state.frames_since_last_barrel_spawn+1,
         )
         
+        # Check if game was even started --> with human_action FIRE
+        def start_game():
+            started_state = state._replace(
+                game_started = True,
+                barrels = BarrelPosition(
+                    barrel_x = jnp.array([BARREL_START_X, -1, -1, -1]).astype(jnp.int32),
+                    barrel_y = jnp.array([BARREL_START_Y, -1, -1, -1]).astype(jnp.int32), 
+                    sprite = jnp.array([BARREL_SPRITE_RIGHT, BARREL_SPRITE_RIGHT, BARREL_SPRITE_RIGHT, BARREL_SPRITE_RIGHT]).astype(jnp.int32),
+                    moving_direction = jnp.array([MOVING_RIGHT, MOVING_RIGHT, MOVING_RIGHT, MOVING_RIGHT]).astype(jnp.int32),
+                    stage = jnp.array([6, 6, 6, 6]).astype(jnp.int32),
+                    reached_the_end=jnp.array([False, True, True, True]).astype(bool)
+                ),
+            )
+            return jax.lax.cond(
+                action == Action.FIRE,
+                lambda _: started_state,
+                lambda _: state,
+                operand=None
+            )
+        new_state = jax.lax.cond(
+            state.game_started == False,
+            lambda _: start_game(),
+            lambda _: new_state,
+            operand=None
+        )
+
+
 
         observation = self._get_observation(new_state)
         return observation, new_state, None, False, None
@@ -548,7 +650,7 @@ def load_sprites():
     hammer_down_right_level_2 = aj.loadFrame(os.path.join(MODULE_DIR, "sprites/donkeyKong/hammer_down_right_level_2.npy"), transpose=True)
     hammer_down_left_level_2 = aj.loadFrame(os.path.join(MODULE_DIR, "sprites/donkeyKong/hammer_down_left_level_2.npy"), transpose=True)
 
-    ghost = aj.loadFrame(os.path.join(MODULE_DIR, "sprites/donkeyKong/ghost.npy"), transpose=True)
+    fire = aj.loadFrame(os.path.join(MODULE_DIR, "sprites/donkeyKong/fire.npy"), transpose=True)
 
     drop_pit = aj.loadFrame(os.path.join(MODULE_DIR, "sprites/donkeyKong/drop_pit.npy"), transpose=True)
 
@@ -564,7 +666,7 @@ def load_sprites():
     SPRITES_MARIO_CLIMBING = jnp.stack([mario_climbing_right, mario_climbing_left], axis=0)
     SPRITES_HAMMER_UP = jnp.stack([hammer_up_level_1, hammer_up_level_2], axis=0)
     SPRITES_HAMMER_DOWN = jnp.stack([hammer_down_right_level_1, hammer_down_left_level_1, hammer_down_right_level_2, hammer_down_left_level_2], axis=0)
-    SPRITE_GHOST = jnp.expand_dims(ghost, axis=0)
+    SPRITE_FIRE = jnp.expand_dims(fire, axis=0)
     SPRITE_DROP_PIT = jnp.expand_dims(drop_pit, axis=0)
 
     SPRITES_BARREL = aj.load_and_pad_digits(
@@ -594,7 +696,7 @@ def load_sprites():
         SPRITES_MARIO_CLIMBING,
         SPRITES_HAMMER_UP,
         SPRITES_HAMMER_DOWN,
-        SPRITE_GHOST,
+        SPRITE_FIRE,
         SPRITE_DROP_PIT,
         SPRITES_BLUE_DIGITS,
         SPRITES_YELLOW_DIGITS,
@@ -618,7 +720,7 @@ class DonkeyKongRenderer(AtraJaxisRenderer):
             self.SPRITES_MARIO_CLIMBING,
             self.SPRITES_HAMMER_UP,
             self.SPRITES_HAMMER_DOWN,
-            self.SPRITE_GHOST,
+            self.SPRITE_FIRE,
             self.SPRITE_DROP_PIT,
             self.SPRITES_BLUE_DIGITS,
             self.SPRITES_YELLOW_DIGITS,
@@ -693,8 +795,16 @@ class DonkeyKongRenderer(AtraJaxisRenderer):
         raster = aj.render_at(raster, LEVEL_1_LIFE_BAR_2_X, LIFE_BAR_Y, frame_life_bar)
 
         # Mario
-        frame_mario = aj.get_sprite_frame(self.SPRITES_MARIO_STANDING, 0)
-        raster = aj.render_at(raster, state.mario_x, state.mario_y, frame_mario)
+        frame_mario_standing_right = aj.get_sprite_frame(self.SPRITES_MARIO_STANDING, 0)
+        frame_mario_jumping_right = aj.get_sprite_frame(self.SPRITES_MARIO_JUMPING, 0)
+        mario_x = state.mario_x
+        mario_y = state.mario_y
+        raster = jax.lax.cond(
+            state.mario_jumping,
+            lambda _: render_at_transparent(raster, mario_x, mario_y, frame_mario_jumping_right),
+            lambda _: render_at_transparent(raster, mario_x, mario_y, frame_mario_standing_right),
+            operand=None
+        )
 
         # Barrels if there are some on the field
         barrels = state.barrels
@@ -778,9 +888,9 @@ class DonkeyKongRenderer(AtraJaxisRenderer):
         frame_hammer_down = aj.get_sprite_frame(self.SPRITES_HAMMER_DOWN, 3)
         raster = aj.render_at(raster, 15, 155, frame_hammer_down)
 
-        # Ghost
-        frame_ghost = aj.get_sprite_frame(self.SPRITE_GHOST, 0)
-        raster = aj.render_at(raster, 5, 165, frame_ghost)
+        # Fire
+        frame_fire = aj.get_sprite_frame(self.SPRITE_FIRE, 0)
+        raster = aj.render_at(raster, 5, 165, frame_fire)
 
         return raster
 
@@ -808,8 +918,12 @@ if __name__ == "__main__":
     frame_by_frame = False
     while running:
 
+        for event in pygame.event.get():
+            if event.type == pygame.QUIT:
+                running = False
+
         if not frame_by_frame:
-            action = None
+            action = get_human_action()
             obs, curr_state, reward, done, info = jitted_step(curr_state, action)
 
         # Render and Display
