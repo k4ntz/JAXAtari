@@ -47,18 +47,38 @@ PLAYER_START_Y = 52 # Y Spawn position of player
 PLAYER_VELOCITY_Y = 1.5 # Y Velocity of player
 PLAYER_VELOCITY_X = 1.5 # X Velocity of player
 
+MAX_ENERGY = 1000
+MAX_SHIELDS = 24
+MAX_DTIME = 1000
+
 # -------- Player missile constants --------
 PLAYER_MISSILE_SIZE = (16, 1)
-PLAYER_MISSILE_COLOR = (54, 46, 200, 255)
+PLAYER_MISSILE_COLOR = jnp.array((54, 46, 200, 255))
 
 PLAYER_MISSILE_INITIAL_VELOCITY = 2.5 # Starting speed of player missile
 PLAYER_MISSILE_VELOCITY_MULTIPLIER = 1.1 # Multiply the current speed at a given moment of the player missile by this number
 
 # -------- Enemy Missile constants --------
-ENEMY_MISSILE_COLOR = (85, 92, 197, 255)
+ENEMY_MISSILE_COLOR = jnp.array((85, 92, 197, 255))
 
 # -------- GUI constants --------
+GUI_COLORED_BACKGROUND_SIZE = (128, 12)
+GUI_BLACK_BACKGROUND_SIZE = (56, 10)
+GUI_TEXT_SCORE_SIZE = (21, 7)
+GUI_TEXT_ENERGY_SIZE = (23, 5)
+GUI_TEXT_SHIELDS_SIZE = (23, 5)
+GUI_TEXT_DTIME_SIZE = (23, 5)
 
+GUI_COLORED_BACKGROUND_COLOR_BLUE = jnp.array((47, 90, 160, 255))
+GUI_COLORED_BACKGROUND_COLOR_GREEN = jnp.array((50, 152, 82, 255))
+GUI_COLORED_BACKGROUND_COLOR_BEIGE = jnp.array((160, 107, 50, 255))
+GUI_COLORED_BACKGROUND_COLOR_GRAY = jnp.array((182, 182, 182, 255))
+GUI_TEXT_COLOR_GRAY = jnp.array((118, 118, 118, 255))
+GUI_TEXT_COLOR_BEIGE = jnp.array((160, 107, 50, 255))
+
+GUI_BLACK_BACKGROUND_X_OFFSET = 36
+GUI_Y_SPACE_BETWEEN_PLAYING_FIELD = 10
+GUI_Y_SPACE_BETWEEN_BACKGROUNDS = 10
 
 # -------- States --------
 class MountainState(NamedTuple):
@@ -81,7 +101,9 @@ class LaserGatesState(NamedTuple):
     lower_mountains: MountainState
     upper_mountains: MountainState
     score: chex.Array
-    lives: chex.Array
+    energy: chex.Array
+    shields: chex.Array
+    dtime: chex.Array
     scroll_speed: chex.Array
     step_counter: chex.Array
     # TODO: fill
@@ -113,8 +135,17 @@ def load_sprites():
     background = aj.loadFrame(os.path.join(MODULE_DIR, "sprites/lasergates/background/background.npy"))
     lower_mountain = aj.loadFrame(os.path.join(MODULE_DIR, "sprites/lasergates/background/mountains/lower_mountain.npy"))
     upper_mountain = aj.loadFrame(os.path.join(MODULE_DIR, "sprites/lasergates/background/mountains/upper_mountain.npy"))
+
     player = aj.loadFrame(os.path.join(MODULE_DIR, "sprites/lasergates/player/player.npy"))
     player_missile = aj.loadFrame(os.path.join(MODULE_DIR, "sprites/lasergates/missiles/player_missile.npy"))
+
+    gui_colored_background = aj.loadFrame(os.path.join(MODULE_DIR, "sprites/lasergates/gui/colored_background.npy"))
+    gui_black_background = aj.loadFrame(os.path.join(MODULE_DIR, "sprites/lasergates/gui/black_background.npy"))
+    gui_text_score = aj.loadFrame(os.path.join(MODULE_DIR, "sprites/lasergates/gui/text/score.npy"))
+    gui_text_energy = aj.loadFrame(os.path.join(MODULE_DIR, "sprites/lasergates/gui/text/energy.npy"))
+    gui_text_shields = aj.loadFrame(os.path.join(MODULE_DIR, "sprites/lasergates/gui/text/shields.npy"))
+    gui_text_dtime = aj.loadFrame(os.path.join(MODULE_DIR, "sprites/lasergates/gui/text/dtime.npy"))
+
 
 
     SPRITE_BACKGROUND = background
@@ -123,12 +154,25 @@ def load_sprites():
     SPRITE_LOWER_MOUNTAIN = lower_mountain
     SPRITE_UPPER_MOUNTAIN = upper_mountain
 
+    SPRITE_GUI_COLORED_BACKGROUND = gui_colored_background
+    SPRITE_GUI_BLACK_BACKGROUND = gui_black_background
+    SPRITE_GUI_TEXT_SCORE = gui_text_score
+    SPRITE_GUI_TEXT_ENERGY = gui_text_energy
+    SPRITE_GUI_TEXT_SHIELDS = gui_text_shields
+    SPRITE_GUI_TEXT_DTIME = gui_text_dtime
+
     return (
         SPRITE_BACKGROUND,
         SPRITE_PLAYER,
         SPRITE_PLAYER_MISSILE,
         SPRITE_LOWER_MOUNTAIN,
         SPRITE_UPPER_MOUNTAIN,
+        SPRITE_GUI_COLORED_BACKGROUND,
+        SPRITE_GUI_BLACK_BACKGROUND,
+        SPRITE_GUI_TEXT_SCORE,
+        SPRITE_GUI_TEXT_ENERGY,
+        SPRITE_GUI_TEXT_SHIELDS,
+        SPRITE_GUI_TEXT_DTIME,
     )
 
 (
@@ -137,6 +181,12 @@ def load_sprites():
     SPRITE_PLAYER_MISSILE,
     SPRITE_LOWER_MOUNTAIN,
     SPRITE_UPPER_MOUNTAIN,
+    SPRITE_GUI_COLORED_BACKGROUND,
+    SPRITE_GUI_BLACK_BACKGROUND,
+    SPRITE_GUI_TEXT_SCORE,
+    SPRITE_GUI_TEXT_ENERGY,
+    SPRITE_GUI_TEXT_SHIELDS,
+    SPRITE_GUI_TEXT_DTIME,
 ) = load_sprites()
 
 # -------- Game Logic --------
@@ -377,8 +427,10 @@ class JaxLaserGates(JaxEnvironment[LaserGatesState, LaserGatesObservation, Laser
             player_missile=initial_player_missile,
             lower_mountains=initial_lower_mountains,
             upper_mountains=initial_upper_mountains,
-            score=jnp.array(0),
-            lives=jnp.array(3),
+            score=jnp.array(0), # Start with no intial score
+            energy=jnp.array(MAX_ENERGY), # As the manual says, energy is consumed at a regular pace. We use 1000 for the initial value and subtract one for every frame to match the timing of the real game.
+            shields=jnp.array(MAX_SHIELDS), # As the manual says, the Dante Dart starts with 24 shield units
+            dtime=jnp.array(MAX_DTIME), # Same idea as energy.
             scroll_speed=jnp.array(SCROLL_SPEED),
             step_counter=jnp.array(0),
         )
@@ -402,6 +454,8 @@ class JaxLaserGates(JaxEnvironment[LaserGatesState, LaserGatesObservation, Laser
 
         new_scroll_speed = jnp.where(state.player_x != PLAYER_BOUNDS[0][1], SCROLL_SPEED, SCROLL_SPEED * SCROLL_MULTIPLIER)
 
+        new_energy = state.energy - 1
+
         return_state = state._replace(
             player_x=new_player_x,
             player_y=new_player_y,
@@ -410,6 +464,7 @@ class JaxLaserGates(JaxEnvironment[LaserGatesState, LaserGatesObservation, Laser
             lower_mountains=new_lower_mountains_state,
             upper_mountains=new_upper_mountains_state,
             scroll_speed=new_scroll_speed,
+            energy=new_energy,
             step_counter=state.step_counter + 1
         )
 
@@ -492,25 +547,164 @@ class LaserGatesRenderer(AtraJaxisRenderer):
             SPRITE_UPPER_MOUNTAIN,
         )
 
+        # -------- Render gui --------
+
+        sprite_gui_colored_background_blue_bg = recolor_sprite(SPRITE_GUI_COLORED_BACKGROUND, GUI_COLORED_BACKGROUND_COLOR_BLUE)
+        sprite_gui_colored_background_green_bg = recolor_sprite(SPRITE_GUI_COLORED_BACKGROUND, GUI_COLORED_BACKGROUND_COLOR_GREEN)
+        sprite_gui_colored_background_beige_bg = recolor_sprite(SPRITE_GUI_COLORED_BACKGROUND, GUI_COLORED_BACKGROUND_COLOR_BEIGE)
+        sprite_gui_colored_background_gray_bg = recolor_sprite(SPRITE_GUI_COLORED_BACKGROUND, GUI_COLORED_BACKGROUND_COLOR_GRAY)
+
+        # Colored backgrounds ---------------
+
+        score_col_bg_y = 111 + GUI_Y_SPACE_BETWEEN_PLAYING_FIELD
+        raster = aj.render_at(
+            raster,
+            16,
+            score_col_bg_y,
+            sprite_gui_colored_background_blue_bg,
+        ) # Colored background for score
+
+        energy_col_bg_y = 111 + GUI_Y_SPACE_BETWEEN_PLAYING_FIELD + GUI_COLORED_BACKGROUND_SIZE[1] + GUI_Y_SPACE_BETWEEN_BACKGROUNDS
+        raster = aj.render_at(
+            raster,
+            16,
+            energy_col_bg_y,
+            sprite_gui_colored_background_green_bg,
+        ) # Colored background for energy
+
+        shields_col_bg_y = 111 + GUI_Y_SPACE_BETWEEN_PLAYING_FIELD + 2 * GUI_COLORED_BACKGROUND_SIZE[1] + 2 * GUI_Y_SPACE_BETWEEN_BACKGROUNDS
+        raster = aj.render_at(
+            raster,
+            16,
+            shields_col_bg_y,
+            sprite_gui_colored_background_green_bg,
+        ) # Colored background for shields
+
+        dtime_col_bg_y = 111 + GUI_Y_SPACE_BETWEEN_PLAYING_FIELD + 3 * GUI_COLORED_BACKGROUND_SIZE[1] + 3 * GUI_Y_SPACE_BETWEEN_BACKGROUNDS
+        raster = aj.render_at(
+            raster,
+            16,
+            dtime_col_bg_y,
+            sprite_gui_colored_background_green_bg,
+        ) # Colored background for d-time # TODO: Implement color rendering logic
+
+        # Black backgrounds ---------------
+
+        raster = aj.render_at(
+            raster,
+            16 + GUI_BLACK_BACKGROUND_X_OFFSET,
+            score_col_bg_y + 1,
+            SPRITE_GUI_BLACK_BACKGROUND,
+        ) # Black background for score
+
+        raster = aj.render_at(
+            raster,
+            16 + GUI_BLACK_BACKGROUND_X_OFFSET,
+            energy_col_bg_y + 1,
+            SPRITE_GUI_BLACK_BACKGROUND,
+        ) # Black background for energy
+
+        raster = aj.render_at(
+            raster,
+            16 + GUI_BLACK_BACKGROUND_X_OFFSET,
+            shields_col_bg_y + 1,
+            SPRITE_GUI_BLACK_BACKGROUND,
+        ) # Black background for shields
+
+        raster = aj.render_at(
+            raster,
+            16 + GUI_BLACK_BACKGROUND_X_OFFSET,
+            dtime_col_bg_y + 1,
+            SPRITE_GUI_BLACK_BACKGROUND,
+        ) # Black background for d-time
+
+        # Text ---------------
+
+        required_text_and_bar_color = jnp.where(jnp.array(True), GUI_TEXT_COLOR_GRAY, GUI_TEXT_COLOR_BEIGE)
+        raster = aj.render_at(
+            raster,
+            16 + GUI_BLACK_BACKGROUND_X_OFFSET + 5,
+            score_col_bg_y + 2,
+            recolor_sprite(SPRITE_GUI_TEXT_SCORE, required_text_and_bar_color),
+        ) # score text
+
+        raster = aj.render_at(
+            raster,
+            16 + GUI_BLACK_BACKGROUND_X_OFFSET + 5,
+            energy_col_bg_y + 2,
+            recolor_sprite(SPRITE_GUI_TEXT_ENERGY, required_text_and_bar_color),
+        ) # energy text
+
+        raster = aj.render_at(
+            raster,
+            16 + GUI_BLACK_BACKGROUND_X_OFFSET + 5,
+            shields_col_bg_y + 2,
+            recolor_sprite(SPRITE_GUI_TEXT_SHIELDS, required_text_and_bar_color),
+        ) # shields text
+
+        raster = aj.render_at(
+            raster,
+            16 + GUI_BLACK_BACKGROUND_X_OFFSET + 5,
+            dtime_col_bg_y + 2,
+            recolor_sprite(SPRITE_GUI_TEXT_DTIME, required_text_and_bar_color),
+        ) # d-time text
+
+        # Bars ---------------
+
+        raster = aj.render_bar(
+            raster, # raster
+            16 + GUI_BLACK_BACKGROUND_X_OFFSET + 4, # x pos
+            energy_col_bg_y + 8, # y pos
+            state.energy, # current value
+            MAX_ENERGY, # maximum value
+            40, # width
+            2, # height
+            required_text_and_bar_color, # color of filled part
+            jnp.array((0, 0, 0, 0)) # color of unfilled part
+        ) # energy bar
+
+        raster = aj.render_bar(
+            raster, # raster
+            16 + GUI_BLACK_BACKGROUND_X_OFFSET + 4, # x pos
+            shields_col_bg_y + 8, # y pos
+            state.shields, # current value
+            MAX_SHIELDS, # maximum value
+            31, # width
+            2, # height
+            required_text_and_bar_color, # color of filled part
+            jnp.array((0, 0, 0, 0)) # color of unfilled part
+        ) # shields bar
+
+        raster = aj.render_bar(
+            raster, # raster
+            16 + GUI_BLACK_BACKGROUND_X_OFFSET + 4, # x pos
+            dtime_col_bg_y + 8, # y pos
+            state.dtime, # current value
+            MAX_DTIME, # maximum value
+            40, # width
+            2, # height
+            required_text_and_bar_color, # color of filled part
+            jnp.array((0, 0, 0, 0)) # color of unfilled part
+        ) # d-time bar TODO: Implement correct color picking
+
         # -------- Render player --------
-        frame_player = recolor_sprite(SPRITE_PLAYER, jnp.array(PLAYER_COLOR))
+        colored_player = recolor_sprite(SPRITE_PLAYER, jnp.array(PLAYER_COLOR))
         raster = aj.render_at(
             raster,
             state.player_x,
             state.player_y,
-            frame_player,
+            colored_player,
             flip_horizontal=state.player_facing_direction < 0,
         )
 
         # -------- Render player missile --------
-        frame_player = recolor_sprite(SPRITE_PLAYER_MISSILE, jnp.array(PLAYER_MISSILE_COLOR))
-
+        colored_player_missile = recolor_sprite(SPRITE_PLAYER_MISSILE, PLAYER_MISSILE_COLOR)
         raster = jnp.where(state.player_missile.direction != 0,
                       aj.render_at(
                       raster,
                       state.player_missile.x,
                       state.player_missile.y,
-                      frame_player,
+                      colored_player_missile,
                       flip_horizontal=state.player_missile.direction < 0,
                       ),
                   raster
