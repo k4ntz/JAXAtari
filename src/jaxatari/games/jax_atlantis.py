@@ -203,7 +203,8 @@ class Renderer_AtraJaxis(AtraJaxisRenderer):
 
             def _do(r):
                 sprite = jax.lax.cond(enemy_type == 0, lambda _: enemy_sprite_blue,  # if enemy_type == 0 -> sprite = blue sprite
-                                      lambda _: enemy_sprite_red, None)  # else -> sprite = red sprite
+                                      lambda _: jax.lax.cond(enemy_type == 1, lambda _: enemy_sprite_blue,  # if enemy_type == 1 -> sprite = blue sprite
+                                                             lambda _: enemy_sprite_red, None), None)  # else -> sprite = red sprite
                 return aj.render_at(r, ex, ey, sprite, flip_horizontal=flip)
 
             return jax.lax.cond(active, _do, lambda r: r, ras)
@@ -495,9 +496,9 @@ class JaxAtlantis(JaxEnvironment[AtlantisState, AtlantisObservation, AtlantisInf
             dx = jnp.where(go_left, -speed, speed)
             # dx = jnp.where(go_left, -cfg.enemy_speed, cfg.enemy_speed)
 
-            # assemble the enemy. for now  the type will randomly chosen without further probability logics/...
+            # assemble the enemy. for now the type will randomly chosen without further probability logics/...
             # TODO: change later
-            type_id = jax.random.randint(rng_type, (), 0, 2, dtype=jnp.int32)
+            type_id = jax.random.randint(rng_type, (), 0, 3, dtype=jnp.int32)
             # also sets the enemy to be active (last entry is 1)
             new_enemy = jnp.array(
                 [start_x, lane_y, dx, type_id, 0, 1],
@@ -651,6 +652,49 @@ class JaxAtlantis(JaxEnvironment[AtlantisState, AtlantisObservation, AtlantisInf
         6. deactive those objects
         7. update score
         """
+        def handle_collision(l_hit_matrix, l_state: AtlantisState):
+            # check if bullet collided with any enemy
+            bullet_hit = jnp.any(l_hit_matrix, axis=1)  # (B,)
+            # check if enemy was hit by any bullet
+            enemy_hit = jnp.any(l_hit_matrix, axis=0)  # (E,)
+
+            # which cannon was used (check horizontal velocity)
+            dx = l_state.bullets[:, 2]
+            side_cannon_hit = jnp.any(l_hit_matrix & (dx[:, None] != 0),
+                                      axis=0)  # vector containing hits made with a side cannon
+
+            # ---- score calculation ----
+            types = l_state.enemies[:, 3]  # get all enemy types
+            # calculate points per enemy (no matter if it was hit or not)
+            # enemy type 0: center=100, side=200
+            points_type_0 = jnp.where(types == 0, jnp.where(side_cannon_hit, 200, 100), 0)
+            # enemy type 1: center=100, side=200
+            points_type_1 = jnp.where(types == 1, jnp.where(side_cannon_hit, 200, 100), 0)
+            # enemy type 2: center=1000, side=2000
+            points_type_2 = jnp.where(types == 2, jnp.where(side_cannon_hit, 2000, 1000), 0)
+            points_per_enemy = points_type_0 + points_type_1 + points_type_2
+
+            # multiply points per enemy with enemy_hit to only get points of hit enemies; then sum points up
+            points = jnp.sum(points_per_enemy * enemy_hit.astype(jnp.int32))
+            # update score
+            new_score = l_state.score + points
+
+            # if at least 1 type 2 enemy is hit, remove all enemies
+            type_2_killed = jnp.any(enemy_hit & (types == 2))
+            enemy_hit = jnp.where(type_2_killed, jnp.ones_like(enemy_hit), enemy_hit)
+            new_number_enemies_wave_remaining = jnp.where(type_2_killed, 0, l_state.number_enemies_wave_remaining)
+
+            # deactivate bullets and enemies
+            new_bullet_alive = l_state.bullets_alive & (~bullet_hit)
+
+            new_enemy_flags = (l_state.enemies[:, 5] == 1) & (~enemy_hit)
+            enemies_updated = l_state.enemies.at[:, 5].set(new_enemy_flags.astype(jnp.int32))
+
+            return l_state._replace(bullets_alive=new_bullet_alive,
+                                    enemies=enemies_updated,
+                                    score=new_score,
+                                    number_enemies_wave_remaining=new_number_enemies_wave_remaining)
+        
         cfg = self.config
 
         bullets_x, bullets_y = state.bullets[:, 0], state.bullets[:, 1]  # (B,)
@@ -683,46 +727,8 @@ class JaxAtlantis(JaxEnvironment[AtlantisState, AtlantisObservation, AtlantisInf
         hit_matrix &= state.bullets_alive[:, None]
         hit_matrix &= (state.enemies[:, 5] == 1)[None, :]
 
-        # check if bullet collided with any enemy
-        bullet_hit = jnp.any(hit_matrix, axis=1)  # (B,)
-        # check if enemy was hit by any bullet
-        enemy_hit = jnp.any(hit_matrix, axis=0)  # (E,)
-
-        # which cannon was used (check horizontal velocity)
-        dx = state.bullets[:, 2]
-        side_cannon_hit = jnp.any(hit_matrix & (dx[:, None] != 0), axis=0)  # vector containing hits made with a side cannon
-
-        # ---- score calculation ----
-        types = state.enemies[:, 3]  # get all enemy types
-        # calculate points per enemy (no matter if it was hit or not)
-        # enemy type 0: center=100, side=200
-        points_type_0 = jnp.where(types == 0, jnp.where(side_cannon_hit, 200, 100), 0)
-        # enemy type 1: center=1000, side=2000
-        points_type_1 = jnp.where(types == 1, jnp.where(side_cannon_hit, 2000, 1000), 0)
-        points_per_enemy = points_type_0 + points_type_1
-
-        # multiply points per enemy with enemy_hit to only get points of hit enemies; then sum points up
-        points = jnp.sum(points_per_enemy * enemy_hit.astype(jnp.int32))
-        # update score
-        new_score = state.score + points
-
-        # if at least 1 type 1 enemy is hit, remove all enemies
-        type_1_killed = jnp.any(enemy_hit & (types == 1))
-        enemy_hit = jnp.where(type_1_killed, jnp.ones_like(enemy_hit), enemy_hit)
-        new_number_enemies_wave_remaining = jnp.where(type_1_killed, 0,state.number_enemies_wave_remaining)
-
-        # deactivate bullets and enemies
-        new_bullet_alive = state.bullets_alive & (~bullet_hit)
-
-        new_enemy_flags = (state.enemies[:, 5] == 1) & (~enemy_hit)
-        enemies_updated = state.enemies.at[:, 5].set(new_enemy_flags.astype(jnp.int32))
-
-        return state._replace(bullets_alive=new_bullet_alive,
-                              enemies=enemies_updated,
-                              score=new_score,
-                              number_enemies_wave_remaining=new_number_enemies_wave_remaining)
-
-
+        state = handle_collision(hit_matrix, state)
+        return state
 
     @partial(jax.jit, static_argnums=(0,))
     def _update_wave(self, state: AtlantisState) -> AtlantisState:
