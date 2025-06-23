@@ -63,21 +63,28 @@ def update_river_banks(state: RiverraidState) -> RiverraidState:
 
     # determine IF the river is to be altered
     # Benutze den aufgeteilten Subkey, statt einen neuen aus dem turn_step zu generieren#
-    new_river_state, new_alternation_cooldown = jax.lax.cond(
-        (state.river_alternation_length <= 0) & (state.alternation_cooldown <= 0),
+    new_river_state = jax.lax.cond(
+        state.river_alternation_length <= 0,
         lambda state: (jax.random.choice(
-            alter_select_key, jnp.array([0, 1, 2]), p=jnp.array([0.80, 0.20, 0.20])
-        ), jnp.array(20)),
-        lambda state: (state.river_state, state.alternation_cooldown - 1),
+            alter_select_key, jnp.array([0, 1, 2]), p=jnp.array([0.60, 0.20, 0.20])
+        )),
+        lambda state: state.river_state,
         operand=state
     )
 
     jax.debug.print("Riverraid: new_river_state: {new_river_state}", new_river_state=new_river_state)
     new_alternation_length = jax.lax.cond(state.river_alternation_length <= 0,
-                                          lambda state: jax.random.randint(alter_length_key, (), 1, 3),
+                                          lambda state: jax.random.randint(alter_length_key, (), 1, 8),
                                           lambda state: state.river_alternation_length - 1,
                                           operand=state
                                           )
+    new_alternation_length, new_river_state, new_alternation_cooldown = jax.lax.cond(
+        (state.alternation_cooldown > 0) & (state.river_alternation_length <= 0),
+        lambda state: (jnp.array(0), jnp.array(0), state.alternation_cooldown - 1),
+        lambda state: (new_alternation_length, new_river_state, new_alternation_length + 10),
+        operand=state
+    )
+
     state = state._replace( river_alternation_length=new_alternation_length,
                             river_state=new_river_state,
                             alternation_cooldown=new_alternation_cooldown)
