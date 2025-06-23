@@ -18,7 +18,7 @@ from jaxatari.rendering import atraJaxis as aj
 # -------- Game constants --------
 SCREEN_WIDTH = 160
 SCREEN_HEIGHT = 200
-DEFAULT_RIVER_WIDTH = 90
+DEFAULT_RIVER_WIDTH = 80
 
 
 class RiverraidState(NamedTuple):
@@ -29,7 +29,9 @@ class RiverraidState(NamedTuple):
     river_right: chex.Array
     river_inner_left: chex.Array
     river_inner_right: chex.Array
-    river_state: chex.Array # 0 keep straight, 1 expanse, 2 shrinking, 3 splitting, 4 splitted expanse, 5 splitted shrinking, 6 splitted straight, 7 terminate island
+    river_state: chex.Array # 0 keep straight, 1 expanse, 2 shrinking, 3 island transition
+    river_island_present: chex.Array #0 no, 1 yes
+    alternation_cooldown: chex.Array
     river_alternation_length: chex.Array
     river_ongoing_alternation: chex.Array
 
@@ -47,138 +49,7 @@ class RiverraidObservation(NamedTuple):
 def update_river_banks(state: RiverraidState) -> RiverraidState:
     key = state.master_key
     key, alter_check_key, alter_select_key, alter_length_key = jax.random.split(key, 4)
-    jax.debug.print("river_state: {}", state.river_state)
-    jax.debug.print("river_alternation_length: {}", state.river_alternation_length)
 
-    def select_alternation(state: RiverraidState):
-        new_river_alternation = jax.random.randint(alter_select_key, (), 0, 3)
-        alternation_length = jax.random.randint(alter_length_key, (), 4, 9)
-        return state._replace(river_ongoing_alternation=new_river_alternation,
-                              river_alternation_length=alternation_length)
-
-    def alter_expanse(state: RiverraidState) -> RiverraidState:
-        def normal_expanse(state: RiverraidState) -> RiverraidState:
-            jax.debug.print("Expanding river banks")
-            new_top_left = state.river_left[1] - 3
-            new_top_right = state.river_right[1] + 3
-
-            new_river_left = state.river_left.at[0].set(new_top_left)
-            new_river_right = state.river_right.at[0].set(new_top_right)
-
-            new_alter_length = state.river_alternation_length - 1
-            new_river_state = jnp.array(1)
-            return state._replace(river_left=new_river_left,
-                                  river_right=new_river_right,
-                                  river_alternation_length=new_alter_length,
-                                  river_state=new_river_state)
-
-        def island_expanse(state: RiverraidState) -> RiverraidState:
-            jax.debug.print("Expanding island banks")
-            new_river_inner_left = state.river_inner_left.at[0].set(state.river_inner_left[1])
-            new_river_inner_right = state.river_inner_right.at[0].set(state.river_inner_right[1])
-            new_alter_length = state.river_alternation_length - 1
-            new_river_state = jnp.array(4)
-            return state._replace(river_inner_left=new_river_inner_left,
-                                  river_inner_right=new_river_inner_right,
-                                  river_alternation_length=new_alter_length,
-                                  river_state=new_river_state)
-
-
-        return jax.lax.cond(state.river_state <= 3,
-                            lambda state: normal_expanse(state),
-                            lambda state: island_expanse(state),
-                            operand=state)
-
-    def alter_shrink(state: RiverraidState) -> RiverraidState:
-        def normal_shrink(state: RiverraidState) -> RiverraidState:
-            jax.debug.print("Shrinking river banks")
-            new_top_left = state.river_left[1] + 3
-            new_top_right = state.river_right[1] - 3
-
-            new_river_left = state.river_left.at[0].set(new_top_left)
-            new_river_right = state.river_right.at[0].set(new_top_right)
-
-            new_alter_length = state.river_alternation_length - 1
-            new_river_state = jnp.array(2)
-            return state._replace(river_left=new_river_left,
-                                  river_right=new_river_right,
-                                  river_alternation_length=new_alter_length,
-                                  river_state=new_river_state)
-
-        def island_shrink(state: RiverraidState) -> RiverraidState:
-            jax.debug.print("Shrinking island banks")
-            new_river_inner_left = state.river_inner_left.at[0].set(state.river_inner_left[1] + 3)
-            new_river_inner_right = state.river_inner_right.at[0].set(state.river_inner_right[1] - 3)
-            new_river_left = state.river_left.at[0].set(state.river_left[1])
-            new_river_right = state.river_right.at[0].set(state.river_right[1])
-            new_alter_length = state.river_alternation_length - 1
-            new_river_state = jnp.array(5)
-
-            return state._replace(river_inner_left=new_river_inner_left,
-                                  river_inner_right=new_river_inner_right,
-                                  river_left=new_river_left,
-                                  river_right=new_river_right,
-                                  river_alternation_length=new_alter_length,
-                                  river_state=new_river_state)
-
-        return jax.lax.cond(state.river_state < 3,
-                            lambda state: normal_shrink(state),
-                            lambda state: island_shrink(state),
-                            operand=state)
-
-    def alter_split(state: RiverraidState) -> RiverraidState:
-        def split(state: RiverraidState) -> RiverraidState:
-            def initiate_split(state: RiverraidState) -> RiverraidState:
-                new_river_inner_left = state.river_inner_left.at[0].set(SCREEN_WIDTH // 2 - 1)
-                new_river_inner_right = state.river_inner_right.at[0].set(SCREEN_WIDTH // 2 + 1)
-                new_river_left = state.river_left.at[0].set(state.river_left[1])
-                new_river_right = state.river_right.at[0].set(state.river_right[1])
-                new_river_state = jnp.array(3)
-                return state._replace(river_inner_left=new_river_inner_left,
-                                      river_inner_right=new_river_inner_right,
-                                      river_left=new_river_left,
-                                      river_right=new_river_right,
-                                      river_state=new_river_state)
-
-            def continue_split(state: RiverraidState) -> RiverraidState:
-                new_river_inner_left = state.river_inner_left.at[0].set(state.river_inner_left[1] - 3)
-                new_river_inner_right = state.river_inner_right.at[0].set(state.river_inner_right[1] + 3)
-                new_river_left = state.river_left.at[0].set(state.river_left[1])
-                new_river_right = state.river_right.at[0].set(state.river_right[1])
-                new_alter_length = state.river_alternation_length - 1
-                new_river_state = jnp.array(3)
-                return state._replace(river_inner_left=new_river_inner_left,
-                                      river_inner_right=new_river_inner_right,
-                                      river_left=new_river_left,
-                                      river_right=new_river_right,
-                                      river_alternation_length=new_alter_length,
-                                      river_state=new_river_state)
-
-            return jax.lax.cond(state.river_inner_left[1] < 0,
-                                lambda state: initiate_split(state),
-                                lambda state: continue_split(state),
-                                operand=state)
-
-        return jax.lax.cond(
-            True,
-            lambda state: split(state),
-            lambda state: state,
-            operand=state
-        )
-
-    def continue_straight(state: RiverraidState) -> RiverraidState:
-        jax.debug.print("Continuing straight river")
-        return jax.lax.cond(
-            (state.river_state == 0) | (state.river_state == 6),
-            lambda state: state._replace(
-                river_left=state.river_left.at[0].set(state.river_left[1]),
-                river_right=state.river_right.at[0].set(state.river_right[1]),
-                river_inner_left=state.river_inner_left.at[0].set(state.river_inner_left[1]),
-                river_inner_right=state.river_inner_right.at[0].set(state.river_inner_right[1])
-            ),
-            lambda state: state,
-            state
-        )
 
     # Scroll the screen down
     scrolled_left = jnp.roll(state.river_left, 1)
@@ -191,82 +62,116 @@ def update_river_banks(state: RiverraidState) -> RiverraidState:
                            river_inner_right=scrolled_inner_right)
 
     # determine IF the river is to be altered
-    # Benutze den aufgeteilten Subkey, statt einen neuen aus dem turn_step zu generieren
-    alter_river = jax.random.bernoulli(alter_check_key, p=0.05)
-    jax.debug.print("alter_river: {alter_river}", alter_river=alter_river)
-
-    # If the river is to be altered, select the type of alteration
-    state = jax.lax.cond(
-        state.river_alternation_length <= 0,
-        lambda state: jax.lax.cond(
-            alter_river,
-            lambda state: select_alternation(state),
-            lambda state: continue_straight(state),
-            operand=state
-        ),
-        lambda state: state,
+    # Benutze den aufgeteilten Subkey, statt einen neuen aus dem turn_step zu generieren#
+    new_river_state, new_alternation_cooldown = jax.lax.cond(
+        (state.river_alternation_length <= 0) & (state.alternation_cooldown <= 0),
+        lambda state: (jax.random.choice(
+            alter_select_key, jnp.array([0, 1, 2]), p=jnp.array([0.80, 0.20, 0.20])
+        ), jnp.array(20)),
+        lambda state: (state.river_state, state.alternation_cooldown - 1),
         operand=state
     )
 
-    # If an alternation is in progress, continue with the alteration
-    state = jax.lax.cond(
-        state.river_alternation_length > 0,
-        lambda state: lax.switch(
-            state.river_ongoing_alternation,
-            [
-                lambda state: alter_expanse(state),
-                lambda state: alter_shrink(state),
-                lambda state: alter_split(state)
-            ],
+    jax.debug.print("Riverraid: new_river_state: {new_river_state}", new_river_state=new_river_state)
+    new_alternation_length = jax.lax.cond(state.river_alternation_length <= 0,
+                                          lambda state: jax.random.randint(alter_length_key, (), 1, 3),
+                                          lambda state: state.river_alternation_length - 1,
+                                          operand=state
+                                          )
+    state = state._replace( river_alternation_length=new_alternation_length,
+                            river_state=new_river_state,
+                            alternation_cooldown=new_alternation_cooldown)
+
+
+
+    def straight(state: RiverraidState) -> RiverraidState:
+
+        new_river_left = state.river_left.at[0].set(state.river_left[1])
+        new_river_right = state.river_right.at[0].set(state.river_right[1])
+        jax.debug.print("straight state: {state}", state=state.river_state)
+        return state._replace(river_left=new_river_left,
+                              river_right=new_river_right)
+
+    def no_island_branch(state: RiverraidState) -> RiverraidState:
+        def expanse(state: RiverraidState) -> RiverraidState:
+            new_river_left = state.river_left.at[0].set(state.river_left[1] - 3)
+            new_river_right = state.river_right.at[0].set(state.river_right[1] + 3)
+            return state._replace(river_left=new_river_left,
+                                  river_right=new_river_right)
+
+        def shrink(state: RiverraidState) -> RiverraidState:
+            new_river_left = state.river_left.at[0].set(state.river_left[1] + 3)
+            new_river_right = state.river_right.at[0].set(state.river_right[1] - 3)
+            return state._replace(river_left=new_river_left,
+                                  river_right=new_river_right)
+
+        jax.debug.print("Riverraid: river_state: {state.river_state}", state=state)
+        return lax.switch(
+            state.river_state,
+            [straight, expanse, shrink],
             state
-        ),
-        lambda state: state,
-        operand=state
-    )
-
-
-    def terminate_island(state: RiverraidState) -> RiverraidState:
-        jax.debug.print("Terminating island")
-        new_river_inner_left = state.river_inner_left.at[0].set(-1)
-        new_river_inner_right = state.river_inner_right.at[0].set(-1)
-        new_river_state = jnp.array(0)
-        return state._replace(river_inner_left=new_river_inner_left,
-                              river_inner_right=new_river_inner_right,
-                              river_state=new_river_state)
-
-    state = jax.lax.cond(
-        state.river_alternation_length <= 0,
-        lambda state: jax.lax.cond(
-            state.river_inner_left[0] >= state.river_inner_right[0],
-            lambda state: state._replace(river_state=jnp.array(0)),
-            lambda state: terminate_island(state),
-            operand=state
-        ),
-        lambda state: state,
-        operand=state
-    )
-
-    min_river_width = 15
-    max_river_width = 90
-    new_left = state.river_left.at[0].set(
-        lax.clamp(
-            state.river_right[1] - max_river_width,
-            state.river_left[0],
-            state.river_right[1] - min_river_width,
         )
-    )
-    new_right = state.river_right.at[0].set(
-        lax.clamp(
-            state.river_left[1] + min_river_width,
-            state.river_right[0],
-            state.river_left[1] + max_river_width,
+
+
+    def island_branch(state: RiverraidState):
+        def expanse(state: RiverraidState) -> RiverraidState:
+            new_river_inner_left = state.river_inner_left.at[0].set(state.river_inner_left[1] - 3)
+            new_river_inner_right = state.river_inner_right.at[0].set(state.river_inner_right[1] + 3)
+            new_left = state.river_left.at[0].set(state.river_left[1])
+            new_right = state.river_right.at[0].set(state.river_right[1])
+            return state._replace(river_inner_left=new_river_inner_left,
+                                  river_inner_right=new_river_inner_right,
+                                  river_left=new_left,
+                                  river_right=new_right)
+
+        def shrink(state: RiverraidState) -> RiverraidState:
+            new_river_inner_left = state.river_inner_left.at[0].set(state.river_inner_left[1] + 3)
+            new_river_inner_right = state.river_inner_right.at[0].set(state.river_inner_right[1] - 3)
+            new_left = state.river_left.at[0].set(state.river_left[1])
+            new_right = state.river_right.at[0].set(state.river_right[1])
+            return state._replace(river_inner_left=new_river_inner_left,
+                                  river_inner_right=new_river_inner_right,
+                                  river_left=new_left,
+                                  river_right=new_right)
+
+        return lax.switch(
+            state.river_state,
+            [straight, expanse, shrink],
+            state
         )
-    )
+
+
+    state = jax.lax.cond(state.river_island_present == 0,
+                 lambda state: no_island_branch(state),
+                 lambda state: island_branch(state),
+                 operand=state)
+
+
+    min_river_width = 15.0
+    max_river_width = 130.0
+    proposed_left = state.river_left[0]
+    proposed_right = state.river_right[0]
+
+    proposed_width = (proposed_right - proposed_left).astype(jnp.float32)
+    proposed_center = (proposed_left + proposed_right).astype(jnp.float32) / 2.0
+
+    clamped_width = lax.clamp(min_river_width, proposed_width, max_river_width)
+
+    min_center = clamped_width / 2.0
+    max_center = SCREEN_WIDTH - (clamped_width / 2.0)
+    clamped_center = lax.clamp(min_center, proposed_center, max_center)
+
+    final_left = jnp.round(clamped_center - clamped_width / 2.0).astype(jnp.int32)
+    final_right = (final_left + jnp.round(clamped_width).astype(jnp.int32))
+
+    new_left = state.river_left.at[0].set(final_left)
+    new_right = state.river_right.at[0].set(final_right)
+
     state = state._replace(
         river_left=new_left,
         river_right=new_right,
+        master_key=key
     )
-    state = state._replace(master_key=key)
     return state
 
 
@@ -307,7 +212,10 @@ class JaxRiverraid(JaxEnvironment):
                                river_state=jnp.array(0),
                                river_alternation_length=jnp.array(0),
                                master_key=initial_key,
-                               river_ongoing_alternation=jnp.array(0))
+                               river_ongoing_alternation=jnp.array(0),
+                               river_island_present=jnp.array(0),
+                               alternation_cooldown=jnp.array(10),
+                               )
         observation = self._get_observation(state)
         return observation, state
 
