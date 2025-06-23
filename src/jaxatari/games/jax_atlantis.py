@@ -14,6 +14,7 @@ from functools import partial
 from jaxatari.rendering import atraJaxis as aj
 from jaxatari.renderers import AtraJaxisRenderer
 from jaxatari.environment import JaxEnvironment, JAXAtariAction as Action
+import jaxatari.spaces as spaces
 
 
 @dataclass(frozen=True)
@@ -214,12 +215,7 @@ class JaxAtlantis(JaxEnvironment[AtlantisState, AtlantisObservation, AtlantisInf
         if reward_funcs is not None:
             reward_funcs = tuple(reward_funcs)
         self.reward_funcs = reward_funcs
-        self.action_set = [
-            Action.NOOP,
-            Action.FIRE,  # centre cannon
-            Action.LEFTFIRE,  # left cannon
-            Action.RIGHTFIRE,  # right cannon
-        ]
+
 
     def reset(
         self, key: jax.random.PRNGKey = jax.random.PRNGKey(42)
@@ -783,12 +779,15 @@ class JaxAtlantis(JaxEnvironment[AtlantisState, AtlantisObservation, AtlantisInf
         """
         return False
 
-    @partial(jax.jit, static_argnums=(0,))
-    def get_action_space(self) -> jnp.ndarray:
+    def action_space(self) -> spaces.Discrete:
+        """Returns the action space for Atlantis.
+        Actions are:
+        0: NOOP
+        1: FIRE
+        11: RIGHTFIRE
+        12: LEFTFIRE
         """
-        Placeholder done: never terminates.
-        """
-        return jnp.array(self.action_set)
+        return spaces.Discrete(int(Action.LEFTFIRE) + 1)
 
 
 # Keyboard inputs
