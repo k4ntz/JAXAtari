@@ -61,6 +61,7 @@ class EntityPosition(NamedTuple):
 
 class AtlantisState(NamedTuple):
     score: chex.Array # tracks the current score
+    reward: chex.Array
     score_spent: chex.Array # tracks how much was spent on repair
     wave: chex.Array #tracks which wave we are in
 
@@ -795,11 +796,11 @@ class JaxAtlantis(JaxEnvironment[AtlantisState, AtlantisObservation, AtlantisInf
         )
         observation = self._get_observation(state)
         info = AtlantisInfo(time=jnp.array(0, dtype=jnp.int32), score=state.score)
-        reward = state.score - previous_state.score
+        state.reward = state.score - previous_state.score
         # done = False  # Never terminates for now
         done = jnp.where(state.score < 10**GameConfig.max_digits_for_score, False, True)  # if score > max displayable value -> done = true
 
-        return observation, state, reward, done, info
+        return observation, state, state.reward, done, info
 
     @partial(jax.jit, static_argnums=(0,))
     def _get_observation(self, state: "AtlantisState") -> "AtlantisObservation":
@@ -835,7 +836,7 @@ class JaxAtlantis(JaxEnvironment[AtlantisState, AtlantisObservation, AtlantisInf
         """
         Placeholder reward: always zero.
         """
-        return 0.0
+        return state.reward
 
     @partial(jax.jit, static_argnums=(0,))
     def _get_done(self, state: AtlantisState) -> bool:
