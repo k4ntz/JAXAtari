@@ -124,7 +124,9 @@ class Renderer_AtraJaxis(AtraJaxisRenderer):
         # Load Sprites
         # Backgrounds + Dynamic elements + UI elements
         sprite_names = [
-            # 'background_0', 'background_1', 'background_2',
+            'enemy_0',
+            'enemy_1',
+            'enemy_2',
         ]
         for name in sprite_names:
             loaded_sprite = _load_sprite_frame(name)
@@ -191,8 +193,11 @@ class Renderer_AtraJaxis(AtraJaxisRenderer):
         raster = jax.lax.fori_loop(0, cfg.max_bullets, _draw_bullet, raster)
 
         # add red & blue enemies
-        enemy_sprite_red = _solid_sprite(cfg.enemy_width, cfg.enemy_height, (255, 0, 0))
-        enemy_sprite_blue = _solid_sprite(cfg.enemy_width, cfg.enemy_height, (0, 0, 255))
+        enemy_sprites = (
+            self.sprites['enemy_0'],
+            self.sprites['enemy_1'],
+            self.sprites['enemy_2'],
+            )
 
         def _draw_enemy(i, ras):
             active = state.enemies[i, 5] == 1
@@ -202,9 +207,21 @@ class Renderer_AtraJaxis(AtraJaxisRenderer):
             enemy_type = state.enemies[i, 3]
 
             def _do(r):
-                sprite = jax.lax.cond(enemy_type == 0, lambda _: enemy_sprite_blue,  # if enemy_type == 0 -> sprite = blue sprite
-                                      lambda _: jax.lax.cond(enemy_type == 1, lambda _: enemy_sprite_blue,  # if enemy_type == 1 -> sprite = blue sprite
-                                                             lambda _: enemy_sprite_red, None), None)  # else -> sprite = red sprite
+                # TODO: Make enemy sprites the same size & smaller, so they can be exchanged & fit into the game
+                # Approach 1
+                # sprite = jax.lax.cond(enemy_type == 0, lambda _: enemy_sprites[0],  # if enemy_type == 0 -> sprite = 0
+                #                       lambda _: jax.lax.cond(enemy_type == 1, lambda _: enemy_sprites[1],  # if enemy_type == 1 -> sprite = 1
+                #                                              lambda _: enemy_sprites[2], None), None)  # else -> sprite = 2
+
+                # Approach 2
+                # sprite = jax.lax.switch(enemy_type, (
+                #         lambda _: enemy_sprites[0],
+                #         lambda _: enemy_sprites[1],
+                #         lambda _: enemy_sprites[2],
+                #     ), None)
+
+                sprite = enemy_sprites[0]  # what currently works; will be deleted in future
+
                 return aj.render_at(r, ex, ey, sprite, flip_horizontal=flip)
 
             return jax.lax.cond(active, _do, lambda r: r, ras)
@@ -759,7 +776,6 @@ class JaxAtlantis(JaxEnvironment[AtlantisState, AtlantisObservation, AtlantisInf
     @partial(jax.jit, static_argnums=(0,))
     def _cooldown_finished(self, state: AtlantisState) -> Array:
         return state.wave_end_cooldown_remaining == 0
-
 
     @partial(jax.jit, static_argnums=(0,))
     def step(
