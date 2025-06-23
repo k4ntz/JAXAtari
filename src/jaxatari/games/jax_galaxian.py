@@ -59,6 +59,8 @@ ENEMY_RIGHT_BOUND = NATIVE_GAME_WIDTH - 25
 DIVE_KILL_Y = 175
 DIVE_SPEED = 0.5
 MAX_DIVERS = 5
+MAX_SUPPORT_CALLERS = 2
+MAX_SUPPORTERS = 2
 BASE_DIVE_PROBABILITY = 30 #TODO back to 5 before merge
 MAX_SHOTS_PER_VOLLEY = 4
 VOLLEY_SHOT_DELAY = 10
@@ -68,12 +70,23 @@ PLAYER_BULLET_Y_OFFSET = 3
 PLAYER_BULLET_X_OFFSET = 3
 
 ATTACK_MOVE_PATTERN = jnp.array([
-    [1,1],[0,1],[1,1],[1,1],[0,1],[1,1],[1,1],[0,1],[1,1],[1,1],[1,1],[0,1],[1,1],[1,1],[0,1]
+    [
+        [1,1],[0,1],[1,1],[1,1],[0,1],[1,1],[1,1],[0,1],[1,1],[1,1],[1,1],[0,1],[1,1],[1,1],[0,1]
+    ],
+    [
+        [2,1],[2,1],[2,1],[2,1],[2,1],[2,1],[2,1],[2,1],[2,1],[2,1],[2,1],[2,1],[2,1],[2,1],[2,1]
+    ]
 ])
 
 ATTACK_TURN_PATTERN = jnp.array([
-    [-1,1],[0,1],[-1,1],[0,1],[0,1],[-1,1],[0,1],[0,1],[-1,1],[0,1],[0,1],[0,1],[-1,1],[0,1],[0,1],[0,1],
-    [0,1],[0,1],[0,1],[1,1],[0,1],[0,1],[0,1],[1,1],[0,1],[0,1],[1,1],[0,1],[0,1],[1,1],[0,1],[0,1],[1,1]
+    [
+        [-1,1],[0,1],[-1,1],[0,1],[0,1],[-1,1],[0,1],[0,1],[-1,1],[0,1],[0,1],[0,1],[-1,1],[0,1],[0,1],[0,1],
+        [0,1],[0,1],[0,1],[1,1],[0,1],[0,1],[0,1],[1,1],[0,1],[0,1],[1,1],[0,1],[0,1],[1,1],[0,1],[1,1]
+    ],
+    [
+        [-1,1],[-1,1],[-2,1],[-1,1],[-1,1],[-1,1],[-1,1],[-1,1],[-1,1],[-1,1],[0,1],[-1,1],[0,1],[0,1],[0,1],[0,1],
+        [0,1],[0,1],[0,1],[0,1],[1,1],[0,1],[1,1],[1,1],[1,1],[1,1],[1,1],[1,1],[1,1],[2,1],[1,1],[1,1]
+    ]
 ])
 
 ATTACK_PAUSE_PATTERN = jnp.array([
@@ -106,6 +119,9 @@ class GalaxianState(NamedTuple):
     enemy_attack_bullet_y: chex.Array
     enemy_attack_bullet_timer: chex.Array
     enemy_attack_pause_step: chex.Array
+    enemy_attack_number: chex.Array
+    enemy_attack_max: chex.Array
+    level: chex.Array
     lives: chex.Array
     player_alive: chex.Array
     player_respawn_timer: chex.Array
@@ -164,34 +180,71 @@ def update_enemy_attack(state: GalaxianState) -> GalaxianState:
     # falls nein, gehe direkt zu continue_active_dives(state)
     @jax.jit
     def test_for_new_dive(state):
-        key = jax.random.PRNGKey(state.turn_step)
-        do_new_dive = jax.random.uniform(key, shape=(), minval=0, maxval=100) < state.dive_probability / 10
-        return jax.lax.cond(do_new_dive & jnp.any(state.enemy_grid_alive == 1), lambda state: initialise_new_dive(state), lambda state: continue_active_dives(state), state)
+        first_available_slot = jnp.where(state.enemy_attack_states == 0, size=MAX_DIVERS, fill_value=-1)[0][0]
+
+        return jax.lax.cond(jnp.any(state.enemy_grid_alive == 1) & (first_available_slot <= state.level), lambda state: initialise_new_dive(state,first_available_slot), lambda state: state, state)
+
+    def choose_diver(state, rows, row_number, key_choice):
+        key_row, key_col = jax.random.split(key_choice, 2)
+
+        # finde zufällige nicht-leere Reihe
+        valid_rows = jnp.where(rows, size=row_number, fill_value=-1)[0]
+        num_valid_rows = jnp.sum(rows)
+        random_row_idx = jax.random.randint(key_row, shape=(), minval=0, maxval=num_valid_rows)
+        chosen_enemy_row = valid_rows[random_row_idx]
+
+        return choose_column(state, chosen_enemy_row, key_col)
+
+    def choose_column(state, row, key_col):
+        # zufällig entscheiden, ob erster oder letzter Feind der Reihe genommen wird
+        first_or_last = jax.random.randint(key_col, shape=(), minval=0, maxval=2)
+        row_alive_mask = (state.enemy_grid_alive[row] == 1)
+        alive_cols = jnp.where(row_alive_mask, size=GRID_COLS, fill_value=-1)[0]
+        first_alive_col = alive_cols[0]
+        last_alive_col = alive_cols[jnp.sum(row_alive_mask) - 1]
+        chosen_enemy_col = jnp.where(first_or_last == 0, first_alive_col, last_alive_col)
+
+        return row, chosen_enemy_col
+
+    def choose_diver_level_0(state, key_choice):
+        jax.debug.print("enemy_grid_alive: {}", state.enemy_grid_alive)
+        rows_with_alive = jnp.any(state.enemy_grid_alive == 1, axis=1)
+
+        num_valid_lower_rows = jnp.sum(rows_with_alive[:4])
+        num_valid_white_rows = jnp.sum(rows_with_alive[-1])
+
+        def lower_rows(state, key_choice):
+            return choose_diver(state, rows_with_alive[:4],4, key_choice)
+
+        def white_row(state, key_choice):
+            return choose_column(state, 5, key_choice)
+
+        def red_row(state,key_choice):
+            return choose_column(state, 4, key_choice)
+
+        return jax.lax.cond(
+            num_valid_lower_rows > 0,
+            lambda state: lower_rows(state, key_choice),
+            lambda state: jax.lax.cond(
+                num_valid_white_rows > 0,
+                lambda state: white_row(state, key_choice),
+                lambda state: red_row(state, key_choice),
+                state
+            ),
+            state
+        )
+
+    def choose_diver_default(state, key_choice):
+        rows_with_alive = jnp.any(state.enemy_grid_alive == 1, axis=1)
+        return choose_diver(state,rows_with_alive,GRID_ROWS, key_choice)
+
 
     @jax.jit
-    def initialise_new_dive(state):
+    def initialise_new_dive(state,diver_idx):
         key = jax.random.PRNGKey(state.turn_step + 101)  # currently deterministic
         key_choice, key_volley, key_shot_delay = jax.random.split(key, 3)
 
-        # finde freien slot im diver array und nimm einfach den ersten (es muss einen geben, weil wir vorher geprüft haben, dass noch Platz ist)
-        available_slots_indices = jnp.where(jnp.atleast_1d(state.enemy_attack_states == 0), size=MAX_DIVERS, fill_value=-1)[0]
-        diver_idx = available_slots_indices[0]
-
-        # finde zufälligen Angreifer
-        alive_grid_mask = (state.enemy_grid_alive == 1)
-        num_alive_in_grid = jnp.sum(alive_grid_mask)
-
-        # hole deren Positionen im Array
-        grid_rows_indices, grid_cols_indices = jnp.where(alive_grid_mask, size=GRID_ROWS * GRID_COLS, fill_value=-1)
-
-        # Filter fill values
-        valid_rows = jnp.where(grid_rows_indices != -1, grid_rows_indices, 0)
-        valid_cols = jnp.where(grid_rows_indices != -1, grid_cols_indices, 0)
-
-        # random selection
-        random_choice_idx = jax.random.randint(key_choice, shape=(), minval=0, maxval=num_alive_in_grid)
-        chosen_enemy_row = valid_rows[random_choice_idx]
-        chosen_enemy_col = valid_cols[random_choice_idx]
+        chosen_enemy_row, chosen_enemy_col = choose_diver_level_0(state, key_choice)
 
         # e.g. enemy_attack_states=[1. 0. 0. 1. 1.] -> enemy_attack_states=[1. 1. 0. 1. 1.]
         new_attack_states = state.enemy_attack_states.at[diver_idx].set(1)  # 1: actively attacking
@@ -248,7 +301,7 @@ def update_enemy_attack(state: GalaxianState) -> GalaxianState:
         curr_x = state.enemy_attack_x
         curr_y = state.enemy_attack_y
 
-        def grey_dive(state: GalaxianState, i: int) -> GalaxianState:
+        def dive(state: GalaxianState) -> GalaxianState:
 
             def update_enemy_state(state: GalaxianState) -> GalaxianState:
                 new_enemy_attack_direction = jnp.where(
@@ -303,8 +356,16 @@ def update_enemy_attack(state: GalaxianState) -> GalaxianState:
                     state.enemy_attack_states == 1,
                     jnp.where(
                         state.enemy_attack_turning == 0,
-                        ATTACK_MOVE_PATTERN[state.enemy_attack_move_step, 0] * state.enemy_attack_direction,
-                        ATTACK_TURN_PATTERN[state.enemy_attack_turn_step, 0] * state.enemy_attack_turning,
+                        jnp.where(
+                            state.enemy_attack_pos[:, 0] == 3,
+                            ATTACK_MOVE_PATTERN[1, state.enemy_attack_move_step, 0] * state.enemy_attack_direction,
+                            ATTACK_MOVE_PATTERN[0, state.enemy_attack_move_step, 0] * state.enemy_attack_direction
+                        ),
+                        jnp.where(
+                            state.enemy_attack_pos[:, 0] == 3,
+                            ATTACK_TURN_PATTERN[1, state.enemy_attack_turn_step, 0] * state.enemy_attack_turning,
+                            ATTACK_TURN_PATTERN[0,state.enemy_attack_turn_step, 0] * state.enemy_attack_turning
+                        )
                     ),
                     0
                 )
@@ -325,17 +386,21 @@ def update_enemy_attack(state: GalaxianState) -> GalaxianState:
             state = update_enemy_position(state)
             return state
 
-        def red_dive(state: GalaxianState, i: int) -> GalaxianState:
-            #jax.debug.print("red")
-            return grey_dive(state, i)
-
-        def purple_dive(state: GalaxianState, i: int) -> GalaxianState:
-            #jax.debug.print("purple")
-            return grey_dive(state, i)
-
-        def white_dive(state: GalaxianState, i: int) -> GalaxianState:
-            #jax.debug.print("white")
-            return grey_dive(state, i)
+        # def green_dive(state: GalaxianState, i: int) -> GalaxianState:
+        #     jax.debug.print("green")
+        #     return dive(state, 0, i)
+        #
+        # def red_dive(state: GalaxianState, i: int) -> GalaxianState:
+        #     jax.debug.print("red")
+        #     return dive(state,0, i)
+        #
+        # def purple_dive(state: GalaxianState, i: int) -> GalaxianState:
+        #     jax.debug.print("purple")
+        #     return dive(state,1, i)
+        #
+        # def white_dive(state: GalaxianState, i: int) -> GalaxianState:
+        #     jax.debug.print("white")
+        #     return dive(state,0, i)
 
         new_pause_step = jnp.where(
             state.enemy_attack_pause_step < 7,
@@ -347,31 +412,9 @@ def update_enemy_attack(state: GalaxianState) -> GalaxianState:
             enemy_attack_pause_step= new_pause_step,
         )
 
-        def dive_loop(state):
-            return lax.fori_loop(
-                0, MAX_DIVERS,
-                lambda i, state: jax.lax.cond(
-                    state.enemy_attack_pos[i, 0] == 5,
-                    lambda state: white_dive(state, i),
-                    lambda state: jax.lax.cond(
-                        state.enemy_attack_pos[i, 0] == 4,
-                        lambda state: red_dive(state, i),
-                        lambda state: jax.lax.cond(
-                            state.enemy_attack_pos[i, 0] == 3,
-                            lambda state: purple_dive(state, i),
-                            lambda state: grey_dive(state, i),
-                            state
-                        ),
-                        state
-                    ),
-                    state
-                ),
-                state
-            )
-
         return jax.lax.cond(
             ATTACK_PAUSE_PATTERN[new_pause_step] == 1,
-            lambda state: dive_loop(state),
+            lambda state: dive(state),
             lambda state: state,
             state
         )
@@ -438,13 +481,10 @@ def update_enemy_attack(state: GalaxianState) -> GalaxianState:
 
 
     new_state = respawn_finished_dives(state)
-    free_slots = jnp.sum(state.enemy_attack_states == 0)
-    return jax.lax.cond(
-        free_slots > 0,
-        lambda state: test_for_new_dive(state),
-        lambda state: continue_active_dives(state),
-        new_state
-    )
+    new_state = test_for_new_dive(new_state)
+    new_state = continue_active_dives(new_state)
+
+    return new_state
 
 
 @jax.jit
@@ -714,10 +754,10 @@ def check_player_death_by_bullet(state: GalaxianState) -> GalaxianState:
 @jax.jit
 def enter_new_wave(state: GalaxianState) -> GalaxianState:
     new_grid = jnp.ones(state.enemy_grid_alive.shape)
-    new_prop = jnp.array(state.dive_probability * 1.1, dtype=state.dive_probability.dtype)
+    new_level = state.level + 1
     new_attack_bullet_cd = jnp.array(state.enemy_bullet_max_cooldown * 0.9, dtype=state.enemy_bullet_max_cooldown.dtype)
     return state._replace(enemy_grid_alive=new_grid,
-                          dive_probability=new_prop)
+                          level=new_level,)
 
 
 class GalaxianObservation(NamedTuple):
@@ -799,6 +839,9 @@ class JaxGalaxian(JaxEnvironment[GalaxianState, GalaxianObservation, GalaxianInf
                               enemy_attack_bullet_y=jnp.full(MAX_DIVERS, -1.0),
                               enemy_attack_bullet_timer=jnp.zeros(MAX_DIVERS),
                               enemy_attack_pause_step=jnp.array(0),
+                              enemy_attack_number=jnp.array(0),
+                              enemy_attack_max=jnp.array(1),
+                              level=jnp.array(0),
                               lives=jnp.array(3),
                               player_alive=jnp.array(True),
                               player_respawn_timer=jnp.array(PLAYER_DEATH_DELAY),
@@ -807,7 +850,7 @@ class JaxGalaxian(JaxEnvironment[GalaxianState, GalaxianObservation, GalaxianInf
                               enemy_attack_target_y=jnp.zeros(MAX_DIVERS),
                               turn_step=jnp.array(0),
                               dive_probability=jnp.array(BASE_DIVE_PROBABILITY),
-                              enemy_bullet_max_cooldown=ENEMY_ATTACK_BULLET_DELAY,
+                              enemy_bullet_max_cooldown=jnp.array(ENEMY_ATTACK_BULLET_DELAY),
                               enemy_attack_shot_timer=jnp.zeros(MAX_DIVERS),
                               enemy_attack_shots_fired=jnp.zeros(MAX_DIVERS, dtype=jnp.int32),
                               enemy_attack_volley_size=jnp.zeros(MAX_DIVERS, dtype=jnp.int32)
@@ -1059,7 +1102,6 @@ class GalaxianRenderer(AtraJaxisRenderer):
 
             return r
         raster = lax.cond(jnp.any(state.enemy_attack_states != 0), draw_attackers, lambda r: r, raster)
-
 
        # Feindgitter
         def row_body(i, r_acc):
