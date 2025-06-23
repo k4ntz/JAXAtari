@@ -58,6 +58,10 @@ PLAYER_MISSILE_COLOR = jnp.array((54, 46, 200, 255))
 PLAYER_MISSILE_INITIAL_VELOCITY = 2.5 # Starting speed of player missile
 PLAYER_MISSILE_VELOCITY_MULTIPLIER = 1.1 # Multiply the current speed at a given moment of the player missile by this number
 
+# -------- Instrument panel constants --------
+SHIELD_LOSS_COL_SMALL = 1
+SHIELD_LOSS_COL_BIG = 6
+
 # -------- Enemy Missile constants --------
 ENEMY_MISSILE_COLOR = jnp.array((85, 92, 197, 255))
 
@@ -333,6 +337,160 @@ def player_missile_step(
 
     return PlayerMissileState(x=new_x, y=new_y, direction=new_direction, velocity=new_velocity)
 
+@jax.jit
+def check_collision_single(pos1, size1, pos2, size2):
+    """Check collision between two single entities"""
+    # Calculate edges for rectangle 1
+    rect1_left = pos1[0]
+    rect1_right = pos1[0] + size1[0]
+    rect1_top = pos1[1]
+    rect1_bottom = pos1[1] + size1[1]
+
+    # Calculate edges for rectangle 2
+    rect2_left = pos2[0]
+    rect2_right = pos2[0] + size2[0]
+    rect2_top = pos2[1]
+    rect2_bottom = pos2[1] + size2[1]
+
+    # Check overlap
+    horizontal_overlap = jnp.logical_and(
+        rect1_left < rect2_right,
+        rect1_right > rect2_left
+    )
+
+    vertical_overlap = jnp.logical_and(
+        rect1_top < rect2_bottom,
+        rect1_bottom > rect2_top
+    )
+
+    return jnp.logical_and(horizontal_overlap, vertical_overlap)
+
+
+
+def any_collision_for_group(player_pos: jnp.ndarray,
+                            player_size: jnp.ndarray,
+                            group_xs: jnp.ndarray,
+                            group_ys: jnp.ndarray,
+                            segment_offsets: jnp.ndarray,
+                            segment_sizes: jnp.ndarray) -> jnp.ndarray:
+    """
+    Checks collision with a group of objects (e.g., multiple mountain chains),
+    each composed of identical segments (offsets + sizes).
+
+    - player_pos: (2,)
+    - player_size: (2,)
+    - group_xs:   (n_groups,)
+    - group_ys:   (n_groups,)
+    - segment_offsets: (n_segments, 2)
+    - segment_sizes:   (n_segments, 2)
+
+    Returns a Boolean-(n_groups,) array, one per group.
+    """
+
+    # vectorize single-segment collision check
+    collision_per_segment = jax.vmap(
+        check_collision_single,
+        in_axes=(None, None, 0, 0),
+        out_axes=0)
+
+    def collision_for_one(x, y):
+        # compute absolute positions of all segments in this group (n_segments, 2)
+        block_positions = jnp.stack([
+            x + segment_offsets[:, 0],
+            y + segment_offsets[:, 1],
+        ], axis=-1)
+
+        # check collisions for each segment
+        seg_hits = collision_per_segment(
+            player_pos, player_size,
+            block_positions, segment_sizes
+        )
+        # return True if any segment collides
+        return jnp.any(seg_hits)
+
+    # map over all group positions
+    return jax.vmap(collision_for_one, in_axes=(0, 0))(group_xs, group_ys)
+
+@jax.jit
+def check_player_collision(
+        state: LaserGatesState
+) -> tuple[chex.Array, chex.Array]:
+
+    # -------- Bounds and mountains --------
+
+    # Segment definitions for Upper Mountains
+    upper_offsets = jnp.array([
+        ( 0, 0),
+        ( 8, 3),
+        (12, 6),
+        (20, 9),
+    ], dtype=jnp.int32)
+    upper_sizes = jnp.array([
+        (60, 3),
+        (44, 3),
+        (36, 3),
+        (20, 3),
+    ], dtype=jnp.int32)
+
+    # Segment definitions for Lower Mountains
+    lower_offsets = jnp.array([
+        (20, 0),
+        (12, 3),
+        ( 8, 6),
+        ( 0, 9),
+    ], dtype=jnp.int32)
+    lower_sizes = jnp.array([
+        (20, 3),
+        (36, 3),
+        (44, 3),
+        (60, 3)
+    ], dtype=jnp.int32)
+
+    # Extract group coordinates from state
+    upper_xs = jnp.array([
+        state.upper_mountains.x1,
+        state.upper_mountains.x2,
+        state.upper_mountains.x3,
+    ], dtype=jnp.int32)
+    upper_ys = jnp.array([
+        state.upper_mountains.y,
+        state.upper_mountains.y,
+        state.upper_mountains.y,
+    ], dtype=jnp.int32)
+
+    lower_xs = jnp.array([
+        state.lower_mountains.x1,
+        state.lower_mountains.x2,
+        state.lower_mountains.x3,
+    ], dtype=jnp.int32)
+    lower_ys = jnp.array([
+        state.lower_mountains.y,
+        state.lower_mountains.y,
+        state.lower_mountains.y,
+    ], dtype=jnp.int32)
+
+    # Player parameters
+    player_pos  = jnp.array((state.player_x, state.player_y), dtype=jnp.int32)
+    player_size = jnp.array(PLAYER_SIZE, dtype=jnp.int32)
+
+    # Check collisions for both groups
+    upper_collisions = any_collision_for_group(
+        player_pos, player_size, upper_xs, upper_ys,
+        segment_offsets=upper_offsets,
+        segment_sizes=upper_sizes
+    )
+    lower_collisions = any_collision_for_group(
+        player_pos, player_size, lower_xs, lower_ys,
+        segment_offsets=lower_offsets,
+        segment_sizes=lower_sizes
+    )
+
+    # Include normal bound
+    upper_collision = jnp.logical_or(jnp.any(upper_collisions), state.player_y <= PLAYER_BOUNDS[1][0])
+    lower_collision = jnp.logical_or(jnp.any(lower_collisions), state.player_y >= PLAYER_BOUNDS[1][1])
+
+    return upper_collision, lower_collision
+
 
 class JaxLaserGates(JaxEnvironment[LaserGatesState, LaserGatesObservation, LaserGatesInfo]):
     def __init__(self, reward_funcs: list[callable] =None):
@@ -461,6 +619,11 @@ class JaxLaserGates(JaxEnvironment[LaserGatesState, LaserGatesObservation, Laser
         new_player_missile_state = player_missile_step(state, action)
 
         new_scroll_speed = jnp.where(state.player_x != PLAYER_BOUNDS[0][1], SCROLL_SPEED, SCROLL_SPEED * SCROLL_MULTIPLIER)
+
+        upper_col, lower_col = check_player_collision(state)
+
+        new_player_y = jnp.where(upper_col, new_player_y + 3, new_player_y)
+        new_player_y = jnp.where(lower_col, new_player_y - 3, new_player_y)
 
         new_energy = state.energy - 1
         new_score = state.score + 1
