@@ -106,6 +106,8 @@ class GameState(NamedTuple):
 class AnimatorState(NamedTuple):
     player_frame: chex.Array = 0
     enemy_frame: chex.Array = 0
+    player_racket_frame: chex.Array = 0
+    player_racket_animation: chex.Array = False
 
 class TennisState(NamedTuple):
     player_state: PlayerState = PlayerState(  # all player-related data
@@ -190,7 +192,7 @@ def normal_step(state: TennisState, action) -> TennisState:
     new_animator_state = animator_step(state, new_player_state, new_enemy_state)
 
     return TennisState(new_player_state, new_enemy_state, new_state_after_ball_step.ball_state,
-                       new_state_after_ball_step.game_state, new_state_after_ball_step.counter + 1, new_animator_state)
+                       new_state_after_ball_step.game_state, state.counter + 1, new_animator_state)
 
 @jax.jit
 def animator_step(state: TennisState, new_player_state, new_enemy_state) -> AnimatorState:
@@ -218,6 +220,36 @@ def animator_step(state: TennisState, new_player_state, new_enemy_state) -> Anim
         0
     )
 
+    # if ball is at x/y coordinates of hit location, it was hit in this frame
+    was_ball_hit = jnp.logical_and(
+        state.ball_state.ball_x == state.ball_state.ball_hit_start_x,
+        state.ball_state.ball_y == state.ball_state.ball_hit_start_y,
+    )
+    # set player_racket_animation to True if ball was hit
+    new_player_racket_animation = jnp.logical_or(
+        was_ball_hit,
+        state.animator_state.player_racket_animation,
+    )
+
+    new_player_racket_frame = jnp.where(
+        jnp.logical_and(
+            new_player_racket_animation,
+            state.counter % 4 == 0,
+        ),
+        (state.animator_state.player_racket_frame + 1) % 4,
+        state.animator_state.player_racket_frame,
+    )
+
+    # if animation is over (has reached start frame again), set player_racket_animation to False
+    new_player_racket_animation = jnp.where(
+        jnp.logical_and(
+            new_player_racket_frame == 0,
+            state.counter % 4 == 0,
+        ),
+        False,
+        new_player_racket_animation,
+    )
+
     # Animations for enemy
     has_enemy_moved = check_has_moved(state.enemy_state.enemy_x, new_enemy_state.enemy_x, state.enemy_state.enemy_y, new_enemy_state.enemy_y)
     new_enemy_frame = jnp.where(
@@ -232,7 +264,7 @@ def animator_step(state: TennisState, new_player_state, new_enemy_state) -> Anim
         0
     )
 
-    new_animator_state = AnimatorState(new_player_frame % 4, new_enemy_frame % 4)
+    new_animator_state = AnimatorState(new_player_frame % 4, new_enemy_frame % 4, new_player_racket_frame, new_player_racket_animation)
 
     return new_animator_state
 
@@ -585,10 +617,11 @@ def ball_step(state: TennisState, action) -> TennisState:
     new_ball_z = jnp.clip(new_ball_z, 0, 500)
     new_ball_z_fp = jnp.clip(new_ball_z_fp, 0, 500)
 
-    #new_ball_x = ball_state.ball_x + ball_state.move_x
-    #new_ball_y = ball_state.ball_y + ball_state.move_y
+    new_ball_x = ball_state.ball_x + ball_state.move_x
+    new_ball_y = ball_state.ball_y + ball_state.move_y
     # ball movement in x/y direction is linear, no velocity involved
 
+    """
     new_ball_x = jnp.where(
         jnp.absolute(ball_state.ball_x - ball_state.ball_hit_target_x) > 1,
         ball_state.ball_x + ball_state.move_x,
@@ -599,6 +632,7 @@ def ball_step(state: TennisState, action) -> TennisState:
         ball_state.ball_y + ball_state.move_y,
         ball_state.ball_y
     )
+    """
 
     player_state = state.player_state
 
