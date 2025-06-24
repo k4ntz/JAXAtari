@@ -22,9 +22,12 @@ def load_sprites():
         aj.loadFrame(os.path.join(MODULE_DIR, "tennis_from_scratch/sprites/player_no_racket_2.npy")), axis=0)
     PLAYER_3 = jnp.expand_dims(
         aj.loadFrame(os.path.join(MODULE_DIR, "tennis_from_scratch/sprites/player_no_racket_3.npy")), axis=0)
-    RACKET = jnp.expand_dims(aj.loadFrame(os.path.join(MODULE_DIR, "tennis_from_scratch/sprites/racket_no_player.npy")), axis=0)
+    RACKET_0 = jnp.expand_dims(aj.loadFrame(os.path.join(MODULE_DIR, "tennis_from_scratch/sprites/1.npy")), axis=0)
+    RACKET_1 = jnp.expand_dims(aj.loadFrame(os.path.join(MODULE_DIR, "tennis_from_scratch/sprites/2.npy")), axis=0)
+    RACKET_2 = jnp.expand_dims(aj.loadFrame(os.path.join(MODULE_DIR, "tennis_from_scratch/sprites/3.npy")), axis=0)
+    RACKET_3 = jnp.expand_dims(aj.loadFrame(os.path.join(MODULE_DIR, "tennis_from_scratch/sprites/4.npy")), axis=0)
 
-    return BG, BALL, BALL_SHADOW, [PLAYER_0, PLAYER_1, PLAYER_2, PLAYER_3], RACKET
+    return BG, BALL, BALL_SHADOW, [PLAYER_0, PLAYER_1, PLAYER_2, PLAYER_3], [RACKET_3, RACKET_0, RACKET_1, RACKET_2]
 
 
 # ToDo remove
@@ -126,14 +129,16 @@ class TennisRenderer:
         frame_enemy = aj.get_sprite_frame(self.PLAYER[state.animator_state.enemy_frame], 0)
         raster = aj.render_at(raster, state.player_state.player_x - 2, state.player_state.player_y, frame_player)
 
-        frame_racket = aj.get_sprite_frame(self.RACKET, 0)
-        raster = aj.render_at(raster, state.player_state.player_x + 8 - 2, state.player_state.player_y + 2, frame_racket)
+
+        racket_offset = [1, 8, 8, 4]
+        frame_racket = aj.get_sprite_frame(self.RACKET[state.animator_state.player_racket_frame], 0)
+        raster = aj.render_at(raster, state.player_state.player_x + 8 - 2, state.player_state.player_y + racket_offset[state.animator_state.player_racket_frame], frame_racket)
 
         frame_bounding_box = aj.get_sprite_frame(self.BOUNDING_BOX, 0)
         raster = aj.render_at(raster, state.player_state.player_x, state.player_state.player_y, frame_bounding_box)
 
         raster = aj.render_at(raster, state.enemy_state.enemy_x, state.enemy_state.enemy_y, frame_enemy)
-        raster = aj.render_at(raster, state.enemy_state.enemy_x + 8 - 2, state.enemy_state.enemy_y + 2,
+        raster = aj.render_at(raster, state.enemy_state.enemy_x + 8 - 2, state.enemy_state.enemy_y + racket_offset[state.animator_state.player_racket_frame],
                               frame_racket)
 
         player_x_rec = jnp.zeros((2, 2, 4))
