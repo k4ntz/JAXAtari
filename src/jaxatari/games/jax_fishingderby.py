@@ -83,3 +83,5 @@ class FishingDerby(JaxEnvironment[GameState, FishingDerbyObservation, FishingDer
             fish_x=jnp.array(self.config.fish_x or [self.config.screen_width // 2]),
         )
         return self._get_observation(state), state
+
+    # test
