@@ -4,6 +4,7 @@ Lukas Bergholz, Linus Orlob, Vincent Jahn
 
 """
 import os
+from enum import IntEnum
 from functools import partial
 from typing import Tuple, NamedTuple
 
@@ -24,10 +25,14 @@ SCROLL_SPEED = 1 # Normal scroll speed
 SCROLL_MULTIPLIER = 1.5 # When at the right player bound, multiply scroll speed by this constant
 
 # -------- Mountains constants --------
+PLAYING_FILED_BG_COLLISION_COLOR = (255, 255, 255, 255)
+PLAYING_FILED_BG_COLOR_FADE_SPEED = 0.2 # Higher = faster fade out, exponential
+
+# -------- Mountains constants --------
 MOUNTAIN_SIZE = (60, 12) # Width, Height
 
-LOWER_MOUNTAINS_Y = 82 # Y Spawn position of lower mountains. This does not change
-UPPER_MOUNTAINS_Y = 21 # Y Spawn position of upper mountains. This does not change
+LOWER_MOUNTAINS_Y = 80 # Y Spawn position of lower mountains. This does not change
+UPPER_MOUNTAINS_Y = 19 # Y Spawn position of upper mountains. This does not change
 
 LOWER_MOUNTAINS_START_X = -44 # X Spawn position of lower mountains.
 UPPER_MOUNTAINS_START_X = -4 # X Spawn position of upper mountains.
@@ -38,8 +43,11 @@ UPDATE_EVERY = 4 # The mountain position is updated every UPDATE_EVERY-th frame.
 
 # -------- Player constants --------
 PLAYER_SIZE = (8, 6) # Width, Height
-PLAYER_COLOR = (85, 92, 197, 255)
-PLAYER_BOUNDS = (20, WIDTH - 20 - PLAYER_SIZE[0]), (21, 88)
+PLAYER_NORMAL_COLOR = (85, 92, 197, 255) # Normal color of the player
+PLAYER_COLLISION_COLOR = (137, 81, 26, 255) # Players color for PLAYER_COLOR_CHANGE_DURATION frames after a collision
+PLAYER_COLOR_CHANGE_DURATION = 10 # How long (in frames) the player changes its color to PLAYER_COLLISION_COLOR if a collision occurs
+
+PLAYER_BOUNDS = (20, WIDTH - 20 - PLAYER_SIZE[0]), (19, 80 + PLAYER_SIZE[1]) # left x, right x, upper y and lower y bound of player
 
 PLAYER_START_X = 20 # X Spawn position of player
 PLAYER_START_Y = 52 # Y Spawn position of player
@@ -47,13 +55,13 @@ PLAYER_START_Y = 52 # Y Spawn position of player
 PLAYER_VELOCITY_Y = 1.5 # Y Velocity of player
 PLAYER_VELOCITY_X = 1.5 # X Velocity of player
 
-MAX_ENERGY = 1000
+MAX_ENERGY = 5100
 MAX_SHIELDS = 24
-MAX_DTIME = 1000
+MAX_DTIME = 10200
 
 # -------- Player missile constants --------
 PLAYER_MISSILE_SIZE = (16, 1)
-PLAYER_MISSILE_BASE_COLOR = jnp.array((140, 79, 24, 255)) # Initial color of player missile. Every value except for transparency is incremented by the missiles velocity * PLAYER_MISSILE_COLOR_CHANGE_SPEED
+PLAYER_MISSILE_BASE_COLOR = (140, 79, 24, 255) # Initial color of player missile. Every value except for transparency is incremented by the missiles velocity * PLAYER_MISSILE_COLOR_CHANGE_SPEED
 PLAYER_MISSILE_COLOR_CHANGE_SPEED = 10 # Defines how fast the player missile changes its color towards white.
 
 PLAYER_MISSILE_INITIAL_VELOCITY = 2.5 # Starting speed of player missile
@@ -64,7 +72,7 @@ SHIELD_LOSS_COL_SMALL = 1
 SHIELD_LOSS_COL_BIG = 6
 
 # -------- Enemy Missile constants --------
-ENEMY_MISSILE_COLOR = jnp.array((85, 92, 197, 255))
+ENEMY_MISSILE_COLOR = (85, 92, 197, 255)
 
 # -------- GUI constants --------
 GUI_COLORED_BACKGROUND_SIZE = (128, 12)
@@ -74,18 +82,35 @@ GUI_TEXT_ENERGY_SIZE = (23, 5)
 GUI_TEXT_SHIELDS_SIZE = (23, 5)
 GUI_TEXT_DTIME_SIZE = (23, 5)
 
-GUI_COLORED_BACKGROUND_COLOR_BLUE = jnp.array((47, 90, 160, 255))
-GUI_COLORED_BACKGROUND_COLOR_GREEN = jnp.array((50, 152, 82, 255))
-GUI_COLORED_BACKGROUND_COLOR_BEIGE = jnp.array((160, 107, 50, 255))
-GUI_COLORED_BACKGROUND_COLOR_GRAY = jnp.array((182, 182, 182, 255))
-GUI_TEXT_COLOR_GRAY = jnp.array((118, 118, 118, 255))
-GUI_TEXT_COLOR_BEIGE = jnp.array((160, 107, 50, 255))
+GUI_COLORED_BACKGROUND_COLOR_BLUE = (47, 90, 160, 255)
+GUI_COLORED_BACKGROUND_COLOR_GREEN = (50, 152, 82, 255)
+GUI_COLORED_BACKGROUND_COLOR_BEIGE = (160, 107, 50, 255)
+GUI_COLORED_BACKGROUND_COLOR_GRAY = (182, 182, 182, 255)
+GUI_TEXT_COLOR_GRAY = (118, 118, 118, 255)
+GUI_TEXT_COLOR_BEIGE = (160, 107, 50, 255)
 
 GUI_BLACK_BACKGROUND_X_OFFSET = 36
 GUI_Y_SPACE_BETWEEN_PLAYING_FIELD = 10
 GUI_Y_SPACE_BETWEEN_BACKGROUNDS = 10
 
 # -------- States --------
+class EntityTypes(IntEnum):
+    RADAR_MORTAR = 0    # Radar mortars appear along the top and bottom of the Computer passage. Avoid Mortar fire. Demolish Radar Mortars with laser fire.
+    BYTE_BAT = 1        # Green bat looking entity flying at you without warning.
+    ROCK_MUNCHER = 2    #
+    HOMING_MISSILE = 3  # Bomb looking entity flying and tracking you
+    FORCEFIELD = 4      # Flashing, flexing or fixed "wall". Time your approach to cross.
+    DENSEPACK = 5       # Grey densepack columns of varying width appear along the dark Computer passage. Blast your way through.
+    DETONATOR = 6       # "Failsafe detonators" are large and grey and have the numbers "6507" etched on the side. Laser fire must trike one of the pins on the side of a detonator to destroy it.
+    ENERGY_POD = 7      # To replenish energy reserves, touch Energy Pods as they appear along the Computer passageway. Do not fire at Energy Pods! You may not survive until another appears!
+
+class Entity(NamedTuple):
+    type: EntityTypes
+    x: chex.Array
+    y: chex.Array
+    is_alive: chex.Array
+    is_in_current_event: chex.Array
+
 class MountainState(NamedTuple):
     x1: chex.Array
     x2: chex.Array
@@ -103,6 +128,8 @@ class LaserGatesState(NamedTuple):
     player_y: chex.Array
     player_facing_direction: chex.Array
     player_missile: PlayerMissileState
+    player_collision: chex.Array
+    animation_timer: chex.Array
     lower_mountains: MountainState
     upper_mountains: MountainState
     score: chex.Array
@@ -137,9 +164,13 @@ class LaserGatesInfo(NamedTuple):
 def load_sprites():
     MODULE_DIR = os.path.dirname(os.path.abspath(__file__))
 
-    background = aj.loadFrame(os.path.join(MODULE_DIR, "sprites/lasergates/background/background.npy"))
+    upper_brown_bg = aj.loadFrame(os.path.join(MODULE_DIR, "sprites/lasergates/background/upper_brown_bg.npy"))
+    lower_brown_bg = aj.loadFrame(os.path.join(MODULE_DIR, "sprites/lasergates/background/lower_brown_bg.npy"))
+    playing_field_bg = aj.loadFrame(os.path.join(MODULE_DIR, "sprites/lasergates/background/playing_field_bg.npy"))
+    gray_gui_bg = aj.loadFrame(os.path.join(MODULE_DIR, "sprites/lasergates/background/gray_gui_bg.npy"))
     lower_mountain = aj.loadFrame(os.path.join(MODULE_DIR, "sprites/lasergates/background/mountains/lower_mountain.npy"))
     upper_mountain = aj.loadFrame(os.path.join(MODULE_DIR, "sprites/lasergates/background/mountains/upper_mountain.npy"))
+    black_stripe = aj.loadFrame(os.path.join(MODULE_DIR, "sprites/lasergates/background/black_stripe.npy"))
 
     player = aj.loadFrame(os.path.join(MODULE_DIR, "sprites/lasergates/player/player.npy"))
     player_missile = aj.loadFrame(os.path.join(MODULE_DIR, "sprites/lasergates/missiles/player_missile.npy"))
@@ -154,44 +185,36 @@ def load_sprites():
     gui_score_comma = aj.loadFrame(os.path.join(MODULE_DIR, "sprites/lasergates/gui/score_numbers/comma.npy"))
 
 
-
-    SPRITE_BACKGROUND = background
-    SPRITE_PLAYER = player
-    SPRITE_PLAYER_MISSILE = player_missile
-    SPRITE_LOWER_MOUNTAIN = lower_mountain
-    SPRITE_UPPER_MOUNTAIN = upper_mountain
-
-    SPRITE_GUI_COLORED_BACKGROUND = gui_colored_background
-    SPRITE_GUI_BLACK_BACKGROUND = gui_black_background
-    SPRITE_GUI_TEXT_SCORE = gui_text_score
-    SPRITE_GUI_TEXT_ENERGY = gui_text_energy
-    SPRITE_GUI_TEXT_SHIELDS = gui_text_shields
-    SPRITE_GUI_TEXT_DTIME = gui_text_dtime
-    SPRITE_GUI_SCORE_DIGITS = gui_score_digits
-    SPRITE_GUI_SCORE_COMMA = gui_score_comma
-
     return (
-        SPRITE_BACKGROUND,
-        SPRITE_PLAYER,
-        SPRITE_PLAYER_MISSILE,
-        SPRITE_LOWER_MOUNTAIN,
-        SPRITE_UPPER_MOUNTAIN,
-        SPRITE_GUI_COLORED_BACKGROUND,
-        SPRITE_GUI_BLACK_BACKGROUND,
-        SPRITE_GUI_TEXT_SCORE,
-        SPRITE_GUI_TEXT_ENERGY,
-        SPRITE_GUI_TEXT_SHIELDS,
-        SPRITE_GUI_TEXT_DTIME,
-        SPRITE_GUI_SCORE_DIGITS,
-        SPRITE_GUI_SCORE_COMMA,
+        player,
+        player_missile,
+        upper_brown_bg,
+        lower_brown_bg,
+        playing_field_bg,
+        gray_gui_bg,
+        lower_mountain,
+        upper_mountain,
+        black_stripe,
+        gui_colored_background,
+        gui_black_background,
+        gui_text_score,
+        gui_text_energy,
+        gui_text_shields,
+        gui_text_dtime,
+        gui_score_digits,
+        gui_score_comma,
     )
 
 (
-    SPRITE_BACKGROUND,
     SPRITE_PLAYER,
     SPRITE_PLAYER_MISSILE,
+    SPRITE_UPPER_BROWN_BG,
+    SPRITE_LOWER_BROWN_BG,
+    SPRITE_PLAYING_FIELD_BG,
+    SPRITE_GRAY_GUI_BG,
     SPRITE_LOWER_MOUNTAIN,
     SPRITE_UPPER_MOUNTAIN,
+    SPRITE_BLACK_STRIPE,
     SPRITE_GUI_COLORED_BACKGROUND,
     SPRITE_GUI_BLACK_BACKGROUND,
     SPRITE_GUI_TEXT_SCORE,
@@ -592,10 +615,12 @@ class JaxLaserGates(JaxEnvironment[LaserGatesState, LaserGatesObservation, Laser
             player_y=jnp.array(PLAYER_START_Y),
             player_facing_direction=jnp.array(1),
             player_missile=initial_player_missile,
+            player_collision=jnp.array(False),
+            animation_timer=jnp.array(0).astype(jnp.uint8),
             lower_mountains=initial_lower_mountains,
             upper_mountains=initial_upper_mountains,
-            score=jnp.array(0), # Start with no intial score
-            energy=jnp.array(MAX_ENERGY), # As the manual says, energy is consumed at a regular pace. We use 1000 for the initial value and subtract one for every frame to match the timing of the real game.
+            score=jnp.array(0), # Start with no initial score
+            energy=jnp.array(MAX_ENERGY), # As the manual says, energy is consumed at a regular pace. We use 5100 for the initial value and subtract one for every frame to match the timing of the real game. (It takes 85 seconds for the energy to run out. 85 * 60 (fps) = 5100
             shields=jnp.array(MAX_SHIELDS), # As the manual says, the Dante Dart starts with 24 shield units
             dtime=jnp.array(MAX_DTIME), # Same idea as energy.
             scroll_speed=jnp.array(SCROLL_SPEED),
@@ -613,6 +638,8 @@ class JaxLaserGates(JaxEnvironment[LaserGatesState, LaserGatesObservation, Laser
 
         # -------- Move player --------
         new_player_x, new_player_y, new_player_facing_direction = player_step(state, action)
+        player_animation_timer = state.animation_timer
+        new_player_animation_timer = jnp.where(player_animation_timer != 0, player_animation_timer - 1, player_animation_timer)
 
         new_lower_mountains_state = mountains_step(state.lower_mountains, state)
         new_upper_mountains_state = mountains_step(state.upper_mountains, state)
@@ -631,11 +658,17 @@ class JaxLaserGates(JaxEnvironment[LaserGatesState, LaserGatesObservation, Laser
 
         new_shields = jnp.where(jnp.logical_or(upper_col, lower_col), state.shields - 1, state.shields)
 
+        any_player_collision = jnp.logical_or(upper_col, lower_col)
+
+        new_player_animation_timer = jnp.where(any_player_collision, 255, new_player_animation_timer)
+
         return_state = state._replace(
             player_x=new_player_x,
             player_y=new_player_y,
             player_facing_direction=new_player_facing_direction,
+            animation_timer=new_player_animation_timer,
             player_missile=new_player_missile_state,
+            player_collision=any_player_collision,
             lower_mountains=new_lower_mountains_state,
             upper_mountains=new_upper_mountains_state,
             scroll_speed=new_scroll_speed,
@@ -670,12 +703,42 @@ class LaserGatesRenderer(AtraJaxisRenderer):
             # Where visible, use the new color; otherwise keep black (zeros)
             return jnp.where(visible_mask, color_broadcasted, 0)
 
-        # -------- Render background --------
+        any_player_collision = state.player_collision
+
+        # -------- Render background parts --------
+
+        # Upper brown background above upper mountains
         raster = aj.render_at(
             raster,
             0,
             0,
-            SPRITE_BACKGROUND,
+            SPRITE_UPPER_BROWN_BG,
+        )
+
+        # Playing field background, color adjusts if player collision
+        pfb_t = jnp.clip(255 * jnp.exp(-PLAYING_FILED_BG_COLOR_FADE_SPEED * (255 - state.animation_timer)), 0, 255)
+        pfb_t = pfb_t.astype(jnp.uint8)
+        raster = aj.render_at(
+            raster,
+            0,
+            19,
+            recolor_sprite(SPRITE_PLAYING_FIELD_BG, jnp.array((PLAYING_FILED_BG_COLLISION_COLOR[0], PLAYING_FILED_BG_COLLISION_COLOR[1], PLAYING_FILED_BG_COLLISION_COLOR[2], pfb_t))),
+        )
+
+        # Lower brown background below upper mountains
+        raster = aj.render_at(
+            raster,
+            0,
+            92,
+            SPRITE_LOWER_BROWN_BG,
+        )
+
+        # Background of instrument panel
+        raster = aj.render_at(
+            raster,
+            0,
+            109,
+            SPRITE_GRAY_GUI_BG,
         )
 
         # -------- Render mountains --------
@@ -724,12 +787,28 @@ class LaserGatesRenderer(AtraJaxisRenderer):
             SPRITE_UPPER_MOUNTAIN,
         )
 
+        # Weird black stripe 1
+        raster = aj.render_at(
+            raster,
+            0,
+            18,
+            SPRITE_BLACK_STRIPE,
+        )
+
+        # Weird black stripe 2
+        raster = aj.render_at(
+            raster,
+            0,
+            109,
+            SPRITE_BLACK_STRIPE,
+        )
+
         # -------- Render gui --------
 
-        sprite_gui_colored_background_blue_bg = recolor_sprite(SPRITE_GUI_COLORED_BACKGROUND, GUI_COLORED_BACKGROUND_COLOR_BLUE)
-        sprite_gui_colored_background_green_bg = recolor_sprite(SPRITE_GUI_COLORED_BACKGROUND, GUI_COLORED_BACKGROUND_COLOR_GREEN)
-        sprite_gui_colored_background_beige_bg = recolor_sprite(SPRITE_GUI_COLORED_BACKGROUND, GUI_COLORED_BACKGROUND_COLOR_BEIGE)
-        sprite_gui_colored_background_gray_bg = recolor_sprite(SPRITE_GUI_COLORED_BACKGROUND, GUI_COLORED_BACKGROUND_COLOR_GRAY)
+        sprite_gui_colored_background_blue_bg = recolor_sprite(SPRITE_GUI_COLORED_BACKGROUND, jnp.array(GUI_COLORED_BACKGROUND_COLOR_BLUE))
+        sprite_gui_colored_background_green_bg = recolor_sprite(SPRITE_GUI_COLORED_BACKGROUND, jnp.array(GUI_COLORED_BACKGROUND_COLOR_GREEN))
+        sprite_gui_colored_background_beige_bg = recolor_sprite(SPRITE_GUI_COLORED_BACKGROUND, jnp.array(GUI_COLORED_BACKGROUND_COLOR_BEIGE))
+        sprite_gui_colored_background_gray_bg = recolor_sprite(SPRITE_GUI_COLORED_BACKGROUND, jnp.array(GUI_COLORED_BACKGROUND_COLOR_GRAY))
 
         # Colored backgrounds ---------------
 
@@ -806,7 +885,7 @@ class LaserGatesRenderer(AtraJaxisRenderer):
         # Text ---------------
 
         # score text
-        required_text_and_bar_color = jnp.where(jnp.array(True), GUI_TEXT_COLOR_GRAY, GUI_TEXT_COLOR_BEIGE)
+        required_text_and_bar_color = jnp.where(jnp.array(True), jnp.array(GUI_TEXT_COLOR_GRAY), jnp.array(GUI_TEXT_COLOR_BEIGE))
         raster = aj.render_at(
             raster,
             16 + GUI_BLACK_BACKGROUND_X_OFFSET + 5,
@@ -920,12 +999,13 @@ class LaserGatesRenderer(AtraJaxisRenderer):
 
 
         # -------- Render player --------
-        colored_player = recolor_sprite(SPRITE_PLAYER, jnp.array(PLAYER_COLOR))
+        timer = state.animation_timer.astype(jnp.int32) - (255 - PLAYER_COLOR_CHANGE_DURATION)
+        jax.debug.print("{x}",x=timer)
         raster = aj.render_at(
             raster,
             state.player_x,
             state.player_y,
-            colored_player,
+            recolor_sprite(SPRITE_PLAYER, jnp.where(timer <= 0, jnp.array(PLAYER_NORMAL_COLOR), jnp.array(PLAYER_COLLISION_COLOR))),
             flip_horizontal=state.player_facing_direction < 0,
         )
 
