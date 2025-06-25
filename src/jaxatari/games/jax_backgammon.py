@@ -20,7 +20,7 @@ NUM_CHECKERS = 15
 BAR_INDEX = 24
 HOME_INDEX = 25
 MAX_DICE = 2
-WHITE_HOME = jnp.array(range(19, 25))
+WHITE_HOME = jnp.array(range(18, 24))
 BLACK_HOME = jnp.array(range(0, 6))
 
 
@@ -188,7 +188,6 @@ class JaxBackgammonEnv(JaxEnvironment[BackgammonState, jnp.ndarray, dict]):
 
             def bearing_off_case(_):
                 can_bear_off = JaxBackgammonEnv.check_bearing_off(state, player)
-                has_piece = board[player_idx, from_point] > 0
 
                 bearing_off_distance = jax.lax.cond(
                     player == WHITE,
@@ -200,27 +199,44 @@ class JaxBackgammonEnv(JaxEnvironment[BackgammonState, jnp.ndarray, dict]):
                 dice_match = jnp.any(state.dice == bearing_off_distance)
 
                 def white_check():
-                    # Always take full 24-size slice
-                    slice_data = board[player_idx, :24]
-                    mask = jnp.arange(24) > from_point
-                    return jnp.any(slice_data * mask.astype(slice_data.dtype) > 0)
+                    slice_start = 18
+                    slice_len = 6  # White home points: 18–23
+                    full_home = jax.lax.dynamic_slice(board[player_idx], (slice_start,), (slice_len,))
+    
+                    # Create a mask: only keep points strictly above from_point
+                    mask = jnp.arange(18, 24) < from_point
+                    return jnp.any(full_home * mask > 0)
+
+
 
                 def black_check():
-                    slice_data = board[player_idx, :24]
-                    mask = jnp.arange(24) < from_point
-                    return jnp.any(slice_data * mask.astype(slice_data.dtype) > 0)
+                    slice_start = 0
+                    slice_len = 6  # Black home points: 0–5
+                    full_home = jax.lax.dynamic_slice(board[player_idx], (slice_start,), (slice_len,))
+    
+                    # Keep only points strictly above from_point
+                    mask = jnp.arange(0, 6) > from_point
+                    return jnp.any(full_home * mask > 0)
+
 
                 higher_checkers_exist = jax.lax.cond(
-                    player == WHITE, lambda _: white_check(), lambda _: black_check(), operand=None
+                    player == WHITE, 
+                    lambda _: white_check(), 
+                    lambda _: black_check(), 
+                    operand=None
                 )
-                # Larger die may be used only if no checkers on higher points
+
+                # Larger die than needed is allowed only if no higher checkers
                 larger_die_available = jnp.any(state.dice > bearing_off_distance)
 
-                valid_bear = dice_match | ((~higher_checkers_exist) & larger_die_available)
+                # Checker must be present at the from_point
+                has_piece = board[player_idx, from_point] > 0
+
+                valid_bear = has_piece & (dice_match | ((~higher_checkers_exist) & larger_die_available))
 
                 return jax.lax.cond(
                     can_bear_off,
-                    lambda _: has_piece & valid_bear,
+                    lambda _: valid_bear,
                     lambda _: False,
                     operand=None
                 )
@@ -259,7 +275,7 @@ class JaxBackgammonEnv(JaxEnvironment[BackgammonState, jnp.ndarray, dict]):
 
         # Mask for non-home points
         non_home_mask = jnp.where(player == WHITE,
-                               point_indices < 19,   # Points 0–17 (before 19)
+                               point_indices < 18,   # Points 0–17 (before 19)
                                point_indices > 5) 
 
         in_play = board[player_idx, :24]
@@ -296,7 +312,6 @@ class JaxBackgammonEnv(JaxEnvironment[BackgammonState, jnp.ndarray, dict]):
     def compute_distance(player, from_point, to_point):
         """Compute move distance based on player and points, including bearing off."""
         is_from_bar = from_point == BAR_INDEX
-        is_bearing_off = to_point == HOME_INDEX
 
         bar_distance = jax.lax.cond(
             player == WHITE,
@@ -469,7 +484,7 @@ class JaxBackgammonEnv(JaxEnvironment[BackgammonState, jnp.ndarray, dict]):
         print("Checkers on board (0–23):", in_play.tolist())
 
         if player == WHITE:
-            outside_home = in_play[:19]
+            outside_home = in_play[:18]
         else:
             outside_home = in_play[6:]
 
