@@ -26,14 +26,14 @@ class GameConfig:
     scaling_factor: int = 3
     bullet_height: int = 1
     bullet_width: int = 1
-    bullet_speed: int = 3 #for side cannon 3 in x 2 in y middle 3 in y
+    bullet_speed: int = 3  # for side cannon 3 in x 2 in y middle 3 in y
     cannon_height: int = 8
     cannon_width: int = 8
     cannon_y: jnp.ndarray = field(
         default_factory=lambda: jnp.array([158,146,146], dtype=jnp.int32)
     )
     cannon_x: jnp.ndarray = field(
-        default_factory=lambda: jnp.array([0,72,152], dtype=jnp.int32)
+        default_factory=lambda: jnp.array([0, 72, 152], dtype=jnp.int32)
     )
     max_bullets: int = 2
     max_enemies: int = 20  # max 1 per line
@@ -42,13 +42,28 @@ class GameConfig:
     enemy_paths: jnp.ndarray = field(
         default_factory=lambda: jnp.array([60, 80, 100, 120], dtype=jnp.int32)
     )
-    enemy_width: int = 15 # 3 different lengths 15, 16, 9
-    enemy_height: int = 8
-    enemy_speed: int = 1 # changes throughout the game
+    enemy_probabilities: jnp.ndarray = field(
+        default_factory=lambda: jnp.array([0.45, 0.45, 0.10], dtype=jnp.float32)
+    )
+    enemy_points: jnp.ndarray = field(
+        default_factory=lambda: jnp.array([100, 100, 1000], dtype=jnp.int32)
+    )
+    enemy_speed_multipliers: jnp.ndarray = field(
+        default_factory=lambda: jnp.array([1, 1, 2], dtype=jnp.int32)
+    )
+    enemy_width: jnp.ndarray = field(
+        default_factory=lambda: jnp.array([28, 30, 18], dtype=jnp.int32)
+    )
+    enemy_height: jnp.ndarray = field(
+        default_factory=lambda: jnp.array([7, 8, 7], dtype=jnp.int32)
+    )
+    # enemy_width: int = 15  # 3 different lengths 15, 16, 9
+    # enemy_height: int = 8
+    enemy_speed: int = 1  # changes throughout the game
     enemy_spawn_min_frames: int = 5
     enemy_spawn_max_frames: int = 50
-    wave_end_cooldown: int = 150 # cooldown of 150 frames after wave-end, before spawning new enemies
-    wave_start_enemy_count: int = 10 # number of enemies in the first wave
+    wave_end_cooldown: int = 150  # cooldown of 150 frames after wave-end, before spawning new enemies
+    wave_start_enemy_count: int = 10  # number of enemies in the first wave
     max_digits_for_score: int = 9  # highest possible score has length of 9; lower limit is always possible
     #coordinates and sizes of all installations
     installations_y: jnp.ndarray = field(
@@ -73,10 +88,10 @@ class EntityPosition(NamedTuple):
 
 
 class AtlantisState(NamedTuple):
-    score: chex.Array # tracks the current score
+    score: chex.Array  # tracks the current score
     reward: chex.Array
-    score_spent: chex.Array # tracks how much was spent on repair
-    wave: chex.Array #tracks which wave we are in
+    score_spent: chex.Array  # tracks how much was spent on repair
+    wave: chex.Array  # tracks which wave we are in
 
     # columns = [ x,  y,  dx,   type_id, lane, active_flag ]
     #   x, y        → position
@@ -93,9 +108,9 @@ class AtlantisState(NamedTuple):
     fire_button_prev: chex.Array  # was fire button down last frame
     enemy_spawn_timer: chex.Array  # frames until next spawn
     rng: chex.Array  # PRNG state
-    lanes_free: chex.Array # bool for each lane
-    command_post_alive: chex.Array # is command post alive (middle cannon)
-    number_enemies_wave_remaining: chex.Array # number of remaining enemies per wave
+    lanes_free: chex.Array  # bool for each lane
+    command_post_alive: chex.Array  # is command post alive (middle cannon)
+    number_enemies_wave_remaining: chex.Array  # number of remaining enemies per wave
     wave_end_cooldown_remaining: chex.Array
     installations: chex.Array # stores boolean alive
 
@@ -136,9 +151,11 @@ class Renderer_AtraJaxis(AtraJaxisRenderer):
         # Load Sprites
         # Backgrounds + Dynamic elements + UI elements
         sprite_names = [
-            'cannon_left', 'cannon_right', 'cannon_middle', 'installation_1','installation_2','installation_3',
-            'installation_4','installation_5','installation_6', 'background'
-            # 'background_0', 'background_1', 'background_2',
+            'enemy_0','enemy_1','enemy_2',
+            'cannon_left', 'cannon_right', 'cannon_middle', 
+            'installation_1','installation_2','installation_3',
+            'installation_4','installation_5','installation_6', 
+            'background'
         ]
         for name in sprite_names:
             loaded_sprite = _load_sprite_frame(name)
@@ -157,7 +174,7 @@ class Renderer_AtraJaxis(AtraJaxisRenderer):
     def render(self, state: AtlantisState) -> chex.Array:
 
         def _solid_sprite(
-            width: int, height: int, rgb: tuple[int, int, int]
+                width: int, height: int, rgb: tuple[int, int, int]
         ) -> chex.Array:
             """Creates a slid-color RGBA sprite of given size and color"""
             rgb_arr = jnp.broadcast_to(
@@ -204,20 +221,29 @@ class Renderer_AtraJaxis(AtraJaxisRenderer):
         raster = jax.lax.fori_loop(0, cfg.max_bullets, _draw_bullet, raster)
 
         # add red & blue enemies
-        enemy_sprite_red = _solid_sprite(cfg.enemy_width, cfg.enemy_height, (255, 0, 0))
-        enemy_sprite_blue = _solid_sprite(cfg.enemy_width, cfg.enemy_height, (0, 0, 255))
+        enemy_sprites = (
+            self.sprites['enemy_0'],
+            self.sprites['enemy_1'],
+            self.sprites['enemy_2'],
+        )
 
         def _draw_enemy(i, ras):
+            state_i = state.enemies[i]
             active = state.enemies[i, 5] == 1
             ex = state.enemies[i, 0].astype(jnp.int32)
             ey = state.enemies[i, 1].astype(jnp.int32)
             flip = state.enemies[i, 2] < 0  # dx < 0 -> facing left
             enemy_type = state.enemies[i, 3]
+            enemy_type = state_i[3].astype(jnp.int32)
 
             def _do(r):
-                sprite = jax.lax.cond(enemy_type == 0, lambda _: enemy_sprite_blue,  # if enemy_type == 0 -> sprite = blue sprite
-                                      lambda _: enemy_sprite_red, None)  # else -> sprite = red sprite
-                return aj.render_at(r, ex, ey, sprite, flip_horizontal=flip)
+                fns = (
+                    lambda r: aj.render_at(r, ex, ey, enemy_sprites[0], flip_horizontal=flip),
+                    lambda r: aj.render_at(r, ex, ey, enemy_sprites[1], flip_horizontal=flip),
+                    lambda r: aj.render_at(r, ex, ey, enemy_sprites[2], flip_horizontal=flip),
+                )
+                # chooses based on the enemy_type (int) the draw function (this change needed because cond doesn't work with different sprite sizes)
+                return jax.lax.switch(enemy_type, fns, r)
 
             return jax.lax.cond(active, _do, lambda r: r, ras)
 
@@ -225,7 +251,9 @@ class Renderer_AtraJaxis(AtraJaxisRenderer):
 
         # render the score
         max_digits = GameConfig.max_digits_for_score  # max amount of digits
-        num_digits = jnp.where(state.score > 0, (jnp.ceil(jnp.log10(state.score.astype(jnp.float32) + 1.)).astype(jnp.int32)), 1)  # actual amount of digits
+        num_digits = jnp.where(state.score > 0,
+                               (jnp.ceil(jnp.log10(state.score.astype(jnp.float32) + 1.)).astype(jnp.int32)),
+                               1)  # actual amount of digits
 
         score_digits = aj.int_to_digits(state.score, max_digits=max_digits)  # get digit array
 
@@ -241,8 +269,8 @@ class Renderer_AtraJaxis(AtraJaxisRenderer):
             score_x, score_y,
             score_digits,
             self.score_digit_sprites,
-            max_digits-num_digits,  # skip 0s in front of score
-            num_digits,             # show that many digits
+            max_digits - num_digits,  # skip 0s in front of score
+            num_digits,  # show that many digits
             spacing=digit_w
         )
         return raster
@@ -250,10 +278,10 @@ class Renderer_AtraJaxis(AtraJaxisRenderer):
 
 class JaxAtlantis(JaxEnvironment[AtlantisState, AtlantisObservation, AtlantisInfo]):
     def __init__(
-        self,
-        frameskip: int = 1,
-        reward_funcs: list[callable] = None,
-        config: GameConfig | None = None,
+            self,
+            frameskip: int = 1,
+            reward_funcs: list[callable] = None,
+            config: GameConfig | None = None,
     ):
         super().__init__()
         # if no config was provided, instantiate the default one
@@ -264,9 +292,8 @@ class JaxAtlantis(JaxEnvironment[AtlantisState, AtlantisObservation, AtlantisInf
             reward_funcs = tuple(reward_funcs)
         self.reward_funcs = reward_funcs
 
-
     def reset(
-        self, key: jax.random.PRNGKey = jax.random.PRNGKey(42)
+            self, key: jax.random.PRNGKey = jax.random.PRNGKey(42)
     ) -> Tuple[AtlantisObservation, AtlantisState]:
         # --- empty tables ---
         empty_enemies = jnp.zeros((self.config.max_enemies, 6), dtype=jnp.int32)
@@ -283,7 +310,7 @@ class JaxAtlantis(JaxEnvironment[AtlantisState, AtlantisObservation, AtlantisInf
             score=jnp.array(0, dtype=jnp.int32),
             reward=jnp.array(0, dtype=jnp.int32),
             score_spent=jnp.array(0, dtype=jnp.int32),
-            wave=jnp.array(0, dtype=jnp.int32), # start with wave-number 0
+            wave=jnp.array(0, dtype=jnp.int32),  # start with wave-number 0
             enemies=empty_enemies,
             bullets=empty_bullets,
             bullets_alive=empty_bullets_alive,
@@ -317,9 +344,9 @@ class JaxAtlantis(JaxEnvironment[AtlantisState, AtlantisObservation, AtlantisInf
         cannon_idx: (0) left, (1) centre, (2) right or -1.
         """
         fire_pressed = (
-            (action == Action.LEFTFIRE)
-            | (action == Action.FIRE)
-            | (action == Action.RIGHTFIRE)
+                (action == Action.LEFTFIRE)
+                | (action == Action.FIRE)
+                | (action == Action.RIGHTFIRE)
         )
         # It is important to keep track if the button just got pressed
         # to prevent holding the button down and spamming bullets
@@ -371,7 +398,7 @@ class JaxAtlantis(JaxEnvironment[AtlantisState, AtlantisObservation, AtlantisInf
 
             # vertical component dy:
             # - side bullets move slightly slower up than middle bullet Because origin is in top left, its negative
-            dy = jnp.where(jnp.logical_or(cannon_idx == 0, cannon_idx==2), -(cfg.bullet_speed-1), -cfg.bullet_speed)
+            dy = jnp.where(jnp.logical_or(cannon_idx == 0, cannon_idx == 2), -(cfg.bullet_speed - 1), -cfg.bullet_speed)
 
             bullet_offset = jnp.array([7,3,-1], dtype=jnp.int32)
             new_bullet = jnp.array(
@@ -415,10 +442,10 @@ class JaxAtlantis(JaxEnvironment[AtlantisState, AtlantisObservation, AtlantisInf
 
         # check if bullets are still onscreen
         in_bounds = (
-            (positions[:, 0] >= 0)
-            & (positions[:, 0] < cfg.screen_width)
-            & (positions[:, 1] >= 0)
-            & (positions[:, 1] < cfg.screen_height)
+                (positions[:, 0] >= 0)
+                & (positions[:, 0] < cfg.screen_width)
+                & (positions[:, 1] >= 0)
+                & (positions[:, 1] < cfg.screen_height)
         )
 
         # a bullet only remains alive if it was already alive and still on-screen
@@ -439,7 +466,7 @@ class JaxAtlantis(JaxEnvironment[AtlantisState, AtlantisObservation, AtlantisInf
         # clip p to always stay between 0.3 and 0.95
         p = jnp.clip(base_p - 0.03 * wave, 0.3, 0.95)
         speed = jax.random.geometric(rng, p)
-        max_speed = wave + 1 # limit speed. wave=0 -> max speed 1. wave=1 -> 2,...
+        max_speed = wave + 1  # limit speed. wave=0 -> max speed 1. wave=1 -> 2,...
         return jnp.minimum(speed, max_speed)
 
     @partial(jax.jit, static_argnums=(0,))
@@ -466,6 +493,7 @@ class JaxAtlantis(JaxEnvironment[AtlantisState, AtlantisObservation, AtlantisInf
                 cfg.enemy_spawn_max_frames + 1,
                 dtype=jnp.int32,
             )
+
         # check if the first lane is free
         lane_free = state.lanes_free[0]
         # Count down the timer if lane is free
@@ -481,7 +509,6 @@ class JaxAtlantis(JaxEnvironment[AtlantisState, AtlantisObservation, AtlantisInf
             return s._replace(enemy_spawn_timer=timer, rng=rng_after)
 
         def _spawn(s: AtlantisState) -> AtlantisState:
-
             # enemy has 5 entries, the last one (index 5) is the active_flag
             # if this value is 0, it means an enemy isn't active anymore
             # this can be because he either left the screen, or he was shot
@@ -496,6 +523,13 @@ class JaxAtlantis(JaxEnvironment[AtlantisState, AtlantisObservation, AtlantisInf
             lane_idx = 0
             lane_y = cfg.enemy_paths[lane_idx]
 
+            # Choose randomly the enemy type. Probabilities are 0.45 for type 0,0.45 for type 1,0.1  for type 2
+            type_id = jax.random.choice(rng_type,
+                                        a=jnp.array([0, 1, 2], dtype=jnp.int32),
+                                        shape=(),
+                                        p=jnp.array([cfg.enemy_probabilities[0], cfg.enemy_probabilities[1],
+                                                     cfg.enemy_probabilities[2]], dtype=jnp.float32))
+
             # randomy decide the direction of the enemies, left or right
             go_left = jax.random.bernoulli(rng_spawn)  # True == left
             # if go_left is True, then set start x to the window_size + enemy_width
@@ -504,16 +538,14 @@ class JaxAtlantis(JaxEnvironment[AtlantisState, AtlantisObservation, AtlantisInf
             start_x = jnp.where(
                 go_left,
                 cfg.screen_width,
-                -cfg.enemy_width,
+                -cfg.enemy_width[type_id],
             )
+
             # Set the direction
-            speed = self._sample_speed(rng_speed, s.wave)
+            speed = self._sample_speed(rng_speed, s.wave)*cfg.enemy_speed_multipliers[type_id]
             dx = jnp.where(go_left, -speed, speed)
             # dx = jnp.where(go_left, -cfg.enemy_speed, cfg.enemy_speed)
 
-            # assemble the enemy. for now  the type will randomly chosen without further probability logics/...
-            # TODO: change later
-            type_id = jax.random.randint(rng_type, (), 0, 2, dtype=jnp.int32)
             # also sets the enemy to be active (last entry is 1)
             new_enemy = jnp.array(
                 [start_x, lane_y, dx, type_id, 0, 1],
@@ -555,19 +587,20 @@ class JaxAtlantis(JaxEnvironment[AtlantisState, AtlantisObservation, AtlantisInf
         x_pos = enemies[:, 0]
         y_pos = enemies[:, 1]
         dx_vel = enemies[:, 2]
-        lane_indices = enemies[:, 4] # get current lanes of all enemies
-        is_active = enemies[:, 5] == 1 # get active flags of all enemies
+        enemy_ids = enemies[:, 3]
+        lane_indices = enemies[:, 4]  # get current lanes of all enemies
+        is_active = enemies[:, 5] == 1  # get active flags of all enemies
         number_lanes = cfg.enemy_paths.shape[0]
 
         # y always stays constant. just move x by adding dx
         new_pos = x_pos + dx_vel  # x + dx
-        #-- enemies = x_pos.set(new_pos)  # write back
+        # -- enemies = x_pos.set(new_pos)  # write back
 
         # decide if an enemy is still on_screen
         # as long as a part of the enemy is still in the viewable area, the enemy stays alive
         # 1) check right edge > 0 -> enemies right edge hasnt completely passed the left edge of the screen
         # 2) check left edge < screen_width -> enemies left edge hasnt gone past the right edge of the screen
-        on_screen = (new_pos + cfg.enemy_width > 0) & (new_pos < cfg.screen_width)
+        on_screen = (new_pos + cfg.enemy_width[enemy_ids] > 0) & (new_pos < cfg.screen_width)
 
         # Identify enemies that are NOT on screen
         off_screen_enemies = ~on_screen
@@ -580,7 +613,7 @@ class JaxAtlantis(JaxEnvironment[AtlantisState, AtlantisObservation, AtlantisInf
         respawn_x = jnp.where(
             dx_vel < 0,
             cfg.screen_width,
-            -cfg.enemy_width
+            -cfg.enemy_width[enemy_ids]
         )
 
         # create array of length max_enemies
@@ -590,7 +623,7 @@ class JaxAtlantis(JaxEnvironment[AtlantisState, AtlantisObservation, AtlantisInf
         next_lanes = jnp.where(
             is_active,
             lane_indices + 1,
-            0 # set dummy 0
+            0  # set dummy 0
         )
 
         # Determine which enemies are allowed to advance into the next lane:
@@ -630,16 +663,15 @@ class JaxAtlantis(JaxEnvironment[AtlantisState, AtlantisObservation, AtlantisInf
         lane_y_positions = jnp.where(
             updated_lanes < number_lanes,
             cfg.enemy_paths[updated_lanes],
-            - cfg.enemy_height
+            - cfg.enemy_height[enemy_ids]
         )
 
-        updated_enemies = enemies.at[:,0].set(updated_x)
+        updated_enemies = enemies.at[:, 0].set(updated_x)
         updated_enemies = updated_enemies.at[:, 1].set(lane_y_positions)
-        updated_enemies = updated_enemies.at[:,4].set(updated_lanes)
+        updated_enemies = updated_enemies.at[:, 4].set(updated_lanes)
         updated_enemies = updated_enemies.at[:, 5].set(flags)
 
-
-        #check if lanes are free now
+        # check if lanes are free now
         lane_masks = []
         # iterate through length of enemy_paths (4)
         # lane_mask checks if
@@ -651,7 +683,6 @@ class JaxAtlantis(JaxEnvironment[AtlantisState, AtlantisObservation, AtlantisInf
 
         free_lanes = jnp.array(lane_masks)
         return state._replace(enemies=updated_enemies, lanes_free=free_lanes)
-
 
     @partial(jax.jit, static_argnums=(0,))
     def _check_bullet_enemy_collision(self, state: AtlantisState) -> AtlantisState:
@@ -667,10 +698,52 @@ class JaxAtlantis(JaxEnvironment[AtlantisState, AtlantisObservation, AtlantisInf
         6. deactive those objects
         7. update score
         """
+
+        def handle_collision(l_hit_matrix, l_state: AtlantisState):
+            # check if bullet collided with any enemy
+            bullet_hit = jnp.any(l_hit_matrix, axis=1)  # (B,)
+            # check if enemy was hit by any bullet
+            enemy_hit = jnp.any(l_hit_matrix, axis=0)  # (E,)
+
+            # which cannon was used (check horizontal velocity)
+            dx = l_state.bullets[:, 2]
+            side_cannon_hit = jnp.any(l_hit_matrix & (dx[:, None] != 0),
+                                      axis=0)  # vector containing hits made with a side cannon
+
+            # ---- score calculation ----
+            types = l_state.enemies[:, 3]  # get all enemy types
+            # calculate points per enemy (no matter if it was hit or not)
+            # enemy type 0: center=100, side=200
+            points_type_0 = jnp.where(types == 0, jnp.where(side_cannon_hit, 2 * cfg.enemy_points[0], cfg.enemy_points[0]), 0)
+            # enemy type 1: center=100, side=200
+            points_type_1 = jnp.where(types == 1, jnp.where(side_cannon_hit, 2 * cfg.enemy_points[1], cfg.enemy_points[1]), 0)
+            # enemy type 2: center=1000, side=2000
+            points_type_2 = jnp.where(types == 2, jnp.where(side_cannon_hit, 2 * cfg.enemy_points[2], cfg.enemy_points[2]), 0)
+            points_per_enemy = points_type_0 + points_type_1 + points_type_2
+
+            # multiply points per enemy with enemy_hit to only get points of hit enemies; then sum points up
+            points = jnp.sum(points_per_enemy * enemy_hit.astype(jnp.int32))
+            # update score
+            new_score = l_state.score + points
+
+            # if at least 1 type 2 enemy is hit, remove all enemies
+            type_2_killed = jnp.any(enemy_hit & (types == 2))
+            enemy_hit = jnp.where(type_2_killed, jnp.ones_like(enemy_hit), enemy_hit)
+
+            # deactivate bullets and enemies
+            new_bullet_alive = l_state.bullets_alive & (~bullet_hit)
+
+            new_enemy_flags = (l_state.enemies[:, 5] == 1) & (~enemy_hit)
+            enemies_updated = l_state.enemies.at[:, 5].set(new_enemy_flags.astype(jnp.int32))
+
+            return l_state._replace(bullets_alive=new_bullet_alive,
+                                    enemies=enemies_updated,
+                                    score=new_score)
+
         cfg = self.config
 
         bullets_x, bullets_y = state.bullets[:, 0], state.bullets[:, 1]  # (B,)
-        enemies_x, enemies_y = state.enemies[:, 0], state.enemies[:, 1]  # (E,)
+        enemies_x, enemies_y, type_ids = state.enemies[:, 0], state.enemies[:, 1], state.enemies[:, 3].astype(jnp.int32)  # (E,)
 
         # compute edge coordinates  for all rectangles
         # broadcasting with none inserts singleton axes so every
@@ -680,11 +753,15 @@ class JaxAtlantis(JaxEnvironment[AtlantisState, AtlantisObservation, AtlantisInf
         b_top = bullets_y[:, None]
         b_bottom = (bullets_y + cfg.bullet_height)[:, None]
 
+        # width per enemy
+        enemy_widths = cfg.enemy_width[type_ids]
+        enemy_heights = cfg.enemy_height[type_ids]
+
         # Enemy edges
         e_left = enemies_x[None, :]
-        e_right = (enemies_x + cfg.enemy_width)[None, :]
+        e_right = (enemies_x + enemy_widths)[None, :]
         e_top = enemies_y[None, :]
-        e_bottom = (enemies_y + cfg.enemy_height)[None, :]
+        e_bottom = (enemies_y + enemy_heights)[None, :]
 
         # True where bullets left < enemies right AND bullets right >  enemies left
         overlaps_x = (b_left < e_right) & (b_right > e_left)
@@ -699,46 +776,8 @@ class JaxAtlantis(JaxEnvironment[AtlantisState, AtlantisObservation, AtlantisInf
         hit_matrix &= state.bullets_alive[:, None]
         hit_matrix &= (state.enemies[:, 5] == 1)[None, :]
 
-        # check if bullet collided with any enemy
-        bullet_hit = jnp.any(hit_matrix, axis=1)  # (B,)
-        # check if enemy was hit by any bullet
-        enemy_hit = jnp.any(hit_matrix, axis=0)  # (E,)
-
-        # which cannon was used (check horizontal velocity)
-        dx = state.bullets[:, 2]
-        side_cannon_hit = jnp.any(hit_matrix & (dx[:, None] != 0), axis=0)  # vector containing hits made with a side cannon
-
-        # ---- score calculation ----
-        types = state.enemies[:, 3]  # get all enemy types
-        # calculate points per enemy (no matter if it was hit or not)
-        # enemy type 0: center=100, side=200
-        points_type_0 = jnp.where(types == 0, jnp.where(side_cannon_hit, 200, 100), 0)
-        # enemy type 1: center=1000, side=2000
-        points_type_1 = jnp.where(types == 1, jnp.where(side_cannon_hit, 2000, 1000), 0)
-        points_per_enemy = points_type_0 + points_type_1
-
-        # multiply points per enemy with enemy_hit to only get points of hit enemies; then sum points up
-        points = jnp.sum(points_per_enemy * enemy_hit.astype(jnp.int32))
-        # update score
-        new_score = state.score + points
-
-        # if at least 1 type 1 enemy is hit, remove all enemies
-        type_1_killed = jnp.any(enemy_hit & (types == 1))
-        enemy_hit = jnp.where(type_1_killed, jnp.ones_like(enemy_hit), enemy_hit)
-        new_number_enemies_wave_remaining = jnp.where(type_1_killed, 0,state.number_enemies_wave_remaining)
-
-        # deactivate bullets and enemies
-        new_bullet_alive = state.bullets_alive & (~bullet_hit)
-
-        new_enemy_flags = (state.enemies[:, 5] == 1) & (~enemy_hit)
-        enemies_updated = state.enemies.at[:, 5].set(new_enemy_flags.astype(jnp.int32))
-
-        return state._replace(bullets_alive=new_bullet_alive,
-                              enemies=enemies_updated,
-                              score=new_score,
-                              number_enemies_wave_remaining=new_number_enemies_wave_remaining)
-
-
+        state = handle_collision(hit_matrix, state)
+        return state
 
     @partial(jax.jit, static_argnums=(0,))
     def _update_wave(self, state: AtlantisState) -> AtlantisState:
@@ -770,12 +809,12 @@ class JaxAtlantis(JaxEnvironment[AtlantisState, AtlantisObservation, AtlantisInf
     def _cooldown_finished(self, state: AtlantisState) -> Array:
         return state.wave_end_cooldown_remaining == 0
 
-
     @partial(jax.jit, static_argnums=(0,))
     def step(
-        self, state: AtlantisState, action: chex.Array
+            self, state: AtlantisState, action: chex.Array
     ) -> Tuple[AtlantisObservation, AtlantisState, float, bool, AtlantisInfo]:
         previous_state = state
+
         def _pause_step(s: AtlantisState) -> AtlantisState:
             # reduce pause cooldown
             s = s._replace(
@@ -813,9 +852,10 @@ class JaxAtlantis(JaxEnvironment[AtlantisState, AtlantisObservation, AtlantisInf
         )
         observation = self._get_observation(state)
         info = AtlantisInfo(time=jnp.array(0, dtype=jnp.int32), score=state.score)
-        state._replace(reward = state.score - previous_state.score)
-        # done = False  # Never terminates for now 
-        done = jnp.where(state.score < 10**GameConfig.max_digits_for_score, False, True)  # if score > max displayable value -> done = true
+        state._replace(reward=state.score - previous_state.score)
+        # done = False  # Never terminates for now
+        done = jnp.where(state.score < 10 ** GameConfig.max_digits_for_score, False,
+                         True)  # if score > max displayable value -> done = true
 
         return observation, state, state.reward, done, info
 
@@ -927,7 +967,7 @@ def main():
                 if event.key == pygame.K_f:
                     frame_by_frame = not frame_by_frame
             elif event.type == pygame.KEYDOWN or (
-                event.type == pygame.KEYUP and event.key == pygame.K_n
+                    event.type == pygame.KEYUP and event.key == pygame.K_n
             ):
                 if event.key == pygame.K_n and frame_by_frame:
                     if counter % frameskip == 0:
@@ -964,3 +1004,41 @@ def main():
 
 if __name__ == "__main__":
     main()
+
+
+
+
+# --------------------- Script to visualize sprites ---------------------
+
+# import os
+# import numpy as np
+# import matplotlib.pyplot as plt
+#
+# def main2():
+#     # Pfad zur .npy Datei relativ zu diesem Skript
+#     script_dir = os.path.dirname(os.path.abspath(__file__))
+#     image_path = os.path.join(
+#         script_dir,
+#         "sprites", "atlantis", "0.npy"
+#     )
+#
+#     # .npy laden (Form (H, W, 4) mit RGBA)
+#     img = np.load(image_path)
+#
+#     # Figure und Achse anlegen, beide mit transparentem Hintergrund
+#     fig, ax = plt.subplots(figsize=(6, 6),
+#                            facecolor="none")        # Figure durchsichtig
+#     ax.set_facecolor("none")                         # Achse durchsichtig
+#
+#     # Bild anzeigen (RGBA wird unterstützt)
+#     ax.imshow(img)
+#     ax.axis("off")  # keine Achsenlinien
+#
+#     # Interaktive Anzeige
+#     plt.show()
+#
+#
+# if __name__ == "__main__":
+#     main2()
+
+
