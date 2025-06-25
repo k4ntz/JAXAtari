@@ -167,7 +167,6 @@ class Renderer_AtraJaxis(AtraJaxisRenderer):
             os.path.join(self.sprite_path, "score_{}.npy"),
             num_chars=10
         )
-        print(sprites)
         return sprites
 
     @partial(jax.jit, static_argnums=(0,))
@@ -220,7 +219,7 @@ class Renderer_AtraJaxis(AtraJaxisRenderer):
 
         raster = jax.lax.fori_loop(0, cfg.max_bullets, _draw_bullet, raster)
 
-        # add red & blue enemies
+        # add enemies
         enemy_sprites = (
             self.sprites['enemy_0'],
             self.sprites['enemy_1'],
