@@ -1361,7 +1361,7 @@ class GalaxianRenderer(AtraJaxisRenderer):
             e = aj.get_sprite_frame(self.SPRITE_ENEMY_GRAY, 0)
 
             def draw_single_attacker(r, i):
-                cond = state.enemy_attack_states[i] == 1
+                cond = jnp.logical_or(state.enemy_attack_states[i] == 1, state.enemy_attack_states[i] == 2)
 
                 def true_fn(r):
                     ex = jnp.round(state.enemy_attack_x[i]).astype(jnp.int32)
@@ -1385,7 +1385,7 @@ class GalaxianRenderer(AtraJaxisRenderer):
             support_caller_y = state.enemy_attack_y[state.enemy_support_caller_idx]
 
             def draw_single_supporter(r, i):
-                cond = state.enemy_support_states[i] == 1
+                cond = jnp.logical_or(state.enemy_support_states[i] == 1, state.enemy_support_states[i] == 2)
 
                 def true_fn(r):
                     ex = jnp.round(state.enemy_support_x[i]).astype(jnp.int32)
