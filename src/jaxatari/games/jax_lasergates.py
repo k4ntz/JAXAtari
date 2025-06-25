@@ -71,6 +71,9 @@ PLAYER_MISSILE_VELOCITY_MULTIPLIER = 1.1 # Multiply the current speed at a given
 SHIELD_LOSS_COL_SMALL = 1
 SHIELD_LOSS_COL_BIG = 6
 
+# -------- Entity constants (constants that apply to all entity types --------
+
+
 # -------- Enemy Missile constants --------
 ENEMY_MISSILE_COLOR = (85, 92, 197, 255)
 
@@ -94,22 +97,66 @@ GUI_Y_SPACE_BETWEEN_PLAYING_FIELD = 10
 GUI_Y_SPACE_BETWEEN_BACKGROUNDS = 10
 
 # -------- States --------
-class EntityTypes(IntEnum):
-    RADAR_MORTAR = 0    # Radar mortars appear along the top and bottom of the Computer passage. Avoid Mortar fire. Demolish Radar Mortars with laser fire.
-    BYTE_BAT = 1        # Green bat looking entity flying at you without warning.
-    ROCK_MUNCHER = 2    #
-    HOMING_MISSILE = 3  # Bomb looking entity flying and tracking you
-    FORCEFIELD = 4      # Flashing, flexing or fixed "wall". Time your approach to cross.
-    DENSEPACK = 5       # Grey densepack columns of varying width appear along the dark Computer passage. Blast your way through.
-    DETONATOR = 6       # "Failsafe detonators" are large and grey and have the numbers "6507" etched on the side. Laser fire must trike one of the pins on the side of a detonator to destroy it.
-    ENERGY_POD = 7      # To replenish energy reserves, touch Energy Pods as they appear along the Computer passageway. Do not fire at Energy Pods! You may not survive until another appears!
+class EntityType(IntEnum):
+    NONE = 0
+    RADAR_MORTAR = 1    # Radar mortars appear along the top and bottom of the Computer passage. Avoid Mortar fire. Demolish Radar Mortars with laser fire.
+    BYTE_BAT = 2        # Green bat looking entity flying at you without warning.
+    ROCK_MUNCHER = 3    #
+    HOMING_MISSILE = 4  # Bomb looking entity flying and tracking you
+    FORCEFIELD = 5      # Flashing, flexing or fixed "wall". Time your approach to cross.
+    DENSEPACK = 6       # Grey densepack columns of varying width appear along the dark Computer passage. Blast your way through.
+    DETONATOR = 7       # "Failsafe detonators" are large and grey and have the numbers "6507" etched on the side. Laser fire must strike one of the pins on the side of a detonator to destroy it.
+    ENERGY_POD = 8      # To replenish energy reserves, touch Energy Pods as they appear along the Computer passageway. Do not fire at Energy Pods! You may not survive until another appears!
 
-class Entity(NamedTuple):
-    type: EntityTypes
+class RadarMortarState(NamedTuple):
+    is_in_current_event: jnp.bool
     x: chex.Array
     y: chex.Array
-    is_alive: chex.Array
-    is_in_current_event: chex.Array
+
+class ByteBatState(NamedTuple):
+    is_in_current_event: jnp.bool
+    x: chex.Array
+    y: chex.Array
+
+class RockMuncherState(NamedTuple):
+    is_in_current_event: jnp.bool
+    x: chex.Array
+    y: chex.Array
+
+class HomingMissileState(NamedTuple):
+    is_in_current_event: jnp.bool
+    x: chex.Array
+    y: chex.Array
+
+class ForceFieldState(NamedTuple):
+    is_in_current_event: jnp.bool
+    x: chex.Array
+    y: chex.Array
+
+class DensepackState(NamedTuple):
+    is_in_current_event: jnp.bool
+    x: chex.Array
+    y: chex.Array
+
+class DetonatorState(NamedTuple):
+    is_in_current_event: jnp.bool
+    x: chex.Array
+    y: chex.Array
+
+class EnergyPodState(NamedTuple):
+    is_in_current_event: jnp.bool
+    x: chex.Array
+    y: chex.Array
+
+class Entities(NamedTuple):
+    radar_mortar_state: RadarMortarState
+    byte_bat_state: ByteBatState
+    rock_muncher_state: RockMuncherState
+    homing_missile_state: HomingMissileState
+    forcefield_state: ForceFieldState
+    dense_pack_state: DensepackState
+    detonator_state: DetonatorState
+    energy_pod_state: EnergyPodState
 
 class MountainState(NamedTuple):
     x1: chex.Array
@@ -129,6 +176,7 @@ class LaserGatesState(NamedTuple):
     player_facing_direction: chex.Array
     player_missile: PlayerMissileState
     player_collision: chex.Array
+    entities: Entities
     animation_timer: chex.Array
     lower_mountains: MountainState
     upper_mountains: MountainState
@@ -164,6 +212,7 @@ class LaserGatesInfo(NamedTuple):
 def load_sprites():
     MODULE_DIR = os.path.dirname(os.path.abspath(__file__))
 
+    # Background parts
     upper_brown_bg = aj.loadFrame(os.path.join(MODULE_DIR, "sprites/lasergates/background/upper_brown_bg.npy"))
     lower_brown_bg = aj.loadFrame(os.path.join(MODULE_DIR, "sprites/lasergates/background/lower_brown_bg.npy"))
     playing_field_bg = aj.loadFrame(os.path.join(MODULE_DIR, "sprites/lasergates/background/playing_field_bg.npy"))
@@ -172,9 +221,11 @@ def load_sprites():
     upper_mountain = aj.loadFrame(os.path.join(MODULE_DIR, "sprites/lasergates/background/mountains/upper_mountain.npy"))
     black_stripe = aj.loadFrame(os.path.join(MODULE_DIR, "sprites/lasergates/background/black_stripe.npy"))
 
+    # Player and player missile
     player = aj.loadFrame(os.path.join(MODULE_DIR, "sprites/lasergates/player/player.npy"))
     player_missile = aj.loadFrame(os.path.join(MODULE_DIR, "sprites/lasergates/missiles/player_missile.npy"))
 
+    # Instrument panel parts
     gui_colored_background = aj.loadFrame(os.path.join(MODULE_DIR, "sprites/lasergates/gui/colored_background.npy"))
     gui_black_background = aj.loadFrame(os.path.join(MODULE_DIR, "sprites/lasergates/gui/black_background.npy"))
     gui_text_score = aj.loadFrame(os.path.join(MODULE_DIR, "sprites/lasergates/gui/text/score.npy"))
@@ -246,6 +297,63 @@ def mountains_step(
     new_x3 = jnp.where(new_x3 < 0 - MOUNTAIN_SIZE[0], new_x2 + MOUNTAIN_SIZE[0] + MOUNTAINS_DISTANCE, new_x3)
 
     return MountainState(x1=new_x1, x2=new_x2, x3=new_x3, y=mountain_state.y)
+
+@jax.jit
+def radar_mortar_step(state: LaserGatesState) -> RadarMortarState:
+    return state.entities.radar_mortar_state
+
+@jax.jit
+def byte_bat_step(state: LaserGatesState) -> ByteBatState:
+    return state.entities.byte_bat_state
+
+@jax.jit
+def rock_muncher_step(state: LaserGatesState) -> RockMuncherState:
+    return state.entities.rock_muncher_state
+
+@jax.jit
+def homing_missile_step(state: LaserGatesState) -> HomingMissileState:
+    return state.entities.homing_missile_state
+
+@jax.jit
+def forcefield_step(state: LaserGatesState) -> ForceFieldState:
+    return state.entities.forcefield_state
+
+@jax.jit
+def densepack_step(state: LaserGatesState) -> DensepackState:
+    return state.entities.dense_pack_state
+
+@jax.jit
+def radar_mortar_step(state: LaserGatesState) -> RadarMortarState:
+    return state.entities.radar_mortar_state
+
+@jax.jit
+def detonator_step(state: LaserGatesState) -> DetonatorState:
+    return state.entities.detonator_state
+
+@jax.jit
+def energy_pod_step(state: LaserGatesState) -> EnergyPodState:
+    return state.entities.energy_pod_state
+
+@jax.jit
+def step_all_entities(game_state: LaserGatesState) -> Entities:
+    def entity_maybe_step(step_fn, entity_state):
+        return jax.lax.cond(
+            entity_state.is_in_current_event,
+            lambda _: step_fn(game_state),  # Only update the entity if in current event
+            lambda _: entity_state,         # Use old state if not in current event
+            operand=None
+        )
+
+    return Entities(
+        radar_mortar_state = entity_maybe_step(radar_mortar_step, game_state.entities.radar_mortar_state),
+        byte_bat_state = entity_maybe_step(byte_bat_step, game_state.entities.byte_bat_state),
+        rock_muncher_state = entity_maybe_step(rock_muncher_step, game_state.entities.rock_muncher_state),
+        homing_missile_state = entity_maybe_step(homing_missile_step, game_state.entities.homing_missile_state),
+        forcefield_state = entity_maybe_step(forcefield_step, game_state.entities.forcefield_state),
+        dense_pack_state = entity_maybe_step(densepack_step, game_state.entities.dense_pack_state),
+        detonator_state = entity_maybe_step(detonator_step, game_state.entities.detonator_state),
+        energy_pod_state = entity_maybe_step(energy_pod_step, game_state.entities.energy_pod_state),
+    )
 
 
 @jax.jit
@@ -610,12 +718,56 @@ class JaxLaserGates(JaxEnvironment[LaserGatesState, LaserGatesObservation, Laser
             velocity=jnp.array(0),
         )
 
+        initial_entities = Entities(
+            radar_mortar_state=RadarMortarState(
+                is_in_current_event=jnp.bool(False),
+                x=jnp.array(0),
+                y=jnp.array(0),
+            ),
+            byte_bat_state=ByteBatState(
+                is_in_current_event=jnp.bool(False),
+                x=jnp.array(0),
+                y=jnp.array(0),
+            ),
+            rock_muncher_state=RockMuncherState(
+                is_in_current_event=jnp.bool(False),
+                x=jnp.array(0),
+                y=jnp.array(0),
+            ),
+            homing_missile_state=HomingMissileState(
+                is_in_current_event=jnp.bool(False),
+                x=jnp.array(0),
+                y=jnp.array(0),
+            ),
+            forcefield_state=ForceFieldState(
+                is_in_current_event=jnp.bool(False),
+                x=jnp.array(0),
+                y=jnp.array(0),
+            ),
+            dense_pack_state=DensepackState(
+                is_in_current_event=jnp.bool(False),
+                x=jnp.array(0),
+                y=jnp.array(0),
+            ),
+            detonator_state=DetonatorState(
+                is_in_current_event=jnp.bool(False),
+                x=jnp.array(0),
+                y=jnp.array(0),
+            ),
+            energy_pod_state=EnergyPodState(
+                is_in_current_event=jnp.bool(False),
+                x=jnp.array(0),
+                y=jnp.array(0),
+            ),
+        )
+
         reset_state = LaserGatesState( # TODO: fill
             player_x=jnp.array(PLAYER_START_X),
             player_y=jnp.array(PLAYER_START_Y),
             player_facing_direction=jnp.array(1),
             player_missile=initial_player_missile,
-            player_collision=jnp.array(False),
+            player_collision=jnp.bool(False),
+            entities=initial_entities,
             animation_timer=jnp.array(0).astype(jnp.uint8),
             lower_mountains=initial_lower_mountains,
             upper_mountains=initial_upper_mountains,
@@ -641,26 +793,34 @@ class JaxLaserGates(JaxEnvironment[LaserGatesState, LaserGatesObservation, Laser
         player_animation_timer = state.animation_timer
         new_player_animation_timer = jnp.where(player_animation_timer != 0, player_animation_timer - 1, player_animation_timer)
 
+        # -------- Move player missile --------
+        new_player_missile_state = player_missile_step(state, action)
+
+        # -------- Move entities --------
+        new_entities = step_all_entities(state)
+
+        # -------- Move mountains --------
         new_lower_mountains_state = mountains_step(state.lower_mountains, state)
         new_upper_mountains_state = mountains_step(state.upper_mountains, state)
 
-        new_player_missile_state = player_missile_step(state, action)
-
+        # -------- Update scroll speed --------
         new_scroll_speed = jnp.where(state.player_x != PLAYER_BOUNDS[0][1], SCROLL_SPEED, SCROLL_SPEED * SCROLL_MULTIPLIER)
 
+        # -------- Check player collision --------
         upper_col, lower_col = check_player_collision(state)
+        any_player_collision = jnp.logical_or(upper_col, lower_col)
+
+        # -------- Update things that have to be updated at collision --------
+        new_player_animation_timer = jnp.where(any_player_collision, 255, new_player_animation_timer)
 
         new_player_y = jnp.where(upper_col, new_player_y + 4, new_player_y)
         new_player_y = jnp.where(lower_col, new_player_y - 4, new_player_y)
 
+        # -------- Update energy, score, shields and d-time --------
         new_energy = state.energy - 1
         new_score = state.score + 1
-
         new_shields = jnp.where(jnp.logical_or(upper_col, lower_col), state.shields - 1, state.shields)
 
-        any_player_collision = jnp.logical_or(upper_col, lower_col)
-
-        new_player_animation_timer = jnp.where(any_player_collision, 255, new_player_animation_timer)
 
         return_state = state._replace(
             player_x=new_player_x,
@@ -669,6 +829,7 @@ class JaxLaserGates(JaxEnvironment[LaserGatesState, LaserGatesObservation, Laser
             animation_timer=new_player_animation_timer,
             player_missile=new_player_missile_state,
             player_collision=any_player_collision,
+            entities=new_entities,
             lower_mountains=new_lower_mountains_state,
             upper_mountains=new_upper_mountains_state,
             scroll_speed=new_scroll_speed,
