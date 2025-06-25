@@ -29,7 +29,9 @@ class GameConfig:
     bullet_speed: int = 3  # for side cannon 3 in x 2 in y middle 3 in y
     cannon_height: int = 8
     cannon_width: int = 8
-    cannon_y: int = 160
+    cannon_y: jnp.ndarray = field(
+        default_factory=lambda: jnp.array([158,146,146], dtype=jnp.int32)
+    )
     cannon_x: jnp.ndarray = field(
         default_factory=lambda: jnp.array([0, 72, 152], dtype=jnp.int32)
     )
@@ -63,6 +65,17 @@ class GameConfig:
     wave_end_cooldown: int = 150  # cooldown of 150 frames after wave-end, before spawning new enemies
     wave_start_enemy_count: int = 10  # number of enemies in the first wave
     max_digits_for_score: int = 9  # highest possible score has length of 9; lower limit is always possible
+    #coordinates and sizes of all installations
+    installations_y: jnp.ndarray = field(
+        default_factory=lambda: jnp.array([204, 182, 171, 158, 193, 171], dtype=jnp.int32)
+    )
+    installations_x: jnp.ndarray = field(
+        default_factory=lambda: jnp.array([17, 38, 62, 82, 96, 142], dtype=jnp.int32)
+    )
+    installations_width: jnp.ndarray = field(
+        default_factory=lambda: jnp.array([16, 16, 4, 4, 16, 4], dtype=jnp.int32)
+    )
+    installations_height: int = 8 #all the same height
 
 
 # Each value of this class is a list.
@@ -99,8 +112,7 @@ class AtlantisState(NamedTuple):
     command_post_alive: chex.Array  # is command post alive (middle cannon)
     number_enemies_wave_remaining: chex.Array  # number of remaining enemies per wave
     wave_end_cooldown_remaining: chex.Array
-    # installations: chex.Array # should store all current installations and their coordinates
-
+    installations: chex.Array # stores boolean alive
 
 class AtlantisObservation(NamedTuple):
     score: jnp.ndarray
@@ -139,9 +151,11 @@ class Renderer_AtraJaxis(AtraJaxisRenderer):
         # Load Sprites
         # Backgrounds + Dynamic elements + UI elements
         sprite_names = [
-            'enemy_0',
-            'enemy_1',
-            'enemy_2',
+            'enemy_0','enemy_1','enemy_2',
+            'cannon_left', 'cannon_right', 'cannon_middle', 
+            'installation_1','installation_2','installation_3',
+            'installation_4','installation_5','installation_6', 
+            'background'
         ]
         for name in sprite_names:
             loaded_sprite = _load_sprite_frame(name)
@@ -153,6 +167,7 @@ class Renderer_AtraJaxis(AtraJaxisRenderer):
             os.path.join(self.sprite_path, "score_{}.npy"),
             num_chars=10
         )
+        print(sprites)
         return sprites
 
     @partial(jax.jit, static_argnums=(0,))
@@ -171,26 +186,24 @@ class Renderer_AtraJaxis(AtraJaxisRenderer):
         cfg = self.config
         W, H = cfg.screen_width, cfg.screen_height
 
-        # add black background
-        BG_COLOUR = (0, 0, 0)
-        bg_sprite = _solid_sprite(W, H, BG_COLOUR)
-        # render black rectangle at (0,0)
+        # add background
+        bg_sprite = self.sprites['background']
         raster = aj.render_at(jnp.zeros_like(bg_sprite[..., :3]), 0, 0, bg_sprite)
 
-        # add deep blue cannons
-        cannon_sprite = _solid_sprite(cfg.cannon_width, cfg.cannon_height, (0, 62, 120))
+        #add cannons
+        raster = aj.render_at(raster, cfg.cannon_x[0], cfg.cannon_y[0], self.sprites['cannon_left'])
+        raster = aj.render_at(raster, cfg.cannon_x[1], cfg.cannon_y[1], self.sprites['cannon_middle'])
+        raster = aj.render_at(raster, cfg.cannon_x[2], cfg.cannon_y[2], self.sprites['cannon_right'])
 
-        def _draw_cannon(i, ras):
-            return aj.render_at(
-                ras,
-                cfg.cannon_x[i],  # x pos of i-th cannon
-                cfg.cannon_y,  # y-pos
-                cannon_sprite,
-            )
+        #add installations
+        raster = aj.render_at(raster, cfg.installations_x[0], cfg.installations_y[0], self.sprites['installation_1'])
+        raster = aj.render_at(raster, cfg.installations_x[1], cfg.installations_y[1], self.sprites['installation_2'])
+        raster = aj.render_at(raster, cfg.installations_x[2], cfg.installations_y[2], self.sprites['installation_3'])
+        raster = aj.render_at(raster, cfg.installations_x[3], cfg.installations_y[3], self.sprites['installation_4'])
+        raster = aj.render_at(raster, cfg.installations_x[4], cfg.installations_y[4], self.sprites['installation_5'])
+        raster = aj.render_at(raster, cfg.installations_x[5], cfg.installations_y[5], self.sprites['installation_6'])
 
-        raster = jax.lax.fori_loop(0, cfg.cannon_x.shape[0], _draw_cannon, raster)
-
-        # add solid white cannons
+        # add solid white bullets
         bullet_sprite = _solid_sprite(
             cfg.bullet_width, cfg.bullet_height, (255, 255, 255)
         )
@@ -287,6 +300,7 @@ class JaxAtlantis(JaxEnvironment[AtlantisState, AtlantisObservation, AtlantisInf
         empty_bullets = jnp.zeros((self.config.max_bullets, 4), dtype=jnp.int32)
         empty_bullets_alive = jnp.zeros((self.config.max_bullets,), dtype=jnp.bool_)
         empty_lanes = jnp.ones((4,), dtype=jnp.bool_)
+        start_installations = jnp.ones((6,), dtype=jnp.bool_)
 
         # split the PRNGkey so we get one subkey for the spawn-timer and one to carry forward in state.rng
         key, sub = jax.random.split(key)
@@ -314,6 +328,7 @@ class JaxAtlantis(JaxEnvironment[AtlantisState, AtlantisObservation, AtlantisInf
             command_post_alive=jnp.array(True, dtype=jnp.bool_),
             number_enemies_wave_remaining=jnp.array(self.config.wave_start_enemy_count, dtype=jnp.int32),
             wave_end_cooldown_remaining=jnp.array(0, dtype=jnp.int32),
+            installations= start_installations,
         )
 
         obs = self._get_observation(new_state)
@@ -385,8 +400,9 @@ class JaxAtlantis(JaxEnvironment[AtlantisState, AtlantisObservation, AtlantisInf
             # - side bullets move slightly slower up than middle bullet Because origin is in top left, its negative
             dy = jnp.where(jnp.logical_or(cannon_idx == 0, cannon_idx == 2), -(cfg.bullet_speed - 1), -cfg.bullet_speed)
 
+            bullet_offset = jnp.array([7,3,-1], dtype=jnp.int32)
             new_bullet = jnp.array(
-                [cfg.cannon_x[cannon_idx], cfg.cannon_y, dx, dy],  # velocity
+                [cfg.cannon_x[cannon_idx]+bullet_offset[cannon_idx], cfg.cannon_y[cannon_idx], dx, dy],  # velocity
                 dtype=jnp.int32,
             )
 
