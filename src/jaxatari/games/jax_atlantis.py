@@ -67,7 +67,7 @@ class GameConfig:
     max_digits_for_score: int = 9  # highest possible score has length of 9; lower limit is always possible
     #coordinates and sizes of all installations
     installations_y: jnp.ndarray = field(
-        default_factory=lambda: jnp.array([204, 182, 171, 158, 193, 171], dtype=jnp.int32)
+        default_factory=lambda: jnp.array([204, 182, 172, 158, 193, 172], dtype=jnp.int32)
     )
     installations_x: jnp.ndarray = field(
         default_factory=lambda: jnp.array([17, 38, 62, 82, 96, 142], dtype=jnp.int32)
@@ -191,16 +191,51 @@ class Renderer_AtraJaxis(AtraJaxisRenderer):
 
         #add cannons
         raster = aj.render_at(raster, cfg.cannon_x[0], cfg.cannon_y[0], self.sprites['cannon_left'])
-        raster = aj.render_at(raster, cfg.cannon_x[1], cfg.cannon_y[1], self.sprites['cannon_middle'])
+        raster = jax.lax.cond(
+            state.command_post_alive,
+            lambda r: aj.render_at(r, cfg.cannon_x[1], cfg.cannon_y[1], self.sprites['cannon_middle']),
+            lambda r: r,  # return raster unchanged if false
+            raster
+        )
         raster = aj.render_at(raster, cfg.cannon_x[2], cfg.cannon_y[2], self.sprites['cannon_right'])
 
         #add installations
-        raster = aj.render_at(raster, cfg.installations_x[0], cfg.installations_y[0], self.sprites['installation_1'])
-        raster = aj.render_at(raster, cfg.installations_x[1], cfg.installations_y[1], self.sprites['installation_2'])
-        raster = aj.render_at(raster, cfg.installations_x[2], cfg.installations_y[2], self.sprites['installation_3'])
-        raster = aj.render_at(raster, cfg.installations_x[3], cfg.installations_y[3], self.sprites['installation_4'])
-        raster = aj.render_at(raster, cfg.installations_x[4], cfg.installations_y[4], self.sprites['installation_5'])
-        raster = aj.render_at(raster, cfg.installations_x[5], cfg.installations_y[5], self.sprites['installation_6'])
+        raster = jax.lax.cond(
+            state.installations[0],
+            lambda r: aj.render_at(raster, cfg.installations_x[0], cfg.installations_y[0], self.sprites['installation_1']),
+            lambda r: r,  # return raster unchanged if false
+            raster
+        )
+        raster = jax.lax.cond(
+            state.installations[1],
+            lambda r: aj.render_at(raster, cfg.installations_x[1], cfg.installations_y[1], self.sprites['installation_2']),
+            lambda r: r,
+            raster
+        )
+        raster = jax.lax.cond(
+            state.installations[2],
+            lambda r: aj.render_at(raster, cfg.installations_x[2], cfg.installations_y[2], self.sprites['installation_3']),
+            lambda r: r,
+            raster
+        )
+        raster = jax.lax.cond(
+            state.installations[3],
+            lambda r: aj.render_at(raster, cfg.installations_x[3], cfg.installations_y[3], self.sprites['installation_4']),
+            lambda r: r,
+            raster
+        )
+        raster = jax.lax.cond(
+            state.installations[4],
+            lambda r: aj.render_at(raster, cfg.installations_x[4], cfg.installations_y[4], self.sprites['installation_5']),
+            lambda r: r,
+            raster
+        )
+        raster = jax.lax.cond(
+            state.installations[5],
+            lambda r: aj.render_at(raster, cfg.installations_x[5], cfg.installations_y[5], self.sprites['installation_6']),
+            lambda r: r,
+            raster
+        )
 
         # add solid white bullets
         bullet_sprite = _solid_sprite(
