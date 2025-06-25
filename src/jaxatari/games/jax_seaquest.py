@@ -7,7 +7,7 @@ import chex
 import pygame
 import jaxatari.rendering.atraJaxis as aj
 import numpy as np
-from gymnax.environments import spaces
+import jaxatari.spaces as spaces
 
 from jaxatari.environment import JaxEnvironment, JAXAtariAction as Action
 
@@ -158,6 +158,14 @@ class SeaquestState(NamedTuple):
     rng_key: chex.PRNGKey
 
 
+class PlayerEntity(NamedTuple):
+    x: jnp.ndarray
+    y: jnp.ndarray
+    o: jnp.ndarray
+    width: jnp.ndarray
+    height: jnp.ndarray
+    active: jnp.ndarray
+
 class EntityPosition(NamedTuple):
     x: jnp.ndarray
     y: jnp.ndarray
@@ -167,7 +175,7 @@ class EntityPosition(NamedTuple):
 
 
 class SeaquestObservation(NamedTuple):
-    player: EntityPosition
+    player: PlayerEntity
     sharks: jnp.ndarray  # Shape (12, 5) - 12 sharks, each with x,y,w,h,active
     submarines: jnp.ndarray  # Shape (12, 5)
     divers: jnp.ndarray  # Shape (4, 5)
@@ -2470,15 +2478,24 @@ class JaxSeaquest(JaxEnvironment[SeaquestState, SeaquestObservation, SeaquestInf
             Action.DOWNLEFTFIRE
         ]
         self.frame_stack_size = 4
-        self.obs_size = 5 + 12 * 5 + 12 * 5 + 4 * 5 + 4 * 5 + 5 + 5 + 4
+        self.obs_size = 6 + 12 * 5 + 12 * 5 + 4 * 5 + 4 * 5 + 5 + 5 + 4
+        self.renderer = SeaquestRenderer()
+
+    @partial(jax.jit, static_argnums=(0,))
+    def render(self, state: SeaquestState) -> jnp.ndarray:
+        """Render the game state to a raster image."""
+        return self.renderer.render(state)
 
     def flatten_entity_position(self, entity: EntityPosition) -> jnp.ndarray:
-        return jnp.concatenate([entity.x, entity.y, entity.width, entity.height, entity.active])
+        return jnp.concatenate([jnp.array([entity.x]), jnp.array([entity.y]), jnp.array([entity.width]), jnp.array([entity.height]), jnp.array([entity.active])])
+
+    def flatten_player_entity(self, entity: PlayerEntity) -> jnp.ndarray:
+        return jnp.concatenate([jnp.array([entity.x]), jnp.array([entity.y]), jnp.array([entity.o]), jnp.array([entity.width]), jnp.array([entity.height]), jnp.array([entity.active])])
 
     @partial(jax.jit, static_argnums=(0,))
     def obs_to_flat_array(self, obs: SeaquestObservation) -> jnp.ndarray:
         return jnp.concatenate([
-            self.flatten_entity_position(obs.player),
+            self.flatten_player_entity(obs.player),
             obs.sharks.flatten(),
             obs.submarines.flatten(),
             obs.divers.flatten(),
@@ -2495,23 +2512,72 @@ class JaxSeaquest(JaxEnvironment[SeaquestState, SeaquestObservation, SeaquestInf
     def action_space(self) -> spaces.Discrete:
         return spaces.Discrete(len(self.action_set))
 
-    def get_action_space(self) -> jnp.ndarray:
-        return jnp.array(self.action_set)
+    def observation_space(self) -> spaces.Dict:
+        """Returns the observation space for Seaquest.
+        The observation contains:
+        - player: PlayerEntity (x, y, o, width, height, active)
+        - sharks: array of shape (12, 5) with x,y,width,height,active for each shark
+        - submarines: array of shape (12, 5) with x,y,width,height,active for each submarine
+        - divers: array of shape (4, 5) with x,y,width,height,active for each diver
+        - enemy_missiles: array of shape (4, 5) with x,y,width,height,active for each missile
+        - surface_submarine: EntityPosition (x, y, width, height, active)
+        - player_missile: EntityPosition (x, y, width, height, active)
+        - collected_divers: int (0-6)
+        - player_score: int (0-999999)
+        - lives: int (0-3)
+        - oxygen_level: int (0-255)
+        """
+        return spaces.Dict({
+            "player": spaces.Dict({
+                "x": spaces.Box(low=0, high=160, shape=(), dtype=jnp.int32),
+                "y": spaces.Box(low=0, high=210, shape=(), dtype=jnp.int32),
+                "o": spaces.Box(low=0, high=1, shape=(), dtype=jnp.int32),
+                "width": spaces.Box(low=0, high=160, shape=(), dtype=jnp.int32),
+                "height": spaces.Box(low=0, high=210, shape=(), dtype=jnp.int32),
+                "active": spaces.Box(low=0, high=1, shape=(), dtype=jnp.int32),
+            }),
+            "sharks": spaces.Box(low=0, high=160, shape=(12, 5), dtype=jnp.int32),
+            "submarines": spaces.Box(low=0, high=160, shape=(12, 5), dtype=jnp.int32),
+            "divers": spaces.Box(low=0, high=160, shape=(4, 5), dtype=jnp.int32),
+            "enemy_missiles": spaces.Box(low=0, high=160, shape=(4, 5), dtype=jnp.int32),
+            "surface_submarine": spaces.Dict({
+                "x": spaces.Box(low=0, high=160, shape=(), dtype=jnp.int32),
+                "y": spaces.Box(low=0, high=210, shape=(), dtype=jnp.int32),
+                "width": spaces.Box(low=0, high=160, shape=(), dtype=jnp.int32),
+                "height": spaces.Box(low=0, high=210, shape=(), dtype=jnp.int32),
+                "active": spaces.Box(low=0, high=1, shape=(), dtype=jnp.int32),
+            }),
+            "player_missile": spaces.Dict({
+                "x": spaces.Box(low=0, high=160, shape=(), dtype=jnp.int32),
+                "y": spaces.Box(low=0, high=210, shape=(), dtype=jnp.int32),
+                "width": spaces.Box(low=0, high=160, shape=(), dtype=jnp.int32),
+                "height": spaces.Box(low=0, high=210, shape=(), dtype=jnp.int32),
+                "active": spaces.Box(low=0, high=1, shape=(), dtype=jnp.int32),
+            }),
+            "collected_divers": spaces.Box(low=0, high=6, shape=(), dtype=jnp.int32),
+            "player_score": spaces.Box(low=0, high=999999, shape=(), dtype=jnp.int32),
+            "lives": spaces.Box(low=0, high=3, shape=(), dtype=jnp.int32),
+            "oxygen_level": spaces.Box(low=0, high=255, shape=(), dtype=jnp.int32),
+        })
 
-    def observation_space(self) -> spaces.Box:
+    def image_space(self) -> spaces.Box:
+        """Returns the image space for Seaquest.
+        The image is a RGB image with shape (160, 210, 3).
+        """
         return spaces.Box(
             low=0,
             high=255,
-            shape=None,
-            dtype=np.uint8,
+            shape=(160, 210, 3),
+            dtype=jnp.uint8
         )
 
     @partial(jax.jit, static_argnums=(0, ))
     def _get_observation(self, state: SeaquestState) -> SeaquestObservation:
         # Create player (already scalar, no need for vectorization)
-        player = EntityPosition(
+        player = PlayerEntity(
             x=state.player_x,
             y=state.player_y,
+            o=state.player_direction,
             width=jnp.array(PLAYER_SIZE[0]),
             height=jnp.array(PLAYER_SIZE[1]),
             active=jnp.array(1),  # Player is always active

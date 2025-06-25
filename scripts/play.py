@@ -205,7 +205,7 @@ def main():
     key = jrandom.PRNGKey(args.seed)
     jitted_reset = jax.jit(env.reset)
     jitted_step = jax.jit(env.step)
-    # TODO: for now, we do not test jitted rendering
+    jitted_render = jax.jit(renderer.render)
 
     # initialize the environment
     obs, state = jitted_reset(key)
@@ -214,12 +214,11 @@ def main():
     if not execute_without_rendering:
         pygame.init()
         pygame.display.set_caption("JAXAtari Game")
-        env_render_shape = renderer.render(state).shape[:2]
+        env_render_shape = jitted_render(state).shape[:2]
         window = pygame.display.set_mode((env_render_shape[0] * UPSCALE_FACTOR, env_render_shape[1] * UPSCALE_FACTOR))
         clock = pygame.time.Clock()
 
-    # get the action space of the current game (i.e. which actions are available)
-    action_space = env.get_action_space()
+    action_space = env.action_space()
 
     save_keys = {}
     playing = True
@@ -245,7 +244,7 @@ def main():
             # Convert numpy action to JAX array
             action = jax.numpy.array(action, dtype=jax.numpy.int32)
             obs, state, reward, done, info = jitted_step(state, action)
-            image = renderer.render(state)
+            image = jitted_render(state)
             aj.update_pygame(window, image, UPSCALE_FACTOR, 160, 210)
             clock.tick(frame_rate)
             
@@ -270,7 +269,7 @@ def main():
             action = get_human_action()
 
             # Check if the action is valid (otherwise send NOOP)
-            if action not in action_space:
+            if not action_space.contains(action):
                 action = Action.NOOP
 
             # Save the action to the save_keys dictionary
@@ -280,7 +279,7 @@ def main():
 
         elif args.random:
             # sample an action from the action space array
-            action = jax.random.choice(key, action_space)
+            action = action_space.sample(key)
             key, subkey = jax.random.split(key)
 
         else:
@@ -292,7 +291,7 @@ def main():
 
         # Render the environment
         if not execute_without_rendering:
-            image = renderer.render(state)
+            image = jitted_render(state)
 
             aj.update_pygame(window, image, UPSCALE_FACTOR, 160, 210)
 
