@@ -6,11 +6,11 @@ import jax.numpy as jnp
 import jax.random as random
 import chex
 import pygame
-from gymnax.environments import spaces
+import jaxatari.spaces as spaces
 
 from jaxatari.rendering import atraJaxis as aj
 from jaxatari.environment import JaxEnvironment, JAXAtariAction
-from jaxatari.renderers import AtraJaxisRenderer 
+from jaxatari.renderers import AtraJaxisRenderer
 
 # Constants for game environment
 WIDTH = 160
@@ -28,7 +28,7 @@ NUM_BUILDINGS = 3
 BUILDING_WIDTH = 25
 BUILDING_HEIGHT = 25
 MAX_BUILDING_DAMAGE = 14
-BUILDING_INITIAL_Y = 160  
+BUILDING_INITIAL_Y = 160
 BUILDING_VELOCITY = 1  # Building moves to the right
 BUILDING_SPACING = 70
 
@@ -38,11 +38,11 @@ BUILDING_Y_POSITIONS = jnp.array([ 160, 163, 168, 170, 172, 174, 176, 178, 180, 
 
 # Constants for enemies
 NUM_ENEMIES_PER_TYPE = 3
-TOTAL_ENEMIES = NUM_ENEMIES_PER_TYPE * 4  
+TOTAL_ENEMIES = NUM_ENEMIES_PER_TYPE * 4
 ENEMY_INITIAL_Y = 69
 ENEMY_SPEED = 1
 ENEMY_SPAWN_Y = 30  # Initial Y position for newly spawned enemies
-ENEMY_SPAWN_PROB = 0.02  # Probability to spawn a new enemy (SPEED) 
+ENEMY_SPAWN_PROB = 0.02  # Probability to spawn a new enemy (SPEED)
 
 
 # Constants for missiles
@@ -50,8 +50,8 @@ MISSILE_WIDTH = 2
 MISSILE_HEIGHT = 2
 NUM_PLAYER_MISSILES = 1
 NUM_ENEMY_MISSILES = 1
-PLAYER_MISSILE_SPEED = -6  
-ENEMY_MISSILE_SPEED = 4    
+PLAYER_MISSILE_SPEED = -6
+ENEMY_MISSILE_SPEED = 4
 ENEMY_FIRE_PROB = 0.02     # Probability of an enemy firing per step
 
 # Action constants
@@ -86,29 +86,27 @@ class AirRaidState(NamedTuple):
     player_x: chex.Array
     player_y: chex.Array
     player_lives: chex.Array
-    
+
     building_x: chex.Array
     building_y: chex.Array
     building_damage: chex.Array
-    
+
     enemy_x: chex.Array
     enemy_y: chex.Array
     enemy_type: chex.Array
     enemy_active: chex.Array
-    
+
     player_missile_x: chex.Array
     player_missile_y: chex.Array
     player_missile_active: chex.Array
-    
+
     enemy_missile_x: chex.Array
     enemy_missile_y: chex.Array
     enemy_missile_active: chex.Array
-    
+
     score: chex.Array
     step_counter: chex.Array
     rng: chex.Array  # Random key for stochastic game elements
-    
-    obs_stack: chex.ArrayTree
 
 class EntityPosition(NamedTuple):
     x: jnp.ndarray
@@ -118,10 +116,10 @@ class EntityPosition(NamedTuple):
 
 class AirRaidObservation(NamedTuple):
     player: EntityPosition
-    buildings: List[EntityPosition]
-    enemies: List[EntityPosition]
-    player_missiles: List[EntityPosition]
-    enemy_missiles: List[EntityPosition]
+    buildings: jnp.ndarray
+    enemies: jnp.ndarray
+    player_missiles: jnp.ndarray
+    enemy_missiles: jnp.ndarray
     score: jnp.ndarray
     lives: jnp.ndarray
 
@@ -133,31 +131,31 @@ class AirRaidInfo(NamedTuple):
 def player_step(player_x: chex.Array, action: chex.Array) -> chex.Array:
     """
     Updates the player position based on the action.
-    
+
     Args:
         player_x: Current player x position
         action: Action taken by player
-        
+
     Returns:
         New player x position
     """
     # Check if left or right button was pressed
     move_left = jnp.logical_or(action == LEFT, action == LEFTFIRE)
     move_right = jnp.logical_or(action == RIGHT, action == RIGHTFIRE)
-    
+
     # Calculate new position
     player_x = jnp.where(
         move_left,
         jnp.maximum(player_x - PLAYER_SPEED, 0),  # Move left with boundary check
         player_x
     )
-    
+
     player_x = jnp.where(
         move_right,
         jnp.minimum(player_x + PLAYER_SPEED, WIDTH - PLAYER_WIDTH),  # Move right with boundary check
         player_x
     )
-    
+
     return player_x
 
 @jax.jit
@@ -165,7 +163,7 @@ def spawn_enemy(state: AirRaidState) -> Tuple[chex.Array, chex.Array, chex.Array
     """
     Spawns a new enemy if conditions are met.
     Args: state: Current game state
-    Returns: Updated enemy arrays 
+    Returns: Updated enemy arrays
     """
     # Extract state components
     enemy_x = state.enemy_x
@@ -173,21 +171,21 @@ def spawn_enemy(state: AirRaidState) -> Tuple[chex.Array, chex.Array, chex.Array
     enemy_type = state.enemy_type
     enemy_active = state.enemy_active
     rng = state.rng
-    
+
     rng, spawn_key = random.split(rng)
     spawn_prob = random.uniform(spawn_key)
-    
+
     # Find the first inactive enemy
     inactive_mask = 1 - enemy_active
     inactive_indices = jnp.where(inactive_mask, jnp.arange(TOTAL_ENEMIES), -1)
     first_inactive = jnp.max(inactive_indices)  # Get the highest valid index
-    
+
     # Randomize enemy type
     rng, type_key, pos_key = random.split(rng, 3)
     new_type = random.randint(type_key, shape=(), minval=0, maxval=4)  # 0-3 for enemy types
     new_x = random.randint(pos_key, shape=(), minval=10, maxval=WIDTH - 30)
     should_spawn = jnp.logical_and(spawn_prob < ENEMY_SPAWN_PROB, first_inactive >= 0)
-    
+
     enemy_x = enemy_x.at[first_inactive].set(
         jnp.where(should_spawn, new_x, enemy_x[first_inactive])
     )
@@ -200,7 +198,7 @@ def spawn_enemy(state: AirRaidState) -> Tuple[chex.Array, chex.Array, chex.Array
     enemy_active = enemy_active.at[first_inactive].set(
         jnp.where(should_spawn, 1, enemy_active[first_inactive])
     )
-    
+
     return enemy_x, enemy_y, enemy_type, enemy_active, rng
 
 @jax.jit
@@ -210,14 +208,14 @@ def update_enemies(state: AirRaidState) -> Tuple[chex.Array, chex.Array, chex.Ar
     enemy_y = state.enemy_y
     enemy_active = state.enemy_active
     building_damage = state.building_damage
-    
+
     # Move active enemies down
     enemy_y = jnp.where(enemy_active == 1, enemy_y + ENEMY_SPEED, enemy_y)
-    
+
     # Deactivate enemies that reach the bottom
     reached_player = enemy_y > PLAYER_INITIAL_Y - 20  # Changed from HEIGHT to PLAYER_INITIAL_Y
     enemy_active = jnp.where(reached_player, 0, enemy_active)
-    
+
     return enemy_y, enemy_active, building_damage
 
 
@@ -225,11 +223,11 @@ def update_enemies(state: AirRaidState) -> Tuple[chex.Array, chex.Array, chex.Ar
 def fire_player_missile(state: AirRaidState, action: chex.Array) -> Tuple[chex.Array, chex.Array, chex.Array]:
     """
     Creates a new player missile if FIRE action is taken and a missile slot is available.
-    
+
     Args:
         state: Current game state
         action: Player action
-        
+
     Returns:
         Updated player missile positions and active flags
     """
@@ -238,18 +236,18 @@ def fire_player_missile(state: AirRaidState, action: chex.Array) -> Tuple[chex.A
         jnp.logical_or(action == FIRE, action == LEFTFIRE),
         action == RIGHTFIRE
     )
-    
+
     # Find the first inactive missile
     inactive_missile_mask = 1 - state.player_missile_active
     inactive_indices = jnp.where(inactive_missile_mask, jnp.arange(NUM_PLAYER_MISSILES), -1)
-    first_inactive = jnp.max(inactive_indices)  
-    
+    first_inactive = jnp.max(inactive_indices)
+
     # Only fire if button pressed and missile slot is available
     should_fire = jnp.logical_and(is_fire, first_inactive >= 0)
 
     missile_x = state.player_x + (PLAYER_WIDTH // 2) - (MISSILE_WIDTH // 2)
 
-    
+
     # Update missile state if firing
     player_missile_x = state.player_missile_x.at[first_inactive].set(
         jnp.where(should_fire, missile_x, state.player_missile_x[first_inactive])
@@ -260,17 +258,17 @@ def fire_player_missile(state: AirRaidState, action: chex.Array) -> Tuple[chex.A
     player_missile_active = state.player_missile_active.at[first_inactive].set(
         jnp.where(should_fire, 1, state.player_missile_active[first_inactive])
     )
-    
+
     return player_missile_x, player_missile_y, player_missile_active
 
 @jax.jit
 def fire_enemy_missiles(state: AirRaidState) -> Tuple[chex.Array, chex.Array, chex.Array, chex.Array]:
     """
     Randomly generates enemy missiles from active enemies.
-    
+
     Args:
         state: Current game state
-        
+
     Returns:
         Updated enemy missile positions, active flags, and RNG
     """
@@ -278,59 +276,59 @@ def fire_enemy_missiles(state: AirRaidState) -> Tuple[chex.Array, chex.Array, ch
     enemy_missile_x = state.enemy_missile_x
     enemy_missile_y = state.enemy_missile_y
     enemy_missile_active = state.enemy_missile_active
-    
+
     # Find the first inactive missile
     inactive_missile_mask = 1 - enemy_missile_active
     inactive_indices = jnp.where(inactive_missile_mask, jnp.arange(NUM_ENEMY_MISSILES), -1)
     first_inactive = jnp.max(inactive_indices)  # Get the highest valid index
-    
+
     # Generate random values for firing decision and which enemy fires
     rng, fire_key, enemy_key = random.split(rng, 3)
     fire_prob = random.uniform(fire_key)
-    
+
     # Count active enemies without using nonzero
     active_enemy_count = jnp.sum(state.enemy_active)
-    
+
     # Randomly select an enemy index (0 to TOTAL_ENEMIES-1)
     random_enemy_idx = random.randint(enemy_key, shape=(), minval=0, maxval=TOTAL_ENEMIES)
-    
+
     # We'll iterate through the enemies and select the first active one after our random index
     # This is a workaround since we can't use jnp.nonzero in jitted code
-    
+
     # This function finds a valid active enemy starting from random_idx
     def find_active_enemy(random_idx, enemy_active):
         # Create a shifted array where we start checking from random_idx
         indices = (random_idx + jnp.arange(TOTAL_ENEMIES)) % TOTAL_ENEMIES
-        
+
         # For each index, check if it's active and compute a score
         # The first active enemy will have the highest score
         scores = jnp.where(
-            enemy_active[indices] == 1, 
-            TOTAL_ENEMIES - jnp.arange(TOTAL_ENEMIES), 
+            enemy_active[indices] == 1,
+            TOTAL_ENEMIES - jnp.arange(TOTAL_ENEMIES),
             -1
         )
-        
+
         # Find the index with the highest score (first active enemy)
         best_idx = indices[jnp.argmax(scores)]
-        
+
         # Return the best enemy index, or 0 if none found
         return jnp.where(jnp.max(scores) >= 0, best_idx, 0)
-    
+
     # Find a valid active enemy
     firing_enemy_idx = find_active_enemy(random_enemy_idx, state.enemy_active)
-    
+
     # Only fire if probability is met, enemy is available and there's an inactive missile slot
     enemy_available = active_enemy_count > 0
     can_fire = jnp.logical_and(
         jnp.logical_and(fire_prob < ENEMY_FIRE_PROB, first_inactive >= 0),
         enemy_available
     )
-    
+
     enemy_width = jnp.where(
         state.enemy_type[firing_enemy_idx] == 0, 16,  # Enemy25 width
         jnp.where(state.enemy_type[firing_enemy_idx] < 3, 14, 14)  # Enemy50/75 width, Enemy100 width
     )
-    
+
     # Update missile state if firing
     enemy_missile_x = enemy_missile_x.at[first_inactive].set(
         jnp.where(
@@ -339,32 +337,32 @@ def fire_enemy_missiles(state: AirRaidState) -> Tuple[chex.Array, chex.Array, ch
             enemy_missile_x[first_inactive]
         )
     )
-    
+
     enemy_missile_y = enemy_missile_y.at[first_inactive].set(
         jnp.where(
             can_fire,
             state.enemy_y[firing_enemy_idx] + (
-                jnp.where(state.enemy_type[firing_enemy_idx] == 0, 18, 
+                jnp.where(state.enemy_type[firing_enemy_idx] == 0, 18,
                       jnp.where(state.enemy_type[firing_enemy_idx] < 3, 16, 14))
             ),
             enemy_missile_y[first_inactive]
         )
     )
-    
+
     enemy_missile_active = enemy_missile_active.at[first_inactive].set(
         jnp.where(can_fire, 1, enemy_missile_active[first_inactive])
     )
-    
+
     return enemy_missile_x, enemy_missile_y, enemy_missile_active, rng
 
 @jax.jit
 def update_missiles(state: AirRaidState) -> Tuple[chex.Array, chex.Array, chex.Array, chex.Array]:
     """
     Updates the positions of all missiles and deactivates those that go off-screen.
-    
+
     Args:
         state: Current game state
-        
+
     Returns:
         Updated player and enemy missile positions and active flags
     """
@@ -374,27 +372,27 @@ def update_missiles(state: AirRaidState) -> Tuple[chex.Array, chex.Array, chex.A
         state.player_missile_y + PLAYER_MISSILE_SPEED,
         state.player_missile_y
     )
-    
+
     # Move enemy missiles down
     enemy_missile_y = jnp.where(
         state.enemy_missile_active == 1,
         state.enemy_missile_y + ENEMY_MISSILE_SPEED,
         state.enemy_missile_y
     )
-    
+
     # Deactivate missiles that go off-screen
     player_missile_active = jnp.where(
         player_missile_y < 0,
         0,
         state.player_missile_active
     )
-    
+
     enemy_missile_active = jnp.where(
         enemy_missile_y > HEIGHT,
         0,
         state.enemy_missile_active
     )
-    
+
     return player_missile_y, player_missile_active, enemy_missile_y, enemy_missile_active
 
 @jax.jit
@@ -410,21 +408,21 @@ def detect_collisions(state: AirRaidState) -> Tuple[chex.Array, chex.Array, chex
     # Check player missiles hitting enemies
     for pm in range(NUM_PLAYER_MISSILES):
         is_missile_active = player_missile_active[pm]
-        
+
         for e in range(TOTAL_ENEMIES):
             is_enemy_active = enemy_active[e]
-            
+
             # Get enemy dimensions based on type
             enemy_width = jnp.where(
                 state.enemy_type[e] == 0, 16,
                 jnp.where(state.enemy_type[e] < 3, 14, 14)
             )
-            
+
             enemy_height = jnp.where(
                 state.enemy_type[e] == 0, 18,
                 jnp.where(state.enemy_type[e] < 3, 16, 14)
             )
-            
+
             # Check collision
             collision = jnp.logical_and(
                 jnp.logical_and(
@@ -436,21 +434,21 @@ def detect_collisions(state: AirRaidState) -> Tuple[chex.Array, chex.Array, chex
                     state.player_missile_y[pm] + MISSILE_HEIGHT > state.enemy_y[e]
                 )
             )
-            
+
             # Only count collision if both objects are active
             effective_collision = jnp.logical_and(
                 jnp.logical_and(collision, is_missile_active),
                 is_enemy_active
             )
-            
+
             enemy_active = enemy_active.at[e].set(
                 jnp.where(effective_collision, 0, enemy_active[e])
             )
-            
+
             player_missile_active = player_missile_active.at[pm].set(
                 jnp.where(effective_collision, 0, player_missile_active[pm])
             )
-            
+
             score_values = jnp.array([25, 50, 75, 100])
             score_to_add = score_values[state.enemy_type[e]]
             score = jnp.where(effective_collision, score + score_to_add, score)
@@ -458,7 +456,7 @@ def detect_collisions(state: AirRaidState) -> Tuple[chex.Array, chex.Array, chex
     # Check enemy missiles hitting buildings and player
     for em in range(NUM_ENEMY_MISSILES):
         is_missile_active = enemy_missile_active[em]
-        
+
         for b in range(NUM_BUILDINGS):
             collision = jnp.logical_and(
                 jnp.logical_and(
@@ -470,18 +468,18 @@ def detect_collisions(state: AirRaidState) -> Tuple[chex.Array, chex.Array, chex
                     state.enemy_missile_y[em] < BUILDING_Y_POSITIONS[building_damage[b]] + BUILDING_HEIGHTS[building_damage[b]]
                 )
             )
-            
+
             effective_collision = jnp.logical_and(collision, is_missile_active == 1)
-            
+
             building_damage = building_damage.at[b].set(
-                jnp.where(effective_collision, 
+                jnp.where(effective_collision,
                          jnp.minimum(building_damage[b] + 1, MAX_BUILDING_DAMAGE),
                          building_damage[b])
             )
             enemy_missile_active = enemy_missile_active.at[em].set(
                 jnp.where(effective_collision, 0, enemy_missile_active[em])
             )
-        
+
         player_collision = jnp.logical_and(
             jnp.logical_and(
                 state.enemy_missile_x[em] < state.player_x + PLAYER_WIDTH,
@@ -492,13 +490,13 @@ def detect_collisions(state: AirRaidState) -> Tuple[chex.Array, chex.Array, chex
                 state.enemy_missile_y[em] + MISSILE_HEIGHT > state.player_y
             )
         )
-        
+
         effective_player_collision = jnp.logical_and(player_collision, is_missile_active == 1)
-        
+
         enemy_missile_active = enemy_missile_active.at[em].set(
             jnp.where(effective_player_collision, 0, enemy_missile_active[em])
         )
-        
+
         player_lives = jnp.where(effective_player_collision, player_lives - 1, player_lives)
 
     return enemy_active, player_missile_active, enemy_missile_active, score, player_lives, building_damage
@@ -508,7 +506,6 @@ class JaxAirRaid(JaxEnvironment[AirRaidState, AirRaidObservation, AirRaidInfo]):
     def __init__(self, frameskip: int = 0, reward_funcs: list = None):
         super().__init__()
         self.frameskip = frameskip + 1
-        self.frame_stack_size = 4
         if reward_funcs is not None:
             self.reward_funcs = tuple(reward_funcs)
         else:
@@ -521,60 +518,44 @@ class JaxAirRaid(JaxEnvironment[AirRaidState, AirRaidObservation, AirRaidInfo]):
             RIGHTFIRE,
             LEFTFIRE
         }
-        self.obs_size = 3*4+1+1  
-        self.renderer = AirRaidRenderer()  
-    
-    def get_renderer(self):
-        return self.renderer
+        self.renderer = AirRaidRenderer()
 
-
-    def get_action_space(self) -> chex.Array:
-        return jnp.array([
-            NOOP,
-            FIRE,
-            RIGHT,
-            LEFT,
-            RIGHTFIRE,
-            LEFTFIRE
-        ], dtype=jnp.int32)
-    
-    
     def reset(self, key=None) -> Tuple[AirRaidObservation, AirRaidState]:
         """
         Resets the game state to the initial state.
-        
+
         Returns:
             The initial observation and state
         """
         # Initialize building positions
         building_x = jnp.array([
-                -BUILDING_WIDTH,                    
+                -BUILDING_WIDTH,
                 -BUILDING_WIDTH + BUILDING_SPACING,
-                -BUILDING_WIDTH + BUILDING_SPACING * 2  
-        ])        
+                -BUILDING_WIDTH + BUILDING_SPACING * 2
+        ])
         building_y = jnp.array([BUILDING_INITIAL_Y, BUILDING_INITIAL_Y, BUILDING_INITIAL_Y])
         building_damage = jnp.zeros(NUM_BUILDINGS, dtype=jnp.int32)
-        
+
         # Initialize enemy arrays (all inactive initially)
         enemy_x = jnp.zeros(TOTAL_ENEMIES, dtype=jnp.int32)
         enemy_y = jnp.zeros(TOTAL_ENEMIES, dtype=jnp.int32)
         enemy_type = jnp.zeros(TOTAL_ENEMIES, dtype=jnp.int32)
         enemy_active = jnp.zeros(TOTAL_ENEMIES, dtype=jnp.int32)
-        
+
         # Initialize missile arrays (all inactive initially)
         player_missile_x = jnp.zeros(NUM_PLAYER_MISSILES, dtype=jnp.int32)
         player_missile_y = jnp.zeros(NUM_PLAYER_MISSILES, dtype=jnp.int32)
         player_missile_active = jnp.zeros(NUM_PLAYER_MISSILES, dtype=jnp.int32)
-        
+
         enemy_missile_x = jnp.zeros(NUM_ENEMY_MISSILES, dtype=jnp.int32)
         enemy_missile_y = jnp.zeros(NUM_ENEMY_MISSILES, dtype=jnp.int32)
         enemy_missile_active = jnp.zeros(NUM_ENEMY_MISSILES, dtype=jnp.int32)
-        
+
         # Initialize random key
         rng = random.PRNGKey(0)
         if key is not None: # Allow passing a key for reproducibility
             rng = key
-            
+
         state = AirRaidState(
             player_x=jnp.array(PLAYER_INITIAL_X),
             player_y=jnp.array(PLAYER_INITIAL_Y),
@@ -595,30 +576,20 @@ class JaxAirRaid(JaxEnvironment[AirRaidState, AirRaidObservation, AirRaidInfo]):
             score=jnp.array(0),
             step_counter=jnp.array(0),
             rng=rng,
-            obs_stack=None 
         )
-        
+
         initial_obs = self._get_observation(state)
-        
-        def expand_and_copy(x):
-            x_expanded = jnp.expand_dims(x, axis=0)
-            return jnp.concatenate([x_expanded] * self.frame_stack_size, axis=0)
-        
-        # Apply transformation to each leaf in the pytree
-        initial_obs_stack = jax.tree.map(expand_and_copy, initial_obs)
-        
-        new_state_with_obs_stack = state._replace(obs_stack=initial_obs_stack)
-        
-        return initial_obs, new_state_with_obs_stack
+
+        return initial_obs, state
 
     @partial(jax.jit, static_argnums=(0,))
     def step(self, state: AirRaidState, action: chex.Array) -> Tuple[AirRaidObservation, AirRaidState, float, bool, AirRaidInfo]:
         """
         Steps the game state forward by one frame.
-        Args: state: Current game state, action: Action to take  
+        Args: state: Current game state, action: Action to take
         Returns: Updated game state, observation, reward, done flag, and info
         """
-        
+
         # Update building positions
         new_building_x = state.building_x + BUILDING_VELOCITY
         new_building_x = jnp.where(
@@ -629,10 +600,10 @@ class JaxAirRaid(JaxEnvironment[AirRaidState, AirRaidObservation, AirRaidInfo]):
 
         # Update player position
         new_player_x = player_step(state.player_x, action)
-                
+
         # Spawn new enemies
         new_enemy_x, new_enemy_y, new_enemy_type, new_enemy_active, new_rng = spawn_enemy(state._replace(player_x=new_player_x))
-        
+
         # Update existing enemies
         updated_enemy_y, updated_enemy_active, updated_building_damage = update_enemies(
             state._replace(
@@ -644,7 +615,7 @@ class JaxAirRaid(JaxEnvironment[AirRaidState, AirRaidObservation, AirRaidInfo]):
                 rng=new_rng
             )
         )
-        
+
         # Handle player firing missiles
         new_player_missile_x, new_player_missile_y, new_player_missile_active = fire_player_missile(
             state._replace(
@@ -657,7 +628,7 @@ class JaxAirRaid(JaxEnvironment[AirRaidState, AirRaidObservation, AirRaidInfo]):
             ),
             action
         )
-        
+
         # Handle enemy firing missiles
         new_enemy_missile_x, new_enemy_missile_y, new_enemy_missile_active, newer_rng = fire_enemy_missiles(
             state._replace(
@@ -673,7 +644,7 @@ class JaxAirRaid(JaxEnvironment[AirRaidState, AirRaidObservation, AirRaidInfo]):
                 rng=new_rng
             )
         )
-        
+
         # Update missile positions
         updated_player_missile_y, updated_player_missile_active, updated_enemy_missile_y, updated_enemy_missile_active = update_missiles(
             state._replace(
@@ -692,7 +663,7 @@ class JaxAirRaid(JaxEnvironment[AirRaidState, AirRaidObservation, AirRaidInfo]):
                 rng=newer_rng
             )
         )
-        
+
         # Detect and handle collisions
         final_enemy_active, final_player_missile_active, final_enemy_missile_active, new_score, new_player_lives, final_building_damage = detect_collisions(
         state._replace(
@@ -701,7 +672,7 @@ class JaxAirRaid(JaxEnvironment[AirRaidState, AirRaidObservation, AirRaidInfo]):
             enemy_y=updated_enemy_y,
             enemy_type=new_enemy_type,
             enemy_active=updated_enemy_active,
-            building_damage=updated_building_damage, 
+            building_damage=updated_building_damage,
             player_missile_y=updated_player_missile_y,
             player_missile_active=updated_player_missile_active,
             enemy_missile_x=new_enemy_missile_x,
@@ -709,15 +680,15 @@ class JaxAirRaid(JaxEnvironment[AirRaidState, AirRaidObservation, AirRaidInfo]):
             enemy_missile_active=updated_enemy_missile_active
         )
         )
-        
+
         # Create the new state
         new_state = AirRaidState(
             player_x=new_player_x,
-            player_y=state.player_y,  
+            player_y=state.player_y,
             player_lives=new_player_lives,
             building_x=new_building_x,
             building_y=state.building_y,
-            building_damage=final_building_damage, 
+            building_damage=final_building_damage,
             enemy_x=new_enemy_x,
             enemy_y=updated_enemy_y,
             enemy_type=new_enemy_type,
@@ -731,35 +702,24 @@ class JaxAirRaid(JaxEnvironment[AirRaidState, AirRaidObservation, AirRaidInfo]):
             score=new_score,
             step_counter=state.step_counter + 1,
             rng=newer_rng,
-            obs_stack=state.obs_stack  
         )
-        
-    
+
+
         done = self._get_done(new_state)
         env_reward = self._get_env_reward(state, new_state)
         all_rewards = self._get_all_reward(state, new_state)
         info = self._get_info(new_state, all_rewards)
         observation = self._get_observation(new_state)
-        
-        # Update the observation stack
-        current_obs_stack = new_state.obs_stack        
 
-        observation_stack = jax.tree.map(
-            lambda stack, obs_leaf: jnp.concatenate([stack[1:], jnp.expand_dims(obs_leaf, axis=0)], axis=0),
-            current_obs_stack, # Used current_obs_stack from new_state
-            observation
-        )
-        final_new_state = new_state._replace(obs_stack=observation_stack)
-        
         def do_reset(_):
             obs, reset_state = self.reset(new_state.rng)
             return obs, reset_state, env_reward, False, info
 
         def no_reset(_):
-            return observation, final_new_state, env_reward, done, info
+            return observation, new_state, env_reward, done, info
 
         return jax.lax.cond(done, do_reset, no_reset, operand=None)
-    
+
     @partial(jax.jit, static_argnums=(0,))
     def _get_observation(self, state: AirRaidState) -> AirRaidObservation:
         """
@@ -767,95 +727,65 @@ class JaxAirRaid(JaxEnvironment[AirRaidState, AirRaidObservation, AirRaidInfo]):
         Args: Current game state
         Returns: Observation object containing entity positions and game data
         """
-        # Create player entity
         player = EntityPosition(
             x=state.player_x,
             y=state.player_y,
-            width=jnp.array(PLAYER_WIDTH),
-            height=jnp.array(PLAYER_HEIGHT)
+            width=jnp.array(PLAYER_WIDTH, dtype=jnp.int32),
+            height=jnp.array(PLAYER_HEIGHT, dtype=jnp.int32)
         )
 
-        # Create building entities
-        buildings = []
-        for i in range(NUM_BUILDINGS):
-            # Get dimensions based on building damage 
+        def _get_building_obs(i):
             height = BUILDING_HEIGHTS[state.building_damage[i]]
             y_pos = BUILDING_Y_POSITIONS[state.building_damage[i]]
+            return jnp.array([state.building_x[i], y_pos, BUILDING_WIDTH, height], dtype=jnp.int32)
+        buildings_arr = jax.vmap(_get_building_obs)(jnp.arange(NUM_BUILDINGS))
 
-            buildings.append(EntityPosition(
-                x=state.building_x[i],
-                y=jnp.array(y_pos),
-                width=jnp.array(BUILDING_WIDTH),
-                height=jnp.array(height)
-            ))
-
-        enemies = []
-        for i in range(TOTAL_ENEMIES):
-            # Get dimensions based on enemy type
+        def _get_enemy_obs(i):
             width = jnp.select(
                 [state.enemy_type[i] == 0, state.enemy_type[i] < 3, state.enemy_type[i] == 3],
-                [16, 14, 14],
-                default=0
+                [16, 14, 14], default=0
             )
-
             height = jnp.select(
                 [state.enemy_type[i] == 0, state.enemy_type[i] < 3, state.enemy_type[i] == 3],
-                [18, 16, 14],
-                default=0
+                [18, 16, 14], default=0
             )
+            active = state.enemy_active[i] == 1
+            x = jnp.where(active, state.enemy_x[i], -1)
+            y = jnp.where(active, state.enemy_y[i], -1)
+            w = jnp.where(active, width, 0)
+            h = jnp.where(active, height, 0)
+            enemy_type = jnp.where(active, state.enemy_type[i], -1)
+            return jnp.array([x, y, w, h, enemy_type], dtype=jnp.int32)
+        enemies_arr = jax.vmap(_get_enemy_obs)(jnp.arange(TOTAL_ENEMIES))
 
-            x = jnp.where(state.enemy_active[i] == 1, state.enemy_x[i], 0)
-            y = jnp.where(state.enemy_active[i] == 1, state.enemy_y[i], 0)
-            width = jnp.where(state.enemy_active[i] == 1, width, 0)
-            height = jnp.where(state.enemy_active[i] == 1, height, 0)
+        def _get_player_missile_obs(i):
+            active = state.player_missile_active[i] == 1
+            x = jnp.where(active, state.player_missile_x[i], -1)
+            y = jnp.where(active, state.player_missile_y[i], -1)
+            w = jnp.where(active, MISSILE_WIDTH, 0)
+            h = jnp.where(active, MISSILE_HEIGHT, 0)
+            return jnp.array([x, y, w, h], dtype=jnp.int32)
+        player_missiles_arr = jax.vmap(_get_player_missile_obs)(jnp.arange(NUM_PLAYER_MISSILES))
 
-            enemies.append(EntityPosition(
-                x=x,
-                y=y,
-                width=width,
-                height=height
-            ))
-
-        #player missile entities 
-        player_missiles = []
-        for i in range(NUM_PLAYER_MISSILES):
-            x = jnp.where(state.player_missile_active[i] == 1, state.player_missile_x[i], 0)
-            y = jnp.where(state.player_missile_active[i] == 1, state.player_missile_y[i], 0)
-            width = jnp.where(state.player_missile_active[i] == 1, MISSILE_WIDTH, 0)
-            height = jnp.where(state.player_missile_active[i] == 1, MISSILE_HEIGHT, 0)
-
-            player_missiles.append(EntityPosition(
-                x=x,
-                y=y,
-                width=jnp.array(width),
-                height=jnp.array(height)
-            ))
-
-        #enemy missile entities
-        enemy_missiles = []
-        for i in range(NUM_ENEMY_MISSILES):
-            x = jnp.where(state.enemy_missile_active[i] == 1, state.enemy_missile_x[i], 0)
-            y = jnp.where(state.enemy_missile_active[i] == 1, state.enemy_missile_y[i], 0)
-            width = jnp.where(state.enemy_missile_active[i] == 1, MISSILE_WIDTH, 0)
-            height = jnp.where(state.enemy_missile_active[i] == 1, MISSILE_HEIGHT, 0)
-
-            enemy_missiles.append(EntityPosition(
-                x=x,
-                y=y,
-                width=jnp.array(width),
-                height=jnp.array(height)
-            ))
+        def _get_enemy_missile_obs(i):
+            active = state.enemy_missile_active[i] == 1
+            x = jnp.where(active, state.enemy_missile_x[i], -1)
+            y = jnp.where(active, state.enemy_missile_y[i], -1)
+            w = jnp.where(active, MISSILE_WIDTH, 0)
+            h = jnp.where(active, MISSILE_HEIGHT, 0)
+            return jnp.array([x, y, w, h], dtype=jnp.int32)
+        enemy_missiles_arr = jax.vmap(_get_enemy_missile_obs)(jnp.arange(NUM_ENEMY_MISSILES))
 
         return AirRaidObservation(
             player=player,
-            buildings=buildings,
-            enemies=enemies,
-            player_missiles=player_missiles,
-            enemy_missiles=enemy_missiles,
+            buildings=buildings_arr,
+            enemies=enemies_arr,
+            player_missiles=player_missiles_arr,
+            enemy_missiles=enemy_missiles_arr,
             score=state.score,
             lives=state.player_lives
         )
-    
+
     @partial(jax.jit, static_argnums=(0,))
     def obs_to_flat_array(self, obs: AirRaidObservation) -> jnp.ndarray:
         """
@@ -863,84 +793,81 @@ class JaxAirRaid(JaxEnvironment[AirRaidState, AirRaidObservation, AirRaidInfo]):
         Args: obs: Observation object
         Returns:  Flattened array representation of the observation
         """
-        player_data = jnp.array([
-            obs.player.x, 
-            obs.player.y, 
-            obs.player.width, 
-            obs.player.height
-        ])
-        
-        building_data = jnp.array([
-            obs.buildings[0].x,
-            obs.buildings[0].y,
-            obs.buildings[0].width,
-            obs.buildings[0].height
-        ])
-        
-        enemy_data = jnp.array([
-            obs.enemies[0].x,
-            obs.enemies[0].y,
-            obs.enemies[0].width,
-            obs.enemies[0].height
-        ])
-        
-        player_missile_data = jnp.array([
-            obs.player_missiles[0].x,
-            obs.player_missiles[0].y,
-            obs.player_missiles[0].width,
-            obs.player_missiles[0].height
-        ])
-        
-        enemy_missile_data = jnp.array([
-            obs.enemy_missiles[0].x,
-            obs.enemy_missiles[0].y,
-            obs.enemy_missiles[0].width,
-            obs.enemy_missiles[0].height
-        ])
-        
-        # Combine all data
-        return jnp.concatenate([
-            player_data.flatten(),
-            building_data.flatten(),
-            enemy_data.flatten(),
-            player_missile_data.flatten(),
-            enemy_missile_data.flatten(),
-            obs.score.flatten(),
-            obs.lives.flatten()
-        ])
-    
+        leaves, _ = jax.tree_util.tree_flatten(obs)
+        return jnp.concatenate([leaf.flatten() for leaf in leaves])
+
     def action_space(self) -> spaces.Discrete:
         return spaces.Discrete(len(self.action_set))
-    
-    def observation_space(self) -> spaces.Box:
+
+    def observation_space(self) -> spaces.Dict:
+        player_space = spaces.Dict({
+            "x": spaces.Box(low=0, high=WIDTH, shape=(), dtype=jnp.int32),
+            "y": spaces.Box(low=0, high=HEIGHT, shape=(), dtype=jnp.int32),
+            "width": spaces.Box(low=0, high=WIDTH, shape=(), dtype=jnp.int32),
+            "height": spaces.Box(low=0, high=HEIGHT, shape=(), dtype=jnp.int32),
+        })
+        # For entities: [x, y, w, h, (type)]
+        # Inactive entities are (-1, -1, 0, 0, -1), so low bound is -1
+        buildings_space = spaces.Box(
+            low=jnp.array([-WIDTH, -1, 0, 0]),
+            high=jnp.array([WIDTH, HEIGHT, BUILDING_WIDTH, BUILDING_HEIGHT]),
+            shape=(NUM_BUILDINGS, 4), dtype=jnp.int32)
+
+        enemies_space = spaces.Box(
+            low=jnp.array([-1, -1, 0, 0, -1]),
+            high=jnp.array([WIDTH, HEIGHT, 16, 18, 3]), # Max w=16, h=18, type=3
+            shape=(TOTAL_ENEMIES, 5), dtype=jnp.int32)
+
+        player_missiles_space = spaces.Box(
+            low=jnp.array([-1, -1, 0, 0]),
+            high=jnp.array([WIDTH, HEIGHT, MISSILE_WIDTH, MISSILE_HEIGHT]),
+            shape=(NUM_PLAYER_MISSILES, 4), dtype=jnp.int32)
+
+        enemy_missiles_space = spaces.Box(
+            low=jnp.array([-1, -1, 0, 0]),
+            high=jnp.array([WIDTH, HEIGHT, MISSILE_WIDTH, MISSILE_HEIGHT]),
+            shape=(NUM_ENEMY_MISSILES, 4), dtype=jnp.int32)
+
+
+        return spaces.Dict({
+            "player": player_space,
+            "buildings": buildings_space,
+            "enemies": enemies_space,
+            "player_missiles": player_missiles_space,
+            "enemy_missiles": enemy_missiles_space,
+            "score": spaces.Box(low=0, high=jnp.iinfo(jnp.int32).max, shape=(), dtype=jnp.int32),
+            "lives": spaces.Box(low=0, high=3, shape=(), dtype=jnp.int32),
+        })
+
+    def image_space(self) -> spaces.Box:
         return spaces.Box(
             low=0,
             high=255,
-            shape=None,
-            dtype=jnp.uint8,
+            shape=(WIDTH, HEIGHT, 3),
+            dtype=jnp.uint8
         )
-    
+
     @partial(jax.jit, static_argnums=(0,))
     def _get_info(self, state: AirRaidState, all_rewards: chex.Array) -> AirRaidInfo:
-        
+
         return AirRaidInfo(time=state.step_counter, all_rewards=all_rewards)
-    
+
     @partial(jax.jit, static_argnums=(0,))
     def _get_env_reward(self, previous_state: AirRaidState, state: AirRaidState) -> float:
         score_reward = state.score - previous_state.score
         life_penalty = (previous_state.player_lives - state.player_lives) * 25
         return score_reward - life_penalty
-    
+
     @partial(jax.jit, static_argnums=(0,))
     def _get_all_reward(self, previous_state: AirRaidState, state: AirRaidState) -> chex.Array:
-        
+
         if self.reward_funcs is None:
             return jnp.zeros(1)
         rewards = jnp.array(
             [reward_func(previous_state, state) for reward_func in self.reward_funcs]
         )
         return rewards
-    
+
     @partial(jax.jit, static_argnums=(0,))
     def _get_done(self, state: AirRaidState) -> bool:
         # Game is over if player has no lives left
@@ -949,7 +876,7 @@ class JaxAirRaid(JaxEnvironment[AirRaidState, AirRaidObservation, AirRaidInfo]):
 def load_sprites():
     """Load all sprites required for AirRaid rendering."""
     MODULE_DIR = os.path.dirname(os.path.abspath(__file__))
-    
+
     # Load sprites (these would need to be created and saved as .npy files)
     player = aj.loadFrame(os.path.join(MODULE_DIR, "sprites/airraid/player.npy"), transpose=True)
     building = aj.loadFrame(os.path.join(MODULE_DIR, "sprites/airraid/building.npy"), transpose=True)
@@ -960,7 +887,7 @@ def load_sprites():
     missile = aj.loadFrame(os.path.join(MODULE_DIR, "sprites/airraid/missile.npy"), transpose=True)
     bg = aj.loadFrame(os.path.join(MODULE_DIR, "sprites/airraid/background.npy"), transpose=True)
     life = aj.loadFrame(os.path.join(MODULE_DIR, "sprites/airraid/life.npy"), transpose=True)
-    
+
     # Convert all sprites to the expected format (add frame dimension)
     SPRITE_BG = jnp.expand_dims(bg, axis=0)
     SPRITE_PLAYER = jnp.expand_dims(player, axis=0)
@@ -971,13 +898,13 @@ def load_sprites():
     SPRITE_ENEMY100 = jnp.expand_dims(enemy100, axis=0)
     SPRITE_MISSILE = jnp.expand_dims(missile, axis=0)
     SPRITE_LIFE = jnp.expand_dims(life, axis=0)
-    
+
     # Load digits for scores
     DIGIT_SPRITES = aj.load_and_pad_digits(
         os.path.join(MODULE_DIR, "sprites/airraid/score_{}.npy"),
         num_chars=11, # we added 1 so that we can have an invisible sprite
     )
-    
+
     return (
         SPRITE_BG,
         SPRITE_PLAYER,
@@ -991,7 +918,7 @@ def load_sprites():
         DIGIT_SPRITES
     )
 
-class AirRaidRenderer(AtraJaxisRenderer):    
+class AirRaidRenderer(AtraJaxisRenderer):
     def __init__(self):
         super().__init__()
         (
@@ -1010,199 +937,122 @@ class AirRaidRenderer(AtraJaxisRenderer):
     @partial(jax.jit, static_argnums=(0,))
     def render(self, state_or_obs):
         is_observation = isinstance(state_or_obs, AirRaidObservation)
-        
+
         raster = jnp.zeros((WIDTH, HEIGHT, 3), dtype=jnp.uint8)
 
         frame_bg = aj.get_sprite_frame(self.SPRITE_BG, 0)
         raster = aj.render_at(raster, 0, 0, frame_bg)
 
-        def get_scalar(value):
-            if hasattr(value, 'shape') and value.ndim > 0 and value.size > 0:
-                return value.item() if value.size == 1 else value[0]
-            return value
-
         if is_observation:
-            
-            if len(state_or_obs.buildings) > 0:
-                frame_building = aj.get_sprite_frame(self.SPRITE_BUILDING, 0)
-                building = state_or_obs.buildings[0]
-                x = get_scalar(building.x)
-                y = get_scalar(building.y)
-                raster = aj.render_at(raster, x, y, frame_building)
-                
-            if len(state_or_obs.buildings) > 1:
-                frame_building = aj.get_sprite_frame(self.SPRITE_BUILDING, 0)
-                building = state_or_obs.buildings[1]
-                x = get_scalar(building.x)
-                y = get_scalar(building.y)
-                raster = aj.render_at(raster, x, y, frame_building)
-                
-            if len(state_or_obs.buildings) > 2:
-                frame_building = aj.get_sprite_frame(self.SPRITE_BUILDING, 0)
-                building = state_or_obs.buildings[2]
-                x = get_scalar(building.x)
-                y = get_scalar(building.y)
-                raster = aj.render_at(raster, x, y, frame_building)
-        else:
+            def render_building(i, raster_in):
+                x, y, w, h = state_or_obs.buildings[i]
+                is_active = h > 0
+                frame = aj.get_sprite_frame(self.SPRITE_BUILDING, 0)
+                render_result = aj.render_at(raster_in, x, y, frame)
+                return jnp.where(is_active, render_result, raster_in)
+
+            raster = jax.lax.fori_loop(0, NUM_BUILDINGS, render_building, raster)
+        else: # is state
             def render_building(i, raster_in):
                 frame_building = aj.get_sprite_frame(self.SPRITE_BUILDING, 0)
                 damage_level = state_or_obs.building_damage[i]
-                
                 building_x = state_or_obs.building_x[i]
                 building_y = BUILDING_Y_POSITIONS[damage_level]
-                
                 return aj.render_at(raster_in, building_x, building_y, frame_building)
-       
+
             raster = jax.lax.fori_loop(0, NUM_BUILDINGS, render_building, raster)
 
         if is_observation:
-            for i in range(min(len(state_or_obs.enemies), TOTAL_ENEMIES)):
-                if i < len(state_or_obs.enemies):
-                    enemy = state_or_obs.enemies[i]
-                    
-                    width = get_scalar(enemy.width)
-                    height = get_scalar(enemy.height)
-                    
-                    active_cond = jnp.logical_and(width > 0, height > 0)
-                    
-                    sprite_25 = aj.get_sprite_frame(self.SPRITE_ENEMY25, 0)
-                    sprite_50 = aj.get_sprite_frame(self.SPRITE_ENEMY50, 0)
-                    sprite_100 = aj.get_sprite_frame(self.SPRITE_ENEMY100, 0)
-                    
-                    is_type_25 = width == 16
-                    is_type_50_75 = jnp.logical_and(width == 14, height == 16)
-                    
-                    sprite = jnp.where(
-                        is_type_25, 
-                        sprite_25,
-                        jnp.where(
-                            is_type_50_75,
-                            sprite_50,
-                            sprite_100
-                        )
-                    )
-                    
-                    def render_enemy(unused):
-                        x_pos = get_scalar(enemy.x)
-                        y_pos = get_scalar(enemy.y)
-                        return aj.render_at(raster, x_pos, y_pos, sprite)
-                    
-                    def no_render(unused):
-                        return raster
-                    
-                    raster = jax.lax.cond(
-                        active_cond,
-                        render_enemy,
-                        no_render,
-                        operand=None
-                    )
-        else:
+            def render_enemy(i, raster_in):
+                x, y, w, h, type = state_or_obs.enemies[i]
+                is_active = w > 0
+
+                sprite_25 = aj.get_sprite_frame(self.SPRITE_ENEMY25, 0)
+                sprite_50 = aj.get_sprite_frame(self.SPRITE_ENEMY50, 0)
+                sprite_75 = aj.get_sprite_frame(self.SPRITE_ENEMY75, 0)
+                sprite_100 = aj.get_sprite_frame(self.SPRITE_ENEMY100, 0)
+
+                enemy_sprite = jnp.select(
+                    [type == 0, type == 1, type == 2, type == 3],
+                    [sprite_25, sprite_50, sprite_75, sprite_100],
+                    default=sprite_25 # Default should not be used for active enemies
+                )
+
+                render_result = aj.render_at(raster_in, x, y, enemy_sprite)
+                return jnp.where(is_active, render_result, raster_in)
+
+            raster = jax.lax.fori_loop(0, TOTAL_ENEMIES, render_enemy, raster)
+        else: # is state
             def render_enemy(i, raster_in):
                 is_active = state_or_obs.enemy_active[i] == 1
                 is_type0 = state_or_obs.enemy_type[i] == 0
                 is_type1 = state_or_obs.enemy_type[i] == 1
                 is_type2 = state_or_obs.enemy_type[i] == 2
-            
+
                 sprite_25 = aj.get_sprite_frame(self.SPRITE_ENEMY25, 0)
                 sprite_50 = aj.get_sprite_frame(self.SPRITE_ENEMY50, 0)
                 sprite_75 = aj.get_sprite_frame(self.SPRITE_ENEMY75, 0)
                 sprite_100 = aj.get_sprite_frame(self.SPRITE_ENEMY100, 0)
-            
+
                 enemy_sprite = jnp.where(is_type0, sprite_25,
                             jnp.where(is_type1, sprite_50,
                             jnp.where(is_type2, sprite_75, sprite_100)))
-            
+
                 render_result = aj.render_at(raster_in, state_or_obs.enemy_x[i], state_or_obs.enemy_y[i], enemy_sprite)
                 return jnp.where(is_active, render_result, raster_in)
-            
+
             raster = jax.lax.fori_loop(0, TOTAL_ENEMIES, render_enemy, raster)
 
         frame_player = aj.get_sprite_frame(self.SPRITE_PLAYER, 0)
         if is_observation:
-            x = get_scalar(state_or_obs.player.x)
-            y = get_scalar(state_or_obs.player.y)
-            raster = aj.render_at(raster, x, y, frame_player)
+            raster = aj.render_at(raster, state_or_obs.player.x, state_or_obs.player.y, frame_player)
         else:
             raster = aj.render_at(raster, state_or_obs.player_x, state_or_obs.player_y, frame_player)
 
         if is_observation:
-            for i in range(min(len(state_or_obs.player_missiles), NUM_PLAYER_MISSILES)):
-                if i < len(state_or_obs.player_missiles):
-                    missile = state_or_obs.player_missiles[i]
-                    
-                    width = get_scalar(missile.width)
-                    height = get_scalar(missile.height)
-                    active_cond = jnp.logical_and(width > 0, height > 0)
-                    
-                    def render_missile(unused):
-                        x_pos = get_scalar(missile.x)
-                        y_pos = get_scalar(missile.y)
-                        frame_missile = aj.get_sprite_frame(self.SPRITE_MISSILE, 0)
-                        return aj.render_at(raster, x_pos, y_pos, frame_missile)
-                        
-                    def no_render(unused):
-                        return raster
-                    
-                    raster = jax.lax.cond(
-                        active_cond,
-                        render_missile,
-                        no_render,
-                        operand=None
-                    )
-        else:
+            def render_player_missile(i, raster_in):
+                x, y, w, h = state_or_obs.player_missiles[i]
+                is_active = w > 0
+                frame_missile = aj.get_sprite_frame(self.SPRITE_MISSILE, 0)
+                render_result = aj.render_at(raster_in, x, y, frame_missile)
+                return jnp.where(is_active, render_result, raster_in)
+
+            raster = jax.lax.fori_loop(0, NUM_PLAYER_MISSILES, render_player_missile, raster)
+        else: # is state
             def render_player_missile(i, raster_in):
                 frame_missile = aj.get_sprite_frame(self.SPRITE_MISSILE, 0)
-                render_result = aj.render_at(raster_in, state_or_obs.player_missile_x[i], 
+                render_result = aj.render_at(raster_in, state_or_obs.player_missile_x[i],
                                             state_or_obs.player_missile_y[i], frame_missile)
                 return jnp.where(state_or_obs.player_missile_active[i] == 1, render_result, raster_in)
-        
+
             raster = jax.lax.fori_loop(0, NUM_PLAYER_MISSILES, render_player_missile, raster)
 
         if is_observation:
-            for i in range(min(len(state_or_obs.enemy_missiles), NUM_ENEMY_MISSILES)):
-                if i < len(state_or_obs.enemy_missiles):
-                    missile = state_or_obs.enemy_missiles[i]
-                    
-                    width = get_scalar(missile.width)
-                    height = get_scalar(missile.height)
-                    active_cond = jnp.logical_and(width > 0, height > 0)
-                    
-                    def render_missile(unused):
-                        x_pos = get_scalar(missile.x)
-                        y_pos = get_scalar(missile.y)
-                        frame_missile = aj.get_sprite_frame(self.SPRITE_MISSILE, 0)
-                        return aj.render_at(raster, x_pos, y_pos, frame_missile)
-                        
-                    def no_render(unused):
-                        return raster
-                    
-                    raster = jax.lax.cond(
-                        active_cond,
-                        render_missile,
-                        no_render,
-                        operand=None
-                    )
-        else:
+            def render_enemy_missile(i, raster_in):
+                x, y, w, h = state_or_obs.enemy_missiles[i]
+                is_active = w > 0
+                frame_missile = aj.get_sprite_frame(self.SPRITE_MISSILE, 0)
+                render_result = aj.render_at(raster_in, x, y, frame_missile)
+                return jnp.where(is_active, render_result, raster_in)
+
+            raster = jax.lax.fori_loop(0, NUM_ENEMY_MISSILES, render_enemy_missile, raster)
+        else: # is state
             def render_enemy_missile(i, raster_in):
                 frame_missile = aj.get_sprite_frame(self.SPRITE_MISSILE, 0)
-                render_result = aj.render_at(raster_in, state_or_obs.enemy_missile_x[i], 
+                render_result = aj.render_at(raster_in, state_or_obs.enemy_missile_x[i],
                                             state_or_obs.enemy_missile_y[i], frame_missile)
                 return jnp.where(state_or_obs.enemy_missile_active[i] == 1, render_result, raster_in)
-        
+
             raster = jax.lax.fori_loop(0, NUM_ENEMY_MISSILES, render_enemy_missile, raster)
 
         # Add a black bar at the bottom of the screen
         black_bar_height = 20
         black_bar_y = HEIGHT - black_bar_height
-        raster = raster.at[:, black_bar_y:, :].set(0)  
+        raster = raster.at[:, black_bar_y:, :].set(0)
 
-        if is_observation:
-            score_value = get_scalar(state_or_obs.score)
-        else:
-            score_value = (state_or_obs.score // 25) * 25
-            
-        score_y = 5 
-        score_x_start = 30 
+        score_value = state_or_obs.score
+        score_y = 5
+        score_x_start = 30
         max_digits_render = 6
         padded_digits_render = jnp.zeros(max_digits_render, dtype=jnp.int32)
 
@@ -1234,8 +1084,8 @@ class AirRaidRenderer(AtraJaxisRenderer):
         invisible_digit_index = 10
         final_digits_to_render = jnp.where(
             should_be_visible,
-            padded_digits_render,      
-            invisible_digit_index      
+            padded_digits_render,
+            invisible_digit_index
         )
 
         raster = aj.render_label(
@@ -1246,23 +1096,20 @@ class AirRaidRenderer(AtraJaxisRenderer):
             self.DIGIT_SPRITES
         )
 
+        lives = state_or_obs.player_lives if not is_observation else state_or_obs.lives
         def render_life(i, raster_in):
             life_sprite = aj.get_sprite_frame(self.SPRITE_LIFE, 0)
             life_width = life_sprite.shape[0]
-            life_spacing = life_width + 3  
+            life_spacing = life_width + 3
 
             life_start_x = 30
-            life_y = 200 
+            life_y = 200
 
             icon_x = life_start_x + i * life_spacing
 
             result = aj.render_at(raster_in, icon_x, life_y, life_sprite)
 
-            if is_observation:
-                lives = get_scalar(state_or_obs.lives)
-                return jnp.where(i < lives, result, raster_in)
-            else:
-                return jnp.where(i < state_or_obs.player_lives, result, raster_in)
+            return jnp.where(i < lives, result, raster_in)
 
         raster = jax.lax.fori_loop(0, 5, render_life, raster)
 
@@ -1276,9 +1123,9 @@ if __name__ == "__main__":
     pygame.display.set_caption("Air Raid Game")
     clock = pygame.time.Clock()
 
-    
+
     game = JaxAirRaid(frameskip=1)
-    renderer = AirRaidRenderer()
+    renderer = game.renderer
 
     jitted_step = jax.jit(game.step)
     jitted_reset = jax.jit(game.reset)
@@ -1297,15 +1144,15 @@ if __name__ == "__main__":
                 if event.key == pygame.K_f:
                     frame_by_frame = not frame_by_frame
             elif event.type == pygame.KEYDOWN and event.key == pygame.K_n:
-                if frame_by_frame: 
-                    if counter % frameskip == 0: 
+                if frame_by_frame:
+                    if counter % frameskip == 0:
                         action = get_human_action()
                         obs, curr_state, reward, done, info = jitted_step(
                             curr_state, action
                         )
-                        
+
                         if done:
-                           obs, curr_state = jitted_reset()
+                           obs, curr_state = jitted_reset(curr_state.rng)
 
 
         if not frame_by_frame:
@@ -1313,7 +1160,7 @@ if __name__ == "__main__":
                 action = get_human_action()
                 obs, curr_state, reward, done, info = jitted_step(curr_state, action)
                 if done:
-                    obs, curr_state = jitted_reset()           
+                    obs, curr_state = jitted_reset(curr_state.rng)
         raster = renderer.render(curr_state)
         aj.update_pygame(screen, raster, 3, WIDTH, HEIGHT)
 
