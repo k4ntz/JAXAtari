@@ -60,13 +60,14 @@ MARIO_START_X = 45.0
 MARIO_START_Y = 176.0
 MARIO_JUMPING_HEIGHT = 5.0
 MARIO_JUMPING_FRAME_DURATION = 33
-MARIO_MOVING_SPEED = 0.3 # 0.3 pixel per frame
-MARIO_WALKING_ANIMATION_CHANGE_DURATION = 6 # after 6 frames of walking to one direction, the walking animation will change
+MARIO_MOVING_SPEED = 0.335 # 0.335 pixel per frame
+MARIO_WALKING_ANIMATION_CHANGE_DURATION = 5 # after 5 frames of walking to one direction, the walking animation will change
 
 # Mario sprite
-MARIO_WALK_SPRITE_0 = 0
+MARIO_WALK_SPRITE_0 = 0  # same sprite as MARIO_WALK_SPRITE_2, game sprite order is (standing)->(walk_1)->(standing)->(walk_2)
 MARIO_WALK_SPRITE_1 = 1
 MARIO_WALK_SPRITE_2 = 2
+MARIO_WALK_SPRITE_3 = 3
 
 # Barrel Start Position
 BARREL_START_X = 34
@@ -208,7 +209,8 @@ class DonkeyKongState(NamedTuple):
     
     mario_x: float
     mario_y: float  
-    mario_jumping: bool
+    mario_jumping: bool   # jumping on spot
+    mario_jumping_wide: bool
     start_frame_when_mario_jumped: int
     mario_view_direction: int
     mario_walk_frame_counter: int
@@ -478,22 +480,72 @@ def mario_step(state, action: chex.Array):
         )
 
         return jax.lax.cond(
-            jnp.logical_and(action == Action.FIRE, state.mario_jumping == False),
+            jnp.logical_and(action == Action.FIRE, jnp.logical_and(state.mario_jumping == False, state.mario_jumping_wide == False)),
             lambda _: new_state,
             lambda _: state,
             operand=None
         )
     new_state = jumping_on_spot(state)
 
+    # Jumping wide with Action.LEFTFIRE and Action.RIGHTFIRE
+    def jumping_right(state):
+        new_state = state._replace(
+            start_frame_when_mario_jumped = state.step_counter,
+            mario_jumping_wide = True,
+            mario_view_direction = MOVING_RIGHT,
+            mario_y = state.mario_y - MARIO_JUMPING_HEIGHT,
+            mario_x = state.mario_x + MARIO_MOVING_SPEED
+        )
+        new_state_2 = state._replace(
+            mario_x = state.mario_x + MARIO_MOVING_SPEED
+        )
+        return jax.lax.cond(
+            jnp.logical_and(action == Action.RIGHTFIRE, jnp.logical_and(state.mario_jumping_wide == False, state.mario_jumping == False)),
+            lambda _: new_state,
+            lambda _: jax.lax.cond(
+                jnp.logical_and(state.mario_jumping_wide == True, state.mario_view_direction == MOVING_RIGHT),
+                lambda _: new_state_2,
+                lambda _: state,
+                operand=None
+            ),
+            operand=None
+        )
+    new_state = jumping_right(new_state)
+
+    def jumping_left(state):
+        new_state = state._replace(
+            start_frame_when_mario_jumped = state.step_counter,
+            mario_jumping_wide = True,
+            mario_view_direction = MOVING_LEFT,
+            mario_y = state.mario_y - MARIO_JUMPING_HEIGHT,
+            mario_x = state.mario_x - MARIO_MOVING_SPEED
+        )
+        new_state_2 = state._replace(
+            mario_x = state.mario_x - MARIO_MOVING_SPEED
+        )
+        return jax.lax.cond(
+            jnp.logical_and(action == Action.LEFTFIRE, jnp.logical_and(state.mario_jumping_wide == False, state.mario_jumping == False)),
+            lambda _: new_state,
+            lambda _: jax.lax.cond(
+                jnp.logical_and(state.mario_jumping_wide == True, state.mario_view_direction == MOVING_LEFT),
+                lambda _: new_state_2,
+                lambda _: state,
+                operand=None
+            ),
+            operand=None
+        )
+    new_state = jumping_left(new_state)
+
     # reset jumping after a certain time
     def reset_jumping(state):
         new_state = state._replace(
             mario_jumping = False,
+            mario_jumping_wide = False,
             mario_y = state.mario_y + MARIO_JUMPING_HEIGHT,
         )
 
         return jax.lax.cond(
-            jnp.logical_and(state.step_counter - state.start_frame_when_mario_jumped >= MARIO_JUMPING_FRAME_DURATION, state.mario_jumping == True),
+            jnp.logical_and(state.step_counter - state.start_frame_when_mario_jumped >= MARIO_JUMPING_FRAME_DURATION, jnp.logical_or(state.mario_jumping == True, state.mario_jumping_wide == True)),
             lambda _: new_state,
             lambda _: state,
             operand=None
@@ -502,18 +554,34 @@ def mario_step(state, action: chex.Array):
 
     # change mario position in x direction if Action.right or Action.left is chosen
     def mario_walking_to_right(state):
-        new_state = state._replace(
-            mario_x=state.mario_x + MARIO_MOVING_SPEED,
-            mario_view_direction=MOVING_RIGHT,
-            mario_walk_frame_counter=state.mario_walk_frame_counter + 1,
+        last_mario_move_was_moving_to_right = state.mario_view_direction != MOVING_RIGHT
+        new_state = jax.lax.cond(
+            last_mario_move_was_moving_to_right,
+            lambda _:  state._replace(
+                mario_x=state.mario_x + MARIO_MOVING_SPEED,
+                mario_view_direction=MOVING_RIGHT,
+                mario_walk_frame_counter=0,
+            ),
+            lambda _:state._replace(
+                mario_x=state.mario_x + MARIO_MOVING_SPEED,
+                mario_view_direction=MOVING_RIGHT,
+                mario_walk_frame_counter=state.mario_walk_frame_counter + 1,
+            ),
+            operand=None
         )
+
         next_mario_walk_sprite = jax.lax.cond(
             state.mario_walk_sprite == MARIO_WALK_SPRITE_0,
             lambda _: MARIO_WALK_SPRITE_1,
             lambda _: jax.lax.cond(
                 state.mario_walk_sprite == MARIO_WALK_SPRITE_1,
                 lambda _: MARIO_WALK_SPRITE_2,
-                lambda _: MARIO_WALK_SPRITE_0,
+                lambda _: jax.lax.cond(
+                    state.mario_walk_sprite == MARIO_WALK_SPRITE_2,
+                    lambda _: MARIO_WALK_SPRITE_3,
+                    lambda _: MARIO_WALK_SPRITE_0,
+                    operand=None
+                ),
                 operand=None
             ),
             operand=None
@@ -529,7 +597,7 @@ def mario_step(state, action: chex.Array):
             operand=None
         )
         return jax.lax.cond(
-            jnp.logical_and(state.mario_jumping == False, action == Action.RIGHT),
+            jnp.logical_and(jnp.logical_and(state.mario_jumping == False, state.mario_jumping_wide == False), action == Action.RIGHT),
             lambda _: new_state,
             lambda _: state,
             operand=None
@@ -538,12 +606,50 @@ def mario_step(state, action: chex.Array):
 
     # similar function as mario_walking_to_right
     def mario_walking_to_left(state):
-        new_state = state._replace(
-            mario_x=state.mario_x - MARIO_MOVING_SPEED,
-            mario_view_direction=MOVING_LEFT
+        last_mario_move_was_moving_to_left = state.mario_view_direction != MOVING_LEFT
+        new_state = jax.lax.cond(
+            last_mario_move_was_moving_to_left,
+            lambda _:  state._replace(
+                mario_x=state.mario_x - MARIO_MOVING_SPEED,
+                mario_view_direction=MOVING_LEFT,
+                mario_walk_frame_counter=0,
+            ),
+            lambda _:state._replace(
+                mario_x=state.mario_x - MARIO_MOVING_SPEED,
+                mario_view_direction=MOVING_LEFT,
+                mario_walk_frame_counter=state.mario_walk_frame_counter + 1,
+            ),
+            operand=None
+        )
+
+        next_mario_walk_sprite = jax.lax.cond(
+            state.mario_walk_sprite == MARIO_WALK_SPRITE_0,
+            lambda _: MARIO_WALK_SPRITE_1,
+            lambda _: jax.lax.cond(
+                state.mario_walk_sprite == MARIO_WALK_SPRITE_1,
+                lambda _: MARIO_WALK_SPRITE_2,
+                lambda _: jax.lax.cond(
+                    state.mario_walk_sprite == MARIO_WALK_SPRITE_2,
+                    lambda _: MARIO_WALK_SPRITE_3,
+                    lambda _: MARIO_WALK_SPRITE_0,
+                    operand=None
+                ),
+                operand=None
+            ),
+            operand=None
+        )
+        change_sprite = state.mario_walk_frame_counter == MARIO_WALKING_ANIMATION_CHANGE_DURATION
+        new_state = jax.lax.cond(
+            change_sprite == True,
+            lambda _: new_state._replace(
+                mario_walk_frame_counter = 0,
+                mario_walk_sprite = next_mario_walk_sprite,
+            ),
+            lambda _: new_state,
+            operand=None
         )
         return jax.lax.cond(
-            jnp.logical_and(state.mario_jumping == False, action == Action.LEFT),
+            jnp.logical_and(jnp.logical_and(state.mario_jumping == False, state.mario_jumping_wide == False), action == Action.LEFT),
             lambda _: new_state,
             lambda _: state,
             operand=None
@@ -587,6 +693,7 @@ class JaxDonkeyKong(JaxEnvironment[DonkeyKongState, DonkeyKongObservation, Donke
             mario_x=MARIO_START_X,
             mario_y=MARIO_START_Y,
             mario_jumping=False,
+            mario_jumping_wide=False,
             start_frame_when_mario_jumped=-1,
             mario_view_direction=MOVING_RIGHT,
             mario_walk_frame_counter=0,
@@ -850,26 +957,44 @@ class DonkeyKongRenderer(AtraJaxisRenderer):
         frame_mario_right_side_walk_0 = aj.get_sprite_frame(self.SPRITES_MARIO_STANDING, 0)
         frame_mario_right_side_walk_1 = aj.get_sprite_frame(self.SPRITES_MARIO_WALKING_1, 0)
         frame_mario_right_side_walk_2 = aj.get_sprite_frame(self.SPRITES_MARIO_WALKING_2, 0)
-        frame_mario_standing_left = aj.get_sprite_frame(self.SPRITES_MARIO_STANDING, 1)
+        frame_mario_left_side_walk_0 = aj.get_sprite_frame(self.SPRITES_MARIO_STANDING, 1)
+        frame_mario_left_side_walk_1 = aj.get_sprite_frame(self.SPRITES_MARIO_WALKING_1, 1)
+        frame_mario_left_side_walk_2 = aj.get_sprite_frame(self.SPRITES_MARIO_WALKING_2, 1)
         frame_mario_jumping_right = aj.get_sprite_frame(self.SPRITES_MARIO_JUMPING, 0)
+        frame_mario_jumping_left = aj.get_sprite_frame(self.SPRITES_MARIO_JUMPING, 1)
         mario_x = state.mario_x
         mario_y = state.mario_y
         raster = jax.lax.cond(
-            state.mario_jumping,
+            jnp.logical_and(jnp.logical_or(state.mario_jumping, state.mario_jumping_wide), state.mario_view_direction == MOVING_RIGHT),
             lambda _: render_at_transparent(raster, jnp.int32(jnp.round(mario_x)), jnp.int32(jnp.round(mario_y)), frame_mario_jumping_right),
             lambda _: jax.lax.cond(
-                jnp.logical_and(state.mario_view_direction==MOVING_RIGHT, state.mario_walk_sprite == MARIO_WALK_SPRITE_0),
-                lambda _: render_at_transparent(raster, jnp.int32(jnp.round(mario_x)), jnp.int32(jnp.round(mario_y)), frame_mario_right_side_walk_0),
+                jnp.logical_and(jnp.logical_or(state.mario_jumping, state.mario_jumping_wide), state.mario_view_direction == MOVING_LEFT),
+                lambda _: render_at_transparent(raster, jnp.int32(jnp.round(mario_x)), jnp.int32(jnp.round(mario_y)), frame_mario_jumping_left),
                 lambda _: jax.lax.cond(
-                    jnp.logical_and(state.mario_view_direction==MOVING_RIGHT, state.mario_walk_sprite == MARIO_WALK_SPRITE_1),
-                    lambda _: render_at_transparent(raster, jnp.int32(jnp.round(mario_x)), jnp.int32(jnp.round(mario_y)), frame_mario_right_side_walk_1),
+                    jnp.logical_and(state.mario_view_direction==MOVING_RIGHT, jnp.logical_or(state.mario_walk_sprite == MARIO_WALK_SPRITE_0, state.mario_walk_sprite == MARIO_WALK_SPRITE_2)),
+                    lambda _: render_at_transparent(raster, jnp.int32(jnp.round(mario_x)), jnp.int32(jnp.round(mario_y)), frame_mario_right_side_walk_0),
                     lambda _: jax.lax.cond(
-                        jnp.logical_and(state.mario_view_direction==MOVING_RIGHT, state.mario_walk_sprite == MARIO_WALK_SPRITE_2),
-                        lambda _: render_at_transparent(raster, jnp.int32(jnp.round(mario_x)), jnp.int32(jnp.round(mario_y)), frame_mario_right_side_walk_2),
+                        jnp.logical_and(state.mario_view_direction==MOVING_RIGHT, state.mario_walk_sprite == MARIO_WALK_SPRITE_1),
+                        lambda _: render_at_transparent(raster, jnp.int32(jnp.round(mario_x)), jnp.int32(jnp.round(mario_y)), frame_mario_right_side_walk_1),
                         lambda _: jax.lax.cond(
-                            state.mario_view_direction==MOVING_LEFT,
-                            lambda _: render_at_transparent(raster, jnp.int32(jnp.round(mario_x)), jnp.int32(jnp.round(mario_y)), frame_mario_standing_left),
-                            lambda _: render_at_transparent(raster, jnp.int32(jnp.round(mario_x)), jnp.int32(jnp.round(mario_y)), frame_mario_right_side_walk_0),
+                            jnp.logical_and(state.mario_view_direction==MOVING_RIGHT, state.mario_walk_sprite == MARIO_WALK_SPRITE_3),
+                            lambda _: render_at_transparent(raster, jnp.int32(jnp.round(mario_x)), jnp.int32(jnp.round(mario_y))+1, frame_mario_right_side_walk_2),
+                            lambda _: jax.lax.cond(
+                                jnp.logical_and(state.mario_view_direction==MOVING_LEFT, jnp.logical_or(state.mario_walk_sprite == MARIO_WALK_SPRITE_0, state.mario_walk_sprite == MARIO_WALK_SPRITE_2)),
+                                lambda _: render_at_transparent(raster, jnp.int32(jnp.round(mario_x)), jnp.int32(jnp.round(mario_y)), frame_mario_left_side_walk_0),
+                                lambda _: jax.lax.cond(
+                                    jnp.logical_and(state.mario_view_direction==MOVING_LEFT, state.mario_walk_sprite == MARIO_WALK_SPRITE_1),
+                                    lambda _: render_at_transparent(raster, jnp.int32(jnp.round(mario_x)), jnp.int32(jnp.round(mario_y)), frame_mario_left_side_walk_1),
+                                    lambda _: jax.lax.cond(
+                                        jnp.logical_and(state.mario_view_direction==MOVING_LEFT, state.mario_walk_sprite == MARIO_WALK_SPRITE_3),
+                                        lambda _: render_at_transparent(raster, jnp.int32(jnp.round(mario_x)), jnp.int32(jnp.round(mario_y))+1, frame_mario_left_side_walk_2),
+                                        lambda _: raster,
+                                        operand=None
+                                    ),
+                                    operand=None
+                                ),
+                                operand=None
+                            ),
                             operand=None
                         ),
                         operand=None
@@ -877,7 +1002,7 @@ class DonkeyKongRenderer(AtraJaxisRenderer):
                     operand=None
                 ),
                 operand=None
-            ), 
+            ),
             operand=None
         )
 
@@ -996,6 +1121,17 @@ if __name__ == "__main__":
         for event in pygame.event.get():
             if event.type == pygame.QUIT:
                 running = False
+            elif event.type == pygame.KEYDOWN:
+                if event.key == pygame.K_f:
+                    frame_by_frame = not frame_by_frame
+            elif event.type == pygame.KEYDOWN or (
+                    event.type == pygame.KEYUP and event.key == pygame.K_n
+            ):
+                if event.key == pygame.K_n and frame_by_frame:
+                    action = get_human_action()
+                    obs, curr_state, reward, done, info = jitted_step(
+                        curr_state, action
+                    )
 
         if not frame_by_frame:
             action = get_human_action()
