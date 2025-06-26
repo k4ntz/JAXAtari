@@ -1306,7 +1306,7 @@ if __name__ == "__main__":
         )
         if game_over:
             print(f"Game Over! Final Score: {curr_state.score}, Lives: {curr_state.player_lives}")
-            running = False
+            running = True
 
         if not frame_by_frame:
             if counter % frameskip == 0:
