@@ -4,6 +4,7 @@ Lukas Bergholz, Linus Orlob, Vincent Jahn
 
 """
 import os
+import time
 from enum import IntEnum
 from functools import partial
 from typing import Tuple, NamedTuple
@@ -72,7 +73,15 @@ SHIELD_LOSS_COL_SMALL = 1
 SHIELD_LOSS_COL_BIG = 6
 
 # -------- Entity constants (constants that apply to all entity types --------
+NUM_ENTITY_TYPES = 8 # How many different (!) entity types there are
 
+# -------- Radar mortar constants --------
+RADAR_MORTAR_SIZE = (8, 26) # Width, Height
+
+RADAR_MORTAR_SPRITE_ROTATION_SPEED = 15 # Change sprite frame (left, middle, right) of radar mortar every RADAR_MORTAR_SPRITE_ROTATION_SPEED frames
+RADAR_MORTAR_SPAWN_X = WIDTH            # Spawm barely outside of bounds TODO: Either change this to a lot more or use cooldown before next entitiy init
+RADAR_MORTAR_SPAWN_Y_BOTTOM = 66        # Since the radar mortar can spawn at the top or at the bottom of the screen, we define two y positions.
+RADAR_MORTAR_SPAWN_Y_TOP = 19
 
 # -------- Enemy Missile constants --------
 ENEMY_MISSILE_COLOR = (85, 92, 197, 255)
@@ -110,41 +119,49 @@ class EntityType(IntEnum):
 
 class RadarMortarState(NamedTuple):
     is_in_current_event: jnp.bool
+    is_alive: jnp.bool
     x: chex.Array
     y: chex.Array
 
 class ByteBatState(NamedTuple):
     is_in_current_event: jnp.bool
+    is_alive: jnp.bool
     x: chex.Array
     y: chex.Array
 
 class RockMuncherState(NamedTuple):
     is_in_current_event: jnp.bool
+    is_alive: jnp.bool
     x: chex.Array
     y: chex.Array
 
 class HomingMissileState(NamedTuple):
     is_in_current_event: jnp.bool
+    is_alive: jnp.bool
     x: chex.Array
     y: chex.Array
 
 class ForceFieldState(NamedTuple):
     is_in_current_event: jnp.bool
+    is_alive: jnp.bool
     x: chex.Array
     y: chex.Array
 
 class DensepackState(NamedTuple):
     is_in_current_event: jnp.bool
+    is_alive: jnp.bool
     x: chex.Array
     y: chex.Array
 
 class DetonatorState(NamedTuple):
     is_in_current_event: jnp.bool
+    is_alive: jnp.bool
     x: chex.Array
     y: chex.Array
 
 class EnergyPodState(NamedTuple):
     is_in_current_event: jnp.bool
+    is_alive: jnp.bool
     x: chex.Array
     y: chex.Array
 
@@ -185,6 +202,7 @@ class LaserGatesState(NamedTuple):
     shields: chex.Array
     dtime: chex.Array
     scroll_speed: chex.Array
+    rng_key:  chex.PRNGKey
     step_counter: chex.Array
     # TODO: fill
 
@@ -235,10 +253,29 @@ def load_sprites():
     gui_score_digits = aj.load_and_pad_digits(os.path.join(MODULE_DIR, "sprites/lasergates/gui/score_numbers/{}.npy"))
     gui_score_comma = aj.loadFrame(os.path.join(MODULE_DIR, "sprites/lasergates/gui/score_numbers/comma.npy"))
 
+    # Entities
+    # Radar mortar
+    radar_mortar_frame_left = aj.loadFrame(os.path.join(MODULE_DIR, "sprites/lasergates/enemies/radar_mortar/1.npy"))
+    radar_mortar_frame_middle = aj.loadFrame(os.path.join(MODULE_DIR, "sprites/lasergates/enemies/radar_mortar/2.npy"))
+    radar_mortar_frame_right = aj.loadFrame(os.path.join(MODULE_DIR, "sprites/lasergates/enemies/radar_mortar/3.npy"))
+
+    rms = aj.pad_to_match([radar_mortar_frame_left, radar_mortar_frame_middle, radar_mortar_frame_right])
+    radar_mortar_sprites = jnp.concatenate([
+        jnp.repeat(rms[0][None], RADAR_MORTAR_SPRITE_ROTATION_SPEED, axis=0),
+        jnp.repeat(rms[1][None], RADAR_MORTAR_SPRITE_ROTATION_SPEED, axis=0),
+        jnp.repeat(rms[2][None], RADAR_MORTAR_SPRITE_ROTATION_SPEED, axis=0),
+        jnp.repeat(rms[1][None], RADAR_MORTAR_SPRITE_ROTATION_SPEED, axis=0),
+    ]) # Radar mortar rotation animation
 
     return (
+        # Player sprites
         player,
         player_missile,
+
+        # Entity sprites
+        radar_mortar_sprites,
+
+        # Background sprites
         upper_brown_bg,
         lower_brown_bg,
         playing_field_bg,
@@ -246,6 +283,8 @@ def load_sprites():
         lower_mountain,
         upper_mountain,
         black_stripe,
+
+        # Instrument panel sprites
         gui_colored_background,
         gui_black_background,
         gui_text_score,
@@ -257,8 +296,14 @@ def load_sprites():
     )
 
 (
+    # Player sprites
     SPRITE_PLAYER,
     SPRITE_PLAYER_MISSILE,
+
+    # Entity sprites
+    SPRITE_RADAR_MORTAR,
+
+    # Background sprites
     SPRITE_UPPER_BROWN_BG,
     SPRITE_LOWER_BROWN_BG,
     SPRITE_PLAYING_FIELD_BG,
@@ -266,6 +311,8 @@ def load_sprites():
     SPRITE_LOWER_MOUNTAIN,
     SPRITE_UPPER_MOUNTAIN,
     SPRITE_BLACK_STRIPE,
+
+    # Instrument panel sprites
     SPRITE_GUI_COLORED_BACKGROUND,
     SPRITE_GUI_BLACK_BACKGROUND,
     SPRITE_GUI_TEXT_SCORE,
@@ -277,6 +324,89 @@ def load_sprites():
 ) = load_sprites()
 
 # -------- Game Logic --------
+
+@jax.jit
+def maybe_initialize_random_entity(entities, state):
+    """
+    Spawns an entity with a random type if no other entities are present in the current state.
+    """
+    key_pick_type, key_intern = jax.random.split(state.rng_key) # rng for picking the type and rng for type-specific need for randomness
+
+    all_is_in_current_event_flags = jnp.stack([
+        entities.radar_mortar_state.is_in_current_event,
+        entities.byte_bat_state.is_in_current_event,
+        entities.rock_muncher_state.is_in_current_event,
+        entities.homing_missile_state.is_in_current_event,
+        entities.forcefield_state.is_in_current_event,
+        entities.dense_pack_state.is_in_current_event,
+        entities.detonator_state.is_in_current_event,
+        entities.energy_pod_state.is_in_current_event,
+    ])
+    active_event = jnp.any(all_is_in_current_event_flags) # If there is an entity that is in the current event
+
+    def initialize_radar_mortar(entities, state):
+
+        top_or_bot = jax.random.bernoulli(key_intern)
+
+        new_radar_mortar_state = RadarMortarState(
+                is_in_current_event = jnp.bool(True),
+                is_alive= jnp.bool(True),
+                x=jnp.array(RADAR_MORTAR_SPAWN_X).astype(entities.radar_mortar_state.x.dtype),
+                y=jnp.where(top_or_bot, RADAR_MORTAR_SPAWN_Y_BOTTOM, RADAR_MORTAR_SPAWN_Y_TOP),
+            )
+        return entities._replace(radar_mortar_state=new_radar_mortar_state)
+
+    def initialize_byte_bat(entities, state):
+        new_state = entities.byte_bat_state._replace(is_in_current_event=jnp.bool(True))
+        return entities._replace(byte_bat_state=new_state)
+
+    def initialize_rock_muncher(entities, state):
+        new_state = entities.rock_muncher_state._replace(is_in_current_event=jnp.bool(True))
+        return entities._replace(rock_muncher_state=new_state)
+
+    def initialize_homing_missile(entities, state):
+        new_state = entities.homing_missile_state._replace(is_in_current_event=jnp.bool(True))
+        return entities._replace(homing_missile_state=new_state)
+
+    def initialize_forcefield(entities, state):
+        new_state = entities.forcefield_state._replace(is_in_current_event=jnp.bool(True))
+        return entities._replace(forcefield_state=new_state)
+
+    def initialize_dense_pack(entities, state):
+        new_state = entities.dense_pack_state._replace(is_in_current_event=jnp.bool(True))
+        return entities._replace(dense_pack_state=new_state)
+
+    def initialize_detonator(entities, state):
+        new_state = entities.detonator_state._replace(is_in_current_event=jnp.bool(True))
+        return entities._replace(detonator_state=new_state)
+
+    def initialize_energy_pod(entities, state):
+        new_state = entities.energy_pod_state._replace(is_in_current_event=jnp.bool(True))
+        return entities._replace(energy_pod_state=new_state)
+
+    init_fns = [
+        initialize_radar_mortar,
+        initialize_byte_bat,
+        initialize_rock_muncher,
+        initialize_homing_missile,
+        initialize_forcefield,
+        initialize_dense_pack,
+        initialize_detonator,
+        initialize_energy_pod,
+    ] # All initialize functions of all entity types
+
+    def initialize_random_entity(_):
+        picked_index = jax.random.randint(key_pick_type, shape=(), minval=0, maxval=1) # TODO: Change maxval to len(init_fns) when all init functions are implemented
+        chosen_fn = lambda i: jax.lax.switch(i, init_fns, entities, state)
+        return chosen_fn(picked_index) # Initialize function of randomly picked entity
+
+    return jax.lax.cond(
+        active_event,
+        lambda _: entities,         # Return the current entities state if there still is an active entity present
+        initialize_random_entity,   # Else spawn a new entity with random type (see initialize_random_entity)
+        operand=None,
+    )
+
 
 @jax.jit
 def mountains_step(
@@ -299,43 +429,45 @@ def mountains_step(
     return MountainState(x1=new_x1, x2=new_x2, x3=new_x3, y=mountain_state.y)
 
 @jax.jit
-def radar_mortar_step(state: LaserGatesState) -> RadarMortarState:
-    return state.entities.radar_mortar_state
+def all_entities_step(game_state: LaserGatesState) -> Entities:
+    """
+    steps the entity (actually entities, but we only have one entity per event) that is currently in game (if is_in_current_event of said entity is True).
+    """
 
-@jax.jit
-def byte_bat_step(state: LaserGatesState) -> ByteBatState:
-    return state.entities.byte_bat_state
+    def radar_mortar_step(state: LaserGatesState) -> RadarMortarState:
+        radar_mortar_state = state.entities.radar_mortar_state
+        new_x = radar_mortar_state.x - state.scroll_speed
 
-@jax.jit
-def rock_muncher_step(state: LaserGatesState) -> RockMuncherState:
-    return state.entities.rock_muncher_state
+        kill_done = jnp.bool(False) # TODO: Collision detection + animation with timer in state
+        no_longer_in_event = jnp.logical_or(radar_mortar_state.x < 0 - RADAR_MORTAR_SIZE[0], kill_done)
 
-@jax.jit
-def homing_missile_step(state: LaserGatesState) -> HomingMissileState:
-    return state.entities.homing_missile_state
+        return radar_mortar_state._replace(
+            x=new_x.astype(radar_mortar_state.x.dtype),
+            is_in_current_event=jnp.logical_not(no_longer_in_event),
+        )
 
-@jax.jit
-def forcefield_step(state: LaserGatesState) -> ForceFieldState:
-    return state.entities.forcefield_state
+    def byte_bat_step(state: LaserGatesState) -> ByteBatState:
+        return state.entities.byte_bat_state
 
-@jax.jit
-def densepack_step(state: LaserGatesState) -> DensepackState:
-    return state.entities.dense_pack_state
+    def rock_muncher_step(state: LaserGatesState) -> RockMuncherState:
+        return state.entities.rock_muncher_state
 
-@jax.jit
-def radar_mortar_step(state: LaserGatesState) -> RadarMortarState:
-    return state.entities.radar_mortar_state
+    def homing_missile_step(state: LaserGatesState) -> HomingMissileState:
+        return state.entities.homing_missile_state
 
-@jax.jit
-def detonator_step(state: LaserGatesState) -> DetonatorState:
-    return state.entities.detonator_state
+    def forcefield_step(state: LaserGatesState) -> ForceFieldState:
+        return state.entities.forcefield_state
 
-@jax.jit
-def energy_pod_step(state: LaserGatesState) -> EnergyPodState:
-    return state.entities.energy_pod_state
+    def densepack_step(state: LaserGatesState) -> DensepackState:
+        return state.entities.dense_pack_state
 
-@jax.jit
-def step_all_entities(game_state: LaserGatesState) -> Entities:
+    def detonator_step(state: LaserGatesState) -> DetonatorState:
+        return state.entities.detonator_state
+
+    def energy_pod_step(state: LaserGatesState) -> EnergyPodState:
+        return state.entities.energy_pod_state
+
+
     def entity_maybe_step(step_fn, entity_state):
         return jax.lax.cond(
             entity_state.is_in_current_event,
@@ -344,16 +476,17 @@ def step_all_entities(game_state: LaserGatesState) -> Entities:
             operand=None
         )
 
+    s_entities = game_state.entities
     return Entities(
-        radar_mortar_state = entity_maybe_step(radar_mortar_step, game_state.entities.radar_mortar_state),
-        byte_bat_state = entity_maybe_step(byte_bat_step, game_state.entities.byte_bat_state),
-        rock_muncher_state = entity_maybe_step(rock_muncher_step, game_state.entities.rock_muncher_state),
-        homing_missile_state = entity_maybe_step(homing_missile_step, game_state.entities.homing_missile_state),
-        forcefield_state = entity_maybe_step(forcefield_step, game_state.entities.forcefield_state),
-        dense_pack_state = entity_maybe_step(densepack_step, game_state.entities.dense_pack_state),
-        detonator_state = entity_maybe_step(detonator_step, game_state.entities.detonator_state),
-        energy_pod_state = entity_maybe_step(energy_pod_step, game_state.entities.energy_pod_state),
-    )
+        radar_mortar_state = entity_maybe_step(radar_mortar_step, s_entities.radar_mortar_state),
+        byte_bat_state = entity_maybe_step(byte_bat_step, s_entities.byte_bat_state),
+        rock_muncher_state = entity_maybe_step(rock_muncher_step, s_entities.rock_muncher_state),
+        homing_missile_state = entity_maybe_step(homing_missile_step, s_entities.homing_missile_state),
+        forcefield_state = entity_maybe_step(forcefield_step, s_entities.forcefield_state),
+        dense_pack_state = entity_maybe_step(densepack_step, s_entities.dense_pack_state),
+        detonator_state = entity_maybe_step(detonator_step, s_entities.detonator_state),
+        energy_pod_state = entity_maybe_step(energy_pod_step, s_entities.energy_pod_state),
+    ) # Return the new step state for every entity. Only the currently active entity is updated. Since we use lax.cond (which is lazy), only the active branch is executed.
 
 
 @jax.jit
@@ -721,45 +854,56 @@ class JaxLaserGates(JaxEnvironment[LaserGatesState, LaserGatesObservation, Laser
         initial_entities = Entities(
             radar_mortar_state=RadarMortarState(
                 is_in_current_event=jnp.bool(False),
-                x=jnp.array(0),
+                is_alive=jnp.bool(False),
+                x=jnp.array(0).astype(jnp.float32),
                 y=jnp.array(0),
             ),
             byte_bat_state=ByteBatState(
                 is_in_current_event=jnp.bool(False),
-                x=jnp.array(0),
+                is_alive=jnp.bool(False),
+                x=jnp.array(0).astype(jnp.float32),
                 y=jnp.array(0),
             ),
             rock_muncher_state=RockMuncherState(
                 is_in_current_event=jnp.bool(False),
-                x=jnp.array(0),
+                is_alive=jnp.bool(False),
+                x=jnp.array(0).astype(jnp.float32),
                 y=jnp.array(0),
             ),
             homing_missile_state=HomingMissileState(
                 is_in_current_event=jnp.bool(False),
-                x=jnp.array(0),
+                is_alive=jnp.bool(False),
+                x=jnp.array(0).astype(jnp.float32),
                 y=jnp.array(0),
             ),
             forcefield_state=ForceFieldState(
                 is_in_current_event=jnp.bool(False),
-                x=jnp.array(0),
+                is_alive=jnp.bool(False),
+                x=jnp.array(0).astype(jnp.float32),
                 y=jnp.array(0),
             ),
             dense_pack_state=DensepackState(
                 is_in_current_event=jnp.bool(False),
-                x=jnp.array(0),
+                is_alive=jnp.bool(False),
+                x=jnp.array(0).astype(jnp.float32),
                 y=jnp.array(0),
             ),
             detonator_state=DetonatorState(
                 is_in_current_event=jnp.bool(False),
-                x=jnp.array(0),
+                is_alive=jnp.bool(False),
+                x=jnp.array(0).astype(jnp.float32),
                 y=jnp.array(0),
             ),
             energy_pod_state=EnergyPodState(
                 is_in_current_event=jnp.bool(False),
-                x=jnp.array(0),
+                is_alive=jnp.bool(False),
+                x=jnp.array(0).astype(jnp.float32),
                 y=jnp.array(0),
             ),
         )
+
+        key = jax.random.PRNGKey(time.time_ns() % (2**32)) # Pseudo random number generator seed key, based on current system time.
+        new_key0, key0 = jax.random.split(key, 2)
 
         reset_state = LaserGatesState( # TODO: fill
             player_x=jnp.array(PLAYER_START_X),
@@ -776,6 +920,7 @@ class JaxLaserGates(JaxEnvironment[LaserGatesState, LaserGatesObservation, Laser
             shields=jnp.array(MAX_SHIELDS), # As the manual says, the Dante Dart starts with 24 shield units
             dtime=jnp.array(MAX_DTIME), # Same idea as energy.
             scroll_speed=jnp.array(SCROLL_SPEED),
+            rng_key=new_key0,  # Pseudo random number generator seed key, based on current time and initial key used.
             step_counter=jnp.array(0),
         )
 
@@ -797,7 +942,11 @@ class JaxLaserGates(JaxEnvironment[LaserGatesState, LaserGatesObservation, Laser
         new_player_missile_state = player_missile_step(state, action)
 
         # -------- Move entities --------
-        new_entities = step_all_entities(state)
+
+        new_entities = all_entities_step(state)
+        # new_entities = check_player_missile_collision_entities # TODO: Implement
+        # new_entities = check_player_collision_entities # TODO: Implement
+        new_entities = maybe_initialize_random_entity(new_entities, state)
 
         # -------- Move mountains --------
         new_lower_mountains_state = mountains_step(state.lower_mountains, state)
@@ -821,6 +970,8 @@ class JaxLaserGates(JaxEnvironment[LaserGatesState, LaserGatesObservation, Laser
         new_score = state.score + 1
         new_shields = jnp.where(jnp.logical_or(upper_col, lower_col), state.shields - 1, state.shields)
 
+        # -------- New rng key --------
+        new_rng_key, new_key = jax.random.split(state.rng_key)
 
         return_state = state._replace(
             player_x=new_player_x,
@@ -836,6 +987,7 @@ class JaxLaserGates(JaxEnvironment[LaserGatesState, LaserGatesObservation, Laser
             score=new_score,
             energy=new_energy,
             shields=new_shields,
+            rng_key=new_rng_key,
             step_counter=state.step_counter + 1
         )
 
@@ -900,68 +1052,6 @@ class LaserGatesRenderer(AtraJaxisRenderer):
             0,
             109,
             SPRITE_GRAY_GUI_BG,
-        )
-
-        # -------- Render mountains --------
-
-        # Lower mountains
-        raster = aj.render_at(
-            raster,
-            state.lower_mountains.x1,
-            state.lower_mountains.y,
-            SPRITE_LOWER_MOUNTAIN,
-        )
-
-        raster = aj.render_at(
-            raster,
-            state.lower_mountains.x2,
-            state.lower_mountains.y,
-            SPRITE_LOWER_MOUNTAIN,
-        )
-
-        raster = aj.render_at(
-            raster,
-            state.lower_mountains.x3,
-            state.lower_mountains.y,
-            SPRITE_LOWER_MOUNTAIN,
-        )
-
-        # Upper mountains
-        raster = aj.render_at(
-            raster,
-            state.upper_mountains.x1,
-            state.upper_mountains.y,
-            SPRITE_UPPER_MOUNTAIN,
-        )
-
-        raster = aj.render_at(
-            raster,
-            state.upper_mountains.x2,
-            state.upper_mountains.y,
-            SPRITE_UPPER_MOUNTAIN,
-        )
-
-        raster = aj.render_at(
-            raster,
-            state.upper_mountains.x3,
-            state.upper_mountains.y,
-            SPRITE_UPPER_MOUNTAIN,
-        )
-
-        # Weird black stripe 1
-        raster = aj.render_at(
-            raster,
-            0,
-            18,
-            SPRITE_BLACK_STRIPE,
-        )
-
-        # Weird black stripe 2
-        raster = aj.render_at(
-            raster,
-            0,
-            109,
-            SPRITE_BLACK_STRIPE,
         )
 
         # -------- Render gui --------
@@ -1161,7 +1251,6 @@ class LaserGatesRenderer(AtraJaxisRenderer):
 
         # -------- Render player --------
         timer = state.animation_timer.astype(jnp.int32) - (255 - PLAYER_COLOR_CHANGE_DURATION)
-        jax.debug.print("{x}",x=timer)
         raster = aj.render_at(
             raster,
             state.player_x,
@@ -1191,6 +1280,83 @@ class LaserGatesRenderer(AtraJaxisRenderer):
                       ),
                   raster
                   )
+
+        # -------- Render entities --------
+
+        # Render radar mortar
+        radar_mortar_frame = aj.get_sprite_frame(SPRITE_RADAR_MORTAR, state.step_counter)
+        raster = jnp.where(state.entities.radar_mortar_state.is_alive,
+                           aj.render_at(
+                               raster,
+                               state.entities.radar_mortar_state.x,
+                               state.entities.radar_mortar_state.y,
+                               radar_mortar_frame,
+                               flip_vertical=state.entities.radar_mortar_state.y == RADAR_MORTAR_SPAWN_Y_TOP,
+                           ),
+                           raster
+                           )
+
+        # -------- Render mountains --------
+
+        # Lower mountains
+        raster = aj.render_at(
+            raster,
+            state.lower_mountains.x1,
+            state.lower_mountains.y,
+            SPRITE_LOWER_MOUNTAIN,
+        )
+
+        raster = aj.render_at(
+            raster,
+            state.lower_mountains.x2,
+            state.lower_mountains.y,
+            SPRITE_LOWER_MOUNTAIN,
+        )
+
+        raster = aj.render_at(
+            raster,
+            state.lower_mountains.x3,
+            state.lower_mountains.y,
+            SPRITE_LOWER_MOUNTAIN,
+        )
+
+        # Upper mountains
+        raster = aj.render_at(
+            raster,
+            state.upper_mountains.x1,
+            state.upper_mountains.y,
+            SPRITE_UPPER_MOUNTAIN,
+        )
+
+        raster = aj.render_at(
+            raster,
+            state.upper_mountains.x2,
+            state.upper_mountains.y,
+            SPRITE_UPPER_MOUNTAIN,
+        )
+
+        raster = aj.render_at(
+            raster,
+            state.upper_mountains.x3,
+            state.upper_mountains.y,
+            SPRITE_UPPER_MOUNTAIN,
+        )
+
+        # Weird black stripe 1
+        raster = aj.render_at(
+            raster,
+            0,
+            18,
+            SPRITE_BLACK_STRIPE,
+        )
+
+        # Weird black stripe 2
+        raster = aj.render_at(
+            raster,
+            0,
+            109,
+            SPRITE_BLACK_STRIPE,
+        )
 
         return raster
 
