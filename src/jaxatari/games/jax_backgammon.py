@@ -322,7 +322,7 @@ class JaxBackgammonEnv(JaxEnvironment[BackgammonState, jnp.ndarray, dict]):
             to_point == HOME_INDEX,
             lambda _: jax.lax.cond(
                 player == WHITE,
-                lambda _: HOME_INDEX - from_point,
+                lambda _: from_point - 17, #needs to be checked
                 lambda _: from_point + 1,
                 operand=None
             ),
@@ -336,16 +336,31 @@ class JaxBackgammonEnv(JaxEnvironment[BackgammonState, jnp.ndarray, dict]):
         )
 
         return jax.lax.cond(is_from_bar, lambda _: bar_distance, lambda _: regular_distance, operand=None)
-    
     @staticmethod
     @jax.jit
-    def update_dice(dice: jnp.ndarray, is_valid: bool, distance: int) -> jnp.ndarray:
+    def update_dice(dice: jnp.ndarray, is_valid: bool, distance: int, allow_oversized: bool = False) -> jnp.ndarray:
         """Consume one matching die (only the first match). Works with up to 4 dice."""
 
         def consume_one(dice):
             def scan_fn(carry, i):
                 d, used = carry
-                should_consume = (~used) & (d[i] == distance)
+                # Verschiedene Modi:
+                # 1. Exakter Match
+                match_exact = (~used) & (d[i] == distance)
+
+                # 2. Oversized erlaubt
+                match_oversized = (~used) & (d[i] > distance)
+
+                # 3. Wenn kein exakter oder größerer, nimm max
+                max_die_val = jnp.max(d)
+                match_fallback = (~used) & (d[i] == max_die_val) & (max_die_val < distance)
+
+                should_consume = jax.lax.cond(
+                    allow_oversized,
+                    lambda _: match_exact | match_oversized | match_fallback,
+                    lambda _: match_exact,
+                    operand=None
+                )
                 new_d = jax.lax.cond(
                     should_consume,
                     lambda _: d.at[i].set(0),
@@ -360,7 +375,7 @@ class JaxBackgammonEnv(JaxEnvironment[BackgammonState, jnp.ndarray, dict]):
 
         return jax.lax.cond(is_valid, consume_one, lambda d: d, dice)
 
-    @partial(jax.jit, static_argnums=(0,))
+    #@partial(jax.jit, static_argnums=(0,))
     def step_impl(self, state: BackgammonState, action: Tuple[int, int], key: jax.Array) -> Tuple[jnp.ndarray, BackgammonState, float, bool, dict, jax.Array]:
         """Perform a step in the environment, applying the action and returning the new state."""
         from_point, to_point = action
@@ -382,9 +397,19 @@ class JaxBackgammonEnv(JaxEnvironment[BackgammonState, jnp.ndarray, dict]):
 
         # calculate move distance
         distance = JaxBackgammonEnv.compute_distance(player, from_point, to_point)
+        distance = int(distance.item())
+        print("=== DEBUG: step_impl ===")
+        print("Move:", from_point, "→", to_point)
+        print("Current player:", player)
+        print("Distance:", distance)
+        print("Type of distance:", type(distance))
+        print("Dice before update:", state.dice)
+        allow_oversized = (to_point == HOME_INDEX)
+        new_dice = JaxBackgammonEnv.update_dice(state.dice, is_valid, distance, allow_oversized)
 
-        # update dice based on the move
-        new_dice = JaxBackgammonEnv.update_dice(state.dice, is_valid, distance)
+        print("Dice after update:", new_dice)
+        print("All dice used:", jnp.all(new_dice == 0))
+        print("Valid move:", is_valid)
 
         # check if all dice are used
         all_dice_used = jnp.all(new_dice == 0)
