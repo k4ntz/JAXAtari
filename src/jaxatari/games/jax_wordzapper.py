@@ -52,10 +52,10 @@ ENEMY_ANIM_SWITCH_RATE = 15
 ENEMY_Y_MIN_SEPARATION = 16  
 
 # zapper
-ZAPPER_COLOR = (204,104,104,255)
+ZAPPER_COLOR = (252,252,84,255)
 MAX_ZAPPER_POS = 49
-ZAPPER_SPR_WIDTH = 8
-ZAPPER_SPR_HEIGHT = 200 # this is approximate, can also be changed, but this works fine
+ZAPPER_SPR_WIDTH = 4
+ZAPPER_SPR_HEIGHT = 200 # this is approximate, can also be changed, but this works fine. TODO define this value based on max/min ship coordinate 
 
 
 TIME = 99
@@ -478,7 +478,7 @@ def player_zapper_step(
     new_zapper = jnp.where(
         jnp.logical_and(fire, jnp.logical_not(zapper_exists)),
         # TODO remove hard-coded values below
-        jnp.array([curr_player_x+4, curr_player_y-5, 1, state.step_counter]),
+        jnp.array([curr_player_x+6, curr_player_y-2, 1, state.step_counter]),
         state.player_zapper_position,
     )
     
@@ -487,14 +487,16 @@ def player_zapper_step(
         state.player_zapper_position[1],
         0,
         state.player_zapper_position[3]
-    ]) 
+    ])
+    
     new_active_zapper = jnp.array([
         state.player_zapper_position[0],
         state.player_zapper_position[1],
         1,
         state.player_zapper_position[3]
-    ]) 
-    #####
+    ])
+
+
     delta = jnp.abs(state.step_counter - new_zapper[3])
 
     out_zapper = jnp.where(
@@ -927,7 +929,7 @@ class WordZapperRenderer(AtraJaxisRenderer):
                 state.player_zapper_position[0],
                 MAX_ZAPPER_POS,
                 zapper_spr * (jnp.arange(ZAPPER_SPR_HEIGHT) < state.player_zapper_position[1] - MAX_ZAPPER_POS).astype(jnp.uint8)[None, :, None]
-                
+                # this is used to mask parts of zapper_spr, as it is longer to make impression of dynamic length
             ),
             lambda r : r,
             raster,
