@@ -1,4 +1,3 @@
-
 from functools import partial
 import pygame
 import chex
@@ -712,100 +711,37 @@ class GameRenderer:
 
 
     def _create_flag_sprite(self) -> pygame.Surface:
-        size = (
+        # Lade das Flaggen-Sprite aus dem Sprite-Verzeichnis
+        base_path = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
+        sprite_dir = os.path.join(base_path, "jaxatari", "games", "sprites", "skiing")
+        full_path = os.path.join(sprite_dir, "checkered_flag.npy")
+        return self._npy_to_surface(
+            full_path,
             self.game_config.flag_width * self.render_config.scale_factor,
             self.game_config.flag_height * self.render_config.scale_factor,
         )
-        sprite = pygame.Surface(size, pygame.SRCALPHA)
-
-        scaled_width = size[0]
-        scaled_height = size[1]
-
-        pygame.draw.line(
-            sprite,
-            self.render_config.text_color,
-            (scaled_width // 2, 0),
-            (scaled_width // 2, scaled_height),
-            2,
-        )
-
-        pygame.draw.polygon(
-            sprite,
-            self.render_config.flag_color,
-            [
-                (scaled_width // 2, scaled_height // 4),
-                (scaled_width, scaled_height // 2),
-                (scaled_width // 2, scaled_height // 4 * 3),
-            ],
-        )
-
-        return sprite
 
     def _create_tree_sprite(self) -> pygame.Surface:
-        size = (
+        # Lade das Baum-Sprite aus dem Sprite-Verzeichnis
+        base_path = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
+        sprite_dir = os.path.join(base_path, "jaxatari", "games", "sprites", "skiing")
+        full_path = os.path.join(sprite_dir, "tree.npy")
+        return self._npy_to_surface(
+            full_path,
             self.game_config.tree_width * self.render_config.scale_factor,
             self.game_config.tree_height * self.render_config.scale_factor,
         )
-        sprite = pygame.Surface(size, pygame.SRCALPHA)
-
-        scaled_width = size[0]
-        scaled_height = size[1]
-
-        # Tree trunk
-        trunk_width = scaled_width // 3
-        trunk_height = scaled_height // 3
-        trunk_rect = pygame.Rect(
-            (scaled_width - trunk_width) // 2,
-            scaled_height - trunk_height,
-            trunk_width,
-            trunk_height,
-        )
-        pygame.draw.rect(sprite, (139, 69, 19), trunk_rect)
-
-        # Tree triangles
-        for i in range(3):
-            height_offset = i * (scaled_height // 3)
-            width_factor = 0.8 + (i * 0.1)
-            pygame.draw.polygon(
-                sprite,
-                self.render_config.tree_color,
-                [
-                    (scaled_width // 2, height_offset),
-                    (
-                        scaled_width * (1 - width_factor) // 2,
-                        height_offset + scaled_height // 3,
-                    ),
-                    (
-                        scaled_width * (1 + width_factor) // 2,
-                        height_offset + scaled_height // 3,
-                    ),
-                ],
-            )
-
-        return sprite
 
     def _create_rock_sprite(self) -> pygame.Surface:
-        size = (
+        # Lade das Stein-Sprite aus dem Sprite-Verzeichnis
+        base_path = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
+        sprite_dir = os.path.join(base_path, "jaxatari", "games", "sprites", "skiing")
+        full_path = os.path.join(sprite_dir, "stone.npy")
+        return self._npy_to_surface(
+            full_path,
             self.game_config.rock_width * self.render_config.scale_factor,
             self.game_config.rock_height * self.render_config.scale_factor,
         )
-        sprite = pygame.Surface(size, pygame.SRCALPHA)
-
-        scaled_width = size[0]
-        scaled_height = size[1]
-
-        # Draw a polygon for the rock
-        points = [
-            (scaled_width * 0.2, scaled_height * 0.8),
-            (0, scaled_height * 0.4),
-            (scaled_width * 0.3, scaled_height * 0.2),
-            (scaled_width * 0.7, scaled_height * 0.1),
-            (scaled_width, scaled_height * 0.5),
-            (scaled_width * 0.8, scaled_height),
-        ]
-        pygame.draw.polygon(sprite, self.render_config.rock_color, points)
-
-        return sprite
 
     def render(self, state: GameState):
         """Render the current game state"""
@@ -1038,7 +974,6 @@ def main():
             clock.tick(60)
 
         renderer.close()
-
 
 if __name__ == "__main__":
     main()
