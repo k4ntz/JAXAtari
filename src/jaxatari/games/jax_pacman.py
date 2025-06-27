@@ -8,6 +8,8 @@ from jaxatari.environment import JaxEnvironment
 from jax import random
 
 
+
+
 # Make sure GRID_WIDTH and GRID_HEIGHT are defined in your environment
 GRID_WIDTH = 19
 GRID_HEIGHT = 11
