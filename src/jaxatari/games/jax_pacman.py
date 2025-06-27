@@ -1,4 +1,5 @@
 # Group: Sooraj Rathore, Kadir Özen
+
 from functools import partial
 from typing import NamedTuple, Tuple
 import jax
@@ -6,10 +7,7 @@ import jax.numpy as jnp
 import chex
 import pygame
 from jaxatari.environment import JaxEnvironment
-from jax import random
-
-
-
+from jax import random, Array
 
 # Make sure GRID_WIDTH and GRID_HEIGHT are defined in your environment
 GRID_WIDTH = 19
@@ -35,23 +33,23 @@ maze_layout = jnp.array([
 
 def get_valid_moves(pos: chex.Array, maze: chex.Array) -> Tuple[chex.Array, chex.Array]:
     directions = jnp.array([
-        (-1, 0),  # up
-        (1, 0),   # down
-        (0, -1),  # left
-        (0, 1),   # right
+        (0, -1),  # up
+        (0, 1),   # down
+        (-1, 0),  # left
+        (1, 0),   # right
     ])
 
     def is_valid(direction):
-        dx, dy = direction
-        new_pos = pos + jnp.array([dx, dy])
-        nx, ny = new_pos[0], new_pos[1]
+        new_pos = pos + direction
+        y, x = new_pos[0], new_pos[1]  # ACHTUNG: (y, x)
 
-        in_bounds = (0 <= nx) & (nx < maze.shape[0]) & (0 <= ny) & (ny < maze.shape[1])
-        is_open = (maze[nx, ny] == 0)
+        in_bounds = (0 <= y) & (y < maze.shape[0]) & (0 <= x) & (x < maze.shape[1])
+        is_open = maze[y, x] == 0
         return in_bounds & is_open
 
     valids = jax.vmap(is_valid)(directions)
     return directions, valids
+
 
 
 
@@ -68,16 +66,16 @@ def ghost_chase_step(ghost_pos, pacman_pos, maze, key):
 
 
 def ghost_frightened_step(ghost_pos: chex.Array, maze: chex.Array, key: chex.PRNGKey) -> chex.Array:
-    directions, valids = get_valid_moves(ghost_pos, maze)  # directions: (4, 2), valids: (4,)
-
-    # Convert bools to indices
-    valid_indices = jnp.nonzero(valids, size=4, fill_value=-1)[0]
+    directions, valids = get_valid_moves(ghost_pos, maze)
     num_valid = jnp.sum(valids)
 
     def choose_move():
+        valid_indices = jnp.nonzero(valids, size=4)[0]
         idx = random.randint(key, (), 0, num_valid)
-        move_idx = valid_indices[idx]
-        return ghost_pos + directions[move_idx]
+        move = directions[valid_indices[idx]]
+        new_pos = ghost_pos + move
+        return new_pos
+        #return ghost_pos + move
 
     def no_move():
         return ghost_pos
@@ -85,7 +83,11 @@ def ghost_frightened_step(ghost_pos: chex.Array, maze: chex.Array, key: chex.PRN
     return jax.lax.cond(num_valid > 0, choose_move, no_move)
 
 
+
+
 class PacmanState(NamedTuple):
+
+
     pacman_pos: chex.Array  # (x, y)
     pacman_dir: chex.Array  # (dx, dy)
     ghost_positions: chex.Array  # (N_ghosts, 2)
@@ -95,6 +97,7 @@ class PacmanState(NamedTuple):
     score: chex.Array
     step_count: chex.Array
     game_over: chex.Array
+    power_mode_timer: chex.Array
 
 class PacmanObservation(NamedTuple):
     grid: chex.Array  # 2D array showing layout of walls, pellets, pacman, ghosts
@@ -127,7 +130,7 @@ class JaxPacman(JaxEnvironment[PacmanState, PacmanObservation, PacmanInfo]):
     def reset(self, key=None) -> Tuple[PacmanObservation, PacmanState]:
         pacman_pos = jnp.array([9, 9])
         pacman_dir = jnp.array([0, 0])
-        ghost_positions = jnp.array([[8, 5], [9, 5], [10, 5]])
+        ghost_positions = jnp.array([[9, 3], [9, 5], [9, 7]])
         ghost_dirs = jnp.zeros_like(ghost_positions)
         pellets = (maze_layout == 0).astype(jnp.int32)
         power_pellets = jnp.zeros_like(pellets)
@@ -136,6 +139,8 @@ class JaxPacman(JaxEnvironment[PacmanState, PacmanObservation, PacmanInfo]):
         power_pellets = power_pellets.at[9, 1].set(1)
         power_pellets = power_pellets.at[9, 17].set(1)
         pellets = pellets - power_pellets
+
+        power_mode_timer = jnp.array(0)
 
         state = PacmanState(
             pacman_pos=pacman_pos,
@@ -146,21 +151,31 @@ class JaxPacman(JaxEnvironment[PacmanState, PacmanObservation, PacmanInfo]):
             power_pellets=power_pellets,
             score=jnp.array(0),
             step_count=jnp.array(0),
-            game_over=jnp.array(False)
+            game_over=jnp.array(False),
+            power_mode_timer=power_mode_timer
         )
         obs = self._get_observation(state)
         return obs, state
 
     @partial(jax.jit, static_argnums=(0,))
-    def step(self, state: PacmanState, action: chex.Array) -> Tuple[
-        PacmanObservation, PacmanState, float, bool, PacmanInfo]:
+    def step(self, state: PacmanState, action: chex.Array) -> tuple[
+        PacmanObservation, PacmanState, Array, Array, PacmanInfo]:
         new_dir = DIRECTIONS[action]
         new_pos = move_entity(state.pacman_pos, new_dir, self._get_wall_grid())
         has_pellet = state.pellets[new_pos[1], new_pos[0]] > 0
+        has_power = state.power_pellets[new_pos[1], new_pos[0]] > 0
 
         # Consume pellet
         pellets = state.pellets.at[new_pos[1], new_pos[0]].set(0)
+        power_pellets = state.power_pellets.at[new_pos[1], new_pos[0]].set(0)
         score = state.score + jax.lax.select(has_pellet, 10, 0)
+
+        #Update power mode timer
+        power_mode_timer = jax.lax.select(
+            has_power,
+            jnp.array(50), #Reset timer when power pellet is consumed
+            jnp.maximum(0, state.power_mode_timer - 1)
+        )
 
         # Ghost random movement
         def move_one_ghost(ghost_pos, key):
@@ -170,7 +185,18 @@ class JaxPacman(JaxEnvironment[PacmanState, PacmanObservation, PacmanInfo]):
         ghost_positions = jax.vmap(move_one_ghost)(state.ghost_positions, keys)
 
         # Check collision
-        pacman_dead = jnp.any(jnp.all(ghost_positions == new_pos, axis=1))
+        def ghost_hits_pacman(ghost_pos):
+            collision = jnp.all(jnp.array([ghost_pos[1], ghost_pos[0]]) == new_pos)
+            # Wenn Power-Modus aktiv ist, führt Kollision nicht zum Tod
+            return jax.lax.cond(
+                state.power_mode_timer > 0,
+                lambda _: False,  # Im Power-Modus: keine tödliche Kollision
+                lambda _: collision,  # Normaler Modus: Kollision ist tödlich
+                operand=None
+            )
+
+        hits = jax.vmap(ghost_hits_pacman)(ghost_positions)
+        pacman_dead = jnp.any(hits)
         game_over = jnp.logical_or(state.game_over, pacman_dead)
 
         new_state = PacmanState(
@@ -179,10 +205,11 @@ class JaxPacman(JaxEnvironment[PacmanState, PacmanObservation, PacmanInfo]):
             ghost_positions=ghost_positions,
             ghost_dirs=state.ghost_dirs,
             pellets=pellets,
-            power_pellets=state.power_pellets,
+            power_pellets=power_pellets,
             score=score,
             step_count=state.step_count + 1,
-            game_over=game_over
+            game_over=game_over,
+            power_mode_timer=power_mode_timer
         )
         obs = self._get_observation(new_state)
         reward = jax.lax.select(has_pellet, 10.0, 0.0)
@@ -199,7 +226,7 @@ class JaxPacman(JaxEnvironment[PacmanState, PacmanObservation, PacmanInfo]):
         grid = grid.at[state.pacman_pos[1], state.pacman_pos[0]].set(2)
         # Place Ghosts
         for g in state.ghost_positions:
-            grid = grid.at[g[1], g[0]].set(3)
+            grid = grid.at[g[0], g[1]].set(3)
         # Add pellets (only to empty spaces)
         pellet_mask = (state.pellets > 0) & (grid == 0)
         grid = jnp.where(pellet_mask, 5, grid)
@@ -257,7 +284,8 @@ def main():
                 elif cell == 2:
                     pygame.draw.circle(screen, (255, 255, 0), rect.center, CELL_SIZE // 2)  # Pacman
                 elif cell == 3:
-                    pygame.draw.circle(screen, (255, 0, 0), rect.center, CELL_SIZE // 2)  # Ghost
+                    color = (0, 191, 255) if state.power_mode_timer > 0 else (255, 0, 0)  # Ghost when frightened
+                    pygame.draw.circle(screen, color, rect.center, CELL_SIZE // 2)
                 elif cell == 4:
                     pygame.draw.circle(screen, (0, 255, 255), rect.center, CELL_SIZE // 4)  # Power Pellet
                 elif cell == 5:
