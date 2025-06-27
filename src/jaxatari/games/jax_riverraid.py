@@ -31,7 +31,7 @@ class RiverraidState(NamedTuple):
     river_inner_left: chex.Array
     river_inner_right: chex.Array
     river_state: chex.Array # 0 keep straight, 1 expanse, 2 shrinking
-    river_island_present: chex.Array #0 no, 1 yes, 2 transition
+    river_island_present: chex.Array #0 no, 1 yes, 2 spawning, 3 removing, 4 removing helper
     alternation_cooldown: chex.Array
     river_alternation_length: chex.Array
     river_ongoing_alternation: chex.Array
@@ -158,21 +158,39 @@ def update_river_banks(state: RiverraidState) -> RiverraidState:
                                   river_right=new_right)
 
         def shrink(state: RiverraidState) -> RiverraidState:
-            new_river_inner_left = state.river_inner_left.at[0].set(state.river_inner_left[1] + 3)
-            new_river_inner_right = state.river_inner_right.at[0].set(state.river_inner_right[1] - 3)
+            proposed_inner_left = state.river_inner_left[1] + 3
+            proposed_inner_right = state.river_inner_right[1] - 3
+            new_river_inner_left, new_river_inner_right, new_island_present = jax.lax.cond(
+                proposed_inner_left + 0 <= proposed_inner_right,
+                lambda _: (
+                    state.river_inner_left.at[0].set(proposed_inner_left),
+                    state.river_inner_right.at[0].set(proposed_inner_right),
+                    jnp.array(4)
+                ),
+                lambda _: (
+                    state.river_inner_left.at[0].set(state.river_inner_left[1]),
+                    state.river_inner_right.at[0].set(state.river_inner_right[1]),
+                    state.river_island_present
+                ),
+                operand=None
+            )
+
             new_left = state.river_left.at[0].set(state.river_left[1])
             new_right = state.river_right.at[0].set(state.river_right[1])
-            new_island_present = jax.lax.cond(new_river_inner_left[0] >= new_river_inner_right[0],
-                                              lambda _: jnp.array(0),
-                                              lambda state: state.river_island_present,
-                                              operand=state
-                                              )
+
+
+            #new_island_present = jax.lax.cond(new_river_inner_left[0] >= new_river_inner_right[0],
+                                             # lambda _: jnp.array(0),
+                                              #lambda state: state.river_island_present,
+                                              #operand=state
+                                              #)
 
             return state._replace(river_inner_left=new_river_inner_left,
                                   river_inner_right=new_river_inner_right,
                                   river_left=new_left,
                                   river_right=new_right,
-                                  river_island_present=new_island_present)
+                                  river_island_present=new_island_present
+            )
 
         #jax.debug.print("YES ISLAND RIVER STATE {state}", state=state.river_state)
         return lax.switch(
@@ -241,20 +259,23 @@ def update_river_banks(state: RiverraidState) -> RiverraidState:
                 [straight, straight, initiate_split],
                 state
             )
+
         def terminate_island(state: RiverraidState) -> RiverraidState:
             def remove_island(state: RiverraidState) -> RiverraidState:
+                jax.debug.print("REMOVING ISLAND")
                 new_river_inner_left = state.river_inner_left.at[0].set(state.river_inner_left[1] + 3)
                 new_river_inner_right = state.river_inner_right.at[0].set(state.river_inner_right[1] - 3)
                 new_left = state.river_left.at[0].set(state.river_left[1])
                 new_right = state.river_right.at[0].set(state.river_right[1])
 
-                new_island_present, new_island_transition_state = jax.lax.cond(
+                new_island_present, new_island_transition_state, new_alternation_length = jax.lax.cond(
                     new_river_inner_left[0] >= new_river_inner_right[0],
-                    lambda _: (jnp.array(0), jnp.array(3)),
-                    lambda state: (state.river_island_present, state.island_transition_state),
+                    lambda _: (jnp.array(4), jnp.array(4), jnp.array(8)),
+                    lambda state: (state.river_island_present, state.island_transition_state, jnp.array(1)),
                     operand=state
                 )
-                new_alternation_length = jnp.array(1)
+
+
                 return state._replace(
                     river_inner_left=new_river_inner_left,
                     river_inner_right=new_river_inner_right,
@@ -264,19 +285,52 @@ def update_river_banks(state: RiverraidState) -> RiverraidState:
                     island_transition_state=new_island_transition_state,
                     river_alternation_length=new_alternation_length
                 )
-            jax.debug.print("YEEEEEEEEEEEEEEEEEEETING ISLAND")
-            return remove_island(state)
 
-        #return jax.lax.cond(jnp.logical_or(state.river_island_present == 0, state.river_island_present == 2),
-                    # lambda state: spawn_island(state),
-                     #lambda state: terminate_island(state),
-                     #operand=state)
-        return spawn_island(state)
+            def straight(state: RiverraidState) -> RiverraidState:
+                jax.debug.print("STRAIGHT AFTER REMOVAL")
+                new_river_left = state.river_left.at[0].set(state.river_left[1])
+                new_river_right = state.river_right.at[0].set(state.river_right[1])
+
+                jax.debug.print("alternation length: {length}", length=state.river_alternation_length)
+                new_river_state, new_island_transition_state, new_island_present = (
+                                                jax.lax.cond(state.river_alternation_length <= 1,
+                                                lambda _: (jnp.array(2), jnp.array(0), jnp.array(0)),
+                                                lambda state: (state.river_state, state.island_transition_state, state.river_island_present),
+                                                operand=state
+                                                ))
+
+                new_alternation_length = jax.lax.cond(
+                    new_island_present == 0,
+                    lambda _: jax.random.randint(alter_length_key, (), 3, 8),
+                    lambda _: state.river_alternation_length,
+                    operand=None
+                )
+
+                return state._replace(river_left=new_river_left,
+                                      river_right=new_river_right,
+                                      island_transition_state=new_island_transition_state,
+                                      river_alternation_length=new_alternation_length,
+                                      river_state=new_river_state,
+                                      river_island_present=new_island_present)
+
+            jax.debug.print("YEEEEEEEEEEEEEEEEEEETING ISLAND")
+            return jax.lax.cond(
+                state.island_transition_state == 4,
+                lambda state: straight(state),
+                lambda state: remove_island(state),
+                operand=state
+            )
+
+        return jax.lax.cond(jnp.logical_or(state.river_island_present == 0, state.river_island_present == 2),
+                        lambda state: spawn_island(state),
+                        lambda state: terminate_island(state),
+                        operand=state)
+        #return spawn_island(state)
 
     jax.debug.print("Riverraid: river_island_present: {island}", island=state.river_island_present)
     state = lax.switch(
         state.river_island_present,
-        [no_island_branch, island_branch, island_transition],
+        [no_island_branch, island_branch, island_transition, island_transition, island_transition],
         state
     )
 
