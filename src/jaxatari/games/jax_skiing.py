@@ -610,11 +610,9 @@ class RenderConfig:
 
 class GameRenderer:
     def __init__(self, game_config: GameConfig, render_config: RenderConfig):
-        
         self.game_config = game_config
         self.render_config = render_config
 
-        # Initialize Pygame
         pygame.init()
         self.screen = pygame.display.set_mode(
             (
@@ -624,14 +622,30 @@ class GameRenderer:
         )
         pygame.display.set_caption("JAX Skiing Game")
 
-        # Create sprites
+        # Erstelle alle Sprites mit der neuen Hilfsmethode
         self.skier_sprite = self._create_skier_sprite()
-        self.skier_jump_sprite = self._create_skier_jump_sprite()  # Add jump sprite
-        self.flag_sprite = self._create_flag_sprite()
-        self.rock_sprite = self._create_rock_sprite()
-        self.tree_sprite = self._create_tree_sprite()
+        self.skier_jump_sprite = self._create_object_sprite(
+            "skiier_jump.npy",
+            self.game_config.skier_width * self.render_config.scale_factor * 2,
+            self.game_config.skier_height * self.render_config.scale_factor * 2,
+        )
+        self.flag_sprite = self._create_object_sprite(
+            "checkered_flag.npy",
+            self.game_config.flag_width * self.render_config.scale_factor * 2,
+            self.game_config.flag_height * self.render_config.scale_factor * 2,
+        )
+        self.rock_sprite = self._create_object_sprite(
+            "stone.npy",
+            self.game_config.rock_width * self.render_config.scale_factor * 3,
+            self.game_config.rock_height * self.render_config.scale_factor * 6,
+        )
+        self.tree_sprite = self._create_object_sprite(
+            "tree.npy",
+            self.game_config.tree_width * self.render_config.scale_factor * 1.5,
+            self.game_config.tree_height * self.render_config.scale_factor * 1.5,
+        )
         self.font = pygame.font.Font(None, 36)
-        
+
     def _npy_to_surface(self, npy_path, width, height):
         arr = np.load(npy_path)  # Erwartet (H, W, 4) RGBA
         arr = arr.astype(np.uint8)
@@ -641,63 +655,26 @@ class GameRenderer:
         surf = pygame.transform.scale(surf, (width, height))
         return surf
 
-    def _create_skier_jump_sprite(self) -> pygame.Surface:
+    def _create_object_sprite(self, filename, width, height):
         base_path = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
         sprite_dir = os.path.join(base_path, "jaxatari", "games", "sprites", "skiing")
-        full_path = os.path.join(sprite_dir, "skiier_jump.npy")
-        return self._npy_to_surface(
-            full_path,
-            self.game_config.skier_width * self.render_config.scale_factor,
-            self.game_config.skier_height * self.render_config.scale_factor,
-        )
-
-    def get_path_center(self, world_y: float) -> float:
-        # Returns center X of the path at given world Y
-        return 80 + 30 * jnp.sin(world_y / 30.0)
-
-
-    def _draw_blue_path(self, skier_y_pos: float):
-        path_width = 40
-        scale = self.render_config.scale_factor
-        screen_height = self.game_config.screen_height
-
-        for screen_y in range(0, screen_height, 4):
-            world_y = skier_y_pos + screen_y
-            x_center = float(80 + 30 * jnp.sin(world_y / 30.0))  # Use environment logic
-            y_pos = float(screen_y)
-
-            left_x = int((x_center - (path_width / 2)) * scale)
-            right_x = int((x_center + (path_width / 2)) * scale)
-            y_scaled = int(y_pos * scale)
-
-            pygame.draw.line(
-                self.screen, (0, 0, 255), (left_x, y_scaled), (right_x, y_scaled), 1
-            )
-
-
-
+        full_path = os.path.join(sprite_dir, filename)
+        return self._npy_to_surface(full_path, width, height)
 
     def _create_skier_sprite(self) -> list[pygame.Surface]:
-        # Base path relative to the project root
         base_path = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
         sprite_dir = os.path.join(base_path, "jaxatari", "games", "sprites", "skiing")
-
         filenames = {
             "left": "skiier_left.npy",
             "front": "skiier_front.npy",
             "right": "skiier_right.npy"
         }
-
+        width = self.game_config.skier_width * self.render_config.scale_factor
+        height = self.game_config.skier_height * self.render_config.scale_factor
         sprites = {}
         for direction, filename in filenames.items():
             full_path = os.path.join(sprite_dir, filename)
-            sprites[direction] = self._npy_to_surface(
-                full_path,
-                self.game_config.skier_width * self.render_config.scale_factor,
-                self.game_config.skier_height * self.render_config.scale_factor,
-            )
-
-        # Map skier_pos (0-7) to a direction
+            sprites[direction] = self._npy_to_surface(full_path, width, height)
         sprite_list = []
         for i in range(8):
             if i <= 2:
@@ -706,140 +683,62 @@ class GameRenderer:
                 sprite_list.append(sprites["right"])
             else:
                 sprite_list.append(sprites["front"])
-        
         return sprite_list
-
-
-    def _create_flag_sprite(self) -> pygame.Surface:
-        # Lade das Flaggen-Sprite aus dem Sprite-Verzeichnis
-        base_path = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
-        sprite_dir = os.path.join(base_path, "jaxatari", "games", "sprites", "skiing")
-        full_path = os.path.join(sprite_dir, "checkered_flag.npy")
-        return self._npy_to_surface(
-            full_path,
-            self.game_config.flag_width * self.render_config.scale_factor,
-            self.game_config.flag_height * self.render_config.scale_factor,
-        )
-
-    def _create_tree_sprite(self) -> pygame.Surface:
-        # Lade das Baum-Sprite aus dem Sprite-Verzeichnis
-        base_path = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
-        sprite_dir = os.path.join(base_path, "jaxatari", "games", "sprites", "skiing")
-        full_path = os.path.join(sprite_dir, "tree.npy")
-        return self._npy_to_surface(
-            full_path,
-            self.game_config.tree_width * self.render_config.scale_factor,
-            self.game_config.tree_height * self.render_config.scale_factor,
-        )
-
-    def _create_rock_sprite(self) -> pygame.Surface:
-        # Lade das Stein-Sprite aus dem Sprite-Verzeichnis
-        base_path = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
-        sprite_dir = os.path.join(base_path, "jaxatari", "games", "sprites", "skiing")
-        full_path = os.path.join(sprite_dir, "stone.npy")
-        return self._npy_to_surface(
-            full_path,
-            self.game_config.rock_width * self.render_config.scale_factor,
-            self.game_config.rock_height * self.render_config.scale_factor,
-        )
 
     def render(self, state: GameState):
         """Render the current game state"""
         self.screen.fill(self.render_config.background_color)
 
-        # Draw blue path
-        # self._draw_blue_path(state.skier_x)
-
-        # Draw skier
-        skier_pos = (
-            int(
-                (state.skier_x - self.game_config.skier_width / 2)
-                * self.render_config.scale_factor
-            ),
-            int(
-                (self.game_config.skier_y - self.game_config.skier_height / 2)
-                * self.render_config.scale_factor
-            ),
+        # Skier
+        skier_img = self.skier_jump_sprite if state.jumping else self.skier_sprite[int(state.skier_pos)]
+        skier_rect = skier_img.get_rect()
+        skier_rect.center = (
+            int(state.skier_x * self.render_config.scale_factor),
+            int(self.game_config.skier_y * self.render_config.scale_factor),
         )
-
-        # Calculate scale factor based on jump state
-        scale_factor = 1.0
         if state.jumping:
-            # Calculate scale based on jump progress
-            # Use a parabolic curve for the scale: start normal, grow to max at middle, return to normal
             jump_progress = state.jump_timer / self.game_config.jump_duration
-            # This creates a parabolic curve that peaks in the middle of the jump
             scale_factor = 1.0 + (self.game_config.jump_scale_factor - 1.0) * (4 * jump_progress * (1 - jump_progress))
+            new_size = (
+                int(self.game_config.skier_width * self.render_config.scale_factor * scale_factor),
+                int(self.game_config.skier_height * self.render_config.scale_factor * scale_factor),
+            )
+            skier_img = pygame.transform.scale(skier_img, new_size)
+            skier_rect = skier_img.get_rect(center=skier_rect.center)
+        self.screen.blit(skier_img, skier_rect)
 
-        # Choose sprite based on jumping state
-        if state.jumping:
-            # Scale the jump sprite based on jump progress
-            scaled_width = int(self.game_config.skier_width * self.render_config.scale_factor * scale_factor)
-            scaled_height = int(self.game_config.skier_height * self.render_config.scale_factor * scale_factor)
-            
-            # Adjust position to keep skier centered when scaled
-            adjusted_x = skier_pos[0] - (scaled_width - self.game_config.skier_width * self.render_config.scale_factor) // 2
-            adjusted_y = skier_pos[1] - (scaled_height - self.game_config.skier_height * self.render_config.scale_factor) // 2
-            
-            # Scale the jump sprite
-            scaled_sprite = pygame.transform.scale(self.skier_jump_sprite, (scaled_width, scaled_height))
-            self.screen.blit(scaled_sprite, (adjusted_x, adjusted_y))
-        else:
-            # Use regular skier sprite based on direction
-            direction_index = int(state.skier_pos)
-            # Make sure the index is valid for our sprite list
-            if direction_index < 0:
-                direction_index = 0
-            elif direction_index >= len(self.skier_sprite):
-                direction_index = len(self.skier_sprite) - 1
-                
-            self.screen.blit(self.skier_sprite[direction_index], skier_pos)
-
-        # Draw flags
+        # Flags
         for fx, fy in state.flags:
-            flag_pos = (
-                int(
-                    (fx - self.game_config.flag_width / 2)
-                    * self.render_config.scale_factor
-                ),
-                int(
-                    (fy - self.game_config.flag_height / 2)
-                    * self.render_config.scale_factor
-                ),
+            flag_rect = self.flag_sprite.get_rect()
+            flag_rect.center = (
+                int(fx * self.render_config.scale_factor),
+                int(fy * self.render_config.scale_factor),
             )
-            self.screen.blit(self.flag_sprite, flag_pos)
-            second_flag_pos = (
-                flag_pos[0]
-                + self.game_config.flag_distance * self.render_config.scale_factor,
-                flag_pos[1],
+            self.screen.blit(self.flag_sprite, flag_rect)
+            second_flag_rect = self.flag_sprite.get_rect()
+            second_flag_rect.center = (
+                int((fx + self.game_config.flag_distance) * self.render_config.scale_factor),
+                int(fy * self.render_config.scale_factor),
             )
-            self.screen.blit(self.flag_sprite, second_flag_pos)
+            self.screen.blit(self.flag_sprite, second_flag_rect)
 
+        # Trees
         for fx, fy in state.trees:
-            tree_pos = (
-                int(
-                    (fx - self.game_config.tree_width / 2)
-                    * self.render_config.scale_factor
-                ),
-                int(
-                    (fy - self.game_config.tree_height / 2)
-                    * self.render_config.scale_factor
-                ),
+            tree_rect = self.tree_sprite.get_rect()
+            tree_rect.center = (
+                int(fx * self.render_config.scale_factor),
+                int(fy * self.render_config.scale_factor),
             )
-            self.screen.blit(self.tree_sprite, tree_pos)
+            self.screen.blit(self.tree_sprite, tree_rect)
 
+        # Rocks
         for fx, fy in state.rocks:
-            rock_pos = (
-                int(
-                    (fx - self.game_config.rock_width / 2)
-                    * self.render_config.scale_factor
-                ),
-                int(
-                    (fy - self.game_config.rock_height / 2)
-                    * self.render_config.scale_factor
-                ),
+            rock_rect = self.rock_sprite.get_rect()
+            rock_rect.center = (
+                int(fx * self.render_config.scale_factor),
+                int(fy * self.render_config.scale_factor),
             )
-            self.screen.blit(self.rock_sprite, rock_pos)
+            self.screen.blit(self.rock_sprite, rock_rect)
 
         # Draw UI
         score_text = self.font.render(
