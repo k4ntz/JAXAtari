@@ -97,7 +97,7 @@ class AtlantisState(NamedTuple):
     # columns = [ x,  y,  dx,   type_id, lane, active_flag ]
     #   x, y        → position
     #   dx          → horizontal speed (positive or negative)
-    #   type_id     → integer index into your enemy_specs dict
+    #   type_id     → integer index into enemy_specs dict
     #   lane        → current lane the enemy is on
     #   active_flag → 1 if on-screen, 0 otherwise
     enemies: chex.Array  # shape: (max_enemies, 6)
@@ -157,9 +157,9 @@ class Renderer_AtraJaxis(AtraJaxisRenderer):
         # Backgrounds + Dynamic elements + UI elements
         sprite_names = [
             'enemy_0','enemy_1','enemy_2',
-            'cannon_left', 'cannon_right', 'cannon_middle', 
+            'cannon_left', 'cannon_right', 'cannon_middle',
             'installation_1','installation_2','installation_3',
-            'installation_4','installation_5','installation_6', 
+            'installation_4','installation_5','installation_6',
             'background'
         ]
         for name in sprite_names:
@@ -622,6 +622,9 @@ class JaxAtlantis(JaxEnvironment[AtlantisState, AtlantisObservation, AtlantisInf
             # Set the direction
             speed = self._sample_speed(rng_speed, s.wave)*cfg.enemy_speed_multipliers[type_id]
             dx = jnp.where(go_left, -speed, speed)
+
+            debug.print(" Test DX {dx}", dx=dx)
+
             # dx = jnp.where(go_left, -cfg.enemy_speed, cfg.enemy_speed)
 
             # also sets the enemy to be active (last entry is 1)
@@ -923,27 +926,42 @@ class JaxAtlantis(JaxEnvironment[AtlantisState, AtlantisObservation, AtlantisInf
     def _handle_plasma_hit(self, state: AtlantisState) -> AtlantisState:
         cfg = self.config
 
-        # 1) Which lane-4 enemies can fire this frame?
+        # Which lane-4 enemies can fire this frame?
         is_lane4 = (state.enemies[:, 4] == 3) & (state.enemies[:, 5] == 1)
         can_fire = is_lane4 & state.plasma_active
         shooter_idx = jnp.argmax(can_fire)
         shooter_fired = jnp.any(can_fire)
 
-        # 2) Compute the beam X position
-        beam_xs = state.enemies[:, 0] + 10
-        beam_xs = jnp.where(can_fire, beam_xs, -1)
-        plasma_x = jnp.max(beam_xs)  # -1 if nobody fired
+        # compute the center‐offset for the beam. 10 pixel puffer so that enemies donot kill on first pixel
+        centers = state.enemies[:, 0] + 10
 
-        # 3) Build the 7 possible targets: 6 installments and command center
-        cmd_center = cfg.cannon_x[1] #+ (cfg.cannon_width // 2)
-        inst_centers = cfg.installations_x #+ (cfg.installations_width // 2)
-        targets = jnp.sort(jnp.concatenate([jnp.array([cmd_center]), inst_centers], axis=0))
+        # reconstruct old beam‐X by subtracting dx
+        old_centers = centers - state.enemies[:, 2]
 
+        #debug.print(" Old center:  {old} New center: {new}", old=old_centers[0], new=centers[0])
 
-        # 4) Which target got actually hit?
-        hit_mask = (plasma_x == targets)  # (7,)
+        # Since speed of plasma can change, we need to find a range to check if the canon / installment should
+        # be hit
+        beam_old = jnp.where(can_fire, old_centers, -1)
+        beam_new = jnp.where(can_fire, centers, -1)
+
+        # now find the maximum (i.e. the only) beam among shooters
+        beam_old = jnp.max(beam_old)  # -1 if none
+        beam_new = jnp.max(beam_new)
+
+        # define an inclusive interval [lo, hi]
+        lo = jnp.minimum(beam_old, beam_new)
+        hi = jnp.maximum(beam_old, beam_new)
+
+        # build 7 possible targets
+        cmd_center = cfg.cannon_x[1]
+        inst_centers = cfg.installations_x
+        targets = jnp.sort(jnp.concatenate([jnp.array([cmd_center]), inst_centers], 0))
+
+        # hit if any target lies in [lo,hi]
+        hit_mask = (targets >= lo) & (targets <= hi)
         any_hit = jnp.any(hit_mask)
-        hit_index = jnp.argmax(hit_mask)  # 0 = command post, 1–6 = installations
+        hit_index = jnp.argmax(hit_mask)  # first match
 
         # 5) Decide who to kill
         kill_cmd = shooter_fired & any_hit & (hit_index == 3) & state.command_post_alive
