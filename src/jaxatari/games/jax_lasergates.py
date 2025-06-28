@@ -12,6 +12,8 @@ from typing import Tuple, NamedTuple
 import chex
 import jax
 import jax.numpy as jnp
+from PIL.JpegImagePlugin import jpeg_factory
+
 import jaxatari.rendering.atraJaxis as aj
 import pygame
 from jaxatari.environment import JaxEnvironment, JAXAtariAction as Action
@@ -77,11 +79,33 @@ NUM_ENTITY_TYPES = 8 # How many different (!) entity types there are
 
 # -------- Radar mortar constants --------
 RADAR_MORTAR_SIZE = (8, 26) # Width, Height
+RADAR_MORTAR_COLOR_BLUE = (96, 162, 228, 255)
+RADAR_MORTAR_COLOR_GRAY = (155, 155, 155, 255)
 
 RADAR_MORTAR_SPRITE_ROTATION_SPEED = 15 # Change sprite frame (left, middle, right) of radar mortar every RADAR_MORTAR_SPRITE_ROTATION_SPEED frames
-RADAR_MORTAR_SPAWN_X = WIDTH            # Spawm barely outside of bounds TODO: Either change this to a lot more or use cooldown before next entitiy init
+RADAR_MORTAR_SPAWN_X = WIDTH            # Spawn barely outside of bounds TODO: Either change this to a lot more or use cooldown before next entitiy init
 RADAR_MORTAR_SPAWN_Y_BOTTOM = 66        # Since the radar mortar can spawn at the top or at the bottom of the screen, we define two y positions.
 RADAR_MORTAR_SPAWN_Y_TOP = 19
+
+RADAR_MORTAR_MISSILE_UPDATE_EVERY = 100 # A missile is spawned every RADAR_MORTAR_MISSILE_UPDATE_EVERY-th frame.
+RADAR_MORTAR_MISSILE_SPEED = 3 # Speed of radar mortar missile
+RADAR_MORTAR_MISSILE_SHOOT_NUMBER = 3 # How often missile gets teleported back before final shot (exept when shooting up or down)
+RADAR_MORTAR_MISSILE_SMALL_OUT_OF_BOUNDS_THRESHOLD = 50 # How far the missile needs to be away from the radar mortar (vertically or/and horizontally) for the missile to be teleported back to the mortar (to be shot again)
+RADAR_MORTAR_SHOOT_STRAIGHT_THRESHOLD = 10 # This defines how far the player needs to be away from the radar mortar (vertically or/and horizontally) for the missile to be shot diagonally
+
+# -------- Byte bat constants --------
+
+# -------- Rock muncher constants --------
+
+# -------- Homing Missile constants --------
+
+# -------- Forcefield constants --------
+
+# -------- Densepcak constants --------
+
+# -------- Detonator constants --------
+
+# -------- Energy pod constants --------
 
 # -------- Enemy Missile constants --------
 ENEMY_MISSILE_COLOR = (85, 92, 197, 255)
@@ -122,6 +146,10 @@ class RadarMortarState(NamedTuple):
     is_alive: jnp.bool
     x: chex.Array
     y: chex.Array
+    missile_x: chex.Array
+    missile_y: chex.Array
+    missile_direction: chex.Array
+    shoot_again_timer: chex.Array
 
 class ByteBatState(NamedTuple):
     is_in_current_event: jnp.bool
@@ -254,6 +282,9 @@ def load_sprites():
     gui_score_comma = aj.loadFrame(os.path.join(MODULE_DIR, "sprites/lasergates/gui/score_numbers/comma.npy"))
 
     # Entities
+    # Entity missile
+    entity_missile = aj.loadFrame(os.path.join(MODULE_DIR, "sprites/lasergates/missiles/enemy_missile.npy"))
+
     # Radar mortar
     radar_mortar_frame_left = aj.loadFrame(os.path.join(MODULE_DIR, "sprites/lasergates/enemies/radar_mortar/1.npy"))
     radar_mortar_frame_middle = aj.loadFrame(os.path.join(MODULE_DIR, "sprites/lasergates/enemies/radar_mortar/2.npy"))
@@ -273,6 +304,7 @@ def load_sprites():
         player_missile,
 
         # Entity sprites
+        entity_missile,
         radar_mortar_sprites,
 
         # Background sprites
@@ -301,6 +333,7 @@ def load_sprites():
     SPRITE_PLAYER_MISSILE,
 
     # Entity sprites
+    SPRITE_ENTITY_MISSILE,
     SPRITE_RADAR_MORTAR,
 
     # Background sprites
@@ -353,6 +386,10 @@ def maybe_initialize_random_entity(entities, state):
                 is_alive= jnp.bool(True),
                 x=jnp.array(RADAR_MORTAR_SPAWN_X).astype(entities.radar_mortar_state.x.dtype),
                 y=jnp.where(top_or_bot, RADAR_MORTAR_SPAWN_Y_BOTTOM, RADAR_MORTAR_SPAWN_Y_TOP),
+                missile_x = jnp.array(0),
+                missile_y = jnp.array(0),
+                missile_direction = jnp.array((0, 0)),
+                shoot_again_timer = jnp.array(0),
             )
         return entities._replace(radar_mortar_state=new_radar_mortar_state)
 
@@ -435,15 +472,95 @@ def all_entities_step(game_state: LaserGatesState) -> Entities:
     """
 
     def radar_mortar_step(state: LaserGatesState) -> RadarMortarState:
-        radar_mortar_state = state.entities.radar_mortar_state
-        new_x = radar_mortar_state.x - state.scroll_speed
+        rm = state.entities.radar_mortar_state
+        new_x = rm.x - state.scroll_speed
 
-        kill_done = jnp.bool(False) # TODO: Collision detection + animation with timer in state
-        no_longer_in_event = jnp.logical_or(radar_mortar_state.x < 0 - RADAR_MORTAR_SIZE[0], kill_done)
+        # Compute spawn position & 45 degree - direction
+        is_at_bottom = rm.y == RADAR_MORTAR_SPAWN_Y_BOTTOM
+        offset_y = jnp.where(is_at_bottom, 0, RADAR_MORTAR_SIZE[1])
+        spawn_x = rm.x
+        spawn_y = rm.y + offset_y
 
-        return radar_mortar_state._replace(
-            x=new_x.astype(radar_mortar_state.x.dtype),
-            is_in_current_event=jnp.logical_not(no_longer_in_event),
+        is_left = state.player_x < (spawn_x - RADAR_MORTAR_SHOOT_STRAIGHT_THRESHOLD)
+        is_right = state.player_x > (spawn_x + RADAR_MORTAR_SHOOT_STRAIGHT_THRESHOLD)
+        is_above = state.player_y < (spawn_y - RADAR_MORTAR_SHOOT_STRAIGHT_THRESHOLD)
+        is_below = state.player_y > (spawn_y + RADAR_MORTAR_SHOOT_STRAIGHT_THRESHOLD)
+        dx = jnp.where(is_left, -2, jnp.where(is_right, 2, 0))
+        dy = jnp.where(is_above, -1, jnp.where(is_below, 1, 0))
+        dir_to_player = jnp.array([dx, dy])
+
+        # Out-of-bounds check for final kill # TODO Collision
+        out_of_bounds = jnp.logical_or(
+            jnp.logical_or(rm.missile_x < 0, rm.missile_x > WIDTH),
+            jnp.logical_or(rm.missile_y < PLAYER_BOUNDS[1][0],
+                           rm.missile_y > PLAYER_BOUNDS[1][1])
+        )
+
+        # Fresh spawn condition
+        missile_dead = jnp.all(rm.missile_direction == 0)
+        spawn_trigger = (state.step_counter % RADAR_MORTAR_MISSILE_UPDATE_EVERY) == 0
+
+        # small_out_of_bounds: moved beyond 5px from spawn?
+        small_oob = jnp.logical_or(
+            jnp.abs(rm.missile_x - spawn_x) > RADAR_MORTAR_MISSILE_SMALL_OUT_OF_BOUNDS_THRESHOLD,
+            jnp.abs(rm.missile_y - spawn_y) > RADAR_MORTAR_MISSILE_SMALL_OUT_OF_BOUNDS_THRESHOLD
+        )
+
+        # Check if the direction is up or down (0, 1)
+        slow_direction = jnp.logical_or(
+            jnp.all(dir_to_player == jnp.array([0, 1])),
+            jnp.all(dir_to_player == jnp.array([0, -1]))
+        )
+
+        # Only start repeat fire when a fresh spawn occurred
+        fresh_spawn = jnp.logical_and(missile_dead, spawn_trigger)
+
+        # Decide new timer value
+        should_decrement = jnp.logical_and(rm.shoot_again_timer > 0, small_oob)
+
+        # Apply conditional timer set:
+        # - 3 if fresh spawn and direction valid
+        # - 1 if fresh spawn and direction is a slow direction
+        new_timer = jnp.where(fresh_spawn,
+                              jnp.where(slow_direction, 1, RADAR_MORTAR_MISSILE_SHOOT_NUMBER),
+                              jnp.where(should_decrement, rm.shoot_again_timer - 1, rm.shoot_again_timer))
+
+        # in_spawn_phase: teleport back if fresh_spawn or (timer > 0 and small_oob)
+        in_spawn_phase = jnp.logical_or(
+            fresh_spawn,
+            jnp.logical_and(new_timer > 0, small_oob)
+        )
+
+        # Base position & direction: either spawn or keep old
+        base_x = jnp.where(in_spawn_phase, spawn_x, rm.missile_x)
+        base_y = jnp.where(in_spawn_phase, spawn_y, rm.missile_y)
+        # Keep original direction until timer runs out
+        base_dir = jnp.where(fresh_spawn, dir_to_player, rm.missile_direction)
+
+        # Kill only if timer == 0 and fully out_of_bounds
+        kill = jnp.logical_and(new_timer == 0, out_of_bounds)
+        missile_x = jnp.where(kill, 0, base_x)
+        missile_y = jnp.where(kill, 0, base_y)
+        missile_dir = jnp.where(kill, jnp.array([0, 0], dtype=jnp.int32), base_dir)
+
+        # Move if alive and not in spawn phase
+        alive = jnp.any(missile_dir != 0)
+        speed = jnp.where(slow_direction, 1, RADAR_MORTAR_MISSILE_SPEED)
+        move_cond = jnp.logical_and(alive, jnp.logical_not(in_spawn_phase))
+        missile_x = jnp.where(move_cond,
+                              missile_x + missile_dir[0] * speed,
+                              missile_x)
+        missile_y = jnp.where(move_cond,
+                              missile_y + missile_dir[1] * speed,
+                              missile_y)
+
+        return rm._replace(
+            x=new_x,
+            is_in_current_event=rm.x > 0,
+            missile_x=(missile_x - state.scroll_speed).astype(rm.missile_x.dtype),
+            missile_y=missile_y,
+            missile_direction=missile_dir,
+            shoot_again_timer=new_timer
         )
 
     def byte_bat_step(state: LaserGatesState) -> ByteBatState:
@@ -857,6 +974,10 @@ class JaxLaserGates(JaxEnvironment[LaserGatesState, LaserGatesObservation, Laser
                 is_alive=jnp.bool(False),
                 x=jnp.array(0).astype(jnp.float32),
                 y=jnp.array(0),
+                missile_x = jnp.array(0),
+                missile_y = jnp.array(0),
+                missile_direction = jnp.array((0, 0)),
+                shoot_again_timer = jnp.array(0),
             ),
             byte_bat_state=ByteBatState(
                 is_in_current_event=jnp.bool(False),
@@ -1295,6 +1416,21 @@ class LaserGatesRenderer(AtraJaxisRenderer):
                            ),
                            raster
                            )
+
+        # Render radar mortar missile
+        should_render_radar_mortar_missile = jnp.logical_and(state.entities.radar_mortar_state.missile_x != 0, state.entities.radar_mortar_state.missile_y != 0)
+        radar_mortar_missile_sprite = recolor_sprite(SPRITE_ENTITY_MISSILE, jnp.array(RADAR_MORTAR_COLOR_BLUE))
+        raster = jnp.where(should_render_radar_mortar_missile,
+                           aj.render_at(
+                               raster,
+                               state.entities.radar_mortar_state.missile_x,
+                               state.entities.radar_mortar_state.missile_y,
+                               radar_mortar_missile_sprite,
+                               flip_horizontal=state.entities.radar_mortar_state.missile_direction[0] < 0,
+                           ),
+                           raster
+                           )
+
 
         # -------- Render mountains --------
 
