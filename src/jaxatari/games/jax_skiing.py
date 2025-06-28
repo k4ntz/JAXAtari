@@ -626,23 +626,28 @@ class GameRenderer:
         self.skier_sprite = self._create_skier_sprite()
         self.skier_jump_sprite = self._create_object_sprite(
             "skiier_jump.npy",
-            self.game_config.skier_width * self.render_config.scale_factor * 2,
-            self.game_config.skier_height * self.render_config.scale_factor * 2,
+            int(self.game_config.skier_width * self.render_config.scale_factor * 2),
+            int(self.game_config.skier_height * self.render_config.scale_factor * 2),
+        )
+        self.skier_fallen_sprite = self._create_object_sprite(
+            "skier_fallen.npy",
+            int(self.game_config.skier_width * self.render_config.scale_factor * 2),
+            int(self.game_config.skier_height * self.render_config.scale_factor * 2),
         )
         self.flag_sprite = self._create_object_sprite(
             "checkered_flag.npy",
-            self.game_config.flag_width * self.render_config.scale_factor * 2,
-            self.game_config.flag_height * self.render_config.scale_factor * 2,
+            int(self.game_config.flag_width * self.render_config.scale_factor * 2),
+            int(self.game_config.flag_height * self.render_config.scale_factor * 2),
         )
         self.rock_sprite = self._create_object_sprite(
             "stone.npy",
-            self.game_config.rock_width * self.render_config.scale_factor * 3,
-            self.game_config.rock_height * self.render_config.scale_factor * 6,
+            int(self.game_config.rock_width * self.render_config.scale_factor * 3),
+            int(self.game_config.rock_height * self.render_config.scale_factor * 6),
         )
         self.tree_sprite = self._create_object_sprite(
             "tree.npy",
-            self.game_config.tree_width * self.render_config.scale_factor * 1.5,
-            self.game_config.tree_height * self.render_config.scale_factor * 1.5,
+            int(self.game_config.tree_width * self.render_config.scale_factor * 1.5),
+            int(self.game_config.tree_height * self.render_config.scale_factor * 1.5),
         )
         self.font = pygame.font.Font(None, 36)
 
@@ -690,13 +695,21 @@ class GameRenderer:
         self.screen.fill(self.render_config.background_color)
 
         # Skier
-        skier_img = self.skier_jump_sprite if state.jumping else self.skier_sprite[int(state.skier_pos)]
+        skier_img = None
+        # Zeige "skier_fallen" Sprite bei Baum- oder Stein-Kollision
+        if state.skier_fell > 0 and state.collision_type in (1, 2):
+            skier_img = self.skier_fallen_sprite
+        elif state.jumping:
+            skier_img = self.skier_jump_sprite
+        else:
+            skier_img = self.skier_sprite[int(state.skier_pos)]
+
         skier_rect = skier_img.get_rect()
         skier_rect.center = (
             int(state.skier_x * self.render_config.scale_factor),
             int(self.game_config.skier_y * self.render_config.scale_factor),
         )
-        if state.jumping:
+        if state.jumping and not (state.skier_fell > 0 and state.collision_type in (1, 2)):
             jump_progress = state.jump_timer / self.game_config.jump_duration
             scale_factor = 1.0 + (self.game_config.jump_scale_factor - 1.0) * (4 * jump_progress * (1 - jump_progress))
             new_size = (
