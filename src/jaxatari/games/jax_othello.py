@@ -9,6 +9,7 @@ import enum
 import time
 from gymnax.environments import spaces
 
+from jaxatari.games.test4 import find_last_valid_corner
 from jaxatari.renderers import AtraJaxisRenderer
 from jaxatari.rendering import atraJaxis as aj
 from jaxatari.environment import JaxEnvironment
@@ -549,10 +550,6 @@ def get_bot_move(game_field: Field, difficulty: chex.Array, player_score: chex.A
     vectorized_compute_score_of_tiles = jax.vmap(compute_score_of_tiles, in_axes=(0, None, None, None))
     list_of_all_move_values = vectorized_compute_score_of_tiles(list_of_all_moves, game_field, game_score, difficulty)
 
-    
-    
-
-    
 
     #Randomly choose one of the best moves    
     random_chosen_max_index = random_max_index(list_of_all_move_values,random_key)
@@ -601,10 +598,22 @@ def compute_score_of_tiles(i, game_field, game_score, difficulty):
 
 @jax.jit
 def compute_score_of_tile_1(tile_y, tile_x, game_field, game_score):
+
+    inner_corner_in_any_direction = (-2147483648, -2147483648)
+    inner_corner_in_final_direction = (-2147483648, -2147483648)
+
     #compute flipped tiles by each direction
     list_of_all_directions = jnp.arange(8)
-    vectorised_flipped_tiles_by_direction = jax.vmap(compute_flipped_tiles_by_direction,in_axes=(0, None, None, None))
-    flipped_tiles_by_direction = vectorised_flipped_tiles_by_direction(list_of_all_directions, tile_y, tile_x, game_field)
+    vectorised_flipped_tiles_by_direction = jax.vmap(compute_flipped_tiles_by_direction,in_axes=(0, None, None, None, None, None))
+    flipped_tiles_by_direction, inner_corner_by_direction_any_direction, inner_corner_by_direction_final_direction = vectorised_flipped_tiles_by_direction(list_of_all_directions, tile_y, tile_x, game_field, inner_corner_in_any_direction, inner_corner_in_final_direction)
+
+    def find_last_valid_corner(arr):
+        idxs = jnp.arange(arr.shape[0])
+        valid_positions = jnp.where(arr != -2147483648, idxs, -1)
+        return jnp.max(valid_positions)
+
+    inner_corner_in_any_direction = find_last_valid_corner(inner_corner_by_direction_any_direction)
+    inner_corner_in_final_direction = find_last_valid_corner(inner_corner_by_direction_final_direction)
 
     flipped_tiles = jnp.nansum(flipped_tiles_by_direction)
     # If no tiles were flipped, set invalid move (return very low score)
@@ -627,7 +636,7 @@ def compute_score_of_tile_1(tile_y, tile_x, game_field, game_score):
         ),
         None
     )
-    return score_of_tile
+    return score_of_tile, inner_corner_in_any_direction, inner_corner_in_final_direction
     
 # array size fixed at 64!!
 @jax.jit
@@ -667,8 +676,8 @@ def random_max_index(array, key:int):
 
 
 @jax.jit
-def compute_flipped_tiles_by_direction(i, tile_y: int, tile_x: int, game_field: Field):
-    args = (tile_y,tile_x,game_field)
+def compute_flipped_tiles_by_direction(i, tile_y: int, tile_x: int, game_field: Field, inner_corner_in_any_direction: tuple[int, int], inner_corner_in_final_direction: tuple[int, int]):
+    args = (tile_y,tile_x,game_field,inner_corner_in_any_direction,inner_corner_in_final_direction)
 
     branches = [
         lambda args: compute_flipped_tiles_top(args),
@@ -683,6 +692,21 @@ def compute_flipped_tiles_by_direction(i, tile_y: int, tile_x: int, game_field: 
 
     return jax.lax.switch(i, branches, args)
 
+def check_if_inner_corner(tile_y, tile_x):
+    return jax.lax.cond(jnp.logical_and(tile_y == 1, tile_x == 1),
+            lambda _: (6,6), #account for flipped game field in calculate_strategic_tile_score
+            lambda _: jax.lax.cond(jnp.logical_and(tile_y == 1, tile_x == 6),
+                        lambda _: (6,1),
+                        lambda _: jax.lax.cond(jnp.logical_and(tile_y == 6, tile_x == 1),
+                                    lambda _: (1,6),
+                                    lambda _: jax.lax.cond(jnp.logical_and(tile_y == 6, tile_x == 6),
+                                                lambda _: (1,1),
+                                                lambda _: (tile_y, tile_x),
+                                                None),
+                                    None),
+                        None),
+            None)
+
 @jax.jit   
 def compute_flipped_tiles_top(input) -> int:
     # Returns the number of tiles to be flipped (only flipped tiles, same color tiles are disregarded)
@@ -690,12 +714,12 @@ def compute_flipped_tiles_top(input) -> int:
     #checks wether the first element in the direction of look-up is invalid, becasause its already taken by bot, sets it to nan, to prevent while loop from running
     args = jax.lax.cond(
         input[2].field_color[input[0]-1][input[1]] == FieldColor.BLACK,
-        lambda input: (input[0] - 1, input[1], input[2], jnp.nan, 0),
-        lambda input: (input[0] - 1, input[1], input[2], 0.0, 0),
+        lambda input: (input[0] - 1, input[1], input[2], jnp.nan, 0, input[3], input[4]),
+        lambda input: (input[0] - 1, input[1], input[2], 0.0, 0, input[3], input[4]),
         input
     ) 
 
-    #args has the following structure: tile_y, tile_x, game_field, flipped, tmp_flipped
+    #args has the following structure: tile_y, tile_x, game_field, flipped, tmp_flipped, inner_corner_in_final_direction, inner_corner_in_any_direction
     def while_cond(args):
         #check if to be checked field is still part of game field
         check_for_outside_borders_of_game_field = jnp.all(
@@ -710,17 +734,18 @@ def compute_flipped_tiles_top(input) -> int:
             lambda args: (-2, args[1], args[2], args[3],  args[4]),#if field is empthy, no further tiles can be flipped use set y to -2 to exit next loop iteration
             lambda args: (jax.lax.cond(
                 args[2].field_color[args[0], args[1]] == FieldColor.BLACK,  
-                lambda args: (args[0]-1, args[1], args[2], args[3] + args[4], 0),
-                lambda args: (args[0]-1, args[1], args[2], args[3], args[4] + 1),
+                lambda args: (args[0]-1, args[1], args[2], args[3] + args[4], 0, args[5], args[5]), #args[5] is no typo (set inner_corner_in_any_direction only when valid move is found)
+                lambda args: (args[0]-1, args[1], args[2], args[3], args[4] + 1, check_if_inner_corner(args[0], args[1]), args[6]),
                 args
                 )),
             args
         )
 
+    while_loop_return = jax.lax.while_loop(while_cond, while_body, args)
     return jax.lax.cond(
         input[0] < 0,
-        lambda args: jnp.int32(0.0),
-        lambda args: jnp.int32(jax.lax.while_loop(while_cond, while_body, args)[3]),  
+        lambda args: (jnp.int32(0.0), (-2147483648,-2147483648), (-2147483648,-2147483648)),
+        lambda args: jnp.int32(while_loop_return[3], while_loop_return[6], while_loop_return[5]),
         args
     )
 @jax.jit
@@ -730,8 +755,8 @@ def compute_flipped_tiles_rigth(input) -> int:
     #checks wether the first element in the direction of look-up is invalid, becasause its already taken by bot, sets it to nan, to prevent while loop from running
     args = jax.lax.cond(
         input[2].field_color[input[0]][input[1]+1] == FieldColor.BLACK,
-        lambda input: (input[0], input[1]+1, input[2], jnp.nan, 0),
-        lambda input: (input[0], input[1]+1, input[2], 0.0, 0),
+        lambda input: (input[0], input[1]+1, input[2], jnp.nan, 0, input[3], input[4]),
+        lambda input: (input[0], input[1]+1, input[2], 0.0, 0, input[3], input[4]),
         input
     ) 
 
@@ -750,17 +775,18 @@ def compute_flipped_tiles_rigth(input) -> int:
             lambda args: (-2, args[1], args[2], args[3],  args[4]),#if field is empthy, no further tiles can be flipped use set y to -2 to exit next loop iteration
             lambda args: (jax.lax.cond(
                 args[2].field_color[args[0], args[1]] == FieldColor.BLACK,  
-                lambda args: (args[0], args[1]+1, args[2], args[3] + args[4], 0),
-                lambda args: (args[0], args[1]+1, args[2], args[3], args[4] + 1),
+                lambda args: (args[0], args[1]+1, args[2], args[3] + args[4], 0,  args[5], args[5]),
+                lambda args: (args[0], args[1]+1, args[2], args[3], args[4] + 1, check_if_inner_corner(args[0], args[1]), args[6]),
                 args
                 )),
             args
         )
 
+    while_loop_return = jax.lax.while_loop(while_cond, while_body, args)
     return jax.lax.cond(
         input[1] > 7,
-        lambda args: jnp.int32(0.0),
-        lambda args: jnp.int32(jax.lax.while_loop(while_cond, while_body, args)[3]),  
+        lambda args: (jnp.int32(0.0), (-2147483648,-2147483648), (-2147483648,-2147483648)),
+        lambda args: jnp.int32(while_loop_return[3], while_loop_return[6], while_loop_return[5]),
         args
     )
 @jax.jit
@@ -770,8 +796,8 @@ def compute_flipped_tiles_bottom(input) -> int:
     #checks wether the first element in the direction of look-up is invalid, becasause its already taken by bot, sets it to nan, to prevent while loop from running
     args = jax.lax.cond(
         input[2].field_color[input[0]+1][input[1]] == FieldColor.BLACK,
-        lambda input: (input[0] + 1, input[1], input[2], jnp.nan, 0),
-        lambda input: (input[0] + 1, input[1], input[2], 0.0, 0),
+        lambda input: (input[0] + 1, input[1], input[2], jnp.nan, 0, input[3], input[4]),
+        lambda input: (input[0] + 1, input[1], input[2], 0.0, 0, input[3], input[4]),
         input
     ) 
 
@@ -790,17 +816,18 @@ def compute_flipped_tiles_bottom(input) -> int:
             lambda args: (-2, args[1], args[2], args[3],  args[4]),#if field is empthy, no further tiles can be flipped use set y to -2 to exit next loop iteration
             lambda args: (jax.lax.cond(
                 args[2].field_color[args[0], args[1]] == FieldColor.BLACK,  
-                lambda args: (args[0]+1, args[1], args[2], args[3] + args[4], 0),
-                lambda args: (args[0]+1, args[1], args[2], args[3], args[4] + 1),
+                lambda args: (args[0]+1, args[1], args[2], args[3] + args[4], 0, args[5], args[5]),
+                lambda args: (args[0]+1, args[1], args[2], args[3], args[4] + 1, check_if_inner_corner(args[0], args[1]), args[6]),
                 args
                 )),
             args
         )
 
+    while_loop_return = jax.lax.while_loop(while_cond, while_body, args)
     return jax.lax.cond(
         input[0] > 7,
-        lambda args: jnp.int32(0.0),
-        lambda args: jnp.int32(jax.lax.while_loop(while_cond, while_body, args)[3]),  
+        lambda args: (jnp.int32(0.0), (-2147483648,-2147483648), (-2147483648,-2147483648)),
+        lambda args: jnp.int32(while_loop_return[3], while_loop_return[6], while_loop_return[5]),
         args
     )
 @jax.jit
@@ -810,8 +837,8 @@ def compute_flipped_tiles_left(input) -> int:
     #checks wether the first element in the direction of look-up is invalid, becasause its already taken by bot, sets it to nan, to prevent while loop from running
     args = jax.lax.cond(
         input[2].field_color[input[0]][input[1]-1] == FieldColor.BLACK,
-        lambda input: (input[0], input[1]-1, input[2], jnp.nan, 0),
-        lambda input: (input[0], input[1]-1, input[2], 0.0, 0),
+        lambda input: (input[0], input[1]-1, input[2], jnp.nan, 0, input[3], input[4]),
+        lambda input: (input[0], input[1]-1, input[2], 0.0, 0, input[3], input[4]),
         input
     ) 
 
@@ -829,18 +856,19 @@ def compute_flipped_tiles_left(input) -> int:
             args[2].field_color[args[0], args[1]] == FieldColor.EMPTY,  
             lambda args: (-2, args[1], args[2], args[3],  args[4]),#if field is empthy, no further tiles can be flipped use set y to -2 to exit next loop iteration
             lambda args: (jax.lax.cond(
-                args[2].field_color[args[0], args[1]] == FieldColor.BLACK,  
-                lambda args: (args[0], args[1]-1, args[2], args[3] + args[4], 0),
-                lambda args: (args[0], args[1]-1, args[2], args[3], args[4] + 1),
+                args[2].field_color[args[0], args[1]] == FieldColor.BLACK,
+                lambda args: (args[0], args[1]-1, args[2], args[3] + args[4], 0, args[5], args[5]),
+                lambda args: (args[0], args[1]-1, args[2], args[3], args[4] + 1, check_if_inner_corner(args[0], args[1]), args[6]),
                 args
                 )),
             args
         )
 
+    while_loop_return = jax.lax.while_loop(while_cond, while_body, args)
     return jax.lax.cond(
-        input[0] > 7,        
-        lambda args: jnp.int32(0.0),
-        lambda args: jnp.int32(jax.lax.while_loop(while_cond, while_body, args)[3]),  
+        input[1] > 7,
+        lambda args: (jnp.int32(0.0), (-2147483648,-2147483648), (-2147483648,-2147483648)),
+        lambda args: jnp.int32(while_loop_return[3], while_loop_return[6], while_loop_return[5]),
         args
     )
 @jax.jit
@@ -850,8 +878,8 @@ def compute_flipped_tiles_top_rigth(input) -> int:
     #checks wether the first element in the direction of look-up is invalid, becasause its already taken by bot, sets it to nan, to prevent while loop from running
     args = jax.lax.cond(
         input[2].field_color[input[0]-1][input[1]+1] == FieldColor.BLACK,
-        lambda input: (input[0]-1, input[1]+1, input[2], jnp.nan, 0),
-        lambda input: (input[0]-1, input[1]+1, input[2], 0.0, 0),
+        lambda input: (input[0]-1, input[1]+1, input[2], jnp.nan, 0, input[3], input[4]),
+        lambda input: (input[0]-1, input[1]+1, input[2], 0.0, 0, input[3], input[4]),
         input
     ) 
 
@@ -869,18 +897,19 @@ def compute_flipped_tiles_top_rigth(input) -> int:
             args[2].field_color[args[0], args[1]] == FieldColor.EMPTY,  
             lambda args: (-2, args[1], args[2], args[3],  args[4]),#if field is empthy, no further tiles can be flipped use set y to -2 to exit next loop iteration
             lambda args: (jax.lax.cond(
-                args[2].field_color[args[0], args[1]] == FieldColor.BLACK,  
-                lambda args: (args[0]-1, args[1]+1, args[2], args[3] + args[4], 0),
-                lambda args: (args[0]-1, args[1]+1, args[2], args[3], args[4] + 1),
+                args[2].field_color[args[0], args[1]] == FieldColor.BLACK,
+                lambda args: (args[0]-1, args[1]+1, args[2], args[3] + args[4], 0, args[5], args[5]),
+                lambda args: (args[0]-1, args[1]+1, args[2], args[3], args[4] + 1, check_if_inner_corner(args[0], args[1]), args[6]),
                 args
                 )),
             args
         )
 
+    while_loop_return = jax.lax.while_loop(while_cond, while_body, args)
     return jax.lax.cond(
-        jnp.logical_and(input[0] < 0, input[1]>7),
-        lambda args: jnp.int32(0.0),
-        lambda args: jnp.int32(jax.lax.while_loop(while_cond, while_body, args)[3]),  
+        jnp.logical_and(input[0] < 0, input[1] > 7),
+        lambda args: (jnp.int32(0.0), (-2147483648, -2147483648), (-2147483648, -2147483648)),
+        lambda args: jnp.int32(while_loop_return[3], while_loop_return[6], while_loop_return[5]),
         args
     )
 @jax.jit
@@ -890,8 +919,8 @@ def compute_flipped_tiles_bottom_rigth(input) -> int:
     #checks wether the first element in the direction of look-up is invalid, becasause its already taken by bot, sets it to nan, to prevent while loop from running
     args = jax.lax.cond(
         input[2].field_color[input[0]+1][input[1]+1] == FieldColor.BLACK,
-        lambda input: (input[0]+1, input[1]+1, input[2], jnp.nan, 0),
-        lambda input: (input[0]+1, input[1]+1, input[2], 0.0, 0),
+        lambda input: (input[0]+1, input[1]+1, input[2], jnp.nan, 0, input[3], input[4]),
+        lambda input: (input[0]+1, input[1]+1, input[2], 0.0, 0, input[3], input[4]),
         input
     ) 
 
@@ -909,18 +938,19 @@ def compute_flipped_tiles_bottom_rigth(input) -> int:
             args[2].field_color[args[0], args[1]] == FieldColor.EMPTY,  
             lambda args: (-2, args[1], args[2], args[3],  args[4]),#if field is empthy, no further tiles can be flipped use set y to -2 to exit next loop iteration
             lambda args: (jax.lax.cond(
-                args[2].field_color[args[0], args[1]] == FieldColor.BLACK,  
-                lambda args: (args[0]+1, args[1]+1, args[2], args[3] + args[4], 0),
-                lambda args: (args[0]+1, args[1]+1, args[2], args[3], args[4] + 1),
+                args[2].field_color[args[0], args[1]] == FieldColor.BLACK,
+                lambda args: (args[0]+1, args[1]+1, args[2], args[3] + args[4], 0, args[5], args[5]),
+                lambda args: (args[0]+1, args[1]+1, args[2], args[3], args[4] + 1, check_if_inner_corner(args[0], args[1]), args[6]),
                 args
                 )),
             args
         )
 
+    while_loop_return = jax.lax.while_loop(while_cond, while_body, args)
     return jax.lax.cond(
-        jnp.logical_and(input[0] > 7, input[1]>7),
-        lambda args: jnp.int32(0.0),
-        lambda args: jnp.int32(jax.lax.while_loop(while_cond, while_body, args)[3]),  
+        jnp.logical_and(input[0] > 7, input[1] > 7),
+        lambda args: (jnp.int32(0.0), (-2147483648, -2147483648), (-2147483648, -2147483648)),
+        lambda args: jnp.int32(while_loop_return[3], while_loop_return[6], while_loop_return[5]),
         args
     )
 @jax.jit
@@ -930,8 +960,8 @@ def compute_flipped_tiles_bottom_left(input) -> int:
     #checks wether the first element in the direction of look-up is invalid, becasause its already taken by bot, sets it to nan, to prevent while loop from running
     args = jax.lax.cond(
         input[2].field_color[input[0]+1][input[1]-1] == FieldColor.BLACK,
-        lambda input: (input[0]+1, input[1]-1, input[2], jnp.nan, 0),
-        lambda input: (input[0]+1, input[1]-1, input[2], 0.0, 0),
+        lambda input: (input[0]+1, input[1]-1, input[2], jnp.nan, 0, input[3], input[4]),
+        lambda input: (input[0]+1, input[1]-1, input[2], 0.0, 0, input[3], input[4]),
         input
     ) 
 
@@ -949,18 +979,20 @@ def compute_flipped_tiles_bottom_left(input) -> int:
             args[2].field_color[args[0], args[1]] == FieldColor.EMPTY,  
             lambda args: (-2, args[1], args[2], args[3],  args[4]),#if field is empthy, no further tiles can be flipped use set y to -2 to exit next loop iteration
             lambda args: (jax.lax.cond(
-                args[2].field_color[args[0], args[1]] == FieldColor.BLACK,  
-                lambda args: (args[0]+1, args[1]-1, args[2], args[3] + args[4], 0),
-                lambda args: (args[0]+1, args[1]-1, args[2], args[3], args[4] + 1),
+                args[2].field_color[args[0], args[1]] == FieldColor.BLACK,
+                lambda args: (args[0]+1, args[1]-1, args[2], args[3] + args[4], 0, args[5], args[5]),
+                lambda args: (args[0]+1, args[1]-1, args[2], args[3], args[4] + 1, check_if_inner_corner(args[0], args[1]), args[6]),
                 args
                 )),
             args
-        )
+        )        
 
+
+    while_loop_return = jax.lax.while_loop(while_cond, while_body, args)
     return jax.lax.cond(
-        jnp.logical_and(input[0] <0, input[1]>7),
-        lambda args: jnp.int32(0.0),
-        lambda args: jnp.int32(jax.lax.while_loop(while_cond, while_body, args)[3]),  
+        jnp.logical_and(input[0] < 0, input[1] > 7),
+        lambda args: (jnp.int32(0.0), (-2147483648, -2147483648), (-2147483648, -2147483648)),
+        lambda args: jnp.int32(while_loop_return[3], while_loop_return[6], while_loop_return[5]),
         args
     )
 @jax.jit
@@ -970,8 +1002,8 @@ def compute_flipped_tiles_top_left(input) -> int:
     #checks wether the first element in the direction of look-up is invalid, becasause its already taken by bot, sets it to nan, to prevent while loop from running
     args = jax.lax.cond(
         input[2].field_color[input[0]-1][input[1]-1] == FieldColor.BLACK,
-        lambda input: (input[0]-1, input[1]-1, input[2], jnp.nan, 0),
-        lambda input: (input[0]-1, input[1]-1, input[2], 0.0, 0),
+        lambda input: (input[0]-1, input[1]-1, input[2], jnp.nan, 0, input[3], input[4]),
+        lambda input: (input[0]-1, input[1]-1, input[2], 0.0, 0, input[3], input[4]),
         input
     ) 
 
@@ -989,18 +1021,20 @@ def compute_flipped_tiles_top_left(input) -> int:
             args[2].field_color[args[0], args[1]] == FieldColor.EMPTY,  
             lambda args: (-2, args[1], args[2], args[3],  args[4]),#if field is empthy, no further tiles can be flipped use set y to -2 to exit next loop iteration
             lambda args: (jax.lax.cond(
-                args[2].field_color[args[0], args[1]] == FieldColor.BLACK,  
-                lambda args: (args[0]-1, args[1]-1, args[2], args[3] + args[4], 0),
-                lambda args: (args[0]-1, args[1]-1, args[2], args[3], args[4] + 1),
+                args[2].field_color[args[0], args[1]] == FieldColor.BLACK,
+                lambda args: (args[0]-1, args[1]-1, args[2], args[3] + args[4], 0, args[5], args[6]),
+                lambda args: (args[0]-1, args[1]-1, args[2], args[3], args[4] + 1, check_if_inner_corner(args[0], args[1]), args[6]),
                 args
                 )),
             args
-        )
+        )        
 
+
+    while_loop_return = jax.lax.while_loop(while_cond, while_body, args)
     return jax.lax.cond(
-        jnp.logical_and(input[0]<0, input[1]<0),
-        lambda args: jnp.int32(0.0),
-        lambda args: jnp.int32(jax.lax.while_loop(while_cond, while_body, args)[3]),  
+        jnp.logical_and(input[0] < 0, input[1] < 0),
+        lambda args: (jnp.int32(0.0), (-2147483648, -2147483648), (-2147483648, -2147483648)),
+        lambda args: jnp.int32(while_loop_return[3], while_loop_return[6], while_loop_return[5]),
         args
     )
 
