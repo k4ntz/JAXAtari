@@ -564,17 +564,17 @@ def compute_score_of_tiles(i, game_field, game_score, difficulty):
 
 
     # If tile is already taken, set invalid move (return very low score)
-    tiles_flipped = jax.lax.cond(
+    tiles_flipped, secondary_tile, default_pos = jax.lax.cond(
         game_field.field_color[tile_y, tile_x] != FieldColor.EMPTY,
-        lambda _: -2147483648,
+        lambda _: -2147483648, (-2147483648, -2147483648), (-2147483648, -2147483648)
         lambda _: compute_score_of_tile_1(tile_y, tile_x, game_field, game_score),
         None
     )
 
-    default_pos, secondary_tile = 0, 0 #TODO: rework search flliped_tiles_by_direction to return default_pos and secondary_tile
+    #TODO add skipping of secondary evaluation if no tiles were flipped
 
     #Calculate the strategic value (score) of the current_square itself
-    ((score, _), skip_secondary_eval) = calculate_strategic_tile_score(i, game_field, default_pos, difficulty)
+    ((score, _), skip_secondary_eval) = calculate_strategic_tile_score(i, game_field, jax.lax.cond(default_pos[0] == -2147483648, lambda _: (0,0),lambda _: default_pos, None), difficulty)
 
     secondary_tile = jax.lax.cond(
         skip_secondary_eval,
