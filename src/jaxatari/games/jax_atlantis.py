@@ -428,6 +428,9 @@ class JaxAtlantis(JaxEnvironment[AtlantisState, AtlantisObservation, AtlantisInf
         just_pressed = fire_pressed & (~state.fire_button_prev)
         can_shoot = (state.fire_cooldown == 0) & just_pressed
 
+        middle_allowed = jnp.logical_or(action != Action.FIRE, state.command_post_alive)  # false if middle canon used, but already dead
+        can_shoot = can_shoot & middle_allowed
+
         cannon_idx = jnp.where(
             can_shoot,
             jnp.where(
