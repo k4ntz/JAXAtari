@@ -84,8 +84,8 @@ RADAR_MORTAR_COLOR_GRAY = (155, 155, 155, 255)
 
 RADAR_MORTAR_SPRITE_ROTATION_SPEED = 15 # Change sprite frame (left, middle, right) of radar mortar every RADAR_MORTAR_SPRITE_ROTATION_SPEED frames
 RADAR_MORTAR_SPAWN_X = WIDTH            # Spawn barely outside of bounds TODO: Either change this to a lot more or use cooldown before next entitiy init
-RADAR_MORTAR_SPAWN_Y_BOTTOM = 66        # Since the radar mortar can spawn at the top or at the bottom of the screen, we define two y positions.
-RADAR_MORTAR_SPAWN_Y_TOP = 19
+RADAR_MORTAR_SPAWN_BOTTOM_Y = 66        # Since the radar mortar can spawn at the top or at the bottom of the screen, we define two y positions.
+RADAR_MORTAR_SPAWN_UPPER_Y = 19
 
 RADAR_MORTAR_MISSILE_UPDATE_EVERY = 100 # A missile is spawned every RADAR_MORTAR_MISSILE_UPDATE_EVERY-th frame.
 RADAR_MORTAR_MISSILE_SPEED = 3 # Speed of radar mortar missile
@@ -94,6 +94,19 @@ RADAR_MORTAR_MISSILE_SMALL_OUT_OF_BOUNDS_THRESHOLD = 50 # How far the missile ne
 RADAR_MORTAR_SHOOT_STRAIGHT_THRESHOLD = 10 # This defines how far the player needs to be away from the radar mortar (vertically or/and horizontally) for the missile to be shot diagonally
 
 # -------- Byte bat constants --------
+BYTE_BAT_SIZE = (7, 8) # Width, Height
+BYTE_BAT_COLOR = (90, 169, 99, 255)
+
+BYTE_BAT_FLAP_SPEED = 16
+
+BYTE_BAT_BOTTOM_BORDER_Y = LOWER_MOUNTAINS_Y - MOUNTAIN_SIZE[1]
+BYTE_BAT_UPPER_BORDER_Y = UPPER_MOUNTAINS_Y + MOUNTAIN_SIZE[1] + 2
+
+BYTE_BAT_SPAWN_X = WIDTH
+BYTE_BAT_SPAWN_Y = BYTE_BAT_UPPER_BORDER_Y + 1
+
+BYTE_BAT_X_SPEED = 0.7
+BYTE_BAT_Y_SPEED = 1
 
 # -------- Rock muncher constants --------
 
@@ -129,6 +142,9 @@ GUI_BLACK_BACKGROUND_X_OFFSET = 36
 GUI_Y_SPACE_BETWEEN_PLAYING_FIELD = 10
 GUI_Y_SPACE_BETWEEN_BACKGROUNDS = 10
 
+# -------- Debug constants --------
+DEBUG_ACTIVATE_MOUNTAINS_SCROLL = jnp.bool(True)
+
 # -------- States --------
 class EntityType(IntEnum):
     NONE = 0
@@ -156,6 +172,8 @@ class ByteBatState(NamedTuple):
     is_alive: jnp.bool
     x: chex.Array
     y: chex.Array
+    direction_is_up: jnp.bool
+    direction_is_left: jnp.bool
 
 class RockMuncherState(NamedTuple):
     is_in_current_event: jnp.bool
@@ -298,6 +316,19 @@ def load_sprites():
         jnp.repeat(rms[1][None], RADAR_MORTAR_SPRITE_ROTATION_SPEED, axis=0),
     ]) # Radar mortar rotation animation
 
+    # Byte bat
+    byte_bat_frame_up = aj.loadFrame(os.path.join(MODULE_DIR, "sprites/lasergates/enemies/byte_bat/1.npy"))
+    byte_bat_frame_mid = aj.loadFrame(os.path.join(MODULE_DIR, "sprites/lasergates/enemies/byte_bat/2.npy"))
+    byte_bat_frame_down = aj.loadFrame(os.path.join(MODULE_DIR, "sprites/lasergates/enemies/byte_bat/3.npy"))
+
+    bbs = aj.pad_to_match([byte_bat_frame_up, byte_bat_frame_mid, byte_bat_frame_down, byte_bat_frame_mid])
+    byte_bat_sprites = jnp.concatenate([
+        jnp.repeat(bbs[0][None], BYTE_BAT_FLAP_SPEED, axis=0),
+        jnp.repeat(bbs[1][None], BYTE_BAT_FLAP_SPEED, axis=0),
+        jnp.repeat(bbs[2][None], BYTE_BAT_FLAP_SPEED, axis=0),
+        jnp.repeat(bbs[1][None], BYTE_BAT_FLAP_SPEED, axis=0),
+    ]) # Radar mortar rotation animation
+
     return (
         # Player sprites
         player,
@@ -306,6 +337,7 @@ def load_sprites():
         # Entity sprites
         entity_missile,
         radar_mortar_sprites,
+        byte_bat_sprites,
 
         # Background sprites
         upper_brown_bg,
@@ -335,6 +367,7 @@ def load_sprites():
     # Entity sprites
     SPRITE_ENTITY_MISSILE,
     SPRITE_RADAR_MORTAR,
+    SPRITE_BYTE_BAT,
 
     # Background sprites
     SPRITE_UPPER_BROWN_BG,
@@ -382,20 +415,29 @@ def maybe_initialize_random_entity(entities, state):
         top_or_bot = jax.random.bernoulli(key_intern)
 
         new_radar_mortar_state = RadarMortarState(
-                is_in_current_event = jnp.bool(True),
-                is_alive= jnp.bool(True),
-                x=jnp.array(RADAR_MORTAR_SPAWN_X).astype(entities.radar_mortar_state.x.dtype),
-                y=jnp.where(top_or_bot, RADAR_MORTAR_SPAWN_Y_BOTTOM, RADAR_MORTAR_SPAWN_Y_TOP),
-                missile_x = jnp.array(0),
-                missile_y = jnp.array(0),
-                missile_direction = jnp.array((0, 0)),
-                shoot_again_timer = jnp.array(0),
-            )
+            is_in_current_event = jnp.bool(True),
+            is_alive= jnp.bool(True),
+            x=jnp.array(RADAR_MORTAR_SPAWN_X).astype(entities.radar_mortar_state.x.dtype),
+            y=jnp.where(top_or_bot, RADAR_MORTAR_SPAWN_BOTTOM_Y, RADAR_MORTAR_SPAWN_UPPER_Y),
+            missile_x = jnp.array(0),
+            missile_y = jnp.array(0),
+            missile_direction = jnp.array((0, 0)),
+            shoot_again_timer = jnp.array(0),
+        )
         return entities._replace(radar_mortar_state=new_radar_mortar_state)
 
     def initialize_byte_bat(entities, state):
-        new_state = entities.byte_bat_state._replace(is_in_current_event=jnp.bool(True))
-        return entities._replace(byte_bat_state=new_state)
+
+        initial_direction_is_up = jnp.bool(BYTE_BAT_SPAWN_Y < BYTE_BAT_UPPER_BORDER_Y)
+        new_byte_bat_state = ByteBatState(
+            is_in_current_event=jnp.bool(True),
+            is_alive= jnp.bool(True),
+            x=jnp.array(BYTE_BAT_SPAWN_X).astype(entities.byte_bat_state.x.dtype),
+            y=jnp.array(BYTE_BAT_SPAWN_Y).astype(entities.byte_bat_state.y.dtype),
+            direction_is_up=initial_direction_is_up,
+            direction_is_left=jnp.bool(True)
+        )
+        return entities._replace(byte_bat_state=new_byte_bat_state)
 
     def initialize_rock_muncher(entities, state):
         new_state = entities.rock_muncher_state._replace(is_in_current_event=jnp.bool(True))
@@ -433,7 +475,7 @@ def maybe_initialize_random_entity(entities, state):
     ] # All initialize functions of all entity types
 
     def initialize_random_entity(_):
-        picked_index = jax.random.randint(key_pick_type, shape=(), minval=0, maxval=1) # TODO: Change maxval to len(init_fns) when all init functions are implemented
+        picked_index = jax.random.randint(key_pick_type, shape=(), minval=1, maxval=2) # TODO: Change maxval to len(init_fns) when all init functions are implemented
         chosen_fn = lambda i: jax.lax.switch(i, init_fns, entities, state)
         return chosen_fn(picked_index) # Initialize function of randomly picked entity
 
@@ -452,6 +494,7 @@ def mountains_step(
 
     # If this is true, update the position
     update_tick = state.step_counter % UPDATE_EVERY == 0
+    update_tick = jnp.logical_and(update_tick, DEBUG_ACTIVATE_MOUNTAINS_SCROLL)
 
     # Update x positions
     new_x1 = jnp.where(update_tick, mountain_state.x1 - UPDATE_EVERY * state.scroll_speed, mountain_state.x1)
@@ -476,7 +519,7 @@ def all_entities_step(game_state: LaserGatesState) -> Entities:
         new_x = rm.x - state.scroll_speed
 
         # Compute spawn position & 45 degree - direction
-        is_at_bottom = rm.y == RADAR_MORTAR_SPAWN_Y_BOTTOM
+        is_at_bottom = rm.y == RADAR_MORTAR_SPAWN_BOTTOM_Y
         offset_y = jnp.where(is_at_bottom, 0, RADAR_MORTAR_SIZE[1])
         spawn_x = rm.x
         spawn_y = rm.y + offset_y
@@ -555,8 +598,8 @@ def all_entities_step(game_state: LaserGatesState) -> Entities:
                               missile_y)
 
         return rm._replace(
-            x=new_x,
             is_in_current_event=rm.x > 0,
+            x=new_x,
             missile_x=(missile_x - state.scroll_speed).astype(rm.missile_x.dtype),
             missile_y=missile_y,
             missile_direction=missile_dir,
@@ -564,7 +607,27 @@ def all_entities_step(game_state: LaserGatesState) -> Entities:
         )
 
     def byte_bat_step(state: LaserGatesState) -> ByteBatState:
-        return state.entities.byte_bat_state
+        bb = state.entities.byte_bat_state
+
+        # If one of the y borders are hit
+        y_border_hit = jnp.logical_or(bb.y <= BYTE_BAT_UPPER_BORDER_Y, bb.y >= BYTE_BAT_BOTTOM_BORDER_Y)
+        # If player is left of the byte bat, update only if hitting border
+        new_direction_is_left = jnp.where(y_border_hit, state.player_x + PLAYER_SIZE[0] < bb.x, bb.direction_is_left)
+        # Invert y direction if one of the two y borders is hit
+        new_direction_is_up = jnp.where(y_border_hit, jnp.logical_not(bb.direction_is_up), bb.direction_is_up)
+
+        # Update positions
+        new_x = jnp.where(new_direction_is_left, bb.x - BYTE_BAT_X_SPEED, bb.x + BYTE_BAT_X_SPEED)
+        new_y = jnp.where(new_direction_is_up, bb.y - BYTE_BAT_Y_SPEED, bb.y + BYTE_BAT_Y_SPEED)
+
+        return bb._replace(
+            is_in_current_event=True,# TODO Collision
+            is_alive=True, # TODO Collision
+            x=new_x,
+            y=new_y,
+            direction_is_up=new_direction_is_up,
+            direction_is_left=new_direction_is_left,
+        )
 
     def rock_muncher_step(state: LaserGatesState) -> RockMuncherState:
         return state.entities.rock_muncher_state
@@ -982,8 +1045,10 @@ class JaxLaserGates(JaxEnvironment[LaserGatesState, LaserGatesObservation, Laser
             byte_bat_state=ByteBatState(
                 is_in_current_event=jnp.bool(False),
                 is_alive=jnp.bool(False),
-                x=jnp.array(0).astype(jnp.float32),
-                y=jnp.array(0),
+                x=jnp.array(0.0).astype(jnp.float32),
+                y=jnp.array(0.0).astype(jnp.float32),
+                direction_is_up=jnp.bool(False),
+                direction_is_left=jnp.bool(False)
             ),
             rock_muncher_state=RockMuncherState(
                 is_in_current_event=jnp.bool(False),
@@ -1406,13 +1471,13 @@ class LaserGatesRenderer(AtraJaxisRenderer):
 
         # Render radar mortar
         radar_mortar_frame = aj.get_sprite_frame(SPRITE_RADAR_MORTAR, state.step_counter)
-        raster = jnp.where(state.entities.radar_mortar_state.is_alive,
+        raster = jnp.where(jnp.logical_and(state.entities.radar_mortar_state.is_alive, state.entities.radar_mortar_state.is_in_current_event),
                            aj.render_at(
                                raster,
                                state.entities.radar_mortar_state.x,
                                state.entities.radar_mortar_state.y,
                                radar_mortar_frame,
-                               flip_vertical=state.entities.radar_mortar_state.y == RADAR_MORTAR_SPAWN_Y_TOP,
+                               flip_vertical=state.entities.radar_mortar_state.y == RADAR_MORTAR_SPAWN_UPPER_Y,
                            ),
                            raster
                            )
@@ -1420,7 +1485,7 @@ class LaserGatesRenderer(AtraJaxisRenderer):
         # Render radar mortar missile
         should_render_radar_mortar_missile = jnp.logical_and(state.entities.radar_mortar_state.missile_x != 0, state.entities.radar_mortar_state.missile_y != 0)
         radar_mortar_missile_sprite = recolor_sprite(SPRITE_ENTITY_MISSILE, jnp.array(RADAR_MORTAR_COLOR_BLUE))
-        raster = jnp.where(should_render_radar_mortar_missile,
+        raster = jnp.where(jnp.logical_and(should_render_radar_mortar_missile, state.entities.radar_mortar_state.is_in_current_event),
                            aj.render_at(
                                raster,
                                state.entities.radar_mortar_state.missile_x,
@@ -1431,6 +1496,19 @@ class LaserGatesRenderer(AtraJaxisRenderer):
                            raster
                            )
 
+
+        # Render byte bat
+        byte_bat_frame = aj.get_sprite_frame(SPRITE_BYTE_BAT, state.step_counter)
+        byte_bat_frame = recolor_sprite(byte_bat_frame, jnp.array(BYTE_BAT_COLOR))
+        raster = jnp.where(jnp.logical_and(state.entities.byte_bat_state.is_alive, state.entities.byte_bat_state.is_in_current_event),
+                           aj.render_at(
+                               raster,
+                               state.entities.byte_bat_state.x,
+                               state.entities.byte_bat_state.y,
+                               byte_bat_frame,
+                           ),
+                           raster
+                           )
 
         # -------- Render mountains --------
 
