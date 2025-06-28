@@ -623,7 +623,7 @@ class JaxAtlantis(JaxEnvironment[AtlantisState, AtlantisObservation, AtlantisInf
             speed = self._sample_speed(rng_speed, s.wave)*cfg.enemy_speed_multipliers[type_id]
             dx = jnp.where(go_left, -speed, speed)
 
-            debug.print(" Test DX {dx}", dx=dx)
+            #debug.print(" Test DX {dx}", dx=dx)
 
             # dx = jnp.where(go_left, -cfg.enemy_speed, cfg.enemy_speed)
 
