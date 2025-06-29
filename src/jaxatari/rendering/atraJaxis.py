@@ -4,7 +4,6 @@ import numpy as np
 import jax.numpy as jnp
 import jax
 from functools import partial
-import pygame
 from jax import lax
 
 
@@ -224,40 +223,7 @@ def render_at(raster, x, y, sprite_frame, flip_horizontal=False, flip_vertical=F
     return new_raster
 
 
-def update_pygame(pygame_screen, raster, SCALING_FACTOR=3, WIDTH=400, HEIGHT=300):
-    """Updates the Pygame display with the rendered raster.
 
-    Args:
-        pygame_screen: The Pygame screen surface.
-        raster: JAX array of shape (Width, Height, 3/4) containing the image data.
-        SCALING_FACTOR: Factor to scale the raster for display.
-        WIDTH: Expected width of the input raster (used for scaling calculation).
-        HEIGHT: Expected height of the input raster (used for scaling calculation).
-    """
-    pygame_screen.fill((0, 0, 0))
-
-    # Convert JAX array (W, H, C) to NumPy (W, H, C)
-    raster_np = np.array(raster)
-    raster_np = raster_np.astype(np.uint8)
-
-    # Pygame surface needs (W, H). make_surface expects (W, H, C) correctly.
-    frame_surface = pygame.surfarray.make_surface(raster_np)
-
-    # Pygame scale expects target (width, height)
-    target_width_px = int(WIDTH * SCALING_FACTOR)
-    target_height_px = int(HEIGHT * SCALING_FACTOR)
-    # Optional: Adjust scaling if raster size differs from constants
-    if raster_np.shape[0] != WIDTH or raster_np.shape[1] != HEIGHT:
-        target_width_px = int(raster_np.shape[0] * SCALING_FACTOR)
-        target_height_px = int(raster_np.shape[1] * SCALING_FACTOR)
-
-
-    frame_surface_scaled = pygame.transform.scale(
-        frame_surface, (target_width_px, target_height_px)
-    )
-
-    pygame_screen.blit(frame_surface_scaled, (0, 0))
-    pygame.display.flip()
 
 
 MAX_LABEL_WIDTH = 100
@@ -460,79 +426,3 @@ def int_to_digits(n, max_digits=8):
 
     # Digits are generated least significant first, flip them
     return jnp.flip(digits_reversed)
-
-
-# debug code
-if __name__ == "__main__":
-
-    # Load frames assuming loadFrame default transpose=True gives (W, H, C)
-    sub1 = loadFrame("./sprites/seaquest/player_sub/1.npy")
-    sub2 = loadFrame("./sprites/seaquest/player_sub/2.npy")
-    sub3 = loadFrame("./sprites/seaquest/player_sub/3.npy")
-    # pad_to_match expects list of (W, H, C), returns list of (maxW, maxH, C)
-    sub_sprite_list = pad_to_match([sub1, sub2, sub3])
-    # Ensure stacking results in (N, W, H, C)
-    sub_frames_repeated = [
-        jnp.repeat(sub_sprite_list[0][None], 4, axis=0),
-        jnp.repeat(sub_sprite_list[1][None], 4, axis=0),
-        jnp.repeat(sub_sprite_list[2][None], 4, axis=0),
-    ]
-    SPRITE_PL_SUB = jnp.concatenate(sub_frames_repeated, axis=0) # Shape (N, W, H, C)
-
-    shark1 = loadFrame("./sprites/seaquest/shark/1.npy")
-    shark2 = loadFrame("./sprites/seaquest/shark/2.npy")
-    shark_sprite_list = pad_to_match([shark1, shark2])
-    shark_frames_repeated = [
-         jnp.repeat(shark_sprite_list[0][None], 16, axis=0),
-         jnp.repeat(shark_sprite_list[1][None], 8, axis=0),
-    ]
-    SPRITE_SHARK = jnp.concatenate(shark_frames_repeated, axis=0) # Shape (N, W, H, C)
-
-
-    # load_and_pad_digits returns (NumDigits, W, H, C)
-    digits_array = load_and_pad_digits("./sprites/seaquest/digits/{}.npy")
-
-    pygame.init()
-
-    SCALING_FACTOR = 3
-    # These constants define the raster size (W, H)
-    WIDTH = 400
-    HEIGHT = 300
-
-    # Pygame screen size uses (width, height) tuple
-    screen = pygame.display.set_mode((int(WIDTH * SCALING_FACTOR), int(HEIGHT * SCALING_FACTOR)))
-    clock = pygame.time.Clock()
-    running = True
-    frame_idx = 0
-
-    while running:
-        for event in pygame.event.get():
-            if event.type == pygame.QUIT:
-                running = False
-        # Create a fresh black raster each frame (W, H, C)
-        raster = jnp.zeros((WIDTH, HEIGHT, 3), dtype=jnp.uint8)
-
-        # Get sprite frames - expected shape (W, H, C)
-        sub_frame = get_sprite_frame(SPRITE_PL_SUB, frame_idx, loop=True)
-        shark_frame = get_sprite_frame(SPRITE_SHARK, frame_idx, loop=True)
-
-        # Render using (x, y) coordinates
-        raster = render_at(raster, x=300, y=140, sprite_frame=sub_frame, flip_horizontal=True)
-        raster = render_at(raster, x=100, y=100, sprite_frame=shark_frame)
-
-        # Render labels/indicators using (x, y)
-        digits = int_to_digits(114514)
-        raster = render_label(raster, x=10, y=10, text_digits=digits, char_sprites=digits_array)
-        raster = render_indicator(raster, x=10, y=30, value=5, sprite=sub_frame)
-
-        # Render bar using (x, y) and geometric width/height
-        raster = render_bar(
-            raster, x=10, y=280, value=5, max_value=10, width=100, height=10,
-            color=(255, 0, 0, 255), default_color=(0, 0, 255, 255)
-        )
-
-        # Update display - expects raster as (W, H, C)
-        update_pygame(screen, raster, SCALING_FACTOR, WIDTH, HEIGHT)
-        frame_idx += 1
-        clock.tick(60)
-    pygame.quit()

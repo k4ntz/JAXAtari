@@ -4,8 +4,7 @@ from typing import NamedTuple, Tuple
 import jax.lax
 import jax.numpy as jnp
 import chex
-import pygame
-from gymnax.environments import spaces
+import jaxatari.spaces as spaces
 
 from jaxatari.renderers import AtraJaxisRenderer
 from jaxatari.rendering import atraJaxis as aj
@@ -50,50 +49,6 @@ WALL_TOP_Y = 24
 WALL_TOP_HEIGHT = 10
 WALL_BOTTOM_Y = 194
 WALL_BOTTOM_HEIGHT = 16
-
-# Pygame window dimensions
-WINDOW_WIDTH = 160 * 3
-WINDOW_HEIGHT = 210 * 3
-
-# define the positions of the state information
-# define the positions of the state information
-STATE_TRANSLATOR: dict = {
-    0: "player_y",
-    1: "player_speed",
-    2: "ball_x",
-    3: "ball_y",
-    4: "enemy_y",
-    5: "enemy_speed",
-    6: "ball_vel_x",
-    7: "ball_vel_y",
-    8: "player_score",
-    9: "enemy_score",
-    10: "step_counter",
-    11: "acceleration_counter",
-    12: "buffer",
-}
-
-
-def get_human_action() -> chex.Array:
-    """
-    Records if UP or DOWN is being pressed and returns the corresponding action.
-
-    Returns:
-        action: int, action taken by the player (LEFT, RIGHT, FIRE, LEFTFIRE, RIGHTFIRE, NOOP).
-    """
-    keys = pygame.key.get_pressed()
-    if keys[pygame.K_a] and keys[pygame.K_SPACE]:
-        return jnp.array(Action.LEFTFIRE)
-    elif keys[pygame.K_d] and keys[pygame.K_SPACE]:
-        return jnp.array(Action.RIGHTFIRE)
-    elif keys[pygame.K_a]:
-        return jnp.array(Action.LEFT)
-    elif keys[pygame.K_d]:
-        return jnp.array(Action.RIGHT)
-    elif keys[pygame.K_SPACE]:
-        return jnp.array(Action.FIRE)
-    else:
-        return jnp.array(Action.NOOP)
 
 
 # immutable state container
@@ -404,7 +359,7 @@ def _reset_ball_after_goal(
 class JaxPong(JaxEnvironment[PongState, PongObservation, PongInfo]):
     def __init__(self, reward_funcs: list[callable]=None):
         super().__init__()
-        self.frame_stack_size = 4
+        self.renderer = PongRenderer()
         if reward_funcs is not None:
             reward_funcs = tuple(reward_funcs)
         self.reward_funcs = reward_funcs
@@ -560,6 +515,10 @@ class JaxPong(JaxEnvironment[PongState, PongObservation, PongInfo]):
 
         return observation, new_state, env_reward, done, info
 
+
+    def render(self, state: PongState) -> jnp.ndarray:
+        return self.renderer.render(state)
+
     @partial(jax.jit, static_argnums=(0,))
     def _get_observation(self, state: PongState):
         # create player
@@ -613,19 +572,59 @@ class JaxPong(JaxEnvironment[PongState, PongObservation, PongInfo]):
            )
 
     def action_space(self) -> spaces.Discrete:
-        return spaces.Discrete(len(self.action_set))
+        """Returns the action space for Pong.
+        Actions are:
+        0: NOOP
+        1: FIRE
+        2: RIGHT
+        3: LEFT
+        4: RIGHTFIRE
+        5: LEFTFIRE
+        """
+        return spaces.Discrete(6)
 
-    def get_action_space(self) -> jnp.ndarray:
-        return jnp.array(self.action_set)
+    def observation_space(self) -> spaces:
+        """Returns the observation space for Pong.
+        The observation contains:
+        - player: EntityPosition (x, y, width, height)
+        - enemy: EntityPosition (x, y, width, height)
+        - ball: EntityPosition (x, y, width, height)
+        - score_player: int (0-21)
+        - score_enemy: int (0-21)
+        """
+        return spaces.Dict({
+            "player": spaces.Dict({
+                "x": spaces.Box(low=0, high=160, shape=(), dtype=jnp.int32),
+                "y": spaces.Box(low=0, high=210, shape=(), dtype=jnp.int32),
+                "width": spaces.Box(low=0, high=160, shape=(), dtype=jnp.int32),
+                "height": spaces.Box(low=0, high=210, shape=(), dtype=jnp.int32),
+            }),
+            "enemy": spaces.Dict({
+                "x": spaces.Box(low=0, high=160, shape=(), dtype=jnp.int32),
+                "y": spaces.Box(low=0, high=210, shape=(), dtype=jnp.int32),
+                "width": spaces.Box(low=0, high=160, shape=(), dtype=jnp.int32),
+                "height": spaces.Box(low=0, high=210, shape=(), dtype=jnp.int32),
+            }),
+            "ball": spaces.Dict({
+                "x": spaces.Box(low=0, high=160, shape=(), dtype=jnp.int32),
+                "y": spaces.Box(low=0, high=210, shape=(), dtype=jnp.int32),
+                "width": spaces.Box(low=0, high=160, shape=(), dtype=jnp.int32),
+                "height": spaces.Box(low=0, high=210, shape=(), dtype=jnp.int32),
+            }),
+            "score_player": spaces.Box(low=0, high=21, shape=(), dtype=jnp.int32),
+            "score_enemy": spaces.Box(low=0, high=21, shape=(), dtype=jnp.int32),
+        })
 
-    def observation_space(self) -> spaces.Box:
+    def image_space(self) -> spaces.Box:
+        """Returns the image space for Pong.
+        The image is a RGB image with shape (160, 210, 3).
+        """
         return spaces.Box(
             low=0,
             high=255,
-            shape=None,
-            dtype=jnp.uint8,
+            shape=(160, 210, 3),
+            dtype=jnp.uint8
         )
-
 
     @partial(jax.jit, static_argnums=(0,))
     def _get_info(self, state: PongState, all_rewards: chex.Array) -> PongInfo:
@@ -649,8 +648,8 @@ class JaxPong(JaxEnvironment[PongState, PongObservation, PongInfo]):
     @partial(jax.jit, static_argnums=(0,))
     def _get_done(self, state: PongState) -> bool:
         return jnp.logical_or(
-            jnp.greater_equal(state.player_score, 20),
-            jnp.greater_equal(state.enemy_score, 20),
+            jnp.greater_equal(state.player_score, 21),
+            jnp.greater_equal(state.enemy_score, 21),
         )
 
 
@@ -716,7 +715,6 @@ class PongRenderer(AtraJaxisRenderer):
             A JAX array representing the rendered frame.
         """
         # Create empty raster with CORRECT orientation for atraJaxis framework
-        # Note: For pygame, the raster is expected to be (width, height, channels)
         # where width corresponds to the horizontal dimension of the screen
         raster = jnp.zeros((WIDTH, HEIGHT, 3))
 
@@ -782,60 +780,3 @@ class PongRenderer(AtraJaxisRenderer):
                                            spacing=16)
 
         return raster
-
-
-if __name__ == "__main__":
-    # Initialize Pygame
-    pygame.init()
-    screen = pygame.display.set_mode((WINDOW_WIDTH, WINDOW_HEIGHT))
-    pygame.display.set_caption("Pong Game")
-    clock = pygame.time.Clock()
-
-    game = JaxPong()
-
-    # Create the JAX renderer
-    renderer = PongRenderer()
-
-    # Get jitted functions
-    jitted_step = jax.jit(game.step)
-    jitted_reset = jax.jit(game.reset)
-
-    obs, curr_state = jitted_reset()
-
-    # Game loop
-    running = True
-    frame_by_frame = False
-    frameskip = 1
-    counter = 1
-
-    while running:
-        for event in pygame.event.get():
-            if event.type == pygame.QUIT:
-                running = False
-            elif event.type == pygame.KEYDOWN:
-                if event.key == pygame.K_f:
-                    frame_by_frame = not frame_by_frame
-            elif event.type == pygame.KEYDOWN or (
-                    event.type == pygame.KEYUP and event.key == pygame.K_n
-            ):
-                if event.key == pygame.K_n and frame_by_frame:
-                    if counter % frameskip == 0:
-                        action = get_human_action()
-                        obs, curr_state, reward, done, info = jitted_step(
-                            curr_state, action
-                        )
-
-        if not frame_by_frame:
-            if counter % frameskip == 0:
-                action = get_human_action()
-                obs, curr_state, reward, done, info = jitted_step(curr_state, action)
-
-        # Render and display
-        raster = renderer.render(curr_state)
-
-        aj.update_pygame(screen, raster, 3, WIDTH, HEIGHT)
-
-        counter += 1
-        clock.tick(60)
-
-    pygame.quit()
