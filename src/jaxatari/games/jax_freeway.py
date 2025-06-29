@@ -1,6 +1,5 @@
 import os
 from functools import partial
-import pygame
 import chex
 import jax
 import jax.numpy as jnp
@@ -551,60 +550,3 @@ class FreewayRenderer(AtraJaxisRenderer):
         raster = raster.at[0:bar_width, :, :].set(0)
 
         return raster
-
-def main():
-    pygame.init()
-
-    # Initialize game and renderer
-    game = JaxFreeway()
-    renderer = FreewayRenderer()
-    scaling = 4
-
-    screen = pygame.display.set_mode((160 * scaling, 210 * scaling))
-    pygame.display.set_caption("Freeway")
-
-    jitted_step = jax.jit(game.step)
-    jitted_render = jax.jit(renderer.render)
-    jitted_reset = jax.jit(game.reset)
-
-    init_obs, state = jitted_reset()
-
-    # Setup game loop
-    clock = pygame.time.Clock()
-    running = True
-    done = False
-
-    while running and not done:
-        # Handle events
-        for event in pygame.event.get():
-            if event.type == pygame.QUIT:
-                running = False
-
-        # Handle input
-        keys = pygame.key.get_pressed()
-        if keys[pygame.K_w]:
-            action = Action.UP
-        elif keys[pygame.K_s]:
-            action = Action.DOWN
-        else:
-            action = Action.NOOP
-
-        # Update game state
-        obs, state, reward, done, info = (jitted_step(state, action))
-
-        # Render
-        frame = jitted_render(state)
-
-        aj.update_pygame(screen, frame, scaling, 160, 210)
-
-        # Cap at 60 FPS
-        clock.tick(30)
-
-    # If game over, wait before closing
-    if done:
-        pygame.time.wait(2000)
-
-    pygame.quit()
-
-if __name__ == "__main__":
-    main()

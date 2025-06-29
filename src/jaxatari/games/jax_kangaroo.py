@@ -4,7 +4,6 @@ from typing import NamedTuple, Tuple, Dict, Any, Optional
 import jax
 import jax.numpy as jnp
 import chex
-import pygame
 from jax import Array
 import jaxatari.spaces as spaces
 from jaxatari.environment import JaxEnvironment, JAXAtariAction as Action
@@ -192,63 +191,6 @@ LEVEL_1 = Kangaroo_Level_1
 LEVEL_2 = Kangaroo_Level_2
 LEVEL_3 = Kangaroo_Level_3
 
-
-# -------- Keyboard Inputs --------
-def get_human_action() -> chex.Array:
-    keys = pygame.key.get_pressed()
-    up = keys[pygame.K_w] or keys[pygame.K_UP]
-    down = keys[pygame.K_s] or keys[pygame.K_DOWN]
-    left = keys[pygame.K_a] or keys[pygame.K_LEFT]
-    right = keys[pygame.K_d] or keys[pygame.K_RIGHT]
-    fire = keys[pygame.K_SPACE]
-    reset = keys[pygame.K_r]
-
-    if reset:
-        return jnp.array(RESET)
-
-    x, y = 0, 0
-    if up and not down:
-        y = 1
-    elif not up and down:
-        y = -1
-
-    if left and not right:
-        x = -1
-    elif not left and right:
-        x = 1
-
-    if fire:
-        if x == -1 and y == -1:
-            return jnp.array(Action.DOWNLEFTFIRE)
-        elif x == -1 and y == 1:
-            return jnp.array(Action.UPLEFTFIRE)
-        elif x == 1 and y == -1:
-            return jnp.array(Action.DOWNRIGHTFIRE)
-        elif x == 1 and y == 1:
-            return jnp.array(Action.UPRIGHTFIRE)
-        elif x == 0 and y == -1:
-            return jnp.array(Action.DOWNFIRE)
-        else:
-            return jnp.array(Action.FIRE)
-    else:
-        if x == -1 and y == -1:
-            return jnp.array(Action.DOWNLEFT)
-        elif x == -1 and y == 1:
-            return jnp.array(Action.UPLEFT)
-        elif x == 1 and y == -1:
-            return jnp.array(Action.DOWNRIGHT)
-        elif x == 1 and y == 1:
-            return jnp.array(Action.UPRIGHT)
-        elif x == -1:
-            return jnp.array(Action.LEFT)
-        elif x == 1:
-            return jnp.array(Action.RIGHT)
-        elif y == -1:
-            return jnp.array(Action.DOWN)
-        elif y == 1:
-            return jnp.array(Action.UP)
-
-    return jnp.array(Action.NOOP)
 
 
 @partial(jax.jit, static_argnums=())
@@ -1810,7 +1752,7 @@ class JaxKangaroo(JaxEnvironment[KangarooState, KangarooObservation, KangarooInf
                 child_position=level_constants.child_position,
                 child_timer=jnp.array(0),
                 child_velocity=jnp.array(1),
-                timer=jnp.array(2000),
+                timer=jnp.array(2000), # to be modified
                 falling_coco_position=jnp.array([13, -1]),
                 falling_coco_dropping=jnp.array(False),
                 falling_coco_counter=jnp.array(0),
@@ -2116,7 +2058,7 @@ class JaxKangaroo(JaxEnvironment[KangarooState, KangarooObservation, KangarooInf
 
     @partial(jax.jit, static_argnums=(0,))
     def _get_done(self, state: KangarooState) -> bool:
-        return state.lives <= 0
+        return jnp.logical_and(state.lives <= 0, state.player.y == 188)
 
 import jaxatari.rendering.atraJaxis as aj
 from jaxatari.renderers import AtraJaxisRenderer
@@ -2454,52 +2396,3 @@ class KangarooRenderer(AtraJaxisRenderer):
 
         # Ensure the final raster has the correct dtype
         return raster.astype(jnp.uint8)
-
-if __name__ == "__main__":
-    pygame.init()
-    game = JaxKangaroo()
-
-    scaling = 4
-
-    screen = pygame.display.set_mode((SCREEN_WIDTH * scaling, SCREEN_HEIGHT * scaling))
-    pygame.display.set_caption("Kangaroo")
-    clock = pygame.time.Clock()
-
-    renderer = KangarooRenderer()
-    jitted_step = jax.jit(game.step)
-    jitted_reset = jax.jit(game.reset)
-    (_, curr_state) = jitted_reset()
-    running = True
-    frame_by_frame = False
-    frameskip = game.frameskip
-    counter = 1
-
-    while running:
-        for event in pygame.event.get():
-            if event.type == pygame.QUIT:
-                running = False
-            elif event.type == pygame.KEYDOWN:
-                if event.key == pygame.K_f:
-                    frame_by_frame = not frame_by_frame
-            elif event.type == pygame.KEYDOWN or (
-                event.type == pygame.KEYUP and event.key == pygame.K_n
-            ):
-                if event.key == pygame.K_n and frame_by_frame:
-                    if counter % frameskip == 0:
-                        action = get_human_action()
-                        (_, curr_state, _, _, _) = jitted_step(curr_state, action)
-
-        if not frame_by_frame:
-            if counter % frameskip == 0:
-                action = get_human_action()
-                (_, curr_state, _, _, _) = jitted_step(curr_state, action)
-
-        # Render and display
-        raster = renderer.render(curr_state)
-
-        aj.update_pygame(screen, raster, scaling, SCREEN_WIDTH, SCREEN_HEIGHT)
-
-        counter += 1
-        pygame.time.Clock().tick(60)
-
-    pygame.quit()
