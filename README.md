@@ -30,6 +30,15 @@ source .venv/bin/activate
 python3 -m pip install -U pip
 pip3 install -e .
 ```
+#### On Windows
+```bash
+python3 -m venv .venv
+.\.venv\Scripts\activate
+
+python3 -m pip install -U pip
+pip3 install -e .
+```
+
 
 **Note**: This will install JAX without GPU acceleration.
 
