@@ -34,12 +34,18 @@ BRAKE_SPEED = jnp.array(BRAKE_TOTAL_DISTANCE / BRAKE_DURATION, dtype=jnp.float32
 
 # --- Player params ---------------
 PLAYER_SIZE = (9, 21)  # w, h
-PLAYER_COLOR = (181, 83, 40)
 PLAYER_START_X, PLAYER_START_Y = 37.0, 74.0
 
 # --- Enemies params ---
 ENEMY_SIZE = (8, 8)  # w, h
 ENEMY_SPAWN_FRAMES = jnp.array([200, 0])  # example delays for each enemy in frames
+
+# --- Object Colors ---
+PLAYER_COLOR = jnp.array([0, 255, 0], dtype=jnp.uint8)
+ENEMY_COLOR = jnp.array([255, 0, 0], dtype=jnp.uint8)
+PLATFORM_COLOR = jnp.array([228, 111, 111], dtype=jnp.uint8)
+GROUND_COLOR = jnp.array([181, 83, 40], dtype=jnp.uint8)
+POW_COLOR = jnp.array([201, 164, 74], dtype=jnp.uint8)
 
 
 # --- Platform params---
@@ -446,6 +452,20 @@ def player_step(state: PlayerState, action: chex.Array) -> PlayerState:
     # 5) apply physics
     return movement(state2, jnp.array([state2.move, state2.jump], dtype=jnp.int32))
 
+def draw_rect(image, x, y, w, h, color):
+        y0 = jnp.clip(jnp.floor(y), 0, SCREEN_HEIGHT - 1).astype(jnp.int32)
+        y1 = jnp.clip(jnp.floor(y + h), 0, SCREEN_HEIGHT).astype(jnp.int32)
+        x0 = jnp.clip(jnp.floor(x), 0, SCREEN_WIDTH - 1).astype(jnp.int32)
+        x1 = jnp.clip(jnp.floor(x + w), 0, SCREEN_WIDTH).astype(jnp.int32)
+
+        mask_y = (jnp.arange(SCREEN_HEIGHT) >= y0) & (jnp.arange(SCREEN_HEIGHT) < y1)
+        mask_x = (jnp.arange(SCREEN_WIDTH) >= x0) & (jnp.arange(SCREEN_WIDTH) < x1)
+        mask = jnp.outer(mask_y, mask_x)
+
+        color_arr = jnp.array(color, dtype=image.dtype).reshape(1, 1, 3)
+        new_image = jnp.where(mask[:, :, None], color_arr, image)
+        return new_image
+
 import jaxatari.rendering.atraJaxis as aj
 from jaxatari.renderers import AtraJaxisRenderer
 
@@ -453,47 +473,47 @@ class MarioBrosRenderer(AtraJaxisRenderer):
     # holds functions to render given Gamestates
 
     def __init__(self):
-        if not pygame.get_init():
-            pygame.init()
-        pygame.font.init()
-        self.font = pygame.font.SysFont(None, 36)
-
-    def draw_rect(self, surface, color, rect):
-        r = pygame.Rect(rect)
-        pygame.draw.rect(surface, color, r)
+        pass
 
     def render(self, state: MarioBrosState) -> jnp.ndarray:
-       
-        surf = pygame.Surface((SCREEN_WIDTH, SCREEN_HEIGHT))
-        # Background
-        surf.fill((0, 0, 0))
+        image = jnp.zeros((SCREEN_HEIGHT, SCREEN_WIDTH, 3), dtype=jnp.uint8)
 
-        # Player
-        px, py = state.player.pos.tolist()
-        color = (255, 0, 0) if state.player.brake_frames_left > 0 else PLAYER_COLOR
-        self.draw_rect(surf, color, (px, py, *PLAYER_SIZE))
+        # Spieler
+        px, py = state.player.pos
+        player_color = lax.cond(
+            state.player.brake_frames_left > 0,
+            lambda _: ENEMY_COLOR,
+            lambda _: PLAYER_COLOR,
+            operand=None
+        )
+        image = draw_rect(image, px, py, *PLAYER_SIZE, player_color)
 
-        # Platforms + Pow-Block
-        for plat in PLATFORMS[1:]:
-            self.draw_rect(surf, (228, 111, 111), plat.tolist())
-        self.draw_rect(surf, (181, 83, 40), PLATFORMS[0].tolist()) # Ground
-        self.draw_rect(surf, (201, 164, 74), POW_BLOCK[0].tolist())
+        # Gegner (enemy_pos ist (N, 2))
+        def draw_enemy(i, img):
+            ex, ey = state.game.enemy_pos[i]
+            return draw_rect(img, ex, ey, *ENEMY_SIZE, ENEMY_COLOR)
 
-        # Enemy
-        for ep in state.game.enemy_pos:
-            ex, ey = ep.tolist()
-            self.draw_rect(surf, (255, 0, 0), (ex, ey, *ENEMY_SIZE))
+        image = lax.fori_loop(0, state.game.enemy_pos.shape[0], draw_enemy, image)
 
+        # Plattformen
+        def draw_platform(i, img):
+            plat = PLATFORMS[i]
+            color = lax.cond(i == 0, lambda _: GROUND_COLOR, lambda _: PLATFORM_COLOR, operand=None)
+            return draw_rect(img, plat[0], plat[1], plat[2], plat[3], color)
 
-        # Lives
-        lives_text = self.font.render(f'Lives: {state.lives}', True, (228, 111, 111))
-        surf.blit(lives_text, (5, 5))
+        image = lax.fori_loop(0, PLATFORMS.shape[0], draw_platform, image)
 
-        
+        # POW Block
+        powb = POW_BLOCK[0]
+        image = draw_rect(image, powb[0], powb[1], powb[2], powb[3], POW_COLOR)
+        def draw_life(i, img):
+            x = 5 + i * 12  # Abstand zwischen den "Lives"-Rechtecken
+            y = 5
+            return draw_rect(img, x, y, 10, 10, (228, 111, 111))
 
-        
-        arr = pygame.surfarray.array3d(surf)
-        return arr
+        image = lax.fori_loop(0, state.lives, draw_life, image)
+
+        return jnp.transpose(image, (1, 0, 2))
 
 
 class JaxMarioBros(JaxEnvironment[MarioBrosState, MarioBrosObservation, MarioBrosInfo]):    # copied and adapted from jax_kangaroo.py ln.1671
@@ -597,6 +617,7 @@ class JaxMarioBros(JaxEnvironment[MarioBrosState, MarioBrosObservation, MarioBro
     from functools import partial
     @partial(jax.jit, static_argnums=0)
     def step(self, state: MarioBrosState, action: chex.Array) -> Tuple[MarioBrosObservation, MarioBrosState, float, bool, MarioBrosInfo]:
+
         # 1) advance player state
         new_player = player_step(state.player, action)
 
@@ -662,7 +683,7 @@ class JaxMarioBros(JaxEnvironment[MarioBrosState, MarioBrosObservation, MarioBro
         return jax.lax.cond(hit_enemy, on_hit, on_no_hit, new_player)
 
 
-# run game with: python scripts\play.py --game src\jaxatari\games\jax_mariobros.py --play
+# run game with: python scripts\play.py --game mariobros   
 if __name__ == "__main__":
     pygame.init()
     screen = pygame.display.set_mode(
