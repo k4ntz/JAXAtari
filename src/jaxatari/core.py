@@ -1,73 +1,57 @@
-import json
-import jax
+import importlib
+import inspect
 
 from jaxatari.environment import JaxEnvironment
-from jaxatari.games.jax_pong import JaxPong, PongRenderer
-from jaxatari.games.jax_seaquest import JaxSeaquest, SeaquestRenderer
-from jaxatari.games.jax_kangaroo import JaxKangaroo, KangarooRenderer
-from jaxatari.games.jax_freeway import JaxFreeway, FreewayRenderer
 
-class JAXAtari:
-    def __init__(self, game_name):
-        renderer = None
-        match game_name:
-            case "pong":
-                env = JaxPong()
-                renderer = PongRenderer()
-            case "seaquest":
-                env = JaxSeaquest()
-                renderer = SeaquestRenderer()
-            case "kangaroo":
-                env = JaxKangaroo()
-                renderer = KangarooRenderer()
-            case "freeway":
-                env = JaxFreeway()
-                renderer = FreewayRenderer()
-            case _:
-                raise NotImplementedError(f"The game {game_name} does not exist")
-        self.env: JaxEnvironment = env
-        self.renderer = renderer
 
-    def reset(self, key=None):
-        fn = jax.jit(self.env.reset)
-        obs, state = fn(key)
-        return obs, state
+# Map of game names to their module paths
+GAME_MODULES = {
+    "pong": "jaxatari.games.jax_pong",
+    "seaquest": "jaxatari.games.jax_seaquest",
+    "kangaroo": "jaxatari.games.jax_kangaroo",
+    "freeway": "jaxatari.games.jax_freeway",
+    # Add new games here
+}
 
-    def get_init_state(self):
-        fn = jax.jit(self.env.reset)
-        obs, state = fn()
-        return state
+def list_available_games() -> list[str]:
+    """Lists all available, registered games."""
+    return list(GAME_MODULES.keys())
 
-    def step_state_only(self, state, action):
-        fn = jax.jit(self.env.step)
-        obs, state, reward, done, info = fn(state, action)
-        return state
+def make(game_name: str, mode: int = 0, difficulty: int = 0) -> JaxEnvironment:
+    """
+    Creates and returns a JaxAtari game environment instance.
+    This is the main entry point for creating environments.
 
-    def step_with_render(self, state, action):
-        fn = jax.jit(self.env.step)
-        obs, state, reward, done, info = fn(state, action)
+    Args:
+        game_name: Name of the game to load (e.g., "pong").
+        mode: Game mode.
+        difficulty: Game difficulty.
 
-        fn_2 = jax.jit(self.env.render)
-        fn_2(state)
-        return state
+    Returns:
+        An instance of the specified game environment.
+    """
+    if game_name not in GAME_MODULES:
+        raise NotImplementedError(
+            f"The game '{game_name}' does not exist. Available games: {list_available_games()}"
+        )
+    
+    try:
+        # 1. Dynamically load the module
+        module = importlib.import_module(GAME_MODULES[game_name])
+        
+        # 2. Find the correct environment class within the module
+        env_class = None
+        for _, obj in inspect.getmembers(module):
+            if inspect.isclass(obj) and issubclass(obj, JaxEnvironment) and obj is not JaxEnvironment:
+                env_class = obj
+                break # Found it
+        
+        if env_class is None:
+            raise ImportError(f"No JaxEnvironment subclass found in {GAME_MODULES[game_name]}")
+        
+        # 3. Instantiate the class, passing along the arguments, and return it
+        # TODO: none of our environments use mode / difficulty yet, but we might want to add it here and in the single envs
+        return env_class()
 
-    def step(self, state, action):
-        fn = jax.jit(self.env.step)
-        return fn(state, action)
-
-    def render(self, state):
-        fn = jax.jit(self.env.render)
-        fn(state)
-
-    def save_state_as_json(self, state, path):
-        state_dict = state._asdict()
-        for item in state_dict:
-            state_dict[item] = state_dict[item].tolist()
-        with open(path, "w", encoding="utf-8") as f:
-            json.dump(state_dict, f, ensure_ascii=False, indent=4)
-
-    def load_state_from_json(self, curr_state, path):
-        with open(path, "r", encoding="utf-8") as f:
-            state = json.load(f)
-        new_state = curr_state.__class__(**state)
-        return new_state
+    except (ImportError, AttributeError) as e:
+        raise ImportError(f"Failed to load game '{game_name}': {e}") from e
