@@ -8,12 +8,9 @@ import time
 from enum import IntEnum
 from functools import partial
 from typing import Tuple, NamedTuple
-
 import chex
 import jax
 import jax.numpy as jnp
-from PIL.JpegImagePlugin import jpeg_factory
-
 import jaxatari.rendering.atraJaxis as aj
 import pygame
 from jaxatari.environment import JaxEnvironment, JAXAtariAction as Action
@@ -83,7 +80,7 @@ RADAR_MORTAR_COLOR_BLUE = (96, 162, 228, 255)
 RADAR_MORTAR_COLOR_GRAY = (155, 155, 155, 255)
 
 RADAR_MORTAR_SPRITE_ROTATION_SPEED = 15 # Change sprite frame (left, middle, right) of radar mortar every RADAR_MORTAR_SPRITE_ROTATION_SPEED frames
-RADAR_MORTAR_SPAWN_X = WIDTH            # Spawn barely outside of bounds TODO: Either change this to a lot more or use cooldown before next entitiy init
+RADAR_MORTAR_SPAWN_X = WIDTH            # Spawn barely outside of bounds
 RADAR_MORTAR_SPAWN_BOTTOM_Y = 66        # Since the radar mortar can spawn at the top or at the bottom of the screen, we define two y positions.
 RADAR_MORTAR_SPAWN_UPPER_Y = 19
 
@@ -99,8 +96,8 @@ BYTE_BAT_COLOR = (90, 169, 99, 255)
 
 BYTE_BAT_FLAP_SPEED = 16
 
-BYTE_BAT_BOTTOM_BORDER_Y = LOWER_MOUNTAINS_Y - MOUNTAIN_SIZE[1]
 BYTE_BAT_UPPER_BORDER_Y = UPPER_MOUNTAINS_Y + MOUNTAIN_SIZE[1] + 2
+BYTE_BAT_BOTTOM_BORDER_Y = LOWER_MOUNTAINS_Y - MOUNTAIN_SIZE[1]
 
 BYTE_BAT_SPAWN_X = WIDTH
 BYTE_BAT_SPAWN_Y = BYTE_BAT_UPPER_BORDER_Y + 1
@@ -109,6 +106,18 @@ BYTE_BAT_X_SPEED = 0.7
 BYTE_BAT_Y_SPEED = 1
 
 # -------- Rock muncher constants --------
+ROCK_MUNCHER_SIZE = (8, 11) # Width, Height
+
+ROCK_MUNCHER_ANIMATION_SPEED = 10
+
+ROCK_MUNCHER_UPPER_BORDER_Y = UPPER_MOUNTAINS_Y + MOUNTAIN_SIZE[1] + 5 + 10
+ROCK_MUNCHER_BOTTOM_BORDER_Y = LOWER_MOUNTAINS_Y - MOUNTAIN_SIZE[1] - 3
+
+ROCK_MUNCHER_SPAWN_X = WIDTH
+ROCK_MUNCHER_SPAWN_Y = ROCK_MUNCHER_UPPER_BORDER_Y + 1
+
+ROCK_MUNCHER_X_SPEED = 0.7
+ROCK_MUNCHER_Y_SPEED = 1
 
 # -------- Homing Missile constants --------
 
@@ -180,6 +189,8 @@ class RockMuncherState(NamedTuple):
     is_alive: jnp.bool
     x: chex.Array
     y: chex.Array
+    direction_is_up: jnp.bool
+    direction_is_left: jnp.bool
 
 class HomingMissileState(NamedTuple):
     is_in_current_event: jnp.bool
@@ -250,7 +261,6 @@ class LaserGatesState(NamedTuple):
     scroll_speed: chex.Array
     rng_key:  chex.PRNGKey
     step_counter: chex.Array
-    # TODO: fill
 
 class EntityPosition(NamedTuple):
     x: jnp.ndarray
@@ -327,7 +337,20 @@ def load_sprites():
         jnp.repeat(bbs[1][None], BYTE_BAT_FLAP_SPEED, axis=0),
         jnp.repeat(bbs[2][None], BYTE_BAT_FLAP_SPEED, axis=0),
         jnp.repeat(bbs[1][None], BYTE_BAT_FLAP_SPEED, axis=0),
-    ]) # Radar mortar rotation animation
+    ]) # Byte bat flap animation
+
+    # Rock muncher
+    rock_muncher_frame_small = aj.loadFrame(os.path.join(MODULE_DIR, "sprites/lasergates/enemies/rock_muncher/1.npy"))
+    rock_muncher_frame_mid = aj.loadFrame(os.path.join(MODULE_DIR, "sprites/lasergates/enemies/rock_muncher/2.npy"))
+    rock_muncher_frame_big = aj.loadFrame(os.path.join(MODULE_DIR, "sprites/lasergates/enemies/rock_muncher/3.npy"))
+
+    rmus = aj.pad_to_match([rock_muncher_frame_small, rock_muncher_frame_mid, rock_muncher_frame_big, rock_muncher_frame_mid])
+    rock_muncher_sprites = jnp.concatenate([
+        jnp.repeat(rmus[0][None], ROCK_MUNCHER_ANIMATION_SPEED, axis=0),
+        jnp.repeat(rmus[1][None], ROCK_MUNCHER_ANIMATION_SPEED, axis=0),
+        jnp.repeat(rmus[2][None], ROCK_MUNCHER_ANIMATION_SPEED, axis=0),
+        jnp.repeat(rmus[1][None], ROCK_MUNCHER_ANIMATION_SPEED, axis=0),
+    ]) # Rock muncher animation
 
     return (
         # Player sprites
@@ -338,6 +361,7 @@ def load_sprites():
         entity_missile,
         radar_mortar_sprites,
         byte_bat_sprites,
+        rock_muncher_sprites,
 
         # Background sprites
         upper_brown_bg,
@@ -368,6 +392,7 @@ def load_sprites():
     SPRITE_ENTITY_MISSILE,
     SPRITE_RADAR_MORTAR,
     SPRITE_BYTE_BAT,
+    SPRITE_ROCK_MUNCHER,
 
     # Background sprites
     SPRITE_UPPER_BROWN_BG,
@@ -440,8 +465,17 @@ def maybe_initialize_random_entity(entities, state):
         return entities._replace(byte_bat_state=new_byte_bat_state)
 
     def initialize_rock_muncher(entities, state):
-        new_state = entities.rock_muncher_state._replace(is_in_current_event=jnp.bool(True))
-        return entities._replace(rock_muncher_state=new_state)
+
+        initial_direction_is_up = jnp.bool(ROCK_MUNCHER_SPAWN_Y < ROCK_MUNCHER_UPPER_BORDER_Y)
+        new_rock_muncher_state = RockMuncherState(
+            is_in_current_event=jnp.bool(True),
+            is_alive= jnp.bool(True),
+            x=jnp.array(ROCK_MUNCHER_SPAWN_X).astype(entities.byte_bat_state.x.dtype),
+            y=jnp.array(ROCK_MUNCHER_SPAWN_Y).astype(entities.byte_bat_state.y.dtype),
+            direction_is_up=initial_direction_is_up,
+            direction_is_left=jnp.bool(True)
+        )
+        return entities._replace(rock_muncher_state=new_rock_muncher_state)
 
     def initialize_homing_missile(entities, state):
         new_state = entities.homing_missile_state._replace(is_in_current_event=jnp.bool(True))
@@ -475,7 +509,7 @@ def maybe_initialize_random_entity(entities, state):
     ] # All initialize functions of all entity types
 
     def initialize_random_entity(_):
-        picked_index = jax.random.randint(key_pick_type, shape=(), minval=1, maxval=2) # TODO: Change maxval to len(init_fns) when all init functions are implemented
+        picked_index = jax.random.randint(key_pick_type, shape=(), minval=2, maxval=3) # TODO: Change maxval to len(init_fns) when all init functions are implemented
         chosen_fn = lambda i: jax.lax.switch(i, init_fns, entities, state)
         return chosen_fn(picked_index) # Initialize function of randomly picked entity
 
@@ -617,8 +651,9 @@ def all_entities_step(game_state: LaserGatesState) -> Entities:
         new_direction_is_up = jnp.where(y_border_hit, jnp.logical_not(bb.direction_is_up), bb.direction_is_up)
 
         # Update positions
-        new_x = jnp.where(new_direction_is_left, bb.x - BYTE_BAT_X_SPEED, bb.x + BYTE_BAT_X_SPEED)
-        new_y = jnp.where(new_direction_is_up, bb.y - BYTE_BAT_Y_SPEED, bb.y + BYTE_BAT_Y_SPEED)
+        new_x = jnp.where(new_direction_is_left, bb.x - BYTE_BAT_X_SPEED, bb.x + BYTE_BAT_X_SPEED) # Move left or right
+        new_x = jnp.where(state.player_x == PLAYER_BOUNDS[0][1], bb.x, new_x) # Do not move in x direction if player speeds up scroll speed (is at right player bound)
+        new_y = jnp.where(new_direction_is_up, bb.y - BYTE_BAT_Y_SPEED, bb.y + BYTE_BAT_Y_SPEED) # Move up or down
 
         return bb._replace(
             is_in_current_event=True,# TODO Collision
@@ -630,7 +665,28 @@ def all_entities_step(game_state: LaserGatesState) -> Entities:
         )
 
     def rock_muncher_step(state: LaserGatesState) -> RockMuncherState:
-        return state.entities.rock_muncher_state
+        rm = state.entities.rock_muncher_state
+
+        # If one of the y borders are hit
+        y_border_hit = jnp.logical_or(rm.y <= ROCK_MUNCHER_UPPER_BORDER_Y, rm.y >= ROCK_MUNCHER_BOTTOM_BORDER_Y)
+        # If player is left of the byte bat, update only if hitting border
+        new_direction_is_left = jnp.where(y_border_hit, state.player_x + PLAYER_SIZE[0] < rm.x, rm.direction_is_left)
+        # Invert y direction if one of the two y borders is hit
+        new_direction_is_up = jnp.where(y_border_hit, jnp.logical_not(rm.direction_is_up), rm.direction_is_up)
+
+        # Update positions
+        new_x = jnp.where(new_direction_is_left, rm.x - BYTE_BAT_X_SPEED, rm.x + BYTE_BAT_X_SPEED) # Move left or right
+        new_x = jnp.where(state.player_x == PLAYER_BOUNDS[0][1], rm.x, new_x) # Do not move in x direction if player speeds up scroll speed (is at right player bound)
+        new_y = jnp.where(new_direction_is_up, rm.y - BYTE_BAT_Y_SPEED, rm.y + BYTE_BAT_Y_SPEED) # Move up or down
+
+        return rm._replace(
+            is_in_current_event=True,# TODO Collision
+            is_alive=True, # TODO Collision
+            x=new_x,
+            y=new_y,
+            direction_is_up=new_direction_is_up,
+            direction_is_left=new_direction_is_left,
+        )
 
     def homing_missile_step(state: LaserGatesState) -> HomingMissileState:
         return state.entities.homing_missile_state
@@ -1007,7 +1063,7 @@ class JaxLaserGates(JaxEnvironment[LaserGatesState, LaserGatesObservation, Laser
         return state.shields <= 0
 
     @partial(jax.jit, static_argnums=(0, ))
-    def reset(self) -> Tuple[LaserGatesObservation, LaserGatesState]:
+    def reset(self, key = 42) -> Tuple[LaserGatesObservation, LaserGatesState]:
         """Initialize game state"""
 
         initial_lower_mountains = MountainState(
@@ -1053,8 +1109,10 @@ class JaxLaserGates(JaxEnvironment[LaserGatesState, LaserGatesObservation, Laser
             rock_muncher_state=RockMuncherState(
                 is_in_current_event=jnp.bool(False),
                 is_alive=jnp.bool(False),
-                x=jnp.array(0).astype(jnp.float32),
-                y=jnp.array(0),
+                x=jnp.array(0.0).astype(jnp.float32),
+                y=jnp.array(0.0).astype(jnp.float32),
+                direction_is_up=jnp.bool(False),
+                direction_is_left=jnp.bool(False)
             ),
             homing_missile_state=HomingMissileState(
                 is_in_current_event=jnp.bool(False),
@@ -1407,7 +1465,7 @@ class LaserGatesRenderer(AtraJaxisRenderer):
         num_to_render = score_array.shape[0] - first_non_zero # number of digits we have to render
         base_x = 16 + GUI_BLACK_BACKGROUND_X_OFFSET + 52 # base x position
         number_spacing = 4 # Spacing of digits (including digit itself)
-        score_numbers_x = base_x - number_spacing * num_to_render # Subtrating offset of x position, since we want the score to be right-aligned
+        score_numbers_x = base_x - number_spacing * num_to_render # Subtracting offset of x position, since we want the score to be right-aligned
 
         raster = jnp.where(state.score > 0, # Render only if score is more than 0
                            aj.render_label_selective(
@@ -1471,6 +1529,7 @@ class LaserGatesRenderer(AtraJaxisRenderer):
 
         # Render radar mortar
         radar_mortar_frame = aj.get_sprite_frame(SPRITE_RADAR_MORTAR, state.step_counter)
+        radar_mortar_frame = jnp.where(state.entities.radar_mortar_state.y == RADAR_MORTAR_SPAWN_BOTTOM_Y, radar_mortar_frame, recolor_sprite(radar_mortar_frame, jnp.array(RADAR_MORTAR_COLOR_GRAY)))
         raster = jnp.where(jnp.logical_and(state.entities.radar_mortar_state.is_alive, state.entities.radar_mortar_state.is_in_current_event),
                            aj.render_at(
                                raster,
@@ -1506,6 +1565,19 @@ class LaserGatesRenderer(AtraJaxisRenderer):
                                state.entities.byte_bat_state.x,
                                state.entities.byte_bat_state.y,
                                byte_bat_frame,
+                           ),
+                           raster
+                           )
+
+
+        # Render rock muncher
+        rock_muncher_frame = aj.get_sprite_frame(SPRITE_ROCK_MUNCHER, state.step_counter)
+        raster = jnp.where(jnp.logical_and(state.entities.rock_muncher_state.is_alive, state.entities.rock_muncher_state.is_in_current_event),
+                           aj.render_at(
+                               raster,
+                               state.entities.rock_muncher_state.x,
+                               state.entities.rock_muncher_state.y,
+                               rock_muncher_frame,
                            ),
                            raster
                            )
@@ -1676,7 +1748,44 @@ if __name__ == "__main__":
 
         # render and update pygame
         raster = renderer_AtraJaxis.render(curr_state)
-        aj.update_pygame(screen, raster, SCALING_FACTOR, WIDTH, HEIGHT)
+
+
+        def update_pygame(pygame_screen, raster, SCALING_FACTOR=3, WIDTH=400, HEIGHT=300): #TODO Delete when import of scripts/utils is working
+            """Updates the Pygame display with the rendered raster.
+
+            Args:
+                pygame_screen: The Pygame screen surface.
+                raster: JAX array of shape (Width, Height, 3/4) containing the image data.
+                SCALING_FACTOR: Factor to scale the raster for display.
+                WIDTH: Expected width of the input raster (used for scaling calculation).
+                HEIGHT: Expected height of the input raster (used for scaling calculation).
+            """
+            pygame_screen.fill((0, 0, 0))
+
+            # Convert JAX array (W, H, C) to NumPy (W, H, C)
+            raster_np = jnp.array(raster)
+            raster_np = raster_np.astype(jnp.uint8)
+
+            # Pygame surface needs (W, H). make_surface expects (W, H, C) correctly.
+            frame_surface = pygame.surfarray.make_surface(raster_np)
+
+            # Pygame scale expects target (width, height)
+            target_width_px = int(WIDTH * SCALING_FACTOR)
+            target_height_px = int(HEIGHT * SCALING_FACTOR)
+            # Optional: Adjust scaling if raster size differs from constants
+            if raster_np.shape[0] != WIDTH or raster_np.shape[1] != HEIGHT:
+                target_width_px = int(raster_np.shape[0] * SCALING_FACTOR)
+                target_height_px = int(raster_np.shape[1] * SCALING_FACTOR)
+
+            frame_surface_scaled = pygame.transform.scale(
+                frame_surface, (target_width_px, target_height_px)
+            )
+
+            pygame_screen.blit(frame_surface_scaled, (0, 0))
+            pygame.display.flip()
+
+
+        update_pygame(screen, raster, SCALING_FACTOR, WIDTH, HEIGHT)
         counter += 1
         clock.tick(60)
 
