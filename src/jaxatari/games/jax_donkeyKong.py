@@ -62,6 +62,7 @@ MARIO_JUMPING_HEIGHT = 5.0
 MARIO_JUMPING_FRAME_DURATION = 33
 MARIO_MOVING_SPEED = 0.335 # 0.335 pixel per frame
 MARIO_WALKING_ANIMATION_CHANGE_DURATION = 5 # after 5 frames of walking to one direction, the walking animation will change
+MARIO_CLIMBING_SPEED = 1
 
 # Mario sprite
 MARIO_WALK_SPRITE_0 = 0  # same sprite as MARIO_WALK_SPRITE_2, game sprite order is (standing)->(walk_1)->(standing)->(walk_2)
@@ -108,6 +109,9 @@ BAR_5_LEFT_Y = 80
 BAR_5_RIGHT_Y = 73
 BAR_6_LEFT_Y = 52
 BAR_6_RIGHT_Y = 52
+
+# Ladder 
+LADDER_WIDTH = 4
 
 # Steps counter until next Barrel will spawn
 SPAWN_STEP_COUNTER_BARREL = 236
@@ -211,6 +215,7 @@ class DonkeyKongState(NamedTuple):
     mario_y: float  
     mario_jumping: bool   # jumping on spot
     mario_jumping_wide: bool
+    mario_climbing: bool
     start_frame_when_mario_jumped: int
     mario_view_direction: int
     mario_walk_frame_counter: int
@@ -552,6 +557,40 @@ def mario_step(state, action: chex.Array):
         )
     new_state = reset_jumping(new_state)
 
+    # mario climbs ladder
+    def mario_climbing_upwards(state):
+        new_state = state._replace(
+            mario_view_direction=MOVING_UP,
+            mario_y=state.mario_y + MARIO_CLIMBING_SPEED,
+            mario_climbing=True,
+        )
+        ladders = state.ladders # be careful, ladder is not the actual ladder positions but where barrel interact with the ladders
+
+        distance = jnp.inf
+        nearest_ladder_idx = -1
+        def search_nearest_climbable_ladder(i, (nearest_ladder_idx, distance)):
+            
+            return (nearest_ladder_idx, distance)
+
+
+        # create boolean which tells if mario can climb in its position
+        mario_can_climb = state.mario_climbing
+
+
+
+
+# Ladder_level_1 = Ladder(
+#         stage=jnp.array([5, 5, 4, 4, 4, 3, 3, 3, 2, 2, 1, 1], dtype=jnp.int32),
+#         climbable=jnp.array([False, True, True, True, False, False, True, True, True, True, False, True]),
+#         start_x=jnp.array([74, 106, 46, 66, 98, 62, 86, 106, 46, 78, 70, 106], dtype=jnp.int32),
+#         start_y=jnp.array([77, 74, 102, 104, 106, 134, 132, 130, 158, 161, 185, 185], dtype=jnp.int32),
+#         end_x=jnp.array([74, 106, 46, 66, 98, 62, 86, 106, 46, 78, 70, 106], dtype=jnp.int32),
+#         end_y=jnp.array([53, 53, 79, 78, 76, 104, 106, 108, 135, 133, 161, 164], dtype=jnp.int32),
+#     )
+
+        return state
+    new_state = mario_climbing_upwards(new_state)
+
     # change mario position in x direction if Action.right or Action.left is chosen
     def mario_walking_to_right(state):
         last_mario_move_was_moving_to_right = state.mario_view_direction != MOVING_RIGHT
@@ -694,6 +733,7 @@ class JaxDonkeyKong(JaxEnvironment[DonkeyKongState, DonkeyKongObservation, Donke
             mario_y=MARIO_START_Y,
             mario_jumping=False,
             mario_jumping_wide=False,
+            mario_climbing=False,
             start_frame_when_mario_jumped=-1,
             mario_view_direction=MOVING_RIGHT,
             mario_walk_frame_counter=0,
