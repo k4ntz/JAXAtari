@@ -1,169 +1,402 @@
 import os
 from functools import partial
-import pygame
-import chex
+from typing import NamedTuple, Tuple, List, Dict
 import jax
 import jax.numpy as jnp
-from dataclasses import dataclass
-from typing import Tuple, NamedTuple, List, Dict, Optional, Any
+import chex
 import pygame
-import jaxatari.rendering.atraJaxis as aj
-import numpy as np
+from dataclasses import dataclass
 from jaxatari.environment import JaxEnvironment, JAXAtariAction as Action
-from jaxatari.renderers import AtraJaxisRenderer
 
+
+def load_sprite_frame(path: str) -> chex.Array:
+    import numpy as np
+    if os.path.exists(path):
+        return jnp.array(np.load(path))
+    return None
 
 @dataclass
 class GameConfig:
-    """Game configuration parameters"""
+    SCREEN_WIDTH: int = 160
+    SCREEN_HEIGHT: int = 210
+    P1_START_X: int = 20
+    P2_START_X: int = 124
+    PLAYER_Y: int = 34
+    HOOK_WIDTH: int = 3
+    HOOK_HEIGHT: int = 5
+    HOOK_SPEED_H: float = 1.2
+    HOOK_SPEED_V: float = 1.0
+    REEL_SLOW_SPEED: float = 0.5
+    REEL_FAST_SPEED: float = 1.5
+    LINE_Y_START: int = 48
+    LINE_Y_END: int = 160
+    FISH_WIDTH: int = 8
+    FISH_HEIGHT: int = 7
+    FISH_SPEED: float = 0.6
+    NUM_FISH: int = 6
+    FISH_ROW_YS: Tuple[int] = (72, 88, 104, 120, 136, 152)
+    FISH_ROW_SCORES: Tuple[int] = (2, 2, 4, 4, 6, 6)
+    SHARK_WIDTH: int = 16
+    SHARK_HEIGHT: int = 7
+    SHARK_SPEED: float = 1.0
+    SHARK_Y: int = 52
 
-    screen_width: int = 160
-    screen_height: int = 210
-    shark_speeds: List[float] = None
-    fish_speed: float = 1
-    fish_x: List[int] = None
-    fish_y: List[int] = None
-    top_border: int = 30
-    bottom_border: int = 180
-    num_rows: int = 6
-    row_spacing: int = 16
-    row_borders: List[int] = None
 
 
-    def __post_init__(self):
-        if self.row_borders is None:
-            self.row_borders = [
-                self.top_border + i * self.row_spacing for i in range(self.num_rows)
-            ]
+class PlayerState(NamedTuple):
+    hook_x: chex.Array
+    hook_y: chex.Array
+    score: chex.Array
+    hook_state: chex.Array
+    hooked_fish_idx: chex.Array
 
 
 class GameState(NamedTuple):
-        """Game state representation"""
-        player1_rod_x: chex.Array
-        player1_rod_y: chex.Array
-        player2_rod_x: chex.Array
-        player2_rod_y: chex.Array
-        score: chex.Array
-        shark_x: chex.Array
-        fish_x: chex.Array
-        time = chex.Array
+    p1: PlayerState
+    p2: PlayerState
+    fish_positions: chex.Array
+    fish_directions: chex.Array
+    fish_active: chex.Array
+    shark_x: chex.Array
+    shark_dir: chex.Array
+    reeling_priority: chex.Array
+    time: chex.Array
+    game_over: chex.Array
+    key: jax.random.PRNGKey
 
-class EntityPositions(NamedTuple):
-    """Positions of entities in the game"""
-    x: jnp.ndarray
-    y: jnp.ndarray
-    width: jnp.ndarray
-    height: jnp.ndarray
+
 
 class FishingDerbyObservation(NamedTuple):
-    """Observation structure for Fishing Derby"""
-    player1_rod: EntityPositions
-    player2_rod: EntityPositions
-    shark: EntityPositions
-    fish: EntityPositions
-    score: jnp.ndarray
+    player1_hook_xy: chex.Array
+    fish_xy: chex.Array
+    shark_x: chex.Array
+    score: chex.Array
+
 
 class FishingDerbyInfo(NamedTuple):
-    time: jnp.ndarray
+    p1_score: int
+    p2_score: int
+    time: int
 
-class FishingDerby(JaxEnvironment[GameState, FishingDerbyObservation, FishingDerbyInfo]):
+
+# Game Logic
+class FishingDerby(JaxEnvironment):
     def __init__(self):
-        super().__init__()
+        super().__init__()  # Initialize the parent class
         self.config = GameConfig()
-        self.state = self.reset()
 
-    def reset(self) -> Tuple[FishingDerbyObservation, GameState]:
+    @partial(jax.jit, static_argnums=(0,))
+    def reset(self, key: jax.random.PRNGKey) -> Tuple[FishingDerbyObservation, GameState]:
+        key, fish_key = jax.random.split(key)
 
-        for row in range(self.config.num_rows):
-            row_y = self.config.fish_y[row]
+        p1_state = PlayerState(
+            hook_x=jnp.array(self.config.P1_START_X + 8.0), hook_y=jnp.array(float(self.config.LINE_Y_START)),
+            score=jnp.array(0), hook_state=jnp.array(0), hooked_fish_idx=jnp.array(-1, dtype=jnp.int32)
+        )
+        p2_state = PlayerState(
+            hook_x=jnp.array(self.config.P2_START_X + 8.0), hook_y=jnp.array(float(self.config.LINE_Y_START)),
+            score=jnp.array(0), hook_state=jnp.array(0), hooked_fish_idx=jnp.array(-1, dtype=jnp.int32)
+        )
+
+        fish_x = jax.random.uniform(fish_key, (self.config.NUM_FISH,), minval=10.0,
+                                    maxval=self.config.SCREEN_WIDTH - 20.0)
+        fish_y = jnp.array(self.config.FISH_ROW_YS, dtype=jnp.float32)
 
         state = GameState(
-            player1_rod_x=jnp.array(0.0),
-            player1_rod_y=jnp.array(0.0),
-            player2_rod_x=jnp.array(0.0),
-            player2_rod_y=jnp.array(0.0),
-            score=jnp.array([0, 0]),
-            shark_x=jnp.array([self.config.screen_width // 2]),
-            fish_x=jnp.array(self.config.fish_x or [self.config.screen_width // 2]),
+            p1=p1_state, p2=p2_state, fish_positions=jnp.stack([fish_x, fish_y], axis=1),
+            fish_directions=jax.random.choice(key, jnp.array([-1.0, 1.0]), (self.config.NUM_FISH,)),
+            fish_active=jnp.ones(self.config.NUM_FISH, dtype=jnp.bool_),
+            shark_x=jnp.array(self.config.SCREEN_WIDTH / 2.0), shark_dir=jnp.array(1.0),
+            reeling_priority=jnp.array(-1), time=jnp.array(0), game_over=jnp.array(False), key=key
         )
         return self._get_observation(state), state
-class FishingDerbyRenderer(AtraJaxisRenderer):
-    def __init__(self):
-        super().__init__()
+
+
+    def _get_observation(self, state: GameState) -> FishingDerbyObservation:
+        return FishingDerbyObservation(
+            player1_hook_xy=jnp.array([state.p1.hook_x, state.p1.hook_y]),
+            fish_xy=state.fish_positions,
+            shark_x=state.shark_x,
+            score=state.p1.score
+        )
+
+    def _get_reward(self, old_state: GameState, new_state: GameState) -> float:
+        return new_state.p1.score - old_state.p1.score
+
+    def _get_done(self, state: GameState) -> bool:
+        return state.game_over
+
+    def _get_info(self, state: GameState) -> FishingDerbyInfo:
+        return FishingDerbyInfo(p1_score=state.p1.score, p2_score=state.p2.score, time=state.time)
+
+    @partial(jax.jit, static_argnums=(0,))
+    def step(self, state: GameState, action: int) -> Tuple[
+        FishingDerbyObservation, GameState, float, bool, FishingDerbyInfo]:
+        """Processes one frame of the game and returns the full tuple."""
+        # This function performs the state transition
+        new_state = self._step_logic(state, action)
+
+        # These functions interpret the state transition
+        observation = self._get_observation(new_state)
+        reward = self._get_reward(state, new_state)
+        done = self._get_done(new_state)
+        info = self._get_info(new_state)
+
+        return observation, new_state, reward, done, info
+
+    def _step_logic(self, state: GameState, p1_action: int) -> GameState:
+        """The core logic for a single game step, returning only the new state."""
+        cfg = self.config
+
+        # --- Update Autonomous Entities (Fish & Shark) ---
+        new_fish_x = state.fish_positions[:, 0] + state.fish_directions * cfg.FISH_SPEED
+        new_fish_dirs = jnp.where((new_fish_x < 0) | (new_fish_x > cfg.SCREEN_WIDTH - cfg.FISH_WIDTH),
+                                  -state.fish_directions, state.fish_directions)
+        new_fish_x = jnp.clip(new_fish_x, 0, cfg.SCREEN_WIDTH - cfg.FISH_WIDTH)
+        new_fish_pos = state.fish_positions.at[:, 0].set(new_fish_x)
+
+        new_shark_x = state.shark_x + state.shark_dir * cfg.SHARK_SPEED
+        new_shark_dir = jnp.where((new_shark_x < 0) | (new_shark_x > cfg.SCREEN_WIDTH - cfg.SHARK_WIDTH),
+                                  -state.shark_dir, state.shark_dir)
+        new_shark_x = jnp.clip(new_shark_x, 0, cfg.SCREEN_WIDTH - cfg.SHARK_WIDTH)
+
+        # --- Process Player 1 Input & State ---
+        p1 = state.p1
+        dx = jnp.where(action == Action.RIGHT, cfg.HOOK_SPEED_H,
+                       jnp.where(action == Action.LEFT, -cfg.HOOK_SPEED_H, 0.0))
+        p1_hook_x = jnp.clip(p1.hook_x + dx, 0, cfg.SCREEN_WIDTH / 2 - cfg.HOOK_WIDTH)
+        dy = jnp.where(action == Action.DOWN, cfg.HOOK_SPEED_V, jnp.where(action == Action.UP, -cfg.HOOK_SPEED_V, 0.0))
+        p1_hook_y = jnp.where(p1.hook_state == 0, jnp.clip(p1.hook_y + dy, cfg.LINE_Y_START, cfg.LINE_Y_END), p1.hook_y)
+
+        # --- Collision and Game Logic ---
+        fish_active, reeling_priority = state.fish_active, state.reeling_priority
+        can_hook = (p1.hook_state == 0)
+        hook_collides_fish = (jnp.abs(new_fish_pos[:, 0] - p1_hook_x) < cfg.FISH_WIDTH) & (
+                    jnp.abs(new_fish_pos[:, 1] - p1_hook_y) < cfg.FISH_HEIGHT)
+        valid_hook_targets = can_hook & fish_active & hook_collides_fish
+
+        hooked_fish_idx, did_hook_fish = jnp.argmax(valid_hook_targets), jnp.any(valid_hook_targets)
+
+        p1_hook_state = jnp.where(did_hook_fish, 1, p1.hook_state)
+        p1_hooked_fish_idx = jnp.where(did_hook_fish, hooked_fish_idx, p1.hooked_fish_idx)
+        fish_active = fish_active.at[hooked_fish_idx].set(jnp.where(did_hook_fish, False, fish_active[hooked_fish_idx]))
+        reeling_priority = jnp.where(did_hook_fish & (reeling_priority == -1), 0, reeling_priority)
+
+        can_reel_fast = (p1_action == Action.FIRE) & (p1_hook_state == 1) & (
+                    (reeling_priority == -1) | (reeling_priority == 0))
+        p1_hook_state = jnp.where(can_reel_fast, 2, p1_hook_state)
+        reeling_priority = jnp.where(can_reel_fast, 0, reeling_priority)
+
+        reel_speed = jnp.where(p1_hook_state == 2, cfg.REEL_FAST_SPEED, cfg.REEL_SLOW_SPEED)
+        p1_hook_y = jnp.where(p1_hook_state > 0, p1_hook_y - reel_speed, p1_hook_y)
+
+        hooked_fish_pos = jnp.array([p1_hook_x, p1_hook_y])
+        new_fish_pos = new_fish_pos.at[p1_hooked_fish_idx].set(
+            jnp.where(p1_hook_state > 0, hooked_fish_pos, new_fish_pos[p1_hooked_fish_idx]))
+
+        p1_score, key = p1.score, state.key
+        shark_collides = (p1_hook_state > 0) & (jnp.abs(p1_hook_x - new_shark_x) < cfg.SHARK_WIDTH) & (
+                    jnp.abs(p1_hook_y - cfg.SHARK_Y) < cfg.SHARK_HEIGHT)
+        scored_fish = (p1_hook_state > 0) & (p1_hook_y <= cfg.LINE_Y_START)
+        reset_hook = shark_collides | scored_fish
+
+        fish_scores = jnp.array(cfg.FISH_ROW_SCORES)
+        p1_score += jnp.where(scored_fish, fish_scores[p1_hooked_fish_idx], 0)
+
+        def respawn_fish_fn(all_fish_pos, idx_to_respawn, respawn_key):
+            new_x = jax.random.uniform(respawn_key, minval=10.0, maxval=cfg.SCREEN_WIDTH - 20.0)
+            return all_fish_pos.at[idx_to_respawn, 0].set(new_x)
+
+        key, respawn_key = jax.random.split(key)
+        new_fish_pos = jax.lax.cond(reset_hook, lambda: respawn_fish_fn(new_fish_pos, p1_hooked_fish_idx, respawn_key),
+                                    lambda: new_fish_pos)
+
+        fish_active = jnp.where(reset_hook, fish_active.at[p1_hooked_fish_idx].set(True), fish_active)
+        reeling_priority = jnp.where(reset_hook & (reeling_priority == 0), -1, reeling_priority)
+        p1_hook_state = jnp.where(reset_hook, 0, p1_hook_state)
+        p1_hooked_fish_idx = jnp.where(reset_hook, -1, p1_hooked_fish_idx)
+
+        game_over = (p1_score >= 99) | (state.p2.score >= 99)
+
+        return GameState(
+            p1=PlayerState(p1_hook_x, p1_hook_y, p1_score, p1_hook_state, p1_hooked_fish_idx), p2=state.p2,
+            fish_positions=new_fish_pos, fish_directions=new_fish_dirs, fish_active=fish_active,
+            shark_x=new_shark_x, shark_dir=new_shark_dir, reeling_priority=reeling_priority,
+            time=state.time + 1, game_over=game_over, key=key
+        )
+
+
+
+class FishingDerbyRenderer:
+    def __init__(self, config: GameConfig):
+        self.config = config
+        self.required_sprites = ['background', 'player1', 'player2', 'shark1', 'shark2', 'fish1', 'fish2']
         self.sprites = self._load_sprites()
-        self.game_config = GameConfig()
 
-    def load_sprites(self):
-        MODULE_DIR = os.path.dirname(os.path.abspath(__file__))
-        # Load sprites
-        bg = aj.loadFrame(os.path.join(MODULE_DIR, "sprites/fishingderby/background.npy"))
-        sky = aj.loadFrame(os.path.join(MODULE_DIR, "sprites/fishingderby/sky.npy"))
-        pl1 = aj.loadFrame(os.path.join(MODULE_DIR, "sprites/fishingderby/player1.npy"))
-        pl2 = aj.loadFrame(os.path.join(MODULE_DIR, "sprites/fishingderby/player2.npy"))
-        shark1 = aj.loadFrame(os.path.join(MODULE_DIR, "sprites/fishingderby/shark1.npy"))
-        shark2 = aj.loadFrame(os.path.join(MODULE_DIR, "sprites/fishingderby/shark2.npy"))
-        fish1 = aj.loadFrame(os.path.join(MODULE_DIR, "sprites/fishingderby/fish1.npy"))
-        fish2 = aj.loadFrame(os.path.join(MODULE_DIR, "sprites/fishingderby/fish2.npy"))
+    @staticmethod
+    def _pad_sprite_to_size(sprite, target_h, target_w):
+        h, w, c = sprite.shape
+        pad_h = target_h - h
+        pad_w = target_w - w
+        return jnp.pad(sprite, ((0, pad_h), (0, pad_w), (0, 0)), mode='constant')
 
-        # padding sprites to match dimensions
-        shark_sub_sprites = aj.pad_to_match([shark1, shark2])
-        fish_sub_sprites = aj.pad_to_match([fish1, fish2])
+    def _load_sprites(self):
+        sprites = {}
+        sprite_path = os.path.join("sprites", "fishingderby")
 
-        SPRITE_BG = jnp.expand_dims(bg, axis=0)
+        for name in self.required_sprites:
+            sprite_data = load_sprite_frame(os.path.join(sprite_path, f'{name}.npy'))
+            if sprite_data is not None:
+                sprites[name] = sprite_data
 
-        SPRITE_SKY = jnp.expand_dims(sky, axis=0)
+        digit_sprites_list = [load_sprite_frame(os.path.join(sprite_path, f'score_{i}.npy')) for i in range(10)]
+        if any(s is None for s in digit_sprites_list):
+            missing_idx = [i for i, s in enumerate(digit_sprites_list) if s is None]
+            raise FileNotFoundError(f"Missing score digit sprites: {[f'score_{i}.npy' for i in missing_idx]}")
 
-        # fish sprites (animation frames)
-        SPRITE_FISH = jnp.concatenate(
-            [
-                jnp.repeat(fish_sub_sprites[0][None], 4, axis=0),
-                jnp.repeat(fish_sub_sprites[1][None], 4, axis=0),
-            ]
-        )
-        # shark sprites (animation frames)
-        SPRITE_SHARK = jnp.concatenate(
-            [
-                jnp.repeat(shark_sub_sprites[0][None], 4, axis=0),
-                jnp.repeat(shark_sub_sprites[1][None], 4, axis=0),
-            ]
-        )
+        max_h_digit = max(s.shape[0] for s in digit_sprites_list)
+        max_w_digit = max(s.shape[1] for s in digit_sprites_list)
+        padded_digits = [self._pad_sprite_to_size(s, max_h_digit, max_w_digit) for s in digit_sprites_list]
+        sprites['score_digits'] = jnp.stack(padded_digits)
 
-        DIGITS = aj.load_and_pad_digits(os.path.join(MODULE_DIR, "sprites/fishingderby/digits/{}.npy"))
+        for name in self.required_sprites:
+            if name not in sprites:
+                raise FileNotFoundError(f"Sprite file not found: '{name}.npy'. Please check '{sprite_path}/'.")
 
-        return (
-            SPRITE_BG,
-            SPRITE_SKY,
-            SPRITE_FISH,
-            SPRITE_SHARK,
-            DIGITS
-        )
+        f1, f2 = sprites['fish1'], sprites['fish2']
+        max_h_fish, max_w_fish = jnp.maximum(f1.shape[0], f2.shape[0]), jnp.maximum(f1.shape[1], f2.shape[1])
+        sprites['fish1'] = self._pad_sprite_to_size(f1, max_h_fish, max_w_fish)
+        sprites['fish2'] = self._pad_sprite_to_size(f2, max_h_fish, max_w_fish)
 
-    # Load sprites once at module level
-    (
-        SPRITE_BG,
-        SPRITE_SKY,
-        SPRITE_FISH,
-        SPRITE_SHARK,
-        DIGITS
-    ) = load_sprites()
+        s1, s2 = sprites['shark1'], sprites['shark2']
+        max_h_shark, max_w_shark = jnp.maximum(s1.shape[0], s2.shape[0]), jnp.maximum(s1.shape[1], s2.shape[1])
+        sprites['shark1'] = self._pad_sprite_to_size(s1, max_h_shark, max_w_shark)
+        sprites['shark2'] = self._pad_sprite_to_size(s2, max_h_shark, max_w_shark)
+        return sprites
+
+    @partial(jax.jit, static_argnums=(0,))
+    def render(self, state: GameState) -> chex.Array:
+        cfg = self.config
+        raster = jnp.zeros((cfg.SCREEN_HEIGHT, cfg.SCREEN_WIDTH, 3), dtype=jnp.uint8)
+        raster = self._render_at(raster, 0, 0, self.sprites['background'])
+        raster = self._render_at(raster, cfg.P1_START_X, cfg.PLAYER_Y, self.sprites['player1'])
+        raster = self._render_at(raster, cfg.P2_START_X, cfg.PLAYER_Y, self.sprites['player2'])
+        raster = self._render_line(raster, cfg.P1_START_X + 10, cfg.PLAYER_Y + 10, state.p1.hook_x, state.p1.hook_y)
+        raster = self._render_line(raster, cfg.P2_START_X + 2, cfg.PLAYER_Y + 10, state.p2.hook_x, state.p2.hook_y)
+        shark_frame = jax.lax.cond((state.time // 8) % 2 == 0, lambda: self.sprites['shark1'],
+                                   lambda: self.sprites['shark2'])
+        raster = self._render_at(raster, state.shark_x, cfg.SHARK_Y, shark_frame, flip_h=state.shark_dir > 0)
+        fish_frame = jax.lax.cond((state.time // 10) % 2 == 0, lambda: self.sprites['fish1'],
+                                  lambda: self.sprites['fish2'])
+
+        def draw_one_fish(i, r):
+            pos, direction, active = state.fish_positions[i], state.fish_directions[i], state.fish_active[i]
+            return jax.lax.cond(active,
+                                lambda r_in: self._render_at(r_in, pos[0], pos[1], fish_frame, flip_h=direction > 0),
+                                lambda r_in: r_in, r)
+
+        raster = jax.lax.fori_loop(0, cfg.NUM_FISH, draw_one_fish, raster)
+
+        def draw_hooked(p_state, r):
+            return jax.lax.cond(p_state.hook_state > 0,
+                                lambda r_in: self._render_at(r_in, p_state.hook_x, p_state.hook_y, fish_frame),
+                                lambda r_in: r_in, r)
+
+        raster = draw_hooked(state.p1, raster)
+        raster = draw_hooked(state.p2, raster)
+        raster = self._render_score(raster, state.p1.score, 50, 20)
+        raster = self._render_score(raster, state.p2.score, 100, 20)
+        return raster
+
+    @staticmethod
+    @jax.jit
+    def _render_at(raster, x, y, sprite, flip_h=False):
+        sprite_rgb = sprite[:, :, :3]
+        x, y = jnp.round(x).astype(jnp.int32), jnp.round(y).astype(jnp.int32)
+        sprite_to_draw = jnp.where(flip_h, jnp.fliplr(sprite_rgb), sprite_rgb)
+        return jax.lax.dynamic_update_slice(raster, sprite_to_draw, (y, x, 0))
+
+    @staticmethod
+    @jax.jit
+    def _render_line(raster, x0, y0, x1, y1, color=(0, 0, 0)):
+        x0, y0, x1, y1 = jnp.round(jnp.array([x0, y0, x1, y1])).astype(jnp.int32)
+        dx, sx, dy, sy = jnp.abs(x1 - x0), jnp.sign(x1 - x0), -jnp.abs(y1 - y0), jnp.sign(y1 - y0)
+        err = dx + dy
+        color_uint8 = jnp.array(color, dtype=jnp.uint8)
+
+        def loop_body(carry):
+            x, y, r, e = carry
+            safe_y, safe_x = jnp.clip(y, 0, r.shape[0] - 1), jnp.clip(x, 0, r.shape[1] - 1)
+            r = r.at[safe_y, safe_x, :].set(color_uint8)
+            e2 = 2 * e
+            e_new = jnp.where(e2 >= dy, e + dy, e)
+            x_new = jnp.where(e2 >= dy, x + sx, x)
+            e_final = jnp.where(e2 <= dx, e_new + dx, e_new)
+            y_new = jnp.where(e2 <= dx, y + sy, y)
+            return x_new, y_new, r, e_final
+
+        def loop_cond(carry):
+            return ~((carry[0] == x1) & (carry[1] == y1))
+
+        _, _, raster, _ = jax.lax.while_loop(loop_cond, loop_body, (x0, y0, raster, err))
+        return raster
+
+    def _render_score(self, raster, score, x, y):
+        s1, s0 = score // 10, score % 10
+        all_digits_sheet = self.sprites['score_digits']
+        digit1_sprite, digit0_sprite = all_digits_sheet[s1], all_digits_sheet[s0]
+        raster = self._render_at(raster, x, y, digit1_sprite)
+        raster = self._render_at(raster, x + 7, y, digit0_sprite)
+        return raster
 
 
 if __name__ == "__main__":
-    # Initialize game and renderer
-    game = FishingDerby()
     pygame.init()
-    screen = pygame.display.set_mode((game.config.screen_width, game.config.screen_height))
-    renderer_Atrajaxis = FishingDerbyRenderer()
 
-    # Get jitted functions
-    jitted_step = jax.jit(game.step)
-    jitted_reset = jax.jit(game.reset)
+    env = FishingDerby()
+    renderer = FishingDerbyRenderer(env.config)
+    jitted_step = jax.jit(env.step)
 
-    curr_obs, curr_state = jitted_reset()
+    scaling = 4
+    w, h = env.config.SCREEN_WIDTH, env.config.SCREEN_HEIGHT
+    screen = pygame.display.set_mode((w * scaling, h * scaling))
+    pygame.display.set_caption("JAX Fishing Derby (Standalone)")
+    clock = pygame.time.Clock()
 
-    # Game loop with rendering
+    main_key = jax.random.PRNGKey(1980)
+    obs, state = env.reset(main_key)
+
+    key_to_action = {
+        pygame.K_SPACE: Action.FIRE, pygame.K_w: Action.UP, pygame.K_UP: Action.UP,
+        pygame.K_d: Action.RIGHT, pygame.K_RIGHT: Action.RIGHT, pygame.K_a: Action.LEFT,
+        pygame.K_LEFT: Action.LEFT, pygame.K_s: Action.DOWN, pygame.K_DOWN: Action.DOWN,
+    }
+
     running = True
-    frame_by_frame = False
-    frameskip = 1
-    counter = 1
+    while running:
+        action = Action.NOOP
+        for event in pygame.event.get():
+            if event.type == pygame.QUIT: running = False
 
+        pressed_keys = pygame.key.get_pressed()
+        for key, act in key_to_action.items():
+            if pressed_keys[key]:
+                action = act;
+                break
+
+        obs, state, reward, done, info = jitted_step(state, action)
+
+        if done:
+            print(f"Game Over! Info: {info}. Resetting.")
+            obs, state = env.reset(state.key)
+
+        frame = renderer.render(state)
+
+        surf = pygame.surfarray.make_surface(jnp.transpose(frame, (1, 0, 2)))
+        scaled_surf = pygame.transform.scale(surf, (w * scaling, h * scaling))
+        screen.blit(scaled_surf, (0, 0))
+        pygame.display.flip()
+
+        clock.tick(60)
+
+    pygame.quit()
