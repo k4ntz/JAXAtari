@@ -114,7 +114,6 @@ class AtlantisState(NamedTuple):
     number_enemies_wave_remaining: chex.Array  # number of remaining enemies per wave
     wave_end_cooldown_remaining: chex.Array
     installations: chex.Array # stores boolean alive
-    plasma_x: chex.Array # X position of the plasma. Y position is actually not that relevant
     # Plasma is deactivated once a cannon or an installment is hit, after that the enemy
     # should reach the end of the screen until it is reactivated. See _refresh_plasma_active for more info.
     plasma_active: chex.Array
@@ -402,7 +401,6 @@ class JaxAtlantis(JaxEnvironment[AtlantisState, AtlantisObservation, AtlantisInf
             number_enemies_wave_remaining=jnp.array(self.config.wave_start_enemy_count, dtype=jnp.int32),
             wave_end_cooldown_remaining=jnp.array(0, dtype=jnp.int32),
             installations= start_installations,
-            plasma_x=jnp.array(-1, dtype=jnp.int32),
             plasma_active=jnp.ones((self.config.max_enemies,), dtype=jnp.bool_),
         )
 
@@ -950,18 +948,6 @@ class JaxAtlantis(JaxEnvironment[AtlantisState, AtlantisObservation, AtlantisInf
         kill_inst = shooter_fired & any_hit & (~state.command_post_alive) & inst_alive
 
         def _handle_hit(s: AtlantisState) -> AtlantisState:
-            # debug info
-            #debug.print("[DEBUG] Targets = {px}", px=state.plasma_active)
-            #debug.print("[DEBUG] Enemies X = {px}", px=state.enemies[:, 0])
-            #debug.print("[DEBUG] Enemies Y = {px}", px=state.enemies[:, 1])
-            #debug.print("[DEBUG] Targets = {px}", px=targets)
-            #debug.print("[DEBUG] Inst = {px}", px=inst_centers)
-
-            #debug.print(
-                #"PLASMA HIT!  hit_index={hit}  inst_idx={ii}  cmd_alive_before={cmd}  shooter_x={sx}  target_x={tx}",
-                #hit=hit_index, ii=inst_idx, cmd=state.command_post_alive, sx=plasma_x, tx=targets[hit_index]
-            #)
-
             # a) knock out command post
             s1 = jax.lax.cond(
                 kill_cmd,
