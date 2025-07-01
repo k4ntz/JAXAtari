@@ -331,7 +331,8 @@ class Renderer_AtraJaxis(AtraJaxisRenderer):
             can_shoot = active & state.plasma_active[i]
             on_lane4 = lane == 3
 
-            # beam center X to prevent killing command center or installment on first pixel when enemy aligns the installment
+            # Draw the plasma somewhere in between the enemies. The 10 pixel was chosen because it looked out as the
+            # best position after multiple tries for drawing plasma which suits all enemies.
             half_w = jnp.minimum(cfg.enemy_width[i] // 2, 10).astype(jnp.int32)
             ex = state.enemies[i, 0].astype(jnp.int32) + half_w
 
@@ -889,18 +890,31 @@ class JaxAtlantis(JaxEnvironment[AtlantisState, AtlantisObservation, AtlantisInf
     def _cooldown_finished(self, state: AtlantisState) -> Array:
         return state.wave_end_cooldown_remaining == 0
 
-    """
-        Handle an incoming plasma beam from lane-4 enemies:
-        • Cannons left and right are invulnerable and can never be knocked out. Only center command can be shot down.
-        • On the very first successful alignment of the beam with the center command, it is eliminated.
-        • After center command is dead, any subsequent beam that lines up with one of the remaining installments is shot
-        down. The beam that causes a knockout is then disabled until that enemy walks off‐screen.
-        """
     @partial(jax.jit, static_argnums=0)
     def _handle_plasma_hit(self, state: AtlantisState) -> AtlantisState:
+
+        """
+        Handle an incoming plasma beam from lane-4 enemies.
+
+        This checks whether any active lane-4 enemy fires a beam that overlaps
+        the central command post or one of the six installations, and if so,
+        knocks it out and disables that enemy’s plasma until it leaves the screen.
+
+        Steps:
+          1. Identify which lane-4 enemies are active and still allowed to fire.
+          2. Compute each shooter’s current beam X (at the enemy’s sprite center).
+          3. Reconstruct the beam’s previous X by subtracting its dx (to cover high-speed passes).
+          4. Form the inclusive interval [lo, hi] between old and new beam positions.
+          5. Build the list of target X-coordinates: central command post + installations.
+          6. Check which installment (if any) lies within [lo, hi].
+          7. If the center post is still alive and is hit first, knock it out.
+          8. Otherwise, if the center post is already down, knock out the installation hit.
+          9. Disable this shooter’s plasma until it goes off-screen.
+
+        """
         cfg = self.config
 
-        # Which lane-4 enemies can fire this frame?
+        # Find out enemy in 4th lane which currently is using plasma
         is_lane4 = (state.enemies[:, 4] == 3) & (state.enemies[:, 5] == 1)
         can_fire = is_lane4 & state.plasma_active
         shooter_idx = jnp.argmax(can_fire)
@@ -909,24 +923,20 @@ class JaxAtlantis(JaxEnvironment[AtlantisState, AtlantisObservation, AtlantisInf
         type_ids = state.enemies[:, 3].astype(jnp.int32)
         half_w = cfg.enemy_width[type_ids] // 2
 
-        # beam X is enemy_x + half_w, regardless of direction;
+        # To avoid that the enemy knocks out the center post or installment at first pixel, we align rather the enemy center
         centers = state.enemies[:, 0] + half_w
 
-        # reconstruct old beam‐X by subtracting dx
+        # We try to simulate the beams last position. It is important because at higher speeds, we cannot have a exact
+        # alignment of central canon and installment for knocking them put
         old_centers = centers - state.enemies[:, 2]
-
-        #debug.print(" Old center:  {old} New center: {new}", old=old_centers[0], new=centers[0])
-
-        # Since speed of plasma can change, we need to find a range to check if the canon / installment should
-        # be hit
         beam_old = jnp.where(can_fire, old_centers, -1)
         beam_new = jnp.where(can_fire, centers, -1)
 
-        # now find the maximum (i.e. the only) beam among shooters
+        # Now find the maximum (i.e. the only) beam among shooters
         beam_old = jnp.max(beam_old)  # -1 if none
         beam_new = jnp.max(beam_new)
 
-        # define an inclusive interval [lo, hi]
+        # Define an inclusive interval [lo, hi].
         lo = jnp.minimum(beam_old, beam_new)
         hi = jnp.maximum(beam_old, beam_new)
 
