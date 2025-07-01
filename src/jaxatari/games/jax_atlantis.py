@@ -891,30 +891,6 @@ class JaxAtlantis(JaxEnvironment[AtlantisState, AtlantisObservation, AtlantisInf
     def _cooldown_finished(self, state: AtlantisState) -> Array:
         return state.wave_end_cooldown_remaining == 0
 
-    @partial(jax.jit, static_argnums=(0,))
-    def _update_plasma_x_position(self, state: AtlantisState) -> AtlantisState:
-        cfg = self.config
-
-        # 1) Which slots are active enemies in lane 4?
-        is_lane4_active = (state.enemies[:, 4] == 3) & (state.enemies[:, 5] == 1)
-
-        # 2) Compute each slot’s beam‐X (center of enemy)
-        type_ids = state.enemies[:, 3].astype(jnp.int32)
-        centers   = state.enemies[:, 0] + (cfg.enemy_width[type_ids] // 2)
-
-        # 3) Zero out non‐lane4 slots by mapping them to -1
-        lane4_centers = jnp.where(is_lane4_active, centers, -1)
-
-        # 4) Pick the one true X (or -1 if none)
-        raw_x = jnp.max(lane4_centers)
-
-        # 5) Clamp into [1, screen_width]
-        clamped_x = jnp.clip(raw_x, 1, cfg.screen_width) #Prevent X from going negative
-
-        #debug.print("[DEBUG] plasma_x = {px}", px=clamped_x)
-
-        return state._replace(plasma_x=clamped_x)
-
     """
         Handle an incoming plasma beam from lane-4 enemies:
         • Cannons left and right are invulnerable and can never be knocked out. Only center command can be shot down.
@@ -932,8 +908,11 @@ class JaxAtlantis(JaxEnvironment[AtlantisState, AtlantisObservation, AtlantisInf
         shooter_idx = jnp.argmax(can_fire)
         shooter_fired = jnp.any(can_fire)
 
-        # compute the center‐offset for the beam. 10 pixel puffer so that enemies donot kill on first pixel
-        centers = state.enemies[:, 0] + 10
+        type_ids = state.enemies[:, 3].astype(jnp.int32)
+        half_w = cfg.enemy_width[type_ids] // 2
+
+        # beam X is enemy_x + half_w, regardless of direction;
+        centers = state.enemies[:, 0] + half_w
 
         # reconstruct old beam‐X by subtracting dx
         old_centers = centers - state.enemies[:, 2]
@@ -1061,7 +1040,6 @@ class JaxAtlantis(JaxEnvironment[AtlantisState, AtlantisObservation, AtlantisInf
             s = self._move_bullets(s)
             s = self._move_enemies(s)
             s = self._check_bullet_enemy_collision(s)
-            s = self._update_plasma_x_position(s)
             s = self._refresh_plasma_active(s)
             s = self._handle_plasma_hit(s)
 
