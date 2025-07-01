@@ -1,13 +1,15 @@
 import os
 from functools import partial
 from typing import NamedTuple, Tuple, List, Dict
+
+import aj
 import jax
 import jax.numpy as jnp
 import chex
 import pygame
 from dataclasses import dataclass
 from jaxatari.environment import JaxEnvironment, JAXAtariAction as Action
-
+import jaxatari.rendering.atraJaxis as aj
 
 def load_sprite_frame(path: str) -> chex.Array:
     import numpy as np
@@ -24,7 +26,7 @@ class GameConfig:
     SKY_COLOR: Tuple[int, int, int] = (100, 149, 237)
     WATER_COLOR: Tuple[int, int, int] = (60, 60, 160)
     WATER_Y_START: int = 64
-
+    RESET:int  = 18
     # Player and Hook
     P1_START_X: int = 20
     P2_START_X: int = 124
@@ -97,7 +99,7 @@ class FishingDerby(JaxEnvironment):
         self.config = GameConfig()
 
     @partial(jax.jit, static_argnums=(0,))
-    def reset(self, key: jax.random.PRNGKey) -> Tuple[FishingDerbyObservation, GameState]:
+    def reset(self, key: jax.random.PRNGKey = jax.random.PRNGKey(10)) -> Tuple[FishingDerbyObservation, GameState, ]:
         key, fish_key = jax.random.split(key)
 
         p1_state = PlayerState(
@@ -417,54 +419,107 @@ class FishingDerbyRenderer:
         raster = self._render_at(raster, x + 7, y, digit0_sprite)
         return raster
 
+def get_human_action() -> chex.Array:
+    keys = pygame.key.get_pressed()
+    up = keys[pygame.K_w] or keys[pygame.K_UP]
+    down = keys[pygame.K_s] or keys[pygame.K_DOWN]
+    left = keys[pygame.K_a] or keys[pygame.K_LEFT]
+    right = keys[pygame.K_d] or keys[pygame.K_RIGHT]
+    fire = keys[pygame.K_SPACE]
+    reset = keys[pygame.K_r]
+
+    if reset:
+        return jnp.array(GameConfig.RESET)
+
+    x, y = 0, 0
+    if up and not down:
+        y = 1
+    elif not up and down:
+        y = -1
+
+    if left and not right:
+        x = -1
+    elif not left and right:
+        x = 1
+
+    if fire:
+        if x == -1 and y == -1:
+            return jnp.array(Action.DOWNLEFTFIRE)
+        elif x == -1 and y == 1:
+            return jnp.array(Action.UPLEFTFIRE)
+        elif x == 1 and y == -1:
+            return jnp.array(Action.DOWNRIGHTFIRE)
+        elif x == 1 and y == 1:
+            return jnp.array(Action.UPRIGHTFIRE)
+        elif x == 0 and y == -1:
+            return jnp.array(Action.DOWNFIRE)
+        else:
+            return jnp.array(Action.FIRE)
+    else:
+        if x == -1 and y == -1:
+            return jnp.array(Action.DOWNLEFT)
+        elif x == -1 and y == 1:
+            return jnp.array(Action.UPLEFT)
+        elif x == 1 and y == -1:
+            return jnp.array(Action.DOWNRIGHT)
+        elif x == 1 and y == 1:
+            return jnp.array(Action.UPRIGHT)
+        elif x == -1:
+            return jnp.array(Action.LEFT)
+        elif x == 1:
+            return jnp.array(Action.RIGHT)
+        elif y == -1:
+            return jnp.array(Action.DOWN)
+        elif y == 1:
+            return jnp.array(Action.UP)
+
+    return jnp.array(Action.NOOP)
+
 
 if __name__ == "__main__":
     pygame.init()
 
-    env = FishingDerby()
-    renderer = FishingDerbyRenderer(env.config)
-    jitted_step = jax.jit(env.step)
-
+    game = FishingDerby()
+    renderer = FishingDerbyRenderer(game.config)
+    jitted_step = jax.jit(game.step)
+    jitted_reset = jax.jit(game.reset)
     scaling = 4
-    w, h = env.config.SCREEN_WIDTH, env.config.SCREEN_HEIGHT
-    screen = pygame.display.set_mode((w * scaling, h * scaling))
-    pygame.display.set_caption("JAX Fishing Derby (Standalone)")
-    clock = pygame.time.Clock()
-
-    main_key = jax.random.PRNGKey(1980)
-    obs, state = env.reset(main_key)
-
-    key_to_action = {
-        pygame.K_SPACE: Action.FIRE, pygame.K_w: Action.UP, pygame.K_UP: Action.UP,
-        pygame.K_d: Action.RIGHT, pygame.K_RIGHT: Action.RIGHT, pygame.K_a: Action.LEFT,
-        pygame.K_LEFT: Action.LEFT, pygame.K_s: Action.DOWN, pygame.K_DOWN: Action.DOWN,
-    }
+    screen = pygame.display.set_mode((GameConfig.SCREEN_WIDTH * scaling, GameConfig.SCREEN_HEIGHT * scaling))
+    (_, curr_state) = jitted_reset()
+    running = True
+    frame_by_frame = False
+    frameskip = 1
+    counter = 1
 
     running = True
     while running:
-        action = Action.NOOP
         for event in pygame.event.get():
-            if event.type == pygame.QUIT: running = False
+            if event.type == pygame.QUIT:
+                running = False
+            elif event.type == pygame.KEYDOWN:
+                if event.key == pygame.K_f:
+                    frame_by_frame = not frame_by_frame
+            elif event.type == pygame.KEYDOWN or (
+                    event.type == pygame.KEYUP and event.key == pygame.K_n
+            ):
+                if event.key == pygame.K_n and frame_by_frame:
+                    if counter % frameskip == 0:
+                        action = get_human_action()
+                        (_, curr_state, _, _, _) = jitted_step(curr_state, action)
 
-        pressed_keys = pygame.key.get_pressed()
-        for key, act in key_to_action.items():
-            if pressed_keys[key]:
-                action = act;
-                break
+        if not frame_by_frame:
+            if counter % frameskip == 0:
+                action = get_human_action()
+                (_, curr_state, _, _, _) = jitted_step(curr_state, action)
 
-        obs, state, reward, done, info = jitted_step(state, action)
-
-        if done:
-            print(f"Game Over! Info: {info}. Resetting.")
-            obs, state = env.reset(state.key)
-
-        frame = renderer.render(state)
-
-        surf = pygame.surfarray.make_surface(jnp.transpose(frame, (1, 0, 2)))
-        scaled_surf = pygame.transform.scale(surf, (w * scaling, h * scaling))
-        screen.blit(scaled_surf, (0, 0))
+        # Render and display
+        raster = renderer.render(curr_state)
         pygame.display.flip()
-
-        clock.tick(60)
+        raster = jnp.transpose(raster, (1, 0, 2))  # now shape → (WIDTH, HEIGHT, 3)
+        aj.update_pygame(screen, raster, scaling, GameConfig.SCREEN_WIDTH, GameConfig.SCREEN_HEIGHT)
+        counter += 1
+        pygame.time.Clock().tick(60)
 
     pygame.quit()
+
+# run with: python scripts/play.py --game src/jaxatari/games/jax_fishingderby.py --record my_record_file.npz
