@@ -1,4 +1,4 @@
-
+# next TODO: recognize and visualise completed boxes
 
 from functools import partial
 import os
@@ -38,7 +38,7 @@ INITIAL_ENEMY_POSITIONS = jnp.array(
 )
 INITIAL_ENEMY_TYPES = jnp.array([1, 1, 1, 1, 1, 1])
 
-PATH_CORNERS = jnp.array( #TODO remove
+PATH_CORNERS = jnp.array(
     [
         [16, 15],
         [40, 15],
@@ -204,6 +204,104 @@ VERTICAL_PATH_EDGES = jnp.array(
 )
 
 PATH_EDGES = jnp.concatenate((HORIZONTAL_PATH_EDGES, VERTICAL_PATH_EDGES), axis=0)
+
+# not jited since it is only ran once
+# assumes the vertical edges are top to bottom and horizontal edges are left to right
+def calculate_rectangles():
+
+
+    def convert_vertical_index(index):
+        """Converts an index in VERTICAL_PATH_EDGES to the corresponding index in PATH_EDGES."""
+        return index + HORIZONTAL_PATH_EDGES.shape[0]
+    
+    def add_edge(rectangle, edge_index):
+        """Adds an edge to the rectangle."""
+        rectangle = rectangle.at[edge_index].set(1)
+        return rectangle
+    
+    no_edges = jnp.zeros(PATH_EDGES.shape[0], dtype=jnp.int32)
+    
+    def left_and_check_down(rectangle, corner):
+        """Checks if there is a horizontal edge going left from the corner and adds it to the rectangle,
+        then checks if there is a vertical edge going down from the new corner (in this case the rectangle should be complete)."""
+        if jnp.any(jnp.apply_along_axis(jnp.all, 1, (HORIZONTAL_PATH_EDGES[:, 1] == corner))):
+            edge_index = jnp.where(jnp.apply_along_axis(jnp.all, 1, (HORIZONTAL_PATH_EDGES[:, 1] == corner)), size=1)[0][0]
+            rectangle = add_edge(rectangle, edge_index)
+            new_corner = PATH_EDGES[edge_index, 0]
+
+            if not jnp.any(jnp.apply_along_axis(jnp.all, 1, (VERTICAL_PATH_EDGES[:, 0] == new_corner))): # if there is NOT a vertical edge that goes down from there
+                rectangle, new_corner = right_and_check_up(rectangle, new_corner) # find another edge that goes left
+            
+            return rectangle, new_corner
+        else: 
+            return no_edges, None
+    
+    def up_and_check_left(rectangle, corner):
+        """Checks if there is a vertical edge going up from the corner and adds it to the rectangle,
+        then checks if there is a horizontal edge going left from the new corner."""
+        if jnp.any(jnp.apply_along_axis(jnp.all, 1, (VERTICAL_PATH_EDGES[:, 1] == corner))): # if there is an edge that goes up
+            edge_index = convert_vertical_index(jnp.where(jnp.apply_along_axis(jnp.all, 1, (VERTICAL_PATH_EDGES[:, 1] == corner)), size=1)[0][0]) # get the index of the edge that goes up
+            rectangle = add_edge(rectangle, edge_index)  # Add the vertical edge going up
+            new_corner = PATH_EDGES[edge_index, 0]  # This is the new corner after going up
+
+            if jnp.any(jnp.apply_along_axis(jnp.all, 1, (HORIZONTAL_PATH_EDGES[:, 1] == new_corner))): # if there is a horizontal edge that goes left from there 
+                rectangle, new_corner = left_and_check_down(rectangle, new_corner)
+            else:
+                rectangle, new_corner = up_and_check_left(rectangle, new_corner) # find another edge that goes up
+
+            return rectangle, new_corner
+        else: 
+            return no_edges, None
+
+    def right_and_check_up(rectangle, corner):
+        """Checks if there is a horizontal edge going right from the corner and adds it to the rectangle,
+        then checks if there is a vertical edge going up from the new corner."""
+        if jnp.any(jnp.apply_along_axis(jnp.all, 1, (HORIZONTAL_PATH_EDGES[:, 0] == corner))):
+            edge_index = jnp.where(jnp.apply_along_axis(jnp.all, 1, (HORIZONTAL_PATH_EDGES[:, 0] == corner)), size=1)[0][0]
+            rectangle = add_edge(rectangle, edge_index)
+            new_corner = PATH_EDGES[edge_index, 1]
+
+            if jnp.any(jnp.apply_along_axis(jnp.all, 1, (VERTICAL_PATH_EDGES[:, 1] == new_corner))): # if there is a vertical edge that goes up from there 
+                rectangle, new_corner = up_and_check_left(rectangle, new_corner)
+            else:
+                rectangle, new_corner = right_and_check_up(rectangle, new_corner) #find another edge that goes right
+            
+            return rectangle, new_corner
+        else: 
+            return no_edges, None
+
+    def down_and_check_right(rectangle, corner):
+        """Checks if there is a vertical edge going down from the corner and adds it to the rectangle,
+        then checks if there is a horizontal edge going right from the new corner."""
+        if jnp.any(jnp.apply_along_axis(jnp.all, 1, (VERTICAL_PATH_EDGES[:, 0] == corner))): # if there is an edge that goes down
+            edge_index = convert_vertical_index(jnp.where(jnp.apply_along_axis(jnp.all, 1, (VERTICAL_PATH_EDGES[:, 0] == corner)), size=1)[0][0]) # get the index of the edge that goes down
+            rectangle = add_edge(rectangle, edge_index)  # Add the vertical edge going down
+            new_corner = PATH_EDGES[edge_index, 1]  # This is the new corner after going down
+
+            if jnp.any(jnp.apply_along_axis(jnp.all, 1, (HORIZONTAL_PATH_EDGES[:, 0] == new_corner))): # if there is a horizontal edge that goes right from there
+                rectangle, new_corner = right_and_check_up(rectangle, new_corner)
+            else:
+                rectangle, new_corner = down_and_check_right(rectangle, new_corner) # find another edge that goes down
+            
+            return rectangle, new_corner
+        else: 
+            return no_edges, None
+
+    rectangles = []
+    for corner in PATH_CORNERS:
+        rectangle = jnp.zeros(PATH_EDGES.shape[0], dtype=jnp.int32)
+        
+        rectangle, new_corner = down_and_check_right(rectangle, corner)
+
+        if jnp.array_equal(rectangle, no_edges) or not jnp.array_equal(corner, new_corner):
+            continue
+        else:
+            # If the rectangle is not empty and we arrived back at the starting corner, add it to the list
+            rectangles.append(rectangle)
+
+    return rectangles
+
+RECTANGLES = calculate_rectangles()
 
 @jax.jit
 def generate_path_mask():
