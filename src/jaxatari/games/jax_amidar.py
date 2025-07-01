@@ -397,7 +397,7 @@ class JaxAmidar(JaxEnvironment[AmidarState, AmidarObservation, AmidarInfo]):
             player_y=jnp.array(88).astype(jnp.int32),
             player_direction=jnp.array(0).astype(jnp.int32),
             last_walked_corner=jnp.array([0, 0]).astype(jnp.int32),  # Last corner walked on
-            walked_on_paths=jnp.zeros(jnp.shape(PATH_EDGES)[0], dtype=jnp.int32),  # Initialize walked on paths
+            walked_on_paths=(jnp.zeros(jnp.shape(PATH_EDGES)[0], dtype=jnp.int32)).at[85].set(1),  # Initialize walked on paths
             enemy_positions=INITIAL_ENEMY_POSITIONS,
             enemy_types=INITIAL_ENEMY_TYPES,
         )
@@ -539,6 +539,7 @@ class AmidarRenderer(AtraJaxisRenderer):
         score_array = aj.int_to_digits(state.score, max_digits=8)
         # convert the score to a list of digits
         number_of_digits = (jnp.log10(state.score)+1).astype(jnp.int32)
+        number_of_digits = jnp.maximum(number_of_digits, 1)  # Ensure at least one digit is rendered
         def render_char(i, current_raster):
             # i is the loop index (0 up to num_to_render-1)
             digit_index_in_array = 8 - number_of_digits + i
