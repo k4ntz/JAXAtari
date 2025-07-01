@@ -125,7 +125,8 @@ def update_river_banks(state: RiverraidState) -> RiverraidState:
             new_river_right = state.river_right.at[0].set(state.river_right[1] + 3)
 
             key, subkey = jax.random.split(state.master_key)
-            should_set_island = jax.random.bernoulli(subkey, 0.1)
+            should_set_island = jnp.logical_and(jax.random.bernoulli(subkey, 0.1),
+                                                new_river_right[0] - new_river_left[0] > 50)
             new_island_present = jax.lax.select(should_set_island, jnp.array(2), state.river_island_present)
 
             return state._replace(river_left=new_river_left,
@@ -235,7 +236,7 @@ def update_river_banks(state: RiverraidState) -> RiverraidState:
                 new_river_left = state.river_left.at[0].set(state.river_left[1])
                 new_river_right = state.river_right.at[0].set(state.river_right[1])
 
-                new_alternation_length = jnp.array(3)
+                new_alternation_length = jax.random.randint(alter_length_key, (), 4, 12)
                 new_island_transition_state = jnp.array(0)
                 new_river_state = jnp.array(1)
                 new_island_present = jnp.array(1)
@@ -265,7 +266,7 @@ def update_river_banks(state: RiverraidState) -> RiverraidState:
 
                 new_island_present, new_island_transition_state, new_alternation_length = jax.lax.cond(
                     new_river_inner_left[0] >= new_river_inner_right[0],
-                    lambda _: (jnp.array(4), jnp.array(4), jnp.array(8)),
+                    lambda _: (jnp.array(4), jnp.array(4), jnp.array(14)),
                     lambda state: (state.river_island_present, state.island_transition_state, jnp.array(1)),
                     operand=state
                 )
@@ -350,9 +351,17 @@ def update_river_banks(state: RiverraidState) -> RiverraidState:
         new_left = state.river_left.at[0].set(final_left)
         new_right = state.river_right.at[0].set(final_right)
 
+        new_alternation_length, new_alternation_cooldown =jax.lax.cond(jnp.logical_and(final_left != proposed_left, state.river_state == 2),
+                                             lambda _: (jnp.array(0), jnp.array(0)),
+                                             lambda state: (state.river_alternation_length, state.alternation_cooldown),
+                                             operand=state
+                                            )
+
         return state._replace(
             river_left=new_left,
-            river_right=new_right
+            river_right=new_right,
+            river_alternation_length=new_alternation_length,
+            alternation_cooldown=new_alternation_cooldown
         )
 
     def yes_island_clamping(state: RiverraidState) -> RiverraidState:
@@ -360,7 +369,7 @@ def update_river_banks(state: RiverraidState) -> RiverraidState:
         outer_right = state.river_right[0]
         proposed_inner_left = state.river_inner_left[0]
         proposed_inner_right = state.river_inner_right[0]
-        min_river_width = 10.0
+        min_river_width = 20.0
 
         new_inner_left = jax.lax.cond(
             (proposed_inner_left - outer_left).astype(jnp.float32) < min_river_width,
@@ -375,9 +384,17 @@ def update_river_banks(state: RiverraidState) -> RiverraidState:
             lambda state: state.river_inner_right,
             operand=state
         )
+
+        new_alternation_length, new_alternation_cooldown =jax.lax.cond(jnp.logical_and(proposed_inner_left != new_inner_left[0], state.river_state == 1),
+                                             lambda _: (jnp.array(0), jnp.array(0)),
+                                             lambda state: (state.river_alternation_length, state.alternation_cooldown),
+                                             operand=state
+                                            )
         return state._replace(
             river_inner_left=new_inner_left,
-            river_inner_right=new_inner_right
+            river_inner_right=new_inner_right,
+            river_alternation_length=new_alternation_length,
+            alternation_cooldown=new_alternation_cooldown
         )
 
     state = jax.lax.cond(state.river_island_present == 0,
