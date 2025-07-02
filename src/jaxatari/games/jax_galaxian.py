@@ -387,7 +387,7 @@ def update_enemy_attack(state: GalaxianState) -> GalaxianState:
             )
             new_grid_alive = state.enemy_grid_alive.at[chosen_enemy_row, chosen_enemy_col].set(2)
 
-            jax.debug.print("enemy_grid_alive: {}", state.enemy_grid_alive)
+            #jax.debug.print("enemy_grid_alive: {}", state.enemy_grid_alive)
 
             return state._replace(
                 enemy_attack_states=new_attack_states,
@@ -436,12 +436,14 @@ def update_enemy_attack(state: GalaxianState) -> GalaxianState:
                 player_left = state.enemy_attack_x > state.player_x+10
 
                 new_enemy_attack_turning = jnp.where(
-                    (state.enemy_attack_turning == 0) & (state.enemy_attack_turn_step == 0) & (
-                                player_right & (state.enemy_attack_direction == -1) | player_left & (state.enemy_attack_direction == 1)),
-                    -state.enemy_attack_direction,  # change turning to the opposite of the current direction
+                    (state.enemy_attack_turn_step == ENEMY_ATTACK_TURN_TIME) | (state.enemy_attack_states == 0) | (
+                                state.enemy_attack_states == 2),
+                    0,  # reset turning, if turn is over or the enemy died
                     jnp.where(
-                        (state.enemy_attack_turn_step == ENEMY_ATTACK_TURN_TIME) | (state.enemy_attack_states == 0),
-                        0,                         # reset turning, if turn is over or the enemy died
+                        (state.enemy_attack_turning == 0) & (state.enemy_attack_turn_step == 0) & (
+                                player_right & (state.enemy_attack_direction == -1) | player_left & (
+                                    state.enemy_attack_direction == 1)),
+                        -state.enemy_attack_direction,  # change turning to the opposite of the current direction
                         state.enemy_attack_turning)
                 )
 
@@ -1148,7 +1150,7 @@ class JaxGalaxian(JaxEnvironment[GalaxianState, GalaxianObservation, GalaxianInf
                               bullet_y=jnp.array(-1.0,dtype=jnp.float32),
                               enemy_grid_x=enemy_grid.astype(jnp.float32),
                               enemy_grid_y=enemy_grid_y.astype(jnp.float32),
-                              enemy_grid_alive=ENEMY_GRID,
+                              enemy_grid_alive=TEST_GRID,
                               enemy_death_frame_grid=jnp.zeros((GRID_ROWS, GRID_COLS), dtype=jnp.int32),
                               enemy_death_frame_attack=jnp.zeros(MAX_DIVERS, dtype=jnp.int32),
                               enemy_death_frame_support=jnp.zeros(MAX_SUPPORTERS, dtype=jnp.int32),
@@ -1230,6 +1232,7 @@ class JaxGalaxian(JaxEnvironment[GalaxianState, GalaxianObservation, GalaxianInf
         jax.debug.print("grid {}",state.enemy_grid_alive)
         jax.debug.print("attackers {}", state.enemy_attack_states)
         jax.debug.print("supporters {}", state.enemy_support_pos)
+        jax.debug.print("support pos {}", state.enemy_support_x)
         new_state = update_player_position(state, action)
         new_state = update_player_bullet(new_state, action)
         new_state = update_enemy_positions(new_state)
@@ -1323,6 +1326,18 @@ def load_sprites():
     death_enemy_3 = aj.loadFrame(os.path.join(MODULE_DIR, "sprites/galaxian/death_enemy_3.npy"),transpose=True)
     death_enemy_4 = aj.loadFrame(os.path.join(MODULE_DIR, "sprites/galaxian/death_enemy_4.npy"),transpose=True)
     death_enemy_5 = aj.loadFrame(os.path.join(MODULE_DIR, "sprites/galaxian/death_enemy_5.npy"),transpose=True)
+    enemy_attacking_facing_down_green = aj.loadFrame(os.path.join(MODULE_DIR, "sprites/galaxian/enemy_attacking_facing_down_green.npy"),transpose=True)
+    enemy_attacking_facing_down_purple = aj.loadFrame(os.path.join(MODULE_DIR, "sprites/galaxian/enemy_attacking_facing_down_purple.npy"),transpose=True)
+    enemy_attacking_facing_down_red = aj.loadFrame(os.path.join(MODULE_DIR, "sprites/galaxian/enemy_attacking_facing_down_red.npy"),transpose=True)
+    enemy_attacking_facing_down_white = aj.loadFrame(os.path.join(MODULE_DIR, "sprites/galaxian/enemy_attacking_facing_down_white.npy"),transpose=True)
+    enemy_attacking_facing_left_red = aj.loadFrame(os.path.join(MODULE_DIR, "sprites/galaxian/enemy_attacking_facing_left_red.npy"),transpose=True)
+    enemy_attacking_facing_right_red = enemy_attacking_facing_left_red[::-1,:]
+    enemy_attacking_facing_left_white = aj.loadFrame(os.path.join(MODULE_DIR, "sprites/galaxian/enemy_attacking_facing_left_white.npy"),transpose=True)
+    enemy_attacking_facing_right_white = enemy_attacking_facing_left_white[::-1,:]
+    enemy_attacking_facing_right_green = aj.loadFrame(os.path.join(MODULE_DIR, "sprites/galaxian/enemy_attacking_facing_right_green.npy"),transpose=True)
+    enemy_attacking_facing_left_green = enemy_attacking_facing_right_green[::-1,:]
+    enemy_attacking_facing_right_purple = aj.loadFrame(os.path.join(MODULE_DIR, "sprites/galaxian/enemy_attacking_facing_right_purple.npy"),transpose=True)
+    enemy_attacking_facing_left_purple = enemy_attacking_facing_right_purple[::-1,:]
 
     # normalize frames to the same shape
     target_shape = enemy_gray.shape
@@ -1339,7 +1354,10 @@ def load_sprites():
     SPRITE_ENEMY_RED = enemy_red[jnp.newaxis, ...]
     SPRITE_ENEMY_PURPLE = enemy_purple[jnp.newaxis, ...]
     SPRITE_ENEMY_WHITE = enemy_white[jnp.newaxis, ...]
-    SPRITE_ENEMY = jnp.stack([enemy_gray,enemy_gray,enemy_gray,enemy_purple,enemy_red,enemy_white], axis=0)
+    SPRITE_ENEMY = jnp.stack([enemy_gray]*3+[enemy_purple,enemy_red,enemy_white], axis=0)
+    SPRITE_ENEMY_DOWN = jnp.stack([enemy_attacking_facing_down_green]*3+[enemy_attacking_facing_down_purple,enemy_attacking_facing_down_red,enemy_attacking_facing_down_white])
+    SPRITE_ENEMY_LEFT = jnp.stack([enemy_attacking_facing_left_green]*3+[enemy_attacking_facing_left_purple,enemy_attacking_facing_left_red,enemy_attacking_facing_left_white])
+    SPRITE_ENEMY_RIGHT = jnp.stack([enemy_attacking_facing_right_green]*3+[enemy_attacking_facing_right_purple,enemy_attacking_facing_right_red,enemy_attacking_facing_right_white])
     SPRITE_LIFE = life[jnp.newaxis, ...]
     SPRITE_ENEMY_BULLET = enemy_bullet[jnp.newaxis, ...]
     SPRITE_ENEMY_DEATH = jnp.stack([death_enemy_1, death_enemy_2, death_enemy_3,
@@ -1353,6 +1371,9 @@ def load_sprites():
         SPRITE_ENEMY_PURPLE,
         SPRITE_ENEMY_WHITE,
         SPRITE_ENEMY,
+        SPRITE_ENEMY_DOWN,
+        SPRITE_ENEMY_LEFT,
+        SPRITE_ENEMY_RIGHT,
         SPRITE_LIFE,
         SPRITE_ENEMY_BULLET,
         SPRITE_ENEMY_DEATH
@@ -1369,6 +1390,9 @@ class GalaxianRenderer(AtraJaxisRenderer):
             self.SPRITE_ENEMY_PURPLE,
             self.SPRITE_ENEMY_WHITE,
             self.SPRITE_ENEMY,
+            self.SPRITE_ENEMY_DOWN,
+            self.SPRITE_ENEMY_LEFT,
+            self.SPRITE_ENEMY_RIGHT,
             self.SPRITE_LIFE,
             self.SPRITE_ENEMY_BULLET,
             self.SPRITE_ENEMY_DEATH
@@ -1442,11 +1466,33 @@ class GalaxianRenderer(AtraJaxisRenderer):
                 death_frame_attack = state.enemy_death_frame_attack[i].astype(jnp.int32)
 
                 row = state.enemy_attack_pos[i][0]
+                direction = jnp.where(
+                    state.enemy_attack_turning[i] == 0,
+                    jnp.where(
+                        state.enemy_attack_direction[i] == -1,
+                        0,
+                        1,
+                    ),
+                    2
+                )
+                is_down = direction == 2
 
-                def alive(r):
+                def down(r):
                     ex = jnp.round(state.enemy_attack_x[i]).astype(jnp.int32)
                     ey = jnp.round(state.enemy_attack_y[i]).astype(jnp.int32)
-                    sprite = get_sprite_frame(self.SPRITE_ENEMY, row)
+                    sprite = get_sprite_frame(self.SPRITE_ENEMY_DOWN, row)
+
+                    return aj.render_at(r, ex, ey, sprite)
+
+                def side(r):
+                    ex = jnp.round(state.enemy_attack_x[i]).astype(jnp.int32)
+                    ey = jnp.round(state.enemy_attack_y[i]).astype(jnp.int32)
+                    sprite = jnp.where(
+                        direction == 1,
+                        get_sprite_frame(self.SPRITE_ENEMY_RIGHT,row),
+                        get_sprite_frame(self.SPRITE_ENEMY_LEFT,row),
+                    )
+
                     return aj.render_at(r, ex, ey, sprite)
 
                 def dying(r):
@@ -1458,7 +1504,7 @@ class GalaxianRenderer(AtraJaxisRenderer):
                 def dead(r):
                     return r
 
-                return lax.cond(is_alive,alive ,lambda r: lax.cond(is_dying,dying,dead,r), r)
+                return lax.cond(is_alive,lambda r: lax.cond(is_down,down,side,r) ,lambda r: lax.cond(is_dying,dying,dead,r), r)
 
             for i in range(MAX_DIVERS):
                 r = draw_single_attacker(r, i)
@@ -1468,16 +1514,39 @@ class GalaxianRenderer(AtraJaxisRenderer):
 
         def draw_supporters(r):
 
-
             def draw_single_supporter(r, i):
                 is_alive = jnp.logical_or(state.enemy_support_states[i] == 1, state.enemy_support_states[i] == 2)
                 is_dying = state.enemy_support_states[i] == 4
                 death_frame_support = state.enemy_death_frame_support[i].astype(jnp.int32)
 
-                def alive(r):
+                caller_idx = state.enemy_support_caller_idx
+                direction = jnp.where(
+                    state.enemy_attack_turning[caller_idx] == 0,
+                    jnp.where(
+                        state.enemy_attack_direction[caller_idx] == -1,
+                        0,
+                        1,
+                    ),
+                    2
+                )
+                is_down = direction == 2
+
+                def down(r):
                     ex = jnp.round(state.enemy_support_x[i]).astype(jnp.int32)
                     ey = jnp.round(state.enemy_support_y[i]).astype(jnp.int32)
-                    sprite = get_sprite_frame(self.SPRITE_ENEMY_RED,0)
+                    sprite = get_sprite_frame(self.SPRITE_ENEMY_DOWN, 4)
+
+                    return aj.render_at(r, ex, ey, sprite)
+
+                def side(r):
+                    ex = jnp.round(state.enemy_support_x[i]).astype(jnp.int32)
+                    ey = jnp.round(state.enemy_support_y[i]).astype(jnp.int32)
+                    sprite = jnp.where(
+                        direction == 1,
+                        get_sprite_frame(self.SPRITE_ENEMY_RIGHT,4),
+                        get_sprite_frame(self.SPRITE_ENEMY_LEFT,4),
+                    )
+
                     return aj.render_at(r, ex, ey, sprite)
 
                 def dying(r):
@@ -1489,7 +1558,7 @@ class GalaxianRenderer(AtraJaxisRenderer):
                 def dead(r):
                     return r
 
-                return lax.cond(is_alive,alive ,lambda r: lax.cond(is_dying,dying,dead,r), r)
+                return lax.cond(is_alive,lambda r: lax.cond(is_down,down,side,r) ,lambda r: lax.cond(is_dying,dying,dead,r), r)
 
             for i in range(MAX_SUPPORTERS):
                     r = draw_single_supporter(r, i)
