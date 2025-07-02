@@ -25,7 +25,7 @@ SCROLL_SPEED = 1 # Normal scroll speed
 SCROLL_MULTIPLIER = 1.5 # When at the right player bound, multiply scroll speed by this constant
 
 # -------- Mountains constants --------
-PLAYING_FILED_BG_COLLISION_COLOR = (255, 255, 255, 255)
+PLAYING_FIELD_BG_COLLISION_COLOR = (255, 255, 255, 255)
 PLAYING_FILED_BG_COLOR_FADE_SPEED = 0.2 # Higher = faster fade out, exponential
 
 # -------- Mountains constants --------
@@ -308,6 +308,7 @@ def load_sprites():
     upper_brown_bg = aj.loadFrame(os.path.join(MODULE_DIR, "sprites/lasergates/background/upper_brown_bg.npy"))
     lower_brown_bg = aj.loadFrame(os.path.join(MODULE_DIR, "sprites/lasergates/background/lower_brown_bg.npy"))
     playing_field_bg = aj.loadFrame(os.path.join(MODULE_DIR, "sprites/lasergates/background/playing_field_bg.npy"))
+    playing_field_small_bg = aj.loadFrame(os.path.join(MODULE_DIR, "sprites/lasergates/background/mountains/playing_field_small_bg.npy"))
     gray_gui_bg = aj.loadFrame(os.path.join(MODULE_DIR, "sprites/lasergates/background/gray_gui_bg.npy"))
     lower_mountain = aj.loadFrame(os.path.join(MODULE_DIR, "sprites/lasergates/background/mountains/lower_mountain.npy"))
     upper_mountain = aj.loadFrame(os.path.join(MODULE_DIR, "sprites/lasergates/background/mountains/upper_mountain.npy"))
@@ -404,6 +405,7 @@ def load_sprites():
         upper_brown_bg,
         lower_brown_bg,
         playing_field_bg,
+        playing_field_small_bg,
         gray_gui_bg,
         lower_mountain,
         upper_mountain,
@@ -437,6 +439,7 @@ def load_sprites():
     SPRITE_UPPER_BROWN_BG,
     SPRITE_LOWER_BROWN_BG,
     SPRITE_PLAYING_FIELD_BG,
+    SPRITE_PLAYING_FIELD_SMALL_BG,
     SPRITE_GRAY_GUI_BG,
     SPRITE_LOWER_MOUNTAIN,
     SPRITE_UPPER_MOUNTAIN,
@@ -1540,19 +1543,45 @@ class LaserGatesRenderer(AtraJaxisRenderer):
     def render(self, state):
         raster = jnp.zeros((WIDTH, HEIGHT, 3))
 
-        def recolor_sprite(sprite: jnp.ndarray, color: jnp.ndarray) -> jnp.ndarray:
+        def recolor_sprite(
+                sprite: jnp.ndarray,
+                color: jnp.ndarray,  # RGB, up to 4 dimensions
+                bounds: tuple[int, int, int, int] = None  # (top, left, bottom, right)
+        ) -> jnp.ndarray:
+            # Ensure color is the same dtype as sprite
+            dtype = sprite.dtype
+            color = color.astype(dtype)
+
             assert sprite.ndim == 3 and sprite.shape[2] in (3, 4), "Sprite must be HxWx3 or HxWx4"
+
+            if color.shape[0] < sprite.shape[2]:
+                missing = sprite.shape[2] - color.shape[0]
+                pad = jnp.full((missing,), 255, dtype=dtype)
+                color = jnp.concatenate([color, pad], axis=0)
+
             assert color.shape[0] == sprite.shape[2], "Color channels must match sprite channels"
 
-            # Define a visibility mask: pixel is visible if any of its channels > 0
-            visible_mask = jnp.any(sprite != 0, axis=-1)  # (H, W)
-            visible_mask = visible_mask[:, :, None]  # (H, W, 1) for broadcasting
+            H, W, _ = sprite.shape
 
-            # Broadcast color to the same shape as sprite
-            color_broadcasted = jnp.broadcast_to(color, sprite.shape)
+            if bounds is None:
+                region = sprite
+            else:
+                top, left, bottom, right = bounds
+                assert 0 <= left < right <= H and 0 <= top < bottom <= W, "Invalid bounds"
+                region = sprite[left:right, top:bottom]
 
-            # Where visible, use the new color; otherwise keep black (zeros)
-            return jnp.where(visible_mask, color_broadcasted, 0)
+            visible_mask = jnp.any(region != 0, axis=-1, keepdims=True)  # (h, w, 1)
+
+            color_broadcasted = jnp.broadcast_to(color, region.shape).astype(dtype)
+            recolored_region = jnp.where(visible_mask, color_broadcasted, jnp.zeros_like(color_broadcasted))
+
+            if bounds is None:
+                return recolored_region
+            else:
+                top, left, bottom, right = bounds
+                recolored_sprite = sprite.at[left:right, top:bottom].set(recolored_region)
+                return recolored_sprite
+
 
         def get_death_sprite_index(death_timer: jnp.ndarray, total_duration: int) -> jnp.ndarray:
             sprite_length = total_duration // 12
@@ -1565,51 +1594,112 @@ class LaserGatesRenderer(AtraJaxisRenderer):
         # Playing field background, color adjusts if player collision
         pfb_t = jnp.clip(255 * jnp.exp(-PLAYING_FILED_BG_COLOR_FADE_SPEED * (255 - state.animation_timer)), 0, 255)
         pfb_t = pfb_t.astype(jnp.uint8)
+        PLAYING_FIELD_COLOR = jnp.array((PLAYING_FIELD_BG_COLLISION_COLOR[0], PLAYING_FIELD_BG_COLLISION_COLOR[1], PLAYING_FIELD_BG_COLLISION_COLOR[2], pfb_t))
         raster = aj.render_at(
             raster,
             0,
             19,
-            recolor_sprite(SPRITE_PLAYING_FIELD_BG, jnp.array((PLAYING_FILED_BG_COLLISION_COLOR[0], PLAYING_FILED_BG_COLLISION_COLOR[1], PLAYING_FILED_BG_COLLISION_COLOR[2], pfb_t))),
+            recolor_sprite(SPRITE_PLAYING_FIELD_BG, PLAYING_FIELD_COLOR),
         )
 
-        # -------- Render entities --------
+        # -------- Render Entity Death Sprites --------
+
+        # Death sprites
+        death_sprite_index = get_death_sprite_index(state.entities.collision_properties_state.death_timer, ENTITY_DEATH_ANIMATION_TIMER)
+        death_sprite_upper_frame = SPRITE_LOWER_DEATH_SPRITES[death_sprite_index]
+        death_sprite_lower_frame = SPRITE_UPPER_DEATH_SPRITES[death_sprite_index]
+
+        # Radar mortar
+        rm_state = state.entities.radar_mortar_state
+        raster = jnp.where(jnp.logical_and(rm_state.is_in_current_event, jnp.logical_and(jnp.logical_not(rm_state.is_alive), state.entities.collision_properties_state.death_timer > 0)),
+                          # Case: in event but dead -> render death sprites
+                          jnp.where(rm_state.y == RADAR_MORTAR_SPAWN_UPPER_Y,
+                                    aj.render_at( #upper
+                                        raster,
+                                        rm_state.x,
+                                        rm_state.y + 15,
+                                        death_sprite_upper_frame,
+                                    ),
+                                    aj.render_at( #lower
+                                        raster,
+                                        rm_state.x,
+                                        rm_state.y - 25,
+                                        death_sprite_lower_frame,
+                                    )
+                                    ),
+                          raster
+                          )
+
+        # Byte bat
+        bb_state = state.entities.byte_bat_state
+        raster = jnp.where(jnp.logical_and(bb_state.is_in_current_event, jnp.logical_and(jnp.logical_not(bb_state.is_alive), state.entities.collision_properties_state.death_timer > 0)),
+                           aj.render_at(
+                               aj.render_at(
+                                   raster,
+                                   bb_state.x,
+                                   bb_state.y + ENTITY_DEATH_SPRITE_Y_OFFSET,
+                                   death_sprite_upper_frame,
+                               ),
+                               bb_state.x,
+                               bb_state.y - ENTITY_DEATH_SPRITES_SIZE[1] + ENTITY_DEATH_SPRITE_Y_OFFSET,
+                               death_sprite_lower_frame,
+                           ),
+                           # Case: in event but dead and death animation over -> do not render
+                           raster
+                           )
+
+        #Rock muncher
+        rmu_state = state.entities.rock_muncher_state
+        raster = jnp.where(jnp.logical_and(rmu_state.is_in_current_event, jnp.logical_and(jnp.logical_not(rmu_state.is_alive), state.entities.collision_properties_state.death_timer > 0)),
+                           aj.render_at(
+                               aj.render_at(
+                                   raster,
+                                   rmu_state.x,
+                                   rmu_state.y + ENTITY_DEATH_SPRITE_Y_OFFSET,
+                                   death_sprite_upper_frame,
+                               ),
+                               rmu_state.x,
+                               rmu_state.y - ENTITY_DEATH_SPRITES_SIZE[1] + ENTITY_DEATH_SPRITE_Y_OFFSET,
+                               death_sprite_lower_frame,
+                           ),
+                           # Case: in event but dead and death animation over -> do not render
+                           raster
+                           )
+
+        # -------- Render Mountain Playing Field Background --------
+
+        colored_playing_field_small_bg = recolor_sprite(SPRITE_PLAYING_FIELD_SMALL_BG, PLAYING_FIELD_COLOR)
+
+        raster = aj.render_at(
+                    aj.render_at(
+                        aj.render_at(
+                            aj.render_at(
+                                raster,
+                                0,
+                                19,
+                                SPRITE_PLAYING_FIELD_SMALL_BG  # upper background of background
+                            ),
+                            0,
+                            19,
+                            colored_playing_field_small_bg, # upper playing field background
+                        ),
+                        0,
+                        80,
+                        SPRITE_PLAYING_FIELD_SMALL_BG # lower background of background
+                    ),
+                    0,
+                    80,
+                    colored_playing_field_small_bg, # lower playing field background
+                )
 
         # -------- Render Radar Mortar --------
-        rm_state = state.entities.radar_mortar_state
 
         # Normal radar mortar
         radar_mortar_frame = aj.get_sprite_frame(SPRITE_RADAR_MORTAR, state.step_counter)
         radar_mortar_frame = jnp.where(state.entities.radar_mortar_state.y == RADAR_MORTAR_SPAWN_BOTTOM_Y, radar_mortar_frame, recolor_sprite(radar_mortar_frame, jnp.array(RADAR_MORTAR_COLOR_GRAY)))
 
-        # Death sprite radar mortar
-        death_sprite_index = get_death_sprite_index(state.entities.collision_properties_state.death_timer, ENTITY_DEATH_ANIMATION_TIMER)
-        rm_death_sprite_upper_frame = SPRITE_LOWER_DEATH_SPRITES[death_sprite_index]
-        rm_death_sprite_lower_frame = SPRITE_UPPER_DEATH_SPRITES[death_sprite_index]
-
         raster = jnp.where(
-            rm_state.is_in_current_event,
-            jnp.where(
-                jnp.logical_not(rm_state.is_alive),
-                jnp.where(
-                    state.entities.collision_properties_state.death_timer > 0,
-                    # Case: in event but dead -> render death sprites
-                    jnp.where(rm_state.y == RADAR_MORTAR_SPAWN_UPPER_Y,
-                              aj.render_at(
-                                  raster,
-                                  rm_state.x,
-                                  rm_state.y,
-                                  rm_death_sprite_upper_frame,
-                              ),
-                              aj.render_at(
-                                  raster,
-                                  rm_state.x,
-                                  rm_state.y - 20, # TODO: Change offset
-                                  rm_death_sprite_lower_frame,
-                              )
-                              ),
-                    # Case: in event but dead and death animation over -> do not render
-                    raster
-                ),
+            jnp.logical_and(rm_state.is_in_current_event, rm_state.is_alive),
                 # Case: alive -> render normally
                 aj.render_at(
                     raster,
@@ -1618,7 +1708,6 @@ class LaserGatesRenderer(AtraJaxisRenderer):
                     radar_mortar_frame,
                     flip_vertical=rm_state.y == RADAR_MORTAR_SPAWN_UPPER_Y,
                 ),
-            ),
             # Case: not in event -> do not render
             raster
         )
@@ -1627,53 +1716,28 @@ class LaserGatesRenderer(AtraJaxisRenderer):
         should_render_rock_muncher_missile = jnp.logical_and(state.entities.radar_mortar_state.missile_x != 0, state.entities.radar_mortar_state.missile_y != 0)
         rock_muncher_missile_sprite = recolor_sprite(SPRITE_ENTITY_MISSILE, jnp.array(RADAR_MORTAR_COLOR_BLUE))
 
-
-
-        raster = jnp.where(jnp.logical_and(should_render_rock_muncher_missile, state.entities.radar_mortar_state.is_in_current_event),
-                           aj.render_at(
-                               raster,
-                               state.entities.radar_mortar_state.missile_x,
-                               state.entities.radar_mortar_state.missile_y,
-                               rock_muncher_missile_sprite,
-                               flip_horizontal=state.entities.radar_mortar_state.missile_direction[0] < 0,
-                           ),
-                           raster
-                           )
+        raster = jnp.where(
+            jnp.logical_and(should_render_rock_muncher_missile, state.entities.radar_mortar_state.is_in_current_event),
+               aj.render_at(
+                   raster,
+                   state.entities.radar_mortar_state.missile_x,
+                   state.entities.radar_mortar_state.missile_y,
+                   rock_muncher_missile_sprite,
+                   flip_horizontal=state.entities.radar_mortar_state.missile_direction[0] < 0,
+               ),
+               # Case: not in event -> do not render
+           raster
+           )
 
 
         # -------- Render Byte Bat --------
-        bb_state = state.entities.byte_bat_state
 
         # Normal Byte Bat
         byte_bat_frame = aj.get_sprite_frame(SPRITE_BYTE_BAT, state.step_counter)
         byte_bat_frame = recolor_sprite(byte_bat_frame, jnp.array(BYTE_BAT_COLOR))
 
-        # Death Sprite Byte Bat
-        death_sprite_index = get_death_sprite_index(state.entities.collision_properties_state.death_timer, ENTITY_DEATH_ANIMATION_TIMER)
-        death_sprite_upper_frame = SPRITE_LOWER_DEATH_SPRITES[death_sprite_index]
-        death_sprite_lower_frame = SPRITE_UPPER_DEATH_SPRITES[death_sprite_index]
-
         raster = jnp.where(
-            bb_state.is_in_current_event,
-            jnp.where(
-                jnp.logical_not(bb_state.is_alive),
-                jnp.where(
-                    state.entities.collision_properties_state.death_timer > 0,
-                    # Case: in event but dead -> render death sprites
-                    aj.render_at(
-                        aj.render_at(
-                            raster,
-                            bb_state.x,
-                            bb_state.y + ENTITY_DEATH_SPRITE_Y_OFFSET,
-                            death_sprite_upper_frame,
-                        ),
-                        bb_state.x,
-                        bb_state.y - ENTITY_DEATH_SPRITES_SIZE[1] + ENTITY_DEATH_SPRITE_Y_OFFSET,
-                        death_sprite_lower_frame,
-                    ),
-                    # Case: in event but dead and death animation over -> do not render
-                    raster
-                ),
+            jnp.logical_and(bb_state.is_in_current_event, bb_state.is_alive),
                 # Case: alive -> render normally
                 aj.render_at(
                     raster,
@@ -1681,43 +1745,17 @@ class LaserGatesRenderer(AtraJaxisRenderer):
                     bb_state.y,
                     byte_bat_frame,
                 ),
-            ),
             # Case: not in event -> do not render
             raster
-        )
+            )
 
         # -------- Render Rock Muncher --------
-        rmu_state = state.entities.rock_muncher_state
 
         # Normal rock_muncher
         rock_muncher_frame = aj.get_sprite_frame(SPRITE_ROCK_MUNCHER, state.step_counter)
 
-        # Death Sprite Rock Muncher
-        death_sprite_index = get_death_sprite_index(state.entities.collision_properties_state.death_timer, ENTITY_DEATH_ANIMATION_TIMER)
-        death_sprite_upper_frame = SPRITE_LOWER_DEATH_SPRITES[death_sprite_index]
-        death_sprite_lower_frame = SPRITE_UPPER_DEATH_SPRITES[death_sprite_index]
-
         raster = jnp.where(
-            rmu_state.is_in_current_event,
-            jnp.where(
-                jnp.logical_not(rmu_state.is_alive),
-                jnp.where(
-                    state.entities.collision_properties_state.death_timer > 0,
-                    # Case: in event but dead -> render death sprites
-                    aj.render_at(
-                        aj.render_at(
-                            raster,
-                            rmu_state.x,
-                            rmu_state.y + ENTITY_DEATH_SPRITE_Y_OFFSET,
-                            death_sprite_upper_frame,
-                        ),
-                        rmu_state.x,
-                        rmu_state.y - ENTITY_DEATH_SPRITES_SIZE[1] + ENTITY_DEATH_SPRITE_Y_OFFSET,
-                        death_sprite_lower_frame,
-                    ),
-                    # Case: in event but dead and death animation over -> do not render
-                    raster
-                ),
+            jnp.logical_and(rmu_state.is_in_current_event, rmu_state.is_alive),
                 # Case: alive -> render normally
                 aj.render_at(
                     raster,
@@ -1725,16 +1763,15 @@ class LaserGatesRenderer(AtraJaxisRenderer):
                     rmu_state.y,
                     rock_muncher_frame,
                 ),
-            ),
             # Case: not in event -> do not render
             raster
-        )
+            )
+
 
         # Render rock muncher missile
-        should_render_rock_muncher_missile = jnp.logical_and(state.entities.rock_muncher_state.missile_x != 0, state.entities.rock_muncher_state.missile_y != 0)
         rock_muncher_missile_sprite = recolor_sprite(SPRITE_ENTITY_MISSILE, jnp.array(ROCK_MUNCHER_MISSILE_COLOR))
 
-        raster = jnp.where(jnp.logical_and(should_render_rock_muncher_missile, state.entities.rock_muncher_state.is_in_current_event),
+        raster = jnp.where(jnp.logical_and(jnp.logical_and(state.entities.rock_muncher_state.missile_x != 0, state.entities.rock_muncher_state.missile_y != 0), state.entities.rock_muncher_state.is_in_current_event),
                            aj.render_at(
                                raster,
                                state.entities.rock_muncher_state.missile_x,
