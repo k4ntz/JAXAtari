@@ -111,7 +111,7 @@ WINDOW_WIDTH = 160 * 3
 WINDOW_HEIGHT = 210 * 3
 
 
-# Positions/dimensions
+# Outer objects (walls etc.) Positions/dimensions
 BALL_START_X = jnp.array(149.0)
 BALL_START_Y = jnp.array(129.0)
 BALL_START_DIRECTION = jnp.array(0)
@@ -150,6 +150,29 @@ WALL_CORNER_BLOCK_WIDTH = 4
 WALL_CORNER_BLOCK_HEIGHT = 8
 STEP_HEIGHT = 8
 STEP_WIDTH = 4
+
+# Inner Objects Positions and Dimensions
+
+VERTICAL_BAR_HEIGHT = 30
+VERTICAL_BAR_WIDTH = 3
+
+ROLLOVER_BAR_DISTANCE = 12  # Distance between the left and right rollover bar
+
+BUMPER_WIDTH = 15
+BUMPER_HEIGHT = 30
+
+LEFT_COLUMN_X_OFFSET = 40
+MIDDLE_COLUMN_X_OFFSET = 72
+RIGHT_COLUMN_X_OFFSET = 104
+TOP_ROW_Y_OFFSET = 49
+MIDDLE_ROW_Y_OFFSET = 113
+BOTTOM_ROW_Y_OFFSET = 177
+
+MIDDLE_BAR_Y = 72
+MIDDLE_BAR_X = 104
+MIDDLE_BAR_WIDTH = 16
+MIDDLE_BAR_HEIGHT = 8
+
 
 TOP_WALL_BOUNDING_BOX = jnp.ones((OUTER_WALL_THICKNESS, 160)).astype(jnp.bool)
 TOP_WALL_OFFSET = jnp.array([TOP_WALL_LEFT_X_OFFSET, TOP_WALL_TOP_Y_OFFSET])
@@ -210,10 +233,130 @@ INVISIBLE_BLOCK_OFFSET = jnp.array(
     [INVISIBLE_BLOCK_LEFT_X_OFFSET, INVISIBLE_BLOCK_TOP_Y_OFFSET]
 )
 
-MIDDLE_BAR_Y = 72
-MIDDLE_BAR_X = 104
-MIDDLE_BAR_WIDTH = 16
-MIDDLE_BAR_HEIGHT = 8
+# Rollover Bounding Boxes and Offsets
+
+
+VERTICAL_BAR_BOUNDING_BOX = jnp.ones((VERTICAL_BAR_HEIGHT, VERTICAL_BAR_WIDTH)).astype(
+    jnp.bool
+)
+
+LEFT_ROLLOVER_LEFT_BAR_BOUNDING_BOX = VERTICAL_BAR_BOUNDING_BOX
+LEFT_ROLLOVER_LEFT_BAR_OFFSET = jnp.array([LEFT_COLUMN_X_OFFSET, TOP_ROW_Y_OFFSET])
+
+LEFT_ROLLOVER_RIGHT_BAR_BOUNDING_BOX = VERTICAL_BAR_BOUNDING_BOX
+LEFT_ROLLOVER_RIGHT_BAR_OFFSET = jnp.array(
+    [LEFT_COLUMN_X_OFFSET + ROLLOVER_BAR_DISTANCE, TOP_ROW_Y_OFFSET]
+)
+
+ATARI_ROLLOVER_LEFT_BAR_BOUNDING_BOX = VERTICAL_BAR_BOUNDING_BOX
+ATARI_ROLLOVER_LEFT_BAR_OFFSET = jnp.array([RIGHT_COLUMN_X_OFFSET, TOP_ROW_Y_OFFSET])
+
+ATARI_ROLLOVER_RIGHT_BAR_BOUNDING_BOX = VERTICAL_BAR_BOUNDING_BOX
+ATARI_ROLLOVER_RIGHT_BAR_OFFSET = jnp.array(
+    [RIGHT_COLUMN_X_OFFSET + ROLLOVER_BAR_DISTANCE, TOP_ROW_Y_OFFSET]
+)
+
+# Bumper Bounding Boxes and Offsets
+
+BUMPER_BOUNDING_BOX = jnp.ones((BUMPER_HEIGHT, BUMPER_WIDTH)).astype(jnp.bool)
+
+TOP_BUMPER_BOUNDING_BOX = BUMPER_BOUNDING_BOX
+TOP_BUMPER_OFFSET = jnp.array([MIDDLE_COLUMN_X_OFFSET, TOP_ROW_Y_OFFSET])
+
+LEFT_BUMPER_BOUNDING_BOX = BUMPER_BOUNDING_BOX
+LEFT_BUMPER_OFFSET = jnp.array([LEFT_COLUMN_X_OFFSET, MIDDLE_ROW_Y_OFFSET])
+
+RIGHT_BUMPER_BOUNDING_BOX = BUMPER_BOUNDING_BOX
+RIGHT_BUMPER_OFFSET = jnp.array([RIGHT_COLUMN_X_OFFSET, MIDDLE_ROW_Y_OFFSET])
+
+# Spinner Bounding Boxes
+
+# Bounding boxes of the spinner if the joined (single larger) spinner part is on the top or bottom
+SPINNER_TOP_BOTTOM_LARGE_BOUNDING_BOX = jnp.ones((2, 3)).astype(jnp.bool)
+SPINNER_TOP_BOTTOM_SMALL_BOUNDING_BOX = jnp.ones((1, 2)).astype(jnp.bool)
+
+# Bounding boxes of the spinner if the joined (single larger) spinner part is on the left or right
+SPINNER_LEFT_RIGHT_LARGE_BOUNDING_BOX = jnp.ones((1, 4)).astype(jnp.bool)
+SPINNER_LEFT_RIGHT_SMALL_BOUNDING_BOX = jnp.ones((1, 2)).astype(jnp.bool)
+
+# Spinner offsets
+# We split this up into six parts
+# We always use the joined (single larger) spinner part as the part that indicates the spinner position
+# If it is in the bottom, we say BOTTOM_POSITION, if it is in the top, we say TOP_POSITION, etc.
+# There are four positions for the joined part, TOP_POSITION, BOTTOM_POSITION, LEFT_POSITION, RIGHT_POSITION.
+
+# For a given position we have five spinner parts:
+# 1. The joined (single larger) spinner part
+# 2. The left spinner part 1 (closer to the joined part)
+# 3. The left spinner part 2 (more distant from the joined part)
+# 4. The right spinner part 1 (closer to the joined part)
+# 5. The right spinner part 2 (more distant from the joined part)
+
+# Left Spinner
+# Bottom Position
+LEFT_SPINNER_BOTTOM_POSITION_JOINED_PART = jnp.array([32, 100])
+LEFT_SPINNER_BOTTOM_POSITION_LEFT_PART_1 = jnp.array([30, 94])
+LEFT_SPINNER_BOTTOM_POSITION_LEFT_PART_2 = jnp.array([31, 92])
+LEFT_SPINNER_BOTTOM_POSITION_RIGHT_PART_1 = jnp.array([35, 94])
+LEFT_SPINNER_BOTTOM_POSITION_RIGHT_PART_2 = jnp.array([34, 92])
+
+# Top Position
+LEFT_SPINNER_TOP_POSITION_JOINED_PART = jnp.array([32, 90])
+LEFT_SPINNER_TOP_POSITION_LEFT_PART_1 = jnp.array([30, 96])
+LEFT_SPINNER_TOP_POSITION_LEFT_PART_2 = jnp.array([31, 98])
+LEFT_SPINNER_TOP_POSITION_RIGHT_PART_1 = jnp.array([35, 96])
+LEFT_SPINNER_TOP_POSITION_RIGHT_PART_2 = jnp.array([34, 98])
+
+# Left Position
+LEFT_SPINNER_LEFT_POSITION_JOINED_PART = jnp.array([30, 94])
+LEFT_SPINNER_LEFT_POSITION_LEFT_PART_1 = jnp.array([33, 90])
+LEFT_SPINNER_LEFT_POSITION_LEFT_PART_2 = jnp.array([34, 92])
+LEFT_SPINNER_LEFT_POSITION_RIGHT_PART_1 = jnp.array([33, 100])
+LEFT_SPINNER_LEFT_POSITION_RIGHT_PART_2 = jnp.array([34, 98])
+
+# Right Position
+LEFT_SPINNER_RIGHT_POSITION_JOINED_PART = jnp.array([35, 94])
+LEFT_SPINNER_RIGHT_POSITION_LEFT_PART_1 = jnp.array([32, 100])
+LEFT_SPINNER_RIGHT_POSITION_LEFT_PART_2 = jnp.array([31, 98])
+LEFT_SPINNER_RIGHT_POSITION_RIGHT_PART_1 = jnp.array([32, 90])
+LEFT_SPINNER_RIGHT_POSITION_RIGHT_PART_2 = jnp.array([31, 92])
+
+# Right Spinner
+# Bottom Position
+RIGHT_SPINNER_BOTTOM_POSITION_JOINED_PART = jnp.array([128, 100])
+RIGHT_SPINNER_BOTTOM_POSITION_LEFT_PART_1 = jnp.array([126, 94])
+RIGHT_SPINNER_BOTTOM_POSITION_LEFT_PART_2 = jnp.array([127, 92])
+RIGHT_SPINNER_BOTTOM_POSITION_RIGHT_PART_1 = jnp.array([131, 94])
+RIGHT_SPINNER_BOTTOM_POSITION_RIGHT_PART_2 = jnp.array([130, 92])
+
+# Top Position
+RIGHT_SPINNER_TOP_POSITION_JOINED_PART = jnp.array([128, 90])
+RIGHT_SPINNER_TOP_POSITION_LEFT_PART_1 = jnp.array([131, 96])
+RIGHT_SPINNER_TOP_POSITION_LEFT_PART_2 = jnp.array([130, 98])
+RIGHT_SPINNER_TOP_POSITION_RIGHT_PART_1 = jnp.array([126, 96])
+RIGHT_SPINNER_TOP_POSITION_RIGHT_PART_2 = jnp.array([127, 98])
+
+# Left Position
+RIGHT_SPINNER_LEFT_POSITION_JOINED_PART = jnp.array([126, 94])
+RIGHT_SPINNER_LEFT_POSITION_LEFT_PART_1 = jnp.array([129, 90])
+RIGHT_SPINNER_LEFT_POSITION_LEFT_PART_2 = jnp.array([130, 92])
+RIGHT_SPINNER_LEFT_POSITION_RIGHT_PART_1 = jnp.array([129, 100])
+RIGHT_SPINNER_LEFT_POSITION_RIGHT_PART_2 = jnp.array([130, 98])
+
+# Right Position
+RIGHT_SPINNER_RIGHT_POSITION_JOINED_PART = jnp.array([131, 94])
+RIGHT_SPINNER_RIGHT_POSITION_LEFT_PART_1 = jnp.array([128, 100])
+RIGHT_SPINNER_RIGHT_POSITION_LEFT_PART_2 = jnp.array([127, 98])
+RIGHT_SPINNER_RIGHT_POSITION_RIGHT_PART_1 = jnp.array([128, 90])
+RIGHT_SPINNER_RIGHT_POSITION_RIGHT_PART_2 = jnp.array([127, 92])
+
+# Middle Bar Bounding Box and Offset
+
+
+MIDDLE_BAR_BOUNDING_BOX = jnp.ones((MIDDLE_BAR_HEIGHT, MIDDLE_BAR_WIDTH)).astype(
+    jnp.bool
+)
+MIDDLE_BAR_OFFSET = jnp.array([MIDDLE_BAR_X, MIDDLE_BAR_Y])
 
 
 @chex.dataclass
@@ -232,101 +375,460 @@ class SceneObject:
     horizontal: chex.Array  # 0: vertical, 1: horizontal
 
 
+# Instantiate a SceneObject like this:
 INVISIBLE_BLOCK_SCENE_OBJECT = SceneObject(
-    hit_box_matrix=INVISIBLE_BLOCK_BOUNDING_BOX,
-    hit_box_offset=INVISIBLE_BLOCK_OFFSET,
-    reflecting=jnp.array(1),
-    horizontal=jnp.array(1),
+    hit_box_matrix=INVISIBLE_BLOCK_BOUNDING_BOX,  # type: ignore
+    hit_box_offset=INVISIBLE_BLOCK_OFFSET,  # type: ignore
+    reflecting=jnp.array(1),  # type: ignore
+    horizontal=jnp.array(1),  # type: ignore
 )
 
+# Wall Scene Objects
 
 TOP_WALL_SCENE_OBJECT = SceneObject(
-    hit_box_matrix=TOP_WALL_BOUNDING_BOX,
-    hit_box_offset=TOP_WALL_OFFSET,
-    reflecting=jnp.array(1),
-    horizontal=jnp.array(1),
+    hit_box_matrix=TOP_WALL_BOUNDING_BOX,  # type: ignore
+    hit_box_offset=TOP_WALL_OFFSET,  # type: ignore
+    reflecting=jnp.array(1),  # type: ignore
+    horizontal=jnp.array(1),  # type: ignore
 )
 BOTTOM_WALL_SCENE_OBJECT = SceneObject(
-    hit_box_matrix=BOTTOM_WALL_BOUNDING_BOX,
-    hit_box_offset=BOTTOM_WALL_OFFSET,
-    reflecting=jnp.array(1),
-    horizontal=jnp.array(1),
+    hit_box_matrix=BOTTOM_WALL_BOUNDING_BOX,  # type: ignore
+    hit_box_offset=BOTTOM_WALL_OFFSET,  # type: ignore
+    reflecting=jnp.array(1),  # type: ignore
+    horizontal=jnp.array(1),  # type: ignore
 )
 LEFT_WALL_SCENE_OBJECT = SceneObject(
-    hit_box_matrix=LEFT_WALL_BOUNDING_BOX,
-    hit_box_offset=LEFT_WALL_OFFSET,
-    reflecting=jnp.array(1),
-    horizontal=jnp.array(0),
+    hit_box_matrix=LEFT_WALL_BOUNDING_BOX,  # type: ignore
+    hit_box_offset=LEFT_WALL_OFFSET,  # type: ignore
+    reflecting=jnp.array(1),  # type: ignore
+    horizontal=jnp.array(0),  # type: ignore
 )
 RIGHT_WALL_SCENE_OBJECT = SceneObject(
-    hit_box_matrix=RIGHT_WALL_BOUNDING_BOX,
-    hit_box_offset=RIGHT_WALL_OFFSET,
-    reflecting=jnp.array(1),
-    horizontal=jnp.array(0),
+    hit_box_matrix=RIGHT_WALL_BOUNDING_BOX,  # type: ignore
+    hit_box_offset=RIGHT_WALL_OFFSET,  # type: ignore
+    reflecting=jnp.array(1),  # type: ignore
+    horizontal=jnp.array(0),  # type: ignore
 )
 
 LEFT_INNER_WALL_SCENE_OBJECT = SceneObject(
-    hit_box_matrix=LEFT_INNER_WALL_BOUNDING_BOX,
-    hit_box_offset=LEFT_INNER_WALL_OFFSET,
-    reflecting=jnp.array(1),
-    horizontal=jnp.array(0),
+    hit_box_matrix=LEFT_INNER_WALL_BOUNDING_BOX,  # type: ignore
+    hit_box_offset=LEFT_INNER_WALL_OFFSET,  # type: ignore
+    reflecting=jnp.array(1),  # type: ignore
+    horizontal=jnp.array(0),  # type: ignore
 )
 
 RIGHT_INNER_WALL_SCENE_OBJECT = SceneObject(
-    hit_box_matrix=RIGHT_INNER_WALL_BOUNDING_BOX,
-    hit_box_offset=RIGHT_INNER_WALL_OFFSET,
-    reflecting=jnp.array(1),
-    horizontal=jnp.array(0),
+    hit_box_matrix=RIGHT_INNER_WALL_BOUNDING_BOX,  # type: ignore
+    hit_box_offset=RIGHT_INNER_WALL_OFFSET,  # type: ignore
+    reflecting=jnp.array(1),  # type: ignore
+    horizontal=jnp.array(0),  # type: ignore
 )
 
+# Steps (Stairway left and right) Scene Objects
+
 LEFT_QUADRUPLE_STEP_SCENE_OBJECT = SceneObject(
-    hit_box_matrix=QUADRUPLE_STEP_BOUNDING_BOX,
-    hit_box_offset=LEFT_QUADRUPLE_STEP_OFFSET,
-    reflecting=jnp.array(1),
-    horizontal=jnp.array(0),
+    hit_box_matrix=QUADRUPLE_STEP_BOUNDING_BOX,  # type: ignore
+    hit_box_offset=LEFT_QUADRUPLE_STEP_OFFSET,  # type: ignore
+    reflecting=jnp.array(1),  # type: ignore
+    horizontal=jnp.array(0),  # type: ignore
 )
 RIGHT_QUADRUPLE_STEP_SCENE_OBJECT = SceneObject(
-    hit_box_matrix=QUADRUPLE_STEP_BOUNDING_BOX,
-    hit_box_offset=RIGHT_QUADRUPLE_STEP_OFFSET,
-    reflecting=jnp.array(1),
-    horizontal=jnp.array(0),
+    hit_box_matrix=QUADRUPLE_STEP_BOUNDING_BOX,  # type: ignore
+    hit_box_offset=RIGHT_QUADRUPLE_STEP_OFFSET,  # type: ignore
+    reflecting=jnp.array(1),  # type: ignore
+    horizontal=jnp.array(0),  # type: ignore
 )
 LEFT_TRIPLE_STEP_SCENE_OBJECT = SceneObject(
-    hit_box_matrix=TRIPLE_STEP_BOUNDING_BOX,
-    hit_box_offset=LEFT_TRIPLE_STEP_OFFSET,
-    reflecting=jnp.array(1),
-    horizontal=jnp.array(0),
+    hit_box_matrix=TRIPLE_STEP_BOUNDING_BOX,  # type: ignore
+    hit_box_offset=LEFT_TRIPLE_STEP_OFFSET,  # type: ignore
+    reflecting=jnp.array(1),  # type: ignore
+    horizontal=jnp.array(0),  # type: ignore
 )
 RIGHT_TRIPLE_STEP_SCENE_OBJECT = SceneObject(
-    hit_box_matrix=TRIPLE_STEP_BOUNDING_BOX,
-    hit_box_offset=RIGHT_TRIPLE_STEP_OFFSET,
-    reflecting=jnp.array(1),
-    horizontal=jnp.array(0),
+    hit_box_matrix=TRIPLE_STEP_BOUNDING_BOX,  # type: ignore
+    hit_box_offset=RIGHT_TRIPLE_STEP_OFFSET,  # type: ignore
+    reflecting=jnp.array(1),  # type: ignore
+    horizontal=jnp.array(0),  # type: ignore
 )
 LEFT_DOUBLE_STEP_SCENE_OBJECT = SceneObject(
-    hit_box_matrix=DOUBLE_STEP_BOUNDING_BOX,
-    hit_box_offset=LEFT_DOUBLE_STEP_OFFSET,
-    reflecting=jnp.array(1),
-    horizontal=jnp.array(0),
+    hit_box_matrix=DOUBLE_STEP_BOUNDING_BOX,  # type: ignore
+    hit_box_offset=LEFT_DOUBLE_STEP_OFFSET,  # type: ignore
+    reflecting=jnp.array(1),  # type: ignore
+    horizontal=jnp.array(0),  # type: ignore
 )
 RIGHT_DOUBLE_STEP_SCENE_OBJECT = SceneObject(
-    hit_box_matrix=DOUBLE_STEP_BOUNDING_BOX,
-    hit_box_offset=RIGHT_DOUBLE_STEP_OFFSET,
-    reflecting=jnp.array(1),
-    horizontal=jnp.array(0),
+    hit_box_matrix=DOUBLE_STEP_BOUNDING_BOX,  # type: ignore
+    hit_box_offset=RIGHT_DOUBLE_STEP_OFFSET,  # type: ignore
+    reflecting=jnp.array(1),  # type: ignore
+    horizontal=jnp.array(0),  # type: ignore
 )
 LEFT_SINGLE_STEP_SCENE_OBJECT = SceneObject(
-    hit_box_matrix=SINGLE_STEP_BOUNDING_BOX,
-    hit_box_offset=LEFT_SINGLE_STEP_OFFSET,
-    reflecting=jnp.array(1),
-    horizontal=jnp.array(0),
+    hit_box_matrix=SINGLE_STEP_BOUNDING_BOX,  # type: ignore
+    hit_box_offset=LEFT_SINGLE_STEP_OFFSET,  # type: ignore
+    reflecting=jnp.array(1),  # type: ignore
+    horizontal=jnp.array(0),  # type: ignore
 )
 RIGHT_SINGLE_STEP_SCENE_OBJECT = SceneObject(
-    hit_box_matrix=SINGLE_STEP_BOUNDING_BOX,
-    hit_box_offset=RIGHT_SINGLE_STEP_OFFSET,
-    reflecting=jnp.array(1),
-    horizontal=jnp.array(0),
+    hit_box_matrix=SINGLE_STEP_BOUNDING_BOX,  # type: ignore
+    hit_box_offset=RIGHT_SINGLE_STEP_OFFSET,  # type: ignore
+    reflecting=jnp.array(1),  # type: ignore
+    horizontal=jnp.array(0),  # type: ignore
 )
+
+# Rollover Scene Objects
+
+LEFT_ROLLOVER_LEFT_BAR_SCENE_OBJECT = SceneObject(
+    hit_box_matrix=LEFT_ROLLOVER_LEFT_BAR_BOUNDING_BOX,  # type: ignore
+    hit_box_offset=LEFT_ROLLOVER_LEFT_BAR_OFFSET,  # type: ignore
+    reflecting=jnp.array(1),  # type: ignore
+    horizontal=jnp.array(0),  # type: ignore
+)
+
+LEFT_ROLLOVER_RIGHT_BAR_SCENE_OBJECT = SceneObject(
+    hit_box_matrix=LEFT_ROLLOVER_RIGHT_BAR_BOUNDING_BOX,  # type: ignore
+    hit_box_offset=LEFT_ROLLOVER_RIGHT_BAR_OFFSET,  # type: ignore
+    reflecting=jnp.array(1),  # type: ignore
+    horizontal=jnp.array(0),  # type: ignore
+)
+
+ATARI_ROLLOVER_LEFT_BAR_SCENE_OBJECT = SceneObject(
+    hit_box_matrix=ATARI_ROLLOVER_LEFT_BAR_BOUNDING_BOX,  # type: ignore
+    hit_box_offset=ATARI_ROLLOVER_LEFT_BAR_OFFSET,  # type: ignore
+    reflecting=jnp.array(1),  # type: ignore
+    horizontal=jnp.array(0),  # type: ignore
+)
+
+ATARI_ROLLOVER_RIGHT_BAR_SCENE_OBJECT = SceneObject(
+    hit_box_matrix=ATARI_ROLLOVER_RIGHT_BAR_BOUNDING_BOX,  # type: ignore
+    hit_box_offset=ATARI_ROLLOVER_RIGHT_BAR_OFFSET,  # type: ignore
+    reflecting=jnp.array(1),  # type: ignore
+    horizontal=jnp.array(0),  # type: ignore
+)
+
+# Bumper Scene Objects
+
+TOP_BUMPER_SCENE_OBJECT = SceneObject(
+    hit_box_matrix=TOP_BUMPER_BOUNDING_BOX,  # type: ignore
+    hit_box_offset=TOP_BUMPER_OFFSET,  # type: ignore
+    reflecting=jnp.array(1),  # type: ignore
+    horizontal=jnp.array(0),  # type: ignore
+)
+
+LEFT_BUMPER_SCENE_OBJECT = SceneObject(
+    hit_box_matrix=LEFT_BUMPER_BOUNDING_BOX,  # type: ignore
+    hit_box_offset=LEFT_BUMPER_OFFSET,  # type: ignore
+    reflecting=jnp.array(1),  # type: ignore
+    horizontal=jnp.array(0),  # type: ignore
+)
+RIGHT_BUMPER_SCENE_OBJECT = SceneObject(
+    hit_box_matrix=RIGHT_BUMPER_BOUNDING_BOX,  # type: ignore
+    hit_box_offset=RIGHT_BUMPER_OFFSET,  # type: ignore
+    reflecting=jnp.array(1),  # type: ignore
+    horizontal=jnp.array(0),  # type: ignore
+)
+
+# Left Spinner Scene Objects
+
+# Left Spinner Bottom Position
+
+LEFT_SPINNER_BOTTOM_POSITION_JOINED_PART_SCENE_OBJECT = SceneObject(
+    hit_box_matrix=SPINNER_TOP_BOTTOM_LARGE_BOUNDING_BOX,  # type: ignore
+    hit_box_offset=LEFT_SPINNER_BOTTOM_POSITION_JOINED_PART,  # type: ignore
+    reflecting=jnp.array(1),  # type: ignore
+    horizontal=jnp.array(1),  # type: ignore
+)
+
+LEFT_SPINNER_BOTTOM_POSITION_LEFT_PART_1_SCENE_OBJECT = SceneObject(
+    hit_box_matrix=SPINNER_TOP_BOTTOM_SMALL_BOUNDING_BOX,  # type: ignore
+    hit_box_offset=LEFT_SPINNER_BOTTOM_POSITION_LEFT_PART_1,  # type: ignore
+    reflecting=jnp.array(1),  # type: ignore
+    horizontal=jnp.array(0),  # type: ignore
+)
+
+LEFT_SPINNER_BOTTOM_POSITION_LEFT_PART_2_SCENE_OBJECT = SceneObject(
+    hit_box_matrix=SPINNER_TOP_BOTTOM_SMALL_BOUNDING_BOX,  # type: ignore
+    hit_box_offset=LEFT_SPINNER_BOTTOM_POSITION_LEFT_PART_2,  # type: ignore
+    reflecting=jnp.array(1),  # type: ignore
+    horizontal=jnp.array(0),  # type: ignore
+)
+
+LEFT_SPINNER_BOTTOM_POSITION_RIGHT_PART_1_SCENE_OBJECT = SceneObject(
+    hit_box_matrix=SPINNER_TOP_BOTTOM_SMALL_BOUNDING_BOX,  # type: ignore
+    hit_box_offset=LEFT_SPINNER_BOTTOM_POSITION_RIGHT_PART_1,  # type: ignore
+    reflecting=jnp.array(1),  # type: ignore
+    horizontal=jnp.array(0),  # type: ignore
+)
+
+LEFT_SPINNER_BOTTOM_POSITION_RIGHT_PART_2_SCENE_OBJECT = SceneObject(
+    hit_box_matrix=SPINNER_TOP_BOTTOM_SMALL_BOUNDING_BOX,  # type: ignore
+    hit_box_offset=LEFT_SPINNER_BOTTOM_POSITION_RIGHT_PART_2,  # type: ignore
+    reflecting=jnp.array(1),  # type: ignore
+    horizontal=jnp.array(0),  # type: ignore
+)
+
+# Left Spinner Top Position
+LEFT_SPINNER_TOP_POSITION_JOINED_PART_SCENE_OBJECT = SceneObject(
+    hit_box_matrix=SPINNER_TOP_BOTTOM_LARGE_BOUNDING_BOX,  # type: ignore
+    hit_box_offset=LEFT_SPINNER_TOP_POSITION_JOINED_PART,  # type: ignore
+    reflecting=jnp.array(1),  # type: ignore
+    horizontal=jnp.array(1),  # type: ignore
+)
+LEFT_SPINNER_TOP_POSITION_LEFT_PART_1_SCENE_OBJECT = SceneObject(
+    hit_box_matrix=SPINNER_TOP_BOTTOM_SMALL_BOUNDING_BOX,  # type: ignore
+    hit_box_offset=LEFT_SPINNER_TOP_POSITION_LEFT_PART_1,  # type: ignore
+    reflecting=jnp.array(1),  # type: ignore
+    horizontal=jnp.array(0),  # type: ignore
+)
+
+LEFT_SPINNER_TOP_POSITION_LEFT_PART_2_SCENE_OBJECT = SceneObject(
+    hit_box_matrix=SPINNER_TOP_BOTTOM_SMALL_BOUNDING_BOX,  # type: ignore
+    hit_box_offset=LEFT_SPINNER_TOP_POSITION_LEFT_PART_2,  # type: ignore
+    reflecting=jnp.array(1),  # type: ignore
+    horizontal=jnp.array(0),  # type: ignore
+)
+
+LEFT_SPINNER_TOP_POSITION_RIGHT_PART_1_SCENE_OBJECT = SceneObject(
+    hit_box_matrix=SPINNER_TOP_BOTTOM_SMALL_BOUNDING_BOX,  # type: ignore
+    hit_box_offset=LEFT_SPINNER_TOP_POSITION_RIGHT_PART_1,  # type: ignore
+    reflecting=jnp.array(1),  # type: ignore
+    horizontal=jnp.array(0),  # type: ignore
+)
+
+LEFT_SPINNER_TOP_POSITION_RIGHT_PART_2_SCENE_OBJECT = SceneObject(
+    hit_box_matrix=SPINNER_TOP_BOTTOM_SMALL_BOUNDING_BOX,  # type: ignore
+    hit_box_offset=LEFT_SPINNER_TOP_POSITION_RIGHT_PART_2,  # type: ignore
+    reflecting=jnp.array(1),  # type: ignore
+    horizontal=jnp.array(0),  # type: ignore
+)
+
+# Left Spinner Left Position
+LEFT_SPINNER_LEFT_POSITION_JOINED_PART_SCENE_OBJECT = SceneObject(
+    hit_box_matrix=SPINNER_LEFT_RIGHT_LARGE_BOUNDING_BOX,  # type: ignore
+    hit_box_offset=LEFT_SPINNER_LEFT_POSITION_JOINED_PART,  # type: ignore
+    reflecting=jnp.array(1),  # type: ignore
+    horizontal=jnp.array(0),  # type: ignore
+)
+
+LEFT_SPINNER_LEFT_POSITION_LEFT_PART_1_SCENE_OBJECT = SceneObject(
+    hit_box_matrix=SPINNER_LEFT_RIGHT_SMALL_BOUNDING_BOX,  # type: ignore
+    hit_box_offset=LEFT_SPINNER_LEFT_POSITION_LEFT_PART_1,  # type: ignore
+    reflecting=jnp.array(1),  # type: ignore
+    horizontal=jnp.array(1),  # type: ignore
+)
+
+LEFT_SPINNER_LEFT_POSITION_LEFT_PART_2_SCENE_OBJECT = SceneObject(
+    hit_box_matrix=SPINNER_LEFT_RIGHT_SMALL_BOUNDING_BOX,  # type: ignore
+    hit_box_offset=LEFT_SPINNER_LEFT_POSITION_LEFT_PART_2,  # type: ignore
+    reflecting=jnp.array(1),  # type: ignore
+    horizontal=jnp.array(1),  # type: ignore
+)
+
+LEFT_SPINNER_LEFT_POSITION_RIGHT_PART_1_SCENE_OBJECT = SceneObject(
+    hit_box_matrix=SPINNER_LEFT_RIGHT_SMALL_BOUNDING_BOX,  # type: ignore
+    hit_box_offset=LEFT_SPINNER_LEFT_POSITION_RIGHT_PART_1,  # type: ignore
+    reflecting=jnp.array(1),  # type: ignore
+    horizontal=jnp.array(1),  # type: ignore
+)
+
+LEFT_SPINNER_LEFT_POSITION_RIGHT_PART_2_SCENE_OBJECT = SceneObject(
+    hit_box_matrix=SPINNER_LEFT_RIGHT_SMALL_BOUNDING_BOX,  # type: ignore
+    hit_box_offset=LEFT_SPINNER_LEFT_POSITION_RIGHT_PART_2,  # type: ignore
+    reflecting=jnp.array(1),  # type: ignore
+    horizontal=jnp.array(1),  # type: ignore
+)
+
+# Left Spinner Right Position
+LEFT_SPINNER_RIGHT_POSITION_JOINED_PART_SCENE_OBJECT = SceneObject(
+    hit_box_matrix=SPINNER_LEFT_RIGHT_LARGE_BOUNDING_BOX,  # type: ignore
+    hit_box_offset=LEFT_SPINNER_RIGHT_POSITION_JOINED_PART,  # type: ignore
+    reflecting=jnp.array(1),  # type: ignore
+    horizontal=jnp.array(0),  # type: ignore
+)
+
+LEFT_SPINNER_RIGHT_POSITION_LEFT_PART_1_SCENE_OBJECT = SceneObject(
+    hit_box_matrix=SPINNER_LEFT_RIGHT_SMALL_BOUNDING_BOX,  # type: ignore
+    hit_box_offset=LEFT_SPINNER_RIGHT_POSITION_LEFT_PART_1,  # type: ignore
+    reflecting=jnp.array(1),  # type: ignore
+    horizontal=jnp.array(1),  # type: ignore
+)
+
+LEFT_SPINNER_RIGHT_POSITION_LEFT_PART_2_SCENE_OBJECT = SceneObject(
+    hit_box_matrix=SPINNER_LEFT_RIGHT_SMALL_BOUNDING_BOX,  # type: ignore
+    hit_box_offset=LEFT_SPINNER_RIGHT_POSITION_LEFT_PART_2,  # type: ignore
+    reflecting=jnp.array(1),  # type: ignore
+    horizontal=jnp.array(1),  # type: ignore
+)
+
+LEFT_SPINNER_RIGHT_POSITION_RIGHT_PART_1_SCENE_OBJECT = SceneObject(
+    hit_box_matrix=SPINNER_LEFT_RIGHT_SMALL_BOUNDING_BOX,  # type: ignore
+    hit_box_offset=LEFT_SPINNER_RIGHT_POSITION_RIGHT_PART_1,  # type: ignore
+    reflecting=jnp.array(1),  # type: ignore
+    horizontal=jnp.array(1),  # type: ignore
+)
+
+LEFT_SPINNER_RIGHT_POSITION_RIGHT_PART_2_SCENE_OBJECT = SceneObject(
+    hit_box_matrix=SPINNER_LEFT_RIGHT_SMALL_BOUNDING_BOX,  # type: ignore
+    hit_box_offset=LEFT_SPINNER_RIGHT_POSITION_RIGHT_PART_2,  # type: ignore
+    reflecting=jnp.array(1),  # type: ignore
+    horizontal=jnp.array(1),  # type: ignore
+)
+
+# Right Spinner Scene Objects
+
+# Right Spinner Bottom Position
+RIGHT_SPINNER_BOTTOM_POSITION_JOINED_PART_SCENE_OBJECT = SceneObject(
+    hit_box_matrix=SPINNER_TOP_BOTTOM_LARGE_BOUNDING_BOX,  # type: ignore
+    hit_box_offset=RIGHT_SPINNER_BOTTOM_POSITION_JOINED_PART,  # type: ignore
+    reflecting=jnp.array(1),  # type: ignore
+    horizontal=jnp.array(1),  # type: ignore
+)
+
+RIGHT_SPINNER_BOTTOM_POSITION_LEFT_PART_1_SCENE_OBJECT = SceneObject(
+    hit_box_matrix=SPINNER_TOP_BOTTOM_SMALL_BOUNDING_BOX,  # type: ignore
+    hit_box_offset=RIGHT_SPINNER_BOTTOM_POSITION_LEFT_PART_1,  # type: ignore
+    reflecting=jnp.array(1),  # type: ignore
+    horizontal=jnp.array(0),  # type: ignore
+)
+
+RIGHT_SPINNER_BOTTOM_POSITION_LEFT_PART_2_SCENE_OBJECT = SceneObject(
+    hit_box_matrix=SPINNER_TOP_BOTTOM_SMALL_BOUNDING_BOX,  # type: ignore
+    hit_box_offset=RIGHT_SPINNER_BOTTOM_POSITION_LEFT_PART_2,  # type: ignore
+    reflecting=jnp.array(1),  # type: ignore
+    horizontal=jnp.array(0),  # type: ignore
+)
+
+RIGHT_SPINNER_BOTTOM_POSITION_RIGHT_PART_1_SCENE_OBJECT = SceneObject(
+    hit_box_matrix=SPINNER_TOP_BOTTOM_SMALL_BOUNDING_BOX,  # type: ignore
+    hit_box_offset=RIGHT_SPINNER_BOTTOM_POSITION_RIGHT_PART_1,  # type: ignore
+    reflecting=jnp.array(1),  # type: ignore
+    horizontal=jnp.array(0),  # type: ignore
+)
+
+RIGHT_SPINNER_BOTTOM_POSITION_RIGHT_PART_2_SCENE_OBJECT = SceneObject(
+    hit_box_matrix=SPINNER_TOP_BOTTOM_SMALL_BOUNDING_BOX,  # type: ignore
+    hit_box_offset=RIGHT_SPINNER_BOTTOM_POSITION_RIGHT_PART_2,  # type: ignore
+    reflecting=jnp.array(1),  # type: ignore
+    horizontal=jnp.array(0),  # type: ignore
+)
+
+# Right Spinner Top Position
+RIGHT_SPINNER_TOP_POSITION_JOINED_PART_SCENE_OBJECT = SceneObject(
+    hit_box_matrix=SPINNER_TOP_BOTTOM_LARGE_BOUNDING_BOX,  # type: ignore
+    hit_box_offset=RIGHT_SPINNER_TOP_POSITION_JOINED_PART,  # type: ignore
+    reflecting=jnp.array(1),  # type: ignore
+    horizontal=jnp.array(1),  # type: ignore
+)
+
+RIGHT_SPINNER_TOP_POSITION_LEFT_PART_1_SCENE_OBJECT = SceneObject(
+    hit_box_matrix=SPINNER_TOP_BOTTOM_SMALL_BOUNDING_BOX,  # type: ignore
+    hit_box_offset=RIGHT_SPINNER_TOP_POSITION_LEFT_PART_1,  # type: ignore
+    reflecting=jnp.array(1),  # type: ignore
+    horizontal=jnp.array(0),  # type: ignore
+)
+
+RIGHT_SPINNER_TOP_POSITION_LEFT_PART_2_SCENE_OBJECT = SceneObject(
+    hit_box_matrix=SPINNER_TOP_BOTTOM_SMALL_BOUNDING_BOX,  # type: ignore
+    hit_box_offset=RIGHT_SPINNER_TOP_POSITION_LEFT_PART_2,  # type: ignore
+    reflecting=jnp.array(1),  # type: ignore
+    horizontal=jnp.array(0),  # type: ignore
+)
+
+RIGHT_SPINNER_TOP_POSITION_RIGHT_PART_1_SCENE_OBJECT = SceneObject(
+    hit_box_matrix=SPINNER_TOP_BOTTOM_SMALL_BOUNDING_BOX,  # type: ignore
+    hit_box_offset=RIGHT_SPINNER_TOP_POSITION_RIGHT_PART_1,  # type: ignore
+    reflecting=jnp.array(1),  # type: ignore
+    horizontal=jnp.array(0),  # type: ignore
+)
+
+RIGHT_SPINNER_TOP_POSITION_RIGHT_PART_2_SCENE_OBJECT = SceneObject(
+    hit_box_matrix=SPINNER_TOP_BOTTOM_SMALL_BOUNDING_BOX,  # type: ignore
+    hit_box_offset=RIGHT_SPINNER_TOP_POSITION_RIGHT_PART_2,  # type: ignore
+    reflecting=jnp.array(1),  # type: ignore
+    horizontal=jnp.array(0),  # type: ignore
+)
+
+# Right Spinner Left Position
+RIGHT_SPINNER_LEFT_POSITION_JOINED_PART_SCENE_OBJECT = SceneObject(
+    hit_box_matrix=SPINNER_LEFT_RIGHT_LARGE_BOUNDING_BOX,  # type: ignore
+    hit_box_offset=RIGHT_SPINNER_LEFT_POSITION_JOINED_PART,  # type: ignore
+    reflecting=jnp.array(1),  # type: ignore
+    horizontal=jnp.array(0),  # type: ignore
+)
+
+RIGHT_SPINNER_LEFT_POSITION_LEFT_PART_1_SCENE_OBJECT = SceneObject(
+    hit_box_matrix=SPINNER_LEFT_RIGHT_SMALL_BOUNDING_BOX,  # type: ignore
+    hit_box_offset=RIGHT_SPINNER_LEFT_POSITION_LEFT_PART_1,  # type: ignore
+    reflecting=jnp.array(1),  # type: ignore
+    horizontal=jnp.array(1),  # type: ignore
+)
+
+RIGHT_SPINNER_LEFT_POSITION_LEFT_PART_2_SCENE_OBJECT = SceneObject(
+    hit_box_matrix=SPINNER_LEFT_RIGHT_SMALL_BOUNDING_BOX,  # type: ignore
+    hit_box_offset=RIGHT_SPINNER_LEFT_POSITION_LEFT_PART_2,  # type: ignore
+    reflecting=jnp.array(1),  # type: ignore
+    horizontal=jnp.array(1),  # type: ignore
+)
+
+RIGHT_SPINNER_LEFT_POSITION_RIGHT_PART_1_SCENE_OBJECT = SceneObject(
+    hit_box_matrix=SPINNER_LEFT_RIGHT_SMALL_BOUNDING_BOX,  # type: ignore
+    hit_box_offset=RIGHT_SPINNER_LEFT_POSITION_RIGHT_PART_1,  # type: ignore
+    reflecting=jnp.array(1),  # type: ignore
+    horizontal=jnp.array(1),  # type: ignore
+)
+
+RIGHT_SPINNER_LEFT_POSITION_RIGHT_PART_2_SCENE_OBJECT = SceneObject(
+    hit_box_matrix=SPINNER_LEFT_RIGHT_SMALL_BOUNDING_BOX,  # type: ignore
+    hit_box_offset=RIGHT_SPINNER_LEFT_POSITION_RIGHT_PART_2,  # type: ignore
+    reflecting=jnp.array(1),  # type: ignore
+    horizontal=jnp.array(1),  # type: ignore
+)
+
+# Right Spinner Right Position
+RIGHT_SPINNER_RIGHT_POSITION_JOINED_PART_SCENE_OBJECT = SceneObject(
+    hit_box_matrix=SPINNER_LEFT_RIGHT_LARGE_BOUNDING_BOX,  # type: ignore
+    hit_box_offset=RIGHT_SPINNER_RIGHT_POSITION_JOINED_PART,  # type: ignore
+    reflecting=jnp.array(1),  # type: ignore
+    horizontal=jnp.array(0),  # type: ignore
+)
+
+RIGHT_SPINNER_RIGHT_POSITION_LEFT_PART_1_SCENE_OBJECT = SceneObject(
+    hit_box_matrix=SPINNER_LEFT_RIGHT_SMALL_BOUNDING_BOX,  # type: ignore
+    hit_box_offset=RIGHT_SPINNER_RIGHT_POSITION_LEFT_PART_1,  # type: ignore
+    reflecting=jnp.array(1),  # type: ignore
+    horizontal=jnp.array(1),  # type: ignore
+)
+
+RIGHT_SPINNER_RIGHT_POSITION_LEFT_PART_2_SCENE_OBJECT = SceneObject(
+    hit_box_matrix=SPINNER_LEFT_RIGHT_SMALL_BOUNDING_BOX,  # type: ignore
+    hit_box_offset=RIGHT_SPINNER_RIGHT_POSITION_LEFT_PART_2,  # type: ignore
+    reflecting=jnp.array(1),  # type: ignore
+    horizontal=jnp.array(1),  # type: ignore
+)
+
+RIGHT_SPINNER_RIGHT_POSITION_RIGHT_PART_1_SCENE_OBJECT = SceneObject(
+    hit_box_matrix=SPINNER_LEFT_RIGHT_SMALL_BOUNDING_BOX,  # type: ignore
+    hit_box_offset=RIGHT_SPINNER_RIGHT_POSITION_RIGHT_PART_1,  # type: ignore
+    reflecting=jnp.array(1),  # type: ignore
+    horizontal=jnp.array(1),  # type: ignore
+)
+
+RIGHT_SPINNER_RIGHT_POSITION_RIGHT_PART_2_SCENE_OBJECT = SceneObject(
+    hit_box_matrix=SPINNER_LEFT_RIGHT_SMALL_BOUNDING_BOX,  # type: ignore
+    hit_box_offset=RIGHT_SPINNER_RIGHT_POSITION_RIGHT_PART_2,  # type: ignore
+    reflecting=jnp.array(1),  # type: ignore
+    horizontal=jnp.array(1),  # type: ignore
+)
+
+
+# Middle Bar Scene Object
+
+MIDDLE_BAR_SCENE_OBJECT = SceneObject(
+    hit_box_matrix=MIDDLE_BAR_BOUNDING_BOX,  # type: ignore
+    hit_box_offset=MIDDLE_BAR_OFFSET,  # type: ignore
+    reflecting=jnp.array(1),  # type: ignore
+    horizontal=jnp.array(1),  # type: ignore
+)
+
 
 REFLECTING_SCENE_OBJECT_LIST = [
     TOP_WALL_SCENE_OBJECT,
@@ -343,7 +845,55 @@ REFLECTING_SCENE_OBJECT_LIST = [
     RIGHT_DOUBLE_STEP_SCENE_OBJECT,
     LEFT_SINGLE_STEP_SCENE_OBJECT,
     RIGHT_SINGLE_STEP_SCENE_OBJECT,
-    # INVISIBLE_BLOCK_SCENE_OBJECT,
+    LEFT_ROLLOVER_LEFT_BAR_SCENE_OBJECT,
+    LEFT_ROLLOVER_RIGHT_BAR_SCENE_OBJECT,
+    ATARI_ROLLOVER_LEFT_BAR_SCENE_OBJECT,
+    ATARI_ROLLOVER_RIGHT_BAR_SCENE_OBJECT,
+    TOP_BUMPER_SCENE_OBJECT,
+    LEFT_BUMPER_SCENE_OBJECT,
+    RIGHT_BUMPER_SCENE_OBJECT,
+    LEFT_SPINNER_BOTTOM_POSITION_JOINED_PART_SCENE_OBJECT,
+    LEFT_SPINNER_BOTTOM_POSITION_LEFT_PART_1_SCENE_OBJECT,
+    LEFT_SPINNER_BOTTOM_POSITION_LEFT_PART_2_SCENE_OBJECT,
+    LEFT_SPINNER_BOTTOM_POSITION_RIGHT_PART_1_SCENE_OBJECT,
+    LEFT_SPINNER_BOTTOM_POSITION_RIGHT_PART_2_SCENE_OBJECT,
+    LEFT_SPINNER_TOP_POSITION_JOINED_PART_SCENE_OBJECT,
+    LEFT_SPINNER_TOP_POSITION_LEFT_PART_1_SCENE_OBJECT,
+    LEFT_SPINNER_TOP_POSITION_LEFT_PART_2_SCENE_OBJECT,
+    LEFT_SPINNER_TOP_POSITION_RIGHT_PART_1_SCENE_OBJECT,
+    LEFT_SPINNER_TOP_POSITION_RIGHT_PART_2_SCENE_OBJECT,
+    LEFT_SPINNER_LEFT_POSITION_JOINED_PART_SCENE_OBJECT,
+    LEFT_SPINNER_LEFT_POSITION_LEFT_PART_1_SCENE_OBJECT,
+    LEFT_SPINNER_LEFT_POSITION_LEFT_PART_2_SCENE_OBJECT,
+    LEFT_SPINNER_LEFT_POSITION_RIGHT_PART_1_SCENE_OBJECT,
+    LEFT_SPINNER_LEFT_POSITION_RIGHT_PART_2_SCENE_OBJECT,
+    LEFT_SPINNER_RIGHT_POSITION_JOINED_PART_SCENE_OBJECT,
+    LEFT_SPINNER_RIGHT_POSITION_LEFT_PART_1_SCENE_OBJECT,
+    LEFT_SPINNER_RIGHT_POSITION_LEFT_PART_2_SCENE_OBJECT,
+    LEFT_SPINNER_RIGHT_POSITION_RIGHT_PART_1_SCENE_OBJECT,
+    LEFT_SPINNER_RIGHT_POSITION_RIGHT_PART_2_SCENE_OBJECT,
+    RIGHT_SPINNER_BOTTOM_POSITION_JOINED_PART_SCENE_OBJECT,
+    RIGHT_SPINNER_BOTTOM_POSITION_LEFT_PART_1_SCENE_OBJECT,
+    RIGHT_SPINNER_BOTTOM_POSITION_LEFT_PART_2_SCENE_OBJECT,
+    RIGHT_SPINNER_BOTTOM_POSITION_RIGHT_PART_1_SCENE_OBJECT,
+    RIGHT_SPINNER_BOTTOM_POSITION_RIGHT_PART_2_SCENE_OBJECT,
+    RIGHT_SPINNER_TOP_POSITION_JOINED_PART_SCENE_OBJECT,
+    RIGHT_SPINNER_TOP_POSITION_LEFT_PART_1_SCENE_OBJECT,
+    RIGHT_SPINNER_TOP_POSITION_LEFT_PART_2_SCENE_OBJECT,
+    RIGHT_SPINNER_TOP_POSITION_RIGHT_PART_1_SCENE_OBJECT,
+    RIGHT_SPINNER_TOP_POSITION_RIGHT_PART_2_SCENE_OBJECT,
+    RIGHT_SPINNER_LEFT_POSITION_JOINED_PART_SCENE_OBJECT,
+    RIGHT_SPINNER_LEFT_POSITION_LEFT_PART_1_SCENE_OBJECT,
+    RIGHT_SPINNER_LEFT_POSITION_LEFT_PART_2_SCENE_OBJECT,
+    RIGHT_SPINNER_LEFT_POSITION_RIGHT_PART_1_SCENE_OBJECT,
+    RIGHT_SPINNER_LEFT_POSITION_RIGHT_PART_2_SCENE_OBJECT,
+    RIGHT_SPINNER_RIGHT_POSITION_JOINED_PART_SCENE_OBJECT,
+    RIGHT_SPINNER_RIGHT_POSITION_LEFT_PART_1_SCENE_OBJECT,
+    RIGHT_SPINNER_RIGHT_POSITION_LEFT_PART_2_SCENE_OBJECT,
+    RIGHT_SPINNER_RIGHT_POSITION_RIGHT_PART_1_SCENE_OBJECT,
+    RIGHT_SPINNER_RIGHT_POSITION_RIGHT_PART_2_SCENE_OBJECT,
+    MIDDLE_BAR_SCENE_OBJECT,
+    INVISIBLE_BLOCK_SCENE_OBJECT,
 ]
 # SCENE_OBJECTS_STACKED = SceneObject(
 #     hit_box_matrix=jnp.stack([obj.hit_box_matrix for obj in SCENE_OBJECT_LIST]),
