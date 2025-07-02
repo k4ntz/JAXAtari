@@ -1212,11 +1212,17 @@ class JaxVideoPinball(
             ]
         )
 
-    # def action_space(self) -> spaces.Discrete:
-    #     return spaces.Discrete(len(self.action_set))
-
-    def get_action_space(self):
-        return jnp.array(list(self.action_set))
+    def action_space(self) -> spaces.Discrete:
+        """Returns the action space for Pong.
+        Actions are:
+        0: NOOP
+        1: FIRE
+        2: RIGHT
+        3: LEFT
+        4: RIGHTFIRE
+        5: LEFTFIRE
+        """
+        return spaces.Discrete(len(self.action_set))
 
     def observation_space(self) -> spaces.Box:
         return spaces.Box(
