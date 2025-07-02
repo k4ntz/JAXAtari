@@ -189,7 +189,7 @@ class JaxBackgammonEnv(JaxEnvironment[BackgammonState, jnp.ndarray, dict]):
 
                 bearing_off_distance = jax.lax.cond(
                     player == WHITE,
-                    lambda _: HOME_INDEX - from_point,
+                    lambda _: HOME_INDEX - from_point - 1,
                     lambda _: from_point + 1,
                     operand=None
                 )
