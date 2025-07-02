@@ -41,6 +41,8 @@ class RiverraidState(NamedTuple):
     segment_transition_state: chex.Array
     segment_straigt_counter: chex.Array
 
+    dam_position: chex.Array
+
 
 class RiverraidInfo(NamedTuple):
     time: jnp.ndarray
@@ -408,6 +410,7 @@ def generate_altering_river(state: RiverraidState) -> RiverraidState:
                         )
     return state._replace(master_key=key)
 
+@jax.jit
 def generate_straight_river(state: RiverraidState) -> RiverraidState:
     new_river_left = state.river_left.at[0].set(state.river_left[1])
     new_river_right = state.river_right.at[0].set(state.river_right[1])
@@ -415,18 +418,28 @@ def generate_straight_river(state: RiverraidState) -> RiverraidState:
                           river_right=new_river_right,
                           )
 
+@jax.jit
 def generate_segment_transition(state: RiverraidState) -> RiverraidState:
+    jax.debug.print("TRANSITIONING SEGMENT")
+    def scroll_empty_island(state: RiverraidState) -> RiverraidState:
+        scrolled_inner_left = jnp.roll(state.river_inner_left, 1)
+        scrolled_inner_right = jnp.roll(state.river_inner_right, 1)
+        scrolled_inner_left = scrolled_inner_left.at[0].set(-1)
+        scrolled_inner_right = scrolled_inner_right.at[0].set(-1)
+        return state._replace(river_inner_left=scrolled_inner_left,
+                                river_inner_right=scrolled_inner_right)
+
     def first_call(state: RiverraidState) -> RiverraidState:
-        new_island_present, new_segment_transition_state = jax.lax.cond(state.river_island_present != 1,
+        new_island_present, new_segment_transition_state = jax.lax.cond(state.river_island_present == 0,
+                                        lambda state: (jnp.array(0), jnp.array(2)),
                                         lambda state: (jnp.array(3), jnp.array(1)),
-                                        lambda state: (state.river_island_present, jnp.array(2)),
                                         operand=state)
         return generate_altering_river(state._replace(river_island_present=new_island_present,
                                                       segment_transition_state=new_segment_transition_state))
 
     def remove_island(state: RiverraidState) -> RiverraidState:
         new_state = generate_altering_river(state)
-        new_segment_transition_state = jax.lax.cond(new_state.river_island_present == 0 and new_state.river_state == 0,
+        new_segment_transition_state = jax.lax.cond(jnp.logical_and(new_state.river_island_present == 0, new_state.river_state == 0),
                                                     lambda state: jnp.array(2),
                                                     lambda state: state.segment_transition_state,
                                                     operand=state)
@@ -435,42 +448,62 @@ def generate_segment_transition(state: RiverraidState) -> RiverraidState:
     def shrink_to_damsize(state: RiverraidState) -> RiverraidState:
         scrolled_left = jnp.roll(state.river_left, 1)
         scrolled_right = jnp.roll(state.river_right, 1)
-        scrolled_inner_left = jnp.roll(state.river_inner_left, 1)
-        scrolled_inner_right = jnp.roll(state.river_inner_right, 1)
 
-        scrolled_inner_left = scrolled_inner_left.at[0].set(-1)
-        scrolled_inner_right = scrolled_inner_right.at[0].set(-1)
+
         new_river_left = state.river_left.at[0].set(scrolled_left[1] + 3)
         new_river_right = state.river_right.at[0].set(scrolled_right[1] - 3)
 
-        new_segment_transition_state = jax.lax.cond(state.river_right - state.river_left <= DEFAULT_RIVER_WIDTH,
+        new_segment_transition_state = jax.lax.cond(state.river_right[0] - state.river_left[0] <= DEFAULT_RIVER_WIDTH + 12,
                                                     lambda state: jnp.array(3),
                                                     lambda state: state.segment_transition_state,
                                                     operand=state
                                                     )
-        return state._replace(river_left=new_river_left,
+        new_state = scroll_empty_island(state)
+        return new_state._replace(river_left=new_river_left,
                                 river_right=new_river_right,
-                                river_inner_left=scrolled_inner_left,
-                                river_inner_right=scrolled_inner_right,
                                 segment_transition_state=new_segment_transition_state)
 
     def straight_until_dam(state: RiverraidState) -> RiverraidState:
-        new_river_left = state.river_left.at[0].set(state.river_left[1])
-        new_river_right = state.river_right.at[0].set(state.river_right[1])
+        scrolled_left = jnp.roll(state.river_left, 1)
+        scrolled_right = jnp.roll(state.river_right, 1)
+        new_river_left = scrolled_left.at[0].set(state.river_left[1])
+        new_river_right = scrolled_right.at[0].set(state.river_right[1])
         new_segment_straight_counter = state.segment_straigt_counter - 1
         new_transition_state = jax.lax.cond(new_segment_straight_counter <= 0,
                                                     lambda state: jnp.array(4),
-                                                    lambda state: state.segment_treansition_state,
+                                                    lambda state: state.segment_transition_state,
                                                     operand=state)
-        return state._replace(river_left=new_river_left,
+        new_state = scroll_empty_island(state)
+        return new_state._replace(river_left=new_river_left,
                               river_right=new_river_right,
                               segment_straigt_counter=new_segment_straight_counter,
                               segment_transition_state=new_transition_state)
 
     def dam_into_new_segment(state: RiverraidState) -> RiverraidState:
-        return state
+        jax.debug.print("SETTING DAM")
+        scrolled_left = jnp.roll(state.river_left, 1)
+        scrolled_right = jnp.roll(state.river_right, 1)
+        new_state = scroll_empty_island(state)
+        new_segment_straight_counter = jnp.array(8)
+        dam_position = 0
+
+        new_river_state = jnp.array(0)
+        new_alternation_length = jnp.array(3)
+        new_alternation_cooldown = jnp.array(0)
+        new_segment_state = jnp.array(0)
+        new_segment_transition_state = jnp.array(0)
+        return new_state._replace(segment_state=new_segment_state,
+                              segment_transition_state=new_segment_transition_state,
+                              dam_position=dam_position,
+                              segment_straigt_counter=new_segment_straight_counter,
+                              river_state=new_river_state,
+                              river_alternation_length=new_alternation_length,
+                              alternation_cooldown=new_alternation_cooldown,
+                              river_left=scrolled_left.at[0].set(scrolled_left[1]),
+                              river_right=scrolled_right.at[0].set(scrolled_right[1]))
 
 
+    jax.debug.print("Riverraid: segment_transition_state: {segment_transition_state}", segment_transition_state=state.segment_transition_state)
     return jax.lax.switch(state.segment_transition_state,[first_call,
                                                                 remove_island,
                                                                 shrink_to_damsize,
@@ -479,11 +512,26 @@ def generate_segment_transition(state: RiverraidState) -> RiverraidState:
                                                                operand=state)
 
 
-
+@jax.jit
+@jax.jit
 def update_river_banks(state: RiverraidState) -> RiverraidState:
+    new_segment_state = jax.lax.cond(
+        (state.turn_step % 100) == 0,
+        lambda state: state.segment_state + 1,
+        lambda state: state.segment_state,
+        operand=state
+    )
+    jax.debug.print("Riverraid: segment_state: {segment_state}", segment_state=new_segment_state)
+    state = state._replace(segment_state=new_segment_state % 3)
+    return jax.lax.switch(state.segment_state, [lambda state: generate_altering_river(state),
+                                                lambda state: generate_segment_transition(state),
+                                                lambda state: generate_altering_river(state)],
+                                                operand=state)
 
-    return jax.lax.switch(state.segment_state, [generate_segment_transition(state), generate_segment_transition(state), generate_altering_river(state)], state)
-
+@jax.jit
+def roll_static_objects(state: RiverraidState) -> RiverraidState:
+    new_dam_position = state.dam_position + 1
+    return state._replace(dam_position=new_dam_position)
 
 class JaxRiverraid(JaxEnvironment):
     def __init__(self, frameskip: int = 0, reward_funcs: list[callable] = None):
@@ -525,7 +573,10 @@ class JaxRiverraid(JaxEnvironment):
                                river_island_present=jnp.array(0),
                                alternation_cooldown=jnp.array(10),
                                island_transition_state=jnp.array(0),
-                               segment_state=jnp.array(0)
+                               segment_state=jnp.array(0),
+                               segment_transition_state=jnp.array(0),
+                               segment_straigt_counter=jnp.array(8),
+                               dam_position= jnp.array(-1) #jnp.full((SCREEN_HEIGHT,), -1, dtype=jnp.int32)
                                )
         observation = self._get_observation(state)
         return observation, state
@@ -539,6 +590,7 @@ class JaxRiverraid(JaxEnvironment):
 
     def step(self, state: RiverraidState, action: Action) -> Tuple[RiverraidObservation, RiverraidState, RiverraidInfo]:
         new_state = state._replace(turn_step=state.turn_step + 1)
+        new_state = roll_static_objects(new_state)
         new_state = update_river_banks(new_state)
 
 
@@ -583,6 +635,7 @@ class RiverraidRenderer(AtraJaxisRenderer):
     def render(self, state: RiverraidState):
         green_banks = jnp.array([26, 132, 26], dtype=jnp.uint8)
         blue_river = jnp.array([42, 42, 189], dtype=jnp.uint8)
+        dam_color = jnp.array([139, 69, 19], dtype=jnp.uint8)
 
         left_banks = state.river_left[:, None]
         right_banks = state.river_right[:, None]
@@ -595,6 +648,28 @@ class RiverraidRenderer(AtraJaxisRenderer):
 
         # The raster is  (HEIGHT, WIDTH, 3)
         raster = jnp.where(is_river[..., None], blue_river, green_banks)
+
+        dam_y = state.dam_position
+        dam_height = 10
+
+        def draw_dam(raster):
+            dam_y_start = jnp.clip(dam_y - dam_height + 1, 0, SCREEN_HEIGHT)
+            dam_y_end = jnp.clip(dam_y + 1, 0, SCREEN_HEIGHT)
+            dam_mask = (x_coords >= state.river_left[dam_y]) & (x_coords <= state.river_right[dam_y])
+            dam_rows = jnp.arange(SCREEN_HEIGHT)
+
+            def set_dam_row(i, raster):
+                raster = raster.at[i].set(jnp.where(dam_mask[..., None], dam_color, raster[i]))
+                return raster
+
+            raster = lax.fori_loop(dam_y_start, dam_y_end, set_dam_row, raster)
+            return raster
+
+        raster = lax.cond((dam_y >= dam_height) & (dam_y < SCREEN_HEIGHT),
+                           draw_dam,
+                           lambda raster: raster,
+                           raster)
+
 
         # transpose it to (WIDTH, HEIGHT, 3)
         return jnp.transpose(raster, (1, 0, 2))
