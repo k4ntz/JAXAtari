@@ -170,7 +170,7 @@ BOTTOM_ROW_Y_OFFSET = 177
 
 MIDDLE_BAR_Y = 72
 MIDDLE_BAR_X = 104
-MIDDLE_BAR_WIDTH = 16
+MIDDLE_BAR_WIDTH = 15
 MIDDLE_BAR_HEIGHT = 8
 
 
@@ -353,7 +353,7 @@ RIGHT_SPINNER_RIGHT_POSITION_RIGHT_PART_2 = jnp.array([127, 92])
 # Middle Bar Bounding Box and Offset
 
 
-MIDDLE_BAR_BOUNDING_BOX = jnp.ones((MIDDLE_BAR_HEIGHT, MIDDLE_BAR_WIDTH)).astype(
+MIDDLE_BAR_BOUNDING_BOX = jnp.ones((MIDDLE_BAR_WIDTH, MIDDLE_BAR_HEIGHT)).astype(
     jnp.bool
 )
 MIDDLE_BAR_OFFSET = jnp.array([MIDDLE_BAR_X, MIDDLE_BAR_Y])
@@ -893,7 +893,6 @@ REFLECTING_SCENE_OBJECT_LIST = [
     RIGHT_SPINNER_RIGHT_POSITION_RIGHT_PART_1_SCENE_OBJECT,
     RIGHT_SPINNER_RIGHT_POSITION_RIGHT_PART_2_SCENE_OBJECT,
     MIDDLE_BAR_SCENE_OBJECT,
-    INVISIBLE_BLOCK_SCENE_OBJECT,
 ]
 # SCENE_OBJECTS_STACKED = SceneObject(
 #     hit_box_matrix=jnp.stack([obj.hit_box_matrix for obj in SCENE_OBJECT_LIST]),
@@ -1241,6 +1240,134 @@ def _check_reflecting_obstacle_hits(
             _calc_hit_point(ball_movement, RIGHT_DOUBLE_STEP_SCENE_OBJECT),
             _calc_hit_point(ball_movement, LEFT_SINGLE_STEP_SCENE_OBJECT),
             _calc_hit_point(ball_movement, RIGHT_SINGLE_STEP_SCENE_OBJECT),
+            _calc_hit_point(ball_movement, LEFT_ROLLOVER_LEFT_BAR_SCENE_OBJECT),
+            _calc_hit_point(ball_movement, LEFT_ROLLOVER_RIGHT_BAR_SCENE_OBJECT),
+            _calc_hit_point(ball_movement, ATARI_ROLLOVER_LEFT_BAR_SCENE_OBJECT),
+            _calc_hit_point(ball_movement, ATARI_ROLLOVER_RIGHT_BAR_SCENE_OBJECT),
+            _calc_hit_point(ball_movement, TOP_BUMPER_SCENE_OBJECT),
+            _calc_hit_point(ball_movement, LEFT_BUMPER_SCENE_OBJECT),
+            _calc_hit_point(ball_movement, RIGHT_BUMPER_SCENE_OBJECT),
+            _calc_hit_point(
+                ball_movement, LEFT_SPINNER_BOTTOM_POSITION_JOINED_PART_SCENE_OBJECT
+            ),
+            _calc_hit_point(
+                ball_movement, LEFT_SPINNER_BOTTOM_POSITION_LEFT_PART_1_SCENE_OBJECT
+            ),
+            _calc_hit_point(
+                ball_movement, LEFT_SPINNER_BOTTOM_POSITION_LEFT_PART_2_SCENE_OBJECT
+            ),
+            _calc_hit_point(
+                ball_movement, LEFT_SPINNER_BOTTOM_POSITION_RIGHT_PART_1_SCENE_OBJECT
+            ),
+            _calc_hit_point(
+                ball_movement, LEFT_SPINNER_BOTTOM_POSITION_RIGHT_PART_2_SCENE_OBJECT
+            ),
+            _calc_hit_point(
+                ball_movement, LEFT_SPINNER_TOP_POSITION_JOINED_PART_SCENE_OBJECT
+            ),
+            _calc_hit_point(
+                ball_movement, LEFT_SPINNER_TOP_POSITION_LEFT_PART_1_SCENE_OBJECT
+            ),
+            _calc_hit_point(
+                ball_movement, LEFT_SPINNER_TOP_POSITION_LEFT_PART_2_SCENE_OBJECT
+            ),
+            _calc_hit_point(
+                ball_movement, LEFT_SPINNER_TOP_POSITION_RIGHT_PART_1_SCENE_OBJECT
+            ),
+            _calc_hit_point(
+                ball_movement, LEFT_SPINNER_TOP_POSITION_RIGHT_PART_2_SCENE_OBJECT
+            ),
+            _calc_hit_point(
+                ball_movement, LEFT_SPINNER_LEFT_POSITION_JOINED_PART_SCENE_OBJECT
+            ),
+            _calc_hit_point(
+                ball_movement, LEFT_SPINNER_LEFT_POSITION_LEFT_PART_1_SCENE_OBJECT
+            ),
+            _calc_hit_point(
+                ball_movement, LEFT_SPINNER_LEFT_POSITION_LEFT_PART_2_SCENE_OBJECT
+            ),
+            _calc_hit_point(
+                ball_movement, LEFT_SPINNER_LEFT_POSITION_RIGHT_PART_1_SCENE_OBJECT
+            ),
+            _calc_hit_point(
+                ball_movement, LEFT_SPINNER_LEFT_POSITION_RIGHT_PART_2_SCENE_OBJECT
+            ),
+            _calc_hit_point(
+                ball_movement, LEFT_SPINNER_RIGHT_POSITION_JOINED_PART_SCENE_OBJECT
+            ),
+            _calc_hit_point(
+                ball_movement, LEFT_SPINNER_RIGHT_POSITION_LEFT_PART_1_SCENE_OBJECT
+            ),
+            _calc_hit_point(
+                ball_movement, LEFT_SPINNER_RIGHT_POSITION_LEFT_PART_2_SCENE_OBJECT
+            ),
+            _calc_hit_point(
+                ball_movement, LEFT_SPINNER_RIGHT_POSITION_RIGHT_PART_1_SCENE_OBJECT
+            ),
+            _calc_hit_point(
+                ball_movement, LEFT_SPINNER_RIGHT_POSITION_RIGHT_PART_2_SCENE_OBJECT
+            ),
+            _calc_hit_point(
+                ball_movement, RIGHT_SPINNER_BOTTOM_POSITION_JOINED_PART_SCENE_OBJECT
+            ),
+            _calc_hit_point(
+                ball_movement, RIGHT_SPINNER_BOTTOM_POSITION_LEFT_PART_1_SCENE_OBJECT
+            ),
+            _calc_hit_point(
+                ball_movement, RIGHT_SPINNER_BOTTOM_POSITION_LEFT_PART_2_SCENE_OBJECT
+            ),
+            _calc_hit_point(
+                ball_movement, RIGHT_SPINNER_BOTTOM_POSITION_RIGHT_PART_1_SCENE_OBJECT
+            ),
+            _calc_hit_point(
+                ball_movement, RIGHT_SPINNER_BOTTOM_POSITION_RIGHT_PART_2_SCENE_OBJECT
+            ),
+            _calc_hit_point(
+                ball_movement, RIGHT_SPINNER_TOP_POSITION_JOINED_PART_SCENE_OBJECT
+            ),
+            _calc_hit_point(
+                ball_movement, RIGHT_SPINNER_TOP_POSITION_LEFT_PART_1_SCENE_OBJECT
+            ),
+            _calc_hit_point(
+                ball_movement, RIGHT_SPINNER_TOP_POSITION_LEFT_PART_2_SCENE_OBJECT
+            ),
+            _calc_hit_point(
+                ball_movement, RIGHT_SPINNER_TOP_POSITION_RIGHT_PART_1_SCENE_OBJECT
+            ),
+            _calc_hit_point(
+                ball_movement, RIGHT_SPINNER_TOP_POSITION_RIGHT_PART_2_SCENE_OBJECT
+            ),
+            _calc_hit_point(
+                ball_movement, RIGHT_SPINNER_LEFT_POSITION_JOINED_PART_SCENE_OBJECT
+            ),
+            _calc_hit_point(
+                ball_movement, RIGHT_SPINNER_LEFT_POSITION_LEFT_PART_1_SCENE_OBJECT
+            ),
+            _calc_hit_point(
+                ball_movement, RIGHT_SPINNER_LEFT_POSITION_LEFT_PART_2_SCENE_OBJECT
+            ),
+            _calc_hit_point(
+                ball_movement, RIGHT_SPINNER_LEFT_POSITION_RIGHT_PART_1_SCENE_OBJECT
+            ),
+            _calc_hit_point(
+                ball_movement, RIGHT_SPINNER_LEFT_POSITION_RIGHT_PART_2_SCENE_OBJECT
+            ),
+            _calc_hit_point(
+                ball_movement, RIGHT_SPINNER_RIGHT_POSITION_JOINED_PART_SCENE_OBJECT
+            ),
+            _calc_hit_point(
+                ball_movement, RIGHT_SPINNER_RIGHT_POSITION_LEFT_PART_1_SCENE_OBJECT
+            ),
+            _calc_hit_point(
+                ball_movement, RIGHT_SPINNER_RIGHT_POSITION_LEFT_PART_2_SCENE_OBJECT
+            ),
+            _calc_hit_point(
+                ball_movement, RIGHT_SPINNER_RIGHT_POSITION_RIGHT_PART_1_SCENE_OBJECT
+            ),
+            _calc_hit_point(
+                ball_movement, RIGHT_SPINNER_RIGHT_POSITION_RIGHT_PART_2_SCENE_OBJECT
+            ),
+            _calc_hit_point(ball_movement, MIDDLE_BAR_SCENE_OBJECT),
         ],
         axis=0,
     )
@@ -1266,6 +1393,54 @@ def _check_reflecting_obstacle_hits(
             lambda: RIGHT_DOUBLE_STEP_SCENE_OBJECT.horizontal,
             lambda: LEFT_SINGLE_STEP_SCENE_OBJECT.horizontal,
             lambda: RIGHT_SINGLE_STEP_SCENE_OBJECT.horizontal,
+            lambda: LEFT_ROLLOVER_LEFT_BAR_SCENE_OBJECT.horizontal,
+            lambda: LEFT_ROLLOVER_RIGHT_BAR_SCENE_OBJECT.horizontal,
+            lambda: ATARI_ROLLOVER_LEFT_BAR_SCENE_OBJECT.horizontal,
+            lambda: ATARI_ROLLOVER_RIGHT_BAR_SCENE_OBJECT.horizontal,
+            lambda: TOP_BUMPER_SCENE_OBJECT.horizontal,
+            lambda: LEFT_BUMPER_SCENE_OBJECT.horizontal,
+            lambda: RIGHT_BUMPER_SCENE_OBJECT.horizontal,
+            lambda: LEFT_SPINNER_BOTTOM_POSITION_JOINED_PART_SCENE_OBJECT.horizontal,
+            lambda: LEFT_SPINNER_BOTTOM_POSITION_LEFT_PART_1_SCENE_OBJECT.horizontal,
+            lambda: LEFT_SPINNER_BOTTOM_POSITION_LEFT_PART_2_SCENE_OBJECT.horizontal,
+            lambda: LEFT_SPINNER_BOTTOM_POSITION_RIGHT_PART_1_SCENE_OBJECT.horizontal,
+            lambda: LEFT_SPINNER_BOTTOM_POSITION_RIGHT_PART_2_SCENE_OBJECT.horizontal,
+            lambda: LEFT_SPINNER_TOP_POSITION_JOINED_PART_SCENE_OBJECT.horizontal,
+            lambda: LEFT_SPINNER_TOP_POSITION_LEFT_PART_1_SCENE_OBJECT.horizontal,
+            lambda: LEFT_SPINNER_TOP_POSITION_LEFT_PART_2_SCENE_OBJECT.horizontal,
+            lambda: LEFT_SPINNER_TOP_POSITION_RIGHT_PART_1_SCENE_OBJECT.horizontal,
+            lambda: LEFT_SPINNER_TOP_POSITION_RIGHT_PART_2_SCENE_OBJECT.horizontal,
+            lambda: LEFT_SPINNER_LEFT_POSITION_JOINED_PART_SCENE_OBJECT.horizontal,
+            lambda: LEFT_SPINNER_LEFT_POSITION_LEFT_PART_1_SCENE_OBJECT.horizontal,
+            lambda: LEFT_SPINNER_LEFT_POSITION_LEFT_PART_2_SCENE_OBJECT.horizontal,
+            lambda: LEFT_SPINNER_LEFT_POSITION_RIGHT_PART_1_SCENE_OBJECT.horizontal,
+            lambda: LEFT_SPINNER_LEFT_POSITION_RIGHT_PART_2_SCENE_OBJECT.horizontal,
+            lambda: LEFT_SPINNER_RIGHT_POSITION_JOINED_PART_SCENE_OBJECT.horizontal,
+            lambda: LEFT_SPINNER_RIGHT_POSITION_LEFT_PART_1_SCENE_OBJECT.horizontal,
+            lambda: LEFT_SPINNER_RIGHT_POSITION_LEFT_PART_2_SCENE_OBJECT.horizontal,
+            lambda: LEFT_SPINNER_RIGHT_POSITION_RIGHT_PART_1_SCENE_OBJECT.horizontal,
+            lambda: LEFT_SPINNER_RIGHT_POSITION_RIGHT_PART_2_SCENE_OBJECT.horizontal,
+            lambda: RIGHT_SPINNER_BOTTOM_POSITION_JOINED_PART_SCENE_OBJECT.horizontal,
+            lambda: RIGHT_SPINNER_BOTTOM_POSITION_LEFT_PART_1_SCENE_OBJECT.horizontal,
+            lambda: RIGHT_SPINNER_BOTTOM_POSITION_LEFT_PART_2_SCENE_OBJECT.horizontal,
+            lambda: RIGHT_SPINNER_BOTTOM_POSITION_RIGHT_PART_1_SCENE_OBJECT.horizontal,
+            lambda: RIGHT_SPINNER_BOTTOM_POSITION_RIGHT_PART_2_SCENE_OBJECT.horizontal,
+            lambda: RIGHT_SPINNER_TOP_POSITION_JOINED_PART_SCENE_OBJECT.horizontal,
+            lambda: RIGHT_SPINNER_TOP_POSITION_LEFT_PART_1_SCENE_OBJECT.horizontal,
+            lambda: RIGHT_SPINNER_TOP_POSITION_LEFT_PART_2_SCENE_OBJECT.horizontal,
+            lambda: RIGHT_SPINNER_TOP_POSITION_RIGHT_PART_1_SCENE_OBJECT.horizontal,
+            lambda: RIGHT_SPINNER_TOP_POSITION_RIGHT_PART_2_SCENE_OBJECT.horizontal,
+            lambda: RIGHT_SPINNER_LEFT_POSITION_JOINED_PART_SCENE_OBJECT.horizontal,
+            lambda: RIGHT_SPINNER_LEFT_POSITION_LEFT_PART_1_SCENE_OBJECT.horizontal,
+            lambda: RIGHT_SPINNER_LEFT_POSITION_LEFT_PART_2_SCENE_OBJECT.horizontal,
+            lambda: RIGHT_SPINNER_LEFT_POSITION_RIGHT_PART_1_SCENE_OBJECT.horizontal,
+            lambda: RIGHT_SPINNER_LEFT_POSITION_RIGHT_PART_2_SCENE_OBJECT.horizontal,
+            lambda: RIGHT_SPINNER_RIGHT_POSITION_JOINED_PART_SCENE_OBJECT.horizontal,
+            lambda: RIGHT_SPINNER_RIGHT_POSITION_LEFT_PART_1_SCENE_OBJECT.horizontal,
+            lambda: RIGHT_SPINNER_RIGHT_POSITION_LEFT_PART_2_SCENE_OBJECT.horizontal,
+            lambda: RIGHT_SPINNER_RIGHT_POSITION_RIGHT_PART_1_SCENE_OBJECT.horizontal,
+            lambda: RIGHT_SPINNER_RIGHT_POSITION_RIGHT_PART_2_SCENE_OBJECT.horizontal,
+            lambda: MIDDLE_BAR_SCENE_OBJECT.horizontal,
         ),
     )
     return hit_point, scene_object
@@ -1399,10 +1574,10 @@ def ball_step(
     Check if the ball is hitting the invisible block at the plunger hole
     """
     ball_movement = BallMovement(
-        old_ball_x=state.ball_x,
-        old_ball_y=state.ball_y,
-        new_ball_x=ball_x,
-        new_ball_y=ball_y,
+        old_ball_x=state.ball_x,  # type: ignore
+        old_ball_y=state.ball_y,  # type: ignore
+        new_ball_x=ball_x,  # type: ignore
+        new_ball_y=ball_y,  # type: ignore
     )
     invisible_block_hit_data = _calc_hit_point(
         ball_movement, INVISIBLE_BLOCK_SCENE_OBJECT
@@ -1454,10 +1629,10 @@ def ball_step(
     # If a non-reflecting obstacle is hit, proceed with usual ball position calculation
     # new_ball_direction, _ball_vel_x, _ball_vel_y = _get_obstacle_hit_direction()
     ball_movement = BallMovement(
-        old_ball_x=state.ball_x,
-        old_ball_y=state.ball_y,
-        new_ball_x=ball_x,
-        new_ball_y=ball_y,
+        old_ball_x=state.ball_x,  # type: ignore
+        old_ball_y=state.ball_y,  # type: ignore
+        new_ball_x=ball_x,  # type: ignore
+        new_ball_y=ball_y,  # type: ignore
     )
 
     hit_data, scene_object_horizontal = _check_reflecting_obstacle_hits(ball_movement)
