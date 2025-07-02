@@ -38,7 +38,7 @@ PLAYER_START_X, PLAYER_START_Y = 37.0, 74.0
 
 # --- Enemies params ---
 ENEMY_SIZE = (8, 8)  # w, h
-ENEMY_SPAWN_FRAMES = jnp.array([200, 0])  # example delays for each enemy in frames
+ENEMY_SPAWN_FRAMES = jnp.array([200, 0, 400])  # example delays for 3 enemies
 
 # --- Object Colors ---
 PLAYER_COLOR = jnp.array([0, 255, 0], dtype=jnp.uint8)
@@ -70,6 +70,7 @@ class GameState(NamedTuple):    #Enemy movement
     enemy_timer: jnp.ndarray # shape (N,): frame count until next patrol/teleport decision
     enemy_initial_sides: jnp.ndarray # shape (N,): 0=spawned on left, 1=spawned on right
     enemy_delay_timer: jnp.ndarray # shape (N,), counts frames until enemy starts moving
+    enemy_init_positions: jnp.ndarray    # shape (N,2): initial spawn positions of enemies  <--- add this
     pow_hits: int # scalar: number of times the POW block has been hit (0–3)
 
 class PlayerState(NamedTuple):  # Player movement
@@ -153,149 +154,157 @@ def check_enemy_collision(player_pos, enemy_pos):
     overlap_y = (py < ey + eh) & (py + ph > ey)
     return jnp.any(overlap_x & overlap_y)
 
+
 @jax.jit
-def enemy_step(enemy_pos, enemy_vel, enemy_platform_idx, enemy_timer, platforms, initial_sides, active_mask):
+def enemy_step(enemy_pos, enemy_vel, enemy_platform_idx, enemy_timer, platforms, initial_sides, active_mask, init_positions):
     ew, eh = ENEMY_SIZE
-    TOP_PLATFORMS = jnp.array([1, 2], dtype=jnp.int32)  # indices of top platforms
-    ENEMY_TOP_START_IDX = jnp.array([1, 2], dtype=jnp.int32)  # which top platform each enemy starts from
+    pw = platforms[:, 2]
+    enemy_init_platform_idx = jnp.array([1, 2, 1])  # same as initial enemy_platform_idx
+    TELEPORT_DELAY_FRAMES = 5 * 60  # e.g. 5 seconds at 60 FPS; adjust as needed
 
-    def platform_below_at(x_pos, current_y):
-        px, py, pw, ph = platforms[:, 0], platforms[:, 1], platforms[:, 2], platforms[:, 3]
-        left = px
-        right = px + pw
-        supported_x = (x_pos + ew > left) & (x_pos < right)
-        below_y = py > current_y
-        candidates = supported_x & below_y
-        return jnp.where(candidates, py, jnp.inf)
-
-    def step_one(pos, vel, p_idx, timer, side, i):
+    def step_enemy(pos, vel, p_idx, timer, side, i):
         x, y = pos
         vx, vy = vel
-        platform = platforms[p_idx]
-        plat_x, plat_y, plat_w, _ = platform
+
+        plat = platforms[p_idx]
+        plat_x, plat_y, plat_w, plat_h = plat
         plat_left = plat_x
         plat_right = plat_x + plat_w
 
-        new_x = x + vx
+        EPS = 0.5
+        at_left_edge = x <= plat_left + EPS
+        at_right_edge = x + ew >= plat_right - EPS
+        at_edge = at_left_edge | at_right_edge
 
-        walking_off_left = new_x < plat_left
-        walking_off_right = new_x + ew > plat_right
-        walking_off_edge = walking_off_left | walking_off_right
+        # Check platform below at next x position (x + vx)
+        def platform_below_y(pos_x):
+            px, py, pw, ph = platforms[:, 0], platforms[:, 1], platforms[:, 2], platforms[:, 3]
+            left = px
+            right = px + pw
+            supported_x = (pos_x + ew > left) & (pos_x < right)
+            below_y = py > y
+            candidates = jnp.where(supported_x & below_y, py, jnp.inf)
+            return jnp.min(candidates)
 
-        fall_x = jnp.where(walking_off_left, plat_left - ew, plat_right)
-
-        platforms_below_y = platform_below_at(fall_x, y + eh)
-        min_platform_below_y = jnp.min(platforms_below_y)
+        min_platform_below_y = platform_below_y(x + vx)
         has_platform_below = min_platform_below_y != jnp.inf
 
-        platform_edges_x = jnp.array([plat_left, plat_right - ew])
-        platforms_below_any_left = jnp.min(platform_below_at(platform_edges_x[0], y + eh))
-        platforms_below_any_right = jnp.min(platform_below_at(platform_edges_x[1], y + eh))
-        is_lowest_platform = (platforms_below_any_left == jnp.inf) & (platforms_below_any_right == jnp.inf)
-
-        timer = jnp.asarray(timer + 1, dtype=jnp.int32)
-
         def teleport_down(pos_x, vx, side, ew, eh, platforms, min_platform_below_y):
-            # Mask of platforms at the target Y level
             same_y_mask = platforms[:, 1] == min_platform_below_y
-
-            # Find platforms under the current x
             plat_lefts = platforms[:, 0]
             plat_rights = platforms[:, 0] + platforms[:, 2]
-
-            inside_x_mask = (pos_x >= plat_lefts) & (pos_x <= plat_rights)
+            inside_x_mask = (pos_x + ew > plat_lefts) & (pos_x < plat_rights)
             valid_mask = same_y_mask & inside_x_mask
 
-            # Choose first matching platform index or fallback
-            horizontal_distance = jnp.where(valid_mask, 0.0, 1e6)
-            idx_below = jnp.argmin(horizontal_distance)
+            idx_below = jnp.argmax(valid_mask.astype(jnp.int32))  # pick first valid below
 
             new_pos_x = jnp.array(pos_x, dtype=jnp.float32)
             new_pos_y = jnp.array(platforms[idx_below, 1] - eh, dtype=jnp.float32)
-
-            new_vx_down = vx  # Preserve horizontal velocity
+            new_vx_down = vx
             new_timer = jnp.array(0, dtype=jnp.int32)
             new_side = jnp.array(side, dtype=jnp.int32)
 
-            return (new_pos_x, new_pos_y, new_vx_down, idx_below, new_timer, new_side)
+            return (
+                jnp.array([new_pos_x, new_pos_y]),
+                jnp.array([new_vx_down, vy]),
+                idx_below,
+                new_timer,
+                new_side
+            )
 
-        def teleport_up(side, target_top_idx):
+        def stay_on():
+            new_x = x + vx
+
+            # Wrap around screen
+            new_x = jnp.where(new_x < 0, SCREEN_WIDTH - ew, new_x)
+            new_x = jnp.where(new_x + ew > SCREEN_WIDTH, 0.0, new_x)
+
+            return (
+                jnp.array([new_x, y]),
+                jnp.array([vx, vy]),
+                p_idx,
+                timer + 1,
+                side
+            )
+
+        def teleport_up_wrapper():
+            return teleport_up(side, i, enemy_init_platform_idx, init_positions)
+        # Correctly define teleport_up_to_3rd_floor as zero-arg function closing over vars
+            # New teleport_up using original position (init_positions)
+        def teleport_up(side, i, enemy_init_platform_idx, init_positions):
+            # Use enemy's original platform index to teleport up
+            target_top_idx = enemy_init_platform_idx[i]
+
             def pos_and_vel_for_top(idx):
-                left_side_x = platforms[idx, 0] + 5.0
-                right_side_x = platforms[idx, 0] + platforms[idx, 2] - ew - 5.0
-                start_x = jnp.where(side == 1, right_side_x, left_side_x)
+                plat_x, plat_y, plat_w, plat_h = platforms[idx]
+                left_side_x = plat_x + 5.0
+                right_side_x = plat_x + plat_w - ew - 5.0
+
+                # Clamp original init x inside platform boundaries (with margin)
+                orig_x = init_positions[i, 0]
+                clamped_x = jnp.clip(orig_x, left_side_x, right_side_x)
+
+                # Velocity depends on side (direction)
                 start_vx = jnp.where(side == 1, -0.5, 0.5)
-                start_y = platforms[idx, 1] - eh
-                return (start_x.astype(jnp.float32), start_y.astype(jnp.float32), start_vx.astype(jnp.float32))
+                start_y = plat_y - eh
+                return (clamped_x.astype(jnp.float32), start_y.astype(jnp.float32), start_vx.astype(jnp.float32))
 
             new_pos_x, new_pos_y, new_vx_up = pos_and_vel_for_top(target_top_idx)
             new_timer = jnp.array(0, dtype=jnp.int32)
             new_side = jnp.array(side, dtype=jnp.int32)
 
-            return (new_pos_x, new_pos_y, new_vx_up, target_top_idx, new_timer, new_side)
+            return (
+                jnp.array([new_pos_x, new_pos_y], dtype=jnp.float32),
+                jnp.array([new_vx_up, 0.0], dtype=jnp.float32),  # vy = 0 on teleport up
+                jnp.array(target_top_idx, dtype=jnp.int32),
+                new_timer,
+                new_side,
+            )
 
-        new_x_final = new_x
-        new_y_final = y
-        new_vx_final = vx
-        new_p_idx = p_idx
-        new_side = side
+        should_teleport = (at_edge & has_platform_below) & (p_idx == 0)
 
-        # Teleport down if walking off edge and platform below exists
-        new_x_final, new_y_final, new_vx_final, new_p_idx, timer, new_side = jax.lax.cond(
-            walking_off_edge & has_platform_below,
-            lambda _: teleport_down(new_x, vx, side, ew, eh, platforms, min_platform_below_y),
-            lambda _: (new_x, y, vx, p_idx, timer, side),
-            operand=None
-        )
+        def wait_then_teleport():
+            # If timer < delay, increment timer and stay invisible (or off-screen)
+            def wait():
+                invisible_pos = jnp.array([-1000.0, -1000.0])  # Off-screen position
+                invisible_vel = jnp.array([0.0, 0.0])
+                return (invisible_pos, invisible_vel, p_idx, timer + 1, side)
 
-        TELEPORT_WAIT = 100
-
-        def wait_and_teleport_up():
+            # When timer >= delay, teleport up (make visible again)
             def do_teleport():
-                # Use enemy index i to pick correct top platform start idx
-                return teleport_up(side, ENEMY_TOP_START_IDX[i])
+                return teleport_up(side, i, enemy_init_platform_idx, init_positions)
 
-            def keep_patrol():
-                return (new_x_final, new_y_final, -new_vx_final, new_p_idx, timer, new_side)
+            return jax.lax.cond(timer >= TELEPORT_DELAY_FRAMES, do_teleport, wait)
 
-            return jax.lax.cond(timer >= TELEPORT_WAIT, do_teleport, keep_patrol)
+        def normal_move():
+            return jax.lax.cond(
+                at_edge & has_platform_below,
+                lambda: teleport_down(x + vx, vx, side, ew, eh, platforms, min_platform_below_y),
+                stay_on
+            )
 
-        # Teleport up condition: walking off edge, no platform below, and on lowest platform
-        new_x_final, new_y_final, new_vx_final, new_p_idx, timer, new_side = jax.lax.cond(
-            walking_off_edge & (~has_platform_below) & is_lowest_platform,
-            wait_and_teleport_up,
-            lambda: (new_x_final, new_y_final, new_vx_final, new_p_idx, timer, new_side)
-        )
 
-        # Reverse direction if walking off edge but not on lowest platform and no platform below
-        def reverse_dir():
-            return (new_x_final, new_y_final, -new_vx_final, new_p_idx, timer, new_side)
+        # Replace the old teleport_up call:
+        return jax.lax.cond(
+        should_teleport,
+        wait_then_teleport,
+        normal_move
+    )
 
-        new_x_final, new_y_final, new_vx_final, new_p_idx, timer, new_side = jax.lax.cond(
-            walking_off_edge & (~has_platform_below) & (~is_lowest_platform),
-            reverse_dir,
-            lambda: (new_x_final, new_y_final, new_vx_final, new_p_idx, timer, new_side)
-        )
-
-        return (jnp.array([new_x_final, new_y_final]),
-                jnp.array([new_vx_final, 0.0]),
-                new_p_idx,
-                timer,
-                new_side)
 
     def conditional_step(pos, vel, idx, timer, side, i, active):
         return jax.lax.cond(
             active,
-            lambda _: step_one(pos, vel, idx, timer, side, i),
+            lambda _: step_enemy(pos, vel, idx, timer, side, i),
             lambda _: (pos, vel, idx, timer, side),
             operand=None
         )
 
-    # Prepare index array to pass enemy indices to step_one
-    indices = jnp.arange(enemy_pos.shape[0])
+    indices = jnp.arange(enemy_pos.shape[0], dtype=jnp.int32)
 
     new_pos, new_vel, new_idx, new_timer, new_sides = jax.vmap(
-        conditional_step, in_axes=(0, 0, 0, 0, 0, 0, 0)
+        conditional_step,
+        in_axes=(0, 0, 0, 0, 0, 0, 0)
     )(enemy_pos, enemy_vel, enemy_platform_idx, enemy_timer, initial_sides, indices, active_mask)
 
     return new_pos, new_vel, new_idx, new_timer, new_sides
@@ -562,14 +571,17 @@ class JaxMarioBros(JaxEnvironment[MarioBrosState, MarioBrosObservation, MarioBro
         game = self.reset_game()
         obs = self._get_observation(game)
         return obs, game
-    
-    def reset_game(self) -> MarioBrosState:
 
-        p1_y = PLATFORMS[1,1]
-        p2_y = PLATFORMS[2,1]
-        
+    def reset_game(self) -> MarioBrosState:
+        p1_y = PLATFORMS[1, 1]
+        p2_y = PLATFORMS[2, 1]
+
+        # Enemy 1 position (used also for enemy 3)
+        enemy1_pos = jnp.array([5.0, p1_y - ENEMY_SIZE[1]])
+        enemy2_pos = jnp.array([130.0, p2_y - ENEMY_SIZE[1]])
+
         new_state = MarioBrosState(
-            player= PlayerState(
+            player=PlayerState(
                 pos=jnp.array([PLAYER_START_X, PLAYER_START_Y]),
                 vel=jnp.array([0.0, 0.0]),
                 on_ground=False,
@@ -584,20 +596,21 @@ class JaxMarioBros(JaxEnvironment[MarioBrosState, MarioBrosObservation, MarioBro
                 last_dir=jnp.int32(0),
                 brake_frames_left=jnp.int32(0)
             ),
-            game = GameState(
-                enemy_pos = jnp.array([[5.0, p1_y-ENEMY_SIZE[1]], [130.0, p2_y-ENEMY_SIZE[1]]]),
-                enemy_vel = jnp.array([[0.5, 0.0], [-0.5, 0.0]]),
-                enemy_platform_idx= jnp.array([1,2]),
-                enemy_timer = jnp.array([0, 0]),
-                enemy_initial_sides = jnp.array([0, 1]),
-                enemy_delay_timer = jnp.array([0, 200]),
-                pow_hits = jnp.int32(0)
+            game=GameState(
+                enemy_pos=jnp.array([enemy1_pos, enemy2_pos, enemy1_pos]),  # 3rd enemy = enemy 1 pos
+                enemy_vel=jnp.array([[0.5, 0.0], [-0.5, 0.0], [0.5, 0.0]]),  # 3rd enemy same as enemy 1
+                enemy_platform_idx=jnp.array([1, 2, 1]),  # 3rd enemy same platform as enemy 1
+                enemy_timer=jnp.array([0, 0, 0]),
+                enemy_initial_sides=jnp.array([0, 1, 0]),  # 3rd enemy same side as enemy 1
+                enemy_delay_timer=jnp.array([0, 200, 0]),
+                enemy_init_positions=jnp.array([enemy1_pos, enemy2_pos, enemy1_pos]),
+                pow_hits=jnp.int32(0)
             ),
-            lives = jnp.int32(4)
+            lives=jnp.int32(4)
         )
 
         return new_state
-    
+
     def old_step(self, state: MarioBrosState, action: chex.Array) -> Tuple[MarioBrosObservation, MarioBrosState, float, bool, MarioBrosInfo]:
         # calls player_step function and check for collision with enemy
         def enemy_collision(s):
@@ -644,7 +657,8 @@ class JaxMarioBros(JaxEnvironment[MarioBrosState, MarioBrosObservation, MarioBro
                 state.game.enemy_timer,
                 PLATFORMS,
                 state.game.enemy_initial_sides,
-                active_mask
+                active_mask,
+                state.game.enemy_init_positions  # <-- add this argument here
             )
 
             # bump the delay timer
@@ -664,6 +678,7 @@ class JaxMarioBros(JaxEnvironment[MarioBrosState, MarioBrosObservation, MarioBro
                 enemy_timer=timer,
                 enemy_initial_sides=sides,
                 enemy_delay_timer=new_enemy_delay_timer,
+                enemy_init_positions=state.game.enemy_init_positions,
                 pow_hits=new_pow_hits
             )
 
