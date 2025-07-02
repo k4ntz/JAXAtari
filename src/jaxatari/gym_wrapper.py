@@ -1,13 +1,10 @@
 import gymnasium
 import gymnasium.envs.functional_jax_env
 import jax
-import jax.numpy as jnp
 import chex
-from flax import struct
-from typing import Any, Dict, Tuple, Union, Optional
+from typing import Any, Dict, Union, Optional
 import functools
 import numpy as np
-import collections
 from gymnasium.envs.functional_jax_env import FunctionalJaxEnv
 
 # Import necessary components from the user's framework
@@ -255,6 +252,9 @@ class GymnasiumJaxAtariWrapper(FunctionalJaxEnv):
         np_truncated = self._convert_to_numpy(jax_truncated)
         np_info = self._convert_to_numpy(jax_info)
         
+        # Ensure correct dtype (e.g. uint8 instead of float32)
+        np_obs = self._cast_obs_dtype(np_obs)
+        
         return np_obs, np_reward, np_terminated, np_truncated, np_info
 
     def reset(self, *, seed: Optional[int] = None, options: Optional[Dict] = None):
@@ -264,6 +264,10 @@ class GymnasiumJaxAtariWrapper(FunctionalJaxEnv):
         # Manually convert all outputs to NumPy before returning
         np_obs = self._convert_to_numpy(jax_obs)
         np_info = self._convert_to_numpy(jax_info)
+        
+        # Ensure correct dtype (e.g. uint8 instead of float32)
+        np_obs = self._cast_obs_dtype(np_obs)
+        
         return np_obs, np_info
 
     def render(self):
@@ -275,9 +279,58 @@ class GymnasiumJaxAtariWrapper(FunctionalJaxEnv):
             frame = self._jaxatari_env.render(self.state)
             # Convert to numpy array (force copy to host if needed)
             frame = np.array(frame)
+            # Cast to correct dtype if necessary
+            frame = self._cast_obs_dtype(frame)
             # If the frame has a batch dimension, squeeze it out
             if frame.ndim == 4 and frame.shape[0] == 1:
                 frame = frame[0]
             return frame
         else:
             raise ValueError(f"Render mode {self.render_mode} not supported")
+
+    # ---------------------------------------------------------------------
+    # Utility helpers for dtype handling
+    # ---------------------------------------------------------------------
+
+    def _cast_obs_dtype(self, obs):
+        """
+        New, stricter implementation that walks the observation_space tree and only
+        casts *floating-point* arrays to the dtype declared by the corresponding
+        leaf space (typically uint8 for Atari image observations).  This prevents
+        accidental coercion of unrelated arrays (e.g. float features) when the
+        top-level space is a Dict/Tuple without a global `dtype` attribute.
+        """
+
+        def _cast_leaf(arr: np.ndarray, target_dtype: np.dtype):
+            """Cast *floating-type* arrays to the given `target_dtype` when needed."""
+            if arr.dtype != target_dtype and np.issubdtype(arr.dtype, np.floating):
+                return arr.astype(target_dtype, copy=False)
+            return arr
+
+        def _walk(obs_part, space_part):
+            """Recursively walk `obs_part` alongside `space_part` and cast leaves."""
+            # Dict space ------------------------------------------------------
+            if isinstance(space_part, gymnasium.spaces.Dict):
+                if not isinstance(obs_part, dict):
+                    return obs_part  # Mismatch – return as-is.
+                return {
+                    key: _walk(obs_part[key], space_part.spaces[key])
+                    for key in space_part.spaces
+                }
+
+            # Tuple space -----------------------------------------------------
+            if isinstance(space_part, gymnasium.spaces.Tuple):
+                if not isinstance(obs_part, (tuple, list)):
+                    return obs_part  # Mismatch – return as-is.
+                casted = [
+                    _walk(o, s) for o, s in zip(obs_part, space_part.spaces)
+                ]
+                return tuple(casted) if isinstance(obs_part, tuple) else casted
+
+            # Box (leaf) ------------------------------------------------------
+            if isinstance(space_part, gymnasium.spaces.Box) and isinstance(obs_part, np.ndarray):
+                return _cast_leaf(obs_part, space_part.dtype)
+
+            return obs_part
+
+        return _walk(obs, self.observation_space)
