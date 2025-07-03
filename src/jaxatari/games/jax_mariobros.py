@@ -146,8 +146,6 @@ def check_collision(pos: jnp.ndarray, vel: jnp.ndarray, platforms: jnp.ndarray, 
     min_idx = jnp.min(bumped_indices)
     bumped_idx = jnp.where(min_idx == 1_000_000, -1, min_idx)
 
-    # jax.debug.print("Inside check_collision: vy={vy}, bumped={b}", vy=vel[1], b=bumped)
-
     return (jnp.any(landed),
             jnp.any(bumped | pow_bumped),
             new_y_land,
@@ -178,24 +176,44 @@ def enemy_step(
     initial_sides,
     active_mask,
     init_positions,
-    enemy_status,   # <-- added status here
+    enemy_status,   # added status
 ):
-    # jax.debug.print("Enemy {} status: {}", init_positions, enemy_status)
     ew, eh = ENEMY_SIZE
     pw = platforms[:, 2]
     enemy_init_platform_idx = jnp.array([1, 2, 1])  # same as initial enemy_platform_idx
     TELEPORT_DELAY_FRAMES = 5 * 60  # e.g. 5 seconds at 60 FPS; adjust as needed
 
+    # Your per-enemy spawn delay array
+    ENEMY_SPAWN_FRAMES = jnp.array([200, 0, 400])  # example, same length as enemies
+
     def step_enemy(pos, vel, p_idx, timer, side, i, status):
         x, y = pos
         vx, vy = vel
+        # Handle dead (status == 3) enemy with respawn delay
+        def dead_logic():
+            invisible_pos = jnp.array([-1000.0, -1000.0])
+            invisible_vel = jnp.array([0.0, 0.0])
+            new_timer = timer + 1
+
+            def do_respawn():
+                new_pos, new_vel, new_p_idx, _, new_side, _ = teleport_up(side, i, enemy_init_platform_idx,
+                                                                          init_positions)
+                new_status = jnp.array(2, dtype=jnp.int32)  # recovering (active) status
+                new_timer_respawn = 0
+                return new_pos, new_vel, new_p_idx, new_timer_respawn, new_side, new_status
+
+            def wait_respawn():
+                # Invisible, increment timer, keep status 3 (dead)
+                return invisible_pos, invisible_vel, p_idx, new_timer, side, status
+
+            return jax.lax.cond(new_timer > ENEMY_SPAWN_FRAMES[i], do_respawn, wait_respawn)
 
         # If enemy is weak (status==1) or dead (status==3), velocity is zero
         is_weak_or_dead = (status == 1) | (status == 3)
         vx = jnp.where(is_weak_or_dead, 0.0, vx)
         vy = jnp.where(is_weak_or_dead, 0.0, vy)
 
-        # 🩹 Fix: If recovering from weak state (status == 2), resume movement
+        # Fix: If recovering from weak state (status == 2), resume movement
         recovering = status == 2
         vx = jnp.where(recovering & (vx == 0.0), jnp.where(side == 1, -0.5, 0.5), vx)
 
@@ -242,7 +260,8 @@ def enemy_step(
                 jnp.array([new_vx_down, vy]),
                 idx_below,
                 new_timer,
-                new_side
+                new_side,
+                status,
             )
 
         def stay_on():
@@ -257,7 +276,8 @@ def enemy_step(
                 jnp.array([vx, vy]),
                 p_idx,
                 timer + 1,
-                side
+                side,
+                status,
             )
 
         def teleport_up_wrapper():
@@ -288,50 +308,49 @@ def enemy_step(
                 jnp.array(target_top_idx, dtype=jnp.int32),
                 new_timer,
                 new_side,
+                status,
             )
 
-        should_teleport = (at_edge & has_platform_below) & (p_idx == 0)
-
-        def wait_then_teleport():
-            def wait():
-                invisible_pos = jnp.array([-1000.0, -1000.0])
-                invisible_vel = jnp.array([0.0, 0.0])
-                return (invisible_pos, invisible_vel, p_idx, timer + 1, side)
-
-            def do_teleport():
-                return teleport_up(side, i, enemy_init_platform_idx, init_positions)
-
-            return jax.lax.cond(timer >= TELEPORT_DELAY_FRAMES, do_teleport, wait)
-
-        def normal_move():
-            return jax.lax.cond(
-                at_edge & has_platform_below,
-                lambda: teleport_down(x + vx, vx, side, ew, eh, platforms, min_platform_below_y),
-                stay_on
+        # Handle dead status first (so it overrides normal move)
+        result = jax.lax.cond(
+            status == 3,
+            dead_logic,
+            lambda: (
+                jax.lax.cond(
+                    (at_edge & has_platform_below) & (p_idx == 0),
+                    lambda: jax.lax.cond(
+                        timer >= TELEPORT_DELAY_FRAMES,
+                        teleport_up_wrapper,
+                        lambda: (jnp.array([-1000.0, -1000.0]), jnp.array([0.0, 0.0]), p_idx, timer + 1, side, status)
+                    ),
+                    lambda: jax.lax.cond(
+                        at_edge & has_platform_below,
+                        lambda: teleport_down(x + vx, vx, side, ew, eh, platforms, min_platform_below_y),
+                        stay_on
+                    ),
+                )
             )
-
-        return jax.lax.cond(
-            should_teleport,
-            wait_then_teleport,
-            normal_move
         )
+
+        return result
 
     def conditional_step(pos, vel, idx, timer, side, i, active, status):
         return jax.lax.cond(
             active,
             lambda _: step_enemy(pos, vel, idx, timer, side, i, status),
-            lambda _: (pos, vel, idx, timer, side),
+            lambda _: (pos, vel, idx, timer, side, status),
             operand=None
         )
 
     indices = jnp.arange(enemy_pos.shape[0], dtype=jnp.int32)
 
-    new_pos, new_vel, new_idx, new_timer, new_sides = jax.vmap(
+    new_pos, new_vel, new_idx, new_timer, new_sides, new_status = jax.vmap(
         conditional_step,
         in_axes=(0, 0, 0, 0, 0, 0, 0, 0)
     )(enemy_pos, enemy_vel, enemy_platform_idx, enemy_timer, initial_sides, indices, active_mask, enemy_status)
 
-    return new_pos, new_vel, new_idx, new_timer, new_sides
+    return new_pos, new_vel, new_idx, new_timer, new_sides, new_status
+
 
 
 
@@ -355,24 +374,9 @@ def movement(state: PlayerState, action: jnp.ndarray) -> Tuple[PlayerState, jnp.
 
     # integrate position
     new_pos = state.pos + jnp.array([vx, vy])
-    # jax.debug.print("Calling check_collision from movement")
 
     landed, bumped, y_land, y_bump, pow_bumped, bumped_idx = check_collision(new_pos, jnp.array([vx, vy]), PLATFORMS,
                                                                              POW_BLOCK)
-
-    def print_if_bumped(bumped, bumped_idx):
-        def print_fn(_):
-            jax.debug.print("Bumped: {b}, Platform bumped index: {idx}", b=bumped, idx=bumped_idx)
-            return 0  # just return something trivial
-
-        def no_print_fn(_):
-            return 0
-
-        # Conditionally run print_fn only if bumped_idx != -1
-        return jax.lax.cond(bumped_idx != -1, print_fn, no_print_fn, operand=None)
-
-    # Then call inside your movement function:
-    # print_if_bumped(bumped, bumped_idx)
 
     new_y = jnp.where(landed, y_land,
                       jnp.where(bumped, y_bump, new_pos[1]))
@@ -686,27 +690,68 @@ class JaxMarioBros(JaxEnvironment[
     @partial(jax.jit, static_argnums=0)
     def step(self, state: MarioBrosState, action: chex.Array) -> Tuple[
         MarioBrosObservation, MarioBrosState, float, bool, MarioBrosInfo]:
-        # 1) advance player state
+        """
+        Performs one step of the environment given a state and an action.
+        Handles player movement, enemy collisions, enemy patrol updates,
+        POW hits, and enemy status changes.
+
+        Args:
+            state: Current MarioBrosState.
+            action: Action chosen by the agent.
+
+        Returns:
+            obs: MarioBrosObservation (player position).
+            new_state: Updated MarioBrosState.
+            reward: Float reward (0.0 here).
+            done: Boolean flag if episode ended.
+            info: MarioBrosInfo.
+        """
+
+        # 1) Advance player state given action
         new_player, bumped_idx, pow_bumped = player_step(state.player, action)
 
-        # jax.debug.print("Inside step check_collision: bumped_idx={bumped_idx}, pow_bumped={pow_bumped}",
-        #                 bumped_idx=bumped_idx, pow_bumped=pow_bumped)
+        # 2) Detect collisions between player and enemies
+        def check_enemy_collision_per_enemy(player_pos, enemy_positions):
+            px, py = player_pos
+            pw, ph = PLAYER_SIZE
+            ex, ey = enemy_positions[:, 0], enemy_positions[:, 1]
+            ew, eh = ENEMY_SIZE
 
-        # 2) check for enemy collision
-        hit_enemy = check_enemy_collision(new_player.pos, state.game.enemy_pos)
+            overlap_x = (px < ex + ew) & (px + pw > ex)
+            overlap_y = (py < ey + eh) & (py + ph > ey)
+            return overlap_x & overlap_y  # bool array per enemy
 
-        # on hit enemy, reset game
+        collided_mask = check_enemy_collision_per_enemy(new_player.pos, state.game.enemy_pos)
+
+        # Check if any collided enemy is strong (status==2)
+        strong_enemy_hit = jnp.any(collided_mask & (state.game.enemy_status == 2))
+
+        # --- Handling collision with strong enemy: reset Mario position only ---
         def on_hit(_):
-            new_lives = jnp.maximum(state.lives - 1, 0)
-            obs_reset, state_reset = self.reset()
-            game_over = (new_lives <= 0)
-            return obs_reset, state_reset, 0.0, game_over, self._get_info(state_reset)
+            ORIGINAL_MARIO_POS = jnp.array([100, 100], dtype=jnp.float32)  # Safe position for Mario
 
-        # no hit enemy, continue with game state
+            # Reset Mario position to safe spot
+            new_player_updated = new_player._replace(pos=ORIGINAL_MARIO_POS)
+
+            # Keep game state and lives unchanged
+            new_state = MarioBrosState(
+                player=new_player_updated,
+                game=state.game,
+                lives=state.lives
+            )
+
+            obs = self._get_observation(new_state)
+            return obs, new_state, 0.0, False, self._get_info(new_state)
+
+        # --- No strong enemy collision: normal game progress ---
         def on_no_hit(_):
-            # Enemy patrol step
-            active_mask = state.game.enemy_delay_timer >= ENEMY_SPAWN_FRAMES
-            ep, ev, idx, timer, sides = enemy_step(
+            # 3) Update enemy patrol movements
+            # Move this before enemy_step:
+            new_enemy_delay_timer = jnp.minimum(state.game.enemy_delay_timer + 1, ENEMY_SPAWN_FRAMES)
+            active_mask = new_enemy_delay_timer >= ENEMY_SPAWN_FRAMES
+
+            # Then call enemy_step:
+            ep, ev, idx, timer, sides, status = enemy_step(
                 state.game.enemy_pos,
                 state.game.enemy_vel,
                 state.game.enemy_platform_idx,
@@ -718,52 +763,63 @@ class JaxMarioBros(JaxEnvironment[
                 state.game.enemy_status
             )
 
-            # Update delay timer
+            # 4) Update enemy spawn delay timer (caps at ENEMY_SPAWN_FRAMES)
             new_enemy_delay_timer = jnp.minimum(state.game.enemy_delay_timer + 1, ENEMY_SPAWN_FRAMES)
 
-            # POW hit logic
+            # 5) POW hit logic and platform bump detection
             pow_hit = pow_bumped
             new_pow_hits = jnp.minimum(state.game.pow_hits + pow_hit, 3)
-
-            # Determine what was bumped: POW (-2) or a platform
             bumped_idx_final = jnp.where(pow_hit, -2, bumped_idx)
 
-            # Debug print: before toggle
-            jax.debug.print("Before toggle: bumped_idx_final={}, enemy_status={}", bumped_idx_final,
-                            state.game.enemy_status)
-
-            # Toggle: 2 <-> 1, keep 3 unchanged
+            # 6) Toggle enemy status for bumped platforms/POW (strong <-> weak)
             def toggle_status(old_status):
                 return jnp.where(old_status == 2, 1,  # strong → weak
                                  jnp.where(old_status == 1, 2,  # weak → strong
-                                           old_status))  # dead → unchanged
+                                           old_status))  # dead or others unchanged
 
-            # Apply toggle to enemies on bumped platform (if valid bump)
             new_enemy_status = jax.lax.cond(
                 bumped_idx_final >= 0,
                 lambda old_status: jnp.where(
-                    state.game.enemy_platform_idx == bumped_idx_final,
+                    idx == bumped_idx_final,
                     toggle_status(old_status),
                     old_status
                 ),
                 lambda old_status: old_status,
-                state.game.enemy_status
+                status  # UPDATED status used here
             )
 
-            # Debug print: after toggle
-            jax.debug.print("After toggle: new_enemy_status={}", new_enemy_status)
-
-            # POW hit makes all enemies weak
+            # Set all enemies to weak if POW bumped (-2)
             new_enemy_status = jnp.where(
                 bumped_idx_final == -2,
                 1,
                 new_enemy_status
             )
 
-            # Debug print: after POW adjustment
-            jax.debug.print("After POW hit adjustment: final_enemy_status={}", new_enemy_status)
+            # --- Collision logic with enemies after enemy step ---
 
-            # Build updated game state
+            # Re-check collisions with updated enemy positions
+            collided_mask = check_enemy_collision_per_enemy(new_player.pos, ep)
+
+            # Mark weak enemies (status==1) hit by player as dead (status=3)
+            enemy_status_after_hit = jnp.where(
+                (collided_mask) & (new_enemy_status == 1),
+                3,
+                new_enemy_status
+            )
+
+            # If collided enemy is strong (status==2), reset Mario position locally (extra safety)
+            mario_pos_reset = jnp.any((collided_mask) & (new_enemy_status == 2))
+            ORIGINAL_MARIO_POS = jnp.array([100, 100], dtype=jnp.float32)
+
+            new_player_pos = jnp.where(
+                mario_pos_reset,
+                ORIGINAL_MARIO_POS,
+                new_player.pos
+            )
+
+            new_player_updated = new_player._replace(pos=new_player_pos)
+
+            # 7) Construct updated game state with new enemy info and POW hits
             new_game = GameState(
                 enemy_pos=ep,
                 enemy_vel=ev,
@@ -773,25 +829,26 @@ class JaxMarioBros(JaxEnvironment[
                 enemy_delay_timer=new_enemy_delay_timer,
                 enemy_init_positions=state.game.enemy_init_positions,
                 pow_hits=new_pow_hits,
-                enemy_status=new_enemy_status
+                enemy_status=enemy_status_after_hit
             )
 
-            # New full state
+            # 8) Final updated full state with player and game info
             new_state = MarioBrosState(
-                player=new_player,
+                player=new_player_updated,
                 game=new_game,
                 lives=state.lives
             )
 
-            # Observation
+            # 9) Observation is just player position
             obs = MarioBrosObservation(
-                player_x=new_player.pos[0],
-                player_y=new_player.pos[1]
+                player_x=new_player_updated.pos[0],
+                player_y=new_player_updated.pos[1]
             )
 
             return obs, new_state, 0.0, False, self._get_info(new_state)
 
-        return jax.lax.cond(hit_enemy, on_hit, on_no_hit, new_player)
+        # 10) Return based on whether strong enemy was hit
+        return jax.lax.cond(strong_enemy_hit, on_hit, on_no_hit, new_player)
 
 
 # run game with: python scripts\play.py --game mariobros
