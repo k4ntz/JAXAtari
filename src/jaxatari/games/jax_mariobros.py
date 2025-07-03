@@ -728,12 +728,17 @@ class JaxMarioBros(JaxEnvironment[
             # Determine what was bumped: POW (-2) or a platform
             bumped_idx_final = jnp.where(pow_hit, -2, bumped_idx)
 
-            # Existing toggle_status logic for enemies bumped by platform or POW
+            # Debug print: before toggle
+            jax.debug.print("Before toggle: bumped_idx_final={}, enemy_status={}", bumped_idx_final,
+                            state.game.enemy_status)
+
+            # Toggle: 2 <-> 1, keep 3 unchanged
             def toggle_status(old_status):
                 return jnp.where(old_status == 2, 1,  # strong → weak
                                  jnp.where(old_status == 1, 2,  # weak → strong
                                            old_status))  # dead → unchanged
 
+            # Apply toggle to enemies on bumped platform (if valid bump)
             new_enemy_status = jax.lax.cond(
                 bumped_idx_final >= 0,
                 lambda old_status: jnp.where(
@@ -745,52 +750,18 @@ class JaxMarioBros(JaxEnvironment[
                 state.game.enemy_status
             )
 
+            # Debug print: after toggle
+            jax.debug.print("After toggle: new_enemy_status={}", new_enemy_status)
+
+            # POW hit makes all enemies weak
             new_enemy_status = jnp.where(
                 bumped_idx_final == -2,
                 1,
                 new_enemy_status
             )
 
-            # --- New Collision Logic Start ---
-
-            # Check collision per enemy
-            def check_enemy_collision_per_enemy(player_pos, enemy_positions):
-                px, py = player_pos
-                pw, ph = PLAYER_SIZE
-                ex, ey = enemy_positions[:, 0], enemy_positions[:, 1]
-                ew, eh = ENEMY_SIZE
-
-                overlap_x = (px < ex + ew) & (px + pw > ex)
-                overlap_y = (py < ey + eh) & (py + ph > ey)
-                return overlap_x & overlap_y  # bool array per enemy
-
-            collided_mask = check_enemy_collision_per_enemy(new_player.pos, ep)
-
-            # Enemy statuses of collided enemies
-            collided_statuses = jnp.where(collided_mask, new_enemy_status, 0)
-
-            # If collided enemy is weak (1), mark as dead (3)
-            enemy_status_after_hit = jnp.where(
-                (collided_mask) & (new_enemy_status == 1),
-                3,
-                new_enemy_status
-            )
-
-            # If collided enemy is strong (2), reset Mario position
-            mario_pos_reset = jnp.any((collided_mask) & (new_enemy_status == 2))
-
-            ORIGINAL_MARIO_POS = jnp.array([0, 0], dtype=jnp.float32)  # define your safe position here
-
-            # Update Mario position conditionally
-            new_player_pos = jnp.where(
-                mario_pos_reset,
-                ORIGINAL_MARIO_POS,
-                new_player.pos
-            )
-
-            new_player_updated = new_player._replace(pos=new_player_pos)
-
-            # --- New Collision Logic End ---
+            # Debug print: after POW adjustment
+            jax.debug.print("After POW hit adjustment: final_enemy_status={}", new_enemy_status)
 
             # Build updated game state
             new_game = GameState(
@@ -802,20 +773,20 @@ class JaxMarioBros(JaxEnvironment[
                 enemy_delay_timer=new_enemy_delay_timer,
                 enemy_init_positions=state.game.enemy_init_positions,
                 pow_hits=new_pow_hits,
-                enemy_status=enemy_status_after_hit
+                enemy_status=new_enemy_status
             )
 
             # New full state
             new_state = MarioBrosState(
-                player=new_player_updated,
+                player=new_player,
                 game=new_game,
                 lives=state.lives
             )
 
             # Observation
             obs = MarioBrosObservation(
-                player_x=new_player_updated.pos[0],
-                player_y=new_player_updated.pos[1]
+                player_x=new_player.pos[0],
+                player_y=new_player.pos[1]
             )
 
             return obs, new_state, 0.0, False, self._get_info(new_state)
