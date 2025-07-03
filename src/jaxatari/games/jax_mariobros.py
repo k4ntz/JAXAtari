@@ -61,6 +61,21 @@ PLATFORMS = jnp.array([
 # --- Pow_Block params ---
 POW_BLOCK = jnp.array([[72, 141, 16, 7]])  # x, y, w, h
 
+# Each number maps to 7-segment display (a,b,c,d,e,f,g)
+DIGIT_SEGMENTS = jnp.array([
+    [1,1,1,1,1,1,0],  # 0
+    [0,1,1,0,0,0,0],  # 1
+    [1,1,0,1,1,0,1],  # 2
+    [1,1,1,1,0,0,1],  # 3
+    [0,1,1,0,0,1,1],  # 4
+    [1,0,1,1,0,1,1],  # 5
+    [1,0,1,1,1,1,1],  # 6
+    [1,1,1,0,0,0,0],  # 7
+    [1,1,1,1,1,1,1],  # 8
+    [1,1,1,1,0,1,1],  # 9
+], dtype=jnp.int32)
+
+
 
 class GameState(NamedTuple):  # Enemy movement
     enemy_pos: jnp.ndarray  # shape (N,2): x/y positions
@@ -72,6 +87,7 @@ class GameState(NamedTuple):  # Enemy movement
     enemy_init_positions: jnp.ndarray  # shape (N,2): initial spawn positions of enemies  <--- add this
     pow_hits: int  # scalar: number of times the POW block has been hit (0–3)
     enemy_status: jnp.ndarray
+    score: jnp.int32
 
 
 class PlayerState(NamedTuple):  # Player movement
@@ -527,21 +543,42 @@ def draw_rect(image, x, y, w, h, color):
     new_image = jnp.where(mask[:, :, None], color_arr, image)
     return new_image
 
+def draw_digit(img, digit, x, y, size=6, color=(255, 255, 255)):
+    seg = DIGIT_SEGMENTS[digit]
+
+    def segment_rect(index):
+        w, h = size, size // 2
+        return [
+            (x + 0, y + 0, w, h),                  # a
+            (x + w, y + 0, h, w),                  # b
+            (x + w, y + w, h, w),                  # c
+            (x + 0, y + 2 * w, w, h),              # d
+            (x - h, y + w, h, w),                  # e
+            (x - h, y + 0, h, w),                  # f
+            (x + 0, y + w, w, h),                  # g
+        ][index]
+
+    for i in range(7):
+        img = lax.cond(
+            seg[i] == 1,
+            lambda im: draw_rect(im, *segment_rect(i), color),
+            lambda im: im,
+            img
+        )
+    return img
 
 import jaxatari.rendering.atraJaxis as aj
 from jaxatari.renderers import AtraJaxisRenderer
 
 
 class MarioBrosRenderer(AtraJaxisRenderer):
-    # holds functions to render given Gamestates
-
     def __init__(self):
         pass
 
     def render(self, state: MarioBrosState) -> jnp.ndarray:
         image = jnp.zeros((SCREEN_HEIGHT, SCREEN_WIDTH, 3), dtype=jnp.uint8)
 
-        # Spieler
+        # --- Draw player ---
         px, py = state.player.pos
         player_color = lax.cond(
             state.player.brake_frames_left > 0,
@@ -551,14 +588,14 @@ class MarioBrosRenderer(AtraJaxisRenderer):
         )
         image = draw_rect(image, px, py, *PLAYER_SIZE, player_color)
 
-        # Gegner (enemy_pos ist (N, 2))
+        # --- Draw enemies ---
         def draw_enemy(i, img):
             ex, ey = state.game.enemy_pos[i]
             return draw_rect(img, ex, ey, *ENEMY_SIZE, ENEMY_COLOR)
 
         image = lax.fori_loop(0, state.game.enemy_pos.shape[0], draw_enemy, image)
 
-        # Plattformen
+        # --- Draw platforms ---
         def draw_platform(i, img):
             plat = PLATFORMS[i]
             color = lax.cond(i == 0, lambda _: GROUND_COLOR, lambda _: PLATFORM_COLOR, operand=None)
@@ -566,18 +603,34 @@ class MarioBrosRenderer(AtraJaxisRenderer):
 
         image = lax.fori_loop(0, PLATFORMS.shape[0], draw_platform, image)
 
-        # POW Block
+        # --- Draw POW block ---
         powb = POW_BLOCK[0]
         image = draw_rect(image, powb[0], powb[1], powb[2], powb[3], POW_COLOR)
 
+        # --- Draw lives ---
         def draw_life(i, img):
-            x = 5 + i * 12  # Abstand zwischen den "Lives"-Rechtecken
+            x = 5 + i * 12
             y = 5
             return draw_rect(img, x, y, 10, 10, (228, 111, 111))
 
         image = lax.fori_loop(0, state.lives, draw_life, image)
 
+        # --- Draw score using 7-segment digits ---
+        score = state.game.score
+        digit_positions = 5  # Max digits to display
+
+        def draw_score_digit(i, img):
+            power = digit_positions - 1 - i
+            divisor = 10 ** power
+            digit = (score // divisor) % 10
+            x = SCREEN_WIDTH - (digit_positions - i) * 12 - 5
+            y = 5
+            return draw_digit(img, digit, x, y)
+
+        image = lax.fori_loop(0, digit_positions, draw_score_digit, image)
+
         return jnp.transpose(image, (1, 0, 2))
+
 
 
 class JaxMarioBros(JaxEnvironment[
@@ -662,7 +715,8 @@ class JaxMarioBros(JaxEnvironment[
                 enemy_delay_timer=jnp.array([0, 200, 0]),
                 enemy_init_positions=jnp.array([enemy1_pos, enemy2_pos, enemy1_pos]),
                 pow_hits=jnp.int32(0),
-                enemy_status = enemy_status
+                enemy_status = enemy_status,
+                score = jnp.int32(0)
         ),
             lives=jnp.int32(4)
         )
@@ -777,10 +831,23 @@ class JaxMarioBros(JaxEnvironment[
                                  jnp.where(old_status == 1, 2,  # weak → strong
                                            old_status))  # dead or others unchanged
 
+            # Define the range around enemy x position where toggle applies
+            TOGGLE_RANGE = 10
+
+            player_x = new_player.pos[0]  # Player x position
+            enemy_x = ep[:, 0]  # All enemies' x positions (assuming ep shape is [num_enemies, 2])
+
+            # Compute mask for enemies near player within the toggle range
+            nearby_mask = jnp.abs(enemy_x - player_x) <= TOGGLE_RANGE
+
+            # Combined mask: enemy on bumped platform AND near player
+            toggle_mask = (idx == bumped_idx_final) & nearby_mask
+
+            # Use toggle_mask to decide where to toggle status
             new_enemy_status = jax.lax.cond(
                 bumped_idx_final >= 0,
                 lambda old_status: jnp.where(
-                    idx == bumped_idx_final,
+                    toggle_mask,
                     toggle_status(old_status),
                     old_status
                 ),
@@ -807,6 +874,16 @@ class JaxMarioBros(JaxEnvironment[
                 new_enemy_status
             )
 
+            # --- Score tracking: reward for defeating weak enemies ---
+            was_weak = (collided_mask) & (new_enemy_status == 1)
+            now_dead = (collided_mask) & (enemy_status_after_hit == 3)
+            newly_killed = was_weak & now_dead
+
+            # Count and score
+            num_killed = jnp.sum(newly_killed.astype(jnp.int32))
+            score_gain = num_killed * 800
+            new_score = state.game.score + score_gain
+
             # If collided enemy is strong (status==2), reset Mario position locally (extra safety)
             mario_pos_reset = jnp.any((collided_mask) & (new_enemy_status == 2))
             ORIGINAL_MARIO_POS = jnp.array([100, 100], dtype=jnp.float32)
@@ -829,7 +906,8 @@ class JaxMarioBros(JaxEnvironment[
                 enemy_delay_timer=new_enemy_delay_timer,
                 enemy_init_positions=state.game.enemy_init_positions,
                 pow_hits=new_pow_hits,
-                enemy_status=enemy_status_after_hit
+                enemy_status=enemy_status_after_hit,
+                score = new_score
             )
 
             # 8) Final updated full state with player and game info
