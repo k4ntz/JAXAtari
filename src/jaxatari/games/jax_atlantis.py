@@ -331,10 +331,17 @@ class Renderer_AtraJaxis(AtraJaxisRenderer):
             can_shoot = active & state.plasma_active[i]
             on_lane4 = lane == 3
 
-            # Draw the plasma somewhere in between the enemies. The 10 pixel was chosen because it looked out as the
-            # best position after multiple tries for drawing plasma which suits all enemies.
-            half_w = jnp.minimum(cfg.enemy_width[i] // 2, 10).astype(jnp.int32)
-            ex = state.enemies[i, 0].astype(jnp.int32) + half_w
+            dx_i = state.enemies[i, 2]
+            x_i = state.enemies[i, 0].astype(jnp.int32)
+            half_w = (cfg.enemy_width[i] // 2).astype(jnp.int32)
+
+            # If dx <0 enemy is moving from right to left. Plasma should be drawn at enemy_x plus half width
+            # If dx > 0 enemy is moving from left to right. Plasma should be drawn at enemy_x plus enemy_x_width minus half width
+            ex = jnp.where(
+                dx_i < 0,
+                x_i + half_w,
+                x_i + cfg.enemy_width[i] - half_w
+            )
 
             def _draw(r):
                 return _draw_two_tone_beam(r, ex)
@@ -921,10 +928,18 @@ class JaxAtlantis(JaxEnvironment[AtlantisState, AtlantisObservation, AtlantisInf
         shooter_fired = jnp.any(can_fire)
 
         type_ids = state.enemies[:, 3].astype(jnp.int32)
-        half_w = cfg.enemy_width[type_ids] // 2
 
-        # To avoid that the enemy knocks out the center post or installment at first pixel, we align rather the enemy center
-        centers = state.enemies[:, 0] + half_w
+        dx_i = state.enemies[:, 2]
+        x_i = state.enemies[:, 0].astype(jnp.int32)
+        half_w = (cfg.enemy_width[type_ids] // 2)
+
+        # If dx <0 enemy is moving from right to left. Plasma should be drawn at enemy_x plus half width
+        # If dx > 0 enemy is moving from left to right. Plasma should be drawn at enemy_x plus enemy_x_width minus half width
+        centers = jnp.where(
+            dx_i < 0,
+            x_i + half_w,
+            x_i + cfg.enemy_width[type_ids] - half_w
+        )
 
         # We try to simulate the beams last position. It is important because at higher speeds, we cannot have a exact
         # alignment of central canon and installment for knocking them put
