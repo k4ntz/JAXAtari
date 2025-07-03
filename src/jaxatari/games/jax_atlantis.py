@@ -955,9 +955,24 @@ class JaxAtlantis(JaxEnvironment[AtlantisState, AtlantisObservation, AtlantisInf
         lo = jnp.minimum(beam_old, beam_new)
         hi = jnp.maximum(beam_old, beam_new)
 
-        # build 7 possible targets
-        cmd_center = cfg.cannon_x[1]
-        inst_centers = cfg.installations_x
+        # Build 7 possible targets, 6 installments and one central canon
+        # If the enemy moves from left to right, plasma will shoot when the right edge of installment/canon is reached
+        # If the enemy moves from right to left, plasma will shoot when the left edge of installment/canon is reached
+
+        dx_shooter = state.enemies[shooter_idx, 2]
+        inst_centers = jnp.where(
+            dx_shooter > 0,
+            cfg.installations_x + cfg.installations_width,  # right-to-left hits right edges
+            cfg.installations_x  # left-to-right hits left edges
+        )
+
+        # Same logic for central canon
+        cmd_center = jnp.where(
+            dx_shooter > 0,
+            cfg.cannon_x[1] + cfg.cannon_width,
+            cfg.cannon_x[1]
+        )
+
         targets = jnp.sort(jnp.concatenate([jnp.array([cmd_center]), inst_centers], 0))
 
         # hit if any target lies in [lo,hi]
