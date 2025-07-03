@@ -128,8 +128,14 @@ ROCK_MUNCHER_MISSILE_COLOR = (85, 92, 197, 255)
 ROCK_MUNCHER_MISSILE_SPAWN_EVERY = 50 # Rock muncher shoots a new missile every ROCK_MUNCHER_MISSILE_SPAWN_EVERY frames
 ROCK_MUNCHER_MISSILE_SPEED = 4 # Speed of rock muncher missile
 
-
 # -------- Homing Missile constants --------
+HOMING_MISSILE_SIZE = (8, 5) # Width, Height
+
+HOMING_MISSILE_Y_BOUNDS = (32, 74)
+HOMING_MISSILE_PLAYER_TRACKING_RANGE = 15 # The minimum y position difference between player and homing missile needed for the homing missile to start tracking the player
+HOMING_MISSILE_Y_PLAYER_OFFSET = 2 # Sets the y position this many pixels above the player (for positive numbers) or below the player (for negative numbers)
+HOMING_MISSILE_X_SPEED = 2.5
+HOMING_MISSILE_Y_SPEED = 1
 
 # -------- Forcefield constants --------
 
@@ -206,6 +212,7 @@ class HomingMissileState(NamedTuple):
     is_alive: jnp.bool
     x: chex.Array
     y: chex.Array
+    is_tracking_player: jnp.bool
 
 class ForceFieldState(NamedTuple):
     is_in_current_event: jnp.bool
@@ -388,6 +395,9 @@ def load_sprites():
         jnp.repeat(rmus[1][None], ROCK_MUNCHER_ANIMATION_SPEED, axis=0),
     ]) # Rock muncher animation
 
+    # Homing missile
+    homing_missile_sprite = aj.loadFrame(os.path.join(MODULE_DIR, "sprites/lasergates/enemies/homing_missile/homing_missile.npy"))
+
     return (
         # Player sprites
         player,
@@ -400,6 +410,7 @@ def load_sprites():
         radar_mortar_sprites,
         byte_bat_sprites,
         rock_muncher_sprites,
+        homing_missile_sprite,
 
         # Background sprites
         upper_brown_bg,
@@ -434,6 +445,7 @@ def load_sprites():
     SPRITE_RADAR_MORTAR,
     SPRITE_BYTE_BAT,
     SPRITE_ROCK_MUNCHER,
+    SPRITE_HOMING_MISSILE,
 
     # Background sprites
     SPRITE_UPPER_BROWN_BG,
@@ -522,8 +534,16 @@ def maybe_initialize_random_entity(entities, state):
         return entities._replace(rock_muncher_state=new_rock_muncher_state)
 
     def initialize_homing_missile(entities, state):
-        new_state = entities.homing_missile_state._replace(is_in_current_event=jnp.bool(True))
-        return entities._replace(homing_missile_state=new_state)
+
+        initial_y_position = jax.random.randint(key_intern, (), HOMING_MISSILE_Y_BOUNDS[0], HOMING_MISSILE_Y_BOUNDS[1])
+        new_homing_missile_state = HomingMissileState(
+            is_in_current_event=jnp.bool(True),
+            is_alive=jnp.bool(True),
+            x=jnp.array(WIDTH).astype(entities.homing_missile_state.x.dtype),
+            y=initial_y_position,
+            is_tracking_player=jnp.bool(False),
+        )
+        return entities._replace(homing_missile_state=new_homing_missile_state)
 
     def initialize_forcefield(entities, state):
         new_state = entities.forcefield_state._replace(is_in_current_event=jnp.bool(True))
@@ -553,7 +573,7 @@ def maybe_initialize_random_entity(entities, state):
     ] # All initialize functions of all entity types
 
     def initialize_random_entity(_):
-        picked_index = jax.random.randint(key_pick_type, shape=(), minval=0, maxval=3) # TODO: Change maxval to len(init_fns) when all init functions are implemented
+        picked_index = jax.random.randint(key_pick_type, shape=(), minval=3, maxval=4) # TODO: Change maxval to len(init_fns) when all init functions are implemented
         chosen_fn = lambda i: jax.lax.switch(i, init_fns, entities, state)
         return chosen_fn(picked_index) # Initialize function of randomly picked entity
 
@@ -896,7 +916,68 @@ def all_entities_step(game_state: LaserGatesState) -> EntitiesState:
         )
 
     def homing_missile_step(state: LaserGatesState) -> tuple[HomingMissileState, CollisionPropertiesState]:
-        return state.entities.homing_missile_state, state.entities.collision_properties_state
+        hm = state.entities.homing_missile_state
+
+        # Track player if in range or already tracking
+        player_is_in_y_range = jnp.abs(state.player_y - hm.y) < HOMING_MISSILE_PLAYER_TRACKING_RANGE
+        new_is_tracking_player = jnp.logical_or(hm.is_tracking_player, player_is_in_y_range)
+
+        player_is_below_missile = state.player_y - HOMING_MISSILE_Y_PLAYER_OFFSET > hm.y
+
+        # Update position
+        new_x = jnp.where(hm.is_alive, hm.x - HOMING_MISSILE_X_SPEED, hm.x)
+        new_y = jnp.where(jnp.logical_and(hm.is_alive, jnp.logical_and(new_is_tracking_player, jnp.logical_not(jnp.abs(state.player_y - HOMING_MISSILE_Y_PLAYER_OFFSET - hm.y) <= HOMING_MISSILE_Y_SPEED))), jnp.where(
+            player_is_below_missile,
+            hm.y + HOMING_MISSILE_Y_SPEED,
+            hm.y - HOMING_MISSILE_Y_SPEED
+        ), hm.y)
+        # Clip y position to bounds
+        new_y = jnp.clip(new_y, HOMING_MISSILE_Y_BOUNDS[0], HOMING_MISSILE_Y_BOUNDS[1])
+
+        # ----- Collision detection -----
+
+        # If collision with player occurred. Only valid if death timer is still in alive state
+        collision_with_player = jnp.where(
+            state.entities.collision_properties_state.death_timer == ENTITY_DEATH_ANIMATION_TIMER,
+            check_collision_single((state.player_x, state.player_y), PLAYER_SIZE, (new_x, new_y), HOMING_MISSILE_SIZE),
+            jnp.bool(False)
+        )
+
+        # If collision with player missile occurred. Only valid if death timer is still in alive state
+        collision_with_player_missile = jnp.where(
+            state.entities.collision_properties_state.death_timer == ENTITY_DEATH_ANIMATION_TIMER,
+            check_collision_single((state.player_missile.x, state.player_missile.y), PLAYER_MISSILE_SIZE, (new_x, new_y), HOMING_MISSILE_SIZE),
+            jnp.bool(False))
+
+        # Is still alive if was already alive and no collision occurred
+        new_is_alive = jnp.logical_and(hm.is_alive, jnp.logical_and(jnp.logical_not(collision_with_player_missile), jnp.logical_not(collision_with_player)))
+
+        # Death timer updates - set alive if is alive, decrement if death animation, deactivate completely if player collision (no animation)
+        new_death_timer = jnp.where(new_is_alive, ENTITY_DEATH_ANIMATION_TIMER, state.entities.collision_properties_state.death_timer)
+        new_death_timer = jnp.where(jnp.logical_not(new_is_alive), jnp.maximum(new_death_timer - 1, 0), new_death_timer)
+        new_death_timer = jnp.where(collision_with_player, -1, new_death_timer)
+
+        # Update is_in_current_event for player missile collision
+        new_is_in_current_event = jnp.where(collision_with_player_missile, hm.is_alive, hm.is_in_current_event)
+        new_is_in_current_event = jnp.where(new_death_timer == 0, jnp.bool(False), new_is_in_current_event)
+
+        # Update is_in_current_event for player collision
+        new_is_in_current_event = jnp.where(collision_with_player, jnp.bool(True), new_is_in_current_event)
+
+        return hm._replace(
+            is_in_current_event=jnp.logical_and(new_is_in_current_event, hm.x > 0),
+            is_alive=new_is_alive,
+            x=new_x,
+            y=new_y,
+            is_tracking_player=new_is_tracking_player,
+        ), state.entities.collision_properties_state._replace(
+            collision_with_player=collision_with_player,
+            collision_with_player_missile=collision_with_player_missile,
+            is_big_collision=jnp.bool(True),
+            is_energy_pod=jnp.bool(False),
+            score_to_add=jnp.array(525),
+            death_timer=new_death_timer,
+        )
 
     def forcefield_step(state: LaserGatesState) -> tuple[ForceFieldState, CollisionPropertiesState]:
         return state.entities.forcefield_state, state.entities.collision_properties_state
@@ -1399,6 +1480,7 @@ class JaxLaserGates(JaxEnvironment[LaserGatesState, LaserGatesObservation, Laser
                 is_alive=jnp.bool(False),
                 x=jnp.array(0).astype(jnp.float32),
                 y=jnp.array(0),
+                is_tracking_player=jnp.bool(False),
             ),
             forcefield_state=ForceFieldState(
                 is_in_current_event=jnp.bool(False),
@@ -1648,7 +1730,7 @@ class LaserGatesRenderer(AtraJaxisRenderer):
                            raster
                            )
 
-        #Rock muncher
+        # Rock muncher
         rmu_state = state.entities.rock_muncher_state
         raster = jnp.where(jnp.logical_and(rmu_state.is_in_current_event, jnp.logical_and(jnp.logical_not(rmu_state.is_alive), state.entities.collision_properties_state.death_timer > 0)),
                            aj.render_at(
@@ -1660,6 +1742,24 @@ class LaserGatesRenderer(AtraJaxisRenderer):
                                ),
                                rmu_state.x,
                                rmu_state.y - ENTITY_DEATH_SPRITES_SIZE[1] + ENTITY_DEATH_SPRITE_Y_OFFSET,
+                               death_sprite_lower_frame,
+                           ),
+                           # Case: in event but dead and death animation over -> do not render
+                           raster
+                           )
+
+        # Homing missile
+        hm_state = state.entities.homing_missile_state
+        raster = jnp.where(jnp.logical_and(hm_state.is_in_current_event, jnp.logical_and(jnp.logical_not(hm_state.is_alive), state.entities.collision_properties_state.death_timer > 0)),
+                           aj.render_at(
+                               aj.render_at(
+                                   raster,
+                                   hm_state.x,
+                                   hm_state.y + ENTITY_DEATH_SPRITE_Y_OFFSET,
+                                   death_sprite_upper_frame,
+                               ),
+                               hm_state.x,
+                               hm_state.y - ENTITY_DEATH_SPRITES_SIZE[1] + ENTITY_DEATH_SPRITE_Y_OFFSET,
                                death_sprite_lower_frame,
                            ),
                            # Case: in event but dead and death animation over -> do not render
@@ -1771,16 +1871,30 @@ class LaserGatesRenderer(AtraJaxisRenderer):
         # Render rock muncher missile
         rock_muncher_missile_sprite = recolor_sprite(SPRITE_ENTITY_MISSILE, jnp.array(ROCK_MUNCHER_MISSILE_COLOR))
 
-        raster = jnp.where(jnp.logical_and(jnp.logical_and(state.entities.rock_muncher_state.missile_x != 0, state.entities.rock_muncher_state.missile_y != 0), state.entities.rock_muncher_state.is_in_current_event),
+        raster = jnp.where(jnp.logical_and(jnp.logical_and(rmu_state.missile_x != 0, rmu_state.missile_y != 0), rmu_state.is_in_current_event),
                            aj.render_at(
                                raster,
-                               state.entities.rock_muncher_state.missile_x,
-                               state.entities.rock_muncher_state.missile_y,
+                               rmu_state.missile_x,
+                               rmu_state.missile_y,
                                rock_muncher_missile_sprite,
                                flip_horizontal=True,
                            ),
                            raster
                            )
+
+        # -------- Render Homing Missile --------
+
+        raster = jnp.where(jnp.logical_and(hm_state.is_in_current_event, hm_state.is_alive),
+            # Case: alive -> render normally
+            aj.render_at(
+                raster,
+                hm_state.x,
+                hm_state.y,
+                SPRITE_HOMING_MISSILE,
+            ),
+            # Case: not in event -> do not render
+            raster
+        )
 
         # -------- Render background parts --------
 
