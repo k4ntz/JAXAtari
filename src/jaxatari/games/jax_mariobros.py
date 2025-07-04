@@ -374,7 +374,7 @@ def enemy_step(
 def movement(state: PlayerState, action: jnp.ndarray) -> Tuple[PlayerState, jnp.int32, jnp.bool_]:    # Calculates movement of Player based on given state and action taken
 
     move, jump_btn = action[0], action[1].astype(jnp.int32)
-    vx = MOVE_SPEED * move
+    vx = jnp.where(state.brake_frames_left > 0, BRAKE_SPEED* state.last_dir, move)
     # -------- phase / frame bookkeeping --------------------------
     start_jump = (jump_btn == 1) & state.on_ground & (state.jump_phase == 0)
 
@@ -449,6 +449,13 @@ def player_step(state: PlayerState, action: chex.Array) -> Tuple[PlayerState, jn
         lambda s: s,
         state
     )
+
+
+    # 3) only allow inputs when not jumping(player stutters when state.on_ground is used for check)
+    press_fire = press_fire & (state0.jump == 0)
+    press_right = press_right & (state0.jump == 0)
+    press_left = press_left & (state0.jump == 0)
+    
 
     # 3) set jump flag
     state1 = state0._replace(jump=jnp.where(press_fire, 1, state0.jump))
