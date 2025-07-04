@@ -87,7 +87,7 @@ class GameState(NamedTuple):  # Enemy movement
     enemy_init_positions: jnp.ndarray  # shape (N,2): initial spawn positions of enemies  <--- add this
     pow_hits: int  # scalar: number of times the POW block has been hit (0–3)
     enemy_status: jnp.ndarray
-    score: jnp.int32
+    score: int
 
 
 class PlayerState(NamedTuple):  # Player movement
@@ -104,6 +104,8 @@ class PlayerState(NamedTuple):  # Player movement
     jumpR: chex.Array
     last_dir: chex.Array
     brake_frames_left: chex.Array
+    bumped_idx: chex.Array
+    pow_bumped: chex.Array
 
 
 class MarioBrosState(NamedTuple):
@@ -371,10 +373,11 @@ def enemy_step(
 
 
 @jax.jit
-def movement(state: PlayerState, action: jnp.ndarray) -> Tuple[PlayerState, jnp.int32, jnp.bool_]:    # Calculates movement of Player based on given state and action taken
+def movement(state: PlayerState) -> PlayerState:    # Calculates movement of Player based on given state and action taken
 
-    move, jump_btn = action[0], action[1].astype(jnp.int32)
-    vx = jnp.where(state.brake_frames_left > 0, BRAKE_SPEED* state.last_dir, move)
+    move = state.move
+    jump_btn = state.jump
+    vx = move
     # -------- phase / frame bookkeeping --------------------------
     start_jump = (jump_btn == 1) & state.on_ground & (state.jump_phase == 0)
 
@@ -431,12 +434,14 @@ def movement(state: PlayerState, action: jnp.ndarray) -> Tuple[PlayerState, jnp.
         jumpL=state.jumpL,
         jumpR=state.jumpR,
         last_dir=state.last_dir,
-        brake_frames_left=state.brake_frames_left
-    ), bumped_idx, pow_bumped
+        brake_frames_left=state.brake_frames_left,
+        bumped_idx=bumped_idx,
+        pow_bumped=pow_bumped
+    )
 
 
 @jax.jit
-def player_step(state: PlayerState, action: chex.Array) -> Tuple[PlayerState, jnp.int32, jnp.bool_]:
+def player_step(state: PlayerState, action: chex.Array) -> PlayerState:
     # 1) decode buttons
     press_fire = (action == Action.FIRE) | (action == Action.LEFTFIRE) | (action == Action.RIGHTFIRE)
     press_right = (action == Action.RIGHT) | (action == Action.RIGHTFIRE)
@@ -532,8 +537,8 @@ def player_step(state: PlayerState, action: chex.Array) -> Tuple[PlayerState, jn
     state2 = lax.cond(state1.jump == 0, walk_or_brake, jump_move, state1)
 
     # 5) apply physics
-    new_state, bumped_idx, pow_bumped = movement(state2, jnp.array([state2.move, state2.jump], dtype=jnp.int32))
-    return new_state, bumped_idx, pow_bumped
+    new_state = movement(state2)
+    return new_state
 
 
 def draw_rect(image, x, y, w, h, color):
@@ -711,7 +716,9 @@ class JaxMarioBros(JaxEnvironment[
                 jumpL=False,
                 jumpR=False,
                 last_dir=jnp.int32(0),
-                brake_frames_left=jnp.int32(0)
+                brake_frames_left=jnp.int32(0),
+                bumped_idx=0,
+                pow_bumped=False
             ),
             game=GameState(
                 enemy_pos=jnp.array([enemy1_pos, enemy2_pos, enemy1_pos]),  # 3rd enemy = enemy 1 pos
@@ -769,8 +776,9 @@ class JaxMarioBros(JaxEnvironment[
         """
 
         # 1) Advance player state given action
-        new_player, bumped_idx, pow_bumped = player_step(state.player, action)
-
+        new_player = player_step(state.player, action)
+        bumped_idx = new_player.bumped_idx
+        pow_bumped = new_player.pow_bumped
         # 2) Detect collisions between player and enemies
         def check_enemy_collision_per_enemy(player_pos, enemy_positions):
             px, py = player_pos
