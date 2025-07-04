@@ -379,7 +379,7 @@ class FishingDerbyRenderer(AtraJaxisRenderer):
 
         # Draw shark
         shark_frame = jax.lax.cond((state.time // 8) % 2 == 0, lambda: self.SPRITE_SHARK1, lambda: self.SPRITE_SHARK2)
-        raster = self._render_at(raster, state.shark_x, cfg.SHARK_Y, shark_frame, flip_h=state.shark_dir > 0)
+        raster = self._render_at(raster, state.shark_x, cfg.SHARK_Y, shark_frame, flip_h=state.shark_dir < 0)
 
         # Draw fish
         fish_frame = jax.lax.cond((state.time // 10) % 2 == 0, lambda: self.SPRITE_FISH1, lambda: self.SPRITE_FISH2)
@@ -387,7 +387,7 @@ class FishingDerbyRenderer(AtraJaxisRenderer):
         def draw_one_fish(i, r):
             pos, direction, active = state.fish_positions[i], state.fish_directions[i], state.fish_active[i]
             return jax.lax.cond(active,
-                                lambda r_in: self._render_at(r_in, pos[0], pos[1], fish_frame, flip_h=direction > 0),
+                                lambda r_in: self._render_at(r_in, pos[0], pos[1], fish_frame, flip_h=direction < 0),
                                 lambda r_in: r_in, r)
 
         raster = jax.lax.fori_loop(0, cfg.NUM_FISH, draw_one_fish, raster)
