@@ -332,17 +332,10 @@ class JaxSkiing(JaxEnvironment[GameState, SkiingObservation, SkiingInfo]):
         )
 
         # Move objects at normal speed regardless of jumping state
-        new_trees = state.trees
-        for i in range(len(state.trees)):
-            new_trees = new_trees.at[i, 1].set(state.trees[i][1] - new_skier_y_speed)
-
-        new_rocks = state.rocks
-        for i in range(len(state.rocks)):
-            new_rocks = new_rocks.at[i, 1].set(state.rocks[i][1] - new_skier_y_speed)
-
-        new_flags = state.flags
-        for i in range(len(state.flags)):
-            new_flags = new_flags.at[i, 1].set(state.flags[i][1] - new_skier_y_speed)
+        # Move objects using vectorized operations instead of Python loops
+        new_trees = state.trees.at[:, 1].add(-new_skier_y_speed)
+        new_rocks = state.rocks.at[:, 1].add(-new_skier_y_speed)
+        new_flags = state.flags.at[:, 1].add(-new_skier_y_speed)
 
         def check_pass_flag(flag_pos):
             fx, fy = flag_pos
@@ -514,49 +507,31 @@ class JaxSkiing(JaxEnvironment[GameState, SkiingObservation, SkiingInfo]):
         )
 
         # create trees
-        trees = jnp.zeros((self.config.max_num_trees, 4))
-        for i in range(self.config.max_num_trees):
-            tree_pos = state.trees.at[i].get()
-            trees = trees.at[i].set(
-                jnp.array(
-                    [
-                        tree_pos.at[0].get(),  # x position
-                        tree_pos.at[1].get(),  # y position
-                        self.config.tree_width,  # width
-                        self.config.tree_height,  # height
-                    ]
-                )
-            )
+        tree_static = jnp.array(
+            [self.config.tree_width, self.config.tree_height], dtype=jnp.float32
+        )
+        trees = jnp.concatenate(
+            [state.trees, jnp.tile(tree_static, (self.config.max_num_trees, 1))],
+            axis=1,
+        )
 
         # create flags
-        flags = jnp.zeros((self.config.max_num_flags, 4))
-        for i in range(self.config.max_num_flags):
-            flag_pos = state.flags.at[i].get()
-            flags = flags.at[i].set(
-                jnp.array(
-                    [
-                        flag_pos.at[0].get(),  # x position
-                        flag_pos.at[1].get(),  # y position
-                        self.config.flag_width,  # width
-                        self.config.flag_height,  # height
-                    ]
-                )
-            )
+        flag_static = jnp.array(
+            [self.config.flag_width, self.config.flag_height], dtype=jnp.float32
+        )
+        flags = jnp.concatenate(
+            [state.flags, jnp.tile(flag_static, (self.config.max_num_flags, 1))],
+            axis=1,
+        )
 
         # create rocks
-        rocks = jnp.zeros((self.config.max_num_rocks, 4))
-        for i in range(self.config.max_num_rocks):
-            rock_pos = state.rocks.at[i].get()
-            rocks = rocks.at[i].set(
-                jnp.array(
-                    [
-                        rock_pos.at[0].get(),  # x position
-                        rock_pos.at[1].get(),  # y position
-                        self.config.rock_width,  # width
-                        self.config.rock_height,  # height
-                    ]
-                )
-            )
+        rock_static = jnp.array(
+            [self.config.rock_width, self.config.rock_height], dtype=jnp.float32
+        )
+        rocks = jnp.concatenate(
+            [state.rocks, jnp.tile(rock_static, (self.config.max_num_rocks, 1))],
+            axis=1,
+        )
 
         return SkiingObservation(
             skier=skier, trees=trees, flags=flags, rocks=rocks, score=state.score, jumping=state.jumping, jump_timer=state.jump_timer
@@ -670,9 +645,9 @@ class GameRenderer:
         base_path = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
         sprite_dir = os.path.join(base_path, "jaxatari", "games", "sprites", "skiing")
         filenames = {
-            "left": "skiier_left.npy",
+            "right": "skiier_left.npy",
             "front": "skiier_front.npy",
-            "right": "skiier_right.npy"
+            "left": "skiier_right.npy"
         }
         width = self.game_config.skier_width * self.render_config.scale_factor
         height = self.game_config.skier_height * self.render_config.scale_factor
