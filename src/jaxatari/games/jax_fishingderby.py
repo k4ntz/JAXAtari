@@ -511,7 +511,6 @@ def get_human_action() -> chex.Array:
 
 
 if __name__ == "__main__":
-    try:
         pygame.init()
         game = FishingDerby()
         renderer = FishingDerbyRenderer()
@@ -548,10 +547,6 @@ if __name__ == "__main__":
             pygame.display.flip()
             counter += 1
             pygame.time.Clock().tick(60)
-
-    except Exception as e:
-        print(f"Error: {e}")
-    finally:
         pygame.quit()
 
 # run with: python scripts/play.py --game src/jaxatari/games/jax_fishingderby.py --record my_record_file.npz
