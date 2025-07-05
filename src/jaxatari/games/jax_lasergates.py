@@ -138,6 +138,23 @@ HOMING_MISSILE_X_SPEED = 2.5
 HOMING_MISSILE_Y_SPEED = 1
 
 # -------- Forcefield constants --------
+FORCEFIELD_SIZE = (8, 73) # Width, Height of a single normal forcefield column
+FORCEFIELD_WIDE_SIZE = (16, 73) # Width, Height of a single wide forcefield column
+
+FORCEFIELD_IS_WIDE_PROBABILITY = 0.2 # Probability that a forcefield is wide
+
+FORCEFIELD_FLASHING_SPACING = 40 # x spacing between the forcefields when in flashing mode
+FORCEFIELD_FLASHING_SPEED = 35 # Forcefield changes state from on to off or from off to on every FORCEFIELD_FLASHING_SPEED frames
+
+FORCEFIELD_FLEXING_SPACING = 60 # x spacing between the forcefields when in flexing mode
+FORCEFIELD_FLEXING_SPEED = 0.6 # Flexing (Crushing motion) speed
+FORCEFIELD_FLEXING_MINIMUM_DISTANCE = 2 # Minimum y distance between the upper and lower forcefields when flexing
+FORCEFIELD_FLEXING_MAXIMUM_DISTANCE = 20 # Maximum y distance between the upper and lower forcefields when flexing
+
+FORCEFIELD_FIXED_SPACING = 50 # x spacing between the forcefields when in fixed mode
+FORCEFIELD_FIXED_SPEED = 0.5 # Fixed (up and down movement) speed
+FORCEFIELD_FIXED_UPPER_BOUND = -FORCEFIELD_SIZE[1] + 33 # Highest allowed y position for forcefields while fixed
+FORCEFIELD_FIXED_LOWER_BOUND = -FORCEFIELD_SIZE[1] + 68 # Lowest allowed y position for forcefields while fixed
 
 # -------- Densepcak constants --------
 
@@ -217,8 +234,25 @@ class HomingMissileState(NamedTuple):
 class ForceFieldState(NamedTuple):
     is_in_current_event: jnp.bool
     is_alive: jnp.bool
-    x: chex.Array
-    y: chex.Array
+    x0: chex.Array
+    y0: chex.Array
+    x1: chex.Array
+    y1: chex.Array
+    x2: chex.Array
+    y2: chex.Array
+    x3: chex.Array
+    y3: chex.Array
+    x4: chex.Array
+    y4: chex.Array
+    x5: chex.Array
+    y5: chex.Array
+    num_of_forcefields: chex.Array
+    is_wide: jnp.bool
+    is_flexing: jnp.bool
+    is_fixed: jnp.bool
+    flash_on: jnp.bool
+    flex_upper_direction_is_up: jnp.bool
+    fixed_upper_direction_is_up: jnp.bool
 
 class DensepackState(NamedTuple):
     is_in_current_event: jnp.bool
@@ -243,6 +277,7 @@ class CollisionPropertiesState(NamedTuple):
     collision_with_player_missile: jnp.bool
     is_big_collision: jnp.bool
     is_energy_pod: jnp.bool
+    is_forcefield: jnp.bool
     score_to_add: chex.Array
     death_timer: chex.Array
 
@@ -398,6 +433,9 @@ def load_sprites():
     # Homing missile
     homing_missile_sprite = aj.loadFrame(os.path.join(MODULE_DIR, "sprites/lasergates/enemies/homing_missile/homing_missile.npy"))
 
+    # Forcefield
+    forcefield_sprite = aj.loadFrame(os.path.join(MODULE_DIR, "sprites/lasergates/enemies/forcefield/forcefield.npy"))
+
     return (
         # Player sprites
         player,
@@ -411,6 +449,7 @@ def load_sprites():
         byte_bat_sprites,
         rock_muncher_sprites,
         homing_missile_sprite,
+        forcefield_sprite,
 
         # Background sprites
         upper_brown_bg,
@@ -446,6 +485,7 @@ def load_sprites():
     SPRITE_BYTE_BAT,
     SPRITE_ROCK_MUNCHER,
     SPRITE_HOMING_MISSILE,
+    SPRITE_FORCEFIELD,
 
     # Background sprites
     SPRITE_UPPER_BROWN_BG,
@@ -546,8 +586,42 @@ def maybe_initialize_random_entity(entities, state):
         return entities._replace(homing_missile_state=new_homing_missile_state)
 
     def initialize_forcefield(entities, state):
-        new_state = entities.forcefield_state._replace(is_in_current_event=jnp.bool(True))
-        return entities._replace(forcefield_state=new_state)
+
+        key_num_of_ff, key_type_of_ff, key_is_wide = jax.random.split(key_intern, 3)
+        number_of_forcefields = jax.random.randint(key_num_of_ff, (), minval=1, maxval=5) # Spawn 1 to 4 forcefields at a time.
+
+        type_of_forcefield = jax.random.randint(key_type_of_ff, (), minval=0, maxval=3)
+        init_is_flexing = type_of_forcefield == 0
+        init_is_fixed = type_of_forcefield == 1
+
+        init_is_wide = jax.random.bernoulli(key_is_wide, p=FORCEFIELD_IS_WIDE_PROBABILITY)
+
+        number_of_forcefields = jnp.where(init_is_wide, 1, number_of_forcefields)
+
+        new_forcefield_state = entities.forcefield_state._replace(
+            is_in_current_event=jnp.bool(True),
+            is_alive=jnp.bool(True),
+            x0=jnp.array(WIDTH, dtype=jnp.float32),
+            y0=jnp.where(init_is_flexing, -10, jnp.where(init_is_fixed, -20, -17)).astype(jnp.float32),
+            x1=jnp.array(WIDTH, dtype=jnp.float32),
+            y1=jnp.where(init_is_flexing, 65, jnp.where(init_is_fixed, 65, 56)).astype(jnp.float32),
+            x2=jnp.array(WIDTH, dtype=jnp.float32),
+            y2=jnp.where(init_is_flexing, -10, jnp.where(init_is_fixed, -20, -17)).astype(jnp.float32),
+            x3=jnp.array(WIDTH, dtype=jnp.float32),
+            y3=jnp.where(init_is_flexing, 65, jnp.where(init_is_fixed, 65, 56)).astype(jnp.float32),
+            x4=jnp.array(WIDTH, dtype=jnp.float32),
+            y4=jnp.where(init_is_flexing, -10, jnp.where(init_is_fixed, -20, -17)).astype(jnp.float32),
+            x5=jnp.array(WIDTH, dtype=jnp.float32),
+            y5=jnp.where(init_is_flexing, 65, jnp.where(init_is_fixed, 65, 56)).astype(jnp.float32),
+            num_of_forcefields=jnp.array(number_of_forcefields),
+            is_wide=init_is_wide,
+            is_flexing=init_is_flexing,
+            is_fixed=init_is_fixed,
+            flash_on=jnp.array(True),
+            flex_upper_direction_is_up=jnp.array(True),
+            fixed_upper_direction_is_up=jnp.array(True),
+        )
+        return entities._replace(forcefield_state=new_forcefield_state)
 
     def initialize_dense_pack(entities, state):
         new_state = entities.dense_pack_state._replace(is_in_current_event=jnp.bool(True))
@@ -573,7 +647,15 @@ def maybe_initialize_random_entity(entities, state):
     ] # All initialize functions of all entity types
 
     def initialize_random_entity(_):
-        picked_index = jax.random.randint(key_pick_type, shape=(), minval=3, maxval=4) # TODO: Change maxval to len(init_fns) when all init functions are implemented
+        picked_index = jax.random.randint(key_pick_type, shape=(), minval=4, maxval=5) # TODO: Change maxval to len(init_fns) when all init functions are implemented
+        # If you want only one specific entity to spawn, change minval, maxval to:
+        # Radar Mortar:     minval=0, maxval=1
+        # Byte Bat:         minval=1, maxval=2
+        # Rock Muncher:     minval=2, maxval=3
+        # Homing Missile:   minval=3, maxval=4
+        # Forcefields:      minval=4, maxval=5
+        # Densepack:        minval=5, maxval=6
+
         chosen_fn = lambda i: jax.lax.switch(i, init_fns, entities, state)
         return chosen_fn(picked_index) # Initialize function of randomly picked entity
 
@@ -746,7 +828,6 @@ def all_entities_step(game_state: LaserGatesState) -> EntitiesState:
             collision_with_player=collision_with_player,
             collision_with_player_missile=collision_with_player_missile,
             is_big_collision=jnp.logical_not(rm_missile_collision_with_player),
-            is_energy_pod=jnp.bool(False),
             score_to_add=jnp.array(115),
             death_timer=new_death_timer,
         )
@@ -822,7 +903,6 @@ def all_entities_step(game_state: LaserGatesState) -> EntitiesState:
             collision_with_player=collision_with_player,
             collision_with_player_missile=collision_with_player_missile,
             is_big_collision=jnp.bool(True),
-            is_energy_pod=jnp.bool(False),
             score_to_add=jnp.array(330),
             death_timer=new_death_timer,
         )
@@ -910,7 +990,6 @@ def all_entities_step(game_state: LaserGatesState) -> EntitiesState:
             collision_with_player=collision_with_player,
             collision_with_player_missile=collision_with_player_missile,
             is_big_collision=jnp.logical_not(rm_missile_collision_with_player),
-            is_energy_pod=jnp.bool(False),
             score_to_add=jnp.array(325),
             death_timer=new_death_timer,
         )
@@ -974,13 +1053,140 @@ def all_entities_step(game_state: LaserGatesState) -> EntitiesState:
             collision_with_player=collision_with_player,
             collision_with_player_missile=collision_with_player_missile,
             is_big_collision=jnp.bool(True),
-            is_energy_pod=jnp.bool(False),
             score_to_add=jnp.array(525),
             death_timer=new_death_timer,
         )
 
     def forcefield_step(state: LaserGatesState) -> tuple[ForceFieldState, CollisionPropertiesState]:
-        return state.entities.forcefield_state, state.entities.collision_properties_state
+        ff = state.entities.forcefield_state
+
+        is_flexing, is_fixed = ff.is_flexing, ff.is_fixed
+        is_flashing = jnp.logical_not(jnp.logical_or(is_flexing, is_fixed))
+        number_of_forcefields = ff.num_of_forcefields
+        new_x0, new_x1, new_x2, new_x3, new_x4, new_x5 = ff.x0, ff.x1, ff.x2, ff.x3, ff.x4, ff.x5
+        new_y0, new_y1, new_y2, new_y3, new_y4, new_y5 = ff.y0, ff.y1, ff.y2, ff.y3, ff.y4, ff.y5
+
+        # Flashing --------------
+        new_flash_on = jnp.where(jnp.logical_and(state.step_counter % FORCEFIELD_FLASHING_SPEED == 0, is_flashing), jnp.logical_not(ff.flash_on), ff.flash_on)
+        is_flashing_and_alive = jnp.logical_and(is_flashing, ff.is_alive)
+
+        new_x0 = jnp.where(is_flashing_and_alive, new_x0 - state.scroll_speed, new_x0) # First forcefield upper
+        new_x1 = jnp.where(is_flashing_and_alive, new_x0, new_x1) # First forcefield lower
+
+        new_x2 = jnp.where(jnp.logical_and(is_flashing_and_alive, number_of_forcefields > 1), new_x0 + FORCEFIELD_FLASHING_SPACING, new_x2)
+        new_x3 = jnp.where(jnp.logical_and(is_flashing_and_alive, number_of_forcefields > 1), new_x2, new_x3)
+
+        new_x4 = jnp.where(jnp.logical_and(is_flashing_and_alive, number_of_forcefields > 2), new_x0 + 2 * FORCEFIELD_FLASHING_SPACING, new_x4)
+        new_x5 = jnp.where(jnp.logical_and(is_flashing_and_alive, number_of_forcefields > 2), new_x4, new_x5)
+        # There is no need for setting the y position, since it remains unchanged. We use the default y positions set in initialize_forcefield
+
+        # Flexing --------------
+        distance = new_y1 - (new_y0 + FORCEFIELD_SIZE[1])
+        new_flex_upper_direction_is_up = jnp.where(distance <= FORCEFIELD_FLEXING_MINIMUM_DISTANCE, jnp.bool(True), jnp.where(distance >= FORCEFIELD_FLEXING_MAXIMUM_DISTANCE, jnp.bool(False), ff.flex_upper_direction_is_up))
+        is_flexing_and_alive = jnp.logical_and(is_flexing, ff.is_alive)
+
+        new_x0 = jnp.where(is_flexing_and_alive, new_x0 - state.scroll_speed, new_x0)
+        new_y0 = jnp.where(is_flexing_and_alive, jnp.where(new_flex_upper_direction_is_up, new_y0 - FORCEFIELD_FLEXING_SPEED, new_y0 + FORCEFIELD_FLEXING_SPEED), new_y0) # First forcefield upper
+        new_x1 = jnp.where(is_flexing_and_alive, new_x0, new_x1)
+        new_y1 = jnp.where(is_flexing_and_alive, jnp.where(new_flex_upper_direction_is_up, new_y1 + FORCEFIELD_FLEXING_SPEED, new_y1 - FORCEFIELD_FLEXING_SPEED), new_y1) # First forcefield lower
+
+        new_x2 = jnp.where(jnp.logical_and(is_flexing_and_alive, number_of_forcefields > 1), new_x0 + FORCEFIELD_FLEXING_SPACING, new_x2)
+        new_y2 = jnp.where(jnp.logical_and(is_flexing_and_alive, number_of_forcefields > 1), jnp.where(new_flex_upper_direction_is_up, new_y2 - FORCEFIELD_FLEXING_SPEED, new_y2 + FORCEFIELD_FLEXING_SPEED), new_y2) # Second forcefield upper
+        new_x3 = jnp.where(jnp.logical_and(is_flexing_and_alive, number_of_forcefields > 1), new_x0 + FORCEFIELD_FLEXING_SPACING, new_x3)
+        new_y3 = jnp.where(jnp.logical_and(is_flexing_and_alive, number_of_forcefields > 1), jnp.where(new_flex_upper_direction_is_up, new_y3 + FORCEFIELD_FLEXING_SPEED, new_y3 - FORCEFIELD_FLEXING_SPEED), new_y3) # Second forcefield lower
+
+        new_x4 = jnp.where(jnp.logical_and(is_flexing_and_alive, number_of_forcefields > 2), new_x0 + 2 * FORCEFIELD_FLEXING_SPACING, new_x4)
+        new_y4 = jnp.where(jnp.logical_and(is_flexing_and_alive, number_of_forcefields > 2), jnp.where(new_flex_upper_direction_is_up, new_y4 - FORCEFIELD_FLEXING_SPEED, new_y4 + FORCEFIELD_FLEXING_SPEED), new_y4) # Third forcefield upper
+        new_x5 = jnp.where(jnp.logical_and(is_flexing_and_alive, number_of_forcefields > 2), new_x0 + 2 * FORCEFIELD_FLEXING_SPACING, new_x5)
+        new_y5 = jnp.where(jnp.logical_and(is_flexing_and_alive, number_of_forcefields > 2), jnp.where(new_flex_upper_direction_is_up, new_y5 + FORCEFIELD_FLEXING_SPEED, new_y5 - FORCEFIELD_FLEXING_SPEED), new_y5) # Third forcefield lower
+
+        # Fixed --------------
+        new_fixed_upper_direction_is_up = jnp.where(new_y0 < FORCEFIELD_FIXED_UPPER_BOUND, jnp.bool(False), jnp.where(new_y0 > FORCEFIELD_FIXED_LOWER_BOUND, jnp.bool(True), ff.fixed_upper_direction_is_up))
+        is_fixed_and_alive = jnp.logical_and(is_fixed, ff.is_alive)
+
+        new_x0 = jnp.where(is_fixed_and_alive, new_x0 - state.scroll_speed, new_x0)
+        new_y0 = jnp.where(is_fixed_and_alive, jnp.where(new_fixed_upper_direction_is_up, new_y0 - FORCEFIELD_FIXED_SPEED, new_y0 + FORCEFIELD_FIXED_SPEED), new_y0) # First forcefield upper
+        new_x1 = jnp.where(is_fixed_and_alive, new_x1 - state.scroll_speed, new_x1)
+        new_y1 = jnp.where(is_fixed_and_alive, jnp.where(new_fixed_upper_direction_is_up, new_y1 - FORCEFIELD_FIXED_SPEED, new_y1 + FORCEFIELD_FIXED_SPEED), new_y1) # First forcefield lower
+
+        new_x2 = jnp.where(jnp.logical_and(is_fixed_and_alive, number_of_forcefields > 1), new_x0 + FORCEFIELD_FIXED_SPACING, new_x2)
+        new_y2 = jnp.where(jnp.logical_and(is_fixed_and_alive, number_of_forcefields > 1), new_y0, new_y2) # Second forcefield upper
+        new_x3 = jnp.where(jnp.logical_and(is_fixed_and_alive, number_of_forcefields > 1), new_x0 + FORCEFIELD_FIXED_SPACING, new_x3)
+        new_y3 = jnp.where(jnp.logical_and(is_fixed_and_alive, number_of_forcefields > 1), new_y1, new_y3) # Second forcefield lower
+
+        new_x4 = jnp.where(jnp.logical_and(is_fixed_and_alive, number_of_forcefields > 2), new_x0 + 2 * FORCEFIELD_FIXED_SPACING, new_x4)
+        new_y4 = jnp.where(jnp.logical_and(is_fixed_and_alive, number_of_forcefields > 2), new_y0, new_y4) # Third forcefield upper
+        new_x5 = jnp.where(jnp.logical_and(is_fixed_and_alive, number_of_forcefields > 2), new_x0 + 2 * FORCEFIELD_FIXED_SPACING, new_x5)
+        new_y5 = jnp.where(jnp.logical_and(is_fixed_and_alive, number_of_forcefields > 2), new_y1, new_y5) # Third forcefield lower
+
+        # Find rightmost x
+        all_x_values = jnp.array([new_x0, new_x1, new_x2, new_x3, new_x4, new_x5])
+        rightmost_x = jnp.max(jnp.where(all_x_values != WIDTH, all_x_values, -jnp.inf)) # Ignore x coordinates that are at the spawn/dead point
+
+        # ----- Collision detection -----
+
+        allow_check_collision_flashing = jnp.logical_or(jnp.logical_not(is_flashing), jnp.logical_and(is_flashing, new_flash_on))
+
+        x_positions = jnp.array([new_x0, new_x1, new_x2, new_x3, new_x4, new_x5])
+        y_positions = jnp.array([new_y0, new_y1, new_y2, new_y3, new_y4, new_y5])
+        zeros = jnp.array([(0, 0), (0, 0), (0, 0), (0, 0), (0, 0), (0, 0)])
+        normal_sizes = jnp.array([FORCEFIELD_SIZE, FORCEFIELD_SIZE, FORCEFIELD_SIZE, FORCEFIELD_SIZE, FORCEFIELD_SIZE, FORCEFIELD_SIZE])
+        wide_sizes = jnp.array([FORCEFIELD_WIDE_SIZE, FORCEFIELD_WIDE_SIZE, FORCEFIELD_WIDE_SIZE, FORCEFIELD_WIDE_SIZE, FORCEFIELD_WIDE_SIZE, FORCEFIELD_WIDE_SIZE])
+
+        # If collision with player occurred. Only valid if death timer is still in alive state
+        collision_with_player = jnp.where(
+            jnp.logical_and(state.entities.collision_properties_state.death_timer == ENTITY_DEATH_ANIMATION_TIMER, allow_check_collision_flashing),
+            jnp.any(any_collision_for_group((state.player_x, state.player_y), PLAYER_SIZE, x_positions, y_positions, zeros, jnp.where(ff.is_wide, wide_sizes, normal_sizes))),
+            jnp.bool(False)
+        )
+
+        collision_with_player_missile = jnp.where(
+            jnp.logical_and(state.entities.collision_properties_state.death_timer == ENTITY_DEATH_ANIMATION_TIMER, allow_check_collision_flashing),
+            jnp.any(any_collision_for_group((state.player_missile.x, state.player_missile.y), PLAYER_MISSILE_SIZE, x_positions, y_positions, zeros, jnp.where(ff.is_wide, wide_sizes, normal_sizes))),
+            jnp.bool(False)
+        )
+
+        # Is still alive if was already alive and no collision occurred
+        new_is_alive = jnp.logical_and(ff.is_alive, jnp.logical_not(collision_with_player))
+
+        # Death timer updates - set alive if is alive, decrement if death animation, deactivate completely if player collision (no animation)
+        new_death_timer = jnp.where(new_is_alive, ENTITY_DEATH_ANIMATION_TIMER, state.entities.collision_properties_state.death_timer)
+        new_death_timer = jnp.where(jnp.logical_not(new_is_alive), jnp.maximum(new_death_timer - 1, 0), new_death_timer)
+        new_death_timer = jnp.where(collision_with_player, -1, new_death_timer)
+
+        # Update is_in_current_event for player missile collision
+        new_is_in_current_event = jnp.where(collision_with_player_missile, ff.is_alive, ff.is_in_current_event)
+        new_is_in_current_event = jnp.where(new_death_timer == 0, jnp.bool(False), new_is_in_current_event)
+
+        # Update is_in_current_event for player collision
+        new_is_in_current_event = jnp.where(collision_with_player, jnp.bool(True), new_is_in_current_event)
+
+        return ff._replace(
+            is_in_current_event=jnp.logical_and(new_is_in_current_event, rightmost_x > 0),
+            is_alive=new_is_alive,
+            x0=new_x0.astype(ff.x0.dtype),
+            y0=new_y0.astype(ff.y0.dtype),
+            x1=new_x1.astype(ff.x1.dtype),
+            y1=new_y1.astype(ff.y1.dtype),
+            x2=new_x2.astype(ff.x2.dtype),
+            y2=new_y2.astype(ff.y2.dtype),
+            x3=new_x3.astype(ff.x3.dtype),
+            y3=new_y3.astype(ff.y3.dtype),
+            x4=new_x4.astype(ff.x4.dtype),
+            y4=new_y4.astype(ff.y4.dtype),
+            x5=new_x5.astype(ff.x5.dtype),
+            y5=new_y5.astype(ff.y5.dtype),
+            flash_on=new_flash_on,
+            flex_upper_direction_is_up=new_flex_upper_direction_is_up,
+            fixed_upper_direction_is_up=new_fixed_upper_direction_is_up,
+        ), state.entities.collision_properties_state._replace(
+            collision_with_player=collision_with_player,
+            collision_with_player_missile=collision_with_player_missile,
+            is_big_collision=jnp.bool(True),
+            is_forcefield=jnp.bool(True),
+            score_to_add=jnp.array(525),
+            death_timer=new_death_timer,
+        )
 
     def densepack_step(state: LaserGatesState) -> tuple[DensepackState, CollisionPropertiesState]:
         return state.entities.dense_pack_state, state.entities.collision_properties_state
@@ -1485,8 +1691,25 @@ class JaxLaserGates(JaxEnvironment[LaserGatesState, LaserGatesObservation, Laser
             forcefield_state=ForceFieldState(
                 is_in_current_event=jnp.bool(False),
                 is_alive=jnp.bool(False),
-                x=jnp.array(0).astype(jnp.float32),
-                y=jnp.array(0),
+                x0=jnp.array(0, dtype=jnp.float32),
+                y0=jnp.array(0, dtype=jnp.float32),
+                x1=jnp.array(0, dtype=jnp.float32),
+                y1=jnp.array(0, dtype=jnp.float32),
+                x2=jnp.array(0, dtype=jnp.float32),
+                y2=jnp.array(0, dtype=jnp.float32),
+                x3=jnp.array(0, dtype=jnp.float32),
+                y3=jnp.array(0, dtype=jnp.float32),
+                x4=jnp.array(0, dtype=jnp.float32),
+                y4=jnp.array(0, dtype=jnp.float32),
+                x5=jnp.array(0, dtype=jnp.float32),
+                y5=jnp.array(0, dtype=jnp.float32),
+                num_of_forcefields=jnp.array(0),
+                is_wide=jnp.bool(False),
+                is_flexing=jnp.bool(False),
+                is_fixed=jnp.bool(False),
+                flash_on=jnp.bool(False),
+                flex_upper_direction_is_up=jnp.bool(False),
+                fixed_upper_direction_is_up=jnp.bool(False),
             ),
             dense_pack_state=DensepackState(
                 is_in_current_event=jnp.bool(False),
@@ -1511,6 +1734,7 @@ class JaxLaserGates(JaxEnvironment[LaserGatesState, LaserGatesObservation, Laser
                 collision_with_player_missile=jnp.bool(False),
                 is_big_collision=jnp.bool(False),
                 is_energy_pod=jnp.bool(False),
+                is_forcefield=jnp.bool(False),
                 score_to_add=jnp.array(0),
                 death_timer=jnp.array(ENTITY_DEATH_ANIMATION_TIMER),
             )
@@ -1587,7 +1811,8 @@ class JaxLaserGates(JaxEnvironment[LaserGatesState, LaserGatesObservation, Laser
 
         # -------- Update energy, score, shields and d-time --------
         new_energy = state.energy - 1
-        new_score = jnp.where(new_entities.collision_properties_state.collision_with_player_missile, state.score + new_entities.collision_properties_state.score_to_add, state.score)
+        allow_score_change = jnp.logical_and(new_entities.collision_properties_state.collision_with_player_missile, jnp.logical_not(state.entities.collision_properties_state.is_forcefield))
+        new_score = jnp.where(allow_score_change, state.score + new_entities.collision_properties_state.score_to_add, state.score)
         new_shields = jnp.where(jnp.logical_or(upper_player_collision, lower_player_collision), state.shields - 1, state.shields)
         new_shields = jnp.where(collision_with_player,
                                 new_shields - jnp.where(new_entities.collision_properties_state.is_big_collision, 6, 1),
@@ -1891,6 +2116,145 @@ class LaserGatesRenderer(AtraJaxisRenderer):
                 hm_state.x,
                 hm_state.y,
                 SPRITE_HOMING_MISSILE,
+            ),
+            # Case: not in event -> do not render
+            raster
+        )
+
+        # -------- Render Forcefield --------
+
+        ff_state = state.entities.forcefield_state
+
+        @jax.jit
+        def recolor_forcefield(
+                sprite: jnp.ndarray,
+                x_position: jnp.ndarray,
+                y_position: jnp.ndarray,
+                flipped: jnp.ndarray
+        ) -> jnp.ndarray:
+            H, W, C = sprite.shape
+            seed = jnp.asarray(x_position, dtype=jnp.int32)
+
+            # Indices over columns (x-axis)
+            xs = jnp.arange(W, dtype=jnp.int32)
+            # Generate ys starting from y_position incrementing by 1 per column
+            ys = xs + y_position.astype(jnp.int32)  # (W,) → y_position .. y_position+W-1
+            # If flipped, reverse ys array, otherwise keep it as is
+            ys = jnp.where(flipped, ys[::-1], ys)
+
+            def sample_color(x):
+                # Create PRNG key based on seed + column index for deterministic color
+                key = jax.random.PRNGKey(seed + x)
+                # Sample random RGB color values between 0 and 255
+                rgb = jax.random.randint(key, (3,), 0, 256, dtype=jnp.int32)
+                alpha = jnp.array([255], dtype=jnp.int32)  # Fully opaque alpha channel
+                # Concatenate RGB with alpha channel (shape: (4,))
+                return jnp.concatenate([rgb, alpha], axis=0)
+
+            # Generate colors for each column using vmap for vectorization
+            col_colors = jax.vmap(sample_color)(xs)  # shape: (W, C)
+
+            # Freeze color boundaries (y positions) where color should not change
+            freeze_lower_border = 32
+            freeze_upper_border = 80  # Colors outside this range are frozen
+
+            # Choose freeze color depending on whether ys >= freeze_lower_border
+            frozen_color = col_colors[jnp.where(ys >= freeze_lower_border, freeze_upper_border, freeze_lower_border)]
+
+            # Create mask for columns where y is within freeze bounds (inclusive)
+            mask = jnp.logical_and(ys >= freeze_lower_border, ys <= freeze_upper_border)  # shape: (W,)
+            # Use dynamic color where mask is True, else use frozen_color
+            final_cols = jnp.where(
+                mask[:, None],  # broadcast mask to (W, 1)
+                col_colors,  # dynamic colors
+                frozen_color  # frozen color for columns outside mask
+            )
+
+            # Broadcast final colors over height dimension to get full (H, W, C) image
+            color_grid = jnp.broadcast_to(final_cols[None, :, :], (H, W, C))
+
+            return color_grid
+
+        # Despawn earlier
+        move_left = FORCEFIELD_SIZE[0]
+        render_x0 = jnp.where(ff_state.x0 <= 0, ff_state.x0 - move_left, ff_state.x0)
+        render_x1 = jnp.where(ff_state.x1 <= 0, ff_state.x1 - move_left, ff_state.x1)
+        render_x2 = jnp.where(ff_state.x2 <= 0, ff_state.x2 - move_left, ff_state.x2)
+        render_x3 = jnp.where(ff_state.x3 <= 0, ff_state.x3 - move_left, ff_state.x3)
+        render_x4 = jnp.where(ff_state.x4 <= 0, ff_state.x4 - move_left, ff_state.x4)
+        render_x5 = jnp.where(ff_state.x5 <= 0, ff_state.x5 - move_left, ff_state.x5)
+
+        x_positions = jnp.array([render_x0, render_x1 + 1, render_x2 + 2, render_x3 + 3, render_x4 + 4, render_x5 + 5], dtype=jnp.int32)
+        y_positions = jnp.array([ff_state.y0, ff_state.y1, ff_state.y2, ff_state.y3, ff_state.y4, ff_state.y5], dtype=jnp.int32)
+        flipped = jnp.array([False, True, False, True, False, True], dtype=jnp.bool)
+
+        batched_recolor = jax.vmap(
+            recolor_forcefield,
+            in_axes=(None, 0, 0, 0),  # sprite bleibt gleich, x_position variiert
+            out_axes=0  # erste Achse im Output wird die Batch‑Achse
+        )
+        all_sprites = batched_recolor(SPRITE_FORCEFIELD, x_positions, y_positions, flipped)
+
+        def resize_sprite_width(sprite: jnp.ndarray, new_width: int) -> jnp.ndarray:
+            H, W, C = sprite.shape
+            return jax.image.resize(sprite, (new_width, W, C), method='nearest')
+
+        sprites_normal = all_sprites  # (6, 8, 73, 4)
+        sprites_wide = jax.vmap(lambda sprite: resize_sprite_width(sprite, FORCEFIELD_WIDE_SIZE[0]))(
+            all_sprites)  # (6, 16, 73, 4)
+
+        max_width = max(sprites_normal.shape[1], sprites_wide.shape[1])
+
+        def pad_to_width(sprites, width):
+            pad = width - sprites.shape[1]
+            return jnp.pad(sprites, ((0, 0), (0, pad), (0, 0), (0, 0)))  # pad in Width
+
+        sprites_normal_padded = pad_to_width(sprites_normal, max_width)  # (6, 16, 73, 4)
+        sprites_wide_padded = pad_to_width(sprites_wide, max_width)  # (6, 16, 73, 4)
+
+        # Choose sprite if forcefield is wide
+        all_sprites = jax.lax.cond(
+            ff_state.is_wide,
+            lambda _: sprites_wide_padded,
+            lambda _: sprites_normal_padded,
+            operand=None
+        )
+
+        raster = jnp.where(jnp.logical_and(ff_state.is_in_current_event, jnp.logical_and(ff_state.is_alive, ff_state.flash_on)),
+            # Case: alive -> render normally
+            aj.render_at(
+                aj.render_at(
+                    aj.render_at(
+                        aj.render_at(
+                            aj.render_at(
+                                aj.render_at(
+                                    raster,
+                                    render_x0,
+                                    ff_state.y0,
+                                    all_sprites[0],
+                                ),
+                                render_x1,
+                                ff_state.y1,
+                                all_sprites[1],
+                                flip_vertical=True
+                            ),
+                            render_x2,
+                            ff_state.y2,
+                            all_sprites[2],
+                        ),
+                        render_x3,
+                        ff_state.y3,
+                        all_sprites[3],
+                        flip_vertical=True
+                    ),
+                    render_x4,
+                    ff_state.y4,
+                    all_sprites[4],
+                ),
+                render_x5,
+                ff_state.y5,
+                all_sprites[5],
+                flip_vertical=True
             ),
             # Case: not in event -> do not render
             raster
