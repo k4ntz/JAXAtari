@@ -163,7 +163,10 @@ DENSEPACK_COLOR = (142, 142, 142, 255)
 
 DENSEPACK_NUMBER_OF_PARTS = 19 # number of segments in the densepack
 DENSEPACK_IS_WIDE_PROBABILITY = 0.4
+
 # -------- Detonator constants --------
+DETONATOR_SIZE = (8, 73)
+DETONATOR_COLOR = (142, 142, 142, 255)
 
 # -------- Energy pod constants --------
 
@@ -273,6 +276,7 @@ class DetonatorState(NamedTuple):
     is_alive: jnp.bool
     x: chex.Array
     y: chex.Array
+    collision_is_pin: jnp.bool
 
 class EnergyPodState(NamedTuple):
     is_in_current_event: jnp.bool
@@ -285,6 +289,7 @@ class CollisionPropertiesState(NamedTuple):
     collision_with_player_missile: jnp.bool
     is_big_collision: jnp.bool
     is_energy_pod: jnp.bool
+    is_detonator: jnp.bool
     is_ff_or_dp: jnp.bool
     score_to_add: chex.Array
     death_timer: chex.Array
@@ -455,6 +460,10 @@ def load_sprites():
         densepack_frame_0, densepack_frame_1, densepack_frame_2, densepack_frame_3, densepack_frame_4
     ])
 
+    # Detonator
+    detonator_sprite = aj.loadFrame(os.path.join(MODULE_DIR, "sprites/lasergates/enemies/detonator/detonator.npy"))
+    detonator_6507 = aj.loadFrame(os.path.join(MODULE_DIR, "sprites/lasergates/enemies/detonator/6507.npy"))
+
     return (
         # Player sprites
         player,
@@ -470,6 +479,8 @@ def load_sprites():
         homing_missile_sprite,
         forcefield_sprite,
         densepack_sprites,
+        detonator_sprite,
+        detonator_6507,
 
         # Background sprites
         upper_brown_bg,
@@ -507,6 +518,8 @@ def load_sprites():
     SPRITE_HOMING_MISSILE,
     SPRITE_FORCEFIELD,
     SPRITE_DENSEPACK,
+    SPRITE_DETONATOR,
+    SPRITE_6507,
 
     # Background sprites
     SPRITE_UPPER_BROWN_BG,
@@ -660,8 +673,14 @@ def maybe_initialize_random_entity(entities, state):
         return entities._replace(dense_pack_state=new_densepack_state)
 
     def initialize_detonator(entities, state):
-        new_state = entities.detonator_state._replace(is_in_current_event=jnp.bool(True))
-        return entities._replace(detonator_state=new_state)
+        new_detonator_state = entities.detonator_state._replace(
+            is_in_current_event=jnp.bool(True),
+            is_alive=jnp.bool(True),
+            x=jnp.array(WIDTH).astype(jnp.float32),
+            y=jnp.array(19).astype(jnp.float32),
+            collision_is_pin=jnp.bool(False),
+        )
+        return entities._replace(detonator_state=new_detonator_state)
 
     def initialize_energy_pod(entities, state):
         new_state = entities.energy_pod_state._replace(is_in_current_event=jnp.bool(True))
@@ -679,7 +698,7 @@ def maybe_initialize_random_entity(entities, state):
     ] # All initialize functions of all entity types
 
     def initialize_random_entity(_):
-        picked_index = jax.random.randint(key_pick_type, shape=(), minval=5, maxval=6) # TODO: Change maxval to len(init_fns) when all init functions are implemented
+        picked_index = jax.random.randint(key_pick_type, shape=(), minval=6, maxval=7) # TODO: Change maxval to len(init_fns) when all init functions are implemented
         # If you want only one specific entity to spawn, change minval, maxval to:
         # Radar Mortar:     minval=0, maxval=1
         # Byte Bat:         minval=1, maxval=2
@@ -687,6 +706,8 @@ def maybe_initialize_random_entity(entities, state):
         # Homing Missile:   minval=3, maxval=4
         # Forcefields:      minval=4, maxval=5
         # Densepack:        minval=5, maxval=6
+        # Detonator:        minval=6, maxval=7
+        # Energy pod:       minval=7, maxval=8
 
         chosen_fn = lambda i: jax.lax.switch(i, init_fns, entities, state)
         return chosen_fn(picked_index) # Initialize function of randomly picked entity
@@ -861,6 +882,7 @@ def all_entities_step(game_state: LaserGatesState) -> EntitiesState:
             collision_with_player_missile=collision_with_player_missile,
             is_big_collision=jnp.logical_not(rm_missile_collision_with_player),
             is_energy_pod=jnp.bool(False),
+            is_detonator=jnp.bool(False),
             is_ff_or_dp=jnp.bool(False),
             score_to_add=jnp.array(115),
             death_timer=new_death_timer,
@@ -938,6 +960,7 @@ def all_entities_step(game_state: LaserGatesState) -> EntitiesState:
             collision_with_player_missile=collision_with_player_missile,
             is_big_collision=jnp.bool(True),
             is_energy_pod=jnp.bool(False),
+            is_detonator=jnp.bool(False),
             is_ff_or_dp=jnp.bool(False),
             score_to_add=jnp.array(330),
             death_timer=new_death_timer,
@@ -1027,6 +1050,7 @@ def all_entities_step(game_state: LaserGatesState) -> EntitiesState:
             collision_with_player_missile=collision_with_player_missile,
             is_big_collision=jnp.logical_not(rm_missile_collision_with_player),
             is_energy_pod=jnp.bool(False),
+            is_detonator=jnp.bool(False),
             is_ff_or_dp=jnp.bool(False),
             score_to_add=jnp.array(325),
             death_timer=new_death_timer,
@@ -1092,6 +1116,7 @@ def all_entities_step(game_state: LaserGatesState) -> EntitiesState:
             collision_with_player_missile=collision_with_player_missile,
             is_big_collision=jnp.bool(True),
             is_energy_pod=jnp.bool(False),
+            is_detonator=jnp.bool(False),
             is_ff_or_dp=jnp.bool(False),
             score_to_add=jnp.array(525),
             death_timer=new_death_timer,
@@ -1169,20 +1194,21 @@ def all_entities_step(game_state: LaserGatesState) -> EntitiesState:
 
         x_positions = jnp.array([new_x0, new_x1, new_x2, new_x3, new_x4, new_x5])
         y_positions = jnp.array([new_y0, new_y1, new_y2, new_y3, new_y4, new_y5])
-        zeros = jnp.array([(0, 0), (0, 0), (0, 0), (0, 0), (0, 0), (0, 0)])
-        normal_sizes = jnp.array([FORCEFIELD_SIZE, FORCEFIELD_SIZE, FORCEFIELD_SIZE, FORCEFIELD_SIZE, FORCEFIELD_SIZE, FORCEFIELD_SIZE])
-        wide_sizes = jnp.array([FORCEFIELD_WIDE_SIZE, FORCEFIELD_WIDE_SIZE, FORCEFIELD_WIDE_SIZE, FORCEFIELD_WIDE_SIZE, FORCEFIELD_WIDE_SIZE, FORCEFIELD_WIDE_SIZE])
+        no_offsets = jnp.array([(0, 0)])
+        normal_size = jnp.array([FORCEFIELD_SIZE])
+        wide_size = jnp.array([FORCEFIELD_WIDE_SIZE])
+        size = jnp.where(ff.is_wide, wide_size, normal_size)
 
         # If collision with player occurred. Only valid if death timer is still in alive state
         collision_with_player = jnp.where(
             jnp.logical_and(state.entities.collision_properties_state.death_timer == ENTITY_DEATH_ANIMATION_TIMER, allow_check_collision_flashing),
-            jnp.any(any_collision_for_group((state.player_x, state.player_y), PLAYER_SIZE, x_positions, y_positions, zeros, jnp.where(ff.is_wide, wide_sizes, normal_sizes))),
+            jnp.any(any_collision_for_group((state.player_x, state.player_y), PLAYER_SIZE, x_positions, y_positions, no_offsets, size)),
             jnp.bool(False)
         )
 
         collision_with_player_missile = jnp.where(
             jnp.logical_and(state.entities.collision_properties_state.death_timer == ENTITY_DEATH_ANIMATION_TIMER, allow_check_collision_flashing),
-            jnp.any(any_collision_for_group((state.player_missile.x, state.player_missile.y), PLAYER_MISSILE_SIZE, x_positions, y_positions, zeros, jnp.where(ff.is_wide, wide_sizes, normal_sizes))),
+            jnp.any(any_collision_for_group((state.player_missile.x, state.player_missile.y), PLAYER_MISSILE_SIZE, x_positions, y_positions, no_offsets, size)),
             jnp.bool(False)
         )
 
@@ -1224,6 +1250,7 @@ def all_entities_step(game_state: LaserGatesState) -> EntitiesState:
             collision_with_player_missile=collision_with_player_missile,
             is_big_collision=jnp.bool(True),
             is_energy_pod=jnp.bool(False),
+            is_detonator=jnp.bool(False),
             is_ff_or_dp=jnp.bool(True),
             score_to_add=jnp.array(525),
             death_timer=new_death_timer,
@@ -1342,7 +1369,77 @@ def all_entities_step(game_state: LaserGatesState) -> EntitiesState:
         )
 
     def detonator_step(state: LaserGatesState) -> tuple[DetonatorState, CollisionPropertiesState]:
-        return state.entities.detonator_state, state.entities.collision_properties_state
+        dn = state.entities.detonator_state
+
+        base_x = dn.x - state.scroll_speed
+        y = dn.y
+
+        # ----- Collision detection -----
+
+        x_positions = jnp.array([base_x, base_x, base_x, base_x])
+        y_positions = jnp.array([y + 17, y + 29, y + 41, y + 53])
+        no_offsets = jnp.array([(0, 0)])
+        sizes = jnp.array([(1, 4)])
+
+        # If collision with player occurred. Only valid if death timer is still in alive state
+        collision_with_player = jnp.where(
+            state.entities.collision_properties_state.death_timer == ENTITY_DEATH_ANIMATION_TIMER,
+            jnp.any(any_collision_for_group((state.player_x, state.player_y), PLAYER_SIZE, x_positions, y_positions, no_offsets, sizes)),
+            jnp.bool(False)
+        )
+        collision_player_detonator = jnp.where(
+            state.entities.collision_properties_state.death_timer == ENTITY_DEATH_ANIMATION_TIMER,
+            check_collision_single((state.player_x, state.player_y), PLAYER_SIZE, (base_x, y), DETONATOR_SIZE),
+            jnp.bool(False)
+        )
+        collision_with_player = jnp.logical_or(collision_with_player, collision_player_detonator)
+
+        collision_player_missile_pin = jnp.where(
+            state.entities.collision_properties_state.death_timer == ENTITY_DEATH_ANIMATION_TIMER,
+            jnp.any(any_collision_for_group((state.player_missile.x, state.player_missile.y), PLAYER_MISSILE_SIZE, x_positions, y_positions, no_offsets, sizes)),
+            jnp.bool(False)
+        )
+        collision_player_missile_detonator = jnp.where(
+            state.entities.collision_properties_state.death_timer == ENTITY_DEATH_ANIMATION_TIMER,
+            check_collision_single((state.player_missile.x, state.player_missile.y), PLAYER_MISSILE_SIZE, (base_x, y), DETONATOR_SIZE),
+            jnp.bool(False)
+        )
+
+        # If is collision with pin or not. We need this to kill the missile but not the detonator at non-pin collision
+        new_collision_is_pin = jnp.bool(False)
+        new_collision_is_pin = jnp.where(collision_player_missile_pin, jnp.bool(True), new_collision_is_pin)
+
+        # Is still alive if was already alive and no collision occurred
+        new_is_alive = jnp.logical_and(dn.is_alive, jnp.logical_and(jnp.logical_not(collision_player_missile_pin), jnp.logical_not(collision_with_player)))
+
+        # Death timer updates - set alive if is alive, decrement if death animation, deactivate completely if player collision (no animation)
+        new_death_timer = jnp.where(new_is_alive, ENTITY_DEATH_ANIMATION_TIMER, state.entities.collision_properties_state.death_timer)
+        new_death_timer = jnp.where(jnp.logical_not(new_is_alive), jnp.maximum(new_death_timer - 1, 0), new_death_timer)
+        new_death_timer = jnp.where(collision_with_player, -1, new_death_timer)
+
+        # Update is_in_current_event for player missile collision
+        new_is_in_current_event = jnp.where(collision_player_missile_pin, dn.is_alive, dn.is_in_current_event)
+        new_is_in_current_event = jnp.where(new_death_timer == 0, jnp.bool(False), new_is_in_current_event)
+
+        # Update is_in_current_event for player collision
+        new_is_in_current_event = jnp.where(collision_with_player, jnp.bool(True), new_is_in_current_event)
+
+        collision_player_missile_pin = jnp.logical_or(collision_player_missile_pin, collision_player_missile_detonator)
+
+        return state.entities.detonator_state._replace(
+            is_in_current_event=jnp.logical_and(new_is_in_current_event, base_x > 0), # Second condition should never happen, since you can only collide or destroy the detonator
+            is_alive=new_is_alive,
+            x=base_x.astype(jnp.float32),
+            collision_is_pin=new_collision_is_pin,
+        ), state.entities.collision_properties_state._replace(
+            collision_with_player=collision_with_player,
+            collision_with_player_missile=collision_player_missile_pin,
+            is_big_collision=jnp.bool(True),
+            is_detonator=jnp.bool(True),
+            is_ff_or_dp=jnp.bool(False),
+            score_to_add=jnp.array(6507),
+            death_timer=new_death_timer,
+        )
 
     def energy_pod_step(state: LaserGatesState) -> tuple[EnergyPodState, CollisionPropertiesState]:
         return state.entities.energy_pod_state, state.entities.collision_properties_state
@@ -1874,7 +1971,8 @@ class JaxLaserGates(JaxEnvironment[LaserGatesState, LaserGatesObservation, Laser
                 is_in_current_event=jnp.bool(False),
                 is_alive=jnp.bool(False),
                 x=jnp.array(0).astype(jnp.float32),
-                y=jnp.array(0),
+                y=jnp.array(0).astype(jnp.float32),
+                collision_is_pin=jnp.bool(False),
             ),
             energy_pod_state=EnergyPodState(
                 is_in_current_event=jnp.bool(False),
@@ -1887,6 +1985,7 @@ class JaxLaserGates(JaxEnvironment[LaserGatesState, LaserGatesObservation, Laser
                 collision_with_player_missile=jnp.bool(False),
                 is_big_collision=jnp.bool(False),
                 is_energy_pod=jnp.bool(False),
+                is_detonator=jnp.bool(False),
                 is_ff_or_dp=jnp.bool(False),
                 score_to_add=jnp.array(0),
                 death_timer=jnp.array(ENTITY_DEATH_ANIMATION_TIMER),
@@ -1964,7 +2063,10 @@ class JaxLaserGates(JaxEnvironment[LaserGatesState, LaserGatesObservation, Laser
 
         # -------- Update energy, score, shields and d-time --------
         new_energy = state.energy - 1
+        # Dorbid score change if densepack or forcefield is hit with missile
         allow_score_change = jnp.logical_and(new_entities.collision_properties_state.collision_with_player_missile, jnp.logical_not(state.entities.collision_properties_state.is_ff_or_dp))
+        # Forbid score change if detonator is not hit with a missile at a pin
+        allow_score_change = jnp.where(new_entities.collision_properties_state.is_detonator, new_entities.detonator_state.collision_is_pin, allow_score_change)
         new_score = jnp.where(allow_score_change, state.score + new_entities.collision_properties_state.score_to_add, state.score)
         new_shields = jnp.where(jnp.logical_or(upper_player_collision, lower_player_collision), state.shields - 1, state.shields)
         new_shields = jnp.where(collision_with_player,
@@ -2143,6 +2245,19 @@ class LaserGatesRenderer(AtraJaxisRenderer):
                            # Case: in event but dead and death animation over -> do not render
                            raster
                            )
+
+        # Detonator
+        dn_state = state.entities.detonator_state
+        raster = jnp.where(jnp.logical_and(dn_state.is_in_current_event, jnp.logical_and(jnp.logical_not(dn_state.is_alive), state.entities.collision_properties_state.death_timer > 0)),
+                          # Case: in event but dead -> render death sprites
+                                aj.render_at( #lower
+                                    raster,
+                                    dn_state.x,
+                                    dn_state.y + 12,
+                                    death_sprite_upper_frame,
+                                ),
+                          raster
+                          )
 
         # -------- Render Mountain Playing Field Background --------
 
@@ -2463,6 +2578,24 @@ class LaserGatesRenderer(AtraJaxisRenderer):
             jnp.logical_and(dp_state.is_in_current_event, dp_state.is_alive),
             render_densepack_parts(raster),  # true_fn
             raster  # false_fn
+        )
+
+        # -------- Render Densepack --------
+
+        raster = jnp.where(
+            jnp.logical_and(dn_state.is_in_current_event, dn_state.is_alive),
+            aj.render_at(
+                aj.render_at(
+                    raster,
+                    dn_state.x,
+                    dn_state.y,
+                    recolor_sprite(SPRITE_DETONATOR, jnp.array(DETONATOR_COLOR)),
+                ),
+                dn_state.x + 2,
+                dn_state.y + 25,
+                SPRITE_6507,
+            ),
+            raster
         )
 
         # -------- Render background parts --------
