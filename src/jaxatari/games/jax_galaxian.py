@@ -52,7 +52,7 @@ ENEMY_ATTACK_TURN_TIME = 32
 ENEMY_ATTACK_BULLET_SPEED = 5
 ENEMY_ATTACK_BULLET_DELAY = 75
 ENEMY_ATTACK_MAX_BULLETS = 2
-LIVES = 10
+LIVES = 2
 PLAYER_DEATH_DELAY = 50
 ENEMY_LEFT_BOUND = 17
 ENEMY_RIGHT_BOUND = NATIVE_GAME_WIDTH - 25
@@ -1004,14 +1004,12 @@ def check_player_death_by_enemy(state: GalaxianState) -> GalaxianState:
         hit_indices = jnp.where(collision, size=MAX_DIVERS, fill_value=-1)[0]
         hit_idx = hit_indices[0]
         pos = current_state.enemy_attack_pos[hit_idx]
-        new_lives = current_state.lives - 1
         new_enemy_grid_alive = current_state.enemy_grid_alive.at[tuple(pos)].set(0)
         new_death = state.enemy_death_frame_attack.at[hit_idx].set(1)
         new_attack_states = state.enemy_attack_states.at[hit_idx].set(4)
 
 
         return current_state._replace(
-            lives=new_lives,
             player_alive = jnp.array(False),
             enemy_grid_alive=new_enemy_grid_alive,
             enemy_attack_states=new_attack_states,
@@ -1034,13 +1032,11 @@ def check_player_death_by_support(state: GalaxianState) -> GalaxianState:
         hit_indices = jnp.where(collision, size=MAX_DIVERS, fill_value=-1)[0]
         hit_idx = hit_indices[0]
         pos = current_state.enemy_support_pos[hit_idx]
-        new_lives = current_state.lives - 1
         new_enemy_grid_alive = current_state.enemy_grid_alive.at[tuple(pos)].set(0)
         new_support_states = current_state.enemy_support_states.at[hit_idx].set(4)
         new_death = current_state.enemy_death_frame_support.at[hit_idx].set(1)
 
         return current_state._replace(
-            lives=new_lives,
             player_alive= jnp.array(False),
             enemy_grid_alive=new_enemy_grid_alive,
             enemy_support_states=new_support_states,
@@ -1063,11 +1059,7 @@ def check_player_death_by_bullet(state: GalaxianState) -> GalaxianState:
         new_bullet_x = current_state.enemy_attack_bullet_x.at[hit_indices].set(-1.0)
         new_bullet_y = current_state.enemy_attack_bullet_y.at[hit_indices].set(-1.0)
 
-        # subtract 1 life
-        new_lives = current_state.lives - jnp.sum(collision_mask)
-
         return current_state._replace(
-            lives=new_lives,
             player_alive=jnp.array(False),
             enemy_attack_bullet_x=new_bullet_x,
             enemy_attack_bullet_y=new_bullet_y
@@ -1076,7 +1068,9 @@ def check_player_death_by_bullet(state: GalaxianState) -> GalaxianState:
     return lax.cond(hit, process_hit, lambda s: s, state)
 
 def respawn_player(state: GalaxianState) -> GalaxianState:
-    return state._replace(player_alive=jnp.array(True))
+    return state._replace(
+        player_alive=jnp.array(True),
+        lives = state.lives -1)
 
 @jax.jit
 def enter_new_wave(state: GalaxianState) -> GalaxianState:
@@ -1176,7 +1170,7 @@ class JaxGalaxian(JaxEnvironment[GalaxianState, GalaxianObservation, GalaxianInf
                               enemy_support_x=jnp.zeros(MAX_SUPPORTERS),
                               enemy_support_y=jnp.zeros(MAX_SUPPORTERS),
                               level=jnp.array(0),
-                              lives=jnp.array(3),
+                              lives=jnp.array(LIVES),
                               player_alive=jnp.array(True),
                               score=jnp.array(0, dtype=jnp.int32),
                               enemy_attack_target_x=jnp.zeros(MAX_DIVERS),
@@ -1257,7 +1251,16 @@ class JaxGalaxian(JaxEnvironment[GalaxianState, GalaxianObservation, GalaxianInf
 
         observation = self._get_observation(new_state)
 
-        return observation, new_state, env_reward, done, info
+        def do_reset(_):
+            obs, s = self.reset()
+            return obs, s, 0, False, self._get_info(s, jnp.zeros(1))
+
+        return jax.lax.cond(
+            done,
+            do_reset,
+            lambda _: (observation, new_state, env_reward, done, info),
+            operand=None
+        )
 
 
     @partial(jax.jit, static_argnums=(0,))
@@ -1276,7 +1279,7 @@ class JaxGalaxian(JaxEnvironment[GalaxianState, GalaxianObservation, GalaxianInf
 
     @partial(jax.jit, static_argnums=(0,))
     def _get_done(self, state: GalaxianState) -> bool:
-        return state.lives <= 0
+        return state.lives < 0
 
     @partial(jax.jit, static_argnums=(0,))
     def _get_info(self, state: GalaxianState, all_rewards: chex.Array) -> GalaxianInfo:
