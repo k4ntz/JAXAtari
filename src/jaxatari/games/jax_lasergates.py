@@ -5,7 +5,6 @@ Lukas Bergholz, Linus Orlob, Vincent Jahn
 """
 import os
 import time
-from enum import IntEnum
 from functools import partial
 from typing import Tuple, NamedTuple
 import chex
@@ -53,7 +52,7 @@ PLAYER_START_X = 20 # X Spawn position of player
 PLAYER_START_Y = 52 # Y Spawn position of player
 
 PLAYER_VELOCITY_Y = 1.5 # Y Velocity of player
-PLAYER_VELOCITY_X = 1.5 # X Velocity of player
+PLAYER_VELOCITY_X = 1.3 # X Velocity of player
 
 MAX_ENERGY = 5100
 MAX_SHIELDS = 24
@@ -146,13 +145,13 @@ FORCEFIELD_IS_WIDE_PROBABILITY = 0.2 # Probability that a forcefield is wide
 FORCEFIELD_FLASHING_SPACING = 40 # x spacing between the forcefields when in flashing mode
 FORCEFIELD_FLASHING_SPEED = 35 # Forcefield changes state from on to off or from off to on every FORCEFIELD_FLASHING_SPEED frames
 
-FORCEFIELD_FLEXING_SPACING = 60 # x spacing between the forcefields when in flexing mode
+FORCEFIELD_FLEXING_SPACING = 50 # x spacing between the forcefields when in flexing mode
 FORCEFIELD_FLEXING_SPEED = 0.6 # Flexing (Crushing motion) speed
 FORCEFIELD_FLEXING_MINIMUM_DISTANCE = 2 # Minimum y distance between the upper and lower forcefields when flexing
-FORCEFIELD_FLEXING_MAXIMUM_DISTANCE = 20 # Maximum y distance between the upper and lower forcefields when flexing
+FORCEFIELD_FLEXING_MAXIMUM_DISTANCE = 25 # Maximum y distance between the upper and lower forcefields when flexing
 
 FORCEFIELD_FIXED_SPACING = 50 # x spacing between the forcefields when in fixed mode
-FORCEFIELD_FIXED_SPEED = 0.5 # Fixed (up and down movement) speed
+FORCEFIELD_FIXED_SPEED = 0.3 # Fixed (up and down movement) speed
 FORCEFIELD_FIXED_UPPER_BOUND = -FORCEFIELD_SIZE[1] + 33 # Highest allowed y position for forcefields while fixed
 FORCEFIELD_FIXED_LOWER_BOUND = -FORCEFIELD_SIZE[1] + 68 # Lowest allowed y position for forcefields while fixed
 
@@ -290,7 +289,7 @@ class CollisionPropertiesState(NamedTuple):
     is_detonator: jnp.bool                      # If entity is detonator
     is_ff_or_dp: jnp.bool                       # If entity is forcefield or densepack
     score_to_add: chex.Array                    # Score to add to current score at collision. Radar Mortar: 115, Rock Muncher: 325, Byte Bat: 330, Pass Forcefield: 400, Homing Missile: 525, Detonator: 6507
-    death_timer: chex.Array
+    death_timer: chex.Array                     # Animation timer used for entity death animations. Change the speed with ENTITY_DEATH_ANIMATION_TIMER
 
 class EntitiesState(NamedTuple):
     radar_mortar_state: RadarMortarState        # Radar mortars appear along the top and bottom of the Computer passage. Avoid Mortar fire. Demolish Radar Mortars with laser fire.
@@ -566,7 +565,7 @@ def maybe_initialize_random_entity(entities, state):
     ])
     active_event = jnp.any(all_is_in_current_event_flags) # If there is an entity that is in the current event
 
-    def initialize_radar_mortar(entities, state):
+    def initialize_radar_mortar(entities):
 
         top_or_bot = jax.random.bernoulli(key_intern)
 
@@ -582,7 +581,7 @@ def maybe_initialize_random_entity(entities, state):
         )
         return entities._replace(radar_mortar_state=new_radar_mortar_state)
 
-    def initialize_byte_bat(entities, state):
+    def initialize_byte_bat(entities):
 
         initial_direction_is_up = jnp.bool(BYTE_BAT_SPAWN_Y < BYTE_BAT_UPPER_BORDER_Y)
         new_byte_bat_state = ByteBatState(
@@ -595,7 +594,7 @@ def maybe_initialize_random_entity(entities, state):
         )
         return entities._replace(byte_bat_state=new_byte_bat_state)
 
-    def initialize_rock_muncher(entities, state):
+    def initialize_rock_muncher(entities):
 
         initial_direction_is_up = jnp.bool(ROCK_MUNCHER_SPAWN_Y < ROCK_MUNCHER_UPPER_BORDER_Y)
         new_rock_muncher_state = RockMuncherState(
@@ -610,7 +609,7 @@ def maybe_initialize_random_entity(entities, state):
         )
         return entities._replace(rock_muncher_state=new_rock_muncher_state)
 
-    def initialize_homing_missile(entities, state):
+    def initialize_homing_missile(entities):
 
         initial_y_position = jax.random.randint(key_intern, (), HOMING_MISSILE_Y_BOUNDS[0], HOMING_MISSILE_Y_BOUNDS[1])
         new_homing_missile_state = HomingMissileState(
@@ -622,7 +621,7 @@ def maybe_initialize_random_entity(entities, state):
         )
         return entities._replace(homing_missile_state=new_homing_missile_state)
 
-    def initialize_forcefield(entities, state):
+    def initialize_forcefield(entities):
 
         key_num_of_ff, key_type_of_ff, key_is_wide = jax.random.split(key_intern, 3)
         number_of_forcefields = jax.random.randint(key_num_of_ff, (), minval=1, maxval=5) # Spawn 1 to 4 forcefields at a time.
@@ -660,7 +659,7 @@ def maybe_initialize_random_entity(entities, state):
         )
         return entities._replace(forcefield_state=new_forcefield_state)
 
-    def initialize_densepack(entities, state):
+    def initialize_densepack(entities):
 
         initial_is_wide = jax.random.bernoulli(key_intern, p=DENSEPACK_IS_WIDE_PROBABILITY)
 
@@ -675,7 +674,7 @@ def maybe_initialize_random_entity(entities, state):
         )
         return entities._replace(dense_pack_state=new_densepack_state)
 
-    def initialize_detonator(entities, state):
+    def initialize_detonator(entities):
         new_detonator_state = entities.detonator_state._replace(
             is_in_current_event=jnp.bool(True),
             is_alive=jnp.bool(True),
@@ -685,7 +684,7 @@ def maybe_initialize_random_entity(entities, state):
         )
         return entities._replace(detonator_state=new_detonator_state)
 
-    def initialize_energy_pod(entities, state):
+    def initialize_energy_pod(entities):
         new_energy_pod_state = entities.energy_pod_state._replace(
             is_in_current_event=jnp.bool(True),
             is_alive=jnp.bool(True),
@@ -707,7 +706,7 @@ def maybe_initialize_random_entity(entities, state):
     ] # All initialize functions of all entity types
 
     def initialize_random_entity(_):
-        picked_index = jax.random.randint(key_pick_type, shape=(), minval=7, maxval=8) # TODO: Change maxval to len(init_fns) when all init functions are implemented
+        picked_index = jax.random.randint(key_pick_type, shape=(), minval=0, maxval=8) # TODO: Change maxval to len(init_fns) when all init functions are implemented
         # If you want only one specific entity to spawn, change minval, maxval to:
         # Radar Mortar:     minval=0, maxval=1
         # Byte Bat:         minval=1, maxval=2
@@ -718,7 +717,7 @@ def maybe_initialize_random_entity(entities, state):
         # Detonator:        minval=6, maxval=7
         # Energy pod:       minval=7, maxval=8
 
-        chosen_fn = lambda i: jax.lax.switch(i, init_fns, entities, state)
+        chosen_fn = lambda i: jax.lax.switch(i, init_fns, entities)
         return chosen_fn(picked_index) # Initialize function of randomly picked entity
 
     return jax.lax.cond(
@@ -756,6 +755,7 @@ def all_entities_step(game_state: LaserGatesState) -> EntitiesState:
     steps the entity (actually entities, but we only have one entity per event) that is currently in game (if is_in_current_event of said entity is True).
     """
 
+    @jax.jit
     def radar_mortar_step(state: LaserGatesState) -> tuple[RadarMortarState, CollisionPropertiesState]:
         rm = state.entities.radar_mortar_state
         new_x = jnp.where(rm.is_alive, rm.x - state.scroll_speed, rm.x)
@@ -897,6 +897,7 @@ def all_entities_step(game_state: LaserGatesState) -> EntitiesState:
             death_timer=new_death_timer,
         )
 
+    @jax.jit
     def byte_bat_step(state: LaserGatesState) -> tuple[ByteBatState, CollisionPropertiesState]:
         bb = state.entities.byte_bat_state
 
@@ -975,6 +976,7 @@ def all_entities_step(game_state: LaserGatesState) -> EntitiesState:
             death_timer=new_death_timer,
         )
 
+    @jax.jit
     def rock_muncher_step(state: LaserGatesState) -> tuple[RockMuncherState, CollisionPropertiesState]:
         rm = state.entities.rock_muncher_state
 
@@ -1065,6 +1067,7 @@ def all_entities_step(game_state: LaserGatesState) -> EntitiesState:
             death_timer=new_death_timer,
         )
 
+    @jax.jit
     def homing_missile_step(state: LaserGatesState) -> tuple[HomingMissileState, CollisionPropertiesState]:
         hm = state.entities.homing_missile_state
 
@@ -1131,6 +1134,7 @@ def all_entities_step(game_state: LaserGatesState) -> EntitiesState:
             death_timer=new_death_timer,
         )
 
+    @jax.jit
     def forcefield_step(state: LaserGatesState) -> tuple[ForceFieldState, CollisionPropertiesState]:
         ff = state.entities.forcefield_state
 
@@ -1315,6 +1319,7 @@ def all_entities_step(game_state: LaserGatesState) -> EntitiesState:
         )  # shape (n_parts,2)
 
         # --- collision vs. player ---
+        @jax.jit
         def hit_by_player(gx, gy, offs, sz):
             seg_x, seg_y = gx + offs[0], gy + offs[1]
             return check_collision_single(
@@ -1330,6 +1335,7 @@ def all_entities_step(game_state: LaserGatesState) -> EntitiesState:
         collision_with_player = jnp.any(player_hits_mask)
 
         # --- collision vs. missile ---
+        @jax.jit
         def hit_by_missile(gx, gy, offs, sz):
             seg_x, seg_y = gx + offs[0], gy + offs[1]
             px = state.player_missile.x.astype(jnp.float32)
@@ -1377,6 +1383,7 @@ def all_entities_step(game_state: LaserGatesState) -> EntitiesState:
             death_timer=new_death_timer,
         )
 
+    @jax.jit
     def detonator_step(state: LaserGatesState) -> tuple[DetonatorState, CollisionPropertiesState]:
         dn = state.entities.detonator_state
 
@@ -1450,6 +1457,7 @@ def all_entities_step(game_state: LaserGatesState) -> EntitiesState:
             death_timer=new_death_timer,
         )
 
+    @jax.jit
     def energy_pod_step(state: LaserGatesState) -> tuple[EnergyPodState, CollisionPropertiesState]:
         ep = state.entities.energy_pod_state
 
