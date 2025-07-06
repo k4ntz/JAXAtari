@@ -169,6 +169,11 @@ DETONATOR_SIZE = (8, 73)
 DETONATOR_COLOR = (142, 142, 142, 255)
 
 # -------- Energy pod constants --------
+ENERGY_POD_SIZE = (6, 4)
+ENERGY_POD_COLOR_GREEN = (84, 171, 96, 255)
+ENERGY_POD_COLOR_GRAY = (142, 142, 142, 255)
+
+ENERGY_POD_ANIMATION_SPEED = 16 # Higher is slower
 
 # -------- GUI constants --------
 GUI_COLORED_BACKGROUND_SIZE = (128, 12)
@@ -193,16 +198,6 @@ GUI_Y_SPACE_BETWEEN_BACKGROUNDS = 10
 DEBUG_ACTIVATE_MOUNTAINS_SCROLL = jnp.bool(True)
 
 # -------- States --------
-class EntityType(IntEnum):
-    NONE = 0
-    RADAR_MORTAR = 1    # Radar mortars appear along the top and bottom of the Computer passage. Avoid Mortar fire. Demolish Radar Mortars with laser fire.
-    BYTE_BAT = 2        # Green bat looking entity flying at you without warning.
-    ROCK_MUNCHER = 3    #
-    HOMING_MISSILE = 4  # Bomb looking entity flying and tracking you
-    FORCEFIELD = 5      # Flashing, flexing or fixed "wall". Time your approach to cross.
-    DENSEPACK = 6       # Grey densepack columns of varying width appear along the dark Computer passage. Blast your way through.
-    DETONATOR = 7       # "Failsafe detonators" are large and grey and have the numbers "6507" etched on the side. Laser fire must strike one of the pins on the side of a detonator to destroy it.
-    ENERGY_POD = 8      # To replenish energy reserves, touch Energy Pods as they appear along the Computer passageway. Do not fire at Energy Pods! You may not survive until another appears!
 
 class RadarMortarState(NamedTuple):
     is_in_current_event: jnp.bool
@@ -283,28 +278,31 @@ class EnergyPodState(NamedTuple):
     is_alive: jnp.bool
     x: chex.Array
     y: chex.Array
+    animation_timer: chex.Array
 
 class CollisionPropertiesState(NamedTuple):
-    collision_with_player: jnp.bool
-    collision_with_player_missile: jnp.bool
-    is_big_collision: jnp.bool
-    is_energy_pod: jnp.bool
-    is_detonator: jnp.bool
-    is_ff_or_dp: jnp.bool
-    score_to_add: chex.Array
+    collision_with_player: jnp.bool             # Player collision with entity
+    collision_with_player_missile: jnp.bool     # Player missile collision with entity
+    is_big_collision: jnp.bool                  # If 1 or 6 shield points should be subtracted at collision.
+                                                # Candidates for small collision: Computer wall (bounds, not handled here, see check_player_and_player_missile_collision_bounds), Rock Muncher missile, Radar Mortar Missile
+                                                # Candidates for big collision: Byte Bat, Rock Muncher, Homing Missile, Radar Cannon, Densepack Column, any Forcefield or Detonator
+    is_energy_pod: jnp.bool                     # If entity is energy pod
+    is_detonator: jnp.bool                      # If entity is detonator
+    is_ff_or_dp: jnp.bool                       # If entity is forcefield or densepack
+    score_to_add: chex.Array                    # Score to add to current score at collision. Radar Mortar: 115, Rock Muncher: 325, Byte Bat: 330, Pass Forcefield: 400, Homing Missile: 525, Detonator: 6507
     death_timer: chex.Array
 
 class EntitiesState(NamedTuple):
-    radar_mortar_state: RadarMortarState
-    byte_bat_state: ByteBatState
-    rock_muncher_state: RockMuncherState
-    homing_missile_state: HomingMissileState
-    forcefield_state: ForceFieldState
-    dense_pack_state: DensepackState
-    detonator_state: DetonatorState
-    energy_pod_state: EnergyPodState
+    radar_mortar_state: RadarMortarState        # Radar mortars appear along the top and bottom of the Computer passage. Avoid Mortar fire. Demolish Radar Mortars with laser fire.
+    byte_bat_state: ByteBatState                # Green bat looking entity flying at you without warning.
+    rock_muncher_state: RockMuncherState        # Pink brown green entity flying at you without warning. Shoots missiles.
+    homing_missile_state: HomingMissileState    # Bomb looking entity flying and tracking you
+    forcefield_state: ForceFieldState           # Flashing, flexing or fixed "wall". Time your approach to cross.
+    dense_pack_state: DensepackState            # Gray densepack columns of varying width appear along the dark Computer passage. Blast your way through.
+    detonator_state: DetonatorState             # "Failsafe detonators" are large and grey and have the numbers "6507" etched on the side. Laser fire must strike one of the pins on the side of a detonator to destroy it.
+    energy_pod_state: EnergyPodState            # To replenish energy reserves, touch Energy Pods as they appear along the Computer passageway. Do not fire at Energy Pods! You may not survive until another appears!
 
-    collision_properties_state: CollisionPropertiesState
+    collision_properties_state: CollisionPropertiesState # Holds attributes relevant for collision logic
 
 class MountainState(NamedTuple):
     x1: chex.Array
@@ -464,6 +462,9 @@ def load_sprites():
     detonator_sprite = aj.loadFrame(os.path.join(MODULE_DIR, "sprites/lasergates/enemies/detonator/detonator.npy"))
     detonator_6507 = aj.loadFrame(os.path.join(MODULE_DIR, "sprites/lasergates/enemies/detonator/6507.npy"))
 
+    # Energy pods
+    energy_pod_sprite = aj.loadFrame(os.path.join(MODULE_DIR, "sprites/lasergates/enemies/energy_pod/energy_pod.npy"))
+
     return (
         # Player sprites
         player,
@@ -481,6 +482,7 @@ def load_sprites():
         densepack_sprites,
         detonator_sprite,
         detonator_6507,
+        energy_pod_sprite,
 
         # Background sprites
         upper_brown_bg,
@@ -520,6 +522,7 @@ def load_sprites():
     SPRITE_DENSEPACK,
     SPRITE_DETONATOR,
     SPRITE_6507,
+    SPRITE_ENERGY_POD,
 
     # Background sprites
     SPRITE_UPPER_BROWN_BG,
@@ -683,8 +686,14 @@ def maybe_initialize_random_entity(entities, state):
         return entities._replace(detonator_state=new_detonator_state)
 
     def initialize_energy_pod(entities, state):
-        new_state = entities.energy_pod_state._replace(is_in_current_event=jnp.bool(True))
-        return entities._replace(energy_pod_state=new_state)
+        new_energy_pod_state = entities.energy_pod_state._replace(
+            is_in_current_event=jnp.bool(True),
+            is_alive=jnp.bool(True),
+            x=jnp.array(WIDTH).astype(jnp.float32),
+            y=jnp.array(73).astype(jnp.float32),
+            animation_timer=jnp.array(0),
+        )
+        return entities._replace(energy_pod_state=new_energy_pod_state)
 
     init_fns = [
         initialize_radar_mortar,
@@ -698,7 +707,7 @@ def maybe_initialize_random_entity(entities, state):
     ] # All initialize functions of all entity types
 
     def initialize_random_entity(_):
-        picked_index = jax.random.randint(key_pick_type, shape=(), minval=6, maxval=7) # TODO: Change maxval to len(init_fns) when all init functions are implemented
+        picked_index = jax.random.randint(key_pick_type, shape=(), minval=7, maxval=8) # TODO: Change maxval to len(init_fns) when all init functions are implemented
         # If you want only one specific entity to spawn, change minval, maxval to:
         # Radar Mortar:     minval=0, maxval=1
         # Byte Bat:         minval=1, maxval=2
@@ -1252,7 +1261,7 @@ def all_entities_step(game_state: LaserGatesState) -> EntitiesState:
             is_energy_pod=jnp.bool(False),
             is_detonator=jnp.bool(False),
             is_ff_or_dp=jnp.bool(True),
-            score_to_add=jnp.array(525),
+            score_to_add=jnp.array(400),
             death_timer=new_death_timer,
         )
 
@@ -1364,7 +1373,7 @@ def all_entities_step(game_state: LaserGatesState) -> EntitiesState:
             collision_with_player_missile=collision_with_player_missile,
             is_big_collision=jnp.bool(True),
             is_ff_or_dp=jnp.bool(True),
-            score_to_add=jnp.array(525), # TODO score
+            score_to_add=jnp.array(0), # TODO score
             death_timer=new_death_timer,
         )
 
@@ -1442,7 +1451,58 @@ def all_entities_step(game_state: LaserGatesState) -> EntitiesState:
         )
 
     def energy_pod_step(state: LaserGatesState) -> tuple[EnergyPodState, CollisionPropertiesState]:
-        return state.entities.energy_pod_state, state.entities.collision_properties_state
+        ep = state.entities.energy_pod_state
+
+        new_x = ep.x - state.scroll_speed
+        y = ep.y
+        animation_timer = ep.animation_timer
+        new_animation_timer = jnp.where(animation_timer > ENERGY_POD_ANIMATION_SPEED, 0, animation_timer + 1)
+
+        # ----- Collision detection -----
+
+        # If collision with player occurred. Only valid if death timer is still in alive state
+        collision_with_player = jnp.where(
+            state.entities.collision_properties_state.death_timer == ENTITY_DEATH_ANIMATION_TIMER,
+            check_collision_single((state.player_x, state.player_y), PLAYER_SIZE, (new_x, y), BYTE_BAT_SIZE),
+            jnp.bool(False)
+        )
+
+        # If collision with player missile occurred. Only valid if death timer is still in alive state
+        collision_with_player_missile = jnp.where(
+            state.entities.collision_properties_state.death_timer == ENTITY_DEATH_ANIMATION_TIMER,
+            check_collision_single((state.player_missile.x, state.player_missile.y), PLAYER_MISSILE_SIZE, (new_x, y), BYTE_BAT_SIZE),
+            jnp.bool(False))
+
+        # Is still alive if was already alive and no collision occurred
+        new_is_alive = jnp.logical_and(ep.is_alive, jnp.logical_and(jnp.logical_not(collision_with_player_missile), jnp.logical_not(collision_with_player)))
+
+        # Death timer updates - set alive if is alive, decrement if death animation, deactivate completely if player collision (no animation)
+        new_death_timer = jnp.where(new_is_alive, ENTITY_DEATH_ANIMATION_TIMER, state.entities.collision_properties_state.death_timer)
+        new_death_timer = jnp.where(jnp.logical_not(new_is_alive), jnp.maximum(new_death_timer - 1, 0), new_death_timer)
+        new_death_timer = jnp.where(collision_with_player, -1, new_death_timer)
+
+        # Update is_in_current_event for player missile collision
+        new_is_in_current_event = jnp.where(collision_with_player_missile, ep.is_alive, ep.is_in_current_event)
+        new_is_in_current_event = jnp.where(new_death_timer == 0, jnp.bool(False), new_is_in_current_event)
+
+        # Update is_in_current_event for player collision
+        new_is_in_current_event = jnp.where(collision_with_player, jnp.bool(True), new_is_in_current_event)
+
+        return state.entities.energy_pod_state._replace(
+            is_in_current_event=jnp.logical_and(new_is_in_current_event, new_x > 0),
+            is_alive=new_is_alive,
+            x=new_x.astype(jnp.float32),
+            animation_timer=new_animation_timer.astype(jnp.int32),
+        ), state.entities.collision_properties_state._replace(
+            collision_with_player=collision_with_player,
+            collision_with_player_missile=collision_with_player_missile,
+            is_big_collision=jnp.bool(False),
+            is_energy_pod=jnp.bool(True),
+            is_detonator=jnp.bool(False),
+            is_ff_or_dp=jnp.bool(False),
+            score_to_add=jnp.array(0),
+            death_timer=new_death_timer,
+        )
 
 
     def entity_maybe_step(step_fn, entity_state):
@@ -1978,7 +2038,8 @@ class JaxLaserGates(JaxEnvironment[LaserGatesState, LaserGatesObservation, Laser
                 is_in_current_event=jnp.bool(False),
                 is_alive=jnp.bool(False),
                 x=jnp.array(0).astype(jnp.float32),
-                y=jnp.array(0),
+                y=jnp.array(0).astype(jnp.float32),
+                animation_timer=jnp.array(0),
             ),
             collision_properties_state=CollisionPropertiesState(
                 collision_with_player=jnp.bool(False),
@@ -2043,6 +2104,10 @@ class JaxLaserGates(JaxEnvironment[LaserGatesState, LaserGatesObservation, Laser
         # -------- Check bound and entity collisions --------
         upper_player_collision, lower_player_collision, player_missile_collision = check_player_and_player_missile_collision_bounds(state)
         collision_with_player = jnp.logical_and(jnp.logical_not(state.entities.collision_properties_state.collision_with_player), new_entities.collision_properties_state.collision_with_player) # Only allow flag to be True once per collision
+        # Do not register as "bad" collision if collision with energy pod. Instead save as own variable
+        collision_with_energy_pod = jnp.where(new_entities.collision_properties_state.is_energy_pod, collision_with_player, jnp.bool(False))
+        collision_with_player = jnp.where(new_entities.collision_properties_state.is_energy_pod, jnp.bool(False), collision_with_player)
+
         any_player_collision = jnp.logical_or(collision_with_player, jnp.logical_or(upper_player_collision, lower_player_collision))
 
         # -------- Update things that have to be updated at collision --------
@@ -2062,13 +2127,24 @@ class JaxLaserGates(JaxEnvironment[LaserGatesState, LaserGatesObservation, Laser
 
 
         # -------- Update energy, score, shields and d-time --------
+
+        # Drain energy every frame
         new_energy = state.energy - 1
-        # Dorbid score change if densepack or forcefield is hit with missile
+        # Restore energy if player collided with energy pod
+        new_energy = jnp.where(collision_with_energy_pod, MAX_ENERGY, new_energy)
+
+
+        # Forbid score change if densepack or forcefield is hit with missile
         allow_score_change = jnp.logical_and(new_entities.collision_properties_state.collision_with_player_missile, jnp.logical_not(state.entities.collision_properties_state.is_ff_or_dp))
         # Forbid score change if detonator is not hit with a missile at a pin
         allow_score_change = jnp.where(new_entities.collision_properties_state.is_detonator, new_entities.detonator_state.collision_is_pin, allow_score_change)
+        # Add score based on entity if allowed
         new_score = jnp.where(allow_score_change, state.score + new_entities.collision_properties_state.score_to_add, state.score)
+
+
+        # Player loses 1 shield, if collision with bounds or mountains
         new_shields = jnp.where(jnp.logical_or(upper_player_collision, lower_player_collision), state.shields - 1, state.shields)
+        # Player loses 6 or 1 shield, if collision with entity. Different entity types cause a big or small decrease. (See is_big_collision)
         new_shields = jnp.where(collision_with_player,
                                 new_shields - jnp.where(new_entities.collision_properties_state.is_big_collision, 6, 1),
                                 new_shields)
@@ -2258,6 +2334,20 @@ class LaserGatesRenderer(AtraJaxisRenderer):
                                 ),
                           raster
                           )
+
+        # Energy pod
+        ep_state = state.entities.energy_pod_state
+        raster = jnp.where(jnp.logical_and(ep_state.is_in_current_event, jnp.logical_and(jnp.logical_not(ep_state.is_alive), state.entities.collision_properties_state.death_timer > 0)),
+                          # Case: in event but dead -> render death sprites
+                                aj.render_at( #lower
+                                    raster,
+                                    ep_state.x,
+                                    ep_state.y - 40,
+                                    death_sprite_lower_frame,
+                                ),
+                          raster
+                          )
+
 
         # -------- Render Mountain Playing Field Background --------
 
@@ -2580,7 +2670,7 @@ class LaserGatesRenderer(AtraJaxisRenderer):
             raster  # false_fn
         )
 
-        # -------- Render Densepack --------
+        # -------- Render Detonator --------
 
         raster = jnp.where(
             jnp.logical_and(dn_state.is_in_current_event, dn_state.is_alive),
@@ -2597,6 +2687,25 @@ class LaserGatesRenderer(AtraJaxisRenderer):
             ),
             raster
         )
+
+        # -------- Render Energy Pod --------
+
+        energy_pod_colored = jnp.where(ep_state.animation_timer < (ENERGY_POD_ANIMATION_SPEED // 2),
+                                       recolor_sprite(SPRITE_ENERGY_POD, jnp.array(ENERGY_POD_COLOR_GREEN)),
+                                       recolor_sprite(SPRITE_ENERGY_POD, jnp.array(ENERGY_POD_COLOR_GRAY))
+                                       )
+
+        raster = jnp.where(
+            jnp.logical_and(ep_state.is_in_current_event, ep_state.is_alive),
+            aj.render_at(
+                raster,
+                ep_state.x,
+                ep_state.y,
+                energy_pod_colored,
+            ),
+            raster
+        )
+
 
         # -------- Render background parts --------
 
