@@ -156,8 +156,13 @@ FORCEFIELD_FIXED_SPEED = 0.5 # Fixed (up and down movement) speed
 FORCEFIELD_FIXED_UPPER_BOUND = -FORCEFIELD_SIZE[1] + 33 # Highest allowed y position for forcefields while fixed
 FORCEFIELD_FIXED_LOWER_BOUND = -FORCEFIELD_SIZE[1] + 68 # Lowest allowed y position for forcefields while fixed
 
-# -------- Densepcak constants --------
+# -------- Densepack constants --------
+DENSEPACK_NORMAL_PART_SIZE = (8, 4)
+DENSEPACK_WIDE_PART_SIZE  = (16, 4)
+DENSEPACK_COLOR = (142, 142, 142, 255)
 
+DENSEPACK_NUMBER_OF_PARTS = 19 # number of segments in the densepack
+DENSEPACK_IS_WIDE_PROBABILITY = 0.4
 # -------- Detonator constants --------
 
 # -------- Energy pod constants --------
@@ -258,7 +263,10 @@ class DensepackState(NamedTuple):
     is_in_current_event: jnp.bool
     is_alive: jnp.bool
     x: chex.Array
-    y: chex.Array
+    upmost_y: chex.Array
+    is_wide: jnp.bool
+    number_of_parts: chex.Array
+    broken_states: chex.Array
 
 class DetonatorState(NamedTuple):
     is_in_current_event: jnp.bool
@@ -277,7 +285,7 @@ class CollisionPropertiesState(NamedTuple):
     collision_with_player_missile: jnp.bool
     is_big_collision: jnp.bool
     is_energy_pod: jnp.bool
-    is_forcefield: jnp.bool
+    is_ff_or_dp: jnp.bool
     score_to_add: chex.Array
     death_timer: chex.Array
 
@@ -436,6 +444,17 @@ def load_sprites():
     # Forcefield
     forcefield_sprite = aj.loadFrame(os.path.join(MODULE_DIR, "sprites/lasergates/enemies/forcefield/forcefield.npy"))
 
+    # Densepack
+    densepack_frame_0 = aj.loadFrame(os.path.join(MODULE_DIR, "sprites/lasergates/enemies/densepack/5.npy"))
+    densepack_frame_1 = aj.loadFrame(os.path.join(MODULE_DIR, "sprites/lasergates/enemies/densepack/4.npy"))
+    densepack_frame_2 = aj.loadFrame(os.path.join(MODULE_DIR, "sprites/lasergates/enemies/densepack/3.npy"))
+    densepack_frame_3 = aj.loadFrame(os.path.join(MODULE_DIR, "sprites/lasergates/enemies/densepack/2.npy"))
+    densepack_frame_4 = aj.loadFrame(os.path.join(MODULE_DIR, "sprites/lasergates/enemies/densepack/1.npy"))
+
+    densepack_sprites = jnp.array([
+        densepack_frame_0, densepack_frame_1, densepack_frame_2, densepack_frame_3, densepack_frame_4
+    ])
+
     return (
         # Player sprites
         player,
@@ -450,6 +469,7 @@ def load_sprites():
         rock_muncher_sprites,
         homing_missile_sprite,
         forcefield_sprite,
+        densepack_sprites,
 
         # Background sprites
         upper_brown_bg,
@@ -486,6 +506,7 @@ def load_sprites():
     SPRITE_ROCK_MUNCHER,
     SPRITE_HOMING_MISSILE,
     SPRITE_FORCEFIELD,
+    SPRITE_DENSEPACK,
 
     # Background sprites
     SPRITE_UPPER_BROWN_BG,
@@ -623,9 +644,20 @@ def maybe_initialize_random_entity(entities, state):
         )
         return entities._replace(forcefield_state=new_forcefield_state)
 
-    def initialize_dense_pack(entities, state):
-        new_state = entities.dense_pack_state._replace(is_in_current_event=jnp.bool(True))
-        return entities._replace(dense_pack_state=new_state)
+    def initialize_densepack(entities, state):
+
+        initial_is_wide = jax.random.bernoulli(key_intern, p=DENSEPACK_IS_WIDE_PROBABILITY)
+
+        new_densepack_state = entities.dense_pack_state._replace(
+            is_in_current_event=jnp.bool(True),
+            is_alive=jnp.bool(True),
+            x=jnp.array(WIDTH).astype(jnp.float32),
+            upmost_y=jnp.array(19).astype(jnp.float32),
+            is_wide=initial_is_wide,
+            number_of_parts=jnp.array(DENSEPACK_NUMBER_OF_PARTS).astype(jnp.int32),
+            broken_states=jnp.full(DENSEPACK_NUMBER_OF_PARTS, 4, jnp.int32),
+        )
+        return entities._replace(dense_pack_state=new_densepack_state)
 
     def initialize_detonator(entities, state):
         new_state = entities.detonator_state._replace(is_in_current_event=jnp.bool(True))
@@ -641,13 +673,13 @@ def maybe_initialize_random_entity(entities, state):
         initialize_rock_muncher,
         initialize_homing_missile,
         initialize_forcefield,
-        initialize_dense_pack,
+        initialize_densepack,
         initialize_detonator,
         initialize_energy_pod,
     ] # All initialize functions of all entity types
 
     def initialize_random_entity(_):
-        picked_index = jax.random.randint(key_pick_type, shape=(), minval=4, maxval=5) # TODO: Change maxval to len(init_fns) when all init functions are implemented
+        picked_index = jax.random.randint(key_pick_type, shape=(), minval=5, maxval=6) # TODO: Change maxval to len(init_fns) when all init functions are implemented
         # If you want only one specific entity to spawn, change minval, maxval to:
         # Radar Mortar:     minval=0, maxval=1
         # Byte Bat:         minval=1, maxval=2
@@ -828,6 +860,8 @@ def all_entities_step(game_state: LaserGatesState) -> EntitiesState:
             collision_with_player=collision_with_player,
             collision_with_player_missile=collision_with_player_missile,
             is_big_collision=jnp.logical_not(rm_missile_collision_with_player),
+            is_energy_pod=jnp.bool(False),
+            is_ff_or_dp=jnp.bool(False),
             score_to_add=jnp.array(115),
             death_timer=new_death_timer,
         )
@@ -903,6 +937,8 @@ def all_entities_step(game_state: LaserGatesState) -> EntitiesState:
             collision_with_player=collision_with_player,
             collision_with_player_missile=collision_with_player_missile,
             is_big_collision=jnp.bool(True),
+            is_energy_pod=jnp.bool(False),
+            is_ff_or_dp=jnp.bool(False),
             score_to_add=jnp.array(330),
             death_timer=new_death_timer,
         )
@@ -990,6 +1026,8 @@ def all_entities_step(game_state: LaserGatesState) -> EntitiesState:
             collision_with_player=collision_with_player,
             collision_with_player_missile=collision_with_player_missile,
             is_big_collision=jnp.logical_not(rm_missile_collision_with_player),
+            is_energy_pod=jnp.bool(False),
+            is_ff_or_dp=jnp.bool(False),
             score_to_add=jnp.array(325),
             death_timer=new_death_timer,
         )
@@ -1053,6 +1091,8 @@ def all_entities_step(game_state: LaserGatesState) -> EntitiesState:
             collision_with_player=collision_with_player,
             collision_with_player_missile=collision_with_player_missile,
             is_big_collision=jnp.bool(True),
+            is_energy_pod=jnp.bool(False),
+            is_ff_or_dp=jnp.bool(False),
             score_to_add=jnp.array(525),
             death_timer=new_death_timer,
         )
@@ -1183,13 +1223,123 @@ def all_entities_step(game_state: LaserGatesState) -> EntitiesState:
             collision_with_player=collision_with_player,
             collision_with_player_missile=collision_with_player_missile,
             is_big_collision=jnp.bool(True),
-            is_forcefield=jnp.bool(True),
+            is_energy_pod=jnp.bool(False),
+            is_ff_or_dp=jnp.bool(True),
             score_to_add=jnp.array(525),
             death_timer=new_death_timer,
         )
 
+    @jax.jit
     def densepack_step(state: LaserGatesState) -> tuple[DensepackState, CollisionPropertiesState]:
-        return state.entities.dense_pack_state, state.entities.collision_properties_state
+        dp = state.entities.dense_pack_state
+
+        # base X coord for all segments (with scrolling)
+        base_x = dp.x - state.scroll_speed
+        # starting Y + vertical spacing
+        y = dp.upmost_y
+        height = DENSEPACK_NORMAL_PART_SIZE[1]
+
+        # world positions array (shape (n_parts,))
+        group_xs = jnp.full((DENSEPACK_NUMBER_OF_PARTS,), base_x, dtype=jnp.float32)
+        group_ys = y + jnp.arange(DENSEPACK_NUMBER_OF_PARTS, dtype=jnp.float32) * height
+
+        # offsets lookup as before
+        offset_lookup_normal = jnp.array([
+            (WIDTH, 0), (6, 0), (4, 0), (2, 0), (0, 0)
+        ], dtype=jnp.float32)
+        offset_lookup_wide = jnp.array([
+            (WIDTH, 0), (12, 0), (8, 0), (4, 0), (0, 0)
+        ], dtype=jnp.float32)
+        # size lookup, one size per broken_state
+        size_lookup_normal = jnp.array([
+            (0, 0),  # 0 → fully gone
+            (2, 4),  # 1 → small
+            (4, 4),  # 2
+            (6, 4),  # 3
+            (8, 4),  # 4 → intact
+        ], dtype=jnp.float32)
+        size_lookup_wide = jnp.array([
+            (0, 0),  # 0 → fully gone
+            (4, 4),  # 1 → small
+            (8, 4),  # 2
+            (12, 4),  # 3
+            (16, 4),  # 4 → intact
+        ], dtype=jnp.float32)
+
+        # pick per‐segment offset and size
+        segment_offsets = jnp.where(
+            dp.is_wide,
+            offset_lookup_wide[dp.broken_states],
+            offset_lookup_normal[dp.broken_states]
+        )  # shape (n_parts,2)
+        segment_sizes = jnp.where(
+            dp.is_wide,
+            size_lookup_wide[dp.broken_states],
+            size_lookup_normal[dp.broken_states]
+        )  # shape (n_parts,2)
+
+        # --- collision vs. player ---
+        def hit_by_player(gx, gy, offs, sz):
+            seg_x, seg_y = gx + offs[0], gy + offs[1]
+            return check_collision_single(
+                jnp.array((state.player_x, state.player_y), dtype=jnp.float32),
+                jnp.array(PLAYER_SIZE, dtype=jnp.float32),
+                jnp.array((seg_x, seg_y), dtype=jnp.float32),
+                sz
+            )
+
+        player_hits_mask = jax.vmap(hit_by_player)(
+            group_xs, group_ys, segment_offsets, segment_sizes
+        )
+        collision_with_player = jnp.any(player_hits_mask)
+
+        # --- collision vs. missile ---
+        def hit_by_missile(gx, gy, offs, sz):
+            seg_x, seg_y = gx + offs[0], gy + offs[1]
+            px = state.player_missile.x.astype(jnp.float32)
+            py = state.player_missile.y.astype(jnp.float32)
+            return check_collision_single(
+                jnp.array((px, py), dtype=jnp.float32),
+                jnp.array(PLAYER_MISSILE_SIZE, dtype=jnp.float32),
+                jnp.array((seg_x, seg_y), dtype=jnp.float32),
+                sz
+            )
+
+        missile_hits_mask = jax.vmap(hit_by_missile)(
+            group_xs, group_ys, segment_offsets, segment_sizes
+        )
+        collision_with_player_missile = jnp.any(missile_hits_mask)
+
+        # decrement broken_states only where missile hit
+        new_broken_states = jnp.where(missile_hits_mask,
+                                      jnp.maximum(dp.broken_states - 1, 0),
+                                      dp.broken_states)
+
+        # --- life & death logic unchanged ---
+        new_is_alive = jnp.logical_and(dp.is_alive, jnp.logical_not(collision_with_player))
+        new_death_timer = jnp.where(new_is_alive, ENTITY_DEATH_ANIMATION_TIMER, state.entities.collision_properties_state.death_timer)
+        new_death_timer = jnp.where(jnp.logical_not(new_is_alive), jnp.maximum(new_death_timer - 1, 0), new_death_timer)
+        new_death_timer = jnp.where(collision_with_player, -1, new_death_timer)
+
+        new_is_in_current_event = dp.is_in_current_event
+        new_is_in_current_event = jnp.where(collision_with_player_missile, dp.is_alive, new_is_in_current_event)
+        new_is_in_current_event = jnp.where(new_death_timer == 0, jnp.bool(False), new_is_in_current_event)
+        new_is_in_current_event = jnp.where(collision_with_player, jnp.bool(True), new_is_in_current_event)
+        new_is_in_current_event = jnp.where(base_x > 0, new_is_in_current_event, jnp.bool(False))
+
+        return dp._replace(
+            is_in_current_event=new_is_in_current_event,
+            is_alive=new_is_alive,
+            x=base_x,
+            broken_states=new_broken_states,
+        ), state.entities.collision_properties_state._replace(
+            collision_with_player=collision_with_player,
+            collision_with_player_missile=collision_with_player_missile,
+            is_big_collision=jnp.bool(True),
+            is_ff_or_dp=jnp.bool(True),
+            score_to_add=jnp.array(525), # TODO score
+            death_timer=new_death_timer,
+        )
 
     def detonator_step(state: LaserGatesState) -> tuple[DetonatorState, CollisionPropertiesState]:
         return state.entities.detonator_state, state.entities.collision_properties_state
@@ -1715,7 +1865,10 @@ class JaxLaserGates(JaxEnvironment[LaserGatesState, LaserGatesObservation, Laser
                 is_in_current_event=jnp.bool(False),
                 is_alive=jnp.bool(False),
                 x=jnp.array(0).astype(jnp.float32),
-                y=jnp.array(0),
+                upmost_y=jnp.array(0).astype(jnp.float32),
+                is_wide=jnp.bool(False),
+                number_of_parts=jnp.array(0).astype(jnp.int32),
+                broken_states=jnp.full(DENSEPACK_NUMBER_OF_PARTS, 3, jnp.int32),
             ),
             detonator_state=DetonatorState(
                 is_in_current_event=jnp.bool(False),
@@ -1734,7 +1887,7 @@ class JaxLaserGates(JaxEnvironment[LaserGatesState, LaserGatesObservation, Laser
                 collision_with_player_missile=jnp.bool(False),
                 is_big_collision=jnp.bool(False),
                 is_energy_pod=jnp.bool(False),
-                is_forcefield=jnp.bool(False),
+                is_ff_or_dp=jnp.bool(False),
                 score_to_add=jnp.array(0),
                 death_timer=jnp.array(ENTITY_DEATH_ANIMATION_TIMER),
             )
@@ -1811,7 +1964,7 @@ class JaxLaserGates(JaxEnvironment[LaserGatesState, LaserGatesObservation, Laser
 
         # -------- Update energy, score, shields and d-time --------
         new_energy = state.energy - 1
-        allow_score_change = jnp.logical_and(new_entities.collision_properties_state.collision_with_player_missile, jnp.logical_not(state.entities.collision_properties_state.is_forcefield))
+        allow_score_change = jnp.logical_and(new_entities.collision_properties_state.collision_with_player_missile, jnp.logical_not(state.entities.collision_properties_state.is_ff_or_dp))
         new_score = jnp.where(allow_score_change, state.score + new_entities.collision_properties_state.score_to_add, state.score)
         new_shields = jnp.where(jnp.logical_or(upper_player_collision, lower_player_collision), state.shields - 1, state.shields)
         new_shields = jnp.where(collision_with_player,
@@ -2195,22 +2348,22 @@ class LaserGatesRenderer(AtraJaxisRenderer):
         )
         all_sprites = batched_recolor(SPRITE_FORCEFIELD, x_positions, y_positions, flipped)
 
-        def resize_sprite_width(sprite: jnp.ndarray, new_width: int) -> jnp.ndarray:
+        def resize_sprite_width_ff(sprite: jnp.ndarray, new_width: int) -> jnp.ndarray:
             H, W, C = sprite.shape
             return jax.image.resize(sprite, (new_width, W, C), method='nearest')
 
         sprites_normal = all_sprites  # (6, 8, 73, 4)
-        sprites_wide = jax.vmap(lambda sprite: resize_sprite_width(sprite, FORCEFIELD_WIDE_SIZE[0]))(
+        sprites_wide = jax.vmap(lambda sprite: resize_sprite_width_ff(sprite, FORCEFIELD_WIDE_SIZE[0]))(
             all_sprites)  # (6, 16, 73, 4)
 
         max_width = max(sprites_normal.shape[1], sprites_wide.shape[1])
 
-        def pad_to_width(sprites, width):
+        def pad_to_width_ff(sprites, width):
             pad = width - sprites.shape[1]
             return jnp.pad(sprites, ((0, 0), (0, pad), (0, 0), (0, 0)))  # pad in Width
 
-        sprites_normal_padded = pad_to_width(sprites_normal, max_width)  # (6, 16, 73, 4)
-        sprites_wide_padded = pad_to_width(sprites_wide, max_width)  # (6, 16, 73, 4)
+        sprites_normal_padded = pad_to_width_ff(sprites_normal, max_width)  # (6, 16, 73, 4)
+        sprites_wide_padded = pad_to_width_ff(sprites_wide, max_width)  # (6, 16, 73, 4)
 
         # Choose sprite if forcefield is wide
         all_sprites = jax.lax.cond(
@@ -2258,6 +2411,58 @@ class LaserGatesRenderer(AtraJaxisRenderer):
             ),
             # Case: not in event -> do not render
             raster
+        )
+
+        # -------- Render Densepack --------
+
+        dp_state = state.entities.dense_pack_state
+        dp_x, dp_upmost_y, dp_height = dp_state.x, dp_state.upmost_y, DENSEPACK_NORMAL_PART_SIZE[1]
+
+        # select correct sprites based on broken_states
+        densepack_correct_sprites = SPRITE_DENSEPACK[dp_state.broken_states]
+        # first recolor each part sprite
+        recolored_sprites = jax.vmap(
+            lambda sp: recolor_sprite(sp, jnp.array(DENSEPACK_COLOR)))(densepack_correct_sprites)
+
+        def resize_sprite_width_dp(sprite: jnp.ndarray, new_width: int) -> jnp.ndarray:
+            H, W, C = sprite.shape
+            return jax.image.resize(sprite, (new_width, W, C), method='nearest')
+
+        sprites_normal = recolored_sprites  # (6, 8, 73, 4)
+        sprites_wide = jax.vmap(lambda sprite: resize_sprite_width_dp(sprite, FORCEFIELD_WIDE_SIZE[0]))(recolored_sprites)  # (6, 16, 73, 4)
+
+        max_width = max(sprites_normal.shape[1], sprites_wide.shape[1])
+
+        def pad_to_width_dp(sprites, width):
+            pad = width - sprites.shape[1]
+            return jnp.pad(sprites, ((0, 0), (0, pad), (0, 0), (0, 0)))  # pad in Width
+
+        sprites_normal_padded = pad_to_width_dp(sprites_normal, max_width)  # (6, 16, 73, 4)
+        sprites_wide_padded = pad_to_width_dp(sprites_wide, max_width)  # (6, 16, 73, 4)
+
+        # Choose sprite if densepack is wide
+        all_sprites = jax.lax.cond(
+            dp_state.is_wide,
+            lambda _: sprites_wide_padded,
+            lambda _: sprites_normal_padded,
+            operand=None
+        )
+
+        def render_densepack_parts(raster):
+            def body(i, r):
+                # compute y position of part i
+                part_y = dp_upmost_y + i * dp_height
+                # render the i‑th recolored sprite
+                return aj.render_at(r, dp_x, part_y, all_sprites[i])
+
+            # loop i from 0 to DENSEPACK_NUMBER_OF_PARTS
+            return jax.lax.fori_loop(0, DENSEPACK_NUMBER_OF_PARTS, body, raster)
+
+        # conditional: only render the fleet if in event & alive
+        raster = jnp.where(
+            jnp.logical_and(dp_state.is_in_current_event, dp_state.is_alive),
+            render_densepack_parts(raster),  # true_fn
+            raster  # false_fn
         )
 
         # -------- Render background parts --------
