@@ -1,6 +1,6 @@
 import jax
 import jax.numpy as jnp
-
+import os
 
 # def extract_array(img):
 #     return np.all(img == [228, 111, 111], axis=-1).astype(int)[1:176:4, ::4]
@@ -230,12 +230,12 @@ def pacman_rgba(size: int = 10) -> jnp.ndarray:
     pacman = jnp.array([
           [0,0,0,1,1,1,0,1,0],
           [0,0,1,1,1,1,1,0,1],
-          [0,1,1,1,1,0,1,1,0],
+          [0,0,1,1,1,0,1,1,0],
           [0,0,0,0,1,1,1,1,0],
           [0,0,0,0,0,0,1,1,0],
           [0,0,0,0,0,0,1,1,0],
           [0,0,0,0,1,1,1,1,0],
-          [0,1,1,1,1,1,1,1,0],
+          [0,0,1,1,1,1,1,1,0],
           [0,0,1,1,1,1,1,0,0],
           [0,0,0,1,1,1,0,0,0],
     ])
@@ -243,3 +243,15 @@ def pacman_rgba(size: int = 10) -> jnp.ndarray:
     # Create RGBA image
     image = jnp.where(pacman[..., None], COLOR, TRANSPARENT)
     return jnp.swapaxes(image, 1, 0)
+
+from jaxatari.renderers import AtraJaxisRenderer
+import jaxatari.rendering.atraJaxis as aj
+
+def load_ghosts():
+       ghosts = []
+       MODULE_DIR = os.path.dirname(os.path.abspath(__file__))
+       sprite_path = os.path.join(MODULE_DIR, "sprites/mspacman/")
+       for i in range(4):
+              path = os.path.join(sprite_path, f'ghost{i+1}.npy')
+              ghosts.append(aj.loadFrame(path))
+       return ghosts

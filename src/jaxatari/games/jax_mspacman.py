@@ -10,7 +10,7 @@ import jaxatari.spaces as spaces
 from jaxatari.environment import JaxEnvironment, JAXAtariAction as Action
 from jaxatari.renderers import AtraJaxisRenderer
 from jaxatari.rendering import atraJaxis as aj
-from jaxatari.games.mspacman_mazes import MAZES, load_background, pacman_rgba
+from jaxatari.games.mspacman_mazes import MAZES, load_background, pacman_rgba, load_ghosts
 
 from jax import random, Array
 
@@ -91,8 +91,8 @@ class PacmanState(NamedTuple):
     pacman_pos: chex.Array  # (x, y)
     pacman_dir: chex.Array  # (dx, dy)
     current_action: chex.Array # 0: NOOP, 1: NOOP, 2: UP ...
-    # ghost_positions: chex.Array  # (N_ghosts, 2)
-    # ghost_dirs: chex.Array  # (N_ghosts, 2)
+    ghost_positions: chex.Array  # (N_ghosts, 2)
+    ghost_dirs: chex.Array  # (N_ghosts, 2)
     # pellets: chex.Array  # 2D grid of 0 (empty) or 1 (pellet)
     # power_pellets: chex.Array
     score: chex.Array
@@ -155,7 +155,7 @@ class JaxPacman(JaxEnvironment[PacmanState, PacmanObservation, PacmanInfo]):
     def reset(self, key=None) -> Tuple[PacmanObservation, PacmanState]:
         pacman_pos = jnp.array([75, 102])
         pacman_dir = jnp.array([-1, 0])
-        ghost_positions = jnp.array([[9, 3], [9, 5], [9, 7]])
+        ghost_positions = jnp.array([[40, 78], [50, 78], [75, 78], [120, 78]])
         ghost_dirs = jnp.zeros_like(ghost_positions)
         pellets = (self.maze_layout == 0).astype(jnp.int32)
         power_pellets = jnp.zeros_like(pellets)
@@ -171,8 +171,8 @@ class JaxPacman(JaxEnvironment[PacmanState, PacmanObservation, PacmanInfo]):
             pacman_pos=pacman_pos,
             pacman_dir=pacman_dir,
             current_action = 4,
-            # ghost_positions=ghost_positions,
-            # ghost_dirs=ghost_dirs,
+            ghost_positions=ghost_positions,
+            ghost_dirs=ghost_dirs,
             # pellets=pellets,
             # power_pellets=power_pellets,
             score=jnp.array(0),
@@ -229,7 +229,7 @@ class JaxPacman(JaxEnvironment[PacmanState, PacmanObservation, PacmanInfo]):
 
         # keys = random.split(random.PRNGKey(state.step_count), state.ghost_positions.shape[0])
         # ghost_positions = jax.vmap(move_one_ghost)(state.ghost_positions, keys)
-        # ghost_positions = state.ghost_positions
+        ghost_positions = state.ghost_positions
 
         game_over = False
 
@@ -237,8 +237,8 @@ class JaxPacman(JaxEnvironment[PacmanState, PacmanObservation, PacmanInfo]):
             pacman_pos=new_pacman_pos,
             pacman_dir=new_pacman_dir,
             current_action=executed_action,
-            # ghost_positions=ghost_positions,
-            # ghost_dirs=state.ghost_dirs,
+            ghost_positions=ghost_positions,
+            ghost_dirs=state.ghost_dirs,
             # pellets=pellets,
             # power_pellets=power_pellets,
             score=score,
@@ -266,15 +266,15 @@ class MsPacmanRenderer(AtraJaxisRenderer):
     """JAX-based MsPacman game renderer, optimized with JIT compilation."""
 
     def __init__(self):
-        # (
-        #     self.SPRITE_BG,
-        #     self.SPRITE_PLAYER,
-        # ) = load_sprites()
+        super().__init__()
         self.SPRITE_BG = load_background(BASE_LEVEL)
         self.SPRITE_PLAYER = pacman_rgba()
+        self.SPRITE_GHOSTS = load_ghosts()
 
     @partial(jax.jit, static_argnums=(0,))
     def render(self, state):
         raster = self.SPRITE_BG
         raster = aj.render_at(raster, state.pacman_pos[0], state.pacman_pos[1], self.SPRITE_PLAYER)
+        for g_pos, g_sprite in zip(state.ghost_positions, self.SPRITE_GHOSTS):
+            raster = aj.render_at(raster, g_pos[0], g_pos[1], g_sprite) 
         return raster
