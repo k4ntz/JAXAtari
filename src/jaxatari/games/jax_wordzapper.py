@@ -1,7 +1,7 @@
 import os
 from functools import partial
 from typing import NamedTuple, Tuple
-from jax._src.core import reset_trace_state
+from jax._src.core import stash_axis_env, reset_trace_state
 import jax.lax
 import jax.numpy as jnp
 import chex
@@ -58,6 +58,12 @@ ENEMY_Y_MIN = 50
 ENEMY_Y_MAX = 150
 ENEMY_ANIM_SWITCH_RATE = 15
 ENEMY_Y_MIN_SEPARATION = 16  
+
+# zapper
+ZAPPER_COLOR = (252,252,84,255)
+MAX_ZAPPER_POS = 49
+ZAPPER_SPR_WIDTH = 4
+ZAPPER_SPR_HEIGHT = 200 # this is approximate, can also be changed, but this works fine. TODO define this value based on max/min ship coordinate 
 
 
 TIME = 99
@@ -500,17 +506,42 @@ def player_zapper_step(
     new_zapper = jnp.where(
         jnp.logical_and(fire, jnp.logical_not(zapper_exists)),
         # TODO remove hard-coded values below
-        jnp.array([curr_player_x+4, curr_player_y-5, 1, state.step_counter]),
+        jnp.array([curr_player_x+6, curr_player_y-2, 1, state.step_counter]),
         state.player_zapper_position,
     )
+    
+    new_deactive_zapper = jnp.array([
+        state.player_zapper_position[0],
+        state.player_zapper_position[1],
+        0,
+        state.player_zapper_position[3]
+    ])
+    
+    new_active_zapper = jnp.array([
+        state.player_zapper_position[0],
+        state.player_zapper_position[1],
+        1,
+        state.player_zapper_position[3]
+    ])
 
-    new_zapper = jnp.where(
-        jnp.abs(state.step_counter - new_zapper[3]) > 10, # TODO find this value exactly
-        jnp.array([0, 0, 0, 0]),
+
+    delta = jnp.abs(state.step_counter - new_zapper[3])
+
+    out_zapper = jnp.where(
+        delta < 10,
         new_zapper,
+        jnp.where(
+            delta < 25,
+            new_deactive_zapper,
+            jnp.where(
+                delta < 40,
+                new_active_zapper,
+                jnp.array([0, 0, 0, 0])
+            )
+        )
     )
 
-    return new_zapper
+    return out_zapper
 
 @jax.jit
 def enemy_step(state: WordZapperState) -> Tuple[chex.Array, chex.PRNGKey]:
@@ -945,17 +976,18 @@ class WordZapperRenderer(AtraJaxisRenderer):
         )
 
         # render player zapper
-        frame_pl_zapper = aj.get_sprite_frame(SPRITE_PL_MISSILE, state.step_counter)
+        zapper_spr = jnp.full((ZAPPER_SPR_WIDTH, ZAPPER_SPR_HEIGHT, 4), jnp.asarray(ZAPPER_COLOR, dtype=jnp.uint8), dtype=jnp.uint8)
 
         raster = jax.lax.cond(
-            state.player_zapper_position[2], # check active
-            lambda r: aj.render_at(
+            state.player_zapper_position[2],
+            lambda r : aj.render_at(
                 r,
                 state.player_zapper_position[0],
-                state.player_zapper_position[1],
-                frame_pl_zapper,
+                MAX_ZAPPER_POS,
+                zapper_spr * (jnp.arange(ZAPPER_SPR_HEIGHT) < state.player_zapper_position[1] - MAX_ZAPPER_POS).astype(jnp.uint8)[None, :, None]
+                # this is used to mask parts of zapper_spr, as it is longer to make impression of dynamic length
             ),
-            lambda r: r,
+            lambda r : r,
             raster,
         )
 
