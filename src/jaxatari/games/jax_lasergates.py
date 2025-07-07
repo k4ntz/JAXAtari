@@ -58,6 +58,12 @@ MAX_ENERGY = 5100
 MAX_SHIELDS = 24
 MAX_DTIME = 10200
 
+ALLOW_ENERGY_POD_PERCENTAGE = 0.3 # The energy pod is allowed to spawn (one in 7 to 8 chance) when current energy is smaller than ALLOW_ENERGY_POD_PERCENTAGE * MAX_ENERGY
+ALLOW_DETONATOR_PERCENTAGE = 0.3 # The detonator is allowed to spawn (one in 7 to 8 chance) when current energy is smaller than ALLOW_DETONATOR_PERCENTAGE * MAX_DTIME
+
+ENERGY_POD_SPAWN_PROBABILITY = 0.4 # If energy pod spawning is allowed, this is the probability for the energy pod to be the next entity spawned.
+DETONATOR_SPAWN_PROBABILITY = 0.4 # If detonator spawning is allowed, this is the probability for the detonator to be the next entity spawned.
+
 # -------- Player missile constants --------
 PLAYER_MISSILE_SIZE = (16, 1) # Width, Height
 PLAYER_MISSILE_BASE_COLOR = (140, 79, 24, 255) # Initial color of player missile. Every value except for transparency is incremented by the missiles velocity * PLAYER_MISSILE_COLOR_CHANGE_SPEED
@@ -248,6 +254,7 @@ class ForceFieldState(NamedTuple):
     y4: chex.Array
     x5: chex.Array
     y5: chex.Array
+    rightmost_x: chex.Array
     num_of_forcefields: chex.Array
     is_wide: jnp.bool
     is_flexing: jnp.bool
@@ -566,7 +573,6 @@ def maybe_initialize_random_entity(entities, state):
     active_event = jnp.any(all_is_in_current_event_flags) # If there is an entity that is in the current event
 
     def initialize_radar_mortar(entities):
-
         top_or_bot = jax.random.bernoulli(key_intern)
 
         new_radar_mortar_state = RadarMortarState(
@@ -582,7 +588,6 @@ def maybe_initialize_random_entity(entities, state):
         return entities._replace(radar_mortar_state=new_radar_mortar_state)
 
     def initialize_byte_bat(entities):
-
         initial_direction_is_up = jnp.bool(BYTE_BAT_SPAWN_Y < BYTE_BAT_UPPER_BORDER_Y)
         new_byte_bat_state = ByteBatState(
             is_in_current_event=jnp.bool(True),
@@ -595,7 +600,6 @@ def maybe_initialize_random_entity(entities, state):
         return entities._replace(byte_bat_state=new_byte_bat_state)
 
     def initialize_rock_muncher(entities):
-
         initial_direction_is_up = jnp.bool(ROCK_MUNCHER_SPAWN_Y < ROCK_MUNCHER_UPPER_BORDER_Y)
         new_rock_muncher_state = RockMuncherState(
             is_in_current_event=jnp.bool(True),
@@ -610,7 +614,6 @@ def maybe_initialize_random_entity(entities, state):
         return entities._replace(rock_muncher_state=new_rock_muncher_state)
 
     def initialize_homing_missile(entities):
-
         initial_y_position = jax.random.randint(key_intern, (), HOMING_MISSILE_Y_BOUNDS[0], HOMING_MISSILE_Y_BOUNDS[1])
         new_homing_missile_state = HomingMissileState(
             is_in_current_event=jnp.bool(True),
@@ -622,7 +625,6 @@ def maybe_initialize_random_entity(entities, state):
         return entities._replace(homing_missile_state=new_homing_missile_state)
 
     def initialize_forcefield(entities):
-
         key_num_of_ff, key_type_of_ff, key_is_wide = jax.random.split(key_intern, 3)
         number_of_forcefields = jax.random.randint(key_num_of_ff, (), minval=1, maxval=5) # Spawn 1 to 4 forcefields at a time.
 
@@ -649,6 +651,7 @@ def maybe_initialize_random_entity(entities, state):
             y4=jnp.where(init_is_flexing, -10, jnp.where(init_is_fixed, -20, -17)).astype(jnp.float32),
             x5=jnp.array(WIDTH, dtype=jnp.float32),
             y5=jnp.where(init_is_flexing, 65, jnp.where(init_is_fixed, 65, 56)).astype(jnp.float32),
+            rightmost_x=jnp.array(WIDTH, dtype=jnp.float32),
             num_of_forcefields=jnp.array(number_of_forcefields),
             is_wide=init_is_wide,
             is_flexing=init_is_flexing,
@@ -660,7 +663,6 @@ def maybe_initialize_random_entity(entities, state):
         return entities._replace(forcefield_state=new_forcefield_state)
 
     def initialize_densepack(entities):
-
         initial_is_wide = jax.random.bernoulli(key_intern, p=DENSEPACK_IS_WIDE_PROBABILITY)
 
         new_densepack_state = entities.dense_pack_state._replace(
@@ -706,7 +708,10 @@ def maybe_initialize_random_entity(entities, state):
     ] # All initialize functions of all entity types
 
     def initialize_random_entity(_):
-        picked_index = jax.random.randint(key_pick_type, shape=(), minval=0, maxval=8) # TODO: Change maxval to len(init_fns) when all init functions are implemented
+        key_normal_index, key_energy_pod, key_detonator, key_edge_case = jax.random.split(key_pick_type, 4)
+
+        # Randomly choose one of the entities, except for the energy pod and detonator (see below)
+        picked_index = jax.random.randint(key_normal_index, shape=(), minval=0, maxval=6) # Default: minval=0, maxval=6
         # If you want only one specific entity to spawn, change minval, maxval to:
         # Radar Mortar:     minval=0, maxval=1
         # Byte Bat:         minval=1, maxval=2
@@ -717,8 +722,22 @@ def maybe_initialize_random_entity(entities, state):
         # Detonator:        minval=6, maxval=7
         # Energy pod:       minval=7, maxval=8
 
-        chosen_fn = lambda i: jax.lax.switch(i, init_fns, entities)
-        return chosen_fn(picked_index) # Initialize function of randomly picked entity
+        # Allow spawning of detonator or energy pod, if values in state are low enough
+        allow_spawn_detonator = state.dtime < (ALLOW_DETONATOR_PERCENTAGE * MAX_DTIME)
+        allow_spawn_energy_pod = state.energy < (ALLOW_ENERGY_POD_PERCENTAGE * MAX_ENERGY)
+        # Spawn detonator or energy pod if is allowed and probability is hit
+        spawn_detonator = jnp.where(allow_spawn_detonator, jax.random.bernoulli(key_detonator, p=DETONATOR_SPAWN_PROBABILITY), jnp.bool(False))
+        spawn_energy_pod = jnp.where(allow_spawn_energy_pod, jax.random.bernoulli(key_energy_pod, p=ENERGY_POD_SPAWN_PROBABILITY), jnp.bool(False))
+        # Spawn detonator or energy pod
+        picked_index = jnp.where(spawn_detonator, 6, picked_index)
+        picked_index = jnp.where(spawn_energy_pod, 7, picked_index)
+        # In the rare case that both detonator and energy pod are spawned, reroll
+        picked_index = jnp.where(jnp.logical_and(spawn_detonator, spawn_energy_pod),
+        jnp.where(jax.random.bernoulli(key_edge_case), 6, 7),
+        picked_index)
+
+        # Call initialize function of picked entity
+        return jax.lax.switch(picked_index, init_fns, entities) # Initialize function of randomly picked entity
 
     return jax.lax.cond(
         active_event,
@@ -1143,12 +1162,13 @@ def all_entities_step(game_state: LaserGatesState) -> EntitiesState:
         number_of_forcefields = ff.num_of_forcefields
         new_x0, new_x1, new_x2, new_x3, new_x4, new_x5 = ff.x0, ff.x1, ff.x2, ff.x3, ff.x4, ff.x5
         new_y0, new_y1, new_y2, new_y3, new_y4, new_y5 = ff.y0, ff.y1, ff.y2, ff.y3, ff.y4, ff.y5
+        scroll_speed = state.scroll_speed
 
         # Flashing --------------
         new_flash_on = jnp.where(jnp.logical_and(state.step_counter % FORCEFIELD_FLASHING_SPEED == 0, is_flashing), jnp.logical_not(ff.flash_on), ff.flash_on)
         is_flashing_and_alive = jnp.logical_and(is_flashing, ff.is_alive)
 
-        new_x0 = jnp.where(is_flashing_and_alive, new_x0 - state.scroll_speed, new_x0) # First forcefield upper
+        new_x0 = jnp.where(is_flashing_and_alive, new_x0 - scroll_speed, new_x0) # First forcefield upper
         new_x1 = jnp.where(is_flashing_and_alive, new_x0, new_x1) # First forcefield lower
 
         new_x2 = jnp.where(jnp.logical_and(is_flashing_and_alive, number_of_forcefields > 1), new_x0 + FORCEFIELD_FLASHING_SPACING, new_x2)
@@ -1163,7 +1183,7 @@ def all_entities_step(game_state: LaserGatesState) -> EntitiesState:
         new_flex_upper_direction_is_up = jnp.where(distance <= FORCEFIELD_FLEXING_MINIMUM_DISTANCE, jnp.bool(True), jnp.where(distance >= FORCEFIELD_FLEXING_MAXIMUM_DISTANCE, jnp.bool(False), ff.flex_upper_direction_is_up))
         is_flexing_and_alive = jnp.logical_and(is_flexing, ff.is_alive)
 
-        new_x0 = jnp.where(is_flexing_and_alive, new_x0 - state.scroll_speed, new_x0)
+        new_x0 = jnp.where(is_flexing_and_alive, new_x0 - scroll_speed, new_x0)
         new_y0 = jnp.where(is_flexing_and_alive, jnp.where(new_flex_upper_direction_is_up, new_y0 - FORCEFIELD_FLEXING_SPEED, new_y0 + FORCEFIELD_FLEXING_SPEED), new_y0) # First forcefield upper
         new_x1 = jnp.where(is_flexing_and_alive, new_x0, new_x1)
         new_y1 = jnp.where(is_flexing_and_alive, jnp.where(new_flex_upper_direction_is_up, new_y1 + FORCEFIELD_FLEXING_SPEED, new_y1 - FORCEFIELD_FLEXING_SPEED), new_y1) # First forcefield lower
@@ -1182,9 +1202,9 @@ def all_entities_step(game_state: LaserGatesState) -> EntitiesState:
         new_fixed_upper_direction_is_up = jnp.where(new_y0 < FORCEFIELD_FIXED_UPPER_BOUND, jnp.bool(False), jnp.where(new_y0 > FORCEFIELD_FIXED_LOWER_BOUND, jnp.bool(True), ff.fixed_upper_direction_is_up))
         is_fixed_and_alive = jnp.logical_and(is_fixed, ff.is_alive)
 
-        new_x0 = jnp.where(is_fixed_and_alive, new_x0 - state.scroll_speed, new_x0)
+        new_x0 = jnp.where(is_fixed_and_alive, new_x0 - scroll_speed, new_x0)
         new_y0 = jnp.where(is_fixed_and_alive, jnp.where(new_fixed_upper_direction_is_up, new_y0 - FORCEFIELD_FIXED_SPEED, new_y0 + FORCEFIELD_FIXED_SPEED), new_y0) # First forcefield upper
-        new_x1 = jnp.where(is_fixed_and_alive, new_x1 - state.scroll_speed, new_x1)
+        new_x1 = jnp.where(is_fixed_and_alive, new_x1 - scroll_speed, new_x1)
         new_y1 = jnp.where(is_fixed_and_alive, jnp.where(new_fixed_upper_direction_is_up, new_y1 - FORCEFIELD_FIXED_SPEED, new_y1 + FORCEFIELD_FIXED_SPEED), new_y1) # First forcefield lower
 
         new_x2 = jnp.where(jnp.logical_and(is_fixed_and_alive, number_of_forcefields > 1), new_x0 + FORCEFIELD_FIXED_SPACING, new_x2)
@@ -1255,6 +1275,7 @@ def all_entities_step(game_state: LaserGatesState) -> EntitiesState:
             y4=new_y4.astype(ff.y4.dtype),
             x5=new_x5.astype(ff.x5.dtype),
             y5=new_y5.astype(ff.y5.dtype),
+            rightmost_x=rightmost_x.astype(ff.rightmost_x.dtype),
             flash_on=new_flash_on,
             flex_upper_direction_is_up=new_flex_upper_direction_is_up,
             fixed_upper_direction_is_up=new_fixed_upper_direction_is_up,
@@ -1379,7 +1400,7 @@ def all_entities_step(game_state: LaserGatesState) -> EntitiesState:
             collision_with_player_missile=collision_with_player_missile,
             is_big_collision=jnp.bool(True),
             is_ff_or_dp=jnp.bool(True),
-            score_to_add=jnp.array(0), # TODO score
+            score_to_add=jnp.array(400),
             death_timer=new_death_timer,
         )
 
@@ -2018,6 +2039,7 @@ class JaxLaserGates(JaxEnvironment[LaserGatesState, LaserGatesObservation, Laser
                 y4=jnp.array(0, dtype=jnp.float32),
                 x5=jnp.array(0, dtype=jnp.float32),
                 y5=jnp.array(0, dtype=jnp.float32),
+                rightmost_x=jnp.array(0, dtype=jnp.float32),
                 num_of_forcefields=jnp.array(0),
                 is_wide=jnp.bool(False),
                 is_flexing=jnp.bool(False),
@@ -2112,7 +2134,7 @@ class JaxLaserGates(JaxEnvironment[LaserGatesState, LaserGatesObservation, Laser
         # -------- Check bound and entity collisions --------
         upper_player_collision, lower_player_collision, player_missile_collision = check_player_and_player_missile_collision_bounds(state)
         collision_with_player = jnp.logical_and(jnp.logical_not(state.entities.collision_properties_state.collision_with_player), new_entities.collision_properties_state.collision_with_player) # Only allow flag to be True once per collision
-        # Do not register as "bad" collision if collision with energy pod. Instead save as own variable
+        # Do not register as "bad" collision if collision with energy pod. Instead, save as own variable
         collision_with_energy_pod = jnp.where(new_entities.collision_properties_state.is_energy_pod, collision_with_player, jnp.bool(False))
         collision_with_player = jnp.where(new_entities.collision_properties_state.is_energy_pod, jnp.bool(False), collision_with_player)
 
@@ -2132,7 +2154,8 @@ class JaxLaserGates(JaxEnvironment[LaserGatesState, LaserGatesObservation, Laser
                                              direction=jnp.where(kill_missile, jnp.array(0).astype(new_player_missile_state.direction.dtype), new_player_missile_state.direction),
                                              velocity=jnp.where(kill_missile, jnp.array(0).astype(new_player_missile_state.velocity.dtype), new_player_missile_state.velocity)
                                              )
-
+        # Register player missile collision with detonator pin for restoring dtime
+        player_missile_collision_detonator_pin = jnp.logical_and(new_entities.collision_properties_state.collision_with_player_missile, new_entities.detonator_state.collision_is_pin)
 
         # -------- Update energy, score, shields and d-time --------
 
@@ -2146,6 +2169,12 @@ class JaxLaserGates(JaxEnvironment[LaserGatesState, LaserGatesObservation, Laser
         allow_score_change = jnp.logical_and(new_entities.collision_properties_state.collision_with_player_missile, jnp.logical_not(state.entities.collision_properties_state.is_ff_or_dp))
         # Forbid score change if detonator is not hit with a missile at a pin
         allow_score_change = jnp.where(new_entities.collision_properties_state.is_detonator, new_entities.detonator_state.collision_is_pin, allow_score_change)
+        # Allow change if forcefield or densepack is passed (rightmost x position (ff) or x position (dp) crossed the x=1 line)
+        allow_score_change_dp_ff = jnp.logical_or(
+            jnp.logical_and(new_entities.forcefield_state.rightmost_x <= 1, state.entities.forcefield_state.rightmost_x > 1),
+            jnp.logical_and(new_entities.dense_pack_state.x <= 1, state.entities.dense_pack_state.x > 1))
+        allow_score_change = jnp.where(state.entities.collision_properties_state.is_ff_or_dp, allow_score_change_dp_ff, allow_score_change)
+
         # Add score based on entity if allowed
         new_score = jnp.where(allow_score_change, state.score + new_entities.collision_properties_state.score_to_add, state.score)
 
@@ -2157,6 +2186,11 @@ class JaxLaserGates(JaxEnvironment[LaserGatesState, LaserGatesObservation, Laser
                                 new_shields - jnp.where(new_entities.collision_properties_state.is_big_collision, 6, 1),
                                 new_shields)
         # TODO: Gain 6 shield points for every 10000 points scored
+
+        # Drain dtime every frame
+        new_dtime = state.dtime - 1
+        # Restore dtime if player shot detonator pin
+        new_dtime = jnp.where(player_missile_collision_detonator_pin, MAX_DTIME, new_dtime)
 
         # -------- New rng key --------
         new_rng_key, new_key = jax.random.split(state.rng_key)
@@ -2174,6 +2208,7 @@ class JaxLaserGates(JaxEnvironment[LaserGatesState, LaserGatesObservation, Laser
             score=new_score,
             energy=new_energy,
             shields=new_shields,
+            dtime=new_dtime,
             rng_key=new_rng_key,
             step_counter=state.step_counter + 1
         )
@@ -2248,7 +2283,7 @@ class LaserGatesRenderer(AtraJaxisRenderer):
             recolor_sprite(SPRITE_PLAYING_FIELD_BG, PLAYING_FIELD_COLOR),
         )
 
-        # -------- Render Entity Death Sprites --------
+        # -------- Render Entity Death Sprites -------- TODO Show added score in death sprite
 
         # Death sprites
         death_sprite_index = get_death_sprite_index(state.entities.collision_properties_state.death_timer, ENTITY_DEATH_ANIMATION_TIMER)
