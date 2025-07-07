@@ -2198,7 +2198,11 @@ class JaxLaserGates(JaxEnvironment[LaserGatesState, LaserGatesObservation, Laser
         new_shields = jnp.where(collision_with_player,
                                 new_shields - jnp.where(new_entities.collision_properties_state.is_big_collision, 6, 1),
                                 new_shields)
-        # TODO: Gain 6 shield points for every 10000 points scored
+        # Clip to minimum and maximum value
+        new_shields = jnp.clip(new_shields, 0, MAX_SHIELDS)
+        # Add 6 shield points every 10000 score points
+        crossed_10k = jnp.array(state.score/10000).astype(jnp.int32) < jnp.array(new_score/10000).astype(jnp.int32)
+        new_shields += jnp.where(crossed_10k,6,0)
 
         # Drain dtime every frame
         new_dtime = state.dtime - 1
