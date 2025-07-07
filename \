@@ -1,7 +1,6 @@
 import os
 from functools import partial
 from typing import NamedTuple, Tuple
-from jax._src.core import reset_trace_state
 import jax.lax
 import jax.numpy as jnp
 import chex
@@ -44,11 +43,10 @@ MAX_BOUND = (WIDTH, HEIGHT)
 X_BORDERS = (0, 160)
 
 # letters to apper and disapper
-LETTER_VISIBLE_MIN_X = 36   # Letters become visible at
-LETTER_VISIBLE_MAX_X = 124  # Letters disappear at
-LETTER_RESET_X = 5 # at this coordinate letters reset back to right ! only coordinates change not real reset
-LETTERS_DISTANCE = 14 # spacing between letters
-LETTERS_END = LETTER_VISIBLE_MIN_X + 26 * LETTERS_DISTANCE # 27 symbols (letters + special) but 26 gaps
+LETTER_VISIBLE_MIN_X = 36   # Letters become visible at x >= 20
+LETTER_VISIBLE_MAX_X = 124  # Letters disappear at x > 120
+LETTER_RESET_X = 5
+LETTER_RESET_TO_X = LETTER_RESET_X + 365 # change this value, so it changes according to list size
 
 # Enemies
 MAX_ENEMIES = 6
@@ -397,16 +395,15 @@ def player_step(
 
     return player_x, player_y, player_direction
 
-
+LETTERS_DISTANCE = 14
+LETTERS_END = LETTER_VISIBLE_MIN_X + 26 * LETTERS_DISTANCE
 @jax.jit
 def scrolling_letters(letters_x, letters_speed, letters_alive):
     new_letters_x = letters_x - letters_speed
 
-    reset_x = jnp.max(new_letters_x) + LETTERS_DISTANCE
-
     new_letters_x = jnp.where(
         new_letters_x < LETTER_RESET_X,
-        reset_x,
+        jnp.max(new_letters_x) + LETTERS_DISTANCE,
         new_letters_x
     )
     return new_letters_x
