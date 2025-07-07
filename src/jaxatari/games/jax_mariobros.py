@@ -85,7 +85,7 @@ class GameState(NamedTuple):  # Enemy movement
     enemy_initial_sides: jnp.ndarray  # shape (N,): 0=spawned on left, 1=spawned on right
     enemy_delay_timer: jnp.ndarray  # shape (N,), counts frames until enemy starts moving
     enemy_init_positions: jnp.ndarray  # shape (N,2): initial spawn positions of enemies  <--- add this
-    pow_hits: int  # scalar: number of times the POW block has been hit (0–3)
+    pow_block_counter: int  # scalar: number of hits remaining on the POW block
     enemy_status: jnp.ndarray
     score: int
 
@@ -615,9 +615,12 @@ class MarioBrosRenderer(AtraJaxisRenderer):
 
         image = lax.fori_loop(0, PLATFORMS.shape[0], draw_platform, image)
 
-        # --- Draw POW block ---
-        powb = POW_BLOCK[0]
-        image = draw_rect(image, powb[0], powb[1], powb[2], powb[3], POW_COLOR)
+        # --- Draw POW block only if hits < 3 ---
+        def draw_pow(img):
+            x, y, w, h = POW_BLOCK[0]
+            return draw_rect(img, x, y, w, h, POW_COLOR)
+
+        image = lax.cond(state.game.pow_block_counter > 0, draw_pow, lambda img: img, image)
 
         # --- Draw lives ---
         def draw_life(i, img):
@@ -728,7 +731,7 @@ class JaxMarioBros(JaxEnvironment[
                 enemy_initial_sides=jnp.array([0, 1, 0]),  # 3rd enemy same side as enemy 1
                 enemy_delay_timer=jnp.array([0, 200, 0]),
                 enemy_init_positions=jnp.array([enemy1_pos, enemy2_pos, enemy1_pos]),
-                pow_hits=jnp.int32(0),
+                pow_block_counter=jnp.int32(3),
                 enemy_status = enemy_status,
                 score = jnp.int32(0)
         ),
@@ -836,8 +839,13 @@ class JaxMarioBros(JaxEnvironment[
             new_enemy_delay_timer = jnp.minimum(state.game.enemy_delay_timer + 1, ENEMY_SPAWN_FRAMES)
 
             # 5) POW hit logic and platform bump detection
-            pow_hit = pow_bumped
-            new_pow_hits = jnp.minimum(state.game.pow_hits + pow_hit, 3)
+            # only count hits if we haven't hit it 3 times yet
+            pow_hit = pow_bumped & (state.game.pow_block_counter > 0)
+            new_pow_block_counter = jnp.maximum(state.game.pow_block_counter - pow_hit, 0)
+            jax.lax.cond(state.game.pow_block_counter == new_pow_block_counter, 
+                         lambda _: None,  # No action if no POW hit
+                         lambda _: jax.debug.print("POW block hit!"),  # Debug print for POW hit
+                         operand=None)
             bumped_idx_final = jnp.where(pow_hit, -2, bumped_idx)
 
             # 6) Toggle enemy status for bumped platforms/POW (strong <-> weak)
@@ -920,7 +928,7 @@ class JaxMarioBros(JaxEnvironment[
                 enemy_initial_sides=sides,
                 enemy_delay_timer=new_enemy_delay_timer,
                 enemy_init_positions=state.game.enemy_init_positions,
-                pow_hits=new_pow_hits,
+                pow_block_counter=new_pow_block_counter,
                 enemy_status=enemy_status_after_hit,
                 score = new_score
             )
