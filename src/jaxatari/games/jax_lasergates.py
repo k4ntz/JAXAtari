@@ -54,9 +54,9 @@ PLAYER_START_Y = 52 # Y Spawn position of player
 PLAYER_VELOCITY_Y = 1.5 # Y Velocity of player
 PLAYER_VELOCITY_X = 1.3 # X Velocity of player
 
-MAX_ENERGY = 5100
-MAX_SHIELDS = 24
-MAX_DTIME = 10200
+MAX_ENERGY = 5100 # As the manual says, energy is consumed at a regular pace. We use 5100 for the initial value and subtract one for every frame to match the timing of the real game. (It takes 85 seconds for the energy to run out. 85 * 60 (fps) = 5100
+MAX_SHIELDS = 24 # As the manual says, the Dante Dart starts with 24 shield units
+MAX_DTIME = 10200 # Same idea as energy.
 
 ALLOW_ENERGY_POD_PERCENTAGE = 0.3 # The energy pod is allowed to spawn (one in 7 to 8 chance) when current energy is smaller than ALLOW_ENERGY_POD_PERCENTAGE * MAX_ENERGY
 ALLOW_DETONATOR_PERCENTAGE = 0.3 # The detonator is allowed to spawn (one in 7 to 8 chance) when current energy is smaller than ALLOW_DETONATOR_PERCENTAGE * MAX_DTIME
@@ -77,11 +77,13 @@ SHIELD_LOSS_COL_SMALL = 1 # see game manual, different collision lose a differen
 SHIELD_LOSS_COL_BIG = 6
 
 # -------- Entity constants (constants that apply to all entity types --------
-NUM_ENTITY_TYPES = 8 # How many different (!) entity types there are
 ENTITY_DEATH_SPRITES_SIZE = (8, 45) # Width, Height
-ENTITY_DEATH_SPRITE_Y_OFFSET = 10 # Y offset to add to the death sprite (the constant is being added to the y coordinate)
 ENTITY_MISSILE_SIZE = (4, 1) # Width, Height
+
+NUM_ENTITY_TYPES = 8 # How many different (!) entity types there are
+ENTITY_DEATH_SPRITE_Y_OFFSET = 7 # Y offset to add to the death sprite (the constant is being added to the y coordinate)
 ENTITY_DEATH_ANIMATION_TIMER = 100 # Duration of death sprite animation in frames
+ENTITY_DEATH_SPRITES_NUMBER_COLOR = (117, 117, 213, 255)
 
 # -------- Radar mortar constants --------
 RADAR_MORTAR_SIZE = (8, 26) # Width, Height
@@ -162,31 +164,31 @@ FORCEFIELD_FIXED_UPPER_BOUND = -FORCEFIELD_SIZE[1] + 33 # Highest allowed y posi
 FORCEFIELD_FIXED_LOWER_BOUND = -FORCEFIELD_SIZE[1] + 68 # Lowest allowed y position for forcefields while fixed
 
 # -------- Densepack constants --------
-DENSEPACK_NORMAL_PART_SIZE = (8, 4)
-DENSEPACK_WIDE_PART_SIZE  = (16, 4)
+DENSEPACK_NORMAL_PART_SIZE = (8, 4) # Width, Height of a single, normal densepack part in a normal densepack column
+DENSEPACK_WIDE_PART_SIZE  = (16, 4) # Width, Height of a single, wide densepack part in a wide densepack column
 DENSEPACK_COLOR = (142, 142, 142, 255)
 
 DENSEPACK_NUMBER_OF_PARTS = 19 # number of segments in the densepack
-DENSEPACK_IS_WIDE_PROBABILITY = 0.4
+DENSEPACK_IS_WIDE_PROBABILITY = 0.4 # Probability that a spawned densepack is wide
 
 # -------- Detonator constants --------
-DETONATOR_SIZE = (8, 73)
+DETONATOR_SIZE = (8, 73) # TODO this is the whole sprite, hitbox of non pin dentonator is smaller
 DETONATOR_COLOR = (142, 142, 142, 255)
 
 # -------- Energy pod constants --------
-ENERGY_POD_SIZE = (6, 4)
-ENERGY_POD_COLOR_GREEN = (84, 171, 96, 255)
-ENERGY_POD_COLOR_GRAY = (142, 142, 142, 255)
+ENERGY_POD_SIZE = (6, 4) # Width, Height
+ENERGY_POD_COLOR_GREEN = (84, 171, 96, 255) # Energy pod color in green frame
+ENERGY_POD_COLOR_GRAY = (142, 142, 142, 255) # Energy pod color in gray frame
 
 ENERGY_POD_ANIMATION_SPEED = 16 # Higher is slower
 
 # -------- GUI constants --------
-GUI_COLORED_BACKGROUND_SIZE = (128, 12)
-GUI_BLACK_BACKGROUND_SIZE = (56, 10)
-GUI_TEXT_SCORE_SIZE = (21, 7)
-GUI_TEXT_ENERGY_SIZE = (23, 5)
-GUI_TEXT_SHIELDS_SIZE = (23, 5)
-GUI_TEXT_DTIME_SIZE = (23, 5)
+GUI_COLORED_BACKGROUND_SIZE = (128, 12) # Width, Height of colored background of black rectangle background
+GUI_BLACK_BACKGROUND_SIZE = (56, 10) # Width, Height of black background of text
+GUI_TEXT_SCORE_SIZE = (21, 7) # Width, Height of "Score" text
+GUI_TEXT_ENERGY_SIZE = (23, 5) # Width, Height of "Energy" text
+GUI_TEXT_SHIELDS_SIZE = (23, 5) # Width, Height of "Shields" text
+GUI_TEXT_DTIME_SIZE = (23, 5) # Width, Height of "Dtime" text
 
 GUI_COLORED_BACKGROUND_COLOR_BLUE = (47, 90, 160, 255)
 GUI_COLORED_BACKGROUND_COLOR_GREEN = (50, 152, 82, 255)
@@ -408,6 +410,11 @@ def load_sprites():
 
     lower_death_sprites = jnp.concatenate(lower_death_sprites_temp, axis=0)
 
+    death_sprite_number_325 = aj.loadFrame(os.path.join(MODULE_DIR, "sprites/lasergates/enemies/enemy_death/numbers/325.npy"))
+    death_sprite_number_525 = aj.loadFrame(os.path.join(MODULE_DIR, "sprites/lasergates/enemies/enemy_death/numbers/525.npy"))
+    death_sprite_number_bg = aj.loadFrame(os.path.join(MODULE_DIR, "sprites/lasergates/enemies/enemy_death/numbers/background.npy"))
+
+
     # Radar mortar
     radar_mortar_frame_left = aj.loadFrame(os.path.join(MODULE_DIR, "sprites/lasergates/enemies/radar_mortar/1.npy"))
     radar_mortar_frame_middle = aj.loadFrame(os.path.join(MODULE_DIR, "sprites/lasergates/enemies/radar_mortar/2.npy"))
@@ -480,6 +487,9 @@ def load_sprites():
         entity_missile,
         upper_death_sprites,
         lower_death_sprites,
+        death_sprite_number_325,
+        death_sprite_number_525,
+        death_sprite_number_bg,
         radar_mortar_sprites,
         byte_bat_sprites,
         rock_muncher_sprites,
@@ -520,6 +530,9 @@ def load_sprites():
     SPRITE_ENTITY_MISSILE,
     SPRITE_UPPER_DEATH_SPRITES,
     SPRITE_LOWER_DEATH_SPRITES,
+    SPRITE_DEATH_NUMBER_325,
+    SPRITE_DEATH_NUMBER_525,
+    SPRITE_DEATH_NUMBER_BG,
     SPRITE_RADAR_MORTAR,
     SPRITE_BYTE_BAT,
     SPRITE_ROCK_MUNCHER,
@@ -2100,7 +2113,7 @@ class JaxLaserGates(JaxEnvironment[LaserGatesState, LaserGatesObservation, Laser
             shields=jnp.array(MAX_SHIELDS), # As the manual says, the Dante Dart starts with 24 shield units
             dtime=jnp.array(MAX_DTIME), # Same idea as energy.
             scroll_speed=jnp.array(SCROLL_SPEED),
-            rng_key=new_key0,  # Pseudo random number generator seed key, based on current time and initial key used.
+            rng_key=new_key0, # Pseudo random number generator seed key, based on current time and initial key used.
             step_counter=jnp.array(0),
         )
 
@@ -2283,7 +2296,7 @@ class LaserGatesRenderer(AtraJaxisRenderer):
             recolor_sprite(SPRITE_PLAYING_FIELD_BG, PLAYING_FIELD_COLOR),
         )
 
-        # -------- Render Entity Death Sprites -------- TODO Show added score in death sprite
+        # -------- Render Entity Death Sprites --------
 
         # Death sprites
         death_sprite_index = get_death_sprite_index(state.entities.collision_properties_state.death_timer, ENTITY_DEATH_ANIMATION_TIMER)
@@ -2331,17 +2344,34 @@ class LaserGatesRenderer(AtraJaxisRenderer):
 
         # Rock muncher
         rmu_state = state.entities.rock_muncher_state
+        rmu_x = rmu_state.x
+        rmu_y = rmu_state.y
         raster = jnp.where(jnp.logical_and(rmu_state.is_in_current_event, jnp.logical_and(jnp.logical_not(rmu_state.is_alive), state.entities.collision_properties_state.death_timer > 0)),
                            aj.render_at(
-                               aj.render_at(
-                                   raster,
-                                   rmu_state.x,
-                                   rmu_state.y + ENTITY_DEATH_SPRITE_Y_OFFSET,
-                                   death_sprite_upper_frame,
-                               ),
-                               rmu_state.x,
-                               rmu_state.y - ENTITY_DEATH_SPRITES_SIZE[1] + ENTITY_DEATH_SPRITE_Y_OFFSET,
-                               death_sprite_lower_frame,
+                                aj.render_at(
+                                    aj.render_at(
+                                        aj.render_at(
+                                            aj.render_at(
+                                                raster,
+                                                rmu_x,
+                                                rmu_y + ENTITY_DEATH_SPRITE_Y_OFFSET,
+                                                death_sprite_upper_frame, # Upper death animation
+                                            ),
+                                            rmu_x,
+                                            rmu_y - ENTITY_DEATH_SPRITES_SIZE[1] + ENTITY_DEATH_SPRITE_Y_OFFSET,
+                                            death_sprite_lower_frame, # Lower death animation
+                                        ),
+                                        rmu_x,
+                                        rmu_y + 2,
+                                        SPRITE_DEATH_NUMBER_BG # Black background two layers behind the number
+                                    ),
+                                    rmu_x,
+                                    rmu_y + 2,
+                                    recolor_sprite(SPRITE_DEATH_NUMBER_BG, PLAYING_FIELD_COLOR), # Black background mimicing playing field bg for number
+                                ),
+                               rmu_x,
+                               rmu_y + 2,
+                               recolor_sprite(SPRITE_DEATH_NUMBER_325, jnp.array(ENTITY_DEATH_SPRITES_NUMBER_COLOR)), # Number showing the score
                            ),
                            # Case: in event but dead and death animation over -> do not render
                            raster
@@ -2349,18 +2379,35 @@ class LaserGatesRenderer(AtraJaxisRenderer):
 
         # Homing missile
         hm_state = state.entities.homing_missile_state
+        hm_x = hm_state.x
+        hm_y = hm_state.y
         raster = jnp.where(jnp.logical_and(hm_state.is_in_current_event, jnp.logical_and(jnp.logical_not(hm_state.is_alive), state.entities.collision_properties_state.death_timer > 0)),
-                           aj.render_at(
-                               aj.render_at(
-                                   raster,
-                                   hm_state.x,
-                                   hm_state.y + ENTITY_DEATH_SPRITE_Y_OFFSET,
-                                   death_sprite_upper_frame,
-                               ),
-                               hm_state.x,
-                               hm_state.y - ENTITY_DEATH_SPRITES_SIZE[1] + ENTITY_DEATH_SPRITE_Y_OFFSET,
-                               death_sprite_lower_frame,
-                           ),
+                            aj.render_at(
+                                aj.render_at(
+                                    aj.render_at(
+                                        aj.render_at(
+                                            aj.render_at(
+                                                raster,
+                                                hm_x,
+                                                hm_y + ENTITY_DEATH_SPRITE_Y_OFFSET,
+                                                death_sprite_upper_frame, # Upper death animation
+                                            ),
+                                            hm_x,
+                                            hm_y - ENTITY_DEATH_SPRITES_SIZE[1] + ENTITY_DEATH_SPRITE_Y_OFFSET,
+                                            death_sprite_lower_frame, # Lower death animation
+                                        ),
+                                        hm_x,
+                                        hm_y + 1,
+                                        SPRITE_DEATH_NUMBER_BG # Black background two layers behind the number
+                                    ),
+                                    hm_x,
+                                    hm_y + 1,
+                                    recolor_sprite(SPRITE_DEATH_NUMBER_BG, PLAYING_FIELD_COLOR), # Black background mimicing playing field bg for number
+                                ),
+                                hm_x,
+                                hm_y + 1,
+                                recolor_sprite(SPRITE_DEATH_NUMBER_525, jnp.array(ENTITY_DEATH_SPRITES_NUMBER_COLOR)), # Number showing the score
+                            ),
                            # Case: in event but dead and death animation over -> do not render
                            raster
                            )
