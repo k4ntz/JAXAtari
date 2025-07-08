@@ -849,7 +849,7 @@ REFLECTING_SCENE_OBJECT_LIST = [
     RIGHT_SPINNER_RIGHT_POSITION_RIGHT_PART_2_SCENE_OBJECT,
     MIDDLE_BAR_SCENE_OBJECT,
 ]
-print(len(REFLECTING_SCENE_OBJECT_LIST))
+
 # SCENE_OBJECTS_STACKED = SceneObject(
 #     hit_box_matrix=jnp.stack([obj.hit_box_matrix for obj in SCENE_OBJECT_LIST]),
 #     hit_box_offset=jnp.stack([obj.hit_box_offset for obj in SCENE_OBJECT_LIST]),
@@ -1192,7 +1192,7 @@ def _check_reflecting_obstacle_hits(
     # rollovers (left & atari)
     # spinner
     """
-    # Jax should be able to optimize this (?) (also with a for loop ???)
+    # apparently jax unrolls for loops inside of jitted functions so this should be fine
     hit_points = jnp.stack(
         [_calc_hit_point(ball_movement, scene_object) for scene_object in REFLECTING_SCENE_OBJECT_LIST],
         axis=0,
@@ -1250,8 +1250,10 @@ def _calc_ball_change(ball_x, ball_y, ball_vel_x, ball_vel_y, ball_direction):
 def _calc_ball_collision_loop(
     ball_movement: BallMovement
 ):
+    @jax.jit
     def _body_fun(args: tuple[chex.Array, chex.Array, chex.Array, chex.Array, chex.Array]):
         old_ball_x, old_ball_y, new_ball_x, new_ball_y, compute_flag = args
+        @jax.jit
         def _compute_ball_collision(old_ball_x, old_ball_y, new_ball_x, new_ball_y):
             _ball_movement = BallMovement(
                 old_ball_x=old_ball_x,
@@ -1303,7 +1305,7 @@ def _calc_ball_collision_loop(
         # If there was no collision, set compute_flag to False
         compute_flag = jnp.logical_and(compute_flag, collision)
         return old_ball_x, old_ball_y, new_ball_x, new_ball_y, compute_flag
-    
+    @jax.jit
     def _cond_fun(args: tuple[chex.Array, chex.Array, chex.Array, chex.Array, chex.Array]):
         old_ball_x, old_ball_y, new_ball_x, new_ball_y, compute_flag = args
         #jax.debug.print("Old ball x: {}, y: {}, New ball x: {}, y: {}.  Compute: {}", old_ball_x, old_ball_y, new_ball_x, new_ball_y, compute_flag)
