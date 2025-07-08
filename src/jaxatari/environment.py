@@ -3,7 +3,6 @@ from typing import Tuple, Generic, TypeVar
 import jax.numpy as jnp
 import jax.random as jrandom
 
-#test
 
 EnvObs = TypeVar("EnvObs")
 EnvState = TypeVar("EnvState")
