@@ -1268,28 +1268,13 @@ def _calc_ball_collision_loop(
             # if there was a collision, returned BallMovement is from hit point to reflected position
             # if there was no collision, returned BallMovement will be the original BallMovement
             no_collision = hit_data[0] == T_ENTRY_NO_COLLISION
+            collision = jnp.logical_not(no_collision)
             
-            ball_moved_after_collision = jnp.logical_not(
-                jnp.logical_and(
-                    jnp.abs(hit_data[1] - reflected_ball_x) < 1e-5,
-                    jnp.abs(hit_data[2] - reflected_ball_y) < 1e-5
-            ))
-            # if the ball does not move to a new location after hitting the obstacle, i.e. remains at the
-            # hitpoint, the ball will be moved to a point right before hitting the obstacle and therefore,
-            # it isnt a collision in that case
-            collision = jnp.logical_and(jnp.logical_not(no_collision), ball_moved_after_collision)
-            
-            ball_trajectory_from_hit_point_to_old_x = old_ball_x - hit_data[1]
-            ball_trajectory_from_hit_point_to_old_y = old_ball_y - hit_data[2]
             #jax.debug.print("ballmovement: old x: {}, y: {}, new x: {}, y: {} | hitpoint x: {}, y: {}, horizontal: {} | reflected x: {}, y: {} | collision: {} | moved: {} | trajectory from hit to old: ({}, {}), ", old_ball_x, old_ball_y, new_ball_x, new_ball_y, hit_data[1], hit_data[2], hit_data[3], reflected_ball_x, reflected_ball_y, collision, ball_moved_after_collision, ball_trajectory_from_hit_point_to_old_x, ball_trajectory_from_hit_point_to_old_y)
             old_ball_x = jnp.where(collision, hit_data[1], old_ball_x)
             old_ball_y = jnp.where(collision, hit_data[2], old_ball_y)
             new_ball_x = jnp.where(collision, reflected_ball_x, new_ball_x)
             new_ball_y = jnp.where(collision, reflected_ball_y, new_ball_y)
-            
-            collision_but_no_movement = jnp.logical_and(jnp.logical_not(no_collision), jnp.logical_not(ball_moved_after_collision))
-            new_ball_x = jnp.where(collision_but_no_movement, hit_data[1] + 0.1 * ball_trajectory_from_hit_point_to_old_x, new_ball_x)
-            new_ball_y = jnp.where(collision_but_no_movement, hit_data[2] + 0.1 * ball_trajectory_from_hit_point_to_old_y, new_ball_y)
             
             return old_ball_x, old_ball_y, new_ball_x, new_ball_y, collision
         
