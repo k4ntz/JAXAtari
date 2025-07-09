@@ -20,6 +20,8 @@ from jaxatari.rendering import atraJaxis as aj
 SCREEN_WIDTH = 160
 SCREEN_HEIGHT = 200
 DEFAULT_RIVER_WIDTH = 80
+MIN_RIVER_WIDTH = 30
+MAX_RIVER_WIDTH = 130
 
 
 class RiverraidState(NamedTuple):
@@ -337,15 +339,15 @@ def generate_altering_river(state: RiverraidState) -> RiverraidState:
     )
 
     def no_island_clamping(state: RiverraidState) -> RiverraidState:
-        min_river_width = 25.0
-        max_river_width = 130.0
+        min_river_width = MIN_RIVER_WIDTH
+        max_river_width = MAX_RIVER_WIDTH
         proposed_left = state.river_left[0]
         proposed_right = state.river_right[0]
 
         proposed_width = (proposed_right - proposed_left).astype(jnp.float32)
         proposed_center = (proposed_left + proposed_right).astype(jnp.float32) / 2.0
 
-        clamped_width = lax.clamp(min_river_width, proposed_width, max_river_width)
+        clamped_width = lax.clamp(min_river_width, proposed_width.astype(jnp.int32), max_river_width)
 
         min_center = clamped_width / 2.0
         max_center = SCREEN_WIDTH - (clamped_width / 2.0)
@@ -375,7 +377,7 @@ def generate_altering_river(state: RiverraidState) -> RiverraidState:
         outer_right = state.river_right[0]
         proposed_inner_left = state.river_inner_left[0]
         proposed_inner_right = state.river_inner_right[0]
-        min_river_width = 20.0
+        min_river_width = MIN_RIVER_WIDTH
 
         new_inner_left = jax.lax.cond(
             (proposed_inner_left - outer_left).astype(jnp.float32) < min_river_width,
@@ -448,12 +450,12 @@ def generate_segment_transition(state: RiverraidState) -> RiverraidState:
     def shrink_to_damsize(state: RiverraidState) -> RiverraidState:
         scrolled_left = jnp.roll(state.river_left, 1)
         scrolled_right = jnp.roll(state.river_right, 1)
+        jax.debug.print("SHRINKING TO DAM SIZE")
 
+        new_river_left = scrolled_left.at[0].set(scrolled_left[1] + 3)
+        new_river_right = scrolled_right.at[0].set(scrolled_right[1] - 3)
 
-        new_river_left = state.river_left.at[0].set(scrolled_left[1] + 3)
-        new_river_right = state.river_right.at[0].set(scrolled_right[1] - 3)
-
-        new_segment_transition_state = jax.lax.cond(state.river_right[0] - state.river_left[0] <= DEFAULT_RIVER_WIDTH + 12,
+        new_segment_transition_state = jax.lax.cond(new_river_right[0] - new_river_left[0] <= MIN_RIVER_WIDTH + 12,
                                                     lambda state: jnp.array(3),
                                                     lambda state: state.segment_transition_state,
                                                     operand=state
@@ -466,8 +468,8 @@ def generate_segment_transition(state: RiverraidState) -> RiverraidState:
     def straight_until_dam(state: RiverraidState) -> RiverraidState:
         scrolled_left = jnp.roll(state.river_left, 1)
         scrolled_right = jnp.roll(state.river_right, 1)
-        new_river_left = scrolled_left.at[0].set(state.river_left[1])
-        new_river_right = scrolled_right.at[0].set(state.river_right[1])
+        new_river_left = scrolled_left.at[0].set(state.river_left[0])
+        new_river_right = scrolled_right.at[0].set(state.river_right[0])
         new_segment_straight_counter = state.segment_straigt_counter - 1
         new_transition_state = jax.lax.cond(new_segment_straight_counter <= 0,
                                                     lambda state: jnp.array(4),
@@ -481,14 +483,14 @@ def generate_segment_transition(state: RiverraidState) -> RiverraidState:
 
     def dam_into_new_segment(state: RiverraidState) -> RiverraidState:
         jax.debug.print("SETTING DAM")
-        scrolled_left = jnp.roll(state.river_left, 1)
-        scrolled_right = jnp.roll(state.river_right, 1)
+        #scrolled_left = jnp.roll(state.river_left, 1)
+        #scrolled_right = jnp.roll(state.river_right, 1)
         new_state = scroll_empty_island(state)
         new_segment_straight_counter = jnp.array(8)
         dam_position = 0
 
         new_river_state = jnp.array(0)
-        new_alternation_length = jnp.array(3)
+        new_alternation_length = jnp.array(10)
         new_alternation_cooldown = jnp.array(0)
         new_segment_state = jnp.array(0)
         new_segment_transition_state = jnp.array(0)
@@ -499,8 +501,9 @@ def generate_segment_transition(state: RiverraidState) -> RiverraidState:
                               river_state=new_river_state,
                               river_alternation_length=new_alternation_length,
                               alternation_cooldown=new_alternation_cooldown,
-                              river_left=scrolled_left.at[0].set(scrolled_left[1]),
-                              river_right=scrolled_right.at[0].set(scrolled_right[1]))
+                              #river_left=scrolled_left.at[0].set(scrolled_left[1]),
+                              #river_right=scrolled_right.at[0].set(scrolled_right[1]))
+                                  )
 
 
     jax.debug.print("Riverraid: segment_transition_state: {segment_transition_state}", segment_transition_state=state.segment_transition_state)
@@ -513,10 +516,9 @@ def generate_segment_transition(state: RiverraidState) -> RiverraidState:
 
 
 @jax.jit
-@jax.jit
 def update_river_banks(state: RiverraidState) -> RiverraidState:
     new_segment_state = jax.lax.cond(
-        (state.turn_step % 100) == 0,
+        (state.turn_step % 400) == 0,
         lambda state: state.segment_state + 1,
         lambda state: state.segment_state,
         operand=state
@@ -589,6 +591,7 @@ class JaxRiverraid(JaxEnvironment):
         return spaces.Discrete(len(self.action_set))
 
     def step(self, state: RiverraidState, action: Action) -> Tuple[RiverraidObservation, RiverraidState, RiverraidInfo]:
+        jax.debug.print("new step \n")
         new_state = state._replace(turn_step=state.turn_step + 1)
         new_state = roll_static_objects(new_state)
         new_state = update_river_banks(new_state)
