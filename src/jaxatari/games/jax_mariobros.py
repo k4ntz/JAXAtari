@@ -122,6 +122,10 @@ class MarioBrosObservation(NamedTuple):  # Copied from jax_kangaroo.py ln.166-16
 class MarioBrosInfo(NamedTuple):  # Copied from jax_kangaroo.py ln.186-187
     score: chex.Array
 
+class MarioBrosConstants(NamedTuple):
+    SCREEN_WIDTH: int = 160
+    SCREEN_HEIGHT: int = 210
+
 
 def check_collision(pos: jnp.ndarray, vel: jnp.ndarray, platforms: jnp.ndarray, pow_block: jnp.ndarray):
     x, y = pos
@@ -579,11 +583,11 @@ def draw_digit(img, digit, x, y, size=6, color=(255, 255, 255)):
         )
     return img
 
-import jaxatari.rendering.atraJaxis as aj
-from jaxatari.renderers import AtraJaxisRenderer
+import jaxatari.rendering.jax_rendering_utils as ru
+from jaxatari.renderers import JAXGameRenderer
 
 
-class MarioBrosRenderer(AtraJaxisRenderer):
+class MarioBrosRenderer(JAXGameRenderer):
     def __init__(self):
         pass
 
@@ -644,12 +648,12 @@ class MarioBrosRenderer(AtraJaxisRenderer):
 
         image = lax.fori_loop(0, digit_positions, draw_score_digit, image)
 
-        return jnp.transpose(image, (1, 0, 2))
+        return image
 
 
 
 class JaxMarioBros(JaxEnvironment[
-                       MarioBrosState, MarioBrosObservation, MarioBrosInfo]):  # copied and adapted from jax_kangaroo.py ln.1671
+                       MarioBrosState, MarioBrosObservation, MarioBrosInfo, MarioBrosConstants]):  # copied and adapted from jax_kangaroo.py ln.1671
     # holds reset and main step function
 
     def __init__(self):
