@@ -53,7 +53,7 @@ class GameConfig:
         default_factory=lambda: jnp.array([1, 1, 2], dtype=jnp.int32)
     )
     enemy_width: jnp.ndarray = field(
-        default_factory=lambda: jnp.array([28, 30, 18], dtype=jnp.int32)
+        default_factory=lambda: jnp.array([15, 15, 9], dtype=jnp.int32)
     )
     enemy_height: jnp.ndarray = field(
         default_factory=lambda: jnp.array([7, 8, 7], dtype=jnp.int32)
@@ -155,8 +155,8 @@ class Renderer_AtraJaxis(AtraJaxisRenderer):
         # Load Sprites
         # Backgrounds + Dynamic elements + UI elements
         sprite_names = [
-            'enemy_0','enemy_1','enemy_2',
-            'cannon_left', 'cannon_right', 'cannon_middle',
+            'small_enemy','round_enemy','long_enemy',
+            'cannon_left', 'cannon_right', 'cannon_middle', 
             'installation_1','installation_2','installation_3',
             'installation_4','installation_5','installation_6',
             'background'
@@ -260,9 +260,9 @@ class Renderer_AtraJaxis(AtraJaxisRenderer):
 
         # add enemies
         enemy_sprites = (
-            self.sprites['enemy_0'],
-            self.sprites['enemy_1'],
-            self.sprites['enemy_2'],
+            self.sprites['long_enemy'],
+            self.sprites['round_enemy'],
+            self.sprites['small_enemy'],
         )
 
         def _draw_enemy(i, ras):
@@ -353,8 +353,6 @@ class Renderer_AtraJaxis(AtraJaxisRenderer):
         raster = jax.lax.fori_loop(0, cfg.max_enemies, _handle_draw_plasma, raster)
 
         return raster
-
-
 
 class JaxAtlantis(JaxEnvironment[AtlantisState, AtlantisObservation, AtlantisInfo]):
     def __init__(
