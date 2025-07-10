@@ -39,9 +39,17 @@ PLAYER_START_X, PLAYER_START_Y = 37.0, 74.0
 ENEMY_SIZE = (8, 8)  # w, h
 ENEMY_SPAWN_FRAMES = jnp.array([200, 0, 400])  # example delays for 3 enemies
 
+# --- Fireball params ---
+FIREBALL_SIZE = (9, 14)
+FIREBALL_MOVEMENT_Start = jnp.array([32, 32, 32, 24], dtype=jnp.float32)
+FIREBALL_MOVEMENT = jnp.array([4, 6, 6], dtype=jnp.float32)
+FIREBALL_RESTART = 120
+FIREBALL_Y = jnp.array([175 - 28, 135 - 28, 95 - 28, 57 - 28])
+FIREBALL_INIT_XY = jnp.array([145, FIREBALL_Y[1]])
 # --- Object Colors ---
 PLAYER_COLOR = jnp.array([0, 255, 0], dtype=jnp.uint8)
 ENEMY_COLOR = jnp.array([255, 0, 0], dtype=jnp.uint8)
+FIREBALL_COLOR = jnp.array([255, 255, 0], dtype=jnp.uint8)
 PLATFORM_COLOR = jnp.array([228, 111, 111], dtype=jnp.uint8)
 GROUND_COLOR = jnp.array([181, 83, 40], dtype=jnp.uint8)
 POW_COLOR = jnp.array([201, 164, 74], dtype=jnp.uint8)
@@ -76,6 +84,13 @@ DIGIT_SEGMENTS = jnp.array([
 ], dtype=jnp.int32)
 
 
+class Fireball(NamedTuple):
+    pos: jnp.ndarray
+    start_pat: jnp.ndarray
+    move_pat: jnp.ndarray
+    count: chex.Array
+    state: chex.Array
+    dir: chex.Array
 
 class GameState(NamedTuple):  # Enemy movement
     enemy_pos: jnp.ndarray  # shape (N,2): x/y positions
@@ -88,7 +103,7 @@ class GameState(NamedTuple):  # Enemy movement
     pow_block_counter: int  # scalar: number of hits remaining on the POW block
     enemy_status: jnp.ndarray
     score: int
-
+    fireball: Fireball
 
 class PlayerState(NamedTuple):  # Player movement
     pos: jnp.ndarray
@@ -204,6 +219,66 @@ def check_enemy_collision(player_pos, enemy_pos):
     overlap_y = (py < ey + eh) & (py + ph > ey)
     return jnp.any(overlap_x & overlap_y)
 
+
+def fireball_step(fb:Fireball):
+    def start(f: Fireball):
+        arr = f.start_pat
+        first_nonzero_index = jnp.argmax(arr != 0)
+        arr = arr.at[first_nonzero_index].set(arr[first_nonzero_index] - 1)
+        new_x = f.pos[0] + f.dir
+        last_is_zero = arr[first_nonzero_index] == 0
+    
+        new_pos= jnp.array([jnp.where(arr[first_nonzero_index] == 0, new_x, f.pos[0]), f.pos[1]]) 
+        new_state= jnp.where(last_is_zero, 1, 0)
+        new_start_pat= jnp.where(last_is_zero, FIREBALL_MOVEMENT_Start, arr)
+        return Fireball(
+            pos= new_pos,
+            start_pat= new_start_pat,
+            move_pat= f.move_pat,
+            count= f.count,
+            state= new_state,
+            dir= f.dir
+        )
+        
+    def move(f: Fireball):
+        arr = f.move_pat
+        first_nonzero_index = jnp.argmax(arr != 0)
+        arr = arr.at[first_nonzero_index].set(arr[first_nonzero_index] - 1)
+        new_x = f.pos[0] + f.dir
+        last_is_zero = arr[first_nonzero_index] == 0
+        
+        new_pos= jnp.array([jnp.where(arr[first_nonzero_index] == 0, new_x, f.pos[0]), f.pos[1]])
+        new_state= jnp.where(new_pos[0]<4, 2, 1)
+        new_move_pat= jnp.where(last_is_zero, FIREBALL_MOVEMENT, arr)
+        return Fireball(
+            pos= new_pos,
+            start_pat= f.start_pat,
+            move_pat= new_move_pat,
+            count= f.count,
+            state= new_state,
+            dir= f.dir
+        )
+    def wait(f: Fireball):
+        def stay(ff: Fireball):
+            return Fireball(
+            pos= ff.pos,
+            start_pat= ff.start_pat,
+            move_pat= ff.move_pat,
+            count= ff.count - 1,
+            state= ff.state,
+            dir= ff.dir
+        )
+        def end(ff: Fireball):
+            return Fireball(
+            pos= FIREBALL_INIT_XY,
+            start_pat= ff.start_pat,
+            move_pat= ff.move_pat,
+            count= 60,
+            state= 0,
+            dir= ff.dir
+        )
+        return lax.cond(f.count > 0, stay, end, f)
+    return lax.switch(fb.state, [start, move, wait], fb)
 
 @jax.jit
 def enemy_step(
@@ -636,6 +711,9 @@ class MarioBrosRenderer(JAXGameRenderer):
 
         image = lax.fori_loop(0, state.game.enemy_pos.shape[0], draw_enemy, image)
 
+        # --- Draw fireball ---
+        fx, fy = state.game.fireball.pos
+        image = draw_rect(image, fx, fy, *FIREBALL_SIZE, FIREBALL_COLOR)
         # --- Draw platforms ---
         def draw_platform(i, img):
             plat = PLATFORMS[i]
@@ -762,7 +840,15 @@ class JaxMarioBros(JaxEnvironment[
                 enemy_init_positions=jnp.array([enemy1_pos, enemy2_pos, enemy1_pos]),
                 pow_block_counter=jnp.int32(3),
                 enemy_status = enemy_status,
-                score = jnp.int32(0)
+                score = jnp.int32(0),
+                fireball=Fireball(
+                    pos= jnp.array(FIREBALL_INIT_XY),
+                    start_pat= FIREBALL_MOVEMENT_Start,
+                    move_pat= FIREBALL_MOVEMENT,
+                    count= FIREBALL_RESTART,
+                    state= 0,
+                    dir= -1
+                )
         ),
             lives=jnp.int32(4)
         )
@@ -822,8 +908,20 @@ class JaxMarioBros(JaxEnvironment[
             overlap_y = (py < ey + eh) & (py + ph > ey)
             return overlap_x & overlap_y  # bool array per enemy
 
+        def check_fireball_collision(fb: Fireball, player_pos) -> bool:
+            px, py = player_pos
+            pw, ph = PLAYER_SIZE
+            fx, fy = fb.pos
+            fw, fh = FIREBALL_SIZE
+            
+            overlap_x = (px < fx + fw) & (px + pw > fx)
+            overlap_y = (py < fy + fh) & (py + ph > fy)
+            
+            return overlap_x & overlap_y
+
         collided_mask = check_enemy_collision_per_enemy(new_player.pos, state.game.enemy_pos)
 
+        fireball_hit = check_fireball_collision(state.game.fireball, new_player.pos)
         # Check if any collided enemy is strong (status==2)
         strong_enemy_hit = jnp.any(collided_mask & (state.game.enemy_status == 2))
 
@@ -864,6 +962,7 @@ class JaxMarioBros(JaxEnvironment[
                 state.game.enemy_status
             )
 
+            new_fireball = fireball_step(state.game.fireball)
             # 4) Update enemy spawn delay timer (caps at ENEMY_SPAWN_FRAMES)
             new_enemy_delay_timer = jnp.minimum(state.game.enemy_delay_timer + 1, ENEMY_SPAWN_FRAMES)
 
@@ -914,7 +1013,7 @@ class JaxMarioBros(JaxEnvironment[
 
             # Re-check collisions with updated enemy positions
             collided_mask = check_enemy_collision_per_enemy(new_player.pos, ep)
-
+            fireball_hit = check_fireball_collision(new_fireball, new_player.pos)
             # Mark weak enemies (status==1) hit by player as dead (status=3)
             enemy_status_after_hit = jnp.where(
                 (collided_mask) & (new_enemy_status == 1),
@@ -933,7 +1032,7 @@ class JaxMarioBros(JaxEnvironment[
             new_score = state.game.score + score_gain
 
             # If collided enemy is strong (status==2), reset Mario position locally (extra safety)
-            mario_pos_reset = jnp.any((collided_mask) & (new_enemy_status == 2))
+            mario_pos_reset = jnp.any(((collided_mask) & (new_enemy_status == 2)) | fireball_hit)
             ORIGINAL_MARIO_POS = jnp.array([100, 100], dtype=jnp.float32)
 
             new_player_pos = jnp.where(
@@ -955,7 +1054,8 @@ class JaxMarioBros(JaxEnvironment[
                 enemy_init_positions=state.game.enemy_init_positions,
                 pow_block_counter=new_pow_block_counter,
                 enemy_status=enemy_status_after_hit,
-                score = new_score
+                score = new_score,
+                fireball = new_fireball
             )
 
             # 8) Final updated full state with player and game info
@@ -974,7 +1074,7 @@ class JaxMarioBros(JaxEnvironment[
             return obs, new_state, 0.0, False, self._get_info(new_state)
 
         # 10) Return based on whether strong enemy was hit
-        return jax.lax.cond(strong_enemy_hit, on_hit, on_no_hit, new_player)
+        return jax.lax.cond(strong_enemy_hit | fireball_hit, on_hit, on_no_hit, new_player)
 
 
 # run game with: python scripts\play.py --game mariobros
