@@ -73,10 +73,6 @@ class LaserGatesConstants(NamedTuple):
     PLAYER_MISSILE_INITIAL_VELOCITY = 2.5  # Starting speed of player missile
     PLAYER_MISSILE_VELOCITY_MULTIPLIER = 1.1  # Multiply the current speed at a given moment of the player missile by this number
 
-    # -------- Instrument panel constants --------
-    SHIELD_LOSS_COL_SMALL = 1  # see game manual, different collision lose a different amount of shield points
-    SHIELD_LOSS_COL_BIG = 6
-
     # -------- Entity constants (constants that apply to all entity types --------
     ENTITY_DEATH_SPRITES_SIZE = (8, 45)  # Width, Height
     ENTITY_MISSILE_SIZE = (4, 1)  # Width, Height
@@ -196,6 +192,16 @@ class LaserGatesConstants(NamedTuple):
     GUI_BLACK_BACKGROUND_X_OFFSET = 36
     GUI_Y_SPACE_BETWEEN_PLAYING_FIELD = 10
     GUI_Y_SPACE_BETWEEN_BACKGROUNDS = 10
+
+    # -------- Instrument panel constants --------
+    INSTRUMENT_PANEL_ANIMATION_SPEED = 14 # Blinking speed when energy, shields or dtime is low. Lower is faster. Should ideally be an even number.
+
+    ENERGY_START_BLINKING_PERCENTAGE = 0.2 # see below
+    SHIELDS_START_BLINKING_PERCENTAGE = 0.2 # see below
+    DTIME_START_BLINKING_PERCENTAGE = 0.2 # Field in instrument panel starts blinking when current value is smaller than VALUE_START_BLINKING_PERCENTAGE * MAX_VALUE.
+
+    SHIELD_LOSS_COL_SMALL = 1 # see is_big_collision entry in CollisionPropertiesState for extensive explanation. This constant defines the shield points to lose
+    SHIELD_LOSS_COL_BIG = 6
 
     # -------- Debug constants --------
     DEBUG_ACTIVATE_MOUNTAINS_SCROLL = jnp.bool(True)
@@ -2861,10 +2867,11 @@ class LaserGatesRenderer(JAXGameRenderer):
 
         # -------- Render gui --------
 
-        sprite_gui_colored_background_blue_bg = recolor_sprite(SPRITE_GUI_COLORED_BACKGROUND, jnp.array(self.consts.GUI_COLORED_BACKGROUND_COLOR_BLUE))
-        sprite_gui_colored_background_green_bg = recolor_sprite(SPRITE_GUI_COLORED_BACKGROUND, jnp.array(self.consts.GUI_COLORED_BACKGROUND_COLOR_GREEN))
-        sprite_gui_colored_background_beige_bg = recolor_sprite(SPRITE_GUI_COLORED_BACKGROUND, jnp.array(self.consts.GUI_COLORED_BACKGROUND_COLOR_BEIGE))
-        sprite_gui_colored_background_gray_bg = recolor_sprite(SPRITE_GUI_COLORED_BACKGROUND, jnp.array(self.consts.GUI_COLORED_BACKGROUND_COLOR_GRAY))
+        sprite_gui_colored_background_blue = recolor_sprite(SPRITE_GUI_COLORED_BACKGROUND, jnp.array(self.consts.GUI_COLORED_BACKGROUND_COLOR_BLUE)) # For Score
+        sprite_gui_colored_background_green = recolor_sprite(SPRITE_GUI_COLORED_BACKGROUND, jnp.array(self.consts.GUI_COLORED_BACKGROUND_COLOR_GREEN)) # For Energy, Shields and Dtime
+        sprite_gui_colored_background_beige = recolor_sprite(SPRITE_GUI_COLORED_BACKGROUND, jnp.array(self.consts.GUI_COLORED_BACKGROUND_COLOR_BEIGE))
+        sprite_gui_colored_background_gray = recolor_sprite(SPRITE_GUI_COLORED_BACKGROUND, jnp.array(self.consts.GUI_COLORED_BACKGROUND_COLOR_GRAY))
+        blinking_sprite_gui_colored_background = jnp.where((state.step_counter % self.consts.INSTRUMENT_PANEL_ANIMATION_SPEED) < (self.consts.INSTRUMENT_PANEL_ANIMATION_SPEED // 2), sprite_gui_colored_background_beige, sprite_gui_colored_background_gray)
 
         # Colored backgrounds ---------------
 
@@ -2874,34 +2881,37 @@ class LaserGatesRenderer(JAXGameRenderer):
             raster,
             16,
             score_col_bg_y,
-            sprite_gui_colored_background_blue_bg,
+            sprite_gui_colored_background_blue,
         )
 
         # Colored background for energy
         energy_col_bg_y = 111 + self.consts.GUI_Y_SPACE_BETWEEN_PLAYING_FIELD + self.consts.GUI_COLORED_BACKGROUND_SIZE[1] + self.consts.GUI_Y_SPACE_BETWEEN_BACKGROUNDS
+        low_energy = state.energy < (0.2 * self.consts.MAX_ENERGY)
         raster = jru.render_at(
             raster,
             16,
             energy_col_bg_y,
-            sprite_gui_colored_background_green_bg,
+            jnp.where(low_energy, blinking_sprite_gui_colored_background, sprite_gui_colored_background_green),
         )
 
         # Colored background for shields
         shields_col_bg_y = 111 + self.consts.GUI_Y_SPACE_BETWEEN_PLAYING_FIELD + 2 * self.consts.GUI_COLORED_BACKGROUND_SIZE[1] + 2 * self.consts.GUI_Y_SPACE_BETWEEN_BACKGROUNDS
+        low_shields = state.shields < (0.2 * self.consts.MAX_SHIELDS)
         raster = jru.render_at(
             raster,
             16,
             shields_col_bg_y,
-            sprite_gui_colored_background_green_bg,
+            jnp.where(low_shields, blinking_sprite_gui_colored_background, sprite_gui_colored_background_green),
         )
 
-        # Colored background for d-time # TODO: Implement color rendering logic
+        # Colored background for d-time
         dtime_col_bg_y = 111 + self.consts.GUI_Y_SPACE_BETWEEN_PLAYING_FIELD + 3 * self.consts.GUI_COLORED_BACKGROUND_SIZE[1] + 3 * self.consts.GUI_Y_SPACE_BETWEEN_BACKGROUNDS
+        low_dtime = state.dtime < (0.2 * self.consts.MAX_DTIME)
         raster = jru.render_at(
             raster,
             16,
             dtime_col_bg_y,
-            sprite_gui_colored_background_green_bg,
+            jnp.where(low_dtime, blinking_sprite_gui_colored_background, sprite_gui_colored_background_green),
         )
 
         # Black backgrounds ---------------
