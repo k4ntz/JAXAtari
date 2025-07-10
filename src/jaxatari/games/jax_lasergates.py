@@ -597,7 +597,7 @@ class JaxLaserGates(JaxEnvironment[LaserGatesState, LaserGatesObservation, Laser
         self.obs_size = 5 * 5 * 5 * 5 # TODO
         self.renderer = LaserGatesRenderer()
 
-
+    @partial(jax.jit, static_argnums=(0,))
     def maybe_initialize_random_entity(self, entities, state):
         """
         Spawns an entity with a random type if no other entities are present in the current state.
@@ -616,6 +616,7 @@ class JaxLaserGates(JaxEnvironment[LaserGatesState, LaserGatesObservation, Laser
         ])
         active_event = jnp.any(all_is_in_current_event_flags) # If there is an entity that is in the current event
 
+        @jax.jit
         def initialize_radar_mortar(entities):
             top_or_bot = jax.random.bernoulli(key_intern)
 
@@ -631,6 +632,7 @@ class JaxLaserGates(JaxEnvironment[LaserGatesState, LaserGatesObservation, Laser
             )
             return entities._replace(radar_mortar_state=new_radar_mortar_state)
 
+        @jax.jit
         def initialize_byte_bat(entities):
             initial_direction_is_up = jnp.bool(self.consts.BYTE_BAT_SPAWN_Y < self.consts.BYTE_BAT_UPPER_BORDER_Y)
             new_byte_bat_state = ByteBatState(
@@ -643,6 +645,7 @@ class JaxLaserGates(JaxEnvironment[LaserGatesState, LaserGatesObservation, Laser
             )
             return entities._replace(byte_bat_state=new_byte_bat_state)
 
+        @jax.jit
         def initialize_rock_muncher(entities):
             initial_direction_is_up = jnp.bool(self.consts.ROCK_MUNCHER_SPAWN_Y < self.consts.ROCK_MUNCHER_UPPER_BORDER_Y)
             new_rock_muncher_state = RockMuncherState(
@@ -657,6 +660,7 @@ class JaxLaserGates(JaxEnvironment[LaserGatesState, LaserGatesObservation, Laser
             )
             return entities._replace(rock_muncher_state=new_rock_muncher_state)
 
+        @jax.jit
         def initialize_homing_missile(entities):
             initial_y_position = jax.random.randint(key_intern, (), self.consts.HOMING_MISSILE_Y_BOUNDS[0], self.consts.HOMING_MISSILE_Y_BOUNDS[1])
             new_homing_missile_state = HomingMissileState(
@@ -668,6 +672,7 @@ class JaxLaserGates(JaxEnvironment[LaserGatesState, LaserGatesObservation, Laser
             )
             return entities._replace(homing_missile_state=new_homing_missile_state)
 
+        @jax.jit
         def initialize_forcefield(entities):
             key_num_of_ff, key_type_of_ff, key_is_wide = jax.random.split(key_intern, 3)
             number_of_forcefields = jax.random.randint(key_num_of_ff, (), minval=1, maxval=5) # Spawn 1 to 4 forcefields at a time.
@@ -706,6 +711,7 @@ class JaxLaserGates(JaxEnvironment[LaserGatesState, LaserGatesObservation, Laser
             )
             return entities._replace(forcefield_state=new_forcefield_state)
 
+        @jax.jit
         def initialize_densepack(entities):
             initial_is_wide = jax.random.bernoulli(key_intern, p=self.consts.DENSEPACK_IS_WIDE_PROBABILITY)
 
@@ -720,6 +726,7 @@ class JaxLaserGates(JaxEnvironment[LaserGatesState, LaserGatesObservation, Laser
             )
             return entities._replace(dense_pack_state=new_densepack_state)
 
+        @jax.jit
         def initialize_detonator(entities):
             new_detonator_state = entities.detonator_state._replace(
                 is_in_current_event=jnp.bool(True),
@@ -730,6 +737,7 @@ class JaxLaserGates(JaxEnvironment[LaserGatesState, LaserGatesObservation, Laser
             )
             return entities._replace(detonator_state=new_detonator_state)
 
+        @jax.jit
         def initialize_energy_pod(entities):
             new_energy_pod_state = entities.energy_pod_state._replace(
                 is_in_current_event=jnp.bool(True),
@@ -751,6 +759,7 @@ class JaxLaserGates(JaxEnvironment[LaserGatesState, LaserGatesObservation, Laser
             initialize_energy_pod,
         ] # All initialize functions of all entity types
 
+        @jax.jit
         def initialize_random_entity(_):
             key_normal_index, key_energy_pod, key_detonator, key_edge_case = jax.random.split(key_pick_type, 4)
 
@@ -818,7 +827,7 @@ class JaxLaserGates(JaxEnvironment[LaserGatesState, LaserGatesObservation, Laser
         steps the entity (actually entities, but we only have one entity per event) that is currently in game (if is_in_current_event of said entity is True).
         """
 
-        @partial(jax.jit, static_argnums=(0,))
+        @jax.jit
         def radar_mortar_step(state: LaserGatesState) -> tuple[RadarMortarState, CollisionPropertiesState]:
             rm = state.entities.radar_mortar_state
             new_x = jnp.where(rm.is_alive, rm.x - state.scroll_speed, rm.x)
@@ -960,7 +969,7 @@ class JaxLaserGates(JaxEnvironment[LaserGatesState, LaserGatesObservation, Laser
                 death_timer=new_death_timer,
             )
 
-        @partial(jax.jit, static_argnums=(0,))
+        @jax.jit
         def byte_bat_step(state: LaserGatesState) -> tuple[ByteBatState, CollisionPropertiesState]:
             bb = state.entities.byte_bat_state
 
@@ -1039,7 +1048,7 @@ class JaxLaserGates(JaxEnvironment[LaserGatesState, LaserGatesObservation, Laser
                 death_timer=new_death_timer,
             )
 
-        @partial(jax.jit, static_argnums=(0,))
+        @jax.jit
         def rock_muncher_step(state: LaserGatesState) -> tuple[RockMuncherState, CollisionPropertiesState]:
             rm = state.entities.rock_muncher_state
 
@@ -1130,7 +1139,7 @@ class JaxLaserGates(JaxEnvironment[LaserGatesState, LaserGatesObservation, Laser
                 death_timer=new_death_timer,
             )
 
-        @partial(jax.jit, static_argnums=(0,))
+        @jax.jit
         def homing_missile_step(state: LaserGatesState) -> tuple[HomingMissileState, CollisionPropertiesState]:
             hm = state.entities.homing_missile_state
 
@@ -1197,7 +1206,7 @@ class JaxLaserGates(JaxEnvironment[LaserGatesState, LaserGatesObservation, Laser
                 death_timer=new_death_timer,
             )
 
-        @partial(jax.jit, static_argnums=(0,))
+        @jax.jit
         def forcefield_step(state: LaserGatesState) -> tuple[ForceFieldState, CollisionPropertiesState]:
             ff = state.entities.forcefield_state
 
@@ -1334,7 +1343,7 @@ class JaxLaserGates(JaxEnvironment[LaserGatesState, LaserGatesObservation, Laser
                 death_timer=new_death_timer,
             )
 
-        @partial(jax.jit, static_argnums=(0,))
+        @jax.jit
         def densepack_step(state: LaserGatesState) -> tuple[DensepackState, CollisionPropertiesState]:
             dp = state.entities.dense_pack_state
 
@@ -1384,7 +1393,7 @@ class JaxLaserGates(JaxEnvironment[LaserGatesState, LaserGatesObservation, Laser
             )  # shape (n_parts,2)
 
             # --- collision vs. player ---
-            @partial(jax.jit, static_argnums=(0,))
+            @jax.jit
             def hit_by_player(gx, gy, offs, sz):
                 seg_x, seg_y = gx + offs[0], gy + offs[1]
                 return self.check_collision_single(
@@ -1400,7 +1409,7 @@ class JaxLaserGates(JaxEnvironment[LaserGatesState, LaserGatesObservation, Laser
             collision_with_player = jnp.any(player_hits_mask)
 
             # --- collision vs. missile ---
-            @partial(jax.jit, static_argnums=(0,))
+            @jax.jit
             def hit_by_missile(gx, gy, offs, sz):
                 seg_x, seg_y = gx + offs[0], gy + offs[1]
                 px = state.player_missile.x.astype(jnp.float32)
@@ -1448,7 +1457,7 @@ class JaxLaserGates(JaxEnvironment[LaserGatesState, LaserGatesObservation, Laser
                 death_timer=new_death_timer,
             )
 
-        @partial(jax.jit, static_argnums=(0,))
+        @jax.jit
         def detonator_step(state: LaserGatesState) -> tuple[DetonatorState, CollisionPropertiesState]:
             dn = state.entities.detonator_state
 
@@ -1522,7 +1531,7 @@ class JaxLaserGates(JaxEnvironment[LaserGatesState, LaserGatesObservation, Laser
                 death_timer=new_death_timer,
             )
 
-        @partial(jax.jit, static_argnums=(0,))
+        @jax.jit
         def energy_pod_step(state: LaserGatesState) -> tuple[EnergyPodState, CollisionPropertiesState]:
             ep = state.entities.energy_pod_state
 
@@ -1577,7 +1586,7 @@ class JaxLaserGates(JaxEnvironment[LaserGatesState, LaserGatesObservation, Laser
                 death_timer=new_death_timer,
             )
 
-
+        @partial(jax.jit, static_argnums=(0,))
         def entity_maybe_step(step_fn, entity_state):
             def run_step(_):
                 stepped_entity, updates = step_fn(game_state)
@@ -1829,6 +1838,7 @@ class JaxLaserGates(JaxEnvironment[LaserGatesState, LaserGatesObservation, Laser
             in_axes=(None, None, 0, 0),
             out_axes=0)
 
+        @jax.jit
         def collision_for_one(x, y):
             # compute absolute positions of all segments in this group (n_segments, 2)
             block_positions = jnp.stack([
@@ -1926,11 +1936,11 @@ class JaxLaserGates(JaxEnvironment[LaserGatesState, LaserGatesObservation, Laser
         )
         upper_missile_collisions = self.any_collision_for_group(
             player_missile_pos, player_missile_size, upper_xs, upper_ys,
-            segment_offsets=lower_offsets,
-            segment_sizes=lower_sizes
+            segment_offsets=upper_offsets,
+            segment_sizes=upper_sizes
         )
         lower_missile_collisions = self.any_collision_for_group(
-            player_missile_pos, player_missile_size, upper_xs, upper_ys,
+            player_missile_pos, player_missile_size, lower_xs, lower_ys,
             segment_offsets=lower_offsets,
             segment_sizes=lower_sizes
         )
@@ -2110,8 +2120,8 @@ class JaxLaserGates(JaxEnvironment[LaserGatesState, LaserGatesObservation, Laser
         new_key0, key0 = jax.random.split(key, 2)
 
         reset_state = LaserGatesState(
-            player_x=jnp.array(self.consts.PLAYER_START_X),
-            player_y=jnp.array(self.consts.PLAYER_START_Y),
+            player_x=jnp.array(self.consts.PLAYER_START_X).astype(jnp.float32),
+            player_y=jnp.array(self.consts.PLAYER_START_Y).astype(jnp.float32),
             player_facing_direction=jnp.array(1),
             player_missile=initial_player_missile,
             animation_timer=jnp.array(0).astype(jnp.uint8),
