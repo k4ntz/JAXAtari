@@ -11,8 +11,8 @@ import pygame
 from typing import Dict, Any, Optional, NamedTuple, Tuple
 from functools import partial
 
-from jaxatari.rendering import atraJaxis as aj
-from jaxatari.renderers import AtraJaxisRenderer
+from jaxatari.rendering import jax_rendering_utils as aj
+from jaxatari.renderers import JAXGameRenderer
 from jaxatari.environment import JaxEnvironment, JAXAtariAction as Action
 import jaxatari.spaces as spaces
 
@@ -129,7 +129,11 @@ class AtlantisInfo(NamedTuple):
     score: chex.Array
 
 
-class Renderer_AtraJaxis(AtraJaxisRenderer):
+class AtlantisConstants(NamedTuple):
+    pass
+
+
+class Renderer_AtraJaxis(JAXGameRenderer):
     sprites: Dict[str, Any]
 
     def __init__(self, config: GameConfig | None = None):
@@ -354,7 +358,7 @@ class Renderer_AtraJaxis(AtraJaxisRenderer):
 
         return raster
 
-class JaxAtlantis(JaxEnvironment[AtlantisState, AtlantisObservation, AtlantisInfo]):
+class JaxAtlantis(JaxEnvironment[AtlantisState, AtlantisObservation, AtlantisInfo, AtlantisConstants]):
     def __init__(
             self,
             frameskip: int = 1,
@@ -1228,13 +1232,13 @@ def main():
         # Render and display
         raster = renderer.render(curr_state)
 
-        aj.update_pygame(
-            screen,
-            raster,
-            config.scaling_factor,
-            config.screen_width,
-            config.screen_height,
-        )
+        #aj.update_pygame(
+        #    screen,
+        #    raster,
+        #    config.scaling_factor,
+        #    config.screen_width,
+        #    config.screen_height,
+        #)
 
         counter += 1
         # FPS
