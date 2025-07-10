@@ -17,18 +17,18 @@ SCREEN_HEIGHT = 210
 WINDOW_SCALE = 3
 
 # --- Physik params ---
-MOVE_SPEED = 1
-ASCEND_VY = -2.0  # ↑ 2 px / frame
-DESCEND_VY = 2.0  # ↓ 2 px / frame
-ASCEND_FRAMES = 21  # 42 px tall jump (21 × 2)
+MOVE_SPEED = 0.5
+ASCEND_VY = -1.0  # ↑ 2 px / frame
+DESCEND_VY = 1.0  # ↓ 2 px / frame
+ASCEND_FRAMES = 21 * 2  # 42 px tall jump (21 × 2)
 
 # -------- Movement params ----------------------------------
 movement_pattern = jnp.array([1, 1, 0, 1, 0, 1, 1, 0, 1, 1, 0], dtype=jnp.float32)
 pat_len = movement_pattern.shape[0]
 
 # -------- Break params ----------------------------------
-BRAKE_DURATION = 10  # in Frames
-BRAKE_TOTAL_DISTANCE = 7.0  # in Pixels
+BRAKE_DURATION = 10 * 2# in Frames
+BRAKE_TOTAL_DISTANCE = 7.0 * 2# in Pixels
 BRAKE_SPEED = jnp.array(BRAKE_TOTAL_DISTANCE / BRAKE_DURATION, dtype=jnp.float32)  # ≈ 0.7 px/frame
 
 # --- Player params ---------------
@@ -396,7 +396,7 @@ def enemy_step(
 @jax.jit
 def movement(state: PlayerState, game_state:GameState) -> PlayerState:    # Calculates movement of Player based on given state and action taken
 
-    move = state.move
+    move = state.move * MOVE_SPEED
     jump_btn = state.jump
     vx = move
     # -------- phase / frame bookkeeping --------------------------
@@ -550,10 +550,18 @@ def player_step(state: PlayerState, action: chex.Array, game_state: GameState) -
                 last_dir=0
             )
 
+        def js(ss):
+            return ss._replace(
+                idx_left=0,
+                idx_right=0,
+                brake_frames_left=0,
+                last_dir=0
+            )
+
         condR = press_right | s.jumpR
         condL = press_left | s.jumpL
         return lax.cond(condR, jr,
-                        lambda ss: lax.cond(condL, jl, lambda x: x, ss), s)
+                        lambda ss: lax.cond(condL, jl, js, ss), s)
 
     state2 = lax.cond(state1.jump == 0, walk_or_brake, jump_move, state1)
 
