@@ -30,14 +30,20 @@ OPPONENT_LIMIT_Y = (31, None)
 MAX_SPEED = 1
 ACCELERATION = 1
 BULLET_SPEED = 1     
+ENEMY_BULLET_SPEED = 1
 
 PATH_SPRITES = "sprites/spaceinvaders"
+ENEMY_ROWS = 6
+ENEMY_COLS = 6
+MAX_ENEMY_BULLETS = 3
 
 # Rate of Opponent Movement and Animation
 MOVEMENT_RATE = 32
+ENEMY_FIRE_RATE = 60
 
 # Sizes
 PLAYER_SIZE = (7, 10)
+BULLET_SIZE = (1, 10)
 WALL_SIZE = (2, 4)
 BACKGROUND_SIZE = (WIDTH, 15)
 NUMBER_SIZE = (12, 9)
@@ -65,6 +71,7 @@ class SpaceInvadersState(NamedTuple):
     player_speed: chex.Array
     step_counter: chex.Array 
     player_score: chex.Array
+    player_lives: chex.Array
     # Holds a list of destroyed opponents by their index (row, column)
     destroyed: chex.Array
     opponent_current_x: int
@@ -76,6 +83,11 @@ class SpaceInvadersState(NamedTuple):
     bullet_active: chex.Array   
     bullet_x: chex.Array
     bullet_y: chex.Array
+    # Enemy bullets
+    enemy_bullets_active: chex.Array
+    enemy_bullets_x: chex.Array
+    enemy_bullets_y: chex.Array
+    enemy_fire_cooldown: chex.Array
 
 class EntityPosition(NamedTuple):
     x: jnp.ndarray
@@ -91,6 +103,175 @@ class SpaceInvadersInfo(NamedTuple):
     time: jnp.ndarray
     all_rewards: chex.Array
 
+@jax.jit
+def get_enemy_position(opponent_current_x, opponent_current_y, row, col):
+    x = opponent_current_x + col * (OFFSET_OPPONENT[0] + OPPONENT_SIZE[0])
+    y = opponent_current_y + row * (OFFSET_OPPONENT[1] + OPPONENT_SIZE[1])
+    return x, y
+
+@jax.jit
+def check_collision(bullet_x, bullet_y, target_x, target_y, target_width, target_height):
+    bullet_right = bullet_x + BULLET_SIZE[0]
+    bullet_bottom = bullet_y + BULLET_SIZE[1]
+    target_right = target_x + target_width
+    target_bottom = target_y + target_height
+    
+    collision = (bullet_x < target_right) & (bullet_right > target_x) & (bullet_y < target_bottom) & (bullet_bottom > target_y)
+    return collision
+
+@jax.jit
+def check_bullet_enemy_collisions(state: SpaceInvadersState):
+    def check_loop(carry):
+        def body(i, carry):
+            destroyed, score, bullet_active = carry
+
+            row = i // ENEMY_COLS
+            col = i % ENEMY_COLS
+            idx = row * ENEMY_COLS + col
+
+            enemy_x, enemy_y = get_enemy_position(
+                state.opponent_current_x,
+                state.opponent_current_y,
+                row,
+                col
+            )
+
+            enemy_alive = jnp.logical_not(destroyed[idx])
+            collision = jnp.logical_and(
+                jnp.logical_and(enemy_alive, bullet_active),
+                check_collision(state.bullet_x, state.bullet_y, enemy_x, enemy_y, OPPONENT_SIZE[0], OPPONENT_SIZE[1])
+            )
+
+            destroyed = destroyed.at[idx].set(jnp.logical_or(destroyed[idx], collision))
+            score += jnp.where(collision, 10, 0) # +10 score 
+            bullet_active = jnp.where(collision, False, bullet_active)
+
+            return destroyed, score, bullet_active
+
+        return jax.lax.fori_loop(0, ENEMY_ROWS * ENEMY_COLS, body, carry)
+
+    init = (state.destroyed, state.player_score, state.bullet_active)
+
+    return jax.lax.cond(
+        state.bullet_active,
+        check_loop,
+        lambda carry: carry,
+        init
+    )
+
+
+@jax.jit
+def check_enemy_bullet_player_collisions(state: SpaceInvadersState):
+    def check_bullet(i, carry):
+        lives, enemy_bullets_active = carry
+        
+        bullet_active = enemy_bullets_active[i]
+        collision = jnp.logical_and(
+            bullet_active,
+            check_collision(
+                state.enemy_bullets_x[i], 
+                state.enemy_bullets_y[i], 
+                state.player_x - PLAYER_SIZE[0], 
+                PLAYER_Y, 
+                PLAYER_SIZE[0], 
+                PLAYER_SIZE[1]
+            )
+        )
+        
+        # If collision, deactivate bullet and reduce lives
+        new_bullet_active = jnp.where(collision, False, bullet_active)
+        enemy_bullets_active = enemy_bullets_active.at[i].set(new_bullet_active)
+        lives = jnp.where(collision, lives - 1, lives)
+        
+        return lives, enemy_bullets_active
+    
+    init = (state.player_lives, state.enemy_bullets_active)
+    return jax.lax.fori_loop(0, MAX_ENEMY_BULLETS, check_bullet, init)
+
+@jax.jit
+def get_bottom_enemies(state: SpaceInvadersState):
+    def check_column(col):
+        def check_row(row):
+            idx = row * ENEMY_COLS + col
+            return jnp.logical_not(state.destroyed[idx])
+        
+        # check from bottom to top
+        has_enemy = jnp.array([check_row(row) for row in range(ENEMY_ROWS-1, -1, -1)])
+        # find first alive enemy from bottom
+        bottom_row = jnp.where(has_enemy, jnp.arange(ENEMY_ROWS-1, -1, -1), -1)
+        # get the bottom row with an enemy
+        actual_bottom = jnp.max(jnp.where(bottom_row >= 0, bottom_row, -1))
+        
+        return jnp.where(actual_bottom >= 0, actual_bottom, -1)
+    
+    return jnp.array([check_column(col) for col in range(ENEMY_COLS)])
+
+
+@jax.jit
+def update_enemy_bullets(state: SpaceInvadersState, key):    
+    new_y = state.enemy_bullets_y + ENEMY_BULLET_SPEED
+    new_active = jnp.where(new_y >= HEIGHT, False, state.enemy_bullets_active)
+    
+    new_cooldown = jnp.maximum(0, state.enemy_fire_cooldown - 1)
+    should_fire = (new_cooldown == 0) & (jnp.sum(new_active) < MAX_ENEMY_BULLETS)
+    
+    def spawn_bullet():
+        bottom_enemies = get_bottom_enemies(state)
+        
+        # valid column is with alive enemies
+        valid_columns = jnp.where(bottom_enemies >= 0, jnp.arange(ENEMY_COLS), -1)
+        mask = valid_columns >= 0
+        indices = jnp.nonzero(mask, size=ENEMY_COLS)[0]
+        valid_columns = valid_columns[indices]
+        num_valid = valid_columns.shape[0]
+        
+        def fire_bullet():
+            # choose random column
+            col_idx = jax.random.randint(key, (), 0, num_valid)
+            firing_col = valid_columns[col_idx]
+            firing_row = bottom_enemies[firing_col]
+            
+            enemy_x, enemy_y = get_enemy_position(
+                state.opponent_current_x,
+                state.opponent_current_y,
+                firing_row,
+                firing_col
+            )
+            
+            # find first inactive bullet slot
+            def find_slot(i, slot):
+                return jnp.where((slot == -1) & (new_active[i] == False), i, slot)
+            
+            bullet_slot = jax.lax.fori_loop(0, MAX_ENEMY_BULLETS, find_slot, -1)
+            
+            # spawn bullet if slot found
+            spawn_active = jnp.where(
+                bullet_slot >= 0,
+                new_active.at[bullet_slot].set(True),
+                new_active
+            )
+            spawn_x = jnp.where(
+                bullet_slot >= 0,
+                state.enemy_bullets_x.at[bullet_slot].set(enemy_x + OPPONENT_SIZE[0] // 2),
+                state.enemy_bullets_x
+            )
+            spawn_y = jnp.where(
+                bullet_slot >= 0,
+                new_y.at[bullet_slot].set(enemy_y + OPPONENT_SIZE[1]),
+                new_y
+            )
+            
+            return spawn_active, spawn_x, spawn_y, ENEMY_FIRE_RATE
+        
+        def no_fire():
+            return new_active, state.enemy_bullets_x, new_y, new_cooldown
+        
+        return jax.lax.cond(num_valid > 0, fire_bullet, no_fire)
+    
+    def no_spawn():
+        return new_active, state.enemy_bullets_x, new_y, new_cooldown
+    
+    return jax.lax.cond(should_fire, spawn_bullet, no_spawn)
 
 @jax.jit
 def player_step(state_player_x, state_player_speed, action: chex.Array):
@@ -187,21 +368,29 @@ class JaxSpaceInvaders(JaxEnvironment[SpaceInvadersState, SpaceInvadersObservati
             player_speed = jnp.array(0.0).astype(jnp.int32),
             step_counter = jnp.array(0).astype(jnp.int32),
             player_score = jnp.array(0).astype(jnp.int32),
-            destroyed = jnp.array(36).astype(jnp.bool),
+            player_lives = jnp.array(3).astype(jnp.int32),
+            destroyed = jnp.zeros((ENEMY_ROWS * ENEMY_COLS,), dtype=jnp.bool),
             opponent_current_x = OPPONENT_LIMIT_X[0],
             opponent_current_y = OPPONENT_LIMIT_Y[0],
             opponent_bounding_rect = (OPPONENT_SIZE[0] * 6 + OFFSET_OPPONENT[0] * 5, OPPONENT_SIZE[1] * 6 + OFFSET_OPPONENT[1] * 5),
             opponent_direction = 1,
             bullet_active=jnp.array(0).astype(jnp.int32),
             bullet_x=jnp.array(78).astype(jnp.int32),
-            bullet_y=jnp.array(78).astype(jnp.int32)
+            bullet_y=jnp.array(78).astype(jnp.int32),
+            enemy_bullets_active=jnp.zeros(MAX_ENEMY_BULLETS, dtype=jnp.bool),
+            enemy_bullets_x=jnp.zeros(MAX_ENEMY_BULLETS, dtype=jnp.int32),
+            enemy_bullets_y=jnp.zeros(MAX_ENEMY_BULLETS, dtype=jnp.int32),
+            enemy_fire_cooldown=jnp.array(ENEMY_FIRE_RATE).astype(jnp.int32)
         )
         initial_obs = self._get_observation(state)
 
         return initial_obs, state
 
     @partial(jax.jit, static_argnums=(0,))
-    def step(self, state: SpaceInvadersState, action: chex.Array) -> Tuple[SpaceInvadersObservation, SpaceInvadersState, float, bool, SpaceInvadersInfo]:
+    def step(self, state: SpaceInvadersState, action: chex.Array, key = None) -> Tuple[SpaceInvadersObservation, SpaceInvadersState, float, bool, SpaceInvadersInfo]:
+        if key is None:
+            key = jax.random.PRNGKey(state.step_counter)
+
         new_player_x, new_player_speed = player_step(
             state.player_x, state.player_speed, action
         )
@@ -214,6 +403,33 @@ class JaxSpaceInvaders(JaxEnvironment[SpaceInvadersState, SpaceInvadersObservati
         )
 
         new_bullet_active, new_bullet_x, new_bullet_y = player_bullet_step(state, action)
+
+        new_bullet_state = state._replace(
+            bullet_active=new_bullet_active,
+            bullet_x=new_bullet_x,
+            bullet_y=new_bullet_y
+        )
+        new_destroyed, new_score, final_bullet_active = check_bullet_enemy_collisions(new_bullet_state)
+
+        enemy_bullets_active, enemy_bullets_x, enemy_bullets_y, enemy_fire_cooldown = update_enemy_bullets(
+            state._replace(
+                destroyed=new_destroyed,
+                enemy_bullets_active=state.enemy_bullets_active,
+                enemy_bullets_x=state.enemy_bullets_x,
+                enemy_bullets_y=state.enemy_bullets_y,
+                enemy_fire_cooldown=state.enemy_fire_cooldown
+            ), 
+            key
+        )
+
+        new_lives, final_enemy_bullets_active = check_enemy_bullet_player_collisions(
+            state._replace(
+                player_x=new_player_x,
+                enemy_bullets_active=enemy_bullets_active,
+                enemy_bullets_x=enemy_bullets_x,
+                enemy_bullets_y=enemy_bullets_y
+            )
+        )
 
         step_counter = jax.lax.cond(
             state.step_counter > 255,
@@ -257,15 +473,20 @@ class JaxSpaceInvaders(JaxEnvironment[SpaceInvadersState, SpaceInvadersObservati
             player_x = new_player_x,
             player_speed = new_player_speed,
             step_counter = step_counter,
-            player_score = state.player_score,
-            destroyed = state.destroyed,
+            player_score = new_score,
+            player_lives = new_lives,
+            destroyed = new_destroyed,
             opponent_current_x = position,
             opponent_current_y = state.opponent_current_y,
             opponent_bounding_rect = state.opponent_bounding_rect,
             opponent_direction = direction,
-            bullet_active=new_bullet_active,
+            bullet_active=final_bullet_active,
             bullet_x=new_bullet_x,
-            bullet_y=new_bullet_y
+            bullet_y=new_bullet_y,
+            enemy_bullets_active=final_enemy_bullets_active,
+            enemy_bullets_x=enemy_bullets_x,
+            enemy_bullets_y=enemy_bullets_y,
+            enemy_fire_cooldown=enemy_fire_cooldown
         )
 
         # TODO: Adjust the opponenet_bounding_rect depending on the destroyed enemies. If all the enemies of a outer column are destroyed the rect should shrink accordingly.
@@ -326,9 +547,26 @@ def load_sprites():
     background = aj.loadFrame(os.path.join(MODULE_DIR, PATH_SPRITES, "background.npy"), transpose=True)
     SPRITE_BACKGROUND = jnp.expand_dims(background, axis=0)
 
-    # Score
-    zero_green = aj.loadFrame(os.path.join(MODULE_DIR, PATH_SPRITES, "numbers/zero_green.npy"), transpose=True)
-    SPRITE_ZERO_GREEN = jnp.expand_dims(zero_green, axis=0)
+    # Score - All Green Numbers (0-9)
+    green_numbers = []
+    number_names = ["zero", "one", "two", "three", "four", "five", "six", "seven", "eight", "nine"]
+    
+    for i, name in enumerate(number_names):
+        number_sprite = aj.loadFrame(os.path.join(MODULE_DIR, PATH_SPRITES, f"numbers/{name}_green.npy"), transpose=True)
+        green_numbers.append(jnp.expand_dims(number_sprite, axis=0))
+    
+    SPRITE_ZERO_GREEN = green_numbers[0]
+    SPRITE_ONE_GREEN = green_numbers[1]
+    SPRITE_TWO_GREEN = green_numbers[2]
+    SPRITE_THREE_GREEN = green_numbers[3]
+    SPRITE_FOUR_GREEN = green_numbers[4]
+    SPRITE_FIVE_GREEN = green_numbers[5]
+    SPRITE_SIX_GREEN = green_numbers[6]
+    SPRITE_SEVEN_GREEN = green_numbers[7]
+    SPRITE_EIGHT_GREEN = green_numbers[8]
+    SPRITE_NINE_GREEN = green_numbers[9]
+    
+    # Yellow numbers
     zero_yellow = aj.loadFrame(os.path.join(MODULE_DIR, PATH_SPRITES, "numbers/zero_yellow.npy"), transpose=True)
     SPRITE_ZERO_YELLOW = jnp.expand_dims(zero_yellow, axis=0)
 
@@ -365,13 +603,28 @@ def load_sprites():
     bullet = aj.loadFrame(os.path.join(MODULE_DIR, PATH_SPRITES, "bullet.npy"), transpose=True)
     SPRITE_BULLET = jnp.expand_dims(bullet, axis=0) 
 
-    return (SPRITE_BACKGROUND, SPRITE_PLAYER, SPRITE_BULLET, SPRITE_ZERO_GREEN, SPRITE_ZERO_YELLOW, SPRITE_DEFENSE, SPRITE_OPPONENT_1_A, SPRITE_OPPONENT_1_B, SPRITE_OPPONENT_2_A, SPRITE_OPPONENT_2_B, SPRITE_OPPONENT_3_A, SPRITE_OPPONENT_3_B, SPRITE_OPPONENT_4_A, SPRITE_OPPONENT_4_B, SPRITE_OPPONENT_5, SPRITE_OPPONENT_6_A, SPRITE_OPPONENT_6_B)
+    return (SPRITE_BACKGROUND, SPRITE_PLAYER, SPRITE_BULLET, 
+            SPRITE_ZERO_GREEN, SPRITE_ONE_GREEN, SPRITE_TWO_GREEN, SPRITE_THREE_GREEN, 
+            SPRITE_FOUR_GREEN, SPRITE_FIVE_GREEN, SPRITE_SIX_GREEN, SPRITE_SEVEN_GREEN, 
+            SPRITE_EIGHT_GREEN, SPRITE_NINE_GREEN, SPRITE_ZERO_YELLOW, SPRITE_DEFENSE, 
+            SPRITE_OPPONENT_1_A, SPRITE_OPPONENT_1_B, SPRITE_OPPONENT_2_A, SPRITE_OPPONENT_2_B, 
+            SPRITE_OPPONENT_3_A, SPRITE_OPPONENT_3_B, SPRITE_OPPONENT_4_A, SPRITE_OPPONENT_4_B, 
+            SPRITE_OPPONENT_5, SPRITE_OPPONENT_6_A, SPRITE_OPPONENT_6_B)
 
 (
     SPRITE_BACKGROUND, 
     SPRITE_PLAYER,
     SPRITE_BULLET,
     SPRITE_ZERO_GREEN,
+    SPRITE_ONE_GREEN,
+    SPRITE_TWO_GREEN,
+    SPRITE_THREE_GREEN,
+    SPRITE_FOUR_GREEN,
+    SPRITE_FIVE_GREEN,
+    SPRITE_SIX_GREEN,
+    SPRITE_SEVEN_GREEN,
+    SPRITE_EIGHT_GREEN,
+    SPRITE_NINE_GREEN,
     SPRITE_ZERO_YELLOW,
     SPRITE_DEFENSE,
     SPRITE_OPPONENT_1_A,
@@ -416,13 +669,32 @@ class SpaceInvadersRenderer(AtraJaxisRenderer):
             raster
         )
 
+        # Render Score - Convert score to 4 digits
+        score = state.player_score
+        digit_1 = (score // 1000) % 10
+        digit_2 = (score // 100) % 10
+        digit_3 = (score // 10) % 10
+        digit_4 = score % 10
+
+        green_sprites = jnp.array([
+            aj.get_sprite_frame(SPRITE_ZERO_GREEN, 0),
+            aj.get_sprite_frame(SPRITE_ONE_GREEN, 0),
+            aj.get_sprite_frame(SPRITE_TWO_GREEN, 0),
+            aj.get_sprite_frame(SPRITE_THREE_GREEN, 0),
+            aj.get_sprite_frame(SPRITE_FOUR_GREEN, 0),
+            aj.get_sprite_frame(SPRITE_FIVE_GREEN, 0),
+            aj.get_sprite_frame(SPRITE_SIX_GREEN, 0),
+            aj.get_sprite_frame(SPRITE_SEVEN_GREEN, 0),
+            aj.get_sprite_frame(SPRITE_EIGHT_GREEN, 0),
+            aj.get_sprite_frame(SPRITE_NINE_GREEN, 0)
+        ])
+
         # Load Initial Score
         # Green Numbers
-        frame_zero_green = aj.get_sprite_frame(SPRITE_ZERO_GREEN, 0)
-        raster = aj.render_at(raster, 3, 9, frame_zero_green)
-        raster = aj.render_at(raster, 6 + NUMBER_SIZE[0], 10, frame_zero_green)
-        raster = aj.render_at(raster, 9 + 2 * NUMBER_SIZE[0], 10, frame_zero_green)
-        raster = aj.render_at(raster, 12 + 3 * NUMBER_SIZE[0], 9, frame_zero_green)
+        raster = aj.render_at(raster, 3, 9, green_sprites[digit_1])
+        raster = aj.render_at(raster, 6 + NUMBER_SIZE[0], 10, green_sprites[digit_2])
+        raster = aj.render_at(raster, 9 + 2 * NUMBER_SIZE[0], 10, green_sprites[digit_3])
+        raster = aj.render_at(raster, 12 + 3 * NUMBER_SIZE[0], 9, green_sprites[digit_4])
 
         # Yellow Numbers
         frame_zero_yellow = aj.get_sprite_frame(SPRITE_ZERO_YELLOW, 0)
@@ -462,19 +734,46 @@ class SpaceInvadersRenderer(AtraJaxisRenderer):
             )
         )
 
-        def body(i, raster):
-            x_cord = state.opponent_current_x + i * (OFFSET_OPPONENT[0] + OPPONENT_SIZE[0])
+        def render_enemies(i, raster):
+            base_x = state.opponent_current_x + i * (OFFSET_OPPONENT[0] + OPPONENT_SIZE[0])
 
-            raster = aj.render_at(raster, x_cord, state.opponent_current_y, fo_1)
-            raster = aj.render_at(raster, x_cord, state.opponent_current_y + (OFFSET_OPPONENT[1] + OPPONENT_SIZE[1]), fo_2)
-            raster = aj.render_at(raster, x_cord, state.opponent_current_y + 2 * (OFFSET_OPPONENT[1] + OPPONENT_SIZE[1]), fo_3)
-            raster = aj.render_at(raster, x_cord, state.opponent_current_y + 3 * (OFFSET_OPPONENT[1] + OPPONENT_SIZE[1]), fo_4)
-            raster = aj.render_at(raster, x_cord, state.opponent_current_y + 4 * (OFFSET_OPPONENT[1] + OPPONENT_SIZE[1]), fo_5, flip)
-            raster = aj.render_at(raster, x_cord, state.opponent_current_y + 5 * (OFFSET_OPPONENT[1] + OPPONENT_SIZE[1]), fo_6)
+            def render_if_alive(row, sprite, y, raster, do_flip=False):
+                idx = row * ENEMY_COLS + i
+                alive = jnp.logical_not(state.destroyed[idx])
+                return jax.lax.cond(
+                    alive,
+                    lambda r: aj.render_at(r, base_x, y, sprite, do_flip),
+                    lambda r: r,
+                    raster
+                )
+
+            raster = render_if_alive(0, fo_1, state.opponent_current_y + 0 * (OFFSET_OPPONENT[1] + OPPONENT_SIZE[1]), raster)
+            raster = render_if_alive(1, fo_2, state.opponent_current_y + 1 * (OFFSET_OPPONENT[1] + OPPONENT_SIZE[1]), raster)
+            raster = render_if_alive(2, fo_3, state.opponent_current_y + 2 * (OFFSET_OPPONENT[1] + OPPONENT_SIZE[1]), raster)
+            raster = render_if_alive(3, fo_4, state.opponent_current_y + 3 * (OFFSET_OPPONENT[1] + OPPONENT_SIZE[1]), raster)
+            raster = render_if_alive(4, fo_5, state.opponent_current_y + 4 * (OFFSET_OPPONENT[1] + OPPONENT_SIZE[1]), raster, do_flip=flip)
+            raster = render_if_alive(5, fo_6, state.opponent_current_y + 5 * (OFFSET_OPPONENT[1] + OPPONENT_SIZE[1]), raster)
 
             return raster
-        
-        raster = jax.lax.fori_loop(0, 6, body, raster)
+        raster = jax.lax.fori_loop(0, 6, render_enemies, raster)
+   
+        frame_enemy_bullet = aj.get_sprite_frame(SPRITE_BULLET, 0)
+        def render_enemy_bullet_body(i, current_raster):
+            def draw_bullet(r):
+                return aj.render_at(r, state.enemy_bullets_x[i], state.enemy_bullets_y[i], frame_enemy_bullet)
+
+            should_render = jnp.logical_and(
+                state.enemy_bullets_active[i],
+                state.step_counter % 2 == 0
+            )
+
+            return jax.lax.cond(
+                should_render,
+                draw_bullet,
+                lambda r: r,
+                current_raster
+            )
+        raster = jax.lax.fori_loop(0, MAX_ENEMY_BULLETS, render_enemy_bullet_body, raster)
 
         return raster 
 
