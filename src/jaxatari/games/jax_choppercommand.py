@@ -655,32 +655,28 @@ class JaxChopperCommand(JaxEnvironment[ChopperCommandState, ChopperCommandObserv
         ], dtype=enemy_pos.dtype)
 
     @partial(jax.jit, static_argnums=(0,))
-    def check_missile_collisions(
+    def check_missile_collisions( # TODO: improve
         self,
         missile_positions: chex.Array,  # (MAX_MISSILES, 4)
         enemy_positions: chex.Array,    # (N_ENEMIES, 2)
-        rng_key: chex.PRNGKey,
         on_screen_position: chex.Array,
         player_x: chex.Array,
         enemy_size: chex.Array,
-    ) -> tuple[chex.Array, chex.Array, chex.Array, chex.PRNGKey]:
+    ) -> tuple[chex.Array, chex.Array, chex.Array]:
         """Check for collisions between player missiles and enemies, mit dynamischer Breitenanpassung."""
 
-        def check_single_missile(missile_idx, carry):
-            missile_positions, enemy_positions, score, rng_key = carry
-
-            missile = missile_positions[missile_idx]
+        def check_single_missile(missile):
             missile_x, missile_y, direction, _ = missile
             missile_active = missile[3] != 0
 
-            def check_single_enemy(enemy_idx, inner_carry):
-                missile_positions, enemy_positions, score, rng_key = inner_carry
-                enemy_pos = enemy_positions[enemy_idx]
+            def check_single_enemy(enemy_pos):
                 enemy_active = enemy_pos[3] > self.consts.FRAMES_DEATH_ANIMATION_ENEMY
 
                 # Sichtfeldgrenzen
                 left_bound = player_x - on_screen_position
                 right_bound = left_bound + self.consts.WIDTH
+
+                new_missile = direction
 
                 missile_left = missile_x
                 missile_right = missile_x + self.consts.PLAYER_MISSILE_SIZE[0]
@@ -710,8 +706,17 @@ class JaxChopperCommand(JaxEnvironment[ChopperCommandState, ChopperCommandObserv
                     self.check_collision_single(adjusted_pos, adjusted_size, enemy_pos, enemy_size)
                 )
 
-                #Kill initialisieren (nicht endgültig tot)
-                new_enemy_pos = jnp.where(collision, self.kill_entity(enemy_pos, self.consts.FRAMES_DEATH_ANIMATION_ENEMY), enemy_pos)
+                # Kill initialisieren (nicht endgültig tot)
+                new_enemy_pos = jnp.where(collision,
+                                          self.kill_entity(enemy_pos, self.consts.FRAMES_DEATH_ANIMATION_ENEMY),
+                                          enemy_pos)
+
+                # Missile deaktivieren bei Treffer
+                new_missile = jnp.where(
+                    collision,
+                    jnp.array([0, 0, 0, 0], dtype=missile.dtype),
+                    missile
+                )
 
                 # Punkte vergeben
                 is_jet = enemy_size[1] == 6
@@ -725,39 +730,14 @@ class JaxChopperCommand(JaxEnvironment[ChopperCommandState, ChopperCommandObserv
                     0
                 )
 
-                # Missile deaktivieren bei Treffer
-                new_missile = jnp.where(
-                    collision,
-                    jnp.array([0, 0, 0, 0], dtype=missile.dtype),
-                    missile
-                )
+                return new_enemy_pos, new_missile, score_add
 
-                # Apply updates
-                updated_enemies = enemy_positions.at[enemy_idx].set(new_enemy_pos)
-                updated_missiles = missile_positions.at[missile_idx].set(new_missile)
+            new_enemy_positions, new_missiles, score_add = jax.vmap(check_single_enemy)(enemy_positions)
+            return new_enemy_positions, new_missiles[0], jnp.sum(score_add)                                 # in case of weird behavior: change the array addressing here
 
-                return (
-                    updated_missiles,
-                    updated_enemies,
-                    score + score_add,
-                    rng_key,
-                )
-
-            # Schleife über alle Gegner für eine Missile
-            return jax.lax.fori_loop(
-                0,
-                enemy_positions.shape[0],
-                check_single_enemy,
-                (missile_positions, enemy_positions, score, rng_key),
-            )
-
-        # Schleife über alle Missiles
-        return jax.lax.fori_loop(
-            0,
-            missile_positions.shape[0],
-            check_single_missile,
-            (missile_positions, enemy_positions, 0, rng_key),
-        )
+        new_enemy_positions, new_missiles, score_add = jax.vmap(check_single_missile)(missile_positions)
+        jax.debug.print("{}", new_enemy_positions[0])
+        return new_enemy_positions[0], new_missiles, jnp.sum(score_add)
 
 
 
@@ -1701,14 +1681,12 @@ class JaxChopperCommand(JaxEnvironment[ChopperCommandState, ChopperCommandObserv
 
             # Check player missile collisions with jets
             (
-                new_player_missile_position,
                 new_jet_positions,
+                new_player_missile_position,
                 score_to_add_jet,
-                new_rng_key,
             ) = self.check_missile_collisions(
                 new_player_missile_positions,
                 new_jet_positions,
-                new_rng_key,
                 on_screen_chopper_position,
                 new_player_x,
                 self.consts.JET_SIZE
@@ -1716,18 +1694,18 @@ class JaxChopperCommand(JaxEnvironment[ChopperCommandState, ChopperCommandObserv
 
             # Check player missile collisions with choppers
             (
-                new_player_missile_position,
                 new_chopper_positions,
+                new_player_missile_position,
                 score_to_add_chopper,
-                new_rng_key,
             ) = self.check_missile_collisions(
                 new_player_missile_positions,
                 new_chopper_positions,
-                new_rng_key,
                 on_screen_chopper_position,
                 new_player_x,
                 self.consts.CHOPPER_SIZE
             )
+
+
 
             # Check player collision with jets
             player_collision_jet, player_collision_new_jet_pos = self.check_player_collision_entity(
