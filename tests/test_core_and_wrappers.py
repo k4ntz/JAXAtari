@@ -47,7 +47,7 @@ def test_base_jaxatari():
 def test_atari_wrapper():
     """Test the AtariWrapper."""
     base_env = jaxatari.make("pong")
-    env = AtariWrapper(base_env)
+    env = AtariWrapper(base_env, first_fire=False)
     key = jax.random.PRNGKey(0)
     
     # Test reset
@@ -107,8 +107,8 @@ def test_pixel_obs_wrapper_with_stacked_frames():
     obs, state = env.reset(key)
     
     # Verify shape is (frame_stack_size, height, width, channels)
-    # Pong dimensions are 160x210 with 3 color channels
-    expected_shape = (env.frame_stack_size, 160, 210, 3)
+    # Pong dimensions are 210x160 with 3 color channels
+    expected_shape = (env.frame_stack_size, 210, 160, 3)
     assert obs.shape == expected_shape, f"Expected shape {expected_shape}, got {obs.shape}"
     
     # Take a step and verify shape remains consistent
@@ -142,7 +142,7 @@ def test_pixel_and_object_centric_wrapper():
 
     pixel_space, object_space = space.spaces
     assert isinstance(pixel_space, spaces.Box)
-    assert pixel_space.shape == (stack_size, 160, 210, 3)
+    assert pixel_space.shape == (stack_size, 210, 160, 3)
 
     assert isinstance(object_space, spaces.Box)
     single_frame_size = get_object_centric_obs_size(base_env.observation_space())
@@ -215,7 +215,7 @@ def test_log_wrapper():
     assert state.returned_episode_lengths == 0
     
     # Verify observation format (should match PixelObsWrapper)
-    expected_shape = (env.frame_stack_size, 160, 210, 3)
+    expected_shape = (env.frame_stack_size, 210, 160, 3)
     assert obs.shape == expected_shape, f"Expected shape {expected_shape}, got {obs.shape}"
     assert jnp.all(obs >= 0) and jnp.all(obs <= 255), "Pixel values should be in range [0, 255]"
     
@@ -266,7 +266,7 @@ def test_multi_reward_log_wrapper():
     
     # Verify observation format (should match PixelAndObjectCentricWrapper)
     image_obs, object_obs = obs
-    expected_image_shape = (env.frame_stack_size, 160, 210, 3)
+    expected_image_shape = (env.frame_stack_size, 210, 160, 3)
     
     # The expected object shape is now a 2D tensor, get its size from the base env
     single_frame_object_size = get_object_centric_obs_size(base_env.observation_space())
@@ -337,9 +337,9 @@ def test_flatten_observation_wrapper():
     obs_pix, _ = env_pix.reset(key)
 
     assert obs_pix.ndim == 1, "Pixel obs should be a 1D array"
-    assert obs_pix.shape[0] == 4 * 160 * 210 * 3
+    assert obs_pix.shape[0] == 4 * 210 * 160 * 3
     # Check order: first part of flattened obs should match flattened first frame
-    assert jnp.array_equal(obs_pix[:160*210*3], unwrapped_obs_pix[0].flatten())
+    assert jnp.array_equal(obs_pix[:210*160*3], unwrapped_obs_pix[0].flatten())
 
     # --- Test 3: Wrapping PixelAndObjectCentricWrapper ---
     unwrapped_both = PixelAndObjectCentricWrapper(atari_env)
@@ -353,8 +353,8 @@ def test_flatten_observation_wrapper():
     # Check pixel part
     pix_part = obs_both[0]
     assert pix_part.ndim == 1, "Pixel part of combined obs should be 1D"
-    assert pix_part.shape[0] == 4 * 160 * 210 * 3
-    assert jnp.array_equal(pix_part[:160*210*3], unwrapped_obs_both[0][0].flatten())
+    assert pix_part.shape[0] == 4 * 210 * 160 * 3
+    assert jnp.array_equal(pix_part[:210*160*3], unwrapped_obs_both[0][0].flatten())
 
     # Check OC part
     oc_part = obs_both[1]
@@ -421,10 +421,10 @@ def test_wrapper_observation_spaces():
     space = pixel_env.observation_space()
     assert isinstance(space, spaces.Box)
     # Shape: (stack_size, H, W, C)
-    assert space.shape == (stack_size, 160, 210, 3)
+    assert space.shape == (stack_size, 210, 160, 3)
     # Bounds and dtype for pixel data.
-    assert space.low == 0
-    assert space.high == 255
+    assert jnp.all(space.low == 0)
+    assert jnp.all(space.high == 255)
     assert space.dtype == jnp.uint8
 
     # --- Test ObjectCentricWrapper ---
@@ -436,9 +436,9 @@ def test_wrapper_observation_spaces():
     single_frame_size = get_object_centric_obs_size(base_env.observation_space())
     assert space.shape == (stack_size, single_frame_size)
 
-    # Check that the bounds are 1D and match a single frame
-    assert space.low.shape == (single_frame_size,)
-    assert space.high.shape == (single_frame_size,)
+    # Check that the bounds match the space shape (2D, broadcasted from 1D single frame)
+    assert space.low.shape == (stack_size, single_frame_size)
+    assert space.high.shape == (stack_size, single_frame_size)
 
     # --- Test PixelAndObjectCentricWrapper ---
     both_env = PixelAndObjectCentricWrapper(atari_env)
@@ -448,14 +448,17 @@ def test_wrapper_observation_spaces():
 
     # The first element should be the stacked pixel space.
     pixel_part = space.spaces[0]
-    assert pixel_part.shape == (stack_size, 160, 210, 3)
-    assert pixel_part.low == 0
-    assert pixel_part.high == 255
+    assert pixel_part.shape == (stack_size, 210, 160, 3)
+    assert jnp.all(pixel_part.low == 0)
+    assert jnp.all(pixel_part.high == 255)
 
     # The second element should be the original stacked object-centric dict space.
     object_part = space.spaces[1]
     assert isinstance(object_part, spaces.Box)
     assert object_part.shape == (stack_size, get_object_centric_obs_size(base_env.observation_space()))
+    # Check that the bounds match the space shape (2D, broadcasted from 1D single frame)
+    assert object_part.low.shape == (stack_size, get_object_centric_obs_size(base_env.observation_space()))
+    assert object_part.high.shape == (stack_size, get_object_centric_obs_size(base_env.observation_space()))
 
 
 def test_flatten_observation_wrapper_space_structure():
