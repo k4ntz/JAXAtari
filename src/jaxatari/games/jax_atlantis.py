@@ -319,8 +319,8 @@ class Renderer_AtraJaxis(JAXGameRenderer):
         # 1) Pre-make two full‐height, static-shape beams:
         height_upper_beam = 40
         start_beam = 130
-        beam_light_blue = _solid_sprite(3, height_upper_beam, (90, 204, 165))
-        beam_green = _solid_sprite(3, 50, (61, 151, 60))
+        beam_light_blue = _solid_sprite(height_upper_beam, 3, (90, 204, 165))
+        beam_green = _solid_sprite(50, 3, (61, 151, 60))
 
         # 2) Helper to stack beams on top of each other
         def _draw_two_tone_beam(raster, x):
