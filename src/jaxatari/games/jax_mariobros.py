@@ -127,7 +127,7 @@ class MarioBrosConstants(NamedTuple):
     SCREEN_HEIGHT: int = 210
 
 
-def check_collision(pos: jnp.ndarray, vel: jnp.ndarray, platforms: jnp.ndarray, pow_block: jnp.ndarray):
+def check_collision(pos: jnp.ndarray, vel: jnp.ndarray, platforms: jnp.ndarray, pow_block: jnp.ndarray, pow_block_counter:int):
     x, y = pos
     vx, vy = vel
     w, h = PLAYER_SIZE
@@ -159,7 +159,24 @@ def check_collision(pos: jnp.ndarray, vel: jnp.ndarray, platforms: jnp.ndarray, 
     pow_top, pow_bottom = pow_y, pow_y + pow_h
 
     pow_overlap_x = (right > pow_left) & (left < pow_right)
-    pow_bumped = pow_overlap_x & (vy < 0) & (top - vy >= pow_bottom) & (top <= pow_bottom)
+
+    def compute_pow_bump(_):
+        # only run when counter > 0
+        return (
+            pow_overlap_x &
+            (vy < 0) &
+            (top - vy >= pow_bottom) &
+            (top <= pow_bottom)
+        )
+    
+    # if counter ≤ 0, always False
+    pow_bumped = lax.cond(
+        pow_block_counter > 0,
+        compute_pow_bump,
+        lambda _: False,
+        operand=None,
+    )
+    
     pow_bump_y = jnp.where(pow_bumped, pow_bottom, -jnp.inf)
     pow_y_new = jnp.max(pow_bump_y)
 
@@ -377,7 +394,7 @@ def enemy_step(
 
 
 @jax.jit
-def movement(state: PlayerState) -> PlayerState:    # Calculates movement of Player based on given state and action taken
+def movement(state: PlayerState, game_state:GameState) -> PlayerState:    # Calculates movement of Player based on given state and action taken
 
     move = state.move
     jump_btn = state.jump
@@ -399,7 +416,7 @@ def movement(state: PlayerState) -> PlayerState:    # Calculates movement of Pla
     new_pos = state.pos + jnp.array([vx, vy])
 
     landed, bumped, y_land, y_bump, pow_bumped, bumped_idx = check_collision(new_pos, jnp.array([vx, vy]), PLATFORMS,
-                                                                             POW_BLOCK)
+                                                                             POW_BLOCK, game_state.pow_block_counter)
 
     new_y = jnp.where(landed, y_land,
                       jnp.where(bumped, y_bump, new_pos[1]))
@@ -445,7 +462,7 @@ def movement(state: PlayerState) -> PlayerState:    # Calculates movement of Pla
 
 
 @jax.jit
-def player_step(state: PlayerState, action: chex.Array) -> PlayerState:
+def player_step(state: PlayerState, action: chex.Array, game_state: GameState) -> PlayerState:
     # 1) decode buttons
     press_fire = (action == Action.FIRE) | (action == Action.LEFTFIRE) | (action == Action.RIGHTFIRE)
     press_right = (action == Action.RIGHT) | (action == Action.RIGHTFIRE)
@@ -541,7 +558,7 @@ def player_step(state: PlayerState, action: chex.Array) -> PlayerState:
     state2 = lax.cond(state1.jump == 0, walk_or_brake, jump_move, state1)
 
     # 5) apply physics
-    new_state = movement(state2)
+    new_state = movement(state2, game_state)
     return new_state
 
 
@@ -783,7 +800,7 @@ class JaxMarioBros(JaxEnvironment[
         """
 
         # 1) Advance player state given action
-        new_player = player_step(state.player, action)
+        new_player = player_step(state.player, action, state.game)
         bumped_idx = new_player.bumped_idx
         pow_bumped = new_player.pow_bumped
         # 2) Detect collisions between player and enemies
@@ -846,10 +863,6 @@ class JaxMarioBros(JaxEnvironment[
             # only count hits if we haven't hit it 3 times yet
             pow_hit = pow_bumped & (state.game.pow_block_counter > 0)
             new_pow_block_counter = jnp.maximum(state.game.pow_block_counter - pow_hit, 0)
-            jax.lax.cond(state.game.pow_block_counter == new_pow_block_counter, 
-                         lambda _: None,  # No action if no POW hit
-                         lambda _: jax.debug.print("POW block hit!"),  # Debug print for POW hit
-                         operand=None)
             bumped_idx_final = jnp.where(pow_hit, -2, bumped_idx)
 
             # 6) Toggle enemy status for bumped platforms/POW (strong <-> weak)
