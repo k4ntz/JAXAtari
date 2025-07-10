@@ -533,10 +533,18 @@ def player_step(state: PlayerState, action: chex.Array) -> PlayerState:
                 last_dir=0
             )
 
+        def js(ss):
+            return ss._replace(
+                idx_left=0,
+                idx_right=0,
+                brake_frames_left=0,
+                last_dir=0
+            )
+
         condR = press_right | s.jumpR
         condL = press_left | s.jumpL
         return lax.cond(condR, jr,
-                        lambda ss: lax.cond(condL, jl, lambda x: x, ss), s)
+                        lambda ss: lax.cond(condL, jl, js, ss), s)
 
     state2 = lax.cond(state1.jump == 0, walk_or_brake, jump_move, state1)
 
