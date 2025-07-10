@@ -14,160 +14,161 @@ import chex
 import pygame
 import jaxatari.rendering.jax_rendering_utils as jru
 import numpy as np
-from gymnax.environments import spaces
+import jaxatari.spaces as spaces
 from jaxatari.environment import JaxEnvironment, JAXAtariAction as Action, EnvState
 from jaxatari.renderers import JAXGameRenderer
 import time
 
-# Game Constants
-WINDOW_WIDTH = 160 * 3
-WINDOW_HEIGHT = 210 * 3
-DEATH_PAUSE_FRAMES = 60
+class ChopperCommandConstants:
+    # Game Constants
+    WINDOW_WIDTH = 160 * 3
+    WINDOW_HEIGHT = 210 * 3
+    DEATH_PAUSE_FRAMES = 60
 
-WIDTH = 160
-HEIGHT = 192
-SCALING_FACTOR = 4
+    WIDTH = 160
+    HEIGHT = 192
+    SCALING_FACTOR = 4
 
-# difficulty
-GAME_DIFFICULTY = 2
+    # difficulty
+    GAME_DIFFICULTY = 2
 
-# Chopper Constants TODO: Tweak these to match feeling of real game
-ACCEL = 0.03  # DEFAULT: 0.05 | how fast the chopper accelerates
-FRICTION = 0.02  # DEFAULT: 0.02 | how fast the chopper decelerates
-MAX_VELOCITY = 3.0  # DEFAULT: 3.0 | maximum speed
-DISTANCE_WHEN_FLYING = 10 # DEFAULT: 10 | How far the chopper moves towards the middle when flying for a longer amount of time
-LOCAL_PLAYER_OFFSET_SPEED = 1 # DEFAULT: 1 | How fast the chopper changes the on-screen position when changing its facing direction
-ALLOW_MOVE_OFFSET = 13 # DEFAULT: 13 | While in the no_move_pause, this is the offset measured from the left screen border where moving the chopper (exiting the pause) is allowed again
-PLAYER_ROTOR_SPEED = 3 # DEFAULT: 3 | The smaller this value, the faster the rotor blades of the player chopper spin
+    # Chopper Constants TODO: Tweak these to match feeling of real game
+    ACCEL = 0.03  # DEFAULT: 0.05 | how fast the chopper accelerates
+    FRICTION = 0.02  # DEFAULT: 0.02 | how fast the chopper decelerates
+    MAX_VELOCITY = 3.0  # DEFAULT: 3.0 | maximum speed
+    DISTANCE_WHEN_FLYING = 10 # DEFAULT: 10 | How far the chopper moves towards the middle when flying for a longer amount of time
+    LOCAL_PLAYER_OFFSET_SPEED = 1 # DEFAULT: 1 | How fast the chopper changes the on-screen position when changing its facing direction
+    ALLOW_MOVE_OFFSET = 13 # DEFAULT: 13 | While in the no_move_pause, this is the offset measured from the left screen border where moving the chopper (exiting the pause) is allowed again
+    PLAYER_ROTOR_SPEED = 3 # DEFAULT: 3 | The smaller this value, the faster the rotor blades of the player chopper spin
 
-# Score
-SCORE_PER_JET_KILL = 200
-SCORE_PER_CHOPPER_KILL = 100
-SCORE_PER_TRUCK_ALIVE = 100
+    # Score
+    SCORE_PER_JET_KILL = 200
+    SCORE_PER_CHOPPER_KILL = 100
+    SCORE_PER_TRUCK_ALIVE = 100
 
-# Player Missile Constants
-PLAYER_MISSILE_WIDTH = 80 # Sprite size_x
-MISSILE_COOLDOWN_FRAMES = 8  # DEFAULT: 8 | How fast Chopper can shoot (higher is slower) TODO: Das müssen wir ändern und höher machen bei dem schweren Schwierigkeitsgrad
-MISSILE_SPEED = 10 # DEFAULT: 10 | Missile speed (higher is faster) TODO: tweak MISSILE_SPEED and MISSILE_COOLDOWN_FRAMES to match real game (already almost perfect)
-MISSILE_ANIMATION_SPEED = 6 # DEFAULT: 6 | Rate at which missile changes sprite textures (based on traveled distance of missile)
+    # Player Missile Constants
+    PLAYER_MISSILE_WIDTH = 80 # Sprite size_x
+    MISSILE_COOLDOWN_FRAMES = 8  # DEFAULT: 8 | How fast Chopper can shoot (higher is slower) TODO: Das müssen wir ändern und höher machen bei dem schweren Schwierigkeitsgrad
+    MISSILE_SPEED = 10 # DEFAULT: 10 | Missile speed (higher is faster) TODO: tweak MISSILE_SPEED and MISSILE_COOLDOWN_FRAMES to match real game (already almost perfect)
+    MISSILE_ANIMATION_SPEED = 6 # DEFAULT: 6 | Rate at which missile changes sprite textures (based on traveled distance of missile)
 
-# Enemy Missile Constants
-ENEMY_MISSILE_SPAWN_PROBABILITY = 0.01 # The probability that an enemy missiles spawns at one of the living enemies in each frame, if the missile of the giving enemy is not "alive". (Meaning that for 0.01 for example, an enemy shoots a missile on average 100 frames after its previous missile died).
-ENEMY_MISSILE_SPLIT_PROBABILITY = 0.05 # The probability that an enemy missiles splits in a frame
-ENEMY_MISSILE_MAXIMUM_Y_SPEED_BEFORE_SPLIT = 0.75 # Maximum speed (+ and -) of a missile before split. This means that for 2 for example, the missiles will have speeds between -2 and 2 (chosen randomly).
-ENEMY_MISSILE_Y_SPEED_AFTER_SPLIT = 2.5 # TODO: Make match real game
+    # Enemy Missile Constants
+    ENEMY_MISSILE_SPAWN_PROBABILITY = 0.01 # The probability that an enemy missiles spawns at one of the living enemies in each frame, if the missile of the giving enemy is not "alive". (Meaning that for 0.01 for example, an enemy shoots a missile on average 100 frames after its previous missile died).
+    ENEMY_MISSILE_SPLIT_PROBABILITY = 0.05 # The probability that an enemy missiles splits in a frame
+    ENEMY_MISSILE_MAXIMUM_Y_SPEED_BEFORE_SPLIT = 0.75 # Maximum speed (+ and -) of a missile before split. This means that for 2 for example, the missiles will have speeds between -2 and 2 (chosen randomly).
+    ENEMY_MISSILE_Y_SPEED_AFTER_SPLIT = 2.5 # TODO: Make match real game
 
-# Colors
-BACKGROUND_COLOR = (0, 0, 139)  # Dark blue for sky
-PLAYER_COLOR = (187, 187, 53)  # Yellow for player helicopter
-ENEMY_COLOR = (170, 170, 170)  # Gray for enemy helicopters
-MISSILE_COLOR = (255, 255, 255)  # White for missiles
-SCORE_COLOR = (210, 210, 64)  # Score color
+    # Colors
+    BACKGROUND_COLOR = (0, 0, 139)  # Dark blue for sky
+    PLAYER_COLOR = (187, 187, 53)  # Yellow for player helicopter
+    ENEMY_COLOR = (170, 170, 170)  # Gray for enemy helicopters
+    MISSILE_COLOR = (255, 255, 255)  # White for missiles
+    SCORE_COLOR = (210, 210, 64)  # Score color
 
-# Object sizes and initial positions
-PLAYER_SIZE = (16, 9)  # Width, Height
-TRUCK_SIZE = (8, 7)
-JET_SIZE = (8, 6)
-CHOPPER_SIZE = (8, 9)
-PLAYER_MISSILE_SIZE = (80, 1) #Default (80, 1)
-ENEMY_MISSILE_SIZE = (2, 1)
+    # Object sizes and initial positions
+    PLAYER_SIZE = (16, 9)  # Width, Height
+    TRUCK_SIZE = (8, 7)
+    JET_SIZE = (8, 6)
+    CHOPPER_SIZE = (8, 9)
+    PLAYER_MISSILE_SIZE = (80, 1) #Default (80, 1)
+    ENEMY_MISSILE_SIZE = (2, 1)
 
-PLAYER_START_X = 0
-PLAYER_START_Y = 100
+    PLAYER_START_X = 0
+    PLAYER_START_Y = 100
 
-X_BORDERS = (0, 160)
-PLAYER_BOUNDS = (0, 160), (52, 150)
+    X_BORDERS = (0, 160)
+    PLAYER_BOUNDS = (0, 160), (52, 150)
 
-# Maximum number of objects
-MAX_TRUCKS = 12 # DEFAULT: 12 | How much trucks are spawned
-MAX_JETS = 12 # DEFAULT: 12 | the maximum amount of jets that can be spawned
-MAX_CHOPPERS = 12 # DEFAULT: 12 | the maximum amount of choppers that can be spawned
-MAX_ENEMIES = 12 # DEFAULT: 12 | the amount of enemies that are spawned
-MAX_PLAYER_MISSILES = 1 # DEFAULT: 1 | the original game allows only one missile per screen. The player_missile_step logic is adjusted automatically, if this is changed to more than 1.
-MAX_ENEMY_MISSILES = MAX_ENEMIES * 2 * 2 # Two missiles for every enemy (jets and choppers) (this does not mean, that there are always this many missiles on the screen/in the game)
-ENEMY_LANE_SWITCH_PROBABILITY = 0.05 # DEFAULT: 7 | how likely is it that en enemy switches a lane
+    # Maximum number of objects
+    MAX_TRUCKS = 12 # DEFAULT: 12 | How much trucks are spawned
+    MAX_JETS = 12 # DEFAULT: 12 | the maximum amount of jets that can be spawned
+    MAX_CHOPPERS = 12 # DEFAULT: 12 | the maximum amount of choppers that can be spawned
+    MAX_ENEMIES = 12 # DEFAULT: 12 | the amount of enemies that are spawned
+    MAX_PLAYER_MISSILES = 1 # DEFAULT: 1 | the original game allows only one missile per screen. The player_missile_step logic is adjusted automatically, if this is changed to more than 1.
+    MAX_ENEMY_MISSILES = MAX_ENEMIES * 2 * 2 # Two missiles for every enemy (jets and choppers) (this does not mean, that there are always this many missiles on the screen/in the game)
+    ENEMY_LANE_SWITCH_PROBABILITY = 0.05 # DEFAULT: 7 | how likely is it that en enemy switches a lane
 
-# Enemy movement
-JET_VELOCITY_LEFT = 1.5 # DEFAULT: 1.5 | How fast jets fly to the left
-JET_VELOCITY_RIGHT = 1 # DEFAULT: 1 | How fast jets fly to the right
-CHOPPER_VELOCITY_LEFT = 0.75 # DEFAULT: 0.75 | How fast choppers fly to the right
-CHOPPER_VELOCITY_RIGHT = 0.5 # DEFAULT: 0.5 | How fast choppers fly to the right
-ENEMY_OUT_OF_CYCLE_RIGHT = 64 # DEFAULT: 64 | How far enemies can fly around the truck fleet to the right
-ENEMY_OUT_OF_CYCLE_LEFT = 64 # DEFAULT: 64 | How far enemies cam fly around the truck fleet to the left
-ENEMY_MAXIMUM_SPAWN_OFFSET = 64 # DEFAULT: 64 | How far to the left and right of the middle truck enemies can spawn
+    # Enemy movement
+    JET_VELOCITY_LEFT = 1.5 # DEFAULT: 1.5 | How fast jets fly to the left
+    JET_VELOCITY_RIGHT = 1 # DEFAULT: 1 | How fast jets fly to the right
+    CHOPPER_VELOCITY_LEFT = 0.75 # DEFAULT: 0.75 | How fast choppers fly to the right
+    CHOPPER_VELOCITY_RIGHT = 0.5 # DEFAULT: 0.5 | How fast choppers fly to the right
+    ENEMY_OUT_OF_CYCLE_RIGHT = 64 # DEFAULT: 64 | How far enemies can fly around the truck fleet to the right
+    ENEMY_OUT_OF_CYCLE_LEFT = 64 # DEFAULT: 64 | How far enemies cam fly around the truck fleet to the left
+    ENEMY_MAXIMUM_SPAWN_OFFSET = 64 # DEFAULT: 64 | How far to the left and right of the middle truck enemies can spawn
 
-# Enemy Lanes
+    # Enemy Lanes
 
-ENEMY_LANE_OFFSET = 7 # DEFAULT: 7 | How much apart bottom and top lanes are from the middle lane
+    ENEMY_LANE_OFFSET = 7 # DEFAULT: 7 | How much apart bottom and top lanes are from the middle lane
 
-ENEMY_LANE_7 = 66
-ENEMY_LANE_8 = ENEMY_LANE_7 - ENEMY_LANE_OFFSET
-ENEMY_LANE_6 = ENEMY_LANE_7 + ENEMY_LANE_OFFSET
+    ENEMY_LANE_7 = 66
+    ENEMY_LANE_8 = ENEMY_LANE_7 - ENEMY_LANE_OFFSET
+    ENEMY_LANE_6 = ENEMY_LANE_7 + ENEMY_LANE_OFFSET
 
-ENEMY_LANE_4 = 96
-ENEMY_LANE_5 = ENEMY_LANE_4 - ENEMY_LANE_OFFSET
-ENEMY_LANE_3 = ENEMY_LANE_4 + ENEMY_LANE_OFFSET
+    ENEMY_LANE_4 = 96
+    ENEMY_LANE_5 = ENEMY_LANE_4 - ENEMY_LANE_OFFSET
+    ENEMY_LANE_3 = ENEMY_LANE_4 + ENEMY_LANE_OFFSET
 
-ENEMY_LANE_1 = 126
-ENEMY_LANE_2 = ENEMY_LANE_1 - ENEMY_LANE_OFFSET
-ENEMY_LANE_0 = ENEMY_LANE_1 + ENEMY_LANE_OFFSET
+    ENEMY_LANE_1 = 126
+    ENEMY_LANE_2 = ENEMY_LANE_1 - ENEMY_LANE_OFFSET
+    ENEMY_LANE_0 = ENEMY_LANE_1 + ENEMY_LANE_OFFSET
 
-BOTTOM_LANES = jnp.array([ENEMY_LANE_0, ENEMY_LANE_1, ENEMY_LANE_2])
-MIDDLE_LANES = jnp.array([ENEMY_LANE_3, ENEMY_LANE_4, ENEMY_LANE_5])
-TOP_LANES = jnp.array([ENEMY_LANE_6, ENEMY_LANE_7, ENEMY_LANE_8])
+    BOTTOM_LANES = jnp.array([ENEMY_LANE_0, ENEMY_LANE_1, ENEMY_LANE_2])
+    MIDDLE_LANES = jnp.array([ENEMY_LANE_3, ENEMY_LANE_4, ENEMY_LANE_5])
+    TOP_LANES = jnp.array([ENEMY_LANE_6, ENEMY_LANE_7, ENEMY_LANE_8])
 
-ALL_LANES = jnp.array([ENEMY_LANE_0, ENEMY_LANE_1, ENEMY_LANE_2, ENEMY_LANE_3, ENEMY_LANE_4, ENEMY_LANE_5, ENEMY_LANE_6, ENEMY_LANE_7, ENEMY_LANE_8])
+    ALL_LANES = jnp.array([ENEMY_LANE_0, ENEMY_LANE_1, ENEMY_LANE_2, ENEMY_LANE_3, ENEMY_LANE_4, ENEMY_LANE_5, ENEMY_LANE_6, ENEMY_LANE_7, ENEMY_LANE_8])
 
-"""
-Correct arrangement of lanes by height is:
+    """
+    Correct arrangement of lanes by height is:
+    
+    ENEMY_LANE_8
+    ENEMY_LANE_7
+    ENEMY_LANE_6
+    
+    ENEMY_LANE_5
+    ENEMY_LANE_4
+    ENEMY_LANE_3
+    
+    ENEMY_LANE_2
+    ENEMY_LANE_1
+    ENEMY_LANE_0
+    
+    """
 
-ENEMY_LANE_8
-ENEMY_LANE_7
-ENEMY_LANE_6
+    # Minimap
+    MINIMAP_WIDTH = 48
+    MINIMAP_HEIGHT = 16
 
-ENEMY_LANE_5
-ENEMY_LANE_4
-ENEMY_LANE_3
+    MINIMAP_POSITION_X = (WIDTH // 2) - (MINIMAP_WIDTH // 2) # TODO: Im echten Game wird die Minimap nicht mittig, sondern weiter links gerendert. Wir müssen besprechen ob wir das auch machen, dann müsste man nur diese Zahl hier ändern (finde es aber so schöner)
+    MINIMAP_POSITION_Y = 165
 
-ENEMY_LANE_2
-ENEMY_LANE_1
-ENEMY_LANE_0
+    MINIMAP_RENDER_TRUCK_REFRESH_RATE = 8 # Higher is slower (Does not fully work yet)
 
-"""
+    DOWNSCALING_FACTOR_WIDTH = WIDTH // MINIMAP_WIDTH
+    DOWNSCALING_FACTOR_HEIGHT = HEIGHT // MINIMAP_HEIGHT
 
-# Minimap
-MINIMAP_WIDTH = 48
-MINIMAP_HEIGHT = 16
+    #Object rendering
+    TRUCK_SPAWN_DISTANCE = 248 # distance 240px + truck width
 
-MINIMAP_POSITION_X = (WIDTH // 2) - (MINIMAP_WIDTH // 2) # TODO: Im echten Game wird die Minimap nicht mittig, sondern weiter links gerendert. Wir müssen besprechen ob wir das auch machen, dann müsste man nur diese Zahl hier ändern (finde es aber so schöner)
-MINIMAP_POSITION_Y = 165
+    FRAMES_DEATH_ANIMATION_ENEMY = 16
+    FRAMES_DEATH_ANIMATION_TRUCK = 32 # TODO: Make match real game
+    TRUCK_FLICKER_RATE = 3 # TODO: Make match real game
 
-MINIMAP_RENDER_TRUCK_REFRESH_RATE = 8 # Higher is slower (Does not fully work yet)
+    PLAYER_FADE_OUT_START_THRESHOLD_0 = 0.25
+    PLAYER_FADE_OUT_START_THRESHOLD_1 = 0.125
 
-DOWNSCALING_FACTOR_WIDTH = WIDTH // MINIMAP_WIDTH
-DOWNSCALING_FACTOR_HEIGHT = HEIGHT // MINIMAP_HEIGHT
+    # define object orientations
+    FACE_LEFT = -1
+    FACE_RIGHT = 1
 
-#Object rendering
-TRUCK_SPAWN_DISTANCE = 248 # distance 240px + truck width
+    SPAWN_POSITIONS_Y = jnp.array([60, 90, 120])
+    TRUCK_SPAWN_POSITIONS = 156
 
-FRAMES_DEATH_ANIMATION_ENEMY = 16
-FRAMES_DEATH_ANIMATION_TRUCK = 32 # TODO: Make match real game
-TRUCK_FLICKER_RATE = 3 # TODO: Make match real game
+    # Debugging
 
-PLAYER_FADE_OUT_START_THRESHOLD_0 = 0.25
-PLAYER_FADE_OUT_START_THRESHOLD_1 = 0.125
-
-# define object orientations
-FACE_LEFT = -1
-FACE_RIGHT = 1
-
-SPAWN_POSITIONS_Y = jnp.array([60, 90, 120])
-TRUCK_SPAWN_POSITIONS = 156
-
-# Debugging
-
-ENABLE_PLAYER_COLLISION = True
-ENABLE_ENEMY_MISSILE_TRUCK_COLLISION = True
+    ENABLE_PLAYER_COLLISION = True
+    ENABLE_ENEMY_MISSILE_TRUCK_COLLISION = True
 
 
 class ChopperCommandState(NamedTuple):
@@ -254,16 +255,16 @@ def load_sprites():
         minimap_mountains_temp[i - 1] = jnp.expand_dims(minimap_mountains_temp[i - 1], axis=0)
 
     # Pad player helicopter sprites to match each other
-    pl_chopper_sprites = jru.pad_to_match([pl_chopper1, pl_chopper2])
+    pl_chopper_sprites, _ = jru.pad_to_match([pl_chopper1, pl_chopper2])
 
     # Pad friendly truck sprites to match each other
-    friendly_truck_sprites = jru.pad_to_match([friendly_truck1, friendly_truck2])
+    friendly_truck_sprites, _ = jru.pad_to_match([friendly_truck1, friendly_truck2])
 
     # Pad enemy jet sprites to match each other
     enemy_jet_sprites = [enemy_jet]
 
     # Pad enemy helicopter sprites to match each other
-    enemy_heli_sprites = jru.pad_to_match([enemy_chopper1, enemy_chopper2])
+    enemy_heli_sprites, _ = jru.pad_to_match([enemy_chopper1, enemy_chopper2])
 
     # Pad player missile sprites to match each other
     pl_missile_sprites = pl_missile_sprites_temp
@@ -277,8 +278,8 @@ def load_sprites():
     # Player helicopter sprites
     SPRITE_PL_CHOPPER = jnp.concatenate(
         [
-            jnp.repeat(pl_chopper_sprites[0][None], PLAYER_ROTOR_SPEED, axis=0),
-            jnp.repeat(pl_chopper_sprites[1][None], PLAYER_ROTOR_SPEED, axis=0),
+            jnp.repeat(pl_chopper_sprites[0][None], 3, axis=0),    # PLAYER_ROTOR_SPEED = 3
+            jnp.repeat(pl_chopper_sprites[1][None], 3, axis=0),    # PLAYER_ROTOR_SPEED = 3
         ]
     )
 
@@ -377,1004 +378,10 @@ def load_sprites():
     MINIMAP_ACTIVISION_LOGO, #delete if necessary
 ) = load_sprites()
 
-@jax.jit
-def check_collision_single(pos1, size1, pos2, size2):
-    """Check collision between two single entities"""
-    # Calculate edges for rectangle 1
-    rect1_left = pos1[0]
-    rect1_right = pos1[0] + size1[0]
-    rect1_top = pos1[1]
-    rect1_bottom = pos1[1] + size1[1]
-
-    # Calculate edges for rectangle 2
-    rect2_left = pos2[0]
-    rect2_right = pos2[0] + size2[0]
-    rect2_top = pos2[1]
-    rect2_bottom = pos2[1] + size2[1]
-
-    # Check overlap
-    horizontal_overlap = jnp.logical_and(
-        rect1_left < rect2_right,
-        rect1_right > rect2_left
-    )
-
-    vertical_overlap = jnp.logical_and(
-        rect1_top < rect2_bottom,
-        rect1_bottom > rect2_top
-    )
-
-    return jnp.logical_and(horizontal_overlap, vertical_overlap)
-
-@jax.jit
-def check_collision_batch(pos1, size1, pos2_array, size2):
-    """Check collision between one entity and an array of entities"""
-    # Calculate edges for rectangle 1
-    rect1_left = pos1[0]
-    rect1_right = pos1[0] + size1[0]
-    rect1_top = pos1[1]
-    rect1_bottom = pos1[1] + size1[1]
-
-    # Calculate edges for all rectangles in pos2_array
-    rect2_left = pos2_array[:, 0]
-    rect2_right = pos2_array[:, 0] + size2[0]
-    rect2_top = pos2_array[:, 1]
-    rect2_bottom = pos2_array[:, 1] + size2[1]
-
-    # Check overlap for all entities
-    horizontal_overlaps = jnp.logical_and(
-        rect1_left < rect2_right,
-        rect1_right > rect2_left
-    )
-
-    vertical_overlaps = jnp.logical_and(
-        rect1_top < rect2_bottom,
-        rect1_bottom > rect2_top
-    )
-
-    # Combine checks for each entity
-    collisions = jnp.logical_and(horizontal_overlaps, vertical_overlaps)
-
-    # Return true if any collision detected
-    return jnp.any(collisions)
-
-def kill_entity(
-        enemy_pos: chex.Array,
-        death_timer: int
-        ) -> chex.Array:
-    return jnp.array([
-        enemy_pos[0],  # x
-        enemy_pos[1],  # y
-        enemy_pos[2],  # direction
-        death_timer  # death_timer
-    ], dtype=enemy_pos.dtype)
-
-@jax.jit
-def check_missile_collisions(
-    missile_positions: chex.Array,  # (MAX_MISSILES, 4)
-    enemy_positions: chex.Array,    # (N_ENEMIES, 2)
-    rng_key: chex.PRNGKey,
-    on_screen_position: chex.Array,
-    player_x: chex.Array,
-    enemy_size: chex.Array,
-) -> tuple[chex.Array, chex.Array, chex.Array, chex.PRNGKey]:
-    """Check for collisions between player missiles and enemies, mit dynamischer Breitenanpassung."""
-
-    def check_single_missile(missile_idx, carry):
-        missile_positions, enemy_positions, score, rng_key = carry
-
-        missile = missile_positions[missile_idx]
-        missile_x, missile_y, direction, _ = missile
-        missile_active = missile[3] != 0
-
-        def check_single_enemy(enemy_idx, inner_carry):
-            missile_positions, enemy_positions, score, rng_key = inner_carry
-            enemy_pos = enemy_positions[enemy_idx]
-            enemy_active = enemy_pos[3] > FRAMES_DEATH_ANIMATION_ENEMY
-
-            # Sichtfeldgrenzen
-            left_bound = player_x - on_screen_position
-            right_bound = left_bound + WIDTH
-
-            missile_left = missile_x
-            missile_right = missile_x + PLAYER_MISSILE_SIZE[0]
-
-            # Dynamische Breite berechnen
-            clipped_left = jnp.maximum(missile_left, left_bound)
-            clipped_right = jnp.minimum(missile_right, right_bound)
-
-            # Neue Breite
-            clipped_width = jnp.maximum(0, clipped_right - clipped_left)
-
-            # Missile ist zu klein → keine Kollision möglich
-            too_small = clipped_width <= 0
-
-            # Neue Position für Kollisionstest
-            adjusted_pos = jnp.array([clipped_left, missile_y])
-            adjusted_size = jnp.array([clipped_width, PLAYER_MISSILE_SIZE[1]])
-
-            collision = jnp.logical_and(
-                jnp.logical_and(
-                    jnp.logical_and(
-                        missile_active,
-                        enemy_active
-                    ),
-                    jnp.logical_not(too_small)
-                ),
-                check_collision_single(adjusted_pos, adjusted_size, enemy_pos, enemy_size)
-            )
-
-            #Kill initialisieren (nicht endgültig tot)
-            new_enemy_pos = jnp.where(collision, kill_entity(enemy_pos, FRAMES_DEATH_ANIMATION_ENEMY), enemy_pos)
-
-            # Punkte vergeben
-            is_jet = enemy_size[1] == 6
-            score_add = jnp.where(
-                jnp.logical_and(collision, enemy_pos[3] > FRAMES_DEATH_ANIMATION_ENEMY),
-                jnp.where(
-                    is_jet,
-                    SCORE_PER_JET_KILL,
-                    SCORE_PER_CHOPPER_KILL
-                ),
-                0
-            )
-
-            # Missile deaktivieren bei Treffer
-            new_missile = jnp.where(
-                collision,
-                jnp.array([0, 0, 0, 0], dtype=missile.dtype),
-                missile
-            )
-
-            # Apply updates
-            updated_enemies = enemy_positions.at[enemy_idx].set(new_enemy_pos)
-            updated_missiles = missile_positions.at[missile_idx].set(new_missile)
-
-            return (
-                updated_missiles,
-                updated_enemies,
-                score + score_add,
-                rng_key,
-            )
-
-        # Schleife über alle Gegner für eine Missile
-        return jax.lax.fori_loop(
-            0,
-            enemy_positions.shape[0],
-            check_single_enemy,
-            (missile_positions, enemy_positions, score, rng_key),
-        )
-
-    # Schleife über alle Missiles
-    return jax.lax.fori_loop(
-        0,
-        missile_positions.shape[0],
-        check_single_missile,
-        (missile_positions, enemy_positions, 0, rng_key),
-    )
-
-
-
-@jax.jit
-def check_player_collision_entity(
-    player_x: chex.Array,
-    player_y: chex.Array,
-    player_velocity: chex.Array,
-    entity_list: chex.Array,
-    entity_size: Tuple[int, int],
-    death_threshold: chex.Array,
-    ) -> Tuple[chex.Array, chex.Array]:
-
-    player_pos = jnp.array([player_x, player_y])
-    offset = (PLAYER_SIZE[0] // 2 - entity_size[0] // 2) - (player_velocity * DISTANCE_WHEN_FLYING)
-
-    def check_single(i, carry):
-        any_collision_inner, updated_entities = carry
-
-        world_x, world_y = entity_list[i, 0], entity_list[i, 1]
-        death_timer = entity_list[i, 3]
-        is_active = death_timer > death_threshold
-
-        # Passe die Position an, wie sie auch im Renderer korrigiert wird
-        adjusted_entity_pos = jnp.array([world_x + offset, world_y])
-
-        # Prüfe Kollision nur bei aktiven Gegnern
-        collision = jnp.logical_and(
-            is_active,
-            check_collision_single(player_pos, PLAYER_SIZE, adjusted_entity_pos, entity_size)
-        )
-
-        # Markiere getroffenen Gegner
-        new_entity = jnp.where(collision, kill_entity(entity_list[i], death_threshold), entity_list[i])
-        updated_entities = updated_entities.at[i].set(new_entity)
-
-        any_collision_inner = jnp.logical_or(any_collision_inner, collision)
-        return any_collision_inner, updated_entities
-
-    initial_carry = (False, entity_list)
-    any_collision, updated_entity_list = jax.lax.fori_loop(
-        0,
-        entity_list.shape[0],
-        check_single,
-        initial_carry
-    )
-
-    return any_collision, updated_entity_list
-
-
-@jax.jit
-def check_missile_truck_collisions(
-    truck_positions: chex.Array,        # (MAX_TRUCKS, 4): [x, y, direction, death_timer]
-    missile_positions: chex.Array,      # (MAX_MISSILES, 4): [x, y, direction, did_split_flag]
-    truck_size: Tuple[int, int],        # (width, height)
-    missile_size: Tuple[int, int],      # (width, height)
-) -> Tuple[chex.Array, chex.Array]:
-
-    def collide_one_missile(mi, carry):
-        trucks, missiles = carry
-        m = missiles[mi]
-
-        # Position und aktiver Status der Missile
-        mx, my, _, _ = m
-        missile_active = my > 2
-
-        # inner loop: prüfen gegen alle Trucks
-        def check_truck(ti, inner):
-            collided, trucks_inner = inner
-            t = trucks_inner[ti]
-            tx, ty, tdir, tdeath = t
-
-            # Truck nur prüfen wenn aktiv
-            truck_active = jnp.logical_and(tdir != 0, tdeath > 0)
-
-            # Kollisionstest
-            collision = jnp.logical_and(
-                missile_active,
-                truck_active
-            ) & check_collision_single(
-                jnp.array([mx, my]), missile_size,
-                jnp.array([tx, ty]), truck_size
-            )
-
-            # Wenn Kollision, setze Truck death_timer auf "tot initialisieren"
-            new_truck = jnp.where(
-                collision,
-                jnp.array([tx, ty, tdir, FRAMES_DEATH_ANIMATION_TRUCK], dtype=trucks_inner.dtype),
-                t
-            )
-            trucks_inner = trucks_inner.at[ti].set(new_truck)
-            collided = jnp.logical_or(collided, collision)
-            return collided, trucks_inner
-
-        # führe inner loop aus
-        init_inner = (False, trucks)
-        collided, updated_trucks = jax.lax.fori_loop(
-            0, truck_positions.shape[0], check_truck, init_inner
-        )
-
-        # wenn collision: kill Missile
-        new_m = jnp.where(
-            collided,
-            jnp.array([0.0, 0.0, 0.0, 187.0]),
-            m
-        )
-        missiles = missiles.at[mi].set(new_m)
-
-        return updated_trucks, missiles
-
-    # outer loop: alle Missiles
-    init = (truck_positions, missile_positions)
-    updated_trucks, updated_missiles = jax.lax.fori_loop(
-        0, missile_positions.shape[0], collide_one_missile, init
-    )
-
-    return updated_trucks, updated_missiles
-
-
-"""now can spawn enemies into fleets with different directions"""
-@jax.jit
-def initialize_enemy_positions(init_rng: chex.PRNGKey) -> tuple[chex.Array, chex.Array]:
-    jet_positions = jnp.zeros((MAX_ENEMIES, 4))
-    chopper_positions = jnp.zeros((MAX_ENEMIES, 4))
-
-    fleet_start_x = -780
-    fleet_spacing_x = 312
-    fleet_count = 4
-    units_per_fleet = 3
-    vertical_spacing = 30
-    y_start = HEIGHT // 2 - (units_per_fleet // 2) * vertical_spacing
-    key0, key1, key2 = jax.random.split(init_rng, 3)
-    keys_for_direction = jax.random.split(key0, fleet_count)
-    keys_for_chopper_amount = jax.random.split(key1, fleet_count)
-    keys_for_offsets = jax.random.split(key2, fleet_count * units_per_fleet)
-
-    carry = (jet_positions, chopper_positions, 0)
-
-    def spawn_fleet(fleet_idx, carry):
-        jet_positions, chopper_positions, global_idx = carry
-
-        anchor_x = fleet_start_x + fleet_idx * fleet_spacing_x
-        out_of_bounds = jnp.abs(PLAYER_START_X - anchor_x) > 624
-        anchor_x = jnp.where(out_of_bounds, anchor_x + 2*624, anchor_x)
-
-        # Für jede Einheit eine zufällige Richtung
-        directions = jax.random.choice(keys_for_direction[fleet_idx], jnp.array([-1, 1]), shape=(units_per_fleet,), replace=True)
-
-        # Zufällige Anzahl Chopper
-        chopper_count = jax.random.randint(keys_for_chopper_amount[fleet_idx], (), 0, units_per_fleet + 1)
-
-        # X-Offsets
-        x_offset_array = jnp.array(
-            [jax.random.randint(keys_for_offsets[fleet_idx * units_per_fleet + 0], (), -ENEMY_MAXIMUM_SPAWN_OFFSET + 5, ENEMY_MAXIMUM_SPAWN_OFFSET - 5),
-            jax.random.randint(keys_for_offsets[fleet_idx * units_per_fleet + 1], (), -ENEMY_MAXIMUM_SPAWN_OFFSET + 5, ENEMY_MAXIMUM_SPAWN_OFFSET - 5),
-            jax.random.randint(keys_for_offsets[fleet_idx * units_per_fleet + 2], (), -ENEMY_MAXIMUM_SPAWN_OFFSET + 5, ENEMY_MAXIMUM_SPAWN_OFFSET - 5)])
-
-        def place_unit(i, unit_carry):
-            jet_positions, chopper_positions, jet_idx, chopper_idx = unit_carry
-            y = y_start + i * vertical_spacing
-            offset_x = x_offset_array[i]
-            direction = directions[i]
-            pos = jnp.array([anchor_x + offset_x, y, direction, FRAMES_DEATH_ANIMATION_ENEMY + 5])
-
-            is_chopper = i < chopper_count
-            chopper_positions = jax.lax.cond(
-                is_chopper,
-                lambda cp: cp.at[chopper_idx].set(pos),
-                lambda cp: cp,
-                chopper_positions
-            )
-            jet_positions = jax.lax.cond(
-                is_chopper,
-                lambda jp: jp,
-                lambda jp: jp.at[jet_idx].set(pos),
-                jet_positions
-            )
-
-            jet_idx += jnp.where(is_chopper, 0, 1)
-            chopper_idx += jnp.where(is_chopper, 1, 0)
-            return jet_positions, chopper_positions, jet_idx, chopper_idx
-
-        jet_positions, chopper_positions, jet_idx, chopper_idx = jax.lax.fori_loop(
-            0, units_per_fleet, place_unit, (jet_positions, chopper_positions, global_idx, global_idx)
-        )
-
-        new_global_idx = global_idx + units_per_fleet
-        return (jet_positions, chopper_positions, new_global_idx)
-
-    jet_positions, chopper_positions, _ = jax.lax.fori_loop(
-        0, fleet_count, spawn_fleet, carry
-    )
-
-    return jet_positions, chopper_positions
-
-@jax.jit
-def emit_enemy_speed(speed: chex.Array) -> chex.Array:
-    return True
-
-@jax.jit
-def step_enemy_movement(
-        truck_positions: chex.Array,
-        jet_positions: chex.Array,
-        chopper_positions: chex.Array,
-        rng: chex.PRNGKey,
-        state_player_x: chex.Array,
-        local_player_offset: chex.Array,
-        difficulty: chex.Array,
-        enemy_speed: chex.Array,
-) -> Tuple[chex.Array, chex.Array, chex.PRNGKey]:
-
-    rng0, direction_rng = jax.random.split(rng)
-    rng1, process_jet_rng = jax.random.split(rng0)
-    return_rng, process_chopper_rng = jax.random.split(rng1)
-
-    def emit_velocity() -> chex.Array:
-        difficulty_value = jnp.where(difficulty == 1, 1, 1.5)
-        jet_speed_right = (JET_VELOCITY_RIGHT + enemy_speed) * difficulty_value
-        jet_speed_left = (JET_VELOCITY_LEFT + enemy_speed) * difficulty_value
-        chopper_speed_right = (CHOPPER_VELOCITY_RIGHT + enemy_speed) * difficulty_value
-        chopper_speed_left = (CHOPPER_VELOCITY_LEFT + enemy_speed) * difficulty_value
-
-        return jnp.array([jet_speed_right, jet_speed_left, chopper_speed_right, chopper_speed_left])
-
-
-    def move_enemy_x(pos: chex.Array, is_jet, move_x_is_in_range) -> chex.Array:
-        is_active = pos[2] != 0
-
-        def is_out_of_cycle(enemy_pos: chex.Array) -> chex.Array:
-            # Auswahl der X-Positionen der mittleren trucks
-            middle_trucks = jnp.array(
-                [
-                    truck_positions[1][0],
-                    truck_positions[4][0],
-                    truck_positions[7][0],
-                    truck_positions[10][0],
-                ]
-            )
-
-            # Berechne den absoluten Abstand zur enemy_position[0]
-            distances = jnp.abs(middle_trucks - enemy_pos[0])
-
-            # Finde den Index des kleinsten Abstands
-            min_index = jnp.argmin(distances)
-
-            nearest_middle_truck = middle_trucks[min_index]
-
-            return jnp.logical_or(enemy_pos[0] > nearest_middle_truck + ENEMY_OUT_OF_CYCLE_RIGHT,
-                                  enemy_pos[0] < nearest_middle_truck - ENEMY_OUT_OF_CYCLE_LEFT)
-
-
-        def is_in_range_function():
-            def check_if_out_of_cycle_jet_function():
-                def jet_is_out_of_cycle_function():
-
-                    return jax.lax.cond( # jet_is_out_of_cycle_function
-                        pos[2] == -1,
-                        lambda _: jnp.array([pos[0] + pos[2] * -1 * emit_velocity()[1] - 1, pos[1], pos[2] * -1, pos[3]], dtype=jnp.float32), # if enemy direction is -1 and position out of bounds turn around by multiply direction with -1 (LEFT -> RIGHT) and adding the LEFT_VELOCITY * direction to the position
-                        lambda _: jnp.array([pos[0] + pos[2] * -1 * emit_velocity()[0] - 1, pos[1], pos[2] * -1, pos[3]], dtype=jnp.float32), # if enemy direction is not -1 and position out of bounds turn around by multiply direction with -1 (RIGHT -> LEFT) and adding the RIGHT_VELOCITY * direction to the position
-                        operand=None
-                    )
-
-                def jet_is_not_out_of_cycle_function():
-
-                    return jax.lax.cond( # jet_is_not_out_of_cycle_function
-                        pos[2] == -1,
-                        lambda _: jnp.array([pos[0] + pos[2] * emit_velocity()[1], pos[1], pos[2], pos[3]], dtype=jnp.float32), # if enemy direction is -1 and position is not out of bounds just add the LEFT_VELOCITY * direction onto the position
-                        lambda _: jnp.array([pos[0] + pos[2] * emit_velocity()[0], pos[1], pos[2], pos[3]], dtype=jnp.float32), # if enemy direction is not -1 and position is not out of bounds just add the RIGHT_VELOCITY * direction onto the position
-                        operand=None
-                    )
-
-
-                return jax.lax.cond( # is_in_range_function
-                    is_out_of_cycle(pos),                               # checks if enemy is out of cycle
-                    lambda _: jet_is_out_of_cycle_function(),           # Jet is indeed out of bounds
-                    lambda _: jet_is_not_out_of_cycle_function(),       # Jet is inside of bounds
-                    operand=None
-                )
-
-
-            def check_if_out_of_cycle_chopper_function():
-
-                def chopper_is_out_of_cycle_function():
-
-                    return jax.lax.cond( # chopper_is_out_of_cycle_function
-                        pos[2] == -1,
-                        lambda _: jnp.array([pos[0] + pos[2] * -1 * emit_velocity()[3] - 1, pos[1], pos[2] * -1, pos[3]], dtype=jnp.float32),  # Since chopper is out of bounds, change its direction from left to right and do one step to the right + 1 to escape cycle (bounds) boundry
-                        lambda _: jnp.array([pos[0] + pos[2] * -1 * emit_velocity()[2] - 1, pos[1], pos[2] * -1, pos[3]], dtype=jnp.float32), # Since chopper is out of bounds, change its direction from right to left and do one step to the left + 1 to escape cycle (bounds) boundry
-                        operand=None
-                    )
-
-                def chopper_is_not_out_of_cycle_function():
-
-                    return jax.lax.cond( # chopper_is_not_out_of_cycle_function
-                        pos[2] == -1,
-                        lambda _: jnp.array([pos[0] + pos[2] * emit_velocity()[3], pos[1], pos[2], pos[3]], dtype=jnp.float32),  # Since chopper is inside of bounds, move chopper to the left by the defined speed
-                        lambda _: jnp.array([pos[0] + pos[2] * emit_velocity()[2], pos[1], pos[2], pos[3]], dtype=jnp.float32), # Since chopper is inside of bounds, move chopper to the right by the defined speed
-                        operand=None
-                    )
-
-
-                return jax.lax.cond( # check_if_out_of_cycle_chopper_function
-                    is_out_of_cycle(pos),
-                    lambda _: chopper_is_out_of_cycle_function(),     # Chopper is indeed out of bounds
-                    lambda _: chopper_is_not_out_of_cycle_function(), # Chopper is inside of bounds
-                    operand=None
-                )
-
-
-            return jax.lax.cond( # is_in_range_function
-                is_jet,
-                lambda _: check_if_out_of_cycle_jet_function(),       # Check if jet is out of bounds
-                lambda _: check_if_out_of_cycle_chopper_function(),   # Check if chopper is out of bounds
-                operand=None
-            )
-
-
-        def not_active_or_not_in_range(): # looks for in_range and active enemies from all fleets
-            return jax.lax.cond(
-                move_x_is_in_range,
-                lambda _: pos,                                                      # is dead -> does not move at all
-                lambda _: jnp.array([pos[0] - 0.5, pos[1], pos[2], pos[3]]),        # moves the same speed as trucks to the left (fleet + trucks stay freezed)
-                operand=None
-            )
-
-        new_pos = jax.lax.cond(
-            jnp.logical_and(is_active, move_x_is_in_range),
-            lambda _: is_in_range_function(),           # Enemy is alive and is in the nearest fleet to the player
-            lambda _: not_active_or_not_in_range(),     # Enemy is either dead or not part of the nearest fleet to the player.
-            operand=None
-        )
-
-
-        out_of_bounds = jnp.abs(state_player_x - pos[0]) > 624
-        wrapped_x = pos[0] + jnp.clip(state_player_x - pos[0], -1, 1) * 1248  # + pos[2] * 0.5
-        wrapped_pos = jnp.array([wrapped_x, pos[1], pos[2], pos[3]])
-
-        return jnp.where(out_of_bounds, wrapped_pos, new_pos)
-
-    def move_enemy_y(pos: chex.Array, i: chex.Array, move_y_rng_keys: chex.Array, move_y_is_in_range: chex.Array):
-        is_active = pos[2] != 0
-        is_on_correct_lane = jnp.logical_or(pos[1] == (pos[3] - FRAMES_DEATH_ANIMATION_ENEMY), pos[3] == FRAMES_DEATH_ANIMATION_ENEMY + 5) # If enemy is on the lane defined in its lane flag, except if lane flag equals the reset state
-
-        def dont_touch_position():
-            return pos[1], pos[3]
-
-        def move_or_dont():
-            def dont_move_and_reset_lane_flag():
-                return pos[1], FRAMES_DEATH_ANIMATION_ENEMY + 5.0
-
-            def move():
-                def get_go_up():
-                    return pos[1] - 0.5, pos[3]
-                def get_go_down():
-                    return pos[1] + 0.5, pos[3]
-
-                lane_is_below = pos[1] < (pos[3] - FRAMES_DEATH_ANIMATION_ENEMY)
-                return jax.lax.cond(lane_is_below,
-                                    lambda _: get_go_down(),  # If lane is below, do one step towards ground
-                                    lambda _: get_go_up(),    # If lane is above, do one step towards sky
-                                    operand=None)
-
-            return jax.lax.cond( # move_or_dont
-                is_on_correct_lane,
-                lambda _: dont_move_and_reset_lane_flag(),   # Enemy is on desired lane (allow new lane to be picked)
-                lambda _: move(),                            # Move enemy towards desired lane
-                operand=None
-            )
-
-        def get_next_pos():
-            def pick_desired_lane():
-                is_in_top_lane = jnp.any(pos[1] == TOP_LANES)           # If enemy is in the global top lane
-                is_in_middle_lane = jnp.any(pos[1] == MIDDLE_LANES)     # If enemy is in the glocal middle lane
-
-                new_lane = FRAMES_DEATH_ANIMATION_ENEMY + jnp.where( # Pick a valid lane for the enemy. (Pick one local lane from the global lane the enemy is on)
-                    is_in_top_lane,
-                    jax.random.choice(move_y_rng_keys[i], TOP_LANES).astype(jnp.float32),   # RNG FOR LANE PICK IS NOT FULLY RANDOM, LIKE IN REAL GAME. CHANGE ALL OCCURRENCES OF move_y_rng_keys[1] to move_y_rng_keys[i] FOR IT TO BE FULLY RANDOM
-                    jnp.where(
-                        is_in_middle_lane,
-                        jax.random.choice(move_y_rng_keys[1], MIDDLE_LANES).astype(jnp.float32),
-                        jax.random.choice(move_y_rng_keys[i], BOTTOM_LANES).astype(jnp.float32)  # If not in top or middle, enemy has to be in the bottom lane
-                    )
-                )
-                return pos[1], new_lane
-
-
-            should_switch = jax.random.bernoulli(move_y_rng_keys[1], p=ENEMY_LANE_SWITCH_PROBABILITY)
-            return jax.lax.cond( # get_next_pos
-                jnp.logical_and(should_switch, is_on_correct_lane),
-                lambda _: pick_desired_lane(),  # Since enemy is on its desired lane and should_switch is triggered, we need to update the lane handler to the desired lane
-                lambda _: move_or_dont(),       # Move enemy if not on desired lane or don't move if on the desired lane
-                operand=None
-            )
-
-        (new_y, death_timer_or_lane_flag) = jax.lax.cond( # move_enemy_y
-            jnp.logical_and((pos[3] > FRAMES_DEATH_ANIMATION_ENEMY + 4), jnp.logical_and(is_active, move_y_is_in_range)),
-            lambda _: get_next_pos(),           # If pos[3] is interpreted as the lane handler
-            lambda _: dont_touch_position(),    # If pos[3] is interpreted as the death timer, also used for logic where the y position should not be changed
-            operand=None
-        )
-
-        return jnp.array([pos[0], new_y, pos[2], death_timer_or_lane_flag], dtype=pos.dtype)
-
-    def is_in_range_checker(pos: chex.Array) -> chex.Array:
-        all_middle_trucks_x = jnp.array(
-            [
-                truck_positions[1][0],
-                truck_positions[4][0],
-                truck_positions[7][0],
-                truck_positions[10][0],
-            ]
-        )
-
-        # nearest_middle_truck = x-coordinate of middle truck closest to enemy with given pos
-        distance_to_enemy = jnp.abs(all_middle_trucks_x - pos[0])
-        min_index = jnp.argmin(distance_to_enemy)
-        nearest_middle_truck = all_middle_trucks_x[min_index]
-
-        # nearest_middle_truck_player = x-coordinate of middle truck closest to player
-        distance_to_player = jnp.abs(all_middle_trucks_x - state_player_x + local_player_offset)
-        min_index_player = jnp.argmin(distance_to_player)
-        nearest_middle_truck_player = all_middle_trucks_x[min_index_player]
-
-        return jnp.where(nearest_middle_truck == nearest_middle_truck_player, jnp.array(True), jnp.array(False))
-
-
-    def process_jet(i, new_positions):
-        current_pos = jet_positions[i]                                                                      # Get current position
-        jet_is_in_range = is_in_range_checker(current_pos)                                                  # If jet is in "render distance". If not, it does not move
-        new_pos = move_enemy_x(current_pos, jnp.array(True), jet_is_in_range)                               # Calculate new x position
-        keys_for_process_jet = jax.random.split(process_jet_rng, jet_positions.shape[0])                    # Generate rng-key for every chopper there is. THIS IS NOT FULLY USED, SINCE MOVEMENT IS NOT FULLY RANDOM.
-        new_pos = move_enemy_y(new_pos, i, keys_for_process_jet, jet_is_in_range)                           # Calculate new y position
-        return new_positions.at[i].set(new_pos)
-
-    new_jet_positions = jnp.zeros_like(jet_positions)
-    new_jet_positions = jax.lax.fori_loop(0, jet_positions.shape[0], process_jet, new_jet_positions)
-
-    def process_chopper(i, new_positions):
-        current_pos = chopper_positions[i]                                                                  # Get current position
-        chopper_is_in_range = is_in_range_checker(current_pos)                                              # If chopper is in "render distance". If not, it does not move
-        new_pos = move_enemy_x(current_pos, jnp.array(False), chopper_is_in_range)                          # Calculate new x position
-        keys_for_process_chopper = jax.random.split(process_chopper_rng, chopper_positions.shape[0])        # Generate rng-key for every chopper there is. THIS IS NOT FULLY USED, SINCE MOVEMENT IS NOT FULLY RANDOM.
-        new_pos = move_enemy_y(new_pos, i, keys_for_process_chopper, chopper_is_in_range)                   # Calculate new y position
-        return new_positions.at[i].set(new_pos)
-
-    new_chopper_positions = jnp.zeros_like(chopper_positions)
-    new_chopper_positions = jax.lax.fori_loop(0, chopper_positions.shape[0], process_chopper, new_chopper_positions)
-
-    return new_jet_positions, new_chopper_positions, return_rng
-
-def update_entity_death(entity_array, death_timer, is_truck):
-    def update_entity(i, carry):
-        entities = carry
-        entity = entities[i]
-        direction, timer = entity[2], entity[3]
-
-        #Wenn tot initialisiert (also noch aktiv) und timer > 0 & timer <= FRAMES_DEATH_ANIMATION, dann dekrementieren
-        new_timer = jnp.where(jnp.logical_and(timer > 0, timer <= death_timer), timer - 1, timer)
-
-        #Nach Ablauf von death_timer Enemy deaktivieren/entfernen
-        new_entity = jnp.where(
-            new_timer == 0,
-                    jnp.where(
-                        is_truck,
-                        jnp.array([entity[0], entity[1], 0, 0], dtype=entity.dtype),
-                        jnp.array([0, 0, 0, 0], dtype=entity.dtype)
-                    ),
-            entity.at[3].set(new_timer)
-        )
-
-        return entities.at[i].set(new_entity)
-
-    return jax.lax.fori_loop(0, entity_array.shape[0], update_entity, entity_array)
-
-
-@jax.jit
-def initialize_truck_positions() -> chex.Array:
-    initial_truck_positions = jnp.zeros((MAX_TRUCKS, 4))
-    anchor = -748
-    carry = (initial_truck_positions, anchor)
-
-    def spawn_trucks(i, carry):
-        truck_positions, anchor = carry
-
-        anchor = jnp.where(
-            i % 3 == 0,
-            anchor + 248,
-            anchor + 32,
-        )
-        truck_positions = truck_positions.at[i].set(jnp.array([anchor, 156, -1, FRAMES_DEATH_ANIMATION_TRUCK + 1]))
-        return truck_positions, anchor
-
-    return jax.lax.fori_loop(0, 12, spawn_trucks, carry)[0]
-
-@jax.jit
-def step_truck_movement(
-        truck_positions: chex.Array,
-        state_player_x: chex.Array,
-) -> chex.Array:
-
-    def move_single_truck(truck_pos):
-        movement_x = -1 * 0.5  # Geschwindigkeit 0.5 pro Frame, egal ob tot oder nicht, weil wir die Position noch für die enemy positions brauchen
-
-        out_of_bounds = jnp.abs(state_player_x - truck_pos[0]) > 624
-
-        new_x = jnp.where(
-            out_of_bounds,
-            truck_pos[0] + jnp.sign(state_player_x - truck_pos[0]) * 1248 + movement_x,
-            truck_pos[0] + movement_x,
-        )
-
-        new_pos = jnp.array([new_x, truck_pos[1], truck_pos[2], truck_pos[3]])
-
-        return new_pos
-
-    return jax.vmap(move_single_truck)(truck_positions)
-
-
-@jax.jit
-def enemy_missiles_step(
-        jet_positions: chex.Array,  # (MAX_ENEMIES, 4)
-        chopper_positions: chex.Array,  # (MAX_ENEMIES, 4)
-        missile_states: chex.Array,  # (MAX_ENEMY_MISSILES, 4): [x, y, y_dir, did_split]
-        rng: chex.PRNGKey,
-) -> chex.Array:
-
-    enemies = jnp.concat([jet_positions, chopper_positions], axis=0)
-
-    def step_both_missiles(i, carry):
-        missiles, key, eni = carry
-        # Split key into spawn, split, speed, and next key
-        key, key_spawn, key_split, key_speed = jax.random.split(key, 4)
-
-        # Get current enemy
-        current_enemy = enemies[eni]
-
-        # Upper and lower missile
-        missile_upper = missiles[i]
-        missile_lower = missiles[i + 1]
-
-        def maybe_spawn():
-            def do_spawn():
-                # Coordinates of upper missile part
-                x_upper_spawn = current_enemy[0]
-                y_upper_spawn = current_enemy[1]
-
-                # Coordinates of lower missile part
-                x_lower_spawn = current_enemy[0]
-                y_lower_spawn = current_enemy[1] + 1
-
-                # Random Y Velocity
-                y_speed_spawn = jax.random.uniform(
-                    key_speed,
-                    (),
-                    minval=-ENEMY_MISSILE_MAXIMUM_Y_SPEED_BEFORE_SPLIT,
-                    maxval=ENEMY_MISSILE_MAXIMUM_Y_SPEED_BEFORE_SPLIT
-                )
-
-                # We also set the did_split flag to false
-                spawned_upper_missile = jnp.array([x_upper_spawn, y_upper_spawn, y_speed_spawn, 187.0], dtype=jnp.float32)
-                spawned_lower_missile = jnp.array([x_lower_spawn, y_lower_spawn, y_speed_spawn, 187.0], dtype=jnp.float32)
-
-                return spawned_upper_missile, spawned_lower_missile
-
-            return jax.lax.cond(
-                jax.random.bernoulli(key_spawn, p=ENEMY_MISSILE_SPAWN_PROBABILITY),
-                lambda _: do_spawn(), # Actually spawn
-                lambda _: (           # Leave dead
-                    jnp.array([0.0, 0.0, 0.0, 187.0], dtype=jnp.float32),
-                    jnp.array([0.0, 0.0, 0.0, 187.0], dtype=jnp.float32)
-                ),
-                operand=None
-            )
-
-        def do_step():
-            x_upper_step, y_upper_step, y_upper_speed, did_split_upper_step = missile_upper
-            x_lower_step, y_lower_step, y_lower_speed, did_split_lower_step = missile_lower
-
-            def dont_split():
-                y_upper_step_inner = y_upper_step + y_upper_speed
-                y_lower_step_inner = y_lower_step + y_lower_speed
-                return (
-                    y_upper_step_inner.astype(jnp.float32),
-                    y_upper_speed.astype(jnp.float32),
-                    y_lower_step_inner.astype(jnp.float32),
-                    y_lower_speed.astype(jnp.float32),
-                    187.0
-                )
-
-            def do_split():
-                y_upper_speed_inner = jnp.array(ENEMY_MISSILE_Y_SPEED_AFTER_SPLIT, dtype=jnp.float32)
-                y_lower_speed_inner = jnp.array(-ENEMY_MISSILE_Y_SPEED_AFTER_SPLIT, dtype=jnp.float32)
-                y_upper_step_inner = y_upper_step + y_upper_speed_inner
-                y_lower_step_inner = y_lower_step + y_lower_speed_inner
-                return (
-                    y_upper_step_inner.astype(jnp.float32),
-                    y_upper_speed_inner,
-                    y_lower_step_inner.astype(jnp.float32),
-                    y_lower_speed_inner,
-                    42.0
-                )
-
-            split_condition = jnp.logical_and(
-                jax.random.bernoulli(key_split, p=ENEMY_MISSILE_SPLIT_PROBABILITY),
-                jnp.logical_and(did_split_upper_step != 42.0, did_split_lower_step != 42.0)
-            )
-
-            y_upper_changed, y_upper_speed_changed, y_lower_changed, y_lower_speed_changed, flag = jax.lax.cond(
-                split_condition,
-                lambda _: do_split(),
-                lambda _: dont_split(),
-                operand=None
-            )
-
-            stepped_upper_missile = jnp.array([x_upper_step, y_upper_changed, y_upper_speed_changed, flag], dtype=jnp.float32)
-            stepped_lower_missile = jnp.array([x_lower_step, y_lower_changed, y_lower_speed_changed, flag], dtype=jnp.float32)
-
-            # Kill upper if out of bounds
-            stepped_upper_missile = jnp.where(
-                jnp.logical_or(y_upper_changed < 44.0, y_upper_changed > 163.0),
-                jnp.array([0.0, 0.0, 0.0, 187.0], dtype=jnp.float32),
-                stepped_upper_missile,
-            )
-
-            # Kill lower if out of bounds
-            stepped_lower_missile = jnp.where(
-                jnp.logical_or(y_lower_changed < 44.0, y_lower_changed > 163.0),
-                jnp.array([0.0, 0.0, 0.0, 187.0], dtype=jnp.float32),
-                stepped_lower_missile
-            )
-
-            return stepped_upper_missile, stepped_lower_missile
-
-        # Check if missile is "alive"
-        upper_dead = jnp.all(missile_upper == jnp.array([0.0, 0.0, 0.0, 187.0], dtype=jnp.float32))
-        lower_dead = jnp.all(missile_lower == jnp.array([0.0, 0.0, 0.0, 187.0], dtype=jnp.float32))
-
-        updated_missile_upper, updated_missile_lower = jax.lax.cond(
-            jnp.logical_and(upper_dead, lower_dead),
-            lambda _: maybe_spawn(),
-            lambda _: do_step(),
-            operand=None
-        )
-
-        missiles = missiles.at[i].set(updated_missile_upper)
-        missiles = missiles.at[i + 1].set(updated_missile_lower)
-
-        return missiles, key
-
-    def step_even(i, carry):
-        a, b = carry
-        carry = a, b, i
-        return step_both_missiles(i * 2, carry)
-
-    updated, _ = jax.lax.fori_loop(
-        0, enemies.shape[0], step_even, (missile_states, rng)
-    )
-    return updated
-
-
-@jax.jit
-def player_missile_step(state: ChopperCommandState, curr_player_x, curr_player_y, action: chex.Array):
-    fire = jnp.any(
-        jnp.array([
-            action == Action.FIRE,
-            action == Action.UPRIGHTFIRE,
-            action == Action.UPLEFTFIRE,
-            action == Action.DOWNFIRE,
-            action == Action.DOWNRIGHTFIRE,
-            action == Action.DOWNLEFTFIRE,
-            action == Action.RIGHTFIRE,
-            action == Action.LEFTFIRE,
-            action == Action.UPFIRE,
-        ])
-    )
-
-    missile_y = curr_player_y + 6
-    cooldown = jnp.maximum(state.player_missile_cooldown - 1, 0)
-
-    def try_spawn(missiles):
-        def body(i, carry):
-            missiles, did_spawn = carry
-            missile = missiles[i]
-            free = missile[2] == 0  # direction == 0 -> inactive
-            should_spawn = jnp.where(MAX_PLAYER_MISSILES > 1,
-                                     jnp.logical_and(free, jnp.logical_not(did_spawn)),
-                                     jnp.array(True))
-
-            spawn_x = jnp.where(
-                state.player_facing_direction == -1,
-                curr_player_x - PLAYER_MISSILE_WIDTH,
-                curr_player_x + PLAYER_SIZE[0],
-            )
-
-            new_missile = jnp.array([
-                spawn_x, # x
-                missile_y, # y
-                state.player_facing_direction, # dir
-                spawn_x # x_spawn
-            ], dtype=jnp.int32)
-
-            updated_missile = jnp.where(should_spawn, new_missile, missile)
-            missiles = missiles.at[i].set(updated_missile)
-            return missiles, jnp.logical_or(did_spawn, should_spawn)
-
-        return jax.lax.fori_loop(0, missiles.shape[0], body, (missiles, False))
-
-    def spawn_if_possible(missiles):
-        def do_spawn(_):
-            return try_spawn(missiles)
-        def skip_spawn(_):
-            return missiles, False
-        return jax.lax.cond(jnp.logical_and(jnp.logical_and(fire, state.pause_timer > DEATH_PAUSE_FRAMES), cooldown == 0), do_spawn, skip_spawn, operand=None)
-
-    def update_missile(missile):
-        exists = missile[2] != 0
-        new_x = missile[0] + missile[2] * MISSILE_SPEED + state.player_velocity_x
-
-        updated = jnp.array([
-            new_x,        # updated x
-            missile[1],   # y stays
-            missile[2],   # direction stays
-            missile[3]    # x_spawn stays
-        ], dtype=jnp.int32)
-
-        chopper_pos = (WIDTH // 2) - 8 + state.local_player_offset + (state.player_velocity_x * DISTANCE_WHEN_FLYING)
-        left_bound = state.player_x - chopper_pos - PLAYER_MISSILE_WIDTH
-        right_bound = state.player_x + (WIDTH - chopper_pos)
-
-        out_of_bounds = jnp.logical_or(updated[0] < left_bound, updated[0] > right_bound)
-        return jnp.where(jnp.logical_and(exists, ~out_of_bounds), updated, jnp.array([0, 0, 0, 0], dtype=jnp.int32))
-
-    updated_missiles = jax.vmap(update_missile)(state.player_missile_positions)
-    updated_missiles, did_spawn = spawn_if_possible(updated_missiles)
-    new_cooldown = jnp.where(did_spawn, MISSILE_COOLDOWN_FRAMES, cooldown)
-
-    return updated_missiles, new_cooldown
-
-
-@jax.jit
-def player_step(
-    state: ChopperCommandState, action: chex.Array
-) -> tuple[chex.Array, chex.Array, chex.Array, chex.Array, chex.Array]:
-    # Bewegungsrichtung bestimmen
-    up = jnp.isin(action, jnp.array([
-        Action.UP,
-        Action.UPRIGHT,
-        Action.UPLEFT,
-        Action.UPFIRE,
-        Action.UPRIGHTFIRE,
-        Action.UPLEFTFIRE
-    ]))
-    down = jnp.isin(action, jnp.array([
-        Action.DOWN,
-        Action.DOWNRIGHT,
-        Action.DOWNLEFT,
-        Action.DOWNFIRE,
-        Action.DOWNRIGHTFIRE,
-        Action.DOWNLEFTFIRE
-    ]))
-    left = jnp.isin(action, jnp.array([
-        Action.LEFT,
-        Action.UPLEFT,
-        Action.DOWNLEFT,
-        Action.LEFTFIRE,
-        Action.UPLEFTFIRE,
-        Action.DOWNLEFTFIRE
-    ]))
-    right = jnp.isin(action, jnp.array([
-        Action.RIGHT,
-        Action.UPRIGHT,
-        Action.DOWNRIGHT,
-        Action.RIGHTFIRE,
-        Action.UPRIGHTFIRE,
-        Action.DOWNRIGHTFIRE
-    ]))
-
-
-    # Ziel-Beschleunigung basierend auf Eingabe
-    accel_x = jnp.where(right, ACCEL, jnp.where(left, -ACCEL, 0.0))
-
-    # Direction player is facing
-    new_player_facing_direction = jnp.where(right, 1, jnp.where(left, -1, state.player_facing_direction))
-
-    # Neue Geschwindigkeit berechnen und begrenzen
-    velocity_x = state.player_velocity_x + accel_x
-    velocity_x = jnp.clip(velocity_x, -MAX_VELOCITY, MAX_VELOCITY)
-
-    # Falls keine Eingabe: langsamer werden (Friction)
-    velocity_x = jnp.where(~(left | right), velocity_x * (1.0 - FRICTION), velocity_x)
-
-    # Neue X-Position (global!)
-    player_x = state.player_x + velocity_x
-
-    # Y-Position berechnen (sofortige Reaktion)
-    delta_y = jnp.where(up, -1, jnp.where(down, 1, 0))
-    player_y = jnp.clip(state.player_y + delta_y, PLAYER_BOUNDS[1][0], PLAYER_BOUNDS[1][1])
-
-    # "Momentum" berechnen für Offset von der Mitte aus
-    new_player_offset = jnp.where(new_player_facing_direction == 1, state.local_player_offset - LOCAL_PLAYER_OFFSET_SPEED, state.local_player_offset + LOCAL_PLAYER_OFFSET_SPEED)
-    new_player_offset = jnp.asarray(new_player_offset, dtype=jnp.int32)
-
-    new_player_offset = jnp.clip(new_player_offset, -60, 60)
-
-    return player_x, player_y, velocity_x, new_player_offset, new_player_facing_direction
-
-def lives_step(
-        player_collision: chex.Array,
-        current_score: jnp.int32,
-        save_lives: jnp.int32,
-) -> tuple[jnp.int32, jnp.int32]:
-
-    current_score = jnp.where(current_score == 0, 1, current_score)
-    num_to_add = jnp.where(player_collision, -1, 0)
-
-    num_to_add = jnp.where((current_score // 10000) > save_lives, num_to_add + 1, num_to_add)
-    new_save_lives = jnp.where((current_score // 10000) > save_lives, save_lives + 1, save_lives)
-
-    return num_to_add, new_save_lives
-
-
-class JaxChopperCommand(JaxEnvironment[ChopperCommandState, ChopperCommandObservation, ChopperCommandInfo]):
-    def __init__(self, frameskip: int = 1, reward_funcs: list[Callable] =None):
-        super().__init__()
+class JaxChopperCommand(JaxEnvironment[ChopperCommandState, ChopperCommandObservation, ChopperCommandInfo, ChopperCommandConstants]):
+    def __init__(self, consts: ChopperCommandConstants = None, frameskip: int = 1, reward_funcs: list[Callable] =None):
+        consts = consts or ChopperCommandConstants()
+        super().__init__(consts)
         self.frameskip = frameskip
         if reward_funcs is not None:
             reward_funcs = tuple(reward_funcs)
@@ -1400,7 +407,7 @@ class JaxChopperCommand(JaxEnvironment[ChopperCommandState, ChopperCommandObserv
             Action.DOWNLEFTFIRE
         ]
         self.frame_stack_size = 4
-        self.obs_size = 5 + MAX_JETS * 5 + MAX_CHOPPERS * 5 + MAX_PLAYER_MISSILES * 5 + 5 + 5
+        self.obs_size = 5 + self.consts.MAX_JETS * 5 + self.consts.MAX_CHOPPERS * 5 + self.consts.MAX_PLAYER_MISSILES * 5 + 5 + 5
         self.renderer = ChopperCommandRenderer()
 
     def render(self, state: ChopperCommandState) -> jnp.ndarray:
@@ -1456,10 +463,10 @@ class JaxChopperCommand(JaxEnvironment[ChopperCommandState, ChopperCommandObserv
                 "height": spaces.Box(low=0, high=210, shape=(), dtype=jnp.int32),
                 "active": spaces.Box(low=0, high=1, shape=(), dtype=jnp.int32),
             }),
-            "trucks": spaces.Box(low=0, high=160, shape=(MAX_TRUCKS, 4), dtype=jnp.int32),
-            "jets": spaces.Box(low=0, high=160, shape=(MAX_JETS, 4), dtype=jnp.int32),
-            "choppers": spaces.Box(low=0, high=160, shape=(MAX_CHOPPERS, 4), dtype=jnp.int32),
-            "enemy_missiles": spaces.Box(low=0, high=160, shape=(MAX_ENEMY_MISSILES, 4), dtype=jnp.int32),
+            "trucks": spaces.Box(low=0, high=160, shape=(self.consts.MAX_TRUCKS, 4), dtype=jnp.int32),
+            "jets": spaces.Box(low=0, high=160, shape=(self.consts.MAX_JETS, 4), dtype=jnp.int32),
+            "choppers": spaces.Box(low=0, high=160, shape=(self.consts.MAX_CHOPPERS, 4), dtype=jnp.int32),
+            "enemy_missiles": spaces.Box(low=0, high=160, shape=(self.consts.MAX_ENEMY_MISSILES, 4), dtype=jnp.int32),
             "player_missile": spaces.Dict({
                 "x": spaces.Box(low=0, high=160, shape=(), dtype=jnp.int32),
                 "y": spaces.Box(low=0, high=210, shape=(), dtype=jnp.int32),
@@ -1490,8 +497,8 @@ class JaxChopperCommand(JaxEnvironment[ChopperCommandState, ChopperCommandObserv
             x=state.player_x,
             y=state.player_y,
             o=state.player_velocity_x,
-            width=jnp.array(PLAYER_SIZE[0]),
-            height=jnp.array(PLAYER_SIZE[1]),
+            width=jnp.array(self.consts.PLAYER_SIZE[0]),
+            height=jnp.array(self.consts.PLAYER_SIZE[1]),
             active=jnp.array(1),  # Player is always active
         )
 
@@ -1508,22 +515,22 @@ class JaxChopperCommand(JaxEnvironment[ChopperCommandState, ChopperCommandObserv
         # Apply conversion to each type of entity using vmap
 
         # Friendly trucks
-        trucks = jax.vmap(lambda pos: convert_to_entity(pos, TRUCK_SIZE))(
+        trucks = jax.vmap(lambda pos: convert_to_entity(pos, self.consts.TRUCK_SIZE))(
             state.truck_positions
         )
 
         # Enemy jets
-        jets = jax.vmap(lambda pos: convert_to_entity(pos, JET_SIZE))(
+        jets = jax.vmap(lambda pos: convert_to_entity(pos, self.consts.JET_SIZE))(
             state.jet_positions
         )
 
         # Enemy choppers
-        choppers = jax.vmap(lambda pos: convert_to_entity(pos, CHOPPER_SIZE))(
+        choppers = jax.vmap(lambda pos: convert_to_entity(pos, self.consts.CHOPPER_SIZE))(
             state.chopper_positions
         )
 
         # Enemy missiles
-        enemy_missiles = jax.vmap(lambda pos: convert_to_entity(pos, ENEMY_MISSILE_SIZE))(
+        enemy_missiles = jax.vmap(lambda pos: convert_to_entity(pos, self.consts.ENEMY_MISSILE_SIZE))(
             state.enemy_missile_positions
         )
 
@@ -1532,8 +539,8 @@ class JaxChopperCommand(JaxEnvironment[ChopperCommandState, ChopperCommandObserv
         player_missile = EntityPosition(
             x=missile_pos[0],
             y=missile_pos[1],
-            width=jnp.array(PLAYER_MISSILE_SIZE[0]),
-            height=jnp.array(PLAYER_MISSILE_SIZE[1]),
+            width=jnp.array(self.consts.PLAYER_MISSILE_SIZE[0]),
+            height=jnp.array(self.consts.PLAYER_MISSILE_SIZE[1]),
             active=jnp.array(missile_pos[2] != 0),
         )
 
@@ -1571,38 +578,1051 @@ class JaxChopperCommand(JaxEnvironment[ChopperCommandState, ChopperCommandObserv
     def _get_done(self, state: ChopperCommandState) -> bool:
         return state.lives < 0
 
+    @partial(jax.jit, static_argnums=(0,))
+    def check_collision_single(
+            self, pos1, size1, pos2, size2
+    ):
+        """Check collision between two single entities"""
+        # Calculate edges for rectangle 1
+        rect1_left = pos1[0]
+        rect1_right = pos1[0] + size1[0]
+        rect1_top = pos1[1]
+        rect1_bottom = pos1[1] + size1[1]
 
+        # Calculate edges for rectangle 2
+        rect2_left = pos2[0]
+        rect2_right = pos2[0] + size2[0]
+        rect2_top = pos2[1]
+        rect2_bottom = pos2[1] + size2[1]
+
+        # Check overlap
+        horizontal_overlap = jnp.logical_and(
+            rect1_left < rect2_right,
+            rect1_right > rect2_left
+        )
+
+        vertical_overlap = jnp.logical_and(
+            rect1_top < rect2_bottom,
+            rect1_bottom > rect2_top
+        )
+
+        return jnp.logical_and(horizontal_overlap, vertical_overlap)
+
+    @partial(jax.jit, static_argnums=(0,))
+    def check_collision_batch(
+            self, pos1, size1, pos2_array, size2
+    ):
+        """Check collision between one entity and an array of entities"""
+        # Calculate edges for rectangle 1
+        rect1_left = pos1[0]
+        rect1_right = pos1[0] + size1[0]
+        rect1_top = pos1[1]
+        rect1_bottom = pos1[1] + size1[1]
+
+        # Calculate edges for all rectangles in pos2_array
+        rect2_left = pos2_array[:, 0]
+        rect2_right = pos2_array[:, 0] + size2[0]
+        rect2_top = pos2_array[:, 1]
+        rect2_bottom = pos2_array[:, 1] + size2[1]
+
+        # Check overlap for all entities
+        horizontal_overlaps = jnp.logical_and(
+            rect1_left < rect2_right,
+            rect1_right > rect2_left
+        )
+
+        vertical_overlaps = jnp.logical_and(
+            rect1_top < rect2_bottom,
+            rect1_bottom > rect2_top
+        )
+
+        # Combine checks for each entity
+        collisions = jnp.logical_and(horizontal_overlaps, vertical_overlaps)
+
+        # Return true if any collision detected
+        return jnp.any(collisions)
+
+    def kill_entity(
+            self,
+            enemy_pos: chex.Array,
+            death_timer: int
+            ) -> chex.Array:
+        return jnp.array([
+            enemy_pos[0],  # x
+            enemy_pos[1],  # y
+            enemy_pos[2],  # direction
+            death_timer  # death_timer
+        ], dtype=enemy_pos.dtype)
+
+    @partial(jax.jit, static_argnums=(0,))
+    def check_missile_collisions(
+        self,
+        missile_positions: chex.Array,  # (MAX_MISSILES, 4)
+        enemy_positions: chex.Array,    # (N_ENEMIES, 2)
+        rng_key: chex.PRNGKey,
+        on_screen_position: chex.Array,
+        player_x: chex.Array,
+        enemy_size: chex.Array,
+    ) -> tuple[chex.Array, chex.Array, chex.Array, chex.PRNGKey]:
+        """Check for collisions between player missiles and enemies, mit dynamischer Breitenanpassung."""
+
+        def check_single_missile(missile_idx, carry):
+            missile_positions, enemy_positions, score, rng_key = carry
+
+            missile = missile_positions[missile_idx]
+            missile_x, missile_y, direction, _ = missile
+            missile_active = missile[3] != 0
+
+            def check_single_enemy(enemy_idx, inner_carry):
+                missile_positions, enemy_positions, score, rng_key = inner_carry
+                enemy_pos = enemy_positions[enemy_idx]
+                enemy_active = enemy_pos[3] > self.consts.FRAMES_DEATH_ANIMATION_ENEMY
+
+                # Sichtfeldgrenzen
+                left_bound = player_x - on_screen_position
+                right_bound = left_bound + self.consts.WIDTH
+
+                missile_left = missile_x
+                missile_right = missile_x + self.consts.PLAYER_MISSILE_SIZE[0]
+
+                # Dynamische Breite berechnen
+                clipped_left = jnp.maximum(missile_left, left_bound)
+                clipped_right = jnp.minimum(missile_right, right_bound)
+
+                # Neue Breite
+                clipped_width = jnp.maximum(0, clipped_right - clipped_left)
+
+                # Missile ist zu klein → keine Kollision möglich
+                too_small = clipped_width <= 0
+
+                # Neue Position für Kollisionstest
+                adjusted_pos = jnp.array([clipped_left, missile_y])
+                adjusted_size = jnp.array([clipped_width, self.consts.PLAYER_MISSILE_SIZE[1]])
+
+                collision = jnp.logical_and(
+                    jnp.logical_and(
+                        jnp.logical_and(
+                            missile_active,
+                            enemy_active
+                        ),
+                        jnp.logical_not(too_small)
+                    ),
+                    self.check_collision_single(adjusted_pos, adjusted_size, enemy_pos, enemy_size)
+                )
+
+                #Kill initialisieren (nicht endgültig tot)
+                new_enemy_pos = jnp.where(collision, self.kill_entity(enemy_pos, self.consts.FRAMES_DEATH_ANIMATION_ENEMY), enemy_pos)
+
+                # Punkte vergeben
+                is_jet = enemy_size[1] == 6
+                score_add = jnp.where(
+                    jnp.logical_and(collision, enemy_pos[3] > self.consts.FRAMES_DEATH_ANIMATION_ENEMY),
+                    jnp.where(
+                        is_jet,
+                        self.consts.SCORE_PER_JET_KILL,
+                        self.consts.SCORE_PER_CHOPPER_KILL
+                    ),
+                    0
+                )
+
+                # Missile deaktivieren bei Treffer
+                new_missile = jnp.where(
+                    collision,
+                    jnp.array([0, 0, 0, 0], dtype=missile.dtype),
+                    missile
+                )
+
+                # Apply updates
+                updated_enemies = enemy_positions.at[enemy_idx].set(new_enemy_pos)
+                updated_missiles = missile_positions.at[missile_idx].set(new_missile)
+
+                return (
+                    updated_missiles,
+                    updated_enemies,
+                    score + score_add,
+                    rng_key,
+                )
+
+            # Schleife über alle Gegner für eine Missile
+            return jax.lax.fori_loop(
+                0,
+                enemy_positions.shape[0],
+                check_single_enemy,
+                (missile_positions, enemy_positions, score, rng_key),
+            )
+
+        # Schleife über alle Missiles
+        return jax.lax.fori_loop(
+            0,
+            missile_positions.shape[0],
+            check_single_missile,
+            (missile_positions, enemy_positions, 0, rng_key),
+        )
+
+
+
+    @partial(jax.jit, static_argnums=(0,))
+    def check_player_collision_entity(
+        self,
+        player_x: chex.Array,
+        player_y: chex.Array,
+        player_velocity: chex.Array,
+        entity_list: chex.Array,
+        entity_size: Tuple[int, int],
+        death_threshold: chex.Array,
+        ) -> Tuple[chex.Array, chex.Array]:
+
+        player_pos = jnp.array([player_x, player_y])
+        offset = (self.consts.PLAYER_SIZE[0] // 2 - entity_size[0] // 2) - (player_velocity * self.consts.DISTANCE_WHEN_FLYING)
+
+        def check_single(i, carry):
+            any_collision_inner, updated_entities = carry
+
+            world_x, world_y = entity_list[i, 0], entity_list[i, 1]
+            death_timer = entity_list[i, 3]
+            is_active = death_timer > death_threshold
+
+            # Passe die Position an, wie sie auch im Renderer korrigiert wird
+            adjusted_entity_pos = jnp.array([world_x + offset, world_y])
+
+            # Prüfe Kollision nur bei aktiven Gegnern
+            collision = jnp.logical_and(
+                is_active,
+                self.check_collision_single(player_pos, self.consts.PLAYER_SIZE, adjusted_entity_pos, entity_size)
+            )
+
+            # Markiere getroffenen Gegner
+            new_entity = jnp.where(collision, self.kill_entity(entity_list[i], death_threshold), entity_list[i])
+            updated_entities = updated_entities.at[i].set(new_entity)
+
+            any_collision_inner = jnp.logical_or(any_collision_inner, collision)
+            return any_collision_inner, updated_entities
+
+        initial_carry = (False, entity_list)
+        any_collision, updated_entity_list = jax.lax.fori_loop(
+            0,
+            entity_list.shape[0],
+            check_single,
+            initial_carry
+        )
+
+        return any_collision, updated_entity_list
+
+
+    @partial(jax.jit, static_argnums=(0,))
+    def check_missile_truck_collisions(
+        self,
+        truck_positions: chex.Array,        # (MAX_TRUCKS, 4): [x, y, direction, death_timer]
+        missile_positions: chex.Array,      # (MAX_MISSILES, 4): [x, y, direction, did_split_flag]
+        truck_size: Tuple[int, int],        # (width, height)
+        missile_size: Tuple[int, int],      # (width, height)
+    ) -> Tuple[chex.Array, chex.Array]:
+
+        def collide_one_missile(mi, carry):
+            trucks, missiles = carry
+            m = missiles[mi]
+
+            # Position und aktiver Status der Missile
+            mx, my, _, _ = m
+            missile_active = my > 2
+
+            # inner loop: prüfen gegen alle Trucks
+            def check_truck(ti, inner):
+                collided, trucks_inner = inner
+                t = trucks_inner[ti]
+                tx, ty, tdir, tdeath = t
+
+                # Truck nur prüfen wenn aktiv
+                truck_active = jnp.logical_and(tdir != 0, tdeath > 0)
+
+                # Kollisionstest
+                collision = jnp.logical_and(
+                    missile_active,
+                    truck_active
+                ) & self.check_collision_single(
+                    jnp.array([mx, my]), missile_size,
+                    jnp.array([tx, ty]), truck_size
+                )
+
+                # Wenn Kollision, setze Truck death_timer auf "tot initialisieren"
+                new_truck = jnp.where(
+                    collision,
+                    jnp.array([tx, ty, tdir, self.consts.FRAMES_DEATH_ANIMATION_TRUCK], dtype=trucks_inner.dtype),
+                    t
+                )
+                trucks_inner = trucks_inner.at[ti].set(new_truck)
+                collided = jnp.logical_or(collided, collision)
+                return collided, trucks_inner
+
+            # führe inner loop aus
+            init_inner = (False, trucks)
+            collided, updated_trucks = jax.lax.fori_loop(
+                0, truck_positions.shape[0], check_truck, init_inner
+            )
+
+            # wenn collision: kill Missile
+            new_m = jnp.where(
+                collided,
+                jnp.array([0.0, 0.0, 0.0, 187.0]),
+                m
+            )
+            missiles = missiles.at[mi].set(new_m)
+
+            return updated_trucks, missiles
+
+        # outer loop: alle Missiles
+        init = (truck_positions, missile_positions)
+        updated_trucks, updated_missiles = jax.lax.fori_loop(
+            0, missile_positions.shape[0], collide_one_missile, init
+        )
+
+        return updated_trucks, updated_missiles
+
+
+    """now can spawn enemies into fleets with different directions"""
+    @partial(jax.jit, static_argnums=(0,))
+    def initialize_enemy_positions(self, init_rng: chex.PRNGKey) -> tuple[chex.Array, chex.Array]:
+        jet_positions = jnp.zeros((self.consts.MAX_ENEMIES, 4))
+        chopper_positions = jnp.zeros((self.consts.MAX_ENEMIES, 4))
+
+        fleet_start_x = -780
+        fleet_spacing_x = 312
+        fleet_count = 4
+        units_per_fleet = 3
+        vertical_spacing = 30
+        y_start = self.consts.HEIGHT // 2 - (units_per_fleet // 2) * vertical_spacing
+        key0, key1, key2 = jax.random.split(init_rng, 3)
+        keys_for_direction = jax.random.split(key0, fleet_count)
+        keys_for_chopper_amount = jax.random.split(key1, fleet_count)
+        keys_for_offsets = jax.random.split(key2, fleet_count * units_per_fleet)
+
+        carry = (jet_positions, chopper_positions, 0)
+
+        def spawn_fleet(fleet_idx, carry):
+            jet_positions, chopper_positions, global_idx = carry
+
+            anchor_x = fleet_start_x + fleet_idx * fleet_spacing_x
+            out_of_bounds = jnp.abs(self.consts.PLAYER_START_X - anchor_x) > 624
+            anchor_x = jnp.where(out_of_bounds, anchor_x + 2*624, anchor_x)
+
+            # Für jede Einheit eine zufällige Richtung
+            directions = jax.random.choice(keys_for_direction[fleet_idx], jnp.array([-1, 1]), shape=(units_per_fleet,), replace=True)
+
+            # Zufällige Anzahl Chopper
+            chopper_count = jax.random.randint(keys_for_chopper_amount[fleet_idx], (), 0, units_per_fleet + 1)
+
+            # X-Offsets
+            x_offset_array = jnp.array(
+                [jax.random.randint(keys_for_offsets[fleet_idx * units_per_fleet + 0], (), -self.consts.ENEMY_MAXIMUM_SPAWN_OFFSET + 5, self.consts.ENEMY_MAXIMUM_SPAWN_OFFSET - 5),
+                jax.random.randint(keys_for_offsets[fleet_idx * units_per_fleet + 1], (), -self.consts.ENEMY_MAXIMUM_SPAWN_OFFSET + 5, self.consts.ENEMY_MAXIMUM_SPAWN_OFFSET - 5),
+                jax.random.randint(keys_for_offsets[fleet_idx * units_per_fleet + 2], (), -self.consts.ENEMY_MAXIMUM_SPAWN_OFFSET + 5, self.consts.ENEMY_MAXIMUM_SPAWN_OFFSET - 5)])
+
+            def place_unit(i, unit_carry):
+                jet_positions, chopper_positions, jet_idx, chopper_idx = unit_carry
+                y = y_start + i * vertical_spacing
+                offset_x = x_offset_array[i]
+                direction = directions[i]
+                pos = jnp.array([anchor_x + offset_x, y, direction, self.consts.FRAMES_DEATH_ANIMATION_ENEMY + 5])
+
+                is_chopper = i < chopper_count
+                chopper_positions = jax.lax.cond(
+                    is_chopper,
+                    lambda cp: cp.at[chopper_idx].set(pos),
+                    lambda cp: cp,
+                    chopper_positions
+                )
+                jet_positions = jax.lax.cond(
+                    is_chopper,
+                    lambda jp: jp,
+                    lambda jp: jp.at[jet_idx].set(pos),
+                    jet_positions
+                )
+
+                jet_idx += jnp.where(is_chopper, 0, 1)
+                chopper_idx += jnp.where(is_chopper, 1, 0)
+                return jet_positions, chopper_positions, jet_idx, chopper_idx
+
+            jet_positions, chopper_positions, jet_idx, chopper_idx = jax.lax.fori_loop(
+                0, units_per_fleet, place_unit, (jet_positions, chopper_positions, global_idx, global_idx)
+            )
+
+            new_global_idx = global_idx + units_per_fleet
+            return (jet_positions, chopper_positions, new_global_idx)
+
+        jet_positions, chopper_positions, _ = jax.lax.fori_loop(
+            0, fleet_count, spawn_fleet, carry
+        )
+
+        return jet_positions, chopper_positions
+
+    @partial(jax.jit, static_argnums=(0,))
+    def emit_enemy_speed(self, speed: chex.Array) -> chex.Array:
+        return True
+
+    @partial(jax.jit, static_argnums=(0,))
+    def step_enemy_movement(
+            self,
+            truck_positions: chex.Array,
+            jet_positions: chex.Array,
+            chopper_positions: chex.Array,
+            rng: chex.PRNGKey,
+            state_player_x: chex.Array,
+            local_player_offset: chex.Array,
+            difficulty: chex.Array,
+            enemy_speed: chex.Array,
+    ) -> Tuple[chex.Array, chex.Array, chex.PRNGKey]:
+
+        rng0, direction_rng = jax.random.split(rng)
+        rng1, process_jet_rng = jax.random.split(rng0)
+        return_rng, process_chopper_rng = jax.random.split(rng1)
+
+        def emit_velocity() -> chex.Array:
+            difficulty_value = jnp.where(difficulty == 1, 1, 1.5)
+            jet_speed_right = (self.consts.JET_VELOCITY_RIGHT + enemy_speed) * difficulty_value
+            jet_speed_left = (self.consts.JET_VELOCITY_LEFT + enemy_speed) * difficulty_value
+            chopper_speed_right = (self.consts.CHOPPER_VELOCITY_RIGHT + enemy_speed) * difficulty_value
+            chopper_speed_left = (self.consts.CHOPPER_VELOCITY_LEFT + enemy_speed) * difficulty_value
+
+            return jnp.array([jet_speed_right, jet_speed_left, chopper_speed_right, chopper_speed_left])
+
+
+        def move_enemy_x(pos: chex.Array, is_jet, move_x_is_in_range) -> chex.Array:
+            is_active = pos[2] != 0
+
+            def is_out_of_cycle(enemy_pos: chex.Array) -> chex.Array:
+                # Auswahl der X-Positionen der mittleren trucks
+                middle_trucks = jnp.array(
+                    [
+                        truck_positions[1][0],
+                        truck_positions[4][0],
+                        truck_positions[7][0],
+                        truck_positions[10][0],
+                    ]
+                )
+
+                # Berechne den absoluten Abstand zur enemy_position[0]
+                distances = jnp.abs(middle_trucks - enemy_pos[0])
+
+                # Finde den Index des kleinsten Abstands
+                min_index = jnp.argmin(distances)
+
+                nearest_middle_truck = middle_trucks[min_index]
+
+                return jnp.logical_or(enemy_pos[0] > nearest_middle_truck + self.consts.ENEMY_OUT_OF_CYCLE_RIGHT,
+                                      enemy_pos[0] < nearest_middle_truck - self.consts.ENEMY_OUT_OF_CYCLE_LEFT)
+
+
+            def is_in_range_function():
+                def check_if_out_of_cycle_jet_function():
+                    def jet_is_out_of_cycle_function():
+
+                        return jax.lax.cond( # jet_is_out_of_cycle_function
+                            pos[2] == -1,
+                            lambda _: jnp.array([pos[0] + pos[2] * -1 * emit_velocity()[1] - 1, pos[1], pos[2] * -1, pos[3]], dtype=jnp.float32), # if enemy direction is -1 and position out of bounds turn around by multiply direction with -1 (LEFT -> RIGHT) and adding the LEFT_VELOCITY * direction to the position
+                            lambda _: jnp.array([pos[0] + pos[2] * -1 * emit_velocity()[0] - 1, pos[1], pos[2] * -1, pos[3]], dtype=jnp.float32), # if enemy direction is not -1 and position out of bounds turn around by multiply direction with -1 (RIGHT -> LEFT) and adding the RIGHT_VELOCITY * direction to the position
+                            operand=None
+                        )
+
+                    def jet_is_not_out_of_cycle_function():
+
+                        return jax.lax.cond( # jet_is_not_out_of_cycle_function
+                            pos[2] == -1,
+                            lambda _: jnp.array([pos[0] + pos[2] * emit_velocity()[1], pos[1], pos[2], pos[3]], dtype=jnp.float32), # if enemy direction is -1 and position is not out of bounds just add the LEFT_VELOCITY * direction onto the position
+                            lambda _: jnp.array([pos[0] + pos[2] * emit_velocity()[0], pos[1], pos[2], pos[3]], dtype=jnp.float32), # if enemy direction is not -1 and position is not out of bounds just add the RIGHT_VELOCITY * direction onto the position
+                            operand=None
+                        )
+
+
+                    return jax.lax.cond( # is_in_range_function
+                        is_out_of_cycle(pos),                               # checks if enemy is out of cycle
+                        lambda _: jet_is_out_of_cycle_function(),           # Jet is indeed out of bounds
+                        lambda _: jet_is_not_out_of_cycle_function(),       # Jet is inside of bounds
+                        operand=None
+                    )
+
+
+                def check_if_out_of_cycle_chopper_function():
+
+                    def chopper_is_out_of_cycle_function():
+
+                        return jax.lax.cond( # chopper_is_out_of_cycle_function
+                            pos[2] == -1,
+                            lambda _: jnp.array([pos[0] + pos[2] * -1 * emit_velocity()[3] - 1, pos[1], pos[2] * -1, pos[3]], dtype=jnp.float32),  # Since chopper is out of bounds, change its direction from left to right and do one step to the right + 1 to escape cycle (bounds) boundry
+                            lambda _: jnp.array([pos[0] + pos[2] * -1 * emit_velocity()[2] - 1, pos[1], pos[2] * -1, pos[3]], dtype=jnp.float32), # Since chopper is out of bounds, change its direction from right to left and do one step to the left + 1 to escape cycle (bounds) boundry
+                            operand=None
+                        )
+
+                    def chopper_is_not_out_of_cycle_function():
+
+                        return jax.lax.cond( # chopper_is_not_out_of_cycle_function
+                            pos[2] == -1,
+                            lambda _: jnp.array([pos[0] + pos[2] * emit_velocity()[3], pos[1], pos[2], pos[3]], dtype=jnp.float32),  # Since chopper is inside of bounds, move chopper to the left by the defined speed
+                            lambda _: jnp.array([pos[0] + pos[2] * emit_velocity()[2], pos[1], pos[2], pos[3]], dtype=jnp.float32), # Since chopper is inside of bounds, move chopper to the right by the defined speed
+                            operand=None
+                        )
+
+
+                    return jax.lax.cond( # check_if_out_of_cycle_chopper_function
+                        is_out_of_cycle(pos),
+                        lambda _: chopper_is_out_of_cycle_function(),     # Chopper is indeed out of bounds
+                        lambda _: chopper_is_not_out_of_cycle_function(), # Chopper is inside of bounds
+                        operand=None
+                    )
+
+
+                return jax.lax.cond( # is_in_range_function
+                    is_jet,
+                    lambda _: check_if_out_of_cycle_jet_function(),       # Check if jet is out of bounds
+                    lambda _: check_if_out_of_cycle_chopper_function(),   # Check if chopper is out of bounds
+                    operand=None
+                )
+
+
+            def not_active_or_not_in_range(): # looks for in_range and active enemies from all fleets
+                return jax.lax.cond(
+                    move_x_is_in_range,
+                    lambda _: pos,                                                      # is dead -> does not move at all
+                    lambda _: jnp.array([pos[0] - 0.5, pos[1], pos[2], pos[3]]),        # moves the same speed as trucks to the left (fleet + trucks stay freezed)
+                    operand=None
+                )
+
+            new_pos = jax.lax.cond(
+                jnp.logical_and(is_active, move_x_is_in_range),
+                lambda _: is_in_range_function(),           # Enemy is alive and is in the nearest fleet to the player
+                lambda _: not_active_or_not_in_range(),     # Enemy is either dead or not part of the nearest fleet to the player.
+                operand=None
+            )
+
+
+            out_of_bounds = jnp.abs(state_player_x - pos[0]) > 624
+            wrapped_x = pos[0] + jnp.clip(state_player_x - pos[0], -1, 1) * 1248  # + pos[2] * 0.5
+            wrapped_pos = jnp.array([wrapped_x, pos[1], pos[2], pos[3]])
+
+            return jnp.where(out_of_bounds, wrapped_pos, new_pos)
+
+        def move_enemy_y(pos: chex.Array, i: chex.Array, move_y_rng_keys: chex.Array, move_y_is_in_range: chex.Array):
+            is_active = pos[2] != 0
+            is_on_correct_lane = jnp.logical_or(pos[1] == (pos[3] - self.consts.FRAMES_DEATH_ANIMATION_ENEMY), pos[3] == self.consts.FRAMES_DEATH_ANIMATION_ENEMY + 5) # If enemy is on the lane defined in its lane flag, except if lane flag equals the reset state
+
+            def dont_touch_position():
+                return pos[1], pos[3]
+
+            def move_or_dont():
+                def dont_move_and_reset_lane_flag():
+                    return pos[1], self.consts.FRAMES_DEATH_ANIMATION_ENEMY + 5.0
+
+                def move():
+                    def get_go_up():
+                        return pos[1] - 0.5, pos[3]
+                    def get_go_down():
+                        return pos[1] + 0.5, pos[3]
+
+                    lane_is_below = pos[1] < (pos[3] - self.consts.FRAMES_DEATH_ANIMATION_ENEMY)
+                    return jax.lax.cond(lane_is_below,
+                                        lambda _: get_go_down(),  # If lane is below, do one step towards ground
+                                        lambda _: get_go_up(),    # If lane is above, do one step towards sky
+                                        operand=None)
+
+                return jax.lax.cond( # move_or_dont
+                    is_on_correct_lane,
+                    lambda _: dont_move_and_reset_lane_flag(),   # Enemy is on desired lane (allow new lane to be picked)
+                    lambda _: move(),                            # Move enemy towards desired lane
+                    operand=None
+                )
+
+            def get_next_pos():
+                def pick_desired_lane():
+                    is_in_top_lane = jnp.any(pos[1] == self.consts.TOP_LANES)           # If enemy is in the global top lane
+                    is_in_middle_lane = jnp.any(pos[1] == self.consts.MIDDLE_LANES)     # If enemy is in the glocal middle lane
+
+                    new_lane = self.consts.FRAMES_DEATH_ANIMATION_ENEMY + jnp.where( # Pick a valid lane for the enemy. (Pick one local lane from the global lane the enemy is on)
+                        is_in_top_lane,
+                        jax.random.choice(move_y_rng_keys[i], self.consts.TOP_LANES).astype(jnp.float32),   # RNG FOR LANE PICK IS NOT FULLY RANDOM, LIKE IN REAL GAME. CHANGE ALL OCCURRENCES OF move_y_rng_keys[1] to move_y_rng_keys[i] FOR IT TO BE FULLY RANDOM
+                        jnp.where(
+                            is_in_middle_lane,
+                            jax.random.choice(move_y_rng_keys[1], self.consts.MIDDLE_LANES).astype(jnp.float32),
+                            jax.random.choice(move_y_rng_keys[i], self.consts.BOTTOM_LANES).astype(jnp.float32)  # If not in top or middle, enemy has to be in the bottom lane
+                        )
+                    )
+                    return pos[1], new_lane
+
+
+                should_switch = jax.random.bernoulli(move_y_rng_keys[1], p=self.consts.ENEMY_LANE_SWITCH_PROBABILITY)
+                return jax.lax.cond( # get_next_pos
+                    jnp.logical_and(should_switch, is_on_correct_lane),
+                    lambda _: pick_desired_lane(),  # Since enemy is on its desired lane and should_switch is triggered, we need to update the lane handler to the desired lane
+                    lambda _: move_or_dont(),       # Move enemy if not on desired lane or don't move if on the desired lane
+                    operand=None
+                )
+
+            (new_y, death_timer_or_lane_flag) = jax.lax.cond( # move_enemy_y
+                jnp.logical_and((pos[3] > self.consts.FRAMES_DEATH_ANIMATION_ENEMY + 4), jnp.logical_and(is_active, move_y_is_in_range)),
+                lambda _: get_next_pos(),           # If pos[3] is interpreted as the lane handler
+                lambda _: dont_touch_position(),    # If pos[3] is interpreted as the death timer, also used for logic where the y position should not be changed
+                operand=None
+            )
+
+            return jnp.array([pos[0], new_y, pos[2], death_timer_or_lane_flag], dtype=pos.dtype)
+
+        def is_in_range_checker(pos: chex.Array) -> chex.Array:
+            all_middle_trucks_x = jnp.array(
+                [
+                    truck_positions[1][0],
+                    truck_positions[4][0],
+                    truck_positions[7][0],
+                    truck_positions[10][0],
+                ]
+            )
+
+            # nearest_middle_truck = x-coordinate of middle truck closest to enemy with given pos
+            distance_to_enemy = jnp.abs(all_middle_trucks_x - pos[0])
+            min_index = jnp.argmin(distance_to_enemy)
+            nearest_middle_truck = all_middle_trucks_x[min_index]
+
+            # nearest_middle_truck_player = x-coordinate of middle truck closest to player
+            distance_to_player = jnp.abs(all_middle_trucks_x - state_player_x + local_player_offset)
+            min_index_player = jnp.argmin(distance_to_player)
+            nearest_middle_truck_player = all_middle_trucks_x[min_index_player]
+
+            return jnp.where(nearest_middle_truck == nearest_middle_truck_player, jnp.array(True), jnp.array(False))
+
+
+        def process_jet(i, new_positions):
+            current_pos = jet_positions[i]                                                                      # Get current position
+            jet_is_in_range = is_in_range_checker(current_pos)                                                  # If jet is in "render distance". If not, it does not move
+            new_pos = move_enemy_x(current_pos, jnp.array(True), jet_is_in_range)                               # Calculate new x position
+            keys_for_process_jet = jax.random.split(process_jet_rng, jet_positions.shape[0])                    # Generate rng-key for every chopper there is. THIS IS NOT FULLY USED, SINCE MOVEMENT IS NOT FULLY RANDOM.
+            new_pos = move_enemy_y(new_pos, i, keys_for_process_jet, jet_is_in_range)                           # Calculate new y position
+            return new_positions.at[i].set(new_pos)
+
+        new_jet_positions = jnp.zeros_like(jet_positions)
+        new_jet_positions = jax.lax.fori_loop(0, jet_positions.shape[0], process_jet, new_jet_positions)
+
+        def process_chopper(i, new_positions):
+            current_pos = chopper_positions[i]                                                                  # Get current position
+            chopper_is_in_range = is_in_range_checker(current_pos)                                              # If chopper is in "render distance". If not, it does not move
+            new_pos = move_enemy_x(current_pos, jnp.array(False), chopper_is_in_range)                          # Calculate new x position
+            keys_for_process_chopper = jax.random.split(process_chopper_rng, chopper_positions.shape[0])        # Generate rng-key for every chopper there is. THIS IS NOT FULLY USED, SINCE MOVEMENT IS NOT FULLY RANDOM.
+            new_pos = move_enemy_y(new_pos, i, keys_for_process_chopper, chopper_is_in_range)                   # Calculate new y position
+            return new_positions.at[i].set(new_pos)
+
+        new_chopper_positions = jnp.zeros_like(chopper_positions)
+        new_chopper_positions = jax.lax.fori_loop(0, chopper_positions.shape[0], process_chopper, new_chopper_positions)
+
+        return new_jet_positions, new_chopper_positions, return_rng
+
+    def update_entity_death(self, entity_array, death_timer, is_truck):
+        def update_entity(i, carry):
+            entities = carry
+            entity = entities[i]
+            direction, timer = entity[2], entity[3]
+
+            #Wenn tot initialisiert (also noch aktiv) und timer > 0 & timer <= FRAMES_DEATH_ANIMATION, dann dekrementieren
+            new_timer = jnp.where(jnp.logical_and(timer > 0, timer <= death_timer), timer - 1, timer)
+
+            #Nach Ablauf von death_timer Enemy deaktivieren/entfernen
+            new_entity = jnp.where(
+                new_timer == 0,
+                        jnp.where(
+                            is_truck,
+                            jnp.array([entity[0], entity[1], 0, 0], dtype=entity.dtype),
+                            jnp.array([0, 0, 0, 0], dtype=entity.dtype)
+                        ),
+                entity.at[3].set(new_timer)
+            )
+
+            return entities.at[i].set(new_entity)
+
+        return jax.lax.fori_loop(0, entity_array.shape[0], update_entity, entity_array)
+
+
+    @partial(jax.jit, static_argnums=(0,))
+    def initialize_truck_positions(self) -> chex.Array:
+        initial_truck_positions = jnp.zeros((self.consts.MAX_TRUCKS, 4))
+        anchor = -748
+        carry = (initial_truck_positions, anchor)
+
+        def spawn_trucks(i, carry):
+            truck_positions, anchor = carry
+
+            anchor = jnp.where(
+                i % 3 == 0,
+                anchor + 248,
+                anchor + 32,
+            )
+            truck_positions = truck_positions.at[i].set(jnp.array([anchor, 156, -1, self.consts.FRAMES_DEATH_ANIMATION_TRUCK + 1]))
+            return truck_positions, anchor
+
+        return jax.lax.fori_loop(0, 12, spawn_trucks, carry)[0]
+
+    @partial(jax.jit, static_argnums=(0,))
+    def step_truck_movement(
+            self,
+            truck_positions: chex.Array,
+            state_player_x: chex.Array,
+    ) -> chex.Array:
+
+        def move_single_truck(truck_pos):
+            movement_x = -1 * 0.5  # Geschwindigkeit 0.5 pro Frame, egal ob tot oder nicht, weil wir die Position noch für die enemy positions brauchen
+
+            out_of_bounds = jnp.abs(state_player_x - truck_pos[0]) > 624
+
+            new_x = jnp.where(
+                out_of_bounds,
+                truck_pos[0] + jnp.sign(state_player_x - truck_pos[0]) * 1248 + movement_x,
+                truck_pos[0] + movement_x,
+            )
+
+            new_pos = jnp.array([new_x, truck_pos[1], truck_pos[2], truck_pos[3]])
+
+            return new_pos
+
+        return jax.vmap(move_single_truck)(truck_positions)
+
+
+    @partial(jax.jit, static_argnums=(0,))
+    def enemy_missiles_step(
+            self,
+            jet_positions: chex.Array,  # (MAX_ENEMIES, 4)
+            chopper_positions: chex.Array,  # (MAX_ENEMIES, 4)
+            missile_states: chex.Array,  # (MAX_ENEMY_MISSILES, 4): [x, y, y_dir, did_split]
+            rng: chex.PRNGKey,
+    ) -> chex.Array:
+
+        enemies = jnp.concat([jet_positions, chopper_positions], axis=0)
+
+        def step_both_missiles(i, carry):
+            missiles, key, eni = carry
+            # Split key into spawn, split, speed, and next key
+            key, key_spawn, key_split, key_speed = jax.random.split(key, 4)
+
+            # Get current enemy
+            current_enemy = enemies[eni]
+
+            # Upper and lower missile
+            missile_upper = missiles[i]
+            missile_lower = missiles[i + 1]
+
+            def maybe_spawn():
+                def do_spawn():
+                    # Coordinates of upper missile part
+                    x_upper_spawn = current_enemy[0]
+                    y_upper_spawn = current_enemy[1]
+
+                    # Coordinates of lower missile part
+                    x_lower_spawn = current_enemy[0]
+                    y_lower_spawn = current_enemy[1] + 1
+
+                    # Random Y Velocity
+                    y_speed_spawn = jax.random.uniform(
+                        key_speed,
+                        (),
+                        minval=-self.consts.ENEMY_MISSILE_MAXIMUM_Y_SPEED_BEFORE_SPLIT,
+                        maxval=self.consts.ENEMY_MISSILE_MAXIMUM_Y_SPEED_BEFORE_SPLIT
+                    )
+
+                    # We also set the did_split flag to false
+                    spawned_upper_missile = jnp.array([x_upper_spawn, y_upper_spawn, y_speed_spawn, 187.0], dtype=jnp.float32)
+                    spawned_lower_missile = jnp.array([x_lower_spawn, y_lower_spawn, y_speed_spawn, 187.0], dtype=jnp.float32)
+
+                    return spawned_upper_missile, spawned_lower_missile
+
+                return jax.lax.cond(
+                    jax.random.bernoulli(key_spawn, p=self.consts.ENEMY_MISSILE_SPAWN_PROBABILITY),
+                    lambda _: do_spawn(), # Actually spawn
+                    lambda _: (           # Leave dead
+                        jnp.array([0.0, 0.0, 0.0, 187.0], dtype=jnp.float32),
+                        jnp.array([0.0, 0.0, 0.0, 187.0], dtype=jnp.float32)
+                    ),
+                    operand=None
+                )
+
+            def do_step():
+                x_upper_step, y_upper_step, y_upper_speed, did_split_upper_step = missile_upper
+                x_lower_step, y_lower_step, y_lower_speed, did_split_lower_step = missile_lower
+
+                def dont_split():
+                    y_upper_step_inner = y_upper_step + y_upper_speed
+                    y_lower_step_inner = y_lower_step + y_lower_speed
+                    return (
+                        y_upper_step_inner.astype(jnp.float32),
+                        y_upper_speed.astype(jnp.float32),
+                        y_lower_step_inner.astype(jnp.float32),
+                        y_lower_speed.astype(jnp.float32),
+                        187.0
+                    )
+
+                def do_split():
+                    y_upper_speed_inner = jnp.array(self.consts.ENEMY_MISSILE_Y_SPEED_AFTER_SPLIT, dtype=jnp.float32)
+                    y_lower_speed_inner = jnp.array(-self.consts.ENEMY_MISSILE_Y_SPEED_AFTER_SPLIT, dtype=jnp.float32)
+                    y_upper_step_inner = y_upper_step + y_upper_speed_inner
+                    y_lower_step_inner = y_lower_step + y_lower_speed_inner
+                    return (
+                        y_upper_step_inner.astype(jnp.float32),
+                        y_upper_speed_inner,
+                        y_lower_step_inner.astype(jnp.float32),
+                        y_lower_speed_inner,
+                        42.0
+                    )
+
+                split_condition = jnp.logical_and(
+                    jax.random.bernoulli(key_split, p=self.consts.ENEMY_MISSILE_SPLIT_PROBABILITY),
+                    jnp.logical_and(did_split_upper_step != 42.0, did_split_lower_step != 42.0)
+                )
+
+                y_upper_changed, y_upper_speed_changed, y_lower_changed, y_lower_speed_changed, flag = jax.lax.cond(
+                    split_condition,
+                    lambda _: do_split(),
+                    lambda _: dont_split(),
+                    operand=None
+                )
+
+                stepped_upper_missile = jnp.array([x_upper_step, y_upper_changed, y_upper_speed_changed, flag], dtype=jnp.float32)
+                stepped_lower_missile = jnp.array([x_lower_step, y_lower_changed, y_lower_speed_changed, flag], dtype=jnp.float32)
+
+                # Kill upper if out of bounds
+                stepped_upper_missile = jnp.where(
+                    jnp.logical_or(y_upper_changed < 44.0, y_upper_changed > 163.0),
+                    jnp.array([0.0, 0.0, 0.0, 187.0], dtype=jnp.float32),
+                    stepped_upper_missile,
+                )
+
+                # Kill lower if out of bounds
+                stepped_lower_missile = jnp.where(
+                    jnp.logical_or(y_lower_changed < 44.0, y_lower_changed > 163.0),
+                    jnp.array([0.0, 0.0, 0.0, 187.0], dtype=jnp.float32),
+                    stepped_lower_missile
+                )
+
+                return stepped_upper_missile, stepped_lower_missile
+
+            # Check if missile is "alive"
+            upper_dead = jnp.all(missile_upper == jnp.array([0.0, 0.0, 0.0, 187.0], dtype=jnp.float32))
+            lower_dead = jnp.all(missile_lower == jnp.array([0.0, 0.0, 0.0, 187.0], dtype=jnp.float32))
+
+            updated_missile_upper, updated_missile_lower = jax.lax.cond(
+                jnp.logical_and(upper_dead, lower_dead),
+                lambda _: maybe_spawn(),
+                lambda _: do_step(),
+                operand=None
+            )
+
+            missiles = missiles.at[i].set(updated_missile_upper)
+            missiles = missiles.at[i + 1].set(updated_missile_lower)
+
+            return missiles, key
+
+        def step_even(i, carry):
+            a, b = carry
+            carry = a, b, i
+            return step_both_missiles(i * 2, carry)
+
+        updated, _ = jax.lax.fori_loop(
+            0, enemies.shape[0], step_even, (missile_states, rng)
+        )
+        return updated
+
+
+    @partial(jax.jit, static_argnums=(0,))
+    def player_missile_step(
+            self,
+            state: ChopperCommandState,
+            curr_player_x,
+            curr_player_y,
+            action: chex.Array,
+    ):
+        fire = jnp.any(
+            jnp.array([
+                action == Action.FIRE,
+                action == Action.UPRIGHTFIRE,
+                action == Action.UPLEFTFIRE,
+                action == Action.DOWNFIRE,
+                action == Action.DOWNRIGHTFIRE,
+                action == Action.DOWNLEFTFIRE,
+                action == Action.RIGHTFIRE,
+                action == Action.LEFTFIRE,
+                action == Action.UPFIRE,
+            ])
+        )
+
+        missile_y = curr_player_y + 6
+        cooldown = jnp.maximum(state.player_missile_cooldown - 1, 0)
+
+        def try_spawn(missiles):
+            def body(i, carry):
+                missiles, did_spawn = carry
+                missile = missiles[i]
+                free = missile[2] == 0  # direction == 0 -> inactive
+                should_spawn = jnp.where(self.consts.MAX_PLAYER_MISSILES > 1,
+                                         jnp.logical_and(free, jnp.logical_not(did_spawn)),
+                                         jnp.array(True))
+
+                spawn_x = jnp.where(
+                    state.player_facing_direction == -1,
+                    curr_player_x - self.consts.PLAYER_MISSILE_WIDTH,
+                    curr_player_x + self.consts.PLAYER_SIZE[0],
+                )
+
+                new_missile = jnp.array([
+                    spawn_x, # x
+                    missile_y, # y
+                    state.player_facing_direction, # dir
+                    spawn_x # x_spawn
+                ], dtype=jnp.int32)
+
+                updated_missile = jnp.where(should_spawn, new_missile, missile)
+                missiles = missiles.at[i].set(updated_missile)
+                return missiles, jnp.logical_or(did_spawn, should_spawn)
+
+            return jax.lax.fori_loop(0, missiles.shape[0], body, (missiles, False))
+
+        def spawn_if_possible(missiles):
+            def do_spawn(_):
+                return try_spawn(missiles)
+            def skip_spawn(_):
+                return missiles, False
+            return jax.lax.cond(jnp.logical_and(jnp.logical_and(fire, state.pause_timer > self.consts.DEATH_PAUSE_FRAMES), cooldown == 0), do_spawn, skip_spawn, operand=None)
+
+        def update_missile(missile):
+            exists = missile[2] != 0
+            new_x = missile[0] + missile[2] * self.consts.MISSILE_SPEED + state.player_velocity_x
+
+            updated = jnp.array([
+                new_x,        # updated x
+                missile[1],   # y stays
+                missile[2],   # direction stays
+                missile[3]    # x_spawn stays
+            ], dtype=jnp.int32)
+
+            chopper_pos = (self.consts.WIDTH // 2) - 8 + state.local_player_offset + (state.player_velocity_x * self.consts.DISTANCE_WHEN_FLYING)
+            left_bound = state.player_x - chopper_pos - self.consts.PLAYER_MISSILE_WIDTH
+            right_bound = state.player_x + (self.consts.WIDTH - chopper_pos)
+
+            out_of_bounds = jnp.logical_or(updated[0] < left_bound, updated[0] > right_bound)
+            return jnp.where(jnp.logical_and(exists, ~out_of_bounds), updated, jnp.array([0, 0, 0, 0], dtype=jnp.int32))
+
+        updated_missiles = jax.vmap(update_missile)(state.player_missile_positions)
+        updated_missiles, did_spawn = spawn_if_possible(updated_missiles)
+        new_cooldown = jnp.where(did_spawn, self.consts.MISSILE_COOLDOWN_FRAMES, cooldown)
+
+        return updated_missiles, new_cooldown
+
+
+    @partial(jax.jit, static_argnums=(0,))
+    def player_step(
+        self,
+        state: ChopperCommandState,
+        action: chex.Array,
+    ) -> tuple[chex.Array, chex.Array, chex.Array, chex.Array, chex.Array]:
+        # Bewegungsrichtung bestimmen
+        up = jnp.isin(action, jnp.array([
+            Action.UP,
+            Action.UPRIGHT,
+            Action.UPLEFT,
+            Action.UPFIRE,
+            Action.UPRIGHTFIRE,
+            Action.UPLEFTFIRE
+        ]))
+        down = jnp.isin(action, jnp.array([
+            Action.DOWN,
+            Action.DOWNRIGHT,
+            Action.DOWNLEFT,
+            Action.DOWNFIRE,
+            Action.DOWNRIGHTFIRE,
+            Action.DOWNLEFTFIRE
+        ]))
+        left = jnp.isin(action, jnp.array([
+            Action.LEFT,
+            Action.UPLEFT,
+            Action.DOWNLEFT,
+            Action.LEFTFIRE,
+            Action.UPLEFTFIRE,
+            Action.DOWNLEFTFIRE
+        ]))
+        right = jnp.isin(action, jnp.array([
+            Action.RIGHT,
+            Action.UPRIGHT,
+            Action.DOWNRIGHT,
+            Action.RIGHTFIRE,
+            Action.UPRIGHTFIRE,
+            Action.DOWNRIGHTFIRE
+        ]))
+
+
+        # Ziel-Beschleunigung basierend auf Eingabe
+        accel_x = jnp.where(right, self.consts.ACCEL, jnp.where(left, -self.consts.ACCEL, 0.0))
+
+        # Direction player is facing
+        new_player_facing_direction = jnp.where(right, 1, jnp.where(left, -1, state.player_facing_direction))
+
+        # Neue Geschwindigkeit berechnen und begrenzen
+        velocity_x = state.player_velocity_x + accel_x
+        velocity_x = jnp.clip(velocity_x, -self.consts.MAX_VELOCITY, self.consts.MAX_VELOCITY)
+
+        # Falls keine Eingabe: langsamer werden (Friction)
+        velocity_x = jnp.where(~(left | right), velocity_x * (1.0 - self.consts.FRICTION), velocity_x)
+
+        # Neue X-Position (global!)
+        player_x = state.player_x + velocity_x
+
+        # Y-Position berechnen (sofortige Reaktion)
+        delta_y = jnp.where(up, -1, jnp.where(down, 1, 0))
+        player_y = jnp.clip(state.player_y + delta_y, self.consts.PLAYER_BOUNDS[1][0], self.consts.PLAYER_BOUNDS[1][1])
+
+        # "Momentum" berechnen für Offset von der Mitte aus
+        new_player_offset = jnp.where(new_player_facing_direction == 1, state.local_player_offset - self.consts.LOCAL_PLAYER_OFFSET_SPEED, state.local_player_offset + self.consts.LOCAL_PLAYER_OFFSET_SPEED)
+        new_player_offset = jnp.asarray(new_player_offset, dtype=jnp.int32)
+
+        new_player_offset = jnp.clip(new_player_offset, -60, 60)
+
+        return player_x, player_y, velocity_x, new_player_offset, new_player_facing_direction
+
+    @partial(jax.jit, static_argnums=(0,))
+    def lives_step(
+            self,
+            player_collision: chex.Array,
+            current_score: jnp.int32,
+            save_lives: jnp.int32,
+    ) -> tuple[jnp.int32, jnp.int32]:
+
+        current_score = jnp.where(current_score == 0, 1, current_score)
+        num_to_add = jnp.where(player_collision, -1, 0)
+
+        num_to_add = jnp.where((current_score // 10000) > save_lives, num_to_add + 1, num_to_add)
+        new_save_lives = jnp.where((current_score // 10000) > save_lives, save_lives + 1, save_lives)
+
+        return num_to_add, new_save_lives
 
     @partial(jax.jit, static_argnums=(0,))
     def reset(self, key: jax.random.PRNGKey = jax.random.PRNGKey(time.time_ns() % (2**32))) -> Tuple[ChopperCommandObservation, ChopperCommandState]:
         """Initialize game state"""
 
         new_key0, key0 = jax.random.split(key, 2)
-        jet_positions, chopper_positions = initialize_enemy_positions(key0)
-        initial_enemy_missile_positions = jnp.full((MAX_ENEMY_MISSILES, 4), jnp.array([0, 0, 0, 187], dtype=jnp.float32))
+        jet_positions, chopper_positions = self.initialize_enemy_positions(key0)
+        initial_enemy_missile_positions = jnp.full((self.consts.MAX_ENEMY_MISSILES, 4), jnp.array([0, 0, 0, 187], dtype=jnp.float32))
 
         # FOR EXPLANATION OF FIELDS SEE ChopperCommandState CLASS
         reset_state = ChopperCommandState(
-            player_x=jnp.array(PLAYER_START_X).astype(jnp.float32),             # Initial horizontal spawn position of the player in world space. Sets where the chopper starts.
-            player_y=jnp.array(PLAYER_START_Y).astype(jnp.int32),               # Initial vertical spawn position of the player. Ensures the chopper appears above ground level.
+            player_x=jnp.array(self.consts.PLAYER_START_X).astype(jnp.float32),             # Initial horizontal spawn position of the player in world space. Sets where the chopper starts.
+            player_y=jnp.array(self.consts.PLAYER_START_Y).astype(jnp.int32),               # Initial vertical spawn position of the player. Ensures the chopper appears above ground level.
             player_velocity_x=jnp.array(0).astype(jnp.float32),                 # Player starts at rest horizontally — no momentum on the first frame.
             local_player_offset=jnp.array(50).astype(jnp.float32),              # Initial screen offset. This is for the no_move_pause animation when starting the game and respawning.
             player_facing_direction=jnp.array(1).astype(jnp.int32),             # # Player begins facing right (1).
             score=jnp.array(0).astype(jnp.int32),                               # Game always starts with a score of 0.
             lives=jnp.array(3).astype(jnp.int32),                               # Standard number of starting lives.
             save_lives=jnp.array(0).astype(jnp.int32),                          # Player starts with no lives granted for every 10000 points reached
-            truck_positions=initialize_truck_positions().astype(jnp.float32),   # Trucks are initialized with predefined starting positions and inactive death timers.
+            truck_positions=self.initialize_truck_positions().astype(jnp.float32),   # Trucks are initialized with predefined starting positions and inactive death timers.
             jet_positions=jet_positions,                                        # Jets are initialized with predefined starting positions and inactive death timers.
             chopper_positions=chopper_positions,                                # Choppers are initialized with predefined starting positions and inactive death timers.
             enemy_missile_positions=initial_enemy_missile_positions,            # All enemy missile entries are coded as "dead": [0.0, 0.0, 0.0, 187.0], meaning no missiles are in play at start.
-            player_missile_positions=jnp.zeros((MAX_PLAYER_MISSILES, 4)),       # All player missile slots are zeroed out; meaning no missiles are in play at start.
+            player_missile_positions=jnp.zeros((self.consts.MAX_PLAYER_MISSILES, 4)),       # All player missile slots are zeroed out; meaning no missiles are in play at start.
             player_missile_cooldown=jnp.array(0),                               # Cooldown timer is 0, so the player is allowed to shoot immediately.
             player_collision=jnp.array(False),                                  # Player has not collided with anything on game start.
             step_counter=jnp.array(0).astype(jnp.int32),                        # Frame counter starts from 0.
-            pause_timer=jnp.array(DEATH_PAUSE_FRAMES + 2).astype(jnp.int32),    # The game starts in the no_move_pause (DEATH_PAUSE_FRAMES + 2) to allow for visual startup or intro.
+            pause_timer=jnp.array(self.consts.DEATH_PAUSE_FRAMES + 2).astype(jnp.int32),    # The game starts in the no_move_pause (DEATH_PAUSE_FRAMES + 2) to allow for visual startup or intro.
             rng_key=new_key0,                                            # Pseudo random number generator seed key, based on current time and initial key used.
             obs_stack=jnp.zeros((self.frame_stack_size, self.obs_size)),        # Observation stack starts empty (zeros). Used for agent state.
-            difficulty=jnp.array(GAME_DIFFICULTY).astype(jnp.float32),          # difficulty of game
+            difficulty=jnp.array(self.consts.GAME_DIFFICULTY).astype(jnp.float32),          # difficulty of game
             enemy_speed=jnp.array(0).astype(jnp.float32),                       # enemy_speed which is 0 on start
         )
 
@@ -1641,12 +1661,12 @@ class JaxChopperCommand(JaxEnvironment[ChopperCommandState, ChopperCommandObserv
                 new_player_velocity_x,
                 new_local_player_offset,
                 new_player_facing_direction
-            ) = player_step(
+            ) = self.player_step(
                 state, action
             )
 
             # Update jet and chopper positions
-            new_jet_positions, new_chopper_positions, new_rng_key = step_enemy_movement(
+            new_jet_positions, new_chopper_positions, new_rng_key = self.step_enemy_movement(
                 state.truck_positions,
                 state.jet_positions,
                 state.chopper_positions,
@@ -1659,25 +1679,25 @@ class JaxChopperCommand(JaxEnvironment[ChopperCommandState, ChopperCommandObserv
 
             # Update truck positions
             new_truck_positions = (
-                step_truck_movement(
+                self.step_truck_movement(
                     state.truck_positions,
                     state.player_x,
                 )
             )
 
             # Update enemy missile positions
-            new_enemy_missile_positions = enemy_missiles_step(
+            new_enemy_missile_positions = self.enemy_missiles_step(
                 new_jet_positions, new_chopper_positions, state.enemy_missile_positions, key1
             )
 
             # Update player missile positions
-            new_player_missile_positions, new_cooldown = player_missile_step(
+            new_player_missile_positions, new_cooldown = self.player_missile_step(
                 state, state.player_x, state.player_y, action
             )
 
             # --------------- COLLISION UPDATES ---------------
 
-            on_screen_chopper_position = (WIDTH // 2) - 8 + new_local_player_offset + (new_player_velocity_x * DISTANCE_WHEN_FLYING)
+            on_screen_chopper_position = (self.consts.WIDTH // 2) - 8 + new_local_player_offset + (new_player_velocity_x * self.consts.DISTANCE_WHEN_FLYING)
 
             # Check player missile collisions with jets
             (
@@ -1685,13 +1705,13 @@ class JaxChopperCommand(JaxEnvironment[ChopperCommandState, ChopperCommandObserv
                 new_jet_positions,
                 score_to_add_jet,
                 new_rng_key,
-            ) = check_missile_collisions(
+            ) = self.check_missile_collisions(
                 new_player_missile_positions,
                 new_jet_positions,
                 new_rng_key,
                 on_screen_chopper_position,
                 new_player_x,
-                JET_SIZE
+                self.consts.JET_SIZE
             )
 
             # Check player missile collisions with choppers
@@ -1700,68 +1720,68 @@ class JaxChopperCommand(JaxEnvironment[ChopperCommandState, ChopperCommandObserv
                 new_chopper_positions,
                 score_to_add_chopper,
                 new_rng_key,
-            ) = check_missile_collisions(
+            ) = self.check_missile_collisions(
                 new_player_missile_positions,
                 new_chopper_positions,
                 new_rng_key,
                 on_screen_chopper_position,
                 new_player_x,
-                CHOPPER_SIZE
+                self.consts.CHOPPER_SIZE
             )
 
             # Check player collision with jets
-            player_collision_jet, player_collision_new_jet_pos = check_player_collision_entity(
+            player_collision_jet, player_collision_new_jet_pos = self.check_player_collision_entity(
                 new_player_x,
                 new_player_y,
                 new_player_velocity_x,
                 new_jet_positions,
-                JET_SIZE,
-                FRAMES_DEATH_ANIMATION_ENEMY,
+                self.consts.JET_SIZE,
+                self.consts.FRAMES_DEATH_ANIMATION_ENEMY,
             )
             new_jet_positions = player_collision_new_jet_pos
 
             # Check player collision with choppers
-            player_collision_chopper, player_collision_new_chopper_pos = check_player_collision_entity(
+            player_collision_chopper, player_collision_new_chopper_pos = self.check_player_collision_entity(
                 new_player_x,
                 new_player_y,
                 new_player_velocity_x,
                 new_chopper_positions,
-                CHOPPER_SIZE,
-                FRAMES_DEATH_ANIMATION_ENEMY,
+                self.consts.CHOPPER_SIZE,
+                self.consts.FRAMES_DEATH_ANIMATION_ENEMY,
             )
             new_chopper_positions = player_collision_new_chopper_pos
 
             # Check player collision with trucks
-            player_collision_truck, player_collision_new_truck_pos = check_player_collision_entity(
+            player_collision_truck, player_collision_new_truck_pos = self.check_player_collision_entity(
                 new_player_x,
                 new_player_y,
                 new_player_velocity_x,
                 new_truck_positions,
-                TRUCK_SIZE,
-                FRAMES_DEATH_ANIMATION_TRUCK,
+                self.consts.TRUCK_SIZE,
+                self.consts.FRAMES_DEATH_ANIMATION_TRUCK,
             )
             new_truck_positions = player_collision_new_truck_pos
 
             # Check player collision with enemy missiles
-            player_collision_enemy_missile, player_collision_new_missile_pos = check_player_collision_entity(
+            player_collision_enemy_missile, player_collision_new_missile_pos = self.check_player_collision_entity(
                 new_player_x,
                 new_player_y,
                 new_player_velocity_x,
                 new_enemy_missile_positions,
-                ENEMY_MISSILE_SIZE,
+                self.consts.ENEMY_MISSILE_SIZE,
                 0,
             )
             new_enemy_missile_positions = player_collision_new_missile_pos
 
             # Check enemy missiles collision with trucks
-            mis_tru_collision_truck_positions, mis_tru_collision_missile_positions = check_missile_truck_collisions(
+            mis_tru_collision_truck_positions, mis_tru_collision_missile_positions = self.check_missile_truck_collisions(
                 new_truck_positions,
                 new_enemy_missile_positions,
-                TRUCK_SIZE,
-                ENEMY_MISSILE_SIZE
+                self.consts.TRUCK_SIZE,
+                self.consts.ENEMY_MISSILE_SIZE
             )
 
-            new_truck_positions = jnp.where(ENABLE_ENEMY_MISSILE_TRUCK_COLLISION, mis_tru_collision_truck_positions,new_truck_positions)
+            new_truck_positions = jnp.where(self.consts.ENABLE_ENEMY_MISSILE_TRUCK_COLLISION, mis_tru_collision_truck_positions,new_truck_positions)
             new_enemy_missile_positions = mis_tru_collision_missile_positions
 
             # If player collided with anything
@@ -1775,7 +1795,7 @@ class JaxChopperCommand(JaxEnvironment[ChopperCommandState, ChopperCommandObserv
                     )
                 )
             )
-            player_collision = jnp.where(ENABLE_PLAYER_COLLISION,
+            player_collision = jnp.where(self.consts.ENABLE_PLAYER_COLLISION,
                                          player_collision,
                                          jnp.array(False)
                                          )
@@ -1783,21 +1803,21 @@ class JaxChopperCommand(JaxEnvironment[ChopperCommandState, ChopperCommandObserv
             # --------------- DEATH UPDATES ---------------
 
             # Update enemy death
-            new_chopper_positions = update_entity_death(new_chopper_positions, FRAMES_DEATH_ANIMATION_ENEMY,jnp.array(False))
-            new_jet_positions = update_entity_death(new_jet_positions, FRAMES_DEATH_ANIMATION_ENEMY, jnp.array(False))
-            new_truck_positions = update_entity_death(new_truck_positions, FRAMES_DEATH_ANIMATION_TRUCK,jnp.array(True))
+            new_chopper_positions = self.update_entity_death(new_chopper_positions, self.consts.FRAMES_DEATH_ANIMATION_ENEMY,jnp.array(False))
+            new_jet_positions = self.update_entity_death(new_jet_positions, self.consts.FRAMES_DEATH_ANIMATION_ENEMY, jnp.array(False))
+            new_truck_positions = self.update_entity_death(new_truck_positions, self.consts.FRAMES_DEATH_ANIMATION_TRUCK,jnp.array(True))
 
             # --------------- SCORE AND LIFE UPDATES ---------------
 
             # Update score with collision points
             new_score = state.score  # Get current score
             new_score = new_score + score_to_add_chopper + score_to_add_jet  # Add scores from enemy kills by player missile
-            new_score = jnp.where(player_collision_jet, new_score + SCORE_PER_JET_KILL,new_score)  # Add scores from enemy kills by collision with jet
-            new_score = jnp.where(player_collision_chopper, new_score + SCORE_PER_CHOPPER_KILL,new_score)  # Add scores from enemy kills by collision with chopper
+            new_score = jnp.where(player_collision_jet, new_score + self.consts.SCORE_PER_JET_KILL,new_score)  # Add scores from enemy kills by collision with jet
+            new_score = jnp.where(player_collision_chopper, new_score + self.consts.SCORE_PER_CHOPPER_KILL,new_score)  # Add scores from enemy kills by collision with chopper
             new_score = jnp.minimum(new_score, 999999)  # Score cannot be greater than 999999
 
             # Update lives if player collides with an enemy or enemy missile and add one life for every 10000 points
-            new_lives_to_add, new_save_lives = lives_step(player_collision, state.score, state.save_lives)
+            new_lives_to_add, new_save_lives = self.lives_step(player_collision, state.score, state.save_lives)
             new_lives = state.lives + new_lives_to_add
 
             # --------------- STEP COUNT ---------------
@@ -1835,7 +1855,7 @@ class JaxChopperCommand(JaxEnvironment[ChopperCommandState, ChopperCommandObserv
 
         # The death_pause is the pause that occurs right after the chopper died
         def get_death_pause_state(state, normal_state, action):
-            in_pause = jnp.logical_and(state.pause_timer <= DEATH_PAUSE_FRAMES, state.pause_timer > 0)
+            in_pause = jnp.logical_and(state.pause_timer <= self.consts.DEATH_PAUSE_FRAMES, state.pause_timer > 0)
 
             # pause counter
             new_pause_timer = jnp.where(in_pause, state.pause_timer - 1, state.pause_timer)
@@ -1851,7 +1871,7 @@ class JaxChopperCommand(JaxEnvironment[ChopperCommandState, ChopperCommandObserv
             def death_pause_truck_step_normal():
                 # truck deaths
                 temp_truck_positions = (
-                    step_truck_movement(
+                    self.step_truck_movement(
                         normal_state.truck_positions,
                         normal_state.player_x,
                     )
@@ -1865,14 +1885,14 @@ class JaxChopperCommand(JaxEnvironment[ChopperCommandState, ChopperCommandObserv
                 # Starts killing trucks at the truck that is the furthest to the left
                 start_idx = 6
 
-                elapsed = DEATH_PAUSE_FRAMES - state.pause_timer
-                frames_per_kill = DEATH_PAUSE_FRAMES // MAX_TRUCKS
+                elapsed = self.consts.DEATH_PAUSE_FRAMES - state.pause_timer
+                frames_per_kill = self.consts.DEATH_PAUSE_FRAMES // self.consts.MAX_TRUCKS
 
-                num_remove_now = jnp.clip(elapsed // frames_per_kill, 0, MAX_TRUCKS)        # Number of trucks to remove in this frame
-                num_remove_prev = jnp.clip((elapsed - 1) // frames_per_kill, 0, MAX_TRUCKS) # Number of trucks that were removed last frame
+                num_remove_now = jnp.clip(elapsed // frames_per_kill, 0, self.consts.MAX_TRUCKS)        # Number of trucks to remove in this frame
+                num_remove_prev = jnp.clip((elapsed - 1) // frames_per_kill, 0, self.consts.MAX_TRUCKS) # Number of trucks that were removed last frame
 
-                id = jnp.arange(MAX_TRUCKS)
-                rel_idx = jnp.mod(id - start_idx, MAX_TRUCKS)
+                id = jnp.arange(self.consts.MAX_TRUCKS)
+                rel_idx = jnp.mod(id - start_idx, self.consts.MAX_TRUCKS)
 
                 # Mask: Who should be dead now? Who was already dead?
                 kill_mask_now = rel_idx < num_remove_now
@@ -1889,7 +1909,7 @@ class JaxChopperCommand(JaxEnvironment[ChopperCommandState, ChopperCommandObserv
 
                 # Give points
                 num_valid_kills = jnp.sum(valid_kill)
-                add_to_score = num_valid_kills * SCORE_PER_TRUCK_ALIVE
+                add_to_score = num_valid_kills * self.consts.SCORE_PER_TRUCK_ALIVE
 
                 # Delete trucks
                 zero_truck = jnp.zeros_like(state.truck_positions)
@@ -1910,7 +1930,7 @@ class JaxChopperCommand(JaxEnvironment[ChopperCommandState, ChopperCommandObserv
 
             # Enemy deaths
             temp_jet_positions, temp_chopper_positions, _ = (
-                step_enemy_movement(
+                self.step_enemy_movement(
                     normal_state.truck_positions,
                     normal_state.jet_positions,
                     normal_state.chopper_positions,
@@ -1929,13 +1949,13 @@ class JaxChopperCommand(JaxEnvironment[ChopperCommandState, ChopperCommandObserv
             new_chopper_positions_pause = state.chopper_positions.at[:, 3].set(updated_chopper_death_timers)
 
 
-            new_player_missile_positions, new_cooldown = player_missile_step(
+            new_player_missile_positions, new_cooldown = self.player_missile_step(
                 normal_state, normal_state.player_x, normal_state.player_y, action
             )
 
             new_player_missile_positions = new_player_missile_positions.astype(jnp.float32)
 
-            new_enemy_missile_positions = jnp.full((MAX_ENEMY_MISSILES, 4), jnp.array([0, 0, 0, 187], dtype=jnp.float32))
+            new_enemy_missile_positions = jnp.full((self.consts.MAX_ENEMY_MISSILES, 4), jnp.array([0, 0, 0, 187], dtype=jnp.float32))
 
             # Things that have to be updated in the pause
             # truck_positions[i][3]     - this is required for rendering truck death animation while paused
@@ -1962,8 +1982,8 @@ class JaxChopperCommand(JaxEnvironment[ChopperCommandState, ChopperCommandObserv
         def get_no_move_pause_state(state, action):
             no_input = jnp.isin(action, Action.NOOP)
 
-            on_screen_position = (WIDTH // 2) - 8 + state.local_player_offset + (state.player_velocity_x * DISTANCE_WHEN_FLYING)
-            chopper_at_desired_point = on_screen_position <= ALLOW_MOVE_OFFSET
+            on_screen_position = (self.consts.WIDTH // 2) - 8 + state.local_player_offset + (state.player_velocity_x * self.consts.DISTANCE_WHEN_FLYING)
+            chopper_at_desired_point = on_screen_position <= self.consts.ALLOW_MOVE_OFFSET
 
             # Things that have to be updated in the no_move_pause
             # local_player_offset - this is required for moving the chopper to the left of the screen, since we are not calling player_step anymore
@@ -1971,10 +1991,10 @@ class JaxChopperCommand(JaxEnvironment[ChopperCommandState, ChopperCommandObserv
             no_move_state = state._replace(
                 local_player_offset=jnp.where(chopper_at_desired_point,
                                               state.local_player_offset,
-                                              state.local_player_offset - LOCAL_PLAYER_OFFSET_SPEED
+                                              state.local_player_offset - self.consts.LOCAL_PLAYER_OFFSET_SPEED
                                               ),
                 pause_timer=jnp.where(jnp.logical_and(chopper_at_desired_point, jnp.logical_not(no_input)),
-                                      jnp.array(DEATH_PAUSE_FRAMES + 1),
+                                      jnp.array(self.consts.DEATH_PAUSE_FRAMES + 1),
                                       jnp.array(state.pause_timer) #Stay in no_move_pause
                                       )
             )
@@ -2010,14 +2030,14 @@ class JaxChopperCommand(JaxEnvironment[ChopperCommandState, ChopperCommandObserv
 
         # Pick correct state
         step_state = jax.lax.cond(
-            state.pause_timer <= DEATH_PAUSE_FRAMES, #Pick the death_pause if Pause was initiated
+            state.pause_timer <= self.consts.DEATH_PAUSE_FRAMES, #Pick the death_pause if Pause was initiated
             lambda _: death_pause_state,
             lambda _: normal_state,
             operand=None
         )
 
         step_state = jax.lax.cond(
-            state.pause_timer == DEATH_PAUSE_FRAMES + 2, #Pick the no_move_pause if no move pause was initiated
+            state.pause_timer == self.consts.DEATH_PAUSE_FRAMES + 2, #Pick the no_move_pause if no move pause was initiated
             lambda _: no_move_state,
             lambda _: step_state,
             operand=None
@@ -2027,7 +2047,7 @@ class JaxChopperCommand(JaxEnvironment[ChopperCommandState, ChopperCommandObserv
         # Soft-Reset (früher war das normal_game_step(get_prev_fields=True))
         soft_reset_state = death_pause_state
         soft_reset_state = jax.lax.cond(
-            state.pause_timer == DEATH_PAUSE_FRAMES + 2,
+            state.pause_timer == self.consts.DEATH_PAUSE_FRAMES + 2,
             lambda _: no_move_state,
             lambda _: soft_reset_state,
             operand=None
@@ -2063,13 +2083,13 @@ class JaxChopperCommand(JaxEnvironment[ChopperCommandState, ChopperCommandObserv
         # Pause-Initialisierung und Update
         just_died = jnp.logical_and(
             step_state.player_collision,
-            step_state.pause_timer > DEATH_PAUSE_FRAMES
+            step_state.pause_timer > self.consts.DEATH_PAUSE_FRAMES
         )
         all_enemies_dead = jnp.logical_and(
             jnp.all(step_state.jet_positions == 0),
             jnp.all(step_state.chopper_positions == 0)
         )
-        initial_dead_pause = jnp.logical_and(all_enemies_dead, step_state.pause_timer > DEATH_PAUSE_FRAMES)
+        initial_dead_pause = jnp.logical_and(all_enemies_dead, step_state.pause_timer > self.consts.DEATH_PAUSE_FRAMES)
 
         respawn_state = respawn_state._replace(
             jet_positions=jnp.where(
@@ -2097,7 +2117,7 @@ class JaxChopperCommand(JaxEnvironment[ChopperCommandState, ChopperCommandObserv
         step_state = step_state._replace(
             pause_timer=jnp.where(
                 jnp.logical_or(just_died, initial_dead_pause),
-                jnp.array(DEATH_PAUSE_FRAMES),
+                jnp.array(self.consts.DEATH_PAUSE_FRAMES),
                 step_state.pause_timer
             )
         )
@@ -2129,21 +2149,25 @@ class JaxChopperCommand(JaxEnvironment[ChopperCommandState, ChopperCommandObserv
 
 
 class ChopperCommandRenderer(JAXGameRenderer):
+    def __init__(self, consts: ChopperCommandConstants = None):
+        super().__init__()
+        self.consts = consts or ChopperCommandConstants()
+
     @partial(jax.jit, static_argnums=(0,))
     def render(self, state):
         # Local position of player on screen
-        chopper_position = (WIDTH // 2) + state.local_player_offset + (state.player_velocity_x * DISTANCE_WHEN_FLYING) - (PLAYER_SIZE[0] // 2) # (WIDTH // 2) - 8 = Heli mittig platzieren, state.local_player_offset = ob Heli links oder rechts auf Bildschirm, state.player_velocity_x * DISTANCE_WHEN_FLYING = Bewegen von Heli richtung Mitte wenn er fliegt
+        chopper_position = (self.consts.WIDTH // 2) + state.local_player_offset + (state.player_velocity_x * self.consts.DISTANCE_WHEN_FLYING) - (self.consts.PLAYER_SIZE[0] // 2) # (WIDTH // 2) - 8 = Heli mittig platzieren, state.local_player_offset = ob Heli links oder rechts auf Bildschirm, state.player_velocity_x * DISTANCE_WHEN_FLYING = Bewegen von Heli richtung Mitte wenn er fliegt
 
         # Bildschirmmitte relativ zur Scrollrichtung des Spielers
-        static_center_x_jet = (WIDTH // 2) + state.local_player_offset - (JET_SIZE[0] // 2)
-        static_center_x_chopper = (WIDTH // 2) + state.local_player_offset - (CHOPPER_SIZE[0] // 2)
-        static_center_x_truck = (WIDTH // 2) + state.local_player_offset - (TRUCK_SIZE[0] // 2)
+        static_center_x_jet = (self.consts.WIDTH // 2) + state.local_player_offset - (self.consts.JET_SIZE[0] // 2)
+        static_center_x_chopper = (self.consts.WIDTH // 2) + state.local_player_offset - (self.consts.CHOPPER_SIZE[0] // 2)
+        static_center_x_truck = (self.consts.WIDTH // 2) + state.local_player_offset - (self.consts.TRUCK_SIZE[0] // 2)
 
         #Initialisierung
-        raster = jnp.zeros((WIDTH, HEIGHT, 3))
+        raster = jnp.zeros((self.consts.HEIGHT, self.consts.WIDTH,  3))
 
         # Render Background
-        frame_idx = jnp.asarray(state.local_player_offset + (-state.player_x % WIDTH), dtype=jnp.int32) #local_player_offset = ob Heli links oder rechts auf Bildschirm ist, -state.player_x % WIDTH = Scrollen vom Hintergrund
+        frame_idx = jnp.asarray(state.local_player_offset + (-state.player_x % self.consts.WIDTH), dtype=jnp.int32) #local_player_offset = ob Heli links oder rechts auf Bildschirm ist, -state.player_x % WIDTH = Scrollen vom Hintergrund
         frame_bg = jru.get_sprite_frame(SPRITE_BG, frame_idx)
 
         raster = jru.render_at(raster, 0, 0, frame_bg)
@@ -2156,17 +2180,17 @@ class ChopperCommandRenderer(JAXGameRenderer):
 
             #am Leben: direction != 0 UND death_timer > FRAMES_DEATH_ANIMATION_TRUCK
             is_alive = jnp.logical_and(direction != 0,
-                                       death_timer > FRAMES_DEATH_ANIMATION_TRUCK)
+                                       death_timer > self.consts.FRAMES_DEATH_ANIMATION_TRUCK)
 
             #in der Todes-Animation: direction != 0 UND 0 < death_timer <= FRAMES_DEATH_ANIMATION_TRUCK
             is_dying = jnp.logical_and(
                 direction != 0,
-                jnp.logical_and(death_timer <= FRAMES_DEATH_ANIMATION_TRUCK,
+                jnp.logical_and(death_timer <= self.consts.FRAMES_DEATH_ANIMATION_TRUCK,
                                 death_timer > 0)
             )
 
             #flicker-Phase (nur relevant wenn is_dying)
-            in_flicker_on = (death_timer % TRUCK_FLICKER_RATE) < (TRUCK_FLICKER_RATE // 2)
+            in_flicker_on = (death_timer % self.consts.TRUCK_FLICKER_RATE) < (self.consts.TRUCK_FLICKER_RATE // 2)
 
             # Render-Logik: immer anzeigen, solange ALIVE oder (DYING & flicker_on)
             should_render = jnp.logical_or(is_alive,
@@ -2189,7 +2213,7 @@ class ChopperCommandRenderer(JAXGameRenderer):
                 raster_base,
             )
 
-        raster = jax.lax.fori_loop(0, MAX_TRUCKS, render_truck, raster)
+        raster = jax.lax.fori_loop(0, self.consts.MAX_TRUCKS, render_truck, raster)
 
         # -- JET Rendering --
         frame_enemy_jet = jru.get_sprite_frame(SPRITE_ENEMY_JET, state.step_counter)
@@ -2202,10 +2226,10 @@ class ChopperCommandRenderer(JAXGameRenderer):
             jet_screen_x = state.jet_positions[i][0] - state.player_x + static_center_x_jet
             jet_screen_y = state.jet_positions[i][1]
 
-            phase0 = death_timer > (2 * FRAMES_DEATH_ANIMATION_ENEMY) // 3
+            phase0 = death_timer > (2 * self.consts.FRAMES_DEATH_ANIMATION_ENEMY) // 3
             phase1 = jnp.logical_and(
-                death_timer <= (2 * FRAMES_DEATH_ANIMATION_ENEMY) // 3,
-                death_timer > FRAMES_DEATH_ANIMATION_ENEMY // 3
+                death_timer <= (2 * self.consts.FRAMES_DEATH_ANIMATION_ENEMY) // 3,
+                death_timer > self.consts.FRAMES_DEATH_ANIMATION_ENEMY // 3
             )
             death_sprite = jnp.where(
                 phase0, ENEMY_CHOPPER_DEATH_1,
@@ -2215,7 +2239,7 @@ class ChopperCommandRenderer(JAXGameRenderer):
             def render_true(r):
                 # je nach death_timer richtigen Sprite rendern
                 return jax.lax.cond(
-                    death_timer <= FRAMES_DEATH_ANIMATION_ENEMY,
+                    death_timer <= self.consts.FRAMES_DEATH_ANIMATION_ENEMY,
                     # Wenn in Death-Phase
                     lambda rr: jru.render_at(
                         rr, jet_screen_x, jet_screen_y - 2, death_sprite,
@@ -2236,7 +2260,7 @@ class ChopperCommandRenderer(JAXGameRenderer):
                 raster_base,
             )
 
-        raster = jax.lax.fori_loop(0, MAX_JETS, render_enemy_jet, raster)
+        raster = jax.lax.fori_loop(0, self.consts.MAX_JETS, render_enemy_jet, raster)
 
         # -- CHOPPER Rendering --
         frame_enemy_chopper = jru.get_sprite_frame(SPRITE_ENEMY_HELI, state.step_counter)
@@ -2249,10 +2273,10 @@ class ChopperCommandRenderer(JAXGameRenderer):
             chopper_screen_x = state.chopper_positions[i][0] - state.player_x + static_center_x_chopper
             chopper_screen_y = state.chopper_positions[i][1]
 
-            phase0 = death_timer > (2 * FRAMES_DEATH_ANIMATION_ENEMY) // 3
+            phase0 = death_timer > (2 * self.consts.FRAMES_DEATH_ANIMATION_ENEMY) // 3
             phase1 = jnp.logical_and(
-                death_timer <= (2 * FRAMES_DEATH_ANIMATION_ENEMY) // 3,
-                death_timer > FRAMES_DEATH_ANIMATION_ENEMY // 3
+                death_timer <= (2 * self.consts.FRAMES_DEATH_ANIMATION_ENEMY) // 3,
+                death_timer > self.consts.FRAMES_DEATH_ANIMATION_ENEMY // 3
             )
 
             death_sprite = jnp.where(
@@ -2267,7 +2291,7 @@ class ChopperCommandRenderer(JAXGameRenderer):
                     chopper_screen_x,
                     chopper_screen_y,
                     jnp.where(
-                        death_timer <= FRAMES_DEATH_ANIMATION_ENEMY,
+                        death_timer <= self.consts.FRAMES_DEATH_ANIMATION_ENEMY,
                         death_sprite,
                         frame_enemy_chopper
                     ),
@@ -2277,7 +2301,7 @@ class ChopperCommandRenderer(JAXGameRenderer):
                 raster_base,
             )
 
-        raster = jax.lax.fori_loop(0, MAX_CHOPPERS, render_enemy_chopper, raster)
+        raster = jax.lax.fori_loop(0, self.consts.MAX_CHOPPERS, render_enemy_chopper, raster)
 
         # Render enemy missiles
         frame_enemy_missile = jru.get_sprite_frame(SPRITE_ENEMY_MISSILE, state.step_counter)
@@ -2296,7 +2320,7 @@ class ChopperCommandRenderer(JAXGameRenderer):
                 raster_base,
             )
 
-        raster = jax.lax.fori_loop(0, MAX_ENEMY_MISSILES, render_enemy_missile, raster)
+        raster = jax.lax.fori_loop(0, self.consts.MAX_ENEMY_MISSILES, render_enemy_missile, raster)
 
         #Render Scores
         def trim_leading_zeros(digits: jnp.ndarray) -> jnp.ndarray:
@@ -2349,8 +2373,8 @@ class ChopperCommandRenderer(JAXGameRenderer):
         should_render = jnp.logical_and(death_timer != 0, death_timer != 1)
 
         # Schwellen berechnen
-        phase0_cutoff = jnp.array(PLAYER_FADE_OUT_START_THRESHOLD_0 * DEATH_PAUSE_FRAMES).astype(jnp.int32)
-        phase1_cutoff = jnp.array(PLAYER_FADE_OUT_START_THRESHOLD_1 * DEATH_PAUSE_FRAMES).astype(jnp.int32)
+        phase0_cutoff = jnp.array(self.consts.PLAYER_FADE_OUT_START_THRESHOLD_0 * self.consts.DEATH_PAUSE_FRAMES).astype(jnp.int32)
+        phase1_cutoff = jnp.array(self.consts.PLAYER_FADE_OUT_START_THRESHOLD_1 * self.consts.DEATH_PAUSE_FRAMES).astype(jnp.int32)
 
         # Phasen bestimmen
         phase0 = death_timer > phase0_cutoff
@@ -2375,7 +2399,7 @@ class ChopperCommandRenderer(JAXGameRenderer):
                 chopper_position,
                 state.player_y,
                 jnp.where(
-                    jnp.logical_or(death_timer > DEATH_PAUSE_FRAMES, all_enemies_dead),
+                    jnp.logical_or(death_timer > self.consts.DEATH_PAUSE_FRAMES, all_enemies_dead),
                     frame_pl_heli,
                     death_sprite
                 ),
@@ -2396,7 +2420,7 @@ class ChopperCommandRenderer(JAXGameRenderer):
 
             def get_pl_missile_frame():
                 delta_curr_missile_spawn = jnp.abs(missile[0] - missile[4])
-                index = jnp.floor_divide(delta_curr_missile_spawn, MISSILE_ANIMATION_SPEED)
+                index = jnp.floor_divide(delta_curr_missile_spawn, self.consts.MISSILE_ANIMATION_SPEED)
                 index = jnp.clip(index, 0, 15)
                 return index.astype(jnp.int32)
             frame_pl_missile = jru.get_sprite_frame(SPRITE_PL_MISSILE, get_pl_missile_frame())
@@ -2432,26 +2456,26 @@ class ChopperCommandRenderer(JAXGameRenderer):
         # Render minimap background
         raster = jru.render_at(
             raster,
-            MINIMAP_POSITION_X,
-            MINIMAP_POSITION_Y,
+            self.consts.MINIMAP_POSITION_X,
+            self.consts.MINIMAP_POSITION_Y,
             MINIMAP_BG,
         )
 
         # Render minimap mountains
         def get_minimap_mountains_frame():
-            return jnp.asarray(((-state.player_x // (DOWNSCALING_FACTOR_WIDTH * 7)) % 8), dtype=jnp.int32)
+            return jnp.asarray(((-state.player_x // (self.consts.DOWNSCALING_FACTOR_WIDTH * 7)) % 8), dtype=jnp.int32)
 
         frame_minimap_mountains = jru.get_sprite_frame(MINIMAP_MOUNTAINS, get_minimap_mountains_frame())
         raster = jru.render_at(
             raster,
-            MINIMAP_POSITION_X,
-            MINIMAP_POSITION_Y + 3,
+            self.consts.MINIMAP_POSITION_X,
+            self.consts.MINIMAP_POSITION_Y + 3,
             frame_minimap_mountains,
         )
 
         # Render trucks on minimap
         def render_trucks_minimap(i, raster_base):
-            timing_clock = state.step_counter % MINIMAP_RENDER_TRUCK_REFRESH_RATE
+            timing_clock = state.step_counter % self.consts.MINIMAP_RENDER_TRUCK_REFRESH_RATE
             update_trigger = timing_clock == 0
 
             truck_world_x = state.truck_positions[6][0]
@@ -2464,7 +2488,8 @@ class ChopperCommandRenderer(JAXGameRenderer):
             weird_offset = 16
             parent_x = weird_offset + (
                     (truck_world_x - state.player_x + chopper_position)
-                    // DOWNSCALING_FACTOR_WIDTH // 6)
+                        // self.consts.DOWNSCALING_FACTOR_WIDTH // 6
+            )
 
             minimap_x = 2 * i + parent_x
 
@@ -2491,19 +2516,19 @@ class ChopperCommandRenderer(JAXGameRenderer):
             minimap_x = minimap_x + add_to_first + add_to_second + add_to_third + add_to_fourth
             minimap_x = jnp.mod(minimap_x, 6 * add)
 
-            minimap_y = (state.truck_positions[i][1] // DOWNSCALING_FACTOR_HEIGHT)
+            minimap_y = (state.truck_positions[i][1] // self.consts.DOWNSCALING_FACTOR_HEIGHT)
 
             should_render = jnp.logical_and(
                 state.truck_positions[i][3] != 0,
-                jnp.logical_and(minimap_x >= 0, minimap_x < MINIMAP_WIDTH)
+                jnp.logical_and(minimap_x >= 0, minimap_x < self.consts.MINIMAP_WIDTH)
             )
 
             raster_base = jax.lax.cond(
                 should_render,
                 lambda r: jru.render_at(
                     r,
-                    MINIMAP_POSITION_X + minimap_x,
-                    MINIMAP_POSITION_Y + 1 + minimap_y,
+                    self.consts.MINIMAP_POSITION_X + minimap_x,
+                    self.consts.MINIMAP_POSITION_Y + 1 + minimap_y,
                     MINIMAP_TRUCK
                 ),
                 lambda r: r,
@@ -2511,7 +2536,7 @@ class ChopperCommandRenderer(JAXGameRenderer):
             )
             return raster_base
 
-        raster = jax.lax.fori_loop(0, MAX_TRUCKS, render_trucks_minimap, raster)
+        raster = jax.lax.fori_loop(0, self.consts.MAX_TRUCKS, render_trucks_minimap, raster)
 
 
         # Render jets on minimap
@@ -2519,15 +2544,15 @@ class ChopperCommandRenderer(JAXGameRenderer):
             weird_offset = 16
             jet_world_x = state.jet_positions[i][0]
             minimap_x = weird_offset + (
-                        (jet_world_x - state.player_x + chopper_position) // DOWNSCALING_FACTOR_WIDTH // 6)
+                        (jet_world_x - state.player_x + chopper_position) // self.consts.DOWNSCALING_FACTOR_WIDTH // 6)
 
-            is_alive = state.jet_positions[i][3] > FRAMES_DEATH_ANIMATION_ENEMY
+            is_alive = state.jet_positions[i][3] > self.consts.FRAMES_DEATH_ANIMATION_ENEMY
 
             should_render = jnp.logical_and(
                 is_alive,
                 jnp.logical_and(
                     minimap_x >= 0,
-                    minimap_x < MINIMAP_WIDTH
+                    minimap_x < self.consts.MINIMAP_WIDTH
                 )
             )
 
@@ -2535,28 +2560,28 @@ class ChopperCommandRenderer(JAXGameRenderer):
                 jet_world_x = state.jet_positions[i][0]
                 jet_world_y = state.jet_positions[i][1]
 
-                is_in_top_lane = jnp.logical_and(jet_world_y <= ENEMY_LANE_6, jet_world_y >= ENEMY_LANE_8)
-                is_in_middle_lane = jnp.logical_and(jet_world_y <= ENEMY_LANE_3, jet_world_y >= ENEMY_LANE_5)
+                is_in_top_lane = jnp.logical_and(jet_world_y <= self.consts.ENEMY_LANE_6, jet_world_y >= self.consts.ENEMY_LANE_8)
+                is_in_middle_lane = jnp.logical_and(jet_world_y <= self.consts.ENEMY_LANE_3, jet_world_y >= self.consts.ENEMY_LANE_5)
 
                 lane_world_y = jnp.where(is_in_top_lane,
-                                         ENEMY_LANE_7, jnp.where(is_in_middle_lane,
-                                                                 ENEMY_LANE_4, ENEMY_LANE_1))
+                                         self.consts.ENEMY_LANE_7, jnp.where(is_in_middle_lane,
+                                                                 self.consts.ENEMY_LANE_4, self.consts.ENEMY_LANE_1))
 
                 # Downscaling
                 minimap_x = weird_offset + (
-                            (jet_world_x - state.player_x + chopper_position) // DOWNSCALING_FACTOR_WIDTH // 6)
-                minimap_y = (lane_world_y // (DOWNSCALING_FACTOR_HEIGHT + 1))
+                            (jet_world_x - state.player_x + chopper_position) // self.consts.DOWNSCALING_FACTOR_WIDTH // 6)
+                minimap_y = (lane_world_y // (self.consts.DOWNSCALING_FACTOR_HEIGHT + 1))
 
                 return jru.render_at(
                     r,
-                    MINIMAP_POSITION_X + minimap_x,
-                    MINIMAP_POSITION_Y + 3 + minimap_y,
+                    self.consts.MINIMAP_POSITION_X + minimap_x,
+                    self.consts.MINIMAP_POSITION_Y + 3 + minimap_y,
                     MINIMAP_ENEMY
                 )
 
             return jax.lax.cond(should_render, do_render, lambda r: r, raster_base)
 
-        raster = jax.lax.fori_loop(0, MAX_JETS, render_jets_minimap, raster)
+        raster = jax.lax.fori_loop(0, self.consts.MAX_JETS, render_jets_minimap, raster)
 
 
         # Render choppers on minimap
@@ -2564,15 +2589,15 @@ class ChopperCommandRenderer(JAXGameRenderer):
             weird_offset = 16
             chooper_world_x = state.chopper_positions[i][0]
             minimap_x = weird_offset + (
-                        (chooper_world_x - state.player_x + chopper_position) // DOWNSCALING_FACTOR_WIDTH // 6)
+                        (chooper_world_x - state.player_x + chopper_position) // self.consts.DOWNSCALING_FACTOR_WIDTH // 6)
 
-            is_alive = state.chopper_positions[i][3] > FRAMES_DEATH_ANIMATION_ENEMY
+            is_alive = state.chopper_positions[i][3] > self.consts.FRAMES_DEATH_ANIMATION_ENEMY
 
             should_render = jnp.logical_and(
                 is_alive,
                 jnp.logical_and(
                     minimap_x >= 0,
-                    minimap_x < MINIMAP_WIDTH
+                    minimap_x < self.consts.MINIMAP_WIDTH
                 )
             )
 
@@ -2580,43 +2605,43 @@ class ChopperCommandRenderer(JAXGameRenderer):
                 chopper_world_x = state.chopper_positions[i][0]
                 chopper_world_y = state.chopper_positions[i][1]
 
-                is_in_top_lane = jnp.logical_and(chopper_world_y <= ENEMY_LANE_6, chopper_world_y >= ENEMY_LANE_8)
-                is_in_middle_lane = jnp.logical_and(chopper_world_y <= ENEMY_LANE_3, chopper_world_y >= ENEMY_LANE_5)
+                is_in_top_lane = jnp.logical_and(chopper_world_y <= self.consts.ENEMY_LANE_6, chopper_world_y >= self.consts.ENEMY_LANE_8)
+                is_in_middle_lane = jnp.logical_and(chopper_world_y <= self.consts.ENEMY_LANE_3, chopper_world_y >= self.consts.ENEMY_LANE_5)
 
                 lane_world_y = jnp.where(is_in_top_lane,
-                                         ENEMY_LANE_7, jnp.where(is_in_middle_lane,
-                                                                 ENEMY_LANE_4, ENEMY_LANE_1))
+                                         self.consts.ENEMY_LANE_7, jnp.where(is_in_middle_lane,
+                                                                 self.consts.ENEMY_LANE_4, self.consts.ENEMY_LANE_1))
 
                 # Downscaling
                 minimap_x = weird_offset + (
-                            (chopper_world_x - state.player_x + chopper_position) // DOWNSCALING_FACTOR_WIDTH // 6)
-                minimap_y = (lane_world_y // (DOWNSCALING_FACTOR_HEIGHT + 1))
+                            (chopper_world_x - state.player_x + chopper_position) // self.consts.DOWNSCALING_FACTOR_WIDTH // 6)
+                minimap_y = (lane_world_y // (self.consts.DOWNSCALING_FACTOR_HEIGHT + 1))
 
                 return jru.render_at(
                     r,
-                    MINIMAP_POSITION_X + minimap_x,
-                    MINIMAP_POSITION_Y + 3 + minimap_y,
+                    self.consts.MINIMAP_POSITION_X + minimap_x,
+                    self.consts.MINIMAP_POSITION_Y + 3 + minimap_y,
                     MINIMAP_ENEMY
                 )
 
             return jax.lax.cond(should_render, do_render, lambda r: r, raster_base)
 
-        raster = jax.lax.fori_loop(0, MAX_CHOPPERS, render_choppers_minimap, raster)
+        raster = jax.lax.fori_loop(0, self.consts.MAX_CHOPPERS, render_choppers_minimap, raster)
 
 
         # Render player on minimap
         raster = jru.render_at(
             raster,
-            MINIMAP_POSITION_X + 16 + (chopper_position // (DOWNSCALING_FACTOR_WIDTH * 7)),
-            MINIMAP_POSITION_Y + 6 + (state.player_y // (DOWNSCALING_FACTOR_HEIGHT + 7)),
+            self.consts.MINIMAP_POSITION_X + 16 + (chopper_position // (self.consts.DOWNSCALING_FACTOR_WIDTH * 7)),
+            self.consts.MINIMAP_POSITION_Y + 6 + (state.player_y // (self.consts.DOWNSCALING_FACTOR_HEIGHT + 7)),
             MINIMAP_PLAYER,
         )
 
         #Render activision logo
         raster = jru.render_at(
             raster,
-            MINIMAP_POSITION_X + (MINIMAP_WIDTH - 32) // 2,
-            HEIGHT - 7 - 1, #7 = Sprite Height 1=One pixel headroom
+            self.consts.MINIMAP_POSITION_X + (self.consts.MINIMAP_WIDTH - 32) // 2,
+            self.consts.HEIGHT - 7 - 1, #7 = Sprite Height 1=One pixel headroom
             MINIMAP_ACTIVISION_LOGO,
         )
 
