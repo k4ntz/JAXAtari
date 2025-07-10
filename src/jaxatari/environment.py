@@ -8,6 +8,7 @@ from jaxatari.spaces import Space
 EnvObs = TypeVar("EnvObs")
 EnvState = TypeVar("EnvState")
 EnvInfo = TypeVar("EnvInfo")
+EnvConstants = TypeVar("EnvConstants")
 
 class JAXAtariAction:
     """
@@ -43,19 +44,18 @@ class JAXAtariAction:
             cls.UPRIGHTFIRE, cls.UPLEFTFIRE, cls.DOWNRIGHTFIRE, cls.DOWNLEFTFIRE
         ], dtype=jnp.int32)
 
-class JaxEnvironment(Generic[EnvState, EnvObs, EnvInfo]):
+class JaxEnvironment(Generic[EnvState, EnvObs, EnvInfo, EnvConstants]):
     """
     Abstract class for a JAX environment.
     Generics:
     EnvState: The type of the environment state.
     EnvObs: The type of the observation.
     EnvInfo: The type of the additional information.
+    EnvConstants: The type of the environment constants.
     """
 
-    def __init__(self):
-        self.mode = 0
-        self.difficulty = 0
-        pass
+    def __init__(self, consts: EnvConstants = None):
+        self.consts = consts
 
     def reset(self, key: jrandom.PRNGKey=None) -> Tuple[EnvObs, EnvState]:
         """

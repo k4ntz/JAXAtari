@@ -10,6 +10,7 @@ GAME_MODULES = {
     "seaquest": "jaxatari.games.jax_seaquest",
     "kangaroo": "jaxatari.games.jax_kangaroo",
     "freeway": "jaxatari.games.jax_freeway",
+    "breakout": "jaxatari.games.jax_breakout",
     # Add new games here
 }
 
