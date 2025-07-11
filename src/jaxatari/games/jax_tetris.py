@@ -244,7 +244,7 @@ def load_sprites():
     """
     #TODO
 
-class TetrisRenderer(AtraJaxisRenderer):
+class TetrisRenderer(JAXGameRenderer):
     """
     JAX-based Tetris game renderer, optimized with JIT compilation.
     """
