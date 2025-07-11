@@ -33,7 +33,8 @@ BRAKE_SPEED = jnp.array(BRAKE_TOTAL_DISTANCE / BRAKE_DURATION, dtype=jnp.float32
 
 # --- Player params ---------------
 PLAYER_SIZE = (9, 21)  # w, h
-PLAYER_START_X, PLAYER_START_Y = 37.0, 74.0
+PLAYER_START_X, PLAYER_START_Y = 15, 140
+PLAYER_RESPWAN_XY = jnp.array([78, 36], dtype=jnp.float32)
 
 # --- Enemies params ---
 ENEMY_SIZE = (8, 8)  # w, h
@@ -121,6 +122,7 @@ class PlayerState(NamedTuple):  # Player movement
     brake_frames_left: chex.Array
     bumped_idx: chex.Array
     pow_bumped: chex.Array
+    safe: bool
 
 
 class MarioBrosState(NamedTuple):
@@ -470,70 +472,74 @@ def enemy_step(
 
 @jax.jit
 def movement(state: PlayerState, game_state:GameState) -> PlayerState:    # Calculates movement of Player based on given state and action taken
+    
+    def normal(x):
 
-    move = state.move * MOVE_SPEED
-    jump_btn = state.jump
-    vx = move
-    # -------- phase / frame bookkeeping --------------------------
-    start_jump = (jump_btn == 1) & state.on_ground & (state.jump_phase == 0)
+        move = state.move * MOVE_SPEED
+        jump_btn = state.jump
+        vx = move
+        # -------- phase / frame bookkeeping --------------------------
+        start_jump = (jump_btn == 1) & state.on_ground & (state.jump_phase == 0)
 
-    jump_phase = jnp.where(start_jump, 1, state.jump_phase)
-    asc_left = jnp.where(start_jump, ASCEND_FRAMES, state.ascend_frames)
+        jump_phase = jnp.where(start_jump, 1, state.jump_phase)
+        asc_left = jnp.where(start_jump, ASCEND_FRAMES, state.ascend_frames)
 
-    # vertical speed for this frame
-    vy = jnp.where(
-        jump_phase == 1, ASCEND_VY,
-        jnp.where(jump_phase == 2, DESCEND_VY,
-                  jnp.where(state.on_ground, 0.0, DESCEND_VY))
-    )
+        # vertical speed for this frame
+        vy = jnp.where(
+            jump_phase == 1, ASCEND_VY,
+            jnp.where(jump_phase == 2, DESCEND_VY,
+                    jnp.where(state.on_ground, 0.0, DESCEND_VY))
+        )
 
-    # integrate position
-    new_pos = state.pos + jnp.array([vx, vy])
+        # integrate position
+        new_pos = state.pos + jnp.array([vx, vy])
 
-    landed, bumped, y_land, y_bump, pow_bumped, bumped_idx = check_collision(new_pos, jnp.array([vx, vy]), PLATFORMS,
-                                                                             POW_BLOCK, game_state.pow_block_counter)
+        landed, bumped, y_land, y_bump, pow_bumped, bumped_idx = check_collision(new_pos, jnp.array([vx, vy]), PLATFORMS,
+                                                                                POW_BLOCK, game_state.pow_block_counter)
 
-    new_y = jnp.where(landed, y_land,
-                      jnp.where(bumped, y_bump, new_pos[1]))
+        new_y = jnp.where(landed, y_land,
+                        jnp.where(bumped, y_bump, new_pos[1]))
 
-    # ---------- update phases after collision & time -------------
-    # decrement ascend frames while ascending
-    asc_left = jnp.where(jump_phase == 1, jnp.maximum(asc_left - 1, 0), asc_left)
-    # switch to descend when ascent finished
-    jump_phase = jnp.where((jump_phase == 1) & (asc_left == 0), 2, jump_phase)
-    # head bump → descend immediately
-    jump_phase = jnp.where(bumped & (vy < 0), 2, jump_phase)
-    asc_left = jnp.where(bumped & (vy < 0), 0, asc_left)
-    # landing → reset
-    jump_phase = jnp.where(landed, 0, jump_phase)
-    asc_left = jnp.where(landed, 0, asc_left)
-    # walked off ledge → fall
-    jump_phase = jnp.where((jump_phase == 0) & (~landed), 2, jump_phase)
+        # ---------- update phases after collision & time -------------
+        # decrement ascend frames while ascending
+        asc_left = jnp.where(jump_phase == 1, jnp.maximum(asc_left - 1, 0), asc_left)
+        # switch to descend when ascent finished
+        jump_phase = jnp.where((jump_phase == 1) & (asc_left == 0), 2, jump_phase)
+        # head bump → descend immediately
+        jump_phase = jnp.where(bumped & (vy < 0), 2, jump_phase)
+        asc_left = jnp.where(bumped & (vy < 0), 0, asc_left)
+        # landing → reset
+        jump_phase = jnp.where(landed, 0, jump_phase)
+        asc_left = jnp.where(landed, 0, asc_left)
+        # walked off ledge → fall
+        jump_phase = jnp.where((jump_phase == 0) & (~landed), 2, jump_phase)
 
-    vy_final = jnp.where(
-        jump_phase == 1, ASCEND_VY,
-        jnp.where(jump_phase == 2, DESCEND_VY, 0.0)
-    )
+        vy_final = jnp.where(
+            jump_phase == 1, ASCEND_VY,
+            jnp.where(jump_phase == 2, DESCEND_VY, 0.0)
+        )
 
-    new_x = jnp.clip(new_pos[0], 0, SCREEN_WIDTH - PLAYER_SIZE[0])
+        new_x = jnp.clip(new_pos[0], 0, SCREEN_WIDTH - PLAYER_SIZE[0])
 
-    return PlayerState(
-        pos=jnp.array([new_x, new_y]),
-        vel=jnp.array([vx, vy_final]),
-        on_ground=landed,
-        jump_phase=jump_phase.astype(jnp.int32),
-        ascend_frames=asc_left.astype(jnp.int32),
-        idx_right=state.idx_right,
-        idx_left=state.idx_left,
-        jump=state.jump,
-        move=state.move,
-        jumpL=state.jumpL,
-        jumpR=state.jumpR,
-        last_dir=state.last_dir,
-        brake_frames_left=state.brake_frames_left,
-        bumped_idx=bumped_idx,
-        pow_bumped=pow_bumped
-    )
+        return PlayerState(
+            pos=jnp.array([new_x, new_y]),
+            vel=jnp.array([vx, vy_final]),
+            on_ground=landed,
+            jump_phase=jump_phase.astype(jnp.int32),
+            ascend_frames=asc_left.astype(jnp.int32),
+            idx_right=state.idx_right,
+            idx_left=state.idx_left,
+            jump=state.jump,
+            move=state.move,
+            jumpL=state.jumpL,
+            jumpR=state.jumpR,
+            last_dir=state.last_dir,
+            brake_frames_left=state.brake_frames_left,
+            bumped_idx=bumped_idx,
+            pow_bumped=pow_bumped,
+            safe= state.safe
+        )
+    return lax.cond(state.safe, lambda x: x, normal , state)
 
 
 @jax.jit
@@ -543,6 +549,7 @@ def player_step(state: PlayerState, action: chex.Array, game_state: GameState) -
     press_right = (action == Action.RIGHT) | (action == Action.RIGHTFIRE)
     press_left = (action == Action.LEFT) | (action == Action.LEFTFIRE)
 
+    state = state._replace(safe=jnp.where((press_fire | press_right | press_left), False, state.safe))
     # 2) reset horizontal/jump input on ground
     state0 = lax.cond(
         state.on_ground,
@@ -814,7 +821,7 @@ class JaxMarioBros(JaxEnvironment[
 
         new_state = MarioBrosState(
             player=PlayerState(
-                pos=jnp.array([PLAYER_START_X, PLAYER_START_Y]),
+                pos=jnp.array([PLAYER_START_X, PLAYER_START_Y], dtype=jnp.float32),
                 vel=jnp.array([0.0, 0.0]),
                 on_ground=False,
                 jump_phase=jnp.int32(0),
@@ -828,7 +835,8 @@ class JaxMarioBros(JaxEnvironment[
                 last_dir=jnp.int32(0),
                 brake_frames_left=jnp.int32(0),
                 bumped_idx=0,
-                pow_bumped=False
+                pow_bumped=False,
+                safe= False
             ),
             game=GameState(
                 enemy_pos=jnp.array([enemy1_pos, enemy2_pos, enemy1_pos]),  # 3rd enemy = enemy 1 pos
@@ -927,20 +935,35 @@ class JaxMarioBros(JaxEnvironment[
 
         # --- Handling collision with strong enemy: reset Mario position only ---
         def on_hit(_):
-            ORIGINAL_MARIO_POS = jnp.array([100, 100], dtype=jnp.float32)  # Safe position for Mario
-
-            # Reset Mario position to safe spot
-            new_player_updated = new_player._replace(pos=ORIGINAL_MARIO_POS)
-
-            # Keep game state and lives unchanged
+            # Spielerleben um 1 reduzieren
+            new_lives = state.lives - 1
+            
+            # Mario an Respawn-Position setzen, falls Leben >= 0
+            new_player_updated = new_player._replace(pos=PLAYER_RESPWAN_XY, safe= True)
+            
+            # Neuer Zustand mit reduziertem Leben und neuer Position
             new_state = MarioBrosState(
                 player=new_player_updated,
                 game=state.game,
-                lives=state.lives
+                lives=new_lives
             )
-
-            obs = self._get_observation(new_state)
-            return obs, new_state, 0.0, False, self._get_info(new_state)
+            
+            # Komplett resetten (z.B. Spiel neu starten)
+            _, reset_state = self.reset()
+            
+            # Bedingung: Wenn noch Leben >= 0, dann new_state, sonst reset_state
+            state_out = lax.cond(
+                new_lives >= 0,
+                lambda _: new_state,
+                lambda _: reset_state,
+                operand=None
+            )
+            
+            # Beobachtung und Info aus dem endgültigen Zustand holen
+            obs = self._get_observation(state_out)
+            info = self._get_info(state_out)
+            
+            return obs, state_out, 0.0, False, info
 
         # --- No strong enemy collision: normal game progress ---
         def on_no_hit(_):
@@ -1035,13 +1058,7 @@ class JaxMarioBros(JaxEnvironment[
             mario_pos_reset = jnp.any(((collided_mask) & (new_enemy_status == 2)) | fireball_hit)
             ORIGINAL_MARIO_POS = jnp.array([100, 100], dtype=jnp.float32)
 
-            new_player_pos = jnp.where(
-                mario_pos_reset,
-                ORIGINAL_MARIO_POS,
-                new_player.pos
-            )
-
-            new_player_updated = new_player._replace(pos=new_player_pos)
+            
 
             # 7) Construct updated game state with new enemy info and POW hits
             new_game = GameState(
@@ -1060,15 +1077,15 @@ class JaxMarioBros(JaxEnvironment[
 
             # 8) Final updated full state with player and game info
             new_state = MarioBrosState(
-                player=new_player_updated,
+                player=new_player,
                 game=new_game,
                 lives=state.lives
             )
 
             # 9) Observation is just player position
             obs = MarioBrosObservation(
-                player_x=new_player_updated.pos[0],
-                player_y=new_player_updated.pos[1]
+                player_x=new_player.pos[0],
+                player_y=new_player.pos[1]
             )
 
             return obs, new_state, 0.0, False, self._get_info(new_state)
