@@ -1,4 +1,4 @@
-#import os
+import os
 #from pty import spawn
 from typing import NamedTuple, Tuple
 import jax.numpy as jnp
@@ -27,7 +27,6 @@ MAX_RIVER_WIDTH = 130
 class RiverraidState(NamedTuple):
     turn_step: chex.Array
     master_key: chex.Array
-    player_x: chex.Array
     river_left: chex.Array
     river_right: chex.Array
     river_inner_left: chex.Array
@@ -42,8 +41,12 @@ class RiverraidState(NamedTuple):
     segment_state : chex.Array
     segment_transition_state: chex.Array
     segment_straigt_counter: chex.Array
-
     dam_position: chex.Array
+
+    player_x: chex.Array
+    player_y: chex.Array
+    player_velocity: chex.Array
+    player_direction: chex.Array  # 0 left, 1 straight, 2 right
 
 
 class RiverraidInfo(NamedTuple):
@@ -557,6 +560,48 @@ def roll_static_objects(state: RiverraidState) -> RiverraidState:
     new_dam_position = new_dam_position.at[-1].set(0)
     return state._replace(dam_position=new_dam_position)
 
+def player_movement(state: RiverraidState, action: Action) -> RiverraidState:
+    press_right = jnp.any(
+        jnp.array([action == Action.RIGHT, action == Action.RIGHTFIRE])
+    )
+
+    press_left = jnp.any(
+        jnp.array([action == Action.LEFT, action == Action.LEFTFIRE])
+    )
+
+    new_velocity = state.player_velocity + (press_right * 0.2) - (press_left * 0.2)
+    new_velocity = jnp.clip(new_velocity, -3, 3)
+    new_x = state.player_x + new_velocity
+
+    new_x = jnp.clip(new_x, state.river_left[SCREEN_HEIGHT - 30] + 1, state.river_right[SCREEN_HEIGHT - 30] - 8)
+    return state._replace(player_x=new_x,
+                          player_velocity=new_velocity)
+
+@jax.jit
+def get_action_from_keyboard(state: RiverraidState) -> Action:
+    keys = pygame.key.get_pressed()
+    left = keys[pygame.K_a] or keys[pygame.K_LEFT]
+    right = keys[pygame.K_d] or keys[pygame.K_RIGHT]
+    shooting = keys[pygame.K_SPACE]
+
+    left_only = left and not right
+    right_only = right and not left
+
+    if shooting:
+        if left_only:
+            return Action.LEFTFIRE
+        elif right_only:
+            return Action.RIGHTFIRE
+        else:
+            return Action.FIRE
+    else:
+        if left_only:
+            return Action.LEFT
+        elif right_only:
+            return Action.RIGHT
+        else:
+            return Action.NOOP
+
 class JaxRiverraid(JaxEnvironment):
     def __init__(self, frameskip: int = 0, reward_funcs: list[callable] = None):
         super().__init__()
@@ -585,7 +630,6 @@ class JaxRiverraid(JaxEnvironment):
         initial_key = jax.random.PRNGKey(1)
 
         state = RiverraidState(turn_step=0,
-                               player_x=jnp.array(10),
                                river_left=jnp.full((SCREEN_HEIGHT,), river_start_x, dtype=jnp.int32),
                                river_right=jnp.full((SCREEN_HEIGHT,), river_end_x, dtype=jnp.int32),
                                river_inner_left=jnp.full((SCREEN_HEIGHT,), -1, dtype=jnp.int32),
@@ -600,7 +644,11 @@ class JaxRiverraid(JaxEnvironment):
                                segment_state=jnp.array(0),
                                segment_transition_state=jnp.array(0),
                                segment_straigt_counter=jnp.array(8),
-                               dam_position= jnp.full((SCREEN_HEIGHT,), -1, dtype=jnp.int32)
+                               dam_position= jnp.full((SCREEN_HEIGHT,), -1, dtype=jnp.int32),
+                               player_x= jnp.array(SCREEN_WIDTH // 2 - 2),
+                               player_y=jnp.array(SCREEN_HEIGHT - 40),
+                               player_velocity=jnp.array(0),
+                               player_direction=jnp.array(1)
                                )
         observation = self._get_observation(state)
         return observation, state
@@ -617,6 +665,7 @@ class JaxRiverraid(JaxEnvironment):
         new_state = state._replace(turn_step=state.turn_step + 1)
         new_state = roll_static_objects(new_state)
         new_state = update_river_banks(new_state)
+        new_state = player_movement(new_state, action)
 
 
         observation = self._get_observation(new_state)
@@ -656,7 +705,23 @@ class JaxRiverraid(JaxEnvironment):
         return RiverraidInfo(time=state.turn_step, all_rewards=all_rewards)
 
 
+def load_sprites():
+    MODULE_DIR = os.path.dirname(os.path.abspath(__file__))
+
+    player = aj.loadFrame(os.path.join(MODULE_DIR, "sprites/galaxian/player.npy"),transpose=False)
+
+    SPRITE_PLAYER = jnp.expand_dims(player, axis = 0)
+    return(
+        SPRITE_PLAYER,
+    )
+
 class RiverraidRenderer(AtraJaxisRenderer):
+    def __init__(self):
+        (
+            self.SPRITE_PLAYER,
+        ) = load_sprites()
+
+
     def render(self, state: RiverraidState):
         green_banks = jnp.array([26, 132, 26], dtype=jnp.uint8)
         blue_river = jnp.array([42, 42, 189], dtype=jnp.uint8)
@@ -676,6 +741,12 @@ class RiverraidRenderer(AtraJaxisRenderer):
 
         is_dam = (state.dam_position[:, None] == 1) & (x_coords > left_banks) & (x_coords < right_banks)
         raster = jnp.where(is_dam[..., None], dam_color, raster)
+
+        # Player
+        player_frame = aj.get_sprite_frame(self.SPRITE_PLAYER, 0)
+        px = jnp.round(state.player_x).astype(jnp.int32)
+        py = jnp.round(state.player_y).astype(jnp.int32)
+        raster = aj.render_at(raster, py, px, player_frame) # x and y swapped cuz its transposed later
 
         # transpose it to (WIDTH, HEIGHT, 3)
         return jnp.transpose(raster, (1, 0, 2))
@@ -706,7 +777,7 @@ if __name__ == "__main__":
             if event.type == pygame.QUIT:
                 running = False
 
-        action = Action.NOOP
+        action = get_action_from_keyboard()
         observation, state, reward, done, info = jitted_step(state, action)
 
         render_output = jitted_render(state)
