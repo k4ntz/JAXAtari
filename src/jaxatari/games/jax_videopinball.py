@@ -1916,7 +1916,7 @@ class VideoPinballRenderer(AtraJaxisRenderer):
             operand=raster
         )
 
-        frame_X = aj.get_sprite_frame(self.sprites["x"])
+        frame_X = aj.get_sprite_frame(self.sprites["x"], 0)
         raster = jax.lax.cond(
             state.atari_symbols == 4,
             lambda r: aj.render_at(raster, 76, 157, frame_X),
