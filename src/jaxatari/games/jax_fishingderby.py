@@ -44,7 +44,8 @@ class GameConfig:
     REEL_FAST_SPEED: float = 1.5
     LINE_Y_START: int = 48
     LINE_Y_END: int = 160
-
+    Acceleration: float = 0.2
+    Damping: float = 0.85
     # Fish
     FISH_WIDTH: int = 8
     FISH_HEIGHT: int = 7
@@ -67,6 +68,8 @@ class PlayerState(NamedTuple):
     score: chex.Array
     hook_state: chex.Array
     hooked_fish_idx: chex.Array
+    hook_velocity_x: chex.Array
+    hook_velocity_y: chex.Array
 
 
 class GameState(NamedTuple):
@@ -127,12 +130,11 @@ class FishingDerby(JaxEnvironment):
         key, fish_key = jax.random.split(key)
 
         p1_state = PlayerState(
-            hook_x=jnp.array(self.config.P1_START_X + 8.0), hook_y=jnp.array(float(self.config.LINE_Y_START)),
-            score=jnp.array(0), hook_state=jnp.array(0), hooked_fish_idx=jnp.array(-1, dtype=jnp.int32)
-        )
+            hook_x=jnp.array(self.config.P1_START_X + 20.0), hook_y=jnp.array(float(self.config.LINE_Y_START - 8.0)),
+            score=jnp.array(0), hook_state=jnp.array(0), hooked_fish_idx=jnp.array(-1, dtype=jnp.int32), hook_velocity_x= jnp.array(0.0), hook_velocity_y=jnp.array(0.0))
         p2_state = PlayerState(
             hook_x=jnp.array(self.config.P2_START_X + 8.0), hook_y=jnp.array(float(self.config.LINE_Y_START)),
-            score=jnp.array(0), hook_state=jnp.array(0), hooked_fish_idx=jnp.array(-1, dtype=jnp.int32)
+            score=jnp.array(0), hook_state=jnp.array(0), hooked_fish_idx=jnp.array(-1, dtype=jnp.int32), hook_velocity_x= jnp.array(0.0), hook_velocity_y=jnp.array(0.0)
         )
 
         fish_x = jax.random.uniform(fish_key, (self.config.NUM_FISH,), minval=10.0,
@@ -214,15 +216,18 @@ class FishingDerby(JaxEnvironment):
             )
             new_shark_x = jnp.clip(new_shark_x, 0, cfg.SCREEN_WIDTH - cfg.SHARK_WIDTH)
 
+
             # Player 1 Hook Logic
             p1 = state.p1
-            dx = jnp.where(p1_action == Action.RIGHT, cfg.HOOK_SPEED_H,
-                           jnp.where(p1_action == Action.LEFT, -cfg.HOOK_SPEED_H, 0.0))
-            p1_hook_x = jnp.clip(p1.hook_x + dx, 0, cfg.SCREEN_WIDTH / 2 - cfg.HOOK_WIDTH)
+            dx = jnp.where(p1_action == Action.RIGHT, +GameConfig.Acceleration,
+                           jnp.where(p1_action == Action.LEFT, -GameConfig.Acceleration, 0.0))
+
+            p1_hook_x = jnp.clip(p1.hook_x + dx, cfg.SCREEN_WIDTH / 4, cfg.SCREEN_WIDTH / 2 - cfg.HOOK_WIDTH)
+            new_velocity_x = p1.hook_x * GameConfig.Damping + dx
             dy = jnp.where(p1_action == Action.DOWN, cfg.HOOK_SPEED_V,
                            jnp.where(p1_action == Action.UP, -cfg.HOOK_SPEED_V, 0.0))
             p1_hook_y = jnp.where(p1.hook_state == 0,
-                                  jnp.clip(p1.hook_y + dy, cfg.LINE_Y_START, cfg.LINE_Y_END),
+                                  jnp.clip(p1.hook_y + dy, cfg.LINE_Y_START - 8.0, cfg.LINE_Y_END),
                                   p1.hook_y)
 
             # Collision and Game Logic
