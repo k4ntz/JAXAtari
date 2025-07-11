@@ -8,6 +8,9 @@ import jax.numpy as jnp
 import chex
 import pygame
 from dataclasses import dataclass
+
+from gymnax.environments import spaces
+
 from jaxatari.environment import JaxEnvironment, JAXAtariAction as Action
 import jaxatari.rendering.atraJaxis as aj
 from jaxatari.renderers import AtraJaxisRenderer
@@ -99,7 +102,26 @@ class FishingDerby(JaxEnvironment):
     def __init__(self):
         super().__init__()
         self.config = GameConfig()
-
+        self.action_set = [
+            Action.NOOP,
+            Action.FIRE,
+            Action.UP,
+            Action.RIGHT,
+            Action.LEFT,
+            Action.DOWN,
+            Action.UPRIGHT,
+            Action.UPLEFT,
+            Action.DOWNRIGHT,
+            Action.DOWNLEFT,
+            Action.UPFIRE,
+            Action.RIGHTFIRE,
+            Action.LEFTFIRE,
+            Action.DOWNFIRE,
+            Action.UPRIGHTFIRE,
+            Action.UPLEFTFIRE,
+            Action.DOWNRIGHTFIRE,
+            Action.DOWNLEFTFIRE
+        ]
     @partial(jax.jit, static_argnums=(0,))
     def reset(self, key: jax.random.PRNGKey = jax.random.PRNGKey(10)) -> Tuple[FishingDerbyObservation, GameState, ]:
         key, fish_key = jax.random.split(key)
@@ -159,6 +181,11 @@ class FishingDerby(JaxEnvironment):
 
         return observation, new_state, reward, done, info
 
+    def action_space(self) -> spaces.Discrete:
+        return spaces.Discrete(len(self.action_set))
+
+    def get_action_space(self) -> jnp.ndarray:
+        return jnp.array(self.action_set)
     def _step_logic(self, state: GameState, p1_action: int) -> GameState:
         """The core logic for a single game step, returning only the new state."""
         cfg = self.config
