@@ -9,9 +9,8 @@ from gymnax.environments import spaces
 import pygame
 import os
 
-from jaxatari.games.jax_pong import ENEMY_SIZE
-from jaxatari.renderers import AtraJaxisRenderer
-import jaxatari.rendering.atraJaxis as aj
+from jaxatari.renderers import JAXGameRenderer
+import jaxatari.rendering.jax_rendering_utils as jr
 
 # Group: Kaan Yilmaz, Jonathan Frey
 # Game: Berzerk
@@ -20,36 +19,37 @@ import jaxatari.rendering.atraJaxis as aj
 # Tested on Ubuntu Virtual Machine
 # Also we currently don't use JAXAtariAction as Action. We will change this in the future
 
-WIDTH = 160
-HEIGHT = 210
-SCALING_FACTOR = 3
+class BerzerkConstants(NamedTuple):
+    WIDTH = 160
+    HEIGHT = 210
+    SCALING_FACTOR = 3
 
-PLAYER_SIZE = (6, 20)
-PLAYER_SPEED = 1
+    PLAYER_SIZE = (6, 20)
+    PLAYER_SPEED = 1
 
-ENEMY_SIZE = (8, 16)
-NUM_ENEMIES = 5
-MOVEMENT_PROB = 0.0025
-ENEMY_SPEED = 0.1
+    ENEMY_SIZE = (8, 16)
+    NUM_ENEMIES = 5
+    MOVEMENT_PROB = 0.0025
+    ENEMY_SPEED = 0.1
 
-BULLET_SIZE_HORIZONTAL = (4, 2)
-BULLET_SIZE_VERTICAL = (1, 6)
-BULLET_SPEED = 1
-MAX_BULLETS = 1
+    BULLET_SIZE_HORIZONTAL = (4, 2)
+    BULLET_SIZE_VERTICAL = (1, 6)
+    BULLET_SPEED = 1
+    MAX_BULLETS = 1
 
-WALL_THICKNESS = 4
-WALL_OFFSET = (4, 4, 4, 30) # left, top, right, bottom
-EXIT_WIDTH = 40
-EXIT_HEIGHT = 64
+    WALL_THICKNESS = 4
+    WALL_OFFSET = (4, 4, 4, 30) # left, top, right, bottom
+    EXIT_WIDTH = 40
+    EXIT_HEIGHT = 64
 
-SCORE_OFFSET_X = 50
-SCORE_OFFSET_Y = 30
+    SCORE_OFFSET_X = WIDTH - 58 - 6  # window width - distance to the right - digit width 
+    SCORE_OFFSET_Y = HEIGHT - 20 - 7  # window height - distance to the bottom - digit height 
 
-UI_OFFSET = 30  # pixels reserved for score at bottom
-PLAYER_BOUNDS = (
-    (WALL_THICKNESS + WALL_OFFSET[0], WIDTH - WALL_THICKNESS - WALL_OFFSET[2]),
-    (WALL_THICKNESS + WALL_OFFSET[1], HEIGHT - WALL_THICKNESS - WALL_OFFSET[3])
-)
+    UI_OFFSET = 30  # pixels reserved for score at bottom
+    PLAYER_BOUNDS = (
+        (WALL_THICKNESS + WALL_OFFSET[0], WIDTH - WALL_THICKNESS - WALL_OFFSET[2]),
+        (WALL_THICKNESS + WALL_OFFSET[1], HEIGHT - WALL_THICKNESS - WALL_OFFSET[3])
+    )
 
 
 class BerzerkState(NamedTuple):
@@ -75,210 +75,235 @@ class BerzerkObservation(NamedTuple):
 class BerzerkInfo(NamedTuple):
     dummy: chex.Array  # placeholder (will be added later on)
 
-@jax.jit
-def player_step(
-    state: BerzerkState, action: chex.Array
-) -> tuple[chex.Array, chex.Array, chex.Array]:
-    # implement all the possible movement directions for the player, the mapping is:
-    # anything with left in it, add -1 to the x position
-    # anything with right in it, add 1 to the x position
-    # anything with up in it, add -1 to the y position
-    # anything with down in it, add 1 to the y position
-    up = jnp.any(
-        jnp.array(
-            [
-                action == Action.UP,
-                action == Action.UPRIGHT,
-                action == Action.UPLEFT,
-                action == Action.UPFIRE,
-                action == Action.UPRIGHTFIRE,
-                action == Action.UPLEFTFIRE,
-            ]
+
+
+class JaxBerzerk(JaxEnvironment[BerzerkState, BerzerkObservation, BerzerkInfo, BerzerkConstants]):
+    def __init__(self, consts: BerzerkConstants = None, frameskip: int = 1, reward_funcs: list[callable]=None):
+        super().__init__(consts)
+        self.frameskip = frameskip
+        self.frame_stack_size = 4
+        if reward_funcs is not None:
+            reward_funcs = tuple(reward_funcs)
+        self.reward_funcs = reward_funcs
+        self.action_set = [
+            Action.NOOP,
+            Action.FIRE,
+            Action.UP,
+            Action.RIGHT,
+            Action.LEFT,
+            Action.DOWN,
+            Action.UPRIGHT,
+            Action.UPLEFT,
+            Action.DOWNRIGHT,
+            Action.DOWNLEFT,
+            Action.UPFIRE,
+            Action.RIGHTFIRE,
+            Action.LEFTFIRE,
+            Action.DOWNFIRE,
+            Action.UPRIGHTFIRE,
+            Action.UPLEFTFIRE,
+            Action.DOWNRIGHTFIRE,
+            Action.DOWNLEFTFIRE
+        ]
+        self.consts = consts or BerzerkConstants()
+        self.obs_size = 111
+        self.renderer = BerzerkRenderer(self.consts)
+
+    
+    
+    @partial(jax.jit, static_argnums=(0, ))
+    def player_step(
+        self, state: BerzerkState, action: chex.Array
+    ) -> tuple[chex.Array, chex.Array, chex.Array]:
+        # implement all the possible movement directions for the player, the mapping is:
+        # anything with left in it, add -1 to the x position
+        # anything with right in it, add 1 to the x position
+        # anything with up in it, add -1 to the y position
+        # anything with down in it, add 1 to the y position
+        up = jnp.any(
+            jnp.array(
+                [
+                    action == Action.UP,
+                    action == Action.UPRIGHT,
+                    action == Action.UPLEFT,
+                    action == Action.UPFIRE,
+                    action == Action.UPRIGHTFIRE,
+                    action == Action.UPLEFTFIRE,
+                ]
+            )
         )
-    )
-    down = jnp.any(
-        jnp.array(
-            [
-                action == Action.DOWN,
-                action == Action.DOWNRIGHT,
-                action == Action.DOWNLEFT,
-                action == Action.DOWNFIRE,
-                action == Action.DOWNRIGHTFIRE,
-                action == Action.DOWNLEFTFIRE,
-            ]
+        down = jnp.any(
+            jnp.array(
+                [
+                    action == Action.DOWN,
+                    action == Action.DOWNRIGHT,
+                    action == Action.DOWNLEFT,
+                    action == Action.DOWNFIRE,
+                    action == Action.DOWNRIGHTFIRE,
+                    action == Action.DOWNLEFTFIRE,
+                ]
+            )
         )
-    )
-    left = jnp.any(
-        jnp.array(
-            [
-                action == Action.LEFT,
-                action == Action.UPLEFT,
-                action == Action.DOWNLEFT,
-                action == Action.LEFTFIRE,
-                action == Action.UPLEFTFIRE,
-                action == Action.DOWNLEFTFIRE,
-            ]
+        left = jnp.any(
+            jnp.array(
+                [
+                    action == Action.LEFT,
+                    action == Action.UPLEFT,
+                    action == Action.DOWNLEFT,
+                    action == Action.LEFTFIRE,
+                    action == Action.UPLEFTFIRE,
+                    action == Action.DOWNLEFTFIRE,
+                ]
+            )
         )
-    )
-    right = jnp.any(
-        jnp.array(
-            [
-                action == Action.RIGHT,
-                action == Action.UPRIGHT,
-                action == Action.DOWNRIGHT,
-                action == Action.RIGHTFIRE,
-                action == Action.UPRIGHTFIRE,
-                action == Action.DOWNRIGHTFIRE,
-            ]
+        right = jnp.any(
+            jnp.array(
+                [
+                    action == Action.RIGHT,
+                    action == Action.UPRIGHT,
+                    action == Action.DOWNRIGHT,
+                    action == Action.RIGHTFIRE,
+                    action == Action.UPRIGHTFIRE,
+                    action == Action.DOWNRIGHTFIRE,
+                ]
+            )
         )
-    )
 
-    dx = jnp.where(right, 1, jnp.where(left, -1, 0))
-    dy = jnp.where(down, 1, jnp.where(up, -1, 0))
+        dx = jnp.where(right, 1, jnp.where(left, -1, 0))
+        dy = jnp.where(down, 1, jnp.where(up, -1, 0))
 
-    # movement scaled
-    player_x = state.player_pos[0] + dx * PLAYER_SPEED
-    player_y = state.player_pos[1] + dy * PLAYER_SPEED
+        # movement scaled
+        player_x = state.player_pos[0] + dx * self.consts.PLAYER_SPEED
+        player_y = state.player_pos[1] + dy * self.consts.PLAYER_SPEED
 
-    # set the direction according to the movement
-    player_direction = jnp.where(
-            (dx != 0) | (dy != 0),
-            jnp.array([dx, dy]),
-            state.last_dir
+        # set the direction according to the movement
+        player_direction = jnp.where(
+                (dx != 0) | (dy != 0),
+                jnp.array([dx, dy]),
+                state.last_dir
+            )
+        
+        # perform out of bounds checks
+        #player_x = jnp.where(
+        #    player_x < PLAYER_BOUNDS[0][0],
+        #    PLAYER_BOUNDS[0][0],  # Clamp to min player bound
+        #    jnp.where(
+        #        player_x > PLAYER_BOUNDS[0][1],
+        #        PLAYER_BOUNDS[0][1],  # Clamp to max player bound
+        #        player_x,
+        #    ),
+        #)
+
+        #player_y = jnp.where(
+        #    player_y < PLAYER_BOUNDS[1][0],
+        #    PLAYER_BOUNDS[1][0],
+        #    jnp.where(player_y > PLAYER_BOUNDS[1][1], PLAYER_BOUNDS[1][1], player_y),
+        #)
+
+        return player_x, player_y, player_direction
+
+
+    @partial(jax.jit, static_argnums=0)
+    def check_exit_crossing(self, player_pos: chex.Array) -> chex.Array:
+        """Return True if player touches an exit region (centered on wall)."""
+        x, y = player_pos[0], player_pos[1]
+
+        # Top exit
+        top = (self.consts.PLAYER_BOUNDS[0][0] + (self.consts.PLAYER_BOUNDS[0][1] - self.consts.PLAYER_BOUNDS[0][0]) / 2 - self.consts.EXIT_WIDTH / 2,
+            self.consts.PLAYER_BOUNDS[0][0] + (self.consts.PLAYER_BOUNDS[0][1] - self.consts.PLAYER_BOUNDS[0][0]) / 2 + self.consts.EXIT_WIDTH / 2 - self.consts.PLAYER_SIZE[0])
+        top_exit = (x > top[0]) & (x < top[1]) & (y < self.consts.PLAYER_BOUNDS[1][0])
+        # Bottom exit
+        bottom_exit = (x > top[0]) & (x < top[1]) & (y > self.consts.PLAYER_BOUNDS[1][1] - self.consts.PLAYER_SIZE[1])
+
+        # Left exit
+        left = (self.consts.PLAYER_BOUNDS[1][0] + (self.consts.PLAYER_BOUNDS[1][1] - self.consts.PLAYER_BOUNDS[1][0]) / 2 - self.consts.EXIT_HEIGHT / 2,
+                self.consts.PLAYER_BOUNDS[1][0] + (self.consts.PLAYER_BOUNDS[1][1] - self.consts.PLAYER_BOUNDS[1][0]) / 2 + self.consts.EXIT_HEIGHT / 2 - self.consts.PLAYER_SIZE[1])
+        left_exit = (y > left[0]) & (y < left[1]) & (x < self.consts.PLAYER_BOUNDS[0][0])
+
+        # Right exit
+        right_exit = (y > left[0]) & (y < left[1]) & (x > self.consts.PLAYER_BOUNDS[0][1] - self.consts.PLAYER_SIZE[0])
+
+        return top_exit | bottom_exit | left_exit | right_exit
+
+
+    @partial(jax.jit, static_argnums=(0, ))
+    def update_enemies(self, player_pos, enemy_pos, enemy_axis, enemy_dir, rng, move_prob):
+        enemy_rngs = jax.random.split(rng, self.consts.NUM_ENEMIES)
+
+        def update_one_enemy(_, inputs):
+            rng, pos, axis, dir_, prob = inputs
+            new_pos, new_axis, new_dir, _ = self.update_enemy_position(
+                player_pos, pos, axis, dir_, rng, prob
+            )
+            return None, (new_pos, new_axis, new_dir)
+
+        _, (positions, axes, dirs) = jax.lax.scan(
+            update_one_enemy,
+            None,
+            (enemy_rngs, enemy_pos, enemy_axis, enemy_dir, move_prob)
         )
-    
-    # perform out of bounds checks
-    #player_x = jnp.where(
-    #    player_x < PLAYER_BOUNDS[0][0],
-    #    PLAYER_BOUNDS[0][0],  # Clamp to min player bound
-    #    jnp.where(
-    #        player_x > PLAYER_BOUNDS[0][1],
-    #        PLAYER_BOUNDS[0][1],  # Clamp to max player bound
-    #        player_x,
-    #    ),
-    #)
 
-    #player_y = jnp.where(
-    #    player_y < PLAYER_BOUNDS[1][0],
-    #    PLAYER_BOUNDS[1][0],
-    #    jnp.where(player_y > PLAYER_BOUNDS[1][1], PLAYER_BOUNDS[1][1], player_y),
-    #)
-
-    return player_x, player_y, player_direction
+        return positions, axes, dirs
 
 
-@jax.jit
-def check_exit_crossing(player_pos: chex.Array) -> chex.Array:
-    """Return True if player touches an exit region (centered on wall)."""
-    x, y = player_pos[0], player_pos[1]
-
-    # Top exit
-    top = (PLAYER_BOUNDS[0][0] + (PLAYER_BOUNDS[0][1] - PLAYER_BOUNDS[0][0]) / 2 - EXIT_WIDTH / 2,
-           PLAYER_BOUNDS[0][0] + (PLAYER_BOUNDS[0][1] - PLAYER_BOUNDS[0][0]) / 2 + EXIT_WIDTH / 2 - PLAYER_SIZE[0])
-    top_exit = (x > top[0]) & (x < top[1]) & (y < PLAYER_BOUNDS[1][0])
-    # Bottom exit
-    bottom_exit = (x > top[0]) & (x < top[1]) & (y > PLAYER_BOUNDS[1][1] - PLAYER_SIZE[1])
-
-    # Left exit
-    left = (PLAYER_BOUNDS[1][0] + (PLAYER_BOUNDS[1][1] - PLAYER_BOUNDS[1][0]) / 2 - EXIT_HEIGHT / 2,
-            PLAYER_BOUNDS[1][0] + (PLAYER_BOUNDS[1][1] - PLAYER_BOUNDS[1][0]) / 2 + EXIT_HEIGHT / 2 - PLAYER_SIZE[1])
-    left_exit = (y > left[0]) & (y < left[1]) & (x < PLAYER_BOUNDS[0][0])
-
-    # Right exit
-    right_exit = (y > left[0]) & (y < left[1]) & (x > PLAYER_BOUNDS[0][1] - PLAYER_SIZE[0])
-
-    return top_exit | bottom_exit | left_exit | right_exit
-
-
-@jax.jit
-def update_enemies(player_pos, enemy_pos, enemy_axis, enemy_dir, rng, move_prob):
-    enemy_rngs = jax.random.split(rng, NUM_ENEMIES)
-
-    def update_one_enemy(_, inputs):
-        rng, pos, axis, dir_, prob = inputs
-        new_pos, new_axis, new_dir, _ = update_enemy_position(
-            player_pos, pos, axis, dir_, rng, prob
+    @partial(jax.jit, static_argnums=(0, ))
+    def update_enemy_position(self, player_pos: chex.Array, enemy_pos: chex.Array, 
+                            enemy_move_axis: chex.Array, enemy_move_dir: chex.Array,
+                            rng: chex.PRNGKey, move_prob: float):
+        """
+        Update enemy position with movement probability.
+        Once started moving, continues until aligned with player.
+        
+        Args:
+            enemy_move_axis: 0 for x-axis, 1 for y-axis movement
+            enemy_move_dir: 1 for positive, -1 for negative direction
+        """
+        rng, move_rng = jax.random.split(rng)
+        
+        # Check if already moving (axis != -1)
+        is_moving = enemy_move_axis != -1
+        
+        # If not moving, decide whether to start moving
+        start_moving = jax.random.bernoulli(move_rng, move_prob)
+        should_move = is_moving | (~is_moving & start_moving)
+        
+        def start_new_movement(_):
+            # Choose random axis (0=x, 1=y) and direction (1 or -1)
+            rng1, rng2 = jax.random.split(move_rng)
+            axis = jax.random.bernoulli(rng1, 0.5).astype(jnp.int32)  # 0 or 1
+            dir_ = jnp.where(player_pos[axis] > enemy_pos[axis], 1, -1)
+            return axis, dir_
+        
+        # If not moving but should start, initialize movement
+        new_axis, new_dir = jax.lax.cond(
+            ~is_moving & should_move,
+            start_new_movement,
+            lambda _: (enemy_move_axis, enemy_move_dir),
+            operand=None
         )
-        return None, (new_pos, new_axis, new_dir)
+        
+        # Update position if moving
+        new_pos = jnp.where(
+            new_axis == 0,  # moving in x-axis
+            enemy_pos.at[0].add(new_dir * self.consts.ENEMY_SPEED),
+            enemy_pos
+        )
+        new_pos = jnp.where(
+            new_axis == 1,  # moving in y-axis
+            new_pos.at[1].add(new_dir * self.consts.ENEMY_SPEED),
+            new_pos
+        )
+        
+        # Check if aligned with player in movement axis
+        aligned_x = jnp.abs(player_pos[0] - new_pos[0]) < 5
+        aligned_y = jnp.abs(player_pos[1] - new_pos[1]) < 5
+        aligned = jax.lax.select(new_axis == 0, aligned_x, aligned_y)
 
-    _, (positions, axes, dirs) = jax.lax.scan(
-        update_one_enemy,
-        None,
-        (enemy_rngs, enemy_pos, enemy_axis, enemy_dir, move_prob)
-    )
-
-    return positions, axes, dirs
-
-
-@jax.jit
-def update_enemy_position(player_pos: chex.Array, enemy_pos: chex.Array, 
-                         enemy_move_axis: chex.Array, enemy_move_dir: chex.Array,
-                         rng: chex.PRNGKey, move_prob: float):
-    """
-    Update enemy position with movement probability.
-    Once started moving, continues until aligned with player.
-    
-    Args:
-        enemy_move_axis: 0 for x-axis, 1 for y-axis movement
-        enemy_move_dir: 1 for positive, -1 for negative direction
-    """
-    rng, move_rng = jax.random.split(rng)
-    
-    # Check if already moving (axis != -1)
-    is_moving = enemy_move_axis != -1
-    
-    # If not moving, decide whether to start moving
-    start_moving = jax.random.bernoulli(move_rng, move_prob)
-    should_move = is_moving | (~is_moving & start_moving)
-    
-    def start_new_movement(_):
-        # Choose random axis (0=x, 1=y) and direction (1 or -1)
-        rng1, rng2 = jax.random.split(move_rng)
-        axis = jax.random.bernoulli(rng1, 0.5).astype(jnp.int32)  # 0 or 1
-        dir_ = jnp.where(player_pos[axis] > enemy_pos[axis], 1, -1)
-        return axis, dir_
-    
-    # If not moving but should start, initialize movement
-    new_axis, new_dir = jax.lax.cond(
-        ~is_moving & should_move,
-        start_new_movement,
-        lambda _: (enemy_move_axis, enemy_move_dir),
-        operand=None
-    )
-    
-    # Update position if moving
-    new_pos = jnp.where(
-        new_axis == 0,  # moving in x-axis
-        enemy_pos.at[0].add(new_dir * ENEMY_SPEED),
-        enemy_pos
-    )
-    new_pos = jnp.where(
-        new_axis == 1,  # moving in y-axis
-        new_pos.at[1].add(new_dir * ENEMY_SPEED),
-        new_pos
-    )
-    
-    # Check if aligned with player in movement axis
-    aligned_x = jnp.abs(player_pos[0] - new_pos[0]) < 5
-    aligned_y = jnp.abs(player_pos[1] - new_pos[1]) < 5
-    aligned = jax.lax.select(new_axis == 0, aligned_x, aligned_y)
-
-    # Stop moving if aligned
-    final_axis = jnp.where(aligned, -1, new_axis)
-    final_dir = jnp.where(aligned, 0, new_dir)
-    
-    return new_pos, final_axis, final_dir, rng
-
-
-class JaxBerzerk(JaxEnvironment[BerzerkState, BerzerkObservation, BerzerkInfo]):
-    def __init__(self):
-        super().__init__()
-        self._action_space = spaces.Discrete(9)
-        self._obs_space = spaces.Dict({
-            "player": spaces.Box(0, 255, (2,), jnp.float32),
-            "bullets": spaces.Box(0, 255, (MAX_BULLETS, 2), jnp.float32),
-            "bullet_active": spaces.Box(0, 1, (MAX_BULLETS,), jnp.bool_),
-        })
+        # Stop moving if aligned
+        final_axis = jnp.where(aligned, -1, new_axis)
+        final_dir = jnp.where(aligned, 0, new_dir)
+        
+        return new_pos, final_axis, final_dir, rng
         
     @partial(jax.jit, static_argnums=(0, ))
     def _get_observation(self, state: BerzerkState) -> BerzerkObservation:
@@ -301,19 +326,19 @@ class JaxBerzerk(JaxEnvironment[BerzerkState, BerzerkObservation, BerzerkInfo]):
 
     @partial(jax.jit, static_argnums=(0,))
     def reset(self, rng: chex.PRNGKey = jax.random.PRNGKey(42)) -> Tuple[BerzerkObservation, BerzerkState]:
-        pos = jnp.array([WIDTH // 2, HEIGHT // 2], dtype=jnp.float32)
+        pos = jnp.array([self.consts.WIDTH // 2, self.consts.HEIGHT // 2], dtype=jnp.float32)
         lives = jnp.array(2)
-        bullets = jnp.zeros((MAX_BULLETS, 2), dtype=jnp.float32)
-        bullet_dirs = jnp.zeros((MAX_BULLETS, 2), dtype=jnp.float32)
-        active = jnp.zeros((MAX_BULLETS,), dtype=bool)
-        enemy_pos = jax.random.uniform(
-            rng, shape=(NUM_ENEMIES, 2),
-            minval=jnp.array([PLAYER_BOUNDS[0][0], PLAYER_BOUNDS[1][0]]),
-            maxval=jnp.array([PLAYER_BOUNDS[0][1] - ENEMY_SIZE[0], PLAYER_BOUNDS[1][1] - ENEMY_SIZE[1]])
+        bullets = jnp.zeros((self.consts.MAX_BULLETS, 2), dtype=jnp.float32)
+        bullet_dirs = jnp.zeros((self.consts.MAX_BULLETS, 2), dtype=jnp.float32)
+        active = jnp.zeros((self.consts.MAX_BULLETS,), dtype=bool)
+        enemy_pos = jax.random.uniform( # TODO: Don't let enemies spawn in player
+            rng, shape=(self.consts.NUM_ENEMIES, 2),
+            minval=jnp.array([self.consts.PLAYER_BOUNDS[0][0], self.consts.PLAYER_BOUNDS[1][0]]),
+            maxval=jnp.array([self.consts.PLAYER_BOUNDS[0][1] - self.consts.ENEMY_SIZE[0], self.consts.PLAYER_BOUNDS[1][1] - self.consts.ENEMY_SIZE[1]])
         )
-        enemy_move_axis = -jnp.ones((NUM_ENEMIES,), dtype=jnp.int32)
-        enemy_move_dir = jnp.zeros((NUM_ENEMIES,), dtype=jnp.int32)
-        enemy_move_prob = jnp.full((NUM_ENEMIES,), MOVEMENT_PROB, dtype=jnp.float32)
+        enemy_move_axis = -jnp.ones((self.consts.NUM_ENEMIES,), dtype=jnp.int32)
+        enemy_move_dir = jnp.zeros((self.consts.NUM_ENEMIES,), dtype=jnp.int32)
+        enemy_move_prob = jnp.full((self.consts.NUM_ENEMIES,), self.consts.MOVEMENT_PROB, dtype=jnp.float32)
         last_dir = jnp.array([0.0, -1.0])  # default = up
         score = jnp.array(0, dtype=jnp.int32)
         state = BerzerkState(pos, lives, bullets, bullet_dirs, active, enemy_pos, enemy_move_axis, enemy_move_dir, enemy_move_prob, last_dir, rng, score)
@@ -322,29 +347,29 @@ class JaxBerzerk(JaxEnvironment[BerzerkState, BerzerkObservation, BerzerkInfo]):
     @partial(jax.jit, static_argnums=0)
     def step(self, state: BerzerkState, action: chex.Array) -> Tuple[BerzerkObservation, BerzerkState, float, bool, BerzerkInfo]:
         # 1. Spielerbewegung
-        player_x, player_y, move_dir = player_step(state, action)
+        player_x, player_y, move_dir = self.player_step(state, action)
         new_pos = jnp.array([player_x, player_y])
 
         _, reset_state = self.reset()
 
         # 1a. Wandkollision prüfen (außerhalb erlaubtem Bereich = Tod)
-        hit_exit = check_exit_crossing(new_pos)
+        hit_exit = self.check_exit_crossing(new_pos)
         player_left   = player_x
-        player_right  = player_x + PLAYER_SIZE[0]
+        player_right  = player_x + self.consts.PLAYER_SIZE[0]
         player_top    = player_y
-        player_bottom = player_y + PLAYER_SIZE[1]
+        player_bottom = player_y + self.consts.PLAYER_SIZE[1]
 
         hit_wall = (
-            (player_left   < PLAYER_BOUNDS[0][0]) |
-            (player_right  > PLAYER_BOUNDS[0][1]) |
-            (player_top    < PLAYER_BOUNDS[1][0]) |
-            (player_bottom > PLAYER_BOUNDS[1][1])
+            (player_left   < self.consts.PLAYER_BOUNDS[0][0]) |
+            (player_right  > self.consts.PLAYER_BOUNDS[0][1]) |
+            (player_top    < self.consts.PLAYER_BOUNDS[1][0]) |
+            (player_bottom > self.consts.PLAYER_BOUNDS[1][1])
         ) & ~hit_exit
 
         # 2. Gegnerposition + Bewegungsrichtung aktualisieren
         rng, enemy_rng = jax.random.split(state.rng)
 
-        updated_enemy_pos, updated_enemy_axis, updated_enemy_dir = update_enemies(
+        updated_enemy_pos, updated_enemy_axis, updated_enemy_dir = self.update_enemies(
             new_pos, state.enemy_pos, state.enemy_move_axis, state.enemy_move_dir,
             enemy_rng, state.enemy_move_prob
         )
@@ -357,9 +382,9 @@ class JaxBerzerk(JaxEnvironment[BerzerkState, BerzerkObservation, BerzerkInfo]):
             object_bottom = object_pos[1] + object_size[1]
 
             enemy_left   = enemy_pos[0]
-            enemy_right  = enemy_pos[0] + ENEMY_SIZE[0]
+            enemy_right  = enemy_pos[0] + self.consts.ENEMY_SIZE[0]
             enemy_top    = enemy_pos[1]
-            enemy_bottom = enemy_pos[1] + ENEMY_SIZE[1]
+            enemy_bottom = enemy_pos[1] + self.consts.ENEMY_SIZE[1]
 
             overlap_x = (object_left < enemy_right) & (object_right > enemy_left)
             overlap_y = (object_top < enemy_bottom) & (object_bottom > enemy_top)
@@ -368,7 +393,7 @@ class JaxBerzerk(JaxEnvironment[BerzerkState, BerzerkObservation, BerzerkInfo]):
 
         player_pos = jnp.array([player_x, player_y])
         player_hits = jax.vmap(
-            lambda enemy_pos: object_hits_enemy(player_pos, PLAYER_SIZE, enemy_pos)
+            lambda enemy_pos: object_hits_enemy(player_pos, self.consts.PLAYER_SIZE, enemy_pos)
         )(updated_enemy_pos)
         
         hit_by_enemy = jnp.any(player_hits)
@@ -389,7 +414,7 @@ class JaxBerzerk(JaxEnvironment[BerzerkState, BerzerkObservation, BerzerkInfo]):
                     lambda _: (bullets, directions, active),
                     operand=None
                 )
-            return jax.lax.fori_loop(0, MAX_BULLETS, try_spawn, (state.bullets, state.bullet_dirs, state.bullet_active))
+            return jax.lax.fori_loop(0, self.consts.MAX_BULLETS, try_spawn, (state.bullets, state.bullet_dirs, state.bullet_active))
 
         is_shooting = jnp.any(jnp.array([
             action == Action.FIRE,
@@ -411,12 +436,12 @@ class JaxBerzerk(JaxEnvironment[BerzerkState, BerzerkObservation, BerzerkInfo]):
         )
 
         # 5. Kugeln bewegen
-        bullets += bullet_dirs * BULLET_SPEED * bullet_active[:, None]
+        bullets += bullet_dirs * self.consts.BULLET_SPEED * bullet_active[:, None]
         bullet_active = bullet_active & (
             (bullets[:, 0] >= 0) &
-            (bullets[:, 0] <= WIDTH) &
+            (bullets[:, 0] <= self.consts.WIDTH) &
             (bullets[:, 1] >= 0) &
-            (bullets[:, 1] <= HEIGHT)
+            (bullets[:, 1] <= self.consts.HEIGHT)
         )
 
         # 6. Kollisionsabfrage (Kugeln vs Gegner)
@@ -424,8 +449,8 @@ class JaxBerzerk(JaxEnvironment[BerzerkState, BerzerkObservation, BerzerkInfo]):
         bullet_sizes = jax.vmap(
             lambda d: jax.lax.select(
                 d[0] == 0,  # vertikal wenn dx == 0
-                jnp.array(BULLET_SIZE_VERTICAL, dtype=jnp.float32),
-                jnp.array(BULLET_SIZE_HORIZONTAL, dtype=jnp.float32)
+                jnp.array(self.consts.BULLET_SIZE_VERTICAL, dtype=jnp.float32),
+                jnp.array(self.consts.BULLET_SIZE_HORIZONTAL, dtype=jnp.float32)
             )
         )(bullet_dirs)
 
@@ -476,17 +501,17 @@ class JaxBerzerk(JaxEnvironment[BerzerkState, BerzerkObservation, BerzerkInfo]):
 
         # === Exit erreicht? Neues "Level" vorbereiten ===
         reset_for_new_level = BerzerkState(
-            player_pos=jnp.array([WIDTH // 2, HEIGHT // 2], dtype=jnp.float32),
+            player_pos=jnp.array([self.consts.WIDTH // 2, self.consts.HEIGHT // 2], dtype=jnp.float32),
             lives=state.lives,
             bullets=jnp.zeros_like(state.bullets),
             bullet_dirs=jnp.zeros_like(state.bullet_dirs),
             bullet_active=jnp.zeros_like(state.bullet_active),
             enemy_pos=jax.random.uniform(
-                state.rng, shape=(NUM_ENEMIES, 2),
-                minval=jnp.array([PLAYER_BOUNDS[0][0], PLAYER_BOUNDS[1][0]]),
+                state.rng, shape=(self.consts.NUM_ENEMIES, 2),
+                minval=jnp.array([self.consts.PLAYER_BOUNDS[0][0], self.consts.PLAYER_BOUNDS[1][0]]),
                 maxval=jnp.array([
-                    PLAYER_BOUNDS[0][1] - ENEMY_SIZE[0],
-                    PLAYER_BOUNDS[1][1] - ENEMY_SIZE[1]
+                    self.consts.PLAYER_BOUNDS[0][1] - self.consts.ENEMY_SIZE[0],
+                    self.consts.PLAYER_BOUNDS[1][1] - self.consts.ENEMY_SIZE[1]
                 ])
             ),
             enemy_move_axis=-jnp.ones_like(state.enemy_move_axis),
@@ -521,29 +546,40 @@ class JaxBerzerk(JaxEnvironment[BerzerkState, BerzerkObservation, BerzerkInfo]):
         return observation, new_state, reward, done, info
     
 
-    def action_space(self, seed: int = 0) -> spaces.Discrete:
-        return self._action_space
+    def action_space(self) -> spaces.Discrete:
+        return spaces.Discrete(len(self.action_set))
 
-    def observation_space(self, seed: int = 0) -> spaces.Dict:
-        return self._obs_space
+    def observation_space(self) -> spaces.Dict:
+         return spaces.Dict(
+            {
+            "player": spaces.Box(0, 255, (2,), jnp.float32),
+            "bullets": spaces.Box(0, 255, (self.consts.MAX_BULLETS, 2), jnp.float32),
+            "bullet_active": spaces.Box(0, 1, (self.consts.MAX_BULLETS,), jnp.bool_),
+            }
+        )
 
 
-class BerzerkRenderer(AtraJaxisRenderer):
+class BerzerkRenderer(JAXGameRenderer):
+    def __init__(self, consts=None):
+        """
+        Initializes the renderer by loading sprites, including level backgrounds.
 
-    def __init__(self):
-        super().__init__()
+        Args:
+            sprite_path: Path to the directory containing sprite .npy files.
+        """
+        self.consts = consts or BerzerkConstants()
+        self.sprite_path = f"{os.path.dirname(os.path.abspath(__file__))}/sprites/berzerk"
         self.sprites = self._load_sprites()
 
+    # TODO: Add pivots for animations
     def _load_sprites(self):
         """Load sprites for player, enemy and walls."""
-        MODULE_DIR = os.path.dirname(os.path.abspath(__file__))
-        sprite_path = os.path.join(MODULE_DIR, "sprites/berzerk/")
-
         sprites: Dict[str, Any] = {}
+        
 
         def _load_sprite(name: str) -> Optional[chex.Array]:
-            path = os.path.join(sprite_path, f'{name}.npy')
-            frame = aj.loadFrame(path)
+            path = os.path.join(self.sprite_path, f'{name}.npy')
+            frame = jr.loadFrame(path)
             return frame.astype(jnp.uint8)
 
         sprite_names = [
@@ -556,27 +592,32 @@ class BerzerkRenderer(AtraJaxisRenderer):
             if sprite is not None:
                 sprites[name] = jnp.expand_dims(sprite, axis=0)
 
+        score_digit_path = os.path.join(self.sprite_path, 'score_{}.npy')
+        digits = jr.load_and_pad_digits(score_digit_path, num_chars=10)
+        sprites['digits'] = digits
+        jax.debug.print("Digit sprite shape: {}", sprites.get('digits', None).shape)
+
         return sprites
 
     @partial(jax.jit, static_argnums=(0,))
     def render(self, state):
-        raster = jnp.zeros((HEIGHT * SCALING_FACTOR, WIDTH * SCALING_FACTOR, 3), dtype=jnp.uint8)
+        raster = jnp.zeros((self.consts.HEIGHT, self.consts.WIDTH, 3), dtype=jnp.uint8)
 
         # Draw walls (assuming fixed positions based on bounds)
-        wall_sprite = aj.get_sprite_frame(self.sprites['level_outer_walls'], 0)
+        wall_sprite = jr.get_sprite_frame(self.sprites['level_outer_walls'], 0)
 
         # Outer wall
-        raster = aj.render_at(raster, WALL_OFFSET[0], WALL_OFFSET[1], wall_sprite)
+        raster = jr.render_at(raster, self.consts.WALL_OFFSET[0], self.consts.WALL_OFFSET[1], wall_sprite)
 
         # Draw player
-        player_sprite = aj.get_sprite_frame(self.sprites['player_idle'], 0)
-        raster = aj.render_at(raster, state.player_pos[0], state.player_pos[1], player_sprite)
+        player_sprite = jr.get_sprite_frame(self.sprites['player_idle'], 0)
+        raster = jr.render_at(raster, state.player_pos[0], state.player_pos[1], player_sprite)
 
         # Draw enemy
-        enemy_sprite = aj.get_sprite_frame(self.sprites['enemy_idle_1'], 0)
+        enemy_sprite = jr.get_sprite_frame(self.sprites['enemy_idle_1'], 0)
 
         for i in range(state.enemy_pos.shape[0]):
-            raster = aj.render_at(raster, state.enemy_pos[i][0], state.enemy_pos[i][1], enemy_sprite)
+            raster = jr.render_at(raster, state.enemy_pos[i][0], state.enemy_pos[i][1], enemy_sprite)
 
         # Draw bullets
         for i in range(state.bullets.shape[0]):
@@ -590,12 +631,12 @@ class BerzerkRenderer(AtraJaxisRenderer):
                 type_idx = jax.lax.select(dx != 0, 0, 1)  # 0=horizontal, 1=vertical
 
                 def render_horizontal(r):
-                    sprite = aj.get_sprite_frame(self.sprites['bullet_horizontal'], 0)
-                    return aj.render_at(r, bullet_pos[0], bullet_pos[1], sprite)
+                    sprite = jr.get_sprite_frame(self.sprites['bullet_horizontal'], 0)
+                    return jr.render_at(r, bullet_pos[0], bullet_pos[1], sprite)
 
                 def render_vertical(r):
-                    sprite = aj.get_sprite_frame(self.sprites['bullet_vertical'], 0)
-                    return aj.render_at(r, bullet_pos[0], bullet_pos[1], sprite)
+                    sprite = jr.get_sprite_frame(self.sprites['bullet_vertical'], 0)
+                    return jr.render_at(r, bullet_pos[0], bullet_pos[1], sprite)
 
                 return jax.lax.switch(
                     type_idx,
@@ -605,8 +646,67 @@ class BerzerkRenderer(AtraJaxisRenderer):
 
             raster = jax.lax.cond(is_active, draw_bullet, lambda r: r, raster)
 
+        # ----------- SCORE -------------
+        # Define score positions and spacing
+        score_x = self.consts.SCORE_OFFSET_X
+        score_y = self.consts.SCORE_OFFSET_Y
+        score_spacing = 8  # Spacing between digits 
+        max_score_digits = 5
+
+        # Get digit sprites
+        digit_sprites = self.sprites.get('digits', None)
+
+        def render_scores(raster_to_update):
+            """
+            Render the score on the screen for Berzerk.
+
+            Args:
+                raster_to_update: The current frame to update.
+            """
+
+            # Convert score to digits, zero-padded (e.g. 50 -> [0,0,5,0])
+            score_digits = jr.int_to_digits(state.score, max_digits=max_score_digits)
+
+            # Remove leading zeros dynamically
+            def find_start_index(digits):
+                # Return the first non-zero index (or max_digits-1 if score == 0)
+                is_non_zero = digits != 0
+                first_non_zero = jnp.argmax(is_non_zero)
+                return jax.lax.select(jnp.any(is_non_zero), first_non_zero, max_score_digits - 1)
+
+            start_idx = find_start_index(score_digits)
+
+            # Number of digits to render
+            num_to_render = max_score_digits - start_idx
+
+            # Adjust x-position to align right
+            render_start_x = score_x - score_spacing * (num_to_render - 1)
+
+            # Render selective digits
+            raster_updated = jr.render_label_selective(
+                raster_to_update,
+                render_start_x,
+                score_y,
+                score_digits,
+                digit_sprites,
+                start_idx,
+                num_to_render,
+                spacing=score_spacing
+            )
+
+            return raster_updated
+
+        # Render scores conditionally
+        raster = jax.lax.cond(
+            digit_sprites is not None,
+            render_scores,
+            lambda r: r,
+            raster
+        )
+
         return raster
 
+# TODO: Refactor input
 def get_human_action() -> chex.Array:
     """Get human action from keyboard with support for diagonal movement and combined fire"""
     keys = pygame.key.get_pressed()
@@ -659,60 +759,3 @@ def get_human_action() -> chex.Array:
         return jnp.array(Action.FIRE)
 
     return jnp.array(Action.NOOP)
-
-
-def main():
-    game = JaxBerzerk()
-    pygame.init()
-    screen = pygame.display.set_mode((WIDTH * SCALING_FACTOR, HEIGHT * SCALING_FACTOR))
-    clock = pygame.time.Clock()
-
-
-    renderer_AtraJaxis = BerzerkRenderer()
-
-    # Get jitted functions
-    jitted_step = jax.jit(game.step)
-    jitted_reset = jax.jit(game.reset)
-
-    curr_obs, curr_state = jitted_reset()
-
-    running = True
-
-    while running:
-        for event in pygame.event.get():
-            if event.type == pygame.QUIT:
-                running = False
-        action = get_human_action()
-        curr_obs, curr_state, reward, done, info = jitted_step(
-                            curr_state, action
-                        )
-
-        if done:
-            for i in range(60):
-                screen.fill((0, 0, 0))
-                # Show player and enemy every three frames to simulate blinking
-                #if i % 3 == 0:
-                #    x = int(curr_state.player_pos[0].item())
-                #    y = int(curr_state.player_pos[1].item())
-                #    pygame.draw.rect(screen, (0, 255, 0), pygame.Rect(x - 5, y - 5, 10, 10))
-
-                #    ex = int(curr_state.enemy_pos[0].item())
-                #    ey = int(curr_state.enemy_pos[1].item())
-                #    pygame.draw.rect(screen, (255, 0, 0), pygame.Rect(ex - 5, ey - 5, 10, 10))
-                pygame.display.flip()
-                clock.tick(60)
-
-            # Reset after death
-            _, curr_state = jitted_reset()
-
-
-        #render(screen, curr_state)
-        raster = renderer_AtraJaxis.render(curr_state)
-        aj.update_pygame(screen, raster, SCALING_FACTOR, WIDTH, HEIGHT)
-        clock.tick(60)
-
-    pygame.quit()
-
-
-if __name__ == "__main__":
-    main()
