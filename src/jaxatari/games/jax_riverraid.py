@@ -487,7 +487,7 @@ def generate_segment_transition(state: RiverraidState) -> RiverraidState:
         #scrolled_right = jnp.roll(state.river_right, 1)
         new_state = scroll_empty_island(state)
         new_segment_straight_counter = jnp.array(8)
-        dam_position = 0
+        dam_position = state.dam_position.at[0].set(1)
 
         new_river_state = jnp.array(0)
         new_alternation_length = jnp.array(10)
@@ -532,7 +532,9 @@ def update_river_banks(state: RiverraidState) -> RiverraidState:
 
 @jax.jit
 def roll_static_objects(state: RiverraidState) -> RiverraidState:
-    new_dam_position = state.dam_position + 1
+    new_dam_position = jnp.roll(state.dam_position, 1)
+    #last index to 0 to prevent rolling over
+    new_dam_position = new_dam_position.at[-1].set(0)
     return state._replace(dam_position=new_dam_position)
 
 class JaxRiverraid(JaxEnvironment):
@@ -578,7 +580,7 @@ class JaxRiverraid(JaxEnvironment):
                                segment_state=jnp.array(0),
                                segment_transition_state=jnp.array(0),
                                segment_straigt_counter=jnp.array(8),
-                               dam_position= jnp.array(-1) #jnp.full((SCREEN_HEIGHT,), -1, dtype=jnp.int32)
+                               dam_position= jnp.full((SCREEN_HEIGHT,), -1, dtype=jnp.int32)
                                )
         observation = self._get_observation(state)
         return observation, state
@@ -652,28 +654,8 @@ class RiverraidRenderer(AtraJaxisRenderer):
         # The raster is  (HEIGHT, WIDTH, 3)
         raster = jnp.where(is_river[..., None], blue_river, green_banks)
 
-        dam_y = state.dam_position
-        dam_height = 10
-
-        def draw_dam(raster):
-            dam_y_start = dam_y - dam_height + 1
-            dam_y_end = dam_y + 1
-
-            dam_left_edge = state.river_left[dam_y]
-            dam_right_edge = state.river_right[dam_y]
-
-            y_coords = jnp.arange(SCREEN_HEIGHT)
-            vertical_mask = (y_coords >= dam_y_start) & (y_coords < dam_y_end)
-            horizontal_mask = (x_coords >= dam_left_edge) & (x_coords <= dam_right_edge)
-
-            full_dam_mask = vertical_mask[:, None] & horizontal_mask
-            return jnp.where(full_dam_mask[..., None], dam_color, raster)
-
-        raster = lax.cond((dam_y >= dam_height) & (dam_y < SCREEN_HEIGHT),
-                           draw_dam,
-                           lambda raster: raster,
-                           raster)
-
+        is_dam = (state.dam_position[:, None] == 1) & (x_coords > left_banks) & (x_coords < right_banks)
+        raster = jnp.where(is_dam[..., None], dam_color, raster)
 
         # transpose it to (WIDTH, HEIGHT, 3)
         return jnp.transpose(raster, (1, 0, 2))
