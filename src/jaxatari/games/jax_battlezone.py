@@ -572,7 +572,7 @@ class BattleZoneRenderer:
         # Draw black bar background (just behind radar)
         bar_width = radar_radius * 2 + 8
         bar_height = radar_radius * 2 + 8
-        pygame.draw.rect(
+        pygame.draw.rect( # Draw black bar background (just behind radar)
             screen, (0, 0, 0),
             (radar_center_x - radar_radius - 4, radar_center_y - radar_radius - 4, bar_width, bar_height)
         )
