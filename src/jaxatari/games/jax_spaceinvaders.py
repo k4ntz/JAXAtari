@@ -99,8 +99,12 @@ class EntityPosition(NamedTuple):
     height: jnp.ndarray
 
 class SpaceInvadersObservation(NamedTuple):
-    player: EntityPosition
-    score_player: jnp.ndarray
+    player: EntityPosition  # Player position and size
+    enemies: jnp.ndarray  # Array of enemy positions and states
+    player_bullet: EntityPosition  # Player bullet position and size
+    enemy_bullets: jnp.ndarray  # Array of enemy bullet positions and states
+    score_player: jnp.ndarray  # Player score
+    lives: jnp.ndarray  # Player lives
 
 class SpaceInvadersInfo(NamedTuple):
     time: jnp.ndarray
@@ -123,6 +127,37 @@ class JaxSpaceInvaders(JaxEnvironment[SpaceInvadersState, SpaceInvadersObservati
             Action.LEFTFIRE,
         ]
         self.obs_size = 3 * 4 + 1 + 1
+
+    @partial(jax.jit, static_argnums=(0,))
+    def flatten_entity_position(self, entity: EntityPosition) -> jnp.ndarray:
+        return jnp.concatenate([
+            jnp.array([entity.x]),
+            jnp.array([entity.y]),
+            jnp.array([entity.width]),
+            jnp.array([entity.height])
+        ])
+
+    @partial(jax.jit, static_argnums=(0,))
+    def obs_to_flat_array(self, obs: SpaceInvadersObservation) -> jnp.ndarray:
+        return jnp.concatenate([
+            self.flatten_entity_position(obs.player),          # 4 values
+            obs.enemies.flatten(),                             # ENEMY_ROWS * ENEMY_COLS * 5 values
+            self.flatten_entity_position(obs.player_bullet),   # 4 values
+            obs.enemy_bullets.flatten(),                       # MAX_ENEMY_BULLETS * 5 values
+            jnp.array([obs.score_player]),                     # 1 value
+            jnp.array([obs.lives])                            # 1 value
+        ])
+
+    def get_flat_obs_size(self) -> int:
+        """Get the size of the flattened observation array."""
+        player_size = 4  # x, y, width, height
+        enemies_size = self.consts.ENEMY_ROWS * self.consts.ENEMY_COLS * 5  # x, y, width, height, alive for each enemy
+        player_bullet_size = 4  # x, y, width, height (no active field needed since bullet existence is implicit)
+        enemy_bullets_size = self.consts.MAX_ENEMY_BULLETS * 5  # x, y, width, height, active for each bullet
+        score_size = 1
+        lives_size = 1
+        
+        return player_size + enemies_size + player_bullet_size + enemy_bullets_size + score_size + lives_size
 
     @partial(jax.jit, static_argnums=(0,))
     def _get_enemy_position(self, opponent_current_x, opponent_current_y, row, col):
@@ -475,20 +510,112 @@ class JaxSpaceInvaders(JaxEnvironment[SpaceInvadersState, SpaceInvadersObservati
         observation = self._get_observation(new_state)
 
         return observation, new_state, env_reward, done, info
+    
+    def observation_space(self) -> spaces.Dict:
+        """Returns the observation space for SpaceInvaders.
+        The observation contains:
+        - player: EntityPosition (x, y, width, height) - player position and size
+        - enemies: array of shape (ENEMY_ROWS * ENEMY_COLS, 5) with x, y, width, height, alive for each enemy
+        - player_bullet: EntityPosition (x, y, width, height) - player's bullet
+        - enemy_bullets: array of shape (MAX_ENEMY_BULLETS, 5) with x, y, width, height, active for each enemy bullet
+        - score_player: int - current player score
+        - lives: int - remaining player lives
+        """
+        total_enemies = self.consts.ENEMY_ROWS * self.consts.ENEMY_COLS
+        
+        return spaces.Dict({
+            "player": spaces.Dict({
+                "x": spaces.Box(low=0, high=self.consts.WIDTH, shape=(), dtype=jnp.int32),
+                "y": spaces.Box(low=0, high=self.consts.HEIGHT, shape=(), dtype=jnp.int32),
+                "width": spaces.Box(low=0, high=self.consts.WIDTH, shape=(), dtype=jnp.int32),
+                "height": spaces.Box(low=0, high=self.consts.HEIGHT, shape=(), dtype=jnp.int32),
+            }),
+            "enemies": spaces.Box(
+                low=0, 
+                high=max(self.consts.WIDTH, self.consts.HEIGHT), 
+                shape=(total_enemies, 5), 
+                dtype=jnp.int32
+            ),
+            "player_bullet": spaces.Dict({
+                "x": spaces.Box(low=0, high=self.consts.WIDTH, shape=(), dtype=jnp.int32),
+                "y": spaces.Box(low=0, high=self.consts.HEIGHT, shape=(), dtype=jnp.int32),
+                "width": spaces.Box(low=0, high=self.consts.WIDTH, shape=(), dtype=jnp.int32),
+                "height": spaces.Box(low=0, high=self.consts.HEIGHT, shape=(), dtype=jnp.int32),
+            }),
+            "enemy_bullets": spaces.Box(
+                low=0, 
+                high=max(self.consts.WIDTH, self.consts.HEIGHT), 
+                shape=(self.consts.MAX_ENEMY_BULLETS, 5), 
+                dtype=jnp.int32
+            ),
+            "score_player": spaces.Box(low=0, high=jnp.iinfo(jnp.int32).max, shape=(), dtype=jnp.int32),
+            "lives": spaces.Box(low=0, high=self.consts.INITIAL_LIVES, shape=(), dtype=jnp.int32),
+        })
 
     @partial(jax.jit, static_argnums=(0,))
     def _get_observation(self, state: SpaceInvadersState):
         player = EntityPosition(
             x=state.player_x,
-            y=self.consts.PLAYER_Y,
+            y=jnp.array(self.consts.PLAYER_Y),
             width=jnp.array(self.consts.PLAYER_SIZE[0]),
             height=jnp.array(self.consts.PLAYER_SIZE[1]),
         )
+        
+        # Create enemy observations
+        def get_enemy_obs(i):
+            row = i // self.consts.ENEMY_COLS
+            col = i % self.consts.ENEMY_COLS
+            
+            enemy_x, enemy_y = self._get_enemy_position(
+                state.opponent_current_x,
+                state.opponent_current_y,
+                row,
+                col
+            )
+            
+            alive = jnp.logical_not(state.destroyed[i]).astype(jnp.int32)
+            
+            return jnp.array([
+                enemy_x,
+                enemy_y,
+                self.consts.OPPONENT_SIZE[0],
+                self.consts.OPPONENT_SIZE[1],
+                alive
+            ])
+        
+        total_enemies = self.consts.ENEMY_ROWS * self.consts.ENEMY_COLS
+        enemies = jnp.array([get_enemy_obs(i) for i in range(total_enemies)])
+        
+        # Player bullet observation
+        player_bullet = EntityPosition(
+            x=state.bullet_x,
+            y=state.bullet_y,
+            width=jnp.array(self.consts.BULLET_SIZE[0]),
+            height=jnp.array(self.consts.BULLET_SIZE[1]),
+        )
+        
+        # Enemy bullets observation
+        def get_enemy_bullet_obs(i):
+            active = state.enemy_bullets_active[i].astype(jnp.int32)
+            return jnp.array([
+                state.enemy_bullets_x[i],
+                state.enemy_bullets_y[i],
+                self.consts.BULLET_SIZE[0],
+                self.consts.BULLET_SIZE[1],
+                active
+            ])
+        
+        enemy_bullets = jnp.array([get_enemy_bullet_obs(i) for i in range(self.consts.MAX_ENEMY_BULLETS)])
+        
         return SpaceInvadersObservation(
             player=player,
+            enemies=enemies,
+            player_bullet=player_bullet,
+            enemy_bullets=enemy_bullets,
             score_player=state.player_score,
+            lives=state.player_lives,
         )
-    
+        
     def action_space(self) -> spaces.Discrete:
         return spaces.Discrete(len(self.action_set))
 
