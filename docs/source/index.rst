@@ -53,9 +53,10 @@ To run a game manually:
    api/environment
    api/core
    api/wrappers
+   api/spaces
    api/rendering
    api/games/index
-   
+
 .. toctree::
    :maxdepth: 2
    :caption: Scripts

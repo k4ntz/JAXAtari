@@ -7,9 +7,9 @@ import jax
 import jax.numpy as jnp
 from jaxatari.games.jax_seaquest import SeaquestState
 
-from jaxatari.wrappers import GymnaxWrapper
+from jaxatari.wrappers import JaxatariWrapper
 
-class DisableEnemiesWrapper(GymnaxWrapper):
+class DisableEnemiesWrapper(JaxatariWrapper):
     """Disable enemies in the environment."""
     @functools.partial(jax.jit, static_argnums=(0,))
     def disable_enemies(self, state: SeaquestState) -> SeaquestState:
