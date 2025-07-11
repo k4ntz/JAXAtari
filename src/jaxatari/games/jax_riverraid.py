@@ -656,17 +656,18 @@ class RiverraidRenderer(AtraJaxisRenderer):
         dam_height = 10
 
         def draw_dam(raster):
-            dam_y_start = jnp.clip(dam_y - dam_height + 1, 0, SCREEN_HEIGHT)
-            dam_y_end = jnp.clip(dam_y + 1, 0, SCREEN_HEIGHT)
-            dam_mask = (x_coords >= state.river_left[dam_y]) & (x_coords <= state.river_right[dam_y])
-            dam_rows = jnp.arange(SCREEN_HEIGHT)
+            dam_y_start = dam_y - dam_height + 1
+            dam_y_end = dam_y + 1
 
-            def set_dam_row(i, raster):
-                raster = raster.at[i].set(jnp.where(dam_mask[..., None], dam_color, raster[i]))
-                return raster
+            dam_left_edge = state.river_left[dam_y]
+            dam_right_edge = state.river_right[dam_y]
 
-            raster = lax.fori_loop(dam_y_start, dam_y_end, set_dam_row, raster)
-            return raster
+            y_coords = jnp.arange(SCREEN_HEIGHT)
+            vertical_mask = (y_coords >= dam_y_start) & (y_coords < dam_y_end)
+            horizontal_mask = (x_coords >= dam_left_edge) & (x_coords <= dam_right_edge)
+
+            full_dam_mask = vertical_mask[:, None] & horizontal_mask
+            return jnp.where(full_dam_mask[..., None], dam_color, raster)
 
         raster = lax.cond((dam_y >= dam_height) & (dam_y < SCREEN_HEIGHT),
                            draw_dam,
