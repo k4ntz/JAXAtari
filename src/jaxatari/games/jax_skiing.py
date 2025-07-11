@@ -107,7 +107,7 @@ class SkiingInfo(NamedTuple):
     time: jnp.ndarray
 
 
-class JaxSkiing(JaxEnvironment[GameState, SkiingObservation, SkiingInfo]):
+class JaxSkiing(JaxEnvironment[GameState, SkiingObservation, SkiingInfo, None]):
     def __init__(self):
         super().__init__()
         self.config = GameConfig()
