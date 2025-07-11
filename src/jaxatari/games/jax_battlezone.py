@@ -12,8 +12,8 @@ import numpy as np
 import math
 
 from jaxatari.environment import JaxEnvironment
-from jaxatari.renderers import AtraJaxisRenderer
-from jaxatari.rendering import atraJaxis as aj
+from jaxatari.renderers import JAXGameRenderer
+from jaxatari.rendering import jax_rendering_utils as aj
 
 # Action constants for BattleZone
 NOOP = 0
@@ -231,7 +231,7 @@ def update_bullets(bullets: Bullet) -> Bullet:
         owner=bullets.owner
     )
 
-class JaxBattleZone(JaxEnvironment[BattleZoneState, BattleZoneObservation, BattleZoneInfo]):
+class JaxBattleZone(JaxEnvironment[BattleZoneState, BattleZoneObservation, chex.Array, BattleZoneInfo]):
     def __init__(self, reward_funcs: list[callable] = None):
         super().__init__()
         self.frame_stack_size = 4
@@ -370,20 +370,26 @@ class JaxBattleZone(JaxEnvironment[BattleZoneState, BattleZoneObservation, Battl
 
 class BattleZoneRenderer:
     """3D wireframe renderer for BattleZone in the style of the original Atari 2600 game."""
-    
+
     def __init__(self):
         self.view_distance = 400.0  # How far we can see
         self.fov = 60.0  # Field of view in degrees
 
         # Load player tank sprite
         try:
-            path = "/Users/stevenmkhitarian/Documents/KI_Praktikum/BattleZone/src/jaxatari/games/sprites/battlezone/player_tank2.npy"
-            # path = "/Users/stevenmkhitarian/Documents/KI_Praktikum/BattleZone/src/jaxatari/games/sprites/battlezone/player_tank_squeezed.npy"
-            self.player_tank_sprite = np.load(path)
-            self.sprite_loaded = True
-        except FileNotFoundError:
-            self.sprite_loaded = False
-        except Exception as e:
+            # Try both possible locations for the sprite
+            sprite_paths = [
+                os.path.join(os.path.dirname(__file__), "../sprites/battlezone/player_tank2.npy"),
+                os.path.join(os.path.dirname(__file__), "sprites/battlezone/player_tank2.npy"),
+            ]
+            for path in sprite_paths:
+                if os.path.exists(path):
+                    self.player_tank_sprite = np.load(path)
+                    self.sprite_loaded = True
+                    break
+            else:
+                self.sprite_loaded = False
+        except Exception:
             self.sprite_loaded = False
 
     def draw_player_bullet(self, screen, state: BattleZoneState):
