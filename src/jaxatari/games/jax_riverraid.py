@@ -9,9 +9,11 @@ from jax import lax
 import jax.lax
 
 from gymnax.environments import spaces
+from ocatari.vision.skiing import player_c
 
 from jaxatari.environment import JaxEnvironment, JAXAtariAction as Action
 from jaxatari.games.jax_pong import WIDTH
+from jaxatari.games.jax_seaquest import player_step
 from jaxatari.renderers import AtraJaxisRenderer
 from jaxatari.rendering import atraJaxis as aj
 
@@ -47,6 +49,7 @@ class RiverraidState(NamedTuple):
     player_y: chex.Array
     player_velocity: chex.Array
     player_direction: chex.Array  # 0 left, 1 straight, 2 right
+    player_state: chex.Array
 
 
 class RiverraidInfo(NamedTuple):
@@ -573,9 +576,16 @@ def player_movement(state: RiverraidState, action: Action) -> RiverraidState:
     new_velocity = jnp.clip(new_velocity, -3, 3)
     new_x = state.player_x + new_velocity
 
+    player_state = jax.lax.cond(jnp.logical_or((new_x <= state.river_left[SCREEN_HEIGHT - 30] + 1, new_x >= state.river_right[SCREEN_HEIGHT - 30] - 8)),
+                 lambda state: jnp.array(1),
+                 lambda state: state.player_state,
+                 operand=state)
+
+    # remove this line when death is implemented
     new_x = jnp.clip(new_x, state.river_left[SCREEN_HEIGHT - 30] + 1, state.river_right[SCREEN_HEIGHT - 30] - 8)
     return state._replace(player_x=new_x,
-                          player_velocity=new_velocity)
+                          player_velocity=new_velocity,
+                          player_state=player_state)
 
 @jax.jit
 def get_action_from_keyboard(state: RiverraidState) -> Action:
@@ -648,7 +658,8 @@ class JaxRiverraid(JaxEnvironment):
                                player_x= jnp.array(SCREEN_WIDTH // 2 - 2),
                                player_y=jnp.array(SCREEN_HEIGHT - 40),
                                player_velocity=jnp.array(0),
-                               player_direction=jnp.array(1)
+                               player_direction=jnp.array(1),
+                               player_state= jnp.array(0)
                                )
         observation = self._get_observation(state)
         return observation, state
@@ -661,11 +672,24 @@ class JaxRiverraid(JaxEnvironment):
         return spaces.Discrete(len(self.action_set))
 
     def step(self, state: RiverraidState, action: Action) -> Tuple[RiverraidObservation, RiverraidState, RiverraidInfo]:
+        def player_alive(state: RiverraidState) -> RiverraidState:
+            new_state = roll_static_objects(state)
+            new_state = update_river_banks(new_state)
+            new_state = player_movement(new_state, action)
+            return new_state
+
+        def respawn(state: RiverraidState) -> RiverraidState:
+            jax.debug.print("YOU DIED GIT GUD")
+            new_state = state._replace(player_state = jnp.array(0))
+            return new_state
+
         jax.debug.print("new step \n")
         new_state = state._replace(turn_step=state.turn_step + 1)
-        new_state = roll_static_objects(new_state)
-        new_state = update_river_banks(new_state)
-        new_state = player_movement(new_state, action)
+        new_state = jax.lax.cond(state.player_state == 0,
+                                 lambda state: player_alive(state),
+                                 lambda state: respawn(state),
+                                 Operand=new_state)
+
 
 
         observation = self._get_observation(new_state)
