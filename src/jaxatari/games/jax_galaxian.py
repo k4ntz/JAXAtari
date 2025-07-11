@@ -1160,7 +1160,7 @@ class JaxGalaxian(JaxEnvironment[GalaxianState, GalaxianObservation, GalaxianInf
                               bullet_y=jnp.array(-1.0,dtype=jnp.float32),
                               enemy_grid_x=enemy_grid.astype(jnp.float32),
                               enemy_grid_y=enemy_grid_y.astype(jnp.float32),
-                              enemy_grid_state=TEST_GRID,
+                              enemy_grid_state=ENEMY_GRID,
                               enemy_death_frame_grid=jnp.zeros((GRID_ROWS, GRID_COLS), dtype=jnp.int32),
                               enemy_death_frame_attack=jnp.zeros(MAX_DIVERS, dtype=jnp.int32),
                               enemy_death_frame_support=jnp.zeros(MAX_SUPPORTERS, dtype=jnp.int32),
@@ -1239,10 +1239,11 @@ class JaxGalaxian(JaxEnvironment[GalaxianState, GalaxianObservation, GalaxianInf
     ) -> Tuple[GalaxianObservation, GalaxianState, float, bool, GalaxianInfo]:
         #TODO: refactor like the other games
         # create new state instead of replacing old state step by step
-        jax.debug.print("grid {}", state.enemy_grid_state)
-        jax.debug.print("attackers {}", state.enemy_attack_states)
-        jax.debug.print("supporters {}", state.enemy_support_pos)
-        jax.debug.print("support pos {}", state.enemy_support_x)
+        #jax.debug.print("grid {}", state.enemy_grid_state)
+        #jax.debug.print("attackers {}", state.enemy_attack_states)
+        #jax.debug.print("supporters {}", state.enemy_support_pos)
+        #jax.debug.print("support pos {}", state.enemy_support_x)
+        jax.debug.print("score {}", state.score)
         new_state = update_player_position(state, action)
         new_state = update_player_bullet(new_state, action)
         new_state = update_enemy_positions(new_state)
@@ -1381,6 +1382,8 @@ def load_sprites():
     SPRITE_ENEMY_BULLET = enemy_bullet[jnp.newaxis, ...]
     SPRITE_ENEMY_DEATH = jnp.stack([death_enemy_1, death_enemy_2, death_enemy_3,
                                     death_enemy_4, death_enemy_5], axis=0)
+    SPRITE_DIGIT = jnp.stack([enemy_gray,enemy_red,enemy_purple, enemy_white,enemy_gray,enemy_red,enemy_purple,enemy_white,enemy_gray,enemy_red])
+
     return(
         SPRITE_BG,
         SPRITE_PLAYER,
@@ -1395,7 +1398,8 @@ def load_sprites():
         SPRITE_ENEMY_RIGHT,
         SPRITE_LIFE,
         SPRITE_ENEMY_BULLET,
-        SPRITE_ENEMY_DEATH
+        SPRITE_ENEMY_DEATH,
+        SPRITE_DIGIT
     )
 
 class GalaxianRenderer(AtraJaxisRenderer):
@@ -1414,7 +1418,8 @@ class GalaxianRenderer(AtraJaxisRenderer):
             self.SPRITE_ENEMY_RIGHT,
             self.SPRITE_LIFE,
             self.SPRITE_ENEMY_BULLET,
-            self.SPRITE_ENEMY_DEATH
+            self.SPRITE_ENEMY_DEATH,
+            self.SPRITE_DIGIT
         ) = load_sprites()
 
         # Sprite-Dimensionen für Life-Icons
@@ -1638,6 +1643,22 @@ class GalaxianRenderer(AtraJaxisRenderer):
                 return aj.render_at(r0, x0, y0, life_sprite)
             return lax.cond(i < state.lives, draw, lambda r0: r0, r_acc)
         raster = lax.fori_loop(0, LIVES, life_loop_body, raster)
+
+        def get_digit(i, score):
+            digit = (score // jnp.power(10, i)) % 10
+            return digit.astype(jnp.int32)
+
+        def score_loop_body(i, r_acc):
+            def draw(r0):
+                x0 = jnp.int32(
+                    NATIVE_GAME_WIDTH - (i + 1) * 20
+                )
+                y0 = jnp.int32(
+                    5
+                )
+                return aj.render_at(r0, x0, y0, aj.get_sprite_frame(self.SPRITE_DIGIT, get_digit(i, state.score)))
+            return lax.cond(i < 5, draw, lambda r0: r0, r_acc)
+        raster = lax.fori_loop(0,5,score_loop_body,raster)
 
         return raster
 
