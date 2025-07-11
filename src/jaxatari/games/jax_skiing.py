@@ -43,6 +43,7 @@ def _npy_to_jax_array(npy_path: str) -> jnp.ndarray:
 @dataclass
 class GameConfig:
     """Game configuration parameters"""
+
     screen_width: int = 160
     screen_height: int = 210
     skier_width: int = 10
@@ -65,6 +66,7 @@ class GameConfig:
 
 class GameState(NamedTuple):
     """Represents the current state of the game"""
+
     skier_x: chex.Array
     skier_pos: chex.Array  # --> --_  \   |   |   /  _-- <-- States are doubles in ALE
     skier_fell: chex.Array
@@ -82,6 +84,7 @@ class GameState(NamedTuple):
     jump_timer: chex.Array  # Frames left in current jump
     collision_type: chex.Array  # 0 = keine, 1 = Baum, 2 = Stein, 3 = Flagge
     flags_passed: chex.Array
+
 
 class EntityPosition(NamedTuple):
     x: jnp.ndarray
@@ -109,7 +112,7 @@ class JaxSkiing(JaxEnvironment[GameState, SkiingObservation, SkiingInfo]):
         super().__init__()
         self.config = GameConfig()
         self.state = self.reset()
-        
+
     def _npy_to_surface(self, npy_path, width, height):
         arr = np.load(npy_path)  # Erwartet (H, W, 4) RGBA
         arr = arr.astype(np.uint8)
@@ -120,7 +123,9 @@ class JaxSkiing(JaxEnvironment[GameState, SkiingObservation, SkiingInfo]):
         surf = pygame.transform.scale(surf, (width, height))
         return surf
 
-    def reset(self, key: jax.random.PRNGKey = jax.random.key(1701)) -> Tuple[SkiingObservation, GameState]:
+    def reset(
+        self, key: jax.random.PRNGKey = jax.random.key(1701)
+    ) -> Tuple[SkiingObservation, GameState]:
         """Initialize a new game state"""
         flags = []
 
@@ -178,7 +183,7 @@ class JaxSkiing(JaxEnvironment[GameState, SkiingObservation, SkiingInfo]):
             jumping=jnp.array(False),
             jump_timer=jnp.array(0),
             collision_type=jnp.array(0),
-            flags_passed=jnp.zeros(self.config.max_num_flags, dtype=bool)
+            flags_passed=jnp.zeros(self.config.max_num_flags, dtype=bool),
         )
         obs = self._get_observation(state)
 
@@ -265,7 +270,9 @@ class JaxSkiing(JaxEnvironment[GameState, SkiingObservation, SkiingInfo]):
         return flags, trees, rocks, k
 
     @partial(jax.jit, static_argnums=(0,))
-    def step(self, state: GameState, action: int) -> tuple[SkiingObservation, GameState, float, bool, SkiingInfo]:
+    def step(
+        self, state: GameState, action: int
+    ) -> tuple[SkiingObservation, GameState, float, bool, SkiingInfo]:
         #                              -->  --_      \     |     |    /    _-- <--
         side_speed = jnp.array(
             [-1.0, -0.5, -0.333, 0.0, 0.0, 0.333, 0.5, 1], jnp.float32
@@ -288,7 +295,7 @@ class JaxSkiing(JaxEnvironment[GameState, SkiingObservation, SkiingInfo]):
             lambda _: (state.jumping, state.jump_timer),
             operand=None,
         )
-        
+
         # If already jumping, decrement timer
         jump_timer = jax.lax.cond(
             jumping,
@@ -296,7 +303,7 @@ class JaxSkiing(JaxEnvironment[GameState, SkiingObservation, SkiingInfo]):
             lambda t: t,
             operand=jump_timer,
         )
-        
+
         # End jump if timer reaches 0
         jumping = jax.lax.cond(
             jnp.equal(jump_timer, 0),
@@ -317,7 +324,9 @@ class JaxSkiing(JaxEnvironment[GameState, SkiingObservation, SkiingInfo]):
                 operand=None,
             )
             # Keine Bewegung, keine Punkteänderung, keine Objektbewegung
-            flags_passed = state.flags_passed  # Fix: Use the existing flags_passed from state
+            flags_passed = (
+                state.flags_passed
+            )  # Fix: Use the existing flags_passed from state
             new_state = GameState(
                 skier_x=state.skier_x,
                 skier_pos=state.skier_pos,
@@ -335,7 +344,7 @@ class JaxSkiing(JaxEnvironment[GameState, SkiingObservation, SkiingInfo]):
                 jumping=state.jumping,
                 jump_timer=state.jump_timer,
                 collision_type=state.collision_type,
-                flags_passed=flags_passed
+                flags_passed=flags_passed,
             )
             obs = self._get_observation(new_state)
             info = self._get_info(new_state)
@@ -384,7 +393,9 @@ class JaxSkiing(JaxEnvironment[GameState, SkiingObservation, SkiingInfo]):
 
             # IMPORTANT FIX: Don't increase vertical speed during jumps
             # Instead, maintain normal vertical speed but handle the visual effect separately
-            new_skier_y_speed = state.skier_y_speed + ((dy - state.skier_y_speed) * 0.05)
+            new_skier_y_speed = state.skier_y_speed + (
+                (dy - state.skier_y_speed) * 0.05
+            )
 
             new_x = jnp.clip(
                 state.skier_x + new_skier_x_speed,
@@ -432,28 +443,28 @@ class JaxSkiing(JaxEnvironment[GameState, SkiingObservation, SkiingInfo]):
                 # No collision with rocks when jumping
                 return jnp.logical_and(
                     jnp.logical_and(dx < x_distance, dy < y_distance),
-                    jnp.logical_not(jumping)  # This ensures no collision when jumping
+                    jnp.logical_not(jumping),  # This ensures no collision when jumping
                 )
 
+            # Check if gates have been passed before respawn
+            passed_flags = jax.vmap(check_pass_flag)(jnp.array(new_flags))
+            flags_passed = state.flags_passed | passed_flags
 
+            # Determine which flags despawn this frame (y < TOP_BORDER)
+            despawn_mask = new_flags[:, 1] < TOP_BORDER
+            missed_penalty_mask = jnp.logical_and(
+                despawn_mask, jnp.logical_not(flags_passed)
+            )
+            missed_penalty_count = jnp.sum(missed_penalty_mask)
+            missed_penalty = missed_penalty_count * 300
+
+            # Reset flags_passed when a flag despawns
+            flags_passed = jnp.where(despawn_mask, False, flags_passed)
+
+            # Spawn new objects after calculating penalties
             new_flags, new_trees, new_rocks, new_key = self._create_new_objs(
                 state, new_flags, new_trees, new_rocks
             )
-
-            # Flags vor und nach Schritt
-            old_flags = state.flags  # shape (max_num_flags, 2)
-            # new_flags wird weiter unten berechnet
-
-            passed_flags = jax.vmap(check_pass_flag)(jnp.array(new_flags))
-            flags_passed = state.flags_passed | passed_flags
-            # Penalty nur, wenn Flagge im letzten Frame noch sichtbar war (old_y >= TOP_BORDER),
-            # jetzt despawnt (new_y < TOP_BORDER), und NICHT passiert wurde
-            old_y = old_flags[:, 1]
-            new_y = new_flags[:, 1]
-            despawn_mask = jnp.logical_and(old_y >= TOP_BORDER, new_y < TOP_BORDER)
-            missed_penalty_mask = jnp.logical_and(despawn_mask, jnp.logical_not(flags_passed))
-            missed_penalty_count = jnp.sum(missed_penalty_mask)
-            missed_penalty = missed_penalty_count * 300
 
             collisions_flag = jax.vmap(check_collision_flag)(jnp.array(new_flags))
             collisions_tree = jax.vmap(check_collision_tree)(jnp.array(new_trees))
@@ -483,7 +494,6 @@ class JaxSkiing(JaxEnvironment[GameState, SkiingObservation, SkiingInfo]):
                     ),
                 ),
             )
-
 
             (
                 new_x,
@@ -556,7 +566,7 @@ class JaxSkiing(JaxEnvironment[GameState, SkiingObservation, SkiingInfo]):
                 operand=None,
             )
             new_time = jax.lax.cond(
-                jnp.greater(state.time, 9223372036854775807/2),
+                jnp.greater(state.time, 9223372036854775807 / 2),
                 lambda _: 0,
                 lambda _: state.time + 1 + missed_penalty,
                 operand=None,
@@ -579,7 +589,7 @@ class JaxSkiing(JaxEnvironment[GameState, SkiingObservation, SkiingInfo]):
                 jumping=jumping,
                 jump_timer=jump_timer,
                 collision_type=collision_type,
-                flags_passed=flags_passed  # <--- Argument ergänzt
+                flags_passed=flags_passed,  # <--- Argument ergänzt
             )
 
             done = self._get_done(new_state)
@@ -637,7 +647,13 @@ class JaxSkiing(JaxEnvironment[GameState, SkiingObservation, SkiingInfo]):
         )
 
         return SkiingObservation(
-            skier=skier, trees=trees, flags=flags, rocks=rocks, score=state.score, jumping=state.jumping, jump_timer=state.jump_timer
+            skier=skier,
+            trees=trees,
+            flags=flags,
+            rocks=rocks,
+            score=state.score,
+            jumping=state.jumping,
+            jump_timer=state.jump_timer,
         )
 
     @partial(jax.jit, static_argnums=(0,))
@@ -683,7 +699,6 @@ class RenderConfig:
     rock_color: Tuple[int, int, int] = (128, 128, 128)
     game_over_color: Tuple[int, int, int] = (255, 0, 0)
     jump_text_color: Tuple[int, int, int] = (0, 0, 255)
-
 
 
 class GameRenderer:
@@ -762,7 +777,7 @@ class GameRenderer:
         filenames = {
             "right": "skiier_left.npy",
             "front": "skiier_front.npy",
-            "left": "skiier_right.npy"
+            "left": "skiier_right.npy",
         }
         width = self.game_config.skier_width * self.render_config.scale_factor
         height = self.game_config.skier_height * self.render_config.scale_factor
@@ -770,7 +785,10 @@ class GameRenderer:
         for direction, filename in filenames.items():
             full_path = os.path.join(sprite_dir, filename)
             sprites[direction] = self._npy_to_surface(full_path, width, height)
-        self.skier_array = {d: _npy_to_jax_array(os.path.join(sprite_dir, f)) for d, f in filenames.items()}
+        self.skier_array = {
+            d: _npy_to_jax_array(os.path.join(sprite_dir, f))
+            for d, f in filenames.items()
+        }
         sprite_list = []
         for i in range(8):
             if i <= 2:
@@ -801,7 +819,9 @@ class GameRenderer:
         distance = jnp.array(self.game_config.flag_distance, dtype=jnp.float32)
 
         left = jnp.round(flags * scale).astype(jnp.int32)
-        right = jnp.round((flags + jnp.array([distance, 0.0])) * scale).astype(jnp.int32)
+        right = jnp.round((flags + jnp.array([distance, 0.0])) * scale).astype(
+            jnp.int32
+        )
 
         return left, right
 
@@ -826,16 +846,28 @@ class GameRenderer:
                 # Finde den ersten Baum, der mit dem Skifahrer kollidiert
                 tree_centers = self._calc_tree_centers(state.trees)
                 skier_x_px = int(state.skier_x * self.render_config.scale_factor)
-                skier_y_px = int(self.game_config.skier_y * self.render_config.scale_factor)
+                skier_y_px = int(
+                    self.game_config.skier_y * self.render_config.scale_factor
+                )
                 # Suche den Baum mit minimalem Abstand zum Skifahrer
-                dists = [abs(tx - skier_x_px) + abs(ty - skier_y_px) for tx, ty in np.array(tree_centers)]
+                dists = [
+                    abs(tx - skier_x_px) + abs(ty - skier_y_px)
+                    for tx, ty in np.array(tree_centers)
+                ]
                 idx = int(np.argmin(dists))
                 cx, cy = np.array(tree_centers[idx])
             elif state.collision_type == 2:  # Stein
-                rock_centers = np.round(np.array(state.rocks) * self.render_config.scale_factor).astype(int)
+                rock_centers = np.round(
+                    np.array(state.rocks) * self.render_config.scale_factor
+                ).astype(int)
                 skier_x_px = int(state.skier_x * self.render_config.scale_factor)
-                skier_y_px = int(self.game_config.skier_y * self.render_config.scale_factor)
-                dists = [abs(rx - skier_x_px) + abs(ry - skier_y_px) for rx, ry in np.array(rock_centers)]
+                skier_y_px = int(
+                    self.game_config.skier_y * self.render_config.scale_factor
+                )
+                dists = [
+                    abs(rx - skier_x_px) + abs(ry - skier_y_px)
+                    for rx, ry in np.array(rock_centers)
+                ]
                 idx = int(np.argmin(dists))
                 cx, cy = rock_centers[idx]
             else:
@@ -848,17 +880,31 @@ class GameRenderer:
                 skier_img = self.skier_jump_sprite
             else:
                 skier_img = self.skier_sprite[int(state.skier_pos)]
-            skier_rect = skier_img.get_rect(center=(
-                int(state.skier_x * self.render_config.scale_factor),
-                int(self.game_config.skier_y * self.render_config.scale_factor),
-            ))
+            skier_rect = skier_img.get_rect(
+                center=(
+                    int(state.skier_x * self.render_config.scale_factor),
+                    int(self.game_config.skier_y * self.render_config.scale_factor),
+                )
+            )
 
-        if state.jumping and not (state.skier_fell > 0 and state.collision_type in (1, 2)):
+        if state.jumping and not (
+            state.skier_fell > 0 and state.collision_type in (1, 2)
+        ):
             jump_progress = state.jump_timer / self.game_config.jump_duration
-            scale_factor = 1.0 + (self.config.jump_scale_factor - 1.0) * (4 * jump_progress * (1 - jump_progress))
+            scale_factor = 1.0 + (self.config.jump_scale_factor - 1.0) * (
+                4 * jump_progress * (1 - jump_progress)
+            )
             new_size = (
-                int(self.game_config.skier_width * self.render_config.scale_factor * scale_factor),
-                int(self.game_config.skier_height * self.render_config.scale_factor * scale_factor),
+                int(
+                    self.game_config.skier_width
+                    * self.render_config.scale_factor
+                    * scale_factor
+                ),
+                int(
+                    self.game_config.skier_height
+                    * self.render_config.scale_factor
+                    * scale_factor
+                ),
             )
             skier_img = pygame.transform.scale(skier_img, new_size)
             skier_rect = skier_img.get_rect(center=skier_rect.center)
@@ -895,7 +941,7 @@ class GameRenderer:
         score_text = self.font.render(
             f"Score: {state.score}", True, self.render_config.text_color
         )
-                # Zeit formatieren wie 00:00.00
+        # Zeit formatieren wie 00:00.00
         total_time = int(state.time)
         minutes = total_time // (60 * 60)
         seconds = (total_time // 60) % 60
@@ -904,11 +950,20 @@ class GameRenderer:
         time_text = self.font.render(time_str, True, self.render_config.text_color)
 
         # Score mittig oben, Zeit darunter mittig
-        screen_width_px = self.game_config.screen_width * self.render_config.scale_factor
+        screen_width_px = (
+            self.game_config.screen_width * self.render_config.scale_factor
+        )
 
-        score_rect = score_text.get_rect(center=(screen_width_px // 2, 10 + score_text.get_height() // 2))
-        time_rect = time_text.get_rect(center=(screen_width_px // 2, 10 + score_text.get_height() + time_text.get_height() // 2))
-        
+        score_rect = score_text.get_rect(
+            center=(screen_width_px // 2, 10 + score_text.get_height() // 2)
+        )
+        time_rect = time_text.get_rect(
+            center=(
+                screen_width_px // 2,
+                10 + score_text.get_height() + time_text.get_height() // 2,
+            )
+        )
+
         self.screen.blit(score_text, score_rect)
         self.screen.blit(time_text, time_rect)
 
@@ -927,7 +982,7 @@ class GameRenderer:
                 )
             )
             self.screen.blit(game_over_text, text_rect)
-        
+
         pygame.display.flip()
 
     def close(self):
@@ -966,10 +1021,10 @@ def main():
             obs, state, reward, done, info = game.step(state, action)
             renderer.render(state)
 
-
             clock.tick(60)
 
         renderer.close()
+
 
 if __name__ == "__main__":
     main()
