@@ -332,10 +332,30 @@ def generate_altering_river(state: RiverraidState) -> RiverraidState:
         #return spawn_island(state)
 
     jax.debug.print("Riverraid: river_island_present: {island}", island=state.river_island_present)
-    state = lax.switch(
-        state.river_island_present,
-        [no_island_branch, island_branch, island_transition, island_transition, island_transition],
-        state
+    new_river_island_present = jax.lax.cond(
+        jnp.logical_and(
+            state.river_island_present >= 2,
+            jnp.logical_and(
+                state.river_inner_left[0] <= state.river_inner_right[0],
+                state.river_right[1] - state.river_left[1] < MIN_RIVER_WIDTH * 2 + 20
+            )
+        ),
+        lambda state: jnp.array(0),
+        lambda state: state.river_island_present,
+        operand=state
+    )
+    state = state._replace(river_island_present=new_river_island_present)
+
+    state = jax.lax.cond(
+        state.river_island_present == 0,
+        lambda state: no_island_branch(state),
+        lambda state: jax.lax.cond(
+            state.river_island_present == 1,
+            lambda state: island_branch(state),
+            lambda state: island_transition(state),
+            operand=state
+        ),
+        operand=state
     )
 
     def no_island_clamping(state: RiverraidState) -> RiverraidState:
