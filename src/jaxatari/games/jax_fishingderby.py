@@ -333,7 +333,7 @@ def load_sprites():
     for name, path in sprite_paths.items():
         if not os.path.exists(path):
             raise FileNotFoundError(f"Sprite file not found: {path}")
-        sprite = aj.loadFrame(path, transpose=True)
+        sprite = aj.loadFrame(path, transpose=False)
         if sprite is None:
             raise ValueError(f"Failed to load sprite: {path}")
         sprites[name] =	sprite
@@ -406,7 +406,7 @@ class FishingDerbyRenderer(AtraJaxisRenderer):
 
         # Draw shark
         shark_frame = jax.lax.cond((state.time // 8) % 2 == 0, lambda: self.SPRITE_SHARK1, lambda: self.SPRITE_SHARK2)
-        raster = self._render_at(raster, state.shark_x, cfg.SHARK_Y, shark_frame, flip_h=state.shark_dir < 0)
+        raster = self._render_at(raster, state.shark_x, cfg.SHARK_Y, shark_frame, flip_h=state.shark_dir > 0)
 
         # Draw fish
         fish_frame = jax.lax.cond((state.time // 10) % 2 == 0, lambda: self.SPRITE_FISH1, lambda: self.SPRITE_FISH2)
@@ -414,7 +414,7 @@ class FishingDerbyRenderer(AtraJaxisRenderer):
         def draw_one_fish(i, r):
             pos, direction, active = state.fish_positions[i], state.fish_directions[i], state.fish_active[i]
             return jax.lax.cond(active,
-                                lambda r_in: self._render_at(r_in, pos[0], pos[1], fish_frame, flip_h=direction < 0),
+                                lambda r_in: self._render_at(r_in, pos[0], pos[1], fish_frame, flip_h=direction > 0),
                                 lambda r_in: r_in, r)
 
         raster = jax.lax.fori_loop(0, cfg.NUM_FISH, draw_one_fish, raster)
@@ -432,7 +432,7 @@ class FishingDerbyRenderer(AtraJaxisRenderer):
         raster = self._render_score(raster, state.p1.score, 50, 20)
         raster = self._render_score(raster, state.p2.score, 100, 20)
 
-        return raster
+        return jnp.transpose(raster, (1, 0, 2))
 
     def _render_score(self, raster, score, x, y):
         s1, s0 = score // 10, score % 10
@@ -569,9 +569,9 @@ if __name__ == "__main__":
 
             # Render and display
             raster = renderer.render(curr_state)
-            raster = jnp.transpose(raster, (1, 0, 2))
-            aj.update_pygame(screen, raster, scaling, GameConfig.SCREEN_WIDTH, GameConfig.SCREEN_HEIGHT)
-            pygame.display.flip()
+            raster_np = jnp.array(raster).transpose((1, 0, 2))
+            aj.update_pygame(screen, raster, scaling, GameConfig.SCREEN_WIDTH,  GameConfig.SCREEN_HEIGHT)
+
             counter += 1
             pygame.time.Clock().tick(60)
         pygame.quit()
