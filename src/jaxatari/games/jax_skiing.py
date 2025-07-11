@@ -21,6 +21,25 @@ BOTTOM_BORDER = 176
 TOP_BORDER = 23
 
 
+def _npy_to_jax_array(npy_path: str) -> jnp.ndarray:
+    """Load a sprite stored as ``.npy`` into a JAX array.
+
+    Parameters
+    ----------
+    npy_path : str
+        Path to the ``.npy`` file containing RGBA pixel data in
+        ``(H, W, 4)`` format.
+
+    Returns
+    -------
+    jnp.ndarray
+        Sprite as a ``uint8`` JAX array with shape ``(H, W, 4)``.
+    """
+
+    arr = np.load(npy_path).astype(np.uint8)
+    return jnp.array(arr)
+
+
 @dataclass
 class GameConfig:
     """Game configuration parameters"""
@@ -385,10 +404,14 @@ class JaxSkiing(JaxEnvironment[GameState, SkiingObservation, SkiingInfo]):
         collisions_tree = jax.vmap(check_collision_tree)(jnp.array(new_trees))
         collisions_rocks = jax.vmap(check_collision_rock)(jnp.array(new_rocks))
 
-        num_colls = (
+        num_colls_pre = (
             jnp.sum(collisions_tree)
             + jnp.sum(collisions_rocks)
             + jnp.sum(collisions_flag)
+        )
+
+        collision_occurred = jnp.logical_and(
+            jnp.greater(num_colls_pre, 0), jnp.equal(state.skier_fell, 0)
         )
 
         # Bestimme, wodurch die erste Kollision verursacht wurde
@@ -433,7 +456,7 @@ class JaxSkiing(JaxEnvironment[GameState, SkiingObservation, SkiingInfo]):
             lambda _: (
                 new_x,
                 state.skier_fell,
-                num_colls,
+                num_colls_pre,
                 new_flags,
                 new_trees,
                 new_rocks,
@@ -441,6 +464,18 @@ class JaxSkiing(JaxEnvironment[GameState, SkiingObservation, SkiingInfo]):
                 new_skier_x_speed,
                 new_skier_y_speed,
             ),
+            operand=None,
+        )
+
+        # Apply small knockback when colliding with an obstacle
+        new_x = jax.lax.cond(
+            collision_occurred,
+            lambda _: jnp.clip(
+                new_x - 5.0,
+                self.config.skier_width / 2,
+                self.config.screen_width - self.config.skier_width / 2,
+            ),
+            lambda _: new_x,
             operand=None,
         )
 
@@ -457,6 +492,8 @@ class JaxSkiing(JaxEnvironment[GameState, SkiingObservation, SkiingInfo]):
             lambda _: state.score,
             operand=None,
         )
+        penalty = jax.lax.select(collision_occurred, jnp.array(1), jnp.array(0))
+        new_score = new_score - penalty
         game_over = jax.lax.cond(
             jnp.equal(new_score, 0),
             lambda _: jnp.array(True),
@@ -609,21 +646,27 @@ class GameRenderer:
             int(self.game_config.skier_width * self.render_config.scale_factor * 2),
             int(self.game_config.skier_height * self.render_config.scale_factor * 2),
         )
+        # JAX arrays for vectorized operations
+        self.skier_jump_array = self._load_object_array("skiier_jump.npy")
+        self.skier_fallen_array = self._load_object_array("skier_fallen.npy")
         self.flag_sprite = self._create_object_sprite(
             "checkered_flag.npy",
             int(self.game_config.flag_width * self.render_config.scale_factor * 2),
             int(self.game_config.flag_height * self.render_config.scale_factor * 2),
         )
+        self.flag_array = self._load_object_array("checkered_flag.npy")
         self.rock_sprite = self._create_object_sprite(
             "stone.npy",
             int(self.game_config.rock_width * self.render_config.scale_factor * 3),
             int(self.game_config.rock_height * self.render_config.scale_factor * 6),
         )
+        self.rock_array = self._load_object_array("stone.npy")
         self.tree_sprite = self._create_object_sprite(
             "tree.npy",
             int(self.game_config.tree_width * self.render_config.scale_factor * 1.5),
             int(self.game_config.tree_height * self.render_config.scale_factor * 1.5),
         )
+        self.tree_array = self._load_object_array("tree.npy")
         self.font = pygame.font.Font(None, 36)
 
     def _npy_to_surface(self, npy_path, width, height):
@@ -641,6 +684,12 @@ class GameRenderer:
         full_path = os.path.join(sprite_dir, filename)
         return self._npy_to_surface(full_path, width, height)
 
+    def _load_object_array(self, filename) -> jnp.ndarray:
+        base_path = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
+        sprite_dir = os.path.join(base_path, "jaxatari", "games", "sprites", "skiing")
+        full_path = os.path.join(sprite_dir, filename)
+        return _npy_to_jax_array(full_path)
+
     def _create_skier_sprite(self) -> list[pygame.Surface]:
         base_path = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
         sprite_dir = os.path.join(base_path, "jaxatari", "games", "sprites", "skiing")
@@ -655,6 +704,7 @@ class GameRenderer:
         for direction, filename in filenames.items():
             full_path = os.path.join(sprite_dir, filename)
             sprites[direction] = self._npy_to_surface(full_path, width, height)
+        self.skier_array = {d: _npy_to_jax_array(os.path.join(sprite_dir, f)) for d, f in filenames.items()}
         sprite_list = []
         for i in range(8):
             if i <= 2:
@@ -664,6 +714,37 @@ class GameRenderer:
             else:
                 sprite_list.append(sprites["front"])
         return sprite_list
+
+    @partial(jax.jit, static_argnums=(0,))
+    def _calc_flag_centers(self, flags: jnp.ndarray) -> tuple[jnp.ndarray, jnp.ndarray]:
+        """Calculate pixel centers for all flags.
+
+        Parameters
+        ----------
+        flags : jnp.ndarray
+            Array with shape (N, 2) containing flag positions in game
+            coordinates.
+
+        Returns
+        -------
+        tuple[jnp.ndarray, jnp.ndarray]
+            Pixel coordinates for the left and right flag of each gate.
+        """
+
+        scale = jnp.array(self.render_config.scale_factor, dtype=jnp.float32)
+        distance = jnp.array(self.game_config.flag_distance, dtype=jnp.float32)
+
+        left = jnp.round(flags * scale).astype(jnp.int32)
+        right = jnp.round((flags + jnp.array([distance, 0.0])) * scale).astype(jnp.int32)
+
+        return left, right
+
+    @partial(jax.jit, static_argnums=(0,))
+    def _calc_tree_centers(self, trees: jnp.ndarray) -> jnp.ndarray:
+        """Calculate pixel centers for all trees."""
+
+        scale = jnp.array(self.render_config.scale_factor, dtype=jnp.float32)
+        return jnp.round(trees * scale).astype(jnp.int32)
 
     def render(self, state: GameState):
         """Render the current game state"""
@@ -696,27 +777,21 @@ class GameRenderer:
         self.screen.blit(skier_img, skier_rect)
 
         # Flags
-        for fx, fy in state.flags:
+        left_centers, right_centers = self._calc_flag_centers(state.flags)
+        for left, right in zip(np.array(left_centers), np.array(right_centers)):
             flag_rect = self.flag_sprite.get_rect()
-            flag_rect.center = (
-                int(fx * self.render_config.scale_factor),
-                int(fy * self.render_config.scale_factor),
-            )
+            flag_rect.center = (int(left[0]), int(left[1]))
             self.screen.blit(self.flag_sprite, flag_rect)
+
             second_flag_rect = self.flag_sprite.get_rect()
-            second_flag_rect.center = (
-                int((fx + self.game_config.flag_distance) * self.render_config.scale_factor),
-                int(fy * self.render_config.scale_factor),
-            )
+            second_flag_rect.center = (int(right[0]), int(right[1]))
             self.screen.blit(self.flag_sprite, second_flag_rect)
 
         # Trees
-        for fx, fy in state.trees:
+        tree_centers = self._calc_tree_centers(state.trees)
+        for tx, ty in np.array(tree_centers):
             tree_rect = self.tree_sprite.get_rect()
-            tree_rect.center = (
-                int(fx * self.render_config.scale_factor),
-                int(fy * self.render_config.scale_factor),
-            )
+            tree_rect.center = (int(tx), int(ty))
             self.screen.blit(self.tree_sprite, tree_rect)
 
         # Rocks
@@ -849,14 +924,6 @@ def main():
             obs, state, reward, done, info = game.step(state, action)
             renderer.render(state)
 
-            if state.skier_fell > 0 and state.collision_type in (1, 2):  # Nur Baum oder Stein
-                # Trigger popup on collision
-                result = show_game_over_popup(renderer.screen, render_config.scale_factor)
-                if result == "restart":
-                    running = False  # Exit inner loop to restart
-                elif result == "quit":
-                    pygame.quit()
-                    return
 
             clock.tick(60)
 
