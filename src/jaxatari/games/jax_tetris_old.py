@@ -9,9 +9,10 @@ import chex
 from jax import lax
 import os
 
-from src.jaxatari.renderers import JAXGameRenderer
-from src.jaxatari.rendering import jax_rendering_utils as jr
-from src.jaxatari.environment import JaxEnvironment, JAXAtariAction as Action
+import jaxatari.spaces as spaces
+from jaxatari.renderers import JAXGameRenderer
+from jaxatari.rendering import jax_rendering_utils as jr
+from jaxatari.environment import JaxEnvironment, JAXAtariAction as Action
 
 # Game Constants
 class TetrisConstants(NamedTuple):
