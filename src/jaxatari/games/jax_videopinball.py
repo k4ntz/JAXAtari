@@ -1538,7 +1538,7 @@ def _handle_ball_in_gutter(state: VideoPinballState, score, atari_symbols, dropp
     atari_symbols = jnp.array(0).astype(jnp.int32)
 
     bumper_multiplier = jnp.array(1).astype(jnp.int32)
-    active_targets = jnp.array([1, 1, 1, 0]).astype(jnp.int32)
+    active_targets = jnp.array([True, True, True, False]).astype(jnp.bool)
 
     return score, active_targets, atari_symbols, dropper_counter, bumper_multiplier, lives
 
@@ -1657,54 +1657,67 @@ def process_objects_hit(state: VideoPinballState, objects_hit):
 @jax.jit
 def handle_target_cooldowns(state: VideoPinballState, previous_active_targets):
 
-    # 2 second cooldown after hitting all targets until they respawn
-    target_cooldown, active_targets, increase_bm = jax.lax.cond(
+    targets_are_inactive = jnp.logical_and(
+        jnp.logical_not(previous_active_targets[0]),
         jnp.logical_and(
-            jnp.logical_and(previous_active_targets[0] == 0, state.target_cooldown == -1),
-            jnp.logical_and(previous_active_targets[1] == 0, previous_active_targets[2] == 0)
-        ),
-        lambda cd, a: (60, jnp.array([True, True, True, a[3]]).astype(jnp.bool), True),
-        lambda cd, a: (cd, a, False),
-        state.target_cooldown, previous_active_targets)
+            jnp.logical_not(previous_active_targets[1]),
+            jnp.logical_not(previous_active_targets[2])
+        )
+    )
+
+    # Start 2 second cooldown after hitting all targets until they respawn
+    target_cooldown, increase_bm = jax.lax.cond(
+        jnp.logical_and(targets_are_inactive, state.target_cooldown == -1),
+        lambda cd: (jnp.array(60).astype(jnp.int32), True),
+        lambda cd: (cd, False),
+        state.target_cooldown)
 
     # Increase Bumper multiplier if all targets got hit
-    bumper_multiplier = jax.lax.cond(jnp.logical_and(increase_bm, state.bumper_multiplier < 9),
-                                           lambda s: s + 1,
-                                           lambda s: s,
-                                           operand=state.bumper_multiplier)
+    bumper_multiplier = jax.lax.cond(
+        jnp.logical_and(increase_bm, state.bumper_multiplier < 9),
+       lambda s: s + 1,
+       lambda s: s,
+       operand=state.bumper_multiplier)
 
     # count down the cooldown timer
-    target_cooldown = jax.lax.cond(
-        jnp.logical_and(
-            jnp.logical_and(active_targets[0] == 0, target_cooldown != -1),
-            jnp.logical_and(active_targets[1] == 0, active_targets[2] == 0)
-        ),
+    target_cooldown = jax.lax.cond(jnp.logical_and(targets_are_inactive, target_cooldown != -1),
         lambda s: s - 1,
         lambda s: s,
         operand=target_cooldown)
 
+
+    # After the cooldown, respawn the targets
+    target_cooldown, active_targets = jax.lax.cond(
+        jnp.logical_and(targets_are_inactive, target_cooldown == 0),
+        lambda tc, pat: (jnp.array(-1).astype(jnp.int32), jnp.array([True, True, True, pat[3]]).astype(jnp.bool)),
+        lambda tc, pat: (tc, pat),
+        target_cooldown, previous_active_targets)
+
+
     # count down the despawn cooldown timer
-    special_target_cooldown = jax.lax.cond(jnp.logical_and(active_targets[3] > 0, state.ball_in_play),
-                                           lambda s: s - 1,
-                                           lambda s: s,
-                                           operand=state.special_target_cooldown)
+    special_target_cooldown = jax.lax.cond(
+        jnp.logical_and(state.special_target_cooldown > 0, state.ball_in_play),
+       lambda s: s - 1,
+       lambda s: s,
+       operand=state.special_target_cooldown)
 
     # count up the respawn cooldown timer
-    special_target_cooldown = jax.lax.cond(jnp.logical_and(active_targets[3] < -1, state.ball_in_play),
-                                           lambda s: s + 1,
-                                           lambda s: s,
-                                           operand=special_target_cooldown)
+    special_target_cooldown = jax.lax.cond(
+        jnp.logical_and(special_target_cooldown < -1, state.ball_in_play),
+       lambda s: s + 1,
+       lambda s: s,
+       operand=special_target_cooldown)
 
     # despawn the special target
     special_target_cooldown, active_targets = jax.lax.cond(
-        jnp.logical_and(active_targets[3] == 0, state.ball_in_play),
+        jnp.logical_and(special_target_cooldown == 0, state.ball_in_play),
         lambda cd, a: (cd - 600, a.at[3].set(False)),  # Check how the real cooldown works
         lambda cd, a: (cd, a),
         special_target_cooldown, active_targets)
 
     # spawn the special target
     special_target_cooldown, active_targets = jax.lax.cond(
-        jnp.logical_and(active_targets[3] == -1, state.ball_in_play),
+        jnp.logical_and(special_target_cooldown == -1, state.ball_in_play),
         lambda cd, a: (cd + 181, a.at[3].set(True)),
         lambda cd, a: (cd, a),
         special_target_cooldown, active_targets)
@@ -1796,7 +1809,7 @@ class JaxVideoPinball(
             bumper_multiplier=jnp.array(1).astype(jnp.int32),
             active_targets=jnp.array([True, True, True, False]).astype(jnp.bool),
             target_cooldown=jnp.array(-1).astype(jnp.int32),
-            special_target_cooldown=jnp.array(120).astype(jnp.int32),
+            special_target_cooldown=jnp.array(-120).astype(jnp.int32),
             atari_symbols=jnp.array(0).astype(jnp.int32),
             dropper_counter=jnp.array(1).astype(jnp.int32),
             step_counter=jnp.array(0).astype(jnp.int32),
