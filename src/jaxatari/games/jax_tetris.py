@@ -5,12 +5,28 @@ import jax.lax
 import jax.numpy as jnp
 import chex
 
-import jaxatari.spaces as spaces
-from jaxatari.renderers import JAXGameRenderer
-from jaxatari.rendering import jax_rendering_utils as jr
-from jaxatari.environment import JaxEnvironment, JAXAtariAction as Action
+import src.jaxatari.spaces as spaces
+from src.jaxatari.renderers import JAXGameRenderer
+from src.jaxatari.rendering import jax_rendering_utils as jr
+from src.jaxatari.environment import JaxEnvironment, JAXAtariAction as Action
 
 #TODO: Constants
+class TetrisConstants(NamedTuple):
+    BOARD_WIDTH: int = 10
+    BOARD_HEIGHT: int = 22
+    BOARD_X: int = 21  # left margin
+    BOARD_Y: int = 27  # top margin
+    BOARD_PADDING: int = 2
+    CELL_WIDTH: int = 3
+    CELL_HEIGHT: int = 7
+    DIGIT_X: int = 95
+    DIGIT_Y: int = 27
+    # Pygame window dimensions
+    WINDOW_WIDTH: int = 160 * 3
+    WINDOW_HEIGHT: int = 210 * 3
+    WIDTH: int = 160
+    HEIGHT: int = 210
+    FPS: int = 10
 
 # Tetris pieces
 TETROMINOS = jnp.array([
@@ -238,29 +254,125 @@ class JaxTetris(JaxEnvironment[TetrisState, TetrisObservation, TetrisInfo]):
     def _get_done(self, state: TetrisState) -> bool:
         #TODO
 
-def load_sprites():
-    """
-    Load all sprites required for Tetris rendering.
-    """
-    #TODO
 
 class TetrisRenderer(JAXGameRenderer):
-    """
-    JAX-based Tetris game renderer, optimized with JIT compilation.
-    """
+    def __init__(self, consts: TetrisConstants = None):
+        super().__init__()
+        self.consts = consts or TetrisConstants()
+        (
+            self.SPRITE_BG,
+            self.SPRITE_BOARD,
+            self.SCORE_DIGIT_SPRITES,
+            self.SPRITE_ROW_COLORS,
+        ) = self.load_sprites()
 
-    def __init__(self):
-        #TODO
+    def load_sprites(self):
+        """Load all sprites required for Tetris rendering."""
+        MODULE_DIR = os.path.dirname(os.path.abspath(__file__))
 
-    @partial(jax.jit, static_argnums=(0,))
+        # Load sprites
+        bg = jr.loadFrame(os.path.join(MODULE_DIR, "sprites/tetris/background.npy"), transpose=True)
+        board = jr.loadFrame(os.path.join(MODULE_DIR, "sprites/tetris/board.npy"), transpose=True)
+
+        # Convert all sprites to the expected format (add frame dimension)
+        SPRITE_BG = jnp.expand_dims(bg, axis=0)
+        SPRITE_BOARD = jnp.expand_dims(board, axis=0)
+
+        # Load digits for scores
+        SCORE_DIGIT_SPRITES = jr.load_and_pad_digits(
+            os.path.join(MODULE_DIR, "sprites/tetris/score/score_{}.npy"),
+            num_chars=10,
+        )
+
+        # Colors for tetris pieces on the board
+        row_squares = []
+        for i in range(22):  # assuming 22 rows
+            sprite = jr.loadFrame(os.path.join(MODULE_DIR, f"sprites/tetris/height_colors/h_{i}.npy"))
+            row_squares.append(sprite)
+
+        SPRITE_ROW_COLORS = jnp.stack(row_squares, axis=0)  # Shape: (22, H, W, 4)
+
+        return (
+            SPRITE_BG,
+            SPRITE_BOARD,
+            SCORE_DIGIT_SPRITES,
+            SPRITE_ROW_COLORS
+        )
+
     def render(self, state):
-        """
-            Renders the current game state using JAX operations.
+        raster = jr.create_initial_frame(width=160, height=210)
 
-            Args:
-                state: A PongState object containing the current game state.
+        frame_bg = jr.get_sprite_frame(self.SPRITE_BG, 0)
+        raster = jr.render_at(raster, 0, 0, frame_bg)
 
-            Returns:
-                A JAX array representing the rendered frame.
-        """
-        #TODO
+        frame_board = jr.get_sprite_frame(self.SPRITE_BOARD, 0)
+        raster = jr.render_at(raster, self.BOARD_X, self.BOARD_Y, frame_board)
+
+        board = state.board
+
+        num_rows = board.shape[0] # 22
+        num_cols = board.shape[1] # 10
+
+        def render_board_row(row_idx, raster):
+            row = board[row_idx]
+            sprite = self.SPRITE_ROW_COLORS[row_idx % len(self.SPRITE_ROW_COLORS)]
+
+            def render_col(col_idx, raster):
+                val = row[col_idx]
+
+                def draw_sprite(r):
+                    x = self.BOARD_X + self.BOARD_PADDING + col_idx * (self.CELL_WIDTH + 1)
+                    y = self.BOARD_Y + row_idx * (self.CELL_HEIGHT + 1)
+                    return jr.render_at(r, x, y, sprite)
+
+                return jax.lax.cond(jnp.equal(val, 1), draw_sprite, lambda r: r, raster)
+
+            return jax.lax.fori_loop(0, num_cols, render_col, raster)
+
+        raster = jax.lax.fori_loop(0, num_rows, render_board_row, raster)
+
+        #render current falling piece using row sprites
+        piece = self.get_piece_shape(int(state.current_piece), int(state.current_rotation))  # shape (4, 4)
+        pos_y, pos_x = state.current_position  # shape (2,)
+
+        def render_piece_cell(i, raster):
+            y = i // 4
+            x = i % 4
+
+            val = piece[y, x]
+
+            def draw_piece(r):
+                board_y = pos_y + y
+                board_x = pos_x + x
+
+                in_bounds_y = jnp.logical_and(board_y >= 0, board_y < num_rows)
+                in_bounds_x = jnp.logical_and(board_x >= 0, board_x < num_cols)
+                in_bounds = jnp.logical_and(in_bounds_y, in_bounds_x)
+
+                def render_pixel(r):
+                    sprite = self.SPRITE_ROW_COLORS[board_y % len(self.SPRITE_ROW_COLORS)]
+                    px = self.BOARD_X + self.BOARD_PADDING + board_x * (self.CELL_WIDTH + 1)
+                    py = self.BOARD_Y + board_y * (self.CELL_HEIGHT + 1)
+                    return jr.render_at(r, px, py, sprite)
+
+                return jax.lax.cond(in_bounds, render_pixel, lambda r: r, r)
+
+            return jax.lax.cond(val == 1, draw_piece, lambda r: r, raster)
+
+        raster = jax.lax.fori_loop(0, 16, render_piece_cell, raster)
+
+
+        # get score digits with zero-padding (always 4 digits)
+        score_digits = jr.int_to_digits(state.score, max_digits=4)
+        raster = jr.render_label_selective(
+            raster,
+            95,  # x position for the most left digit
+            27,  # y position
+            score_digits,
+            self.SCORE_DIGIT_SPRITES,
+            start_index=0,
+            num_to_render=4,
+            spacing=16  # each digit offset by 16 px
+        )
+
+        return raster
