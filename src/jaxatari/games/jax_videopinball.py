@@ -985,6 +985,7 @@ def _reset_ball(state: VideoPinballState):
     return BALL_START_X, BALL_START_Y, jnp.array(0.0), jnp.array(0.0)
 
 
+@jax.jit
 def _handle_ball_in_gutter(state: VideoPinballState, score, atari_symbols, dropper_counter):
     lives = jax.lax.cond(
         atari_symbols < 4,
@@ -1062,21 +1063,21 @@ def process_objects_hit(state: VideoPinballState, objects_hit):
     # Make hit targets disappear
     active_targets = jax.lax.cond(
         objects_hit[3],
-        lambda s: jnp.array([0, s[1], s[2], s[3]]).astype(jnp.int32),
+        lambda s: jnp.array([False, s[1], s[2], s[3]]).astype(jnp.bool),
         lambda s: s,
         operand=active_targets,
     )
 
     active_targets = jax.lax.cond(
         objects_hit[4],
-        lambda s: jnp.array([s[0], 0, s[2], s[3]]).astype(jnp.int32),
+        lambda s: jnp.array([s[0], False, s[2], s[3]]).astype(jnp.bool),
         lambda s: s,
         operand=active_targets,
     )
 
     active_targets = jax.lax.cond(
         objects_hit[5],
-        lambda s: jnp.array([s[0], s[1], 0, s[3]]).astype(jnp.int32),
+        lambda s: jnp.array([s[0], s[1], False, s[3]]).astype(jnp.bool),
         lambda s: s,
         operand=active_targets,
     )
@@ -1085,7 +1086,7 @@ def process_objects_hit(state: VideoPinballState, objects_hit):
     score += jnp.where(objects_hit[6],1100,0)
     active_targets = jax.lax.cond(
         objects_hit[6],
-        lambda s: jnp.array([s[0], s[1], s[2], 0]).astype(jnp.int32),
+        lambda s: jnp.array([s[0], s[1], s[2], False]).astype(jnp.bool),
         lambda s: s,
         operand=active_targets,
     )
@@ -1125,7 +1126,7 @@ def handle_target_cooldowns(state: VideoPinballState, previous_active_targets):
             jnp.logical_and(previous_active_targets[0] == 0, state.target_cooldown == -1),
             jnp.logical_and(previous_active_targets[1] == 0, previous_active_targets[2] == 0)
         ),
-        lambda cd, a: (60, jnp.array([1, 1, 1, a[3]]).astype(jnp.int32), True),
+        lambda cd, a: (60, jnp.array([True, True, True, a[3]]).astype(jnp.bool), True),
         lambda cd, a: (cd, a, False),
         state.target_cooldown, previous_active_targets)
 
@@ -1160,14 +1161,14 @@ def handle_target_cooldowns(state: VideoPinballState, previous_active_targets):
     # despawn the special target
     special_target_cooldown, active_targets = jax.lax.cond(
         jnp.logical_and(active_targets[3] == 0, state.ball_in_play),
-        lambda cd, a: (cd - 600, a.at[3].set(0)),  # Check how the real cooldown works
+        lambda cd, a: (cd - 600, a.at[3].set(False)),  # Check how the real cooldown works
         lambda cd, a: (cd, a),
         special_target_cooldown, active_targets)
 
     # spawn the special target
     special_target_cooldown, active_targets = jax.lax.cond(
         jnp.logical_and(active_targets[3] == -1, state.ball_in_play),
-        lambda cd, a: (cd + 181, a.at[3].set(1)),
+        lambda cd, a: (cd + 181, a.at[3].set(True)),
         lambda cd, a: (cd, a),
         special_target_cooldown, active_targets)
 
@@ -1175,7 +1176,7 @@ def handle_target_cooldowns(state: VideoPinballState, previous_active_targets):
     return active_targets, target_cooldown, special_target_cooldown, bumper_multiplier
 
 
-
+@jax.jit
 def _split_integer(number: jnp.ndarray, max_digits: int = 6) -> jnp.ndarray:
     """
     Splits an integer into a JAX array of its individual digits.
@@ -1256,7 +1257,7 @@ class JaxVideoPinball(
             score=jnp.array(0).astype(jnp.int32),
             lives=jnp.array(1).astype(jnp.int32),
             bumper_multiplier=jnp.array(1).astype(jnp.int32),
-            active_targets=jnp.array([1, 1, 1, 0]).astype(jnp.int32),
+            active_targets=jnp.array([True, True, True, False]).astype(jnp.bool),
             target_cooldown=jnp.array(-1).astype(jnp.int32),
             special_target_cooldown=jnp.array(120).astype(jnp.int32),
             atari_symbols=jnp.array(0).astype(jnp.int32),
