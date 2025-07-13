@@ -1,6 +1,7 @@
 # Author: Nil Erdal
 # Author: Emir Tavukcu
 # Author: Fanwei Kong
+from functools import partial
 
 import jax
 import jax.numpy as jnp
@@ -111,23 +112,49 @@ class JaxTetris(JaxEnvironment[TetrisState, TetrisObservation, TetrisInfo, Tetri
         ]
         self.obs_size = 3 * 4 + 1 + 1
 
-    def reset(self, rng_key: jax.random.PRNGKey) -> TetrisObservation:
+    def reset(self, rng_key: jax.random.PRNGKey) -> Tuple[TetrisObservation, TetrisState]:
+        """
         self.rng_key = rng_key
         self.state = self.init_state(self.rng_key)
         return self._get_observation()
+        """
+        rng_key, piece_key, next_piece_key, pos_key = jax.random.split(rng_key, 4)
 
+        current_piece = jax.random.randint(piece_key, shape=(), minval=0, maxval=3, dtype=jnp.int32)
+        next_piece = jax.random.randint(next_piece_key, shape=(), minval=0, maxval=3, dtype=jnp.int32)
+
+        start_x = 6  #TODO: new Generate position
+        current_position = jnp.array([start_x, 0], dtype=jnp.int32)
+        board = jnp.zeros((self.consts.BOARD_HEIGHT, self.consts.BOARD_WIDTH), dtype=jnp.int32)
+
+        state = TetrisState(
+            board=board,
+            current_piece=current_piece,
+            current_position=current_position,
+            current_rotation=jnp.array(0).astype(jnp.int32),
+            next_piece=next_piece,
+            score=jnp.array(0).astype(jnp.int32),
+            is_game_over=jnp.array(False),
+            rng_key=rng_key
+        )
+        initial_obs = self._get_observation(state)
+
+        return initial_obs, state
+
+    @partial(jax.jit, static_argnums=(0,))
     def step(self, action: jnp.ndarray, rotate: jnp.bool_) -> Tuple[TetrisState, TetrisObservation, jnp.float_, jnp.bool_, TetrisInfo]:
         self.state, reward, done, info = self.tetris_step(self.state, action, rotate)
         obs = self._get_observation()
         return self.state, obs, reward, done, info
 
-    def _get_observation(self) -> TetrisObservation:
+    @partial(jax.jit, static_argnums=(0,))
+    def _get_observation(self, state: TetrisState) -> TetrisObservation:
         return TetrisObservation(
-            board=self.state.board,
-            current_piece=self.state.current_piece,
-            current_position=self.state.current_position,
-            current_rotation=self.state.current_rotation,
-            next_piece=self.state.next_piece
+            board=state.board,
+            current_piece=state.current_piece,
+            current_position=state.current_position,
+            current_rotation=state.current_rotation,
+            next_piece=state.next_piece,
         )
 
     def init_state(self, rng_key):
@@ -141,7 +168,7 @@ class JaxTetris(JaxEnvironment[TetrisState, TetrisObservation, TetrisInfo, Tetri
             TetrisState: The initial game state containing an empty board, current piece,
                          position, rotation, next piece, score, game over flag, and RNG key.
         """
-        board = jnp.zeros((self.BOARD_HEIGHT, self.BOARD_WIDTH), dtype=jnp.int32)
+        board = jnp.zeros((TetrisConstants.BOARD_HEIGHT, TetrisConstants.BOARD_WIDTH), dtype=jnp.int32)
         piece_type, pos, rot, rng_key = self.spawn_piece(rng_key)
         next_piece, _, _, rng_key = self.spawn_piece(rng_key)
         return TetrisState(board, piece_type, pos, rot, next_piece, jnp.array(0), jnp.array(False), rng_key)
@@ -401,7 +428,7 @@ class TetrisRenderer(JAXGameRenderer):
         raster = jr.render_at(raster, 0, 0, frame_bg)
 
         frame_board = jr.get_sprite_frame(self.SPRITE_BOARD, 0)
-        raster = jr.render_at(raster, self.BOARD_X, self.BOARD_Y, frame_board)
+        raster = jr.render_at(raster, 21, 27, frame_board)
 
         board = state.board
 
@@ -416,8 +443,8 @@ class TetrisRenderer(JAXGameRenderer):
                 val = row[col_idx]
 
                 def draw_sprite(r):
-                    x = self.BOARD_X + self.BOARD_PADDING + col_idx * (self.CELL_WIDTH + 1)
-                    y = self.BOARD_Y + row_idx * (self.CELL_HEIGHT + 1)
+                    x = 21 + 2 + col_idx * (3 + 1)
+                    y = 27 + row_idx * (7 + 1)
                     return jr.render_at(r, x, y, sprite)
 
                 return jax.lax.cond(jnp.equal(val, 1), draw_sprite, lambda r: r, raster)
@@ -427,7 +454,13 @@ class TetrisRenderer(JAXGameRenderer):
         raster = jax.lax.fori_loop(0, num_rows, render_board_row, raster)
 
         #render current falling piece using row sprites
-        piece = self.get_piece_shape(int(state.current_piece), int(state.current_rotation))  # shape (4, 4)
+        #piece = self.get_piece_shape(int(state.current_piece), int(state.current_rotation))  # shape (4, 4)
+        piece = jnp.array([
+            [0, 0, 0, 0],
+            [0, 1, 1, 0],
+            [0, 1, 1, 0],
+            [0, 0, 0, 0]
+        ], dtype=jnp.int32)
         pos_y, pos_x = state.current_position  # shape (2,)
 
         def render_piece_cell(i, raster):
@@ -446,8 +479,8 @@ class TetrisRenderer(JAXGameRenderer):
 
                 def render_pixel(r):
                     sprite = self.SPRITE_ROW_COLORS[board_y % len(self.SPRITE_ROW_COLORS)]
-                    px = self.BOARD_X + self.BOARD_PADDING + board_x * (self.CELL_WIDTH + 1)
-                    py = self.BOARD_Y + board_y * (self.CELL_HEIGHT + 1)
+                    px = 21 + 2 + board_x * (3 + 1)
+                    py = + board_y * (7 + 1)
                     return jr.render_at(r, px, py, sprite)
 
                 return jax.lax.cond(in_bounds, render_pixel, lambda r: r, r)
