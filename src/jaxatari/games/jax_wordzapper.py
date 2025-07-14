@@ -38,8 +38,8 @@ SCALING_FACTOR = 3
 WINDOW_WIDTH = 160 * 3
 WINDOW_HEIGHT = 210 * 3
 
-MIN_BOUND = (0,0)
-MAX_BOUND = (WIDTH, HEIGHT)
+MIN_BOUND = (10, 56)
+MAX_BOUND = (134, 135)
 
 X_BORDERS = (0, 160)
 
@@ -397,7 +397,7 @@ def player_step(
 
     player_y = jnp.where(
         player_y < MIN_BOUND[1],
-        0,
+        MIN_BOUND[1],  # Clamp to min player bound
         jnp.where(player_y > MAX_BOUND[1], MAX_BOUND[1], player_y),
     )
 
