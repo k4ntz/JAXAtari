@@ -68,6 +68,7 @@ class BerzerkState(NamedTuple):
     rng: chex.PRNGKey
     score: chex.Array
     animation_counter: chex.Array
+    enemy_animation_counter: chex.Array
     
 class BerzerkObservation(NamedTuple):
     player: chex.Array
@@ -369,6 +370,7 @@ class JaxBerzerk(JaxEnvironment[BerzerkState, BerzerkObservation, BerzerkInfo, B
         last_dir = jnp.array([0.0, -1.0])  # default = up
         score = jnp.array(0, dtype=jnp.int32)
         animation_counter = jnp.array(0, dtype=jnp.int32)
+        enemy_animation_counter = jnp.zeros((self.consts.NUM_ENEMIES,), dtype=jnp.int32)
         state = BerzerkState(player_pos=pos, 
                              lives=lives, 
                              bullets=bullets, bullet_dirs=bullet_dirs, 
@@ -384,7 +386,8 @@ class JaxBerzerk(JaxEnvironment[BerzerkState, BerzerkObservation, BerzerkInfo, B
                              last_dir=last_dir, 
                              rng=rng, 
                              score=score, 
-                             animation_counter=animation_counter)
+                             animation_counter=animation_counter,
+                             enemy_animation_counter=enemy_animation_counter)
         return self._get_observation(state), state
 
     @partial(jax.jit, static_argnums=0)
@@ -415,7 +418,6 @@ class JaxBerzerk(JaxEnvironment[BerzerkState, BerzerkObservation, BerzerkInfo, B
             overlap_x = (left_a < right_b) & (right_a > left_b)
             overlap_y = (top_a < bottom_b) & (bottom_a > top_b)
             return overlap_x & overlap_y
-
 
         def object_hits_enemy(object_pos, object_size, enemy_pos):
             object_left   = object_pos[0]
@@ -453,6 +455,13 @@ class JaxBerzerk(JaxEnvironment[BerzerkState, BerzerkObservation, BerzerkInfo, B
         updated_enemy_pos, updated_enemy_axis, updated_enemy_dir = self.update_enemies(
             new_pos, state.enemy_pos, state.enemy_move_axis, state.enemy_move_dir,
             enemy_rng, state.enemy_move_prob
+        )
+
+        enemy_moving = updated_enemy_axis != -1
+        enemy_animation_counter = jnp.where(
+            enemy_moving,
+            state.enemy_animation_counter + 1,
+            jnp.zeros_like(state.enemy_animation_counter)
         )
 
         # Only move living enemies
@@ -683,7 +692,8 @@ class JaxBerzerk(JaxEnvironment[BerzerkState, BerzerkObservation, BerzerkInfo, B
             last_dir=move_dir,
             rng=rng,
             score=score_after,
-            animation_counter=animation_counter
+            animation_counter=animation_counter,
+            enemy_animation_counter=enemy_animation_counter
         )
 
         # New level if exit reached
@@ -711,7 +721,8 @@ class JaxBerzerk(JaxEnvironment[BerzerkState, BerzerkObservation, BerzerkInfo, B
             last_dir=jnp.array([0.0, -1.0], dtype=jnp.float32),
             rng=rng,
             score=score_after,
-            animation_counter=jnp.zeros_like(state.animation_counter)
+            animation_counter=jnp.zeros_like(state.animation_counter),
+            enemy_animation_counter=jnp.zeros_like(state.enemy_animation_counter)
         )
 
         _, reset_state = self.reset(rng)
@@ -784,7 +795,7 @@ class BerzerkRenderer(JAXGameRenderer):
         # Sprites to load
         sprite_names = [
             'player_idle', 'player_move_1', 'player_move_2',
-            'enemy_idle_1', 'level_outer_walls',
+            'enemy_idle_1', 'enemy_move_horizontal_1', 'enemy_move_horizontal_2','level_outer_walls',
             'bullet_horizontal', 'bullet_vertical'
         ]
         for name in sprite_names:
@@ -822,11 +833,6 @@ class BerzerkRenderer(JAXGameRenderer):
         wall_sprite = jr.get_sprite_frame(self.sprites['level_outer_walls'], 0)
         raster = jr.render_at(raster, self.consts.WALL_OFFSET[0], self.consts.WALL_OFFSET[1], wall_sprite)
 
-        # Draw enemies
-        enemy_sprite = jr.get_sprite_frame(self.sprites['enemy_idle_1'], 0)
-
-        for i in range(state.enemy_pos.shape[0]):
-            raster = jr.render_at(raster, state.enemy_pos[i][0], state.enemy_pos[i][1], enemy_sprite)
 
         # Draw bullets
         for i in range(state.bullets.shape[0]):
@@ -909,6 +915,54 @@ class BerzerkRenderer(JAXGameRenderer):
 
         player_sprite = get_player_sprite()
         raster = jr.render_at(raster, state.player_pos[0], state.player_pos[1], jr.get_sprite_frame(player_sprite, 0))
+
+
+        def get_enemy_sprite(i):
+            counter = state.enemy_animation_counter[i]
+
+            return jax.lax.cond(
+                counter == 0,
+                lambda: self.sprites["enemy_idle_1"],
+                lambda: jax.lax.switch(
+                    (counter - 1) % 28,
+                    [
+                        lambda: self.sprites["enemy_move_horizontal_1"],
+                        lambda: self.sprites["enemy_move_horizontal_1"],
+                        lambda: self.sprites["enemy_move_horizontal_1"],
+                        lambda: self.sprites["enemy_move_horizontal_1"],
+                        lambda: self.sprites["enemy_move_horizontal_1"],
+                        lambda: self.sprites["enemy_move_horizontal_1"],
+                        lambda: self.sprites["enemy_move_horizontal_1"],
+                        lambda: self.sprites["enemy_move_horizontal_1"],
+                        lambda: self.sprites["enemy_move_horizontal_1"],
+                        lambda: self.sprites["enemy_move_horizontal_1"],
+                        lambda: self.sprites["enemy_move_horizontal_1"],
+                        lambda: self.sprites["enemy_move_horizontal_1"],
+                        lambda: self.sprites["enemy_move_horizontal_1"],
+                        lambda: self.sprites["enemy_move_horizontal_1"],
+                        lambda: self.sprites["enemy_move_horizontal_2"],
+                        lambda: self.sprites["enemy_move_horizontal_2"],
+                        lambda: self.sprites["enemy_move_horizontal_2"],
+                        lambda: self.sprites["enemy_move_horizontal_2"],
+                        lambda: self.sprites["enemy_move_horizontal_2"],
+                        lambda: self.sprites["enemy_move_horizontal_2"],
+                        lambda: self.sprites["enemy_move_horizontal_2"],
+                        lambda: self.sprites["enemy_move_horizontal_2"],
+                        lambda: self.sprites["enemy_move_horizontal_2"],
+                        lambda: self.sprites["enemy_move_horizontal_2"],
+                        lambda: self.sprites["enemy_move_horizontal_2"],
+                        lambda: self.sprites["enemy_move_horizontal_2"],
+                        
+                        ]
+                    
+                )
+            )
+
+        for i in range(state.enemy_pos.shape[0]):
+            sprite = get_enemy_sprite(i)
+            raster = jr.render_at(raster, state.enemy_pos[i][0], state.enemy_pos[i][1], jr.get_sprite_frame(sprite, 0))
+
+
 
         # Draw score
         score_spacing = 8  # Spacing between digits 
