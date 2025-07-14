@@ -572,17 +572,41 @@ def player_movement(state: RiverraidState, action: Action) -> RiverraidState:
         jnp.array([action == Action.LEFT, action == Action.LEFTFIRE])
     )
 
-    new_velocity = state.player_velocity + (press_right * 0.2) - (press_left * 0.2)
-    new_velocity = jnp.clip(new_velocity, -3, 3)
+    new_velocity = jax.lax.cond(
+        (press_left == 0) & (press_right == 0),
+        lambda state: jnp.array(0, dtype=state.player_velocity.dtype),
+        lambda state: state.player_velocity + (press_right * 0.1) - (press_left * 0.1),
+        operand=state
+    )
+
+    new_velocity = jax.lax.cond(press_right == 0,
+        lambda state: jnp.clip(new_velocity, -3, 0),
+        lambda state: jnp.clip(new_velocity, 0, 3),
+        operand=state
+    )
+
     new_x = state.player_x + new_velocity
 
-    player_state = jax.lax.cond(jnp.logical_or((new_x <= state.river_left[SCREEN_HEIGHT - 30] + 1, new_x >= state.river_right[SCREEN_HEIGHT - 30] - 8)),
+    # check collision with river banks -> invoke death
+    player_state = jax.lax.cond(jnp.logical_or(new_x <= state.river_left[SCREEN_HEIGHT - 30] + 1, new_x >= state.river_right[SCREEN_HEIGHT - 30] - 8),
                  lambda state: jnp.array(1),
                  lambda state: state.player_state,
                  operand=state)
 
-    # remove this line when death is implemented
-    new_x = jnp.clip(new_x, state.river_left[SCREEN_HEIGHT - 30] + 1, state.river_right[SCREEN_HEIGHT - 30] - 8)
+    # check collision with island -> invoke death
+    player_state = jax.lax.cond(
+        jnp.logical_and(
+            state.river_inner_left[SCREEN_HEIGHT - 30] >= 0,
+            jnp.logical_and(
+                new_x >= state.river_inner_left[SCREEN_HEIGHT - 30] - 8,
+                new_x <= state.river_inner_right[SCREEN_HEIGHT - 30] + 1
+            )
+        ),
+        lambda state: jnp.array(1),
+        lambda state: player_state,
+        operand=state
+    )
+
     return state._replace(player_x=new_x,
                           player_velocity=new_velocity,
                           player_state=player_state)
@@ -655,9 +679,9 @@ class JaxRiverraid(JaxEnvironment):
                                segment_transition_state=jnp.array(0),
                                segment_straigt_counter=jnp.array(8),
                                dam_position= jnp.full((SCREEN_HEIGHT,), -1, dtype=jnp.int32),
-                               player_x= jnp.array(SCREEN_WIDTH // 2 - 2),
+                               player_x= jnp.array(SCREEN_WIDTH // 2 - 2, dtype=jnp.float32),
                                player_y=jnp.array(SCREEN_HEIGHT - 40),
-                               player_velocity=jnp.array(0),
+                               player_velocity=jnp.array(0, dtype=jnp.float32),
                                player_direction=jnp.array(1),
                                player_state= jnp.array(0)
                                )
@@ -680,15 +704,15 @@ class JaxRiverraid(JaxEnvironment):
 
         def respawn(state: RiverraidState) -> RiverraidState:
             jax.debug.print("YOU DIED GIT GUD")
-            new_state = state._replace(player_state = jnp.array(0))
-            return new_state
+            #new_state = state._replace(player_state = jnp.array(0, dtype=state.player_state.dtype))
+            return state
 
         jax.debug.print("new step \n")
         new_state = state._replace(turn_step=state.turn_step + 1)
         new_state = jax.lax.cond(state.player_state == 0,
                                  lambda state: player_alive(state),
                                  lambda state: respawn(state),
-                                 Operand=new_state)
+                                 operand=new_state)
 
 
 
