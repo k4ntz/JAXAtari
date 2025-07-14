@@ -4,77 +4,39 @@ from typing import NamedTuple, Tuple
 import jax.lax
 import jax.numpy as jnp
 import chex
-import pygame
-import jaxatari.spaces as spaces
 
-from jaxatari.renderers import AtraJaxisRenderer
-from jaxatari.rendering import atraJaxis as aj
+import jaxatari.spaces as spaces
+from jaxatari.renderers import JAXGameRenderer
+from jaxatari.rendering import jax_rendering_utils as jr
 from jaxatari.environment import JaxEnvironment, JAXAtariAction as Action
 
-# Constants for game environment
-MAX_SPEED = 12
-BALL_SPEED = jnp.array([-1, 1])  # Ball speed in x and y direction
-ENEMY_STEP_SIZE = 2
-WIDTH = 160
-HEIGHT = 210
-
-# Constants for ball physics
-BASE_BALL_SPEED = 1
-BALL_MAX_SPEED = 4  # Maximum ball speed cap
-
-# constants for paddle speed influence
-MIN_BALL_SPEED = 1
-
-PLAYER_ACCELERATION = jnp.array([6, 3, 1, -1, 1, -1, 0, 0, 1, 0, -1, 0, 1])
-
-BALL_START_X = jnp.array(78)
-BALL_START_Y = jnp.array(115)
-
-# Background color and object colors
-BACKGROUND_COLOR = 144, 72, 17
-PLAYER_COLOR = 92, 186, 92
-ENEMY_COLOR = 213, 130, 74
-BALL_COLOR = 236, 236, 236  # White ball
-WALL_COLOR = 236, 236, 236  # White walls
-SCORE_COLOR = 236, 236, 236  # White score
-
-# Player and enemy paddle positions
-PLAYER_X = 140
-ENEMY_X = 16
-
-# Object sizes (width, height)
-PLAYER_SIZE = (4, 16)
-BALL_SIZE = (2, 4)
-ENEMY_SIZE = (4, 16)
-WALL_TOP_Y = 24
-WALL_TOP_HEIGHT = 10
-WALL_BOTTOM_Y = 194
-WALL_BOTTOM_HEIGHT = 16
-
-# Pygame window dimensions
-WINDOW_WIDTH = 160 * 3
-WINDOW_HEIGHT = 210 * 3
-
-def get_human_action() -> chex.Array:
-    """
-    Records if UP or DOWN is being pressed and returns the corresponding action.
-
-    Returns:
-        action: int, action taken by the player (LEFT, RIGHT, FIRE, LEFTFIRE, RIGHTFIRE, NOOP).
-    """
-    keys = pygame.key.get_pressed()
-    if keys[pygame.K_a] and keys[pygame.K_SPACE]:
-        return jnp.array(Action.LEFTFIRE)
-    elif keys[pygame.K_d] and keys[pygame.K_SPACE]:
-        return jnp.array(Action.RIGHTFIRE)
-    elif keys[pygame.K_a]:
-        return jnp.array(Action.LEFT)
-    elif keys[pygame.K_d]:
-        return jnp.array(Action.RIGHT)
-    elif keys[pygame.K_SPACE]:
-        return jnp.array(Action.FIRE)
-    else:
-        return jnp.array(Action.NOOP)
+class PongConstants(NamedTuple):
+    MAX_SPEED: int = 12
+    BALL_SPEED: chex.Array = jnp.array([-1, 1])
+    ENEMY_STEP_SIZE: int = 2
+    WIDTH: int = 160
+    HEIGHT: int = 210
+    BASE_BALL_SPEED: int = 1
+    BALL_MAX_SPEED: int = 4
+    MIN_BALL_SPEED: int = 1
+    PLAYER_ACCELERATION: chex.Array = jnp.array([6, 3, 1, -1, 1, -1, 0, 0, 1, 0, -1, 0, 1])
+    BALL_START_X: chex.Array = jnp.array(78)
+    BALL_START_Y: chex.Array = jnp.array(115)
+    BACKGROUND_COLOR: Tuple[int, int, int] = (144, 72, 17)
+    PLAYER_COLOR: Tuple[int, int, int] = (92, 186, 92)
+    ENEMY_COLOR: Tuple[int, int, int] = (213, 130, 74)
+    BALL_COLOR: Tuple[int, int, int] = (236, 236, 236)
+    WALL_COLOR: Tuple[int, int, int] = (236, 236, 236)
+    SCORE_COLOR: Tuple[int, int, int] = (236, 236, 236)
+    PLAYER_X: int = 140
+    ENEMY_X: int = 16
+    PLAYER_SIZE: Tuple[int, int] = (4, 16)
+    BALL_SIZE: Tuple[int, int] = (2, 4)
+    ENEMY_SIZE: Tuple[int, int] = (4, 16)
+    WALL_TOP_Y: int = 24
+    WALL_TOP_HEIGHT: int = 10
+    WALL_BOTTOM_Y: int = 194
+    WALL_BOTTOM_HEIGHT: int = 16
 
 
 # immutable state container
@@ -108,279 +70,12 @@ class PongInfo(NamedTuple):
     time: jnp.ndarray
     all_rewards: chex.Array
 
-@jax.jit
-def player_step(
-    state_player_y, state_player_speed, acceleration_counter, action: chex.Array
-):
-    # check if one of the buttons is pressed
-    up = jnp.logical_or(action == Action.LEFT, action == Action.LEFTFIRE)
-    down = jnp.logical_or(action == Action.RIGHT, action == Action.RIGHTFIRE)
 
-    # get the current acceleration
-    acceleration = PLAYER_ACCELERATION[acceleration_counter]
-
-    # perform the deceleration checks first, since in the base game
-    # on a direction switch the player is first decelerated and then accelerated in the new direction
-    # check if the player touches a wall
-    touches_wall = jnp.logical_or(
-        state_player_y < WALL_TOP_Y,
-        state_player_y + PLAYER_SIZE[1] > WALL_BOTTOM_Y,
-    )
-
-    player_speed = state_player_speed
-
-    # if no button was clicked OR the paddle touched a wall and there is a speed, apply deceleration (halfing the speed every tick)
-    player_speed = jax.lax.cond(
-        jnp.logical_or(jnp.logical_not(jnp.logical_or(up, down)), touches_wall),
-        lambda s: jnp.round(s / 2).astype(jnp.int32),
-        lambda s: s,
-        operand=player_speed,
-    )
-
-    direction_change_up = jnp.logical_and(up, state_player_speed > 0)
-    # also apply deceleration if the direction is changed
-    player_speed = jax.lax.cond(
-        direction_change_up,
-        lambda s: 0,
-        lambda s: s,
-        operand=player_speed,
-    )
-    direction_change_down = jnp.logical_and(down, state_player_speed < 0)
-
-    player_speed = jax.lax.cond(
-        direction_change_down,
-        lambda s: 0,
-        lambda s: s,
-        operand=player_speed,
-    )
-
-    # reset the acceleration counter on a direction change
-    direction_change = jnp.logical_or(direction_change_up, direction_change_down)
-    acceleration_counter = jax.lax.cond(
-        direction_change,
-        lambda _: 0,
-        lambda s: s,
-        operand=acceleration_counter,
-    )
-
-    # add the current acceleration to the speed (positive if up, negative if down)
-    player_speed = jax.lax.cond(
-        up,
-        lambda s: jnp.maximum(s - acceleration, -MAX_SPEED),
-        lambda s: s,
-        operand=player_speed,
-    )
-
-    player_speed = jax.lax.cond(
-        down,
-        lambda s: jnp.minimum(s + acceleration, MAX_SPEED),
-        lambda s: s,
-        operand=player_speed,
-    )
-
-    # reset or increment the acceleration counter here
-    new_acceleration_counter = jax.lax.cond(
-        jnp.logical_or(up, down),  # If moving in either direction
-        lambda s: jnp.minimum(s + 1, 15),  # Increment counter
-        lambda s: 0,  # Reset if no movement
-        operand=acceleration_counter,
-    )
-
-    # calculate the new player position
-    player_y = jnp.clip(
-        state_player_y + player_speed,
-        WALL_TOP_Y + WALL_TOP_HEIGHT - 10,
-        WALL_BOTTOM_Y - 4,
-    )
-    return player_y, player_speed, new_acceleration_counter
-
-
-def ball_step(
-    state: PongState,
-    action,
-):
-    # update the balls position
-    ball_x = state.ball_x + state.ball_vel_x
-    ball_y = state.ball_y + state.ball_vel_y
-
-    wall_bounce = jnp.logical_or(
-        ball_y <= WALL_TOP_Y + WALL_TOP_HEIGHT - BALL_SIZE[1],
-        ball_y >= WALL_BOTTOM_Y,
-    )
-    # calculate bounces on top and bottom walls
-    ball_vel_y = jnp.where(wall_bounce, -state.ball_vel_y, state.ball_vel_y)
-
-    # Calculate paddle hits
-    player_paddle_hit = jnp.logical_and(
-        jnp.logical_and(PLAYER_X <= ball_x, ball_x <= PLAYER_X + PLAYER_SIZE[0]),
-        state.ball_vel_x > 0,
-    )
-
-    player_paddle_hit = jnp.logical_and(
-        player_paddle_hit,
-        jnp.logical_and(
-            state.player_y - BALL_SIZE[1] <= ball_y,
-            ball_y <= state.player_y + PLAYER_SIZE[1] + BALL_SIZE[1],
-        ),
-    )
-
-    enemy_paddle_hit = jnp.logical_and(
-        jnp.logical_and(ENEMY_X <= ball_x, ball_x <= ENEMY_X + ENEMY_SIZE[0] - 1),
-        state.ball_vel_x < 0,
-    )
-
-    enemy_paddle_hit = jnp.logical_and(
-        enemy_paddle_hit,
-        jnp.logical_and(
-            state.enemy_y - BALL_SIZE[1] <= ball_y,
-            ball_y <= state.enemy_y + ENEMY_SIZE[1] + BALL_SIZE[1],
-        ),
-    )
-
-    paddle_hit = jnp.logical_or(player_paddle_hit, enemy_paddle_hit)
-
-    # Calculate hit position on paddle (divide paddle into 5 equal sections)
-    section_height = PLAYER_SIZE[1] / 5  # Each section is 1/5 of paddle height
-
-    # Calculate relative hit position (int between -2 and 2, which is also the relevant y speed depending on the hit paddle)
-    hit_position = jnp.where(
-        paddle_hit,
-        jnp.where(
-            player_paddle_hit,
-            # For player paddle
-            jnp.where(
-                ball_y < state.player_y + section_height,
-                -2.0,  # Top section -> strong up
-                jnp.where(
-                    ball_y < state.player_y + 2 * section_height,
-                    -1.0,  # Upper middle -> medium up
-                    jnp.where(
-                        ball_y < state.player_y + 3 * section_height,
-                        0.0,  # Center section -> straight
-                        jnp.where(
-                            ball_y < state.player_y + 4 * section_height,
-                            1.0,  # Lower middle -> medium down
-                            2.0,  # Bottom section -> strong down
-                        ),
-                    ),
-                ),
-            ),
-            # For enemy paddle (same logic)
-            jnp.where(
-                ball_y < state.enemy_y + section_height,
-                -2.0,
-                jnp.where(
-                    ball_y < state.enemy_y + 2 * section_height,
-                    -1.0,
-                    jnp.where(
-                        ball_y < state.enemy_y + 3 * section_height,
-                        0.0,
-                        jnp.where(
-                            ball_y < state.enemy_y + 4 * section_height,
-                            1.0,
-                            2.0,
-                        ),
-                    ),
-                ),
-            ),
-        ),
-        0.0,
-    )
-
-    # Get relevant paddle speed based on which paddle was hit
-    paddle_speed = jnp.where(
-        player_paddle_hit,
-        state.player_speed,
-        jnp.where(
-            enemy_paddle_hit,
-            state.enemy_speed,
-            0.0,
-        ),
-    )
-
-    # Calculate new y velocity
-    ball_vel_y = jnp.where(paddle_hit, hit_position, ball_vel_y)
-
-    # calculate the new ball_vel_x position depending on 1. if a boost was hit or 2. the ball was hit with max velocity by the player (eval tbd?)
-    # first check the paddle
-    boost_triggered = jnp.logical_and(
-        player_paddle_hit,
-        jnp.logical_or(
-            jnp.logical_or(action == Action.LEFTFIRE, action == Action.RIGHTFIRE),
-            action == Action.FIRE,
-        ),
-    )
-    # and check if the paddle hit the ball at MAX speed
-    player_max_hit = jnp.logical_and(player_paddle_hit, state.player_speed == MAX_SPEED)
-    # if any of the two is true, increase/decrease the ball_vel_x by 1 based on current direction
-    ball_vel_x = jnp.where(
-        jnp.logical_or(boost_triggered, player_max_hit),
-        state.ball_vel_x
-        + jnp.sign(state.ball_vel_x),  # Add/subtract 1 based on direction
-        state.ball_vel_x,
-    )
-
-    # invert ball_vel_x if a paddle was hit
-    ball_vel_x = jnp.where(
-        paddle_hit,
-        -ball_vel_x,
-        ball_vel_x,
-    )
-
-    return ball_x, ball_y, ball_vel_x, ball_vel_y
-
-
-def enemy_step(state, step_counter, ball_y, ball_speed_y):
-    # Skip movement every 8th step
-    should_move = step_counter % 8 != 0
-
-    # Calculate direction (-1 for up, 0 for stay, 1 for down)
-    direction = jnp.sign(ball_y - state.enemy_y)
-
-    # Calculate new position
-    new_y = state.enemy_y + (direction * ENEMY_STEP_SIZE).astype(jnp.int32)
-    # Return either new position or current position based on should_move
-    return jax.lax.cond(
-        should_move, lambda _: new_y, lambda _: state.enemy_y, operand=None
-    )
-
-@jax.jit
-def _reset_ball_after_goal(
-    state_and_goal: Tuple[PongState, bool]
-) -> Tuple[chex.Array, chex.Array, chex.Array, chex.Array]:
-    """
-    Determines new ball position and velocity after a goal.
-    Args:
-        state_and_goal: Tuple of (current state, whether goal was scored on right side)
-    Returns:
-        Tuple of (ball_x, ball_y, ball_vel_x, ball_vel_y) as int32 arrays
-    """
-    state, scored_right = state_and_goal
-
-    # Determine Y velocity direction based on ball position
-    ball_vel_y = jnp.where(
-        state.ball_y > BALL_START_Y,
-        1,  # Ball was in lower half, go down
-        -1,  # Ball was in upper half, go up
-    ).astype(jnp.int32)
-
-    # X velocity is always towards the side that just got scored on
-    ball_vel_x = jnp.where(
-        scored_right, 1, -1  # Ball moves right  # Ball moves left
-    ).astype(jnp.int32)
-
-    return (
-        BALL_START_X.astype(jnp.int32),
-        BALL_START_Y.astype(jnp.int32),
-        ball_vel_x.astype(jnp.int32),
-        ball_vel_y.astype(jnp.int32),
-    )
-
-
-class JaxPong(JaxEnvironment[PongState, PongObservation, PongInfo]):
-    def __init__(self, reward_funcs: list[callable]=None):
-        super().__init__()
-        self.renderer = PongRenderer()
+class JaxPong(JaxEnvironment[PongState, PongObservation, PongInfo, PongConstants]):
+    def __init__(self, consts: PongConstants = None, reward_funcs: list[callable]=None):
+        consts = consts or PongConstants()
+        super().__init__(consts)
+        self.renderer = PongRenderer(self.consts)
         if reward_funcs is not None:
             reward_funcs = tuple(reward_funcs)
         self.reward_funcs = reward_funcs
@@ -392,14 +87,230 @@ class JaxPong(JaxEnvironment[PongState, PongObservation, PongInfo]):
             Action.RIGHTFIRE,
             Action.LEFTFIRE,
         ]
-        self.obs_size = 3*2
+        self.obs_size = 3*4+1+1
 
+    @partial(jax.jit, static_argnums=(0,))
+    def _player_step(self, state_player_y, state_player_speed, acceleration_counter, action: chex.Array):
+        up = jnp.logical_or(action == Action.LEFT, action == Action.LEFTFIRE)
+        down = jnp.logical_or(action == Action.RIGHT, action == Action.RIGHTFIRE)
+
+        acceleration = self.consts.PLAYER_ACCELERATION[acceleration_counter]
+
+        touches_wall = jnp.logical_or(
+            state_player_y < self.consts.WALL_TOP_Y,
+            state_player_y + self.consts.PLAYER_SIZE[1] > self.consts.WALL_BOTTOM_Y,
+        )
+
+        player_speed = state_player_speed
+
+        player_speed = jax.lax.cond(
+            jnp.logical_or(jnp.logical_not(jnp.logical_or(up, down)), touches_wall),
+            lambda s: jnp.round(s / 2).astype(jnp.int32),
+            lambda s: s,
+            operand=player_speed,
+        )
+
+        direction_change_up = jnp.logical_and(up, state_player_speed > 0)
+        player_speed = jax.lax.cond(
+            direction_change_up,
+            lambda s: 0,
+            lambda s: s,
+            operand=player_speed,
+        )
+        direction_change_down = jnp.logical_and(down, state_player_speed < 0)
+
+        player_speed = jax.lax.cond(
+            direction_change_down,
+            lambda s: 0,
+            lambda s: s,
+            operand=player_speed,
+        )
+
+        direction_change = jnp.logical_or(direction_change_up, direction_change_down)
+        acceleration_counter = jax.lax.cond(
+            direction_change,
+            lambda _: 0,
+            lambda s: s,
+            operand=acceleration_counter,
+        )
+
+        player_speed = jax.lax.cond(
+            up,
+            lambda s: jnp.maximum(s - acceleration, -self.consts.MAX_SPEED),
+            lambda s: s,
+            operand=player_speed,
+        )
+
+        player_speed = jax.lax.cond(
+            down,
+            lambda s: jnp.minimum(s + acceleration, self.consts.MAX_SPEED),
+            lambda s: s,
+            operand=player_speed,
+        )
+
+        new_acceleration_counter = jax.lax.cond(
+            jnp.logical_or(up, down),
+            lambda s: jnp.minimum(s + 1, 15),
+            lambda s: 0,
+            operand=acceleration_counter,
+        )
+
+        player_y = jnp.clip(
+            state_player_y + player_speed,
+            self.consts.WALL_TOP_Y + self.consts.WALL_TOP_HEIGHT - 10,
+            self.consts.WALL_BOTTOM_Y - 4,
+        )
+        return player_y, player_speed, new_acceleration_counter
+
+    def _ball_step(self, state: PongState, action):
+        ball_x = state.ball_x + state.ball_vel_x
+        ball_y = state.ball_y + state.ball_vel_y
+
+        wall_bounce = jnp.logical_or(
+            ball_y <= self.consts.WALL_TOP_Y + self.consts.WALL_TOP_HEIGHT - self.consts.BALL_SIZE[1],
+            ball_y >= self.consts.WALL_BOTTOM_Y,
+        )
+        ball_vel_y = jnp.where(wall_bounce, -state.ball_vel_y, state.ball_vel_y)
+
+        player_paddle_hit = jnp.logical_and(
+            jnp.logical_and(self.consts.PLAYER_X <= ball_x, ball_x <= self.consts.PLAYER_X + self.consts.PLAYER_SIZE[0]),
+            state.ball_vel_x > 0,
+        )
+
+        player_paddle_hit = jnp.logical_and(
+            player_paddle_hit,
+            jnp.logical_and(
+                state.player_y - self.consts.BALL_SIZE[1] <= ball_y,
+                ball_y <= state.player_y + self.consts.PLAYER_SIZE[1] + self.consts.BALL_SIZE[1],
+            ),
+        )
+
+        enemy_paddle_hit = jnp.logical_and(
+            jnp.logical_and(self.consts.ENEMY_X <= ball_x, ball_x <= self.consts.ENEMY_X + self.consts.ENEMY_SIZE[0] - 1),
+            state.ball_vel_x < 0,
+        )
+
+        enemy_paddle_hit = jnp.logical_and(
+            enemy_paddle_hit,
+            jnp.logical_and(
+                state.enemy_y - self.consts.BALL_SIZE[1] <= ball_y,
+                ball_y <= state.enemy_y + self.consts.ENEMY_SIZE[1] + self.consts.BALL_SIZE[1],
+            ),
+        )
+
+        paddle_hit = jnp.logical_or(player_paddle_hit, enemy_paddle_hit)
+
+        section_height = self.consts.PLAYER_SIZE[1] / 5
+
+        hit_position = jnp.where(
+            paddle_hit,
+            jnp.where(
+                player_paddle_hit,
+                jnp.where(
+                    ball_y < state.player_y + section_height,
+                    -2.0,
+                    jnp.where(
+                        ball_y < state.player_y + 2 * section_height,
+                        -1.0,
+                        jnp.where(
+                            ball_y < state.player_y + 3 * section_height,
+                            0.0,
+                            jnp.where(
+                                ball_y < state.player_y + 4 * section_height,
+                                1.0,
+                                2.0,
+                            ),
+                        ),
+                    ),
+                ),
+                jnp.where(
+                    ball_y < state.enemy_y + section_height,
+                    -2.0,
+                    jnp.where(
+                        ball_y < state.enemy_y + 2 * section_height,
+                        -1.0,
+                        jnp.where(
+                            ball_y < state.enemy_y + 3 * section_height,
+                            0.0,
+                            jnp.where(
+                                ball_y < state.enemy_y + 4 * section_height,
+                                1.0,
+                                2.0,
+                            ),
+                        ),
+                    ),
+                ),
+            ),
+            0.0,
+        )
+
+        paddle_speed = jnp.where(
+            player_paddle_hit,
+            state.player_speed,
+            jnp.where(
+                enemy_paddle_hit,
+                state.enemy_speed,
+                0.0,
+            ),
+        )
+
+        ball_vel_y = jnp.where(paddle_hit, hit_position, ball_vel_y)
+
+        boost_triggered = jnp.logical_and(
+            player_paddle_hit,
+            jnp.logical_or(
+                jnp.logical_or(action == Action.LEFTFIRE, action == Action.RIGHTFIRE),
+                action == Action.FIRE,
+            ),
+        )
+        player_max_hit = jnp.logical_and(player_paddle_hit, state.player_speed == self.consts.MAX_SPEED)
+        ball_vel_x = jnp.where(
+            jnp.logical_or(boost_triggered, player_max_hit),
+            state.ball_vel_x
+            + jnp.sign(state.ball_vel_x),
+            state.ball_vel_x,
+        )
+
+        ball_vel_x = jnp.where(
+            paddle_hit,
+            -ball_vel_x,
+            ball_vel_x,
+        )
+
+        return ball_x, ball_y, ball_vel_x, ball_vel_y
+
+    def _enemy_step(self, state, step_counter, ball_y, ball_speed_y):
+        should_move = step_counter % 8 != 0
+
+        direction = jnp.sign(ball_y - state.enemy_y)
+
+        new_y = state.enemy_y + (direction * self.consts.ENEMY_STEP_SIZE).astype(jnp.int32)
+        return jax.lax.cond(
+            should_move, lambda _: new_y, lambda _: state.enemy_y, operand=None
+        )
+
+    @partial(jax.jit, static_argnums=(0,))
+    def _reset_ball_after_goal(self, state_and_goal: Tuple[PongState, bool]) -> Tuple[chex.Array, chex.Array, chex.Array, chex.Array]:
+        state, scored_right = state_and_goal
+
+        ball_vel_y = jnp.where(
+            state.ball_y > self.consts.BALL_START_Y,
+            1,
+            -1,
+        ).astype(jnp.int32)
+
+        ball_vel_x = jnp.where(
+            scored_right, 1, -1
+        ).astype(jnp.int32)
+
+        return (
+            self.consts.BALL_START_X.astype(jnp.int32),
+            self.consts.BALL_START_Y.astype(jnp.int32),
+            ball_vel_x.astype(jnp.int32),
+            ball_vel_y.astype(jnp.int32),
+        )
 
     def reset(self, key=None) -> Tuple[PongObservation, PongState]:
-        """
-        Resets the game state to the initial state.
-        Returns the initial state and the reward (i.e. 0)
-        """
         state = PongState(
             player_y=jnp.array(96).astype(jnp.int32),
             player_speed=jnp.array(0.0).astype(jnp.int32),
@@ -407,8 +318,8 @@ class JaxPong(JaxEnvironment[PongState, PongObservation, PongInfo]):
             ball_y=jnp.array(115).astype(jnp.int32),
             enemy_y=jnp.array(115).astype(jnp.int32),
             enemy_speed=jnp.array(0.0).astype(jnp.int32),
-            ball_vel_x=BALL_SPEED[0].astype(jnp.int32),
-            ball_vel_y=BALL_SPEED[1].astype(jnp.int32),
+            ball_vel_x=self.consts.BALL_SPEED[0].astype(jnp.int32),
+            ball_vel_y=self.consts.BALL_SPEED[1].astype(jnp.int32),
             player_score=jnp.array(0).astype(jnp.int32),
             enemy_score=jnp.array(0).astype(jnp.int32),
             step_counter=jnp.array(0).astype(jnp.int32),
@@ -421,9 +332,7 @@ class JaxPong(JaxEnvironment[PongState, PongObservation, PongInfo]):
 
     @partial(jax.jit, static_argnums=(0,))
     def step(self, state: PongState, action: chex.Array) -> Tuple[PongObservation, PongState, float, bool, PongInfo]:
-        # Step 1: Update player position and speed
-        # only execute player step on even steps (base implementation only moves the player every second tick)
-        new_player_y, player_speed_b, new_acceleration_counter = player_step(
+        new_player_y, player_speed_b, new_acceleration_counter = self._player_step(
             state.player_y, state.player_speed, state.acceleration_counter, action
         )
 
@@ -442,17 +351,14 @@ class JaxPong(JaxEnvironment[PongState, PongObservation, PongInfo]):
         )
         player_y = state.buffer
 
-        enemy_y = enemy_step(state, state.step_counter, state.ball_y, state.ball_y)
+        enemy_y = self._enemy_step(state, state.step_counter, state.ball_y, state.ball_y)
 
-        # Step 2: Update ball position and velocity
-        ball_x, ball_y, ball_vel_x, ball_vel_y = ball_step(state, action)
+        ball_x, ball_y, ball_vel_x, ball_vel_y = self._ball_step(state, action)
 
-        # Step 3: Score and goal detection
         player_goal = ball_x < 4
         enemy_goal = ball_x > 156
         ball_reset = jnp.logical_or(enemy_goal, player_goal)
 
-        # Step 4: Update scores
         player_score = jax.lax.cond(
             player_goal,
             lambda s: s + 1,
@@ -466,7 +372,6 @@ class JaxPong(JaxEnvironment[PongState, PongObservation, PongInfo]):
             operand=state.enemy_score,
         )
 
-        # Step 5: Reset ball if goal was scored
         current_values = (
             ball_x.astype(jnp.int32),
             ball_y.astype(jnp.int32),
@@ -475,12 +380,11 @@ class JaxPong(JaxEnvironment[PongState, PongObservation, PongInfo]):
         )
         ball_x_final, ball_y_final, ball_vel_x_final, ball_vel_y_final = jax.lax.cond(
             ball_reset,
-            lambda x: _reset_ball_after_goal((state, enemy_goal)),
+            lambda x: self._reset_ball_after_goal((state, enemy_goal)),
             lambda x: x,
             operand=current_values,
         )
 
-        # Step 6: Update step counter for game freeze after goal
         step_counter = jax.lax.cond(
             ball_reset,
             lambda s: jnp.array(0),
@@ -488,26 +392,22 @@ class JaxPong(JaxEnvironment[PongState, PongObservation, PongInfo]):
             operand=state.step_counter,
         )
 
-        # Step 7: Update enemy position and speed
-
-        # Step 8: Reset enemy position on goal
         enemy_y_final = jax.lax.cond(
             ball_reset,
-            lambda s: BALL_START_Y.astype(jnp.int32),
+            lambda s: self.consts.BALL_START_Y.astype(jnp.int32),
             lambda s: enemy_y.astype(jnp.int32),
             operand=None,
         )
 
-        # Step 9: Handle ball position during game freeze
         ball_x_final = jax.lax.cond(
             step_counter < 60,
-            lambda s: BALL_START_X.astype(jnp.int32),
+            lambda s: self.consts.BALL_START_X.astype(jnp.int32),
             lambda s: s,
             operand=ball_x_final,
         )
         ball_y_final = jax.lax.cond(
             step_counter < 60,
-            lambda s: BALL_START_Y.astype(jnp.int32),
+            lambda s: self.consts.BALL_START_Y.astype(jnp.int32),
             lambda s: s,
             operand=ball_y_final,
         )
@@ -529,7 +429,7 @@ class JaxPong(JaxEnvironment[PongState, PongObservation, PongInfo]):
         )
 
         done = self._get_done(new_state)
-        env_reward = self._get_env_reward(state, new_state)
+        env_reward = self._get_reward(state, new_state)
         all_rewards = self._get_all_reward(state, new_state)
         info = self._get_info(new_state, all_rewards)
         observation = self._get_observation(new_state)
@@ -542,15 +442,13 @@ class JaxPong(JaxEnvironment[PongState, PongObservation, PongInfo]):
 
     @partial(jax.jit, static_argnums=(0,))
     def _get_observation(self, state: PongState):
-        # create player
         player = EntityPosition(
-            x=jnp.array(PLAYER_X),
+            x=jnp.array(self.consts.PLAYER_X),
             y=state.player_y,
         )
 
-        # create enemy
         enemy = EntityPosition(
-            x=jnp.array(ENEMY_X),
+            x=jnp.array(self.consts.ENEMY_X),
             y=state.enemy_y,
         )
 
@@ -577,26 +475,9 @@ class JaxPong(JaxEnvironment[PongState, PongObservation, PongInfo]):
         )
 
     def action_space(self) -> spaces.Discrete:
-        """Returns the action space for Pong.
-        Actions are:
-        0: NOOP
-        1: FIRE
-        2: RIGHT
-        3: LEFT
-        4: RIGHTFIRE
-        5: LEFTFIRE
-        """
         return spaces.Discrete(6)
 
     def observation_space(self) -> spaces:
-        """Returns the observation space for Pong.
-        The observation contains:
-        - player: EntityPosition (x, y, width, height)
-        - enemy: EntityPosition (x, y, width, height)
-        - ball: EntityPosition (x, y, width, height)
-        - score_player: int (0-20)
-        - score_enemy: int (0-20)
-        """
         return spaces.Dict({
             "player": spaces.Dict({
                 "x": spaces.Box(low=0, high=160, shape=(), dtype=jnp.int32),
@@ -613,22 +494,19 @@ class JaxPong(JaxEnvironment[PongState, PongObservation, PongInfo]):
         })
 
     def image_space(self) -> spaces.Box:
-        """Returns the image space for Pong.
-        The image is a RGB image with shape (160, 210, 3).
-        """
         return spaces.Box(
             low=0,
             high=255,
-            shape=(160, 210, 3),
+            shape=(210, 160, 3),
             dtype=jnp.uint8
         )
 
     @partial(jax.jit, static_argnums=(0,))
-    def _get_info(self, state: PongState, all_rewards: chex.Array) -> PongInfo:
+    def _get_info(self, state: PongState, all_rewards: chex.Array = None) -> PongInfo:
         return PongInfo(time=state.step_counter, all_rewards=all_rewards)
 
     @partial(jax.jit, static_argnums=(0,))
-    def _get_env_reward(self, previous_state: PongState, state: PongState):
+    def _get_reward(self, previous_state: PongState, state: PongState):
         return (state.player_score - state.enemy_score) - (
             previous_state.player_score - previous_state.enemy_score
         )
@@ -645,52 +523,15 @@ class JaxPong(JaxEnvironment[PongState, PongObservation, PongInfo]):
     @partial(jax.jit, static_argnums=(0,))
     def _get_done(self, state: PongState) -> bool:
         return jnp.logical_or(
-            jnp.greater_equal(state.player_score, 20),
-            jnp.greater_equal(state.enemy_score, 20),
+            jnp.greater_equal(state.player_score, 21),
+            jnp.greater_equal(state.enemy_score, 21),
         )
 
 
-def load_sprites():
-    """Load all sprites required for Pong rendering."""
-    MODULE_DIR = os.path.dirname(os.path.abspath(__file__))
-
-    # Load sprites
-    player = aj.loadFrame(os.path.join(MODULE_DIR, "sprites/pong/player.npy"), transpose=True)
-    enemy = aj.loadFrame(os.path.join(MODULE_DIR, "sprites/pong/enemy.npy"), transpose=True)
-    ball = aj.loadFrame(os.path.join(MODULE_DIR, "sprites/pong/ball.npy"), transpose=True)
-
-    bg = aj.loadFrame(os.path.join(MODULE_DIR, "sprites/pong/background.npy"), transpose=True)
-
-    # Convert all sprites to the expected format (add frame dimension)
-    SPRITE_BG = jnp.expand_dims(bg, axis=0)
-    SPRITE_PLAYER = jnp.expand_dims(player, axis=0)
-    SPRITE_ENEMY = jnp.expand_dims(enemy, axis=0)
-    SPRITE_BALL = jnp.expand_dims(ball, axis=0)
-
-    # Load digits for scores
-    PLAYER_DIGIT_SPRITES = aj.load_and_pad_digits(
-        os.path.join(MODULE_DIR, "sprites/pong/player_score_{}.npy"),
-        num_chars=10,
-    )
-    ENEMY_DIGIT_SPRITES = aj.load_and_pad_digits(
-        os.path.join(MODULE_DIR, "sprites/pong/enemy_score_{}.npy"),
-        num_chars=10,
-    )
-
-    return (
-        SPRITE_BG,
-        SPRITE_PLAYER,
-        SPRITE_ENEMY,
-        SPRITE_BALL,
-        PLAYER_DIGIT_SPRITES,
-        ENEMY_DIGIT_SPRITES
-    )
-
-
-class PongRenderer(AtraJaxisRenderer):
-    """JAX-based Pong game renderer, optimized with JIT compilation."""
-
-    def __init__(self):
+class PongRenderer(JAXGameRenderer):
+    def __init__(self, consts: PongConstants = None):
+        super().__init__()
+        self.consts = consts or PongConstants()
         (
             self.SPRITE_BG,
             self.SPRITE_PLAYER,
@@ -698,72 +539,81 @@ class PongRenderer(AtraJaxisRenderer):
             self.SPRITE_BALL,
             self.PLAYER_DIGIT_SPRITES,
             self.ENEMY_DIGIT_SPRITES,
-        ) = load_sprites()
+        ) = self.load_sprites()
+
+    def load_sprites(self):
+        MODULE_DIR = os.path.dirname(os.path.abspath(__file__))
+
+        player = jr.loadFrame(os.path.join(MODULE_DIR, "sprites/pong/player.npy"))
+        enemy = jr.loadFrame(os.path.join(MODULE_DIR, "sprites/pong/enemy.npy"))
+        ball = jr.loadFrame(os.path.join(MODULE_DIR, "sprites/pong/ball.npy"))
+
+        bg = jr.loadFrame(os.path.join(MODULE_DIR, "sprites/pong/background.npy"))
+
+        SPRITE_BG = jnp.expand_dims(bg, axis=0)
+        SPRITE_PLAYER = jnp.expand_dims(player, axis=0)
+        SPRITE_ENEMY = jnp.expand_dims(enemy, axis=0)
+        SPRITE_BALL = jnp.expand_dims(ball, axis=0)
+
+        PLAYER_DIGIT_SPRITES = jr.load_and_pad_digits(
+            os.path.join(MODULE_DIR, "sprites/pong/player_score_{}.npy"),
+            num_chars=10,
+        )
+        ENEMY_DIGIT_SPRITES = jr.load_and_pad_digits(
+            os.path.join(MODULE_DIR, "sprites/pong/enemy_score_{}.npy"),
+            num_chars=10,
+        )
+
+        return (
+            SPRITE_BG,
+            SPRITE_PLAYER,
+            SPRITE_ENEMY,
+            SPRITE_BALL,
+            PLAYER_DIGIT_SPRITES,
+            ENEMY_DIGIT_SPRITES
+        )
 
     @partial(jax.jit, static_argnums=(0,))
     def render(self, state):
-        """
-        Renders the current game state using JAX operations.
+        raster = jr.create_initial_frame(width=160, height=210)
 
-        Args:
-            state: A PongState object containing the current game state.
+        frame_bg = jr.get_sprite_frame(self.SPRITE_BG, 0)
+        raster = jr.render_at(raster, 0, 0, frame_bg)
 
-        Returns:
-            A JAX array representing the rendered frame.
-        """
-        # Create empty raster with CORRECT orientation for atraJaxis framework
-        # Note: For pygame, the raster is expected to be (width, height, channels)
-        # where width corresponds to the horizontal dimension of the screen
-        raster = jnp.zeros((WIDTH, HEIGHT, 3))
+        frame_player = jr.get_sprite_frame(self.SPRITE_PLAYER, 0)
+        raster = jr.render_at(raster, self.consts.PLAYER_X, state.player_y, frame_player)
 
-        # Render background - (0, 0) is top-left corner
-        frame_bg = aj.get_sprite_frame(self.SPRITE_BG, 0)
-        raster = aj.render_at(raster, 0, 0, frame_bg)
+        frame_enemy = jr.get_sprite_frame(self.SPRITE_ENEMY, 0)
+        raster = jr.render_at(raster, self.consts.ENEMY_X, state.enemy_y, frame_enemy)
 
-        # Render player paddle - IMPORTANT: Swap x and y coordinates
-        # render_at takes (raster, y, x, sprite) but we need to swap them due to transposition
-        frame_player = aj.get_sprite_frame(self.SPRITE_PLAYER, 0)
-        raster = aj.render_at(raster, PLAYER_X, state.player_y, frame_player)
+        frame_ball = jr.get_sprite_frame(self.SPRITE_BALL, 0)
+        raster = jr.render_at(raster, state.ball_x, state.ball_y, frame_ball)
 
-        # Render enemy paddle - same swap needed
-        frame_enemy = aj.get_sprite_frame(self.SPRITE_ENEMY, 0)
-        raster = aj.render_at(raster, ENEMY_X,state.enemy_y, frame_enemy)
+        # Direct wall rendering with HWC indexing
+        wall_color = jnp.array(self.consts.WALL_COLOR, dtype=jnp.uint8)
+        top_wall_y_start = self.consts.WALL_TOP_Y
+        top_wall_y_end = self.consts.WALL_TOP_Y + self.consts.WALL_TOP_HEIGHT
+        raster = raster.at[top_wall_y_start:top_wall_y_end, :, :].set(wall_color)
 
-        # Render ball - ball position is (ball_x, ball_y) but needs to be swapped
-        frame_ball = aj.get_sprite_frame(self.SPRITE_BALL, 0)
-        raster = aj.render_at(raster, state.ball_x, state.ball_y, frame_ball)
+        bottom_wall_y_start = self.consts.WALL_BOTTOM_Y
+        bottom_wall_y_end = self.consts.WALL_BOTTOM_Y + self.consts.WALL_BOTTOM_HEIGHT
+        raster = raster.at[bottom_wall_y_start:bottom_wall_y_end, :, :].set(wall_color)
 
-        wall_color = jnp.array(WALL_COLOR, dtype=jnp.uint8)
-        # Top Wall: Full width (x=0 to WIDTH), y from WALL_TOP_Y to WALL_TOP_Y + WALL_TOP_HEIGHT
-        top_wall_y_start = WALL_TOP_Y
-        top_wall_y_end = WALL_TOP_Y + WALL_TOP_HEIGHT
-        raster = raster.at[:, top_wall_y_start:top_wall_y_end, :].set(wall_color)
+        player_score_digits = jr.int_to_digits(state.player_score, max_digits=2)
+        enemy_score_digits = jr.int_to_digits(state.enemy_score, max_digits=2)
 
-        # Bottom Wall: Full width, y from WALL_BOTTOM_Y to WALL_BOTTOM_Y + WALL_BOTTOM_HEIGHT
-        bottom_wall_y_start = WALL_BOTTOM_Y
-        bottom_wall_y_end = WALL_BOTTOM_Y + WALL_BOTTOM_HEIGHT
-        raster = raster.at[:, bottom_wall_y_start:bottom_wall_y_end, :].set(wall_color)
-
-        # 1. Get digit arrays (always 2 digits)
-        player_score_digits = aj.int_to_digits(state.player_score, max_digits=2)
-        enemy_score_digits = aj.int_to_digits(state.enemy_score, max_digits=2)
-
-        # 2. Determine parameters for player score rendering using jax.lax.select
         is_player_single_digit = state.player_score < 10
-        player_start_index = jax.lax.select(is_player_single_digit, 1, 0) # Start at index 1 if single, 0 if double
-        player_num_to_render = jax.lax.select(is_player_single_digit, 1, 2) # Render 1 digit if single, 2 if double
-        # Adjust X position: If single digit, center it slightly by moving right by half the spacing
+        player_start_index = jax.lax.select(is_player_single_digit, 1, 0)
+        player_num_to_render = jax.lax.select(is_player_single_digit, 1, 2)
         player_render_x = jax.lax.select(is_player_single_digit,
                                          120 + 16 // 2,
                                          120)
 
-        # 3. Render player score using the selective renderer
-        raster = aj.render_label_selective(raster, player_render_x, 3,
+        raster = jr.render_label_selective(raster, player_render_x, 3,
                                             player_score_digits, self.PLAYER_DIGIT_SPRITES,
                                             player_start_index, player_num_to_render,
                                             spacing=16)
 
-        # 4. Determine parameters for enemy score rendering
         is_enemy_single_digit = state.enemy_score < 10
         enemy_start_index = jax.lax.select(is_enemy_single_digit, 1, 0)
         enemy_num_to_render = jax.lax.select(is_enemy_single_digit, 1, 2)
@@ -771,67 +621,9 @@ class PongRenderer(AtraJaxisRenderer):
                                         10 + 16 // 2,
                                         10)
 
-        # 5. Render enemy score
-        raster = aj.render_label_selective(raster, enemy_render_x, 3,
+        raster = jr.render_label_selective(raster, enemy_render_x, 3,
                                            enemy_score_digits, self.ENEMY_DIGIT_SPRITES,
                                            enemy_start_index, enemy_num_to_render,
                                            spacing=16)
 
         return raster
-
-
-if __name__ == "__main__":
-    # Initialize Pygame
-    pygame.init()
-    screen = pygame.display.set_mode((WINDOW_WIDTH, WINDOW_HEIGHT))
-    pygame.display.set_caption("Pong Game")
-    clock = pygame.time.Clock()
-
-    game = JaxPong()
-
-    # Create the JAX renderer
-    renderer = PongRenderer()
-
-    # Get jitted functions
-    jitted_step = jax.jit(game.step)
-    jitted_reset = jax.jit(game.reset)
-
-    obs, curr_state = jitted_reset()
-
-    # Game loop
-    running = True
-    frame_by_frame = False
-    frameskip = 1
-    counter = 1
-
-    while running:
-        for event in pygame.event.get():
-            if event.type == pygame.QUIT:
-                running = False
-            elif event.type == pygame.KEYDOWN:
-                if event.key == pygame.K_f:
-                    frame_by_frame = not frame_by_frame
-            elif event.type == pygame.KEYDOWN or (
-                    event.type == pygame.KEYUP and event.key == pygame.K_n
-            ):
-                if event.key == pygame.K_n and frame_by_frame:
-                    if counter % frameskip == 0:
-                        action = get_human_action()
-                        obs, curr_state, reward, done, info = jitted_step(
-                            curr_state, action
-                        )
-
-        if not frame_by_frame:
-            if counter % frameskip == 0:
-                action = get_human_action()
-                obs, curr_state, reward, done, info = jitted_step(curr_state, action)
-
-        # Render and display
-        raster = renderer.render(curr_state)
-
-        aj.update_pygame(screen, raster, 3, WIDTH, HEIGHT)
-
-        counter += 1
-        clock.tick(60)
-
-    pygame.quit()
