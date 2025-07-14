@@ -3,15 +3,16 @@ import numpy as np
 import jax
 import jax.numpy as jnp
 from jax import random, jit
-from typing import Tuple, Dict, Any
+from typing import Tuple, Dict, Any, NamedTuple
 import chex
 from flax import struct
 import sys
 
 from jaxatari.environment import JaxEnvironment
+from jaxatari.renderers import JAXGameRenderer
 
 
-class GameConstants:
+class BeamRiderConstants(NamedTuple):
     """Container for all game constants"""
 
     # Screen dimensions
@@ -84,7 +85,7 @@ class Projectile:
     x: float
     y: float
     active: bool
-    speed: float = GameConstants.PROJECTILE_SPEED
+    speed: float = BeamRiderConstants.PROJECTILE_SPEED
 
 
 @struct.dataclass
@@ -94,7 +95,7 @@ class Enemy:
     y: float
     beam_position: int  # Which beam the enemy is on (0-4)
     active: bool
-    speed: float = GameConstants.ENEMY_SPEED
+    speed: float = BeamRiderConstants.ENEMY_SPEED
     enemy_type: int = 0  # Different enemy types for variety
 
 
@@ -116,14 +117,14 @@ class BeamRiderState:
     # Timing and spawning
     frame_count: int
     enemy_spawn_timer: int
-    enemy_spawn_interval: int = GameConstants.ENEMY_SPAWN_INTERVAL
+    enemy_spawn_interval: int = BeamRiderConstants.ENEMY_SPAWN_INTERVAL
 
 
-class BeamRiderEnv:
+class BeamRiderEnv(JaxEnvironment[BeamRiderState, jnp.ndarray, dict, BeamRiderConstants]):
     """BeamRider environment following JAXAtari structure"""
 
     def __init__(self):
-        self.constants = GameConstants()
+        self.constants = BeamRiderConstants()
         self.screen_width = self.constants.SCREEN_WIDTH
         self.screen_height = self.constants.SCREEN_HEIGHT
         self.action_space_size = 6  # 0: no-op, 1: left, 2: right, 3: fire, 4: left+fire, 5: right+fire
@@ -403,11 +404,11 @@ class BeamRiderEnv:
         return state.replace(game_over=game_over)
 
 
-class BeamRiderRenderer:
+class BeamRiderRenderer(JAXGameRenderer):
     """Renderer for BeamRider game"""
 
     def __init__(self):
-        self.constants = GameConstants()
+        self.constants = BeamRiderConstants()
         self.screen_width = self.constants.SCREEN_WIDTH
         self.screen_height = self.constants.SCREEN_HEIGHT
         self.beam_positions = self.constants.get_beam_positions()
@@ -610,8 +611,8 @@ class BeamRiderPygameRenderer:
     def __init__(self, scale=3):
         pygame.init()
         self.scale = scale
-        self.screen_width = GameConstants.SCREEN_WIDTH * scale
-        self.screen_height = GameConstants.SCREEN_HEIGHT * scale
+        self.screen_width = BeamRiderConstants.SCREEN_WIDTH * scale
+        self.screen_height = BeamRiderConstants.SCREEN_HEIGHT * scale
 
         self.screen = pygame.display.set_mode((self.screen_width, self.screen_height))
         pygame.display.set_caption("BeamRider - JAX Implementation")
