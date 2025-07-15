@@ -250,10 +250,10 @@ class SceneObject:
 
 # Instantiate a SceneObject like this:
 INVISIBLE_BLOCK_SCENE_OBJECT = SceneObject(
-    hit_box_height=2,  # type: ignore
-    hit_box_width=INNER_WALL_THICKNESS,  # type: ignore
-    hit_box_x_offset=INVISIBLE_BLOCK_LEFT_X_OFFSET,  # type: ignore
-    hit_box_y_offset=INVISIBLE_BLOCK_TOP_Y_OFFSET,  # type: ignore
+    hit_box_height=jnp.array(2),  # type: ignore
+    hit_box_width=jnp.array(INNER_WALL_THICKNESS),  # type: ignore
+    hit_box_x_offset=jnp.array(INVISIBLE_BLOCK_LEFT_X_OFFSET),  # type: ignore
+    hit_box_y_offset=jnp.array(INVISIBLE_BLOCK_TOP_Y_OFFSET),  # type: ignore
     reflecting=jnp.array(1),  # type: ignore
     score_type=jnp.array(0),  # type: ignore
 )
@@ -261,52 +261,52 @@ INVISIBLE_BLOCK_SCENE_OBJECT = SceneObject(
 # Wall Scene Objects
 
 TOP_WALL_SCENE_OBJECT = SceneObject(
-    hit_box_height=OUTER_WALL_THICKNESS,  # type: ignore
-    hit_box_width=160,  # type: ignore
-    hit_box_x_offset=TOP_WALL_LEFT_X_OFFSET,  # type: ignore
-    hit_box_y_offset=TOP_WALL_TOP_Y_OFFSET,  # type: ignore
+    hit_box_height=jnp.array(OUTER_WALL_THICKNESS),  # type: ignore
+    hit_box_width=jnp.array(160),  # type: ignore
+    hit_box_x_offset=jnp.array(TOP_WALL_LEFT_X_OFFSET),  # type: ignore
+    hit_box_y_offset=jnp.array(TOP_WALL_TOP_Y_OFFSET),  # type: ignore
     reflecting=jnp.array(1),  # type: ignore
     score_type=jnp.array(0),  # type: ignore
 )
 BOTTOM_WALL_SCENE_OBJECT = SceneObject(
-    hit_box_height=OUTER_WALL_THICKNESS,  # type: ignore
-    hit_box_width=160,  # type: ignore
-    hit_box_x_offset=BOTTOM_WALL_LEFT_X_OFFSET,  # type: ignore
-    hit_box_y_offset=BOTTOM_WALL_TOP_Y_OFFSET,  # type: ignore
+    hit_box_height=jnp.array(OUTER_WALL_THICKNESS),  # type: ignore
+    hit_box_width=jnp.array(160),  # type: ignore
+    hit_box_x_offset=jnp.array(BOTTOM_WALL_LEFT_X_OFFSET),  # type: ignore
+    hit_box_y_offset=jnp.array(BOTTOM_WALL_TOP_Y_OFFSET),  # type: ignore
     reflecting=jnp.array(1),  # type: ignore
     score_type=jnp.array(0),  # type: ignore
 )
 LEFT_WALL_SCENE_OBJECT = SceneObject(
-    hit_box_height=176,  # type: ignore
-    hit_box_width=OUTER_WALL_THICKNESS,  # type: ignore
-    hit_box_x_offset=TOP_WALL_LEFT_X_OFFSET,  # type: ignore
-    hit_box_y_offset=TOP_WALL_TOP_Y_OFFSET,  # type: ignore
+    hit_box_height=jnp.array(176),  # type: ignore
+    hit_box_width=jnp.array(OUTER_WALL_THICKNESS),  # type: ignore
+    hit_box_x_offset=jnp.array(TOP_WALL_LEFT_X_OFFSET),  # type: ignore
+    hit_box_y_offset=jnp.array(TOP_WALL_TOP_Y_OFFSET),  # type: ignore
     reflecting=jnp.array(1),  # type: ignore
     score_type=jnp.array(0),  # type: ignore
 )
 RIGHT_WALL_SCENE_OBJECT = SceneObject(
-    hit_box_height=176,  # type: ignore
-    hit_box_width=OUTER_WALL_THICKNESS,  # type: ignore
-    hit_box_x_offset=RIGHT_WALL_LEFT_X_OFFSET,  # type: ignore
-    hit_box_y_offset=TOP_WALL_TOP_Y_OFFSET,  # type: ignore
+    hit_box_height=jnp.array(176),  # type: ignore
+    hit_box_width=jnp.array(OUTER_WALL_THICKNESS),  # type: ignore
+    hit_box_x_offset=jnp.array(RIGHT_WALL_LEFT_X_OFFSET),  # type: ignore
+    hit_box_y_offset=jnp.array(TOP_WALL_TOP_Y_OFFSET),  # type: ignore
     reflecting=jnp.array(1),  # type: ignore
     score_type=jnp.array(0),  # type: ignore
 )
 
 LEFT_INNER_WALL_SCENE_OBJECT = SceneObject(
-    hit_box_height=135,  # type: ignore
-    hit_box_width=INNER_WALL_THICKNESS,  # type: ignore
-    hit_box_x_offset=LEFT_INNER_WALL_TOP_X_OFFSET,  # type: ignore
-    hit_box_y_offset=INNER_WALL_TOP_Y_OFFSET,  # type: ignore
+    hit_box_height=jnp.array(135),  # type: ignore
+    hit_box_width=jnp.array(INNER_WALL_THICKNESS),  # type: ignore
+    hit_box_x_offset=jnp.array(LEFT_INNER_WALL_TOP_X_OFFSET),  # type: ignore
+    hit_box_y_offset=jnp.array(INNER_WALL_TOP_Y_OFFSET),  # type: ignore
     reflecting=jnp.array(1),  # type: ignore
     score_type=jnp.array(0),  # type: ignore
 )
 
 RIGHT_INNER_WALL_SCENE_OBJECT = SceneObject(
-    hit_box_height=135,  # type: ignore
-    hit_box_width=INNER_WALL_THICKNESS,  # type: ignore
-    hit_box_x_offset=RIGHT_INNER_WALL_TOP_X_OFFSET,  # type: ignore
-    hit_box_y_offset=INNER_WALL_TOP_Y_OFFSET,  # type: ignore
+    hit_box_height=jnp.array(135),  # type: ignore
+    hit_box_width=jnp.array(INNER_WALL_THICKNESS),  # type: ignore
+    hit_box_x_offset=jnp.array(RIGHT_INNER_WALL_TOP_X_OFFSET),  # type: ignore
+    hit_box_y_offset=jnp.array(INNER_WALL_TOP_Y_OFFSET),  # type: ignore
     reflecting=jnp.array(1),  # type: ignore
     score_type=jnp.array(0),  # type: ignore
 )
@@ -314,82 +314,82 @@ RIGHT_INNER_WALL_SCENE_OBJECT = SceneObject(
 # Steps (Stairway left and right) Scene Objects
 
 LEFT_QUADRUPLE_STEP_SCENE_OBJECT = SceneObject(
-    hit_box_height=4 * STEP_HEIGHT,  # type: ignore
-    hit_box_width=STEP_WIDTH,  # type: ignore
-    hit_box_x_offset=LEFT_QUADRUPLE_STEP_X_OFFSET,  # type: ignore
-    hit_box_y_offset=QUADRUPLE_STEP_Y_OFFSET,  # type: ignore
+    hit_box_height=jnp.array(4 * STEP_HEIGHT),  # type: ignore
+    hit_box_width=jnp.array(STEP_WIDTH),  # type: ignore
+    hit_box_x_offset=jnp.array(LEFT_QUADRUPLE_STEP_X_OFFSET),  # type: ignore
+    hit_box_y_offset=jnp.array(QUADRUPLE_STEP_Y_OFFSET),  # type: ignore
     reflecting=jnp.array(1),  # type: ignore
     score_type=jnp.array(0),  # type: ignore
 )
 RIGHT_QUADRUPLE_STEP_SCENE_OBJECT = SceneObject(
-    hit_box_height=4 * STEP_HEIGHT,  # type: ignore
-    hit_box_width=STEP_WIDTH,  # type: ignore
-    hit_box_x_offset=RIGHT_QUADRUPLE_STEP_X_OFFSET,  # type: ignore
-    hit_box_y_offset=QUADRUPLE_STEP_Y_OFFSET,  # type: ignore
+    hit_box_height=jnp.array(4 * STEP_HEIGHT),  # type: ignore
+    hit_box_width=jnp.array(STEP_WIDTH),  # type: ignore
+    hit_box_x_offset=jnp.array(RIGHT_QUADRUPLE_STEP_X_OFFSET),  # type: ignore
+    hit_box_y_offset=jnp.array(QUADRUPLE_STEP_Y_OFFSET),  # type: ignore
     reflecting=jnp.array(1),  # type: ignore
     score_type=jnp.array(0),  # type: ignore
 )
 LEFT_TRIPLE_STEP_SCENE_OBJECT = SceneObject(
-    hit_box_height=3 * STEP_HEIGHT,  # type: ignore
-    hit_box_width=STEP_WIDTH,  # type: ignore
-    hit_box_x_offset=LEFT_TRIPLE_STEP_X_OFFSET,  # type: ignore
-    hit_box_y_offset=TRIPLE_STEP_Y_OFFSET,  # type: ignore
+    hit_box_height=jnp.array(3 * STEP_HEIGHT),  # type: ignore
+    hit_box_width=jnp.array(STEP_WIDTH),  # type: ignore
+    hit_box_x_offset=jnp.array(LEFT_TRIPLE_STEP_X_OFFSET),  # type: ignore
+    hit_box_y_offset=jnp.array(TRIPLE_STEP_Y_OFFSET),  # type: ignore
     reflecting=jnp.array(1),  # type: ignore
     score_type=jnp.array(0),  # type: ignore
 )
 RIGHT_TRIPLE_STEP_SCENE_OBJECT = SceneObject(
-    hit_box_height=3 * STEP_HEIGHT,  # type: ignore
-    hit_box_width=STEP_WIDTH,  # type: ignore
-    hit_box_x_offset=RIGHT_TRIPLE_STEP_X_OFFSET,  # type: ignore
-    hit_box_y_offset=TRIPLE_STEP_Y_OFFSET,  # type: ignore
+    hit_box_height=jnp.array(3 * STEP_HEIGHT),  # type: ignore
+    hit_box_width=jnp.array(STEP_WIDTH),  # type: ignore
+    hit_box_x_offset=jnp.array(RIGHT_TRIPLE_STEP_X_OFFSET),  # type: ignore
+    hit_box_y_offset=jnp.array(TRIPLE_STEP_Y_OFFSET),  # type: ignore
     reflecting=jnp.array(1),  # type: ignore
     score_type=jnp.array(0),  # type: ignore
 )
 LEFT_DOUBLE_STEP_SCENE_OBJECT = SceneObject(
-    hit_box_height=2 * STEP_HEIGHT,  # type: ignore
-    hit_box_width=STEP_WIDTH,  # type: ignore
-    hit_box_x_offset=LEFT_DOUBLE_STEP_X_OFFSET,  # type: ignore
-    hit_box_y_offset=DOUBLE_STEP_Y_OFFSET,  # type: ignore
+    hit_box_height=jnp.array(2 * STEP_HEIGHT),  # type: ignore
+    hit_box_width=jnp.array(STEP_WIDTH),  # type: ignore
+    hit_box_x_offset=jnp.array(LEFT_DOUBLE_STEP_X_OFFSET),  # type: ignore
+    hit_box_y_offset=jnp.array(DOUBLE_STEP_Y_OFFSET),  # type: ignore
     reflecting=jnp.array(1),  # type: ignore
     score_type=jnp.array(0),  # type: ignore
 )
 RIGHT_DOUBLE_STEP_SCENE_OBJECT = SceneObject(
-    hit_box_height=2 * STEP_HEIGHT,  # type: ignore
-    hit_box_width=STEP_WIDTH,  # type: ignore
-    hit_box_x_offset=RIGHT_DOUBLE_STEP_X_OFFSET,  # type: ignore
-    hit_box_y_offset=DOUBLE_STEP_Y_OFFSET,  # type: ignore
+    hit_box_height=jnp.array(2 * STEP_HEIGHT),  # type: ignore
+    hit_box_width=jnp.array(STEP_WIDTH),  # type: ignore
+    hit_box_x_offset=jnp.array(RIGHT_DOUBLE_STEP_X_OFFSET),  # type: ignore
+    hit_box_y_offset=jnp.array(DOUBLE_STEP_Y_OFFSET),  # type: ignore
     reflecting=jnp.array(1),  # type: ignore
     score_type=jnp.array(0),  # type: ignore
 )
 LEFT_SINGLE_STEP_SCENE_OBJECT = SceneObject(
-    hit_box_height=1 * STEP_HEIGHT,  # type: ignore
-    hit_box_width=STEP_WIDTH,  # type: ignore
-    hit_box_x_offset=LEFT_SINGLE_STEP_X_OFFSET,  # type: ignore
-    hit_box_y_offset=SINGLE_STEP_Y_OFFSET,  # type: ignore
+    hit_box_height=jnp.array(1 * STEP_HEIGHT),  # type: ignore
+    hit_box_width=jnp.array(STEP_WIDTH),  # type: ignore
+    hit_box_x_offset=jnp.array(LEFT_SINGLE_STEP_X_OFFSET),  # type: ignore
+    hit_box_y_offset=jnp.array(SINGLE_STEP_Y_OFFSET),  # type: ignore
     reflecting=jnp.array(1),  # type: ignore
     score_type=jnp.array(0),  # type: ignore
 )
 RIGHT_SINGLE_STEP_SCENE_OBJECT = SceneObject(
-    hit_box_height=1 * STEP_HEIGHT,  # type: ignore
-    hit_box_width=STEP_WIDTH,  # type: ignore
-    hit_box_x_offset=RIGHT_SINGLE_STEP_X_OFFSET,  # type: ignore
-    hit_box_y_offset=SINGLE_STEP_Y_OFFSET,  # type: ignore
+    hit_box_height=jnp.array(1 * STEP_HEIGHT),  # type: ignore
+    hit_box_width=jnp.array(STEP_WIDTH),  # type: ignore
+    hit_box_x_offset=jnp.array(RIGHT_SINGLE_STEP_X_OFFSET),  # type: ignore
+    hit_box_y_offset=jnp.array(SINGLE_STEP_Y_OFFSET),  # type: ignore
     reflecting=jnp.array(1),  # type: ignore
     score_type=jnp.array(0),  # type: ignore
 )
 TOP_LEFT_STEP_SCENE_OBJECT = SceneObject(
-    hit_box_height=1 * STEP_HEIGHT,  # type: ignore
-    hit_box_width=1 * STEP_WIDTH,  # type: ignore
-    hit_box_x_offset=8,  # type: ignore
-    hit_box_y_offset=24,  # type: ignore
+    hit_box_height=jnp.array(1 * STEP_HEIGHT),  # type: ignore
+    hit_box_width=jnp.array(1 * STEP_WIDTH),  # type: ignore
+    hit_box_x_offset=jnp.array(8),  # type: ignore
+    hit_box_y_offset=jnp.array(24),  # type: ignore
     reflecting=jnp.array(1),  # type: ignore
     score_type=jnp.array(0),  # type: ignore
 )
 TOP_RIGHT_STEP_SCENE_OBJECT = SceneObject(
-    hit_box_height=1 * STEP_HEIGHT,  # type: ignore
-    hit_box_width=1 * STEP_WIDTH,  # type: ignore
-    hit_box_x_offset=148,  # type: ignore
-    hit_box_y_offset=24,  # type: ignore
+    hit_box_height=jnp.array(1 * STEP_HEIGHT),  # type: ignore
+    hit_box_width=jnp.array(1 * STEP_WIDTH),  # type: ignore
+    hit_box_x_offset=jnp.array(148),  # type: ignore
+    hit_box_y_offset=jnp.array(24),  # type: ignore
     reflecting=jnp.array(1),  # type: ignore
     score_type=jnp.array(0),  # type: ignore
 )
@@ -397,37 +397,37 @@ TOP_RIGHT_STEP_SCENE_OBJECT = SceneObject(
 # Rollover Scene Objects
 
 LEFT_ROLLOVER_LEFT_BAR_SCENE_OBJECT = SceneObject(
-    hit_box_height=VERTICAL_BAR_HEIGHT,  # type: ignore
-    hit_box_width=VERTICAL_BAR_WIDTH,  # type: ignore
-    hit_box_x_offset=LEFT_COLUMN_X_OFFSET,  # type: ignore
-    hit_box_y_offset=TOP_ROW_Y_OFFSET,  # type: ignore
+    hit_box_height=jnp.array(VERTICAL_BAR_HEIGHT),  # type: ignore
+    hit_box_width=jnp.array(VERTICAL_BAR_WIDTH),  # type: ignore
+    hit_box_x_offset=jnp.array(LEFT_COLUMN_X_OFFSET),  # type: ignore
+    hit_box_y_offset=jnp.array(TOP_ROW_Y_OFFSET),  # type: ignore
     reflecting=jnp.array(1),  # type: ignore
     score_type=jnp.array(0),  # type: ignore
 )
 
 LEFT_ROLLOVER_RIGHT_BAR_SCENE_OBJECT = SceneObject(
-    hit_box_height=VERTICAL_BAR_HEIGHT,  # type: ignore
-    hit_box_width=VERTICAL_BAR_WIDTH,  # type: ignore
-    hit_box_x_offset=LEFT_COLUMN_X_OFFSET + ROLLOVER_BAR_DISTANCE,  # type: ignore
-    hit_box_y_offset=TOP_ROW_Y_OFFSET,  # type: ignore
+    hit_box_height=jnp.array(VERTICAL_BAR_HEIGHT),  # type: ignore
+    hit_box_width=jnp.array(VERTICAL_BAR_WIDTH),  # type: ignore
+    hit_box_x_offset=jnp.array(LEFT_COLUMN_X_OFFSET + ROLLOVER_BAR_DISTANCE),  # type: ignore
+    hit_box_y_offset=jnp.array(TOP_ROW_Y_OFFSET),  # type: ignore
     reflecting=jnp.array(1),  # type: ignore
     score_type=jnp.array(0),  # type: ignore
 )
 
 ATARI_ROLLOVER_LEFT_BAR_SCENE_OBJECT = SceneObject(
-    hit_box_height=VERTICAL_BAR_HEIGHT,  # type: ignore
-    hit_box_width=VERTICAL_BAR_WIDTH,  # type: ignore
-    hit_box_x_offset=RIGHT_COLUMN_X_OFFSET,  # type: ignore
-    hit_box_y_offset=TOP_ROW_Y_OFFSET,  # type: ignore
+    hit_box_height=jnp.array(VERTICAL_BAR_HEIGHT),  # type: ignore
+    hit_box_width=jnp.array(VERTICAL_BAR_WIDTH),  # type: ignore
+    hit_box_x_offset=jnp.array(RIGHT_COLUMN_X_OFFSET),  # type: ignore
+    hit_box_y_offset=jnp.array(TOP_ROW_Y_OFFSET),  # type: ignore
     reflecting=jnp.array(1),  # type: ignore
     score_type=jnp.array(0),  # type: ignore
 )
 
 ATARI_ROLLOVER_RIGHT_BAR_SCENE_OBJECT = SceneObject(
-    hit_box_height=VERTICAL_BAR_HEIGHT,  # type: ignore
-    hit_box_width=VERTICAL_BAR_WIDTH,  # type: ignore
-    hit_box_x_offset=RIGHT_COLUMN_X_OFFSET + ROLLOVER_BAR_DISTANCE,  # type: ignore
-    hit_box_y_offset=TOP_ROW_Y_OFFSET,  # type: ignore
+    hit_box_height=jnp.array(VERTICAL_BAR_HEIGHT),  # type: ignore
+    hit_box_width=jnp.array(VERTICAL_BAR_WIDTH),  # type: ignore
+    hit_box_x_offset=jnp.array(RIGHT_COLUMN_X_OFFSET + ROLLOVER_BAR_DISTANCE),  # type: ignore
+    hit_box_y_offset=jnp.array(TOP_ROW_Y_OFFSET),  # type: ignore
     reflecting=jnp.array(1),  # type: ignore
     score_type=jnp.array(0),  # type: ignore
 )
@@ -435,27 +435,27 @@ ATARI_ROLLOVER_RIGHT_BAR_SCENE_OBJECT = SceneObject(
 # Bumper Scene Objects
 
 TOP_BUMPER_SCENE_OBJECT = SceneObject(
-    hit_box_height=BUMPER_HEIGHT,  # type: ignore
-    hit_box_width=BUMPER_WIDTH,  # type: ignore
-    hit_box_x_offset=MIDDLE_COLUMN_X_OFFSET,  # type: ignore
-    hit_box_y_offset=TOP_ROW_Y_OFFSET,  # type: ignore
+    hit_box_height=jnp.array(BUMPER_HEIGHT),  # type: ignore
+    hit_box_width=jnp.array(BUMPER_WIDTH),  # type: ignore
+    hit_box_x_offset=jnp.array(MIDDLE_COLUMN_X_OFFSET),  # type: ignore
+    hit_box_y_offset=jnp.array(TOP_ROW_Y_OFFSET),  # type: ignore
     reflecting=jnp.array(1),  # type: ignore
     score_type=jnp.array(1),  # type: ignore
 )
 
 LEFT_BUMPER_SCENE_OBJECT = SceneObject(
-    hit_box_height=BUMPER_HEIGHT,  # type: ignore
-    hit_box_width=BUMPER_WIDTH,  # type: ignore
-    hit_box_x_offset=LEFT_COLUMN_X_OFFSET,  # type: ignore
-    hit_box_y_offset=MIDDLE_ROW_Y_OFFSET,  # type: ignore
+    hit_box_height=jnp.array(BUMPER_HEIGHT),  # type: ignore
+    hit_box_width=jnp.array(BUMPER_WIDTH),  # type: ignore
+    hit_box_x_offset=jnp.array(LEFT_COLUMN_X_OFFSET),  # type: ignore
+    hit_box_y_offset=jnp.array(MIDDLE_ROW_Y_OFFSET),  # type: ignore
     reflecting=jnp.array(1),  # type: ignore
     score_type=jnp.array(1),  # type: ignore
 )
 RIGHT_BUMPER_SCENE_OBJECT = SceneObject(
-    hit_box_height=BUMPER_HEIGHT,  # type: ignore
-    hit_box_width=BUMPER_WIDTH,  # type: ignore
-    hit_box_x_offset=RIGHT_COLUMN_X_OFFSET,  # type: ignore
-    hit_box_y_offset=MIDDLE_ROW_Y_OFFSET,  # type: ignore
+    hit_box_height=jnp.array(BUMPER_HEIGHT),  # type: ignore
+    hit_box_width=jnp.array(BUMPER_WIDTH),  # type: ignore
+    hit_box_x_offset=jnp.array(RIGHT_COLUMN_X_OFFSET),  # type: ignore
+    hit_box_y_offset=jnp.array(MIDDLE_ROW_Y_OFFSET),  # type: ignore
     reflecting=jnp.array(1),  # type: ignore
     score_type=jnp.array(1),  # type: ignore
 )
@@ -465,8 +465,8 @@ RIGHT_BUMPER_SCENE_OBJECT = SceneObject(
 # Left Spinner Bottom Position
 
 LEFT_SPINNER_BOTTOM_POSITION_JOINED_PART_SCENE_OBJECT = SceneObject(
-    hit_box_height=SPINNER_TOP_BOTTOM_LARGE_HEIGHT,  # type: ignore
-    hit_box_width=SPINNER_TOP_BOTTOM_LARGE_WIDTH,  # type: ignore
+    hit_box_height=jnp.array(SPINNER_TOP_BOTTOM_LARGE_HEIGHT),  # type: ignore
+    hit_box_width=jnp.array(SPINNER_TOP_BOTTOM_LARGE_WIDTH),  # type: ignore
     hit_box_x_offset=jnp.array(32),  # type: ignore
     hit_box_y_offset=jnp.array(100),  # type: ignore
     reflecting=jnp.array(1),  # type: ignore
@@ -474,8 +474,8 @@ LEFT_SPINNER_BOTTOM_POSITION_JOINED_PART_SCENE_OBJECT = SceneObject(
 )
 
 LEFT_SPINNER_BOTTOM_POSITION_LEFT_PART_1_SCENE_OBJECT = SceneObject(
-    hit_box_height=SPINNER_TOP_BOTTOM_SMALL_HEIGHT,  # type: ignore
-    hit_box_width=SPINNER_TOP_BOTTOM_SMALL_WIDTH,  # type: ignore
+    hit_box_height=jnp.array(SPINNER_TOP_BOTTOM_SMALL_HEIGHT),  # type: ignore
+    hit_box_width=jnp.array(SPINNER_TOP_BOTTOM_SMALL_WIDTH),  # type: ignore
     hit_box_x_offset=jnp.array(30),  # type: ignore
     hit_box_y_offset=jnp.array(94),  # type: ignore
     reflecting=jnp.array(1),  # type: ignore
@@ -483,8 +483,8 @@ LEFT_SPINNER_BOTTOM_POSITION_LEFT_PART_1_SCENE_OBJECT = SceneObject(
 )
 
 LEFT_SPINNER_BOTTOM_POSITION_LEFT_PART_2_SCENE_OBJECT = SceneObject(
-    hit_box_height=SPINNER_TOP_BOTTOM_SMALL_HEIGHT,  # type: ignore
-    hit_box_width=SPINNER_TOP_BOTTOM_SMALL_WIDTH,  # type: ignore
+    hit_box_height=jnp.array(SPINNER_TOP_BOTTOM_SMALL_HEIGHT),  # type: ignore
+    hit_box_width=jnp.array(SPINNER_TOP_BOTTOM_SMALL_WIDTH),  # type: ignore
     hit_box_x_offset=jnp.array(31),  # type: ignore
     hit_box_y_offset=jnp.array(92),  # type: ignore
     reflecting=jnp.array(1),  # type: ignore
@@ -492,8 +492,8 @@ LEFT_SPINNER_BOTTOM_POSITION_LEFT_PART_2_SCENE_OBJECT = SceneObject(
 )
 
 LEFT_SPINNER_BOTTOM_POSITION_RIGHT_PART_1_SCENE_OBJECT = SceneObject(
-    hit_box_height=SPINNER_TOP_BOTTOM_SMALL_HEIGHT,  # type: ignore
-    hit_box_width=SPINNER_TOP_BOTTOM_SMALL_WIDTH,  # type: ignore
+    hit_box_height=jnp.array(SPINNER_TOP_BOTTOM_SMALL_HEIGHT),  # type: ignore
+    hit_box_width=jnp.array(SPINNER_TOP_BOTTOM_SMALL_WIDTH),  # type: ignore
     hit_box_x_offset=jnp.array(35),  # type: ignore
     hit_box_y_offset=jnp.array(94),  # type: ignore
     reflecting=jnp.array(1),  # type: ignore
@@ -501,8 +501,8 @@ LEFT_SPINNER_BOTTOM_POSITION_RIGHT_PART_1_SCENE_OBJECT = SceneObject(
 )
 
 LEFT_SPINNER_BOTTOM_POSITION_RIGHT_PART_2_SCENE_OBJECT = SceneObject(
-    hit_box_height=SPINNER_TOP_BOTTOM_SMALL_HEIGHT,  # type: ignore
-    hit_box_width=SPINNER_TOP_BOTTOM_SMALL_WIDTH,  # type: ignore
+    hit_box_height=jnp.array(SPINNER_TOP_BOTTOM_SMALL_HEIGHT),  # type: ignore
+    hit_box_width=jnp.array(SPINNER_TOP_BOTTOM_SMALL_WIDTH),  # type: ignore
     hit_box_x_offset=jnp.array(34),  # type: ignore
     hit_box_y_offset=jnp.array(92),  # type: ignore
     reflecting=jnp.array(1),  # type: ignore
@@ -511,16 +511,16 @@ LEFT_SPINNER_BOTTOM_POSITION_RIGHT_PART_2_SCENE_OBJECT = SceneObject(
 
 # Left Spinner Top Position
 LEFT_SPINNER_TOP_POSITION_JOINED_PART_SCENE_OBJECT = SceneObject(
-    hit_box_height=SPINNER_TOP_BOTTOM_LARGE_HEIGHT,  # type: ignore
-    hit_box_width=SPINNER_TOP_BOTTOM_LARGE_WIDTH,  # type: ignore
+    hit_box_height=jnp.array(SPINNER_TOP_BOTTOM_LARGE_HEIGHT),  # type: ignore
+    hit_box_width=jnp.array(SPINNER_TOP_BOTTOM_LARGE_WIDTH),  # type: ignore
     hit_box_x_offset=jnp.array(32),  # type: ignore
     hit_box_y_offset=jnp.array(90),  # type: ignore
     reflecting=jnp.array(1),  # type: ignore
     score_type=jnp.array(2),  # type: ignore
 )
 LEFT_SPINNER_TOP_POSITION_LEFT_PART_1_SCENE_OBJECT = SceneObject(
-    hit_box_height=SPINNER_TOP_BOTTOM_SMALL_HEIGHT,  # type: ignore
-    hit_box_width=SPINNER_TOP_BOTTOM_SMALL_WIDTH,  # type: ignore
+    hit_box_height=jnp.array(SPINNER_TOP_BOTTOM_SMALL_HEIGHT),  # type: ignore
+    hit_box_width=jnp.array(SPINNER_TOP_BOTTOM_SMALL_WIDTH),  # type: ignore
     hit_box_x_offset=jnp.array(30),  # type: ignore
     hit_box_y_offset=jnp.array(96),  # type: ignore
     reflecting=jnp.array(1),  # type: ignore
@@ -528,8 +528,8 @@ LEFT_SPINNER_TOP_POSITION_LEFT_PART_1_SCENE_OBJECT = SceneObject(
 )
 
 LEFT_SPINNER_TOP_POSITION_LEFT_PART_2_SCENE_OBJECT = SceneObject(
-    hit_box_height=SPINNER_TOP_BOTTOM_SMALL_HEIGHT,  # type: ignore
-    hit_box_width=SPINNER_TOP_BOTTOM_SMALL_WIDTH,  # type: ignore
+    hit_box_height=jnp.array(SPINNER_TOP_BOTTOM_SMALL_HEIGHT),  # type: ignore
+    hit_box_width=jnp.array(SPINNER_TOP_BOTTOM_SMALL_WIDTH),  # type: ignore
     hit_box_x_offset=jnp.array(31),  # type: ignore
     hit_box_y_offset=jnp.array(98),  # type: ignore
     reflecting=jnp.array(1),  # type: ignore
@@ -537,8 +537,8 @@ LEFT_SPINNER_TOP_POSITION_LEFT_PART_2_SCENE_OBJECT = SceneObject(
 )
 
 LEFT_SPINNER_TOP_POSITION_RIGHT_PART_1_SCENE_OBJECT = SceneObject(
-    hit_box_height=SPINNER_TOP_BOTTOM_SMALL_HEIGHT,  # type: ignore
-    hit_box_width=SPINNER_TOP_BOTTOM_SMALL_WIDTH,  # type: ignore
+    hit_box_height=jnp.array(SPINNER_TOP_BOTTOM_SMALL_HEIGHT),  # type: ignore
+    hit_box_width=jnp.array(SPINNER_TOP_BOTTOM_SMALL_WIDTH),  # type: ignore
     hit_box_x_offset=jnp.array(35),  # type: ignore
     hit_box_y_offset=jnp.array(96),  # type: ignore
     reflecting=jnp.array(1),  # type: ignore
@@ -546,8 +546,8 @@ LEFT_SPINNER_TOP_POSITION_RIGHT_PART_1_SCENE_OBJECT = SceneObject(
 )
 
 LEFT_SPINNER_TOP_POSITION_RIGHT_PART_2_SCENE_OBJECT = SceneObject(
-    hit_box_height=SPINNER_TOP_BOTTOM_SMALL_HEIGHT,  # type: ignore
-    hit_box_width=SPINNER_TOP_BOTTOM_SMALL_WIDTH,  # type: ignore
+    hit_box_height=jnp.array(SPINNER_TOP_BOTTOM_SMALL_HEIGHT),  # type: ignore
+    hit_box_width=jnp.array(SPINNER_TOP_BOTTOM_SMALL_WIDTH),  # type: ignore
     hit_box_x_offset=jnp.array(34),  # type: ignore
     hit_box_y_offset=jnp.array(98),  # type: ignore
     reflecting=jnp.array(1),  # type: ignore
@@ -556,8 +556,8 @@ LEFT_SPINNER_TOP_POSITION_RIGHT_PART_2_SCENE_OBJECT = SceneObject(
 
 # Left Spinner Left Position
 LEFT_SPINNER_LEFT_POSITION_JOINED_PART_SCENE_OBJECT = SceneObject(
-    hit_box_height=SPINNER_LEFT_RIGHT_LARGE_HEIGHT,  # type: ignore
-    hit_box_width=SPINNER_LEFT_RIGHT_LARGE_WIDTH,  # type: ignore
+    hit_box_height=jnp.array(SPINNER_LEFT_RIGHT_LARGE_HEIGHT),  # type: ignore
+    hit_box_width=jnp.array(SPINNER_LEFT_RIGHT_LARGE_WIDTH),  # type: ignore
     hit_box_x_offset=jnp.array(30),  # type: ignore
     hit_box_y_offset=jnp.array(94),  # type: ignore
     reflecting=jnp.array(1),  # type: ignore
@@ -565,8 +565,8 @@ LEFT_SPINNER_LEFT_POSITION_JOINED_PART_SCENE_OBJECT = SceneObject(
 )
 
 LEFT_SPINNER_LEFT_POSITION_LEFT_PART_1_SCENE_OBJECT = SceneObject(
-    hit_box_height=SPINNER_LEFT_RIGHT_SMALL_HEIGHT,  # type: ignore
-    hit_box_width=SPINNER_LEFT_RIGHT_SMALL_WIDTH,  # type: ignore
+    hit_box_height=jnp.array(SPINNER_LEFT_RIGHT_SMALL_HEIGHT),  # type: ignore
+    hit_box_width=jnp.array(SPINNER_LEFT_RIGHT_SMALL_WIDTH),  # type: ignore
     hit_box_x_offset=jnp.array(33),  # type: ignore
     hit_box_y_offset=jnp.array(90),  # type: ignore
     reflecting=jnp.array(1),  # type: ignore
@@ -574,8 +574,8 @@ LEFT_SPINNER_LEFT_POSITION_LEFT_PART_1_SCENE_OBJECT = SceneObject(
 )
 
 LEFT_SPINNER_LEFT_POSITION_LEFT_PART_2_SCENE_OBJECT = SceneObject(
-    hit_box_height=SPINNER_LEFT_RIGHT_SMALL_HEIGHT,  # type: ignore
-    hit_box_width=SPINNER_LEFT_RIGHT_SMALL_WIDTH,  # type: ignore
+    hit_box_height=jnp.array(SPINNER_LEFT_RIGHT_SMALL_HEIGHT),  # type: ignore
+    hit_box_width=jnp.array(SPINNER_LEFT_RIGHT_SMALL_WIDTH),  # type: ignore
     hit_box_x_offset=jnp.array(34),  # type: ignore
     hit_box_y_offset=jnp.array(92),  # type: ignore
     reflecting=jnp.array(1),  # type: ignore
@@ -583,8 +583,8 @@ LEFT_SPINNER_LEFT_POSITION_LEFT_PART_2_SCENE_OBJECT = SceneObject(
 )
 
 LEFT_SPINNER_LEFT_POSITION_RIGHT_PART_1_SCENE_OBJECT = SceneObject(
-    hit_box_height=SPINNER_LEFT_RIGHT_SMALL_HEIGHT,  # type: ignore
-    hit_box_width=SPINNER_LEFT_RIGHT_SMALL_WIDTH,  # type: ignore
+    hit_box_height=jnp.array(SPINNER_LEFT_RIGHT_SMALL_HEIGHT),  # type: ignore
+    hit_box_width=jnp.array(SPINNER_LEFT_RIGHT_SMALL_WIDTH),  # type: ignore
     hit_box_x_offset=jnp.array(33),  # type: ignore
     hit_box_y_offset=jnp.array(100),  # type: ignore
     reflecting=jnp.array(1),  # type: ignore
@@ -592,8 +592,8 @@ LEFT_SPINNER_LEFT_POSITION_RIGHT_PART_1_SCENE_OBJECT = SceneObject(
 )
 
 LEFT_SPINNER_LEFT_POSITION_RIGHT_PART_2_SCENE_OBJECT = SceneObject(
-    hit_box_height=SPINNER_LEFT_RIGHT_SMALL_HEIGHT,  # type: ignore
-    hit_box_width=SPINNER_LEFT_RIGHT_SMALL_WIDTH,  # type: ignore
+    hit_box_height=jnp.array(SPINNER_LEFT_RIGHT_SMALL_HEIGHT),  # type: ignore
+    hit_box_width=jnp.array(SPINNER_LEFT_RIGHT_SMALL_WIDTH),  # type: ignore
     hit_box_x_offset=jnp.array(34),  # type: ignore
     hit_box_y_offset=jnp.array(98),  # type: ignore
     reflecting=jnp.array(1),  # type: ignore
@@ -602,8 +602,8 @@ LEFT_SPINNER_LEFT_POSITION_RIGHT_PART_2_SCENE_OBJECT = SceneObject(
 
 # Left Spinner Right Position
 LEFT_SPINNER_RIGHT_POSITION_JOINED_PART_SCENE_OBJECT = SceneObject(
-    hit_box_height=SPINNER_LEFT_RIGHT_LARGE_HEIGHT,  # type: ignore
-    hit_box_width=SPINNER_LEFT_RIGHT_LARGE_WIDTH,  # type: ignore
+    hit_box_height=jnp.array(SPINNER_LEFT_RIGHT_LARGE_HEIGHT),  # type: ignore
+    hit_box_width=jnp.array(SPINNER_LEFT_RIGHT_LARGE_WIDTH),  # type: ignore
     hit_box_x_offset=jnp.array(35),  # type: ignore
     hit_box_y_offset=jnp.array(94),  # type: ignore
     reflecting=jnp.array(1),  # type: ignore
@@ -611,8 +611,8 @@ LEFT_SPINNER_RIGHT_POSITION_JOINED_PART_SCENE_OBJECT = SceneObject(
 )
 
 LEFT_SPINNER_RIGHT_POSITION_LEFT_PART_1_SCENE_OBJECT = SceneObject(
-    hit_box_height=SPINNER_LEFT_RIGHT_SMALL_HEIGHT,  # type: ignore
-    hit_box_width=SPINNER_LEFT_RIGHT_SMALL_WIDTH,  # type: ignore
+    hit_box_height=jnp.array(SPINNER_LEFT_RIGHT_SMALL_HEIGHT),  # type: ignore
+    hit_box_width=jnp.array(SPINNER_LEFT_RIGHT_SMALL_WIDTH),  # type: ignore
     hit_box_x_offset=jnp.array(32),  # type: ignore
     hit_box_y_offset=jnp.array(100),  # type: ignore
     reflecting=jnp.array(1),  # type: ignore
@@ -620,8 +620,8 @@ LEFT_SPINNER_RIGHT_POSITION_LEFT_PART_1_SCENE_OBJECT = SceneObject(
 )
 
 LEFT_SPINNER_RIGHT_POSITION_LEFT_PART_2_SCENE_OBJECT = SceneObject(
-    hit_box_height=SPINNER_LEFT_RIGHT_SMALL_HEIGHT,  # type: ignore
-    hit_box_width=SPINNER_LEFT_RIGHT_SMALL_WIDTH,  # type: ignore
+    hit_box_height=jnp.array(SPINNER_LEFT_RIGHT_SMALL_HEIGHT),  # type: ignore
+    hit_box_width=jnp.array(SPINNER_LEFT_RIGHT_SMALL_WIDTH),  # type: ignore
     hit_box_x_offset=jnp.array(31),  # type: ignore
     hit_box_y_offset=jnp.array(98),  # type: ignore
     reflecting=jnp.array(1),  # type: ignore
@@ -629,8 +629,8 @@ LEFT_SPINNER_RIGHT_POSITION_LEFT_PART_2_SCENE_OBJECT = SceneObject(
 )
 
 LEFT_SPINNER_RIGHT_POSITION_RIGHT_PART_1_SCENE_OBJECT = SceneObject(
-    hit_box_height=SPINNER_LEFT_RIGHT_SMALL_HEIGHT,  # type: ignore
-    hit_box_width=SPINNER_LEFT_RIGHT_SMALL_WIDTH,  # type: ignore
+    hit_box_height=jnp.array(SPINNER_LEFT_RIGHT_SMALL_HEIGHT),  # type: ignore
+    hit_box_width=jnp.array(SPINNER_LEFT_RIGHT_SMALL_WIDTH),  # type: ignore
     hit_box_x_offset=jnp.array(32),  # type: ignore
     hit_box_y_offset=jnp.array(90),  # type: ignore
     reflecting=jnp.array(1),  # type: ignore
@@ -638,8 +638,8 @@ LEFT_SPINNER_RIGHT_POSITION_RIGHT_PART_1_SCENE_OBJECT = SceneObject(
 )
 
 LEFT_SPINNER_RIGHT_POSITION_RIGHT_PART_2_SCENE_OBJECT = SceneObject(
-    hit_box_height=SPINNER_LEFT_RIGHT_SMALL_HEIGHT,  # type: ignore
-    hit_box_width=SPINNER_LEFT_RIGHT_SMALL_WIDTH,  # type: ignore
+    hit_box_height=jnp.array(SPINNER_LEFT_RIGHT_SMALL_HEIGHT),  # type: ignore
+    hit_box_width=jnp.array(SPINNER_LEFT_RIGHT_SMALL_WIDTH),  # type: ignore
     hit_box_x_offset=jnp.array(31),  # type: ignore
     hit_box_y_offset=jnp.array(92),  # type: ignore
     reflecting=jnp.array(1),  # type: ignore
@@ -650,8 +650,8 @@ LEFT_SPINNER_RIGHT_POSITION_RIGHT_PART_2_SCENE_OBJECT = SceneObject(
 
 # Right Spinner Bottom Position
 RIGHT_SPINNER_BOTTOM_POSITION_JOINED_PART_SCENE_OBJECT = SceneObject(
-    hit_box_height=SPINNER_TOP_BOTTOM_LARGE_HEIGHT,  # type: ignore
-    hit_box_width=SPINNER_TOP_BOTTOM_LARGE_WIDTH,  # type: ignore
+    hit_box_height=jnp.array(SPINNER_TOP_BOTTOM_LARGE_HEIGHT),  # type: ignore
+    hit_box_width=jnp.array(SPINNER_TOP_BOTTOM_LARGE_WIDTH),  # type: ignore
     hit_box_x_offset=jnp.array(128),  # type: ignore
     hit_box_y_offset=jnp.array(100),  # type: ignore
     reflecting=jnp.array(1),  # type: ignore
@@ -659,8 +659,8 @@ RIGHT_SPINNER_BOTTOM_POSITION_JOINED_PART_SCENE_OBJECT = SceneObject(
 )
 
 RIGHT_SPINNER_BOTTOM_POSITION_LEFT_PART_1_SCENE_OBJECT = SceneObject(
-    hit_box_height=SPINNER_TOP_BOTTOM_SMALL_HEIGHT,  # type: ignore
-    hit_box_width=SPINNER_TOP_BOTTOM_SMALL_WIDTH,  # type: ignore
+    hit_box_height=jnp.array(SPINNER_TOP_BOTTOM_SMALL_HEIGHT),  # type: ignore
+    hit_box_width=jnp.array(SPINNER_TOP_BOTTOM_SMALL_WIDTH),  # type: ignore
     hit_box_x_offset=jnp.array(126),  # type: ignore
     hit_box_y_offset=jnp.array(94),  # type: ignore
     reflecting=jnp.array(1),  # type: ignore
@@ -668,8 +668,8 @@ RIGHT_SPINNER_BOTTOM_POSITION_LEFT_PART_1_SCENE_OBJECT = SceneObject(
 )
 
 RIGHT_SPINNER_BOTTOM_POSITION_LEFT_PART_2_SCENE_OBJECT = SceneObject(
-    hit_box_height=SPINNER_TOP_BOTTOM_SMALL_HEIGHT,  # type: ignore
-    hit_box_width=SPINNER_TOP_BOTTOM_SMALL_WIDTH,  # type: ignore
+    hit_box_height=jnp.array(SPINNER_TOP_BOTTOM_SMALL_HEIGHT),  # type: ignore
+    hit_box_width=jnp.array(SPINNER_TOP_BOTTOM_SMALL_WIDTH),  # type: ignore
     hit_box_x_offset=jnp.array(127),  # type: ignore
     hit_box_y_offset=jnp.array(92),  # type: ignore
     reflecting=jnp.array(1),  # type: ignore
@@ -677,8 +677,8 @@ RIGHT_SPINNER_BOTTOM_POSITION_LEFT_PART_2_SCENE_OBJECT = SceneObject(
 )
 
 RIGHT_SPINNER_BOTTOM_POSITION_RIGHT_PART_1_SCENE_OBJECT = SceneObject(
-    hit_box_height=SPINNER_TOP_BOTTOM_SMALL_HEIGHT,  # type: ignore
-    hit_box_width=SPINNER_TOP_BOTTOM_SMALL_WIDTH,  # type: ignore
+    hit_box_height=jnp.array(SPINNER_TOP_BOTTOM_SMALL_HEIGHT),  # type: ignore
+    hit_box_width=jnp.array(SPINNER_TOP_BOTTOM_SMALL_WIDTH),  # type: ignore
     hit_box_x_offset=jnp.array(131),  # type: ignore
     hit_box_y_offset=jnp.array(94),  # type: ignore
     reflecting=jnp.array(1),  # type: ignore
@@ -686,8 +686,8 @@ RIGHT_SPINNER_BOTTOM_POSITION_RIGHT_PART_1_SCENE_OBJECT = SceneObject(
 )
 
 RIGHT_SPINNER_BOTTOM_POSITION_RIGHT_PART_2_SCENE_OBJECT = SceneObject(
-    hit_box_height=SPINNER_TOP_BOTTOM_SMALL_HEIGHT,  # type: ignore
-    hit_box_width=SPINNER_TOP_BOTTOM_SMALL_WIDTH,  # type: ignore
+    hit_box_height=jnp.array(SPINNER_TOP_BOTTOM_SMALL_HEIGHT),  # type: ignore
+    hit_box_width=jnp.array(SPINNER_TOP_BOTTOM_SMALL_WIDTH),  # type: ignore
     hit_box_x_offset=jnp.array(130),  # type: ignore
     hit_box_y_offset=jnp.array(92),  # type: ignore
     reflecting=jnp.array(1),  # type: ignore
@@ -696,8 +696,8 @@ RIGHT_SPINNER_BOTTOM_POSITION_RIGHT_PART_2_SCENE_OBJECT = SceneObject(
 
 # Right Spinner Top Position
 RIGHT_SPINNER_TOP_POSITION_JOINED_PART_SCENE_OBJECT = SceneObject(
-    hit_box_height=SPINNER_TOP_BOTTOM_LARGE_HEIGHT,  # type: ignore
-    hit_box_width=SPINNER_TOP_BOTTOM_LARGE_WIDTH,  # type: ignore
+    hit_box_height=jnp.array(SPINNER_TOP_BOTTOM_LARGE_HEIGHT),  # type: ignore
+    hit_box_width=jnp.array(SPINNER_TOP_BOTTOM_LARGE_WIDTH),  # type: ignore
     hit_box_x_offset=jnp.array(128),  # type: ignore
     hit_box_y_offset=jnp.array(90),  # type: ignore
     reflecting=jnp.array(1),  # type: ignore
@@ -705,8 +705,8 @@ RIGHT_SPINNER_TOP_POSITION_JOINED_PART_SCENE_OBJECT = SceneObject(
 )
 
 RIGHT_SPINNER_TOP_POSITION_LEFT_PART_1_SCENE_OBJECT = SceneObject(
-    hit_box_height=SPINNER_TOP_BOTTOM_SMALL_HEIGHT,  # type: ignore
-    hit_box_width=SPINNER_TOP_BOTTOM_SMALL_WIDTH,  # type: ignore
+    hit_box_height=jnp.array(SPINNER_TOP_BOTTOM_SMALL_HEIGHT),  # type: ignore
+    hit_box_width=jnp.array(SPINNER_TOP_BOTTOM_SMALL_WIDTH),  # type: ignore
     hit_box_x_offset=jnp.array(131),  # type: ignore
     hit_box_y_offset=jnp.array(96),  # type: ignore
     reflecting=jnp.array(1),  # type: ignore
@@ -714,8 +714,8 @@ RIGHT_SPINNER_TOP_POSITION_LEFT_PART_1_SCENE_OBJECT = SceneObject(
 )
 
 RIGHT_SPINNER_TOP_POSITION_LEFT_PART_2_SCENE_OBJECT = SceneObject(
-    hit_box_height=SPINNER_TOP_BOTTOM_SMALL_HEIGHT,  # type: ignore
-    hit_box_width=SPINNER_TOP_BOTTOM_SMALL_WIDTH,  # type: ignore
+    hit_box_height=jnp.array(SPINNER_TOP_BOTTOM_SMALL_HEIGHT),  # type: ignore
+    hit_box_width=jnp.array(SPINNER_TOP_BOTTOM_SMALL_WIDTH),  # type: ignore
     hit_box_x_offset=jnp.array(130),  # type: ignore
     hit_box_y_offset=jnp.array(98),  # type: ignore
     reflecting=jnp.array(1),  # type: ignore
@@ -723,8 +723,8 @@ RIGHT_SPINNER_TOP_POSITION_LEFT_PART_2_SCENE_OBJECT = SceneObject(
 )
 
 RIGHT_SPINNER_TOP_POSITION_RIGHT_PART_1_SCENE_OBJECT = SceneObject(
-    hit_box_height=SPINNER_TOP_BOTTOM_SMALL_HEIGHT,  # type: ignore
-    hit_box_width=SPINNER_TOP_BOTTOM_SMALL_WIDTH,  # type: ignore
+    hit_box_height=jnp.array(SPINNER_TOP_BOTTOM_SMALL_HEIGHT),  # type: ignore
+    hit_box_width=jnp.array(SPINNER_TOP_BOTTOM_SMALL_WIDTH),  # type: ignore
     hit_box_x_offset=jnp.array(126),  # type: ignore
     hit_box_y_offset=jnp.array(96),  # type: ignore
     reflecting=jnp.array(1),  # type: ignore
@@ -732,8 +732,8 @@ RIGHT_SPINNER_TOP_POSITION_RIGHT_PART_1_SCENE_OBJECT = SceneObject(
 )
 
 RIGHT_SPINNER_TOP_POSITION_RIGHT_PART_2_SCENE_OBJECT = SceneObject(
-    hit_box_height=SPINNER_TOP_BOTTOM_SMALL_HEIGHT,  # type: ignore
-    hit_box_width=SPINNER_TOP_BOTTOM_SMALL_WIDTH,  # type: ignore
+    hit_box_height=jnp.array(SPINNER_TOP_BOTTOM_SMALL_HEIGHT),  # type: ignore
+    hit_box_width=jnp.array(SPINNER_TOP_BOTTOM_SMALL_WIDTH),  # type: ignore
     hit_box_x_offset=jnp.array(127),  # type: ignore
     hit_box_y_offset=jnp.array(98),  # type: ignore
     reflecting=jnp.array(1),  # type: ignore
@@ -742,8 +742,8 @@ RIGHT_SPINNER_TOP_POSITION_RIGHT_PART_2_SCENE_OBJECT = SceneObject(
 
 # Right Spinner Left Position
 RIGHT_SPINNER_LEFT_POSITION_JOINED_PART_SCENE_OBJECT = SceneObject(
-    hit_box_height=SPINNER_LEFT_RIGHT_LARGE_HEIGHT,  # type: ignore
-    hit_box_width=SPINNER_LEFT_RIGHT_LARGE_WIDTH,  # type: ignore
+    hit_box_height=jnp.array(SPINNER_LEFT_RIGHT_LARGE_HEIGHT),  # type: ignore
+    hit_box_width=jnp.array(SPINNER_LEFT_RIGHT_LARGE_WIDTH),  # type: ignore
     hit_box_x_offset=jnp.array(126),  # type: ignore
     hit_box_y_offset=jnp.array(94),  # type: ignore
     reflecting=jnp.array(1),  # type: ignore
@@ -751,8 +751,8 @@ RIGHT_SPINNER_LEFT_POSITION_JOINED_PART_SCENE_OBJECT = SceneObject(
 )
 
 RIGHT_SPINNER_LEFT_POSITION_LEFT_PART_1_SCENE_OBJECT = SceneObject(
-    hit_box_height=SPINNER_LEFT_RIGHT_SMALL_HEIGHT,  # type: ignore
-    hit_box_width=SPINNER_LEFT_RIGHT_SMALL_WIDTH,  # type: ignore
+    hit_box_height=jnp.array(SPINNER_LEFT_RIGHT_SMALL_HEIGHT),  # type: ignore
+    hit_box_width=jnp.array(SPINNER_LEFT_RIGHT_SMALL_WIDTH),  # type: ignore
     hit_box_x_offset=jnp.array(129),  # type: ignore
     hit_box_y_offset=jnp.array(90),  # type: ignore
     reflecting=jnp.array(1),  # type: ignore
@@ -760,8 +760,8 @@ RIGHT_SPINNER_LEFT_POSITION_LEFT_PART_1_SCENE_OBJECT = SceneObject(
 )
 
 RIGHT_SPINNER_LEFT_POSITION_LEFT_PART_2_SCENE_OBJECT = SceneObject(
-    hit_box_height=SPINNER_LEFT_RIGHT_SMALL_HEIGHT,  # type: ignore
-    hit_box_width=SPINNER_LEFT_RIGHT_SMALL_WIDTH,  # type: ignore
+    hit_box_height=jnp.array(SPINNER_LEFT_RIGHT_SMALL_HEIGHT),  # type: ignore
+    hit_box_width=jnp.array(SPINNER_LEFT_RIGHT_SMALL_WIDTH),  # type: ignore
     hit_box_x_offset=jnp.array(130),  # type: ignore
     hit_box_y_offset=jnp.array(92),  # type: ignore
     reflecting=jnp.array(1),  # type: ignore
@@ -769,8 +769,8 @@ RIGHT_SPINNER_LEFT_POSITION_LEFT_PART_2_SCENE_OBJECT = SceneObject(
 )
 
 RIGHT_SPINNER_LEFT_POSITION_RIGHT_PART_1_SCENE_OBJECT = SceneObject(
-    hit_box_height=SPINNER_LEFT_RIGHT_SMALL_HEIGHT,  # type: ignore
-    hit_box_width=SPINNER_LEFT_RIGHT_SMALL_WIDTH,  # type: ignore
+    hit_box_height=jnp.array(SPINNER_LEFT_RIGHT_SMALL_HEIGHT),  # type: ignore
+    hit_box_width=jnp.array(SPINNER_LEFT_RIGHT_SMALL_WIDTH),  # type: ignore
     hit_box_x_offset=jnp.array(129),  # type: ignore
     hit_box_y_offset=jnp.array(100),  # type: ignore
     reflecting=jnp.array(1),  # type: ignore
@@ -778,8 +778,8 @@ RIGHT_SPINNER_LEFT_POSITION_RIGHT_PART_1_SCENE_OBJECT = SceneObject(
 )
 
 RIGHT_SPINNER_LEFT_POSITION_RIGHT_PART_2_SCENE_OBJECT = SceneObject(
-    hit_box_height=SPINNER_LEFT_RIGHT_SMALL_HEIGHT,  # type: ignore
-    hit_box_width=SPINNER_LEFT_RIGHT_SMALL_WIDTH,  # type: ignore
+    hit_box_height=jnp.array(SPINNER_LEFT_RIGHT_SMALL_HEIGHT),  # type: ignore
+    hit_box_width=jnp.array(SPINNER_LEFT_RIGHT_SMALL_WIDTH),  # type: ignore
     hit_box_x_offset=jnp.array(130),  # type: ignore
     hit_box_y_offset=jnp.array(98),  # type: ignore
     reflecting=jnp.array(1),  # type: ignore
@@ -788,8 +788,8 @@ RIGHT_SPINNER_LEFT_POSITION_RIGHT_PART_2_SCENE_OBJECT = SceneObject(
 
 # Right Spinner Right Position
 RIGHT_SPINNER_RIGHT_POSITION_JOINED_PART_SCENE_OBJECT = SceneObject(
-    hit_box_height=SPINNER_LEFT_RIGHT_LARGE_HEIGHT,  # type: ignore
-    hit_box_width=SPINNER_LEFT_RIGHT_LARGE_WIDTH,  # type: ignore
+    hit_box_height=jnp.array(SPINNER_LEFT_RIGHT_LARGE_HEIGHT),  # type: ignore
+    hit_box_width=jnp.array(SPINNER_LEFT_RIGHT_LARGE_WIDTH),  # type: ignore
     hit_box_x_offset=jnp.array(131),  # type: ignore
     hit_box_y_offset=jnp.array(94),  # type: ignore
     reflecting=jnp.array(1),  # type: ignore
@@ -797,8 +797,8 @@ RIGHT_SPINNER_RIGHT_POSITION_JOINED_PART_SCENE_OBJECT = SceneObject(
 )
 
 RIGHT_SPINNER_RIGHT_POSITION_LEFT_PART_1_SCENE_OBJECT = SceneObject(
-    hit_box_height=SPINNER_LEFT_RIGHT_SMALL_HEIGHT,  # type: ignore
-    hit_box_width=SPINNER_LEFT_RIGHT_SMALL_WIDTH,  # type: ignore
+    hit_box_height=jnp.array(SPINNER_LEFT_RIGHT_SMALL_HEIGHT),  # type: ignore
+    hit_box_width=jnp.array(SPINNER_LEFT_RIGHT_SMALL_WIDTH),  # type: ignore
     hit_box_x_offset=jnp.array(128),  # type: ignore
     hit_box_y_offset=jnp.array(100),  # type: ignore
     reflecting=jnp.array(1),  # type: ignore
@@ -806,8 +806,8 @@ RIGHT_SPINNER_RIGHT_POSITION_LEFT_PART_1_SCENE_OBJECT = SceneObject(
 )
 
 RIGHT_SPINNER_RIGHT_POSITION_LEFT_PART_2_SCENE_OBJECT = SceneObject(
-    hit_box_height=SPINNER_LEFT_RIGHT_SMALL_HEIGHT,  # type: ignore
-    hit_box_width=SPINNER_LEFT_RIGHT_SMALL_WIDTH,  # type: ignore
+    hit_box_height=jnp.array(SPINNER_LEFT_RIGHT_SMALL_HEIGHT),  # type: ignore
+    hit_box_width=jnp.array(SPINNER_LEFT_RIGHT_SMALL_WIDTH),  # type: ignore
     hit_box_x_offset=jnp.array(127),  # type: ignore
     hit_box_y_offset=jnp.array(98),  # type: ignore
     reflecting=jnp.array(1),  # type: ignore
@@ -815,8 +815,8 @@ RIGHT_SPINNER_RIGHT_POSITION_LEFT_PART_2_SCENE_OBJECT = SceneObject(
 )
 
 RIGHT_SPINNER_RIGHT_POSITION_RIGHT_PART_1_SCENE_OBJECT = SceneObject(
-    hit_box_height=SPINNER_LEFT_RIGHT_SMALL_HEIGHT,  # type: ignore
-    hit_box_width=SPINNER_LEFT_RIGHT_SMALL_WIDTH,  # type: ignore
+    hit_box_height=jnp.array(SPINNER_LEFT_RIGHT_SMALL_HEIGHT),  # type: ignore
+    hit_box_width=jnp.array(SPINNER_LEFT_RIGHT_SMALL_WIDTH),  # type: ignore
     hit_box_x_offset=jnp.array(128),  # type: ignore
     hit_box_y_offset=jnp.array(90),  # type: ignore
     reflecting=jnp.array(1),  # type: ignore
@@ -824,8 +824,8 @@ RIGHT_SPINNER_RIGHT_POSITION_RIGHT_PART_1_SCENE_OBJECT = SceneObject(
 )
 
 RIGHT_SPINNER_RIGHT_POSITION_RIGHT_PART_2_SCENE_OBJECT = SceneObject(
-    hit_box_height=SPINNER_LEFT_RIGHT_SMALL_HEIGHT,  # type: ignore
-    hit_box_width=SPINNER_LEFT_RIGHT_SMALL_WIDTH,  # type: ignore
+    hit_box_height=jnp.array(SPINNER_LEFT_RIGHT_SMALL_HEIGHT),  # type: ignore
+    hit_box_width=jnp.array(SPINNER_LEFT_RIGHT_SMALL_WIDTH),  # type: ignore
     hit_box_x_offset=jnp.array(127),  # type: ignore
     hit_box_y_offset=jnp.array(92),  # type: ignore
     reflecting=jnp.array(1),  # type: ignore
@@ -836,10 +836,10 @@ RIGHT_SPINNER_RIGHT_POSITION_RIGHT_PART_2_SCENE_OBJECT = SceneObject(
 # Middle Bar Scene Object
 
 MIDDLE_BAR_SCENE_OBJECT = SceneObject(
-    hit_box_height=MIDDLE_BAR_HEIGHT,  # type: ignore
-    hit_box_width=MIDDLE_BAR_WIDTH,  # type: ignore
-    hit_box_x_offset=MIDDLE_BAR_X,  # type: ignore
-    hit_box_y_offset=MIDDLE_BAR_Y,  # type: ignore
+    hit_box_height=jnp.array(MIDDLE_BAR_HEIGHT),  # type: ignore
+    hit_box_width=jnp.array(MIDDLE_BAR_WIDTH),  # type: ignore
+    hit_box_x_offset=jnp.array(MIDDLE_BAR_X),  # type: ignore
+    hit_box_y_offset=jnp.array(MIDDLE_BAR_Y),  # type: ignore
     reflecting=jnp.array(1),  # type: ignore
     score_type=jnp.array(0),  # type: ignore
 )
