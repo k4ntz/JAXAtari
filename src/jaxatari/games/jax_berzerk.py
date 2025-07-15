@@ -874,27 +874,25 @@ class BerzerkRenderer(JAXGameRenderer):
             sprites[key] = jnp.expand_dims(player_sprites_padded[i], axis=0)
             pad_offsets[key] = player_offsets[i]
 
+        # Add padding to enemy sprites for same size
+        def pad_and_store(keys: list[str]):
+            enemy_frames = [sprites[k] for k in keys]
+            padded_frames, offsets = jr.pad_to_match(enemy_frames)
+            for i, key in enumerate(keys):
+                sprites[key] = jnp.expand_dims(padded_frames[i], axis=0)
+                pad_offsets[key] = offsets[i]
 
-
-        # Gegner-Sprites Keys generieren: enemy_idle_1 bis enemy_idle_8
-        enemy_keys = ['enemy_idle_1', 'enemy_idle_2', 'enemy_idle_3', 'enemy_idle_4', 'enemy_idle_5', 'enemy_idle_6', 'enemy_idle_7', 'enemy_idle_8',
+        enemy_keys = [
+            'enemy_idle_1', 'enemy_idle_2', 'enemy_idle_3', 'enemy_idle_4',
+            'enemy_idle_5', 'enemy_idle_6', 'enemy_idle_7', 'enemy_idle_8',
             'enemy_move_horizontal_1', 'enemy_move_horizontal_2',
-            'enemy_move_vertical_1', 'enemy_move_vertical_2', 'enemy_move_vertical_3']
-        enemy_frames = [sprites[k] for k in enemy_keys]
+            'enemy_move_vertical_1', 'enemy_move_vertical_2', 'enemy_move_vertical_3'
+        ]
+        pad_and_store(enemy_keys)
 
-        # Padding anwenden
-        enemy_sprites_padded, enemy_offsets = jr.pad_to_match(enemy_frames)
-
-        # Padded Sprites und Offsets in die Dictionaries schreiben
-        for i, key in enumerate(enemy_keys):
-            sprites[key] = jnp.expand_dims(enemy_sprites_padded[i], axis=0)
-            pad_offsets[key] = enemy_offsets[i]
-        
-        
-    
         # Expand other sprites
         for key in sprites.keys():
-            if key not in player_keys or key not in enemy_keys:
+            if key not in player_keys and key not in enemy_keys:
                 if isinstance(sprites[key], (list, tuple)):
                     sprites[key] = [jnp.expand_dims(sprite, axis=0) for sprite in sprites[key]]
                 else:
@@ -938,7 +936,7 @@ class BerzerkRenderer(JAXGameRenderer):
 
             raster = jax.lax.cond(is_active, draw_bullet, lambda r: r, raster)
 
-                # Draw enemy bullets
+        # Draw enemy bullets
         for i in range(state.enemy_bullets.shape[0]):
             is_active = state.enemy_bullet_active[i]
             bullet_pos = state.enemy_bullets[i]
@@ -1057,9 +1055,7 @@ class BerzerkRenderer(JAXGameRenderer):
 
         def get_enemy_sprite(i):
             counter = state.enemy_animation_counter[i]
-            is_moving = state.enemy_move_axis[i] != -1
             axis = state.enemy_move_axis[i]
-            
             
             color_idx = get_enemy_color_index(state.room_counter)
 
@@ -1067,122 +1063,34 @@ class BerzerkRenderer(JAXGameRenderer):
                 return maybe_recolor(self.sprites[name], color_idx)
 
             return jax.lax.switch(
-                jnp.clip(axis+1, 0, 2), 
+                jnp.clip(axis+1, 0, 2),
                 [
                     lambda: jax.lax.switch(
                         (counter - 1) % 64,
-                        [
-                            lambda: self.sprites["enemy_idle_1"],
-                            lambda: self.sprites["enemy_idle_1"],
-                            lambda: self.sprites["enemy_idle_1"],
-                            lambda: self.sprites["enemy_idle_1"],
-                            lambda: self.sprites["enemy_idle_1"],
-                            lambda: self.sprites["enemy_idle_1"],
-                            lambda: self.sprites["enemy_idle_1"],
-                            lambda: self.sprites["enemy_idle_1"],
-                            lambda: self.sprites["enemy_idle_2"],
-                            lambda: self.sprites["enemy_idle_2"],
-                            lambda: self.sprites["enemy_idle_2"],
-                            lambda: self.sprites["enemy_idle_2"],
-                            lambda: self.sprites["enemy_idle_2"],
-                            lambda: self.sprites["enemy_idle_2"],
-                            lambda: self.sprites["enemy_idle_2"],
-                            lambda: self.sprites["enemy_idle_2"],
-                            lambda: self.sprites["enemy_idle_3"],
-                            lambda: self.sprites["enemy_idle_3"],
-                            lambda: self.sprites["enemy_idle_3"],
-                            lambda: self.sprites["enemy_idle_3"],
-                            lambda: self.sprites["enemy_idle_3"],
-                            lambda: self.sprites["enemy_idle_3"],
-                            lambda: self.sprites["enemy_idle_3"],
-                            lambda: self.sprites["enemy_idle_3"],
-                            lambda: self.sprites["enemy_idle_4"],
-                            lambda: self.sprites["enemy_idle_4"],
-                            lambda: self.sprites["enemy_idle_4"],
-                            lambda: self.sprites["enemy_idle_4"],
-                            lambda: self.sprites["enemy_idle_4"],
-                            lambda: self.sprites["enemy_idle_4"],
-                            lambda: self.sprites["enemy_idle_4"],
-                            lambda: self.sprites["enemy_idle_4"],
-                            lambda: self.sprites["enemy_idle_5"],
-                            lambda: self.sprites["enemy_idle_5"],
-                            lambda: self.sprites["enemy_idle_5"],
-                            lambda: self.sprites["enemy_idle_5"],
-                            lambda: self.sprites["enemy_idle_5"],
-                            lambda: self.sprites["enemy_idle_5"],
-                            lambda: self.sprites["enemy_idle_5"],
-                            lambda: self.sprites["enemy_idle_5"],
-                            lambda: self.sprites["enemy_idle_6"],
-                            lambda: self.sprites["enemy_idle_6"],
-                            lambda: self.sprites["enemy_idle_6"],
-                            lambda: self.sprites["enemy_idle_6"],
-                            lambda: self.sprites["enemy_idle_6"],
-                            lambda: self.sprites["enemy_idle_6"],
-                            lambda: self.sprites["enemy_idle_6"],
-                            lambda: self.sprites["enemy_idle_6"],
-                            lambda: self.sprites["enemy_idle_7"],
-                            lambda: self.sprites["enemy_idle_7"],
-                            lambda: self.sprites["enemy_idle_7"],
-                            lambda: self.sprites["enemy_idle_7"],
-                            lambda: self.sprites["enemy_idle_7"],
-                            lambda: self.sprites["enemy_idle_7"],
-                            lambda: self.sprites["enemy_idle_7"],
-                            lambda: self.sprites["enemy_idle_7"],
-                            lambda: self.sprites["enemy_idle_8"],
-                            lambda: self.sprites["enemy_idle_8"],
-                            lambda: self.sprites["enemy_idle_8"],
-                            lambda: self.sprites["enemy_idle_8"],
-                            lambda: self.sprites["enemy_idle_8"],
-                            lambda: self.sprites["enemy_idle_8"],
-                            lambda: self.sprites["enemy_idle_8"],
-                            lambda: self.sprites["enemy_idle_8"],
-                        ]
+                        [lambda: recolor("enemy_idle_1")] * 8 + 
+                        [lambda: recolor("enemy_idle_2")] * 8 +
+                        [lambda: recolor("enemy_idle_3")] * 8 +
+                        [lambda: recolor("enemy_idle_4")] * 8 +
+                        [lambda: recolor("enemy_idle_5")] * 8 +
+                        [lambda: recolor("enemy_idle_6")] * 8 +
+                        [lambda: recolor("enemy_idle_7")] * 8 +
+                        [lambda: recolor("enemy_idle_8")] * 8 
                     ),
                     lambda: jax.lax.switch(
                         (counter - 1) % 28,
-                        [
-                            lambda: self.sprites["enemy_move_horizontal_1"],
-                            lambda: self.sprites["enemy_move_horizontal_1"],
-                            lambda: self.sprites["enemy_move_horizontal_1"],
-                            lambda: self.sprites["enemy_move_horizontal_1"],
-                            lambda: self.sprites["enemy_move_horizontal_1"],
-                            lambda: self.sprites["enemy_move_horizontal_1"],
-                            lambda: self.sprites["enemy_move_horizontal_1"],
-                            lambda: self.sprites["enemy_move_horizontal_1"],
-                            lambda: self.sprites["enemy_move_horizontal_1"],
-                            lambda: self.sprites["enemy_move_horizontal_1"],
-                            lambda: self.sprites["enemy_move_horizontal_1"],
-                            lambda: self.sprites["enemy_move_horizontal_1"],
-                            lambda: self.sprites["enemy_move_horizontal_1"],
-                            lambda: self.sprites["enemy_move_horizontal_1"],
-                            lambda: self.sprites["enemy_move_horizontal_2"],
-                            lambda: self.sprites["enemy_move_horizontal_2"],
-                            lambda: self.sprites["enemy_move_horizontal_2"],
-                            lambda: self.sprites["enemy_move_horizontal_2"],
-                            lambda: self.sprites["enemy_move_horizontal_2"],
-                            lambda: self.sprites["enemy_move_horizontal_2"],
-                            lambda: self.sprites["enemy_move_horizontal_2"],
-                            lambda: self.sprites["enemy_move_horizontal_2"],
-                            lambda: self.sprites["enemy_move_horizontal_2"],
-                            lambda: self.sprites["enemy_move_horizontal_2"],
-                            lambda: self.sprites["enemy_move_horizontal_2"],
-                            lambda: self.sprites["enemy_move_horizontal_2"],
-                            
-                            ]
-                        
+                        [lambda: recolor("enemy_move_horizontal_1")] * 14 +
+                        [lambda: recolor("enemy_move_horizontal_2")] * 14
                     ),
                     lambda: jax.lax.switch(
-                        (counter - 1) % 2,
-                        [
-                            lambda: self.sprites["enemy_move_vertical_1"],
-                            lambda: self.sprites["enemy_move_vertical_2"],
-                        ]
-                    )
+                        (counter - 1) % 48,
+                        [lambda: recolor("enemy_move_vertical_1")] * 12 +
+                        [lambda: recolor("enemy_move_vertical_2")] * 12 +
+                        [lambda: recolor("enemy_move_vertical_1")] * 12 +
+                        [lambda: recolor("enemy_move_vertical_3")] * 12
+                    ),
                 ]
             )
         
-
-
         for i in range(state.enemy_pos.shape[0]):
             sprite = get_enemy_sprite(i)
             raster = jr.render_at(raster, state.enemy_pos[i][0], state.enemy_pos[i][1], jr.get_sprite_frame(sprite, 0))
