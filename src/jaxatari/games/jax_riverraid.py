@@ -9,11 +9,9 @@ from jax import lax
 import jax.lax
 
 from gymnax.environments import spaces
-from ocatari.vision.skiing import player_c
+#from ocatari.vision.skiing import player_c
 
 from jaxatari.environment import JaxEnvironment, JAXAtariAction as Action
-from jaxatari.games.jax_pong import WIDTH
-from jaxatari.games.jax_seaquest import player_step
 from jaxatari.renderers import AtraJaxisRenderer
 from jaxatari.rendering import atraJaxis as aj
 
@@ -50,6 +48,10 @@ class RiverraidState(NamedTuple):
     player_velocity: chex.Array
     player_direction: chex.Array  # 0 left, 1 straight, 2 right
     player_state: chex.Array
+
+    player_bullet_x: chex.Array
+    player_bullet_y: chex.Array
+
 
 
 class RiverraidInfo(NamedTuple):
@@ -161,9 +163,9 @@ def generate_altering_river(state: RiverraidState) -> RiverraidState:
 
 
     def island_branch(state: RiverraidState):
-        jax.debug.print("YES ISLAND BRANCH")
+        #jax.debug.print("YES ISLAND BRANCH")
         def expanse(state: RiverraidState) -> RiverraidState:
-            jax.debug.print("EXPANDING ISLAND")
+            #jax.debug.print("EXPANDING ISLAND")
             new_river_inner_left = state.river_inner_left.at[0].set(state.river_inner_left[1] - 3)
             new_river_inner_right = state.river_inner_right.at[0].set(state.river_inner_right[1] + 3)
             new_left = state.river_left.at[0].set(state.river_left[1])
@@ -174,7 +176,7 @@ def generate_altering_river(state: RiverraidState) -> RiverraidState:
                                   river_right=new_right)
 
         def shrink(state: RiverraidState) -> RiverraidState:
-            jax.debug.print("SHRINKING ISLAND")
+            #jax.debug.print("SHRINKING ISLAND")
             proposed_inner_left = state.river_inner_left[1] + 3
             proposed_inner_right = state.river_inner_right[1] - 3
             new_river_inner_left, new_river_inner_right, new_island_present = jax.lax.cond(
@@ -202,7 +204,7 @@ def generate_altering_river(state: RiverraidState) -> RiverraidState:
                                   river_island_present=new_island_present
             )
 
-        jax.debug.print("YES ISLAND RIVER STATE {state}", state=state.river_state)
+        #jax.debug.print("YES ISLAND RIVER STATE {state}", state=state.river_state)
         return lax.switch(
             state.river_state,
             [straight, expanse, shrink],
@@ -211,9 +213,9 @@ def generate_altering_river(state: RiverraidState) -> RiverraidState:
 
 
     def island_transition(state: RiverraidState) -> RiverraidState:
-        jax.debug.print("ISLAND TRANSITION BRANCH")
+        #jax.debug.print("ISLAND TRANSITION BRANCH")
         def spawn_island(state: RiverraidState) -> RiverraidState:
-            jax.debug.print("SPAWNING ISLAND")
+            #jax.debug.print("SPAWNING ISLAND")
             def straight(state: RiverraidState) -> RiverraidState:
                 new_river_left = state.river_left.at[0].set(state.river_left[1])
                 new_river_right = state.river_right.at[0].set(state.river_right[1])
@@ -244,7 +246,7 @@ def generate_altering_river(state: RiverraidState) -> RiverraidState:
                                       island_transition_state=new_island_transition_state)
 
             def initiate_split(state: RiverraidState) -> RiverraidState:
-                jax.debug.print("INIT SPLIIIIIIIIIIIIIIIIT")
+                #jax.debug.print("INIT SPLIIIIIIIIIIIIIIIIT")
                 new_river_inner_left = state.river_inner_left.at[0].set(SCREEN_WIDTH // 2 - 1)
                 new_river_inner_right = state.river_inner_right.at[0].set(SCREEN_WIDTH // 2 + 1)
                 new_river_left = state.river_left.at[0].set(state.river_left[1])
@@ -272,7 +274,7 @@ def generate_altering_river(state: RiverraidState) -> RiverraidState:
 
         def terminate_island(state: RiverraidState) -> RiverraidState:
             def remove_island(state: RiverraidState) -> RiverraidState:
-                jax.debug.print("REMOVING ISLAND")
+                #jax.debug.print("REMOVING ISLAND")
                 new_river_inner_left = state.river_inner_left.at[0].set(state.river_inner_left[1] + 3)
                 new_river_inner_right = state.river_inner_right.at[0].set(state.river_inner_right[1] - 3)
                 new_left = state.river_left.at[0].set(state.river_left[1])
@@ -297,11 +299,11 @@ def generate_altering_river(state: RiverraidState) -> RiverraidState:
                 )
 
             def straight(state: RiverraidState) -> RiverraidState:
-                jax.debug.print("STRAIGHT AFTER REMOVAL")
+                #jax.debug.print("STRAIGHT AFTER REMOVAL")
                 new_river_left = state.river_left.at[0].set(state.river_left[1])
                 new_river_right = state.river_right.at[0].set(state.river_right[1])
 
-                jax.debug.print("alternation length: {length}", length=state.river_alternation_length)
+                #jax.debug.print("alternation length: {length}", length=state.river_alternation_length)
                 new_river_state, new_island_transition_state, new_island_present = (
                                                 jax.lax.cond(state.river_alternation_length <= 1,
                                                 lambda _: (jnp.array(2), jnp.array(0), jnp.array(0)),
@@ -323,7 +325,7 @@ def generate_altering_river(state: RiverraidState) -> RiverraidState:
                                       river_state=new_river_state,
                                       river_island_present=new_island_present)
 
-            jax.debug.print("YEEEEEEEEEEEEEEEEEEETING ISLAND")
+            #jax.debug.print("YEEEEEEEEEEEEEEEEEEETING ISLAND")
             return jax.lax.cond(
                 state.island_transition_state == 4,
                 lambda state: straight(state),
@@ -337,7 +339,7 @@ def generate_altering_river(state: RiverraidState) -> RiverraidState:
                         operand=state)
         #return spawn_island(state)
 
-    jax.debug.print("Riverraid: river_island_present: {island}", island=state.river_island_present)
+   # jax.debug.print("Riverraid: river_island_present: {island}", island=state.river_island_present)
     new_river_island_present = jax.lax.cond(
         jnp.logical_and(
             state.river_island_present >= 2,
@@ -448,7 +450,7 @@ def generate_straight_river(state: RiverraidState) -> RiverraidState:
 
 @jax.jit
 def generate_segment_transition(state: RiverraidState) -> RiverraidState:
-    jax.debug.print("TRANSITIONING SEGMENT")
+    #jax.debug.print("TRANSITIONING SEGMENT")
     def scroll_empty_island(state: RiverraidState) -> RiverraidState:
         scrolled_inner_left = jnp.roll(state.river_inner_left, 1)
         scrolled_inner_right = jnp.roll(state.river_inner_right, 1)
@@ -476,7 +478,7 @@ def generate_segment_transition(state: RiverraidState) -> RiverraidState:
     def shrink_to_damsize(state: RiverraidState) -> RiverraidState:
         scrolled_left = jnp.roll(state.river_left, 1)
         scrolled_right = jnp.roll(state.river_right, 1)
-        jax.debug.print("SHRINKING TO DAM SIZE")
+        #jax.debug.print("SHRINKING TO DAM SIZE")
 
         new_river_left = scrolled_left.at[0].set(scrolled_left[1] + 3)
         new_river_right = scrolled_right.at[0].set(scrolled_right[1] - 3)
@@ -508,7 +510,7 @@ def generate_segment_transition(state: RiverraidState) -> RiverraidState:
                               segment_transition_state=new_transition_state)
 
     def dam_into_new_segment(state: RiverraidState) -> RiverraidState:
-        jax.debug.print("SETTING DAM")
+        #jax.debug.print("SETTING DAM")
         #scrolled_left = jnp.roll(state.river_left, 1)
         #scrolled_right = jnp.roll(state.river_right, 1)
         new_state = scroll_empty_island(state)
@@ -532,7 +534,7 @@ def generate_segment_transition(state: RiverraidState) -> RiverraidState:
                                   )
 
 
-    jax.debug.print("Riverraid: segment_transition_state: {segment_transition_state}", segment_transition_state=state.segment_transition_state)
+    #jax.debug.print("Riverraid: segment_transition_state: {segment_transition_state}", segment_transition_state=state.segment_transition_state)
     return jax.lax.switch(state.segment_transition_state,[first_call,
                                                                 remove_island,
                                                                 shrink_to_damsize,
@@ -549,7 +551,7 @@ def update_river_banks(state: RiverraidState) -> RiverraidState:
         lambda state: state.segment_state,
         operand=state
     )
-    jax.debug.print("Riverraid: segment_state: {segment_state}", segment_state=new_segment_state)
+    #jax.debug.print("Riverraid: segment_state: {segment_state}", segment_state=new_segment_state)
     state = state._replace(segment_state=new_segment_state % 3)
     return jax.lax.switch(state.segment_state, [lambda state: generate_altering_river(state),
                                                 lambda state: generate_segment_transition(state),
@@ -636,6 +638,44 @@ def get_action_from_keyboard(state: RiverraidState) -> Action:
         else:
             return Action.NOOP
 
+
+def player_shooting(state, action):
+    shooting = jnp.any(
+        jnp.array([action == Action.LEFTFIRE, action == Action.RIGHTFIRE, action == Action.FIRE])
+    )
+    new_bullet_x, new_bullet_y = jax.lax.cond(
+        jnp.logical_and(
+            shooting,
+            state.player_bullet_y < 0),
+        lambda state: ((state.player_x + 2).astype(jnp.float32), (state.player_y - 0).astype(jnp.float32)),
+        lambda state: (state.player_bullet_x.astype(jnp.float32), (state.player_bullet_y - 5).astype(jnp.float32)),
+        operand=state
+    )
+
+    # collision with outer banks
+    new_bullet_x, new_bullet_y = jax.lax.cond(
+        jnp.logical_or(new_bullet_x <= state.river_left[new_bullet_y.astype(jnp.int32)],
+                        new_bullet_x >= state.river_right[new_bullet_y.astype(jnp.int32)]),
+        lambda state: (jnp.array(-1, dtype=jnp.float32), jnp.array(-1, dtype=jnp.float32)),
+        lambda state: (new_bullet_x, new_bullet_y),
+        operand=state
+    )
+
+    # collision with island
+    new_bullet_x, new_bullet_y = jax.lax.cond(
+        jnp.logical_and(new_bullet_x >= state.river_inner_left[new_bullet_y.astype(jnp.int32)],
+                        new_bullet_x <= state.river_inner_right[new_bullet_y.astype(jnp.int32)]),
+        lambda state: (jnp.array(-1, dtype=jnp.float32), jnp.array(-1, dtype=jnp.float32)),
+        lambda state: (new_bullet_x, new_bullet_y),
+        operand=state
+    )
+
+
+    jax.debug.print("Riverraid: player_bullet_x: {bullet_x}, player_bullet_y: {bullet_y}", bullet_x=new_bullet_x, bullet_y=new_bullet_y)
+    return state._replace(player_bullet_x=new_bullet_x,
+                              player_bullet_y=new_bullet_y)
+
+
 class JaxRiverraid(JaxEnvironment):
     def __init__(self, frameskip: int = 0, reward_funcs: list[callable] = None):
         super().__init__()
@@ -683,7 +723,9 @@ class JaxRiverraid(JaxEnvironment):
                                player_y=jnp.array(SCREEN_HEIGHT - 40),
                                player_velocity=jnp.array(0, dtype=jnp.float32),
                                player_direction=jnp.array(1),
-                               player_state= jnp.array(0)
+                               player_state= jnp.array(0),
+                               player_bullet_x= jnp.array(-1, dtype=jnp.float32),
+                               player_bullet_y= jnp.array(-1, dtype=jnp.float32)
                                )
         observation = self._get_observation(state)
         return observation, state
@@ -700,6 +742,7 @@ class JaxRiverraid(JaxEnvironment):
             new_state = roll_static_objects(state)
             new_state = update_river_banks(new_state)
             new_state = player_movement(new_state, action)
+            new_state = player_shooting(new_state, action)
             return new_state
 
         def respawn(state: RiverraidState) -> RiverraidState:
@@ -757,16 +800,20 @@ def load_sprites():
     MODULE_DIR = os.path.dirname(os.path.abspath(__file__))
 
     player = aj.loadFrame(os.path.join(MODULE_DIR, "sprites/galaxian/player.npy"),transpose=False)
+    bullet = aj.loadFrame(os.path.join(MODULE_DIR, "sprites/galaxian/bullet.npy"), transpose=False)
 
     SPRITE_PLAYER = jnp.expand_dims(player, axis = 0)
+    BULLET = jnp.expand_dims(bullet, axis=0)
     return(
         SPRITE_PLAYER,
+        BULLET
     )
 
 class RiverraidRenderer(AtraJaxisRenderer):
     def __init__(self):
         (
             self.SPRITE_PLAYER,
+            self.BULLET,
         ) = load_sprites()
 
 
@@ -795,6 +842,11 @@ class RiverraidRenderer(AtraJaxisRenderer):
         px = jnp.round(state.player_x).astype(jnp.int32)
         py = jnp.round(state.player_y).astype(jnp.int32)
         raster = aj.render_at(raster, py, px, player_frame) # x and y swapped cuz its transposed later
+
+        bullet_frame = aj.get_sprite_frame(self.BULLET, 0)
+        bx = jnp.round(state.player_bullet_x).astype(jnp.int32)
+        by = jnp.round(state.player_bullet_y).astype(jnp.int32)
+        raster = aj.render_at(raster, by, bx, bullet_frame)
 
         # transpose it to (WIDTH, HEIGHT, 3)
         return jnp.transpose(raster, (1, 0, 2))
