@@ -55,6 +55,11 @@ class BeamRiderConstants(NamedTuple):
     SHIP_BOTTOM_OFFSET = 20
     INITIAL_BEAM = 2  # Center beam
 
+    TORPEDOES_PER_SECTOR: int = 3
+    TORPEDO_SPEED: float = 2.0  # Faster than regular projectiles
+    TORPEDO_WIDTH: int = 3
+    TORPEDO_HEIGHT: int = 6
+
     # Enemy spawn position
     ENEMY_SPAWN_Y = 10
 
@@ -85,7 +90,8 @@ class Projectile:
     x: float
     y: float
     active: bool
-    speed: float = BeamRiderConstants.PROJECTILE_SPEED
+    speed: float
+    projectile_type: int  # 0 = laser, 1 = torpedo
 
 
 @struct.dataclass
@@ -102,21 +108,27 @@ class Enemy:
 @struct.dataclass
 class BeamRiderState:
     """Complete game state"""
-    # Game entities
+    # Game entities (no defaults)
     ship: Ship
-    projectiles: chex.Array  # Array of Projectile structs
-    enemies: chex.Array  # Array of Enemy structs
+    projectiles: chex.Array
+    enemies: chex.Array
 
-    # Game state
+    # Game state (no defaults)
     score: int
     lives: int
     level: int
     game_over: bool
-    # Random state
     rng_key: chex.PRNGKey
-    # Timing and spawning
     frame_count: int
     enemy_spawn_timer: int
+
+    # Torpedo system (no defaults)
+    torpedoes_remaining: int
+    torpedo_projectiles: chex.Array
+    current_sector: int
+    enemies_killed_this_sector: int
+
+    # Fields WITH defaults (must come last)
     enemy_spawn_interval: int = BeamRiderConstants.ENEMY_SPAWN_INTERVAL
 
 
@@ -143,6 +155,8 @@ class BeamRiderEnv(JaxEnvironment[BeamRiderState, jnp.ndarray, dict, BeamRiderCo
             beam_position=initial_beam,
             active=True
         )
+        # Initialize torpedo projectiles (separate array)
+        torpedo_projectiles = jnp.zeros((self.constants.MAX_PROJECTILES, 4))  # x, y, active, speed, type
 
         # Initialize empty projectiles array
         projectiles = jnp.zeros((self.constants.MAX_PROJECTILES, 4))  # x, y, active, speed
@@ -155,6 +169,10 @@ class BeamRiderEnv(JaxEnvironment[BeamRiderState, jnp.ndarray, dict, BeamRiderCo
             projectiles=projectiles,
             enemies=enemies,
             score=0,
+            torpedoes_remaining=self.constants.TORPEDOES_PER_SECTOR,
+            torpedo_projectiles=torpedo_projectiles,
+            current_sector=1,
+            enemies_killed_this_sector=0,
             lives=self.constants.INITIAL_LIVES,
             level=self.constants.INITIAL_LEVEL,
             game_over=False,
@@ -218,18 +236,26 @@ class BeamRiderEnv(JaxEnvironment[BeamRiderState, jnp.ndarray, dict, BeamRiderCo
         return state.replace(ship=ship)
 
     def _handle_firing(self, state: BeamRiderState, action: int) -> BeamRiderState:
-        """Handle projectile firing - JAX-compatible version"""
-        # Check if firing action
-        should_fire = jnp.isin(action, jnp.array([3, 4, 5]))  # fire, left+fire, right+fire
+        """Handle both laser and torpedo firing"""
 
+        # Laser firing (actions 3, 4, 5)
+        should_fire_laser = jnp.isin(action, jnp.array([3, 4, 5]))
+        state = self._fire_laser(state, should_fire_laser)
+
+        # Torpedo firing (actions 6, 7, 8)
+        should_fire_torpedo = jnp.isin(action, jnp.array([6, 7, 8]))
+        state = self._fire_torpedo(state, should_fire_torpedo)
+
+        return state
+
+    def _fire_laser(self, state: BeamRiderState, should_fire: bool) -> BeamRiderState:
+        """Fire regular laser projectile"""
         projectiles = state.projectiles
         active_mask = projectiles[:, 2] == 0  # inactive projectiles
 
-        # Find first inactive projectile slot
         first_inactive = jnp.argmax(active_mask)
         can_fire = active_mask[first_inactive] & should_fire
 
-        # Create new projectile data
         new_projectile = jnp.array([
             state.ship.x + self.constants.SHIP_WIDTH // 2,  # x
             state.ship.y,  # y
@@ -237,7 +263,6 @@ class BeamRiderEnv(JaxEnvironment[BeamRiderState, jnp.ndarray, dict, BeamRiderCo
             -self.constants.PROJECTILE_SPEED  # speed (negative = upward)
         ])
 
-        # Update projectiles array conditionally
         projectiles = jnp.where(
             can_fire,
             projectiles.at[first_inactive].set(new_projectile),
@@ -246,20 +271,61 @@ class BeamRiderEnv(JaxEnvironment[BeamRiderState, jnp.ndarray, dict, BeamRiderCo
 
         return state.replace(projectiles=projectiles)
 
+    def _fire_torpedo(self, state: BeamRiderState, should_fire: bool) -> BeamRiderState:
+        """Fire torpedo projectile (if any remaining)"""
+        torpedo_projectiles = state.torpedo_projectiles
+        active_mask = torpedo_projectiles[:, 2] == 0  # inactive torpedoes
+
+        first_inactive = jnp.argmax(active_mask)
+        has_torpedoes = state.torpedoes_remaining > 0
+        can_fire = active_mask[first_inactive] & should_fire & has_torpedoes
+
+        new_torpedo = jnp.array([
+            state.ship.x + self.constants.SHIP_WIDTH // 2,  # x
+            state.ship.y,  # y
+            1,  # active
+            -self.constants.TORPEDO_SPEED  # speed (faster than laser)
+        ])
+
+        torpedo_projectiles = jnp.where(
+            can_fire,
+            torpedo_projectiles.at[first_inactive].set(new_torpedo),
+            torpedo_projectiles
+        )
+
+        # Decrease torpedo count when fired
+        torpedoes_remaining = jnp.where(
+            can_fire,
+            state.torpedoes_remaining - 1,
+            state.torpedoes_remaining
+        )
+
+        return state.replace(
+            torpedo_projectiles=torpedo_projectiles,
+            torpedoes_remaining=torpedoes_remaining
+        )
+
     def _update_projectiles(self, state: BeamRiderState) -> BeamRiderState:
-        """Update all projectiles"""
+        """Update all projectiles (lasers and torpedoes)"""
+        # Update regular projectiles
         projectiles = state.projectiles
-
-        # Update y position for active projectiles
         new_y = projectiles[:, 1] + projectiles[:, 3]  # y + speed
-
-        # Deactivate projectiles that go off screen
         active = (projectiles[:, 2] == 1) & (new_y > 0) & (new_y < self.constants.SCREEN_HEIGHT)
-
         projectiles = projectiles.at[:, 1].set(new_y)
         projectiles = projectiles.at[:, 2].set(active.astype(jnp.float32))
 
-        return state.replace(projectiles=projectiles)
+        # Update torpedo projectiles
+        torpedo_projectiles = state.torpedo_projectiles
+        torpedo_new_y = torpedo_projectiles[:, 1] + torpedo_projectiles[:, 3]  # y + speed
+        torpedo_active = (torpedo_projectiles[:, 2] == 1) & (torpedo_new_y > 0) & (
+                    torpedo_new_y < self.constants.SCREEN_HEIGHT)
+        torpedo_projectiles = torpedo_projectiles.at[:, 1].set(torpedo_new_y)
+        torpedo_projectiles = torpedo_projectiles.at[:, 2].set(torpedo_active.astype(jnp.float32))
+
+        return state.replace(
+            projectiles=projectiles,
+            torpedo_projectiles=torpedo_projectiles
+        )
 
     def _spawn_enemies(self, state: BeamRiderState) -> BeamRiderState:
         """Spawn new enemies on random beams"""
@@ -322,10 +388,11 @@ class BeamRiderEnv(JaxEnvironment[BeamRiderState, jnp.ndarray, dict, BeamRiderCo
     def _check_collisions(self, state: BeamRiderState) -> BeamRiderState:
         """Check for collisions between projectiles and enemies - JAX-compatible"""
         projectiles = state.projectiles
+        torpedo_projectiles = state.torpedo_projectiles
         enemies = state.enemies
         score = state.score
 
-        # Vectorized collision detection for projectiles vs enemies
+        # Vectorized collision detection for LASER projectiles vs enemies
         proj_active = projectiles[:, 2] == 1  # active projectiles
         enemy_active = enemies[:, 3] == 1  # active enemies
 
@@ -335,8 +402,8 @@ class BeamRiderEnv(JaxEnvironment[BeamRiderState, jnp.ndarray, dict, BeamRiderCo
         enemy_x = enemies[:, 0:1].T  # shape (1, MAX_ENEMIES)
         enemy_y = enemies[:, 1:2].T  # shape (1, MAX_ENEMIES)
 
-        # Vectorized bounding box collision check
-        collisions = (
+        # Vectorized bounding box collision check for lasers
+        laser_collisions = (
                 (proj_x < enemy_x + self.constants.ENEMY_WIDTH) &
                 (proj_x + self.constants.PROJECTILE_WIDTH > enemy_x) &
                 (proj_y < enemy_y + self.constants.ENEMY_HEIGHT) &
@@ -345,18 +412,43 @@ class BeamRiderEnv(JaxEnvironment[BeamRiderState, jnp.ndarray, dict, BeamRiderCo
                 enemy_active[None, :]  # broadcast enemy active state
         )
 
-        # Find first collision for each projectile
-        proj_hits = jnp.any(collisions, axis=1)
-        enemy_hits = jnp.any(collisions, axis=0)
+        # Find collisions for laser projectiles
+        laser_proj_hits = jnp.any(laser_collisions, axis=1)
+        laser_enemy_hits = jnp.any(laser_collisions, axis=0)
+
+        # Vectorized collision detection for TORPEDO projectiles vs enemies
+        torpedo_active = torpedo_projectiles[:, 2] == 1  # active torpedoes
+        torpedo_x = torpedo_projectiles[:, 0:1]  # shape (MAX_PROJECTILES, 1)
+        torpedo_y = torpedo_projectiles[:, 1:2]  # shape (MAX_PROJECTILES, 1)
+
+        # Vectorized bounding box collision check for torpedoes
+        torpedo_collisions = (
+                (torpedo_x < enemy_x + self.constants.ENEMY_WIDTH) &
+                (torpedo_x + self.constants.TORPEDO_WIDTH > enemy_x) &
+                (torpedo_y < enemy_y + self.constants.ENEMY_HEIGHT) &
+                (torpedo_y + self.constants.TORPEDO_HEIGHT > enemy_y) &
+                torpedo_active[:, None] &  # broadcast torpedo active state
+                enemy_active[None, :]  # broadcast enemy active state
+        )
+
+        # Find collisions for torpedo projectiles
+        torpedo_proj_hits = jnp.any(torpedo_collisions, axis=1)
+        torpedo_enemy_hits = jnp.any(torpedo_collisions, axis=0)
+
+        # Combine enemy hits from both laser and torpedo
+        total_enemy_hits = laser_enemy_hits | torpedo_enemy_hits
 
         # Update projectile and enemy states
-        projectiles = projectiles.at[:, 2].set(projectiles[:, 2] * (~proj_hits))
-        enemies = enemies.at[:, 3].set(enemies[:, 3] * (~enemy_hits))
+        projectiles = projectiles.at[:, 2].set(projectiles[:, 2] * (~laser_proj_hits))
+        torpedo_projectiles = torpedo_projectiles.at[:, 2].set(torpedo_projectiles[:, 2] * (~torpedo_proj_hits))
+        enemies = enemies.at[:, 3].set(enemies[:, 3] * (~total_enemy_hits))
 
-        # Update score
-        score += jnp.sum(enemy_hits) * self.constants.POINTS_PER_ENEMY
+        # Update score (torpedoes give double points)
+        laser_score = jnp.sum(laser_enemy_hits) * self.constants.POINTS_PER_ENEMY
+        torpedo_score = jnp.sum(torpedo_enemy_hits) * self.constants.POINTS_PER_ENEMY * 2  # Double points
+        score += laser_score + torpedo_score
 
-        # Check enemy-ship collisions (vectorized)
+        # Check enemy-ship collisions (vectorized) - use original enemy_active
         ship_x, ship_y = state.ship.x, state.ship.y
         ship_collisions = (
                 (ship_x < enemies[:, 0] + self.constants.ENEMY_WIDTH) &
@@ -367,6 +459,8 @@ class BeamRiderEnv(JaxEnvironment[BeamRiderState, jnp.ndarray, dict, BeamRiderCo
         )
 
         ship_collision = jnp.any(ship_collisions)
+
+        # Deactivate enemies that hit the ship
         enemies = enemies.at[:, 3].set(enemies[:, 3] * (~ship_collisions))
 
         # Handle ship collision - use conditional logic for struct updates
@@ -393,12 +487,30 @@ class BeamRiderEnv(JaxEnvironment[BeamRiderState, jnp.ndarray, dict, BeamRiderCo
 
         return state.replace(
             projectiles=projectiles,
+            torpedo_projectiles=torpedo_projectiles,
             enemies=enemies,
             score=score,
             ship=ship,
             lives=lives
         )
 
+    def _check_sector_completion(self, state: BeamRiderState) -> BeamRiderState:
+        """Check if sector is complete and reset torpedoes"""
+        # This should be called after enemy collision detection
+        # Count how many enemies were killed this frame
+
+        # If 15 enemies killed this sector, advance to next sector
+        sector_complete = state.enemies_killed_this_sector >= 15
+
+        new_sector = jnp.where(sector_complete, state.current_sector + 1, state.current_sector)
+        new_torpedoes = jnp.where(sector_complete, self.constants.TORPEDOES_PER_SECTOR, state.torpedoes_remaining)
+        new_enemies_killed = jnp.where(sector_complete, 0, state.enemies_killed_this_sector)
+
+        return state.replace(
+            current_sector=new_sector,
+            torpedoes_remaining=new_torpedoes,
+            enemies_killed_this_sector=new_enemies_killed
+        )
     def _check_game_over(self, state: BeamRiderState) -> BeamRiderState:
         """Check if game is over"""
         game_over = state.lives <= 0
@@ -432,13 +544,16 @@ class BeamRiderRenderer(JAXGameRenderer):
             screen
         )
 
-        # Render projectiles
+        # Render projectiles (lasers)
         screen = self._draw_projectiles(screen, state.projectiles)
+
+        # Render torpedo projectiles
+        screen = self._draw_torpedo_projectiles(screen, state.torpedo_projectiles)
 
         # Render enemies
         screen = self._draw_enemies(screen, state.enemies)
 
-        # Render UI (score, lives)
+        # Render UI (score, lives, torpedoes)
         screen = self._draw_ui(screen, state)
 
         return screen
@@ -472,6 +587,44 @@ class BeamRiderRenderer(JAXGameRenderer):
 
         # Draw all beams using JAX loop
         screen = jax.lax.fori_loop(0, self.constants.NUM_BEAMS, draw_single_beam, screen)
+        return screen
+
+    def _draw_torpedo_projectiles(self, screen: chex.Array, torpedo_projectiles: chex.Array) -> chex.Array:
+        """Draw all active torpedo projectiles - vectorized for JIT"""
+
+        # Vectorized drawing function
+        def draw_single_torpedo(i, screen):
+            x, y = torpedo_projectiles[i, 0].astype(int), torpedo_projectiles[i, 1].astype(int)
+            active = torpedo_projectiles[i, 2] == 1
+
+            # Create coordinate grids
+            y_indices = jnp.arange(self.constants.SCREEN_HEIGHT)
+            x_indices = jnp.arange(self.constants.SCREEN_WIDTH)
+            y_grid, x_grid = jnp.meshgrid(y_indices, x_indices, indexing='ij')
+
+            # Create mask for torpedo pixels (slightly larger than regular projectiles)
+            torpedo_mask = (
+                    (x_grid >= x) &
+                    (x_grid < x + self.constants.TORPEDO_WIDTH) &
+                    (y_grid >= y) &
+                    (y_grid < y + self.constants.TORPEDO_HEIGHT) &
+                    active &
+                    (x >= 0) & (x < self.constants.SCREEN_WIDTH) &
+                    (y >= 0) & (y < self.constants.SCREEN_HEIGHT)
+            )
+
+            # Apply torpedo color where mask is True (WHITE for torpedoes vs YELLOW for lasers)
+            torpedo_color = jnp.array(self.constants.WHITE, dtype=jnp.uint8)
+            screen = jnp.where(
+                torpedo_mask[..., None],  # Add dimension for RGB
+                torpedo_color,
+                screen
+            ).astype(jnp.uint8)
+
+            return screen
+
+        # Apply to all torpedo projectiles
+        screen = jax.lax.fori_loop(0, self.constants.MAX_PROJECTILES, draw_single_torpedo, screen)
         return screen
 
     def _draw_ship(self, screen: chex.Array, ship: Ship) -> chex.Array:
@@ -578,9 +731,9 @@ class BeamRiderRenderer(JAXGameRenderer):
         return screen
 
     def _draw_ui(self, screen: chex.Array, state: BeamRiderState) -> chex.Array:
-        """Draw UI elements (score, lives, etc.)"""
+        """Draw UI elements (score, lives, torpedoes, etc.)"""
 
-        # Create coordinate grids für die UI-Elemente
+        # Create coordinate grids for UI elements
         y_indices = jnp.arange(self.constants.SCREEN_HEIGHT)
         x_indices = jnp.arange(self.constants.SCREEN_WIDTH)
         y_grid, x_grid = jnp.meshgrid(y_indices, x_indices, indexing='ij')
@@ -600,6 +753,15 @@ class BeamRiderRenderer(JAXGameRenderer):
         screen = jnp.where(
             lives_mask[..., None],
             jnp.array(self.constants.WHITE, dtype=jnp.uint8),
+            screen
+        )
+
+        # Torpedo indicator
+        torpedo_bars = state.torpedoes_remaining * 15
+        torpedo_mask = (y_grid >= 4) & (y_grid < 6) & (x_grid < torpedo_bars)
+        screen = jnp.where(
+            torpedo_mask[..., None],
+            jnp.array(self.constants.YELLOW, dtype=jnp.uint8),
             screen
         )
 
@@ -665,17 +827,23 @@ class BeamRiderPygameRenderer:
         sys.exit()
 
     def _get_action_from_key(self, key):
-        """Konvertiert Tastatureingaben zu Aktionen"""
+        """Convert keyboard inputs to actions"""
         if key == pygame.K_LEFT:
             return 1  # left
         elif key == pygame.K_RIGHT:
             return 2  # right
         elif key == pygame.K_SPACE:
-            return 3  # fire
-        elif key == pygame.K_a:  # A + Space für left+fire
+            return 3  # fire laser
+        elif key == pygame.K_a:  # A for left+laser
             return 4
-        elif key == pygame.K_d:  # D + Space für right+fire
+        elif key == pygame.K_d:  # D for right+laser
             return 5
+        elif key == pygame.K_t:  # T for torpedo
+            return 6  # fire torpedo
+        elif key == pygame.K_q:  # Q for left+torpedo
+            return 7
+        elif key == pygame.K_e:  # E for right+torpedo
+            return 8
         return 0  # no-op
 
     def _draw_screen(self, screen_buffer):
@@ -691,7 +859,7 @@ class BeamRiderPygameRenderer:
         self.screen.blit(surf, (0, 0))
 
     def _draw_ui_overlay(self, state):
-        """Zeichnet UI-Overlay mit Text"""
+        """Draw UI overlay with text"""
         # Score
         score_text = self.font.render(f"Score: {state.score}", True, (255, 255, 255))
         self.screen.blit(score_text, (10, 10))
@@ -700,17 +868,22 @@ class BeamRiderPygameRenderer:
         lives_text = self.font.render(f"Lives: {state.lives}", True, (255, 255, 255))
         self.screen.blit(lives_text, (10, 50))
 
+        # Torpedoes remaining
+        torpedoes_text = self.font.render(f"Torpedoes: {state.torpedoes_remaining}", True, (255, 255, 0))
+        self.screen.blit(torpedoes_text, (10, 90))
+
         # Level
         level_text = self.font.render(f"Level: {state.level}", True, (255, 255, 255))
-        self.screen.blit(level_text, (10, 90))
+        self.screen.blit(level_text, (10, 130))
 
         # Controls
         controls_text = [
             "Controls:",
             "← → : Move",
-            "Space: Fire",
-            "A: Left+Fire",
-            "D: Right+Fire"
+            "Space: Fire Laser",
+            "T: Fire Torpedo",
+            "A/D: Move+Laser",
+            "Q/E: Move+Torpedo"
         ]
 
         for i, text in enumerate(controls_text):
