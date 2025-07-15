@@ -991,7 +991,7 @@ class VideoPinballState(NamedTuple):
     target_cooldown: chex.Array
     special_target_cooldown: chex.Array
     atari_symbols: chex.Array
-    dropper_counter: chex.Array
+    rollover_counter: chex.Array
     step_counter: chex.Array
     ball_in_play: chex.Array
     # obs_stack: chex.ArrayTree     What is this for? Pong doesnt have this right?
@@ -1016,7 +1016,7 @@ class VideoPinballObservation(NamedTuple):
     bumper_multiplier: jnp.ndarray
     active_targets: chex.Array
     atari_symbols: chex.Array
-    dropper_counter: chex.Array
+    rollover_counter: chex.Array
 
 
 class VideoPinballInfo(NamedTuple):
@@ -1616,7 +1616,7 @@ def _reset_ball(state: VideoPinballState):
 
 @jax.jit
 def _handle_ball_in_gutter(
-    state: VideoPinballState, score, atari_symbols, dropper_counter
+    state: VideoPinballState, score, atari_symbols, rollover_counter
 ):
     lives = jax.lax.cond(
         atari_symbols < 4,
@@ -1626,8 +1626,8 @@ def _handle_ball_in_gutter(
     )
 
     # TODO: This should slowly happen one by one but this will do for now
-    score = score + ((dropper_counter - 1) * atari_symbols)
-    dropper_counter = jnp.array(1).astype(jnp.int32)
+    score = score + ((rollover_counter - 1) * atari_symbols)
+    rollover_counter = jnp.array(1).astype(jnp.int32)
 
     atari_symbols = jnp.array(0).astype(jnp.int32)
 
@@ -1638,7 +1638,7 @@ def _handle_ball_in_gutter(
         score,
         active_targets,
         atari_symbols,
-        dropper_counter,
+        rollover_counter,
         bumper_multiplier,
         lives,
     )
@@ -1650,71 +1650,47 @@ def process_objects_hit(state: VideoPinballState, objects_hit):
     # Targets: Make them disappear, give points
     # Targets: Check if all hit, increase multiplier
     # BonusTarget: Give points, make screen flash, something else?
-    # Dropper: Give points, increase number
+    # Rollover: Give points, increase number
     # Atari: Give points, make Atari symbol at bottom appear
-    # Assume objects_hit is list: [LeftBumper, MiddleBumper, RightBumper, LeftTarget, MiddleTarget, RightTarget,
-    #                              BonusTarget, Dropper, AtariSymbol, Spinner]
+    # Assume objects_hit is list:
+    # [0: no score, 1: Bumper, 2: Spinner, 3: Left Rollover, 4: Atari Rollover,
+    # 5: Special Lit Up Target, 6: Left Lit Up Target, 7:Middle Lit Up Target, 8: Right Lit Up Target]
 
-    # ball_vel_y = jnp.where(
-    #     plunger_power > 0,
-    #     ball_vel_y + plunger_power,
-    #     ball_vel_y,
-    # )
-
-    # plunger_position = jax.lax.cond(
-    #     jnp.logical_and(
-    #         state.plunger_position < PLUNGER_MAX_POSITION,
-    #         jnp.logical_and(action == Action.DOWN, jnp.logical_not(state.ball_in_play)),
-    #     ),
-    #     lambda s: s + 1,
-    #     lambda s: s,
-    #     operand=state.plunger_position,
-    # )
 
     # Bumper points
     score = state.score
     active_targets = state.active_targets
     atari_symbols = state.atari_symbols
-    dropper_counter = state.dropper_counter
+    rollover_counter = state.rollover_counter
 
-    score += jnp.where(
-        objects_hit[0],
-        100 * state.bumper_multiplier,
-        0,
-    )
     score += jnp.where(
         objects_hit[1],
         100 * state.bumper_multiplier,
         0,
     )
-    score += jnp.where(
-        objects_hit[2],
-        100 * state.bumper_multiplier,
-        0,
-    )
 
     # Give points for targets hit
-    score += jnp.where(objects_hit[3], 100, 0)
-    score += jnp.where(objects_hit[4], 100, 0)
-    score += jnp.where(objects_hit[5], 100, 0)
+    score += jnp.where(objects_hit[6], 100, 0)
+    score += jnp.where(objects_hit[7], 100, 0)
+    score += jnp.where(objects_hit[8], 100, 0)
 
     # Make hit targets disappear
     active_targets = jax.lax.cond(
-        objects_hit[3],
+        objects_hit[6],
         lambda s: jnp.array([False, s[1], s[2], s[3]]).astype(jnp.bool),
         lambda s: s,
         operand=active_targets,
     )
 
     active_targets = jax.lax.cond(
-        objects_hit[4],
+        objects_hit[7],
         lambda s: jnp.array([s[0], False, s[2], s[3]]).astype(jnp.bool),
         lambda s: s,
         operand=active_targets,
     )
 
     active_targets = jax.lax.cond(
-        objects_hit[5],
+        objects_hit[8],
         lambda s: jnp.array([s[0], s[1], False, s[3]]).astype(jnp.bool),
         lambda s: s,
         operand=active_targets,
@@ -1723,24 +1699,24 @@ def process_objects_hit(state: VideoPinballState, objects_hit):
     # Bottom Bonus Target
     score += jnp.where(objects_hit[6], 1100, 0)
     active_targets = jax.lax.cond(
-        objects_hit[6],
+        objects_hit[5],
         lambda s: jnp.array([s[0], s[1], s[2], False]).astype(jnp.bool),
         lambda s: s,
         operand=active_targets,
     )
 
-    # Give score for hitting the dropper and increase its number
-    score += jnp.where(objects_hit[7], 100, 0)
-    # TODO: Check if dropper really goes up further beyond 9 even though the number isnt displayed
-    dropper_counter = jax.lax.cond(
+    # Give score for hitting the rollover and increase its number
+    score += jnp.where(objects_hit[3], 100, 0)
+    # TODO: Check if rollover really goes up further beyond 9 even though the number isnt displayed
+    rollover_counter = jax.lax.cond(
         objects_hit[7],
         lambda s: s + 1,
         lambda s: s,
-        operand=dropper_counter,
+        operand=rollover_counter,
     )
 
     # Give score for hitting the Atari symbol and make a symbol appear at the bottom
-    score += jnp.where(objects_hit[8], 100, 0)
+    score += jnp.where(objects_hit[4], 100, 0)
     atari_symbols = jax.lax.cond(
         jnp.logical_and(objects_hit[8], atari_symbols < 4),
         lambda s: s + 1,
@@ -1749,9 +1725,9 @@ def process_objects_hit(state: VideoPinballState, objects_hit):
     )
 
     # Give 1 point for hitting a spinner
-    score += jnp.where(objects_hit[9], 1, 0)
+    score += jnp.where(objects_hit[2], 1, 0)
 
-    return score, active_targets, atari_symbols, dropper_counter
+    return score, active_targets, atari_symbols, rollover_counter
 
 
 @jax.jit
@@ -1926,7 +1902,7 @@ class JaxVideoPinball(
             target_cooldown=jnp.array(-1).astype(jnp.int32),
             special_target_cooldown=jnp.array(-120).astype(jnp.int32),
             atari_symbols=jnp.array(0).astype(jnp.int32),
-            dropper_counter=jnp.array(1).astype(jnp.int32),
+            rollover_counter=jnp.array(1).astype(jnp.int32),
             step_counter=jnp.array(0).astype(jnp.int32),
             ball_in_play=jnp.array(False).astype(jnp.bool),
         )
@@ -1980,9 +1956,9 @@ class JaxVideoPinball(
 
         # Step 4: Update scores and handle special objects
         # TODO: Input the list of objects hit once collisions are done
-        score, active_targets, atari_symbols, dropper_counter = process_objects_hit(
+        score, active_targets, atari_symbols, rollover_counter = process_objects_hit(
             state,
-            [False, False, False, False, False, False, False, False, False, False],
+            [False, False, False, False, False, False, False, False, False],
         )
         active_targets, target_cooldown, special_target_cooldown, bumper_multiplier = (
             handle_target_cooldowns(state, active_targets)
@@ -2007,7 +1983,7 @@ class JaxVideoPinball(
             score,
             active_targets,
             atari_symbols,
-            dropper_counter,
+            rollover_counter,
             bumper_multiplier,
             lives,
         ) = jax.lax.cond(
@@ -2017,7 +1993,7 @@ class JaxVideoPinball(
             score,
             active_targets,
             atari_symbols,
-            dropper_counter,
+            rollover_counter,
             bumper_multiplier,
         )
 
@@ -2040,7 +2016,7 @@ class JaxVideoPinball(
             target_cooldown=target_cooldown,
             special_target_cooldown=special_target_cooldown,
             atari_symbols=atari_symbols,
-            dropper_counter=dropper_counter,
+            rollover_counter=rollover_counter,
             step_counter=jnp.array(state.step_counter + 1).astype(jnp.int32),
             ball_in_play=ball_in_play,
             # obs_stack=None,
@@ -2108,7 +2084,7 @@ class JaxVideoPinball(
             bumper_multiplier=state.bumper_multiplier,
             active_targets=state.active_targets,
             atari_symbols=state.atari_symbols,
-            dropper_counter=state.dropper_counter,
+            rollover_counter=state.rollover_counter,
         )
 
     @partial(jax.jit, static_argnums=(0,))
@@ -2212,7 +2188,7 @@ def load_sprites():
 
     # sprite_wall_bottom_left_square = aj.loadFrame(os.path.join(SPRITES_BASE_DIR, "WallBottomLeftSquare.npy"), transpose=True)
     # sprite_wall_bumper = aj.loadFrame(os.path.join(SPRITES_BASE_DIR, "WallBumper.npy"), transpose=True)
-    # sprite_wall_dropper = aj.loadFrame(os.path.join(SPRITES_BASE_DIR, "WallDropper.npy"), transpose=True)
+    # sprite_wall_rollover = aj.loadFrame(os.path.join(SPRITES_BASE_DIR, "Wallrollover.npy"), transpose=True)
     # sprite_wall_left_l = aj.loadFrame(os.path.join(SPRITES_BASE_DIR, "WallLeftL.npy"), transpose=True)
     # sprite_wall_outer = aj.loadFrame(os.path.join(SPRITES_BASE_DIR, "WallOuter.npy"), transpose=True)
     # sprite_wall_right_l = aj.loadFrame(os.path.join(SPRITES_BASE_DIR, "WallRightL.npy"), transpose=True)
@@ -2447,7 +2423,7 @@ def load_sprites():
         "yellow_diamond_top": sprite_yellow_diamond_top,
         # "wall_bottom_left_square": sprite_wall_bottom_left_square,
         # "wall_bumper": sprite_wall_bumper,
-        # "wall_dropper": sprite_wall_dropper,
+        # "wall_rollover": sprite_wall_rollover,
         # "wall_left_l": sprite_wall_left_l,
         # "wall_outer": sprite_wall_outer,
         # "wall_right_l": sprite_wall_right_l,
@@ -2576,16 +2552,16 @@ class VideoPinballRenderer(AtraJaxisRenderer):
         )
         raster = aj.render_at(raster, 110, 122, frame_bumper_right)
 
-        displayed_dropper_number = jax.lax.cond(
-            state.dropper_counter > 9,
+        displayed_rollover_number = jax.lax.cond(
+            state.rollover_counter > 9,
             lambda c: 9,
             lambda c: c,
-            operand=state.dropper_counter,
+            operand=state.rollover_counter,
         )
-        frame_dropper_left = aj.get_sprite_frame(
-            self.sprites["field_number_digits"], displayed_dropper_number
+        frame_rollover_left = aj.get_sprite_frame(
+            self.sprites["field_number_digits"], displayed_rollover_number
         )
-        raster = aj.render_at(raster, 46, 58, frame_dropper_left)
+        raster = aj.render_at(raster, 46, 58, frame_rollover_left)
         frame_atari_logo = aj.get_sprite_frame(self.sprites["atari_logo"], 0)
         raster = aj.render_at(raster, 109, 58, frame_atari_logo)
 
