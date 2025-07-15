@@ -169,10 +169,24 @@ TOP_ROW_Y_OFFSET = 49
 MIDDLE_ROW_Y_OFFSET = 113
 BOTTOM_ROW_Y_OFFSET = 177
 
-MIDDLE_BAR_Y = 104
 MIDDLE_BAR_X = 72
+MIDDLE_BAR_Y = 104
 MIDDLE_BAR_WIDTH = 16
 MIDDLE_BAR_HEIGHT = 8
+
+# Flipper Parts Positions and Dimensions
+
+#Flipper bounding boxes
+# Position 0 - Downn (RAM state 0)
+BOUNDING_BOX_1_2 = jnp.ones((1, 2)).astype(jnp.bool)
+BOUNDING_BOX_2_3 = jnp.ones((2, 3)).astype(jnp.bool)
+BOUNDING_BOX_2_4 = jnp.ones((2, 4)).astype(jnp.bool)
+BOUDNING_BOX_1_5 = jnp.ones((1, 5)).astype(jnp.bool)
+BOUNDING_BOX_1_4 = jnp.ones((1, 4)).astype(jnp.bool)
+BOUNDING_BOX_2_5 = jnp.ones((2, 5)).astype(jnp.bool)
+BOUNDING_BOX_2_6 = jnp.ones((2, 6)).astype(jnp.bool)
+
+# Position 16 - Mid-Down (RAM state 16)
 
 
 TOP_WALL_BOUNDING_BOX = jnp.ones((OUTER_WALL_THICKNESS, 160)).astype(jnp.bool)
