@@ -40,6 +40,8 @@ class BerzerkConstants(NamedTuple):
     EXIT_WIDTH = 40
     EXIT_HEIGHT = 64
 
+    DEATH_ANIMATION_FRAMES = 40
+
     SCORE_OFFSET_X = WIDTH - 58 - 6  # window width - distance to the right - digit width 
     SCORE_OFFSET_Y = HEIGHT - 20 - 7  # window height - distance to the bottom - digit height 
 
@@ -69,6 +71,8 @@ class BerzerkState(NamedTuple):
     score: chex.Array
     animation_counter: chex.Array
     enemy_animation_counter: chex.Array
+    death_timer: chex.Array
+    room_counter: chex.Array
     
 class BerzerkObservation(NamedTuple):
     player: chex.Array
@@ -351,12 +355,12 @@ class JaxBerzerk(JaxEnvironment[BerzerkState, BerzerkObservation, BerzerkInfo, B
     @partial(jax.jit, static_argnums=(0,))
     def reset(self, rng: chex.PRNGKey = jax.random.PRNGKey(42)) -> Tuple[BerzerkObservation, BerzerkState]:
         pos = jnp.array([self.consts.WIDTH // 2, self.consts.HEIGHT // 2], dtype=jnp.float32)
-        lives = jnp.array(2)
+        lives = jnp.array(2, dtype=jnp.int32)
         bullets = jnp.zeros((self.consts.MAX_BULLETS, 2), dtype=jnp.float32)
         bullet_dirs = jnp.zeros((self.consts.MAX_BULLETS, 2), dtype=jnp.float32)
         active = jnp.zeros((self.consts.MAX_BULLETS,), dtype=bool)
         enemy_pos = jax.random.uniform( # TODO: Don't let enemies spawn in player
-            rng, shape=(self.consts.NUM_ENEMIES, 2),
+            jax.random.split(rng)[1], shape=(self.consts.NUM_ENEMIES, 2),
             minval=jnp.array([self.consts.PLAYER_BOUNDS[0][0], self.consts.PLAYER_BOUNDS[1][0]]),
             maxval=jnp.array([self.consts.PLAYER_BOUNDS[0][1] - self.consts.ENEMY_SIZE[0], self.consts.PLAYER_BOUNDS[1][1] - self.consts.ENEMY_SIZE[1]])
         )
@@ -371,6 +375,8 @@ class JaxBerzerk(JaxEnvironment[BerzerkState, BerzerkObservation, BerzerkInfo, B
         score = jnp.array(0, dtype=jnp.int32)
         animation_counter = jnp.array(0, dtype=jnp.int32)
         enemy_animation_counter = jnp.zeros((self.consts.NUM_ENEMIES,), dtype=jnp.int32)
+        death_timer = jnp.array(0, dtype=jnp.int32)
+        room_counter = jnp.array(0, dtype=jnp.int32)
         state = BerzerkState(player_pos=pos, 
                              lives=lives, 
                              bullets=bullets, bullet_dirs=bullet_dirs, 
@@ -387,369 +393,419 @@ class JaxBerzerk(JaxEnvironment[BerzerkState, BerzerkObservation, BerzerkInfo, B
                              rng=rng, 
                              score=score, 
                              animation_counter=animation_counter,
-                             enemy_animation_counter=enemy_animation_counter)
+                             enemy_animation_counter=enemy_animation_counter,
+                             death_timer=death_timer,
+                             room_counter=room_counter)
         return self._get_observation(state), state
 
     @partial(jax.jit, static_argnums=0)
     def step(self, state: BerzerkState, action: chex.Array) -> Tuple[BerzerkObservation, BerzerkState, float, bool, BerzerkInfo]:
-        # 1. Player movement
-        player_x, player_y, move_dir = self.player_step(state, action)
-        new_pos = jnp.array([player_x, player_y])
+        # 0. Handle death animation phase
+        is_dead = state.death_timer > 0
+        death_timer = jnp.maximum(state.death_timer - 1, 0)
 
-        moving = self.is_moving_action(action)
+        def handle_death(_):
+            new_state = state._replace(death_timer=death_timer)
 
-        animation_counter = jnp.where(
-            moving,
-            state.animation_counter + 1,
-            0
-        )
+            # Leben und Score nur beim Reset abziehen/ändern
+            lives_after = jnp.where(death_timer == 0, state.lives - 1, state.lives)
+            score_after = jnp.where(lives_after == -1, 0, state.score)
+            room_after = jnp.where(lives_after == -1, 0, state.room_counter + 1)
 
-        _, reset_state = self.reset()
-
-        def rects_overlap(pos_a, size_a, pos_b, size_b):
-            left_a, top_a = pos_a
-            right_a = pos_a[0] + size_a[0]
-            bottom_a = pos_a[1] + size_a[1]
-
-            left_b, top_b = pos_b
-            right_b = pos_b[0] + size_b[0]
-            bottom_b = pos_b[1] + size_b[1]
-
-            overlap_x = (left_a < right_b) & (right_a > left_b)
-            overlap_y = (top_a < bottom_b) & (bottom_a > top_b)
-            return overlap_x & overlap_y
-
-        def object_hits_enemy(object_pos, object_size, enemy_pos):
-            object_left   = object_pos[0]
-            object_right  = object_pos[0] + object_size[0]
-            object_top    = object_pos[1]
-            object_bottom = object_pos[1] + object_size[1]
-
-            enemy_left   = enemy_pos[0]
-            enemy_right  = enemy_pos[0] + self.consts.ENEMY_SIZE[0]
-            enemy_top    = enemy_pos[1]
-            enemy_bottom = enemy_pos[1] + self.consts.ENEMY_SIZE[1]
-
-            overlap_x = (object_left < enemy_right) & (object_right > enemy_left)
-            overlap_y = (object_top < enemy_bottom) & (object_bottom > enemy_top)
-
-            return overlap_x & overlap_y
-
-        # 1a. Check wallcollision and exit collision
-        def object_hits_wall(object_pos, object_size):
-            object_hits_wall = (
-                ((object_pos[0] < self.consts.PLAYER_BOUNDS[0][0]) & (object_pos[0] > 0)) |
-                ((object_pos[0] + object_size[0] > self.consts.PLAYER_BOUNDS[0][1]) & (object_pos[0] < self.consts.WIDTH)) |
-                ((object_pos[1] < self.consts.PLAYER_BOUNDS[1][0]) & (object_pos[0] > 0)) |
-                ((object_pos[1] + object_size[1] > self.consts.PLAYER_BOUNDS[1][1]) & (object_pos[1] < self.consts.HEIGHT))
+            reset_state_with_lives_score = self.reset(jax.random.split(state.rng)[1])[1]._replace(
+                lives=lives_after,
+                score=score_after,
+                room_counter=room_after
             )
 
-            return object_hits_wall
-        
-        hit_exit = self.check_exit_crossing(new_pos)
-        hit_wall = object_hits_wall((player_x, player_y), self.consts.PLAYER_SIZE) & ~hit_exit
-
-        # 2. Update position and direction of enemies
-        rng, enemy_rng = jax.random.split(state.rng)
-
-        updated_enemy_pos, updated_enemy_axis, updated_enemy_dir = self.update_enemies(
-            new_pos, state.enemy_pos, state.enemy_move_axis, state.enemy_move_dir,
-            enemy_rng, state.enemy_move_prob
-        )
-
-        #enemy_moving = updated_enemy_axis != -1
-        #enemy_animation_counter = jnp.where(
-        #    enemy_moving,
-        #    state.enemy_animation_counter + 1,
-        #    jnp.zeros_like(state.enemy_animation_counter)
-        #)
-        enemy_animation_counter = state.enemy_animation_counter + 1
-
-
-        # Only move living enemies
-        updated_enemy_pos = jnp.where(state.enemy_alive[:, None], updated_enemy_pos, state.enemy_pos)
-        updated_enemy_axis = jnp.where(state.enemy_alive, updated_enemy_axis, state.enemy_move_axis)
-        updated_enemy_dir = jnp.where(state.enemy_alive, updated_enemy_dir, state.enemy_move_dir)
-
-        enemy_hits_wall = jax.vmap(
-            lambda enemy_pos: object_hits_wall(enemy_pos, self.consts.ENEMY_SIZE)
-        )(updated_enemy_pos)
-
-        # Enemies shoot
-        def enemy_fire_logic(pos, alive, axis, dir_, rng):
-            should_fire = jax.random.uniform(rng) < self.consts.ENEMY_SHOOT_PROB
-
-            def direction_when_moving():
-                # Bewegung entlang x (0) oder y (1)
-                dx = jnp.where(axis == 0, dir_, 0)
-                dy = jnp.where(axis == 1, dir_, 0)
-                return jnp.array([dx, dy], dtype=jnp.float32)
-
-            def direction_when_idle():
-                # Zielt grob in Richtung Spieler
-                delta = new_pos - pos  # Spieler - Gegner
-                abs_dx = jnp.abs(delta[0])
-                abs_dy = jnp.abs(delta[1])
-                axis = jnp.where(abs_dx > abs_dy, 0, 1)
-                dir_ = jnp.where(delta[axis] > 0, 1.0, -1.0)
-                dx = jnp.where(axis == 0, dir_, 0.0)
-                dy = jnp.where(axis == 1, dir_, 0.0)
-                return jnp.array([dx, dy], dtype=jnp.float32)
-
-            is_moving = axis != -1
-            direction = jax.lax.cond(
-                is_moving,
-                direction_when_moving,
-                direction_when_idle
+            return jax.lax.cond(
+                death_timer == 0,
+                lambda: (
+                    self._get_observation(reset_state_with_lives_score),
+                    reset_state_with_lives_score,
+                    0.0,
+                    lives_after == -1,
+                    self._get_info(reset_state_with_lives_score),
+                ),
+                lambda: (
+                    self._get_observation(new_state),
+                    new_state,
+                    0.0,
+                    state.lives == -1,
+                    self._get_info(new_state),
+                ),
             )
 
-            return (
-                pos,
-                direction,
-                should_fire & alive
+
+
+        def handle_normal(_):
+            # 1. Player movement
+            player_x, player_y, move_dir = self.player_step(state, action)
+
+            new_pos = jnp.array([player_x, player_y])
+
+            moving = self.is_moving_action(action)
+
+            animation_counter = jnp.where(
+                moving,
+                state.animation_counter + 1,
+                0
             )
 
-        enemy_rngs = jax.random.split(rng, self.consts.NUM_ENEMIES)
-        enemy_bullets_new, dirs_new, active_new = jax.vmap(enemy_fire_logic)(
-            updated_enemy_pos,
-            state.enemy_alive,
-            updated_enemy_axis,
-            updated_enemy_dir,
-            enemy_rngs
-        )
+            def rects_overlap(pos_a, size_a, pos_b, size_b):
+                left_a, top_a = pos_a
+                right_a = pos_a[0] + size_a[0]
+                bottom_a = pos_a[1] + size_a[1]
 
-        # Nur feuern, wenn nicht bereits aktiv
-        enemy_bullets = jnp.where(
-            ~state.enemy_bullet_active[:, None] & active_new[:, None],
-            enemy_bullets_new,
-            state.enemy_bullets
-        )
-        enemy_bullet_dirs = jnp.where(
-            ~state.enemy_bullet_active[:, None] & active_new[:, None],
-            dirs_new,
-            state.enemy_bullet_dirs
-        )
-        enemy_bullet_active = state.enemy_bullet_active | active_new
+                left_b, top_b = pos_b
+                right_b = pos_b[0] + size_b[0]
+                bottom_b = pos_b[1] + size_b[1]
 
-        enemy_bullet_sizes = jax.vmap(
-            lambda d: jax.lax.select(
-                d[0] == 0,
-                jnp.array(self.consts.BULLET_SIZE_VERTICAL, dtype=jnp.float32),
-                jnp.array(self.consts.BULLET_SIZE_HORIZONTAL, dtype=jnp.float32)
-            )
-        )(enemy_bullet_dirs)
+                overlap_x = (left_a < right_b) & (right_a > left_b)
+                overlap_y = (top_a < bottom_b) & (bottom_a > top_b)
+                return overlap_x & overlap_y
 
-        enemy_bullets = enemy_bullets + enemy_bullet_dirs * self.consts.BULLET_SPEED * enemy_bullet_active[:, None]
+            def object_hits_enemy(object_pos, object_size, enemy_pos):
+                object_left   = object_pos[0]
+                object_right  = object_pos[0] + object_size[0]
+                object_top    = object_pos[1]
+                object_bottom = object_pos[1] + object_size[1]
 
-        # Deaktiviere wenn außerhalb
-        enemy_bullet_active = enemy_bullet_active & (
-            (enemy_bullets[:, 0] >= self.consts.PLAYER_BOUNDS[0][0]) &
-            (enemy_bullets[:, 0] + enemy_bullet_sizes[:, 0] <= self.consts.PLAYER_BOUNDS[0][1]) &
-            (enemy_bullets[:, 1] >= self.consts.PLAYER_BOUNDS[1][0]) &
-            (enemy_bullets[:, 1] + enemy_bullet_sizes[:, 1] <= self.consts.PLAYER_BOUNDS[1][1])
-        )
+                enemy_left   = enemy_pos[0]
+                enemy_right  = enemy_pos[0] + self.consts.ENEMY_SIZE[0]
+                enemy_top    = enemy_pos[1]
+                enemy_bottom = enemy_pos[1] + self.consts.ENEMY_SIZE[1]
 
-        enemy_bullet_hits_player = jax.vmap(
-            lambda b_pos, b_size: rects_overlap(b_pos, b_size, new_pos, self.consts.PLAYER_SIZE)
-        )(enemy_bullets, enemy_bullet_sizes)
+                overlap_x = (object_left < enemy_right) & (object_right > enemy_left)
+                overlap_y = (object_top < enemy_bottom) & (object_bottom > enemy_top)
 
-        hit_by_enemy_bullet = jnp.any(enemy_bullet_hits_player)
+                return overlap_x & overlap_y
 
-        # 3. Check collision of player with enemy
-        player_pos = jnp.array([player_x, player_y])
-        player_hits = jax.vmap(
-            lambda enemy_pos: object_hits_enemy(player_pos, self.consts.PLAYER_SIZE, enemy_pos)
-        )(updated_enemy_pos)
-        
-        hit_by_enemy = jnp.any(player_hits)
-        hit_something = hit_by_enemy | hit_wall | hit_by_enemy_bullet
-        lives_after = jnp.where(hit_something, state.lives - 1, state.lives)
-
-        # 4. Shoot bullets of player (enemies can't shoot yet)
-        def shoot_bullet(state):
-            def try_spawn(i, carry):
-                bullets, directions, active = carry
-                return jax.lax.cond(
-                    ~active[i],
-                    lambda _: (
-                        bullets.at[i].set(new_pos),
-                        directions.at[i].set(move_dir),
-                        active.at[i].set(True),
-                    ),
-                    lambda _: (bullets, directions, active),
-                    operand=None
+            # 1a. Check wallcollision and exit collision
+            def object_hits_wall(object_pos, object_size):
+                object_hits_wall = (
+                    ((object_pos[0] < self.consts.PLAYER_BOUNDS[0][0]) & (object_pos[0] > 0)) |
+                    ((object_pos[0] + object_size[0] > self.consts.PLAYER_BOUNDS[0][1]) & (object_pos[0] < self.consts.WIDTH)) |
+                    ((object_pos[1] < self.consts.PLAYER_BOUNDS[1][0]) & (object_pos[0] > 0)) |
+                    ((object_pos[1] + object_size[1] > self.consts.PLAYER_BOUNDS[1][1]) & (object_pos[1] < self.consts.HEIGHT))
                 )
-            return jax.lax.fori_loop(0, self.consts.MAX_BULLETS, try_spawn, (state.bullets, state.bullet_dirs, state.bullet_active))
 
-        is_shooting = jnp.any(jnp.array([
-            action == Action.FIRE,
-            action == Action.UPRIGHTFIRE,
-            action == Action.UPLEFTFIRE,
-            action == Action.DOWNFIRE,
-            action == Action.DOWNRIGHTFIRE,
-            action == Action.DOWNLEFTFIRE,
-            action == Action.RIGHTFIRE,
-            action == Action.LEFTFIRE,
-            action == Action.UPFIRE,
-        ]))
+                return object_hits_wall
+            
+            hit_exit = self.check_exit_crossing(new_pos)
+            hit_wall = object_hits_wall((player_x, player_y), self.consts.PLAYER_SIZE) & ~hit_exit
+            jax.debug.print("Exzr: {hit_exit}", hit_exit=hit_exit)
+            new_room_counter = jax.lax.select(
+                hit_exit,
+                state.room_counter + 1,
+                state.room_counter
+            )
+            jax.debug.print("Room: {new_room_counter}", new_room_counter=new_room_counter)
+            # 2. Update position and direction of enemies
+            rng, enemy_rng = jax.random.split(state.rng)
 
-        bullets, bullet_dirs, bullet_active = jax.lax.cond(
-            is_shooting,
-            lambda _: shoot_bullet(state),
-            lambda _: (state.bullets, state.bullet_dirs, state.bullet_active),
+            updated_enemy_pos, updated_enemy_axis, updated_enemy_dir = self.update_enemies(
+                new_pos, state.enemy_pos, state.enemy_move_axis, state.enemy_move_dir,
+                enemy_rng, state.enemy_move_prob
+            )
+
+            #enemy_moving = updated_enemy_axis != -1
+            #enemy_animation_counter = jnp.where(
+            #    enemy_moving,
+            #    state.enemy_animation_counter + 1,
+            #    jnp.zeros_like(state.enemy_animation_counter)
+            #)
+            enemy_animation_counter = state.enemy_animation_counter + 1
+
+
+            # Only move living enemies
+            updated_enemy_pos = jnp.where(state.enemy_alive[:, None], updated_enemy_pos, state.enemy_pos)
+            updated_enemy_axis = jnp.where(state.enemy_alive, updated_enemy_axis, state.enemy_move_axis)
+            updated_enemy_dir = jnp.where(state.enemy_alive, updated_enemy_dir, state.enemy_move_dir)
+
+            enemy_hits_wall = jax.vmap(
+                lambda enemy_pos: object_hits_wall(enemy_pos, self.consts.ENEMY_SIZE)
+            )(updated_enemy_pos)
+
+            # Enemies shoot
+            def enemy_fire_logic(pos, alive, axis, dir_, rng):
+                should_fire = jax.random.uniform(rng) < self.consts.ENEMY_SHOOT_PROB
+
+                def direction_when_moving():
+                    # Bewegung entlang x (0) oder y (1)
+                    dx = jnp.where(axis == 0, dir_, 0)
+                    dy = jnp.where(axis == 1, dir_, 0)
+                    return jnp.array([dx, dy], dtype=jnp.float32)
+
+                def direction_when_idle():
+                    # Zielt grob in Richtung Spieler
+                    delta = new_pos - pos  # Spieler - Gegner
+                    abs_dx = jnp.abs(delta[0])
+                    abs_dy = jnp.abs(delta[1])
+                    axis = jnp.where(abs_dx > abs_dy, 0, 1)
+                    dir_ = jnp.where(delta[axis] > 0, 1.0, -1.0)
+                    dx = jnp.where(axis == 0, dir_, 0.0)
+                    dy = jnp.where(axis == 1, dir_, 0.0)
+                    return jnp.array([dx, dy], dtype=jnp.float32)
+
+                is_moving = axis != -1
+                direction = jax.lax.cond(
+                    is_moving,
+                    direction_when_moving,
+                    direction_when_idle
+                )
+
+                return (
+                    pos,
+                    direction,
+                    should_fire & alive
+                )
+
+            enemy_rngs = jax.random.split(rng, self.consts.NUM_ENEMIES)
+            enemy_bullets_new, dirs_new, active_new = jax.vmap(enemy_fire_logic)(
+                updated_enemy_pos,
+                state.enemy_alive,
+                updated_enemy_axis,
+                updated_enemy_dir,
+                enemy_rngs
+            )
+
+            # Nur feuern, wenn nicht bereits aktiv
+            enemy_bullets = jnp.where(
+                ~state.enemy_bullet_active[:, None] & active_new[:, None],
+                enemy_bullets_new,
+                state.enemy_bullets
+            )
+            enemy_bullet_dirs = jnp.where(
+                ~state.enemy_bullet_active[:, None] & active_new[:, None],
+                dirs_new,
+                state.enemy_bullet_dirs
+            )
+            enemy_bullet_active = state.enemy_bullet_active | active_new
+
+            enemy_bullet_sizes = jax.vmap(
+                lambda d: jax.lax.select(
+                    d[0] == 0,
+                    jnp.array(self.consts.BULLET_SIZE_VERTICAL, dtype=jnp.float32),
+                    jnp.array(self.consts.BULLET_SIZE_HORIZONTAL, dtype=jnp.float32)
+                )
+            )(enemy_bullet_dirs)
+
+            enemy_bullets = enemy_bullets + enemy_bullet_dirs * self.consts.BULLET_SPEED * enemy_bullet_active[:, None]
+
+            # Deaktiviere wenn außerhalb
+            enemy_bullet_active = enemy_bullet_active & (
+                (enemy_bullets[:, 0] >= self.consts.PLAYER_BOUNDS[0][0]) &
+                (enemy_bullets[:, 0] + enemy_bullet_sizes[:, 0] <= self.consts.PLAYER_BOUNDS[0][1]) &
+                (enemy_bullets[:, 1] >= self.consts.PLAYER_BOUNDS[1][0]) &
+                (enemy_bullets[:, 1] + enemy_bullet_sizes[:, 1] <= self.consts.PLAYER_BOUNDS[1][1])
+            )
+
+            enemy_bullet_hits_player = jax.vmap(
+                lambda b_pos, b_size: rects_overlap(b_pos, b_size, new_pos, self.consts.PLAYER_SIZE)
+            )(enemy_bullets, enemy_bullet_sizes)
+
+            hit_by_enemy_bullet = jnp.any(enemy_bullet_hits_player)
+
+            # 3. Check collision of player with enemy
+            player_pos = jnp.array([player_x, player_y])
+            player_hits = jax.vmap(
+                lambda enemy_pos: object_hits_enemy(player_pos, self.consts.PLAYER_SIZE, enemy_pos)
+            )(updated_enemy_pos)
+            
+            hit_by_enemy = jnp.any(player_hits)
+            hit_something = hit_by_enemy | hit_wall | hit_by_enemy_bullet
+            death_timer = jnp.where(hit_something, self.consts.DEATH_ANIMATION_FRAMES, state.death_timer)
+
+
+            # 4. Shoot bullets of player (enemies can't shoot yet)
+            def shoot_bullet(state):
+                def try_spawn(i, carry):
+                    bullets, directions, active = carry
+                    return jax.lax.cond(
+                        ~active[i],
+                        lambda _: (
+                            bullets.at[i].set(new_pos),
+                            directions.at[i].set(move_dir),
+                            active.at[i].set(True),
+                        ),
+                        lambda _: (bullets, directions, active),
+                        operand=None
+                    )
+                return jax.lax.fori_loop(0, self.consts.MAX_BULLETS, try_spawn, (state.bullets, state.bullet_dirs, state.bullet_active))
+
+            is_shooting = jnp.any(jnp.array([
+                action == Action.FIRE,
+                action == Action.UPRIGHTFIRE,
+                action == Action.UPLEFTFIRE,
+                action == Action.DOWNFIRE,
+                action == Action.DOWNRIGHTFIRE,
+                action == Action.DOWNLEFTFIRE,
+                action == Action.RIGHTFIRE,
+                action == Action.LEFTFIRE,
+                action == Action.UPFIRE,
+            ]))
+
+            bullets, bullet_dirs, bullet_active = jax.lax.cond(
+                is_shooting,
+                lambda _: shoot_bullet(state),
+                lambda _: (state.bullets, state.bullet_dirs, state.bullet_active),
+                operand=None
+            )
+
+            # 5. Move bullets
+            # Choose bullet size (depending on direction)
+            bullet_sizes = jax.vmap(
+                lambda d: jax.lax.select(
+                    d[0] == 0,
+                    jnp.array(self.consts.BULLET_SIZE_VERTICAL, dtype=jnp.float32),
+                    jnp.array(self.consts.BULLET_SIZE_HORIZONTAL, dtype=jnp.float32)
+                )
+            )(bullet_dirs)
+            
+            bullets += bullet_dirs * self.consts.BULLET_SPEED * bullet_active[:, None]
+            bullet_active = bullet_active & (
+                (bullets[:, 0] >= self.consts.PLAYER_BOUNDS[0][0]) & # left
+                (bullets[:, 0] + bullet_sizes[:, 0] <= self.consts.PLAYER_BOUNDS[0][1]) & # right
+                (bullets[:, 1] >= self.consts.PLAYER_BOUNDS[1][0]) & # top
+                (bullets[:, 1] + bullet_sizes[:, 1] <= self.consts.PLAYER_BOUNDS[1][1]) # bottom
+            )
+
+            # 6. Check collision of bullet and enemy
+            def bullet_hits_enemy(bullet_pos, bullet_size, enemy_pos):
+                return object_hits_enemy(bullet_pos, bullet_size, enemy_pos)
+            
+            # 6b. Check collision of enemy bullets with other enemies (friendly fire)
+            def enemy_bullet_hits_enemy(bullet_pos, bullet_size, target_pos, shooter_pos):
+                # Treffer, wenn Rechtecke überlappen UND nicht auf sich selbst schießen
+                return rects_overlap(bullet_pos, bullet_size, target_pos, jnp.array(self.consts.ENEMY_SIZE, dtype=jnp.float32)) & ~jnp.all(target_pos == shooter_pos)
+
+            enemy_friendly_fire_hits = jax.vmap(
+                lambda bullet_pos, bullet_size, shooter_pos: jax.vmap(
+                    lambda target_pos: enemy_bullet_hits_enemy(bullet_pos, bullet_size, target_pos, shooter_pos)
+                )(updated_enemy_pos)
+            )(enemy_bullets, enemy_bullet_sizes, updated_enemy_pos)
+
+            enemy_hit_by_friendly_fire = jnp.any(enemy_friendly_fire_hits, axis=0)  # (NUM_ENEMIES,)
+
+            all_hits = jax.vmap(
+                lambda enemy_pos: jax.vmap(
+                    lambda bullet, size: bullet_hits_enemy(bullet, size, enemy_pos)
+                )(bullets, bullet_sizes)
+            )(updated_enemy_pos)
+
+            enemy_hit = jnp.any(all_hits, axis=1)
+            enemy_alive = state.enemy_alive & ~enemy_hit & ~enemy_hits_wall & ~enemy_hit_by_friendly_fire
+
+            bullet_vs_bullet_hits = jax.vmap(
+                lambda b_pos, b_size, b_active: jax.vmap(
+                    lambda e_pos, e_size, e_active: 
+                        rects_overlap(b_pos, b_size, e_pos, e_size) & b_active & e_active
+                )(enemy_bullets, enemy_bullet_sizes, enemy_bullet_active)
+            )(bullets, bullet_sizes, bullet_active)
+
+            # Spieler-Schüsse, die eine Gegner-Bullet treffen
+            player_bullet_hit_enemy_bullet = jnp.any(bullet_vs_bullet_hits, axis=1)  # (player_bullets,)
+            # Gegner-Schüsse, die von Spieler-Bullets getroffen werden
+            enemy_bullet_hit_by_player = jnp.any(bullet_vs_bullet_hits, axis=0)      # (enemy_bullets,)
+
+            enemy_bullet_hit_enemy = jnp.any(enemy_friendly_fire_hits, axis=1)  # Shape: (NUM_ENEMIES,)
+            bullet_active = bullet_active & ~player_bullet_hit_enemy_bullet
+            enemy_bullet_active = enemy_bullet_active & ~enemy_bullet_hit_enemy
+
+            score_after = jnp.where(
+                jnp.any(enemy_hit | enemy_hits_wall | enemy_bullet_hit_enemy | hit_by_enemy),
+                state.score + 50,
+                state.score
+            )
+
+            # 7. For now simply teleport enemies out of area
+            invisible = jnp.array([-100.0, -100.0])
+            updated_enemy_pos = jnp.where(enemy_alive[:, None], updated_enemy_pos, invisible)
+
+            updated_enemy_axis = jnp.where(enemy_alive, updated_enemy_axis, 0)
+
+            # 8. Deactivate bullets on hit
+            bullet_hit = jnp.any(all_hits, axis=0)
+            bullet_active = bullet_active & ~bullet_hit
+
+            # 9. New state
+            new_state = BerzerkState(
+                player_pos=new_pos,
+                lives=state.lives,
+                bullets=bullets,
+                bullet_dirs=bullet_dirs,
+                bullet_active=bullet_active,
+                enemy_pos=updated_enemy_pos,
+                enemy_move_axis=updated_enemy_axis,
+                enemy_move_dir=updated_enemy_dir,
+                enemy_alive=enemy_alive,
+                enemy_bullets=enemy_bullets,
+                enemy_bullet_dirs=enemy_bullet_dirs,
+                enemy_bullet_active=enemy_bullet_active,
+                enemy_move_prob = state.enemy_move_prob,
+                last_dir=move_dir,
+                rng=rng,
+                score=score_after,
+                animation_counter=animation_counter,
+                enemy_animation_counter=enemy_animation_counter,
+                death_timer=death_timer,
+                room_counter=new_room_counter
+            )
+
+            # New level if exit reached
+            reset_for_new_level = BerzerkState(
+                player_pos=jnp.array([self.consts.WIDTH // 2, self.consts.HEIGHT // 2], dtype=jnp.float32),
+                lives=state.lives,
+                bullets=jnp.zeros_like(state.bullets),
+                bullet_dirs=jnp.zeros_like(state.bullet_dirs),
+                bullet_active=jnp.zeros_like(state.bullet_active),
+                enemy_pos=jax.random.uniform(
+                    state.rng, shape=(self.consts.NUM_ENEMIES, 2),
+                    minval=jnp.array([self.consts.PLAYER_BOUNDS[0][0], self.consts.PLAYER_BOUNDS[1][0]]),
+                    maxval=jnp.array([
+                        self.consts.PLAYER_BOUNDS[0][1] - self.consts.ENEMY_SIZE[0],
+                        self.consts.PLAYER_BOUNDS[1][1] - self.consts.ENEMY_SIZE[1]
+                    ])
+                ),
+                enemy_move_axis=-jnp.ones_like(state.enemy_move_axis),
+                enemy_move_dir=jnp.zeros_like(state.enemy_move_dir),
+                enemy_alive=jnp.ones_like(state.enemy_alive),
+                enemy_bullets=jnp.zeros((self.consts.NUM_ENEMIES, 2), dtype=jnp.float32),
+                enemy_bullet_dirs=jnp.zeros((self.consts.NUM_ENEMIES, 2), dtype=jnp.float32),
+                enemy_bullet_active=jnp.zeros((self.consts.NUM_ENEMIES,), dtype=bool),
+                enemy_move_prob=state.enemy_move_prob,
+                last_dir=jnp.array([0.0, -1.0], dtype=jnp.float32),
+                rng=rng,
+                score=score_after,
+                animation_counter=jnp.zeros_like(state.animation_counter),
+                enemy_animation_counter=jnp.zeros_like(state.enemy_animation_counter),
+                death_timer=jnp.array(0, dtype=jnp.int32),
+                room_counter=new_room_counter
+            )
+
+            #jax.debug.print("EXIT: {}", hit_exit)
+            new_state = jax.lax.cond(
+                hit_exit,
+                lambda: reset_for_new_level,
+                lambda: new_state
+            )
+
+            # 10. Observation + Info + Reward/Done
+            observation = self._get_observation(new_state)
+            info = self._get_info(new_state)
+            reward = 0.0
+            done = jnp.equal(state.lives, -1) 
+
+            return observation, new_state, reward, done, info
+    
+        return jax.lax.cond(
+            is_dead,
+            handle_death,
+            handle_normal,
             operand=None
         )
 
-        # 5. Move bullets
-        # Choose bullet size (depending on direction)
-        bullet_sizes = jax.vmap(
-            lambda d: jax.lax.select(
-                d[0] == 0,
-                jnp.array(self.consts.BULLET_SIZE_VERTICAL, dtype=jnp.float32),
-                jnp.array(self.consts.BULLET_SIZE_HORIZONTAL, dtype=jnp.float32)
-            )
-        )(bullet_dirs)
-        
-        bullets += bullet_dirs * self.consts.BULLET_SPEED * bullet_active[:, None]
-        bullet_active = bullet_active & (
-            (bullets[:, 0] >= self.consts.PLAYER_BOUNDS[0][0]) & # left
-            (bullets[:, 0] + bullet_sizes[:, 0] <= self.consts.PLAYER_BOUNDS[0][1]) & # right
-            (bullets[:, 1] >= self.consts.PLAYER_BOUNDS[1][0]) & # top
-            (bullets[:, 1] + bullet_sizes[:, 1] <= self.consts.PLAYER_BOUNDS[1][1]) # bottom
-        )
-
-        # 6. Check collision of bullet and enemy
-        def bullet_hits_enemy(bullet_pos, bullet_size, enemy_pos):
-            return object_hits_enemy(bullet_pos, bullet_size, enemy_pos)
-        
-        # 6b. Check collision of enemy bullets with other enemies (friendly fire)
-        def enemy_bullet_hits_enemy(bullet_pos, bullet_size, target_pos, shooter_pos):
-            # Treffer, wenn Rechtecke überlappen UND nicht auf sich selbst schießen
-            return rects_overlap(bullet_pos, bullet_size, target_pos, jnp.array(self.consts.ENEMY_SIZE, dtype=jnp.float32)) & ~jnp.all(target_pos == shooter_pos)
-
-        enemy_friendly_fire_hits = jax.vmap(
-            lambda bullet_pos, bullet_size, shooter_pos: jax.vmap(
-                lambda target_pos: enemy_bullet_hits_enemy(bullet_pos, bullet_size, target_pos, shooter_pos)
-            )(updated_enemy_pos)
-        )(enemy_bullets, enemy_bullet_sizes, updated_enemy_pos)
-
-        enemy_hit_by_friendly_fire = jnp.any(enemy_friendly_fire_hits, axis=0)  # (NUM_ENEMIES,)
-
-        all_hits = jax.vmap(
-            lambda enemy_pos: jax.vmap(
-                lambda bullet, size: bullet_hits_enemy(bullet, size, enemy_pos)
-            )(bullets, bullet_sizes)
-        )(updated_enemy_pos)
-
-        enemy_hit = jnp.any(all_hits, axis=1)
-        enemy_alive = state.enemy_alive & ~enemy_hit & ~enemy_hits_wall & ~enemy_hit_by_friendly_fire
-
-        bullet_vs_bullet_hits = jax.vmap(
-            lambda b_pos, b_size, b_active: jax.vmap(
-                lambda e_pos, e_size, e_active: 
-                    rects_overlap(b_pos, b_size, e_pos, e_size) & b_active & e_active
-            )(enemy_bullets, enemy_bullet_sizes, enemy_bullet_active)
-        )(bullets, bullet_sizes, bullet_active)
-
-        # Spieler-Schüsse, die eine Gegner-Bullet treffen
-        player_bullet_hit_enemy_bullet = jnp.any(bullet_vs_bullet_hits, axis=1)  # (player_bullets,)
-        # Gegner-Schüsse, die von Spieler-Bullets getroffen werden
-        enemy_bullet_hit_by_player = jnp.any(bullet_vs_bullet_hits, axis=0)      # (enemy_bullets,)
-
-        enemy_bullet_hit_enemy = jnp.any(enemy_friendly_fire_hits, axis=1)  # Shape: (NUM_ENEMIES,)
-        bullet_active = bullet_active & ~player_bullet_hit_enemy_bullet
-        enemy_bullet_active = enemy_bullet_active & ~enemy_bullet_hit_enemy
-
-        score_after = jnp.where(
-            jnp.any(enemy_hit | enemy_hits_wall),
-            state.score + 50,
-            state.score
-        )
-
-        # 7. For now simply teleport enemies out of area
-        invisible = jnp.array([-100.0, -100.0])
-        updated_enemy_pos = jnp.where(enemy_alive[:, None], updated_enemy_pos, invisible)
-
-        updated_enemy_axis = jnp.where(enemy_alive, updated_enemy_axis, 0)
-
-        # 8. Deactivate bullets on hit
-        bullet_hit = jnp.any(all_hits, axis=0)
-        bullet_active = bullet_active & ~bullet_hit
-
-        # 9. New state
-        new_state = BerzerkState(
-            player_pos=new_pos,
-            lives=lives_after,
-            bullets=bullets,
-            bullet_dirs=bullet_dirs,
-            bullet_active=bullet_active,
-            enemy_pos=updated_enemy_pos,
-            enemy_move_axis=updated_enemy_axis,
-            enemy_move_dir=updated_enemy_dir,
-            enemy_alive=enemy_alive,
-            enemy_bullets=enemy_bullets,
-            enemy_bullet_dirs=enemy_bullet_dirs,
-            enemy_bullet_active=enemy_bullet_active,
-            enemy_move_prob = state.enemy_move_prob,
-            last_dir=move_dir,
-            rng=rng,
-            score=score_after,
-            animation_counter=animation_counter,
-            enemy_animation_counter=enemy_animation_counter
-        )
-
-        # New level if exit reached
-        reset_for_new_level = BerzerkState(
-            player_pos=jnp.array([self.consts.WIDTH // 2, self.consts.HEIGHT // 2], dtype=jnp.float32),
-            lives=state.lives,
-            bullets=jnp.zeros_like(state.bullets),
-            bullet_dirs=jnp.zeros_like(state.bullet_dirs),
-            bullet_active=jnp.zeros_like(state.bullet_active),
-            enemy_pos=jax.random.uniform(
-                state.rng, shape=(self.consts.NUM_ENEMIES, 2),
-                minval=jnp.array([self.consts.PLAYER_BOUNDS[0][0], self.consts.PLAYER_BOUNDS[1][0]]),
-                maxval=jnp.array([
-                    self.consts.PLAYER_BOUNDS[0][1] - self.consts.ENEMY_SIZE[0],
-                    self.consts.PLAYER_BOUNDS[1][1] - self.consts.ENEMY_SIZE[1]
-                ])
-            ),
-            enemy_move_axis=-jnp.ones_like(state.enemy_move_axis),
-            enemy_move_dir=jnp.zeros_like(state.enemy_move_dir),
-            enemy_alive=jnp.ones_like(state.enemy_alive),
-            enemy_bullets=jnp.zeros((self.consts.NUM_ENEMIES, 2), dtype=jnp.float32),
-            enemy_bullet_dirs=jnp.zeros((self.consts.NUM_ENEMIES, 2), dtype=jnp.float32),
-            enemy_bullet_active=jnp.zeros((self.consts.NUM_ENEMIES,), dtype=bool),
-            enemy_move_prob=state.enemy_move_prob,
-            last_dir=jnp.array([0.0, -1.0], dtype=jnp.float32),
-            rng=rng,
-            score=score_after,
-            animation_counter=jnp.zeros_like(state.animation_counter),
-            enemy_animation_counter=jnp.zeros_like(state.enemy_animation_counter)
-        )
-
-        _, reset_state = self.reset(rng)
-
-        jax.debug.print("EXIT: {}", hit_exit)
-        new_state = jax.lax.cond(
-            hit_exit,
-            lambda: reset_for_new_level,
-            lambda: jax.lax.cond(
-                hit_something,
-                lambda: reset_state._replace(lives=state.lives - 1, score=score_after),  # Tod
-                lambda: new_state
-            )
-        )
-
-        # 10. Observation + Info + Reward/Done
-        observation = self._get_observation(new_state)
-        info = self._get_info(new_state)
-        reward = 0.0
-        done = jnp.equal(lives_after, -1) 
-        
-        jax.debug.print("Leben: {}", lives_after)
-
-        return observation, new_state, reward, done, info
-    
 
     def action_space(self) -> spaces.Discrete:
         return spaces.Discrete(len(self.action_set))
@@ -796,7 +852,7 @@ class BerzerkRenderer(JAXGameRenderer):
 
         # Sprites to load
         sprite_names = [
-            'player_idle', 'player_move_1', 'player_move_2',
+            'player_idle', 'player_move_1', 'player_move_2', 'player_death',
             'enemy_idle_1', 'enemy_idle_2', 'enemy_idle_3', 'enemy_idle_4', 'enemy_idle_5', 'enemy_idle_6', 'enemy_idle_7', 'enemy_idle_8',
             'enemy_move_horizontal_1', 'enemy_move_horizontal_2',
             'enemy_move_vertical_1', 'enemy_move_vertical_2', 'enemy_move_vertical_3', 'level_outer_walls',
@@ -810,7 +866,7 @@ class BerzerkRenderer(JAXGameRenderer):
         sprites['digits'] = digits
 
         # Add padding to player sprites for same size
-        player_keys = ['player_idle', 'player_move_1', 'player_move_2']
+        player_keys = ['player_idle', 'player_move_1', 'player_move_2', 'player_death']
         player_frames = [sprites[k] for k in player_keys]
 
         player_sprites_padded, player_offsets = jr.pad_to_match(player_frames)
@@ -854,7 +910,6 @@ class BerzerkRenderer(JAXGameRenderer):
         # Draw walls (assuming fixed positions based on bounds)
         wall_sprite = jr.get_sprite_frame(self.sprites['level_outer_walls'], 0)
         raster = jr.render_at(raster, self.consts.WALL_OFFSET[0], self.consts.WALL_OFFSET[1], wall_sprite)
-
 
         # Draw bullets
         for i in range(state.bullets.shape[0]):
@@ -913,36 +968,104 @@ class BerzerkRenderer(JAXGameRenderer):
 
         # Draw player animation
         def get_player_sprite():
+            def death_animation():
+                phase = (state.death_timer // 4) % 2
+                return jax.lax.cond(
+                    phase == 0,
+                    lambda: self.sprites['player_idle'],
+                    lambda: self.sprites['player_death']
+                )
+
             return jax.lax.cond(
-                state.animation_counter == 0,
-                lambda: self.sprites['player_idle'],
-                lambda: jax.lax.switch(
-                    (state.animation_counter - 1) % 12,
-                    [
-                        lambda: self.sprites['player_move_1'],
-                        lambda: self.sprites['player_move_1'],
-                        lambda: self.sprites['player_move_1'],
-                        lambda: self.sprites['player_move_1'],
-                        lambda: self.sprites['player_move_2'],
-                        lambda: self.sprites['player_move_2'],
-                        lambda: self.sprites['player_move_2'],
-                        lambda: self.sprites['player_move_2'],
-                        lambda: self.sprites['player_idle'],
-                        lambda: self.sprites['player_idle'],
-                        lambda: self.sprites['player_idle'],
-                        lambda: self.sprites['player_idle']
-                    ]
+                state.death_timer > 0,
+                death_animation,
+                lambda: jax.lax.cond(
+                    state.animation_counter == 0,
+                    lambda: self.sprites['player_idle'],
+                    lambda: jax.lax.switch(
+                        (state.animation_counter - 1) % 12,
+                        [
+                            lambda: self.sprites['player_move_1'],
+                            lambda: self.sprites['player_move_1'],
+                            lambda: self.sprites['player_move_1'],
+                            lambda: self.sprites['player_move_1'],
+                            lambda: self.sprites['player_move_2'],
+                            lambda: self.sprites['player_move_2'],
+                            lambda: self.sprites['player_move_2'],
+                            lambda: self.sprites['player_move_2'],
+                            lambda: self.sprites['player_idle'],
+                            lambda: self.sprites['player_idle'],
+                            lambda: self.sprites['player_idle'],
+                            lambda: self.sprites['player_idle'],
+                        ]
+                    )
                 )
             )
+
 
         player_sprite = get_player_sprite()
         raster = jr.render_at(raster, state.player_pos[0], state.player_pos[1], jr.get_sprite_frame(player_sprite, 0))
 
+        # Draw enemies
+        color_cycle = ["yellow", "orange", "white", "green", "red", "yellow2", "pink", "yellow"]
+
+        def get_enemy_color_index(room_counter: jnp.ndarray) -> jnp.ndarray:
+            num_colors = len(color_cycle)
+            return jax.lax.cond(
+                room_counter == 0,
+                lambda: jnp.array(0, dtype=jnp.int32),
+                lambda: ((room_counter - 1) // 2 + 1) % num_colors
+            )
+
+        color_names = jnp.array([
+            [255, 255, 0, 255],    # yellow
+            [255, 165, 0, 255],    # orange
+            [255, 255, 255, 255],  # white
+            [0, 255, 0, 255],      # green
+            [255, 0, 0, 255],      # red
+            [255, 255, 128, 255],  # yellow2
+            [255, 192, 203, 255],  # pink
+            [255, 255, 0, 255],    # yellow (wiederholung)
+        ], dtype=jnp.uint8)
+
+        def get_new_color(color_idx: jnp.ndarray) -> jnp.ndarray:
+            # color_idx ist ein JAX tracer int32
+            return color_names[color_idx]
+
+
+        def recolor_sprite(sprite, color_idx):
+            # Beispiel: Gelb (RGBA)
+            original_color = jnp.array([210, 210, 64, 255], dtype=jnp.uint8)  # Gelb
+            new_color = get_new_color(color_idx)  # z.B. grün, rot, etc.
+
+            # Maske: Nur gelbe Pixel finden (Vergleich mit original_color)
+            mask = jnp.all(sprite == original_color, axis=-1)  # shape (H, W), True nur bei Gelb
+
+            # Nur gelbe Pixel durch neue Farbe ersetzen
+            recolored = jnp.where(mask[..., None], new_color, sprite)
+
+            return recolored.astype(jnp.uint8)
+
+
+
+        def maybe_recolor(sprite: chex.Array, color_idx: int) -> chex.Array:
+            return jax.lax.cond(
+                color_idx == 0,
+                lambda: sprite,
+                lambda: recolor_sprite(sprite, color_idx)
+            )
 
         def get_enemy_sprite(i):
             counter = state.enemy_animation_counter[i]
             is_moving = state.enemy_move_axis[i] != -1
             axis = state.enemy_move_axis[i]
+            
+            
+            color_idx = get_enemy_color_index(state.room_counter)
+
+            def recolor(name: str):
+                return maybe_recolor(self.sprites[name], color_idx)
+
             return jax.lax.switch(
                 jnp.clip(axis+1, 0, 2), 
                 [
@@ -1057,12 +1180,14 @@ class BerzerkRenderer(JAXGameRenderer):
                     )
                 ]
             )
+        
+
 
         for i in range(state.enemy_pos.shape[0]):
             sprite = get_enemy_sprite(i)
             raster = jr.render_at(raster, state.enemy_pos[i][0], state.enemy_pos[i][1], jr.get_sprite_frame(sprite, 0))
 
-
+        # yellow (only 1x) -> orange -> white -> green -> red -> other yellow -> pink -> yellow -> ...
 
         # Draw score
         score_spacing = 8  # Spacing between digits 
