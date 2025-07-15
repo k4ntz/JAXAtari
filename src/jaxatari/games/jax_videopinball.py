@@ -376,9 +376,12 @@ class BallMovement:
 
 @chex.dataclass
 class SceneObject:
+    # Assume objects_hit is list: [LeftBumper, MiddleBumper, RightBumper, LeftTarget, MiddleTarget, RightTarget,
+    #                              BonusTarget, Dropper, AtariSymbol, Spinner]
     hit_box_matrix: chex.Array
     hit_box_offset: chex.Array
     reflecting: chex.Array  # 0: no reflection, 1: reflection
+    score_type: chex.Array # 0: no score, 1: Bumper, 2: Left Lit Target, 3: 
 
 
 # Instantiate a SceneObject like this:
@@ -911,11 +914,17 @@ class VideoPinballState(NamedTuple):
     ball_y: chex.Array
     ball_vel_x: chex.Array
     ball_vel_y: chex.Array
-    ball_direction: (chex.Array)  # 0: left/up, 1:left/down , 2: right/up, 3: right/down (Shouldn't this be a function?)
+    ball_direction: (
+        chex.Array
+    )  # 0: left/up, 1:left/down , 2: right/up, 3: right/down (Shouldn't this be a function?)
     left_flipper_angle: chex.Array
     right_flipper_angle: chex.Array
-    plunger_position: (chex.Array)  # Value between 0 and 20 where 20 means that the plunger is fully pulled
-    plunger_power: (chex.Array)  # 2 * plunger_position, only set to non-zero value once fired, reset after hitting invisible block
+    plunger_position: (
+        chex.Array
+    )  # Value between 0 and 20 where 20 means that the plunger is fully pulled
+    plunger_power: (
+        chex.Array
+    )  # 2 * plunger_position, only set to non-zero value once fired, reset after hitting invisible block
     score: chex.Array
     lives: chex.Array
     bumper_multiplier: chex.Array
@@ -1106,8 +1115,10 @@ def _calc_hit_point(
     hit_point_y = ball_movement.old_ball_y + t_entry * trajectory_y
 
     # determine on which side the ball has hit the obstacle
-    scene_object_half_height = scene_object.hit_box_matrix.shape[0] / 2.
-    scene_object_middle_point_y = scene_object.hit_box_offset[1] + scene_object_half_height
+    scene_object_half_height = scene_object.hit_box_matrix.shape[0] / 2.0
+    scene_object_middle_point_y = (
+        scene_object.hit_box_offset[1] + scene_object_half_height
+    )
 
     # distance of ball y to middle point of scene object
     d_middle_point_ball_y = jnp.abs(scene_object_middle_point_y - hit_point_y)
@@ -1115,16 +1126,18 @@ def _calc_hit_point(
     # if ball hit the scene object to the top/bottom, this distance should be around half height of the scene object
     hit_horizontal = jnp.abs(d_middle_point_ball_y - scene_object_half_height) < 1e-6
 
-    hit_point = jnp.array([
-        t_entry,
-        hit_point_x,
-        hit_point_y,
-        hit_horizontal,
-    ])
+    hit_point = jnp.array(
+        [
+            t_entry,
+            hit_point_x,
+            hit_point_y,
+            hit_horizontal,
+        ]
+    )
 
     hit_point = jax.lax.cond(
         no_collision,
-        lambda: jnp.array([T_ENTRY_NO_COLLISION, -1.0, -1.0, 0.]),
+        lambda: jnp.array([T_ENTRY_NO_COLLISION, -1.0, -1.0, 0.0]),
         lambda: hit_point,
     )
 
@@ -1194,7 +1207,10 @@ def _check_reflecting_obstacle_hits(
     """
     # apparently jax unrolls for loops inside of jitted functions so this should be fine
     hit_points = jnp.stack(
-        [_calc_hit_point(ball_movement, scene_object) for scene_object in REFLECTING_SCENE_OBJECT_LIST],
+        [
+            _calc_hit_point(ball_movement, scene_object)
+            for scene_object in REFLECTING_SCENE_OBJECT_LIST
+        ],
         axis=0,
     )
 
@@ -1247,12 +1263,13 @@ def _calc_ball_change(ball_x, ball_y, ball_vel_x, ball_vel_y, ball_direction):
 
 
 @jax.jit
-def _calc_ball_collision_loop(
-    ball_movement: BallMovement
-):
+def _calc_ball_collision_loop(ball_movement: BallMovement):
     @jax.jit
-    def _body_fun(args: tuple[chex.Array, chex.Array, chex.Array, chex.Array, chex.Array]):
+    def _body_fun(
+        args: tuple[chex.Array, chex.Array, chex.Array, chex.Array, chex.Array],
+    ):
         old_ball_x, old_ball_y, new_ball_x, new_ball_y, compute_flag = args
+
         @jax.jit
         def _compute_ball_collision(old_ball_x, old_ball_y, new_ball_x, new_ball_y):
             _ball_movement = BallMovement(
@@ -1262,15 +1279,13 @@ def _calc_ball_collision_loop(
                 new_ball_y=new_ball_y,
             )
             hit_data = _check_reflecting_obstacle_hits(_ball_movement)
-            reflected_ball_x, reflected_ball_y = _reflect_ball(
-                _ball_movement, hit_data
-            )
+            reflected_ball_x, reflected_ball_y = _reflect_ball(_ball_movement, hit_data)
             # if there was a collision, returned BallMovement is from hit point to reflected position
             # if there was no collision, returned BallMovement will be the original BallMovement
             no_collision = hit_data[0] == T_ENTRY_NO_COLLISION
             collision = jnp.logical_not(no_collision)
 
-            #jax.debug.print("ballmovement: old x: {}, y: {}, new x: {}, y: {} | hitpoint x: {}, y: {}, horizontal: {} | reflected x: {}, y: {} | collision: {} | moved: {} | trajectory from hit to old: ({}, {}), ", old_ball_x, old_ball_y, new_ball_x, new_ball_y, hit_data[1], hit_data[2], hit_data[3], reflected_ball_x, reflected_ball_y, collision, ball_moved_after_collision, ball_trajectory_from_hit_point_to_old_x, ball_trajectory_from_hit_point_to_old_y)
+            # jax.debug.print("ballmovement: old x: {}, y: {}, new x: {}, y: {} | hitpoint x: {}, y: {}, horizontal: {} | reflected x: {}, y: {} | collision: {} | moved: {} | trajectory from hit to old: ({}, {}), ", old_ball_x, old_ball_y, new_ball_x, new_ball_y, hit_data[1], hit_data[2], hit_data[3], reflected_ball_x, reflected_ball_y, collision, ball_moved_after_collision, ball_trajectory_from_hit_point_to_old_x, ball_trajectory_from_hit_point_to_old_y)
             old_ball_x = jnp.where(collision, hit_data[1], old_ball_x)
             old_ball_y = jnp.where(collision, hit_data[2], old_ball_y)
             new_ball_x = jnp.where(collision, reflected_ball_x, new_ball_x)
@@ -1284,16 +1299,28 @@ def _calc_ball_collision_loop(
         old_ball_x, old_ball_y, new_ball_x, new_ball_y, collision = jax.lax.cond(
             compute_flag,
             _compute_ball_collision,
-            lambda old_ball_x, old_ball_y, new_ball_x, new_ball_y: (old_ball_x, old_ball_y, new_ball_x, new_ball_y, compute_flag),
-            old_ball_x, old_ball_y, new_ball_x, new_ball_y
+            lambda old_ball_x, old_ball_y, new_ball_x, new_ball_y: (
+                old_ball_x,
+                old_ball_y,
+                new_ball_x,
+                new_ball_y,
+                compute_flag,
+            ),
+            old_ball_x,
+            old_ball_y,
+            new_ball_x,
+            new_ball_y,
         )
         # If there was no collision, set compute_flag to False
         compute_flag = jnp.logical_and(compute_flag, collision)
         return old_ball_x, old_ball_y, new_ball_x, new_ball_y, compute_flag
+
     @jax.jit
-    def _cond_fun(args: tuple[chex.Array, chex.Array, chex.Array, chex.Array, chex.Array]):
+    def _cond_fun(
+        args: tuple[chex.Array, chex.Array, chex.Array, chex.Array, chex.Array],
+    ):
         old_ball_x, old_ball_y, new_ball_x, new_ball_y, compute_flag = args
-        #jax.debug.print("Old ball x: {}, y: {}, New ball x: {}, y: {}.  Compute: {}", old_ball_x, old_ball_y, new_ball_x, new_ball_y, compute_flag)
+        # jax.debug.print("Old ball x: {}, y: {}, New ball x: {}, y: {}.  Compute: {}", old_ball_x, old_ball_y, new_ball_x, new_ball_y, compute_flag)
         return jnp.any(compute_flag)
 
     compute_flag = jnp.ones_like(ball_movement.new_ball_x, dtype=jnp.bool)
@@ -1303,14 +1330,20 @@ def _calc_ball_collision_loop(
         # corresponding compute_flag set to True, else set it to False to keep the BallMovement
         _cond_fun,
         _body_fun,
-        (ball_movement.old_ball_x, ball_movement.old_ball_y, ball_movement.new_ball_x, ball_movement.new_ball_y, compute_flag)
+        (
+            ball_movement.old_ball_x,
+            ball_movement.old_ball_y,
+            ball_movement.new_ball_x,
+            ball_movement.new_ball_y,
+            compute_flag,
+        ),
     )
 
     return BallMovement(
         old_ball_x=old_ball_x,
         old_ball_y=old_ball_y,
         new_ball_x=new_ball_x,
-        new_ball_y=new_ball_y
+        new_ball_y=new_ball_y,
     )
 
 
@@ -1329,14 +1362,14 @@ def ball_step(
     ball_vel_y = state.ball_vel_y
     ball_direction = state.ball_direction
     ball_in_play = state.ball_in_play
-    #jax.debug.print(
+    # jax.debug.print(
     #    "Ball Step, Initial Ball x {ball_x}, y , {ball_y}, vel_x {ball_vel_x}, vel_y {ball_vel_y}, direction {ball_direction}",
     #    ball_x=ball_x,
     #    ball_y=ball_y,
     #    ball_vel_x=ball_vel_x,
     #    ball_vel_y=ball_vel_y,
     #    ball_direction=ball_direction,
-    #)
+    # )
     """
     Plunger calculation
     """
@@ -1372,14 +1405,14 @@ def ball_step(
         ball_direction,
     )
     ball_vel_y = jnp.abs(ball_vel_y)
-    #jax.debug.print(
+    # jax.debug.print(
     #    "Ball Step, After Gravity Ball x {ball_x}, y , {ball_y}, vel_x {ball_vel_x}, vel_y {ball_vel_y}, direction {ball_direction}",
     #    ball_x=ball_x,
     #    ball_y=ball_y,
     #    ball_vel_x=ball_vel_x,
     #    ball_vel_y=ball_vel_y,
     #    ball_direction=ball_direction,
-    #)
+    # )
 
     """
     Ball movement calculation observing its direction 
@@ -1389,14 +1422,14 @@ def ball_step(
             state.ball_x, state.ball_y, ball_vel_x, ball_vel_y, ball_direction
         )
     )
-    #jax.debug.print(
+    # jax.debug.print(
     #    "Ball Step, After Ball Update x {ball_x}, y , {ball_y}, vel_x {ball_vel_x}, vel_y {ball_vel_y}, direction {ball_direction}",
     #    ball_x=ball_x,
     #    ball_y=ball_y,
     #    ball_vel_x=ball_vel_x,
     #    ball_vel_y=ball_vel_y,
     #    ball_direction=ball_direction,
-    #)
+    # )
     """
     Check if the ball is hitting the invisible block at the plunger hole
     """
@@ -1413,12 +1446,12 @@ def ball_step(
         jnp.logical_not(ball_in_play),
         invisible_block_hit_data[0] != T_ENTRY_NO_COLLISION,
     )
-    #jax.debug.print(
+    # jax.debug.print(
     #    "Ball Step, invisible ball hit {invis_ball_hit}, ball in play {bip}, plunger_power {pp}",
     #    invis_ball_hit=is_invisible_block_hit,
     #    bip=ball_in_play,
     #    pp=plunger_power,
-    #)
+    # )
     # set x vel to y vel and divide vel y by 5
     ball_vel_x = jnp.where(
         is_invisible_block_hit,
@@ -1470,23 +1503,23 @@ def ball_step(
     ball_x = ball_movement.new_ball_x
     ball_y = ball_movement.new_ball_y
 
-    #jax.debug.print(
+    # jax.debug.print(
     #    "Ball Step, After Obstacle Update x {ball_x}, y , {ball_y}, vel_x {ball_vel_x}, vel_y {ball_vel_y}, direction {ball_direction}",
     #    ball_x=ball_x,
     #    ball_y=ball_y,
     #    ball_vel_x=ball_vel_x,
     #    ball_vel_y=ball_vel_y,
     #    ball_direction=ball_direction,
-    #)
+    # )
 
     """
     Some final calculations
     """
-    #jax.debug.print(
+    # jax.debug.print(
     #    "Ball Trajectory x, Ball Trajectory y {ball_trajectory_x}, {ball_trajectory_y}",
     #    ball_trajectory_x=ball_trajectory_x,
     #    ball_trajectory_y=ball_trajectory_y,
-    #)
+    # )
     ball_direction = _get_ball_direction(ball_trajectory_x, ball_trajectory_y)
     # Clip the ball velocity to the maximum speed
     ball_vel_x = jnp.clip(jnp.abs(signed_ball_vel_x), 0, BALL_MAX_SPEED)
@@ -1501,14 +1534,14 @@ def ball_step(
     # ball_y = jnp.where(ball_in_play, ball_y, BALL_START_Y)
     # ball_vel_x = jnp.where(ball_in_play, ball_vel_x, jnp.array(0.0))
     # ball_vel_y = jnp.where(ball_in_play, ball_vel_y, jnp.array(0.0))
-    #jax.debug.print(
+    # jax.debug.print(
     #    "Ball Step, Final Ball x {ball_x}, y , {ball_y}, vel_x {ball_vel_x}, vel_y {ball_vel_y}, direction {ball_direction}",
     #    ball_x=ball_x,
     #    ball_y=ball_y,
     #    ball_vel_x=ball_vel_x,
     #    ball_vel_y=ball_vel_y,
     #    ball_direction=ball_direction,
-    #)
+    # )
     return ball_x, ball_y, ball_direction, ball_vel_x, ball_vel_y, ball_in_play
 
 
@@ -1523,7 +1556,9 @@ def _reset_ball(state: VideoPinballState):
 
 
 @jax.jit
-def _handle_ball_in_gutter(state: VideoPinballState, score, atari_symbols, dropper_counter):
+def _handle_ball_in_gutter(
+    state: VideoPinballState, score, atari_symbols, dropper_counter
+):
     lives = jax.lax.cond(
         atari_symbols < 4,
         lambda x: x + 1,
@@ -1540,8 +1575,14 @@ def _handle_ball_in_gutter(state: VideoPinballState, score, atari_symbols, dropp
     bumper_multiplier = jnp.array(1).astype(jnp.int32)
     active_targets = jnp.array([True, True, True, False]).astype(jnp.bool)
 
-    return score, active_targets, atari_symbols, dropper_counter, bumper_multiplier, lives
-
+    return (
+        score,
+        active_targets,
+        atari_symbols,
+        dropper_counter,
+        bumper_multiplier,
+        lives,
+    )
 
 
 @jax.jit
@@ -1577,7 +1618,8 @@ def process_objects_hit(state: VideoPinballState, objects_hit):
     atari_symbols = state.atari_symbols
     dropper_counter = state.dropper_counter
 
-    score += jnp.where(objects_hit[0],
+    score += jnp.where(
+        objects_hit[0],
         100 * state.bumper_multiplier,
         0,
     )
@@ -1593,9 +1635,9 @@ def process_objects_hit(state: VideoPinballState, objects_hit):
     )
 
     # Give points for targets hit
-    score += jnp.where(objects_hit[3],100,0)
-    score += jnp.where(objects_hit[4],100,0)
-    score += jnp.where(objects_hit[5],100,0)
+    score += jnp.where(objects_hit[3], 100, 0)
+    score += jnp.where(objects_hit[4], 100, 0)
+    score += jnp.where(objects_hit[5], 100, 0)
 
     # Make hit targets disappear
     active_targets = jax.lax.cond(
@@ -1620,7 +1662,7 @@ def process_objects_hit(state: VideoPinballState, objects_hit):
     )
 
     # Bottom Bonus Target
-    score += jnp.where(objects_hit[6],1100,0)
+    score += jnp.where(objects_hit[6], 1100, 0)
     active_targets = jax.lax.cond(
         objects_hit[6],
         lambda s: jnp.array([s[0], s[1], s[2], False]).astype(jnp.bool),
@@ -1629,8 +1671,8 @@ def process_objects_hit(state: VideoPinballState, objects_hit):
     )
 
     # Give score for hitting the dropper and increase its number
-    score += jnp.where(objects_hit[7],100,0)
-    #TODO: Check if dropper really goes up further beyond 9 even though the number isnt displayed
+    score += jnp.where(objects_hit[7], 100, 0)
+    # TODO: Check if dropper really goes up further beyond 9 even though the number isnt displayed
     dropper_counter = jax.lax.cond(
         objects_hit[7],
         lambda s: s + 1,
@@ -1648,10 +1690,9 @@ def process_objects_hit(state: VideoPinballState, objects_hit):
     )
 
     # Give 1 point for hitting a spinner
-    score += jnp.where(objects_hit[9],1,0)
+    score += jnp.where(objects_hit[9], 1, 0)
 
     return score, active_targets, atari_symbols, dropper_counter
-
 
 
 @jax.jit
@@ -1661,8 +1702,8 @@ def handle_target_cooldowns(state: VideoPinballState, previous_active_targets):
         jnp.logical_not(previous_active_targets[0]),
         jnp.logical_and(
             jnp.logical_not(previous_active_targets[1]),
-            jnp.logical_not(previous_active_targets[2])
-        )
+            jnp.logical_not(previous_active_targets[2]),
+        ),
     )
 
     # Start 2 second cooldown after hitting all targets until they respawn
@@ -1670,58 +1711,73 @@ def handle_target_cooldowns(state: VideoPinballState, previous_active_targets):
         jnp.logical_and(targets_are_inactive, state.target_cooldown == -1),
         lambda cd: (jnp.array(60).astype(jnp.int32), True),
         lambda cd: (cd, False),
-        state.target_cooldown)
+        state.target_cooldown,
+    )
 
     # Increase Bumper multiplier if all targets got hit
     bumper_multiplier = jax.lax.cond(
         jnp.logical_and(increase_bm, state.bumper_multiplier < 9),
-       lambda s: s + 1,
-       lambda s: s,
-       operand=state.bumper_multiplier)
+        lambda s: s + 1,
+        lambda s: s,
+        operand=state.bumper_multiplier,
+    )
 
     # count down the cooldown timer
-    target_cooldown = jax.lax.cond(jnp.logical_and(targets_are_inactive, target_cooldown != -1),
+    target_cooldown = jax.lax.cond(
+        jnp.logical_and(targets_are_inactive, target_cooldown != -1),
         lambda s: s - 1,
         lambda s: s,
-        operand=target_cooldown)
-
+        operand=target_cooldown,
+    )
 
     # After the cooldown, respawn the targets
     target_cooldown, active_targets = jax.lax.cond(
         jnp.logical_and(targets_are_inactive, target_cooldown == 0),
-        lambda tc, pat: (jnp.array(-1).astype(jnp.int32), jnp.array([True, True, True, pat[3]]).astype(jnp.bool)),
+        lambda tc, pat: (
+            jnp.array(-1).astype(jnp.int32),
+            jnp.array([True, True, True, pat[3]]).astype(jnp.bool),
+        ),
         lambda tc, pat: (tc, pat),
-        target_cooldown, previous_active_targets)
-
+        target_cooldown,
+        previous_active_targets,
+    )
 
     # count down the despawn cooldown timer
     special_target_cooldown = jax.lax.cond(
         jnp.logical_and(state.special_target_cooldown > 0, state.ball_in_play),
-       lambda s: s - 1,
-       lambda s: s,
-       operand=state.special_target_cooldown)
+        lambda s: s - 1,
+        lambda s: s,
+        operand=state.special_target_cooldown,
+    )
 
     # count up the respawn cooldown timer
     special_target_cooldown = jax.lax.cond(
         jnp.logical_and(special_target_cooldown < -1, state.ball_in_play),
-       lambda s: s + 1,
-       lambda s: s,
-       operand=special_target_cooldown)
+        lambda s: s + 1,
+        lambda s: s,
+        operand=special_target_cooldown,
+    )
 
     # despawn the special target
     special_target_cooldown, active_targets = jax.lax.cond(
         jnp.logical_and(special_target_cooldown == 0, state.ball_in_play),
-        lambda cd, a: (cd - 600, a.at[3].set(False)),  # Check how the real cooldown works
+        lambda cd, a: (
+            cd - 600,
+            a.at[3].set(False),
+        ),  # Check how the real cooldown works
         lambda cd, a: (cd, a),
-        special_target_cooldown, active_targets)
+        special_target_cooldown,
+        active_targets,
+    )
 
     # spawn the special target
     special_target_cooldown, active_targets = jax.lax.cond(
         jnp.logical_and(special_target_cooldown == -1, state.ball_in_play),
         lambda cd, a: (cd + 181, a.at[3].set(True)),
         lambda cd, a: (cd, a),
-        special_target_cooldown, active_targets)
-
+        special_target_cooldown,
+        active_targets,
+    )
 
     return active_targets, target_cooldown, special_target_cooldown, bumper_multiplier
 
@@ -1840,11 +1896,11 @@ class JaxVideoPinball(
         left_flipper_angle, right_flipper_angle = flipper_step(state, action)
 
         # Print new_plunger_power and plunger_power
-        #jax.debug.print(
+        # jax.debug.print(
         #    "Plunger Step, Plunger Power {plunger_power}, New Plunger Power {new_plunger_power}",
         #    plunger_power=plunger_power,
         #    new_plunger_power=new_plunger_power,
-        #)
+        # )
 
         # Step 2: Update ball position and velocity
         ball_x, ball_y, ball_direction, ball_vel_x, ball_vel_y, ball_in_play = (
@@ -1865,9 +1921,13 @@ class JaxVideoPinball(
 
         # Step 4: Update scores and handle special objects
         # TODO: Input the list of objects hit once collisions are done
-        score, active_targets, atari_symbols, dropper_counter = process_objects_hit(state, [False, False, False, False, False, False, False, False, False, False])
-        active_targets, target_cooldown, special_target_cooldown, bumper_multiplier = handle_target_cooldowns(state, active_targets)
-
+        score, active_targets, atari_symbols, dropper_counter = process_objects_hit(
+            state,
+            [False, False, False, False, False, False, False, False, False, False],
+        )
+        active_targets, target_cooldown, special_target_cooldown, bumper_multiplier = (
+            handle_target_cooldowns(state, active_targets)
+        )
 
         # Step 5: Reset ball if it went down the gutter
         current_values = (
@@ -1884,11 +1944,22 @@ class JaxVideoPinball(
             operand=current_values,
         )
 
-        score, active_targets, atari_symbols, dropper_counter, bumper_multiplier, lives = jax.lax.cond(
+        (
+            score,
+            active_targets,
+            atari_symbols,
+            dropper_counter,
+            bumper_multiplier,
+            lives,
+        ) = jax.lax.cond(
             ball_in_gutter,
             lambda s, at, asym, dc, bm: _handle_ball_in_gutter(state, s, asym, dc),
             lambda s, at, asym, dc, bm: (s, at, asym, dc, bm, state.lives),
-            score, active_targets, atari_symbols, dropper_counter, bumper_multiplier
+            score,
+            active_targets,
+            atari_symbols,
+            dropper_counter,
+            bumper_multiplier,
         )
 
         ball_in_play = jnp.where(ball_reset, jnp.array(False), ball_in_play)
@@ -1931,7 +2002,7 @@ class JaxVideoPinball(
         #     observation,
         # )
         # new_state = new_state._replace(obs_stack=observation)
-        #jax.debug.print("------------------------------------------")
+        # jax.debug.print("------------------------------------------")
         return observation, new_state, env_reward, done, info
 
     @partial(jax.jit, static_argnums=(0,))
@@ -1978,7 +2049,7 @@ class JaxVideoPinball(
             bumper_multiplier=state.bumper_multiplier,
             active_targets=state.active_targets,
             atari_symbols=state.atari_symbols,
-            dropper_counter=state.dropper_counter
+            dropper_counter=state.dropper_counter,
         )
 
     @partial(jax.jit, static_argnums=(0,))
@@ -2051,6 +2122,7 @@ class JaxVideoPinball(
     @partial(jax.jit, static_argnums=(0,))
     def _get_done(self, state: VideoPinballState) -> bool:
         return False
+
 
 @jax.jit
 def load_sprites():
@@ -2400,38 +2472,60 @@ class VideoPinballRenderer(AtraJaxisRenderer):
         frame_unknown = aj.get_sprite_frame(self.sprites["score_number_digits"], 1)
         raster = aj.render_at(raster, 4, 3, frame_unknown)
 
-        frame_ball_count = aj.get_sprite_frame(self.sprites["score_number_digits"], state.lives)
+        frame_ball_count = aj.get_sprite_frame(
+            self.sprites["score_number_digits"], state.lives
+        )
         raster = aj.render_at(raster, 36, 3, frame_ball_count)
 
         numbers = _split_integer(state.score)
-        frame_score1 = aj.get_sprite_frame(self.sprites["score_number_digits"], numbers[0])
+        frame_score1 = aj.get_sprite_frame(
+            self.sprites["score_number_digits"], numbers[0]
+        )
         raster = aj.render_at(raster, 64, 3, frame_score1)
-        frame_score2 = aj.get_sprite_frame(self.sprites["score_number_digits"], numbers[1])
+        frame_score2 = aj.get_sprite_frame(
+            self.sprites["score_number_digits"], numbers[1]
+        )
         raster = aj.render_at(raster, 80, 3, frame_score2)
-        frame_score3 = aj.get_sprite_frame(self.sprites["score_number_digits"], numbers[2])
+        frame_score3 = aj.get_sprite_frame(
+            self.sprites["score_number_digits"], numbers[2]
+        )
         raster = aj.render_at(raster, 96, 3, frame_score3)
-        frame_score4 = aj.get_sprite_frame(self.sprites["score_number_digits"], numbers[3])
+        frame_score4 = aj.get_sprite_frame(
+            self.sprites["score_number_digits"], numbers[3]
+        )
         raster = aj.render_at(raster, 112, 3, frame_score4)
-        frame_score5 = aj.get_sprite_frame(self.sprites["score_number_digits"], numbers[4])
+        frame_score5 = aj.get_sprite_frame(
+            self.sprites["score_number_digits"], numbers[4]
+        )
         raster = aj.render_at(raster, 128, 3, frame_score5)
-        frame_score6 = aj.get_sprite_frame(self.sprites["score_number_digits"], numbers[5])
+        frame_score6 = aj.get_sprite_frame(
+            self.sprites["score_number_digits"], numbers[5]
+        )
         raster = aj.render_at(raster, 144, 3, frame_score6)
 
         # Render special yellow field objects TODO: (unfinished, game_state implementation needed)
-        frame_bumper_left = aj.get_sprite_frame(self.sprites["field_number_digits"], state.bumper_multiplier)
+        frame_bumper_left = aj.get_sprite_frame(
+            self.sprites["field_number_digits"], state.bumper_multiplier
+        )
         raster = aj.render_at(raster, 46, 122, frame_bumper_left)
-        frame_bumper_middle = aj.get_sprite_frame(self.sprites["field_number_digits"], state.bumper_multiplier)
+        frame_bumper_middle = aj.get_sprite_frame(
+            self.sprites["field_number_digits"], state.bumper_multiplier
+        )
         raster = aj.render_at(raster, 78, 58, frame_bumper_middle)
-        frame_bumper_right = aj.get_sprite_frame(self.sprites["field_number_digits"], state.bumper_multiplier)
+        frame_bumper_right = aj.get_sprite_frame(
+            self.sprites["field_number_digits"], state.bumper_multiplier
+        )
         raster = aj.render_at(raster, 110, 122, frame_bumper_right)
 
         displayed_dropper_number = jax.lax.cond(
             state.dropper_counter > 9,
             lambda c: 9,
             lambda c: c,
-            operand=state.dropper_counter
+            operand=state.dropper_counter,
         )
-        frame_dropper_left = aj.get_sprite_frame(self.sprites["field_number_digits"], displayed_dropper_number)
+        frame_dropper_left = aj.get_sprite_frame(
+            self.sprites["field_number_digits"], displayed_dropper_number
+        )
         raster = aj.render_at(raster, 46, 58, frame_dropper_left)
         frame_atari_logo = aj.get_sprite_frame(self.sprites["atari_logo"], 0)
         raster = aj.render_at(raster, 109, 58, frame_atari_logo)
@@ -2441,30 +2535,31 @@ class VideoPinballRenderer(AtraJaxisRenderer):
             state.active_targets[0],
             lambda r: aj.render_at(raster, 60, 24, frame_target),
             lambda r: raster,
-            operand=raster
+            operand=raster,
         )
 
         raster = jax.lax.cond(
             state.active_targets[1],
             lambda r: aj.render_at(raster, 76, 24, frame_target),
             lambda r: raster,
-            operand=raster
+            operand=raster,
         )
 
         raster = jax.lax.cond(
             state.active_targets[2],
             lambda r: aj.render_at(raster, 92, 24, frame_target),
             lambda r: raster,
-            operand=raster
+            operand=raster,
         )
 
-
-        frame_special_target = aj.get_sprite_frame(self.sprites["yellow_diamond_bottom"], 0)
+        frame_special_target = aj.get_sprite_frame(
+            self.sprites["yellow_diamond_bottom"], 0
+        )
         raster = jax.lax.cond(
             state.active_targets[3],
             lambda r: aj.render_at(raster, 76, 120, frame_special_target),
             lambda r: raster,
-            operand=raster
+            operand=raster,
         )
 
         # Render Atari Logos and the X
@@ -2472,21 +2567,21 @@ class VideoPinballRenderer(AtraJaxisRenderer):
             state.atari_symbols > 0,
             lambda r: aj.render_at(raster, 60, 154, frame_atari_logo),
             lambda r: raster,
-            operand=raster
+            operand=raster,
         )
 
         raster = jax.lax.cond(
             jnp.logical_or(state.atari_symbols == 2, state.atari_symbols == 3),
             lambda r: aj.render_at(raster, 76, 154, frame_atari_logo),
             lambda r: raster,
-            operand=raster
+            operand=raster,
         )
 
         raster = jax.lax.cond(
             state.atari_symbols > 2,
             lambda r: aj.render_at(raster, 90, 154, frame_atari_logo),
             lambda r: raster,
-            operand=raster
+            operand=raster,
         )
 
         frame_X = aj.get_sprite_frame(self.sprites["x"], 0)
@@ -2494,7 +2589,7 @@ class VideoPinballRenderer(AtraJaxisRenderer):
             state.atari_symbols == 4,
             lambda r: aj.render_at(raster, 76, 157, frame_X),
             lambda r: raster,
-            operand=raster
+            operand=raster,
         )
 
         return raster
