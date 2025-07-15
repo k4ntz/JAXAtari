@@ -363,10 +363,11 @@ class BeamRiderEnv(JaxEnvironment[BeamRiderState, jnp.ndarray, dict, BeamRiderCo
                 (ship_x + self.constants.SHIP_WIDTH > enemies[:, 0]) &
                 (ship_y < enemies[:, 1] + self.constants.ENEMY_HEIGHT) &
                 (ship_y + self.constants.SHIP_HEIGHT > enemies[:, 1]) &
-                enemy_active
+                enemy_active  # Use the original enemy_active, before projectile collisions
         )
 
         ship_collision = jnp.any(ship_collisions)
+        enemies = enemies.at[:, 3].set(enemies[:, 3] * (~ship_collisions))
 
         # Handle ship collision - use conditional logic for struct updates
         lives = jnp.where(ship_collision, state.lives - 1, state.lives)
