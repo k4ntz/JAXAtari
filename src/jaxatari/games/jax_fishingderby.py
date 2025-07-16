@@ -224,6 +224,7 @@ class FishingDerby(JaxEnvironment):
 
             p1_hook_x = jnp.clip(p1.hook_x + dx, cfg.SCREEN_WIDTH / 4, cfg.SCREEN_WIDTH / 2 - cfg.HOOK_WIDTH)
             new_velocity_x = p1.hook_x * GameConfig.Damping + dx
+            new_velocity_y = p1.hook_y * GameConfig.Damping
             dy = jnp.where(p1_action == Action.DOWN, cfg.HOOK_SPEED_V,
                            jnp.where(p1_action == Action.UP, -cfg.HOOK_SPEED_V, 0.0))
             p1_hook_y = jnp.where(p1.hook_state == 0,
@@ -295,7 +296,7 @@ class FishingDerby(JaxEnvironment):
             game_over = (p1_score >= 99) | (state.p2.score >= 99)
 
             return GameState(
-                p1=PlayerState(p1_hook_x, p1_hook_y, p1_score, p1_hook_state, p1_hooked_fish_idx),
+                p1=PlayerState(p1_hook_x, p1_hook_y, p1_score, p1_hook_state, p1_hooked_fish_idx, hook_velocity_x = new_velocity_x, hook_velocity_y = new_velocity_y),
                 p2=state.p2,
                 fish_positions=new_fish_pos,
                 fish_directions=new_fish_dirs,
@@ -308,7 +309,7 @@ class FishingDerby(JaxEnvironment):
                 key=key
             )
 
-        return jax.lax.cond(p1_action == cfg.RESET, reset_branch, game_branch, None)
+        return jax.lax.cond(p1_action == cfg.RESET, reset_branch, game_branch, state)
 
 def load_sprites():
     MODULE_DIR = os.path.dirname(os.path.abspath(__file__))
