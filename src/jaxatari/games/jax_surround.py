@@ -44,7 +44,8 @@ class SurroundInfo(NamedTuple):
 class SurroundRenderer(JAXGameRenderer):
     """Very small dummy renderer used for tests."""
 
-    def __init__(self, consts: SurroundConstants):
+    def __init__(self, consts: Optional[SurroundConstants] = None):
+        consts = consts or SurroundConstants()
         super().__init__(consts)
         self.consts = consts
 
