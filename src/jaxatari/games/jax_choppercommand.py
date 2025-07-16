@@ -12,6 +12,7 @@ import jax
 import jax.numpy as jnp
 import chex
 import pygame
+
 import jaxatari.rendering.jax_rendering_utils as jru
 import numpy as np
 import jaxatari.spaces as spaces
@@ -736,7 +737,6 @@ class JaxChopperCommand(JaxEnvironment[ChopperCommandState, ChopperCommandObserv
             return new_enemy_positions, new_missiles[0], jnp.sum(score_add)                                 # in case of weird behavior: change the array addressing here
 
         new_enemy_positions, new_missiles, score_add = jax.vmap(check_single_missile)(missile_positions)
-        jax.debug.print("{}", new_enemy_positions[0])
         return new_enemy_positions[0], new_missiles, jnp.sum(score_add)
 
 
@@ -755,11 +755,11 @@ class JaxChopperCommand(JaxEnvironment[ChopperCommandState, ChopperCommandObserv
         player_pos = jnp.array([player_x, player_y])
         offset = (self.consts.PLAYER_SIZE[0] // 2 - entity_size[0] // 2) - (player_velocity * self.consts.DISTANCE_WHEN_FLYING)
 
-        def check_single(i, carry):
-            any_collision_inner, updated_entities = carry
+        def check_single(entity):
+            #any_collision_inner, updated_entities = carry
 
-            world_x, world_y = entity_list[i, 0], entity_list[i, 1]
-            death_timer = entity_list[i, 3]
+            world_x, world_y = entity[0], entity[1]
+            death_timer = entity[3]
             is_active = death_timer > death_threshold
 
             # Passe die Position an, wie sie auch im Renderer korrigiert wird
@@ -772,21 +772,13 @@ class JaxChopperCommand(JaxEnvironment[ChopperCommandState, ChopperCommandObserv
             )
 
             # Markiere getroffenen Gegner
-            new_entity = jnp.where(collision, self.kill_entity(entity_list[i], death_threshold), entity_list[i])
-            updated_entities = updated_entities.at[i].set(new_entity)
+            new_entity = jnp.where(collision, self.kill_entity(entity, death_threshold), entity)
 
-            any_collision_inner = jnp.logical_or(any_collision_inner, collision)
-            return any_collision_inner, updated_entities
+            return new_entity
 
-        initial_carry = (False, entity_list)
-        any_collision, updated_entity_list = jax.lax.fori_loop(
-            0,
-            entity_list.shape[0],
-            check_single,
-            initial_carry
-        )
+        updated_entity_list = jax.vmap(check_single)(entity_list)
 
-        return any_collision, updated_entity_list
+        return jnp.invert(jnp.array_equal(entity_list, updated_entity_list)), updated_entity_list
 
 
     @partial(jax.jit, static_argnums=(0,))
@@ -830,8 +822,6 @@ class JaxChopperCommand(JaxEnvironment[ChopperCommandState, ChopperCommandObserv
                     jnp.array([tx, ty, tdir, self.consts.FRAMES_DEATH_ANIMATION_TRUCK], dtype=trucks_inner.dtype),
                     t
                 )
-                trucks_inner = trucks_inner.at[ti].set(new_truck)
-                collided = jnp.logical_or(collided, collision)
                 return collided, trucks_inner
 
             # führe inner loop aus
@@ -857,7 +847,6 @@ class JaxChopperCommand(JaxEnvironment[ChopperCommandState, ChopperCommandObserv
         )
 
         return updated_trucks, updated_missiles
-
 
     """now can spawn enemies into fleets with different directions"""
     @partial(jax.jit, static_argnums=(0,))
@@ -1704,6 +1693,8 @@ class JaxChopperCommand(JaxEnvironment[ChopperCommandState, ChopperCommandObserv
                 new_player_x,
                 self.consts.CHOPPER_SIZE
             )
+
+            #jax.debug.print("{a}, {b}", a=new_jet_positions[:,0], b=new_chopper_positions[:,0])
 
 
 
