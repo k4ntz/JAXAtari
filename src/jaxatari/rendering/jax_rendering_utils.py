@@ -151,6 +151,60 @@ def get_sprite_frame(frames, frame_idx, loop=True):
         lambda: blank_frame,
     )
 
+@jax.jit
+def recolor_sprite(
+        sprite: jnp.ndarray,
+        color: jnp.ndarray,  # RGB, up to 4 dimensions
+        bounds: tuple[int, int, int, int] = None  # (top, left, bottom, right)
+) -> jnp.ndarray:
+    """Recolors the visible (non-zero) pixels of a sprite image with a specified color.
+
+    Args:
+        sprite (jnp.ndarray): A 3D array with shape (H, W, C), where C is 3 (RGB) or 4 (RGBA).
+            Pixels with all zero values are considered transparent and will not be recolored.
+        color (jnp.ndarray): A 1D array with 3 or 4 elements representing the RGB(A) color to apply.
+            If fewer elements than the sprite's channel count are provided, the color is padded with 255.
+        bounds (tuple[int, int, int, int], optional): A tuple (top, left, bottom, right) specifying
+            the rectangular region to recolor. If None, the entire sprite is recolored.
+
+    Returns:
+        jnp.ndarray: A new sprite array with visible pixels in the specified region recolored.
+        Transparent pixels remain unchanged.
+    """
+
+    # Ensure color is the same dtype as sprite
+    dtype = sprite.dtype
+    color = color.astype(dtype)
+
+    assert sprite.ndim == 3 and sprite.shape[2] in (3, 4), "Sprite must be HxWx3 or HxWx4"
+
+    if color.shape[0] < sprite.shape[2]:
+        missing = sprite.shape[2] - color.shape[0]
+        pad = jnp.full((missing,), 255, dtype=dtype)
+        color = jnp.concatenate([color, pad], axis=0)
+
+    assert color.shape[0] == sprite.shape[2], "Color channels must match sprite channels"
+
+    H, W, _ = sprite.shape
+
+    if bounds is None:
+        region = sprite
+    else:
+        top, left, bottom, right = bounds
+        assert 0 <= left < right <= H and 0 <= top < bottom <= W, "Invalid bounds"
+        region = sprite[left:right, top:bottom]
+
+    visible_mask = jnp.any(region != 0, axis=-1, keepdims=True)  # (h, w, 1)
+
+    color_broadcasted = jnp.broadcast_to(color, region.shape).astype(dtype)
+    recolored_region = jnp.where(visible_mask, color_broadcasted, jnp.zeros_like(color_broadcasted))
+
+    if bounds is None:
+        return recolored_region
+    else:
+        recolored_sprite = sprite.at[left:right, top:bottom].set(recolored_region)
+        return recolored_sprite
+
 
 @jax.jit
 def render_at(raster, x, y, sprite_frame, 
