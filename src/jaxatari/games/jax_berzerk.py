@@ -40,7 +40,7 @@ class BerzerkConstants(NamedTuple):
     EXIT_WIDTH = 40
     EXIT_HEIGHT = 64
 
-    DEATH_ANIMATION_FRAMES = 40
+    DEATH_ANIMATION_FRAMES = 256
 
     SCORE_OFFSET_X = WIDTH - 58 - 6  # window width - distance to the right - digit width 
     SCORE_OFFSET_Y = HEIGHT - 20 - 7  # window height - distance to the bottom - digit height 
@@ -967,11 +967,10 @@ class BerzerkRenderer(JAXGameRenderer):
         # Draw player animation
         def get_player_sprite():
             def death_animation():
-                phase = (state.death_timer // 4) % 2
-                return jax.lax.cond(
-                    phase == 0,
-                    lambda: self.sprites['player_idle'],
-                    lambda: self.sprites['player_death']
+                return jax.lax.switch(
+                    (state.death_timer - 1) % 8,
+                        [lambda: self.sprites['player_idle']] * 4 +
+                        [lambda: self.sprites['player_death']] * 4
                 )
 
             return jax.lax.cond(
@@ -1002,7 +1001,16 @@ class BerzerkRenderer(JAXGameRenderer):
 
 
         player_sprite = get_player_sprite()
-        raster = jr.render_at(raster, state.player_pos[0], state.player_pos[1], jr.get_sprite_frame(player_sprite, 0))
+
+        player_frame_right = jr.get_sprite_frame(player_sprite, 0)
+
+        player_frame = jax.lax.cond(
+            state.last_dir[0] < 0,
+            lambda: jnp.flip(player_frame_right, axis=1),  # Horizontal spiegeln
+            lambda: player_frame_right
+        )
+
+        raster = jr.render_at(raster, state.player_pos[0], state.player_pos[1], player_frame)
 
         # Draw enemies
         color_cycle = ["yellow", "orange", "white", "green", "red", "yellow2", "pink", "yellow"]
@@ -1092,8 +1100,16 @@ class BerzerkRenderer(JAXGameRenderer):
             )
         
         for i in range(state.enemy_pos.shape[0]):
-            sprite = get_enemy_sprite(i)
-            raster = jr.render_at(raster, state.enemy_pos[i][0], state.enemy_pos[i][1], jr.get_sprite_frame(sprite, 0))
+            enemy_sprite = get_enemy_sprite(i)
+            enemy_frame_right = jr.get_sprite_frame(enemy_sprite, 0)
+
+            enemy_frame = jax.lax.cond(
+                state.enemy_move_dir[i] < 0,
+                lambda: jnp.flip(enemy_frame_right, axis=1),
+                lambda: enemy_frame_right
+            )
+
+            raster = jr.render_at(raster, state.enemy_pos[i][0], state.enemy_pos[i][1], enemy_frame)
 
         # yellow (only 1x) -> orange -> white -> green -> red -> other yellow -> pink -> yellow -> ...
 
