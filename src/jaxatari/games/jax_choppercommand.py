@@ -850,7 +850,7 @@ class JaxChopperCommand(JaxEnvironment[ChopperCommandState, ChopperCommandObserv
         return updated_trucks, updated_missiles
 
     """now can spawn enemies into fleets with different directions"""
-    @partial(jax.jit, static_argnums=(0,))
+    @partial(jax.jit, static_argnums=(0,))      #TODO: fix, change to vmap (via positioning array) if possible
     def initialize_enemy_positions(self, init_rng: chex.PRNGKey) -> tuple[chex.Array, chex.Array]:
         jet_positions = jnp.zeros((self.consts.MAX_ENEMIES, 4))
         chopper_positions = jnp.zeros((self.consts.MAX_ENEMIES, 4))
@@ -1186,12 +1186,10 @@ class JaxChopperCommand(JaxEnvironment[ChopperCommandState, ChopperCommandObserv
         return new_jet_positions, new_chopper_positions, return_rng
 
     def update_entity_death(self, entity_array, death_timer, is_truck):
-        def update_entity(i, carry):
-            entities = carry
-            entity = entities[i]
+        def update_entity(entity):
             direction, timer = entity[2], entity[3]
 
-            #Wenn tot initialisiert (also noch aktiv) und timer > 0 & timer <= FRAMES_DEATH_ANIMATION, dann dekrementieren
+            #Wenn Tod initialisiert (also noch aktiv) und timer > 0 & timer <= FRAMES_DEATH_ANIMATION, dann dekrementieren
             new_timer = jnp.where(jnp.logical_and(timer > 0, timer <= death_timer), timer - 1, timer)
 
             #Nach Ablauf von death_timer Enemy deaktivieren/entfernen
@@ -1205,13 +1203,13 @@ class JaxChopperCommand(JaxEnvironment[ChopperCommandState, ChopperCommandObserv
                 entity.at[3].set(new_timer)
             )
 
-            return entities.at[i].set(new_entity)
+            return new_entity
 
-        return jax.lax.fori_loop(0, entity_array.shape[0], update_entity, entity_array)
+        return jax.vmap(update_entity)(entity_array)
 
 
     @partial(jax.jit, static_argnums=(0,))
-    def initialize_truck_positions(self) -> chex.Array:
+    def initialize_truck_positions(self) -> chex.Array:     # TODO: change to vmap (via positioning array) if possible
         initial_truck_positions = jnp.zeros((self.consts.MAX_TRUCKS, 4))
         anchor = -748
         carry = (initial_truck_positions, anchor)
