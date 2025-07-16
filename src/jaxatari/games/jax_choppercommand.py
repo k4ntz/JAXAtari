@@ -1172,7 +1172,7 @@ class JaxChopperCommand(JaxEnvironment[ChopperCommandState, ChopperCommandObserv
 
         # -- Process choppers --
         # Prepare rng keys for random jet movement TODO: randomization might need to be fixed
-        keys_for_process_chopper = jax.random.split(process_jet_rng, jet_positions.shape[0])  # Generate rng-key for every chopper there is. THIS IS NOT FULLY USED, SINCE MOVEMENT IS NOT FULLY RANDOM.
+        keys_for_process_chopper = jax.random.split(process_chopper_rng, jet_positions.shape[0])  # Generate rng-key for every chopper there is. THIS IS NOT FULLY USED, SINCE MOVEMENT IS NOT FULLY RANDOM.
         middle_lane_chopper_key = keys_for_process_jet[1]
         #new_chopper_positions = jnp.zeros_like(chopper_positions)  # for debugging purposes
         new_chopper_positions = jax.vmap(
