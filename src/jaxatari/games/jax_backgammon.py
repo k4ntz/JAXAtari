@@ -1,11 +1,13 @@
+# Third party imports
 import jax
 import jax.numpy as jnp
 from functools import partial
 from typing import NamedTuple, Tuple, Any, List
+import pygame
+from jax import Array
 
-from jaxlib.mlir.dialects.arith import constant
-
-from jaxatari.environment import JaxEnvironment, EnvState
+# Project imports
+from jaxatari.environment import JaxEnvironment
 from jaxatari.renderers import JAXGameRenderer
 
 """
@@ -61,6 +63,8 @@ class JaxBackgammonEnv(JaxEnvironment[BackgammonState, jnp.ndarray, dict, Backga
 
         # Pre-compute all possible moves for fast validation
         self.action_space = jnp.array([(i, j) for i in range(26) for j in range(26)], dtype=jnp.int32)
+        self.renderer = BackgammonRenderer(self)
+
 
     @partial(jax.jit, static_argnums=(0,))
     def init_state(self,key) -> BackgammonState:
@@ -525,72 +529,96 @@ class JaxBackgammonEnv(JaxEnvironment[BackgammonState, jnp.ndarray, dict, Backga
         valid_moves_array = self.action_space[jnp.array(valid_mask)]
         return [tuple(map(int, move)) for move in valid_moves_array]
 
-    def render(self, state: EnvState) -> Tuple[jnp.ndarray]:
-        return
+    def render(self, state: BackgammonState) -> Tuple[jnp.ndarray]:
+        self.renderer.render(state)
 
-class BackgammonRenderer(JAXGameRenderer):
-    def __init__(self, env: JaxBackgammonEnv):
-        self.env = env
 
-    def render(self, state: BackgammonState) -> str:
-        """Render the current state of the game in ASCII format."""
-        board = state.board
-        output = []
+class BackgammonRenderer:
+    def __init__(self, asset_dir="/sprites/backgammon", screen_size=(1024, 640)):
+        pygame.init()
+        self.screen = pygame.display.set_mode(screen_size)
+        self.assets = {
+            "board": pygame.image.load("jaxatari/games/sprites/backgammon/board.png"),
+            "checker_white": pygame.image.load("jaxatari/games/sprites/backgammon/checker_white.png"),
+            "checker_black": pygame.image.load("jaxatari/games/sprites/backgammon/checker_black.png"),
+            "dice": [pygame.image.load(f"jaxatari/games/sprites/backgammon/dice_{i}.png") for i in range(1, 7)]
+        }
 
-        # Board header
-        output.append("  12 11 10  9  8  7  |   6  5  4  3  2  1")
-        output.append("  -------------------------------------------------")
+    def render(self, state):
+        self.screen.blit(self.assets["board"], (0, 0))
+        for point in range(24):
+            for player in [0, 1]:
+                count = state.board[player, point]
+                for i in range(count):
+                    pos = self.get_checker_position(point, i)
+                    sprite = self.assets["checker_white"] if player == 0 else self.assets["checker_black"]
+                    self.screen.blit(sprite, pos)
+        pygame.display.flip()
 
-        def render_row(indices: range, split_at: int):
-            row = ["  "]
-            for i in indices:
-                point_idx = i - 1
-                white = board[0, point_idx]
-                black = board[1, point_idx]
 
-                if white > 0:
-                    row.append(f"W{white} ")
-                elif black > 0:
-                    row.append(f"B{black} ")
-                else:
-                    row.append("•  ")
-
-                if i == split_at:
-                    row.append(" |   ")
-            return "".join(row)
-
-        # Top row (points 12–1)
-        output.append(render_row(range(12, 0, -1), 7))
-
-        # Middle divider
-        output.append("  -------------------------------------------------")
-
-        # Bottom row (points 13–24)
-        output.append(render_row(range(13, 25), 18))
-
-        # Footer
-        output.append("  -------------------------+------------------------")
-        output.append("  13 14 15 16 17 18  |   19 20 21 22 23 24")
-
-        # Bar and Home
-        output.append("")
-        output.append(f"Bar: White: {board[0, self.env.consts.BAR_INDEX]}, Black: {board[1, self.env.consts.BAR_INDEX]}")
-        output.append(f"Home: White: {board[0, self.env.consts.HOME_INDEX]}, Black: {board[1, self.env.consts.HOME_INDEX]}")
-
-        # Game status
-        output.append("")
-        output.append(f"Current player: {'White' if state.current_player == self.env.consts.WHITE else 'Black'}")
-        output.append(f"Dice: {state.dice}")
-        output.append(f"Game over: {state.is_game_over}")
-
-        return "\n".join(output)
-
-    def display(self, state: BackgammonState) -> None:
-        """Print the rendered state to the console."""
-        print(self.render(state))
-
-    def close(self):
-        pass
+# class BackgammonRenderer(JAXGameRenderer):
+#     def __init__(self, env: JaxBackgammonEnv):
+#         self.env = env
+#
+#     def render(self, state: BackgammonState) -> str:
+#         """Render the current state of the game in ASCII format."""
+#         board = state.board
+#         output = []
+#
+#         # Board header
+#         output.append("  12 11 10  9  8  7  |   6  5  4  3  2  1")
+#         output.append("  -------------------------------------------------")
+#
+#         def render_row(indices: range, split_at: int):
+#             row = ["  "]
+#             for i in indices:
+#                 point_idx = i - 1
+#                 white = board[0, point_idx]
+#                 black = board[1, point_idx]
+#
+#                 if white > 0:
+#                     row.append(f"W{white} ")
+#                 elif black > 0:
+#                     row.append(f"B{black} ")
+#                 else:
+#                     row.append("•  ")
+#
+#                 if i == split_at:
+#                     row.append(" |   ")
+#             return "".join(row)
+#
+#         # Top row (points 12–1)
+#         output.append(render_row(range(12, 0, -1), 7))
+#
+#         # Middle divider
+#         output.append("  -------------------------------------------------")
+#
+#         # Bottom row (points 13–24)
+#         output.append(render_row(range(13, 25), 18))
+#
+#         # Footer
+#         output.append("  -------------------------+------------------------")
+#         output.append("  13 14 15 16 17 18  |   19 20 21 22 23 24")
+#
+#         # Bar and Home
+#         output.append("")
+#         output.append(f"Bar: White: {board[0, self.env.consts.BAR_INDEX]}, Black: {board[1, self.env.consts.BAR_INDEX]}")
+#         output.append(f"Home: White: {board[0, self.env.consts.HOME_INDEX]}, Black: {board[1, self.env.consts.HOME_INDEX]}")
+#
+#         # Game status
+#         output.append("")
+#         output.append(f"Current player: {'White' if state.current_player == self.env.consts.WHITE else 'Black'}")
+#         output.append(f"Dice: {state.dice}")
+#         output.append(f"Game over: {state.is_game_over}")
+#
+#         return "\n".join(output)
+#
+#     def display(self, state: BackgammonState) -> None:
+#         """Print the rendered state to the console."""
+#         print(self.render(state))
+#
+#     def close(self):
+#         pass
 
 
 def get_user_move(state: BackgammonState, env: JaxBackgammonEnv) -> Tuple[int, int]:
@@ -623,7 +651,7 @@ def get_user_move(state: BackgammonState, env: JaxBackgammonEnv) -> Tuple[int, i
         except ValueError:
             print("Please enter a valid number")
 
-def run_game_without_input(key: jax.Array, max_steps=200):
+def run_game_without_input(key: jax.Array, max_steps=400):
     """Run the backgammon game without user input, using random moves."""
     env = JaxBackgammonEnv()
     obs, state = env.reset(key)
@@ -671,7 +699,7 @@ def run_game_without_input(key: jax.Array, max_steps=200):
 
     return state
 
-def run_game_with_input(key: jax.Array, max_steps=100):
+def run_game_with_input(key: jax.Array, max_steps=200):
     """Run the backgammon game with keyboard input for moves."""
     env = JaxBackgammonEnv()
     # Create and attach the renderer
@@ -731,7 +759,7 @@ def run_game_with_input(key: jax.Array, max_steps=100):
 def main():
     key = jax.random.PRNGKey(0)
     # run_game_without_input(key)
-    run_game_with_input(key)
+    run_game_without_input(key)
 
 
 if __name__ == "__main__":
