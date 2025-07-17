@@ -263,7 +263,11 @@ def main() -> None:  # pragma: no cover - visual helper
 
         action = _pygame_action()
 
-        _obs, state, reward, done, _info = env.step(state, jnp.int32(action))
+        # env.step expects an action for each player. When playing manually we
+        # control only the first player, so keep the second player idle.
+        joint_action = jnp.array([action, Action.NOOP], dtype=jnp.int32)
+
+        _obs, state, reward, done, _info = env.step(state, joint_action)
 
         frame = np.array(env.render(state))
         surface = pygame.surfarray.make_surface(frame.transpose(1, 0, 2))
