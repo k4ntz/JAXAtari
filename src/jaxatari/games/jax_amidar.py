@@ -1,4 +1,5 @@
-# next TODO: recognize and visualise completed boxes
+# next TODO's: visualisation of walked on paths/completed rectangles, make path rendering adaptive to list of Paths, 
+# make enemies move, enemy colision detection, chicken mode, Level 2
 
 from functools import partial
 import os
@@ -25,6 +26,8 @@ PLAYER_PATH_OFFSET = (1, 1) # Offset for the player sprite in relation to the pa
 # Values to calculate how many points an Edge is worth based on how long it is
 PIXELS_PER_POINT_HORIZONTAL = 4
 PIXELS_PER_POINT_VERTICAL = 30 # Each vertical edge is worth 1 point, since they are 30 pixels long
+# Bonus points for completing a rectangle
+BONUS_POINTS_PER_RECTANGLE = 48
 
 INITIAL_ENEMY_POSITIONS = jnp.array(
     [
@@ -230,7 +233,7 @@ def calculate_rectangles():
             new_corner = PATH_EDGES[edge_index, 0]
 
             if not jnp.any(jnp.apply_along_axis(jnp.all, 1, (VERTICAL_PATH_EDGES[:, 0] == new_corner))): # if there is NOT a vertical edge that goes down from there
-                rectangle, new_corner = right_and_check_up(rectangle, new_corner) # find another edge that goes left
+                rectangle, new_corner = left_and_check_down(rectangle, new_corner) # find another edge that goes left
             
             return rectangle, new_corner
         else: 
@@ -301,7 +304,7 @@ def calculate_rectangles():
 
     return rectangles
 
-RECTANGLES = calculate_rectangles()
+RECTANGLES = jnp.array(calculate_rectangles())
 
 @jax.jit
 def generate_path_mask():
@@ -355,6 +358,7 @@ class AmidarState(NamedTuple):
     player_direction: chex.Array # 0=up, 1=down, 2=left, 3=right
     last_walked_corner: chex.Array # (2,) -> (x, y) of the last corner walked on
     walked_on_paths: chex.Array
+    completed_rectangles: chex.Array
     enemy_positions: chex.Array # (MAX_ENEMIES, 2) -> (x, y) for each enemy TODO possibly add direction?
     enemy_types: chex.Array # (MAX_ENEMIES, 1) -> type of each enemy (Warrior, Pig, Shadow, Chicken)
 
@@ -392,9 +396,6 @@ def player_step(state: AmidarState, action: chex.Array) -> tuple[chex.Array, che
     new_x = state.player_x + jnp.where(left, -1, 0) + jnp.where(right, 1, 0)
     new_y = state.player_y + jnp.where(up, -1, 0) + jnp.where(down, 1, 0)
 
-    # jax.debug.print("new player position: ({}, {})", new_x, new_y)
-    # jax.debug.print("Path mask at new position: {}", PATH_MASK[new_x, new_y])
-
     new_x = jnp.where(on_path(new_x, new_y), new_x, state.player_x)
     new_y = jnp.where(on_path(new_x, new_y), new_y, state.player_y)
 
@@ -426,40 +427,76 @@ def player_step(state: AmidarState, action: chex.Array) -> tuple[chex.Array, che
             match_reverse = jnp.all(edges == edge[::-1], axis=(1, 2))
             matches = jnp.logical_or(match_forward, match_reverse)
             # Get the index of the first match, or -1 if not found
-            idx = jnp.argmax(matches)
+            index = jnp.argmax(matches)
             found = jnp.any(matches)
-            idx = jnp.where(found, idx, -1)
-            return idx
-        match_idx = find_edge(jnp.array([[new_x+PLAYER_PATH_OFFSET[0], new_y+PLAYER_PATH_OFFSET[1]], state.last_walked_corner]), PATH_EDGES)
+            index = jnp.where(found, index, -1)
+            return index
+        match_index = find_edge(jnp.array([[new_x+PLAYER_PATH_OFFSET[0], new_y+PLAYER_PATH_OFFSET[1]], state.last_walked_corner]), PATH_EDGES)
 
         def score_points():
             """Scores points based on the edge walked on."""
             # Calculate the points scored based on the edge walked on
-            edge = PATH_EDGES[match_idx]
+            edge = PATH_EDGES[match_index]
             points_scored = jax.lax.cond(edge[0, 0] == edge[1, 0],  # Vertical edge
                          lambda: ((edge[1, 1] - edge[0, 1]) // PIXELS_PER_POINT_VERTICAL),  # Vertical edge
                          lambda: ((edge[1, 0] - edge[0, 0]) // PIXELS_PER_POINT_HORIZONTAL))  # Horizontal edge
             # Ensure points_scored is an integer
             points_scored = points_scored.astype(jnp.int32)
             # Update the walked on paths
-            walked_on_paths = state.walked_on_paths.at[match_idx].set(1)
-            return points_scored, walked_on_paths
+            walked_on_paths = state.walked_on_paths.at[match_index].set(1)
 
-        points_scored, walked_on_paths = jax.lax.cond(jnp.logical_and(match_idx >= 0, state.walked_on_paths[match_idx] == 0), score_points, lambda: (0, state.walked_on_paths))
+            def check_rectangle_completion():
+                """Checks if a rectangle is completed and updates the completed rectangles."""
+                completed_rectangles = state.completed_rectangles
+                
+                # Create a mask for rectangles that contain this edge
+                rectangles_containing_edge_mask = RECTANGLES[:, match_index] == 1
+
+                # Check if any rectangles containing this edge are now completed
+                def check_single_rectangle(rect_idx):
+                    # Get the rectangle (which edges it contains)
+                    rectangle = RECTANGLES[rect_idx]
+                    # Check if all edges in this rectangle have been walked on
+                    all_edges_walked = jnp.all(jnp.where(rectangle == 1, walked_on_paths, True))
+                    return all_edges_walked
+                
+                # Check all rectangles to see if they're completed
+                all_rectangle_indices = jnp.arange(RECTANGLES.shape[0])
+                completed_mask = jax.vmap(check_single_rectangle)(all_rectangle_indices)
+                
+                # Only consider rectangles that contain this edge
+                relevant_completed_mask = jnp.logical_and(rectangles_containing_edge_mask, completed_mask)
+                
+                # Check if any new rectangles are completed (not already marked as completed)
+                new_completions = jnp.logical_and(relevant_completed_mask, 
+                                                 jnp.logical_not(state.completed_rectangles))
+                
+                new_rectangle_completed = jnp.any(new_completions)
+                
+                # Update completed rectangles
+                completed_rectangles = jnp.logical_or(state.completed_rectangles, new_completions)
+                
+                return new_rectangle_completed, completed_rectangles
+            
+            # call check_rectangle_completion to check if a rectangle is completed
+            new_rectangle_completed, completed_rectangles = check_rectangle_completion()
+            # Add bonus points for completing a rectangle
+            points_scored = jax.lax.cond(new_rectangle_completed, lambda: points_scored + BONUS_POINTS_PER_RECTANGLE, lambda: points_scored)
+
+            return points_scored, walked_on_paths, completed_rectangles
+
+        # If the edge is not walked on yet, score points and update the walked on paths & completed rectangles
+        points_scored, walked_on_paths, completed_rectangles = jax.lax.cond(jnp.logical_and(match_index >= 0, state.walked_on_paths[match_index] == 0), score_points, lambda: (0, state.walked_on_paths, state.completed_rectangles))
 
         last_walked_corner = [new_x+PLAYER_PATH_OFFSET[0], new_y+PLAYER_PATH_OFFSET[1]]  # Update the last walked corner to the new position
-
-        # jax.debug.print("walked_on_paths: {walked_on_paths}", walked_on_paths=walked_on_paths)
-        # jax.debug.print("points_scored: {points_scored}", points_scored=points_scored)
-        return points_scored, last_walked_corner, walked_on_paths
+        return points_scored, last_walked_corner, walked_on_paths, completed_rectangles
 
 
     is_corner = jnp.any(jnp.all(PATH_CORNERS == jnp.array([new_x+PLAYER_PATH_OFFSET[0], new_y+PLAYER_PATH_OFFSET[1]]), axis=1))
-    points_scored, last_walked_corner, walked_on_paths = jax.lax.cond(is_corner, corner_handeling, lambda: (0, [state.last_walked_corner[0], state.last_walked_corner[1]], state.walked_on_paths))
+    points_scored, last_walked_corner, walked_on_paths, completed_rectangles = jax.lax.cond(is_corner, corner_handeling, lambda: (0, [state.last_walked_corner[0], state.last_walked_corner[1]], state.walked_on_paths, state.completed_rectangles))
 
-    # TODO: Box completed handling -> bonus points for completing a box
     # TODO: Add checking if all edges(next level)/corner edges(chickens) are walked on
-    return points_scored, new_x, new_y, player_direction, last_walked_corner, walked_on_paths
+    return points_scored, new_x, new_y, player_direction, last_walked_corner, walked_on_paths, completed_rectangles
 
 
 
@@ -496,6 +533,7 @@ class JaxAmidar(JaxEnvironment[AmidarState, AmidarObservation, AmidarInfo]):
             player_direction=jnp.array(0).astype(jnp.int32),
             last_walked_corner=jnp.array([0, 0]).astype(jnp.int32),  # Last corner walked on
             walked_on_paths=(jnp.zeros(jnp.shape(PATH_EDGES)[0], dtype=jnp.int32)).at[85].set(1),  # Initialize walked on paths
+            completed_rectangles=jnp.zeros(jnp.shape(RECTANGLES)[0], dtype=jnp.bool_),  # Initialize completed rectangles
             enemy_positions=INITIAL_ENEMY_POSITIONS,
             enemy_types=INITIAL_ENEMY_TYPES,
         )
@@ -510,7 +548,7 @@ class JaxAmidar(JaxEnvironment[AmidarState, AmidarObservation, AmidarInfo]):
     def step(self, state: AmidarState, action: chex.Array) -> Tuple[AmidarObservation, AmidarState, float, bool, AmidarInfo]:
         observation = self._get_observation(state)
         player_state = player_step(state, action)
-        (points_scored, player_x, player_y, player_direction, last_walked_corner, walked_on_paths) = player_state
+        (points_scored, player_x, player_y, player_direction, last_walked_corner, walked_on_paths, completed_rectangles) = player_state
         new_state = AmidarState(
             score=state.score + points_scored, # Could possibly change in multiple functions, so it is not calculated in the function based on the previous state
             player_x=player_x,
@@ -518,6 +556,7 @@ class JaxAmidar(JaxEnvironment[AmidarState, AmidarObservation, AmidarInfo]):
             player_direction=player_direction,
             last_walked_corner=last_walked_corner,
             walked_on_paths=walked_on_paths,
+            completed_rectangles=completed_rectangles,
             enemy_positions=state.enemy_positions,
             enemy_types=state.enemy_types,
         )
