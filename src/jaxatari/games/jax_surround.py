@@ -192,3 +192,65 @@ class JaxSurround(
 
     def obs_to_flat_array(self, obs: SurroundObservation) -> jnp.ndarray:
         return obs.grid.reshape(-1).astype(jnp.int32)
+
+
+def _pygame_action() -> int:
+    """Map pressed keys to a Surround action."""
+    import pygame
+
+    keys = pygame.key.get_pressed()
+    if keys[pygame.K_UP]:
+        return Action.UP
+    if keys[pygame.K_RIGHT]:
+        return Action.RIGHT
+    if keys[pygame.K_LEFT]:
+        return Action.LEFT
+    if keys[pygame.K_DOWN]:
+        return Action.DOWN
+    if keys[pygame.K_SPACE]:
+        return Action.FIRE
+    return Action.NOOP
+
+
+def main() -> None:  # pragma: no cover - visual helper
+    """Simple interactive loop to play Surround using pygame."""
+    import pygame
+    import numpy as np
+
+    env = JaxSurround()
+    _obs, state = env.reset()
+
+    scale = 20
+    width = env.consts.GRID_WIDTH * scale
+    height = env.consts.GRID_HEIGHT * scale
+
+    pygame.init()
+    screen = pygame.display.set_mode((width, height))
+    pygame.display.set_caption("JAX Surround")
+    clock = pygame.time.Clock()
+
+    running = True
+    while running:
+        for event in pygame.event.get():
+            if event.type == pygame.QUIT:
+                running = False
+
+        action = _pygame_action()
+
+        _obs, state, reward, done, _info = env.step(state, jnp.int32(action))
+
+        frame = np.array(env.render(state))
+        surface = pygame.surfarray.make_surface(frame.transpose(1, 0, 2))
+        surface = pygame.transform.scale(surface, (width, height))
+        screen.blit(surface, (0, 0))
+        pygame.display.flip()
+        clock.tick(10)
+
+        if bool(done):
+            _obs, state = env.reset()
+
+    pygame.quit()
+
+
+if __name__ == "__main__":  # pragma: no cover - manual play
+    main()
