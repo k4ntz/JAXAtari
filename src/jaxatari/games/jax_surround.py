@@ -87,7 +87,20 @@ class JaxSurround(
         return self._get_observation(state), state
 
     @partial(jax.jit, static_argnums=(0,))
-    def step(self, state: SurroundState, action: int) -> Tuple[SurroundObservation, SurroundState, float, bool, SurroundInfo]:
+    def step(
+        self, state: SurroundState, actions: jnp.ndarray
+    ) -> Tuple[SurroundObservation, SurroundState, jnp.ndarray, bool, SurroundInfo]:
+        """Takes a step for both agents.
+
+        Parameters
+        ----------
+        state : SurroundState
+            Current environment state.
+        actions : jnp.ndarray
+            Array of shape ``(2,)`` containing the actions for ``first_0`` and
+            ``second_0`` respectively.
+        """
+
         offsets = jnp.array(
             [
                 [0, 0],  # NOOP
@@ -99,10 +112,11 @@ class JaxSurround(
             ],
             dtype=jnp.int32,
         )
-        offset_p1 = offsets[action]
+
+        offset_p1 = offsets[actions[0]]
+        offset_p2 = offsets[actions[1]]
         new_p1 = state.p1_pos + offset_p1
-        # opponent moves slowly to the right
-        new_p2 = state.p2_pos + jnp.array([1, 0], dtype=jnp.int32)
+        new_p2 = state.p2_pos + offset_p2
 
         def clip_pos(pos):
             return jnp.clip(pos, jnp.array([0, 0]), jnp.array([self.consts.GRID_WIDTH - 1, self.consts.GRID_HEIGHT - 1]))
@@ -125,8 +139,10 @@ class JaxSurround(
         hit_p1_trail = jnp.logical_or(p1_trail[tuple(new_p1)], p2_trail[tuple(new_p1)])
         hit_p2_trail = jnp.logical_or(p1_trail[tuple(new_p2)], p2_trail[tuple(new_p2)])
 
-        p1_hit = jnp.logical_or(hit_p1_wall, hit_p1_trail)
-        p2_hit = jnp.logical_or(hit_p2_wall, hit_p2_trail)
+        head_on = jnp.all(new_p1 == new_p2)
+
+        p1_hit = jnp.logical_or(hit_p1_wall, jnp.logical_or(hit_p1_trail, head_on))
+        p2_hit = jnp.logical_or(hit_p2_wall, jnp.logical_or(hit_p2_trail, head_on))
 
         terminated = jnp.logical_or(p1_hit, p2_hit)
 
@@ -139,7 +155,9 @@ class JaxSurround(
             state.time + 1,
         )
 
-        reward = jnp.where(p1_hit, -1.0, jnp.where(p2_hit, 1.0, 0.0))
+        reward_p1 = jnp.where(p1_hit, -1.0, jnp.where(p2_hit, 1.0, 0.0))
+        reward_p2 = jnp.where(p2_hit, -1.0, jnp.where(p1_hit, 1.0, 0.0))
+        reward = jnp.array([reward_p1, reward_p2])
         obs = self._get_observation(next_state)
         done = self._get_done(next_state)
         info = self._get_info(next_state)
@@ -159,17 +177,25 @@ class JaxSurround(
         return SurroundInfo(time=state.time)
 
     @partial(jax.jit, static_argnums=(0,))
-    def _get_reward(self, previous_state: SurroundState, state: SurroundState) -> float:
+    def _get_reward(self, previous_state: SurroundState, state: SurroundState) -> jnp.ndarray:
         del previous_state
         hit_p1 = state.terminated & (state.p1_pos == state.p2_pos).all()
-        return jnp.where(hit_p1, -1.0, jnp.where(state.terminated, 1.0, 0.0))
+        reward_p1 = jnp.where(hit_p1, -1.0, jnp.where(state.terminated, 1.0, 0.0))
+        reward_p2 = jnp.where(state.terminated & ~hit_p1, -1.0, jnp.where(hit_p1, 1.0, 0.0))
+        return jnp.array([reward_p1, reward_p2])
 
     @partial(jax.jit, static_argnums=(0,))
     def _get_done(self, state: SurroundState) -> jnp.ndarray:
         return state.terminated.astype(jnp.bool_)
 
-    def action_space(self) -> spaces.Discrete:
-        return spaces.Discrete(len(self.action_set))
+    def action_space(self) -> spaces.Tuple:
+        """Returns the joint action space for both agents."""
+        return spaces.Tuple(
+            [
+                spaces.Discrete(len(self.action_set)),
+                spaces.Discrete(len(self.action_set)),
+            ]
+        )
 
     def observation_space(self) -> spaces.Box:
         return spaces.Box(
