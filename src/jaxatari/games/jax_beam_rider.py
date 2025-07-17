@@ -16,8 +16,8 @@ class BeamRiderConstants(NamedTuple):
     """Container for all game constants"""
 
     # Screen dimensions
-    SCREEN_WIDTH = 160
-    SCREEN_HEIGHT = 210
+    SCREEN_WIDTH = 240
+    SCREEN_HEIGHT = 160
 
     # Entity dimensions
     SHIP_WIDTH = 16
@@ -102,6 +102,10 @@ class BeamRiderConstants(NamedTuple):
     GREEN_BLOCKER_SPAWN_CHANCE = 0.12  # 12% chance to spawn green blocker
 
 
+    # HUD margins
+    TOP_MARGIN = int(210* 0.12)
+
+
     @classmethod
     def get_beam_positions(cls) -> jnp.ndarray:
         """Calculate beam positions based on screen width"""
@@ -113,12 +117,13 @@ class BeamRiderConstants(NamedTuple):
             7 * cls.SCREEN_WIDTH // 8  # Beam 4 (rightmost)
         ])
 
+
 @struct.dataclass
 class Ship:
     """Player ship state"""
     x: float
     y: float
-    beam_position: int  # Which beam the ship is on (0-4)
+    #beam_position: int  # Which beam the ship is on (0-4)
     active: bool = True
 
 
@@ -156,7 +161,9 @@ class BeamRiderState:
     lives: int
     level: int
     game_over: bool
+    # Random state
     rng_key: chex.PRNGKey
+    # Timing and spawning
     frame_count: int
     enemy_spawn_timer: int
 
@@ -188,11 +195,10 @@ class BeamRiderEnv(JaxEnvironment[BeamRiderState, jnp.ndarray, dict, BeamRiderCo
         # Initialize ship at bottom center beam
         initial_beam = self.constants.INITIAL_BEAM
         ship = Ship(
-            x=self.beam_positions[initial_beam] - self.constants.SHIP_WIDTH // 2,
-            y=self.constants.SCREEN_HEIGHT - self.constants.SHIP_BOTTOM_OFFSET,
-            beam_position=initial_beam,
-            active=True
-        )
+        x=self.constants.SCREEN_WIDTH // 2 - self.constants.SHIP_WIDTH // 2,
+        y=self.constants.SCREEN_HEIGHT - self.constants.SHIP_BOTTOM_OFFSET,
+        active=True
+    )
 
         # Initialize empty projectiles arrays (4 columns each)
         projectiles = jnp.zeros((self.constants.MAX_PROJECTILES, 4))  # x, y, active, speed
@@ -248,33 +254,31 @@ class BeamRiderEnv(JaxEnvironment[BeamRiderState, jnp.ndarray, dict, BeamRiderCo
         # Check game over conditions
         state = self._check_game_over(state)
 
+        state = state.replace(
+            frame_count=state.frame_count + 1,
+        )
+
         return state
 
 
     def _update_ship(self, state: BeamRiderState, action: int) -> BeamRiderState:
-        """Update ship position based on action - moves between beams"""
+        """Update ship position smoothly using left/right actions"""
         ship = state.ship
+        speed = 1.5  # adjust this for faster/slower ship
 
-        # Handle beam movement using JAX conditionals
-        new_beam_position = jnp.where(
-            jnp.isin(action, jnp.array([1, 4, 7])),  # left, left+laser, left+torpedo
-            jnp.maximum(0, ship.beam_position - 1),
+        new_x = jnp.where(
+            action == 1,  # left
+            jnp.maximum(0, ship.x - speed),
             jnp.where(
-                jnp.isin(action, jnp.array([2, 5, 8])),  # right, right+laser, right+torpedo
-                jnp.minimum(self.constants.NUM_BEAMS - 1, ship.beam_position + 1),
-                ship.beam_position  # no movement
+                action == 2,  # right
+                jnp.minimum(self.constants.SCREEN_WIDTH - self.constants.SHIP_WIDTH, ship.x + speed),
+                ship.x  # no movement
             )
         )
 
-        # Update ship position to match beam
-        new_x = self.beam_positions[new_beam_position] - self.constants.SHIP_WIDTH // 2
+        return state.replace(ship=ship.replace(x=new_x))
 
-        ship = ship.replace(
-            x=new_x,
-            beam_position=new_beam_position
-        )
 
-        return state.replace(ship=ship)
 
     def _handle_firing(self, state: BeamRiderState, action: int) -> BeamRiderState:
         """Handle both laser and torpedo firing"""
@@ -292,18 +296,22 @@ class BeamRiderEnv(JaxEnvironment[BeamRiderState, jnp.ndarray, dict, BeamRiderCo
     def _fire_laser(self, state: BeamRiderState, should_fire: bool) -> BeamRiderState:
         """Fire regular laser projectile"""
         projectiles = state.projectiles
-        active_mask = projectiles[:, 2] == 0  # inactive projectiles
+        any_active = jnp.any(projectiles[:, 2] == 1)
+        can_fire = ~any_active & should_fire  # only fire if none are active
 
-        first_inactive = jnp.argmax(active_mask)
-        can_fire = active_mask[first_inactive] & should_fire
-
+        # New projectile to be fired
         new_projectile = jnp.array([
             state.ship.x + self.constants.SHIP_WIDTH // 2,  # x
-            state.ship.y,  # y
-            1,  # active
-            -self.constants.PROJECTILE_SPEED  # speed (negative = upward)
+            state.ship.y,                                   # y
+            1,                                              # active
+            -self.constants.PROJECTILE_SPEED               # speed
         ])
 
+        # Find first available (inactive) slot
+        active_mask = projectiles[:, 2] == 0
+        first_inactive = jnp.argmax(active_mask)
+
+        # Conditionally insert new projectile
         projectiles = jnp.where(
             can_fire,
             projectiles.at[first_inactive].set(new_projectile),
@@ -351,7 +359,15 @@ class BeamRiderEnv(JaxEnvironment[BeamRiderState, jnp.ndarray, dict, BeamRiderCo
         # Update regular projectiles
         projectiles = state.projectiles
         new_y = projectiles[:, 1] + projectiles[:, 3]  # y + speed
-        active = (projectiles[:, 2] == 1) & (new_y > 0) & (new_y < self.constants.SCREEN_HEIGHT)
+        #active = (projectiles[:, 2] == 1) & (new_y > 0) & (new_y < self.constants.SCREEN_HEIGHT)
+
+        # Deactivate projectiles that go off screen
+        active = (
+            (projectiles[:, 2] == 1) &
+            (new_y > self.constants.TOP_MARGIN) &
+            (new_y < self.constants.SCREEN_HEIGHT)
+        )
+
         projectiles = projectiles.at[:, 1].set(new_y)
         projectiles = projectiles.at[:, 2].set(active.astype(jnp.float32))
 
@@ -789,17 +805,14 @@ class BeamRiderEnv(JaxEnvironment[BeamRiderState, jnp.ndarray, dict, BeamRiderCo
             self.beam_positions[center_beam] - self.constants.SHIP_WIDTH // 2,
             state.ship.x
         )
-        new_ship_beam = jnp.where(
+        """ new_ship_beam = jnp.where(
             ship_collision,
             center_beam,
             state.ship.beam_position
-        )
+        ) """
 
-        # Create updated ship struct
-        ship = state.ship.replace(
-            x=new_ship_x,
-            beam_position=new_ship_beam
-        )
+        ship = state.ship.replace(x=new_ship_x)
+
 
         return state.replace(
             projectiles=projectiles,
@@ -935,24 +948,55 @@ class BeamRiderRenderer(JAXGameRenderer):
         self.screen_width = self.constants.SCREEN_WIDTH
         self.screen_height = self.constants.SCREEN_HEIGHT
         self.beam_positions = self.constants.get_beam_positions()
+        self.ship_sprite_surface = self._create_ship_surface()
+        self.small_ship_surface = self._create_small_ship_surface()
 
         # JIT-compile the render function
         self.render = jit(self._render_impl)
+
+    def _create_ship_surface(self):
+        # Pixel values: 0=transparent, 1=yellow, 2=purple
+        ship_sprite = np.array([
+            [0, 0, 0, 2, 2, 0, 0, 0],
+            [0, 0, 1, 1, 1, 1, 0, 0],
+            [0, 1, 1, 1, 1, 1, 1, 0],
+            [1, 1, 1, 1, 1, 1, 1, 1],
+            [1, 1, 1, 0, 0, 1, 1, 1],
+            [1, 1, 0, 0, 0, 0, 1, 1],
+            [0, 0, 0, 0, 0, 0, 0, 0],
+        ])
+        colors = {
+            0: (0, 0, 0, 0),           # transparent
+            1: (255, 255, 0, 255),     # yellow
+            2: (160, 32, 240, 255),    # purple
+        }
+        h, w = ship_sprite.shape
+        surface = pygame.Surface((w, h), pygame.SRCALPHA)
+        for y in range(h):
+            for x in range(w):
+                surface.set_at((x, y), colors[ship_sprite[y, x]])
+        return pygame.transform.scale(surface, (w * 6, h * 6))
+
+    def _create_small_ship_surface(self):
+        """Creates a small version of the ship sprite for UI (lives display)"""
+        small_sprite = pygame.transform.scale(self.ship_sprite_surface, (16, 10))  # adjust size as needed
+        return small_sprite
 
     def _render_impl(self, state: BeamRiderState) -> chex.Array:
         """Render the current game state to a screen buffer - JIT-compiled"""
         # Create screen buffer (RGB)
         screen = jnp.zeros((self.constants.SCREEN_HEIGHT, self.constants.SCREEN_WIDTH, 3), dtype=jnp.uint8)
 
-        # Render the 5 beams first
-        screen = self._draw_beams(screen)
+        # Render 3D dotted tunnel grid
+        screen = self._draw_3d_grid(screen, state.frame_count)
 
-        # Render ship
+
+        """ # Render ship
         screen = jnp.where(
             state.ship.active,
             self._draw_ship(screen, state.ship),
             screen
-        )
+        ) """
 
         # Render projectiles (lasers)
         screen = self._draw_projectiles(screen, state.projectiles)
@@ -965,6 +1009,83 @@ class BeamRiderRenderer(JAXGameRenderer):
 
         # Render UI (score, lives, torpedoes, sector progress)
         screen = self._draw_ui(screen, state)
+
+        return screen
+
+    def _draw_3d_grid(self, screen: chex.Array, frame_count: int) -> chex.Array:
+        """Draw 3D grid with 7 animated horizontal lines and 9 vertical beam positions, skipping 2 & 8"""
+
+        height = self.constants.SCREEN_HEIGHT
+        width = self.constants.SCREEN_WIDTH
+        line_color = jnp.array([64, 64, 255], dtype=jnp.uint8)
+
+        # === Margins for HUD (top) and player (bottom) ===
+        top_margin = int(height * 0.12)
+        bottom_margin = int(height * 0.14)
+        grid_height = height - top_margin - bottom_margin
+
+        y_indices = jnp.arange(height)
+        x_indices = jnp.arange(width)
+        y_grid, x_grid = jnp.meshgrid(y_indices, x_indices, indexing="ij")
+
+        # === Horizontal lines ===
+        num_hlines = 7
+        speed = 1  # pixels per frame
+        spacing = grid_height // (num_hlines + 1)
+        phase = (frame_count * 0.003) % 1.0  # Controls global animation phase
+
+        def draw_hline(i, scr):
+            t = (phase + i / num_hlines) % 1.0
+            y = jnp.round((t ** 3.0) * grid_height).astype(int) + top_margin
+            y = jnp.clip(y, 0, height - 1)
+            mask = y_grid == y
+            return jnp.where(mask[..., None], line_color, scr)
+
+        screen = jax.lax.fori_loop(0, num_hlines, draw_hline, screen)
+
+         # === Vertical lines (9 positions, skip 1 and 7) ===
+        total_beams = 9
+        rel_positions = jnp.linspace(-1.0, 1.0, total_beams)  # full spread
+        draw_indices = jnp.array([0, 2, 3, 4, 5, 6, 8])  # skip index 1 and 7 (2nd and 8th from left)
+
+        center_x = width / 2
+        bottom_spread = width * 1.6
+        y0 = height - bottom_margin
+        y1 = -height * 0.7  # vanishing point above screen
+
+        def draw_vline(i, scr):
+            idx = draw_indices[i]
+            rel = rel_positions[idx]
+            x0 = center_x + rel * (bottom_spread / 2.0)
+            x1 = center_x
+
+            # Compute upper limit in t where y reaches top_margin
+            t_top = (top_margin - y0) / (y1 - y0)
+            t_top = jnp.clip(t_top, 0.0, 1.0)  # prevent overflow
+
+            num_steps = 200
+            dot_spacing = 25
+
+            def body_fn(j, scr_inner):
+                t = j / (num_steps - 1)
+                t_clipped = t * t_top  # scale to [0, t_top]
+
+                y = y0 + (y1 - y0) * t_clipped
+                x = x0 + (x1 - x0) * t_clipped
+
+                xi = jnp.clip(jnp.round(x).astype(int), 0, width - 1)
+                yi = jnp.clip(jnp.round(y).astype(int), 0, height - 1)
+
+                return jax.lax.cond(
+                    j % dot_spacing == 0,
+                    lambda s: s.at[yi, xi].set(line_color),
+                    lambda s: s,
+                    scr_inner
+                )
+
+
+            return jax.lax.fori_loop(0, num_steps, body_fn, scr)
+        screen = jax.lax.fori_loop(0, draw_indices.shape[0], draw_vline, screen)
 
         return screen
 
@@ -1156,51 +1277,8 @@ class BeamRiderRenderer(JAXGameRenderer):
         return screen
 
     def _draw_ui(self, screen: chex.Array, state: BeamRiderState) -> chex.Array:
-        """Draw UI elements (score, lives, torpedoes, sector progress, etc.)"""
-
-        # Create coordinate grids for UI elements
-        y_indices = jnp.arange(self.constants.SCREEN_HEIGHT)
-        x_indices = jnp.arange(self.constants.SCREEN_WIDTH)
-        y_grid, x_grid = jnp.meshgrid(y_indices, x_indices, indexing='ij')
-
-        # Score indicator (top line)
-        score_bars = jnp.minimum(state.score // 100, self.constants.SCREEN_WIDTH // 4)
-        score_mask = (y_grid < 2) & (x_grid < score_bars)
-        screen = jnp.where(
-            score_mask[..., None],
-            jnp.array(self.constants.GREEN, dtype=jnp.uint8),
-            screen
-        )
-
-        # Lives indicator (second line)
-        lives_bars = state.lives * 10
-        lives_mask = (y_grid >= 2) & (y_grid < 4) & (x_grid < lives_bars)
-        screen = jnp.where(
-            lives_mask[..., None],
-            jnp.array(self.constants.WHITE, dtype=jnp.uint8),
-            screen
-        )
-
-        # Torpedo indicator (third line)
-        torpedo_bars = state.torpedoes_remaining * 15
-        torpedo_mask = (y_grid >= 4) & (y_grid < 6) & (x_grid < torpedo_bars)
-        screen = jnp.where(
-            torpedo_mask[..., None],
-            jnp.array(self.constants.YELLOW, dtype=jnp.uint8),
-            screen
-        )
-
-        # Enemy progress indicator (fourth line) - shows enemies remaining in sector
-        enemies_remaining = self.constants.ENEMIES_PER_SECTOR - state.enemies_killed_this_sector
-        progress_bars = enemies_remaining * 8  # Scale factor for visibility
-        progress_mask = (y_grid >= 6) & (y_grid < 8) & (x_grid < progress_bars)
-        screen = jnp.where(
-            progress_mask[..., None],
-            jnp.array(self.constants.RED, dtype=jnp.uint8),  # Red for remaining enemies
-            screen
-        )
-
         return screen
+
 
 class BeamRiderPygameRenderer:
     """Pygame-basierte Visualisierung für BeamRider"""
@@ -1215,7 +1293,7 @@ class BeamRiderPygameRenderer:
         pygame.display.set_caption("BeamRider - JAX Implementation")
 
         self.clock = pygame.time.Clock()
-        self.font = pygame.font.Font(None, 36)
+        self.font = pygame.font.Font("PressStart2P.ttf", 16)
 
         # Create BeamRider components
         self.env = BeamRiderEnv()
@@ -1259,35 +1337,49 @@ class BeamRiderPygameRenderer:
         state = self.env.reset(key)
 
         running = True
-        action = 0
+        paused = False
 
         while running and not state.game_over:
-            # Handle events
+            # Handle quit & pause events
             for event in pygame.event.get():
                 if event.type == pygame.QUIT:
                     running = False
                 elif event.type == pygame.KEYDOWN:
-                    action = self._get_action_from_key(event.key)
+                    if event.key == pygame.K_p:
+                        paused = not paused
 
-            # Update game state
-            prev_state = state  # Store previous state
+            if not paused:
+                # Poll real-time key states for smoother controls
+                keys = pygame.key.get_pressed()
+                if keys[pygame.K_LEFT] and keys[pygame.K_SPACE]:
+                    action = 4  # left + fire
+                elif keys[pygame.K_RIGHT] and keys[pygame.K_SPACE]:
+                    action = 5  # right + fire
+                elif keys[pygame.K_LEFT]:
+                    action = 1  # left
+                elif keys[pygame.K_RIGHT]:
+                    action = 2  # right
+                elif keys[pygame.K_SPACE]:
+                    action = 3  # fire
+                else:
+                    action = 0  # no-op
+
+                # Step and render
+                prev_state = state  # Store previous state
             state = self.env.step(state, action)
 
             # Check for sector completion
             self._show_sector_complete(state)
+                screen_buffer = self.renderer.render(state)
+                self._draw_screen(screen_buffer, state)
+                self._draw_ui_overlay(state)
 
-            # Render game
-            screen_buffer = self.renderer.render(state)
-            self._draw_screen(screen_buffer)
-
-            # Draw UI
-            self._draw_ui_overlay(state)
-
-            pygame.display.flip()
-            self.clock.tick(60)  # 60 FPS
-
-            # Reset action to no-op after processing
-            action = 0
+                pygame.display.flip()
+                self.clock.tick(60)
+            else:
+                self._draw_pause_overlay()
+                pygame.display.flip()
+                self.clock.tick(15)
 
         # Game over screen
         if state.game_over:
@@ -1295,6 +1387,12 @@ class BeamRiderPygameRenderer:
 
         pygame.quit()
         sys.exit()
+
+    def _draw_pause_overlay(self):
+        pause_text = self.font.render("PAUSED", True, (255, 220, 100))
+        rect = pause_text.get_rect(center=(self.screen_width // 2, self.screen_height // 2))
+        self.screen.blit(pause_text, rect)
+
 
     def _get_action_from_key(self, key):
         """Convert keyboard inputs to actions"""
@@ -1316,54 +1414,47 @@ class BeamRiderPygameRenderer:
             return 8
         return 0  # no-op
 
-    def _draw_screen(self, screen_buffer):
-        """Zeichnet den Spielbildschirm"""
-        # Konvertiere JAX Array zu NumPy
+    def _draw_screen(self, screen_buffer, state):
+        """Draws the game screen buffer and overlays the ship sprite"""
         screen_np = np.array(screen_buffer)
-
-        # Skaliere das Bild
         scaled_screen = np.repeat(np.repeat(screen_np, self.scale, axis=0), self.scale, axis=1)
 
-        # Erstelle pygame Surface
         surf = pygame.surfarray.make_surface(scaled_screen.swapaxes(0, 1))
         self.screen.blit(surf, (0, 0))
 
+        # === OVERLAY THE SHIP SPRITE ===
+        ship_x = int(state.ship.x) * self.scale
+        ship_y = int(state.ship.y) * self.scale
+        self.screen.blit(self.renderer.ship_sprite_surface, (ship_x, ship_y))
+
+
     def _draw_ui_overlay(self, state):
-        """Draw UI overlay with text"""
-        # Score
-        score_text = self.font.render(f"Score: {state.score}", True, (255, 255, 255))
-        self.screen.blit(score_text, (10, 10))
+        """Draw centered Score and Level UI like Atari"""
+        score_text = self.font.render(f"SCORE {state.score:06}", True, (255, 220, 100))  # padded 6-digit score
+        level_text = self.font.render(f"SECTOR {state.level:02}", True, (255, 220, 100))  # padded 2-digit sector
 
-        # Lives
-        lives_text = self.font.render(f"Lives: {state.lives}", True, (255, 255, 255))
-        self.screen.blit(lives_text, (10, 50))
+        score_rect = score_text.get_rect(center=(self.screen_width // 2, 20))
+        level_rect = level_text.get_rect(center=(self.screen_width // 2, 42))
 
+        self.screen.blit(score_text, score_rect)
+        self.screen.blit(level_text, level_rect)
         # Torpedoes remaining
         torpedoes_text = self.font.render(f"Torpedoes: {state.torpedoes_remaining}", True, (255, 255, 0))
         self.screen.blit(torpedoes_text, (10, 90))
 
-        # Sector information
-        sector_text = self.font.render(f"Sector: {state.current_sector}", True, (255, 255, 255))
-        self.screen.blit(sector_text, (10, 130))
 
         # Enemy progress in current sector
         enemies_remaining = 15 - state.enemies_killed_this_sector
         progress_text = self.font.render(f"Enemies Left: {enemies_remaining}", True, (255, 100, 100))
         self.screen.blit(progress_text, (10, 170))
 
-        # Controls
-        controls_text = [
-            "Controls:",
-            "← → : Move",
-            "Space: Fire Laser",
-            "T: Fire Torpedo",
-            "A/D: Move+Laser",
-            "Q/E: Move+Torpedo"
-        ]
+        # === DRAW LIVES INDICATORS ===
+        for i in range(state.lives):
+            x = 30 + i * 36  # spacing between icons
+            y = self.screen_height - 20  # near bottom
+            scaled_ship = pygame.transform.scale(self.renderer.small_ship_surface, (int(self.renderer.small_ship_surface.get_width() * 1.5), int(self.renderer.small_ship_surface.get_height() * 1.5)))
+            self.screen.blit(scaled_ship, (x, y))
 
-        for i, text in enumerate(controls_text):
-            rendered = self.font.render(text, True, (200, 200, 200))
-            self.screen.blit(rendered, (self.screen_width - 200, 10 + i * 25))
 
     def _show_game_over(self, state):
         """Zeigt Game Over Bildschirm"""
