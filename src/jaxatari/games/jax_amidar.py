@@ -13,6 +13,8 @@ from jaxatari.environment import JaxEnvironment, JAXAtariAction as Action
 from jaxatari.renderers import AtraJaxisRenderer
 from jaxatari.rendering import atraJaxis as aj
 
+########## Constants ##########
+
 WIDTH = 160
 HEIGHT = 210
 
@@ -183,47 +185,79 @@ RECTANGLES = jnp.array(calculate_rectangles())
 
 @jax.jit
 def generate_path_mask():
-    """Generates a mask for the path edges using Bresenham's line algorithm.
+    """Generates a mask for the path edges.
     Args:
         path_edges: JAX array of shape (N, 2, 2) representing the path edges.
     """
     # Create an empty mask 
     mask = jnp.zeros((WIDTH, HEIGHT), dtype=jnp.int32)
+    rendering_mask = jnp.zeros((WIDTH, HEIGHT), dtype=jnp.int32)
 
-    def add_horizontal_edge(i, mask):
+    def add_horizontal_edge(i, carry):
+        mask, rendering_mask = carry
         start, end = HORIZONTAL_PATH_EDGES[i]
 
         x1, y1 = start
         x2, y2 = end
 
         def loop(x, carry):
-            mask, y = carry
+            mask, rendering_mask, y = carry
             mask = mask.at[x, y].set(1)
-            return (mask, y)
-        
-        mask, _ = jax.lax.fori_loop(x1, x2 + 1, loop, (mask, y1))
-        return mask
-    
-    def add_vertical_edge(i, mask):
+            rendering_mask = rendering_mask.at[x, y].set(1)
+            rendering_mask = rendering_mask.at[x, y+1].set(1)
+            rendering_mask = rendering_mask.at[x, y+2].set(1)
+            rendering_mask = rendering_mask.at[x, y+3].set(1)
+            rendering_mask = rendering_mask.at[x, y+4].set(1)
+            return (mask, rendering_mask, y)
+
+        mask, rendering_mask, _ = jax.lax.fori_loop(x1, x2 + 1, loop, (mask, rendering_mask, y1))
+
+        # add a bit to the rendering mask to make sure that even at corners the path is visible
+        rendering_mask = rendering_mask.at[x2+1, y1+1].set(1)
+        rendering_mask = rendering_mask.at[x2+2, y1+1].set(1)
+        rendering_mask = rendering_mask.at[x2+3, y1+1].set(1)
+        rendering_mask = rendering_mask.at[x2+1, y1+2].set(1)
+        rendering_mask = rendering_mask.at[x2+2, y1+2].set(1)
+        rendering_mask = rendering_mask.at[x2+3, y1+2].set(1)
+        rendering_mask = rendering_mask.at[x2+1, y1+3].set(1)
+        rendering_mask = rendering_mask.at[x2+2, y1+3].set(1)
+        rendering_mask = rendering_mask.at[x2+3, y1+3].set(1)
+        rendering_mask = rendering_mask.at[x2+1, y1+4].set(1)
+        rendering_mask = rendering_mask.at[x2+2, y1+4].set(1)
+        rendering_mask = rendering_mask.at[x2+3, y1+4].set(1)
+
+        return mask, rendering_mask
+
+    def add_vertical_edge(i, carry):
+        mask, rendering_mask = carry
         start, end = VERTICAL_PATH_EDGES[i]
 
         x1, y1 = start
         x2, y2 = end
 
         def loop(y, carry):
-            mask, x = carry
+            mask, rendering_mask, x = carry
             mask = mask.at[x, y].set(1)
-            return (mask, x)
-        
-        mask, _ = jax.lax.fori_loop(y1, y2 + 1, loop, (mask, x1))
-        return mask
-    
-    mask = jax.lax.fori_loop(0, jnp.shape(HORIZONTAL_PATH_EDGES)[0], add_horizontal_edge, mask)
-    mask = jax.lax.fori_loop(0, jnp.shape(VERTICAL_PATH_EDGES)[0], add_vertical_edge, mask)
+            rendering_mask = rendering_mask.at[x, y].set(1)
+            rendering_mask = rendering_mask.at[x+1, y].set(1)
+            rendering_mask = rendering_mask.at[x+2, y].set(1)
+            rendering_mask = rendering_mask.at[x+3, y].set(1)
+            return (mask, rendering_mask, x)
 
-    return mask
+        mask, rendering_mask, _ = jax.lax.fori_loop(y1, y2 + 1, loop, (mask, rendering_mask, x1))
+        return mask, rendering_mask
 
-PATH_MASK = generate_path_mask()
+    mask, rendering_mask = jax.lax.fori_loop(0, jnp.shape(HORIZONTAL_PATH_EDGES)[0], add_horizontal_edge, (mask, rendering_mask))
+    mask, rendering_mask = jax.lax.fori_loop(0, jnp.shape(VERTICAL_PATH_EDGES)[0], add_vertical_edge, (mask, rendering_mask))
+
+    return mask, rendering_mask
+
+# Path mask are the single lines which restrict the movement, while rendering path mask includes the width of the paths for rendering
+PATH_MASK, RENDERING_PATH_MASK = generate_path_mask()
+
+
+
+########## 
 
 # immutable state container
 class AmidarState(NamedTuple):
@@ -580,19 +614,20 @@ class AmidarRenderer(AtraJaxisRenderer):
 
         ###### For DEBUGGING #######
 
-        # Render path edges
-        def render_path(i, raster):
-            path = jnp.array(PATH_EDGES[i])
+        # # Render path edges
+        # def render_path(i, raster):
+        #     path = jnp.array(PATH_EDGES[i])
+        #     raster = render_line(raster, path, (255, 0, 0))
+        #     return raster
+        # raster = jax.lax.fori_loop(0, jnp.shape(PATH_EDGES)[0], render_path, raster)
 
-            raster = render_line(raster, path, (255, 0, 0))
-
-            return raster
-
-        raster = jax.lax.fori_loop(0, jnp.shape(PATH_EDGES)[0], render_path, raster)
-
-        # #render mask
+        # # Render path mask
         # all_white = jnp.full_like(raster, 255, dtype=jnp.uint8)
         # raster = jnp.where(PATH_MASK[:, :, None] == 1, all_white, raster)
+
+        # Render rendering path mask
+        all_white = jnp.full_like(raster, 255, dtype=jnp.uint8)
+        raster = jnp.where(RENDERING_PATH_MASK[:, :, None] == 1, all_white, raster)
 
         # # Render walked on paths
         # def render_walked_paths(i, raster):
