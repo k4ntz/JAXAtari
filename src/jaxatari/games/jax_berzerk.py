@@ -73,6 +73,7 @@ class BerzerkState(NamedTuple):
     enemy_animation_counter: chex.Array
     death_timer: chex.Array
     room_counter: chex.Array
+    entry_direction: chex.Array
     
 class BerzerkObservation(NamedTuple):
     player: chex.Array
@@ -267,6 +268,30 @@ class JaxBerzerk(JaxEnvironment[BerzerkState, BerzerkObservation, BerzerkInfo, B
         right_exit = (y > left[0]) & (y < left[1]) & (x > self.consts.PLAYER_BOUNDS[0][1] - self.consts.PLAYER_SIZE[0])
 
         return top_exit | bottom_exit | left_exit | right_exit
+    
+    @partial(jax.jit, static_argnums=(0,))
+    def get_exit_direction(self, player_pos: chex.Array) -> jnp.ndarray:
+        """Returns direction index: 0=top, 1=bottom, 2=left, 3=right, -1=none"""
+        x, y = player_pos[0], player_pos[1]
+        top = (self.consts.PLAYER_BOUNDS[0][0] + (self.consts.PLAYER_BOUNDS[0][1] - self.consts.PLAYER_BOUNDS[0][0]) / 2 - self.consts.EXIT_WIDTH / 2,
+            self.consts.PLAYER_BOUNDS[0][0] + (self.consts.PLAYER_BOUNDS[0][1] - self.consts.PLAYER_BOUNDS[0][0]) / 2 + self.consts.EXIT_WIDTH / 2 - self.consts.PLAYER_SIZE[0])
+        left = (self.consts.PLAYER_BOUNDS[1][0] + (self.consts.PLAYER_BOUNDS[1][1] - self.consts.PLAYER_BOUNDS[1][0]) / 2 - self.consts.EXIT_HEIGHT / 2,
+                self.consts.PLAYER_BOUNDS[1][0] + (self.consts.PLAYER_BOUNDS[1][1] - self.consts.PLAYER_BOUNDS[1][0]) / 2 + self.consts.EXIT_HEIGHT / 2 - self.consts.PLAYER_SIZE[1])
+        
+        return jax.lax.select(
+            (x > top[0]) & (x < top[1]) & (y < self.consts.PLAYER_BOUNDS[1][0]), jnp.int32(0),
+            jax.lax.select(
+                (x > top[0]) & (x < top[1]) & (y > self.consts.PLAYER_BOUNDS[1][1] - self.consts.PLAYER_SIZE[1]), jnp.int32(1),
+                jax.lax.select(
+                    (y > left[0]) & (y < left[1]) & (x < self.consts.PLAYER_BOUNDS[0][0]), jnp.int32(2),
+                    jax.lax.select(
+                        (y > left[0]) & (y < left[1]) & (x > self.consts.PLAYER_BOUNDS[0][1] - self.consts.PLAYER_SIZE[0]), jnp.int32(3),
+                        jnp.int32(-1)
+                    )
+                )
+            )
+        )
+
 
 
     @partial(jax.jit, static_argnums=(0, ))
@@ -369,7 +394,10 @@ class JaxBerzerk(JaxEnvironment[BerzerkState, BerzerkObservation, BerzerkInfo, B
 
     @partial(jax.jit, static_argnums=(0,))
     def reset(self, rng: chex.PRNGKey = jax.random.PRNGKey(42)) -> Tuple[BerzerkObservation, BerzerkState]:
-        pos = jnp.array([self.consts.WIDTH // 2, self.consts.HEIGHT // 2], dtype=jnp.float32)
+        pos = jnp.array([
+            10,
+            self.consts.PLAYER_BOUNDS[1][1] // 2
+        ], dtype=jnp.float32)
         lives = jnp.array(2, dtype=jnp.int32)
         bullets = jnp.zeros((self.consts.MAX_BULLETS, 2), dtype=jnp.float32)
         bullet_dirs = jnp.zeros((self.consts.MAX_BULLETS, 2), dtype=jnp.float32)
@@ -392,6 +420,7 @@ class JaxBerzerk(JaxEnvironment[BerzerkState, BerzerkObservation, BerzerkInfo, B
         enemy_animation_counter = jnp.zeros((self.consts.NUM_ENEMIES,), dtype=jnp.int32)
         death_timer = jnp.array(0, dtype=jnp.int32)
         room_counter = jnp.array(0, dtype=jnp.int32)
+        entry_direction=jnp.array(3, dtype=jnp.int32)
         state = BerzerkState(player_pos=pos, 
                              lives=lives, 
                              bullets=bullets, bullet_dirs=bullet_dirs, 
@@ -410,7 +439,8 @@ class JaxBerzerk(JaxEnvironment[BerzerkState, BerzerkObservation, BerzerkInfo, B
                              animation_counter=animation_counter,
                              enemy_animation_counter=enemy_animation_counter,
                              death_timer=death_timer,
-                             room_counter=room_counter)
+                             room_counter=room_counter,
+                             entry_direction=entry_direction)
         return self._get_observation(state), state
 
     @partial(jax.jit, static_argnums=0)
@@ -791,12 +821,27 @@ class JaxBerzerk(JaxEnvironment[BerzerkState, BerzerkObservation, BerzerkInfo, B
                 animation_counter=animation_counter,
                 enemy_animation_counter=enemy_animation_counter,
                 death_timer=death_timer,
-                room_counter=new_room_counter
+                room_counter=new_room_counter,
+                entry_direction=state.entry_direction
             )
+
+
+            #TODO: Positions need to be changed to match original.
+            player_spawn_pos = jax.lax.switch(
+                self.get_exit_direction(new_pos),
+                [
+                    lambda _: jnp.array([self.consts.WIDTH // 2, self.consts.PLAYER_BOUNDS[1][1] - 2 * self.consts.PLAYER_SIZE[1]], dtype=jnp.float32),  # oben → unten spawnen
+                    lambda _: jnp.array([self.consts.WIDTH // 2, self.consts.PLAYER_BOUNDS[1][0] + 2], dtype=jnp.float32),  # unten → oben spawnen
+                    lambda _: jnp.array([self.consts.PLAYER_BOUNDS[0][1] - 2 * self.consts.PLAYER_SIZE[0], self.consts.HEIGHT // 2], dtype=jnp.float32),  # links → rechts
+                    lambda _: jnp.array([self.consts.PLAYER_BOUNDS[0][0] + 2, self.consts.HEIGHT // 2], dtype=jnp.float32),  # rechts → links
+                ],
+                jnp.array([self.consts.WIDTH // 2, self.consts.HEIGHT // 2], dtype=jnp.float32)  # fallback
+            )
+
 
             # New level if exit reached
             reset_for_new_level = BerzerkState(
-                player_pos=jnp.array([self.consts.WIDTH // 2, self.consts.HEIGHT // 2], dtype=jnp.float32),
+                player_pos=player_spawn_pos,
                 lives=state.lives,
                 bullets=jnp.zeros_like(state.bullets),
                 bullet_dirs=jnp.zeros_like(state.bullet_dirs),
@@ -822,7 +867,8 @@ class JaxBerzerk(JaxEnvironment[BerzerkState, BerzerkObservation, BerzerkInfo, B
                 animation_counter=jnp.zeros_like(state.animation_counter),
                 enemy_animation_counter=jnp.zeros_like(state.enemy_animation_counter),
                 death_timer=jnp.array(0, dtype=jnp.int32),
-                room_counter=new_room_counter
+                room_counter=new_room_counter,
+                entry_direction= self.get_exit_direction(new_pos)
             )
 
             #jax.debug.print("EXIT: {}", hit_exit)
@@ -899,6 +945,7 @@ class BerzerkRenderer(JAXGameRenderer):
             'enemy_move_horizontal_1', 'enemy_move_horizontal_2',
             'enemy_move_vertical_1', 'enemy_move_vertical_2', 'enemy_move_vertical_3',
             'bullet_horizontal', 'bullet_vertical',
+            'door_horizontal', 'door_vertical',
             'level_outer_walls', 'mid_walls_1', 'mid_walls_2', 'mid_walls_3', 'mid_walls_4'
         ]
         for name in sprite_names:
@@ -978,6 +1025,58 @@ class BerzerkRenderer(JAXGameRenderer):
         # --- Außenwände immer oben drauf ---
         outer_walls = jr.get_sprite_frame(self.sprites['level_outer_walls'], 0)
         raster = jr.render_at(raster, self.consts.WALL_OFFSET[0], self.consts.WALL_OFFSET[1], outer_walls)
+
+
+        def draw_entry_block(raster):
+            wall_v = jr.get_sprite_frame(self.sprites['door_vertical'], 0)
+            wall_h = jr.get_sprite_frame(self.sprites['door_horizontal'], 0)
+
+            def block_top(r):
+                return jr.render_at(
+                    r,
+                    self.consts.PLAYER_BOUNDS[0][0] + (self.consts.PLAYER_BOUNDS[0][1] - self.consts.PLAYER_BOUNDS[0][0]) // 2 - wall_h.shape[1] // 2,
+                    self.consts.PLAYER_BOUNDS[1][0] - self.consts.WALL_THICKNESS,
+                    wall_h
+                )
+
+            def block_bottom(r):
+                return jr.render_at(
+                    r,
+                    self.consts.PLAYER_BOUNDS[0][0] + (self.consts.PLAYER_BOUNDS[0][1] - self.consts.PLAYER_BOUNDS[0][0]) // 2 - wall_h.shape[1] // 2,
+                    self.consts.PLAYER_BOUNDS[1][1],
+                    wall_h
+                )
+
+            def block_left(r):
+                return jr.render_at(
+                    r,
+                    self.consts.PLAYER_BOUNDS[0][0] - self.consts.WALL_THICKNESS,
+                    self.consts.PLAYER_BOUNDS[1][0] + (self.consts.PLAYER_BOUNDS[1][1] - self.consts.PLAYER_BOUNDS[1][0]) // 2 - wall_v.shape[0] // 2,
+                    wall_v
+                )
+
+            def block_right(r):
+                return jr.render_at(
+                    r,
+                    self.consts.PLAYER_BOUNDS[0][1],
+                    self.consts.PLAYER_BOUNDS[1][0] + (self.consts.PLAYER_BOUNDS[1][1] - self.consts.PLAYER_BOUNDS[1][0]) // 2 - wall_v.shape[0] // 2,
+                    wall_v
+                )
+
+            entry = state.entry_direction
+
+            # Falls von links oder rechts → blockiere beide
+            raster = jax.lax.cond(entry == 2, lambda r: block_left(block_right(r)), lambda r: r, raster)
+            raster = jax.lax.cond(entry == 3, lambda r: block_left(block_right(r)), lambda r: r, raster)
+
+            # Falls von oben → blockiere unten
+            raster = jax.lax.cond(entry == 0, block_bottom, lambda r: r, raster)
+            # Falls von unten → blockiere oben
+            raster = jax.lax.cond(entry == 1, block_top, lambda r: r, raster)
+
+            return raster
+        
+        raster = draw_entry_block(raster)
 
 
         # Draw bullets
