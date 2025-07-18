@@ -22,6 +22,7 @@ SCREEN_HEIGHT = 200
 DEFAULT_RIVER_WIDTH = 80
 MIN_RIVER_WIDTH = 30
 MAX_RIVER_WIDTH = 130
+MAX_ENEMIES = 10
 
 
 class RiverraidState(NamedTuple):
@@ -51,6 +52,12 @@ class RiverraidState(NamedTuple):
 
     player_bullet_x: chex.Array
     player_bullet_y: chex.Array
+
+    enemy_x: chex.Array
+    enemy_y: chex.Array
+    enemy_type: chex.Array
+    enemy_state: chex.Array  # 0 empty/dead, 1 alive
+    enemy_direction: chex.Array  # 0 left static, 1 right static, 2 left moving, 3 right moving
 
 
 
@@ -675,6 +682,90 @@ def player_shooting(state, action):
     return state._replace(player_bullet_x=new_bullet_x,
                               player_bullet_y=new_bullet_y)
 
+# TODO cooldown between spawns
+@jax.jit
+def spawn_enemies(state):
+    key, spawn_key, x_key = jax.random.split(state.master_key, 3)
+    spawn_enemy = jax.random.bernoulli(spawn_key, 0.07)
+
+    # 0 boat, 1 helicopter, 2 plane
+    new_single_enemy_type = jax.random.randint(spawn_key, (), 0, 3)
+    free_enemy_idx = jax.lax.cond(
+        jnp.any(state.enemy_state == 0),
+        lambda state: jnp.argmax(state.enemy_state == 0),
+        lambda _: jnp.array(-1, dtype=jnp.int32),
+        operand=state
+    )
+
+    new_enemy_type = state.enemy_type.at[free_enemy_idx].set(new_single_enemy_type)
+    new_enemy_state = state.enemy_state.at[free_enemy_idx].set(jnp.array(1)) # TODO select type
+
+
+    new_enemy_x = jax.lax.cond(
+        spawn_enemy & (free_enemy_idx >= 0),
+        lambda state: jax.lax.cond(
+            new_enemy_type[free_enemy_idx] <= 1, # logic for boat or helicopter (spawn in water)
+            lambda state: jax.lax.cond(
+                state.river_inner_left[0] >= 0,
+                lambda state: jax.lax.cond(
+                    jax.random.bernoulli(x_key, 0.5),
+                            lambda state: jax.random.randint(x_key, (), state.river_left[0] + 1, state.river_inner_left[0] - 8),
+                            lambda state: jax.random.randint(x_key, (), state.river_inner_right[0] + 1, state.river_right[0] - 8),
+                    operand=state
+                ),
+                lambda state: jax.random.randint(x_key, (), state.river_left[0] + 8, state.river_right[0] - 8),
+                operand=state
+            ),
+            lambda state: jax.lax.cond( # logic for plane (select a screenside)
+                jax.random.bernoulli(x_key, 0.5),
+                lambda _: jnp.array(-50, dtype=jnp.int32),
+                lambda _: jnp.array(SCREEN_WIDTH + 50, dtype=jnp.int32),
+                operand=None
+            ),
+            operand=state
+        ),
+        lambda state: jnp.array(-1, dtype=jnp.int32),
+        operand=state
+    )
+    new_enemy_y = jax.lax.cond(
+        spawn_enemy & (free_enemy_idx >= 0),
+        lambda _: jnp.array(0, dtype=jnp.float32),
+        lambda _: state.enemy_y[free_enemy_idx],
+        operand=None
+    )
+    new_enemy_direction = jax.lax.cond(
+        spawn_enemy & (free_enemy_idx >= 0),
+        lambda _: jax.random.randint(spawn_key, (), 0, 2),
+        lambda _: state.enemy_direction[free_enemy_idx],
+        operand=None
+    )
+
+    new_state = jax.lax.cond(
+        spawn_enemy & (free_enemy_idx >= 0),
+        lambda new_state: new_state._replace(
+            enemy_x=state.enemy_x.at[free_enemy_idx].set(new_enemy_x.astype(jnp.float32)),
+            enemy_y=state.enemy_y.at[free_enemy_idx].set(new_enemy_y.astype(jnp.float32)),
+            enemy_direction=state.enemy_direction.at[free_enemy_idx].set(new_enemy_direction),
+            enemy_state=new_enemy_state,
+            enemy_type=new_enemy_type
+        ),
+        lambda state: state,
+        operand=state
+    )
+    jax.debug.print("Riverraid: enemy_x: {enemy_x}", enemy_x=state.enemy_x)
+    jax.debug.print("Riverraid: enemy_y: {enemy_y}", enemy_y=state.enemy_y)
+    jax.debug.print("Riverraid: enemy_state: {enemy_state}", enemy_state=state.enemy_state)
+    return new_state
+
+def update_enemies(state: RiverraidState) -> RiverraidState:
+    new_enemy_y = state.enemy_y + 1
+    new_enemy_state = jnp.where(new_enemy_y > SCREEN_HEIGHT + 1, 0, state.enemy_state)
+    new_enemy_x = jnp.where(new_enemy_y > SCREEN_HEIGHT + 1, -1, state.enemy_x)
+    return state._replace(enemy_y=new_enemy_y,
+                          enemy_state=new_enemy_state,
+                          enemy_x=new_enemy_x)
+
+
 
 class JaxRiverraid(JaxEnvironment):
     def __init__(self, frameskip: int = 0, reward_funcs: list[callable] = None):
@@ -725,7 +816,12 @@ class JaxRiverraid(JaxEnvironment):
                                player_direction=jnp.array(1),
                                player_state= jnp.array(0),
                                player_bullet_x= jnp.array(-1, dtype=jnp.float32),
-                               player_bullet_y= jnp.array(-1, dtype=jnp.float32)
+                               player_bullet_y= jnp.array(-1, dtype=jnp.float32),
+                               enemy_x=jnp.full((MAX_ENEMIES,), -1, dtype=jnp.float32),
+                               enemy_y=jnp.full((MAX_ENEMIES,), SCREEN_HEIGHT + 1, dtype=jnp.float32),
+                               enemy_state=jnp.full((MAX_ENEMIES,), 0, dtype=jnp.int32),
+                               enemy_type= jnp.full((MAX_ENEMIES,), 0, dtype=jnp.int32),
+                               enemy_direction= jnp.full((MAX_ENEMIES,), 0, dtype=jnp.int32)
                                )
         observation = self._get_observation(state)
         return observation, state
@@ -743,6 +839,8 @@ class JaxRiverraid(JaxEnvironment):
             new_state = update_river_banks(new_state)
             new_state = player_movement(new_state, action)
             new_state = player_shooting(new_state, action)
+            new_state = spawn_enemies(new_state)
+            new_state = update_enemies(new_state)
             return new_state
 
         def respawn(state: RiverraidState) -> RiverraidState:
@@ -801,12 +899,15 @@ def load_sprites():
 
     player = aj.loadFrame(os.path.join(MODULE_DIR, "sprites/galaxian/player.npy"),transpose=False)
     bullet = aj.loadFrame(os.path.join(MODULE_DIR, "sprites/galaxian/bullet.npy"), transpose=False)
+    enemy = aj.loadFrame(os.path.join(MODULE_DIR, "sprites/galaxian/red_orange_enemy_1.npy"), transpose=False)
 
     SPRITE_PLAYER = jnp.expand_dims(player, axis = 0)
     BULLET = jnp.expand_dims(bullet, axis=0)
+    ENEMY = jnp.expand_dims(enemy, axis=0)
     return(
         SPRITE_PLAYER,
-        BULLET
+        BULLET,
+        ENEMY
     )
 
 class RiverraidRenderer(AtraJaxisRenderer):
@@ -814,6 +915,7 @@ class RiverraidRenderer(AtraJaxisRenderer):
         (
             self.SPRITE_PLAYER,
             self.BULLET,
+            self.ENEMY
         ) = load_sprites()
 
 
@@ -847,6 +949,28 @@ class RiverraidRenderer(AtraJaxisRenderer):
         bx = jnp.round(state.player_bullet_x).astype(jnp.int32)
         by = jnp.round(state.player_bullet_y).astype(jnp.int32)
         raster = aj.render_at(raster, by, bx, bullet_frame)
+
+        def render_enemy_at_idx(raster, i):
+            ex = jnp.round(state.enemy_x[i]).astype(jnp.int32)
+            ey = jnp.round(state.enemy_y[i]).astype(jnp.int32)
+            enemy_frame = aj.get_sprite_frame(self.ENEMY, 0)
+            return aj.render_at(raster, ey, ex, enemy_frame)
+
+        def cond_fun(i):
+            return state.enemy_state[i] > 0
+
+        def body_fun(i, raster):
+            raster = jax.lax.cond(
+                cond_fun(i),
+                lambda raster: render_enemy_at_idx(raster, i),
+                lambda raster: raster,
+                operand=raster
+            )
+            return raster
+
+        raster = jax.lax.fori_loop(0, MAX_ENEMIES, body_fun, raster)
+
+        raster = jax.lax.fori_loop(0, MAX_ENEMIES, body_fun, raster)
 
         # transpose it to (WIDTH, HEIGHT, 3)
         return jnp.transpose(raster, (1, 0, 2))
