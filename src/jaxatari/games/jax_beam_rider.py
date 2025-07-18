@@ -12,13 +12,18 @@ from jaxatari.environment import JaxEnvironment
 from jaxatari.renderers import JAXGameRenderer
 
 """TODOS:
-- Add torpedo shooting -> done
-- Add the rest of the enemies -> Orange tracker bug needs to be fixed and Sentinel Ship needs to be added
+- Add torpedo shooting -> DONE
+- Add the rest of the enemies -> DONE
 - Merge the renderers(try this)
 ----If the steps above are finished, ask for feedback----
+- Logic Bugs for ships:
+    - Green blockers and sentinel should not allow any laser to go through -> DONE
+    - change the yellow chirper ships height --> DONE
+    - spawn rate of green blockers needs to be fixed when sector == 6 && sentinal is active --> might be done
+- Check the sentinal ship constants
 - Add more movement Types for white enemies
-- Difficulty Scaling
-- Change enemy speeds
+- Difficulty Scaling -> DONE
+- Change enemy speeds -> DONE
 - Adjust points according to enemies -> done
 - Documentation
 - Should be playable through script
@@ -30,7 +35,7 @@ Nice to have:
 
 
 class BeamRiderConstants(NamedTuple):
-    """Container for all game constants"""
+    """Container for all game constants - Updated for 99-sector progression"""
 
     # Screen dimensions
     SCREEN_WIDTH = 160
@@ -60,9 +65,9 @@ class BeamRiderConstants(NamedTuple):
     GREEN = (0, 255, 0)
     YELLOW = (255, 255, 0)
 
-    # Game mechanics
+    # Game mechanics - UPDATED for better progression
     PROJECTILE_SPEED = 4.0
-    ENEMY_SPEED = 1.0
+    ENEMY_SPEED = 0.8  # Slower base speed, will scale up
     ENEMY_SPAWN_INTERVAL = 60  # frames between enemy spawns
     INITIAL_LIVES = 100
     INITIAL_LEVEL = 1
@@ -78,10 +83,11 @@ class BeamRiderConstants(NamedTuple):
     TORPEDO_WIDTH = 3
     TORPEDO_HEIGHT = 6
 
-    # Sector progression
+    # Sector progression - UPDATED for 99-sector scaling
     ENEMIES_PER_SECTOR = 15
-    BASE_ENEMY_SPAWN_INTERVAL = 60
-    MIN_ENEMY_SPAWN_INTERVAL = 20  # Fastest spawn rate
+    BASE_ENEMY_SPAWN_INTERVAL = 90  # Start slower (was 60)
+    MIN_ENEMY_SPAWN_INTERVAL = 12   # End faster (was 20)
+    MAX_ENEMY_SPEED = 2.5           # Maximum enemy speed at sector 99
 
     # Enemy spawn position
     ENEMY_SPAWN_Y = 10
@@ -96,24 +102,25 @@ class BeamRiderConstants(NamedTuple):
     ENEMY_TYPE_ORANGE_TRACKER = 6  # Orange tracker
     ENEMY_TYPE_SENTINEL_SHIP = 7  # NEW: Sentinel ship
 
-    # Sentinel ship specific constants
-    SENTINEL_SHIP_SPEED = 0.1  # Fast movement speed
+    # Sentinel ship specific constants - UPDATED speeds
+    SENTINEL_SHIP_SPEED = 1.0  # Moderate base speed, will scale
     SENTINEL_SHIP_POINTS = 200  # High points when destroyed with torpedo
     SENTINEL_SHIP_COLOR = (192, 192, 192)  # Silver/grey color RGB
-    SENTINEL_SHIP_SPAWN_SECTOR = 1  # Starts appearing from sector 12
+    SENTINEL_SHIP_SPAWN_SECTOR = 1  # Starts appearing from sector 1
     SENTINEL_SHIP_SPAWN_CHANCE = 0.05  # 5% chance to spawn sentinel ship (rare)
     SENTINEL_SHIP_WIDTH = 12  # Larger than regular enemies
     SENTINEL_SHIP_HEIGHT = 10  # Larger than regular enemies
     SENTINEL_SHIP_FIRING_INTERVAL = 120  # Frames between shots (2 seconds at 60fps)
     SENTINEL_SHIP_PROJECTILE_SPEED = 3.0  # Speed of sentinel projectiles
-    SENTINEL_SHIP_HEALTH = 1  # Takes 3 torpedo hits to destroy
+    SENTINEL_SHIP_HEALTH = 1  # Takes 1 torpedo hit to destroy
     SENTINEL_SHIP_MANEUVER_INTERVAL = 180  # Frames between evasive maneuvers
     SENTINEL_SHIP_MANEUVER_SPEED = 4.0  # Speed during evasive maneuvers
 
-    ORANGE_TRACKER_SPEED = 1.2  # Tracking movement speed
+    # Orange tracker specific constants - UPDATED speeds
+    ORANGE_TRACKER_SPEED = 0.9  # Slower base tracking speed
     ORANGE_TRACKER_POINTS = 50  # Points when destroyed with torpedo
     ORANGE_TRACKER_COLOR = (255, 165, 0)  # Orange color RGB
-    ORANGE_TRACKER_SPAWN_SECTOR = 12  # CHANGED: Starts appearing from sector 12 (was 12)
+    ORANGE_TRACKER_SPAWN_SECTOR = 12  # Starts appearing from sector 12
     ORANGE_TRACKER_SPAWN_CHANCE = 0.08  # 8% chance to spawn orange tracker
     ORANGE_TRACKER_CHANGE_DIRECTION_INTERVAL = 90  # Frames between direction changes
 
@@ -121,8 +128,8 @@ class BeamRiderConstants(NamedTuple):
     ORANGE_TRACKER_BASE_COURSE_CHANGES = 1  # Base number of course changes allowed
     ORANGE_TRACKER_COURSE_CHANGE_INCREASE_SECTOR = 5  # Every X sectors, add 1 more course change
 
-    # Blue charger specific constants
-    BLUE_CHARGER_SPEED = 1.5  # Speed moving down beam
+    # Blue charger specific constants - UPDATED speeds
+    BLUE_CHARGER_SPEED = 1.1  # Slower base speed
     BLUE_CHARGER_POINTS = 30  # Points when destroyed
     BLUE_CHARGER_COLOR = (0, 0, 255)  # Blue color RGB
     BLUE_CHARGER_SPAWN_SECTOR = 10  # Starts appearing from sector 10
@@ -130,8 +137,8 @@ class BeamRiderConstants(NamedTuple):
     BLUE_CHARGER_LINGER_TIME = 180  # Frames to stay at bottom (3 seconds at 60fps)
     BLUE_CHARGER_DEFLECT_SPEED = -2.0  # Speed when deflected upward by laser
 
-    # Brown debris specific constants
-    BROWN_DEBRIS_SPEED = 1.5  # Slightly faster than regular enemies
+    # Brown debris specific constants - UPDATED speeds
+    BROWN_DEBRIS_SPEED = 1.0  # Slower base speed
     BROWN_DEBRIS_POINTS = 25  # Bonus points when destroyed with torpedo
     BROWN_DEBRIS_COLOR = (139, 69, 19)  # Brown color RGB
 
@@ -139,8 +146,8 @@ class BeamRiderConstants(NamedTuple):
     BROWN_DEBRIS_SPAWN_SECTOR = 2  # Starts appearing from sector 2
     BROWN_DEBRIS_SPAWN_CHANCE = 0.15  # 15% chance to spawn brown debris
 
-    # Yellow chirper specific constants
-    YELLOW_CHIRPER_SPEED = 1.0  # Horizontal movement speed
+    # Yellow chirper specific constants - UPDATED speeds
+    YELLOW_CHIRPER_SPEED = 0.7  # Slower horizontal movement speed
     YELLOW_CHIRPER_POINTS = 50  # Bonus points for shooting them
     YELLOW_CHIRPER_COLOR = (255, 255, 0)  # Yellow color RGB
     YELLOW_CHIRPER_SPAWN_Y_MIN = 50  # Minimum Y position for horizontal flight
@@ -149,8 +156,8 @@ class BeamRiderConstants(NamedTuple):
     YELLOW_CHIRPER_SPAWN_SECTOR = 4  # Starts appearing from sector 4
     YELLOW_CHIRPER_SPAWN_CHANCE = 0.1  # 10% chance to spawn yellow chirper
 
-    # Green blocker specific constants
-    GREEN_BLOCKER_SPEED = 0.2  # Fast ramming speed
+    # Green blocker specific constants - UPDATED speeds
+    GREEN_BLOCKER_SPEED = 0.15  # Much slower ramming speed
     GREEN_BLOCKER_POINTS = 75  # High points when destroyed
     GREEN_BLOCKER_COLOR = (0, 255, 0)  # Green color RGB
     GREEN_BLOCKER_SPAWN_Y_MIN = 30  # Spawn higher up for targeting
@@ -160,8 +167,8 @@ class BeamRiderConstants(NamedTuple):
     GREEN_BLOCKER_SPAWN_CHANCE = 0.12  # 12% chance to spawn green blocker
     GREEN_BLOCKER_SENTINEL_SPAWN_CHANCE = 0.3  # 30% chance when sentinel is active in sectors 1-5
 
-    # Green bounce craft specific constants
-    GREEN_BOUNCE_SPEED = 2.0  # Fast bouncing speed
+    # Green bounce craft specific constants - UPDATED speeds
+    GREEN_BOUNCE_SPEED = 1.5  # Slower bouncing speed
     GREEN_BOUNCE_POINTS = 100  # Very high points when destroyed with torpedo
     GREEN_BOUNCE_COLOR = (0, 200, 0)  # Slightly different green than blockers
     GREEN_BOUNCE_SPAWN_SECTOR = 8  # Starts appearing from sector 8
@@ -498,7 +505,7 @@ class BeamRiderEnv(JaxEnvironment[BeamRiderState, jnp.ndarray, dict, BeamRiderCo
         return state.replace(sentinel_projectiles=sentinel_projectiles)
 
     def _spawn_enemies(self, state: BeamRiderState) -> BeamRiderState:
-        """Spawn new enemies - Updated with orange tracker beam following logic"""
+        """Spawn new enemies with dynamic speed scaling based on sector"""
 
         # Check if white saucers are complete for this sector
         white_saucers_complete = state.enemies_killed_this_sector >= self.constants.ENEMIES_PER_SECTOR
@@ -548,18 +555,42 @@ class BeamRiderEnv(JaxEnvironment[BeamRiderState, jnp.ndarray, dict, BeamRiderCo
             self._select_enemy_type_excluding_blockers_early_sectors(state.current_sector, subkey1)
         )
 
-        # SPECIAL SPAWNING LOGIC FOR GREEN BLOCKERS
+        # YELLOW CHIRPERS: Special side spawning with random Y position
+        is_yellow_chirper = enemy_type == self.constants.ENEMY_TYPE_YELLOW_CHIRPER
+
+        # Choose spawn side randomly (0 = left, 1 = right)
+        rng_key, spawn_side_key = random.split(rng_key)
+        spawn_from_right = random.randint(spawn_side_key, (), 0, 2)  # 0 or 1
+
+        # Choose random Y position within chirper range
+        rng_key, spawn_y_key = random.split(rng_key)
+        chirper_spawn_y = random.uniform(
+            spawn_y_key, (),
+            minval=self.constants.YELLOW_CHIRPER_SPAWN_Y_MIN,
+            maxval=self.constants.YELLOW_CHIRPER_SPAWN_Y_MAX,
+            dtype=jnp.float32
+        )
+
+        # Yellow chirper spawn positions (from sides, off-screen)
+        chirper_spawn_x = jnp.where(
+            spawn_from_right,
+            self.constants.SCREEN_WIDTH + self.constants.ENEMY_WIDTH,  # Spawn from right side (off-screen)
+            -self.constants.ENEMY_WIDTH  # Spawn from left side (off-screen)
+        )
+
+        # GREEN BLOCKERS: Target fixed X coordinate (where player was when blocker spawned)
         is_green_blocker = enemy_type == self.constants.ENEMY_TYPE_GREEN_BLOCKER
 
         # Calculate player ship center X coordinate (exact position)
         player_ship_center_x = state.ship.x + self.constants.SHIP_WIDTH // 2
 
-        # Choose spawn side randomly (0 = left, 1 = right)
-        spawn_from_right = random.randint(subkey2, (), 0, 2)  # 0 or 1
+        # Choose spawn side randomly for blockers (0 = left, 1 = right)
+        rng_key, blocker_side_key = random.split(rng_key)
+        blocker_spawn_from_right = random.randint(blocker_side_key, (), 0, 2)  # 0 or 1
 
         # Green blocker spawn positions (from sides)
         blocker_spawn_x = jnp.where(
-            spawn_from_right,
+            blocker_spawn_from_right,
             self.constants.SCREEN_WIDTH + self.constants.ENEMY_WIDTH,  # Spawn from right side (off-screen)
             -self.constants.ENEMY_WIDTH  # Spawn from left side (off-screen)
         )
@@ -573,12 +604,85 @@ class BeamRiderEnv(JaxEnvironment[BeamRiderState, jnp.ndarray, dict, BeamRiderCo
         regular_spawn_y = self.constants.ENEMY_SPAWN_Y
 
         # Choose final spawn position based on enemy type
-        spawn_x = jnp.where(is_green_blocker, blocker_spawn_x, regular_spawn_x)
-        spawn_y = jnp.where(is_green_blocker, blocker_spawn_y, regular_spawn_y)
-        spawn_beam = jnp.where(is_green_blocker, 0, regular_spawn_beam)  # Beam not used for blockers
+        spawn_x = jnp.where(
+            is_yellow_chirper,
+            chirper_spawn_x,  # Chirpers spawn from sides
+            jnp.where(
+                is_green_blocker,
+                blocker_spawn_x,
+                regular_spawn_x  # Regular enemies spawn from top
+            )
+        )
 
-        # Set enemy speed and health
-        enemy_speed = self.constants.ENEMY_SPEED
+        spawn_y = jnp.where(
+            is_yellow_chirper,
+            chirper_spawn_y,  # Chirpers use random Y in their range
+            jnp.where(
+                is_green_blocker,
+                blocker_spawn_y,
+                regular_spawn_y  # Regular enemies spawn from top
+            )
+        )
+
+        spawn_beam = jnp.where(
+            is_green_blocker | is_yellow_chirper,
+            0,  # Beam not used for blockers or chirpers
+            regular_spawn_beam
+        )
+
+        # DYNAMIC SPEED CALCULATION based on current sector
+        # Calculate scaled speeds for each enemy type
+        scaled_white_saucer_speed = self._calculate_enemy_speed(self.constants.ENEMY_SPEED, state.current_sector)
+        scaled_brown_debris_speed = self._calculate_enemy_speed(self.constants.BROWN_DEBRIS_SPEED, state.current_sector)
+        scaled_yellow_chirper_speed = self._calculate_enemy_speed(self.constants.YELLOW_CHIRPER_SPEED,
+                                                                  state.current_sector)
+        scaled_green_blocker_speed = self._calculate_enemy_speed(self.constants.GREEN_BLOCKER_SPEED,
+                                                                 state.current_sector)
+        scaled_green_bounce_speed = self._calculate_enemy_speed(self.constants.GREEN_BOUNCE_SPEED, state.current_sector)
+        scaled_blue_charger_speed = self._calculate_enemy_speed(self.constants.BLUE_CHARGER_SPEED, state.current_sector)
+        scaled_orange_tracker_speed = self._calculate_enemy_speed(self.constants.ORANGE_TRACKER_SPEED,
+                                                                  state.current_sector)
+        scaled_sentinel_speed = self._calculate_enemy_speed(self.constants.SENTINEL_SHIP_SPEED, state.current_sector)
+
+        # Select appropriate speed based on enemy type
+        base_enemy_speed = jnp.where(
+            enemy_type == self.constants.ENEMY_TYPE_WHITE_SAUCER,
+            scaled_white_saucer_speed,
+            jnp.where(
+                enemy_type == self.constants.ENEMY_TYPE_BROWN_DEBRIS,
+                scaled_brown_debris_speed,
+                jnp.where(
+                    enemy_type == self.constants.ENEMY_TYPE_YELLOW_CHIRPER,
+                    scaled_yellow_chirper_speed,
+                    jnp.where(
+                        enemy_type == self.constants.ENEMY_TYPE_GREEN_BLOCKER,
+                        scaled_green_blocker_speed,
+                        jnp.where(
+                            enemy_type == self.constants.ENEMY_TYPE_GREEN_BOUNCE,
+                            scaled_green_bounce_speed,
+                            jnp.where(
+                                enemy_type == self.constants.ENEMY_TYPE_BLUE_CHARGER,
+                                scaled_blue_charger_speed,
+                                jnp.where(
+                                    enemy_type == self.constants.ENEMY_TYPE_ORANGE_TRACKER,
+                                    scaled_orange_tracker_speed,
+                                    scaled_sentinel_speed  # SENTINEL_SHIP
+                                )
+                            )
+                        )
+                    )
+                )
+            )
+        )
+
+        # Apply directional speed for yellow chirpers
+        chirper_direction_x = jnp.where(spawn_from_right, -1.0, 1.0)  # -1 if spawning from right, +1 if from left
+        final_enemy_speed = jnp.where(
+            is_yellow_chirper,
+            jnp.where(spawn_from_right, -base_enemy_speed, base_enemy_speed),  # Apply direction
+            base_enemy_speed  # Regular speed for others
+        )
+
         enemy_health = 1
 
         # SPECIAL HANDLING FOR ORANGE TRACKERS
@@ -594,24 +698,6 @@ class BeamRiderEnv(JaxEnvironment[BeamRiderState, jnp.ndarray, dict, BeamRiderCo
                                     state.current_sector - self.constants.ORANGE_TRACKER_SPAWN_SECTOR) // self.constants.ORANGE_TRACKER_COURSE_CHANGE_INCREASE_SECTOR
         max_course_changes = base_changes + jnp.maximum(0, bonus_changes)
 
-        # Store the target X coordinate where player currently is (FIXED TARGET for blockers)
-        target_x = jnp.where(
-            is_green_blocker,
-            player_ship_center_x,  # Fixed target for blockers
-            jnp.where(
-                is_orange_tracker,
-                target_beam_x,  # Target beam X for trackers
-                0.0  # Default for other enemies
-            )
-        )
-
-        # Set movement direction for green blockers
-        direction_x = jnp.where(
-            is_green_blocker,
-            jnp.where(spawn_from_right, -1.0, 1.0),  # -1 if spawning from right, +1 if from left
-            0.0  # Regular enemies don't use direction_x initially
-        )
-
         # Override spawn beam for orange trackers to store current target beam
         final_spawn_beam = jnp.where(
             is_orange_tracker,
@@ -626,15 +712,37 @@ class BeamRiderEnv(JaxEnvironment[BeamRiderState, jnp.ndarray, dict, BeamRiderCo
             0
         )
 
+        # Set movement direction for green blockers and chirpers
+        direction_x = jnp.where(
+            is_green_blocker,
+            jnp.where(blocker_spawn_from_right, -1.0, 1.0),  # Blocker direction
+            jnp.where(
+                is_yellow_chirper,
+                chirper_direction_x,  # Chirper direction
+                0.0  # Regular enemies don't use direction_x initially
+            )
+        )
+
+        # Store the target X coordinate where player currently is (FIXED TARGET for blockers)
+        target_x = jnp.where(
+            is_green_blocker,
+            player_ship_center_x,  # Fixed target for blockers
+            jnp.where(
+                is_orange_tracker,
+                target_beam_x,  # Target beam X for trackers
+                0.0  # Default for other enemies
+            )
+        )
+
         # Create new enemy data
         new_enemy = jnp.array([
             spawn_x,  # 0: x
             spawn_y,  # 1: y
             final_spawn_beam,  # 2: beam_position (target beam for trackers, regular beam for others)
             1,  # 3: active
-            enemy_speed,  # 4: speed
+            final_enemy_speed,  # 4: speed (NOW DYNAMICALLY SCALED!)
             enemy_type,  # 5: type
-            direction_x,  # 6: direction_x (movement direction for blockers)
+            direction_x,  # 6: direction_x (movement direction for blockers and chirpers)
             1.0,  # 7: direction_y
             0,  # 8: bounce_count
             0,  # 9: linger_timer
@@ -656,6 +764,21 @@ class BeamRiderEnv(JaxEnvironment[BeamRiderState, jnp.ndarray, dict, BeamRiderCo
 
         return state.replace(enemies=enemies, rng_key=rng_key)
 
+    # Updated enemy speed calculation function (add this as a new method)
+    def _calculate_enemy_speed(self, base_speed: float, current_sector: int) -> float:
+        """Calculate enemy speed based on sector with smooth scaling"""
+        # Scale from base_speed to MAX_ENEMY_SPEED over 99 sectors
+        progress_ratio = jnp.minimum((current_sector - 1) / 98.0, 1.0)  # Cap at 1.0
+
+        # Use square root scaling for gradual increase that accelerates later
+        speed_multiplier = 1.0 + (jnp.sqrt(progress_ratio) * 2.0)  # 1.0x to 3.0x multiplier
+
+        final_speed = jnp.minimum(
+            base_speed * speed_multiplier,
+            self.constants.MAX_ENEMY_SPEED
+        )
+
+        return final_speed
     def _select_enemy_type_excluding_blockers_early_sectors(self, sector: int, rng_key: chex.PRNGKey) -> int:
         """Select enemy type - excludes green blockers in sectors 1-5, includes them in 6+"""
 
@@ -1134,7 +1257,7 @@ class BeamRiderEnv(JaxEnvironment[BeamRiderState, jnp.ndarray, dict, BeamRiderCo
         return state.replace(enemies=enemies)
 
     def _check_collisions(self, state: BeamRiderState) -> BeamRiderState:
-        """Check for collisions - Updated for brown debris blocking and orange tracker immunity"""
+        """Check for collisions - Updated so green blockers and sentinels block lasers"""
         projectiles = state.projectiles
         torpedo_projectiles = state.torpedo_projectiles
         sentinel_projectiles = state.sentinel_projectiles
@@ -1145,14 +1268,22 @@ class BeamRiderEnv(JaxEnvironment[BeamRiderState, jnp.ndarray, dict, BeamRiderCo
         proj_active = projectiles[:, 2] == 1
         enemy_active = enemies[:, 3] == 1
 
-        # UPDATED: Orange trackers are immune to lasers, brown debris blocks lasers
+        # Enemies that take damage from lasers (can be destroyed)
         enemy_vulnerable_to_lasers = (
                 (enemies[:, 5] == self.constants.ENEMY_TYPE_WHITE_SAUCER) |
                 (enemies[:, 5] == self.constants.ENEMY_TYPE_YELLOW_CHIRPER) |
-                (enemies[:, 5] == self.constants.ENEMY_TYPE_BLUE_CHARGER) |
-                (enemies[:, 5] == self.constants.ENEMY_TYPE_BROWN_DEBRIS)  # Brown debris blocks lasers
-            # NOTE: Orange trackers NOT included - immune to lasers!
+                (enemies[:, 5] == self.constants.ENEMY_TYPE_BLUE_CHARGER)
         )
+
+        # Enemies that BLOCK lasers (destroy the laser but don't take damage)
+        enemy_blocks_lasers = (
+                (enemies[:, 5] == self.constants.ENEMY_TYPE_BROWN_DEBRIS) |
+                (enemies[:, 5] == self.constants.ENEMY_TYPE_GREEN_BLOCKER) |
+                (enemies[:, 5] == self.constants.ENEMY_TYPE_SENTINEL_SHIP)
+        )
+
+        # Enemies that lasers can interact with (either damage or block)
+        enemy_interacts_with_lasers = enemy_vulnerable_to_lasers | enemy_blocks_lasers
 
         # Broadcast projectile and enemy positions for vectorized collision check
         proj_x = projectiles[:, 0:1]
@@ -1172,7 +1303,7 @@ class BeamRiderEnv(JaxEnvironment[BeamRiderState, jnp.ndarray, dict, BeamRiderCo
             self.constants.ENEMY_HEIGHT
         )
 
-        # Vectorized bounding box collision check for lasers
+        # Vectorized bounding box collision check for lasers (ANY interaction)
         laser_collisions = (
                 (proj_x < enemy_x + enemy_width[None, :]) &
                 (proj_x + self.constants.PROJECTILE_WIDTH > enemy_x) &
@@ -1180,11 +1311,15 @@ class BeamRiderEnv(JaxEnvironment[BeamRiderState, jnp.ndarray, dict, BeamRiderCo
                 (proj_y + self.constants.PROJECTILE_HEIGHT > enemy_y) &
                 proj_active[:, None] &
                 enemy_active[None, :] &
-                enemy_vulnerable_to_lasers[None, :]
+                enemy_interacts_with_lasers[None, :]  # Include both vulnerable and blocking enemies
         )
 
+        # Lasers get destroyed when hitting ANY enemy they interact with
         laser_proj_hits = jnp.any(laser_collisions, axis=1)
-        laser_enemy_hits = jnp.any(laser_collisions, axis=0)
+
+        # Only vulnerable enemies take damage from lasers
+        laser_damage_collisions = laser_collisions & enemy_vulnerable_to_lasers[None, :]
+        laser_enemy_hits = jnp.any(laser_damage_collisions, axis=0)
 
         # Special handling for blue charger deflection by lasers
         charger_laser_hits = laser_enemy_hits & (enemies[:, 5] == self.constants.ENEMY_TYPE_BLUE_CHARGER)
@@ -1196,17 +1331,15 @@ class BeamRiderEnv(JaxEnvironment[BeamRiderState, jnp.ndarray, dict, BeamRiderCo
             )
         )
 
-        # Don't deactivate blue chargers OR brown debris when hit by lasers
-        laser_enemy_hits = laser_enemy_hits & \
-                           (enemies[:, 5] != self.constants.ENEMY_TYPE_BLUE_CHARGER) & \
-                           (enemies[:, 5] != self.constants.ENEMY_TYPE_BROWN_DEBRIS)  # Brown debris stays active
+        # Don't deactivate blue chargers when hit by lasers (they just get deflected)
+        laser_enemy_hits = laser_enemy_hits & (enemies[:, 5] != self.constants.ENEMY_TYPE_BLUE_CHARGER)
 
         # Vectorized collision detection for TORPEDO projectiles vs enemies
         torpedo_active = torpedo_projectiles[:, 2] == 1
         torpedo_x = torpedo_projectiles[:, 0:1]
         torpedo_y = torpedo_projectiles[:, 1:2]
 
-        # Torpedoes can hit all enemy types (including brown debris and orange trackers)
+        # Torpedoes can hit all enemy types
         torpedo_collisions = (
                 (torpedo_x < enemy_x + enemy_width[None, :]) &
                 (torpedo_x + self.constants.TORPEDO_WIDTH > enemy_x) &
@@ -1218,6 +1351,28 @@ class BeamRiderEnv(JaxEnvironment[BeamRiderState, jnp.ndarray, dict, BeamRiderCo
 
         torpedo_proj_hits = jnp.any(torpedo_collisions, axis=1)
         torpedo_enemy_hits = jnp.any(torpedo_collisions, axis=0)
+
+        # Handle sentinel ship health reduction
+        sentinel_torpedo_hits = torpedo_enemy_hits & (enemies[:, 5] == self.constants.ENEMY_TYPE_SENTINEL_SHIP)
+
+        # Reduce sentinel health when hit by torpedo
+        enemies = enemies.at[:, 11].set(  # health column
+            jnp.where(
+                sentinel_torpedo_hits,
+                jnp.maximum(0, enemies[:, 11] - 1),  # Reduce health by 1, minimum 0
+                enemies[:, 11]
+            )
+        )
+
+        # Only destroy sentinels when health reaches 0
+        sentinel_destroyed = sentinel_torpedo_hits & (enemies[:, 11] <= 1)  # Will be 0 after reduction
+
+        # Update torpedo hits to only include destroyed sentinels
+        torpedo_enemy_hits = jnp.where(
+            enemies[:, 5] == self.constants.ENEMY_TYPE_SENTINEL_SHIP,
+            sentinel_destroyed,  # Only destroy if health will reach 0
+            torpedo_enemy_hits  # Normal destruction for other enemies
+        )
 
         # Combine enemy hits from laser and torpedo
         total_enemy_hits = laser_enemy_hits | torpedo_enemy_hits
@@ -1232,7 +1387,6 @@ class BeamRiderEnv(JaxEnvironment[BeamRiderState, jnp.ndarray, dict, BeamRiderCo
                                             5] == self.constants.ENEMY_TYPE_WHITE_SAUCER)) * self.constants.POINTS_PER_ENEMY +
                 jnp.sum(laser_enemy_hits & (enemies[:,
                                             5] == self.constants.ENEMY_TYPE_YELLOW_CHIRPER)) * self.constants.YELLOW_CHIRPER_POINTS
-            # NOTE: Brown debris doesn't give points when hit by lasers (since they're not destroyed)
         )
 
         torpedo_score = (
@@ -1332,7 +1486,7 @@ class BeamRiderEnv(JaxEnvironment[BeamRiderState, jnp.ndarray, dict, BeamRiderCo
         )
 
     def _check_sector_progression(self, state: BeamRiderState) -> BeamRiderState:
-        """Check if sector is complete and advance to next sector"""
+        """Check if sector is complete and advance to next sector - Updated with smooth 99-sector scaling"""
 
         # Check if we've killed enough WHITE SAUCERS
         white_saucers_complete = state.enemies_killed_this_sector >= self.constants.ENEMIES_PER_SECTOR
@@ -1377,7 +1531,6 @@ class BeamRiderEnv(JaxEnvironment[BeamRiderState, jnp.ndarray, dict, BeamRiderCo
 
         # Override sector completion if we just spawned a sentinel
         sector_truly_complete = white_saucers_complete & sentinel_requirement_met & ~just_spawned_sentinel
-
 
         # Calculate new values when sector is truly complete
         new_sector = jnp.where(sector_truly_complete, state.current_sector + 1, state.current_sector)
@@ -1429,14 +1582,26 @@ class BeamRiderEnv(JaxEnvironment[BeamRiderState, jnp.ndarray, dict, BeamRiderCo
         # Reset spawn timer when sector completes
         new_spawn_timer = jnp.where(sector_truly_complete, 0, state.enemy_spawn_timer)
 
-        # Increase difficulty: spawn enemies faster in higher sectors
-        difficulty_factor = jnp.maximum(1, (new_sector - 1) // 2)
-        new_spawn_interval = jnp.maximum(
-            self.constants.MIN_ENEMY_SPAWN_INTERVAL,
-            self.constants.BASE_ENEMY_SPAWN_INTERVAL - (difficulty_factor * 5)
-        )
+        # UPDATED: Smooth difficulty scaling across 99 sectors
+        # Calculate spawn interval scaling (90 frames to 12 frames over 99 sectors)
+        # Uses exponential decay for smoother progression
+        progress_ratio = jnp.minimum((new_sector - 1) / 98.0, 1.0)  # 0.0 to 1.0 over sectors 1-99, capped at 1.0
 
-        spawn_interval = jnp.where(sector_truly_complete, new_spawn_interval, state.enemy_spawn_interval)
+        # Exponential spawn rate increase (starts slow, accelerates later)
+        spawn_decay_factor = jnp.exp(-3.0 * progress_ratio)  # Exponential curve
+        calculated_spawn_interval = (
+                self.constants.MIN_ENEMY_SPAWN_INTERVAL +
+                (
+                            self.constants.BASE_ENEMY_SPAWN_INTERVAL - self.constants.MIN_ENEMY_SPAWN_INTERVAL) * spawn_decay_factor
+        )
+        calculated_spawn_interval = jnp.round(calculated_spawn_interval).astype(jnp.int32)
+
+        # Apply new spawn interval only when sector completes
+        spawn_interval = jnp.where(
+            sector_truly_complete,
+            calculated_spawn_interval,
+            state.enemy_spawn_interval
+        )
 
         # Create updated ship struct
         ship = state.ship.replace(
@@ -1458,9 +1623,18 @@ class BeamRiderEnv(JaxEnvironment[BeamRiderState, jnp.ndarray, dict, BeamRiderCo
             enemy_spawn_timer=new_spawn_timer,
             enemy_spawn_interval=spawn_interval
         )
+
     def _check_game_over(self, state: BeamRiderState) -> BeamRiderState:
-        """Check if game is over"""
-        game_over = state.lives <= 0
+        """Check if game is over - Updated to include sector 99 limit"""
+        # Original game over condition: no lives left
+        lives_game_over = state.lives <= 0
+
+        # New game over condition: reached sector 99 limit
+        sector_limit_reached = state.current_sector > 99
+
+        # Game is over if either condition is met
+        game_over = lives_game_over | sector_limit_reached
+
         return state.replace(game_over=game_over)
 
 
