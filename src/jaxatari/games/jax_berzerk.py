@@ -117,6 +117,7 @@ class JaxBerzerk(JaxEnvironment[BerzerkState, BerzerkObservation, BerzerkInfo, B
         self.obs_size = 111
         self.renderer = BerzerkRenderer(self.consts)
 
+
     def is_moving_action(self, action):
         moving_actions = jnp.array([
         Action.UP, 
@@ -137,6 +138,20 @@ class JaxBerzerk(JaxEnvironment[BerzerkState, BerzerkObservation, BerzerkInfo, B
         Action.DOWNRIGHTFIRE
     ])
         return jnp.any(action == moving_actions)
+
+
+    @staticmethod
+    def get_room_index(room_num):
+            def get_random_index(room_num):
+                prev = (room_num - 1) % 3
+                offset = (room_num % 2) + 1
+                next_idx = (prev + offset) % 3
+                return next_idx + 1
+            return jax.lax.cond(
+                room_num == 0,
+                lambda: jnp.array(0, dtype=jnp.int32),
+                lambda: jnp.array(get_random_index(room_num), dtype=jnp.int32)
+            )
 
     
     @partial(jax.jit, static_argnums=(0, ))
@@ -482,15 +497,40 @@ class JaxBerzerk(JaxEnvironment[BerzerkState, BerzerkObservation, BerzerkInfo, B
                 return overlap_x & overlap_y
 
             # 1a. Check wallcollision and exit collision
-            def object_hits_wall(object_pos, object_size):
-                object_hits_wall = (
-                    ((object_pos[0] < self.consts.PLAYER_BOUNDS[0][0]) & (object_pos[0] > 0)) |
-                    ((object_pos[0] + object_size[0] > self.consts.PLAYER_BOUNDS[0][1]) & (object_pos[0] < self.consts.WIDTH)) |
-                    ((object_pos[1] < self.consts.PLAYER_BOUNDS[1][0]) & (object_pos[0] > 0)) |
-                    ((object_pos[1] + object_size[1] > self.consts.PLAYER_BOUNDS[1][1]) & (object_pos[1] < self.consts.HEIGHT))
-                )
+            def object_hits_wall(object_pos, object_size, num_points_per_side=10):
+                # Aktuelle Raum-ID (0–3 → mid_walls_1 bis _4)
+                room_idx = JaxBerzerk.get_room_index(state.room_counter)
 
-                return object_hits_wall
+                # Hole passende Maske (True = Kollision)
+                def load_mask(idx):
+                    return jax.lax.switch(idx, [
+                        lambda: self.renderer.room_collision_masks['mid_walls_1'],
+                        lambda: self.renderer.room_collision_masks['mid_walls_2'],
+                        lambda: self.renderer.room_collision_masks['mid_walls_3'],
+                        lambda: self.renderer.room_collision_masks['mid_walls_4'],
+                    ])
+                
+                collision_mask = load_mask(room_idx) | self.renderer.room_collision_masks['level_outer_walls']  # shape (H,W)
+
+                mask_height, mask_width = collision_mask.shape
+
+                # Check Kollision: alle Eckpunkte
+                def point_hits(px, py):
+                    i = jnp.floor(py).astype(jnp.int32)
+                    j = jnp.floor(px).astype(jnp.int32)
+                    in_bounds = (i >= 0) & (i < mask_height) & (j >= 0) & (j < mask_width)
+                    return jax.lax.select(in_bounds, collision_mask[i, j], False)
+
+                x0, y0 = object_pos
+                w, h = object_size
+                top_edge = [(x0 + dx, y0) for dx in jnp.linspace(0, w, num_points_per_side)]
+                right_edge = [(x0 + w, y0 + dy) for dy in jnp.linspace(0, h, num_points_per_side)]
+                bottom_edge = [(x0 + dx, y0 + h) for dx in jnp.linspace(w, 0, num_points_per_side)]
+                left_edge = [(x0, y0 + dy) for dy in jnp.linspace(h, 0, num_points_per_side)]
+
+                all_edge_points = top_edge + right_edge + bottom_edge + left_edge
+                return jnp.any(jnp.array([point_hits(x, y) for x, y in all_edge_points]))
+
             
             hit_exit = self.check_exit_crossing(new_pos)
             hit_wall = object_hits_wall((player_x, player_y), self.consts.PLAYER_SIZE) & ~hit_exit
@@ -516,7 +556,6 @@ class JaxBerzerk(JaxEnvironment[BerzerkState, BerzerkObservation, BerzerkInfo, B
             #    jnp.zeros_like(state.enemy_animation_counter)
             #)
             enemy_animation_counter = state.enemy_animation_counter + 1
-
 
             # Only move living enemies
             updated_enemy_pos = jnp.where(state.enemy_alive[:, None], updated_enemy_pos, state.enemy_pos)
@@ -664,12 +703,8 @@ class JaxBerzerk(JaxEnvironment[BerzerkState, BerzerkObservation, BerzerkInfo, B
             )(bullet_dirs)
             
             bullets += bullet_dirs * self.consts.BULLET_SPEED * bullet_active[:, None]
-            bullet_active = bullet_active & (
-                (bullets[:, 0] >= self.consts.PLAYER_BOUNDS[0][0]) & # left
-                (bullets[:, 0] + bullet_sizes[:, 0] <= self.consts.PLAYER_BOUNDS[0][1]) & # right
-                (bullets[:, 1] >= self.consts.PLAYER_BOUNDS[1][0]) & # top
-                (bullets[:, 1] + bullet_sizes[:, 1] <= self.consts.PLAYER_BOUNDS[1][1]) # bottom
-            )
+            # only 1 player bullet
+            bullet_active = bullet_active & (~object_hits_wall(bullets[0], bullet_sizes[0]))
 
             # 6. Check collision of bullet and enemy
             def bullet_hits_enemy(bullet_pos, bullet_size, enemy_pos):
@@ -712,6 +747,12 @@ class JaxBerzerk(JaxEnvironment[BerzerkState, BerzerkObservation, BerzerkInfo, B
             enemy_bullet_hit_enemy = jnp.any(enemy_friendly_fire_hits, axis=1)  # Shape: (NUM_ENEMIES,)
             bullet_active = bullet_active & ~player_bullet_hit_enemy_bullet
             enemy_bullet_active = enemy_bullet_active & ~enemy_bullet_hit_enemy
+            enemy_bullet_hits_wall = jax.vmap(
+                lambda pos, size: object_hits_wall(pos, size)
+            )(enemy_bullets, enemy_bullet_sizes)
+
+            enemy_bullet_active = enemy_bullet_active & (~enemy_bullet_hits_wall)
+
 
             score_after = jnp.where(
                 jnp.any(enemy_hit | enemy_hits_wall | enemy_bullet_hit_enemy | hit_by_enemy),
@@ -835,6 +876,7 @@ class BerzerkRenderer(JAXGameRenderer):
         self.consts = consts or BerzerkConstants()
         self.sprite_path = f"{os.path.dirname(os.path.abspath(__file__))}/sprites/berzerk"
         self.sprites, self.pivots = self._load_sprites()
+        self.room_collision_masks = self._generate_room_collision_masks()
 
     def _load_sprites(self) -> tuple[Dict[str, Any], Dict[str, Any]]:
         """Loads all necessary sprites from .npy files and returns (padded sprites, render offsets)."""
@@ -855,8 +897,9 @@ class BerzerkRenderer(JAXGameRenderer):
             'player_idle', 'player_move_1', 'player_move_2', 'player_death',
             'enemy_idle_1', 'enemy_idle_2', 'enemy_idle_3', 'enemy_idle_4', 'enemy_idle_5', 'enemy_idle_6', 'enemy_idle_7', 'enemy_idle_8',
             'enemy_move_horizontal_1', 'enemy_move_horizontal_2',
-            'enemy_move_vertical_1', 'enemy_move_vertical_2', 'enemy_move_vertical_3', 'level_outer_walls',
-            'bullet_horizontal', 'bullet_vertical'
+            'enemy_move_vertical_1', 'enemy_move_vertical_2', 'enemy_move_vertical_3',
+            'bullet_horizontal', 'bullet_vertical',
+            'level_outer_walls', 'mid_walls_1', 'mid_walls_2', 'mid_walls_3', 'mid_walls_4'
         ]
         for name in sprite_names:
             sprites[name] = _load_sprite_frame(name)
@@ -890,9 +933,17 @@ class BerzerkRenderer(JAXGameRenderer):
         ]
         pad_and_store(enemy_keys)
 
+        # Pad mid_walls sprites to same shape
+        mid_keys = ['mid_walls_1', 'mid_walls_2', 'mid_walls_3', 'mid_walls_4']
+        mid_frames = [sprites[k] for k in mid_keys]
+        mid_padded, mid_offsets = jr.pad_to_match(mid_frames)
+        for i, key in enumerate(mid_keys):
+            sprites[key] = jnp.expand_dims(mid_padded[i], axis=0)
+            pad_offsets[key] = mid_offsets[i]
+
         # Expand other sprites
         for key in sprites.keys():
-            if key not in player_keys and key not in enemy_keys:
+            if key not in player_keys and key not in enemy_keys and key not in mid_keys:
                 if isinstance(sprites[key], (list, tuple)):
                     sprites[key] = [jnp.expand_dims(sprite, axis=0) for sprite in sprites[key]]
                 else:
@@ -906,8 +957,28 @@ class BerzerkRenderer(JAXGameRenderer):
         raster = jnp.zeros((self.consts.HEIGHT, self.consts.WIDTH, 3), dtype=jnp.uint8)
 
         # Draw walls (assuming fixed positions based on bounds)
-        wall_sprite = jr.get_sprite_frame(self.sprites['level_outer_walls'], 0)
-        raster = jr.render_at(raster, self.consts.WALL_OFFSET[0], self.consts.WALL_OFFSET[1], wall_sprite)
+        room_idx = JaxBerzerk.get_room_index(state.room_counter)
+
+        # --- Lade passendes Sprite ---
+        def load_room_sprite(idx):
+            return jax.lax.switch(
+                idx,
+                [
+                    lambda: jr.get_sprite_frame(self.sprites["mid_walls_1"], 0),
+                    lambda: jr.get_sprite_frame(self.sprites["mid_walls_2"], 0),
+                    lambda: jr.get_sprite_frame(self.sprites["mid_walls_3"], 0),
+                    lambda: jr.get_sprite_frame(self.sprites["mid_walls_4"], 0),
+                ]
+            )
+
+        mid_sprite = load_room_sprite(room_idx)
+        raster = jr.render_at(raster, 0, 0, mid_sprite)
+
+
+        # --- Außenwände immer oben drauf ---
+        outer_walls = jr.get_sprite_frame(self.sprites['level_outer_walls'], 0)
+        raster = jr.render_at(raster, self.consts.WALL_OFFSET[0], self.consts.WALL_OFFSET[1], outer_walls)
+
 
         # Draw bullets
         for i in range(state.bullets.shape[0]):
@@ -1171,6 +1242,16 @@ class BerzerkRenderer(JAXGameRenderer):
         )
 
         return raster
+    
+    def _generate_room_collision_masks(self) -> Dict[str, chex.Array]:
+        def extract_mask(sprite, wall_color=jnp.array([84, 92, 214, 255])):
+            return jnp.all(sprite[0] == wall_color, axis=-1)  # shape (H, W)
+
+        return {
+            name: extract_mask(self.sprites[name])
+            for name in ['mid_walls_1', 'mid_walls_2', 'mid_walls_3', 'mid_walls_4', 'level_outer_walls']
+        }
+
 
 # TODO: Refactor input
 def get_human_action() -> chex.Array:
