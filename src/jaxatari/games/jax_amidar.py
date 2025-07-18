@@ -255,6 +255,42 @@ def generate_path_mask():
 # Path mask are the single lines which restrict the movement, while rendering path mask includes the width of the paths for rendering
 PATH_MASK, RENDERING_PATH_MASK = generate_path_mask()
 
+PATH_COLOR = jnp.array([162, 98, 33, 255], dtype=jnp.uint8)  # Brown color for the path
+WALKED_ON_COLOR = jnp.array([104, 72, 198, 255], dtype=jnp.uint8)  # Purple color for the walked on paths
+
+def generate_path_pattern():
+    """Generates a path pattern for rendering.
+    Returns a JAX array of shape (WIDTH, HEIGHT) with the path pattern."""
+    # Create an empty mask
+    path_pattern = jnp.full(jnp.array([WIDTH, HEIGHT, 4]), 0, dtype=jnp.uint8)
+    walked_on_pattern = jnp.full(jnp.array([WIDTH, HEIGHT, 4]), 0, dtype=jnp.uint8)
+
+    # put the indices in a seperate array to be able to use vmap
+    ii, jj = jnp.meshgrid(jnp.arange(WIDTH), jnp.arange(HEIGHT), indexing='ij')
+    indices = jnp.stack((ii, jj), axis=-1)  # shape (WIDTH, HEIGHT, 2)
+
+    def set_for_column(path_column, walked_on_column, indices):
+        jax.debug.print("path_column shape: {s}", s=path_column.shape)
+
+        def set_color(path_value, walked_on_value, index):
+            x, y = index
+
+            path_value, walked_on_value, index = jax.lax.cond(jnp.logical_or(jnp.logical_or(y % 5 == 0, y % 5 == 2), y % 5 == 3),
+                lambda: (PATH_COLOR, walked_on_value, index),
+                lambda: (path_value, WALKED_ON_COLOR, index)
+            )
+            return path_value, walked_on_value, index
+
+        path_column, walked_on_column, index = jax.vmap(set_color, in_axes=0)(path_column, walked_on_column, indices)
+        return path_column, walked_on_column, index
+
+    path_pattern, walked_on_pattern, _ = jax.vmap(set_for_column, in_axes=0)(path_pattern, walked_on_pattern, indices)
+
+    return path_pattern, walked_on_pattern
+
+PATH_PATTERN, WALKED_ON_PATTERN = generate_path_pattern()
+
+PATH_SPRITE = jnp.where(RENDERING_PATH_MASK[:, :, None] == 1, PATH_PATTERN, jnp.full(jnp.array([WIDTH, HEIGHT, 4]), 0, dtype=jnp.uint8))
 
 
 ########## 
@@ -575,11 +611,14 @@ class AmidarRenderer(AtraJaxisRenderer):
         frame_bg = aj.get_sprite_frame(self.SPRITE_BG, 0)
         raster = aj.render_at(raster, 0, 0, frame_bg)
 
-        # Render paths - The Top Left corner of the path is (16, 15)
-        # TODO render the paths that have been walked on
-        # TODO make adaptable to different configurations?
-        frame_paths = aj.get_sprite_frame(self.SPRITE_PATHS, 0)
-        raster = aj.render_at(raster, 16, 15, frame_paths)
+        # # Render paths - The Top Left corner of the path is (16, 15)
+        # # TODO render the paths that have been walked on
+        # # TODO make adaptable to different configurations?
+        # frame_paths = aj.get_sprite_frame(self.SPRITE_PATHS, 0)
+        # raster = aj.render_at(raster, 16, 15, frame_paths)
+
+        # Render paths
+        raster = aj.render_at(raster, 0, 0, PATH_SPRITE)
 
         # Render score
         score_array = aj.int_to_digits(state.score, max_digits=8)
@@ -625,9 +664,15 @@ class AmidarRenderer(AtraJaxisRenderer):
         # all_white = jnp.full_like(raster, 255, dtype=jnp.uint8)
         # raster = jnp.where(PATH_MASK[:, :, None] == 1, all_white, raster)
 
-        # Render rendering path mask
-        all_white = jnp.full_like(raster, 255, dtype=jnp.uint8)
-        raster = jnp.where(RENDERING_PATH_MASK[:, :, None] == 1, all_white, raster)
+        # # Render rendering path mask
+        # all_white = jnp.full_like(raster, 255, dtype=jnp.uint8)
+        # raster = jnp.where(RENDERING_PATH_MASK[:, :, None] == 1, all_white, raster)
+
+        # # Render path pattern
+        # raster = aj.render_at(raster, 0, 0, PATH_PATTERN)
+
+        # # Render walked on pattern
+        # raster = aj.render_at(raster, 0, 0, WALKED_ON_PATTERN)
 
         # # Render walked on paths
         # def render_walked_paths(i, raster):
