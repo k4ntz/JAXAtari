@@ -110,13 +110,16 @@ class BeamRiderConstants(NamedTuple):
     SENTINEL_SHIP_MANEUVER_INTERVAL = 180  # Frames between evasive maneuvers
     SENTINEL_SHIP_MANEUVER_SPEED = 4.0  # Speed during evasive maneuvers
 
-    # Orange tracker specific constants
     ORANGE_TRACKER_SPEED = 1.2  # Tracking movement speed
     ORANGE_TRACKER_POINTS = 50  # Points when destroyed with torpedo
     ORANGE_TRACKER_COLOR = (255, 165, 0)  # Orange color RGB
-    ORANGE_TRACKER_SPAWN_SECTOR = 12  # Starts appearing from sector 12
+    ORANGE_TRACKER_SPAWN_SECTOR = 12  # CHANGED: Starts appearing from sector 12 (was 12)
     ORANGE_TRACKER_SPAWN_CHANCE = 0.08  # 8% chance to spawn orange tracker
     ORANGE_TRACKER_CHANGE_DIRECTION_INTERVAL = 90  # Frames between direction changes
+
+    # NEW: Tracker course change limits based on sector
+    ORANGE_TRACKER_BASE_COURSE_CHANGES = 1  # Base number of course changes allowed
+    ORANGE_TRACKER_COURSE_CHANGE_INCREASE_SECTOR = 5  # Every X sectors, add 1 more course change
 
     # Blue charger specific constants
     BLUE_CHARGER_SPEED = 1.5  # Speed moving down beam
@@ -495,7 +498,7 @@ class BeamRiderEnv(JaxEnvironment[BeamRiderState, jnp.ndarray, dict, BeamRiderCo
         return state.replace(sentinel_projectiles=sentinel_projectiles)
 
     def _spawn_enemies(self, state: BeamRiderState) -> BeamRiderState:
-        """Spawn new enemies - Green blockers target player's exact X coordinate when spawned"""
+        """Spawn new enemies - Updated with orange tracker beam following logic"""
 
         # Check if white saucers are complete for this sector
         white_saucers_complete = state.enemies_killed_this_sector >= self.constants.ENEMIES_PER_SECTOR
@@ -578,8 +581,29 @@ class BeamRiderEnv(JaxEnvironment[BeamRiderState, jnp.ndarray, dict, BeamRiderCo
         enemy_speed = self.constants.ENEMY_SPEED
         enemy_health = 1
 
-        # Store the target X coordinate where player currently is (FIXED TARGET)
-        target_x = jnp.where(is_green_blocker, player_ship_center_x, 0.0)
+        # SPECIAL HANDLING FOR ORANGE TRACKERS
+        is_orange_tracker = enemy_type == self.constants.ENEMY_TYPE_ORANGE_TRACKER
+
+        # For orange trackers: set up beam following data
+        player_beam = state.ship.beam_position
+        target_beam_x = self.beam_positions[player_beam]
+
+        # Calculate course change limit based on current sector
+        base_changes = self.constants.ORANGE_TRACKER_BASE_COURSE_CHANGES
+        bonus_changes = (
+                                    state.current_sector - self.constants.ORANGE_TRACKER_SPAWN_SECTOR) // self.constants.ORANGE_TRACKER_COURSE_CHANGE_INCREASE_SECTOR
+        max_course_changes = base_changes + jnp.maximum(0, bonus_changes)
+
+        # Store the target X coordinate where player currently is (FIXED TARGET for blockers)
+        target_x = jnp.where(
+            is_green_blocker,
+            player_ship_center_x,  # Fixed target for blockers
+            jnp.where(
+                is_orange_tracker,
+                target_beam_x,  # Target beam X for trackers
+                0.0  # Default for other enemies
+            )
+        )
 
         # Set movement direction for green blockers
         direction_x = jnp.where(
@@ -588,11 +612,25 @@ class BeamRiderEnv(JaxEnvironment[BeamRiderState, jnp.ndarray, dict, BeamRiderCo
             0.0  # Regular enemies don't use direction_x initially
         )
 
+        # Override spawn beam for orange trackers to store current target beam
+        final_spawn_beam = jnp.where(
+            is_orange_tracker,
+            player_beam,  # Store player's current beam as target
+            spawn_beam
+        )
+
+        # Store course changes remaining for orange trackers
+        course_changes_remaining = jnp.where(
+            is_orange_tracker,
+            max_course_changes,
+            0
+        )
+
         # Create new enemy data
         new_enemy = jnp.array([
             spawn_x,  # 0: x
             spawn_y,  # 1: y
-            spawn_beam,  # 2: beam_position (not used for blockers)
+            final_spawn_beam,  # 2: beam_position (target beam for trackers, regular beam for others)
             1,  # 3: active
             enemy_speed,  # 4: speed
             enemy_type,  # 5: type
@@ -600,10 +638,10 @@ class BeamRiderEnv(JaxEnvironment[BeamRiderState, jnp.ndarray, dict, BeamRiderCo
             1.0,  # 7: direction_y
             0,  # 8: bounce_count
             0,  # 9: linger_timer
-            target_x,  # 10: tracker_timer -> repurposed as target_x for blockers
+            target_x,  # 10: tracker_timer -> target_x for blockers/trackers
             enemy_health,  # 11: health
             0,  # 12: firing_timer
-            0  # 13: maneuver_timer
+            course_changes_remaining  # 13: maneuver_timer -> course changes remaining for trackers
         ])
 
         # Find first available slot and spawn
@@ -678,6 +716,7 @@ class BeamRiderEnv(JaxEnvironment[BeamRiderState, jnp.ndarray, dict, BeamRiderCo
         )
 
         return enemy_type
+
     def _select_enemy_type(self, sector: int, rng_key: chex.PRNGKey) -> int:
         """Select enemy type based on current sector - UPDATED: includes sentinel ship"""
 
@@ -738,7 +777,7 @@ class BeamRiderEnv(JaxEnvironment[BeamRiderState, jnp.ndarray, dict, BeamRiderCo
         return enemy_type
 
     def _update_enemies(self, state: BeamRiderState) -> BeamRiderState:
-        """Update enemy positions - Green blockers target fixed X coordinates"""
+        """Update enemy positions - Updated with orange tracker beam following"""
         enemies = state.enemies
 
         # Handle different movement patterns based on enemy type
@@ -780,6 +819,76 @@ class BeamRiderEnv(JaxEnvironment[BeamRiderState, jnp.ndarray, dict, BeamRiderCo
             blocker_y  # Don't move down until reached target
         )
 
+        # ORANGE TRACKERS: NEW beam following with limited course changes
+        tracker_mask = enemy_types == self.constants.ENEMY_TYPE_ORANGE_TRACKER
+
+        # Get tracker data
+        tracker_x = enemies[:, 0]
+        tracker_y = enemies[:, 1]
+        tracker_current_target_beam = enemies[:, 2].astype(int)  # Current target beam
+        tracker_target_x = enemies[:, 10]  # Target X coordinate for current beam
+        tracker_course_changes_remaining = enemies[:, 13].astype(int)  # Course changes left
+
+        # Get current player beam position
+        current_player_beam = state.ship.beam_position
+
+        # Check if player changed beams and tracker can still change course
+        player_changed_beam = current_player_beam != tracker_current_target_beam
+        can_change_course = tracker_course_changes_remaining > 0
+        should_change_course = tracker_mask & player_changed_beam & can_change_course
+
+        # Update target beam and target X when changing course
+        new_target_beam = jnp.where(
+            should_change_course,
+            current_player_beam,  # Follow player to new beam
+            tracker_current_target_beam  # Keep current target
+        )
+
+        new_target_x = jnp.where(
+            should_change_course,
+            self.beam_positions[current_player_beam],  # New beam X position
+            tracker_target_x  # Keep current target X
+        )
+
+        # Decrease course changes remaining when used
+        new_course_changes_remaining = jnp.where(
+            should_change_course,
+            tracker_course_changes_remaining - 1,
+            tracker_course_changes_remaining
+        )
+
+        # Calculate movement toward target beam
+        distance_to_target_x = jnp.abs(tracker_x - new_target_x)
+        reached_target_beam = distance_to_target_x < (self.constants.ORANGE_TRACKER_SPEED * 2)
+
+        # Horizontal movement toward target beam
+        horizontal_direction = jnp.sign(new_target_x - tracker_x)
+        tracker_new_x = jnp.where(
+            tracker_mask & ~reached_target_beam,
+            tracker_x + (horizontal_direction * self.constants.ORANGE_TRACKER_SPEED),
+            tracker_x  # Stop horizontal movement when aligned
+        )
+
+        # Vertical movement (always moving down, but faster when aligned)
+        vertical_speed = jnp.where(
+            tracker_mask & reached_target_beam,
+            self.constants.ORANGE_TRACKER_SPEED * 1.5,  # Faster when aligned with beam
+            self.constants.ORANGE_TRACKER_SPEED * 0.5  # Slower when moving to beam
+        )
+
+        tracker_new_y = jnp.where(
+            tracker_mask,
+            tracker_y + vertical_speed,
+            tracker_y
+        )
+
+        # Check if tracker has reached bottom
+        tracker_at_bottom = tracker_new_y >= (self.constants.SCREEN_HEIGHT - self.constants.ENEMY_HEIGHT)
+
+        # Don't move if at bottom
+        tracker_new_x = jnp.where(tracker_mask & tracker_at_bottom, tracker_x, tracker_new_x)
+        tracker_new_y = jnp.where(tracker_mask & tracker_at_bottom, tracker_y, tracker_new_y)
+
         # Blue chargers: move down beam, then linger at bottom
         charger_mask = enemy_types == self.constants.ENEMY_TYPE_BLUE_CHARGER
         charger_linger_timer = enemies[:, 9].astype(int)  # linger_timer column
@@ -807,49 +916,6 @@ class BeamRiderEnv(JaxEnvironment[BeamRiderState, jnp.ndarray, dict, BeamRiderCo
                 charger_linger_timer  # Keep current value
             )
         )
-
-        # Orange trackers: simple movement toward player
-        tracker_mask = enemy_types == self.constants.ENEMY_TYPE_ORANGE_TRACKER
-        tracker_timer = enemies[:, 10].astype(int)  # tracker_timer column
-
-        # Get player ship position for targeting
-        player_x = state.ship.x + self.constants.SHIP_WIDTH // 2
-        player_y = state.ship.y
-
-        # Calculate simple movement toward player
-        dx_to_player = player_x - enemies[:, 0]
-        dy_to_player = player_y - enemies[:, 1]
-
-        # Check if tracker has reached bottom
-        tracker_at_bottom = enemies[:, 1] >= (self.constants.SCREEN_HEIGHT - self.constants.ENEMY_HEIGHT)
-
-        # Simple movement: move a step toward player (but stop if at bottom)
-        move_x = jnp.where(
-            tracker_mask & ~tracker_at_bottom,  # Only move if not at bottom
-            jnp.sign(dx_to_player) * enemies[:, 4] * 0.7,  # Move toward player (slower)
-            0.0
-        )
-
-        move_y = jnp.where(
-            tracker_mask & ~tracker_at_bottom,  # Only move if not at bottom
-            jnp.sign(dy_to_player) * enemies[:, 4] * 0.7,  # Move toward player (slower)
-            0.0
-        )
-
-        # Calculate new tracker position
-        tracker_new_x = enemies[:, 0] + move_x
-        tracker_new_y = enemies[:, 1] + move_y
-
-        # Decrement timer
-        new_tracker_timer = jnp.where(
-            tracker_mask,
-            jnp.maximum(0, tracker_timer - 1),
-            tracker_timer
-        )
-
-        # Simple direction tracking for array updates
-        new_tracker_dir_x = jnp.where(tracker_mask, jnp.sign(dx_to_player), enemies[:, 6])
-        new_tracker_dir_y = jnp.where(tracker_mask, jnp.sign(dy_to_player), enemies[:, 7])
 
         # GREEN BOUNCE CRAFT: bouncing behavior
         bounce_mask = enemy_types == self.constants.ENEMY_TYPE_GREEN_BOUNCE
@@ -919,7 +985,7 @@ class BeamRiderEnv(JaxEnvironment[BeamRiderState, jnp.ndarray, dict, BeamRiderCo
                         enemies[:, 0],  # Blue chargers don't change X
                         jnp.where(
                             tracker_mask,
-                            tracker_new_x,  # Orange trackers follow player
+                            tracker_new_x,  # NEW: Orange trackers use beam following
                             jnp.where(
                                 sentinel_mask,
                                 sentinel_new_x,  # Sentinels move horizontally
@@ -946,11 +1012,7 @@ class BeamRiderEnv(JaxEnvironment[BeamRiderState, jnp.ndarray, dict, BeamRiderCo
                         charger_new_y,  # Blue chargers use special logic
                         jnp.where(
                             tracker_mask,
-                            jnp.where(
-                                tracker_new_y >= self.constants.SCREEN_HEIGHT,  # If tracker reached bottom
-                                enemies[:, 1],  # Don't update position
-                                tracker_new_y  # Otherwise update position
-                            ),
+                            tracker_new_y,  # NEW: Orange trackers use beam following Y movement
                             jnp.where(
                                 sentinel_mask,
                                 sentinel_new_y,  # Sentinels stay at same Y
@@ -1011,7 +1073,7 @@ class BeamRiderEnv(JaxEnvironment[BeamRiderState, jnp.ndarray, dict, BeamRiderCo
                             charger_active,
                             jnp.where(
                                 tracker_mask,
-                                tracker_active,
+                                tracker_active,  # Use tracker-specific active logic
                                 jnp.where(
                                     sentinel_mask,
                                     sentinel_active,
@@ -1027,48 +1089,52 @@ class BeamRiderEnv(JaxEnvironment[BeamRiderState, jnp.ndarray, dict, BeamRiderCo
         # Update enemy array
         enemies = enemies.at[:, 0].set(new_x)  # Update x positions
         enemies = enemies.at[:, 1].set(new_y)  # Update y positions
+        enemies = enemies.at[:, 2].set(  # Update target beam for trackers
+            jnp.where(tracker_mask, new_target_beam, enemies[:, 2])
+        )
         enemies = enemies.at[:, 3].set(active.astype(jnp.float32))  # Update active states
 
-        # Update direction arrays - prioritize bounce craft, then trackers, keep blocker directions
+        # Update direction arrays - prioritize bounce craft, keep blocker directions
         enemies = enemies.at[:, 6].set(
             jnp.where(
                 bounce_mask,
                 new_bounce_dir_x,
-                jnp.where(
-                    tracker_mask,
-                    new_tracker_dir_x,
-                    enemies[:, 6]  # Keep existing direction_x for blockers and others
-                )
+                enemies[:, 6]  # Keep existing direction_x for blockers and others
             )
         )
         enemies = enemies.at[:, 7].set(
             jnp.where(
                 bounce_mask,
                 new_bounce_dir_y,
-                jnp.where(
-                    tracker_mask,
-                    new_tracker_dir_y,
-                    enemies[:, 7]  # Keep existing direction_y for others
-                )
+                enemies[:, 7]  # Keep existing direction_y for others
             )
         )
 
         enemies = enemies.at[:, 8].set(new_bounce_count)  # Update bounce count
         enemies = enemies.at[:, 9].set(new_linger_timer)  # Update linger timer
 
-        # Update tracker timer - but preserve target_x for blockers (stored in same field)
+        # Update target X for trackers and blockers
         enemies = enemies.at[:, 10].set(
             jnp.where(
                 tracker_mask,
-                new_tracker_timer,  # Update timer for trackers
+                new_target_x,  # Update target X for trackers
                 enemies[:, 10]  # Keep target_x for blockers, existing values for others
+            )
+        )
+
+        # Update course changes remaining for trackers
+        enemies = enemies.at[:, 13].set(
+            jnp.where(
+                tracker_mask,
+                new_course_changes_remaining,  # Update course changes for trackers
+                enemies[:, 13]  # Keep existing values for others
             )
         )
 
         return state.replace(enemies=enemies)
 
     def _check_collisions(self, state: BeamRiderState) -> BeamRiderState:
-        """Check for collisions - Updated to handle brown debris laser blocking"""
+        """Check for collisions - Updated for brown debris blocking and orange tracker immunity"""
         projectiles = state.projectiles
         torpedo_projectiles = state.torpedo_projectiles
         sentinel_projectiles = state.sentinel_projectiles
@@ -1079,12 +1145,13 @@ class BeamRiderEnv(JaxEnvironment[BeamRiderState, jnp.ndarray, dict, BeamRiderCo
         proj_active = projectiles[:, 2] == 1
         enemy_active = enemies[:, 3] == 1
 
-        # UPDATED: Most enemies vulnerable to lasers (NOW INCLUDING brown debris for collision detection)
+        # UPDATED: Orange trackers are immune to lasers, brown debris blocks lasers
         enemy_vulnerable_to_lasers = (
                 (enemies[:, 5] == self.constants.ENEMY_TYPE_WHITE_SAUCER) |
                 (enemies[:, 5] == self.constants.ENEMY_TYPE_YELLOW_CHIRPER) |
                 (enemies[:, 5] == self.constants.ENEMY_TYPE_BLUE_CHARGER) |
-                (enemies[:, 5] == self.constants.ENEMY_TYPE_BROWN_DEBRIS)  # ADDED: Brown debris now blocks lasers
+                (enemies[:, 5] == self.constants.ENEMY_TYPE_BROWN_DEBRIS)  # Brown debris blocks lasers
+            # NOTE: Orange trackers NOT included - immune to lasers!
         )
 
         # Broadcast projectile and enemy positions for vectorized collision check
@@ -1129,20 +1196,17 @@ class BeamRiderEnv(JaxEnvironment[BeamRiderState, jnp.ndarray, dict, BeamRiderCo
             )
         )
 
-        # UPDATED: Handle brown debris laser hits (debris blocks laser but doesn't get destroyed)
-        brown_debris_laser_hits = laser_enemy_hits & (enemies[:, 5] == self.constants.ENEMY_TYPE_BROWN_DEBRIS)
-
         # Don't deactivate blue chargers OR brown debris when hit by lasers
         laser_enemy_hits = laser_enemy_hits & \
                            (enemies[:, 5] != self.constants.ENEMY_TYPE_BLUE_CHARGER) & \
-                           (enemies[:, 5] != self.constants.ENEMY_TYPE_BROWN_DEBRIS)  # ADDED: Brown debris stays active
+                           (enemies[:, 5] != self.constants.ENEMY_TYPE_BROWN_DEBRIS)  # Brown debris stays active
 
         # Vectorized collision detection for TORPEDO projectiles vs enemies
         torpedo_active = torpedo_projectiles[:, 2] == 1
         torpedo_x = torpedo_projectiles[:, 0:1]
         torpedo_y = torpedo_projectiles[:, 1:2]
 
-        # Torpedoes can hit all enemy types (including brown debris - torpedoes destroy everything)
+        # Torpedoes can hit all enemy types (including brown debris and orange trackers)
         torpedo_collisions = (
                 (torpedo_x < enemy_x + enemy_width[None, :]) &
                 (torpedo_x + self.constants.TORPEDO_WIDTH > enemy_x) &
@@ -1175,7 +1239,7 @@ class BeamRiderEnv(JaxEnvironment[BeamRiderState, jnp.ndarray, dict, BeamRiderCo
                 jnp.sum(torpedo_enemy_hits & (enemies[:,
                                               5] == self.constants.ENEMY_TYPE_WHITE_SAUCER)) * self.constants.POINTS_PER_ENEMY * 2 +
                 jnp.sum(torpedo_enemy_hits & (enemies[:,
-                                              5] == self.constants.ENEMY_TYPE_BROWN_DEBRIS)) * self.constants.BROWN_DEBRIS_POINTS +  # Points when destroyed by torpedo
+                                              5] == self.constants.ENEMY_TYPE_BROWN_DEBRIS)) * self.constants.BROWN_DEBRIS_POINTS +
                 jnp.sum(torpedo_enemy_hits & (enemies[:,
                                               5] == self.constants.ENEMY_TYPE_YELLOW_CHIRPER)) * self.constants.YELLOW_CHIRPER_POINTS +
                 jnp.sum(torpedo_enemy_hits & (enemies[:,
@@ -1266,6 +1330,7 @@ class BeamRiderEnv(JaxEnvironment[BeamRiderState, jnp.ndarray, dict, BeamRiderCo
             lives=lives,
             enemies_killed_this_sector=state.enemies_killed_this_sector + enemies_killed_this_frame
         )
+
     def _check_sector_progression(self, state: BeamRiderState) -> BeamRiderState:
         """Check if sector is complete and advance to next sector"""
 
