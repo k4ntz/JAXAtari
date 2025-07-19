@@ -8,48 +8,33 @@ Authors:
     - Jonas Neumann <jonas.neumann@stud.tu-darmstadt.de>
     - Yuddhish Chooah <yuddhish.chooah@stud.tu-darmstadt.de>
 
-We recorded a sequence of game play and have added the interpretations of the RAM values as
-a CSV file with the RAM registers and their meaning and possible values.
 
 Implemented features:
-- Working Game state, reset() and step() functions
 - Plunger and Flipper movement logic
 - Plunger physics
-- Accurate and jit-compatible rendering for implemented mechanics
-- Ball respawning upon failure and life counter
-- Wall collisions
-- Rudimentary ball physics (IMPORTANT: Pull the plunger back all the way when testing)
+- Jit-compatible rendering
+- Special object logic (like yellow targets, rollovers, etc.)
+- Scoring
+- Ball respawning upon hitting the gutter and life counter
+- Basic collisions and ball physics
 
 Why the ball physics are not yet perfect:
-Video Pinball has extremely complicated ball physics. Launch angles, when hitting (close to) corners are
+Video Pinball has extremely complicated ball physics. Launch angles when hitting (close to) corners are
 seemingly random and velocity calculation has a variety of strange quirks like strong spontaneous acceleration
 when a slow balls hit walls at certain angles, etc...
 These properties are impossible to read from the RAM state and need to be investigated
 frame by frame in various scenarios. Thus, the physics are far from perfect.
-There is still a physics bug when calculating multiple wall collisions during a single step which unfortunately
-gets triggered when the plunger is pulled all the way down. When testing, pulling it all the way down, this is the only
-way we found so far to mitigate this issue until we match the physics to the Atari original.
+Collisions are mostly implemented apart from the flippers but non-reflective collisions
+such as when hitting a target are still missing, even though the logic for these objects such as the targets
+(like increasing bumper multiplier and respawn cooldown etc.) are already implemented so the game
+is a little more complete than it seems.
 
 Additional notes:
 The renderer requires a custom function that was implemented in atraJaxis.py
-If the game.py files are tested separately, this function needs to be included manually:
+We were not working on the game for almost 2 months as most of the team debated whether they
+should quit the project or not, which is why the game is still in such an incomplete state.
+However, we are now determined to continue.
 
-@jax.jit
-def pad_to_match_top(sprites):
-    max_height = max(sprite.shape[0] for sprite in sprites)
-    max_width = max(sprite.shape[1] for sprite in sprites)
-
-    def pad_sprite(sprite):
-        pad_height = max_height - sprite.shape[0]
-        pad_width = max_width - sprite.shape[1]
-        return jnp.pad(
-            sprite,
-            ((pad_height, 0), (pad_width, 0), (0, 0)),
-            mode="constant",
-            constant_values=0,
-        )
-
-    return [pad_sprite(sprite) for sprite in sprites]
 """
 
 import os
@@ -245,7 +230,8 @@ class SceneObject:
     reflecting: chex.Array  # 0: no reflection, 1: reflection
     score_type: (
         chex.Array
-    )  # 0: no score, 1: Bumper, 2: Spinner, 3: Left Rollover, 4: Atari Rollover, 5: Special Lit Up Target, 6: Left Lit Up Target, 7:Middle Lit Up Target, 8: Right Lit Up Target
+    )  # 0: no score, 1: Bumper, 2: Spinner, 3: Left Rollover, 4: Atari Rollover, 5: Special Lit Up Target,
+       # 6: Left Lit Up Target, 7:Middle Lit Up Target, 8: Right Lit Up Target
 
 
 # Instantiate a SceneObject like this:
