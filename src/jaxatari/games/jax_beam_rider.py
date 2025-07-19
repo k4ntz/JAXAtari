@@ -16,18 +16,19 @@ from jaxatari.renderers import JAXGameRenderer
 - Add the rest of the enemies -> DONE
 - Merge the renderers(try this)
 ----If the steps above are finished, ask for feedback----
-- Logic Bugs for ships:
+- Logic Bugs for ships: --> DONE
     - Green blockers and sentinel should not allow any laser to go through -> DONE
     - change the yellow chirper ships height --> DONE
     - spawn rate of green blockers needs to be fixed when sector == 6 && sentinal is active --> might be done
-- Check the sentinal ship constants
-- Add more movement Types for white enemies
+- Check the sentinal ship constants/Optimize the code/remove unnecessary code
+- Adjust the spawn rate of green blockers in sectors 1 - 5 (currently the sentinel moves faster through the screen than they can spawn)
+- Add more movement Types for white enemies -> DONE
 - Difficulty Scaling -> DONE
 - Change enemy speeds -> DONE
 - Adjust points according to enemies -> done
 - Documentation
 - Should be playable through script
-- Yellow Rejuvinators(?)
+- Add Yellow Rejuvinators
 - Maybe some environment changes(depending on feedback)
 
 Nice to have:
@@ -101,6 +102,28 @@ class BeamRiderConstants(NamedTuple):
     ENEMY_TYPE_BLUE_CHARGER = 5  # Blue charger
     ENEMY_TYPE_ORANGE_TRACKER = 6  # Orange tracker
     ENEMY_TYPE_SENTINEL_SHIP = 7  # NEW: Sentinel ship
+
+    # White saucer behavior constants
+    WHITE_SAUCER_SHOOT_CHANCE = 0.2  # 20% of white saucers can shoot
+    WHITE_SAUCER_JUMP_CHANCE = 0.15  # 15% chance for beam jumping
+    WHITE_SAUCER_REVERSE_CHANCE = 0.1  # 10% chance for reverse movement
+    WHITE_SAUCER_ZIGZAG_CHANCE = 0.1  # 10% chance for zigzag movement
+    WHITE_SAUCER_FIRING_INTERVAL = 90  # Frames between shots
+    WHITE_SAUCER_PROJECTILE_SPEED = 2.5  # Speed of white saucer projectiles
+    WHITE_SAUCER_JUMP_INTERVAL = 120  # Frames between beam jumps
+    WHITE_SAUCER_REVERSE_SPEED = -1.5  # Reverse movement speed (going back up)
+    WHITE_SAUCER_ZIGZAG_AMPLITUDE = 15  # Horizontal movement range for zigzag
+    WHITE_SAUCER_ZIGZAG_FREQUENCY = 0.1  # Zigzag frequency
+
+    # White saucer movement patterns
+    WHITE_SAUCER_STRAIGHT_DOWN = 0
+    WHITE_SAUCER_BEAM_JUMP = 1
+    WHITE_SAUCER_REVERSE_UP = 2
+    WHITE_SAUCER_ZIGZAG = 3
+    WHITE_SAUCER_SHOOTING = 4
+    # White saucer reverse pattern constants
+    WHITE_SAUCER_REVERSE_TRIGGER_Y = 150  # Y position where reverse pattern triggers
+    WHITE_SAUCER_REVERSE_SPEED_FAST = -4.0
 
     # Sentinel ship specific constants - UPDATED speeds
     SENTINEL_SHIP_SPEED = 1.0  # Moderate base speed, will scale
@@ -277,7 +300,7 @@ class BeamRiderEnv(JaxEnvironment[BeamRiderState, jnp.ndarray, dict, BeamRiderCo
         self.step = jit(self._step_impl)
 
     def reset(self, rng_key: chex.PRNGKey) -> BeamRiderState:
-        """Reset the game to initial state"""
+        """Reset the game to initial state - MODIFIED for 18-column enemies array"""
         # Initialize ship at bottom center beam
         initial_beam = self.constants.INITIAL_BEAM
         ship = Ship(
@@ -292,10 +315,11 @@ class BeamRiderEnv(JaxEnvironment[BeamRiderState, jnp.ndarray, dict, BeamRiderCo
         torpedo_projectiles = jnp.zeros((self.constants.MAX_PROJECTILES, 4))  # x, y, active, speed
         sentinel_projectiles = jnp.zeros((self.constants.MAX_PROJECTILES, 4))  # x, y, active, speed
 
-        # Initialize empty enemies array - UPDATED: now 14 columns for sentinel ships
-        enemies = jnp.zeros((self.constants.MAX_ENEMIES, 14))
+        # Initialize empty enemies array - UPDATED: now 18 columns for white saucer enhancements
+        enemies = jnp.zeros((self.constants.MAX_ENEMIES, 18))
         # x, y, beam_position, active, speed, type, direction_x, direction_y,
-        # bounce_count, linger_timer, tracker_timer, health, firing_timer, maneuver_timer
+        # bounce_count, linger_timer, target_x, health, firing_timer, maneuver_timer,
+        # movement_pattern, white_saucer_firing_timer, jump_timer, zigzag_offset
 
         return BeamRiderState(
             ship=ship,
@@ -333,6 +357,8 @@ class BeamRiderEnv(JaxEnvironment[BeamRiderState, jnp.ndarray, dict, BeamRiderCo
 
         # Update enemies
         state = self._update_enemies(state)
+        #Handle white saucer shooting
+        state = self._handle_white_saucer_shooting(state)
 
         # NEW: Update sentinel ship projectiles
         state = self._update_sentinel_projectiles(state)
@@ -376,6 +402,239 @@ class BeamRiderEnv(JaxEnvironment[BeamRiderState, jnp.ndarray, dict, BeamRiderCo
 
         return state.replace(ship=ship.replace(x=new_x, beam_position=new_beam_position))
 
+    def _select_white_saucer_movement_pattern(self, rng_key: chex.PRNGKey) -> int:
+        """Select movement pattern for a new white saucer"""
+        # Generate random value for pattern selection
+        pattern_rand = random.uniform(rng_key, (), minval=0.0, maxval=1.0)
+
+        # Determine movement pattern based on probabilities
+        pattern = jnp.where(
+            pattern_rand < self.constants.WHITE_SAUCER_REVERSE_CHANCE,
+            self.constants.WHITE_SAUCER_REVERSE_UP,
+            jnp.where(
+                pattern_rand < (self.constants.WHITE_SAUCER_REVERSE_CHANCE +
+                                self.constants.WHITE_SAUCER_ZIGZAG_CHANCE),
+                self.constants.WHITE_SAUCER_ZIGZAG,
+                jnp.where(
+                    pattern_rand < (self.constants.WHITE_SAUCER_REVERSE_CHANCE +
+                                    self.constants.WHITE_SAUCER_ZIGZAG_CHANCE +
+                                    self.constants.WHITE_SAUCER_JUMP_CHANCE),
+                    self.constants.WHITE_SAUCER_BEAM_JUMP,
+                    jnp.where(
+                        pattern_rand < (self.constants.WHITE_SAUCER_REVERSE_CHANCE +
+                                        self.constants.WHITE_SAUCER_ZIGZAG_CHANCE +
+                                        self.constants.WHITE_SAUCER_JUMP_CHANCE +
+                                        self.constants.WHITE_SAUCER_SHOOT_CHANCE),
+                        self.constants.WHITE_SAUCER_SHOOTING,
+                        self.constants.WHITE_SAUCER_STRAIGHT_DOWN
+                    )
+                )
+            )
+        )
+
+        return pattern
+
+    def _handle_white_saucer_shooting(self, state: BeamRiderState) -> BeamRiderState:
+        """Handle white saucer projectile firing"""
+        enemies = state.enemies
+
+        # Find shooting white saucers that are ready to fire
+        white_saucer_mask = enemies[:, 5] == self.constants.ENEMY_TYPE_WHITE_SAUCER
+        active_mask = enemies[:, 3] == 1
+        shooting_pattern_mask = enemies[:, 14] == self.constants.WHITE_SAUCER_SHOOTING
+        ready_to_fire_mask = enemies[:, 15] == 0  # white_saucer_firing_timer is 0
+
+        can_shoot = white_saucer_mask & active_mask & shooting_pattern_mask & ready_to_fire_mask
+
+        # Find any white saucer that can shoot
+        any_can_shoot = jnp.any(can_shoot)
+
+        # Find first shooting white saucer
+        shooter_idx = jnp.argmax(can_shoot)
+
+        # Get shooter position (only valid if any_can_shoot is True)
+        shooter_x = enemies[shooter_idx, 0]
+        shooter_y = enemies[shooter_idx, 1]
+
+        # Create projectile at saucer position, moving downward
+        projectile_x = shooter_x + self.constants.ENEMY_WIDTH // 2 - self.constants.PROJECTILE_WIDTH // 2
+        projectile_y = shooter_y + self.constants.ENEMY_HEIGHT
+
+        new_projectile = jnp.array([
+            projectile_x,
+            projectile_y,
+            1,  # active
+            self.constants.WHITE_SAUCER_PROJECTILE_SPEED  # speed (positive = downward)
+        ])
+
+        # Find first inactive slot in sentinel projectiles array (reuse for white saucer projectiles)
+        sentinel_projectiles = state.sentinel_projectiles
+        inactive_mask = sentinel_projectiles[:, 2] == 0
+        first_inactive = jnp.argmax(inactive_mask)
+        can_spawn_projectile = inactive_mask[first_inactive]
+
+        # Create and add projectile if conditions are met
+        should_fire = any_can_shoot & can_spawn_projectile
+
+        # Update sentinel projectiles array (using it for white saucer projectiles too)
+        sentinel_projectiles = jnp.where(
+            should_fire,
+            sentinel_projectiles.at[first_inactive].set(new_projectile),
+            sentinel_projectiles
+        )
+
+        # Reset firing timer for the shooter
+        enemies = jnp.where(
+            should_fire,
+            enemies.at[shooter_idx, 15].set(self.constants.WHITE_SAUCER_FIRING_INTERVAL),
+            enemies
+        )
+
+        return state.replace(
+            enemies=enemies,
+            sentinel_projectiles=sentinel_projectiles
+        )
+
+    def _update_white_saucer_movement(self, state: BeamRiderState) -> BeamRiderState:
+        """Enhanced white saucer movement patterns"""
+        enemies = state.enemies
+
+        # Get white saucer mask
+        white_saucer_mask = enemies[:, 5] == self.constants.ENEMY_TYPE_WHITE_SAUCER
+        active_mask = enemies[:, 3] == 1
+        white_saucer_active = white_saucer_mask & active_mask
+
+        # Get current positions and properties
+        current_x = enemies[:, 0]
+        current_y = enemies[:, 1]
+        current_beam = enemies[:, 2].astype(int)
+        current_speed = enemies[:, 4]
+        movement_pattern = enemies[:, 14].astype(int)
+        firing_timer = enemies[:, 15].astype(int)
+        jump_timer = enemies[:, 16].astype(int)
+        zigzag_offset = enemies[:, 17]
+
+        # Update timers
+        new_firing_timer = jnp.maximum(0, firing_timer - 1)
+        new_jump_timer = jnp.maximum(0, jump_timer - 1)
+
+        # PATTERN 2: REVERSE_UP (move down first, then rapidly back up)
+        reverse_mask = white_saucer_active & (movement_pattern == self.constants.WHITE_SAUCER_REVERSE_UP)
+
+        # IMPORTANT: Only trigger reverse when saucer has moved down significantly
+        # Check if reverse saucers have reached the trigger point (150 pixels down from top)
+        reached_reverse_point = current_y >= self.constants.WHITE_SAUCER_REVERSE_TRIGGER_Y
+
+        # Debug: Let's make sure the logic is clear
+        # Before trigger: use current_speed (should be positive)
+        # After trigger: use fast negative speed
+        reverse_new_speed = jnp.where(
+            reverse_mask & reached_reverse_point,
+            self.constants.WHITE_SAUCER_REVERSE_SPEED_FAST,  # -4.0 (fast upward)
+            current_speed  # Keep current speed (should be positive when spawned)
+        )
+
+        reverse_new_x = current_x
+        reverse_new_y = current_y + reverse_new_speed  # Apply the speed
+        reverse_new_beam = current_beam
+
+        # [Keep all other pattern logic the same...]
+
+        # PATTERN 0: STRAIGHT_DOWN
+        straight_mask = white_saucer_active & (movement_pattern == self.constants.WHITE_SAUCER_STRAIGHT_DOWN)
+        straight_new_x = current_x
+        straight_new_y = current_y + current_speed
+        straight_new_beam = current_beam
+        straight_new_speed = current_speed
+
+        # PATTERN 1: BEAM_JUMP
+        jump_mask = white_saucer_active & (movement_pattern == self.constants.WHITE_SAUCER_BEAM_JUMP)
+        should_jump = jump_mask & (new_jump_timer == 0)
+
+        jump_indices = jnp.arange(self.constants.MAX_ENEMIES)
+        jump_rng_keys = jax.vmap(lambda i: random.fold_in(state.rng_key, state.frame_count + i))(jump_indices)
+        new_random_beams = jax.vmap(lambda key: random.randint(key, (), 0, self.constants.NUM_BEAMS))(jump_rng_keys)
+
+        jump_new_beam = jnp.where(should_jump, new_random_beams, current_beam)
+        jump_new_x = jnp.where(
+            should_jump,
+            self.beam_positions[jump_new_beam] - self.constants.ENEMY_WIDTH // 2,
+            current_x
+        )
+        new_jump_timer = jnp.where(should_jump, self.constants.WHITE_SAUCER_JUMP_INTERVAL, new_jump_timer)
+        jump_new_y = current_y + current_speed
+        jump_new_speed = current_speed
+
+        # PATTERN 3: ZIGZAG
+        zigzag_mask = white_saucer_active & (movement_pattern == self.constants.WHITE_SAUCER_ZIGZAG)
+        new_zigzag_offset = jnp.where(
+            zigzag_mask,
+            zigzag_offset + self.constants.WHITE_SAUCER_ZIGZAG_FREQUENCY,
+            zigzag_offset
+        )
+        beam_center_x = self.beam_positions[current_beam]
+        zigzag_delta = jnp.sin(new_zigzag_offset) * self.constants.WHITE_SAUCER_ZIGZAG_AMPLITUDE
+        zigzag_new_x = jnp.clip(
+            beam_center_x + zigzag_delta - self.constants.ENEMY_WIDTH // 2,
+            0, self.constants.SCREEN_WIDTH - self.constants.ENEMY_WIDTH
+        )
+        zigzag_new_y = current_y + current_speed
+        zigzag_new_beam = current_beam
+        zigzag_new_speed = current_speed
+
+        # PATTERN 4: SHOOTING
+        shooting_mask = white_saucer_active & (movement_pattern == self.constants.WHITE_SAUCER_SHOOTING)
+        shooting_new_x = current_x
+        shooting_new_y = current_y + current_speed
+        shooting_new_beam = current_beam
+        shooting_new_speed = current_speed
+
+        # Apply movement patterns
+        new_x = jnp.where(straight_mask, straight_new_x,
+                          jnp.where(jump_mask, jump_new_x,
+                                    jnp.where(reverse_mask, reverse_new_x,
+                                              jnp.where(zigzag_mask, zigzag_new_x,
+                                                        jnp.where(shooting_mask, shooting_new_x, current_x)))))
+
+        new_y = jnp.where(straight_mask, straight_new_y,
+                          jnp.where(jump_mask, jump_new_y,
+                                    jnp.where(reverse_mask, reverse_new_y,
+                                              jnp.where(zigzag_mask, zigzag_new_y,
+                                                        jnp.where(shooting_mask, shooting_new_y, current_y)))))
+
+        new_beam = jnp.where(straight_mask, straight_new_beam,
+                             jnp.where(jump_mask, jump_new_beam,
+                                       jnp.where(reverse_mask, reverse_new_beam,
+                                                 jnp.where(zigzag_mask, zigzag_new_beam,
+                                                           jnp.where(shooting_mask, shooting_new_beam, current_beam)))))
+
+        new_speed = jnp.where(straight_mask, straight_new_speed,
+                              jnp.where(jump_mask, jump_new_speed,
+                                        jnp.where(reverse_mask, reverse_new_speed,  # This is KEY - speed changes here
+                                                  jnp.where(zigzag_mask, zigzag_new_speed,
+                                                            jnp.where(shooting_mask, shooting_new_speed,
+                                                                      current_speed)))))
+
+        # Update all white saucer properties
+        enemies = enemies.at[:, 0].set(jnp.where(white_saucer_active, new_x, enemies[:, 0]))
+        enemies = enemies.at[:, 1].set(jnp.where(white_saucer_active, new_y, enemies[:, 1]))
+        enemies = enemies.at[:, 2].set(jnp.where(white_saucer_active, new_beam, enemies[:, 2]))
+        enemies = enemies.at[:, 4].set(
+            jnp.where(white_saucer_active, new_speed, enemies[:, 4]))  # CRITICAL: Update speed
+        enemies = enemies.at[:, 15].set(jnp.where(white_saucer_active, new_firing_timer, enemies[:, 15]))
+        enemies = enemies.at[:, 16].set(jnp.where(white_saucer_active, new_jump_timer, enemies[:, 16]))
+        enemies = enemies.at[:, 17].set(jnp.where(white_saucer_active, new_zigzag_offset, enemies[:, 17]))
+
+        # Handle off-screen deactivation
+        standard_off_screen = new_y > self.constants.SCREEN_HEIGHT
+        reverse_off_screen = reverse_mask & (new_y < -self.constants.ENEMY_HEIGHT)
+        white_saucer_off_screen = standard_off_screen | reverse_off_screen
+
+        current_active = enemies[:, 3] == 1
+        new_active_bool = current_active & jnp.where(white_saucer_active, ~white_saucer_off_screen, True)
+        enemies = enemies.at[:, 3].set(new_active_bool.astype(jnp.float32))
+
+        return state.replace(enemies=enemies)
     def _handle_firing(self, state: BeamRiderState, action: int) -> BeamRiderState:
         """Handle both laser and torpedo firing"""
 
@@ -679,8 +938,8 @@ class BeamRiderEnv(JaxEnvironment[BeamRiderState, jnp.ndarray, dict, BeamRiderCo
         chirper_direction_x = jnp.where(spawn_from_right, -1.0, 1.0)  # -1 if spawning from right, +1 if from left
         final_enemy_speed = jnp.where(
             is_yellow_chirper,
-            jnp.where(spawn_from_right, -base_enemy_speed, base_enemy_speed),  # Apply direction
-            base_enemy_speed  # Regular speed for others
+            jnp.where(spawn_from_right, -base_enemy_speed, base_enemy_speed),  # Apply direction for chirpers
+            base_enemy_speed  # Regular POSITIVE speed for all others (including white saucers)
         )
 
         enemy_health = 1
@@ -695,7 +954,7 @@ class BeamRiderEnv(JaxEnvironment[BeamRiderState, jnp.ndarray, dict, BeamRiderCo
         # Calculate course change limit based on current sector
         base_changes = self.constants.ORANGE_TRACKER_BASE_COURSE_CHANGES
         bonus_changes = (
-                                    state.current_sector - self.constants.ORANGE_TRACKER_SPAWN_SECTOR) // self.constants.ORANGE_TRACKER_COURSE_CHANGE_INCREASE_SECTOR
+                                state.current_sector - self.constants.ORANGE_TRACKER_SPAWN_SECTOR) // self.constants.ORANGE_TRACKER_COURSE_CHANGE_INCREASE_SECTOR
         max_course_changes = base_changes + jnp.maximum(0, bonus_changes)
 
         # Override spawn beam for orange trackers to store current target beam
@@ -734,24 +993,63 @@ class BeamRiderEnv(JaxEnvironment[BeamRiderState, jnp.ndarray, dict, BeamRiderCo
             )
         )
 
-        # Create new enemy data
+        # Create 18-element new_enemy array
         new_enemy = jnp.array([
             spawn_x,  # 0: x
             spawn_y,  # 1: y
-            final_spawn_beam,  # 2: beam_position (target beam for trackers, regular beam for others)
+            final_spawn_beam,  # 2: beam_position
             1,  # 3: active
-            final_enemy_speed,  # 4: speed (NOW DYNAMICALLY SCALED!)
+            final_enemy_speed,  # 4: speed
             enemy_type,  # 5: type
-            direction_x,  # 6: direction_x (movement direction for blockers and chirpers)
+            direction_x,  # 6: direction_x
             1.0,  # 7: direction_y
             0,  # 8: bounce_count
             0,  # 9: linger_timer
-            target_x,  # 10: tracker_timer -> target_x for blockers/trackers
+            target_x,  # 10: target_x
             enemy_health,  # 11: health
             0,  # 12: firing_timer
-            course_changes_remaining  # 13: maneuver_timer -> course changes remaining for trackers
+            course_changes_remaining,  # 13: course_changes_remaining
+            # NEW COLUMNS FOR WHITE SAUCER FUNCTIONALITY:
+            0,  # 14: movement_pattern (0 = straight down for all non-white-saucers)
+            0,  # 15: white_saucer_firing_timer
+            0,  # 16: jump_timer
+            0.0,  # 17: zigzag_offset
         ])
 
+        # SPECIAL HANDLING FOR WHITE SAUCERS - COMPLETELY FIXED VERSION
+        is_white_saucer = enemy_type == self.constants.ENEMY_TYPE_WHITE_SAUCER
+
+        # Generate movement pattern for white saucers
+        pattern_rng_key = random.fold_in(state.rng_key, state.frame_count + 1000)
+        movement_pattern = jnp.where(
+            is_white_saucer,
+            self._select_white_saucer_movement_pattern(pattern_rng_key),
+            0  # Default pattern for non-white-saucers
+        )
+
+        # CRITICAL FIX: ALL white saucers start with normal positive speed
+        # No speed adjustments based on pattern at spawn time
+        adjusted_speed = final_enemy_speed  # Always use normal positive speed
+
+        # Set initial timers for white saucers
+        initial_firing_timer = jnp.where(
+            is_white_saucer & (movement_pattern == self.constants.WHITE_SAUCER_SHOOTING),
+            self.constants.WHITE_SAUCER_FIRING_INTERVAL,
+            0
+        )
+
+        initial_jump_timer = jnp.where(
+            is_white_saucer & (movement_pattern == self.constants.WHITE_SAUCER_BEAM_JUMP),
+            self.constants.WHITE_SAUCER_JUMP_INTERVAL,
+            0
+        )
+
+        # Update the new_enemy array with white saucer specific values
+        new_enemy = new_enemy.at[4].set(adjusted_speed)  # speed - ALWAYS positive at spawn
+        new_enemy = new_enemy.at[14].set(movement_pattern)  # movement_pattern
+        new_enemy = new_enemy.at[15].set(initial_firing_timer)  # white_saucer_firing_timer
+        new_enemy = new_enemy.at[16].set(initial_jump_timer)  # jump_timer
+        # Note: zigzag_offset (column 17) stays 0.0 at spawn
         # Find first available slot and spawn
         first_inactive = jnp.argmax(active_mask)
         can_spawn = active_mask[first_inactive] & should_spawn
@@ -763,7 +1061,6 @@ class BeamRiderEnv(JaxEnvironment[BeamRiderState, jnp.ndarray, dict, BeamRiderCo
         )
 
         return state.replace(enemies=enemies, rng_key=rng_key)
-
     # Updated enemy speed calculation function (add this as a new method)
     def _calculate_enemy_speed(self, base_speed: float, current_sector: int) -> float:
         """Calculate enemy speed based on sector with smooth scaling"""
@@ -900,15 +1197,17 @@ class BeamRiderEnv(JaxEnvironment[BeamRiderState, jnp.ndarray, dict, BeamRiderCo
         return enemy_type
 
     def _update_enemies(self, state: BeamRiderState) -> BeamRiderState:
-        """Update enemy positions - Updated with orange tracker beam following"""
-        enemies = state.enemies
+        """Update enemy positions - Updated with white saucer enhancements"""
+
+        # FIRST: Handle white saucer movement patterns
+        state = self._update_white_saucer_movement(state)
+        enemies = state.enemies  # Get updated enemies array after white saucer movement
 
         # Handle different movement patterns based on enemy type
         enemy_types = enemies[:, 5]  # Get enemy types
 
-        # Regular enemies (white saucer, brown debris) move vertically down
-        regular_enemy_mask = (enemy_types == self.constants.ENEMY_TYPE_WHITE_SAUCER) | (
-                enemy_types == self.constants.ENEMY_TYPE_BROWN_DEBRIS)
+        # IMPORTANT: Remove WHITE_SAUCER from regular_enemy_mask since they're handled separately now
+        regular_enemy_mask = (enemy_types == self.constants.ENEMY_TYPE_BROWN_DEBRIS)  # REMOVED WHITE_SAUCER
         regular_new_y = enemies[:, 1] + enemies[:, 4]  # y + speed
 
         # Yellow chirpers move horizontally
@@ -1093,7 +1392,7 @@ class BeamRiderEnv(JaxEnvironment[BeamRiderState, jnp.ndarray, dict, BeamRiderCo
         sentinel_new_x = enemies[:, 0] + enemies[:, 4]  # Move horizontally at constant speed
         sentinel_new_y = enemies[:, 1]  # Stay at same Y level
 
-        # Update X positions based on enemy type
+        # Update X positions based on enemy type (WHITE SAUCERS EXCLUDED - handled separately)
         new_x = jnp.where(
             chirper_mask,
             chirper_new_x,  # Chirpers move horizontally
@@ -1108,11 +1407,11 @@ class BeamRiderEnv(JaxEnvironment[BeamRiderState, jnp.ndarray, dict, BeamRiderCo
                         enemies[:, 0],  # Blue chargers don't change X
                         jnp.where(
                             tracker_mask,
-                            tracker_new_x,  # NEW: Orange trackers use beam following
+                            tracker_new_x,  # Orange trackers use beam following
                             jnp.where(
                                 sentinel_mask,
                                 sentinel_new_x,  # Sentinels move horizontally
-                                enemies[:, 0]  # Regular enemies don't change X
+                                enemies[:, 0]  # Default: no X change (includes white saucers)
                             )
                         )
                     )
@@ -1120,9 +1419,9 @@ class BeamRiderEnv(JaxEnvironment[BeamRiderState, jnp.ndarray, dict, BeamRiderCo
             )
         )
 
-        # Update Y positions based on enemy type
+        # Update Y positions based on enemy type (WHITE SAUCERS EXCLUDED - handled separately)
         new_y = jnp.where(
-            regular_enemy_mask & ~charger_mask & ~tracker_mask,  # Regular enemies but not chargers or trackers
+            regular_enemy_mask & ~charger_mask & ~tracker_mask,  # Regular enemies (only brown debris now)
             regular_new_y,  # Regular enemies move down
             jnp.where(
                 blocker_mask,
@@ -1135,11 +1434,11 @@ class BeamRiderEnv(JaxEnvironment[BeamRiderState, jnp.ndarray, dict, BeamRiderCo
                         charger_new_y,  # Blue chargers use special logic
                         jnp.where(
                             tracker_mask,
-                            tracker_new_y,  # NEW: Orange trackers use beam following Y movement
+                            tracker_new_y,  # Orange trackers use beam following Y movement
                             jnp.where(
                                 sentinel_mask,
                                 sentinel_new_y,  # Sentinels stay at same Y
-                                enemies[:, 1]  # Chirpers don't change Y
+                                enemies[:, 1]  # Default: no Y change (includes white saucers AND chirpers)
                             )
                         )
                     )
@@ -1148,7 +1447,7 @@ class BeamRiderEnv(JaxEnvironment[BeamRiderState, jnp.ndarray, dict, BeamRiderCo
         )
 
         # Deactivate enemies that go off screen
-        # Regular enemies: deactivate when they go below screen
+        # Regular enemies: deactivate when they go below screen (only brown debris now)
         regular_active = (enemies[:, 3] == 1) & (regular_new_y < self.constants.SCREEN_HEIGHT)
 
         # Orange trackers: deactivate when they reach bottom of screen
@@ -1178,7 +1477,7 @@ class BeamRiderEnv(JaxEnvironment[BeamRiderState, jnp.ndarray, dict, BeamRiderCo
         sentinel_off_screen = sentinel_new_x > (self.constants.SCREEN_WIDTH + self.constants.SENTINEL_SHIP_WIDTH)
         sentinel_active = (enemies[:, 3] == 1) & ~sentinel_off_screen
 
-        # Combine active states based on enemy type
+        # Combine active states based on enemy type (WHITE SAUCERS EXCLUDED - handled separately)
         active = jnp.where(
             regular_enemy_mask & ~charger_mask & ~tracker_mask,
             regular_active,
@@ -1200,7 +1499,7 @@ class BeamRiderEnv(JaxEnvironment[BeamRiderState, jnp.ndarray, dict, BeamRiderCo
                                 jnp.where(
                                     sentinel_mask,
                                     sentinel_active,
-                                    enemies[:, 3] == 1  # Default: stay active
+                                    enemies[:, 3]  # Default: keep current active state (includes white saucers)
                                 )
                             )
                         )
@@ -1209,7 +1508,7 @@ class BeamRiderEnv(JaxEnvironment[BeamRiderState, jnp.ndarray, dict, BeamRiderCo
             )
         )
 
-        # Update enemy array
+        # Update enemy array (NOTE: White saucer positions were already updated by _update_white_saucer_movement)
         enemies = enemies.at[:, 0].set(new_x)  # Update x positions
         enemies = enemies.at[:, 1].set(new_y)  # Update y positions
         enemies = enemies.at[:, 2].set(  # Update target beam for trackers
@@ -1255,7 +1554,6 @@ class BeamRiderEnv(JaxEnvironment[BeamRiderState, jnp.ndarray, dict, BeamRiderCo
         )
 
         return state.replace(enemies=enemies)
-
     def _check_collisions(self, state: BeamRiderState) -> BeamRiderState:
         """Check for collisions - Updated so green blockers and sentinels block lasers"""
         projectiles = state.projectiles
@@ -1655,20 +1953,25 @@ class BeamRiderEnv(JaxEnvironment[BeamRiderState, jnp.ndarray, dict, BeamRiderCo
         sentinel_spawn_y = self.constants.TOP_MARGIN + 10
 
         new_sentinel = jnp.array([
-            sentinel_spawn_x,  # x
-            sentinel_spawn_y,  # y
-            0,  # beam_position (not used for sentinel)
-            1,  # active
-            self.constants.SENTINEL_SHIP_SPEED,  # horizontal speed
-            self.constants.ENEMY_TYPE_SENTINEL_SHIP,  # type
-            1.0,  # direction_x (moving right)
-            0.0,  # direction_y (horizontal only)
-            0,  # bounce_count
-            0,  # linger_timer
-            0,  # tracker_timer
-            1,  # health
-            self.constants.SENTINEL_SHIP_FIRING_INTERVAL,  # firing_timer
-            0  # maneuver_timer (not used for cruising)
+            sentinel_spawn_x,  # 0: x
+            sentinel_spawn_y,  # 1: y
+            0,  # 2: beam_position
+            1,  # 3: active
+            self.constants.SENTINEL_SHIP_SPEED,  # 4: speed
+            self.constants.ENEMY_TYPE_SENTINEL_SHIP,  # 5: type
+            1.0,  # 6: direction_x
+            0.0,  # 7: direction_y
+            0,  # 8: bounce_count
+            0,  # 9: linger_timer
+            0,  # 10: target_x
+            1,  # 11: health
+            self.constants.SENTINEL_SHIP_FIRING_INTERVAL,  # 12: firing_timer
+            0,  # 13: maneuver_timer
+            # NEW COLUMNS (not used by sentinels but needed for consistency):
+            0,  # 14: movement_pattern
+            0,  # 15: white_saucer_firing_timer
+            0,  # 16: jump_timer
+            0.0,  # 17: zigzag_offset
         ])
 
         enemies = jnp.where(
