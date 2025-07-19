@@ -6,6 +6,7 @@ from typing import NamedTuple, Tuple, Any, List
 import pygame
 from jax import Array
 import os
+from pathlib import Path
 
 # Project imports
 from src.jaxatari.environment import JaxEnvironment
@@ -65,7 +66,7 @@ class JaxBackgammonEnv(JaxEnvironment[BackgammonState, jnp.ndarray, dict, Backga
 
         # Pre-compute all possible moves for fast validation
         self.action_space = jnp.array([(i, j) for i in range(26) for j in range(26)], dtype=jnp.int32)
-        self.renderer = BackgammonRenderer()
+        self.renderer = BackgammonRenderer(self)
 
 
     @partial(jax.jit, static_argnums=(0,))
@@ -536,28 +537,17 @@ class JaxBackgammonEnv(JaxEnvironment[BackgammonState, jnp.ndarray, dict, Backga
 
 
 class BackgammonRenderer(JAXGameRenderer):
-    def __init__(self, asset_dir="src/jaxatari/games/sprites/backgammon"):
+    def __init__(self, env: JaxBackgammonEnv):
         super().__init__()
-        self.asset_dir = asset_dir
+        self.asset_dir = Path("src/jaxatari/games/sprites/backgammon")
 
-        # Board and game pieces
-        self.SPRITE_BOARD = jnp.expand_dims(jr.loadFrame(os.path.join(asset_dir, "board.png")), axis=0)
-        self.SPRITE_WHITE = jnp.expand_dims(jr.loadFrame(os.path.join(asset_dir, "checker_white.png")), axis=0)
-        self.SPRITE_BLACK = jnp.expand_dims(jr.loadFrame(os.path.join(asset_dir, "checker_black.png")), axis=0)
+        self.SPRITE_BOARD = jnp.expand_dims(jr.loadFrame(self.asset_dir / "board.npy"), axis=0)
+        self.SPRITE_WHITE = jnp.expand_dims(jr.loadFrame(self.asset_dir / "white_checker.npy"), axis=0)
+        self.SPRITE_BLACK = jnp.expand_dims(jr.loadFrame(self.asset_dir / "black_checker.npy"), axis=0)
         self.SPRITE_DICE = [
-            jnp.expand_dims(jr.loadFrame(os.path.join(asset_dir, f"dice_{i}.png")), axis=0)
+            jnp.expand_dims(jr.loadFrame(self.asset_dir / f"dice_{i}.npy"), axis=0)
             for i in range(1, 7)
         ]
-
-        # Load digits and letters from PNG
-        self.char_sprites = load_and_pad_png_sprites(
-            folder_path=os.path.join(asset_dir, "chars"),
-            filenames=[f"{c}.png" for c in "0123456789WHITEBLACKGAMEOVER"]
-        )
-
-        # Map characters to indices in char_sprites
-        self.char_map = {c: i for i, c in enumerate("0123456789WHITEBLACKGAMEOVER")}
-
     def load_and_pad_png_sprites(folder_path: str, filenames: list[str]) -> jnp.ndarray:
         """Loads .png sprites from disk and pads them to match dimensions."""
         sprites = []
