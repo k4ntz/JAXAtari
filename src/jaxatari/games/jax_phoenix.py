@@ -43,14 +43,18 @@ lambda:jnp.array([123 - WIDTH//2, 123 -WIDTH//2, 136-WIDTH//2, 136-WIDTH//2, 160
 lambda:jnp.array([141 - WIDTH//2, 155 - WIDTH//2, 127- WIDTH//2, 169 - WIDTH//2,134 - WIDTH//2, 162 - WIDTH//2, 120 - WIDTH//2, 176 - WIDTH//2]).astype(jnp.int32),
 lambda:jnp.array([123 - WIDTH//2, 170 -WIDTH//2, 123-WIDTH//2, 180-WIDTH//2, 123-WIDTH//2, 170-WIDTH//2,123-WIDTH//2,-1 ]).astype(jnp.int32),
 lambda:jnp.array([123 - WIDTH//2, 180 - WIDTH//2, 123- WIDTH//2, 170 - WIDTH//2,123 - WIDTH//2, 180 - WIDTH//2, 123 - WIDTH//2,-1]).astype(jnp.int32),
-lambda:jnp.array([PLAYER_BOUNDS[1]//2, -1, -1, -1, -1, -1 ,-1 ,-1]).astype(jnp.int32),
+lambda:jnp.array([78, -1, -1, -1, -1, -1 ,-1 ,-1]).astype(jnp.int32),
+
+
+
 ]
 ENEMY_POSITIONS_Y_LIST = [
 lambda:jnp.array([HEIGHT-135,HEIGHT- 153,HEIGHT- 117,HEIGHT- 171,HEIGHT- 117,HEIGHT- 171,HEIGHT- 135,HEIGHT- 153]).astype(jnp.int32),
 lambda:jnp.array([HEIGHT-171, HEIGHT-171, HEIGHT-135, HEIGHT-135, HEIGHT-153, HEIGHT-153, HEIGHT-117, HEIGHT-117]).astype(jnp.int32),
 lambda:jnp.array([HEIGHT-99,HEIGHT- 117,HEIGHT- 135,HEIGHT- 153,HEIGHT- 171,HEIGHT- 63,HEIGHT- 81, HEIGHT+20]).astype(jnp.int32),
 lambda:jnp.array([HEIGHT-63, HEIGHT-81, HEIGHT-99, HEIGHT-117, HEIGHT-135, HEIGHT-153, HEIGHT-171, HEIGHT+20]).astype(jnp.int32),
-lambda:jnp.array([HEIGHT-136, HEIGHT+20 ,  HEIGHT+20 ,  HEIGHT+20 ,  HEIGHT+20,  HEIGHT+20 , HEIGHT+20 , HEIGHT+20]).astype(jnp.int32),
+lambda:jnp.array([HEIGHT-132, HEIGHT+20 ,  HEIGHT+20 ,  HEIGHT+20 ,  HEIGHT+20,  HEIGHT+20 , HEIGHT+20 , HEIGHT+20]).astype(jnp.int32),
+
 ]
 
 MAX_PLAYER = 1
@@ -471,9 +475,9 @@ def boss_step(state):
     )
 
     def rotate(arr):
-        return jnp.stack([jnp.roll(arr[:,0],2),arr[:,1]], axis=1)
+        return jnp.stack([jnp.roll(arr[:,0],1),arr[:,1]], axis=1)
     new_blue_blocks = jax.lax.cond(
-        jnp.logical_and(jnp.any(new_blue_blocks <= -100),step_count % 15 == 0),
+        jnp.logical_and(jnp.any(new_blue_blocks <= -100),step_count % 20 == 0),    
         lambda: rotate(new_blue_blocks),
         lambda: new_blue_blocks,
     )
@@ -590,6 +594,7 @@ class JaxPhoenix(JaxEnvironment[PhoenixState, PhoenixOberservation, PhoenixInfo,
         )
         projectile_x = jnp.where(firing,
                                  state.player_x + 2,
+
                                  state.projectile_x).astype(jnp.int32)
 
         projectile_y = jnp.where(firing,
