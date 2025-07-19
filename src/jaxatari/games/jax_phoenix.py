@@ -165,7 +165,8 @@ class PhoenixState(NamedTuple):
     blue_blocks: chex.Array
     red_blocks: chex.Array
     green_blocks: chex.Array
-    rotation: chex.Array
+    invincibility: chex.Array
+    invincibility_timer: chex.Array
     projectile_x: chex.Array = jnp.array(-1)  # Standardwert: kein Projektil
     projectile_y: chex.Array = jnp.array(-1)  # Standardwert: kein Projektil # Gegner Y-Positionen
     enemy_projectile_x: chex.Array = jnp.full((8,), -1) # Enemy projectile X-Positionen
@@ -276,17 +277,26 @@ class JaxPhoenix(JaxEnvironment[PhoenixState, PhoenixOberservation, PhoenixInfo,
                 ]
             )
         )
+        # Ability : it holds on for ... amount; it can only be reactivated when an enemy is hitted
+        invinsibility = jnp.any(jnp.array([action == Action.DOWN]))
+        new_invinsibility = jnp.where(invinsibility & (state.invincibility_timer == 0), True, state.invincibility)
+        new_timer = jnp.where(invinsibility & (state.invincibility_timer == 0), 200, state.invincibility_timer)
+        new_timer = jnp.where(new_timer > 0, new_timer - 1, 0)
+        new_invinsibility = jnp.where(new_timer == 0, False, new_invinsibility)
         # movement right
         player_x = jnp.where(
-            right, state.player_x + step_size, jnp.where(left, state.player_x - step_size, state.player_x)
+            right & jnp.logical_not(new_invinsibility), state.player_x + step_size, jnp.where(left & jnp.logical_not(new_invinsibility), state.player_x - step_size, state.player_x)
         )
         # movement left
         player_x = jnp.where(
             player_x < self.consts.PLAYER_BOUNDS[0], self.consts.PLAYER_BOUNDS[0],
             jnp.where(player_x > self.consts.PLAYER_BOUNDS[1], self.consts.PLAYER_BOUNDS[1], player_x)
         )
+        state = state._replace(player_x= player_x.astype(jnp.float32),
+                               invincibility=new_invinsibility,
+                               invincibility_timer=new_timer)
 
-        return player_x.astype(jnp.float32)
+        return state
 
     def phoenix_step(self, state):
         enemy_step_size = 0.4
@@ -491,11 +501,12 @@ class JaxPhoenix(JaxEnvironment[PhoenixState, PhoenixOberservation, PhoenixInfo,
             level=jnp.array(5),
             phoenix_cooldown=jnp.array(30),
             vertical_direction=jnp.full((8,),1.0),
+            invincibility=jnp.array(False),
+            invincibility_timer=jnp.array(0),
 
             blue_blocks=self.consts.BLUE_BLOCK_POSITIONS.astype(jnp.float32),
             red_blocks=self.consts.RED_BLOCK_POSITIONS.astype(jnp.float32),
             green_blocks = self.consts.GREEN_BLOCK_POSITIONS.astype(jnp.float32),            
-            rotation=jnp.array(False),
         )
 
         initial_obs = self._get_observation(return_state)
@@ -503,7 +514,9 @@ class JaxPhoenix(JaxEnvironment[PhoenixState, PhoenixOberservation, PhoenixInfo,
 
 
     def step(self,state, action: Action) -> Tuple[PhoenixOberservation, PhoenixState, float, bool, PhoenixInfo]:
-        player_x = self.player_step(state, action)
+        state = self.player_step(state, action)
+        #jax.debug.print("invinsiblity:{}", state.invincibility)
+        #jax.debug.print("timer:{}", state.invincibility_timer)
 
         projectile_active = state.projectile_y >= 0
 
@@ -586,9 +599,6 @@ class JaxPhoenix(JaxEnvironment[PhoenixState, PhoenixOberservation, PhoenixInfo,
 
         # Checken ob alle Gegner getroffen wurden
         all_enemies_hit = jnp.all(enemies_y >= self.consts.HEIGHT + 10)
-        #jax.debug.print("All enemies hit: {}", all_enemies_hit)
-        #jax.debug.print("Enemies X: {}", enemies_x)
-        #jax.debug.print("Enemies Y: {}", enemies_y)
         new_level = jnp.where(all_enemies_hit, (state.level % 5) + 1, state.level)
         new_enemies_x = jax.lax.cond(
             all_enemies_hit,
@@ -619,9 +629,9 @@ class JaxPhoenix(JaxEnvironment[PhoenixState, PhoenixOberservation, PhoenixInfo,
         # Kollisionsüberprüfung Spieler
         # Remaining lives updaten und Spieler neu Spawnen
         is_vulnerable = state.player_respawn_timer <= 0
-        player_hit_detected = jnp.where(is_vulnerable, check_player_hit(state.enemy_projectile_x, enemy_projectile_y, player_x, state.player_y), False)
+        player_hit_detected = jnp.where(jnp.logical_and(is_vulnerable,state.invincibility == jnp.array(False)), check_player_hit(state.enemy_projectile_x, enemy_projectile_y, state.player_x, state.player_y), False)
         lives = jnp.where(player_hit_detected, state.lives - 1, state.lives)
-        player_x = jnp.where(player_hit_detected, self.consts.PLAYER_POSITION[0], self.player_step(state, action))
+        player_x = jnp.where(player_hit_detected, self.consts.PLAYER_POSITION[0], state.player_x)
         player_respawn_timer = jnp.where(
             player_hit_detected,
             5,
@@ -661,7 +671,8 @@ class JaxPhoenix(JaxEnvironment[PhoenixState, PhoenixOberservation, PhoenixInfo,
             blue_blocks=state.blue_blocks,
             red_blocks=state.red_blocks,
             green_blocks=state.green_blocks,
-            rotation=state.rotation,
+            invincibility=state.invincibility,
+            invincibility_timer=state.invincibility_timer
         )
         observation = self._get_observation(return_state)
         env_reward = jnp.where(enemy_hit_detected, 1.0, 0.0)
@@ -695,6 +706,7 @@ class PhoenixRenderer(JAXGameRenderer):
             self.SPRITE_RED_BLOCK,
             self.SPRITE_BLUE_BLOCK,
             self.SPRITE_GREEN_BLOCK,
+            self.SPRITE_ABILITY,
         ) = self.load_sprites()
     def load_sprites(self):
         MODULE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -715,6 +727,8 @@ class PhoenixRenderer(JAXGameRenderer):
         boss_block_red = jr.loadFrame(os.path.join(MODULE_DIR, "./sprites/phoenix/red_block.npy"))
         boss_block_blue = jr.loadFrame(os.path.join(MODULE_DIR, "./sprites/phoenix/blue_block.npy"))
         boss_block_green = jr.loadFrame(os.path.join(MODULE_DIR, "./sprites/phoenix/green_block.npy"))
+        ability = jr.loadFrame(os.path.join(MODULE_DIR, "./sprites/phoenix/ability.npy"))
+        SPRITE_ABILITY = ability
 
         SPRITE_PLAYER = jnp.expand_dims(player_sprites, axis=0)
         BG_SPRITE = jnp.expand_dims(np.zeros_like(bg_sprites), axis=0)
@@ -731,7 +745,6 @@ class PhoenixRenderer(JAXGameRenderer):
         SPRITE_BLUE_BLOCK = boss_block_blue
         SPRITE_RED_BLOCK = boss_block_red
         SPRITE_GREEN_BLOCK = boss_block_green
-
         DIGITS = jr.load_and_pad_digits(os.path.join(MODULE_DIR, "./sprites/phoenix/digits/{}.npy"))
         LIFE_INDICATOR = jr.loadFrame(os.path.join(MODULE_DIR, "./sprites/phoenix/life_indicator.npy"))
 
@@ -753,6 +766,7 @@ class PhoenixRenderer(JAXGameRenderer):
             SPRITE_RED_BLOCK,
             SPRITE_BLUE_BLOCK,
             SPRITE_GREEN_BLOCK,
+            SPRITE_ABILITY,
         )
 
     # load sprites on module layer
@@ -828,6 +842,20 @@ class PhoenixRenderer(JAXGameRenderer):
             raster
         )
 
+        def render_ability(r):
+            return jax.lax.cond(
+                state.invincibility,  # condition must be a scalar bool (e.g., jnp.bool_)
+                lambda _: jr.render_at(r, state.player_x - 5, state.player_y - 4, self.SPRITE_ABILITY),
+                lambda _: r,
+                operand=None  # no operand needed
+            )
+
+        raster = jax.lax.cond(
+            state.invincibility,
+            render_ability,
+            lambda r: r,
+            raster
+        )
         def render_enemy_projectile(raster, projectile_pos):
             x, y = projectile_pos
             return jax.lax.cond(
