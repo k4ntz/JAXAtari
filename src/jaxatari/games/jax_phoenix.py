@@ -1,29 +1,17 @@
 import os
-import time
-from distutils.dep_util import newer
 from functools import partial
-from operator import truediv
 from typing import Tuple, NamedTuple
 import jax
 import jax.numpy as jnp
 import chex
-import pygame
-from gymnasium.envs.tabular.blackjack import score
-from jax import Array
-from scipy.stats import false_discovery_control
 import jaxatari.spaces as spaces
-
 import jaxatari.rendering.jax_rendering_utils as jr
 import numpy as np
-from enum import Enum
 from jaxatari.environment import JaxEnvironment, JAXAtariAction as Action
 from jaxatari.spaces import Space
 
 # Phoenix Game by: Florian Schmidt, Finn Keller
 # new Constant class
-HEIGHT = 210
-NUM_BLUE_BLOCKS = 24
-PLAYER_MARGIN = 32
 class PhoenixConstants(NamedTuple):
     """Game constants for Phoenix."""
     PLAYER_POSITION: Tuple[int, int] = (76, 175)
@@ -65,25 +53,25 @@ class PhoenixConstants(NamedTuple):
     ]
     ENEMY_POSITIONS_Y_LIST = [
         lambda: jnp.array(
-            [HEIGHT - 135, HEIGHT - 153, HEIGHT - 117, HEIGHT - 171, HEIGHT - 117, HEIGHT - 171, HEIGHT - 135,
-             HEIGHT - 153]).astype(jnp.int32),
+            [210 - 135, 210 - 153, 210 - 117, 210 - 171, 210 - 117, 210 - 171, 210 - 135,
+             210 - 153]).astype(jnp.int32),
         lambda: jnp.array(
-            [HEIGHT - 171, HEIGHT - 171, HEIGHT - 135, HEIGHT - 135, HEIGHT - 153, HEIGHT - 153, HEIGHT - 117,
-             HEIGHT - 117]).astype(jnp.int32),
+            [210 - 171, 210 - 171, 210 - 135, 210 - 135, 210 - 153, 210 - 153, 210 - 117,
+             210 - 117]).astype(jnp.int32),
         lambda: jnp.array(
-            [HEIGHT - 99, HEIGHT - 117, HEIGHT - 135, HEIGHT - 153, HEIGHT - 171, HEIGHT - 63, HEIGHT - 81,
-             HEIGHT + 20]).astype(jnp.int32),
+            [210 - 99, 210 - 117, 210 - 135, 210 - 153, 210 - 171, 210 - 63, 210 - 81,
+             210 + 20]).astype(jnp.int32),
         lambda: jnp.array(
-            [HEIGHT - 63, HEIGHT - 81, HEIGHT - 99, HEIGHT - 117, HEIGHT - 135, HEIGHT - 153, HEIGHT - 171,
-             HEIGHT + 20]).astype(jnp.int32),
-        lambda: jnp.array([HEIGHT - 132, HEIGHT + 20, HEIGHT + 20, HEIGHT + 20, HEIGHT + 20, HEIGHT + 20, HEIGHT + 20,
-                           HEIGHT + 20]).astype(jnp.int32),
+            [210 - 63, 210 - 81, 210 - 99, 210 - 117, 210 - 135, 210 - 153, 210 - 171,
+             210 + 20]).astype(jnp.int32),
+        lambda: jnp.array([210 - 132, 210 + 20, 210 + 20, 210 + 20, 210 + 20, 210 + 20, 210 + 20,
+                           210 + 20]).astype(jnp.int32),
     ]
-    BLUE_BLOCK_X = jnp.linspace(PLAYER_BOUNDS[0] + PLAYER_MARGIN, PLAYER_BOUNDS[1] - PLAYER_MARGIN,
-                                NUM_BLUE_BLOCKS).astype(jnp.int32)
+    BLUE_BLOCK_X = jnp.linspace(PLAYER_BOUNDS[0] + 32, PLAYER_BOUNDS[1] - 32,
+                                24).astype(jnp.int32)
 
-    BLUE_BLOCK_Y_1 = jnp.full((NUM_BLUE_BLOCKS,), HEIGHT - 115, dtype=jnp.int32)
-    BLUE_BLOCK_Y_2 = jnp.full((NUM_BLUE_BLOCKS,), HEIGHT - 117, dtype=jnp.int32)
+    BLUE_BLOCK_Y_1 = jnp.full((24,), HEIGHT - 115, dtype=jnp.int32)
+    BLUE_BLOCK_Y_2 = jnp.full((24,), HEIGHT - 117, dtype=jnp.int32)
 
     BLUE_BLOCK_POSITIONS = jnp.concatenate([
         jnp.stack((BLUE_BLOCK_X, BLUE_BLOCK_Y_1), axis=1),
@@ -164,136 +152,6 @@ class PhoenixConstants(NamedTuple):
         ]
     )
 
-
-# Game Constants
-#WINDOW_WIDTH = 160 * 3
-#WINDOW_HEIGHT = 210 * 3
-
-#WIDTH = 160
-#HEIGHT = 210
-#SCALING_FACTOR = 3
-
-# Object sizes and initial positions from Ram State
-#PLAYER_POSITION = 76, 175 #210-175 =
-#PLAYER_COLOR = (213, 130, 74)
-#PLAYER_BOUNDS = (0, 155) # (left, right)
-
-# Enemy Positions for level 1(phoenix)
-#ENEMY_POSITIONS_X = jnp.array([123 - self.consts.WIDTH//2, 123 -WIDTH//2, 136-WIDTH//2, 136-WIDTH//2, 160-WIDTH//2, 160-WIDTH//2, 174-WIDTH//2, 174-WIDTH//2])
-#ENEMY_POSITIONS_Y = jnp.array([HEIGHT-135,HEIGHT- 153,HEIGHT- 117,HEIGHT- 171,HEIGHT- 117,HEIGHT- 171,HEIGHT- 135,HEIGHT- 153])
-
-# Enemy Positions for each level
-#ENEMY_POSITIONS_X_LIST = [
-#lambda:jnp.array([123 - WIDTH//2, 123 -WIDTH//2, 136-WIDTH//2, 136-WIDTH//2, 160-WIDTH//2, 160-WIDTH//2, 174-WIDTH//2, 174-WIDTH//2]).astype(jnp.int32),
-#lambda:jnp.array([141 - WIDTH//2, 155 - WIDTH//2, 127- WIDTH//2, 169 - WIDTH//2,134 - WIDTH//2, 162 - WIDTH//2, 120 - WIDTH//2, 176 - WIDTH//2]).astype(jnp.int32),
-#lambda:jnp.array([123 - WIDTH//2, 170 -WIDTH//2, 123-WIDTH//2, 180-WIDTH//2, 123-WIDTH//2, 170-WIDTH//2,123-WIDTH//2,-1 ]).astype(jnp.int32),
-#lambda:jnp.array([123 - WIDTH//2, 180 - WIDTH//2, 123- WIDTH//2, 170 - WIDTH//2,123 - WIDTH//2, 180 - WIDTH//2, 123 - WIDTH//2,-1]).astype(jnp.int32),
-#lambda:jnp.array([78, -1, -1, -1, -1, -1 ,-1 ,-1]).astype(jnp.int32),
-#]
-#ENEMY_POSITIONS_Y_LIST = [
-#lambda:jnp.array([HEIGHT-135,HEIGHT- 153,HEIGHT- 117,HEIGHT- 171,HEIGHT- 117,HEIGHT- 171,HEIGHT- 135,HEIGHT- 153]).astype(jnp.int32),
-#lambda:jnp.array([HEIGHT-171, HEIGHT-171, HEIGHT-135, HEIGHT-135, HEIGHT-153, HEIGHT-153, HEIGHT-117, HEIGHT-117]).astype(jnp.int32),
-#lambda:jnp.array([HEIGHT-99,HEIGHT- 117,HEIGHT- 135,HEIGHT- 153,HEIGHT- 171,HEIGHT- 63,HEIGHT- 81, HEIGHT+20]).astype(jnp.int32),
-#lambda:jnp.array([HEIGHT-63, HEIGHT-81, HEIGHT-99, HEIGHT-117, HEIGHT-135, HEIGHT-153, HEIGHT-171, HEIGHT+20]).astype(jnp.int32),
-#lambda:jnp.array([HEIGHT-132, HEIGHT+20 ,  HEIGHT+20 ,  HEIGHT+20 ,  HEIGHT+20,  HEIGHT+20 , HEIGHT+20 , HEIGHT+20]).astype(jnp.int32),
-#]
-
-#MAX_PLAYER = 1
-#MAX_PLAYER_PROJECTILE = 1
-#MAX_PHOENIX = 8
-#MAX_BATS = 7
-#MAX_BOSS = 1
-#MAX_BOSS_BLOCK_GREEN = 2
-#MAX_BOSS_BLOCK_BLUE = 24
-#MAX_BOSS_BLOCK_RED = 104
-#SCORE_COLOR = (210, 210, 64)
-
-#NUM_BLUE_BLOCKS = MAX_BOSS_BLOCK_BLUE
-#BLOCK_SPACING = 4  # horizontal spacing shrink per red layer
-#PLAYER_MARGIN = 32
-#RED_LAYERS = 7
-
-
-
-#BLUE_BLOCK_X = jnp.linspace(PLAYER_BOUNDS[0] + PLAYER_MARGIN, PLAYER_BOUNDS[1] - PLAYER_MARGIN, NUM_BLUE_BLOCKS).astype(jnp.int32)#
-
-
-#BLUE_BLOCK_Y_1 = jnp.full((NUM_BLUE_BLOCKS,), HEIGHT - 115, dtype=jnp.int32)
-#BLUE_BLOCK_Y_2 = jnp.full((NUM_BLUE_BLOCKS,), HEIGHT - 117, dtype=jnp.int32)
-
-#BLUE_BLOCK_POSITIONS = jnp.concatenate([
-#    jnp.stack((BLUE_BLOCK_X, BLUE_BLOCK_Y_1), axis=1),
-#    jnp.stack((BLUE_BLOCK_X, BLUE_BLOCK_Y_2), axis=1),
-#])
-
-# 1 Line with Blocks the same amount as Blue Blocks
-#RED_BLOCK_X_1 = jnp.linspace(PLAYER_BOUNDS[0]+32, PLAYER_BOUNDS[1]-32, MAX_BOSS_BLOCK_BLUE).astype(jnp.int32)
-#RED_BLOCK_X_2 = jnp.linspace(PLAYER_BOUNDS[0]+36, PLAYER_BOUNDS[1]-36, MAX_BOSS_BLOCK_BLUE-2).astype(jnp.int32)
-#RED_BLOCK_X_3 = jnp.linspace(PLAYER_BOUNDS[0]+40, PLAYER_BOUNDS[1]-40, MAX_BOSS_BLOCK_BLUE-4).astype(jnp.int32)
-#RED_BLOCK_X_4 = jnp.linspace(PLAYER_BOUNDS[0]+44, PLAYER_BOUNDS[1]-44, MAX_BOSS_BLOCK_BLUE-6).astype(jnp.int32)
-#RED_BLOCK_X_5 = jnp.linspace(PLAYER_BOUNDS[0]+48, PLAYER_BOUNDS[1]-48, MAX_BOSS_BLOCK_BLUE-8).astype(jnp.int32)
-#RED_BLOCK_X_6 = jnp.linspace(PLAYER_BOUNDS[0]+52, PLAYER_BOUNDS[1]-52, MAX_BOSS_BLOCK_BLUE-10).astype(jnp.int32)
-#RED_BLOCK_X_7 = jnp.linspace(PLAYER_BOUNDS[0]+56, PLAYER_BOUNDS[1]-56, MAX_BOSS_BLOCK_BLUE-12).astype(jnp.int32)
-#RED_BLOCK_POSITIONS = jnp.concatenate(
-#    [
-#      jnp.stack((RED_BLOCK_X_1, jnp.full((MAX_BOSS_BLOCK_BLUE,), HEIGHT-111, dtype=jnp.int32)), axis=1),
-#        jnp.stack((RED_BLOCK_X_2, jnp.full((MAX_BOSS_BLOCK_BLUE-2,), HEIGHT-108, dtype=jnp.int32)), axis=1),
-#        jnp.stack((RED_BLOCK_X_3, jnp.full((MAX_BOSS_BLOCK_BLUE-4,), HEIGHT-105, dtype=jnp.int32)), axis=1),
-#        jnp.stack((RED_BLOCK_X_4, jnp.full((MAX_BOSS_BLOCK_BLUE-6,), HEIGHT-102, dtype=jnp.int32)), axis=1),
-#        jnp.stack((RED_BLOCK_X_5, jnp.full((MAX_BOSS_BLOCK_BLUE-8,), HEIGHT-99, dtype=jnp.int32)), axis=1),
-#        jnp.stack((RED_BLOCK_X_6, jnp.full((MAX_BOSS_BLOCK_BLUE-10,), HEIGHT-96, dtype=jnp.int32)), axis=1),
-#        jnp.stack((RED_BLOCK_X_7, jnp.full((MAX_BOSS_BLOCK_BLUE-12,), HEIGHT-93, dtype=jnp.int32)), axis=1)
-#    ],
-#    axis=0
-#)
-
-#GREEN_BLOCK_Y_1 = jnp.linspace(HEIGHT-120, HEIGHT-128, 5).astype(jnp.int32)
-#GREEN_BLOCK_X_1 = jnp.full((5,), WIDTH//2 + 8, dtype=jnp.int32)
-#
-#GREEN_BLOCK_X_2 = jnp.full((4,), WIDTH//2 + 12, dtype=jnp.int32)
-#GREEN_BLOCK_Y_2 = jnp.linspace(HEIGHT-120, HEIGHT-126, 4).astype(jnp.int32)
-#
-#GREEN_BLOCK_X_3 = jnp.full((3,), WIDTH//2 + 16, dtype=jnp.int32)
-#GREEN_BLOCK_Y_3 = jnp.linspace(HEIGHT-120, HEIGHT-124, 3).astype(jnp.int32)
-
-#GREEN_BLOCK_X_4 = jnp.full((2,), WIDTH//2 + 20, dtype=jnp.int32)
-#GREEN_BLOCK_Y_4 = jnp.linspace(HEIGHT-120, HEIGHT-122, 2).astype(jnp.int32)
-
-#GREEN_BLOCK_X_5 = jnp.full((1,), WIDTH//2 + 24, dtype=jnp.int32)
-#GREEN_BLOCK_Y_5 = jnp.linspace(HEIGHT-120, HEIGHT-120, 1).astype(jnp.int32)
-
-# mirror the blocks to the left side
-#GREEN_BLOCK_Y_6 = jnp.linspace(HEIGHT-120, HEIGHT-128, 5).astype(jnp.int32)
-#GREEN_BLOCK_X_6 = jnp.full((5,), WIDTH//2 - 8, dtype=jnp.int32)
-
-#GREEN_BLOCK_X_7 = jnp.full((4,), WIDTH//2 - 12, dtype=jnp.int32)
-#GREEN_BLOCK_Y_7 = jnp.linspace(HEIGHT-120, HEIGHT-126, 4).astype(jnp.int32)
-
-#GREEN_BLOCK_X_8 = jnp.full((3,), WIDTH//2 - 16, dtype=jnp.int32)
-#GREEN_BLOCK_Y_8 = jnp.linspace(HEIGHT-120, HEIGHT-124, 3).astype(jnp.int32)
-#
-#GREEN_BLOCK_X_9 = jnp.full((2,), WIDTH//2 - 20, dtype=jnp.int32)
-#GREEN_BLOCK_Y_9 = jnp.linspace(HEIGHT-120, HEIGHT-122, 2).astype(jnp.int32)
-
-#GREEN_BLOCK_X_10 = jnp.full((1,), WIDTH//2 - 24, dtype=jnp.int32)
-#GREEN_BLOCK_Y_10 = jnp.linspace(HEIGHT-120, HEIGHT-120, 1).astype(jnp.int32)
-#
-#GREEN_BLOCK_POSITIONS = jnp.concatenate(
- #   [
-  #  jnp.stack((GREEN_BLOCK_X_1, GREEN_BLOCK_Y_1), axis=1),
-   # jnp.stack((GREEN_BLOCK_X_2, GREEN_BLOCK_Y_2), axis=1),
-    #jnp.stack((GREEN_BLOCK_X_3, GREEN_BLOCK_Y_3), axis=1),
-    #jnp.stack((GREEN_BLOCK_X_4, GREEN_BLOCK_Y_4), axis=1),
-    #jnp.stack((GREEN_BLOCK_X_5, GREEN_BLOCK_Y_5), axis=1),
-    #jnp.stack((GREEN_BLOCK_X_6, GREEN_BLOCK_Y_1), axis=1),
-    #jnp.stack((GREEN_BLOCK_X_7, GREEN_BLOCK_Y_2), axis=1),
-    #jnp.stack((GREEN_BLOCK_X_8, GREEN_BLOCK_Y_3), axis=1),
-    #jnp.stack((GREEN_BLOCK_X_9, GREEN_BLOCK_Y_4), axis=1),
-    #jnp.stack((GREEN_BLOCK_X_10, GREEN_BLOCK_Y_5), axis=1)
-#
- #   ]
-#)
-
 # === GAME STATE ===
 class PhoenixState(NamedTuple):
     player_x: chex.Array
@@ -335,71 +193,6 @@ class CarryState(NamedTuple):
 class EntityPosition(NamedTuple):## not sure
     x: chex.Array
     y: chex.Array
-
-
-def load_sprites(): # load Sprites
-    MODULE_DIR = os.path.dirname(os.path.abspath(__file__))
-
-    # Load individual sprite frames
-    player_sprites = jr.loadFrame(os.path.join(MODULE_DIR, "./sprites/phoenix/player.npy"))
-    bg_sprites = jr.loadFrame(os.path.join(MODULE_DIR, "./sprites/pong/background.npy"))
-    floor_sprite = jr.loadFrame(os.path.join(MODULE_DIR, "./sprites/phoenix/floor.npy"))
-    player_projectile = jr.loadFrame(os.path.join(MODULE_DIR, "./sprites/phoenix/player_projectile.npy"))
-    bat_high_wings_sprite = jr.loadFrame(os.path.join(MODULE_DIR, "./sprites/phoenix/bats/bats_high_wings.npy"))
-    bat_low_wings_sprite = jr.loadFrame(os.path.join(MODULE_DIR, "./sprites/phoenix/bats/bats_low_wings.npy"))
-    bat_2_high_wings_sprite = jr.loadFrame(os.path.join(MODULE_DIR, "./sprites/phoenix/bats/bats_2_high_wings.npy"))
-    bat_2_low_wings_sprite = jr.loadFrame(os.path.join(MODULE_DIR, "./sprites/phoenix/bats/bats_2_low_wings.npy"))
-    enemy1_sprite = jr.loadFrame(os.path.join(MODULE_DIR, "./sprites/phoenix/enemy_phoenix.npy"))
-    enemy2_sprite = jr.loadFrame(os.path.join(MODULE_DIR, "./sprites/phoenix/enemy_phoenix_2.npy"))
-    boss_sprite = jr.loadFrame(os.path.join(MODULE_DIR, "./sprites/phoenix/boss.npy"))
-    enemy_projectile = jr.loadFrame(os.path.join(MODULE_DIR, "./sprites/phoenix/enemy_projectile.npy"))
-    boss_block_red = jr.loadFrame(os.path.join(MODULE_DIR, "./sprites/phoenix/red_block.npy"))
-    boss_block_blue = jr.loadFrame(os.path.join(MODULE_DIR, "./sprites/phoenix/blue_block.npy"))
-    boss_block_green = jr.loadFrame(os.path.join(MODULE_DIR, "./sprites/phoenix/green_block.npy"))
-
-
-    SPRITE_PLAYER = jnp.expand_dims(player_sprites, axis=0)
-    BG_SPRITE = jnp.expand_dims(np.zeros_like(bg_sprites), axis=0)
-    SPRITE_FLOOR = jnp.expand_dims(floor_sprite, axis=0)
-    SPRITE_PLAYER_PROJECTILE = jnp.expand_dims(player_projectile, axis=0)
-    SPRITE_ENEMY1 = jnp.expand_dims(enemy1_sprite, axis=0)
-    SPRITE_ENEMY2 = jnp.expand_dims(enemy2_sprite, axis=0)
-    SPRITE_BAT_HIGH_WING = jnp.expand_dims(bat_high_wings_sprite, axis=0)
-    SPRITE_BAT_LOW_WING = jnp.expand_dims(bat_low_wings_sprite, axis=0)
-    SPRITE_BAT_2_HIGH_WING = jnp.expand_dims(bat_2_high_wings_sprite, axis=0)
-    SPRITE_BAT_2_LOW_WING = jnp.expand_dims(bat_2_low_wings_sprite, axis=0)
-    SPRITE_BOSS = jnp.expand_dims(boss_sprite, axis=0)
-    SPRITE_ENEMY_PROJECTILE = jnp.expand_dims(enemy_projectile, axis=0)
-    SPRITE_BLUE_BLOCK = boss_block_blue
-    SPRITE_RED_BLOCK = boss_block_red
-    SPRITE_GREEN_BLOCK = boss_block_green
-
-
-    DIGITS = jr.load_and_pad_digits(os.path.join(MODULE_DIR, "./sprites/phoenix/digits/{}.npy"))
-    LIFE_INDICATOR = jr.loadFrame(os.path.join(MODULE_DIR, "./sprites/phoenix/life_indicator.npy"))
-
-    return (
-        SPRITE_PLAYER,
-        BG_SPRITE,
-        SPRITE_PLAYER_PROJECTILE,
-        SPRITE_FLOOR,
-        SPRITE_ENEMY1,
-        SPRITE_ENEMY2,
-        SPRITE_BAT_HIGH_WING,
-        SPRITE_BAT_LOW_WING,
-        SPRITE_BAT_2_HIGH_WING,
-        SPRITE_BAT_2_LOW_WING,
-        SPRITE_BOSS,
-        SPRITE_ENEMY_PROJECTILE,
-        DIGITS,
-        LIFE_INDICATOR,
-        SPRITE_RED_BLOCK,
-        SPRITE_BLUE_BLOCK,
-        SPRITE_GREEN_BLOCK,
-    )
-# load sprites on module layer
-(SPRITE_PLAYER, SPRITE_BG, SPRITE_PLAYER_PROJECTILE, SPRITE_FLOOR, SPRITE_ENEMY1, SPRITE_ENEMY2, SPRITE_BAT_HIGH_WING, SPRITE_BAT_LOW_WING,SPRITE_BAT_2_HIGH_WING,SPRITE_BAT_2_LOW_WING,SPRITE_BOSS, SPRITE_ENEMY_PROJECTILE, DIGITS, LIFE_INDICATOR, SPRITE_RED_BLOCK, SPRITE_BLUE_BLOCK, SPRITE_GREEN_BLOCK) = load_sprites()
-
 
 class JaxPhoenix(JaxEnvironment[PhoenixState, PhoenixOberservation, PhoenixInfo, None]):
     @partial(jax.jit, static_argnums=(0,))
@@ -499,7 +292,7 @@ class JaxPhoenix(JaxEnvironment[PhoenixState, PhoenixOberservation, PhoenixInfo,
         enemy_step_size = 0.4
         vertical_step_size = 0.3
 
-        active_enemies = (state.enemies_x > -1) & (state.enemies_y < HEIGHT + 10)
+        active_enemies = (state.enemies_x > -1) & (state.enemies_y < self.consts.HEIGHT + 10)
 
         # Prüfen, ob ein Gegner die linke oder rechte Grenze erreicht hat
         at_left_boundary = jnp.any(jnp.logical_and(state.enemies_x <= self.consts.PLAYER_BOUNDS[0], active_enemies))
@@ -551,7 +344,7 @@ class JaxPhoenix(JaxEnvironment[PhoenixState, PhoenixOberservation, PhoenixInfo,
 
     def bat_step(self, state):
         bat_step_size = 0.5
-        active_bats = (state.enemies_x > -1) & (state.enemies_y < HEIGHT + 10)
+        active_bats = (state.enemies_x > -1) & (state.enemies_y < self.consts.HEIGHT + 10)
 
         # Initialisiere neue Richtungen für jede Fledermaus
         new_directions = jnp.where(
@@ -786,13 +579,13 @@ class JaxPhoenix(JaxEnvironment[PhoenixState, PhoenixOberservation, PhoenixInfo,
 
         # Gegner und Projektil entfernen wenn eine Kollision erkannt wurde
         enemies_x = jnp.where(enemy_collisions, -1, state.enemies_x).astype(jnp.float32)
-        enemies_y = jnp.where(enemy_collisions, HEIGHT+20, state.enemies_y).astype(jnp.float32)
+        enemies_y = jnp.where(enemy_collisions, self.consts.HEIGHT+20, state.enemies_y).astype(jnp.float32)
         projectile_x = jnp.where(enemy_hit_detected, -1, projectile_x)
         projectile_y = jnp.where(enemy_hit_detected, -1, projectile_y)
         score = jnp.where(enemy_hit_detected, state.score + 20, state.score)
 
         # Checken ob alle Gegner getroffen wurden
-        all_enemies_hit = jnp.all(enemies_y >= HEIGHT + 10)
+        all_enemies_hit = jnp.all(enemies_y >= self.consts.HEIGHT + 10)
         #jax.debug.print("All enemies hit: {}", all_enemies_hit)
         #jax.debug.print("Enemies X: {}", enemies_x)
         #jax.debug.print("Enemies Y: {}", enemies_y)
@@ -838,7 +631,7 @@ class JaxPhoenix(JaxEnvironment[PhoenixState, PhoenixOberservation, PhoenixInfo,
         enemy_respawn_x = jax.lax.switch((level -1) % 5, self.consts.ENEMY_POSITIONS_X_LIST).astype(jnp.float32)
         enemy_respawn_y = jax.lax.switch((level - 1) % 5, self.consts.ENEMY_POSITIONS_Y_LIST).astype(jnp.int32)
 
-        enemy_respawn_mask = jnp.logical_and(player_hit_detected, (enemies_x > 0) & (enemies_y < HEIGHT + 10))
+        enemy_respawn_mask = jnp.logical_and(player_hit_detected, (enemies_x > 0) & (enemies_y < self.consts.HEIGHT + 10))
         enemies_x = jnp.where(enemy_respawn_mask, enemy_respawn_x, enemies_x)
         enemies_y = jnp.where(enemy_respawn_mask, enemy_respawn_y, enemies_y)
 
@@ -881,30 +674,113 @@ class JaxPhoenix(JaxEnvironment[PhoenixState, PhoenixOberservation, PhoenixInfo,
 from jaxatari.renderers import JAXGameRenderer
 
 class PhoenixRenderer(JAXGameRenderer):
+    def __init__(self, consts: PhoenixConstants = None):
+        super().__init__()
+        self.consts = consts or PhoenixConstants()
+        (
+            self.SPRITE_PLAYER,
+            self.BG_SPRITE,
+            self.SPRITE_PLAYER_PROJECTILE,
+            self.SPRITE_FLOOR,
+            self.SPRITE_ENEMY1,
+            self.SPRITE_ENEMY2,
+            self.SPRITE_BAT_HIGH_WING,
+            self.SPRITE_BAT_LOW_WING,
+            self.SPRITE_BAT_2_HIGH_WING,
+            self.SPRITE_BAT_2_LOW_WING,
+            self.SPRITE_BOSS,
+            self.SPRITE_ENEMY_PROJECTILE,
+            self.DIGITS,
+            self.LIFE_INDICATOR,
+            self.SPRITE_RED_BLOCK,
+            self.SPRITE_BLUE_BLOCK,
+            self.SPRITE_GREEN_BLOCK,
+        ) = self.load_sprites()
+    def load_sprites(self):
+        MODULE_DIR = os.path.dirname(os.path.abspath(__file__))
+
+        # Load individual sprite frames
+        player_sprites = jr.loadFrame(os.path.join(MODULE_DIR, "./sprites/phoenix/player.npy"))
+        bg_sprites = jr.loadFrame(os.path.join(MODULE_DIR, "./sprites/pong/background.npy"))
+        floor_sprite = jr.loadFrame(os.path.join(MODULE_DIR, "./sprites/phoenix/floor.npy"))
+        player_projectile = jr.loadFrame(os.path.join(MODULE_DIR, "./sprites/phoenix/player_projectile.npy"))
+        bat_high_wings_sprite = jr.loadFrame(os.path.join(MODULE_DIR, "./sprites/phoenix/bats/bats_high_wings.npy"))
+        bat_low_wings_sprite = jr.loadFrame(os.path.join(MODULE_DIR, "./sprites/phoenix/bats/bats_low_wings.npy"))
+        bat_2_high_wings_sprite = jr.loadFrame(os.path.join(MODULE_DIR, "./sprites/phoenix/bats/bats_2_high_wings.npy"))
+        bat_2_low_wings_sprite = jr.loadFrame(os.path.join(MODULE_DIR, "./sprites/phoenix/bats/bats_2_low_wings.npy"))
+        enemy1_sprite = jr.loadFrame(os.path.join(MODULE_DIR, "./sprites/phoenix/enemy_phoenix.npy"))
+        enemy2_sprite = jr.loadFrame(os.path.join(MODULE_DIR, "./sprites/phoenix/enemy_phoenix_2.npy"))
+        boss_sprite = jr.loadFrame(os.path.join(MODULE_DIR, "./sprites/phoenix/boss.npy"))
+        enemy_projectile = jr.loadFrame(os.path.join(MODULE_DIR, "./sprites/phoenix/enemy_projectile.npy"))
+        boss_block_red = jr.loadFrame(os.path.join(MODULE_DIR, "./sprites/phoenix/red_block.npy"))
+        boss_block_blue = jr.loadFrame(os.path.join(MODULE_DIR, "./sprites/phoenix/blue_block.npy"))
+        boss_block_green = jr.loadFrame(os.path.join(MODULE_DIR, "./sprites/phoenix/green_block.npy"))
+
+        SPRITE_PLAYER = jnp.expand_dims(player_sprites, axis=0)
+        BG_SPRITE = jnp.expand_dims(np.zeros_like(bg_sprites), axis=0)
+        SPRITE_FLOOR = jnp.expand_dims(floor_sprite, axis=0)
+        SPRITE_PLAYER_PROJECTILE = jnp.expand_dims(player_projectile, axis=0)
+        SPRITE_ENEMY1 = jnp.expand_dims(enemy1_sprite, axis=0)
+        SPRITE_ENEMY2 = jnp.expand_dims(enemy2_sprite, axis=0)
+        SPRITE_BAT_HIGH_WING = jnp.expand_dims(bat_high_wings_sprite, axis=0)
+        SPRITE_BAT_LOW_WING = jnp.expand_dims(bat_low_wings_sprite, axis=0)
+        SPRITE_BAT_2_HIGH_WING = jnp.expand_dims(bat_2_high_wings_sprite, axis=0)
+        SPRITE_BAT_2_LOW_WING = jnp.expand_dims(bat_2_low_wings_sprite, axis=0)
+        SPRITE_BOSS = jnp.expand_dims(boss_sprite, axis=0)
+        SPRITE_ENEMY_PROJECTILE = jnp.expand_dims(enemy_projectile, axis=0)
+        SPRITE_BLUE_BLOCK = boss_block_blue
+        SPRITE_RED_BLOCK = boss_block_red
+        SPRITE_GREEN_BLOCK = boss_block_green
+
+        DIGITS = jr.load_and_pad_digits(os.path.join(MODULE_DIR, "./sprites/phoenix/digits/{}.npy"))
+        LIFE_INDICATOR = jr.loadFrame(os.path.join(MODULE_DIR, "./sprites/phoenix/life_indicator.npy"))
+
+        return (
+            SPRITE_PLAYER,
+            BG_SPRITE,
+            SPRITE_PLAYER_PROJECTILE,
+            SPRITE_FLOOR,
+            SPRITE_ENEMY1,
+            SPRITE_ENEMY2,
+            SPRITE_BAT_HIGH_WING,
+            SPRITE_BAT_LOW_WING,
+            SPRITE_BAT_2_HIGH_WING,
+            SPRITE_BAT_2_LOW_WING,
+            SPRITE_BOSS,
+            SPRITE_ENEMY_PROJECTILE,
+            DIGITS,
+            LIFE_INDICATOR,
+            SPRITE_RED_BLOCK,
+            SPRITE_BLUE_BLOCK,
+            SPRITE_GREEN_BLOCK,
+        )
+
+    # load sprites on module layer
+
     @partial(jax.jit, static_argnums=(0,))
     def render(self, state):
         raster = jr.create_initial_frame(width=160, height=210)
 
         # Render background
-        frame_bg = jr.get_sprite_frame(SPRITE_BG, 0)
+        frame_bg = jr.get_sprite_frame(self.BG_SPRITE, 0)
         raster = jr.render_at(raster, 0, 0, frame_bg)
         # Render floor
-        frame_floor = jr.get_sprite_frame(SPRITE_FLOOR, 0)
+        frame_floor = jr.get_sprite_frame(self.SPRITE_FLOOR, 0)
         raster = jr.render_at(raster, 0, 185, frame_floor)
         # Render player
-        frame_player = jr.get_sprite_frame(SPRITE_PLAYER, 0)
+        frame_player = jr.get_sprite_frame(self.SPRITE_PLAYER, 0)
         raster = jr.render_at(raster, state.player_x, state.player_y, frame_player)
         # Render projectile
-        frame_projectile = jr.get_sprite_frame(SPRITE_PLAYER_PROJECTILE, 0)
+        frame_projectile = jr.get_sprite_frame(self.SPRITE_PLAYER_PROJECTILE, 0)
         # Render enemies
-        frame_enemy_1 = jr.get_sprite_frame(SPRITE_ENEMY1, 0)
-        frame_enemy_2 = jr.get_sprite_frame(SPRITE_ENEMY2, 0)
-        frame_bat_high_wings = jr.get_sprite_frame(SPRITE_BAT_HIGH_WING, 0)
-        frame_bat_low_wings = jr.get_sprite_frame(SPRITE_BAT_LOW_WING, 0)
-        frame_bat_2_high_wings = jr.get_sprite_frame(SPRITE_BAT_2_HIGH_WING, 0)
-        frame_bat_2_low_wings = jr.get_sprite_frame(SPRITE_BAT_2_LOW_WING, 0)
-        frame_enemy_projectile = jr.get_sprite_frame(SPRITE_ENEMY_PROJECTILE, 0)
-        frame_boss = jr.get_sprite_frame(SPRITE_BOSS, 0)
+        frame_enemy_1 = jr.get_sprite_frame(self.SPRITE_ENEMY1, 0)
+        frame_enemy_2 = jr.get_sprite_frame(self.SPRITE_ENEMY2, 0)
+        frame_bat_high_wings = jr.get_sprite_frame(self.SPRITE_BAT_HIGH_WING, 0)
+        frame_bat_low_wings = jr.get_sprite_frame(self.SPRITE_BAT_LOW_WING, 0)
+        frame_bat_2_high_wings = jr.get_sprite_frame(self.SPRITE_BAT_2_HIGH_WING, 0)
+        frame_bat_2_low_wings = jr.get_sprite_frame(self.SPRITE_BAT_2_LOW_WING, 0)
+        frame_enemy_projectile = jr.get_sprite_frame(self.SPRITE_ENEMY_PROJECTILE, 0)
+        frame_boss = jr.get_sprite_frame(self.SPRITE_BOSS, 0)
 
 
         def render_enemy(raster, enemy_pos):
@@ -964,7 +840,7 @@ class PhoenixRenderer(JAXGameRenderer):
             x,y = block_pos
             return jax.lax.cond(
                 state.level% 5 == 0,
-                lambda r: jr.render_at(r, x, y, SPRITE_BLUE_BLOCK),
+                lambda r: jr.render_at(r, x, y, self.SPRITE_BLUE_BLOCK),
                 lambda r:r,
                 raster
             ), None
@@ -972,7 +848,7 @@ class PhoenixRenderer(JAXGameRenderer):
             x,y = block_pos
             return jax.lax.cond(
                 state.level% 5 == 0,
-                lambda r: jr.render_at(r, x, y, SPRITE_RED_BLOCK),
+                lambda r: jr.render_at(r, x, y, self.SPRITE_RED_BLOCK),
                 lambda r:r,
                 raster
             ), None
@@ -981,7 +857,7 @@ class PhoenixRenderer(JAXGameRenderer):
             x, y = block_pos
             return jax.lax.cond(
                 state.level % 5 == 0,
-                lambda r: jr.render_at(r, x, y, SPRITE_GREEN_BLOCK),
+                lambda r: jr.render_at(r, x, y, self.SPRITE_GREEN_BLOCK),
                 lambda r: r,
                 raster
             ), None
@@ -996,10 +872,10 @@ class PhoenixRenderer(JAXGameRenderer):
         raster, _ = jax.lax.scan(render_enemy_projectile, raster, enemy_proj_positions)
         # render score
         score_array = jr.int_to_digits(state.score, max_digits=5)  # 5 for now
-        raster = jr.render_label(raster, 60, 10, score_array, DIGITS, spacing=8)
+        raster = jr.render_label(raster, 60, 10, score_array, self.DIGITS, spacing=8)
         # render lives
         lives_value = jnp.sum(jr.int_to_digits(state.lives, max_digits=2))
-        raster = jr.render_indicator(raster, 70, 20, lives_value, LIFE_INDICATOR, spacing=4)
+        raster = jr.render_indicator(raster, 70, 20, lives_value, self.LIFE_INDICATOR, spacing=4)
 
         return raster
 
