@@ -563,8 +563,8 @@ class BackgammonRenderer:
         self.checker_size = 24
         self.dice_size = 32
 
-        self.native_resolution = (1024, 640)
-        self.window_resolution = (1024, 640)
+        self.native_resolution = window_size
+        self.window_resolution = window_size
         self.scale_x = 1.0
         self.scale_y = 1.0
 
@@ -697,71 +697,6 @@ class BackgammonRenderer:
 
     def text_to_indices(self, text: str) -> jnp.ndarray:
         return jnp.array([self.char_map[c] for c in text if c in self.char_map], dtype=jnp.int32)
-
-
-# class BackgammonRenderer(JAXGameRenderer):
-#     def __init__(self, env: JaxBackgammonEnv):
-#         self.env = env
-#
-#     def render(self, state: BackgammonState) -> str:
-#         """Render the current state of the game in ASCII format."""
-#         board = state.board
-#         output = []
-#
-#         # Board header
-#         output.append("  12 11 10  9  8  7  |   6  5  4  3  2  1")
-#         output.append("  -------------------------------------------------")
-#
-#         def render_row(indices: range, split_at: int):
-#             row = ["  "]
-#             for i in indices:
-#                 point_idx = i - 1
-#                 white = board[0, point_idx]
-#                 black = board[1, point_idx]
-#
-#                 if white > 0:
-#                     row.append(f"W{white} ")
-#                 elif black > 0:
-#                     row.append(f"B{black} ")
-#                 else:
-#                     row.append("•  ")
-#
-#                 if i == split_at:
-#                     row.append(" |   ")
-#             return "".join(row)
-#
-#         # Top row (points 12–1)
-#         output.append(render_row(range(12, 0, -1), 7))
-#
-#         # Middle divider
-#         output.append("  -------------------------------------------------")
-#
-#         # Bottom row (points 13–24)
-#         output.append(render_row(range(13, 25), 18))
-#
-#         # Footer
-#         output.append("  -------------------------+------------------------")
-#         output.append("  13 14 15 16 17 18  |   19 20 21 22 23 24")
-#
-#         # Bar and Home
-#         output.append("")
-#         output.append(f"Bar: White: {board[0, self.env.consts.BAR_INDEX]}, Black: {board[1, self.env.consts.BAR_INDEX]}")
-#         output.append(f"Home: White: {board[0, self.env.consts.HOME_INDEX]}, Black: {board[1, self.env.consts.HOME_INDEX]}")
-#
-#         # Game status
-#         output.append("")
-#         output.append(f"Current player: {'White' if state.current_player == self.env.consts.WHITE else 'Black'}")
-#         output.append(f"Dice: {state.dice}")
-#         output.append(f"Game over: {state.is_game_over}")
-#
-#         return "\n".join(output)
-#
-#     def display(self, state: BackgammonState) -> None:
-#         """Print the rendered state to the console."""
-#         print(self.render(state))
-#
-#     def close(self):
-#         pass
 
 
 def get_user_move(state: BackgammonState, env: JaxBackgammonEnv) -> Tuple[int, int]:
