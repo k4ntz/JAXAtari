@@ -553,6 +553,16 @@ class BackgammonRenderer:
         chars = "0123456789WHITEBLACKGAMEOVER"
         self.char_sprites, self.char_map = self.load_char_sprites(chars, str(self.asset_dir / "chars"))
 
+        # Board layout parameters (matching the generated board)
+        self.board_margin = 32
+        self.border_width = 4
+        self.center_bar_x = 512 - 30
+        self.center_bar_width = 60
+        self.triangle_width = (1024 - 2 * self.board_margin - 2 * self.border_width - 60) // 12  # ~73px
+        self.triangle_height = 200
+        self.checker_size = 24
+        self.dice_size = 32
+
         self.native_resolution = (1024, 640)
         self.window_resolution = (1024, 640)
         self.scale_x = 1.0
@@ -576,30 +586,34 @@ class BackgammonRenderer:
                     x, y = self.get_checker_position(point, i, player)
                     raster = jr.render_at(raster, x, y, jr.get_sprite_frame(sprite, 0))
 
-        # Render dice
+        # Render dice in center bar area
         for i in range(2):
             die_val = int(state.dice[i])
             if 1 <= die_val <= 6:
                 die_sprite = self.SPRITE_DICE[die_val - 1]
-                x = 440 + i * 60  # centered near top
-                y = 16
+                # Position dice in center of center bar
+                x = self.center_bar_x + 10 + i * (self.dice_size + 4)
+                y = 320 - self.dice_size // 2  # Vertically centered
                 raster = jr.render_at(raster, x, y, jr.get_sprite_frame(die_sprite, 0))
 
-        # Render score
+        # Render scores in corners
         white_digits = jr.int_to_digits(int(state.board[0, 25]), max_digits=2)
         black_digits = jr.int_to_digits(int(state.board[1, 25]), max_digits=2)
-        raster = jr.render_label(raster, 120, 30, white_digits, self.char_sprites)
-        raster = jr.render_label(raster, 1840, 30, black_digits, self.char_sprites)
 
-        # Render current player
+        # White score in top-left
+        raster = jr.render_label(raster, 50, 50, white_digits, self.char_sprites)
+        # Black score in top-right
+        raster = jr.render_label(raster, 950, 50, black_digits, self.char_sprites)
+
+        # Render current player at bottom
         player_text = "WHITE" if int(state.current_player) == 1 else "BLACK"
         player_indices = self.text_to_indices(player_text)
-        raster = jr.render_label(raster, 940, 1200, player_indices, self.char_sprites)
+        raster = jr.render_label(raster, 450, 600, player_indices, self.char_sprites)
 
         # Game over message
         if bool(state.is_game_over):
             over_indices = self.text_to_indices("GAMEOVER")
-            raster = jr.render_label(raster, 850, 600, over_indices, self.char_sprites)
+            raster = jr.render_label(raster, 400, 320, over_indices, self.char_sprites)
 
         return raster
 
@@ -617,23 +631,48 @@ class BackgammonRenderer:
 
         for event in pygame.event.get():
             if event.type == pygame.QUIT or (
-                event.type == pygame.KEYDOWN and event.key == pygame.K_ESCAPE
+                    event.type == pygame.KEYDOWN and event.key == pygame.K_ESCAPE
             ):
                 pygame.quit()
                 exit()
 
-    def get_checker_position(self, point, index, player):
-        triangle_width = 60
-        spacing = 24
-        base_y_top = 32
-        base_y_bottom = 544
+    def get_checker_position(self, point, stack_index, player):
+        """Calculate checker position based on point number and stack position"""
 
-        if point < 12:
-            x = 32 + point * triangle_width
-            y = base_y_bottom - index * spacing
+        # Board layout calculations
+        left_start_x = self.board_margin + self.border_width + 8
+        right_start_x = self.center_bar_x + self.center_bar_width + 8
+        top_y = self.board_margin + self.border_width
+        bottom_y = 640 - self.board_margin - self.border_width
+
+        checker_spacing = 20  # Vertical spacing between stacked checkers
+
+        # Convert backgammon point numbering to our layout
+        if point < 6:
+            # Points 1-6: Bottom left quarter
+            triangle_x = left_start_x + point * self.triangle_width
+            # Checkers stack upward from bottom
+            x = triangle_x + (self.triangle_width - self.checker_size) // 2
+            y = bottom_y - self.checker_size - (stack_index * checker_spacing)
+
+        elif point < 12:
+            # Points 7-12: Bottom right quarter
+            triangle_x = right_start_x + (point - 6) * self.triangle_width
+            x = triangle_x + (self.triangle_width - self.checker_size) // 2
+            y = bottom_y - self.checker_size - (stack_index * checker_spacing)
+
+        elif point < 18:
+            # Points 13-18: Top left quarter
+            triangle_x = left_start_x + (17 - point) * self.triangle_width  # Reverse order
+            x = triangle_x + (self.triangle_width - self.checker_size) // 2
+            # Checkers stack downward from top
+            y = top_y + (stack_index * checker_spacing)
+
         else:
-            x = 32 + (23 - point) * triangle_width
-            y = base_y_top + index * spacing
+            # Points 19-24: Top right quarter
+            triangle_x = right_start_x + (23 - point) * self.triangle_width  # Reverse order
+            x = triangle_x + (self.triangle_width - self.checker_size) // 2
+            y = top_y + (stack_index * checker_spacing)
 
         return int(x), int(y)
 
@@ -658,6 +697,7 @@ class BackgammonRenderer:
 
     def text_to_indices(self, text: str) -> jnp.ndarray:
         return jnp.array([self.char_map[c] for c in text if c in self.char_map], dtype=jnp.int32)
+
 
 # class BackgammonRenderer(JAXGameRenderer):
 #     def __init__(self, env: JaxBackgammonEnv):
