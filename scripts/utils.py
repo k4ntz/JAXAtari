@@ -12,7 +12,7 @@ from jaxatari.environment import JaxEnvironment, JAXAtariAction as Action
 from jaxatari.renderers import AtraJaxisRenderer
 
 
-def update_pygame(pygame_screen, raster, SCALING_FACTOR=3, WIDTH=400, HEIGHT=300):
+def update_pygame(pygame_screen, raster, SCALING_FACTOR=1, WIDTH=160, HEIGHT=210):
     """Updates the Pygame display with the rendered raster.
 
     Args:

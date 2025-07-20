@@ -111,7 +111,7 @@ def main():
         for action in actions_array:
             # Convert numpy action to JAX array
             action = jax.numpy.array(action, dtype=jax.numpy.int32)
-            obs, state, reward, done, info = jitted_step(state, action)
+            obs, state, reward, done, info = jitted_step(state, action, key=key)
             image = jitted_render(state)
             update_pygame(window, image, UPSCALE_FACTOR, 160, 210)
             clock.tick(frame_rate)
@@ -158,7 +158,8 @@ def main():
 
         if not frame_by_frame or next_frame_asked:
             action = get_human_action()
-            obs, state, reward, done, info = jitted_step(state, action)
+            key, subkey = jax.random.split(key)
+            obs, state, reward, done, info = jitted_step(state, action, key=subkey)
             total_return += reward
             if next_frame_asked:
                 next_frame_asked = False
