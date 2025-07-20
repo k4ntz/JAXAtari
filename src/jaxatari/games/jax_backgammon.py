@@ -536,89 +536,128 @@ class JaxBackgammonEnv(JaxEnvironment[BackgammonState, jnp.ndarray, dict, Backga
         self.renderer.render(state)
 
 
-class BackgammonRenderer(JAXGameRenderer):
-    def __init__(self, env: JaxBackgammonEnv):
-        super().__init__()
+class BackgammonRenderer:
+    def __init__(self, env, window_size=(1024, 640)):
+        self.env = env
         self.asset_dir = Path("src/jaxatari/games/sprites/backgammon")
 
-        self.SPRITE_BOARD = jnp.expand_dims(jr.loadFrame(self.asset_dir / "board.npy"), axis=0)
+        # Load sprite assets
+        self.SPRITE_BOARD = jnp.expand_dims(jr.loadFrame(self.asset_dir / "backgammon_board.npy"), axis=0)
         self.SPRITE_WHITE = jnp.expand_dims(jr.loadFrame(self.asset_dir / "white_checker.npy"), axis=0)
         self.SPRITE_BLACK = jnp.expand_dims(jr.loadFrame(self.asset_dir / "black_checker.npy"), axis=0)
         self.SPRITE_DICE = [
             jnp.expand_dims(jr.loadFrame(self.asset_dir / f"dice_{i}.npy"), axis=0)
             for i in range(1, 7)
         ]
-    def load_and_pad_png_sprites(folder_path: str, filenames: list[str]) -> jnp.ndarray:
-        """Loads .png sprites from disk and pads them to match dimensions."""
-        sprites = []
-        for name in filenames:
-            img = Image.open(os.path.join(folder_path, name)).convert("RGBA")
-            arr = np.array(img)
-            sprites.append(jnp.array(arr))
 
-        padded_sprites, _ = jr.pad_to_match(sprites)
-        return jnp.stack(padded_sprites)
+        chars = "0123456789WHITEBLACKGAMEOVER"
+        self.char_sprites, self.char_map = self.load_char_sprites(chars, str(self.asset_dir / "chars"))
 
+        self.native_resolution = (1024, 640)
+        self.window_resolution = (1024, 640)
+        self.scale_x = 1.0
+        self.scale_y = 1.0
 
-    def text_to_indices(self, text: str) -> jnp.ndarray:
-        """Convert a string to indices in self.char_sprites"""
-        indices = [self.char_map[c] for c in text if c in self.char_map]
-        return jnp.array(indices, dtype=jnp.int32)
+        pygame.init()
+        self.screen = pygame.display.set_mode(self.window_resolution)
+        pygame.display.set_caption("JAX Backgammon")
+        self.clock = pygame.time.Clock()
 
-    @partial(jax.jit, static_argnums=(0,))
     def render(self, state):
-        raster = jr.create_initial_frame(width=1024, height=640)
+        raster = jr.create_initial_frame(1024, 640)
         raster = jr.render_at(raster, 0, 0, jr.get_sprite_frame(self.SPRITE_BOARD, 0))
 
+        # Render checkers
         for point in range(24):
             for player in [0, 1]:
-                count = state.board[player, point]
-                for i in range(count):
-                    sprite = self.SPRITE_WHITE if player == 0 else self.SPRITE_BLACK
+                count = int(state.board[player, point])
+                sprite = self.SPRITE_WHITE if player == 0 else self.SPRITE_BLACK
+                for i in range(min(count, 10)):  # Limit visible checkers
                     x, y = self.get_checker_position(point, i, player)
                     raster = jr.render_at(raster, x, y, jr.get_sprite_frame(sprite, 0))
 
+        # Render dice
         for i in range(2):
-            die_val = state.dice[i]
-            if die_val > 0:
-                die_sprite = self.SPRITE_DICE[int(die_val) - 1]
-                raster = jr.render_at(raster, 480 + i * 60, 10, jr.get_sprite_frame(die_sprite, 0))
+            die_val = int(state.dice[i])
+            if 1 <= die_val <= 6:
+                die_sprite = self.SPRITE_DICE[die_val - 1]
+                x = 440 + i * 60  # centered near top
+                y = 16
+                raster = jr.render_at(raster, x, y, jr.get_sprite_frame(die_sprite, 0))
 
-        # Score display
-        white_digits = jr.int_to_digits(state.board[0, 25], max_digits=2)
-        black_digits = jr.int_to_digits(state.board[1, 25], max_digits=2)
+        # Render score
+        white_digits = jr.int_to_digits(int(state.board[0, 25]), max_digits=2)
+        black_digits = jr.int_to_digits(int(state.board[1, 25]), max_digits=2)
+        raster = jr.render_label(raster, 120, 30, white_digits, self.char_sprites)
+        raster = jr.render_label(raster, 1840, 30, black_digits, self.char_sprites)
 
-        raster = jr.render_label(raster, 60, 10, white_digits, self.char_sprites)
-        raster = jr.render_label(raster, 860, 10, black_digits, self.char_sprites)
+        # Render current player
+        player_text = "WHITE" if int(state.current_player) == 1 else "BLACK"
+        player_indices = self.text_to_indices(player_text)
+        raster = jr.render_label(raster, 940, 1200, player_indices, self.char_sprites)
 
-        # Current player label
-        player_text = "WHITE" if state.current_player == 1 else "BLACK"
-        label_indices = self.text_to_indices(player_text)
-        raster = jr.render_label(raster, 440, 580, label_indices, self.char_sprites)
-
-        # Game over text
-        if state.is_game_over:
+        # Game over message
+        if bool(state.is_game_over):
             over_indices = self.text_to_indices("GAMEOVER")
-            raster = jr.render_label(raster, 400, 300, over_indices, self.char_sprites)
+            raster = jr.render_label(raster, 850, 600, over_indices, self.char_sprites)
 
         return raster
 
-    def get_checker_position(self, point: int, index: int, player: int) -> tuple[int, int]:
-        triangle_width = 40
-        spacing = 15
-        base_y_top = 30
-        base_y_bottom = 400
+    def display(self, state):
+        raster = self.render(state)
+        frame = jnp.array(raster).astype(jnp.uint8)
+        surface = pygame.surfarray.make_surface(jnp.transpose(frame, (1, 0, 2)))
+
+        # Scale full frame to fit screen
+        surface = pygame.transform.smoothscale(surface, self.window_resolution)
+
+        self.screen.blit(surface, (0, 0))
+        pygame.display.flip()
+        self.clock.tick(30)
+
+        for event in pygame.event.get():
+            if event.type == pygame.QUIT or (
+                event.type == pygame.KEYDOWN and event.key == pygame.K_ESCAPE
+            ):
+                pygame.quit()
+                exit()
+
+    def get_checker_position(self, point, index, player):
+        triangle_width = 60
+        spacing = 24
+        base_y_top = 32
+        base_y_bottom = 544
 
         if point < 12:
-            x = 40 + point * triangle_width
+            x = 32 + point * triangle_width
             y = base_y_bottom - index * spacing
         else:
-            x = 40 + (23 - point) * triangle_width
+            x = 32 + (23 - point) * triangle_width
             y = base_y_top + index * spacing
 
         return int(x), int(y)
 
+    def close(self):
+        pygame.quit()
 
+    def load_char_sprites(self, chars: str, base_path: str) -> tuple[jnp.ndarray, dict]:
+        sprites = []
+        char_map = {}
+
+        for i, c in enumerate(chars):
+            file_path = os.path.join(base_path, f"{c}.npy")
+            if not os.path.exists(file_path):
+                raise FileNotFoundError(f"Sprite for '{c}' not found at: {file_path}")
+            sprite = jnp.load(file_path)
+            assert sprite.ndim == 3 and sprite.shape[2] == 4, f"Invalid sprite format for {c}"
+            sprites.append(sprite)
+            char_map[c] = i
+
+        padded_sprites, _ = jr.pad_to_match(sprites)
+        return jnp.stack(padded_sprites), char_map
+
+    def text_to_indices(self, text: str) -> jnp.ndarray:
+        return jnp.array([self.char_map[c] for c in text if c in self.char_map], dtype=jnp.int32)
 
 # class BackgammonRenderer(JAXGameRenderer):
 #     def __init__(self, env: JaxBackgammonEnv):
