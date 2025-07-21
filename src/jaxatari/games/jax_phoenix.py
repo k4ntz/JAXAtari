@@ -30,8 +30,9 @@ class PhoenixConstants(NamedTuple):
     MAX_BOSS_BLOCK_RED: int = 104
     PROJECTILE_WIDTH: int = 2
     PROJECTILE_HEIGHT: int = 4
-    ENEMY_WIDTH: int = 10
-    ENEMY_HEIGHT:int = 10
+    ENEMY_WIDTH: int = 4
+    ENEMY_HEIGHT:int = 6
+    WING_WIDTH: int = 5
     BLOCK_WIDTH:int = 4
     BLOCK_HEIGHT:int = 4
     SCORE_COLOR: Tuple[int, int, int] = (210, 210, 64)
@@ -167,6 +168,7 @@ class PhoenixState(NamedTuple):
     green_blocks: chex.Array
     invincibility: chex.Array
     invincibility_timer: chex.Array
+    bat_wings: chex.Array
     projectile_x: chex.Array = jnp.array(-1)  # Standardwert: kein Projektil
     projectile_y: chex.Array = jnp.array(-1)  # Standardwert: kein Projektil # Gegner Y-Positionen
     enemy_projectile_x: chex.Array = jnp.full((8,), -1) # Enemy projectile X-Positionen
@@ -355,6 +357,7 @@ class JaxPhoenix(JaxEnvironment[PhoenixState, PhoenixOberservation, PhoenixInfo,
     def bat_step(self, state):
         bat_step_size = 0.5
         active_bats = (state.enemies_x > -1) & (state.enemies_y < self.consts.HEIGHT + 10)
+        proj_pos = jnp.array([state.projectile_x, state.projectile_y])
 
         # Initialisiere neue Richtungen für jede Fledermaus
         new_directions = jnp.where(
@@ -370,13 +373,56 @@ class JaxPhoenix(JaxEnvironment[PhoenixState, PhoenixOberservation, PhoenixInfo,
 
         # Bewege Fledermäuse basierend auf ihrer individuellen Richtung
         new_enemies_x = jnp.where(active_bats, state.enemies_x + (new_directions * bat_step_size), state.enemies_x)
-
-        # Begrenze die Positionen innerhalb des Spielfelds
+        enemy_pos = jnp.stack([new_enemies_x, state.enemies_y], axis=1)
         new_enemies_x = jnp.clip(new_enemies_x, self.consts.PLAYER_BOUNDS[0], self.consts.PLAYER_BOUNDS[1])
+        def check_collision(entity_pos, projectile_pos):
+            enemy_x, enemy_y = entity_pos
+            proj_x, proj_y = projectile_pos
+            wing_left_x = enemy_x - 5
+            wing_y = enemy_y + 2
+            wing_right_x = enemy_x + 4
+            collision_x_left = (proj_x + self.consts.PROJECTILE_WIDTH > wing_left_x) & (
+                    proj_x < wing_left_x + self.consts.WING_WIDTH)
+            collision_y = (proj_y + self.consts.PROJECTILE_HEIGHT > wing_y) & (
+                    proj_y < enemy_y + 2)
+            collision_x_right = (proj_x + self.consts.PROJECTILE_WIDTH <= wing_right_x) & (
+                    proj_x <= wing_right_x + self.consts.WING_WIDTH)
+
+            return collision_x_left & collision_y, collision_x_right & collision_y
+
+        left_wing_collision, right_wing_collision = jax.vmap(lambda entity_pos: check_collision(entity_pos, proj_pos))(enemy_pos)
+        new_proj_y = jnp.where(jnp.any(left_wing_collision | right_wing_collision), -1, state.projectile_y)
+        def update_wing_state(current_state, left_hit, right_hit):
+            # current_state: int (-1,0,1,2), left_hit & right_hit: bool
+
+            # First handle left wing hit
+            updated = jnp.where(
+                left_hit,
+                jnp.where(current_state == 2, 1,  # both wings → right wing only
+                          jnp.where(current_state == 1, 0, current_state)),  # right only → none, else unchanged
+                current_state
+            )
+
+            # Then handle right wing hit
+            updated = jnp.where(
+                right_hit,
+                jnp.where(updated == 2, -1,  # both wings → left wing only
+                          jnp.where(updated == -1, 0, updated)),  # left only → none, else unchanged
+                updated
+            )
+
+            return updated
+
+        new_bat_wings = jax.vmap(update_wing_state)(state.bat_wings, left_wing_collision, right_wing_collision)
+        jax.debug.print("bat_wings: {}", new_bat_wings)
+
+
         state = state._replace(
             enemies_x=new_enemies_x.astype(jnp.float32),
             enemies_y=state.enemies_y.astype(jnp.float32),
-            enemy_direction=new_directions.astype(jnp.float32)
+            enemy_direction=new_directions.astype(jnp.float32),
+            projectile_y=new_proj_y,
+            bat_wings= new_bat_wings,
         )
 
         return state
@@ -498,11 +544,12 @@ class JaxPhoenix(JaxEnvironment[PhoenixState, PhoenixOberservation, PhoenixInfo,
             score = jnp.array(0), # Standardwert: Score=0
             lives=jnp.array(5), # Standardwert: 5 Leben
             player_respawn_timer=jnp.array(5),
-            level=jnp.array(5),
+            level=jnp.array(3),
             phoenix_cooldown=jnp.array(30),
             vertical_direction=jnp.full((8,),1.0),
             invincibility=jnp.array(False),
             invincibility_timer=jnp.array(0),
+            bat_wings=jnp.full((8,), 2),
 
             blue_blocks=self.consts.BLUE_BLOCK_POSITIONS.astype(jnp.float32),
             red_blocks=self.consts.RED_BLOCK_POSITIONS.astype(jnp.float32),
@@ -672,7 +719,9 @@ class JaxPhoenix(JaxEnvironment[PhoenixState, PhoenixOberservation, PhoenixInfo,
             red_blocks=state.red_blocks,
             green_blocks=state.green_blocks,
             invincibility=state.invincibility,
-            invincibility_timer=state.invincibility_timer
+            invincibility_timer=state.invincibility_timer,
+            bat_wings=state.bat_wings
+
         )
         observation = self._get_observation(return_state)
         env_reward = jnp.where(enemy_hit_detected, 1.0, 0.0)
@@ -707,6 +756,9 @@ class PhoenixRenderer(JAXGameRenderer):
             self.SPRITE_BLUE_BLOCK,
             self.SPRITE_GREEN_BLOCK,
             self.SPRITE_ABILITY,
+            self.SPRITE_MAIN_BAT_1,
+            self.SPRITE_LEFT_WING_BAT_1,
+            self.SPRITE_RIGHT_WING_BAT_1,
         ) = self.load_sprites()
     def load_sprites(self):
         MODULE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -728,6 +780,9 @@ class PhoenixRenderer(JAXGameRenderer):
         boss_block_blue = jr.loadFrame(os.path.join(MODULE_DIR, "./sprites/phoenix/blue_block.npy"))
         boss_block_green = jr.loadFrame(os.path.join(MODULE_DIR, "./sprites/phoenix/green_block.npy"))
         ability = jr.loadFrame(os.path.join(MODULE_DIR, "./sprites/phoenix/ability.npy"))
+        main_bat_1 = jr.loadFrame(os.path.join(MODULE_DIR, "./sprites/phoenix/bats/bats_1_main.npy"))
+        left_wing_bat_1 = jr.loadFrame(os.path.join(MODULE_DIR, "./sprites/phoenix/bats/bats_1_wing_left.npy"))
+        right_wing_bat_1 = jr.loadFrame(os.path.join(MODULE_DIR, "./sprites/phoenix/bats/bats_1_wing_right.npy"))
         SPRITE_ABILITY = ability
 
         SPRITE_PLAYER = jnp.expand_dims(player_sprites, axis=0)
@@ -747,6 +802,9 @@ class PhoenixRenderer(JAXGameRenderer):
         SPRITE_GREEN_BLOCK = boss_block_green
         DIGITS = jr.load_and_pad_digits(os.path.join(MODULE_DIR, "./sprites/phoenix/digits/{}.npy"))
         LIFE_INDICATOR = jr.loadFrame(os.path.join(MODULE_DIR, "./sprites/phoenix/life_indicator.npy"))
+        SPRITE_MAIN_BAT_1 = jnp.expand_dims(main_bat_1, axis=0)
+        SPRITE_LEFT_WING_BAT_1 = jnp.expand_dims(left_wing_bat_1, axis=0)
+        SPRITE_RIGHT_WING_BAT_1 = jnp.expand_dims(right_wing_bat_1, axis=0)
 
         return (
             SPRITE_PLAYER,
@@ -767,6 +825,9 @@ class PhoenixRenderer(JAXGameRenderer):
             SPRITE_BLUE_BLOCK,
             SPRITE_GREEN_BLOCK,
             SPRITE_ABILITY,
+            SPRITE_MAIN_BAT_1,
+            SPRITE_LEFT_WING_BAT_1,
+            SPRITE_RIGHT_WING_BAT_1,
         )
 
     # load sprites on module layer
@@ -796,8 +857,13 @@ class PhoenixRenderer(JAXGameRenderer):
         frame_enemy_projectile = jr.get_sprite_frame(self.SPRITE_ENEMY_PROJECTILE, 0)
         frame_boss = jr.get_sprite_frame(self.SPRITE_BOSS, 0)
 
+        frame_main_bat = jr.get_sprite_frame(self.SPRITE_MAIN_BAT_1, 0)
+        frame_left_wing_bat_1 = jr.get_sprite_frame(self.SPRITE_LEFT_WING_BAT_1, 0)
+        frame_right_wing_bat_1 = jr.get_sprite_frame(self.SPRITE_RIGHT_WING_BAT_1, 0)
 
-        def render_enemy(raster, enemy_pos):
+
+        def render_enemy(raster, input):
+            enemy_pos, wings = input
             x, y = enemy_pos
 
             def render_level1(r):
@@ -806,7 +872,32 @@ class PhoenixRenderer(JAXGameRenderer):
             def render_level2(r):
                 return jr.render_at(r, x, y, frame_enemy_2)
             def render_level3(r):
-                return jr.render_at(r, x, y, frame_bat_high_wings)
+                r = jr.render_at(r, x, y, frame_main_bat)
+
+                def no_wings(r):
+                    return r
+
+                def left_wing_only(r):
+                    return jr.render_at(r, x - 5, y+2, frame_left_wing_bat_1)
+
+                def right_wing_only(r):
+                    return jr.render_at(r, x + 4, y+2, frame_right_wing_bat_1)
+
+                def both_wings(r):
+                    r = jr.render_at(r, x - 5, y+2, frame_left_wing_bat_1)
+                    r = jr.render_at(r, x + 4, y+2, frame_right_wing_bat_1)
+                    return r
+                wing_idx = wings + 1
+                r = jax.lax.switch(
+                    wing_idx,
+                    [
+                        left_wing_only,  # 0: no wings
+                        no_wings,  # 1: left wing only
+                        right_wing_only,  # 2: right wing only
+                        both_wings,  # 3: both wings
+                    ], r
+                )
+                return r
             def render_level4(r):
                 return jr.render_at(r, x, y, frame_bat_2_high_wings)
             def render_level5(r):
@@ -829,7 +920,9 @@ class PhoenixRenderer(JAXGameRenderer):
 
             return raster, None
         enemy_positions = jnp.stack((state.enemies_x, state.enemies_y), axis=1)
-        raster, _ = jax.lax.scan(render_enemy, raster, enemy_positions)
+        wings_array = jnp.full((enemy_positions.shape[0],), state.bat_wings)
+        inputs = (enemy_positions, wings_array)
+        raster, _ = jax.lax.scan(render_enemy, raster, inputs)
 
         # Render player projectiles
         def render_player_projectile(r):
