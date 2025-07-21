@@ -17,15 +17,15 @@ class FreewayConstants(NamedTuple):
     player_width: int = 8
     player_height: int = 8
     num_stages: int = 8
-    stage_spacing: int = 20 # ursprünglich 16
+    stage_spacing: int = 16 # ursprünglich 16
     stage_borders: List[int] = None
-    top_border: int = 15
-    top_path: int = 30 # ursprünglich 8
-    bottom_border: int = 185
+    top_border: int = 15 # oberer Rand des Spielfelds
+    top_path: int = 30 # ursprünglich 8 # abstand vom oberen Rand bis zur ersten Stage
+    bottom_border: int = 160
 
 
     stage_borders = [
-        top_path - 5,
+        top_path, # TOP
         top_border + top_path,  # Stage 1
         1 * stage_spacing + (top_border + top_path),  # Stage 2
         2 * stage_spacing + (top_border + top_path),  # Stage 3
@@ -33,7 +33,7 @@ class FreewayConstants(NamedTuple):
         4 * stage_spacing + (top_border + top_path),  # Stage 5
         5 * stage_spacing + (top_border + top_path),  # Stage 6
         6 * stage_spacing + (top_border + top_path),  # Stage 7
-        bottom_border
+        7 * stage_spacing + (top_border + top_path),  # BOTTOM
     ]
 
 
@@ -320,9 +320,12 @@ class FreewayRenderer(JAXGameRenderer):
         # --- Stages rendern ---
         stage_sprite = jr.get_sprite_frame(self.sprites['STAGE'], 0)
         stage_height = stage_sprite.shape[0]
-        stage_x = 25 # TODO make this dynamic based on the sprite width
+        stage_x = (self.consts.screen_width - stage_sprite.shape[1]) // 2 # Center the stage horizontally
 
         for stage_y in self.consts.stage_borders:
+            # oberste und unterste stage nicht rendern
+            if stage_y == self.consts.stage_borders[0] or stage_y == self.consts.stage_borders[-1]:
+                continue
             raster = jr.render_at(
                 raster,
                 stage_x,
@@ -333,9 +336,10 @@ class FreewayRenderer(JAXGameRenderer):
         # --- Top und Bottom rendern ---
         top_sprite = jr.get_sprite_frame(self.sprites['TOP'], 0)
         bottom_sprite = jr.get_sprite_frame(self.sprites['BOTTOM'], 0)
-        top_x = stage_x - 8
-        top_y = top_sprite.shape[0] // 2
-        bottom_x = stage_x - 8
+        top_x = (self.consts.screen_width - top_sprite.shape[1]) // 2  # Center the top sprite horizontally
+        # top_y = top_sprite.shape[0] // 2
+        top_y = self.consts.top_border
+        bottom_x = (self.consts.screen_width - bottom_sprite.shape[1]) // 2  # Center the bottom sprite horizontally
         bottom_y = self.consts.stage_borders[-1]  # 5 Pixel unter der letzten Stage
         raster = jr.render_at(
             raster,
