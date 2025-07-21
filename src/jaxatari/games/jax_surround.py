@@ -1,3 +1,4 @@
+import os
 import jax
 import jax.numpy as jnp
 from functools import partial
@@ -5,6 +6,7 @@ from typing import NamedTuple, Tuple, Optional
 
 from jaxatari.environment import JaxEnvironment, JAXAtariAction as Action
 from jaxatari.renderers import JAXGameRenderer
+from jaxatari.rendering import jax_rendering_utils as jr
 import jaxatari.spaces as spaces
 
 
@@ -34,6 +36,8 @@ class SurroundState(NamedTuple):
     p2_trail: jnp.ndarray  # (GRID_WIDTH, GRID_HEIGHT)
     terminated: jnp.ndarray  # () bool
     time: jnp.ndarray  # step counter
+    p1_score: jnp.ndarray  # () int32
+    p2_score: jnp.ndarray  # () int32
 
 
 class SurroundObservation(NamedTuple):
@@ -56,23 +60,47 @@ class SurroundRenderer(JAXGameRenderer):
         super().__init__(consts)
         self.consts = consts
 
+        module_dir = os.path.dirname(os.path.abspath(__file__))
+        digit_path = os.path.join(module_dir, "sprites/seaquest/digits/{}" + ".npy")
+        digits = jr.load_and_pad_digits(digit_path)
+        p1_color = jnp.array(self.consts.P1_TRAIL_COLOR, dtype=jnp.uint8)
+        p2_color = jnp.array(self.consts.P2_TRAIL_COLOR, dtype=jnp.uint8)
+        self.p1_digits = digits.at[..., :3].set(jnp.where(digits[..., 3:] > 0, p1_color, 0))
+        self.p2_digits = digits.at[..., :3].set(jnp.where(digits[..., 3:] > 0, p2_color, 0))
+
     def render(self, state: SurroundState) -> jnp.ndarray:  # pragma: no cover - visual
         """Render the current game state as a simple RGB image."""
-        img = jnp.ones(
-            (self.consts.GRID_HEIGHT, self.consts.GRID_WIDTH, 3), dtype=jnp.uint8
-        ) * jnp.array(self.consts.BACKGROUND_COLOR, dtype=jnp.uint8)
-        img = img.at[state.p1_trail.T == 1].set(
-            jnp.array(self.consts.P1_TRAIL_COLOR, dtype=jnp.uint8)
-        )
-        img = img.at[state.p2_trail.T == 1].set(
-            jnp.array(self.consts.P2_TRAIL_COLOR, dtype=jnp.uint8)
-        )
-        img = img.at[tuple(state.p1_pos[::-1])].set(
-            jnp.array(self.consts.P1_TRAIL_COLOR, dtype=jnp.uint8)
-        )
-        img = img.at[tuple(state.p2_pos[::-1])].set(
-            jnp.array(self.consts.P2_TRAIL_COLOR, dtype=jnp.uint8)
-        )
+        bg = jnp.array(self.consts.BACKGROUND_COLOR, dtype=jnp.uint8)
+        width, height = self.consts.SCREEN_SIZE
+        img = jnp.ones((height, width, 3), dtype=jnp.uint8) * bg
+
+        field_h = self.consts.GRID_HEIGHT * self.consts.CELL_SIZE[1]
+        y_off = height - field_h
+        playfield = jnp.ones((field_h, width, 3), dtype=jnp.uint8) * bg
+
+        def upscale(mask):
+            mask = jnp.repeat(mask, self.consts.CELL_SIZE[1], axis=0)
+            return jnp.repeat(mask, self.consts.CELL_SIZE[0], axis=1)
+
+        p1_mask = upscale(state.p1_trail.T)
+        playfield = playfield.at[p1_mask == 1].set(jnp.array(self.consts.P1_TRAIL_COLOR, dtype=jnp.uint8))
+        p2_mask = upscale(state.p2_trail.T)
+        playfield = playfield.at[p2_mask == 1].set(jnp.array(self.consts.P2_TRAIL_COLOR, dtype=jnp.uint8))
+
+        p1x = state.p1_pos[0] * self.consts.CELL_SIZE[0]
+        p1y = state.p1_pos[1] * self.consts.CELL_SIZE[1]
+        playfield = playfield.at[p1y:p1y+self.consts.CELL_SIZE[1], p1x:p1x+self.consts.CELL_SIZE[0], :].set(jnp.array(self.consts.P1_TRAIL_COLOR, dtype=jnp.uint8))
+
+        p2x = state.p2_pos[0] * self.consts.CELL_SIZE[0]
+        p2y = state.p2_pos[1] * self.consts.CELL_SIZE[1]
+        playfield = playfield.at[p2y:p2y+self.consts.CELL_SIZE[1], p2x:p2x+self.consts.CELL_SIZE[0], :].set(jnp.array(self.consts.P2_TRAIL_COLOR, dtype=jnp.uint8))
+
+        img = img.at[y_off:y_off+field_h, :width, :].set(playfield)
+
+        digit_p1 = jr.get_sprite_frame(self.p1_digits, state.p1_score)
+        digit_p2 = jr.get_sprite_frame(self.p2_digits, state.p2_score)
+        img = jr.render_at(img, 10, 2, digit_p1)
+        img = jr.render_at(img, width - 10 - digit_p2.shape[1], 2, digit_p2)
         return img
 
 
@@ -100,7 +128,16 @@ class JaxSurround(
         p2_start = jnp.array([3 * self.consts.GRID_WIDTH // 4, self.consts.GRID_HEIGHT // 2], dtype=jnp.int32)
         p1_trail = jnp.zeros((self.consts.GRID_WIDTH, self.consts.GRID_HEIGHT), dtype=jnp.int32)
         p2_trail = jnp.zeros_like(p1_trail)
-        state = SurroundState(p1_start, p2_start, p1_trail, p2_trail, jnp.array(0, dtype=jnp.int32), jnp.array(0, dtype=jnp.int32))
+        state = SurroundState(
+            p1_start,
+            p2_start,
+            p1_trail,
+            p2_trail,
+            jnp.array(0, dtype=jnp.int32),
+            jnp.array(0, dtype=jnp.int32),
+            jnp.array(0, dtype=jnp.int32),
+            jnp.array(0, dtype=jnp.int32),
+        )
         return self._get_observation(state), state
 
     @partial(jax.jit, static_argnums=(0,))
@@ -165,6 +202,10 @@ class JaxSurround(
 
         terminated = jnp.logical_or(p1_hit, p2_hit)
 
+        new_p1_score = state.p1_score + jnp.where(p2_hit & ~p1_hit, 1, 0)
+        new_p2_score = state.p2_score + jnp.where(p1_hit & ~p2_hit, 1, 0)
+        terminated = jnp.logical_or(terminated, jnp.logical_or(new_p1_score >= 10, new_p2_score >= 10))
+
         next_state = SurroundState(
             new_p1,
             new_p2,
@@ -172,6 +213,8 @@ class JaxSurround(
             p2_trail,
             terminated.astype(jnp.int32),
             state.time + 1,
+            new_p1_score,
+            new_p2_score,
         )
 
         reward_p1 = jnp.where(p1_hit, -1.0, jnp.where(p2_hit, 1.0, 0.0))
@@ -205,7 +248,8 @@ class JaxSurround(
 
     @partial(jax.jit, static_argnums=(0,))
     def _get_done(self, state: SurroundState) -> jnp.ndarray:
-        return state.terminated.astype(jnp.bool_)
+        reached_score = jnp.logical_or(state.p1_score >= 10, state.p2_score >= 10)
+        return jnp.logical_or(state.terminated, reached_score).astype(jnp.bool_)
 
     def action_space(self) -> spaces.Discrete:
         """Returns the action space for the controllable player."""
@@ -223,7 +267,7 @@ class JaxSurround(
         return spaces.Box(
             low=0,
             high=255,
-            shape=(self.consts.GRID_HEIGHT, self.consts.GRID_WIDTH, 3),
+            shape=(self.consts.SCREEN_SIZE[1], self.consts.SCREEN_SIZE[0], 3),
             dtype=jnp.uint8,
         )
 
