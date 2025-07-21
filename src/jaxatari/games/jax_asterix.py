@@ -19,22 +19,22 @@ class FreewayConstants(NamedTuple):
     num_stages: int = 8
     stage_spacing: int = 16 # ursprünglich 16
     stage_borders: List[int] = None
-    top_border: int = 15 # oberer Rand des Spielfelds
-    top_path: int = 30 # ursprünglich 8 # abstand vom oberen Rand bis zur ersten Stage
-    bottom_border: int = 160
+    top_border: int = 25 # oberer Rand des Spielfelds
+    bottom_border: int = 8 * stage_spacing + top_border
     cooldown_frames: int = 8 # Cooldown frames for lane changes
+    num_lives: int = 3 # Anzahl der Leben
 
 
     stage_borders = [
-        top_path, # TOP
-        top_border + top_path,  # Stage 1
-        1 * stage_spacing + (top_border + top_path),  # Stage 2
-        2 * stage_spacing + (top_border + top_path),  # Stage 3
-        3 * stage_spacing + (top_border + top_path),  # Stage 4
-        4 * stage_spacing + (top_border + top_path),  # Stage 5
-        5 * stage_spacing + (top_border + top_path),  # Stage 6
-        6 * stage_spacing + (top_border + top_path),  # Stage 7
-        7 * stage_spacing + (top_border + top_path),  # BOTTOM
+        top_border, # TOP
+        1 * stage_spacing + top_border,  # Stage 2
+        2 * stage_spacing + top_border,  # Stage 3
+        3 * stage_spacing + top_border,  # Stage 4
+        4 * stage_spacing + top_border,  # Stage 5
+        5 * stage_spacing + top_border,  # Stage 6
+        6 * stage_spacing + top_border,  # Stage 7
+        7 * stage_spacing + top_border,  # Stage 8
+        8 * stage_spacing + top_border,  # BOTTOM
     ]
 
 
@@ -63,6 +63,7 @@ class FreewayObservation(NamedTuple):
 class FreewayInfo(NamedTuple):
     all_rewards: jnp.ndarray
 
+
 class JaxFreeway(JaxEnvironment[FreewayState, FreewayObservation, FreewayInfo, FreewayConstants]):
     def __init__(self, consts: FreewayConstants = None, reward_funcs: list[callable] = None):
         if consts is None:
@@ -74,21 +75,19 @@ class JaxFreeway(JaxEnvironment[FreewayState, FreewayObservation, FreewayInfo, F
         self.state = self.reset()
         self.renderer = FreewayRenderer()
 
-
     def reset(self, key: jax.random.PRNGKey = None) -> Tuple[FreewayObservation, FreewayState]:
         """Initialize a new game state"""
-        # Start chicken at bottom
-        player_x = self.consts.screen_width // 2
         stage_borders = jnp.array(self.consts.stage_borders, dtype=jnp.int32)
+        player_x = self.consts.screen_width // 2
         player_y = (stage_borders[-2] + stage_borders[-1]) // 2
 
         state = FreewayState(
             player_x =jnp.array(player_x, dtype=jnp.int32),
             player_y=jnp.array(player_y, dtype=jnp.int32),
-            score=jnp.array(0, dtype=jnp.int32),
-            lives=jnp.array(3, dtype=jnp.int32),  # 3 Leben
+            score=jnp.array(0, dtype=jnp.int32), # Start with 0 points
+            lives=jnp.array(self.consts.num_lives, dtype=jnp.int32),  # 3 Leben
             game_over=jnp.array(False, dtype=jnp.bool_),
-            stage_cooldown = jnp.array(0, dtype=jnp.int32), # Cooldown initial 0
+            stage_cooldown = jnp.array(self.consts.cooldown_frames, dtype=jnp.int32), # Cooldown initial 0
         )
 
         return self._get_observation(state), state
@@ -128,14 +127,14 @@ class JaxFreeway(JaxEnvironment[FreewayState, FreewayObservation, FreewayInfo, F
         dy = jnp.where(action == Action.UP, -1.0, jnp.where(action == Action.DOWN, 1.0, 0.0))
         dx = jnp.where(action == Action.LEFT, -1.0, jnp.where(action == Action.RIGHT, 1.0, 0.0))
 
+        stage_left_x = (self.consts.screen_width - self.renderer.sprites['STAGE'][0].shape[1]) // 2
+        stage_right_x = stage_left_x + self.renderer.sprites['STAGE'][0].shape[1]
 
         new_x = jnp.clip(
             state.player_x + dx.astype(jnp.int32),
-            0,
-            self.consts.screen_width - self.consts.player_width,
+            stage_left_x,
+            stage_right_x - self.consts.player_width,
         ).astype(jnp.int32)
-
-
 
         new_score = state.score
 
@@ -203,9 +202,9 @@ class JaxFreeway(JaxEnvironment[FreewayState, FreewayObservation, FreewayInfo, F
         Actions are:
         0: NOOP
         1: UP
-        2: DOWN
+        2: RIGHTS
         3: LEFT
-        4: RIGHT
+        4: DOWN
         """
         return spaces.Discrete(5)
 
@@ -262,7 +261,6 @@ class JaxFreeway(JaxEnvironment[FreewayState, FreewayObservation, FreewayInfo, F
 
 
 class FreewayRenderer(JAXGameRenderer):
-
     def __init__(self, consts: FreewayConstants = None):
         super().__init__()
         self.consts = consts or FreewayConstants()
@@ -339,9 +337,9 @@ class FreewayRenderer(JAXGameRenderer):
         bottom_sprite = jr.get_sprite_frame(self.sprites['BOTTOM'], 0)
         top_x = (self.consts.screen_width - top_sprite.shape[1]) // 2  # Center the top sprite horizontally
         # top_y = top_sprite.shape[0] // 2
-        top_y = self.consts.top_border
+        top_y = self.consts.top_border - self.consts.stage_spacing + stage_height
         bottom_x = (self.consts.screen_width - bottom_sprite.shape[1]) // 2  # Center the bottom sprite horizontally
-        bottom_y = self.consts.stage_borders[-1]  # 5 Pixel unter der letzten Stage
+        bottom_y = self.consts.stage_borders[-1]
         raster = jr.render_at(
             raster,
             top_x,
@@ -374,9 +372,6 @@ class FreewayRenderer(JAXGameRenderer):
         # ----------- SCORE -------------
         # Define score positions and spacing
         player_score_rightmost_digit_x = 49  # X position for the START of the player's rightmost digit (or single digit)
-        enemy_score_rightmost_digit_x = 114  # X position for the START of the enemy's single '0' digit
-        score_y = 5
-        score_spacing = 8  # Spacing between digits (should match digit width ideally)
         max_score_digits = 6
 
         # Get digit sprites
@@ -406,6 +401,34 @@ class FreewayRenderer(JAXGameRenderer):
         raster = jax.lax.cond(
             digit_sprites is not None,
             render_scores,
+            lambda r: r,
+            raster
+        )
+
+        # ----------- LIVES -------------
+        num_lives = self.consts.num_lives
+        life_sprite = jr.get_sprite_frame(self.sprites['ASTERIX'], 0)
+        life_width = life_sprite.shape[1]
+        life_height = life_sprite.shape[0]
+        lives_spacing = 4  # Abstand zwischen den Leben
+        total_lives_width = num_lives * life_width + (num_lives - 1) * lives_spacing
+        lives_start_x = (self.consts.screen_width - total_lives_width) // 2
+        lives_y = bottom_y + bottom_sprite.shape[0] + 3  # 3 Pixel unter Bottom
+
+        def render_lives(raster_to_update):
+            for i in range(num_lives):
+                x = lives_start_x + i * (life_width + lives_spacing)
+                raster_to_update = jr.render_at(
+                    raster_to_update,
+                    x,
+                    lives_y,
+                    life_sprite
+                )
+            return raster_to_update
+
+        raster = jax.lax.cond(
+            num_lives > 0,
+            render_lives,
             lambda r: r,
             raster
         )
