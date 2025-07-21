@@ -11,7 +11,7 @@ from jaxatari.renderers import JAXGameRenderer
 import jaxatari.rendering.jax_rendering_utils as jr
 
 
-class FreewayConstants(NamedTuple):
+class AsterixConstants(NamedTuple):
     screen_width: int = 160
     screen_height: int = 210
     player_width: int = 8
@@ -19,7 +19,7 @@ class FreewayConstants(NamedTuple):
     num_stages: int = 8
     stage_spacing: int = 16 # ursprünglich 16
     stage_borders: List[int] = None
-    top_border: int = 25 # oberer Rand des Spielfelds
+    top_border: int = 23 # oberer Rand des Spielfelds
     bottom_border: int = 8 * stage_spacing + top_border
     cooldown_frames: int = 8 # Cooldown frames for lane changes
     num_lives: int = 3 # Anzahl der Leben
@@ -27,18 +27,18 @@ class FreewayConstants(NamedTuple):
 
     stage_borders = [
         top_border, # TOP
-        1 * stage_spacing + top_border,  # Stage 2
-        2 * stage_spacing + top_border,  # Stage 3
-        3 * stage_spacing + top_border,  # Stage 4
-        4 * stage_spacing + top_border,  # Stage 5
-        5 * stage_spacing + top_border,  # Stage 6
-        6 * stage_spacing + top_border,  # Stage 7
-        7 * stage_spacing + top_border,  # Stage 8
+        1 * stage_spacing + top_border,  # Stage 1
+        2 * stage_spacing + top_border,  # Stage 2
+        3 * stage_spacing + top_border,  # Stage 3
+        4 * stage_spacing + top_border,  # Stage 4
+        5 * stage_spacing + top_border,  # Stage 5
+        6 * stage_spacing + top_border,  # Stage 6
+        7 * stage_spacing + top_border,  # Stage 7
         8 * stage_spacing + top_border,  # BOTTOM
     ]
 
 
-class FreewayState(NamedTuple):
+class AsterixState(NamedTuple):
     """Represents the current state of the game"""
     player_x: chex.Array
     player_y: chex.Array
@@ -55,33 +55,33 @@ class EntityPosition(NamedTuple):
     height: jnp.ndarray
 
 
-class FreewayObservation(NamedTuple):
+class AsterixObservation(NamedTuple):
     player: EntityPosition
     score: jnp.ndarray
 
 
-class FreewayInfo(NamedTuple):
+class AsterixInfo(NamedTuple):
     all_rewards: jnp.ndarray
 
 
-class JaxFreeway(JaxEnvironment[FreewayState, FreewayObservation, FreewayInfo, FreewayConstants]):
-    def __init__(self, consts: FreewayConstants = None, reward_funcs: list[callable] = None):
+class JaxAsterix(JaxEnvironment[AsterixState, AsterixObservation, AsterixInfo, AsterixConstants]):
+    def __init__(self, consts: AsterixConstants = None, reward_funcs: list[callable] = None):
         if consts is None:
-            consts = FreewayConstants()
+            consts = AsterixConstants()
         super().__init__(consts)
         if reward_funcs is not None:
             reward_funcs = tuple(reward_funcs)
         self.reward_funcs = reward_funcs
         self.state = self.reset()
-        self.renderer = FreewayRenderer()
+        self.renderer = AsterixRenderer()
 
-    def reset(self, key: jax.random.PRNGKey = None) -> Tuple[FreewayObservation, FreewayState]:
+    def reset(self, key: jax.random.PRNGKey = None) -> Tuple[AsterixObservation, AsterixState]:
         """Initialize a new game state"""
         stage_borders = jnp.array(self.consts.stage_borders, dtype=jnp.int32)
         player_x = self.consts.screen_width // 2
         player_y = (stage_borders[-2] + stage_borders[-1]) // 2
 
-        state = FreewayState(
+        state = AsterixState(
             player_x =jnp.array(player_x, dtype=jnp.int32),
             player_y=jnp.array(player_y, dtype=jnp.int32),
             score=jnp.array(0, dtype=jnp.int32), # Start with 0 points
@@ -93,8 +93,8 @@ class JaxFreeway(JaxEnvironment[FreewayState, FreewayObservation, FreewayInfo, F
         return self._get_observation(state), state
 
     @partial(jax.jit, static_argnums=(0,))
-    def step(self, state: FreewayState, action: int) -> tuple[
-        FreewayObservation, FreewayState, float, bool, FreewayInfo]:
+    def step(self, state: AsterixState, action: int) -> tuple[
+        AsterixObservation, AsterixState, float, bool, AsterixInfo]:
         """Take a step in the game given an action"""
         player_height = self.consts.player_height
 
@@ -147,7 +147,7 @@ class JaxFreeway(JaxEnvironment[FreewayState, FreewayObservation, FreewayInfo, F
             state.game_over,
         )
 
-        new_state = FreewayState(
+        new_state = AsterixState(
             player_x=new_x,
             player_y=new_y,
             lives=state.lives,
@@ -164,7 +164,7 @@ class JaxFreeway(JaxEnvironment[FreewayState, FreewayObservation, FreewayInfo, F
         return obs, new_state, env_reward, done, info
 
     @partial(jax.jit, static_argnums=(0,))
-    def _get_observation(self, state: FreewayState):
+    def _get_observation(self, state: AsterixState):
         # create chicken
         player = EntityPosition(
             x=state.player_x,
@@ -174,18 +174,18 @@ class JaxFreeway(JaxEnvironment[FreewayState, FreewayObservation, FreewayInfo, F
         )
 
 
-        return FreewayObservation(player=player, score=state.score)
+        return AsterixObservation(player=player, score=state.score)
 
     @partial(jax.jit, static_argnums=(0,))
-    def _get_info(self, state: FreewayState, all_rewards: chex.Array = None) -> FreewayInfo:
-        return FreewayInfo(all_rewards=all_rewards)
+    def _get_info(self, state: AsterixState, all_rewards: chex.Array = None) -> AsterixInfo:
+        return AsterixInfo(all_rewards=all_rewards)
 
     @partial(jax.jit, static_argnums=(0,))
-    def _get_reward(self, previous_state: FreewayState, state: FreewayState):
+    def _get_reward(self, previous_state: AsterixState, state: AsterixState):
         return state.score - previous_state.score
 
     @partial(jax.jit, static_argnums=(0,))
-    def _get_all_reward(self, previous_state: FreewayState, state: FreewayState):
+    def _get_all_reward(self, previous_state: AsterixState, state: AsterixState):
         if self.reward_funcs is None:
             return jnp.zeros(1)
         rewards = jnp.array(
@@ -194,11 +194,11 @@ class JaxFreeway(JaxEnvironment[FreewayState, FreewayObservation, FreewayInfo, F
         return rewards
 
     @partial(jax.jit, static_argnums=(0,))
-    def _get_done(self, state: FreewayState) -> bool:
+    def _get_done(self, state: AsterixState) -> bool:
         return state.game_over
 
     def action_space(self) -> spaces.Discrete:
-        """Returns the action space for Freeway.
+        """Returns the action space for Asterix.
         Actions are:
         0: NOOP
         1: UP
@@ -209,7 +209,7 @@ class JaxFreeway(JaxEnvironment[FreewayState, FreewayObservation, FreewayInfo, F
         return spaces.Discrete(5)
 
     def observation_space(self) -> spaces.Dict: # TODO kann entfernt werden? wird nicht verwendet / benötigt
-        """Returns the observation space for Freeway.
+        """Returns the observation space for Asterix.
         The observation contains:
         - player: EntityPosition (x, y, width, height)
         - score: int (0-99)
@@ -226,7 +226,7 @@ class JaxFreeway(JaxEnvironment[FreewayState, FreewayObservation, FreewayInfo, F
         })
 
     def image_space(self) -> spaces.Box: # TODO kann entfernt werden? wird nicht verwendet / benötigt
-        """Returns the image space for Freeway.
+        """Returns the image space for Asterix.
         The image is a RGB image with shape (210, 160, 3).
         """
         return spaces.Box(
@@ -236,11 +236,11 @@ class JaxFreeway(JaxEnvironment[FreewayState, FreewayObservation, FreewayInfo, F
             dtype=jnp.uint8
         )
 
-    def render(self, state: FreewayState) -> jnp.ndarray:
+    def render(self, state: AsterixState) -> jnp.ndarray:
         """Render the game state to a raster image."""
         return self.renderer.render(state)
 
-    def obs_to_flat_array(self, obs: FreewayObservation) -> jnp.ndarray: # TODO kann entfernt werden? wird nicht verwendet / benötigt
+    def obs_to_flat_array(self, obs: AsterixObservation) -> jnp.ndarray: # TODO kann entfernt werden? wird nicht verwendet / benötigt
         """Convert observation to a flat array."""
         # Flatten chicken position and dimensions
         chicken_flat = jnp.concatenate([
@@ -260,14 +260,14 @@ class JaxFreeway(JaxEnvironment[FreewayState, FreewayObservation, FreewayInfo, F
         return jnp.concatenate([chicken_flat, score_flat]).astype(jnp.int32) #TODO add cars_flat back an zweiter stelle when implemented
 
 
-class FreewayRenderer(JAXGameRenderer):
-    def __init__(self, consts: FreewayConstants = None):
+class AsterixRenderer(JAXGameRenderer):
+    def __init__(self, consts: AsterixConstants = None):
         super().__init__()
-        self.consts = consts or FreewayConstants()
+        self.consts = consts or AsterixConstants()
         self.sprites, self.offsets = self._load_sprites()
 
     def _load_sprites(self):
-        """Load all sprites required for Freeway rendering."""
+        """Load all sprites required for Asterix rendering."""
         MODULE_DIR = os.path.dirname(os.path.abspath(__file__))
         sprite_path = os.path.join(MODULE_DIR, "sprites/asterix/")
 
@@ -280,7 +280,7 @@ class FreewayRenderer(JAXGameRenderer):
             return frame.astype(jnp.uint8)
 
         sprite_names = [
-            'player_hit', 'player_idle', 'ASTERIX', 'OBELIX', 'STAGE', 'TOP', 'BOTTOM',
+            'ASTERIX', 'OBELIX', 'STAGE', 'TOP', 'BOTTOM',
         ]
 
         for name in sprite_names:
@@ -298,9 +298,9 @@ class FreewayRenderer(JAXGameRenderer):
         offsets['ASTERIX'] = player_offsets[1] # player_idle sprite offset
 
         # --- Load Digit Sprites ---
-        score_digit_path = os.path.join(sprite_path, 'score_{}.npy')
-        digits = jr.load_and_pad_digits(score_digit_path, num_chars=10)
-        sprites['score'] = digits
+        digit_path = os.path.join(sprite_path, 'DIGIT_{}.npy')
+        digits = jr.load_and_pad_digits(digit_path, num_chars=10)
+        sprites['digit'] = digits
 
         for key in sprites.keys():
             if isinstance(sprites[key], (list, tuple)):
@@ -375,7 +375,7 @@ class FreewayRenderer(JAXGameRenderer):
         max_score_digits = 6
 
         # Get digit sprites
-        digit_sprites = self.sprites.get('score', None)
+        digit_sprites = self.sprites.get('digit', None)
 
         # Define the function to render scores if sprites are available
         def render_scores(raster_to_update):
@@ -410,13 +410,13 @@ class FreewayRenderer(JAXGameRenderer):
         life_sprite = jr.get_sprite_frame(self.sprites['ASTERIX'], 0)
         life_width = life_sprite.shape[1]
         life_height = life_sprite.shape[0]
-        lives_spacing = 4  # Abstand zwischen den Leben
+        lives_spacing = 8  # Abstand zwischen den Leben
         total_lives_width = num_lives * life_width + (num_lives - 1) * lives_spacing
         lives_start_x = (self.consts.screen_width - total_lives_width) // 2
         lives_y = bottom_y + bottom_sprite.shape[0] + 3  # 3 Pixel unter Bottom
 
         def render_lives(raster_to_update):
-            for i in range(num_lives):
+            for i in range(num_lives-1):
                 x = lives_start_x + i * (life_width + lives_spacing)
                 raster_to_update = jr.render_at(
                     raster_to_update,
