@@ -383,11 +383,11 @@ class AsterixRenderer(JAXGameRenderer):
             num_digits = jnp.maximum(1, jnp.floor(jnp.log10(jnp.maximum(state.score, 1))) + 1).astype(jnp.int32)
             digit_height = digit_sprites[0].shape[0]
             score_spacing = 8
-            center_x = (self.consts.screen_width - (num_digits * score_spacing)) // 2
-            score_y = self.consts.screen_height - digit_height - 5
+            score_x = ((self.consts.screen_width - (num_digits * score_spacing)) // 2) + 20
+            score_y = bottom_y + bottom_sprite.shape[0] + jr.get_sprite_frame(self.sprites['ASTERIX'], 0).shape[0] + 6
             raster_updated = jr.render_label_selective(
                 raster_to_update,
-                center_x,
+                score_x,
                 score_y,
                 player_score_digits_indices,
                 digit_sprites[0],
