@@ -7,8 +7,8 @@ from jaxatari.environment import JAXAtariAction as Action
 def test_surround_start_positions():
     env = jaxatari.make("surround")
     _obs, state = env.reset()
-    assert tuple(state.p1_pos.tolist()) == env.consts.P1_START_POS
-    assert tuple(state.p2_pos.tolist()) == env.consts.P2_START_POS
+    assert tuple(state.pos0.tolist()) == env.consts.P1_START_POS
+    assert tuple(state.pos1.tolist()) == env.consts.P2_START_POS
 
 
 def test_surround_crossing_no_crash():
@@ -31,5 +31,5 @@ def test_surround_wall_crash():
         if done:
             break
     assert bool(done)
-    assert state.p2_score == 1
+    assert state.score1 == 1
     assert reward == -1.0
