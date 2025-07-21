@@ -22,6 +22,7 @@ class FreewayConstants(NamedTuple):
     top_border: int = 15 # oberer Rand des Spielfelds
     top_path: int = 30 # ursprünglich 8 # abstand vom oberen Rand bis zur ersten Stage
     bottom_border: int = 160
+    cooldown_frames: int = 8 # Cooldown frames for lane changes
 
 
     stage_borders = [
@@ -98,7 +99,7 @@ class JaxFreeway(JaxEnvironment[FreewayState, FreewayObservation, FreewayInfo, F
         """Take a step in the game given an action"""
         player_height = self.consts.player_height
 
-        COOLDOWN_FRAMES = 8  # Cooldown frames for lane changes
+        cooldown_frames = self.consts.cooldown_frames  # Cooldown frames for lane changes
         can_switch_stage = state.stage_cooldown <= 0
 
         stage_borders = jnp.array(self.consts.stage_borders, dtype=jnp.int32)
@@ -120,7 +121,7 @@ class JaxFreeway(JaxEnvironment[FreewayState, FreewayObservation, FreewayInfo, F
 
         new_cooldown = jnp.where(
             can_switch_stage & ((action == Action.UP) | (action == Action.DOWN)),
-            COOLDOWN_FRAMES,
+            cooldown_frames,
             jnp.maximum(state.stage_cooldown - 1, 0)
         )
 
