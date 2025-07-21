@@ -9,12 +9,19 @@ import jaxatari.spaces as spaces
 
 
 class SurroundConstants(NamedTuple):
-    """Parameters defining the Surround grid."""
+    """Parameters defining the Surround grid and visuals."""
 
-    GRID_WIDTH: int = 20
-    GRID_HEIGHT: int = 20
+    # Playfield layout
+    GRID_WIDTH: int = 40
+    GRID_HEIGHT: int = 24
+
+    # Mapping from grid cells to screen pixels
+    CELL_SIZE: Tuple[int, int] = (4, 8)  # (width, height)
     SCREEN_SIZE: Tuple[int, int] = (160, 210)
-    PLAYER_COLOR: Tuple[int, int, int] = (255, 255, 255)
+
+    # Colors
+    P1_TRAIL_COLOR: Tuple[int, int, int] = (0, 255, 0)  # green
+    P2_TRAIL_COLOR: Tuple[int, int, int] = (160, 32, 240)  # purple
     BACKGROUND_COLOR: Tuple[int, int, int] = (0, 0, 0)
 
 
@@ -50,12 +57,22 @@ class SurroundRenderer(JAXGameRenderer):
         self.consts = consts
 
     def render(self, state: SurroundState) -> jnp.ndarray:  # pragma: no cover - visual
-        # Produce a simple RGB array where player trails are drawn.
-        img = jnp.zeros((self.consts.GRID_HEIGHT, self.consts.GRID_WIDTH, 3), dtype=jnp.uint8)
-        img = img.at[state.p1_trail == 1].set(jnp.array(self.consts.PLAYER_COLOR, dtype=jnp.uint8))
-        img = img.at[state.p2_trail == 1].set(jnp.array([200, 100, 100], dtype=jnp.uint8))
-        img = img.at[tuple(state.p1_pos[::-1])].set(jnp.array(self.consts.PLAYER_COLOR, dtype=jnp.uint8))
-        img = img.at[tuple(state.p2_pos[::-1])].set(jnp.array([200, 100, 100], dtype=jnp.uint8))
+        """Render the current game state as a simple RGB image."""
+        img = jnp.ones(
+            (self.consts.GRID_HEIGHT, self.consts.GRID_WIDTH, 3), dtype=jnp.uint8
+        ) * jnp.array(self.consts.BACKGROUND_COLOR, dtype=jnp.uint8)
+        img = img.at[state.p1_trail.T == 1].set(
+            jnp.array(self.consts.P1_TRAIL_COLOR, dtype=jnp.uint8)
+        )
+        img = img.at[state.p2_trail.T == 1].set(
+            jnp.array(self.consts.P2_TRAIL_COLOR, dtype=jnp.uint8)
+        )
+        img = img.at[tuple(state.p1_pos[::-1])].set(
+            jnp.array(self.consts.P1_TRAIL_COLOR, dtype=jnp.uint8)
+        )
+        img = img.at[tuple(state.p2_pos[::-1])].set(
+            jnp.array(self.consts.P2_TRAIL_COLOR, dtype=jnp.uint8)
+        )
         return img
 
 
@@ -88,7 +105,7 @@ class JaxSurround(
 
     @partial(jax.jit, static_argnums=(0,))
     def step(
-        self, state: SurroundState, actions: jnp.ndarray
+        self, state: SurroundState, actions: jnp.ndarray | tuple | list
     ) -> Tuple[SurroundObservation, SurroundState, jnp.ndarray, bool, SurroundInfo]:
         """Takes a step for both agents.
 
@@ -113,6 +130,8 @@ class JaxSurround(
             dtype=jnp.int32,
         )
 
+        actions = jnp.asarray(actions, dtype=jnp.int32)
+        actions = jnp.broadcast_to(actions, (2,))
         offset_p1 = offsets[actions[0]]
         offset_p2 = offsets[actions[1]]
         new_p1 = state.p1_pos + offset_p1
@@ -157,7 +176,7 @@ class JaxSurround(
 
         reward_p1 = jnp.where(p1_hit, -1.0, jnp.where(p2_hit, 1.0, 0.0))
         reward_p2 = jnp.where(p2_hit, -1.0, jnp.where(p1_hit, 1.0, 0.0))
-        reward = jnp.array([reward_p1, reward_p2])
+        reward = reward_p1 + reward_p2
         obs = self._get_observation(next_state)
         done = self._get_done(next_state)
         info = self._get_info(next_state)
@@ -182,20 +201,15 @@ class JaxSurround(
         hit_p1 = state.terminated & (state.p1_pos == state.p2_pos).all()
         reward_p1 = jnp.where(hit_p1, -1.0, jnp.where(state.terminated, 1.0, 0.0))
         reward_p2 = jnp.where(state.terminated & ~hit_p1, -1.0, jnp.where(hit_p1, 1.0, 0.0))
-        return jnp.array([reward_p1, reward_p2])
+        return reward_p1 + reward_p2
 
     @partial(jax.jit, static_argnums=(0,))
     def _get_done(self, state: SurroundState) -> jnp.ndarray:
         return state.terminated.astype(jnp.bool_)
 
-    def action_space(self) -> spaces.Tuple:
-        """Returns the joint action space for both agents."""
-        return spaces.Tuple(
-            [
-                spaces.Discrete(len(self.action_set)),
-                spaces.Discrete(len(self.action_set)),
-            ]
-        )
+    def action_space(self) -> spaces.Discrete:
+        """Returns the action space for the controllable player."""
+        return spaces.Discrete(len(self.action_set))
 
     def observation_space(self) -> spaces.Box:
         return spaces.Box(
