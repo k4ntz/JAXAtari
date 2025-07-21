@@ -46,6 +46,7 @@ class AsterixState(NamedTuple):
     lives: chex.Array
     game_over: chex.Array
     stage_cooldown: chex.Array
+    bonus_life_stage: chex.Array
 
 
 class EntityPosition(NamedTuple):
@@ -88,6 +89,7 @@ class JaxAsterix(JaxEnvironment[AsterixState, AsterixObservation, AsterixInfo, A
             lives=jnp.array(self.consts.num_lives, dtype=jnp.int32),  # 3 Leben
             game_over=jnp.array(False, dtype=jnp.bool_),
             stage_cooldown = jnp.array(self.consts.cooldown_frames, dtype=jnp.int32), # Cooldown initial 0
+            bonus_life_stage=jnp.array(0, dtype=jnp.int32),  # Stage for bonus life
         )
 
         return self._get_observation(state), state
@@ -138,9 +140,23 @@ class JaxAsterix(JaxEnvironment[AsterixState, AsterixObservation, AsterixInfo, A
 
         new_score = state.score
 
-        new_lives = state.lives # TODO füge ein jnp.where hinzu um leben zu verlieren; dafür ist noch eine Kollisionserkennung notwendig
+        bonus_thresholds = jnp.array([10_000, 30_000, 50_000, 80_000, 110_000], dtype=jnp.int32)
+        bonus_interval = 40_000
 
-        # Check game over (optional: could be based on time or score limit)
+        # Berechne, wie viele Bonusleben der Score verdient
+        def calc_bonus_stage(score):
+            # Zähle, wie viele Schwellen überschritten wurden
+            below = jnp.sum(score >= bonus_thresholds)
+            # Danach alle 40.000
+            above = jnp.maximum(score - 110_000, 0) // bonus_interval
+            return below + above
+
+        new_bonus_stage = calc_bonus_stage(new_score)
+        bonus_lives_gained = new_bonus_stage - state.bonus_life_stage
+        new_lives = state.lives + bonus_lives_gained # TODO füge ein jnp.where hinzu um leben zu verlieren; dafür ist noch eine Kollisionserkennung notwendig
+
+
+        # Check game over
         game_over = jnp.where(
             new_lives <= 0,
             jnp.array(True),
@@ -154,6 +170,7 @@ class JaxAsterix(JaxEnvironment[AsterixState, AsterixObservation, AsterixInfo, A
             score=new_score,
             game_over=game_over,
             stage_cooldown=new_cooldown,
+            bonus_life_stage=new_bonus_stage
         )
         done = self._get_done(new_state)
         env_reward = self._get_reward(state, new_state)
@@ -313,10 +330,10 @@ class AsterixRenderer(JAXGameRenderer):
     @partial(jax.jit, static_argnums=(0,))
     def render(self, state):
         """Render the game state to a raster image."""
-        # --- Schwarzes Raster als Background rendern ---
+        # ----------- RASTER INITIALIZATION -------------
         raster = jnp.zeros((self.consts.screen_height, self.consts.screen_width, 3), dtype=jnp.uint8)
 
-        # --- Stages rendern ---
+        # ----------- STAGE -------------
         stage_sprite = jr.get_sprite_frame(self.sprites['STAGE'], 0)
         stage_height = stage_sprite.shape[0]
         stage_x = (self.consts.screen_width - stage_sprite.shape[1]) // 2 # Center the stage horizontally
@@ -332,7 +349,7 @@ class AsterixRenderer(JAXGameRenderer):
                 stage_sprite
             )
 
-        # --- Top und Bottom rendern ---
+        # ----------- TOP AND BOTTOM -------------
         top_sprite = jr.get_sprite_frame(self.sprites['TOP'], 0)
         bottom_sprite = jr.get_sprite_frame(self.sprites['BOTTOM'], 0)
         top_x = (self.consts.screen_width - top_sprite.shape[1]) // 2  # Center the top sprite horizontally
@@ -354,7 +371,7 @@ class AsterixRenderer(JAXGameRenderer):
         )
 
 
-        # --- Player rendern ---
+        # ----------- PLAYER -------------
         player_sprite = jr.get_sprite_frame(self.sprites['ASTERIX'], 0)
         player_hit_sprite = jr.get_sprite_frame(self.sprites['ASTERIX'], 0)
         player_sprite_offset = self.offsets['ASTERIX']
