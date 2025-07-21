@@ -698,7 +698,7 @@ def spawn_enemies(state):
     )
 
     new_enemy_type = state.enemy_type.at[free_enemy_idx].set(new_single_enemy_type)
-    new_enemy_state = state.enemy_state.at[free_enemy_idx].set(jnp.array(1)) # TODO select type
+    new_enemy_state = state.enemy_state.at[free_enemy_idx].set(jnp.array(1))
 
 
     new_enemy_x = jax.lax.cond(
@@ -718,8 +718,8 @@ def spawn_enemies(state):
             ),
             lambda state: jax.lax.cond( # logic for plane (select a screenside)
                 jax.random.bernoulli(x_key, 0.5),
-                lambda _: jnp.array(-50, dtype=jnp.int32),
-                lambda _: jnp.array(SCREEN_WIDTH + 50, dtype=jnp.int32),
+                lambda _: jnp.array(1, dtype=jnp.int32),
+                lambda _: jnp.array(SCREEN_WIDTH - 8, dtype=jnp.int32),
                 operand=None
             ),
             operand=state
@@ -752,9 +752,9 @@ def spawn_enemies(state):
         lambda state: state,
         operand=state
     )
-    jax.debug.print("Riverraid: enemy_x: {enemy_x}", enemy_x=state.enemy_x)
-    jax.debug.print("Riverraid: enemy_y: {enemy_y}", enemy_y=state.enemy_y)
-    jax.debug.print("Riverraid: enemy_state: {enemy_state}", enemy_state=state.enemy_state)
+    #jax.debug.print("Riverraid: enemy_x: {enemy_x}", enemy_x=state.enemy_x)
+    #jax.debug.print("Riverraid: enemy_y: {enemy_y}", enemy_y=state.enemy_y)
+    #jax.debug.print("Riverraid: enemy_state: {enemy_state}", enemy_state=state.enemy_state)
     return new_state
 
 def update_enemies(state: RiverraidState) -> RiverraidState:
@@ -947,15 +947,21 @@ def load_sprites():
 
     player = aj.loadFrame(os.path.join(MODULE_DIR, "sprites/galaxian/player.npy"),transpose=False)
     bullet = aj.loadFrame(os.path.join(MODULE_DIR, "sprites/galaxian/bullet.npy"), transpose=False)
-    enemy = aj.loadFrame(os.path.join(MODULE_DIR, "sprites/galaxian/red_orange_enemy_1.npy"), transpose=False)
+    enemy_boat = aj.loadFrame(os.path.join(MODULE_DIR, "sprites/galaxian/red_orange_enemy_1.npy"), transpose=False)
+    enemy_helicopter = aj.loadFrame(os.path.join(MODULE_DIR, "sprites/galaxian/gray_enemy_1.npy"), transpose=False)
+    enemy_airplane = aj.loadFrame(os.path.join(MODULE_DIR, "sprites/galaxian/purple_blue_enemy_1.npy"), transpose=False)
 
     SPRITE_PLAYER = jnp.expand_dims(player, axis = 0)
     BULLET = jnp.expand_dims(bullet, axis=0)
-    ENEMY = jnp.expand_dims(enemy, axis=0)
+    ENEMY_BOAT = jnp.expand_dims(enemy_boat, axis=0)
+    ENEMY_HELICOPTER = jnp.expand_dims(enemy_helicopter, axis=0)
+    ENEMY_AIRPLANE = jnp.expand_dims(enemy_airplane, axis=0)
     return(
         SPRITE_PLAYER,
         BULLET,
-        ENEMY
+        ENEMY_BOAT,
+        ENEMY_HELICOPTER,
+        ENEMY_AIRPLANE
     )
 
 class RiverraidRenderer(AtraJaxisRenderer):
@@ -963,7 +969,9 @@ class RiverraidRenderer(AtraJaxisRenderer):
         (
             self.SPRITE_PLAYER,
             self.BULLET,
-            self.ENEMY
+            self.ENEMY_BOAT,
+            self.ENEMY_HELICOPTER,
+            self.ENEMY_AIRPLANE
         ) = load_sprites()
 
     @partial(jax.jit, static_argnums=(0,))
@@ -1001,8 +1009,18 @@ class RiverraidRenderer(AtraJaxisRenderer):
         def render_enemy_at_idx(raster, i):
             ex = jnp.round(state.enemy_x[i]).astype(jnp.int32)
             ey = jnp.round(state.enemy_y[i]).astype(jnp.int32)
-            enemy_frame = aj.get_sprite_frame(self.ENEMY, 0)
-            return aj.render_at(raster, ey, ex, enemy_frame)
+            boat_frame = aj.get_sprite_frame(self.ENEMY_BOAT, 0)
+            helicopter_frame = aj.get_sprite_frame(self.ENEMY_HELICOPTER, 0)
+            airplane_frame = aj.get_sprite_frame(self.ENEMY_AIRPLANE, 0)
+            frame_to_render = jax.lax.switch(
+                state.enemy_type[i],
+                [
+                    lambda: boat_frame,
+                    lambda: helicopter_frame,
+                    lambda: airplane_frame,
+                ]
+            )
+            return aj.render_at(raster, ey, ex, frame_to_render)
 
         def cond_fun(i):
             return state.enemy_state[i] > 0
