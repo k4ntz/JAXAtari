@@ -18,14 +18,14 @@ class AsterixConstants(NamedTuple):
     player_height: int = 8
     num_stages: int = 8
     stage_spacing: int = 16 # ursprünglich 16
-    stage_borders: List[int] = None
+    stage_positions: List[int] = None
     top_border: int = 23 # oberer Rand des Spielfelds
     bottom_border: int = 8 * stage_spacing + top_border
     cooldown_frames: int = 8 # Cooldown frames for lane changes
     num_lives: int = 3 # Anzahl der Leben
 
 
-    stage_borders = [
+    stage_positions = [
         top_border, # TOP
         1 * stage_spacing + top_border,  # Stage 1
         2 * stage_spacing + top_border,  # Stage 2
@@ -47,6 +47,7 @@ class AsterixState(NamedTuple):
     game_over: chex.Array
     stage_cooldown: chex.Array
     bonus_life_stage: chex.Array
+    player_direction: chex.Array
 
 
 class EntityPosition(NamedTuple):
@@ -78,7 +79,7 @@ class JaxAsterix(JaxEnvironment[AsterixState, AsterixObservation, AsterixInfo, A
 
     def reset(self, key: jax.random.PRNGKey = None) -> Tuple[AsterixObservation, AsterixState]:
         """Initialize a new game state"""
-        stage_borders = jnp.array(self.consts.stage_borders, dtype=jnp.int32)
+        stage_borders = jnp.array(self.consts.stage_positions, dtype=jnp.int32)
         player_x = self.consts.screen_width // 2
         player_y = (stage_borders[-2] + stage_borders[-1]) // 2
 
@@ -90,6 +91,7 @@ class JaxAsterix(JaxEnvironment[AsterixState, AsterixObservation, AsterixInfo, A
             game_over=jnp.array(False, dtype=jnp.bool_),
             stage_cooldown = jnp.array(self.consts.cooldown_frames, dtype=jnp.int32), # Cooldown initial 0
             bonus_life_stage=jnp.array(0, dtype=jnp.int32),  # Stage for bonus life
+            player_direction=jnp.array(1, dtype=jnp.int32)  # Initial direction (1=links)
         )
 
         return self._get_observation(state), state
@@ -103,7 +105,7 @@ class JaxAsterix(JaxEnvironment[AsterixState, AsterixObservation, AsterixInfo, A
         cooldown_frames = self.consts.cooldown_frames  # Cooldown frames for lane changes
         can_switch_stage = state.stage_cooldown <= 0
 
-        stage_borders = jnp.array(self.consts.stage_borders, dtype=jnp.int32)
+        stage_borders = jnp.array(self.consts.stage_positions, dtype=jnp.int32)
         num_stage = stage_borders.shape[0]
 
         stage_diffs = jnp.abs(stage_borders - state.player_y)
@@ -126,17 +128,22 @@ class JaxAsterix(JaxEnvironment[AsterixState, AsterixObservation, AsterixInfo, A
             jnp.maximum(state.stage_cooldown - 1, 0)
         )
 
-        dy = jnp.where(action == Action.UP, -1.0, jnp.where(action == Action.DOWN, 1.0, 0.0))
-        dx = jnp.where(action == Action.LEFT, -1.0, jnp.where(action == Action.RIGHT, 1.0, 0.0))
-
         stage_left_x = (self.consts.screen_width - self.renderer.sprites['STAGE'][0].shape[1]) // 2
         stage_right_x = stage_left_x + self.renderer.sprites['STAGE'][0].shape[1]
+
+        dy = jnp.where(action == Action.UP, -1.0, jnp.where(action == Action.DOWN, 1.0, 0.0))
+        dx = jnp.where(action == Action.LEFT, -1.0, jnp.where(action == Action.RIGHT, 1.0, 0.0))
 
         new_x = jnp.clip(
             state.player_x + dx.astype(jnp.int32),
             stage_left_x,
             stage_right_x - self.consts.player_width,
         ).astype(jnp.int32)
+
+        new_player_direction = jnp.where(
+            dx < 0, 1,  # links
+            jnp.where(dx > 0, 2, state.player_direction)  # rechts oder idle: behalte alte Richtung
+        )
 
         new_score = state.score
 
@@ -170,7 +177,8 @@ class JaxAsterix(JaxEnvironment[AsterixState, AsterixObservation, AsterixInfo, A
             score=new_score,
             game_over=game_over,
             stage_cooldown=new_cooldown,
-            bonus_life_stage=new_bonus_stage
+            bonus_life_stage=new_bonus_stage,
+            player_direction=new_player_direction
         )
         done = self._get_done(new_state)
         env_reward = self._get_reward(state, new_state)
@@ -297,7 +305,7 @@ class AsterixRenderer(JAXGameRenderer):
             return frame.astype(jnp.uint8)
 
         sprite_names = [
-            'ASTERIX', 'OBELIX', 'STAGE', 'TOP', 'BOTTOM',
+            'ASTERIX_LEFT', 'ASTERIX_RIGHT', 'ASTERIX_LEFT_HIT', 'ASTERIX_RIGHT_HIT','OBELIX', 'STAGE', 'TOP', 'BOTTOM', 'LYRE_LEFT', 'LYRE_RIGHT',
         ]
 
         for name in sprite_names:
@@ -307,7 +315,7 @@ class AsterixRenderer(JAXGameRenderer):
 
         # pad the player sprites since they are used interchangably
         player_sprites, player_offsets = jr.pad_to_match([
-            sprites['ASTERIX'], sprites['ASTERIX'] # first: player_hit, second: player_idle
+            sprites['ASTERIX_LEFT_HIT'], sprites['ASTERIX_LEFT'] # first: player_hit, second: player_idle
         ])
         sprites['ASTERIX'] = player_sprites[0] # player_hit sprite
         sprites['ASTERIX'] = player_sprites[1] # player_idle sprite
@@ -338,9 +346,9 @@ class AsterixRenderer(JAXGameRenderer):
         stage_height = stage_sprite.shape[0]
         stage_x = (self.consts.screen_width - stage_sprite.shape[1]) // 2 # Center the stage horizontally
 
-        for stage_y in self.consts.stage_borders:
+        for stage_y in self.consts.stage_positions:
             # oberste und unterste stage nicht rendern
-            if stage_y == self.consts.stage_borders[0] or stage_y == self.consts.stage_borders[-1]:
+            if stage_y == self.consts.stage_positions[0] or stage_y == self.consts.stage_positions[-1]:
                 continue
             raster = jr.render_at(
                 raster,
@@ -356,7 +364,7 @@ class AsterixRenderer(JAXGameRenderer):
         # top_y = top_sprite.shape[0] // 2
         top_y = self.consts.top_border - self.consts.stage_spacing + stage_height
         bottom_x = (self.consts.screen_width - bottom_sprite.shape[1]) // 2  # Center the bottom sprite horizontally
-        bottom_y = self.consts.stage_borders[-1]
+        bottom_y = self.consts.stage_positions[-1]
         raster = jr.render_at(
             raster,
             top_x,
@@ -376,6 +384,16 @@ class AsterixRenderer(JAXGameRenderer):
         player_hit_sprite = jr.get_sprite_frame(self.sprites['ASTERIX'], 0)
         player_sprite_offset = self.offsets['ASTERIX']
         player_hit_sprite_offset = self.offsets['ASTERIX']
+
+        direction = state.player_direction
+        player_sprite = jax.lax.switch(
+            direction - 1,  # 1=links, 2=rechts → 0/1 für switch
+            [
+                lambda _: jr.get_sprite_frame(self.sprites['ASTERIX_LEFT'], 0),  # 1: links
+                lambda _: jr.get_sprite_frame(self.sprites['ASTERIX_RIGHT'], 0),  # 2: rechts
+            ],
+            None  # Dummy-Argument, wird von den Lambdas ignoriert
+        )
 
         raster = jr.render_at(
             raster,
@@ -424,7 +442,14 @@ class AsterixRenderer(JAXGameRenderer):
 
         # ----------- LIVES -------------
         num_lives = self.consts.num_lives
-        life_sprite = jr.get_sprite_frame(self.sprites['ASTERIX'], 0)
+        life_sprite = jax.lax.switch(
+            state.player_direction - 1,
+            [
+                lambda _: jr.get_sprite_frame(self.sprites['ASTERIX_LEFT'], 0),  # links
+                lambda _: jr.get_sprite_frame(self.sprites['ASTERIX_RIGHT'], 0),  # rechts
+            ],
+            None
+        )
         life_width = life_sprite.shape[1]
         life_height = life_sprite.shape[0]
         lives_spacing = 8  # Abstand zwischen den Leben
