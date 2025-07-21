@@ -78,6 +78,7 @@ class RiverraidObservation(NamedTuple):
 # then also shrink - straight - river shrink
 @jax.jit
 def generate_altering_river(state: RiverraidState) -> RiverraidState:
+    jax.debug.print("ALTERING RIVER IS BEING CALLED AAA")
     key = state.master_key
     key, alter_check_key, alter_select_key, alter_length_key = jax.random.split(key, 4)
 
@@ -449,11 +450,28 @@ def generate_altering_river(state: RiverraidState) -> RiverraidState:
 
 @jax.jit
 def generate_straight_river(state: RiverraidState) -> RiverraidState:
-    new_river_left = state.river_left.at[0].set(state.river_left[1])
-    new_river_right = state.river_right.at[0].set(state.river_right[1])
-    return state._replace(river_left=new_river_left,
-                          river_right=new_river_right,
-                          )
+    scrolled_left = jnp.roll(state.river_left, 1)
+    scrolled_right = jnp.roll(state.river_right, 1)
+    scrolled_inner_left = jnp.roll(state.river_inner_left, 1)
+    scrolled_inner_right = jnp.roll(state.river_inner_right, 1)
+    scrolled_inner_left = scrolled_inner_left.at[0].set(-1)
+    scrolled_inner_right = scrolled_inner_right.at[0].set(-1)
+
+    current_width = scrolled_right[1] - scrolled_left[1]
+    should_expand = current_width < MIN_RIVER_WIDTH * 2
+
+    new_top_left = jnp.where(should_expand, scrolled_left[1] - 3, scrolled_left[1])
+    new_top_right = jnp.where(should_expand, scrolled_right[1] + 3, scrolled_right[1])
+    new_river_left = scrolled_left.at[0].set(new_top_left)
+    new_river_right = scrolled_right.at[0].set(new_top_right)
+
+    return state._replace(
+        river_left=new_river_left,
+        river_right=new_river_right,
+        river_inner_left=scrolled_inner_left,
+        river_inner_right=scrolled_inner_right,
+        river_state=jnp.array(0)
+    )
 
 @jax.jit
 def generate_segment_transition(state: RiverraidState) -> RiverraidState:
@@ -527,7 +545,7 @@ def generate_segment_transition(state: RiverraidState) -> RiverraidState:
         new_river_state = jnp.array(0)
         new_alternation_length = jnp.array(10)
         new_alternation_cooldown = jnp.array(0)
-        new_segment_state = jnp.array(0)
+        new_segment_state = state.segment_state + 1
         new_segment_transition_state = jnp.array(0)
         return new_state._replace(segment_state=new_segment_state,
                               segment_transition_state=new_segment_transition_state,
@@ -558,11 +576,12 @@ def update_river_banks(state: RiverraidState) -> RiverraidState:
         lambda state: state.segment_state,
         operand=state
     )
-    #jax.debug.print("Riverraid: segment_state: {segment_state}", segment_state=new_segment_state)
-    state = state._replace(segment_state=new_segment_state % 3)
+    jax.debug.print("Riverraid: segment_state: {segment_state}", segment_state=new_segment_state)
+    state = state._replace(segment_state=new_segment_state % 4)
     return jax.lax.switch(state.segment_state, [lambda state: generate_altering_river(state),
                                                 lambda state: generate_segment_transition(state),
-                                                lambda state: generate_altering_river(state)],
+                                                lambda state: generate_straight_river(state),
+                                                lambda state: generate_segment_transition(state)],
                                                 operand=state)
 
 @jax.jit
@@ -955,6 +974,7 @@ class JaxRiverraid(JaxEnvironment):
 
         jax.debug.print("new step \n")
         new_state = state._replace(turn_step=state.turn_step + 1)
+        state = state._replace(player_state=jnp.array(0, dtype=state.player_state.dtype)) # immortal for testing
         new_state = jax.lax.cond(state.player_state == 0,
                                  lambda state: player_alive(state),
                                  lambda state: respawn(state),
