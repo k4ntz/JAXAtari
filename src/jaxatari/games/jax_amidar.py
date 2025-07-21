@@ -1,6 +1,5 @@
-# next TODO's: visualisation of walked on paths/completed rectangles, make path rendering adaptive to list of Paths, 
-# make enemies move, enemy colision detection, chicken mode, Level 2
-# TODO make initial Player position a constant
+# next TODO's (game features): visualisation of completed rectangles, make enemies move, enemy colision detection, chicken mode, Level 2
+# TODO make initial Player position a constant, update observation
 
 from functools import partial
 import os
@@ -184,7 +183,7 @@ def calculate_rectangles():
 RECTANGLES = jnp.array(calculate_rectangles())
 
 @jax.jit
-def generate_path_mask():
+def generate_path_mask(horizontal_edges=HORIZONTAL_PATH_EDGES, vertical_edges=VERTICAL_PATH_EDGES, horizontal_cond=jnp.full((HORIZONTAL_PATH_EDGES.shape[0],), True), vertical_cond=jnp.full((VERTICAL_PATH_EDGES.shape[0],), True)):
     """Generates a mask for the path edges.
     Args:
         path_edges: JAX array of shape (N, 2, 2) representing the path edges.
@@ -195,7 +194,7 @@ def generate_path_mask():
 
     def add_horizontal_edge(i, carry):
         mask, rendering_mask = carry
-        start, end = HORIZONTAL_PATH_EDGES[i]
+        start, end = horizontal_edges[i]
 
         x1, y1 = start
         x2, y2 = end
@@ -210,27 +209,25 @@ def generate_path_mask():
             rendering_mask = rendering_mask.at[x, y+4].set(1)
             return (mask, rendering_mask, y)
 
-        mask, rendering_mask, _ = jax.lax.fori_loop(x1, x2 + 1, loop, (mask, rendering_mask, y1))
+        mask, rendering_mask, _ = jax.lax.cond(horizontal_cond[i], lambda: jax.lax.fori_loop(x1, x2 + 1, loop, (mask, rendering_mask, y1)), lambda: (mask, rendering_mask, y1))
 
-        # add a bit to the rendering mask to make sure that even at corners the path is visible
-        rendering_mask = rendering_mask.at[x2+1, y1+1].set(1)
-        rendering_mask = rendering_mask.at[x2+2, y1+1].set(1)
-        rendering_mask = rendering_mask.at[x2+3, y1+1].set(1)
-        rendering_mask = rendering_mask.at[x2+1, y1+2].set(1)
-        rendering_mask = rendering_mask.at[x2+2, y1+2].set(1)
-        rendering_mask = rendering_mask.at[x2+3, y1+2].set(1)
-        rendering_mask = rendering_mask.at[x2+1, y1+3].set(1)
-        rendering_mask = rendering_mask.at[x2+2, y1+3].set(1)
-        rendering_mask = rendering_mask.at[x2+3, y1+3].set(1)
-        rendering_mask = rendering_mask.at[x2+1, y1+4].set(1)
-        rendering_mask = rendering_mask.at[x2+2, y1+4].set(1)
-        rendering_mask = rendering_mask.at[x2+3, y1+4].set(1)
+        # add a bit to the rendering mask to make sure that even at corners the path is visible        
+        def add_corners_for_rendering(x, carry):
+            rendering_mask, y = carry
+            rendering_mask = rendering_mask.at[x, y].set(1)
+            rendering_mask = rendering_mask.at[x, y+1].set(1)
+            rendering_mask = rendering_mask.at[x, y+2].set(1)
+            rendering_mask = rendering_mask.at[x, y+3].set(1)
+            rendering_mask = rendering_mask.at[x, y+4].set(1)
+            return (rendering_mask, y)
+
+        rendering_mask, _ = jax.lax.cond(horizontal_cond[i], lambda: jax.lax.fori_loop(x2, x2 + 4, add_corners_for_rendering, (rendering_mask, y1)), lambda: (rendering_mask, y1))
 
         return mask, rendering_mask
 
     def add_vertical_edge(i, carry):
         mask, rendering_mask = carry
-        start, end = VERTICAL_PATH_EDGES[i]
+        start, end = vertical_edges[i]
 
         x1, y1 = start
         x2, y2 = end
@@ -244,11 +241,11 @@ def generate_path_mask():
             rendering_mask = rendering_mask.at[x+3, y].set(1)
             return (mask, rendering_mask, x)
 
-        mask, rendering_mask, _ = jax.lax.fori_loop(y1, y2 + 1, loop, (mask, rendering_mask, x1))
+        mask, rendering_mask, _ = jax.lax.cond(vertical_cond[i], lambda: jax.lax.fori_loop(y1, y2 + 1, loop, (mask, rendering_mask, x1)), lambda: (mask, rendering_mask, x1))
         return mask, rendering_mask
 
-    mask, rendering_mask = jax.lax.fori_loop(0, jnp.shape(HORIZONTAL_PATH_EDGES)[0], add_horizontal_edge, (mask, rendering_mask))
-    mask, rendering_mask = jax.lax.fori_loop(0, jnp.shape(VERTICAL_PATH_EDGES)[0], add_vertical_edge, (mask, rendering_mask))
+    mask, rendering_mask = jax.lax.fori_loop(0, jnp.shape(horizontal_edges)[0], add_horizontal_edge, (mask, rendering_mask))
+    mask, rendering_mask = jax.lax.fori_loop(0, jnp.shape(vertical_edges)[0], add_vertical_edge, (mask, rendering_mask))
 
     return mask, rendering_mask
 
@@ -270,7 +267,6 @@ def generate_path_pattern():
     indices = jnp.stack((ii, jj), axis=-1)  # shape (WIDTH, HEIGHT, 2)
 
     def set_for_column(path_column, walked_on_column, indices):
-        jax.debug.print("path_column shape: {s}", s=path_column.shape)
 
         def set_color(path_value, walked_on_value, index):
             x, y = index
@@ -611,14 +607,15 @@ class AmidarRenderer(AtraJaxisRenderer):
         frame_bg = aj.get_sprite_frame(self.SPRITE_BG, 0)
         raster = aj.render_at(raster, 0, 0, frame_bg)
 
-        # # Render paths - The Top Left corner of the path is (16, 15)
-        # # TODO render the paths that have been walked on
-        # # TODO make adaptable to different configurations?
-        # frame_paths = aj.get_sprite_frame(self.SPRITE_PATHS, 0)
-        # raster = aj.render_at(raster, 16, 15, frame_paths)
-
         # Render paths
         raster = aj.render_at(raster, 0, 0, PATH_SPRITE)
+
+        # # Render walked on paths
+        walked_on_paths_horizontal = state.walked_on_paths[0:jnp.shape(HORIZONTAL_PATH_EDGES)[0]]
+        walked_on_paths_vertical = state.walked_on_paths[jnp.shape(HORIZONTAL_PATH_EDGES)[0]:]
+        _, walked_on_rendering_mask = generate_path_mask(horizontal_cond=walked_on_paths_horizontal, vertical_cond=walked_on_paths_vertical)
+        walked_on_paths_sprite = jnp.where(walked_on_rendering_mask[:, :, None] == 1, WALKED_ON_PATTERN, jnp.full((WIDTH, HEIGHT, 4), 0, dtype=jnp.uint8))
+        raster = aj.render_at(raster, 0, 0, walked_on_paths_sprite)
 
         # Render score
         score_array = aj.int_to_digits(state.score, max_digits=8)
