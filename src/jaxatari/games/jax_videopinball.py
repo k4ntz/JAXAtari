@@ -174,14 +174,19 @@ BOUNDING_BOX_2_6 = jnp.ones((2, 6)).astype(jnp.bool)
 
 # Position 16 - Mid-Down (RAM state 16)
 # TODO: Add
+BOUNDING_BOX_1_10 = jnp.ones((1, 10)).astype(jnp.bool)
+BOUNDING_BOX_2_13 = jnp.ones((2, 13)).astype(jnp.bool)
 
 # Position 32 - Mid-Down (RAM state 32)
 # TODO: Add
-
+BOUNDING_BOX_1_6  = jnp.ones((1, 6)).astype(jnp.bool)
+BOUNDING_BOX_1_7  = jnp.ones((1, 7)).astype(jnp.bool)
+BOUNDING_BOX_1_9  = jnp.ones((1, 9)).astype(jnp.bool)
 
 # Position 48 - Mid-Down (RAM state 48)
 # TODO: Add
-
+BOUNDING_BOX_1_1  = jnp.ones((1, 1)).astype(jnp.bool)
+BOUNDING_BOX_1_3  = jnp.ones((1, 3)).astype(jnp.bool)
 
 # Define Offsets for the flipper parts
 # Position 0 - Mid-Down (RAM state 0)
