@@ -718,8 +718,8 @@ def spawn_enemies(state):
             ),
             lambda state: jax.lax.cond( # logic for plane (select a screenside)
                 jax.random.bernoulli(x_key, 0.5),
-                lambda _: jnp.array(1, dtype=jnp.int32),
-                lambda _: jnp.array(SCREEN_WIDTH - 8, dtype=jnp.int32),
+                lambda _: jnp.array(-10, dtype=jnp.int32),
+                lambda _: jnp.array(SCREEN_WIDTH + 10, dtype=jnp.int32),
                 operand=None
             ),
             operand=state
@@ -735,7 +735,7 @@ def spawn_enemies(state):
     )
     new_enemy_direction = jax.lax.cond(
         spawn_enemy & (free_enemy_idx >= 0),
-        lambda _: jax.random.randint(spawn_key, (), 0, 2),
+        lambda _: jax.random.randint(spawn_key, (), 0, 2), # 0 left, 1 right
         lambda _: state.enemy_direction[free_enemy_idx],
         operand=None
     )
@@ -752,18 +752,16 @@ def spawn_enemies(state):
         lambda state: state,
         operand=state
     )
-    #jax.debug.print("Riverraid: enemy_x: {enemy_x}", enemy_x=state.enemy_x)
-    #jax.debug.print("Riverraid: enemy_y: {enemy_y}", enemy_y=state.enemy_y)
-    #jax.debug.print("Riverraid: enemy_state: {enemy_state}", enemy_state=state.enemy_state)
     return new_state
 
-def update_enemies(state: RiverraidState) -> RiverraidState:
+def scroll_enemies(state: RiverraidState) -> RiverraidState:
     new_enemy_y = state.enemy_y + 1
     new_enemy_state = jnp.where(new_enemy_y > SCREEN_HEIGHT + 1, 0, state.enemy_state)
     new_enemy_x = jnp.where(new_enemy_y > SCREEN_HEIGHT + 1, -1, state.enemy_x)
     return state._replace(enemy_y=new_enemy_y,
                           enemy_state=new_enemy_state,
                           enemy_x=new_enemy_x)
+
 
 def enemy_collision(state: RiverraidState) -> RiverraidState:
     def handle_bullet_collision(state: RiverraidState) -> RiverraidState:
@@ -812,6 +810,63 @@ def enemy_collision(state: RiverraidState) -> RiverraidState:
     return new_state._replace(player_state=new_player_state)
 
 
+@jax.jit
+def update_enemy_movement_status(state: RiverraidState) -> RiverraidState:
+    active_static_mask = (state.enemy_state == 1) & (state.enemy_direction <= 1)
+    key, *subkeys = jax.random.split(state.master_key, MAX_ENEMIES + 1)
+    subkeys = jnp.array(subkeys[:MAX_ENEMIES])
+
+    def change_direction(i, enemy_direction):
+        should_change = jax.lax.cond(
+            active_static_mask[i],
+            lambda _: jax.random.bernoulli(subkeys[i], 0.05),
+            lambda _: False,
+            operand=None
+        )
+        new_direction = jax.lax.cond(
+            should_change,
+            lambda _: jax.lax.cond(
+                enemy_direction[i] == 0,
+                lambda _: jnp.array(2),
+                lambda _: jnp.array(3),
+                operand=None
+            ),
+            lambda _: enemy_direction[i],
+            operand=None
+        )
+        return enemy_direction.at[i].set(new_direction)
+
+    new_enemy_direction = jax.lax.fori_loop(
+        0, MAX_ENEMIES,
+        lambda i, enemy_direction: change_direction(i, enemy_direction),
+        state.enemy_direction
+    )
+    return state._replace(enemy_direction=new_enemy_direction, master_key=key)
+
+
+def enemy_movement(state: RiverraidState) -> RiverraidState:
+    new_enemy_x = state.enemy_x.copy()
+    move_left_mask = (state.enemy_state == 1) & (state.enemy_direction == 2)
+    move_right_mask = (state.enemy_state == 1) & (state.enemy_direction == 3)
+    new_enemy_x = jnp.where(move_left_mask, new_enemy_x - 1, new_enemy_x)
+    new_enemy_x = jnp.where(move_right_mask, new_enemy_x + 1, new_enemy_x)
+
+    enemy_y = state.enemy_y.astype(jnp.int32)
+
+    hit_left_bank = new_enemy_x <= state.river_left[enemy_y]
+    hit_right_bank = new_enemy_x >= state.river_right[enemy_y] - 8
+
+    hit_inner_left = (state.river_inner_left[enemy_y] >= 0) & (new_enemy_x <= state.river_inner_left[enemy_y])
+    hit_inner_right = (state.river_inner_right[enemy_y] >= 0) & (new_enemy_x >= state.river_inner_right[enemy_y] - 8)
+
+    change_direction_mask = hit_left_bank | hit_right_bank | hit_inner_left | hit_inner_right
+
+    new_enemy_direction = jnp.where(
+        change_direction_mask & (state.enemy_type != 2),
+        jnp.where(state.enemy_direction == 2, 3, 2),
+        state.enemy_direction
+    )
+    return state._replace(enemy_x=new_enemy_x, enemy_direction=new_enemy_direction)
 
 
 class JaxRiverraid(JaxEnvironment):
@@ -887,8 +942,10 @@ class JaxRiverraid(JaxEnvironment):
             new_state = player_movement(new_state, action)
             new_state = player_shooting(new_state, action)
             new_state = spawn_enemies(new_state)
-            new_state = update_enemies(new_state)
+            new_state = scroll_enemies(new_state)
             new_state = enemy_collision(new_state)
+            new_state = update_enemy_movement_status(new_state)
+            new_state = enemy_movement(new_state)
             return new_state
 
         def respawn(state: RiverraidState) -> RiverraidState:
