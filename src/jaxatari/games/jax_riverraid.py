@@ -765,6 +765,53 @@ def update_enemies(state: RiverraidState) -> RiverraidState:
                           enemy_state=new_enemy_state,
                           enemy_x=new_enemy_x)
 
+def enemy_collision(state: RiverraidState) -> RiverraidState:
+    def handle_bullet_collision(state: RiverraidState) -> RiverraidState:
+        active_enemy_mask = state.enemy_state == 1
+
+        x_collision_mask = (state.player_bullet_x < state.enemy_x + 8) & (state.player_bullet_x + 8 > state.enemy_x)
+        y_collision_mask = (state.player_bullet_y < state.enemy_y + 8) & (state.player_bullet_y + 8 > state.enemy_y)
+
+        collision_mask = active_enemy_mask & x_collision_mask & y_collision_mask
+        collision_present = jnp.any(collision_mask)
+        hit_index = jnp.argmax(collision_mask)
+
+        new_enemy_state = jnp.where(
+            collision_present,
+            state.enemy_state.at[hit_index].set(0),
+            state.enemy_state
+        )
+
+        new_bullet_x = jnp.where(collision_present, -1.0, state.player_bullet_x)
+        new_bullet_y = jnp.where(collision_present, -1.0, state.player_bullet_y)
+
+        return state._replace(
+            enemy_state=new_enemy_state,
+            player_bullet_x=new_bullet_x,
+            player_bullet_y=new_bullet_y
+        )
+
+    # Bullet - Enemy Collision only when bullet present
+    new_state = jax.lax.cond(
+        state.player_bullet_y >= 0,
+        lambda state: handle_bullet_collision(state),
+        lambda state: state,
+        state
+    )
+
+    # Player - Enemy Collision
+    active_enemy_mask = new_state.enemy_state == 1
+
+    x_collision = (new_state.player_x < new_state.enemy_x + 8) & (new_state.player_x + 8 > new_state.enemy_x)
+    y_collision = (new_state.player_y < new_state.enemy_y + 8) & (new_state.player_y + 8 > new_state.enemy_y)
+    collision_mask = active_enemy_mask & x_collision & y_collision
+
+
+    collision_present = jnp.any(collision_mask)
+    new_player_state = jnp.where(collision_present, 1, new_state.player_state)
+    return new_state._replace(player_state=new_player_state)
+
+
 
 
 class JaxRiverraid(JaxEnvironment):
@@ -841,6 +888,7 @@ class JaxRiverraid(JaxEnvironment):
             new_state = player_shooting(new_state, action)
             new_state = spawn_enemies(new_state)
             new_state = update_enemies(new_state)
+            new_state = enemy_collision(new_state)
             return new_state
 
         def respawn(state: RiverraidState) -> RiverraidState:
@@ -918,7 +966,7 @@ class RiverraidRenderer(AtraJaxisRenderer):
             self.ENEMY
         ) = load_sprites()
 
-
+    @partial(jax.jit, static_argnums=(0,))
     def render(self, state: RiverraidState):
         green_banks = jnp.array([26, 132, 26], dtype=jnp.uint8)
         blue_river = jnp.array([42, 42, 189], dtype=jnp.uint8)
@@ -970,8 +1018,6 @@ class RiverraidRenderer(AtraJaxisRenderer):
 
         raster = jax.lax.fori_loop(0, MAX_ENEMIES, body_fun, raster)
 
-        raster = jax.lax.fori_loop(0, MAX_ENEMIES, body_fun, raster)
-
         # transpose it to (WIDTH, HEIGHT, 3)
         return jnp.transpose(raster, (1, 0, 2))
 
@@ -1001,7 +1047,7 @@ if __name__ == "__main__":
             if event.type == pygame.QUIT:
                 running = False
 
-        action = get_action_from_keyboard()
+        action = get_action_from_keyboard(state)
         observation, state, reward, done, info = jitted_step(state, action)
 
         render_output = jitted_render(state)
