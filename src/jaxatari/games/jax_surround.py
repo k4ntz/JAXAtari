@@ -26,6 +26,10 @@ class SurroundConstants(NamedTuple):
     P2_TRAIL_COLOR: Tuple[int, int, int] = (160, 32, 240)  # purple
     BACKGROUND_COLOR: Tuple[int, int, int] = (0, 0, 0)
 
+    # Starting positions (x, y)
+    P1_START_POS: Tuple[int, int] = (5, 12)
+    P2_START_POS: Tuple[int, int] = (34, 12)
+
 
 class SurroundState(NamedTuple):
     """Immutable game state container."""
@@ -124,8 +128,8 @@ class JaxSurround(
 
     def reset(self, key: Optional[jax.random.PRNGKey] = None) -> Tuple[SurroundObservation, SurroundState]:
         del key
-        p1_start = jnp.array([self.consts.GRID_WIDTH // 4, self.consts.GRID_HEIGHT // 2], dtype=jnp.int32)
-        p2_start = jnp.array([3 * self.consts.GRID_WIDTH // 4, self.consts.GRID_HEIGHT // 2], dtype=jnp.int32)
+        p1_start = jnp.array(self.consts.P1_START_POS, dtype=jnp.int32)
+        p2_start = jnp.array(self.consts.P2_START_POS, dtype=jnp.int32)
         p1_trail = jnp.zeros((self.consts.GRID_WIDTH, self.consts.GRID_HEIGHT), dtype=jnp.int32)
         p2_trail = jnp.zeros_like(p1_trail)
         state = SurroundState(
@@ -174,31 +178,34 @@ class JaxSurround(
         new_p1 = state.p1_pos + offset_p1
         new_p2 = state.p2_pos + offset_p2
 
-        def clip_pos(pos):
-            return jnp.clip(pos, jnp.array([0, 0]), jnp.array([self.consts.GRID_WIDTH - 1, self.consts.GRID_HEIGHT - 1]))
+        bounds = jnp.array([self.consts.GRID_WIDTH, self.consts.GRID_HEIGHT])
+        clip = lambda pos: jnp.clip(pos, jnp.array([0, 0]), bounds - 1)
 
-        hit_p1_wall = jnp.logical_or(
-            jnp.any(new_p1 < 0),
-            jnp.any(new_p1 >= jnp.array([self.consts.GRID_WIDTH, self.consts.GRID_HEIGHT])),
+        hit_p1_wall = jnp.logical_or(jnp.any(new_p1 < 0), jnp.any(new_p1 >= bounds))
+        hit_p2_wall = jnp.logical_or(jnp.any(new_p2 < 0), jnp.any(new_p2 >= bounds))
+
+        safe_p1 = clip(new_p1)
+        safe_p2 = clip(new_p2)
+
+        hit_p1_trail = jax.lax.cond(
+            hit_p1_wall,
+            lambda: False,
+            lambda: jnp.logical_or(state.p1_trail[tuple(safe_p1)], state.p2_trail[tuple(safe_p1)]),
         )
-        hit_p2_wall = jnp.logical_or(
-            jnp.any(new_p2 < 0),
-            jnp.any(new_p2 >= jnp.array([self.consts.GRID_WIDTH, self.consts.GRID_HEIGHT])),
+        hit_p2_trail = jax.lax.cond(
+            hit_p2_wall,
+            lambda: False,
+            lambda: jnp.logical_or(state.p1_trail[tuple(safe_p2)], state.p2_trail[tuple(safe_p2)]),
         )
 
-        new_p1 = clip_pos(new_p1)
-        new_p2 = clip_pos(new_p2)
+        p1_hit = jnp.logical_or(hit_p1_wall, hit_p1_trail)
+        p2_hit = jnp.logical_or(hit_p2_wall, hit_p2_trail)
 
         p1_trail = state.p1_trail.at[tuple(state.p1_pos)].set(1)
         p2_trail = state.p2_trail.at[tuple(state.p2_pos)].set(1)
 
-        hit_p1_trail = jnp.logical_or(p1_trail[tuple(new_p1)], p2_trail[tuple(new_p1)])
-        hit_p2_trail = jnp.logical_or(p1_trail[tuple(new_p2)], p2_trail[tuple(new_p2)])
-
-        head_on = jnp.all(new_p1 == new_p2)
-
-        p1_hit = jnp.logical_or(hit_p1_wall, jnp.logical_or(hit_p1_trail, head_on))
-        p2_hit = jnp.logical_or(hit_p2_wall, jnp.logical_or(hit_p2_trail, head_on))
+        new_p1 = safe_p1
+        new_p2 = safe_p2
 
         terminated = jnp.logical_or(p1_hit, p2_hit)
 
@@ -217,9 +224,7 @@ class JaxSurround(
             new_p2_score,
         )
 
-        reward_p1 = jnp.where(p1_hit, -1.0, jnp.where(p2_hit, 1.0, 0.0))
-        reward_p2 = jnp.where(p2_hit, -1.0, jnp.where(p1_hit, 1.0, 0.0))
-        reward = reward_p1 + reward_p2
+        reward = self._get_reward(state, next_state)
         obs = self._get_observation(next_state)
         done = self._get_done(next_state)
         info = self._get_info(next_state)
@@ -240,11 +245,9 @@ class JaxSurround(
 
     @partial(jax.jit, static_argnums=(0,))
     def _get_reward(self, previous_state: SurroundState, state: SurroundState) -> jnp.ndarray:
-        del previous_state
-        hit_p1 = state.terminated & (state.p1_pos == state.p2_pos).all()
-        reward_p1 = jnp.where(hit_p1, -1.0, jnp.where(state.terminated, 1.0, 0.0))
-        reward_p2 = jnp.where(state.terminated & ~hit_p1, -1.0, jnp.where(hit_p1, 1.0, 0.0))
-        return reward_p1 + reward_p2
+        previous_diff = previous_state.p1_score - previous_state.p2_score
+        diff = state.p1_score - state.p2_score
+        return diff - previous_diff
 
     @partial(jax.jit, static_argnums=(0,))
     def _get_done(self, state: SurroundState) -> jnp.ndarray:
