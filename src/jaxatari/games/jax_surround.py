@@ -38,6 +38,8 @@ class SurroundConstants(NamedTuple):
 
     # Rules
     ALLOW_REVERSE: bool = False
+    # Maximum number of environment steps before truncation
+    MAX_STEPS: int = 1000
 
 
 class SurroundState(NamedTuple):
@@ -58,6 +60,9 @@ class SurroundObservation(NamedTuple):
     """Observation returned to the agent."""
 
     grid: jnp.ndarray  # (GRID_WIDTH, GRID_HEIGHT) int32
+    pos0: jnp.ndarray  # (2,) int32
+    pos1: jnp.ndarray  # (2,) int32
+    agent_id: jnp.ndarray  # () int32
 
 
 class SurroundInfo(NamedTuple):
@@ -238,10 +243,14 @@ class JaxSurround(
         new_p1 = safe_p1
 
         terminated = jnp.logical_or(p0_hit, p1_hit)
+        time_limit_reached = (state.time + 1) >= self.consts.MAX_STEPS
+        terminated = jnp.logical_or(terminated, time_limit_reached)
 
         new_score0 = state.score0 + jnp.where(p1_hit & ~p0_hit, 1, 0)
         new_score1 = state.score1 + jnp.where(p0_hit & ~p1_hit, 1, 0)
-        terminated = jnp.logical_or(terminated, jnp.logical_or(new_score0 >= 10, new_score1 >= 10))
+        terminated = jnp.logical_or(
+            terminated, jnp.logical_or(new_score0 >= 10, new_score1 >= 10)
+        )
 
         next_state = SurroundState(
             new_p0,
@@ -266,7 +275,12 @@ class JaxSurround(
         grid = state.trail
         grid = grid.at[tuple(state.pos0)].set(1)
         grid = grid.at[tuple(state.pos1)].set(2)
-        return SurroundObservation(grid)
+        return SurroundObservation(
+            grid=grid,
+            pos0=state.pos0.astype(jnp.int32),
+            pos1=state.pos1.astype(jnp.int32),
+            agent_id=jnp.array(0, dtype=jnp.int32),
+        )
 
     @partial(jax.jit, static_argnums=(0,))
     def _get_info(self, state: SurroundState) -> SurroundInfo:
@@ -281,19 +295,27 @@ class JaxSurround(
     @partial(jax.jit, static_argnums=(0,))
     def _get_done(self, state: SurroundState) -> jnp.ndarray:
         reached_score = jnp.logical_or(state.score0 >= 10, state.score1 >= 10)
-        return jnp.logical_or(state.terminated, reached_score).astype(jnp.bool_)
+        time_exceeded = state.time >= self.consts.MAX_STEPS
+        done = jnp.logical_or(state.terminated, reached_score)
+        done = jnp.logical_or(done, time_exceeded)
+        return done.astype(jnp.bool_)
 
     def action_space(self) -> spaces.Discrete:
         """Returns the action space for the controllable player."""
         return spaces.Discrete(len(self.action_set))
 
-    def observation_space(self) -> spaces.Box:
-        return spaces.Box(
-            low=0,
-            high=2,
-            shape=(self.consts.GRID_WIDTH, self.consts.GRID_HEIGHT),
-            dtype=jnp.int32,
-        )
+    def observation_space(self) -> spaces.Dict:
+        return spaces.Dict({
+            "grid": spaces.Box(
+                low=0,
+                high=2,
+                shape=(self.consts.GRID_WIDTH, self.consts.GRID_HEIGHT),
+                dtype=jnp.int32,
+            ),
+            "pos0": spaces.Box(0, self.consts.GRID_WIDTH, shape=(2,), dtype=jnp.int32),
+            "pos1": spaces.Box(0, self.consts.GRID_WIDTH, shape=(2,), dtype=jnp.int32),
+            "agent_id": spaces.Discrete(2),
+        })
 
     def image_space(self) -> spaces.Box:
         return spaces.Box(
@@ -307,7 +329,8 @@ class JaxSurround(
         return self.renderer.render(state)
 
     def obs_to_flat_array(self, obs: SurroundObservation) -> jnp.ndarray:
-        return obs.grid.reshape(-1).astype(jnp.int32)
+        flat = [obs.grid.reshape(-1), obs.pos0.reshape(-1), obs.pos1.reshape(-1), jnp.array([obs.agent_id], dtype=jnp.int32)]
+        return jnp.concatenate(flat).astype(jnp.int32)
 
 
 def _pygame_action() -> int:
