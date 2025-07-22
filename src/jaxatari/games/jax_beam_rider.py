@@ -222,15 +222,25 @@ class BeamRiderConstants(NamedTuple):
 
     @classmethod
     def get_beam_positions(cls) -> jnp.ndarray:
+        """Calculate 5 beam positions with beam 2 as center"""
+        # The 3D grid draws at indices [0, 2, 3, 4, 5, 6, 8] from a 9-position spread
+        # We need to select 5 of these for our gameplay beams
+
         total_beams = 9
-        draw_indices = jnp.array([0, 2, 3, 4, 5, 6, 8])
         rel_positions = jnp.linspace(-1.0, 1.0, total_beams)
+        draw_indices = jnp.array([0, 2, 3, 4, 5, 6, 8])  # 7 visual beams
+
+        # Select 5 beams from these 7 visual beams for gameplay
+        # Use indices 0, 2, 3, 4, 6 from draw_indices to get 5 evenly spaced beams
+        # This maps to: leftmost, left-center, center, right-center, rightmost
+        gameplay_beam_indices = jnp.array([0, 2, 3, 4, 6])  # indices into draw_indices
+        selected_draw_indices = draw_indices[gameplay_beam_indices]
 
         center_x = cls.SCREEN_WIDTH / 2
         bottom_spread = cls.SCREEN_WIDTH * 1.6
 
-        positions = center_x + rel_positions * (bottom_spread / 2.0)
-        return positions[draw_indices]
+        positions = center_x + rel_positions[selected_draw_indices] * (bottom_spread / 2.0)
+        return positions
 
 
 
