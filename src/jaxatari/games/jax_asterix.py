@@ -272,10 +272,38 @@ class JaxAsterix(JaxEnvironment[AsterixState, AsterixObservation, AsterixInfo, A
         alive = (new_enemy_x >= -enemy_width) & (new_enemy_x <= screen_width + enemy_width) & enemies.alive
         enemies = enemies._replace(x=new_enemy_x, alive=alive)
 
+        # --- Kollisionserkennung Spieler <-> Gegner ---
+        def check_collision(player_x, player_y, player_w, player_h, enemy_x, enemy_y, enemy_w, enemy_h):
+            return (
+                    (player_x < enemy_x + enemy_w) &
+                    (player_x + player_w > enemy_x) &
+                    (player_y < enemy_y + enemy_h) &
+                    (player_y + player_h > enemy_y)
+            )
+
+        player_w = self.consts.player_width
+        player_h = self.consts.player_height
+        enemy_w = 8  # ggf. anpassen
+        enemy_h = 8  # ggf. anpassen
+
+        collisions = check_collision(
+            new_player_x, new_y, player_w, player_h,
+            enemies.x, enemies.y, enemy_w, enemy_h
+        ) & enemies.alive
+
+        any_collision = jnp.any(collisions)
+
+        # Leben abziehen und Gegner deaktivieren, falls Kollision
+        new_lives = jnp.where(any_collision, new_lives - 1, new_lives)
+        game_over = jnp.where(new_lives <= 0, True, game_over)
+        enemies = enemies._replace(
+            alive=jnp.where(collisions, False, enemies.alive)
+        )
+
         new_state = AsterixState(
             player_x=new_player_x,
             player_y=new_y,
-            lives=state.lives,
+            lives=new_lives,
             score=new_score,
             game_over=game_over,
             stage_cooldown=new_cooldown,
@@ -579,7 +607,7 @@ class AsterixRenderer(JAXGameRenderer):
         )
 
         # ----------- LIVES -------------
-        num_lives = self.consts.num_lives
+        num_lives = jnp.maximum(state.lives, 0).astype(jnp.int32) - 1
         life_sprite = jax.lax.switch(
             state.player_direction - 1,
             [
@@ -595,16 +623,20 @@ class AsterixRenderer(JAXGameRenderer):
         lives_start_x = (self.consts.screen_width - total_lives_width) // 2
         lives_y = bottom_y + bottom_sprite.shape[0] + 3  # 3 Pixel unter Bottom
 
+        def render_life(i, raster_to_update):
+            x = lives_start_x + i * (life_width + lives_spacing)
+            return jr.render_at(
+                raster_to_update,
+                x,
+                lives_y,
+                life_sprite
+            )
+
         def render_lives(raster_to_update):
-            for i in range(num_lives-1):
-                x = lives_start_x + i * (life_width + lives_spacing)
-                raster_to_update = jr.render_at(
-                    raster_to_update,
-                    x,
-                    lives_y,
-                    life_sprite
-                )
-            return raster_to_update
+            def body_fun(i, r):
+                return render_life(i, r)
+
+            return jax.lax.fori_loop(0, num_lives, body_fun, raster_to_update)
 
         raster = jax.lax.cond(
             num_lives > 0,
