@@ -30,6 +30,7 @@ from jaxatari.renderers import JAXGameRenderer
 - Should be playable through script
 - Add Yellow Rejuvinators --> DONE
 - Maybe some environment changes(depending on feedback)
+- White saucers movement needs to be update --> No teleporation and zigzag movement needs to be broader
 
 Nice to have:
 - Enemies get smaller/bigger according to the 3d rendering"""
@@ -153,7 +154,7 @@ class BeamRiderConstants(NamedTuple):
     BLUE_CHARGER_SPEED = 1.1  # Slower base speed
     BLUE_CHARGER_POINTS = 30  # Points when destroyed
     BLUE_CHARGER_COLOR = (0, 0, 255)  # Blue color RGB
-    BLUE_CHARGER_SPAWN_SECTOR = 1  # Starts appearing from sector 10
+    BLUE_CHARGER_SPAWN_SECTOR = 10  # Starts appearing from sector 10
     BLUE_CHARGER_SPAWN_CHANCE = 0.1  # 10% chance to spawn blue charger
     BLUE_CHARGER_LINGER_TIME = 180  # Frames to stay at bottom (3 seconds at 60fps)
     BLUE_CHARGER_DEFLECT_SPEED = -2.0  # Speed when deflected upward by laser
@@ -298,9 +299,9 @@ class BeamRiderState:
     current_sector: int
     enemies_killed_this_sector: int
 
-    # NEW: Sentinel ship projectiles
+    # Sentinel ship projectiles
     sentinel_projectiles: chex.Array
-    # NEW: Track sentinel status for current sector
+    # Track sentinel status for current sector
     sentinel_spawned_this_sector: bool
     # Fields WITH defaults (must come last)
     enemy_spawn_interval: int = BeamRiderConstants.ENEMY_SPAWN_INTERVAL
