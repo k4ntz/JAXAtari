@@ -129,14 +129,6 @@ class JaxBerzerk(JaxEnvironment[BerzerkState, BerzerkObservation, BerzerkInfo, B
         Action.UPRIGHT, 
         Action.DOWNLEFT, 
         Action.DOWNRIGHT,
-        Action.UPFIRE, 
-        Action.DOWNFIRE, 
-        Action.LEFTFIRE, 
-        Action.RIGHTFIRE,
-        Action.UPLEFTFIRE, 
-        Action.UPRIGHTFIRE, 
-        Action.DOWNLEFTFIRE, 
-        Action.DOWNRIGHTFIRE
     ])
         return jnp.any(action == moving_actions)
 
@@ -170,9 +162,6 @@ class JaxBerzerk(JaxEnvironment[BerzerkState, BerzerkObservation, BerzerkInfo, B
                     action == Action.UP,
                     action == Action.UPRIGHT,
                     action == Action.UPLEFT,
-                    action == Action.UPFIRE,
-                    action == Action.UPRIGHTFIRE,
-                    action == Action.UPLEFTFIRE,
                 ]
             )
         )
@@ -182,9 +171,6 @@ class JaxBerzerk(JaxEnvironment[BerzerkState, BerzerkObservation, BerzerkInfo, B
                     action == Action.DOWN,
                     action == Action.DOWNRIGHT,
                     action == Action.DOWNLEFT,
-                    action == Action.DOWNFIRE,
-                    action == Action.DOWNRIGHTFIRE,
-                    action == Action.DOWNLEFTFIRE,
                 ]
             )
         )
@@ -194,9 +180,6 @@ class JaxBerzerk(JaxEnvironment[BerzerkState, BerzerkObservation, BerzerkInfo, B
                     action == Action.LEFT,
                     action == Action.UPLEFT,
                     action == Action.DOWNLEFT,
-                    action == Action.LEFTFIRE,
-                    action == Action.UPLEFTFIRE,
-                    action == Action.DOWNLEFTFIRE,
                 ]
             )
         )
@@ -206,26 +189,60 @@ class JaxBerzerk(JaxEnvironment[BerzerkState, BerzerkObservation, BerzerkInfo, B
                     action == Action.RIGHT,
                     action == Action.UPRIGHT,
                     action == Action.DOWNRIGHT,
-                    action == Action.RIGHTFIRE,
-                    action == Action.UPRIGHTFIRE,
-                    action == Action.DOWNRIGHTFIRE,
                 ]
             )
         )
+        
 
         dx = jnp.where(right, 1, jnp.where(left, -1, 0))
         dy = jnp.where(down, 1, jnp.where(up, -1, 0))
+
 
         # movement scaled
         player_x = state.player_pos[0] + dx * self.consts.PLAYER_SPEED
         player_y = state.player_pos[1] + dy * self.consts.PLAYER_SPEED
 
-        # set the direction according to the movement
-        player_direction = jnp.where(
-                (dx != 0) | (dy != 0),
-                jnp.array([dx, dy]),
-                state.last_dir
-            )
+
+
+        player_direction = jnp.select(
+            [
+                action == Action.UPFIRE,
+                action == Action.DOWNFIRE,
+                action == Action.LEFTFIRE,
+                action == Action.RIGHTFIRE,
+                action == Action.UP,
+                action == Action.DOWN,
+                action == Action.LEFT,
+                action == Action.RIGHT,
+                action == Action.UPRIGHT,
+                action == Action.UPLEFT,
+                action == Action.DOWNRIGHT,
+                action == Action.DOWNLEFT,
+                action == Action.UPRIGHTFIRE,
+                action == Action.UPLEFTFIRE,
+                action == Action.DOWNRIGHTFIRE,
+                action == Action.DOWNLEFTFIRE,
+            ],
+            [
+                jnp.array([0, -1]),   # UPFIRE
+                jnp.array([0, 1]),    # DOWNFIRE
+                jnp.array([-1, 0]),   # LEFTFIRE
+                jnp.array([1, 0]),    # RIGHTFIRE
+                jnp.array([0, -1]),   # UP
+                jnp.array([0, 1]),    # DOWN
+                jnp.array([-1, 0]),   # LEFT
+                jnp.array([1, 0]),    # RIGHT
+                jnp.array([1, -1]),   # UPRIGHT
+                jnp.array([-1, -1]),  # UPLEFT
+                jnp.array([1, 1]),    # DOWNRIGHT
+                jnp.array([-1, 1]),   # DOWNLEFT
+                jnp.array([1, -1]),   # UPRIGHTFIRE
+                jnp.array([-1, -1]),  # UPLEFTFIRE
+                jnp.array([1, 1]),    # DOWNRIGHTFIRE
+                jnp.array([-1, 1]),   # DOWNLEFTFIRE
+            ],
+        default=state.last_dir
+        )
         
         # perform out of bounds checks
         #player_x = jnp.where(
@@ -941,6 +958,7 @@ class BerzerkRenderer(JAXGameRenderer):
         # Sprites to load
         sprite_names = [
             'player_idle', 'player_move_1', 'player_move_2', 'player_death',
+            'player_shoot_up', 'player_shoot_up_right', 'player_shoot_right', 'player_shoot_down_right', 'player_shoot_down',
             'enemy_idle_1', 'enemy_idle_2', 'enemy_idle_3', 'enemy_idle_4', 'enemy_idle_5', 'enemy_idle_6', 'enemy_idle_7', 'enemy_idle_8',
             'enemy_move_horizontal_1', 'enemy_move_horizontal_2',
             'enemy_move_vertical_1', 'enemy_move_vertical_2', 'enemy_move_vertical_3',
@@ -956,7 +974,8 @@ class BerzerkRenderer(JAXGameRenderer):
         sprites['digits'] = digits
 
         # Add padding to player sprites for same size
-        player_keys = ['player_idle', 'player_move_1', 'player_move_2', 'player_death']
+        player_keys = ['player_idle', 'player_move_1', 'player_move_2', 'player_death', 
+                       'player_shoot_up', 'player_shoot_up_right', 'player_shoot_right', 'player_shoot_down_right', 'player_shoot_down']
         player_frames = [sprites[k] for k in player_keys]
 
         player_sprites_padded, player_offsets = jr.pad_to_match(player_frames)
@@ -1142,15 +1161,36 @@ class BerzerkRenderer(JAXGameRenderer):
                         [lambda: self.sprites['player_idle']] * 4 +
                         [lambda: self.sprites['player_death']] * 4
                 )
+            dir = state.last_dir
 
             return jax.lax.cond(
                 state.death_timer > 0,
                 death_animation,
                 lambda: jax.lax.cond(
-                    state.animation_counter == 0,
-                    lambda: self.sprites['player_idle'],
+                    state.animation_counter == 0, #TODO: Add is firing boolean
                     lambda: jax.lax.switch(
-                        (state.animation_counter - 1) % 12,
+                        jnp.select(
+                            [
+                                (dir[0] == 0) & (dir[1] == -1),   # up
+                                (dir[0] == 1) & (dir[1] == -1),   # upright
+                                (dir[0] == 1) & (dir[1] == 0),    # right
+                                (dir[0] == 1) & (dir[1] == 1),    # downright
+                                (dir[0] == 0) & (dir[1] == 1),    # down
+                            ],
+                            jnp.arange(5),
+                            default=2  # fallback = right
+                        ),
+                        [
+                            lambda: self.sprites['player_shoot_up'],
+                            lambda: self.sprites['player_shoot_up_right'],
+                            lambda: self.sprites['player_shoot_right'],
+                            lambda: self.sprites['player_shoot_down_right'],
+                            lambda: self.sprites['player_shoot_down'],
+                        ]
+                    ),
+                    lambda: jax.lax.cond(
+                        state.animation_counter > 0,
+                        lambda: jax.lax.switch((state.animation_counter - 1) % 12,
                         [
                             lambda: self.sprites['player_move_1'],
                             lambda: self.sprites['player_move_1'],
@@ -1165,9 +1205,11 @@ class BerzerkRenderer(JAXGameRenderer):
                             lambda: self.sprites['player_idle'],
                             lambda: self.sprites['player_idle'],
                         ]
-                    )
+                    ),
+                    lambda: self.sprites['player_idle']
                 )
             )
+        )
 
 
         player_sprite = get_player_sprite()
