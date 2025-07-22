@@ -11,6 +11,26 @@ from jaxatari.renderers import JAXGameRenderer
 import jaxatari.rendering.jax_rendering_utils as jr
 
 
+def min_delay(level, base_min=30, spawn_accel=2, min_delay_clamp=20, max_delay_clamp=120):
+    return jnp.clip(base_min - level * spawn_accel, min_delay_clamp, max_delay_clamp)
+
+
+def max_delay(level, base_max=60, spawn_accel=2, min_delay_clamp=20, max_delay_clamp=120):
+    return jnp.clip(base_max - level * spawn_accel, min_delay_clamp, max_delay_clamp)
+
+
+def spawn_enemy(rng, level, platformY, screen_width, enemy_width, base_speed=1.0, speed_factor=0.1, lyre_height=8):
+    rng_side, rng_platform = jax.random.split(rng)
+    num_platforms = len(platformY) - 1
+    platform = jax.random.randint(rng_platform, (), 0, num_platforms)
+    y_center = (platformY[platform] + platformY[platform + 1]) // 2
+    y = y_center - (lyre_height // 2)  # Korrigiert: Sprite mittig platzieren
+    x = jax.lax.select(jax.random.bernoulli(rng_side), screen_width + enemy_width, -enemy_width)
+    speed = base_speed + level * speed_factor
+    vx = speed * jax.lax.select(x > 0, -1.0, 1.0)
+    return Enemy(x, y, vx, True)
+
+
 class AsterixConstants(NamedTuple):
     screen_width: int = 160
     screen_height: int = 210
@@ -37,6 +57,12 @@ class AsterixConstants(NamedTuple):
         8 * stage_spacing + top_border,  # BOTTOM
     ]
 
+class Enemy(NamedTuple):
+    x: jnp.ndarray
+    y: jnp.ndarray
+    vx: jnp.ndarray
+    alive: jnp.ndarray
+
 
 class AsterixState(NamedTuple):
     """Represents the current state of the game"""
@@ -48,6 +74,10 @@ class AsterixState(NamedTuple):
     stage_cooldown: chex.Array
     bonus_life_stage: chex.Array
     player_direction: chex.Array
+    enemies: Enemy
+    spawn_timer: jnp.ndarray
+    rng: jax.random.PRNGKey
+
 
 
 class EntityPosition(NamedTuple):
@@ -55,6 +85,8 @@ class EntityPosition(NamedTuple):
     y: jnp.ndarray
     width: jnp.ndarray
     height: jnp.ndarray
+
+
 
 
 class AsterixObservation(NamedTuple):
@@ -77,11 +109,25 @@ class JaxAsterix(JaxEnvironment[AsterixState, AsterixObservation, AsterixInfo, A
         self.state = self.reset()
         self.renderer = AsterixRenderer()
 
+
     def reset(self, key: jax.random.PRNGKey = None) -> Tuple[AsterixObservation, AsterixState]:
         """Initialize a new game state"""
         stage_borders = jnp.array(self.consts.stage_positions, dtype=jnp.int32)
         player_x = self.consts.screen_width // 2
         player_y = (stage_borders[-2] + stage_borders[-1]) // 2
+
+        if key is None:
+            key = jax.random.PRNGKey(0)
+        platformY = jnp.array(self.consts.stage_positions[1:-1], dtype=jnp.int32)
+        max_enemies = 32
+        spawn_rng, timer_rng, state_rng = jax.random.split(key, 3)
+        spawn_timer = jax.random.randint(timer_rng, (), min_delay(1), max_delay(1) + 1)
+        enemies = Enemy(
+            x=jnp.full((max_enemies,), -9999.0),
+            y=jnp.full((max_enemies,), -9999.0),
+            vx=jnp.zeros((max_enemies,)),
+            alive=jnp.zeros((max_enemies,), dtype=bool)
+        )
 
         state = AsterixState(
             player_x =jnp.array(player_x, dtype=jnp.int32),
@@ -91,7 +137,10 @@ class JaxAsterix(JaxEnvironment[AsterixState, AsterixObservation, AsterixInfo, A
             game_over=jnp.array(False, dtype=jnp.bool_),
             stage_cooldown = jnp.array(self.consts.cooldown_frames, dtype=jnp.int32), # Cooldown initial 0
             bonus_life_stage=jnp.array(0, dtype=jnp.int32),  # Stage for bonus life
-            player_direction=jnp.array(1, dtype=jnp.int32)  # Initial direction (1=links)
+            player_direction=jnp.array(1, dtype=jnp.int32),  # Initial direction (1=links)
+            enemies=enemies,
+            spawn_timer=spawn_timer,
+            rng=state_rng
         )
 
         return self._get_observation(state), state
@@ -134,7 +183,7 @@ class JaxAsterix(JaxEnvironment[AsterixState, AsterixObservation, AsterixInfo, A
         dy = jnp.where(action == Action.UP, -1.0, jnp.where(action == Action.DOWN, 1.0, 0.0))
         dx = jnp.where(action == Action.LEFT, -1.0, jnp.where(action == Action.RIGHT, 1.0, 0.0))
 
-        new_x = jnp.clip(
+        new_player_x = jnp.clip(
             state.player_x + dx.astype(jnp.int32),
             stage_left_x,
             stage_right_x - self.consts.player_width,
@@ -170,15 +219,71 @@ class JaxAsterix(JaxEnvironment[AsterixState, AsterixObservation, AsterixInfo, A
             state.game_over,
         )
 
+        platformY = jnp.array(self.consts.stage_positions[1:-1], dtype=jnp.int32)
+        enemy_width = 8
+        screen_width = self.consts.screen_width
+        level = 1  # oder aus Score ableiten
+
+        # --- Feind-Spawn- und Update-Logik ---
+        rng, rng_spawn, rng_delay = jax.random.split(state.rng, 3)
+        spawn_timer = state.spawn_timer - 1
+
+
+        def spawn_fn(args):
+            enemies, rng_spawn, level = args
+            new_enemy = spawn_enemy(rng_spawn, level, platformY, screen_width, enemy_width)
+            # Prüfe, ob auf dieser Ebene schon ein Lyre aktiv ist
+            already_exists = jnp.any((enemies.y == new_enemy.y) & enemies.alive)
+
+            # Nur spawnen, wenn noch keiner auf dieser Ebene ist
+            def do_spawn():
+                idx = jnp.argmax(~enemies.alive)
+                return enemies._replace(
+                    x=enemies.x.at[idx].set(new_enemy.x),
+                    y=enemies.y.at[idx].set(new_enemy.y),
+                    vx=enemies.vx.at[idx].set(new_enemy.vx),
+                    alive=enemies.alive.at[idx].set(True)
+                )
+
+            return jax.lax.cond(already_exists, lambda: enemies, do_spawn)
+
+        should_spawn = spawn_timer <= 0
+        enemies = jax.lax.cond(
+            should_spawn,
+            spawn_fn,
+            lambda args: args[0],
+            (state.enemies, rng_spawn, level)
+        )
+
+        def new_timer_fn(_):
+            minD = min_delay(level)
+            maxD = max_delay(level)
+            return jax.random.randint(rng_delay, (), minD, maxD + 1)
+
+        spawn_timer = jax.lax.cond(
+            should_spawn,
+            new_timer_fn,
+            lambda _: spawn_timer,
+            operand=None
+        )
+
+        # Feinde bewegen und entfernen
+        new_enemy_x = enemies.x + enemies.vx
+        alive = (new_enemy_x >= -enemy_width) & (new_enemy_x <= screen_width + enemy_width) & enemies.alive
+        enemies = enemies._replace(x=new_enemy_x, alive=alive)
+
         new_state = AsterixState(
-            player_x=new_x,
+            player_x=new_player_x,
             player_y=new_y,
             lives=state.lives,
             score=new_score,
             game_over=game_over,
             stage_cooldown=new_cooldown,
             bonus_life_stage=new_bonus_stage,
-            player_direction=new_player_direction
+            player_direction=new_player_direction,
+            enemies=enemies,
+            spawn_timer=spawn_timer,
+            rng=rng,  # Update the RNG for the next step
         )
         done = self._get_done(new_state)
         env_reward = self._get_reward(state, new_state)
@@ -402,6 +507,39 @@ class AsterixRenderer(JAXGameRenderer):
             player_sprite,
             flip_offset=player_sprite_offset
         )
+
+        # ----------- LYRES -------------
+        lyre_left_sprite = jr.get_sprite_frame(self.sprites['LYRE_LEFT'], 0)
+        lyre_right_sprite = jr.get_sprite_frame(self.sprites['LYRE_RIGHT'], 0)
+
+        # ----------- LYRES (Feinde) -------------
+        def render_lyres(raster_to_update):
+            def render_single_lyre(i, raster_inner):
+                is_alive = state.enemies.alive[i]
+                x = state.enemies.x[i]
+                y = state.enemies.y[i]
+                vx = state.enemies.vx[i]
+                lyre_sprite = jax.lax.select(
+                    vx < 0,
+                    lyre_left_sprite,
+                    lyre_right_sprite
+                )
+                # Nur rendern, wenn alive
+                raster_inner = jax.lax.cond(
+                    is_alive,
+                    lambda r: jr.render_at(r, x.astype(jnp.int32), y.astype(jnp.int32), lyre_sprite),
+                    lambda r: r,
+                    raster_inner
+                )
+                return raster_inner
+
+            raster_out = raster_to_update
+            for i in range(state.enemies.x.shape[0]):
+                raster_out = render_single_lyre(i, raster_out)
+            return raster_out
+
+        raster = render_lyres(raster)
+
 
 
         # ----------- SCORE -------------
