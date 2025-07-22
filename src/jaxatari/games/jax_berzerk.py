@@ -145,7 +145,7 @@ class JaxBerzerk(JaxEnvironment[BerzerkState, BerzerkObservation, BerzerkInfo, B
     def get_room_index(room_num):
             def get_random_index(room_num):
                 prev = (room_num - 1) % 3
-                offset = (room_num % 2) + 1
+                offset = room_num + 1
                 next_idx = (prev + offset) % 3
                 return next_idx + 1
             return jax.lax.cond(
@@ -255,17 +255,17 @@ class JaxBerzerk(JaxEnvironment[BerzerkState, BerzerkObservation, BerzerkInfo, B
         # Top exit
         top = (self.consts.PLAYER_BOUNDS[0][0] + (self.consts.PLAYER_BOUNDS[0][1] - self.consts.PLAYER_BOUNDS[0][0]) / 2 - self.consts.EXIT_WIDTH / 2,
             self.consts.PLAYER_BOUNDS[0][0] + (self.consts.PLAYER_BOUNDS[0][1] - self.consts.PLAYER_BOUNDS[0][0]) / 2 + self.consts.EXIT_WIDTH / 2 - self.consts.PLAYER_SIZE[0])
-        top_exit = (x > top[0]) & (x < top[1]) & (y < self.consts.PLAYER_BOUNDS[1][0])
+        top_exit = (x > top[0]) & (x < top[1]) & (y < self.consts.PLAYER_BOUNDS[1][0] - self.consts.WALL_THICKNESS)
         # Bottom exit
-        bottom_exit = (x > top[0]) & (x < top[1]) & (y > self.consts.PLAYER_BOUNDS[1][1] - self.consts.PLAYER_SIZE[1])
+        bottom_exit = (x > top[0]) & (x < top[1]) & (y > self.consts.PLAYER_BOUNDS[1][1] - self.consts.PLAYER_SIZE[1] + self.consts.WALL_THICKNESS)
 
         # Left exit
         left = (self.consts.PLAYER_BOUNDS[1][0] + (self.consts.PLAYER_BOUNDS[1][1] - self.consts.PLAYER_BOUNDS[1][0]) / 2 - self.consts.EXIT_HEIGHT / 2,
                 self.consts.PLAYER_BOUNDS[1][0] + (self.consts.PLAYER_BOUNDS[1][1] - self.consts.PLAYER_BOUNDS[1][0]) / 2 + self.consts.EXIT_HEIGHT / 2 - self.consts.PLAYER_SIZE[1])
-        left_exit = (y > left[0]) & (y < left[1]) & (x < self.consts.PLAYER_BOUNDS[0][0])
+        left_exit = (y > left[0]) & (y < left[1]) & (x < self.consts.PLAYER_BOUNDS[0][0] - self.consts.WALL_THICKNESS)
 
         # Right exit
-        right_exit = (y > left[0]) & (y < left[1]) & (x > self.consts.PLAYER_BOUNDS[0][1] - self.consts.PLAYER_SIZE[0])
+        right_exit = (y > left[0]) & (y < left[1]) & (x > self.consts.PLAYER_BOUNDS[0][1] - self.consts.PLAYER_SIZE[0] + self.consts.WALL_THICKNESS)
 
         return top_exit | bottom_exit | left_exit | right_exit
     
@@ -564,13 +564,13 @@ class JaxBerzerk(JaxEnvironment[BerzerkState, BerzerkObservation, BerzerkInfo, B
             
             hit_exit = self.check_exit_crossing(new_pos)
             hit_wall = object_hits_wall((player_x, player_y), self.consts.PLAYER_SIZE) & ~hit_exit
-            jax.debug.print("Exzr: {hit_exit}", hit_exit=hit_exit)
+            #jax.debug.print("Exzr: {hit_exit}", hit_exit=hit_exit)
             new_room_counter = jax.lax.select(
                 hit_exit,
                 state.room_counter + 1,
                 state.room_counter
             )
-            jax.debug.print("Room: {new_room_counter}", new_room_counter=new_room_counter)
+            #jax.debug.print("Room: {new_room_counter}", new_room_counter=new_room_counter)
             # 2. Update position and direction of enemies
             rng, enemy_rng = jax.random.split(state.rng)
 
@@ -1106,34 +1106,6 @@ class BerzerkRenderer(JAXGameRenderer):
 
             raster = jax.lax.cond(is_active, draw_bullet, lambda r: r, raster)
 
-        # Draw enemy bullets
-        for i in range(state.enemy_bullets.shape[0]):
-            is_active = state.enemy_bullet_active[i]
-            bullet_pos = state.enemy_bullets[i]
-            bullet_dir = state.enemy_bullet_dirs[i]
-
-            def draw_enemy_bullet(raster):
-                dx = bullet_dir[0]
-
-                type_idx = jax.lax.select(dx != 0, 0, 1)  # 0=horizontal, 1=vertical
-
-                def render_horizontal(r):
-                    sprite = jr.get_sprite_frame(self.sprites['bullet_horizontal'], 0)
-                    return jr.render_at(r, bullet_pos[0], bullet_pos[1], sprite)
-
-                def render_vertical(r):
-                    sprite = jr.get_sprite_frame(self.sprites['bullet_vertical'], 0)
-                    return jr.render_at(r, bullet_pos[0], bullet_pos[1], sprite)
-
-                return jax.lax.switch(
-                    type_idx,
-                    [render_horizontal, render_vertical],
-                    raster
-                )
-
-            raster = jax.lax.cond(is_active, draw_enemy_bullet, lambda r: r, raster)
-
-
         # Draw player animation
         def get_player_sprite():
             def death_animation():
@@ -1209,26 +1181,23 @@ class BerzerkRenderer(JAXGameRenderer):
             return color_names[color_idx]
 
 
-        def recolor_sprite(sprite, color_idx):
+        def recolor_sprite(sprite, color_idx, original_color):
             # Beispiel: Gelb (RGBA)
-            original_color = jnp.array([210, 210, 64, 255], dtype=jnp.uint8)  # Gelb
             new_color = get_new_color(color_idx)  # z.B. grün, rot, etc.
 
-            # Maske: Nur gelbe Pixel finden (Vergleich mit original_color)
-            mask = jnp.all(sprite == original_color, axis=-1)  # shape (H, W), True nur bei Gelb
+            # Maske (Vergleich mit original_color)
+            mask = jnp.all(sprite == original_color, axis=-1)  # shape (H, W)
 
-            # Nur gelbe Pixel durch neue Farbe ersetzen
             recolored = jnp.where(mask[..., None], new_color, sprite)
 
             return recolored.astype(jnp.uint8)
+        
 
-
-
-        def maybe_recolor(sprite: chex.Array, color_idx: int) -> chex.Array:
+        def maybe_recolor(sprite: chex.Array, color_idx: int, original_color) -> chex.Array:
             return jax.lax.cond(
                 color_idx == 0,
                 lambda: sprite,
-                lambda: recolor_sprite(sprite, color_idx)
+                lambda: recolor_sprite(sprite, color_idx, original_color)
             )
 
         def get_enemy_sprite(i):
@@ -1238,7 +1207,8 @@ class BerzerkRenderer(JAXGameRenderer):
             color_idx = get_enemy_color_index(state.room_counter)
 
             def recolor(name: str):
-                return maybe_recolor(self.sprites[name], color_idx)
+                original_color = jnp.array([210, 210, 64, 255], dtype=jnp.uint8)
+                return maybe_recolor(self.sprites[name], color_idx, original_color)
 
             return jax.lax.switch(
                 jnp.clip(axis+1, 0, 2),
@@ -1282,6 +1252,34 @@ class BerzerkRenderer(JAXGameRenderer):
             raster = jr.render_at(raster, state.enemy_pos[i][0], state.enemy_pos[i][1], enemy_frame)
 
         # yellow (only 1x) -> orange -> white -> green -> red -> other yellow -> pink -> yellow -> ...
+
+        # Draw enemy bullets
+        color_idx = get_enemy_color_index(state.room_counter)
+
+        for i in range(state.enemy_bullets.shape[0]):
+            is_active = state.enemy_bullet_active[i]
+            bullet_pos = state.enemy_bullets[i]
+            bullet_dir = state.enemy_bullet_dirs[i]
+
+            def draw_enemy_bullet(raster):
+                dx = bullet_dir[0]
+                original_color = jnp.array([240, 170, 103, 255], dtype=jnp.uint8)
+
+                def draw_horizontal(r):
+                    raw_sprite = jr.get_sprite_frame(self.sprites['bullet_horizontal'], 0)
+                    recolored = recolor_sprite(raw_sprite, color_idx, original_color)
+                    return jr.render_at(r, bullet_pos[0], bullet_pos[1], recolored)
+
+                def draw_vertical(r):
+                    raw_sprite = jr.get_sprite_frame(self.sprites['bullet_vertical'], 0)
+                    recolored = recolor_sprite(raw_sprite, color_idx, original_color)
+                    return jr.render_at(r, bullet_pos[0], bullet_pos[1], recolored)
+
+                return jax.lax.cond(dx != 0, draw_horizontal, draw_vertical, raster)
+
+            raster = jax.lax.cond(is_active, draw_enemy_bullet, lambda r: r, raster)
+
+
 
         # Draw score
         score_spacing = 8  # Spacing between digits 
