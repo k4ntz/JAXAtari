@@ -74,6 +74,7 @@ class BerzerkState(NamedTuple):
     death_timer: chex.Array
     room_counter: chex.Array
     entry_direction: chex.Array
+    player_is_firing: chex.Array
     
 class BerzerkObservation(NamedTuple):
     player: chex.Array
@@ -438,6 +439,7 @@ class JaxBerzerk(JaxEnvironment[BerzerkState, BerzerkObservation, BerzerkInfo, B
         death_timer = jnp.array(0, dtype=jnp.int32)
         room_counter = jnp.array(0, dtype=jnp.int32)
         entry_direction=jnp.array(3, dtype=jnp.int32)
+        player_is_firing=jnp.array(False)
         state = BerzerkState(player_pos=pos, 
                              lives=lives, 
                              bullets=bullets, bullet_dirs=bullet_dirs, 
@@ -457,7 +459,8 @@ class JaxBerzerk(JaxEnvironment[BerzerkState, BerzerkObservation, BerzerkInfo, B
                              enemy_animation_counter=enemy_animation_counter,
                              death_timer=death_timer,
                              room_counter=room_counter,
-                             entry_direction=entry_direction)
+                             entry_direction=entry_direction,
+                             player_is_firing=player_is_firing)
         return self._get_observation(state), state
 
     @partial(jax.jit, static_argnums=0)
@@ -722,6 +725,8 @@ class JaxBerzerk(JaxEnvironment[BerzerkState, BerzerkObservation, BerzerkInfo, B
                 action == Action.UPFIRE,
             ]))
 
+            player_is_firing = is_shooting.astype(jnp.bool_)
+
             bullets, bullet_dirs, bullet_active = jax.lax.cond(
                 is_shooting,
                 lambda _: shoot_bullet(state),
@@ -834,7 +839,8 @@ class JaxBerzerk(JaxEnvironment[BerzerkState, BerzerkObservation, BerzerkInfo, B
                 enemy_animation_counter=enemy_animation_counter,
                 death_timer=death_timer,
                 room_counter=new_room_counter,
-                entry_direction=state.entry_direction
+                entry_direction=state.entry_direction,
+                player_is_firing=player_is_firing
             )
 
 
@@ -880,7 +886,8 @@ class JaxBerzerk(JaxEnvironment[BerzerkState, BerzerkObservation, BerzerkInfo, B
                 enemy_animation_counter=jnp.zeros_like(state.enemy_animation_counter),
                 death_timer=jnp.array(0, dtype=jnp.int32),
                 room_counter=new_room_counter,
-                entry_direction= self.get_exit_direction(new_pos)
+                entry_direction= self.get_exit_direction(new_pos),
+                player_is_firing=jnp.array(False)
             )
 
             #jax.debug.print("EXIT: {}", hit_exit)
@@ -1134,7 +1141,7 @@ class BerzerkRenderer(JAXGameRenderer):
                 state.death_timer > 0,
                 death_animation,
                 lambda: jax.lax.cond(
-                    state.animation_counter == 0, #TODO: Add is firing boolean
+                    state.player_is_firing,
                     lambda: jax.lax.switch(
                         jnp.select(
                             [
