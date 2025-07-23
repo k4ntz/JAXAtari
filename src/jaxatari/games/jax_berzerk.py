@@ -699,12 +699,22 @@ class JaxBerzerk(JaxEnvironment[BerzerkState, BerzerkObservation, BerzerkInfo, B
 
             # 4. Shoot bullets of player (enemies can't shoot yet)
             def shoot_bullet(state):
+                player_w, player_h = self.consts.PLAYER_SIZE
+
+                # Offset von Spielerzentrum zur Handposition
+                offset = jnp.array([
+                    jnp.where(move_dir[0] > 0, player_w, jnp.where(move_dir[0] < 0, -2.0, player_w / 2)),   # x
+                    jnp.where(move_dir[1] > 0, player_h, jnp.where(move_dir[1] < 0, -2.0, player_h / 2))    # y
+                ])
+
+                # Startposition ist Spielerposition + Offset (Handposition)
+                spawn_pos = new_pos + offset
                 def try_spawn(i, carry):
                     bullets, directions, active = carry
                     return jax.lax.cond(
                         ~active[i],
                         lambda _: (
-                            bullets.at[i].set(new_pos),
+                            bullets.at[i].set(spawn_pos),
                             directions.at[i].set(move_dir),
                             active.at[i].set(True),
                         ),
@@ -960,7 +970,8 @@ class BerzerkRenderer(JAXGameRenderer):
         # Sprites to load
         sprite_names = [
             'player_idle', 'player_move_1', 'player_move_2', 'player_death',
-            'player_shoot_up', 'player_shoot_up_right', 'player_shoot_right', 'player_shoot_down_right', 'player_shoot_down',
+            'player_shoot_up', 'player_shoot_right', 'player_shoot_down',
+            'player_shoot_left', 'player_shoot_up_left', 'player_shoot_down_left',
             'enemy_idle_1', 'enemy_idle_2', 'enemy_idle_3', 'enemy_idle_4', 'enemy_idle_5', 'enemy_idle_6', 'enemy_idle_7', 'enemy_idle_8',
             'enemy_move_horizontal_1', 'enemy_move_horizontal_2',
             'enemy_move_vertical_1', 'enemy_move_vertical_2', 'enemy_move_vertical_3',
@@ -977,7 +988,8 @@ class BerzerkRenderer(JAXGameRenderer):
 
         # Add padding to player sprites for same size
         player_keys = ['player_idle', 'player_move_1', 'player_move_2', 'player_death', 
-                       'player_shoot_up', 'player_shoot_up_right', 'player_shoot_right', 'player_shoot_down_right', 'player_shoot_down']
+                       'player_shoot_up', 'player_shoot_right', 'player_shoot_down',
+                       'player_shoot_left', 'player_shoot_up_left', 'player_shoot_down_left']
         player_frames = [sprites[k] for k in player_keys]
 
         player_sprites_padded, player_offsets = jr.pad_to_match(player_frames)
@@ -1145,21 +1157,27 @@ class BerzerkRenderer(JAXGameRenderer):
                     lambda: jax.lax.switch(
                         jnp.select(
                             [
-                                (dir[0] == 0) & (dir[1] == -1),   # up
-                                (dir[0] == 1) & (dir[1] == -1),   # upright
-                                (dir[0] == 1) & (dir[1] == 0),    # right
-                                (dir[0] == 1) & (dir[1] == 1),    # downright
-                                (dir[0] == 0) & (dir[1] == 1),    # down
+                                (dir[0] == 0) & (dir[1] == -1),     # up
+                                (dir[0] == 1) & (dir[1] == -1),     # upright
+                                (dir[0] == 1) & (dir[1] == 0),      # right
+                                (dir[0] == 1) & (dir[1] == 1),      # downright
+                                (dir[0] == 0) & (dir[1] == 1),      # down
+                                (dir[0] == -1) & (dir[1] == 1),     # downleft
+                                (dir[0] == -1) & (dir[1] == 0),     # left
+                                (dir[0] == -1) & (dir[1] == -1),    # upleft
                             ],
-                            jnp.arange(5),
+                            jnp.arange(8),
                             default=2  # fallback = right
                         ),
                         [
                             lambda: self.sprites['player_shoot_up'],
-                            lambda: self.sprites['player_shoot_up_right'],
+                            lambda: self.sprites['player_shoot_up'],
                             lambda: self.sprites['player_shoot_right'],
-                            lambda: self.sprites['player_shoot_down_right'],
                             lambda: self.sprites['player_shoot_down'],
+                            lambda: self.sprites['player_shoot_down'],
+                            lambda: self.sprites["player_shoot_down_left"],
+                            lambda: self.sprites["player_shoot_left"],
+                            lambda: self.sprites["player_shoot_up_left"],
                         ]
                     ),
                     lambda: jax.lax.cond(
@@ -1191,12 +1209,14 @@ class BerzerkRenderer(JAXGameRenderer):
         player_frame_right = jr.get_sprite_frame(player_sprite, 0)
 
         player_frame = jax.lax.cond(
-            state.last_dir[0] < 0,
+            (state.last_dir[0] < 0) & (~state.player_is_firing),
             lambda: jnp.flip(player_frame_right, axis=1),  # Horizontal spiegeln
             lambda: player_frame_right
         )
 
         raster = jr.render_at(raster, state.player_pos[0], state.player_pos[1], player_frame)
+
+        #raster = jr.render_at(raster, state.player_pos[0], state.player_pos[1], player_frame)
 
         # Draw enemies
         color_cycle = ["yellow", "orange", "white", "green", "red", "yellow2", "pink", "yellow"]
