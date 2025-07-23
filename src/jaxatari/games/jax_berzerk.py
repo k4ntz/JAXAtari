@@ -28,7 +28,7 @@ class BerzerkConstants(NamedTuple):
     NUM_ENEMIES = 5
     MOVEMENT_PROB = 0.0025  # Value for testing, has to be adjusted
     ENEMY_SPEED = 0.05
-    ENEMY_SHOOT_PROB = 0.001
+    ENEMY_SHOOT_PROB = 0.005
 
     BULLET_SIZE_HORIZONTAL = (4, 2)
     BULLET_SIZE_VERTICAL = (1, 6)
@@ -615,37 +615,27 @@ class JaxBerzerk(JaxEnvironment[BerzerkState, BerzerkObservation, BerzerkInfo, B
 
             # Enemies shoot
             def enemy_fire_logic(pos, alive, axis, dir_, rng):
+                # Nur schießen, wenn nicht in Bewegung
+                is_moving = axis != -1
+
+                aligned_x = jnp.abs(pos[0] - new_pos[0]) < 5
+                aligned_y = jnp.abs(pos[1] - new_pos[1]) < 5
+                aligned = aligned_x | aligned_y
+
+                can_shoot = (~is_moving) & aligned & alive
                 should_fire = jax.random.uniform(rng) < self.consts.ENEMY_SHOOT_PROB
 
-                def direction_when_moving():
-                    # Bewegung entlang x (0) oder y (1)
-                    dx = jnp.where(axis == 0, dir_, 0)
-                    dy = jnp.where(axis == 1, dir_, 0)
-                    return jnp.array([dx, dy], dtype=jnp.float32)
-
-                def direction_when_idle():
-                    # Zielt grob in Richtung Spieler
-                    delta = new_pos - pos  # Spieler - Gegner
-                    abs_dx = jnp.abs(delta[0])
-                    abs_dy = jnp.abs(delta[1])
-                    axis = jnp.where(abs_dx > abs_dy, 0, 1)
-                    dir_ = jnp.where(delta[axis] > 0, 1.0, -1.0)
-                    dx = jnp.where(axis == 0, dir_, 0.0)
-                    dy = jnp.where(axis == 1, dir_, 0.0)
-                    return jnp.array([dx, dy], dtype=jnp.float32)
-
-                is_moving = axis != -1
-                direction = jax.lax.cond(
-                    is_moving,
-                    direction_when_moving,
-                    direction_when_idle
-                )
+                # Richtung in die geschossen wird (zur Spielerposition entlang Achse)
+                dx = jnp.where(aligned_x, 0.0, jnp.sign(new_pos[0] - pos[0]))
+                dy = jnp.where(aligned_y, 0.0, jnp.sign(new_pos[1] - pos[1]))
+                direction = jnp.array([dx, dy], dtype=jnp.float32)
 
                 return (
                     pos,
                     direction,
-                    should_fire & alive
+                    should_fire & can_shoot
                 )
+
 
             enemy_rngs = jax.random.split(rng, self.consts.NUM_ENEMIES)
             enemy_bullets_new, dirs_new, active_new = jax.vmap(enemy_fire_logic)(
@@ -751,7 +741,12 @@ class JaxBerzerk(JaxEnvironment[BerzerkState, BerzerkObservation, BerzerkInfo, B
             
             bullets += bullet_dirs * self.consts.BULLET_SPEED * bullet_active[:, None]
             # only 1 player bullet
-            bullet_active = bullet_active & (~object_hits_wall(bullets[0], bullet_sizes[0]))
+            bullet_active = bullet_active & (~object_hits_wall(bullets[0], bullet_sizes[0])) & (
+                (bullets[:, 0] >= self.consts.PLAYER_BOUNDS[0][0]) &
+                (bullets[:, 0] + bullet_sizes[:, 0] <= self.consts.PLAYER_BOUNDS[0][1]) &
+                (bullets[:, 1] >= self.consts.PLAYER_BOUNDS[1][0]) &
+                (bullets[:, 1] + bullet_sizes[:, 1] <= self.consts.PLAYER_BOUNDS[1][1])
+            )
 
             # 6. Check collision of bullet and enemy
             def bullet_hits_enemy(bullet_pos, bullet_size, enemy_pos):
@@ -793,7 +788,7 @@ class JaxBerzerk(JaxEnvironment[BerzerkState, BerzerkObservation, BerzerkInfo, B
 
             enemy_bullet_hit_enemy = jnp.any(enemy_friendly_fire_hits, axis=1)  # Shape: (NUM_ENEMIES,)
             bullet_active = bullet_active & ~player_bullet_hit_enemy_bullet
-            enemy_bullet_active = enemy_bullet_active & ~enemy_bullet_hit_enemy
+            enemy_bullet_active = enemy_bullet_active & ~enemy_bullet_hit_enemy & ~enemy_bullet_hit_by_player
             enemy_bullet_hits_wall = jax.vmap(
                 lambda pos, size: object_hits_wall(pos, size)
             )(enemy_bullets, enemy_bullet_sizes)
@@ -1379,6 +1374,29 @@ class BerzerkRenderer(JAXGameRenderer):
             lambda r: r,
             raster
         )
+
+        # Death screen effect: black bars from top to bottom
+        def apply_death_overlay(raster):
+            # Fortschritt der Animation (1.0 = ganz schwarz)
+            progress = 1.0 - (state.death_timer.astype(jnp.float32) / self.consts.DEATH_ANIMATION_FRAMES)
+
+            height = raster.shape[0]
+            width = raster.shape[1]
+
+            # Anzahl Pixelzeilen die abgedeckt werden sollen
+            covered_rows = jnp.floor(progress * height).astype(jnp.int32)
+
+            # Maske erzeugen: Zeilen < covered_rows → True
+            mask = jnp.arange(height)[:, None] < covered_rows
+
+            # Auf 3 Kanäle erweitern
+            mask_3c = jnp.repeat(mask, width, axis=1)[..., None]
+
+            # Schwarzes Overlay anwenden
+            return jnp.where(mask_3c, 0, raster)
+
+        # Wende nur an, wenn im Todesmodus
+        raster = jax.lax.cond(state.death_timer > 0, apply_death_overlay, lambda r: r, raster)
 
         return raster
     
