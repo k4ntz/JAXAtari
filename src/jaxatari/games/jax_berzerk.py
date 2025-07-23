@@ -1385,27 +1385,49 @@ class BerzerkRenderer(JAXGameRenderer):
         )
 
         # Death screen effect: black bars from top to bottom
-        def apply_death_overlay(raster):
-            # Fortschritt der Animation (1.0 = ganz schwarz)
-            progress = 1.0 - (state.death_timer.astype(jnp.float32) / self.consts.DEATH_ANIMATION_FRAMES)
-
-            height = raster.shape[0]
-            width = raster.shape[1]
-
-            # Anzahl Pixelzeilen die abgedeckt werden sollen
+        def apply_bar_overlay(raster, progress: jnp.ndarray, mode_idx: int):
+            height, width = raster.shape[0], raster.shape[1]
             covered_rows = jnp.floor(progress * height).astype(jnp.int32)
+            rows = jnp.arange(height)
 
-            # Maske erzeugen: Zeilen < covered_rows → True
-            mask = jnp.arange(height)[:, None] < covered_rows
+            def top_down_mask():
+                return rows[:, None] < covered_rows
 
-            # Auf 3 Kanäle erweitern
+            def bottom_up_mask():
+                return rows[:, None] >= (height - covered_rows)
+
+            def center_inward_mask():
+                top = rows[:, None] < (covered_rows // 2)
+                bottom = rows[:, None] >= (height - covered_rows // 2)
+                return top | bottom
+
+            mask = jax.lax.switch(
+                mode_idx,
+                [top_down_mask, bottom_up_mask, center_inward_mask]
+            )
+
             mask_3c = jnp.repeat(mask, width, axis=1)[..., None]
-
-            # Schwarzes Overlay anwenden
             return jnp.where(mask_3c, 0, raster)
 
-        # Wende nur an, wenn im Todesmodus
-        raster = jax.lax.cond(state.death_timer > 0, apply_death_overlay, lambda r: r, raster)
+
+        # Fortschritt berechnen
+        death_anim = state.death_timer > 0
+        level_transition = (
+            (state.room_counter > 0) & 
+            (state.animation_counter < self.consts.DEATH_ANIMATION_FRAMES)
+        )
+
+        progress = 1.0 - (state.death_timer.astype(jnp.float32) / self.consts.DEATH_ANIMATION_FRAMES)
+
+        # Death = center collapse
+        raster = jax.lax.cond(
+            death_anim,
+            lambda r: apply_bar_overlay(r, progress, 2),
+            lambda r: r,
+            raster
+        )
+
+        # TODO: Death anim for changing rooms
 
         return raster
     
