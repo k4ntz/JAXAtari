@@ -557,7 +557,32 @@ class JaxBerzerk(JaxEnvironment[BerzerkState, BerzerkObservation, BerzerkInfo, B
                         lambda: self.renderer.room_collision_masks['mid_walls_4'],
                     ])
                 
-                collision_mask = load_mask(room_idx) | self.renderer.room_collision_masks['level_outer_walls']  # shape (H,W)
+                # Hole Basismasken
+                mid_mask = load_mask(room_idx)
+                outer_mask = self.renderer.room_collision_masks['level_outer_walls']
+
+                # Hole Türmasken
+                left_mask = self.renderer.room_collision_masks['door_vertical_left']
+                right_mask = self.renderer.room_collision_masks['door_vertical_right']
+                top_mask = self.renderer.room_collision_masks['door_horizontal_up']
+                bottom_mask = self.renderer.room_collision_masks['door_horizontal_down']
+
+                # entry_direction: 0=oben, 1=unten, 2=links, 3=rechts
+                entry = state.entry_direction
+
+                # Dynamisch festlegen, welche Türen "geschlossen" (= blockieren) sind
+                block_left   = (entry == 2) | (entry == 3)
+                block_right  = (entry == 2) | (entry == 3)
+                block_top    = (entry == 1)
+                block_bottom = (entry == 0)
+
+                # Nur diese Türmasken zulassen
+                collision_mask = mid_mask | outer_mask
+                collision_mask = jax.lax.cond(block_left,   lambda: collision_mask | left_mask,   lambda: collision_mask)
+                collision_mask = jax.lax.cond(block_right,  lambda: collision_mask | right_mask,  lambda: collision_mask)
+                collision_mask = jax.lax.cond(block_top,    lambda: collision_mask | top_mask,    lambda: collision_mask)
+                collision_mask = jax.lax.cond(block_bottom, lambda: collision_mask | bottom_mask, lambda: collision_mask)
+
 
                 mask_height, mask_width = collision_mask.shape
 
@@ -958,7 +983,8 @@ class BerzerkRenderer(JAXGameRenderer):
             'enemy_move_horizontal_1', 'enemy_move_horizontal_2',
             'enemy_move_vertical_1', 'enemy_move_vertical_2', 'enemy_move_vertical_3',
             'bullet_horizontal', 'bullet_vertical',
-            'door_horizontal', 'door_vertical',
+            'door_vertical_left', 'door_vertical_right',
+            'door_horizontal_up', 'door_horizontal_down',
             'level_outer_walls', 'mid_walls_1', 'mid_walls_2', 'mid_walls_3', 'mid_walls_4'
         ]
         for name in sprite_names:
@@ -995,7 +1021,8 @@ class BerzerkRenderer(JAXGameRenderer):
         pad_and_store(enemy_keys)
 
         # Pad mid_walls sprites to same shape
-        mid_keys = ['mid_walls_1', 'mid_walls_2', 'mid_walls_3', 'mid_walls_4']
+        mid_keys = ['mid_walls_1', 'mid_walls_2', 'mid_walls_3', 'mid_walls_4', 'level_outer_walls', 
+                    'door_vertical_left', 'door_vertical_right', 'door_horizontal_up', 'door_horizontal_down',]
         mid_frames = [sprites[k] for k in mid_keys]
         mid_padded, mid_offsets = jr.pad_to_match(mid_frames)
         for i, key in enumerate(mid_keys):
@@ -1038,44 +1065,26 @@ class BerzerkRenderer(JAXGameRenderer):
 
         # --- Außenwände immer oben drauf ---
         outer_walls = jr.get_sprite_frame(self.sprites['level_outer_walls'], 0)
-        raster = jr.render_at(raster, self.consts.WALL_OFFSET[0], self.consts.WALL_OFFSET[1], outer_walls)
+        raster = jr.render_at(raster, 0, 0, outer_walls)
 
 
         def draw_entry_block(raster):
-            wall_v = jr.get_sprite_frame(self.sprites['door_vertical'], 0)
-            wall_h = jr.get_sprite_frame(self.sprites['door_horizontal'], 0)
+            wall_vl = jr.get_sprite_frame(self.sprites['door_vertical_left'], 0)
+            wall_hu = jr.get_sprite_frame(self.sprites['door_horizontal_up'], 0)
+            wall_vr = jr.get_sprite_frame(self.sprites['door_vertical_right'], 0)
+            wall_hd = jr.get_sprite_frame(self.sprites['door_horizontal_down'], 0)
 
             def block_top(r):
-                return jr.render_at(
-                    r,
-                    self.consts.PLAYER_BOUNDS[0][0] + (self.consts.PLAYER_BOUNDS[0][1] - self.consts.PLAYER_BOUNDS[0][0]) // 2 - wall_h.shape[1] // 2,
-                    self.consts.PLAYER_BOUNDS[1][0] - self.consts.WALL_THICKNESS,
-                    wall_h
-                )
+                return jr.render_at(r, 0, 0, wall_hu)
 
             def block_bottom(r):
-                return jr.render_at(
-                    r,
-                    self.consts.PLAYER_BOUNDS[0][0] + (self.consts.PLAYER_BOUNDS[0][1] - self.consts.PLAYER_BOUNDS[0][0]) // 2 - wall_h.shape[1] // 2,
-                    self.consts.PLAYER_BOUNDS[1][1],
-                    wall_h
-                )
+                return jr.render_at(r, 0, 0, wall_hd)
 
             def block_left(r):
-                return jr.render_at(
-                    r,
-                    self.consts.PLAYER_BOUNDS[0][0] - self.consts.WALL_THICKNESS,
-                    self.consts.PLAYER_BOUNDS[1][0] + (self.consts.PLAYER_BOUNDS[1][1] - self.consts.PLAYER_BOUNDS[1][0]) // 2 - wall_v.shape[0] // 2,
-                    wall_v
-                )
+                return jr.render_at(r, 0, 0, wall_vl)
 
             def block_right(r):
-                return jr.render_at(
-                    r,
-                    self.consts.PLAYER_BOUNDS[0][1],
-                    self.consts.PLAYER_BOUNDS[1][0] + (self.consts.PLAYER_BOUNDS[1][1] - self.consts.PLAYER_BOUNDS[1][0]) // 2 - wall_v.shape[0] // 2,
-                    wall_v
-                )
+                return jr.render_at(r, 0, 0, wall_vr)
 
             entry = state.entry_direction
 
@@ -1406,7 +1415,9 @@ class BerzerkRenderer(JAXGameRenderer):
 
         return {
             name: extract_mask(self.sprites[name])
-            for name in ['mid_walls_1', 'mid_walls_2', 'mid_walls_3', 'mid_walls_4', 'level_outer_walls']
+            for name in ['mid_walls_1', 'mid_walls_2', 'mid_walls_3', 'mid_walls_4', 
+                         'level_outer_walls', 
+                         'door_vertical_left', 'door_horizontal_up', 'door_vertical_right', 'door_horizontal_down']
         }
 
 
