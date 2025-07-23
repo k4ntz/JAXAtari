@@ -23,7 +23,7 @@ ENEMY_SIZE = (7, 7)
 
 MAX_ENEMIES = 6
 
-PLAYER_PATH_OFFSET = (1, 0) # Offset for the player sprite in relation to the path mask
+PLAYER_SPRITE_OFFSET = (-1, 0) # Offset for the player sprite in relation to the position in the code (because the top left corner of the player sprite is of the path to the left)
 
 # Values to calculate how many points an Edge is worth based on how long it is
 PIXELS_PER_POINT_HORIZONTAL = 3 # Change rendering if more than 3 
@@ -32,7 +32,7 @@ PIXELS_PER_POINT_VERTICAL = 30 # Each vertical edge is worth 1 point, since they
 BONUS_POINTS_PER_RECTANGLE = 48
 
 INITIAL_LIVES = 7
-INITIAL_PLAYER_POSITION = jnp.array([139, 88])
+INITIAL_PLAYER_POSITION = jnp.array([140, 88])
 PLAYER_STARTING_PATH = 85  # The path edge the player starts on, this is the index in PATH_EDGES
 INITIAL_ENEMY_POSITIONS = jnp.array(
     [
@@ -331,7 +331,7 @@ def player_step(state: AmidarState, action: chex.Array) -> tuple[chex.Array, che
     def on_path(x, y):
         """Checks if the given coordinates are on the path."""
         # add 1 to x and y to account for the offset of the top left corner of the player sprite in relation to the path mask
-        return PATH_MASK[x+PLAYER_PATH_OFFSET[0], y+PLAYER_PATH_OFFSET[1]] == 1
+        return PATH_MASK[x, y] == 1
 
     up = jnp.logical_or( action == Action.UP, action == Action.UPFIRE)
     down = jnp.logical_or( action == Action.DOWN, action == Action.DOWNFIRE)
@@ -376,7 +376,7 @@ def player_step(state: AmidarState, action: chex.Array) -> tuple[chex.Array, che
             found = jnp.any(matches)
             index = jnp.where(found, index, -1)
             return index
-        match_index = find_edge(jnp.array([[new_x+PLAYER_PATH_OFFSET[0], new_y+PLAYER_PATH_OFFSET[1]], state.last_walked_corner]), PATH_EDGES)
+        match_index = find_edge(jnp.array([[new_x, new_y], state.last_walked_corner]), PATH_EDGES)
 
         def score_points():
             """Scores points based on the edge walked on."""
@@ -433,11 +433,11 @@ def player_step(state: AmidarState, action: chex.Array) -> tuple[chex.Array, che
         # If the edge is not walked on yet, score points and update the walked on paths & completed rectangles
         points_scored, walked_on_paths, completed_rectangles = jax.lax.cond(jnp.logical_and(match_index >= 0, state.walked_on_paths[match_index] == 0), score_points, lambda: (0, state.walked_on_paths, state.completed_rectangles))
 
-        last_walked_corner = [new_x+PLAYER_PATH_OFFSET[0], new_y+PLAYER_PATH_OFFSET[1]]  # Update the last walked corner to the new position
+        last_walked_corner = [new_x, new_y]  # Update the last walked corner to the new position
         return points_scored, last_walked_corner, walked_on_paths, completed_rectangles
 
 
-    is_corner = jnp.any(jnp.all(PATH_CORNERS == jnp.array([new_x+PLAYER_PATH_OFFSET[0], new_y+PLAYER_PATH_OFFSET[1]]), axis=1))
+    is_corner = jnp.any(jnp.all(PATH_CORNERS == jnp.array([new_x, new_y]), axis=1))
     points_scored, last_walked_corner, walked_on_paths, completed_rectangles = jax.lax.cond(is_corner, corner_handeling, lambda: (0, [state.last_walked_corner[0], state.last_walked_corner[1]], state.walked_on_paths, state.completed_rectangles))
 
     # TODO: Add checking if all edges(next level)/corner edges(chickens) are walked on
@@ -698,7 +698,7 @@ class AmidarRenderer(AtraJaxisRenderer):
         # Render player - IMPORTANT: Swap x and y coordinates
         # render_at takes (raster, y, x, sprite) but we need to swap them due to transposition
         frame_player = aj.get_sprite_frame(self.SPRITE_PLAYER, 0)
-        raster = aj.render_at(raster, state.player_x, state.player_y, frame_player)
+        raster = aj.render_at(raster, state.player_x+PLAYER_SPRITE_OFFSET[0], state.player_y+PLAYER_SPRITE_OFFSET[1], frame_player)
 
         # Render enemies - IMPORTANT: Swap x and y coordinates
         # TODO differentiate enemy types and if they should be rendered or not
