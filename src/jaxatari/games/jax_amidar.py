@@ -26,11 +26,12 @@ MAX_ENEMIES = 6
 PLAYER_PATH_OFFSET = (1, 0) # Offset for the player sprite in relation to the path mask
 
 # Values to calculate how many points an Edge is worth based on how long it is
-PIXELS_PER_POINT_HORIZONTAL = 4
+PIXELS_PER_POINT_HORIZONTAL = 3 # Change rendering if more than 3 
 PIXELS_PER_POINT_VERTICAL = 30 # Each vertical edge is worth 1 point, since they are 30 pixels long
 # Bonus points for completing a rectangle
 BONUS_POINTS_PER_RECTANGLE = 48
 
+INITIAL_LIVES = 7
 INITIAL_PLAYER_POSITION = jnp.array([139, 88])
 PLAYER_STARTING_PATH = 85  # The path edge the player starts on, this is the index in PATH_EDGES
 INITIAL_ENEMY_POSITIONS = jnp.array(
@@ -296,6 +297,7 @@ PATH_SPRITE = jnp.where(RENDERING_PATH_MASK[:, :, None] == 1, PATH_PATTERN, jnp.
 # immutable state container
 class AmidarState(NamedTuple):
     score: chex.Array
+    lives: chex.Array
     player_x: chex.Array
     player_y: chex.Array
     player_direction: chex.Array # 0=up, 1=down, 2=left, 3=right
@@ -471,6 +473,7 @@ class JaxAmidar(JaxEnvironment[AmidarState, AmidarObservation, AmidarInfo]):
         """
         state = AmidarState(
             score=jnp.array(0).astype(jnp.int32),  # Initial score
+            lives=jnp.array(INITIAL_LIVES).astype(jnp.int32),  # Initial lives
             player_x=jnp.array(INITIAL_PLAYER_POSITION[0]).astype(jnp.int32),
             player_y=jnp.array(INITIAL_PLAYER_POSITION[1]).astype(jnp.int32),
             player_direction=jnp.array(0).astype(jnp.int32),
@@ -494,6 +497,7 @@ class JaxAmidar(JaxEnvironment[AmidarState, AmidarObservation, AmidarInfo]):
         (points_scored, player_x, player_y, player_direction, last_walked_corner, walked_on_paths, completed_rectangles) = player_state
         new_state = AmidarState(
             score=state.score + points_scored, # Could possibly change in multiple functions, so it is not calculated in the function based on the previous state
+            lives=state.lives, # not changing yet
             player_x=player_x,
             player_y=player_y,
             player_direction=player_direction,
@@ -558,16 +562,20 @@ def load_sprites():
 
     bg = aj.loadFrame(os.path.join(MODULE_DIR, "sprites/amidar/background.npy"), transpose=True)
 
+    life = aj.loadFrame(os.path.join(MODULE_DIR, "sprites/amidar/life.npy"), transpose=True)
+
     warrior = aj.loadFrame(os.path.join(MODULE_DIR, "sprites/amidar/enemy/warrior.npy"), transpose=True)
 
     # Convert all sprites to the expected format (add frame dimension)
     SPRITE_BG = jnp.expand_dims(bg, axis=0)
+    SPRITE_LIFE = jnp.expand_dims(life, axis=0)
     SPRITE_PLAYER = jnp.expand_dims(player, axis=0)
     SPRITE_WARRIOR = jnp.expand_dims(warrior, axis=0)
 
     return (
         SPRITE_BG,
         DIGITS,
+        SPRITE_LIFE,
         SPRITE_PLAYER,
         SPRITE_WARRIOR,
     )
@@ -580,6 +588,7 @@ class AmidarRenderer(AtraJaxisRenderer):
         (
             self.SPRITE_BG,
             self.DIGITS,
+            self.SPRITE_LIFE,
             self.SPRITE_PLAYER,
             self.SPRITE_WARRIOR,
         ) = load_sprites()
@@ -677,6 +686,14 @@ class AmidarRenderer(AtraJaxisRenderer):
 
         raster = jax.lax.fori_loop(0, number_of_digits, render_char, raster)
 
+        # Render lives
+        lives = state.lives
+        def render_lives(i, carry):
+            current_raster, x, y = carry
+            # Render a life sprite at the specified position
+            frame_life = aj.get_sprite_frame(self.SPRITE_LIFE, 0)
+            return aj.render_at(current_raster, x, y, frame_life), x-16, y  # Move x left by 16 pixels for the next life
+        raster, _, _ = jax.lax.fori_loop(0, lives, render_lives, (raster, 148, 175))
 
         # Render player - IMPORTANT: Swap x and y coordinates
         # render_at takes (raster, y, x, sprite) but we need to swap them due to transposition
