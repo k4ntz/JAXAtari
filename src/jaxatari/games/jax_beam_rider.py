@@ -12,23 +12,13 @@ from jaxatari.environment import JaxEnvironment
 from jaxatari.renderers import JAXGameRenderer
 
 """TODOS:
-- Add torpedo shooting -> DONE
-- Add the rest of the enemies -> DONE
-- Merge the renderers --> DONE
-----If the steps above are finished, ask for feedback----
 - Logic Bugs for ships: --> DONE
-    - Green blockers and sentinel should not allow any laser to go through -> DONE
-    - change the yellow chirper ships height --> DONE
     - spawn rate of green blockers needs to be fixed when sector == 6 && sentinal is active --> might be done
 - Check the sentinal ship constants/Optimize the code/remove unnecessary code
 - Adjust the spawn rate of green blockers in sectors 1 - 5 (currently the sentinel moves faster through the screen than they can spawn) -> somewhat done
-- Add more movement Types for white enemies -> DONE
-- Difficulty Scaling -> DONE
-- Change enemy speeds -> DONE
-- Adjust points according to enemies -> done
+- Change enemy speeds
 - Documentation
 - Should be playable through script
-- Add Yellow Rejuvinators --> DONE
 - Maybe some environment changes(depending on feedback)
 - White saucers movement needs to be update --> No teleporation and zigzag movement needs to be broader
 
