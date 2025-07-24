@@ -75,7 +75,8 @@ class BerzerkState(NamedTuple):
     room_counter: chex.Array
     entry_direction: chex.Array
     player_is_firing: chex.Array
-    
+    room_transition_timer: chex.Array
+
 class BerzerkObservation(NamedTuple):
     player: chex.Array
     bullets: chex.Array
@@ -438,8 +439,9 @@ class JaxBerzerk(JaxEnvironment[BerzerkState, BerzerkObservation, BerzerkInfo, B
         enemy_animation_counter = jnp.zeros((self.consts.NUM_ENEMIES,), dtype=jnp.int32)
         death_timer = jnp.array(0, dtype=jnp.int32)
         room_counter = jnp.array(0, dtype=jnp.int32)
-        entry_direction=jnp.array(3, dtype=jnp.int32)
-        player_is_firing=jnp.array(False)
+        entry_direction= jnp.array(3, dtype=jnp.int32)
+        player_is_firing= jnp.array(False)
+        room_transition_timer= jnp.array(0, dtype=jnp.int32)
         state = BerzerkState(player_pos=pos, 
                              lives=lives, 
                              bullets=bullets, bullet_dirs=bullet_dirs, 
@@ -460,7 +462,9 @@ class JaxBerzerk(JaxEnvironment[BerzerkState, BerzerkObservation, BerzerkInfo, B
                              death_timer=death_timer,
                              room_counter=room_counter,
                              entry_direction=entry_direction,
-                             player_is_firing=player_is_firing)
+                             player_is_firing=player_is_firing,
+                             room_transition_timer=room_transition_timer
+                             )
         return self._get_observation(state), state
 
     @partial(jax.jit, static_argnums=0)
@@ -501,6 +505,73 @@ class JaxBerzerk(JaxEnvironment[BerzerkState, BerzerkObservation, BerzerkInfo, B
                 ),
             )
 
+        room_transition_active = state.room_transition_timer > 0
+        transition_timer = jnp.maximum(state.room_transition_timer - 1, 0)
+
+        def handle_room_transition(_):
+            new_state = state._replace(room_transition_timer=transition_timer)
+
+            def finished_transition():
+                #TODO: Positions need to be changed to match original.
+                #TODO: Positions need to be changed to match original.
+                player_spawn_pos = jax.lax.switch(
+                    self.get_exit_direction(new_state.player_pos),
+                    [
+                        lambda _: jnp.array([
+                            self.consts.PLAYER_BOUNDS[0][1] // 2,
+                            self.consts.PLAYER_BOUNDS[1][1] - 25
+                            ], dtype=jnp.float32),  # oben → unten spawnen
+                        
+                        lambda _: jnp.array([
+                            self.consts.PLAYER_BOUNDS[0][1] // 2, 
+                            self.consts.PLAYER_BOUNDS[1][0] + 5], dtype=jnp.float32),  # unten → oben spawnen
+                        
+                        lambda _: jnp.array([
+                            self.consts.PLAYER_BOUNDS[0][1] - 12, 
+                            self.consts.PLAYER_BOUNDS[1][1] // 2
+                            ], dtype=jnp.float32),  # links → rechts
+                        
+                        lambda _: jnp.array([
+                            self.consts.PLAYER_BOUNDS[0][0] + 2,
+                            self.consts.PLAYER_BOUNDS[1][1] // 2
+                        ], dtype=jnp.float32),  # rechts → links
+                    ],
+                    jnp.array([
+                            self.consts.PLAYER_BOUNDS[0][0] + 2,
+                            self.consts.PLAYER_BOUNDS[1][1] // 2
+                        ], dtype=jnp.float32)  # fallback
+                )
+                # Neues Level laden (ähnlich wie beim Tod)
+                new_rng = jax.random.split(state.rng)[1]
+                next_state = self.reset(new_rng)[1]._replace(
+                    player_pos=player_spawn_pos,
+                    room_counter=state.room_counter + 1,
+                    lives=state.lives,
+                    score=state.score,
+                    entry_direction=state.entry_direction
+                )
+                return (
+                    self._get_observation(next_state),
+                    next_state,
+                    0.0,
+                    False,
+                    self._get_info(next_state),
+                )
+
+            def in_transition():
+                return (
+                    self._get_observation(new_state),
+                    new_state,
+                    0.0,
+                    False,
+                    self._get_info(new_state),
+                )
+
+            return jax.lax.cond(
+                transition_timer == 0,
+                finished_transition,
+                in_transition
+            )
 
 
         def handle_normal(_):
@@ -608,13 +679,10 @@ class JaxBerzerk(JaxEnvironment[BerzerkState, BerzerkObservation, BerzerkInfo, B
 
             
             hit_exit = self.check_exit_crossing(new_pos)
+            transition_timer = jnp.where(hit_exit, self.consts.DEATH_ANIMATION_FRAMES, state.room_transition_timer)
+            entry_direction = jnp.where(hit_exit, self.get_exit_direction(new_pos), state.entry_direction)
             hit_wall = object_hits_wall((player_x, player_y), self.consts.PLAYER_SIZE) & ~hit_exit
             #jax.debug.print("Exzr: {hit_exit}", hit_exit=hit_exit)
-            new_room_counter = jax.lax.select(
-                hit_exit,
-                state.room_counter + 1,
-                state.room_counter
-            )
             #jax.debug.print("Room: {new_room_counter}", new_room_counter=new_room_counter)
             # 2. Update position and direction of enemies
             rng, enemy_rng = jax.random.split(state.rng)
@@ -873,63 +941,10 @@ class JaxBerzerk(JaxEnvironment[BerzerkState, BerzerkObservation, BerzerkInfo, B
                 animation_counter=animation_counter,
                 enemy_animation_counter=enemy_animation_counter,
                 death_timer=death_timer,
-                room_counter=new_room_counter,
-                entry_direction=state.entry_direction,
-                player_is_firing=player_is_firing
-            )
-
-
-            #TODO: Positions need to be changed to match original.
-            player_spawn_pos = jax.lax.switch(
-                self.get_exit_direction(new_pos),
-                [
-                    lambda _: jnp.array([self.consts.WIDTH // 2, self.consts.PLAYER_BOUNDS[1][1] - 2 * self.consts.PLAYER_SIZE[1]], dtype=jnp.float32),  # oben → unten spawnen
-                    lambda _: jnp.array([self.consts.WIDTH // 2, self.consts.PLAYER_BOUNDS[1][0] + 2], dtype=jnp.float32),  # unten → oben spawnen
-                    lambda _: jnp.array([self.consts.PLAYER_BOUNDS[0][1] - 2 * self.consts.PLAYER_SIZE[0], self.consts.HEIGHT // 2], dtype=jnp.float32),  # links → rechts
-                    lambda _: jnp.array([self.consts.PLAYER_BOUNDS[0][0] + 2, self.consts.HEIGHT // 2], dtype=jnp.float32),  # rechts → links
-                ],
-                jnp.array([self.consts.WIDTH // 2, self.consts.HEIGHT // 2], dtype=jnp.float32)  # fallback
-            )
-
-
-            # New level if exit reached
-            reset_for_new_level = BerzerkState(
-                player_pos=player_spawn_pos,
-                lives=state.lives,
-                bullets=jnp.zeros_like(state.bullets),
-                bullet_dirs=jnp.zeros_like(state.bullet_dirs),
-                bullet_active=jnp.zeros_like(state.bullet_active),
-                enemy_pos=jax.random.uniform(
-                    state.rng, shape=(self.consts.NUM_ENEMIES, 2),
-                    minval=jnp.array([self.consts.PLAYER_BOUNDS[0][0], self.consts.PLAYER_BOUNDS[1][0]]),
-                    maxval=jnp.array([
-                        self.consts.PLAYER_BOUNDS[0][1] - self.consts.ENEMY_SIZE[0],
-                        self.consts.PLAYER_BOUNDS[1][1] - self.consts.ENEMY_SIZE[1]
-                    ])
-                ),
-                enemy_move_axis=-jnp.ones_like(state.enemy_move_axis),
-                enemy_move_dir=jnp.zeros_like(state.enemy_move_dir),
-                enemy_alive=jnp.ones_like(state.enemy_alive),
-                enemy_bullets=jnp.zeros((self.consts.NUM_ENEMIES, 2), dtype=jnp.float32),
-                enemy_bullet_dirs=jnp.zeros((self.consts.NUM_ENEMIES, 2), dtype=jnp.float32),
-                enemy_bullet_active=jnp.zeros((self.consts.NUM_ENEMIES,), dtype=bool),
-                enemy_move_prob=state.enemy_move_prob,
-                last_dir=jnp.array([0.0, -1.0], dtype=jnp.float32),
-                rng=rng,
-                score=score_after,
-                animation_counter=jnp.zeros_like(state.animation_counter),
-                enemy_animation_counter=jnp.zeros_like(state.enemy_animation_counter),
-                death_timer=jnp.array(0, dtype=jnp.int32),
-                room_counter=new_room_counter,
-                entry_direction= self.get_exit_direction(new_pos),
-                player_is_firing=jnp.array(False)
-            )
-
-            #jax.debug.print("EXIT: {}", hit_exit)
-            new_state = jax.lax.cond(
-                hit_exit,
-                lambda: reset_for_new_level,
-                lambda: new_state
+                room_counter=state.room_counter,
+                entry_direction=entry_direction,
+                player_is_firing=player_is_firing,
+                room_transition_timer=transition_timer
             )
 
             # 10. Observation + Info + Reward/Done
@@ -943,7 +958,12 @@ class JaxBerzerk(JaxEnvironment[BerzerkState, BerzerkObservation, BerzerkInfo, B
         return jax.lax.cond(
             is_dead,
             handle_death,
-            handle_normal,
+            lambda _: jax.lax.cond(
+                room_transition_active,
+                handle_room_transition,
+                handle_normal,
+                operand=None
+            ),
             operand=None
         )
 
@@ -1003,7 +1023,8 @@ class BerzerkRenderer(JAXGameRenderer):
             'bullet_horizontal', 'bullet_vertical',
             'door_vertical_left', 'door_vertical_right',
             'door_horizontal_up', 'door_horizontal_down',
-            'level_outer_walls', 'mid_walls_1', 'mid_walls_2', 'mid_walls_3', 'mid_walls_4'
+            'level_outer_walls', 'mid_walls_1', 'mid_walls_2', 'mid_walls_3', 'mid_walls_4',
+            'life'
         ]
         for name in sprite_names:
             sprites[name] = _load_sprite_frame(name)
@@ -1061,6 +1082,9 @@ class BerzerkRenderer(JAXGameRenderer):
 
     @partial(jax.jit, static_argnums=(0,))
     def render(self, state):
+        death_anim = state.death_timer > 0
+        room_transition_anim = state.room_transition_timer > 0
+        current_screen_anim = jnp.logical_or(death_anim, room_transition_anim)
         raster = jnp.zeros((self.consts.HEIGHT, self.consts.WIDTH, 3), dtype=jnp.uint8)
 
         # Draw walls (assuming fixed positions based on bounds)
@@ -1105,16 +1129,21 @@ class BerzerkRenderer(JAXGameRenderer):
             def block_right(r):
                 return jr.render_at(r, 0, 0, wall_vr)
 
-            entry = state.entry_direction
-
             # Falls von links oder rechts → blockiere beide
-            raster = jax.lax.cond(entry == 2, lambda r: block_left(block_right(r)), lambda r: r, raster)
-            raster = jax.lax.cond(entry == 3, lambda r: block_left(block_right(r)), lambda r: r, raster)
+            cond_lr = jnp.logical_and(state.entry_direction == 2, current_screen_anim == 0)
+            raster = jax.lax.cond(cond_lr, lambda r: block_left(block_right(r)), lambda r: r, raster)
+
+            cond_ll = jnp.logical_and(state.entry_direction == 3, current_screen_anim == 0)
+            raster = jax.lax.cond(cond_ll, lambda r: block_left(block_right(r)), lambda r: r, raster)
 
             # Falls von oben → blockiere unten
-            raster = jax.lax.cond(entry == 0, block_bottom, lambda r: r, raster)
+            cond_top = jnp.logical_and(state.entry_direction == 0, current_screen_anim == 0)
+            raster = jax.lax.cond(cond_top, block_bottom, lambda r: r, raster)
+
             # Falls von unten → blockiere oben
-            raster = jax.lax.cond(entry == 1, block_top, lambda r: r, raster)
+            cond_bottom = jnp.logical_and(state.entry_direction == 1, current_screen_anim == 0)
+            raster = jax.lax.cond(cond_bottom, block_top, lambda r: r, raster)
+
 
             return raster
         
@@ -1146,7 +1175,9 @@ class BerzerkRenderer(JAXGameRenderer):
                     raster
                 )
 
-            raster = jax.lax.cond(is_active, draw_bullet, lambda r: r, raster)
+            cond = jnp.logical_and(is_active, jnp.logical_not(current_screen_anim))
+            raster = jax.lax.cond(cond, draw_bullet, lambda r: r, raster)
+
 
         # Draw player animation
         def get_player_sprite():
@@ -1222,10 +1253,12 @@ class BerzerkRenderer(JAXGameRenderer):
             lambda: jnp.flip(player_frame_right, axis=1),  # Horizontal spiegeln
             lambda: player_frame_right
         )
-
-        raster = jr.render_at(raster, state.player_pos[0], state.player_pos[1], player_frame)
-
-        #raster = jr.render_at(raster, state.player_pos[0], state.player_pos[1], player_frame)
+        raster = jax.lax.cond(
+            jnp.logical_not(current_screen_anim),
+            lambda r: jr.render_at(r, state.player_pos[0], state.player_pos[1], player_frame),
+            lambda r: r,
+            raster
+        )
 
         # Draw enemies
         color_cycle = ["yellow", "orange", "white", "green", "red", "yellow2", "pink", "yellow"]
@@ -1322,7 +1355,12 @@ class BerzerkRenderer(JAXGameRenderer):
                 lambda: enemy_frame_right
             )
 
-            raster = jr.render_at(raster, state.enemy_pos[i][0], state.enemy_pos[i][1], enemy_frame)
+            raster = jax.lax.cond(
+                jnp.logical_not(current_screen_anim),
+                lambda r: jr.render_at(raster, state.enemy_pos[i][0], state.enemy_pos[i][1], enemy_frame),
+                lambda r: r,
+                raster
+            )
 
         # yellow (only 1x) -> orange -> white -> green -> red -> other yellow -> pink -> yellow -> ...
 
@@ -1350,8 +1388,8 @@ class BerzerkRenderer(JAXGameRenderer):
 
                 return jax.lax.cond(dx != 0, draw_horizontal, draw_vertical, raster)
 
-            raster = jax.lax.cond(is_active, draw_enemy_bullet, lambda r: r, raster)
-
+            cond = jnp.logical_and(is_active, jnp.logical_not(current_screen_anim))
+            raster = jax.lax.cond(cond, draw_enemy_bullet, lambda r: r, raster)
 
 
         # Draw score
@@ -1405,7 +1443,7 @@ class BerzerkRenderer(JAXGameRenderer):
             return raster_updated
 
         raster = jax.lax.cond(
-            digit_sprites is not None,
+            jnp.logical_not(current_screen_anim),
             render_scores,
             lambda r: r,
             raster
@@ -1438,23 +1476,61 @@ class BerzerkRenderer(JAXGameRenderer):
 
 
         # Fortschritt berechnen
-        death_anim = state.death_timer > 0
-        level_transition = (
-            (state.room_counter > 0) & 
-            (state.animation_counter < self.consts.DEATH_ANIMATION_FRAMES)
-        )
-
-        progress = 1.0 - (state.death_timer.astype(jnp.float32) / self.consts.DEATH_ANIMATION_FRAMES)
-
-        # Death = center collapse
+        progress_death = 1.0 - (state.death_timer.astype(jnp.float32) / self.consts.DEATH_ANIMATION_FRAMES)
+        progress_transition = 1.0 - (state.room_transition_timer.astype(jnp.float32) / self.consts.DEATH_ANIMATION_FRAMES)
+        jax.debug.print("hgi {test}", test=state.entry_direction)
         raster = jax.lax.cond(
             death_anim,
-            lambda r: apply_bar_overlay(r, progress, 2),
-            lambda r: r,
+            lambda r: apply_bar_overlay(r, progress_death, 2),  # Tod → center-inward
+            lambda r: jax.lax.cond(
+                room_transition_anim,
+                lambda r: jax.lax.switch(
+                state.entry_direction,
+                [
+                    lambda: apply_bar_overlay(raster, progress_transition, 0),  # oben
+                    lambda: apply_bar_overlay(raster, progress_transition, 1),  # unten
+                    lambda: apply_bar_overlay(raster, progress_transition, 2),  # rechts
+                    lambda: apply_bar_overlay(raster, progress_transition, 2),  # links
+                ]
+                ),
+                lambda r: r,
+                raster
+            ),
             raster
         )
 
-        # TODO: Death anim for changing rooms
+        # render lives when in transition animation
+        life_sprite = self.sprites.get('life', None)
+        life_sprite = jnp.squeeze(life_sprite, axis=0)
+        def render_lives(raster_to_update):
+            """
+            Render player lives using life_sprite during room transition or death.
+            """
+            life_spacing = 8
+            start_x = self.consts.SCORE_OFFSET_X
+            start_y = self.consts.SCORE_OFFSET_Y
+
+            # Entscheide, wie viele Leben angezeigt werden sollen
+            num_lives_to_draw = jax.lax.cond(
+                death_anim,
+                lambda: jnp.maximum(state.lives - 1, 0),
+                lambda: state.lives
+            )
+
+            def draw_life(i, r):
+                x = start_x - i * life_spacing
+                y = start_y
+                return jr.render_at(r, x, y, life_sprite)
+
+            return jax.lax.fori_loop(0, num_lives_to_draw, draw_life, raster_to_update)
+
+
+        raster = jax.lax.cond(
+            current_screen_anim,
+            render_lives,
+            lambda r: r,
+            raster
+        )
 
         return raster
     
