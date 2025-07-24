@@ -413,7 +413,7 @@ class JaxBerzerk(JaxEnvironment[BerzerkState, BerzerkObservation, BerzerkInfo, B
     @partial(jax.jit, static_argnums=(0,))
     def reset(self, rng: chex.PRNGKey = jax.random.PRNGKey(42)) -> Tuple[BerzerkObservation, BerzerkState]:
         pos = jnp.array([
-            10,
+            self.consts.PLAYER_BOUNDS[0][0] + 2,
             self.consts.PLAYER_BOUNDS[1][1] // 2
         ], dtype=jnp.float32)
         lives = jnp.array(2, dtype=jnp.int32)
@@ -724,13 +724,39 @@ class JaxBerzerk(JaxEnvironment[BerzerkState, BerzerkObservation, BerzerkInfo, B
 
             # 4. Shoot bullets of player (enemies can't shoot yet)
             def shoot_bullet(state):
-                player_w, player_h = self.consts.PLAYER_SIZE
 
-                # Offset von Spielerzentrum zur Handposition
-                offset = jnp.array([
-                    jnp.where(move_dir[0] > 0, player_w, jnp.where(move_dir[0] < 0, -2.0, player_w / 2)),   # x
-                    jnp.where(move_dir[1] > 0, player_h, jnp.where(move_dir[1] < 0, -2.0, player_h / 2))    # y
-                ])
+                # alle gültigen Richtungen
+                dirs = jnp.array([
+                    [0, -1],   # up
+                    [1, -1],   # upright
+                    [1, 0],    # right
+                    [1, 1],    # downright
+                    [0, 1],    # down
+                    [-1, 1],   # downleft
+                    [-1, 0],   # left
+                    [-1, -1],  # upleft
+                ], dtype=jnp.int32)
+
+                # passende Handpositionen (relativ zur Spieler-Mitte)
+                offsets = jnp.array([
+                    [self.consts.PLAYER_SIZE[0] // 2, 0.0],    # up
+                    [self.consts.PLAYER_SIZE[0] // 2, 4.0],    # upright
+                    [3.0, self.consts.PLAYER_SIZE[1] // 2 - 4],    # right
+                    [self.consts.PLAYER_SIZE[0] // 2 + 1.0, self.consts.PLAYER_SIZE[1] - 10.0],   # downright
+                    [self.consts.PLAYER_SIZE[0] // 2 + 2.0, self.consts.PLAYER_SIZE[1] - 10.0],    # down
+                    [self.consts.PLAYER_SIZE[0] // 2 - 6.0, self.consts.PLAYER_SIZE[1] - 10.0],    # downleft
+                    [-3.0, self.consts.PLAYER_SIZE[1] // 2 - 4],    # left
+                    [self.consts.PLAYER_SIZE[0] -4.0 // 2 - 6.0, 4.0],     # upleft
+                ], dtype=jnp.float32)
+
+                # prüfe, welche Richtung aktiv ist (8 Bedingungen → shape (8,))
+                conds = jnp.all(dirs == move_dir[None, :], axis=1)
+
+                # fallback: wenn keine passt (z. B. move_dir = [0,0])
+                default_offset = jnp.array([8.0, 8.0], dtype=jnp.float32)
+
+                # wähle das passende offset (shape (2,))
+                offset = jnp.select(conds, offsets, default_offset)
 
                 # Startposition ist Spielerposition + Offset (Handposition)
                 spawn_pos = new_pos + offset
@@ -883,12 +909,29 @@ class JaxBerzerk(JaxEnvironment[BerzerkState, BerzerkObservation, BerzerkInfo, B
             player_spawn_pos = jax.lax.switch(
                 self.get_exit_direction(new_pos),
                 [
-                    lambda _: jnp.array([self.consts.WIDTH // 2, self.consts.PLAYER_BOUNDS[1][1] - 2 * self.consts.PLAYER_SIZE[1]], dtype=jnp.float32),  # oben → unten spawnen
-                    lambda _: jnp.array([self.consts.WIDTH // 2, self.consts.PLAYER_BOUNDS[1][0] + 2], dtype=jnp.float32),  # unten → oben spawnen
-                    lambda _: jnp.array([self.consts.PLAYER_BOUNDS[0][1] - 2 * self.consts.PLAYER_SIZE[0], self.consts.HEIGHT // 2], dtype=jnp.float32),  # links → rechts
-                    lambda _: jnp.array([self.consts.PLAYER_BOUNDS[0][0] + 2, self.consts.HEIGHT // 2], dtype=jnp.float32),  # rechts → links
+                    lambda _: jnp.array([
+                        self.consts.PLAYER_BOUNDS[0][1] // 2,
+                        self.consts.PLAYER_BOUNDS[1][1] - 25
+                        ], dtype=jnp.float32),  # oben → unten spawnen
+                    
+                    lambda _: jnp.array([
+                        self.consts.PLAYER_BOUNDS[0][1] // 2, 
+                        self.consts.PLAYER_BOUNDS[1][0] + 5], dtype=jnp.float32),  # unten → oben spawnen
+                    
+                    lambda _: jnp.array([
+                        self.consts.PLAYER_BOUNDS[0][1] - 12, 
+                        self.consts.PLAYER_BOUNDS[1][1] // 2
+                        ], dtype=jnp.float32),  # links → rechts
+                    
+                    lambda _: jnp.array([
+                        self.consts.PLAYER_BOUNDS[0][0] + 2,
+                        self.consts.PLAYER_BOUNDS[1][1] // 2
+                    ], dtype=jnp.float32),  # rechts → links
                 ],
-                jnp.array([self.consts.WIDTH // 2, self.consts.HEIGHT // 2], dtype=jnp.float32)  # fallback
+                jnp.array([
+                        self.consts.PLAYER_BOUNDS[0][0] + 2,
+                        self.consts.PLAYER_BOUNDS[1][1] // 2
+                    ], dtype=jnp.float32)  # fallback
             )
 
 
