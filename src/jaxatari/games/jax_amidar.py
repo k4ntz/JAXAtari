@@ -31,7 +31,7 @@ PIXELS_PER_POINT_VERTICAL = 30 # Each vertical edge is worth 1 point, since they
 # Bonus points for completing a rectangle
 BONUS_POINTS_PER_RECTANGLE = 48
 
-INITIAL_LIVES = 7
+INITIAL_LIVES = 3
 INITIAL_PLAYER_POSITION = jnp.array([140, 88])
 PLAYER_STARTING_PATH = 85  # The path edge the player starts on, this is the index in PATH_EDGES
 INITIAL_ENEMY_POSITIONS = jnp.array(
@@ -300,7 +300,7 @@ class AmidarState(NamedTuple):
     lives: chex.Array
     player_x: chex.Array
     player_y: chex.Array
-    player_direction: chex.Array # 0=up, 1=down, 2=left, 3=right
+    player_direction: chex.Array # 0=up, 1=left, 2=down, 3=right
     last_walked_corner: chex.Array # (2,) -> (x, y) of the last corner walked on
     walked_on_paths: chex.Array
     completed_rectangles: chex.Array
@@ -324,7 +324,7 @@ class AmidarInfo(NamedTuple):
     time: jnp.ndarray
     all_rewards: chex.Array
 
-def player_step(state: AmidarState, action: chex.Array) -> tuple[chex.Array, chex.Array, chex.Array]:
+def player_step(state: AmidarState, action: chex.Array) -> tuple[chex.Array, chex.Array, chex.Array, chex.Array, chex.Array, chex.Array, chex.Array]:
     """Updates the player position based on the action taken.
     Returns the new player x and y coordinates and the direction."""
 
@@ -346,8 +346,8 @@ def player_step(state: AmidarState, action: chex.Array) -> tuple[chex.Array, che
 
     # if the direction is not possiple to move in, try moving in the previous direction
     def move_in_previous_direction(direction):
-        new_x = state.player_x + jnp.where(direction == 2, -1, 0) + jnp.where(direction == 3, 1, 0)
-        new_y = state.player_y + jnp.where(direction == 0, -1, 0) + jnp.where(direction == 1, 1, 0)
+        new_x = state.player_x + jnp.where(direction == 1, -1, 0) + jnp.where(direction == 3, 1, 0)
+        new_y = state.player_y + jnp.where(direction == 0, -1, 0) + jnp.where(direction == 2, 1, 0)
         # only move if new position is on the path
         new_x = jnp.where(on_path(new_x, new_y), new_x, state.player_x)
         new_y = jnp.where(on_path(new_x, new_y), new_y, state.player_y)
@@ -357,8 +357,8 @@ def player_step(state: AmidarState, action: chex.Array) -> tuple[chex.Array, che
     movement_key_pressed = jnp.logical_or(up, jnp.logical_or(down, jnp.logical_or(left, right)))
     new_x, new_y = jax.lax.cond(jnp.logical_and(has_not_moved, movement_key_pressed), move_in_previous_direction, lambda direction: (new_x, new_y), state.player_direction)
         
-    player_direction = jnp.select([new_x > state.player_x, new_x < state.player_x, new_y > state.player_y, new_y < state.player_y],
-                                  [3, 2, 1, 0], default=state.player_direction)
+    player_direction = jnp.select([new_y < state.player_y, new_x < state.player_x, new_y > state.player_y, new_x > state.player_x],
+                                  [0, 1, 2, 3], default=state.player_direction)
     
     # Check if the new position is a corner, in witch case check if a new path edge is walked on
 
