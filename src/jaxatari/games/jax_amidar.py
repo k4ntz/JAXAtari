@@ -1,5 +1,5 @@
-# next TODO's (game features): make enemies move, enemy colision detection, add lives, chicken mode, Level 2
-# TODO update observation, flexible enemy number?
+# next TODO's (game features): enemy colision detection, chicken mode, Level 2
+# TODO update observation, check is anything can be done about the enemies taking steps before the rendering has loaded
 
 from functools import partial
 import os
@@ -21,9 +21,10 @@ HEIGHT = 210
 PLAYER_SIZE = (7, 7)
 ENEMY_SIZE = (7, 7)
 
-MAX_ENEMIES = 6
+# MAX_ENEMIES = 6
 
 PLAYER_SPRITE_OFFSET = (-1, 0) # Offset for the player sprite in relation to the position in the code (because the top left corner of the player sprite is of the path to the left)
+ENEMY_SPRITE_OFFSET = (-1, 0) # Offset for the enemy sprite in relation to the position in the code (because the top left corner of the enemy sprite is of the path to the right)
 
 # Values to calculate how many points an Edge is worth based on how long it is
 PIXELS_PER_POINT_HORIZONTAL = 3 # Change rendering if more than 3 
@@ -31,19 +32,21 @@ PIXELS_PER_POINT_VERTICAL = 30 # Each vertical edge is worth 1 point, since they
 # Bonus points for completing a rectangle
 BONUS_POINTS_PER_RECTANGLE = 48
 
+RANDOM_KEY_SEED = 0
 INITIAL_LIVES = 3
 INITIAL_PLAYER_POSITION = jnp.array([140, 88])
 PLAYER_STARTING_PATH = 85  # The path edge the player starts on, this is the index in PATH_EDGES
 INITIAL_ENEMY_POSITIONS = jnp.array(
     [
-        [15, 14],  # Enemy 1
-        [15, 14],  # Enemy 2
-        [43, 14],  # Enemy 3
-        [15, 137],  # Enemy 4
-        [15, 160],  # Enemy 5
-        [51, 160],  # Enemy 6
+        [16, 14],  # Enemy 1
+        [16, 14],  # Enemy 2
+        [44, 14],  # Enemy 3
+        [16, 137],  # Enemy 4
+        [16, 164],  # Enemy 5
+        [52, 164],  # Enemy 6
     ]
 )
+INITIAL_ENEMY_DIRECTIONS = jnp.array([3, 3, 3, 3, 3, 3])  # All enemies start moving right
 INITIAL_ENEMY_TYPES = jnp.array([1, 1, 1, 1, 1, 1])
 
 PATH_CORNERS = jnp.array([[16, 14], [40, 14], [56, 14], [72, 14], [84, 14], [100, 14], [116, 14], [140, 14], 
@@ -296,6 +299,7 @@ PATH_SPRITE = jnp.where(RENDERING_PATH_MASK[:, :, None] == 1, PATH_PATTERN, jnp.
 
 # immutable state container
 class AmidarState(NamedTuple):
+    random_key: chex.Array  # Random key for JAX operations
     score: chex.Array
     lives: chex.Array
     player_x: chex.Array
@@ -304,7 +308,8 @@ class AmidarState(NamedTuple):
     last_walked_corner: chex.Array # (2,) -> (x, y) of the last corner walked on
     walked_on_paths: chex.Array
     completed_rectangles: chex.Array
-    enemy_positions: chex.Array # (MAX_ENEMIES, 2) -> (x, y) for each enemy TODO possibly add direction?
+    enemy_positions: chex.Array # (MAX_ENEMIES, 2) -> (x, y) for each enemy
+    enemy_directions: chex.Array # (MAX_ENEMIES, 1) -> direction of each enemy (0=up, 1=left, 2=down, 3=right)
     enemy_types: chex.Array # (MAX_ENEMIES, 1) -> type of each enemy (Warrior, Pig, Shadow, Chicken)
 
 class EntityPosition(NamedTuple):
@@ -443,6 +448,54 @@ def player_step(state: AmidarState, action: chex.Array) -> tuple[chex.Array, che
     # TODO: Add checking if all edges(next level)/corner edges(chickens) are walked on
     return points_scored, new_x, new_y, player_direction, last_walked_corner, walked_on_paths, completed_rectangles
 
+def enemies_step(state: AmidarState, random_key: chex.Array) -> tuple[chex.Array, chex.Array, chex.Array]:
+    """Updates the enemy positions based on their behavior."""
+
+    enemy_keys = jax.random.split(random_key, state.enemy_positions.shape[0])  # Split the random key for each enemy
+
+    # Calculate possible movement directions for enemies
+    def calculate_possible_enemy_directions(enemy_position):
+        """Calculates possible movement directions for an enemy."""
+        # 0=up, 1=left, 2=down, 3=right
+        x, y = enemy_position
+        up = PATH_MASK[x, y - 1]
+        down = PATH_MASK[x, y + 1]
+        left = PATH_MASK[x - 1, y]
+        right = PATH_MASK[x + 1, y]
+        return jnp.array([up, left, down, right])
+
+    possible_directions_per_enemy = jax.vmap(calculate_possible_enemy_directions, in_axes=0)(state.enemy_positions)
+
+    def calculate_good_enemy_directions(enemy_direction, possible_directions):
+        """From the possible movement directions exclude u-turns"""
+        opposite_direction = (enemy_direction + 2) % 4
+        good_directions = possible_directions.at[opposite_direction].set(False)  # Exclude the opposite direction (u-turn)
+        return good_directions
+
+    good_directions_per_enemy = jax.vmap(calculate_good_enemy_directions, in_axes=0)(state.enemy_directions, possible_directions_per_enemy)
+
+    def move_enemy(enemy_x, enemy_y, direction, possible_directions, good_directions, random_key):
+        """Chooses randomly from the possible directions, only taking u-turns when necassary."""
+
+        def choose_direction():
+            # If there are good directions, choose one, else choose from all possible directions
+            chosen_direction = jax.lax.cond(jnp.any(good_directions),
+                                            lambda: jax.random.choice(random_key, jnp.arange(4), shape=(), p=jnp.where(good_directions, 1/jnp.count_nonzero(good_directions), 0)),
+                                            lambda: jax.random.choice(random_key, jnp.arange(4), shape=(), p=jnp.where(possible_directions, 1/jnp.count_nonzero(possible_directions), 0)))
+            return chosen_direction
+
+        # if no directions are possible stay with the current one
+        chosen_direction = jax.lax.cond(jnp.any(possible_directions), choose_direction, lambda: direction)
+        
+        new_x, new_y = jax.lax.cond(jnp.any(possible_directions),
+            lambda: (enemy_x + jnp.where(chosen_direction == 1, -1, 0) + jnp.where(chosen_direction == 3, 1, 0),
+                     enemy_y + jnp.where(chosen_direction == 0, -1, 0) + jnp.where(chosen_direction == 2, 1, 0)),
+            lambda: (enemy_x, enemy_y))  # If the direction is not possible, stay in place
+        return jnp.array([new_x, new_y]), chosen_direction
+
+    new_enemy_positions, new_enemy_directions = jax.vmap(move_enemy, in_axes=0)(state.enemy_positions[:, 0], state.enemy_positions[:, 1], state.enemy_directions, possible_directions_per_enemy, good_directions_per_enemy, enemy_keys)
+
+    return new_enemy_positions, new_enemy_directions, state.enemy_types
 
 
 class JaxAmidar(JaxEnvironment[AmidarState, AmidarObservation, AmidarInfo]):
@@ -472,6 +525,7 @@ class JaxAmidar(JaxEnvironment[AmidarState, AmidarObservation, AmidarInfo]):
         Returns the initial state and the reward (i.e. 0)
         """
         state = AmidarState(
+            random_key=jax.random.key(RANDOM_KEY_SEED),
             score=jnp.array(0).astype(jnp.int32),  # Initial score
             lives=jnp.array(INITIAL_LIVES).astype(jnp.int32),  # Initial lives
             player_x=jnp.array(INITIAL_PLAYER_POSITION[0]).astype(jnp.int32),
@@ -481,6 +535,7 @@ class JaxAmidar(JaxEnvironment[AmidarState, AmidarObservation, AmidarInfo]):
             walked_on_paths=(jnp.zeros(jnp.shape(PATH_EDGES)[0], dtype=jnp.int32)).at[PLAYER_STARTING_PATH].set(1),  # Initialize walked on paths
             completed_rectangles=jnp.zeros(jnp.shape(RECTANGLES)[0], dtype=jnp.bool_),  # Initialize completed rectangles
             enemy_positions=INITIAL_ENEMY_POSITIONS,
+            enemy_directions=INITIAL_ENEMY_DIRECTIONS,
             enemy_types=INITIAL_ENEMY_TYPES,
         )
         initial_obs = self._get_observation(state)
@@ -493,9 +548,17 @@ class JaxAmidar(JaxEnvironment[AmidarState, AmidarObservation, AmidarInfo]):
     @partial(jax.jit, static_argnums=(0,))
     def step(self, state: AmidarState, action: chex.Array) -> Tuple[AmidarObservation, AmidarState, float, bool, AmidarInfo]:
         observation = self._get_observation(state)
+        random_key, _ = jax.random.split(state.random_key)
+
         player_state = player_step(state, action)
         (points_scored, player_x, player_y, player_direction, last_walked_corner, walked_on_paths, completed_rectangles) = player_state
+
+        random_key, random_enemies_key = jax.random.split(random_key)
+        enemies_state = enemies_step(state, random_enemies_key)
+        (enemy_positions, enemy_directions, enemy_types) = enemies_state
+
         new_state = AmidarState(
+            random_key=random_key,
             score=state.score + points_scored, # Could possibly change in multiple functions, so it is not calculated in the function based on the previous state
             lives=state.lives, # not changing yet
             player_x=player_x,
@@ -504,8 +567,9 @@ class JaxAmidar(JaxEnvironment[AmidarState, AmidarObservation, AmidarInfo]):
             last_walked_corner=last_walked_corner,
             walked_on_paths=walked_on_paths,
             completed_rectangles=completed_rectangles,
-            enemy_positions=state.enemy_positions,
-            enemy_types=state.enemy_types,
+            enemy_positions=enemy_positions,
+            enemy_directions=enemy_directions,
+            enemy_types=enemy_types,
         )
         env_reward = 0.0
         done = False
@@ -703,12 +767,13 @@ class AmidarRenderer(AtraJaxisRenderer):
         # Render enemies - IMPORTANT: Swap x and y coordinates
         # TODO differentiate enemy types and if they should be rendered or not
         frame_enemy = aj.get_sprite_frame(self.SPRITE_WARRIOR, 0)
-        enemy_positions = state.enemy_positions
-
-        def render_enemy(i, raster):
-            return aj.render_at(raster, enemy_positions[i][0], enemy_positions[i][1], frame_enemy)
         
-        raster = jax.lax.fori_loop(0, MAX_ENEMIES, render_enemy, raster)
+        # Use scan to accumulate the raster updates
+        def scan_render_enemy(raster, enemy_pos):
+            new_raster = aj.render_at(raster, enemy_pos[0]+ENEMY_SPRITE_OFFSET[0], enemy_pos[1]+ENEMY_SPRITE_OFFSET[1], frame_enemy)
+            return new_raster, None
+        
+        raster, _ = jax.lax.scan(scan_render_enemy, raster, state.enemy_positions)
 
         ###### For DEBUGGING #######
 
