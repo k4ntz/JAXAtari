@@ -188,20 +188,117 @@ BOUNDING_BOX_1_9  = jnp.ones((1, 9)).astype(jnp.bool)
 BOUNDING_BOX_1_1  = jnp.ones((1, 1)).astype(jnp.bool)
 BOUNDING_BOX_1_3  = jnp.ones((1, 3)).astype(jnp.bool)
 
-# Define Offsets for the flipper parts
 # Position 0 - Mid-Down (RAM state 0)
-# TODO: Add
+FLIPPER_OFFSETS_STATE_0_LEFT = jnp.array(
+    [
+        [64, 183],  
+        [64, 184],  
+        [64, 185],  
+        [64, 186],  
+        [67, 187],  
+        [68, 187],  
+        [69, 188],  
+    ],
+    dtype=jnp.int32,
+)
 
+FLIPPER_OFFSETS_STATE_0_RIGHT = jnp.array(
+    [
+        [94, 183],  
+        [93, 184],  
+        [92, 185],  
+        [91, 186],  
+        [89, 187],  
+        [87, 187],  
+        [85, 188],  
+    ],
+    dtype=jnp.int32,
+)
 
-# Position 16 - Mid-Down (RAM state 16)
-# TODO: Add
+# Offsets for the flipper in the first mid‑down position (RAM state 16).
+FLIPPER_OFFSETS_STATE_16_LEFT = jnp.array(
+    [
+        [64, 184],  
+        [64, 185],  
+    ],
+    dtype=jnp.int32,
+)
 
-# Position 32 - Mid-Down (RAM state 32)
-# TODO: Add
+FLIPPER_OFFSETS_STATE_16_RIGHT = jnp.array(
+    [
+        [86, 184],  
+        [83, 185],  
+    ],
+    dtype=jnp.int32,
+)
 
+# Offsets for the flipper in the second mid‑angle position (RAM state 32).
+FLIPPER_OFFSETS_STATE_32_LEFT = jnp.array(
+    [
+        [71, 181],  
+        [67, 182],  
+        [67, 182],  
+    ],
+    dtype=jnp.int32,
+)
 
-# Position 48 - Mid-Down (RAM state 48)
-# TODO: Add
+FLIPPER_OFFSETS_STATE_32_RIGHT = jnp.array(
+    [
+        [83, 181],  
+        [86, 182],   
+        [84, 182],  
+    ],
+    dtype=jnp.int32,
+)
+
+# Offsets for the flipper in the fully upright position (RAM state 48).
+FLIPPER_OFFSETS_STATE_48_LEFT = jnp.array(
+    [
+        [74, 176],  
+        [73, 177],  
+    ],
+    dtype=jnp.int32,
+)
+
+FLIPPER_OFFSETS_STATE_48_RIGHT = jnp.array(
+    [
+        [85, 176],  
+        [84, 177],  
+    ],
+    dtype=jnp.int32,
+)
+
+# A convenience mapping from RAM state to the corresponding offset arrays.
+FLIPPER_OFFSETS = {
+    0: {
+        "left": FLIPPER_OFFSETS_STATE_0_LEFT,
+        "right": FLIPPER_OFFSETS_STATE_0_RIGHT,
+    },
+    16: {
+        "left": FLIPPER_OFFSETS_STATE_16_LEFT,
+        "right": FLIPPER_OFFSETS_STATE_16_RIGHT,
+    },
+    32: {
+        "left": FLIPPER_OFFSETS_STATE_32_LEFT,
+        "right": FLIPPER_OFFSETS_STATE_32_RIGHT,
+    },
+    48: {
+        "left": FLIPPER_OFFSETS_STATE_48_LEFT,
+        "right": FLIPPER_OFFSETS_STATE_48_RIGHT,
+    },
+}
+
+__all__ = [
+    "FLIPPER_OFFSETS_STATE_0_LEFT",
+    "FLIPPER_OFFSETS_STATE_0_RIGHT",
+    "FLIPPER_OFFSETS_STATE_16_LEFT",
+    "FLIPPER_OFFSETS_STATE_16_RIGHT",
+    "FLIPPER_OFFSETS_STATE_32_LEFT",
+    "FLIPPER_OFFSETS_STATE_32_RIGHT",
+    "FLIPPER_OFFSETS_STATE_48_LEFT",
+    "FLIPPER_OFFSETS_STATE_48_RIGHT",
+    "FLIPPER_OFFSETS",
+]
 
 # Spinner Bounding Boxes
 
