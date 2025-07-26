@@ -10,6 +10,24 @@ import csv, uuid
 
 from tennis_main import FRAME_WIDTH, FRAME_HEIGHT, GAME_OFFSET_LEFT_BOTTOM, GAME_OFFSET_TOP, GAME_HEIGHT, GAME_WIDTH, TennisState, PLAYER_WIDTH, PLAYER_HEIGHT
 
+
+def recolor_blue_to_red(sprite, blue_color=[117, 128, 240, 255], red_color=[240, 128, 128, 255]):
+    # Convert color constants to jax arrays of the same dtype
+    blue_color = jnp.array(blue_color, dtype=sprite.dtype)
+    red_color = jnp.array(red_color, dtype=sprite.dtype)
+
+    # Create a mask: shape (H, W), where each pixel matches the blue color
+    mask = jnp.all(sprite == blue_color, axis=-1)  # shape: (H, W)
+
+    # Find the indices of the pixels to replace
+    indices = jnp.argwhere(mask)  # shape: (N, 2)
+
+    # Replace each matching pixel using .at[].set()
+    for idx in indices:
+        sprite = sprite.at[tuple(idx)].set(red_color)
+
+    return sprite
+
 def load_sprites():
     MODULE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     BG = jnp.expand_dims(aj.loadFrame(os.path.join(MODULE_DIR, "tennis_from_scratch/sprites/background.npy")), axis=0)
@@ -40,7 +58,8 @@ def load_sprites():
     UI_NUM_5 = jnp.expand_dims(aj.loadFrame(os.path.join(MODULE_DIR, "tennis_from_scratch/sprites/ui_blue_5.npy")),
                                axis=0)
 
-    return BG, BALL, BALL_SHADOW, [PLAYER_0, PLAYER_1, PLAYER_2, PLAYER_3], [RACKET_3, RACKET_0, RACKET_1, RACKET_2], [UI_NUM_0, UI_NUM_1, UI_NUM_2, UI_NUM_3, UI_NUM_4, UI_NUM_5]
+    return (BG, BALL, BALL_SHADOW, [PLAYER_0, PLAYER_1, PLAYER_2, PLAYER_3], [RACKET_3, RACKET_0, RACKET_1, RACKET_2], [UI_NUM_0, UI_NUM_1, UI_NUM_2, UI_NUM_3, UI_NUM_4, UI_NUM_5],
+            [recolor_blue_to_red(UI_NUM_0), recolor_blue_to_red(UI_NUM_1), recolor_blue_to_red(UI_NUM_2), recolor_blue_to_red(UI_NUM_3), recolor_blue_to_red(UI_NUM_4), recolor_blue_to_red(UI_NUM_5)])
 
 
 # ToDo remove
@@ -105,17 +124,15 @@ def perspective_transform(x, y, apply_offsets = True, width_top = 79.0, width_bo
 class TennisRenderer:
 
     def __init__(self):
-        (self.BG, self.BALL, self.BALL_SHADOW, self.PLAYER, self.RACKET, self.UI_NUMBERS) = load_sprites()
+        (self.BG, self.BALL, self.BALL_SHADOW, self.PLAYER, self.RACKET, self.UI_NUMBERS_BLUE, self.UI_NUMBERS_RED) = load_sprites()
         # use bounding box as mockup
         self.BOUNDING_BOX = get_bounding_box(PLAYER_WIDTH, PLAYER_HEIGHT)
 
-    def render_number_centered(self, raster, number: int, position):
+    def render_number_centered(self, raster, number: int, position, red=False):
         chars = list(str(number))
 
-        sprites = [aj.get_sprite_frame((self.UI_NUMBERS[0] if int(c) >= len(self.UI_NUMBERS) else self.UI_NUMBERS[int(c)]), 0) for c in chars]
-
-
-        #print(sprites[0].shape)
+        all_sprites = self.UI_NUMBERS_RED if red else self.UI_NUMBERS_BLUE
+        sprites = [aj.get_sprite_frame((all_sprites[0] if int(c) >= len(all_sprites) else all_sprites[int(c)]), 0) for c in chars]
 
         padding = 2
         total_width = sum(s.shape[0] for s in sprites) + (len(sprites) - 1) * padding
@@ -240,7 +257,7 @@ class TennisRenderer:
         enemy_score_number = tennis_scores[min(len(tennis_scores), state.game_state.enemy_score)]
 
         raster = self.render_number_centered(raster, player_score_number, [FRAME_WIDTH / 4, 2])
-        raster = self.render_number_centered(raster, enemy_score_number, [(FRAME_WIDTH / 4) * 3, 2])
+        raster = self.render_number_centered(raster, enemy_score_number, [(FRAME_WIDTH / 4) * 3, 2], red=True)
 
         #raster = aj.render_at(raster, 0, 0, rectangle)
         return raster
