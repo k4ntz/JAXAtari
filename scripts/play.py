@@ -14,7 +14,7 @@ from jaxatari.environment import JaxEnvironment, JAXAtariAction as Action
 from jaxatari.renderers import AtraJaxisRenderer
 import jaxatari.rendering.atraJaxis as aj
 
-UPSCALE_FACTOR = 4
+UPSCALE_FACTOR = 5
 
 def get_human_action() -> jax.numpy.ndarray: # Or chex.Array if you use chex
     """
