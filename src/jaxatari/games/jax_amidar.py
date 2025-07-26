@@ -7,10 +7,10 @@ from typing import NamedTuple, Tuple
 import chex
 import jax
 import jax.numpy as jnp
-import pygame
+from jaxatari import spaces
 from jaxatari.environment import JaxEnvironment, JAXAtariAction as Action
-from jaxatari.renderers import AtraJaxisRenderer
-from jaxatari.rendering import atraJaxis as aj
+from jaxatari.renderers import JAXGameRenderer
+from jaxatari.rendering import jax_rendering_utils as aj
 
 ########## Constants ##########
 
@@ -188,6 +188,28 @@ def calculate_rectangles():
 
 RECTANGLES = jnp.array(calculate_rectangles())
 
+def precompute_rectangle_corners(rectangle):
+    """Gets the top-left and bottom-right corners of a rectangle."""
+    def calculate():
+        # Get only the edges that belong to this rectangle
+        rectangle_edges = jnp.where(rectangle[:, None, None], PATH_EDGES, jnp.full(PATH_EDGES.shape, jnp.inf, dtype=jnp.float32))
+        
+        # Flatten the coordinates to make min/max operations easier
+        all_x_coords = rectangle_edges[:, :, 0].flatten()
+        all_y_coords = rectangle_edges[:, :, 1].flatten()
+        
+        # Instead of boolean indexing, use conditional operations
+        # Find min/max while ignoring inf values
+        min_x = jnp.min(jnp.where(all_x_coords != jnp.inf, all_x_coords, jnp.inf)).astype(jnp.int32)
+        min_y = jnp.min(jnp.where(all_y_coords != jnp.inf, all_y_coords, jnp.inf)).astype(jnp.int32)
+        max_x = jnp.max(jnp.where(all_x_coords != jnp.inf, all_x_coords, -jnp.inf)).astype(jnp.int32)
+        max_y = jnp.max(jnp.where(all_y_coords != jnp.inf, all_y_coords, -jnp.inf)).astype(jnp.int32)
+        
+        return jnp.stack((min_x, min_y, max_x, max_y))
+    return jax.lax.cond(jnp.any(rectangle), calculate, lambda: jnp.zeros(4, dtype=jnp.int32))
+
+RECTANGLE_CORNERS = jax.vmap(precompute_rectangle_corners)(RECTANGLES)
+
 @jax.jit
 def generate_path_mask(horizontal_edges=HORIZONTAL_PATH_EDGES, vertical_edges=VERTICAL_PATH_EDGES, horizontal_cond=jnp.full((HORIZONTAL_PATH_EDGES.shape[0],), True), vertical_cond=jnp.full((VERTICAL_PATH_EDGES.shape[0],), True)):
     """Generates a mask for the path edges.
@@ -253,6 +275,9 @@ def generate_path_mask(horizontal_edges=HORIZONTAL_PATH_EDGES, vertical_edges=VE
     mask, rendering_mask = jax.lax.fori_loop(0, jnp.shape(horizontal_edges)[0], add_horizontal_edge, (mask, rendering_mask))
     mask, rendering_mask = jax.lax.fori_loop(0, jnp.shape(vertical_edges)[0], add_vertical_edge, (mask, rendering_mask))
 
+    # transpose to match the HWC format for rendering
+    rendering_mask = jnp.transpose(rendering_mask, (1, 0))
+
     return mask, rendering_mask
 
 # Path mask are the single lines which restrict the movement, while rendering path mask includes the width of the paths for rendering
@@ -265,19 +290,19 @@ def generate_path_pattern():
     """Generates a path pattern for rendering.
     Returns a JAX array of shape (WIDTH, HEIGHT) with the path pattern."""
     # Create an empty mask
-    path_pattern = jnp.full(jnp.array([WIDTH, HEIGHT, 4]), 0, dtype=jnp.uint8)
-    walked_on_pattern = jnp.full(jnp.array([WIDTH, HEIGHT, 4]), 0, dtype=jnp.uint8)
+    path_pattern = jnp.full(jnp.array([HEIGHT, WIDTH, 4]), 0, dtype=jnp.uint8)
+    walked_on_pattern = jnp.full(jnp.array([HEIGHT, WIDTH, 4]), 0, dtype=jnp.uint8)
 
     # put the indices in a seperate array to be able to use vmap
-    ii, jj = jnp.meshgrid(jnp.arange(WIDTH), jnp.arange(HEIGHT), indexing='ij')
-    indices = jnp.stack((ii, jj), axis=-1)  # shape (WIDTH, HEIGHT, 2)
+    ii, jj = jnp.meshgrid(jnp.arange(HEIGHT), jnp.arange(WIDTH), indexing='ij')
+    indices = jnp.stack((ii, jj), axis=-1)  # shape (HEIGHT, WIDTH, 2)
 
     def set_for_column(path_column, walked_on_column, indices):
 
         def set_color(path_value, walked_on_value, index):
             x, y = index
 
-            path_value, walked_on_value, index = jax.lax.cond(jnp.logical_or(jnp.logical_or(y % 5 == 0, y % 5 == 2), y % 5 == 3),
+            path_value, walked_on_value, index = jax.lax.cond(jnp.logical_or(jnp.logical_or(x % 5 == 0, x % 5 == 2), x % 5 == 3),
                 lambda: (PATH_COLOR, walked_on_value, index),
                 lambda: (path_value, WALKED_ON_COLOR, index)
             )
@@ -292,7 +317,7 @@ def generate_path_pattern():
 
 PATH_PATTERN, WALKED_ON_PATTERN = generate_path_pattern()
 
-PATH_SPRITE = jnp.where(RENDERING_PATH_MASK[:, :, None] == 1, PATH_PATTERN, jnp.full(jnp.array([WIDTH, HEIGHT, 4]), 0, dtype=jnp.uint8))
+PATH_SPRITE = jnp.where(RENDERING_PATH_MASK[:, :, None] == 1, PATH_PATTERN, jnp.full((HEIGHT, WIDTH, 4), 0, dtype=jnp.uint8))
 
 
 ########## 
@@ -365,7 +390,7 @@ def player_step(state: AmidarState, action: chex.Array) -> tuple[chex.Array, che
     player_direction = jnp.select([new_y < state.player_y, new_x < state.player_x, new_y > state.player_y, new_x > state.player_x],
                                   [0, 1, 2, 3], default=state.player_direction)
     
-    # Check if the new position is a corner, in witch case check if a new path edge is walked on
+    # Check if the new position is a corner, in which case check if a new path edge is walked on
 
     def corner_handeling():
         # Set the walked on paths
@@ -438,12 +463,12 @@ def player_step(state: AmidarState, action: chex.Array) -> tuple[chex.Array, che
         # If the edge is not walked on yet, score points and update the walked on paths & completed rectangles
         points_scored, walked_on_paths, completed_rectangles = jax.lax.cond(jnp.logical_and(match_index >= 0, state.walked_on_paths[match_index] == 0), score_points, lambda: (0, state.walked_on_paths, state.completed_rectangles))
 
-        last_walked_corner = [new_x, new_y]  # Update the last walked corner to the new position
+        last_walked_corner = jnp.array([new_x, new_y])   # Update the last walked corner to the new position
         return points_scored, last_walked_corner, walked_on_paths, completed_rectangles
 
 
     is_corner = jnp.any(jnp.all(PATH_CORNERS == jnp.array([new_x, new_y]), axis=1))
-    points_scored, last_walked_corner, walked_on_paths, completed_rectangles = jax.lax.cond(is_corner, corner_handeling, lambda: (0, [state.last_walked_corner[0], state.last_walked_corner[1]], state.walked_on_paths, state.completed_rectangles))
+    points_scored, last_walked_corner, walked_on_paths, completed_rectangles = jax.lax.cond(is_corner, corner_handeling, lambda: (0, state.last_walked_corner, state.walked_on_paths, state.completed_rectangles))
 
     # TODO: Add checking if all edges(next level)/corner edges(chickens) are walked on
     return points_scored, new_x, new_y, player_direction, last_walked_corner, walked_on_paths, completed_rectangles
@@ -497,9 +522,14 @@ def enemies_step(state: AmidarState, random_key: chex.Array) -> tuple[chex.Array
 
     return new_enemy_positions, new_enemy_directions, state.enemy_types
 
+class AmidarConstants(NamedTuple):
+    # NOTE: empty for now, but its needed for the environment initialization (see recent changes)
+    # would normally include stuff like the PATH EDGES, RECTANGLES, ENEMY SPAWNS, etc. etc.
+    # TODO : add constants here and just below here in the class
+    pass
 
-class JaxAmidar(JaxEnvironment[AmidarState, AmidarObservation, AmidarInfo]):
-    def __init__(self, reward_funcs: list[callable]=None):
+class JaxAmidar(JaxEnvironment[AmidarState, AmidarObservation, AmidarInfo, AmidarConstants]):
+    def __init__(self, constants: AmidarConstants = None, reward_funcs: list[callable]=None):
         super().__init__()
         self.frame_stack_size = 4
         if reward_funcs is not None:
@@ -517,7 +547,9 @@ class JaxAmidar(JaxEnvironment[AmidarState, AmidarObservation, AmidarInfo]):
             Action.UPFIRE,
             Action.DOWNFIRE,
         ]
+        self.constants = constants or AmidarConstants()
         self.obs_size = 4 #TODO add as needed
+        self.renderer = AmidarRenderer(constants)
 
     def reset(self, key=None) -> Tuple[AmidarObservation, AmidarState]:
         """
@@ -545,15 +577,32 @@ class JaxAmidar(JaxEnvironment[AmidarState, AmidarObservation, AmidarInfo]):
 
         return initial_obs, state
     
+    # TODO check these notes and see what they do/should do
+    
+    # NOTE: added this for compatibility (its incorrect, I was just too lazy to get the correct one!)
+    def observation_space(self) -> spaces.Box:
+        return spaces.Box(low=0, high=255, shape=(HEIGHT, WIDTH, 4), dtype=jnp.uint8)
+
+    # NOTE: added this for compatibility
+    def state_space(self) -> spaces.Box:
+        return spaces.Box(low=0, high=255, shape=(HEIGHT, WIDTH, 4), dtype=jnp.uint8)
+
+    # NOTE: added this for compatibility
+    def action_space(self) -> spaces.Discrete:
+        return spaces.Discrete(len(self.action_set))
+
+    # NOTE: added this for compatibility (see changes from a few weeks ago), it just calls the renderer as a class attribute since that was more comfortable when writing wrappers and such (i.e. easier for me xD)
+    @partial(jax.jit, static_argnums=(0,))
+    def render(self, state: AmidarState) -> jnp.ndarray:
+        return self.renderer.render(state)
+
     @partial(jax.jit, static_argnums=(0,))
     def step(self, state: AmidarState, action: chex.Array) -> Tuple[AmidarObservation, AmidarState, float, bool, AmidarInfo]:
-        observation = self._get_observation(state)
-        random_key, _ = jax.random.split(state.random_key)
+        random_key, random_enemies_key = jax.random.split(state.random_key)
 
         player_state = player_step(state, action)
         (points_scored, player_x, player_y, player_direction, last_walked_corner, walked_on_paths, completed_rectangles) = player_state
 
-        random_key, random_enemies_key = jax.random.split(random_key)
         enemies_state = enemies_step(state, random_enemies_key)
         (enemy_positions, enemy_directions, enemy_types) = enemies_state
 
@@ -577,6 +626,8 @@ class JaxAmidar(JaxEnvironment[AmidarState, AmidarObservation, AmidarInfo]):
             time=jnp.array(0),
             all_rewards=jnp.array(0.0),
         )
+        
+        observation = self._get_observation(new_state)
         return observation, new_state, env_reward, done, info
 
     @partial(jax.jit, static_argnums=(0,))
@@ -610,7 +661,6 @@ class JaxAmidar(JaxEnvironment[AmidarState, AmidarObservation, AmidarInfo]):
         )
         
     
-    
     def get_action_space(self) -> jnp.ndarray:
         return jnp.array(self.action_set)
 
@@ -622,13 +672,13 @@ def load_sprites():
 
     DIGITS = aj.load_and_pad_digits(os.path.join(MODULE_DIR, "./sprites/amidar/score/{}.npy"))
 
-    player = aj.loadFrame(os.path.join(MODULE_DIR, "sprites/amidar/player_ghost.npy"), transpose=True)
+    player = aj.loadFrame(os.path.join(MODULE_DIR, "sprites/amidar/player_ghost.npy"))
 
     bg = aj.loadFrame(os.path.join(MODULE_DIR, "sprites/amidar/background.npy"), transpose=True)
 
-    life = aj.loadFrame(os.path.join(MODULE_DIR, "sprites/amidar/life.npy"), transpose=True)
+    life = aj.loadFrame(os.path.join(MODULE_DIR, "sprites/amidar/life.npy"))
 
-    warrior = aj.loadFrame(os.path.join(MODULE_DIR, "sprites/amidar/enemy/warrior.npy"), transpose=True)
+    warrior = aj.loadFrame(os.path.join(MODULE_DIR, "sprites/amidar/enemy/warrior.npy"))
 
     # Convert all sprites to the expected format (add frame dimension)
     SPRITE_BG = jnp.expand_dims(bg, axis=0)
@@ -645,10 +695,12 @@ def load_sprites():
     )
 
 
-class AmidarRenderer(AtraJaxisRenderer):
+class AmidarRenderer(JAXGameRenderer):
     """JAX-based Amidar game renderer, optimized with JIT compilation."""
 
-    def __init__(self):
+    def __init__(self, constants: AmidarConstants = None):
+        # NOTE: added for compatibility TODO (check recent changes / the other games)
+        self.constants = constants or AmidarConstants()
         (
             self.SPRITE_BG,
             self.DIGITS,
@@ -671,7 +723,7 @@ class AmidarRenderer(AtraJaxisRenderer):
         # Create empty raster with CORRECT orientation for atraJaxis framework
         # Note: For pygame, the raster is expected to be (width, height, channels)
         # where width corresponds to the horizontal dimension of the screen
-        raster = jnp.zeros((WIDTH, HEIGHT, 3))
+        raster = jnp.zeros((HEIGHT, WIDTH, 3))
 
         # Render background - (0, 0) is top-left corner
         frame_bg = aj.get_sprite_frame(self.SPRITE_BG, 0)
@@ -684,45 +736,16 @@ class AmidarRenderer(AtraJaxisRenderer):
         walked_on_paths_horizontal = state.walked_on_paths[0:jnp.shape(HORIZONTAL_PATH_EDGES)[0]]
         walked_on_paths_vertical = state.walked_on_paths[jnp.shape(HORIZONTAL_PATH_EDGES)[0]:]
         _, walked_on_rendering_mask = generate_path_mask(horizontal_cond=walked_on_paths_horizontal, vertical_cond=walked_on_paths_vertical)
-        walked_on_paths_sprite = jnp.where(walked_on_rendering_mask[:, :, None] == 1, WALKED_ON_PATTERN, jnp.full((WIDTH, HEIGHT, 4), 0, dtype=jnp.uint8))
+        walked_on_paths_sprite = jnp.where(walked_on_rendering_mask[:, :, None] == 1, WALKED_ON_PATTERN, jnp.full((HEIGHT, WIDTH, 4), 0, dtype=jnp.uint8))
         raster = aj.render_at(raster, 0, 0, walked_on_paths_sprite)
 
         # Render completed rectangles
-        def create_rectangle_corners(rectangle):
-            """Gets the top-left and bottom-right corners of a rectangle."""
-            def calculate(): # can prob. be removed
-                # Get only the edges that belong to this rectangle
-                rectangle_edges = jnp.where(rectangle[:, None, None], PATH_EDGES, jnp.full(PATH_EDGES.shape, jnp.inf, dtype=jnp.float32))
-                
-                # Flatten the coordinates to make min/max operations easier
-                all_x_coords = rectangle_edges[:, :, 0].flatten()
-                all_y_coords = rectangle_edges[:, :, 1].flatten()
-                
-                # Instead of boolean indexing, use conditional operations
-                # Find min/max while ignoring inf values
-                min_x = jnp.min(jnp.where(all_x_coords != jnp.inf, all_x_coords, jnp.inf)).astype(jnp.int32)
-                min_y = jnp.min(jnp.where(all_y_coords != jnp.inf, all_y_coords, jnp.inf)).astype(jnp.int32)
-                max_x = jnp.max(jnp.where(all_x_coords != jnp.inf, all_x_coords, -jnp.inf)).astype(jnp.int32)
-                max_y = jnp.max(jnp.where(all_y_coords != jnp.inf, all_y_coords, -jnp.inf)).astype(jnp.int32)
-                
-                return jnp.stack((min_x, min_y, max_x, max_y))
-            return jax.lax.cond(jnp.any(rectangle), calculate, lambda: jnp.zeros(4, dtype=jnp.int32))
-
-        # Only process rectangles that are actually completed
-        def process_completed_rectangle(i):
-            rectangle = RECTANGLES[i]
-            is_completed = state.completed_rectangles[i]
-            return jax.lax.cond(is_completed, 
-                               lambda: create_rectangle_corners(rectangle),
-                               lambda: jnp.zeros(4, dtype=jnp.int32))
-
-        rectangle_corners = jax.vmap(process_completed_rectangle)(jnp.arange(RECTANGLES.shape[0]))
-
+        # Still computed in the (HEIGHT, WIDTH) format and transposed later since the code uses (x, y) coordinates
         # Create coordinate grids for vectorized operations
         x_coords, y_coords = jnp.meshgrid(jnp.arange(WIDTH), jnp.arange(HEIGHT), indexing='ij')
         completed_rectangles_mask = jnp.zeros((WIDTH, HEIGHT), dtype=jnp.uint8)
         def create_rectangle_mask(i, mask):
-            rect_min_x, rect_min_y, rect_max_x, rect_max_y = rectangle_corners[i]
+            rect_min_x, rect_min_y, rect_max_x, rect_max_y = RECTANGLE_CORNERS[i]
             is_completed = state.completed_rectangles[i]
             def create_mask():
                 in_rect_x = jnp.logical_and(x_coords >= rect_min_x, x_coords <= rect_max_x)
@@ -731,8 +754,9 @@ class AmidarRenderer(AtraJaxisRenderer):
                 return jnp.logical_or(mask, rect_mask).astype(jnp.uint8)
             return jax.lax.cond(is_completed, create_mask, lambda: mask)
         completed_rectangles_mask = jax.lax.fori_loop(0, jnp.shape(RECTANGLES)[0], create_rectangle_mask, completed_rectangles_mask)
+        completed_rectangles_mask = jnp.transpose(completed_rectangles_mask, (1, 0))  # Transpose to match the HWC format for rendering
 
-        completed_rectangles_sprite = jnp.where(completed_rectangles_mask[:, :, None] == 1, WALKED_ON_PATTERN, jnp.full((WIDTH, HEIGHT, 4), 0, dtype=jnp.uint8))
+        completed_rectangles_sprite = jnp.where(completed_rectangles_mask[:, :, None] == 1, WALKED_ON_PATTERN, jnp.full((HEIGHT, WIDTH, 4), 0, dtype=jnp.uint8))
         raster = aj.render_at(raster, 0, 0, completed_rectangles_sprite)
 
         # Render score
