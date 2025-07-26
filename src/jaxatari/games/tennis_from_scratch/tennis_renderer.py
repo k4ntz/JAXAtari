@@ -27,7 +27,20 @@ def load_sprites():
     RACKET_2 = jnp.expand_dims(aj.loadFrame(os.path.join(MODULE_DIR, "tennis_from_scratch/sprites/3.npy")), axis=0)
     RACKET_3 = jnp.expand_dims(aj.loadFrame(os.path.join(MODULE_DIR, "tennis_from_scratch/sprites/4.npy")), axis=0)
 
-    return BG, BALL, BALL_SHADOW, [PLAYER_0, PLAYER_1, PLAYER_2, PLAYER_3], [RACKET_3, RACKET_0, RACKET_1, RACKET_2]
+    # UI sprites
+    UI_NUM_0 = jnp.expand_dims(aj.loadFrame(os.path.join(MODULE_DIR, "tennis_from_scratch/sprites/ui_blue_0.npy")), axis=0)
+    UI_NUM_1 = jnp.expand_dims(aj.loadFrame(os.path.join(MODULE_DIR, "tennis_from_scratch/sprites/ui_blue_1.npy")),
+                               axis=0)
+    UI_NUM_2 = jnp.expand_dims(aj.loadFrame(os.path.join(MODULE_DIR, "tennis_from_scratch/sprites/ui_blue_2.npy")),
+                               axis=0)
+    UI_NUM_3 = jnp.expand_dims(aj.loadFrame(os.path.join(MODULE_DIR, "tennis_from_scratch/sprites/ui_blue_3.npy")),
+                               axis=0)
+    UI_NUM_4 = jnp.expand_dims(aj.loadFrame(os.path.join(MODULE_DIR, "tennis_from_scratch/sprites/ui_blue_4.npy")),
+                               axis=0)
+    UI_NUM_5 = jnp.expand_dims(aj.loadFrame(os.path.join(MODULE_DIR, "tennis_from_scratch/sprites/ui_blue_5.npy")),
+                               axis=0)
+
+    return BG, BALL, BALL_SHADOW, [PLAYER_0, PLAYER_1, PLAYER_2, PLAYER_3], [RACKET_3, RACKET_0, RACKET_1, RACKET_2], [UI_NUM_0, UI_NUM_1, UI_NUM_2, UI_NUM_3, UI_NUM_4, UI_NUM_5]
 
 
 # ToDo remove
@@ -92,9 +105,26 @@ def perspective_transform(x, y, apply_offsets = True, width_top = 79.0, width_bo
 class TennisRenderer:
 
     def __init__(self):
-        (self.BG, self.BALL, self.BALL_SHADOW, self.PLAYER, self.RACKET) = load_sprites()
+        (self.BG, self.BALL, self.BALL_SHADOW, self.PLAYER, self.RACKET, self.UI_NUMBERS) = load_sprites()
         # use bounding box as mockup
         self.BOUNDING_BOX = get_bounding_box(PLAYER_WIDTH, PLAYER_HEIGHT)
+
+    def render_number_centered(self, raster, number: int, position):
+        chars = list(str(number))
+
+        sprites = [aj.get_sprite_frame((self.UI_NUMBERS[0] if int(c) >= len(self.UI_NUMBERS) else self.UI_NUMBERS[int(c)]), 0) for c in chars]
+
+        padding = 2
+        total_width = sum(len(s[0][0]) for s in sprites) + (len(sprites) - 1) * padding
+
+        curr_x = position[0] - total_width / 2
+        for sprite in sprites:
+            raster = aj.render_at(raster, curr_x, position[1],
+                                  sprite)
+
+            curr_x += len(sprite[0][0]) + padding
+
+        return raster
 
     #@partial(jax.jit, static_argnums=(0,))
     def render(self, state: TennisState) -> jnp.ndarray:
@@ -201,6 +231,8 @@ class TennisRenderer:
         bottom_right_corner_coords = perspective_transform(GAME_WIDTH, GAME_HEIGHT)
 
         raster = aj.render_at(raster, bottom_right_corner_coords[0], bottom_right_corner_coords[1], bottom_right_rec)
+
+        raster = self.render_number_centered(raster, 10, [FRAME_WIDTH / 2, 10])
 
         #raster = aj.render_at(raster, 0, 0, rectangle)
         return raster
