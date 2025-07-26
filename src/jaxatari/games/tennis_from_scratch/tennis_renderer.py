@@ -114,15 +114,18 @@ class TennisRenderer:
 
         sprites = [aj.get_sprite_frame((self.UI_NUMBERS[0] if int(c) >= len(self.UI_NUMBERS) else self.UI_NUMBERS[int(c)]), 0) for c in chars]
 
+
+        #print(sprites[0].shape)
+
         padding = 2
-        total_width = sum(len(s[0][0]) for s in sprites) + (len(sprites) - 1) * padding
+        total_width = sum(s.shape[0] for s in sprites) + (len(sprites) - 1) * padding
 
         curr_x = position[0] - total_width / 2
         for sprite in sprites:
             raster = aj.render_at(raster, curr_x, position[1],
                                   sprite)
 
-            curr_x += len(sprite[0][0]) + padding
+            curr_x += sprite.shape[0] + padding
 
         return raster
 
@@ -232,7 +235,12 @@ class TennisRenderer:
 
         raster = aj.render_at(raster, bottom_right_corner_coords[0], bottom_right_corner_coords[1], bottom_right_rec)
 
-        raster = self.render_number_centered(raster, 10, [FRAME_WIDTH / 2, 10])
+        tennis_scores = [0, 15, 30, 40]
+        player_score_number = tennis_scores[min(len(tennis_scores), state.game_state.player_score)]
+        enemy_score_number = tennis_scores[min(len(tennis_scores), state.game_state.enemy_score)]
+
+        raster = self.render_number_centered(raster, player_score_number, [FRAME_WIDTH / 4, 2])
+        raster = self.render_number_centered(raster, enemy_score_number, [(FRAME_WIDTH / 4) * 3, 2])
 
         #raster = aj.render_at(raster, 0, 0, rectangle)
         return raster

@@ -97,7 +97,7 @@ class EnemyState(NamedTuple):
 class GameState(NamedTuple):
     is_serving: chex.Array  # whether the game is currently in serving state (ball bouncing on one side until player hits)
     pause_counter: chex.Array  # delay between restart of game
-    player_score: chex.Array  # The score line within the current set
+    player_score: chex.Array  # The score line within the current set (goes up in increments of 1, instead of traditional tennis counting)
     enemy_score: chex.Array
     player_game_score: chex.Array  # Number of won sets
     enemy_game_score: chex.Array
