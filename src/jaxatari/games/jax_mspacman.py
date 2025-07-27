@@ -10,7 +10,7 @@ import jaxatari.spaces as spaces
 from jaxatari.environment import JaxEnvironment, JAXAtariAction as Action
 from jaxatari.renderers import AtraJaxisRenderer
 from jaxatari.rendering import atraJaxis as aj
-from jaxatari.games.mspacman_mazes import MAZES, load_background, pacman_rgba, load_ghosts
+from jaxatari.games.mspacman_mazes import MAZES, load_background, pacman_rgba, load_ghosts, precompute_dof, base_pellets
 
 from jax import random, Array
 
@@ -50,80 +50,31 @@ def last_pressed_action(action, prev_action):
         return action
 
 
-def dof(pos: chex.Array, maze: chex.Array):
+def dof(pos: chex.Array, dofmaze: chex.Array):
     """
     Degree of freedom of the object, can it move up, right, left, down
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    TO BE PASSED AT LA MOULINETTE
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
     """
     x, y = pos
     grid_x = (x+5)//4
     grid_y = (y+3)//4
-    no_wall_above = sum(maze[grid_y-2, grid_x-1:grid_x+2]) == 0
-    no_wall_bellow = sum(maze[grid_y+2, grid_x-1:grid_x+2]) == 0
-    no_wall_left = sum(maze[grid_y-1:grid_y+2, grid_x-2]) == 0
-    no_wall_right = sum(maze[grid_y-1:grid_y+2, grid_x+2]) == 0
-    # if x % 4 == 1: # can potentially move up/down
-    # if y % 12 == 6: # can potentially move left/right
-    return no_wall_above, no_wall_right, no_wall_left, no_wall_bellow
+    return dofmaze[grid_x][grid_y]
 
-
-def can_change_direction(pos: chex.Array, maze: chex.Array):
+def can_change_direction(pos: chex.Array, dofmaze: chex.Array):
     """
     Wether the object change change direction
     """
-    up, right, left, down = dof(pos, maze)
     x, y = pos
     on_vertical_grid = x % 4 == 1 # can potentially move up/down
     on_horizontal_grid = y % 12 == 6 # can potentially move left/right
+    up, right, left, down = dof(pos, dofmaze)
     return up and on_vertical_grid, right and on_horizontal_grid, left and on_horizontal_grid, down and on_vertical_grid
 
 
-def stop_wall(pos: chex.Array, maze: chex.Array):
-    up, right, left, down = dof(pos, maze)
+def stop_wall(pos: chex.Array, dofmaze: chex.Array):
     x, y = pos
     on_vertical_grid = x % 4 == 1 # can potentially move up/down
     on_horizontal_grid = y % 12 == 6 # can potentially move left/right
+    up, right, left, down = dof(pos, dofmaze)
     return not(up) and on_horizontal_grid, not(right) and on_vertical_grid, not(left) and on_vertical_grid, not(down) and on_horizontal_grid
 
 
@@ -134,7 +85,8 @@ class PacmanState(NamedTuple):
     current_action: chex.Array # 0: NOOP, 1: NOOP, 2: UP ...
     ghost_positions: chex.Array  # (N_ghosts, 2)
     ghost_dirs: chex.Array  # (N_ghosts, 2)
-    # pellets: chex.Array  # 2D grid of 0 (empty) or 1 (pellet)
+    pellets: chex.Array  # 2D grid of 0 (empty) or 1 (pellet)
+    has_pellet: chex.Array  # Boolean indicating if pacman just collected a pellet
     # power_pellets: chex.Array
     score: chex.Array
     step_count: chex.Array
@@ -177,7 +129,9 @@ class JaxPacman(JaxEnvironment[PacmanState, PacmanObservation, PacmanInfo]):
             Action.DOWNRIGHT,
             Action.DOWNLEFT,
         ]
-        self.maze_layout = MAZES[BASE_LEVEL]
+        self.maze_layout = jnp.array(MAZES[BASE_LEVEL])
+        self.dofmaze = precompute_dof(MAZES[BASE_LEVEL])
+        self.pellets = jnp.array(base_pellets)
     
     def action_space(self) -> spaces.Discrete:
         """Returns the action space for MsPacman.
@@ -200,13 +154,13 @@ class JaxPacman(JaxEnvironment[PacmanState, PacmanObservation, PacmanInfo]):
         pacman_dir = jnp.array([-1, 0])
         ghost_positions = jnp.array([[40, 78], [50, 78], [75, 54], [120, 78]])
         ghost_dirs = jnp.zeros_like(ghost_positions)
-        pellets = (self.maze_layout == 0).astype(jnp.int32)
-        power_pellets = jnp.zeros_like(pellets)
-        power_pellets = power_pellets.at[1, 1].set(1)
-        power_pellets = power_pellets.at[1, 17].set(1)
-        power_pellets = power_pellets.at[9, 1].set(1)
-        power_pellets = power_pellets.at[9, 17].set(1)
-        pellets = pellets - power_pellets
+        pellets = self.pellets
+        # power_pellets = jnp.zeros_like(pellets)
+        # power_pellets = power_pellets.at[1, 1].set(1)
+        # power_pellets = power_pellets.at[1, 17].set(1)
+        # power_pellets = power_pellets.at[9, 1].set(1)
+        # power_pellets = power_pellets.at[9, 17].set(1)
+        # pellets = pellets - power_pellets
 
         power_mode_timer = jnp.array(0)
 
@@ -216,7 +170,8 @@ class JaxPacman(JaxEnvironment[PacmanState, PacmanObservation, PacmanInfo]):
             current_action = 4,
             ghost_positions=ghost_positions,
             ghost_dirs=ghost_dirs,
-            # pellets=pellets,
+            pellets=pellets,
+            has_pellet=jnp.array(False),
             # power_pellets=power_pellets,
             score=jnp.array(0),
             step_count=jnp.array(0),
@@ -253,6 +208,8 @@ class JaxPacman(JaxEnvironment[PacmanState, PacmanObservation, PacmanInfo]):
                 current_action=state.current_action,
                 ghost_positions=ghost_positions,
                 ghost_dirs=ghost_dirs,
+                pellets=state.pellets,
+                has_pellet=state.has_pellet,
                 score=state.score,
                 step_count=state.step_count + 1,
                 game_over=game_over,
@@ -267,25 +224,35 @@ class JaxPacman(JaxEnvironment[PacmanState, PacmanObservation, PacmanInfo]):
             return obs, new_state, reward, done, info
 
         action = last_pressed_action(action, state.current_action)
-        possible_directions = can_change_direction(state.pacman_pos, self.maze_layout)
+        possible_directions = can_change_direction(state.pacman_pos, self.dofmaze)
         if action != Action.NOOP and action != Action.FIRE and possible_directions[action - 2]:
             new_pacman_dir = DIRECTIONS[action]
             executed_action = action
         else:
             # check for wall collision
-            if state.current_action > 1 and stop_wall(state.pacman_pos, self.maze_layout)[state.current_action - 2]:
+            if state.current_action > 1 and stop_wall(state.pacman_pos, self.dofmaze)[state.current_action - 2]:
                 executed_action = 0
                 new_pacman_dir = jnp.array([0, 0])
             else:
                 executed_action = state.current_action
                 new_pacman_dir = state.pacman_dir
-        if state.step_count % 2:
+        # if state.step_count % 2:
+        if True:
             new_pacman_pos = state.pacman_pos + new_pacman_dir
             new_pacman_pos = new_pacman_pos.at[0].set(new_pacman_pos[0] % 160)
         else:
             new_pacman_pos = state.pacman_pos
-
-
+        
+        pellets = state.pellets
+        # Check for pellet consumption
+        has_pellet = jnp.array(False)
+        x_offset = 5 if new_pacman_pos[0] < 75 else 1
+        if new_pacman_pos[0] % 8 == x_offset and new_pacman_pos[1] % 12 == 6:
+            x_pellets = (new_pacman_pos[0] - 2) // 8
+            y_pellets = (new_pacman_pos[1] + 4) // 12
+            if state.pellets[x_pellets, y_pellets]:
+                has_pellet = jnp.array(True)
+                pellets = state.pellets.at[x_pellets, y_pellets].set(False)
 
         # has_pellet = state.pellets[new_pacman_pos[1], new_pacman_pos[0]] > 0
         # has_power = state.power_pellets[new_pacman_pos[1], new_pacman_pos[0]] > 0
@@ -293,7 +260,7 @@ class JaxPacman(JaxEnvironment[PacmanState, PacmanObservation, PacmanInfo]):
         # # Consume pellet
         # pellets = state.pellets.at[new_pacman_pos[1], new_pacman_pos[0]].set(0)
         # power_pellets = state.power_pellets.at[new_pacman_pos[1], new_pacman_pos[0]].set(0)
-        score = state.score #+ jax.lax.select(has_pellet, 10, 0)
+        score = state.score + jax.lax.select(has_pellet, 10, 0)
 
         #Update power mode timer
         # power_mode_timer = jax.lax.select(
@@ -309,7 +276,7 @@ class JaxPacman(JaxEnvironment[PacmanState, PacmanObservation, PacmanInfo]):
         # keys = random.split(random.PRNGKey(state.step_count), state.ghost_positions.shape[0])
         # ghost_positions = jax.vmap(move_one_ghost)(state.ghost_positions, keys)
         ghost_positions, ghost_dirs = ghosts_step(
-            state.ghost_positions, state.ghost_dirs, self.maze_layout, key=key
+            state.ghost_positions, state.ghost_dirs, self.dofmaze, key=key
         )
         # Collision detection
         collision = jnp.any(jnp.all(abs(new_pacman_pos - ghost_positions) < 8, axis=1))
@@ -322,6 +289,8 @@ class JaxPacman(JaxEnvironment[PacmanState, PacmanObservation, PacmanInfo]):
             current_action=executed_action,
             ghost_positions=ghost_positions,
             ghost_dirs=ghost_dirs,
+            pellets=pellets,
+            has_pellet=has_pellet,
             score=score,
             step_count=state.step_count + 1,
             game_over=game_over,
@@ -356,9 +325,26 @@ class MsPacmanRenderer(AtraJaxisRenderer):
     @partial(jax.jit, static_argnums=(0,))
     def render(self, state):
         raster = self.SPRITE_BG
+        # de-render pellets
+        # if state.has_pellet:
+        if state.has_pellet:
+            # PATH_COLOR = jnp.array([200, 200, 200], dtype=jnp.uint8)
+            PATH_COLOR = jnp.array([0, 28, 136], dtype=jnp.uint8)
+            pellet_x = state.pacman_pos[0] + 3
+            pellet_y = state.pacman_pos[1] + 4
+            for i in range(4):
+                for j in range(2):
+                    self.SPRITE_BG = self.SPRITE_BG.at[pellet_x+i, pellet_y+j].set(PATH_COLOR)
         raster = aj.render_at(raster, state.pacman_pos[0], state.pacman_pos[1], self.SPRITE_PLAYER)
         for g_pos, g_sprite in zip(state.ghost_positions, self.SPRITE_GHOSTS):
-            raster = aj.render_at(raster, g_pos[0], g_pos[1], g_sprite) 
+            raster = aj.render_at(raster, g_pos[0], g_pos[1], g_sprite)
+        # for px in range(18):
+        #     x_offset = 8 if px < 9 else 12
+        #     for py in range(14):
+        #         if state.pellets[px, py] > 0:
+        #             pellet_x = px * 8 + x_offset
+        #             pellet_y = py * 12 + 10
+        #             raster = aj.render_at(raster, pellet_x, pellet_y, jnp.ones((4, 2, 4), dtype=jnp.uint8) * 255)  # White pellet
         return raster
 
 
@@ -372,11 +358,11 @@ def get_direction_index(direction: chex.Array) -> int:
     return 0  # Default to NOOP if not found
 
 
-def ghost_step(ghost_pos: chex.Array, ghost_dir: chex.Array, maze: chex.Array, key=None) -> Tuple[chex.Array, chex.Array]:
+def ghost_step(ghost_pos: chex.Array, ghost_dir: chex.Array, dofmaze:chex.Array, key=None) -> Tuple[chex.Array, chex.Array]:
     """
     Step function for a single ghost. Never stops, never reverses, can change direction at intersections.
     """
-    possible = can_change_direction(ghost_pos, maze)
+    possible = can_change_direction(ghost_pos, dofmaze)
     dir_idx = get_direction_index(ghost_dir)
     # Map: 2=UP, 3=RIGHT, 4=LEFT, 5=DOWN
     direction_indices = [2, 3, 4, 5]
@@ -404,7 +390,7 @@ def ghost_step(ghost_pos: chex.Array, ghost_dir: chex.Array, maze: chex.Array, k
     return new_pos, next_dir
 
 
-def ghosts_step(ghost_positions: chex.Array, ghost_dirs: chex.Array, maze: chex.Array, key=None) -> Tuple[chex.Array, chex.Array]:
+def ghosts_step(ghost_positions: chex.Array, ghost_dirs: chex.Array, dofmaze: chex.Array, key=None) -> Tuple[chex.Array, chex.Array]:
     """
     Step all ghosts. key can be a PRNGKey or None for deterministic.
     """
@@ -416,7 +402,7 @@ def ghosts_step(ghost_positions: chex.Array, ghost_dirs: chex.Array, maze: chex.
     new_positions = []
     new_dirs = []
     for i in range(n_ghosts):
-        pos, d = ghost_step(ghost_positions[i], ghost_dirs[i], maze, keys[i])
+        pos, d = ghost_step(ghost_positions[i], ghost_dirs[i], dofmaze, keys[i])
         new_positions.append(pos)
         new_dirs.append(d)
     return jnp.stack(new_positions), jnp.stack(new_dirs)

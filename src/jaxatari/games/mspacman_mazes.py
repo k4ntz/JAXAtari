@@ -1,11 +1,46 @@
 import jax
 import jax.numpy as jnp
 import os
+import numpy as np
 
-# def extract_array(img):
-#     return np.all(img == [228, 111, 111], axis=-1).astype(int)[1:176:4, ::4]
 
-maze1 = jnp.array([
+def precompute_dof(maze: np.ndarray):
+	"""
+	Precompute the degree of freedom for each position in the maze
+	"""
+	w, h = maze.shape
+	dof_grid = np.zeros((h, w, 4), dtype=np.bool)
+	for x in range(maze.shape[1]):
+		for y in range(maze.shape[0]):
+			no_wall_above = sum(maze[y-2, x-1:x+2]) == 0
+			no_wall_right = sum(maze[y-1:y+2, (x+2)%h]) == 0
+			no_wall_left = sum(maze[y-1:y+2, x-2]) == 0
+			no_wall_bellow = sum(maze[(y+2)%w, x-1:x+2]) == 0
+			dof_grid[x, y] = [no_wall_above, no_wall_right, no_wall_left, no_wall_bellow]
+	return jnp.array(dof_grid)
+
+base_pellets = np.array([
+	   [1, 1, 1, 1, 1, 1, 1, 1, 0, 1, 1, 1, 1, 1],
+       [1, 1, 1, 1, 1, 1, 1, 1, 0, 1, 1, 1, 1, 1],
+       [1, 1, 1, 1, 1, 1, 1, 1, 0, 1, 1, 1, 1, 1],
+       [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1],
+       [1, 1, 1, 1, 1, 1, 1, 1, 0, 1, 1, 1, 1, 1],
+       [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1],
+       [1, 1, 1, 1, 1, 1, 1, 1, 0, 1, 1, 1, 1, 1],
+       [1, 1, 1, 1, 1, 0, 0, 0, 0, 1, 1, 1, 1, 1],
+       [1, 1, 1, 1, 1, 0, 0, 0, 0, 1, 1, 1, 1, 1],
+       [1, 1, 1, 1, 1, 0, 0, 0, 0, 1, 1, 1, 1, 1],
+       [1, 1, 1, 1, 1, 0, 0, 0, 1, 1, 1, 1, 1, 1],
+       [1, 1, 1, 1, 1, 1, 1, 1, 0, 1, 1, 1, 1, 1],
+       [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1],
+       [1, 1, 1, 1, 1, 1, 1, 1, 0, 1, 1, 1, 1, 1],
+       [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1],
+       [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1],
+       [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1],
+       [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1]
+	], dtype=np.bool)
+
+maze1 = np.array([
        [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1],
        [1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1],
        [1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1],
@@ -50,7 +85,7 @@ maze1 = jnp.array([
        [1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1],
        [1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1],
        [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1]
-], dtype=jnp.int32)
+], dtype=np.bool)
 
 maze2 = jnp.array([
        [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1],
@@ -97,7 +132,7 @@ maze2 = jnp.array([
        [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
        [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
        [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1]
-], dtype=jnp.int32)
+], dtype=jnp.bool_)
 
 maze3 = jnp.array([
        [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1],
@@ -195,32 +230,43 @@ maze4 = jnp.array([
 
 MAZES = [maze1, maze1, maze3, maze4]
 
+
+
 def load_background(level):
-       """
-       Constructs the background based on the level.
-       """
-       maze_grid  = MAZES[level]
+	"""
+	Constructs the background based on the level.
+	"""
+	maze_grid  = MAZES[level]
 
-       # Define wall and path colors (RGB)
-       WALL_COLOR = jnp.array([228, 111, 111], dtype=jnp.uint8)
-       PATH_COLOR = jnp.array([0, 28, 136], dtype=jnp.uint8)
+	# Define wall and path colors (RGB)
+	WALL_COLOR = jnp.array([228, 111, 111], dtype=jnp.uint8)
+	PATH_COLOR = jnp.array([0, 28, 136], dtype=jnp.uint8)
 
-       # Each cell becomes a 4x4 block in the final image
-       SCALE = 4
-       H, W = maze_grid.shape
+	# Each cell becomes a 4x4 block in the final image
+	SCALE = 4
+	H, W = maze_grid.shape
 
-       # Initialize RGB image
-       background = jnp.zeros((210, W * SCALE, 3), dtype=jnp.uint8)
+	# Initialize RGB image
+	background = jnp.zeros((210, W * SCALE, 3), dtype=jnp.uint8)
 
-       # Fill background
-       for y in range(H):
-              for x in range(W):
-                     color = jax.lax.cond(maze_grid[y, x] == 1,
-                                          lambda _: WALL_COLOR,
-                                          lambda _: PATH_COLOR,
-                                          operand=None)
-                     background = background.at[1+y*SCALE:(y+2)*SCALE, x*SCALE:(x+1)*SCALE, :].set(color)
-       return jnp.swapaxes(background, 0, 1)
+	# Fill background
+	for y in range(H):
+		for x in range(W):
+			color = jax.lax.cond(maze_grid[y, x] == 1,
+				lambda _: WALL_COLOR,
+				lambda _: PATH_COLOR,
+				operand=None)
+			background = background.at[1+y*SCALE:(y+2)*SCALE, x*SCALE:(x+1)*SCALE, :].set(color)
+	for px in range(18):
+		x_offset = 8 if px < 9 else 12
+		for py in range(14):
+			if base_pellets[px, py] > 0:
+				pellet_x = px * 8 + x_offset
+				pellet_y = py * 12 + 10
+				for i in range(4):
+					for j in range(2):
+						background = background.at[pellet_y+j, pellet_x+i].set(WALL_COLOR)
+	return jnp.swapaxes(background, 0, 1)
 
 def pacman_rgba(size: int = 10) -> jnp.ndarray:
     # Define RGBA colors
