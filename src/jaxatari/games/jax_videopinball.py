@@ -932,6 +932,79 @@ MIDDLE_BAR_SCENE_OBJECT = SceneObject(
     score_type=jnp.array(0),  # type: ignore
 )
 
+# Left Flipper SceneObjects for different states
+LEFT_FLIPPER_STATE_0_SCENE_OBJECT = SceneObject(
+    hit_box_height=jnp.array(6),  
+    hit_box_width=jnp.array(6),   
+    hit_box_x_offset=jnp.array(64),
+    hit_box_y_offset=jnp.array(183),
+    reflecting=jnp.array(1),      
+    score_type=jnp.array(0), #no score 
+)
+
+LEFT_FLIPPER_STATE_16_SCENE_OBJECT = SceneObject(
+    hit_box_height=jnp.array(2),  
+    hit_box_width=jnp.array(1),   
+    hit_box_x_offset=jnp.array(64),
+    hit_box_y_offset=jnp.array(184),
+    reflecting=jnp.array(1),
+    score_type=jnp.array(0),
+)
+
+LEFT_FLIPPER_STATE_32_SCENE_OBJECT = SceneObject(
+    hit_box_height=jnp.array(2),  
+    hit_box_width=jnp.array(5),   
+    hit_box_x_offset=jnp.array(67),
+    hit_box_y_offset=jnp.array(181),
+    reflecting=jnp.array(1),
+    score_type=jnp.array(0),
+)
+
+LEFT_FLIPPER_STATE_48_SCENE_OBJECT = SceneObject(
+    hit_box_height=jnp.array(2),  
+    hit_box_width=jnp.array(2),   
+    hit_box_x_offset=jnp.array(73),
+    hit_box_y_offset=jnp.array(176),
+    reflecting=jnp.array(1),
+    score_type=jnp.array(0),
+)
+
+# Right Flipper SceneObjects for different states
+RIGHT_FLIPPER_STATE_0_SCENE_OBJECT = SceneObject(
+    hit_box_height=jnp.array(6),  
+    hit_box_width=jnp.array(10),  
+    hit_box_x_offset=jnp.array(85),
+    hit_box_y_offset=jnp.array(183),
+    reflecting=jnp.array(1),
+    score_type=jnp.array(0),
+)
+
+RIGHT_FLIPPER_STATE_16_SCENE_OBJECT = SceneObject(
+    hit_box_height=jnp.array(2),  
+    hit_box_width=jnp.array(4),   
+    hit_box_x_offset=jnp.array(83),
+    hit_box_y_offset=jnp.array(184),
+    reflecting=jnp.array(1),
+    score_type=jnp.array(0),
+)
+
+RIGHT_FLIPPER_STATE_32_SCENE_OBJECT = SceneObject(
+    hit_box_height=jnp.array(2),  
+    hit_box_width=jnp.array(4),   
+    hit_box_x_offset=jnp.array(83),
+    hit_box_y_offset=jnp.array(181),
+    reflecting=jnp.array(1),
+    score_type=jnp.array(0),
+)
+
+RIGHT_FLIPPER_STATE_48_SCENE_OBJECT = SceneObject(
+    hit_box_height=jnp.array(2),  
+    hit_box_width=jnp.array(2),   
+    hit_box_x_offset=jnp.array(84),
+    hit_box_y_offset=jnp.array(176),
+    reflecting=jnp.array(1),
+    score_type=jnp.array(0),
+)
 
 ALL_SCENE_OBJECTS_LIST = [
     TOP_WALL_SCENE_OBJECT,
@@ -998,6 +1071,14 @@ ALL_SCENE_OBJECTS_LIST = [
     RIGHT_SPINNER_RIGHT_POSITION_RIGHT_PART_1_SCENE_OBJECT,
     RIGHT_SPINNER_RIGHT_POSITION_RIGHT_PART_2_SCENE_OBJECT,
     MIDDLE_BAR_SCENE_OBJECT,
+    LEFT_FLIPPER_STATE_0_SCENE_OBJECT,
+    LEFT_FLIPPER_STATE_16_SCENE_OBJECT,
+    LEFT_FLIPPER_STATE_32_SCENE_OBJECT,
+    LEFT_FLIPPER_STATE_48_SCENE_OBJECT,
+    RIGHT_FLIPPER_STATE_0_SCENE_OBJECT,
+    RIGHT_FLIPPER_STATE_16_SCENE_OBJECT,
+    RIGHT_FLIPPER_STATE_32_SCENE_OBJECT,
+    RIGHT_FLIPPER_STATE_48_SCENE_OBJECT,
 ]
 
 REFLECTING_SCENE_OBJECTS = jnp.stack(
