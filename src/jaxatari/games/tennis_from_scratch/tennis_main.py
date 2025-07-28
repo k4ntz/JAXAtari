@@ -30,6 +30,7 @@ GAME_MIDDLE = GAME_OFFSET_TOP + 0.5 * GAME_HEIGHT
 GAME_OFFSET_BOTTOM = GAME_OFFSET_TOP + GAME_HEIGHT
 PAUSE_DURATION = 100
 
+
 # player constants
 PLAYER_CONST = 0
 PLAYER_WIDTH = 13  # player flips side so total covered x section is greater
@@ -61,6 +62,8 @@ SHORT_HIT_DISTANCE = 40
 
 # enemy constants
 ENEMY_CONST = 1
+
+GAME_MIDDLE_HORIZONTAL = (FRAME_WIDTH - PLAYER_WIDTH) / 2
 
 rand_key = random.key(0)
 
@@ -507,21 +510,32 @@ y - coordinate:
 @jax.jit
 def enemy_step(state: TennisState) -> EnemyState:
     # x-coordinate
-    # simply track balls x-coordinate
-    ball_tracking_tolerance = 1
     enemy_hit_offset = state.enemy_state.prev_walking_direction * 5 * -1 * 0
     enemy_x_hit_point = state.enemy_state.enemy_x + PLAYER_WIDTH / 2 + enemy_hit_offset
-    new_enemy_x = jnp.where(
-        enemy_x_hit_point < state.ball_state.ball_x,
-        state.enemy_state.enemy_x + 1,
-        state.enemy_state.enemy_x
-    )
+    ball_tracking_tolerance = 1
 
-    new_enemy_x = jnp.where(
-        enemy_x_hit_point > state.ball_state.ball_x,
-        state.enemy_state.enemy_x - 1,
-        new_enemy_x
-    )
+    # move to middle
+    def move_x_to_middle():
+        middle_step_x = jnp.where(jnp.less_equal(state.enemy_state.enemy_x, GAME_MIDDLE_HORIZONTAL), state.enemy_state.enemy_x + 1,
+                               state.enemy_state.enemy_x - 1)
+        return jnp.where(jnp.abs(state.enemy_state.enemy_x - GAME_MIDDLE_HORIZONTAL) > 1, middle_step_x,
+                         state.enemy_state.enemy_x)
+
+    def track_ball_x():
+        # simply track balls x-coordinate
+        new_enemy_x = jnp.where(
+            enemy_x_hit_point < state.ball_state.ball_x,
+            state.enemy_state.enemy_x + 1,
+            state.enemy_state.enemy_x
+        )
+        new_enemy_x = jnp.where(
+            enemy_x_hit_point > state.ball_state.ball_x,
+            state.enemy_state.enemy_x - 1,
+            new_enemy_x
+        )
+        return new_enemy_x
+
+    new_enemy_x = jax.lax.cond(state.ball_state.last_hit == 1, move_x_to_middle, track_ball_x)
 
     cur_walking_direction = jnp.where(
         new_enemy_x - state.enemy_state.enemy_x < 0,
@@ -536,11 +550,11 @@ def enemy_step(state: TennisState) -> EnemyState:
 
         #jnp.clip(new_enemy_x - state.enemy_state.enemy_x, -1, 1))
 
-    should_perform_direction_change = jnp.logical_or(
+    should_perform_direction_change = jnp.logical_or(jnp.logical_or(
         jnp.abs((enemy_x_hit_point) - state.ball_state.ball_x) >= ball_tracking_tolerance,
         #state.enemy_state.prev_walking_direction == cur_walking_direction
         False
-    )
+    ), state.ball_state.last_hit == 1)
 
     new_enemy_x = jnp.where(should_perform_direction_change, new_enemy_x, state.enemy_state.enemy_x)
 
