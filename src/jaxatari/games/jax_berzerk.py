@@ -1176,6 +1176,35 @@ class BerzerkRenderer(JAXGameRenderer):
         raster = draw_entry_block(raster)
 
 
+        def draw_enemy_wall_lines(raster, state):
+            wall_x = 2
+            line_height = 1  # Höhe in Pixeln
+            line_length = 6  # Länge in Pixeln nach rechts
+
+            def draw_line(raster, enemy_y):
+                y = jnp.clip(enemy_y.astype(jnp.int32) - 1, 0, raster.shape[0] - line_height)
+
+                # Schwarze horizontale Linie (line_height hoch, line_length breit, 3 Farbkanäle)
+                line = jnp.zeros((line_height, line_length, raster.shape[-1]), dtype=raster.dtype)
+
+                return jax.lax.dynamic_update_slice(raster, line, (y, wall_x, 0))
+
+            def maybe_draw(i, raster):
+                is_alive = state.enemy_alive[i]
+                enemy_y = state.enemy_pos[i][1]
+                return jax.lax.cond(
+                    is_alive,
+                    lambda _: draw_line(raster, enemy_y),
+                    lambda _: raster,
+                    operand=None
+                )
+
+            return jax.lax.fori_loop(0, state.enemy_pos.shape[0], maybe_draw, raster)
+
+        
+        raster = draw_enemy_wall_lines(raster, state)
+
+
         # Draw bullets
         for i in range(state.bullets.shape[0]):
             is_active = state.bullet_active[i]
