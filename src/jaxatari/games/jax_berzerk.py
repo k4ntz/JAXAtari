@@ -76,6 +76,8 @@ class BerzerkState(NamedTuple):
     entry_direction: chex.Array
     player_is_firing: chex.Array
     room_transition_timer: chex.Array
+    enemy_clear_bonus_given: chex.Array
+    
 
 class BerzerkObservation(NamedTuple):
     player: chex.Array
@@ -442,6 +444,7 @@ class JaxBerzerk(JaxEnvironment[BerzerkState, BerzerkObservation, BerzerkInfo, B
         entry_direction= jnp.array(3, dtype=jnp.int32)
         player_is_firing= jnp.array(False)
         room_transition_timer= jnp.array(0, dtype=jnp.int32)
+        enemy_clear_bonus_given=jnp.array(False)
         state = BerzerkState(player_pos=pos, 
                              lives=lives, 
                              bullets=bullets, bullet_dirs=bullet_dirs, 
@@ -463,7 +466,8 @@ class JaxBerzerk(JaxEnvironment[BerzerkState, BerzerkObservation, BerzerkInfo, B
                              room_counter=room_counter,
                              entry_direction=entry_direction,
                              player_is_firing=player_is_firing,
-                             room_transition_timer=room_transition_timer
+                             room_transition_timer=room_transition_timer,
+                             enemy_clear_bonus_given=enemy_clear_bonus_given
                              )
         return self._get_observation(state), state
 
@@ -929,12 +933,17 @@ class JaxBerzerk(JaxEnvironment[BerzerkState, BerzerkObservation, BerzerkInfo, B
 
             enemy_bullet_active = enemy_bullet_active & (~enemy_bullet_hits_wall)
 
+            give_bonus = (~jnp.any(enemy_alive)) & (~state.enemy_clear_bonus_given)
+            bonus_score = jnp.where(give_bonus, self.consts.NUM_ENEMIES * 10, 0)
 
             score_after = jnp.where(
                 jnp.any(enemy_hit | enemy_hits_wall | enemy_bullet_hit_enemy | hit_by_enemy),
                 state.score + 50,
                 state.score
             )
+
+            score_after += bonus_score
+            enemy_clear_bonus_given = state.enemy_clear_bonus_given | give_bonus
 
             # 7. For now simply teleport enemies out of area
             invisible = jnp.array([-100.0, -100.0])
@@ -970,7 +979,8 @@ class JaxBerzerk(JaxEnvironment[BerzerkState, BerzerkObservation, BerzerkInfo, B
                 room_counter=state.room_counter,
                 entry_direction=entry_direction,
                 player_is_firing=player_is_firing,
-                room_transition_timer=transition_timer
+                room_transition_timer=transition_timer,
+                enemy_clear_bonus_given=enemy_clear_bonus_given
             )
 
             # 10. Observation + Info + Reward/Done
@@ -1178,22 +1188,24 @@ class BerzerkRenderer(JAXGameRenderer):
 
         def draw_enemy_wall_lines(raster, state):
             wall_x = 2
-            line_height = 1  # Höhe in Pixeln
-            line_length = 6  # Länge in Pixeln nach rechts
+            line_height = 1
+            line_length = 6
+
+            # Aktiv, wenn Übergang/Tod gerade NICHT passiert
+            current_screen_anim = (state.death_timer > 0) | (state.room_transition_timer > 0)
+            draw_lines = ~current_screen_anim  # Nur zeichnen, wenn keine Animation
 
             def draw_line(raster, enemy_y):
                 y = jnp.clip(enemy_y.astype(jnp.int32) - 1, 0, raster.shape[0] - line_height)
-
-                # Schwarze horizontale Linie (line_height hoch, line_length breit, 3 Farbkanäle)
                 line = jnp.zeros((line_height, line_length, raster.shape[-1]), dtype=raster.dtype)
-
                 return jax.lax.dynamic_update_slice(raster, line, (y, wall_x, 0))
 
             def maybe_draw(i, raster):
                 is_alive = state.enemy_alive[i]
                 enemy_y = state.enemy_pos[i][1]
+                should_draw = is_alive & draw_lines
                 return jax.lax.cond(
-                    is_alive,
+                    should_draw,
                     lambda _: draw_line(raster, enemy_y),
                     lambda _: raster,
                     operand=None
