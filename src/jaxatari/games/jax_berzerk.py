@@ -24,6 +24,8 @@ class BerzerkConstants(NamedTuple):
     PLAYER_SIZE = (6, 20)
     PLAYER_SPEED = 0.2
 
+    EXTRA_LIFE_AT = 1000
+
     ENEMY_SIZE = (8, 16)
     NUM_ENEMIES = 5
     MOVEMENT_PROB = 0.0025  # Value for testing, has to be adjusted
@@ -77,6 +79,7 @@ class BerzerkState(NamedTuple):
     player_is_firing: chex.Array
     room_transition_timer: chex.Array
     enemy_clear_bonus_given: chex.Array
+    extra_life_counter: chex.Array
     
 
 class BerzerkObservation(NamedTuple):
@@ -445,6 +448,7 @@ class JaxBerzerk(JaxEnvironment[BerzerkState, BerzerkObservation, BerzerkInfo, B
         player_is_firing= jnp.array(False)
         room_transition_timer= jnp.array(0, dtype=jnp.int32)
         enemy_clear_bonus_given=jnp.array(False)
+        extra_life_counter = jnp.array(0, dtype=jnp.int32)
         state = BerzerkState(player_pos=pos, 
                              lives=lives, 
                              bullets=bullets, bullet_dirs=bullet_dirs, 
@@ -467,7 +471,8 @@ class JaxBerzerk(JaxEnvironment[BerzerkState, BerzerkObservation, BerzerkInfo, B
                              entry_direction=entry_direction,
                              player_is_firing=player_is_firing,
                              room_transition_timer=room_transition_timer,
-                             enemy_clear_bonus_given=enemy_clear_bonus_given
+                             enemy_clear_bonus_given=enemy_clear_bonus_given,
+                             extra_life_counter=extra_life_counter
                              )
         return self._get_observation(state), state
 
@@ -488,7 +493,8 @@ class JaxBerzerk(JaxEnvironment[BerzerkState, BerzerkObservation, BerzerkInfo, B
             reset_state_with_lives_score = self.reset(jax.random.split(state.rng)[1])[1]._replace(
                 lives=lives_after,
                 score=score_after,
-                room_counter=room_after
+                room_counter=room_after,
+                extra_life_counter=state.extra_life_counter
             )
 
             return jax.lax.cond(
@@ -552,7 +558,8 @@ class JaxBerzerk(JaxEnvironment[BerzerkState, BerzerkObservation, BerzerkInfo, B
                     room_counter=state.room_counter + 1,
                     lives=state.lives,
                     score=state.score,
-                    entry_direction=state.entry_direction
+                    entry_direction=state.entry_direction,
+                    extra_life_counter=state.extra_life_counter
                 )
                 return (
                     self._get_observation(next_state),
@@ -945,6 +952,14 @@ class JaxBerzerk(JaxEnvironment[BerzerkState, BerzerkObservation, BerzerkInfo, B
             score_after += bonus_score
             enemy_clear_bonus_given = state.enemy_clear_bonus_given | give_bonus
 
+            lives_after = state.lives
+
+            extra_lives_given_last_score = state.extra_life_counter * self.consts.EXTRA_LIFE_AT
+            give_extra_life = score_after >= extra_lives_given_last_score + self.consts.EXTRA_LIFE_AT
+
+            lives_after = jnp.where(give_extra_life, state.lives + 1, state.lives)
+            extra_life_counter_after = jnp.where(give_extra_life, state.extra_life_counter + 1, state.extra_life_counter)
+
             # 7. For now simply teleport enemies out of area
             invisible = jnp.array([-100.0, -100.0])
             updated_enemy_pos = jnp.where(enemy_alive[:, None], updated_enemy_pos, invisible)
@@ -958,7 +973,7 @@ class JaxBerzerk(JaxEnvironment[BerzerkState, BerzerkObservation, BerzerkInfo, B
             # 9. New state
             new_state = BerzerkState(
                 player_pos=new_pos,
-                lives=state.lives,
+                lives=lives_after,
                 bullets=bullets,
                 bullet_dirs=bullet_dirs,
                 bullet_active=bullet_active,
@@ -980,7 +995,8 @@ class JaxBerzerk(JaxEnvironment[BerzerkState, BerzerkObservation, BerzerkInfo, B
                 entry_direction=entry_direction,
                 player_is_firing=player_is_firing,
                 room_transition_timer=transition_timer,
-                enemy_clear_bonus_given=enemy_clear_bonus_given
+                enemy_clear_bonus_given=enemy_clear_bonus_given,
+                extra_life_counter=extra_life_counter_after
             )
 
             # 10. Observation + Info + Reward/Done
