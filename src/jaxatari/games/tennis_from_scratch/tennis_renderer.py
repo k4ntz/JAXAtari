@@ -26,6 +26,28 @@ def recolor_blue_to_red(sprite, blue_color=[117, 128, 240, 255], red_color=[240,
     return sprite
 
 
+def switch_blue_and_red(sprite, blue_color=[117, 128, 240, 255], red_color=[240, 128, 128, 255]):
+    # Convert color constants to jax arrays of the same dtype
+    blue_color = jnp.array(blue_color, dtype=sprite.dtype)
+    red_color = jnp.array(red_color, dtype=sprite.dtype)
+
+    # Create a mask: shape (H, W), where each pixel matches the blue color
+    mask_blue = jnp.all(sprite == blue_color, axis=-1)  # shape: (H, W)
+    mask_red = jnp.all(sprite == red_color, axis=-1)  # shape: (H, W)
+
+    # Find the indices of the pixels to replace
+    indices_blue = jnp.argwhere(mask_blue)  # shape: (N, 2)
+    indices_red = jnp.argwhere(mask_red)  # shape: (N, 2)
+
+    # Replace each matching pixel using .at[].set()
+    for idx in indices_blue:
+        sprite = sprite.at[tuple(idx)].set(red_color)
+    for idx in indices_red:
+        sprite = sprite.at[tuple(idx)].set(blue_color)
+
+    return sprite
+
+
 def load_sprites():
     MODULE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     BG = jnp.expand_dims(aj.loadFrame(os.path.join(MODULE_DIR, "tennis_from_scratch/sprites/background.npy")), axis=0)
@@ -59,10 +81,14 @@ def load_sprites():
     UI_NUM_5 = jnp.expand_dims(aj.loadFrame(os.path.join(MODULE_DIR, "tennis_from_scratch/sprites/ui_blue_5.npy")),
                                axis=0)
 
-    return (BG, BALL, BALL_SHADOW, [PLAYER_0, PLAYER_1, PLAYER_2, PLAYER_3], [RACKET_3, RACKET_0, RACKET_1, RACKET_2],
+    return (BG, BALL, BALL_SHADOW,
+            [switch_blue_and_red(PLAYER_0), switch_blue_and_red(PLAYER_1), switch_blue_and_red(PLAYER_2),
+             switch_blue_and_red(PLAYER_3)], [PLAYER_0, PLAYER_1, PLAYER_2, PLAYER_3],
+            [switch_blue_and_red(RACKET_3), switch_blue_and_red(RACKET_0), switch_blue_and_red(RACKET_1), switch_blue_and_red(RACKET_2)],
+            [RACKET_3, RACKET_0, RACKET_1, RACKET_2],
             [UI_NUM_0, UI_NUM_1, UI_NUM_2, UI_NUM_3, UI_NUM_4, UI_NUM_5],
-            [recolor_blue_to_red(UI_NUM_0), recolor_blue_to_red(UI_NUM_1), recolor_blue_to_red(UI_NUM_2),
-             recolor_blue_to_red(UI_NUM_3), recolor_blue_to_red(UI_NUM_4), recolor_blue_to_red(UI_NUM_5)])
+            [switch_blue_and_red(UI_NUM_0), switch_blue_and_red(UI_NUM_1), switch_blue_and_red(UI_NUM_2),
+             switch_blue_and_red(UI_NUM_3), switch_blue_and_red(UI_NUM_4), switch_blue_and_red(UI_NUM_5)])
 
 
 # ToDo remove
@@ -127,7 +153,7 @@ def perspective_transform(x, y, apply_offsets=True, width_top=79.0, width_bottom
 class TennisRenderer:
 
     def __init__(self):
-        (self.BG, self.BALL, self.BALL_SHADOW, self.PLAYER, self.RACKET, self.UI_NUMBERS_BLUE,
+        (self.BG, self.BALL, self.BALL_SHADOW, self.PLAYER_BLUE, self.PLAYER_RED, self.RACKET_BLUE, self.RACKET_RED, self.UI_NUMBERS_BLUE,
          self.UI_NUMBERS_RED) = load_sprites()
         # use bounding box as mockup
         self.BOUNDING_BOX = get_bounding_box(PLAYER_WIDTH, PLAYER_HEIGHT)
@@ -168,38 +194,30 @@ class TennisRenderer:
         raster = aj.render_at(raster, state.ball_state.ball_x, state.ball_state.ball_y - state.ball_state.ball_z,
                               frame_ball)
 
-        # Prepare CSV output
-        # os.makedirs("saved_traces", exist_ok=True)
-        # csv_path = os.path.join("saved_traces", f"{os.getpid()}.csv")
-
-        # with open(csv_path, "a", newline="") as csvfile:
-        #    writer = csv.writer(csvfile)
-        #    writer.writerow([state.ball_state.ball_x, state.ball_state.ball_y, state.ball_state.ball_z])
-
         # print("x ball: {:0.2f}., y ball: {:0.2f}, z ball: {:0.2f}, vel: {:0.2f}".format(state.ball_state.ball_x, state.ball_state.ball_y, state.ball_state.ball_z, state.ball_state.ball_velocity_z_fp))
-        print("x ball: {:0.2f}, x ball target: {:0.2f}, y ball: {:0.2f}, y ball target: {:0.2f}".format(
+        print("x ball: {:0.2f}, x ball target: {:0.2f}, y ball: {:0.2f}, y ball target: {:0.2f}, player_side: {:0.2f}".format(
             state.ball_state.ball_x, state.ball_state.ball_hit_target_x, state.ball_state.ball_y,
-            state.ball_state.ball_hit_target_y))
+            state.ball_state.ball_hit_target_y, state.player_state.player_field))
 
-        # player_screen_x, player_screen_y = self.perspective_transform(state.player_state.player_x, state.player_state.player_y)
-        # player_screen_x, player_screen_y = self.perspective_transform(0, -20)
-        frame_player = aj.get_sprite_frame(self.PLAYER[state.animator_state.player_frame], 0)
-        frame_enemy = aj.get_sprite_frame(self.PLAYER[state.animator_state.enemy_frame], 0)
+        frame_player = aj.get_sprite_frame(self.PLAYER_RED[state.animator_state.player_frame], 0)
+        frame_enemy = aj.get_sprite_frame(self.PLAYER_BLUE[state.animator_state.enemy_frame], 0)
+
         raster = aj.render_at(raster, state.player_state.player_x - 2, state.player_state.player_y, frame_player)
 
         racket_offset = [1, 8, 8, 4]
-        frame_racket = aj.get_sprite_frame(self.RACKET[state.animator_state.player_racket_frame], 0)
+        frame_racket_player = aj.get_sprite_frame(self.RACKET_RED[state.animator_state.player_racket_frame], 0)
         raster = aj.render_at(raster, state.player_state.player_x + 8 - 2,
                               state.player_state.player_y + racket_offset[state.animator_state.player_racket_frame],
-                              frame_racket)
+                              frame_racket_player)
 
         frame_bounding_box = aj.get_sprite_frame(self.BOUNDING_BOX, 0)
         raster = aj.render_at(raster, state.player_state.player_x, state.player_state.player_y, frame_bounding_box)
 
-        raster = aj.render_at(raster, state.enemy_state.enemy_x, state.enemy_state.enemy_y, frame_enemy)
+        frame_racket_enemy = aj.get_sprite_frame(self.RACKET_BLUE[state.animator_state.enemy_racket_frame], 0)
+        raster = aj.render_at(raster, state.enemy_state.enemy_x - 2, state.enemy_state.enemy_y, frame_enemy)
         raster = aj.render_at(raster, state.enemy_state.enemy_x + 8 - 2,
-                              state.enemy_state.enemy_y + racket_offset[state.animator_state.player_racket_frame],
-                              frame_racket)
+                              state.enemy_state.enemy_y + racket_offset[state.animator_state.enemy_racket_frame],
+                              frame_racket_enemy)
 
         player_x_rec = jnp.zeros((2, 2, 4))
         player_x_rec = player_x_rec.at[:, :, 1].set(255)  # Yellow
@@ -239,8 +257,9 @@ class TennisRenderer:
 
         if state.game_state.pause_counter > 0:
             # Game is paused, display overall score
-            raster = self.render_number_centered(raster, state.game_state.player_game_score, [FRAME_WIDTH / 4, 2])
-            raster = self.render_number_centered(raster, state.game_state.enemy_game_score, [(FRAME_WIDTH / 4) * 3, 2], red=True)
+            raster = self.render_number_centered(raster, state.game_state.player_game_score, [FRAME_WIDTH / 4, 2],
+                                                 red=True)
+            raster = self.render_number_centered(raster, state.game_state.enemy_game_score, [(FRAME_WIDTH / 4) * 3, 2])
 
         else:
             # Game is paused, display current set score
@@ -248,7 +267,7 @@ class TennisRenderer:
             player_score_number = tennis_scores[min(len(tennis_scores), state.game_state.player_score)]
             enemy_score_number = tennis_scores[min(len(tennis_scores), state.game_state.enemy_score)]
 
-            raster = self.render_number_centered(raster, player_score_number, [FRAME_WIDTH / 4, 2])
-            raster = self.render_number_centered(raster, enemy_score_number, [(FRAME_WIDTH / 4) * 3, 2], red=True)
+            raster = self.render_number_centered(raster, player_score_number, [FRAME_WIDTH / 4, 2], red=True)
+            raster = self.render_number_centered(raster, enemy_score_number, [(FRAME_WIDTH / 4) * 3, 2])
 
         return raster
