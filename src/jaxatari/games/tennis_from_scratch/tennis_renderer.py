@@ -195,23 +195,30 @@ class TennisRenderer:
                               frame_ball)
 
         # print("x ball: {:0.2f}., y ball: {:0.2f}, z ball: {:0.2f}, vel: {:0.2f}".format(state.ball_state.ball_x, state.ball_state.ball_y, state.ball_state.ball_z, state.ball_state.ball_velocity_z_fp))
-        print("x ball: {:0.2f}, x ball target: {:0.2f}, y ball: {:0.2f}, y ball target: {:0.2f}, player_side: {:0.2f}".format(
-            state.ball_state.ball_x, state.ball_state.ball_hit_target_x, state.ball_state.ball_y,
+        print("x player: {:0.2f}, x ball target: {:0.2f}, y ball: {:0.2f}, y ball target: {:0.2f}, player_side: {:0.2f}".format(
+            state.player_state.player_x, state.ball_state.ball_hit_target_x, state.ball_state.ball_y,
             state.ball_state.ball_hit_target_y, state.player_state.player_field))
 
         frame_player = aj.get_sprite_frame(self.PLAYER_RED[state.animator_state.player_frame], 0)
+        if state.player_state.player_direction == -1:
+            frame_player = jnp.flip(frame_player, axis=0)
+
         frame_enemy = aj.get_sprite_frame(self.PLAYER_BLUE[state.animator_state.enemy_frame], 0)
 
-        raster = aj.render_at(raster, state.player_state.player_x - 2, state.player_state.player_y, frame_player)
+        player_pos = state.player_state.player_x - 2 if state.player_state.player_direction == 1 else state.player_state.player_x - 4
+        raster = aj.render_at(raster, player_pos, state.player_state.player_y, frame_player)
 
         racket_offset = [1, 8, 8, 4]
         frame_racket_player = aj.get_sprite_frame(self.RACKET_RED[state.animator_state.player_racket_frame], 0)
-        raster = aj.render_at(raster, state.player_state.player_x + 8 - 2,
+        if state.player_state.player_direction == -1:
+            frame_racket_player = jnp.flip(frame_racket_player, axis=0)
+        raster = aj.render_at(raster, state.player_state.player_x + state.player_state.player_direction * (8 - 2),
                               state.player_state.player_y + racket_offset[state.animator_state.player_racket_frame],
                               frame_racket_player)
 
         frame_bounding_box = aj.get_sprite_frame(self.BOUNDING_BOX, 0)
-        raster = aj.render_at(raster, state.player_state.player_x, state.player_state.player_y, frame_bounding_box)
+        bounding_box_pos = state.player_state.player_x if state.player_state.player_direction == 1 else state.player_state.player_x - PLAYER_WIDTH + 2
+        raster = aj.render_at(raster, bounding_box_pos, state.player_state.player_y, frame_bounding_box)
 
         frame_racket_enemy = aj.get_sprite_frame(self.RACKET_BLUE[state.animator_state.enemy_racket_frame], 0)
         raster = aj.render_at(raster, state.enemy_state.enemy_x - 2, state.enemy_state.enemy_y, frame_enemy)
