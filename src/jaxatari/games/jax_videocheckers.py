@@ -63,7 +63,7 @@ class VideoCheckersConstants(NamedTuple):
     SHOW_OPPONENT_MOVE_PHASE = 2
     GAME_OVER_PHASE = 3
 
-    ANIMATION_FRAME_RATE = 6 if os.environ.get("JAX_DISABLE_JIT") == "1" else 60  # Workaround for JAX disabling JIT compilation
+    ANIMATION_FRAME_RATE =  60
 
 class OpponentMove(NamedTuple):
     start_pos: chex.Array  # Start position of the opponent's piece
@@ -144,7 +144,7 @@ class JaxVideoCheckers(JaxEnvironment[VideoCheckersState, VideoCheckersObservati
         board = board.at[5, 0].set(self.consts.BLACK_PIECE)
         board = board.at[5, 2].set(self.consts.BLACK_PIECE)
         board = board.at[5, 4].set(self.consts.BLACK_PIECE)
-        board = board.at[5, 6].set(self.consts.BLACK_PIECE)
+        board = board.at[5, 6].set(self.consts.BLACK_KING)
         board = board.at[6, 1].set(self.consts.BLACK_PIECE)
         board = board.at[6, 3].set(self.consts.BLACK_PIECE)
         board = board.at[6, 5].set(self.consts.BLACK_PIECE)
@@ -916,7 +916,8 @@ class VideoCheckersRenderer(JAXGameRenderer):
             def f_umoved(_):
                 # If the piece is unmoved, blink fast
                 return jax.lax.cond(
-                    (state.frame_counter % 5 < 2) | (state.frame_counter % 5 > 3),
+                    (state.frame_counter % self.consts.ANIMATION_FRAME_RATE < 5) | (state.frame_counter % self.consts.ANIMATION_FRAME_RATE >= 10) & (
+                        state.frame_counter % self.consts.ANIMATION_FRAME_RATE < 15),
                     lambda _: self.consts.EMPTY_TILE,
                     lambda _: state.board[row, col],
                     operand=None
