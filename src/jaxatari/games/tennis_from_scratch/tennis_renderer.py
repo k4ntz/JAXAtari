@@ -204,6 +204,8 @@ class TennisRenderer:
             frame_player = jnp.flip(frame_player, axis=0)
 
         frame_enemy = aj.get_sprite_frame(self.PLAYER_BLUE[state.animator_state.enemy_frame], 0)
+        if state.enemy_state.enemy_direction == -1:
+            frame_enemy = jnp.flip(frame_enemy, axis=0)
 
         player_pos = state.player_state.player_x - 2 if state.player_state.player_direction == 1 else state.player_state.player_x - 4
         raster = aj.render_at(raster, player_pos, state.player_state.player_y, frame_player)
@@ -221,8 +223,10 @@ class TennisRenderer:
         raster = aj.render_at(raster, bounding_box_pos, state.player_state.player_y, frame_bounding_box)
 
         frame_racket_enemy = aj.get_sprite_frame(self.RACKET_BLUE[state.animator_state.enemy_racket_frame], 0)
+        if state.enemy_state.enemy_direction == -1:
+            frame_racket_enemy = jnp.flip(frame_racket_enemy, axis=0)
         raster = aj.render_at(raster, state.enemy_state.enemy_x - 2, state.enemy_state.enemy_y, frame_enemy)
-        raster = aj.render_at(raster, state.enemy_state.enemy_x + 8 - 2,
+        raster = aj.render_at(raster, state.enemy_state.enemy_x + state.enemy_state.enemy_direction * (8 - 2),
                               state.enemy_state.enemy_y + racket_offset[state.animator_state.enemy_racket_frame],
                               frame_racket_enemy)
 
