@@ -1076,7 +1076,7 @@ class BerzerkRenderer(JAXGameRenderer):
             'door_vertical_left', 'door_vertical_right',
             'door_horizontal_up', 'door_horizontal_down',
             'level_outer_walls', 'mid_walls_1', 'mid_walls_2', 'mid_walls_3', 'mid_walls_4',
-            'life'
+            'life', 'start_title'
         ]
         for name in sprite_names:
             sprites[name] = _load_sprite_frame(name)
@@ -1493,37 +1493,43 @@ class BerzerkRenderer(JAXGameRenderer):
                 raster_to_update: The current frame to update.
             """
 
-            # Convert score to digits, zero-padded (e.g. 50 -> [0,0,5,0])
-            score_digits = jr.int_to_digits(state.score, max_digits=max_score_digits)
+            def skip_render():
+                return raster_to_update
+            
+            def draw_score():
+                # Convert score to digits, zero-padded (e.g. 50 -> [0,0,5,0])
+                score_digits = jr.int_to_digits(state.score, max_digits=max_score_digits)
 
-            # Remove leading zeros dynamically
-            def find_start_index(digits):
-                # Return the first non-zero index (or max_digits-1 if score == 0)
-                is_non_zero = digits != 0
-                first_non_zero = jnp.argmax(is_non_zero)
-                return jax.lax.select(jnp.any(is_non_zero), first_non_zero, max_score_digits - 1)
+                # Remove leading zeros dynamically
+                def find_start_index(digits):
+                    # Return the first non-zero index (or max_digits-1 if score == 0)
+                    is_non_zero = digits != 0
+                    first_non_zero = jnp.argmax(is_non_zero)
+                    return jax.lax.select(jnp.any(is_non_zero), first_non_zero, max_score_digits - 1)
 
-            start_idx = find_start_index(score_digits)
+                start_idx = find_start_index(score_digits)
 
-            # Number of digits to render
-            num_to_render = max_score_digits - start_idx
+                # Number of digits to render
+                num_to_render = max_score_digits - start_idx
 
-            # Adjust x-position to align right
-            render_start_x = self.consts.SCORE_OFFSET_X - score_spacing * (num_to_render - 1)
+                # Adjust x-position to align right
+                render_start_x = self.consts.SCORE_OFFSET_X - score_spacing * (num_to_render - 1)
 
-            # Render selective digits
-            raster_updated = jr.render_label_selective(
-                raster_to_update,
-                render_start_x,
-                self.consts.SCORE_OFFSET_Y,
-                score_digits,
-                digit_sprites,
-                start_idx,
-                num_to_render,
-                spacing=score_spacing
-            )
+                # Render selective digits
+                raster_updated = jr.render_label_selective(
+                    raster_to_update,
+                    render_start_x,
+                    self.consts.SCORE_OFFSET_Y,
+                    score_digits,
+                    digit_sprites,
+                    start_idx,
+                    num_to_render,
+                    spacing=score_spacing
+                )
 
-            return raster_updated
+                return raster_updated
+
+            return jax.lax.cond(state.score == 0, skip_render, draw_score)
 
         raster = jax.lax.cond(
             jnp.logical_not(current_screen_anim),
@@ -1531,6 +1537,18 @@ class BerzerkRenderer(JAXGameRenderer):
             lambda r: r,
             raster
         )
+
+        # ---- Titel ----
+        title_sprite = self.sprites.get('start_title', None)
+        title_sprite = jnp.squeeze(title_sprite, axis=0)
+
+        x = (self.consts.WIDTH - title_sprite.shape[1]) // 2 + 2
+        y = self.consts.SCORE_OFFSET_Y
+
+        def render_title(r):
+            return jr.render_at(r, x, y, title_sprite)
+
+        raster = jax.lax.cond(state.score == 0, render_title, lambda r: r, raster)
 
         # Death screen effect: black bars from top to bottom
         def apply_bar_overlay(raster, progress: jnp.ndarray, mode_idx: int):
