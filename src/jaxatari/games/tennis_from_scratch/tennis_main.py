@@ -111,6 +111,8 @@ class AnimatorState(NamedTuple):
     enemy_frame: chex.Array = 0
     player_racket_frame: chex.Array = 0
     player_racket_animation: chex.Array = False
+    enemy_racket_frame: chex.Array = 0
+    enemy_racket_animation: chex.Array = False
 
 class TennisState(NamedTuple):
     player_state: PlayerState = PlayerState(  # all player-related data
@@ -228,10 +230,31 @@ def animator_step(state: TennisState, new_player_state, new_enemy_state) -> Anim
         state.ball_state.ball_x == state.ball_state.ball_hit_start_x,
         state.ball_state.ball_y == state.ball_state.ball_hit_start_y,
     )
+    player_hit = jnp.logical_or(
+        jnp.logical_and(
+            state.ball_state.ball_y < GAME_MIDDLE,
+            state.player_state.player_field == 1
+        ),
+        jnp.logical_and(
+            state.ball_state.ball_y > GAME_MIDDLE,
+            state.player_state.player_field == 0
+        )
+    )
+
     # set player_racket_animation to True if ball was hit
     new_player_racket_animation = jnp.logical_or(
-        was_ball_hit,
+        jnp.logical_and(
+            was_ball_hit,
+            player_hit
+        ),
         state.animator_state.player_racket_animation,
+    )
+    new_enemy_racket_animation = jnp.logical_or(
+        jnp.logical_and(
+            was_ball_hit,
+            jnp.logical_not(player_hit)
+        ),
+        state.animator_state.enemy_racket_animation,
     )
 
     new_player_racket_frame = jnp.where(
@@ -243,6 +266,15 @@ def animator_step(state: TennisState, new_player_state, new_enemy_state) -> Anim
         state.animator_state.player_racket_frame,
     )
 
+    new_enemy_racket_frame = jnp.where(
+        jnp.logical_and(
+            new_enemy_racket_animation,
+            state.counter % 4 == 0,
+        ),
+        (state.animator_state.enemy_racket_frame + 1) % 4,
+        state.animator_state.enemy_racket_frame,
+    )
+
     # if animation is over (has reached start frame again), set player_racket_animation to False
     new_player_racket_animation = jnp.where(
         jnp.logical_and(
@@ -251,6 +283,15 @@ def animator_step(state: TennisState, new_player_state, new_enemy_state) -> Anim
         ),
         False,
         new_player_racket_animation,
+    )
+
+    new_enemy_racket_animation = jnp.where(
+        jnp.logical_and(
+            new_enemy_racket_frame == 0,
+            state.counter % 4 == 0,
+        ),
+        False,
+        new_enemy_racket_animation,
     )
 
     # Animations for enemy
@@ -267,7 +308,7 @@ def animator_step(state: TennisState, new_player_state, new_enemy_state) -> Anim
         0
     )
 
-    new_animator_state = AnimatorState(new_player_frame % 4, new_enemy_frame % 4, new_player_racket_frame, new_player_racket_animation)
+    new_animator_state = AnimatorState(new_player_frame % 4, new_enemy_frame % 4, new_player_racket_frame, new_player_racket_animation, new_enemy_racket_frame, new_enemy_racket_animation)
 
     return new_animator_state
 
