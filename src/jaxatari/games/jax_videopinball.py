@@ -71,6 +71,9 @@ PLUNGER_MAX_POSITION = 20
 # Game logic constants
 T_ENTRY_NO_COLLISION = 9999
 VELOCITY_RETENTION_FACTOR = 1.0
+TARGET_RESPAWN_COOLDOWN = 16
+SPECIAL_TARGET_ACTIVE_DURATION = 257
+SPECIAL_TARGET_INACTIVE_DURATION = 787
 
 # Game layout constants
 # TODO: check if these are correct
@@ -85,10 +88,87 @@ INVISIBLE_BLOCK_REFLECTION_FACTOR = (
 
 
 # Background color and object colors
-BACKGROUND_COLOR = 0, 0, 0
-BALL_COLOR = 255, 255, 255  # ball
-FLIPPER_COLOR = 255, 0, 0  # flipper
-TEXT_COLOR = 255, 255, 255  # text
+BG_COLOR = 0, 0, 0
+TILT_MODE_COLOR = 167, 26, 26
+BACKGROUND_COLOR = jnp.array([0, 0, 0], dtype=jnp.uint8)
+WALL_COLOR = jnp.array([104, 72, 198], dtype=jnp.uint8)
+GROUP3_COLOR = jnp.array([187, 159, 71], dtype=jnp.uint8)
+GROUP4_COLOR = jnp.array([210, 164, 74], dtype=jnp.uint8)
+GROUP5_COLOR = jnp.array([236, 236, 236], dtype=jnp.uint8)
+
+# Color cycling arrays (each inner tuple converted to a list with alpha)
+BACKGROUND_COLOR_CYCLING = jnp.array([
+    [74, 74, 74],
+    [111, 111, 111],
+    [142, 142, 142],
+    [170, 170, 170],
+    [192, 192, 192],
+    [214, 214, 214],
+    [236, 236, 236],
+    [72, 72, 0]
+], dtype=jnp.uint8)
+
+WALL_COLOR_CYCLING = jnp.array([
+    [78, 50, 181],
+    [51, 26, 163],
+    [20, 0, 144],
+    [188, 144, 252],
+    [169, 128, 240],
+    [149, 111, 227],
+    [127, 92, 213],
+    [146, 70, 192]
+], dtype=jnp.uint8)
+
+GROUP3_COLOR_CYCLING = jnp.array([
+    [210, 182, 86],
+    [232, 204, 99],
+    [252, 224, 112],
+    [72, 44, 0],
+    [105, 77, 20],
+    [134, 106, 38],
+    [162, 134, 56],
+    [160, 171, 79]
+], dtype=jnp.uint8)
+
+GROUP4_COLOR_CYCLING = jnp.array([
+    [195, 144, 61],
+    [236, 200, 96],
+    [223, 183, 85],
+    [144, 72, 17],
+    [124, 44, 0],
+    [180, 122, 48],
+    [162, 98, 33],
+    [227, 151, 89]
+], dtype=jnp.uint8)
+
+GROUP5_COLOR_CYCLING = jnp.array([
+    [214, 214, 214],
+    [192, 192, 192],
+    [170, 170, 170],
+    [142, 142, 142],
+    [111, 111, 111],
+    [74, 74, 74],
+    [0, 0, 0],
+    [252, 252, 84]
+], dtype=jnp.uint8)
+
+# BACKGROUND_COLOR = 0, 0, 0
+# WALL_COLOR = 104, 72, 198
+# GROUP3_COLOR = 187, 159, 71
+# GROUP4_COLOR = 210, 164, 74
+# GROUP5_COLOR = 236, 236, 236
+# TILT_MODE_COLOR = 167, 26, 26
+# BACKGROUND_COLOR_CYCLING = jnp.array([(74, 74, 74), (111, 111, 111), (142, 142, 142), (170, 170, 170),
+#                                       (192, 192, 192), (214, 214, 214), (236, 236, 236), (72, 72, 0)])
+# WALL_COLOR_CYCLING = jnp.array([(78, 50, 181), (51, 26, 163), (20, 0, 144), (188, 144, 252),
+#                                 (169, 128, 240), (149, 111, 227), (127, 92, 213), (146, 70, 192)])
+# GROUP3_COLOR_CYCLING = jnp.array([(210, 182, 86), (232, 204, 99), (252, 224, 112), (72, 44, 0),
+#                                   (105, 77, 20), (134, 106, 38), (162, 134, 56), (160, 171, 79)])
+# GROUP4_COLOR_CYCLING = jnp.array([(195, 144, 61), (236, 200, 96), (223, 183, 85), (144, 72, 17),
+#                                   (124, 44, 0), (180, 122, 48), (162, 98, 33), (227, 151, 89)])
+# GROUP5_COLOR_CYCLING = jnp.array([(214, 214, 214), (192, 192, 192), (170, 170, 170), (142, 142, 142),
+#                                   (111, 111, 111), (74, 74, 74), (0, 0, 0), (252, 252, 84)])
+
 
 
 # Pygame window dimensions
@@ -1001,6 +1081,8 @@ class VideoPinballState(NamedTuple):
     rollover_counter: chex.Array
     step_counter: chex.Array
     ball_in_play: chex.Array
+    respawn_timer: chex.Array
+    color_cycling: chex.Array
     # obs_stack: chex.ArrayTree     What is this for? Pong doesnt have this right?
 
 
@@ -1669,33 +1751,47 @@ def _reset_ball(state: VideoPinballState):
 
 
 @jax.jit
-def _handle_ball_in_gutter(
-    state: VideoPinballState, score, atari_symbols, rollover_counter
-):
+def _ball_enters_gutter(state: VideoPinballState):
+
+    respawn_timer = jnp.where(state.rollover_counter > 1,
+                              jnp.array((state.rollover_counter - 1) * 16).astype(jnp.int32),
+                              jnp.array(1).astype(jnp.int32))
+
+    return respawn_timer
+
+
+@jax.jit
+def handle_ball_in_gutter(rt, rollover_counter, score, atari_symbols, lives, active_targets, special_target_cooldown):
+
+    multiplier = jnp.clip(atari_symbols + 1, max=4)
+    score = jnp.where(rt % 16 == 15, score + 1000 * multiplier, score)
+    rollover_counter = jnp.where(rt % 16 == 15, rollover_counter - 1, rollover_counter)
+    respawn_timer = jnp.where(rt > 0, rt - 1, rt)
+
+    lives, active_targets, atari_symbols, special_target_cooldown = jax.lax.cond(respawn_timer == 0,
+              lambda l, asym: _reset_stuff_and_handle_lives(l, asym),
+              lambda l, asym: (l, active_targets, asym, special_target_cooldown),
+              lives, atari_symbols)
+
+    return respawn_timer, rollover_counter, score, atari_symbols, lives, active_targets, special_target_cooldown
+
+@jax.jit
+def _reset_stuff_and_handle_lives(lives, atari_symbols):
     lives = jax.lax.cond(
         atari_symbols < 4,
         lambda x: x + 1,
         lambda x: x,
-        operand=state.lives,
+        operand=lives,
     )
 
-    # TODO: This should slowly happen one by one but this will do for now
-    score = score + ((rollover_counter - 1) * atari_symbols)
-    rollover_counter = jnp.array(1).astype(jnp.int32)
-
-    atari_symbols = jnp.array(0).astype(jnp.int32)
-
-    bumper_multiplier = jnp.array(1).astype(jnp.int32)
     active_targets = jnp.array([True, True, True, False]).astype(jnp.bool)
+    atari_symbols = jnp.array(0).astype(jnp.int32)
+    special_target_cooldown = jnp.array(0).astype(jnp.int32)
 
-    return (
-        score,
-        active_targets,
-        atari_symbols,
-        rollover_counter,
-        bumper_multiplier,
-        lives,
-    )
+    # TODO: Whoever implements tilt mode: Turn off tilt mode here in this function
+
+    return lives, active_targets, atari_symbols, special_target_cooldown
+
 
 
 @jax.jit
@@ -1708,7 +1804,7 @@ def process_objects_hit(state: VideoPinballState, objects_hit):
     # Atari: Give points, make Atari symbol at bottom appear
     # Assume objects_hit is list:
     # [0: no score, 1: Bumper, 2: Spinner, 3: Left Rollover, 4: Atari Rollover,
-    # 5: Special Lit Up Target, 6: Left Lit Up Target, 7:Middle Lit Up Target, 8: Right Lit Up Target]
+    # 5: Special Lit Up Target, 6: Left Lit Up Target, 7: Middle Lit Up Target, 8: Right Lit Up Target]
 
 
     # Bumper points
@@ -1752,16 +1848,15 @@ def process_objects_hit(state: VideoPinballState, objects_hit):
 
     # Bottom Bonus Target
     score += jnp.where(objects_hit[6], 1100, 0)
-    active_targets = jax.lax.cond(
+    active_targets, color_cycling = jax.lax.cond(
         objects_hit[5],
-        lambda s: jnp.array([s[0], s[1], s[2], False]).astype(jnp.bool),
-        lambda s: s,
-        operand=active_targets,
+        lambda s, cc: (jnp.array([s[0], s[1], s[2], False]).astype(jnp.bool), jnp.array(30).astype(jnp.int32)),
+        lambda s, cc: (s, cc),
+        active_targets, state.color_cycling
     )
 
     # Give score for hitting the rollover and increase its number
     score += jnp.where(objects_hit[3], 100, 0)
-    # TODO: Check if rollover really goes up further beyond 9 even though the number isnt displayed
     rollover_counter = jax.lax.cond(
         objects_hit[7],
         lambda s: s + 1,
@@ -1778,14 +1873,19 @@ def process_objects_hit(state: VideoPinballState, objects_hit):
         operand=atari_symbols,
     )
 
+    # Do color cycling when the fourth Atari symbol has been hit
+    color_cycling = jnp.where(jnp.logical_and(state.atari_symbols == 3, atari_symbols == 4),
+                              jnp.array(30).astype(jnp.int32),
+                              color_cycling)
+
     # Give 1 point for hitting a spinner
     score += jnp.where(objects_hit[2], 1, 0)
 
-    return score, active_targets, atari_symbols, rollover_counter
+    return score, active_targets, atari_symbols, rollover_counter, color_cycling
 
 
 @jax.jit
-def handle_target_cooldowns(state: VideoPinballState, previous_active_targets):
+def handle_target_cooldowns(state: VideoPinballState, previous_active_targets, color_cycling):
 
     targets_are_inactive = jnp.logical_and(
         jnp.logical_not(previous_active_targets[0]),
@@ -1796,11 +1896,11 @@ def handle_target_cooldowns(state: VideoPinballState, previous_active_targets):
     )
 
     # Start 2 second cooldown after hitting all targets until they respawn
-    target_cooldown, increase_bm = jax.lax.cond(
+    target_cooldown, increase_bm, color_cycling = jax.lax.cond(
         jnp.logical_and(targets_are_inactive, state.target_cooldown == -1),
-        lambda cd: (jnp.array(60).astype(jnp.int32), True),
-        lambda cd: (cd, False),
-        state.target_cooldown,
+        lambda cd, cc: (jnp.array(TARGET_RESPAWN_COOLDOWN).astype(jnp.int32), True, jnp.array(-9)),
+        lambda cd, cc: (cd, False, cc),
+        state.target_cooldown, color_cycling
     )
 
     # Increase Bumper multiplier if all targets got hit
@@ -1851,7 +1951,7 @@ def handle_target_cooldowns(state: VideoPinballState, previous_active_targets):
     special_target_cooldown, active_targets = jax.lax.cond(
         jnp.logical_and(special_target_cooldown == 0, state.ball_in_play),
         lambda cd, a: (
-            cd - 600,
+            cd - SPECIAL_TARGET_INACTIVE_DURATION,
             a.at[3].set(False),
         ),  # Check how the real cooldown works
         lambda cd, a: (cd, a),
@@ -1862,13 +1962,55 @@ def handle_target_cooldowns(state: VideoPinballState, previous_active_targets):
     # spawn the special target
     special_target_cooldown, active_targets = jax.lax.cond(
         jnp.logical_and(special_target_cooldown == -1, state.ball_in_play),
-        lambda cd, a: (cd + 181, a.at[3].set(True)),
+        lambda cd, a: (cd + SPECIAL_TARGET_ACTIVE_DURATION, a.at[3].set(True)),
         lambda cd, a: (cd, a),
         special_target_cooldown,
         active_targets,
     )
 
-    return active_targets, target_cooldown, special_target_cooldown, bumper_multiplier
+    return active_targets, target_cooldown, special_target_cooldown, bumper_multiplier, color_cycling
+
+
+@jax.jit
+def color_cycler(color):
+
+    new_color = jax.lax.cond(
+        color > 0,  # Condition 1: is value > 0?
+        lambda x: color - 1,  # True branch for Condition 1
+        lambda x: jnp.where(  # False branch for Condition 1 (nested cond)
+            color < 0,  # Condition 2: is value < 0?
+            color + 1,  # True branch for Condition 2
+            color,  # False branch for Condition 2 (must be == 0)
+        ),
+        None  # Operand for outer cond (not used by branch funcs)
+    )
+
+    new_color = jnp.where(new_color == -1, jnp.array(14).astype(jnp.int32), new_color)
+
+    return new_color
+
+
+@jax.jit
+def handle_color_cycling(raster, color):
+
+    bg_color_mask = jnp.all(raster == BACKGROUND_COLOR, axis=-1, keepdims=True)
+    wall_color_mask = jnp.all(raster == WALL_COLOR, axis=-1, keepdims=True)
+    group3_color_mask = jnp.all(raster == GROUP3_COLOR, axis=-1, keepdims=True)
+    group4_color_mask = jnp.all(raster == GROUP4_COLOR, axis=-1, keepdims=True)
+    group5_color_mask = jnp.all(raster == GROUP5_COLOR, axis=-1, keepdims=True)
+
+    raster = jnp.where(bg_color_mask, BACKGROUND_COLOR_CYCLING[color], raster)
+    raster = jnp.where(wall_color_mask, WALL_COLOR_CYCLING[color], raster)
+    raster = jnp.where(group3_color_mask, GROUP3_COLOR_CYCLING[color], raster)
+    raster = jnp.where(group4_color_mask, GROUP4_COLOR_CYCLING[color], raster)
+    raster = jnp.where(group5_color_mask, GROUP5_COLOR_CYCLING[color], raster)
+
+    raster = raster.at[0:8, 175:176, :].set(BG_COLOR)
+    raster = raster.at[:, 191:, :].set(BG_COLOR)
+
+    return raster
+
+
 
 
 @jax.jit
@@ -1959,6 +2101,8 @@ class JaxVideoPinball(
             rollover_counter=jnp.array(1).astype(jnp.int32),
             step_counter=jnp.array(0).astype(jnp.int32),
             ball_in_play=jnp.array(False).astype(jnp.bool),
+            respawn_timer=jnp.array(0).astype(jnp.int32),
+            color_cycling=jnp.array(0).astype(jnp.int32)
         )
 
         initial_obs = self._get_observation(state)
@@ -2001,7 +2145,7 @@ class JaxVideoPinball(
         )
 
         # Step 3: Check if ball is in the gutter or in plunger hole
-        ball_in_gutter = ball_y > 209
+        ball_in_gutter = ball_y > 192
         # TODO if ball is back in plunger hole reset, not instantly
         ball_reset = jnp.logical_or(
             ball_in_gutter,
@@ -2010,12 +2154,12 @@ class JaxVideoPinball(
 
         # Step 4: Update scores and handle special objects
         # TODO: Input the list of objects hit once collisions are done
-        score, active_targets, atari_symbols, rollover_counter = process_objects_hit(
+        score, active_targets, atari_symbols, rollover_counter, color_cycling = process_objects_hit(
             state,
             scoring_list,
         )
-        active_targets, target_cooldown, special_target_cooldown, bumper_multiplier = (
-            handle_target_cooldowns(state, active_targets)
+        active_targets, target_cooldown, special_target_cooldown, bumper_multiplier, color_cycling = (
+            handle_target_cooldowns(state, active_targets, color_cycling)
         )
 
         # Step 5: Reset ball if it went down the gutter
@@ -2033,25 +2177,36 @@ class JaxVideoPinball(
             operand=current_values,
         )
 
-        (
-            score,
-            active_targets,
-            atari_symbols,
-            rollover_counter,
-            bumper_multiplier,
-            lives,
-        ) = jax.lax.cond(
+
+        respawn_timer = jax.lax.cond(
             ball_in_gutter,
-            lambda s, at, asym, dc, bm: _handle_ball_in_gutter(state, s, asym, dc),
-            lambda s, at, asym, dc, bm: (s, at, asym, dc, bm, state.lives),
-            score,
-            active_targets,
-            atari_symbols,
-            rollover_counter,
-            bumper_multiplier,
+            lambda at: _ball_enters_gutter(state),
+            lambda at: state.respawn_timer,
+            active_targets
         )
 
-        ball_in_play = jnp.where(ball_reset, jnp.array(False), ball_in_play)
+        # TODO: Whoever implements tilt mode: properly define this tilt_mode_active boolean
+        #  (this needs to be exactly here, don't move it)
+        tilt_mode_active = False
+        score = jnp.where(tilt_mode_active, state.score, score)
+
+
+        respawn_timer, rollover_counter, score, atari_symbols, lives, active_targets, special_target_cooldown = jax.lax.cond(
+            respawn_timer > 0,
+            lambda rt, rc, s, asym, l, at, stc: handle_ball_in_gutter(rt, rc, s, asym, l, at, stc),
+            lambda rt, rc, s, asym, l, at, stc: (rt, rc, s, asym, l, at, stc),
+            respawn_timer, rollover_counter, score, atari_symbols, state.lives, active_targets, special_target_cooldown)
+
+        ball_in_play = jnp.where(jnp.logical_or(ball_reset, respawn_timer > 0), jnp.array(False), ball_in_play)
+        # ball_in_play = jnp.where(ball_reset, jnp.array(False), ball_in_play)
+
+        color_cycling = color_cycler(color_cycling)
+
+        # TEST: This makes the rollover increase and make the ball hit the gutter after a short time
+        # rollover_counter = jnp.where(state.step_counter % 400 == 399, jnp.array(3).astype(jnp.int32), rollover_counter)
+        # ball_y_final = jnp.where(state.step_counter % 420 == 419, jnp.array(194).astype(jnp.int32), ball_y_final)
+
+        # active_targets = jnp.where(state.step_counter % 420 == 419, jnp.array([False, False, False, False]).astype(jnp.bool), active_targets)
 
         new_state = VideoPinballState(
             ball_x=ball_x_final,
@@ -2073,6 +2228,8 @@ class JaxVideoPinball(
             rollover_counter=rollover_counter,
             step_counter=jnp.array(state.step_counter + 1).astype(jnp.int32),
             ball_in_play=ball_in_play,
+            respawn_timer=respawn_timer,
+            color_cycling=color_cycling
             # obs_stack=None,
         )
 
@@ -2092,6 +2249,16 @@ class JaxVideoPinball(
         # )
         # new_state = new_state._replace(obs_stack=observation)
         # jax.debug.print("------------------------------------------")
+
+        # Check if all lives are lost and the game should reset
+        observation, new_state = jax.lax.cond(
+            jnp.logical_and(lives > 3, respawn_timer == 0),
+            lambda ob, ns: self.reset(jax.random.PRNGKey(score + special_target_cooldown + env_reward)),
+            lambda ob, ns: (ob, ns),
+            observation, new_state
+        )
+
+
         return observation, new_state, env_reward, done, info
 
     @partial(jax.jit, static_argnums=(0,))
@@ -2492,6 +2659,15 @@ def load_sprites():
         "field_number_digits": sprites_field_numbers,
     }
 
+@jax.jit
+def render_tilt_mode(r):
+    r = r.at[:, 0:16, :].set(TILT_MODE_COLOR)
+    r = r.at[36:40, 184:192, :].set(BG_COLOR)
+    r = r.at[120:124, 184:192, :].set(BG_COLOR)
+
+    return r
+
+
 
 class VideoPinballRenderer(AtraJaxisRenderer):
     """JAX-based Video Pinball game renderer, optimized with JIT compilation."""
@@ -2522,7 +2698,11 @@ class VideoPinballRenderer(AtraJaxisRenderer):
         frame_walls = aj.get_sprite_frame(self.sprites["walls"], 0)
         raster = aj.render_at(raster, 0, 16, frame_walls)
 
-        # Render animated objects TODO: (unfinished, game_state implementation needed)
+        # TODO: Whoever implements tilt mode: properly define this tilt_mode_active boolean
+        tilt_mode_active = False
+        raster = jnp.where(tilt_mode_active, render_tilt_mode(raster), raster)
+
+        # Render animated objects
         frame_flipper_left = aj.get_sprite_frame(
             self.sprites["flipper_left"], state.left_flipper_angle
         )
@@ -2557,12 +2737,13 @@ class VideoPinballRenderer(AtraJaxisRenderer):
         frame_ball = aj.get_sprite_frame(self.sprites["ball"], 0)
         raster = aj.render_at(raster, state.ball_x, state.ball_y, frame_ball)
 
-        # Render score TODO: (unfinished, game_state implementation needed)
+        # Render score
         frame_unknown = aj.get_sprite_frame(self.sprites["score_number_digits"], 1)
         raster = aj.render_at(raster, 4, 3, frame_unknown)
 
+        displayed_lives = jnp.clip(state.lives, max=3)
         frame_ball_count = aj.get_sprite_frame(
-            self.sprites["score_number_digits"], state.lives
+            self.sprites["score_number_digits"], displayed_lives
         )
         raster = aj.render_at(raster, 36, 3, frame_ball_count)
 
@@ -2592,7 +2773,7 @@ class VideoPinballRenderer(AtraJaxisRenderer):
         )
         raster = aj.render_at(raster, 144, 3, frame_score6)
 
-        # Render special yellow field objects TODO: (unfinished, game_state implementation needed)
+        # Render special yellow field objects
         frame_bumper_left = aj.get_sprite_frame(
             self.sprites["field_number_digits"], state.bumper_multiplier
         )
@@ -2606,12 +2787,7 @@ class VideoPinballRenderer(AtraJaxisRenderer):
         )
         raster = aj.render_at(raster, 110, 122, frame_bumper_right)
 
-        displayed_rollover_number = jax.lax.cond(
-            state.rollover_counter > 9,
-            lambda c: 9,
-            lambda c: c,
-            operand=state.rollover_counter,
-        )
+        displayed_rollover_number = state.rollover_counter % 9
         frame_rollover_left = aj.get_sprite_frame(
             self.sprites["field_number_digits"], displayed_rollover_number
         )
@@ -2653,21 +2829,21 @@ class VideoPinballRenderer(AtraJaxisRenderer):
 
         # Render Atari Logos and the X
         raster = jax.lax.cond(
-            state.atari_symbols > 0,
+            jnp.logical_and(state.atari_symbols > 0, state.respawn_timer == 0),
             lambda r: aj.render_at(raster, 60, 154, frame_atari_logo),
             lambda r: raster,
             operand=raster,
         )
 
         raster = jax.lax.cond(
-            jnp.logical_or(state.atari_symbols == 2, state.atari_symbols == 3),
+            jnp.logical_and(jnp.logical_or(state.atari_symbols == 2, state.atari_symbols == 3), state.respawn_timer == 0),
             lambda r: aj.render_at(raster, 76, 154, frame_atari_logo),
             lambda r: raster,
             operand=raster,
         )
 
         raster = jax.lax.cond(
-            state.atari_symbols > 2,
+            jnp.logical_and(state.atari_symbols > 2, state.respawn_timer == 0),
             lambda r: aj.render_at(raster, 90, 154, frame_atari_logo),
             lambda r: raster,
             operand=raster,
@@ -2675,11 +2851,21 @@ class VideoPinballRenderer(AtraJaxisRenderer):
 
         frame_X = aj.get_sprite_frame(self.sprites["x"], 0)
         raster = jax.lax.cond(
-            state.atari_symbols == 4,
+            jnp.logical_and(state.atari_symbols == 4, state.respawn_timer == 0),
             lambda r: aj.render_at(raster, 76, 157, frame_X),
             lambda r: raster,
             operand=raster,
         )
+
+
+        # Handle color cycling
+        color = jnp.ceil(state.color_cycling / jnp.array(4.0)).astype(jnp.int32)
+        color = jnp.clip(color, min=0)
+
+        raster = jax.lax.cond(color > 0,
+                              lambda r: handle_color_cycling(r, color),
+                              lambda r: r,
+                              raster)
 
         return raster
 
