@@ -81,7 +81,7 @@ def load_sprites():
     UI_NUM_5 = jnp.expand_dims(aj.loadFrame(os.path.join(MODULE_DIR, "tennis_from_scratch/sprites/ui_blue_5.npy")),
                                axis=0)
 
-    return (BG, BALL, BALL_SHADOW,
+    return (BG, switch_blue_and_red(BG), BALL, BALL_SHADOW,
             [switch_blue_and_red(PLAYER_0), switch_blue_and_red(PLAYER_1), switch_blue_and_red(PLAYER_2),
              switch_blue_and_red(PLAYER_3)], [PLAYER_0, PLAYER_1, PLAYER_2, PLAYER_3],
             [switch_blue_and_red(RACKET_3), switch_blue_and_red(RACKET_0), switch_blue_and_red(RACKET_1), switch_blue_and_red(RACKET_2)],
@@ -153,7 +153,7 @@ def perspective_transform(x, y, apply_offsets=True, width_top=79.0, width_bottom
 class TennisRenderer:
 
     def __init__(self):
-        (self.BG, self.BALL, self.BALL_SHADOW, self.PLAYER_BLUE, self.PLAYER_RED, self.RACKET_BLUE, self.RACKET_RED, self.UI_NUMBERS_BLUE,
+        (self.BG_TOP_RED, self.BG_TOP_BLUE, self.BALL, self.BALL_SHADOW, self.PLAYER_BLUE, self.PLAYER_RED, self.RACKET_BLUE, self.RACKET_RED, self.UI_NUMBERS_BLUE,
          self.UI_NUMBERS_RED) = load_sprites()
         # use bounding box as mockup
         self.BOUNDING_BOX = get_bounding_box(PLAYER_WIDTH, PLAYER_HEIGHT)
@@ -181,7 +181,7 @@ class TennisRenderer:
     def render(self, state: TennisState) -> jnp.ndarray:
         raster = jnp.zeros((FRAME_WIDTH, FRAME_HEIGHT, 3))
 
-        frame_bg = aj.get_sprite_frame(self.BG, 0)
+        frame_bg = aj.get_sprite_frame(self.BG_TOP_RED if state.player_state.player_field == 1 else self.BG_TOP_BLUE, 0)
         raster = aj.render_at(raster, 0, 0, frame_bg)
 
         frame_ball_shadow = aj.get_sprite_frame(self.BALL_SHADOW, 0)
