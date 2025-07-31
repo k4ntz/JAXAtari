@@ -35,8 +35,8 @@ PAUSE_DURATION = 100
 PLAYER_CONST = 0
 PLAYER_WIDTH = 13  # player flips side so total covered x section is greater
 PLAYER_HEIGHT = 23
-PLAYER_MIN_X = 10  # 17
-PLAYER_MAX_X = 130  # 142
+PLAYER_MIN_X = 8  # left movement restriction
+PLAYER_MAX_X = 144  # right movement restriction
 # lower y-axis values are towards the top in our case, opposite in original game
 PLAYER_Y_LOWER_BOUND_BOTTOM = 160 #180  # 206-2-PLAYER_HEIGHT
 PLAYER_Y_UPPER_BOUND_BOTTOM = 109  # 206-53-PLAYER_HEIGHT
@@ -87,7 +87,7 @@ class BallState(NamedTuple):
 class PlayerState(NamedTuple):
     player_x: chex.Array  # x-coordinate of the player
     player_y: chex.Array  # y-coordinate of the player
-    player_direction: chex.Array  # direction the player is currently facing in todo explain which values can happen here in what they mean
+    player_direction: chex.Array  # direction the player is currently facing in (-1: look towards left, 1: look towards right)
     player_field: chex.Array  # top (1) or bottom (-1) field
 
 
@@ -456,13 +456,13 @@ def check_end(state: GameState) -> GameState:
 # todo needs docs
 @jax.jit
 def player_step(state: TennisState, action: chex.Array) -> PlayerState:
-    player_state = update_player_pos(state.player_state, action)
+    player_state = update_player_pos(state, action)
     # todo add turning etc.
     return player_state
 
 
 @jax.jit
-def update_player_pos(state: PlayerState, action: chex.Array) -> PlayerState:
+def update_player_pos(state: TennisState, action: chex.Array) -> PlayerState:
     """
     Updates player position based on provided action and applies bounding box.
 
@@ -473,6 +473,8 @@ def update_player_pos(state: PlayerState, action: chex.Array) -> PlayerState:
     Returns:
         PlayerState: The updated player state.
     """
+
+    player_state = state.player_state
 
     # does the action contain UP
     up = jnp.any(
@@ -510,13 +512,13 @@ def update_player_pos(state: PlayerState, action: chex.Array) -> PlayerState:
     # move left if the player is trying to move left
     player_x = jnp.where(
         left,
-        state.player_x - 1,
-        state.player_x,
+        player_state.player_x - 1,
+        player_state.player_x,
     )
     # move right if the player is trying to move right
     player_x = jnp.where(
         right,
-        state.player_x + 1,
+        player_state.player_x + 1,
         player_x,
     )
     # apply X bounding box
@@ -524,28 +526,47 @@ def update_player_pos(state: PlayerState, action: chex.Array) -> PlayerState:
 
     # move up if the player is trying to move up
     player_y = jnp.where(
-        up,
-        state.player_y - 1,
-        state.player_y,
+        jnp.logical_and(
+            up,
+            jnp.logical_not(state.game_state.is_serving) # not allowed to change y position while someone is serving
+        ),
+        player_state.player_y - 1,
+        player_state.player_y,
     )
+
     # move down if the player is trying to move down
     player_y = jnp.where(
-        down,
-        state.player_y + 1,
+        jnp.logical_and(
+            down,
+            jnp.logical_not(state.game_state.is_serving) # not allowed to change y position while someone is serving
+        ),
+        player_state.player_y + 1,
         player_y,
     )
     # apply Y bounding box
     player_y = jnp.where(
-        state.player_field == 1,
+        player_state.player_field == 1,
         jnp.clip(player_y, PLAYER_Y_UPPER_BOUND_TOP, PLAYER_Y_LOWER_BOUND_TOP),
         jnp.clip(player_y, PLAYER_Y_UPPER_BOUND_BOTTOM, PLAYER_Y_LOWER_BOUND_BOTTOM)
+    )
+
+    new_player_direction = jnp.where(
+        player_state.player_x > state.ball_state.ball_x,
+        -1,
+        player_state.player_direction
+    )
+
+    new_player_direction = jnp.where(
+        player_state.player_x < state.ball_state.ball_x,
+        1,
+        new_player_direction
     )
 
     return PlayerState(
         player_x,
         player_y,
-        state.player_direction,
-        state.player_field
+        new_player_direction,
+        player_state.player_field
     )
 
 
@@ -719,9 +740,14 @@ def ball_step(state: TennisState, action) -> TennisState:
     )
     enemy_state = state.enemy_state
 
+    corrected_player_x = jnp.where(
+        player_state.player_direction == 1,
+        player_state.player_x,
+        state.player_state.player_x - PLAYER_WIDTH + 2
+    )
     upper_entity_x = jnp.where(
         player_state.player_field == 1,
-        player_state.player_x,
+        corrected_player_x,
         enemy_state.enemy_x
     )
     upper_entity_y = jnp.where(
@@ -732,7 +758,7 @@ def ball_step(state: TennisState, action) -> TennisState:
 
     lower_entity_x = jnp.where(
         player_state.player_field == -1,
-        player_state.player_x,
+        corrected_player_x,
         enemy_state.enemy_x
     )
     lower_entity_y = jnp.where(
