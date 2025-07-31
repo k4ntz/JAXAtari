@@ -95,7 +95,7 @@ class EnemyState(NamedTuple):
     enemy_x: chex.Array  # x-coordinate of the enemy
     enemy_y: chex.Array  # y-coordinate of the enemy
     prev_walking_direction: chex.Array # previous walking direction (in x-direction) of the enemy, -1 = towards x=min, 1 = towards x=max
-
+    enemy_direction: chex.Array
 
 class GameState(NamedTuple):
     is_serving: chex.Array  # whether the game is currently in serving state (ball bouncing on one side until player hits)
@@ -124,7 +124,8 @@ class TennisState(NamedTuple):
     enemy_state: EnemyState = EnemyState(  # all enemy-related data
         jnp.array(START_X),
         jnp.array(ENEMY_START_Y),
-        jnp.array(0.0)
+        jnp.array(0.0),
+        jnp.array(PLAYER_START_DIRECTION) # todo maybe create separate ENEMY_START_DIRECTION constant
     )
     ball_state: BallState = BallState(  # all ball-related data
         jnp.array(GAME_WIDTH / 2.0 - 2.5),
@@ -378,7 +379,8 @@ def check_score(state: TennisState) -> TennisState:
                 jnp.array(START_X),
                 jnp.where(new_player_field == 1, jnp.array(ENEMY_START_Y),
                           jnp.array(PLAYER_START_Y)),
-                jnp.array(0.0)
+                jnp.array(0.0),
+                jnp.array(PLAYER_START_DIRECTION) #todo ENEMY_START_DIRECTION
             ),
             BallState(
                 jnp.array(GAME_WIDTH / 2.0 - 2.5),
@@ -661,10 +663,23 @@ def enemy_step(state: TennisState) -> EnemyState:
                             #jnp.clip(normal_step_y, 0, ENEMY_START_Y)
                             )
 
+    new_enemy_direction = jnp.where(
+        state.enemy_state.enemy_x > state.ball_state.ball_x,
+        -1,
+        state.enemy_state.enemy_direction
+    )
+
+    new_enemy_direction = jnp.where(
+        state.enemy_state.enemy_x < state.ball_state.ball_x,
+        1,
+        new_enemy_direction
+    )
+
     return EnemyState(
         new_enemy_x,
         new_enemy_y,
         cur_walking_direction,
+        new_enemy_direction
     )
 
 
