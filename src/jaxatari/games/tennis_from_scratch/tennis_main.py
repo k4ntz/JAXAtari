@@ -395,7 +395,7 @@ def check_score(state: TennisState) -> TennisState:
     )
 
     return jax.lax.cond(
-        new_bounces > 2,
+        new_bounces >= 2,
         lambda _: TennisState(
             PlayerState(
                 jnp.array(START_X),
