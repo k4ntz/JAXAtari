@@ -30,7 +30,6 @@ GAME_MIDDLE = GAME_OFFSET_TOP + 0.5 * GAME_HEIGHT
 GAME_OFFSET_BOTTOM = GAME_OFFSET_TOP + GAME_HEIGHT
 PAUSE_DURATION = 100
 
-
 # player constants
 PLAYER_CONST = 0
 PLAYER_WIDTH = 13  # player flips side so total covered x section is greater
@@ -38,10 +37,10 @@ PLAYER_HEIGHT = 23
 PLAYER_MIN_X = 8  # left movement restriction
 PLAYER_MAX_X = 144  # right movement restriction
 # lower y-axis values are towards the top in our case, opposite in original game
-PLAYER_Y_LOWER_BOUND_BOTTOM = 160 #180  # 206-2-PLAYER_HEIGHT
+PLAYER_Y_LOWER_BOUND_BOTTOM = 160  # 180  # 206-2-PLAYER_HEIGHT
 PLAYER_Y_UPPER_BOUND_BOTTOM = 109  # 206-53-PLAYER_HEIGHT
-PLAYER_Y_LOWER_BOUND_TOP = 70 #72  # 206-91-PLAYER_HEIGHT
-PLAYER_Y_UPPER_BOUND_TOP = 15 #35  # 206-148-PLAYER_HEIGHT
+PLAYER_Y_LOWER_BOUND_TOP = 70  # 72  # 206-91-PLAYER_HEIGHT
+PLAYER_Y_UPPER_BOUND_TOP = 15  # 35  # 206-148-PLAYER_HEIGHT
 
 START_X = GAME_OFFSET_LEFT_BOTTOM + 0.5 * GAME_WIDTH - 0.5 * PLAYER_WIDTH
 PLAYER_START_Y = GAME_OFFSET_TOP - PLAYER_HEIGHT
@@ -57,7 +56,7 @@ BALL_SERVING_BOUNCE_VELOCITY_RANDOM_OFFSET = 2
 BALL_WIDTH = 2.0
 LONG_HIT_THRESHOLD_TOP = 52
 LONG_HIT_THRESHOLD_BOTTOM = 121
-LONG_HIT_DISTANCE = 91 # previously 91
+LONG_HIT_DISTANCE = 91  # previously 91
 SHORT_HIT_DISTANCE = 40
 
 # enemy constants
@@ -89,13 +88,15 @@ class PlayerState(NamedTuple):
     player_y: chex.Array  # y-coordinate of the player
     player_direction: chex.Array  # direction the player is currently facing in (-1: look towards left, 1: look towards right)
     player_field: chex.Array  # top (1) or bottom (-1) field
-    player_serving: chex.Array # true: Player is serving, false: Enemy is serving
+    player_serving: chex.Array  # true: Player is serving, false: Enemy is serving
+
 
 class EnemyState(NamedTuple):
     enemy_x: chex.Array  # x-coordinate of the enemy
     enemy_y: chex.Array  # y-coordinate of the enemy
-    prev_walking_direction: chex.Array # previous walking direction (in x-direction) of the enemy, -1 = towards x=min, 1 = towards x=max
+    prev_walking_direction: chex.Array  # previous walking direction (in x-direction) of the enemy, -1 = towards x=min, 1 = towards x=max
     enemy_direction: chex.Array
+
 
 class GameState(NamedTuple):
     is_serving: chex.Array  # whether the game is currently in serving state (ball bouncing on one side until player hits)
@@ -106,6 +107,7 @@ class GameState(NamedTuple):
     enemy_game_score: chex.Array
     is_finished: chex.Array  # True if the game is finished (Player or enemy has won the game)
 
+
 class AnimatorState(NamedTuple):
     player_frame: chex.Array = 0
     enemy_frame: chex.Array = 0
@@ -113,6 +115,7 @@ class AnimatorState(NamedTuple):
     player_racket_animation: chex.Array = False
     enemy_racket_frame: chex.Array = 0
     enemy_racket_animation: chex.Array = False
+
 
 class TennisState(NamedTuple):
     player_state: PlayerState = PlayerState(  # all player-related data
@@ -126,7 +129,7 @@ class TennisState(NamedTuple):
         jnp.array(START_X),
         jnp.array(ENEMY_START_Y),
         jnp.array(0.0),
-        jnp.array(PLAYER_START_DIRECTION) # todo maybe create separate ENEMY_START_DIRECTION constant
+        jnp.array(PLAYER_START_DIRECTION)  # todo maybe create separate ENEMY_START_DIRECTION constant
     )
     ball_state: BallState = BallState(  # all ball-related data
         jnp.array(GAME_WIDTH / 2.0 - 2.5),
@@ -155,6 +158,7 @@ class TennisState(NamedTuple):
     counter: chex.Array = jnp.array(
         0)  # not currently used, just a counter that is increased by one each frame todo evaluate if we can remove this
     animator_state: AnimatorState = AnimatorState()
+
 
 @jax.jit
 def tennis_step(state: TennisState, action) -> TennisState:
@@ -190,6 +194,7 @@ def tennis_step(state: TennisState, action) -> TennisState:
                         None
                         )
 
+
 @jax.jit
 def normal_step(state: TennisState, action) -> TennisState:
     new_state_after_score_check = check_score(state)
@@ -200,6 +205,7 @@ def normal_step(state: TennisState, action) -> TennisState:
 
     return TennisState(new_player_state, new_enemy_state, new_state_after_ball_step.ball_state,
                        new_state_after_ball_step.game_state, state.counter + 1, new_animator_state)
+
 
 @jax.jit
 def animator_step(state: TennisState, new_player_state, new_enemy_state) -> AnimatorState:
@@ -214,7 +220,8 @@ def animator_step(state: TennisState, new_player_state, new_enemy_state) -> Anim
         )
 
     # Animations for player
-    has_player_moved = check_has_moved(state.player_state.player_x, new_player_state.player_x, state.player_state.player_y, new_player_state.player_y)
+    has_player_moved = check_has_moved(state.player_state.player_x, new_player_state.player_x,
+                                       state.player_state.player_y, new_player_state.player_y)
     new_player_frame = jnp.where(
         # only update if player has moved, otherwise reset to frame 0
         has_player_moved,
@@ -297,7 +304,8 @@ def animator_step(state: TennisState, new_player_state, new_enemy_state) -> Anim
     )
 
     # Animations for enemy
-    has_enemy_moved = check_has_moved(state.enemy_state.enemy_x, new_enemy_state.enemy_x, state.enemy_state.enemy_y, new_enemy_state.enemy_y)
+    has_enemy_moved = check_has_moved(state.enemy_state.enemy_x, new_enemy_state.enemy_x, state.enemy_state.enemy_y,
+                                      new_enemy_state.enemy_y)
     new_enemy_frame = jnp.where(
         # only update if enemy has moved, otherwise reset to frame 0
         has_enemy_moved,
@@ -310,9 +318,11 @@ def animator_step(state: TennisState, new_player_state, new_enemy_state) -> Anim
         0
     )
 
-    new_animator_state = AnimatorState(new_player_frame % 4, new_enemy_frame % 4, new_player_racket_frame, new_player_racket_animation, new_enemy_racket_frame, new_enemy_racket_animation)
+    new_animator_state = AnimatorState(new_player_frame % 4, new_enemy_frame % 4, new_player_racket_frame,
+                                       new_player_racket_animation, new_enemy_racket_frame, new_enemy_racket_animation)
 
     return new_animator_state
+
 
 @jax.jit
 def check_score(state: TennisState) -> TennisState:
@@ -410,7 +420,7 @@ def check_score(state: TennisState) -> TennisState:
                 jnp.where(new_player_field == 1, jnp.array(ENEMY_START_Y),
                           jnp.array(PLAYER_START_Y)),
                 jnp.array(0.0),
-                jnp.array(PLAYER_START_DIRECTION) #todo ENEMY_START_DIRECTION
+                jnp.array(PLAYER_START_DIRECTION)  # todo ENEMY_START_DIRECTION
             ),
             BallState(
                 jnp.array(FRAME_WIDTH / 2.0 - 2.5),
@@ -560,7 +570,7 @@ def update_player_pos(state: TennisState, action: chex.Array) -> PlayerState:
     player_y = jnp.where(
         jnp.logical_and(
             up,
-            jnp.logical_not(state.game_state.is_serving) # not allowed to change y position while someone is serving
+            jnp.logical_not(state.game_state.is_serving)  # not allowed to change y position while someone is serving
         ),
         player_state.player_y - 1,
         player_state.player_y,
@@ -570,7 +580,7 @@ def update_player_pos(state: TennisState, action: chex.Array) -> PlayerState:
     player_y = jnp.where(
         jnp.logical_and(
             down,
-            jnp.logical_not(state.game_state.is_serving) # not allowed to change y position while someone is serving
+            jnp.logical_not(state.game_state.is_serving)  # not allowed to change y position while someone is serving
         ),
         player_state.player_y + 1,
         player_y,
@@ -628,8 +638,9 @@ def enemy_step(state: TennisState) -> EnemyState:
 
     # move to middle
     def move_x_to_middle():
-        middle_step_x = jnp.where(jnp.less_equal(state.enemy_state.enemy_x, GAME_MIDDLE_HORIZONTAL), state.enemy_state.enemy_x + 1,
-                               state.enemy_state.enemy_x - 1)
+        middle_step_x = jnp.where(jnp.less_equal(state.enemy_state.enemy_x, GAME_MIDDLE_HORIZONTAL),
+                                  state.enemy_state.enemy_x + 1,
+                                  state.enemy_state.enemy_x - 1)
         return jnp.where(jnp.abs(state.enemy_state.enemy_x - GAME_MIDDLE_HORIZONTAL) > 1, middle_step_x,
                          state.enemy_state.enemy_x)
 
@@ -660,11 +671,11 @@ def enemy_step(state: TennisState) -> EnemyState:
         cur_walking_direction
     )
 
-        #jnp.clip(new_enemy_x - state.enemy_state.enemy_x, -1, 1))
+    # jnp.clip(new_enemy_x - state.enemy_state.enemy_x, -1, 1))
 
     should_perform_direction_change = jnp.logical_or(jnp.logical_or(
         jnp.abs((enemy_x_hit_point) - state.ball_state.ball_x) >= ball_tracking_tolerance,
-        #state.enemy_state.prev_walking_direction == cur_walking_direction
+        # state.enemy_state.prev_walking_direction == cur_walking_direction
         False
     ), state.ball_state.last_hit == 1)
 
@@ -691,7 +702,7 @@ def enemy_step(state: TennisState) -> EnemyState:
     new_enemy_y = jnp.where(state.game_state.is_serving,
                             state.enemy_state.enemy_y,
                             normal_step_y,
-                            #jnp.clip(normal_step_y, 0, ENEMY_START_Y)
+                            # jnp.clip(normal_step_y, 0, ENEMY_START_Y)
                             )
 
     new_enemy_direction = jnp.where(
@@ -817,7 +828,7 @@ def ball_step(state: TennisState, action) -> TennisState:
         is_overlapping(
             upper_entity_x,
             PLAYER_WIDTH,
-            0, # this is z pos
+            0,  # this is z pos
             PLAYER_HEIGHT,
             ball_state.ball_x,
             BALL_WIDTH,
@@ -831,7 +842,7 @@ def ball_step(state: TennisState, action) -> TennisState:
         is_overlapping(
             lower_entity_x,
             PLAYER_WIDTH,
-            0, # this is z pos
+            0,  # this is z pos
             PLAYER_HEIGHT,
             ball_state.ball_x,
             BALL_WIDTH,
@@ -878,7 +889,6 @@ def ball_step(state: TennisState, action) -> TennisState:
         )
     )
 
-
     should_hit = jnp.logical_and(any_entity_ready_to_fire, jnp.logical_or(
         jnp.logical_not(jnp.logical_and(state.player_state.player_serving, state.game_state.is_serving)),
         fire
@@ -908,12 +918,12 @@ def ball_step(state: TennisState, action) -> TennisState:
     new_last_hit = jnp.where(should_hit,
                              # player hit
                              jnp.where(
-                                jnp.logical_or(
-                                    jnp.logical_and(upper_entity_overlapping_ball, player_state.player_field == 1),
-                                    jnp.logical_and(lower_entity_overlapping_ball, player_state.player_field == -1)
-                                ),
-                                0,
-                                1
+                                 jnp.logical_or(
+                                     jnp.logical_and(upper_entity_overlapping_ball, player_state.player_field == 1),
+                                     jnp.logical_and(lower_entity_overlapping_ball, player_state.player_field == -1)
+                                 ),
+                                 0,
+                                 1
                              ),
                              state.ball_state.last_hit
                              )
@@ -1014,7 +1024,7 @@ def handle_ball_fire(state: TennisState, hitting_entity_x, hitting_entity_y, dir
         1,
         -1
     )
-    angle *= hitting_entity_field # adjust angle in case entity is in bottom field (* -1 will reverse angle)
+    angle *= hitting_entity_field  # adjust angle in case entity is in bottom field (* -1 will reverse angle)
     # calc x landing position depending on player hit angle
     # angle = 0 # neutral angle, between -1...1
     left_offset = -39
@@ -1037,12 +1047,12 @@ def handle_ball_fire(state: TennisState, hitting_entity_x, hitting_entity_y, dir
         )
     )
 
-
     new_ball_hit_target_y = new_ball_hit_start_y + (y_dist * direction)
     field_min_x = 32
     field_max_x = 32 + FIELD_WIDTH_TOP
     new_ball_hit_target_x = jnp.clip(new_ball_hit_start_x + offset, field_min_x, field_max_x)
-# ==================================
+
+    # ==================================
 
     @jax.jit
     def compute_ball_landing_frame(z_fp0, v0_fp, gravity_fp):
@@ -1072,21 +1082,20 @@ def handle_ball_fire(state: TennisState, hitting_entity_x, hitting_entity_y, dir
 
         return t_landing
 
-
     hit_vel = 24.0
 
     dx = new_ball_hit_target_x - state.ball_state.ball_x
     dy = new_ball_hit_target_y - state.ball_state.ball_y
-    #dist = jnp.sqrt(dx**2 + dy**2)
-    #dist = jnp.linalg.norm(jnp.array([dx, dy])) #+ 1e-8
+    # dist = jnp.sqrt(dx**2 + dy**2)
+    # dist = jnp.linalg.norm(jnp.array([dx, dy])) #+ 1e-8
 
-    #norm_dist = dist / compute_ball_landing_frame(14, 24.0, BALL_GRAVITY_PER_FRAME)
+    # norm_dist = dist / compute_ball_landing_frame(14, 24.0, BALL_GRAVITY_PER_FRAME)
 
-    #norm_dx = dx / dist
-   #norm_dy = dy / dist
+    # norm_dx = dx / dist
+    # norm_dy = dy / dist
 
-    #move_x = norm_dx #* 2.1
-    #move_y = norm_dy #* 2.1
+    # move_x = norm_dx #* 2.1
+    # move_y = norm_dy #* 2.1
     steps = compute_ball_landing_frame(14, 24.0, BALL_GRAVITY_PER_FRAME)
 
     move_x = dx / steps
@@ -1107,6 +1116,7 @@ def handle_ball_fire(state: TennisState, hitting_entity_x, hitting_entity_y, dir
         jnp.array(0),  # ball has not bounced after last hit
         state.ball_state.last_hit
     )
+
 
 """
 # todo needs docs
@@ -1149,6 +1159,7 @@ def handle_ball_serve(state: TennisState) -> BallState:
         state.ball_state.last_hit
     )
 """
+
 
 @jax.jit
 def tennis_reset() -> TennisState:
