@@ -449,7 +449,7 @@ def check_score(state: TennisState) -> TennisState:
     )
 
 
-# Cheks whether the current set has ended and updates the score accordingly
+# Checks whether the current set has ended and updates the score accordingly
 @jax.jit
 def check_set(state: GameState) -> GameState:
     player_won_set = jnp.logical_and(state.player_score >= 4, state.player_score >= state.enemy_score + 2)
@@ -879,7 +879,10 @@ def ball_step(state: TennisState, action) -> TennisState:
     )
 
 
-    should_hit = jnp.logical_and(any_entity_ready_to_fire, jnp.logical_or(jnp.logical_not(state.game_state.is_serving), fire))
+    should_hit = jnp.logical_and(any_entity_ready_to_fire, jnp.logical_or(
+        jnp.logical_not(jnp.logical_and(state.player_state.player_serving, state.game_state.is_serving)),
+        fire
+    ))
     new_is_serving = jnp.where(should_hit, False, state.game_state.is_serving)
 
     # no need to check whether the lower entity is actually overlapping because this variable won't be used if it isn't
