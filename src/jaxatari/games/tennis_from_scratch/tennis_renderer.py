@@ -281,16 +281,16 @@ class TennisRenderer:
         raster = aj.render_at(raster, bottom_right_corner_coords[0], bottom_right_corner_coords[1], bottom_right_rec)
 
         if (state.game_state.player_game_score + state.game_state.enemy_game_score) > 0 and state.game_state.player_score == 0 and state.game_state.enemy_score == 0:
-            # Game is paused, display overall score
+            # display overall score
             raster = self.render_number_centered(raster, state.game_state.player_game_score, [FRAME_WIDTH / 4, 2],
                                                  red=True)
             raster = self.render_number_centered(raster, state.game_state.enemy_game_score, [(FRAME_WIDTH / 4) * 3, 2])
 
         else:
-            # Game is paused, display current set score
+            # display current set score
             tennis_scores = [0, 15, 30, 40]
-            player_score_number = tennis_scores[min(len(tennis_scores), state.game_state.player_score)]
-            enemy_score_number = tennis_scores[min(len(tennis_scores), state.game_state.enemy_score)]
+            player_score_number = tennis_scores[min(len(tennis_scores) - 1, state.game_state.player_score)]
+            enemy_score_number = tennis_scores[min(len(tennis_scores) - 1, state.game_state.enemy_score)]
 
             raster = self.render_number_centered(raster, player_score_number, [FRAME_WIDTH / 4, 2], red=True)
             raster = self.render_number_centered(raster, enemy_score_number, [(FRAME_WIDTH / 4) * 3, 2])

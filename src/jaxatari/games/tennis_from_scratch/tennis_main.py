@@ -1004,11 +1004,17 @@ def handle_ball_fire(state: TennisState, hitting_entity_x, hitting_entity_y, dir
     new_ball_hit_start_y = state.ball_state.ball_y
 
     # todo fix hardcoded values
-    # todo this is incorrect, it assumes the player_x is in the center of the player
     ball_width = 2.0
     max_dist = PLAYER_WIDTH / 2 + ball_width / 2
 
     angle = -1 * (((hitting_entity_x + PLAYER_WIDTH / 2) - (state.ball_state.ball_x + 2 / 2)) / max_dist) * direction
+
+    hitting_entity_field = jnp.where(
+        hitting_entity_y < GAME_MIDDLE,
+        1,
+        -1
+    )
+    angle *= hitting_entity_field # adjust angle in case entity is in bottom field (* -1 will reverse angle)
     # calc x landing position depending on player hit angle
     # angle = 0 # neutral angle, between -1...1
     left_offset = -39
