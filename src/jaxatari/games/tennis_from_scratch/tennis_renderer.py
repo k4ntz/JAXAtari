@@ -80,15 +80,23 @@ def load_sprites():
                                axis=0)
     UI_NUM_5 = jnp.expand_dims(aj.loadFrame(os.path.join(MODULE_DIR, "tennis_from_scratch/sprites/ui_blue_5.npy")),
                                axis=0)
+    UI_NUM_6 = jnp.expand_dims(aj.loadFrame(os.path.join(MODULE_DIR, "tennis_from_scratch/sprites/ui_blue_6.npy")),
+                               axis=0)
+    UI_NUM_7 = jnp.expand_dims(aj.loadFrame(os.path.join(MODULE_DIR, "tennis_from_scratch/sprites/ui_blue_7.npy")),
+                               axis=0)
+    UI_NUM_8 = jnp.expand_dims(aj.loadFrame(os.path.join(MODULE_DIR, "tennis_from_scratch/sprites/ui_blue_8.npy")),
+                               axis=0)
+    UI_NUM_9 = jnp.expand_dims(aj.loadFrame(os.path.join(MODULE_DIR, "tennis_from_scratch/sprites/ui_blue_9.npy")),
+                               axis=0)
 
     return (BG, switch_blue_and_red(BG), BALL, BALL_SHADOW,
             [switch_blue_and_red(PLAYER_0), switch_blue_and_red(PLAYER_1), switch_blue_and_red(PLAYER_2),
              switch_blue_and_red(PLAYER_3)], [PLAYER_0, PLAYER_1, PLAYER_2, PLAYER_3],
             [switch_blue_and_red(RACKET_3), switch_blue_and_red(RACKET_0), switch_blue_and_red(RACKET_1), switch_blue_and_red(RACKET_2)],
             [RACKET_3, RACKET_0, RACKET_1, RACKET_2],
-            [UI_NUM_0, UI_NUM_1, UI_NUM_2, UI_NUM_3, UI_NUM_4, UI_NUM_5],
+            [UI_NUM_0, UI_NUM_1, UI_NUM_2, UI_NUM_3, UI_NUM_4, UI_NUM_5, UI_NUM_6, UI_NUM_7, UI_NUM_8, UI_NUM_9],
             [switch_blue_and_red(UI_NUM_0), switch_blue_and_red(UI_NUM_1), switch_blue_and_red(UI_NUM_2),
-             switch_blue_and_red(UI_NUM_3), switch_blue_and_red(UI_NUM_4), switch_blue_and_red(UI_NUM_5)])
+             switch_blue_and_red(UI_NUM_3), switch_blue_and_red(UI_NUM_4), switch_blue_and_red(UI_NUM_5), switch_blue_and_red(UI_NUM_6), switch_blue_and_red(UI_NUM_7), switch_blue_and_red(UI_NUM_8), switch_blue_and_red(UI_NUM_9)])
 
 
 # ToDo remove
