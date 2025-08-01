@@ -88,6 +88,12 @@ def load_sprites():
                                axis=0)
     UI_NUM_9 = jnp.expand_dims(aj.loadFrame(os.path.join(MODULE_DIR, "tennis_from_scratch/sprites/ui_blue_9.npy")),
                                axis=0)
+    UI_DEUCE = jnp.expand_dims(aj.loadFrame(os.path.join(MODULE_DIR, "tennis_from_scratch/sprites/ui_deuce.npy")),
+                               axis=0)
+    UI_AD_IN = jnp.expand_dims(aj.loadFrame(os.path.join(MODULE_DIR, "tennis_from_scratch/sprites/ui_ad_in.npy")),
+                               axis=0)
+    UI_AD_OUT = jnp.expand_dims(aj.loadFrame(os.path.join(MODULE_DIR, "tennis_from_scratch/sprites/ui_ad_out.npy")),
+                               axis=0)
 
     return (BG, switch_blue_and_red(BG), BALL, BALL_SHADOW,
             [switch_blue_and_red(PLAYER_0), switch_blue_and_red(PLAYER_1), switch_blue_and_red(PLAYER_2),
@@ -96,7 +102,10 @@ def load_sprites():
             [RACKET_3, RACKET_0, RACKET_1, RACKET_2],
             [UI_NUM_0, UI_NUM_1, UI_NUM_2, UI_NUM_3, UI_NUM_4, UI_NUM_5, UI_NUM_6, UI_NUM_7, UI_NUM_8, UI_NUM_9],
             [switch_blue_and_red(UI_NUM_0), switch_blue_and_red(UI_NUM_1), switch_blue_and_red(UI_NUM_2),
-             switch_blue_and_red(UI_NUM_3), switch_blue_and_red(UI_NUM_4), switch_blue_and_red(UI_NUM_5), switch_blue_and_red(UI_NUM_6), switch_blue_and_red(UI_NUM_7), switch_blue_and_red(UI_NUM_8), switch_blue_and_red(UI_NUM_9)])
+             switch_blue_and_red(UI_NUM_3), switch_blue_and_red(UI_NUM_4), switch_blue_and_red(UI_NUM_5), switch_blue_and_red(UI_NUM_6), switch_blue_and_red(UI_NUM_7), switch_blue_and_red(UI_NUM_8), switch_blue_and_red(UI_NUM_9)],
+            UI_DEUCE,
+            UI_AD_IN,
+            UI_AD_OUT)
 
 
 # ToDo remove
@@ -162,7 +171,7 @@ class TennisRenderer:
 
     def __init__(self):
         (self.BG_TOP_RED, self.BG_TOP_BLUE, self.BALL, self.BALL_SHADOW, self.PLAYER_BLUE, self.PLAYER_RED, self.RACKET_BLUE, self.RACKET_RED, self.UI_NUMBERS_BLUE,
-         self.UI_NUMBERS_RED) = load_sprites()
+         self.UI_NUMBERS_RED, self.UI_DEUCE, self.UI_AD_IN, self.UI_AD_OUT) = load_sprites()
         # use bounding box as mockup
         self.BOUNDING_BOX = get_bounding_box(PLAYER_WIDTH, PLAYER_HEIGHT)
 
@@ -289,10 +298,27 @@ class TennisRenderer:
         else:
             # display current set score
             tennis_scores = [0, 15, 30, 40]
-            player_score_number = tennis_scores[min(len(tennis_scores) - 1, state.game_state.player_score)]
-            enemy_score_number = tennis_scores[min(len(tennis_scores) - 1, state.game_state.enemy_score)]
 
-            raster = self.render_number_centered(raster, player_score_number, [FRAME_WIDTH / 4, 2], red=True)
-            raster = self.render_number_centered(raster, enemy_score_number, [(FRAME_WIDTH / 4) * 3, 2])
+            # deuce situation
+            if (state.game_state.player_score >= len(tennis_scores) or state.game_state.enemy_score >= len(tennis_scores)) or (state.game_state.player_score >= len(tennis_scores) - 1 and state.game_state.enemy_score >= len(tennis_scores) - 1):
+                if state.game_state.player_score == state.game_state.enemy_score:
+                    ui_deuce_sprite = aj.get_sprite_frame(self.UI_DEUCE, 0)
+                    raster = aj.render_at(raster, FRAME_WIDTH / 4 - ui_deuce_sprite.shape[0] / 2, 2,
+                                          ui_deuce_sprite)
+                elif (state.game_state.player_score > state.game_state.enemy_score and state.player_state.player_serving) or (state.game_state.enemy_score > state.game_state.player_score and not state.player_state.player_serving):
+                    ui_ad_in_sprite = aj.get_sprite_frame(self.UI_AD_IN, 0)
+                    raster = aj.render_at(raster, FRAME_WIDTH / 4 - ui_ad_in_sprite.shape[0] / 2, 2,
+                                          ui_ad_in_sprite)
+                else:
+                    ui_ad_out_sprite = aj.get_sprite_frame(self.UI_AD_OUT, 0)
+                    raster = aj.render_at(raster, FRAME_WIDTH / 4 - ui_ad_out_sprite.shape[0] / 2, 2,
+                                          ui_ad_out_sprite)
+            # regular play
+            else:
+                player_score_number = tennis_scores[min(len(tennis_scores) - 1, state.game_state.player_score)]
+                enemy_score_number = tennis_scores[min(len(tennis_scores) - 1, state.game_state.enemy_score)]
+
+                raster = self.render_number_centered(raster, player_score_number, [FRAME_WIDTH / 4, 2], red=True)
+                raster = self.render_number_centered(raster, enemy_score_number, [(FRAME_WIDTH / 4) * 3, 2])
 
         return raster
