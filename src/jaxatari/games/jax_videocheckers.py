@@ -518,6 +518,11 @@ class JaxVideoCheckers(
 
         return new_state
 
+
+    def calculate_best_opponent_move(self, board, movable_pieces, state):
+        # TODO
+        pass
+
     def step_move_piece_phase(self, state: VideoCheckersState, action: chex.Array) -> VideoCheckersState:
         """
         Handles moving a piece in the move piece phase.
@@ -532,12 +537,29 @@ class JaxVideoCheckers(
             """
             Prepares the opponent's move by changing the game phase to SHOW_OPPONENT_MOVE_PHASE.
             This is called when the player has moved a piece and no further jumps are available.
+            In this function we determine the opponent's move.
+            The resulting opponent move is stored in the state with
+            the start position, end position, captured positions and what type the moved piece is at the end position.
+            the calculate_best_opponent_move(board,allowed_moves) function is used to determine the opponent's move.
             """
+
+            movable_pieces = self.get_movable_pieces(self.consts.COLOUR_WHITE, state)
+
+            jax.debug.print("Movable pieces for opponent: {movable_pieces}", movable_pieces=movable_pieces)
+
+            # If no movable pieces, the game is over
+            if jnp.all(movable_pieces == jnp.array([-1, -1])):
+                jax.debug.print("No movable pieces for opponent, game over.")
+                return state._replace(game_phase=self.consts.GAME_OVER_PHASE, winner=self.consts.COLOUR_BLACK)
+            # Calculate the opponent's move
+            opponent_move = self.calculate_best_opponent_move(state.board, movable_pieces, state)
+            jax.debug.print("Opponent move: {opponent_move}", opponent_move=opponent_move)
+            # Update the state with the opponent's move
             return state._replace(
                 game_phase=self.consts.SHOW_OPPONENT_MOVE_PHASE,
+                opponent_move=opponent_move,
+                selected_piece=jnp.array([-1, -1]),  # Reset the selected piece
             )
-
-            # TODO OOOOO
 
         def move_cursor(state: VideoCheckersState, action: chex.Array) -> VideoCheckersState:
             """
