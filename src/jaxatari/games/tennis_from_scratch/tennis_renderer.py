@@ -280,7 +280,7 @@ class TennisRenderer:
 
         raster = aj.render_at(raster, bottom_right_corner_coords[0], bottom_right_corner_coords[1], bottom_right_rec)
 
-        if state.game_state.pause_counter > 0:
+        if (state.game_state.player_game_score + state.game_state.enemy_game_score) > 0 and state.game_state.player_score == 0 and state.game_state.enemy_score == 0:
             # Game is paused, display overall score
             raster = self.render_number_centered(raster, state.game_state.player_game_score, [FRAME_WIDTH / 4, 2],
                                                  red=True)
