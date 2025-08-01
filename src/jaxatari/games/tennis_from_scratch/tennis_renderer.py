@@ -93,16 +93,19 @@ def load_sprites():
     UI_AD_IN = jnp.expand_dims(aj.loadFrame(os.path.join(MODULE_DIR, "tennis_from_scratch/sprites/ui_ad_in.npy")),
                                axis=0)
     UI_AD_OUT = jnp.expand_dims(aj.loadFrame(os.path.join(MODULE_DIR, "tennis_from_scratch/sprites/ui_ad_out.npy")),
-                               axis=0)
+                                axis=0)
 
     return (BG, switch_blue_and_red(BG), BALL, BALL_SHADOW,
             [switch_blue_and_red(PLAYER_0), switch_blue_and_red(PLAYER_1), switch_blue_and_red(PLAYER_2),
              switch_blue_and_red(PLAYER_3)], [PLAYER_0, PLAYER_1, PLAYER_2, PLAYER_3],
-            [switch_blue_and_red(RACKET_3), switch_blue_and_red(RACKET_0), switch_blue_and_red(RACKET_1), switch_blue_and_red(RACKET_2)],
+            [switch_blue_and_red(RACKET_3), switch_blue_and_red(RACKET_0), switch_blue_and_red(RACKET_1),
+             switch_blue_and_red(RACKET_2)],
             [RACKET_3, RACKET_0, RACKET_1, RACKET_2],
             [UI_NUM_0, UI_NUM_1, UI_NUM_2, UI_NUM_3, UI_NUM_4, UI_NUM_5, UI_NUM_6, UI_NUM_7, UI_NUM_8, UI_NUM_9],
             [switch_blue_and_red(UI_NUM_0), switch_blue_and_red(UI_NUM_1), switch_blue_and_red(UI_NUM_2),
-             switch_blue_and_red(UI_NUM_3), switch_blue_and_red(UI_NUM_4), switch_blue_and_red(UI_NUM_5), switch_blue_and_red(UI_NUM_6), switch_blue_and_red(UI_NUM_7), switch_blue_and_red(UI_NUM_8), switch_blue_and_red(UI_NUM_9)],
+             switch_blue_and_red(UI_NUM_3), switch_blue_and_red(UI_NUM_4), switch_blue_and_red(UI_NUM_5),
+             switch_blue_and_red(UI_NUM_6), switch_blue_and_red(UI_NUM_7), switch_blue_and_red(UI_NUM_8),
+             switch_blue_and_red(UI_NUM_9)],
             UI_DEUCE,
             UI_AD_IN,
             UI_AD_OUT)
@@ -170,7 +173,8 @@ def perspective_transform(x, y, apply_offsets=True, width_top=79.0, width_bottom
 class TennisRenderer:
 
     def __init__(self):
-        (self.BG_TOP_RED, self.BG_TOP_BLUE, self.BALL, self.BALL_SHADOW, self.PLAYER_BLUE, self.PLAYER_RED, self.RACKET_BLUE, self.RACKET_RED, self.UI_NUMBERS_BLUE,
+        (self.BG_TOP_RED, self.BG_TOP_BLUE, self.BALL, self.BALL_SHADOW, self.PLAYER_BLUE, self.PLAYER_RED,
+         self.RACKET_BLUE, self.RACKET_RED, self.UI_NUMBERS_BLUE,
          self.UI_NUMBERS_RED, self.UI_DEUCE, self.UI_AD_IN, self.UI_AD_OUT) = load_sprites()
         # use bounding box as mockup
         self.BOUNDING_BOX = get_bounding_box(PLAYER_WIDTH, PLAYER_HEIGHT)
@@ -212,9 +216,10 @@ class TennisRenderer:
                               frame_ball)
 
         # print("x ball: {:0.2f}., y ball: {:0.2f}, z ball: {:0.2f}, vel: {:0.2f}".format(state.ball_state.ball_x, state.ball_state.ball_y, state.ball_state.ball_z, state.ball_state.ball_velocity_z_fp))
-        print("x player: {:0.2f}, x ball target: {:0.2f}, y ball: {:0.2f}, y ball target: {:0.2f}, player_side: {:0.2f}".format(
-            state.player_state.player_x, state.ball_state.ball_hit_target_x, state.ball_state.ball_y,
-            state.ball_state.ball_hit_target_y, state.player_state.player_field))
+        print(
+            "x player: {:0.2f}, x ball target: {:0.2f}, y ball: {:0.2f}, y ball target: {:0.2f}, player_side: {:0.2f}".format(
+                state.player_state.player_x, state.ball_state.ball_hit_target_x, state.ball_state.ball_y,
+                state.ball_state.ball_hit_target_y, state.player_state.player_field))
 
         frame_player = aj.get_sprite_frame(self.PLAYER_RED[state.animator_state.player_frame], 0)
         if state.player_state.player_direction == -1:
@@ -227,7 +232,9 @@ class TennisRenderer:
         player_pos = state.player_state.player_x - 2 if state.player_state.player_direction == 1 else state.player_state.player_x - 4
 
         racket_offset_x = [0, 1, 4, 3]
-        player_racket_pos = state.player_state.player_x - 2 if state.player_state.player_direction == 1 else state.player_state.player_x - racket_offset_x[state.animator_state.player_racket_frame]
+        player_racket_pos = state.player_state.player_x - 2 if state.player_state.player_direction == 1 else state.player_state.player_x - \
+                                                                                                             racket_offset_x[
+                                                                                                                 state.animator_state.player_racket_frame]
         raster = aj.render_at(raster, player_pos, state.player_state.player_y, frame_player)
 
         racket_offset = [1, 8, 8, 4]
@@ -243,7 +250,9 @@ class TennisRenderer:
         raster = aj.render_at(raster, bounding_box_pos, state.player_state.player_y, frame_bounding_box)
 
         enemy_pos = state.enemy_state.enemy_x - 2 if state.enemy_state.enemy_direction == 1 else state.enemy_state.enemy_x - 4
-        enemy_racket_pos = state.enemy_state.enemy_x - 2 if state.enemy_state.enemy_direction == 1 else state.enemy_state.enemy_x - racket_offset_x[state.animator_state.enemy_racket_frame]
+        enemy_racket_pos = state.enemy_state.enemy_x - 2 if state.enemy_state.enemy_direction == 1 else state.enemy_state.enemy_x - \
+                                                                                                        racket_offset_x[
+                                                                                                            state.animator_state.enemy_racket_frame]
 
         frame_racket_enemy = aj.get_sprite_frame(self.RACKET_BLUE[state.animator_state.enemy_racket_frame], 0)
         if state.enemy_state.enemy_direction == -1:
@@ -289,7 +298,8 @@ class TennisRenderer:
 
         raster = aj.render_at(raster, bottom_right_corner_coords[0], bottom_right_corner_coords[1], bottom_right_rec)
 
-        if (state.game_state.player_game_score + state.game_state.enemy_game_score) > 0 and state.game_state.player_score == 0 and state.game_state.enemy_score == 0:
+        if (
+                state.game_state.player_game_score + state.game_state.enemy_game_score) > 0 and state.game_state.player_score == 0 and state.game_state.enemy_score == 0:
             # display overall score
             raster = self.render_number_centered(raster, state.game_state.player_game_score, [FRAME_WIDTH / 4, 2],
                                                  red=True)
@@ -300,12 +310,17 @@ class TennisRenderer:
             tennis_scores = [0, 15, 30, 40]
 
             # deuce situation
-            if (state.game_state.player_score >= len(tennis_scores) or state.game_state.enemy_score >= len(tennis_scores)) or (state.game_state.player_score >= len(tennis_scores) - 1 and state.game_state.enemy_score >= len(tennis_scores) - 1):
+            if (state.game_state.player_score >= len(tennis_scores) or state.game_state.enemy_score >= len(
+                    tennis_scores)) or (
+                    state.game_state.player_score >= len(tennis_scores) - 1 and state.game_state.enemy_score >= len(
+                    tennis_scores) - 1):
                 if state.game_state.player_score == state.game_state.enemy_score:
                     ui_deuce_sprite = aj.get_sprite_frame(self.UI_DEUCE, 0)
                     raster = aj.render_at(raster, FRAME_WIDTH / 4 - ui_deuce_sprite.shape[0] / 2, 2,
                                           ui_deuce_sprite)
-                elif (state.game_state.player_score > state.game_state.enemy_score and state.player_state.player_serving) or (state.game_state.enemy_score > state.game_state.player_score and not state.player_state.player_serving):
+                elif (
+                        state.game_state.player_score > state.game_state.enemy_score and state.player_state.player_serving) or (
+                        state.game_state.enemy_score > state.game_state.player_score and not state.player_state.player_serving):
                     ui_ad_in_sprite = aj.get_sprite_frame(self.UI_AD_IN, 0)
                     raster = aj.render_at(raster, FRAME_WIDTH / 4 - ui_ad_in_sprite.shape[0] / 2, 2,
                                           ui_ad_in_sprite)
