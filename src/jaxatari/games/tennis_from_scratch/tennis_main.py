@@ -89,7 +89,7 @@ class PlayerState(NamedTuple):
     player_y: chex.Array  # y-coordinate of the player
     player_direction: chex.Array  # direction the player is currently facing in (-1: look towards left, 1: look towards right)
     player_field: chex.Array  # top (1) or bottom (-1) field
-
+    player_serving: chex.Array # true: Player is serving, false: Enemy is serving
 
 class EnemyState(NamedTuple):
     enemy_x: chex.Array  # x-coordinate of the enemy
@@ -119,7 +119,8 @@ class TennisState(NamedTuple):
         jnp.array(START_X),
         jnp.array(PLAYER_START_Y),
         jnp.array(PLAYER_START_DIRECTION),
-        jnp.array(PLAYER_START_FIELD)
+        jnp.array(PLAYER_START_FIELD),
+        jnp.array(True)
     )
     enemy_state: EnemyState = EnemyState(  # all enemy-related data
         jnp.array(START_X),
@@ -350,9 +351,13 @@ def check_score(state: TennisState) -> TennisState:
     # todo implement changing sides
     # Check if a set has ended and if the game has ended
     after_set_check_game_state = check_end(check_set(after_score_update_game_state))
-    should_change_sides = jnp.logical_or(
+    game_point_scored = jnp.logical_or(
         after_set_check_game_state.player_game_score != after_score_update_game_state.player_game_score,
         after_set_check_game_state.enemy_game_score != after_score_update_game_state.enemy_game_score
+    )
+    should_change_sides = jnp.logical_and(
+        game_point_scored,
+        (after_set_check_game_state.player_game_score + after_set_check_game_state.enemy_game_score) % 2 != 0
     )
 
     new_player_field = jnp.where(
@@ -365,6 +370,30 @@ def check_score(state: TennisState) -> TennisState:
         state.player_state.player_field
     )
 
+    new_player_serving = jnp.where(
+        game_point_scored,
+        jnp.where(
+            state.player_state.player_serving == True,
+            False,
+            True
+        ),
+        state.player_state.player_serving
+    )
+
+    ball_spawn_y = jnp.where(
+        new_player_serving == True,
+        jnp.where(
+            new_player_field == 1,
+            GAME_OFFSET_TOP,
+            GAME_OFFSET_TOP + GAME_HEIGHT
+        ),
+        jnp.where(
+            new_player_field == 1,
+            GAME_OFFSET_TOP + GAME_HEIGHT,
+            GAME_OFFSET_TOP
+        )
+    )
+
     return jax.lax.cond(
         new_bounces > 2,
         lambda _: TennisState(
@@ -373,7 +402,8 @@ def check_score(state: TennisState) -> TennisState:
                 jnp.where(new_player_field == 1, jnp.array(PLAYER_START_Y),
                           jnp.array(ENEMY_START_Y)),
                 jnp.array(PLAYER_START_DIRECTION),
-                new_player_field
+                new_player_field,
+                new_player_serving
             ),
             EnemyState(
                 jnp.array(START_X),
@@ -383,8 +413,8 @@ def check_score(state: TennisState) -> TennisState:
                 jnp.array(PLAYER_START_DIRECTION) #todo ENEMY_START_DIRECTION
             ),
             BallState(
-                jnp.array(GAME_WIDTH / 2.0 - 2.5),
-                jnp.array(GAME_OFFSET_TOP),
+                jnp.array(FRAME_WIDTH / 2.0 - 2.5),
+                ball_spawn_y,
                 jnp.array(0.0),
                 jnp.array(0.0),
                 jnp.array(0.0),
@@ -568,7 +598,8 @@ def update_player_pos(state: TennisState, action: chex.Array) -> PlayerState:
         player_x,
         player_y,
         new_player_direction,
-        player_state.player_field
+        player_state.player_field,
+        player_state.player_serving
     )
 
 
