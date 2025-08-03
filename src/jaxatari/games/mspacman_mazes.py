@@ -19,25 +19,26 @@ def precompute_dof(maze: np.ndarray):
 			dof_grid[x, y] = [no_wall_above, no_wall_right, no_wall_left, no_wall_bellow]
 	return jnp.array(dof_grid)
 
+# Total number of pellets in the maze = 155
 base_pellets = np.array([
-	   [1, 1, 1, 1, 1, 1, 1, 1, 0, 1, 1, 1, 1, 1],
-       [1, 1, 1, 1, 1, 1, 1, 1, 0, 1, 1, 1, 1, 1],
-       [1, 1, 1, 1, 1, 1, 1, 1, 0, 1, 1, 1, 1, 1],
+	[1, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 1],
        [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1],
-       [1, 1, 1, 1, 1, 1, 1, 1, 0, 1, 1, 1, 1, 1],
        [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1],
-       [1, 1, 1, 1, 1, 1, 1, 1, 0, 1, 1, 1, 1, 1],
-       [1, 1, 1, 1, 1, 0, 0, 0, 0, 1, 1, 1, 1, 1],
-       [1, 1, 1, 1, 1, 0, 0, 0, 0, 1, 1, 1, 1, 1],
-       [1, 1, 1, 1, 1, 0, 0, 0, 0, 1, 1, 1, 1, 1],
+       [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1],
+       [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1],
+       [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1],
+       [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1],
        [1, 1, 1, 1, 1, 0, 0, 0, 1, 1, 1, 1, 1, 1],
-       [1, 1, 1, 1, 1, 1, 1, 1, 0, 1, 1, 1, 1, 1],
+       [1, 1, 1, 1, 1, 0, 0, 0, 1, 1, 1, 1, 1, 1],
+       [1, 1, 1, 1, 1, 0, 0, 0, 1, 1, 1, 1, 1, 1],
+       [1, 1, 1, 1, 1, 0, 0, 0, 1, 1, 1, 1, 1, 1],
        [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1],
-       [1, 1, 1, 1, 1, 1, 1, 1, 0, 1, 1, 1, 1, 1],
        [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1],
        [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1],
        [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1],
-       [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1]
+       [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1],
+       [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1],
+       [1, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 1]
 	], dtype=np.bool)
 
 maze1 = np.array([
@@ -228,7 +229,7 @@ maze4 = jnp.array([
        [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1]
 ], dtype=jnp.int32)
 
-MAZES = [maze1, maze1, maze3, maze4]
+MAZES = [maze1, maze2, maze3, maze4]
 
 
 
@@ -268,27 +269,69 @@ def load_background(level):
 						background = background.at[pellet_y+j, pellet_x+i].set(WALL_COLOR)
 	return jnp.swapaxes(background, 0, 1)
 
-def pacman_rgba(size: int = 10) -> jnp.ndarray:
+def pacmans_rgba(size: int = 10) -> jnp.ndarray:
     # Define RGBA colors
     COLOR = jnp.array([210, 164, 74, 255], dtype=jnp.uint8)
     TRANSPARENT = jnp.array([0, 0, 0, 0], dtype=jnp.uint8)
 
-    pacman = jnp.array([
-          [0,0,0,1,1,1,0,1,0],
-          [0,0,1,1,1,1,1,0,1],
-          [0,0,1,1,1,0,1,1,0],
-          [0,0,0,0,1,1,1,1,0],
-          [0,0,0,0,0,0,1,1,0],
-          [0,0,0,0,0,0,1,1,0],
-          [0,0,0,0,1,1,1,1,0],
-          [0,0,1,1,1,1,1,1,0],
-          [0,0,1,1,1,1,1,0,0],
-          [0,0,0,1,1,1,0,0,0],
+    pacmans_left = [jnp.array([
+          [0,0,1,1,1,1,0,1,0,0],
+          [0,0,0,1,1,1,1,0,1,0],
+          [0,0,0,0,1,0,1,1,0,0],
+          [0,0,0,0,1,1,1,1,0,0],
+          [0,0,0,0,0,0,1,1,0,0],
+          [0,0,0,0,0,0,1,1,0,0],
+          [0,0,0,0,1,1,1,1,0,0],
+          [0,0,0,1,1,1,1,1,0,0],
+          [0,0,0,1,1,1,1,0,0,0],
+          [0,0,1,1,1,1,0,0,0,0],
+    ]), jnp.array([
+          [0,0,0,1,1,1,0,1,0,0],
+          [0,0,1,1,1,1,1,0,1,0],
+          [0,0,1,1,1,0,1,1,0,0],
+          [0,0,0,0,1,1,1,1,0,0],
+          [0,0,0,0,0,0,1,1,0,0],
+          [0,0,0,0,0,0,1,1,0,0],
+          [0,0,0,0,1,1,1,1,0,0],
+          [0,0,1,1,1,1,1,1,0,0],
+          [0,0,1,1,1,1,1,0,0,0],
+          [0,0,0,1,1,1,0,0,0,0],
+    ]),
+    jnp.array([
+          [0,0,0,1,1,1,0,1,0,0],
+          [0,0,1,1,1,1,1,0,1,0],
+          [0,1,1,1,1,0,1,1,0,0],
+          [0,1,1,1,1,1,1,1,0,0],
+          [1,1,1,1,1,1,1,1,0,0],
+          [1,1,1,1,1,1,1,1,0,0],
+          [0,1,1,1,1,1,1,1,0,0],
+          [0,0,1,1,1,1,1,1,0,0],
+          [0,0,1,1,1,1,1,0,0,0],
+          [0,0,0,1,1,1,0,0,0,0],
+    ]), jnp.array([
+          [0,0,0,1,1,1,0,1,0,0],
+          [0,0,1,1,1,1,1,0,1,0],
+          [0,0,1,1,1,0,1,1,0,0],
+          [0,0,0,0,1,1,1,1,0,0],
+          [0,0,0,0,0,0,1,1,0,0],
+          [0,0,0,0,0,0,1,1,0,0],
+          [0,0,0,0,1,1,1,1,0,0],
+          [0,0,1,1,1,1,1,1,0,0],
+          [0,0,1,1,1,1,1,0,0,0],
+          [0,0,0,1,1,1,0,0,0,0],
     ])
+    ]
+    pacmans_right = [jnp.fliplr(p) for p in pacmans_left]
+    pacmans_up = [jnp.rot90(p) for p in pacmans_right]
+    pacmans_down = [jnp.rot90(p, 3) for p in pacmans_right]
+#     nothing = [jnp.zeros((10, 10), dtype=jnp.int32) for _ in range(4)]
 
     # Create RGBA image
-    image = jnp.where(pacman[..., None], COLOR, TRANSPARENT)
-    return jnp.swapaxes(image, 1, 0)
+    images = [[jnp.swapaxes(jnp.where(p[..., None], 
+                            COLOR, 
+                            TRANSPARENT), 1, 0) for p in pacmans] 
+                                   for pacmans in [pacmans_up, pacmans_right, pacmans_left, pacmans_down]]
+    return images
 
 from jaxatari.renderers import AtraJaxisRenderer
 import jaxatari.rendering.atraJaxis as aj
@@ -300,4 +343,7 @@ def load_ghosts():
        for i in range(4):
               path = os.path.join(sprite_path, f'ghost{i+1}.npy')
               ghosts.append(aj.loadFrame(path))
-       return ghosts
+       ghosts.append(aj.loadFrame(os.path.join(sprite_path, 'ghost_blue.npy')))
+       ghosts.append(aj.loadFrame(os.path.join(sprite_path, 'ghost_white.npy')))
+       symmetric_ghosts = [jnp.flipud(ghost) for ghost in ghosts]
+       return [ghosts, symmetric_ghosts]

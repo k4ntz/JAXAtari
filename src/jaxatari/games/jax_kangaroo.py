@@ -1782,7 +1782,7 @@ class JaxKangaroo(JaxEnvironment[KangarooState, KangarooObservation, KangarooInf
 
     @partial(jax.jit, static_argnums=(0), donate_argnums=(1))
     def step(
-        self, state: KangarooState, action: chex.Array
+        self, state: KangarooState, action: chex.Array, key: chex.PRNGKey = None
     ) -> Tuple[KangarooObservation, KangarooState, float, bool, KangarooInfo]:
         reset_cond = jnp.any(jnp.array([action == RESET]))
 
@@ -2019,7 +2019,6 @@ class JaxKangaroo(JaxEnvironment[KangarooState, KangarooObservation, KangarooInf
         coco_positions = jnp.where(
             coco_mask, state.level.coco_positions, jnp.array([-1, -1])
         )
-
 
         return KangarooObservation(
             player_x=state.player.x,
