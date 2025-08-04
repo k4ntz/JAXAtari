@@ -155,6 +155,9 @@ class JaxBerzerk(JaxEnvironment[BerzerkState, BerzerkObservation, BerzerkInfo, B
                 lambda: jnp.array(0, dtype=jnp.int32),
                 lambda: jnp.array(get_random_index(room_num), dtype=jnp.int32)
             )
+    
+
+
 
     
     @partial(jax.jit, static_argnums=(0, ))
@@ -273,7 +276,67 @@ class JaxBerzerk(JaxEnvironment[BerzerkState, BerzerkObservation, BerzerkInfo, B
 
         return player_x, player_y, player_direction
 
+# 1a. Check wallcollision and exit collision
+    @partial(jax.jit, static_argnums=0)
+    def object_hits_wall(self, object_pos, object_size, room_counter, entry_direction, num_points_per_side=10):
+        # Aktuelle Raum-ID (0–3 → mid_walls_1 bis _4)
+        room_idx = JaxBerzerk.get_room_index(room_counter)
 
+        # Hole passende Maske (True = Kollision)
+        def load_mask(idx):
+            return jax.lax.switch(idx, [
+                lambda: self.renderer.room_collision_masks['mid_walls_1'],
+                lambda: self.renderer.room_collision_masks['mid_walls_2'],
+                lambda: self.renderer.room_collision_masks['mid_walls_3'],
+                lambda: self.renderer.room_collision_masks['mid_walls_4'],
+            ])
+        
+        # Hole Basismasken
+        mid_mask = load_mask(room_idx)
+        outer_mask = self.renderer.room_collision_masks['level_outer_walls']
+
+        # Hole Türmasken
+        left_mask = self.renderer.room_collision_masks['door_vertical_left']
+        right_mask = self.renderer.room_collision_masks['door_vertical_right']
+        top_mask = self.renderer.room_collision_masks['door_horizontal_up']
+        bottom_mask = self.renderer.room_collision_masks['door_horizontal_down']
+
+        # entry_direction: 0=oben, 1=unten, 2=links, 3=rechts
+        entry = entry_direction
+
+        # Dynamisch festlegen, welche Türen "geschlossen" (= blockieren) sind
+        block_left   = (entry == 2) | (entry == 3)
+        block_right  = (entry == 2) | (entry == 3)
+        block_top    = (entry == 1)
+        block_bottom = (entry == 0)
+
+        # Nur diese Türmasken zulassen
+        collision_mask = mid_mask | outer_mask
+        collision_mask = jax.lax.cond(block_left,   lambda: collision_mask | left_mask,   lambda: collision_mask)
+        collision_mask = jax.lax.cond(block_right,  lambda: collision_mask | right_mask,  lambda: collision_mask)
+        collision_mask = jax.lax.cond(block_top,    lambda: collision_mask | top_mask,    lambda: collision_mask)
+        collision_mask = jax.lax.cond(block_bottom, lambda: collision_mask | bottom_mask, lambda: collision_mask)
+
+
+        mask_height, mask_width = collision_mask.shape
+
+        # Check Kollision: alle Eckpunkte
+        def point_hits(px, py):
+            i = jnp.floor(py).astype(jnp.int32)
+            j = jnp.floor(px).astype(jnp.int32)
+            in_bounds = (i >= 0) & (i < mask_height) & (j >= 0) & (j < mask_width)
+            return jax.lax.select(in_bounds, collision_mask[i, j], False)
+
+        x0, y0 = object_pos
+        w, h = object_size
+        top_edge = [(x0 + dx, y0) for dx in jnp.linspace(0, w, num_points_per_side)]
+        right_edge = [(x0 + w, y0 + dy) for dy in jnp.linspace(0, h, num_points_per_side)]
+        bottom_edge = [(x0 + dx, y0 + h) for dx in jnp.linspace(w, 0, num_points_per_side)]
+        left_edge = [(x0, y0 + dy) for dy in jnp.linspace(h, 0, num_points_per_side)]
+
+        all_edge_points = top_edge + right_edge + bottom_edge + left_edge
+        return jnp.any(jnp.array([point_hits(x, y) for x, y in all_edge_points]))
+    
     @partial(jax.jit, static_argnums=0)
     def check_exit_crossing(self, player_pos: chex.Array) -> chex.Array:
         """Return True if player touches an exit region (centered on wall)."""
@@ -419,11 +482,11 @@ class JaxBerzerk(JaxEnvironment[BerzerkState, BerzerkObservation, BerzerkInfo, B
             jnp.array(0)
         )
 
-    @partial(jax.jit, static_argnums=(0,))
+    @partial(jax.jit, static_argnums=(0,)) 
     def reset(self, rng: chex.PRNGKey = jax.random.PRNGKey(42)) -> Tuple[BerzerkObservation, BerzerkState]:
         rng, enemy_rng, spawn_rng = jax.random.split(rng, 3)
 
-        min_enemies = 3
+        min_enemies = 5
         max_enemies = self.consts.NUM_ENEMIES
         num_enemies = jax.random.randint(enemy_rng, (), min_enemies, max_enemies + 1)
 
@@ -437,17 +500,83 @@ class JaxBerzerk(JaxEnvironment[BerzerkState, BerzerkObservation, BerzerkInfo, B
         bullets = jnp.zeros((self.consts.MAX_BULLETS, 2), dtype=jnp.float32)
         bullet_dirs = jnp.zeros((self.consts.MAX_BULLETS, 2), dtype=jnp.float32)
         active = jnp.zeros((self.consts.MAX_BULLETS,), dtype=bool)
-        
-        enemy_pos = jax.random.uniform(
-            spawn_rng, shape=(self.consts.NUM_ENEMIES, 2),
-            minval=jnp.array([self.consts.PLAYER_BOUNDS[0][0], self.consts.PLAYER_BOUNDS[1][0]]),
-            maxval=jnp.array([
-                self.consts.PLAYER_BOUNDS[0][1] - self.consts.ENEMY_SIZE[0],
-                self.consts.PLAYER_BOUNDS[1][1] - self.consts.ENEMY_SIZE[1]
-            ])
+        room_counter=jnp.array(0, dtype=jnp.int32)
+        entry_direction=jnp.array(3, dtype=jnp.int32)
+
+
+        # Sicheren Abstand zum Rand definieren (in Pixel)
+        margin_x = 10.0
+        margin_y = 10.0
+
+        spawn_min = jnp.array([
+            self.consts.PLAYER_BOUNDS[0][0] + margin_x,
+            self.consts.PLAYER_BOUNDS[1][0] + margin_y,
+        ])
+
+        spawn_max = jnp.array([
+            self.consts.PLAYER_BOUNDS[0][1] - self.consts.ENEMY_SIZE[0] - margin_x,
+            self.consts.PLAYER_BOUNDS[1][1] - self.consts.ENEMY_SIZE[1] - margin_y,
+        ])
+
+        # Gegner-Positionen zufällig erzeugen
+        rng, rng_pos = jax.random.split(rng)
+
+
+        enemy_pos_all = jax.random.uniform(
+            rng_pos,
+            shape=(self.consts.NUM_ENEMIES, 2),
+            minval=spawn_min,
+            maxval=spawn_max
+        )
+        max_attempts = 1000
+
+        def try_update_enemy_pos(state, i):
+            enemy_pos_all, rng = state
+            rng, sub_rng = jax.random.split(rng)
+            
+            # Prüfen ob Position mit Wand kollidiert
+            hits_wall = self.object_hits_wall(enemy_pos_all[i], self.consts.ENEMY_SIZE, room_counter, entry_direction)
+            
+            # Falls Kollision, neue Position generieren
+            new_pos = jax.random.uniform(
+                sub_rng,
+                shape=(2,),
+                minval=spawn_min,
+                maxval=spawn_max
+            )
+            
+            enemy_pos_all = jax.lax.cond(
+                hits_wall,
+                lambda arr: arr.at[i].set(new_pos),
+                lambda arr: arr,
+                enemy_pos_all
+            )
+            return enemy_pos_all, rng
+
+        def loop_body(i, val):
+            enemy_pos_all, rng = val
+            return try_update_enemy_pos((enemy_pos_all, rng), i)
+
+        # Mehrere Versuche, alle Gegner zu prüfen und ggf. neue Positionen zu setzen
+        def attempts_loop(i, val):
+            enemy_pos_all, rng = val
+            enemy_pos_all, rng = jax.lax.fori_loop(0, self.consts.NUM_ENEMIES, loop_body, (enemy_pos_all, rng))
+            return enemy_pos_all, rng
+
+        enemy_pos_all = jax.random.uniform(
+            rng_pos,
+            shape=(self.consts.NUM_ENEMIES, 2),
+            minval=spawn_min,
+            maxval=spawn_max
         )
 
+        enemy_pos_all, rng = jax.lax.fori_loop(0, max_attempts, attempts_loop, (enemy_pos_all, rng))
+
+        enemy_pos = enemy_pos_all
+
         enemy_alive = jnp.arange(self.consts.NUM_ENEMIES) < num_enemies
+
+
 
         state = BerzerkState(
             player_pos=pos,
@@ -469,8 +598,8 @@ class JaxBerzerk(JaxEnvironment[BerzerkState, BerzerkObservation, BerzerkInfo, B
             animation_counter=jnp.array(0, dtype=jnp.int32),
             enemy_animation_counter=jnp.zeros((self.consts.NUM_ENEMIES,), dtype=jnp.int32),
             death_timer=jnp.array(0, dtype=jnp.int32),
-            room_counter=jnp.array(0, dtype=jnp.int32),
-            entry_direction=jnp.array(3, dtype=jnp.int32),
+            room_counter=room_counter,
+            entry_direction=entry_direction,
             player_is_firing=jnp.array(False),
             room_transition_timer=jnp.array(0, dtype=jnp.int32),
             enemy_clear_bonus_given=jnp.array(False),
@@ -634,71 +763,11 @@ class JaxBerzerk(JaxEnvironment[BerzerkState, BerzerkObservation, BerzerkInfo, B
 
                 return overlap_x & overlap_y
 
-            # 1a. Check wallcollision and exit collision
-            def object_hits_wall(object_pos, object_size, num_points_per_side=10):
-                # Aktuelle Raum-ID (0–3 → mid_walls_1 bis _4)
-                room_idx = JaxBerzerk.get_room_index(state.room_counter)
-
-                # Hole passende Maske (True = Kollision)
-                def load_mask(idx):
-                    return jax.lax.switch(idx, [
-                        lambda: self.renderer.room_collision_masks['mid_walls_1'],
-                        lambda: self.renderer.room_collision_masks['mid_walls_2'],
-                        lambda: self.renderer.room_collision_masks['mid_walls_3'],
-                        lambda: self.renderer.room_collision_masks['mid_walls_4'],
-                    ])
-                
-                # Hole Basismasken
-                mid_mask = load_mask(room_idx)
-                outer_mask = self.renderer.room_collision_masks['level_outer_walls']
-
-                # Hole Türmasken
-                left_mask = self.renderer.room_collision_masks['door_vertical_left']
-                right_mask = self.renderer.room_collision_masks['door_vertical_right']
-                top_mask = self.renderer.room_collision_masks['door_horizontal_up']
-                bottom_mask = self.renderer.room_collision_masks['door_horizontal_down']
-
-                # entry_direction: 0=oben, 1=unten, 2=links, 3=rechts
-                entry = state.entry_direction
-
-                # Dynamisch festlegen, welche Türen "geschlossen" (= blockieren) sind
-                block_left   = (entry == 2) | (entry == 3)
-                block_right  = (entry == 2) | (entry == 3)
-                block_top    = (entry == 1)
-                block_bottom = (entry == 0)
-
-                # Nur diese Türmasken zulassen
-                collision_mask = mid_mask | outer_mask
-                collision_mask = jax.lax.cond(block_left,   lambda: collision_mask | left_mask,   lambda: collision_mask)
-                collision_mask = jax.lax.cond(block_right,  lambda: collision_mask | right_mask,  lambda: collision_mask)
-                collision_mask = jax.lax.cond(block_top,    lambda: collision_mask | top_mask,    lambda: collision_mask)
-                collision_mask = jax.lax.cond(block_bottom, lambda: collision_mask | bottom_mask, lambda: collision_mask)
-
-
-                mask_height, mask_width = collision_mask.shape
-
-                # Check Kollision: alle Eckpunkte
-                def point_hits(px, py):
-                    i = jnp.floor(py).astype(jnp.int32)
-                    j = jnp.floor(px).astype(jnp.int32)
-                    in_bounds = (i >= 0) & (i < mask_height) & (j >= 0) & (j < mask_width)
-                    return jax.lax.select(in_bounds, collision_mask[i, j], False)
-
-                x0, y0 = object_pos
-                w, h = object_size
-                top_edge = [(x0 + dx, y0) for dx in jnp.linspace(0, w, num_points_per_side)]
-                right_edge = [(x0 + w, y0 + dy) for dy in jnp.linspace(0, h, num_points_per_side)]
-                bottom_edge = [(x0 + dx, y0 + h) for dx in jnp.linspace(w, 0, num_points_per_side)]
-                left_edge = [(x0, y0 + dy) for dy in jnp.linspace(h, 0, num_points_per_side)]
-
-                all_edge_points = top_edge + right_edge + bottom_edge + left_edge
-                return jnp.any(jnp.array([point_hits(x, y) for x, y in all_edge_points]))
-
             
             hit_exit = self.check_exit_crossing(new_pos)
             transition_timer = jnp.where(hit_exit, self.consts.DEATH_ANIMATION_FRAMES, state.room_transition_timer)
             entry_direction = jnp.where(hit_exit, self.get_exit_direction(new_pos), state.entry_direction)
-            hit_wall = object_hits_wall((player_x, player_y), self.consts.PLAYER_SIZE) & ~hit_exit
+            hit_wall = self.object_hits_wall((player_x, player_y), self.consts.PLAYER_SIZE, state.room_counter, state.entry_direction) & ~hit_exit
             #jax.debug.print("Exzr: {hit_exit}", hit_exit=hit_exit)
             #jax.debug.print("Room: {new_room_counter}", new_room_counter=new_room_counter)
             # 2. Update position and direction of enemies
@@ -723,7 +792,7 @@ class JaxBerzerk(JaxEnvironment[BerzerkState, BerzerkObservation, BerzerkInfo, B
             updated_enemy_dir = jnp.where(state.enemy_alive, updated_enemy_dir, state.enemy_move_dir)
 
             enemy_hits_wall = jax.vmap(
-                lambda enemy_pos: object_hits_wall(enemy_pos, self.consts.ENEMY_SIZE)
+                lambda enemy_pos: self.object_hits_wall(enemy_pos, self.consts.ENEMY_SIZE, state.room_counter, state.entry_direction)
             )(updated_enemy_pos)
 
             # Enemies shoot
@@ -892,7 +961,7 @@ class JaxBerzerk(JaxEnvironment[BerzerkState, BerzerkObservation, BerzerkInfo, B
             
             bullets += bullet_dirs * self.consts.BULLET_SPEED * bullet_active[:, None]
             # only 1 player bullet
-            bullet_active = bullet_active & (~object_hits_wall(bullets[0], bullet_sizes[0])) & (
+            bullet_active = bullet_active & (~self.object_hits_wall(bullets[0], bullet_sizes[0], state.room_counter, state.entry_direction)) & (
                 (bullets[:, 0] >= self.consts.PLAYER_BOUNDS[0][0]) &
                 (bullets[:, 0] + bullet_sizes[:, 0] <= self.consts.PLAYER_BOUNDS[0][1]) &
                 (bullets[:, 1] >= self.consts.PLAYER_BOUNDS[1][0]) &
@@ -951,7 +1020,7 @@ class JaxBerzerk(JaxEnvironment[BerzerkState, BerzerkObservation, BerzerkInfo, B
             bullet_active = bullet_active & ~player_bullet_hit_enemy_bullet
             enemy_bullet_active = enemy_bullet_active & ~enemy_bullet_hit_enemy & ~enemy_bullet_hit_by_player
             enemy_bullet_hits_wall = jax.vmap(
-                lambda pos, size: object_hits_wall(pos, size)
+                lambda pos, size: self.object_hits_wall(pos, size, state.room_counter, state.entry_direction)
             )(enemy_bullets, enemy_bullet_sizes)
 
             enemy_bullet_active = enemy_bullet_active & (~enemy_bullet_hits_wall)
