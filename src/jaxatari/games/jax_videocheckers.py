@@ -518,10 +518,72 @@ class JaxVideoCheckers(
 
         return new_state
 
-
-    def calculate_best_opponent_move(self, board, movable_pieces, state):
+    def calculate_best_opponent_move(self, movable_pieces: chex.Array, state: VideoCheckersState) -> OpponentMove:
         # TODO
-        pass
+        def per_piece(piece, key):
+            """Return (best_move, best_score) for one piece."""
+            row, col = piece
+            piece_type = state.board[row, col]
+
+            moves = self.get_possible_moves_for_piece(row, col, state)
+            drow, dcol = moves[:, 0], moves[:, 1]
+            is_jump = jnp.all(jnp.abs(moves) == 2, axis=1)
+
+            # “Forward” move for regular pieces, opposite for kings
+            white_piece = piece_type == self.consts.WHITE_PIECE
+            white_king = piece_type == self.consts.WHITE_KING
+            advance = jnp.where(
+                white_piece, drow == -1,
+                jnp.where(white_king, drow == 1, False)
+            )
+
+            # Toward-centre test using squared distance (avoids sqrt)
+            CENTER = 3.5
+            new_row = row + drow
+            new_col = col + dcol
+            old_d2 = (row - CENTER) ** 2 + (col - CENTER) ** 2
+            new_d2 = (new_row - CENTER) ** 2 + (new_col - CENTER) ** 2
+            toward = new_d2 < old_d2
+
+            # Raw scores
+            # Weights
+            CAPTURE_W = 10.0
+            ADVANCE_W = 1.0
+            CENTER_FWD = 0.5
+            CENTER_BWD = -2.0
+            scores = (CAPTURE_W * is_jump.astype(jnp.int8)
+                      + ADVANCE_W * advance.astype(jnp.int8)
+                      + CENTER_FWD * toward.astype(jnp.int8)
+                      + CENTER_BWD * (~toward).astype(jnp.int8))  # penalise if not toward
+
+            # Break ties with tiny random noise
+            key, subkey = jax.random.split(key)
+            scores += 0.01 * jax.random.normal(subkey, scores.shape)
+
+            best_idx = jnp.argmax(scores)
+            return moves[best_idx], scores[best_idx]
+
+        # Supply an independent RNG key per piece
+        piece_keys = jax.random.split(187, movable_pieces.shape[0])
+        best_moves, best_scores = jax.vmap(per_piece)(movable_pieces, piece_keys)
+
+        # Choose the overall best move among all pieces
+        top_piece_idx = jnp.argmax(best_scores)
+        piece_to_move = movable_pieces[top_piece_idx]  # (row, col)
+        move_to_play = best_moves[top_piece_idx]  # (drow, dcol)
+
+        # Apply the move and return the new state
+        piece = state.board[piece_to_move[0], piece_to_move[1]]
+        new_pos = piece_to_move + move_to_play
+        new_piece = jax.lax.cond(
+            new_pos[0] == 7,  # reached opposite end
+            lambda: self.consts.WHITE_KING,
+            lambda: piece
+        )
+
+        new_opponent_move = state.opponent_move._replace(start_pos=piece_to_move, end_pos=new_pos, piece_type=new_piece)
+
+        return new_opponent_move
 
     def step_move_piece_phase(self, state: VideoCheckersState, action: chex.Array) -> VideoCheckersState:
         """
@@ -719,7 +781,7 @@ class JaxVideoCheckers(
                 # get new state
                 new_state = state._replace(board=new_board)
                 captured_piece = state.selected_piece + (
-                            move // 2)  # mid position for jumped piece if jumps are available from new pos
+                        move // 2)  # mid position for jumped piece if jumps are available from new pos
                 new_moves = self.get_possible_moves_for_piece(row=new_state.cursor_pos[0], col=new_state.cursor_pos[1],
                                                               state=new_state)
                 move_distances = jnp.abs(new_moves)  # Shape: (n_moves, 2)
@@ -857,7 +919,7 @@ class JaxVideoCheckers(
                                     old_phase=state.game_phase, new_phase=new_state.game_phase),
             lambda: None)
 
-        new_state=new_state._replace(frame_counter=(new_state.frame_counter + 1) % self.consts.ANIMATION_FRAME_RATE)
+        new_state = new_state._replace(frame_counter=(new_state.frame_counter + 1) % self.consts.ANIMATION_FRAME_RATE)
 
         done = self._get_done(new_state)
         env_reward = self._get_env_reward(state, new_state)
