@@ -27,7 +27,7 @@ class BerzerkConstants(NamedTuple):
     EXTRA_LIFE_AT = 1000
 
     ENEMY_SIZE = (8, 16)
-    NUM_ENEMIES = 5
+    NUM_ENEMIES = 7
     MOVEMENT_PROB = 0.0025  # Value for testing, has to be adjusted
     ENEMY_SPEED = 0.05
     ENEMY_SHOOT_PROB = 0.005
@@ -83,7 +83,7 @@ class BerzerkState(NamedTuple):
     extra_life_counter: chex.Array
     enemy_death_timer: chex.Array
     enemy_death_pos: chex.Array
-    
+    num_enemies: chex.Array
 
 class BerzerkObservation(NamedTuple):
     player: chex.Array
@@ -421,66 +421,65 @@ class JaxBerzerk(JaxEnvironment[BerzerkState, BerzerkObservation, BerzerkInfo, B
 
     @partial(jax.jit, static_argnums=(0,))
     def reset(self, rng: chex.PRNGKey = jax.random.PRNGKey(42)) -> Tuple[BerzerkObservation, BerzerkState]:
+        rng, enemy_rng, spawn_rng = jax.random.split(rng, 3)
+
+        min_enemies = 3
+        max_enemies = self.consts.NUM_ENEMIES
+        num_enemies = jax.random.randint(enemy_rng, (), min_enemies, max_enemies + 1)
+
         pos = jnp.array([
             self.consts.PLAYER_BOUNDS[0][0] + 2,
             self.consts.PLAYER_BOUNDS[1][1] // 2
         ], dtype=jnp.float32)
+
+        # Initialwerte
         lives = jnp.array(2, dtype=jnp.int32)
         bullets = jnp.zeros((self.consts.MAX_BULLETS, 2), dtype=jnp.float32)
         bullet_dirs = jnp.zeros((self.consts.MAX_BULLETS, 2), dtype=jnp.float32)
         active = jnp.zeros((self.consts.MAX_BULLETS,), dtype=bool)
-        enemy_pos = jax.random.uniform( # TODO: Don't let enemies spawn in player
-            jax.random.split(rng)[1], shape=(self.consts.NUM_ENEMIES, 2),
+        
+        enemy_pos = jax.random.uniform(
+            spawn_rng, shape=(self.consts.NUM_ENEMIES, 2),
             minval=jnp.array([self.consts.PLAYER_BOUNDS[0][0], self.consts.PLAYER_BOUNDS[1][0]]),
-            maxval=jnp.array([self.consts.PLAYER_BOUNDS[0][1] - self.consts.ENEMY_SIZE[0], self.consts.PLAYER_BOUNDS[1][1] - self.consts.ENEMY_SIZE[1]])
+            maxval=jnp.array([
+                self.consts.PLAYER_BOUNDS[0][1] - self.consts.ENEMY_SIZE[0],
+                self.consts.PLAYER_BOUNDS[1][1] - self.consts.ENEMY_SIZE[1]
+            ])
         )
-        enemy_move_axis = -jnp.ones((self.consts.NUM_ENEMIES,), dtype=jnp.int32)
-        enemy_move_dir = jnp.zeros((self.consts.NUM_ENEMIES,), dtype=jnp.int32)
-        enemy_alive = jnp.ones((self.consts.NUM_ENEMIES,), dtype=bool)
-        enemy_bullets = jnp.zeros((self.consts.NUM_ENEMIES, 2), dtype=jnp.float32)
-        enemy_bullet_dirs = jnp.zeros((self.consts.NUM_ENEMIES, 2), dtype=jnp.float32)
-        enemy_bullet_active = jnp.zeros((self.consts.NUM_ENEMIES,), dtype=bool)
-        enemy_move_prob = jnp.full((self.consts.NUM_ENEMIES,), self.consts.MOVEMENT_PROB, dtype=jnp.float32)
-        last_dir = jnp.array([0.0, -1.0])  # default = up
-        score = jnp.array(0, dtype=jnp.int32)
-        animation_counter = jnp.array(0, dtype=jnp.int32)
-        enemy_animation_counter = jnp.zeros((self.consts.NUM_ENEMIES,), dtype=jnp.int32)
-        death_timer = jnp.array(0, dtype=jnp.int32)
-        room_counter = jnp.array(0, dtype=jnp.int32)
-        entry_direction= jnp.array(3, dtype=jnp.int32)
-        player_is_firing= jnp.array(False)
-        room_transition_timer= jnp.array(0, dtype=jnp.int32)
-        enemy_clear_bonus_given=jnp.array(False)
-        extra_life_counter = jnp.array(0, dtype=jnp.int32)
-        enemy_death_timer = jnp.zeros((self.consts.NUM_ENEMIES,), dtype=jnp.int32)
-        enemy_death_pos = jnp.full((self.consts.NUM_ENEMIES, 2), -100.0, dtype=jnp.float32)
-        state = BerzerkState(player_pos=pos, 
-                             lives=lives, 
-                             bullets=bullets, bullet_dirs=bullet_dirs, 
-                             bullet_active=active, 
-                             enemy_pos=enemy_pos, 
-                             enemy_move_axis=enemy_move_axis, 
-                             enemy_move_dir=enemy_move_dir, 
-                             enemy_alive=enemy_alive,
-                             enemy_bullets=enemy_bullets,
-                             enemy_bullet_dirs=enemy_bullet_dirs,
-                             enemy_bullet_active=enemy_bullet_active,
-                             enemy_move_prob=enemy_move_prob, 
-                             last_dir=last_dir, 
-                             rng=rng, 
-                             score=score, 
-                             animation_counter=animation_counter,
-                             enemy_animation_counter=enemy_animation_counter,
-                             death_timer=death_timer,
-                             room_counter=room_counter,
-                             entry_direction=entry_direction,
-                             player_is_firing=player_is_firing,
-                             room_transition_timer=room_transition_timer,
-                             enemy_clear_bonus_given=enemy_clear_bonus_given,
-                             extra_life_counter=extra_life_counter,
-                             enemy_death_timer=enemy_death_timer,
-                             enemy_death_pos=enemy_death_pos
-                             )
+
+        enemy_alive = jnp.arange(self.consts.NUM_ENEMIES) < num_enemies
+
+        state = BerzerkState(
+            player_pos=pos,
+            lives=lives,
+            bullets=bullets,
+            bullet_dirs=bullet_dirs,
+            bullet_active=active,
+            enemy_pos=enemy_pos,
+            enemy_move_axis=-jnp.ones((self.consts.NUM_ENEMIES,), dtype=jnp.int32),
+            enemy_move_dir=jnp.zeros((self.consts.NUM_ENEMIES,), dtype=jnp.int32),
+            enemy_alive=enemy_alive,
+            enemy_bullets=jnp.zeros((self.consts.NUM_ENEMIES, 2), dtype=jnp.float32),
+            enemy_bullet_dirs=jnp.zeros((self.consts.NUM_ENEMIES, 2), dtype=jnp.float32),
+            enemy_bullet_active=jnp.zeros((self.consts.NUM_ENEMIES,), dtype=bool),
+            enemy_move_prob=jnp.full((self.consts.NUM_ENEMIES,), self.consts.MOVEMENT_PROB, dtype=jnp.float32),
+            last_dir=jnp.array([0.0, -1.0], dtype=jnp.float32),
+            rng=rng,
+            score=jnp.array(0, dtype=jnp.int32),
+            animation_counter=jnp.array(0, dtype=jnp.int32),
+            enemy_animation_counter=jnp.zeros((self.consts.NUM_ENEMIES,), dtype=jnp.int32),
+            death_timer=jnp.array(0, dtype=jnp.int32),
+            room_counter=jnp.array(0, dtype=jnp.int32),
+            entry_direction=jnp.array(3, dtype=jnp.int32),
+            player_is_firing=jnp.array(False),
+            room_transition_timer=jnp.array(0, dtype=jnp.int32),
+            enemy_clear_bonus_given=jnp.array(False),
+            extra_life_counter=jnp.array(0, dtype=jnp.int32),
+            enemy_death_timer=jnp.zeros((self.consts.NUM_ENEMIES,), dtype=jnp.int32),
+            enemy_death_pos=jnp.full((self.consts.NUM_ENEMIES, 2), -100.0, dtype=jnp.float32),
+            num_enemies=num_enemies  # <- wichtig!
+        )
+
         return self._get_observation(state), state
 
     @partial(jax.jit, static_argnums=0)
@@ -958,7 +957,7 @@ class JaxBerzerk(JaxEnvironment[BerzerkState, BerzerkObservation, BerzerkInfo, B
             enemy_bullet_active = enemy_bullet_active & (~enemy_bullet_hits_wall)
 
             give_bonus = (~jnp.any(enemy_alive)) & (~state.enemy_clear_bonus_given)
-            bonus_score = jnp.where(give_bonus, self.consts.NUM_ENEMIES * 10, 0)
+            bonus_score = jnp.where(give_bonus, state.num_enemies * 10, 0)
 
             score_after = jnp.where(
                 jnp.any(enemy_hit | enemy_hits_wall | enemy_bullet_hit_enemy | hit_by_enemy),
@@ -1015,7 +1014,8 @@ class JaxBerzerk(JaxEnvironment[BerzerkState, BerzerkObservation, BerzerkInfo, B
                 enemy_clear_bonus_given=enemy_clear_bonus_given,
                 extra_life_counter=extra_life_counter_after,
                 enemy_death_timer=enemy_death_timer_next,
-                enemy_death_pos=new_enemy_death_pos
+                enemy_death_pos=new_enemy_death_pos,
+                num_enemies=state.num_enemies
             )
 
             # 10. Observation + Info + Reward/Done
