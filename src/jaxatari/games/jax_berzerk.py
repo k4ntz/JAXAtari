@@ -512,7 +512,7 @@ class JaxBerzerk(JaxEnvironment[BerzerkState, BerzerkObservation, BerzerkInfo, B
                 lives=lives_after,
                 score=score_after,
                 room_counter=room_after,
-                entry_direction=2
+                entry_direction=3
             )
 
             # Wenn Todesanimation noch läuft → einfach weiter
@@ -569,7 +569,7 @@ class JaxBerzerk(JaxEnvironment[BerzerkState, BerzerkObservation, BerzerkInfo, B
             def finished_transition():
                 #TODO: Positions need to be changed to match original.
                 player_spawn_pos = jax.lax.switch(
-                    self.get_exit_direction(new_state.player_pos),
+                    new_state.entry_direction,
                     [
                         lambda _: jnp.array([
                             self.consts.PLAYER_BOUNDS[0][1] // 2,
