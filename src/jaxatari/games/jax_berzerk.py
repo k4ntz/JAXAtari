@@ -4,6 +4,7 @@ from functools import partial
 import jax
 import jax.numpy as jnp
 import chex
+from numpy import logical_or
 from jaxatari.environment import JaxEnvironment, JAXAtariAction as Action
 from gymnax.environments import spaces
 import pygame
@@ -44,6 +45,10 @@ class BerzerkConstants(NamedTuple):
 
     DEATH_ANIMATION_FRAMES = 256
     ENEMY_DEATH_ANIMATION_FRAMES = 16
+    
+    TRANSITION_ANIMATION_FRAMES = 128
+
+    GAME_OVER_FRAMES = 64
 
     SCORE_OFFSET_X = WIDTH - 58 - 6  # window width - distance to the right - digit width 
     SCORE_OFFSET_Y = HEIGHT - 20 - 7  # window height - distance to the bottom - digit height 
@@ -83,7 +88,8 @@ class BerzerkState(NamedTuple):
     extra_life_counter: chex.Array
     enemy_death_timer: chex.Array
     enemy_death_pos: chex.Array
-    
+    game_over_timer: chex.Array
+
 
 class BerzerkObservation(NamedTuple):
     player: chex.Array
@@ -454,6 +460,7 @@ class JaxBerzerk(JaxEnvironment[BerzerkState, BerzerkObservation, BerzerkInfo, B
         extra_life_counter = jnp.array(0, dtype=jnp.int32)
         enemy_death_timer = jnp.zeros((self.consts.NUM_ENEMIES,), dtype=jnp.int32)
         enemy_death_pos = jnp.full((self.consts.NUM_ENEMIES, 2), -100.0, dtype=jnp.float32)
+        game_over_timer = jnp.array(0, dtype=jnp.int32)
         state = BerzerkState(player_pos=pos, 
                              lives=lives, 
                              bullets=bullets, bullet_dirs=bullet_dirs, 
@@ -479,7 +486,8 @@ class JaxBerzerk(JaxEnvironment[BerzerkState, BerzerkObservation, BerzerkInfo, B
                              enemy_clear_bonus_given=enemy_clear_bonus_given,
                              extra_life_counter=extra_life_counter,
                              enemy_death_timer=enemy_death_timer,
-                             enemy_death_pos=enemy_death_pos
+                             enemy_death_pos=enemy_death_pos,
+                             game_over_timer=game_over_timer
                              )
         return self._get_observation(state), state
 
@@ -490,46 +498,75 @@ class JaxBerzerk(JaxEnvironment[BerzerkState, BerzerkObservation, BerzerkInfo, B
         death_timer = jnp.maximum(state.death_timer - 1, 0)
 
         def handle_death(_):
+            # Timer runterzählen
             new_state = state._replace(death_timer=death_timer)
 
-            # Leben und Score nur beim Reset abziehen/ändern
+            # Nur wenn Tod vorbei, Leben verringern
             lives_after = jnp.where(death_timer == 0, state.lives - 1, state.lives)
             score_after = jnp.where(lives_after == -1, 0, state.score)
             room_after = jnp.where(lives_after == -1, 0, state.room_counter + 1)
 
-            reset_state_with_lives_score = self.reset(jax.random.split(state.rng)[1])[1]._replace(
+            # Basis-Update nach Tod
+            base_state = state._replace(
+                death_timer=0,
                 lives=lives_after,
                 score=score_after,
                 room_counter=room_after,
-                extra_life_counter=state.extra_life_counter
+                entry_direction=2
             )
 
-            return jax.lax.cond(
-                death_timer == 0,
-                lambda: (
-                    self._get_observation(reset_state_with_lives_score),
-                    reset_state_with_lives_score,
-                    0.0,
-                    lives_after == -1,
-                    self._get_info(reset_state_with_lives_score),
-                ),
-                lambda: (
+            # Wenn Todesanimation noch läuft → einfach weiter
+            still_dying = death_timer > 0
+            def during_death():
+                return (
                     self._get_observation(new_state),
                     new_state,
                     0.0,
-                    state.lives == -1,
-                    self._get_info(new_state),
-                ),
+                    False,
+                    self._get_info(new_state)
+                )
+
+            # Wenn Tod vorbei → entscheiden: Game Over oder Transition
+            def after_death():
+                base_state_with_timer = jax.lax.cond(
+                    lives_after == -1,
+                    # Game Over
+                    lambda: base_state._replace(game_over_timer=self.consts.GAME_OVER_FRAMES),
+                    # Normale Raum-Transition
+                    lambda: base_state._replace(room_transition_timer=self.consts.TRANSITION_ANIMATION_FRAMES)
+                )
+                return (
+                    self._get_observation(base_state_with_timer),
+                    base_state_with_timer,
+                    0.0,
+                    False,
+                    self._get_info(base_state_with_timer)
+                )
+
+            return jax.lax.cond(still_dying, during_death, after_death)
+
+
+        game_over_active = state.game_over_timer > 0
+        game_over_timer = jnp.maximum(state.game_over_timer - 1, 0)
+
+        def handle_game_over(_):
+            new_state = state._replace(game_over_timer=game_over_timer)
+            return (
+                self._get_observation(new_state),
+                new_state,
+                0.0,
+                game_over_timer == 0,
+                self._get_info(new_state),
             )
+
 
         room_transition_active = state.room_transition_timer > 0
         transition_timer = jnp.maximum(state.room_transition_timer - 1, 0)
 
         def handle_room_transition(_):
             new_state = state._replace(room_transition_timer=transition_timer)
-
+            #jax.debug.print("{gi}",gi=new_state.room_transition_timer)
             def finished_transition():
-                #TODO: Positions need to be changed to match original.
                 #TODO: Positions need to be changed to match original.
                 player_spawn_pos = jax.lax.switch(
                     self.get_exit_direction(new_state.player_pos),
@@ -697,7 +734,7 @@ class JaxBerzerk(JaxEnvironment[BerzerkState, BerzerkObservation, BerzerkInfo, B
 
             
             hit_exit = self.check_exit_crossing(new_pos)
-            transition_timer = jnp.where(hit_exit, self.consts.DEATH_ANIMATION_FRAMES, state.room_transition_timer)
+            transition_timer = jnp.where(hit_exit, self.consts.TRANSITION_ANIMATION_FRAMES, state.room_transition_timer)
             entry_direction = jnp.where(hit_exit, self.get_exit_direction(new_pos), state.entry_direction)
             hit_wall = object_hits_wall((player_x, player_y), self.consts.PLAYER_SIZE) & ~hit_exit
             #jax.debug.print("Exzr: {hit_exit}", hit_exit=hit_exit)
@@ -1015,7 +1052,8 @@ class JaxBerzerk(JaxEnvironment[BerzerkState, BerzerkObservation, BerzerkInfo, B
                 enemy_clear_bonus_given=enemy_clear_bonus_given,
                 extra_life_counter=extra_life_counter_after,
                 enemy_death_timer=enemy_death_timer_next,
-                enemy_death_pos=new_enemy_death_pos
+                enemy_death_pos=new_enemy_death_pos,
+                game_over_timer=game_over_timer
             )
 
             # 10. Observation + Info + Reward/Done
@@ -1025,18 +1063,24 @@ class JaxBerzerk(JaxEnvironment[BerzerkState, BerzerkObservation, BerzerkInfo, B
             done = jnp.equal(state.lives, -1) 
 
             return observation, new_state, reward, done, info
-    
+        
         return jax.lax.cond(
-            is_dead,
-            handle_death,
+            game_over_active,
+            handle_game_over,
             lambda _: jax.lax.cond(
-                room_transition_active,
-                handle_room_transition,
-                handle_normal,
+                is_dead,
+                handle_death,
+                lambda _: jax.lax.cond(
+                    room_transition_active,
+                    handle_room_transition,
+                    handle_normal,
+                    operand=None
+                ),
                 operand=None
             ),
             operand=None
         )
+
 
 
     def action_space(self) -> spaces.Discrete:
@@ -1157,7 +1201,7 @@ class BerzerkRenderer(JAXGameRenderer):
     def render(self, state):
         death_anim = state.death_timer > 0
         room_transition_anim = state.room_transition_timer > 0
-        current_screen_anim = jnp.logical_or(death_anim, room_transition_anim)
+        game_over_anim = state.game_over_timer > 0
         raster = jnp.zeros((self.consts.HEIGHT, self.consts.WIDTH, 3), dtype=jnp.uint8)
 
         # Draw walls (assuming fixed positions based on bounds)
@@ -1203,18 +1247,18 @@ class BerzerkRenderer(JAXGameRenderer):
                 return jr.render_at(r, 0, 0, wall_vr)
 
             # Falls von links oder rechts → blockiere beide
-            cond_lr = jnp.logical_and(state.entry_direction == 2, current_screen_anim == 0)
+            cond_lr = jnp.logical_and(state.entry_direction == 2, room_transition_anim == 0)
             raster = jax.lax.cond(cond_lr, lambda r: block_left(block_right(r)), lambda r: r, raster)
 
-            cond_ll = jnp.logical_and(state.entry_direction == 3, current_screen_anim == 0)
+            cond_ll = jnp.logical_and(state.entry_direction == 3, room_transition_anim == 0)
             raster = jax.lax.cond(cond_ll, lambda r: block_left(block_right(r)), lambda r: r, raster)
 
             # Falls von oben → blockiere unten
-            cond_top = jnp.logical_and(state.entry_direction == 0, current_screen_anim == 0)
+            cond_top = jnp.logical_and(state.entry_direction == 0, room_transition_anim == 0)
             raster = jax.lax.cond(cond_top, block_bottom, lambda r: r, raster)
 
             # Falls von unten → blockiere oben
-            cond_bottom = jnp.logical_and(state.entry_direction == 1, current_screen_anim == 0)
+            cond_bottom = jnp.logical_and(state.entry_direction == 1, room_transition_anim == 0)
             raster = jax.lax.cond(cond_bottom, block_top, lambda r: r, raster)
 
 
@@ -1228,9 +1272,7 @@ class BerzerkRenderer(JAXGameRenderer):
             line_height = 1
             line_length = 6
 
-            # Aktiv, wenn Übergang/Tod gerade NICHT passiert
-            current_screen_anim = (state.death_timer > 0) | (state.room_transition_timer > 0)
-            draw_lines = ~current_screen_anim  # Nur zeichnen, wenn keine Animation
+            draw_lines = ~room_transition_anim  # Nur zeichnen, wenn keine Animation
 
             def draw_line(raster, enemy_y):
                 y = jnp.clip(enemy_y.astype(jnp.int32) - 1, 0, raster.shape[0] - line_height)
@@ -1279,7 +1321,7 @@ class BerzerkRenderer(JAXGameRenderer):
                     raster
                 )
 
-            cond = jnp.logical_and(is_active, jnp.logical_not(current_screen_anim))
+            cond = jnp.logical_and(is_active, jnp.logical_not(room_transition_anim))
             raster = jax.lax.cond(cond, draw_bullet, lambda r: r, raster)
 
 
@@ -1294,7 +1336,7 @@ class BerzerkRenderer(JAXGameRenderer):
             dir = state.last_dir
 
             return jax.lax.cond(
-                state.death_timer > 0,
+                death_anim,
                 death_animation,
                 lambda: jax.lax.cond(
                     state.player_is_firing,
@@ -1358,9 +1400,9 @@ class BerzerkRenderer(JAXGameRenderer):
             lambda: player_frame_right
         )
         raster = jax.lax.cond(
-            jnp.logical_not(current_screen_anim),
-            lambda r: jr.render_at(r, state.player_pos[0], state.player_pos[1], player_frame),
+            room_transition_anim,
             lambda r: r,
+            lambda r: jr.render_at(r, state.player_pos[0], state.player_pos[1], player_frame),
             raster
         )
 
@@ -1475,9 +1517,9 @@ class BerzerkRenderer(JAXGameRenderer):
 
             #TODO: Death Sprites arent centered yet
             raster = jax.lax.cond(
-                jnp.logical_not(current_screen_anim),
-                lambda r: jr.render_at(r, pos[0], pos[1], frame),
+                room_transition_anim,
                 lambda r: r,
+                lambda r: jr.render_at(r, pos[0], pos[1], frame),
                 raster
             )
 
@@ -1507,7 +1549,7 @@ class BerzerkRenderer(JAXGameRenderer):
 
                 return jax.lax.cond(dx != 0, draw_horizontal, draw_vertical, raster)
 
-            cond = jnp.logical_and(is_active, jnp.logical_not(current_screen_anim))
+            cond = jnp.logical_and(is_active, jnp.logical_not(room_transition_anim))
             raster = jax.lax.cond(cond, draw_enemy_bullet, lambda r: r, raster)
 
 
@@ -1568,7 +1610,7 @@ class BerzerkRenderer(JAXGameRenderer):
             return jax.lax.cond(state.score == 0, skip_render, draw_score)
 
         raster = jax.lax.cond(
-            jnp.logical_not(current_screen_anim),
+            jnp.logical_not(room_transition_anim),
             render_scores,
             lambda r: r,
             raster
@@ -1586,21 +1628,21 @@ class BerzerkRenderer(JAXGameRenderer):
 
         raster = jax.lax.cond(state.score == 0, render_title, lambda r: r, raster)
 
-        # Death screen effect: black bars from top to bottom
         def apply_bar_overlay(raster, progress: jnp.ndarray, mode_idx: int):
-            height, width = raster.shape[0], raster.shape[1]
-            covered_rows = jnp.floor(progress * height).astype(jnp.int32)
-            rows = jnp.arange(height)
+            total_height, width = raster.shape[0], raster.shape[1]
+            playfield_height = total_height - self.consts.WALL_OFFSET[3]  # ignoring margin at top
+            covered_rows = jnp.floor(progress * playfield_height).astype(jnp.int32)
+            rows = jnp.arange(total_height)
 
             def top_down_mask():
                 return rows[:, None] < covered_rows
 
             def bottom_up_mask():
-                return rows[:, None] >= (height - covered_rows)
+                return rows[:, None] >= (playfield_height - covered_rows)
 
             def center_inward_mask():
                 top = rows[:, None] < (covered_rows // 2)
-                bottom = rows[:, None] >= (height - covered_rows // 2)
+                bottom = rows[:, None] >= (playfield_height - covered_rows // 2)
                 return top | bottom
 
             mask = jax.lax.switch(
@@ -1613,26 +1655,20 @@ class BerzerkRenderer(JAXGameRenderer):
 
 
         # Fortschritt berechnen
-        progress_death = 1.0 - (state.death_timer.astype(jnp.float32) / self.consts.DEATH_ANIMATION_FRAMES)
-        progress_transition = 1.0 - (state.room_transition_timer.astype(jnp.float32) / self.consts.DEATH_ANIMATION_FRAMES)
-        #jax.debug.print("hgi {test}", test=state.entry_direction)
+        progress_transition = 1.0 - (state.room_transition_timer.astype(jnp.float32) / self.consts.TRANSITION_ANIMATION_FRAMES)
+        #jax.debug.print("hgi {test}", test=progress_transition)
         raster = jax.lax.cond(
-            death_anim,
-            lambda r: apply_bar_overlay(r, progress_death, 2),  # Tod → center-inward
-            lambda r: jax.lax.cond(
-                room_transition_anim,
-                lambda r: jax.lax.switch(
-                state.entry_direction,
-                [
-                    lambda: apply_bar_overlay(raster, progress_transition, 0),  # oben
-                    lambda: apply_bar_overlay(raster, progress_transition, 1),  # unten
-                    lambda: apply_bar_overlay(raster, progress_transition, 2),  # rechts
-                    lambda: apply_bar_overlay(raster, progress_transition, 2),  # links
-                ]
-                ),
-                lambda r: r,
-                raster
+            room_transition_anim,
+            lambda r: jax.lax.switch(
+            state.entry_direction,
+            [
+                lambda: apply_bar_overlay(raster, progress_transition, 0),  # oben
+                lambda: apply_bar_overlay(raster, progress_transition, 1),  # unten
+                lambda: apply_bar_overlay(raster, progress_transition, 2),  # rechts
+                lambda: apply_bar_overlay(raster, progress_transition, 2),  # links
+            ]
             ),
+            lambda r: r,
             raster
         )
 
@@ -1663,10 +1699,17 @@ class BerzerkRenderer(JAXGameRenderer):
 
 
         raster = jax.lax.cond(
-            current_screen_anim,
+            room_transition_anim,
             render_lives,
             lambda r: r,
             raster
+        )
+
+        raster = jax.lax.cond(
+            game_over_anim,
+            lambda _: jnp.zeros_like(raster),  # Schwarzer Bildschirm
+            lambda _: raster,
+            operand=None
         )
 
         return raster
