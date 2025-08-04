@@ -960,8 +960,29 @@ class JaxBerzerk(JaxEnvironment[BerzerkState, BerzerkObservation, BerzerkInfo, B
                 )(bullets, bullet_sizes)
             )(updated_enemy_pos)
 
+            # Gegner-Gegner-Kollision
+            enemy_touch_hits = jax.vmap(
+                lambda pos_a, alive_a: jax.vmap(
+                    lambda pos_b, alive_b: (
+                        object_hits_enemy(pos_a, self.consts.ENEMY_SIZE, pos_b) &  # Kollision
+                        ~jnp.all(pos_a == pos_b) &                                 # nicht derselbe Gegner
+                        alive_a & alive_b                                          # beide lebendig
+                    )
+                )(updated_enemy_pos, state.enemy_alive)
+            )(updated_enemy_pos, state.enemy_alive)
+
+            # Reduziere zu einer "wird berührt"-Maske pro Gegner
+            enemy_hit_enemy = jnp.any(enemy_touch_hits, axis=1)
+
             enemy_hit = jnp.any(all_hits, axis=1)
-            enemy_alive = state.enemy_alive & ~enemy_hit & ~enemy_hits_wall & ~enemy_hit_by_friendly_fire
+            enemy_alive = (
+                state.enemy_alive
+                & ~enemy_hit
+                & ~enemy_hits_wall
+                & ~enemy_hit_by_friendly_fire
+                & ~enemy_hit_enemy
+            )
+
 
             # Neue Todes-Timer setzen, wenn Gegner gerade getroffen wurden
             enemy_dies = enemy_hit | enemy_hits_wall | enemy_hit_by_friendly_fire
@@ -971,7 +992,6 @@ class JaxBerzerk(JaxEnvironment[BerzerkState, BerzerkObservation, BerzerkInfo, B
 
             # Timer herunterzählen
             enemy_death_timer_next = jnp.maximum(new_enemy_death_timer - 1, 0)
-
 
             bullet_vs_bullet_hits = jax.vmap(
                 lambda b_pos, b_size, b_active: jax.vmap(
