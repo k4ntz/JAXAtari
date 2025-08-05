@@ -1,5 +1,5 @@
 # next TODO's (game features): jumping, chicken mode, Level 2
-# TODO update observation, freeze for about 250 frames, vmap more, random blinking, update spaces, possibly make generating/changing the maze easier?
+# TODO update observation, freeze for about 250 frames, vmap more, random blinking, update spaces, possibly make generating/changing the maze easier?, update info
 
 from functools import partial
 import os
@@ -234,6 +234,7 @@ class AmidarConstants(NamedTuple):
     HEIGHT: int = 210
     RANDOM_KEY_SEED: int = 0
     INITIAL_LIVES: int = 3
+    FREEZE_DURATION: int = 256  # Duration for which the game is frozen in the beginning and after being hit by an enemy
 
     # Rendering
     PATH_COLOR = jnp.array([162, 98, 33, 255], dtype=jnp.uint8)  # Brown color for the path
@@ -312,6 +313,7 @@ class AmidarConstants(NamedTuple):
 # immutable state container
 class AmidarState(NamedTuple):
     random_key: chex.Array  # Random key for JAX operations
+    freeze_counter: chex.Array  # Counter for freezing the game
     score: chex.Array
     lives: chex.Array
     player_x: chex.Array
@@ -575,6 +577,7 @@ class JaxAmidar(JaxEnvironment[AmidarState, AmidarObservation, AmidarInfo, Amida
         """
         state = AmidarState(
             random_key=jax.random.key(self.constants.RANDOM_KEY_SEED),
+            freeze_counter=jnp.array(self.constants.FREEZE_DURATION).astype(jnp.int32),  # Freeze counter for the initial freeze
             score=jnp.array(0).astype(jnp.int32),  # Initial score
             lives=jnp.array(self.constants.INITIAL_LIVES).astype(jnp.int32),  # Initial lives
             player_x=jnp.array(self.constants.INITIAL_PLAYER_POSITION[0]).astype(jnp.int32),
@@ -614,63 +617,78 @@ class JaxAmidar(JaxEnvironment[AmidarState, AmidarObservation, AmidarInfo, Amida
 
     @partial(jax.jit, static_argnums=(0,))
     def step(self, state: AmidarState, action: chex.Array) -> Tuple[AmidarObservation, AmidarState, float, bool, AmidarInfo]:
-        random_key, random_enemies_key = jax.random.split(state.random_key)
+            
+        def take_step():
+            random_key, random_enemies_key = jax.random.split(state.random_key)
 
-        player_state = player_step(self.constants, state, action)
-        (points_scored_player_step, player_x, player_y, player_direction, last_walked_corner, walked_on_paths, completed_rectangles) = player_state
+            player_state = player_step(self.constants, state, action)
+            (points_scored_player_step, player_x, player_y, player_direction, last_walked_corner, walked_on_paths, completed_rectangles) = player_state
 
-        enemies_state = enemies_step(self.constants, state, random_enemies_key)
-        (enemy_positions, enemy_directions) = enemies_state
+            enemies_state = enemies_step(self.constants, state, random_enemies_key)
+            (enemy_positions, enemy_directions) = enemies_state
 
-        enemy_types = state.enemy_types  # For now, keep the enemy types the same, TODO later add jump and chicken activation/deactivation
-        # TODO add next level handling
+            enemy_types = state.enemy_types  # For now, keep the enemy types the same, TODO later add jump and chicken activation/deactivation
+            # TODO add next level handling
 
-        # Check for collisions with enemies
-        collisions = check_for_collisions(self.constants, player_x, player_y, enemy_positions, enemy_types)
-        # jax.debug.print("Collisions: {collisions}", collisions=collisions)
-        (enemy_types, points_scored_enemy_collision, lost_live) = jax.lax.cond(
-            jnp.any(collisions),
-            lambda: handle_collisions(enemy_types, collisions),
-            lambda: (enemy_types, 0, False)
-        )
+            # Check for collisions with enemies
+            collisions = check_for_collisions(self.constants, player_x, player_y, enemy_positions, enemy_types)
+            # jax.debug.print("Collisions: {collisions}", collisions=collisions)
+            (enemy_types, points_scored_enemy_collision, lost_live) = jax.lax.cond(
+                jnp.any(collisions),
+                lambda: handle_collisions(enemy_types, collisions),
+                lambda: (enemy_types, 0, False)
+            )
 
-        # TODO start freeze again
-        # Reset positions if a life is lost 
-        enemy_positions, enemy_directions, player_x, player_y, player_direction, lives = jax.lax.cond(lost_live,
-            lambda: (self.constants.INITIAL_ENEMY_POSITIONS, self.constants.INITIAL_ENEMY_DIRECTIONS, self.constants.INITIAL_PLAYER_POSITION[0], self.constants.INITIAL_PLAYER_POSITION[1], self.constants.INITIAL_PLAYER_DIRECTION, state.lives-1),  # Reset enemy & player positions and directions, decrement lives
-            lambda: (enemy_positions, enemy_directions, player_x, player_y, player_direction, state.lives))  # Keep the current enemy positions and directions
+            # Reset positions if a life is lost 
+            enemy_positions, enemy_directions, player_x, player_y, player_direction, lives, freeze_counter = jax.lax.cond(lost_live,
+                lambda: (self.constants.INITIAL_ENEMY_POSITIONS, self.constants.INITIAL_ENEMY_DIRECTIONS, self.constants.INITIAL_PLAYER_POSITION[0], self.constants.INITIAL_PLAYER_POSITION[1], self.constants.INITIAL_PLAYER_DIRECTION, state.lives-1, self.constants.FREEZE_DURATION),  # Reset enemy & player positions and directions, decrement lives
+                lambda: (enemy_positions, enemy_directions, player_x, player_y, player_direction, state.lives, state.freeze_counter))  # Keep the current enemy positions and directions
 
-        # TODO where do i change the enemy type? (jump, jump time up, collision with chicken, chicken time up, chicken activated, next level)
+            # TODO where do i change the enemy type? (jump, jump time up, collision with chicken, chicken time up, chicken activated, next level)
 
-        # Check for game over condition
-        # If lives are less than 0, the game is over
-        done, lives = jax.lax.cond(
-            lives < 0,
-            lambda: (True, 0),
-            lambda: (False, lives)
-        )
+            # Check for game over condition
+            # If lives are less than 0, the game is over
+            done, lives = jax.lax.cond(
+                lives < 0,
+                lambda: (True, 0),
+                lambda: (False, lives)
+            )
 
-        new_state = AmidarState(
-            random_key=random_key,
-            score=state.score + points_scored_player_step + points_scored_enemy_collision, # Could change in multiple functions, so it is not calculated in the function based on the previous state
-            lives=lives,
-            player_x=player_x,
-            player_y=player_y,
-            player_direction=player_direction,
-            last_walked_corner=last_walked_corner,
-            walked_on_paths=walked_on_paths,
-            completed_rectangles=completed_rectangles,
-            enemy_positions=enemy_positions,
-            enemy_directions=enemy_directions,
-            enemy_types=enemy_types,
-        )
-        env_reward = 0.0
-        info = AmidarInfo(
-            time=jnp.array(0),
-            all_rewards=jnp.array(0.0),
-        )
+            new_state = AmidarState(
+                random_key=random_key,
+                freeze_counter=freeze_counter,
+                score=state.score + points_scored_player_step + points_scored_enemy_collision, # Could change in multiple functions, so it is not calculated in the function based on the previous state
+                lives=lives,
+                player_x=player_x,
+                player_y=player_y,
+                player_direction=player_direction,
+                last_walked_corner=last_walked_corner,
+                walked_on_paths=walked_on_paths,
+                completed_rectangles=completed_rectangles,
+                enemy_positions=enemy_positions,
+                enemy_directions=enemy_directions,
+                enemy_types=enemy_types,
+            )
+            env_reward = 0.0
+            info = AmidarInfo(
+                time=jnp.array(0),
+                all_rewards=jnp.array(0.0),
+            )
+            
+            observation = self._get_observation(new_state)
+            return observation, new_state, env_reward, done, info
         
-        observation = self._get_observation(new_state)
+        # If the game is frozen, just return the current state
+        def freeze_game():
+            # Decrement the freeze counter
+            new_freeze_counter = state.freeze_counter - 1
+            new_state = state._replace(freeze_counter=new_freeze_counter)
+            return self._get_observation(new_state), new_state, 0.0, False, AmidarInfo(time=jnp.array(0), all_rewards=jnp.array(0.0))
+        
+        # Check if the game is frozen
+        is_frozen = state.freeze_counter > 0
+        # jax.debug.print("Freeze counter: {freeze_counter}", freeze_counter=state.freeze_counter)
+        observation, new_state, env_reward, done, info = jax.lax.cond(is_frozen, freeze_game, take_step)
         return observation, new_state, env_reward, done, info
 
     @partial(jax.jit, static_argnums=(0,))
