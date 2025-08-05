@@ -130,6 +130,62 @@ class VideoCheckersInfo(NamedTuple):
     all_rewards: chex.Array
 
 
+class BoardHandler:
+    """Handles modifications to the board."""
+
+    @staticmethod
+    def reset_board():
+        # Initialize the board with pieces, this is a placeholder
+        board = jnp.zeros((VideoCheckersConstants.NUM_FIELDS_X,
+                           VideoCheckersConstants.NUM_FIELDS_Y), dtype=jnp.int32)
+        # Set up the initial pieces on the board
+
+        # Create arrays of positions
+        white_rows = jnp.array([0, 0, 0, 0, 1, 1, 1, 1, 2, 2, 2, 2])
+        white_cols = jnp.array([1, 3, 5, 7, 0, 2, 4, 6, 1, 3, 5, 7])
+
+        black_rows = jnp.array([5, 5, 5, 5, 6, 6, 6, 6, 7, 7, 7, 7])
+        black_cols = jnp.array([0, 2, 4, 6, 1, 3, 5, 7, 0, 2, 4, 6])
+
+        # Set pieces using array indexing
+        board = board.at[white_rows, white_cols].set(VideoCheckersConstants.WHITE_PIECE)
+        board = board.at[black_rows, black_cols].set(VideoCheckersConstants.BLACK_PIECE)
+
+        return board
+
+    @staticmethod
+    def move_piece(row, col, drow, dcol, board):
+        # 1. move & upgrade piece
+        piece = board[row, col]
+        new_row = row + drow
+        new_col = col + dcol
+
+        upgrade_white = piece == VideoCheckersConstants.WHITE_PIECE & (new_row == 7)
+        upgrade_black = piece == VideoCheckersConstants.BLACK_PIECE & (new_row == 0)
+        new_piece = jax.lax.cond(
+            upgrade_white,
+            lambda: VideoCheckersConstants.WHITE_KING,
+            lambda: jax.lax.cond(
+                upgrade_black,
+                lambda: VideoCheckersConstants.BLACK_KING,
+                lambda: piece)
+        )
+
+        new_board = (board
+                     .at[(row, col)].set(VideoCheckersConstants.EMPTY_TILE)
+                     .at[(new_row, new_col)].set(new_piece))
+
+        # 2. handle capture
+        captured_row = row + drow // 2
+        captured_col = col + dcol // 2
+        new_board = new_board.at[(captured_row, captured_col)].set(VideoCheckersConstants.EMPTY_TILE)
+
+        return new_board
+
+
+
+
+
 class JaxVideoCheckers(
     JaxEnvironment[VideoCheckersState, VideoCheckersObservation, VideoCheckersInfo, VideoCheckersConstants]):
     def __init__(self, consts: VideoCheckersConstants = None, reward_funcs: list[callable] = None):
