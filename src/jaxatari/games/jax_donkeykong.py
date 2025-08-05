@@ -823,38 +823,38 @@ def load_sprites():
     MODULE_DIR = os.path.dirname(os.path.abspath(__file__))
 
     # Load sprites
-    bg_level_1 = aj.loadFrame(os.path.join(MODULE_DIR, "sprites/donkeyKong/donkeyKong_background_level_1.npy"), transpose=True)
-    bg_level_2 = aj.loadFrame(os.path.join(MODULE_DIR, "sprites/donkeyKong/donkeyKong_background_level_2.npy"), transpose=True)
+    bg_level_1 = aj.loadFrame(os.path.join(MODULE_DIR, "sprites/donkeyKong/donkeyKong_background_level_1.npy"), transpose=False)
+    bg_level_2 = aj.loadFrame(os.path.join(MODULE_DIR, "sprites/donkeyKong/donkeyKong_background_level_2.npy"), transpose=False)
 
-    donkeyKong_pose_1 = aj.loadFrame(os.path.join(MODULE_DIR, "sprites/donkeyKong/donkeyKong1.npy"), transpose=True)
-    donkeyKong_pose_2 = aj.loadFrame(os.path.join(MODULE_DIR, "sprites/donkeyKong/donkeyKong2.npy"), transpose=True)
+    donkeyKong_pose_1 = aj.loadFrame(os.path.join(MODULE_DIR, "sprites/donkeyKong/donkeyKong1.npy"), transpose=False)
+    donkeyKong_pose_2 = aj.loadFrame(os.path.join(MODULE_DIR, "sprites/donkeyKong/donkeyKong2.npy"), transpose=False)
 
-    girlfriend = aj.loadFrame(os.path.join(MODULE_DIR, "sprites/donkeyKong/girlfriend.npy"), transpose=True)
+    girlfriend = aj.loadFrame(os.path.join(MODULE_DIR, "sprites/donkeyKong/girlfriend.npy"), transpose=False)
 
-    level_1_life_bar = aj.loadFrame(os.path.join(MODULE_DIR, "sprites/donkeyKong/level_1_life_bar.npy"), transpose=True)
-    level_2_life_bar = aj.loadFrame(os.path.join(MODULE_DIR, "sprites/donkeyKong/level_2_life_bar.npy"), transpose=True)
+    level_1_life_bar = aj.loadFrame(os.path.join(MODULE_DIR, "sprites/donkeyKong/level_1_life_bar.npy"), transpose=False)
+    level_2_life_bar = aj.loadFrame(os.path.join(MODULE_DIR, "sprites/donkeyKong/level_2_life_bar.npy"), transpose=False)
 
-    mario_standing_right = aj.loadFrame(os.path.join(MODULE_DIR, "sprites/donkeyKong/mario_standing_right.npy"), transpose=True)
-    mario_standing_left = aj.loadFrame(os.path.join(MODULE_DIR, "sprites/donkeyKong/mario_standing_left.npy"), transpose=True)
-    mario_jumping_right = aj.loadFrame(os.path.join(MODULE_DIR, "sprites/donkeyKong/mario_jumping_right.npy"), transpose=True)
-    mario_jumping_left = aj.loadFrame(os.path.join(MODULE_DIR, "sprites/donkeyKong/mario_jumping_left.npy"), transpose=True)
-    mario_walking_1_right = aj.loadFrame(os.path.join(MODULE_DIR, "sprites/donkeyKong/mario_walking_1_right.npy"), transpose=True)
-    mario_walking_1_left = aj.loadFrame(os.path.join(MODULE_DIR, "sprites/donkeyKong/mario_walking_1_left.npy"), transpose=True)
-    mario_walking_2_right = aj.loadFrame(os.path.join(MODULE_DIR, "sprites/donkeyKong/mario_walking_2_right.npy"), transpose=True)
-    mario_walking_2_left = aj.loadFrame(os.path.join(MODULE_DIR, "sprites/donkeyKong/mario_walking_2_left.npy"), transpose=True)
-    mario_climbing_right = aj.loadFrame(os.path.join(MODULE_DIR, "sprites/donkeyKong/mario_climbing_right.npy"), transpose=True)
-    mario_climbing_left = aj.loadFrame(os.path.join(MODULE_DIR, "sprites/donkeyKong/mario_climbing_left.npy"), transpose=True)
+    mario_standing_right = aj.loadFrame(os.path.join(MODULE_DIR, "sprites/donkeyKong/mario_standing_right.npy"), transpose=False)
+    mario_standing_left = aj.loadFrame(os.path.join(MODULE_DIR, "sprites/donkeyKong/mario_standing_left.npy"), transpose=False)
+    mario_jumping_right = aj.loadFrame(os.path.join(MODULE_DIR, "sprites/donkeyKong/mario_jumping_right.npy"), transpose=False)
+    mario_jumping_left = aj.loadFrame(os.path.join(MODULE_DIR, "sprites/donkeyKong/mario_jumping_left.npy"), transpose=False)
+    mario_walking_1_right = aj.loadFrame(os.path.join(MODULE_DIR, "sprites/donkeyKong/mario_walking_1_right.npy"), transpose=False)
+    mario_walking_1_left = aj.loadFrame(os.path.join(MODULE_DIR, "sprites/donkeyKong/mario_walking_1_left.npy"), transpose=False)
+    mario_walking_2_right = aj.loadFrame(os.path.join(MODULE_DIR, "sprites/donkeyKong/mario_walking_2_right.npy"), transpose=False)
+    mario_walking_2_left = aj.loadFrame(os.path.join(MODULE_DIR, "sprites/donkeyKong/mario_walking_2_left.npy"), transpose=False)
+    mario_climbing_right = aj.loadFrame(os.path.join(MODULE_DIR, "sprites/donkeyKong/mario_climbing_right.npy"), transpose=False)
+    mario_climbing_left = aj.loadFrame(os.path.join(MODULE_DIR, "sprites/donkeyKong/mario_climbing_left.npy"), transpose=False)
 
-    hammer_up_level_1 = aj.loadFrame(os.path.join(MODULE_DIR, "sprites/donkeyKong/hammer_up_level_1.npy"), transpose=True)
-    hammer_up_level_2 = aj.loadFrame(os.path.join(MODULE_DIR, "sprites/donkeyKong/hammer_up_level_2.npy"), transpose=True)
-    hammer_down_right_level_1 = aj.loadFrame(os.path.join(MODULE_DIR, "sprites/donkeyKong/hammer_down_right_level_1.npy"), transpose=True)
-    hammer_down_left_level_1 = aj.loadFrame(os.path.join(MODULE_DIR, "sprites/donkeyKong/hammer_down_left_level_1.npy"), transpose=True)
-    hammer_down_right_level_2 = aj.loadFrame(os.path.join(MODULE_DIR, "sprites/donkeyKong/hammer_down_right_level_2.npy"), transpose=True)
-    hammer_down_left_level_2 = aj.loadFrame(os.path.join(MODULE_DIR, "sprites/donkeyKong/hammer_down_left_level_2.npy"), transpose=True)
+    hammer_up_level_1 = aj.loadFrame(os.path.join(MODULE_DIR, "sprites/donkeyKong/hammer_up_level_1.npy"), transpose=False)
+    hammer_up_level_2 = aj.loadFrame(os.path.join(MODULE_DIR, "sprites/donkeyKong/hammer_up_level_2.npy"), transpose=False)
+    hammer_down_right_level_1 = aj.loadFrame(os.path.join(MODULE_DIR, "sprites/donkeyKong/hammer_down_right_level_1.npy"), transpose=False)
+    hammer_down_left_level_1 = aj.loadFrame(os.path.join(MODULE_DIR, "sprites/donkeyKong/hammer_down_left_level_1.npy"), transpose=False)
+    hammer_down_right_level_2 = aj.loadFrame(os.path.join(MODULE_DIR, "sprites/donkeyKong/hammer_down_right_level_2.npy"), transpose=False)
+    hammer_down_left_level_2 = aj.loadFrame(os.path.join(MODULE_DIR, "sprites/donkeyKong/hammer_down_left_level_2.npy"), transpose=False)
 
-    fire = aj.loadFrame(os.path.join(MODULE_DIR, "sprites/donkeyKong/fire.npy"), transpose=True)
+    fire = aj.loadFrame(os.path.join(MODULE_DIR, "sprites/donkeyKong/fire.npy"), transpose=False)
 
-    drop_pit = aj.loadFrame(os.path.join(MODULE_DIR, "sprites/donkeyKong/drop_pit.npy"), transpose=True)
+    drop_pit = aj.loadFrame(os.path.join(MODULE_DIR, "sprites/donkeyKong/drop_pit.npy"), transpose=False)
 
     # Convert all sprites to the expected format (add frame dimension)
     SPRITES_BG = jnp.stack([bg_level_1, bg_level_2], axis=0)
@@ -974,7 +974,7 @@ class DonkeyKongRenderer(JAXGameRenderer):
             raster = aj.render_at(raster, DP_RIGHT_X, DP_FLOOR_5_Y, frame_drop_pit)
             return raster            
 
-        raster = jnp.zeros((WIDTH, HEIGHT, 3))
+        raster = jnp.zeros((HEIGHT, WIDTH, 3))
 
         # Background raster
         level = state.level
