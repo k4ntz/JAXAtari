@@ -1,3 +1,4 @@
+import functools
 import os
 from functools import partial
 from typing import NamedTuple, Tuple
@@ -81,11 +82,34 @@ class OpponentMove(NamedTuple):
     captured_positions: chex.Array  # Array of positions of captured pieces
 
 
+class OpponentMoveHandler:
+    """
+    Handles modifications to the opponent's move. All methods should be of type OpponentMove, args -> OpponentMove.
+    """
+    @staticmethod
+    def add_captured_position(opponent_move: OpponentMove, position: chex.Array) -> OpponentMove:
+        jax.debug.print("Adding captured position {}".format(position))
+        matches = jnp.all(opponent_move.captured_positions == jnp.array([-1, -1]), axis=1)
+        first_index = jnp.argmax(matches)
+        has_match = jnp.any(matches)
+
+        return jax.lax.cond(
+            has_match,
+            lambda o: o._replace(captured_positions=o.captured_positions.at[first_index].set(position)),
+            lambda o: o,
+            opponent_move
+        )
+
+    @staticmethod
+    def clear_captured_positions(opponent_move: OpponentMove) -> OpponentMove:
+        return opponent_move._replace(captured_positions=jnp.full(opponent_move.captured_positions.shape, -1))
+
+
 class VideoCheckersState(NamedTuple):
     board: chex.Array  # Shape (NUM_FIELDS_Y, NUM_FIELDS_X)
     game_phase: int
     cursor_pos: chex.Array
-    has_jumped: bool  # True if the selected piece has already jumped, so the player cant deselect it.
+    has_jumped: chex.Array  # True if the selected piece has already jumped, so the player cant deselect it.
     additional_jump: bool  # True if in the MOVE_PIECE_PHASE a there has already been a jump, so the player can jump again. This prevents the player from deselecting the piece.
     selected_piece: chex.Array
     frame_counter: chex.Array
@@ -124,8 +148,8 @@ class JaxVideoCheckers(
             Action.DOWNLEFT
         }
 
-    def reset(self, key: jax.random.PRNGKey = jax.random.PRNGKey(0)) -> Tuple[
-        VideoCheckersObservation, VideoCheckersState]:
+    def reset(self, key: jax.random.PRNGKey = jax.random.PRNGKey(0)) \
+            -> Tuple[VideoCheckersObservation, VideoCheckersState]:
         """
         Resets the game state to the initial state.
         Returns the initial state and the reward (i.e. 0)
@@ -173,8 +197,8 @@ class JaxVideoCheckers(
                                    opponent_move=OpponentMove(start_pos=jnp.array([-1, -1]),
                                                               end_pos=jnp.array([-1, -1]),
                                                               piece_type=-1,
-                                                              # captured_positions shoudl be initialized as an Array with 50 times [-1, -1]
-                                                              captured_positions= jnp.full((50,2), -1)
+                                                              captured_positions=jnp.full((12, 2), -1)
+                                                              # total of 12 pieces per side
                                                               ),
                                    rng_key=key,
                                    has_jumped=False)
@@ -342,7 +366,6 @@ class JaxVideoCheckers(
             col: column index of the piece
             drow: movement in y direction
             dcol: movement in x direction
-            state: state of the game, containing current cursor position.
 
         Returns: True, if cursor can be moved in the given direction, False otherwise.
 
@@ -427,10 +450,10 @@ class JaxVideoCheckers(
         Returns: True, if the piece is movable, False otherwise.
         """
         movable_pieces = self.get_movable_pieces(colour, state)
-        jax.debug.print("Movable pieces for colour {colour}: {movable_pieces}", colour=colour,
-                        movable_pieces=movable_pieces)
+        # jax.debug.print("Movable pieces for colour {colour}: {movable_pieces}", colour=colour,
+        #                movable_pieces=movable_pieces)
         is_movable = jnp.any(jnp.all(movable_pieces == position, axis=1))
-        jax.debug.print("Is position {position} movable: {is_movable}", position=position, is_movable=is_movable)
+        # jax.debug.print("Is position {position} movable: {is_movable}", position=position, is_movable=is_movable)
         return is_movable
 
     def get_movable_pieces(self, colour, state: VideoCheckersState) -> jnp.ndarray:
@@ -544,7 +567,8 @@ class JaxVideoCheckers(
 
         return new_state
 
-    def calculate_best_move_per_piece(self, piece, key, board) -> Tuple[chex.Array, chex.Array]:
+    @staticmethod
+    def calculate_best_move_per_piece(self, piece: chex.Array, key, board: chex.Array) -> Tuple[chex.Array, chex.Array]:
         row, col = piece
         piece_type = board[row, col]
 
@@ -582,25 +606,18 @@ class JaxVideoCheckers(
     def calculate_best_first_opponent_move(self, movable_pieces: chex.Array, state: VideoCheckersState) \
             -> VideoCheckersState:
 
-        def calculate_move_per_piece_wrapper( piece, key, board):
-            """Return (best_move, best_score) for one piece."""
-            return self.calculate_best_move_per_piece(piece, key, board)
-
         # Supply an independent RNG key per piece
-        rng_key, splitkey = jax.random.split(
-            state.rng_key)  # TODO every piece has the same random key, but that is ok i think
-        board = state.board
-
-        best_moves, best_scores = (jax.vmap(calculate_move_per_piece_wrapper, in_axes=(0, None, None))
-                                   (movable_pieces, splitkey, board))
+        rng_key, splitkey = jax.random.split(state.rng_key)
+        best_moves, best_scores = (jax.vmap(self.calculate_best_move_per_piece, in_axes=(None, 0, None, None)
+                                            )(self, movable_pieces, splitkey, state.board))
 
         # Choose the overall best move among all pieces
         top_piece_idx = jnp.argmax(best_scores)
         piece_to_move = movable_pieces[top_piece_idx]  # (row, col)
         move_to_play = best_moves[top_piece_idx]  # (drow, dcol)
-        is_jump = jnp.logical_and(jnp.abs(move_to_play)[0]==2,jnp.abs(move_to_play)[1]==2)
+        is_jump = (jnp.abs(move_to_play[0]) == 2) & (jnp.abs(move_to_play[1]) == 2)
 
-        # Apply the move and return the new state
+        # Record the move and return the new state
         piece = state.board[piece_to_move[0], piece_to_move[1]]
         new_pos = piece_to_move + move_to_play
         new_piece = jax.lax.cond(
@@ -610,12 +627,11 @@ class JaxVideoCheckers(
         )
         captured_piece = piece_to_move + (move_to_play // 2)
         new_opponent_move = state.opponent_move._replace(start_pos=piece_to_move, end_pos=new_pos, piece_type=new_piece)
-        new_captured_positions = jnp.append(state.opponent_move.captured_positions, captured_piece)
         newest_opponent_move = jax.lax.cond(is_jump,
-            lambda: new_opponent_move._replace(captured_positions=new_captured_positions),
-            lambda: new_opponent_move
-        )
-        
+                                            lambda: OpponentMoveHandler.add_captured_position(new_opponent_move,
+                                                                                              captured_piece),
+                                            lambda: new_opponent_move
+                                            )
 
         return state._replace(has_jumped=is_jump, opponent_move=newest_opponent_move)
 
@@ -632,6 +648,7 @@ class JaxVideoCheckers(
             Loop body for the fori_loop, which calculates the best further opponent move.
             This is called when the opponent has already jumped and can jump again.
             """
+
             def calc_further_move(state: VideoCheckersState) -> VideoCheckersState:
                 """
                 Get all moves for this piece and check if there is a jump available.
@@ -640,10 +657,10 @@ class JaxVideoCheckers(
                 """
                 piece = state.opponent_move.end_pos
                 rng_key, splitkey = jax.random.split(state.rng_key)
-                best_move, best_score = self.calculate_best_move_per_piece(piece, splitkey, state.board)
+                best_move, best_score = self.calculate_best_move_per_piece(self, piece, splitkey, state.board)
                 jax.debug.print("Best move for piece {piece}: {best_move}, score: {best_score}",
                                 piece=piece, best_move=best_move, best_score=best_score)
-                is_jump = jnp.abs(best_move)[0] == 2 & jnp.abs(best_move)[1] == 2
+                is_jump = (jnp.abs(best_move)[0] == 2) & (jnp.abs(best_move)[1] == 2)
                 new_pos = piece + best_move
                 new_piece = jax.lax.cond(
                     new_pos[0] == 7,  # reached opposite end
@@ -651,11 +668,8 @@ class JaxVideoCheckers(
                     lambda: state.opponent_move.piece_type
                 )
                 captured_piece = piece + (best_move // 2)
-                new_opponent_move = state.opponent_move._replace(
-                    end_pos=new_pos,
-                    piece_type=new_piece,
-                    captured_positions= jnp.append(state.opponent_move.captured_positions, captured_piece)
-                )
+                new_opponent_move = state.opponent_move._replace(end_pos=new_pos, piece_type=new_piece)
+                new_opponent_move = OpponentMoveHandler.add_captured_position(new_opponent_move, captured_piece)
                 return jax.lax.cond(
                     is_jump,
                     lambda: state._replace(
@@ -669,7 +683,7 @@ class JaxVideoCheckers(
                     )
                 )
 
-
+            jax.debug.print("Iteration: {}".format(i))
             return jax.lax.cond(
                 state.has_jumped,
                 lambda s: calc_further_move(s),
@@ -679,7 +693,7 @@ class JaxVideoCheckers(
 
         return jax.lax.fori_loop(
             lower=0,
-            upper=50,
+            upper=12,
             body_fun=loop_body,
             init_val=state
         )
@@ -705,20 +719,21 @@ class JaxVideoCheckers(
             """
 
             def moves_available(moveable_pieces: chex.Array, state: VideoCheckersState):
-                opponent_move, rng_key, has_jumped = self.calculate_best_first_opponent_move(moveable_pieces, state)
-                jax.debug.print("Opponent move: {opponent_move}", opponent_move=opponent_move)
+                new_state = self.calculate_best_first_opponent_move(moveable_pieces, state)
+                jax.debug.print("Opponent move: {opponent_move}", opponent_move=new_state.opponent_move)
                 # if the opponent has jumped, we need to check calculate_best_further_opponent_move
                 opponent_move = jax.lax.cond(
-                    has_jumped,
-                    lambda: self.calculate_best_further_opponent_move(state),
-                    lambda: opponent_move,
+                    new_state.has_jumped,
+                    lambda: self.calculate_best_further_opponent_move(new_state).opponent_move,
+                    lambda: new_state.opponent_move,
                 )
+
                 return state._replace(
                     game_phase=self.consts.SHOW_OPPONENT_MOVE_PHASE,
                     has_jumped=False,
                     opponent_move=opponent_move,
                     selected_piece=jnp.array([-1, -1]),  # Reset the selected piece
-                    rng_key=rng_key,
+                    rng_key=new_state.rng_key,
                 )
 
             movable_pieces = self.get_movable_pieces(self.consts.COLOUR_WHITE, state)
@@ -871,7 +886,7 @@ class JaxVideoCheckers(
 
             def _place_piece(state: VideoCheckersState) -> VideoCheckersState:
                 piece_type = state.board[state.selected_piece[0], state.selected_piece[1]]
-                jax.debug.print("Selected piece: {}", piece_type)
+                # jax.debug.print("Selected piece: {}", piece_type)
                 move = state.cursor_pos - state.selected_piece
                 jumped = (jnp.abs(move[0]) > 1) & (jnp.abs(move[1]) > 1)
 
@@ -1022,11 +1037,8 @@ class JaxVideoCheckers(
                         state.game_phase == self.consts.SHOW_OPPONENT_MOVE_PHASE,
                         lambda: self.step_show_opponent_move_phase(state, action),
                         lambda: self.step_game_over_phase(state, action),
-
                     ),
-
                 ),
-
             ),
             lambda: state,
         )
