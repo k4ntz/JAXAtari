@@ -64,7 +64,7 @@ def main():
     parser.add_argument(
         "--fps",
         type=int,
-        default=60,
+        default=30,
         help="Frame rate for the game.",
     )
     parser.add_argument(

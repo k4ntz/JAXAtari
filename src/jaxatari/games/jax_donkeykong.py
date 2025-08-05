@@ -7,8 +7,8 @@ import chex
 import pygame
 from gymnax.environments import spaces
 
-from jaxatari.renderers import AtraJaxisRenderer
-from jaxatari.rendering import atraJaxis as aj
+from jaxatari.renderers import JAXGameRenderer
+from jaxatari.rendering import jax_rendering_utils as aj
 from jaxatari.environment import JaxEnvironment, JAXAtariAction as Action
 
 
@@ -117,6 +117,8 @@ LADDER_WIDTH = 4
 SPAWN_STEP_COUNTER_BARREL = 236
 
 
+class DonkeyKongConstants(NamedTuple):
+    DUMMY = 0
 
 
 # Bars as lienar functions
@@ -698,8 +700,9 @@ def mario_step(state, action: chex.Array):
     return new_state
 
 
-class JaxDonkeyKong(JaxEnvironment[DonkeyKongState, DonkeyKongObservation, DonkeyKongInfo]):
-    def __init__(self, reward_funcs: list[callable]=None):
+class JaxDonkeyKong(JaxEnvironment[DonkeyKongState, DonkeyKongObservation, DonkeyKongInfo, DonkeyKongConstants]):
+    def __init__(self, consts: DonkeyKongConstants = None, reward_funcs: list[callable]=None):
+        consts = consts or DonkeyKongConstants()
         super().__init__()
         self.frame_stack_size = 4
         if reward_funcs is not None:
@@ -800,10 +803,8 @@ class JaxDonkeyKong(JaxEnvironment[DonkeyKongState, DonkeyKongObservation, Donke
             operand=None
         )
 
-
-
         observation = self._get_observation(new_state)
-        return observation, new_state, None, False, None
+        return observation, new_state, 0, False, None
 
     
     @partial(jax.jit, static_argnums=(0,))
@@ -813,6 +814,8 @@ class JaxDonkeyKong(JaxEnvironment[DonkeyKongState, DonkeyKongObservation, Donke
             total_score = 0,
         )
 
+    def action_space(self) -> spaces.Discrete:
+        return spaces.Discrete(8)
 
 
 def load_sprites():
@@ -902,10 +905,12 @@ def load_sprites():
     )
 
 
-class DonkeyKongRenderer(AtraJaxisRenderer):
+class DonkeyKongRenderer(JAXGameRenderer):
     """JAX-based Pong game renderer, optimized with JIT compilation."""
 
-    def __init__(self):
+    def __init__(self, consts: DonkeyKongConstants = None):
+        super().__init__()
+        self.consts = consts or DonkeyKongConstants()
         (
             self.SPRITES_BG,
             self.SPRITES_DONKEYKONG,
