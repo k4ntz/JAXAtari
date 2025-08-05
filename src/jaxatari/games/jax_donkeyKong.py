@@ -568,9 +568,9 @@ def mario_step(state, action: chex.Array):
 
         distance = jnp.inf
         nearest_ladder_idx = -1
-        def search_nearest_climbable_ladder(i, (nearest_ladder_idx, distance)):
+        # def search_nearest_climbable_ladder(i, (nearest_ladder_idx, distance)):
             
-            return (nearest_ladder_idx, distance)
+        #     return (nearest_ladder_idx, distance)
 
 
         # create boolean which tells if mario can climb in its position
