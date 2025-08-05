@@ -1,5 +1,5 @@
-# next TODO's (game features): enemy colision detection, chicken mode, Level 2
-# TODO update observation
+# next TODO's (game features): jumping, chicken mode, Level 2
+# TODO update observation, freeze for about 250 frames, vmap more, random blinking, update spaces, possibly make generating/changing the maze easier?
 
 from functools import partial
 import os
@@ -249,6 +249,7 @@ class AmidarConstants(NamedTuple):
     ENEMY_SIZE: tuple[int, int] = (7, 7)  # Object sizes (width, height)
     PLAYER_SPRITE_OFFSET: tuple[int, int] = (-1, 0) # Offset for the player sprite in relation to the position in the code (because the top left corner of the player sprite is of the path to the left)
     INITIAL_PLAYER_POSITION: chex.Array = jnp.array([140, 88])
+    INITIAL_PLAYER_DIRECTION: chex.Array = jnp.array(0)
     PLAYER_STARTING_PATH: int = 85  # The path edge the player starts on, this is the index in PATH_EDGES
 
     # Enemies
@@ -506,7 +507,43 @@ def enemies_step(constants: AmidarConstants, state: AmidarState, random_key: che
 
     new_enemy_positions, new_enemy_directions = jax.vmap(move_enemy, in_axes=0)(state.enemy_positions[:, 0], state.enemy_positions[:, 1], state.enemy_directions, possible_directions_per_enemy, good_directions_per_enemy, enemy_keys)
 
-    return new_enemy_positions, new_enemy_directions, state.enemy_types
+    return new_enemy_positions, new_enemy_directions
+
+def check_for_collisions(constants, player_x, player_y, enemy_positions, enemy_types) -> bool:
+    """Checks if the player collides with any enemy."""
+    # the collision is counted if any part of the sprites touch, so per enemy we need to check if the sprite overlaps the players
+
+    def check_enemy_for_collision(enemy_x, enemy_y, enemy_type):
+        """Checks if the enemy collides with the player."""
+        collision = jax.lax.cond(
+            enemy_type == 0, # shadows don't collide with the player
+            lambda: False,
+            lambda: jnp.logical_not(
+                        (enemy_x + constants.ENEMY_SIZE[0] <= player_x)    |   # enemy is to the left of the player
+                        (player_x + constants.PLAYER_SIZE[0] <= enemy_x)   |   # enemy is to the right of the player
+                        (enemy_y + constants.ENEMY_SIZE[1] <= player_y)    |   # enemy is above the player
+                        (player_y + constants.PLAYER_SIZE[1] <= enemy_y)       # enemy is below the player
+                    )
+        )
+        return collision
+
+    return jax.vmap(check_enemy_for_collision, in_axes=0)(enemy_positions[:, 0], enemy_positions[:, 1], enemy_types)
+
+def handle_collisions(enemy_types: chex.Array, collisions: chex.Array) -> tuple[chex.Array, chex.Array, chex.Array, chex.Array, chex.Array]:
+    """Handles the collisions with the enemies.
+    Returns the new enemy positions, directions, types, lives and points scored."""
+
+    def handle_collision(enemy_type, collision):
+        """Handles the collision with a single enemy."""
+        enemy_type, points, lost_live = jax.lax.cond(collision, lambda: (enemy_type, 0, 1), lambda: (enemy_type, 0, 0))
+        return enemy_type, points, lost_live
+
+    enemy_types, points_scored, lost_live = jax.vmap(handle_collision, in_axes=(0, 0))(enemy_types, collisions)
+
+    lost_live = jnp.any(lost_live)  # If any enemy collision results in a lost life, set lost_live to True
+    points_scored = jnp.sum(points_scored)  # Sum the points scored from all collisions
+
+    return enemy_types, points_scored, lost_live
 
 class JaxAmidar(JaxEnvironment[AmidarState, AmidarObservation, AmidarInfo, AmidarConstants]):
     def __init__(self, constants: AmidarConstants = None, reward_funcs: list[callable]=None):
@@ -542,7 +579,7 @@ class JaxAmidar(JaxEnvironment[AmidarState, AmidarObservation, AmidarInfo, Amida
             lives=jnp.array(self.constants.INITIAL_LIVES).astype(jnp.int32),  # Initial lives
             player_x=jnp.array(self.constants.INITIAL_PLAYER_POSITION[0]).astype(jnp.int32),
             player_y=jnp.array(self.constants.INITIAL_PLAYER_POSITION[1]).astype(jnp.int32),
-            player_direction=jnp.array(0).astype(jnp.int32),
+            player_direction=jnp.array(self.constants.INITIAL_PLAYER_DIRECTION).astype(jnp.int32),
             last_walked_corner=jnp.array([0, 0]).astype(jnp.int32),  # Last corner walked on
             walked_on_paths=(jnp.zeros(jnp.shape(self.constants.PATH_EDGES)[0], dtype=jnp.int32)).at[self.constants.PLAYER_STARTING_PATH].set(1),  # Initialize walked on paths
             completed_rectangles=jnp.zeros(jnp.shape(self.constants.RECTANGLES)[0], dtype=jnp.bool_),  # Initialize completed rectangles
@@ -557,8 +594,7 @@ class JaxAmidar(JaxEnvironment[AmidarState, AmidarObservation, AmidarInfo, Amida
 
         return initial_obs, state
     
-    # TODO check these notes and see what they do/should do
-    
+    # TODO check these notes and see what they do/should do 
     # NOTE: added this for compatibility (its incorrect, I was just too lazy to get the correct one!)
     def observation_space(self) -> spaces.Box:
         return spaces.Box(low=0, high=255, shape=(self.constants.HEIGHT, self.constants.WIDTH, 4), dtype=jnp.uint8)
@@ -581,15 +617,43 @@ class JaxAmidar(JaxEnvironment[AmidarState, AmidarObservation, AmidarInfo, Amida
         random_key, random_enemies_key = jax.random.split(state.random_key)
 
         player_state = player_step(self.constants, state, action)
-        (points_scored, player_x, player_y, player_direction, last_walked_corner, walked_on_paths, completed_rectangles) = player_state
+        (points_scored_player_step, player_x, player_y, player_direction, last_walked_corner, walked_on_paths, completed_rectangles) = player_state
 
         enemies_state = enemies_step(self.constants, state, random_enemies_key)
-        (enemy_positions, enemy_directions, enemy_types) = enemies_state
+        (enemy_positions, enemy_directions) = enemies_state
+
+        enemy_types = state.enemy_types  # For now, keep the enemy types the same, TODO later add jump and chicken activation/deactivation
+        # TODO add next level handling
+
+        # Check for collisions with enemies
+        collisions = check_for_collisions(self.constants, player_x, player_y, enemy_positions, enemy_types)
+        # jax.debug.print("Collisions: {collisions}", collisions=collisions)
+        (enemy_types, points_scored_enemy_collision, lost_live) = jax.lax.cond(
+            jnp.any(collisions),
+            lambda: handle_collisions(enemy_types, collisions),
+            lambda: (enemy_types, 0, False)
+        )
+
+        # TODO start freeze again
+        # Reset positions if a life is lost 
+        enemy_positions, enemy_directions, player_x, player_y, player_direction, lives = jax.lax.cond(lost_live,
+            lambda: (self.constants.INITIAL_ENEMY_POSITIONS, self.constants.INITIAL_ENEMY_DIRECTIONS, self.constants.INITIAL_PLAYER_POSITION[0], self.constants.INITIAL_PLAYER_POSITION[1], self.constants.INITIAL_PLAYER_DIRECTION, state.lives-1),  # Reset enemy & player positions and directions, decrement lives
+            lambda: (enemy_positions, enemy_directions, player_x, player_y, player_direction, state.lives))  # Keep the current enemy positions and directions
+
+        # TODO where do i change the enemy type? (jump, jump time up, collision with chicken, chicken time up, chicken activated, next level)
+
+        # Check for game over condition
+        # If lives are less than 0, the game is over
+        done, lives = jax.lax.cond(
+            lives < 0,
+            lambda: (True, 0),
+            lambda: (False, lives)
+        )
 
         new_state = AmidarState(
             random_key=random_key,
-            score=state.score + points_scored, # Could possibly change in multiple functions, so it is not calculated in the function based on the previous state
-            lives=state.lives, # not changing yet
+            score=state.score + points_scored_player_step + points_scored_enemy_collision, # Could change in multiple functions, so it is not calculated in the function based on the previous state
+            lives=lives,
             player_x=player_x,
             player_y=player_y,
             player_direction=player_direction,
@@ -601,7 +665,6 @@ class JaxAmidar(JaxEnvironment[AmidarState, AmidarObservation, AmidarInfo, Amida
             enemy_types=enemy_types,
         )
         env_reward = 0.0
-        done = False
         info = AmidarInfo(
             time=jnp.array(0),
             all_rewards=jnp.array(0.0),
