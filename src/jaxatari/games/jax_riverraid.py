@@ -23,6 +23,7 @@ DEFAULT_RIVER_WIDTH = 80
 MIN_RIVER_WIDTH = 30
 MAX_RIVER_WIDTH = 130
 MAX_ENEMIES = 10
+MINIMUM_SPAWN_COOLDOWN = 20
 
 
 class RiverraidState(NamedTuple):
@@ -58,6 +59,7 @@ class RiverraidState(NamedTuple):
     enemy_type: chex.Array
     enemy_state: chex.Array  # 0 empty/dead, 1 alive
     enemy_direction: chex.Array  # 0 left static, 1 right static, 2 left moving, 3 right moving
+    spawn_cooldown: chex.Array
 
 
 
@@ -704,8 +706,9 @@ def player_shooting(state, action):
 # TODO cooldown between spawns
 @jax.jit
 def spawn_enemies(state):
+    jax.debug.print("SPAWNING ENEMY")
     key, spawn_key, x_key = jax.random.split(state.master_key, 3)
-    spawn_enemy = jax.random.bernoulli(spawn_key, 0.07)
+    #spawn_enemy = jax.random.bernoulli(spawn_key, 0.07)
 
     # 0 boat, 1 helicopter, 2 plane
     new_single_enemy_type = jax.random.randint(spawn_key, (), 0, 3)
@@ -721,7 +724,7 @@ def spawn_enemies(state):
 
 
     new_enemy_x = jax.lax.cond(
-        spawn_enemy & (free_enemy_idx >= 0),
+        free_enemy_idx >= 0,
         lambda state: jax.lax.cond(
             new_enemy_type[free_enemy_idx] <= 1, # logic for boat or helicopter (spawn in water)
             lambda state: jax.lax.cond(
@@ -747,20 +750,20 @@ def spawn_enemies(state):
         operand=state
     )
     new_enemy_y = jax.lax.cond(
-        spawn_enemy & (free_enemy_idx >= 0),
+        free_enemy_idx >= 0,
         lambda _: jnp.array(0, dtype=jnp.float32),
         lambda _: state.enemy_y[free_enemy_idx],
         operand=None
     )
     new_enemy_direction = jax.lax.cond(
-        spawn_enemy & (free_enemy_idx >= 0),
+        free_enemy_idx >= 0,
         lambda _: jax.random.randint(spawn_key, (), 0, 2), # 0 left, 1 right
         lambda _: state.enemy_direction[free_enemy_idx],
         operand=None
     )
 
     new_state = jax.lax.cond(
-        spawn_enemy & (free_enemy_idx >= 0),
+        free_enemy_idx >= 0,
         lambda new_state: new_state._replace(
             enemy_x=state.enemy_x.at[free_enemy_idx].set(new_enemy_x.astype(jnp.float32)),
             enemy_y=state.enemy_y.at[free_enemy_idx].set(new_enemy_y.astype(jnp.float32)),
@@ -772,6 +775,42 @@ def spawn_enemies(state):
         operand=state
     )
     return new_state
+
+@jax.jit
+def spawn_fuel(state: RiverraidState) -> RiverraidState:
+    jax.debug.print("SPAWNING FUEL")
+    return state
+
+@jax.jit
+def spawn_entities(state: RiverraidState) -> RiverraidState:
+    key, subkey1, subkey2 = jax.random.split(state.master_key, 3)
+
+    def spawn_entity(state: RiverraidState) -> RiverraidState:
+        spawn_fuel_flag = jax.random.bernoulli(subkey2, 0.0) # TODO balance
+        return jax.lax.cond(
+            spawn_fuel_flag,
+            lambda state: spawn_fuel(state),
+            lambda state: spawn_enemies(state),
+            operand=state
+        )
+
+    spawn_new_entity = jax.random.bernoulli(subkey1, 0.07) #TODO balance
+    new_state = jax.lax.cond(
+        jnp.logical_and(state.spawn_cooldown <= 0, spawn_new_entity),
+        lambda state: spawn_entity(state),
+        lambda state: state,
+        operand=state
+    )
+
+    new_spawn_cooldown = jax.lax.cond(
+        jnp.logical_and(state.spawn_cooldown <= 0, spawn_new_entity),
+        lambda _: jnp.array(MINIMUM_SPAWN_COOLDOWN),
+        lambda _: state.spawn_cooldown - 1,
+        operand=None
+    )
+
+    return new_state._replace(master_key=key,
+                              spawn_cooldown=new_spawn_cooldown)
 
 def scroll_enemies(state: RiverraidState) -> RiverraidState:
     new_enemy_y = state.enemy_y + 1
@@ -942,7 +981,8 @@ class JaxRiverraid(JaxEnvironment):
                                enemy_y=jnp.full((MAX_ENEMIES,), SCREEN_HEIGHT + 1, dtype=jnp.float32),
                                enemy_state=jnp.full((MAX_ENEMIES,), 0, dtype=jnp.int32),
                                enemy_type= jnp.full((MAX_ENEMIES,), 0, dtype=jnp.int32),
-                               enemy_direction= jnp.full((MAX_ENEMIES,), 0, dtype=jnp.int32)
+                               enemy_direction= jnp.full((MAX_ENEMIES,), 0, dtype=jnp.int32),
+                               spawn_cooldown=jnp.array(50)
                                )
         observation = self._get_observation(state)
         return observation, state
@@ -960,7 +1000,7 @@ class JaxRiverraid(JaxEnvironment):
             new_state = update_river_banks(new_state)
             new_state = player_movement(new_state, action)
             new_state = player_shooting(new_state, action)
-            new_state = spawn_enemies(new_state)
+            new_state = spawn_entities(new_state)
             new_state = scroll_enemies(new_state)
             new_state = enemy_collision(new_state)
             new_state = update_enemy_movement_status(new_state)
