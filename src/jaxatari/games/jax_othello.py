@@ -9,6 +9,7 @@ import enum
 import time
 from gymnax.environments import spaces
 
+from jaxatari.games.test4 import find_last_valid_corner
 from jaxatari.renderers import AtraJaxisRenderer
 from jaxatari.rendering import atraJaxis as aj
 from jaxatari.environment import JaxEnvironment
@@ -76,7 +77,7 @@ BIT_MASKS_HIGH_TO_LOW = jnp.array([0x80, 0x40, 0x20, 0x10, 8, 4, 2, 1], dtype=jn
 __F7EC = jnp.array([
     0x20, 0x20, 0x20, 0x20, 0x20, 0x10, 0x40, 0xe0, 0x20, 0x40, 0x15, 0xe0, 0x20, 0xe0, 0xe0,
     0x50, 0x00, 0xf0, 0xb0
-], dtype=jnp.uint8)
+], dtype=jnp.uint8) #TODO difference to np.int8
 
 # Constants to decide in which side the discs will be flipped
 FLIP_UP_SIDE = 0
@@ -546,14 +547,9 @@ def get_bot_move(game_field: Field, difficulty: chex.Array, player_score: chex.A
     list_of_all_moves = jnp.arange(64)
 
     #calculate flipped tiles for all possible moves and adjust score based on game stage
-    vectorized_compute_score_of_tiles = jax.vmap(compute_score_of_tiles, in_axes=(0, None, None))
-    list_of_all_move_values = vectorized_compute_score_of_tiles(list_of_all_moves, game_field, game_score)
+    vectorized_compute_score_of_tiles = jax.vmap(compute_score_of_tiles, in_axes=(0, None, None, None))
+    list_of_all_move_values = vectorized_compute_score_of_tiles(list_of_all_moves, game_field, game_score, difficulty)
 
-    #Calculate the strategic value (score) of the current_square itself
-
-    #Re-evaluate or combine with a secondary related square's score
-
-    #Combine the score from flipped pieces and the strategic tile score
 
     #Randomly choose one of the best moves    
     random_chosen_max_index = random_max_index(list_of_all_move_values,random_key)
@@ -561,27 +557,63 @@ def get_bot_move(game_field: Field, difficulty: chex.Array, player_score: chex.A
     
     return jnp.array([jnp.floor_divide(random_chosen_max_index, 8), jnp.mod(random_chosen_max_index, 8)])
 
-def compute_score_of_tiles(i, game_field, game_score):
+def compute_score_of_tiles(i, game_field, game_score, difficulty):
     # Decode tile position
     tile_y = jnp.floor_divide(i, 8)
     tile_x = jnp.mod(i, 8)
 
 
     # If tile is already taken, set invalid move (return very low score)
-    score_of_tile = jax.lax.cond(
+    tiles_flipped, secondary_tile, default_pos = jax.lax.cond(
         game_field.field_color[tile_y, tile_x] != FieldColor.EMPTY,
-        lambda _: -2147483648,  
-        lambda _: compute_score_of_tile_1(tile_y, tile_x,game_field, game_score),  
+        lambda _: -2147483648, (-2147483648, -2147483648), (-2147483648, -2147483648)
+        lambda _: compute_score_of_tile_1(tile_y, tile_x, game_field, game_score),
         None
     )
-    return score_of_tile
+
+    #TODO add skipping of secondary evaluation if no tiles were flipped
+
+    #Calculate the strategic value (score) of the current_square itself
+    ((score, _), skip_secondary_eval) = calculate_strategic_tile_score(i, game_field, jax.lax.cond(default_pos[0] == -2147483648, lambda _: (0,0),lambda _: default_pos, None), difficulty)
+
+    secondary_tile = jax.lax.cond(
+        skip_secondary_eval,
+        lambda _: None,
+        lambda _: secondary_tile,
+        None
+    )
+
+    #Re-evaluate or combine with a secondary related square's score
+    score = jax.lax.cond(
+        secondary_tile is not None,
+        lambda _: handle_secondary_calculation_of_strategic_score(secondary_tile, game_field, default_pos, difficulty, score),
+        lambda _: score,
+        None
+    )
+
+    #Combine the score from flipped pieces and the strategic tile score
+    score += tiles_flipped
+
+    return score
 
 @jax.jit
 def compute_score_of_tile_1(tile_y, tile_x, game_field, game_score):
+
+    inner_corner_in_any_direction = (-2147483648, -2147483648)
+    inner_corner_in_final_direction = (-2147483648, -2147483648)
+
     #compute flipped tiles by each direction
     list_of_all_directions = jnp.arange(8)
-    vectorised_flipped_tiles_by_direction = jax.vmap(compute_flipped_tiles_by_direction,in_axes=(0, None, None, None))
-    flipped_tiles_by_direction = vectorised_flipped_tiles_by_direction(list_of_all_directions, tile_y, tile_x, game_field)
+    vectorised_flipped_tiles_by_direction = jax.vmap(compute_flipped_tiles_by_direction,in_axes=(0, None, None, None, None, None))
+    flipped_tiles_by_direction, inner_corner_by_direction_any_direction, inner_corner_by_direction_final_direction = vectorised_flipped_tiles_by_direction(list_of_all_directions, tile_y, tile_x, game_field, inner_corner_in_any_direction, inner_corner_in_final_direction)
+
+    def find_last_valid_corner(arr):
+        idxs = jnp.arange(arr.shape[0])
+        valid_positions = jnp.where(arr != -2147483648, idxs, -1)
+        return jnp.max(valid_positions)
+
+    inner_corner_in_any_direction = find_last_valid_corner(inner_corner_by_direction_any_direction)
+    inner_corner_in_final_direction = find_last_valid_corner(inner_corner_by_direction_final_direction)
 
     flipped_tiles = jnp.nansum(flipped_tiles_by_direction)
     # If no tiles were flipped, set invalid move (return very low score)
@@ -604,7 +636,7 @@ def compute_score_of_tile_1(tile_y, tile_x, game_field, game_score):
         ),
         None
     )
-    return score_of_tile
+    return score_of_tile, inner_corner_in_any_direction, inner_corner_in_final_direction
     
 # array size fixed at 64!!
 @jax.jit
@@ -644,8 +676,8 @@ def random_max_index(array, key:int):
 
 
 @jax.jit
-def compute_flipped_tiles_by_direction(i, tile_y: int, tile_x: int, game_field: Field):
-    args = (tile_y,tile_x,game_field)
+def compute_flipped_tiles_by_direction(i, tile_y: int, tile_x: int, game_field: Field, inner_corner_in_any_direction: tuple[int, int], inner_corner_in_final_direction: tuple[int, int]):
+    args = (tile_y,tile_x,game_field,inner_corner_in_any_direction,inner_corner_in_final_direction)
 
     branches = [
         lambda args: compute_flipped_tiles_top(args),
@@ -660,6 +692,21 @@ def compute_flipped_tiles_by_direction(i, tile_y: int, tile_x: int, game_field: 
 
     return jax.lax.switch(i, branches, args)
 
+def check_if_inner_corner(tile_y, tile_x):
+    return jax.lax.cond(jnp.logical_and(tile_y == 1, tile_x == 1),
+            lambda _: (6,6), #account for flipped game field in calculate_strategic_tile_score
+            lambda _: jax.lax.cond(jnp.logical_and(tile_y == 1, tile_x == 6),
+                        lambda _: (6,1),
+                        lambda _: jax.lax.cond(jnp.logical_and(tile_y == 6, tile_x == 1),
+                                    lambda _: (1,6),
+                                    lambda _: jax.lax.cond(jnp.logical_and(tile_y == 6, tile_x == 6),
+                                                lambda _: (1,1),
+                                                lambda _: (tile_y, tile_x),
+                                                None),
+                                    None),
+                        None),
+            None)
+
 @jax.jit   
 def compute_flipped_tiles_top(input) -> int:
     # Returns the number of tiles to be flipped (only flipped tiles, same color tiles are disregarded)
@@ -667,12 +714,12 @@ def compute_flipped_tiles_top(input) -> int:
     #checks wether the first element in the direction of look-up is invalid, becasause its already taken by bot, sets it to nan, to prevent while loop from running
     args = jax.lax.cond(
         input[2].field_color[input[0]-1][input[1]] == FieldColor.BLACK,
-        lambda input: (input[0] - 1, input[1], input[2], jnp.nan, 0),
-        lambda input: (input[0] - 1, input[1], input[2], 0.0, 0),
+        lambda input: (input[0] - 1, input[1], input[2], jnp.nan, 0, input[3], input[4]),
+        lambda input: (input[0] - 1, input[1], input[2], 0.0, 0, input[3], input[4]),
         input
     ) 
 
-    #args has the following structure: tile_y, tile_x, game_field, flipped, tmp_flipped
+    #args has the following structure: tile_y, tile_x, game_field, flipped, tmp_flipped, inner_corner_in_final_direction, inner_corner_in_any_direction
     def while_cond(args):
         #check if to be checked field is still part of game field
         check_for_outside_borders_of_game_field = jnp.all(
@@ -687,17 +734,18 @@ def compute_flipped_tiles_top(input) -> int:
             lambda args: (-2, args[1], args[2], args[3],  args[4]),#if field is empthy, no further tiles can be flipped use set y to -2 to exit next loop iteration
             lambda args: (jax.lax.cond(
                 args[2].field_color[args[0], args[1]] == FieldColor.BLACK,  
-                lambda args: (args[0]-1, args[1], args[2], args[3] + args[4], 0),
-                lambda args: (args[0]-1, args[1], args[2], args[3], args[4] + 1),
+                lambda args: (args[0]-1, args[1], args[2], args[3] + args[4], 0, args[5], args[5]), #args[5] is no typo (set inner_corner_in_any_direction only when valid move is found)
+                lambda args: (args[0]-1, args[1], args[2], args[3], args[4] + 1, check_if_inner_corner(args[0], args[1]), args[6]),
                 args
                 )),
             args
         )
 
+    while_loop_return = jax.lax.while_loop(while_cond, while_body, args)
     return jax.lax.cond(
         input[0] < 0,
-        lambda args: jnp.int32(0.0),
-        lambda args: jnp.int32(jax.lax.while_loop(while_cond, while_body, args)[3]),  
+        lambda args: (jnp.int32(0.0), (-2147483648,-2147483648), (-2147483648,-2147483648)),
+        lambda args: jnp.int32(while_loop_return[3], while_loop_return[6], while_loop_return[5]),
         args
     )
 @jax.jit
@@ -707,8 +755,8 @@ def compute_flipped_tiles_rigth(input) -> int:
     #checks wether the first element in the direction of look-up is invalid, becasause its already taken by bot, sets it to nan, to prevent while loop from running
     args = jax.lax.cond(
         input[2].field_color[input[0]][input[1]+1] == FieldColor.BLACK,
-        lambda input: (input[0], input[1]+1, input[2], jnp.nan, 0),
-        lambda input: (input[0], input[1]+1, input[2], 0.0, 0),
+        lambda input: (input[0], input[1]+1, input[2], jnp.nan, 0, input[3], input[4]),
+        lambda input: (input[0], input[1]+1, input[2], 0.0, 0, input[3], input[4]),
         input
     ) 
 
@@ -727,17 +775,18 @@ def compute_flipped_tiles_rigth(input) -> int:
             lambda args: (-2, args[1], args[2], args[3],  args[4]),#if field is empthy, no further tiles can be flipped use set y to -2 to exit next loop iteration
             lambda args: (jax.lax.cond(
                 args[2].field_color[args[0], args[1]] == FieldColor.BLACK,  
-                lambda args: (args[0], args[1]+1, args[2], args[3] + args[4], 0),
-                lambda args: (args[0], args[1]+1, args[2], args[3], args[4] + 1),
+                lambda args: (args[0], args[1]+1, args[2], args[3] + args[4], 0,  args[5], args[5]),
+                lambda args: (args[0], args[1]+1, args[2], args[3], args[4] + 1, check_if_inner_corner(args[0], args[1]), args[6]),
                 args
                 )),
             args
         )
 
+    while_loop_return = jax.lax.while_loop(while_cond, while_body, args)
     return jax.lax.cond(
         input[1] > 7,
-        lambda args: jnp.int32(0.0),
-        lambda args: jnp.int32(jax.lax.while_loop(while_cond, while_body, args)[3]),  
+        lambda args: (jnp.int32(0.0), (-2147483648,-2147483648), (-2147483648,-2147483648)),
+        lambda args: jnp.int32(while_loop_return[3], while_loop_return[6], while_loop_return[5]),
         args
     )
 @jax.jit
@@ -747,8 +796,8 @@ def compute_flipped_tiles_bottom(input) -> int:
     #checks wether the first element in the direction of look-up is invalid, becasause its already taken by bot, sets it to nan, to prevent while loop from running
     args = jax.lax.cond(
         input[2].field_color[input[0]+1][input[1]] == FieldColor.BLACK,
-        lambda input: (input[0] + 1, input[1], input[2], jnp.nan, 0),
-        lambda input: (input[0] + 1, input[1], input[2], 0.0, 0),
+        lambda input: (input[0] + 1, input[1], input[2], jnp.nan, 0, input[3], input[4]),
+        lambda input: (input[0] + 1, input[1], input[2], 0.0, 0, input[3], input[4]),
         input
     ) 
 
@@ -767,17 +816,18 @@ def compute_flipped_tiles_bottom(input) -> int:
             lambda args: (-2, args[1], args[2], args[3],  args[4]),#if field is empthy, no further tiles can be flipped use set y to -2 to exit next loop iteration
             lambda args: (jax.lax.cond(
                 args[2].field_color[args[0], args[1]] == FieldColor.BLACK,  
-                lambda args: (args[0]+1, args[1], args[2], args[3] + args[4], 0),
-                lambda args: (args[0]+1, args[1], args[2], args[3], args[4] + 1),
+                lambda args: (args[0]+1, args[1], args[2], args[3] + args[4], 0, args[5], args[5]),
+                lambda args: (args[0]+1, args[1], args[2], args[3], args[4] + 1, check_if_inner_corner(args[0], args[1]), args[6]),
                 args
                 )),
             args
         )
 
+    while_loop_return = jax.lax.while_loop(while_cond, while_body, args)
     return jax.lax.cond(
         input[0] > 7,
-        lambda args: jnp.int32(0.0),
-        lambda args: jnp.int32(jax.lax.while_loop(while_cond, while_body, args)[3]),  
+        lambda args: (jnp.int32(0.0), (-2147483648,-2147483648), (-2147483648,-2147483648)),
+        lambda args: jnp.int32(while_loop_return[3], while_loop_return[6], while_loop_return[5]),
         args
     )
 @jax.jit
@@ -787,8 +837,8 @@ def compute_flipped_tiles_left(input) -> int:
     #checks wether the first element in the direction of look-up is invalid, becasause its already taken by bot, sets it to nan, to prevent while loop from running
     args = jax.lax.cond(
         input[2].field_color[input[0]][input[1]-1] == FieldColor.BLACK,
-        lambda input: (input[0], input[1]-1, input[2], jnp.nan, 0),
-        lambda input: (input[0], input[1]-1, input[2], 0.0, 0),
+        lambda input: (input[0], input[1]-1, input[2], jnp.nan, 0, input[3], input[4]),
+        lambda input: (input[0], input[1]-1, input[2], 0.0, 0, input[3], input[4]),
         input
     ) 
 
@@ -806,18 +856,19 @@ def compute_flipped_tiles_left(input) -> int:
             args[2].field_color[args[0], args[1]] == FieldColor.EMPTY,  
             lambda args: (-2, args[1], args[2], args[3],  args[4]),#if field is empthy, no further tiles can be flipped use set y to -2 to exit next loop iteration
             lambda args: (jax.lax.cond(
-                args[2].field_color[args[0], args[1]] == FieldColor.BLACK,  
-                lambda args: (args[0], args[1]-1, args[2], args[3] + args[4], 0),
-                lambda args: (args[0], args[1]-1, args[2], args[3], args[4] + 1),
+                args[2].field_color[args[0], args[1]] == FieldColor.BLACK,
+                lambda args: (args[0], args[1]-1, args[2], args[3] + args[4], 0, args[5], args[5]),
+                lambda args: (args[0], args[1]-1, args[2], args[3], args[4] + 1, check_if_inner_corner(args[0], args[1]), args[6]),
                 args
                 )),
             args
         )
 
+    while_loop_return = jax.lax.while_loop(while_cond, while_body, args)
     return jax.lax.cond(
-        input[0] > 7,        
-        lambda args: jnp.int32(0.0),
-        lambda args: jnp.int32(jax.lax.while_loop(while_cond, while_body, args)[3]),  
+        input[1] > 7,
+        lambda args: (jnp.int32(0.0), (-2147483648,-2147483648), (-2147483648,-2147483648)),
+        lambda args: jnp.int32(while_loop_return[3], while_loop_return[6], while_loop_return[5]),
         args
     )
 @jax.jit
@@ -827,8 +878,8 @@ def compute_flipped_tiles_top_rigth(input) -> int:
     #checks wether the first element in the direction of look-up is invalid, becasause its already taken by bot, sets it to nan, to prevent while loop from running
     args = jax.lax.cond(
         input[2].field_color[input[0]-1][input[1]+1] == FieldColor.BLACK,
-        lambda input: (input[0]-1, input[1]+1, input[2], jnp.nan, 0),
-        lambda input: (input[0]-1, input[1]+1, input[2], 0.0, 0),
+        lambda input: (input[0]-1, input[1]+1, input[2], jnp.nan, 0, input[3], input[4]),
+        lambda input: (input[0]-1, input[1]+1, input[2], 0.0, 0, input[3], input[4]),
         input
     ) 
 
@@ -846,18 +897,19 @@ def compute_flipped_tiles_top_rigth(input) -> int:
             args[2].field_color[args[0], args[1]] == FieldColor.EMPTY,  
             lambda args: (-2, args[1], args[2], args[3],  args[4]),#if field is empthy, no further tiles can be flipped use set y to -2 to exit next loop iteration
             lambda args: (jax.lax.cond(
-                args[2].field_color[args[0], args[1]] == FieldColor.BLACK,  
-                lambda args: (args[0]-1, args[1]+1, args[2], args[3] + args[4], 0),
-                lambda args: (args[0]-1, args[1]+1, args[2], args[3], args[4] + 1),
+                args[2].field_color[args[0], args[1]] == FieldColor.BLACK,
+                lambda args: (args[0]-1, args[1]+1, args[2], args[3] + args[4], 0, args[5], args[5]),
+                lambda args: (args[0]-1, args[1]+1, args[2], args[3], args[4] + 1, check_if_inner_corner(args[0], args[1]), args[6]),
                 args
                 )),
             args
         )
 
+    while_loop_return = jax.lax.while_loop(while_cond, while_body, args)
     return jax.lax.cond(
-        jnp.logical_and(input[0] < 0, input[1]>7),
-        lambda args: jnp.int32(0.0),
-        lambda args: jnp.int32(jax.lax.while_loop(while_cond, while_body, args)[3]),  
+        jnp.logical_and(input[0] < 0, input[1] > 7),
+        lambda args: (jnp.int32(0.0), (-2147483648, -2147483648), (-2147483648, -2147483648)),
+        lambda args: jnp.int32(while_loop_return[3], while_loop_return[6], while_loop_return[5]),
         args
     )
 @jax.jit
@@ -867,8 +919,8 @@ def compute_flipped_tiles_bottom_rigth(input) -> int:
     #checks wether the first element in the direction of look-up is invalid, becasause its already taken by bot, sets it to nan, to prevent while loop from running
     args = jax.lax.cond(
         input[2].field_color[input[0]+1][input[1]+1] == FieldColor.BLACK,
-        lambda input: (input[0]+1, input[1]+1, input[2], jnp.nan, 0),
-        lambda input: (input[0]+1, input[1]+1, input[2], 0.0, 0),
+        lambda input: (input[0]+1, input[1]+1, input[2], jnp.nan, 0, input[3], input[4]),
+        lambda input: (input[0]+1, input[1]+1, input[2], 0.0, 0, input[3], input[4]),
         input
     ) 
 
@@ -886,18 +938,19 @@ def compute_flipped_tiles_bottom_rigth(input) -> int:
             args[2].field_color[args[0], args[1]] == FieldColor.EMPTY,  
             lambda args: (-2, args[1], args[2], args[3],  args[4]),#if field is empthy, no further tiles can be flipped use set y to -2 to exit next loop iteration
             lambda args: (jax.lax.cond(
-                args[2].field_color[args[0], args[1]] == FieldColor.BLACK,  
-                lambda args: (args[0]+1, args[1]+1, args[2], args[3] + args[4], 0),
-                lambda args: (args[0]+1, args[1]+1, args[2], args[3], args[4] + 1),
+                args[2].field_color[args[0], args[1]] == FieldColor.BLACK,
+                lambda args: (args[0]+1, args[1]+1, args[2], args[3] + args[4], 0, args[5], args[5]),
+                lambda args: (args[0]+1, args[1]+1, args[2], args[3], args[4] + 1, check_if_inner_corner(args[0], args[1]), args[6]),
                 args
                 )),
             args
         )
 
+    while_loop_return = jax.lax.while_loop(while_cond, while_body, args)
     return jax.lax.cond(
-        jnp.logical_and(input[0] > 7, input[1]>7),
-        lambda args: jnp.int32(0.0),
-        lambda args: jnp.int32(jax.lax.while_loop(while_cond, while_body, args)[3]),  
+        jnp.logical_and(input[0] > 7, input[1] > 7),
+        lambda args: (jnp.int32(0.0), (-2147483648, -2147483648), (-2147483648, -2147483648)),
+        lambda args: jnp.int32(while_loop_return[3], while_loop_return[6], while_loop_return[5]),
         args
     )
 @jax.jit
@@ -907,8 +960,8 @@ def compute_flipped_tiles_bottom_left(input) -> int:
     #checks wether the first element in the direction of look-up is invalid, becasause its already taken by bot, sets it to nan, to prevent while loop from running
     args = jax.lax.cond(
         input[2].field_color[input[0]+1][input[1]-1] == FieldColor.BLACK,
-        lambda input: (input[0]+1, input[1]-1, input[2], jnp.nan, 0),
-        lambda input: (input[0]+1, input[1]-1, input[2], 0.0, 0),
+        lambda input: (input[0]+1, input[1]-1, input[2], jnp.nan, 0, input[3], input[4]),
+        lambda input: (input[0]+1, input[1]-1, input[2], 0.0, 0, input[3], input[4]),
         input
     ) 
 
@@ -926,18 +979,20 @@ def compute_flipped_tiles_bottom_left(input) -> int:
             args[2].field_color[args[0], args[1]] == FieldColor.EMPTY,  
             lambda args: (-2, args[1], args[2], args[3],  args[4]),#if field is empthy, no further tiles can be flipped use set y to -2 to exit next loop iteration
             lambda args: (jax.lax.cond(
-                args[2].field_color[args[0], args[1]] == FieldColor.BLACK,  
-                lambda args: (args[0]+1, args[1]-1, args[2], args[3] + args[4], 0),
-                lambda args: (args[0]+1, args[1]-1, args[2], args[3], args[4] + 1),
+                args[2].field_color[args[0], args[1]] == FieldColor.BLACK,
+                lambda args: (args[0]+1, args[1]-1, args[2], args[3] + args[4], 0, args[5], args[5]),
+                lambda args: (args[0]+1, args[1]-1, args[2], args[3], args[4] + 1, check_if_inner_corner(args[0], args[1]), args[6]),
                 args
                 )),
             args
-        )
+        )        
 
+
+    while_loop_return = jax.lax.while_loop(while_cond, while_body, args)
     return jax.lax.cond(
-        jnp.logical_and(input[0] <0, input[1]>7),
-        lambda args: jnp.int32(0.0),
-        lambda args: jnp.int32(jax.lax.while_loop(while_cond, while_body, args)[3]),  
+        jnp.logical_and(input[0] < 0, input[1] > 7),
+        lambda args: (jnp.int32(0.0), (-2147483648, -2147483648), (-2147483648, -2147483648)),
+        lambda args: jnp.int32(while_loop_return[3], while_loop_return[6], while_loop_return[5]),
         args
     )
 @jax.jit
@@ -947,8 +1002,8 @@ def compute_flipped_tiles_top_left(input) -> int:
     #checks wether the first element in the direction of look-up is invalid, becasause its already taken by bot, sets it to nan, to prevent while loop from running
     args = jax.lax.cond(
         input[2].field_color[input[0]-1][input[1]-1] == FieldColor.BLACK,
-        lambda input: (input[0]-1, input[1]-1, input[2], jnp.nan, 0),
-        lambda input: (input[0]-1, input[1]-1, input[2], 0.0, 0),
+        lambda input: (input[0]-1, input[1]-1, input[2], jnp.nan, 0, input[3], input[4]),
+        lambda input: (input[0]-1, input[1]-1, input[2], 0.0, 0, input[3], input[4]),
         input
     ) 
 
@@ -966,25 +1021,50 @@ def compute_flipped_tiles_top_left(input) -> int:
             args[2].field_color[args[0], args[1]] == FieldColor.EMPTY,  
             lambda args: (-2, args[1], args[2], args[3],  args[4]),#if field is empthy, no further tiles can be flipped use set y to -2 to exit next loop iteration
             lambda args: (jax.lax.cond(
-                args[2].field_color[args[0], args[1]] == FieldColor.BLACK,  
-                lambda args: (args[0]-1, args[1]-1, args[2], args[3] + args[4], 0),
-                lambda args: (args[0]-1, args[1]-1, args[2], args[3], args[4] + 1),
+                args[2].field_color[args[0], args[1]] == FieldColor.BLACK,
+                lambda args: (args[0]-1, args[1]-1, args[2], args[3] + args[4], 0, args[5], args[6]),
+                lambda args: (args[0]-1, args[1]-1, args[2], args[3], args[4] + 1, check_if_inner_corner(args[0], args[1]), args[6]),
                 args
                 )),
             args
-        )
+        )        
 
+
+    while_loop_return = jax.lax.while_loop(while_cond, while_body, args)
     return jax.lax.cond(
-        jnp.logical_and(input[0]<0, input[1]<0),
-        lambda args: jnp.int32(0.0),
-        lambda args: jnp.int32(jax.lax.while_loop(while_cond, while_body, args)[3]),  
+        jnp.logical_and(input[0] < 0, input[1] < 0),
+        lambda args: (jnp.int32(0.0), (-2147483648, -2147483648), (-2147483648, -2147483648)),
+        lambda args: jnp.int32(while_loop_return[3], while_loop_return[6], while_loop_return[5]),
         args
     )
 
+def handle_secondary_calculation_of_strategic_score(tile_index: int, game_field: Field, default_pos: int, difficulty: int, new_score: int) -> int:
+    new_score_copy = new_score
+    ((new_score, new_alt_position), _) = calculate_strategic_tile_score(tile_index, game_field, default_pos, difficulty)
+
+    new_score_copy = jax.lax.cond(
+        new_alt_position is not None,
+        lambda _: new_alt_position,
+        lambda _: new_score_copy,
+    )
+
+    total_score = new_score + new_score_copy
+
+    total_score = jax.lax.cond(jnp.logical_or(total_score > 127, total_score < -128),
+        lambda _: -104,
+        lambda _: total_score,
+        None
+    ) 
+
+    return total_score
+
 @jax.jit
-def calculate_strategic_tile_score(tile_index: int, game_field: Field, unknown_arg, difficulty: int):
-    #determine the position of the tile within the game field
-    args = (7 - tile_index // 8, 7 - tile_index % 8, game_field, unknown_arg, difficulty)
+def calculate_strategic_tile_score(tile_index: int, game_field: Field, unknown_arg: int, difficulty: int):
+    game_field_flipped = Field(field_id=game_field.field_id,
+                               field_color=jnp.flip(game_field.field_color))
+
+    #determine the position of the tile within the game field, account for flipped game field
+    args = (7 - tile_index // 8, 7 - tile_index % 8, game_field_flipped, unknown_arg, difficulty)
     branches = [
         lambda args: compute_strategic_score_top_left(args), 
         lambda args: compute_strategic_score_top(args),  
@@ -1007,46 +1087,41 @@ def calculate_strategic_tile_score(tile_index: int, game_field: Field, unknown_a
     ]
 
     def compute_strategic_score_top_left(args):
-        tile_y, tile_x, game_field, unknown_arg, difficulty = args
-        #TODO implement the strategic score for the top left corner
-
-        return ((None, None), None)
+        _, _, game_field_flipped, unknown_arg, difficulty = args
+        return ((css_calculate_top_left_score(game_field_flipped, unknown_arg, difficulty)), True)
 
     def compute_strategic_score_top(args):
-        tile_y, tile_x, game_field, unknown_arg, difficulty = args
-        #TODO implement the strategic score for the top side
+        tile_y, tile_x, game_field_flipped, unknown_arg, difficulty = args
 
-        return ((None, None), None)
+        return ((css__f2d3_count_tiles_horizontally(game_field_flipped, tile_y, tile_x, unknown_arg, difficulty)), False)
 
     def compute_strategic_score_top_right(args):
-        tile_y, tile_x, game_field, unknown_arg, difficulty = args
-        #TODO implement the strategic score for the top right corner
+        _, _, game_field_flipped, unknown_arg, difficulty = args
 
-        return ((None, None), None)
-    
+        return ((css_calculate_top_right_score(game_field_flipped, unknown_arg, difficulty)), True)
+
     def compute_strategic_score_top_left_inner(args):
-        _, _, game_field, _, _ = args
-        return ((css_check_three_tiles(game_field, 0xf, 0x39, 0x3f), None), False)
+        _, _, game_field_flipped, _, _ = args
+        return ((css_check_three_tiles(game_field_flipped, 0xf, 0x39, 0x3f), None), False)
 
     def compute_strategic_score_top_inner(args):
         #Strategic score for top inner field is influenced by the field above it
-        tile_y, tile_x, game_field, _, _ = args 
-        return ((css_check_tile_up(tile_y, tile_x, game_field), None), False)
+        tile_y, tile_x, game_field_flipped, _, _ = args
+        return ((css_check_tile_up(tile_y, tile_x, game_field_flipped), None), False)
 
     def compute_strategic_score_top_right_inner(args):
-        _, _, game_field, _, _ = args
-        return ((css_check_three_tiles(game_field, 0x8, 0x3e, 0x38), None), False)
+        _, _, game_field_flipped, _, _ = args
+        return ((css_check_three_tiles(game_field_flipped, 0x8, 0x3e, 0x38), None), False)
 
     def compute_strategic_score_left(args):
-        tile_y, tile_x, game_field, unknown_arg, difficulty = args
-        #TODO implement the strategic score for the left side
+        tile_y, tile_x, game_field_flipped, unknown_arg, difficulty = args
 
-        return ((None, None), None)
+        return ((css__f2d3_count_tiles_vertically(game_field_flipped, tile_y, tile_x, unknown_arg, difficulty)), False)
 
     def compute_strategic_score_left_inner(args):
         #Strategic score for left inner field is influenced by the field to the left of it
-        tile_y, tile_x, game_field, _, _ = args
-        return ((css_check_tile_left(tile_y, tile_x, game_field), None), False)
+        tile_y, tile_x, game_field_flipped, _, _ = args
+        return ((css_check_tile_left(tile_y, tile_x, game_field_flipped), None), False)
 
     def compute_strategic_score_center_corner(args):
         # Center corner has a fixed score of 4, no further explanation needed
@@ -1058,52 +1133,49 @@ def calculate_strategic_tile_score(tile_index: int, game_field: Field, unknown_a
 
     def compute_strategic_score_right_inner(args):
         #Strategic score for right inner field is influenced by the field to the right of it
-        tile_y, tile_x, game_field, unknown_arg, difficulty = args
-        return ((css_check_tile_right(tile_y, tile_x, game_field), None), False)
+        tile_y, tile_x, game_field_flipped, unknown_arg, difficulty = args
+        return ((css_check_tile_right(tile_y, tile_x, game_field_flipped), None), False)
 
     def compute_strategic_score_right(args):
-        tile_y, tile_x, game_field, unknown_arg, difficulty = args
-        #TODO implement the strategic score for the right side
+        tile_y, tile_x, game_field_flipped, unknown_arg, difficulty = args
 
-        return ((None, None), None)
+        return ((css__f2d3_count_tiles_vertically(game_field_flipped, tile_y, tile_x, unknown_arg, difficulty)), False)
+
 
     def compute_strategic_score_bottom_left_inner(args):
-        _, _, game_field, _, _ = args
-        return ((css_check_three_tiles(game_field, 0x1, 0x37, 0x7), None), None)
+        _, _, game_field_flipped, _, _ = args
+        return ((css_check_three_tiles(game_field_flipped, 0x1, 0x37, 0x7), None), False)
 
     def compute_strategic_score_bottom_inner(args):
         #Strategic score for bottom inner field is influenced by the field below it
-        tile_y, tile_x, game_field, _, _ = args
-        return ((css_check_tile_down(tile_y, tile_x, game_field), None), False)
+        tile_y, tile_x, game_field_flipped, _, _ = args
+        return ((css_check_tile_down(tile_y, tile_x, game_field_flipped), None), False)
 
     def compute_strategic_score_bottom_right_inner(args):
-        _, _, game_field, _, _ = args
-        return ((css_check_three_tiles(game_field, 0x6, 0x30, 0x0), None), None)
+        _, _, game_field_flipped, _, _ = args
+        return ((css_check_three_tiles(game_field_flipped, 0x6, 0x30, 0x0), None), None)
 
     def compute_strategic_score_bottom_left(args):
-        tile_y, tile_x, game_field, unknown_arg, difficulty = args
-        #TODO implement the strategic score for the bottom left corner
-
-        return ((None, None), None)
+        _, _, game_field_flipped, unknown_arg, difficulty = args
+        
+        return ((css_calculate_bottom_left_score(game_field_flipped, unknown_arg, difficulty)), True)
 
     def compute_strategic_score_bottom(args):
-        tile_y, tile_x, game_field, unknown_arg, difficulty = args
-        #TODO implement the strategic score for the bottom side
+        tile_y, tile_x, game_field_flipped, unknown_arg, difficulty = args
 
-        return ((None, None), None)
+        return ((css__f2d3_count_tiles_horizontally(game_field_flipped, tile_y, tile_x, unknown_arg, difficulty)), False)
 
     def compute_strategic_score_bottom_right(args):
-        tile_y, tile_x, game_field, unknown_arg, difficulty = args
-        #TODO implement the strategic score for the bottom right corner
+        _, _, game_field_flipped, unknown_arg, difficulty = args
 
-        return ((None, None), None)
+        return ((css_calculate_bottom_right_score(game_field_flipped, unknown_arg, difficulty)), True)
 
-    return jax.lax.switch(tile_index, branches, args)
+    return jax.lax.switch(STRATEGIC_TILE_SCORE_CASES[tile_index], branches, args)
 
 def css_check_tile_down(tile_y: int, tile_x: int, game_field: Field) -> int:
     # If field below has the same color as the current tile, return 4, else return -8
     return jax.lax.cond(
-        game_field.field_color[tile_y + 1, tile_x] == game_field.field_color[tile_y , tile_x],
+        game_field.field_color[tile_y - 1, tile_x] == game_field.field_color[tile_y , tile_x],
         lambda _: 4,
         lambda _: -8,
         None)
@@ -1111,7 +1183,7 @@ def css_check_tile_down(tile_y: int, tile_x: int, game_field: Field) -> int:
 def css_check_tile_up(tile_y: int, tile_x: int, game_field: Field) -> int:
     # If field above has the same color as the current tile, return 4, else return -8
     return jax.lax.cond(
-        game_field.field_color[tile_y - 1, tile_x] == game_field.field_color[tile_y , tile_x],
+        game_field.field_color[tile_y + 1, tile_x] == game_field.field_color[tile_y , tile_x],
         lambda _: 4,
         lambda _: -8,
         None)
@@ -1119,7 +1191,7 @@ def css_check_tile_up(tile_y: int, tile_x: int, game_field: Field) -> int:
 def css_check_tile_left(tile_y: int, tile_x: int, game_field: Field) -> int:
     # If field to the left has the same color as the current tile, return 4, else return -8
     return jax.lax.cond(
-        game_field.field_color[tile_y, tile_x - 1] == game_field.field_color[tile_y , tile_x],
+        game_field.field_color[tile_y, tile_x + 1] == game_field.field_color[tile_y , tile_x],
         lambda _: 4,
         lambda _: -8,
         None)
@@ -1127,7 +1199,7 @@ def css_check_tile_left(tile_y: int, tile_x: int, game_field: Field) -> int:
 def css_check_tile_right(tile_y: int, tile_x: int, game_field: Field) -> int:
     # If field to the right has the same color as the current tile, return 4, else return -8
     return jax.lax.cond(
-        game_field.field_color[tile_y, tile_x + 1] == game_field.field_color[tile_y , tile_x],
+        game_field.field_color[tile_y, tile_x - 1] == game_field.field_color[tile_y , tile_x],
         lambda _: 4,
         lambda _: -8,
         None)
@@ -1135,10 +1207,10 @@ def css_check_tile_right(tile_y: int, tile_x: int, game_field: Field) -> int:
 def css_check_three_tiles(game_field: Field, field_1: int, field_2: int, field_3: int) -> int:
     # checks for colors of the fields and returns a score based on the colors
     # field_1, field_2 are are on the opposing line end of the to be checked field, field_3 is in the opposing corner
-    secondary_condition = jnp.logical_or(game_field.field_color[7 - (field_1 % 8),7- field_1 // 8 ] == FieldColor.WHITE,
-    game_field.field_color[7 - (field_2 % 8),7- field_2 // 8 ] == FieldColor.WHITE)
+    secondary_condition = jnp.logical_or(game_field.field_color[field_1 % 8, field_1 // 8 ] == FieldColor.WHITE,
+    game_field.field_color[(field_2 % 8),field_2 // 8 ] == FieldColor.WHITE)
 
-    return jax.lax.cond(game_field.field_color[7 - (field_3 % 8),7- field_3 // 8 ] == FieldColor.EMPTY,
+    return jax.lax.cond(game_field.field_color[field_3 % 8,field_3 // 8 ] == FieldColor.EMPTY,
         lambda secondary_condition: 0,
         lambda secondary_condition: jax.lax.cond(secondary_condition, 
             lambda _: -68, 
@@ -1146,48 +1218,147 @@ def css_check_three_tiles(game_field: Field, field_1: int, field_2: int, field_3
             None),
         secondary_condition)
 
-def css__f2d3_count_tiles_in_line(game_field: Field, array_of_tiles, pos, default_pos, difficulty: int):
-    return_value = ((None, None), False) # (Touple to be returned, Aborted)
-
-    return_value = jax.lax.cond(difficulty == 1,
-        lambda _: ((0, None), True),
+def css_calculate_bottom_right_score(game_field: Field, default_pos: int, difficulty: int):
+    #alt singature: game_field: Field, ai_think_timer: int, default_pos: int, difficulty: int, y_pos: int, x_pos: int
+    return_value = ((56,default_pos), False) # (Touple to be returned, Aborted)
+    (horizontal_score, alternate_pos_horz) = css__f2d3_count_tiles_horizontally(game_field, 0, 7, default_pos, difficulty) #TODO check for correctness of 0,7
+    
+    jax.lax.cond(horizontal_score < 0,
+        lambda _: ((horizontal_score, alternate_pos_horz), True),
         lambda _: return_value,
         None)
 
-    reversed_array_of_tiles = jnp.flip(array_of_tiles.field_color)
+    (vertical_score, alternate_pos_vert) = css__f2d3_count_tiles_vertically(game_field, 7, 0, default_pos, difficulty) #TODO check for correctness of 7,0
+
+    jax.lax.cond(jnp.logical_and(vertical_score < 0, return_value[1] == False),
+        lambda _: ((vertical_score, alternate_pos_vert), True),
+        lambda _: return_value,
+        None)
+
+    return return_value[0]
+
+def css_calculate_top_left_score(game_field: Field, default_pos: int, difficulty: int):
+    return_value = ((56,default_pos), False) # (Touple to be returned, Aborted)
+    (horizontal_score, alternate_pos_horz) = css__f2d3_count_tiles_horizontally(game_field, 7, 0, default_pos, difficulty) #TODO check for correctness of 7,0
+
+    jax.lax.cond(horizontal_score < 0,
+        lambda _: ((horizontal_score, alternate_pos_horz), True),
+        lambda _: return_value,
+        None)
+
+    (vertical_score, alternate_pos_vert) = css__f2d3_count_tiles_vertically(game_field, 0, 7, default_pos, difficulty) #TODO check for correctness of 0,7
+
+    jax.lax.cond(jnp.logical_and(vertical_score < 0, return_value[1] == False),
+        lambda _: ((vertical_score, alternate_pos_vert), True),
+        lambda _: return_value,
+        None)
+
+    return return_value[0]
+
+def css_calculate_top_right_score(game_field: Field, default_pos: int, difficulty: int):
+    return_value = ((56,default_pos), False) # (Touple to be returned, Aborted)
+    (horizontal_score, alternate_pos_horz) = css__f2d3_count_tiles_horizontally(game_field, 0, 0, default_pos, difficulty) #TODO check for correctness of 0,0
+    
+    jax.lax.cond(horizontal_score < 0,
+        lambda _: ((horizontal_score, alternate_pos_horz), True),
+        lambda _: return_value,
+        None)
+
+    (vertical_score, alternate_pos_vert) = css__f2d3_count_tiles_vertically(game_field, 7, 7, default_pos, difficulty) #TODO check for correctness of 7,7
+
+    jax.lax.cond(jnp.logical_and(vertical_score < 0, return_value[1] == False),
+        lambda _: ((vertical_score, alternate_pos_vert), True),
+        lambda _: return_value,
+        None)
+
+    return return_value[0]
+
+def css_calculate_bottom_left_score(game_field: Field, default_pos: int, difficulty: int):
+    return_value = ((56,default_pos), False) # (Touple to be returned, Aborted)
+    (horizontal_score, alternate_pos_horz) = css__f2d3_count_tiles_horizontally(game_field, 7, 7, default_pos, difficulty) #TODO check for correctness of 7,7
+    
+    jax.lax.cond(horizontal_score < 0,
+        lambda _: ((horizontal_score, alternate_pos_horz), True),
+        lambda _: return_value,
+        None)
+
+    (vertical_score, alternate_pos_vert) = css__f2d3_count_tiles_vertically(game_field, 0, 0, default_pos, difficulty) #TODO check for correctness of 0,0
+
+    jax.lax.cond(jnp.logical_and(vertical_score < 0, return_value[1] == False),
+        lambda _: ((vertical_score, alternate_pos_vert), True),
+        lambda _: return_value,
+        None)
+
+    return return_value[0]
+
+def css__f2d3_count_tiles_vertically(game_field: Field, y_pos:int, x_pos: int, default_pos: int, difficulty: int):
+    empty_line = jnp.arange(8, dtype=jnp.int32)
+
+    def get_field_color_tiles_vertically(i, y_pos, x_pos, game_field):
+        return game_field.field_color[i, x_pos]
+
+    vectorized_array_of_tiles = jax.vmap(get_field_color_tiles_vertically, in_axes=(0, None, None, None))
+    array_of_tiles = Field(field_id=jnp.arange(8),
+                           field_color=vectorized_array_of_tiles(empty_line, y_pos, x_pos, game_field)) #TODO check if flip is needed
+
+    return css__f2d3_count_tiles_in_line(array_of_tiles, y_pos, default_pos, difficulty)
+
+def css__f2d3_count_tiles_horizontally(game_field: Field, y_pos:int, x_pos: int, default_pos: int, difficulty: int):
+    array_of_tiles = Field(
+        field_id=jnp.arange(8),
+        field_color=game_field.field_color[y_pos] #TODO check if flip is needed
+    )
+
+
+    return css__f2d3_count_tiles_in_line(array_of_tiles, x_pos, default_pos, difficulty)
+
+
+
+def css__f2d3_count_tiles_in_line(array_of_tiles, pos: int, default_pos: int, difficulty: int):
+    return_value = ((-1, -1), False) # (Touple to be returned, Aborted)
+
+    return_value = jax.lax.cond(difficulty == 1,
+        lambda _: ((0, -1), True),
+        lambda _: return_value,
+        None)
+
+    reversed_array_of_tiles = Field(
+        field_id=jnp.flip(array_of_tiles.field_id),
+        field_color=jnp.flip(array_of_tiles.field_color)
+    )
 
     left_state, left_pos_opt = css_sub_f5c1_count_tiles_in_line_descending(array_of_tiles, pos)
-    right_state, right_pos_opt = css_sub_f5c1_count_tiles_in_line_ascending(reversed_array_of_tiles, 7 - pos)
+    right_state, right_pos_opt = css_sub_f5c1_count_tiles_in_line_descending(reversed_array_of_tiles,7 - pos)
 
     left_pos = jax.lax.cond(left_pos_opt != -1, 
         lambda _: left_pos_opt, 
         lambda _: default_pos, 
         None)
     right_pos = jax.lax.cond(right_pos_opt != -1, 
-        lambda _: right_pos_opt, 
+        lambda _: 7-right_pos_opt, #TODO check for correctnes in assembly (reconverts right pos from flipped array to normal array)
         lambda _: left_pos,
         None) #TODO check in assembly if left_pos is the correct value
 
     combined_state = (left_state << 2) | right_state
 
-    returned_value = jax.lax.cond(jnp.logical_and(
-        returned_value[1] == False),
+    return_value = jax.lax.cond(jnp.logical_and(
+        return_value[1] == False,
         jnp.logical_and(
             combined_state == 0b0101, 
             jnp.logical_or(
                 reversed_array_of_tiles.field_color[0] != FieldColor.EMPTY, 
-                reversed_array_of_tiles.field_color[7] != FieldColor.EMPTY)),
-        lambda _: ((-40, right_pos), True),
-        lambda _: returned_value,
+                reversed_array_of_tiles.field_color[7] != FieldColor.EMPTY))),
+        lambda _: ((-40, right_pos), True), #TODO check why right_pos is used and if correct
+        lambda _: return_value,
         None)
 
-    returned_value = jax.lax.cond(jnp.logical_and(
-        returned_value[1] == False),
+    return_value = jax.lax.cond(jnp.logical_and(
+        return_value[1] == False,
         jnp.logical_and(
             jnp.logical_or(combined_state == 0b0111, combined_state == 0b1101),
-            jnp.logical_or(right_pos == 7, right_pos == 0)),
-        lambda _: ((-96, right_pos), True),
-        lambda _: returned_value,
+            jnp.logical_or(right_pos == 7, right_pos == 0))),
+        lambda _: ((-96, right_pos), True), #TODO check why right_pos is used and if correct (randomness?)
+        lambda _: return_value,
         None)
 
     reverse_pos = 7 - pos
@@ -1201,23 +1372,23 @@ def css__f2d3_count_tiles_in_line(game_field: Field, array_of_tiles, pos, defaul
         lambda _: (flag, False),
         None)
 
-    flag, condition_break = jax.lax.cond(jnp.logical_and(condition_break == False, reverse_pos <2),
+    flag, condition_break = jax.lax.cond(jnp.logical_and(condition_break == False, reverse_pos < 2), #TODO check if <> is correct
         lambda _: (True, True),
         lambda _: (flag, False),
         None)
 
     flag, condition_break = jax.lax.cond(jnp.logical_and(
         condition_break == False, 
-        jnp.logical_and(
-            reversed_array_of_tiles.field_color[rev_pos - 1] != FieldColor.EMPTY, 
-            reversed_array_of_tiles.field_color[rev_pos-2] == FieldColor.EMPTY)),
+        jnp.logical_or(
+            reversed_array_of_tiles.field_color[reverse_pos - 1] != FieldColor.EMPTY, 
+            reversed_array_of_tiles.field_color[reverse_pos - 2] == FieldColor.EMPTY)),
             lambda _: (True, True),
             lambda _: (flag, False),
             None)
 
-    flag, condition_break, combined_score = jax.lax.cond(jnp.logical_and(condition_break == False, reverse_pos <2),
-        lambda _: (True, True, 18),
-        lambda _: (flag, False, combined_score),
+    flag, condition_break, combined_state = jax.lax.cond(jnp.logical_and(condition_break == False, reversed_array_of_tiles.field_color[reverse_pos - 2] != FieldColor.WHITE),
+        lambda _: (False, True, 18),
+        lambda _: (flag, False, combined_state),
         None)
 
 
@@ -1231,16 +1402,75 @@ def css__f2d3_count_tiles_in_line(game_field: Field, array_of_tiles, pos, defaul
         ]
     ))
 
-    combined_score = jax.lax.cond(conditions,
+    combined_state = jax.lax.cond(conditions,
         lambda _: 18,
-        lambda _: combined_score,
+        lambda _: combined_state,
         None
     )
 
+    return_value = jax.lax.cond(jnp.logical_and(difficulty == 2, return_value[1] == False),
+        lambda _: ((__F7EC[combined_state], right_pos), True),
+        lambda _: return_value,
+        None,
+    )
+
+    black_mask_low = 1 << reverse_pos
+    black_mask_high = 1 << (7-reverse_pos)
+    white_mask_low = 0
+    white_mask_high = 0
+
+    init_val = (reversed_array_of_tiles, black_mask_low, black_mask_high, white_mask_low,white_mask_high)
 
 
+    def css_sub_f5c1_count_tiles_in_line_loop_mask_tiles(i, loop_vals):
+        _, black_mask_low, black_mask_high, white_mask_low, white_mask_high = loop_vals
 
+        black_mask_low, black_mask_high = jax.lax.cond( reversed_array_of_tiles.field_color[i] == FieldColor.BLACK,
+            lambda _: (black_mask_low | 1 << i, black_mask_high | 1 << (7 - i)),
+            lambda _: (black_mask_low, black_mask_high),
+            None
+        )
 
+        white_mask_low, white_mask_high = jax.lax.cond( reversed_array_of_tiles.field_color[i] == FieldColor.WHITE,
+            lambda _: (white_mask_low | 1 << i, white_mask_high | 1 << (7 - i)),
+            lambda _: (white_mask_low, white_mask_high),
+            None
+        )
+
+        return (loop_vals[0], black_mask_low, black_mask_high, white_mask_low, white_mask_high)
+
+    _, black_mask_low, black_mask_high, white_mask_low, white_mask_high = jax.lax.fori_loop(0,8, css_sub_f5c1_count_tiles_in_line_loop_mask_tiles, init_val)
+
+    init_val2 = (return_value, black_mask_low, black_mask_high,white_mask_low,white_mask_high)
+
+    def css_sub_f5c1_count_tiles_in_line_loop_check_masks(i, loop_vals):
+        #TODO can be vectorised
+        return_value, black_mask_low, black_mask_high, white_mask_low, white_mask_high = loop_vals
+        return_value = jax.lax.cond(
+            jnp.logical_and(__F3BA[33-i] == white_mask_low, __F3DC[33-i] == black_mask_low),
+            lambda _: ((__F3FE[33-i], white_mask_high),True),
+            lambda _: return_value,
+            None)
+        
+        return_value = jax.lax.cond(
+            jnp.logical_and(return_value[1] == False, 
+                jnp.logical_and(__F3BA[33-i] == white_mask_high, __F3DC[33-i] == black_mask_high)),
+            lambda _: ((__F3FE[33-i], white_mask_high),True), #TODO check in Assembly for correctnes!
+            lambda _: return_value,
+            None)
+        
+        return (return_value, black_mask_low, black_mask_high, white_mask_low, white_mask_high)
+
+    return_value, _, _, _, _ = jax.lax.cond(return_value[1] == False, 
+                                            lambda init_val2: jax.lax.fori_loop(0,34, css_sub_f5c1_count_tiles_in_line_loop_check_masks, init_val2),
+                                            lambda init_val2: (return_value, black_mask_low, black_mask_high, white_mask_low, white_mask_high),
+                                            init_val2)
+
+    return jax.lax.cond(return_value[1] == True,
+        lambda _: return_value[0],
+        lambda _: (__F3FE[combined_state], white_mask_high),
+        None)
+   
 @jax.jit
 def css_sub_f5c1_count_tiles_in_line_descending(array_of_tiles, start_index: int) ->(int, int):
     adjacent_index = start_index-1
