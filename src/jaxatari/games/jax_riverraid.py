@@ -59,6 +59,9 @@ class RiverraidState(NamedTuple):
     enemy_type: chex.Array
     enemy_state: chex.Array  # 0 empty/dead, 1 alive
     enemy_direction: chex.Array  # 0 left static, 1 right static, 2 left moving, 3 right moving
+    fuel_x: chex.Array
+    fuel_y: chex.Array
+    fuel_state: chex.Array  # 0 empty, 1 present
     spawn_cooldown: chex.Array
 
 
@@ -779,14 +782,52 @@ def spawn_enemies(state):
 @jax.jit
 def spawn_fuel(state: RiverraidState) -> RiverraidState:
     jax.debug.print("SPAWNING FUEL")
-    return state
+
+    key, spawn_key, x_key = jax.random.split(state.master_key, 3)
+
+    free_fuel_idx = jax.lax.cond(
+        jnp.any(state.fuel_state == 0),
+        lambda state: jnp.argmax(state.fuel_state == 0),
+        lambda _: jnp.array(-1, dtype=jnp.int32),
+        operand=state
+    )
+
+    new_fuel_state = state.fuel_state.at[free_fuel_idx].set(jnp.array(1))
+
+    new_fuel_x = jax.lax.cond(
+        free_fuel_idx >= 0,
+        lambda state: jax.lax.cond(
+                state.river_inner_left[0] >= 0,
+                lambda state: jax.lax.cond(
+                    jax.random.bernoulli(x_key, 0.5),
+                            lambda state: jax.random.randint(x_key, (), state.river_left[0] + 1, state.river_inner_left[0] - 8),
+                            lambda state: jax.random.randint(x_key, (), state.river_inner_right[0] + 1, state.river_right[0] - 8),
+                    operand=state
+                ),
+                lambda state: jax.random.randint(x_key, (), state.river_left[0] + 8, state.river_right[0] - 8),
+                operand=state
+            ),
+        lambda state: jnp.array(-1, dtype=jnp.int32),
+        operand=state
+    )
+    new_fuel_y = jax.lax.cond(
+        free_fuel_idx >= 0,
+        lambda _: jnp.array(0, dtype=jnp.float32),
+        lambda _: state.enemy_y[free_fuel_idx],
+        operand=None
+    )
+
+    return state._replace(fuel_state=new_fuel_state,
+                            fuel_x=state.fuel_x.at[free_fuel_idx].set(new_fuel_x.astype(jnp.float32)),
+                            fuel_y=state.fuel_y.at[free_fuel_idx].set(new_fuel_y.astype(jnp.float32)),
+                            master_key=key)
 
 @jax.jit
 def spawn_entities(state: RiverraidState) -> RiverraidState:
     key, subkey1, subkey2 = jax.random.split(state.master_key, 3)
 
     def spawn_entity(state: RiverraidState) -> RiverraidState:
-        spawn_fuel_flag = jax.random.bernoulli(subkey2, 0.0) # TODO balance
+        spawn_fuel_flag = jax.random.bernoulli(subkey2, 0.1) # TODO balance
         return jax.lax.cond(
             spawn_fuel_flag,
             lambda state: spawn_fuel(state),
@@ -812,13 +853,23 @@ def spawn_entities(state: RiverraidState) -> RiverraidState:
     return new_state._replace(master_key=key,
                               spawn_cooldown=new_spawn_cooldown)
 
-def scroll_enemies(state: RiverraidState) -> RiverraidState:
+def scroll_entities(state: RiverraidState) -> RiverraidState:
     new_enemy_y = state.enemy_y + 1
     new_enemy_state = jnp.where(new_enemy_y > SCREEN_HEIGHT + 1, 0, state.enemy_state)
     new_enemy_x = jnp.where(new_enemy_y > SCREEN_HEIGHT + 1, -1, state.enemy_x)
-    return state._replace(enemy_y=new_enemy_y,
-                          enemy_state=new_enemy_state,
-                          enemy_x=new_enemy_x)
+
+    new_fuel_y = state.fuel_y + 1
+    new_fuel_state = jnp.where(new_fuel_y > SCREEN_HEIGHT + 1, 0, state.fuel_state)
+    new_fuel_x = jnp.where(new_fuel_y > SCREEN_HEIGHT + 1, -1, state.fuel_x)
+
+    return state._replace(
+        enemy_y=new_enemy_y,
+        enemy_state=new_enemy_state,
+        enemy_x=new_enemy_x,
+        fuel_y=new_fuel_y,
+        fuel_state=new_fuel_state,
+        fuel_x=new_fuel_x
+    )
 
 
 def enemy_collision(state: RiverraidState) -> RiverraidState:
@@ -982,6 +1033,9 @@ class JaxRiverraid(JaxEnvironment):
                                enemy_state=jnp.full((MAX_ENEMIES,), 0, dtype=jnp.int32),
                                enemy_type= jnp.full((MAX_ENEMIES,), 0, dtype=jnp.int32),
                                enemy_direction= jnp.full((MAX_ENEMIES,), 0, dtype=jnp.int32),
+                               fuel_x=jnp.full((MAX_ENEMIES,), -1, dtype=jnp.float32),
+                               fuel_y=jnp.full((MAX_ENEMIES,), SCREEN_HEIGHT + 1, dtype=jnp.float32),
+                               fuel_state=jnp.full((MAX_ENEMIES,), 0, dtype=jnp.int32),
                                spawn_cooldown=jnp.array(50)
                                )
         observation = self._get_observation(state)
@@ -1001,7 +1055,7 @@ class JaxRiverraid(JaxEnvironment):
             new_state = player_movement(new_state, action)
             new_state = player_shooting(new_state, action)
             new_state = spawn_entities(new_state)
-            new_state = scroll_enemies(new_state)
+            new_state = scroll_entities(new_state)
             new_state = enemy_collision(new_state)
             new_state = update_enemy_movement_status(new_state)
             new_state = enemy_movement(new_state)
@@ -1139,19 +1193,33 @@ class RiverraidRenderer(AtraJaxisRenderer):
             )
             return aj.render_at(raster, ey, ex, frame_to_render)
 
-        def cond_fun(i):
-            return state.enemy_state[i] > 0
 
-        def body_fun(i, raster):
+        def render_alive_enemies(i, raster):
             raster = jax.lax.cond(
-                cond_fun(i),
+                state.enemy_state[i] > 0,
                 lambda raster: render_enemy_at_idx(raster, i),
                 lambda raster: raster,
                 operand=raster
             )
             return raster
 
-        raster = jax.lax.fori_loop(0, MAX_ENEMIES, body_fun, raster)
+        raster = jax.lax.fori_loop(0, MAX_ENEMIES, render_alive_enemies, raster)
+
+        def render_fuel_at_idx(raster, i):
+            fx = jnp.round(state.fuel_x[i]).astype(jnp.int32)
+            fy = jnp.round(state.fuel_y[i]).astype(jnp.int32)
+            return aj.render_at(raster, fy, fx, aj.get_sprite_frame(self.SPRITE_PLAYER, 0))
+
+        def render_alive_fuel(i, raster):
+            raster = jax.lax.cond(
+                state.fuel_state[i] > 0,
+                lambda raster: render_fuel_at_idx(raster, i),
+                lambda raster: raster,
+                operand=raster
+            )
+            return raster
+
+        raster = jax.lax.fori_loop(0, MAX_ENEMIES, render_alive_fuel, raster)
 
         # transpose it to (WIDTH, HEIGHT, 3)
         return jnp.transpose(raster, (1, 0, 2))
