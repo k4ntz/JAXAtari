@@ -28,7 +28,8 @@ from jaxatari.environment import JaxEnvironment, JAXAtariAction as Action
 MAX_PIECES = 12
 
 
-class VideoCheckersConstants(NamedTuple):
+#class VideoCheckersConstants(NamedTuple):
+class VideoCheckersConstants:
     COLOUR_WHITE: int = 0
     COLOUR_BLACK: int = 1
 
@@ -102,6 +103,7 @@ class OpponentMoveHandler:
 
     @staticmethod
     def clear_captured_positions(opponent_move: OpponentMove) -> OpponentMove:
+        jax.debug.print("Cleared captured positions.")
         return opponent_move._replace(captured_positions=jnp.full(opponent_move.captured_positions.shape, -1))
 
 
@@ -131,7 +133,7 @@ class VideoCheckersInfo(NamedTuple):
 
 
 class BoardHandler:
-    """Handles modifications to the board."""
+    """Handles modifications to the board, as well as board reliant operations."""
 
     @staticmethod
     def reset_board():
@@ -139,15 +141,12 @@ class BoardHandler:
         board = jnp.zeros((VideoCheckersConstants.NUM_FIELDS_X,
                            VideoCheckersConstants.NUM_FIELDS_Y), dtype=jnp.int32)
         # Set up the initial pieces on the board
-
-        # Create arrays of positions
         white_rows = jnp.array([0, 0, 0, 0, 1, 1, 1, 1, 2, 2, 2, 2])
         white_cols = jnp.array([1, 3, 5, 7, 0, 2, 4, 6, 1, 3, 5, 7])
 
         black_rows = jnp.array([5, 5, 5, 5, 6, 6, 6, 6, 7, 7, 7, 7])
         black_cols = jnp.array([0, 2, 4, 6, 1, 3, 5, 7, 0, 2, 4, 6])
 
-        # Set pieces using array indexing
         board = board.at[white_rows, white_cols].set(VideoCheckersConstants.WHITE_PIECE)
         board = board.at[black_rows, black_cols].set(VideoCheckersConstants.BLACK_PIECE)
 
@@ -182,8 +181,217 @@ class BoardHandler:
 
         return new_board
 
+    @staticmethod
+    def tile_is_free(row, col, board):
+        return board[row, col] == VideoCheckersConstants.EMPTY_TILE
 
+    @staticmethod
+    def move_in_bounds(row, col, drow, dcol):
+        """
+        Checks if move can be made in the given direction.
+        Args:
+            row: row index of the piece
+            col: column index of the piece
+            drow: movement in y direction
+            dcol: movement in x direction
 
+        Returns: True, if cursor can be moved in the given direction, False otherwise.
+        """
+        return (((0 <= row + drow) & (row + drow < VideoCheckersConstants.NUM_FIELDS_Y))
+                & ((0 <= col + dcol) & (col + dcol < VideoCheckersConstants.NUM_FIELDS_X)))
+
+    @staticmethod
+    def get_possible_moves_for_piece(row, col, board: chex.Array):
+        """
+        Get all possible moves for a piece at position (row,col)
+        Args:
+           row: row index of the piece
+           col: column index of the piece
+           board: current game board
+
+        Returns: array of all possible moves. If a move in a given direction is not possible, it returns [0,0]
+        """
+
+        piece = board[row, col]
+        is_not_a_piece = (piece == VideoCheckersConstants.EMPTY_TILE) | (row == -1)
+
+        def _get_moves():
+            def prune_possible_moves_for_jumps(possible_moves):
+                """
+                Prune the possible moves for jumps, set the rest to [0 0].
+                """
+
+                return jax.lax.fori_loop(
+                    lower=0,
+                    upper=possible_moves.shape[0],
+                    body_fun=lambda i, moves: jax.lax.cond(
+                        jnp.all(jnp.abs(moves[i]) == 2),  # Check if the move is a jump
+                        lambda moves: moves.at[i].set(moves[i]),  # Keep the jump move
+                        lambda moves: moves.at[i].set(jnp.array([0, 0])),  # Set non-jump move to [0, 0]
+                        operand=moves
+                    ),
+                    init_val=possible_moves
+                )
+
+            def check_move(move):
+                drow, dcol = move
+                jump_available = BoardHandler.move_is_available(row=row, col=col, drow=2 * drow, dcol=2 * dcol,
+                                                        board=board)  # check jump
+                move_available = BoardHandler.move_is_available(row=row, col=col, drow=drow, dcol=dcol,
+                                                        board=board)  # check normal move
+
+                # Return jump move if available, else normal move if available, else [0,0]
+                return jax.lax.cond(
+                    jump_available,
+                    lambda: move * 2,
+                    lambda: jax.lax.cond(
+                        move_available,
+                        lambda: move,
+                        lambda: jnp.array([0, 0]),
+                    ),
+                )
+
+            possible_moves = jax.vmap(check_move)(VideoCheckersConstants.MOVES)
+            # if there is a jump in the possible moves, make non jump moves [0,0]
+            has_jump = jnp.any(jnp.all(jnp.abs(possible_moves) == 2, axis=1))
+            possible_moves = jax.lax.cond(
+                has_jump,
+                lambda: prune_possible_moves_for_jumps(possible_moves),
+                lambda: possible_moves,
+
+            )
+            return possible_moves
+
+        return jax.lax.cond(is_not_a_piece, lambda: jnp.zeros((4, 2), dtype=jnp.int32), _get_moves)
+
+    @staticmethod
+    def move_is_available(row, col, drow, dcol, board: chex.Array):
+        """
+    Checks if a piece can be moved in the given direction. Checks for both, simple moves and jumps.
+    Simple move is available if
+            - destination is in bounds
+            - destination is free
+            - destination is forwards (unless king piece)
+    Args:
+        row: row index of the piece
+        col: column index of the piece
+        drow: movement in y direction
+        dcol: movement in x direction
+        board: current game board
+
+    Returns:
+        True, if a piece can be moved in the given direction, False otherwise.
+    """
+        landing_in_bounds = BoardHandler.move_in_bounds(row=row, col=col, drow=drow, dcol=dcol)
+
+        def handle_jump():
+            """
+            Handle moves with |dx|=2 and |dy|=2
+            jump is not possible if the jumped piece is of the same color as the jumping one
+            BE SURE not just to check if the jumped pice is the same piece, but the same colour. (A white piece still cant jump a white king)
+            jump movement for normal, non-king pieces is only possible forwards (row - 2 for black, row + 2 for white)
+            Returns: True if that movement is available, False otherwise.
+            """
+            piece = board[row, col]
+            jumped_piece = board[row + drow // 2, col + dcol // 2]
+            piece_is_king = (piece == VideoCheckersConstants.WHITE_KING) | (piece == VideoCheckersConstants.BLACK_KING)
+            drow_forward = jax.lax.cond((piece == VideoCheckersConstants.WHITE_PIECE) | (piece == VideoCheckersConstants.WHITE_KING),
+                                        lambda: 2, lambda: -2)
+            is_forward = (drow == drow_forward)
+            can_jump_in_direction = piece_is_king | is_forward
+            tile_is_free = board[row + drow, col + dcol] == VideoCheckersConstants.EMPTY_TILE
+            jumped_piece_is_opponent = jax.lax.cond(
+                jnp.logical_or(piece == VideoCheckersConstants.WHITE_PIECE, piece == VideoCheckersConstants.WHITE_KING),
+                lambda: jnp.logical_or(jumped_piece == VideoCheckersConstants.BLACK_PIECE, jumped_piece == VideoCheckersConstants.BLACK_KING),
+                lambda: jnp.logical_or(jumped_piece == VideoCheckersConstants.WHITE_PIECE, jumped_piece == VideoCheckersConstants.WHITE_KING),
+            )
+            return landing_in_bounds & tile_is_free & jumped_piece_is_opponent & can_jump_in_direction
+
+        def handle_move():
+            """
+            Handle moves with |dx|=1 and |dy|=1
+            Returns: True if that movement is available, False otherwise.
+            """
+            piece = board[row, col]
+            piece_is_king = (piece == VideoCheckersConstants.WHITE_KING) | (piece == VideoCheckersConstants.BLACK_KING)
+
+            drow_forward = jax.lax.cond((piece == VideoCheckersConstants.WHITE_PIECE) | (piece == VideoCheckersConstants.WHITE_KING),
+                                        lambda: 1, lambda: -1)
+            is_forward = (drow == drow_forward)
+            can_move_in_direction = piece_is_king | is_forward
+
+            tile_is_free = board[row + drow, col + dcol] == VideoCheckersConstants.EMPTY_TILE
+            return landing_in_bounds & tile_is_free & can_move_in_direction
+
+        is_jump = (jnp.abs(dcol) == 2) & (jnp.abs(drow) == 2)
+        return jax.lax.cond(is_jump, handle_jump, handle_move)
+
+    @staticmethod
+    def get_movable_pieces(colour, board: chex.Array) -> jnp.ndarray:
+        """
+        For the given colour, return the position of pieces that can perform a legal move. This method therefore enforces
+        the "must jump if possible" rule, returning only the positions of pieces with a jump available.
+        Args:
+            colour: Piece's colour
+            board: Current game board
+
+        Returns: Array of size (MAX_PIECES, 2), containing the positions of pieces that can perform a legal move. If no legal
+        move is available for a piece, it is instead padded with [-1, -1].
+        """
+        jax.debug.print("Const {}".format(VideoCheckersConstants.COLOUR_WHITE))
+        jax.debug.print("Const {}".format(VideoCheckersConstants.COLOUR_BLACK))
+        ha = VideoCheckersConstants.COLOUR_WHITE
+        ha1 = VideoCheckersConstants.COLOUR_BLACK
+        haha = colour == VideoCheckersConstants.COLOUR_WHITE
+        own_pieces = jax.lax.cond(colour == VideoCheckersConstants.COLOUR_WHITE,
+                                  lambda: [VideoCheckersConstants.WHITE_PIECE, VideoCheckersConstants.WHITE_KING],
+                                  lambda: [VideoCheckersConstants.BLACK_PIECE, VideoCheckersConstants.BLACK_KING], )
+        own_pieces_mask = jnp.zeros_like(board, dtype=bool)
+        for piece in own_pieces:
+            own_pieces_mask |= (board == piece)
+
+        # get positions of own pieces. static output shape, which is required for jit compilation.
+        rows, cols = jnp.where(own_pieces_mask, size=MAX_PIECES, fill_value=-1)
+        positions = jnp.stack([rows, cols], axis=1)
+
+        # jax.debug.print("Positions of own pieces: {positions}", positions=positions)
+        # DEBUG NOTES: positions works correctly
+
+        # vectorise function and apply to all positions
+        vmapped_get_possible_moves = jax.vmap(BoardHandler.get_possible_moves_for_piece, in_axes=(0, 0, None))
+        all_possible_moves = vmapped_get_possible_moves(rows, cols, board)
+
+        # jax.debug.print("All possible moves for all pieces: {all_possible_moves}", all_possible_moves=all_possible_moves)
+
+        # masks for each piece
+        can_move_mask = jnp.any(all_possible_moves != 0, axis=(1, 2))  # any move available
+        can_jump_mask = jnp.any(jnp.all(jnp.abs(all_possible_moves) == 2, axis=2), axis=1)  # jump available
+        any_jump_available = jnp.any(can_jump_mask)
+
+        movable_mask = jnp.where(any_jump_available, can_jump_mask,
+                                 can_move_mask)  # this is just an if statement (cond, x ,y)
+
+        movable_positions = jnp.where(
+            movable_mask[:, None],  # Reshape mask to (MAX_PIECES, 1) for broadcasting
+            positions,
+            jnp.array([-1, -1])
+        )
+
+        return movable_positions
+
+    @staticmethod
+    def is_movable_piece(colour, position, board: chex.Array):
+        """
+        check if position is in return set of get_movable_pieces. This is used to check if a piece can be selected in the select piece phase.
+        Args:
+            colour: Colour of the side to check for. 0 for white, 1 for black.
+            position: Position of the piece to check
+            board: Current board
+        Returns: True, if the piece is movable, False otherwise.
+        """
+        movable_pieces = BoardHandler.get_movable_pieces(colour, board)
+        is_movable = jnp.any(jnp.all(movable_pieces == position, axis=1))
+        return is_movable
 
 
 class JaxVideoCheckers(
@@ -217,34 +425,7 @@ class JaxVideoCheckers(
             state: Initial game state.
         """
         # Initialize the board with pieces, this is a placeholder
-        board = jnp.zeros((self.consts.NUM_FIELDS_X, self.consts.NUM_FIELDS_Y), dtype=jnp.int32)
-        # Set up the initial pieces on the board
-
-        board = board.at[0, 1].set(self.consts.WHITE_PIECE)
-        board = board.at[0, 3].set(self.consts.WHITE_PIECE)
-        board = board.at[0, 5].set(self.consts.WHITE_PIECE)
-        board = board.at[0, 7].set(self.consts.WHITE_PIECE)
-        board = board.at[1, 0].set(self.consts.WHITE_PIECE)
-        board = board.at[1, 2].set(self.consts.WHITE_PIECE)
-        board = board.at[1, 4].set(self.consts.WHITE_PIECE)
-        board = board.at[1, 6].set(self.consts.WHITE_PIECE)
-        board = board.at[2, 1].set(self.consts.WHITE_PIECE)
-        board = board.at[2, 3].set(self.consts.WHITE_PIECE)
-        board = board.at[2, 5].set(self.consts.WHITE_PIECE)
-        board = board.at[2, 7].set(self.consts.WHITE_PIECE)
-
-        board = board.at[5, 0].set(self.consts.BLACK_PIECE)
-        board = board.at[5, 2].set(self.consts.BLACK_PIECE)
-        board = board.at[5, 4].set(self.consts.BLACK_PIECE)
-        board = board.at[5, 6].set(self.consts.BLACK_KING)
-        board = board.at[6, 1].set(self.consts.BLACK_PIECE)
-        board = board.at[6, 3].set(self.consts.BLACK_PIECE)
-        board = board.at[6, 5].set(self.consts.BLACK_PIECE)
-        board = board.at[6, 7].set(self.consts.BLACK_PIECE)
-        board = board.at[7, 0].set(self.consts.BLACK_PIECE)
-        board = board.at[7, 2].set(self.consts.BLACK_PIECE)
-        board = board.at[7, 4].set(self.consts.BLACK_PIECE)
-        board = board.at[7, 6].set(self.consts.BLACK_PIECE)
+        board = BoardHandler.reset_board()
 
         # Default state
         state = VideoCheckersState(cursor_pos=jnp.array([6, 7]), board=board, game_phase=self.consts.SELECT_PIECE_PHASE,
@@ -346,220 +527,6 @@ class JaxVideoCheckers(
     # Important for phase changes. The fields used by the next phase must be reset. This means select_piece, etc.
 
     @partial(jax.jit, static_argnums=(0,))
-    def get_possible_moves_for_piece(self, row, col, board):
-        """
-        Get all possible moves for a piece at position (row,col)
-        Args:
-           row: row index of the piece
-           col: column index of the piece
-           board: current game board
-
-        Returns: array of all possible moves. If a move in a given direction is not possible, it returns [0,0]
-        """
-
-        piece = board[row, col]
-        is_not_a_piece = (piece == self.consts.EMPTY_TILE) | (row == -1)
-
-        def _get_moves():
-            def prune_possible_moves_for_jumps(possible_moves):
-                """
-                Prune the possible moves for jumps, set the rest to [0 0].
-                """
-
-                return jax.lax.fori_loop(
-                    lower=0,
-                    upper=possible_moves.shape[0],
-                    body_fun=lambda i, moves: jax.lax.cond(
-                        jnp.all(jnp.abs(moves[i]) == 2),  # Check if the move is a jump
-                        lambda moves: moves.at[i].set(moves[i]),  # Keep the jump move
-                        lambda moves: moves.at[i].set(jnp.array([0, 0])),  # Set non-jump move to [0, 0]
-                        operand=moves
-                    ),
-                    init_val=possible_moves
-                )
-
-            def check_move(move):
-                drow, dcol = move
-                jump_available = self.move_is_available(row=row, col=col, drow=2 * drow, dcol=2 * dcol,
-                                                        board=board)  # check jump
-                move_available = self.move_is_available(row=row, col=col, drow=drow, dcol=dcol,
-                                                        board=board)  # check normal move
-                # jax.debug.print(
-                #    "The jump from ({start_row}, {start_col}) to ({end_row}, {end_col}) is available: {jump_available}",
-                #    start_row=row, start_col=col,
-                #    end_row=row + 2 * drow, end_col=col + 2 * dcol, jump_available=jump_available)
-
-                # Return jump move if available, else normal move if available, else [0,0]
-                return jax.lax.cond(
-                    jump_available,
-                    lambda: move * 2,
-                    lambda: jax.lax.cond(
-                        move_available,
-                        lambda: move,
-                        lambda: jnp.array([0, 0]),
-                    ),
-                )
-
-            possible_moves = jax.vmap(check_move)(self.consts.MOVES)
-            # if there is a jump in the possible moves, make non jump moves [0,0]
-            has_jump = jnp.any(jnp.all(jnp.abs(possible_moves) == 2, axis=1))
-            possible_moves = jax.lax.cond(
-                has_jump,
-                lambda: prune_possible_moves_for_jumps(possible_moves),
-                lambda: possible_moves,
-
-            )
-            return possible_moves
-
-        return jax.lax.cond(is_not_a_piece, lambda: jnp.zeros((4, 2), dtype=jnp.int32), _get_moves)
-
-    @partial(jax.jit, static_argnums=(0,))
-    def move_in_bounds(self, row, col, drow, dcol):
-        """
-        Checks if move can be made in the given direction.
-        Args:
-            row: row index of the piece
-            col: column index of the piece
-            drow: movement in y direction
-            dcol: movement in x direction
-
-        Returns: True, if cursor can be moved in the given direction, False otherwise.
-
-        """
-        return (jnp.logical_and(
-            (0 <= row + drow),
-            (row + drow < self.consts.NUM_FIELDS_Y)
-        ) & jnp.logical_and(
-            (0 <= col + dcol),
-            (col + dcol < self.consts.NUM_FIELDS_X)
-        ))
-
-    @partial(jax.jit, static_argnums=(0,))
-    def move_is_available(self, row, col, drow, dcol, board):
-        """
-    Checks if a piece can be moved in the given direction. Checks for both, simple moves and jumps.
-    Simple move is available if
-            - destination is in bounds
-            - destination is free
-            - destination is forwards (unless king piece)
-    Args:
-        row: row index of the piece
-        col: column index of the piece
-        drow: movement in y direction
-        dcol: movement in x direction
-        board: current game board
-
-    Returns:
-        True, if a piece can be moved in the given direction, False otherwise.
-    """
-        landing_in_bounds = self.move_in_bounds(row=row, col=col, drow=drow, dcol=dcol)
-
-        def handle_jump():
-            """
-            Handle moves with |dx|=2 and |dy|=2
-            jump is not possible if the jumped piece is of the same color as the jumping one
-            BE SURE not just to check if the jumped pice is the same piece, but the same colour. (A white piece still cant jump a white king)
-            jump movement for normal, non-king pieces is only possible forwards (row - 2 for black, row + 2 for white)
-            Returns: True if that movement is available, False otherwise.
-            """
-            piece = board[row, col]
-            jumped_piece = board[row + drow // 2, col + dcol // 2]
-            piece_is_king = (piece == self.consts.WHITE_KING) | (piece == self.consts.BLACK_KING)
-            drow_forward = jax.lax.cond((piece == self.consts.WHITE_PIECE) | (piece == self.consts.WHITE_KING),
-                                        lambda: 2, lambda: -2)
-            is_forward = (drow == drow_forward)
-            can_jump_in_direction = piece_is_king | is_forward
-            tile_is_free = board[row + drow, col + dcol] == self.consts.EMPTY_TILE
-            jumped_piece_is_opponent = jax.lax.cond(
-                jnp.logical_or(piece == self.consts.WHITE_PIECE, piece == self.consts.WHITE_KING),
-                lambda: jnp.logical_or(jumped_piece == self.consts.BLACK_PIECE, jumped_piece == self.consts.BLACK_KING),
-                lambda: jnp.logical_or(jumped_piece == self.consts.WHITE_PIECE, jumped_piece == self.consts.WHITE_KING),
-            )
-            return landing_in_bounds & tile_is_free & jumped_piece_is_opponent & can_jump_in_direction
-
-        def handle_move():
-            """
-            Handle moves with |dx|=1 and |dy|=1
-            Returns: True if that movement is available, False otherwise.
-            """
-            piece = board[row, col]
-            piece_is_king = (piece == self.consts.WHITE_KING) | (piece == self.consts.BLACK_KING)
-
-            drow_forward = jax.lax.cond((piece == self.consts.WHITE_PIECE) | (piece == self.consts.WHITE_KING),
-                                        lambda: 1, lambda: -1)
-            is_forward = (drow == drow_forward)
-            can_move_in_direction = piece_is_king | is_forward
-
-            tile_is_free = board[row + drow, col + dcol] == self.consts.EMPTY_TILE
-            return landing_in_bounds & tile_is_free & can_move_in_direction
-
-        is_jump = (jnp.abs(dcol) == 2) & (jnp.abs(drow) == 2)
-        return jax.lax.cond(is_jump, handle_jump, handle_move)
-
-    def is_movable_piece(self, colour, position, state: VideoCheckersState):
-        """
-        check if position is in return set of get_movable_pieces. This is used to check if a piece can be selected in the select piece phase.
-        Args:
-            colour: Colour of the side to check for. 0 for white, 1 for black.
-            position: Position of the piece to check
-            state: Current state of the game
-        Returns: True, if the piece is movable, False otherwise.
-        """
-        movable_pieces = self.get_movable_pieces(colour, state)
-        # jax.debug.print("Movable pieces for colour {colour}: {movable_pieces}", colour=colour,
-        #                movable_pieces=movable_pieces)
-        is_movable = jnp.any(jnp.all(movable_pieces == position, axis=1))
-        # jax.debug.print("Is position {position} movable: {is_movable}", position=position, is_movable=is_movable)
-        return is_movable
-
-    def get_movable_pieces(self, colour, state: VideoCheckersState) -> jnp.ndarray:
-        """
-        For the given colour, return the position of pieces that can perform a legal move. This method therefore enforces
-        the "must jump if possible" rule, returning only the positions of pieces with a jump available.
-        Args:
-            colour: Piece's colour
-            state: Current state of the game
-
-        Returns: Array of size (MAX_PIECES, 2), containing the positions of pieces that can perform a legal move. If no legal
-        move is available for a piece, it is instead padded with [-1, -1].
-        """
-        own_pieces = jax.lax.cond(colour == self.consts.COLOUR_WHITE,
-                                  lambda: [self.consts.WHITE_PIECE, self.consts.WHITE_KING],
-                                  lambda: [self.consts.BLACK_PIECE, self.consts.BLACK_KING], )
-        own_pieces_mask = jnp.zeros_like(state.board, dtype=bool)
-        for piece in own_pieces:
-            own_pieces_mask |= (state.board == piece)
-
-        # get positions of own pieces. static output shape, which is required for jit compilation.
-        rows, cols = jnp.where(own_pieces_mask, size=MAX_PIECES, fill_value=-1)
-        positions = jnp.stack([rows, cols], axis=1)
-
-        # jax.debug.print("Positions of own pieces: {positions}", positions=positions)
-        # DEBUG NOTES: positions works correctly
-
-        # vectorise function and apply to all positions
-        vmapped_get_possible_moves = jax.vmap(self.get_possible_moves_for_piece, in_axes=(0, 0, None))
-        all_possible_moves = vmapped_get_possible_moves(rows, cols, state.board)
-
-        # jax.debug.print("All possible moves for all pieces: {all_possible_moves}", all_possible_moves=all_possible_moves)
-
-        # masks for each piece
-        can_move_mask = jnp.any(all_possible_moves != 0, axis=(1, 2))  # any move available
-        can_jump_mask = jnp.any(jnp.all(jnp.abs(all_possible_moves) == 2, axis=2), axis=1)  # jump available
-        any_jump_available = jnp.any(can_jump_mask)
-
-        movable_mask = jnp.where(any_jump_available, can_jump_mask,
-                                 can_move_mask)  # this is just an if statement (cond, x ,y)
-
-        movable_positions = jnp.where(
-            movable_mask[:, None],  # Reshape mask to (MAX_PIECES, 1) for broadcasting
-            positions,
-            jnp.array([-1, -1])
-        )
-
-        return movable_positions
-
-    @partial(jax.jit, static_argnums=(0,))
     def step_select_piece_phase(self, state: VideoCheckersState, action: chex.Array) -> VideoCheckersState:
         """
         Handles moving the cursor and selecting a piece in the select piece phase.
@@ -578,8 +545,8 @@ class JaxVideoCheckers(
             row, col = state.cursor_pos
             piece = state.board[row, col]
             return jax.lax.cond(
-                (piece != self.consts.EMPTY_TILE) & self.is_movable_piece(self.consts.COLOUR_BLACK, state.cursor_pos,
-                                                                          state),
+                (piece != self.consts.EMPTY_TILE)
+                & BoardHandler.is_movable_piece(self.consts.COLOUR_BLACK, state.cursor_pos, state.board),
                 lambda s: s._replace(
                     selected_piece=s.cursor_pos,
                     game_phase=self.consts.MOVE_PIECE_PHASE,
@@ -602,10 +569,10 @@ class JaxVideoCheckers(
 
             new_cursor_pos = state.cursor_pos + jnp.array([drow, dcol])
             # Check if the new position is within bounds
-            in_bounds = self.move_in_bounds(row=state.cursor_pos[0],
-                                            col=state.cursor_pos[1],
-                                            drow=drow,
-                                            dcol=dcol)
+            in_bounds = BoardHandler.move_in_bounds(row=state.cursor_pos[0],
+                                                    col=state.cursor_pos[1],
+                                                    drow=drow,
+                                                    dcol=dcol)
             new_cursor_pos = jax.lax.cond(
                 in_bounds & jnp.logical_or(up, jnp.logical_or(right, donw_left)),
                 lambda: new_cursor_pos,
@@ -628,7 +595,7 @@ class JaxVideoCheckers(
         row, col = piece
         piece_type = board[row, col]
 
-        moves = self.get_possible_moves_for_piece(row, col, board)
+        moves = BoardHandler.get_possible_moves_for_piece(row, col, board)
         drow, dcol = moves[:, 0], moves[:, 1]
         is_jump = jnp.all(jnp.abs(moves) == 2, axis=1)
 
@@ -659,6 +626,7 @@ class JaxVideoCheckers(
         best_idx = jnp.argmax(scores)
         return moves[best_idx], scores[best_idx]
 
+    @staticmethod
     def calculate_best_first_opponent_move(self, movable_pieces: chex.Array, state: VideoCheckersState) \
             -> VideoCheckersState:
 
@@ -684,8 +652,8 @@ class JaxVideoCheckers(
         captured_piece = piece_to_move + (move_to_play // 2)
         new_opponent_move = state.opponent_move._replace(start_pos=piece_to_move, end_pos=new_pos, piece_type=new_piece)
         newest_opponent_move = jax.lax.cond(is_jump,
-                                            lambda: OpponentMoveHandler.add_captured_position(new_opponent_move,
-                                                                                              captured_piece),
+                                            lambda: OpponentMoveHandler.
+                                            add_captured_position(new_opponent_move, captured_piece),
                                             lambda: new_opponent_move
                                             )
 
@@ -698,7 +666,7 @@ class JaxVideoCheckers(
         So only check if the piece on end_pos can jump again.
         Do so in a fori loop with index 50 to prevent infinite loops.
         """
-
+        jax.debug.print("Computing further opponent move...")
         def loop_body(i, state: VideoCheckersState) -> VideoCheckersState:
             """
             Loop body for the fori_loop, which calculates the best further opponent move.
@@ -724,7 +692,7 @@ class JaxVideoCheckers(
                     lambda: state.opponent_move.piece_type
                 )
                 captured_piece = piece + (best_move // 2)
-                new_opponent_move = state.opponent_move._replace(end_pos=new_pos, piece_type=new_piece)
+                new_opponent_move = state.opponent_move._replace(start_pos=piece, end_pos=new_pos, piece_type=new_piece)
                 new_opponent_move = OpponentMoveHandler.add_captured_position(new_opponent_move, captured_piece)
                 return jax.lax.cond(
                     is_jump,
@@ -739,7 +707,6 @@ class JaxVideoCheckers(
                     )
                 )
 
-            jax.debug.print("Iteration: {}".format(i))
             return jax.lax.cond(
                 state.has_jumped,
                 lambda s: calc_further_move(s),
@@ -775,9 +742,10 @@ class JaxVideoCheckers(
             """
 
             def moves_available(moveable_pieces: chex.Array, state: VideoCheckersState):
-                new_state = self.calculate_best_first_opponent_move(moveable_pieces, state)
+                new_state = self.calculate_best_first_opponent_move(self, moveable_pieces, state)
                 jax.debug.print("Opponent move: {opponent_move}", opponent_move=new_state.opponent_move)
                 # if the opponent has jumped, we need to check calculate_best_further_opponent_move
+                jax.debug.breakpoint()
                 opponent_move = jax.lax.cond(
                     new_state.has_jumped,
                     lambda: self.calculate_best_further_opponent_move(new_state).opponent_move,
@@ -792,7 +760,7 @@ class JaxVideoCheckers(
                     rng_key=new_state.rng_key,
                 )
 
-            movable_pieces = self.get_movable_pieces(self.consts.COLOUR_WHITE, state)
+            movable_pieces = BoardHandler.get_movable_pieces(self.consts.COLOUR_WHITE, state.board)
 
             jax.debug.print("Movable pieces for opponent: {movable_pieces}", movable_pieces=movable_pieces)
 
@@ -858,7 +826,7 @@ class JaxVideoCheckers(
                 """
 
                 # Ermittle die möglichen Züge für die ausgewählte Figur
-                possible_moves = self.get_possible_moves_for_piece(state.selected_piece[0], state.selected_piece[1],
+                possible_moves = BoardHandler.get_possible_moves_for_piece(state.selected_piece[0], state.selected_piece[1],
                                                                    state.board)
 
                 jax.debug.print("Possible moves for selected piece: {possible_moves}", possible_moves=possible_moves)
@@ -974,7 +942,7 @@ class JaxVideoCheckers(
                 new_state = state._replace(board=new_board)
                 captured_piece = state.selected_piece + (
                         move // 2)  # mid position for jumped piece if jumps are available from new pos
-                new_moves = self.get_possible_moves_for_piece(row=new_state.cursor_pos[0], col=new_state.cursor_pos[1],
+                new_moves = BoardHandler.get_possible_moves_for_piece(row=new_state.cursor_pos[0], col=new_state.cursor_pos[1],
                                                               board=new_state.board)
                 move_distances = jnp.abs(new_moves)  # Shape: (n_moves, 2)
                 max_distances = jnp.max(move_distances, axis=1)  # Max distance per move
