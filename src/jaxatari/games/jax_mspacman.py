@@ -33,6 +33,11 @@ PELLETS_TO_COLLECT = 155  # Total pellets to collect in the maze (including powe
 NB_INITIAL_LIVES = 1
 RESET_TIMER = 40  # Timer for resetting the game after death
 
+PATH_COLOR = jnp.array([0, 28, 136], dtype=jnp.uint8)
+WALL_COLOR = jnp.array([228, 111, 111], dtype=jnp.uint8)
+PELLET_COLOR = WALL_COLOR  # Same color as walls for pellets
+POWER_PELLET_SPRITE = jnp.tile(jnp.concatenate([PELLET_COLOR, jnp.array([255], dtype=jnp.uint8)]), (4, 7, 1))  # 4x7 sprite 
+
 
 def last_pressed_action(action, prev_action):
     """
@@ -395,7 +400,6 @@ class MsPacmanRenderer(AtraJaxisRenderer):
         self.SPRITES_PLAYER = pacmans_rgba()
         self.SPRITES_GHOSTS = load_ghosts()
         # self.reset_bg()
-        self.power_pellet_sprite = jnp.ones((4, 7, 4), dtype=jnp.uint8) * 200
         
 
     def reset_bg(self):
@@ -416,18 +420,17 @@ class MsPacmanRenderer(AtraJaxisRenderer):
         # de-render pellets
         # if state.has_pellet:
         if state.has_pellet:
-            # PATH_COLOR = jnp.array([200, 200, 200], dtype=jnp.uint8)
-            PATH_COLOR = jnp.array([0, 28, 136], dtype=jnp.uint8)
             pellet_x = state.pacman_pos[0] + 3
             pellet_y = state.pacman_pos[1] + 4
             for i in range(4):
                 for j in range(2):
                     self.SPRITE_BG = self.SPRITE_BG.at[pellet_x+i, pellet_y+j].set(PATH_COLOR)
         # power pellets
-        for i in range(4):
-            if state.power_pellets[i]:
-                pellet_x, pellet_y = POWER_PELLET_POSITIONS[i]
-                raster = aj.render_at(raster, pellet_x, pellet_y, self.power_pellet_sprite)
+        for i in range(2):
+            pel_n = 2*i + ((state.step_count & 0b1000) >> 3) # Alternate power pellet rendering
+            if state.power_pellets[pel_n]:
+                pellet_x, pellet_y = POWER_PELLET_POSITIONS[pel_n]
+                raster = aj.render_at(raster, pellet_x, pellet_y, POWER_PELLET_SPRITE)
         orientation = state.pacman_last_dir_int
         pacman_sprite = self.SPRITES_PLAYER[orientation][(state.step_count % 16) // 4]
         raster = aj.render_at(raster, state.pacman_pos[0], state.pacman_pos[1], 
