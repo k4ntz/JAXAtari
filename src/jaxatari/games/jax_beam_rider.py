@@ -334,7 +334,10 @@ class BeamRiderEnv(JaxEnvironment[BeamRiderState, BeamRiderObservation, BeamRide
         self.action_space_size = 18  # Updated to use full JAXAtari action space
         self.beam_positions = self.constants.get_beam_positions()
 
-    def reset(self, rng_key: chex.PRNGKey) -> Tuple[jnp.ndarray, BeamRiderState]:
+        # Initialize renderer (this was missing)
+        self.renderer = BeamRiderRenderer()
+
+    def reset(self, rng_key: chex.PRNGKey) -> Tuple[BeamRiderObservation, BeamRiderState]:
         """Reset the game to initial state"""
         # Initialize ship at bottom center beam
         initial_beam = self.constants.INITIAL_BEAM
@@ -350,7 +353,7 @@ class BeamRiderEnv(JaxEnvironment[BeamRiderState, BeamRiderObservation, BeamRide
         torpedo_projectiles = jnp.zeros((self.constants.MAX_PROJECTILES, 4))  # x, y, active, speed
         sentinel_projectiles = jnp.zeros((self.constants.MAX_PROJECTILES, 4))  # x, y, active, speed
 
-        # Initialize empty enemies array - UPDATED: now 18 columns for white saucer enhancements
+        # Initialize empty enemies array - 18 columns for white saucer enhancements
         enemies = jnp.zeros((self.constants.MAX_ENEMIES, 18))
         # x, y, beam_position, active, speed, type, direction_x, direction_y,
         # bounce_count, linger_timer, target_x, health, firing_timer, maneuver_timer,
@@ -407,29 +410,27 @@ class BeamRiderEnv(JaxEnvironment[BeamRiderState, BeamRiderObservation, BeamRide
 
     def render(self, state: BeamRiderState) -> jnp.ndarray:
         """Render the current game state - delegates to renderer"""
-        if not hasattr(self, 'renderer'):
-            self.renderer = BeamRiderRenderer()
         return self.renderer.render(state)
 
-    def _get_observation(self, state: BeamRiderState):
+    @partial(jax.jit, static_argnums=(0,))
+    def _get_observation(self, state: BeamRiderState) -> BeamRiderObservation:
         """Extract observation from game state"""
-        obs = {
-            'ship_beam': state.ship.beam_position,
-            'ship_x': state.ship.x,
-            'ship_y': state.ship.y,
-            'ship_active': state.ship.active,
-            'enemies': state.enemies,
-            'projectiles': state.projectiles,
-            'torpedo_projectiles': state.torpedo_projectiles,
-            'sentinel_projectiles': state.sentinel_projectiles,
-            'score': state.score,
-            'lives': state.lives,
-            'level': state.level,
-            'current_sector': state.current_sector,
-            'torpedoes_remaining': state.torpedoes_remaining,
-            'frame_count': state.frame_count
-        }
-        return obs
+        return BeamRiderObservation(
+            ship_beam=jnp.array(state.ship.beam_position, dtype=jnp.float32),
+            ship_x=jnp.array(state.ship.x, dtype=jnp.float32),
+            ship_y=jnp.array(state.ship.y, dtype=jnp.float32),
+            ship_active=jnp.array(state.ship.active, dtype=jnp.float32),
+            enemies=state.enemies,
+            projectiles=state.projectiles,
+            torpedo_projectiles=state.torpedo_projectiles,
+            sentinel_projectiles=state.sentinel_projectiles,
+            score=jnp.array(state.score, dtype=jnp.float32),
+            lives=jnp.array(state.lives, dtype=jnp.float32),
+            level=jnp.array(state.level, dtype=jnp.float32),
+            current_sector=jnp.array(state.current_sector, dtype=jnp.float32),
+            torpedoes_remaining=jnp.array(state.torpedoes_remaining, dtype=jnp.float32),
+            frame_count=jnp.array(state.frame_count, dtype=jnp.float32)
+        )
 
     @partial(jax.jit, static_argnums=(0,))
     def obs_to_flat_array(self, obs: BeamRiderObservation) -> jnp.ndarray:
@@ -2079,7 +2080,17 @@ class BeamRiderEnv(JaxEnvironment[BeamRiderState, BeamRiderObservation, BeamRide
 class BeamRiderRenderer(JAXGameRenderer):
     """Unified renderer for BeamRider game with both JAX rendering and Pygame display"""
 
-    def __init__(self, scale=3, enable_pygame=False):
+    def __init__(self):
+        super().__init__()
+        self.constants = BeamRiderConstants()
+        self.screen_width = self.constants.SCREEN_WIDTH
+        self.screen_height = self.constants.SCREEN_HEIGHT
+        self.beam_positions = self.constants.get_beam_positions()
+
+        # JIT-compile the render function
+        self.render = jit(self._render_impl)
+
+    """def __init__(self, scale=3, enable_pygame=False):
         super().__init__()
         self.constants = BeamRiderConstants()
         self.screen_width = self.constants.SCREEN_WIDTH
@@ -2113,7 +2124,7 @@ class BeamRiderRenderer(JAXGameRenderer):
             import os  # at the top of the file if not already there
             font_path = os.path.join(os.path.dirname(__file__), "../../../assets/PressStart2P.ttf")
             self.font = pygame.font.Font(font_path, 16)
-            self.env = BeamRiderEnv()
+            self.env = BeamRiderEnv()"""
 
     def _create_ship_surface(self):
         # Create the main ship sprite surface using a pixel array and color map.
@@ -2155,8 +2166,9 @@ class BeamRiderRenderer(JAXGameRenderer):
         small_sprite = pygame.transform.scale(self.ship_sprite_surface, (16, 10))
         return small_sprite
 
+    @partial(jax.jit, static_argnums=(0,))
     def _render_impl(self, state: BeamRiderState) -> chex.Array:
-        """Render the current game state to a screen buffer"""
+        """Render the current game state to a screen buffer - JIT compiled implementation"""
         # Create screen buffer (RGB)
         screen = jnp.zeros((self.constants.SCREEN_HEIGHT, self.constants.SCREEN_WIDTH, 3), dtype=jnp.uint8)
 
@@ -2467,8 +2479,8 @@ class BeamRiderRenderer(JAXGameRenderer):
     # PYGAME DISPLAY METHODS (moved from BeamRiderPygameRenderer)
     # ============================================================================
 
-    def run_game(self):
-        """Main game loop with torpedo support - requires pygame to be enabled"""
+    """def run_game(self):
+        Main game loop with torpedo support - requires pygame to be enabled
         if not self.enable_pygame:
             raise RuntimeError("pygame must be enabled to run the game. Initialize with enable_pygame=True")
 
@@ -2537,7 +2549,7 @@ class BeamRiderRenderer(JAXGameRenderer):
         sys.exit()
 
     def _show_sector_complete(self, state):
-        """Show sector completion message (called when sector advances)"""
+       Show sector completion message (called when sector advances)
         if hasattr(self, '_last_sector') and state.current_sector > self._last_sector:
             # Sector just advanced - show visual feedback
 
@@ -2578,7 +2590,7 @@ class BeamRiderRenderer(JAXGameRenderer):
         self.pygame_screen.blit(pause_text, rect)
 
     def _draw_screen(self, screen_buffer, state):
-        """Draws the game screen buffer and overlays the ship sprite"""
+        Draws the game screen buffer and overlays the ship sprite
         screen_np = np.array(screen_buffer)
         scaled_screen = np.repeat(np.repeat(screen_np, self.scale, axis=0), self.scale, axis=1)
 
@@ -2591,7 +2603,7 @@ class BeamRiderRenderer(JAXGameRenderer):
         self.pygame_screen.blit(self.ship_sprite_surface, (ship_x, ship_y))
 
     def _draw_ui_overlay(self, state):
-        """Draw centered Score and Level UI - UPDATED: shows sentinel ship info"""
+        #Draw centered Score and Level UI - UPDATED: shows sentinel ship info
         # Enemies left number (top-left)
         enemies_left = 15 - state.enemies_killed_this_sector
         enemies_text = self.font.render(str(enemies_left), True, (255, 0, 0))  # red number
@@ -2628,7 +2640,7 @@ class BeamRiderRenderer(JAXGameRenderer):
             self.pygame_screen.blit(scaled_ship, (x, y))
 
     def _show_game_over(self, state):
-        """Show Game Over screen"""
+        Show Game Over screen
         overlay = pygame.Surface((self.pygame_screen_width, self.pygame_screen_height))
         overlay.set_alpha(128)
         overlay.fill((0, 0, 0))
@@ -2646,9 +2658,130 @@ class BeamRiderRenderer(JAXGameRenderer):
 
         self.pygame_screen.blit(game_over_text, game_over_rect)
         self.pygame_screen.blit(final_score_text, score_rect)
-        self.pygame_screen.blit(sector_text, sector_rect)
+        self.pygame_screen.blit(sector_text, sector_rect)"""
 
 
 if __name__ == "__main__":
-    game = BeamRiderRenderer(enable_pygame=True)
-    game.run_game()
+    # For standalone pygame gameplay, create environment and run with pygame
+    import pygame
+    import sys
+
+    # Create the game environment
+    env = BeamRiderEnv()
+
+    # Initialize pygame
+    pygame.init()
+    scale = 3
+    screen_width = env.constants.SCREEN_WIDTH * scale
+    screen_height = env.constants.SCREEN_HEIGHT * scale
+    screen = pygame.display.set_mode((screen_width, screen_height))
+    pygame.display.set_caption("BeamRider - JAX Implementation")
+    clock = pygame.time.Clock()
+
+    # Load font (you may need to adjust the path)
+    try:
+        font = pygame.font.Font("PressStart2P.ttf", 16)
+    except:
+        font = pygame.font.Font(None, 24)  # Fallback to default font
+
+    # Initialize game state
+    key = random.PRNGKey(42)
+    obs, state = env.reset(key)
+
+    running = True
+    paused = False
+
+    while running and not state.game_over:
+        # Handle quit & pause events
+        for event in pygame.event.get():
+            if event.type == pygame.QUIT:
+                running = False
+            elif event.type == pygame.KEYDOWN:
+                if event.key == pygame.K_p:
+                    paused = not paused
+
+        if not paused:
+            # Poll real-time key states for smoother controls
+            keys = pygame.key.get_pressed()
+
+            # Determine action based on key combinations
+            action = 0  # default no-op
+
+            # TORPEDO ACTIONS - Map to JAXAtari action constants
+            if keys[pygame.K_t] and keys[pygame.K_UP]:
+                action = 10  # UPFIRE - torpedo + up
+            elif keys[pygame.K_t] and keys[pygame.K_LEFT]:
+                action = 12  # LEFTFIRE - torpedo + left
+            elif keys[pygame.K_t] and keys[pygame.K_RIGHT]:
+                action = 11  # RIGHTFIRE - torpedo + right
+            elif keys[pygame.K_t]:
+                action = 10  # UPFIRE - torpedo only (default up)
+            # LASER ACTIONS
+            elif keys[pygame.K_SPACE]:
+                action = 1  # FIRE - fire laser only
+            # MOVEMENT ACTIONS
+            elif keys[pygame.K_LEFT]:
+                action = 4  # LEFT
+            elif keys[pygame.K_RIGHT]:
+                action = 3  # RIGHT
+
+            # Step the game
+            obs, state, reward, done, info = env.step(state, action)
+
+            # Render the game
+            screen_buffer = env.render(state)
+
+            # Convert JAX array to numpy and scale up
+            screen_np = np.array(screen_buffer)
+            scaled_screen = np.repeat(np.repeat(screen_np, scale, axis=0), scale, axis=1)
+
+            # Create pygame surface and blit to screen
+            surf = pygame.surfarray.make_surface(scaled_screen.swapaxes(0, 1))
+            screen.blit(surf, (0, 0))
+
+            # Draw simple UI overlay
+            score_text = font.render(f"SCORE {state.score:06}", True, (255, 255, 255))
+            level_text = font.render(f"SECTOR {state.level:02}", True, (255, 255, 255))
+            lives_text = font.render(f"LIVES {state.lives}", True, (255, 255, 255))
+            torpedoes_text = font.render(f"TORPEDOES {state.torpedoes_remaining}", True, (255, 255, 255))
+
+            screen.blit(score_text, (10, 10))
+            screen.blit(level_text, (10, 35))
+            screen.blit(lives_text, (10, 60))
+            screen.blit(torpedoes_text, (10, 85))
+
+            pygame.display.flip()
+            clock.tick(60)
+        else:
+            # Pause overlay
+            pause_text = font.render("PAUSED", True, (255, 255, 0))
+            pause_rect = pause_text.get_rect(center=(screen_width // 2, screen_height // 2))
+            screen.blit(pause_text, pause_rect)
+            pygame.display.flip()
+            clock.tick(15)
+
+    # Game over screen
+    if state.game_over:
+        overlay = pygame.Surface((screen_width, screen_height))
+        overlay.set_alpha(128)
+        overlay.fill((0, 0, 0))
+        screen.blit(overlay, (0, 0))
+
+        game_over_text = font.render("GAME OVER", True, (255, 0, 0))
+        final_score_text = font.render(f"Final Score: {state.score}", True, (255, 255, 255))
+        sector_text = font.render(f"Reached Sector: {state.current_sector}", True, (255, 255, 255))
+
+        # Center the text
+        game_over_rect = game_over_text.get_rect(center=(screen_width // 2, screen_height // 2 - 40))
+        score_rect = final_score_text.get_rect(center=(screen_width // 2, screen_height // 2))
+        sector_rect = sector_text.get_rect(center=(screen_width // 2, screen_height // 2 + 30))
+
+        screen.blit(game_over_text, game_over_rect)
+        screen.blit(final_score_text, score_rect)
+        screen.blit(sector_text, sector_rect)
+
+        pygame.display.flip()
+        pygame.time.wait(3000)  # Show for 3 seconds
+
+    pygame.quit()
+    sys.exit()
