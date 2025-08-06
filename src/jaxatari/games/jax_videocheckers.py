@@ -1037,9 +1037,10 @@ class JaxVideoCheckers(
                 new_board
             )
 
-            # Update the game state with the new board and reset cursor position
+            # Update the game state with the new board and reset cursor position and opponent move
             return state._replace(
                 board=new_board,
+                opponent_move=OpponentMoveHandler.clear_captured_positions(opponent_move),
                 game_phase=self.consts.SELECT_PIECE_PHASE,  # Change phase back to select piece phase
                 selected_piece=jnp.array([-1, -1]),  # Reset selected piece
             )
