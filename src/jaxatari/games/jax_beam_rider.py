@@ -1,3 +1,4 @@
+from functools import partial
 import pygame
 import numpy as np
 import jax
@@ -12,18 +13,19 @@ from jaxatari.environment import JaxEnvironment
 from jaxatari.renderers import JAXGameRenderer
 
 """TODOS:
-- Logic Bugs for ships: --> DONE
-    - spawn rate of green blockers needs to be fixed when sector == 6 && sentinal is active --> might be done
-- Check the sentinal ship constants/Optimize the code/remove unnecessary code
 - Adjust the spawn rate of green blockers in sectors 1 - 5 (currently the sentinel moves faster through the screen than they can spawn) -> somewhat done
 - Change enemy speeds
+- Change enemy movements
+- Add torpedoes(got lost for some reason) (and the handling for the torpedoes against enemies)
+- Torpedo and laser should not travel after collision with enemy
+- Only allow one laser per shot and not mutliple back to back
 - Documentation
 - Should be playable through script
-- Maybe some environment changes(depending on feedback)
 - White saucers movement needs to be update --> No teleporation and zigzag movement needs to be broader
 
 Nice to have:
 - Enemies get smaller/bigger according to the 3d rendering"""
+
 
 class BeamRiderConstants(NamedTuple):
     """Container for all game constants"""
@@ -77,8 +79,8 @@ class BeamRiderConstants(NamedTuple):
     # Sector progression
     ENEMIES_PER_SECTOR = 15
     BASE_ENEMY_SPAWN_INTERVAL = 90  # Start slower (was 60)
-    MIN_ENEMY_SPAWN_INTERVAL = 12   # End faster (was 20)
-    MAX_ENEMY_SPEED = 2.5           # Maximum enemy speed at sector 99
+    MIN_ENEMY_SPAWN_INTERVAL = 12  # End faster (was 20)
+    MAX_ENEMY_SPEED = 2.5  # Maximum enemy speed at sector 99
 
     # Enemy spawn position
     ENEMY_SPAWN_Y = 10
@@ -134,7 +136,7 @@ class BeamRiderConstants(NamedTuple):
     ORANGE_TRACKER_SPAWN_CHANCE = 0.08  # 8% chance to spawn orange tracker
     ORANGE_TRACKER_CHANGE_DIRECTION_INTERVAL = 90  # Frames between direction changes
 
-    #Tracker course change limits based on sector
+    # Tracker course change limits based on sector
     ORANGE_TRACKER_BASE_COURSE_CHANGES = 1  # Base number of course changes allowed
     ORANGE_TRACKER_COURSE_CHANGE_INCREASE_SECTOR = 5  # Every X sectors, add 1 more course change
 
@@ -210,26 +212,21 @@ class BeamRiderConstants(NamedTuple):
 
     @classmethod
     def get_beam_positions(cls) -> jnp.ndarray:
-        """Calculate 5 beam positions with beam 2 as center"""
-        # The 3D grid draws at indices [0, 2, 3, 4, 5, 6, 8] from a 9-position spread
-        # We need to select 5 of these for our gameplay beams
+        """Calculate 5 beam positions evenly spaced across the screen width"""
+        # Simple, direct calculation for 5 evenly spaced beams
+        # Beam 0: leftmost, Beam 2: center, Beam 4: rightmost
 
-        total_beams = 9
-        rel_positions = jnp.linspace(-1.0, 1.0, total_beams)
-        draw_indices = jnp.array([0, 2, 3, 4, 5, 6, 8])  # 7 visual beams
+        # Leave some margin from screen edges
+        margin = 20
+        usable_width = cls.SCREEN_WIDTH - (2 * margin)
 
-        # Select 5 beams from these 7 visual beams for gameplay
-        # Use indices 0, 2, 3, 4, 6 from draw_indices to get 5 evenly spaced beams
-        # This maps to: leftmost, left-center, center, right-center, rightmost
-        gameplay_beam_indices = jnp.array([0, 2, 3, 4, 6])  # indices into draw_indices
-        selected_draw_indices = draw_indices[gameplay_beam_indices]
+        # Create 5 evenly spaced positions
+        beam_spacing = usable_width / (cls.NUM_BEAMS - 1)
+        positions = jnp.array([
+            margin + i * beam_spacing for i in range(cls.NUM_BEAMS)
+        ])
 
-        center_x = cls.SCREEN_WIDTH / 2
-        bottom_spread = cls.SCREEN_WIDTH * 1.6
-
-        positions = center_x + rel_positions[selected_draw_indices] * (bottom_spread / 2.0)
         return positions
-
 
 
 @struct.dataclass
@@ -244,12 +241,11 @@ class Ship:
 @struct.dataclass
 class Projectile:
     # Represents a player-fired projectile (laser or torpedo), with position, speed, and type.
-    x: float                  # Horizontal position of the projectile (in pixels)
-    y: float                  # Vertical position of the projectile (in pixels)
-    active: bool              # Whether the projectile is currently in play
-    speed: float              # Vertical movement speed (positive = upward)
-    projectile_type: int      # 0 = laser, 1 = torpedo
-
+    x: float  # Horizontal position of the projectile (in pixels)
+    y: float  # Vertical position of the projectile (in pixels)
+    active: bool  # Whether the projectile is currently in play
+    speed: float  # Vertical movement speed (positive = upward)
+    projectile_type: int  # 0 = laser, 1 = torpedo
 
 
 @struct.dataclass
@@ -272,6 +268,28 @@ class Enemy:
     firing_timer: int = 0  # Timer for sentinel ship firing
     maneuver_timer: int = 0  # Timer for evasive maneuvers
 
+class BeamRiderObservation(NamedTuple):
+    ship_beam: jnp.ndarray
+    ship_x: jnp.ndarray
+    ship_y: jnp.ndarray
+    ship_active: jnp.ndarray
+    enemies: jnp.ndarray
+    projectiles: jnp.ndarray
+    torpedo_projectiles: jnp.ndarray
+    sentinel_projectiles: jnp.ndarray
+    score: jnp.ndarray
+    lives: jnp.ndarray
+    level: jnp.ndarray
+    current_sector: jnp.ndarray
+    torpedoes_remaining: jnp.ndarray
+    frame_count: jnp.ndarray
+
+class BeamRiderInfo(NamedTuple):
+    enemies_killed_this_sector: jnp.ndarray
+    enemy_spawn_timer: jnp.ndarray
+    enemy_spawn_interval: jnp.ndarray
+    sentinel_spawned_this_sector: jnp.ndarray
+    game_over: jnp.ndarray
 
 @struct.dataclass
 class BeamRiderState:
@@ -306,20 +324,20 @@ class BeamRiderState:
     enemy_spawn_interval: int = BeamRiderConstants.ENEMY_SPAWN_INTERVAL
 
 
-class BeamRiderEnv(JaxEnvironment[BeamRiderState, jnp.ndarray, dict, BeamRiderConstants]):
+class BeamRiderEnv(JaxEnvironment[BeamRiderState, BeamRiderObservation, BeamRiderInfo, BeamRiderConstants]):
     """BeamRider environment following JAXAtari structure"""
 
     def __init__(self):
         self.constants = BeamRiderConstants()
         self.screen_width = self.constants.SCREEN_WIDTH
         self.screen_height = self.constants.SCREEN_HEIGHT
-        self.action_space_size = 9  # Updated from 6 to 9 for torpedo actions
+        self.action_space_size = 18  # Updated to use full JAXAtari action space
         self.beam_positions = self.constants.get_beam_positions()
 
-        # JIT-compile the step function for performance
-        self.step = jit(self._step_impl)
+        # Initialize renderer (this was missing)
+        self.renderer = BeamRiderRenderer()
 
-    def reset(self, rng_key: chex.PRNGKey) -> BeamRiderState:
+    def reset(self, rng_key: chex.PRNGKey) -> Tuple[BeamRiderObservation, BeamRiderState]:
         """Reset the game to initial state"""
         # Initialize ship at bottom center beam
         initial_beam = self.constants.INITIAL_BEAM
@@ -335,13 +353,13 @@ class BeamRiderEnv(JaxEnvironment[BeamRiderState, jnp.ndarray, dict, BeamRiderCo
         torpedo_projectiles = jnp.zeros((self.constants.MAX_PROJECTILES, 4))  # x, y, active, speed
         sentinel_projectiles = jnp.zeros((self.constants.MAX_PROJECTILES, 4))  # x, y, active, speed
 
-        # Initialize empty enemies array - UPDATED: now 18 columns for white saucer enhancements
+        # Initialize empty enemies array - 18 columns for white saucer enhancements
         enemies = jnp.zeros((self.constants.MAX_ENEMIES, 18))
         # x, y, beam_position, active, speed, type, direction_x, direction_y,
         # bounce_count, linger_timer, target_x, health, firing_timer, maneuver_timer,
         # movement_pattern, white_saucer_firing_timer, jump_timer, zigzag_offset
 
-        return BeamRiderState(
+        state = BeamRiderState(
             ship=ship,
             projectiles=projectiles,
             enemies=enemies,
@@ -361,12 +379,148 @@ class BeamRiderEnv(JaxEnvironment[BeamRiderState, jnp.ndarray, dict, BeamRiderCo
             rng_key=rng_key
         )
 
+        # Return observation and state
+        obs = self._get_observation(state)
+        return obs, state
+
+    def action_space(self):
+        """Returns the action space for BeamRider"""
+        from jaxatari.spaces import Discrete
+        return Discrete(18)  # All standard Atari actions available
+
+    def observation_space(self):
+        """Returns the observation space for BeamRider"""
+        from jaxatari.spaces import Box
+        # Observation includes: ship position, beam, enemies, projectiles, score, lives, etc.
+        return Box(
+            low=jnp.full((100,), -1e6, dtype=jnp.float32),
+            high=jnp.full((100,), 1e6, dtype=jnp.float32),
+            dtype=jnp.float32
+        )
+
+    def image_space(self):
+        """Returns the image space for BeamRider rendering"""
+        from jaxatari.spaces import Box
+        return Box(
+            low=0,
+            high=255,
+            shape=(self.constants.SCREEN_HEIGHT, self.constants.SCREEN_WIDTH, 3),
+            dtype=jnp.uint8
+        )
+
+    def render(self, state: BeamRiderState) -> jnp.ndarray:
+        """Render the current game state - delegates to renderer"""
+        return self.renderer.render(state)
+
+    @partial(jax.jit, static_argnums=(0,))
+    def _get_observation(self, state: BeamRiderState) -> BeamRiderObservation:
+        """Extract observation from game state"""
+        return BeamRiderObservation(
+            ship_beam=jnp.array(state.ship.beam_position, dtype=jnp.float32),
+            ship_x=jnp.array(state.ship.x, dtype=jnp.float32),
+            ship_y=jnp.array(state.ship.y, dtype=jnp.float32),
+            ship_active=jnp.array(state.ship.active, dtype=jnp.float32),
+            enemies=state.enemies,
+            projectiles=state.projectiles,
+            torpedo_projectiles=state.torpedo_projectiles,
+            sentinel_projectiles=state.sentinel_projectiles,
+            score=jnp.array(state.score, dtype=jnp.float32),
+            lives=jnp.array(state.lives, dtype=jnp.float32),
+            level=jnp.array(state.level, dtype=jnp.float32),
+            current_sector=jnp.array(state.current_sector, dtype=jnp.float32),
+            torpedoes_remaining=jnp.array(state.torpedoes_remaining, dtype=jnp.float32),
+            frame_count=jnp.array(state.frame_count, dtype=jnp.float32)
+        )
+
+    @partial(jax.jit, static_argnums=(0,))
+    def obs_to_flat_array(self, obs: BeamRiderObservation) -> jnp.ndarray:
+        """Convert observation to flat array for ML models"""
+        flat_components = [
+            obs.ship_beam.flatten(),
+            obs.ship_x.flatten(),
+            obs.ship_y.flatten(),
+            obs.ship_active.flatten(),
+            obs.enemies.flatten(),
+            obs.projectiles.flatten(),
+            obs.torpedo_projectiles.flatten(),
+            obs.sentinel_projectiles.flatten(),
+            obs.score.flatten(),
+            obs.lives.flatten(),
+            obs.level.flatten(),
+            obs.current_sector.flatten(),
+            obs.torpedoes_remaining.flatten(),
+            obs.frame_count.flatten()
+        ]
+
+        flat_obs = jnp.concatenate(flat_components)
+
+        # Pad or truncate to fixed size (100 elements)
+        target_size = 100
+        if len(flat_obs) < target_size:
+            flat_obs = jnp.pad(flat_obs, (0, target_size - len(flat_obs)))
+        else:
+            flat_obs = flat_obs[:target_size]
+
+        return flat_obs
+
+    @partial(jax.jit, static_argnums=(0,))
+    def _get_info(self, state: BeamRiderState) -> BeamRiderInfo:
+        """Extract additional info from game state"""
+        return BeamRiderInfo(
+            enemies_killed_this_sector=jnp.array(state.enemies_killed_this_sector),
+            enemy_spawn_timer=jnp.array(state.enemy_spawn_timer),
+            enemy_spawn_interval=jnp.array(state.enemy_spawn_interval),
+            sentinel_spawned_this_sector=jnp.array(state.sentinel_spawned_this_sector),
+            game_over=jnp.array(state.game_over)
+        )
+
+    @partial(jax.jit, static_argnums=(0,))
+    def _get_reward(self, previous_state: BeamRiderState, state: BeamRiderState) -> float:
+        """Calculate reward based on state changes"""
+        # Primary reward: score increase
+        score_reward = state.score - previous_state.score
+
+        # Penalty for losing a life
+        life_penalty = (previous_state.lives - state.lives) * 100
+
+        # Small bonus for staying alive
+        survival_reward = jnp.where(state.ship.active, 1.0, 0.0)
+
+        # Bonus for advancing sectors
+        sector_bonus = (state.current_sector - previous_state.current_sector) * 500
+
+        # Small penalty for using torpedoes (encourage strategic use)
+        torpedo_penalty = (previous_state.torpedoes_remaining - state.torpedoes_remaining) * 5
+
+        total_reward = score_reward + sector_bonus + survival_reward - life_penalty - torpedo_penalty
+
+        return total_reward
+
+    @partial(jax.jit, static_argnums=(0,))
+    def _get_done(self, state: BeamRiderState) -> bool:
+        """Determine if the game is over"""
+        return state.game_over
+
+    @partial(jax.jit, static_argnums=(0,))
+    def step(self, state: BeamRiderState, action: int) -> Tuple[BeamRiderObservation, BeamRiderState, float, bool, BeamRiderInfo]:
+        """Execute one game step"""
+        previous_state = state
+        new_state = self._step_impl(state, action)
+
+        obs = self._get_observation(new_state)
+        reward = self._get_reward(previous_state, new_state)
+        done = self._get_done(new_state)
+        info = self._get_info(new_state)
+
+        return obs, new_state, reward, done, info
+
+    @partial(jax.jit, static_argnums=(0,))
     def _step_impl(self, state: BeamRiderState, action: int) -> BeamRiderState:
         """Execute one game step - JIT-compiled implementation"""
         # Process player input and update ship
         state = self._update_ship(state, action)
 
-        # Handle projectile firing
+        # Handle projectile firing (UPDATED to include torpedoes)
         state = self._handle_firing(state, action)
 
         # Update projectiles
@@ -377,10 +531,10 @@ class BeamRiderEnv(JaxEnvironment[BeamRiderState, jnp.ndarray, dict, BeamRiderCo
 
         # Update enemies
         state = self._update_enemies(state)
-        #Handle white saucer shooting
+        # Handle white saucer shooting
         state = self._handle_white_saucer_shooting(state)
 
-        #Update sentinel ship projectiles
+        # Update sentinel ship projectiles
         state = self._update_sentinel_projectiles(state)
 
         # Check collisions
@@ -397,35 +551,38 @@ class BeamRiderEnv(JaxEnvironment[BeamRiderState, jnp.ndarray, dict, BeamRiderCo
 
         return state
 
+    @partial(jax.jit, static_argnums=(0,))
     def _update_ship(self, state: BeamRiderState, action: int) -> BeamRiderState:
-        """Update ship position smoothly using left/right actions"""
+        """Update ship position using discrete beam movement with cooldown"""
         ship = state.ship
-        speed = 1.5  # adjust this for faster/slower ship
+        current_beam = ship.beam_position
 
-        # Compute new x position:
-        # - Move left if action == 1
-        # - Move right if action == 2
-        # - Clamp within screen bounds
-        new_x = jnp.where(
-            action == 1,  # Left movement
-            jnp.maximum(0, ship.x - speed),
+        # Add movement cooldown to prevent rapid beam jumping
+        movement_cooldown = 8  # Frames to wait between movements (adjust if needed)
+        frames_since_last_move = state.frame_count % movement_cooldown
+        can_move_this_frame = frames_since_last_move == 0
+
+        # Use standard JAXAtari action constants: LEFT=4, RIGHT=3
+        should_move_left = (action == 4) & (current_beam > 0) & can_move_this_frame
+        should_move_right = (action == 3) & (current_beam < self.constants.NUM_BEAMS - 1) & can_move_this_frame
+
+        # Discrete beam movement with cooldown
+        new_beam_position = jnp.where(
+            should_move_left,  # Move left
+            current_beam - 1,
             jnp.where(
-                action == 2,  # Right movement
-                jnp.minimum(self.constants.SCREEN_WIDTH - self.constants.SHIP_WIDTH, ship.x + speed),
-                ship.x  # No movement
+                should_move_right,  # Move right
+                current_beam + 1,
+                current_beam  # No movement
             )
         )
-        # Calculate ship center position
-        ship_center_x = new_x + self.constants.SHIP_WIDTH // 2
 
-        # Calculate distances to each beam position
-        beam_distances = jnp.abs(self.beam_positions - ship_center_x)
-
-        # Find the closest beam
-        new_beam_position = jnp.argmin(beam_distances)
+        # Set ship x position to exactly match the beam center
+        new_x = self.beam_positions[new_beam_position] - self.constants.SHIP_WIDTH // 2
 
         return state.replace(ship=ship.replace(x=new_x, beam_position=new_beam_position))
 
+    @partial(jax.jit, static_argnums=(0,))
     def _select_white_saucer_movement_pattern(self, rng_key: chex.PRNGKey) -> int:
         """Select movement pattern for a new white saucer"""
         # Generate random value for pattern selection
@@ -458,6 +615,7 @@ class BeamRiderEnv(JaxEnvironment[BeamRiderState, jnp.ndarray, dict, BeamRiderCo
 
         return pattern
 
+    @partial(jax.jit, static_argnums=(0,))
     def _handle_white_saucer_shooting(self, state: BeamRiderState) -> BeamRiderState:
         """Handle white saucer projectile firing"""
         enemies = state.enemies
@@ -519,6 +677,7 @@ class BeamRiderEnv(JaxEnvironment[BeamRiderState, jnp.ndarray, dict, BeamRiderCo
             sentinel_projectiles=sentinel_projectiles
         )
 
+    @partial(jax.jit, static_argnums=(0,))
     def _update_white_saucer_movement(self, state: BeamRiderState) -> BeamRiderState:
         """Enhanced white saucer movement patterns"""
         enemies = state.enemies
@@ -659,38 +818,59 @@ class BeamRiderEnv(JaxEnvironment[BeamRiderState, jnp.ndarray, dict, BeamRiderCo
         enemies = enemies.at[:, 3].set(new_active_bool.astype(jnp.float32))
 
         return state.replace(enemies=enemies)
+
+    @partial(jax.jit, static_argnums=(0,))
     def _handle_firing(self, state: BeamRiderState, action: int) -> BeamRiderState:
-        """Handle both laser and torpedo firing"""
+        """Handle both laser and torpedo firing with proper action mapping"""
 
-        # Laser firing (actions 3, 4, 5)
-        should_fire_laser = jnp.isin(action, jnp.array([3, 4, 5]))
-        state = self._fire_laser(state, should_fire_laser)
+        # TORPEDO FIRING - Check for torpedo-specific actions first
+        # Using available actions that we can map to torpedo firing
+        # Based on JAXAtari action constants, we'll use:
+        # UPFIRE (10), RIGHTFIRE (11), LEFTFIRE (12) for torpedo + movement
+        should_fire_torpedo = (action == 10) | (action == 11) | (action == 12)  # UPFIRE, RIGHTFIRE, LEFTFIRE
 
-        # Torpedo firing (actions 6, 7, 8)
-        should_fire_torpedo = jnp.isin(action, jnp.array([6, 7, 8]))
-        state = self._fire_torpedo(state, should_fire_torpedo)
+        # LASER FIRING - Standard firing actions
+        should_fire_laser = (action == 1) | (action == 13) | (action == 14) | (action == 15) | (action == 16) | (
+                    action == 17)  # FIRE and other fire combos
+
+        # Handle torpedo firing first (higher priority)
+        state = jax.lax.cond(
+            should_fire_torpedo,
+            lambda s: self._fire_torpedo(s, True),
+            lambda s: s,
+            state
+        )
+
+        # Handle laser firing if no torpedo fired
+        state = jax.lax.cond(
+            should_fire_laser & ~should_fire_torpedo,  # Only fire laser if not firing torpedo
+            lambda s: self._fire_laser(s, True),
+            lambda s: s,
+            state
+        )
 
         return state
 
+    @partial(jax.jit, static_argnums=(0,))
     def _fire_laser(self, state: BeamRiderState, should_fire: bool) -> BeamRiderState:
         """Fire regular laser projectile"""
         projectiles = state.projectiles
-        any_active = jnp.any(projectiles[:, 2] == 1)
-        can_fire = ~any_active & should_fire  # only fire if none are active
 
-        # New projectile to be fired
+        # Find first inactive projectile slot
+        inactive_mask = projectiles[:, 2] == 0
+        first_inactive = jnp.argmax(inactive_mask)
+        can_fire = inactive_mask[first_inactive] & should_fire
+
+        # Create new projectile at ship position
+        ship_center_x = state.ship.x + self.constants.SHIP_WIDTH // 2
         new_projectile = jnp.array([
-            state.ship.x + self.constants.SHIP_WIDTH // 2,  # x
+            ship_center_x - self.constants.PROJECTILE_WIDTH // 2,  # x
             state.ship.y,  # y
-            1,  # active
-            -self.constants.PROJECTILE_SPEED  # speed
+            1.0,  # active
+            -self.constants.PROJECTILE_SPEED  # speed (negative = upward)
         ])
 
-        # Find first available (inactive) slot
-        active_mask = projectiles[:, 2] == 0
-        first_inactive = jnp.argmax(active_mask)
-
-        # Conditionally insert new projectile
+        # Update projectiles array
         projectiles = jnp.where(
             can_fire,
             projectiles.at[first_inactive].set(new_projectile),
@@ -699,50 +879,53 @@ class BeamRiderEnv(JaxEnvironment[BeamRiderState, jnp.ndarray, dict, BeamRiderCo
 
         return state.replace(projectiles=projectiles)
 
+    @partial(jax.jit, static_argnums=(0,))
     def _fire_torpedo(self, state: BeamRiderState, should_fire: bool) -> BeamRiderState:
         """Fire torpedo projectile (if any remaining)"""
-
         torpedo_projectiles = state.torpedo_projectiles
 
-        # Check if ANY torpedo slot is available
-        any_torpedo_active = jnp.any(torpedo_projectiles[:, 2] == 1)
+        # Find ALL inactive torpedo slots
+        inactive_mask = torpedo_projectiles[:, 2] == 0
+
+        # Check if ANY slot is available
+        has_torpedo_slot = jnp.any(inactive_mask)
         has_torpedoes = state.torpedoes_remaining > 0
 
-        # Allow firing if no torpedoes are active AND we have torpedoes remaining
-        can_fire = ~any_torpedo_active & should_fire & has_torpedoes
+        # Can fire if we have a slot AND torpedoes remaining
+        can_fire = has_torpedo_slot & has_torpedoes & should_fire
 
-        # Find first available (inactive) slot
-        active_mask = torpedo_projectiles[:, 2] == 0  # inactive torpedoes
-        first_inactive = jnp.argmax(active_mask)
+        # Find the first actual inactive slot (only if we can fire)
+        first_inactive = jnp.argmax(inactive_mask)
 
-        # Define the new torpedo
+        # Create new torpedo at ship position
+        ship_center_x = state.ship.x + self.constants.SHIP_WIDTH // 2
         new_torpedo = jnp.array([
-            state.ship.x + self.constants.SHIP_WIDTH // 2,  # Center of ship
-            state.ship.y,  # Launch from ship's current y
-            1,  # Active
-            -self.constants.TORPEDO_SPEED  # Upward speed
+            ship_center_x - self.constants.TORPEDO_WIDTH // 2,  # x
+            state.ship.y,  # y
+            1.0,  # active
+            -self.constants.TORPEDO_SPEED  # speed (negative = upward)
         ])
 
-        # Insert new torpedo into first inactive slot, if allowed
+        # Update torpedo projectiles array - only update if we can actually fire
         torpedo_projectiles = jnp.where(
             can_fire,
             torpedo_projectiles.at[first_inactive].set(new_torpedo),
             torpedo_projectiles
         )
 
-        # Decrease torpedo count only if a torpedo was fired
+        # Decrease torpedo count
         torpedoes_remaining = jnp.where(
             can_fire,
             state.torpedoes_remaining - 1,
             state.torpedoes_remaining
         )
 
-        # Return updated game state
         return state.replace(
             torpedo_projectiles=torpedo_projectiles,
             torpedoes_remaining=torpedoes_remaining
         )
 
+    @partial(jax.jit, static_argnums=(0,))
     def _update_projectiles(self, state: BeamRiderState) -> BeamRiderState:
         """Update all projectiles (lasers and torpedoes)"""
         projectiles = state.projectiles
@@ -762,8 +945,7 @@ class BeamRiderEnv(JaxEnvironment[BeamRiderState, jnp.ndarray, dict, BeamRiderCo
         # Update torpedo projectiles
         torpedo_projectiles = state.torpedo_projectiles
         torpedo_new_y = torpedo_projectiles[:, 1] + torpedo_projectiles[:, 3]  # y + speed
-        torpedo_active = (torpedo_projectiles[:, 2] == 1) & (torpedo_new_y > 0) & (
-                torpedo_new_y < self.constants.SCREEN_HEIGHT)
+        torpedo_active = (torpedo_projectiles[:, 2] == 1) & (torpedo_new_y >= 0)  # Keep active while y >= 0
         torpedo_projectiles = torpedo_projectiles.at[:, 1].set(torpedo_new_y)
         torpedo_projectiles = torpedo_projectiles.at[:, 2].set(torpedo_active.astype(jnp.float32))
 
@@ -772,6 +954,7 @@ class BeamRiderEnv(JaxEnvironment[BeamRiderState, jnp.ndarray, dict, BeamRiderCo
             torpedo_projectiles=torpedo_projectiles
         )
 
+    @partial(jax.jit, static_argnums=(0,))
     def _update_sentinel_projectiles(self, state: BeamRiderState) -> BeamRiderState:
         """Update sentinel ship projectiles"""
         sentinel_projectiles = state.sentinel_projectiles
@@ -791,146 +974,42 @@ class BeamRiderEnv(JaxEnvironment[BeamRiderState, jnp.ndarray, dict, BeamRiderCo
 
         return state.replace(sentinel_projectiles=sentinel_projectiles)
 
+    @partial(jax.jit, static_argnums=(0,))
     def _spawn_enemies(self, state: BeamRiderState) -> BeamRiderState:
-        """Spawn new enemies with dynamic speed scaling based on sector - WITH YELLOW REJUVENATORS"""
+        """Spawn new enemies with proper sector-based enemy types and discrete beam positioning"""
 
         # Check if white saucers are complete for this sector
         white_saucers_complete = state.enemies_killed_this_sector >= self.constants.ENEMIES_PER_SECTOR
 
-        # Check if a sentinel ship is currently active
-        sentinel_active = jnp.any(
-            (state.enemies[:, 3] == 1) & (state.enemies[:, 5] == self.constants.ENEMY_TYPE_SENTINEL_SHIP)
-        )
+        # Check if it's time to spawn an enemy
+        should_spawn = (state.enemy_spawn_timer <= 0) & (~white_saucers_complete)
 
-        state = state.replace(enemy_spawn_timer=state.enemy_spawn_timer + 1)
-
-        # Determine spawning conditions
-        normal_enemy_spawn_allowed = ~white_saucers_complete
-        blocker_spawn_allowed = white_saucers_complete & sentinel_active
-
-        should_spawn_normal = (state.enemy_spawn_timer >= state.enemy_spawn_interval) & normal_enemy_spawn_allowed
-
-        # FIXED: More balanced spawn rate for green blockers
-        early_sector = state.current_sector <= 5
-
-        # More conservative blocker spawn timing - fast enough to challenge sentinel but not spam
-        blocker_spawn_interval = jnp.where(
-            early_sector,
-            jnp.maximum(45, state.enemy_spawn_interval // 2),  # 45-60 frames (0.75-1.0 seconds)
-            state.enemy_spawn_interval  # Normal rate for sectors 6+ (60 frames)
-        )
-
-        should_spawn_blocker = (state.enemy_spawn_timer >= blocker_spawn_interval) & blocker_spawn_allowed
-
-        should_spawn = should_spawn_normal | should_spawn_blocker
-
-        # Reset spawn timer when spawning occurs
-        new_spawn_timer = jnp.where(should_spawn, 0, state.enemy_spawn_timer)
-        state = state.replace(enemy_spawn_timer=new_spawn_timer)
-
-        # Find inactive enemy slot
         enemies = state.enemies
-        active_mask = enemies[:, 3] == 0
 
-        # Generate random values
-        rng_key, subkey1 = random.split(state.rng_key)
-        rng_key, subkey2 = random.split(rng_key)
-        rng_key, subkey3 = random.split(rng_key)
+        # Find first inactive enemy slot
+        active_enemies = enemies[:, 3] == 1
+        inactive_mask = ~active_enemies
+        first_inactive = jnp.where(inactive_mask, jnp.arange(self.constants.MAX_ENEMIES),
+                                   self.constants.MAX_ENEMIES).min()
 
-        # Determine enemy type
-        enemy_type = jnp.where(
-            should_spawn_blocker,
-            self.constants.ENEMY_TYPE_GREEN_BLOCKER,
-            self._select_enemy_type_excluding_blockers_early_sectors(state.current_sector, subkey1)
-        )
+        # Check if we have space
+        can_spawn = first_inactive < self.constants.MAX_ENEMIES
 
-        # YELLOW CHIRPERS: Special side spawning with random Y position
-        is_yellow_chirper = enemy_type == self.constants.ENEMY_TYPE_YELLOW_CHIRPER
+        # Only spawn if conditions are met
+        do_spawn = should_spawn & can_spawn
 
-        # Choose spawn side randomly (0 = left, 1 = right)
-        rng_key, spawn_side_key = random.split(rng_key)
-        spawn_from_right = random.randint(spawn_side_key, (), 0, 2)  # 0 or 1
+        # Generate random keys
+        rng_key, subkey1, subkey2, subkey3, subkey4 = random.split(state.rng_key, 5)
 
-        # Choose random Y position within chirper range
-        rng_key, spawn_y_key = random.split(rng_key)
-        chirper_spawn_y = random.uniform(
-            spawn_y_key, (),
-            minval=self.constants.YELLOW_CHIRPER_SPAWN_Y_MIN,
-            maxval=self.constants.YELLOW_CHIRPER_SPAWN_Y_MAX,
-            dtype=jnp.float32
-        )
+        # PROPER SECTOR-BASED ENEMY TYPE SELECTION
+        enemy_type = self._select_enemy_type_by_sector(state.current_sector, subkey1)
 
-        # Yellow chirper spawn positions (from sides, off-screen)
-        chirper_spawn_x = jnp.where(
-            spawn_from_right,
-            self.constants.SCREEN_WIDTH + self.constants.ENEMY_WIDTH,  # Spawn from right side (off-screen)
-            -self.constants.ENEMY_WIDTH  # Spawn from left side (off-screen)
-        )
+        # All enemies spawn on discrete beams only
+        spawn_beam = random.randint(subkey3, (), 0, self.constants.NUM_BEAMS)
+        spawn_x = self.beam_positions[spawn_beam] - self.constants.ENEMY_WIDTH // 2
+        spawn_y = self.constants.ENEMY_SPAWN_Y
 
-        # GREEN BLOCKERS: Target fixed X coordinate (where player was when blocker spawned)
-        is_green_blocker = enemy_type == self.constants.ENEMY_TYPE_GREEN_BLOCKER
-
-        # Calculate player ship center X coordinate (exact position)
-        player_ship_center_x = state.ship.x + self.constants.SHIP_WIDTH // 2
-
-        # Choose spawn side randomly for blockers (0 = left, 1 = right)
-        rng_key, blocker_side_key = random.split(rng_key)
-        blocker_spawn_from_right = random.randint(blocker_side_key, (), 0, 2)  # 0 or 1
-
-        # Green blocker spawn positions (from sides)
-        blocker_spawn_x = jnp.where(
-            blocker_spawn_from_right,
-            self.constants.SCREEN_WIDTH + self.constants.ENEMY_WIDTH,  # Spawn from right side (off-screen)
-            -self.constants.ENEMY_WIDTH  # Spawn from left side (off-screen)
-        )
-
-        # Green blockers spawn at upper third of screen (higher up)
-        blocker_spawn_y = self.constants.SCREEN_HEIGHT // 3
-
-        # YELLOW REJUVENATORS: Spawn from top on random beam
-        is_yellow_rejuvenator = enemy_type == self.constants.ENEMY_TYPE_YELLOW_REJUVENATOR
-
-        # Choose random beam for rejuvenator spawning
-        rng_key, rejuv_beam_key = random.split(rng_key)
-        rejuv_spawn_beam = random.randint(rejuv_beam_key, (), 0, self.constants.NUM_BEAMS)
-        rejuv_spawn_x = self.beam_positions[rejuv_spawn_beam] - self.constants.ENEMY_WIDTH // 2
-        rejuv_spawn_y = self.constants.ENEMY_SPAWN_Y
-
-        # Regular enemy spawn (from top, random beam)
-        regular_spawn_beam = random.randint(subkey3, (), 0, self.constants.NUM_BEAMS)
-        regular_spawn_x = self.beam_positions[regular_spawn_beam] - self.constants.ENEMY_WIDTH // 2
-        regular_spawn_y = self.constants.ENEMY_SPAWN_Y
-
-        # Choose final spawn position based on enemy type
-        spawn_x = jnp.where(
-            is_yellow_chirper,
-            chirper_spawn_x,  # Chirpers spawn from sides
-            jnp.where(
-                is_green_blocker,
-                blocker_spawn_x,
-                jnp.where(
-                    is_yellow_rejuvenator,
-                    rejuv_spawn_x,  # Rejuvenators spawn from top
-                    regular_spawn_x  # Regular enemies spawn from top
-                )
-            )
-        )
-
-        spawn_y = jnp.where(
-            is_yellow_chirper,
-            chirper_spawn_y,  # Chirpers use random Y in their range
-            jnp.where(
-                is_green_blocker,
-                blocker_spawn_y,
-                jnp.where(
-                    is_yellow_rejuvenator,
-                    rejuv_spawn_y,  # Rejuvenators spawn from top
-                    regular_spawn_y  # Regular enemies spawn from top
-                )
-            )
-        )
-
-        # Calculate enemy speed with sector scaling
+        # Calculate enemy speed based on sector (proper scaling)
         base_speed = jnp.where(
             enemy_type == self.constants.ENEMY_TYPE_WHITE_SAUCER,
             self.constants.ENEMY_SPEED,
@@ -943,142 +1022,66 @@ class BeamRiderEnv(JaxEnvironment[BeamRiderState, jnp.ndarray, dict, BeamRiderCo
                     jnp.where(
                         enemy_type == self.constants.ENEMY_TYPE_GREEN_BLOCKER,
                         self.constants.GREEN_BLOCKER_SPEED,
-                        jnp.where(
-                            enemy_type == self.constants.ENEMY_TYPE_GREEN_BOUNCE,
-                            self.constants.GREEN_BOUNCE_SPEED,
-                            jnp.where(
-                                enemy_type == self.constants.ENEMY_TYPE_BLUE_CHARGER,
-                                self.constants.BLUE_CHARGER_SPEED,
-                                jnp.where(
-                                    enemy_type == self.constants.ENEMY_TYPE_ORANGE_TRACKER,
-                                    self.constants.ORANGE_TRACKER_SPEED,
-                                    jnp.where(
-                                        enemy_type == self.constants.ENEMY_TYPE_YELLOW_REJUVENATOR,
-                                        self.constants.YELLOW_REJUVENATOR_SPEED,
-                                        self.constants.ENEMY_SPEED  # Default
-                                    )
-                                )
-                            )
-                        )
+                        self.constants.ENEMY_SPEED  # Default
                     )
                 )
             )
         )
 
-        # UPDATED: Smooth speed scaling across 99 sectors
-        # Linear scaling factor from 1.0 (sector 1) to 2.5 (sector 99)
-        speed_scale_factor = 1.0 + ((state.current_sector - 1) / 98.0) * 1.5  # Goes from 1.0 to 2.5
-        final_enemy_speed = base_speed * speed_scale_factor
+        # Smooth speed scaling across sectors (1.0x to 2.5x multiplier)
+        speed_scale_factor = 1.0 + ((state.current_sector - 1) / 98.0) * 1.5
+        enemy_speed = base_speed * speed_scale_factor
 
-        # Set direction for horizontal moving enemies
-        direction_x = jnp.where(
-            is_yellow_chirper,
-            jnp.where(spawn_from_right, -1.0, 1.0),  # Chirpers move toward center
-            jnp.where(
-                is_green_blocker,
-                jnp.where(blocker_spawn_from_right, -1.0, 1.0),  # Blockers move toward player
-                1.0  # Default right movement for bounce craft
-            )
-        )
-
-        direction_y = 1.0  # All enemies move down by default
-
-        # Set target X for blockers (where player was when spawned)
-        target_x = jnp.where(
-            is_green_blocker,
-            player_ship_center_x,  # Blocker targets player's current position
-            jnp.where(
-                enemy_type == self.constants.ENEMY_TYPE_ORANGE_TRACKER,
-                self.beam_positions[state.ship.beam_position],  # Tracker targets current player beam
-                0.0  # Default for others
-            )
-        )
-
-        # Calculate final spawn beam position for tracking
-        final_spawn_beam = jnp.where(
-            is_yellow_chirper | is_green_blocker,
-            0,  # Side spawners don't use beam positions
-            jnp.where(
-                enemy_type == self.constants.ENEMY_TYPE_ORANGE_TRACKER,
-                state.ship.beam_position,  # Track player's current beam
-                regular_spawn_beam  # Use calculated spawn beam
-            )
-        )
-
-        # Enemy health (sentinel ships have 1 health, others have 1)
-        enemy_health = jnp.where(
-            enemy_type == self.constants.ENEMY_TYPE_SENTINEL_SHIP,
-            self.constants.SENTINEL_SHIP_HEALTH,
-            1  # All other enemies
-        )
-
-        # Calculate course changes for orange trackers
-        base_changes = self.constants.ORANGE_TRACKER_BASE_COURSE_CHANGES
-        bonus_changes = (state.current_sector - 1) // self.constants.ORANGE_TRACKER_COURSE_CHANGE_INCREASE_SECTOR
-        course_changes_remaining = jnp.where(
-            enemy_type == self.constants.ENEMY_TYPE_ORANGE_TRACKER,
-            base_changes + bonus_changes,
-            0  # Not applicable for other enemies
-        )
-
-        # WHITE SAUCER MOVEMENT PATTERNS
-        is_white_saucer = enemy_type == self.constants.ENEMY_TYPE_WHITE_SAUCER
-
-        # Select movement pattern for white saucers
+        # Movement patterns for white saucers
         movement_pattern = jnp.where(
-            is_white_saucer,
+            enemy_type == self.constants.ENEMY_TYPE_WHITE_SAUCER,
             self._select_white_saucer_movement_pattern(subkey2),
             0  # Default pattern for non-white saucers
         )
 
-        # Set initial firing timer for shooting white saucers
-        can_shoot = movement_pattern == self.constants.WHITE_SAUCER_SHOOTING
-        initial_firing_timer = jnp.where(
-            is_white_saucer & can_shoot,
-            self.constants.WHITE_SAUCER_FIRING_INTERVAL,
-            0
-        )
+        # Create new enemy array entry
+        new_enemy = jnp.array([
+            spawn_x,  # 0: x
+            spawn_y,  # 1: y
+            spawn_beam,  # 2: beam_position
+            1.0,  # 3: active
+            enemy_speed,  # 4: speed
+            enemy_type,  # 5: type
+            1.0,  # 6: direction_x (default right)
+            1.0,  # 7: direction_y (default down)
+            0,  # 8: bounce_count
+            0,  # 9: linger_timer
+            spawn_x,  # 10: target_x (for blockers, set to spawn position initially)
+            1,  # 11: health
+            0,  # 12: firing_timer
+            0,  # 13: maneuver_timer
+            movement_pattern,  # 14: movement_pattern
+            0,  # 15: white_saucer_firing_timer
+            0,  # 16: jump_timer
+            0.0,  # 17: zigzag_offset
+        ])
 
-        # Set initial jump timer for jumping white saucers
-        can_jump = movement_pattern == self.constants.WHITE_SAUCER_BEAM_JUMP
-        initial_jump_timer = jnp.where(
-            is_white_saucer & can_jump,
-            self.constants.WHITE_SAUCER_JUMP_INTERVAL,
-            0
-        )
-
-        # Create new enemy array
-        new_enemy = jnp.zeros(18)  # 18 columns for all enemy data
-        new_enemy = new_enemy.at[0].set(spawn_x)  # x
-        new_enemy = new_enemy.at[1].set(spawn_y)  # y
-        new_enemy = new_enemy.at[2].set(final_spawn_beam)  # beam_position (or target beam for trackers)
-        new_enemy = new_enemy.at[3].set(1)  # active
-        new_enemy = new_enemy.at[4].set(final_enemy_speed)  # speed
-        new_enemy = new_enemy.at[5].set(enemy_type)  # type
-        new_enemy = new_enemy.at[6].set(direction_x)  # direction_x
-        new_enemy = new_enemy.at[7].set(direction_y)  # direction_y
-        new_enemy = new_enemy.at[8].set(0)  # bounce_count
-        new_enemy = new_enemy.at[9].set(0)  # linger_timer
-        new_enemy = new_enemy.at[10].set(target_x)  # target_x
-        new_enemy = new_enemy.at[11].set(enemy_health)  # health
-        new_enemy = new_enemy.at[12].set(0)  # firing_timer
-        new_enemy = new_enemy.at[13].set(course_changes_remaining)  # maneuver_timer (course changes for trackers)
-        new_enemy = new_enemy.at[14].set(movement_pattern)  # movement_pattern
-        new_enemy = new_enemy.at[15].set(initial_firing_timer)  # white_saucer_firing_timer
-        new_enemy = new_enemy.at[16].set(initial_jump_timer)  # jump_timer
-        new_enemy = new_enemy.at[17].set(0.0)  # zigzag_offset (also used for rejuvenator oscillation)
-
-        # Find first inactive enemy and place new enemy
-        first_inactive = jnp.argmax(active_mask)
-        can_spawn_enemy = active_mask[first_inactive] & should_spawn
-
+        # Update enemies array only if spawning
         enemies = jnp.where(
-            can_spawn_enemy,
+            do_spawn,
             enemies.at[first_inactive].set(new_enemy),
             enemies
         )
 
-        return state.replace(enemies=enemies, rng_key=rng_key)    # Updated enemy speed calculation function (add this as a new method)
+        # Update spawn timer: reset if spawning, otherwise decrement
+        new_spawn_timer = jnp.where(
+            do_spawn,
+            state.enemy_spawn_interval,
+            state.enemy_spawn_timer - 1
+        )
+
+        return state.replace(
+            enemies=enemies,
+            enemy_spawn_timer=new_spawn_timer,
+            rng_key=rng_key
+        )
+
+    @partial(jax.jit, static_argnums=(0,))
     def _calculate_enemy_speed(self, base_speed: float, current_sector: int) -> float:
         """Calculate enemy speed based on sector with smooth scaling"""
         # Scale from base_speed to MAX_ENEMY_SPEED over 99 sectors
@@ -1094,6 +1097,47 @@ class BeamRiderEnv(JaxEnvironment[BeamRiderState, jnp.ndarray, dict, BeamRiderCo
 
         return final_speed
 
+    @partial(jax.jit, static_argnums=(0,))
+    def _select_enemy_type_by_sector(self, sector: int, rng_key: chex.PRNGKey) -> int:
+        """Select enemy type based on current sector with proper spawn rules"""
+
+        # Generate random value for enemy type selection
+        rand_val = random.uniform(rng_key, (), minval=0.0, maxval=1.0, dtype=jnp.float32)
+
+        # Check availability based on sector
+        brown_debris_available = sector >= self.constants.BROWN_DEBRIS_SPAWN_SECTOR  # Sector 2
+        yellow_chirper_available = sector >= self.constants.YELLOW_CHIRPER_SPAWN_SECTOR  # Sector 4
+        green_blocker_available = sector >= self.constants.GREEN_BLOCKER_SPAWN_SECTOR  # Sector 6
+
+        # Calculate spawn probabilities ONLY for available enemy types
+        brown_debris_chance = jnp.where(brown_debris_available, self.constants.BROWN_DEBRIS_SPAWN_CHANCE, 0.0)
+        yellow_chirper_chance = jnp.where(yellow_chirper_available, self.constants.YELLOW_CHIRPER_SPAWN_CHANCE, 0.0)
+        green_blocker_chance = jnp.where(green_blocker_available, self.constants.GREEN_BLOCKER_SPAWN_CHANCE, 0.0)
+
+        # Calculate cumulative thresholds
+        green_blocker_threshold = green_blocker_chance
+        yellow_chirper_threshold = green_blocker_threshold + yellow_chirper_chance
+        brown_debris_threshold = yellow_chirper_threshold + brown_debris_chance
+        # Remaining probability goes to white saucers
+
+        # Select enemy type using thresholds
+        enemy_type = jnp.where(
+            rand_val < green_blocker_threshold,
+            self.constants.ENEMY_TYPE_GREEN_BLOCKER,
+            jnp.where(
+                rand_val < yellow_chirper_threshold,
+                self.constants.ENEMY_TYPE_YELLOW_CHIRPER,
+                jnp.where(
+                    rand_val < brown_debris_threshold,
+                    self.constants.ENEMY_TYPE_BROWN_DEBRIS,
+                    self.constants.ENEMY_TYPE_WHITE_SAUCER  # Default fallback
+                )
+            )
+        )
+
+        return enemy_type
+
+    @partial(jax.jit, static_argnums=(0,))
     def _select_enemy_type_excluding_blockers_early_sectors(self, sector: int, rng_key: chex.PRNGKey) -> int:
         """Select enemy type - includes yellow rejuvenators"""
 
@@ -1160,6 +1204,8 @@ class BeamRiderEnv(JaxEnvironment[BeamRiderState, jnp.ndarray, dict, BeamRiderCo
         )
 
         return enemy_type
+
+    @partial(jax.jit, static_argnums=(0,))
     def _select_enemy_type(self, sector: int, rng_key: chex.PRNGKey) -> int:
         """Select enemy type based on current sector - UPDATED: includes sentinel ship"""
 
@@ -1192,395 +1238,339 @@ class BeamRiderEnv(JaxEnvironment[BeamRiderState, jnp.ndarray, dict, BeamRiderCo
 
         # Select enemy type using thresholds
         enemy_type = jnp.where(
-                rand_val < orange_tracker_threshold,
-                self.constants.ENEMY_TYPE_ORANGE_TRACKER,
+            rand_val < orange_tracker_threshold,
+            self.constants.ENEMY_TYPE_ORANGE_TRACKER,
+            jnp.where(
+                rand_val < blue_charger_threshold,
+                self.constants.ENEMY_TYPE_BLUE_CHARGER,
                 jnp.where(
-                    rand_val < blue_charger_threshold,
-                    self.constants.ENEMY_TYPE_BLUE_CHARGER,
+                    rand_val < bounce_threshold,
+                    self.constants.ENEMY_TYPE_GREEN_BOUNCE,
                     jnp.where(
-                        rand_val < bounce_threshold,
-                        self.constants.ENEMY_TYPE_GREEN_BOUNCE,
+                        rand_val < blocker_threshold,
+                        self.constants.ENEMY_TYPE_GREEN_BLOCKER,
                         jnp.where(
-                            rand_val < blocker_threshold,
-                            self.constants.ENEMY_TYPE_GREEN_BLOCKER,
+                            rand_val < chirper_threshold,
+                            self.constants.ENEMY_TYPE_YELLOW_CHIRPER,
                             jnp.where(
-                                rand_val < chirper_threshold,
-                                self.constants.ENEMY_TYPE_YELLOW_CHIRPER,
-                                jnp.where(
-                                    rand_val < debris_threshold,
-                                    self.constants.ENEMY_TYPE_BROWN_DEBRIS,
-                                    self.constants.ENEMY_TYPE_WHITE_SAUCER  # Default
-                                )
+                                rand_val < debris_threshold,
+                                self.constants.ENEMY_TYPE_BROWN_DEBRIS,
+                                self.constants.ENEMY_TYPE_WHITE_SAUCER  # Default
                             )
                         )
                     )
                 )
             )
+        )
 
         return enemy_type
 
+    @partial(jax.jit, static_argnums=(0,))
     def _update_enemies(self, state: BeamRiderState) -> BeamRiderState:
-        """Update enemy positions - WORKING VERSION: Simple blue charger movement"""
+        """Update enemy positions using discrete beam movement for ALL enemy types"""
+        enemies = state.enemies
 
-        # FIRST: Handle white saucer movement patterns
-        state = self._update_white_saucer_movement(state)
-        enemies = state.enemies  # Get updated enemies array after white saucer movement
+        # Only update active enemies
+        active_mask = enemies[:, 3] == 1
 
-        # Handle different movement patterns based on enemy type
-        enemy_types = enemies[:, 5]  # Get enemy types
+        # Get enemy data
+        current_x = enemies[:, 0]
+        current_y = enemies[:, 1]
+        current_beam = enemies[:, 2].astype(int)
+        current_speed = enemies[:, 4]
+        enemy_types = enemies[:, 5].astype(int)
+        direction_x = enemies[:, 6]
+        direction_y = enemies[:, 7]
+        bounce_count = enemies[:, 8].astype(int)
+        linger_timer = enemies[:, 9].astype(int)
+        target_x = enemies[:, 10]
+        health = enemies[:, 11].astype(int)
+        firing_timer = enemies[:, 12].astype(int)
+        maneuver_timer = enemies[:, 13].astype(int)
+        movement_pattern = enemies[:, 14].astype(int)
+        white_saucer_firing_timer = enemies[:, 15].astype(int)
+        jump_timer = enemies[:, 16].astype(int)
+        zigzag_offset = enemies[:, 17]
 
-        # IMPORTANT: Remove WHITE_SAUCER from regular_enemy_mask since they're handled separately now
-        regular_enemy_mask = (enemy_types == self.constants.ENEMY_TYPE_BROWN_DEBRIS)  # REMOVED WHITE_SAUCER
-        regular_new_y = enemies[:, 1] + enemies[:, 4]  # y + speed
+        # Update timers
+        new_jump_timer = jnp.maximum(0, jump_timer - 1)
+        new_linger_timer = jnp.maximum(0, linger_timer - 1)
+        new_firing_timer = jnp.maximum(0, firing_timer - 1)
+        new_maneuver_timer = jnp.maximum(0, maneuver_timer - 1)
+        new_white_saucer_firing_timer = jnp.maximum(0, white_saucer_firing_timer - 1)
 
-        # Yellow chirpers move horizontally
-        chirper_mask = enemy_types == self.constants.ENEMY_TYPE_YELLOW_CHIRPER
-        chirper_new_x = enemies[:, 0] + enemies[:, 4]  # x + speed (horizontal movement)
+        # =================================================================
+        # WHITE SAUCER MOVEMENT PATTERNS (Discrete Beam-Based)
+        # =================================================================
+        white_saucer_active = active_mask & (enemy_types == self.constants.ENEMY_TYPE_WHITE_SAUCER)
 
-        # Green blockers: complex targeting behavior
-        blocker_mask = enemy_types == self.constants.ENEMY_TYPE_GREEN_BLOCKER
+        # PATTERN 0: STRAIGHT DOWN (stay on same beam)
+        straight_mask = white_saucer_active & (movement_pattern == self.constants.WHITE_SAUCER_STRAIGHT_DOWN)
+        straight_new_x = self.beam_positions[current_beam] - self.constants.ENEMY_WIDTH // 2
+        straight_new_y = current_y + current_speed
+        straight_new_beam = current_beam
 
-        # Get blocker current positions and targets
-        blocker_x = enemies[:, 0]
-        blocker_y = enemies[:, 1]
-        blocker_target_x = enemies[:, 10]  # Fixed target_x stored when spawned
-        blocker_direction_x = enemies[:, 6]  # movement direction
+        # PATTERN 1: BEAM_JUMP (discrete beam hopping)
+        jump_mask = white_saucer_active & (movement_pattern == self.constants.WHITE_SAUCER_BEAM_JUMP)
+        should_jump = jump_mask & (new_jump_timer == 0)
 
-        # Calculate movement toward fixed target X coordinate
-        distance_to_target = jnp.abs(blocker_x - blocker_target_x)
-        reached_target = distance_to_target < (self.constants.GREEN_BLOCKER_SPEED * 2)  # Close enough threshold
+        # Generate new random beam for jumping
+        jump_indices = jnp.arange(self.constants.MAX_ENEMIES)
+        jump_rng_keys = jax.vmap(lambda i: random.fold_in(state.rng_key, state.frame_count + i))(jump_indices)
+        new_random_beams = jax.vmap(lambda key: random.randint(key, (), 0, self.constants.NUM_BEAMS))(jump_rng_keys)
 
-        # Move horizontally toward fixed target X coordinate
-        blocker_new_x = jnp.where(
-            blocker_mask & ~reached_target,
-            blocker_x + (blocker_direction_x * self.constants.GREEN_BLOCKER_SPEED),
-            blocker_x  # Stop moving when reached target
+        jump_new_beam = jnp.where(should_jump, new_random_beams, current_beam)
+        jump_new_x = self.beam_positions[jump_new_beam] - self.constants.ENEMY_WIDTH // 2
+        jump_new_y = current_y + current_speed
+        new_jump_timer = jnp.where(should_jump, self.constants.WHITE_SAUCER_JUMP_INTERVAL, new_jump_timer)
+
+        # PATTERN 2: REVERSE_UP (move up on same beam)
+        reverse_mask = white_saucer_active & (movement_pattern == self.constants.WHITE_SAUCER_REVERSE_UP)
+        reverse_new_x = self.beam_positions[current_beam] - self.constants.ENEMY_WIDTH // 2
+        reverse_new_y = current_y + self.constants.WHITE_SAUCER_REVERSE_SPEED  # negative speed
+        reverse_new_beam = current_beam
+
+        # PATTERN 3: ZIGZAG (oscillate between adjacent beams discretely)
+        zigzag_mask = white_saucer_active & (movement_pattern == self.constants.WHITE_SAUCER_ZIGZAG)
+        new_zigzag_offset = jnp.where(
+            zigzag_mask,
+            zigzag_offset + self.constants.WHITE_SAUCER_ZIGZAG_FREQUENCY,
+            zigzag_offset
         )
 
-        # Once reached target X coordinate, move down slowly
-        blocker_new_y = jnp.where(
-            blocker_mask & reached_target,
-            blocker_y + (self.constants.GREEN_BLOCKER_SPEED * 0.5),  # Slower downward movement
-            blocker_y  # Don't move down until reached target
+        # Zigzag between current beam and adjacent beams (discrete)
+        zigzag_beam_offset = jnp.round(jnp.sin(new_zigzag_offset) * 1.0).astype(int)  # -1, 0, or 1
+        zigzag_new_beam = jnp.clip(current_beam + zigzag_beam_offset, 0, self.constants.NUM_BEAMS - 1)
+        zigzag_new_x = self.beam_positions[zigzag_new_beam] - self.constants.ENEMY_WIDTH // 2
+        zigzag_new_y = current_y + current_speed
+
+        # PATTERN 4: SHOOTING (stay on same beam, move straight down)
+        shooting_mask = white_saucer_active & (movement_pattern == self.constants.WHITE_SAUCER_SHOOTING)
+        shooting_new_x = self.beam_positions[current_beam] - self.constants.ENEMY_WIDTH // 2
+        shooting_new_y = current_y + current_speed
+        shooting_new_beam = current_beam
+
+        # Apply white saucer movement patterns
+        ws_new_x = jnp.where(straight_mask, straight_new_x,
+                             jnp.where(jump_mask, jump_new_x,
+                                       jnp.where(reverse_mask, reverse_new_x,
+                                                 jnp.where(zigzag_mask, zigzag_new_x,
+                                                           jnp.where(shooting_mask, shooting_new_x, current_x)))))
+
+        ws_new_y = jnp.where(straight_mask, straight_new_y,
+                             jnp.where(jump_mask, jump_new_y,
+                                       jnp.where(reverse_mask, reverse_new_y,
+                                                 jnp.where(zigzag_mask, zigzag_new_y,
+                                                           jnp.where(shooting_mask, shooting_new_y, current_y)))))
+
+        ws_new_beam = jnp.where(straight_mask, straight_new_beam,
+                                jnp.where(jump_mask, jump_new_beam,
+                                          jnp.where(reverse_mask, reverse_new_beam,
+                                                    jnp.where(zigzag_mask, zigzag_new_beam,
+                                                              jnp.where(shooting_mask, shooting_new_beam,
+                                                                        current_beam)))))
+
+        # =================================================================
+        # BROWN DEBRIS: Move straight down on assigned beam
+        # =================================================================
+        brown_debris_mask = active_mask & (enemy_types == self.constants.ENEMY_TYPE_BROWN_DEBRIS)
+        brown_new_x = self.beam_positions[current_beam] - self.constants.ENEMY_WIDTH // 2
+        brown_new_y = current_y + current_speed
+        brown_new_beam = current_beam
+
+        # =================================================================
+        # YELLOW CHIRPER: Move horizontally between beams (discrete)
+        # =================================================================
+        chirper_mask = active_mask & (enemy_types == self.constants.ENEMY_TYPE_YELLOW_CHIRPER)
+
+        # Move to adjacent beam based on direction
+        chirper_beam_delta = jnp.where(direction_x > 0, 1, -1)  # Move right or left beam
+        chirper_new_beam = jnp.clip(current_beam + chirper_beam_delta, 0, self.constants.NUM_BEAMS - 1)
+
+        # If reached edge beams, reverse direction
+        reached_left_edge = (current_beam == 0) & (direction_x < 0)
+        reached_right_edge = (current_beam == self.constants.NUM_BEAMS - 1) & (direction_x > 0)
+        should_reverse = reached_left_edge | reached_right_edge
+
+        new_direction_x = jnp.where(
+            chirper_mask & should_reverse,
+            -direction_x,  # Reverse direction
+            direction_x  # Keep same direction
         )
 
-        # ORANGE TRACKERS: beam following with limited course changes
-        tracker_mask = enemy_types == self.constants.ENEMY_TYPE_ORANGE_TRACKER
+        chirper_new_x = self.beam_positions[chirper_new_beam] - self.constants.ENEMY_WIDTH // 2
+        chirper_new_y = current_y + current_speed * 0.3  # Slower vertical movement
 
-        # Get tracker data
-        tracker_x = enemies[:, 0]
-        tracker_y = enemies[:, 1]
-        tracker_current_target_beam = enemies[:, 2].astype(int)  # Current target beam
-        tracker_target_x = enemies[:, 10]  # Target X coordinate for current beam
-        tracker_course_changes_remaining = enemies[:, 13].astype(int)  # Course changes left
+        # =================================================================
+        # GREEN BLOCKER: Move toward player's beam (discrete)
+        # =================================================================
+        blocker_mask = active_mask & (enemy_types == self.constants.ENEMY_TYPE_GREEN_BLOCKER)
 
-        # Get current player beam position
-        current_player_beam = state.ship.beam_position
+        # Get player's current beam
+        player_beam = state.ship.beam_position
 
-        # Check if player changed beams and tracker can still change course
-        player_changed_beam = current_player_beam != tracker_current_target_beam
-        can_change_course = tracker_course_changes_remaining > 0
-        should_change_course = tracker_mask & player_changed_beam & can_change_course
-
-        # Update target beam and target X when changing course
-        new_target_beam = jnp.where(
-            should_change_course,
-            current_player_beam,  # Follow player to new beam
-            tracker_current_target_beam  # Keep current target
+        # Calculate direction to player's beam
+        beam_diff = player_beam - current_beam
+        blocker_beam_direction = jnp.where(
+            beam_diff > 0, 1,  # Move right toward player
+            jnp.where(beam_diff < 0, -1, 0)  # Move left toward player, or stay if same beam
         )
 
-        new_target_x = jnp.where(
-            should_change_course,
-            self.beam_positions[current_player_beam],  # New beam X position
-            tracker_target_x  # Keep current target X
+        blocker_new_beam = jnp.clip(
+            current_beam + blocker_beam_direction,
+            0, self.constants.NUM_BEAMS - 1
         )
 
-        # Decrease course changes remaining when used
-        new_course_changes_remaining = jnp.where(
-            should_change_course,
-            tracker_course_changes_remaining - 1,
-            tracker_course_changes_remaining
+        blocker_new_x = self.beam_positions[blocker_new_beam] - self.constants.ENEMY_WIDTH // 2
+        blocker_new_y = current_y + current_speed
+
+        # =================================================================
+        # BLUE CHARGER: Move down on beam, linger at bottom
+        # =================================================================
+        blue_charger_mask = active_mask & (enemy_types == self.constants.ENEMY_TYPE_BLUE_CHARGER)
+
+        # Normal downward movement
+        charger_new_x = self.beam_positions[current_beam] - self.constants.ENEMY_WIDTH // 2
+        charger_new_y = current_y + current_speed
+        charger_new_beam = current_beam
+
+        # If reached bottom and has linger time, stay there
+        at_bottom = current_y >= (self.constants.SCREEN_HEIGHT - self.constants.SHIP_BOTTOM_OFFSET - 30)
+        should_linger = blue_charger_mask & at_bottom & (new_linger_timer > 0)
+
+        charger_new_y = jnp.where(should_linger, current_y, charger_new_y)  # Don't move if lingering
+
+        # =================================================================
+        # ORANGE TRACKER: Track player beam with limited course changes
+        # =================================================================
+        tracker_mask = active_mask & (enemy_types == self.constants.ENEMY_TYPE_ORANGE_TRACKER)
+
+        # Move toward player's beam (similar to blocker but with limits)
+        tracker_beam_diff = player_beam - current_beam
+        tracker_beam_direction = jnp.where(
+            tracker_beam_diff > 0, 1,
+            jnp.where(tracker_beam_diff < 0, -1, 0)
         )
 
-        # Calculate movement toward target beam
-        distance_to_target_x = jnp.abs(tracker_x - new_target_x)
-        reached_target_beam = distance_to_target_x < (self.constants.ORANGE_TRACKER_SPEED * 2)
-
-        # Horizontal movement toward target beam
-        horizontal_direction = jnp.sign(new_target_x - tracker_x)
-        tracker_new_x = jnp.where(
-            tracker_mask & ~reached_target_beam,
-            tracker_x + (horizontal_direction * self.constants.ORANGE_TRACKER_SPEED),
-            tracker_x  # Stop horizontal movement when aligned
+        tracker_new_beam = jnp.clip(
+            current_beam + tracker_beam_direction,
+            0, self.constants.NUM_BEAMS - 1
         )
 
-        # Vertical movement (always moving down, but faster when aligned)
-        vertical_speed = jnp.where(
-            tracker_mask & reached_target_beam,
-            self.constants.ORANGE_TRACKER_SPEED * 1.5,  # Faster when aligned with beam
-            self.constants.ORANGE_TRACKER_SPEED * 0.5  # Slower when moving to beam
+        tracker_new_x = self.beam_positions[tracker_new_beam] - self.constants.ENEMY_WIDTH // 2
+        tracker_new_y = current_y + current_speed
+
+        # =================================================================
+        # SENTINEL SHIP: Move horizontally across screen and disappear
+        # =================================================================
+        sentinel_mask = active_mask & (enemy_types == self.constants.ENEMY_TYPE_SENTINEL_SHIP)
+
+        # Move continuously across beams until off-screen
+        sentinel_beam_delta = jnp.where(direction_x > 0, 1, -1)
+        sentinel_new_beam = current_beam + sentinel_beam_delta
+
+        # Don't clip to beam boundaries - let them go off-screen
+        # But set x position based on beam if still on valid beams
+        on_valid_beam = (sentinel_new_beam >= 0) & (sentinel_new_beam < self.constants.NUM_BEAMS)
+
+        sentinel_new_x = jnp.where(
+            on_valid_beam,
+            self.beam_positions[sentinel_new_beam] - self.constants.SENTINEL_SHIP_WIDTH // 2,  # Use beam position
+            current_x + (direction_x * self.constants.SENTINEL_SHIP_SPEED * 10)  # Continue moving off-screen
         )
 
-        tracker_new_y = jnp.where(
-            tracker_mask,
-            tracker_y + vertical_speed,
-            tracker_y
+        sentinel_new_y = current_y + current_speed
+
+        # Keep same direction - no reversing
+        new_sentinel_direction_x = direction_x
+
+        # =================================================================
+        # DEFAULT: All other enemies move straight down on their beam
+        # =================================================================
+        default_mask = active_mask & ~(
+                white_saucer_active | brown_debris_mask | chirper_mask | blocker_mask | blue_charger_mask | tracker_mask | sentinel_mask)
+        default_new_x = self.beam_positions[current_beam] - self.constants.ENEMY_WIDTH // 2
+        default_new_y = current_y + current_speed
+        default_new_beam = current_beam
+
+        # =================================================================
+        # COMBINE ALL MOVEMENT PATTERNS
+        # =================================================================
+        new_x = jnp.where(white_saucer_active, ws_new_x,
+                          jnp.where(brown_debris_mask, brown_new_x,
+                                    jnp.where(chirper_mask, chirper_new_x,
+                                              jnp.where(blocker_mask, blocker_new_x,
+                                                        jnp.where(blue_charger_mask, charger_new_x,
+                                                                  jnp.where(tracker_mask, tracker_new_x,
+                                                                            jnp.where(sentinel_mask, sentinel_new_x,
+                                                                                      jnp.where(default_mask,
+                                                                                                default_new_x,
+                                                                                                current_x))))))))
+
+        new_y = jnp.where(white_saucer_active, ws_new_y,
+                          jnp.where(brown_debris_mask, brown_new_y,
+                                    jnp.where(chirper_mask, chirper_new_y,
+                                              jnp.where(blocker_mask, blocker_new_y,
+                                                        jnp.where(blue_charger_mask, charger_new_y,
+                                                                  jnp.where(tracker_mask, tracker_new_y,
+                                                                            jnp.where(sentinel_mask, sentinel_new_y,
+                                                                                      jnp.where(default_mask,
+                                                                                                default_new_y,
+                                                                                                current_y))))))))
+
+        new_beam = jnp.where(white_saucer_active, ws_new_beam,
+                             jnp.where(brown_debris_mask, brown_new_beam,
+                                       jnp.where(chirper_mask, chirper_new_beam,
+                                                 jnp.where(blocker_mask, blocker_new_beam,
+                                                           jnp.where(blue_charger_mask, charger_new_beam,
+                                                                     jnp.where(tracker_mask, tracker_new_beam,
+                                                                               jnp.where(sentinel_mask,
+                                                                                         sentinel_new_beam,
+                                                                                         jnp.where(default_mask,
+                                                                                                   default_new_beam,
+                                                                                                   current_beam))))))))
+
+        # Update direction_x for enemies that reverse
+        final_direction_x = jnp.where(chirper_mask, new_direction_x,
+                                      jnp.where(sentinel_mask, new_sentinel_direction_x, direction_x))
+
+        # =================================================================
+        # DEACTIVATE OFF-SCREEN ENEMIES
+        # =================================================================
+        new_active = active_mask & (new_y < self.constants.SCREEN_HEIGHT) & (new_y > -self.constants.ENEMY_HEIGHT)
+
+        # For reverse-moving white saucers, also deactivate if they go too high
+        new_active = jnp.where(
+            reverse_mask & (new_y < 0),
+            False,
+            new_active
         )
 
-        # Check if tracker has reached bottom
-        tracker_at_bottom = tracker_new_y >= (self.constants.SCREEN_HEIGHT - self.constants.ENEMY_HEIGHT)
-
-        # Don't move if at bottom
-        tracker_new_x = jnp.where(tracker_mask & tracker_at_bottom, tracker_x, tracker_new_x)
-        tracker_new_y = jnp.where(tracker_mask & tracker_at_bottom, tracker_y, tracker_new_y)
-
-        # BLUE CHARGERS: WORKING VERSION - SIMPLE, DIRECT LOGIC
-        charger_mask = enemy_types == self.constants.ENEMY_TYPE_BLUE_CHARGER
-        charger_linger_timer = enemies[:, 9].astype(int)  # linger_timer column
-
-        # Define bottom position where chargers should stop
-        bottom_position = self.constants.SCREEN_HEIGHT - self.constants.ENEMY_HEIGHT - 10
-
-        # Check if charger has reached or passed bottom position
-        charger_reached_bottom = enemies[:, 1] >= bottom_position
-
-        # WORKING VERSION: Simple Y movement - just apply the speed directly
-        # If speed is positive, move down. If speed is negative (deflected), move up.
-        charger_new_y = jnp.where(
-            charger_mask & charger_reached_bottom,
-            bottom_position,  # Stay exactly at bottom position when reached
-            enemies[:, 1] + enemies[:, 4]  # Normal movement: current Y + speed (can be + or -)
+        # For sentinel ships, deactivate when they go off-screen horizontally
+        sentinel_off_screen = sentinel_mask & (
+                (new_x < -self.constants.SENTINEL_SHIP_WIDTH) |  # Gone off left side
+                (new_x > self.constants.SCREEN_WIDTH)  # Gone off right side
         )
+        new_active = jnp.where(sentinel_off_screen, False, new_active)
 
-        # WORKING VERSION: Simple linger timer logic (only affects normal movement)
-        new_linger_timer = jnp.where(
-            charger_mask & charger_reached_bottom & (charger_linger_timer == 0),
-            self.constants.BLUE_CHARGER_LINGER_TIME,  # Start lingering when first reaching bottom
-            jnp.where(
-                charger_mask & charger_reached_bottom & (charger_linger_timer > 0),
-                charger_linger_timer - 1,  # Count down while at bottom
-                charger_linger_timer  # Keep current value for others
-            )
-        )
-
-        # GREEN BOUNCE CRAFT: bouncing behavior
-        bounce_mask = enemy_types == self.constants.ENEMY_TYPE_GREEN_BOUNCE
-
-        # Get current bounce directions
-        bounce_dir_x = enemies[:, 6]  # direction_x
-        bounce_dir_y = enemies[:, 7]  # direction_y
-
-        # Calculate new positions based on current direction and speed
-        bounce_new_x = enemies[:, 0] + (bounce_dir_x * enemies[:, 4])
-        bounce_new_y = enemies[:, 1] + (bounce_dir_y * enemies[:, 4])
-
-        # Check for bouncing off screen edges
-        hit_left_edge = bounce_new_x <= 0
-        hit_right_edge = bounce_new_x >= (self.constants.SCREEN_WIDTH - self.constants.ENEMY_WIDTH)
-        hit_top_edge = bounce_new_y <= self.constants.TOP_MARGIN
-        hit_bottom_edge = bounce_new_y >= (self.constants.SCREEN_HEIGHT - self.constants.ENEMY_HEIGHT)
-
-        # Check if any bounce occurred
-        any_bounce = hit_left_edge | hit_right_edge | hit_top_edge | hit_bottom_edge
-
-        # Decrement bounce count when bouncing occurs
-        current_bounce_count = enemies[:, 8]  # bounce_count column
-        new_bounce_count = jnp.where(
-            bounce_mask & any_bounce,
-            jnp.maximum(0, current_bounce_count - 1),  # Decrement, but don't go below 0
-            current_bounce_count
-        )
-
-        # Reverse directions when hitting edges (only if still have bounces left)
-        can_bounce = new_bounce_count > 0
-
-        new_bounce_dir_x = jnp.where(
-            bounce_mask & (hit_left_edge | hit_right_edge) & can_bounce,
-            -bounce_dir_x,
-            bounce_dir_x
-        )
-
-        new_bounce_dir_y = jnp.where(
-            bounce_mask & (hit_top_edge | hit_bottom_edge) & can_bounce,
-            -bounce_dir_y,
-            bounce_dir_y
-        )
-
-        # Clamp bounce positions to screen bounds
-        bounce_clamped_x = jnp.clip(bounce_new_x, 0, self.constants.SCREEN_WIDTH - self.constants.ENEMY_WIDTH)
-        bounce_clamped_y = jnp.clip(bounce_new_y, self.constants.TOP_MARGIN,
-                                    self.constants.SCREEN_HEIGHT - self.constants.ENEMY_HEIGHT)
-
-        # SENTINEL SHIP: simple horizontal cruise across top
-        sentinel_mask = enemy_types == self.constants.ENEMY_TYPE_SENTINEL_SHIP
-        sentinel_new_x = enemies[:, 0] + enemies[:, 4]  # Move horizontally at constant speed
-        sentinel_new_y = enemies[:, 1]  # Stay at same Y level
-
-        # Update X positions based on enemy type (WHITE SAUCERS EXCLUDED - handled separately)
-        new_x = jnp.where(
-            chirper_mask,
-            chirper_new_x,  # Chirpers move horizontally
-            jnp.where(
-                blocker_mask,
-                blocker_new_x,  # Blockers use fixed X-coordinate targeting
-                jnp.where(
-                    bounce_mask,
-                    bounce_clamped_x,  # Bounce craft bounce around
-                    jnp.where(
-                        charger_mask,
-                        enemies[:, 0],  # Blue chargers don't change X position
-                        jnp.where(
-                            tracker_mask,
-                            tracker_new_x,  # Orange trackers use beam following
-                            jnp.where(
-                                sentinel_mask,
-                                sentinel_new_x,  # Sentinels move horizontally
-                                enemies[:, 0]  # Default: no X change (includes white saucers)
-                            )
-                        )
-                    )
-                )
-            )
-        )
-
-        # Update Y positions based on enemy type (WHITE SAUCERS EXCLUDED - handled separately)
-        new_y = jnp.where(
-            regular_enemy_mask & ~charger_mask & ~tracker_mask,  # Regular enemies (only brown debris now)
-            regular_new_y,  # Regular enemies move down
-            jnp.where(
-                blocker_mask,
-                blocker_new_y,  # Blockers use fixed X-coordinate targeting Y movement
-                jnp.where(
-                    bounce_mask,
-                    bounce_clamped_y,  # Bounce craft bounce around
-                    jnp.where(
-                        charger_mask,
-                        charger_new_y,  # Blue chargers use WORKING simple logic
-                        jnp.where(
-                            tracker_mask,
-                            tracker_new_y,  # Orange trackers use beam following Y movement
-                            jnp.where(
-                                sentinel_mask,
-                                sentinel_new_y,  # Sentinels stay at same Y
-                                enemies[:, 1]  # Default: no Y change (includes white saucers AND chirpers)
-                            )
-                        )
-                    )
-                )
-            )
-        )
-
-        # Deactivate enemies that go off screen
-        # Regular enemies: deactivate when they go below screen (only brown debris now)
-        regular_active = (enemies[:, 3] == 1) & (regular_new_y < self.constants.SCREEN_HEIGHT)
-
-        # Orange trackers: deactivate when they reach bottom of screen
-        tracker_active = (enemies[:, 3] == 1) & ~tracker_at_bottom
-
-        # Chirpers: deactivate when they go off either side
-        chirper_active = (enemies[:, 3] == 1) & (chirper_new_x > -self.constants.ENEMY_WIDTH) & (
-                chirper_new_x < self.constants.SCREEN_WIDTH + self.constants.ENEMY_WIDTH)
-
-        # Green blockers: deactivate when they go off any edge OR reach bottom
-        blocker_active = (enemies[:, 3] == 1) & \
-                         (blocker_new_x > -self.constants.ENEMY_WIDTH) & \
-                         (blocker_new_x < self.constants.SCREEN_WIDTH + self.constants.ENEMY_WIDTH) & \
-                         (blocker_new_y > -self.constants.ENEMY_HEIGHT) & \
-                         (blocker_new_y < self.constants.SCREEN_HEIGHT)
-
-        # Bounce craft: stay active as long as they have bounces remaining
-        bounce_active = (enemies[:, 3] == 1) & (new_bounce_count > 0)
-
-        # WORKING VERSION: Blue chargers - simple active logic
-        # Stay active until they reach bottom AND linger timer expires, OR until they go off top when deflected
-        charger_off_top = charger_new_y < -self.constants.ENEMY_HEIGHT  # Deflected chargers going off top
-        charger_active = (enemies[:, 3] == 1) & ~charger_off_top & (
-                (~charger_reached_bottom) |  # Still moving down, stay active
-                (charger_reached_bottom & (new_linger_timer > 0))  # At bottom but timer not expired
-        )
-
-        # Sentinel ships: deactivate when they go completely off screen
-        sentinel_off_screen = sentinel_new_x > (self.constants.SCREEN_WIDTH + self.constants.SENTINEL_SHIP_WIDTH)
-        sentinel_active = (enemies[:, 3] == 1) & ~sentinel_off_screen
-
-        # Combine active states based on enemy type (WHITE SAUCERS EXCLUDED - handled separately)
-        active = jnp.where(
-            regular_enemy_mask & ~charger_mask & ~tracker_mask,
-            regular_active,
-            jnp.where(
-                chirper_mask,
-                chirper_active,
-                jnp.where(
-                    blocker_mask,
-                    blocker_active,  # Use blocker-specific active logic
-                    jnp.where(
-                        bounce_mask,
-                        bounce_active,
-                        jnp.where(
-                            charger_mask,
-                            charger_active,  # WORKING VERSION: simple charger active logic
-                            jnp.where(
-                                tracker_mask,
-                                tracker_active,  # Use tracker-specific active logic
-                                jnp.where(
-                                    sentinel_mask,
-                                    sentinel_active,
-                                    enemies[:, 3]  # Default: keep current active state (includes white saucers)
-                                )
-                            )
-                        )
-                    )
-                )
-            )
-        )
-
-        # Update enemy array
-        enemies = enemies.at[:, 0].set(new_x)  # Update x positions
-        enemies = enemies.at[:, 1].set(new_y)  # Update y positions
-        enemies = enemies.at[:, 2].set(  # Update target beam for trackers
-            jnp.where(tracker_mask, new_target_beam, enemies[:, 2])
-        )
-        enemies = enemies.at[:, 3].set(active.astype(jnp.float32))  # Update active states
-
-        # Update direction arrays - prioritize bounce craft, keep blocker directions
-        enemies = enemies.at[:, 6].set(
-            jnp.where(
-                bounce_mask,
-                new_bounce_dir_x,
-                enemies[:, 6]  # Keep existing direction_x for blockers and others
-            )
-        )
-        enemies = enemies.at[:, 7].set(
-            jnp.where(
-                bounce_mask,
-                new_bounce_dir_y,
-                enemies[:, 7]  # Keep existing direction_y for others
-            )
-        )
-
-        enemies = enemies.at[:, 8].set(new_bounce_count)  # Update bounce count
-        enemies = enemies.at[:, 9].set(new_linger_timer)  # Update linger timer (WORKING VERSION)
-
-        # Update target X for trackers and blockers
-        enemies = enemies.at[:, 10].set(
-            jnp.where(
-                tracker_mask,
-                new_target_x,  # Update target X for trackers
-                enemies[:, 10]  # Keep target_x for blockers, existing values for others
-            )
-        )
-
-        # Update course changes remaining for trackers
-        enemies = enemies.at[:, 13].set(
-            jnp.where(
-                tracker_mask,
-                new_course_changes_remaining,  # Update course changes for trackers
-                enemies[:, 13]  # Keep existing values for others
-            )
-        )
+        # =================================================================
+        # UPDATE ENEMY ARRAY
+        # =================================================================
+        enemies = enemies.at[:, 0].set(new_x)  # x
+        enemies = enemies.at[:, 1].set(new_y)  # y
+        enemies = enemies.at[:, 2].set(new_beam)  # beam_position
+        enemies = enemies.at[:, 3].set(new_active.astype(jnp.float32))  # active
+        enemies = enemies.at[:, 6].set(final_direction_x)  # direction_x
+        enemies = enemies.at[:, 9].set(new_linger_timer)  # linger_timer
+        enemies = enemies.at[:, 12].set(new_firing_timer)  # firing_timer
+        enemies = enemies.at[:, 13].set(new_maneuver_timer)  # maneuver_timer
+        enemies = enemies.at[:, 15].set(new_white_saucer_firing_timer)  # white_saucer_firing_timer
+        enemies = enemies.at[:, 16].set(new_jump_timer)  # jump_timer
+        enemies = enemies.at[:, 17].set(new_zigzag_offset)  # zigzag_offset
 
         return state.replace(enemies=enemies)
 
+    @partial(jax.jit, static_argnums=(0,))
     def _check_collisions(self, state: BeamRiderState) -> BeamRiderState:
         """Check for collisions between projectiles and enemies"""
         projectiles = state.projectiles
@@ -1810,6 +1800,8 @@ class BeamRiderEnv(JaxEnvironment[BeamRiderState, jnp.ndarray, dict, BeamRiderCo
             lives=lives,
             enemies_killed_this_sector=state.enemies_killed_this_sector + enemies_killed_this_frame
         )
+
+    @partial(jax.jit, static_argnums=(0,))
     def _spawn_rejuvenator_debris(self, state: BeamRiderState, rejuvenator_hit_mask: chex.Array,
                                   enemies: chex.Array) -> BeamRiderState:
         """Spawn explosive debris when rejuvenator is shot"""
@@ -1885,6 +1877,8 @@ class BeamRiderEnv(JaxEnvironment[BeamRiderState, jnp.ndarray, dict, BeamRiderCo
                                            (state, enemies))
 
         return state.replace(enemies=enemies)
+
+    @partial(jax.jit, static_argnums=(0,))
     def _check_sector_progression(self, state: BeamRiderState) -> BeamRiderState:
         """Check if sector is complete and advance to next sector - Updated with smooth 99-sector scaling"""
 
@@ -1992,7 +1986,7 @@ class BeamRiderEnv(JaxEnvironment[BeamRiderState, jnp.ndarray, dict, BeamRiderCo
         calculated_spawn_interval = (
                 self.constants.MIN_ENEMY_SPAWN_INTERVAL +
                 (
-                            self.constants.BASE_ENEMY_SPAWN_INTERVAL - self.constants.MIN_ENEMY_SPAWN_INTERVAL) * spawn_decay_factor
+                        self.constants.BASE_ENEMY_SPAWN_INTERVAL - self.constants.MIN_ENEMY_SPAWN_INTERVAL) * spawn_decay_factor
         )
         calculated_spawn_interval = jnp.round(calculated_spawn_interval).astype(jnp.int32)
 
@@ -2024,6 +2018,7 @@ class BeamRiderEnv(JaxEnvironment[BeamRiderState, jnp.ndarray, dict, BeamRiderCo
             enemy_spawn_interval=spawn_interval
         )
 
+    @partial(jax.jit, static_argnums=(0,))
     def _check_game_over(self, state: BeamRiderState) -> BeamRiderState:
         """Check if game is over - Updated to include sector 99 limit"""
         # Original game over condition: no lives left
@@ -2037,6 +2032,7 @@ class BeamRiderEnv(JaxEnvironment[BeamRiderState, jnp.ndarray, dict, BeamRiderCo
 
         return state.replace(game_over=game_over)
 
+    @partial(jax.jit, static_argnums=(0,))
     def _spawn_sentinel(self, state: BeamRiderState) -> BeamRiderState:
         """Spawn the sector sentinel ship - FIXED: Always spawns from left side"""
         enemies = state.enemies
@@ -2080,16 +2076,26 @@ class BeamRiderEnv(JaxEnvironment[BeamRiderState, jnp.ndarray, dict, BeamRiderCo
 
         return state.replace(enemies=enemies)
 
+
 class BeamRiderRenderer(JAXGameRenderer):
     """Unified renderer for BeamRider game with both JAX rendering and Pygame display"""
 
-    def __init__(self, scale=3, enable_pygame=False):
+    def __init__(self):
         super().__init__()
         self.constants = BeamRiderConstants()
         self.screen_width = self.constants.SCREEN_WIDTH
         self.screen_height = self.constants.SCREEN_HEIGHT
         self.beam_positions = self.constants.get_beam_positions()
 
+        # JIT-compile the render function
+        self.render = jit(self._render_impl)
+
+    """def __init__(self, scale=3, enable_pygame=False):
+        super().__init__()
+        self.constants = BeamRiderConstants()
+        self.screen_width = self.constants.SCREEN_WIDTH
+        self.screen_height = self.constants.SCREEN_HEIGHT
+        self.beam_positions = self.constants.get_beam_positions()
 
         self.white_saucer_sprite = jnp.array([
             [0, 0, 1, 0, 0],
@@ -2097,7 +2103,6 @@ class BeamRiderRenderer(JAXGameRenderer):
             [1, 0, 1, 0, 1],
             [1, 1, 1, 1, 1]
         ], dtype=jnp.uint8)
-
 
         # JAX rendering components
         self.ship_sprite_surface = self._create_ship_surface()
@@ -2119,7 +2124,7 @@ class BeamRiderRenderer(JAXGameRenderer):
             import os  # at the top of the file if not already there
             font_path = os.path.join(os.path.dirname(__file__), "../../../assets/PressStart2P.ttf")
             self.font = pygame.font.Font(font_path, 16)
-            self.env = BeamRiderEnv()
+            self.env = BeamRiderEnv()"""
 
     def _create_ship_surface(self):
         # Create the main ship sprite surface using a pixel array and color map.
@@ -2138,9 +2143,9 @@ class BeamRiderRenderer(JAXGameRenderer):
 
         # Map from pixel value to RGBA color
         colors = {
-            0: (0, 0, 0, 0),             # transparent
-            1: (255, 255, 0, 255),       # yellow
-            2: (160, 32, 240, 255),      # purple
+            0: (0, 0, 0, 0),  # transparent
+            1: (255, 255, 0, 255),  # yellow
+            2: (160, 32, 240, 255),  # purple
         }
 
         h, w = ship_sprite.shape
@@ -2156,19 +2161,22 @@ class BeamRiderRenderer(JAXGameRenderer):
         # Scale the sprite up for visibility (6x enlargement)
         return pygame.transform.scale(surface, (w * 6, h * 6))
 
-
     def _create_small_ship_surface(self):
         """Creates a small version of the ship sprite for UI (lives display)"""
         small_sprite = pygame.transform.scale(self.ship_sprite_surface, (16, 10))
         return small_sprite
 
+    @partial(jax.jit, static_argnums=(0,))
     def _render_impl(self, state: BeamRiderState) -> chex.Array:
-        """Render the current game state to a screen buffer"""
+        """Render the current game state to a screen buffer - JIT compiled implementation"""
         # Create screen buffer (RGB)
         screen = jnp.zeros((self.constants.SCREEN_HEIGHT, self.constants.SCREEN_WIDTH, 3), dtype=jnp.uint8)
 
         # Render 3D dotted tunnel grid
         screen = self._draw_3d_grid(screen, state.frame_count)
+
+        # Render ship
+        screen = self._draw_ship(screen, state.ship)
 
         # Render projectiles (lasers)
         screen = self._draw_projectiles(screen, state.projectiles)
@@ -2188,7 +2196,7 @@ class BeamRiderRenderer(JAXGameRenderer):
         return screen
 
     def _draw_3d_grid(self, screen: chex.Array, frame_count: int) -> chex.Array:
-        """Draw 3D grid with 7 animated horizontal lines and 9 vertical beam positions, skipping 2 & 8"""
+        """Draw 3D grid with 7 animated horizontal lines and 5 vertical gameplay beams"""
 
         height = self.constants.SCREEN_HEIGHT
         width = self.constants.SCREEN_WIDTH
@@ -2206,7 +2214,6 @@ class BeamRiderRenderer(JAXGameRenderer):
 
         # === Horizontal Lines ===
         num_hlines = 7  # Number of animated lines
-        speed = 1  # Pixels per frame (for timing)
         spacing = grid_height // (num_hlines + 1)
         phase = (frame_count * 0.003) % 1.0  # Smooth looping animation phase
 
@@ -2221,53 +2228,51 @@ class BeamRiderRenderer(JAXGameRenderer):
         # Draw each horizontal line
         screen = jax.lax.fori_loop(0, num_hlines, draw_hline, screen)
 
-        # === Vertical Lines ===
-        total_beams = 9  # Total line slots (for symmetry)
-        rel_positions = jnp.linspace(-1.0, 1.0, total_beams)
-        draw_indices = jnp.array([0, 2, 3, 4, 5, 6, 8])  # Skip lines 1 and 7 (for spacing)
-
-        center_x = width / 2
-        bottom_spread = width * 1.6  # Line spread at bottom of screen
+        # === Vertical Beam Lines ===
+        # Draw 5 vertical beams that match our gameplay beam positions
         y0 = height - bottom_margin  # Line starts here (bottom)
-        y1 = -height * 0.7  # Line vanishes toward horizon (off-screen)
+        y1 = top_margin  # Line ends here (top)
 
-        def draw_vline(i, scr):
-            idx = draw_indices[i]
-            rel = rel_positions[idx]
+        def draw_vbeam(i, scr):
+            # Get the actual gameplay beam position
+            beam_x = self.beam_positions[i]
 
-            # Starting and ending x positions for vanishing lines
-            x0 = center_x + rel * (bottom_spread / 2.0)
-            x1 = center_x  # All lines converge toward center top
+            # Draw vertical line from bottom to top
+            beam_mask = jnp.abs(x_grid - beam_x) < 1  # 1-pixel wide line
+            vertical_mask = (y_grid >= y1) & (y_grid <= y0)
+            line_mask = beam_mask & vertical_mask
 
-            # Scale y range so lines fade before reaching top_margin
-            t_top = (top_margin - y0) / (y1 - y0)
-            t_top = jnp.clip(t_top, 0.0, 1.0)
+            return jnp.where(line_mask[..., None], line_color, scr)
 
-            num_steps = 200
-            dot_spacing = 25  # Only draw dots every N steps for stylized effect
+        # Draw each vertical beam
+        screen = jax.lax.fori_loop(0, self.constants.NUM_BEAMS, draw_vbeam, screen)
 
-            def body_fn(j, scr_inner):
-                # Parametric interpolation along line
-                t = j / (num_steps - 1)
-                t_clipped = t * t_top
+        return screen
 
-                y = y0 + (y1 - y0) * t_clipped
-                x = x0 + (x1 - x0) * t_clipped
+    def _draw_ship(self, screen: chex.Array, ship: Ship) -> chex.Array:
+        """Draw the player ship"""
+        x, y = ship.x.astype(int), ship.y.astype(int)
 
-                xi = jnp.clip(jnp.round(x).astype(int), 0, width - 1)
-                yi = jnp.clip(jnp.round(y).astype(int), 0, height - 1)
+        # Create coordinate grids
+        y_indices = jnp.arange(self.constants.SCREEN_HEIGHT)
+        x_indices = jnp.arange(self.constants.SCREEN_WIDTH)
+        y_grid, x_grid = jnp.meshgrid(y_indices, x_indices, indexing='ij')
 
-                return jax.lax.cond(
-                    j % dot_spacing == 0,  # Place dot only at intervals
-                    lambda s: s.at[yi, xi].set(line_color),  # Set pixel color
-                    lambda s: s,  # Else do nothing
-                    scr_inner
-                )
+        # Create mask for ship pixels
+        ship_mask = (
+                (x_grid >= x) &
+                (x_grid < x + self.constants.SHIP_WIDTH) &
+                (y_grid >= y) &
+                (y_grid < y + self.constants.SHIP_HEIGHT)
+        )
 
-            return jax.lax.fori_loop(0, num_steps, body_fn, scr)
-
-        # Draw all selected vertical lines
-        screen = jax.lax.fori_loop(0, draw_indices.shape[0], draw_vline, screen)
+        # Apply ship color where mask is True
+        ship_color = jnp.array(self.constants.BLUE, dtype=jnp.uint8)
+        screen = jnp.where(
+            ship_mask[..., None],  # Add dimension for RGB
+            ship_color,
+            screen
+        ).astype(jnp.uint8)
 
         return screen
 
@@ -2345,33 +2350,6 @@ class BeamRiderRenderer(JAXGameRenderer):
 
         # Apply to all sentinel projectiles
         screen = jax.lax.fori_loop(0, self.constants.MAX_PROJECTILES, draw_single_sentinel_projectile, screen)
-        return screen
-
-    def _draw_ship(self, screen: chex.Array, ship: Ship) -> chex.Array:
-        """Draw the player ship"""
-        x, y = ship.x.astype(int), ship.y.astype(int)
-
-        # Create coordinate grids
-        y_indices = jnp.arange(self.constants.SCREEN_HEIGHT)
-        x_indices = jnp.arange(self.constants.SCREEN_WIDTH)
-        y_grid, x_grid = jnp.meshgrid(y_indices, x_indices, indexing='ij')
-
-        # Create mask for ship pixels
-        ship_mask = (
-                (x_grid >= x) &
-                (x_grid < x + self.constants.SHIP_WIDTH) &
-                (y_grid >= y) &
-                (y_grid < y + self.constants.SHIP_HEIGHT)
-        )
-
-        # Apply ship color where mask is True
-        ship_color = jnp.array(self.constants.BLUE, dtype=jnp.uint8)
-        screen = jnp.where(
-            ship_mask[..., None],  # Add dimension for RGB
-            ship_color,
-            screen
-        ).astype(jnp.uint8)
-
         return screen
 
     def _draw_projectiles(self, screen: chex.Array, projectiles: chex.Array) -> chex.Array:
@@ -2501,13 +2479,13 @@ class BeamRiderRenderer(JAXGameRenderer):
     # PYGAME DISPLAY METHODS (moved from BeamRiderPygameRenderer)
     # ============================================================================
 
-    def run_game(self):
-        """Main game loop with torpedo support - requires pygame to be enabled"""
+    """def run_game(self):
+        Main game loop with torpedo support - requires pygame to be enabled
         if not self.enable_pygame:
             raise RuntimeError("pygame must be enabled to run the game. Initialize with enable_pygame=True")
 
         key = random.PRNGKey(42)
-        state = self.env.reset(key)
+        obs, state = self.env.reset(key)
 
         running = True
         paused = False
@@ -2528,29 +2506,27 @@ class BeamRiderRenderer(JAXGameRenderer):
                 # Determine action based on key combinations
                 action = 0  # default no-op
 
-                # TORPEDO ACTIONS (actions 6, 7, 8) - CHECK FIRST!
-                if keys[pygame.K_t]:  # T for torpedo only
-                    action = 6
-                elif keys[pygame.K_q]:  # Q for left + torpedo
-                    action = 7
-                elif keys[pygame.K_e]:  # E for right + torpedo
-                    action = 8
-                # LASER ACTIONS (actions 3, 4, 5)
-                elif keys[pygame.K_LEFT] and keys[pygame.K_SPACE]:
-                    action = 4  # left + fire laser
-                elif keys[pygame.K_RIGHT] and keys[pygame.K_SPACE]:
-                    action = 5  # right + fire laser
+                # TORPEDO ACTIONS - Map to JAXAtari action constants
+                if keys[pygame.K_t] and keys[pygame.K_UP]:
+                    action = 10  # UPFIRE - torpedo + up
+                elif keys[pygame.K_t] and keys[pygame.K_LEFT]:
+                    action = 12  # LEFTFIRE - torpedo + left
+                elif keys[pygame.K_t] and keys[pygame.K_RIGHT]:
+                    action = 11  # RIGHTFIRE - torpedo + right
+                elif keys[pygame.K_t]:
+                    action = 10  # UPFIRE - torpedo only (default up)
+                # LASER ACTIONS
                 elif keys[pygame.K_SPACE]:
-                    action = 3  # fire laser only
-                # MOVEMENT ACTIONS (actions 1, 2)
+                    action = 1  # FIRE - fire laser only
+                # MOVEMENT ACTIONS
                 elif keys[pygame.K_LEFT]:
-                    action = 1  # left
+                    action = 4  # LEFT
                 elif keys[pygame.K_RIGHT]:
-                    action = 2  # right
+                    action = 3  # RIGHT
 
                 # Step and render
                 prev_state = state  # Store previous state
-                state = self.env.step(state, action)
+                obs, state, reward, done, info = self.env.step(state, action)
 
                 # Check for sector completion
                 self._show_sector_complete(state)
@@ -2573,7 +2549,7 @@ class BeamRiderRenderer(JAXGameRenderer):
         sys.exit()
 
     def _show_sector_complete(self, state):
-        """Show sector completion message (called when sector advances)"""
+       Show sector completion message (called when sector advances)
         if hasattr(self, '_last_sector') and state.current_sector > self._last_sector:
             # Sector just advanced - show visual feedback
 
@@ -2589,9 +2565,12 @@ class BeamRiderRenderer(JAXGameRenderer):
             torpedoes_text = self.font.render("Torpedoes Refilled!", True, (255, 255, 0))
 
             # Center the messages
-            sector_rect = sector_complete_text.get_rect(center=(self.pygame_screen_width // 2, self.pygame_screen_height // 2 - 40))
-            next_rect = next_sector_text.get_rect(center=(self.pygame_screen_width // 2, self.pygame_screen_height // 2))
-            torpedo_rect = torpedoes_text.get_rect(center=(self.pygame_screen_width // 2, self.pygame_screen_height // 2 + 40))
+            sector_rect = sector_complete_text.get_rect(
+                center=(self.pygame_screen_width // 2, self.pygame_screen_height // 2 - 40))
+            next_rect = next_sector_text.get_rect(
+                center=(self.pygame_screen_width // 2, self.pygame_screen_height // 2))
+            torpedo_rect = torpedoes_text.get_rect(
+                center=(self.pygame_screen_width // 2, self.pygame_screen_height // 2 + 40))
 
             # Draw the messages
             self.pygame_screen.blit(sector_complete_text, sector_rect)
@@ -2611,7 +2590,7 @@ class BeamRiderRenderer(JAXGameRenderer):
         self.pygame_screen.blit(pause_text, rect)
 
     def _draw_screen(self, screen_buffer, state):
-        """Draws the game screen buffer and overlays the ship sprite"""
+        Draws the game screen buffer and overlays the ship sprite
         screen_np = np.array(screen_buffer)
         scaled_screen = np.repeat(np.repeat(screen_np, self.scale, axis=0), self.scale, axis=1)
 
@@ -2624,7 +2603,7 @@ class BeamRiderRenderer(JAXGameRenderer):
         self.pygame_screen.blit(self.ship_sprite_surface, (ship_x, ship_y))
 
     def _draw_ui_overlay(self, state):
-        """Draw centered Score and Level UI - UPDATED: shows sentinel ship info"""
+        #Draw centered Score and Level UI - UPDATED: shows sentinel ship info
         # Enemies left number (top-left)
         enemies_left = 15 - state.enemies_killed_this_sector
         enemies_text = self.font.render(str(enemies_left), True, (255, 0, 0))  # red number
@@ -2661,7 +2640,7 @@ class BeamRiderRenderer(JAXGameRenderer):
             self.pygame_screen.blit(scaled_ship, (x, y))
 
     def _show_game_over(self, state):
-        """Show Game Over screen"""
+        Show Game Over screen
         overlay = pygame.Surface((self.pygame_screen_width, self.pygame_screen_height))
         overlay.set_alpha(128)
         overlay.fill((0, 0, 0))
@@ -2672,15 +2651,137 @@ class BeamRiderRenderer(JAXGameRenderer):
         sector_text = self.font.render(f"Reached Sector: {state.current_sector}", True, (255, 255, 255))
 
         # Center the text
-        game_over_rect = game_over_text.get_rect(center=(self.pygame_screen_width // 2, self.pygame_screen_height // 2 - 40))
+        game_over_rect = game_over_text.get_rect(
+            center=(self.pygame_screen_width // 2, self.pygame_screen_height // 2 - 40))
         score_rect = final_score_text.get_rect(center=(self.pygame_screen_width // 2, self.pygame_screen_height // 2))
         sector_rect = sector_text.get_rect(center=(self.pygame_screen_width // 2, self.pygame_screen_height // 2 + 30))
 
         self.pygame_screen.blit(game_over_text, game_over_rect)
         self.pygame_screen.blit(final_score_text, score_rect)
-        self.pygame_screen.blit(sector_text, sector_rect)
+        self.pygame_screen.blit(sector_text, sector_rect)"""
 
 
 if __name__ == "__main__":
-    game = BeamRiderRenderer(enable_pygame=True)
-    game.run_game()
+    # For standalone pygame gameplay, create environment and run with pygame
+    import pygame
+    import sys
+
+    # Create the game environment
+    env = BeamRiderEnv()
+
+    # Initialize pygame
+    pygame.init()
+    scale = 3
+    screen_width = env.constants.SCREEN_WIDTH * scale
+    screen_height = env.constants.SCREEN_HEIGHT * scale
+    screen = pygame.display.set_mode((screen_width, screen_height))
+    pygame.display.set_caption("BeamRider - JAX Implementation")
+    clock = pygame.time.Clock()
+
+    # Load font (you may need to adjust the path)
+    try:
+        font = pygame.font.Font("PressStart2P.ttf", 16)
+    except:
+        font = pygame.font.Font(None, 24)  # Fallback to default font
+
+    # Initialize game state
+    key = random.PRNGKey(42)
+    obs, state = env.reset(key)
+
+    running = True
+    paused = False
+
+    while running and not state.game_over:
+        # Handle quit & pause events
+        for event in pygame.event.get():
+            if event.type == pygame.QUIT:
+                running = False
+            elif event.type == pygame.KEYDOWN:
+                if event.key == pygame.K_p:
+                    paused = not paused
+
+        if not paused:
+            # Poll real-time key states for smoother controls
+            keys = pygame.key.get_pressed()
+
+            # Determine action based on key combinations
+            action = 0  # default no-op
+
+            # TORPEDO ACTIONS - Map to JAXAtari action constants
+            if keys[pygame.K_t] and keys[pygame.K_UP]:
+                action = 10  # UPFIRE - torpedo + up
+            elif keys[pygame.K_t] and keys[pygame.K_LEFT]:
+                action = 12  # LEFTFIRE - torpedo + left
+            elif keys[pygame.K_t] and keys[pygame.K_RIGHT]:
+                action = 11  # RIGHTFIRE - torpedo + right
+            elif keys[pygame.K_t]:
+                action = 10  # UPFIRE - torpedo only (default up)
+            # LASER ACTIONS
+            elif keys[pygame.K_SPACE]:
+                action = 1  # FIRE - fire laser only
+            # MOVEMENT ACTIONS
+            elif keys[pygame.K_LEFT]:
+                action = 4  # LEFT
+            elif keys[pygame.K_RIGHT]:
+                action = 3  # RIGHT
+
+            # Step the game
+            obs, state, reward, done, info = env.step(state, action)
+
+            # Render the game
+            screen_buffer = env.render(state)
+
+            # Convert JAX array to numpy and scale up
+            screen_np = np.array(screen_buffer)
+            scaled_screen = np.repeat(np.repeat(screen_np, scale, axis=0), scale, axis=1)
+
+            # Create pygame surface and blit to screen
+            surf = pygame.surfarray.make_surface(scaled_screen.swapaxes(0, 1))
+            screen.blit(surf, (0, 0))
+
+            # Draw simple UI overlay
+            score_text = font.render(f"SCORE {state.score:06}", True, (255, 255, 255))
+            level_text = font.render(f"SECTOR {state.level:02}", True, (255, 255, 255))
+            lives_text = font.render(f"LIVES {state.lives}", True, (255, 255, 255))
+            torpedoes_text = font.render(f"TORPEDOES {state.torpedoes_remaining}", True, (255, 255, 255))
+
+            screen.blit(score_text, (10, 10))
+            screen.blit(level_text, (10, 35))
+            screen.blit(lives_text, (10, 60))
+            screen.blit(torpedoes_text, (10, 85))
+
+            pygame.display.flip()
+            clock.tick(60)
+        else:
+            # Pause overlay
+            pause_text = font.render("PAUSED", True, (255, 255, 0))
+            pause_rect = pause_text.get_rect(center=(screen_width // 2, screen_height // 2))
+            screen.blit(pause_text, pause_rect)
+            pygame.display.flip()
+            clock.tick(15)
+
+    # Game over screen
+    if state.game_over:
+        overlay = pygame.Surface((screen_width, screen_height))
+        overlay.set_alpha(128)
+        overlay.fill((0, 0, 0))
+        screen.blit(overlay, (0, 0))
+
+        game_over_text = font.render("GAME OVER", True, (255, 0, 0))
+        final_score_text = font.render(f"Final Score: {state.score}", True, (255, 255, 255))
+        sector_text = font.render(f"Reached Sector: {state.current_sector}", True, (255, 255, 255))
+
+        # Center the text
+        game_over_rect = game_over_text.get_rect(center=(screen_width // 2, screen_height // 2 - 40))
+        score_rect = final_score_text.get_rect(center=(screen_width // 2, screen_height // 2))
+        sector_rect = sector_text.get_rect(center=(screen_width // 2, screen_height // 2 + 30))
+
+        screen.blit(game_over_text, game_over_rect)
+        screen.blit(final_score_text, score_rect)
+        screen.blit(sector_text, sector_rect)
+
+        pygame.display.flip()
+        pygame.time.wait(3000)  # Show for 3 seconds
+
+    pygame.quit()
+    sys.exit()
