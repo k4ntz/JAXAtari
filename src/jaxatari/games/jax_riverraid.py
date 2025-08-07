@@ -24,6 +24,7 @@ MIN_RIVER_WIDTH = 30
 MAX_RIVER_WIDTH = 130
 MAX_ENEMIES = 10
 MINIMUM_SPAWN_COOLDOWN = 20
+MAX_FUEL = 30
 
 
 class RiverraidState(NamedTuple):
@@ -50,6 +51,7 @@ class RiverraidState(NamedTuple):
     player_velocity: chex.Array
     player_direction: chex.Array  # 0 left, 1 straight, 2 right
     player_state: chex.Array
+    player_fuel: chex.Array
 
     player_bullet_x: chex.Array
     player_bullet_y: chex.Array
@@ -706,12 +708,10 @@ def player_shooting(state, action):
     return state._replace(player_bullet_x=new_bullet_x,
                               player_bullet_y=new_bullet_y)
 
-# TODO cooldown between spawns
+
 @jax.jit
 def spawn_enemies(state):
-    jax.debug.print("SPAWNING ENEMY")
     key, spawn_key, x_key = jax.random.split(state.master_key, 3)
-    #spawn_enemy = jax.random.bernoulli(spawn_key, 0.07)
 
     # 0 boat, 1 helicopter, 2 plane
     new_single_enemy_type = jax.random.randint(spawn_key, (), 0, 3)
@@ -781,9 +781,7 @@ def spawn_enemies(state):
 
 @jax.jit
 def spawn_fuel(state: RiverraidState) -> RiverraidState:
-    jax.debug.print("SPAWNING FUEL")
-
-    key, spawn_key, x_key = jax.random.split(state.master_key, 3)
+    key, x_key = jax.random.split(state.master_key, 2)
 
     free_fuel_idx = jax.lax.cond(
         jnp.any(state.fuel_state == 0),
@@ -919,6 +917,53 @@ def enemy_collision(state: RiverraidState) -> RiverraidState:
     return new_state._replace(player_state=new_player_state)
 
 
+def fuel_collision(state: RiverraidState) -> RiverraidState:
+    active_fuel_mask = state.fuel_state == 1
+
+    # player collision
+    x_collision_mask = (state.player_x < state.fuel_x + 8) & (state.player_x + 8 > state.fuel_x)
+    y_collision_mask = (state.player_y < state.fuel_y + 8) & (state.player_y + 8 > state.fuel_y)
+    player_collision_mask = active_fuel_mask & x_collision_mask & y_collision_mask
+    player_collision_present = jnp.any(player_collision_mask)
+
+    # bullet collision
+    bullet_x_collision_mask = (state.player_bullet_x < state.fuel_x + 8) & (state.player_bullet_x + 8 > state.fuel_x)
+    bullet_y_collision_mask = (state.player_bullet_y < state.fuel_y + 8) & (state.player_bullet_y + 8 > state.fuel_y)
+    bullet_collision_mask = active_fuel_mask & bullet_x_collision_mask & bullet_y_collision_mask
+    bullet_collision_present = jnp.any(bullet_collision_mask)
+    bullet_hit_index = jnp.argmax(bullet_collision_mask)
+
+    new_fuel_state = jnp.where(
+        bullet_collision_present,
+        state.fuel_state.at[bullet_hit_index].set(0),
+        state.fuel_state
+    )
+
+    new_bullet_x = jnp.where(bullet_collision_present, -1.0, state.player_bullet_x)
+    new_bullet_y = jnp.where(bullet_collision_present, -1.0, state.player_bullet_y)
+
+    new_player_fuel = jax.lax.cond(
+        player_collision_present,
+        lambda state: jnp.clip(state.player_fuel + 1, 0, MAX_FUEL),  # TODO every 5th frame after first contact
+        lambda state: jax.lax.cond(                                         # every 50th frame
+            state.turn_step % 50 == 0,
+            lambda _: jnp.clip(state.player_fuel - 1, 0, MAX_FUEL),
+            lambda _: state.player_fuel,
+            operand=None
+        ),
+        operand=state
+    )
+    jax.debug.print("Riverraid: player_fuel: {player_fuel}", player_fuel=new_player_fuel)
+
+    return state._replace(
+        fuel_state=new_fuel_state,
+        player_bullet_x=new_bullet_x,
+        player_bullet_y=new_bullet_y,
+        player_fuel=new_player_fuel
+    )
+
+
+
 @jax.jit
 def update_enemy_movement_status(state: RiverraidState) -> RiverraidState:
     active_static_mask = (state.enemy_state == 1) & (state.enemy_direction <= 1)
@@ -1036,6 +1081,7 @@ class JaxRiverraid(JaxEnvironment):
                                fuel_x=jnp.full((MAX_ENEMIES,), -1, dtype=jnp.float32),
                                fuel_y=jnp.full((MAX_ENEMIES,), SCREEN_HEIGHT + 1, dtype=jnp.float32),
                                fuel_state=jnp.full((MAX_ENEMIES,), 0, dtype=jnp.int32),
+                               player_fuel=jnp.array(MAX_FUEL),
                                spawn_cooldown=jnp.array(50)
                                )
         observation = self._get_observation(state)
@@ -1059,6 +1105,7 @@ class JaxRiverraid(JaxEnvironment):
             new_state = enemy_collision(new_state)
             new_state = update_enemy_movement_status(new_state)
             new_state = enemy_movement(new_state)
+            new_state = fuel_collision(new_state)
             return new_state
 
         def respawn(state: RiverraidState) -> RiverraidState:
