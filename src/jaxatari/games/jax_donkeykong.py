@@ -114,6 +114,10 @@ class DonkeyKongConstants(NamedTuple):
     # Barrel spawn timing
     SPAWN_STEP_COUNTER_BARREL: int = 236
 
+class InvisibleWallEachStage(NamedTuple):
+    stage: chex.Array
+    left_end: chex.Array
+    right_end: chex.Array
 
 class Ladder(NamedTuple):
     stage: chex.Array
@@ -145,10 +149,11 @@ class DonkeyKongState(NamedTuple):
     mario_view_direction: int
     mario_walk_frame_counter: int
     mario_walk_sprite: int
-    
+    mario_stage: int
 
     barrels: BarrelPosition
     ladders: Ladder
+    invisibleWallEachStage: InvisibleWallEachStage
     random_key: int
     frames_since_last_barrel_spawn: int
 
@@ -221,6 +226,25 @@ class JaxDonkeyKong(JaxEnvironment[DonkeyKongState, DonkeyKongObservation, Donke
             lambda _: Ladder_level_2,
             operand=None
         )
+
+    @partial(jax.jit, static_argnums=(0,))
+    def init_invisible_wall_for_level(self, level: int) -> InvisibleWallEachStage:
+        # Set invisible wall depending of level
+        invisible_wall_level_1 = InvisibleWallEachStage(
+            stage=jnp.array([1, 2, 3, 4, 5, 6], dtype=jnp.int32),
+            left_end=jnp.array([37, 32, 37, 32, 37, 32], dtype=jnp.int32),
+            right_end=jnp.array([120, 113, 120, 113, 120, 113], dtype=jnp.int32),
+        )
+
+        invisible_wall_level_2 = invisible_wall_level_1
+
+        return jax.lax.cond(
+            level == 1,
+            lambda _: invisible_wall_level_1,
+            lambda _: invisible_wall_level_2,
+            operand=None
+        )
+
 
     @partial(jax.jit, static_argnums=(0,))
     def _barrel_step(self, state):
@@ -546,7 +570,7 @@ class JaxDonkeyKong(JaxEnvironment[DonkeyKongState, DonkeyKongObservation, Donke
         def mario_climbing_upwards(state):
             new_state = state._replace(
                 mario_view_direction=self.consts.MOVING_UP,
-                mario_y=state.mario_y + self.consts.MARIO_CLIMBING_SPEED,
+                mario_x=state.mario_x + self.consts.MARIO_CLIMBING_SPEED,
                 mario_climbing=True,
             )
             ladders = state.ladders # be careful, ladder is not the actual ladder positions but where barrel interact with the ladders
@@ -567,6 +591,8 @@ class JaxDonkeyKong(JaxEnvironment[DonkeyKongState, DonkeyKongObservation, Donke
         # change mario position in x direction if Action.right or Action.left is chosen
         def mario_walking_to_right(state):
             last_mario_move_was_moving_to_right = state.mario_view_direction != self.consts.MOVING_RIGHT
+            
+
             new_state = jax.lax.cond(
                 last_mario_move_was_moving_to_right,
                 lambda _:  state._replace(
@@ -677,6 +703,7 @@ class JaxDonkeyKong(JaxEnvironment[DonkeyKongState, DonkeyKongObservation, Donke
         Returns the initial state and the reward (i.e. 0)
         """
         ladders = self.init_ladders_for_level(level=1)
+        invisibleWallEachStage = self.init_invisible_wall_for_level(level=1)
         state = DonkeyKongState(
             game_started = False,
             level = 1,
@@ -692,6 +719,7 @@ class JaxDonkeyKong(JaxEnvironment[DonkeyKongState, DonkeyKongObservation, Donke
             mario_view_direction=self.consts.MOVING_RIGHT,
             mario_walk_frame_counter=0,
             mario_walk_sprite=self.consts.MARIO_WALK_SPRITE_0,
+            mario_stage=1,
 
             barrels = BarrelPosition(
                 barrel_x = jnp.array([-1, -1, -1, -1]).astype(jnp.int32),
@@ -703,6 +731,7 @@ class JaxDonkeyKong(JaxEnvironment[DonkeyKongState, DonkeyKongObservation, Donke
             ),
 
             ladders=ladders,
+            invisibleWallEachStage=invisibleWallEachStage,
             random_key = jax.random.PRNGKey(key[0]),
         )
         initial_obs = self._get_observation(state)
