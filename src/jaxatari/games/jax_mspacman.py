@@ -30,6 +30,13 @@ POWER_PELLET_POSITIONS = [[ppx0, ppy0], [ppx1, ppy0], [ppx0, ppy1], [ppx1, ppy1]
 INITIAL_GHOSTS_POSITIONS = jnp.array([[40, 78], [50, 78], [75, 54], [120, 78]])
 PELLETS_TO_COLLECT = 155  # Total pellets to collect in the maze (including power pellets)
 # PELLETS_TO_COLLECT = 5  # Total pellets to collect in the maze (including power pellets)
+PELLET_POINTS = 10
+POWER_PELLET_POINTS = 50
+# cherry, strawberry, orange, pretzel, apple, pear, banana
+FRUITS_POINTS = [100, 200, 500, 700, 1000, 2000, 5000]  
+GHOSTS_POINTS = [200, 400, 800, 1600]
+BONUS_LIFE_LIMIT = 10000
+
 
 def last_pressed_action(action, prev_action):
     """
@@ -68,7 +75,8 @@ def dof(pos: chex.Array, dofmaze: chex.Array):
     grid_y = (y+3)//4
     return dofmaze[grid_x][grid_y]
 
-def can_change_direction(pos: chex.Array, dofmaze: chex.Array):
+
+def available_directions(pos: chex.Array, dofmaze: chex.Array):
     """
     Wether the object change change direction
     """
@@ -250,7 +258,7 @@ class JaxPacman(JaxEnvironment[PacmanState, PacmanObservation, PacmanInfo]):
 
 
         action = last_pressed_action(action, state.current_action)
-        possible_directions = can_change_direction(state.pacman_pos, state.dofmaze)
+        possible_directions = available_directions(state.pacman_pos, state.dofmaze)
         if action != Action.NOOP and action != Action.FIRE and possible_directions[action - 2]:
             new_pacman_dir = DIRECTIONS[action]
             executed_action = action
@@ -441,6 +449,33 @@ def get_direction_index(direction: chex.Array) -> int:
             return idx
     return 0  # Default to NOOP if not found
 
+def get_chase_target(ghost_id: int,
+                     pacman_tile: chex.Array,
+                     pacman_dir: chex.Array,
+                     blinky_tile: chex.Array) -> chex.Array:
+    """
+    Compute the chase-mode target tile for each ghost by ID:
+     0=Red (Blinky), 1=Pink (Pinky), 2=Blue (Inky), 3=Orange (Clyde)
+    """
+    if ghost_id == 0:
+        # Blinky: target Pac-Man's current tile
+        return pacman_tile
+    elif ghost_id == 1:
+        # Pinky: 4 tiles ahead of Pac-Man
+        ahead = pacman_tile + 4 * pacman_dir
+        return ahead
+    elif ghost_id == 2:
+        # Inky: vector from Blinky to two tiles ahead of Pac-Man, doubled
+        two_ahead = pacman_tile + 2 * pacman_dir
+        vect = two_ahead - blinky_tile
+        return blinky_tile + 2 * vect
+    else:
+        # Clyde: if >8 tiles away, chase Pac-Man, else scatter corner
+        dist = jnp.linalg.norm(ghost_id_tile - pacman_tile)
+        chase = pacman_tile
+        corner = SCATTER_TARGETS[3]
+        return jnp.where(dist > 8, chase, corner)
+
 
 def ghost_step(ghost_pos: chex.Array, ghost_dir: chex.Array, dofmaze:chex.Array, 
                 eaten_ghost: chex.Array, power_mode: chex.Array,
@@ -448,29 +483,33 @@ def ghost_step(ghost_pos: chex.Array, ghost_dir: chex.Array, dofmaze:chex.Array,
     """
     Step function for a single ghost. Never stops, never reverses, can change direction at intersections.
     """
-    possible = can_change_direction(ghost_pos, dofmaze)
-    dir_idx = get_direction_index(ghost_dir)
-    # Map: 2=UP, 3=RIGHT, 4=LEFT, 5=DOWN
-    direction_indices = [2, 3, 4, 5]
-    # Opposite directions: UP<->DOWN, LEFT<->RIGHT
-    opposite = {2:5, 3:4, 4:3, 5:2}
-    # Build list of allowed directions (not reverse, not blocked)
-    allowed = []
-    for i, can_go in zip(direction_indices, possible):
-        if can_go and (dir_idx == 0 or i != opposite.get(dir_idx, -1)):
-            allowed.append(i)
-    if not allowed:
-        # If no allowed (shouldn't happen), keep going forward
-        next_dir_idx = dir_idx
-    elif len(allowed) == 1:
-        next_dir_idx = allowed[0]
-    else:
-        # Randomly pick one (except reverse)
-        if key is not None:
-            next_dir_idx = jax.random.choice(key, jnp.array(allowed))
+    x, y = ghost_pos
+    if x % 4 == 1 or y % 12 == 6: # on horizontal or vertical grid
+        possible = available_directions(ghost_pos, dofmaze)
+        dir_idx = get_direction_index(ghost_dir)
+        # Map: 2=UP, 3=RIGHT, 4=LEFT, 5=DOWN
+        direction_indices = [2, 3, 4, 5]
+        # Opposite directions: UP<->DOWN, LEFT<->RIGHT
+        opposite = {2:5, 3:4, 4:3, 5:2}
+        # Build list of allowed directions (not reverse, not blocked)
+        allowed = []
+        for i, can_go in zip(direction_indices, possible):
+            if can_go and (dir_idx == 0 or i != opposite.get(dir_idx, -1)):
+                allowed.append(i)
+        if not allowed:
+            # If no allowed (shouldn't happen), keep going forward
+            next_dir_idx = dir_idx
+        elif len(allowed) == 1:
+            next_dir_idx = allowed[0]
         else:
-            next_dir_idx = allowed[0]  # deterministic fallback
-    next_dir = DIRECTIONS[next_dir_idx]
+            # Randomly pick one (except reverse)
+            if key is not None:
+                next_dir_idx = jax.random.choice(key, jnp.array(allowed))
+            else:
+                next_dir_idx = allowed[0]  # deterministic fallback
+        next_dir = DIRECTIONS[next_dir_idx]
+    else:
+        next_dir = ghost_dir
     new_pos = ghost_pos + next_dir
     new_pos = new_pos.at[0].set(new_pos[0] % 160)  # wrap horizontally
     if eaten_ghost == 1:
