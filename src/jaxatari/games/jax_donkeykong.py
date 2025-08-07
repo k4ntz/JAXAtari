@@ -71,14 +71,14 @@ class DonkeyKongConstants(NamedTuple):
     MARIO_WALK_SPRITE_3: int = 3
 
     # Barrel positions and sprites
-    BARREL_START_X: int = 34
-    BARREL_START_Y: int = 52
+    BARREL_START_X: int = 52
+    BARREL_START_Y: int = 34
     BARREL_SPRITE_FALL: int = 0
     BARREL_SPRITE_RIGHT: int = 1
     BARREL_SPRITE_LEFT: int = 2
 
     # Barrel rolling probability
-    BASE_PROBABILITY_BARREL_ROLLING_A_LADDER_DOWN: float = 0.0
+    BASE_PROBABILITY_BARREL_ROLLING_A_LADDER_DOWN: float = 0.8
 
     # Hit boxes
     MARIO_HIT_BOX_X: int = 7
@@ -93,20 +93,20 @@ class DonkeyKongConstants(NamedTuple):
     MOVING_LEFT: int = 3
 
     # Bar start/end positions
-    BAR_LEFT_X: int = 32
-    BAR_RIGHT_X: int = 120
-    BAR_1_LEFT_Y: int = 185
-    BAR_1_RIGHT_Y: int = 185
-    BAR_2_LEFT_Y: int = 157
-    BAR_2_RIGHT_Y: int = 164
-    BAR_3_LEFT_Y: int = 136
-    BAR_3_RIGHT_Y: int = 129
-    BAR_4_LEFT_Y: int = 101
-    BAR_4_RIGHT_Y: int = 108
-    BAR_5_LEFT_Y: int = 80
-    BAR_5_RIGHT_Y: int = 73
-    BAR_6_LEFT_Y: int = 52
-    BAR_6_RIGHT_Y: int = 52
+    BAR_LEFT_Y: int = 32
+    BAR_RIGHT_Y: int = 120
+    BAR_1_LEFT_X: int = 185
+    BAR_1_RIGHT_X: int = 185
+    BAR_2_LEFT_X: int = 157
+    BAR_2_RIGHT_X: int = 164
+    BAR_3_LEFT_X: int = 136
+    BAR_3_RIGHT_X: int = 129
+    BAR_4_LEFT_X: int = 101
+    BAR_4_RIGHT_X: int = 108
+    BAR_5_LEFT_X: int = 80
+    BAR_5_RIGHT_X: int = 73
+    BAR_6_LEFT_X: int = 52
+    BAR_6_RIGHT_X: int = 52
 
     # Ladder
     LADDER_WIDTH: int = 4
@@ -152,17 +152,12 @@ class DonkeyKongState(NamedTuple):
     random_key: int
     frames_since_last_barrel_spawn: int
 
-
 class DonkeyKongObservation(NamedTuple):
     total_score: jnp.ndarray
-
 
 class DonkeyKongInfo(NamedTuple):
     time: jnp.ndarray
     all_rewards: chex.Array
-
-
-
 
 class JaxDonkeyKong(JaxEnvironment[DonkeyKongState, DonkeyKongObservation, DonkeyKongInfo, DonkeyKongConstants]):
     def __init__(self, consts: DonkeyKongConstants = None, reward_funcs: list[callable]=None):
@@ -186,24 +181,24 @@ class JaxDonkeyKong(JaxEnvironment[DonkeyKongState, DonkeyKongObservation, Donke
         self.obs_size = 0
 
     # Bars as lienar functions
-    def bar_linear_equation(self, stage, x):
-        x_1 = self.consts.BAR_LEFT_X
-        x_2 = self.consts.BAR_RIGHT_X
+    def bar_linear_equation(self, stage, y):
+        y_1 = self.consts.BAR_LEFT_Y
+        y_2 = self.consts.BAR_RIGHT_Y
 
-        y_1_values = [self.consts.BAR_1_LEFT_Y, self.consts.BAR_2_LEFT_Y, self.consts.BAR_3_LEFT_Y, self.consts.BAR_4_LEFT_Y, self.consts.BAR_5_LEFT_Y, self.consts.BAR_6_LEFT_Y]
-        y_2_values = [self.consts.BAR_1_RIGHT_Y, self.consts.BAR_2_RIGHT_Y, self.consts.BAR_3_RIGHT_Y, self.consts.BAR_4_RIGHT_Y, self.consts.BAR_5_RIGHT_Y, self.consts.BAR_6_RIGHT_Y]
+        x_1_values = [self.consts.BAR_1_LEFT_X, self.consts.BAR_2_LEFT_X, self.consts.BAR_3_LEFT_X, self.consts.BAR_4_LEFT_X, self.consts.BAR_5_LEFT_X, self.consts.BAR_6_LEFT_X]
+        x_2_values = [self.consts.BAR_1_RIGHT_X, self.consts.BAR_2_RIGHT_X, self.consts.BAR_3_RIGHT_X, self.consts.BAR_4_RIGHT_X, self.consts.BAR_5_RIGHT_X, self.consts.BAR_6_RIGHT_X]
 
         index = stage - 1
-        branches = [lambda _, v=val: jnp.array(v) for val in y_1_values]
-        y_1 = jax.lax.switch(index, branches, operand=None)
-        branches = [lambda _, v=val: jnp.array(v) for val in y_2_values]
-        y_2 = jax.lax.switch(index, branches, operand=None)
+        branches = [lambda _, v=val: jnp.array(v) for val in x_1_values]
+        x_1 = jax.lax.switch(index, branches, operand=None)
+        branches = [lambda _, v=val: jnp.array(v) for val in x_2_values]
+        x_2 = jax.lax.switch(index, branches, operand=None)
 
-        m = (y_2 - y_1) / (x_2 - x_1)
-        b = y_1 - m * x_1
+        m = (x_2 - x_1) / (y_2 - y_1)
+        b = x_1 - m * y_1
 
-        y = m * x + b
-        return y
+        x = m * y + b
+        return x
 
     @partial(jax.jit, static_argnums=(0,))
     def init_ladders_for_level(self, level: int) -> Ladder:
@@ -211,10 +206,10 @@ class JaxDonkeyKong(JaxEnvironment[DonkeyKongState, DonkeyKongObservation, Donke
         Ladder_level_1 = Ladder(
             stage=jnp.array([5, 5, 4, 4, 4, 3, 3, 3, 2, 2, 1, 1], dtype=jnp.int32),
             climbable=jnp.array([False, True, True, True, False, False, True, True, True, True, False, True]),
-            start_x=jnp.array([74, 106, 46, 66, 98, 62, 86, 106, 46, 78, 70, 106], dtype=jnp.int32),
-            start_y=jnp.array([77, 74, 102, 104, 106, 134, 132, 130, 158, 161, 185, 185], dtype=jnp.int32),
-            end_x=jnp.array([74, 106, 46, 66, 98, 62, 86, 106, 46, 78, 70, 106], dtype=jnp.int32),
-            end_y=jnp.array([53, 53, 79, 78, 76, 104, 106, 108, 135, 133, 161, 164], dtype=jnp.int32),
+            start_x=jnp.array([77, 74, 102, 104, 106, 134, 132, 130, 158, 161, 185, 185], dtype=jnp.int32),
+            start_y=jnp.array([74, 106, 46, 66, 98, 62, 86, 106, 46, 78, 70, 106], dtype=jnp.int32),
+            end_x=jnp.array([53, 53, 79, 78, 76, 104, 106, 108, 135, 133, 161, 164], dtype=jnp.int32),
+            end_y=jnp.array([74, 106, 46, 66, 98, 62, 86, 106, 46, 78, 70, 106], dtype=jnp.int32),
         )
 
         # Ladder positions for level 2
@@ -255,14 +250,14 @@ class JaxDonkeyKong(JaxEnvironment[DonkeyKongState, DonkeyKongObservation, Donke
                 operand=None
             )
 
-            # change y position if the barrel is still falling
+            # change x position if the barrel is still falling
             # if barrel is landed on the down stage, change the moving direction
-            def change_y_if_barrel_is_falling(x, y, direction, sprite, stage):
-                new_y = y + 2
+            def change_x_if_barrel_is_falling(x, y, direction, sprite, stage):
+                new_x = x + 2
 
-                bar_y = jnp.round(self.bar_linear_equation(stage, x)).astype(int)
+                bar_x = jnp.round(self.bar_linear_equation(stage, y)).astype(int)
                 new_direction = jax.lax.cond(
-                    new_y >= bar_y,
+                    new_x >= bar_x,
                     lambda _: jax.lax.cond(
                         stage % 2 == 0,
                         lambda _: self.consts.MOVING_RIGHT,
@@ -273,7 +268,7 @@ class JaxDonkeyKong(JaxEnvironment[DonkeyKongState, DonkeyKongObservation, Donke
                     operand=None
                 )
                 new_sprite = jax.lax.cond(
-                    new_y >= bar_y,
+                    new_x >= bar_x,
                     lambda _: self.consts.BARREL_SPRITE_RIGHT,
                     lambda _: sprite,
                     operand=None
@@ -281,11 +276,11 @@ class JaxDonkeyKong(JaxEnvironment[DonkeyKongState, DonkeyKongObservation, Donke
 
                 return jax.lax.cond(
                     direction == self.consts.MOVING_DOWN,
-                    lambda _: (x, new_y, new_direction, new_sprite, stage),
+                    lambda _: (new_x, y, new_direction, new_sprite, stage),
                     lambda _: (x, y, direction, sprite, stage),
                     operand=None
                 )
-            x, y, direction, sprite, stage = change_y_if_barrel_is_falling(x, y, direction, sprite, stage)
+            x, y, direction, sprite, stage = change_x_if_barrel_is_falling(x, y, direction, sprite, stage)
 
             # change position
             # check if barrel can fall (ladder or end of bar)
@@ -294,20 +289,20 @@ class JaxDonkeyKong(JaxEnvironment[DonkeyKongState, DonkeyKongObservation, Donke
                 
                 # check first if barrel is positioned on top of a ladder
                 curr_stage = stage - 1
-                mask = jnp.logical_and(ladders.stage == curr_stage, ladders.end_x == x)
+                mask = jnp.logical_and(ladders.stage == curr_stage, ladders.end_y == y)
                 barrel_is_on_ladder = jnp.any(mask)
                 roll_down_prob = jax.random.bernoulli(state.random_key, prob_barrel_rolls_down_a_ladder)
 
                 new_direction = self.consts.MOVING_DOWN
                 new_sprite = self.consts.BARREL_SPRITE_FALL
-                new_y = y + 1
+                new_x = x + 1
                 new_stage = stage - 1
 
                 # check secondly if barrel is positioned at the end of a bar
-                bar_x = jax.lax.cond(
+                bar_y = jax.lax.cond(
                     stage % 2 == 0,
-                    lambda _: self.consts.BAR_RIGHT_X,
-                    lambda _: self.consts.BAR_LEFT_X,
+                    lambda _: self.consts.BAR_RIGHT_Y,
+                    lambda _: self.consts.BAR_LEFT_Y,
                     operand=None
                 )
                 new_direction_2 = self.consts.MOVING_DOWN
@@ -315,13 +310,13 @@ class JaxDonkeyKong(JaxEnvironment[DonkeyKongState, DonkeyKongObservation, Donke
                 barrel_is_over_the_bar = jax.lax.cond(
                     stage % 2 == 0,
                     lambda _: jax.lax.cond(
-                        x >= self.consts.BAR_RIGHT_X,
+                        y >= self.consts.BAR_RIGHT_Y,
                         lambda _: True,
                         lambda _: False,
                         operand=None
                     ),
                     lambda _: jax.lax.cond(
-                        x <= self.consts.BAR_LEFT_X,
+                        y <= self.consts.BAR_LEFT_Y,
                         lambda _: True,
                         lambda _: False,
                         operand=None
@@ -331,7 +326,7 @@ class JaxDonkeyKong(JaxEnvironment[DonkeyKongState, DonkeyKongObservation, Donke
 
                 return jax.lax.cond(
                     jnp.logical_and(barrel_is_on_ladder, jnp.logical_and(direction != self.consts.MOVING_DOWN, roll_down_prob)),
-                    lambda _: (x, new_y, new_direction, new_sprite, new_stage),
+                    lambda _: (new_x, y, new_direction, new_sprite, new_stage),
                     lambda _: jax.lax.cond(
                         barrel_is_over_the_bar,
                         lambda _: (x, y, new_direction_2, sprite, new_stage_2),
@@ -342,15 +337,15 @@ class JaxDonkeyKong(JaxEnvironment[DonkeyKongState, DonkeyKongObservation, Donke
                 )
             x, y, direction, sprite, stage = check_if_barrel_will_fall(x, y, direction, sprite, stage)
 
-            # change x (y) positions when barrel is rolling on bar
+            # change y (x) positions when barrel is rolling on bar
             def barrel_rolling_on_a_bar(x, y, direction, sprite, stage):
-                new_x = jax.lax.cond(
+                new_y = jax.lax.cond(
                     direction == self.consts.MOVING_RIGHT,
-                    lambda _: x + 1,
-                    lambda _: x - 1,
+                    lambda _: y + 1,
+                    lambda _: y - 1,
                     operand=None
                 )
-                new_y = jnp.round(self.bar_linear_equation(stage, new_x)).astype(int)
+                new_x = jnp.round(self.bar_linear_equation(stage, new_y)).astype(int)
                 return jax.lax.cond(
                     direction != self.consts.MOVING_DOWN,
                     lambda _: (new_x, new_y, direction, sprite, stage),
@@ -362,7 +357,7 @@ class JaxDonkeyKong(JaxEnvironment[DonkeyKongState, DonkeyKongObservation, Donke
             # mark x = y = -1 as a barrel reaches the end
             def mark_barrel_if_cheached_end(x, y, direction, sprite, stage, reached_the_end):
                 return jax.lax.cond(
-                    jnp.logical_and(stage == 1, x <= self.consts.BAR_LEFT_X),
+                    jnp.logical_and(stage == 1, y <= self.consts.BAR_LEFT_Y),
                     lambda _: (-1, -1, direction, sprite, stage, True),
                     lambda _: (x, y, direction, sprite, stage, reached_the_end),
                     operand=None
