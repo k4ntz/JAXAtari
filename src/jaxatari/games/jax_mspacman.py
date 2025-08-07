@@ -19,12 +19,15 @@ from jax import random, Array
 WIDTH = 160
 HEIGHT = 210
 
-RESET_LEVEL = 0
+RESET_LEVEL = 0 # the starting level, loaded when reset is called
 POWER_PELLET_DURATION = 62  # Duration of power pellet effect in frames (x8 steps)
+
+#POWER PELLETS X Y POSITIONS
 ppx0 = 8
 ppx1 = 148
 ppy0 = 18
 ppy1 = 150
+
 EATEN_GHOST_DURATION = 120 # in steps
 POWER_PELLET_POSITIONS = [[ppx0, ppy0], [ppx1, ppy0], [ppx0, ppy1], [ppx1, ppy1]]
 INITIAL_GHOSTS_POSITIONS = jnp.array([[40, 78], [50, 78], [75, 54], [120, 78]])
@@ -36,6 +39,13 @@ POWER_PELLET_POINTS = 50
 FRUITS_POINTS = [100, 200, 500, 700, 1000, 2000, 5000]  
 GHOSTS_POINTS = [200, 400, 800, 1600]
 BONUS_LIFE_LIMIT = 10000
+NB_INITIAL_LIVES = 1
+RESET_TIMER = 40  # Timer for resetting the game after death
+
+PATH_COLOR = jnp.array([0, 28, 136], dtype=jnp.uint8)
+WALL_COLOR = jnp.array([228, 111, 111], dtype=jnp.uint8)
+PELLET_COLOR = WALL_COLOR  # Same color as walls for pellets
+POWER_PELLET_SPRITE = jnp.tile(jnp.concatenate([PELLET_COLOR, jnp.array([255], dtype=jnp.uint8)]), (4, 7, 1))  # 4x7 sprite 
 
 
 def last_pressed_action(action, prev_action):
@@ -118,6 +128,7 @@ class PacmanState(NamedTuple):
     maze_layout: chex.Array # Whether the level is completed
     completed_level: chex.Array  # Whether the level is completed
     dofmaze: chex.Array # Precomputed degree of freedom maze layout
+    reset: chex.Array  # Reset state for the next episode
 
 
 class PacmanObservation(NamedTuple):
@@ -174,7 +185,6 @@ class JaxPacman(JaxEnvironment[PacmanState, PacmanObservation, PacmanInfo]):
     def reset(self, key=None) -> Tuple[PacmanObservation, PacmanState]:
         pacman_pos = jnp.array([75, 102])
         pacman_pos = jnp.array([17, 126])
-
         state = PacmanState(
             pacman_pos=pacman_pos,
             pacman_dir=jnp.array([-1, 0]),
@@ -192,11 +202,12 @@ class JaxPacman(JaxEnvironment[PacmanState, PacmanObservation, PacmanInfo]):
             game_over=jnp.array(False),
             power_mode_timer=jnp.array(0).astype(jnp.uint8),  # Timer for power mode,
             level=0,
-            lives=jnp.array(3),
+            lives=jnp.array(NB_INITIAL_LIVES, dtype=jnp.int8),  # Number of lives left
             death_timer=jnp.array(0),
             completed_level=jnp.array(False),
             maze_layout=RESET_LEVEL,
-            dofmaze=precompute_dof(MAZES[RESET_LEVEL]) # Precompute degree of freedom maze layout
+            dofmaze=precompute_dof(MAZES[RESET_LEVEL]), # Precompute degree of freedom maze layout
+            reset=jnp.array(True, dtype=jnp.bool_) # to reload the background
         )
         obs = None
         return obs, state
@@ -247,9 +258,10 @@ class JaxPacman(JaxEnvironment[PacmanState, PacmanObservation, PacmanInfo]):
                 death_timer=new_death_timer,
                 completed_level=completed_level,
                 maze_layout=state.maze_layout, 
-                dofmaze=dofmaze
+                dofmaze=dofmaze,
+                reset=jnp.array(False, dtype=jnp.bool_)
             )
-            obs = self._get_observation(new_state)
+            obs = None
             reward = 0.0
             done = game_over
             info = PacmanInfo(score=state.score, done=done)
@@ -317,6 +329,7 @@ class JaxPacman(JaxEnvironment[PacmanState, PacmanObservation, PacmanInfo]):
                 pellets = state.pellets.at[x_pellets, y_pellets].set(False)
         score = state.score + jax.lax.select(has_pellet, 10, 0)
         if has_pellet:
+            print(f"Pacman collected a pellet at {new_pacman_pos}, score: {score}")
             collected_pellets = collected_pellets + 1
 
         ghost_positions, ghosts_dirs, eaten_ghosts = ghosts_step(
@@ -340,7 +353,7 @@ class JaxPacman(JaxEnvironment[PacmanState, PacmanObservation, PacmanInfo]):
         else:
             collision = jnp.any(jnp.all(abs(new_pacman_pos - ghost_positions) < 8, axis=1))
         new_lives = state.lives - jnp.where(collision, 1, 0)
-        new_death_timer = jnp.where(collision, 40, 0)
+        new_death_timer = jnp.where(collision, RESET_TIMER, 0)
         game_over = (new_lives == 0) & (new_death_timer > 0)
         maze_layout = state.maze_layout
         if collected_pellets >= PELLETS_TO_COLLECT:
@@ -379,6 +392,7 @@ class JaxPacman(JaxEnvironment[PacmanState, PacmanObservation, PacmanInfo]):
             completed_level=completed_level,
             maze_layout=maze_layout,
             dofmaze=dofmaze,
+            reset=jnp.array(False, dtype=jnp.bool_)
         )
         obs = None
         reward = 0.0
@@ -393,33 +407,40 @@ class MsPacmanRenderer(AtraJaxisRenderer):
 
     def __init__(self):
         super().__init__()
-        self.SPRITE_BG = load_background(RESET_LEVEL)
         self.SPRITES_PLAYER = pacmans_rgba()
         self.SPRITES_GHOSTS = load_ghosts()
-        self.power_pellet_sprite = jnp.ones((4, 7, 4), dtype=jnp.uint8) * 200
+        # self.reset_bg()
+        
 
+    def reset_bg(self):
+        """Reset the background for a new level."""
+        life_sprite = self.SPRITES_PLAYER[1][1] # Life sprite (right looking pacman)
+        self.SPRITE_BG = load_background(RESET_LEVEL)
+        for life in range(NB_INITIAL_LIVES-1):
+            self.SPRITE_BG = aj.render_at(self.SPRITE_BG, 12 + life * 16, 182, life_sprite)
+   
     @partial(jax.jit, static_argnums=(0,))
     def render(self, state):
+        if state.reset:
+            # Render game over screen
+            self.reset_bg()
         if state.completed_level:
             self.SPRITE_BG = load_background(state.maze_layout)
         raster = self.SPRITE_BG
         # de-render pellets
         # if state.has_pellet:
         if state.has_pellet:
-            # PATH_COLOR = jnp.array([200, 200, 200], dtype=jnp.uint8)
-            PATH_COLOR = jnp.array([0, 28, 136], dtype=jnp.uint8)
             pellet_x = state.pacman_pos[0] + 3
             pellet_y = state.pacman_pos[1] + 4
             for i in range(4):
                 for j in range(2):
                     self.SPRITE_BG = self.SPRITE_BG.at[pellet_x+i, pellet_y+j].set(PATH_COLOR)
         # power pellets
-        for i in range(4):
-            if state.power_pellets[i]:
-                pellet_x, pellet_y = POWER_PELLET_POSITIONS[i]
-                raster = aj.render_at(raster, pellet_x, pellet_y, self.power_pellet_sprite)
-        # 0: down, 1: left, 2: Nothing, 3: right, 4: up
-        # orientation = state.pacman_dir[0] + 2 * (state.pacman_dir[1] + 1) 
+        for i in range(2):
+            pel_n = 2*i + ((state.step_count & 0b1000) >> 3) # Alternate power pellet rendering
+            if state.power_pellets[pel_n]:
+                pellet_x, pellet_y = POWER_PELLET_POSITIONS[pel_n]
+                raster = aj.render_at(raster, pellet_x, pellet_y, POWER_PELLET_SPRITE)
         orientation = state.pacman_last_dir_int
         pacman_sprite = self.SPRITES_PLAYER[orientation][(state.step_count % 16) // 4]
         raster = aj.render_at(raster, state.pacman_pos[0], state.pacman_pos[1], 
@@ -437,6 +458,12 @@ class MsPacmanRenderer(AtraJaxisRenderer):
             else:
                 g_sprite = self.SPRITES_GHOSTS[ghosts_orientation][i]
             raster = aj.render_at(raster, g_pos[0], g_pos[1], g_sprite)
+        if state.death_timer == RESET_TIMER-1:
+            # Remove one life from the background
+            black_sprite = jnp.zeros((10, 10, 4), dtype=jnp.uint8)
+            black_sprite = black_sprite.at[:, :, 3].set(255) # Set alpha channel to 255
+            # Remove the last life sprite from the background
+            self.SPRITE_BG = aj.render_at(self.SPRITE_BG, 12 + (state.lives-1) * 16, 182, black_sprite)
         return raster
 
 
@@ -512,7 +539,7 @@ def ghost_step(ghost_pos: chex.Array, ghost_dir: chex.Array, dofmaze:chex.Array,
         next_dir = ghost_dir
     new_pos = ghost_pos + next_dir
     new_pos = new_pos.at[0].set(new_pos[0] % 160)  # wrap horizontally
-    if eaten_ghost == 1:
+    if eaten_ghost == 2:
         next_dir = jnp.array([0, -1])  # Reset direction to escape the center box
     if eaten_ghost > 1:
         eaten_ghost = eaten_ghost - 1
