@@ -1,5 +1,6 @@
-# next TODO's (game features): jumping, chicken mode, Level 2
-# TODO update observation, freeze for about 250 frames, vmap more, random blinking, update spaces, possibly make generating/changing the maze easier?, update info
+# next TODO's (game features): jumping, chicken mode, Level 2, 
+# TODO adjustments because of inacuracies: player & enemy speeds, add a Tracer, make the enemies take every turn
+# TODO update observation, vmap more, random blinking, update spaces, possibly make generating/changing the maze easier?, update info
 
 from functools import partial
 import os
@@ -480,22 +481,32 @@ def enemies_step(constants: AmidarConstants, state: AmidarState, random_key: che
 
     possible_directions_per_enemy = jax.vmap(calculate_possible_enemy_directions, in_axes=0)(state.enemy_positions)
 
-    def calculate_good_enemy_directions(enemy_direction, possible_directions):
-        """From the possible movement directions exclude u-turns"""
+    def calculate_good_enemy_directions(enemy_direction, possible_directions, index):
+        """From the possible movement directions exclude u-turns and the direction the enemy is currently moving in.
+        The first enemy(index 0) is the Tracer and only moves along the perimeter, so it's good direction is the current one."""
         opposite_direction = (enemy_direction + 2) % 4
-        good_directions = possible_directions.at[opposite_direction].set(False)  # Exclude the opposite direction (u-turn)
-        return good_directions
+        possible_directions_without_u_turns = possible_directions.at[opposite_direction].set(False) # Exclude the opposite direction (u-turn) 
+        good_directions = jax.lax.cond(index == 0,
+                                        lambda: possible_directions_without_u_turns & jnp.full(possible_directions.shape, False).at[enemy_direction].set(True),  # Tracer should always go in the current direction
+                                        lambda: possible_directions_without_u_turns.at[enemy_direction].set(False))  # every other enemy should take every turn it can
+        return good_directions, possible_directions_without_u_turns
 
-    good_directions_per_enemy = jax.vmap(calculate_good_enemy_directions, in_axes=0)(state.enemy_directions, possible_directions_per_enemy)
+    good_directions_per_enemy, possible_directions_without_u_turns_per_enemy = jax.vmap(calculate_good_enemy_directions, in_axes=0)(state.enemy_directions, possible_directions_per_enemy, jnp.arange(state.enemy_directions.shape[0]))
 
-    def move_enemy(enemy_x, enemy_y, direction, possible_directions, good_directions, random_key):
-        """Chooses randomly from the possible directions, only taking u-turns when necassary."""
+    # jax.debug.print("good: \n {}, \n okay: \n {}, \n possible: \n {}", good_directions_per_enemy, possible_directions_without_u_turns_per_enemy, possible_directions_per_enemy)
+
+    def move_enemy(enemy_x, enemy_y, direction, possible_directions, possible_directions_without_u_turns, good_directions, random_key):
+        """Makes the enemy move according to it's movement pattern."""
 
         def choose_direction():
-            # If there are good directions, choose one, else choose from all possible directions
+            # If there are good directions, choose one, else choose from all non-u-turns, if that is not possible, choose from all possible directions
             chosen_direction = jax.lax.cond(jnp.any(good_directions),
                                             lambda: jax.random.choice(random_key, jnp.arange(4), shape=(), p=jnp.where(good_directions, 1/jnp.count_nonzero(good_directions), 0)),
-                                            lambda: jax.random.choice(random_key, jnp.arange(4), shape=(), p=jnp.where(possible_directions, 1/jnp.count_nonzero(possible_directions), 0)))
+                                            lambda: jax.lax.cond(jnp.any(possible_directions_without_u_turns),
+                                                             lambda: jax.random.choice(random_key, jnp.arange(4), shape=(), p=jnp.where(possible_directions_without_u_turns, 1/jnp.count_nonzero(possible_directions_without_u_turns), 0)),
+                                                             lambda: jax.random.choice(random_key, jnp.arange(4), shape=(), p=jnp.where(possible_directions, 1/jnp.count_nonzero(possible_directions), 0))
+                                                            )
+                                            )  
             return chosen_direction
 
         # if no directions are possible stay with the current one
@@ -507,7 +518,7 @@ def enemies_step(constants: AmidarConstants, state: AmidarState, random_key: che
             lambda: (enemy_x, enemy_y))  # If the direction is not possible, stay in place
         return jnp.array([new_x, new_y]), chosen_direction
 
-    new_enemy_positions, new_enemy_directions = jax.vmap(move_enemy, in_axes=0)(state.enemy_positions[:, 0], state.enemy_positions[:, 1], state.enemy_directions, possible_directions_per_enemy, good_directions_per_enemy, enemy_keys)
+    new_enemy_positions, new_enemy_directions = jax.vmap(move_enemy, in_axes=0)(state.enemy_positions[:, 0], state.enemy_positions[:, 1], state.enemy_directions, possible_directions_per_enemy, possible_directions_without_u_turns_per_enemy, good_directions_per_enemy, enemy_keys)
 
     return new_enemy_positions, new_enemy_directions
 
@@ -632,6 +643,7 @@ class JaxAmidar(JaxEnvironment[AmidarState, AmidarObservation, AmidarInfo, Amida
 
             # Check for collisions with enemies
             collisions = check_for_collisions(self.constants, player_x, player_y, enemy_positions, enemy_types)
+            # collisions = jnp.zeros_like(collisions, dtype=jnp.bool_) # FOR DEBUGGING OTHER THINGS: remove collisions
             # jax.debug.print("Collisions: {collisions}", collisions=collisions)
             (enemy_types, points_scored_enemy_collision, lost_live) = jax.lax.cond(
                 jnp.any(collisions),
@@ -649,7 +661,7 @@ class JaxAmidar(JaxEnvironment[AmidarState, AmidarObservation, AmidarInfo, Amida
             # Check for game over condition
             # If lives are less than 0, the game is over
             done, lives = jax.lax.cond(
-                lives < 0,
+                lives <= 0,
                 lambda: (True, 0),
                 lambda: (False, lives)
             )
