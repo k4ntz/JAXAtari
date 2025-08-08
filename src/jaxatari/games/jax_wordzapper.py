@@ -725,8 +725,6 @@ class JaxWordZapper(JaxEnvironment[WordZapperState, WordZapperObservation, WordZ
             timer=jnp.array(TIME),
           
             target_word=encoded,
-
-            timer=jnp.array(TIME),
             step_counter=jnp.array(0),
 
             game_phase=jnp.array(0),
@@ -1078,6 +1076,7 @@ class WordZapperRenderer(AtraJaxisRenderer):
             state.game_phase == 2,
             _draw_player_bundle,
             lambda r: r,
+            raster,
         )
 
         # render enemies
@@ -1137,8 +1136,9 @@ class WordZapperRenderer(AtraJaxisRenderer):
  
         raster = jax.lax.cond(
             state.game_phase == 2,
-            jax.lax.fori_loop(0, state.letters_x.shape[0], _render_letter, r),
+            lambda r: jax.lax.fori_loop(0, state.letters_x.shape[0], _render_letter, r),
             lambda r: r,
+            raster,
         )
           
 
