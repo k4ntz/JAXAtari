@@ -1,5 +1,5 @@
 # next TODO's (game features): jumping, chicken mode, Level 2, 
-# TODO adjustments because of inacuracies: player & enemy speeds, add a Tracer, make the enemies take every turn
+# TODO adjustments because of inacuracies: player & enemy speeds
 # TODO update observation, vmap more, random blinking, update spaces, possibly make generating/changing the maze easier?, update info
 
 from functools import partial
@@ -137,60 +137,90 @@ def generate_path_mask(WIDTH, HEIGHT, horizontal_edges, vertical_edges, horizont
     mask = jnp.zeros((WIDTH, HEIGHT), dtype=jnp.int32)
     rendering_mask = jnp.zeros((WIDTH, HEIGHT), dtype=jnp.int32)
 
-    def add_horizontal_edge(i, carry):
-        mask, rendering_mask = carry
-        start, end = horizontal_edges[i]
+    PATH_THICKNESS_HORIZONTAL = 5  # Thickness of the path in horizontal direction # TODO possibly move to constants
+    PATH_THICKNESS_VERTICAL = 4  # Thickness of the path in vertical direction # TODO possibly move to constants
 
-        x1, y1 = start
-        x2, y2 = end
 
-        def loop(x, carry):
-            mask, rendering_mask, y = carry
-            mask = mask.at[x, y].set(1)
-            rendering_mask = rendering_mask.at[x, y].set(1)
-            rendering_mask = rendering_mask.at[x, y+1].set(1)
-            rendering_mask = rendering_mask.at[x, y+2].set(1)
-            rendering_mask = rendering_mask.at[x, y+3].set(1)
-            rendering_mask = rendering_mask.at[x, y+4].set(1)
-            return (mask, rendering_mask, y)
+    def interpolate_horizontal_line(edge, condition, num_points=WIDTH): # Could use less points if performance is a problem, but this accounts for all valid maze changes
 
-        mask, rendering_mask, _ = jax.lax.cond(horizontal_cond[i], lambda: jax.lax.fori_loop(x1, x2 + 1, loop, (mask, rendering_mask, y1)), lambda: (mask, rendering_mask, y1))
+        def calculate():
+            start, end = edge
 
-        # add a bit to the rendering mask to make sure that even at corners the path is visible        
-        def add_corners_for_rendering(x, carry):
-            rendering_mask, y = carry
-            rendering_mask = rendering_mask.at[x, y].set(1)
-            rendering_mask = rendering_mask.at[x, y+1].set(1)
-            rendering_mask = rendering_mask.at[x, y+2].set(1)
-            rendering_mask = rendering_mask.at[x, y+3].set(1)
-            rendering_mask = rendering_mask.at[x, y+4].set(1)
-            return (rendering_mask, y)
+            # for the computational path mask
+            xs = jnp.linspace(start[0], end[0], num_points).astype(jnp.int32)
+            ys = jnp.full(xs.shape, start[1], dtype=jnp.int32)  # y-coordinate is constant for horizontal lines
+            coords = jnp.stack([xs, ys], axis=-1)  # shape (num_points, 2)
 
-        rendering_mask, _ = jax.lax.cond(horizontal_cond[i], lambda: jax.lax.fori_loop(x2, x2 + 4, add_corners_for_rendering, (rendering_mask, y1)), lambda: (rendering_mask, y1))
+            # for the rendering path mask
+            xs_rendering = jnp.linspace(start[0], end[0]+PATH_THICKNESS_VERTICAL-1, num_points).astype(jnp.int32) # the rendering mask needs to be longer to make sure that even at the corners the path is visible
+            y_offsets = jnp.arange(PATH_THICKNESS_HORIZONTAL)  # offsets for the vertical expansion
+            ys_rendering = start[1] + y_offsets[:, None]
 
-        return mask, rendering_mask
+            # make sure that the xs and ys are the same shape
+            shape = jnp.broadcast_shapes(ys_rendering.shape, xs_rendering.shape)
+            xs_rendering = jnp.broadcast_to(xs_rendering, shape)
+            ys_rendering = jnp.broadcast_to(ys_rendering, shape)
+            coords_rendering = jnp.stack([xs_rendering, ys_rendering], axis=-1)  # shape (thickness, num_points, 2)
+            coords_rendering = jnp.reshape(coords_rendering, (-1, 2)) # shape: (num_points * thickness, 2)
+            return coords, coords_rendering
 
-    def add_vertical_edge(i, carry):
-        mask, rendering_mask = carry
-        start, end = vertical_edges[i]
+        coords, coords_rendering = jax.lax.cond(condition, calculate, lambda: (jnp.full((num_points, 2), -1, dtype=jnp.int32), jnp.full((num_points * PATH_THICKNESS_HORIZONTAL, 2), -1, dtype=jnp.int32)))
 
-        x1, y1 = start
-        x2, y2 = end
+        return coords, coords_rendering 
 
-        def loop(y, carry):
-            mask, rendering_mask, x = carry
-            mask = mask.at[x, y].set(1)
-            rendering_mask = rendering_mask.at[x, y].set(1)
-            rendering_mask = rendering_mask.at[x+1, y].set(1)
-            rendering_mask = rendering_mask.at[x+2, y].set(1)
-            rendering_mask = rendering_mask.at[x+3, y].set(1)
-            return (mask, rendering_mask, x)
+    def interpolate_vertical_line(edge, condition, num_points=HEIGHT): # Could use less points if performance is a problem, but this accounts for all valid maze changes
+        
+        def calculate():
+            start, end = edge
 
-        mask, rendering_mask, _ = jax.lax.cond(vertical_cond[i], lambda: jax.lax.fori_loop(y1, y2 + 1, loop, (mask, rendering_mask, x1)), lambda: (mask, rendering_mask, x1))
-        return mask, rendering_mask
+            # for the computational path mask
+            xs = jnp.full((num_points,), start[0], dtype=jnp.int32)  # x-coordinate is constant for vertical lines
+            ys = jnp.linspace(start[1], end[1], num_points).astype(jnp.int32)
+            coords = jnp.stack([xs, ys], axis=-1)  # shape (num_points, 2)
 
-    mask, rendering_mask = jax.lax.fori_loop(0, jnp.shape(horizontal_edges)[0], add_horizontal_edge, (mask, rendering_mask))
-    mask, rendering_mask = jax.lax.fori_loop(0, jnp.shape(vertical_edges)[0], add_vertical_edge, (mask, rendering_mask))
+            # for the rendering path mask
+            x_offsets = jnp.arange(PATH_THICKNESS_VERTICAL)  # offsets for the horizontal expansion
+            xs_rendering = start[0] + x_offsets[:, None]  # offsets for the horizontal expansion
+            ys_rendering = jnp.linspace(start[1], end[1]+PATH_THICKNESS_HORIZONTAL-1, num_points).astype(jnp.int32) # the rendering mask needs to be longer to make sure that even at the corners the path is visible
+
+            # make sure that the xs and ys are the same shape
+            shape = jnp.broadcast_shapes(ys_rendering.shape, xs_rendering.shape)
+            xs_rendering = jnp.broadcast_to(xs_rendering, shape)
+            ys_rendering = jnp.broadcast_to(ys_rendering, shape)
+            coords_rendering = jnp.stack([xs_rendering, ys_rendering], axis=-1)  # shape (thickness, num_points, 2)
+            coords_rendering = jnp.reshape(coords_rendering, (-1, 2)) # shape: (num_points * thickness, 2)
+            return coords, coords_rendering
+
+        coords, coords_rendering = jax.lax.cond(condition, calculate, lambda: (jnp.full((num_points, 2), -1, dtype=jnp.int32), jnp.full((num_points * PATH_THICKNESS_VERTICAL, 2), -1, dtype=jnp.int32)))
+
+        return coords, coords_rendering 
+
+    coords_horizontal, rendering_coords_horizontal = jax.vmap(interpolate_horizontal_line, in_axes=(0, 0))(horizontal_edges, horizontal_cond)
+    coords_vertical, rendering_coords_vertical = jax.vmap(interpolate_vertical_line, in_axes=(0, 0))(vertical_edges, vertical_cond)
+
+
+    # flatten the coordinates, because right now they are in the shape (num_lines, num_points, 2) or (num_lines, num_points * PATH_WIDTH_x, 2)
+    coords_horizontal = coords_horizontal.reshape(-1, 2)
+    rendering_coords_horizontal = rendering_coords_horizontal.reshape(-1, 2)
+    coords_vertical = coords_vertical.reshape(-1, 2)
+    rendering_coords_vertical = rendering_coords_vertical.reshape(-1, 2)
+
+    coords, rendering_coords = jnp.concatenate([coords_horizontal, coords_vertical], axis=0), jnp.concatenate([rendering_coords_horizontal, rendering_coords_vertical], axis=0)
+
+    # create a mask of valid coordinates in the new shape
+    valid_coords = jnp.all(coords >= 0, axis=-1)
+    valid_rendering_coords = jnp.all(rendering_coords >= 0, axis=-1)
+
+    # clip the coordinates to the width and height of the mask
+    coords = jnp.clip(coords, 0, jnp.array([WIDTH - 1, HEIGHT - 1]))
+    rendering_coords = jnp.clip(rendering_coords, 0, jnp.array([WIDTH - 1, HEIGHT - 1]))
+
+    # set the mask values for the horizontal edges
+    mask = mask.at[coords[:, 0], coords[:, 1]].add(valid_coords)
+    rendering_mask = rendering_mask.at[rendering_coords[:, 0], rendering_coords[:, 1]].add(valid_rendering_coords)
+
+    mask = jnp.clip(mask, 0, 1)  # Ensure the mask values are either 0 or 1
+    rendering_mask = jnp.clip(rendering_mask, 0, 1)  # Ensure the rendering mask values are either 0 or 1
 
     # transpose to match the HWC format for rendering
     rendering_mask = jnp.transpose(rendering_mask, (1, 0))
@@ -881,8 +911,9 @@ class AmidarRenderer(JAXGameRenderer):
         # raster = jax.lax.fori_loop(0, jnp.shape(self.constants.PATH_EDGES)[0], render_path, raster)
 
         # # Render path mask
+        # transposed_path_mask = jnp.transpose(self.constants.PATH_MASK, (1, 0))  # Transpose to match the HWC format for rendering
         # all_white = jnp.full_like(raster, 255, dtype=jnp.uint8)
-        # raster = jnp.where(self.constants.PATH_MASK[:, :, None] == 1, all_white, raster)
+        # raster = jnp.where(transposed_path_mask[:, :, None] == 1, all_white, raster)
 
         # # Render rendering path mask
         # all_white = jnp.full_like(raster, 255, dtype=jnp.uint8)
