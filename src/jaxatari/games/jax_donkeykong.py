@@ -86,7 +86,7 @@ class DonkeyKongConstants(NamedTuple):
     BASE_PROBABILITY_BARREL_ROLLING_A_LADDER_DOWN: float = 0.8
 
     # Hit boxes
-    MARIO_HIT_BOX_X: int = 17
+    MARIO_HIT_BOX_X: int = 15
     MARIO_HIT_BOX_Y: int = 7
     BARREL_HIT_BOX_X: int = 8
     BARREL_HIT_BOX_Y: int = 8
@@ -100,18 +100,18 @@ class DonkeyKongConstants(NamedTuple):
     # Bar start/end positions
     BAR_LEFT_Y: int = 32
     BAR_RIGHT_Y: int = 120
-    BAR_1_LEFT_X: int = 185
-    BAR_1_RIGHT_X: int = 185
-    BAR_2_LEFT_X: int = 157
-    BAR_2_RIGHT_X: int = 164
-    BAR_3_LEFT_X: int = 136
-    BAR_3_RIGHT_X: int = 129
-    BAR_4_LEFT_X: int = 101
-    BAR_4_RIGHT_X: int = 108
-    BAR_5_LEFT_X: int = 80
-    BAR_5_RIGHT_X: int = 73
-    BAR_6_LEFT_X: int = 52
-    BAR_6_RIGHT_X: int = 52
+    BAR_1_LEFT_X: int = 185 +8
+    BAR_1_RIGHT_X: int = 185 +8
+    BAR_2_LEFT_X: int = 157 +8
+    BAR_2_RIGHT_X: int = 164 +8
+    BAR_3_LEFT_X: int = 136 +8
+    BAR_3_RIGHT_X: int = 129 +8
+    BAR_4_LEFT_X: int = 101 +8
+    BAR_4_RIGHT_X: int = 108 +8
+    BAR_5_LEFT_X: int = 80 +8
+    BAR_5_RIGHT_X: int = 73 +8
+    BAR_6_LEFT_X: int = 52 +8
+    BAR_6_RIGHT_X: int = 52 +8
 
     # Ladder
     LADDER_WIDTH: int = 4
@@ -286,7 +286,7 @@ class JaxDonkeyKong(JaxEnvironment[DonkeyKongState, DonkeyKongObservation, Donke
             def change_x_if_barrel_is_falling(x, y, direction, sprite, stage):
                 new_x = x + 2
 
-                bar_x = jnp.round(self.bar_linear_equation(stage, y)).astype(int)
+                bar_x = jnp.round(self.bar_linear_equation(stage, y) - self.consts.BARREL_HIT_BOX_X).astype(int)
                 new_direction = jax.lax.cond(
                     new_x >= bar_x,
                     lambda _: jax.lax.cond(
@@ -376,7 +376,7 @@ class JaxDonkeyKong(JaxEnvironment[DonkeyKongState, DonkeyKongObservation, Donke
                     lambda _: y - 1,
                     operand=None
                 )
-                new_x = jnp.round(self.bar_linear_equation(stage, new_y)).astype(int)
+                new_x = jnp.round(self.bar_linear_equation(stage, new_y) - self.consts.BARREL_HIT_BOX_X).astype(int)
                 return jax.lax.cond(
                     direction != self.consts.MOVING_DOWN,
                     lambda _: (new_x, new_y, direction, sprite, stage),
@@ -576,64 +576,162 @@ class JaxDonkeyKong(JaxEnvironment[DonkeyKongState, DonkeyKongObservation, Donke
         # mario climbing ladder
         # precondition, mario is already climbing --> function for STARTING climbing below
         def mario_climbing(state):
-            new_state = state._replace(
-                mario_x=state.mario_x - self.consts.MARIO_CLIMBING_SPEED,
-                mario_climb_frame_counter= state.mario_climb_frame_counter + 1,
-            ) 
+            # normal climbing upwards
+            new_state_climbing_upwards = jax.lax.cond(
+                state.mario_climb_frame_counter % self.consts.MARIO_CLIMBING_ANIMATION_CHANGE_DURATION == 0,
+                lambda _: jax.lax.cond(
+                    state.mario_climb_sprite == self.consts.MARIO_CLIMB_SPRITE_0,
+                    lambda _: state._replace(
+                        mario_x=state.mario_x - self.consts.MARIO_CLIMBING_SPEED,
+                        mario_climb_frame_counter= state.mario_climb_frame_counter + 1,
+                        mario_climb_sprite=self.consts.MARIO_CLIMB_SPRITE_1
+                    ),
+                    lambda _: state._replace(
+                        mario_x=state.mario_x - self.consts.MARIO_CLIMBING_SPEED,
+                        mario_climb_frame_counter= state.mario_climb_frame_counter + 1,
+                        mario_climb_sprite=self.consts.MARIO_CLIMB_SPRITE_0
+                    ),
+                    operand=None
+                ),
+                lambda _: state._replace(
+                    mario_x=state.mario_x - self.consts.MARIO_CLIMBING_SPEED,
+                    mario_climb_frame_counter= state.mario_climb_frame_counter + 1,
+                ),
+                operand=None
+            )
+
+            # check if mario finished climbing / reached the end of a ladder
+            reached_top = new_state_climbing_upwards.mario_x <= jnp.round(self.bar_linear_equation(new_state_climbing_upwards.mario_stage + 1, new_state_climbing_upwards.mario_y) - self.consts.MARIO_HIT_BOX_X).astype(int)
+            new_state_climbing_upwards = jax.lax.cond(
+                reached_top,
+                lambda _: state._replace(
+                    mario_x = state.mario_x - 2,
+                    mario_climb_frame_counter= 0,
+                    mario_view_direction = self.consts.MOVING_RIGHT,
+                    mario_climbing = False,
+                    mario_stage = state.mario_stage + 1,
+                    mario_walk_frame_counter = 0,
+                    mario_walk_sprite = self.consts.MARIO_WALK_SPRITE_0,
+                ),
+                lambda _: new_state_climbing_upwards,
+                operand=None
+            )
+
+            # normal climbing downwards
+            new_state_climbing_downwards = jax.lax.cond(
+                state.mario_climb_frame_counter % self.consts.MARIO_CLIMBING_ANIMATION_CHANGE_DURATION == 0,
+                lambda _: jax.lax.cond(
+                    state.mario_climb_sprite == self.consts.MARIO_CLIMB_SPRITE_0,
+                    lambda _: state._replace(
+                        mario_x=state.mario_x + self.consts.MARIO_CLIMBING_SPEED,
+                        mario_climb_frame_counter= state.mario_climb_frame_counter + 1,
+                        mario_climb_sprite=self.consts.MARIO_CLIMB_SPRITE_1
+                    ),
+                    lambda _: state._replace(
+                        mario_x=state.mario_x + self.consts.MARIO_CLIMBING_SPEED,
+                        mario_climb_frame_counter= state.mario_climb_frame_counter + 1,
+                        mario_climb_sprite=self.consts.MARIO_CLIMB_SPRITE_0
+                    ),
+                    operand=None
+                ),
+                lambda _: state._replace(
+                    mario_x=state.mario_x + self.consts.MARIO_CLIMBING_SPEED,
+                    mario_climb_frame_counter= state.mario_climb_frame_counter + 1,
+                ),
+                operand=None
+            )
+
+            # check if mario finished climbing / reached the start of a ladder
+            reached_bottom = new_state_climbing_downwards.mario_x >= jnp.round(self.bar_linear_equation(new_state_climbing_downwards.mario_stage, new_state_climbing_downwards.mario_y) - self.consts.MARIO_HIT_BOX_X).astype(int)
+            new_state_climbing_downwards = jax.lax.cond(
+                reached_bottom,
+                lambda _: state._replace(
+                    mario_x = state.mario_x - 2,
+                    mario_climb_frame_counter= 0,
+                    mario_view_direction = self.consts.MOVING_RIGHT,
+                    mario_climbing = False,
+                    mario_walk_frame_counter = 0,
+                    mario_walk_sprite = self.consts.MARIO_WALK_SPRITE_0,
+                ),
+                lambda _: new_state_climbing_downwards,
+                operand=None
+            )
 
             return jax.lax.cond(
                 jnp.logical_and(jnp.logical_and(jnp.logical_and(state.mario_climbing == True, state.mario_jumping == False), state.mario_jumping_wide == False), action == Action.UP),
-                lambda _: new_state,
-                lambda _: state,
+                lambda _: new_state_climbing_upwards,
+                lambda _: jax.lax.cond(
+                    jnp.logical_and(jnp.logical_and(jnp.logical_and(state.mario_climbing == True, state.mario_jumping == False), state.mario_jumping_wide == False), action == Action.DOWN),
+                    lambda _: new_state_climbing_downwards,
+                    lambda _: state,
+                    operand=None
+                ),
                 operand=None
             )
         new_state = mario_climbing(new_state)
 
         # mario starts climbs ladder
-        def mario_starts_climbing_upwards(state):
-            new_state = state._replace(
+        def mario_starts_climbing(state):
+            new_state_climbing_upwards = state._replace(
                 mario_view_direction=self.consts.MOVING_UP,
                 mario_x=state.mario_x + 1,
                 mario_climbing=True,
                 mario_climb_frame_counter=0,
             )
+            new_state_climbing_downwards = state._replace(
+                mario_view_direction=self.consts.MOVING_UP,
+                mario_stage = state.mario_stage - 1,
+                mario_x=state.mario_x + 3,
+                mario_climbing=True,
+                mario_climb_frame_counter=0,
+            )
             ladders = state.ladders # be careful, ladder is not the actual ladder positions but where barrel interact with the ladders
 
-            def look_for_valid_ladder_to_climb(i, mario_can_climb):
+            def look_for_valid_ladder_to_climb(i, value):
+                mario_can_climb = value[0]
+                mario_stage = value[1]
                 current_ladder_climbable = True
-                current_ladder_climbable &= state.mario_stage == ladders.stage[i]
-                current_ladder_climbable &= state.mario_y < ladders.start_y[i]
+                current_ladder_climbable &= mario_stage == ladders.stage[i]
+                current_ladder_climbable &= state.mario_y <= ladders.start_y[i]
                 current_ladder_climbable &= state.mario_y + self.consts.MARIO_HIT_BOX_Y - 1 > ladders.start_y[i] + self.consts.LADDER_WIDTH
 
                 return jax.lax.cond(
                     mario_can_climb,
-                    lambda _: True,
-                    lambda _: current_ladder_climbable,
+                    lambda _: (True, mario_stage),
+                    lambda _: (current_ladder_climbable, mario_stage),
                     operand=None
                 )
-            mario_can_climb = jax.lax.fori_loop(0, len(ladders.stage), look_for_valid_ladder_to_climb, False)          
+            mario_can_climb_upwards = jax.lax.fori_loop(0, len(ladders.stage), look_for_valid_ladder_to_climb, (False, state.mario_stage))[0]  
+            mario_can_climb_downwards = jax.lax.fori_loop(0, len(ladders.stage), look_for_valid_ladder_to_climb, (False, state.mario_stage - 1))[0]        
             
             return jax.lax.cond(
-                jnp.logical_and(jnp.logical_and(jnp.logical_and(jnp.logical_and(mario_can_climb, state.mario_climbing == False), state.mario_jumping == False), state.mario_jumping_wide == False), action == Action.UP),
-                lambda _: new_state,
-                lambda _: state,
+                jnp.logical_and(jnp.logical_and(jnp.logical_and(jnp.logical_and(mario_can_climb_upwards, state.mario_climbing == False), state.mario_jumping == False), state.mario_jumping_wide == False), action == Action.UP),
+                lambda _: new_state_climbing_upwards,
+                lambda _: jax.lax.cond(
+                    jnp.logical_and(jnp.logical_and(jnp.logical_and(jnp.logical_and(mario_can_climb_downwards, state.mario_climbing == False), state.mario_jumping == False), state.mario_jumping_wide == False), action == Action.DOWN),
+                    lambda _: new_state_climbing_downwards,
+                    lambda _: state,
+                    operand=None
+                ),
                 operand=None
             )
-        new_state = mario_starts_climbing_upwards(new_state)
+        new_state = mario_starts_climbing(new_state)
 
         # change mario position in x direction if Action.right or Action.left is chosen
         def mario_walking_to_right(state):
             last_mario_move_was_moving_to_right = state.mario_view_direction != self.consts.MOVING_RIGHT
+            new_mario_x = jnp.round(self.bar_linear_equation(state.mario_stage, state.mario_y) - self.consts.MARIO_HIT_BOX_X) - 2
             
-
             new_state = jax.lax.cond(
                 last_mario_move_was_moving_to_right,
                 lambda _:  state._replace(
+                    mario_x = new_mario_x,
                     mario_y=state.mario_y + self.consts.MARIO_MOVING_SPEED,
                     mario_view_direction=self.consts.MOVING_RIGHT,
                     mario_walk_frame_counter=0,
                 ),
                 lambda _:state._replace(
+                    mario_x = new_mario_x,
                     mario_y=state.mario_y + self.consts.MARIO_MOVING_SPEED,
                     mario_view_direction=self.consts.MOVING_RIGHT,
                     mario_walk_frame_counter=state.mario_walk_frame_counter + 1,
@@ -678,14 +776,17 @@ class JaxDonkeyKong(JaxEnvironment[DonkeyKongState, DonkeyKongObservation, Donke
         # similar function as mario_walking_to_right
         def mario_walking_to_left(state):
             last_mario_move_was_moving_to_left = state.mario_view_direction != self.consts.MOVING_LEFT
+            new_mario_x = jnp.round(self.bar_linear_equation(state.mario_stage, state.mario_y) - self.consts.MARIO_HIT_BOX_X) - 2
             new_state = jax.lax.cond(
                 last_mario_move_was_moving_to_left,
                 lambda _:  state._replace(
+                    mario_x = new_mario_x,
                     mario_y=state.mario_y - self.consts.MARIO_MOVING_SPEED,
                     mario_view_direction=self.consts.MOVING_LEFT,
                     mario_walk_frame_counter=0,
                 ),
                 lambda _:state._replace(
+                    mario_x = new_mario_x,
                     mario_y=state.mario_y - self.consts.MARIO_MOVING_SPEED,
                     mario_view_direction=self.consts.MOVING_LEFT,
                     mario_walk_frame_counter=state.mario_walk_frame_counter + 1,
