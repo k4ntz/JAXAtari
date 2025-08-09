@@ -76,9 +76,21 @@ def dof(pos: chex.Array, dofmaze: chex.Array):
     grid_y = (y+3)//4
     return dofmaze[grid_x][grid_y]
 
-def can_change_direction(pos: chex.Array, dofmaze: chex.Array):
+
+def available_directions(pos: chex.Array, dofmaze: chex.Array):
     """
-    Wether the object change change direction
+    What direction Pacman or the ghosts can take when at an intersection.
+    Returns a tuple of booleans (up, right, left, down) indicating if
+    the character can move in that direction.
+    The character can only change direction if it is on a vertical or horizontal grid.
+
+    Arguments:
+    pos -- (x, y) position of the character
+    dofmaze -- precomputed degree of freedom for a maze level/layout
+
+    Returns:
+    A tuple of booleans (up, right, left, down) indicating if the 
+    character can move in that direction.
     """
     x, y = pos
     on_vertical_grid = x % 4 == 1 # can potentially move up/down
@@ -260,7 +272,7 @@ class JaxPacman(JaxEnvironment[PacmanState, PacmanObservation, PacmanInfo]):
 
 
         action = last_pressed_action(action, state.current_action)
-        possible_directions = can_change_direction(state.pacman_pos, state.dofmaze)
+        possible_directions = available_directions(state.pacman_pos, state.dofmaze)
         if action != Action.NOOP and action != Action.FIRE and possible_directions[action - 2]:
             new_pacman_dir = DIRECTIONS[action]
             executed_action = action
@@ -473,7 +485,7 @@ def ghost_step(ghost_pos: chex.Array, ghost_dir: chex.Array, dofmaze:chex.Array,
     """
     Step function for a single ghost. Never stops, never reverses, can change direction at intersections.
     """
-    possible = can_change_direction(ghost_pos, dofmaze)
+    possible = available_directions(ghost_pos, dofmaze)
     dir_idx = get_direction_index(ghost_dir)
     # Map: 2=UP, 3=RIGHT, 4=LEFT, 5=DOWN
     direction_indices = [2, 3, 4, 5]
