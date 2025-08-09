@@ -281,6 +281,23 @@ class JaxBerzerk(JaxEnvironment[BerzerkState, BerzerkObservation, BerzerkInfo, B
         #)
 
         return player_x, player_y, player_direction
+    
+    @partial(jax.jit, static_argnums=0)
+    def object_hits_enemy(self, object_pos, object_size, enemy_pos):
+        object_left   = object_pos[0]
+        object_right  = object_pos[0] + object_size[0]
+        object_top    = object_pos[1]
+        object_bottom = object_pos[1] + object_size[1]
+
+        enemy_left   = enemy_pos[0]
+        enemy_right  = enemy_pos[0] + self.consts.ENEMY_SIZE[0]
+        enemy_top    = enemy_pos[1]
+        enemy_bottom = enemy_pos[1] + self.consts.ENEMY_SIZE[1]
+
+        overlap_x = (object_left < enemy_right) & (object_right > enemy_left)
+        overlap_y = (object_top < enemy_bottom) & (object_bottom > enemy_top)
+
+        return overlap_x & overlap_y
 
 # 1a. Check wallcollision and exit collision
     @partial(jax.jit, static_argnums=0)
@@ -468,6 +485,49 @@ class JaxBerzerk(JaxEnvironment[BerzerkState, BerzerkObservation, BerzerkInfo, B
         final_dir = jnp.where(aligned, 0, new_dir)
         
         return new_pos, final_axis, final_dir, rng
+    
+    @partial(jax.jit, static_argnums=(0, ))
+    def spawn_enemies(self, state, rng, max_attempts: int = 200):
+        num = self.consts.NUM_ENEMIES
+        minval = jnp.array([self.consts.PLAYER_BOUNDS[0][0], self.consts.PLAYER_BOUNDS[1][0]], dtype=jnp.float32)
+        maxval = jnp.array([self.consts.PLAYER_BOUNDS[0][1] - self.consts.ENEMY_SIZE[0],
+                            self.consts.PLAYER_BOUNDS[1][1] - self.consts.ENEMY_SIZE[1]], dtype=jnp.float32)
+
+        placed_init = jnp.full((num, 2), -100.0, dtype=jnp.float32)
+        init_carry = (placed_init, rng)
+
+        enemy_size = jnp.array(self.consts.ENEMY_SIZE, dtype=jnp.float32)
+        player_size = jnp.array(self.consts.PLAYER_SIZE, dtype=jnp.float32)
+        max_attempts = jnp.int32(max_attempts)
+
+        def body_fun(i, carry):
+            placed, rng_inner = carry
+            rng_inner, sub = jax.random.split(rng_inner)
+
+            def sample(r):
+                return jax.random.uniform(r, shape=(2,), minval=minval, maxval=maxval)
+
+            def cond_fn(carry2):
+                pos, rng2, attempts = carry2
+                in_wall = self.object_hits_wall(pos, enemy_size, state.room_counter, state.entry_direction)
+                on_player = self.object_hits_enemy(state.player_pos, player_size, pos)
+                overlap_enemy = jnp.any(jax.vmap(lambda ep: self.object_hits_enemy(pos, enemy_size, ep))(placed))
+                invalid = in_wall | on_player | overlap_enemy
+                return jnp.logical_and(invalid, attempts < max_attempts)
+
+            def body2(carry2):
+                _, rng2, attempts = carry2
+                rng2, sub2 = jax.random.split(rng2)
+                return sample(sub2), rng2, attempts + 1
+
+            pos0 = sample(sub)
+            pos, rng_after, _ = jax.lax.while_loop(cond_fn, body2, (pos0, sub, jnp.int32(0)))
+            placed = placed.at[i].set(pos)
+            return (placed, rng_after)
+
+        final_carry = jax.lax.fori_loop(0, num, body_fun, init_carry)
+        placed_final, _ = final_carry
+        return state._replace(enemy_pos=placed_final)
         
     @partial(jax.jit, static_argnums=(0, ))
     def _get_observation(self, state: BerzerkState) -> BerzerkObservation:
@@ -488,136 +548,76 @@ class JaxBerzerk(JaxEnvironment[BerzerkState, BerzerkObservation, BerzerkInfo, B
             jnp.array(0)
         )
 
-    @partial(jax.jit, static_argnums=(0,)) 
+    @partial(jax.jit, static_argnums=(0,))
     def reset(self, rng: chex.PRNGKey = jax.random.PRNGKey(42)) -> Tuple[BerzerkObservation, BerzerkState]:
-        rng, enemy_rng, spawn_rng = jax.random.split(rng, 3)
-
-        min_enemies = 5
-        max_enemies = self.consts.NUM_ENEMIES
-        num_enemies = jax.random.randint(enemy_rng, (), min_enemies, max_enemies + 1)
-
         pos = jnp.array([
             self.consts.PLAYER_BOUNDS[0][0] + 2,
             self.consts.PLAYER_BOUNDS[1][1] // 2
         ], dtype=jnp.float32)
-
-        # Initialwerte
         lives = jnp.array(2, dtype=jnp.int32)
         bullets = jnp.zeros((self.consts.MAX_BULLETS, 2), dtype=jnp.float32)
         bullet_dirs = jnp.zeros((self.consts.MAX_BULLETS, 2), dtype=jnp.float32)
         active = jnp.zeros((self.consts.MAX_BULLETS,), dtype=bool)
-        room_counter=jnp.array(0, dtype=jnp.int32)
-        entry_direction=jnp.array(3, dtype=jnp.int32)
+
+        enemy_move_axis = -jnp.ones((self.consts.NUM_ENEMIES,), dtype=jnp.int32)
+        enemy_move_dir = jnp.zeros((self.consts.NUM_ENEMIES,), dtype=jnp.int32)
+        enemy_alive = jnp.ones((self.consts.NUM_ENEMIES,), dtype=bool)
+        enemy_bullets = jnp.zeros((self.consts.NUM_ENEMIES, 2), dtype=jnp.float32)
+        enemy_bullet_dirs = jnp.zeros((self.consts.NUM_ENEMIES, 2), dtype=jnp.float32)
+        enemy_bullet_active = jnp.zeros((self.consts.NUM_ENEMIES,), dtype=bool)
+        enemy_move_prob = jnp.full((self.consts.NUM_ENEMIES,), self.consts.MOVEMENT_PROB, dtype=jnp.float32)
+        last_dir = jnp.array([0.0, -1.0])  # default = up
+        score = jnp.array(0, dtype=jnp.int32)
+        animation_counter = jnp.array(0, dtype=jnp.int32)
+        enemy_animation_counter = jnp.zeros((self.consts.NUM_ENEMIES,), dtype=jnp.int32)
+        death_timer = jnp.array(0, dtype=jnp.int32)
+        room_counter = jnp.array(0, dtype=jnp.int32)
+        entry_direction= jnp.array(3, dtype=jnp.int32)
+        player_is_firing= jnp.array(False)
+        room_transition_timer= jnp.array(0, dtype=jnp.int32)
+        enemy_clear_bonus_given=jnp.array(False)
+        extra_life_counter = jnp.array(0, dtype=jnp.int32)
+        enemy_death_timer = jnp.zeros((self.consts.NUM_ENEMIES,), dtype=jnp.int32)
+        enemy_death_pos = jnp.full((self.consts.NUM_ENEMIES, 2), -100.0, dtype=jnp.float32)
+        num_enemies = jnp.array(self.consts.NUM_ENEMIES, dtype=jnp.int32)
+        game_over_timer = jnp.array(0, dtype=jnp.int32)
+
+        enemy_pos = jnp.full((self.consts.NUM_ENEMIES, 2), -100.0, dtype=jnp.float32)
 
 
-        # Sicheren Abstand zum Rand definieren (in Pixel)
-        margin_x = 10.0
-        margin_y = 10.0
-
-        spawn_min = jnp.array([
-            self.consts.PLAYER_BOUNDS[0][0] + margin_x,
-            self.consts.PLAYER_BOUNDS[1][0] + margin_y,
-        ])
-
-        spawn_max = jnp.array([
-            self.consts.PLAYER_BOUNDS[0][1] - self.consts.ENEMY_SIZE[0] - margin_x,
-            self.consts.PLAYER_BOUNDS[1][1] - self.consts.ENEMY_SIZE[1] - margin_y,
-        ])
-
-        # Gegner-Positionen zufällig erzeugen
-        rng, rng_pos = jax.random.split(rng)
-
-
-        enemy_pos_all = jax.random.uniform(
-            rng_pos,
-            shape=(self.consts.NUM_ENEMIES, 2),
-            minval=spawn_min,
-            maxval=spawn_max
-        )
-        max_attempts = 1000
-
-        def try_update_enemy_pos(state, i):
-            enemy_pos_all, rng = state
-            rng, sub_rng = jax.random.split(rng)
-            
-            # Prüfen ob Position mit Wand kollidiert
-            hits_wall = self.object_hits_wall(enemy_pos_all[i], self.consts.ENEMY_SIZE, room_counter, entry_direction)
-            
-            # Falls Kollision, neue Position generieren
-            new_pos = jax.random.uniform(
-                sub_rng,
-                shape=(2,),
-                minval=spawn_min,
-                maxval=spawn_max
-            )
-            
-            enemy_pos_all = jax.lax.cond(
-                hits_wall,
-                lambda arr: arr.at[i].set(new_pos),
-                lambda arr: arr,
-                enemy_pos_all
-            )
-            return enemy_pos_all, rng
-
-        def loop_body(i, val):
-            enemy_pos_all, rng = val
-            return try_update_enemy_pos((enemy_pos_all, rng), i)
-
-        # Mehrere Versuche, alle Gegner zu prüfen und ggf. neue Positionen zu setzen
-        def attempts_loop(i, val):
-            enemy_pos_all, rng = val
-            enemy_pos_all, rng = jax.lax.fori_loop(0, self.consts.NUM_ENEMIES, loop_body, (enemy_pos_all, rng))
-            return enemy_pos_all, rng
-
-        enemy_pos_all = jax.random.uniform(
-            rng_pos,
-            shape=(self.consts.NUM_ENEMIES, 2),
-            minval=spawn_min,
-            maxval=spawn_max
-        )
-
-        enemy_pos_all, rng = jax.lax.fori_loop(0, max_attempts, attempts_loop, (enemy_pos_all, rng))
-
-        enemy_pos = enemy_pos_all
-
-        enemy_alive = jnp.arange(self.consts.NUM_ENEMIES) < num_enemies
-
-
-
-        state = BerzerkState(
-            player_pos=pos,
-            lives=lives,
-            bullets=bullets,
-            bullet_dirs=bullet_dirs,
-            bullet_active=active,
-            enemy_pos=enemy_pos,
-            enemy_move_axis=-jnp.ones((self.consts.NUM_ENEMIES,), dtype=jnp.int32),
-            enemy_move_dir=jnp.zeros((self.consts.NUM_ENEMIES,), dtype=jnp.int32),
-            enemy_alive=enemy_alive,
-            enemy_bullets=jnp.zeros((self.consts.NUM_ENEMIES, 2), dtype=jnp.float32),
-            enemy_bullet_dirs=jnp.zeros((self.consts.NUM_ENEMIES, 2), dtype=jnp.float32),
-            enemy_bullet_active=jnp.zeros((self.consts.NUM_ENEMIES,), dtype=bool),
-            enemy_move_prob=jnp.full((self.consts.NUM_ENEMIES,), self.consts.MOVEMENT_PROB, dtype=jnp.float32),
-            last_dir=jnp.array([0.0, -1.0], dtype=jnp.float32),
-            rng=rng,
-            score=jnp.array(0, dtype=jnp.int32),
-            animation_counter=jnp.array(0, dtype=jnp.int32),
-            enemy_animation_counter=jnp.zeros((self.consts.NUM_ENEMIES,), dtype=jnp.int32),
-            death_timer=jnp.array(0, dtype=jnp.int32),
-            room_counter=room_counter,
-            entry_direction=entry_direction,
-            player_is_firing=jnp.array(False),
-            room_transition_timer=jnp.array(0, dtype=jnp.int32),
-            enemy_clear_bonus_given=jnp.array(False),
-            extra_life_counter=jnp.array(0, dtype=jnp.int32),
-            enemy_death_timer=jnp.zeros((self.consts.NUM_ENEMIES,), dtype=jnp.int32),
-            enemy_death_pos=jnp.full((self.consts.NUM_ENEMIES, 2), -100.0, dtype=jnp.float32),
-            game_over_timer = jnp.array(0, dtype=jnp.int32),
-            num_enemies=num_enemies
-        )
-
+        state = BerzerkState(player_pos=pos, 
+                             lives=lives, 
+                             bullets=bullets, bullet_dirs=bullet_dirs, 
+                             bullet_active=active, 
+                             enemy_pos=enemy_pos, 
+                             enemy_move_axis=enemy_move_axis, 
+                             enemy_move_dir=enemy_move_dir, 
+                             enemy_alive=enemy_alive,
+                             enemy_bullets=enemy_bullets,
+                             enemy_bullet_dirs=enemy_bullet_dirs,
+                             enemy_bullet_active=enemy_bullet_active,
+                             enemy_move_prob=enemy_move_prob, 
+                             last_dir=last_dir, 
+                             rng=rng, 
+                             score=score, 
+                             animation_counter=animation_counter,
+                             enemy_animation_counter=enemy_animation_counter,
+                             death_timer=death_timer,
+                             room_counter=room_counter,
+                             entry_direction=entry_direction,
+                             player_is_firing=player_is_firing,
+                             room_transition_timer=room_transition_timer,
+                             enemy_clear_bonus_given=enemy_clear_bonus_given,
+                             extra_life_counter=extra_life_counter,
+                             enemy_death_timer=enemy_death_timer,
+                             enemy_death_pos=enemy_death_pos,
+                             game_over_timer=game_over_timer,
+                             num_enemies=num_enemies
+                            )
+        
+        state = self.spawn_enemies(state, jax.random.split(rng)[0])
         return self._get_observation(state), state
-
+    
     @partial(jax.jit, static_argnums=0)
     def step(self, state: BerzerkState, action: chex.Array) -> Tuple[BerzerkObservation, BerzerkState, float, bool, BerzerkInfo]:
         # 0. Handle death animation phase
@@ -724,7 +724,8 @@ class JaxBerzerk(JaxEnvironment[BerzerkState, BerzerkObservation, BerzerkInfo, B
                 )
                 # Neues Level laden (ähnlich wie beim Tod)
                 new_rng = jax.random.split(state.rng)[1]
-                next_state = self.reset(new_rng)[1]._replace(
+                obs, base_state = self.reset(new_rng)
+                base_state = base_state._replace(
                     player_pos=player_spawn_pos,
                     room_counter=state.room_counter + 1,
                     lives=state.lives,
@@ -732,6 +733,10 @@ class JaxBerzerk(JaxEnvironment[BerzerkState, BerzerkObservation, BerzerkInfo, B
                     entry_direction=state.entry_direction,
                     extra_life_counter=state.extra_life_counter
                 )
+
+                # Jetzt Gegner spawnen mit den neuen Werten
+                next_state = self.spawn_enemies(base_state, jax.random.split(new_rng)[1])
+
                 return (
                     self._get_observation(next_state),
                     next_state,
@@ -783,21 +788,7 @@ class JaxBerzerk(JaxEnvironment[BerzerkState, BerzerkObservation, BerzerkInfo, B
                 overlap_y = (top_a < bottom_b) & (bottom_a > top_b)
                 return overlap_x & overlap_y
 
-            def object_hits_enemy(object_pos, object_size, enemy_pos):
-                object_left   = object_pos[0]
-                object_right  = object_pos[0] + object_size[0]
-                object_top    = object_pos[1]
-                object_bottom = object_pos[1] + object_size[1]
-
-                enemy_left   = enemy_pos[0]
-                enemy_right  = enemy_pos[0] + self.consts.ENEMY_SIZE[0]
-                enemy_top    = enemy_pos[1]
-                enemy_bottom = enemy_pos[1] + self.consts.ENEMY_SIZE[1]
-
-                overlap_x = (object_left < enemy_right) & (object_right > enemy_left)
-                overlap_y = (object_top < enemy_bottom) & (object_bottom > enemy_top)
-
-                return overlap_x & overlap_y
+            
 
             
             hit_exit = self.check_exit_crossing(new_pos)
@@ -904,7 +895,7 @@ class JaxBerzerk(JaxEnvironment[BerzerkState, BerzerkObservation, BerzerkInfo, B
             # 3. Check collision of player with enemy
             player_pos = jnp.array([player_x, player_y])
             player_hits = jax.vmap(
-                lambda enemy_pos: object_hits_enemy(player_pos, self.consts.PLAYER_SIZE, enemy_pos)
+                lambda enemy_pos: self.object_hits_enemy(player_pos, self.consts.PLAYER_SIZE, enemy_pos)
             )(updated_enemy_pos)
             
             hit_by_enemy = jnp.any(player_hits)
@@ -1006,7 +997,7 @@ class JaxBerzerk(JaxEnvironment[BerzerkState, BerzerkObservation, BerzerkInfo, B
 
             # 6. Check collision of bullet and enemy
             def bullet_hits_enemy(bullet_pos, bullet_size, enemy_pos):
-                return object_hits_enemy(bullet_pos, bullet_size, enemy_pos)
+                return self.object_hits_enemy(bullet_pos, bullet_size, enemy_pos)
             
             # 6b. Check collision of enemy bullets with other enemies (friendly fire)
             def enemy_bullet_hits_enemy(bullet_pos, bullet_size, target_pos, shooter_pos):
@@ -1031,7 +1022,7 @@ class JaxBerzerk(JaxEnvironment[BerzerkState, BerzerkObservation, BerzerkInfo, B
             enemy_touch_hits = jax.vmap(
                 lambda pos_a, alive_a: jax.vmap(
                     lambda pos_b, alive_b: (
-                        object_hits_enemy(pos_a, self.consts.ENEMY_SIZE, pos_b) &  # Kollision
+                        self.object_hits_enemy(pos_a, self.consts.ENEMY_SIZE, pos_b) &  # Kollision
                         ~jnp.all(pos_a == pos_b) &                                 # nicht derselbe Gegner
                         alive_a & alive_b                                          # beide lebendig
                     )
