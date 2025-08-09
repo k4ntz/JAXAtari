@@ -95,7 +95,18 @@ def dof(pos: chex.Array, dofmaze: chex.Array):
 
 def available_directions(pos: chex.Array, dofmaze: chex.Array):
     """
-    Wether the object change change direction
+    What direction Pacman or the ghosts can take when at an intersection.
+    Returns a tuple of booleans (up, right, left, down) indicating if
+    the character can move in that direction.
+    The character can only change direction if it is on a vertical or horizontal grid.
+
+    Arguments:
+    pos -- (x, y) position of the character
+    dofmaze -- precomputed degree of freedom for a maze level/layout
+
+    Returns:
+    A tuple of booleans (up, right, left, down) indicating if the 
+    character can move in that direction.
     """
     x, y = pos
     on_vertical_grid = x % 4 == 1 # can potentially move up/down
