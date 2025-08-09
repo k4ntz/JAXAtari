@@ -29,6 +29,7 @@ class BerzerkConstants(NamedTuple):
 
     ENEMY_SIZE = (8, 16)
     NUM_ENEMIES = 7
+    MIN_NUM_ENEMIES = 5
     MOVEMENT_PROB = 0.0025  # Value for testing, has to be adjusted
     ENEMY_SPEED = 0.05
     ENEMY_SHOOT_PROB = 0.005
@@ -487,47 +488,49 @@ class JaxBerzerk(JaxEnvironment[BerzerkState, BerzerkObservation, BerzerkInfo, B
         return new_pos, final_axis, final_dir, rng
     
     @partial(jax.jit, static_argnums=(0, ))
-    def spawn_enemies(self, state, rng, max_attempts: int = 200):
-        num = self.consts.NUM_ENEMIES
-        minval = jnp.array([self.consts.PLAYER_BOUNDS[0][0], self.consts.PLAYER_BOUNDS[1][0]], dtype=jnp.float32)
-        maxval = jnp.array([self.consts.PLAYER_BOUNDS[0][1] - self.consts.ENEMY_SIZE[0],
-                            self.consts.PLAYER_BOUNDS[1][1] - self.consts.ENEMY_SIZE[1]], dtype=jnp.float32)
+    def spawn_enemies(self, state, rng):
+        # Gegneranzahl: 5–7
+        rng, sub_num, sub_spawn = jax.random.split(rng, 3)
+        num_enemies = jax.random.randint(sub_num, (), self.consts.MIN_NUM_ENEMIES, self.consts.NUM_ENEMIES+1)  # 8 exklusiv → 5, 6, 7
 
-        placed_init = jnp.full((num, 2), -100.0, dtype=jnp.float32)
-        init_carry = (placed_init, rng)
+        # Alle Plätze initial leer
+        placed_init = jnp.full((self.consts.NUM_ENEMIES, 2), -100.0, dtype=jnp.float32)
 
-        enemy_size = jnp.array(self.consts.ENEMY_SIZE, dtype=jnp.float32)
-        player_size = jnp.array(self.consts.PLAYER_SIZE, dtype=jnp.float32)
-        max_attempts = jnp.int32(max_attempts)
+        def sample_pos(r):
+            return jax.random.uniform(
+                r, shape=(2,),
+                minval=jnp.array([self.consts.PLAYER_BOUNDS[0][0], self.consts.PLAYER_BOUNDS[1][0]]),
+                maxval=jnp.array([self.consts.PLAYER_BOUNDS[0][1] - self.consts.ENEMY_SIZE[0],
+                                self.consts.PLAYER_BOUNDS[1][1] - self.consts.ENEMY_SIZE[1]])
+            )
+
+        def cond_fn(carry2):
+            pos, rng2, attempts, placed = carry2
+            in_wall = self.object_hits_wall(pos, self.consts.ENEMY_SIZE,
+                                            state.room_counter, state.entry_direction)
+            on_player = self.object_hits_enemy(state.player_pos, self.consts.PLAYER_SIZE, pos)
+            overlap_enemy = jnp.any(jax.vmap(lambda ep: self.object_hits_enemy(pos, self.consts.ENEMY_SIZE, ep))(placed))
+            invalid = in_wall | on_player | overlap_enemy
+            return jnp.logical_and(invalid, attempts < 200)
+
+        def body2(carry2):
+            _, rng2, attempts, placed = carry2
+            rng2, sub2 = jax.random.split(rng2)
+            return sample_pos(sub2), rng2, attempts + 1, placed
 
         def body_fun(i, carry):
             placed, rng_inner = carry
             rng_inner, sub = jax.random.split(rng_inner)
-
-            def sample(r):
-                return jax.random.uniform(r, shape=(2,), minval=minval, maxval=maxval)
-
-            def cond_fn(carry2):
-                pos, rng2, attempts = carry2
-                in_wall = self.object_hits_wall(pos, enemy_size, state.room_counter, state.entry_direction)
-                on_player = self.object_hits_enemy(state.player_pos, player_size, pos)
-                overlap_enemy = jnp.any(jax.vmap(lambda ep: self.object_hits_enemy(pos, enemy_size, ep))(placed))
-                invalid = in_wall | on_player | overlap_enemy
-                return jnp.logical_and(invalid, attempts < max_attempts)
-
-            def body2(carry2):
-                _, rng2, attempts = carry2
-                rng2, sub2 = jax.random.split(rng2)
-                return sample(sub2), rng2, attempts + 1
-
-            pos0 = sample(sub)
-            pos, rng_after, _ = jax.lax.while_loop(cond_fn, body2, (pos0, sub, jnp.int32(0)))
+            pos0 = sample_pos(sub)
+            pos, rng_after, _, _ = jax.lax.while_loop(cond_fn, body2, (pos0, sub, jnp.int32(0), placed))
             placed = placed.at[i].set(pos)
             return (placed, rng_after)
 
-        final_carry = jax.lax.fori_loop(0, num, body_fun, init_carry)
+        final_carry = jax.lax.fori_loop(0, num_enemies, body_fun, (placed_init, sub_spawn))
         placed_final, _ = final_carry
-        return state._replace(enemy_pos=placed_final)
+        return state._replace(enemy_pos=placed_final, num_enemies=num_enemies)
+
+
         
     @partial(jax.jit, static_argnums=(0, ))
     def _get_observation(self, state: BerzerkState) -> BerzerkObservation:
