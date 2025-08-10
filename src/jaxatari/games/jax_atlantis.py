@@ -36,8 +36,8 @@ class GameConfig:
     cannon_x: jnp.ndarray = field(
         default_factory=lambda: jnp.array([0, 72, 152], dtype=jnp.int32)
     )
-    max_bullets: int = 2
-    max_enemies: int = 20  # max 1 per line
+    max_bullets: int = 2 # Max 2 bullets simultaneously at screen
+    max_enemies: int = 20  # max 1 enemy per lane
     fire_cooldown_frames: int = 9  # delay between shots
     # y-coordinates of the different enemy paths/heights
     enemy_paths: jnp.ndarray = field(
@@ -87,7 +87,6 @@ class EntityPosition(NamedTuple):
     width: jnp.ndarray
     height: jnp.ndarray
 
-
 class AtlantisState(NamedTuple):
     score: chex.Array  # tracks the current score
     reward: chex.Array
@@ -123,15 +122,12 @@ class AtlantisObservation(NamedTuple):
     enemy: EntityPosition
     bullet: EntityPosition
 
-
 class AtlantisInfo(NamedTuple):
     time: jnp.ndarray
     score: chex.Array
 
-
 class AtlantisConstants(NamedTuple):
     pass
-
 
 class Renderer_AtraJaxis(JAXGameRenderer):
     sprites: Dict[str, Any]
@@ -453,8 +449,6 @@ class JaxAtlantis(JaxEnvironment[AtlantisState, AtlantisObservation, AtlantisInf
             -1,
         )
         return fire_pressed, cannon_idx
-
-    # ..................................................................
 
     def _spawn_bullet(self, state, cannon_idx):
         """Insert newly spawned bullet in first free slot"""
@@ -1189,7 +1183,6 @@ def get_human_action() -> chex.Array:
 
     return jnp.array(Action.NOOP)
 
-
 def main():
     config = GameConfig()
     pygame.init()
@@ -1298,5 +1291,3 @@ if __name__ == "__main__":
 #
 # if __name__ == "__main__":
 #     main2()
-
-
