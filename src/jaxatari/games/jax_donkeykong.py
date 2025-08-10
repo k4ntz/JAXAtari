@@ -479,9 +479,7 @@ class JaxDonkeyKong(JaxEnvironment[DonkeyKongState, DonkeyKongObservation, Donke
 
 
     @partial(jax.jit, static_argnums=(0,))
-    def _mario_step(self, state, action: chex.Array):
-        # need some frame skip here because mario is much slower than fires and barrels
-        
+    def _mario_step(self, state, action: chex.Array):    
 
         # there are multiple action which mario/player can execute
 
@@ -827,6 +825,44 @@ class JaxDonkeyKong(JaxEnvironment[DonkeyKongState, DonkeyKongObservation, Donke
                 operand=None
             )
         new_state = mario_walking_to_left(new_state)
+
+        def mario_walking_into_invisible_wall(state):
+            def look_for_invisible_wall_of_given_stage(i, hit):
+                wall_hit = True
+                wall_hit &= state.invisibleWallEachStage.stage[i] == state.mario_stage
+                mario_reaches_invisible_wall = jnp.logical_or(state.invisibleWallEachStage.right_end[i] < state.mario_y, state.invisibleWallEachStage.left_end[i] > state.mario_y) 
+                wall_hit &= mario_reaches_invisible_wall
+                return jax.lax.cond(
+                    wall_hit,
+                    lambda _: True,
+                    lambda _: hit,
+                    operand=None
+                )
+            hit = jax.lax.fori_loop(0, len(state.invisibleWallEachStage.stage), look_for_invisible_wall_of_given_stage, False)
+
+            new_state_right_wall = state._replace(
+                mario_walk_sprite = self.consts.MARIO_WALK_SPRITE_0,
+                mario_y = state.mario_y - self.consts.MARIO_MOVING_SPEED
+            )
+
+            new_state_left_wall = state._replace(
+                mario_walk_sprite = self.consts.MARIO_WALK_SPRITE_0,
+                mario_y = state.mario_y + self.consts.MARIO_MOVING_SPEED
+            )
+
+            return jax.lax.cond(
+                hit,
+                lambda _: jax.lax.cond(
+                    state.mario_view_direction == self.consts.MOVING_RIGHT,
+                    lambda _: new_state_right_wall,
+                    lambda _: new_state_left_wall,
+                    operand=None
+                ),
+                lambda _: state,
+                operand=None
+            )
+        new_state = mario_walking_into_invisible_wall(new_state)
+        
 
         return new_state
     
