@@ -944,7 +944,7 @@ class JaxAtlantis(JaxEnvironment[AtlantisState, AtlantisObservation, AtlantisInf
         )
 
         # We try to simulate the beams last position. It is important because at higher speeds, we cannot have a exact
-        # alignment of central canon and installment for knocking them put
+        # alignment of central canon and installment for knocking them out
         old_centers = centers - state.enemies[:, 2]
         beam_old = jnp.where(can_fire, old_centers, -1)
         beam_new = jnp.where(can_fire, centers, -1)
@@ -953,40 +953,53 @@ class JaxAtlantis(JaxEnvironment[AtlantisState, AtlantisObservation, AtlantisInf
         beam_old = jnp.max(beam_old)  # -1 if none
         beam_new = jnp.max(beam_new)
 
-        # Define an inclusive interval [lo, hi].
-        lo = jnp.minimum(beam_old, beam_new)
-        hi = jnp.maximum(beam_old, beam_new)
+        # For directional collision detection:
+        # - If moving left to right (dx > 0): check if beam_new >= target (beam reached target from left)
+        # - If moving right to left (dx < 0): check if beam_new <= target (beam reached target from right)
+        dx_shooter = state.enemies[shooter_idx, 2]
 
         # Build 7 possible targets, 6 installments and one central canon
-        # If the enemy moves from left to right, plasma will shoot when the right edge of installment/canon is reached
-        # If the enemy moves from right to left, plasma will shoot when the left edge of installment/canon is reached
+        # If enemy comes from left to right, collision occurs when plasma hits the right edge
+        # If enemy comes from right to left, collision occurs when plasma hits the left edge
 
         dx_shooter = state.enemies[shooter_idx, 2]
-        inst_centers = jnp.where(
-            dx_shooter > 0,
-            cfg.installations_x + cfg.installations_width,  # right-to-left hits right edges
-            cfg.installations_x  # left-to-right hits left edges
+        
+        # For installations: hit the approaching edge based on enemy direction
+        inst_targets = jnp.where(
+            dx_shooter > 0,  # enemy moving left to right
+            cfg.installations_x + cfg.installations_width,  # hit right edge
+            cfg.installations_x  # hit left edge
         )
 
-        # Same logic for central canon
-        cmd_center = jnp.where(
-            dx_shooter > 0,
-            cfg.cannon_x[1] + cfg.cannon_width,
-            cfg.cannon_x[1]
+        # Same logic for central cannon
+        cmd_target = jnp.where(
+            dx_shooter > 0,  # enemy moving left to right
+            cfg.cannon_x[1] + cfg.cannon_width,  # hit right edge
+            cfg.cannon_x[1]  # hit left edge
         )
 
-        targets = jnp.sort(jnp.concatenate([jnp.array([cmd_center]), inst_centers], 0))
+        targets = jnp.concatenate([jnp.array([cmd_target]), inst_targets], 0)
 
-        # hit if any target lies in [lo,hi]
-        hit_mask = (targets >= lo) & (targets <= hi)
+        # Directional collision detection: check if beam has reached each target
+        # For left-to-right movement: beam_new >= target AND beam_old < target
+        # For right-to-left movement: beam_new <= target AND beam_old > target
+        left_to_right_hit = (beam_new >= targets) & (beam_old < targets)
+        right_to_left_hit = (beam_new <= targets) & (beam_old > targets)
+        
+        hit_mask = jnp.where(
+            dx_shooter > 0,  # moving left to right
+            left_to_right_hit,
+            right_to_left_hit
+        )
+            
         any_hit = jnp.any(hit_mask)
         hit_index = jnp.argmax(hit_mask)  # first match
 
         # 5) Decide who to kill
-        kill_cmd = shooter_fired & any_hit & (hit_index == 3) & state.command_post_alive
+        kill_cmd = shooter_fired & any_hit & (hit_index == 0) & state.command_post_alive
 
         inst_idx = hit_index - 1  # maps 1→install[0], …, 6→install[5]
-        inst_alive = (inst_idx >= 0) & (inst_idx < inst_centers.shape[0]) & state.installations[inst_idx]
+        inst_alive = (inst_idx >= 0) & (inst_idx < inst_targets.shape[0]) & state.installations[inst_idx]
         kill_inst = shooter_fired & any_hit & (~state.command_post_alive) & inst_alive
 
         def _handle_hit(s: AtlantisState) -> AtlantisState:
