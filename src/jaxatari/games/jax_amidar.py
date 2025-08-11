@@ -825,7 +825,14 @@ class AmidarRenderer(JAXGameRenderer):
         # Create empty raster with CORRECT orientation for atraJaxis framework
         # Note: For pygame, the raster is expected to be (width, height, channels)
         # where width corresponds to the horizontal dimension of the screen
+
+        # TODO remove
+        import jax.numpy as jnp
+
         raster = jnp.zeros((self.constants.HEIGHT, self.constants.WIDTH, 3))
+        
+        empty_mask = jnp.zeros((self.constants.WIDTH, self.constants.HEIGHT), dtype=jnp.uint8)
+        empty_raster = jnp.zeros_like(raster, dtype=jnp.uint8)
 
         # Render background - (0, 0) is top-left corner
         frame_bg = aj.get_sprite_frame(self.SPRITE_BG, 0)
@@ -845,52 +852,61 @@ class AmidarRenderer(JAXGameRenderer):
         # Still computed in the (HEIGHT, WIDTH) format and transposed later since the code uses (x, y) coordinates
         # Create coordinate grids for vectorized operations
         x_coords, y_coords = jnp.meshgrid(jnp.arange(self.constants.WIDTH), jnp.arange(self.constants.HEIGHT), indexing='ij')
-        completed_rectangles_mask = jnp.zeros((self.constants.WIDTH, self.constants.HEIGHT), dtype=jnp.uint8)
-        def create_rectangle_mask(i, mask):
-            rect_min_x, rect_min_y, rect_max_x, rect_max_y = self.constants.RECTANGLE_CORNERS[i]
-            is_completed = state.completed_rectangles[i]
+        def create_rectangle_mask(rectangle_corners, is_completed):
+            rect_min_x, rect_min_y, rect_max_x, rect_max_y = rectangle_corners
             def create_mask():
                 in_rect_x = jnp.logical_and(x_coords >= rect_min_x, x_coords <= rect_max_x)
                 in_rect_y = jnp.logical_and(y_coords >= rect_min_y, y_coords <= rect_max_y)
                 rect_mask = jnp.logical_and(in_rect_x, in_rect_y).astype(jnp.uint8)
-                return jnp.logical_or(mask, rect_mask).astype(jnp.uint8)
-            return jax.lax.cond(is_completed, create_mask, lambda: mask)
-        completed_rectangles_mask = jax.lax.fori_loop(0, jnp.shape(self.constants.RECTANGLES)[0], create_rectangle_mask, completed_rectangles_mask)
+                return rect_mask
+            return jax.lax.cond(is_completed, create_mask, lambda: empty_mask)
+        rectangle_masks = jax.vmap(create_rectangle_mask, in_axes=(0, 0))(self.constants.RECTANGLE_CORNERS, state.completed_rectangles)
+        completed_rectangles_mask = jnp.any(rectangle_masks, axis=0).astype(jnp.uint8)
         completed_rectangles_mask = jnp.transpose(completed_rectangles_mask, (1, 0))  # Transpose to match the HWC format for rendering
 
         completed_rectangles_sprite = jnp.where(completed_rectangles_mask[:, :, None] == 1, self.constants.WALKED_ON_PATTERN, jnp.full((self.constants.HEIGHT, self.constants.WIDTH, 4), 0, dtype=jnp.uint8))
         raster = aj.render_at(raster, 0, 0, completed_rectangles_sprite)
 
         # Render score
-        score_array = aj.int_to_digits(state.score, max_digits=8)
+        max_digits = 8  # Maximum number of digits to render # TODO make constant? 
+        score_array = aj.int_to_digits(state.score, max_digits=max_digits)
         # convert the score to a list of digits
         number_of_digits = (jnp.log10(state.score)+1).astype(jnp.int32)
         number_of_digits = jnp.maximum(number_of_digits, 1)  # Ensure at least one digit is rendered
-        def render_char(i, current_raster):
-            # i is the loop index (0 up to num_to_render-1)
-            digit_index_in_array = 8 - number_of_digits + i
-            digit_value = score_array[digit_index_in_array]
-            sprite_to_render = self.DIGITS[digit_value] # Gets (W, H, C) sprite
-            render_x = 103-(number_of_digits * 8) + i * 8 # Calculate x position based on loop index
-            return aj.render_at(current_raster, render_x, 176, sprite_to_render)
 
-        raster = jax.lax.fori_loop(0, number_of_digits, render_char, raster)
+        def get_digit_sprite(i):
+            
+            def get_digit_sprite():
+                digit_index_in_array = 8 - number_of_digits + i
+                digit_value = score_array[digit_index_in_array]
+                sprite_to_render = self.DIGITS[digit_value] # Gets (W, H, C) sprite
+                return sprite_to_render
+
+            # if there is no digit, return an empty sprite
+            sprite_to_render = jax.lax.cond(i >= number_of_digits, lambda: jnp.zeros((7, 7, 4), dtype=jnp.uint8), get_digit_sprite)
+            return sprite_to_render
+
+        digit_sprites = jax.vmap(get_digit_sprite)(jnp.arange(max_digits))  # Render all digits in parallel
+        x_positions = jnp.arange(0, max_digits * 8, step=8) + 105-(number_of_digits * 8)  # Calculate x positions for each digit
+        digit_rasters = jax.vmap(aj.render_at, in_axes=(None, 0, None, 0))(empty_raster, x_positions, 176, digit_sprites)
+        digits_raster = jnp.sum(digit_rasters, axis=0)  # Combine all digit rasters into one, adding works because irrelevant values are zero
+        raster = jnp.add(raster, digits_raster)  # Combine the raster with the digits raster
 
         # Render lives
+        max_lives_rendered = 3
         lives = state.lives
-        def render_lives(i, carry):
-            current_raster, x, y = carry
-            # Render a life sprite at the specified position
-            frame_life = aj.get_sprite_frame(self.SPRITE_LIFE, 0)
-            return aj.render_at(current_raster, x, y, frame_life), x-16, y  # Move x left by 16 pixels for the next life
-        raster, _, _ = jax.lax.fori_loop(0, lives, render_lives, (raster, 148, 175))
+        life_sprite = aj.get_sprite_frame(self.SPRITE_LIFE, 0)  # Get the life sprite frame
+        life_sprites = jax.vmap(lambda i: jax.lax.cond(i < lives, lambda: life_sprite, lambda: jnp.zeros_like(life_sprite, dtype=jnp.uint8)))(jnp.arange(max_lives_rendered))
+        x_positions = 148 - jnp.arange(0, max_lives_rendered * 16, step=16)  # Calculate x positions for each life
+        life_rasters = jax.vmap(aj.render_at, in_axes=(None, 0, None, 0))(empty_raster, x_positions, 175, life_sprites)
+        lives_raster = jnp.sum(life_rasters, axis=0)  # Combine all life rasters into one
+        raster = jnp.add(raster, lives_raster)  # Combine the raster with the lives raster
 
-        # Render player - IMPORTANT: Swap x and y coordinates
-        # render_at takes (raster, y, x, sprite) but we need to swap them due to transposition
+        # Render player
         frame_player = aj.get_sprite_frame(self.SPRITE_PLAYER, 0)
         raster = aj.render_at(raster, state.player_x+self.constants.PLAYER_SPRITE_OFFSET[0], state.player_y+self.constants.PLAYER_SPRITE_OFFSET[1], frame_player)
 
-        # Render enemies - IMPORTANT: Swap x and y coordinates
+        # Render enemies
         # TODO differentiate enemy types and if they should be rendered or not
         frame_enemy = aj.get_sprite_frame(self.SPRITE_WARRIOR, 0)
         
@@ -902,6 +918,7 @@ class AmidarRenderer(JAXGameRenderer):
         raster, _ = jax.lax.scan(scan_render_enemy, raster, state.enemy_positions)
 
         ###### For DEBUGGING #######
+        # loops are fine for debugging 
 
         # # Render path edges
         # def render_path(i, raster):
@@ -945,11 +962,12 @@ class AmidarRenderer(JAXGameRenderer):
 
         # raster = jax.lax.fori_loop(0, jnp.shape(self.constants.PATH_EDGES)[0], render_walked_paths, raster)
 
-        return raster
+        return jnp.array(raster, dtype=jnp.uint8)  # Ensure the raster is returned as a JAX array with uint8 type
 
 @jax.jit
 def render_line(raster, coords, color):
     """Renders a line on the raster from coords [[x1, y1], [x2, y2]] with the given color.
+    Only used for debugging, so using loops is fine.
 
     Args:
         raster: JAX array of shape (Width, Height, Channels) for the target image.
