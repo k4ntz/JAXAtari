@@ -193,6 +193,9 @@ class JaxSurround(
         actions = jnp.asarray(actions, dtype=jnp.int32)
         actions = jnp.broadcast_to(actions, (2,))
 
+        is_move0 = jnp.logical_and(actions[0] >= Action.UP, actions[0] <= Action.DOWN)
+        is_move1 = jnp.logical_and(actions[1] >= Action.UP, actions[1] <= Action.DOWN)
+
         def update_dir(curr_dir, action):
             is_move = jnp.logical_and(action >= Action.UP, action <= Action.DOWN)
             candidate = jax.lax.select(is_move, action, curr_dir)
@@ -211,8 +214,8 @@ class JaxSurround(
         new_dir0 = update_dir(state.dir0, actions[0])
         new_dir1 = update_dir(state.dir1, actions[1])
 
-        offset_p0 = offsets[new_dir0]
-        offset_p1 = offsets[new_dir1]
+        offset_p0 = jax.lax.select(is_move0, offsets[new_dir0], jnp.array([0, 0], dtype=jnp.int32))
+        offset_p1 = jax.lax.select(is_move1, offsets[new_dir1], jnp.array([0, 0], dtype=jnp.int32))
 
         new_p0 = state.pos0 + offset_p0
         new_p1 = state.pos1 + offset_p1
@@ -240,8 +243,10 @@ class JaxSurround(
         p0_hit = jnp.logical_or(hit_p0_wall, hit_p0_trail)
         p1_hit = jnp.logical_or(hit_p1_wall, hit_p1_trail)
 
-        grid = state.trail.at[tuple(state.pos0)].set(1)
-        grid = grid.at[tuple(state.pos1)].set(2)
+        grid0 = jax.lax.select(
+            is_move0, state.trail.at[tuple(state.pos0)].set(1), state.trail
+        )
+        grid = jax.lax.select(is_move1, grid0.at[tuple(state.pos1)].set(2), grid0)
 
         new_p0 = safe_p0
         new_p1 = safe_p1
@@ -391,7 +396,7 @@ def main() -> None:  # pragma: no cover - visual helper
         surface = pygame.transform.scale(surface, (width, height))
         screen.blit(surface, (0, 0))
         pygame.display.flip()
-        clock.tick(10)
+        clock.tick(5)
 
         if bool(done):
             _obs, state = env.reset()
