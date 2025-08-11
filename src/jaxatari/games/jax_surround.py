@@ -283,12 +283,6 @@ class JaxSurround(
         # Head-on (beide wollen gleiche Zielzelle)
         head_on = jnp.all(new_p0 == new_p1)
 
-        # Durchtausch (A->altePosB und B->altePosA)
-        swap = jnp.logical_and(
-            jnp.all(new_p0 == state.pos1),
-            jnp.all(new_p1 == state.pos0)
-        )
-
         # Kollision prüfen
         hit_p0 = jax.lax.cond(
             out0,
@@ -308,8 +302,8 @@ class JaxSurround(
         )
 
         # Simultane Kollisionen berücksichtigen
-        hit_p0 = jnp.logical_or(hit_p0, jnp.logical_or(head_on, swap))
-        hit_p1 = jnp.logical_or(hit_p1, jnp.logical_or(head_on, swap))
+        hit_p0 = jnp.logical_or(hit_p0, head_on)
+        hit_p1 = jnp.logical_or(hit_p1, head_on)
 
         # Trail aktualisieren (immer setzen, weil immer Bewegung)
         grid0 = state.trail.at[tuple(state.pos0)].set(1)
@@ -393,7 +387,7 @@ class JaxSurround(
             ),
             "pos0": spaces.Box(0, self.consts.GRID_WIDTH, shape=(2,), dtype=jnp.int32),
             "pos1": spaces.Box(0, self.consts.GRID_WIDTH, shape=(2,), dtype=jnp.int32),
-            "agent_id": spaces.Discrete(2),
+            "agent_id": spaces.Box(0, 1, shape=(), dtype=jnp.int32),
         })
 
     def image_space(self) -> spaces.Box:
