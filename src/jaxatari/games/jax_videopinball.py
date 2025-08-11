@@ -71,6 +71,9 @@ PLUNGER_MAX_POSITION = 20
 # Game logic constants
 T_ENTRY_NO_COLLISION = 9999
 VELOCITY_RETENTION_FACTOR = 1.0
+TARGET_RESPAWN_COOLDOWN = 16
+SPECIAL_TARGET_ACTIVE_DURATION = 257
+SPECIAL_TARGET_INACTIVE_DURATION = 787
 
 # Game layout constants
 # TODO: check if these are correct
@@ -85,10 +88,101 @@ INVISIBLE_BLOCK_REFLECTION_FACTOR = (
 
 
 # Background color and object colors
-BACKGROUND_COLOR = 0, 0, 0
-BALL_COLOR = 255, 255, 255  # ball
-FLIPPER_COLOR = 255, 0, 0  # flipper
-TEXT_COLOR = 255, 255, 255  # text
+BG_COLOR = 0, 0, 0
+TILT_MODE_COLOR = 167, 26, 26
+BACKGROUND_COLOR = jnp.array([0, 0, 0], dtype=jnp.uint8)
+WALL_COLOR = jnp.array([104, 72, 198], dtype=jnp.uint8)
+GROUP3_COLOR = jnp.array([187, 159, 71], dtype=jnp.uint8)
+GROUP4_COLOR = jnp.array([210, 164, 74], dtype=jnp.uint8)
+GROUP5_COLOR = jnp.array([236, 236, 236], dtype=jnp.uint8)
+
+# Color cycling arrays (each inner tuple converted to a list with alpha)
+BACKGROUND_COLOR_CYCLING = jnp.array(
+    [
+        [74, 74, 74],
+        [111, 111, 111],
+        [142, 142, 142],
+        [170, 170, 170],
+        [192, 192, 192],
+        [214, 214, 214],
+        [236, 236, 236],
+        [72, 72, 0],
+    ],
+    dtype=jnp.uint8,
+)
+
+WALL_COLOR_CYCLING = jnp.array(
+    [
+        [78, 50, 181],
+        [51, 26, 163],
+        [20, 0, 144],
+        [188, 144, 252],
+        [169, 128, 240],
+        [149, 111, 227],
+        [127, 92, 213],
+        [146, 70, 192],
+    ],
+    dtype=jnp.uint8,
+)
+
+GROUP3_COLOR_CYCLING = jnp.array(
+    [
+        [210, 182, 86],
+        [232, 204, 99],
+        [252, 224, 112],
+        [72, 44, 0],
+        [105, 77, 20],
+        [134, 106, 38],
+        [162, 134, 56],
+        [160, 171, 79],
+    ],
+    dtype=jnp.uint8,
+)
+
+GROUP4_COLOR_CYCLING = jnp.array(
+    [
+        [195, 144, 61],
+        [236, 200, 96],
+        [223, 183, 85],
+        [144, 72, 17],
+        [124, 44, 0],
+        [180, 122, 48],
+        [162, 98, 33],
+        [227, 151, 89],
+    ],
+    dtype=jnp.uint8,
+)
+
+GROUP5_COLOR_CYCLING = jnp.array(
+    [
+        [214, 214, 214],
+        [192, 192, 192],
+        [170, 170, 170],
+        [142, 142, 142],
+        [111, 111, 111],
+        [74, 74, 74],
+        [0, 0, 0],
+        [252, 252, 84],
+    ],
+    dtype=jnp.uint8,
+)
+
+# BACKGROUND_COLOR = 0, 0, 0
+# WALL_COLOR = 104, 72, 198
+# GROUP3_COLOR = 187, 159, 71
+# GROUP4_COLOR = 210, 164, 74
+# GROUP5_COLOR = 236, 236, 236
+# TILT_MODE_COLOR = 167, 26, 26
+# BACKGROUND_COLOR_CYCLING = jnp.array([(74, 74, 74), (111, 111, 111), (142, 142, 142), (170, 170, 170),
+#                                       (192, 192, 192), (214, 214, 214), (236, 236, 236), (72, 72, 0)])
+# WALL_COLOR_CYCLING = jnp.array([(78, 50, 181), (51, 26, 163), (20, 0, 144), (188, 144, 252),
+#                                 (169, 128, 240), (149, 111, 227), (127, 92, 213), (146, 70, 192)])
+# GROUP3_COLOR_CYCLING = jnp.array([(210, 182, 86), (232, 204, 99), (252, 224, 112), (72, 44, 0),
+#                                   (105, 77, 20), (134, 106, 38), (162, 134, 56), (160, 171, 79)])
+# GROUP4_COLOR_CYCLING = jnp.array([(195, 144, 61), (236, 200, 96), (223, 183, 85), (144, 72, 17),
+#                                   (124, 44, 0), (180, 122, 48), (162, 98, 33), (227, 151, 89)])
+# GROUP5_COLOR_CYCLING = jnp.array([(214, 214, 214), (192, 192, 192), (170, 170, 170), (142, 142, 142),
+#                                   (111, 111, 111), (74, 74, 74), (0, 0, 0), (252, 252, 84)])
 
 
 # Pygame window dimensions
@@ -172,23 +266,33 @@ BOUNDING_BOX_1_4 = jnp.ones((1, 4)).astype(jnp.bool)
 BOUNDING_BOX_2_5 = jnp.ones((2, 5)).astype(jnp.bool)
 BOUNDING_BOX_2_6 = jnp.ones((2, 6)).astype(jnp.bool)
 
-# Position 16 - Mid-Down (RAM state 16)
-# TODO: Add
 BOUNDING_BOX_1_10 = jnp.ones((1, 10)).astype(jnp.bool)
 BOUNDING_BOX_2_13 = jnp.ones((2, 13)).astype(jnp.bool)
 
 # Position 32 - Mid-Down (RAM state 32)
-# TODO: Add
 BOUNDING_BOX_1_6  = jnp.ones((1, 6)).astype(jnp.bool)
 BOUNDING_BOX_1_7  = jnp.ones((1, 7)).astype(jnp.bool)
 BOUNDING_BOX_1_9  = jnp.ones((1, 9)).astype(jnp.bool)
 
 # Position 48 - Mid-Down (RAM state 48)
-# TODO: Add
 BOUNDING_BOX_1_1  = jnp.ones((1, 1)).astype(jnp.bool)
 BOUNDING_BOX_1_3  = jnp.ones((1, 3)).astype(jnp.bool)
 
-# Position 0 - Mid-Down (RAM state 0)
+# Spinner Bounding Boxes
+
+# Bounding boxes of the spinner if the joined (single larger) spinner part is on the top or bottom
+SPINNER_TOP_BOTTOM_LARGE_HEIGHT = jnp.array(2)
+SPINNER_TOP_BOTTOM_LARGE_WIDTH = jnp.array(3)
+SPINNER_TOP_BOTTOM_SMALL_HEIGHT = jnp.array(1)
+SPINNER_TOP_BOTTOM_SMALL_WIDTH = jnp.array(2)
+
+# Bounding boxes of the spinner if the joined (single larger) spinner part is on the left or right
+SPINNER_LEFT_RIGHT_LARGE_HEIGHT = jnp.array(1)
+SPINNER_LEFT_RIGHT_LARGE_WIDTH = jnp.array(4)
+SPINNER_LEFT_RIGHT_SMALL_HEIGHT = jnp.array(1)
+SPINNER_LEFT_RIGHT_SMALL_WIDTH = jnp.array(2)
+
+
 FLIPPER_OFFSETS_STATE_0_LEFT = jnp.array(
     [
         [64, 183],  
@@ -232,6 +336,7 @@ FLIPPER_OFFSETS_STATE_16_RIGHT = jnp.array(
     dtype=jnp.int32,
 )
 
+# Position 16 - Mid-Down (RAM state 16)
 # Offsets for the flipper in the second mid‑angle position (RAM state 32).
 FLIPPER_OFFSETS_STATE_32_LEFT = jnp.array(
     [
@@ -242,6 +347,7 @@ FLIPPER_OFFSETS_STATE_32_LEFT = jnp.array(
     dtype=jnp.int32,
 )
 
+# Position 32 - Mid-Down (RAM state 32)
 FLIPPER_OFFSETS_STATE_32_RIGHT = jnp.array(
     [
         [83, 181],  
@@ -260,6 +366,7 @@ FLIPPER_OFFSETS_STATE_48_LEFT = jnp.array(
     dtype=jnp.int32,
 )
 
+# Position 48 - Mid-Down (RAM state 48)
 FLIPPER_OFFSETS_STATE_48_RIGHT = jnp.array(
     [
         [85, 176],  
@@ -300,21 +407,6 @@ __all__ = [
     "FLIPPER_OFFSETS",
 ]
 
-# Spinner Bounding Boxes
-
-# Bounding boxes of the spinner if the joined (single larger) spinner part is on the top or bottom
-SPINNER_TOP_BOTTOM_LARGE_HEIGHT = jnp.array(2)
-SPINNER_TOP_BOTTOM_LARGE_WIDTH = jnp.array(3)
-SPINNER_TOP_BOTTOM_SMALL_HEIGHT = jnp.array(1)
-SPINNER_TOP_BOTTOM_SMALL_WIDTH = jnp.array(2)
-
-# Bounding boxes of the spinner if the joined (single larger) spinner part is on the left or right
-SPINNER_LEFT_RIGHT_LARGE_HEIGHT = jnp.array(1)
-SPINNER_LEFT_RIGHT_LARGE_WIDTH = jnp.array(4)
-SPINNER_LEFT_RIGHT_SMALL_HEIGHT = jnp.array(1)
-SPINNER_LEFT_RIGHT_SMALL_WIDTH = jnp.array(2)
-
-
 @chex.dataclass
 class BallMovement:
     old_ball_x: chex.Array
@@ -333,7 +425,7 @@ class SceneObject:
     score_type: (
         chex.Array
     )  # 0: no score, 1: Bumper, 2: Spinner, 3: Left Rollover, 4: Atari Rollover, 5: Special Lit Up Target,
-       # 6: Left Lit Up Target, 7:Middle Lit Up Target, 8: Right Lit Up Target
+    # 6: Left Lit Up Target, 7:Middle Lit Up Target, 8: Right Lit Up Target
 
 
 # Instantiate a SceneObject like this:
@@ -920,6 +1012,175 @@ RIGHT_SPINNER_RIGHT_POSITION_RIGHT_PART_2_SCENE_OBJECT = SceneObject(
     score_type=jnp.array(2),  # type: ignore
 )
 
+DIAMOND_VERTICAL_RECTANGLE_BOUNDING_BOX_HEIGHT = jnp.array(10)
+DIAMOND_VERTICAL_RECTANGLE_BOUNDING_BOX_WIDTH = jnp.array(3)
+DIAMOND_HORIZONTAL_RECTANGLE_BOUNDING_BOX_HEIGHT = jnp.array(6)
+DIAMOND_HORIZONTAL_RECTANGLE_BOUNDING_BOX_WIDTH = jnp.array(5)
+DIAMOND_SMALL_RECTANGLE_BOUNDING_BOX_HEIGHT = jnp.array(2)
+DIAMOND_SMALL_RECTANGLE_BOUNDING_BOX_WIDTH = jnp.array(1)
+
+LEFT_LIT_UP_TARGET_LARGE_VERTICAL_SCENE_OBJECT = SceneObject(
+    hit_box_height=jnp.array(DIAMOND_VERTICAL_RECTANGLE_BOUNDING_BOX_HEIGHT),  # type: ignore
+    hit_box_width=jnp.array(DIAMOND_VERTICAL_RECTANGLE_BOUNDING_BOX_WIDTH),  # type: ignore
+    hit_box_x_offset=jnp.array(62),  # type: ignore
+    hit_box_y_offset=jnp.array(26),  # type: ignore
+    reflecting=jnp.array(0),  # type: ignore
+    score_type=jnp.array(6),  # type: ignore
+)
+
+LEFT_LIT_UP_TARGET_LARGE_HORIZONTAL_SCENE_OBJECT = SceneObject(
+    hit_box_height=jnp.array(DIAMOND_HORIZONTAL_RECTANGLE_BOUNDING_BOX_HEIGHT),  # type: ignore
+    hit_box_width=jnp.array(DIAMOND_HORIZONTAL_RECTANGLE_BOUNDING_BOX_WIDTH),  # type: ignore
+    hit_box_x_offset=jnp.array(60),  # type: ignore
+    hit_box_y_offset=jnp.array(30),  # type: ignore
+    reflecting=jnp.array(0),  # type: ignore
+    score_type=jnp.array(6),  # type: ignore
+)
+
+# LEFT_LIT_UP_TARGET_SMALL_TOP_SCENE_OBJECT = SceneObject(
+#     hit_box_height=jnp.array(DIAMOND_SMALL_RECTANGLE_BOUNDING_BOX_HEIGHT),  # type: ignore
+#     hit_box_width=jnp.array(DIAMOND_SMALL_RECTANGLE_BOUNDING_BOX_WIDTH),  # type: ignore
+#     hit_box_x_offset=jnp.array(),  # type: ignore
+#     hit_box_y_offset=jnp.array(),  # type: ignore
+#     reflecting=jnp.array(0),  # type: ignore
+#     score_type=jnp.array(6),  # type: ignore
+# )
+
+# LEFT_LIT_UP_TARGET_SMALL_BOTTOM_SCENE_OBJECT = SceneObject(
+#     hit_box_height=jnp.array(DIAMOND_SMALL_RECTANGLE_BOUNDING_BOX_HEIGHT),  # type: ignore
+#     hit_box_width=jnp.array(DIAMOND_SMALL_RECTANGLE_BOUNDING_BOX_WIDTH),  # type: ignore
+#     hit_box_x_offset=jnp.array(),  # type: ignore
+#     hit_box_y_offset=jnp.array(),  # type: ignore
+#     reflecting=jnp.array(0),  # type: ignore
+#     score_type=jnp.array(6),  # type: ignore
+# )
+
+
+MIDDLE_LIT_UP_TARGET_LARGE_VERTICAL_SCENE_OBJECT = SceneObject(
+    hit_box_height=jnp.array(DIAMOND_VERTICAL_RECTANGLE_BOUNDING_BOX_HEIGHT),  # type: ignore
+    hit_box_width=jnp.array(DIAMOND_VERTICAL_RECTANGLE_BOUNDING_BOX_WIDTH),  # type: ignore
+    hit_box_x_offset=jnp.array(78),  # type: ignore
+    hit_box_y_offset=jnp.array(26),  # type: ignore
+    reflecting=jnp.array(0),  # type: ignore
+    score_type=jnp.array(7),  # type: ignore
+)
+
+MIDDLE_LIT_UP_TARGET_LARGE_HORIZONTAL_SCENE_OBJECT = SceneObject(
+    hit_box_height=jnp.array(DIAMOND_HORIZONTAL_RECTANGLE_BOUNDING_BOX_HEIGHT),  # type: ignore
+    hit_box_width=jnp.array(DIAMOND_HORIZONTAL_RECTANGLE_BOUNDING_BOX_WIDTH),  # type: ignore
+    hit_box_x_offset=jnp.array(77),  # type: ignore
+    hit_box_y_offset=jnp.array(28),  # type: ignore
+    reflecting=jnp.array(0),  # type: ignore
+    score_type=jnp.array(7),  # type: ignore
+)
+
+# MIDDLE_LIT_UP_TARGET_SMALL_TOP_SCENE_OBJECT = SceneObject(
+#     hit_box_height=jnp.array(DIAMOND_SMALL_RECTANGLE_BOUNDING_BOX_HEIGHT),  # type: ignore
+#     hit_box_width=jnp.array(DIAMOND_SMALL_RECTANGLE_BOUNDING_BOX_WIDTH),  # type: ignore
+#     hit_box_x_offset=jnp.array(),  # type: ignore
+#     hit_box_y_offset=jnp.array(),  # type: ignore
+#     reflecting=jnp.array(0),  # type: ignore
+#     score_type=jnp.array(6),  # type: ignore
+# )
+
+# MIDDLE_LIT_UP_TARGET_SMALL_BOTTOM_SCENE_OBJECT = SceneObject(
+#     hit_box_height=jnp.array(DIAMOND_SMALL_RECTANGLE_BOUNDING_BOX_HEIGHT),  # type: ignore
+#     hit_box_width=jnp.array(DIAMOND_SMALL_RECTANGLE_BOUNDING_BOX_WIDTH),  # type: ignore
+#     hit_box_x_offset=jnp.array(),  # type: ignore
+#     hit_box_y_offset=jnp.array(),  # type: ignore
+#     reflecting=jnp.array(0),  # type: ignore
+#     score_type=jnp.array(6),  # type: ignore
+# )
+
+RIGHT_LIT_UP_TARGET_LARGE_VERTICAL_SCENE_OBJECT = SceneObject(
+    hit_box_height=jnp.array(DIAMOND_VERTICAL_RECTANGLE_BOUNDING_BOX_HEIGHT),  # type: ignore
+    hit_box_width=jnp.array(DIAMOND_VERTICAL_RECTANGLE_BOUNDING_BOX_WIDTH),  # type: ignore
+    hit_box_x_offset=jnp.array(94),  # type: ignore
+    hit_box_y_offset=jnp.array(26),  # type: ignore
+    reflecting=jnp.array(0),  # type: ignore
+    score_type=jnp.array(8),  # type: ignore
+)
+
+RIGHT_LIT_UP_TARGET_LARGE_HORIZONTAL_SCENE_OBJECT = SceneObject(
+    hit_box_height=jnp.array(DIAMOND_HORIZONTAL_RECTANGLE_BOUNDING_BOX_HEIGHT),  # type: ignore
+    hit_box_width=jnp.array(DIAMOND_HORIZONTAL_RECTANGLE_BOUNDING_BOX_WIDTH),  # type: ignore
+    hit_box_x_offset=jnp.array(93),  # type: ignore
+    hit_box_y_offset=jnp.array(28),  # type: ignore
+    reflecting=jnp.array(0),  # type: ignore
+    score_type=jnp.array(8),  # type: ignore
+)
+
+# RIGHT_LIT_UP_TARGET_SMALL_TOP_SCENE_OBJECT = SceneObject(
+#     hit_box_height=jnp.array(DIAMOND_SMALL_RECTANGLE_BOUNDING_BOX_HEIGHT),  # type: ignore
+#     hit_box_width=jnp.array(DIAMOND_SMALL_RECTANGLE_BOUNDING_BOX_WIDTH),  # type: ignore
+#     hit_box_x_offset=jnp.array(),  # type: ignore
+#     hit_box_y_offset=jnp.array(),  # type: ignore
+#     reflecting=jnp.array(0),  # type: ignore
+#     score_type=jnp.array(6),  # type: ignore
+# )
+
+# RIGHT_LIT_UP_TARGET_SMALL_BOTTOM_SCENE_OBJECT = SceneObject(
+#     hit_box_height=jnp.array(DIAMOND_SMALL_RECTANGLE_BOUNDING_BOX_HEIGHT),  # type: ignore
+#     hit_box_width=jnp.array(DIAMOND_SMALL_RECTANGLE_BOUNDING_BOX_WIDTH),  # type: ignore
+#     hit_box_x_offset=jnp.array(),  # type: ignore
+#     hit_box_y_offset=jnp.array(),  # type: ignore
+#     reflecting=jnp.array(0),  # type: ignore
+#     score_type=jnp.array(6),  # type: ignore
+# )
+
+SPECIAL_LIT_UP_TARGET_LARGE_VERTICAL_SCENE_OBJECT = SceneObject(
+    hit_box_height=jnp.array(DIAMOND_VERTICAL_RECTANGLE_BOUNDING_BOX_HEIGHT),  # type: ignore
+    hit_box_width=jnp.array(DIAMOND_VERTICAL_RECTANGLE_BOUNDING_BOX_WIDTH),  # type: ignore
+    hit_box_x_offset=jnp.array(79),  # type: ignore
+    hit_box_y_offset=jnp.array(122),  # type: ignore
+    reflecting=jnp.array(0),  # type: ignore
+    score_type=jnp.array(5),  # type: ignore
+)
+
+SPECIAL_LIT_UP_TARGET_LARGE_HORIZONTAL_SCENE_OBJECT = SceneObject(
+    hit_box_height=jnp.array(DIAMOND_HORIZONTAL_RECTANGLE_BOUNDING_BOX_HEIGHT),  # type: ignore
+    hit_box_width=jnp.array(DIAMOND_HORIZONTAL_RECTANGLE_BOUNDING_BOX_WIDTH),  # type: ignore
+    hit_box_x_offset=jnp.array(78),  # type: ignore
+    hit_box_y_offset=jnp.array(124),  # type: ignore
+    reflecting=jnp.array(0),  # type: ignore
+    score_type=jnp.array(5),  # type: ignore
+)
+
+# SPECIAL_LIT_UP_TARGET_SMALL_TOP_SCENE_OBJECT = SceneObject(
+#     hit_box_height=jnp.array(DIAMOND_SMALL_RECTANGLE_BOUNDING_BOX_HEIGHT),  # type: ignore
+#     hit_box_width=jnp.array(DIAMOND_SMALL_RECTANGLE_BOUNDING_BOX_WIDTH),  # type: ignore
+#     hit_box_x_offset=jnp.array(),  # type: ignore
+#     hit_box_y_offset=jnp.array(),  # type: ignore
+#     reflecting=jnp.array(0),  # type: ignore
+#     score_type=jnp.array(5),  # type: ignore
+# )
+
+# SPECIAL_LIT_UP_TARGET_SMALL_BOTTOM_SCENE_OBJECT = SceneObject(
+#     hit_box_height=jnp.array(DIAMOND_SMALL_RECTANGLE_BOUNDING_BOX_HEIGHT),  # type: ignore
+#     hit_box_width=jnp.array(DIAMOND_SMALL_RECTANGLE_BOUNDING_BOX_WIDTH),  # type: ignore
+#     hit_box_x_offset=jnp.array(),  # type: ignore
+#     hit_box_y_offset=jnp.array(),  # type: ignore
+#     reflecting=jnp.array(0),  # type: ignore
+#     score_type=jnp.array(5),  # type: ignore
+# )
+
+LEFT_ROLLOVER_SCENE_OBJECT = SceneObject(
+    hit_box_height=jnp.array(12),  # type: ignore
+    hit_box_width=jnp.array(6),  # type: ignore
+    hit_box_x_offset=jnp.array(44),  # type: ignore
+    hit_box_y_offset=jnp.array(58),  # type: ignore
+    reflecting=jnp.array(0),  # type: ignore
+    score_type=jnp.array(3),  # type: ignore
+)
+
+ATARI_ROLLOVER_SCENE_OBJECT = SceneObject(
+    hit_box_height=jnp.array(12),  # type: ignore
+    hit_box_width=jnp.array(6),  # type: ignore
+    hit_box_x_offset=jnp.array(108),  # type: ignore
+    hit_box_y_offset=jnp.array(58),  # type: ignore
+    reflecting=jnp.array(0),  # type: ignore
+    score_type=jnp.array(4),  # type: ignore
+)
 
 # Middle Bar Scene Object
 
@@ -1070,6 +1331,24 @@ ALL_SCENE_OBJECTS_LIST = [
     RIGHT_SPINNER_RIGHT_POSITION_LEFT_PART_2_SCENE_OBJECT,
     RIGHT_SPINNER_RIGHT_POSITION_RIGHT_PART_1_SCENE_OBJECT,
     RIGHT_SPINNER_RIGHT_POSITION_RIGHT_PART_2_SCENE_OBJECT,
+    LEFT_LIT_UP_TARGET_LARGE_VERTICAL_SCENE_OBJECT,
+    LEFT_LIT_UP_TARGET_LARGE_HORIZONTAL_SCENE_OBJECT,
+    # LEFT_LIT_UP_TARGET_SMALL_TOP_SCENE_OBJECT,
+    # LEFT_LIT_UP_TARGET_SMALL_BOTTOM_SCENE_OBJECT,
+    MIDDLE_LIT_UP_TARGET_LARGE_VERTICAL_SCENE_OBJECT,
+    MIDDLE_LIT_UP_TARGET_LARGE_HORIZONTAL_SCENE_OBJECT,
+    # MIDDLE_LIT_UP_TARGET_SMALL_TOP_SCENE_OBJECT,
+    # MIDDLE_LIT_UP_TARGET_SMALL_BOTTOM_SCENE_OBJECT,
+    RIGHT_LIT_UP_TARGET_LARGE_VERTICAL_SCENE_OBJECT,
+    RIGHT_LIT_UP_TARGET_LARGE_HORIZONTAL_SCENE_OBJECT,
+    # RIGHT_LIT_UP_TARGET_SMALL_TOP_SCENE_OBJECT,
+    # RIGHT_LIT_UP_TARGET_SMALL_BOTTOM_SCENE_OBJECT,
+    SPECIAL_LIT_UP_TARGET_LARGE_VERTICAL_SCENE_OBJECT,
+    SPECIAL_LIT_UP_TARGET_LARGE_HORIZONTAL_SCENE_OBJECT,
+    # SPECIAL_LIT_UP_TARGET_SMALL_TOP_SCENE_OBJECT,
+    # SPECIAL_LIT_UP_TARGET_SMALL_BOTTOM_SCENE_OBJECT,
+    LEFT_ROLLOVER_SCENE_OBJECT,
+    ATARI_ROLLOVER_SCENE_OBJECT,
     MIDDLE_BAR_SCENE_OBJECT,
     LEFT_FLIPPER_STATE_0_SCENE_OBJECT,
     LEFT_FLIPPER_STATE_16_SCENE_OBJECT,
@@ -1083,18 +1362,21 @@ ALL_SCENE_OBJECTS_LIST = [
 
 REFLECTING_SCENE_OBJECTS = jnp.stack(
     [
-        jnp.array([
-            scene_object.hit_box_height,
-            scene_object.hit_box_width,
-            scene_object.hit_box_x_offset,
-            scene_object.hit_box_y_offset,
-            scene_object.reflecting,
-            scene_object.score_type
-        ]) for scene_object in ALL_SCENE_OBJECTS_LIST
+        jnp.array(
+            [
+                scene_object.hit_box_height,
+                scene_object.hit_box_width,
+                scene_object.hit_box_x_offset,
+                scene_object.hit_box_y_offset,
+                scene_object.reflecting,
+                scene_object.score_type,
+            ]
+        )
+        for scene_object in ALL_SCENE_OBJECTS_LIST
         if scene_object.reflecting == 1
     ]
 ).squeeze()
-#NON_REFLECTING_SCENE_OBJECTS = jnp.stack(
+# NON_REFLECTING_SCENE_OBJECTS = jnp.stack(
 #    [
 #        jnp.array([
 #            scene_object.hit_box_height,
@@ -1106,7 +1388,7 @@ REFLECTING_SCENE_OBJECTS = jnp.stack(
 #        ]) for scene_object in ALL_SCENE_OBJECTS_LIST
 #        if scene_object.reflecting == 0
 #    ]
-#).squeeze()
+# ).squeeze()
 
 # define the positions of the state information
 STATE_TRANSLATOR: dict = {
@@ -1184,6 +1466,8 @@ class VideoPinballState(NamedTuple):
     rollover_counter: chex.Array
     step_counter: chex.Array
     ball_in_play: chex.Array
+    respawn_timer: chex.Array
+    color_cycling: chex.Array
     # obs_stack: chex.ArrayTree     What is this for? Pong doesnt have this right?
 
 
@@ -1345,17 +1629,9 @@ def _calc_hit_point(
     )
 
     tx1 = (scene_object[2] - ball_movement.old_ball_x) / trajectory_x
-    tx2 = (
-        scene_object[2]
-        + scene_object[1]
-        - ball_movement.old_ball_x
-    ) / trajectory_x
+    tx2 = (scene_object[2] + scene_object[1] - ball_movement.old_ball_x) / trajectory_x
     ty1 = (scene_object[3] - ball_movement.old_ball_y) / trajectory_y
-    ty2 = (
-        scene_object[3]
-        + scene_object[0]
-        - ball_movement.old_ball_y
-    ) / trajectory_y
+    ty2 = (scene_object[3] + scene_object[0] - ball_movement.old_ball_y) / trajectory_y
 
     # Calculate the time of intersection with the bounding box
     tmin_x = jnp.minimum(tx1, tx2)
@@ -1376,9 +1652,7 @@ def _calc_hit_point(
 
     # determine on which side the ball has hit the obstacle
     scene_object_half_height = scene_object[0] / 2.0
-    scene_object_middle_point_y = (
-        scene_object[3] + scene_object_half_height
-    )
+    scene_object_middle_point_y = scene_object[3] + scene_object_half_height
 
     # distance of ball y to middle point of scene object
     d_middle_point_ball_y = jnp.abs(scene_object_middle_point_y - hit_point_y)
@@ -1451,8 +1725,7 @@ def _reflect_ball(
 
 @jax.jit
 def _check_reflecting_obstacle_hits(
-    ball_movement: BallMovement,
-    scoring_list: chex.Array
+    ball_movement: BallMovement, scoring_list: chex.Array
 ) -> tuple[chex.Array, SceneObject]:
     """
     Check if the ball is hitting an obstacle.
@@ -1469,8 +1742,10 @@ def _check_reflecting_obstacle_hits(
     # spinner
     """
     # apparently jax unrolls for loops inside of jitted functions so this should be fine
-    reflecting_hit_points = jax.vmap(lambda scene_objects: _calc_hit_point(ball_movement, scene_objects))(REFLECTING_SCENE_OBJECTS)
-    #non_reflecting_hit_points = jax.vmap(lambda scene_objects: _calc_hit_point(ball_movement, scene_objects))(NON_REFLECTING_SCENE_OBJECTS)
+    reflecting_hit_points = jax.vmap(
+        lambda scene_objects: _calc_hit_point(ball_movement, scene_objects)
+    )(REFLECTING_SCENE_OBJECTS)
+    # non_reflecting_hit_points = jax.vmap(lambda scene_objects: _calc_hit_point(ball_movement, scene_objects))(NON_REFLECTING_SCENE_OBJECTS)
 
     # Get and return first object hit (argmin entry time)
     lowest_entry_time_index = jnp.argmin(reflecting_hit_points[:, 0])
@@ -1479,27 +1754,54 @@ def _check_reflecting_obstacle_hits(
     scoring_bools = jnp.eye(9, dtype=jnp.bool)
 
     # reflecting scoring objects (only one possible)
-    scoring_list = jnp.logical_or(scoring_list, jnp.where(hit_point[5] == 0, scoring_bools[0], jnp.zeros(9, dtype=jnp.bool)))
-    scoring_list = jnp.logical_or(scoring_list, jnp.where(hit_point[5] == 1, scoring_bools[1], jnp.zeros(9, dtype=jnp.bool)))
-    scoring_list = jnp.logical_or(scoring_list, jnp.where(hit_point[5] == 2, scoring_bools[2], jnp.zeros(9, dtype=jnp.bool)))
-    scoring_list = jnp.logical_or(scoring_list, jnp.where(hit_point[5] == 3, scoring_bools[3], jnp.zeros(9, dtype=jnp.bool)))
-    scoring_list = jnp.logical_or(scoring_list, jnp.where(hit_point[5] == 4, scoring_bools[4], jnp.zeros(9, dtype=jnp.bool)))
-    scoring_list = jnp.logical_or(scoring_list, jnp.where(hit_point[5] == 5, scoring_bools[5], jnp.zeros(9, dtype=jnp.bool)))
-    scoring_list = jnp.logical_or(scoring_list, jnp.where(hit_point[5] == 6, scoring_bools[6], jnp.zeros(9, dtype=jnp.bool)))
-    scoring_list = jnp.logical_or(scoring_list, jnp.where(hit_point[5] == 7, scoring_bools[7], jnp.zeros(9, dtype=jnp.bool)))
-    scoring_list = jnp.logical_or(scoring_list, jnp.where(hit_point[5] == 8, scoring_bools[8], jnp.zeros(9, dtype=jnp.bool)))
+    scoring_list = jnp.logical_or(
+        scoring_list,
+        jnp.where(hit_point[5] == 0, scoring_bools[0], jnp.zeros(9, dtype=jnp.bool)),
+    )
+    scoring_list = jnp.logical_or(
+        scoring_list,
+        jnp.where(hit_point[5] == 1, scoring_bools[1], jnp.zeros(9, dtype=jnp.bool)),
+    )
+    scoring_list = jnp.logical_or(
+        scoring_list,
+        jnp.where(hit_point[5] == 2, scoring_bools[2], jnp.zeros(9, dtype=jnp.bool)),
+    )
+    scoring_list = jnp.logical_or(
+        scoring_list,
+        jnp.where(hit_point[5] == 3, scoring_bools[3], jnp.zeros(9, dtype=jnp.bool)),
+    )
+    scoring_list = jnp.logical_or(
+        scoring_list,
+        jnp.where(hit_point[5] == 4, scoring_bools[4], jnp.zeros(9, dtype=jnp.bool)),
+    )
+    scoring_list = jnp.logical_or(
+        scoring_list,
+        jnp.where(hit_point[5] == 5, scoring_bools[5], jnp.zeros(9, dtype=jnp.bool)),
+    )
+    scoring_list = jnp.logical_or(
+        scoring_list,
+        jnp.where(hit_point[5] == 6, scoring_bools[6], jnp.zeros(9, dtype=jnp.bool)),
+    )
+    scoring_list = jnp.logical_or(
+        scoring_list,
+        jnp.where(hit_point[5] == 7, scoring_bools[7], jnp.zeros(9, dtype=jnp.bool)),
+    )
+    scoring_list = jnp.logical_or(
+        scoring_list,
+        jnp.where(hit_point[5] == 8, scoring_bools[8], jnp.zeros(9, dtype=jnp.bool)),
+    )
 
     # non-reflecting scoring objects (multiple possible but only one of each type)
-    #hit_before_reflection = jnp.logical_and(non_reflecting_hit_points[:,0] < reflecting_hit_points[:,0], non_reflecting_hit_points[:,0] != T_ENTRY_NO_COLLISION)
-    #scoring_list = jnp.logical_or(scoring_list, jnp.where(jnp.any(jnp.logical_and(hit_before_reflection, non_reflecting_hit_points[:,5] == 0), axis=0), scoring_bools[0], jnp.zeros(9, dtype=jnp.bool)))
-    #scoring_list = jnp.logical_or(scoring_list, jnp.where(jnp.any(jnp.logical_and(hit_before_reflection, non_reflecting_hit_points[:,5] == 1), axis=0), scoring_bools[1], jnp.zeros(9, dtype=jnp.bool)))
-    #scoring_list = jnp.logical_or(scoring_list, jnp.where(jnp.any(jnp.logical_and(hit_before_reflection, non_reflecting_hit_points[:,5] == 2), axis=0), scoring_bools[2], jnp.zeros(9, dtype=jnp.bool)))
-    #scoring_list = jnp.logical_or(scoring_list, jnp.where(jnp.any(jnp.logical_and(hit_before_reflection, non_reflecting_hit_points[:,5] == 3), axis=0), scoring_bools[3], jnp.zeros(9, dtype=jnp.bool)))
-    #scoring_list = jnp.logical_or(scoring_list, jnp.where(jnp.any(jnp.logical_and(hit_before_reflection, non_reflecting_hit_points[:,5] == 4), axis=0), scoring_bools[4], jnp.zeros(9, dtype=jnp.bool)))
-    #scoring_list = jnp.logical_or(scoring_list, jnp.where(jnp.any(jnp.logical_and(hit_before_reflection, non_reflecting_hit_points[:,5] == 5), axis=0), scoring_bools[5], jnp.zeros(9, dtype=jnp.bool)))
-    #scoring_list = jnp.logical_or(scoring_list, jnp.where(jnp.any(jnp.logical_and(hit_before_reflection, non_reflecting_hit_points[:,5] == 6), axis=0), scoring_bools[6], jnp.zeros(9, dtype=jnp.bool)))
-    #scoring_list = jnp.logical_or(scoring_list, jnp.where(jnp.any(jnp.logical_and(hit_before_reflection, non_reflecting_hit_points[:,5] == 7), axis=0), scoring_bools[7], jnp.zeros(9, dtype=jnp.bool)))
-    #scoring_list = jnp.logical_or(scoring_list, jnp.where(jnp.any(jnp.logical_and(hit_before_reflection, non_reflecting_hit_points[:,5] == 8), axis=0), scoring_bools[8], jnp.zeros(9, dtype=jnp.bool)))
+    # hit_before_reflection = jnp.logical_and(non_reflecting_hit_points[:,0] < reflecting_hit_points[:,0], non_reflecting_hit_points[:,0] != T_ENTRY_NO_COLLISION)
+    # scoring_list = jnp.logical_or(scoring_list, jnp.where(jnp.any(jnp.logical_and(hit_before_reflection, non_reflecting_hit_points[:,5] == 0), axis=0), scoring_bools[0], jnp.zeros(9, dtype=jnp.bool)))
+    # scoring_list = jnp.logical_or(scoring_list, jnp.where(jnp.any(jnp.logical_and(hit_before_reflection, non_reflecting_hit_points[:,5] == 1), axis=0), scoring_bools[1], jnp.zeros(9, dtype=jnp.bool)))
+    # scoring_list = jnp.logical_or(scoring_list, jnp.where(jnp.any(jnp.logical_and(hit_before_reflection, non_reflecting_hit_points[:,5] == 2), axis=0), scoring_bools[2], jnp.zeros(9, dtype=jnp.bool)))
+    # scoring_list = jnp.logical_or(scoring_list, jnp.where(jnp.any(jnp.logical_and(hit_before_reflection, non_reflecting_hit_points[:,5] == 3), axis=0), scoring_bools[3], jnp.zeros(9, dtype=jnp.bool)))
+    # scoring_list = jnp.logical_or(scoring_list, jnp.where(jnp.any(jnp.logical_and(hit_before_reflection, non_reflecting_hit_points[:,5] == 4), axis=0), scoring_bools[4], jnp.zeros(9, dtype=jnp.bool)))
+    # scoring_list = jnp.logical_or(scoring_list, jnp.where(jnp.any(jnp.logical_and(hit_before_reflection, non_reflecting_hit_points[:,5] == 5), axis=0), scoring_bools[5], jnp.zeros(9, dtype=jnp.bool)))
+    # scoring_list = jnp.logical_or(scoring_list, jnp.where(jnp.any(jnp.logical_and(hit_before_reflection, non_reflecting_hit_points[:,5] == 6), axis=0), scoring_bools[6], jnp.zeros(9, dtype=jnp.bool)))
+    # scoring_list = jnp.logical_or(scoring_list, jnp.where(jnp.any(jnp.logical_and(hit_before_reflection, non_reflecting_hit_points[:,5] == 7), axis=0), scoring_bools[7], jnp.zeros(9, dtype=jnp.bool)))
+    # scoring_list = jnp.logical_or(scoring_list, jnp.where(jnp.any(jnp.logical_and(hit_before_reflection, non_reflecting_hit_points[:,5] == 8), axis=0), scoring_bools[8], jnp.zeros(9, dtype=jnp.bool)))
 
     return hit_point, scoring_list
 
@@ -1551,17 +1853,23 @@ def _calc_ball_collision_loop(ball_movement: BallMovement):
     def _body_fun(
         args: tuple[chex.Array, chex.Array, chex.Array, chex.Array, chex.Array],
     ):
-        old_ball_x, old_ball_y, new_ball_x, new_ball_y, scoring_list, compute_flag = args
+        old_ball_x, old_ball_y, new_ball_x, new_ball_y, scoring_list, compute_flag = (
+            args
+        )
 
         @jax.jit
-        def _compute_ball_collision(old_ball_x, old_ball_y, new_ball_x, new_ball_y, scoring_list):
+        def _compute_ball_collision(
+            old_ball_x, old_ball_y, new_ball_x, new_ball_y, scoring_list
+        ):
             _ball_movement = BallMovement(
                 old_ball_x=old_ball_x,
                 old_ball_y=old_ball_y,
                 new_ball_x=new_ball_x,
                 new_ball_y=new_ball_y,
             )
-            hit_data, scoring_list = _check_reflecting_obstacle_hits(_ball_movement, scoring_list)
+            hit_data, scoring_list = _check_reflecting_obstacle_hits(
+                _ball_movement, scoring_list
+            )
             reflected_ball_x, reflected_ball_y = _reflect_ball(_ball_movement, hit_data)
             # if there was a collision, returned BallMovement is from hit point to reflected position
             # if there was no collision, returned BallMovement will be the original BallMovement
@@ -1574,65 +1882,89 @@ def _calc_ball_collision_loop(ball_movement: BallMovement):
             new_ball_x = jnp.where(collision, reflected_ball_x, new_ball_x)
             new_ball_y = jnp.where(collision, reflected_ball_y, new_ball_y)
 
-            return old_ball_x, old_ball_y, new_ball_x, new_ball_y, scoring_list, collision
-
-        # Where compute_flag is true, compute ball collisions along the trajectory of BallMovement
-        # The returned BallMovement is either the original BallMovement or a new BallMovement, from the
-        # obstacle hit to the new location of the ball after reflecting it from that obstacle
-        old_ball_x, old_ball_y, new_ball_x, new_ball_y, scoring_list, collision = jax.lax.cond(
-            compute_flag,
-            _compute_ball_collision,
-            lambda old_ball_x, old_ball_y, new_ball_x, new_ball_y, scoring_list: (
+            return (
                 old_ball_x,
                 old_ball_y,
                 new_ball_x,
                 new_ball_y,
                 scoring_list,
+                collision,
+            )
+
+        # Where compute_flag is true, compute ball collisions along the trajectory of BallMovement
+        # The returned BallMovement is either the original BallMovement or a new BallMovement, from the
+        # obstacle hit to the new location of the ball after reflecting it from that obstacle
+        old_ball_x, old_ball_y, new_ball_x, new_ball_y, scoring_list, collision = (
+            jax.lax.cond(
                 compute_flag,
-            ),
+                _compute_ball_collision,
+                lambda old_ball_x, old_ball_y, new_ball_x, new_ball_y, scoring_list: (
+                    old_ball_x,
+                    old_ball_y,
+                    new_ball_x,
+                    new_ball_y,
+                    scoring_list,
+                    compute_flag,
+                ),
+                old_ball_x,
+                old_ball_y,
+                new_ball_x,
+                new_ball_y,
+                scoring_list,
+            )
+        )
+        # If there was no collision, set compute_flag to False
+        compute_flag = jnp.logical_and(compute_flag, collision)
+        # "or" the scoring_lists together
+        return (
             old_ball_x,
             old_ball_y,
             new_ball_x,
             new_ball_y,
             scoring_list,
+            compute_flag,
         )
-        # If there was no collision, set compute_flag to False
-        compute_flag = jnp.logical_and(compute_flag, collision)
-        # "or" the scoring_lists together
-        return old_ball_x, old_ball_y, new_ball_x, new_ball_y, scoring_list, compute_flag
 
     @jax.jit
     def _cond_fun(
         args: tuple[chex.Array, chex.Array, chex.Array, chex.Array, chex.Array],
     ):
-        old_ball_x, old_ball_y, new_ball_x, new_ball_y, scoring_list, compute_flag = args
+        old_ball_x, old_ball_y, new_ball_x, new_ball_y, scoring_list, compute_flag = (
+            args
+        )
         # jax.debug.print("Old ball x: {}, y: {}, New ball x: {}, y: {}.  Compute: {}", old_ball_x, old_ball_y, new_ball_x, new_ball_y, compute_flag)
         return jnp.any(compute_flag)
+
     # TODO we will need another way of constructing the initial all-False array:
     scoring_list = jnp.zeros(9, dtype=jnp.bool)
     compute_flag = jnp.ones_like(ball_movement.new_ball_x, dtype=jnp.bool)
-    old_ball_x, old_ball_y, new_ball_x, new_ball_y, scoring_list, _ = jax.lax.while_loop(
-        # while there are new BallMovements along whose trajectory there might be collisions (compute_flag set to True),
-        # compute whether there are collisions and if so, calculate a new BallMovement and keep
-        # corresponding compute_flag set to True, else set it to False to keep the BallMovement
-        _cond_fun,
-        _body_fun,
-        (
-            ball_movement.old_ball_x,
-            ball_movement.old_ball_y,
-            ball_movement.new_ball_x,
-            ball_movement.new_ball_y,
-            scoring_list,
-            compute_flag,
-        ),
+    old_ball_x, old_ball_y, new_ball_x, new_ball_y, scoring_list, _ = (
+        jax.lax.while_loop(
+            # while there are new BallMovements along whose trajectory there might be collisions (compute_flag set to True),
+            # compute whether there are collisions and if so, calculate a new BallMovement and keep
+            # corresponding compute_flag set to True, else set it to False to keep the BallMovement
+            _cond_fun,
+            _body_fun,
+            (
+                ball_movement.old_ball_x,
+                ball_movement.old_ball_y,
+                ball_movement.new_ball_x,
+                ball_movement.new_ball_y,
+                scoring_list,
+                compute_flag,
+            ),
+        )
     )
 
-    return BallMovement(
-        old_ball_x=old_ball_x,
-        old_ball_y=old_ball_y,
-        new_ball_x=new_ball_x,
-        new_ball_y=new_ball_y,
-    ), scoring_list
+    return (
+        BallMovement(
+            old_ball_x=old_ball_x,
+            old_ball_y=old_ball_y,
+            new_ball_x=new_ball_x,
+            new_ball_y=new_ball_y,
+        ),
+        scoring_list,
+    )
 
 
 @jax.jit
@@ -1729,14 +2061,16 @@ def ball_step(
     )
     invisible_block_hit_data = _calc_hit_point(
         ball_movement,
-        jnp.array([
-            INVISIBLE_BLOCK_SCENE_OBJECT.hit_box_height,
-            INVISIBLE_BLOCK_SCENE_OBJECT.hit_box_width,
-            INVISIBLE_BLOCK_SCENE_OBJECT.hit_box_x_offset,
-            INVISIBLE_BLOCK_SCENE_OBJECT.hit_box_y_offset,
-            INVISIBLE_BLOCK_SCENE_OBJECT.reflecting,
-            INVISIBLE_BLOCK_SCENE_OBJECT.score_type
-        ])
+        jnp.array(
+            [
+                INVISIBLE_BLOCK_SCENE_OBJECT.hit_box_height,
+                INVISIBLE_BLOCK_SCENE_OBJECT.hit_box_width,
+                INVISIBLE_BLOCK_SCENE_OBJECT.hit_box_x_offset,
+                INVISIBLE_BLOCK_SCENE_OBJECT.hit_box_y_offset,
+                INVISIBLE_BLOCK_SCENE_OBJECT.reflecting,
+                INVISIBLE_BLOCK_SCENE_OBJECT.score_type,
+            ]
+        ),
     )
     is_invisible_block_hit = jnp.logical_and(
         jnp.logical_not(ball_in_play),
@@ -1838,7 +2172,15 @@ def ball_step(
     #    ball_vel_y=ball_vel_y,
     #    ball_direction=ball_direction,
     # )
-    return ball_x, ball_y, ball_direction, ball_vel_x, ball_vel_y, ball_in_play, scoring_list
+    return (
+        ball_x,
+        ball_y,
+        ball_direction,
+        ball_vel_x,
+        ball_vel_y,
+        ball_in_play,
+        scoring_list,
+    )
 
 
 @jax.jit
@@ -1852,33 +2194,68 @@ def _reset_ball(state: VideoPinballState):
 
 
 @jax.jit
-def _handle_ball_in_gutter(
-    state: VideoPinballState, score, atari_symbols, rollover_counter
+def _ball_enters_gutter(state: VideoPinballState):
+
+    respawn_timer = jnp.where(
+        state.rollover_counter > 1,
+        jnp.array((state.rollover_counter - 1) * 16).astype(jnp.int32),
+        jnp.array(1).astype(jnp.int32),
+    )
+
+    return respawn_timer
+
+
+@jax.jit
+def handle_ball_in_gutter(
+    rt,
+    rollover_counter,
+    score,
+    atari_symbols,
+    lives,
+    active_targets,
+    special_target_cooldown,
 ):
+
+    multiplier = jnp.clip(atari_symbols + 1, max=4)
+    score = jnp.where(rt % 16 == 15, score + 1000 * multiplier, score)
+    rollover_counter = jnp.where(rt % 16 == 15, rollover_counter - 1, rollover_counter)
+    respawn_timer = jnp.where(rt > 0, rt - 1, rt)
+
+    lives, active_targets, atari_symbols, special_target_cooldown = jax.lax.cond(
+        respawn_timer == 0,
+        lambda l, asym: _reset_stuff_and_handle_lives(l, asym),
+        lambda l, asym: (l, active_targets, asym, special_target_cooldown),
+        lives,
+        atari_symbols,
+    )
+
+    return (
+        respawn_timer,
+        rollover_counter,
+        score,
+        atari_symbols,
+        lives,
+        active_targets,
+        special_target_cooldown,
+    )
+
+
+@jax.jit
+def _reset_stuff_and_handle_lives(lives, atari_symbols):
     lives = jax.lax.cond(
         atari_symbols < 4,
         lambda x: x + 1,
         lambda x: x,
-        operand=state.lives,
+        operand=lives,
     )
 
-    # TODO: This should slowly happen one by one but this will do for now
-    score = score + ((rollover_counter - 1) * atari_symbols)
-    rollover_counter = jnp.array(1).astype(jnp.int32)
-
-    atari_symbols = jnp.array(0).astype(jnp.int32)
-
-    bumper_multiplier = jnp.array(1).astype(jnp.int32)
     active_targets = jnp.array([True, True, True, False]).astype(jnp.bool)
+    atari_symbols = jnp.array(0).astype(jnp.int32)
+    special_target_cooldown = jnp.array(0).astype(jnp.int32)
 
-    return (
-        score,
-        active_targets,
-        atari_symbols,
-        rollover_counter,
-        bumper_multiplier,
-        lives,
-    )
+    # TODO: Whoever implements tilt mode: Turn off tilt mode here in this function
+
+    return lives, active_targets, atari_symbols, special_target_cooldown
 
 
 @jax.jit
@@ -1891,8 +2268,7 @@ def process_objects_hit(state: VideoPinballState, objects_hit):
     # Atari: Give points, make Atari symbol at bottom appear
     # Assume objects_hit is list:
     # [0: no score, 1: Bumper, 2: Spinner, 3: Left Rollover, 4: Atari Rollover,
-    # 5: Special Lit Up Target, 6: Left Lit Up Target, 7:Middle Lit Up Target, 8: Right Lit Up Target]
-
+    # 5: Special Lit Up Target, 6: Left Lit Up Target, 7: Middle Lit Up Target, 8: Right Lit Up Target]
 
     # Bumper points
     score = state.score
@@ -1935,16 +2311,19 @@ def process_objects_hit(state: VideoPinballState, objects_hit):
 
     # Bottom Bonus Target
     score += jnp.where(objects_hit[6], 1100, 0)
-    active_targets = jax.lax.cond(
+    active_targets, color_cycling = jax.lax.cond(
         objects_hit[5],
-        lambda s: jnp.array([s[0], s[1], s[2], False]).astype(jnp.bool),
-        lambda s: s,
-        operand=active_targets,
+        lambda s, cc: (
+            jnp.array([s[0], s[1], s[2], False]).astype(jnp.bool),
+            jnp.array(30).astype(jnp.int32),
+        ),
+        lambda s, cc: (s, cc),
+        active_targets,
+        state.color_cycling,
     )
 
     # Give score for hitting the rollover and increase its number
     score += jnp.where(objects_hit[3], 100, 0)
-    # TODO: Check if rollover really goes up further beyond 9 even though the number isnt displayed
     rollover_counter = jax.lax.cond(
         objects_hit[7],
         lambda s: s + 1,
@@ -1961,14 +2340,23 @@ def process_objects_hit(state: VideoPinballState, objects_hit):
         operand=atari_symbols,
     )
 
+    # Do color cycling when the fourth Atari symbol has been hit
+    color_cycling = jnp.where(
+        jnp.logical_and(state.atari_symbols == 3, atari_symbols == 4),
+        jnp.array(30).astype(jnp.int32),
+        color_cycling,
+    )
+
     # Give 1 point for hitting a spinner
     score += jnp.where(objects_hit[2], 1, 0)
 
-    return score, active_targets, atari_symbols, rollover_counter
+    return score, active_targets, atari_symbols, rollover_counter, color_cycling
 
 
 @jax.jit
-def handle_target_cooldowns(state: VideoPinballState, previous_active_targets):
+def handle_target_cooldowns(
+    state: VideoPinballState, previous_active_targets, color_cycling
+):
 
     targets_are_inactive = jnp.logical_and(
         jnp.logical_not(previous_active_targets[0]),
@@ -1979,11 +2367,16 @@ def handle_target_cooldowns(state: VideoPinballState, previous_active_targets):
     )
 
     # Start 2 second cooldown after hitting all targets until they respawn
-    target_cooldown, increase_bm = jax.lax.cond(
+    target_cooldown, increase_bm, color_cycling = jax.lax.cond(
         jnp.logical_and(targets_are_inactive, state.target_cooldown == -1),
-        lambda cd: (jnp.array(60).astype(jnp.int32), True),
-        lambda cd: (cd, False),
+        lambda cd, cc: (
+            jnp.array(TARGET_RESPAWN_COOLDOWN).astype(jnp.int32),
+            True,
+            jnp.array(-9),
+        ),
+        lambda cd, cc: (cd, False, cc),
         state.target_cooldown,
+        color_cycling,
     )
 
     # Increase Bumper multiplier if all targets got hit
@@ -2034,7 +2427,7 @@ def handle_target_cooldowns(state: VideoPinballState, previous_active_targets):
     special_target_cooldown, active_targets = jax.lax.cond(
         jnp.logical_and(special_target_cooldown == 0, state.ball_in_play),
         lambda cd, a: (
-            cd - 600,
+            cd - SPECIAL_TARGET_INACTIVE_DURATION,
             a.at[3].set(False),
         ),  # Check how the real cooldown works
         lambda cd, a: (cd, a),
@@ -2045,13 +2438,59 @@ def handle_target_cooldowns(state: VideoPinballState, previous_active_targets):
     # spawn the special target
     special_target_cooldown, active_targets = jax.lax.cond(
         jnp.logical_and(special_target_cooldown == -1, state.ball_in_play),
-        lambda cd, a: (cd + 181, a.at[3].set(True)),
+        lambda cd, a: (cd + SPECIAL_TARGET_ACTIVE_DURATION, a.at[3].set(True)),
         lambda cd, a: (cd, a),
         special_target_cooldown,
         active_targets,
     )
 
-    return active_targets, target_cooldown, special_target_cooldown, bumper_multiplier
+    return (
+        active_targets,
+        target_cooldown,
+        special_target_cooldown,
+        bumper_multiplier,
+        color_cycling,
+    )
+
+
+@jax.jit
+def color_cycler(color):
+
+    new_color = jax.lax.cond(
+        color > 0,  # Condition 1: is value > 0?
+        lambda x: color - 1,  # True branch for Condition 1
+        lambda x: jnp.where(  # False branch for Condition 1 (nested cond)
+            color < 0,  # Condition 2: is value < 0?
+            color + 1,  # True branch for Condition 2
+            color,  # False branch for Condition 2 (must be == 0)
+        ),
+        None,  # Operand for outer cond (not used by branch funcs)
+    )
+
+    new_color = jnp.where(new_color == -1, jnp.array(14).astype(jnp.int32), new_color)
+
+    return new_color
+
+
+@jax.jit
+def handle_color_cycling(raster, color):
+
+    bg_color_mask = jnp.all(raster == BACKGROUND_COLOR, axis=-1, keepdims=True)
+    wall_color_mask = jnp.all(raster == WALL_COLOR, axis=-1, keepdims=True)
+    group3_color_mask = jnp.all(raster == GROUP3_COLOR, axis=-1, keepdims=True)
+    group4_color_mask = jnp.all(raster == GROUP4_COLOR, axis=-1, keepdims=True)
+    group5_color_mask = jnp.all(raster == GROUP5_COLOR, axis=-1, keepdims=True)
+
+    raster = jnp.where(bg_color_mask, BACKGROUND_COLOR_CYCLING[color], raster)
+    raster = jnp.where(wall_color_mask, WALL_COLOR_CYCLING[color], raster)
+    raster = jnp.where(group3_color_mask, GROUP3_COLOR_CYCLING[color], raster)
+    raster = jnp.where(group4_color_mask, GROUP4_COLOR_CYCLING[color], raster)
+    raster = jnp.where(group5_color_mask, GROUP5_COLOR_CYCLING[color], raster)
+
+    raster = raster.at[0:8, 175:176, :].set(BG_COLOR)
+    raster = raster.at[:, 191:, :].set(BG_COLOR)
+
+    return raster
 
 
 @jax.jit
@@ -2142,6 +2581,8 @@ class JaxVideoPinball(
             rollover_counter=jnp.array(1).astype(jnp.int32),
             step_counter=jnp.array(0).astype(jnp.int32),
             ball_in_play=jnp.array(False).astype(jnp.bool),
+            respawn_timer=jnp.array(0).astype(jnp.int32),
+            color_cycling=jnp.array(0).astype(jnp.int32),
         )
 
         initial_obs = self._get_observation(state)
@@ -2175,16 +2616,22 @@ class JaxVideoPinball(
         # )
 
         # Step 2: Update ball position and velocity
-        ball_x, ball_y, ball_direction, ball_vel_x, ball_vel_y, ball_in_play, scoring_list = (
-            ball_step(
-                state,
-                new_plunger_power,
-                action,
-            )
+        (
+            ball_x,
+            ball_y,
+            ball_direction,
+            ball_vel_x,
+            ball_vel_y,
+            ball_in_play,
+            scoring_list,
+        ) = ball_step(
+            state,
+            new_plunger_power,
+            action,
         )
 
         # Step 3: Check if ball is in the gutter or in plunger hole
-        ball_in_gutter = ball_y > 209
+        ball_in_gutter = ball_y > 192
         # TODO if ball is back in plunger hole reset, not instantly
         ball_reset = jnp.logical_or(
             ball_in_gutter,
@@ -2193,13 +2640,19 @@ class JaxVideoPinball(
 
         # Step 4: Update scores and handle special objects
         # TODO: Input the list of objects hit once collisions are done
-        score, active_targets, atari_symbols, rollover_counter = process_objects_hit(
-            state,
-            scoring_list,
+        score, active_targets, atari_symbols, rollover_counter, color_cycling = (
+            process_objects_hit(
+                state,
+                scoring_list,
+            )
         )
-        active_targets, target_cooldown, special_target_cooldown, bumper_multiplier = (
-            handle_target_cooldowns(state, active_targets)
-        )
+        (
+            active_targets,
+            target_cooldown,
+            special_target_cooldown,
+            bumper_multiplier,
+            color_cycling,
+        ) = handle_target_cooldowns(state, active_targets, color_cycling)
 
         # Step 5: Reset ball if it went down the gutter
         current_values = (
@@ -2216,25 +2669,55 @@ class JaxVideoPinball(
             operand=current_values,
         )
 
-        (
-            score,
-            active_targets,
-            atari_symbols,
-            rollover_counter,
-            bumper_multiplier,
-            lives,
-        ) = jax.lax.cond(
+        respawn_timer = jax.lax.cond(
             ball_in_gutter,
-            lambda s, at, asym, dc, bm: _handle_ball_in_gutter(state, s, asym, dc),
-            lambda s, at, asym, dc, bm: (s, at, asym, dc, bm, state.lives),
-            score,
+            lambda at: _ball_enters_gutter(state),
+            lambda at: state.respawn_timer,
             active_targets,
-            atari_symbols,
-            rollover_counter,
-            bumper_multiplier,
         )
 
-        ball_in_play = jnp.where(ball_reset, jnp.array(False), ball_in_play)
+        # TODO: Whoever implements tilt mode: properly define this tilt_mode_active boolean
+        #  (this needs to be exactly here, don't move it)
+        tilt_mode_active = False
+        score = jnp.where(tilt_mode_active, state.score, score)
+
+        (
+            respawn_timer,
+            rollover_counter,
+            score,
+            atari_symbols,
+            lives,
+            active_targets,
+            special_target_cooldown,
+        ) = jax.lax.cond(
+            respawn_timer > 0,
+            lambda rt, rc, s, asym, l, at, stc: handle_ball_in_gutter(
+                rt, rc, s, asym, l, at, stc
+            ),
+            lambda rt, rc, s, asym, l, at, stc: (rt, rc, s, asym, l, at, stc),
+            respawn_timer,
+            rollover_counter,
+            score,
+            atari_symbols,
+            state.lives,
+            active_targets,
+            special_target_cooldown,
+        )
+
+        ball_in_play = jnp.where(
+            jnp.logical_or(ball_reset, respawn_timer > 0),
+            jnp.array(False),
+            ball_in_play,
+        )
+        # ball_in_play = jnp.where(ball_reset, jnp.array(False), ball_in_play)
+
+        color_cycling = color_cycler(color_cycling)
+
+        # TEST: This makes the rollover increase and make the ball hit the gutter after a short time
+        # rollover_counter = jnp.where(state.step_counter % 400 == 399, jnp.array(3).astype(jnp.int32), rollover_counter)
+        # ball_y_final = jnp.where(state.step_counter % 420 == 419, jnp.array(194).astype(jnp.int32), ball_y_final)
+
+        # active_targets = jnp.where(state.step_counter % 420 == 419, jnp.array([False, False, False, False]).astype(jnp.bool), active_targets)
 
         new_state = VideoPinballState(
             ball_x=ball_x_final,
@@ -2256,6 +2739,8 @@ class JaxVideoPinball(
             rollover_counter=rollover_counter,
             step_counter=jnp.array(state.step_counter + 1).astype(jnp.int32),
             ball_in_play=ball_in_play,
+            respawn_timer=respawn_timer,
+            color_cycling=color_cycling,
             # obs_stack=None,
         )
 
@@ -2275,6 +2760,18 @@ class JaxVideoPinball(
         # )
         # new_state = new_state._replace(obs_stack=observation)
         # jax.debug.print("------------------------------------------")
+
+        # Check if all lives are lost and the game should reset
+        observation, new_state = jax.lax.cond(
+            jnp.logical_and(lives > 3, respawn_timer == 0),
+            lambda ob, ns: self.reset(
+                jax.random.PRNGKey(score + special_target_cooldown + env_reward)
+            ),
+            lambda ob, ns: (ob, ns),
+            observation,
+            new_state,
+        )
+
         return observation, new_state, env_reward, done, info
 
     @partial(jax.jit, static_argnums=(0,))
@@ -2676,6 +3173,15 @@ def load_sprites():
     }
 
 
+@jax.jit
+def render_tilt_mode(r):
+    r = r.at[:, 0:16, :].set(TILT_MODE_COLOR)
+    r = r.at[36:40, 184:192, :].set(BG_COLOR)
+    r = r.at[120:124, 184:192, :].set(BG_COLOR)
+
+    return r
+
+
 class VideoPinballRenderer(AtraJaxisRenderer):
     """JAX-based Video Pinball game renderer, optimized with JIT compilation."""
 
@@ -2705,7 +3211,11 @@ class VideoPinballRenderer(AtraJaxisRenderer):
         frame_walls = aj.get_sprite_frame(self.sprites["walls"], 0)
         raster = aj.render_at(raster, 0, 16, frame_walls)
 
-        # Render animated objects TODO: (unfinished, game_state implementation needed)
+        # TODO: Whoever implements tilt mode: properly define this tilt_mode_active boolean
+        tilt_mode_active = False
+        raster = jnp.where(tilt_mode_active, render_tilt_mode(raster), raster)
+
+        # Render animated objects
         frame_flipper_left = aj.get_sprite_frame(
             self.sprites["flipper_left"], state.left_flipper_angle
         )
@@ -2740,12 +3250,13 @@ class VideoPinballRenderer(AtraJaxisRenderer):
         frame_ball = aj.get_sprite_frame(self.sprites["ball"], 0)
         raster = aj.render_at(raster, state.ball_x, state.ball_y, frame_ball)
 
-        # Render score TODO: (unfinished, game_state implementation needed)
+        # Render score
         frame_unknown = aj.get_sprite_frame(self.sprites["score_number_digits"], 1)
         raster = aj.render_at(raster, 4, 3, frame_unknown)
 
+        displayed_lives = jnp.clip(state.lives, max=3)
         frame_ball_count = aj.get_sprite_frame(
-            self.sprites["score_number_digits"], state.lives
+            self.sprites["score_number_digits"], displayed_lives
         )
         raster = aj.render_at(raster, 36, 3, frame_ball_count)
 
@@ -2775,7 +3286,7 @@ class VideoPinballRenderer(AtraJaxisRenderer):
         )
         raster = aj.render_at(raster, 144, 3, frame_score6)
 
-        # Render special yellow field objects TODO: (unfinished, game_state implementation needed)
+        # Render special yellow field objects
         frame_bumper_left = aj.get_sprite_frame(
             self.sprites["field_number_digits"], state.bumper_multiplier
         )
@@ -2789,12 +3300,7 @@ class VideoPinballRenderer(AtraJaxisRenderer):
         )
         raster = aj.render_at(raster, 110, 122, frame_bumper_right)
 
-        displayed_rollover_number = jax.lax.cond(
-            state.rollover_counter > 9,
-            lambda c: 9,
-            lambda c: c,
-            operand=state.rollover_counter,
-        )
+        displayed_rollover_number = state.rollover_counter % 9
         frame_rollover_left = aj.get_sprite_frame(
             self.sprites["field_number_digits"], displayed_rollover_number
         )
@@ -2836,21 +3342,24 @@ class VideoPinballRenderer(AtraJaxisRenderer):
 
         # Render Atari Logos and the X
         raster = jax.lax.cond(
-            state.atari_symbols > 0,
+            jnp.logical_and(state.atari_symbols > 0, state.respawn_timer == 0),
             lambda r: aj.render_at(raster, 60, 154, frame_atari_logo),
             lambda r: raster,
             operand=raster,
         )
 
         raster = jax.lax.cond(
-            jnp.logical_or(state.atari_symbols == 2, state.atari_symbols == 3),
+            jnp.logical_and(
+                jnp.logical_or(state.atari_symbols == 2, state.atari_symbols == 3),
+                state.respawn_timer == 0,
+            ),
             lambda r: aj.render_at(raster, 76, 154, frame_atari_logo),
             lambda r: raster,
             operand=raster,
         )
 
         raster = jax.lax.cond(
-            state.atari_symbols > 2,
+            jnp.logical_and(state.atari_symbols > 2, state.respawn_timer == 0),
             lambda r: aj.render_at(raster, 90, 154, frame_atari_logo),
             lambda r: raster,
             operand=raster,
@@ -2858,10 +3367,18 @@ class VideoPinballRenderer(AtraJaxisRenderer):
 
         frame_X = aj.get_sprite_frame(self.sprites["x"], 0)
         raster = jax.lax.cond(
-            state.atari_symbols == 4,
+            jnp.logical_and(state.atari_symbols == 4, state.respawn_timer == 0),
             lambda r: aj.render_at(raster, 76, 157, frame_X),
             lambda r: raster,
             operand=raster,
+        )
+
+        # Handle color cycling
+        color = jnp.ceil(state.color_cycling / jnp.array(4.0)).astype(jnp.int32)
+        color = jnp.clip(color, min=0)
+
+        raster = jax.lax.cond(
+            color > 0, lambda r: handle_color_cycling(r, color), lambda r: r, raster
         )
 
         return raster
