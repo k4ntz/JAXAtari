@@ -41,7 +41,7 @@ class SurroundConstants(NamedTuple):
     BORDER_THICKNESS = 10           # Dicke des Randes in Pixeln
 
     # Rules
-    ALLOW_REVERSE: bool = False
+    ALLOW_REVERSE: bool = True
     # Maximum number of environment steps before truncation
     MAX_STEPS: int = 1000
 
@@ -73,6 +73,21 @@ class SurroundInfo(NamedTuple):
     """Additional environment information."""
 
     time: jnp.ndarray
+
+
+@partial(jax.jit, static_argnames=("border_x", "border_y", "grid_w", "grid_h"))
+def check_border_collision(
+    player_pos: jnp.ndarray,
+    border_x: int,
+    border_y: int,
+    grid_w: int,
+    grid_h: int,
+) -> jnp.ndarray:
+    x, y = player_pos
+    return jnp.logical_or(
+        jnp.logical_or(x < border_x, x > grid_w - border_x - 1),
+        jnp.logical_or(y < border_y, y > grid_h - border_y - 1),
+    )
 
 
 class SurroundRenderer(JAXGameRenderer):
@@ -123,6 +138,13 @@ class SurroundRenderer(JAXGameRenderer):
         playfield = jax.lax.dynamic_update_slice(playfield, p2_patch, (p2y, p2x, 0))
 
         img = img.at[y_off:y_off+field_h, :width, :].set(playfield)
+
+        border = self.consts.BORDER_THICKNESS
+        border_color = jnp.array(self.consts.BORDER_COLOR, dtype=jnp.uint8)
+        img = img.at[:border, :, :].set(border_color)
+        img = img.at[-border:, :, :].set(border_color)
+        img = img.at[:, :border, :].set(border_color)
+        img = img.at[:, -border:, :].set(border_color)
 
         digit_p1 = jr.get_sprite_frame(self.p1_digits, state.score0)
         digit_p2 = jr.get_sprite_frame(self.p2_digits, state.score1)
@@ -224,11 +246,17 @@ class JaxSurround(
         new_p0 = state.pos0 + offset_p0
         new_p1 = state.pos1 + offset_p1
 
-        bounds = jnp.array([self.consts.GRID_WIDTH, self.consts.GRID_HEIGHT])
-        clip = lambda pos: jnp.clip(pos, jnp.array([0, 0]), bounds - 1)
+        border_x = self.consts.BORDER_THICKNESS // self.consts.CELL_SIZE[0]
+        border_y = self.consts.BORDER_THICKNESS // self.consts.CELL_SIZE[1]
+        grid_w = self.consts.GRID_WIDTH
+        grid_h = self.consts.GRID_HEIGHT
 
-        hit_p0_wall = jnp.logical_or(jnp.any(new_p0 < 0), jnp.any(new_p0 >= bounds))
-        hit_p1_wall = jnp.logical_or(jnp.any(new_p1 < 0), jnp.any(new_p1 >= bounds))
+        bounds_min = jnp.array([border_x, border_y])
+        bounds_max = jnp.array([grid_w - border_x, grid_h - border_y])
+        clip = lambda pos: jnp.clip(pos, bounds_min, bounds_max - 1)
+
+        hit_p0_wall = check_border_collision(new_p0, border_x, border_y, grid_w, grid_h)
+        hit_p1_wall = check_border_collision(new_p1, border_x, border_y, grid_w, grid_h)
 
         safe_p0 = clip(new_p0)
         safe_p1 = clip(new_p1)
@@ -399,6 +427,14 @@ def main() -> None:  # pragma: no cover - visual helper
         surface = pygame.surfarray.make_surface(frame.transpose(1, 0, 2))
         surface = pygame.transform.scale(surface, (width, height))
         screen.blit(surface, (0, 0))
+
+        border = env.consts.BORDER_THICKNESS
+        color = env.consts.BORDER_COLOR
+        pygame.draw.rect(screen, color, (0, 0, width, border))
+        pygame.draw.rect(screen, color, (0, height - border, width, border))
+        pygame.draw.rect(screen, color, (0, 0, border, height))
+        pygame.draw.rect(screen, color, (width - border, 0, border, height))
+
         pygame.display.flip()
         clock.tick(5)
 
