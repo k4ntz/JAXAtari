@@ -3,15 +3,15 @@ import jax
 import jax.numpy as jnp
 from functools import partial
 from typing import NamedTuple, Tuple, Any, List
-import pygame
 from jax import Array
 import os
 from pathlib import Path
 
 # Project imports
-from src.jaxatari.environment import JaxEnvironment
-from src.jaxatari.renderers import JAXGameRenderer
-from src.jaxatari.rendering import jax_rendering_utils as jr
+from jaxatari.environment import JaxEnvironment
+from jaxatari.renderers import JAXGameRenderer
+from jaxatari.rendering import jax_rendering_utils as jr
+import jaxatari.spaces as spaces
 
 """
 Contribuors: Ayush Bansal, Mahta Mollaeian, Anh Tuan Nguyen, Abdallah Siwar  
@@ -64,10 +64,9 @@ class JaxBackgammonEnv(JaxEnvironment[BackgammonState, jnp.ndarray, dict, Backga
         consts = consts or BackgammonConstants()
         super().__init__(consts)
 
-        # Pre-compute all possible moves for fast validation
-        self.action_space = jnp.array([(i, j) for i in range(26) for j in range(26)], dtype=jnp.int32)
+        # Pre-compute all possible moves (indexed as a scalar in the framework)
+        self._action_pairs = jnp.array([(i, j) for i in range(26) for j in range(26)], dtype=jnp.int32)
         self.renderer = BackgammonRenderer(self)
-
 
     @partial(jax.jit, static_argnums=(0,))
     def init_state(self,key) -> BackgammonState:
@@ -472,19 +471,23 @@ class JaxBackgammonEnv(JaxEnvironment[BackgammonState, jnp.ndarray, dict, Backga
 
         return obs, new_state, reward, done, info, new_key
 
-    def step(self, state: BackgammonState, action: Tuple[int, int]) -> Tuple[jnp.ndarray, BackgammonState, float, bool, dict]:
-        """Perform a step in the environment, applying the action and returning the new state."""
-        obs, new_state, reward, done, info, new_key = self.step_impl(state, action, state.key)
+    def step(self, state: BackgammonState, action: jnp.ndarray) -> Tuple[jnp.ndarray, BackgammonState, float, bool, dict]:
+        """Perform a step in the environment using a scalar action index."""
+        # Map the scalar action index to a (from_point, to_point) pair
+        move = tuple(self._action_pairs[action])
+        obs, new_state, reward, done, info, new_key = self.step_impl(state, move, state.key)
         new_state = new_state._replace(key=new_key)
         return obs, new_state, reward, done, info
 
-    def get_action_space(self) -> jnp.ndarray:
-        """Return the action space for the environment."""
-        return self.action_space
+    def action_space(self) -> spaces.Discrete:
+        """Return the discrete action space (scalar index into move list)."""
+        return spaces.Discrete(self._action_pairs.shape[0])
 
-    def get_observation_space(self) -> Tuple:
+    def observation_space(self) -> spaces.Box:
         """Return the observation space for the environment."""
-        return (2, 26), (4,), (), ()
+        shape = (2 * 26 + 4 + 1 + 1,)  # = (58,)
+        # current_player can be -1 or 1 → low must include -1
+        return spaces.Box(low=-1, high=self.consts.NUM_CHECKERS, shape=shape, dtype=jnp.int32)
 
     @staticmethod
     @jax.jit
@@ -536,167 +539,73 @@ class JaxBackgammonEnv(JaxEnvironment[BackgammonState, jnp.ndarray, dict, Backga
         self.renderer.render(state)
 
 
-class BackgammonRenderer:
-    def __init__(self, env, window_size=(1024, 640)):
-        self.env = env
-        self.asset_dir = Path("src/jaxatari/games/sprites/backgammon")
+class BackgammonRenderer(JAXGameRenderer):
+    def __init__(self, env=None):
+        super().__init__(env)
+        asset_dir = Path("src/jaxatari/games/sprites/backgammon/")
 
-        # Load sprite assets
-        self.SPRITE_BOARD = jnp.expand_dims(jr.loadFrame(self.asset_dir / "backgammon_board.npy"), axis=0)
-        self.SPRITE_WHITE = jnp.expand_dims(jr.loadFrame(self.asset_dir / "white_checker.npy"), axis=0)
-        self.SPRITE_BLACK = jnp.expand_dims(jr.loadFrame(self.asset_dir / "black_checker.npy"), axis=0)
-        self.SPRITE_DICE = [
-            jnp.expand_dims(jr.loadFrame(self.asset_dir / f"dice_{i}.npy"), axis=0)
-            for i in range(1, 7)
-        ]
+        # All sprites should be RGBA (H, W, 4)
+        self.sprite_board = jr.loadFrame(asset_dir / "backgammon_board.npy")
+        self.sprite_checker_white = jr.loadFrame(asset_dir / "white_checker.npy")
+        self.sprite_checker_black = jr.loadFrame(asset_dir / "black_checker.npy")
 
-        chars = "0123456789WHITEBLACKGAMEOVER"
-        self.char_sprites, self.char_map = self.load_char_sprites(chars, str(self.asset_dir / "chars"))
+        self.point_positions = self._compute_point_positions()
 
-        # Board layout parameters (matching the generated board)
-        self.board_margin = 32
-        self.border_width = 4
-        self.center_bar_x = 512 - 30
-        self.center_bar_width = 60
-        self.triangle_width = (1024 - 2 * self.board_margin - 2 * self.border_width - 60) // 12  # ~73px
-        self.triangle_height = 200
-        self.checker_size = 24
-        self.dice_size = 32
+    import jax.numpy as jnp
 
-        self.native_resolution = window_size
-        self.window_resolution = window_size
-        self.scale_x = 1.0
-        self.scale_y = 1.0
+    def _compute_point_positions(self):
+        """Return a JAX array of shape (26, 2) with (x, y) coords."""
+        positions = []
+        for i in range(13):
+            x = 50 + i * 60
+            y = 50
+            positions.append((x, y))
+        for i in range(13):
+            x = 50 + (12 - i) * 60
+            y = 400
+            positions.append((x, y))
+        return jnp.array(positions, dtype=jnp.int32)
 
-        pygame.init()
-        self.screen = pygame.display.set_mode(self.window_resolution)
-        pygame.display.set_caption("JAX Backgammon")
-        self.clock = pygame.time.Clock()
-
+    @partial(jax.jit, static_argnums=(0,))
     def render(self, state):
-        raster = jr.create_initial_frame(1024, 640)
-        raster = jr.render_at(raster, 0, 0, jr.get_sprite_frame(self.SPRITE_BOARD, 0))
+        """
+        Render the current Backgammon state to an RGBA (H, W, 4) frame.
+        Fully JIT-compatible.
+        """
+        # Create a blank RGBA frame matching board dimensions
+        frame = jr.create_initial_frame(
+            self.sprite_board.shape[0],  # height
+            self.sprite_board.shape[1],  # width
+        )
 
-        # Render checkers
-        for point in range(24):
-            for player in [0, 1]:
-                count = int(state.board[player, point])
-                sprite = self.SPRITE_WHITE if player == 0 else self.SPRITE_BLACK
-                for i in range(min(count, 10)):  # Limit visible checkers
-                    x, y = self.get_checker_position(point, i, player)
-                    raster = jr.render_at(raster, x, y, jr.get_sprite_frame(sprite, 0))
+        # Draw the board first
+        frame = jr.render_at(frame, 0, 0, self.sprite_board)
 
-        # Render dice in center bar area
-        for i in range(2):
-            die_val = int(state.dice[i])
-            if 1 <= die_val <= 6:
-                die_sprite = self.SPRITE_DICE[die_val - 1]
-                # Position dice in center of center bar
-                x = self.center_bar_x + 10 + i * (self.dice_size + 4)
-                y = 320 - self.dice_size // 2  # Vertically centered
-                raster = jr.render_at(raster, x, y, jr.get_sprite_frame(die_sprite, 0))
+        def draw_point(point_idx, fr):
+            pos_x, pos_y = self.point_positions[point_idx]
 
-        # Render scores in corners
-        white_digits = jr.int_to_digits(int(state.board[0, 25]), max_digits=2)
-        black_digits = jr.int_to_digits(int(state.board[1, 25]), max_digits=2)
+            # White checkers (player 0 row)
+            count_white = jnp.int32(state.board[0, point_idx])
 
-        # White score in top-left
-        raster = jr.render_label(raster, 50, 50, white_digits, self.char_sprites)
-        # Black score in top-right
-        raster = jr.render_label(raster, 950, 50, black_digits, self.char_sprites)
+            def draw_white(i, f):
+                return jr.render_at(f, pos_x, pos_y + i * 20, self.sprite_checker_white)
 
-        # Render current player at bottom
-        player_text = "WHITE" if int(state.current_player) == 1 else "BLACK"
-        player_indices = self.text_to_indices(player_text)
-        raster = jr.render_label(raster, 450, 600, player_indices, self.char_sprites)
+            fr = jax.lax.fori_loop(0, count_white, draw_white, fr)
 
-        # Game over message
-        if bool(state.is_game_over):
-            over_indices = self.text_to_indices("GAMEOVER")
-            raster = jr.render_label(raster, 400, 320, over_indices, self.char_sprites)
+            # Black checkers (player 1 row)
+            count_black = jnp.int32(state.board[1, point_idx])
 
-        return raster
+            def draw_black(i, f):
+                return jr.render_at(f, pos_x, pos_y - i * 20, self.sprite_checker_black)
 
-    def display(self, state):
-        raster = self.render(state)
-        frame = jnp.array(raster).astype(jnp.uint8)
-        surface = pygame.surfarray.make_surface(jnp.transpose(frame, (1, 0, 2)))
+            fr = jax.lax.fori_loop(0, count_black, draw_black, fr)
 
-        # Scale full frame to fit screen
-        surface = pygame.transform.smoothscale(surface, self.window_resolution)
+            return fr
 
-        self.screen.blit(surface, (0, 0))
-        pygame.display.flip()
-        self.clock.tick(30)
+        # Loop over all 26 points
+        frame = jax.lax.fori_loop(0, 26, draw_point, frame)
 
-        for event in pygame.event.get():
-            if event.type == pygame.QUIT or (
-                    event.type == pygame.KEYDOWN and event.key == pygame.K_ESCAPE
-            ):
-                pygame.quit()
-                exit()
-
-    def get_checker_position(self, point, stack_index, player):
-        """Calculate checker position based on point number and stack position"""
-
-        # Board layout calculations
-        left_start_x = self.board_margin + self.border_width + 8
-        right_start_x = self.center_bar_x + self.center_bar_width + 8
-        top_y = self.board_margin + self.border_width
-        bottom_y = 640 - self.board_margin - self.border_width
-
-        checker_spacing = 20  # Vertical spacing between stacked checkers
-
-        # Convert backgammon point numbering to our layout
-        if point < 6:
-            # Points 1-6: Bottom left quarter
-            triangle_x = left_start_x + point * self.triangle_width
-            # Checkers stack upward from bottom
-            x = triangle_x + (self.triangle_width - self.checker_size) // 2
-            y = bottom_y - self.checker_size - (stack_index * checker_spacing)
-
-        elif point < 12:
-            # Points 7-12: Bottom right quarter
-            triangle_x = right_start_x + (point - 6) * self.triangle_width
-            x = triangle_x + (self.triangle_width - self.checker_size) // 2
-            y = bottom_y - self.checker_size - (stack_index * checker_spacing)
-
-        elif point < 18:
-            # Points 13-18: Top left quarter
-            triangle_x = left_start_x + (17 - point) * self.triangle_width  # Reverse order
-            x = triangle_x + (self.triangle_width - self.checker_size) // 2
-            # Checkers stack downward from top
-            y = top_y + (stack_index * checker_spacing)
-
-        else:
-            # Points 19-24: Top right quarter
-            triangle_x = right_start_x + (23 - point) * self.triangle_width  # Reverse order
-            x = triangle_x + (self.triangle_width - self.checker_size) // 2
-            y = top_y + (stack_index * checker_spacing)
-
-        return int(x), int(y)
-
-    def close(self):
-        pygame.quit()
-
-    def load_char_sprites(self, chars: str, base_path: str) -> tuple[jnp.ndarray, dict]:
-        sprites = []
-        char_map = {}
-
-        for i, c in enumerate(chars):
-            file_path = os.path.join(base_path, f"{c}.npy")
-            if not os.path.exists(file_path):
-                raise FileNotFoundError(f"Sprite for '{c}' not found at: {file_path}")
-            sprite = jnp.load(file_path)
-            assert sprite.ndim == 3 and sprite.shape[2] == 4, f"Invalid sprite format for {c}"
-            sprites.append(sprite)
-            char_map[c] = i
-
-        padded_sprites, _ = jr.pad_to_match(sprites)
-        return jnp.stack(padded_sprites), char_map
-
-    def text_to_indices(self, text: str) -> jnp.ndarray:
-        return jnp.array([self.char_map[c] for c in text if c in self.char_map], dtype=jnp.int32)
+        return frame
 
 
 def get_user_move(state: BackgammonState, env: JaxBackgammonEnv) -> Tuple[int, int]:
