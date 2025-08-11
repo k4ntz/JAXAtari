@@ -2,7 +2,7 @@ from enum import Enum
 from typing import Tuple, Generic, TypeVar
 import jax.numpy as jnp
 import jax.random as jrandom
-from src.jaxatari.spaces import Space
+from jaxatari.spaces import Space
 
 
 EnvObs = TypeVar("EnvObs")
