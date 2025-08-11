@@ -98,10 +98,20 @@ class BattleZoneInfo(NamedTuple):
     all_rewards: chex.Array
 
 def get_human_action() -> chex.Array:
-    """Get human input for BattleZone controls (arrow keys only for movements and space for shooting)."""
+    """Get human input for BattleZone controls (arrow keys for movements and space for shooting)."""
     keys = pygame.key.get_pressed()
-    # Movement + Fire combinations
-    if keys[pygame.K_UP] and keys[pygame.K_SPACE]:
+    
+    # Diagonal Movement + Fire combinations
+    if keys[pygame.K_UP] and keys[pygame.K_RIGHT] and keys[pygame.K_SPACE]:
+        return jnp.array(UPRIGHTFIRE)
+    elif keys[pygame.K_UP] and keys[pygame.K_LEFT] and keys[pygame.K_SPACE]:
+        return jnp.array(UPLEFTFIRE)
+    elif keys[pygame.K_DOWN] and keys[pygame.K_RIGHT] and keys[pygame.K_SPACE]:
+        return jnp.array(DOWNRIGHTFIRE)
+    elif keys[pygame.K_DOWN] and keys[pygame.K_LEFT] and keys[pygame.K_SPACE]:
+        return jnp.array(DOWNLEFTFIRE)
+    # Single Direction + Fire combinations
+    elif keys[pygame.K_UP] and keys[pygame.K_SPACE]:
         return jnp.array(UPFIRE)
     elif keys[pygame.K_DOWN] and keys[pygame.K_SPACE]:
         return jnp.array(DOWNFIRE)
@@ -109,7 +119,16 @@ def get_human_action() -> chex.Array:
         return jnp.array(LEFTFIRE)
     elif keys[pygame.K_RIGHT] and keys[pygame.K_SPACE]:
         return jnp.array(RIGHTFIRE)
-    # Movement only
+    # Diagonal Movement only
+    elif keys[pygame.K_UP] and keys[pygame.K_RIGHT]:
+        return jnp.array(UPRIGHT)
+    elif keys[pygame.K_UP] and keys[pygame.K_LEFT]:
+        return jnp.array(UPLEFT)
+    elif keys[pygame.K_DOWN] and keys[pygame.K_RIGHT]:
+        return jnp.array(DOWNRIGHT)
+    elif keys[pygame.K_DOWN] and keys[pygame.K_LEFT]:
+        return jnp.array(DOWNLEFT)
+    # Single Direction Movement only
     elif keys[pygame.K_UP]:
         return jnp.array(UP)
     elif keys[pygame.K_DOWN]:
@@ -126,38 +145,85 @@ def get_human_action() -> chex.Array:
 
 @jax.jit
 def update_tank_position(tank: Tank, action: chex.Array) -> Tank:
-    """Update tank position and angle based on arrow key action."""
-    move_speed = TANK_SPEED
+    """
+    Update tank position and angle based on action with realistic tank movement.
+    Tank physics:
+    - LEFT/RIGHT: Turn the tank (rotate in place)
+    - UP: Move forward in the direction the tank is facing
+    - DOWN: Move backward (reverse)
+    - Diagonals: Combine turning and movement
     
-    # Start with current position
+    Coordinate system:
+    - angle=0: facing right (+X direction)
+    - angle=π/2: facing down (+Y direction) 
+    - angle=π: facing left (-X direction)
+    - angle=-π/2: facing up (-Y direction)
+    """
+    move_speed = TANK_SPEED
+    turn_speed = TANK_TURN_SPEED
+    
+    # Start with current position and angle
     new_x = tank.x
     new_y = tank.y
     angle = tank.angle
     
-    # Handle all movement actions (including fire combinations)
-    # LEFT movements
+    # Handle pure turning (LEFT/RIGHT) - tank rotates in place
     left_actions = jnp.array([LEFT, LEFTFIRE])
     is_left = jnp.any(action == left_actions)
-    new_x = jnp.where(is_left, tank.x - move_speed, new_x)
-    angle = jnp.where(is_left, jnp.array(math.pi), angle)
+    angle = jnp.where(is_left, tank.angle - turn_speed, angle)
     
-    # RIGHT movements  
     right_actions = jnp.array([RIGHT, RIGHTFIRE])
     is_right = jnp.any(action == right_actions)
-    new_x = jnp.where(is_right, tank.x + move_speed, new_x)
-    angle = jnp.where(is_right, jnp.array(0.0), angle)
+    angle = jnp.where(is_right, tank.angle + turn_speed, angle)
     
-    # UP movements
+    # Handle forward movement (UP) - move in direction tank is facing
     up_actions = jnp.array([UP, UPFIRE])
     is_up = jnp.any(action == up_actions)
-    new_y = jnp.where(is_up, tank.y - move_speed, new_y)
-    angle = jnp.where(is_up, jnp.array(-math.pi/2), angle)
+    new_x = jnp.where(is_up, tank.x + jnp.cos(angle) * move_speed, new_x)
+    new_y = jnp.where(is_up, tank.y + jnp.sin(angle) * move_speed, new_y)
     
-    # DOWN movements
+    # Handle backward movement (DOWN) - move opposite to tank facing direction
     down_actions = jnp.array([DOWN, DOWNFIRE])
     is_down = jnp.any(action == down_actions)
-    new_y = jnp.where(is_down, tank.y + move_speed, new_y)
-    angle = jnp.where(is_down, jnp.array(math.pi/2), angle)
+    new_x = jnp.where(is_down, tank.x - jnp.cos(angle) * move_speed, new_x)
+    new_y = jnp.where(is_down, tank.y - jnp.sin(angle) * move_speed, new_y)
+
+    # Handle diagonal movements - combinations of turning and moving
+    # UPRIGHT: Turn right while moving forward
+    upright_actions = jnp.array([UPRIGHT, UPRIGHTFIRE])
+    is_upright = jnp.any(action == upright_actions)
+    # Update angle first, then move in new direction
+    new_angle_upright = tank.angle + turn_speed
+    angle = jnp.where(is_upright, new_angle_upright, angle)
+    new_x = jnp.where(is_upright, tank.x + jnp.cos(new_angle_upright) * move_speed, new_x)
+    new_y = jnp.where(is_upright, tank.y + jnp.sin(new_angle_upright) * move_speed, new_y)
+    
+    # UPLEFT: Turn left while moving forward
+    upleft_actions = jnp.array([UPLEFT, UPLEFTFIRE])
+    is_upleft = jnp.any(action == upleft_actions)
+    new_angle_upleft = tank.angle - turn_speed
+    angle = jnp.where(is_upleft, new_angle_upleft, angle)
+    new_x = jnp.where(is_upleft, tank.x + jnp.cos(new_angle_upleft) * move_speed, new_x)
+    new_y = jnp.where(is_upleft, tank.y + jnp.sin(new_angle_upleft) * move_speed, new_y)
+    
+    # DOWNRIGHT: Turn right while moving backward
+    downright_actions = jnp.array([DOWNRIGHT, DOWNRIGHTFIRE])
+    is_downright = jnp.any(action == downright_actions)
+    new_angle_downright = tank.angle + turn_speed
+    angle = jnp.where(is_downright, new_angle_downright, angle)
+    new_x = jnp.where(is_downright, tank.x - jnp.cos(new_angle_downright) * move_speed, new_x)
+    new_y = jnp.where(is_downright, tank.y - jnp.sin(new_angle_downright) * move_speed, new_y)
+    
+    # DOWNLEFT: Turn left while moving backward
+    downleft_actions = jnp.array([DOWNLEFT, DOWNLEFTFIRE])
+    is_downleft = jnp.any(action == downleft_actions)
+    new_angle_downleft = tank.angle - turn_speed
+    angle = jnp.where(is_downleft, new_angle_downleft, angle)
+    new_x = jnp.where(is_downleft, tank.x - jnp.cos(new_angle_downleft) * move_speed, new_x)
+    new_y = jnp.where(is_downleft, tank.y - jnp.sin(new_angle_downleft) * move_speed, new_y)
+
+    # Normalize angle to [-π, π] range to prevent angle drift
+    angle = jnp.arctan2(jnp.sin(angle), jnp.cos(angle))
 
     # Boundary checking
     new_x = jnp.clip(new_x, BOUNDARY_MIN, BOUNDARY_MAX)
@@ -299,7 +365,7 @@ class JaxBattleZone(JaxEnvironment[BattleZoneState, BattleZoneObservation, chex.
 
         # Reserve only the first PLAYER_BULLET_LIMIT slots for the player
         inactive_player_slots = jnp.logical_not(state.bullets.active[:PLAYER_BULLET_LIMIT])
-        inactive_bullet_idx = jnp.argmax(PLAYER_BULLET_LIMIT) #(inactive_player_slots)
+        inactive_bullet_idx = jnp.argmax(inactive_player_slots)  # Find first inactive slot
         can_fire = inactive_player_slots[inactive_bullet_idx]
 
         
@@ -399,29 +465,29 @@ class BattleZoneRenderer:
         if not jnp.any(player_bullets):
             return
 
-        # Take the first active player bullet
-        bullet_idx = jnp.argmax(player_bullets)
+        # Draw all active player bullets
+        for i in range(PLAYER_BULLET_LIMIT):
+            if bullets.active[i] and bullets.owner[i] == 0:
+                bullet_x = bullets.x[i]
+                bullet_y = bullets.y[i]
 
-        bullet_x = bullets.x[bullet_idx]
-        bullet_y = bullets.y[bullet_idx]
+                # Transform bullet position to screen
+                screen_x, screen_y, distance, visible = self.world_to_screen_3d(
+                    bullet_x, bullet_y,
+                    state.player_tank.x,
+                    state.player_tank.y,
+                    state.player_tank.angle
+                )
 
-        # # Transform bullet position to screen
-        # screen_x, screen_y, distance, visible = self.world_to_screen_3d(
-        #     bullet_x, bullet_y,
-        #     state.player_tank.x,
-        #     state.player_tank.y,
-        #     state.player_tank.angle
-        # )
-
-        # if visible and 0 <= screen_x < WIDTH and 0 <= screen_y < HEIGHT:
-        #     # Draw the bullet as a short thick vertical line
-        #     pygame.draw.line(
-        #         screen,
-        #         BULLET_COLOR,
-        #         (screen_x, screen_y - 3),
-        #         (screen_x, screen_y + 3),
-        #         3
-        #     )
+                if visible and 0 <= screen_x < WIDTH and 0 <= screen_y < HEIGHT:
+                    # Draw the bullet as a short thick vertical line
+                    pygame.draw.line(
+                        screen,
+                        BULLET_COLOR,
+                        (screen_x, screen_y - 3),
+                        (screen_x, screen_y + 3),
+                        3
+                    )
 
 
     def numpy_to_pygame_surface(self, array):
@@ -461,26 +527,46 @@ class BattleZoneRenderer:
         return surface
 
     def world_to_screen_3d(self, world_x, world_y, player_x, player_y, player_angle):
-        """Convert world coordinates to 3D screen coordinates relative to player."""
+        """Convert world coordinates to 3D screen coordinates relative to player.
+        
+        Coordinate system:
+        - World: X increases right, Y increases down
+        - Player angle: 0=right, π/2=down, π=left, -π/2=up
+        - View space: X is left(-)/right(+) relative to player, Y is forward(+)/back(-) relative to player
+        - Screen: X increases right, Y increases down, with horizon at HORIZON_Y
+        """
         # Translate to player-relative coordinates
         rel_x = world_x - player_x
-        rel_y = world_y - player_y
+        rel_y = world_y - player_y  
         
         # Rotate by player angle to get view-relative coordinates
+        # We need to rotate the world coordinates to align with player's facing direction
         cos_a = jnp.cos(player_angle)
         sin_a = jnp.sin(player_angle)
         
-        # Correct transformation: forward is positive Y in view space
-        # When player faces right (angle=0), forward should be +Y direction
-        view_x = rel_x * cos_a + rel_y * sin_a   # Right/left relative to player
-        view_y = -rel_x * sin_a + rel_y * cos_a  # Forward/back relative to player
+        # CORRECTED transformation matrix:
+        # When player faces right (angle=0): forward should be +X direction in world
+        # When player faces down (angle=π/2): forward should be +Y direction in world
+        # The transformation should map world directions to view directions correctly
+        
+        # For a proper view transformation:
+        # - view_x (left/right): perpendicular to player's facing direction
+        # - view_y (forward/back): aligned with player's facing direction
+        view_x = -rel_x * sin_a + rel_y * cos_a   # Right/left relative to player (perpendicular to facing)
+        view_y = rel_x * cos_a + rel_y * sin_a    # Forward/back relative to player (parallel to facing)
                 
         # Perspective projection
-        if view_y > 1.0:  # Object is in front of player
-            # Standard perspective projection
-            screen_x = int(WIDTH // 2 + (view_x / view_y) * 100)
-            # Objects closer to horizon (far away) have smaller y, objects close have larger y
-            screen_y = int(HORIZON_Y + (10 / view_y) * 20)  # Simplified object positioning
+        if view_y > 1.0:  # Object is in front of player (positive forward distance)
+            # Standard perspective projection with proper FOV scaling
+            fov_scale = 80.0  # Field of view scaling factor
+            screen_x = int(WIDTH // 2 + (view_x / view_y) * fov_scale)
+            
+            # For proper 3D perspective:
+            # - Objects farther away should appear higher on screen (closer to horizon)
+            # - Objects closer should appear lower on screen (away from horizon)
+            # - The perspective scale should make closer objects larger
+            perspective_scale = 100.0  # Controls how much perspective affects Y position
+            screen_y = int(HORIZON_Y + (perspective_scale / view_y))
             
             distance = view_y
             return screen_x, screen_y, distance, True
