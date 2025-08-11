@@ -1,6 +1,6 @@
-# next TODO's (game features): jumping, chicken mode, Level 2, 
+# next TODO's (game features): jumping, chicken mode, Levels, 
 # TODO adjustments because of inacuracies: player & enemy speeds
-# TODO update observation, vmap more, random blinking, update spaces, possibly make generating/changing the maze easier?, update info
+# TODO update observation, random blinking, update spaces, possibly make generating/changing the maze easier?, update info
 
 from functools import partial
 import os
@@ -130,16 +130,12 @@ def precompute_rectangle_corners(rectangle, PATH_EDGES):
         return jnp.stack((min_x, min_y, max_x, max_y))
     return jax.lax.cond(jnp.any(rectangle), calculate, lambda: jnp.zeros(4, dtype=jnp.int32))
 
-@partial(jax.jit, static_argnames=['WIDTH', 'HEIGHT'])
-def generate_path_mask(WIDTH, HEIGHT, horizontal_edges, vertical_edges, horizontal_cond, vertical_cond):
+@partial(jax.jit, static_argnames=['WIDTH', 'HEIGHT', 'PATH_THICKNESS_HORIZONTAL', 'PATH_THICKNESS_VERTICAL'])
+def generate_path_mask(WIDTH, HEIGHT, PATH_THICKNESS_HORIZONTAL, PATH_THICKNESS_VERTICAL, horizontal_edges, vertical_edges, horizontal_cond, vertical_cond):
     """Generates a mask for the path edges. Conditions are used so this function can also be used to render only the walked on paths."""
     # Create an empty mask 
     mask = jnp.zeros((WIDTH, HEIGHT), dtype=jnp.int32)
     rendering_mask = jnp.zeros((WIDTH, HEIGHT), dtype=jnp.int32)
-
-    PATH_THICKNESS_HORIZONTAL = 5  # Thickness of the path in horizontal direction # TODO possibly move to constants
-    PATH_THICKNESS_VERTICAL = 4  # Thickness of the path in vertical direction # TODO possibly move to constants
-
 
     def interpolate_horizontal_line(edge, condition, num_points=WIDTH): # Could use less points if performance is a problem, but this accounts for all valid maze changes
 
@@ -270,6 +266,8 @@ class AmidarConstants(NamedTuple):
     # Rendering
     PATH_COLOR = jnp.array([162, 98, 33, 255], dtype=jnp.uint8)  # Brown color for the path
     WALKED_ON_COLOR = jnp.array([104, 72, 198, 255], dtype=jnp.uint8)  # Purple color for the walked on paths
+    PATH_THICKNESS_HORIZONTAL = 5  # Thickness of the path in horizontal direction 
+    PATH_THICKNESS_VERTICAL = 4  # Thickness of the path in vertical direction 
 
     # Points
     PIXELS_PER_POINT_HORIZONTAL: int = 3 # Values to calculate how many points an Edge is worth based on how long it is
@@ -280,7 +278,7 @@ class AmidarConstants(NamedTuple):
     PLAYER_SIZE: tuple[int, int] = (7, 7)  # Object sizes (width, height)
     ENEMY_SIZE: tuple[int, int] = (7, 7)  # Object sizes (width, height)
     PLAYER_SPRITE_OFFSET: tuple[int, int] = (-1, 0) # Offset for the player sprite in relation to the position in the code (because the top left corner of the player sprite is of the path to the left)
-    INITIAL_PLAYER_POSITION: chex.Array = jnp.array([140, 88])
+    INITIAL_PLAYER_POSITION: chex.Array = jnp.array([140, 89])
     INITIAL_PLAYER_DIRECTION: chex.Array = jnp.array(0)
     PLAYER_STARTING_PATH: int = 85  # The path edge the player starts on, this is the index in PATH_EDGES
 
@@ -337,7 +335,7 @@ class AmidarConstants(NamedTuple):
     PATH_EDGES: chex.Array = jnp.concatenate((HORIZONTAL_PATH_EDGES, VERTICAL_PATH_EDGES), axis=0)
     RECTANGLES: chex.Array = jnp.array(calculate_rectangles(HORIZONTAL_PATH_EDGES, VERTICAL_PATH_EDGES, PATH_EDGES, PATH_CORNERS))
     RECTANGLE_CORNERS: chex.Array = jax.vmap(precompute_rectangle_corners, in_axes=(0, None))(RECTANGLES, PATH_EDGES)
-    PATH_MASK, RENDERING_PATH_MASK = generate_path_mask(WIDTH, HEIGHT, HORIZONTAL_PATH_EDGES, VERTICAL_PATH_EDGES, jnp.full((HORIZONTAL_PATH_EDGES.shape[0],), True), jnp.full((VERTICAL_PATH_EDGES.shape[0],), True))  # Path mask are the single lines which restrict the movement, while rendering path mask includes the width of the paths for rendering
+    PATH_MASK, RENDERING_PATH_MASK = generate_path_mask(WIDTH, HEIGHT, PATH_THICKNESS_HORIZONTAL, PATH_THICKNESS_VERTICAL, HORIZONTAL_PATH_EDGES, VERTICAL_PATH_EDGES, jnp.full((HORIZONTAL_PATH_EDGES.shape[0],), True), jnp.full((VERTICAL_PATH_EDGES.shape[0],), True))  # Path mask are the single lines which restrict the movement, while rendering path mask includes the width of the paths for rendering
     PATH_PATTERN, WALKED_ON_PATTERN = generate_path_pattern(WIDTH, HEIGHT, PATH_COLOR, WALKED_ON_COLOR)
     PATH_SPRITE: chex.Array = jnp.where(RENDERING_PATH_MASK[:, :, None] == 1, PATH_PATTERN, jnp.full((HEIGHT, WIDTH, 4), 0, dtype=jnp.uint8))
 
@@ -826,9 +824,6 @@ class AmidarRenderer(JAXGameRenderer):
         # Note: For pygame, the raster is expected to be (width, height, channels)
         # where width corresponds to the horizontal dimension of the screen
 
-        # TODO remove
-        import jax.numpy as jnp
-
         raster = jnp.zeros((self.constants.HEIGHT, self.constants.WIDTH, 3))
         
         empty_mask = jnp.zeros((self.constants.WIDTH, self.constants.HEIGHT), dtype=jnp.uint8)
@@ -844,7 +839,7 @@ class AmidarRenderer(JAXGameRenderer):
         # Render walked on paths
         walked_on_paths_horizontal = state.walked_on_paths[0:jnp.shape(self.constants.HORIZONTAL_PATH_EDGES)[0]]
         walked_on_paths_vertical = state.walked_on_paths[jnp.shape(self.constants.HORIZONTAL_PATH_EDGES)[0]:]
-        _, walked_on_rendering_mask = generate_path_mask(self.constants.WIDTH, self.constants.HEIGHT, self.constants.HORIZONTAL_PATH_EDGES, self.constants.VERTICAL_PATH_EDGES, horizontal_cond=walked_on_paths_horizontal, vertical_cond=walked_on_paths_vertical)
+        _, walked_on_rendering_mask = generate_path_mask(self.constants.WIDTH, self.constants.HEIGHT, self.constants.PATH_THICKNESS_HORIZONTAL, self.constants.PATH_THICKNESS_VERTICAL, self.constants.HORIZONTAL_PATH_EDGES, self.constants.VERTICAL_PATH_EDGES, horizontal_cond=walked_on_paths_horizontal, vertical_cond=walked_on_paths_vertical)
         walked_on_paths_sprite = jnp.where(walked_on_rendering_mask[:, :, None] == 1, self.constants.WALKED_ON_PATTERN, jnp.full((self.constants.HEIGHT, self.constants.WIDTH, 4), 0, dtype=jnp.uint8))
         raster = aj.render_at(raster, 0, 0, walked_on_paths_sprite)
 
@@ -868,7 +863,7 @@ class AmidarRenderer(JAXGameRenderer):
         raster = aj.render_at(raster, 0, 0, completed_rectangles_sprite)
 
         # Render score
-        max_digits = 8  # Maximum number of digits to render # TODO make constant? 
+        max_digits = 8  # Maximum number of digits to render
         score_array = aj.int_to_digits(state.score, max_digits=max_digits)
         # convert the score to a list of digits
         number_of_digits = (jnp.log10(state.score)+1).astype(jnp.int32)
