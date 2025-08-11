@@ -74,6 +74,9 @@ VELOCITY_RETENTION_FACTOR = 1.0
 TARGET_RESPAWN_COOLDOWN = 16
 SPECIAL_TARGET_ACTIVE_DURATION = 257
 SPECIAL_TARGET_INACTIVE_DURATION = 787
+TARGET_RESPAWN_COOLDOWN = 16
+SPECIAL_TARGET_ACTIVE_DURATION = 257
+SPECIAL_TARGET_INACTIVE_DURATION = 787
 
 # Game layout constants
 # TODO: check if these are correct
@@ -88,6 +91,101 @@ INVISIBLE_BLOCK_REFLECTION_FACTOR = (
 
 
 # Background color and object colors
+BG_COLOR = 0, 0, 0
+TILT_MODE_COLOR = 167, 26, 26
+BACKGROUND_COLOR = jnp.array([0, 0, 0], dtype=jnp.uint8)
+WALL_COLOR = jnp.array([104, 72, 198], dtype=jnp.uint8)
+GROUP3_COLOR = jnp.array([187, 159, 71], dtype=jnp.uint8)
+GROUP4_COLOR = jnp.array([210, 164, 74], dtype=jnp.uint8)
+GROUP5_COLOR = jnp.array([236, 236, 236], dtype=jnp.uint8)
+
+# Color cycling arrays (each inner tuple converted to a list with alpha)
+BACKGROUND_COLOR_CYCLING = jnp.array(
+    [
+        [74, 74, 74],
+        [111, 111, 111],
+        [142, 142, 142],
+        [170, 170, 170],
+        [192, 192, 192],
+        [214, 214, 214],
+        [236, 236, 236],
+        [72, 72, 0],
+    ],
+    dtype=jnp.uint8,
+)
+
+WALL_COLOR_CYCLING = jnp.array(
+    [
+        [78, 50, 181],
+        [51, 26, 163],
+        [20, 0, 144],
+        [188, 144, 252],
+        [169, 128, 240],
+        [149, 111, 227],
+        [127, 92, 213],
+        [146, 70, 192],
+    ],
+    dtype=jnp.uint8,
+)
+
+GROUP3_COLOR_CYCLING = jnp.array(
+    [
+        [210, 182, 86],
+        [232, 204, 99],
+        [252, 224, 112],
+        [72, 44, 0],
+        [105, 77, 20],
+        [134, 106, 38],
+        [162, 134, 56],
+        [160, 171, 79],
+    ],
+    dtype=jnp.uint8,
+)
+
+GROUP4_COLOR_CYCLING = jnp.array(
+    [
+        [195, 144, 61],
+        [236, 200, 96],
+        [223, 183, 85],
+        [144, 72, 17],
+        [124, 44, 0],
+        [180, 122, 48],
+        [162, 98, 33],
+        [227, 151, 89],
+    ],
+    dtype=jnp.uint8,
+)
+
+GROUP5_COLOR_CYCLING = jnp.array(
+    [
+        [214, 214, 214],
+        [192, 192, 192],
+        [170, 170, 170],
+        [142, 142, 142],
+        [111, 111, 111],
+        [74, 74, 74],
+        [0, 0, 0],
+        [252, 252, 84],
+    ],
+    dtype=jnp.uint8,
+)
+
+# BACKGROUND_COLOR = 0, 0, 0
+# WALL_COLOR = 104, 72, 198
+# GROUP3_COLOR = 187, 159, 71
+# GROUP4_COLOR = 210, 164, 74
+# GROUP5_COLOR = 236, 236, 236
+# TILT_MODE_COLOR = 167, 26, 26
+# BACKGROUND_COLOR_CYCLING = jnp.array([(74, 74, 74), (111, 111, 111), (142, 142, 142), (170, 170, 170),
+#                                       (192, 192, 192), (214, 214, 214), (236, 236, 236), (72, 72, 0)])
+# WALL_COLOR_CYCLING = jnp.array([(78, 50, 181), (51, 26, 163), (20, 0, 144), (188, 144, 252),
+#                                 (169, 128, 240), (149, 111, 227), (127, 92, 213), (146, 70, 192)])
+# GROUP3_COLOR_CYCLING = jnp.array([(210, 182, 86), (232, 204, 99), (252, 224, 112), (72, 44, 0),
+#                                   (105, 77, 20), (134, 106, 38), (162, 134, 56), (160, 171, 79)])
+# GROUP4_COLOR_CYCLING = jnp.array([(195, 144, 61), (236, 200, 96), (223, 183, 85), (144, 72, 17),
+#                                   (124, 44, 0), (180, 122, 48), (162, 98, 33), (227, 151, 89)])
+# GROUP5_COLOR_CYCLING = jnp.array([(214, 214, 214), (192, 192, 192), (170, 170, 170), (142, 142, 142),
+#                                   (111, 111, 111), (74, 74, 74), (0, 0, 0), (252, 252, 84)])
 BG_COLOR = 0, 0, 0
 TILT_MODE_COLOR = 167, 26, 26
 BACKGROUND_COLOR = jnp.array([0, 0, 0], dtype=jnp.uint8)
@@ -266,6 +364,18 @@ BOUNDING_BOX_1_4 = jnp.ones((1, 4)).astype(jnp.bool)
 BOUNDING_BOX_2_5 = jnp.ones((2, 5)).astype(jnp.bool)
 BOUNDING_BOX_2_6 = jnp.ones((2, 6)).astype(jnp.bool)
 
+BOUNDING_BOX_1_10 = jnp.ones((1, 10)).astype(jnp.bool)
+BOUNDING_BOX_2_13 = jnp.ones((2, 13)).astype(jnp.bool)
+
+# Position 32 - Mid-Down (RAM state 32)
+BOUNDING_BOX_1_6  = jnp.ones((1, 6)).astype(jnp.bool)
+BOUNDING_BOX_1_7  = jnp.ones((1, 7)).astype(jnp.bool)
+BOUNDING_BOX_1_9  = jnp.ones((1, 9)).astype(jnp.bool)
+
+# Position 48 - Mid-Down (RAM state 48)
+BOUNDING_BOX_1_1  = jnp.ones((1, 1)).astype(jnp.bool)
+BOUNDING_BOX_1_3  = jnp.ones((1, 3)).astype(jnp.bool)
+
 # Spinner Bounding Boxes
 
 # Bounding boxes of the spinner if the joined (single larger) spinner part is on the top or bottom
@@ -280,6 +390,120 @@ SPINNER_LEFT_RIGHT_LARGE_WIDTH = jnp.array(4)
 SPINNER_LEFT_RIGHT_SMALL_HEIGHT = jnp.array(1)
 SPINNER_LEFT_RIGHT_SMALL_WIDTH = jnp.array(2)
 
+
+FLIPPER_OFFSETS_STATE_0_LEFT = jnp.array(
+    [
+        [64, 183],  
+        [64, 184],  
+        [64, 185],  
+        [64, 186],  
+        [67, 187],  
+        [68, 187],  
+        [69, 188],  
+    ],
+    dtype=jnp.int32,
+)
+
+FLIPPER_OFFSETS_STATE_0_RIGHT = jnp.array(
+    [
+        [94, 183],  
+        [93, 184],  
+        [92, 185],  
+        [91, 186],  
+        [89, 187],  
+        [87, 187],  
+        [85, 188],  
+    ],
+    dtype=jnp.int32,
+)
+
+# Offsets for the flipper in the first mid‑down position (RAM state 16).
+FLIPPER_OFFSETS_STATE_16_LEFT = jnp.array(
+    [
+        [64, 184],  
+        [64, 185],  
+    ],
+    dtype=jnp.int32,
+)
+
+FLIPPER_OFFSETS_STATE_16_RIGHT = jnp.array(
+    [
+        [86, 184],  
+        [83, 185],  
+    ],
+    dtype=jnp.int32,
+)
+
+# Position 16 - Mid-Down (RAM state 16)
+# Offsets for the flipper in the second mid‑angle position (RAM state 32).
+FLIPPER_OFFSETS_STATE_32_LEFT = jnp.array(
+    [
+        [71, 181],  
+        [67, 182],  
+        [67, 182],  
+    ],
+    dtype=jnp.int32,
+)
+
+# Position 32 - Mid-Down (RAM state 32)
+FLIPPER_OFFSETS_STATE_32_RIGHT = jnp.array(
+    [
+        [83, 181],  
+        [86, 182],   
+        [84, 182],  
+    ],
+    dtype=jnp.int32,
+)
+
+# Offsets for the flipper in the fully upright position (RAM state 48).
+FLIPPER_OFFSETS_STATE_48_LEFT = jnp.array(
+    [
+        [74, 176],  
+        [73, 177],  
+    ],
+    dtype=jnp.int32,
+)
+
+# Position 48 - Mid-Down (RAM state 48)
+FLIPPER_OFFSETS_STATE_48_RIGHT = jnp.array(
+    [
+        [85, 176],  
+        [84, 177],  
+    ],
+    dtype=jnp.int32,
+)
+
+# A convenience mapping from RAM state to the corresponding offset arrays.
+FLIPPER_OFFSETS = {
+    0: {
+        "left": FLIPPER_OFFSETS_STATE_0_LEFT,
+        "right": FLIPPER_OFFSETS_STATE_0_RIGHT,
+    },
+    16: {
+        "left": FLIPPER_OFFSETS_STATE_16_LEFT,
+        "right": FLIPPER_OFFSETS_STATE_16_RIGHT,
+    },
+    32: {
+        "left": FLIPPER_OFFSETS_STATE_32_LEFT,
+        "right": FLIPPER_OFFSETS_STATE_32_RIGHT,
+    },
+    48: {
+        "left": FLIPPER_OFFSETS_STATE_48_LEFT,
+        "right": FLIPPER_OFFSETS_STATE_48_RIGHT,
+    },
+}
+
+__all__ = [
+    "FLIPPER_OFFSETS_STATE_0_LEFT",
+    "FLIPPER_OFFSETS_STATE_0_RIGHT",
+    "FLIPPER_OFFSETS_STATE_16_LEFT",
+    "FLIPPER_OFFSETS_STATE_16_RIGHT",
+    "FLIPPER_OFFSETS_STATE_32_LEFT",
+    "FLIPPER_OFFSETS_STATE_32_RIGHT",
+    "FLIPPER_OFFSETS_STATE_48_LEFT",
+    "FLIPPER_OFFSETS_STATE_48_RIGHT",
+    "FLIPPER_OFFSETS",
+]
 
 @chex.dataclass
 class BallMovement:
@@ -1067,6 +1291,79 @@ MIDDLE_BAR_SCENE_OBJECT = SceneObject(
     score_type=jnp.array(0),  # type: ignore
 )
 
+# Left Flipper SceneObjects for different states
+LEFT_FLIPPER_STATE_0_SCENE_OBJECT = SceneObject(
+    hit_box_height=jnp.array(6),  
+    hit_box_width=jnp.array(6),   
+    hit_box_x_offset=jnp.array(64),
+    hit_box_y_offset=jnp.array(183),
+    reflecting=jnp.array(1),      
+    score_type=jnp.array(0), #no score 
+)
+
+LEFT_FLIPPER_STATE_16_SCENE_OBJECT = SceneObject(
+    hit_box_height=jnp.array(2),  
+    hit_box_width=jnp.array(1),   
+    hit_box_x_offset=jnp.array(64),
+    hit_box_y_offset=jnp.array(184),
+    reflecting=jnp.array(1),
+    score_type=jnp.array(0),
+)
+
+LEFT_FLIPPER_STATE_32_SCENE_OBJECT = SceneObject(
+    hit_box_height=jnp.array(2),  
+    hit_box_width=jnp.array(5),   
+    hit_box_x_offset=jnp.array(67),
+    hit_box_y_offset=jnp.array(181),
+    reflecting=jnp.array(1),
+    score_type=jnp.array(0),
+)
+
+LEFT_FLIPPER_STATE_48_SCENE_OBJECT = SceneObject(
+    hit_box_height=jnp.array(2),  
+    hit_box_width=jnp.array(2),   
+    hit_box_x_offset=jnp.array(73),
+    hit_box_y_offset=jnp.array(176),
+    reflecting=jnp.array(1),
+    score_type=jnp.array(0),
+)
+
+# Right Flipper SceneObjects for different states
+RIGHT_FLIPPER_STATE_0_SCENE_OBJECT = SceneObject(
+    hit_box_height=jnp.array(6),  
+    hit_box_width=jnp.array(10),  
+    hit_box_x_offset=jnp.array(85),
+    hit_box_y_offset=jnp.array(183),
+    reflecting=jnp.array(1),
+    score_type=jnp.array(0),
+)
+
+RIGHT_FLIPPER_STATE_16_SCENE_OBJECT = SceneObject(
+    hit_box_height=jnp.array(2),  
+    hit_box_width=jnp.array(4),   
+    hit_box_x_offset=jnp.array(83),
+    hit_box_y_offset=jnp.array(184),
+    reflecting=jnp.array(1),
+    score_type=jnp.array(0),
+)
+
+RIGHT_FLIPPER_STATE_32_SCENE_OBJECT = SceneObject(
+    hit_box_height=jnp.array(2),  
+    hit_box_width=jnp.array(4),   
+    hit_box_x_offset=jnp.array(83),
+    hit_box_y_offset=jnp.array(181),
+    reflecting=jnp.array(1),
+    score_type=jnp.array(0),
+)
+
+RIGHT_FLIPPER_STATE_48_SCENE_OBJECT = SceneObject(
+    hit_box_height=jnp.array(2),  
+    hit_box_width=jnp.array(2),   
+    hit_box_x_offset=jnp.array(84),
+    hit_box_y_offset=jnp.array(176),
+    reflecting=jnp.array(1),
+    score_type=jnp.array(0),
+)
 
 ALL_SCENE_OBJECTS_LIST = [
     TOP_WALL_SCENE_OBJECT,
@@ -1151,6 +1448,14 @@ ALL_SCENE_OBJECTS_LIST = [
     LEFT_ROLLOVER_SCENE_OBJECT,
     ATARI_ROLLOVER_SCENE_OBJECT,
     MIDDLE_BAR_SCENE_OBJECT,
+    LEFT_FLIPPER_STATE_0_SCENE_OBJECT,
+    LEFT_FLIPPER_STATE_16_SCENE_OBJECT,
+    LEFT_FLIPPER_STATE_32_SCENE_OBJECT,
+    LEFT_FLIPPER_STATE_48_SCENE_OBJECT,
+    RIGHT_FLIPPER_STATE_0_SCENE_OBJECT,
+    RIGHT_FLIPPER_STATE_16_SCENE_OBJECT,
+    RIGHT_FLIPPER_STATE_32_SCENE_OBJECT,
+    RIGHT_FLIPPER_STATE_48_SCENE_OBJECT,
 ]
 
 REFLECTING_SCENE_OBJECTS = jnp.stack(
