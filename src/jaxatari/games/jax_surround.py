@@ -101,18 +101,22 @@ class SurroundRenderer(JAXGameRenderer):
             mask = jnp.repeat(mask, self.consts.CELL_SIZE[1], axis=0)
             return jnp.repeat(mask, self.consts.CELL_SIZE[0], axis=1)
 
-        p1_mask = upscale((state.trail == 1).T)
-        playfield = playfield.at[p1_mask == 1].set(jnp.array(self.consts.P1_TRAIL_COLOR, dtype=jnp.uint8))
-        p2_mask = upscale((state.trail == 2).T)
-        playfield = playfield.at[p2_mask == 1].set(jnp.array(self.consts.P2_TRAIL_COLOR, dtype=jnp.uint8))
+        p1_mask = upscale((state.trail == 1).T)[..., None]
+        p1_color = jnp.array(self.consts.P1_TRAIL_COLOR, dtype=jnp.uint8)
+        playfield = jnp.where(p1_mask, p1_color, playfield)
+        p2_mask = upscale((state.trail == 2).T)[..., None]
+        p2_color = jnp.array(self.consts.P2_TRAIL_COLOR, dtype=jnp.uint8)
+        playfield = jnp.where(p2_mask, p2_color, playfield)
 
         p1x = state.pos0[0] * self.consts.CELL_SIZE[0]
         p1y = state.pos0[1] * self.consts.CELL_SIZE[1]
-        playfield = playfield.at[p1y:p1y+self.consts.CELL_SIZE[1], p1x:p1x+self.consts.CELL_SIZE[0], :].set(jnp.array(self.consts.P1_TRAIL_COLOR, dtype=jnp.uint8))
+        p1_patch = jnp.ones((self.consts.CELL_SIZE[1], self.consts.CELL_SIZE[0], 3), dtype=jnp.uint8) * p1_color
+        playfield = jax.lax.dynamic_update_slice(playfield, p1_patch, (p1y, p1x, 0))
 
         p2x = state.pos1[0] * self.consts.CELL_SIZE[0]
         p2y = state.pos1[1] * self.consts.CELL_SIZE[1]
-        playfield = playfield.at[p2y:p2y+self.consts.CELL_SIZE[1], p2x:p2x+self.consts.CELL_SIZE[0], :].set(jnp.array(self.consts.P2_TRAIL_COLOR, dtype=jnp.uint8))
+        p2_patch = jnp.ones((self.consts.CELL_SIZE[1], self.consts.CELL_SIZE[0], 3), dtype=jnp.uint8) * p2_color
+        playfield = jax.lax.dynamic_update_slice(playfield, p2_patch, (p2y, p2x, 0))
 
         img = img.at[y_off:y_off+field_h, :width, :].set(playfield)
 
