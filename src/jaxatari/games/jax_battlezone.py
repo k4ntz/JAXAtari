@@ -44,9 +44,9 @@ MAX_OBSTACLES = 16
 
 
 # Tank movement constants
-TANK_SPEED = 2.0
-TANK_TURN_SPEED = 0.1
-BULLET_SPEED = 4.0
+TANK_SPEED = 0.5
+TANK_TURN_SPEED = 0.02
+BULLET_SPEED = 1.0 # 4.0
 BULLET_LIFETIME = 120  # frames
 
 # 3D rendering constants
@@ -237,6 +237,69 @@ def update_tank_position(tank: Tank, action: chex.Array) -> Tank:
     )
 
 @jax.jit
+def check_bullet_obstacle_collisions(bullets: Bullet, obstacles: Obstacle) -> Tuple[Bullet, Obstacle]:
+    """Check for collisions between bullets and obstacles, removing both on hit."""
+    
+    # Define collision radius
+    collision_radius = 15.0
+    
+    # Create meshgrid for bullet-obstacle pairs
+    bullet_x = bullets.x[:, None]  # Shape: (num_bullets, 1)
+    bullet_y = bullets.y[:, None]  # Shape: (num_bullets, 1)
+    bullet_active = bullets.active[:, None]  # Shape: (num_bullets, 1)
+    
+    obstacle_x = obstacles.x[None, :]  # Shape: (1, num_obstacles)
+    obstacle_y = obstacles.y[None, :]  # Shape: (1, num_obstacles)
+    
+    # Calculate distances between all bullet-obstacle pairs
+    dx = bullet_x - obstacle_x  # Shape: (num_bullets, num_obstacles)
+    dy = bullet_y - obstacle_y  # Shape: (num_bullets, num_obstacles)
+    distances = jnp.sqrt(dx * dx + dy * dy)
+    
+    # Check collisions (only for active bullets)
+    collisions = jnp.logical_and(
+        bullet_active,  # Only active bullets can collide
+        distances < collision_radius
+    )
+    
+    # Mark bullets for removal (any bullet that collides with any obstacle)
+    bullets_to_remove = jnp.any(collisions, axis=1)  # Shape: (num_bullets,)
+    
+    # Mark obstacles for removal (any obstacle that collides with any bullet)
+    obstacles_to_remove = jnp.any(collisions, axis=0)  # Shape: (num_obstacles,)
+    
+    # Update bullets - set collided bullets to inactive
+    new_bullet_active = jnp.where(
+        bullets_to_remove,
+        jnp.zeros_like(bullets.active),
+        bullets.active
+    )
+    
+    # Update obstacles - move collided obstacles far away
+    far_away = BOUNDARY_MAX + 1000.0
+    new_obstacle_x = jnp.where(obstacles_to_remove, far_away, obstacles.x)
+    new_obstacle_y = jnp.where(obstacles_to_remove, far_away, obstacles.y)
+    
+    # Create updated structures
+    updated_bullets = Bullet(
+        x=bullets.x,
+        y=bullets.y,
+        z=bullets.z,
+        vel_x=bullets.vel_x,
+        vel_y=bullets.vel_y,
+        active=new_bullet_active,
+        lifetime=bullets.lifetime,
+        owner=bullets.owner
+    )
+    
+    updated_obstacles = Obstacle(
+        x=new_obstacle_x,
+        y=new_obstacle_y,
+        obstacle_type=obstacles.obstacle_type
+    )
+    
+    return updated_bullets, updated_obstacles
+@jax.jit
 def should_fire(action: chex.Array) -> chex.Array:
     """Check if the action includes firing."""
     fire_actions = jnp.array([FIRE, UPFIRE, RIGHTFIRE, LEFTFIRE, DOWNFIRE,
@@ -247,7 +310,7 @@ def should_fire(action: chex.Array) -> chex.Array:
 def create_bullet(tank: Tank, owner: chex.Array) -> Bullet:
     """Create a new bullet slightly in front of tank's barrel."""
     angle = tank.angle
-    offset = 10.0  # Offset in front of tank
+    offset = 0.1  # Offset in front of tank
 
     # Use consistent angle direction - no flip needed here
     vel_x = jnp.cos(angle) * BULLET_SPEED
@@ -258,7 +321,7 @@ def create_bullet(tank: Tank, owner: chex.Array) -> Bullet:
     return Bullet(
         x=spawn_x,
         y=spawn_y,
-        z=jnp.array(10.0),  # Add this line - bullets fly at height 10
+        z=jnp.array(3.0),  # Add this line - bullets fly at height 10
         vel_x=vel_x,
         vel_y=vel_y,
         active=jnp.array(1, dtype=jnp.int32),
@@ -328,6 +391,7 @@ class JaxBattleZone(JaxEnvironment[BattleZoneState, BattleZoneObservation, chex.
             owner=jnp.zeros(MAX_BULLETS)
         )
         
+        # Replace later with actual enemy tanks and other enemy entities...
         # Initialize obstacles (cubes and pyramids scattered around)
         obstacle_positions_x = jnp.array([100.0, -150.0, 250.0, -250.0, 350.0, -350.0, 450.0, -450.0,
                                          150.0, -100.0, 300.0, -300.0, 400.0, -400.0, 500.0, -500.0])
@@ -392,10 +456,13 @@ class JaxBattleZone(JaxEnvironment[BattleZoneState, BattleZoneObservation, chex.
         # Update all bullet positions
         updated_bullets = update_bullets(updated_bullets)
         
+        # Check for bullet-obstacle collisions (ADD THIS HERE)
+        updated_bullets, updated_obstacles = check_bullet_obstacle_collisions(updated_bullets, state.obstacles)
+        
         new_state = BattleZoneState(
             player_tank=new_player_tank,
             bullets=updated_bullets,
-            obstacles=state.obstacles,  # Obstacles don't change
+            obstacles=updated_obstacles,  # Use updated obstacles (not state.obstacles)
             step_counter=state.step_counter + 1
         )
         
@@ -406,7 +473,6 @@ class JaxBattleZone(JaxEnvironment[BattleZoneState, BattleZoneObservation, chex.
         info = self._get_info(new_state, all_rewards)
 
         return observation, new_state, reward, done, info
-
     @partial(jax.jit, static_argnums=(0,))
     def _get_observation(self, state: BattleZoneState) -> BattleZoneObservation:
         return BattleZoneObservation(
