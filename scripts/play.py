@@ -4,6 +4,7 @@ import pygame
 
 import jax
 import jax.random as jrandom
+import jax.numpy as jnp
 import numpy as np
 
 from jaxatari.environment import JAXAtariAction
@@ -68,6 +69,12 @@ def main():
         help="Frame rate for the game.",
     )
     parser.add_argument(
+        "--logic-fps",
+        type=int,
+        default=None,
+        help="Logic update rate (steps per second). Defaults to 2 for Surround.",
+    )
+    parser.add_argument(
         "-v",
         "--verbose",
         action="store_true",
@@ -75,6 +82,12 @@ def main():
     )
 
     args = parser.parse_args()
+
+    logic_fps = args.logic_fps or (2 if args.game.lower() == "surround" else args.fps)
+    render_fps = args.fps
+    step_ms = 1000 // logic_fps
+    acc_ms = 0
+    latest_action = JAXAtariAction.NOOP
 
     execute_without_rendering = False
     # Load the game environment
@@ -117,28 +130,20 @@ def main():
     running = True
     pause = False
     frame_by_frame = False
-    frame_rate = args.fps
     next_frame_asked = False
     total_return = 0
     if args.replay:
         with open(args.replay, "rb") as f:
-            # Load the saved data
             save_data = np.load(f, allow_pickle=True).item()
-
-            # Extract saved data
             actions_array = save_data["actions"]
             seed = save_data["seed"]
-            loaded_frame_rate = save_data["frame_rate"]
-
-            frame_rate = loaded_frame_rate
-
-            # Reset environment with the saved seed
+            render_fps = save_data.get("frame_rate", render_fps)
+            logic_fps = save_data.get("logic_fps", logic_fps)
+            step_ms = 1000 // logic_fps
             key = jrandom.PRNGKey(seed)
             obs, state = jitted_reset(key)
 
-        # loop over all the actions and play the game
         for action in actions_array:
-            # Convert numpy action to JAX array
             action = jax.numpy.array(action, dtype=jax.numpy.int32)
             if args.verbose:
                 print(f"Action: {ACTION_NAMES[int(action)]} ({int(action)})")
@@ -146,9 +151,8 @@ def main():
             obs, state, reward, done, info = jitted_step(state, action)
             image = jitted_render(state)
             update_pygame(window, image, UPSCALE_FACTOR, 160, 210)
-            clock.tick(frame_rate)
+            clock.tick(logic_fps)
 
-            # Check for quit event
             for event in pygame.event.get():
                 if event.type == pygame.QUIT or (
                     event.type == pygame.KEYDOWN and event.key == pygame.K_ESCAPE
@@ -161,54 +165,55 @@ def main():
 
     # main game loop
     while running:
-        # check for external actions
-        for event in pygame.event.get():
+        dt = clock.tick(render_fps)
+        acc_ms += dt
+
+        events = pygame.event.get()
+        for event in events:
             if event.type == pygame.QUIT:
                 running = False
-                continue
             elif event.type == pygame.KEYDOWN:
-                if event.key == pygame.K_p:  # pause
+                if event.key == pygame.K_p:
                     pause = not pause
-                elif event.key == pygame.K_r:  # reset
+                elif event.key == pygame.K_r:
                     obs, state = jitted_reset(key)
                 elif event.key == pygame.K_f:
                     frame_by_frame = not frame_by_frame
                 elif event.key == pygame.K_n:
                     next_frame_asked = True
+
+        if args.random:
+            key, subkey = jax.random.split(key)
+            latest_action = action_space.sample(subkey)
+        else:
+            latest_action = get_human_action(events)
+
         if pause or (frame_by_frame and not next_frame_asked):
             continue
-        if args.random:
-            # sample an action from the action space array
-            action = action_space.sample(key)
-            key, subkey = jax.random.split(key)
-        else:
-            # get the pressed keys
-            action = get_human_action()
 
-            # Save the action to the save_keys dictionary
-            if args.record:
-                # Save the action to the save_keys dictionary
-                save_keys[len(save_keys)] = action
-
-        if not frame_by_frame or next_frame_asked:
-            action = get_human_action()
-            obs, state, reward, done, info = jitted_step(state, action)
+        if acc_ms >= step_ms and (not frame_by_frame or next_frame_asked):
+            acc_ms -= step_ms
+            act = latest_action
+            if args.game.lower() == "surround":
+                joint_action = jnp.array([act, JAXAtariAction.NOOP], dtype=jnp.int32)
+            else:
+                joint_action = act
+            obs, state, reward, done, info = jitted_step(state, joint_action)
             total_return += reward
             if next_frame_asked:
                 next_frame_asked = False
+            if args.record:
+                save_keys[len(save_keys)] = act
+            if done:
+                print(f"Done. Total return {total_return}")
+                total_return = 0
+                obs, state = jitted_reset(key)
+                latest_action = JAXAtariAction.NOOP
+                acc_ms = 0
 
-        if done:
-            print(f"Done. Total return {total_return}")
-            total_return = 0
-            obs, state = jitted_reset(key)
-
-        # Render the environment
         if not execute_without_rendering:
             image = jitted_render(state)
-
             update_pygame(window, image, UPSCALE_FACTOR, 160, 210)
-
-            clock.tick(frame_rate)
 
     if args.record:
         # Convert dictionary to array of actions
@@ -217,7 +222,8 @@ def main():
                 [action for action in save_keys.values()], dtype=np.int32
             ),
             "seed": args.seed,  # The random seed used
-            "frame_rate": frame_rate,  # The frame rate for consistent replay
+            "frame_rate": render_fps,  # The frame rate for consistent replay
+            "logic_fps": logic_fps,
         }
         with open(args.record, "wb") as f:
             np.save(f, save_data)

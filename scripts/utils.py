@@ -54,14 +54,21 @@ def update_pygame(pygame_screen, raster, SCALING_FACTOR=3, WIDTH=400, HEIGHT=300
     pygame.display.flip()
 
 
-def get_human_action() -> jax.numpy.ndarray: # Or chex.Array if you use chex
+def get_human_action(events=None) -> jax.numpy.ndarray:  # Or chex.Array if you use chex
     """
     Get human action from keyboard with support for diagonal movement and combined fire,
     using Action constants.
     Returns a JAX array containing a single integer action.
+    
+    Args:
+        events: Optional list of pygame events. If ``None`` the events are fetched
+            internally via :func:`pygame.event.get`. Providing the events allows the
+            caller to handle them separately without losing keyboard input.
     """
     # Important: Process Pygame events to allow window to close, etc.
-    for event in pygame.event.get():
+    if events is None:
+        events = pygame.event.get()
+    for event in events:
         if event.type == pygame.QUIT:
             pygame.quit()
             raise SystemExit("Pygame window closed by user.")
