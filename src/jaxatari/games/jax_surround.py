@@ -1,7 +1,5 @@
 import os
 import jax
-import os
-import jax
 import jax.numpy as jnp
 from functools import partial
 from typing import NamedTuple, Tuple, Optional
@@ -54,6 +52,7 @@ class SurroundState(NamedTuple):
     dir0: jnp.ndarray  # () int32
     dir1: jnp.ndarray  # () int32
     trail: jnp.ndarray  # (GRID_WIDTH, GRID_HEIGHT)
+    border: jnp.ndarray  # (GRID_WIDTH, GRID_HEIGHT) bool mask
     terminated: jnp.ndarray  # () bool
     time: jnp.ndarray  # step counter
     score0: jnp.ndarray  # () int32
@@ -74,20 +73,16 @@ class SurroundInfo(NamedTuple):
 
     time: jnp.ndarray
 
-
-@partial(jax.jit, static_argnames=("border_x", "border_y", "grid_w", "grid_h"))
-def check_border_collision(
-    player_pos: jnp.ndarray,
-    border_x: int,
-    border_y: int,
-    grid_w: int,
-    grid_h: int,
-) -> jnp.ndarray:
-    x, y = player_pos
-    return jnp.logical_or(
-        jnp.logical_or(x < border_x, x > grid_w - border_x - 1),
-        jnp.logical_or(y < border_y, y > grid_h - border_y - 1),
-    )
+def create_border_mask(consts: SurroundConstants) -> jnp.ndarray:
+    """Return a boolean mask marking all border cells as ``True``."""
+    mask = jnp.zeros((consts.GRID_WIDTH, consts.GRID_HEIGHT), dtype=jnp.bool_)
+    bx = consts.BORDER_THICKNESS // consts.CELL_SIZE[0]
+    by = consts.BORDER_THICKNESS // consts.CELL_SIZE[1]
+    mask = mask.at[:bx, :].set(True)
+    mask = mask.at[-bx:, :].set(True)
+    mask = mask.at[:, :by].set(True)
+    mask = mask.at[:, -by:].set(True)
+    return mask
 
 
 class SurroundRenderer(JAXGameRenderer):
@@ -176,12 +171,14 @@ class JaxSurround(
         p0_start = jnp.array(self.consts.P1_START_POS, dtype=jnp.int32)
         p1_start = jnp.array(self.consts.P2_START_POS, dtype=jnp.int32)
         grid = jnp.zeros((self.consts.GRID_WIDTH, self.consts.GRID_HEIGHT), dtype=jnp.int32)
+        border = create_border_mask(self.consts)
         state = SurroundState(
             p0_start,
             p1_start,
             jnp.array(self.consts.P1_START_DIR, dtype=jnp.int32),
             jnp.array(self.consts.P2_START_DIR, dtype=jnp.int32),
             grid,
+            border,
             jnp.array(0, dtype=jnp.int32),
             jnp.array(0, dtype=jnp.int32),
             jnp.array(0, dtype=jnp.int32),
@@ -246,49 +243,47 @@ class JaxSurround(
         new_p0 = state.pos0 + offset_p0
         new_p1 = state.pos1 + offset_p1
 
-        border_x = self.consts.BORDER_THICKNESS // self.consts.CELL_SIZE[0]
-        border_y = self.consts.BORDER_THICKNESS // self.consts.CELL_SIZE[1]
         grid_w = self.consts.GRID_WIDTH
         grid_h = self.consts.GRID_HEIGHT
 
-        bounds_min = jnp.array([border_x, border_y])
-        bounds_max = jnp.array([grid_w - border_x, grid_h - border_y])
-        clip = lambda pos: jnp.clip(pos, bounds_min, bounds_max - 1)
+        def out_of_bounds(pos):
+            return jnp.logical_or(
+                jnp.logical_or(pos[0] < 0, pos[0] >= grid_w),
+                jnp.logical_or(pos[1] < 0, pos[1] >= grid_h),
+            )
 
-        hit_p0_wall = check_border_collision(new_p0, border_x, border_y, grid_w, grid_h)
-        hit_p1_wall = check_border_collision(new_p1, border_x, border_y, grid_w, grid_h)
+        out0 = out_of_bounds(new_p0)
+        out1 = out_of_bounds(new_p1)
 
-        safe_p0 = clip(new_p0)
-        safe_p1 = clip(new_p1)
-
-        hit_p0_trail = jax.lax.cond(
-            hit_p0_wall,
-            lambda: False,
-            lambda: state.trail[tuple(safe_p0)] != 0,
+        hit_p0 = jax.lax.cond(
+            out0,
+            lambda: True,
+            lambda: jnp.logical_or(
+                state.border[tuple(new_p0)], state.trail[tuple(new_p0)] != 0
+            ),
         )
-        hit_p1_trail = jax.lax.cond(
-            hit_p1_wall,
-            lambda: False,
-            lambda: state.trail[tuple(safe_p1)] != 0,
+        hit_p1 = jax.lax.cond(
+            out1,
+            lambda: True,
+            lambda: jnp.logical_or(
+                state.border[tuple(new_p1)], state.trail[tuple(new_p1)] != 0
+            ),
         )
-
-        p0_hit = jnp.logical_or(hit_p0_wall, hit_p0_trail)
-        p1_hit = jnp.logical_or(hit_p1_wall, hit_p1_trail)
 
         grid0 = jax.lax.select(
             is_move0, state.trail.at[tuple(state.pos0)].set(1), state.trail
         )
         grid = jax.lax.select(is_move1, grid0.at[tuple(state.pos1)].set(2), grid0)
 
-        new_p0 = safe_p0
-        new_p1 = safe_p1
+        new_p0 = jax.lax.select(out0, state.pos0, new_p0)
+        new_p1 = jax.lax.select(out1, state.pos1, new_p1)
 
-        terminated = jnp.logical_or(p0_hit, p1_hit)
+        terminated = jnp.logical_or(hit_p0, hit_p1)
         time_limit_reached = (state.time + 1) >= self.consts.MAX_STEPS
         terminated = jnp.logical_or(terminated, time_limit_reached)
 
-        new_score0 = state.score0 + jnp.where(p1_hit & ~p0_hit, 1, 0)
-        new_score1 = state.score1 + jnp.where(p0_hit & ~p1_hit, 1, 0)
+        new_score0 = state.score0 + jnp.where(hit_p1 & ~hit_p0, 1, 0)
+        new_score1 = state.score1 + jnp.where(hit_p0 & ~hit_p1, 1, 0)
         terminated = jnp.logical_or(
             terminated, jnp.logical_or(new_score0 >= 10, new_score1 >= 10)
         )
@@ -299,6 +294,7 @@ class JaxSurround(
             new_dir0,
             new_dir1,
             grid,
+            state.border,
             terminated.astype(jnp.int32),
             state.time + 1,
             new_score0,
