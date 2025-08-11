@@ -24,9 +24,9 @@ class SurroundConstants(NamedTuple):
     SCREEN_SIZE: Tuple[int, int] = (160, 210)
 
     # Colors
-    P1_TRAIL_COLOR: Tuple[int, int, int] = (0, 255, 0)  # green
-    P2_TRAIL_COLOR: Tuple[int, int, int] = (160, 32, 240)  # purple
-    BACKGROUND_COLOR: Tuple[int, int, int] = (0, 0, 0)
+    P1_TRAIL_COLOR: Tuple[int, int, int] = (255, 221, 51) # Gelb
+    P2_TRAIL_COLOR: Tuple[int, int, int] = (221, 51, 136)   # Pink-Magenta
+    BACKGROUND_COLOR: Tuple[int, int, int] = (153, 153, 255) # Blau-Lila Hintergrund
 
     # Starting positions (x, y)
     P1_START_POS: Tuple[int, int] = (5, 12)
@@ -35,6 +35,10 @@ class SurroundConstants(NamedTuple):
     # Starting directions
     P1_START_DIR: int = Action.RIGHT
     P2_START_DIR: int = Action.LEFT
+
+    # Border
+    BORDER_COLOR = (255, 102, 204)  # Pink wie im Bild
+    BORDER_THICKNESS = 10           # Dicke des Randes in Pixeln
 
     # Rules
     ALLOW_REVERSE: bool = False
