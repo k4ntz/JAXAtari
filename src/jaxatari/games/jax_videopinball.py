@@ -1115,7 +1115,6 @@ STATE_TRANSLATOR: dict = {
     18: "ball_in_play",
     19: "respawn_timer",
     20: "color_cycling",
-    # 21: "tilt_mode_active"
 }
 
 
@@ -1178,7 +1177,6 @@ class VideoPinballState(NamedTuple):
     ball_in_play: chex.Array
     respawn_timer: chex.Array
     color_cycling: chex.Array
-    # tilt_mode_active: chex.Array  # True if the tilt mode is active, False otherwise
     # obs_stack: chex.ArrayTree     What is this for? Pong doesnt have this right?
 
 
