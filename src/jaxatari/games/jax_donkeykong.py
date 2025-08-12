@@ -40,6 +40,9 @@ class DonkeyKongConstants(NamedTuple):
     LEVEL_2_HAMMER_X: int = 78
     LEVEL_2_HAMMER_Y: int = 68
 
+    HAMMER_CARRY_DURATION = 654
+    HAMMER_SWING_DURATION = 8
+
     # Drop Pit positions
     DP_LEFT_X: int = 52
     DP_RIGHT_X: int = 104
@@ -100,24 +103,25 @@ class DonkeyKongConstants(NamedTuple):
     # Bar start/end positions
     BAR_LEFT_Y: int = 32
     BAR_RIGHT_Y: int = 120
-    BAR_1_LEFT_X: int = 185 +8
-    BAR_1_RIGHT_X: int = 185 +8
-    BAR_2_LEFT_X: int = 157 +8
-    BAR_2_RIGHT_X: int = 164 +8
-    BAR_3_LEFT_X: int = 136 +8
-    BAR_3_RIGHT_X: int = 129 +8
-    BAR_4_LEFT_X: int = 101 +8
-    BAR_4_RIGHT_X: int = 108 +8
-    BAR_5_LEFT_X: int = 80 +8
-    BAR_5_RIGHT_X: int = 73 +8
-    BAR_6_LEFT_X: int = 52 +8
-    BAR_6_RIGHT_X: int = 52 +8
+    BAR_1_LEFT_X: int = 193
+    BAR_1_RIGHT_X: int = 193
+    BAR_2_LEFT_X: int = 165 
+    BAR_2_RIGHT_X: int = 172
+    BAR_3_LEFT_X: int = 144
+    BAR_3_RIGHT_X: int = 137
+    BAR_4_LEFT_X: int = 109
+    BAR_4_RIGHT_X: int = 116
+    BAR_5_LEFT_X: int = 88
+    BAR_5_RIGHT_X: int = 81
+    BAR_6_LEFT_X: int = 60
+    BAR_6_RIGHT_X: int = 60
 
     # Ladder
     LADDER_WIDTH: int = 4
 
     # Barrel spawn timing
     SPAWN_STEP_COUNTER_BARREL: int = 236
+
 
 class InvisibleWallEachStage(NamedTuple):
     stage: chex.Array
@@ -163,6 +167,10 @@ class DonkeyKongState(NamedTuple):
     invisibleWallEachStage: InvisibleWallEachStage
     random_key: int
     frames_since_last_barrel_spawn: int
+
+    hammer_x: int
+    hammer_y: int
+    hammer_can_hit: bool
 
 class DonkeyKongObservation(NamedTuple):
     total_score: jnp.ndarray
@@ -508,22 +516,22 @@ class JaxDonkeyKong(JaxEnvironment[DonkeyKongState, DonkeyKongObservation, Donke
 
         # Jumping wide with Action.LEFTFIRE and Action.RIGHTFIRE
         def jumping_right(state):
-            new_state = state._replace(
+            new_state_start_jumping = state._replace(
                 start_frame_when_mario_jumped = state.step_counter,
                 mario_jumping_wide = True,
                 mario_view_direction = self.consts.MOVING_RIGHT,
                 mario_x = state.mario_x - self.consts.MARIO_JUMPING_HEIGHT,
                 mario_y = state.mario_y + self.consts.MARIO_MOVING_SPEED
             )
-            new_state_2 = state._replace(
+            new_state_already_jumping = state._replace(
                 mario_y = state.mario_y + self.consts.MARIO_MOVING_SPEED
             )
             return jax.lax.cond(
                 jnp.logical_and(action == Action.RIGHTFIRE, jnp.logical_and(jnp.logical_and(state.mario_climbing == False, state.mario_jumping_wide == False), state.mario_jumping == False)),
-                lambda _: new_state,
+                lambda _: new_state_start_jumping,
                 lambda _: jax.lax.cond(
                     jnp.logical_and(state.mario_jumping_wide == True, state.mario_view_direction == self.consts.MOVING_RIGHT),
-                    lambda _: new_state_2,
+                    lambda _: new_state_already_jumping,
                     lambda _: state,
                     operand=None
                 ),
@@ -532,22 +540,22 @@ class JaxDonkeyKong(JaxEnvironment[DonkeyKongState, DonkeyKongObservation, Donke
         new_state = jumping_right(new_state)
 
         def jumping_left(state):
-            new_state = state._replace(
+            new_state_start_jumping = state._replace(
                 start_frame_when_mario_jumped = state.step_counter,
                 mario_jumping_wide = True,
                 mario_view_direction = self.consts.MOVING_LEFT,
                 mario_x = state.mario_x - self.consts.MARIO_JUMPING_HEIGHT,
                 mario_y = state.mario_y - self.consts.MARIO_MOVING_SPEED
             )
-            new_state_2 = state._replace(
+            new_state_already_jumping = state._replace(
                 mario_y = state.mario_y - self.consts.MARIO_MOVING_SPEED
             )
             return jax.lax.cond(
                 jnp.logical_and(action == Action.LEFTFIRE, jnp.logical_and(jnp.logical_and(state.mario_climbing == False, state.mario_jumping_wide == False), state.mario_jumping == False)),
-                lambda _: new_state,
+                lambda _: new_state_start_jumping,
                 lambda _: jax.lax.cond(
                     jnp.logical_and(state.mario_jumping_wide == True, state.mario_view_direction == self.consts.MOVING_LEFT),
-                    lambda _: new_state_2,
+                    lambda _: new_state_already_jumping,
                     lambda _: state,
                     operand=None
                 ),
@@ -557,10 +565,11 @@ class JaxDonkeyKong(JaxEnvironment[DonkeyKongState, DonkeyKongObservation, Donke
 
         # reset jumping after a certain time
         def reset_jumping(state):
+            new_mario_x = jnp.round(self.bar_linear_equation(state.mario_stage, state.mario_y) - self.consts.MARIO_HIT_BOX_X) - 2
             new_state = state._replace(
                 mario_jumping = False,
                 mario_jumping_wide = False,
-                mario_x = state.mario_x + self.consts.MARIO_JUMPING_HEIGHT,
+                mario_x = new_mario_x
             )
 
             return jax.lax.cond(
@@ -905,6 +914,10 @@ class JaxDonkeyKong(JaxEnvironment[DonkeyKongState, DonkeyKongObservation, Donke
             ladders=ladders,
             invisibleWallEachStage=invisibleWallEachStage,
             random_key = jax.random.PRNGKey(key[0]),
+
+            hammer_x = self.consts.LEVEL_1_HAMMER_X,
+            hammer_y = self.consts.LEVEL_1_HAMMER_Y,
+            hammer_can_hit = False,
         )
         initial_obs = self._get_observation(state)
 
