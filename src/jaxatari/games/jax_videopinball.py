@@ -2699,8 +2699,6 @@ class JaxVideoPinball(
             active_targets,
         )
 
-        # TODO: Whoever implements tilt mode: properly define this tilt_mode_active boolean
-        #  (this needs to be exactly here, don't move it)
         score = jnp.where(state.tilt_mode_active, state.score, score)
 
         (
@@ -3234,9 +3232,7 @@ class VideoPinballRenderer(AtraJaxisRenderer):
         frame_walls = aj.get_sprite_frame(self.sprites["walls"], 0)
         raster = aj.render_at(raster, 0, 16, frame_walls)
 
-        # TODO: Whoever implements tilt mode: properly define this tilt_mode_active boolean
-        tilt_mode_active = False
-        raster = jnp.where(tilt_mode_active, render_tilt_mode(raster), raster)
+        raster = jnp.where(state.tilt_mode_active, render_tilt_mode(raster), raster)
 
         # Render animated objects
         frame_flipper_left = aj.get_sprite_frame(
