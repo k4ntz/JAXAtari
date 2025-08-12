@@ -659,7 +659,7 @@ TOP_RIGHT_STEP_SCENE_OBJECT = SceneObject(
     score_type=jnp.array(0),  # type: ignore
 )
 
-# Rollover Scene Objects
+# Rollover Bars Scene Objects
 
 LEFT_ROLLOVER_LEFT_BAR_SCENE_OBJECT = SceneObject(
     hit_box_height=jnp.array(VERTICAL_BAR_HEIGHT),  # type: ignore
@@ -1122,25 +1122,6 @@ LEFT_LIT_UP_TARGET_LARGE_HORIZONTAL_SCENE_OBJECT = SceneObject(
     score_type=jnp.array(6),  # type: ignore
 )
 
-# LEFT_LIT_UP_TARGET_SMALL_TOP_SCENE_OBJECT = SceneObject(
-#     hit_box_height=jnp.array(DIAMOND_SMALL_RECTANGLE_BOUNDING_BOX_HEIGHT),  # type: ignore
-#     hit_box_width=jnp.array(DIAMOND_SMALL_RECTANGLE_BOUNDING_BOX_WIDTH),  # type: ignore
-#     hit_box_x_offset=jnp.array(),  # type: ignore
-#     hit_box_y_offset=jnp.array(),  # type: ignore
-#     reflecting=jnp.array(0),  # type: ignore
-#     score_type=jnp.array(6),  # type: ignore
-# )
-
-# LEFT_LIT_UP_TARGET_SMALL_BOTTOM_SCENE_OBJECT = SceneObject(
-#     hit_box_height=jnp.array(DIAMOND_SMALL_RECTANGLE_BOUNDING_BOX_HEIGHT),  # type: ignore
-#     hit_box_width=jnp.array(DIAMOND_SMALL_RECTANGLE_BOUNDING_BOX_WIDTH),  # type: ignore
-#     hit_box_x_offset=jnp.array(),  # type: ignore
-#     hit_box_y_offset=jnp.array(),  # type: ignore
-#     reflecting=jnp.array(0),  # type: ignore
-#     score_type=jnp.array(6),  # type: ignore
-# )
-
-
 MIDDLE_LIT_UP_TARGET_LARGE_VERTICAL_SCENE_OBJECT = SceneObject(
     hit_box_height=jnp.array(DIAMOND_VERTICAL_RECTANGLE_BOUNDING_BOX_HEIGHT),  # type: ignore
     hit_box_width=jnp.array(DIAMOND_VERTICAL_RECTANGLE_BOUNDING_BOX_WIDTH),  # type: ignore
@@ -1158,24 +1139,6 @@ MIDDLE_LIT_UP_TARGET_LARGE_HORIZONTAL_SCENE_OBJECT = SceneObject(
     reflecting=jnp.array(0),  # type: ignore
     score_type=jnp.array(7),  # type: ignore
 )
-
-# MIDDLE_LIT_UP_TARGET_SMALL_TOP_SCENE_OBJECT = SceneObject(
-#     hit_box_height=jnp.array(DIAMOND_SMALL_RECTANGLE_BOUNDING_BOX_HEIGHT),  # type: ignore
-#     hit_box_width=jnp.array(DIAMOND_SMALL_RECTANGLE_BOUNDING_BOX_WIDTH),  # type: ignore
-#     hit_box_x_offset=jnp.array(),  # type: ignore
-#     hit_box_y_offset=jnp.array(),  # type: ignore
-#     reflecting=jnp.array(0),  # type: ignore
-#     score_type=jnp.array(6),  # type: ignore
-# )
-
-# MIDDLE_LIT_UP_TARGET_SMALL_BOTTOM_SCENE_OBJECT = SceneObject(
-#     hit_box_height=jnp.array(DIAMOND_SMALL_RECTANGLE_BOUNDING_BOX_HEIGHT),  # type: ignore
-#     hit_box_width=jnp.array(DIAMOND_SMALL_RECTANGLE_BOUNDING_BOX_WIDTH),  # type: ignore
-#     hit_box_x_offset=jnp.array(),  # type: ignore
-#     hit_box_y_offset=jnp.array(),  # type: ignore
-#     reflecting=jnp.array(0),  # type: ignore
-#     score_type=jnp.array(6),  # type: ignore
-# )
 
 RIGHT_LIT_UP_TARGET_LARGE_VERTICAL_SCENE_OBJECT = SceneObject(
     hit_box_height=jnp.array(DIAMOND_VERTICAL_RECTANGLE_BOUNDING_BOX_HEIGHT),  # type: ignore
@@ -1195,24 +1158,6 @@ RIGHT_LIT_UP_TARGET_LARGE_HORIZONTAL_SCENE_OBJECT = SceneObject(
     score_type=jnp.array(8),  # type: ignore
 )
 
-# RIGHT_LIT_UP_TARGET_SMALL_TOP_SCENE_OBJECT = SceneObject(
-#     hit_box_height=jnp.array(DIAMOND_SMALL_RECTANGLE_BOUNDING_BOX_HEIGHT),  # type: ignore
-#     hit_box_width=jnp.array(DIAMOND_SMALL_RECTANGLE_BOUNDING_BOX_WIDTH),  # type: ignore
-#     hit_box_x_offset=jnp.array(),  # type: ignore
-#     hit_box_y_offset=jnp.array(),  # type: ignore
-#     reflecting=jnp.array(0),  # type: ignore
-#     score_type=jnp.array(6),  # type: ignore
-# )
-
-# RIGHT_LIT_UP_TARGET_SMALL_BOTTOM_SCENE_OBJECT = SceneObject(
-#     hit_box_height=jnp.array(DIAMOND_SMALL_RECTANGLE_BOUNDING_BOX_HEIGHT),  # type: ignore
-#     hit_box_width=jnp.array(DIAMOND_SMALL_RECTANGLE_BOUNDING_BOX_WIDTH),  # type: ignore
-#     hit_box_x_offset=jnp.array(),  # type: ignore
-#     hit_box_y_offset=jnp.array(),  # type: ignore
-#     reflecting=jnp.array(0),  # type: ignore
-#     score_type=jnp.array(6),  # type: ignore
-# )
-
 SPECIAL_LIT_UP_TARGET_LARGE_VERTICAL_SCENE_OBJECT = SceneObject(
     hit_box_height=jnp.array(DIAMOND_VERTICAL_RECTANGLE_BOUNDING_BOX_HEIGHT),  # type: ignore
     hit_box_width=jnp.array(DIAMOND_VERTICAL_RECTANGLE_BOUNDING_BOX_WIDTH),  # type: ignore
@@ -1230,24 +1175,6 @@ SPECIAL_LIT_UP_TARGET_LARGE_HORIZONTAL_SCENE_OBJECT = SceneObject(
     reflecting=jnp.array(0),  # type: ignore
     score_type=jnp.array(5),  # type: ignore
 )
-
-# SPECIAL_LIT_UP_TARGET_SMALL_TOP_SCENE_OBJECT = SceneObject(
-#     hit_box_height=jnp.array(DIAMOND_SMALL_RECTANGLE_BOUNDING_BOX_HEIGHT),  # type: ignore
-#     hit_box_width=jnp.array(DIAMOND_SMALL_RECTANGLE_BOUNDING_BOX_WIDTH),  # type: ignore
-#     hit_box_x_offset=jnp.array(),  # type: ignore
-#     hit_box_y_offset=jnp.array(),  # type: ignore
-#     reflecting=jnp.array(0),  # type: ignore
-#     score_type=jnp.array(5),  # type: ignore
-# )
-
-# SPECIAL_LIT_UP_TARGET_SMALL_BOTTOM_SCENE_OBJECT = SceneObject(
-#     hit_box_height=jnp.array(DIAMOND_SMALL_RECTANGLE_BOUNDING_BOX_HEIGHT),  # type: ignore
-#     hit_box_width=jnp.array(DIAMOND_SMALL_RECTANGLE_BOUNDING_BOX_WIDTH),  # type: ignore
-#     hit_box_x_offset=jnp.array(),  # type: ignore
-#     hit_box_y_offset=jnp.array(),  # type: ignore
-#     reflecting=jnp.array(0),  # type: ignore
-#     score_type=jnp.array(5),  # type: ignore
-# )
 
 LEFT_ROLLOVER_SCENE_OBJECT = SceneObject(
     hit_box_height=jnp.array(12),  # type: ignore
@@ -1352,97 +1279,93 @@ RIGHT_FLIPPER_STATE_48_SCENE_OBJECT = SceneObject(
     score_type=jnp.array(0),
 )
 
+# If you edit these make sure that the indexing over it is still correct
+# we do this in: _check_obstacle_hits
 ALL_SCENE_OBJECTS_LIST = [
-    TOP_WALL_SCENE_OBJECT,
-    BOTTOM_WALL_SCENE_OBJECT,
-    LEFT_WALL_SCENE_OBJECT,
-    RIGHT_WALL_SCENE_OBJECT,
-    LEFT_INNER_WALL_SCENE_OBJECT,
-    RIGHT_INNER_WALL_SCENE_OBJECT,
-    LEFT_QUADRUPLE_STEP_SCENE_OBJECT,
-    RIGHT_QUADRUPLE_STEP_SCENE_OBJECT,
-    LEFT_TRIPLE_STEP_SCENE_OBJECT,
-    RIGHT_TRIPLE_STEP_SCENE_OBJECT,
-    LEFT_DOUBLE_STEP_SCENE_OBJECT,
-    RIGHT_DOUBLE_STEP_SCENE_OBJECT,
-    LEFT_SINGLE_STEP_SCENE_OBJECT,
-    RIGHT_SINGLE_STEP_SCENE_OBJECT,
-    TOP_LEFT_STEP_SCENE_OBJECT,
-    TOP_RIGHT_STEP_SCENE_OBJECT,
-    LEFT_ROLLOVER_LEFT_BAR_SCENE_OBJECT,
-    LEFT_ROLLOVER_RIGHT_BAR_SCENE_OBJECT,
-    ATARI_ROLLOVER_LEFT_BAR_SCENE_OBJECT,
-    ATARI_ROLLOVER_RIGHT_BAR_SCENE_OBJECT,
-    TOP_BUMPER_SCENE_OBJECT,
-    LEFT_BUMPER_SCENE_OBJECT,
-    RIGHT_BUMPER_SCENE_OBJECT,
-    LEFT_SPINNER_BOTTOM_POSITION_JOINED_PART_SCENE_OBJECT,
-    LEFT_SPINNER_BOTTOM_POSITION_LEFT_PART_1_SCENE_OBJECT,
-    LEFT_SPINNER_BOTTOM_POSITION_LEFT_PART_2_SCENE_OBJECT,
-    LEFT_SPINNER_BOTTOM_POSITION_RIGHT_PART_1_SCENE_OBJECT,
-    LEFT_SPINNER_BOTTOM_POSITION_RIGHT_PART_2_SCENE_OBJECT,
-    LEFT_SPINNER_TOP_POSITION_JOINED_PART_SCENE_OBJECT,
-    LEFT_SPINNER_TOP_POSITION_LEFT_PART_1_SCENE_OBJECT,
-    LEFT_SPINNER_TOP_POSITION_LEFT_PART_2_SCENE_OBJECT,
-    LEFT_SPINNER_TOP_POSITION_RIGHT_PART_1_SCENE_OBJECT,
-    LEFT_SPINNER_TOP_POSITION_RIGHT_PART_2_SCENE_OBJECT,
-    LEFT_SPINNER_LEFT_POSITION_JOINED_PART_SCENE_OBJECT,
-    LEFT_SPINNER_LEFT_POSITION_LEFT_PART_1_SCENE_OBJECT,
-    LEFT_SPINNER_LEFT_POSITION_LEFT_PART_2_SCENE_OBJECT,
-    LEFT_SPINNER_LEFT_POSITION_RIGHT_PART_1_SCENE_OBJECT,
-    LEFT_SPINNER_LEFT_POSITION_RIGHT_PART_2_SCENE_OBJECT,
-    LEFT_SPINNER_RIGHT_POSITION_JOINED_PART_SCENE_OBJECT,
-    LEFT_SPINNER_RIGHT_POSITION_LEFT_PART_1_SCENE_OBJECT,
-    LEFT_SPINNER_RIGHT_POSITION_LEFT_PART_2_SCENE_OBJECT,
-    LEFT_SPINNER_RIGHT_POSITION_RIGHT_PART_1_SCENE_OBJECT,
-    LEFT_SPINNER_RIGHT_POSITION_RIGHT_PART_2_SCENE_OBJECT,
-    RIGHT_SPINNER_BOTTOM_POSITION_JOINED_PART_SCENE_OBJECT,
-    RIGHT_SPINNER_BOTTOM_POSITION_LEFT_PART_1_SCENE_OBJECT,
-    RIGHT_SPINNER_BOTTOM_POSITION_LEFT_PART_2_SCENE_OBJECT,
-    RIGHT_SPINNER_BOTTOM_POSITION_RIGHT_PART_1_SCENE_OBJECT,
-    RIGHT_SPINNER_BOTTOM_POSITION_RIGHT_PART_2_SCENE_OBJECT,
-    RIGHT_SPINNER_TOP_POSITION_JOINED_PART_SCENE_OBJECT,
-    RIGHT_SPINNER_TOP_POSITION_LEFT_PART_1_SCENE_OBJECT,
-    RIGHT_SPINNER_TOP_POSITION_LEFT_PART_2_SCENE_OBJECT,
-    RIGHT_SPINNER_TOP_POSITION_RIGHT_PART_1_SCENE_OBJECT,
-    RIGHT_SPINNER_TOP_POSITION_RIGHT_PART_2_SCENE_OBJECT,
-    RIGHT_SPINNER_LEFT_POSITION_JOINED_PART_SCENE_OBJECT,
-    RIGHT_SPINNER_LEFT_POSITION_LEFT_PART_1_SCENE_OBJECT,
-    RIGHT_SPINNER_LEFT_POSITION_LEFT_PART_2_SCENE_OBJECT,
-    RIGHT_SPINNER_LEFT_POSITION_RIGHT_PART_1_SCENE_OBJECT,
-    RIGHT_SPINNER_LEFT_POSITION_RIGHT_PART_2_SCENE_OBJECT,
-    RIGHT_SPINNER_RIGHT_POSITION_JOINED_PART_SCENE_OBJECT,
-    RIGHT_SPINNER_RIGHT_POSITION_LEFT_PART_1_SCENE_OBJECT,
-    RIGHT_SPINNER_RIGHT_POSITION_LEFT_PART_2_SCENE_OBJECT,
-    RIGHT_SPINNER_RIGHT_POSITION_RIGHT_PART_1_SCENE_OBJECT,
-    RIGHT_SPINNER_RIGHT_POSITION_RIGHT_PART_2_SCENE_OBJECT,
-    LEFT_LIT_UP_TARGET_LARGE_VERTICAL_SCENE_OBJECT,
-    LEFT_LIT_UP_TARGET_LARGE_HORIZONTAL_SCENE_OBJECT,
-    # LEFT_LIT_UP_TARGET_SMALL_TOP_SCENE_OBJECT,
-    # LEFT_LIT_UP_TARGET_SMALL_BOTTOM_SCENE_OBJECT,
-    MIDDLE_LIT_UP_TARGET_LARGE_VERTICAL_SCENE_OBJECT,
-    MIDDLE_LIT_UP_TARGET_LARGE_HORIZONTAL_SCENE_OBJECT,
-    # MIDDLE_LIT_UP_TARGET_SMALL_TOP_SCENE_OBJECT,
-    # MIDDLE_LIT_UP_TARGET_SMALL_BOTTOM_SCENE_OBJECT,
-    RIGHT_LIT_UP_TARGET_LARGE_VERTICAL_SCENE_OBJECT,
-    RIGHT_LIT_UP_TARGET_LARGE_HORIZONTAL_SCENE_OBJECT,
-    # RIGHT_LIT_UP_TARGET_SMALL_TOP_SCENE_OBJECT,
-    # RIGHT_LIT_UP_TARGET_SMALL_BOTTOM_SCENE_OBJECT,
-    SPECIAL_LIT_UP_TARGET_LARGE_VERTICAL_SCENE_OBJECT,
-    SPECIAL_LIT_UP_TARGET_LARGE_HORIZONTAL_SCENE_OBJECT,
-    # SPECIAL_LIT_UP_TARGET_SMALL_TOP_SCENE_OBJECT,
-    # SPECIAL_LIT_UP_TARGET_SMALL_BOTTOM_SCENE_OBJECT,
-    LEFT_ROLLOVER_SCENE_OBJECT,
-    ATARI_ROLLOVER_SCENE_OBJECT,
-    MIDDLE_BAR_SCENE_OBJECT,
-    LEFT_FLIPPER_STATE_0_SCENE_OBJECT,
-    LEFT_FLIPPER_STATE_16_SCENE_OBJECT,
-    LEFT_FLIPPER_STATE_32_SCENE_OBJECT,
-    LEFT_FLIPPER_STATE_48_SCENE_OBJECT,
-    RIGHT_FLIPPER_STATE_0_SCENE_OBJECT,
-    RIGHT_FLIPPER_STATE_16_SCENE_OBJECT,
-    RIGHT_FLIPPER_STATE_32_SCENE_OBJECT,
-    RIGHT_FLIPPER_STATE_48_SCENE_OBJECT,
+    # Non-reflective scene objects
+    LEFT_LIT_UP_TARGET_LARGE_VERTICAL_SCENE_OBJECT,  # 0
+    LEFT_LIT_UP_TARGET_LARGE_HORIZONTAL_SCENE_OBJECT,  # 1
+    MIDDLE_LIT_UP_TARGET_LARGE_VERTICAL_SCENE_OBJECT,  # 2
+    MIDDLE_LIT_UP_TARGET_LARGE_HORIZONTAL_SCENE_OBJECT,  # 3
+    RIGHT_LIT_UP_TARGET_LARGE_VERTICAL_SCENE_OBJECT,  # 4
+    RIGHT_LIT_UP_TARGET_LARGE_HORIZONTAL_SCENE_OBJECT,  # 5
+    SPECIAL_LIT_UP_TARGET_LARGE_VERTICAL_SCENE_OBJECT,  # 6
+    SPECIAL_LIT_UP_TARGET_LARGE_HORIZONTAL_SCENE_OBJECT,  # 7
+    LEFT_ROLLOVER_SCENE_OBJECT,  # 8
+    ATARI_ROLLOVER_SCENE_OBJECT,  # 9
+    # Reflective scene objects
+    TOP_WALL_SCENE_OBJECT,  # 10
+    BOTTOM_WALL_SCENE_OBJECT,  # 11
+    LEFT_WALL_SCENE_OBJECT,  # 12
+    RIGHT_WALL_SCENE_OBJECT,  # 13
+    LEFT_INNER_WALL_SCENE_OBJECT,  # 14
+    RIGHT_INNER_WALL_SCENE_OBJECT,  # 15
+    LEFT_QUADRUPLE_STEP_SCENE_OBJECT,  # 16
+    RIGHT_QUADRUPLE_STEP_SCENE_OBJECT,  # 17
+    LEFT_TRIPLE_STEP_SCENE_OBJECT,  # 18
+    RIGHT_TRIPLE_STEP_SCENE_OBJECT,  # 19
+    LEFT_DOUBLE_STEP_SCENE_OBJECT,  # 20
+    RIGHT_DOUBLE_STEP_SCENE_OBJECT,  # 21
+    LEFT_SINGLE_STEP_SCENE_OBJECT,  # 22
+    RIGHT_SINGLE_STEP_SCENE_OBJECT,  # 23
+    TOP_LEFT_STEP_SCENE_OBJECT,  # 24
+    TOP_RIGHT_STEP_SCENE_OBJECT,  # 25
+    LEFT_ROLLOVER_LEFT_BAR_SCENE_OBJECT,  # 26
+    LEFT_ROLLOVER_RIGHT_BAR_SCENE_OBJECT,  # 27
+    ATARI_ROLLOVER_LEFT_BAR_SCENE_OBJECT,  # 28
+    ATARI_ROLLOVER_RIGHT_BAR_SCENE_OBJECT,  # 29
+    TOP_BUMPER_SCENE_OBJECT,  # 30
+    LEFT_BUMPER_SCENE_OBJECT,  # 31
+    RIGHT_BUMPER_SCENE_OBJECT,  # 32
+    LEFT_SPINNER_BOTTOM_POSITION_JOINED_PART_SCENE_OBJECT,  # 33
+    LEFT_SPINNER_BOTTOM_POSITION_LEFT_PART_1_SCENE_OBJECT,  # 34
+    LEFT_SPINNER_BOTTOM_POSITION_LEFT_PART_2_SCENE_OBJECT,  # 35
+    LEFT_SPINNER_BOTTOM_POSITION_RIGHT_PART_1_SCENE_OBJECT,  # 36
+    LEFT_SPINNER_BOTTOM_POSITION_RIGHT_PART_2_SCENE_OBJECT,  # 37
+    LEFT_SPINNER_RIGHT_POSITION_JOINED_PART_SCENE_OBJECT,  # 38
+    LEFT_SPINNER_RIGHT_POSITION_LEFT_PART_1_SCENE_OBJECT,  # 39
+    LEFT_SPINNER_RIGHT_POSITION_LEFT_PART_2_SCENE_OBJECT,  # 40
+    LEFT_SPINNER_RIGHT_POSITION_RIGHT_PART_1_SCENE_OBJECT,  # 41
+    LEFT_SPINNER_RIGHT_POSITION_RIGHT_PART_2_SCENE_OBJECT,  # 42
+    LEFT_SPINNER_TOP_POSITION_JOINED_PART_SCENE_OBJECT,  # 43
+    LEFT_SPINNER_TOP_POSITION_LEFT_PART_1_SCENE_OBJECT,  # 44
+    LEFT_SPINNER_TOP_POSITION_LEFT_PART_2_SCENE_OBJECT,  # 45
+    LEFT_SPINNER_TOP_POSITION_RIGHT_PART_1_SCENE_OBJECT,  # 46
+    LEFT_SPINNER_TOP_POSITION_RIGHT_PART_2_SCENE_OBJECT,  # 47
+    LEFT_SPINNER_LEFT_POSITION_JOINED_PART_SCENE_OBJECT,  # 48
+    LEFT_SPINNER_LEFT_POSITION_LEFT_PART_1_SCENE_OBJECT,  # 49
+    LEFT_SPINNER_LEFT_POSITION_LEFT_PART_2_SCENE_OBJECT,  # 50
+    LEFT_SPINNER_LEFT_POSITION_RIGHT_PART_1_SCENE_OBJECT,  # 51
+    LEFT_SPINNER_LEFT_POSITION_RIGHT_PART_2_SCENE_OBJECT,  # 52
+    RIGHT_SPINNER_BOTTOM_POSITION_JOINED_PART_SCENE_OBJECT,  # 53
+    RIGHT_SPINNER_BOTTOM_POSITION_LEFT_PART_1_SCENE_OBJECT,  # 54
+    RIGHT_SPINNER_BOTTOM_POSITION_LEFT_PART_2_SCENE_OBJECT,  # 55
+    RIGHT_SPINNER_BOTTOM_POSITION_RIGHT_PART_1_SCENE_OBJECT,  # 56
+    RIGHT_SPINNER_BOTTOM_POSITION_RIGHT_PART_2_SCENE_OBJECT,  # 57
+    RIGHT_SPINNER_RIGHT_POSITION_JOINED_PART_SCENE_OBJECT,  # 58
+    RIGHT_SPINNER_RIGHT_POSITION_LEFT_PART_1_SCENE_OBJECT,  # 59
+    RIGHT_SPINNER_RIGHT_POSITION_LEFT_PART_2_SCENE_OBJECT,  # 60
+    RIGHT_SPINNER_RIGHT_POSITION_RIGHT_PART_1_SCENE_OBJECT,  # 61
+    RIGHT_SPINNER_RIGHT_POSITION_RIGHT_PART_2_SCENE_OBJECT,  # 62
+    RIGHT_SPINNER_TOP_POSITION_JOINED_PART_SCENE_OBJECT,  # 63
+    RIGHT_SPINNER_TOP_POSITION_LEFT_PART_1_SCENE_OBJECT,  # 64
+    RIGHT_SPINNER_TOP_POSITION_LEFT_PART_2_SCENE_OBJECT,  # 65
+    RIGHT_SPINNER_TOP_POSITION_RIGHT_PART_1_SCENE_OBJECT,  # 66
+    RIGHT_SPINNER_TOP_POSITION_RIGHT_PART_2_SCENE_OBJECT,  # 67
+    RIGHT_SPINNER_LEFT_POSITION_JOINED_PART_SCENE_OBJECT,  # 68
+    RIGHT_SPINNER_LEFT_POSITION_LEFT_PART_1_SCENE_OBJECT,  # 69
+    RIGHT_SPINNER_LEFT_POSITION_LEFT_PART_2_SCENE_OBJECT,  # 70
+    RIGHT_SPINNER_LEFT_POSITION_RIGHT_PART_1_SCENE_OBJECT,  # 71
+    RIGHT_SPINNER_LEFT_POSITION_RIGHT_PART_2_SCENE_OBJECT,  # 72
+    MIDDLE_BAR_SCENE_OBJECT,  # 73
+    LEFT_FLIPPER_STATE_0_SCENE_OBJECT,  # 74
+    LEFT_FLIPPER_STATE_16_SCENE_OBJECT,  # 75
+    LEFT_FLIPPER_STATE_32_SCENE_OBJECT,  # 76
+    LEFT_FLIPPER_STATE_48_SCENE_OBJECT,  # 77
+    RIGHT_FLIPPER_STATE_0_SCENE_OBJECT,  # 78
+    RIGHT_FLIPPER_STATE_16_SCENE_OBJECT,  # 79
+    RIGHT_FLIPPER_STATE_32_SCENE_OBJECT,  # 80
+    RIGHT_FLIPPER_STATE_48_SCENE_OBJECT,  # 81
 ]
 
 REFLECTING_SCENE_OBJECTS = jnp.stack(
@@ -1458,7 +1381,6 @@ REFLECTING_SCENE_OBJECTS = jnp.stack(
             ]
         )
         for scene_object in ALL_SCENE_OBJECTS_LIST
-        if scene_object.reflecting == 1
     ]
 ).squeeze()
 NON_REFLECTING_SCENE_OBJECTS = jnp.stack(
@@ -1481,16 +1403,23 @@ STATE_TRANSLATOR: dict = {
     1: "ball_y",
     2: "ball_vel_x",
     3: "ball_vel_y",
-    4: "left_flipper_angle",
-    5: "right_flipper_angle",
-    6: "plunger_position",
-    7: "score",
-    8: "lives",
-    9: "bonus_multiplier",
-    10: "bumpers_active",
-    11: "targets_hit",
-    12: "step_counter",
-    13: "ball_in_play",
+    4: "ball_direction",
+    5: "left_flipper_angle",
+    6: "right_flipper_angle",
+    7: "plunger_position",
+    8: "plunger_power",
+    9: "score",
+    10: "lives",
+    11: "bumper_multiplier",
+    12: "active_targets",
+    13: "target_cooldown",
+    14: "special_target_cooldown",
+    15: "atari_symbols",
+    16: "rollover_counter",
+    17: "step_counter",
+    18: "ball_in_play",
+    19: "respawn_timer",
+    20: "color_cycling",
 }
 
 
@@ -1544,7 +1473,7 @@ class VideoPinballState(NamedTuple):
     score: chex.Array
     lives: chex.Array
     bumper_multiplier: chex.Array
-    active_targets: chex.Array
+    active_targets: chex.Array  # Left diamond, Middle diamond, Right diamond, Special target
     target_cooldown: chex.Array
     special_target_cooldown: chex.Array
     atari_symbols: chex.Array
@@ -1817,10 +1746,9 @@ def _reflect_ball(
 
     return new_ball_x, new_ball_y
 
-
 @jax.jit
-def _check_reflecting_obstacle_hits(
-    ball_movement: BallMovement, scoring_list: chex.Array
+def _check_obstacle_hits(
+    state: VideoPinballState, ball_movement: BallMovement, scoring_list: chex.Array
 ) -> tuple[chex.Array, SceneObject]:
     """
     Check if the ball is hitting an obstacle.
@@ -1841,11 +1769,77 @@ def _check_reflecting_obstacle_hits(
     )(REFLECTING_SCENE_OBJECTS)
     non_reflecting_hit_points = jax.vmap(
         lambda scene_objects: _calc_hit_point(ball_movement, scene_objects)
-    )(NON_REFLECTING_SCENE_OBJECTS)
+    )(NON_REFLECTING_SCENE_OBJECTS) 
+    """
+    TODO FOR MAX:
+
+    IDEA:
+        We do not want to consider objects to be hit if they are not at the right position.
+        I.e. if the flipper is currently on the lowest position, the highest one should be ignored for hits.
+        The same goes for spinners, lit up special target, the lit up targets (diamonds).
+        
+    HOW WE DO IT:
+        Manually set the entry time for all the components of these objects to a very high number.
+        This will then ignore them for reflections and point scoring as only the lowest entry time is to be considered.
+    """
+
+    # is_left_lit_up_target_active = state.active_targets[0]
+    # is_middle_lit_up_target_active = state.active_targets[1]
+    # is_right_lit_up_target_active = state.active_targets[2]
+    # is_special_lit_up_target_active = state.active_targets[3]
+    # # Disable inactive lit up targets (diamonds)
+    # hit_points = jax.lax.cond(is_left_lit_up_target_active, lambda a: a, lambda a: a.at[0, 0].set(T_ENTRY_NO_COLLISION), hit_points)
+    # hit_points = jax.lax.cond(is_left_lit_up_target_active, lambda a: a, lambda a: a.at[1, 0].set(T_ENTRY_NO_COLLISION), hit_points)
+
+    # hit_points = jax.lax.cond(is_middle_lit_up_target_active, lambda a: a, lambda a: a.at[2, 0].set(T_ENTRY_NO_COLLISION), hit_points)
+    # hit_points = jax.lax.cond(is_middle_lit_up_target_active, lambda a: a, lambda a: a.at[3, 0].set(T_ENTRY_NO_COLLISION), hit_points)
+
+    # hit_points = jax.lax.cond(is_right_lit_up_target_active, lambda a: a, lambda a: a.at[4, 0].set(T_ENTRY_NO_COLLISION), hit_points)
+    # hit_points = jax.lax.cond(is_right_lit_up_target_active, lambda a: a, lambda a: a.at[5, 0].set(T_ENTRY_NO_COLLISION), hit_points)
+
+    # # Disable inactive special lit up target
+    # hit_points = jax.lax.cond(is_special_lit_up_target_active, lambda a: a, lambda a: a.at[6, 0].set(T_ENTRY_NO_COLLISION), hit_points)
+    # hit_points = jax.lax.cond(is_special_lit_up_target_active, lambda a: a, lambda a: a.at[7, 0].set(T_ENTRY_NO_COLLISION), hit_points)
+
+    # # Disable inactive spinner parts
+    # # We do this by setting the entry time of inactive spinner parts to a high value
+    # spinner_state = state.step_counter % 8  # 0: Bottom, 1: Right, 2: Top, 3: Left
+    # # Left Spinner SceneObject indices
+    # # Bottom: 33,34,35,36,37
+    # # Right:  38,39,40,41,42
+    # # Top:    43,44,45,46,47
+    # # Left:   48,49,50,51,52
+    # initial_left_spinner_indices = jnp.array([33, 38, 43, 48]).astype(jnp.int32)
+    # current_initial_left_spinner_index = initial_left_spinner_indices[spinner_state]
+    # # Right Spinner SceneObject indices
+    # # Bottom: 53,54,55,56,57
+    # # Right:  58,59,60,61,62
+    # # Top:    63,64,65,66,67
+    # # Left:   68,69,70,71,72
+    # initial_right_spinner_indices = jnp.array([53, 58, 63, 68]).astype(jnp.int32)
+    # current_initial_right_spinner_index = initial_right_spinner_indices[spinner_state]
+
+    # # Disable all the spinner parts not matching the current step
+    # hit_points = jax.lax.cond(33 == current_initial_left_spinner_index, lambda a: a, lambda a: a.at[33:38, 0].set(T_ENTRY_NO_COLLISION), hit_points)
+    # hit_points = jax.lax.cond(38 == current_initial_left_spinner_index, lambda a: a, lambda a: a.at[38:43, 0].set(T_ENTRY_NO_COLLISION), hit_points)
+    # hit_points = jax.lax.cond(43 == current_initial_left_spinner_index, lambda a: a, lambda a: a.at[43:48, 0].set(T_ENTRY_NO_COLLISION), hit_points)
+    # hit_points = jax.lax.cond(48 == current_initial_left_spinner_index, lambda a: a, lambda a: a.at[48:53, 0].set(T_ENTRY_NO_COLLISION), hit_points)
+    # hit_points = jax.lax.cond(53 == current_initial_right_spinner_index, lambda a: a, lambda a: a.at[53:58, 0].set(T_ENTRY_NO_COLLISION), hit_points)
+    # hit_points = jax.lax.cond(58 == current_initial_right_spinner_index, lambda a: a, lambda a: a.at[58:63, 0].set(T_ENTRY_NO_COLLISION), hit_points)
+    # hit_points = jax.lax.cond(63 == current_initial_right_spinner_index, lambda a: a, lambda a: a.at[63:68, 0].set(T_ENTRY_NO_COLLISION), hit_points)
+    # hit_points = jax.lax.cond(68 == current_initial_right_spinner_index, lambda a: a, lambda a: a.at[68:73, 0].set(T_ENTRY_NO_COLLISION), hit_points)
+
+    # # Disable inactive flipper parts
+    # left_flipper_angle = state.left_flipper_angle
+    # right_flipper_angle = state.right_flipper_angle
+    
+    # # TODO: @Max implements after @Kun finishes the scene objects
+    
 
     # Get and return first object hit (argmin entry time)
-    lowest_entry_time_index = jnp.argmin(reflecting_hit_points[:, 0])
-    hit_point = reflecting_hit_points[lowest_entry_time_index]
+    lowest_reflecting_object_entry_time_index = jnp.argmin(reflecting_hit_points[:, 0])
+    hit_point = reflecting_hit_points[lowest_reflecting_object_entry_time_index]
+    lowest_entry_time = hit_point[0]
 
     # Probably could do this in a pythonic for-loop since jax unrolls those in jitted functions
     # reflecting scoring objects (only one possible)
@@ -1940,18 +1934,18 @@ def _calc_ball_change(ball_x, ball_y, ball_vel_x, ball_vel_y, ball_direction):
 
 
 @jax.jit
-def _calc_ball_collision_loop(ball_movement: BallMovement):
+def _calc_ball_collision_loop(state: VideoPinballState, ball_movement: BallMovement):
     @jax.jit
     def _body_fun(
-        args: tuple[chex.Array, chex.Array, chex.Array, chex.Array, chex.Array],
+        args: tuple[VideoPinballState, chex.Array, chex.Array, chex.Array, chex.Array, chex.Array, chex.Array],
     ):
-        old_ball_x, old_ball_y, new_ball_x, new_ball_y, scoring_list, compute_flag = (
+        state, old_ball_x, old_ball_y, new_ball_x, new_ball_y, scoring_list, compute_flag = (
             args
         )
 
         @jax.jit
         def _compute_ball_collision(
-            old_ball_x, old_ball_y, new_ball_x, new_ball_y, scoring_list
+            state, old_ball_x, old_ball_y, new_ball_x, new_ball_y, scoring_list
         ):
             _ball_movement = BallMovement(
                 old_ball_x=old_ball_x,
@@ -1959,8 +1953,8 @@ def _calc_ball_collision_loop(ball_movement: BallMovement):
                 new_ball_x=new_ball_x,
                 new_ball_y=new_ball_y,
             )
-            hit_data, scoring_list = _check_reflecting_obstacle_hits(
-                _ball_movement, scoring_list
+            hit_data, scoring_list = _check_obstacle_hits(
+                state, _ball_movement, scoring_list
             )
             reflected_ball_x, reflected_ball_y = _reflect_ball(_ball_movement, hit_data)
             # if there was a collision, returned BallMovement is from hit point to reflected position
@@ -1975,6 +1969,7 @@ def _calc_ball_collision_loop(ball_movement: BallMovement):
             new_ball_y = jnp.where(collision, reflected_ball_y, new_ball_y)
 
             return (
+                state,
                 old_ball_x,
                 old_ball_y,
                 new_ball_x,
@@ -1986,11 +1981,12 @@ def _calc_ball_collision_loop(ball_movement: BallMovement):
         # Where compute_flag is true, compute ball collisions along the trajectory of BallMovement
         # The returned BallMovement is either the original BallMovement or a new BallMovement, from the
         # obstacle hit to the new location of the ball after reflecting it from that obstacle
-        old_ball_x, old_ball_y, new_ball_x, new_ball_y, scoring_list, collision = (
+        state, old_ball_x, old_ball_y, new_ball_x, new_ball_y, scoring_list, collision = (
             jax.lax.cond(
                 compute_flag,
                 _compute_ball_collision,
-                lambda old_ball_x, old_ball_y, new_ball_x, new_ball_y, scoring_list: (
+                lambda state, old_ball_x, old_ball_y, new_ball_x, new_ball_y, scoring_list: (
+                    state,
                     old_ball_x,
                     old_ball_y,
                     new_ball_x,
@@ -1998,6 +1994,7 @@ def _calc_ball_collision_loop(ball_movement: BallMovement):
                     scoring_list,
                     compute_flag,
                 ),
+                state,
                 old_ball_x,
                 old_ball_y,
                 new_ball_x,
@@ -2009,6 +2006,7 @@ def _calc_ball_collision_loop(ball_movement: BallMovement):
         compute_flag = jnp.logical_and(compute_flag, collision)
         # "or" the scoring_lists together
         return (
+            state,
             old_ball_x,
             old_ball_y,
             new_ball_x,
@@ -2019,9 +2017,9 @@ def _calc_ball_collision_loop(ball_movement: BallMovement):
 
     @jax.jit
     def _cond_fun(
-        args: tuple[chex.Array, chex.Array, chex.Array, chex.Array, chex.Array],
+        args: tuple[VideoPinballState, chex.Array, chex.Array, chex.Array, chex.Array, chex.Array, chex.Array],
     ):
-        old_ball_x, old_ball_y, new_ball_x, new_ball_y, scoring_list, compute_flag = (
+        state, old_ball_x, old_ball_y, new_ball_x, new_ball_y, scoring_list, compute_flag = (
             args
         )
         # jax.debug.print("Old ball x: {}, y: {}, New ball x: {}, y: {}.  Compute: {}", old_ball_x, old_ball_y, new_ball_x, new_ball_y, compute_flag)
@@ -2029,7 +2027,7 @@ def _calc_ball_collision_loop(ball_movement: BallMovement):
 
     scoring_list = jnp.stack([jnp.zeros_like(ball_movement.old_ball_x, dtype=jnp.bool) for i in range(9)])
     compute_flag = jnp.ones_like(ball_movement.new_ball_x, dtype=jnp.bool)
-    old_ball_x, old_ball_y, new_ball_x, new_ball_y, scoring_list, _ = (
+    state, old_ball_x, old_ball_y, new_ball_x, new_ball_y, scoring_list, _ = (
         jax.lax.while_loop(
             # while there are new BallMovements along whose trajectory there might be collisions (compute_flag set to True),
             # compute whether there are collisions and if so, calculate a new BallMovement and keep
@@ -2037,6 +2035,7 @@ def _calc_ball_collision_loop(ball_movement: BallMovement):
             _cond_fun,
             _body_fun,
             (
+                state,
                 ball_movement.old_ball_x,
                 ball_movement.old_ball_y,
                 ball_movement.new_ball_x,
@@ -2073,14 +2072,6 @@ def ball_step(
     ball_vel_y = state.ball_vel_y
     ball_direction = state.ball_direction
     ball_in_play = state.ball_in_play
-    # jax.debug.print(
-    #    "Ball Step, Initial Ball x {ball_x}, y , {ball_y}, vel_x {ball_vel_x}, vel_y {ball_vel_y}, direction {ball_direction}",
-    #    ball_x=ball_x,
-    #    ball_y=ball_y,
-    #    ball_vel_x=ball_vel_x,
-    #    ball_vel_y=ball_vel_y,
-    #    ball_direction=ball_direction,
-    # )
     """
     Plunger calculation
     """
@@ -2095,10 +2086,6 @@ def ball_step(
         ball_vel_y + plunger_power,
         ball_vel_y,
     )
-    """
-    Flipper calculation
-    """
-    # Check if the ball is hitting a paddle
 
     """
     Gravity calculation
@@ -2116,14 +2103,6 @@ def ball_step(
         ball_direction,
     )
     ball_vel_y = jnp.abs(ball_vel_y)
-    # jax.debug.print(
-    #    "Ball Step, After Gravity Ball x {ball_x}, y , {ball_y}, vel_x {ball_vel_x}, vel_y {ball_vel_y}, direction {ball_direction}",
-    #    ball_x=ball_x,
-    #    ball_y=ball_y,
-    #    ball_vel_x=ball_vel_x,
-    #    ball_vel_y=ball_vel_y,
-    #    ball_direction=ball_direction,
-    # )
 
     """
     Ball movement calculation observing its direction 
@@ -2133,14 +2112,7 @@ def ball_step(
             state.ball_x, state.ball_y, ball_vel_x, ball_vel_y, ball_direction
         )
     )
-    # jax.debug.print(
-    #    "Ball Step, After Ball Update x {ball_x}, y , {ball_y}, vel_x {ball_vel_x}, vel_y {ball_vel_y}, direction {ball_direction}",
-    #    ball_x=ball_x,
-    #    ball_y=ball_y,
-    #    ball_vel_x=ball_vel_x,
-    #    ball_vel_y=ball_vel_y,
-    #    ball_direction=ball_direction,
-    # )
+
     """
     Check if the ball is hitting the invisible block at the plunger hole
     """
@@ -2167,13 +2139,6 @@ def ball_step(
         jnp.logical_not(ball_in_play),
         invisible_block_hit_data[0] != T_ENTRY_NO_COLLISION,
     )
-    # jax.debug.print(
-    #    "Ball Step, invisible ball hit {invis_ball_hit}, ball in play {bip}, plunger_power {pp}",
-    #    invis_ball_hit=is_invisible_block_hit,
-    #    bip=ball_in_play,
-    #    pp=plunger_power,
-    # )
-    # set x vel to y vel and divide vel y by 5
     ball_vel_x = jnp.where(
         is_invisible_block_hit,
         ball_vel_y,
@@ -2216,7 +2181,7 @@ def ball_step(
         new_ball_y=ball_y,  # type: ignore
     )
 
-    ball_movement, scoring_list = _calc_ball_collision_loop(ball_movement)
+    ball_movement, scoring_list = _calc_ball_collision_loop(state, ball_movement)
 
     ball_trajectory_x = ball_movement.new_ball_x - ball_movement.old_ball_x
     ball_trajectory_y = ball_movement.new_ball_y - ball_movement.old_ball_y
@@ -2224,45 +2189,14 @@ def ball_step(
     ball_x = ball_movement.new_ball_x
     ball_y = ball_movement.new_ball_y
 
-    # jax.debug.print(
-    #    "Ball Step, After Obstacle Update x {ball_x}, y , {ball_y}, vel_x {ball_vel_x}, vel_y {ball_vel_y}, direction {ball_direction}",
-    #    ball_x=ball_x,
-    #    ball_y=ball_y,
-    #    ball_vel_x=ball_vel_x,
-    #    ball_vel_y=ball_vel_y,
-    #    ball_direction=ball_direction,
-    # )
-
     """
     Some final calculations
     """
-    # jax.debug.print(
-    #    "Ball Trajectory x, Ball Trajectory y {ball_trajectory_x}, {ball_trajectory_y}",
-    #    ball_trajectory_x=ball_trajectory_x,
-    #    ball_trajectory_y=ball_trajectory_y,
-    # )
     ball_direction = _get_ball_direction(ball_trajectory_x, ball_trajectory_y)
     # Clip the ball velocity to the maximum speed
     ball_vel_x = jnp.clip(jnp.abs(signed_ball_vel_x), 0, BALL_MAX_SPEED)
     ball_vel_y = jnp.clip(jnp.abs(signed_ball_vel_y), 0, BALL_MAX_SPEED)
 
-    """
-    Check if ball is in play if not ignore the calculations
-    """
-    # TODO: Maybe do the stuff above in a function that is called if we are in play
-    # ball_direction = jnp.where(ball_in_play, ball_direction, BALL_START_DIRECTION)
-    # ball_x = jnp.where(ball_in_play, ball_x, BALL_START_X)
-    # ball_y = jnp.where(ball_in_play, ball_y, BALL_START_Y)
-    # ball_vel_x = jnp.where(ball_in_play, ball_vel_x, jnp.array(0.0))
-    # ball_vel_y = jnp.where(ball_in_play, ball_vel_y, jnp.array(0.0))
-    # jax.debug.print(
-    #    "Ball Step, Final Ball x {ball_x}, y , {ball_y}, vel_x {ball_vel_x}, vel_y {ball_vel_y}, direction {ball_direction}",
-    #    ball_x=ball_x,
-    #    ball_y=ball_y,
-    #    ball_vel_x=ball_vel_x,
-    #    ball_vel_y=ball_vel_y,
-    #    ball_direction=ball_direction,
-    # )
     return (
         ball_x,
         ball_y,
