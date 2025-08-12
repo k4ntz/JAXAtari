@@ -1752,17 +1752,6 @@ def _check_obstacle_hits(
 ) -> tuple[chex.Array, SceneObject]:
     """
     Check if the ball is hitting an obstacle.
-
-    # top, left, right bottom, outer walls
-
-    # left, right inner walls
-    # middle bar
-    # corner boxes top left, right, bottom left, right
-    # bumper
-    # drop targets
-    # lit up targets
-    # rollovers (left & atari)
-    # spinner
     """
     reflecting_hit_points = jax.vmap(
         lambda scene_objects: _calc_hit_point(ball_movement, scene_objects)
@@ -1783,23 +1772,23 @@ def _check_obstacle_hits(
         This will then ignore them for reflections and point scoring as only the lowest entry time is to be considered.
     """
 
-    # is_left_lit_up_target_active = state.active_targets[0]
-    # is_middle_lit_up_target_active = state.active_targets[1]
-    # is_right_lit_up_target_active = state.active_targets[2]
-    # is_special_lit_up_target_active = state.active_targets[3]
-    # # Disable inactive lit up targets (diamonds)
-    # hit_points = jax.lax.cond(is_left_lit_up_target_active, lambda a: a, lambda a: a.at[0, 0].set(T_ENTRY_NO_COLLISION), hit_points)
-    # hit_points = jax.lax.cond(is_left_lit_up_target_active, lambda a: a, lambda a: a.at[1, 0].set(T_ENTRY_NO_COLLISION), hit_points)
+    is_left_lit_up_target_active = state.active_targets[0]
+    is_middle_lit_up_target_active = state.active_targets[1]
+    is_right_lit_up_target_active = state.active_targets[2]
+    is_special_lit_up_target_active = state.active_targets[3]
+    # Disable inactive lit up targets (diamonds)
+    # hit_points = jax.lax.cond(is_left_lit_up_target_active, lambda a: a, lambda a: a.at[0, 0].set(T_ENTRY_NO_COLLISION), non_reflecting_hit_points)
+    # hit_points = jax.lax.cond(is_left_lit_up_target_active, lambda a: a, lambda a: a.at[1, 0].set(T_ENTRY_NO_COLLISION), non_reflecting_hit_points)
 
-    # hit_points = jax.lax.cond(is_middle_lit_up_target_active, lambda a: a, lambda a: a.at[2, 0].set(T_ENTRY_NO_COLLISION), hit_points)
-    # hit_points = jax.lax.cond(is_middle_lit_up_target_active, lambda a: a, lambda a: a.at[3, 0].set(T_ENTRY_NO_COLLISION), hit_points)
+    # hit_points = jax.lax.cond(is_middle_lit_up_target_active, lambda a: a, lambda a: a.at[2, 0].set(T_ENTRY_NO_COLLISION), non_reflecting_hit_points)
+    # hit_points = jax.lax.cond(is_middle_lit_up_target_active, lambda a: a, lambda a: a.at[3, 0].set(T_ENTRY_NO_COLLISION), non_reflecting_hit_points)
 
-    # hit_points = jax.lax.cond(is_right_lit_up_target_active, lambda a: a, lambda a: a.at[4, 0].set(T_ENTRY_NO_COLLISION), hit_points)
-    # hit_points = jax.lax.cond(is_right_lit_up_target_active, lambda a: a, lambda a: a.at[5, 0].set(T_ENTRY_NO_COLLISION), hit_points)
+    # hit_points = jax.lax.cond(is_right_lit_up_target_active, lambda a: a, lambda a: a.at[4, 0].set(T_ENTRY_NO_COLLISION), non_reflecting_hit_points)
+    # hit_points = jax.lax.cond(is_right_lit_up_target_active, lambda a: a, lambda a: a.at[5, 0].set(T_ENTRY_NO_COLLISION), non_reflecting_hit_points)
 
     # # Disable inactive special lit up target
-    # hit_points = jax.lax.cond(is_special_lit_up_target_active, lambda a: a, lambda a: a.at[6, 0].set(T_ENTRY_NO_COLLISION), hit_points)
-    # hit_points = jax.lax.cond(is_special_lit_up_target_active, lambda a: a, lambda a: a.at[7, 0].set(T_ENTRY_NO_COLLISION), hit_points)
+    # hit_points = jax.lax.cond(is_special_lit_up_target_active, lambda a: a, lambda a: a.at[6, 0].set(T_ENTRY_NO_COLLISION), non_reflecting_hit_points)
+    # hit_points = jax.lax.cond(is_special_lit_up_target_active, lambda a: a, lambda a: a.at[7, 0].set(T_ENTRY_NO_COLLISION), non_reflecting_hit_points)
 
     # # Disable inactive spinner parts
     # # We do this by setting the entry time of inactive spinner parts to a high value
@@ -1820,14 +1809,14 @@ def _check_obstacle_hits(
     # current_initial_right_spinner_index = initial_right_spinner_indices[spinner_state]
 
     # # Disable all the spinner parts not matching the current step
-    # hit_points = jax.lax.cond(33 == current_initial_left_spinner_index, lambda a: a, lambda a: a.at[33:38, 0].set(T_ENTRY_NO_COLLISION), hit_points)
-    # hit_points = jax.lax.cond(38 == current_initial_left_spinner_index, lambda a: a, lambda a: a.at[38:43, 0].set(T_ENTRY_NO_COLLISION), hit_points)
-    # hit_points = jax.lax.cond(43 == current_initial_left_spinner_index, lambda a: a, lambda a: a.at[43:48, 0].set(T_ENTRY_NO_COLLISION), hit_points)
-    # hit_points = jax.lax.cond(48 == current_initial_left_spinner_index, lambda a: a, lambda a: a.at[48:53, 0].set(T_ENTRY_NO_COLLISION), hit_points)
-    # hit_points = jax.lax.cond(53 == current_initial_right_spinner_index, lambda a: a, lambda a: a.at[53:58, 0].set(T_ENTRY_NO_COLLISION), hit_points)
-    # hit_points = jax.lax.cond(58 == current_initial_right_spinner_index, lambda a: a, lambda a: a.at[58:63, 0].set(T_ENTRY_NO_COLLISION), hit_points)
-    # hit_points = jax.lax.cond(63 == current_initial_right_spinner_index, lambda a: a, lambda a: a.at[63:68, 0].set(T_ENTRY_NO_COLLISION), hit_points)
-    # hit_points = jax.lax.cond(68 == current_initial_right_spinner_index, lambda a: a, lambda a: a.at[68:73, 0].set(T_ENTRY_NO_COLLISION), hit_points)
+    # hit_points = jax.lax.cond(23 == current_initial_left_spinner_index, lambda a: a, lambda a: a.at[23:28, 0].set(T_ENTRY_NO_COLLISION), reflecting_hit_points)
+    # hit_points = jax.lax.cond(28 == current_initial_left_spinner_index, lambda a: a, lambda a: a.at[28:33, 0].set(T_ENTRY_NO_COLLISION), reflecting_hit_points)
+    # hit_points = jax.lax.cond(33 == current_initial_left_spinner_index, lambda a: a, lambda a: a.at[33:38, 0].set(T_ENTRY_NO_COLLISION), reflecting_hit_points)
+    # hit_points = jax.lax.cond(38 == current_initial_left_spinner_index, lambda a: a, lambda a: a.at[38:43, 0].set(T_ENTRY_NO_COLLISION), reflecting_hit_points)
+    # hit_points = jax.lax.cond(43 == current_initial_right_spinner_index, lambda a: a, lambda a: a.at[43:48, 0].set(T_ENTRY_NO_COLLISION), reflecting_hit_points)
+    # hit_points = jax.lax.cond(48 == current_initial_right_spinner_index, lambda a: a, lambda a: a.at[48:53, 0].set(T_ENTRY_NO_COLLISION), reflecting_hit_points)
+    # hit_points = jax.lax.cond(53 == current_initial_right_spinner_index, lambda a: a, lambda a: a.at[53:58, 0].set(T_ENTRY_NO_COLLISION), reflecting_hit_points)
+    # hit_points = jax.lax.cond(58 == current_initial_right_spinner_index, lambda a: a, lambda a: a.at[58:63, 0].set(T_ENTRY_NO_COLLISION), reflecting_hit_points)
 
     # # Disable inactive flipper parts
     # left_flipper_angle = state.left_flipper_angle
