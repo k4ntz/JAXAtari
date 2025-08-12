@@ -58,9 +58,9 @@ HEIGHT = 210
 
 # Physics constants
 # TODO: check if these are correct
-GRAVITY = 0.01  # 0.12
-VELOCITY_DAMPENING_VALUE = 0  # 24
-BALL_MAX_SPEED = 1.75
+GRAVITY = 0.03  # 0.12
+VELOCITY_DAMPENING_VALUE = 0.1  # 24
+BALL_MAX_SPEED = 3
 FLIPPER_MAX_ANGLE = 3
 FLIPPER_ANIMATION_Y_OFFSETS = jnp.array(
     [0, 0, 3, 7]
@@ -70,7 +70,6 @@ PLUNGER_MAX_POSITION = 20
 
 # Game logic constants
 T_ENTRY_NO_COLLISION = 9999
-VELOCITY_RETENTION_FACTOR = 1.0
 TARGET_RESPAWN_COOLDOWN = 16
 SPECIAL_TARGET_ACTIVE_DURATION = 257
 SPECIAL_TARGET_INACTIVE_DURATION = 787
@@ -80,7 +79,7 @@ SPECIAL_TARGET_INACTIVE_DURATION = 787
 
 # Game layout constants
 # TODO: check if these are correct
-BALL_SIZE = (4, 4)
+BALL_SIZE = (2, 4)
 FLIPPER_LEFT_POS = (30, 180)
 FLIPPER_RIGHT_POS = (110, 180)
 PLUNGER_POS = (150, 120)
@@ -474,36 +473,24 @@ FLIPPER_OFFSETS_STATE_48_RIGHT = jnp.array(
 )
 
 # A convenience mapping from RAM state to the corresponding offset arrays.
-FLIPPER_OFFSETS = {
-    0: {
-        "left": FLIPPER_OFFSETS_STATE_0_LEFT,
-        "right": FLIPPER_OFFSETS_STATE_0_RIGHT,
-    },
-    16: {
-        "left": FLIPPER_OFFSETS_STATE_16_LEFT,
-        "right": FLIPPER_OFFSETS_STATE_16_RIGHT,
-    },
-    32: {
-        "left": FLIPPER_OFFSETS_STATE_32_LEFT,
-        "right": FLIPPER_OFFSETS_STATE_32_RIGHT,
-    },
-    48: {
-        "left": FLIPPER_OFFSETS_STATE_48_LEFT,
-        "right": FLIPPER_OFFSETS_STATE_48_RIGHT,
-    },
-}
-
-__all__ = [
-    "FLIPPER_OFFSETS_STATE_0_LEFT",
-    "FLIPPER_OFFSETS_STATE_0_RIGHT",
-    "FLIPPER_OFFSETS_STATE_16_LEFT",
-    "FLIPPER_OFFSETS_STATE_16_RIGHT",
-    "FLIPPER_OFFSETS_STATE_32_LEFT",
-    "FLIPPER_OFFSETS_STATE_32_RIGHT",
-    "FLIPPER_OFFSETS_STATE_48_LEFT",
-    "FLIPPER_OFFSETS_STATE_48_RIGHT",
-    "FLIPPER_OFFSETS",
-]
+#FLIPPER_OFFSETS = {
+#    0: {
+#        "left": FLIPPER_OFFSETS_STATE_0_LEFT,
+#        "right": FLIPPER_OFFSETS_STATE_0_RIGHT,
+#    },
+#    16: {
+#        "left": FLIPPER_OFFSETS_STATE_16_LEFT,
+#        "right": FLIPPER_OFFSETS_STATE_16_RIGHT,
+#    },
+#    32: {
+#        "left": FLIPPER_OFFSETS_STATE_32_LEFT,
+#        "right": FLIPPER_OFFSETS_STATE_32_RIGHT,
+#    },
+#    48: {
+#        "left": FLIPPER_OFFSETS_STATE_48_LEFT,
+#        "right": FLIPPER_OFFSETS_STATE_48_RIGHT,
+#    },
+#}
 
 @chex.dataclass
 class BallMovement:
@@ -1474,19 +1461,19 @@ REFLECTING_SCENE_OBJECTS = jnp.stack(
         if scene_object.reflecting == 1
     ]
 ).squeeze()
-# NON_REFLECTING_SCENE_OBJECTS = jnp.stack(
-#    [
-#        jnp.array([
-#            scene_object.hit_box_height,
-#            scene_object.hit_box_width,
-#            scene_object.hit_box_x_offset,
-#            scene_object.hit_box_y_offset,
-#            scene_object.reflecting,
-#            scene_object.score_type
-#        ]) for scene_object in ALL_SCENE_OBJECTS_LIST
-#        if scene_object.reflecting == 0
-#    ]
-# ).squeeze()
+NON_REFLECTING_SCENE_OBJECTS = jnp.stack(
+   [
+       jnp.array([
+           scene_object.hit_box_height,
+           scene_object.hit_box_width,
+           scene_object.hit_box_x_offset,
+           scene_object.hit_box_y_offset,
+           scene_object.reflecting,
+           scene_object.score_type
+       ]) for scene_object in ALL_SCENE_OBJECTS_LIST
+       if scene_object.reflecting == 0
+   ]
+).squeeze()
 
 # define the positions of the state information
 STATE_TRANSLATOR: dict = {
@@ -1750,13 +1737,17 @@ def _calc_hit_point(
 
     # determine on which side the ball has hit the obstacle
     scene_object_half_height = scene_object[0] / 2.0
+    scene_object_half_width = scene_object[1] / 2.0
     scene_object_middle_point_y = scene_object[3] + scene_object_half_height
+    scene_object_middle_point_x = scene_object[2] + scene_object_half_width
 
     # distance of ball y to middle point of scene object
     d_middle_point_ball_y = jnp.abs(scene_object_middle_point_y - hit_point_y)
+    d_middle_point_ball_x = jnp.abs(scene_object_middle_point_x - hit_point_x)
 
     # if ball hit the scene object to the top/bottom, this distance should be around half height of the scene object
-    hit_horizontal = jnp.abs(d_middle_point_ball_y - scene_object_half_height) < 1e-6
+    hit_horizontal = jnp.abs(d_middle_point_ball_y - scene_object_half_height) < 1e-1
+    hit_vertical = jnp.abs(d_middle_point_ball_x - scene_object_half_width) < 1e-1
 
     hit_point = jnp.array(
         [
@@ -1764,6 +1755,7 @@ def _calc_hit_point(
             hit_point_x,
             hit_point_y,
             hit_horizontal,
+            hit_vertical,
             scene_object[4],
             scene_object[5],
         ]
@@ -1771,7 +1763,7 @@ def _calc_hit_point(
 
     hit_point = jax.lax.cond(
         no_collision,
-        lambda: jnp.array([T_ENTRY_NO_COLLISION, -1.0, -1.0, 0.0, 1.0, 0.0]),
+        lambda: jnp.array([T_ENTRY_NO_COLLISION, -1.0, -1.0, 0.0, 0.0, 1.0, 0.0]),
         lambda: hit_point,
     )
 
@@ -1802,7 +1794,7 @@ def _reflect_ball(
     # Calculate the dot product of the velocity and the surface normal
     velocity_normal_prod = velocity_x * surface_normal_x + velocity_y * surface_normal_y
     velocity_normal_prod = (
-        velocity_normal_prod - VELOCITY_DAMPENING_VALUE
+        velocity_normal_prod * (1 - VELOCITY_DAMPENING_VALUE)
     )  # Dampen the velocity a bit (value taken from RAM values)
 
     reflected_velocity_x = velocity_x - 2 * velocity_normal_prod * surface_normal_x
@@ -1817,6 +1809,11 @@ def _reflect_ball(
 
     new_ball_x = hit_point[1] + r * reflected_velocity_x
     new_ball_y = hit_point[2] + r * reflected_velocity_y
+
+    # If the ball hit a corner, reflect ball in the direction it came from instead of
+    # via surface normal of the object
+    new_ball_x = jnp.where(jnp.logical_and(hit_point[3], hit_point[4]), hit_point[1] - r * velocity_x, new_ball_x)
+    new_ball_y = jnp.where(jnp.logical_and(hit_point[3], hit_point[4]), hit_point[2] - r * velocity_y, new_ball_y)
 
     return new_ball_x, new_ball_y
 
@@ -1839,67 +1836,64 @@ def _check_reflecting_obstacle_hits(
     # rollovers (left & atari)
     # spinner
     """
-    # apparently jax unrolls for loops inside of jitted functions so this should be fine
     reflecting_hit_points = jax.vmap(
         lambda scene_objects: _calc_hit_point(ball_movement, scene_objects)
     )(REFLECTING_SCENE_OBJECTS)
-    # non_reflecting_hit_points = jax.vmap(lambda scene_objects: _calc_hit_point(ball_movement, scene_objects))(NON_REFLECTING_SCENE_OBJECTS)
+    non_reflecting_hit_points = jax.vmap(
+        lambda scene_objects: _calc_hit_point(ball_movement, scene_objects)
+    )(NON_REFLECTING_SCENE_OBJECTS)
 
     # Get and return first object hit (argmin entry time)
     lowest_entry_time_index = jnp.argmin(reflecting_hit_points[:, 0])
     hit_point = reflecting_hit_points[lowest_entry_time_index]
 
-    scoring_bools = jnp.eye(9, dtype=jnp.bool)
-
+    # Probably could do this in a pythonic for-loop since jax unrolls those in jitted functions
     # reflecting scoring objects (only one possible)
-    scoring_list = jnp.logical_or(
-        scoring_list,
-        jnp.where(hit_point[5] == 0, scoring_bools[0], jnp.zeros(9, dtype=jnp.bool)),
-    )
-    scoring_list = jnp.logical_or(
-        scoring_list,
-        jnp.where(hit_point[5] == 1, scoring_bools[1], jnp.zeros(9, dtype=jnp.bool)),
-    )
-    scoring_list = jnp.logical_or(
-        scoring_list,
-        jnp.where(hit_point[5] == 2, scoring_bools[2], jnp.zeros(9, dtype=jnp.bool)),
-    )
-    scoring_list = jnp.logical_or(
-        scoring_list,
-        jnp.where(hit_point[5] == 3, scoring_bools[3], jnp.zeros(9, dtype=jnp.bool)),
-    )
-    scoring_list = jnp.logical_or(
-        scoring_list,
-        jnp.where(hit_point[5] == 4, scoring_bools[4], jnp.zeros(9, dtype=jnp.bool)),
-    )
-    scoring_list = jnp.logical_or(
-        scoring_list,
-        jnp.where(hit_point[5] == 5, scoring_bools[5], jnp.zeros(9, dtype=jnp.bool)),
-    )
-    scoring_list = jnp.logical_or(
-        scoring_list,
-        jnp.where(hit_point[5] == 6, scoring_bools[6], jnp.zeros(9, dtype=jnp.bool)),
-    )
-    scoring_list = jnp.logical_or(
-        scoring_list,
-        jnp.where(hit_point[5] == 7, scoring_bools[7], jnp.zeros(9, dtype=jnp.bool)),
-    )
-    scoring_list = jnp.logical_or(
-        scoring_list,
-        jnp.where(hit_point[5] == 8, scoring_bools[8], jnp.zeros(9, dtype=jnp.bool)),
-    )
+    scoring_list_0 = scoring_list[0]
+    scoring_list_1 = scoring_list[1]
+    scoring_list_2 = scoring_list[2]
+    scoring_list_3 = scoring_list[3]
+    scoring_list_4 = scoring_list[4]
+    scoring_list_5 = scoring_list[5]
+    scoring_list_6 = scoring_list[6]
+    scoring_list_7 = scoring_list[7]
+    scoring_list_8 = scoring_list[8]
+
+    scoring_list_0 = jnp.logical_or(scoring_list_0, jnp.where(hit_point[6] == 0, 1, 0))
+    scoring_list_1 = jnp.logical_or(scoring_list_1, jnp.where(hit_point[6] == 1, 1, 0))
+    scoring_list_2 = jnp.logical_or(scoring_list_2, jnp.where(hit_point[6] == 2, 1, 0))
+    scoring_list_3 = jnp.logical_or(scoring_list_3, jnp.where(hit_point[6] == 3, 1, 0))
+    scoring_list_4 = jnp.logical_or(scoring_list_4, jnp.where(hit_point[6] == 4, 1, 0))
+    scoring_list_5 = jnp.logical_or(scoring_list_5, jnp.where(hit_point[6] == 5, 1, 0))
+    scoring_list_6 = jnp.logical_or(scoring_list_6, jnp.where(hit_point[6] == 6, 1, 0))
+    scoring_list_7 = jnp.logical_or(scoring_list_7, jnp.where(hit_point[6] == 7, 1, 0))
+    scoring_list_8 = jnp.logical_or(scoring_list_8, jnp.where(hit_point[6] == 8, 1, 0))
 
     # non-reflecting scoring objects (multiple possible but only one of each type)
-    # hit_before_reflection = jnp.logical_and(non_reflecting_hit_points[:,0] < reflecting_hit_points[:,0], non_reflecting_hit_points[:,0] != T_ENTRY_NO_COLLISION)
-    # scoring_list = jnp.logical_or(scoring_list, jnp.where(jnp.any(jnp.logical_and(hit_before_reflection, non_reflecting_hit_points[:,5] == 0), axis=0), scoring_bools[0], jnp.zeros(9, dtype=jnp.bool)))
-    # scoring_list = jnp.logical_or(scoring_list, jnp.where(jnp.any(jnp.logical_and(hit_before_reflection, non_reflecting_hit_points[:,5] == 1), axis=0), scoring_bools[1], jnp.zeros(9, dtype=jnp.bool)))
-    # scoring_list = jnp.logical_or(scoring_list, jnp.where(jnp.any(jnp.logical_and(hit_before_reflection, non_reflecting_hit_points[:,5] == 2), axis=0), scoring_bools[2], jnp.zeros(9, dtype=jnp.bool)))
-    # scoring_list = jnp.logical_or(scoring_list, jnp.where(jnp.any(jnp.logical_and(hit_before_reflection, non_reflecting_hit_points[:,5] == 3), axis=0), scoring_bools[3], jnp.zeros(9, dtype=jnp.bool)))
-    # scoring_list = jnp.logical_or(scoring_list, jnp.where(jnp.any(jnp.logical_and(hit_before_reflection, non_reflecting_hit_points[:,5] == 4), axis=0), scoring_bools[4], jnp.zeros(9, dtype=jnp.bool)))
-    # scoring_list = jnp.logical_or(scoring_list, jnp.where(jnp.any(jnp.logical_and(hit_before_reflection, non_reflecting_hit_points[:,5] == 5), axis=0), scoring_bools[5], jnp.zeros(9, dtype=jnp.bool)))
-    # scoring_list = jnp.logical_or(scoring_list, jnp.where(jnp.any(jnp.logical_and(hit_before_reflection, non_reflecting_hit_points[:,5] == 6), axis=0), scoring_bools[6], jnp.zeros(9, dtype=jnp.bool)))
-    # scoring_list = jnp.logical_or(scoring_list, jnp.where(jnp.any(jnp.logical_and(hit_before_reflection, non_reflecting_hit_points[:,5] == 7), axis=0), scoring_bools[7], jnp.zeros(9, dtype=jnp.bool)))
-    # scoring_list = jnp.logical_or(scoring_list, jnp.where(jnp.any(jnp.logical_and(hit_before_reflection, non_reflecting_hit_points[:,5] == 8), axis=0), scoring_bools[8], jnp.zeros(9, dtype=jnp.bool)))
+    # hit_before_reflection calculates for each object whether it was hit before hitting any rigid object, i.e. shape (, n_non_reflecting_objects)
+    # the jnp.where(...) statement checks whether any non_reflecting_object of a specific scoring_type was hit
+    hit_before_reflection = jnp.logical_and(non_reflecting_hit_points[:,0] < hit_point[0], non_reflecting_hit_points[:,0] != T_ENTRY_NO_COLLISION)
+    scoring_list_0 = jnp.logical_or(scoring_list_0, jnp.where(jnp.any(jnp.logical_and(hit_before_reflection, non_reflecting_hit_points[:,6] == 0), axis=0), 1, 0))
+    scoring_list_1 = jnp.logical_or(scoring_list_1, jnp.where(jnp.any(jnp.logical_and(hit_before_reflection, non_reflecting_hit_points[:,6] == 1), axis=0), 1, 0))
+    scoring_list_2 = jnp.logical_or(scoring_list_2, jnp.where(jnp.any(jnp.logical_and(hit_before_reflection, non_reflecting_hit_points[:,6] == 2), axis=0), 1, 0))
+    scoring_list_3 = jnp.logical_or(scoring_list_3, jnp.where(jnp.any(jnp.logical_and(hit_before_reflection, non_reflecting_hit_points[:,6] == 3), axis=0), 1, 0))
+    scoring_list_4 = jnp.logical_or(scoring_list_4, jnp.where(jnp.any(jnp.logical_and(hit_before_reflection, non_reflecting_hit_points[:,6] == 4), axis=0), 1, 0))
+    scoring_list_5 = jnp.logical_or(scoring_list_5, jnp.where(jnp.any(jnp.logical_and(hit_before_reflection, non_reflecting_hit_points[:,6] == 5), axis=0), 1, 0))
+    scoring_list_6 = jnp.logical_or(scoring_list_6, jnp.where(jnp.any(jnp.logical_and(hit_before_reflection, non_reflecting_hit_points[:,6] == 6), axis=0), 1, 0))
+    scoring_list_7 = jnp.logical_or(scoring_list_7, jnp.where(jnp.any(jnp.logical_and(hit_before_reflection, non_reflecting_hit_points[:,6] == 7), axis=0), 1, 0))
+    scoring_list_8 = jnp.logical_or(scoring_list_8, jnp.where(jnp.any(jnp.logical_and(hit_before_reflection, non_reflecting_hit_points[:,6] == 8), axis=0), 1, 0))
+    
+    scoring_list = jnp.stack([
+        scoring_list_0,
+        scoring_list_1,
+        scoring_list_2,
+        scoring_list_3,
+        scoring_list_4,
+        scoring_list_5,
+        scoring_list_6,
+        scoring_list_7,
+        scoring_list_8,
+    ], axis=0)
 
     return hit_point, scoring_list
 
@@ -2033,8 +2027,7 @@ def _calc_ball_collision_loop(ball_movement: BallMovement):
         # jax.debug.print("Old ball x: {}, y: {}, New ball x: {}, y: {}.  Compute: {}", old_ball_x, old_ball_y, new_ball_x, new_ball_y, compute_flag)
         return jnp.any(compute_flag)
 
-    # TODO we will need another way of constructing the initial all-False array:
-    scoring_list = jnp.zeros(9, dtype=jnp.bool)
+    scoring_list = jnp.stack([jnp.zeros_like(ball_movement.old_ball_x, dtype=jnp.bool) for i in range(9)])
     compute_flag = jnp.ones_like(ball_movement.new_ball_x, dtype=jnp.bool)
     old_ball_x, old_ball_y, new_ball_x, new_ball_y, scoring_list, _ = (
         jax.lax.while_loop(
