@@ -1421,6 +1421,7 @@ STATE_TRANSLATOR: dict = {
     18: "ball_in_play",
     19: "respawn_timer",
     20: "color_cycling",
+    21: "tilt_mode_active"
 }
 
 
@@ -1483,6 +1484,7 @@ class VideoPinballState(NamedTuple):
     ball_in_play: chex.Array
     respawn_timer: chex.Array
     color_cycling: chex.Array
+    tilt_mode_active: chex.Array
     # obs_stack: chex.ArrayTree     What is this for? Pong doesnt have this right?
 
 
@@ -2596,15 +2598,16 @@ class JaxVideoPinball(
             score=jnp.array(0).astype(jnp.int32),
             lives=jnp.array(1).astype(jnp.int32),
             bumper_multiplier=jnp.array(1).astype(jnp.int32),
-            active_targets=jnp.array([True, True, True, False]).astype(jnp.bool),
+            active_targets=jnp.array([True, True, True, False]).astype(jnp.bool_),
             target_cooldown=jnp.array(-1).astype(jnp.int32),
             special_target_cooldown=jnp.array(-120).astype(jnp.int32),
             atari_symbols=jnp.array(0).astype(jnp.int32),
             rollover_counter=jnp.array(1).astype(jnp.int32),
             step_counter=jnp.array(0).astype(jnp.int32),
-            ball_in_play=jnp.array(False).astype(jnp.bool),
+            ball_in_play=jnp.array(False).astype(jnp.bool_),
             respawn_timer=jnp.array(0).astype(jnp.int32),
             color_cycling=jnp.array(0).astype(jnp.int32),
+            tilt_mode_active=jnp.array(True).astype(jnp.bool_),
         )
 
         initial_obs = self._get_observation(state)
@@ -2661,13 +2664,11 @@ class JaxVideoPinball(
         )
 
         # Step 4: Update scores and handle special objects
-        # TODO: Input the list of objects hit once collisions are done
-        score, active_targets, atari_symbols, rollover_counter, color_cycling = (
-            process_objects_hit(
-                state,
-                scoring_list,
-            )
+        score, active_targets, atari_symbols, rollover_counter, color_cycling = process_objects_hit(
+            state,
+            scoring_list,
         )
+
         (
             active_targets,
             target_cooldown,
@@ -2700,8 +2701,7 @@ class JaxVideoPinball(
 
         # TODO: Whoever implements tilt mode: properly define this tilt_mode_active boolean
         #  (this needs to be exactly here, don't move it)
-        tilt_mode_active = False
-        score = jnp.where(tilt_mode_active, state.score, score)
+        score = jnp.where(state.tilt_mode_active, state.score, score)
 
         (
             respawn_timer,
@@ -2763,6 +2763,7 @@ class JaxVideoPinball(
             ball_in_play=ball_in_play,
             respawn_timer=respawn_timer,
             color_cycling=color_cycling,
+            tilt_mode_active=state.tilt_mode_active,
             # obs_stack=None,
         )
 
