@@ -305,6 +305,12 @@ class AmidarConstants(NamedTuple):
     FREEZE_DURATION: int = 256  # Duration for which the game is frozen in the beginning and after being hit by an enemy
     CHICKEN_MODE_DURATION: int = 640
 
+    # Directions
+    UP: int = 0 
+    LEFT: int = 1
+    DOWN: int = 2
+    RIGHT: int = 3
+
     # Rendering
     PATH_COLOR = jnp.array([162, 98, 33, 255], dtype=jnp.uint8)  # Brown color for the path
     WALKED_ON_COLOR = jnp.array([104, 72, 198, 255], dtype=jnp.uint8)  # Purple color for the walked on paths
@@ -322,7 +328,7 @@ class AmidarConstants(NamedTuple):
     ENEMY_SIZE: tuple[int, int] = (7, 7)  # Object sizes (width, height)
     PLAYER_SPRITE_OFFSET: tuple[int, int] = (-1, 0) # Offset for the player sprite in relation to the position in the code (because the top left corner of the player sprite is of the path to the left)
     INITIAL_PLAYER_POSITION: chex.Array = jnp.array([140, 89])
-    INITIAL_PLAYER_DIRECTION: chex.Array = jnp.array(0)
+    INITIAL_PLAYER_DIRECTION: chex.Array = UP
     PLAYER_STARTING_PATH: int = 85  # The path edge the player starts on, this is the index in PATH_EDGES
 
     # Enemies
@@ -335,7 +341,7 @@ class AmidarConstants(NamedTuple):
             [16, 164],  # Enemy 5
             [52, 164],  # Enemy 6
         ])
-    INITIAL_ENEMY_DIRECTIONS: chex.Array = jnp.array([3, 3, 3, 3, 3, 3])  # All enemies start moving right
+    INITIAL_ENEMY_DIRECTIONS: chex.Array = jnp.array([RIGHT] * 6)  # All enemies start moving right
     # Enemy Types
     SHADOW: int = 0 
     WARRIOR: int = 1  
@@ -396,12 +402,12 @@ class AmidarState(NamedTuple):
     lives: chex.Array
     player_x: chex.Array
     player_y: chex.Array
-    player_direction: chex.Array # 0=up, 1=left, 2=down, 3=right
+    player_direction: chex.Array
     last_walked_corner: chex.Array # (2,) -> (x, y) of the last corner walked on
     walked_on_paths: chex.Array
     completed_rectangles: chex.Array
     enemy_positions: chex.Array # (MAX_ENEMIES, 2) -> (x, y) for each enemy
-    enemy_directions: chex.Array # (MAX_ENEMIES, 1) -> direction of each enemy (0=up, 1=left, 2=down, 3=right)
+    enemy_directions: chex.Array # (MAX_ENEMIES, 1) -> direction of each enemy
     enemy_types: chex.Array # (MAX_ENEMIES, 1) -> type of each enemy (Shadow, Warrior, Pig, Chicken)
     chicken_counter: chex.Array  # Counter for the chicken mode, counts down from CHICKEN_MODE_DURATION
 
@@ -444,8 +450,8 @@ def player_step(constants: AmidarConstants, state: AmidarState, action: chex.Arr
 
     # if the direction is not possiple to move in, try moving in the previous direction
     def move_in_previous_direction(direction):
-        new_x = state.player_x + jnp.where(direction == 1, -1, 0) + jnp.where(direction == 3, 1, 0)
-        new_y = state.player_y + jnp.where(direction == 0, -1, 0) + jnp.where(direction == 2, 1, 0)
+        new_x = state.player_x + jnp.where(direction == constants.LEFT, -1, 0) + jnp.where(direction == constants.RIGHT, 1, 0)
+        new_y = state.player_y + jnp.where(direction == constants.UP, -1, 0) + jnp.where(direction == constants.DOWN, 1, 0)
         # only move if new position is on the path
         new_x = jnp.where(on_path(new_x, new_y), new_x, state.player_x)
         new_y = jnp.where(on_path(new_x, new_y), new_y, state.player_y)
@@ -456,8 +462,9 @@ def player_step(constants: AmidarConstants, state: AmidarState, action: chex.Arr
     new_x, new_y = jax.lax.cond(jnp.logical_and(has_not_moved, movement_key_pressed), move_in_previous_direction, lambda direction: (new_x, new_y), state.player_direction)
         
     player_direction = jnp.select([new_y < state.player_y, new_x < state.player_x, new_y > state.player_y, new_x > state.player_x],
-                                  [0, 1, 2, 3], default=state.player_direction)
-    
+                                  [constants.UP,           constants.LEFT,         constants.DOWN,         constants.RIGHT       ], 
+                                  default=state.player_direction)
+
     # Check if the new position is a corner, in which case check if a new path edge is walked on
 
     def corner_handeling():
@@ -593,8 +600,8 @@ def enemies_step(constants: AmidarConstants, state: AmidarState, random_key: che
         chosen_direction = jax.lax.cond(jnp.any(possible_directions), choose_direction, lambda: direction)
         
         new_x, new_y = jax.lax.cond(jnp.any(possible_directions),
-            lambda: (enemy_x + jnp.where(chosen_direction == 1, -1, 0) + jnp.where(chosen_direction == 3, 1, 0),
-                     enemy_y + jnp.where(chosen_direction == 0, -1, 0) + jnp.where(chosen_direction == 2, 1, 0)),
+            lambda: (enemy_x + jnp.where(chosen_direction == constants.LEFT, -1, 0) + jnp.where(chosen_direction == constants.RIGHT, 1, 0),
+                     enemy_y + jnp.where(chosen_direction == constants.UP, -1, 0) + jnp.where(chosen_direction == constants.DOWN, 1, 0)),
             lambda: (enemy_x, enemy_y))  # If the direction is not possible, stay in place
         return jnp.array([new_x, new_y]), chosen_direction
 
