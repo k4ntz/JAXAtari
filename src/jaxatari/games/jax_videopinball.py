@@ -1381,6 +1381,7 @@ REFLECTING_SCENE_OBJECTS = jnp.stack(
             ]
         )
         for scene_object in ALL_SCENE_OBJECTS_LIST
+       if scene_object.reflecting == 1
     ]
 ).squeeze()
 NON_REFLECTING_SCENE_OBJECTS = jnp.stack(
