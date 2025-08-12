@@ -71,8 +71,18 @@ class JaxBackgammonEnv(JaxEnvironment[BackgammonState, jnp.ndarray, dict, Backga
     @partial(jax.jit, static_argnums=(0,))
     def init_state(self,key) -> BackgammonState:
         board = jnp.zeros((2, 26), dtype=jnp.int32)
-        board = board.at[0, 0].set(2).at[0, 11].set(5).at[0, 16].set(3).at[0, 18].set(5)
-        board = board.at[1, 23].set(2).at[1, 12].set(5).at[1, 7].set(3).at[1, 5].set(5)
+        # White (player 0)
+        board = board.at[0, 0].set(2)  # point 24
+        board = board.at[0, 11].set(5)  # point 13
+        board = board.at[0, 16].set(3)  # point 8
+        board = board.at[0, 18].set(5)  # point 6
+
+        # Black (player 1)
+        board = board.at[1, 23].set(2)  # point 1
+        board = board.at[1, 12].set(5)  # point 12
+        board = board.at[1, 7].set(3)  # point 17
+        board = board.at[1, 5].set(5)  # point 19
+
         dice = jnp.zeros(4, dtype=jnp.int32)
 
         #The condition for the while loop
@@ -544,65 +554,114 @@ class BackgammonRenderer(JAXGameRenderer):
         super().__init__(env)
         asset_dir = Path("src/jaxatari/games/sprites/backgammon/")
 
-        # All sprites should be RGBA (H, W, 4)
+        # Load sprites (RGBA numpy arrays expected)
+        # jr.loadFrame returns an HxWx4 uint8 array for each sprite
         self.sprite_board = jr.loadFrame(asset_dir / "backgammon_board.npy")
         self.sprite_checker_white = jr.loadFrame(asset_dir / "white_checker.npy")
         self.sprite_checker_black = jr.loadFrame(asset_dir / "black_checker.npy")
 
+        # dimensions (python ints)
+        self.frame_height = int(self.sprite_board.shape[0])
+        self.frame_width = int(self.sprite_board.shape[1])
+
+        # checker sprite size (use max of white/black so we can center consistently)
+        self.checker_h = int(max(self.sprite_checker_white.shape[0], self.sprite_checker_black.shape[0]))
+        self.checker_w = int(max(self.sprite_checker_white.shape[1], self.sprite_checker_black.shape[1]))
+
+        # compute triangle-tip positions (as CENTER coordinates) for the 26 indices
+        # This yields 13 positions across the top (left->right) then 13 across the bottom (right->left),
+        # which matches the layout used in other parts of the code (0..12 top, 13..25 bottom).
         self.point_positions = self._compute_point_positions()
 
-    import jax.numpy as jnp
+        # vertical spacing used when stacking checkers (overlap so they look like a stack)
+        # Use fraction of checker height (tweak 0.55-0.85 to taste)
+        self.stack_offset = int(self.checker_h * 0.72)
 
     def _compute_point_positions(self):
-        """Return a JAX array of shape (26, 2) with (x, y) coords."""
+        """
+        Compute 26 point tip centers (x_center, y_tip) as jnp.array(dtype=int32).
+        Top row: indices 0..12 left->right
+        Bottom row: indices 13..25 right->left
+        """
         positions = []
+
+        # margins & geometry derived from board size (tweak multipliers if needed)
+        margin_x = int(self.frame_width * 0.07)        # small horizontal margin
+        margin_y = int(self.frame_height * 0.06)       # small vertical margin for triangle tips
+        usable_width = float(self.frame_width - 2 * margin_x)
+
+        # we want 13 positions across the width (13 points -> 12 intervals)
+        # spacing between adjacent tip centers
+        point_spacing = usable_width / 12.0
+
+        # choose top and bottom tip y positions (tips pointing into the board)
+        top_tip_y = margin_y + int(self.frame_height * 0.02)   # a little lower than the very top border
+        bottom_tip_y = self.frame_height - margin_y - int(self.frame_height * 0.02)
+
+        # top row: left -> right (i = 0..12)
         for i in range(13):
-            x = 50 + i * 60
-            y = 50
-            positions.append((x, y))
+            x_center = int(round(margin_x + i * point_spacing))
+            positions.append((x_center, top_tip_y))
+
+        # bottom row: right -> left (i = 0..12)
         for i in range(13):
-            x = 50 + (12 - i) * 60
-            y = 400
-            positions.append((x, y))
+            # Notice the reversed order to match the original mapping
+            x_center = int(round(margin_x + (12 - i) * point_spacing))
+            positions.append((x_center, bottom_tip_y))
+
         return jnp.array(positions, dtype=jnp.int32)
 
     @partial(jax.jit, static_argnums=(0,))
     def render(self, state):
         """
         Render the current Backgammon state to an RGBA (H, W, 4) frame.
-        Fully JIT-compatible.
+        self is static (method decorated with static_argnums=(0,)) so accessing self.* values is fine.
         """
-        # Create a blank RGBA frame matching board dimensions
-        frame = jr.create_initial_frame(
-            self.sprite_board.shape[0],  # height
-            self.sprite_board.shape[1],  # width
-        )
+        frame = jr.create_initial_frame(self.frame_height, self.frame_width)
 
-        # Draw the board first
+        # draw board first
         frame = jr.render_at(frame, 0, 0, self.sprite_board)
 
+        checker_h = self.checker_h
+        checker_w = self.checker_w
+        stack_offset = self.stack_offset
+        frame_h = self.frame_height
+        frame_w = self.frame_width
+
+        # draw each point's checkers
         def draw_point(point_idx, fr):
-            pos_x, pos_y = self.point_positions[point_idx]
+            pos = self.point_positions[point_idx]  # jnp (2,)
+            x_center = jnp.int32(pos[0])
+            y_tip = jnp.int32(pos[1])
+            x_left = x_center - (checker_w // 2)
 
-            # White checkers (player 0 row)
             count_white = jnp.int32(state.board[0, point_idx])
-
-            def draw_white(i, f):
-                return jr.render_at(f, pos_x, pos_y + i * 20, self.sprite_checker_white)
-
-            fr = jax.lax.fori_loop(0, count_white, draw_white, fr)
-
-            # Black checkers (player 1 row)
             count_black = jnp.int32(state.board[1, point_idx])
 
-            def draw_black(i, f):
-                return jr.render_at(f, pos_x, pos_y - i * 20, self.sprite_checker_black)
+            # Function to draw a stack with direction multiplier (+1 = down, -1 = up)
+            def draw_stack(f, count, sprite, direction):
+                def body(i, f_):
+                    y_top = y_tip + direction * (i * stack_offset) - (checker_h // 2)
+                    x_clamped = jnp.maximum(0, jnp.minimum(x_left, frame_w - checker_w))
+                    y_clamped = jnp.maximum(0, jnp.minimum(y_top, frame_h - checker_h))
+                    return jr.render_at(f_, x_clamped, y_clamped, sprite)
 
-            fr = jax.lax.fori_loop(0, count_black, draw_black, fr)
+                return jax.lax.fori_loop(0, count, body, f)
 
-            return fr
+            # If top row (point_idx < 12) → direction = +1 (down), else direction = -1 (up)
+            def top_row_dir(_):
+                f2 = draw_stack(fr, count_white, self.sprite_checker_white, +1)
+                f2 = draw_stack(f2, count_black, self.sprite_checker_black, +1)
+                return f2
 
-        # Loop over all 26 points
+            def bottom_row_dir(_):
+                f2 = draw_stack(fr, count_white, self.sprite_checker_white, -1)
+                f2 = draw_stack(f2, count_black, self.sprite_checker_black, -1)
+                return f2
+
+            return jax.lax.cond(point_idx < 12, top_row_dir, bottom_row_dir, operand=None)
+
+        # loop over all 26 indices
         frame = jax.lax.fori_loop(0, 26, draw_point, frame)
 
         return frame
