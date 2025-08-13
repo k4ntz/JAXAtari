@@ -14,17 +14,44 @@ import jaxatari.rendering.jax_rendering_utils as jr
 class WizardOfWorConstants(NamedTuple):
     WINDOW_WIDTH: int = 160
     WINDOW_HEIGHT: int = 210
+
     BACKGROUND_COLOR: Tuple[int, int, int] = (0, 0, 0)
     PLAYER_COLOR: Tuple[int, int, int] = (255, 255, 0)
     ENEMY_COLOR: Tuple[int, int, int] = (255, 0, 0)
     BULLET_COLOR: Tuple[int, int, int] = (255, 255, 255)
     WALL_COLOR: Tuple[int, int, int] = (0, 0, 255)
+
     # Sprite sizes (Platzhalter)
     PLAYER_SIZE: Tuple[int, int] = (8, 8)
     ENEMY_SIZE: Tuple[int, int] = (8, 8)
     BULLET_SIZE: Tuple[int, int] = (2, 2)
-    TILE_SIZE: Tuple[int, int] = (8, 8)  # Größe eines Tiles auf dem Gameboard
+    TILE_SIZE: Tuple[int, int] = (8, 8)
     WALL_THICKNESS: int = 2
+
+    # Richtungen
+    UP: int = Action.UP
+    DOWN: int = Action.DOWN
+    LEFT: int = Action.LEFT
+    RIGHT: int = Action.RIGHT
+
+    # Enemy types
+    ENEMY_NONE: int = 0
+    ENEMY_BURWOR: int = 1
+    ENEMY_GARWOR: int = 2
+    ENEMY_THORWOR: int = 3
+    ENEMY_WORLUK: int = 4
+    ENEMY_WIZARD: int = 5
+
+    # POINTS
+    POINTS_BURWOR: int = 100
+    POINTS_GARWOR: int = 200
+    POINTS_THORWOR: int = 500
+    POINTS_WORLUK: int = 1000
+    POINTS_WIZARD: int = 2500
+
+    MAX_ENEMIES: int = 10  # Maximum number of enemies on the game board
+    MAX_LEVEL: int = 1
+
     GAMEBOARD_1_WALLS_HORIZONTAL = jnp.array([
         [0, 1, 1, 0, 0, 1, 0, 0, 1, 1, 0],
         [0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0],
@@ -38,36 +65,34 @@ class WizardOfWorConstants(NamedTuple):
         [0, 1, 0, 1, 0, 0, 1, 0, 1, 0],
         [1, 0, 1, 0, 1, 1, 0, 1, 0, 1],
         [0, 0, 0, 1, 0, 0, 1, 0, 0, 0]])
-    # Richtungen
-    UP: int = Action.UP
-    DOWN: int = Action.DOWN
-    LEFT: int = Action.LEFT
-    RIGHT: int = Action.RIGHT
 
-    STEP_SIZE: int = 1  # Schrittgröße für Bewegungen
+    LEVEL_1_ENEMY_POSITIONS = jnp.concatenate([
+        jnp.array([[0, 0, RIGHT, ENEMY_BURWOR]], dtype=jnp.int32),
+        jnp.array([[40, 20, LEFT, ENEMY_BURWOR]], dtype=jnp.int32),
+        jnp.array([[10, 40, UP, ENEMY_BURWOR]], dtype=jnp.int32),
+        jnp.array([[60, 30, DOWN, ENEMY_BURWOR]], dtype=jnp.int32),
+        jnp.tile(jnp.array([[0, 0, 0, 0]], dtype=jnp.int32), (MAX_ENEMIES - 4, 1))
+    ], axis=0)
 
-    BOARD_POSITION: Tuple[int, int] = (0, 0)
-    GAME_AREA_OFFSET: Tuple[int, int] = (BOARD_POSITION[0] + WALL_THICKNESS + TILE_SIZE[0], BOARD_POSITION[1] + WALL_THICKNESS)
+    NO_ENEMY_POSITIONS = jnp.zeros((MAX_ENEMIES, 4), dtype=jnp.int32)  # No enemies
+
+
+    PLAYER_SPAWN_POSITION: Tuple[int, int,int] = (100,50,LEFT)  # Startposition der Spielfigur
+
+    STEP_SIZE: int = 1  # Step size for player movement
+
+    BOARD_POSITION: Tuple[int, int] = (16, 64)
+    GAME_AREA_OFFSET: Tuple[int, int] = (
+    BOARD_POSITION[0] + WALL_THICKNESS + TILE_SIZE[0], BOARD_POSITION[1] + WALL_THICKNESS)
 
     # IMPORTANT: About the coordinates
-    # The board goes from 0,0 (top-left) to 60,110 (bottom-right)
-
-    # CODE PATTERN:
-    #
-    # 2d_array_flat = 2d_array.flatten()
-    # 2d_array_x_coord_flat = jnp.tile(jnp.arange(2d_array.shape[1]), 2d_array.shape[0])
-    # 2d_array_y_coord_flat = jnp.repeat(jnp.arange(2d_array.shape[0]), 2d_array.shape[1])
-    # new_output = jax.vmap(vmap_function, in_axes=(0, 0, 0, None))(
-    #     2d_array_x_coord_flat, 2d_array_y_coord_flat, 2d_array_flat, old_output
-    # )
-    #
-    # Use this pattern instead of x y nested for-loops.
+    # The board goes from 0,0 (top-left) to 110,60 (bottom-right)
 
     @staticmethod
     def get_walls_for_gameboard(gameboard: int) -> Tuple[jnp.ndarray, jnp.ndarray]:
-        """    Placeholder: Gibt die Wände für das angegebene Gameboard zurück.
-        :param gameboard: Das Gameboard, für das die Wände abgerufen werden sollen.
-        :return: Ein Tupel mit den horizontalen und vertikalen Wänden.
+        """    Placeholder: Returns the walls for the specified gameboard.
+        :param gameboard: The gameboard for which the walls should be retrieved.
+        :return: A tuple with the horizontal and vertical walls.
         """
         return jax.lax.cond(
             gameboard == 1,
@@ -77,6 +102,18 @@ class WizardOfWorConstants(NamedTuple):
             operand=None
         )  # Hier können weitere Gameboards hinzugefügt werden
 
+    @staticmethod
+    def get_enemy_positions_for_level(level: int) -> jnp.ndarray:
+        """Placeholder: Returns the enemy positions for the specified level.
+        :param level: The level for which the enemy positions should be retrieved.
+        :return: An array with the enemy positions.
+        """
+        return jax.lax.cond(
+            level == 1,
+            lambda _: WizardOfWorConstants.LEVEL_1_ENEMY_POSITIONS,
+            lambda _: WizardOfWorConstants.NO_ENEMY_POSITIONS,
+            operand=None
+        )
 
 class EntityPosition(NamedTuple):
     x: chex.Array
@@ -97,30 +134,38 @@ class WizardOfWorInfo(NamedTuple):
 
 
 class WizardOfWorState(NamedTuple):
-    # Spielfigur
     player: EntityPosition
-    # Gegner, Schüsse etc.
-    enemies: chex.Array
+    enemies: chex.Array # Array of EntityPosition with length WizardOfWorConstants.MAX_ENEMIES
     gameboard: int
     bullet: EntityPosition
     score: chex.Array
     lives: int
+    doubled: bool  # Flag to indicate if the player has the double score power-up. This is only relevant for WORLUK and WIZARD enemies.
+    animation_counter: int # Counter for animations. This may not be needed since animation are tied to board position.
+    rng_key: chex.PRNGKey  # Random key for JAX operations
+    level: int  # The current level of the game, used for level progression
+    game_over: bool
 
 
 def update_state(state: WizardOfWorState, player: EntityPosition = None, enemies: chex.Array = None,
                  gameboard: int = None, bullet: EntityPosition = None, score: chex.Array = None,
-                 lives: int = None) -> WizardOfWorState:
+                 lives: int = None, doubled: bool = None,animation_counter: int = None,rng_key: chex.PRNGKey = None,
+                 level: int = None, game_over: bool = None) -> WizardOfWorState:
     """
-    Aktualisiert den Zustand des Spiels. Nur diese Methode sollte verwendet werden, um das State Objekt zu mutieren.
-    Nicht übergebene Parameter werden aus dem aktuellen Zustand übernommen.
-    :param state: Der aktuelle Zustand des Spiels.
-    :param player: Neue Position der Spielfigur.
-    :param enemies: Neue Positionen der Gegner.
-    :param gameboard: Neues Gameboard.
-    :param bullet: Neue Position des Schusses.
-    :param score: Neuer Punktestand.
-    :param lives: Neue Anzahl der Leben.
-    :return: Ein neuer Zustand des Spiels mit den aktualisierten Werten.
+    Updates the state of the game. Only this method should be used to mutate the State object.
+    Parameters not passed will be taken from the current state.
+    :param state: The current state of the game.
+    :param player: New position of the player character.
+    :param enemies: New positions of the enemies.
+    :param gameboard: New gameboard.
+    :param bullet: New position of the shot.
+    :param score: New score.
+    :param lives: New number of lives.
+    :param doubled: Flag indicating whether the player has the double score power-up.
+    :param animation_counter: Counter for animations, e.g. player walking animation.
+    :param rng_key: Random key for JAX operations.
+    :param level: The current level of the game.
+    :return: A new state of the game with the updated values.
     """
     return WizardOfWorState(
         player=player if player is not None else state.player,
@@ -128,7 +173,12 @@ def update_state(state: WizardOfWorState, player: EntityPosition = None, enemies
         gameboard=gameboard if gameboard is not None else state.gameboard,
         bullet=bullet if bullet is not None else state.bullet,
         score=score if score is not None else state.score,
-        lives=lives if lives is not None else state.lives
+        lives=lives if lives is not None else state.lives,
+        doubled=doubled if doubled is not None else state.doubled,
+        animation_counter=animation_counter if animation_counter is not None else state.animation_counter,
+        rng_key=rng_key if rng_key is not None else state.rng_key,
+        level=level if level is not None else state.level,
+        game_over=game_over if game_over is not None else state.game_over
     )
 
 
@@ -145,19 +195,27 @@ class JaxWizardOfWor(JaxEnvironment[WizardOfWorState, WizardOfWorObservation, Wi
     def reset(self, key=None) -> Tuple[WizardOfWorObservation, WizardOfWorState]:
         state = WizardOfWorState(
             player=EntityPosition(
-                x=jnp.array(self.consts.WINDOW_WIDTH // 2),
-                y=jnp.array(self.consts.WINDOW_HEIGHT // 2),
-                direction=self.consts.LEFT
+                x=jnp.array(self.consts.PLAYER_SPAWN_POSITION[0]),
+                y=jnp.array(self.consts.PLAYER_SPAWN_POSITION[1]),
+                direction=self.consts.PLAYER_SPAWN_POSITION[2]
             ),
-            enemies=jnp.zeros((0, 4), dtype=jnp.int32),  # Platzhalter für Gegner
-            gameboard=1,  # Start mit Gameboard 1
+            enemies= jnp.zeros(
+                (self.consts.MAX_ENEMIES, 4),  # [x, y, direction, type]
+                dtype=jnp.int32
+            ),
+            gameboard=1,
             bullet=EntityPosition(
-                x=jnp.array(-1),  # Keine Schüsse zu Beginn
+                x=jnp.array(-1),
                 y=jnp.array(-1),
                 direction=self.consts.UP
             ),
             score=jnp.array(0),
-            lives=3  # Startleben
+            lives=3,
+            doubled=False,
+            animation_counter=0,
+            rng_key=jax.random.PRNGKey(0),  # Initialisiere den RNG
+            level=0,
+            game_over=False
         )
         return self._get_observation(state), state
 
@@ -246,30 +304,45 @@ class JaxWizardOfWor(JaxEnvironment[WizardOfWorState, WizardOfWorObservation, Wi
             lives=jnp.array(state.lives)
         )
 
+    @partial(jax.jit, static_argnums=(0,))
     def _step_level_change(self, state):
-        # Placeholder: Logik für Levelwechsel.
-        # Unser MVP hat nur Level 1, daher wird hier nichts geändert
-        return state
+        # Wenn alle Gegner besiegt sind, Level erhöhen und Gegner respawnen. Falls das nächste Level größer als MAX_LEVEL ist, Spiel beenden.
+        return jax.lax.cond(
+            jnp.all(state.enemies[:, 3] == self.consts.ENEMY_NONE),
+            lambda _: jax.lax.cond(
+                (state.level + 1) > self.consts.MAX_LEVEL,
+                lambda _: update_state(
+                    state=state,
+                    game_over=True
+                ),
+                lambda _: update_state(
+                    state=state,
+                    enemies=self.consts.get_enemy_positions_for_level(level=state.level + 1),
+                    level=state.level + 1,
+                ),
+                operand=None
+            ),
+            lambda _: state,
+            operand=None
+        )
 
+    @partial(jax.jit, static_argnums=(0,))
     def _step_respawn(self, state, action):
-        # Placeholder: Logik für Respawn
-        # hier wird geprüft, ob der tot ist und durch einen Input respawned werden soll
-
         return state
 
+    @partial(jax.jit, static_argnums=(0,))
     def _step_player_movement(self, state, action):
-        # Placeholder: Spielerbewegung basierend auf der Aktion
-        # also Bewegung, Rotation und Kollision mit Wänden
         return state
 
+    @partial(jax.jit, static_argnums=(0,))
     def _step_bullet_movement(self, state):
-        # Placeholder: Schussbewegung
-        # hier wird die Position des Schusses aktualisiert
         return state
 
+    @partial(jax.jit, static_argnums=(0,))
     def _step_enemy_movement(self, state):
         return state
 
+    @partial(jax.jit, static_argnums=(0,))
     def _step_collision_detection(self, state):
         return state
 
@@ -337,6 +410,7 @@ class WizardOfWorRenderer(JAXGameRenderer):
         # Raster initialisieren
         raster = jr.create_initial_frame(width=self.consts.WINDOW_WIDTH, height=self.consts.WINDOW_HEIGHT)
         raster = self._render_gameboard(raster=raster, state=state)
+        raster = self._render_radar(raster=raster, state=state)
         raster = self._render_enemies(raster=raster, state=state)
         raster = self._render_bullet(raster=raster, state=state)
         raster = self._render_player(raster=raster, state=state)
@@ -345,10 +419,7 @@ class WizardOfWorRenderer(JAXGameRenderer):
         return raster
 
     def _render_gameboard(self, raster, state: WizardOfWorState):
-        # Placeholder: Hintergrund und Wände zeichnen
-
         def _render_gameboard_background(raster):
-            # Hintergrund zeichnen
             return jr.render_at(
                 raster=raster,
                 sprite_frame=jr.get_sprite_frame(self.SPRITE_BG, 0),
@@ -357,17 +428,16 @@ class WizardOfWorRenderer(JAXGameRenderer):
             )
 
         def _render_gameboard_walls(raster, state: WizardOfWorState):
-            # Wände zeichnen basierend auf dem Gameboard
             walls_horizontal, walls_vertical = self.consts.get_walls_for_gameboard(gameboard=state.gameboard)
 
             def _render_horizontal_wall(raster, x: int, y: int, is_wall: int):
                 def _get_raster_x_for_horizontal_wall(x):
                     return self.consts.GAME_AREA_OFFSET[0] + (
-                                x * (self.consts.WALL_THICKNESS + self.consts.TILE_SIZE[0]))
+                            x * (self.consts.WALL_THICKNESS + self.consts.TILE_SIZE[0]))
 
                 def _get_raster_y_for_horizontal_wall(y):
-                    return self.consts.GAME_AREA_OFFSET[1] + self.consts.TILE_SIZE[1] +  (
-                                y * (self.consts.WALL_THICKNESS + self.consts.TILE_SIZE[1]))
+                    return self.consts.GAME_AREA_OFFSET[1] + self.consts.TILE_SIZE[1] + (
+                            y * (self.consts.WALL_THICKNESS + self.consts.TILE_SIZE[1]))
 
                 return jax.lax.cond(
                     is_wall > 0,
@@ -384,19 +454,19 @@ class WizardOfWorRenderer(JAXGameRenderer):
             def _render_vertical_wall(raster, x, y, is_wall):
                 def _get_raster_x_for_vertical_wall(x):
                     return self.consts.GAME_AREA_OFFSET[0] + self.consts.TILE_SIZE[0] + (
-                        x * (self.consts.WALL_THICKNESS + self.consts.TILE_SIZE[0]))
+                            x * (self.consts.WALL_THICKNESS + self.consts.TILE_SIZE[0]))
 
                 def _get_raster_y_for_vertical_wall(y):
                     return self.consts.GAME_AREA_OFFSET[1] + (
-                        y * (self.consts.WALL_THICKNESS + self.consts.TILE_SIZE[1]))
+                            y * (self.consts.WALL_THICKNESS + self.consts.TILE_SIZE[1]))
 
                 return jax.lax.cond(
                     is_wall > 0,
                     lambda _: jr.render_at(
                         raster=raster,
                         sprite_frame=jr.get_sprite_frame(self.SPRITE_WALL_VERTICAL, 0),
-                        x=_get_raster_x_for_vertical_wall(x),
-                        y=_get_raster_y_for_vertical_wall(y)
+                        x=_get_raster_x_for_vertical_wall(x=x),
+                        y=_get_raster_y_for_vertical_wall(y=y)
                     ),
                     lambda _: raster,
                     operand=None
@@ -416,12 +486,16 @@ class WizardOfWorRenderer(JAXGameRenderer):
                 def body(carry, elem):
                     r = carry
                     row, col, v = elem
-                    r = _render_horizontal_wall(r, col, row, v)
+                    r = _render_horizontal_wall(raster=r, x=col, y=row, is_wall=v)
                     return r, None
 
                 init = raster
                 elems = (xs_f, ys_f, vals_f)
-                raster_final, _ = jax.lax.scan(body, init, elems)
+                raster_final, _ = jax.lax.scan(
+                    f=body,
+                    init=init,
+                    xs=elems
+                )
                 return raster_final
 
             def _render_vertical_walls(raster, grid_vals):
@@ -434,17 +508,22 @@ class WizardOfWorRenderer(JAXGameRenderer):
                 xs_f = xs.ravel()
                 ys_f = ys.ravel()
                 vals_f = grid_vals.reshape(-1, *grid_vals.shape[2:])
+
                 # [-1] or [-1,3]
                 def body(carry, elem):
                     r = carry
                     row, col, v = elem
-                    r = _render_vertical_wall(r, col, row, v)
+                    r = _render_vertical_wall(raster=r, x=col, y=row, is_wall=v)
                     return r, None
+
                 init = raster
                 elems = (xs_f, ys_f, vals_f)
-                raster_final, _ = jax.lax.scan(body, init, elems)
+                raster_final, _ = jax.lax.scan(
+                    f=body,
+                    init=init,
+                    xs=elems
+                )
                 return raster_final
-
 
             new_raster = _render_horizontal_walls(
                 raster=raster,
@@ -460,22 +539,90 @@ class WizardOfWorRenderer(JAXGameRenderer):
         new_raster = _render_gameboard_walls(raster=new_raster, state=state)
         return new_raster
 
-    def _render_enemies(self, raster, state):
-        # Placeholder: Gegner zeichnen
+    def _render_radar(self, raster, state: WizardOfWorState):
         return raster
 
-    def _render_bullet(self, raster, state):
-        # Placeholder: Schuss zeichnen
+    def _render_enemies(self, raster, state: WizardOfWorState):
+        def _render_enemies(self, raster, state: WizardOfWorState):
+            def body(carry, enemy):
+                r = carry
+                x, y, direction, enemy_type = enemy
+                r = jax.lax.cond(
+                    enemy_type != self.consts.ENEMY_NONE,
+                    lambda _: self._render_character(
+                        r,
+                        self.SPRITE_BURWOR, # Placeholder for enemy sprite, can be extended for other enemy types
+                        EntityPosition(x=x, y=y, direction=direction)
+                    ),
+                    lambda _: r,
+                    operand=None
+                )
+                return r, None
+
+            raster_final, _ = jax.lax.scan(
+                f=body,
+                init=raster,
+                xs=state.enemies
+            )
+            return raster_final
+        new_raster = _render_enemies(self, raster=raster, state=state)
+        return new_raster
+
+    def _render_bullet(self, raster, state: WizardOfWorState):
         return raster
 
-    def _render_player(self, raster, state):
-        # Placeholder: Spieler zeichnen
+    def _render_player(self, raster, state: WizardOfWorState):
+        new_raster = self._render_character(raster,self.SPRITE_PLAYER,state.player)
+        return new_raster
+
+    def _render_score(self, raster, state: WizardOfWorState):
         return raster
 
-    def _render_score(self, raster, state):
-        # Placeholder: Punktestand zeichnen
+    def _render_lives(self, raster, state: WizardOfWorState):
         return raster
 
-    def _render_lives(self, raster, state):
-        # Placeholder: Leben zeichnen
-        return raster
+    def _render_character(self, raster, sprite, entity: EntityPosition):
+        """
+        Renders a character sprite at the specified position and direction.
+        :param raster: The raster to render on.
+        :param sprite: The sprite to render.
+        :param entity: The entity to render, containing x, y, and direction.
+        :return: The raster with the rendered character.
+        """
+        direction = entity.direction
+        frame_offset = (entity.x+entity.y) % 2
+        frame_index = jax.lax.cond(
+            (direction == self.consts.LEFT) | (direction == self.consts.RIGHT),
+            lambda _: frame_offset,
+            lambda _: 2 + frame_offset,
+            operand=None
+        )
+        sprite_frame = jr.get_sprite_frame(sprite,frame_index)
+        return jax.lax.cond(
+            direction == self.consts.RIGHT,
+            lambda _: jr.render_at(
+                raster=raster,
+                sprite_frame=sprite_frame,
+                x=self.consts.GAME_AREA_OFFSET[0]+entity.x,
+                y=self.consts.GAME_AREA_OFFSET[1]+entity.y,
+                flip_horizontal=True
+            ),
+            lambda _: jax.lax.cond(
+                direction == self.consts.UP,
+                lambda _: jr.render_at(
+                    raster=raster,
+                    sprite_frame=sprite_frame,
+                    x=self.consts.GAME_AREA_OFFSET[0]+entity.x,
+                    y=self.consts.GAME_AREA_OFFSET[1]+entity.y,
+                    flip_vertical=True
+                ),
+                lambda _: jr.render_at(
+                    raster=raster,
+                    sprite_frame=sprite_frame,
+                    x=self.consts.GAME_AREA_OFFSET[0]+entity.x,
+                    y=self.consts.GAME_AREA_OFFSET[1]+entity.y
+                ),
+                operand=None
+            ),
+            operand=None
+        )
