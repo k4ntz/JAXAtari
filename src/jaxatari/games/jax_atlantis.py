@@ -2,21 +2,20 @@ import os
 from dataclasses import dataclass, field
 
 from jax import config, Array
-from jax._src.dtypes import dtype
+
 import jax.lax
 import jax.numpy as jnp
 import chex
-from numpy import array
+
 import pygame
 from typing import Dict, Any, Optional, NamedTuple, Tuple
 from functools import partial
 
 from jaxatari.rendering import jax_rendering_utils as aj
 from jaxatari.renderers import JAXGameRenderer
-from jaxatari.environment import JaxEnvironment, JAXAtariAction as Action
+from jaxatari.environment import JaxEnvironment, JAXAtariAction as Action, EnvObs
 import jaxatari.spaces as spaces
 
-from jax import debug
 
 @dataclass(frozen=True)
 class GameConfig:
@@ -86,6 +85,7 @@ class EntityPosition(NamedTuple):
     y: jnp.ndarray
     width: jnp.ndarray
     height: jnp.ndarray
+    alive: jnp.ndarray
 
 
 class AtlantisState(NamedTuple):
@@ -122,11 +122,18 @@ class AtlantisObservation(NamedTuple):
     score: jnp.ndarray
     enemy: EntityPosition
     bullet: EntityPosition
-
+    installations_alive: jnp.ndarray
+    command_post_alive: jnp.ndarray
 
 class AtlantisInfo(NamedTuple):
-    time: jnp.ndarray
-    score: chex.Array
+    score: jnp.ndarray
+    wave: jnp.ndarray
+    enemies_alive: jnp.ndarray # scalar
+    bullets_alive: jnp.ndarray # scalar
+    enemies_remaining_in_wave: jnp.ndarray
+    wave_cooldown_remaining: jnp.ndarray
+    command_post_alive: jnp.ndarray # bool scalar
+    installations_alive: jnp.ndarray # (6,) bool
 
 
 class AtlantisConstants(NamedTuple):
@@ -373,6 +380,7 @@ class JaxAtlantis(JaxEnvironment[AtlantisState, AtlantisObservation, AtlantisInf
         if reward_funcs is not None:
             reward_funcs = tuple(reward_funcs)
         self.reward_funcs = reward_funcs
+        self.renderer = Renderer_AtraJaxis(config=self.config)
 
     def reset(
             self, key: jax.random.PRNGKey = jax.random.PRNGKey(42)
@@ -1083,46 +1091,131 @@ class JaxAtlantis(JaxEnvironment[AtlantisState, AtlantisObservation, AtlantisInf
         )
         observation = self._get_observation(state)
         done = self._get_done(state)
-        info = AtlantisInfo(time=jnp.array(0, dtype=jnp.int32), score=state.score)
-        state._replace(reward=state.score - previous_state.score)
+        info = self._get_info(state)
+        new_reward = state.score - previous_state.score
+        state = state._replace(reward=new_reward)
 
         return observation, state, state.reward, done, info
 
     @partial(jax.jit, static_argnums=(0,))
-    def _get_observation(self, state: "AtlantisState") -> "AtlantisObservation":
-        # just placeholders
-        enemies_pos = EntityPosition(
-            0,
-            0,
-            0,
-            0,
+    def _get_observation(self, state: AtlantisState) -> AtlantisObservation:
+        cfg = self.config
+
+        # get types of enemies
+        type_ids = state.enemies[:, 3].astype(jnp.int32)
+
+        # Get the positions and dimensions of the enemies
+        # set inactive enemies to -1 or 0
+        enemy_alive = (state.enemies[:, 5] == 1)
+        enemy_x = jnp.where(enemy_alive, state.enemies[:, 0].astype(jnp.int32), -1)
+        enemy_y = jnp.where(enemy_alive, state.enemies[:, 1].astype(jnp.int32), -1)
+        enemy_w = jnp.where(enemy_alive, cfg.enemy_width[type_ids].astype(jnp.int32), 0)
+        enemy_h = jnp.where(enemy_alive, cfg.enemy_height[type_ids].astype(jnp.int32), 0)
+        enemy_pos = EntityPosition(enemy_x, enemy_y, enemy_w, enemy_h, enemy_alive)
+
+        # Get the positions and dimensions of the bullets
+        # set inactive bullets to -1 or 0
+        bullet_alive = state.bullets_alive
+        bullet_x = jnp.where(bullet_alive, state.bullets[:, 0].astype(jnp.int32), -1)
+        bullet_y = jnp.where(bullet_alive, state.bullets[:, 1].astype(jnp.int32), -1)
+        bullet_w = jnp.where(bullet_alive,
+                       jnp.full((cfg.max_bullets,), cfg.bullet_width, dtype=jnp.int32),
+                       0)
+        bullet_h = jnp.where(bullet_alive,
+                       jnp.full((cfg.max_bullets,), cfg.bullet_height, dtype=jnp.int32),
+                       0)
+        bullet_pos = EntityPosition(bullet_x, bullet_y, bullet_w, bullet_h, bullet_alive)
+
+        return AtlantisObservation(
+            score = state.score,
+            enemy = enemy_pos,
+            bullet = bullet_pos,
+            installations_alive = state.installations,
+            command_post_alive = state.command_post_alive
         )
 
-        bullets_pos = EntityPosition(
-            0,
-            0,
-            0,
-            0,
-        )
+    def observation_space(self) -> spaces.Dict:
+        cfg = self.config
+        def entity_space(n: int, w_max: int, h_max: int) -> spaces.Dict:
+            return spaces.Dict({
+                "x": spaces.Box(low=-w_max, high=cfg.screen_width, shape=(n,), dtype=jnp.int32),
+                "y": spaces.Box(low=-h_max, high=cfg.screen_height, shape=(n,), dtype=jnp.int32),
+                "width": spaces.Box(low=0, high=w_max, shape=(n,), dtype=jnp.int32),
+                "height": spaces.Box(low=0, high=h_max, shape=(n,), dtype=jnp.int32),
+                "alive":  spaces.Box(low=0, high=1, shape=(n,), dtype=jnp.bool_),
+            })
 
-        return AtlantisObservation(state.score, enemies_pos, bullets_pos)
+        return spaces.Dict({
+            "score": spaces.Box(
+                low = 0,
+                high = (10 ** cfg.max_digits_for_score) - 1,
+                shape = (),
+                dtype = jnp.int32,
+            ),
+            "enemy": entity_space(
+                n = cfg.max_enemies,
+                w_max = int(jnp.max(cfg.enemy_width).item()),
+                h_max = int(jnp.max(cfg.enemy_height).item()),
+            ),
+            "bullet": entity_space(
+                n = cfg.max_bullets,
+                w_max = int(cfg.bullet_width),
+                h_max = int(cfg.bullet_height),
+            ),
+            "installations_alive": spaces.Box(
+                low = 0,
+                high = 1,
+                shape = (6,),
+                dtype=jnp.bool_,
+            ),
+            "command_post_alive": spaces.Box(
+                low=0,
+                high=1,
+                shape=(),
+                dtype=jnp.bool_,
+            ),
+        })
+
+    @partial(jax.jit, static_argnums=(0,))
+    def obs_to_flat_array(self, obs: EnvObs) -> jnp.ndarray:
+        def _flat(ep: EntityPosition) -> jnp.ndarray:
+            return jnp.concatenate([
+                jnp.ravel(ep.x).astype(jnp.int32),
+                jnp.ravel(ep.y).astype(jnp.int32),
+                jnp.ravel(ep.width).astype(jnp.int32),
+                jnp.ravel(ep.height).astype(jnp.int32),
+                jnp.ravel(ep.alive).astype(jnp.int32),  # booleans -> 0,1
+            ], axis=0)
+
+        return jnp.concatenate([
+            jnp.atleast_1d(obs.score).astype(jnp.int32),
+            _flat(obs.enemy),
+            _flat(obs.bullet),
+            obs.installations_alive.astype(jnp.int32),
+            jnp.atleast_1d(obs.command_post_alive.astype(jnp.int32)),
+        ], axis=0)
+
+
 
     @partial(jax.jit, static_argnums=(0,))
     def _get_info(self, state: AtlantisState) -> AtlantisInfo:
-        """
-        Placeholder info: returns zero time and empty reward array.
-        """
+        enemies_alive = jnp.sum((state.enemies[:,5] == 1).astype(jnp.int32))
+        bullets_alive = jnp.sum(state.bullets_alive.astype(jnp.int32))
+
         return AtlantisInfo(
-            time=jnp.array(0, dtype=jnp.int32),
             score=state.score,
+            wave=state.wave,
+            enemies_alive=enemies_alive,
+            bullets_alive=bullets_alive,
+            enemies_remaining_in_wave=state.number_enemies_wave_remaining,
+            wave_cooldown_remaining=state.wave_end_cooldown_remaining,
+            command_post_alive=state.command_post_alive,
+            installations_alive=state.installations,
         )
 
-    @partial(jax.jit, static_argnums=(0,))
+
     def _get_reward(self, previous_state: AtlantisState, state: AtlantisState) -> float:
-        """
-        Placeholder reward: always zero.
-        """
-        return state.reward
+        return float(state.score.item() - previous_state.score.item())
 
     @partial(jax.jit, static_argnums=(0,))
     def _get_done(self, state: AtlantisState) -> jnp.bool_:
@@ -1156,6 +1249,18 @@ class JaxAtlantis(JaxEnvironment[AtlantisState, AtlantisObservation, AtlantisInf
         12: LEFTFIRE
         """
         return spaces.Discrete(int(Action.LEFTFIRE) + 1)
+
+    def render(self, state: AtlantisState) -> jnp.ndarray:
+        return self.renderer.render(state)
+
+    def image_space(self) -> spaces.Box:
+        cfg = self.config
+        return spaces.Box(
+            low=0,
+            high=255,
+            shape=(cfg.screen_height, cfg.screen_width, 3),
+            dtype=jnp.uint8
+        )
 
 
 # Keyboard inputs
