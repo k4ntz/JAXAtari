@@ -64,5 +64,5 @@ jobs:
           echo "Running tests for game: ${{ matrix.game }}"
 
           . .venv/bin/activate
-          pytest --game ${{ matrix.game }} --tb=line -ra --color=yes
+          pytest --game ${{ matrix.game }} --snapshot-warn-unused --tb=line -ra --color=yes
         shell: bash
