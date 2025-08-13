@@ -40,8 +40,14 @@ class DonkeyKongConstants(NamedTuple):
     LEVEL_2_HAMMER_X: int = 78
     LEVEL_2_HAMMER_Y: int = 68
 
+    # Hammer Carry
     HAMMER_CARRY_DURATION = 654
     HAMMER_SWING_DURATION = 8
+
+    HAMMER_HIT_BOX_X = 7
+    HAMMER_HIT_BOX_Y = 4
+    HAMMER_SWING_HIT_BOX_X = 6
+    HAMMER_SWING_HIT_BOX_Y = 6
 
     # Drop Pit positions
     DP_LEFT_X: int = 52
@@ -260,6 +266,13 @@ class JaxDonkeyKong(JaxEnvironment[DonkeyKongState, DonkeyKongObservation, Donke
             operand=None
         )
 
+    # calculate if there is a collision between two object (e.g. mario and barrel)
+    @jax.jit
+    def _collision_between_two_objects(obj_a_x, obj_a_y, hit_box_a_x, hit_box_a_y, obj_b_x, obj_b_y, hit_box_b_x, hit_box_b_y):
+        return (
+            (jnp.abs(obj_a_x - obj_b_x) <= (hit_box_a_x + hit_box_b_x) / 2) &
+            (jnp.abs(obj_a_y - obj_b_y) <= (hit_box_a_y + hit_box_b_y) / 2)
+        )
 
     @partial(jax.jit, static_argnums=(0,))
     def _barrel_step(self, state):
@@ -875,6 +888,13 @@ class JaxDonkeyKong(JaxEnvironment[DonkeyKongState, DonkeyKongObservation, Donke
 
         return new_state
     
+    @partial(jax.jit, static_argnums=(0,))
+    def _hammer_step(self, state, action: chex.Array):
+        new_state = state
+
+
+        return new_state
+    
 
     def reset(self, key = [0,0]) -> Tuple[DonkeyKongObservation, DonkeyKongState]:
         """
@@ -935,6 +955,9 @@ class JaxDonkeyKong(JaxEnvironment[DonkeyKongState, DonkeyKongObservation, Donke
   
         # mario step / player step
         new_state = self._mario_step(new_state, action)
+
+        # hammer step
+        new_state = self._hammer_step(new_state, action)
 
         # increase timer / frame counter
         new_state = new_state._replace(
