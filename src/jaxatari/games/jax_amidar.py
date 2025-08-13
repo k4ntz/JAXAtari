@@ -610,12 +610,12 @@ def enemies_step(constants: AmidarConstants, state: AmidarState, random_key: che
     return new_enemy_positions, new_enemy_directions
 
 def chicken_mode(constants, corners_completed, enemy_types, chicken_counter):
-    # If all corners are completed and the chicken counter is still at the maximum, activate the chickens
-    enemy_types, chicken_counter = jax.lax.cond(jnp.logical_and(corners_completed, chicken_counter == constants.CHICKEN_MODE_DURATION), lambda: (jnp.full(enemy_types.shape, constants.CHICKEN), chicken_counter-1), lambda: (enemy_types, chicken_counter))
     # If the chicken counter is 0 and there is at least one chicken, deactivate the chickens
     enemy_types = jax.lax.cond(chicken_counter == 0, lambda: jnp.full(enemy_types.shape, constants.WARRIOR), lambda: enemy_types) # TODO turn back to the correct type for the level
     # If the chicken counter is greater or equal to 0 and less than the maximum, decrement it
     chicken_counter = jax.lax.cond(jnp.logical_and(chicken_counter >= 0, chicken_counter < constants.CHICKEN_MODE_DURATION), lambda: chicken_counter - 1, lambda: chicken_counter)
+    # If all corners are completed and the chicken counter is still at the maximum, activate the chickens
+    enemy_types, chicken_counter = jax.lax.cond(jnp.logical_and(corners_completed, chicken_counter == constants.CHICKEN_MODE_DURATION), lambda: (jnp.full(enemy_types.shape, constants.CHICKEN), chicken_counter-1), lambda: (enemy_types, chicken_counter))
     # jax.debug.print("Enemy types: {enemy_types}", enemy_types=enemy_types)
     # jax.lax.cond(corners_completed, lambda: jax.debug.print("Corners completed, Chicken Counter{}", chicken_counter), lambda: None)
     return enemy_types, chicken_counter
@@ -745,6 +745,7 @@ class JaxAmidar(JaxEnvironment[AmidarState, AmidarObservation, AmidarInfo, Amida
 
             # CHICKEN MODE
             enemy_types, chicken_counter = chicken_mode(self.constants, corners_completed, state.enemy_types, state.chicken_counter)
+            # jax.lax.cond(jnp.any(enemy_types == self.constants.CHICKEN), lambda: jax.debug.print("Chickens activated, {}", chicken_counter), lambda: None)
 
             # Check for collisions with enemies
             collisions = check_for_collisions(self.constants, player_x, player_y, enemy_positions, enemy_types)
