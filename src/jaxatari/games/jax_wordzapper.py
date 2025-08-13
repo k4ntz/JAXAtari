@@ -1,90 +1,93 @@
 import os
 from functools import partial
 from typing import NamedTuple, Tuple
-from jax._src.core import stash_axis_env, reset_trace_state
 import jax.lax
 import jax.numpy as jnp
 import chex
-import pygame
 from gymnax.environments import spaces
 
-from jaxatari.renderers import AtraJaxisRenderer
-from jaxatari.rendering import atraJaxis as aj
+from jaxatari.renderers import JAXGameRenderer
+import jaxatari.rendering.jax_rendering_utils as jr
 from jaxatari.environment import JaxEnvironment, JAXAtariAction as Action
 
-# Constants for game environment
-MAX_ASTEROIDS_COUNT = 6 #TODO not sure about value
 
-# define object orientations
-FACE_LEFT = -1
-FACE_RIGHT = 1
+class WordZapperConstants(NamedTuple) :
+    # Constants for game environment
+    MAX_ASTEROIDS_COUNT = 6 #TODO not sure about value
 
-# Player and letter positions
-PLAYER_START_X = 80
-PLAYER_START_Y = 110
+    # define object orientations
+    FACE_LEFT = -1
+    FACE_RIGHT = 1
 
-# Object sizes (width, height)
-PLAYER_SIZE = (4, 16)
-ASTEROID_SIZE = (8, 7)
-MISSILE_SIZE = (8, 1)
-ZAPPER_SIZE = (8, 1)
-LETTER_SIZE = (8, 8)
+    # Player and letter positions
+    PLAYER_START_X = 80
+    PLAYER_START_Y = 110
 
-# Pygame window dimensions
-WIDTH = 160
-HEIGHT = 210
-SCALING_FACTOR = 3
+    # Object sizes (width, height)
+    PLAYER_SIZE = (4, 16)
+    ASTEROID_SIZE = (8, 7)
+    MISSILE_SIZE = (8, 1)
+    ZAPPER_SIZE = (8, 1)
+    LETTER_SIZE = (8, 8)
 
-WINDOW_WIDTH = 160 * 3
-WINDOW_HEIGHT = 210 * 3
+    # Pygame window dimensions
+    WIDTH = 160
+    HEIGHT = 210
+    SCALING_FACTOR = 3 # TODO make game independent of WIDTH/HEIGHT
+    WINDOW_WIDTH = 160 * 3
+    WINDOW_HEIGHT = 210 * 3
 
-MIN_BOUND = (10, 56)
-MAX_BOUND = (134, 135)
+    MIN_BOUND = (10, 56)
+    MAX_BOUND = (134, 135)
 
-X_BORDERS = (0, 160)
+    X_BORDERS = (0, 160)
 
-# letters to apper and disapper
-LETTER_VISIBLE_MIN_X = 36   # Letters become visible at
-LETTER_VISIBLE_MAX_X = 124  # Letters disappear at
-LETTER_RESET_X = 5 # at this coordinate letters reset back to right ! only coordinates change not real reset
-LETTERS_DISTANCE = 14 # spacing between letters
-LETTERS_END = LETTER_VISIBLE_MIN_X + 26 * LETTERS_DISTANCE # 27 symbols (letters + special) but 26 gaps
+    # letters to apper and disapper
+    LETTER_VISIBLE_MIN_X = 36   # Letters become visible at
+    LETTER_VISIBLE_MAX_X = 124  # Letters disappear at
+    LETTER_RESET_X = 5 # at this coordinate letters reset back to right ! only coordinates change not real reset
+    LETTERS_DISTANCE = 14 # spacing between letters
+    LETTERS_END = LETTER_VISIBLE_MIN_X + 26 * LETTERS_DISTANCE # 27 symbols (letters + special) but 26 gaps
 
-# Enemies
-MAX_ENEMIES = 6
-ENEMY_MIN_X = -16
-ENEMY_MAX_X = WIDTH + 16
-ENEMY_Y_MIN = 50
-ENEMY_Y_MAX = 150
-ENEMY_ANIM_SWITCH_RATE = 15
-ENEMY_Y_MIN_SEPARATION = 16
-
-
-ENEMY_GAME_SPEED = 1.2
-INTRO_PHASE_FRAMES = 3 * 60 # TODO this assumes 60 fps for some reason
-INTRO_SWEEP_SPEED = (ENEMY_MAX_X - ENEMY_MIN_X) / (3 * 60)
-
-# zapper
-ZAPPER_COLOR = (252,252,84,255)
-MAX_ZAPPER_POS = 49
-ZAPPER_SPR_WIDTH = 4
-ZAPPER_SPR_HEIGHT = 200 # this is approximate, can also be changed, but this works fine. TODO define this value based on max/min ship coordinate 
+    # Enemies
+    MAX_ENEMIES = 6
+    ENEMY_MIN_X = -16
+    ENEMY_MAX_X = WIDTH + 16
+    ENEMY_Y_MIN = 50
+    ENEMY_Y_MAX = 150
+    ENEMY_ANIM_SWITCH_RATE = 15
+    ENEMY_Y_MIN_SEPARATION = 16
 
 
-TIME = 99
+    ENEMY_GAME_SPEED = 1.2
+    INTRO_PHASE_FRAMES = 3 * 60 # TODO this assumes 60 fps for some reason
+    INTRO_SWEEP_SPEED = (ENEMY_MAX_X - ENEMY_MIN_X) / (3 * 60)
 
-WORD_DISPLAY_FRAMES = 5 * 60 # TODO this assumes 60 fps for some reason
+    # zapper
+    ZAPPER_COLOR = (252,252,84,255)
+    MAX_ZAPPER_POS = 49
+    ZAPPER_SPR_WIDTH = 4
+    ZAPPER_SPR_HEIGHT = 200 # this is approximate, can also be changed, but this works fine. TODO define this value based on max/min ship coordinate 
+
+
+    TIME = 99
+
+    WORD_DISPLAY_FRAMES = 5 * 60 # TODO this assumes 60 fps for some reason
+
+
+
 WORD_LIST = [
-    "BRAIN", "SMART", "PIXEL", "CLICK",
+    "BRAIN", "SMART", "PIXEL", "CLICK", # put this in constants
     "INPUT", "ROBOT", "GHOST", "POWER",
     "GLARE", "NODES", "WAVES", "ZAPPA",
 ]
+
 
 def _encode_word(word, max_len=6):
     vals = [ord(c) - 65 for c in word] + [-1] * (max_len - len(word))
     return jnp.array(vals, dtype=jnp.int32)
 
-ENCODED_WORD_LIST = jnp.stack([_encode_word(w) for w in WORD_LIST])  
+ENCODED_WORD_LIST = jnp.stack([_encode_word(w) for w in WORD_LIST])   # TODO dont directly use WORD_LIST, pass it as arg
 WORD_COUNT = ENCODED_WORD_LIST.shape[0]
 
 
@@ -109,62 +112,6 @@ STATE_TRANSLATOR: dict = {
     17: "step_counter",
     18: "buffer",
 }
-
-
-def get_human_action() -> chex.Array:
-    """Get human action from keyboard with support for diagonal movement and combined fire"""
-    keys = pygame.key.get_pressed()
-    up = keys[pygame.K_UP] or keys[pygame.K_w]
-    down = keys[pygame.K_DOWN] or keys[pygame.K_s]
-    left = keys[pygame.K_LEFT] or keys[pygame.K_a]
-    right = keys[pygame.K_RIGHT] or keys[pygame.K_d]
-    fire = keys[pygame.K_SPACE]
-
-    # Diagonal movements with fire
-    if up and right and fire:
-        return jnp.array(Action.UPRIGHTFIRE)
-    if up and left and fire:
-        return jnp.array(Action.UPLEFTFIRE)
-    if down and right and fire:
-        return jnp.array(Action.DOWNRIGHTFIRE)
-    if down and left and fire:
-        return jnp.array(Action.DOWNLEFTFIRE)
-
-    # Cardinal directions with fire
-    if up and fire:
-        return jnp.array(Action.UPFIRE)
-    if down and fire:
-        return jnp.array(Action.DOWNFIRE)
-    if left and fire:
-        return jnp.array(Action.LEFTFIRE)
-    if right and fire:
-        return jnp.array(Action.RIGHTFIRE)
-
-    # Diagonal movements
-    if up and right:
-        return jnp.array(Action.UPRIGHT)
-    if up and left:
-        return jnp.array(Action.UPLEFT)
-    if down and right:
-        return jnp.array(Action.DOWNRIGHT)
-    if down and left:
-        return jnp.array(Action.DOWNLEFT)
-
-    # Cardinal directions
-    if up:
-        return jnp.array(Action.UP)
-    if down:
-        return jnp.array(Action.DOWN)
-    if left:
-        return jnp.array(Action.LEFT)
-    if right:
-        return jnp.array(Action.RIGHT)
-    if fire:
-        return jnp.array(Action.FIRE)
-
-    return jnp.array(Action.NOOP)
-    
-
 
 class WordZapperState(NamedTuple):
     player_x: chex.Array
@@ -246,48 +193,55 @@ def load_sprites():
     MODULE_DIR = os.path.dirname(os.path.abspath(__file__))
 
     # Background
-    bg1 = aj.loadFrame(os.path.join(MODULE_DIR, "sprites/wordzapper/bg/1.npy"))
+    bg1 = jr.loadFrame(os.path.join(MODULE_DIR, "sprites/wordzapper/bg/1.npy"))
 
     # Player
-    pl_1 = aj.loadFrame(os.path.join(MODULE_DIR, "sprites/wordzapper/player/1.npy"))
-    pl_2 = aj.loadFrame(os.path.join(MODULE_DIR, "sprites/wordzapper/player/2.npy"))
-    pl_missile = aj.loadFrame(os.path.join(MODULE_DIR, "sprites/wordzapper/bullet/1.npy"))
+    pl_1 = jr.loadFrame(os.path.join(MODULE_DIR, "sprites/wordzapper/player/1.npy"))
+    pl_2 = jr.loadFrame(os.path.join(MODULE_DIR, "sprites/wordzapper/player/2.npy"))
+    pl_missile = jr.loadFrame(os.path.join(MODULE_DIR, "sprites/wordzapper/bullet/1.npy"))
 
     # Enemies Bonker
-    bonker_1 = aj.loadFrame(os.path.join(MODULE_DIR, "sprites/wordzapper/enemies/bonker/1.npy"))
-    bonker_2 = aj.loadFrame(os.path.join(MODULE_DIR, "sprites/wordzapper/enemies/bonker/2.npy"))
+    bonker_1 = jr.loadFrame(os.path.join(MODULE_DIR, "sprites/wordzapper/enemies/bonker/1.npy"))
+    bonker_2 = jr.loadFrame(os.path.join(MODULE_DIR, "sprites/wordzapper/enemies/bonker/2.npy"))
 
     # Enemies Zonker
-    zonker_1 = aj.loadFrame(os.path.join(MODULE_DIR, "sprites/wordzapper/enemies/zonker/1.npy"))
-    zonker_2 = aj.loadFrame(os.path.join(MODULE_DIR, "sprites/wordzapper/enemies/zonker/2.npy"))
+    zonker_1 = jr.loadFrame(os.path.join(MODULE_DIR, "sprites/wordzapper/enemies/zonker/1.npy"))
+    zonker_2 = jr.loadFrame(os.path.join(MODULE_DIR, "sprites/wordzapper/enemies/zonker/2.npy"))
 
     # yellow letters
-    yellow_letters = [aj.loadFrame(os.path.join(MODULE_DIR, f"sprites/wordzapper/letters/yellow_letters/{chr(i)}.npy")) for i in range(ord('a'), ord('z') + 1)]
+    yellow_letters = [jr.loadFrame(os.path.join(MODULE_DIR, f"sprites/wordzapper/letters/yellow_letters/{chr(i)}.npy")) for i in range(ord('a'), ord('z') + 1)]
 
-    qmark = aj.loadFrame(
+    qmark = jr.loadFrame(
         os.path.join(MODULE_DIR, "sprites/wordzapper/special/qmark.npy")
     )
     
     # Loading Digit Sprites
-    digits = aj.load_and_pad_digits(os.path.join(MODULE_DIR, "sprites/wordzapper/digits/{}.npy"))    
+    digits = jr.load_and_pad_digits(os.path.join(MODULE_DIR, "sprites/wordzapper/digits/{}.npy"))    
  
     # Letters above 
-    letters = [aj.loadFrame(os.path.join(MODULE_DIR, f"sprites/wordzapper/letters/normal_letters/{chr(i)}.npy")) for i in range(ord('a'), ord('z') + 1)] # MAYBE SPECIAL CHAR MISSING
+    letters = [jr.loadFrame(os.path.join(MODULE_DIR, f"sprites/wordzapper/letters/normal_letters/{chr(i)}.npy")) for i in range(ord('a'), ord('z') + 1)] # MAYBE SPECIAL CHAR MISSING
     
-    special = aj.loadFrame(os.path.join(MODULE_DIR, "sprites/wordzapper/letters/normal_letters/1special_symbol.npy"))
+    special = jr.loadFrame(os.path.join(MODULE_DIR, "sprites/wordzapper/letters/normal_letters/1special_symbol.npy"))
     letters.append(special)
 
     # Pad player sprites to match
-    pl_sub_sprites = aj.pad_to_match([pl_1, pl_2])
-    pl_missile_sprites = [pl_missile]
-    bonker_sprites = aj.pad_to_match([bonker_1, bonker_2])
-    zonker_sprites = aj.pad_to_match([zonker_1, zonker_2])
+    pl_sub_sprites, pl_sub_offsets = jr.pad_to_match([pl_1, pl_2])
+    pl_sub_offsets = jnp.array(pl_sub_offsets)
 
-    yellow_letters = aj.pad_to_match(yellow_letters)
+    pl_missile_sprites = [pl_missile]
+
+    bonker_sprites, bonker_offsets = jr.pad_to_match([bonker_1, bonker_2])
+    bonker_offsets = jnp.array(bonker_offsets)
+
+    zonker_sprites, zonker_offsets = jr.pad_to_match([zonker_1, zonker_2])
+    zonker_offsets = jnp.array(zonker_offsets)
+
+    yellow_letters, yellow_letters_offsets = jr.pad_to_match(yellow_letters)
+    yellow_letters_offsets = jnp.array(yellow_letters_offsets)
     
     # pad letters with special special_symbol
-    letters = aj.pad_to_match(letters)
-
+    letters, letters_offsets = jr.pad_to_match(letters)
+    letters_offsets = jnp.array(letters_offsets)
 
 
     SPRITE_BG = jnp.expand_dims(bg1, axis=0)
@@ -317,7 +271,7 @@ def load_sprites():
 
 
     # Loading Digit Sprites
-    DIGITS = aj.load_and_pad_digits(
+    DIGITS = jr.load_and_pad_digits(
         os.path.join(MODULE_DIR, "sprites/wordzapper/digits/{}.npy")
     )
 
@@ -339,7 +293,11 @@ def load_sprites():
         YELLOW_LETTERS,
         QMARK_SPRITE,
         LETTERS,
-
+        pl_sub_offsets,
+        bonker_offsets,
+        zonker_offsets,
+        yellow_letters_offsets,
+        letters_offsets,
     )
 
 (
@@ -351,13 +309,18 @@ def load_sprites():
     DIGITS,
     YELLOW_LETTERS,
     QMARK_SPRITE,
-    LETTERS,  
+    LETTERS,
+    PL_OFFSETS,
+    BONKER_OFFSETS,
+    ZONKER_OFFSETS,
+    YELLOW_LETTERS_OFFSETS,
+    LETTERS_OFFSETS,
 ) = load_sprites()
 
 
 @jax.jit
 def player_step(
-    state: WordZapperState, action: chex.Array
+    state: WordZapperState, action: chex.Array, consts: WordZapperConstants
 ) -> tuple[chex.Array, chex.Array, chex.Array]:
     '''
     implement all the possible movement directions for the player, the mapping is:
@@ -426,19 +389,19 @@ def player_step(
     player_direction = jnp.where(right, 1, jnp.where(left, -1, state.player_direction))
 
     player_x = jnp.where(
-        player_x < MIN_BOUND[0],
-        MIN_BOUND[0],
+        player_x < consts.MIN_BOUND[0],
+        consts.MIN_BOUND[0],
         jnp.where(
-            player_x > MAX_BOUND[0],
-            MAX_BOUND[0],
+            player_x > consts.MAX_BOUND[0],
+            consts.MAX_BOUND[0],
             player_x,
         ),
     )
 
     player_y = jnp.where(
-        player_y < MIN_BOUND[1],
-        MIN_BOUND[1],  # Clamp to min player bound
-        jnp.where(player_y > MAX_BOUND[1], MAX_BOUND[1], player_y),
+        player_y < consts.MIN_BOUND[1],
+        consts.MIN_BOUND[1],  # Clamp to min player bound
+        jnp.where(player_y > consts.MAX_BOUND[1], consts.MAX_BOUND[1], player_y),
     )
 
 
@@ -446,13 +409,13 @@ def player_step(
 
 
 @jax.jit
-def scrolling_letters(letters_x, letters_speed, letters_alive):
+def scrolling_letters(letters_x, letters_speed, letters_alive, consts):
     new_letters_x = letters_x - letters_speed
 
-    reset_x = jnp.max(new_letters_x) + LETTERS_DISTANCE
+    reset_x = jnp.max(new_letters_x) + consts.LETTERS_DISTANCE
 
     new_letters_x = jnp.where(
-        new_letters_x < LETTER_RESET_X,
+        new_letters_x < consts.LETTER_RESET_X,
         reset_x,
         new_letters_x
     )
@@ -461,7 +424,7 @@ def scrolling_letters(letters_x, letters_speed, letters_alive):
 
 @jax.jit
 def player_missile_step(
-    state: WordZapperState, curr_player_x, curr_player_y, action: chex.Array
+    state: WordZapperState, curr_player_x, curr_player_y, action: chex.Array, consts: WordZapperConstants
 ) -> chex.Array:
     fire = jnp.any(
         jnp.array(
@@ -509,9 +472,9 @@ def player_missile_step(
 
     # check if the new positions are still in bounds
     new_missile = jnp.where(
-        new_missile[0] < X_BORDERS[0],
+        new_missile[0] < consts.X_BORDERS[0],
         jnp.array([0, 0, 0]),
-        jnp.where(new_missile[0] > X_BORDERS[1], jnp.array([0, 0, 0]), new_missile),
+        jnp.where(new_missile[0] > consts.X_BORDERS[1], jnp.array([0, 0, 0]), new_missile),
     )
 
     return new_missile
@@ -584,8 +547,8 @@ def player_zapper_step(
 
     return out_zapper
 
-@jax.jit
-def enemy_step(state: WordZapperState) -> Tuple[chex.Array, chex.PRNGKey]:
+@jax.jit # we dont even use this thiung????
+def enemy_step(state: WordZapperState, consts) -> Tuple[chex.Array, chex.PRNGKey]:
     rng_key, subkey = jax.random.split(state.rng_key)
 
     # Move enemies left
@@ -612,8 +575,8 @@ def enemy_step(state: WordZapperState) -> Tuple[chex.Array, chex.PRNGKey]:
 
     empty_slot = jnp.argmax(enemy_positions[:, 4] == 0)
 
-    spawn_x = jnp.array(WIDTH + 16)
-    spawn_y = jax.random.randint(subkey, (), 40, HEIGHT - 40)
+    spawn_x = jnp.array(consts.WIDTH + 16)
+    spawn_y = jax.random.randint(subkey, (), 40, consts.HEIGHT - 40)
     spawn_speed = jnp.array(2)
     spawn_frame = jnp.array(0)
     spawn_active = jnp.array(1)
@@ -633,8 +596,8 @@ def enemy_step(state: WordZapperState) -> Tuple[chex.Array, chex.PRNGKey]:
     return updated_enemy_positions, rng_key
 
 
-class JaxWordZapper(JaxEnvironment[WordZapperState, WordZapperObservation, WordZapperInfo]) :
-    def __init__(self, reward_funcs: list[callable] =None):
+class JaxWordZapper(JaxEnvironment[WordZapperState, WordZapperObservation, WordZapperInfo, WordZapperConstants]) :
+    def __init__(self, consts: WordZapperConstants = None, reward_funcs: list[callable] =None):
         super().__init__()
         if reward_funcs is not None:
             reward_funcs = tuple(reward_funcs)
@@ -661,6 +624,7 @@ class JaxWordZapper(JaxEnvironment[WordZapperState, WordZapperObservation, WordZ
         ]
         self.frame_stack_size = 4
         self.obs_size = 3*4 + 1 + 1
+        self.consts = consts or WordZapperConstants()
 
     @partial(jax.jit, static_argnums=(0,))
     def reset(self, key: jax.random.PRNGKey = jax.random.PRNGKey(42)) -> Tuple[WordZapperObservation, WordZapperState]:
@@ -669,9 +633,9 @@ class JaxWordZapper(JaxEnvironment[WordZapperState, WordZapperObservation, WordZ
         word_idx = jax.random.randint(sub_word, (), 0, WORD_COUNT, dtype=jnp.int32)
         encoded = ENCODED_WORD_LIST[word_idx]
 
-        intro_y = jnp.linspace(ENEMY_Y_MIN, ENEMY_Y_MAX, 4)
-        intro_vx = jnp.ones((4,)) * INTRO_SWEEP_SPEED
-        intro_x = jnp.full((4,), ENEMY_MIN_X)
+        intro_y = jnp.linspace(self.consts.ENEMY_Y_MIN, self.consts.ENEMY_Y_MAX, 4)
+        intro_vx = jnp.ones((4,)) * self.consts.INTRO_SWEEP_SPEED
+        intro_x = jnp.full((4,), self.consts.ENEMY_MIN_X)
         intro_typ = jnp.array([0, 1, 0, 1])
         intro_on = jnp.ones((4,))
 
@@ -680,22 +644,22 @@ class JaxWordZapper(JaxEnvironment[WordZapperState, WordZapperObservation, WordZ
         )
         enemy_positions_init = jnp.concatenate(
             [intro_enemies,
-            jnp.zeros((MAX_ENEMIES - 4, 5), dtype=jnp.float32)],
+            jnp.zeros((self.consts.MAX_ENEMIES - 4, 5), dtype=jnp.float32)],
             axis=0,
         )
         enemy_active_init = jnp.concatenate(
             [jnp.ones((4,), jnp.int32),
-            jnp.zeros((MAX_ENEMIES - 4,), jnp.int32)],
+            jnp.zeros((self.consts.MAX_ENEMIES - 4,), jnp.int32)],
             axis=0,
         )
 
         # TODO get rid of these for more elegant solution, these are reused in reset below
-        letters_x = jnp.linspace(WIDTH, WIDTH + 25 * 14, 27) # 12px apart, offscreen right
+        letters_x = jnp.linspace(self.consts.WIDTH, self.consts.WIDTH + 25 * 14, 27) # 12px apart, offscreen right
         letters_y = jnp.full((27,), 30)  # All at y=30
 
         reset_state = WordZapperState(
-            player_x=jnp.array(PLAYER_START_X),
-            player_y=jnp.array(PLAYER_START_Y),
+            player_x=jnp.array(self.consts.PLAYER_START_X),
+            player_y=jnp.array(self.consts.PLAYER_START_Y),
             player_speed=jnp.array(0),
             player_direction=jnp.array(0),
             cooldown_timer=jnp.array(0),
@@ -704,7 +668,7 @@ class JaxWordZapper(JaxEnvironment[WordZapperState, WordZapperObservation, WordZ
             asteroid_y=jnp.array(0),
             asteroid_speed=jnp.array(0),
             asteroid_alive=jnp.array(0),
-            asteroid_positions=jnp.zeros((MAX_ASTEROIDS_COUNT, 3)),
+            asteroid_positions=jnp.zeros((self.consts.MAX_ASTEROIDS_COUNT, 3)),
 
             enemy_positions=enemy_positions_init,
             enemy_active=enemy_active_init,
@@ -713,7 +677,7 @@ class JaxWordZapper(JaxEnvironment[WordZapperState, WordZapperObservation, WordZ
             player_missile_position=jnp.zeros(3),
             player_zapper_position=jnp.zeros(4),
 
-            letters_x = jnp.linspace(LETTER_VISIBLE_MIN_X, LETTERS_END, 27), # 12px apart, offscreen right
+            letters_x = jnp.linspace(self.consts.LETTER_VISIBLE_MIN_X, self.consts.LETTERS_END, 27), # 12px apart, offscreen right
             letters_y = jnp.full((27,), 30),  # All at y=30
             letters_char = jnp.arange(27),  # A-Z and special
             letters_alive = jnp.ones((27,), dtype=jnp.int32),
@@ -722,7 +686,7 @@ class JaxWordZapper(JaxEnvironment[WordZapperState, WordZapperObservation, WordZ
             current_word = jnp.array([0, 1, 2, 3, 4]),  # Example: word "ABCDE"
             current_letter_index = jnp.array(0),
 
-            timer=jnp.array(TIME),
+            timer=jnp.array(self.consts.TIME),
           
             target_word=encoded,
             step_counter=jnp.array(0),
@@ -736,8 +700,8 @@ class JaxWordZapper(JaxEnvironment[WordZapperState, WordZapperObservation, WordZ
         initial_obs = self._get_observation(reset_state)
         return initial_obs, reset_state
 
-    def get_action_space(self) -> jnp.ndarray:
-        return jnp.array(self.action_set)
+    def action_space(self) -> spaces.Discrete:
+        return spaces.Discrete(len(self.action_set))
 
     @partial(jax.jit, static_argnums=(0,))
     def _get_observation(self, state: WordZapperState) -> WordZapperObservation:
@@ -745,8 +709,8 @@ class JaxWordZapper(JaxEnvironment[WordZapperState, WordZapperObservation, WordZ
         player = EntityPosition(
             x=state.player_x,
             y=state.player_y,
-            width=jnp.array(PLAYER_SIZE[0]),
-            height=jnp.array(PLAYER_SIZE[1]),
+            width=jnp.array(self.consts.PLAYER_SIZE[0]),
+            height=jnp.array(self.consts.PLAYER_SIZE[1]),
             active=jnp.array(1), # player is always active
         )
 
@@ -760,7 +724,7 @@ class JaxWordZapper(JaxEnvironment[WordZapperState, WordZapperObservation, WordZ
             ])
 
         # Apply conversion to asteroid positions
-        asteroids = jax.vmap(lambda pos: convert_to_entity(pos, ASTEROID_SIZE))(state.asteroid_positions)
+        asteroids = jax.vmap(lambda pos: convert_to_entity(pos, self.consts.ASTEROID_SIZE))(state.asteroid_positions)
         
         # Enemies
         def convert_enemy(pos, active):
@@ -783,7 +747,7 @@ class JaxWordZapper(JaxEnvironment[WordZapperState, WordZapperObservation, WordZ
                 size[1],  # height
                 1,        # active flag (use state.letters_alive if needed)
             ])
-        letters = jax.vmap(lambda pos: convert_to_entity(pos, LETTER_SIZE))(state.letters_positions)
+        letters = jax.vmap(lambda pos: convert_to_entity(pos, self.consts.LETTER_SIZE))(state.letters_positions)
 
         # Convert player missile position into the correct entity format
         missile_pos = state.player_missile_position
@@ -791,8 +755,8 @@ class JaxWordZapper(JaxEnvironment[WordZapperState, WordZapperObservation, WordZ
         player_missile = EntityPosition(
             x=missile_pos[0],
             y=missile_pos[1],
-            width=jnp.array(MISSILE_SIZE[0]),
-            height=jnp.array(MISSILE_SIZE[1]),
+            width=jnp.array(self.consts.MISSILE_SIZE[0]),
+            height=jnp.array(self.consts.MISSILE_SIZE[1]),
             active=jnp.array(missile_pos[2] != 0),
         )
 
@@ -801,8 +765,8 @@ class JaxWordZapper(JaxEnvironment[WordZapperState, WordZapperObservation, WordZ
         player_zapper = EntityPosition(
             x=zapper_pos[0],
             y=zapper_pos[1],
-            width=jnp.array(ZAPPER_SIZE[0]),
-            height=jnp.array(ZAPPER_SIZE[1]),
+            width=jnp.array(self.consts.ZAPPER_SIZE[0]),
+            height=jnp.array(self.consts.ZAPPER_SIZE[1]),
             active=zapper_pos[2],
         )
 
@@ -824,12 +788,13 @@ class JaxWordZapper(JaxEnvironment[WordZapperState, WordZapperObservation, WordZ
     @partial(jax.jit, static_argnums=(0,))
     def _get_done(self, state: WordZapperState) -> bool:
         """Check if the game should end due to timer expiring."""
-        MAX_TIME = 60 * TIME  # 90 seconds at 60 FPS
+        MAX_TIME = 60 * self.consts.TIME  # 90 seconds at 60 FPS
         return state.timer >= MAX_TIME
 
     @partial(jax.jit, static_argnums=(0,))
     def _get_env_reward(self, previous_state: WordZapperState, state: WordZapperState):
-        pass
+        # TODO this is not implemented!!
+        return 10
 
     @partial(jax.jit, static_argnums=(0,))
     def _get_all_rewards(self, previous_state: WordZapperState, state: WordZapperState) -> jnp.ndarray:
@@ -844,11 +809,11 @@ class JaxWordZapper(JaxEnvironment[WordZapperState, WordZapperObservation, WordZ
         phase = s.game_phase           # 0=intro, 1=word, 2=gameplay
 
         phase = jax.lax.cond(
-            (phase == 0) & (timer >= INTRO_PHASE_FRAMES),
+            (phase == 0) & (timer >= self.consts.INTRO_PHASE_FRAMES),
             lambda: jnp.array(1), lambda: phase
         )
         phase = jax.lax.cond(
-            (phase == 1) & (timer >= WORD_DISPLAY_FRAMES),
+            (phase == 1) & (timer >= self.consts.WORD_DISPLAY_FRAMES),
             lambda: jnp.array(2), lambda: phase
         )
 
@@ -860,7 +825,7 @@ class JaxWordZapper(JaxEnvironment[WordZapperState, WordZapperObservation, WordZ
     @partial(jax.jit, static_argnums=(0,))
     def _intro_step(self, s: WordZapperState):
         new_positions = s.enemy_positions.at[:, 0].add(
-            s.enemy_positions[:, 3] * INTRO_SWEEP_SPEED
+            s.enemy_positions[:, 3] * self.consts.INTRO_SWEEP_SPEED
         )
         return s._replace(
             enemy_positions=new_positions,
@@ -869,26 +834,26 @@ class JaxWordZapper(JaxEnvironment[WordZapperState, WordZapperObservation, WordZ
         )
 
     @partial(jax.jit, static_argnums=(0,))
-    def _word_step(self, s: WordZapperState):
-        moved_pos = s.enemy_positions.at[:, 0].add(s.enemy_positions[:, 3])
+    def _word_step(self, state: WordZapperState):
+        moved_pos = state.enemy_positions.at[:, 0].add(state.enemy_positions[:, 3])
         moved_act = jnp.where(
-            (moved_pos[:, 0] < ENEMY_MIN_X - 16) |
-            (moved_pos[:, 0] > ENEMY_MAX_X + 16),
+            (moved_pos[:, 0] < self.consts.ENEMY_MIN_X - 16) |
+            (moved_pos[:, 0] > self.consts.ENEMY_MAX_X + 16),
             0,
-            s.enemy_active,
+            state.enemy_active,
         )
-        return s._replace(
+        return state._replace(
             enemy_positions=moved_pos,
             enemy_active=moved_act,
-            phase_timer=s.phase_timer + 1,
-            step_counter=s.step_counter + 1,
+            phase_timer=state.phase_timer + 1,
+            step_counter=state.step_counter + 1,
         )
 
     @partial(jax.jit, static_argnums=(0,))
     def _normal_game_step(self, state: WordZapperState, action: chex.Array):
 
         new_player_x, new_player_y, new_player_direction = player_step(
-            state, action
+            state, action, self.consts
         )
 
         new_step_counter = jnp.where(
@@ -904,7 +869,7 @@ class JaxWordZapper(JaxEnvironment[WordZapperState, WordZapperObservation, WordZ
         )
 
         player_missile_position = player_missile_step(
-            state, new_player_x, new_player_y, action
+            state, new_player_x, new_player_y, action, self.consts
         )
         player_zapper_position = player_zapper_step(
             state, new_player_x, new_player_y, action
@@ -916,14 +881,14 @@ class JaxWordZapper(JaxEnvironment[WordZapperState, WordZapperObservation, WordZ
 
 
         new_enemy_active = jnp.where(
-            (new_enemy_positions[:, 0] < ENEMY_MIN_X - 16) |
-            (new_enemy_positions[:, 0] > ENEMY_MAX_X + 16),
+            (new_enemy_positions[:, 0] < self.consts.ENEMY_MIN_X - 16) |
+            (new_enemy_positions[:, 0] > self.consts.ENEMY_MAX_X + 16),
             0,
             state.enemy_active,
         )
         
         # Scroll letters
-        new_letters_x = scrolling_letters(state.letters_x, state.letters_speed, state.letters_alive)
+        new_letters_x = scrolling_letters(state.letters_x, state.letters_speed, state.letters_alive, self.consts)
 
         new_enemy_global_spawn_timer = jnp.maximum(state.enemy_global_spawn_timer - 1, 0)
         has_free_slot = jnp.any(new_enemy_active == 0)
@@ -932,9 +897,9 @@ class JaxWordZapper(JaxEnvironment[WordZapperState, WordZapperObservation, WordZ
         def spawn_one_enemy_fn(rng_key_in, existing_pos, existing_act):
             rng_key_out, sk_dir, sk_lane, sk_type = jax.random.split(rng_key_in, 4)
             direction = jnp.where(jax.random.bernoulli(sk_dir),  1.0, -1.0)
-            vx = direction * ENEMY_GAME_SPEED
-            x_pos = jnp.where(direction == 1.0, ENEMY_MIN_X, ENEMY_MAX_X)
-            lanes = jnp.linspace(ENEMY_Y_MIN, ENEMY_Y_MAX, 4)
+            vx = direction * self.consts.ENEMY_GAME_SPEED
+            x_pos = jnp.where(direction == 1.0, self.consts.ENEMY_MIN_X, self.consts.ENEMY_MAX_X)
+            lanes = jnp.linspace(self.consts.ENEMY_Y_MIN, self.consts.ENEMY_Y_MAX, 4)
             lane_idx = jax.random.randint(sk_lane, (), 0, 4)
             final_y = lanes[lane_idx]
             enemy_type = jax.random.randint(sk_type, (), 0, 2)
@@ -1008,18 +973,27 @@ class JaxWordZapper(JaxEnvironment[WordZapperState, WordZapperObservation, WordZ
 
         return observation, state, env_reward, done, info
     
-class WordZapperRenderer(AtraJaxisRenderer):
+class WordZapperRenderer(JAXGameRenderer):
+    def __init__(self, consts: WordZapperConstants = None):
+        super().__init__()
+        self.pl_sub_offsets_length = len(PL_OFFSETS)
+        self.bonker_offsets_length = len(BONKER_OFFSETS)
+        self.zonker_offsets_length = len(ZONKER_OFFSETS)
+        self.yellow_letters_offsets_length = len(YELLOW_LETTERS_OFFSETS)
+        self.letters_offsets_length = len(LETTERS_OFFSETS)
+        self.consts = consts or WordZapperConstants()
+
     @partial(jax.jit, static_argnums=(0,))
     def render(self, state):
-        raster = jnp.zeros((WIDTH, HEIGHT, 3))
+        raster = jr.create_initial_frame(width=160, height=210)
         
         # render background
-        frame_bg = aj.get_sprite_frame(SPRITE_BG, 0)
-        raster = aj.render_at(raster, 0, 0, frame_bg)
+        frame_bg = jr.get_sprite_frame(SPRITE_BG, 0)
+        raster = jr.render_at(raster, 0, 0, frame_bg)
 
         def _draw_timer(raster):
-            digits = aj.int_to_digits(state.timer.astype(jnp.int32), max_digits=2)
-            raster = aj.render_label(raster, 70, 10, digits, DIGITS, spacing=10)
+            digits = jr.int_to_digits(state.timer.astype(jnp.int32), max_digits=2)
+            raster = jr.render_label(raster, 70, 10, digits, DIGITS, spacing=10)
             return raster
 
         raster = jax.lax.cond(
@@ -1031,39 +1005,39 @@ class WordZapperRenderer(AtraJaxisRenderer):
 
         def _draw_player_bundle(raster):
             # player sprite
-            frame_pl = aj.get_sprite_frame(SPRITE_PL, state.step_counter)
-            raster = aj.render_at(
+            frame_pl = jr.get_sprite_frame(SPRITE_PL, state.step_counter)
+            raster = jr.render_at(
                 raster,
                 state.player_x,
                 state.player_y,
                 frame_pl,
-                flip_horizontal=state.player_direction == FACE_LEFT,
+                flip_horizontal=state.player_direction == self.consts.FACE_LEFT,
             )
 
             # missile (if any)
             raster = jax.lax.cond(
                 state.player_missile_position[2] != 0,
-                lambda r: aj.render_at(
+                lambda r: jr.render_at(
                     r,
                     state.player_missile_position[0],
                     state.player_missile_position[1],
-                    aj.get_sprite_frame(SPRITE_PL_MISSILE, state.step_counter),
-                    flip_horizontal=state.player_missile_position[2] == FACE_LEFT,
+                    jr.get_sprite_frame(SPRITE_PL_MISSILE, state.step_counter),
+                    flip_horizontal=state.player_missile_position[2] == self.consts.FACE_LEFT,
                 ),
                 lambda r: r,
                 raster,
             )
 
             # render player zapper
-            zapper_spr = jnp.full((ZAPPER_SPR_WIDTH, ZAPPER_SPR_HEIGHT, 4), jnp.asarray(ZAPPER_COLOR, dtype=jnp.uint8), dtype=jnp.uint8)
+            zapper_spr = jnp.full((self.consts.ZAPPER_SPR_HEIGHT, self.consts.ZAPPER_SPR_WIDTH, 4), jnp.asarray(self.consts.ZAPPER_COLOR, dtype=jnp.uint8), dtype=jnp.uint8)
 
             raster = jax.lax.cond(
                 state.player_zapper_position[2],
-                lambda r : aj.render_at(
+                lambda r : jr.render_at(
                     r,
                     state.player_zapper_position[0],
-                    MAX_ZAPPER_POS,
-                    zapper_spr * (jnp.arange(ZAPPER_SPR_HEIGHT) < state.player_zapper_position[1] - MAX_ZAPPER_POS).astype(jnp.uint8)[None, :, None]
+                    self.consts.MAX_ZAPPER_POS,
+                    zapper_spr * (jnp.arange(self.consts.ZAPPER_SPR_HEIGHT) < state.player_zapper_position[1] - self.consts.MAX_ZAPPER_POS).astype(jnp.uint8)[:, None, None]
                     # this is used to mask parts of zapper_spr, as it is longer to make impression of dynamic length
                 ),
                 lambda r : r,
@@ -1080,8 +1054,8 @@ class WordZapperRenderer(AtraJaxisRenderer):
         )
 
         # render enemies
-        frame_bonker = aj.get_sprite_frame(SPRITE_BONKER, state.step_counter)
-        frame_zonker = aj.get_sprite_frame(SPRITE_ZONKER ,state.step_counter)
+        frame_bonker = jr.get_sprite_frame(SPRITE_BONKER, state.step_counter)
+        frame_zonker = jr.get_sprite_frame(SPRITE_ZONKER ,state.step_counter)
 
         def body_fn(i, raster):
             should_render_enemy = state.enemy_active[i]
@@ -1093,8 +1067,8 @@ class WordZapperRenderer(AtraJaxisRenderer):
                 should_render_enemy,
                 lambda r: jax.lax.cond(
                     enemy_type == 0,
-                    lambda rr: aj.render_at(rr, x, y, frame_bonker),
-                    lambda rr: aj.render_at(rr, x, y, frame_zonker),
+                    lambda rr: jr.render_at(rr, x, y, frame_bonker),
+                    lambda rr: jr.render_at(rr, x, y, frame_zonker),
                     r
                 ),
                 lambda r: r,
@@ -1102,7 +1076,7 @@ class WordZapperRenderer(AtraJaxisRenderer):
             )
             return raster
 
-        raster = jax.lax.fori_loop(0, MAX_ENEMIES, body_fn, raster)
+        raster = jax.lax.fori_loop(0, self.consts.MAX_ENEMIES, body_fn, raster)
 
           
         # Render normal letters
@@ -1111,24 +1085,24 @@ class WordZapperRenderer(AtraJaxisRenderer):
             x = state.letters_x[i]
             y = state.letters_y[i]
             char_idx = state.letters_char[i]
-            sprite = aj.get_sprite_frame(LETTERS, char_idx)  # (H, W, C)
+            sprite = jr.get_sprite_frame(LETTERS, char_idx)  # (H, W, C)
         
             def render_visible(r):
-                sprite_w, sprite_h = sprite.shape[:2]
+                sprite_h, sprite_w = sprite.shape[:2]
         
                 # x positions of each column of the sprite
                 sprite_xs = x + jnp.arange(sprite_w)
         
                 # create mask where x is within bounds
-                x_mask = jnp.logical_and((sprite_xs >= LETTER_VISIBLE_MIN_X), (sprite_xs < LETTER_VISIBLE_MAX_X)).astype(sprite.dtype)
+                x_mask = jnp.logical_and((sprite_xs >= self.consts.LETTER_VISIBLE_MIN_X), (sprite_xs < self.consts.LETTER_VISIBLE_MAX_X)).astype(sprite.dtype)
                 
-                # expand themask
-                x_mask = x_mask[:, None, None]  # (W, 1, 1)
+                # expand the mask
+                x_mask = x_mask[None, :, None]  # (1, W, 1)
 
                 # apply mask to zero out offscreen pixels
                 masked_sprite = sprite * x_mask
         
-                return aj.render_at(r, x, y, masked_sprite)
+                return jr.render_at(r, x, y, masked_sprite)
             
             
             return jax.lax.cond(is_alive == 1, render_visible, lambda r: r, raster)
@@ -1148,7 +1122,7 @@ class WordZapperRenderer(AtraJaxisRenderer):
             BASELINE_SHIFT = 22
 
             sprite_h, _ = QMARK_SPRITE.shape[:2]
-            y_pos       = HEIGHT - sprite_h - BASELINE_SHIFT
+            y_pos       = self.consts.HEIGHT - sprite_h - BASELINE_SHIFT
 
             def glyph_width(idx):
                 yspr  = YELLOW_LETTERS[idx]
@@ -1158,7 +1132,7 @@ class WordZapperRenderer(AtraJaxisRenderer):
             widths = jax.vmap(lambda i : jax.lax.cond(i >= 0, glyph_width, lambda _: 0, i))(word_arr)
             n_letters = jnp.sum(word_arr >= 0)
             total_w = jnp.sum(widths) + GAP_PX * jnp.maximum(n_letters - 1, 0)
-            start_x = (WIDTH - total_w) // 2
+            start_x = (self.consts.WIDTH - total_w) // 2
 
             carry0 = (raster, start_x)
 
@@ -1168,7 +1142,7 @@ class WordZapperRenderer(AtraJaxisRenderer):
 
                 def draw(c):
                     r, x_now = c
-                    r = aj.render_at(r, x_now, y_pos, QMARK_SPRITE)
+                    r = jr.render_at(r, x_now, y_pos, QMARK_SPRITE)
                     return (r, x_now + widths[i] + GAP_PX)
 
                 return jax.lax.cond(idx >= 0, draw, lambda c: c, carry)
@@ -1185,7 +1159,7 @@ class WordZapperRenderer(AtraJaxisRenderer):
             sprite_w = YELLOW_LETTERS.shape[2]
             gap = GAP_PX
 
-            y_pos = HEIGHT - sprite_h - BASELINE_SHIFT 
+            y_pos = self.consts.HEIGHT - sprite_h - BASELINE_SHIFT 
 
             def glyph_w(idx):
                 sprite = YELLOW_LETTERS[idx]
@@ -1197,7 +1171,7 @@ class WordZapperRenderer(AtraJaxisRenderer):
                             )(word_arr)
             n = jnp.sum(word_arr >= 0)
             total = jnp.sum(widths) + gap * jnp.maximum(n - 1, 0)
-            start = (WIDTH - total) // 2
+            start = (self.consts.WIDTH - total) // 2
 
             carry0 = (raster, start)
 
@@ -1207,7 +1181,7 @@ class WordZapperRenderer(AtraJaxisRenderer):
 
                 def draw(c):
                     r, cur_x = c
-                    r = aj.render_at(r, cur_x, y_pos, YELLOW_LETTERS[idx])
+                    r = jr.render_at(r, cur_x, y_pos, YELLOW_LETTERS[idx])
                     return (r, cur_x + widths[i] + gap)
 
                 return jax.lax.cond(idx >= 0, draw, lambda c: c, carry)
@@ -1228,65 +1202,3 @@ class WordZapperRenderer(AtraJaxisRenderer):
           
           
         return raster
-
-
-
-
-if __name__ == "__main__":
-    # Initialize Pygame
-    pygame.init()
-    screen = pygame.display.set_mode((WINDOW_WIDTH, WINDOW_HEIGHT))
-    pygame.display.set_caption("Word Zapper")
-    clock = pygame.time.Clock()
-
-    game = JaxWordZapper()
-
-    # Initialize the renderer
-    renderer = WordZapperRenderer()
-
-    # Get jitted functions
-    jitted_step = jax.jit(game.step)
-    jitted_reset = jax.jit(game.reset)
-
-    curr_obs, curr_state = jitted_reset()
-
-    # Game loop with rendering
-    running = True
-    frame_by_frame = False
-    frameskip = 1
-    counter = 1
-
-    while running:
-        for event in pygame.event.get():
-            if event.type == pygame.QUIT:
-                running = False
-            elif event.type == pygame.KEYDOWN:
-                if event.key == pygame.K_f:
-                    frame_by_frame = not frame_by_frame
-            elif event.type == pygame.KEYDOWN or (
-                event.type == pygame.KEYUP and event.key == pygame.K_n
-            ):
-                if event.key == pygame.K_n and frame_by_frame:
-                    if counter % frameskip == 0:
-                        action = get_human_action()
-                        curr_obs, curr_state, reward, done, info = jitted_step(
-                            curr_state, action
-                        )
-                        print(f"Observations: {curr_obs}")
-                        print(f"Reward: {reward}, Done: {done}, Info: {info}")
-
-        if not frame_by_frame:
-            if counter % frameskip == 0:
-                action = get_human_action()
-                curr_obs, curr_state, reward, done, info = jitted_step(
-                    curr_state, action
-                )
-
-        # render and update pygame
-        raster = renderer.render(curr_state)
-        aj.update_pygame(screen, raster, SCALING_FACTOR, WIDTH, HEIGHT)
-        counter += 1
-
-        clock.tick(60)
-
-    pygame.quit()
