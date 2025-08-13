@@ -37,4 +37,5 @@ gh_ci = [
   "pytest",
   "pytest-sugar",
   "pytest-github-actions-annotate-failures",
+  "syrupy==4.9.1",
 ]
