@@ -369,16 +369,16 @@ class WizardOfWorRenderer(JAXGameRenderer):
                     return self.consts.GAME_AREA_OFFSET[1] + self.consts.TILE_SIZE[1] +  (
                                 y * (self.consts.WALL_THICKNESS + self.consts.TILE_SIZE[1]))
 
-                jax.debug.print("Rendering horizontal wall at ({x}, {y}) on raster ({rasterX}, {rasterY})",
-                                x=x, y=y,
-                                rasterX=_get_raster_x_for_horizontal_wall(x),
-                                rasterY=_get_raster_y_for_horizontal_wall(y))
-                # TODO: Check ob is_wall. Bisher entfernt da es Error geworfen hat.
-                return jr.render_at(
-                    raster=raster,
-                    sprite_frame=jr.get_sprite_frame(self.SPRITE_WALL_HORIZONTAL, 0),
-                    x=_get_raster_x_for_horizontal_wall(x),
-                    y=_get_raster_y_for_horizontal_wall(y)
+                return jax.lax.cond(
+                    is_wall > 0,
+                    lambda _: jr.render_at(
+                        raster=raster,
+                        sprite_frame=jr.get_sprite_frame(self.SPRITE_WALL_HORIZONTAL, 0),
+                        x=_get_raster_x_for_horizontal_wall(x),
+                        y=_get_raster_y_for_horizontal_wall(y)
+                    ),
+                    lambda _: raster,
+                    operand=None
                 )
 
             def _render_vertical_wall(raster, x, y, is_wall):
@@ -390,15 +390,16 @@ class WizardOfWorRenderer(JAXGameRenderer):
                     return self.consts.GAME_AREA_OFFSET[1] + (
                         y * (self.consts.WALL_THICKNESS + self.consts.TILE_SIZE[1]))
 
-                jax.debug.print("Rendering vertical wall at ({x}, {y}) on raster ({rasterX}, {rasterY})",
-                                x=x, y=y,
-                                rasterX=_get_raster_x_for_vertical_wall(x),
-                                rasterY=_get_raster_y_for_vertical_wall(y))
-                return jr.render_at(
-                    raster=raster,
-                    sprite_frame=jr.get_sprite_frame(self.SPRITE_WALL_VERTICAL, 0),
-                    x=_get_raster_x_for_vertical_wall(x),
-                    y=_get_raster_y_for_vertical_wall(y)
+                return jax.lax.cond(
+                    is_wall > 0,
+                    lambda _: jr.render_at(
+                        raster=raster,
+                        sprite_frame=jr.get_sprite_frame(self.SPRITE_WALL_VERTICAL, 0),
+                        x=_get_raster_x_for_vertical_wall(x),
+                        y=_get_raster_y_for_vertical_wall(y)
+                    ),
+                    lambda _: raster,
+                    operand=None
                 )
 
             def _render_horizontal_walls(raster, grid_vals):
