@@ -1,16 +1,50 @@
-name: PyTest
+name: Dynamic Tests
 
 on:
   pull_request:
 
 jobs:
-  tests:
+  # This job scans the repository for specific files and prepares a matrix for the next job.
+  scan-games:
+    runs-on: ubuntu-latest
+    outputs:
+      # The output 'matrix' will contain a JSON array of games.
+      # This will be consumed by the strategy of the next job.
+      matrix: ${{ steps.set-matrix.outputs.matrix }}
+    
+    steps:
+      - name: Check out code
+        uses: actions/checkout@v4
+
+      - name: Generate matrix of files
+        id: set-matrix
+        run: |
+          cd src/jaxatari/games/
+
+          GAME_MATRIX=$(find . -type f -name "jax_*.py" -printf "%f\n" | sed -e 's/^jax_//' -e 's/\.py$//' | jq -R . | jq -s .)
+
+          # Set the output for the job
+          echo "matrix=${GAME_MATRIX}" >> $GITHUB_OUTPUT
+
+  # This job runs a set of steps for each file found by the 'scan-games' job.
+  # The jobs will run in parallel based on the matrix configuration.
+  run-tests:
+    # This job will not start until 'scan-games' has successfully completed.
+    needs: scan-games
     runs-on: ubuntu-latest
 
-    steps:
-      - name: Check out repository
-        uses: actions/checkout@v3
+    strategy:
+      # Fail-fast is set to false so that if one test fails, the others will continue.
+      fail-fast: false
+      matrix:
+        # 'fromJSON' parses the JSON string output from the 'scan-games' job.
+        # It creates a matrix variable 'game' for each item in the array.
+        game: ${{ fromJSON(needs.scan-games.outputs.matrix) }}
 
+    steps:
+      - name: Check out code
+        uses: actions/checkout@v4
+      
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
@@ -27,6 +61,8 @@ jobs:
 
       - name: Run tests
         run: |
+          echo "Running tests for game: ${{ matrix.game }}"
+
           . .venv/bin/activate
-          pytest --tb=line -ra --color=yes
+          pytest --game ${{ matrix.game }} --tb=line -ra --color=yes
         shell: bash
