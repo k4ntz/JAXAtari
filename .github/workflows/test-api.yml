@@ -21,7 +21,7 @@ jobs:
         run: |
           cd src/jaxatari/games/
 
-          GAME_MATRIX=$(find . -type f -name "jax_*.py" -printf "%f\n" | sed -e 's/^jax_//' -e 's/\.py$//' | jq -R . | jq -s .)
+          GAME_MATRIX=$(find . -type f -name "jax_*.py" -printf "%f\n" | sed -e 's/^jax_//' -e 's/\.py$//' | jq -R . | jq -cs .)
 
           # Set the output for the job
           echo "matrix=${GAME_MATRIX}" >> $GITHUB_OUTPUT
