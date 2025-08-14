@@ -54,7 +54,7 @@ class WordZapperConstants(NamedTuple) :
     MAX_ENEMIES = 6
     ENEMY_MIN_X = -16
     ENEMY_MAX_X = WIDTH + 16
-    ENEMY_Y_MIN = 50
+    ENEMY_Y_MIN = 55
     ENEMY_Y_MAX = 133
     ENEMY_ANIM_SWITCH_RATE = 2
     ENEMY_Y_MIN_SEPARATION = 16
@@ -895,6 +895,11 @@ class JaxWordZapper(JaxEnvironment[WordZapperState, WordZapperObservation, WordZ
         new_enemy_global_spawn_timer = jnp.maximum(state.enemy_global_spawn_timer - 1, 0)
         has_free_slot = jnp.any(new_enemy_active == 0)
         spawn_cond = (new_enemy_global_spawn_timer == 0) & has_free_slot
+
+
+
+
+
 
         def spawn_one_enemy_fn(rng_key_in, existing_pos, existing_act):
             rng_key_out, sk_dir, sk_lane, sk_type = jax.random.split(rng_key_in, 4)
