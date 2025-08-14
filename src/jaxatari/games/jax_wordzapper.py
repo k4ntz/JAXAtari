@@ -55,7 +55,7 @@ class WordZapperConstants(NamedTuple) :
     ENEMY_MAX_X = WIDTH + 16
     ENEMY_Y_MIN = 50
     ENEMY_Y_MAX = 133
-    ENEMY_ANIM_SWITCH_RATE = 15
+    ENEMY_ANIM_SWITCH_RATE = 2
     ENEMY_Y_MIN_SEPARATION = 16
 
 
@@ -1054,8 +1054,8 @@ class WordZapperRenderer(JAXGameRenderer):
         )
 
         # render enemies
-        frame_bonker = jr.get_sprite_frame(SPRITE_BONKER, state.step_counter)
-        frame_zonker = jr.get_sprite_frame(SPRITE_ZONKER ,state.step_counter)
+        frame_bonker = jr.get_sprite_frame(SPRITE_BONKER, state.step_counter // self.consts.ENEMY_ANIM_SWITCH_RATE)
+        frame_zonker = jr.get_sprite_frame(SPRITE_ZONKER ,state.step_counter // self.consts.ENEMY_ANIM_SWITCH_RATE)
 
         def body_fn(i, raster):
             should_render_enemy = state.enemy_active[i]
