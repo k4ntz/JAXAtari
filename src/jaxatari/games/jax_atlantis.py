@@ -947,14 +947,11 @@ class JaxAtlantis(JaxEnvironment[AtlantisState, AtlantisObservation, AtlantisInf
         beam_old = jnp.max(beam_old)  # -1 if none
         beam_new = jnp.max(beam_new)
 
-        # For directional collision detection:
-        # - If moving left to right (dx > 0): check if beam_new >= target (beam reached target from left)
-        # - If moving right to left (dx < 0): check if beam_new <= target (beam reached target from right)
-        dx_shooter = state.enemies[shooter_idx, 2]
-
         # Build 7 possible targets, 6 installments and one central canon
-        # If enemy comes from left to right, collision occurs when plasma hits the right edge
-        # If enemy comes from right to left, collision occurs when plasma hits the left edge
+        # If enemy comes from left to right, collision occurs when plasma hits the right edge of the installation
+        # If enemy comes from right to left, collision occurs when plasma hits the left edge of the installation
+        # Although, in the real game, the enemy is shot down on first contact, since we don't have the animations right
+        # now, we implemented this extra so that it looks good and real while playing
 
         dx_shooter = state.enemies[shooter_idx, 2]
         
