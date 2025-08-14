@@ -902,10 +902,34 @@ class JaxWordZapper(JaxEnvironment[WordZapperState, WordZapperObservation, WordZ
             vx = direction * self.consts.ENEMY_GAME_SPEED
             x_pos = jnp.where(direction == 1.0, self.consts.ENEMY_MIN_X, self.consts.ENEMY_MAX_X)
             lanes = jnp.linspace(self.consts.ENEMY_Y_MIN, self.consts.ENEMY_Y_MAX, 4)
-            lane_idx = jax.random.randint(sk_lane, (), 0, 4)
-            final_y = lanes[lane_idx]
+            
+            
+            # COMPLETELY REDONE SPAWNING LOGIC
+            # ONLY 4 EXISTING LANES
+            # NEW ENEMY SPAWNS ON THE LANE IF IT IS FREE
+            # THE RANDOMNESS IS CONTROLLED BY g_timer = jax.random.randint(rng_key_out, (), 30, 100)
+            
+            # Check which lanes are free
+            def lane_is_free(lane_y):
+                return jnp.all(jnp.logical_or((existing_act == 0), (jnp.abs(existing_pos[:, 1] - lane_y) > 1e-3)))
+            lane_free_mask = jax.vmap(lane_is_free)(lanes)
+            
+            # Try lanes in random order
+            perm = jax.random.permutation(sk_lane, 4)
+            def pick_lane(i, chosen):
+                lane = perm[i]
+                is_free = lane_free_mask[lane]
+                # If not chosen yet and lane is free, pick it
+                return jnp.where((chosen == -1) & is_free, lane, chosen)
+            
+            lane_idx = jax.lax.fori_loop(0, 4, pick_lane, -1)
+            final_y = jnp.where(lane_idx == -1, -9999, lanes[0])
             enemy_type = jax.random.randint(sk_type, (), 0, 2)
-            new_enemy = jnp.array([x_pos, final_y, enemy_type, vx, 1.0])
+
+            # If no free lane, spawn inactive enemy (delay spawn)
+            new_enemy = jnp.where(lane_idx == -1,
+                                  jnp.array([x_pos, final_y, enemy_type, vx, 0.0]),
+                                  jnp.array([x_pos, lanes[lane_idx], enemy_type, vx, 1.0]))
             return new_enemy, rng_key_out
 
         def spawn_enemy_branch(carry):
@@ -914,7 +938,7 @@ class JaxWordZapper(JaxEnvironment[WordZapperState, WordZapperObservation, WordZ
             new_enemy, rng_key_out = spawn_one_enemy_fn(rng_key_inner, pos, act)
             pos = pos.at[free_idx].set(new_enemy)
             act = act.at[free_idx].set(1)
-            g_timer = jnp.array(30)
+            g_timer = jax.random.randint(rng_key_out, (), 30, 70)
             return pos, act, g_timer, rng_key_out
 
         def no_spawn_branch(carry):
