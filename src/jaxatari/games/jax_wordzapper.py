@@ -54,12 +54,12 @@ class WordZapperConstants(NamedTuple) :
     ENEMY_MIN_X = -16
     ENEMY_MAX_X = WIDTH + 16
     ENEMY_Y_MIN = 50
-    ENEMY_Y_MAX = 150
+    ENEMY_Y_MAX = 133
     ENEMY_ANIM_SWITCH_RATE = 15
     ENEMY_Y_MIN_SEPARATION = 16
 
 
-    ENEMY_GAME_SPEED = 1.2
+    ENEMY_GAME_SPEED = 0.8
     INTRO_PHASE_FRAMES = 3 * 60 # TODO this assumes 60 fps for some reason
     INTRO_SWEEP_SPEED = (ENEMY_MAX_X - ENEMY_MIN_X) / (3 * 60)
 
