@@ -575,7 +575,7 @@ def compute_score_of_tiles(i, game_field, game_score, difficulty):
         lambda args_compute_score_of_tile_1: compute_score_of_tile_1(args_compute_score_of_tile_1),
         args_compute_score_of_tile_1
     )
-    jax.debug.print("tiles_flipped: {}, secondary_tile: {}, default_pos: {}", tiles_flipped, secondary_tile, default_pos)
+    #jax.debug.print("tiles_flipped: {}, secondary_tile: {}, default_pos: {}", tiles_flipped, secondary_tile, default_pos)
     
 
     def handle_calculation_of_strategic_score(args):
@@ -585,7 +585,7 @@ def compute_score_of_tiles(i, game_field, game_score, difficulty):
         #Calculate the strategic value (score) of the current_square itself
         ((score, _), skip_secondary_eval) = calculate_strategic_tile_score(i, game_field, jax.lax.cond(default_pos[0] == -2147483648, lambda _: (0,0),lambda _: default_pos, None), difficulty)
 
-        #jax.debug.print("score: {}, skip_secondary_eval: {}", score, skip_secondary_eval)
+        jax.debug.print("score: {}, skip_secondary_eval: {}", score, skip_secondary_eval)
         secondary_tile = jax.lax.cond(
             skip_secondary_eval,
             lambda _: (-2147483648, -2147483648),
@@ -593,26 +593,32 @@ def compute_score_of_tiles(i, game_field, game_score, difficulty):
             None
         )
 
-        jax.debug.print("i: {},secondary_tile[0]: {},secondary_tile[1]: {}", i, secondary_tile[0], secondary_tile[1])
+        #jax.debug.print("i: {},secondary_tile[0]: {},secondary_tile[1]: {}", i, secondary_tile[0], secondary_tile[1])
         #Re-evaluate or combine with a secondary related square's score
         args_handle_secondary_calculation_of_strategic_score = (secondary_tile[0] + secondary_tile[1]*8, game_field, default_pos, difficulty, score)
+        #jax.debug.print("skip_secondary_eval: {}", skip_secondary_eval)
         score = jax.lax.cond(
-            secondary_tile[0] != -2147483648,
-            lambda args_handle_secondary_calculation_of_strategic_score: handle_secondary_calculation_of_strategic_score(args_handle_secondary_calculation_of_strategic_score),
+            skip_secondary_eval,
+            #lambda args_handle_secondary_calculation_of_strategic_score: handle_secondary_calculation_of_strategic_score(args_handle_secondary_calculation_of_strategic_score), #TODO fix outer corners- take a look at index changes by check neighbor conflict with loop borders
+            lambda args_handle_secondary_calculation_of_strategic_score: score,
             lambda args_handle_secondary_calculation_of_strategic_score: score,
             args_handle_secondary_calculation_of_strategic_score
         )
         return score
     
+    def test_123(args):
+        i, game_field, default_pos, difficulty, secondary_tile = args
+        #jax.debug.print("test_123 i: {}", i)
+        return 0
+    
     #only execute the strategic score calculation if tiles were flipped = is a valid move
-    jax.debug.print(str(tiles_flipped != jnp.array(-2147483648, dtype=jnp.int32)))
-    jax.debug.print(str(tiles_flipped != -2147483648))
+    #jax.debug.print(str(tiles_flipped != jnp.array(-2147483648, dtype=jnp.int32)))
+    jax.debug.print("tiles_flipped: {}", tiles_flipped != -2147483648)
 
     args = (i, game_field, default_pos, difficulty, secondary_tile)
-    #score = jax.lax.cond(tiles_flipped != jnp.array(-2147483648, dtype=jnp.int32),
-    score = jax.lax.cond(False,
+    score = jax.lax.cond(tiles_flipped != -2147483648,
                  lambda args: tiles_flipped + handle_calculation_of_strategic_score(args),
-                 lambda args: tiles_flipped,
+                 lambda args: tiles_flipped + test_123(args),
                  args)
 
 
@@ -1077,29 +1083,37 @@ def compute_flipped_tiles_top_left(input) -> int:
     )
 
 def handle_secondary_calculation_of_strategic_score(args) -> int:
-    tile_index, game_field, default_pos, difficulty, new_score = args
-    jax.debug.print("tile_index: {}, default_pos: {}, difficulty: {}", tile_index, default_pos, difficulty)
-    new_score_copy = new_score
-    ((new_score, new_alt_position), _) = calculate_strategic_tile_score(tile_index, game_field, default_pos, difficulty)
+
+    def handle_secondary_calculation_of_strategic_score_limit_to_valid(args):
+        tile_index, game_field, default_pos, difficulty, new_score = args
+        #jax.debug.print("tile_index: {}, default_pos: {}, difficulty: {}", tile_index, default_pos, difficulty)
+        new_score_copy = new_score
+        ((new_score, new_alt_position), _) = calculate_strategic_tile_score(63-tile_index, game_field, default_pos, difficulty)
 
 
 
-    new_score_copy = jax.lax.cond(
-        new_alt_position != -2147483648,
-        lambda _: new_alt_position,
-        lambda _: new_score_copy,
-        None
+        new_score_copy = jax.lax.cond(
+            new_alt_position != -2147483648,
+            lambda _: new_alt_position,
+            lambda _: new_score_copy,
+            None
+        )
+
+        total_score = new_score + new_score_copy
+
+        total_score = jax.lax.cond(jnp.logical_or(total_score > 127, total_score < -128),
+            lambda _: -104,
+            lambda _: total_score,
+            None
+        ) 
+
+        return total_score
+    
+    return jax.lax.cond(jnp.logical_and(args[0] >=64, args[0] < 0),
+        lambda args: -2147483648,  
+        lambda args: handle_secondary_calculation_of_strategic_score_limit_to_valid(args),  
+        args
     )
-
-    total_score = new_score + new_score_copy
-
-    total_score = jax.lax.cond(jnp.logical_or(total_score > 127, total_score < -128),
-        lambda _: -104,
-        lambda _: total_score,
-        None
-    ) 
-
-    return total_score
 
 @jax.jit
 def calculate_strategic_tile_score(tile_index: int, game_field: Field, default_pos: Tuple[int, int], difficulty: int):
