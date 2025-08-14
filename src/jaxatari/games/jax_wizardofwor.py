@@ -237,12 +237,15 @@ class JaxWizardOfWor(JaxEnvironment[WizardOfWorState, WizardOfWorObservation, Wi
 
         return observation, new_state, env_reward, done, info
 
+    @partial(jax.jit, static_argnums=(0,))
     def render(self, state: WizardOfWorState) -> jnp.ndarray:
         return self.renderer.render(state)
 
+    @partial(jax.jit, static_argnums=(0,))
     def action_space(self) -> spaces.Discrete:
         return spaces.Discrete(6)  # Platzhalter
 
+    @partial(jax.jit, static_argnums=(0,))
     def observation_space(self) -> spaces.Dict:
         return spaces.Dict({
             "player": spaces.Dict({
@@ -257,6 +260,7 @@ class JaxWizardOfWor(JaxEnvironment[WizardOfWorState, WizardOfWorObservation, Wi
             "lives": spaces.Box(low=0, high=10, shape=(), dtype=jnp.int32),
         })
 
+    @partial(jax.jit, static_argnums=(0,))
     def image_space(self) -> spaces.Box:
         return spaces.Box(
             low=0,
@@ -362,6 +366,7 @@ class WizardOfWorRenderer(JAXGameRenderer):
             self.SPRITE_RADAR_BLIP,
         ) = self.load_sprites()
 
+    @partial(jax.jit, static_argnums=(0,))
     def load_sprites(self):
         MODULE_DIR = os.path.dirname(os.path.abspath(__file__))
 
@@ -418,6 +423,7 @@ class WizardOfWorRenderer(JAXGameRenderer):
         raster = self._render_lives(raster=raster, state=state)
         return raster
 
+    @partial(jax.jit, static_argnums=(0,))
     def _render_gameboard(self, raster, state: WizardOfWorState):
         def _render_gameboard_background(raster):
             return jr.render_at(
@@ -539,9 +545,11 @@ class WizardOfWorRenderer(JAXGameRenderer):
         new_raster = _render_gameboard_walls(raster=new_raster, state=state)
         return new_raster
 
+    @partial(jax.jit, static_argnums=(0,))
     def _render_radar(self, raster, state: WizardOfWorState):
         return raster
 
+    @partial(jax.jit, static_argnums=(0,))
     def _render_enemies(self, raster, state: WizardOfWorState):
         def _render_enemies(self, raster, state: WizardOfWorState):
             def body(carry, enemy):
@@ -568,19 +576,24 @@ class WizardOfWorRenderer(JAXGameRenderer):
         new_raster = _render_enemies(self, raster=raster, state=state)
         return new_raster
 
+    @partial(jax.jit, static_argnums=(0,))
     def _render_bullet(self, raster, state: WizardOfWorState):
         return raster
 
+    @partial(jax.jit, static_argnums=(0,))
     def _render_player(self, raster, state: WizardOfWorState):
         new_raster = self._render_character(raster,self.SPRITE_PLAYER,state.player)
         return new_raster
 
+    @partial(jax.jit, static_argnums=(0,))
     def _render_score(self, raster, state: WizardOfWorState):
         return raster
 
+    @partial(jax.jit, static_argnums=(0,))
     def _render_lives(self, raster, state: WizardOfWorState):
         return raster
 
+    @partial(jax.jit, static_argnums=(0,))
     def _render_character(self, raster, sprite, entity: EntityPosition):
         """
         Renders a character sprite at the specified position and direction.
