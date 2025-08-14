@@ -35,8 +35,8 @@ class DonkeyKongConstants(NamedTuple):
     LIFE_BAR_Y: int = 23
 
     # Hammer default position
-    LEVEL_1_HAMMER_X: int = 39
-    LEVEL_1_HAMMER_Y: int = 68
+    LEVEL_1_HAMMER_X: int = 68
+    LEVEL_1_HAMMER_Y: int = 39
     LEVEL_2_HAMMER_X: int = 78
     LEVEL_2_HAMMER_Y: int = 68
 
@@ -267,6 +267,7 @@ class JaxDonkeyKong(JaxEnvironment[DonkeyKongState, DonkeyKongObservation, Donke
         )
 
     # calculate if there is a collision between two object (e.g. mario and barrel)
+    @staticmethod
     @jax.jit
     def _collision_between_two_objects(obj_a_x, obj_a_y, hit_box_a_x, hit_box_a_y, obj_b_x, obj_b_y, hit_box_b_x, hit_box_b_y):
         return (
@@ -890,7 +891,20 @@ class JaxDonkeyKong(JaxEnvironment[DonkeyKongState, DonkeyKongObservation, Donke
     
     @partial(jax.jit, static_argnums=(0,))
     def _hammer_step(self, state, action: chex.Array):
-        new_state = state
+        # mario can take the hammer by jumping and if they collide
+        def hammer_is_taken_by_mario(state):
+            new_state = state
+
+            collision_mario_hammer = JaxDonkeyKong._collision_between_two_objects(state.mario_x, state.mario_y, self.consts.MARIO_HIT_BOX_X, self.consts.MARIO_HIT_BOX_Y, 
+                                                                                  state.hammer_x, state.hammer_y, self.consts.HAMMER_HIT_BOX_X, self.consts.HAMMER_HIT_BOX_Y)
+
+            # jax.debug.print("{}", collision_mario_hammer)
+            jax.debug.print("Hammer: {}, {}", state.hammer_x, state.hammer_y)
+            jax.debug.print("Mario: {}, {}", state.mario_x, state.mario_y)
+
+            return new_state
+        new_state = hammer_is_taken_by_mario(state)
+
 
 
         return new_state
@@ -979,7 +993,7 @@ class JaxDonkeyKong(JaxEnvironment[DonkeyKongState, DonkeyKongObservation, Donke
                 ),
             )
             return jax.lax.cond(
-                action == Action.FIRE,
+                jnp.logical_or(action == Action.FIRE, jnp.logical_or(action == Action.RIGHTFIRE, action == Action.LEFTFIRE)),
                 lambda _: started_state,
                 lambda _: state,
                 operand=None
