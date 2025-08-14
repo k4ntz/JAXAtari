@@ -49,6 +49,10 @@ class DonkeyKongConstants(NamedTuple):
     HAMMER_SWING_HIT_BOX_X = 6
     HAMMER_SWING_HIT_BOX_Y = 6
 
+    # Relative Distance of Hammer to Mario
+    REL_DIS_HAMMER_TO_WALKING_MARIO_RIGHT_X = 0
+    REL_DIS_HAMMER_TO_WALKING_MARIO_RIGHT_Y = 0
+
     # Drop Pit positions
     DP_LEFT_X: int = 52
     DP_RIGHT_X: int = 104
@@ -177,6 +181,9 @@ class DonkeyKongState(NamedTuple):
     hammer_x: int
     hammer_y: int
     hammer_can_hit: bool
+    hammer_taken: bool
+    hammer_carry_time: int
+    block_jumping: bool
 
 class DonkeyKongObservation(NamedTuple):
     total_score: jnp.ndarray
@@ -891,20 +898,62 @@ class JaxDonkeyKong(JaxEnvironment[DonkeyKongState, DonkeyKongObservation, Donke
     
     @partial(jax.jit, static_argnums=(0,))
     def _hammer_step(self, state, action: chex.Array):
+
+        # calculate the position of the hammer if active
+        def calculate_hammer_pos_relative_to_mario(state):
+            new_state_mario_views_right_swing = state._replace(
+                hammer_x = (state.mario_x + 5).astype(jnp.int32),
+                hammer_y = (state.mario_y + self.consts.MARIO_HIT_BOX_Y + 1).astype(jnp.int32),
+            )
+            new_state_mario_views_right_no_swing = state._replace(
+                hammer_x = (state.mario_x - 4).astype(jnp.int32),
+                hammer_y = (state.mario_y + self.consts.MARIO_HIT_BOX_Y + 1).astype(jnp.int32),
+            )
+
+            new_state_mario_jumping_right_swing = state._replace(
+                hammer_x = (state.mario_x + self.consts.MARIO_JUMPING_HEIGHT + 5).astype(jnp.int32),
+                hammer_y = (state.mario_y + self.consts.MARIO_HIT_BOX_Y + 1).astype(jnp.int32),
+            )
+            new_state_mario_jumping_right_no_swing = state._replace(
+                hammer_x = (state.mario_x + self.consts.MARIO_JUMPING_HEIGHT - 4).astype(jnp.int32),
+                hammer_y = (state.mario_y + self.consts.MARIO_HIT_BOX_Y + 1).astype(jnp.int32),
+            )
+
+            return new_state_mario_jumping_right
+
         # mario can take the hammer by jumping and if they collide
         def hammer_is_taken_by_mario(state):
-            new_state = state
+            new_state = state._replace(
+                hammer_taken = True,
+                hammer_can_hit = True,
+                hammer_carry_time = -1,
+                block_jumping = True,
+            )
 
             collision_mario_hammer = JaxDonkeyKong._collision_between_two_objects(state.mario_x, state.mario_y, self.consts.MARIO_HIT_BOX_X, self.consts.MARIO_HIT_BOX_Y, 
                                                                                   state.hammer_x, state.hammer_y, self.consts.HAMMER_HIT_BOX_X, self.consts.HAMMER_HIT_BOX_Y)
 
-            # jax.debug.print("{}", collision_mario_hammer)
-            jax.debug.print("Hammer: {}, {}", state.hammer_x, state.hammer_y)
-            jax.debug.print("Mario: {}, {}", state.mario_x, state.mario_y)
+            new_state = calculate_hammer_pos_relative_to_mario(new_state)
 
-            return new_state
+            return jax.lax.cond(
+                jnp.logical_and(state.hammer_taken == False, jnp.logical_and(action == Action.FIRE, collision_mario_hammer)),
+                lambda _: new_state,
+                lambda _: state,
+                operand=None
+            )
         new_state = hammer_is_taken_by_mario(state)
 
+        # Hammer swings have swing time/duration
+        def hammer_swing(state):
+            new_state = state._replace(
+                hammer_carry_time = state.hammer_carry_time + 1,
+            )
+
+            
+
+
+            return new_state
+        new_state = hammer_swing(new_state)
 
 
         return new_state
@@ -952,6 +1001,9 @@ class JaxDonkeyKong(JaxEnvironment[DonkeyKongState, DonkeyKongObservation, Donke
             hammer_x = self.consts.LEVEL_1_HAMMER_X,
             hammer_y = self.consts.LEVEL_1_HAMMER_Y,
             hammer_can_hit = False,
+            hammer_taken = False,
+            hammer_carry_time = 0,
+            block_jumping = False,
         )
         initial_obs = self._get_observation(state)
 
@@ -1278,7 +1330,7 @@ class DonkeyKongRenderer(JAXGameRenderer):
 
         # Hammer
         frame_hammer = aj.get_sprite_frame(self.SPRITES_HAMMER_UP, 0)
-        raster = aj.render_at(raster, self.consts.LEVEL_1_HAMMER_X, self.consts.LEVEL_1_HAMMER_Y, frame_hammer)
+        raster = aj.render_at(raster, state.hammer_y, state.hammer_x, frame_hammer)
 
 
         # Scores
