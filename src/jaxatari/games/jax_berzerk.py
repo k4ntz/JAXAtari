@@ -528,7 +528,8 @@ class JaxBerzerk(JaxEnvironment[BerzerkState, BerzerkObservation, BerzerkInfo, B
 
         final_carry = jax.lax.fori_loop(0, num_enemies, body_fun, (placed_init, sub_spawn))
         placed_final, _ = final_carry
-        return state._replace(enemy_pos=placed_final, num_enemies=num_enemies)
+        enemy_alive = jnp.arange(self.consts.NUM_ENEMIES) < num_enemies
+        return state._replace(enemy_pos=placed_final, enemy_alive=enemy_alive, num_enemies=num_enemies)
 
 
         
@@ -1656,9 +1657,9 @@ class BerzerkRenderer(JAXGameRenderer):
             def skip_render():
                 return raster_to_update
             
-            def draw_score():
+            def draw_score(value, offset_x):
                 # Convert score to digits, zero-padded (e.g. 50 -> [0,0,5,0])
-                score_digits = jr.int_to_digits(state.score, max_digits=max_score_digits)
+                score_digits = jr.int_to_digits(value, max_digits=max_score_digits)
 
                 # Remove leading zeros dynamically
                 def find_start_index(digits):
@@ -1673,7 +1674,7 @@ class BerzerkRenderer(JAXGameRenderer):
                 num_to_render = max_score_digits - start_idx
 
                 # Adjust x-position to align right
-                render_start_x = self.consts.SCORE_OFFSET_X - score_spacing * (num_to_render - 1)
+                render_start_x = offset_x - score_spacing * (num_to_render - 1)
 
                 # Render selective digits
                 raster_updated = jr.render_label_selective(
@@ -1688,8 +1689,20 @@ class BerzerkRenderer(JAXGameRenderer):
                 )
 
                 return raster_updated
+            
+            show_bonus = state.enemy_clear_bonus_given
+            #jax.debug.print("Enemy alive: {test}", test= state.enemy_alive)
+            #jax.debug.print("Enemy bonus: {test}", test= state.enemy_clear_bonus_given)
 
-            return jax.lax.cond(state.score == 0, skip_render, draw_score)
+            return jax.lax.cond(
+                (state.score == 0) & (~show_bonus),
+                skip_render,
+                lambda: jax.lax.cond(
+                    show_bonus,
+                    lambda: draw_score(state.num_enemies * 10, self.consts.SCORE_OFFSET_X - 31),  # Bonus weiter links
+                    lambda: draw_score(state.score, self.consts.SCORE_OFFSET_X)               # Normal an Standardposition
+                )
+            )
 
         raster = jax.lax.cond(
             jnp.logical_not(room_transition_anim),
