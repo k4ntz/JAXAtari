@@ -1047,7 +1047,7 @@ class JaxBerzerk(JaxEnvironment[BerzerkState, BerzerkObservation, BerzerkInfo, B
 
 
             # Neue Todes-Timer setzen, wenn Gegner gerade getroffen wurden
-            enemy_dies = enemy_hit | enemy_hits_wall | enemy_hit_by_friendly_fire
+            enemy_dies = enemy_hit | enemy_hits_wall | enemy_hit_by_friendly_fire | enemy_hit_enemy
             new_enemy_death_timer = jnp.where(enemy_dies, self.consts.ENEMY_DEATH_ANIMATION_FRAMES, state.enemy_death_timer)
 
             new_enemy_death_pos = jnp.where(enemy_dies[:, None], updated_enemy_pos, state.enemy_death_pos)
@@ -1079,11 +1079,17 @@ class JaxBerzerk(JaxEnvironment[BerzerkState, BerzerkObservation, BerzerkInfo, B
             give_bonus = (~jnp.any(enemy_alive)) & (~state.enemy_clear_bonus_given)
             bonus_score = jnp.where(give_bonus, state.num_enemies * 10, 0)
 
-            score_after = jnp.where(
-                jnp.any(enemy_hit | enemy_hits_wall | enemy_bullet_hit_enemy | hit_by_enemy),
-                state.score + 50,
-                state.score
+            # Maske aller toten Gegner in diesem Frame
+            enemy_dies_mask = (
+                enemy_hit |
+                enemy_hits_wall |
+                enemy_bullet_hit_enemy |
+                hit_by_enemy |
+                enemy_hit_enemy
             )
+
+            # Punkte berechnen: 50 pro gestorbenem Gegner
+            score_after = state.score + jnp.sum(enemy_dies_mask) * 50
 
             score_after += bonus_score
             enemy_clear_bonus_given = state.enemy_clear_bonus_given | give_bonus
