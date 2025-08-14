@@ -1,4 +1,5 @@
 import os
+import time
 from functools import partial
 from typing import NamedTuple, Tuple
 import jax.lax
@@ -628,6 +629,7 @@ class JaxWordZapper(JaxEnvironment[WordZapperState, WordZapperObservation, WordZ
 
     @partial(jax.jit, static_argnums=(0,))
     def reset(self, key: jax.random.PRNGKey = jax.random.PRNGKey(42)) -> Tuple[WordZapperObservation, WordZapperState]:
+        key = jax.random.PRNGKey(int(time.time() * 1000) % (2**32 - 1))
         key, sub_word, next_key = jax.random.split(key, 3) # TODO: ask what does this do? why do we need this?
 
         word_idx = jax.random.randint(sub_word, (), 0, WORD_COUNT, dtype=jnp.int32)
