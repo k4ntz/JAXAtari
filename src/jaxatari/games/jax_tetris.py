@@ -648,9 +648,8 @@ class TetrisRenderer(JAXGameRenderer):
 
         # -------- NEW: draw ONE / TWO / THREE / TETRIS while banner is active --------
         # compute a position to the right of the board
-        board_px_w = self.consts.BOARD_PADDING + self.consts.BOARD_WIDTH * (self.consts.CELL_WIDTH + 1)
-        label_x = self.consts.BOARD_X + board_px_w + 10  # small margin to the right
-        label_y = self.consts.BOARD_Y + 70  # tweak to match your video
+        label_x = 95
+        label_y = 122
 
         def draw_with(sprite, r_):
             frame = jr.get_sprite_frame(sprite, 0)
