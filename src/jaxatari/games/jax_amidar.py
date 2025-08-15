@@ -1,18 +1,23 @@
 # TODO's:
 
 # Features: 
-# - Levels 
+# none, the game mechanics are done
 
 # Remove Inacuracies:
 # - Improve shadow rendering to match the original (variable sizes)
 # - Implement blinking before chicken mode and jumping is over
-# - Implement random blinking for enemies
+# - Adjust the enemy speed for levels over Level 7 
+# - Implement random blinking for enemies and player
 
 # General & Environment:
 # - Update observation
 # - Update spaces
 # - Update info
+
+# Possibly nice to have for future hacking 
 # - Make generating/changing the maze easier
+# - make the enemy number flexible 
+#   (The number for the beginning levels, the maximum number and where to switch from beginning number to maximum number)
 
 from functools import partial
 import os
@@ -236,34 +241,35 @@ def generate_path_mask(WIDTH, HEIGHT, PATH_THICKNESS_HORIZONTAL, PATH_THICKNESS_
     return mask, rendering_mask
 
 @partial(jax.jit, static_argnames=['WIDTH', 'HEIGHT'])
-def generate_path_pattern(WIDTH, HEIGHT, PATH_COLOR, WALKED_ON_COLOR):
+def generate_path_pattern(WIDTH, HEIGHT, PATH_COLOR_BROWN, PATH_COLOR_GREEN, WALKED_ON_COLOR):
     """Generates a path pattern for rendering.
     Returns a JAX array of shape (WIDTH, HEIGHT) with the path pattern."""
     # Create an empty mask
-    path_pattern = jnp.full((HEIGHT, WIDTH, 4), 0, dtype=jnp.uint8)
+    path_pattern_brown = jnp.full((HEIGHT, WIDTH, 4), 0, dtype=jnp.uint8)
+    path_pattern_green = jnp.full((HEIGHT, WIDTH, 4), 0, dtype=jnp.uint8)
     walked_on_pattern = jnp.full((HEIGHT, WIDTH, 4), 0, dtype=jnp.uint8)
 
     # put the indices in a seperate array to be able to use vmap
     ii, jj = jnp.meshgrid(jnp.arange(HEIGHT), jnp.arange(WIDTH), indexing='ij')
     indices = jnp.stack((ii, jj), axis=-1)  # shape (HEIGHT, WIDTH, 2)
 
-    def set_for_column(path_column, walked_on_column, indices):
+    def set_for_column(path_column_brown, path_column_green, walked_on_column, indices):
 
-        def set_color(path_value, walked_on_value, index):
+        def set_color(path_value_brown, path_value_green, walked_on_value, index):
             x, y = index
 
-            path_value, walked_on_value, index = jax.lax.cond(jnp.logical_or(jnp.logical_or(x % 5 == 0, x % 5 == 2), x % 5 == 3),
-                lambda: (PATH_COLOR, walked_on_value, index),
-                lambda: (path_value, WALKED_ON_COLOR, index)
+            path_value_brown, path_value_green, walked_on_value, index = jax.lax.cond(jnp.logical_or(jnp.logical_or(x % 5 == 0, x % 5 == 2), x % 5 == 3),
+                lambda: (PATH_COLOR_BROWN, PATH_COLOR_GREEN, walked_on_value, index),
+                lambda: (path_value_brown, path_value_green, WALKED_ON_COLOR, index)
             )
-            return path_value, walked_on_value, index
+            return path_value_brown, path_value_green, walked_on_value, index
 
-        path_column, walked_on_column, index = jax.vmap(set_color, in_axes=0)(path_column, walked_on_column, indices)
-        return path_column, walked_on_column, index
+        path_column_brown, path_column_green, walked_on_column, index = jax.vmap(set_color, in_axes=0)(path_column_brown, path_column_green, walked_on_column, indices)
+        return path_column_brown, path_column_green, walked_on_column, index
 
-    path_pattern, walked_on_pattern, _ = jax.vmap(set_for_column, in_axes=0)(path_pattern, walked_on_pattern, indices)
+    path_pattern_brown, path_pattern_green, walked_on_pattern, _ = jax.vmap(set_for_column, in_axes=0)(path_pattern_brown, path_pattern_green, walked_on_pattern, indices)
 
-    return path_pattern, walked_on_pattern
+    return path_pattern_brown, path_pattern_green, walked_on_pattern
 
 def calculate_corner_rectangles(RECTANGLE_BOUNDS):
     """Calculates which rectangles are at the corners of the maze"""
@@ -299,7 +305,9 @@ class AmidarConstants(NamedTuple):
     WIDTH: int = 160
     HEIGHT: int = 210
     RANDOM_KEY_SEED: int = 0
+    DIFFICULTY_SETTING: int = 3 # Valid settings are 0 (starts at level 3) and 3 (starts at level 1). If invalid, the game starts at Level 3
     INITIAL_LIVES: int = 3
+    MAX_LIVES: int = 3
     FREEZE_DURATION: int = 256  # Duration for which the game is frozen in the beginning and after being hit by an enemy
     CHICKEN_MODE_DURATION: int = 640
 
@@ -310,7 +318,8 @@ class AmidarConstants(NamedTuple):
     RIGHT: int = 3
 
     # Rendering
-    PATH_COLOR = jnp.array([162, 98, 33, 255], dtype=jnp.uint8)  # Brown color for the path
+    PATH_COLOR_BROWN = jnp.array([162, 98, 33, 255], dtype=jnp.uint8)  # Brown color for the path
+    PATH_COLOR_GREEN = jnp.array([82, 126, 45, 255], dtype=jnp.uint8)  # Green color for the path
     WALKED_ON_COLOR = jnp.array([104, 72, 198, 255], dtype=jnp.uint8)  # Purple color for the walked on paths
     PATH_THICKNESS_HORIZONTAL = 5  # Thickness of the path in horizontal direction 
     PATH_THICKNESS_VERTICAL = 4  # Thickness of the path in vertical direction 
@@ -348,8 +357,8 @@ class AmidarConstants(NamedTuple):
             [16, 14],  # Enemy 2
             [44, 14],  # Enemy 3
             [16, 137],  # Enemy 4
-            [16, 164],  # Enemy 5
-            [52, 164],  # Enemy 6
+            [52, 164],  # Enemy 5
+            [16, 164],  # Enemy 6
         ])
     INITIAL_ENEMY_DIRECTIONS: chex.Array = jnp.array([RIGHT] * 6)  # All enemies start moving right
     # Enemy Types
@@ -357,6 +366,7 @@ class AmidarConstants(NamedTuple):
     WARRIOR: int = 1  
     PIG: int = 2
     CHICKEN: int = 3
+    INVALID_ENEMY: int = -1
     INITIAL_ENEMY_TYPES: chex.Array = jnp.array([WARRIOR] * 6) 
 
     # Path Structure
@@ -401,14 +411,16 @@ class AmidarConstants(NamedTuple):
     RECTANGLE_BOUNDS: chex.Array = jax.vmap(precompute_rectangle_bounds, in_axes=(0, None))(RECTANGLES, PATH_EDGES)
     CORNER_RECTANGLES: chex.Array = calculate_corner_rectangles(RECTANGLE_BOUNDS)
     PATH_MASK, RENDERING_PATH_MASK = generate_path_mask(WIDTH, HEIGHT, PATH_THICKNESS_HORIZONTAL, PATH_THICKNESS_VERTICAL, HORIZONTAL_PATH_EDGES, VERTICAL_PATH_EDGES, jnp.full((HORIZONTAL_PATH_EDGES.shape[0],), True), jnp.full((VERTICAL_PATH_EDGES.shape[0],), True))  # Path mask are the single lines which restrict the movement, while rendering path mask includes the width of the paths for rendering
-    PATH_PATTERN, WALKED_ON_PATTERN = generate_path_pattern(WIDTH, HEIGHT, PATH_COLOR, WALKED_ON_COLOR)
-    PATH_SPRITE: chex.Array = jnp.where(RENDERING_PATH_MASK[:, :, None] == 1, PATH_PATTERN, jnp.full((HEIGHT, WIDTH, 4), 0, dtype=jnp.uint8))
+    PATH_PATTERN_BROWN, PATH_PATTERN_GREEN, WALKED_ON_PATTERN = generate_path_pattern(WIDTH, HEIGHT, PATH_COLOR_BROWN, PATH_COLOR_GREEN, WALKED_ON_COLOR)
+    PATH_SPRITE_BROWN: chex.Array = jnp.where(RENDERING_PATH_MASK[:, :, None] == 1, PATH_PATTERN_BROWN, jnp.full((HEIGHT, WIDTH, 4), 0, dtype=jnp.uint8))
+    PATH_SPRITE_GREEN: chex.Array = jnp.where(RENDERING_PATH_MASK[:, :, None] == 1, PATH_PATTERN_GREEN, jnp.full((HEIGHT, WIDTH, 4), 0, dtype=jnp.uint8))
 
 # immutable state container
 class AmidarState(NamedTuple):
     frame_counter: chex.Array
     random_key: chex.Array  # Random key for JAX operations
     freeze_counter: chex.Array  # Counter for freezing the game
+    level: chex.Array
     score: chex.Array
     lives: chex.Array
     player_x: chex.Array
@@ -628,15 +640,17 @@ def player_step(constants: AmidarConstants, state: AmidarState, action: chex.Arr
 
         corners_completed = jnp.all(completed_rectangles[constants.CORNER_RECTANGLES])  # Check if all corners are completed
 
+        next_level = jnp.all(walked_on_paths)  # Check if all paths are walked on
+
         last_walked_corner = jnp.array([new_x, new_y])   # Update the last walked corner to the new position
-        return points_scored, last_walked_corner, walked_on_paths, completed_rectangles, corners_completed
+        return points_scored, last_walked_corner, walked_on_paths, completed_rectangles, corners_completed, next_level
 
 
     is_corner = jnp.any(jnp.all(constants.PATH_CORNERS == jnp.array([new_x, new_y]), axis=1))
-    points_scored, last_walked_corner, walked_on_paths, completed_rectangles, corners_completed = jax.lax.cond(is_corner, corner_handeling, lambda: (0, state.last_walked_corner, state.walked_on_paths, state.completed_rectangles, False))
+    points_scored, last_walked_corner, walked_on_paths, completed_rectangles, corners_completed, next_level = jax.lax.cond(is_corner, corner_handeling, lambda: (0, state.last_walked_corner, state.walked_on_paths, state.completed_rectangles, False, False))
 
     # TODO: Add checking if all edges(next level)/corner edges(chickens) are walked on
-    return points_scored, new_x, new_y, player_direction, last_walked_corner, walked_on_paths, completed_rectangles, corners_completed
+    return points_scored, new_x, new_y, player_direction, last_walked_corner, walked_on_paths, completed_rectangles, corners_completed, next_level
 
 def enemies_step(constants: AmidarConstants, state: AmidarState, random_key: chex.Array) -> tuple[chex.Array, chex.Array, chex.Array]:
     """Updates the enemy positions based on their behavior."""
@@ -697,18 +711,21 @@ def enemies_step(constants: AmidarConstants, state: AmidarState, random_key: che
 
     return new_enemy_positions, new_enemy_directions
 
-def chicken_mode(constants, corners_completed, enemy_types, chicken_counter, jump_counter):
+def chicken_mode(constants, level, corners_completed, enemy_types, chicken_counter, jump_counter):
     # If the chicken counter is 0 deactivate the chickens
-    enemy_types = jax.lax.cond(chicken_counter == 0, lambda: jnp.full(enemy_types.shape, constants.WARRIOR), lambda: enemy_types) # TODO turn back to the correct type for the level
+    enemies_this_level = jax.lax.cond(level % 2 == 0, lambda: constants.PIG, lambda: constants.WARRIOR)
+    enemy_types = jax.lax.cond(chicken_counter == 0, lambda: jnp.full(enemy_types.shape, enemies_this_level), lambda: enemy_types)
     # If the chicken counter is greater or equal to 0 and less than the maximum, decrement it
     chicken_counter, chicken_mode = jax.lax.cond(jnp.logical_and(chicken_counter >= 0, chicken_counter < constants.CHICKEN_MODE_DURATION), lambda: (chicken_counter - 1, True), lambda: (chicken_counter, False))
     # If all corners are completed and the chicken counter is still at the maximum, activate the chickens (any jump ends immediately)
     enemy_types, chicken_counter, jump_counter = jax.lax.cond(jnp.logical_and(corners_completed, chicken_counter == constants.CHICKEN_MODE_DURATION), lambda: (jnp.full(enemy_types.shape, constants.CHICKEN), chicken_counter-1, -1), lambda: (enemy_types, chicken_counter, jump_counter))
     # jax.debug.print("Enemy types: {enemy_types}", enemy_types=enemy_types)
     # jax.lax.cond(corners_completed, lambda: jax.debug.print("Corners completed, Chicken Counter{}", chicken_counter), lambda: None)
+    # reduce to 5 enemies if the level is <= 2
+    enemy_types = jax.lax.cond(level <= 2, lambda: enemy_types.at[5].set(constants.INVALID_ENEMY), lambda: enemy_types)
     return enemy_types, chicken_counter, chicken_mode, jump_counter
 
-def jump(constants, frame_counter, action, jump_counter, chicken_mode_active, times_jumped, enemy_types):
+def jump(constants, level, frame_counter, action, jump_counter, chicken_mode_active, times_jumped, enemy_types):
     """
     jump counter stays at -1
     if the player presses jump and the times jumped < 4 and not chicken mode and not already jumping
@@ -744,9 +761,12 @@ def jump(constants, frame_counter, action, jump_counter, chicken_mode_active, ti
     can_jump = jnp.logical_and(jnp.logical_and(jnp.logical_and(jnp.logical_and(times_jumped < constants.MAX_JUMPS, timing_condition), jnp.bitwise_not(chicken_mode_active)), jump_counter < 0), jump_action)  # Check if the player can jump
     # If the player can jump, set the jump counter to the jump duration and increment the times jumped, turn enemies into shadows
     enemy_types, jump_counter, times_jumped = jax.lax.cond(can_jump, lambda: (jnp.full(enemy_types.shape, constants.SHADOW), get_jump_duration(), times_jumped + 1), lambda: (enemy_types, jump_counter, times_jumped))
-    enemy_types = jax.lax.cond(jump_counter == 0, lambda: jnp.full(enemy_types.shape, constants.WARRIOR), lambda: enemy_types) # TODO turn back to the correct type for the level
+    enemy_type_this_level = jax.lax.cond(level % 2 == 0, lambda: constants.PIG, lambda: constants.WARRIOR)
+    enemy_types = jax.lax.cond(jump_counter == 0, lambda: jnp.full(enemy_types.shape, enemy_type_this_level), lambda: enemy_types) # TODO turn back to the correct type for the level
     jump_counter = jax.lax.cond(jump_counter >= 0, lambda: jump_counter - 1, lambda: jump_counter)  # Decrement the jump counter if it is greater than 0
     # jax.lax.cond(jnp.any(enemy_types == constants.SHADOW), lambda: jax.debug.print("Jump activated, {}", jump_counter), lambda: None)
+    # reduce to 5 enemies if the level is <= 2
+    enemy_types = jax.lax.cond(level <= 2, lambda: enemy_types.at[5].set(constants.INVALID_ENEMY), lambda: enemy_types)
     return enemy_types, jump_counter, times_jumped
 
 
@@ -757,7 +777,7 @@ def check_for_collisions(constants, player_x, player_y, enemy_positions, enemy_t
     def check_enemy_for_collision(enemy_x, enemy_y, enemy_type):
         """Checks if the enemy collides with the player."""
         collision = jax.lax.cond(
-            enemy_type == 0, # shadows don't collide with the player
+            jnp.logical_or(enemy_type == 0, enemy_type == -1), # shadows and invalid enemies don't collide with the player
             lambda: False,
             lambda: jnp.logical_not(
                         (enemy_x + constants.ENEMY_SIZE[0] <= player_x)    |   # enemy is to the left of the player
@@ -824,6 +844,7 @@ class JaxAmidar(JaxEnvironment[AmidarState, AmidarObservation, AmidarInfo, Amida
             frame_counter=jnp.array(0).astype(jnp.int32),  # Frame counter for the game
             random_key=jax.random.key(self.constants.RANDOM_KEY_SEED),
             freeze_counter=jnp.array(self.constants.FREEZE_DURATION).astype(jnp.int32),  # Freeze counter for the initial freeze
+            level=jax.lax.cond(self.constants.DIFFICULTY_SETTING == 3, lambda: jnp.array(1).astype(jnp.int32), lambda: jnp.array(3).astype(jnp.int32)),
             score=jnp.array(0).astype(jnp.int32),  # Initial score
             lives=jnp.array(self.constants.INITIAL_LIVES).astype(jnp.int32),  # Initial lives
             player_x=jnp.array(self.constants.INITIAL_PLAYER_POSITION[0]).astype(jnp.int32),
@@ -834,7 +855,7 @@ class JaxAmidar(JaxEnvironment[AmidarState, AmidarObservation, AmidarInfo, Amida
             completed_rectangles=jnp.zeros(jnp.shape(self.constants.RECTANGLES)[0], dtype=jnp.bool_),  # Initialize completed rectangles
             enemy_positions=self.constants.INITIAL_ENEMY_POSITIONS,
             enemy_directions=self.constants.INITIAL_ENEMY_DIRECTIONS,
-            enemy_types=self.constants.INITIAL_ENEMY_TYPES,
+            enemy_types=jax.lax.cond(self.constants.DIFFICULTY_SETTING == 3, lambda: self.constants.INITIAL_ENEMY_TYPES.at[5].set(self.constants.INVALID_ENEMY), lambda: self.constants.INITIAL_ENEMY_TYPES),
             chicken_counter=jnp.array(self.constants.CHICKEN_MODE_DURATION).astype(jnp.int32),  # Initial chicken counter
             jump_counter=jnp.array(-1).astype(jnp.int32),  # Initial jump counter
             times_jumped=jnp.array(0).astype(jnp.int32), 
@@ -870,14 +891,14 @@ class JaxAmidar(JaxEnvironment[AmidarState, AmidarObservation, AmidarInfo, Amida
         def take_step():
             random_key, random_enemies_key = jax.random.split(state.random_key)
 
-            player_state = jax.lax.cond(get_player_speed(state.frame_counter), player_step, lambda constants, state, action: (0, state.player_x, state.player_y, state.player_direction, state.last_walked_corner, state.walked_on_paths, state.completed_rectangles, False), self.constants, state, action)
-            (points_scored_player_step, player_x, player_y, player_direction, last_walked_corner, walked_on_paths, completed_rectangles, corners_completed) = player_state
+            player_state = jax.lax.cond(get_player_speed(state.frame_counter), player_step, lambda constants, state, action: (0, state.player_x, state.player_y, state.player_direction, state.last_walked_corner, state.walked_on_paths, state.completed_rectangles, False, False), self.constants, state, action)
+            (points_scored_player_step, player_x, player_y, player_direction, last_walked_corner, walked_on_paths, completed_rectangles, corners_completed, next_level) = player_state
 
-            enemies_state = jax.lax.cond(get_enemy_speed(state.frame_counter, 3), enemies_step, lambda constants, state, random_key: (state.enemy_positions, state.enemy_directions), self.constants, state, random_key)
+            enemies_state = jax.lax.cond(get_enemy_speed(state.frame_counter, state.level), enemies_step, lambda constants, state, random_key: (state.enemy_positions, state.enemy_directions), self.constants, state, random_key)
             (enemy_positions, enemy_directions) = enemies_state
 
             # CHICKEN MODE-handling
-            enemy_types, chicken_counter, chicken_mode_active, jump_counter = chicken_mode(self.constants, corners_completed, state.enemy_types, state.chicken_counter, state.jump_counter)
+            enemy_types, chicken_counter, chicken_mode_active, jump_counter = chicken_mode(self.constants, state.level, corners_completed, state.enemy_types, state.chicken_counter, state.jump_counter)
             # jax.lax.cond(jnp.any(enemy_types == self.constants.CHICKEN), lambda: jax.debug.print("Chickens activated, {}", chicken_counter), lambda: None)
 
             # Check for collisions with enemies
@@ -891,12 +912,35 @@ class JaxAmidar(JaxEnvironment[AmidarState, AmidarObservation, AmidarInfo, Amida
             )
 
             # Jump-handling
-            enemy_types, jump_counter, times_jumped = jump(self.constants, state.frame_counter, action, jump_counter, chicken_mode_active, state.times_jumped, enemy_types)
+            enemy_types, jump_counter, times_jumped = jump(self.constants, state.level, state.frame_counter, action, jump_counter, chicken_mode_active, state.times_jumped, enemy_types)
 
             # Reset positions if a life is lost 
             enemy_positions, enemy_directions, player_x, player_y, player_direction, lives, freeze_counter, times_jumped = jax.lax.cond(lost_live,
                 lambda: (self.constants.INITIAL_ENEMY_POSITIONS, self.constants.INITIAL_ENEMY_DIRECTIONS, self.constants.INITIAL_PLAYER_POSITION[0], self.constants.INITIAL_PLAYER_POSITION[1], self.constants.INITIAL_PLAYER_DIRECTION, state.lives-1, self.constants.FREEZE_DURATION, 0),  # Reset enemy & player positions and directions, decrement lives
                 lambda: (enemy_positions, enemy_directions, player_x, player_y, player_direction, state.lives, state.freeze_counter, times_jumped))  # Keep the current enemy positions and directions
+
+            # Update the level if all edges are completed
+            def activate_next_level(constants, level, lives, enemy_positions, enemy_directions, enemy_types):
+                level = level + 1
+                lives = jnp.minimum(lives + 1, self.constants.MAX_LIVES)
+                enemy_positions = constants.INITIAL_ENEMY_POSITIONS
+                enemy_directions = constants.INITIAL_ENEMY_DIRECTIONS
+                enemy_types = jax.lax.cond(level % 2 == 0, lambda: jnp.full(enemy_types.shape, constants.PIG), lambda: jnp.full(enemy_types.shape, constants.WARRIOR))  # Alternate between PIG and WARRIOR every level
+                # reduce to 5 enemies if the level is <= 2
+                enemy_types = jax.lax.cond(level <= 2, lambda: enemy_types.at[5].set(self.constants.INVALID_ENEMY), lambda: enemy_types)
+                freeze_counter = constants.FREEZE_DURATION  # Reset the freeze counter for the next level
+                walked_on_paths = (jnp.zeros(jnp.shape(self.constants.PATH_EDGES)[0], dtype=jnp.int32)).at[self.constants.PLAYER_STARTING_PATH].set(1)
+                completed_rectangles = jnp.zeros(jnp.shape(self.constants.RECTANGLES)[0], dtype=jnp.bool_)
+                player_x = constants.INITIAL_PLAYER_POSITION[0]
+                player_y = constants.INITIAL_PLAYER_POSITION[1]
+                player_direction = constants.INITIAL_PLAYER_DIRECTION
+                chicken_counter = jnp.array(constants.CHICKEN_MODE_DURATION).astype(jnp.int32)  # Reset chicken counter
+                jump_counter = -1
+                times_jumped = 0
+
+                return level, lives, enemy_positions, enemy_directions, enemy_types, freeze_counter, walked_on_paths, completed_rectangles, player_x, player_y, player_direction, chicken_counter, jump_counter, times_jumped
+
+            level, lives, enemy_positions, enemy_directions, enemy_types, freeze_counter, walked_on_paths, completed_rectangles, player_x, player_y, player_direction, chicken_counter, jump_counter, times_jumped = jax.lax.cond(next_level, activate_next_level, lambda constants, level, lives, enemy_positions, enemy_directions, enemy_types: (level, lives, enemy_positions, enemy_directions, enemy_types, freeze_counter, walked_on_paths, completed_rectangles, player_x, player_y, player_direction, chicken_counter, jump_counter, times_jumped), self.constants, state.level, lives, enemy_positions, enemy_directions, enemy_types)
 
             # Check for game over condition
             # If lives are 0, the game is over
@@ -910,6 +954,7 @@ class JaxAmidar(JaxEnvironment[AmidarState, AmidarObservation, AmidarInfo, Amida
                 frame_counter=state.frame_counter + 1,  # Increment the frame counter
                 random_key=random_key,
                 freeze_counter=freeze_counter,
+                level=level,
                 score=state.score + points_scored_player_step + points_scored_enemy_collision, # Could change in multiple functions, so it is not calculated in the function based on the previous state
                 lives=lives,
                 player_x=player_x,
@@ -989,7 +1034,9 @@ def load_sprites():
 
     DIGITS = aj.load_and_pad_digits(os.path.join(MODULE_DIR, "./sprites/amidar/score/{}.npy"))
 
-    player = aj.loadFrame(os.path.join(MODULE_DIR, "sprites/amidar/player_ghost.npy"))
+    player_ghost = aj.loadFrame(os.path.join(MODULE_DIR, "sprites/amidar/player_ghost.npy"))
+
+    player_paint_roller = aj.loadFrame(os.path.join(MODULE_DIR, "sprites/amidar/player_paint_roller.npy"))
 
     bg = aj.loadFrame(os.path.join(MODULE_DIR, "sprites/amidar/background.npy"), transpose=True)
 
@@ -997,21 +1044,27 @@ def load_sprites():
 
     warrior = aj.loadFrame(os.path.join(MODULE_DIR, "sprites/amidar/enemy/warrior.npy"))
 
+    pig = aj.loadFrame(os.path.join(MODULE_DIR, "sprites/amidar/enemy/pig.npy"))
+
     chicken = aj.loadFrame(os.path.join(MODULE_DIR, "sprites/amidar/enemy/chicken.npy"))
 
     # Convert all sprites to the expected format (add frame dimension)
     SPRITE_BG = jnp.expand_dims(bg, axis=0)
     SPRITE_LIFE = jnp.expand_dims(life, axis=0)
-    SPRITE_PLAYER = jnp.expand_dims(player, axis=0)
+    SPRITE_PLAYER_GHOST = jnp.expand_dims(player_ghost, axis=0)
+    SPRITE_PLAYER_PAINT_ROLLER = jnp.expand_dims(player_paint_roller, axis=0)
     SPRITE_WARRIOR = jnp.expand_dims(warrior, axis=0)
+    SPRITE_PIG = jnp.expand_dims(pig, axis=0)
     SPRITE_CHICKEN = jnp.expand_dims(chicken, axis=0)
 
     return (
         SPRITE_BG,
         DIGITS,
         SPRITE_LIFE,
-        SPRITE_PLAYER,
+        SPRITE_PLAYER_GHOST,
+        SPRITE_PLAYER_PAINT_ROLLER,
         SPRITE_WARRIOR,
+        SPRITE_PIG,
         SPRITE_CHICKEN,
     )
 
@@ -1025,8 +1078,10 @@ class AmidarRenderer(JAXGameRenderer):
             self.SPRITE_BG,
             self.DIGITS,
             self.SPRITE_LIFE,
-            self.SPRITE_PLAYER,
+            self.SPRITE_PLAYER_GHOST,
+            self.SPRITE_PLAYER_PAINT_ROLLER,
             self.SPRITE_WARRIOR,
+            self.SPRITE_PIG,
             self.SPRITE_CHICKEN,
         ) = load_sprites()
 
@@ -1055,7 +1110,8 @@ class AmidarRenderer(JAXGameRenderer):
         raster = aj.render_at(raster, 0, 0, frame_bg)
 
         # Render paths
-        raster = aj.render_at(raster, 0, 0, self.constants.PATH_SPRITE)
+        path_sprite = jax.lax.cond(state.level%2 == 1, lambda: self.constants.PATH_SPRITE_BROWN, lambda: self.constants.PATH_SPRITE_GREEN)
+        raster = aj.render_at(raster, 0, 0, path_sprite)
 
         # Render walked on paths
         walked_on_paths_horizontal = state.walked_on_paths[0:jnp.shape(self.constants.HORIZONTAL_PATH_EDGES)[0]]
@@ -1120,9 +1176,10 @@ class AmidarRenderer(JAXGameRenderer):
 
         # Render enemies
         frame_warrior = aj.get_sprite_frame(self.SPRITE_WARRIOR, 0)
+        frame_pig = aj.get_sprite_frame(self.SPRITE_PIG, 0)
         frame_chicken = aj.get_sprite_frame(self.SPRITE_CHICKEN, 0)
         # jax.debug.print("w: {}, c: {}", frame_warrior.shape, frame_chicken.shape)
-        frames_enemies = jnp.array([jnp.broadcast_to(jnp.array([0, 0, 0, 255]), frame_warrior.shape), frame_warrior,  jnp.zeros_like(frame_warrior), frame_chicken])
+        frames_enemies = jnp.array([jnp.broadcast_to(jnp.array([0, 0, 0, 255]), frame_warrior.shape), frame_warrior, frame_pig, frame_chicken, jnp.zeros_like(frame_warrior)])
 
         # Use scan to accumulate the raster updates
         def scan_render_enemy(raster, enemy_data):
@@ -1134,7 +1191,8 @@ class AmidarRenderer(JAXGameRenderer):
         raster, _ = jax.lax.scan(scan_render_enemy, raster, (state.enemy_positions, state.enemy_types))
         
         # Render player
-        frame_player = aj.get_sprite_frame(self.SPRITE_PLAYER, 0)
+        sprite_player = jax.lax.cond(state.level%2 == 1, lambda: self.SPRITE_PLAYER_GHOST, lambda: self.SPRITE_PLAYER_PAINT_ROLLER)
+        frame_player = aj.get_sprite_frame(sprite_player, 0)
         raster = aj.render_at(raster, state.player_x+self.constants.PLAYER_SPRITE_OFFSET[0], state.player_y+self.constants.PLAYER_SPRITE_OFFSET[1], frame_player)
 
         ###### For DEBUGGING #######
