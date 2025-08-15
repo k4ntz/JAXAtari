@@ -26,7 +26,7 @@ WALLS_ID = 1
 WINDOW_WIDTH = 160 * 3
 WINDOW_HEIGHT = 210 * 3
 
-COLLISION_BOX =(8,8)
+COLLISION_BOX = (8, 8)
 PORTAL_X = jnp.array([12, 140])
 
 MODULE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -76,10 +76,10 @@ def find_free_areas(map, h, w):
 
     _, is_free_arr = jax.lax.scan(scan_fn, None, positions)
     valid_positions = positions[is_free_arr]
-
+    print(type(jnp.array(valid_positions)))
     return jnp.array(valid_positions)
 
-CITY_COLLISION_MAPS = [load_city_collision_map(f"map_{i+1}_collision.npy") for i in range(8)]
+CITY_COLLISION_MAPS = jnp.array([load_city_collision_map(f"map_{i+1}_collision.npy") for i in range(8)])
 CITY_SPAWNS = get_spawn_points(CITY_COLLISION_MAPS)
 
 def get_human_action() -> chex.Array:
@@ -157,8 +157,8 @@ class JaxBankHeist(JaxEnvironment[BankHeistState, BankHeistObservation, BankHeis
                 visibility=jnp.array([1]).astype(jnp.int32)
             ),
             dynamite_position=jnp.array([]).astype(jnp.int32),
-            enemy_positions=jnp.array([]).astype(jnp.int32),
-            bank_positions=jnp.array([None,None,None]).astype(jnp.int32),
+            enemy_positions=jnp.array([None, None, None]).astype(jnp.int32),
+            bank_positions=jnp.array([None, None, None]).astype(jnp.int32),
             speed=jnp.array(1).astype(jnp.int32),
             money=jnp.array(0).astype(jnp.int32),
             player_lives=jnp.array(4).astype(jnp.int32),
@@ -166,9 +166,9 @@ class JaxBankHeist(JaxEnvironment[BankHeistState, BankHeistObservation, BankHeis
             obs_stack=None,
             map_collision=CITY_COLLISION_MAPS[0],
             spawn_points=CITY_SPAWNS[0],
-            bank_spawn_timers=jnp.array([1]).astype(jnp.int32),
-            police_spawn_timers=jnp.array([0]).astype(jnp.int32),
-            dynamite_timer=jnp.array([0]).astype(jnp.int32)
+            bank_spawn_timers=jnp.array([1, 1, 1]).astype(jnp.int32),
+            police_spawn_timers=jnp.array([-1, -1, -1]).astype(jnp.int32),
+            dynamite_timer=jnp.array([-1]).astype(jnp.int32)
         )
         obs = self._get_observation(state)
         def expand_and_copy(x):
@@ -233,16 +233,14 @@ class JaxBankHeist(JaxEnvironment[BankHeistState, BankHeistObservation, BankHeis
         new_level = state.level+1
         default_player_position = jnp.array([12, 78]).astype(jnp.int32)
         new_player = state.player._replace(position=default_player_position)
-        empty_police = jnp.array([None,None,None]).astype(jnp.int32)
-        empty_banks = jnp.array([None,None,None]).astype(jnp.int32)
-        new_speed = state.speed * 1.1
+        empty_police = jnp.array([None, None, None]).astype(jnp.int32)
+        empty_banks = jnp.array([None, None, None]).astype(jnp.int32)
+        new_speed = state.speed * 1
         new_fuel = state.fuel_refill
         new_fuel_refill=jnp.array(0).astype(jnp.int32)
-        collision_branches = [lambda: map for map in CITY_COLLISION_MAPS]
-        spawn_branches = [lambda: points for points in CITY_SPAWNS]
         map_id = new_level % len(CITY_COLLISION_MAPS)
-        new_map_collision = jax.lax.switch(map_id, collision_branches)
-        new_spawn_points = jax.lax.switch(map_id, spawn_branches)
+        new_map_collision = jax.lax.dynamic_index_in_dim(CITY_COLLISION_MAPS, map_id, axis=0, keepdims=False)
+        new_spawn_points = jax.lax.dynamic_index_in_dim(CITY_SPAWNS, map_id, axis=0, keepdims=False)
         new_dynamite_position = jnp.array([]).astype(jnp.int32)
         new_bank_spawn_timers = jnp.array([1,1,1]).astype(jnp.int32)
         new_police_spawn_timers = jnp.array([-1,-1,-1]).astype(jnp.int32)
@@ -311,7 +309,7 @@ class JaxBankHeist(JaxEnvironment[BankHeistState, BankHeistObservation, BankHeis
             player=new_player,
             )
 
-        #new_state = jax.lax.cond(collision == 200, lambda: self.map_transition(new_state), lambda: new_state)
+        new_state = jax.lax.cond(collision == 200, lambda: self.map_transition(new_state), lambda: new_state)
         return new_state
 
     @partial(jax.jit, static_argnums=(0,))
