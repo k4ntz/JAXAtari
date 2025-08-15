@@ -296,6 +296,7 @@ class JaxTetris(JaxEnvironment[TetrisState, TetrisObservation, TetrisInfo, Tetri
     @partial(jax.jit, static_argnums=(0,), donate_argnums=(1,))
     def step(self, state: TetrisState, action: chex.Array) -> Tuple[
         TetrisObservation, TetrisState, float, bool, TetrisInfo]:
+        previous_state = state
         a = action.astype(jnp.int32)
         is_left = (a == Action.LEFT) | (a == Action.UPLEFT) | (a == Action.DOWNLEFT)
         is_right = (a == Action.RIGHT) | (a == Action.UPRIGHT) | (a == Action.DOWNRIGHT)
@@ -363,7 +364,6 @@ class JaxTetris(JaxEnvironment[TetrisState, TetrisObservation, TetrisInfo, Tetri
             dy = jnp.clip(do_soft_now.astype(jnp.int32) | gravity_drop, 0, 1)
             pos_v = s.pos + jnp.array([dy, 0], dtype=jnp.int32)
             coll_v = self.check_collision(s.board, grid, pos_v)
-            # soft_points = self.consts.SOFT_DROP_SCORE_PER_CELL * (1 - coll_v.astype(jnp.int32)) * dy
             return lax.cond(
                 coll_v,
                 lambda ss: self._lock_spawn(ss, grid, tick_next, soft_points = jnp.int32(0)),
@@ -378,7 +378,7 @@ class JaxTetris(JaxEnvironment[TetrisState, TetrisObservation, TetrisInfo, Tetri
             return st0, jnp.float32(0.0), jnp.bool_(False), TetrisInfo(score=st0.score, cleared=jnp.int32(0),
                                                                        game_over=st0.game_over)
 
-        state, reward, done, info = lax.cond(
+        state, _reward, done, info = lax.cond(
             do_reset, do_env_reset,
             lambda _: lax.cond(do_hard_now, do_hard, do_soft_or_gravity, state),
             operand=None
@@ -389,7 +389,7 @@ class JaxTetris(JaxEnvironment[TetrisState, TetrisObservation, TetrisInfo, Tetri
             return st2, jnp.float32(0.0), jnp.bool_(False), TetrisInfo(score=st2.score, cleared=jnp.int32(0),
                                                                        game_over=jnp.bool_(False))
 
-        state, reward, done, info = lax.cond(state.game_over, after_over, lambda s: (s, reward, done, info), state)
+        state, _reward, done, info = lax.cond(state.game_over, after_over, lambda s: (s, _reward, done, info), state)
 
         state = state._replace(
             das_timer=das,
@@ -401,6 +401,7 @@ class JaxTetris(JaxEnvironment[TetrisState, TetrisObservation, TetrisInfo, Tetri
         )
 
         obs = self._get_observation(state)
+        reward = self._get_reward(previous_state, state)
         return obs, state, reward, jnp.bool_(False), info
 
     # ----- Helpers used inside step -----
@@ -420,7 +421,9 @@ class JaxTetris(JaxEnvironment[TetrisState, TetrisObservation, TetrisInfo, Tetri
 
     @partial(jax.jit, static_argnums=(0,))
     def _get_reward(self, previous_state: TetrisState, state: TetrisState) -> float:
-        return (state.score - previous_state.score).astype(jnp.float32)
+        # only reward when line is cleared, otherwise 0 
+        cleared = state.score - previous_state.score
+        return jnp.where(cleared > 0, cleared.astype(jnp.float32), jnp.float32(0.0))
 
     @partial(jax.jit, static_argnums=(0,))
     def _get_done(self, state: TetrisState) -> bool:
