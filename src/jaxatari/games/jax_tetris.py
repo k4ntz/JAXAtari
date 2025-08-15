@@ -221,29 +221,15 @@ class JaxTetris(JaxEnvironment[TetrisState, TetrisObservation, TetrisInfo, Tetri
 
     @partial(jax.jit, static_argnums=0)
     def try_rotate_with_kick(self, board: chex.Array, piece_type: chex.Array, pos: chex.Array, rot: chex.Array):
-        """CW rotate; if collides, try L, R, then Up (all 1-cell)."""
+        # doesnt allow kick
         new_rot = (rot + 1) & 3
         g2 = self.piece_grid(piece_type, new_rot)
         pos0 = pos
-        posL = pos + jnp.array([0, -1], jnp.int32)
-        posR = pos + jnp.array([0, 1], jnp.int32)
-        posU = pos + jnp.array([-1, 0], jnp.int32)
-
-        # extra kicks for I piece (index 0)
-        posL2 = pos + jnp.array([0, -2], jnp.int32)
-        posR2 = pos + jnp.array([0, 2], jnp.int32)
-        is_I = (piece_type == jnp.int32(0))
 
         ok0 = ~self.check_collision(board, g2, pos0)
-        okL = ~self.check_collision(board, g2, posL)
-        okR = ~self.check_collision(board, g2, posR)
-        okU = ~self.check_collision(board, g2, posU)
 
-        pos_final = jnp.where(ok0, pos0,
-                              jnp.where(okL, posL,
-                                        jnp.where(okR, posR,
-                                                  jnp.where(okU, posU, pos))))
-        rot_final = jnp.where(ok0 | okL | okR | okU, new_rot, rot)
+        pos_final = jnp.where(ok0, pos0, pos)
+        rot_final = jnp.where(ok0, new_rot, rot)
         return pos_final, rot_final
 
     @partial(jax.jit, static_argnums=0)
