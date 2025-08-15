@@ -38,6 +38,8 @@ class SpaceInvadersConstants(NamedTuple):
     ENEMY_COLS: int = 6
     MAX_ENEMY_BULLETS: int = 3
 
+    EXPLOSION_FRAMES: jnp.array = jnp.array([3, 11, 19, 27], dtype=jnp.int32)
+
     MOVEMENT_RATE: int = 32
     ENEMY_FIRE_RATE: int = 60
 
@@ -80,6 +82,8 @@ class SpaceInvadersState(NamedTuple):
     player_score: chex.Array
     player_lives: chex.Array
     destroyed: chex.Array
+    exploded: chex.Array
+    exploded_frames: chex.Array
     opponent_current_x: int
     opponent_current_y: int
     opponent_bounding_rect: NamedTuple
@@ -180,7 +184,7 @@ class JaxSpaceInvaders(JaxEnvironment[SpaceInvadersState, SpaceInvadersObservati
     def _check_bullet_enemy_collisions(self, state: SpaceInvadersState):
         def check_loop(carry):
             def body(i, carry):
-                destroyed, score, bullet_active = carry
+                destroyed, score, bullet_active, exploded = carry
 
                 row = i // self.consts.ENEMY_COLS
                 col = i % self.consts.ENEMY_COLS
@@ -200,15 +204,23 @@ class JaxSpaceInvaders(JaxEnvironment[SpaceInvadersState, SpaceInvadersObservati
                                          self.consts.OPPONENT_SIZE[1])
                 )
 
+                exploded = jax.lax.cond(
+                    collision,
+                    lambda ex: ex.at[idx].set(True),
+                    lambda ex: ex,
+                    exploded
+                )
+
                 destroyed = destroyed.at[idx].set(jnp.logical_or(destroyed[idx], collision))
+
                 score += jnp.where(collision, 10, 0)  # +10 score
                 bullet_active = jnp.where(collision, False, bullet_active)
 
-                return destroyed, score, bullet_active
+                return destroyed, score, bullet_active, exploded
 
             return jax.lax.fori_loop(0, self.consts.ENEMY_ROWS * self.consts.ENEMY_COLS, body, carry)
 
-        init = (state.destroyed, state.player_score, state.bullet_active)
+        init = (state.destroyed, state.player_score, state.bullet_active, state.exploded)
 
         return jax.lax.cond(
             state.bullet_active,
@@ -390,13 +402,17 @@ class JaxSpaceInvaders(JaxEnvironment[SpaceInvadersState, SpaceInvadersObservati
         opponent_rect_width = self.consts.OPPONENT_SIZE[0] * self.consts.ENEMY_COLS + self.consts.OFFSET_OPPONENT[0] * (self.consts.ENEMY_COLS - 1)
         opponent_rect_height = self.consts.OPPONENT_SIZE[1] * self.consts.ENEMY_ROWS + self.consts.OFFSET_OPPONENT[1] * (self.consts.ENEMY_ROWS - 1)
 
+        enemy_count = self.consts.ENEMY_ROWS * self.consts.ENEMY_COLS
+
         state = SpaceInvadersState(
             player_x=jnp.array(self.consts.INITIAL_PLAYER_X).astype(jnp.int32),
             player_speed=jnp.array(0.0).astype(jnp.int32),
             step_counter=jnp.array(0).astype(jnp.int32),
             player_score=jnp.array(0).astype(jnp.int32),
             player_lives=jnp.array(self.consts.INITIAL_LIVES).astype(jnp.int32),
-            destroyed=jnp.zeros((self.consts.ENEMY_ROWS * self.consts.ENEMY_COLS,), dtype=jnp.bool),
+            destroyed=jnp.zeros((enemy_count,), dtype=jnp.bool),
+            exploded=jnp.zeros((enemy_count,), dtype=jnp.bool),
+            exploded_frames=jnp.zeros((enemy_count,), dtype=jnp.int32),
             opponent_current_x=self.consts.OPPONENT_LIMIT_X[0],
             opponent_current_y=self.consts.OPPONENT_LIMIT_Y[0],
             opponent_bounding_rect=(opponent_rect_width, opponent_rect_height),
@@ -433,7 +449,7 @@ class JaxSpaceInvaders(JaxEnvironment[SpaceInvadersState, SpaceInvadersObservati
             bullet_x=new_bullet_x,
             bullet_y=new_bullet_y
         )
-        new_destroyed, new_score, final_bullet_active = self._check_bullet_enemy_collisions(new_bullet_state)
+        new_destroyed, new_score, final_bullet_active, new_exploded = self._check_bullet_enemy_collisions(new_bullet_state)
 
         enemy_bullets_active, enemy_bullets_x, enemy_bullets_y, enemy_fire_cooldown = self._update_enemy_bullets(
             state._replace(
@@ -441,7 +457,8 @@ class JaxSpaceInvaders(JaxEnvironment[SpaceInvadersState, SpaceInvadersObservati
                 enemy_bullets_active=state.enemy_bullets_active,
                 enemy_bullets_x=state.enemy_bullets_x,
                 enemy_bullets_y=state.enemy_bullets_y,
-                enemy_fire_cooldown=state.enemy_fire_cooldown
+                enemy_fire_cooldown=state.enemy_fire_cooldown,
+                exploded=new_exploded
             ),
             key
         )
@@ -490,6 +507,8 @@ class JaxSpaceInvaders(JaxEnvironment[SpaceInvadersState, SpaceInvadersObservati
             player_score=new_score,
             player_lives=new_lives,
             destroyed=new_destroyed,
+            exploded=new_exploded,
+            exploded_frames=state.exploded_frames,
             opponent_current_x=position,
             opponent_current_y=state.opponent_current_y,
             opponent_bounding_rect=state.opponent_bounding_rect,
@@ -644,12 +663,15 @@ def load_sprites():
     MODULE_DIR = os.path.dirname(os.path.abspath(__file__))
     SPRITES_DIR = os.path.join(MODULE_DIR, C.PATH_SPRITES)
     
+    # Player
     player = aj.loadFrame(os.path.join(SPRITES_DIR, "player.npy"))
     SPRITE_PLAYER = jnp.expand_dims(player, axis=0)
     
+    # Background
     background = aj.loadFrame(os.path.join(SPRITES_DIR, "background.npy"))
     SPRITE_BACKGROUND = jnp.expand_dims(background, axis=0)
 
+    # Score
     green_numbers = []
     number_names = ["zero", "one", "two", "three", "four", "five", "six", "seven", "eight", "nine"]
     for name in number_names:
@@ -659,9 +681,11 @@ def load_sprites():
     zero_yellow = aj.loadFrame(os.path.join(SPRITES_DIR, "numbers/zero_yellow.npy"))
     SPRITE_ZERO_YELLOW = jnp.expand_dims(zero_yellow, axis=0)
     
+    # Defense
     defense = aj.loadFrame(os.path.join(SPRITES_DIR, "defense.npy"))
     SPRITE_DEFENSE = jnp.expand_dims(defense, axis=0)
 
+    # Enemies
     opponents = {}
     opponent_files = [
         "opponent_1_a", "opponent_1_b", "opponent_2_a", "opponent_2_b",
@@ -675,10 +699,21 @@ def load_sprites():
     opponents["opponent_3_b"] = jax.numpy.pad(opponents["opponent_3_b"], ((0,0), (0,1), (0,0), (0,0)))
     opponents["opponent_4_b"] = jax.numpy.pad(opponents["opponent_4_b"], ((0,0), (0,1), (0,0), (0,0)))
 
+    # Bullet
     bullet = aj.loadFrame(os.path.join(SPRITES_DIR, "bullet.npy"))
     SPRITE_BULLET = jnp.expand_dims(bullet, axis=0)
 
-    return (SPRITE_BACKGROUND, SPRITE_PLAYER, SPRITE_BULLET, *green_numbers, SPRITE_ZERO_YELLOW, SPRITE_DEFENSE, *opponents.values())
+    # Explosions
+    explosions = {}
+    explosion_files = [
+        "explosion_1", "explosion_2", "explosion_3", "explosion_4", "explosion_purple_a", "explosion_purple_b", "player_explosion_a", "player_explosion_b"
+    ]
+
+    for name in explosion_files:
+        sprite = aj.loadFrame(os.path.join(SPRITES_DIR, f"explosions/{name}.npy"))
+        explosions[name] = jnp.expand_dims(sprite, axis=0)
+
+    return (SPRITE_BACKGROUND, SPRITE_PLAYER, SPRITE_BULLET, *green_numbers, SPRITE_ZERO_YELLOW, SPRITE_DEFENSE, *opponents.values(), *explosions.values())
 
 (
     SPRITE_BACKGROUND, SPRITE_PLAYER, SPRITE_BULLET,
@@ -687,7 +722,9 @@ def load_sprites():
     SPRITE_EIGHT_GREEN, SPRITE_NINE_GREEN, SPRITE_ZERO_YELLOW, SPRITE_DEFENSE,
     SPRITE_OPPONENT_1_A, SPRITE_OPPONENT_1_B, SPRITE_OPPONENT_2_A, SPRITE_OPPONENT_2_B,
     SPRITE_OPPONENT_3_A, SPRITE_OPPONENT_3_B, SPRITE_OPPONENT_4_A, SPRITE_OPPONENT_4_B,
-    SPRITE_OPPONENT_5, SPRITE_OPPONENT_6_A, SPRITE_OPPONENT_6_B
+    SPRITE_OPPONENT_5, SPRITE_OPPONENT_6_A, SPRITE_OPPONENT_6_B, SPRITE_EXPLOSION_1, 
+    SPRITE_EXPLOSION_2, SPRITE_EXPLOSION_3, SPRITE_EXPLOSION_4, 
+    SPRITE_EXPLOSION_PURPLE_A, SPRITE_EXPLOSION_PURPLE_B, PLAYER_EXPLOSION_A, PLAYER_EXPLOSION_B
 ) = load_sprites()
 
 class SpaceInvadersRenderer(JAXGameRenderer):
@@ -700,12 +737,15 @@ class SpaceInvadersRenderer(JAXGameRenderer):
     def render(self, state: SpaceInvadersState) -> chex.Array:
         raster = aj.create_initial_frame(width=self.consts.WIDTH, height=self.consts.HEIGHT)
 
+        # Load Background
         background = aj.get_sprite_frame(SPRITE_BACKGROUND, 0)
         raster = aj.render_at(raster, 0, self.consts.HEIGHT - self.consts.BACKGROUND_SIZE[1], background)
 
+        # Load Player
         frame_player = aj.get_sprite_frame(self.SPRITE_PLAYER, 0)
         raster = aj.render_at(raster, state.player_x - self.consts.PLAYER_SIZE[0], self.consts.PLAYER_Y, frame_player)
 
+        # Render bullet every even frame 
         frame_bullet = aj.get_sprite_frame(SPRITE_BULLET, 0)
         raster = jax.lax.cond(
             (state.step_counter % 2 == 0) & (state.bullet_active),
@@ -714,6 +754,7 @@ class SpaceInvadersRenderer(JAXGameRenderer):
             raster
         )
 
+        # Render Score - Convert score to 4 digits
         score = state.player_score
         digits = [
             (score // 1000) % 10,
@@ -729,6 +770,7 @@ class SpaceInvadersRenderer(JAXGameRenderer):
             ]
         ])
 
+        # Load Initial Score
         score_pos_x = [3, 6, 9, 12]
         score_pos_y = [9, 10, 10, 9]
         for i in range(4):
@@ -738,11 +780,13 @@ class SpaceInvadersRenderer(JAXGameRenderer):
         for i in range(4):
             raster = aj.render_at(raster, self.consts.NUMBER_YELLOW_OFFSET + score_pos_x[i] + i * self.consts.NUMBER_SIZE[0], score_pos_y[i], frame_zero_yellow)
 
+        # Load Defense Object
         frame_defense = aj.get_sprite_frame(SPRITE_DEFENSE, 0)
         defense_pos_x = [41, 73, 105]
         for x_pos in defense_pos_x:
             raster = aj.render_at(raster, x_pos, self.consts.HEIGHT - 53, frame_defense)
 
+        # Load Opponent Sprites
         flip = jax.numpy.floor(state.step_counter / self.consts.MOVEMENT_RATE) % 2 == 1
 
         opponent_sprites_a = [SPRITE_OPPONENT_1_A, SPRITE_OPPONENT_2_A, SPRITE_OPPONENT_3_A, SPRITE_OPPONENT_4_A, SPRITE_OPPONENT_5, SPRITE_OPPONENT_6_A]
@@ -754,6 +798,35 @@ class SpaceInvadersRenderer(JAXGameRenderer):
             lambda: jnp.stack([aj.get_sprite_frame(s, 0) for s in opponent_sprites_a])
         )
 
+        explosion_sprites = [SPRITE_EXPLOSION_1, SPRITE_EXPLOSION_1, SPRITE_EXPLOSION_1, SPRITE_EXPLOSION_1]
+        explosion_purple_sprites = [SPRITE_EXPLOSION_PURPLE_A, SPRITE_EXPLOSION_PURPLE_B]
+        explosion_player_sprites = [PLAYER_EXPLOSION_A, PLAYER_EXPLOSION_B]
+
+        explosion_sprites = jnp.array([aj.get_sprite_frame(s, 0) for s in explosion_sprites])
+
+        def render_explosion(idx, raster, x, y):
+            frames = state.exploded_frames
+            frame = frames[idx] + 1
+
+            # Update Animation Frame
+            new_frame = jax.lax.cond(
+                frame < jnp.sum(self.consts.EXPLOSION_FRAMES),
+                lambda f: f,
+                lambda _: -1,
+                frame
+            )
+
+            frames = frames.at[idx].set(new_frame)
+            state._replace(exploded_frames=frames)
+
+            sprite_id = jnp.argmax(frame < self.consts.EXPLOSION_FRAMES)
+            sprite = explosion_sprites[sprite_id]
+
+            aj.render_at(raster, x, y, sprite, False)
+            jax.debug.print("Drawing Explosion at x: {x}, y: {y} with Frame: {frame} and Sprite: {sprite} for IDX: {idx}", x=x, y=y, frame=frames[idx], sprite=sprite_id, idx=idx)
+
+            return raster
+
 
         def render_enemies(i, raster):
             base_x = state.opponent_current_x + i * (self.consts.OFFSET_OPPONENT[0] + self.consts.OPPONENT_SIZE[0])
@@ -764,10 +837,17 @@ class SpaceInvadersRenderer(JAXGameRenderer):
                 sprite = sprites_to_render[j]
                 
                 is_alive = jnp.logical_not(state.destroyed[idx])
+
+                raster = jax.lax.cond(
+                    jnp.logical_and(state.exploded[idx], state.exploded_frames[idx] > -1),
+                    lambda r: render_explosion(idx, r, base_x, y_pos),
+                    lambda r: r,
+                    raster
+                )
                 
                 # Special flip logic for opponent 5
                 do_flip = jnp.where(j == 4, flip, False)
-                
+
                 return jax.lax.cond(
                     is_alive,
                     lambda r: aj.render_at(r, base_x, y_pos, sprite, do_flip),
@@ -777,7 +857,7 @@ class SpaceInvadersRenderer(JAXGameRenderer):
             
             raster = jax.lax.fori_loop(0, self.consts.ENEMY_ROWS, render_row, raster)
             return raster
-            
+        
         raster = jax.lax.fori_loop(0, self.consts.ENEMY_COLS, render_enemies, raster)
 
         frame_enemy_bullet = aj.get_sprite_frame(SPRITE_BULLET, 0)
