@@ -135,15 +135,6 @@ class JaxTetris(JaxEnvironment[TetrisState, TetrisObservation, TetrisInfo, Tetri
         self.renderer = TetrisRenderer(self.consts)
         if reward_funcs is not None:
             reward_funcs = tuple(reward_funcs)
-        self.action_set = [
-            Action.NOOP,
-            Action.FIRE,
-            Action.RIGHT,
-            Action.LEFT,
-            Action.DOWN
-        ]
-        # self.obs_size = 3 * 4 + 1 + 1 !!!!
-        self.obs_size = self.consts.BOARD_HEIGHT * self.consts.BOARD_WIDTH + 5
 
     # ----- Helpers -----
     @partial(jax.jit, static_argnums=0)
@@ -418,7 +409,9 @@ class JaxTetris(JaxEnvironment[TetrisState, TetrisObservation, TetrisInfo, Tetri
 
         obs = self._get_observation(state)
         reward = self._get_reward(previous_state, state)
-        return obs, state, reward, jnp.bool_(False), info
+        done = self._get_done(state)
+        info = self._get_info(state)
+        return obs, state, reward, done, info
 
     # ----- Helpers used inside step -----
     @partial(jax.jit, static_argnums=(0,))
