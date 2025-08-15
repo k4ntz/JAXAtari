@@ -11,6 +11,42 @@ from jaxatari.renderers import JAXGameRenderer
 import jaxatari.rendering.jax_rendering_utils as jr
 
 
+# Wizard of Wor: Spawn Behavior by Level
+# Core Spawn Rules
+#
+#     Each dungeon starts with 6 Burwors on the field, and there are never more than 6 enemies on-screen at once.
+#
+# Killing Burwors progressively “promotes” them to Garwors depending on the dungeon number: in dungeon 1 only the last Burwor becomes a Garwor; in dungeon 2 the last two; continuing until dungeon 6+, where every Burwor you kill is replaced by a Garwor.
+#
+# On every dungeon, each Garwor killed immediately spawns a Thorwor; killing a Thorwor does not spawn further replacements until the last one is destroyed.
+#
+# From dungeon 2 onward, once the last Thorwor is killed, a Worluk appears and tries to escape through a side exit; the level ends when it escapes or is shot, and shooting it makes the next dungeon a Double Score Dungeon.
+# Level-by-Level Promotion Pattern
+#
+#     Dungeon 1: 6 Burwors begin on the map; when only 1 Burwor remains, killing it spawns 1 Garwor; each Garwor killed spawns 1 Thorwor; no Worluk after Thorwors on dungeon 1.
+#
+# Dungeon 2: The last 2 Burwors killed are replaced by Garwors; each Garwor killed spawns a Thorwor; after the last Thorwor, the Worluk appears.
+#
+# Dungeon 3: The last 3 Burwors killed are replaced by Garwors; each Garwor killed spawns a Thorwor; Worluk appears after the last Thorwor.
+#
+# Dungeon 4: The last 4 Burwors killed are replaced by Garwors; each Garwor killed spawns a Thorwor; Worluk appears after the last Thorwor.
+#
+# Dungeon 5: The last 5 Burwors killed are replaced by Garwors; each Garwor killed spawns a Thorwor; Worluk appears after the last Thorwor.
+#
+# Dungeon 6 and beyond: All 6 Burwors, when killed, are replaced by Garwors; each Garwor killed spawns a Thorwor; Worluk appears after the last Thorwor.
+# Special Spawns and Set Dungeons
+#
+#     The Wizard of Wor may appear starting from dungeon 2, with a low random chance; he teleports in after or around the Worluk phase and vanishes after killing a player or being shot.
+#
+# “The Arena” is always the 4th dungeon, and “The Pit” occurs at dungeons 13, 19, 25, 31, and then every 6th dungeon thereafter; The Pit has no inner walls and follows the same enemy promotion/spawn rules but on an open map.
+# Practical Flow Within a Dungeon
+#
+#     Start: 6 Burwors active. Depending on dungeon number, some of the final Burwors killed will be replaced by Garwors immediately upon death.
+#
+# Mid-phase: Each Garwor killed spawns a Thorwor in place; this continues until all Garwors have turned into Thorwors and are then cleared.
+#
+# End-phase: From dungeon 2 onward, the Worluk spawns after the last Thorwor is destroyed and races for a side exit; shooting it ends the level and grants Double Score on the next dungeon; letting it escape also ends the level without the bonus.
+
 class EntityPosition(NamedTuple):
     x: int
     y: int
@@ -61,7 +97,7 @@ class WizardOfWorConstants(NamedTuple):
     POINTS_WORLUK: int = 1000
     POINTS_WIZARD: int = 2500
 
-    MAX_ENEMIES: int = 10  # Maximum number of enemies on the game board
+    MAX_ENEMIES: int = 6  # Maximum number of enemies on the game board
     MAX_LEVEL: int = 1
     MAX_LIVES: int = 3
 
@@ -81,14 +117,6 @@ class WizardOfWorConstants(NamedTuple):
 
     TELEPORTER_LEFT_POSITION: Tuple[int, int] = (-2, 20)  # Position des linken Teleporters
     TELEPORTER_RIGHT_POSITION: Tuple[int, int] = (108, 20)  # Position des rechten Teleporters
-
-    LEVEL_1_ENEMY_POSITIONS = jnp.concatenate([
-        jnp.array([[0, 0, RIGHT, ENEMY_BURWOR, 1]], dtype=jnp.int32),
-        jnp.array([[45, 20, LEFT, ENEMY_BURWOR, 0]], dtype=jnp.int32),
-        jnp.array([[10, 43, UP, ENEMY_BURWOR, 1]], dtype=jnp.int32),
-        jnp.array([[60, 32, DOWN, ENEMY_BURWOR, 0]], dtype=jnp.int32),
-        jnp.tile(jnp.array([[0, 0, 0, 0, 0]], dtype=jnp.int32), (MAX_ENEMIES - 4, 1))
-    ], axis=0)
 
     NO_ENEMY_POSITIONS = jnp.zeros((MAX_ENEMIES, 5), dtype=jnp.int32)  # No enemies
 
@@ -151,19 +179,6 @@ class WizardOfWorConstants(NamedTuple):
             operand=None
         )  # Hier können weitere Gameboards hinzugefügt werden
 
-    @staticmethod
-    def get_enemy_positions_for_level(level: int) -> jnp.ndarray:
-        """Placeholder: Returns the enemy positions for the specified level.
-        :param level: The level for which the enemy positions should be retrieved.
-        :return: An array with the enemy positions.
-        """
-        return jax.lax.cond(
-            level == 1,
-            lambda _: WizardOfWorConstants.LEVEL_1_ENEMY_POSITIONS,
-            lambda _: WizardOfWorConstants.NO_ENEMY_POSITIONS,
-            operand=None
-        )
-
 
 class WizardOfWorObservation(NamedTuple):
     player: EntityPosition
@@ -189,7 +204,7 @@ class WizardOfWorState(NamedTuple):
     doubled: bool  # Flag to indicate if the player has the double score power-up. This is only relevant for WORLUK and WIZARD enemies.
     frame_counter: int  # Counter for animations. This may not be needed since animation are tied to board position.
     rng_key: chex.PRNGKey  # Random key for JAX operations
-    level: int  # The current level of the game, used for level progression
+    level: int
     game_over: bool
     teleporter: bool  # Flag to indicate if the teleporter is active.
 
@@ -256,7 +271,7 @@ class JaxWizardOfWor(JaxEnvironment[WizardOfWorState, WizardOfWorObservation, Wi
                 height=self.consts.PLAYER_SIZE[1],
                 direction=self.consts.PLAYER_SPAWN_POSITION[2]
             ),
-            player_death_animation=0,
+            player_death_animation=self.consts.DEATH_ANIMATION_STEPS[1]+1,
             enemies=jnp.zeros(
                 (self.consts.MAX_ENEMIES, 5),  # [x, y, direction, type]
                 dtype=jnp.int32
@@ -277,10 +292,10 @@ class JaxWizardOfWor(JaxEnvironment[WizardOfWorState, WizardOfWorObservation, Wi
                 direction=self.consts.UP
             ),
             score=jnp.array(0),
-            lives=4,
+            lives=3,
             doubled=False,
             frame_counter=0,
-            rng_key=jax.random.PRNGKey(0),  # Initialisiere den RNG
+            rng_key=jax.random.PRNGKey(1),  # Initialisiere den RNG
             level=0,
             game_over=False,
             teleporter=False
@@ -299,11 +314,11 @@ class JaxWizardOfWor(JaxEnvironment[WizardOfWorState, WizardOfWorObservation, Wi
             teleporter=(state.frame_counter < 180)
         )
         new_state = self._step_level_change(state=new_state)
-        new_state = self._step_respawn(state=new_state, action=action)
         new_state = self._step_player_movement(state=new_state, action=action)
         new_state = self._step_bullet_movement(state=new_state)
         new_state = self._step_enemy_movement(state=new_state)
         new_state = self._step_collision_detection(state=new_state)
+        new_state = self._step_enemy_level_progression(state=new_state)
         done = self._get_done(state=new_state)
         env_reward = self._get_reward(previous_state=previous_state, state=new_state)
         all_rewards = self._get_all_reward(previous_state=previous_state, state=new_state)
@@ -385,30 +400,79 @@ class JaxWizardOfWor(JaxEnvironment[WizardOfWorState, WizardOfWorObservation, Wi
         )
 
     @partial(jax.jit, static_argnums=(0,))
-    def _step_level_change(self, state):
-        # Wenn alle Gegner besiegt sind, Level erhöhen und Gegner respawnen. Falls das nächste Level größer als MAX_LEVEL ist, Spiel beenden.
+    def _is_enemy_dead(self, enemy) -> bool:
+        x, y, direction, type, death_animation = enemy
+        return (death_animation > self.consts.DEATH_ANIMATION_STEPS[1]) | (type == self.consts.ENEMY_NONE)
+
+    @partial(jax.jit, static_argnums=(0,))
+    def _get_gameboard_for_level(self, level: int) -> int:
         return jax.lax.cond(
-            jnp.all(state.enemies[:, 3] == self.consts.ENEMY_NONE),
-            lambda _: jax.lax.cond(
-                (state.level + 1) > self.consts.MAX_LEVEL,
-                lambda _: update_state(
-                    state=state,
-                    game_over=True
-                ),
-                lambda _: update_state(
-                    state=state,
-                    enemies=self.consts.get_enemy_positions_for_level(level=state.level + 1),
-                    level=state.level + 1,
-                ),
-                operand=None
-            ),
-            lambda _: state,
-            operand=None
+            level == 1,
+            lambda: 1,
+            lambda: 1
         )
 
     @partial(jax.jit, static_argnums=(0,))
-    def _step_respawn(self, state, action):
-        return state
+    def _get_start_enemies(self, rng_key) -> chex.Array:
+        # This is always MAX_ENEMIES BURWOR on random tiles
+        # return an array of 6 burwors at random positions.
+        # x can be i * (TILE_SIZE[0] + WALL_THICKNESS)
+        # y can be j * (TILE_SIZE[1] + WALL_THICKNESS)
+        # so generate the enemies with x from 0 to 10 and y from 0 to 5 and then after multiply it.
+        # this ensures the random generater doesnt spawn them between tiles
+        # direction is randomly chosen from UP, DOWN, LEFT, RIGHT
+        def _generate_single_enemy(rng_key) -> chex.Array:
+            x = jax.random.randint(rng_key, shape=(), minval=0, maxval=11) * (
+                        self.consts.TILE_SIZE[0] + self.consts.WALL_THICKNESS)
+            y = jax.random.randint(rng_key, shape=(), minval=0, maxval=6) * (
+                        self.consts.TILE_SIZE[1] + self.consts.WALL_THICKNESS)
+            direction = jax.random.choice(rng_key, jnp.array(
+                [self.consts.UP, self.consts.DOWN, self.consts.LEFT, self.consts.RIGHT]))
+            return jnp.array([x, y, direction, self.consts.ENEMY_BURWOR, 0])
+
+        return jax.vmap(_generate_single_enemy)(jax.random.split(rng_key, self.consts.MAX_ENEMIES))
+
+    @partial(jax.jit, static_argnums=(0,))
+    def _step_level_change(self, state):
+        # We only do level 1 for this MVP
+        # if no enemies are left, we increase the level
+        # dont assume that this is  if state.enemies == self.consts.NO_ENEMY_POSITIONS.
+        # go through the enemies and check if they are all dead
+        all_enemies_dead = jnp.all(jax.vmap(self._is_enemy_dead)(state.enemies))
+        new_rng_key, rng_key = jax.random.split(state.rng_key)
+        state = update_state(state=state, rng_key=new_rng_key)
+        return jax.lax.cond(
+            all_enemies_dead,
+            lambda: update_state(
+                state=state,
+                gameboard=self._get_gameboard_for_level(
+                    level=state.level + 1
+                ),
+                level=state.level + 1,
+                player=EntityPosition(
+                    x=-100,
+                    y=-100,
+                    width=self.consts.PLAYER_SIZE[0],
+                    height=self.consts.PLAYER_SIZE[1],
+                    direction=self.consts.NONE
+                ),
+                bullet=EntityPosition(
+                    x=-100,
+                    y=-100,
+                    width=self.consts.BULLET_SIZE[0],
+                    height=self.consts.BULLET_SIZE[1],
+                    direction=self.consts.NONE
+                ),
+                enemy_bullet=EntityPosition(
+                    x=-100,
+                    y=-100,
+                    width=self.consts.BULLET_SIZE[0],
+                    height=self.consts.BULLET_SIZE[1],
+                    direction=self.consts.NONE
+                ),
+                lives=state.lives + 1,
+                enemies=self._get_start_enemies(rng_key)),
+            lambda: state)
 
     @partial(jax.jit, static_argnums=(0,))
     def _step_player_movement(self, state, action):
@@ -416,7 +480,29 @@ class JaxWizardOfWor(JaxEnvironment[WizardOfWorState, WizardOfWorObservation, Wi
         Updates the player position based on the action taken.
         Handles movement only if player_death_animation == 0.
         If player_death_animation > 0, increments it up to 21.
+        If player.direction == NONE and a non-NONE action is given, spawns the player at SPAWN_POSITION.
         """
+
+        def _is_spawn_action(action):
+            # Prüft, ob die Aktion eine echte Bewegung oder Schuss ist (kein NOOP)
+            return ~jnp.equal(action, self.consts.NONE)
+
+
+
+        def _spawn_player_at_start():
+            spawn_pos = self.consts.PLAYER_SPAWN_POSITION
+            return update_state(
+                state=state,
+                player=EntityPosition(
+                    x=spawn_pos[0],
+                    y=spawn_pos[1],
+                    width=self.consts.PLAYER_SIZE[0],
+                    height=self.consts.PLAYER_SIZE[1],
+                    direction=spawn_pos[2]
+                ),
+                lives=state.lives - 1,  # Reduce lives on respawn
+                player_death_animation=0,
+            )
 
         def handle_alive():
             def _get_new_position(player: EntityPosition, action: int) -> EntityPosition:
@@ -578,7 +664,6 @@ class JaxWizardOfWor(JaxEnvironment[WizardOfWorState, WizardOfWorObservation, Wi
                 lambda: state.bullet
             )
 
-
             return update_state(
                 state=state,
                 player=checked_new_position,
@@ -589,18 +674,67 @@ class JaxWizardOfWor(JaxEnvironment[WizardOfWorState, WizardOfWorObservation, Wi
             new_animation = jnp.minimum(state.player_death_animation + 1, self.consts.DEATH_ANIMATION_STEPS[1] + 1)
             return update_state(
                 state=state,
-                player_death_animation=new_animation
+                player_death_animation=new_animation,
+                player=EntityPosition(
+                    x=state.player.x,
+                    y=state.player.y,
+                    width=state.player.width,
+                    height=state.player.height,
+                    direction=self.consts.NONE
+                ),
+                bullet=EntityPosition(
+                    x=-100,
+                    y=-100,
+                    width=self.consts.BULLET_SIZE[0],
+                    height=self.consts.BULLET_SIZE[1],
+                    direction=self.consts.NONE
+                )
+            )
+
+        def handle_game_over():
+            return update_state(
+                state=state,
+                player_death_animation= self.consts.DEATH_ANIMATION_STEPS[1] + 1,
+                player=EntityPosition(
+                    x=-100,
+                    y=-100,
+                    width=self.consts.PLAYER_SIZE[0],
+                    height=self.consts.PLAYER_SIZE[1],
+                    direction=self.consts.NONE
+                ),
+                bullet=EntityPosition(
+                    x=-100,
+                    y=-100,
+                    width=self.consts.BULLET_SIZE[0],
+                    height=self.consts.BULLET_SIZE[1],
+                    direction=self.consts.NONE
+                ),
+                game_over=True
+            )
+
+        def handle_spawn():
+            return jax.lax.cond(
+                (state.lives - 1) <= 0,
+                lambda: handle_game_over(),
+                lambda: jax.lax.cond(
+                    _is_spawn_action(action),
+                    lambda: _spawn_player_at_start(),
+                    lambda: state
+                )
             )
 
         return jax.lax.cond(
-            state.player_death_animation == 0,
+            state.player_death_animation > self.consts.DEATH_ANIMATION_STEPS[1],
+            lambda: handle_spawn(),
             lambda: jax.lax.cond(
-                state.frame_counter % 4 == 0,  # Update player position every 4 frames
-                lambda _: handle_alive(),
-                lambda _: state,  # No movement if not the right frame
-                operand=None
-            ),
-            lambda: handle_death()
+                state.player_death_animation > 0,
+                lambda: handle_death(),
+                lambda: jax.lax.cond(
+                    (state.frame_counter % 4 == 0),
+                    lambda: handle_alive(),
+                    lambda: state,  # No movement if not the right frame
+                )
+            )
         )
 
     @partial(jax.jit, static_argnums=(0,))
@@ -751,16 +885,16 @@ class JaxWizardOfWor(JaxEnvironment[WizardOfWorState, WizardOfWorObservation, Wi
             )
 
             return jax.lax.cond(
-                    bullet.direction == self.consts.NONE,
-                    lambda _: bullet,
-                    lambda _: jax.lax.cond(
-                        self._positions_equal(pos1=bullet, pos2=new_bullet),
-                        lambda _: reset_bullet,  # Reset bullet if it collided with a wall or is out of bounds
-                        lambda _: new_bullet,  # Otherwise return the new position
-                        operand=None
-                    ),
+                bullet.direction == self.consts.NONE,
+                lambda _: bullet,
+                lambda _: jax.lax.cond(
+                    self._positions_equal(pos1=bullet, pos2=new_bullet),
+                    lambda _: reset_bullet,  # Reset bullet if it collided with a wall or is out of bounds
+                    lambda _: new_bullet,  # Otherwise return the new position
                     operand=None
-                )
+                ),
+                operand=None
+            )
 
         new_bullet = move_bullet(state.bullet)
         new_enemy_bullet = move_bullet(state.enemy_bullet)
@@ -778,27 +912,31 @@ class JaxWizardOfWor(JaxEnvironment[WizardOfWorState, WizardOfWorObservation, Wi
     def _step_enemy_movement(self, state):
         # map over all enemies and update their positions based on their direction
 
+        def move_alive_enemy(enemy: chex.Array) -> chex.Array:
+            x, y, direction, enemy_type, death_animation = enemy
+
+            is_burwor = enemy_type == self.consts.ENEMY_BURWOR
+            is_garwor = enemy_type == self.consts.ENEMY_GARWOR
+            is_thorwor = enemy_type == self.consts.ENEMY_THORWOR
+            is_worluk = enemy_type == self.consts.ENEMY_WORLUK
+            is_wizard = enemy_type == self.consts.ENEMY_WIZARD
+
+            return enemy
+
         def move_enemy(enemy: chex.Array) -> chex.Array:
             x, y, direction, enemy_type, death_animation = enemy
 
             is_none = enemy_type == self.consts.ENEMY_NONE
             is_dying = death_animation > 0
-            is_dead = death_animation >= self.consts.DEATH_ANIMATION_STEPS[1]
             dying_enemy = jnp.array([x, y, direction, enemy_type, death_animation + 1])
-            none_enemy = jnp.array([0, 0, 0, self.consts.ENEMY_NONE, 0])
 
             result = jax.lax.cond(
                 is_none,
                 lambda _: enemy,
                 lambda _: jax.lax.cond(
                     is_dying,
-                    lambda _: jax.lax.cond(
-                        is_dead,
-                        lambda _: none_enemy,
-                        lambda _: dying_enemy,
-                        operand=None
-                    ),
-                    lambda _: enemy,  # Hier später die Bewegungslogik ergänzen
+                    lambda _: dying_enemy,
+                    lambda _: move_alive_enemy(enemy),
                     operand=None
                 ),
                 operand=None
@@ -811,9 +949,262 @@ class JaxWizardOfWor(JaxEnvironment[WizardOfWorState, WizardOfWorObservation, Wi
             enemies=new_enemies
         )
 
+    # In this function we handle the enemy level progression and the "cleanup" of dead enemies.
+    # when we "clean up" an enemy, we check if:
+    # if it is one of the n last burwors on the board. n is the level were in up to 6.
+    #   - in this case we spawn a garwor on the board.
+    # if it is a garwor, we spawn a thorwor.
+    # if it is the last thorwor (so no other burwor, garwor or thorwor is on the board), we spawn a worluk.
+    # if it is a worluk, we maybe (50% chance) spawn a wizard.
+    # if none of these conditions are met, we just remove the enemy.
+    # A enemy is considered dead if its death_animation > DEATH_ANIMATION_STEPS[1] and its type is not NONE.
+    # A enemy is always spawned on a tile. so that means x between 0 and 10 and y between 0 and 5; and then multiplied by (TILE_SIZE[0] + WALL_THICKNESS) or (TILE_SIZE[1] + WALL_THICKNESS).
+
+    def _step_enemy_level_progression(self, state):
+        """
+        Führt die Feind-Progression und das Aufräumen toter Feinde durch.
+        Jede Regel ist als innere Funktion implementiert.
+        """
+        consts = self.consts
+        enemies = state.enemies
+        level = jnp.minimum(state.level + 1, 6)  # Level für Burwor->Garwor-Promotion, max 6
+
+        def get_random_tile_position(rng_key):
+            # Generiert eine zufällige Position auf einem Tile
+            x_idx = jax.random.randint(rng_key, shape=(), minval=0, maxval=11)
+            y_idx = jax.random.randint(rng_key, shape=(), minval=0, maxval=6)
+            x = x_idx * (consts.TILE_SIZE[0] + consts.WALL_THICKNESS)
+            y = y_idx * (consts.TILE_SIZE[1] + consts.WALL_THICKNESS)
+            direction = jax.random.choice(rng_key, jnp.array([consts.UP, consts.DOWN, consts.LEFT, consts.RIGHT]))
+            return jnp.array([x, y, direction, consts.ENEMY_NONE, 0])
+
+        def is_dead(enemy):
+            return (enemy[4] > consts.DEATH_ANIMATION_STEPS[1]) & (enemy[3] != consts.ENEMY_NONE)
+
+        def promote_burwor_to_garwor(enemies, idx):
+            # Letzte n Burwors werden zu Garwors
+            # Wenn weniger als level Burwors übrig sind gebe true zurück
+            alive_burwors = jnp.sum(enemies[:, 3] == consts.ENEMY_BURWOR)
+            return alive_burwors <= level
+
+        def spawn_garwor(enemy, rng_key):
+            # Spawnt einen Garwor an einer zufälligen Position
+            pos = get_random_tile_position(rng_key)
+            return jnp.array([pos[0], pos[1], enemy[2], consts.ENEMY_GARWOR, 0])
+
+        def spawn_thorwor(enemy, rng_key):
+            # Spawnt einen Thorwor an einer zufälligen Position
+            pos = get_random_tile_position(rng_key)
+            return jnp.array([pos[0], pos[1], enemy[2], consts.ENEMY_THORWOR, 0])
+
+        def spawn_worluk(enemies, rng_key):
+            # Spawnt einen Worluk, wenn keine Burwors, Garwors oder Thorwors mehr leben
+            alive_types = jnp.array([consts.ENEMY_BURWOR, consts.ENEMY_GARWOR, consts.ENEMY_THORWOR])
+            any_alive = jnp.any(jnp.isin(enemies[:, 3], alive_types))
+            if not any_alive:
+                pos = get_random_tile_position(rng_key)
+                return jnp.array([pos[0], pos[1], consts.RIGHT, consts.ENEMY_WORLUK, 0])
+            else:
+                return None
+
+        def spawn_wizard(rng_key):
+            # 50% Chance, einen Wizard zu spawnen
+            return jax.random.bernoulli(rng_key, 0.5)
+
+        def cleanup_enemy(enemy, idx, rng_key):
+            # Hauptlogik für das Aufräumen und Progression
+            def handle_dead():
+                return jax.lax.cond(
+                    (enemy[3] == consts.ENEMY_BURWOR) & promote_burwor_to_garwor(enemies, idx),
+                    lambda: spawn_garwor(enemy, rng_key),
+                    lambda: jax.lax.cond(
+                        enemy[3] == consts.ENEMY_GARWOR,
+                        lambda: spawn_thorwor(enemy, rng_key),
+                        lambda: jax.lax.cond(
+                            (enemy[3] == consts.ENEMY_THORWOR) & (~jnp.any(jnp.isin(enemies[:, 3], jnp.array(
+                                [consts.ENEMY_BURWOR, consts.ENEMY_GARWOR, consts.ENEMY_THORWOR])))),
+                            lambda: get_random_tile_position(rng_key).at[2].set(consts.ENEMY_WORLUK),
+                            lambda: jax.lax.cond(
+                                (enemy[3] == consts.ENEMY_WORLUK) & spawn_wizard(rng_key),
+                                lambda: get_random_tile_position(rng_key).at[2].set(consts.ENEMY_WIZARD),
+                                lambda: jnp.array([0, 0, 0, consts.ENEMY_NONE, 0])
+                            )
+                        )
+                    )
+                )
+
+            return jax.lax.cond(
+                is_dead(enemy),
+                handle_dead,
+                lambda: enemy
+            )
+
+        rng_keys = jax.random.split(state.rng_key, consts.MAX_ENEMIES)
+        new_enemies = jax.vmap(cleanup_enemy, in_axes=(0, 0, 0))(enemies, jnp.arange(consts.MAX_ENEMIES), rng_keys)
+        return update_state(state=state, enemies=new_enemies)
+
     @partial(jax.jit, static_argnums=(0,))
     def _step_collision_detection(self, state):
-        return state
+        # We have 3 types of collisions:
+        # 1. Player vs Enemy
+        #    - If a player collides with an enemy, the player dies (death_animation is set to 1)
+        # 2. Player vs Enemy Bullet
+        #    - If a player collides with an enemy bullet, the player dies (death_animation is set to 1) and
+        #      the bullet is removed (direction is set to NONE)
+        # 3. Enemy vs Player Bullet
+        #    - If an enemy collides with a player bullet, the enemy dies (death_animation is set to 1)
+        #      and the bullet is removed (direction is set to NONE)
+
+        def check_player_enemy_collision(player: EntityPosition, enemy: chex.Array) -> bool:
+            x, y, direction, enemy_type, death_animation = enemy
+            return jax.lax.cond(
+                (enemy_type == self.consts.ENEMY_NONE) | (death_animation > 0) | (state.player_death_animation != 0),
+                lambda: False,
+                lambda: self._check_collision(
+                    player,
+                    EntityPosition(
+                        x=x,
+                        y=y,
+                        width=self.consts.ENEMY_SIZE[0],
+                        height=self.consts.ENEMY_SIZE[1],
+                        direction=direction
+                    )
+                )
+            )
+
+        # Check if player collides with any enemy
+        player_enemy_collisions = jax.vmap(check_player_enemy_collision, in_axes=(None, 0))(state.player, state.enemies)
+        player_enemy_collision = jnp.any(player_enemy_collisions)
+
+        def handle_player_enemy_collision(state: WizardOfWorState) -> WizardOfWorState:
+            # If player collides with an enemy, set death_animation to 1
+            new_player = EntityPosition(
+                x=state.player.x,
+                y=state.player.y,
+                width=state.player.width,
+                height=state.player.height,
+                direction=state.player.direction
+            )
+            return update_state(
+                state=state,
+                player=new_player,
+                player_death_animation=1
+            )
+
+        # Handle player vs enemy collision
+        new_state = jax.lax.cond(
+            player_enemy_collision,
+            lambda: handle_player_enemy_collision(state),
+            lambda: state)
+
+        def check_player_bullet_collision(player: EntityPosition, bullet: EntityPosition) -> bool:
+            return jax.lax.cond(
+                bullet.direction == self.consts.NONE,
+                lambda: False,
+                lambda: self._check_collision(
+                    player,
+                    EntityPosition(
+                        x=bullet.x,
+                        y=bullet.y,
+                        width=bullet.width,
+                        height=bullet.height,
+                        direction=bullet.direction
+                    )
+                )
+            )
+
+        # Check if player collides with enemy bullet
+        player_bullet_collision = check_player_bullet_collision(
+            player=new_state.player,
+            bullet=new_state.enemy_bullet
+        )
+
+        def handle_player_bullet_collision(state: WizardOfWorState) -> WizardOfWorState:
+            # If player collides with enemy bullet, set death_animation to 1 and reset bullet
+            new_player = EntityPosition(
+                x=state.player.x,
+                y=state.player.y,
+                width=state.player.width,
+                height=state.player.height,
+                direction=state.player.direction
+            )
+            new_bullet = EntityPosition(
+                x=-1,
+                y=-1,
+                width=state.enemy_bullet.width,
+                height=state.enemy_bullet.height,
+                direction=self.consts.NONE
+            )
+            return update_state(
+                state=state,
+                player=new_player,
+                player_death_animation=1,
+                enemy_bullet=new_bullet
+            )
+
+        # Handle player vs enemy bullet collision
+        new_state = jax.lax.cond(
+            player_bullet_collision,
+            lambda: handle_player_bullet_collision(new_state),
+            lambda: new_state
+        )
+
+        # For the enemy with player bullet collision we cant just check for any collision. we have to go through all enemies and check if this enemy collides with the player bullet and handle it in loop.
+        def check_and_handle_enemy_bullet_collision(enemy: chex.Array, bullet: EntityPosition) -> chex.Array:
+            x, y, direction, enemy_type, death_animation = enemy
+
+            def handle_collision():
+                return jnp.array([x, y, direction, enemy_type, 1])
+
+            def no_collision():
+                return enemy
+
+            def check_collision_inner():
+                return jax.lax.cond(
+                    self._check_collision(
+                        EntityPosition(
+                            x=x,
+                            y=y,
+                            width=self.consts.ENEMY_SIZE[0],
+                            height=self.consts.ENEMY_SIZE[1],
+                            direction=direction
+                        ),
+                        bullet
+                    ),
+                    handle_collision,
+                    no_collision
+                )
+
+            return jax.lax.cond(
+                (enemy_type == self.consts.ENEMY_NONE) | (death_animation > self.consts.DEATH_ANIMATION_STEPS[1]),
+                no_collision,
+                check_collision_inner
+            )
+
+        # Check if any enemy collides with player bullet
+        new_enemies = jax.vmap(check_and_handle_enemy_bullet_collision, in_axes=(0, None))(new_state.enemies,
+                                                                                           new_state.bullet)
+        # Reset the bullet if it was hit
+        new_bullet = jax.lax.cond(
+            jnp.any(new_enemies[:, 4] == 1),  # If any enemy was hit
+            lambda: EntityPosition(
+                x=-1,
+                y=-1,
+                width=new_state.bullet.width,
+                height=new_state.bullet.height,
+                direction=self.consts.NONE
+            ),
+            lambda: new_state.bullet
+        )
+
+        # Update the state with new enemies and bullet
+        new_state = update_state(
+            state=new_state,
+            enemies=new_enemies,
+            bullet=new_bullet
+        )
+
+        return new_state
 
 
 class WizardOfWorRenderer(JAXGameRenderer):
@@ -1278,11 +1669,16 @@ class WizardOfWorRenderer(JAXGameRenderer):
                         y=self.consts.GAME_AREA_OFFSET[1] + entity.y,
                         flip_vertical=True
                     ),
-                    lambda _: jr.render_at(
-                        raster=raster,
-                        sprite_frame=sprite_frame,
-                        x=self.consts.GAME_AREA_OFFSET[0] + entity.x,
-                        y=self.consts.GAME_AREA_OFFSET[1] + entity.y
+                    lambda _: jax.lax.cond(
+                        direction == self.consts.NONE,
+                        lambda _: raster,  # Nichts rendern, wenn Richtung NONE
+                        lambda _: jr.render_at(
+                            raster=raster,
+                            sprite_frame=sprite_frame,
+                            x=self.consts.GAME_AREA_OFFSET[0] + entity.x,
+                            y=self.consts.GAME_AREA_OFFSET[1] + entity.y
+                        ),
+                        operand=None
                     ),
                     operand=None
                 ),
