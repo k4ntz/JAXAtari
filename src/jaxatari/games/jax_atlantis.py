@@ -35,8 +35,8 @@ class GameConfig:
     cannon_x: jnp.ndarray = field(
         default_factory=lambda: jnp.array([0, 72, 152], dtype=jnp.int32)
     )
-    max_bullets: int = 2
-    max_enemies: int = 20  # max 1 per line
+    max_bullets: int = 2 # Max 2 bullets simultaneously at screen
+    max_enemies: int = 20  # max 1 enemy per lane
     fire_cooldown_frames: int = 9  # delay between shots
     # y-coordinates of the different enemy paths/heights
     enemy_paths: jnp.ndarray = field(
@@ -89,7 +89,6 @@ class EntityPosition(NamedTuple):
     height: jnp.ndarray
     alive: jnp.ndarray
 
-
 class AtlantisState(NamedTuple):
     score: chex.Array  # tracks the current score
     reward: chex.Array
@@ -137,10 +136,8 @@ class AtlantisInfo(NamedTuple):
     command_post_alive: jnp.ndarray # bool scalar
     installations_alive: jnp.ndarray # (6,) bool
 
-
 class AtlantisConstants(NamedTuple):
     pass
-
 
 class Renderer_AtraJaxis(JAXGameRenderer):
     sprites: Dict[str, Any]
@@ -366,6 +363,54 @@ class Renderer_AtraJaxis(JAXGameRenderer):
         return raster
 
 class JaxAtlantis(JaxEnvironment[AtlantisState, AtlantisObservation, AtlantisInfo, AtlantisConstants]):
+    """
+    JAX-accelerated implementation of the classic Atari Atlantis game.
+    
+    This class provides a complete, high-performance implementation of Atlantis
+    using JAX for GPU acceleration and JIT compilation. The game faithfully
+    recreates the original mechanics while adding modern optimizations.
+    
+    Game Features:
+    - Three-cannon defense system (left, center, right)
+    - Four-lane enemy movement with queue-like behavior
+    - Three enemy types with different speeds, sizes, and point values
+    - Plasma beam attacks from enemies in the fourth lane
+    - Installation revival system based on scoring (10000 per wave for one revival)
+    - Progressive wave system with increasing difficulty
+    - Authentic scoring system with bonus multipliers
+    
+    Technical Features:
+    - Fully JAX-compatible with JIT compilation support
+    - Vectorized collision detection and physics
+    - Immutable state management for functional programming
+    - Configurable parameters via GameConfig
+    - Multiple reward function support for RL training
+    - Frame skipping for training efficiency
+    
+    Scoring System (based on original Atari manual):
+    - Large Gorgon Vessel: 100 points (center), 200 points (side cannons)
+    - Gorgon Bandit Bomber: 1000 points (center), 2000 points (side cannons)
+    - Wave completion bonus: 500 points per surviving installation
+    - Installation revival: Every 10,000 points grants one revival credit
+    
+    Installation Revival Rules:
+    - Command Post has highest revival priority
+    - Credits carry over between waves if unused
+    - Revival occurs at the end of each wave
+    - Game ends when all installations destroyed and no credits remain
+    
+    Args:
+        frameskip (int): Number of frames to skip between actions (default: 1)
+        reward_funcs (list[callable]): Custom reward functions for RL training
+        config (GameConfig): Game configuration parameters
+        
+    Attributes:
+        config (GameConfig): Current game configuration
+        frameskip (int): Frame skipping factor
+        frame_stack_size (int): Number of frames to stack for observations
+        reward_funcs (tuple): Tuple of reward functions for multi-objective RL
+    """
+    
     def __init__(
             self,
             frameskip: int = 1,
@@ -373,10 +418,12 @@ class JaxAtlantis(JaxEnvironment[AtlantisState, AtlantisObservation, AtlantisInf
             config: GameConfig | None = None,
     ):
         super().__init__()
-        # if no config was provided, instantiate the default one
+        # Use provided config or create default configuration
         self.config = config or GameConfig()
         self.frameskip = frameskip
-        self.frame_stack_size = 4
+        self.frame_stack_size = 4  # Standard for Atari environments
+        
+        # Convert reward functions to tuple for JAX compatibility
         if reward_funcs is not None:
             reward_funcs = tuple(reward_funcs)
         self.reward_funcs = reward_funcs
@@ -395,23 +442,30 @@ class JaxAtlantis(JaxEnvironment[AtlantisState, AtlantisObservation, AtlantisInf
         empty_enemies = jnp.zeros((self.config.max_enemies, 6), dtype=jnp.int32)
         empty_bullets = jnp.zeros((self.config.max_bullets, 4), dtype=jnp.int32)
         empty_bullets_alive = jnp.zeros((self.config.max_bullets,), dtype=jnp.bool_)
-        empty_lanes = jnp.ones((4,), dtype=jnp.bool_)
-        start_installations = jnp.ones((6,), dtype=jnp.bool_)
+        empty_lanes = jnp.ones((4,), dtype=jnp.bool_)  # All lanes start free
+        start_installations = jnp.ones((6,), dtype=jnp.bool_)  # All installations start intact
 
-        # split the PRNGkey so we get one subkey for the spawn-timer and one to carry forward in state.rng
+        # Split PRNG key for spawn timer initialization and future use
         key, sub = jax.random.split(key)
 
-        # initial state
+        # Create initial game state with all systems reset
         new_state = AtlantisState(
+            # Scoring system
             score=jnp.array(0, dtype=jnp.int32),
             reward=jnp.array(0, dtype=jnp.int32),
             score_spent=jnp.array(0, dtype=jnp.int32),
-            wave=jnp.array(0, dtype=jnp.int32),  # start with wave-number 0
+            wave=jnp.array(0, dtype=jnp.int32),  # Start with wave 0
+            
+            # Entity arrays
             enemies=empty_enemies,
             bullets=empty_bullets,
             bullets_alive=empty_bullets_alive,
+            
+            # Cannon control
             fire_cooldown=jnp.array(0, dtype=jnp.int32),
             fire_button_prev=jnp.array(False, dtype=jnp.bool_),
+            
+            # Enemy spawning system with random initial timer
             enemy_spawn_timer=jax.random.randint(
                 sub,
                 (),
@@ -421,13 +475,18 @@ class JaxAtlantis(JaxEnvironment[AtlantisState, AtlantisObservation, AtlantisInf
             ),
             rng=key,
             lanes_free=empty_lanes,
-            command_post_alive=jnp.array(True, dtype=jnp.bool_),
             number_enemies_wave_remaining=jnp.array(self.config.wave_start_enemy_count, dtype=jnp.int32),
             wave_end_cooldown_remaining=jnp.array(0, dtype=jnp.int32),
-            installations= start_installations,
+            
+            # Defensive structures (all start intact)
+            command_post_alive=jnp.array(True, dtype=jnp.bool_),
+            installations=start_installations,
+            
+            # Plasma system (all enemies start with plasma capability)
             plasma_active=jnp.ones((self.config.max_enemies,), dtype=jnp.bool_),
         )
 
+        # Generate initial observation
         obs = self._get_observation(new_state)
         return obs, new_state
 
@@ -466,8 +525,6 @@ class JaxAtlantis(JaxEnvironment[AtlantisState, AtlantisObservation, AtlantisInf
             -1,
         )
         return fire_pressed, cannon_idx
-
-    # ..................................................................
 
     def _spawn_bullet(self, state, cannon_idx):
         """Insert newly spawned bullet in first free slot"""
@@ -884,25 +941,115 @@ class JaxAtlantis(JaxEnvironment[AtlantisState, AtlantisObservation, AtlantisInf
 
     @partial(jax.jit, static_argnums=(0,))
     def _update_wave(self, state: AtlantisState) -> AtlantisState:
+        """
+        Handle wave progression and installation revival system.
+        
+        This function manages:
+        1. Wave completion detection
+        2. Installation revival based on scoring (every 10,000 points)
+        3. Next wave initialization with increased enemy count
+        4. Bonus points for surviving installations (500 points each)
+        
+        Installation Revival Rules (from official Atari manual):
+        - For every 10,000 points scored, one destroyed installation is restored
+        - Command Post has rebuilding priority over other installations
+        - Credits are saved across waves if no buildings were destroyed
+        - Revival happens at the end of each wave
+        
+        Args:
+            state: Current game state
+            
+        Returns:
+            Updated game state with wave progression and potential revivals
+        """
         cfg = self.config
 
         def _new_wave(s: AtlantisState) -> AtlantisState:
+            """
+            Start a new wave with installation revival and bonus scoring.
+            """
             new_wave = s.wave + 1
-            # jax.debug.print(f"Started wave {new_wave}")
-            # compute how many enemies next wave should have
+            
+            # Calculate bonus points for surviving installations (500 points each)
+            surviving_installations = jnp.sum(s.installations.astype(jnp.int32))
+            command_post_bonus = jnp.where(s.command_post_alive, 500, 0)
+            wave_bonus = (surviving_installations * 500) + command_post_bonus
+            
+            # Calculate revival credits based on total score
+            # Every 10,000 points grants one revival credit
+            total_revival_credits = s.score // 10000
+            used_credits = s.score_spent // 10000
+            available_credits = total_revival_credits - used_credits
+            
+            # Determine how many installations need revival
+            destroyed_installations = ~s.installations
+            command_post_destroyed = ~s.command_post_alive
+            total_destroyed = jnp.sum(destroyed_installations.astype(jnp.int32)) + command_post_destroyed.astype(jnp.int32)
+            
+            # Calculate actual revivals (limited by credits and destroyed count)
+            revivals_to_perform = jnp.minimum(available_credits, total_destroyed)
+            
+            # Revive installations with priority system:
+            # 1. Command Post has highest priority
+            # 2. Then installations in order (0, 1, 2, 3, 4, 5)
+            
+            # Revive command post first if destroyed and credits available
+            revive_command_post = command_post_destroyed & (revivals_to_perform > 0)
+            new_command_post_alive = s.command_post_alive | revive_command_post
+            credits_after_command_post = jnp.where(
+                revive_command_post,
+                revivals_to_perform - 1,
+                revivals_to_perform
+            )
+            
+            # Revive installations in order of priority
+            new_installations = s.installations
+            remaining_credits = credits_after_command_post
+            
+            def _revive_installation(i, carry):
+                """Helper to revive installation i if credits available and installation destroyed."""
+                installations, credits = carry
+                
+                # Check if this installation is destroyed and credits available
+                can_revive = (~installations[i]) & (credits > 0)
+                
+                # Revive installation and decrement credits
+                new_installations_i = installations.at[i].set(installations[i] | can_revive)
+                new_credits = jnp.where(can_revive, credits - 1, credits)
+                
+                return (new_installations_i, new_credits)
+            
+            # Apply revival to each installation in priority order
+            final_installations, final_credits = jax.lax.fori_loop(
+                0, 6, _revive_installation, (new_installations, remaining_credits)
+            )
+            
+            # Update score_spent to track used revival credits
+            credits_used_this_wave = available_credits - final_credits
+            new_score_spent = s.score_spent + (credits_used_this_wave * 10000)
+            
+            # Compute how many enemies next wave should have
             next_count = cfg.wave_start_enemy_count + new_wave * 2
+            
             return s._replace(
                 wave=new_wave,
                 wave_end_cooldown_remaining=jnp.array(cfg.wave_end_cooldown, jnp.int32),
                 number_enemies_wave_remaining=next_count,
+                score=s.score + wave_bonus,  # Add survival bonus
+                score_spent=new_score_spent,  # Track spent revival credits
+                command_post_alive=new_command_post_alive,  # Apply command post revival
+                installations=final_installations,  # Apply installation revivals
             )
 
         def _same_wave(s: AtlantisState) -> AtlantisState:
+            """Continue current wave without changes."""
             return s
 
-        # if no enemies are remaining and the screen is empty, start a new wave
+        # Start new wave if no enemies remaining and screen is empty
+        wave_complete = (state.number_enemies_wave_remaining == 0) & (~jnp.any(state.enemies[:, 5] == 1))
+        
         return jax.lax.cond(
-            (state.number_enemies_wave_remaining == 0) & (~jnp.any(state.enemies[:, 5] == 1)),
+            wave_complete,
             _new_wave,
             _same_wave,
             state,
@@ -957,7 +1104,7 @@ class JaxAtlantis(JaxEnvironment[AtlantisState, AtlantisObservation, AtlantisInf
         )
 
         # We try to simulate the beams last position. It is important because at higher speeds, we cannot have a exact
-        # alignment of central canon and installment for knocking them put
+        # alignment of central canon and installment for knocking them out
         old_centers = centers - state.enemies[:, 2]
         beam_old = jnp.where(can_fire, old_centers, -1)
         beam_new = jnp.where(can_fire, centers, -1)
@@ -966,40 +1113,50 @@ class JaxAtlantis(JaxEnvironment[AtlantisState, AtlantisObservation, AtlantisInf
         beam_old = jnp.max(beam_old)  # -1 if none
         beam_new = jnp.max(beam_new)
 
-        # Define an inclusive interval [lo, hi].
-        lo = jnp.minimum(beam_old, beam_new)
-        hi = jnp.maximum(beam_old, beam_new)
-
         # Build 7 possible targets, 6 installments and one central canon
-        # If the enemy moves from left to right, plasma will shoot when the right edge of installment/canon is reached
-        # If the enemy moves from right to left, plasma will shoot when the left edge of installment/canon is reached
+        # If enemy comes from left to right, collision occurs when plasma hits the right edge of the installation
+        # If enemy comes from right to left, collision occurs when plasma hits the left edge of the installation
+        # Although, in the real game, the enemy is shot down on first contact, since we don't have the animations right
+        # now, we implemented this extra so that it looks good and real while playing
 
         dx_shooter = state.enemies[shooter_idx, 2]
-        inst_centers = jnp.where(
-            dx_shooter > 0,
-            cfg.installations_x + cfg.installations_width,  # right-to-left hits right edges
-            cfg.installations_x  # left-to-right hits left edges
+        
+        # For installations: hit the approaching edge based on enemy direction
+        inst_targets = jnp.where(
+            dx_shooter > 0,  # enemy moving left to right
+            cfg.installations_x + cfg.installations_width,  # hit right edge
+            cfg.installations_x  # hit left edge
         )
 
-        # Same logic for central canon
-        cmd_center = jnp.where(
-            dx_shooter > 0,
-            cfg.cannon_x[1] + cfg.cannon_width,
-            cfg.cannon_x[1]
+        # Same logic for central cannon
+        cmd_target = jnp.where(
+            dx_shooter > 0,  # enemy moving left to right
+            cfg.cannon_x[1] + cfg.cannon_width,  # hit right edge
+            cfg.cannon_x[1]  # hit left edge
         )
 
-        targets = jnp.sort(jnp.concatenate([jnp.array([cmd_center]), inst_centers], 0))
+        targets = jnp.concatenate([jnp.array([cmd_target]), inst_targets], 0)
 
-        # hit if any target lies in [lo,hi]
-        hit_mask = (targets >= lo) & (targets <= hi)
+        # Directional collision detection: check if beam has reached each target
+        # For left-to-right movement: beam_new >= target AND beam_old < target
+        # For right-to-left movement: beam_new <= target AND beam_old > target
+        left_to_right_hit = (beam_new >= targets) & (beam_old < targets)
+        right_to_left_hit = (beam_new <= targets) & (beam_old > targets)
+        
+        hit_mask = jnp.where(
+            dx_shooter > 0,  # moving left to right
+            left_to_right_hit,
+            right_to_left_hit
+        )
+            
         any_hit = jnp.any(hit_mask)
         hit_index = jnp.argmax(hit_mask)  # first match
 
         # 5) Decide who to kill
-        kill_cmd = shooter_fired & any_hit & (hit_index == 3) & state.command_post_alive
+        kill_cmd = shooter_fired & any_hit & (hit_index == 0) & state.command_post_alive
 
         inst_idx = hit_index - 1  # maps 1→install[0], …, 6→install[5]
-        inst_alive = (inst_idx >= 0) & (inst_idx < inst_centers.shape[0]) & state.installations[inst_idx]
+        inst_alive = (inst_idx >= 0) & (inst_idx < inst_targets.shape[0]) & state.installations[inst_idx]
         kill_inst = shooter_fired & any_hit & (~state.command_post_alive) & inst_alive
 
         def _handle_hit(s: AtlantisState) -> AtlantisState:
@@ -1286,7 +1443,6 @@ def get_human_action() -> chex.Array:
 
     return jnp.array(Action.NOOP)
 
-
 def main():
     config = GameConfig()
     pygame.init()
@@ -1395,5 +1551,3 @@ if __name__ == "__main__":
 #
 # if __name__ == "__main__":
 #     main2()
-
-
