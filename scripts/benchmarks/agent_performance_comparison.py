@@ -29,7 +29,7 @@ try:
     from jaxatari.games.jax_pong import JaxPong
     from jaxatari.games.jax_pong import PongRenderer as JaxPongRenderer
     from jaxatari.wrappers import AtariWrapper, FlattenObservationWrapper
-    import jaxatari.rendering.atraJaxis as aj
+    import jaxatari.rendering.jax_rendering_utils as jax_rendering_utils
 
 except ImportError as e:
     print(f"Error importing modules: {e}")
@@ -511,8 +511,8 @@ def visualize_agent(agent_path: str, config_dict: Dict[str, Any], num_episodes: 
             next_obs_viz_norm_flat = normalize_observation_jaxatari(next_obs_viz_raw, vis_env.observation_space()).reshape(1, -1)
             # Render the game state using JaxPongRenderer directly
             raster = vis_env_base.render(state_viz.env_state)
-            # Update pygame display with the rendered frame
-            aj.update_pygame(pygame_screen, raster, SCALING_FACTOR, WIDTH, HEIGHT)
+            # Update pygame display with the rendered frame 
+            jax_rendering_utils.update_pygame(pygame_screen, raster, SCALING_FACTOR, WIDTH, HEIGHT)
             
             # Save frame to video
             if video_writer:

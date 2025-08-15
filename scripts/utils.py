@@ -184,7 +184,7 @@ def load_game_environment(game: str) -> Tuple[JaxEnvironment, JAXGameRenderer]:
 def load_game_mod(game: str, mod: str) -> JaxEnvironment:
     """
     Dynamically loads a game mod from a .py file.
-    It looks for a class that inherits from JaxEnvironment.
+    It looks for a class that inherits from JaxatariWrapper.
     """
     # Get the project root directory (parent of scripts directory)
     script_dir = os.path.dirname(os.path.abspath(__file__))

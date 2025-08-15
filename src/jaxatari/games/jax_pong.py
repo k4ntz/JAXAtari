@@ -59,12 +59,17 @@ class PongState(NamedTuple):
 class EntityPosition(NamedTuple):
     x: jnp.ndarray
     y: jnp.ndarray
+    width: jnp.ndarray
+    height: jnp.ndarray
 
 
 class PongObservation(NamedTuple):
     player: EntityPosition
     enemy: EntityPosition
     ball: EntityPosition
+    score_player: jnp.ndarray
+    score_enemy: jnp.ndarray
+
 
 class PongInfo(NamedTuple):
     time: jnp.ndarray
@@ -445,21 +450,29 @@ class JaxPong(JaxEnvironment[PongState, PongObservation, PongInfo, PongConstants
         player = EntityPosition(
             x=jnp.array(self.consts.PLAYER_X),
             y=state.player_y,
+            width=jnp.array(self.consts.PLAYER_SIZE[0]),
+            height=jnp.array(self.consts.PLAYER_SIZE[1]),
         )
 
         enemy = EntityPosition(
             x=jnp.array(self.consts.ENEMY_X),
             y=state.enemy_y,
+            width=jnp.array(self.consts.ENEMY_SIZE[0]),
+            height=jnp.array(self.consts.ENEMY_SIZE[1]),
         )
 
         ball = EntityPosition(
             x=state.ball_x,
             y=state.ball_y,
+            width=jnp.array(self.consts.BALL_SIZE[0]),
+            height=jnp.array(self.consts.BALL_SIZE[1]),
         )
         return PongObservation(
             player=player,
-            ball=ball,
             enemy=enemy,
+            ball=ball,
+            score_player=state.player_score,
+            score_enemy=state.enemy_score,
         )
 
     @partial(jax.jit, static_argnums=(0,))
@@ -467,12 +480,20 @@ class JaxPong(JaxEnvironment[PongState, PongObservation, PongInfo, PongConstants
            return jnp.concatenate([
                obs.player.x.flatten(),
                obs.player.y.flatten(),
+               obs.player.height.flatten(),
+               obs.player.width.flatten(),
+               obs.enemy.x.flatten(),
+               obs.enemy.y.flatten(),
+               obs.enemy.height.flatten(),
+               obs.enemy.width.flatten(),
                obs.ball.x.flatten(),
                obs.ball.y.flatten(),
-               obs.enemy.x.flatten(),
-               obs.enemy.y.flatten()
+               obs.ball.height.flatten(),
+               obs.ball.width.flatten(),
+               obs.score_player.flatten(),
+               obs.score_enemy.flatten()
             ]
-        )
+           )
 
     def action_space(self) -> spaces.Discrete:
         return spaces.Discrete(6)
@@ -482,15 +503,23 @@ class JaxPong(JaxEnvironment[PongState, PongObservation, PongInfo, PongConstants
             "player": spaces.Dict({
                 "x": spaces.Box(low=0, high=160, shape=(), dtype=jnp.int32),
                 "y": spaces.Box(low=0, high=210, shape=(), dtype=jnp.int32),
-            }),
-            "ball": spaces.Dict({
-                "x": spaces.Box(low=0, high=160, shape=(), dtype=jnp.int32),
-                "y": spaces.Box(low=0, high=210, shape=(), dtype=jnp.int32),
+                "width": spaces.Box(low=0, high=160, shape=(), dtype=jnp.int32),
+                "height": spaces.Box(low=0, high=210, shape=(), dtype=jnp.int32),
             }),
             "enemy": spaces.Dict({
                 "x": spaces.Box(low=0, high=160, shape=(), dtype=jnp.int32),
                 "y": spaces.Box(low=0, high=210, shape=(), dtype=jnp.int32),
+                "width": spaces.Box(low=0, high=160, shape=(), dtype=jnp.int32),
+                "height": spaces.Box(low=0, high=210, shape=(), dtype=jnp.int32),
             }),
+            "ball": spaces.Dict({
+                "x": spaces.Box(low=0, high=160, shape=(), dtype=jnp.int32),
+                "y": spaces.Box(low=0, high=210, shape=(), dtype=jnp.int32),
+                "width": spaces.Box(low=0, high=160, shape=(), dtype=jnp.int32),
+                "height": spaces.Box(low=0, high=210, shape=(), dtype=jnp.int32),
+            }),
+            "score_player": spaces.Box(low=0, high=21, shape=(), dtype=jnp.int32),
+            "score_enemy": spaces.Box(low=0, high=21, shape=(), dtype=jnp.int32),
         })
 
     def image_space(self) -> spaces.Box:

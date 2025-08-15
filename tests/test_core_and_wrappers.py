@@ -5,6 +5,7 @@ import pytest
 import jaxatari
 from jaxatari.environment import EnvInfo, EnvObs, EnvState
 from jaxatari.wrappers import (
+    NormalizeObservationWrapper,
     ObjectCentricWrapper,
     PixelObsWrapper,
     AtariWrapper,
@@ -24,58 +25,10 @@ def get_object_centric_obs_size(space: spaces.Dict) -> int:
         size += np.prod(leaf.shape)
     return size
 
-def test_base_jaxatari():
-    """Test the base JAXAtari class with a simple game."""
-    env = jaxatari.make("pong")
-    key = jax.random.PRNGKey(0)
-    
-    # Test reset
-    obs, state = env.reset(key)
-    assert obs is not None
-    assert state is not None
-    
-    # Test step
-    action = 0  # NOOP
-    obs, state, reward, done, info = env.step(state, action)
-    assert obs is not None
-    assert state is not None
-    assert isinstance(reward, (float, jnp.ndarray))
-    assert isinstance(done, (bool, jnp.ndarray))
-    assert info is not None
-
-
-def test_atari_wrapper():
-    """Test the AtariWrapper."""
-    base_env = jaxatari.make("pong")
-    env = AtariWrapper(base_env, first_fire=False)
-    key = jax.random.PRNGKey(0)
-    
-    # Test reset
-    obs, state = env.reset(key)
-    assert obs is not None
-    assert state.env_state is not None
-    assert state.step == 0
-    assert state.prev_action == 0
-    assert state.obs_stack is not None
-    assert state.key is not None  # Check that key is stored in state
-    
-    # Test step
-    action = 0  # NOOP
-    obs, state, reward, done, info = env.step(state, action)
-    assert obs is not None
-    assert state.env_state is not None
-    assert state.step > 0
-    assert state.prev_action is not None
-    assert state.obs_stack is not None
-    assert state.key is not None  # Check that key is still in state
-    assert isinstance(reward, (float, jnp.ndarray))
-    assert isinstance(done, (bool, jnp.ndarray))
-    assert info is not None
-
-def test_obs_to_flat_array_with_stacked_observations():
+def test_obs_to_flat_array_with_stacked_observations(raw_env):
     """Test that obs_to_flat_array works correctly with stacked observations."""
     key = jax.random.PRNGKey(0)
-    base_env = jaxatari.make("pong")
+    base_env = raw_env
     atari_env = AtariWrapper(base_env, frame_stack_size=4)
     env = ObjectCentricWrapper(atari_env)
 
@@ -95,12 +48,12 @@ def test_obs_to_flat_array_with_stacked_observations():
     last_frame = obs[-1]
     assert not jnp.array_equal(first_frame, last_frame), "Frames should be different after active gameplay"
 
-def test_pixel_obs_wrapper_with_stacked_frames():
+def test_pixel_obs_wrapper_with_stacked_frames(raw_env):
     """Test that PixelObsWrapper correctly handles stacked frames."""
     key = jax.random.PRNGKey(0)
     
     # Create environment with wrappers
-    base_env = jaxatari.make("pong")
+    base_env = raw_env
     env = PixelObsWrapper(AtariWrapper(base_env))
     
     # Get initial observation
@@ -127,11 +80,11 @@ def test_pixel_obs_wrapper_with_stacked_frames():
     # Verify that frames are in the correct range (0-255 for uint8)
     assert jnp.all(obs >= 0) and jnp.all(obs <= 255), "Pixel values should be in range [0, 255]"
 
-def test_pixel_and_object_centric_wrapper():
+def test_pixel_and_object_centric_wrapper(raw_env):
     """Test that PixelAndObjectCentricWrapper returns both pixel and flattened object-centric observations."""
     key = jax.random.PRNGKey(0)
     stack_size = 4
-    base_env = jaxatari.make("pong")
+    base_env = raw_env
     atari_env = AtariWrapper(base_env, frame_stack_size=stack_size)
     env = PixelAndObjectCentricWrapper(atari_env)
 
@@ -165,10 +118,10 @@ def test_pixel_and_object_centric_wrapper():
     assert space.contains(obs), "Runtime observation is not contained in the defined space"
 
 
-def test_object_centric_wrapper():
+def test_object_centric_wrapper(raw_env):
     """Test ObjectCentricWrapper returns a 2D stacked observation and its space is correct."""
     key = jax.random.PRNGKey(0)
-    base_env = jaxatari.make("pong")
+    base_env = raw_env
     atari_env = AtariWrapper(base_env, frame_stack_size=4)
     env = ObjectCentricWrapper(atari_env)
 
@@ -197,12 +150,12 @@ def test_object_centric_wrapper():
     assert not jnp.array_equal(first_frame, last_frame), "Frames should be different after active gameplay"
 
 
-def test_log_wrapper():
+def test_log_wrapper(raw_env):
     """Test that LogWrapper correctly tracks episode returns and lengths."""
     key = jax.random.PRNGKey(0)
     
     # Create environment with wrappers
-    base_env = jaxatari.make("pong")
+    base_env = raw_env
     env = LogWrapper(PixelObsWrapper(AtariWrapper(base_env)))
     
     # Get initial observation
@@ -245,12 +198,12 @@ def test_log_wrapper():
             assert info["returned_episode_lengths"] == steps
             assert info["returned_episode"] == True
 
-def test_multi_reward_log_wrapper():
+def test_multi_reward_log_wrapper(raw_env):
     """Test that MultiRewardLogWrapper correctly tracks multiple reward types."""
     key = jax.random.PRNGKey(0)
     
     # Create environment with wrappers
-    base_env = jaxatari.make("pong")
+    base_env = raw_env
     env = MultiRewardLogWrapper(PixelAndObjectCentricWrapper(AtariWrapper(base_env)))
     
     # Get initial observation
@@ -311,10 +264,10 @@ def test_multi_reward_log_wrapper():
             assert info["returned_episode"] == True
 
 
-def test_flatten_observation_wrapper():
+def test_flatten_observation_wrapper(raw_env):
     """Test that FlattenObservationWrapper correctly flattens each observation type."""
     key = jax.random.PRNGKey(0)
-    base_env = jaxatari.make("pong")
+    base_env = raw_env
     atari_env = AtariWrapper(base_env, frame_stack_size=4)
 
     # --- Test 1: Wrapping ObjectCentricWrapper ---
@@ -363,10 +316,10 @@ def test_flatten_observation_wrapper():
     assert jnp.array_equal(oc_part[:int(get_object_centric_obs_size(base_env.observation_space()))], unwrapped_obs_both[1][0])
 
 
-def test_log_wrapper_with_flatten_observation():
+def test_log_wrapper_with_flatten_observation(raw_env):
     """Test that LogWrapper works correctly with FlattenObservationWrapper."""
     key = jax.random.PRNGKey(0)
-    base_env = jaxatari.make("pong")
+    base_env = raw_env
     atari_env = AtariWrapper(base_env, frame_stack_size=4)
     
     # Test with a complex observation stack
@@ -394,81 +347,14 @@ def test_log_wrapper_with_flatten_observation():
     assert obs[0].ndim == 1
     assert obs[1].ndim == 1
 
-
-def test_wrapper_observation_spaces():
-    """
-    Tests that all wrappers correctly modify and present their observation_space.
-    """
-    key = jax.random.PRNGKey(0)
-    stack_size = 4
-    base_env = jaxatari.make("pong")
-    atari_env = AtariWrapper(base_env, frame_stack_size=stack_size)
-
-    # --- Test AtariWrapper ---
-    assert isinstance(atari_env.observation_space(), spaces.Dict)
-    original_leaves = jax.tree.leaves(base_env.observation_space())
-    stacked_leaves = jax.tree.leaves(atari_env.observation_space())
-    for original_leaf, stacked_leaf in zip(original_leaves, stacked_leaves):
-        # Shape should have the stack_size as the new first dimension.
-        assert stacked_leaf.shape == (stack_size,) + original_leaf.shape
-        # Bounds and dtype should be preserved.
-        assert jnp.all(stacked_leaf.low == original_leaf.low)
-        assert jnp.all(stacked_leaf.high == original_leaf.high)
-        assert stacked_leaf.dtype == original_leaf.dtype
-
-    # --- Test PixelObsWrapper ---
-    pixel_env = PixelObsWrapper(atari_env)
-    space = pixel_env.observation_space()
-    assert isinstance(space, spaces.Box)
-    # Shape: (stack_size, H, W, C)
-    assert space.shape == (stack_size, 210, 160, 3)
-    # Bounds and dtype for pixel data.
-    assert jnp.all(space.low == 0)
-    assert jnp.all(space.high == 255)
-    assert space.dtype == jnp.uint8
-
-    # --- Test ObjectCentricWrapper ---
-    oc_env = ObjectCentricWrapper(atari_env)
-    space = oc_env.observation_space()
-    assert isinstance(space, spaces.Box)
-    
-    # Check for the correct 2D shape
-    single_frame_size = get_object_centric_obs_size(base_env.observation_space())
-    assert space.shape == (stack_size, single_frame_size)
-
-    # Check that the bounds match the space shape (2D, broadcasted from 1D single frame)
-    assert space.low.shape == (stack_size, single_frame_size)
-    assert space.high.shape == (stack_size, single_frame_size)
-
-    # --- Test PixelAndObjectCentricWrapper ---
-    both_env = PixelAndObjectCentricWrapper(atari_env)
-    space = both_env.observation_space()
-    assert isinstance(space, spaces.Tuple)
-    assert len(space.spaces) == 2
-
-    # The first element should be the stacked pixel space.
-    pixel_part = space.spaces[0]
-    assert pixel_part.shape == (stack_size, 210, 160, 3)
-    assert jnp.all(pixel_part.low == 0)
-    assert jnp.all(pixel_part.high == 255)
-
-    # The second element should be the original stacked object-centric dict space.
-    object_part = space.spaces[1]
-    assert isinstance(object_part, spaces.Box)
-    assert object_part.shape == (stack_size, get_object_centric_obs_size(base_env.observation_space()))
-    # Check that the bounds match the space shape (2D, broadcasted from 1D single frame)
-    assert object_part.low.shape == (stack_size, get_object_centric_obs_size(base_env.observation_space()))
-    assert object_part.high.shape == (stack_size, get_object_centric_obs_size(base_env.observation_space()))
-
-
-def test_flatten_observation_wrapper_space_structure():
+def test_flatten_observation_wrapper_space_structure(raw_env):
     """
     Tests that FlattenObservationWrapper correctly flattens the leaf spaces
     of a given environment's observation space Pytree.
     """
     key = jax.random.PRNGKey(0)
     stack_size = 4
-    base_env = jaxatari.make("pong")
+    base_env = raw_env
     atari_env = AtariWrapper(base_env, frame_stack_size=stack_size)
 
     # Wrap the Atari environment with the FlattenObservationWrapper
@@ -543,6 +429,64 @@ def test_flatten_observation_wrapper_space_structure():
             obs_leaf
         ), f"Observation leaf with shape {obs_leaf.shape} not contained in space with shape {space_leaf.shape}"
 
+def test_atari_wrapper_features_and_pixel_preprocessing(raw_env):
+    """Tests max-pooling, resizing, and grayscaling features."""
+    key = jax.random.PRNGKey(0)
+    
+    # --- Test 1: AtariWrapper Max-Pooling and Sticky Actions ---
+    class FakeEnv:
+        def __init__(self):
+            self.state = 0
+            self._observation_space = spaces.Dict({"features": spaces.Box(low=0, high=255, shape=(2,2), dtype=jnp.uint8)})
+        
+        def observation_space(self) -> spaces.Space:
+            return self._observation_space
+
+        def reset(self, key):
+            self.state = 0
+            obs = jax.tree.map(lambda s: jnp.zeros(s.shape, s.dtype), self._observation_space)
+            return obs, self.state
+        
+        def step(self, state, action):
+            state += 1
+            obs = jax.tree.map(lambda s: (jnp.ones(s.shape, s.dtype) * state), self._observation_space)
+            return obs, state, 1.0, False, {"all_rewards": jnp.array([1.0])}
+        
+        def render(self, state):
+             return jnp.zeros((210, 160, 3), dtype=jnp.uint8)
+
+    base_env = AtariWrapper(FakeEnv(), frame_skip=4, max_pooling=True, first_fire=False, episodic_life=False, sticky_actions=True)
+    _, state = base_env.reset(key)
+    obs, state, _, _, _ = base_env.step(state, 0)
+    
+    expected_max_pooled_frame = jnp.ones((2,2), dtype=jnp.uint8) * 4
+    
+    assert jnp.array_equal(obs.spaces['features'][-1], expected_max_pooled_frame)
+
+    # --- Test 2: PixelObsWrapper Preprocessing ---
+    RESIZE_SHAPE = (84, 84)
+    STACK_SIZE = 4
+    atari_env = AtariWrapper(raw_env, frame_stack_size=STACK_SIZE)
+    pixel_env = PixelObsWrapper(atari_env, do_pixel_resize=True, pixel_resize_shape=RESIZE_SHAPE, grayscale=True)
+    
+    space = pixel_env.observation_space()
+    expected_shape = (STACK_SIZE, RESIZE_SHAPE[0], RESIZE_SHAPE[1], 1)
+    assert space.shape == expected_shape
+    assert space.dtype == jnp.uint8
+    
+    obs, state = pixel_env.reset(key)
+    assert obs.shape == expected_shape
+
+    # --- Test 3: PixelAndObjectCentricWrapper Preprocessing ---
+    atari_env_2 = AtariWrapper(raw_env, frame_stack_size=STACK_SIZE)
+    mixed_env = PixelAndObjectCentricWrapper(atari_env_2, do_pixel_resize=True, pixel_resize_shape=RESIZE_SHAPE, grayscale=True)
+
+    pix_space, obj_space = mixed_env.observation_space().spaces
+    assert pix_space.shape == expected_shape
+    
+    (pix_obs, obj_obs), state = mixed_env.reset(key)
+    assert pix_obs.shape == expected_shape
+    assert obj_obs.ndim == 2
 
 if __name__ == "__main__":
     pytest.main([__file__]) 

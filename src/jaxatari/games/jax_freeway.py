@@ -81,7 +81,7 @@ class EntityPosition(NamedTuple):
 
 class FreewayObservation(NamedTuple):
     chicken: EntityPosition
-    car: EntityPosition
+    car: jnp.ndarray  # Shape: (10, 4) with x,y,width,height for each car
 
 
 class FreewayInfo(NamedTuple):
@@ -324,7 +324,6 @@ class JaxFreeway(JaxEnvironment[FreewayState, FreewayObservation, FreewayInfo, F
         The observation contains:
         - chicken: EntityPosition (x, y, width, height)
         - car: array of shape (10, 4) with x,y,width,height for each car
-        - score: int (0-99)
         """
         return spaces.Dict({
             "chicken": spaces.Dict({
@@ -333,7 +332,7 @@ class JaxFreeway(JaxEnvironment[FreewayState, FreewayObservation, FreewayInfo, F
                 "width": spaces.Box(low=0, high=160, shape=(), dtype=jnp.int32),
                 "height": spaces.Box(low=0, high=210, shape=(), dtype=jnp.int32),
             }),
-            "car": spaces.Box(low=0, high=160, shape=(10, 4), dtype=jnp.int32),
+            "car": spaces.Box(low=0, high=210, shape=(10, 4), dtype=jnp.int32),
         })
 
     def image_space(self) -> spaces.Box:

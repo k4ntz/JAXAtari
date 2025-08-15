@@ -22,9 +22,9 @@ import psutil
 import gc
 
 from jaxatari.environment import JaxEnvironment
-from jaxatari.renderers import AtraJaxisRenderer
+from jaxatari.renderers import JAXGameRenderer
 
-def load_game_environment(game_file_path: str) -> Tuple[JaxEnvironment, AtraJaxisRenderer]:
+def load_game_environment(game_file_path: str) -> Tuple[JaxEnvironment, JAXGameRenderer]:
     """
     Dynamically loads a game environment and the renderer from a .py file.
     It looks for a class that inherits from JaxEnvironment.
@@ -62,7 +62,7 @@ def load_game_environment(game_file_path: str) -> Tuple[JaxEnvironment, AtraJaxi
             print(f"Found game environment: {name}")
             game = obj()  # Instantiate and return
 
-        if inspect.isclass(obj) and issubclass(obj, AtraJaxisRenderer) and obj is not AtraJaxisRenderer:
+        if inspect.isclass(obj) and issubclass(obj, JAXGameRenderer) and obj is not JAXGameRenderer:
             print(f"Found renderer: {name}")
             renderer = obj()
 
@@ -72,14 +72,14 @@ def load_game_environment(game_file_path: str) -> Tuple[JaxEnvironment, AtraJaxi
     return game, renderer
 
 # It's assumed that jaxatari is installed or accessible in the PYTHONPATH
-# If JaxEnvironment or AtraJaxisRenderer are part of your local project structure,
+# If JaxEnvironment or JAXGameRenderer are part of your local project structure,
 # ensure sys.path is set up accordingly before these imports if this script is moved.
 try:
     from jaxatari.environment import JaxEnvironment
-    from jaxatari.renderers import AtraJaxisRenderer
+    from jaxatari.renderers import JAXGameRenderer
 except ImportError:
     print(
-        "Warning: Could not import JaxEnvironment or AtraJaxisRenderer from jaxatari."
+        "Warning: Could not import JaxEnvironment or JAXGameRenderer from jaxatari."
     )
     print("Please ensure 'jaxatari' is installed or in PYTHONPATH.")
     exit()
@@ -294,14 +294,14 @@ def run_parallel_jax(
         lambda x: jnp.stack([x] * num_envs), init_state_single
     )
 
-    action_space = jax_env.get_action_space() 
-    num_distinct_actions = len(action_space)
+    action_space = jax_env.action_space() 
+    num_distinct_actions = action_space.n
 
     # This function will be vmapped and JITted.
     # It handles one environment's step and optional rendering.
     def _core_logic_for_one_env(current_state_one_env, action_one_env):
         # Always call the step function
-        obs, next_state, reward, term, info = jax_env.step(current_state_one_env, action_one_env)
+        obs, next_state, reward, term, info = jax_env.step(current_state_one_env, jnp.array(0))
         
         if use_render_step: # Python boolean, static for JIT compilation
             # Call render on the next_state.
@@ -320,15 +320,17 @@ def run_parallel_jax(
     vmapped_core_logic = jax.vmap(_core_logic_for_one_env, in_axes=(0, 0))
     jit_parallel_step = jax.jit(vmapped_core_logic)
 
+    # We need to vmap the action sampling as well to generate actions for all parallel environments.
+    vmapped_action_sample = jax.vmap(action_space.sample)
+
     @jax.jit
     def run_one_step(carry, _):
         current_states_batch, current_rng_key = carry
         action_rng_key, next_rng_key_for_carry = jax.random.split(current_rng_key)
         
-        random_indices = jax.random.randint(
-            action_rng_key, shape=(num_envs,), minval=0, maxval=num_distinct_actions
-        )
-        actions_to_take = action_space[random_indices] # Gather actual actions
+        # Generate a batch of actions by creating a batch of random keys and vmapping the sample function.
+        action_keys = jax.random.split(action_rng_key, num_envs)
+        actions_to_take = vmapped_action_sample(action_keys)
         
         # jit_parallel_step returns (next_states_batch, obs_batch, aux_output_batch)
         # The scan only needs to carry 'next_states_batch' and the new RNG key.
@@ -341,8 +343,9 @@ def run_parallel_jax(
     warmup_start_time = time.time()
     
     # Warmup/Compile jit_parallel_step by calling it once
-    dummy_actions_indices = jax.random.randint(run_key, shape=(num_envs,), minval=0, maxval=num_distinct_actions)
-    dummy_actions = action_space[dummy_actions_indices]
+    # Generate a batch of dummy actions for warmup using the same vmapped sampling.
+    warmup_action_keys = jax.random.split(run_key, num_envs)
+    dummy_actions = vmapped_action_sample(warmup_action_keys)
     
     # Execute to compile and ensure all parts are processed
     s_w, o_w, aux_w = jit_parallel_step(states, dummy_actions)
@@ -769,7 +772,7 @@ if __name__ == "__main__":
     parser.add_argument("--output-dir", type=str, default="./benchmark_results", help="Directory to save results.")
 
     parser.add_argument("--run-std-benchmark", action=argparse.BooleanOptionalAction, default=True, help="Run the standard (single point) benchmark.")
-    parser.add_argument("--run-scaling-benchmark", action=argparse.BooleanOptionalAction, default=True, help="Run the scaling benchmark.")
+    parser.add_argument("--run-scaling-benchmark", action=argparse.BooleanOptionalAction, default=False, help="Run the scaling benchmark.")
     
     parser.add_argument("--render-jax", action=argparse.BooleanOptionalAction, default=False, help="Use JAX environment's 'step_with_render' method (if available).")
     
