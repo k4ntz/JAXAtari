@@ -202,12 +202,9 @@ class JaxSpaceInvaders(JaxEnvironment[SpaceInvadersState, SpaceInvadersObservati
                                          self.consts.OPPONENT_SIZE[1])
                 )
 
-                updated = jnp.where(
-                    destroyed[idx] != 0,
-                    jnp.minimum(destroyed[idx] + 1, 29),
-                    collision.astype(jnp.int32)
+                destroyed = destroyed.at[idx].set(
+                    jnp.where((destroyed[idx] == 0) & collision, 1, destroyed[idx])
                 )
-                destroyed = destroyed.at[idx].set(updated)
 
                 score += jnp.where(collision, 10, 0)  # +10 score
                 bullet_active = jnp.where(collision, False, bullet_active)
@@ -216,7 +213,8 @@ class JaxSpaceInvaders(JaxEnvironment[SpaceInvadersState, SpaceInvadersObservati
 
             return jax.lax.fori_loop(0, self.consts.ENEMY_ROWS * self.consts.ENEMY_COLS, body, carry)
 
-        init = (state.destroyed, state.player_score, state.bullet_active)
+        destroyed = jnp.where(state.destroyed != 0, jnp.minimum(state.destroyed + 1, 29), 0)
+        init = (destroyed, state.player_score, state.bullet_active)
 
         return jax.lax.cond(
             state.bullet_active,
