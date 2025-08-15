@@ -919,7 +919,7 @@ class JaxDonkeyKong(JaxEnvironment[DonkeyKongState, DonkeyKongObservation, Donke
                 hammer_y = (state.mario_y + self.consts.MARIO_HIT_BOX_Y + 1).astype(jnp.int32),
             )
 
-            return new_state_mario_jumping_right
+            return new_state_mario_jumping_right_no_swing
 
         # mario can take the hammer by jumping and if they collide
         def hammer_is_taken_by_mario(state):
@@ -945,16 +945,23 @@ class JaxDonkeyKong(JaxEnvironment[DonkeyKongState, DonkeyKongObservation, Donke
 
         # Hammer swings have swing time/duration
         def hammer_swing(state):
+            hammer_carry_time, hammer_can_hit = jax.lax.cond(
+                (state.hammer_carry_time + 1) % self.consts.HAMMER_SWING_DURATION == 0,
+                lambda _: (0, jnp.logical_not(state.hammer_can_hit)),
+                lambda _: (state.hammer_carry_time + 1, state.hammer_can_hit),
+                operand=None
+            )         
             new_state = state._replace(
-                hammer_carry_time = state.hammer_carry_time + 1,
+                hammer_carry_time = hammer_carry_time,
+                hammer_can_hit = hammer_can_hit,
+            ) 
+            return jax.lax.cond(
+                state.hammer_taken,
+                lambda _: new_state,
+                lambda _: state,
+                operand=None
             )
-
-            
-
-
-            return new_state
         new_state = hammer_swing(new_state)
-
 
         return new_state
     
@@ -1330,7 +1337,13 @@ class DonkeyKongRenderer(JAXGameRenderer):
 
         # Hammer
         frame_hammer = aj.get_sprite_frame(self.SPRITES_HAMMER_UP, 0)
-        raster = aj.render_at(raster, state.hammer_y, state.hammer_x, frame_hammer)
+        frame_hammer_down = aj.get_sprite_frame(self.SPRITES_HAMMER_DOWN, 0)
+        raster = jax.lax.cond(
+            state.hammer_can_hit,
+            lambda _: aj.render_at(raster, state.hammer_y, state.hammer_x, frame_hammer_down),
+            lambda _: aj.render_at(raster, state.hammer_y, state.hammer_x, frame_hammer),
+            operand=None
+        )
 
 
         # Scores
