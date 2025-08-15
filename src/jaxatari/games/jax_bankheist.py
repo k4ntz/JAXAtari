@@ -32,6 +32,18 @@ PORTAL_X = jnp.array([12, 140])
 MODULE_DIR = os.path.dirname(os.path.abspath(__file__))
 SPRITES_DIR = os.path.join(MODULE_DIR, "sprites", "bankheist")
 
+def init_banks_or_police() -> chex.Array:
+    """
+    Initializes the bank and police positions.
+
+    Returns:
+        chex.Array: An array containing the initial positions of banks and police.
+    """
+    positions = jnp.stack([jnp.array([0, 0]), jnp.array([0, 0]), jnp.array([0, 0])])
+    directions = jnp.stack([jnp.array(4), jnp.array(4), jnp.array(4)])
+    visibilities = jnp.stack([jnp.array(0), jnp.array(0), jnp.array(0)])
+    return Entity(position=positions, direction=directions, visibility=visibilities)
+
 def load_city_collision_map(file_name: str) -> chex.Array:
     """
     Loads the city collision map from the sprites directory.
@@ -76,7 +88,6 @@ def find_free_areas(map, h, w):
 
     _, is_free_arr = jax.lax.scan(scan_fn, None, positions)
     valid_positions = positions[is_free_arr]
-    print(type(jnp.array(valid_positions)))
     return jnp.array(valid_positions)
 
 CITY_COLLISION_MAPS = jnp.array([load_city_collision_map(f"map_{i+1}_collision.npy") for i in range(8)])
@@ -111,8 +122,8 @@ class BankHeistState(NamedTuple):
     level: chex.Array
     player: Entity
     dynamite_position: chex.Array
-    enemy_positions: chex.Array
-    bank_positions: chex.Array
+    enemy_positions: Entity
+    bank_positions: Entity
     speed: chex.Array
     money: chex.Array
     player_lives: chex.Array
@@ -157,8 +168,8 @@ class JaxBankHeist(JaxEnvironment[BankHeistState, BankHeistObservation, BankHeis
                 visibility=jnp.array([1]).astype(jnp.int32)
             ),
             dynamite_position=jnp.array([]).astype(jnp.int32),
-            enemy_positions=jnp.array([None, None, None]).astype(jnp.int32),
-            bank_positions=jnp.array([None, None, None]).astype(jnp.int32),
+            enemy_positions=init_banks_or_police(),
+            bank_positions=init_banks_or_police(),
             speed=jnp.array(1).astype(jnp.int32),
             money=jnp.array(0).astype(jnp.int32),
             player_lives=jnp.array(4).astype(jnp.int32),
@@ -233,8 +244,8 @@ class JaxBankHeist(JaxEnvironment[BankHeistState, BankHeistObservation, BankHeis
         new_level = state.level+1
         default_player_position = jnp.array([12, 78]).astype(jnp.int32)
         new_player = state.player._replace(position=default_player_position)
-        empty_police = jnp.array([None, None, None]).astype(jnp.int32)
-        empty_banks = jnp.array([None, None, None]).astype(jnp.int32)
+        empty_police = init_banks_or_police()
+        empty_banks = init_banks_or_police()
         new_speed = state.speed * 1
         new_fuel = state.fuel_refill
         new_fuel_refill=jnp.array(0).astype(jnp.int32)
@@ -284,7 +295,7 @@ class JaxBankHeist(JaxEnvironment[BankHeistState, BankHeistObservation, BankHeis
         # Player step
         new_state = self.player_step(state, action)
         # Timer step
-        #new_state = self.timer_step(new_state)
+        new_state = self.timer_step(new_state)
         return state.obs_stack, new_state, 0.0, 1, {}
 
     @partial(jax.jit, static_argnums=(0,))
@@ -322,10 +333,15 @@ class JaxBankHeist(JaxEnvironment[BankHeistState, BankHeistObservation, BankHeis
         """
         def spawn_bank(state: BankHeistState) -> BankHeistState:
             key = jax.random.PRNGKey(0)  # Use a fixed key for reproducibility
-            new_bank_spawns = jax.random.randint(key, shape=state.bank_positions.shape, minval=0, maxval=state.spawn_points.shape[0])
-            new_pos = Entity(new_bank_spawns[0], 0, 1)
-            new_bank_positions = jnp.where(state.bank_positions == 0, new_pos, state.bank_positions)
-            return state._replace(bank_positions=new_bank_positions)
+            new_bank_spawns = jax.random.randint(key, shape=(state.bank_positions.position.shape[0],), minval=0, maxval=state.spawn_points.shape[0])
+            chosen_points = state.spawn_points[new_bank_spawns]
+            mask = (state.bank_spawn_timers == 0)[:, None]  # shape (3, 1)
+            new_bank_positions = jnp.where(mask, chosen_points, state.bank_positions.position)
+
+            new_visibility = jnp.where(state.bank_spawn_timers == 0, jnp.array([1,1,1]), state.bank_positions.visibility)
+
+            new_banks = state.bank_positions._replace(position=new_bank_positions, visibility=new_visibility)
+            return state._replace(bank_positions=new_banks)
 
         new_bank_spawn_timers = jnp.where(state.bank_spawn_timers >= 0, state.bank_spawn_timers - 1, state.bank_spawn_timers)
         new_police_spawn_timers = jnp.where(state.police_spawn_timers >= 0, state.police_spawn_timers - 1, state.police_spawn_timers)
@@ -336,8 +352,8 @@ class JaxBankHeist(JaxEnvironment[BankHeistState, BankHeistObservation, BankHeis
             police_spawn_timers=new_police_spawn_timers,
             dynamite_timer=new_dynamite_timer
         )
-        bank_update = spawn_bank(new_state)
-        new_state = jnp.where(new_bank_spawn_timers == 0, bank_update, new_state)
+        spawn_bank_condition = jnp.any(new_bank_spawn_timers == 0)
+        new_state = jax.lax.cond(spawn_bank_condition, lambda: spawn_bank(new_state), lambda: new_state)
         #new_state = jnp.where(new_police_spawn_timers == 0, self.spawn_police(new_state), new_state)
         #new_state = jnp.where(new_dynamite_timer == 0, self.explode_dynamite(new_state), new_state)
         return new_state
@@ -387,12 +403,12 @@ class Renderer_AtraBankisHeist:
     @partial(jax.jit, static_argnums=(0,))
     def render(self, state):
         raster = jnp.zeros((WIDTH, HEIGHT, 3), dtype=jnp.uint8)
-        
-        # Render City
-        frame_city = aj.get_sprite_frame(self.SPRITES_CITY[state.level], 0)
+
+        ### Render City
+        frame_city = aj.get_sprite_frame(self.SPRITES_CITY[state.level % self.SPRITES_CITY.shape[0]], 0)
         raster = aj.render_at(raster, 0, 0, frame_city)
 
-        # Render Player
+        ### Render Player
         branches = [
             lambda: aj.get_sprite_frame(self.SPRITE_PLAYER_FRONT, 0),  # DOWN
             lambda: aj.get_sprite_frame(self.SPRITE_PLAYER_FRONT, 0),  # UP
@@ -408,6 +424,15 @@ class Renderer_AtraBankisHeist:
         player_frame = jax.lax.switch(player_direction, branches)
         raster = aj.render_at(raster, state.player.position[0], state.player.position[1], player_frame)
 
+        ### Render Banks
+        bank_frame = aj.get_sprite_frame(self.SPRITE_BANK, 0)
+        for i in range(state.bank_positions.position.shape[0]):
+            raster = jax.lax.cond(
+                state.bank_positions.visibility[i] != 0,
+                lambda r: aj.render_at(r, state.bank_positions.position[i, 0], state.bank_positions.position[i, 1], bank_frame),
+                lambda r: r,
+                raster
+            )
         return raster
 
 if __name__ == "__main__":
