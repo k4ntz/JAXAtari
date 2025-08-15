@@ -139,18 +139,28 @@ class JaxTetris(JaxEnvironment[TetrisState, TetrisObservation, TetrisInfo, Tetri
     # ----- Helpers -----
     @partial(jax.jit, static_argnums=0)
     def piece_grid(self, piece_type: chex.Array, rot: chex.Array) -> chex.Array:
+        """
+        Return the 4x4 grid for a given tetromino type and rotation.
+        """
+        # Select the correct rotation for the given piece type
         return self.consts.TETROMINOS[piece_type, (rot & 3)]
 
     @partial(jax.jit, static_argnums=0)
     def spawn_piece(self, key: chex.Array) -> Tuple[chex.Array, chex.Array, chex.Array, chex.Array]:
-        key, sub = jrandom.split(key)
-        p = jrandom.randint(sub, (), 0, 7, dtype=jnp.int32)
-        pos = jnp.array([0, 3], dtype=jnp.int32)
-        rot = jnp.int32(0)
+        """
+        Spawn a new random tetromino, returning its type, position, rotation, and updated PRNG key.
+        """
+        key, sub = jrandom.split(key)  # Split PRNG key for reproducibility
+        p = jrandom.randint(sub, (), 0, 7, dtype=jnp.int32)  # Random piece type
+        pos = jnp.array([0, 3], dtype=jnp.int32)  # Spawn at top center
+        rot = jnp.int32(0)  # Initial rotation
         return p, pos, rot, key
 
     @partial(jax.jit, static_argnums=0)
     def check_collision(self, board: chex.Array, grid4: chex.Array, pos: chex.Array) -> chex.Array:
+        """
+        Check if the tetromino at the given position collides with the board or is out of bounds.
+        """
         H = jnp.int32(self.consts.BOARD_HEIGHT)
         W = jnp.int32(self.consts.BOARD_WIDTH)
 
@@ -163,14 +173,17 @@ class JaxTetris(JaxEnvironment[TetrisState, TetrisObservation, TetrisInfo, Tetri
             readable = inb_side & (py >= 0)
             pyc = jnp.clip(py, 0, H - 1)
             pxc = jnp.clip(px, 0, W - 1)
-            occ = jnp.where(readable, board[pyc, pxc] == 1, False)
-            side_or_bottom_oob = on & (~inb_side) & (py >= 0)
-            return acc | (on & (occ | side_or_bottom_oob))
+            occ = jnp.where(readable, board[pyc, pxc] == 1, False)  # Is cell already filled?
+            side_or_bottom_oob = on & (~inb_side) & (py >= 0)  # Out of bounds at side or bottom
+            return acc | (on & (occ | side_or_bottom_oob))  # check Any collision?
 
         return lax.fori_loop(0, 16, body, False)
 
     @partial(jax.jit, static_argnums=0)
     def lock_piece(self, board: chex.Array, grid4: chex.Array, pos: chex.Array) -> chex.Array:
+        """
+        Lock the current tetromino onto the board at the given position.
+        """
         H = jnp.int32(self.consts.BOARD_HEIGHT)
         W = jnp.int32(self.consts.BOARD_WIDTH)
 
@@ -179,16 +192,21 @@ class JaxTetris(JaxEnvironment[TetrisState, TetrisObservation, TetrisInfo, Tetri
             on = grid4[y, x] == 1
             py = pos[0] + y
             px = pos[1] + x
-            inb = (px >= 0) & (px < W) & (py >= 0) & (py < H)
+            inb = (px >= 0) & (px < W) & (py >= 0) & (py < H)  # In board
             pyc = jnp.clip(py, 0, H - 1)
             pxc = jnp.clip(px, 0, W - 1)
+            # Set cell to 1 if in bounds and occupied by piece
             return lax.cond(on & inb, lambda bb: bb.at[pyc, pxc].set(1), lambda bb: bb, b)
 
         return lax.fori_loop(0, 16, body, board)
 
     @partial(jax.jit, static_argnums=0)
     def clear_lines(self, board: chex.Array) -> Tuple[chex.Array, chex.Array]:
-        full = jnp.all(board == 1, axis=1)
+        """
+        Clear all full lines from the board.
+        Returns the new board and the number of lines cleared.
+        """
+        full = jnp.all(board == 1, axis=1)  # check which rows are full
 
         def scan_row(carry, y):
             nb, wy, cnt = carry
@@ -197,12 +215,12 @@ class JaxTetris(JaxEnvironment[TetrisState, TetrisObservation, TetrisInfo, Tetri
 
             def write_row(c):
                 _nb, _wy, _cnt = c
-                _nb = _nb.at[_wy].set(row)
+                _nb = _nb.at[_wy].set(row)  # Copy row down
                 return _nb, _wy - 1, _cnt
 
             def skip_row(c):
                 _nb, _wy, _cnt = c
-                return _nb, _wy, _cnt + 1
+                return _nb, _wy, _cnt + 1  # Count cleared line
 
             return lax.cond(~is_full, write_row, skip_row, (nb, wy, cnt)), None
 
@@ -211,61 +229,65 @@ class JaxTetris(JaxEnvironment[TetrisState, TetrisObservation, TetrisInfo, Tetri
         return nb, cleared
 
     @partial(jax.jit, static_argnums=0)
-    def try_rotate_with_kick(self, board: chex.Array, piece_type: chex.Array, pos: chex.Array, rot: chex.Array):
-        # doesnt allow kick
-        new_rot = (rot + 1) & 3
-        g2 = self.piece_grid(piece_type, new_rot)
-        pos0 = pos
-
-        ok0 = ~self.check_collision(board, g2, pos0)
-
-        pos_final = jnp.where(ok0, pos0, pos)
-        rot_final = jnp.where(ok0, new_rot, rot)
+    def try_rotate(self, board: chex.Array, piece_type: chex.Array, pos: chex.Array, rot: chex.Array):
+        """
+        Try to rotate the tetromino in place (no wall kick).
+        Returns the new position and rotation if successful, otherwise the original.
+        """
+        new_rot = (rot + 1) & 3  # Next rotation
+        rotated_grid = self.piece_grid(piece_type, new_rot)  # Rotated grid
+        original_pos = pos  # Try original position
+        can_rotate_in_place = ~self.check_collision(board, rotated_grid, original_pos)  # Is rotation valid?
+        pos_final = jnp.where(can_rotate_in_place, original_pos, pos)
+        rot_final = jnp.where(can_rotate_in_place, new_rot, rot)
         return pos_final, rot_final
 
     @partial(jax.jit, static_argnums=0)
     def _lock_spawn(self, s: TetrisState, grid: chex.Array, tick_next: chex.Array, soft_points: chex.Array):
-        b2 = self.lock_piece(s.board, grid, s.pos)
-        b3, cleared = self.clear_lines(b2)
-        add = jnp.array(self.consts.LINE_CLEAR_SCORE, dtype=jnp.int32)[jnp.clip(cleared, 0, 4)]
-        score2 = s.score + add + soft_points
+        """
+        Lock the current piece, clear lines, update score, and spawn the next piece.
+        Returns the new state, reward, game over flag, and info.
+        """
+        board_locked = self.lock_piece(s.board, grid, s.pos)  # Lock piece
+        board_cleared, lines_cleared = self.clear_lines(board_locked)  # Clear lines
+        line_clear_score = jnp.array(self.consts.LINE_CLEAR_SCORE, dtype=jnp.int32)[jnp.clip(lines_cleared, 0, 4)]  # Score for lines
+        total_score = s.score + line_clear_score + soft_points  # Update score
 
-
-        # part for the banners one, two, triple, tetris
-
-        lines = jnp.clip(cleared, 0, 4).astype(jnp.int32)
-
-        # duration ob banners shown on the right side of the board
+        # Banner logic for line clear
+        
         show_frames_by_lines = jnp.array([0,60,60,60,60], dtype = jnp.int32)
-        new_timer = show_frames_by_lines[lines]
-        new_code = lines
+        new_banner_timer = show_frames_by_lines[lines_cleared]
+        new_banner_code = lines_cleared
+        banner_timer = jnp.where(lines_cleared > 0, new_banner_timer, s.banner_timer)
+        banner_code = jnp.where(lines_cleared > 0, new_banner_code, s.banner_code)
 
-        banner_timer2 = jnp.where(lines > 0, new_timer, s.banner_timer)
-        banner_code2 = jnp.where(lines > 0, new_code, s.banner_code)
-
-
-
-        cur = s.next_piece
+        current_piece = s.next_piece
         pos, rot = jnp.array([0, 3], jnp.int32), jnp.int32(0)
-        g_new = self.piece_grid(cur, rot)
-        over = self.check_collision(b3, g_new, pos)
-        nxt, _, _, key2 = self.spawn_piece(s.key)
+        new_piece_grid = self.piece_grid(current_piece, rot)
+        game_over = self.check_collision(board_cleared, new_piece_grid, pos)  # Check if game over
+        next_piece, _, _, key2 = self.spawn_piece(s.key)
 
-        s2 = s._replace(board=b3, piece_type=cur, pos=pos, rot=rot,
-                        next_piece=nxt, score=score2, game_over=over, key=key2, tick=tick_next,
-                        banner_timer=banner_timer2,  # new row for banners
-                        banner_code = banner_code2
+        new_state = s._replace(board=board_cleared, piece_type=current_piece, pos=pos, rot=rot,
+                        next_piece=next_piece, score=total_score, game_over=game_over, key=key2, tick=tick_next,
+                        banner_timer=banner_timer,  # new row for banners
+                        banner_code=banner_code
                         )
 
-        reward = (cleared > 0).astype(jnp.float32) * add.astype(jnp.float32)
-        info = TetrisInfo(score=s2.score, cleared=cleared, game_over=over)
-        return s2, reward, over, info
+        reward = (lines_cleared > 0).astype(jnp.float32) * line_clear_score.astype(jnp.float32)
+        info = TetrisInfo(score=new_state.score, cleared=lines_cleared, game_over=game_over)
+        return new_state, reward, game_over, info
 
     # ----- Spaces -----
     def action_space(self) -> spaces.Discrete:
+        """
+        Return the action space for the environment.
+        """
         return spaces.Discrete(5)
 
     def observation_space(self) -> spaces.Dict:
+        """
+        Return the observation space for the environment.
+        """
         return spaces.Dict({
             "board": spaces.Box(low=0, high=1, shape=(self.consts.BOARD_HEIGHT, self.consts.BOARD_WIDTH), dtype=jnp.int32),
             "piece_type": spaces.Box(low=0, high=6, shape=(), dtype=jnp.int32),
@@ -275,11 +297,17 @@ class JaxTetris(JaxEnvironment[TetrisState, TetrisObservation, TetrisInfo, Tetri
         })
 
     def image_space(self) -> spaces.Box:
+        """
+        Return the image space for rendering (if needed).
+        """
         return spaces.Box(low=0, high=255, shape=(self.consts.IMG_H, self.consts.IMG_W, 3), dtype=jnp.uint8)
 
     # ----- Public API -----
     @partial(jax.jit, static_argnums=(0,))
     def reset(self, key: jrandom.PRNGKey = None) -> Tuple[TetrisObservation, TetrisState]:
+        """
+        Reset the environment and return the initial observation and state.
+        """
         key = jrandom.PRNGKey(0) if key is None else key
         board = jnp.zeros((self.consts.BOARD_HEIGHT, self.consts.BOARD_WIDTH), dtype=jnp.int32)
         cur, pos, rot, key = self.spawn_piece(key)
@@ -299,6 +327,10 @@ class JaxTetris(JaxEnvironment[TetrisState, TetrisObservation, TetrisInfo, Tetri
     @partial(jax.jit, static_argnums=(0,), donate_argnums=(1,))
     def step(self, state: TetrisState, action: chex.Array) -> Tuple[
         TetrisObservation, TetrisState, float, bool, TetrisInfo]:
+        """
+        Take one step in the environment.
+        Returns the new observation, state, reward, done flag, and info.
+        """
         previous_state = state
         a = action.astype(jnp.int32)
         is_left = (a == Action.LEFT) | (a == Action.UPLEFT) | (a == Action.DOWNLEFT)
@@ -337,7 +369,7 @@ class JaxTetris(JaxEnvironment[TetrisState, TetrisObservation, TetrisInfo, Tetri
         # Rotate
         pos_r, rot_r = lax.cond(
             do_rotate_now,
-            lambda _: self.try_rotate_with_kick(state.board, state.piece_type, state.pos, state.rot),
+            lambda _: self.try_rotate(state.board, state.piece_type, state.pos, state.rot),
             lambda _: (state.pos, state.rot),
             operand=None
         )
@@ -416,6 +448,9 @@ class JaxTetris(JaxEnvironment[TetrisState, TetrisObservation, TetrisInfo, Tetri
     # ----- Helpers used inside step -----
     @partial(jax.jit, static_argnums=(0,))
     def _get_observation(self, state: TetrisState) -> TetrisObservation:
+        """
+        Convert the state to an observation.
+        """
         return TetrisObservation(
             board=state.board,
             piece_type=state.piece_type,
@@ -426,24 +461,38 @@ class JaxTetris(JaxEnvironment[TetrisState, TetrisObservation, TetrisInfo, Tetri
 
     @partial(jax.jit, static_argnums=(0,))
     def _get_info(self, state: TetrisState) -> TetrisInfo:
+        """
+        Extract info (score, cleared lines, game over) from the state.
+        """
         return TetrisInfo(score=state.score, cleared=jnp.int32(0), game_over=state.game_over)
 
     @partial(jax.jit, static_argnums=(0,))
     def _get_reward(self, previous_state: TetrisState, state: TetrisState) -> float:
-        # only reward when line is cleared, otherwise 0 
+        """
+        Compute the reward for the transition from previous_state to state.
+        Only nonzero when lines are cleared.
+        """
         cleared = state.score - previous_state.score
         return jnp.where(cleared > 0, cleared.astype(jnp.float32), jnp.float32(0.0))
 
     @partial(jax.jit, static_argnums=(0,))
     def _get_done(self, state: TetrisState) -> bool:
-        # unused (auto-restart), keep for API completeness
+        """
+        Check if the game is over.
+        """
         return state.game_over
 
     @partial(jax.jit, static_argnums=(0,))
     def obs_to_flat_array(self, obs: TetrisObservation) -> chex.Array:
+        """
+        Flatten the observation to a 1D array (for vectorization/testing).
+        """
         return jnp.concatenate([obs.board.flatten(), obs.piece_type[None], obs.pos, obs.rot[None], obs.next_piece[None]]).astype(jnp.int32)
 
     def render(self, state: TetrisState) -> jnp.ndarray:
+        """
+        Render the current game state to an image.
+        """
         return self.renderer.render(state)
 
 # ======================= Renderer (pure JAX) =============
