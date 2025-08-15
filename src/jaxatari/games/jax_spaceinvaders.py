@@ -788,7 +788,7 @@ class SpaceInvadersRenderer(JAXGameRenderer):
             lambda: jnp.stack([aj.get_sprite_frame(s, 0) for s in opponent_sprites_a])
         )
 
-        explosion_sprites = [SPRITE_EXPLOSION_1, SPRITE_EXPLOSION_1, SPRITE_EXPLOSION_1, SPRITE_EXPLOSION_1]
+        explosion_sprites = [SPRITE_EXPLOSION_1, SPRITE_EXPLOSION_2, SPRITE_EXPLOSION_3, SPRITE_EXPLOSION_4]
         explosion_purple_sprites = [SPRITE_EXPLOSION_PURPLE_A, SPRITE_EXPLOSION_PURPLE_B]
         explosion_player_sprites = [PLAYER_EXPLOSION_A, PLAYER_EXPLOSION_B]
 
