@@ -183,7 +183,7 @@ class DonkeyKongState(NamedTuple):
     hammer_can_hit: bool
     hammer_taken: bool
     hammer_carry_time: int
-    block_jumping: bool
+    block_jumping_and_climbing: bool
 
 class DonkeyKongObservation(NamedTuple):
     total_score: jnp.ndarray
@@ -528,7 +528,7 @@ class JaxDonkeyKong(JaxEnvironment[DonkeyKongState, DonkeyKongObservation, Donke
             )
 
             return jax.lax.cond(
-                jnp.logical_and(action == Action.FIRE, jnp.logical_and(jnp.logical_and(state.mario_climbing == False, state.mario_jumping == False), state.mario_jumping_wide == False)),
+                jnp.logical_and(action == Action.FIRE, jnp.logical_and(jnp.logical_and(jnp.logical_and(state.mario_climbing == False, state.mario_jumping == False), state.mario_jumping_wide == False), state.block_jumping_and_climbing == False)),
                 lambda _: new_state,
                 lambda _: state,
                 operand=None
@@ -548,7 +548,7 @@ class JaxDonkeyKong(JaxEnvironment[DonkeyKongState, DonkeyKongObservation, Donke
                 mario_y = state.mario_y + self.consts.MARIO_MOVING_SPEED
             )
             return jax.lax.cond(
-                jnp.logical_and(action == Action.RIGHTFIRE, jnp.logical_and(jnp.logical_and(state.mario_climbing == False, state.mario_jumping_wide == False), state.mario_jumping == False)),
+                jnp.logical_and(action == Action.RIGHTFIRE, jnp.logical_and(jnp.logical_and(jnp.logical_and(state.mario_climbing == False, state.mario_jumping_wide == False), state.mario_jumping == False), state.block_jumping_and_climbing == False)),
                 lambda _: new_state_start_jumping,
                 lambda _: jax.lax.cond(
                     jnp.logical_and(state.mario_jumping_wide == True, state.mario_view_direction == self.consts.MOVING_RIGHT),
@@ -572,7 +572,7 @@ class JaxDonkeyKong(JaxEnvironment[DonkeyKongState, DonkeyKongObservation, Donke
                 mario_y = state.mario_y - self.consts.MARIO_MOVING_SPEED
             )
             return jax.lax.cond(
-                jnp.logical_and(action == Action.LEFTFIRE, jnp.logical_and(jnp.logical_and(state.mario_climbing == False, state.mario_jumping_wide == False), state.mario_jumping == False)),
+                jnp.logical_and(action == Action.LEFTFIRE, jnp.logical_and(jnp.logical_and(jnp.logical_and(state.mario_climbing == False, state.mario_jumping_wide == False), state.mario_jumping == False), state.block_jumping_and_climbing == False)),
                 lambda _: new_state_start_jumping,
                 lambda _: jax.lax.cond(
                     jnp.logical_and(state.mario_jumping_wide == True, state.mario_view_direction == self.consts.MOVING_LEFT),
@@ -919,7 +919,77 @@ class JaxDonkeyKong(JaxEnvironment[DonkeyKongState, DonkeyKongObservation, Donke
                 hammer_y = (state.mario_y + self.consts.MARIO_HIT_BOX_Y + 1).astype(jnp.int32),
             )
 
-            return new_state_mario_jumping_right_no_swing
+            new_state_mario_views_left_swing = state._replace(
+                hammer_x = (state.mario_x + 5).astype(jnp.int32),
+                hammer_y = (state.mario_y - self.consts.HAMMER_SWING_HIT_BOX_Y).astype(jnp.int32),
+            )
+            new_state_mario_views_left_no_swing = state._replace(
+                hammer_x = (state.mario_x - 4).astype(jnp.int32),
+                hammer_y = (state.mario_y - self.consts.HAMMER_HIT_BOX_Y).astype(jnp.int32),
+            )
+
+            new_state_mario_jumping_left_swing = state._replace(
+                hammer_x = (state.mario_x + self.consts.MARIO_JUMPING_HEIGHT + 5).astype(jnp.int32),
+                hammer_y = (state.mario_y - self.consts.HAMMER_SWING_HIT_BOX_Y).astype(jnp.int32),
+            )
+            new_state_mario_jumping_left_no_swing = state._replace(
+                hammer_x = (state.mario_x + self.consts.MARIO_JUMPING_HEIGHT - 4).astype(jnp.int32),
+                hammer_y = (state.mario_y - self.consts.HAMMER_HIT_BOX_Y).astype(jnp.int32),
+            )
+
+
+            mario_is_jumping = jnp.logical_or(state.mario_jumping, state.mario_jumping_wide)
+
+            new_state = state
+            new_state = jax.lax.cond(
+                jnp.logical_and(new_state.mario_view_direction == self.consts.MOVING_RIGHT, jnp.logical_and(mario_is_jumping, new_state.hammer_can_hit)),
+                lambda _: new_state_mario_jumping_right_swing,
+                lambda _: new_state,
+                operand=None
+            )
+            new_state = jax.lax.cond(
+                jnp.logical_and(new_state.mario_view_direction == self.consts.MOVING_RIGHT, jnp.logical_and(mario_is_jumping, jnp.logical_not(new_state.hammer_can_hit))),
+                lambda _: new_state_mario_jumping_right_no_swing,
+                lambda _: new_state,
+                operand=None
+            )
+            new_state = jax.lax.cond(
+                jnp.logical_and(new_state.mario_view_direction == self.consts.MOVING_RIGHT, jnp.logical_and(jnp.logical_not(mario_is_jumping), new_state.hammer_can_hit)),
+                lambda _: new_state_mario_views_right_swing,
+                lambda _: new_state,
+                operand=None
+            )
+            new_state = jax.lax.cond(
+                jnp.logical_and(new_state.mario_view_direction == self.consts.MOVING_RIGHT, jnp.logical_and(jnp.logical_not(mario_is_jumping), jnp.logical_not(new_state.hammer_can_hit))),
+                lambda _: new_state_mario_views_right_no_swing,
+                lambda _: new_state,
+                operand=None
+            )
+            new_state = jax.lax.cond(
+                jnp.logical_and(new_state.mario_view_direction == self.consts.MOVING_LEFT, jnp.logical_and(mario_is_jumping, new_state.hammer_can_hit)),
+                lambda _: new_state_mario_jumping_left_swing,
+                lambda _: new_state,
+                operand=None
+            )
+            new_state = jax.lax.cond(
+                jnp.logical_and(new_state.mario_view_direction == self.consts.MOVING_LEFT, jnp.logical_and(mario_is_jumping, jnp.logical_not(new_state.hammer_can_hit))),
+                lambda _: new_state_mario_jumping_left_no_swing,
+                lambda _: new_state,
+                operand=None
+            )
+            new_state = jax.lax.cond(
+                jnp.logical_and(new_state.mario_view_direction == self.consts.MOVING_LEFT, jnp.logical_and(jnp.logical_not(mario_is_jumping), new_state.hammer_can_hit)),
+                lambda _: new_state_mario_views_left_swing,
+                lambda _: new_state,
+                operand=None
+            )
+            new_state = jax.lax.cond(
+                jnp.logical_and(new_state.mario_view_direction == self.consts.MOVING_LEFT, jnp.logical_and(jnp.logical_not(mario_is_jumping), jnp.logical_not(new_state.hammer_can_hit))),
+                lambda _: new_state_mario_views_left_no_swing,
+                lambda _: new_state,
+                operand=None
+            )
+            return new_state
 
         # mario can take the hammer by jumping and if they collide
         def hammer_is_taken_by_mario(state):
@@ -927,7 +997,7 @@ class JaxDonkeyKong(JaxEnvironment[DonkeyKongState, DonkeyKongObservation, Donke
                 hammer_taken = True,
                 hammer_can_hit = True,
                 hammer_carry_time = -1,
-                block_jumping = True,
+                block_jumping_and_climbing = True,
             )
 
             collision_mario_hammer = JaxDonkeyKong._collision_between_two_objects(state.mario_x, state.mario_y, self.consts.MARIO_HIT_BOX_X, self.consts.MARIO_HIT_BOX_Y, 
@@ -955,6 +1025,7 @@ class JaxDonkeyKong(JaxEnvironment[DonkeyKongState, DonkeyKongObservation, Donke
                 hammer_carry_time = hammer_carry_time,
                 hammer_can_hit = hammer_can_hit,
             ) 
+            new_state = calculate_hammer_pos_relative_to_mario(new_state)
             return jax.lax.cond(
                 state.hammer_taken,
                 lambda _: new_state,
@@ -1010,7 +1081,7 @@ class JaxDonkeyKong(JaxEnvironment[DonkeyKongState, DonkeyKongObservation, Donke
             hammer_can_hit = False,
             hammer_taken = False,
             hammer_carry_time = 0,
-            block_jumping = False,
+            block_jumping_and_climbing = False,
         )
         initial_obs = self._get_observation(state)
 
@@ -1337,7 +1408,12 @@ class DonkeyKongRenderer(JAXGameRenderer):
 
         # Hammer
         frame_hammer = aj.get_sprite_frame(self.SPRITES_HAMMER_UP, 0)
-        frame_hammer_down = aj.get_sprite_frame(self.SPRITES_HAMMER_DOWN, 0)
+        frame_hammer_down = jax.lax.cond(
+            state.mario_view_direction == self.consts.MOVING_RIGHT,
+            lambda _: aj.get_sprite_frame(self.SPRITES_HAMMER_DOWN, 0),
+            lambda _: aj.get_sprite_frame(self.SPRITES_HAMMER_DOWN, 1),
+            operand=None
+        )
         raster = jax.lax.cond(
             state.hammer_can_hit,
             lambda _: aj.render_at(raster, state.hammer_y, state.hammer_x, frame_hammer_down),
