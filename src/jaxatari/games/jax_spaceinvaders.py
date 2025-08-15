@@ -82,8 +82,6 @@ class SpaceInvadersState(NamedTuple):
     player_score: chex.Array
     player_lives: chex.Array
     destroyed: chex.Array
-    exploded: chex.Array
-    exploded_frames: chex.Array
     opponent_current_x: int
     opponent_current_y: int
     opponent_bounding_rect: NamedTuple
@@ -184,7 +182,7 @@ class JaxSpaceInvaders(JaxEnvironment[SpaceInvadersState, SpaceInvadersObservati
     def _check_bullet_enemy_collisions(self, state: SpaceInvadersState):
         def check_loop(carry):
             def body(i, carry):
-                destroyed, score, bullet_active, exploded = carry
+                destroyed, score, bullet_active = carry
 
                 row = i // self.consts.ENEMY_COLS
                 col = i % self.consts.ENEMY_COLS
@@ -204,23 +202,21 @@ class JaxSpaceInvaders(JaxEnvironment[SpaceInvadersState, SpaceInvadersObservati
                                          self.consts.OPPONENT_SIZE[1])
                 )
 
-                exploded = jax.lax.cond(
-                    collision,
-                    lambda ex: ex.at[idx].set(True),
-                    lambda ex: ex,
-                    exploded
+                updated = jnp.where(
+                    destroyed[idx] != 0,
+                    jnp.minimum(destroyed[idx] + 1, 29),
+                    collision.astype(jnp.int32)
                 )
-
-                destroyed = destroyed.at[idx].set(jnp.logical_or(destroyed[idx], collision))
+                destroyed = destroyed.at[idx].set(updated)
 
                 score += jnp.where(collision, 10, 0)  # +10 score
                 bullet_active = jnp.where(collision, False, bullet_active)
 
-                return destroyed, score, bullet_active, exploded
+                return destroyed, score, bullet_active
 
             return jax.lax.fori_loop(0, self.consts.ENEMY_ROWS * self.consts.ENEMY_COLS, body, carry)
 
-        init = (state.destroyed, state.player_score, state.bullet_active, state.exploded)
+        init = (state.destroyed, state.player_score, state.bullet_active)
 
         return jax.lax.cond(
             state.bullet_active,
@@ -410,9 +406,7 @@ class JaxSpaceInvaders(JaxEnvironment[SpaceInvadersState, SpaceInvadersObservati
             step_counter=jnp.array(0).astype(jnp.int32),
             player_score=jnp.array(0).astype(jnp.int32),
             player_lives=jnp.array(self.consts.INITIAL_LIVES).astype(jnp.int32),
-            destroyed=jnp.zeros((enemy_count,), dtype=jnp.bool),
-            exploded=jnp.zeros((enemy_count,), dtype=jnp.bool),
-            exploded_frames=jnp.zeros((enemy_count,), dtype=jnp.int32),
+            destroyed=jnp.zeros((enemy_count,), dtype=jnp.int32), # If 0 its alive, after it counts up to 28 each frame showing a different animation state depending on this value. Starting with 29 its gone 
             opponent_current_x=self.consts.OPPONENT_LIMIT_X[0],
             opponent_current_y=self.consts.OPPONENT_LIMIT_Y[0],
             opponent_bounding_rect=(opponent_rect_width, opponent_rect_height),
@@ -449,7 +443,7 @@ class JaxSpaceInvaders(JaxEnvironment[SpaceInvadersState, SpaceInvadersObservati
             bullet_x=new_bullet_x,
             bullet_y=new_bullet_y
         )
-        new_destroyed, new_score, final_bullet_active, new_exploded = self._check_bullet_enemy_collisions(new_bullet_state)
+        new_destroyed, new_score, final_bullet_active = self._check_bullet_enemy_collisions(new_bullet_state)
 
         enemy_bullets_active, enemy_bullets_x, enemy_bullets_y, enemy_fire_cooldown = self._update_enemy_bullets(
             state._replace(
@@ -458,7 +452,6 @@ class JaxSpaceInvaders(JaxEnvironment[SpaceInvadersState, SpaceInvadersObservati
                 enemy_bullets_x=state.enemy_bullets_x,
                 enemy_bullets_y=state.enemy_bullets_y,
                 enemy_fire_cooldown=state.enemy_fire_cooldown,
-                exploded=new_exploded
             ),
             key
         )
@@ -507,8 +500,6 @@ class JaxSpaceInvaders(JaxEnvironment[SpaceInvadersState, SpaceInvadersObservati
             player_score=new_score,
             player_lives=new_lives,
             destroyed=new_destroyed,
-            exploded=new_exploded,
-            exploded_frames=state.exploded_frames,
             opponent_current_x=position,
             opponent_current_y=state.opponent_current_y,
             opponent_bounding_rect=state.opponent_bounding_rect,
@@ -593,7 +584,6 @@ class JaxSpaceInvaders(JaxEnvironment[SpaceInvadersState, SpaceInvadersObservati
             )
             
             alive = jnp.logical_not(state.destroyed[i]).astype(jnp.int32)
-            
             return jnp.array([
                 enemy_x,
                 enemy_y,
@@ -805,25 +795,15 @@ class SpaceInvadersRenderer(JAXGameRenderer):
         explosion_sprites = jnp.array([aj.get_sprite_frame(s, 0) for s in explosion_sprites])
 
         def render_explosion(idx, raster, x, y):
-            frames = state.exploded_frames
-            frame = frames[idx] + 1
+            destroyed_frame = state.destroyed[idx] # value between [1;28]
 
-            # Update Animation Frame
-            new_frame = jax.lax.cond(
-                frame < jnp.sum(self.consts.EXPLOSION_FRAMES),
-                lambda f: f,
-                lambda _: -1,
-                frame
-            )
+            #TODO state._replace(exploded_frames=frames)
 
-            frames = frames.at[idx].set(new_frame)
-            state._replace(exploded_frames=frames)
-
-            sprite_id = jnp.argmax(frame < self.consts.EXPLOSION_FRAMES)
+            sprite_id = jnp.argmax(destroyed_frame < self.consts.EXPLOSION_FRAMES)
             sprite = explosion_sprites[sprite_id]
 
-            aj.render_at(raster, x, y, sprite, False)
-            jax.debug.print("Drawing Explosion at x: {x}, y: {y} with Frame: {frame} and Sprite: {sprite} for IDX: {idx}", x=x, y=y, frame=frames[idx], sprite=sprite_id, idx=idx)
+            raster = aj.render_at(raster, x, y, sprite, False)
+            #jax.debug.print("Drawing Explosion at x: {x}, y: {y} with Frame: {frame} and Sprite: {sprite} for IDX: {idx}", x=x, y=y, frame=frames[idx], sprite=sprite_id, idx=idx)
 
             return raster
 
@@ -837,9 +817,8 @@ class SpaceInvadersRenderer(JAXGameRenderer):
                 sprite = sprites_to_render[j]
                 
                 is_alive = jnp.logical_not(state.destroyed[idx])
-
                 raster = jax.lax.cond(
-                    jnp.logical_and(state.exploded[idx], state.exploded_frames[idx] > -1),
+                    jnp.logical_and(state.destroyed[idx] != 0, state.destroyed[idx] < 29), # Starting with the 29th frame the explosion animation is finished and doesnt need to be shown anymore 
                     lambda r: render_explosion(idx, r, base_x, y_pos),
                     lambda r: r,
                     raster
