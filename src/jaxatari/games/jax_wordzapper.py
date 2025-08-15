@@ -25,7 +25,7 @@ class WordZapperConstants(NamedTuple) :
     PLAYER_START_Y = 110
 
     # Object sizes (width, height)
-    PLAYER_SIZE = (4, 16)
+    PLAYER_SIZE = (16, 16)
     ASTEROID_SIZE = (8, 7)
     MISSILE_SIZE = (8, 1)
     ZAPPER_SIZE = (8, 1)
@@ -896,42 +896,23 @@ class JaxWordZapper(JaxEnvironment[WordZapperState, WordZapperObservation, WordZ
         has_free_slot = jnp.any(new_enemy_active == 0)
         spawn_cond = (new_enemy_global_spawn_timer == 0) & has_free_slot
 
-
-
-
-
-
         def spawn_one_enemy_fn(rng_key_in, existing_pos, existing_act):
             rng_key_out, sk_dir, sk_lane, sk_type = jax.random.split(rng_key_in, 4)
             direction = jnp.where(jax.random.bernoulli(sk_dir),  1.0, -1.0)
             vx = direction * self.consts.ENEMY_GAME_SPEED
             x_pos = jnp.where(direction == 1.0, self.consts.ENEMY_MIN_X, self.consts.ENEMY_MAX_X)
             lanes = jnp.linspace(self.consts.ENEMY_Y_MIN, self.consts.ENEMY_Y_MAX, 4)
-            
-            
-            # COMPLETELY REDONE SPAWNING LOGIC
-            # ONLY 4 EXISTING LANES
-            # NEW ENEMY SPAWNS ON THE LANE IF IT IS FREE
-            # THE RANDOMNESS IS CONTROLLED BY g_timer = jax.random.randint(rng_key_out, (), 30, 100)
-            
-            # Check which lanes are free
             def lane_is_free(lane_y):
                 return jnp.all(jnp.logical_or((existing_act == 0), (jnp.abs(existing_pos[:, 1] - lane_y) > 1e-3)))
             lane_free_mask = jax.vmap(lane_is_free)(lanes)
-            
-            # Try lanes in random order
             perm = jax.random.permutation(sk_lane, 4)
             def pick_lane(i, chosen):
                 lane = perm[i]
                 is_free = lane_free_mask[lane]
-                # If not chosen yet and lane is free, pick it
                 return jnp.where((chosen == -1) & is_free, lane, chosen)
-            
             lane_idx = jax.lax.fori_loop(0, 4, pick_lane, -1)
             final_y = jnp.where(lane_idx == -1, -9999, lanes[0])
             enemy_type = jax.random.randint(sk_type, (), 0, 2)
-
-            # If no free lane, spawn inactive enemy (delay spawn)
             new_enemy = jnp.where(lane_idx == -1,
                                   jnp.array([x_pos, final_y, enemy_type, vx, 0.0]),
                                   jnp.array([x_pos, lanes[lane_idx], enemy_type, vx, 1.0]))
@@ -956,20 +937,63 @@ class JaxWordZapper(JaxEnvironment[WordZapperState, WordZapperObservation, WordZ
             (new_enemy_positions, new_enemy_active, new_enemy_global_spawn_timer, state.rng_key),
         )
 
-        # 7. Assemble new state
+        # --- Integrated Player-Enemy Collision Logic ---
+        # Player rectangle
+        player_pos = jnp.array([new_player_x, new_player_y])
+        player_size = jnp.array(self.consts.PLAYER_SIZE)
+
+        # Enemy rectangles and actives
+        enemy_pos = positions[:, 0:2]  # shape (MAX_ENEMIES, 2)
+        enemy_size = jnp.array([16, 16])
+        enemy_active = active
+
+        # Calculate edges for player
+        p_left = player_pos[0] + player_size[0]/2
+        p_right = player_pos[0] + player_size[0]
+        p_top = player_pos[1]
+        p_bottom = player_pos[1] + player_size[1]
+
+        # Calculate edges for all enemies
+        e_left = enemy_pos[:, 0]
+        e_right = enemy_pos[:, 0] + enemy_size[0]
+        e_top = enemy_pos[:, 1]
+        e_bottom = enemy_pos[:, 1] + enemy_size[1]
+
+        # Check overlap for all enemies (trigger on edge contact)
+        horizontal_overlaps = (p_left <= e_right) & (p_right >= e_left)
+        vertical_overlaps = (p_top <= e_bottom) & (p_bottom >= e_top)           
+        collisions = horizontal_overlaps & vertical_overlaps & (enemy_active == 1)
+
+        # If any collision, move player by 13 in direction of enemy (positions[:,3])
+        any_collision = jnp.any(collisions)
+
+        # Find the first colliding enemy (lowest index)
+        colliding_idx = jnp.argmax(collisions)
+
+        # Only use the direction if there is a collision
+        enemy_dir = jnp.where(any_collision, positions[colliding_idx, 3], 0.0)
+
+        # Move player by 13 in direction of enemy_dir
+        new_player_x = jnp.where(any_collision & (enemy_dir < 0), new_player_x - 13, new_player_x)
+        new_player_x = jnp.where(any_collision & (enemy_dir > 0), new_player_x + 13, new_player_x)
+
+        # Deactivate ("disappear") collided enemy
+        new_enemy_active = jnp.where(collisions, 0, active)
+
+        # Update state
         return state._replace(
-            player_x = new_player_x,
-            player_y = new_player_y,
-            player_direction = new_player_direction,
-            player_missile_position = player_missile_position,
-            player_zapper_position = player_zapper_position,
-            enemy_positions = positions,
-            enemy_active = active,
-            enemy_global_spawn_timer = global_timer,
+            player_x=new_player_x,
+            player_y=new_player_y,
+            player_direction=new_player_direction,
+            player_missile_position=player_missile_position,
+            player_zapper_position=player_zapper_position,
+            enemy_positions=positions,
+            enemy_active=new_enemy_active,
+            enemy_global_spawn_timer=global_timer,
             letters_x=new_letters_x,
-            step_counter = new_step_counter,
-            timer = new_timer,
-            rng_key = rng_key,
+            step_counter=new_step_counter,
+            timer=new_timer,
+            rng_key=rng_key,
         )
 
     @partial(jax.jit, static_argnums=(0,))
