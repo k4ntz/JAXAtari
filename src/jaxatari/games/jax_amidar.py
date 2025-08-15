@@ -2,10 +2,8 @@
 
 # Features: 
 # - Levels 
-# - Jumping
 
 # Remove Inacuracies:
-# - Player & Enemy Speeds
 # - Improve shadow rendering to match the original (variable sizes)
 # - Implement blinking before chicken mode and jumping is over
 # - Implement random blinking for enemies
@@ -443,6 +441,81 @@ class AmidarInfo(NamedTuple):
     time: jnp.ndarray
     all_rewards: chex.Array
 
+def get_player_speed(frame_counter: chex.Array) -> chex.Array:
+    """
+    Compute the player speed based on the frame counter.
+    Corresponds to whether the player is moving this frame or not.
+
+    The player speed is based on a repeating '01001' pattern with periodic skips.
+
+    The base sequence repeats every 5 positions as:
+        0, 1, 0, 0, 1
+    which means '1' occurs only at indices where n % 5 == 1 or n % 5 == 4.
+
+    Certain '1' positions are periodically replaced with '0' according to
+    two skip positions r1 and r2 modulo 155 (where 155 = 5 × 31). These
+    skip positions alternate every 78 and 77 steps, creating a full cycle
+    of length 155.
+
+    r1 and r2 are chosen such that r1 % 5 and r2 % 5 are both in {1, 4}.
+    In the ALE game, these are different each game, but what the desicion is based on is not clear, 
+    so for now they are just set to 66 and 144.
+    Here are all the possible combinations of r1 and r2:
+    [[1, 79], [4, 81], [6, 84], [9, 86], [11, 89], [14, 91], [16, 94], [19, 96], [21, 99], [24, 101], 
+    [26, 104], [29, 106], [31, 109], [34, 111], [36, 114], [39, 116], [41, 119], [44, 121], [46, 124], 
+    [49, 126], [51, 129], [54, 131], [56, 134], [59, 136], [61, 139], [64, 141], [66, 144], [69, 146], 
+    [71, 149], [74, 151], [76, 154]]
+
+
+    Parameters
+    ----------
+    frame_counter : int 
+        The frame in which to check if the player moves.
+    
+    Returns
+    -------
+    jax.numpy.ndarray
+        Boolean of whether the player moves at the given frame.
+
+    Notes
+    -----
+    - The base pattern is defined purely by n % 5.
+    - The skip mask is defined by n % 155 ∈ {r1, r2}.
+    - Multiplying the base pattern by the skip mask produces the final sequence.
+    """
+    frame_counter = jnp.asarray(frame_counter)
+    r1, r2 = 66, 144
+
+    # Base pattern: 1 if n % 5 == 1 or 4
+    base = jnp.isin(frame_counter % 5, jnp.array([1, 4], dtype=frame_counter.dtype))
+
+    # Skip mask: 0 at r1 or r2 modulo 155, else 1
+    skip_mask = jnp.isin(frame_counter % 155, jnp.array([r1 % 155, r2 % 155], dtype=frame_counter.dtype), invert=True)
+
+    return jnp.logical_and(base, skip_mask).astype(jnp.int32)
+
+def get_enemy_speed(frame_counter: chex.Array, level: chex.Array) -> chex.Array:
+    """
+    Gets the enemy speed based on the frame counter and level.
+    For now only up to level 7, it doesn't change after that. TODO change in the future?
+    """
+
+    compute_for_level_functions = [
+        lambda: jnp.isin(frame_counter % 5, jnp.array([0, 3])), # level 1
+        lambda: jnp.isin(frame_counter % 25, jnp.array([2, 4, 7, 9, 12, 14, 16, 17, 19, 22, 24])), # level 2
+        lambda: jnp.isin(frame_counter % 25, jnp.array([0, 2, 3, 5, 8, 10, 13, 15, 17, 18, 20, 23])), # level 3
+        lambda: jnp.isin(frame_counter % 25, jnp.array([1, 4, 6, 8, 9, 11, 14, 16, 18, 19, 21, 24])), # level 4
+        lambda: jnp.isin(frame_counter % 25, jnp.array([0, 2, 4, 5, 7, 9, 10, 12, 14, 15, 17, 19, 20, 22])), # level 5
+        lambda: jnp.isin(frame_counter % 25, jnp.array([0, 2, 4, 5, 7, 9, 10, 12, 14, 15, 17, 19, 20, 22])), # level 6
+        lambda: jnp.isin(frame_counter % 5, jnp.array([0, 2, 3])), # level 7
+    ]
+
+    # level-1 since levels are 1-indexed, but jax.lax.switch is 0-indexed
+    enemy_speed = jax.lax.switch(level-1, compute_for_level_functions)
+
+    return enemy_speed
+
+
 def player_step(constants: AmidarConstants, state: AmidarState, action: chex.Array) -> tuple[chex.Array, chex.Array, chex.Array, chex.Array, chex.Array, chex.Array, chex.Array]:
     """Updates the player position based on the action taken.
     Returns the new player x and y coordinates and the direction."""
@@ -797,10 +870,10 @@ class JaxAmidar(JaxEnvironment[AmidarState, AmidarObservation, AmidarInfo, Amida
         def take_step():
             random_key, random_enemies_key = jax.random.split(state.random_key)
 
-            player_state = player_step(self.constants, state, action)
+            player_state = jax.lax.cond(get_player_speed(state.frame_counter), player_step, lambda constants, state, action: (0, state.player_x, state.player_y, state.player_direction, state.last_walked_corner, state.walked_on_paths, state.completed_rectangles, False), self.constants, state, action)
             (points_scored_player_step, player_x, player_y, player_direction, last_walked_corner, walked_on_paths, completed_rectangles, corners_completed) = player_state
 
-            enemies_state = enemies_step(self.constants, state, random_enemies_key)
+            enemies_state = jax.lax.cond(get_enemy_speed(state.frame_counter, 3), enemies_step, lambda constants, state, random_key: (state.enemy_positions, state.enemy_directions), self.constants, state, random_key)
             (enemy_positions, enemy_directions) = enemies_state
 
             # CHICKEN MODE-handling
