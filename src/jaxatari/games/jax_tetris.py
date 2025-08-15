@@ -1,4 +1,3 @@
-from __future__ import annotations
 from functools import partial
 from typing import NamedTuple, Tuple
 import os
@@ -112,6 +111,9 @@ class TetrisState(NamedTuple):
 
     last_action: chex.Array  # () int32 (Atari code)
 
+    banner_timer: chex.Array  # fields for the one, two, triple, tetris sprites
+    banner_code: chex.Array
+
 class TetrisObservation(NamedTuple):
     board: chex.Array
     piece_type: chex.Array
@@ -140,7 +142,8 @@ class JaxTetris(JaxEnvironment[TetrisState, TetrisObservation, TetrisInfo, Tetri
             Action.LEFT,
             Action.DOWN
         ]
-        self.obs_size = 3 * 4 + 1 + 1
+        # self.obs_size = 3 * 4 + 1 + 1 !!!!
+        self.obs_size = self.consts.BOARD_HEIGHT * self.consts.BOARD_WIDTH + 5
 
     # ----- Helpers -----
     @partial(jax.jit, static_argnums=0)
@@ -249,13 +252,34 @@ class JaxTetris(JaxEnvironment[TetrisState, TetrisObservation, TetrisInfo, Tetri
         b3, cleared = self.clear_lines(b2)
         add = jnp.array(self.consts.LINE_CLEAR_SCORE, dtype=jnp.int32)[jnp.clip(cleared, 0, 4)]
         score2 = s.score + add + soft_points
+
+
+        # part for the banners one, two, triple, tetris
+
+        lines = jnp.clip(cleared, 0, 4).astype(jnp.int32)
+
+        # duration ob banners shown on the right side of the board
+        show_frames_by_lines = jnp.array([0,60,60,60,60], dtype = jnp.int32)
+        new_timer = show_frames_by_lines[lines]
+        new_code = lines
+
+        banner_timer2 = jnp.where(lines > 0, new_timer, s.banner_timer)
+        banner_code2 = jnp.where(lines > 0, new_code, s.banner_code)
+
+
+
         cur = s.next_piece
         pos, rot = jnp.array([0, 3], jnp.int32), jnp.int32(0)
         g_new = self.piece_grid(cur, rot)
         over = self.check_collision(b3, g_new, pos)
         nxt, _, _, key2 = self.spawn_piece(s.key)
+
         s2 = s._replace(board=b3, piece_type=cur, pos=pos, rot=rot,
-                        next_piece=nxt, score=score2, game_over=over, key=key2, tick=tick_next)
+                        next_piece=nxt, score=score2, game_over=over, key=key2, tick=tick_next,
+                        banner_timer=banner_timer2,  # new row for banners
+                        banner_code = banner_code2
+                        )
+
         reward = (cleared > 0).astype(jnp.float32) * add.astype(jnp.float32)
         info = TetrisInfo(score=s2.score, cleared=cleared, game_over=over)
         return s2, reward, over, info
@@ -289,7 +313,9 @@ class JaxTetris(JaxEnvironment[TetrisState, TetrisObservation, TetrisInfo, Tetri
             tick=jnp.int32(0),
             das_timer=jnp.int32(0), arr_timer=jnp.int32(0), move_dir=jnp.int32(0),
             rot_timer=jnp.int32(0), soft_timer=jnp.int32(0),
-            last_action=jnp.int32(Action.NOOP)
+            last_action=jnp.int32(Action.NOOP),
+            banner_timer =jnp.int32(0),
+            banner_code = jnp.int32(0)
         )
         return self._get_observation(state), state
 
@@ -389,7 +415,9 @@ class JaxTetris(JaxEnvironment[TetrisState, TetrisObservation, TetrisInfo, Tetri
             return st2, jnp.float32(0.0), jnp.bool_(False), TetrisInfo(score=st2.score, cleared=jnp.int32(0),
                                                                        game_over=jnp.bool_(False))
 
-        state, _reward, done, info = lax.cond(state.game_over, after_over, lambda s: (s, _reward, done, info), state)
+        state, reward, done, info = lax.cond(state.game_over, after_over, lambda s: (s, _reward, done, info), state)
+
+        next_banner_timer = jnp.maximum(0, state.banner_timer - 1) # new row for banners
 
         state = state._replace(
             das_timer=das,
@@ -397,7 +425,9 @@ class JaxTetris(JaxEnvironment[TetrisState, TetrisObservation, TetrisInfo, Tetri
             move_dir=new_move_dir,
             rot_timer=jnp.where(do_rotate_now, jnp.int32(self.consts.ROT_DAS_FRAMES), rot_timer),
             soft_timer=jnp.where(do_soft_now, jnp.int32(self.consts.SOFT_PACE_FRAMES), soft_timer),
-            last_action=a
+            last_action=a,
+            banner_timer = next_banner_timer, # new row for banners
+            banner_code = jnp.where(next_banner_timer == 0, jnp.int32(0), state.banner_code) #new row for banners
         )
 
         obs = self._get_observation(state)
@@ -447,6 +477,10 @@ class TetrisRenderer(JAXGameRenderer):
             self.SPRITE_BOARD,
             self.SCORE_DIGIT_SPRITES,
             self.SPRITE_ROW_COLORS,
+            self.SPRITE_ONE, #new banner for one
+            self.SPRITE_TWO, #new banner for two
+            self.SPRITE_THREE, #new banner for triple
+            self.SPRITE_TETRIS, #new banner for tetris
         ) = self.load_sprites()
 
         self.N_COLOR_ROWS = int(self.SPRITE_ROW_COLORS.shape[0])
@@ -477,11 +511,34 @@ class TetrisRenderer(JAXGameRenderer):
 
         SPRITE_ROW_COLORS = jnp.stack(row_squares, axis=0)  # Shape: (22, H, W, 4)
 
+
+        ######################## I'M NOT SURE IF WE HAVE TO IMPLEMENT BANNERS LIKE THIS ####################
+
+        one = jr.loadFrame(os.path.join(MODULE_DIR, "sprites/tetris/text_one.npy"))
+        two = jr.loadFrame(os.path.join(MODULE_DIR, "sprites/tetris/text_two.npy"))
+        three = jr.loadFrame(os.path.join(MODULE_DIR, "sprites/tetris/text_triple.npy"))
+        tetris = jr.loadFrame(os.path.join(MODULE_DIR, "sprites/tetris/text_tetris.npy"))
+
+
+        # uint8 -> everything into 8 bits. It also works without the conversion so idk
+        # SPRITE_ONE = jnp.expand_dims(one.astype(jnp.uint8), axis=0)
+
+        #
+        SPRITE_ONE = jnp.expand_dims(jnp.array(one, dtype=jnp.uint8), axis=0)
+        SPRITE_TWO = jnp.expand_dims(jnp.array(two, dtype=jnp.uint8), axis=0)
+        SPRITE_THREE = jnp.expand_dims(jnp.array(three, dtype=jnp.uint8), axis=0)
+        SPRITE_TETRIS = jnp.expand_dims(jnp.array( tetris, dtype=jnp.uint8), axis=0)
+
+
         return (
             SPRITE_BG,
             SPRITE_BOARD,
             SCORE_DIGIT_SPRITES,
-            SPRITE_ROW_COLORS
+            SPRITE_ROW_COLORS,
+            SPRITE_ONE,
+            SPRITE_TWO,
+            SPRITE_THREE,
+            SPRITE_TETRIS
         )
 
     @partial(jax.jit, static_argnums=(0,))
@@ -560,4 +617,38 @@ class TetrisRenderer(JAXGameRenderer):
             num_to_render=4,
             spacing=16
         )
+
+        # -------- NEW: draw ONE / TWO / THREE / TETRIS while banner is active --------
+        # compute a position to the right of the board
+        board_px_w = self.consts.BOARD_PADDING + self.consts.BOARD_WIDTH * (self.consts.CELL_WIDTH + 1)
+        label_x = self.consts.BOARD_X + board_px_w + 10  # small margin to the right
+        label_y = self.consts.BOARD_Y + 70  # tweak to match your video
+
+        def draw_with(sprite, r_):
+            frame = jr.get_sprite_frame(sprite, 0)
+            return jr.render_at(r_, label_x, label_y, frame)
+
+        def draw_none(r_):   return r_
+
+        def draw_one(r_):    return draw_with(self.SPRITE_ONE, r_)
+
+        def draw_two(r_):    return draw_with(self.SPRITE_TWO, r_)
+
+        def draw_three(r_):  return draw_with(self.SPRITE_THREE, r_)
+
+        def draw_tetris(r_): return draw_with(self.SPRITE_TETRIS, r_)
+
+        def draw_banner(r_):
+            # banner_code: 0 none, 1 ONE, 2 TWO, 3 THREE, 4 TETRIS
+            idx = jnp.clip(state.banner_code, jnp.int32(0), jnp.int32(4))
+            fns = [draw_none, draw_one, draw_two, draw_three, draw_tetris]
+            return jax.lax.switch(idx, fns, r_)
+
+        raster = jax.lax.cond(
+            (state.banner_timer > jnp.int32(0)) & (state.banner_code > jnp.int32(0)),
+            draw_banner,
+            lambda r_: r_,
+            raster
+        )
+
         return raster
