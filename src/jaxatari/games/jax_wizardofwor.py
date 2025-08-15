@@ -23,6 +23,8 @@ class WizardOfWorConstants(NamedTuple):
     WINDOW_WIDTH: int = 160
     WINDOW_HEIGHT: int = 210
 
+    DEATH_ANIMATION_STEPS = [10, 20]
+
     # Sprite sizes (Platzhalter)
     PLAYER_SIZE: Tuple[int, int] = (8, 8)
     ENEMY_SIZE: Tuple[int, int] = (8, 8)
@@ -33,6 +35,7 @@ class WizardOfWorConstants(NamedTuple):
     RADAR_BLIP_GAP: int = 0
 
     # Richtungen
+    NONE: int = Action.NOOP
     UP: int = Action.UP
     DOWN: int = Action.DOWN
     LEFT: int = Action.LEFT
@@ -80,14 +83,14 @@ class WizardOfWorConstants(NamedTuple):
     TELEPORTER_RIGHT_POSITION: Tuple[int, int] = (108, 20)  # Position des rechten Teleporters
 
     LEVEL_1_ENEMY_POSITIONS = jnp.concatenate([
-        jnp.array([[0, 0, RIGHT, ENEMY_BURWOR]], dtype=jnp.int32),
-        jnp.array([[45, 20, LEFT, ENEMY_BURWOR]], dtype=jnp.int32),
-        jnp.array([[10, 43, UP, ENEMY_BURWOR]], dtype=jnp.int32),
-        jnp.array([[60, 32, DOWN, ENEMY_BURWOR]], dtype=jnp.int32),
-        jnp.tile(jnp.array([[0, 0, 0, 0]], dtype=jnp.int32), (MAX_ENEMIES - 4, 1))
+        jnp.array([[0, 0, RIGHT, ENEMY_BURWOR, 1]], dtype=jnp.int32),
+        jnp.array([[45, 20, LEFT, ENEMY_BURWOR, 0]], dtype=jnp.int32),
+        jnp.array([[10, 43, UP, ENEMY_BURWOR, 1]], dtype=jnp.int32),
+        jnp.array([[60, 32, DOWN, ENEMY_BURWOR, 0]], dtype=jnp.int32),
+        jnp.tile(jnp.array([[0, 0, 0, 0, 0]], dtype=jnp.int32), (MAX_ENEMIES - 4, 1))
     ], axis=0)
 
-    NO_ENEMY_POSITIONS = jnp.zeros((MAX_ENEMIES, 4), dtype=jnp.int32)  # No enemies
+    NO_ENEMY_POSITIONS = jnp.zeros((MAX_ENEMIES, 5), dtype=jnp.int32)  # No enemies
 
     PLAYER_SPAWN_POSITION: Tuple[int, int, int] = (100, 50, LEFT)  # Startposition der Spielfigur
 
@@ -103,6 +106,9 @@ class WizardOfWorConstants(NamedTuple):
     # IMPORTANT: About the coordinates
     # The board goes from 0,0 (top-left) to 110,60 (bottom-right)
     BOARD_SIZE: Tuple[int, int] = (110, 60)  # Size of the game board in tiles
+
+    SCORE_DIGIT_SPACING: int = 8
+    SCORE_OFFSET: Tuple[int, int] = (BOARD_POSITION[0] + 80, BOARD_POSITION[1] - 16)  # Offset for score display
 
     @partial(jax.jit, static_argnums=(0,))
     def _get_wall_position(self, x: int, y: int, horizontal: bool) -> EntityPosition:
@@ -173,6 +179,7 @@ class WizardOfWorInfo(NamedTuple):
 
 class WizardOfWorState(NamedTuple):
     player: EntityPosition
+    player_death_animation: int
     enemies: chex.Array  # Array of EntityPosition with length WizardOfWorConstants.MAX_ENEMIES
     gameboard: int
     bullet: EntityPosition
@@ -184,13 +191,15 @@ class WizardOfWorState(NamedTuple):
     rng_key: chex.PRNGKey  # Random key for JAX operations
     level: int  # The current level of the game, used for level progression
     game_over: bool
-    teleporter: bool # Flag to indicate if the teleporter is active.
+    teleporter: bool  # Flag to indicate if the teleporter is active.
 
 
 def update_state(state: WizardOfWorState, player: EntityPosition = None, enemies: chex.Array = None,
-                 gameboard: int = None, bullet: EntityPosition = None, enemy_bullet: EntityPosition = None, score: chex.Array = None,
+                 gameboard: int = None, bullet: EntityPosition = None, enemy_bullet: EntityPosition = None,
+                 score: chex.Array = None,
                  lives: int = None, doubled: bool = None, frame_counter: int = None, rng_key: chex.PRNGKey = None,
-                 level: int = None, game_over: bool = None, teleporter: bool = None) -> WizardOfWorState:
+                 level: int = None, game_over: bool = None, teleporter: bool = None,
+                 player_death_animation: int = None) -> WizardOfWorState:
     """
     Updates the state of the game. Only this method should be used to mutate the State object.
     Parameters not passed will be taken from the current state.
@@ -212,10 +221,11 @@ def update_state(state: WizardOfWorState, player: EntityPosition = None, enemies
     """
     return WizardOfWorState(
         player=player if player is not None else state.player,
+        player_death_animation=player_death_animation if player_death_animation is not None else state.player_death_animation,
         enemies=enemies if enemies is not None else state.enemies,
         gameboard=gameboard if gameboard is not None else state.gameboard,
         bullet=bullet if bullet is not None else state.bullet,
-        enemy_bullet= enemy_bullet if enemy_bullet is not None else state.enemy_bullet,
+        enemy_bullet=enemy_bullet if enemy_bullet is not None else state.enemy_bullet,
         score=score if score is not None else state.score,
         lives=lives if lives is not None else state.lives,
         doubled=doubled if doubled is not None else state.doubled,
@@ -246,8 +256,9 @@ class JaxWizardOfWor(JaxEnvironment[WizardOfWorState, WizardOfWorObservation, Wi
                 height=self.consts.PLAYER_SIZE[1],
                 direction=self.consts.PLAYER_SPAWN_POSITION[2]
             ),
+            player_death_animation=0,
             enemies=jnp.zeros(
-                (self.consts.MAX_ENEMIES, 4),  # [x, y, direction, type]
+                (self.consts.MAX_ENEMIES, 5),  # [x, y, direction, type]
                 dtype=jnp.int32
             ),
             gameboard=1,
@@ -285,16 +296,11 @@ class JaxWizardOfWor(JaxEnvironment[WizardOfWorState, WizardOfWorObservation, Wi
             frame_counter=(state.frame_counter + 1) % 360,
             rng_key=jax.random.fold_in(state.rng_key, action),
             # Teleporter is true if the frame_counter is below 180
-            teleporter= (state.frame_counter < 180)
+            teleporter=(state.frame_counter < 180)
         )
         new_state = self._step_level_change(state=new_state)
         new_state = self._step_respawn(state=new_state, action=action)
-        new_state = jax.lax.cond(
-            new_state.frame_counter % 4 == 0,
-            lambda _: self._step_player_movement(state=new_state, action=action),
-            lambda _: new_state,
-            operand=None
-        )
+        new_state = self._step_player_movement(state=new_state, action=action)
         new_state = self._step_bullet_movement(state=new_state)
         new_state = self._step_enemy_movement(state=new_state)
         new_state = self._step_collision_detection(state=new_state)
@@ -406,150 +412,195 @@ class JaxWizardOfWor(JaxEnvironment[WizardOfWorState, WizardOfWorObservation, Wi
 
     @partial(jax.jit, static_argnums=(0,))
     def _step_player_movement(self, state, action):
-        """Updates the player position based on the action taken.
-        Checks for collisions with walls and boundaries.
-        Handles teleportation if the player collides with a teleporter and it is active.
-        :param state: The current state of the game.
-        :param action: The action taken by the player.
-        :return: The updated state with the new player position.
+        """
+        Updates the player position based on the action taken.
+        Handles movement only if player_death_animation == 0.
+        If player_death_animation > 0, increments it up to 21.
         """
 
-        def _get_new_position(player: EntityPosition, action: int) -> EntityPosition:
-            return jax.lax.cond(
-                jnp.logical_or(jnp.equal(action, self.consts.UP), jnp.equal(action, self.consts.UPFIRE)),
-                lambda: EntityPosition(
-                    x=player.x,
-                    y=player.y - self.consts.STEP_SIZE,
-                    width=player.width,
-                    height=player.height,
-                    direction=self.consts.UP
-                ),
-                lambda: jax.lax.cond(
-                    jnp.logical_or(jnp.equal(action, self.consts.DOWN), jnp.equal(action, self.consts.DOWNFIRE)),
+        def handle_alive():
+            def _get_new_position(player: EntityPosition, action: int) -> EntityPosition:
+                return jax.lax.cond(
+                    jnp.logical_or(jnp.equal(action, self.consts.UP), jnp.equal(action, self.consts.UPFIRE)),
                     lambda: EntityPosition(
                         x=player.x,
-                        y=player.y + self.consts.STEP_SIZE,
+                        y=player.y - self.consts.STEP_SIZE,
                         width=player.width,
                         height=player.height,
-                        direction=self.consts.DOWN
+                        direction=self.consts.UP
                     ),
                     lambda: jax.lax.cond(
-                        jnp.logical_or(jnp.equal(action, self.consts.LEFT), jnp.equal(action, self.consts.LEFTFIRE)),
+                        jnp.logical_or(jnp.equal(action, self.consts.DOWN), jnp.equal(action, self.consts.DOWNFIRE)),
                         lambda: EntityPosition(
-                            x=player.x - self.consts.STEP_SIZE,
-                            y=player.y,
+                            x=player.x,
+                            y=player.y + self.consts.STEP_SIZE,
                             width=player.width,
                             height=player.height,
-                            direction=self.consts.LEFT
+                            direction=self.consts.DOWN
                         ),
                         lambda: jax.lax.cond(
-                            jnp.logical_or(jnp.equal(action, self.consts.RIGHT), jnp.equal(action, self.consts.RIGHTFIRE)),
+                            jnp.logical_or(jnp.equal(action, self.consts.LEFT),
+                                           jnp.equal(action, self.consts.LEFTFIRE)),
                             lambda: EntityPosition(
-                                x=player.x + self.consts.STEP_SIZE,
+                                x=player.x - self.consts.STEP_SIZE,
                                 y=player.y,
                                 width=player.width,
                                 height=player.height,
-                                direction=self.consts.RIGHT
+                                direction=self.consts.LEFT
                             ),
-                            lambda: state.player  # No movement, return current position
-                        )
+                            lambda: jax.lax.cond(
+                                jnp.logical_or(jnp.equal(action, self.consts.RIGHT),
+                                               jnp.equal(action, self.consts.RIGHTFIRE)),
+                                lambda: EntityPosition(
+                                    x=player.x + self.consts.STEP_SIZE,
+                                    y=player.y,
+                                    width=player.width,
+                                    height=player.height,
+                                    direction=self.consts.RIGHT
+                                ),
+                                lambda: state.player  # No movement, return current position
+                            )
+                        ),
                     ),
-                ),
+                )
+
+            proposed_new_position = _get_new_position(player=state.player, action=action)
+
+            # Teleporter EntityPositions
+            teleporter_left = EntityPosition(
+                x=self.consts.TELEPORTER_LEFT_POSITION[0],
+                y=self.consts.TELEPORTER_LEFT_POSITION[1],
+                width=self.consts.WALL_THICKNESS,
+                height=self.consts.TILE_SIZE[1],
+                direction=self.consts.RIGHT
+            )
+            teleporter_right = EntityPosition(
+                x=self.consts.TELEPORTER_RIGHT_POSITION[0],
+                y=self.consts.TELEPORTER_RIGHT_POSITION[1],
+                width=self.consts.WALL_THICKNESS,
+                height=self.consts.TILE_SIZE[1],
+                direction=self.consts.LEFT
+            )
+            # Zielpositionen nach Teleport
+            teleporter_left_target = EntityPosition(
+                x=self.consts.TELEPORTER_RIGHT_POSITION[0] - state.player.width,
+                y=self.consts.TELEPORTER_RIGHT_POSITION[1],
+                width=state.player.width,
+                height=state.player.height,
+                direction=self.consts.LEFT
+            )
+            teleporter_right_target = EntityPosition(
+                x=self.consts.TELEPORTER_LEFT_POSITION[0] + self.consts.WALL_THICKNESS,
+                y=self.consts.TELEPORTER_LEFT_POSITION[1],
+                width=state.player.width,
+                height=state.player.height,
+                direction=self.consts.RIGHT
             )
 
-        proposed_new_position = _get_new_position(player=state.player, action=action)
-
-        # Teleporter EntityPositions
-        teleporter_left = EntityPosition(
-            x=self.consts.TELEPORTER_LEFT_POSITION[0],
-            y=self.consts.TELEPORTER_LEFT_POSITION[1],
-            width=self.consts.WALL_THICKNESS,
-            height=self.consts.TILE_SIZE[1],
-            direction=self.consts.RIGHT
-        )
-        teleporter_right = EntityPosition(
-            x=self.consts.TELEPORTER_RIGHT_POSITION[0],
-            y=self.consts.TELEPORTER_RIGHT_POSITION[1],
-            width=self.consts.WALL_THICKNESS,
-            height=self.consts.TILE_SIZE[1],
-            direction=self.consts.LEFT
-        )
-        # Zielpositionen nach Teleport
-        teleporter_left_target = EntityPosition(
-            x=self.consts.TELEPORTER_RIGHT_POSITION[0] - state.player.width,
-            y=self.consts.TELEPORTER_RIGHT_POSITION[1],
-            width=state.player.width,
-            height=state.player.height,
-            direction=self.consts.LEFT
-        )
-        teleporter_right_target = EntityPosition(
-            x=self.consts.TELEPORTER_LEFT_POSITION[0] + self.consts.WALL_THICKNESS,
-            y=self.consts.TELEPORTER_LEFT_POSITION[1],
-            width=state.player.width,
-            height=state.player.height,
-            direction=self.consts.RIGHT
-        )
-
-        def teleport_if_needed(pos):
-            # Links: Wenn Teleporter aktiv und Kollision mit linker Teleporterwand
-            return jax.lax.cond(
-                jnp.logical_and(
-                    state.teleporter,
-                    self._check_collision(proposed_new_position, teleporter_left)
-                ),
-                lambda: teleporter_left_target,
-                lambda: jax.lax.cond(
+            def teleport_if_needed(pos):
+                return jax.lax.cond(
                     jnp.logical_and(
                         state.teleporter,
-                        self._check_collision(proposed_new_position, teleporter_right)
+                        self._check_collision(proposed_new_position, teleporter_left)
                     ),
-                    lambda: teleporter_right_target,
-                    lambda: pos
+                    lambda: teleporter_left_target,
+                    lambda: jax.lax.cond(
+                        jnp.logical_and(
+                            state.teleporter,
+                            self._check_collision(proposed_new_position, teleporter_right)
+                        ),
+                        lambda: teleporter_right_target,
+                        lambda: pos
+                    )
                 )
+
+            checked_new_position = self._ensure_position_validity(
+                state=state,
+                old_position=state.player,
+                new_position=proposed_new_position
             )
 
-        checked_new_position = self._ensure_position_validity(
-            state=state,
-            old_position=state.player,
-            new_position=proposed_new_position
-        )
+            checked_new_position = teleport_if_needed(checked_new_position)
 
-        # Teleportation prüfen
-        checked_new_position = teleport_if_needed(checked_new_position)
+            new_player_position = jax.lax.cond(
+                self._positions_equal(pos1=proposed_new_position, pos2=checked_new_position),
+                lambda _: checked_new_position,
+                lambda _: jax.lax.cond(
+                    jnp.logical_and(
+                        jnp.not_equal(checked_new_position.direction, proposed_new_position.direction),
+                        jnp.logical_not(
+                            jnp.logical_and(
+                                checked_new_position.x % (self.consts.TILE_SIZE[0] + self.consts.WALL_THICKNESS) == 0,
+                                checked_new_position.y % (self.consts.TILE_SIZE[1] + self.consts.WALL_THICKNESS) == 0
+                            )
+                        )
+                    ),
+                    lambda _: _get_new_position(
+                        player=checked_new_position,
+                        action=checked_new_position.direction
+                    ),
+                    lambda _: checked_new_position,
+                    operand=None
+                ),
+                operand=None
+            )
 
-        new_player_position = jax.lax.cond(
-            self._positions_equal(pos1=proposed_new_position, pos2=checked_new_position),
-            lambda _: checked_new_position,  # If the position is valid, return it
-            lambda _: jax.lax.cond(
-                jnp.logical_and(
-                    jnp.not_equal(checked_new_position.direction, proposed_new_position.direction),
-                    jnp.logical_not(
-                        jnp.logical_and(
-                            checked_new_position.x % (self.consts.TILE_SIZE[0] + self.consts.WALL_THICKNESS) == 0,
-                            checked_new_position.y % (self.consts.TILE_SIZE[1] + self.consts.WALL_THICKNESS) == 0
+            checked_new_position = self._ensure_position_validity(
+                state=state,
+                old_position=state.player,
+                new_position=new_player_position
+            )
+            checked_new_position = teleport_if_needed(checked_new_position)
+
+            # Bullet firing
+            # if a fire action is taken and bullet is not currently active, fire a bullet
+            new_bullet = jax.lax.cond(
+                jnp.logical_or(
+                    jnp.logical_or(
+                        jnp.equal(action, self.consts.FIRE),
+                        jnp.equal(action, self.consts.UPFIRE)
+                    ),
+                    jnp.logical_or(
+                        jnp.equal(action, self.consts.DOWNFIRE),
+                        jnp.logical_or(
+                            jnp.equal(action, self.consts.LEFTFIRE),
+                            jnp.equal(action, self.consts.RIGHTFIRE)
                         )
                     )
+                ) & (state.bullet.direction == self.consts.NONE),
+                lambda: EntityPosition(
+                    x=checked_new_position.x + checked_new_position.width // 2 - self.consts.BULLET_SIZE[0] // 2,
+                    y=checked_new_position.y + checked_new_position.height // 2 - self.consts.BULLET_SIZE[1] // 2,
+                    width=self.consts.BULLET_SIZE[0],
+                    height=self.consts.BULLET_SIZE[1],
+                    direction=checked_new_position.direction
                 ),
-                lambda _: _get_new_position(
-                    player=checked_new_position,
-                    action=checked_new_position.direction
-                ),
-                lambda _: checked_new_position,
+                lambda: state.bullet
+            )
+
+
+            return update_state(
+                state=state,
+                player=checked_new_position,
+                bullet=new_bullet,
+            )
+
+        def handle_death():
+            new_animation = jnp.minimum(state.player_death_animation + 1, self.consts.DEATH_ANIMATION_STEPS[1] + 1)
+            return update_state(
+                state=state,
+                player_death_animation=new_animation
+            )
+
+        return jax.lax.cond(
+            state.player_death_animation == 0,
+            lambda: jax.lax.cond(
+                state.frame_counter % 4 == 0,  # Update player position every 4 frames
+                lambda _: handle_alive(),
+                lambda _: state,  # No movement if not the right frame
                 operand=None
             ),
-            operand=None
-        )
-
-        checked_new_position = self._ensure_position_validity(
-            state=state,
-            old_position=state.player,
-            new_position=new_player_position
-        )
-        checked_new_position = teleport_if_needed(checked_new_position)
-
-        return update_state(
-            state=state,
-            player=checked_new_position
+            lambda: handle_death()
         )
 
     @partial(jax.jit, static_argnums=(0,))
@@ -663,11 +714,102 @@ class JaxWizardOfWor(JaxEnvironment[WizardOfWorState, WizardOfWorObservation, Wi
 
     @partial(jax.jit, static_argnums=(0,))
     def _step_bullet_movement(self, state):
-        return state
+        # move the bullet in the direction it is facing
+        # if the bullet collides with a wall, it is removed
+        # there are up to 2 bullets, one for the player and one for the enemy
+
+        def move_bullet(bullet: EntityPosition) -> EntityPosition:
+            new_x = bullet.x + self.consts.STEP_SIZE * (bullet.direction == self.consts.RIGHT) - \
+                    self.consts.STEP_SIZE * (bullet.direction == self.consts.LEFT)
+            new_y = bullet.y + self.consts.STEP_SIZE * (bullet.direction == self.consts.DOWN) - \
+                    self.consts.STEP_SIZE * (bullet.direction == self.consts.UP)
+            new_bullet = EntityPosition(
+                x=new_x,
+                y=new_y,
+                width=bullet.width,
+                height=bullet.height,
+                direction=bullet.direction
+            )
+            # Check if the bullet is out of bounds or collides with a wall
+            new_bullet = self._check_walls(
+                state=state,
+                old_position=bullet,
+                new_position=new_bullet
+            )
+            new_bullet = self._check_boundaries(
+                old_position=bullet,
+                new_position=new_bullet
+            )
+            # If bullet == new_bullet, it means the bullet is out of bounds or collided with a wall
+            # Such it collided and we remove it by resetting it.
+            reset_bullet = EntityPosition(
+                x=-1,
+                y=-1,
+                width=self.consts.BULLET_SIZE[0],
+                height=self.consts.BULLET_SIZE[1],
+                direction=self.consts.NONE
+            )
+
+            return jax.lax.cond(
+                    bullet.direction == self.consts.NONE,
+                    lambda _: bullet,
+                    lambda _: jax.lax.cond(
+                        self._positions_equal(pos1=bullet, pos2=new_bullet),
+                        lambda _: reset_bullet,  # Reset bullet if it collided with a wall or is out of bounds
+                        lambda _: new_bullet,  # Otherwise return the new position
+                        operand=None
+                    ),
+                    operand=None
+                )
+
+        new_bullet = move_bullet(state.bullet)
+        new_enemy_bullet = move_bullet(state.enemy_bullet)
+        return jax.lax.cond(
+            state.frame_counter % 2 == 0,
+            lambda: update_state(
+                state=state,
+                bullet=new_bullet,
+                enemy_bullet=new_enemy_bullet
+            ),
+            lambda: state
+        )
 
     @partial(jax.jit, static_argnums=(0,))
     def _step_enemy_movement(self, state):
-        return state
+        # map over all enemies and update their positions based on their direction
+
+        def move_enemy(enemy: chex.Array) -> chex.Array:
+            x, y, direction, enemy_type, death_animation = enemy
+
+            is_none = enemy_type == self.consts.ENEMY_NONE
+            is_dying = death_animation > 0
+            is_dead = death_animation >= self.consts.DEATH_ANIMATION_STEPS[1]
+            dying_enemy = jnp.array([x, y, direction, enemy_type, death_animation + 1])
+            none_enemy = jnp.array([0, 0, 0, self.consts.ENEMY_NONE, 0])
+
+            result = jax.lax.cond(
+                is_none,
+                lambda _: enemy,
+                lambda _: jax.lax.cond(
+                    is_dying,
+                    lambda _: jax.lax.cond(
+                        is_dead,
+                        lambda _: none_enemy,
+                        lambda _: dying_enemy,
+                        operand=None
+                    ),
+                    lambda _: enemy,  # Hier später die Bewegungslogik ergänzen
+                    operand=None
+                ),
+                operand=None
+            )
+            return result
+
+        new_enemies = jax.vmap(move_enemy)(state.enemies)
+        return update_state(
+            state=state,
+            enemies=new_enemies
+        )
 
     @partial(jax.jit, static_argnums=(0,))
     def _step_collision_detection(self, state):
@@ -688,6 +830,7 @@ class WizardOfWorRenderer(JAXGameRenderer):
             self.SPRITE_WALL_HORIZONTAL,
             self.SPRITE_WALL_VERTICAL,
             self.SPRITE_RADAR_BLIP,
+            self.SCORE_DIGIT_SPRITES
         ) = self.load_sprites()
 
     @partial(jax.jit, static_argnums=(0,))
@@ -699,10 +842,16 @@ class WizardOfWorRenderer(JAXGameRenderer):
         player1 = jr.loadFrame(os.path.join(MODULE_DIR, "sprites/wizardofwor/player/player_1.npy"))
         player2 = jr.loadFrame(os.path.join(MODULE_DIR, "sprites/wizardofwor/player/player_2.npy"))
         player3 = jr.loadFrame(os.path.join(MODULE_DIR, "sprites/wizardofwor/player/player_3.npy"))
+        player_death0 = jr.loadFrame(os.path.join(MODULE_DIR, "sprites/wizardofwor/player/death_0.npy"))
+        player_death1 = jr.loadFrame(os.path.join(MODULE_DIR, "sprites/wizardofwor/player/death_1.npy"))
+        player_death2 = jr.loadFrame(os.path.join(MODULE_DIR, "sprites/wizardofwor/player/death_2.npy"))
         burwor0 = jr.loadFrame(os.path.join(MODULE_DIR, "sprites/wizardofwor/enemies/burwor/burwor_0.npy"))
         burwor1 = jr.loadFrame(os.path.join(MODULE_DIR, "sprites/wizardofwor/enemies/burwor/burwor_1.npy"))
         burwor2 = jr.loadFrame(os.path.join(MODULE_DIR, "sprites/wizardofwor/enemies/burwor/burwor_2.npy"))
         burwor3 = jr.loadFrame(os.path.join(MODULE_DIR, "sprites/wizardofwor/enemies/burwor/burwor_3.npy"))
+        burwor_death0 = jr.loadFrame(os.path.join(MODULE_DIR, "sprites/wizardofwor/enemies/burwor/death_0.npy"))
+        burwor_death1 = jr.loadFrame(os.path.join(MODULE_DIR, "sprites/wizardofwor/enemies/burwor/death_1.npy"))
+        burwor_death2 = jr.loadFrame(os.path.join(MODULE_DIR, "sprites/wizardofwor/enemies/burwor/death_2.npy"))
         bullet = jr.loadFrame(os.path.join(MODULE_DIR, "sprites/wizardofwor/bullet.npy"))
         enemy_bullet = jr.loadFrame(os.path.join(MODULE_DIR, "sprites/wizardofwor/enemy_bullet.npy"))
         wall_horizontal = jr.loadFrame(os.path.join(MODULE_DIR, "sprites/wizardofwor/wall_horizontal.npy"))
@@ -710,8 +859,10 @@ class WizardOfWorRenderer(JAXGameRenderer):
         radar_blip_empty = jr.loadFrame(os.path.join(MODULE_DIR, "sprites/wizardofwor/radar/radar_empty.npy"))
         radar_blip_burwor = jr.loadFrame(os.path.join(MODULE_DIR, "sprites/wizardofwor/radar/radar_burwor.npy"))
 
-        SPRITE_PLAYER = jnp.stack([player0, player1, player2, player3], axis=0)
-        SPRITE_BURWOR = jnp.stack([burwor0, burwor1, burwor2, burwor3], axis=0)
+        SPRITE_PLAYER = jnp.stack([player0, player1, player2, player3, player_death0, player_death1, player_death2],
+                                  axis=0)
+        SPRITE_BURWOR = jnp.stack([burwor0, burwor1, burwor2, burwor3, burwor_death0, burwor_death1, burwor_death2],
+                                  axis=0)
         SPRITE_RADAR_BLIP = jnp.stack([radar_blip_empty, radar_blip_burwor], axis=0)
 
         SPRITE_BG = jnp.expand_dims(bg, axis=0)
@@ -721,7 +872,7 @@ class WizardOfWorRenderer(JAXGameRenderer):
         SPRITE_WALL_VERTICAL = jnp.expand_dims(wall_vertical, axis=0)
 
         SCORE_DIGIT_SPRITES = jr.load_and_pad_digits(
-            os.path.join(MODULE_DIR, "sprites/pong/player_score_{}.npy"),
+            os.path.join(MODULE_DIR, "sprites/wizardofwor/digits/score_{}.npy"),
             num_chars=10,
         )
 
@@ -735,6 +886,7 @@ class WizardOfWorRenderer(JAXGameRenderer):
             SPRITE_WALL_HORIZONTAL,
             SPRITE_WALL_VERTICAL,
             SPRITE_RADAR_BLIP,
+            SCORE_DIGIT_SPRITES
         )
 
     @partial(jax.jit, static_argnums=(0,))
@@ -879,7 +1031,7 @@ class WizardOfWorRenderer(JAXGameRenderer):
                 raster=raster,
                 sprite_frame=jr.get_sprite_frame(self.SPRITE_WALL_VERTICAL, 0),
                 x=self.consts.GAME_AREA_OFFSET[0] + self.consts.TELEPORTER_LEFT_POSITION[0],
-                y= self.consts.GAME_AREA_OFFSET[1] + self.consts.TELEPORTER_LEFT_POSITION[1]
+                y=self.consts.GAME_AREA_OFFSET[1] + self.consts.TELEPORTER_LEFT_POSITION[1]
             )
             # Render the right teleporter wall
             raster = jr.render_at(
@@ -900,7 +1052,7 @@ class WizardOfWorRenderer(JAXGameRenderer):
         # We calculate the radar blips based on the enemies' positions.
         # If a monster is fully on a tile, it will be rendered as a radar blip.
         # If the monster is between tiles, it will be rendered as the tile its back is facing.
-        def _render_radar_blip(raster, x, y, direction, enemy_type):
+        def _render_radar_blip(raster, x, y, direction, enemy_type, death_animation):
             radar_x = jax.lax.cond(
                 direction == self.consts.LEFT,
                 lambda _: jnp.ceil(x / (self.consts.TILE_SIZE[0] + self.consts.WALL_THICKNESS)),
@@ -924,7 +1076,7 @@ class WizardOfWorRenderer(JAXGameRenderer):
                 operand=None
             )
             return jax.lax.cond(
-                enemy_type == self.consts.ENEMY_NONE,
+                (enemy_type == self.consts.ENEMY_NONE) | (death_animation > 0),
                 lambda _: raster,
                 lambda _: jr.render_at(
                     raster=raster,
@@ -937,7 +1089,7 @@ class WizardOfWorRenderer(JAXGameRenderer):
 
         def body(carry, enemy):
             r = carry
-            x, y, direction, enemy_type = enemy
+            x, y, direction, enemy_type, death_animation = enemy
             # Calculate the radar blip position based on the enemy's position
             # If the monster is between tiles, it will be rendered as the tile opposite to the direction it is facing.
             # so we have to use direction to determine the radar blip position.
@@ -945,7 +1097,8 @@ class WizardOfWorRenderer(JAXGameRenderer):
             # 0 <= radar_y < self.consts.BOARD_SIZE[1]
 
             # Render the radar blip at the calculated position
-            r = _render_radar_blip(raster=r, x=x, y=y, direction=direction, enemy_type=enemy_type)
+            r = _render_radar_blip(raster=r, x=x, y=y, direction=direction, enemy_type=enemy_type,
+                                   death_animation=death_animation)
             return r, None
 
         raster_final, _ = jax.lax.scan(
@@ -960,14 +1113,15 @@ class WizardOfWorRenderer(JAXGameRenderer):
         def _render_enemies(self, raster, state: WizardOfWorState):
             def body(carry, enemy):
                 r = carry
-                x, y, direction, enemy_type = enemy
+                x, y, direction, enemy_type, death_animation = enemy
                 r = jax.lax.cond(
                     enemy_type != self.consts.ENEMY_NONE,
                     lambda _: self._render_character(
                         r,
                         self.SPRITE_BURWOR,  # Placeholder for enemy sprite, can be extended for other enemy types
                         EntityPosition(x=x, y=y, direction=direction, width=self.consts.ENEMY_SIZE[0],
-                                       height=self.consts.ENEMY_SIZE[1])
+                                       height=self.consts.ENEMY_SIZE[1]),
+                        death_animation=death_animation
                     ),
                     lambda _: r,
                     operand=None
@@ -1016,12 +1170,20 @@ class WizardOfWorRenderer(JAXGameRenderer):
 
     @partial(jax.jit, static_argnums=(0,))
     def _render_player(self, raster, state: WizardOfWorState):
-        new_raster = self._render_character(raster, self.SPRITE_PLAYER, state.player)
+        new_raster = self._render_character(raster, self.SPRITE_PLAYER, state.player,
+                                            death_animation=state.player_death_animation)
         return new_raster
 
     @partial(jax.jit, static_argnums=(0,))
     def _render_score(self, raster, state: WizardOfWorState):
-        return raster
+        score_digits = jr.int_to_digits(state.score, max_digits=5)
+
+        new_raster = jr.render_label_selective(raster=raster, x=self.consts.SCORE_OFFSET[0],
+                                               y=self.consts.SCORE_OFFSET[1],
+                                               all_digits=score_digits, char_sprites=self.SCORE_DIGIT_SPRITES,
+                                               start_index=0, num_to_render=5,
+                                               spacing=self.consts.SCORE_DIGIT_SPACING)
+        return new_raster
 
     @partial(jax.jit, static_argnums=(0,))
     def _render_lives(self, raster, state: WizardOfWorState):
@@ -1040,7 +1202,8 @@ class WizardOfWorRenderer(JAXGameRenderer):
                         width=self.consts.PLAYER_SIZE[0],
                         height=self.consts.PLAYER_SIZE[1],
                         direction=self.consts.LEFT
-                    )),
+                    ),
+                    death_animation=0),
                 lambda _: r,
                 operand=None
             )
@@ -1051,55 +1214,84 @@ class WizardOfWorRenderer(JAXGameRenderer):
         return new_raster
 
     @partial(jax.jit, static_argnums=(0,))
-    def _render_character(self, raster, sprite, entity: EntityPosition):
+    def _render_character(self, raster, sprite, entity: EntityPosition, death_animation):
         """
         Renders a character sprite at the specified position and direction.
         :param raster: The raster to render on.
         :param sprite: The sprite to render.
-        :param entity: The entity to render, containing x, y, and direction.
+        :param entity: The entity to render, containing x, y,width,height and direction.
         :return: The raster with the rendered character.
         """
         direction = entity.direction
-        frame_offset = ((entity.x + entity.y + 1) // 2) % 2
-        # if the y position is above 60 frame offset is 1. THIS IS A SPECIAL CASE FOR LIVES RENDERING
-        frame_offset = jax.lax.cond(
-            entity.y >= 60,
-            lambda _: 1,
-            lambda _: frame_offset,
-            operand=None
-        )
-        frame_index = jax.lax.cond(
-            (direction == self.consts.LEFT) | (direction == self.consts.RIGHT),
-            lambda _: frame_offset,
-            lambda _: 2 + frame_offset,
-            operand=None
-        )
-        sprite_frame = jr.get_sprite_frame(sprite, frame_index)
-        return jax.lax.cond(
-            direction == self.consts.RIGHT,
-            lambda _: jr.render_at(
+
+        def render_death_animation(_):
+            frame_index = frame_index = jax.lax.cond(
+                death_animation < self.consts.DEATH_ANIMATION_STEPS[0],
+                lambda _: 4,
+                lambda _: jax.lax.cond(
+                    death_animation > self.consts.DEATH_ANIMATION_STEPS[1],
+                    lambda _: 6,
+                    lambda _: 5,
+                    operand=None
+                ),
+                operand=None
+            )
+            sprite_frame = jr.get_sprite_frame(sprite, frame_index)
+            return jr.render_at(
                 raster=raster,
                 sprite_frame=sprite_frame,
                 x=self.consts.GAME_AREA_OFFSET[0] + entity.x,
-                y=self.consts.GAME_AREA_OFFSET[1] + entity.y,
-                flip_horizontal=True
-            ),
-            lambda _: jax.lax.cond(
-                direction == self.consts.UP,
+                y=self.consts.GAME_AREA_OFFSET[1] + entity.y
+            )
+
+        def render_normal(_):
+            frame_offset = ((entity.x + entity.y + 1) // 2) % 2
+            # if the y position is above 60 frame offset is 1. THIS IS A SPECIAL CASE FOR LIVES RENDERING
+            frame_offset = jax.lax.cond(
+                entity.y >= 60,
+                lambda _: 1,
+                lambda _: frame_offset,
+                operand=None
+            )
+            frame_index = jax.lax.cond(
+                (direction == self.consts.LEFT) | (direction == self.consts.RIGHT),
+                lambda _: frame_offset,
+                lambda _: 2 + frame_offset,
+                operand=None
+            )
+            sprite_frame = jr.get_sprite_frame(sprite, frame_index)
+            return jax.lax.cond(
+                direction == self.consts.RIGHT,
                 lambda _: jr.render_at(
                     raster=raster,
                     sprite_frame=sprite_frame,
                     x=self.consts.GAME_AREA_OFFSET[0] + entity.x,
                     y=self.consts.GAME_AREA_OFFSET[1] + entity.y,
-                    flip_vertical=True
+                    flip_horizontal=True
                 ),
-                lambda _: jr.render_at(
-                    raster=raster,
-                    sprite_frame=sprite_frame,
-                    x=self.consts.GAME_AREA_OFFSET[0] + entity.x,
-                    y=self.consts.GAME_AREA_OFFSET[1] + entity.y
+                lambda _: jax.lax.cond(
+                    direction == self.consts.UP,
+                    lambda _: jr.render_at(
+                        raster=raster,
+                        sprite_frame=sprite_frame,
+                        x=self.consts.GAME_AREA_OFFSET[0] + entity.x,
+                        y=self.consts.GAME_AREA_OFFSET[1] + entity.y,
+                        flip_vertical=True
+                    ),
+                    lambda _: jr.render_at(
+                        raster=raster,
+                        sprite_frame=sprite_frame,
+                        x=self.consts.GAME_AREA_OFFSET[0] + entity.x,
+                        y=self.consts.GAME_AREA_OFFSET[1] + entity.y
+                    ),
+                    operand=None
                 ),
                 operand=None
-            ),
+            )
+
+        return jax.lax.cond(
+            death_animation > 0,
+            render_death_animation,
+            render_normal,
             operand=None
         )
