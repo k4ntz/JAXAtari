@@ -76,6 +76,7 @@ class WordZapperConstants(NamedTuple) :
     WORD_DISPLAY_FRAMES = 5 * 60 # TODO this assumes 60 fps for some reason
 
     ENEMY_EXPLOSION_FRAME_DURATION = 8  # Number of ticks per explosion frame
+    ENEMY_EXPLOSION_FRAMES = 4          # NEW: number of explosion frames/sprites
 
 
 
@@ -150,6 +151,7 @@ class WordZapperState(NamedTuple):
     enemy_explosion_frame: chex.Array  # shape (MAX_ENEMIES,) - explosion frame index (0=none, 1-3=anim)
     enemy_explosion_timer: chex.Array  # shape (MAX_ENEMIES,) - ticks left for explosion anim
     enemy_explosion_frame_timer: chex.Array  # shape (MAX_ENEMIES,)
+    enemy_explosion_pos: chex.Array  # shape (MAX_ENEMIES, 2) - position where explosion anim is rendered
 
     # current_word: chex.Array # the actual word
     # current_letter_index: chex.Array
@@ -292,7 +294,8 @@ def load_sprites():
     exp1 = jr.loadFrame(os.path.join(MODULE_DIR, "sprites/wordzapper/explosions/enemy_explosions/exp1.npy"))
     exp2 = jr.loadFrame(os.path.join(MODULE_DIR, "sprites/wordzapper/explosions/enemy_explosions/exp2.npy"))
     exp3 = jr.loadFrame(os.path.join(MODULE_DIR, "sprites/wordzapper/explosions/enemy_explosions/exp3.npy"))
-    ENEMY_EXPLOSION_SPRITES = jnp.stack([exp1, exp2, exp3], axis=0)
+    exp4 = jr.loadFrame(os.path.join(MODULE_DIR, "sprites/wordzapper/explosions/enemy_explosions/exp4.npy"))  # NEW
+    ENEMY_EXPLOSION_SPRITES = jnp.stack([exp1, exp2, exp3, exp4], axis=0)  # Now 4 sprites
 
     return (
         SPRITE_BG,
@@ -712,6 +715,7 @@ class JaxWordZapper(JaxEnvironment[WordZapperState, WordZapperObservation, WordZ
             enemy_explosion_frame=jnp.zeros((self.consts.MAX_ENEMIES,), dtype=jnp.int32),
             enemy_explosion_timer=jnp.zeros((self.consts.MAX_ENEMIES,), dtype=jnp.int32),
             enemy_explosion_frame_timer=jnp.zeros((self.consts.MAX_ENEMIES,), dtype=jnp.int32),
+            enemy_explosion_pos=jnp.zeros((self.consts.MAX_ENEMIES, 2)),  # <-- ensure always present
         )
 
         initial_obs = self._get_observation(reset_state)
@@ -1044,13 +1048,32 @@ class JaxWordZapper(JaxEnvironment[WordZapperState, WordZapperObservation, WordZ
         )
 
         # Explosion logic: start explosion for hit enemies
-        # If missile hits, set explosion_frame=1 and explosion_timer=3 for those enemies
+        # If missile hits, set explosion_frame=1 and explosion_timer=4 for those enemies
         new_enemy_explosion_frame = jnp.where(missile_collisions, 1, state.enemy_explosion_frame)
-        new_enemy_explosion_timer = jnp.where(missile_collisions, 3, state.enemy_explosion_timer)
+        new_enemy_explosion_timer = jnp.where(missile_collisions, self.consts.ENEMY_EXPLOSION_FRAMES, state.enemy_explosion_timer)
         new_enemy_explosion_frame_timer = jnp.where(missile_collisions, self.consts.ENEMY_EXPLOSION_FRAME_DURATION, state.enemy_explosion_frame_timer)
 
+        # --- Prevent explosion animation from moving ---
+        # For enemies that start exploding, freeze their position at the moment of explosion
+        # We'll store the explosion position separately
+        # Add a new array: enemy_explosion_pos (shape: (MAX_ENEMIES, 2))
+        # If explosion just started, set to current position; otherwise, keep previous
+
+        # Initialize enemy_explosion_pos if not present
+        if not hasattr(state, 'enemy_explosion_pos'):
+            enemy_explosion_pos = jnp.zeros((self.consts.MAX_ENEMIES, 2))
+        else:
+            enemy_explosion_pos = state.enemy_explosion_pos
+
+        # For enemies where explosion just started, set position to current enemy position
+        explosion_started = missile_collisions
+        enemy_explosion_pos = jnp.where(
+            explosion_started[:, None],
+            positions[:, 0:2],
+            enemy_explosion_pos
+        )
+
         # Progress explosion animation for enemies already exploding
-        # If timer > 0, increment frame and decrement timer
         frame_should_advance = (new_enemy_explosion_frame_timer == 0) & (new_enemy_explosion_frame > 0)
         new_enemy_explosion_frame = jnp.where(
             frame_should_advance,
@@ -1062,8 +1085,8 @@ class JaxWordZapper(JaxEnvironment[WordZapperState, WordZapperObservation, WordZ
             jnp.where(frame_should_advance, self.consts.ENEMY_EXPLOSION_FRAME_DURATION, new_enemy_explosion_frame_timer - 1),
             0
         )
-        # Clamp frame to max 3 (since we have 3 sprites)
-        new_enemy_explosion_frame = jnp.where(new_enemy_explosion_frame > 3, 0, new_enemy_explosion_frame)
+        # Clamp frame to max 4 (since we have 4 sprites)
+        new_enemy_explosion_frame = jnp.where(new_enemy_explosion_frame > self.consts.ENEMY_EXPLOSION_FRAMES, 0, new_enemy_explosion_frame)
 
         # Deactivate enemies hit by missile
         new_enemy_active = jnp.where(missile_collisions, 0, new_enemy_active)
@@ -1089,6 +1112,7 @@ class JaxWordZapper(JaxEnvironment[WordZapperState, WordZapperObservation, WordZ
             enemy_explosion_frame=new_enemy_explosion_frame,
             enemy_explosion_timer=new_enemy_explosion_timer,
             enemy_explosion_frame_timer=new_enemy_explosion_frame_timer,
+            enemy_explosion_pos=enemy_explosion_pos,  # NEW: store explosion positions
         )
 
     @partial(jax.jit, static_argnums=(0,))
@@ -1209,14 +1233,18 @@ class WordZapperRenderer(JAXGameRenderer):
 
         def body_fn(i, raster):
             should_render_enemy = state.enemy_active[i]
-            x = state.enemy_positions[i, 0]
-            y = state.enemy_positions[i, 1]
-            enemy_type = state.enemy_positions[i, 2].astype(jnp.int32)
+            # Use explosion position if exploding, otherwise normal position
             explosion_frame = state.enemy_explosion_frame[i]
+            is_exploding = explosion_frame > 0
+
+            # Use frozen explosion position if exploding
+            x = jnp.where(is_exploding, state.enemy_explosion_pos[i, 0], state.enemy_positions[i, 0])
+            y = jnp.where(is_exploding, state.enemy_explosion_pos[i, 1], state.enemy_positions[i, 1])
+            enemy_type = state.enemy_positions[i, 2].astype(jnp.int32)
 
             def render_explosion(r):
-                # explosion_frame: 1,2,3 -> index 0,1,2
-                idx = jnp.clip(explosion_frame - 1, 0, 2)
+                # explosion_frame: 1,2,3,4 -> index 0,1,2,3
+                idx = jnp.clip(explosion_frame - 1, 0, 3)
                 return jr.render_at(r, x, y, ENEMY_EXPLOSION_SPRITES[idx])
 
             raster = jax.lax.cond(
