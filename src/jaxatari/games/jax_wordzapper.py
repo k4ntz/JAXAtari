@@ -981,6 +981,60 @@ class JaxWordZapper(JaxEnvironment[WordZapperState, WordZapperObservation, WordZ
         new_enemy_active = jnp.where(collisions, 0, active)
 
         # Update state
+        state = state._replace(
+            player_x=new_player_x,
+            player_y=new_player_y,
+            player_direction=new_player_direction,
+            player_missile_position=player_missile_position,
+            player_zapper_position=player_zapper_position,
+            enemy_positions=positions,
+            enemy_active=new_enemy_active,
+            enemy_global_spawn_timer=global_timer,
+            letters_x=new_letters_x,
+            step_counter=new_step_counter,
+            timer=new_timer,
+            rng_key=rng_key,
+        )
+
+        # Missile-Enemy Collision Logic 
+        missile_pos = player_missile_position
+        missile_active = missile_pos[2] != 0
+
+        def missile_enemy_collision(missile, enemies, active):
+            missile_x, missile_y = missile[0], missile[1]
+            missile_w, missile_h = self.consts.MISSILE_SIZE
+            enemy_x = enemies[:, 0]
+            enemy_y = enemies[:, 1]
+            enemy_w, enemy_h = 16, 16
+
+            m_left = missile_x
+            m_right = missile_x + missile_w
+            m_top = missile_y
+            m_bottom = missile_y + missile_h
+
+            e_left = enemy_x
+            e_right = enemy_x + enemy_w
+            e_top = enemy_y
+            e_bottom = enemy_y + enemy_h
+
+            h_overlap = (m_left <= e_right) & (m_right >= e_left)
+            v_overlap = (m_top <= e_bottom) & (m_bottom >= e_top)           
+            collisions = h_overlap & v_overlap & (active == 1)
+            return collisions
+
+        missile_collisions = jax.lax.cond(
+            missile_active & (missile_pos[2] != 0),
+            lambda: missile_enemy_collision(missile_pos, new_enemy_positions[:, 0:2], new_enemy_active),
+            lambda: jnp.zeros_like(new_enemy_active, dtype=bool)
+        )
+
+        new_enemy_active = jnp.where(missile_collisions, 0, new_enemy_active)
+        player_missile_position = jnp.where(
+            jnp.any(missile_collisions),
+            jnp.zeros_like(player_missile_position),
+            player_missile_position
+        )
+
         return state._replace(
             player_x=new_player_x,
             player_y=new_player_y,
