@@ -60,7 +60,7 @@ class WordZapperConstants(NamedTuple) :
     ENEMY_Y_MIN_SEPARATION = 16
 
 
-    ENEMY_GAME_SPEED = 1.2
+    ENEMY_GAME_SPEED = 0.7
     INTRO_PHASE_FRAMES = 3 * 60 # TODO this assumes 60 fps for some reason
     INTRO_SWEEP_SPEED = (ENEMY_MAX_X - ENEMY_MIN_X) / (3 * 60)
 
@@ -74,6 +74,8 @@ class WordZapperConstants(NamedTuple) :
     TIME = 99
 
     WORD_DISPLAY_FRAMES = 5 * 60 # TODO this assumes 60 fps for some reason
+
+    ENEMY_EXPLOSION_FRAME_DURATION = 8  # Number of ticks per explosion frame
 
 
 
@@ -145,7 +147,9 @@ class WordZapperState(NamedTuple):
     enemy_positions: chex.Array  # shape (MAX_ENEMIES, 4): x, y, type, vx
     enemy_active: chex.Array     # shape (MAX_ENEMIES,)
     enemy_global_spawn_timer: chex.Array
-
+    enemy_explosion_frame: chex.Array  # shape (MAX_ENEMIES,) - explosion frame index (0=none, 1-3=anim)
+    enemy_explosion_timer: chex.Array  # shape (MAX_ENEMIES,) - ticks left for explosion anim
+    enemy_explosion_frame_timer: chex.Array  # shape (MAX_ENEMIES,)
 
     # current_word: chex.Array # the actual word
     # current_letter_index: chex.Array
@@ -284,6 +288,12 @@ def load_sprites():
 
     LETTERS = jnp.stack(letters, axis=0)  
 
+    # Load enemy explosion sprites
+    exp1 = jr.loadFrame(os.path.join(MODULE_DIR, "sprites/wordzapper/explosions/enemy_explosions/exp1.npy"))
+    exp2 = jr.loadFrame(os.path.join(MODULE_DIR, "sprites/wordzapper/explosions/enemy_explosions/exp2.npy"))
+    exp3 = jr.loadFrame(os.path.join(MODULE_DIR, "sprites/wordzapper/explosions/enemy_explosions/exp3.npy"))
+    ENEMY_EXPLOSION_SPRITES = jnp.stack([exp1, exp2, exp3], axis=0)
+
     return (
         SPRITE_BG,
         SPRITE_PL,
@@ -299,6 +309,7 @@ def load_sprites():
         zonker_offsets,
         yellow_letters_offsets,
         letters_offsets,
+        ENEMY_EXPLOSION_SPRITES,  
     )
 
 (
@@ -316,6 +327,7 @@ def load_sprites():
     ZONKER_OFFSETS,
     YELLOW_LETTERS_OFFSETS,
     LETTERS_OFFSETS,
+    ENEMY_EXPLOSION_SPRITES, 
 ) = load_sprites()
 
 
@@ -697,6 +709,9 @@ class JaxWordZapper(JaxEnvironment[WordZapperState, WordZapperObservation, WordZ
             phase_timer=jnp.array(0),
 
             rng_key=next_key,
+            enemy_explosion_frame=jnp.zeros((self.consts.MAX_ENEMIES,), dtype=jnp.int32),
+            enemy_explosion_timer=jnp.zeros((self.consts.MAX_ENEMIES,), dtype=jnp.int32),
+            enemy_explosion_frame_timer=jnp.zeros((self.consts.MAX_ENEMIES,), dtype=jnp.int32),
         )
 
         initial_obs = self._get_observation(reset_state)
@@ -1028,6 +1043,29 @@ class JaxWordZapper(JaxEnvironment[WordZapperState, WordZapperObservation, WordZ
             lambda: jnp.zeros_like(new_enemy_active, dtype=bool)
         )
 
+        # Explosion logic: start explosion for hit enemies
+        # If missile hits, set explosion_frame=1 and explosion_timer=3 for those enemies
+        new_enemy_explosion_frame = jnp.where(missile_collisions, 1, state.enemy_explosion_frame)
+        new_enemy_explosion_timer = jnp.where(missile_collisions, 3, state.enemy_explosion_timer)
+        new_enemy_explosion_frame_timer = jnp.where(missile_collisions, self.consts.ENEMY_EXPLOSION_FRAME_DURATION, state.enemy_explosion_frame_timer)
+
+        # Progress explosion animation for enemies already exploding
+        # If timer > 0, increment frame and decrement timer
+        frame_should_advance = (new_enemy_explosion_frame_timer == 0) & (new_enemy_explosion_frame > 0)
+        new_enemy_explosion_frame = jnp.where(
+            frame_should_advance,
+            new_enemy_explosion_frame + 1,
+            new_enemy_explosion_frame
+        )
+        new_enemy_explosion_frame_timer = jnp.where(
+            (new_enemy_explosion_frame > 0),
+            jnp.where(frame_should_advance, self.consts.ENEMY_EXPLOSION_FRAME_DURATION, new_enemy_explosion_frame_timer - 1),
+            0
+        )
+        # Clamp frame to max 3 (since we have 3 sprites)
+        new_enemy_explosion_frame = jnp.where(new_enemy_explosion_frame > 3, 0, new_enemy_explosion_frame)
+
+        # Deactivate enemies hit by missile
         new_enemy_active = jnp.where(missile_collisions, 0, new_enemy_active)
         player_missile_position = jnp.where(
             jnp.any(missile_collisions),
@@ -1048,6 +1086,9 @@ class JaxWordZapper(JaxEnvironment[WordZapperState, WordZapperObservation, WordZ
             step_counter=new_step_counter,
             timer=new_timer,
             rng_key=rng_key,
+            enemy_explosion_frame=new_enemy_explosion_frame,
+            enemy_explosion_timer=new_enemy_explosion_timer,
+            enemy_explosion_frame_timer=new_enemy_explosion_frame_timer,
         )
 
     @partial(jax.jit, static_argnums=(0,))
@@ -1171,23 +1212,33 @@ class WordZapperRenderer(JAXGameRenderer):
             x = state.enemy_positions[i, 0]
             y = state.enemy_positions[i, 1]
             enemy_type = state.enemy_positions[i, 2].astype(jnp.int32)
+            explosion_frame = state.enemy_explosion_frame[i]
+
+            def render_explosion(r):
+                # explosion_frame: 1,2,3 -> index 0,1,2
+                idx = jnp.clip(explosion_frame - 1, 0, 2)
+                return jr.render_at(r, x, y, ENEMY_EXPLOSION_SPRITES[idx])
 
             raster = jax.lax.cond(
-                should_render_enemy,
+                explosion_frame > 0,
+                render_explosion,
                 lambda r: jax.lax.cond(
-                    enemy_type == 0,
-                    lambda rr: jr.render_at(rr, x, y, frame_bonker),
-                    lambda rr: jr.render_at(rr, x, y, frame_zonker),
+                    should_render_enemy,
+                    lambda rr: jax.lax.cond(
+                        enemy_type == 0,
+                        lambda rrr: jr.render_at(rrr, x, y, frame_bonker),
+                        lambda rrr: jr.render_at(rrr, x, y, frame_zonker),
+                        rr
+                    ),
+                    lambda rr: rr,
                     r
                 ),
-                lambda r: r,
                 raster
             )
             return raster
 
         raster = jax.lax.fori_loop(0, self.consts.MAX_ENEMIES, body_fn, raster)
 
-          
         # Render normal letters
         def _render_letter(i, raster):
             is_alive = state.letters_alive[i]
