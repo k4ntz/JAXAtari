@@ -298,9 +298,9 @@ class JaxTetris(JaxEnvironment[TetrisState, TetrisObservation, TetrisInfo, Tetri
 
     def image_space(self) -> spaces.Box:
         """
-        Return the image space for rendering (if needed).
+        Return the image space for rendering.
         """
-        return spaces.Box(low=0, high=255, shape=(self.consts.IMG_H, self.consts.IMG_W, 3), dtype=jnp.uint8)
+        return spaces.Box(low=0, high=255, shape=(210, 160, 3), dtype=jnp.uint8)
 
     # ----- Public API -----
     @partial(jax.jit, static_argnums=(0,))
