@@ -129,10 +129,11 @@ class TetrisInfo(NamedTuple):
 # ======================= Environment =====================
 
 class JaxTetris(JaxEnvironment[TetrisState, TetrisObservation, TetrisInfo, TetrisConstants]):
-    def __init__(self, consts: TetrisConstants = None, reward_funcs: list[callable]=None):
+    def __init__(self, consts: TetrisConstants = None, reward_funcs: list[callable]=None, instant_drop: bool = False):
         consts = consts or TetrisConstants()
         super().__init__(consts)
         self.renderer = TetrisRenderer(self.consts)
+        self.instant_drop = instant_drop
         if reward_funcs is not None:
             reward_funcs = tuple(reward_funcs)
 
@@ -359,12 +360,17 @@ class JaxTetris(JaxEnvironment[TetrisState, TetrisObservation, TetrisInfo, Tetri
         do_move_now = (new_move_dir != 0) & ((state.move_dir == 0) | ((das == 0) & (arr == 0)))
 
         rot_timer = jnp.where(is_up, jnp.maximum(0, state.rot_timer - 1), jnp.int32(0))
-        do_rotate_now = is_up & ((state.last_action != Action.UP) | (rot_timer == 0))
+        # --- INSTANT DROP LOGIC ---
+        if self.instant_drop:
+            do_hard_now = is_fire & (state.last_action != Action.FIRE)
+            do_rotate_now = is_up & ((state.last_action != Action.UP) | (rot_timer == 0))
+        else:
+            do_hard_now = False
+            do_rotate_now = (is_up | is_fire) & ((state.last_action != Action.UP) | (rot_timer == 0))
+        # --- END INSTANT DROP LOGIC ---
 
         soft_timer = jnp.where(is_down, jnp.maximum(0, state.soft_timer - 1), jnp.int32(0))
         do_soft_now = is_down & (soft_timer == 0)
-
-        do_hard_now = is_fire & (state.last_action != Action.FIRE)
 
         # Rotate
         pos_r, rot_r = lax.cond(
