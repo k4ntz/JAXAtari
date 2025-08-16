@@ -15,7 +15,7 @@ import jaxatari.rendering.jax_rendering_utils as jr
 # FEATURES THAT WERE NOT IN SCOPE:
 # - Pathfinding of the Worluk towards the teleporters
 # - Spawning and movement of the Wizard
-# - Speed increasing through level progression instead of just time in the level
+# - Speed increasing through level progression instead of just time in the level. This is connected to the point below.
 # - More than 1 level. Our scope was the first level, the others are just cherries on top. (This can be configured via MAX_LEVEL)
 #
 
