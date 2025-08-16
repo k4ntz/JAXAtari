@@ -10,6 +10,7 @@ from jaxatari.environment import JaxEnvironment, JAXAtariAction as Action
 from jaxatari.renderers import JAXGameRenderer
 import jaxatari.rendering.jax_rendering_utils as jr
 
+
 #
 # IMPORTANT
 # FEATURES THAT WERE NOT IN SCOPE:
@@ -29,19 +30,9 @@ class EntityPosition(NamedTuple):
 
 
 class WizardOfWorConstants(NamedTuple):
+    # Window size
     WINDOW_WIDTH: int = 160
     WINDOW_HEIGHT: int = 210
-
-    DEATH_ANIMATION_STEPS = [10, 20]
-
-    # Sprite sizes (Platzhalter)
-    PLAYER_SIZE: Tuple[int, int] = (8, 8)
-    ENEMY_SIZE: Tuple[int, int] = (8, 8)
-    BULLET_SIZE: Tuple[int, int] = (2, 2)
-    TILE_SIZE: Tuple[int, int] = (8, 8)
-    RADAR_BLIP_SIZE: Tuple[int, int] = (2, 2)
-    WALL_THICKNESS: int = 2
-    RADAR_BLIP_GAP: int = 0
 
     # 4 tuples for each direction
     BULLET_ORIGIN_UP: Tuple[int, int] = (4, 1)
@@ -49,6 +40,7 @@ class WizardOfWorConstants(NamedTuple):
     BULLET_ORIGIN_LEFT: Tuple[int, int] = (1, 4)
     BULLET_ORIGIN_RIGHT: Tuple[int, int] = (7, 4)
 
+    # Enemy Speed Up Timers
     SPEED_TIMER_1 = 1500
     SPEED_TIMER_2 = 3000
     SPEED_TIMER_3 = 4500
@@ -59,11 +51,12 @@ class WizardOfWorConstants(NamedTuple):
     SPEED_TIMER_3_MOD = 4
     SPEED_TIMER_MAX_MOD = 2
 
+    # Enemy invisibility timers
     MAX_LAST_SEEN = 200
     INVISIBILITY_TIMER_GARWOR = 100
     INVISIBILITY_TIMER_THORWOR = 100
 
-    # Richtungen
+    # Directions
     NONE: int = Action.NOOP
     UP: int = Action.UP
     DOWN: int = Action.DOWN
@@ -90,12 +83,15 @@ class WizardOfWorConstants(NamedTuple):
     POINTS_WORLUK: int = 1000
     POINTS_WIZARD: int = 2500
 
+    # Gameplay constants
     MAX_ENEMIES: int = 6
     MAX_LEVEL: int = 5
     MAX_LIVES: int = 3
 
+    # Tolerance for spotting invisible enemies not quite in the same row/column
     SPOT_TOLERANCE = 4
 
+    # Gameboards
     GAMEBOARD_1_WALLS_HORIZONTAL = jnp.array([
         [0, 1, 1, 0, 0, 1, 0, 0, 1, 1, 0],
         [0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0],
@@ -124,32 +120,44 @@ class WizardOfWorConstants(NamedTuple):
         [0, 0, 0, 1, 0, 0, 1, 0, 0, 0],
         [0, 0, 0, 0, 1, 1, 0, 0, 0, 0]])
 
-    TELEPORTER_LEFT_POSITION: Tuple[int, int] = (-2, 20)  # Position des linken Teleporters
-    TELEPORTER_RIGHT_POSITION: Tuple[int, int] = (108, 20)  # Position des rechten Teleporters
+    #Positions of the teleporters
+    TELEPORTER_LEFT_POSITION: Tuple[int, int] = (-2, 20)
+    TELEPORTER_RIGHT_POSITION: Tuple[int, int] = (108, 20)
 
-    NO_ENEMY_POSITIONS = jnp.zeros((MAX_ENEMIES, 5), dtype=jnp.int32)  # No enemies
+    # Empty enemy array
+    NO_ENEMY_POSITIONS = jnp.zeros((MAX_ENEMIES, 5), dtype=jnp.int32)
 
+    # Position where the player spawns
     PLAYER_SPAWN_POSITION: Tuple[int, int, int] = (100, 50, LEFT)  # Startposition der Spielfigur
 
-    STEP_SIZE: int = 1  # Step size for player movement
+    # How far one walk step is
+    STEP_SIZE: int = 1
 
+    # IMPORTANT: About the coordinates
+    # The board goes from 0,0 (top-left) to 110,60 (bottom-right)
+    BOARD_SIZE: Tuple[int, int] = (110, 60)  # Size of the game board in tiles
+
+    # Rendering
+    DEATH_ANIMATION_STEPS = [10, 20]
+    PLAYER_SIZE: Tuple[int, int] = (8, 8)
+    ENEMY_SIZE: Tuple[int, int] = (8, 8)
+    BULLET_SIZE: Tuple[int, int] = (2, 2)
+    TILE_SIZE: Tuple[int, int] = (8, 8)
+    RADAR_BLIP_SIZE: Tuple[int, int] = (2, 2)
+    WALL_THICKNESS: int = 2
+    RADAR_BLIP_GAP: int = 0
     BOARD_POSITION: Tuple[int, int] = (16, 64)
     GAME_AREA_OFFSET: Tuple[int, int] = (
         BOARD_POSITION[0] + WALL_THICKNESS + TILE_SIZE[0], BOARD_POSITION[1] + WALL_THICKNESS)
     LIVES_OFFSET: Tuple[int, int] = (100, 60)  # Offset for lives display
     LIVES_GAP: int = 5  # Gap between lives icons
     RADAR_OFFSET: Tuple[int, int] = (BOARD_POSITION[0] + 53, BOARD_POSITION[1] + 72)  # Offset for radar display
-
-    # IMPORTANT: About the coordinates
-    # The board goes from 0,0 (top-left) to 110,60 (bottom-right)
-    BOARD_SIZE: Tuple[int, int] = (110, 60)  # Size of the game board in tiles
-
     SCORE_DIGIT_SPACING: int = 8
     SCORE_OFFSET: Tuple[int, int] = (BOARD_POSITION[0] + 80, BOARD_POSITION[1] - 16)  # Offset for score display
 
     @partial(jax.jit, static_argnums=(0,))
     def _get_wall_position(self, x: int, y: int, horizontal: bool) -> EntityPosition:
-        """Placeholder: Returns the position of a wall based on its coordinates.
+        """Returns the position of a wall based on its coordinates.
         :param x: The x-coordinate of the wall.
         :param y: The y-coordinate of the wall.
         :param horizontal: Whether the wall is horizontal or vertical.
@@ -176,7 +184,7 @@ class WizardOfWorConstants(NamedTuple):
 
     @staticmethod
     def get_walls_for_gameboard(gameboard: int) -> Tuple[jnp.ndarray, jnp.ndarray]:
-        """    Placeholder: Returns the walls for the specified gameboard.
+        """Returns the walls for the specified gameboard.
         :param gameboard: The gameboard for which the walls should be retrieved.
         :return: A tuple with the horizontal and vertical walls.
         """
@@ -287,6 +295,7 @@ class JaxWizardOfWor(JaxEnvironment[WizardOfWorState, WizardOfWorObservation, Wi
 
     @partial(jax.jit, static_argnums=(0,))
     def reset(self, key=None) -> Tuple[WizardOfWorObservation, WizardOfWorState]:
+        """Reset the game to the initial state."""
         state = WizardOfWorState(
             player=EntityPosition(
                 x=self.consts.PLAYER_SPAWN_POSITION[0],
@@ -330,6 +339,11 @@ class JaxWizardOfWor(JaxEnvironment[WizardOfWorState, WizardOfWorObservation, Wi
     @partial(jax.jit, static_argnums=(0,))
     def step(self, state: WizardOfWorState, action: chex.Array) -> Tuple[
         WizardOfWorObservation, WizardOfWorState, chex.Array, chex.Array, WizardOfWorInfo]:
+        """ Advances the game state by one step based on the action taken.
+        :param state: The current state of the game.
+        :param action: The action taken by the player.
+        :return: A tuple containing the new observation, the updated state, the reward, whether the game is done, and additional info.
+        """
         previous_state = state
         new_state = update_state(
             state=state,
@@ -358,28 +372,46 @@ class JaxWizardOfWor(JaxEnvironment[WizardOfWorState, WizardOfWorObservation, Wi
         return observation, new_state, env_reward, done, info
 
     def render(self, state: WizardOfWorState) -> jnp.ndarray:
+        """Renders the current game state to an image."""
         return self.renderer.render(state)
 
     def action_space(self) -> spaces.Discrete:
+        """Returns the action space of the game."""
         return spaces.Discrete(6)  # Platzhalter
 
     @partial(jax.jit, static_argnums=(0,))
     def observation_space(self) -> spaces.Dict:
+        """Returns the observation space of the game."""
         return spaces.Dict({
             "player": spaces.Dict({
-                "x": spaces.Box(low=0, high=self.consts.WINDOW_WIDTH, shape=(), dtype=jnp.int32),
-                "y": spaces.Box(low=0, high=self.consts.WINDOW_HEIGHT, shape=(), dtype=jnp.int32),
-                "width": spaces.Box(low=0, high=self.consts.WINDOW_WIDTH, shape=(), dtype=jnp.int32),
-                "height": spaces.Box(low=0, high=self.consts.WINDOW_HEIGHT, shape=(), dtype=jnp.int32),
+                "x": spaces.Box(low=0, high=self.consts.BOARD_SIZE[0], shape=(), dtype=jnp.int32),
+                "y": spaces.Box(low=0, high=self.consts.BOARD_SIZE[1], shape=(), dtype=jnp.int32),
+                "width": spaces.Box(low=0, high=self.consts.PLAYER_SIZE[0], shape=(), dtype=jnp.int32),
+                "height": spaces.Box(low=0, high=self.consts.PLAYER_SIZE[1], shape=(), dtype=jnp.int32),
+                "direction": spaces.Discrete(5),  # NONE, UP, DOWN, LEFT, RIGHT
             }),
-            "enemies": spaces.Box(low=0, high=self.consts.WINDOW_WIDTH, shape=(None, 4), dtype=jnp.int32),
-            "bullets": spaces.Box(low=0, high=self.consts.WINDOW_WIDTH, shape=(None, 4), dtype=jnp.int32),
+            "enemies": spaces.Box(low=0, high=999999, shape=(self.consts.MAX_ENEMIES, 7), dtype=jnp.int32),
+            "bullet": spaces.Dict({
+                "x": spaces.Box(low=0, high=self.consts.BOARD_SIZE[0], shape=(), dtype=jnp.int32),
+                "y": spaces.Box(low=0, high=self.consts.BOARD_SIZE[1], shape=(), dtype=jnp.int32),
+                "width": spaces.Box(low=0, high=self.consts.BULLET_SIZE[0], shape=(), dtype=jnp.int32),
+                "height": spaces.Box(low=0, high=self.consts.BULLET_SIZE[1], shape=(), dtype=jnp.int32),
+                "direction": spaces.Discrete(5),  # NONE, UP, DOWN, LEFT, RIGHT
+            }),
+            "enemy_bullet": spaces.Dict({
+                "x": spaces.Box(low=0, high=self.consts.BOARD_SIZE[0], shape=(), dtype=jnp.int32),
+                "y": spaces.Box(low=0, high=self.consts.BOARD_SIZE[1], shape=(), dtype=jnp.int32),
+                "width": spaces.Box(low=0, high=self.consts.BULLET_SIZE[0], shape=(), dtype=jnp.int32),
+                "height": spaces.Box(low=0, high=self.consts.BULLET_SIZE[1], shape=(), dtype=jnp.int32),
+                "direction": spaces.Discrete(5),  # NONE, UP, DOWN, LEFT, RIGHT
+            }),
             "score": spaces.Box(low=0, high=999999, shape=(), dtype=jnp.int32),
             "lives": spaces.Box(low=0, high=10, shape=(), dtype=jnp.int32),
         })
 
     @partial(jax.jit, static_argnums=(0,))
     def image_space(self) -> spaces.Box:
+        """Returns the image space of the game."""
         return spaces.Box(
             low=0,
             high=255,
@@ -389,23 +421,28 @@ class JaxWizardOfWor(JaxEnvironment[WizardOfWorState, WizardOfWorObservation, Wi
 
     @partial(jax.jit, static_argnums=(0,))
     def _get_done(self, state: WizardOfWorState) -> chex.Array:
+        """Checks if the game is over."""
         return jnp.array(state.game_over, dtype=jnp.bool_)
 
     @partial(jax.jit, static_argnums=(0,))
     def _get_all_reward(self, previous_state: WizardOfWorState, state: WizardOfWorState):
+        """Calculates all rewards based on the previous and current state."""
         if self.reward_funcs is None:
             return jnp.zeros(1)
         return jnp.array([reward_func(previous_state, state) for reward_func in self.reward_funcs])
 
     @partial(jax.jit, static_argnums=(0,))
     def _get_info(self, state: WizardOfWorState, all_rewards: chex.Array = None) -> WizardOfWorInfo:
+        """Returns additional information about the game state."""
         return WizardOfWorInfo(all_rewards=all_rewards)
 
     def _get_reward(self, previous_state: WizardOfWorState, state: WizardOfWorState) -> chex.Array:
+        """Calculates the reward based on the previous and current state."""
         return state.score - previous_state.score
 
     @partial(jax.jit, static_argnums=(0,))
     def _get_observation(self, state: WizardOfWorState) -> WizardOfWorObservation:
+        """Converts the game state into an observation."""
         return WizardOfWorObservation(
             player=state.player,
             enemies=state.enemies,
@@ -417,22 +454,18 @@ class JaxWizardOfWor(JaxEnvironment[WizardOfWorState, WizardOfWorObservation, Wi
 
     @partial(jax.jit, static_argnums=(0,))
     def _is_enemy_dead(self, enemy) -> bool:
+        """Checks if an enemy is dead based on its death animation and type."""
         x, y, direction, type, death_animation, timer, last_seen = enemy
         return (death_animation > self.consts.DEATH_ANIMATION_STEPS[1]) | (type == self.consts.ENEMY_NONE)
 
     @partial(jax.jit, static_argnums=(0,))
     def _get_gameboard_for_level(self, level: int) -> int:
+        """Returns the gameboard for the given level."""
         return 1 + ((level + 1) % 2)
 
     @partial(jax.jit, static_argnums=(0,))
     def _get_start_enemies(self, rng_key) -> chex.Array:
-        # This is always MAX_ENEMIES BURWOR on random tiles
-        # return an array of 6 burwors at random positions.
-        # x can be i * (TILE_SIZE[0] + WALL_THICKNESS)
-        # y can be j * (TILE_SIZE[1] + WALL_THICKNESS)
-        # so generate the enemies with x from 0 to 10 and y from 0 to 5 and then after multiply it.
-        # this ensures the random generater doesnt spawn them between tiles
-        # direction is randomly chosen from UP, DOWN, LEFT, RIGHT
+        """Generates the starting enemies for the game."""
         def _generate_single_enemy(rng_key) -> chex.Array:
             x = jax.random.randint(rng_key, shape=(), minval=0, maxval=11) * (
                     self.consts.TILE_SIZE[0] + self.consts.WALL_THICKNESS)
@@ -445,7 +478,163 @@ class JaxWizardOfWor(JaxEnvironment[WizardOfWorState, WizardOfWorObservation, Wi
         return jax.vmap(_generate_single_enemy)(jax.random.split(rng_key, self.consts.MAX_ENEMIES))
 
     @partial(jax.jit, static_argnums=(0,))
+    def _get_bullet_origin_for_direction(self, direction: int) -> Tuple[int, int]:
+        """Returns the origin offset for the bullet based on the direction."""
+        return jax.lax.cond(
+            jnp.equal(direction, self.consts.UP),
+            lambda: self.consts.BULLET_ORIGIN_UP,
+            lambda: jax.lax.cond(
+                jnp.equal(direction, self.consts.DOWN),
+                lambda: self.consts.BULLET_ORIGIN_DOWN,
+                lambda: jax.lax.cond(
+                    jnp.equal(direction, self.consts.LEFT),
+                    lambda: self.consts.BULLET_ORIGIN_LEFT,
+                    lambda: self.consts.BULLET_ORIGIN_RIGHT
+                )
+            )
+        )
+
+    @partial(jax.jit, static_argnums=(0,))
+    def _positions_equal(self, pos1: EntityPosition, pos2: EntityPosition) -> bool:
+        """Check if two positions are equal.
+        :param pos1: The first position to compare.
+        :param pos2: The second position to compare.
+        :return: True if the positions are equal, False otherwise.
+        """
+        return jax.lax.cond(
+            (pos1.x == pos2.x) & (pos1.y == pos2.y) &
+            (pos1.width == pos2.width) & (pos1.height == pos2.height) &
+            (pos1.direction == pos2.direction),
+            lambda _: True,
+            lambda _: False,
+            operand=None
+        )
+
+    @partial(jax.jit, static_argnums=(0,))
+    def _ensure_position_validity(self, state, old_position: EntityPosition,
+                                  new_position: EntityPosition) -> EntityPosition:
+        """
+        Check if the position is valid.
+        :param position: The position to check.
+        :return: True if the position is valid, False otherwise.
+        """
+        # check both walls and boundaries using _check_boundaries and _check_walls
+        boundary_position = self._check_boundaries(old_position=old_position, new_position=new_position)
+        return self._check_walls(state, old_position=old_position, new_position=boundary_position)
+
+    @partial(jax.jit, static_argnums=(0,))
+    def _check_boundaries(self, old_position: EntityPosition, new_position: EntityPosition) -> EntityPosition:
+        """Check if an entity collides with the boundaries of the gameboard.
+        :param old_position: The old position of the entity.
+        :param new_position: The new position of the entity.
+        :return: The new position of the entity, or the old position if a collision occurs.
+        """
+        return jax.lax.cond(
+            jnp.logical_or(
+                jnp.logical_or(
+                    new_position.x < 0,
+                    new_position.x > self.consts.BOARD_SIZE[0] - new_position.width - self.consts.WALL_THICKNESS
+                ),
+                jnp.logical_or(
+                    new_position.y < 0,
+                    new_position.y > self.consts.BOARD_SIZE[1] - new_position.height - self.consts.WALL_THICKNESS
+                )),
+            lambda _: old_position,
+            lambda _: new_position,
+            operand=None
+        )
+
+    @partial(jax.jit, static_argnums=(0,))
+    def _check_walls(self, state: WizardOfWorState, old_position: EntityPosition,
+                     new_position: EntityPosition) -> EntityPosition:
+        """Check if an entity collides with any walls in the gameboard.
+        :param state: The current state of the game.
+        :param old_position: The old position of the entity.
+        :param new_position: The new position of the entity.
+        :return: The new position of the entity, or the old position if a collision occurs.
+        """
+        horizontal_walls, vertical_walls = self.consts.get_walls_for_gameboard(gameboard=state.gameboard)
+        H_horizontal, W_horizontal = horizontal_walls.shape
+        H_vertical, W_vertical = vertical_walls.shape
+
+        def check_wall_horizontal(idx):
+            y = idx // W_horizontal
+            x = idx % W_horizontal
+            wall_position = self.consts._get_wall_position(x=x, y=y, horizontal=True)
+            collision = jax.lax.cond(
+                horizontal_walls[y, x] == 1,
+                lambda _: self._check_collision(
+                    new_position,
+                    wall_position
+                ),
+                lambda _: False,
+                operand=None
+            )
+
+            return collision
+
+        def check_wall_vertical(idx):
+            y = idx // W_vertical
+            x = idx % W_vertical
+            wall_position = self.consts._get_wall_position(x=x, y=y, horizontal=False)
+            collision = jax.lax.cond(
+                vertical_walls[y, x] == 1,
+                lambda _: self._check_collision(
+                    new_position,
+                    wall_position
+                ),
+                lambda _: False,
+                operand=None
+            )
+            return collision
+
+        indices_horizontal = jnp.arange(H_horizontal * W_horizontal)
+        indices_vertical = jnp.arange(H_vertical * W_vertical)
+        collides_horizontal = jnp.any(jax.vmap(check_wall_horizontal)(indices_horizontal))
+        collides_vertical = jnp.any(jax.vmap(check_wall_vertical)(indices_vertical))
+
+        return jax.lax.cond(
+            jnp.logical_or(collides_horizontal, collides_vertical),
+            lambda _: old_position,  # If there is a collision, return the old position
+            lambda _: new_position,  # If there is no collision, return the new position
+            operand=None
+        )
+
+    def _check_collision(self, box1: EntityPosition, box2: EntityPosition) -> bool:
+        """ Check if two boxes collide.
+        :param box1: The first box.
+        :param box2: The second box.
+        :return: True if the boxes collide, False otherwise.
+        """
+        return jax.lax.cond(
+            jnp.logical_not(
+                (box1.x + box1.width <= box2.x) |
+                (box1.x >= box2.x + box2.width) |
+                (box1.y + box1.height <= box2.y) |
+                (box1.y >= box2.y + box2.height)
+            ),
+            lambda: True,
+            lambda: False
+        )
+
+    @partial(jax.jit, static_argnums=(0,))
+    def _get_direction_to_player(self, enemy: EntityPosition, player: EntityPosition) -> int:
+        """Returns the direction from the enemy to the player."""
+        if enemy.x < player.x:
+            return self.consts.RIGHT
+        elif enemy.x > player.x:
+            return self.consts.LEFT
+        elif enemy.y < player.y:
+            return self.consts.DOWN
+        else:
+            return self.consts.UP
+
+    @partial(jax.jit, static_argnums=(0,))
     def _step_level_change(self, state):
+        """Checks if all enemies are dead and handles level progression.
+        :param state: The current state of the game.
+        :return: The updated state of the game.
+        """
         # if no enemies are left, we increase the level
         # dont assume that this is  if state.enemies == self.consts.NO_ENEMY_POSITIONS.
         # go through the enemies and check if they are all dead
@@ -494,23 +683,6 @@ class JaxWizardOfWor(JaxEnvironment[WizardOfWorState, WizardOfWorObservation, Wi
                 )
             ),
             lambda: state)
-
-    @partial(jax.jit, static_argnums=(0,))
-    def _get_bullet_origin_for_direction(self, direction: int) -> Tuple[int, int]:
-        """Returns the origin offset for the bullet based on the direction."""
-        return jax.lax.cond(
-            jnp.equal(direction, self.consts.UP),
-            lambda: self.consts.BULLET_ORIGIN_UP,
-            lambda: jax.lax.cond(
-                jnp.equal(direction, self.consts.DOWN),
-                lambda: self.consts.BULLET_ORIGIN_DOWN,
-                lambda: jax.lax.cond(
-                    jnp.equal(direction, self.consts.LEFT),
-                    lambda: self.consts.BULLET_ORIGIN_LEFT,
-                    lambda: self.consts.BULLET_ORIGIN_RIGHT
-                )
-            )
-        )
 
     @partial(jax.jit, static_argnums=(0,))
     def _step_player_movement(self, state, action):
@@ -774,116 +946,8 @@ class JaxWizardOfWor(JaxEnvironment[WizardOfWorState, WizardOfWorObservation, Wi
         )
 
     @partial(jax.jit, static_argnums=(0,))
-    def _positions_equal(self, pos1: EntityPosition, pos2: EntityPosition) -> bool:
-        """Check if two positions are equal."""
-        return jax.lax.cond(
-            (pos1.x == pos2.x) & (pos1.y == pos2.y) &
-            (pos1.width == pos2.width) & (pos1.height == pos2.height) &
-            (pos1.direction == pos2.direction),
-            lambda _: True,
-            lambda _: False,
-            operand=None
-        )
-
-    @partial(jax.jit, static_argnums=(0,))
-    def _ensure_position_validity(self, state, old_position: EntityPosition,
-                                  new_position: EntityPosition) -> EntityPosition:
-        """Check if the position is valid.
-        :param position: The position to check.
-        :return: True if the position is valid, False otherwise.
-        """
-        # check both walls and boundaries using _check_boundaries and _check_walls
-        boundary_position = self._check_boundaries(old_position=old_position, new_position=new_position)
-        return self._check_walls(state, old_position=old_position, new_position=boundary_position)
-
-    @partial(jax.jit, static_argnums=(0,))
-    def _check_boundaries(self, old_position: EntityPosition, new_position: EntityPosition) -> EntityPosition:
-        return jax.lax.cond(
-            jnp.logical_or(
-                jnp.logical_or(
-                    new_position.x < 0,
-                    new_position.x > self.consts.BOARD_SIZE[0] - new_position.width - self.consts.WALL_THICKNESS
-                ),
-                jnp.logical_or(
-                    new_position.y < 0,
-                    new_position.y > self.consts.BOARD_SIZE[1] - new_position.height - self.consts.WALL_THICKNESS
-                )),
-            lambda _: old_position,
-            lambda _: new_position,
-            operand=None
-        )
-
-    @partial(jax.jit, static_argnums=(0,))
-    def _check_walls(self, state: WizardOfWorState, old_position: EntityPosition,
-                     new_position: EntityPosition) -> EntityPosition:
-        """Check if an entity collides with any walls in the gameboard.
-        :param state: The current state of the game.
-        :param old_position: The old position of the entity.
-        :param new_position: The new position of the entity.
-        :return: The new position of the entity, or the old position if a collision occurs.
-        """
-        horizontal_walls, vertical_walls = self.consts.get_walls_for_gameboard(gameboard=state.gameboard)
-        H_horizontal, W_horizontal = horizontal_walls.shape
-        H_vertical, W_vertical = vertical_walls.shape
-
-        def check_wall_horizontal(idx):
-            y = idx // W_horizontal
-            x = idx % W_horizontal
-            wall_position = self.consts._get_wall_position(x=x, y=y, horizontal=True)
-            collision = jax.lax.cond(
-                horizontal_walls[y, x] == 1,
-                lambda _: self._check_collision(
-                    new_position,
-                    wall_position
-                ),
-                lambda _: False,
-                operand=None
-            )
-
-            return collision
-
-        def check_wall_vertical(idx):
-            y = idx // W_vertical
-            x = idx % W_vertical
-            wall_position = self.consts._get_wall_position(x=x, y=y, horizontal=False)
-            collision = jax.lax.cond(
-                vertical_walls[y, x] == 1,
-                lambda _: self._check_collision(
-                    new_position,
-                    wall_position
-                ),
-                lambda _: False,
-                operand=None
-            )
-            return collision
-
-        indices_horizontal = jnp.arange(H_horizontal * W_horizontal)
-        indices_vertical = jnp.arange(H_vertical * W_vertical)
-        collides_horizontal = jnp.any(jax.vmap(check_wall_horizontal)(indices_horizontal))
-        collides_vertical = jnp.any(jax.vmap(check_wall_vertical)(indices_vertical))
-
-        return jax.lax.cond(
-            jnp.logical_or(collides_horizontal, collides_vertical),
-            lambda _: old_position,  # If there is a collision, return the old position
-            lambda _: new_position,  # If there is no collision, return the new position
-            operand=None
-        )
-
-    def _check_collision(self, box1: EntityPosition, box2: EntityPosition) -> bool:
-        """Prüft, ob sich zwei Bounding-Boxen überlappen (Kantenberührung zählt nicht als Kollision)."""
-        return jax.lax.cond(
-            jnp.logical_not(
-                (box1.x + box1.width <= box2.x) |
-                (box1.x >= box2.x + box2.width) |
-                (box1.y + box1.height <= box2.y) |
-                (box1.y >= box2.y + box2.height)
-            ),
-            lambda: True,
-            lambda: False
-        )
-
-    @partial(jax.jit, static_argnums=(0,))
     def _step_bullet_movement(self, state):
+        """Updates the positions of the bullets in the game."""
         # move the bullet in the direction it is facing
         # if the bullet collides with a wall, it is removed
         # there are up to 2 bullets, one for the player and one for the enemy
@@ -945,19 +1009,8 @@ class JaxWizardOfWor(JaxEnvironment[WizardOfWorState, WizardOfWorObservation, Wi
         )
 
     @partial(jax.jit, static_argnums=(0,))
-    def _get_direction_to_player(self, enemy: EntityPosition, player: EntityPosition) -> int:
-        """Returns the direction from the enemy to the player."""
-        if enemy.x < player.x:
-            return self.consts.RIGHT
-        elif enemy.x > player.x:
-            return self.consts.LEFT
-        elif enemy.y < player.y:
-            return self.consts.DOWN
-        else:
-            return self.consts.UP
-
-    @partial(jax.jit, static_argnums=(0,))
     def _step_enemy_movement(self, state):
+        """Updates the positions of the enemies in the game."""
         # scan over all enemies and update the state based on their movement
 
         def move_enemy(carry, enemy_index):
@@ -1327,9 +1380,9 @@ class JaxWizardOfWor(JaxEnvironment[WizardOfWorState, WizardOfWorObservation, Wi
             last_seen = jnp.minimum(self.consts.MAX_LAST_SEEN, last_seen + 1)  # increment last seen timer
             state = jax.lax.cond(
                 jnp.logical_or(
-                                   jnp.abs(state.player.x - state.enemies[enemy_index, 0]) <= self.consts.SPOT_TOLERANCE,
-                                   jnp.abs(state.player.y - state.enemies[enemy_index, 1]) <= self.consts.SPOT_TOLERANCE
-                               ),
+                    jnp.abs(state.player.x - state.enemies[enemy_index, 0]) <= self.consts.SPOT_TOLERANCE,
+                    jnp.abs(state.player.y - state.enemies[enemy_index, 1]) <= self.consts.SPOT_TOLERANCE
+                ),
                 lambda: update_state(state=state, enemies=state.enemies.at[enemy_index, 6].set(0)),
                 lambda: update_state(
                     state=state,
@@ -1399,9 +1452,7 @@ class JaxWizardOfWor(JaxEnvironment[WizardOfWorState, WizardOfWorObservation, Wi
 
     def _step_enemy_level_progression(self, state):
         """
-        Führt die Feind-Progression und das Aufräumen toter Feinde durch.
-        Jede Regel ist als innere Funktion implementiert.
-        Fügt außerdem Punkte für getötete Feinde hinzu.
+        Handles the enemy level progression and the cleanup of dead enemies.
         """
         consts = self.consts
         enemies = state.enemies
@@ -1496,6 +1547,7 @@ class JaxWizardOfWor(JaxEnvironment[WizardOfWorState, WizardOfWorObservation, Wi
 
     @partial(jax.jit, static_argnums=(0,))
     def _step_collision_detection(self, state):
+        """Detects and handles collisions between player, enemies, and bullets."""
         # We have 3 types of collisions:
         # 1. Player vs Enemy
         #    - If a player collides with an enemy, the player dies (death_animation is set to 1)
@@ -1790,8 +1842,9 @@ class WizardOfWorRenderer(JAXGameRenderer):
 
         SPRITE_BG = jnp.expand_dims(bg, axis=0)
         SPRITE_BULLET = jnp.expand_dims(bullet, axis=0)
-        SPRITE_ENEMY_BULLET = jnp.stack([burwor_bullet,burwor_bullet,garwor_bullet, thorwor_bullet, worluk_bullet, wizard_bullet],
-                                        axis=0)
+        SPRITE_ENEMY_BULLET = jnp.stack(
+            [burwor_bullet, burwor_bullet, garwor_bullet, thorwor_bullet, worluk_bullet, wizard_bullet],
+            axis=0)
         SPRITE_WALL_HORIZONTAL = jnp.expand_dims(wall_horizontal, axis=0)
         SPRITE_WALL_VERTICAL = jnp.expand_dims(wall_vertical, axis=0)
 
