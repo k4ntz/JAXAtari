@@ -10,6 +10,15 @@ from jaxatari.environment import JaxEnvironment, JAXAtariAction as Action
 from jaxatari.renderers import JAXGameRenderer
 import jaxatari.rendering.jax_rendering_utils as jr
 
+#
+# IMPORTANT
+# FEATURES THAT WERE NOT IN SCOPE:
+# - Pathfinding of the Worluk towards the teleporters
+# - Spawning and movement of the Wizard
+# - Speed increasing through level progression instead of just time in the level
+# - More than 1 level. Our scope was the first level, the others are just cherries on top. (This can be configured via MAX_LEVEL)
+#
+
 
 class EntityPosition(NamedTuple):
     x: int
