@@ -92,7 +92,6 @@ def create_random_map(width, height, wall_density=0.2):
     for cx, cy in corners:
         if maze[cy][cx] != WALL:
             maze[cy][cx] = POWER_PELLET
-
     # Pac-Man start position
     maze[1][1] = PACMAN
 
