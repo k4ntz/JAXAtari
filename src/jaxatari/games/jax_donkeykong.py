@@ -362,7 +362,7 @@ class JaxDonkeyKong(JaxEnvironment[DonkeyKongState, DonkeyKongObservation, Donke
                 )
 
                 return jax.lax.cond(
-                    jnp.logical_and(direction == self.consts.MOVING_DOWN, state.mario_got_hit == False),
+                    jnp.logical_and(jnp.logical_and(direction == self.consts.MOVING_DOWN, state.mario_got_hit == False), state.mario_reached_goal == False),
                     lambda _: (new_x, y, new_direction, new_sprite, stage),
                     lambda _: (x, y, direction, sprite, stage),
                     operand=None
@@ -412,7 +412,7 @@ class JaxDonkeyKong(JaxEnvironment[DonkeyKongState, DonkeyKongObservation, Donke
                 )
 
                 return jax.lax.cond(
-                    jnp.logical_and(barrel_is_on_ladder, jnp.logical_and(direction != self.consts.MOVING_DOWN, jnp.logical_and(roll_down_prob, state.mario_got_hit == False))),
+                    jnp.logical_and(barrel_is_on_ladder, jnp.logical_and(direction != self.consts.MOVING_DOWN, jnp.logical_and(roll_down_prob, jnp.logical_and(state.mario_got_hit == False, state.mario_reached_goal == False)))),
                     lambda _: (new_x, y, new_direction, new_sprite, new_stage),
                     lambda _: jax.lax.cond(
                         barrel_is_over_the_bar,
@@ -434,7 +434,7 @@ class JaxDonkeyKong(JaxEnvironment[DonkeyKongState, DonkeyKongObservation, Donke
                 )
                 new_x = jnp.round(self.bar_linear_equation(stage, new_y) - self.consts.BARREL_HIT_BOX_X).astype(int)
                 return jax.lax.cond(
-                    jnp.logical_and(direction != self.consts.MOVING_DOWN, state.mario_got_hit == False),
+                    jnp.logical_and(jnp.logical_and(direction != self.consts.MOVING_DOWN, state.mario_got_hit == False), state.mario_reached_goal == False),
                     lambda _: (new_x, new_y, direction, sprite, stage),
                     lambda _: (x, y, direction, sprite, stage),
                     operand=None
@@ -555,7 +555,7 @@ class JaxDonkeyKong(JaxEnvironment[DonkeyKongState, DonkeyKongObservation, Donke
             )
 
             return jax.lax.cond(
-                jnp.logical_and(action == Action.FIRE, jnp.logical_and(jnp.logical_and(jnp.logical_and(state.mario_climbing == False, state.mario_jumping == False), state.mario_jumping_wide == False), state.block_jumping_and_climbing == False)),
+                jnp.logical_and(action == Action.FIRE, jnp.logical_and(jnp.logical_and(jnp.logical_and(state.mario_climbing == False, state.mario_jumping == False), state.mario_jumping_wide == False), jnp.logical_and(state.block_jumping_and_climbing == False, state.mario_reached_goal == False))),
                 lambda _: new_state,
                 lambda _: state,
                 operand=None
@@ -575,7 +575,7 @@ class JaxDonkeyKong(JaxEnvironment[DonkeyKongState, DonkeyKongObservation, Donke
                 mario_y = state.mario_y + self.consts.MARIO_MOVING_SPEED
             )
             return jax.lax.cond(
-                jnp.logical_and(action == Action.RIGHTFIRE, jnp.logical_and(jnp.logical_and(jnp.logical_and(state.mario_climbing == False, state.mario_jumping_wide == False), state.mario_jumping == False), state.block_jumping_and_climbing == False)),
+                jnp.logical_and(action == Action.RIGHTFIRE, jnp.logical_and(jnp.logical_and(jnp.logical_and(state.mario_climbing == False, state.mario_jumping_wide == False), state.mario_jumping == False), jnp.logical_and(state.block_jumping_and_climbing == False, state.mario_reached_goal == False))),
                 lambda _: new_state_start_jumping,
                 lambda _: jax.lax.cond(
                     jnp.logical_and(state.mario_jumping_wide == True, state.mario_view_direction == self.consts.MOVING_RIGHT),
@@ -599,7 +599,7 @@ class JaxDonkeyKong(JaxEnvironment[DonkeyKongState, DonkeyKongObservation, Donke
                 mario_y = state.mario_y - self.consts.MARIO_MOVING_SPEED
             )
             return jax.lax.cond(
-                jnp.logical_and(action == Action.LEFTFIRE, jnp.logical_and(jnp.logical_and(jnp.logical_and(state.mario_climbing == False, state.mario_jumping_wide == False), state.mario_jumping == False), state.block_jumping_and_climbing == False)),
+                jnp.logical_and(action == Action.LEFTFIRE, jnp.logical_and(jnp.logical_and(jnp.logical_and(jnp.logical_and(state.mario_climbing == False, state.mario_jumping_wide == False), state.mario_jumping == False), state.block_jumping_and_climbing == False), state.mario_reached_goal == False)),
                 lambda _: new_state_start_jumping,
                 lambda _: jax.lax.cond(
                     jnp.logical_and(state.mario_jumping_wide == True, state.mario_view_direction == self.consts.MOVING_LEFT),
@@ -713,10 +713,10 @@ class JaxDonkeyKong(JaxEnvironment[DonkeyKongState, DonkeyKongObservation, Donke
             )
 
             return jax.lax.cond(
-                jnp.logical_and(jnp.logical_and(jnp.logical_and(jnp.logical_and(state.mario_climbing == True, state.mario_jumping == False), state.mario_jumping_wide == False), action == Action.UP), state.block_jumping_and_climbing == False),
+                jnp.logical_and(jnp.logical_and(jnp.logical_and(jnp.logical_and(jnp.logical_and(state.mario_climbing == True, state.mario_jumping == False), state.mario_jumping_wide == False), action == Action.UP), state.block_jumping_and_climbing == False), state.mario_reached_goal == False),
                 lambda _: new_state_climbing_upwards,
                 lambda _: jax.lax.cond(
-                    jnp.logical_and(jnp.logical_and(jnp.logical_and(jnp.logical_and(state.mario_climbing == True, state.mario_jumping == False), state.mario_jumping_wide == False), action == Action.DOWN), state.block_jumping_and_climbing == False),
+                    jnp.logical_and(jnp.logical_and(jnp.logical_and(jnp.logical_and(jnp.logical_and(state.mario_climbing == True, state.mario_jumping == False), state.mario_jumping_wide == False), action == Action.DOWN), state.block_jumping_and_climbing == False), state.mario_reached_goal == False),
                     lambda _: new_state_climbing_downwards,
                     lambda _: state,
                     operand=None
@@ -760,10 +760,10 @@ class JaxDonkeyKong(JaxEnvironment[DonkeyKongState, DonkeyKongObservation, Donke
             mario_can_climb_downwards = jax.lax.fori_loop(0, len(ladders.stage), look_for_valid_ladder_to_climb, (False, state.mario_stage - 1))[0]        
             
             return jax.lax.cond(
-                jnp.logical_and(jnp.logical_and(jnp.logical_and(jnp.logical_and(jnp.logical_and(mario_can_climb_upwards, state.mario_climbing == False), state.mario_jumping == False), state.mario_jumping_wide == False), action == Action.UP), state.block_jumping_and_climbing == False),
+                jnp.logical_and(jnp.logical_and(jnp.logical_and(jnp.logical_and(jnp.logical_and(jnp.logical_and(mario_can_climb_upwards, state.mario_climbing == False), state.mario_jumping == False), state.mario_jumping_wide == False), action == Action.UP), state.block_jumping_and_climbing == False), state.mario_reached_goal == False),
                 lambda _: new_state_climbing_upwards,
                 lambda _: jax.lax.cond(
-                    jnp.logical_and(jnp.logical_and(jnp.logical_and(jnp.logical_and(jnp.logical_and(mario_can_climb_downwards, state.mario_climbing == False), state.mario_jumping == False), state.mario_jumping_wide == False), action == Action.DOWN), state.block_jumping_and_climbing == False),
+                    jnp.logical_and(jnp.logical_and(jnp.logical_and(jnp.logical_and(jnp.logical_and(jnp.logical_and(mario_can_climb_downwards, state.mario_climbing == False), state.mario_jumping == False), state.mario_jumping_wide == False), action == Action.DOWN), state.block_jumping_and_climbing == False), state.mario_reached_goal == False),
                     lambda _: new_state_climbing_downwards,
                     lambda _: state,
                     operand=None
@@ -821,7 +821,7 @@ class JaxDonkeyKong(JaxEnvironment[DonkeyKongState, DonkeyKongObservation, Donke
                 operand=None
             )
             return jax.lax.cond(
-                jnp.logical_and(jnp.logical_and(jnp.logical_and(state.mario_climbing == False, state.mario_jumping == False), state.mario_jumping_wide == False), action == Action.RIGHT),
+                jnp.logical_and(jnp.logical_and(jnp.logical_and(jnp.logical_and(state.mario_climbing == False, state.mario_jumping == False), state.mario_jumping_wide == False), action == Action.RIGHT), state.mario_reached_goal == False),
                 lambda _: new_state,
                 lambda _: state,
                 operand=None
@@ -876,7 +876,7 @@ class JaxDonkeyKong(JaxEnvironment[DonkeyKongState, DonkeyKongObservation, Donke
                 operand=None
             )
             return jax.lax.cond(
-                jnp.logical_and(jnp.logical_and(jnp.logical_and(state.mario_climbing == False, state.mario_jumping == False), state.mario_jumping_wide == False), action == Action.LEFT),
+                jnp.logical_and(jnp.logical_and(jnp.logical_and(jnp.logical_and(state.mario_climbing == False, state.mario_jumping == False), state.mario_jumping_wide == False), action == Action.LEFT), state.mario_reached_goal == False),
                 lambda _: new_state,
                 lambda _: state,
                 operand=None
@@ -952,6 +952,8 @@ class JaxDonkeyKong(JaxEnvironment[DonkeyKongState, DonkeyKongObservation, Donke
         # check if mario reached the goal
         def mario_reached_goal(state):
             reached_goal = state.mario_x <= self.consts.LEVEL_1_GOAL_X
+            reached_goal &= state.mario_climbing
+            reached_goal &= jnp.logical_not(state.mario_reached_goal) # false if already reached the goal
             new_state = state._replace(
                 game_freeze_start = state.step_counter,
                 mario_reached_goal = True,
@@ -967,14 +969,20 @@ class JaxDonkeyKong(JaxEnvironment[DonkeyKongState, DonkeyKongObservation, Donke
         # after mario reached the goal or hit by an enemy --> reset the level, calculate score
         def reset_game_after_success_or_collision(state):
             _, new_state = JaxDonkeyKong.reset(self)
-            new_state = new_state._replace(
+            new_state_life_loose = new_state._replace(
                 mario_life_counter = state.mario_life_counter - 1,
             )
+            new_state_clear_level = new_state
             game_freeze_over = self.consts.GAME_FREEZE_DURATION < (state.step_counter - state.game_freeze_start)
             return jax.lax.cond(
                 jnp.logical_and(game_freeze_over, state.mario_got_hit),
-                lambda _: (new_state, True),
-                lambda _: (state, False),
+                lambda _: (new_state_life_loose, True),
+                lambda _: jax.lax.cond(
+                    jnp.logical_and(game_freeze_over, state.mario_reached_goal == True),
+                    lambda _: (new_state_clear_level, True),
+                    lambda _: (state, False),
+                    operand=None
+                ),
                 operand=None
             )    
         new_state, game_can_be_resetted = reset_game_after_success_or_collision(new_state)
@@ -982,13 +990,17 @@ class JaxDonkeyKong(JaxEnvironment[DonkeyKongState, DonkeyKongObservation, Donke
         return jax.lax.cond(
             jnp.logical_and(state.mario_got_hit, game_can_be_resetted == False),
             lambda _: state,
-            lambda _: new_state,
+            lambda _: jax.lax.cond(
+                jnp.logical_and(state.mario_reached_goal, game_can_be_resetted == False),
+                lambda _: state,
+                lambda _: new_state,
+                operand=None
+            ),
             operand=None
         )
     
     @partial(jax.jit, static_argnums=(0,))
     def _hammer_step(self, state, action: chex.Array):
-
         # calculate the position of the hammer if active
         def calculate_hammer_pos_relative_to_mario(state):
             new_state_mario_views_right_swing = state._replace(
