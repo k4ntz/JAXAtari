@@ -343,6 +343,21 @@ class JaxTetris(JaxEnvironment[TetrisState, TetrisObservation, TetrisInfo, Tetri
                   | (a == Action.UPLEFTFIRE) | (a == Action.UPRIGHTFIRE) \
                   | (a == Action.DOWNLEFTFIRE) | (a == Action.DOWNRIGHTFIRE)
 
+        # Allow only single-key actions: if multiple logical keys pressed (diagonals or with FIRE), treat as NOOP
+        pressed_count = (
+            is_left.astype(jnp.int32)
+            + is_right.astype(jnp.int32)
+            + is_up.astype(jnp.int32)
+            + is_down.astype(jnp.int32)
+            + is_fire.astype(jnp.int32)
+        )
+        exactly_one = (pressed_count == 1)
+        is_left = is_left & exactly_one
+        is_right = is_right & exactly_one
+        is_up = is_up & exactly_one
+        is_down = is_down & exactly_one
+        is_fire = is_fire & exactly_one
+
         do_reset = (a == self.consts.RESET)
 
         tick_next = state.tick + jnp.int32(1)
