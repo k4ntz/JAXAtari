@@ -343,7 +343,7 @@ class JaxTetris(JaxEnvironment[TetrisState, TetrisObservation, TetrisInfo, Tetri
                   | (a == Action.UPLEFTFIRE) | (a == Action.UPRIGHTFIRE) \
                   | (a == Action.DOWNLEFTFIRE) | (a == Action.DOWNRIGHTFIRE)
 
-        # Allow only single-key actions: if multiple logical keys pressed (diagonals or with FIRE), treat as NOOP
+        # Allow only single-key actions: if multiple logical keys pressed, treat as NOOP
         pressed_count = (
             is_left.astype(jnp.int32)
             + is_right.astype(jnp.int32)
@@ -609,6 +609,7 @@ class TetrisRenderer(JAXGameRenderer):
 
     @partial(jax.jit, static_argnums=(0,))
     def render(self, state):
+        # Base raster and static layers
         raster = jr.create_initial_frame(width=160, height=210)
 
         frame_bg = jr.get_sprite_frame(self.SPRITE_BG, 0)
@@ -617,56 +618,77 @@ class TetrisRenderer(JAXGameRenderer):
         frame_board = jr.get_sprite_frame(self.SPRITE_BOARD, 0)
         raster = jr.render_at(raster, self.consts.BOARD_X, self.consts.BOARD_Y, frame_board)
 
-        board = state.board
+        # Vectorized board + piece rasterization (no loops)
+        board = state.board  # (H_board, W_board) {0,1}
+        H_board = board.shape[0]
+        W_board = board.shape[1]
 
-        num_rows = board.shape[0] # 22
-        num_cols = board.shape[1] # 10
+        # Raster grid (xy indexing)
+        H_out, W_out, _ = raster.shape
+        xx, yy = jnp.meshgrid(jnp.arange(W_out, dtype=jnp.int32),
+                              jnp.arange(H_out, dtype=jnp.int32), indexing="xy")
 
-        def render_board_row(row_idx, raster):
-            row = board[row_idx]
-            sprite = self.SPRITE_ROW_COLORS[row_idx % len(self.SPRITE_ROW_COLORS)]
+        # Geometry
+        cell_w = jnp.int32(self.consts.CELL_WIDTH)
+        cell_h = jnp.int32(self.consts.CELL_HEIGHT)
+        stride_x = cell_w + jnp.int32(1)
+        stride_y = cell_h + jnp.int32(1)
+        board_x0 = jnp.int32(self.consts.BOARD_X + self.consts.BOARD_PADDING)
+        board_y0 = jnp.int32(self.consts.BOARD_Y)
 
-            def render_col(col_idx, raster):
-                val = row[col_idx]
+        # Local board-plane coordinates
+        local_x = xx - board_x0
+        local_y = yy - board_y0
 
-                def draw_sprite(r):
-                    x = self.consts.BOARD_X + self.consts.BOARD_PADDING + col_idx * (self.consts.CELL_WIDTH + 1)
-                    y = self.consts.BOARD_Y + row_idx * (self.consts.CELL_HEIGHT + 1)
-                    return jr.render_at(r, x, y, sprite)
+        in_region = (
+            (local_x >= 0)
+            & (local_y >= 0)
+            & (local_x < stride_x * W_board)
+            & (local_y < stride_y * H_board)
+        )
 
-                return jax.lax.cond(jnp.equal(val, 1), draw_sprite, lambda r: r, raster)
+        # Cell indices and intra-cell offsets
+        cell_c = local_x // stride_x
+        cell_r = local_y // stride_y
+        off_x = local_x - cell_c * stride_x
+        off_y = local_y - cell_r * stride_y
 
-            return jax.lax.fori_loop(0, num_cols, render_col, raster)
+        inside_tile = (off_x < cell_w) & (off_y < cell_h)
 
-        raster = jax.lax.fori_loop(0, num_rows, render_board_row, raster)
+        # Safe indices for board gather
+        cell_r_c = jnp.clip(cell_r, 0, H_board - 1)
+        cell_c_c = jnp.clip(cell_c, 0, W_board - 1)
 
+        # Board occupancy per pixel
+        board_on = (board[cell_r_c, cell_c_c] == 1)
+
+        # Piece occupancy per pixel
         piece = self.get_piece_shape(state.piece_type, state.rot)  # (4,4)
         pos_y, pos_x = state.pos
+        rel_y = cell_r - jnp.asarray(pos_y, jnp.int32)
+        rel_x = cell_c - jnp.asarray(pos_x, jnp.int32)
+        in_piece = (rel_y >= 0) & (rel_y < 4) & (rel_x >= 0) & (rel_x < 4)
+        rel_y_c = jnp.clip(rel_y, 0, 3)
+        rel_x_c = jnp.clip(rel_x, 0, 3)
+        piece_on = (piece[rel_y_c, rel_x_c] == 1) & in_piece
 
-        def render_piece_cell(i, raster):
-            y = i // 4
-            x = i % 4
-            val = piece[y, x]
+        # Active pixels to draw (non-overlapping by construction)
+        active = in_region & inside_tile & (board_on | piece_on)
 
-            def draw_piece(r):
-                board_y = pos_y + y
-                board_x = pos_x + x
+        # Select row-colored sprite pixel per raster pixel
+        row_sel = (cell_r_c % jnp.int32(self.N_COLOR_ROWS))
+        off_y_c = jnp.clip(off_y, 0, cell_h - 1)
+        off_x_c = jnp.clip(off_x, 0, cell_w - 1)
+        sprite_px_rgba = self.SPRITE_ROW_COLORS[row_sel, off_y_c, off_x_c]  # (...,4)
 
-                in_bounds_y = jnp.logical_and(board_y >= 0, board_y < num_rows)
-                in_bounds_x = jnp.logical_and(board_x >= 0, board_x < num_cols)
-                in_bounds = jnp.logical_and(in_bounds_y, in_bounds_x)
+        # Alpha blend in one pass for all active pixels
+        sprite_rgb = sprite_px_rgba[..., :3].astype(jnp.float32)
+        sprite_a = (sprite_px_rgba[..., 3].astype(jnp.float32) / 255.0)
+        base_rgb = raster[..., :3].astype(jnp.float32)
 
-                def render_pixel(r):
-                    sprite = self.SPRITE_ROW_COLORS[board_y % self.N_COLOR_ROWS]
-                    px = self.consts.BOARD_X + self.consts.BOARD_PADDING + board_x * (self.consts.CELL_WIDTH + 1)
-                    py = self.consts.BOARD_Y + board_y * (self.consts.CELL_HEIGHT + 1)
-                    return jr.render_at(r, px, py, sprite)
-
-                return jax.lax.cond(in_bounds, render_pixel, lambda r: r, r)
-
-            return jax.lax.cond(jnp.equal(val, 1), draw_piece, lambda r: r, raster)
-
-        raster = jax.lax.fori_loop(0, 16, render_piece_cell, raster)
+        a_mask = sprite_a * active.astype(jnp.float32)
+        blended_rgb = sprite_rgb * a_mask[..., None] + base_rgb * (1.0 - a_mask[..., None])
+        raster = jnp.where(active[..., None], blended_rgb.astype(raster.dtype), raster)
 
         # score (unchanged)
         score_digits = jr.int_to_digits(state.score, max_digits=4)
