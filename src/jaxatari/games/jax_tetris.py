@@ -186,8 +186,8 @@ class JaxTetris(JaxEnvironment[TetrisState, TetrisObservation, TetrisInfo, Tetri
         """
         Lock the current tetromino onto the board at the given position.
         """
-        H = self.consts.BOARD_HEIGHT  # python int to avoid tracer shapes
-        W = self.consts.BOARD_WIDTH   # python int to avoid tracer shapes
+        H = self.consts.BOARD_HEIGHT  # avoid tracer shapes
+        W = self.consts.BOARD_WIDTH
 
         # Build an overlay mask over the whole board where piece occupies
         by = jnp.arange(H, dtype=jnp.int32)[:, None]
@@ -332,6 +332,8 @@ class JaxTetris(JaxEnvironment[TetrisState, TetrisObservation, TetrisInfo, Tetri
         """
         previous_state = state
         a = action.astype(jnp.int32)
+
+        # Decode inputs
         is_left = (a == Action.LEFT) | (a == Action.UPLEFT) | (a == Action.DOWNLEFT)
         is_right = (a == Action.RIGHT) | (a == Action.UPRIGHT) | (a == Action.DOWNRIGHT)
         is_up = (a == Action.UP) | (a == Action.UPLEFT) | (a == Action.UPRIGHT)
@@ -346,31 +348,41 @@ class JaxTetris(JaxEnvironment[TetrisState, TetrisObservation, TetrisInfo, Tetri
         tick_next = state.tick + jnp.int32(1)
         gravity_drop = (tick_next % jnp.int32(self.consts.GRAVITY_FRAMES) == 0).astype(jnp.int32)
 
-        # Held-key timers
+        # ---- Held-key timers (horizontal) ----
         new_move_dir = jnp.where(is_left, -1, jnp.where(is_right, 1, state.move_dir * 0))
         das = jnp.where(new_move_dir != 0,
-                        jnp.where(state.move_dir == 0, jnp.int32(self.consts.DAS_FRAMES), jnp.maximum(0, state.das_timer - 1)),
+                        jnp.where(state.move_dir == 0, jnp.int32(self.consts.DAS_FRAMES),
+                                  jnp.maximum(0, state.das_timer - 1)),
                         jnp.int32(0))
         arr = jnp.where(new_move_dir != 0,
-                        jnp.where(das == 0, jnp.maximum(0, state.arr_timer - 1), jnp.int32(self.consts.ARR_FRAMES)),
+                        jnp.where(das == 0, jnp.maximum(0, state.arr_timer - 1),
+                                  jnp.int32(self.consts.ARR_FRAMES)),
                         jnp.int32(0))
-
         do_move_now = (new_move_dir != 0) & ((state.move_dir == 0) | ((das == 0) & (arr == 0)))
 
-        rot_timer = jnp.where(is_up, jnp.maximum(0, state.rot_timer - 1), jnp.int32(0))
-        # --- INSTANT DROP LOGIC ---
+        # ---- Rotation repeat gating ----
         if self.instant_drop:
-            do_hard_now = is_fire & (state.last_action != Action.FIRE)
-            do_rotate_now = is_up & ((state.last_action != Action.UP) | (rot_timer == 0))
+            # When hard drop is enabled, FIRE should not rotate
+            rotate_pressed = is_up
+            last_was_rotate = (state.last_action == Action.UP)
         else:
-            do_hard_now = False
-            do_rotate_now = (is_up | is_fire) & ((state.last_action != Action.UP) | (rot_timer == 0))
-        # --- END INSTANT DROP LOGIC ---
+            rotate_pressed = is_up | is_fire
+            last_was_rotate = (state.last_action == Action.UP) | (state.last_action == Action.FIRE)
 
+        # countdown while held; reset to 0 when neither is held
+        rot_timer = jnp.where(rotate_pressed, jnp.maximum(0, state.rot_timer - 1), jnp.int32(0))
+
+        # edge-trigger or repeat
+        do_rotate_now = rotate_pressed & ((~last_was_rotate) | (rot_timer == 0))
+
+        # ---- Soft drop timer ----
         soft_timer = jnp.where(is_down, jnp.maximum(0, state.soft_timer - 1), jnp.int32(0))
         do_soft_now = is_down & (soft_timer == 0)
 
-        # Rotate
+        # ---- Hard drop (SPACE) edge when instant_drop=True ----
+        do_hard_now = (jnp.bool_(self.instant_drop) & is_fire & (state.last_action != Action.FIRE))
+
+        # ---- Apply rotate ----
         pos_r, rot_r = lax.cond(
             do_rotate_now,
             lambda _: self.try_rotate(state.board, state.piece_type, state.pos, state.rot),
@@ -379,13 +391,13 @@ class JaxTetris(JaxEnvironment[TetrisState, TetrisObservation, TetrisInfo, Tetri
         )
         state = state._replace(pos=pos_r, rot=rot_r)
 
-        # Horizontal
+        # ---- Horizontal move ----
         grid = self.piece_grid(state.piece_type, state.rot)
         pos_h = state.pos + jnp.array([0, jnp.int32(jnp.where(do_move_now, new_move_dir, 0))], dtype=jnp.int32)
         coll_h = self.check_collision(state.board, grid, pos_h)
         state = lax.cond(coll_h, lambda s: s, lambda s: s._replace(pos=pos_h), state)
 
-        # Vertical
+        # ---- Vertical movement / lock ----
         def do_hard(s: TetrisState):
             g = self.piece_grid(s.piece_type, s.rot)
 
@@ -405,10 +417,10 @@ class JaxTetris(JaxEnvironment[TetrisState, TetrisObservation, TetrisInfo, Tetri
             coll_v = self.check_collision(s.board, grid, pos_v)
             return lax.cond(
                 coll_v,
-                lambda ss: self._lock_spawn(ss, grid, tick_next, soft_points = jnp.int32(0)),
+                lambda ss: self._lock_spawn(ss, grid, tick_next, soft_points=jnp.int32(0)),
                 lambda ss: (ss._replace(pos=pos_v, tick=tick_next),
                             jnp.float32(0.0), jnp.bool_(False),
-                            TetrisInfo(score=ss.score , cleared=jnp.int32(0), game_over=ss.game_over)),
+                            TetrisInfo(score=ss.score, cleared=jnp.int32(0), game_over=ss.game_over)),
                 s
             )
 
@@ -423,6 +435,7 @@ class JaxTetris(JaxEnvironment[TetrisState, TetrisObservation, TetrisInfo, Tetri
             operand=None
         )
 
+        # If game over, auto-reset
         def after_over(ss):
             obs2, st2 = self.reset(ss.key)
             return st2, jnp.float32(0.0), jnp.bool_(False), TetrisInfo(score=st2.score, cleared=jnp.int32(0),
@@ -430,7 +443,8 @@ class JaxTetris(JaxEnvironment[TetrisState, TetrisObservation, TetrisInfo, Tetri
 
         state, reward, done, info = lax.cond(state.game_over, after_over, lambda s: (s, _reward, done, info), state)
 
-        next_banner_timer = jnp.maximum(0, state.banner_timer - 1) # new row for banners
+        # ---- Timers & book-keeping ----
+        next_banner_timer = jnp.maximum(0, state.banner_timer - 1)
 
         state = state._replace(
             das_timer=das,
@@ -439,10 +453,11 @@ class JaxTetris(JaxEnvironment[TetrisState, TetrisObservation, TetrisInfo, Tetri
             rot_timer=jnp.where(do_rotate_now, jnp.int32(self.consts.ROT_DAS_FRAMES), rot_timer),
             soft_timer=jnp.where(do_soft_now, jnp.int32(self.consts.SOFT_PACE_FRAMES), soft_timer),
             last_action=a,
-            banner_timer = next_banner_timer, # new row for banners
-            banner_code = jnp.where(next_banner_timer == 0, jnp.int32(0), state.banner_code) #new row for banners
+            banner_timer=next_banner_timer,
+            banner_code=jnp.where(next_banner_timer == 0, jnp.int32(0), state.banner_code)
         )
 
+        # ---- Outputs ----
         obs = self._get_observation(state)
         reward = self._get_reward(previous_state, state)
         done = self._get_done(state)
