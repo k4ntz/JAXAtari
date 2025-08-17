@@ -165,41 +165,44 @@ class JaxTetris(JaxEnvironment[TetrisState, TetrisObservation, TetrisInfo, Tetri
         H = jnp.int32(self.consts.BOARD_HEIGHT)
         W = jnp.int32(self.consts.BOARD_WIDTH)
 
-        def body(i, acc):
-            y, x = jnp.divmod(i, 4)
-            on = grid4[y, x] == 1
-            py = pos[0] + y
-            px = pos[1] + x
-            inb_side = (px >= 0) & (px < W) & (py < H)
-            readable = inb_side & (py >= 0)
-            pyc = jnp.clip(py, 0, H - 1)
-            pxc = jnp.clip(px, 0, W - 1)
-            occ = jnp.where(readable, board[pyc, pxc] == 1, False)  # Is cell already filled?
-            side_or_bottom_oob = on & (~inb_side) & (py >= 0)  # Out of bounds at side or bottom
-            return acc | (on & (occ | side_or_bottom_oob))  # check Any collision?
+        ys = jnp.arange(4, dtype=jnp.int32)
+        xs = jnp.arange(4, dtype=jnp.int32)
+        yy, xx = jnp.meshgrid(ys, xs, indexing="ij")  # (4,4)
+        on = (grid4 == 1)
+        py = pos[0] + yy
+        px = pos[1] + xx
 
-        return lax.fori_loop(0, 16, body, False)
+        inb_side = (px >= 0) & (px < W) & (py < H)
+        readable = inb_side & (py >= 0)
+        pyc = jnp.clip(py, 0, H - 1)
+        pxc = jnp.clip(px, 0, W - 1)
+        occ = jnp.where(readable, board[pyc, pxc] == 1, False)
+        side_or_bottom_oob = on & (~inb_side) & (py >= 0)
+        coll = on & (occ | side_or_bottom_oob)
+        return jnp.any(coll)
 
     @partial(jax.jit, static_argnums=0)
     def lock_piece(self, board: chex.Array, grid4: chex.Array, pos: chex.Array) -> chex.Array:
         """
         Lock the current tetromino onto the board at the given position.
         """
-        H = jnp.int32(self.consts.BOARD_HEIGHT)
-        W = jnp.int32(self.consts.BOARD_WIDTH)
+        H = self.consts.BOARD_HEIGHT  # python int to avoid tracer shapes
+        W = self.consts.BOARD_WIDTH   # python int to avoid tracer shapes
 
-        def body(i, b):
-            y, x = jnp.divmod(i, 4)
-            on = grid4[y, x] == 1
-            py = pos[0] + y
-            px = pos[1] + x
-            inb = (px >= 0) & (px < W) & (py >= 0) & (py < H)  # In board
-            pyc = jnp.clip(py, 0, H - 1)
-            pxc = jnp.clip(px, 0, W - 1)
-            # Set cell to 1 if in bounds and occupied by piece
-            return lax.cond(on & inb, lambda bb: bb.at[pyc, pxc].set(1), lambda bb: bb, b)
+        # Build an overlay mask over the whole board where piece occupies
+        by = jnp.arange(H, dtype=jnp.int32)[:, None]
+        bx = jnp.arange(W, dtype=jnp.int32)[None, :]
 
-        return lax.fori_loop(0, 16, body, board)
+        # Map board coords to piece-local coords and test membership
+        rel_y = by - pos[0]
+        rel_x = bx - pos[1]
+        within_piece = (rel_y >= 0) & (rel_y < 4) & (rel_x >= 0) & (rel_x < 4)
+        rel_yc = jnp.clip(rel_y, 0, 3)
+        rel_xc = jnp.clip(rel_x, 0, 3)
+        cover = within_piece & (grid4[rel_yc, rel_xc] == 1)
+        # Only lock for board cells with non-negative piece rows (top negative rows are ignored)
+        cover = cover & (rel_y >= 0)
+        return jnp.where(cover, jnp.int32(1), board)
 
     @partial(jax.jit, static_argnums=0)
     def clear_lines(self, board: chex.Array) -> Tuple[chex.Array, chex.Array]:
@@ -207,26 +210,21 @@ class JaxTetris(JaxEnvironment[TetrisState, TetrisObservation, TetrisInfo, Tetri
         Clear all full lines from the board.
         Returns the new board and the number of lines cleared.
         """
-        full = jnp.all(board == 1, axis=1)  # check which rows are full
+        full = jnp.all(board == 1, axis=1)  # (H,)
+        H = self.consts.BOARD_HEIGHT  # python int for shape ops
 
-        def scan_row(carry, y):
-            nb, wy, cnt = carry
-            row = board[y]
-            is_full = full[y]
+        idx = jnp.arange(H, dtype=jnp.int32)
+        keep_key = (~full).astype(jnp.int32)
+        # Composite key makes all full rows (0) come first, then non-full (1), each in original order
+        key = keep_key * H + idx
+        perm = jnp.argsort(key)
+        board_sorted = board[perm]
 
-            def write_row(c):
-                _nb, _wy, _cnt = c
-                _nb = _nb.at[_wy].set(row)  # Copy row down
-                return _nb, _wy - 1, _cnt
-
-            def skip_row(c):
-                _nb, _wy, _cnt = c
-                return _nb, _wy, _cnt + 1  # Count cleared line
-
-            return lax.cond(~is_full, write_row, skip_row, (nb, wy, cnt)), None
-
-        init = (jnp.zeros_like(board), jnp.int32(self.consts.BOARD_HEIGHT - 1), jnp.int32(0))
-        (nb, _wy, cleared), _ = lax.scan(scan_row, init, jnp.arange(self.consts.BOARD_HEIGHT - 1, -1, -1))
+        cleared = jnp.sum(full).astype(jnp.int32)
+        # Zero out the top `cleared` rows
+        row_ids = jnp.arange(H, dtype=jnp.int32)
+        is_top_cleared = row_ids < cleared
+        nb = jnp.where(is_top_cleared[:, None], jnp.int32(0), board_sorted)
         return nb, cleared
 
     @partial(jax.jit, static_argnums=0)
