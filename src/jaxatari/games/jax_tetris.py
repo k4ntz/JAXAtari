@@ -376,13 +376,13 @@ class JaxTetris(JaxEnvironment[TetrisState, TetrisObservation, TetrisInfo, Tetri
         do_move_now = (new_move_dir != 0) & ((state.move_dir == 0) | ((das == 0) & (arr == 0)))
 
         # ---- Rotation repeat gating ----
-        if self.instant_drop:
-            # When hard drop is enabled, FIRE should not rotate
-            rotate_pressed = is_up
-            last_was_rotate = (state.last_action == Action.UP)
-        else:
-            rotate_pressed = is_up | is_fire
-            last_was_rotate = (state.last_action == Action.UP) | (state.last_action == Action.FIRE)
+        # Allow FIRE to rotate only when instant_drop is disabled
+        allow_fire_rotate = jnp.logical_not(jnp.bool_(self.instant_drop))
+        is_up_single = (a == Action.UP)
+        is_fire_single = (a == Action.FIRE)
+        rotate_pressed = is_up_single | (allow_fire_rotate & is_fire_single)
+        last_was_rotate = ((state.last_action == Action.UP) |
+                           (allow_fire_rotate & (state.last_action == Action.FIRE)))
 
         # countdown while held; reset to 0 when neither is held
         rot_timer = jnp.where(rotate_pressed, jnp.maximum(0, state.rot_timer - 1), jnp.int32(0))
