@@ -611,6 +611,143 @@ def enemy_step(state: WordZapperState, consts) -> Tuple[chex.Array, chex.PRNGKey
 
     return updated_enemy_positions, rng_key
 
+def handle_missile_enemy_explosions(
+    state,
+    positions,
+    new_enemy_active,
+    player_missile_position,
+    consts
+):
+    # Missile-Enemy Collision Logic 
+    missile_pos = player_missile_position
+    missile_active = missile_pos[2] != 0
+
+    def missile_enemy_collision(missile, enemies, active):
+        missile_x, missile_y = missile[0], missile[1]
+        missile_w, missile_h = consts.MISSILE_SIZE
+        enemy_x = enemies[:, 0]
+        enemy_y = enemies[:, 1]
+        enemy_w, enemy_h = 16, 16
+
+        m_left = missile_x
+        m_right = missile_x + missile_w
+        m_top = missile_y
+        m_bottom = missile_y + missile_h
+
+        e_left = enemy_x
+        e_right = enemy_x + enemy_w
+        e_top = enemy_y
+        e_bottom = enemy_y + enemy_h
+
+        h_overlap = (m_left <= e_right) & (m_right >= e_left)
+        v_overlap = (m_top <= e_bottom) & (m_bottom >= e_top)           
+        collisions = h_overlap & v_overlap & (active == 1)
+        return collisions
+
+    missile_collisions = jax.lax.cond(
+        missile_active & (missile_pos[2] != 0),
+        lambda: missile_enemy_collision(missile_pos, positions[:, 0:2], new_enemy_active),
+        lambda: jnp.zeros_like(new_enemy_active, dtype=bool)
+    )
+
+    # Explosion logic: start explosion for hit enemies
+    new_enemy_explosion_frame = jnp.where(missile_collisions, 1, state.enemy_explosion_frame)
+    new_enemy_explosion_timer = jnp.where(missile_collisions, consts.ENEMY_EXPLOSION_FRAMES, state.enemy_explosion_timer)
+    new_enemy_explosion_frame_timer = jnp.where(missile_collisions, consts.ENEMY_EXPLOSION_FRAME_DURATION, state.enemy_explosion_frame_timer)
+
+    # Prevent explosion animation from moving
+    if not hasattr(state, 'enemy_explosion_pos'):
+        enemy_explosion_pos = jnp.zeros((consts.MAX_ENEMIES, 2))
+    else:
+        enemy_explosion_pos = state.enemy_explosion_pos
+
+    explosion_started = missile_collisions
+    enemy_explosion_pos = jnp.where(
+        explosion_started[:, None],
+        positions[:, 0:2],
+        enemy_explosion_pos
+    )
+
+    frame_should_advance = (new_enemy_explosion_frame_timer == 0) & (new_enemy_explosion_frame > 0)
+    new_enemy_explosion_frame = jnp.where(
+        frame_should_advance,
+        new_enemy_explosion_frame + 1,
+        new_enemy_explosion_frame
+    )
+    new_enemy_explosion_frame_timer = jnp.where(
+        (new_enemy_explosion_frame > 0),
+        jnp.where(frame_should_advance, consts.ENEMY_EXPLOSION_FRAME_DURATION, new_enemy_explosion_frame_timer - 1),
+        0
+    )
+    new_enemy_explosion_frame = jnp.where(new_enemy_explosion_frame > consts.ENEMY_EXPLOSION_FRAMES, 0, new_enemy_explosion_frame)
+
+    new_enemy_active = jnp.where(missile_collisions, 0, new_enemy_active)
+    player_missile_position = jnp.where(
+        jnp.any(missile_collisions),
+        jnp.zeros_like(player_missile_position),
+        player_missile_position
+    )
+
+    return (
+        new_enemy_explosion_frame,
+        new_enemy_explosion_timer,
+        new_enemy_explosion_frame_timer,
+        enemy_explosion_pos,
+        new_enemy_active,
+        player_missile_position,
+    )
+
+def handle_player_enemy_collisions(
+    new_player_x,
+    new_player_y,
+    new_player_direction,
+    positions,
+    active,
+    consts
+):
+    # Player rectangle
+    player_pos = jnp.array([new_player_x, new_player_y])
+    player_size = jnp.array(consts.PLAYER_SIZE)
+
+    # Enemy rectangles and actives
+    enemy_pos = positions[:, 0:2]  # shape (MAX_ENEMIES, 2)
+    enemy_size = jnp.array([16, 16])
+    enemy_active = active
+
+    # Calculate edges for player
+    p_left = player_pos[0] + player_size[0]/2
+    p_right = player_pos[0] + player_size[0]
+    p_top = player_pos[1]
+    p_bottom = player_pos[1] + player_size[1]
+
+    # Calculate edges for all enemies
+    e_left = enemy_pos[:, 0]
+    e_right = enemy_pos[:, 0] + enemy_size[0]
+    e_top = enemy_pos[:, 1]
+    e_bottom = enemy_pos[:, 1] + enemy_size[1]
+
+    # Check overlap for all enemies (trigger on edge contact)
+    horizontal_overlaps = (p_left <= e_right) & (p_right >= e_left)
+    vertical_overlaps = (p_top <= e_bottom) & (p_bottom >= e_top)           
+    collisions = horizontal_overlaps & vertical_overlaps & (enemy_active == 1)
+
+    # If any collision, move player by 13 in direction of enemy (positions[:,3])
+    any_collision = jnp.any(collisions)
+
+    # Find the first colliding enemy (lowest index)
+    colliding_idx = jnp.argmax(collisions)
+
+    # Only use the direction if there is a collision
+    enemy_dir = jnp.where(any_collision, positions[colliding_idx, 3], 0.0)
+
+    # Move player by 13 in direction of enemy_dir
+    new_player_x = jnp.where(any_collision & (enemy_dir < 0), new_player_x - 13, new_player_x)
+    new_player_x = jnp.where(any_collision & (enemy_dir > 0), new_player_x + 13, new_player_x)
+
+    # Deactivate ("disappear") collided enemy
+    new_enemy_active = jnp.where(collisions, 0, active)
+
+    return new_player_x, new_enemy_active
 
 class JaxWordZapper(JaxEnvironment[WordZapperState, WordZapperObservation, WordZapperInfo, WordZapperConstants]) :
     def __init__(self, consts: WordZapperConstants = None, reward_funcs: list[callable] =None):
@@ -957,143 +1094,29 @@ class JaxWordZapper(JaxEnvironment[WordZapperState, WordZapperObservation, WordZ
         )
 
         # --- Integrated Player-Enemy Collision Logic ---
-        # Player rectangle
-        player_pos = jnp.array([new_player_x, new_player_y])
-        player_size = jnp.array(self.consts.PLAYER_SIZE)
-
-        # Enemy rectangles and actives
-        enemy_pos = positions[:, 0:2]  # shape (MAX_ENEMIES, 2)
-        enemy_size = jnp.array([16, 16])
-        enemy_active = active
-
-        # Calculate edges for player
-        p_left = player_pos[0] + player_size[0]/2
-        p_right = player_pos[0] + player_size[0]
-        p_top = player_pos[1]
-        p_bottom = player_pos[1] + player_size[1]
-
-        # Calculate edges for all enemies
-        e_left = enemy_pos[:, 0]
-        e_right = enemy_pos[:, 0] + enemy_size[0]
-        e_top = enemy_pos[:, 1]
-        e_bottom = enemy_pos[:, 1] + enemy_size[1]
-
-        # Check overlap for all enemies (trigger on edge contact)
-        horizontal_overlaps = (p_left <= e_right) & (p_right >= e_left)
-        vertical_overlaps = (p_top <= e_bottom) & (p_bottom >= e_top)           
-        collisions = horizontal_overlaps & vertical_overlaps & (enemy_active == 1)
-
-        # If any collision, move player by 13 in direction of enemy (positions[:,3])
-        any_collision = jnp.any(collisions)
-
-        # Find the first colliding enemy (lowest index)
-        colliding_idx = jnp.argmax(collisions)
-
-        # Only use the direction if there is a collision
-        enemy_dir = jnp.where(any_collision, positions[colliding_idx, 3], 0.0)
-
-        # Move player by 13 in direction of enemy_dir
-        new_player_x = jnp.where(any_collision & (enemy_dir < 0), new_player_x - 13, new_player_x)
-        new_player_x = jnp.where(any_collision & (enemy_dir > 0), new_player_x + 13, new_player_x)
-
-        # Deactivate ("disappear") collided enemy
-        new_enemy_active = jnp.where(collisions, 0, active)
-
-        # Update state
-        state = state._replace(
-            player_x=new_player_x,
-            player_y=new_player_y,
-            player_direction=new_player_direction,
-            player_missile_position=player_missile_position,
-            player_zapper_position=player_zapper_position,
-            enemy_positions=positions,
-            enemy_active=new_enemy_active,
-            enemy_global_spawn_timer=global_timer,
-            letters_x=new_letters_x,
-            step_counter=new_step_counter,
-            timer=new_timer,
-            rng_key=rng_key,
+        new_player_x, new_enemy_active = handle_player_enemy_collisions(
+            new_player_x,
+            new_player_y,
+            new_player_direction,
+            positions,
+            active,
+            self.consts
         )
 
-        # Missile-Enemy Collision Logic 
-        missile_pos = player_missile_position
-        missile_active = missile_pos[2] != 0
-
-        def missile_enemy_collision(missile, enemies, active):
-            missile_x, missile_y = missile[0], missile[1]
-            missile_w, missile_h = self.consts.MISSILE_SIZE
-            enemy_x = enemies[:, 0]
-            enemy_y = enemies[:, 1]
-            enemy_w, enemy_h = 16, 16
-
-            m_left = missile_x
-            m_right = missile_x + missile_w
-            m_top = missile_y
-            m_bottom = missile_y + missile_h
-
-            e_left = enemy_x
-            e_right = enemy_x + enemy_w
-            e_top = enemy_y
-            e_bottom = enemy_y + enemy_h
-
-            h_overlap = (m_left <= e_right) & (m_right >= e_left)
-            v_overlap = (m_top <= e_bottom) & (m_bottom >= e_top)           
-            collisions = h_overlap & v_overlap & (active == 1)
-            return collisions
-
-        missile_collisions = jax.lax.cond(
-            missile_active & (missile_pos[2] != 0),
-            lambda: missile_enemy_collision(missile_pos, new_enemy_positions[:, 0:2], new_enemy_active),
-            lambda: jnp.zeros_like(new_enemy_active, dtype=bool)
-        )
-
-        # Explosion logic: start explosion for hit enemies
-        # If missile hits, set explosion_frame=1 and explosion_timer=4 for those enemies
-        new_enemy_explosion_frame = jnp.where(missile_collisions, 1, state.enemy_explosion_frame)
-        new_enemy_explosion_timer = jnp.where(missile_collisions, self.consts.ENEMY_EXPLOSION_FRAMES, state.enemy_explosion_timer)
-        new_enemy_explosion_frame_timer = jnp.where(missile_collisions, self.consts.ENEMY_EXPLOSION_FRAME_DURATION, state.enemy_explosion_frame_timer)
-
-        # --- Prevent explosion animation from moving ---
-        # For enemies that start exploding, freeze their position at the moment of explosion
-        # We'll store the explosion position separately
-        # Add a new array: enemy_explosion_pos (shape: (MAX_ENEMIES, 2))
-        # If explosion just started, set to current position; otherwise, keep previous
-
-        # Initialize enemy_explosion_pos if not present
-        if not hasattr(state, 'enemy_explosion_pos'):
-            enemy_explosion_pos = jnp.zeros((self.consts.MAX_ENEMIES, 2))
-        else:
-            enemy_explosion_pos = state.enemy_explosion_pos
-
-        # For enemies where explosion just started, set position to current enemy position
-        explosion_started = missile_collisions
-        enemy_explosion_pos = jnp.where(
-            explosion_started[:, None],
-            positions[:, 0:2],
-            enemy_explosion_pos
-        )
-
-        # Progress explosion animation for enemies already exploding
-        frame_should_advance = (new_enemy_explosion_frame_timer == 0) & (new_enemy_explosion_frame > 0)
-        new_enemy_explosion_frame = jnp.where(
-            frame_should_advance,
-            new_enemy_explosion_frame + 1,
-            new_enemy_explosion_frame
-        )
-        new_enemy_explosion_frame_timer = jnp.where(
-            (new_enemy_explosion_frame > 0),
-            jnp.where(frame_should_advance, self.consts.ENEMY_EXPLOSION_FRAME_DURATION, new_enemy_explosion_frame_timer - 1),
-            0
-        )
-        # Clamp frame to max 4 (since we have 4 sprites)
-        new_enemy_explosion_frame = jnp.where(new_enemy_explosion_frame > self.consts.ENEMY_EXPLOSION_FRAMES, 0, new_enemy_explosion_frame)
-
-        # Deactivate enemies hit by missile
-        new_enemy_active = jnp.where(missile_collisions, 0, new_enemy_active)
-        player_missile_position = jnp.where(
-            jnp.any(missile_collisions),
-            jnp.zeros_like(player_missile_position),
-            player_missile_position
+        # --- Missile-Enemy collision and explosion logic ---
+        (
+            new_enemy_explosion_frame,
+            new_enemy_explosion_timer,
+            new_enemy_explosion_frame_timer,
+            enemy_explosion_pos,
+            new_enemy_active,
+            player_missile_position,
+        ) = handle_missile_enemy_explosions(
+            state,
+            positions,
+            new_enemy_active,
+            player_missile_position,
+            self.consts
         )
 
         return state._replace(
@@ -1112,7 +1135,7 @@ class JaxWordZapper(JaxEnvironment[WordZapperState, WordZapperObservation, WordZ
             enemy_explosion_frame=new_enemy_explosion_frame,
             enemy_explosion_timer=new_enemy_explosion_timer,
             enemy_explosion_frame_timer=new_enemy_explosion_frame_timer,
-            enemy_explosion_pos=enemy_explosion_pos,  # NEW: store explosion positions
+            enemy_explosion_pos=enemy_explosion_pos,
         )
 
     @partial(jax.jit, static_argnums=(0,))
@@ -1146,7 +1169,6 @@ class JaxWordZapper(JaxEnvironment[WordZapperState, WordZapperObservation, WordZ
         info = self._get_info(state, all_rewards)
 
         return observation, state, env_reward, done, info
-    
 class WordZapperRenderer(JAXGameRenderer):
     def __init__(self, consts: WordZapperConstants = None):
         super().__init__()
