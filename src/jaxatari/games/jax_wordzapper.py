@@ -231,6 +231,12 @@ def load_sprites():
     special = jr.loadFrame(os.path.join(MODULE_DIR, "sprites/wordzapper/letters/normal_letters/1special_symbol.npy"))
     letters.append(special)
 
+    # enemy explosion
+    exp1 = jr.loadFrame(os.path.join(MODULE_DIR, "sprites/wordzapper/explosions/enemy_explosions/exp1.npy"))
+    exp2 = jr.loadFrame(os.path.join(MODULE_DIR, "sprites/wordzapper/explosions/enemy_explosions/exp2.npy"))
+    exp3 = jr.loadFrame(os.path.join(MODULE_DIR, "sprites/wordzapper/explosions/enemy_explosions/exp3.npy"))
+    exp4 = jr.loadFrame(os.path.join(MODULE_DIR, "sprites/wordzapper/explosions/enemy_explosions/exp4.npy"))
+
     # Pad player sprites to match
     pl_sub_sprites, pl_sub_offsets = jr.pad_to_match([pl_1, pl_2])
     pl_sub_offsets = jnp.array(pl_sub_offsets)
@@ -290,11 +296,7 @@ def load_sprites():
 
     LETTERS = jnp.stack(letters, axis=0)  
 
-    # Load enemy explosion sprites
-    exp1 = jr.loadFrame(os.path.join(MODULE_DIR, "sprites/wordzapper/explosions/enemy_explosions/exp1.npy"))
-    exp2 = jr.loadFrame(os.path.join(MODULE_DIR, "sprites/wordzapper/explosions/enemy_explosions/exp2.npy"))
-    exp3 = jr.loadFrame(os.path.join(MODULE_DIR, "sprites/wordzapper/explosions/enemy_explosions/exp3.npy"))
-    exp4 = jr.loadFrame(os.path.join(MODULE_DIR, "sprites/wordzapper/explosions/enemy_explosions/exp4.npy"))  # NEW
+    
     ENEMY_EXPLOSION_SPRITES = jnp.stack([exp1, exp2, exp3, exp4], axis=0)  # Now 4 sprites
 
     return (
@@ -307,12 +309,12 @@ def load_sprites():
         YELLOW_LETTERS,
         QMARK_SPRITE,
         LETTERS,
+        ENEMY_EXPLOSION_SPRITES,  
         pl_sub_offsets,
         bonker_offsets,
         zonker_offsets,
         yellow_letters_offsets,
         letters_offsets,
-        ENEMY_EXPLOSION_SPRITES,  
     )
 
 (
@@ -325,12 +327,12 @@ def load_sprites():
     YELLOW_LETTERS,
     QMARK_SPRITE,
     LETTERS,
+    ENEMY_EXPLOSION_SPRITES, 
     PL_OFFSETS,
     BONKER_OFFSETS,
     ZONKER_OFFSETS,
     YELLOW_LETTERS_OFFSETS,
     LETTERS_OFFSETS,
-    ENEMY_EXPLOSION_SPRITES, 
 ) = load_sprites()
 
 
@@ -612,11 +614,11 @@ def enemy_step(state: WordZapperState, consts) -> Tuple[chex.Array, chex.PRNGKey
     return updated_enemy_positions, rng_key
 
 def handle_missile_enemy_explosions(
-    state,
+    state: WordZapperState,
     positions,
     new_enemy_active,
     player_missile_position,
-    consts
+    consts: WordZapperConstants
 ):
     # Missile-Enemy Collision Logic 
     missile_pos = player_missile_position
@@ -703,7 +705,7 @@ def handle_player_enemy_collisions(
     new_player_direction,
     positions,
     active,
-    consts
+    consts: WordZapperConstants
 ):
     # Player rectangle
     player_pos = jnp.array([new_player_x, new_player_y])
@@ -781,7 +783,6 @@ class JaxWordZapper(JaxEnvironment[WordZapperState, WordZapperObservation, WordZ
 
     @partial(jax.jit, static_argnums=(0,))
     def reset(self, key: jax.random.PRNGKey = jax.random.PRNGKey(42)) -> Tuple[WordZapperObservation, WordZapperState]:
-        key = jax.random.PRNGKey(int(time.time() * 1000) % (2**32 - 1))
         key, sub_word, next_key = jax.random.split(key, 3) # TODO: ask what does this do? why do we need this?
 
         word_idx = jax.random.randint(sub_word, (), 0, WORD_COUNT, dtype=jnp.int32)
@@ -852,7 +853,7 @@ class JaxWordZapper(JaxEnvironment[WordZapperState, WordZapperObservation, WordZ
             enemy_explosion_frame=jnp.zeros((self.consts.MAX_ENEMIES,), dtype=jnp.int32),
             enemy_explosion_timer=jnp.zeros((self.consts.MAX_ENEMIES,), dtype=jnp.int32),
             enemy_explosion_frame_timer=jnp.zeros((self.consts.MAX_ENEMIES,), dtype=jnp.int32),
-            enemy_explosion_pos=jnp.zeros((self.consts.MAX_ENEMIES, 2)),  # <-- ensure always present
+            enemy_explosion_pos=jnp.zeros((self.consts.MAX_ENEMIES, 2)),
         )
 
         initial_obs = self._get_observation(reset_state)
@@ -1093,7 +1094,7 @@ class JaxWordZapper(JaxEnvironment[WordZapperState, WordZapperObservation, WordZ
             (new_enemy_positions, new_enemy_active, new_enemy_global_spawn_timer, state.rng_key),
         )
 
-        # --- Integrated Player-Enemy Collision Logic ---
+        # Integrated Player-Enemy Collision Logic
         new_player_x, new_enemy_active = handle_player_enemy_collisions(
             new_player_x,
             new_player_y,
@@ -1103,7 +1104,7 @@ class JaxWordZapper(JaxEnvironment[WordZapperState, WordZapperObservation, WordZ
             self.consts
         )
 
-        # --- Missile-Enemy collision and explosion logic ---
+        # Missile-Enemy collision and explosion logic
         (
             new_enemy_explosion_frame,
             new_enemy_explosion_timer,
@@ -1169,6 +1170,7 @@ class JaxWordZapper(JaxEnvironment[WordZapperState, WordZapperObservation, WordZ
         info = self._get_info(state, all_rewards)
 
         return observation, state, env_reward, done, info
+
 class WordZapperRenderer(JAXGameRenderer):
     def __init__(self, consts: WordZapperConstants = None):
         super().__init__()
@@ -1403,7 +1405,7 @@ class WordZapperRenderer(JAXGameRenderer):
         raster = jax.lax.switch(
             state.game_phase,
             [
-                lambda ras: ras,                                        # phase 0
+                lambda ras: ras,                                   # phase 0
                 lambda ras: _draw_word(ras,   state.target_word),  # phase 1
                 lambda ras: _draw_qmarks(ras, state.target_word),  # phase 2
             ],
