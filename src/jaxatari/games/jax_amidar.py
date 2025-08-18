@@ -1,22 +1,14 @@
 # TODO's:
 
-# Features: 
-# none, the game mechanics are done
-
 # Remove Inacuracies:
 # - Improve shadow rendering to match the original (variable sizes)
 # - Adjust the enemy speed for levels over Level 7 
 # - Implement random blinking for enemies and player
 
-# General & Environment:
-# - Update observation
-# - implement obs_to_flat_array
-# - Update spaces
-
-# Possibly nice to have for future hacking 
+# Possibly nice to have for future hacking, but not relevant if the game is played/used in the ALE way:
 # - Make generating/changing the maze easier
 # - make the enemy number flexible 
-#   (The number for the beginning levels, the maximum number and where to switch from beginning number to maximum number)
+#   (The number for the beginning levels and where to switch from beginning number to maximum number)
 
 from functools import partial
 import os
@@ -304,7 +296,7 @@ class AmidarConstants(NamedTuple):
     WIDTH: int = 160
     HEIGHT: int = 210
     RANDOM_KEY_SEED: int = 0
-    DIFFICULTY_SETTING: int = 3 # Valid settings are 0 (starts at level 3) and 3 (starts at level 1). If invalid, the game starts at Level 3
+    DIFFICULTY_SETTING: int = 0 # Valid settings are 0 (starts at level 3) and 3 (starts at level 1). If invalid, the game starts at Level 3
     INITIAL_LIVES: int = 3
     MAX_LIVES: int = 3
     FREEZE_DURATION: int = 256  # Duration for which the game is frozen in the beginning and after being hit by an enemy
@@ -331,7 +323,6 @@ class AmidarConstants(NamedTuple):
 
     # Player
     PLAYER_SIZE: tuple[int, int] = (7, 7)  # Object sizes (width, height)
-    ENEMY_SIZE: tuple[int, int] = (7, 7)  # Object sizes (width, height)
     PLAYER_SPRITE_OFFSET: tuple[int, int] = (-1, 0) # Offset for the player sprite in relation to the position in the code (because the top left corner of the player sprite is of the path to the left)
     INITIAL_PLAYER_POSITION: chex.Array = jnp.array([140, 89])
     INITIAL_PLAYER_DIRECTION: chex.Array = UP
@@ -350,6 +341,9 @@ class AmidarConstants(NamedTuple):
     END_JUMP_DURATION_INCREASE: int = 508  # End of jump duration increase (frames)
 
     # Enemies
+    MAX_ENEMIES: int = 6  # Maximum number of enemies on screen
+    ENEMY_SIZE: tuple[int, int] = (7, 7)  # Object sizes (width, height)
+    CHICKEN_SIZE: tuple[int, int] = (5, 7)  # Object sizes (width, height)
     ENEMY_SPRITE_OFFSET: tuple[int, int] = (-1, 0) # Offset for the enemy sprite in relation to the position in the code (because the top left corner of the enemy sprite is of the path to the left)
     INITIAL_ENEMY_POSITIONS: chex.Array = jnp.array(
         [   [16, 14],  # Enemy 1
@@ -440,16 +434,23 @@ class EntityPosition(NamedTuple):
     y: jnp.ndarray
     width: jnp.ndarray
     height: jnp.ndarray
+    active: jnp.ndarray
 
-class AmidarObservation(NamedTuple):
-    player: EntityPosition
+class AmidarObservation(NamedTuple): #XXX
+    player_gorilla: EntityPosition
+    player_paint_roller: EntityPosition
+    shadows: chex.Array
     warriors: chex.Array
-    # pigs: chex.Array
-    # shadows: chex.Array
-    # chickens: chex.Array
+    pigs: chex.Array
+    chickens: chex.Array
+    lives: chex.Array
+    paths: chex.Array
+    walked_on_paths: chex.Array
+    completed_rectangles: chex.Array
 
 class AmidarInfo(NamedTuple):
-    time: jnp.ndarray
+    level: jnp.ndarray
+    frame_counter: jnp.ndarray
     all_rewards: chex.Array
 
 def get_player_speed(frame_counter: chex.Array) -> chex.Array:
@@ -889,17 +890,74 @@ class JaxAmidar(JaxEnvironment[AmidarState, AmidarObservation, AmidarInfo, Amida
 
         return initial_obs, state
     
-    # TODO check these notes and see what they do/should do 
-    # NOTE: added this for compatibility (its incorrect, I was just too lazy to get the correct one!)
-    def observation_space(self) -> spaces.Box:
-        return spaces.Box(low=0, high=255, shape=(self.constants.HEIGHT, self.constants.WIDTH, 4), dtype=jnp.uint8)
 
-    # NOTE: added this for compatibility
+    def observation_space(self) -> spaces.Box:
+        """ 
+        Returns the observation space for Amidar.
+        The observation contains:
+        - player_gorilla: PlayerEntity (x, y, width, height, active)
+        - player_paint_roller: PlayerEntity (x, y, width, height, active)
+        - shadows: array of shape (MAX_ENEMIES, 5) with x,y,width,height,active for each shadow
+        - warriors: array of shape (MAX_ENEMIES, 5) with x,y,width,height,active for each warrior
+        - pigs: array of shape (MAX_ENEMIES, 5) with x,y,width,height,active for each pig
+        - chickens: array of shape (MAX_ENEMIES, 5) with x,y,width,height,active for each chicken
+        - lives: int (0-MAX_LIVES)
+        - paths: array of shape (num_edges, 5) with x,y,width,height,active for each path
+        - walked_on_paths: array of shape (num_edges, 5) with x,y,width,height,active for each path (active when walked on)
+        - completed_rectangles: array of shape (num_rectangles, 5) with x,y,width,height,active for each rectangle (active when completed)
+        """
+        HEIGHT = self.constants.HEIGHT
+        WIDTH = self.constants.WIDTH
+        MAX_ENEMIES = self.constants.MAX_ENEMIES
+        path_shape = self.constants.PATH_EDGES.shape[0]
+        return spaces.Dict({
+            "player_gorilla": spaces.Dict({
+                "x": spaces.Box(low=0, high=WIDTH, shape=(), dtype=jnp.int32),
+                "y": spaces.Box(low=0, high=HEIGHT, shape=(), dtype=jnp.int32),
+                "width": spaces.Box(low=0, high=WIDTH, shape=(), dtype=jnp.int32),
+                "height": spaces.Box(low=0, high=HEIGHT, shape=(), dtype=jnp.int32),
+                "active": spaces.Box(low=0, high=1, shape=(), dtype=jnp.int32),
+            }),
+            "player_paint_roller": spaces.Dict({
+                "x": spaces.Box(low=0, high=WIDTH, shape=(), dtype=jnp.int32),
+                "y": spaces.Box(low=0, high=HEIGHT, shape=(), dtype=jnp.int32),
+                "width": spaces.Box(low=0, high=WIDTH, shape=(), dtype=jnp.int32),
+                "height": spaces.Box(low=0, high=HEIGHT, shape=(), dtype=jnp.int32),
+                "active": spaces.Box(low=0, high=1, shape=(), dtype=jnp.int32),
+            }),
+            "shadows": spaces.Box(low=0, high=WIDTH, shape=(MAX_ENEMIES, 5), dtype=jnp.int32),
+            "warriors": spaces.Box(low=0, high=WIDTH, shape=(MAX_ENEMIES, 5), dtype=jnp.int32),
+            "pigs": spaces.Box(low=0, high=WIDTH, shape=(MAX_ENEMIES, 5), dtype=jnp.int32),
+            "chickens": spaces.Box(low=0, high=WIDTH, shape=(MAX_ENEMIES, 5), dtype=jnp.int32),
+            "lives": spaces.Box(low=0, high=self.constants.MAX_LIVES, shape=(), dtype=jnp.int32),
+            "paths": spaces.Box(low=0, high=HEIGHT, shape=(path_shape, 5), dtype=jnp.int32),
+            "walked_on_paths": spaces.Box(low=0, high=HEIGHT, shape=(path_shape, 5), dtype=jnp.int32),
+            "completed_rectangles": spaces.Box(low=0, high=HEIGHT, shape=(self.constants.RECTANGLES.shape[0], 5), dtype=jnp.int32),
+        })
+
     def state_space(self) -> spaces.Box:
         return spaces.Box(low=0, high=255, shape=(self.constants.HEIGHT, self.constants.WIDTH, 4), dtype=jnp.uint8)
 
     def action_space(self) -> spaces.Discrete:
         return spaces.Discrete(len(self.action_set))
+    
+    def flatten_entity_position(self, entity: EntityPosition) -> jnp.ndarray:
+        return jnp.concatenate([jnp.array([entity.x]), jnp.array([entity.y]), jnp.array([entity.width]), jnp.array([entity.height]), jnp.array([entity.active])])
+
+    @partial(jax.jit, static_argnums=(0,))
+    def obs_to_flat_array(self, obs: AmidarObservation) -> jnp.ndarray:
+        return jnp.concatenate([
+            self.flatten_entity_position(obs.player_gorilla),
+            self.flatten_entity_position(obs.player_paint_roller),
+            obs.shadows.flatten(),
+            obs.warriors.flatten(),
+            obs.pigs.flatten(),
+            obs.chickens.flatten(),
+            obs.lives.flatten(),
+            obs.paths.flatten(),
+            obs.walked_on_paths.flatten(),
+            obs.completed_rectangles.flatten(),
+        ])
 
     @partial(jax.jit, static_argnums=(0,))
     def render(self, state: AmidarState) -> jnp.ndarray:
@@ -999,6 +1057,7 @@ class JaxAmidar(JaxEnvironment[AmidarState, AmidarObservation, AmidarInfo, Amida
 
 
         observation = self._get_observation(new_state)
+        # jax.debug.print("observation{}", observation)
 
         done = self._get_done(new_state)
         env_reward = self._get_env_reward(previous_state, new_state)
@@ -1008,33 +1067,105 @@ class JaxAmidar(JaxEnvironment[AmidarState, AmidarObservation, AmidarInfo, Amida
         return observation, new_state, env_reward, done, info
 
     @partial(jax.jit, static_argnums=(0,))
-    def _get_observation(self, state: AmidarState):
+    def _get_observation(self, state: AmidarState): #XXX
         # create player
-        player = EntityPosition(
+        player_gorilla = EntityPosition(
             x=state.player_x,
             y=state.player_y,
             width=jnp.array(self.constants.PLAYER_SIZE[0]),
             height=jnp.array(self.constants.PLAYER_SIZE[1]),
+            active=state.level % 2 == 1,
+        )
+
+        player_paint_roller = EntityPosition(
+            x=state.player_x,
+            y=state.player_y,
+            width=jnp.array(self.constants.PLAYER_SIZE[0]),
+            height=jnp.array(self.constants.PLAYER_SIZE[1]),
+            active=state.level % 2 == 0,
         )
 
         # Define a function to convert enemy positions to entity format
-        def convert_to_entity(pos, size):
+        def convert_to_entity(pos, size, active):
             return jnp.array([
                 pos[0],  # x position
                 pos[1],  # y position
                 size[0],  # width
                 size[1],  # height
-                #pos[2] != 0,  # active flag TODO remove?
+                active,  # active flag
             ])
 
         # Apply conversion to each type of entity using vmap
 
+        true = jnp.full_like(state.enemy_types, True)
+        false = jnp.full_like(state.enemy_types, False)
+
+        # shadows
+        is_shadow = jnp.where(state.enemy_types == self.constants.SHADOW, true, false)
+        shadows = jax.vmap(convert_to_entity, in_axes=(0, None, 0))(state.enemy_positions, self.constants.ENEMY_SIZE, is_shadow)
+
         # warriors
-        warriors = jax.vmap(lambda pos: convert_to_entity(pos, self.constants.ENEMY_SIZE))(state.enemy_positions)
+        is_warrior = jnp.where(state.enemy_types == self.constants.WARRIOR, true, false)
+        warriors = jax.vmap(convert_to_entity, in_axes=(0, None, 0))(state.enemy_positions, self.constants.ENEMY_SIZE, is_warrior)
+        
+        # pigs
+        is_pig = jnp.where(state.enemy_types == self.constants.PIG, true, false)
+        pigs = jax.vmap(convert_to_entity, in_axes=(0, None, 0))(state.enemy_positions, self.constants.ENEMY_SIZE, is_pig)
+
+        # chickens
+        is_chicken = jnp.where(state.enemy_types == self.constants.CHICKEN, true, false)
+        chickens = jax.vmap(convert_to_entity, in_axes=(0, None, 0))(state.enemy_positions, self.constants.CHICKEN_SIZE, is_chicken)
+
+        def make_path_edge_entity_horizontal(edge):
+            start = edge[0]
+            end = edge[1]
+            return jnp.array([
+                start[0],  # x position
+                start[1],  # y position
+                end[0] - start[0],  # width
+                self.constants.PATH_THICKNESS_HORIZONTAL,  # height
+                jnp.array(1),  # Path is always active
+            ])
+
+        def make_path_edge_entity_vertical(edge):
+            start = edge[0]
+            end = edge[1]
+            return jnp.array([
+                start[0],  # x position
+                start[1],  # y position
+                self.constants.PATH_THICKNESS_VERTICAL,  # width
+                end[1] - start[1],  # height
+                jnp.array(1),  # Path is always active
+            ])
+        
+        horizontal_edges = jax.vmap(make_path_edge_entity_horizontal, in_axes=0)(self.constants.HORIZONTAL_PATH_EDGES)
+        vertical_edges = jax.vmap(make_path_edge_entity_vertical, in_axes=0)(self.constants.VERTICAL_PATH_EDGES)
+
+        paths = jnp.concatenate([horizontal_edges, vertical_edges], axis=0)
+        walked_on_paths = paths.at[:, 4].set(state.walked_on_paths.astype(paths.dtype))
+
+        def make_completed_rectangle_entity(rectangle_bound, completed):
+            return jnp.array([
+                rectangle_bound[0],  # x position
+                rectangle_bound[1],  # y position
+                rectangle_bound[2] - rectangle_bound[0],  # width
+                rectangle_bound[3] - rectangle_bound[1],  # height
+                completed,  # active flag
+            ])
+
+        completed_rectangles = jax.vmap(make_completed_rectangle_entity, in_axes=(0, 0))(self.constants.RECTANGLE_BOUNDS, state.completed_rectangles)
 
         return AmidarObservation(
-            player=player,
-            warriors=warriors
+            player_gorilla=player_gorilla,
+            player_paint_roller=player_paint_roller,
+            shadows=shadows,
+            warriors=warriors,
+            pigs=pigs,
+            chickens=chickens,
+            lives=state.lives,
+            paths=paths,
+            walked_on_paths=walked_on_paths,
+            completed_rectangles=completed_rectangles
         )
         
     
