@@ -40,9 +40,9 @@ class TetrisConstants(NamedTuple):
         # I
         [
             [[0, 0, 0, 0], [1, 1, 1, 1], [0, 0, 0, 0], [0, 0, 0, 0]],
-            [[0, 0, 1, 0], [0, 0, 1, 0], [0, 0, 1, 0], [0, 0, 1, 0]],
+            [[0, 1, 0, 0], [0, 1, 0, 0], [0, 1, 0, 0], [0, 1, 0, 0]],
             [[0, 0, 0, 0], [1, 1, 1, 1], [0, 0, 0, 0], [0, 0, 0, 0]],
-            [[0, 0, 1, 0], [0, 0, 1, 0], [0, 0, 1, 0], [0, 0, 1, 0]],
+            [[0, 1, 0, 0], [0, 1, 0, 0], [0, 1, 0, 0], [0, 1, 0, 0]],
         ],
         # O
         [
@@ -233,13 +233,55 @@ class JaxTetris(JaxEnvironment[TetrisState, TetrisObservation, TetrisInfo, Tetri
         Try to rotate the tetromino in place (no wall kick).
         Returns the new position and rotation if successful, otherwise the original.
         """
-        new_rot = (rot + 1) & 3  # Next rotation
-        rotated_grid = self.piece_grid(piece_type, new_rot)  # Rotated grid
-        original_pos = pos  # Try original position
-        can_rotate_in_place = ~self.check_collision(board, rotated_grid, original_pos)  # Is rotation valid?
-        pos_final = jnp.where(can_rotate_in_place, original_pos, pos)
-        rot_final = jnp.where(can_rotate_in_place, new_rot, rot)
-        return pos_final, rot_final
+        new_rot = (rot + 1) & 3
+        rotated_grid = self.piece_grid(piece_type, new_rot)
+
+        # I piece symmetric tiny wall-kick: try [(0,0), (0,+1), (0,-1)]
+        is_I = (piece_type == jnp.int32(0))
+
+        def rotate_I(_):
+            # Detect second from right for current I piece
+            current_grid = self.piece_grid(piece_type, rot)
+            xs = jnp.arange(4, dtype=jnp.int32)
+            ys = jnp.arange(4, dtype=jnp.int32)
+            yy, xx = jnp.meshgrid(ys, xs, indexing="ij")
+            on = (current_grid == 1)
+            world_x = pos[1] + xx
+            W = jnp.int32(self.consts.BOARD_WIDTH)
+            max_px = jnp.max(jnp.where(on, world_x, jnp.int32(-1)))
+            # Forbid when at rightmost or second-from-right; allow from third-from-right and leftwards
+            # Apply this block ONLY when the current I is vertical, so horizontal behavior is unaffected
+            is_vertical_now = ((rot & jnp.int32(1)) == jnp.int32(1))
+            is_right_blocked = is_vertical_now & (max_px >= (W - jnp.int32(2)))
+
+            pos0 = pos
+            pos1 = pos + jnp.array([jnp.int32(0), jnp.int32(1)], dtype=jnp.int32)
+            pos2 = pos + jnp.array([jnp.int32(0), jnp.int32(-1)], dtype=jnp.int32)
+
+            feas0 = ~self.check_collision(board, rotated_grid, pos0)
+            feas1 = ~self.check_collision(board, rotated_grid, pos1)
+            feas2 = ~self.check_collision(board, rotated_grid, pos2)
+
+            # Pick first feasible in order 0,1,2
+            feas = jnp.stack([feas0, feas1, feas2])
+            idxs = jnp.array([0, 1, 2], dtype=jnp.int32)
+            sentinel = jnp.int32(3)
+            keys = jnp.where(feas, idxs, sentinel)
+            best = jnp.argmin(keys)
+            success = jnp.any(feas) & (~is_right_blocked)
+
+            pos_best = jnp.where(best == 0, pos0, jnp.where(best == 1, pos1, pos2))
+            pos_out = jnp.where(success, pos_best, pos)
+            rot_out = jnp.where(success, new_rot, rot)
+            return pos_out, rot_out
+
+        def rotate_default(_):
+            can_in_place = ~self.check_collision(board, rotated_grid, pos)
+            pos_out = jnp.where(can_in_place, pos, pos)
+            rot_out = jnp.where(can_in_place, new_rot, rot)
+            return pos_out, rot_out
+
+        return lax.cond(is_I, rotate_I, rotate_default, operand=None)
 
     @partial(jax.jit, static_argnums=0)
     def _lock_spawn(self, s: TetrisState, grid: chex.Array, tick_next: chex.Array, soft_points: chex.Array):
