@@ -249,10 +249,13 @@ class JaxTetris(JaxEnvironment[TetrisState, TetrisObservation, TetrisInfo, Tetri
             world_x = pos[1] + xx
             W = jnp.int32(self.consts.BOARD_WIDTH)
             max_px = jnp.max(jnp.where(on, world_x, jnp.int32(-1)))
-            # Forbid when at rightmost or second-from-right; allow from third-from-right and leftwards
+            # Forbid when at rightmost or second-from-right
             # Apply this block ONLY when the current I is vertical, so horizontal behavior is unaffected
             is_vertical_now = ((rot & jnp.int32(1)) == jnp.int32(1))
             is_right_blocked = is_vertical_now & (max_px >= (W - jnp.int32(2)))
+            # +forbid when touching leftmost column while vertical
+            min_px = jnp.min(jnp.where(on, world_x, jnp.int32(1 << 30)))
+            is_left_blocked = is_vertical_now & (min_px == jnp.int32(0))
 
             pos0 = pos
             pos1 = pos + jnp.array([jnp.int32(0), jnp.int32(1)], dtype=jnp.int32)
@@ -268,7 +271,7 @@ class JaxTetris(JaxEnvironment[TetrisState, TetrisObservation, TetrisInfo, Tetri
             sentinel = jnp.int32(3)
             keys = jnp.where(feas, idxs, sentinel)
             best = jnp.argmin(keys)
-            success = jnp.any(feas) & (~is_right_blocked)
+            success = jnp.any(feas) & (~is_right_blocked) & (~is_left_blocked)
 
             pos_best = jnp.where(best == 0, pos0, jnp.where(best == 1, pos1, pos2))
             pos_out = jnp.where(success, pos_best, pos)
