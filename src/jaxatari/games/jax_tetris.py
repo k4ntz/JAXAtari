@@ -24,7 +24,7 @@ class TetrisConstants(NamedTuple):
     ROT_DAS_FRAMES: int = 12      # rotate auto-repeat cadence
     SOFT_PACE_FRAMES: int = 4     # paced soft-drop while held
     SOFT_DROP_SCORE_PER_CELL = 1
-    LINE_CLEAR_SCORE = (0, 1, 3, 5, 8)  # 0..4
+    LINE_CLEAR_SCORE = (0, 1, 2, 3, 4)  # 0 -> if no row is cleared, 1 -> only 1 row, 2 -> 2 rows, 3-> 3 rows, 4 -> 4 rows, just like the original game
 
     # Render tiling
     BOARD_X: int = 21  # left margin
@@ -551,7 +551,7 @@ class TetrisRenderer(JAXGameRenderer):
         """Load all sprites required for Tetris rendering."""
         MODULE_DIR = os.path.dirname(os.path.abspath(__file__))
 
-        # Load sprites
+        # Load background sprites
         bg = jr.loadFrame(os.path.join(MODULE_DIR, "sprites/tetris/background.npy"))
         board = jr.loadFrame(os.path.join(MODULE_DIR, "sprites/tetris/board.npy"))
 
@@ -573,9 +573,10 @@ class TetrisRenderer(JAXGameRenderer):
 
         SPRITE_ROW_COLORS = jnp.stack(row_squares, axis=0)  # Shape: (22, H, W, 4)
 
-
-        ######################## I'M NOT SURE IF WE HAVE TO IMPLEMENT BANNERS LIKE THIS ####################
-
+        # Sprites for banners: when a row is cleared a message
+        # on the right side of the board is shown
+        # Load banner sprites shown when rows are cleared.
+        # Each .npy file stores an RGBA image (H, W, 4) for ONE/TWO/TRIPLE/TETRIS
         one = jr.loadFrame(os.path.join(MODULE_DIR, "sprites/tetris/text_one.npy"))
         two = jr.loadFrame(os.path.join(MODULE_DIR, "sprites/tetris/text_two.npy"))
         three = jr.loadFrame(os.path.join(MODULE_DIR, "sprites/tetris/text_triple.npy"))
@@ -585,7 +586,9 @@ class TetrisRenderer(JAXGameRenderer):
         # uint8 -> everything into 8 bits. It also works without the conversion so idk
         # SPRITE_ONE = jnp.expand_dims(one.astype(jnp.uint8), axis=0)
 
-        #
+        # expand dimensions so that shape (H, W, 4) becomes (1, H, W, 4),
+        # making them compatible with sprite-handling code that expects a
+        # sequence of frames: (NumFrames, Height, Width, Channels).
         SPRITE_ONE = jnp.expand_dims(jnp.array(one, dtype=jnp.uint8), axis=0)
         SPRITE_TWO = jnp.expand_dims(jnp.array(two, dtype=jnp.uint8), axis=0)
         SPRITE_THREE = jnp.expand_dims(jnp.array(three, dtype=jnp.uint8), axis=0)
