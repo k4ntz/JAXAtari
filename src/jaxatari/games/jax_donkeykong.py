@@ -143,7 +143,8 @@ class DonkeyKongConstants(NamedTuple):
     SCORE_FOR_REACHING_GOAL = 4100 
 
     TIMER_REDUTION_DURATION = 128 # at every 128st frame, the timer will be reduced by 100, starting from 5000 "points"
-
+    TIMER_REDUTION_AMOUNT = 100
+    
 
 class InvisibleWallEachStage(NamedTuple):
     stage: chex.Array
@@ -169,6 +170,8 @@ class BarrelPosition(NamedTuple):
 class DonkeyKongState(NamedTuple):
     game_started: bool
     level: chex.Array
+    game_timer: int
+    game_remaining_time: int
     step_counter: chex.Array
     
     mario_x: float
@@ -338,7 +341,7 @@ class JaxDonkeyKong(JaxEnvironment[DonkeyKongState, DonkeyKongObservation, Donke
                 )
             
             sprite = jax.lax.cond(
-                jnp.logical_and(should_pick_next_sprite, direction != self.consts.MOVING_DOWN), 
+                jnp.logical_and(should_pick_next_sprite, direction != self.consts.MOVING_DOWN),
                 lambda _: flip_sprite(sprite),
                 lambda _: sprite,
                 operand=None
@@ -378,7 +381,7 @@ class JaxDonkeyKong(JaxEnvironment[DonkeyKongState, DonkeyKongObservation, Donke
 
             # change position
             # check if barrel can fall (ladder or end of bar)
-            def check_if_barrel_will_fall(x, y, direction, sprite, stage):        
+            def check_if_barrel_will_fall(x, y, direction, sprite, stage):
                 prob_barrel_rolls_down_a_ladder = self.consts.BASE_PROBABILITY_BARREL_ROLLING_A_LADDER_DOWN
                 
                 # check first if barrel is positioned on top of a ladder
@@ -1200,6 +1203,8 @@ class JaxDonkeyKong(JaxEnvironment[DonkeyKongState, DonkeyKongObservation, Donke
             game_started = False,
             level = 1,
             step_counter=jnp.array(1).astype(jnp.int32),
+            game_timer = 1,
+            game_remaining_time = 5000,
             frames_since_last_barrel_spawn=jnp.array(0).astype(jnp.int32),
 
             mario_x=self.consts.MARIO_START_X,
@@ -1261,9 +1266,25 @@ class JaxDonkeyKong(JaxEnvironment[DonkeyKongState, DonkeyKongObservation, Donke
         new_state = self._hammer_step(new_state, action)
 
         # increase timer / frame counter
+        game_remaining_time = jax.lax.cond(
+            new_state.game_timer % self.consts.TIMER_REDUTION_DURATION == 0,
+            lambda _: new_state.game_remaining_time - self.consts.TIMER_REDUTION_AMOUNT,
+            lambda _: new_state.game_remaining_time,
+            operand=None
+        )
+        mario_reached_goal, game_freeze_start = jax.lax.cond(
+            jnp.logical_and(new_state.game_remaining_time == 0, new_state.mario_reached_goal == False),
+            lambda _: (True, new_state.step_counter),
+            lambda _: (new_state.mario_reached_goal, -1),
+            operand=None
+        )
         new_state = new_state._replace(
             step_counter=new_state.step_counter+1,
             frames_since_last_barrel_spawn=new_state.frames_since_last_barrel_spawn+1,
+            game_remaining_time=game_remaining_time,
+            game_timer=new_state.game_timer+1,
+            mario_reached_goal = mario_reached_goal,
+            game_freeze_start=game_freeze_start,
         )
         
         # Check if game was even started --> with human_action FIRE
@@ -1593,9 +1614,8 @@ class DonkeyKongRenderer(JAXGameRenderer):
             operand=None 
         )
 
-
-        # Scores
-        score = 5000
+        # Scores/ Timer
+        score = state.game_remaining_time
         show_game_score = False
         def create_score_in_raster(i, raster):
             digit = score // (10 ** i)
@@ -1613,6 +1633,7 @@ class DonkeyKongRenderer(JAXGameRenderer):
             lambda x: jax.lax.fori_loop(0, self.consts.NUMBER_OF_DIGITS_FOR_TIMER_SCORE, create_score_in_raster, x),
             raster
         )
+
 
         # Barrels - example for now
         frame_barrel = aj.get_sprite_frame(self.SPRITES_BARREL, 0)
