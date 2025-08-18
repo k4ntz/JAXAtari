@@ -13,11 +13,17 @@ from jaxatari.renderers import JAXGameRenderer
 import jaxatari.spaces as spaces
 
 """TODOS:
+Top Priorities:
+- Check overall movement of the enemies in the video: https://www.youtube.com/watch?v=EbPB_X2vbOU (Mahta)
+- the beam movement of the ship(Ayush)
+- White saucers movement needs to be update --> No teleporation and zigzag movement needs to be broader(REMOVE ZIGAZG)(Ayush)
+- The movements of the enemies (slightly reworked so that they follow the beams(more depending on Analysis from Mahta))
+- "Fix" the renderer as some components are not being shown with Play.py(Player ship, Points, lives, torpedoes, enemies left) (Mahta)
+For later:
 - spawn rate of green blockers needs to be fixed when sector == 6 && sentinal is active --> might be done
 - Check the sentinal ship constants/Optimize the code/remove unnecessary code
 - Adjust the spawn rate of green blockers in sectors 1 - 5 (currently the sentinel moves faster through the screen than they can spawn) -> somewhat done
 - Documentation
-- White saucers movement needs to be update --> No teleporation and zigzag movement needs to be broader
 - Fix beam movement
 
 Nice to have:
