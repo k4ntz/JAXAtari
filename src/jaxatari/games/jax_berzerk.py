@@ -415,7 +415,7 @@ class JaxBerzerk(JaxEnvironment[BerzerkState, BerzerkObservation, BerzerkInfo, B
         def update_one_enemy(_, inputs):
             rng, pos, axis, dir_, prob = inputs
             new_pos, new_axis, new_dir, _ = self.update_enemy_position(
-                player_pos, pos, axis, dir_, rng, prob
+                player_pos, pos, axis, dir_, rng, prob, enemy_pos
             )
             return None, (new_pos, new_axis, new_dir)
 
@@ -431,7 +431,7 @@ class JaxBerzerk(JaxEnvironment[BerzerkState, BerzerkObservation, BerzerkInfo, B
     @partial(jax.jit, static_argnums=(0, ))
     def update_enemy_position(self, player_pos: chex.Array, enemy_pos: chex.Array, 
                             enemy_move_axis: chex.Array, enemy_move_dir: chex.Array,
-                            rng: chex.PRNGKey, move_prob: float):
+                            rng: chex.PRNGKey, move_prob: float, all_enemy_pos: chex.Array):
         """
         Update enemy position with movement probability.
         Once started moving, continues until aligned with player.
@@ -464,28 +464,44 @@ class JaxBerzerk(JaxEnvironment[BerzerkState, BerzerkObservation, BerzerkInfo, B
             operand=None
         )
         
-        # Update position if moving
-        new_pos = jnp.where(
-            new_axis == 0,  # moving in x-axis
-            enemy_pos.at[0].add(new_dir * self.consts.ENEMY_SPEED),
-            enemy_pos
-        )
-        new_pos = jnp.where(
-            new_axis == 1,  # moving in y-axis
-            new_pos.at[1].add(new_dir * self.consts.ENEMY_SPEED),
-            new_pos
-        )
-        
-        # Check if aligned with player in movement axis
-        aligned_x = jnp.abs(player_pos[0] - new_pos[0]) < 5
-        aligned_y = jnp.abs(player_pos[1] - new_pos[1]) < 5
+         # Bewegungsvektor berechnen
+        move_vec = jnp.array([
+            jnp.where(new_axis == 0, new_dir * self.consts.ENEMY_SPEED, 0),
+            jnp.where(new_axis == 1, new_dir * self.consts.ENEMY_SPEED, 0),
+        ])
+        proposed_pos = enemy_pos + move_vec
+
+
+        # Prüfen ob er in einen anderen Gegner laufen würde (mit 3px Sicherheitsabstand)
+        def too_close(ep):
+            # simulierter Schritt + 5px extra Puffer in Bewegungsrichtung
+            offset = jnp.array([
+                jnp.where(new_axis == 0, new_dir * 5, 0),
+                jnp.where(new_axis == 1, new_dir * 5, 0),
+            ])
+            future_pos = enemy_pos + move_vec + offset
+            return (
+                self.object_hits_enemy(future_pos, self.consts.ENEMY_SIZE, ep)
+                & ~jnp.all(ep == enemy_pos)  # sich selbst ausschließen
+            )
+        overlap = jnp.any(jax.vmap(too_close)(all_enemy_pos))
+
+        # Wenn overlap → gar nicht bewegen
+        final_pos = jax.lax.select(overlap, enemy_pos, proposed_pos)
+
+        # Bewegung stoppen wie bei Alignment
+        stop_due_to_block = overlap
+
+        # Prüfen, ob mit Spieler ausgerichtet → Bewegung stoppen
+        aligned_x = jnp.abs(player_pos[0] - final_pos[0]) < 5
+        aligned_y = jnp.abs(player_pos[1] - final_pos[1]) < 5
         aligned = jax.lax.select(new_axis == 0, aligned_x, aligned_y)
 
-        # Stop moving if aligned
-        final_axis = jnp.where(aligned, -1, new_axis)
-        final_dir = jnp.where(aligned, 0, new_dir)
+        # Bewegung stoppen entweder wenn blockiert ODER aligned
+        final_axis = jnp.where(stop_due_to_block | aligned, -1, new_axis)
+        final_dir  = jnp.where(stop_due_to_block | aligned, 0, new_dir)
         
-        return new_pos, final_axis, final_dir, rng
+        return final_pos, final_axis, final_dir, rng
     
     @partial(jax.jit, static_argnums=(0, ))
     def spawn_enemies(self, state, rng):
