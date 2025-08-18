@@ -96,6 +96,7 @@ class EnemyState(NamedTuple):
     enemy_y: chex.Array  # y-coordinate of the enemy
     prev_walking_direction: chex.Array  # previous walking direction (in x-direction) of the enemy, -1 = towards x=min, 1 = towards x=max
     enemy_direction: chex.Array
+    y_movement_direction: chex.Array # direction in which the enemy is moving until it hits the ball, -1 towards net 1 away from net
 
 
 class GameState(NamedTuple):
@@ -129,7 +130,8 @@ class TennisState(NamedTuple):
         jnp.array(START_X),
         jnp.array(ENEMY_START_Y),
         jnp.array(0.0),
-        jnp.array(PLAYER_START_DIRECTION)  # todo maybe create separate ENEMY_START_DIRECTION constant
+        jnp.array(PLAYER_START_DIRECTION),  # todo maybe create separate ENEMY_START_DIRECTION constant
+        jnp.array(1)
     )
     ball_state: BallState = BallState(  # all ball-related data
         jnp.array(GAME_WIDTH / 2.0 - 2.5),
@@ -420,7 +422,8 @@ def check_score(state: TennisState) -> TennisState:
                 jnp.where(new_player_field == 1, jnp.array(ENEMY_START_Y),
                           jnp.array(PLAYER_START_Y)),
                 jnp.array(0.0),
-                jnp.array(PLAYER_START_DIRECTION)  # todo ENEMY_START_DIRECTION
+                jnp.array(PLAYER_START_DIRECTION),  # todo ENEMY_START_DIRECTION
+                jnp.array(1)
             ),
             BallState(
                 jnp.array(FRAME_WIDTH / 2.0 - 2.5),
@@ -632,9 +635,12 @@ y - coordinate:
 @jax.jit
 def enemy_step(state: TennisState) -> EnemyState:
     # x-coordinate
-    enemy_hit_offset = state.enemy_state.prev_walking_direction * 5 * -1 * 0
+    enemy_hit_offset = state.enemy_state.prev_walking_direction * 5 * -1 * 0 #todo this is always 0
     enemy_x_hit_point = state.enemy_state.enemy_x + PLAYER_WIDTH / 2 + enemy_hit_offset
+
+    player_x_hit_point = state.player_state.player_x + PLAYER_WIDTH / 2
     ball_tracking_tolerance = 1
+    x_tracking_tolerance = 2
 
     # move to middle
     def move_x_to_middle():
@@ -645,14 +651,23 @@ def enemy_step(state: TennisState) -> EnemyState:
                          state.enemy_state.enemy_x)
 
     def track_ball_x():
-        # simply track balls x-coordinate
+        enemy_aiming_x_offset = jnp.where(
+            player_x_hit_point < FRAME_WIDTH / 2,
+            5,
+            -15
+        )
+        diff = state.ball_state.ball_x - (enemy_x_hit_point + enemy_aiming_x_offset)
+
+        # move right if ball is sufficiently to the right
         new_enemy_x = jnp.where(
-            enemy_x_hit_point < state.ball_state.ball_x,
+            diff > x_tracking_tolerance,
             state.enemy_state.enemy_x + 1,
             state.enemy_state.enemy_x
         )
+
+        # move left if ball is sufficiently to the left
         new_enemy_x = jnp.where(
-            enemy_x_hit_point > state.ball_state.ball_x,
+            diff < -x_tracking_tolerance,
             state.enemy_state.enemy_x - 1,
             new_enemy_x
         )
@@ -683,27 +698,41 @@ def enemy_step(state: TennisState) -> EnemyState:
 
     # y-coordinate
 
-    normal_step_y = jnp.where(
-        state.ball_state.last_hit == 1,
-        # last hit was enemy, rush the net
-        jnp.where(jnp.logical_and(state.enemy_state.enemy_y != PLAYER_Y_LOWER_BOUND_TOP,
-                                  state.enemy_state.enemy_y != PLAYER_Y_UPPER_BOUND_BOTTOM),
-                  state.enemy_state.enemy_y - state.player_state.player_field,
-                  state.enemy_state.enemy_y
-                  ),
-        # last hit was player, move away from net
-        jnp.where(jnp.logical_and(state.enemy_state.enemy_y != PLAYER_Y_UPPER_BOUND_TOP,
-                                  state.enemy_state.enemy_y != PLAYER_Y_LOWER_BOUND_BOTTOM),
-                  state.enemy_state.enemy_y + state.player_state.player_field,
-                  state.enemy_state.enemy_y
-                  )
-    )
+    def enemy_y_step():
 
-    new_enemy_y = jnp.where(state.game_state.is_serving,
-                            state.enemy_state.enemy_y,
-                            normal_step_y,
-                            # jnp.clip(normal_step_y, 0, ENEMY_START_Y)
-                            )
+        state_after_y = jax.lax.cond(
+            state.ball_state.last_hit == 1,
+            # last hit was enemy rush net
+            lambda _: EnemyState(state.enemy_state.enemy_x, jnp.where(jnp.logical_and(state.enemy_state.enemy_y != PLAYER_Y_LOWER_BOUND_TOP,
+                                      state.enemy_state.enemy_y != PLAYER_Y_UPPER_BOUND_BOTTOM),
+                      state.enemy_state.enemy_y - state.player_state.player_field,
+                      state.enemy_state.enemy_y
+                      ), state.enemy_state.prev_walking_direction, state.enemy_state.enemy_direction, jnp.array(1)),
+            # last hit was player move away from net until baseline is hit then move towards ball
+            lambda _: EnemyState(state.enemy_state.enemy_x,
+                                 jnp.where(state.player_state.player_field == 1,
+                                           jax.numpy.clip(state.enemy_state.enemy_y +
+                                                          state.player_state.player_field * state.enemy_state.y_movement_direction,
+                                                          PLAYER_Y_UPPER_BOUND_BOTTOM,
+                                                          PLAYER_Y_LOWER_BOUND_BOTTOM),
+                                           jax.numpy.clip(state.enemy_state.enemy_y +
+                                                          state.player_state.player_field * state.enemy_state.y_movement_direction,
+                                                          PLAYER_Y_UPPER_BOUND_TOP,
+                                                          PLAYER_Y_LOWER_BOUND_TOP)),
+                                 state.enemy_state.prev_walking_direction,
+                                 state.enemy_state.enemy_direction,
+                                 jnp.where(jnp.logical_or(state.enemy_state.enemy_y == PLAYER_Y_UPPER_BOUND_TOP, state.enemy_state.enemy_y == PLAYER_Y_LOWER_BOUND_BOTTOM),
+                                           jnp.array(-1),
+                                           state.enemy_state.y_movement_direction)), operand=None)
+
+        return jax.lax.cond(
+            state.game_state.is_serving,
+            lambda _:state.enemy_state,
+            lambda _: state_after_y,
+            operand=None
+        )
+
+    enemy_state_after_y_step = enemy_y_step()
 
     new_enemy_direction = jnp.where(
         state.enemy_state.enemy_x > state.ball_state.ball_x,
@@ -719,9 +748,10 @@ def enemy_step(state: TennisState) -> EnemyState:
 
     return EnemyState(
         new_enemy_x,
-        new_enemy_y,
+        enemy_state_after_y_step.enemy_y,
         cur_walking_direction,
-        new_enemy_direction
+        new_enemy_direction,
+        enemy_state_after_y_step.y_movement_direction
     )
 
 
@@ -785,6 +815,7 @@ def ball_step(state: TennisState, action) -> TennisState:
     """
 
     player_state = state.player_state
+    enemy_state = state.enemy_state
 
     # check player-ball collisions
     player_end = player_state.player_x + PLAYER_WIDTH
@@ -795,17 +826,24 @@ def ball_step(state: TennisState, action) -> TennisState:
             ball_end <= player_state.player_x
         )
     )
-    enemy_state = state.enemy_state
 
+    # Correct X positions based on facing direction
     corrected_player_x = jnp.where(
         player_state.player_direction == 1,
         player_state.player_x,
-        state.player_state.player_x - PLAYER_WIDTH + 2
+        player_state.player_x - PLAYER_WIDTH + 2
     )
+
+    corrected_enemy_x = jnp.where(
+        enemy_state.enemy_direction == 1,
+        enemy_state.enemy_x,
+        enemy_state.enemy_x - PLAYER_WIDTH + 2
+    )
+
     upper_entity_x = jnp.where(
         player_state.player_field == 1,
         corrected_player_x,
-        enemy_state.enemy_x
+        corrected_enemy_x
     )
     upper_entity_y = jnp.where(
         player_state.player_field == 1,
@@ -816,7 +854,7 @@ def ball_step(state: TennisState, action) -> TennisState:
     lower_entity_x = jnp.where(
         player_state.player_field == -1,
         corrected_player_x,
-        enemy_state.enemy_x
+        corrected_enemy_x
     )
     lower_entity_y = jnp.where(
         player_state.player_field == -1,
@@ -832,7 +870,8 @@ def ball_step(state: TennisState, action) -> TennisState:
             PLAYER_HEIGHT,
             ball_state.ball_x,
             BALL_WIDTH,
-            ball_state.ball_z,
+            #ball_state.ball_z,
+            0, # the original game ignores height when checking collision
             BALL_WIDTH  # todo rename to BALL_SIZE because ball is square
         ),
         jnp.absolute(upper_entity_y + PLAYER_HEIGHT - ball_state.ball_y) <= 3
@@ -846,7 +885,8 @@ def ball_step(state: TennisState, action) -> TennisState:
             PLAYER_HEIGHT,
             ball_state.ball_x,
             BALL_WIDTH,
-            ball_state.ball_z,
+            #ball_state.ball_z,
+            0,  # the original game ignores height when checking collision
             BALL_WIDTH
         ),
         jnp.absolute(lower_entity_y + PLAYER_HEIGHT - ball_state.ball_y) <= 3
