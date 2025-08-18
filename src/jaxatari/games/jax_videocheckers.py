@@ -75,7 +75,7 @@ class VideoCheckersConstants:
     SHOW_OPPONENT_MOVE_PHASE = 2
     GAME_OVER_PHASE = 3
 
-    ANIMATION_FRAME_RATE = 60
+    ANIMATION_FRAME_RATE = 30
 
 
 class OpponentMove(NamedTuple):
@@ -231,7 +231,7 @@ class BoardHandler:
         """
 
         piece = board[row, col]
-        is_not_a_piece = (piece == VideoCheckersConstants.EMPTY_TILE) | (row == -1)
+        is_not_a_piece = (BoardHandler.tile_is_free(row, col, board)) | (row == -1)
 
         def _get_moves():
             def prune_possible_moves_for_jumps(possible_moves):
@@ -317,7 +317,7 @@ class BoardHandler:
                                         lambda: 2, lambda: -2)
             is_forward = (drow == drow_forward)
             can_jump_in_direction = piece_is_king | is_forward
-            tile_is_free = board[row + drow, col + dcol] == VideoCheckersConstants.EMPTY_TILE
+            tile_is_free = BoardHandler.tile_is_free(row + drow, col + dcol, board)
             jumped_piece_is_opponent = jax.lax.cond(
                 jnp.logical_or(piece == VideoCheckersConstants.WHITE_PIECE, piece == VideoCheckersConstants.WHITE_KING),
                 lambda: jnp.logical_or(jumped_piece == VideoCheckersConstants.BLACK_PIECE, jumped_piece == VideoCheckersConstants.BLACK_KING),
@@ -338,7 +338,7 @@ class BoardHandler:
             is_forward = (drow == drow_forward)
             can_move_in_direction = piece_is_king | is_forward
 
-            tile_is_free = board[row + drow, col + dcol] == VideoCheckersConstants.EMPTY_TILE
+            tile_is_free = BoardHandler.tile_is_free(row + drow, col + dcol, board)
             return landing_in_bounds & tile_is_free & can_move_in_direction
 
         is_jump = (jnp.abs(dcol) == 2) & (jnp.abs(drow) == 2)
