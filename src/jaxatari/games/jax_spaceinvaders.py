@@ -46,7 +46,7 @@ class SpaceInvadersConstants(NamedTuple):
     ENEMY_FIRE_RATE: int = 60
 
     INITIAL_LIVES: int = 3
-    INITIAL_PLAYER_X: int = 96
+    INITIAL_PLAYER_X: int = 33
     INITIAL_BULLET_POS: int = 78
     INITIAL_OPPONENT_DIRECTION: int = 1
     WIN_SCORE: int = 1000 # actually infinite 
