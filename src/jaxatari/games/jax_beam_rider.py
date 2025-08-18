@@ -7,6 +7,7 @@ from typing import Tuple, Dict, Any, NamedTuple
 import chex
 from flax import struct
 import sys
+from functools import partial
 
 from jaxatari.environment import JaxEnvironment
 from jaxatari.renderers import JAXGameRenderer
@@ -215,16 +216,19 @@ class BeamRiderConstants(NamedTuple):
 
     @classmethod
     def get_beam_positions(cls) -> jnp.ndarray:
-        """Get 5 beam positions evenly spaced within screen bounds"""
-        # Simply create 5 evenly spaced beams across the screen width
-        # with reasonable margins from the edges
-        margin = 20  # Distance from screen edges
+        """Calculate 5 beam positions evenly spaced across the screen width"""
+        # Simple, direct calculation for 5 evenly spaced beams
+        # Beam 0: leftmost, Beam 2: center, Beam 4: rightmost
 
-        positions = jnp.linspace(
-            margin,  # Start position (left side with margin)
-            cls.SCREEN_WIDTH - margin,  # End position (right side with margin)
-            cls.NUM_BEAMS  # 5 beams total
-        )
+        # Leave some margin from screen edges
+        margin = 20
+        usable_width = cls.SCREEN_WIDTH - (2 * margin)
+
+        # Create 5 evenly spaced positions
+        beam_spacing = usable_width / (cls.NUM_BEAMS - 1)
+        positions = jnp.array([
+            margin + i * beam_spacing for i in range(cls.NUM_BEAMS)
+        ])
 
         return positions
 
@@ -515,26 +519,37 @@ class BeamRiderEnv(JaxEnvironment[BeamRiderState, BeamRiderObservation, BeamRide
 
         return obs, state, reward, done, info
 
+    @partial(jax.jit, static_argnums=(0,))
     def _update_ship(self, state: BeamRiderState, action: int) -> BeamRiderState:
-        """Update ship position to move discretely between beams"""
+        """Update ship position using discrete beam movement with cooldown"""
         ship = state.ship
         current_beam = ship.beam_position
 
-        # Calculate new beam position based on action
+        # Add movement cooldown to prevent rapid beam jumping
+        movement_cooldown = 8  # Frames to wait between movements (adjust if needed)
+        frames_since_last_move = state.frame_count % movement_cooldown
+        can_move_this_frame = frames_since_last_move == 0
+
+        # Use standard JAXAtari action constants: LEFT=1, RIGHT=2
+        should_move_left = (action == 1) & (current_beam > 0) & can_move_this_frame
+        should_move_right = (action == 2) & (current_beam < self.constants.NUM_BEAMS - 1) & can_move_this_frame
+
+        # Discrete beam movement with cooldown
         new_beam_position = jnp.where(
-            action == 1,  # Left movement
-            jnp.maximum(0, current_beam - 1),  # Move to left beam
+            should_move_left,  # Move left
+            current_beam - 1,
             jnp.where(
-                action == 2,  # Right movement
-                jnp.minimum(self.constants.NUM_BEAMS - 1, current_beam + 1),  # Move to right beam
+                should_move_right,  # Move right
+                current_beam + 1,
                 current_beam  # No movement
             )
         )
 
-        # Calculate new x position - center ship on the beam
+        # Set ship x position to exactly match the beam center
         new_x = self.beam_positions[new_beam_position] - self.constants.SHIP_WIDTH // 2
 
         return state.replace(ship=ship.replace(x=new_x, beam_position=new_beam_position))
+
     def _select_white_saucer_movement_pattern(self, rng_key: chex.PRNGKey) -> int:
         """Select movement pattern for a new white saucer"""
         # Generate random value for pattern selection
