@@ -15,7 +15,6 @@ class SpaceInvadersConstants(NamedTuple):
     WIDTH: int = 160
     HEIGHT: int = 210
 
-    FPS: int = 30
     SCALING_FACTOR: int = 4
     WINDOW_WIDTH: int = WIDTH * SCALING_FACTOR
     WINDOW_HEIGHT: int = HEIGHT * SCALING_FACTOR
@@ -41,12 +40,17 @@ class SpaceInvadersConstants(NamedTuple):
     EXPLOSION_FRAMES: jnp.array = jnp.array([3, 11, 19, 27], dtype=jnp.int32)
     PLAYER_EXPLOSION_FRAMES: int = 4
     PLAYER_EXPLOSION_DURATION: int = 126
+    PLAYER_RESET_DURATION: int = 64
+    PLAYER_RESET_FRAMES: int = 8
+    FULL_PAUSE_DURATION: int = PLAYER_EXPLOSION_DURATION + 1 + PLAYER_RESET_DURATION # +1 for the frame between the end of the explosion and the start of the blinking animation
+
+    POSITION_LIFE_X: int = 83
 
     MOVEMENT_RATE: int = 32
     ENEMY_FIRE_RATE: int = 60
 
     INITIAL_LIVES: int = 3
-    INITIAL_PLAYER_X: int = 33
+    INITIAL_PLAYER_X: int = 41
     INITIAL_BULLET_POS: int = 78
     INITIAL_OPPONENT_DIRECTION: int = 1
     WIN_SCORE: int = 1000 # actually infinite 
@@ -474,8 +478,16 @@ class JaxSpaceInvaders(JaxEnvironment[SpaceInvadersState, SpaceInvadersObservati
             None
         )
 
-        new_player_dead = jax.lax.cond(
+        # ggf. Ersetzen durch Reset Funktion für gesamtes Level
+        new_player_x, new_player_speed = jax.lax.cond(
             new_player_dead > self.consts.PLAYER_EXPLOSION_DURATION,
+            lambda _: (self.consts.INITIAL_PLAYER_X, 0),
+            lambda _: (new_player_x, new_player_speed),
+            None
+        )
+
+        new_player_dead = jax.lax.cond(
+            new_player_dead > self.consts.FULL_PAUSE_DURATION,
             lambda _: 0,
             lambda _: new_player_dead,
             None
@@ -672,8 +684,10 @@ def load_sprites():
     
     # Player
     player = aj.loadFrame(os.path.join(SPRITES_DIR, "player.npy"))
+    player_invisible = aj.loadFrame(os.path.join(SPRITES_DIR, "player_invisible.npy"))
     SPRITE_PLAYER = jnp.expand_dims(player, axis=0)
-    
+    SPRITE_PLAYER_INVISIBLE = jnp.expand_dims(player_invisible, axis=0)
+
     # Background
     background = aj.loadFrame(os.path.join(SPRITES_DIR, "background.npy"))
     SPRITE_BACKGROUND = jnp.expand_dims(background, axis=0)
@@ -720,10 +734,18 @@ def load_sprites():
         sprite = aj.loadFrame(os.path.join(SPRITES_DIR, f"explosions/{name}.npy"))
         explosions[name] = jnp.expand_dims(sprite, axis=0)
 
-    return (SPRITE_BACKGROUND, SPRITE_PLAYER, SPRITE_BULLET, *green_numbers, SPRITE_ZERO_YELLOW, SPRITE_DEFENSE, *opponents.values(), *explosions.values())
+    # Lives
+    lifes = {}
+    life_files = ["one", "two", "three"]
+
+    for name in life_files:
+        sprite = aj.loadFrame(os.path.join(SPRITES_DIR, f"lifes/{name}.npy"))
+        lifes[name] = jnp.expand_dims(sprite, axis=0)
+
+    return (SPRITE_BACKGROUND, SPRITE_PLAYER, SPRITE_PLAYER_INVISIBLE, SPRITE_BULLET, *green_numbers, SPRITE_ZERO_YELLOW, SPRITE_DEFENSE, *opponents.values(), *explosions.values(), *lifes.values())
 
 (
-    SPRITE_BACKGROUND, SPRITE_PLAYER, SPRITE_BULLET,
+    SPRITE_BACKGROUND, SPRITE_PLAYER, SPRITE_PLAYER_INVISIBLE, SPRITE_BULLET,
     SPRITE_ZERO_GREEN, SPRITE_ONE_GREEN, SPRITE_TWO_GREEN, SPRITE_THREE_GREEN,
     SPRITE_FOUR_GREEN, SPRITE_FIVE_GREEN, SPRITE_SIX_GREEN, SPRITE_SEVEN_GREEN,
     SPRITE_EIGHT_GREEN, SPRITE_NINE_GREEN, SPRITE_ZERO_YELLOW, SPRITE_DEFENSE,
@@ -731,14 +753,36 @@ def load_sprites():
     SPRITE_OPPONENT_3_A, SPRITE_OPPONENT_3_B, SPRITE_OPPONENT_4_A, SPRITE_OPPONENT_4_B,
     SPRITE_OPPONENT_5, SPRITE_OPPONENT_6_A, SPRITE_OPPONENT_6_B, SPRITE_EXPLOSION_1, 
     SPRITE_EXPLOSION_2, SPRITE_EXPLOSION_3, SPRITE_EXPLOSION_4, 
-    SPRITE_EXPLOSION_PURPLE_A, SPRITE_EXPLOSION_PURPLE_B, PLAYER_EXPLOSION_A, PLAYER_EXPLOSION_B
+    SPRITE_EXPLOSION_PURPLE_A, SPRITE_EXPLOSION_PURPLE_B, PLAYER_EXPLOSION_A, PLAYER_EXPLOSION_B,
+    LIFE_1, LIFE_2, LIFE_3
 ) = load_sprites()
 
 class SpaceInvadersRenderer(JAXGameRenderer):
+    life_sprites: chex.Array
+
     def __init__(self, consts: SpaceInvadersConstants = None):
         super().__init__()
         self.consts = consts or SpaceInvadersConstants()
         self.SPRITE_PLAYER = SPRITE_PLAYER
+
+        self.init_sprites()
+
+    def init_sprites(self):
+        self.life_sprites = jnp.array([aj.get_sprite_frame(LIFE_1, 0), aj.get_sprite_frame(LIFE_2, 0), aj.get_sprite_frame(LIFE_3, 0)])
+
+    def get_player_sprite(self, state: SpaceInvadersState):
+        return jax.lax.cond(
+            state.player_dead > self.consts.PLAYER_EXPLOSION_DURATION,
+            lambda _: jnp.where(jnp.floor((state.player_dead - 1) / self.consts.PLAYER_RESET_FRAMES) % 2 == 0, SPRITE_PLAYER, SPRITE_PLAYER_INVISIBLE),
+            lambda _: jnp.where(jnp.floor(state.player_dead / self.consts.PLAYER_EXPLOSION_FRAMES) % 2 == 0, PLAYER_EXPLOSION_A, PLAYER_EXPLOSION_B),
+            None
+        )
+    
+    def render_life(self, state: SpaceInvadersState, raster): 
+        sprite = self.life_sprites[state.player_lives - 1]
+        raster = aj.render_at(raster, self.consts.POSITION_LIFE_X, self.consts.PLAYER_Y, sprite)
+
+        return raster
 
     @partial(jax.jit, static_argnums=(0,))
     def render(self, state: SpaceInvadersState) -> chex.Array:
@@ -749,19 +793,23 @@ class SpaceInvadersRenderer(JAXGameRenderer):
         raster = aj.render_at(raster, 0, self.consts.HEIGHT - self.consts.BACKGROUND_SIZE[1], background)
 
         # Load Player
+        sprite_player = self.get_player_sprite(state)
         sprite_player = jax.lax.cond(
             state.player_dead == 0,
             lambda _: self.SPRITE_PLAYER,
-            lambda _: jnp.where(
-                jnp.floor(state.player_dead / self.consts.PLAYER_EXPLOSION_FRAMES) % 2 == 0,
-                PLAYER_EXPLOSION_A,
-                PLAYER_EXPLOSION_B
-            ),
+            lambda _: self.get_player_sprite(state),
             None
         )
 
         frame_player = aj.get_sprite_frame(sprite_player, 0)
         raster = aj.render_at(raster, state.player_x - self.consts.PLAYER_SIZE[0], self.consts.PLAYER_Y, frame_player)
+
+        raster = jax.lax.cond(
+            state.player_dead > self.consts.PLAYER_EXPLOSION_DURATION + 1,
+            lambda r: self.render_life(state, r),
+            lambda r: r,
+            raster
+        )
 
         # Render bullet every even frame 
         frame_bullet = aj.get_sprite_frame(SPRITE_BULLET, 0)
