@@ -52,9 +52,11 @@ class VideoCheckersConstants:
 
     # Opponent move scoring
     CAPTURE_W = 10.0
+    UPGRADE_W = 5
     ADVANCE_W = 1.0
-    CENTER_FWD = 0.5
-    CENTER_BWD = -2.0
+    CENTER_FWD = 0.5 #moving towards center
+    CENTER_BWD = -2.0 #moving away from center
+    NO_MOVE = -jnp.inf
 
     EMPTY_TILE = 0
     WHITE_PIECE = 1
@@ -631,17 +633,37 @@ class JaxVideoCheckers(
         new_d2 = (new_row - self.consts.CENTER) ** 2 + (new_col - self.consts.CENTER) ** 2
         toward = new_d2 < old_d2
 
-        scores = (self.consts.CAPTURE_W * is_jump.astype(jnp.int8)
-                  + self.consts.ADVANCE_W * advance.astype(jnp.int8)
-                  + self.consts.CENTER_FWD * toward.astype(jnp.int8)
-                  + self.consts.CENTER_BWD * (~toward).astype(jnp.int8))  # penalise if not toward
+        # Reaches edge
+        reaches_upgrade = (new_row == 7) & white_piece
 
-        # Break ties with tiny random noise
+        # no move punish
+        no_move = (drow == 0) | (dcol == 0)
+
+        scores = (
+                self.consts.CAPTURE_W * is_jump.astype(jnp.float32)
+                + self.consts.ADVANCE_W * advance.astype(jnp.float32)
+                + self.consts.UPGRADE_W * reaches_upgrade.astype(jnp.float32)
+                + self.consts.CENTER_FWD * toward.astype(jnp.float32)
+                + self.consts.CENTER_BWD * (~toward).astype(jnp.float32)
+        )
+
+        # Apply mask via where (avoid mixing -inf into sums)
+        scores = jnp.where(~no_move, scores, -jnp.inf)
+
+        # Tie-breaker noise only on legal entries; keep masked as -inf
         key, subkey = jax.random.split(key)
-        scores += 0.01 * jax.random.normal(subkey, scores.shape)
+        noise = 0.01 * jax.random.normal(subkey, scores.shape, dtype=scores.dtype)
+        scores = jnp.where(~no_move, scores + noise, scores)
 
+        all_illegal = jnp.all(~~no_move)
+        # When all illegal, argmax will be 0; preserve score -inf and return dummy move
         best_idx = jnp.argmax(scores)
-        return moves[best_idx], scores[best_idx]
+        best_move = jnp.where(all_illegal, jnp.array([0, 0], moves.dtype), moves[best_idx])
+        best_score = jnp.where(all_illegal, -jnp.inf, scores[best_idx])
+
+        jax.debug.print("Piece {p} best move {m} score {s}", p=piece, m=best_move, s=best_score)
+
+        return best_move, best_score
 
     @staticmethod
     def calculate_best_first_opponent_move(self, movable_pieces: chex.Array, state: VideoCheckersState) \
@@ -670,10 +692,9 @@ class JaxVideoCheckers(
                                                          resulting_board=new_board)
 
         newest_opponent_move = jax.lax.cond(is_jump,
-                                            lambda: OpponentMoveHandler.
-                                            add_captured_position(new_opponent_move, captured_piece),
-                                            lambda: new_opponent_move
-                                            )
+                                            lambda: OpponentMoveHandler.add_captured_position(new_opponent_move,
+                                                                                              jnp.array((c_row,c_col), dtype=jnp.int32)),
+                                            lambda: new_opponent_move)
 
         return state._replace(has_jumped=is_jump, opponent_move=newest_opponent_move)
 
@@ -759,7 +780,7 @@ class JaxVideoCheckers(
 
             def moves_available(moveable_pieces: chex.Array, state: VideoCheckersState):
                 new_state = self.calculate_best_first_opponent_move(self, moveable_pieces, state)
-                jax.debug.print("Opponent move: {opponent_move}", opponent_move=new_state.opponent_move)
+                # jax.debug.print("Opponent move:\n{opponent_move}\n", opponent_move=new_state.opponent_move)
                 # if the opponent has jumped, we need to check calculate_best_further_opponent_move
                 jax.debug.breakpoint()
                 opponent_move = jax.lax.cond(
@@ -778,7 +799,7 @@ class JaxVideoCheckers(
 
             movable_pieces = BoardHandler.get_movable_pieces(self.consts.COLOUR_WHITE, state.board)
 
-            jax.debug.print("Movable pieces for opponent: {movable_pieces}", movable_pieces=movable_pieces)
+            jax.debug.print("Movable pieces for opponent:\n{movable_pieces}\n", movable_pieces=movable_pieces)
 
             return jax.lax.cond(
                 jnp.all(movable_pieces == jnp.array([-1, -1])),
@@ -845,7 +866,7 @@ class JaxVideoCheckers(
                 possible_moves = BoardHandler.get_possible_moves_for_piece(state.selected_piece[0], state.selected_piece[1],
                                                                    state.board)
 
-                jax.debug.print("Possible moves for selected piece: {possible_moves}", possible_moves=possible_moves)
+                # jax.debug.print("Possible moves for selected piece: {possible_moves}", possible_moves=possible_moves)
 
                 move_vector, jump_vector = jax.lax.cond(
                     action == Action.UPRIGHT,
@@ -934,11 +955,11 @@ class JaxVideoCheckers(
                                          lambda: self.consts.BLACK_KING,
                                          lambda: piece_type)
 
-                jax.debug.print(
-                    "Moving piece type {piece_type} from {selected_piece} to {cursor_pos}",
-                    piece_type=piece_type,
-                    selected_piece=state.selected_piece,
-                    cursor_pos=state.cursor_pos)
+                # jax.debug.print(
+                #     "Moving piece type {piece_type} from {selected_piece} to {cursor_pos}",
+                #     piece_type=piece_type,
+                #     selected_piece=state.selected_piece,
+                #     cursor_pos=state.cursor_pos)
 
                 # move piece
                 new_board = state.board \
@@ -947,7 +968,7 @@ class JaxVideoCheckers(
 
                 # capture piece (determine the piece between state.selected_piece and state.cursor_pos
                 captured_piece = state.selected_piece + (move // 2)
-                jax.debug.print("Mid position for jump: {captured_piece}", captured_piece=captured_piece)
+                # jax.debug.print("Mid position for jump: {captured_piece}", captured_piece=captured_piece)
                 new_board = jax.lax.cond(
                     jumped,
                     lambda: new_board.at[tuple(captured_piece)].set(self.consts.EMPTY_TILE),
