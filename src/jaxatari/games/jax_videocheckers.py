@@ -362,11 +362,6 @@ class BoardHandler:
         Returns: Array of size (MAX_PIECES, 2), containing the positions of pieces that can perform a legal move. If no legal
         move is available for a piece, it is instead padded with [-1, -1].
         """
-        jax.debug.print("Const {}".format(VideoCheckersConstants.COLOUR_WHITE))
-        jax.debug.print("Const {}".format(VideoCheckersConstants.COLOUR_BLACK))
-        ha = VideoCheckersConstants.COLOUR_WHITE
-        ha1 = VideoCheckersConstants.COLOUR_BLACK
-        haha = colour == VideoCheckersConstants.COLOUR_WHITE
         own_pieces = jax.lax.cond(colour == VideoCheckersConstants.COLOUR_WHITE,
                                   lambda: [VideoCheckersConstants.WHITE_PIECE, VideoCheckersConstants.WHITE_KING],
                                   lambda: [VideoCheckersConstants.BLACK_PIECE, VideoCheckersConstants.BLACK_KING], )
@@ -378,14 +373,9 @@ class BoardHandler:
         rows, cols = jnp.where(own_pieces_mask, size=MAX_PIECES, fill_value=-1)
         positions = jnp.stack([rows, cols], axis=1)
 
-        # jax.debug.print("Positions of own pieces: {positions}", positions=positions)
-        # DEBUG NOTES: positions works correctly
-
         # vectorise function and apply to all positions
         vmapped_get_possible_moves = jax.vmap(BoardHandler.get_possible_moves_for_piece, in_axes=(0, 0, None))
         all_possible_moves = vmapped_get_possible_moves(rows, cols, board)
-
-        # jax.debug.print("All possible moves for all pieces: {all_possible_moves}", all_possible_moves=all_possible_moves)
 
         # masks for each piece
         can_move_mask = jnp.any(all_possible_moves != 0, axis=(1, 2))  # any move available
@@ -604,7 +594,6 @@ class JaxVideoCheckers(
                 lambda: state.cursor_pos,
 
             )
-            # jax.debug.print("New cursor position row: {new_cursor_pos[0]}, col: {new_cursor_pos[1]}", new_cursor_pos=new_cursor_pos)
             return state._replace(cursor_pos=new_cursor_pos)
 
         new_state = jax.lax.cond(
@@ -684,10 +673,8 @@ class JaxVideoCheckers(
         top_piece_idx = jnp.argmax(best_scores)
         piece_to_move = movable_pieces[top_piece_idx]  # (row, col)
         move_to_play = best_moves[top_piece_idx]  # (drow, dcol)
-        is_jump = (jnp.abs(move_to_play[0]) == 2) & (jnp.abs(move_to_play[1]) == 2)
 
         # Record the move and return the new state
-        piece = state.board[piece_to_move[0], piece_to_move[1]]
         new_pos = piece_to_move + move_to_play
         new_board, new_piece, is_jump, c_row, c_col = BoardHandler.move_piece(
             row=piece_to_move[0], col=piece_to_move[1], drow=move_to_play[0], dcol=move_to_play[1], board=state.board)
@@ -788,7 +775,6 @@ class JaxVideoCheckers(
                 new_state = self.calculate_best_first_opponent_move(self, moveable_pieces, state)
                 # jax.debug.print("Opponent move:\n{opponent_move}\n", opponent_move=new_state.opponent_move)
                 # if the opponent has jumped, we need to check calculate_best_further_opponent_move
-                jax.debug.breakpoint()
                 opponent_move = jax.lax.cond(
                     new_state.has_jumped,
                     lambda: self.calculate_best_further_opponent_move(new_state).opponent_move,
