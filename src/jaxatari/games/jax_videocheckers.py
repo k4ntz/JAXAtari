@@ -81,6 +81,7 @@ class OpponentMove(NamedTuple):
     end_pos: chex.Array  # End position of the opponent's piece
     piece_type: int  # Type of the piece at the end position (king or normal)
     captured_positions: chex.Array  # Array of positions of captured pieces
+    resulting_board: chex.Array # New board with all moves applied
 
 
 class OpponentMoveHandler:
@@ -89,11 +90,12 @@ class OpponentMoveHandler:
     """
     @staticmethod
     def add_captured_position(opponent_move: OpponentMove, position: chex.Array) -> OpponentMove:
-        jax.debug.print("Adding captured position {}".format(position))
+        # 1. find empty slot in array to store the new position
         matches = jnp.all(opponent_move.captured_positions == jnp.array([-1, -1]), axis=1)
         first_index = jnp.argmax(matches)
         has_match = jnp.any(matches)
 
+        # 2. get new opponent move, if an empty slot was found (guaranteed), do nothing if not
         return jax.lax.cond(
             has_match,
             lambda o: o._replace(captured_positions=o.captured_positions.at[first_index].set(position)),
@@ -153,7 +155,11 @@ class BoardHandler:
         return board
 
     @staticmethod
-    def move_piece(row, col, drow, dcol, board):
+    def move_piece(row, col, drow, dcol, board) -> (jnp.ndarray, int, bool, int, int):
+        """
+        Returns new board with the move applied, the type of the piece after the move (e.g. if piece was upgraded)
+        and the coordinates of the captured piece (-1,-1 if nothing was captured)
+        """
         # 1. move & upgrade piece
         piece = board[row, col]
         new_row = row + drow
@@ -175,11 +181,21 @@ class BoardHandler:
                      .at[(new_row, new_col)].set(new_piece))
 
         # 2. handle capture
-        captured_row = row + drow // 2
-        captured_col = col + dcol // 2
-        new_board = new_board.at[(captured_row, captured_col)].set(VideoCheckersConstants.EMPTY_TILE)
+        is_jump = (jnp.abs(drow) == 2) & (jnp.abs(dcol) == 2)
+        def _handle_capture(board):
+            captured_row = row + drow // 2
+            captured_col = col + dcol // 2
+            return (board.at[(captured_row, captured_col)].set(VideoCheckersConstants.EMPTY_TILE),
+                    captured_row, captured_col)
 
-        return new_board
+        new_board, captured_row, captured_col = jax.lax.cond(
+            is_jump,
+            _handle_capture,
+            lambda b: (b, -1, -1),
+            new_board
+        )
+
+        return new_board, new_piece, is_jump, captured_row, captured_col
 
     @staticmethod
     def tile_is_free(row, col, board):
@@ -434,8 +450,9 @@ class JaxVideoCheckers(
                                    opponent_move=OpponentMove(start_pos=jnp.array([-1, -1]),
                                                               end_pos=jnp.array([-1, -1]),
                                                               piece_type=-1,
-                                                              captured_positions=jnp.full((12, 2), -1)
+                                                              captured_positions=jnp.full((12, 2), -1),
                                                               # total of 12 pieces per side
+                                                              resulting_board=board
                                                               ),
                                    rng_key=key,
                                    has_jumped=False)
@@ -644,13 +661,14 @@ class JaxVideoCheckers(
         # Record the move and return the new state
         piece = state.board[piece_to_move[0], piece_to_move[1]]
         new_pos = piece_to_move + move_to_play
-        new_piece = jax.lax.cond(
-            new_pos[0] == 7,  # reached opposite end
-            lambda: self.consts.WHITE_KING,
-            lambda: piece
-        )
-        captured_piece = piece_to_move + (move_to_play // 2)
-        new_opponent_move = state.opponent_move._replace(start_pos=piece_to_move, end_pos=new_pos, piece_type=new_piece)
+        new_board, new_piece, is_jump, c_row, c_col = BoardHandler.move_piece(
+            row=piece_to_move[0], col=piece_to_move[1], drow=move_to_play[0], dcol=move_to_play[1], board=state.board)
+
+        new_opponent_move = state.opponent_move._replace(start_pos=piece_to_move,
+                                                         end_pos=new_pos,
+                                                         piece_type=new_piece,
+                                                         resulting_board=new_board)
+
         newest_opponent_move = jax.lax.cond(is_jump,
                                             lambda: OpponentMoveHandler.
                                             add_captured_position(new_opponent_move, captured_piece),
@@ -681,19 +699,17 @@ class JaxVideoCheckers(
                 """
                 piece = state.opponent_move.end_pos
                 rng_key, splitkey = jax.random.split(state.rng_key)
-                best_move, best_score = self.calculate_best_move_per_piece(self, piece, splitkey, state.board)
+                board = state.opponent_move.resulting_board
+
+                best_move, best_score = self.calculate_best_move_per_piece(self, piece, splitkey, board)
                 jax.debug.print("Best move for piece {piece}: {best_move}, score: {best_score}",
                                 piece=piece, best_move=best_move, best_score=best_score)
-                is_jump = (jnp.abs(best_move)[0] == 2) & (jnp.abs(best_move)[1] == 2)
+                new_board, new_piece, is_jump, c_row, c_col = BoardHandler.move_piece(
+                    row=piece[0], col=piece[1], drow=best_move[0], dcol=best_move[1], board=board)
                 new_pos = piece + best_move
-                new_piece = jax.lax.cond(
-                    new_pos[0] == 7,  # reached opposite end
-                    lambda: self.consts.WHITE_KING,
-                    lambda: state.opponent_move.piece_type
-                )
-                captured_piece = piece + (best_move // 2)
-                new_opponent_move = state.opponent_move._replace(start_pos=piece, end_pos=new_pos, piece_type=new_piece)
-                new_opponent_move = OpponentMoveHandler.add_captured_position(new_opponent_move, captured_piece)
+
+                new_opponent_move = state.opponent_move._replace(end_pos=new_pos, piece_type=new_piece, resulting_board=new_board)
+                new_opponent_move = OpponentMoveHandler.add_captured_position(new_opponent_move, jnp.array((c_row, c_col), dtype=jnp.int32))
                 return jax.lax.cond(
                     is_jump,
                     lambda: state._replace(
@@ -994,20 +1010,20 @@ class JaxVideoCheckers(
             opponent_move = state.opponent_move
 
             # Update the board with the opponent's move
-            new_board = state.board.at[tuple(opponent_move.start_pos)].set(self.consts.EMPTY_TILE)
-            new_board = new_board.at[tuple(opponent_move.end_pos)].set(opponent_move.piece_type)
-
-            # Remove captured pieces from the board
-            new_board = jax.lax.fori_loop(
-                0,
-                opponent_move.captured_positions.shape[0],
-                lambda i, board: board.at[tuple(opponent_move.captured_positions[i])].set(self.consts.EMPTY_TILE),
-                new_board
-            )
+            # new_board = state.board.at[tuple(opponent_move.start_pos)].set(self.consts.EMPTY_TILE)
+            # new_board = new_board.at[tuple(opponent_move.end_pos)].set(opponent_move.piece_type)
+            #
+            # # Remove captured pieces from the board
+            # new_board = jax.lax.fori_loop(
+            #     0,
+            #     opponent_move.captured_positions.shape[0],
+            #     lambda i, board: board.at[tuple(opponent_move.captured_positions[i])].set(self.consts.EMPTY_TILE),
+            #     new_board
+            # )
 
             # Update the game state with the new board and reset cursor position and opponent move
             return state._replace(
-                board=new_board,
+                board=opponent_move.resulting_board,
                 opponent_move=OpponentMoveHandler.clear_captured_positions(opponent_move),
                 game_phase=self.consts.SELECT_PIECE_PHASE,  # Change phase back to select piece phase
                 selected_piece=jnp.array([-1, -1]),  # Reset selected piece
