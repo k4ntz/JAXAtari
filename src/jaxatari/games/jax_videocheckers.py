@@ -283,6 +283,12 @@ class BoardHandler:
         return jax.lax.cond(is_not_a_piece, lambda: jnp.zeros((4, 2), dtype=jnp.int32), _get_moves)
 
     @staticmethod
+    def count_pieces(board: jnp.ndarray):
+        cnt_white = jnp.sum(board == 1) + jnp.sum(board == 3)
+        cnt_black = jnp.sum(board == 2) + jnp.sum(board == 4)
+        return cnt_white, cnt_black
+
+    @staticmethod
     def move_is_available(row, col, drow, dcol, board: chex.Array):
         """
     Checks if a piece can be moved in the given direction. Checks for both, simple moves and jumps.
@@ -1152,7 +1158,11 @@ class JaxVideoCheckers(
         Args:
             previous_state: The previous game state.
         """
-        return 0  # TODO: Implement environment reward logic
+        previous_counts = BoardHandler.count_pieces(previous_state.board)
+        previous_lead_black = previous_counts[1] - previous_counts[0]
+        new_counts = BoardHandler.count_pieces(state.board)
+        new_lead_black = new_counts[1] - new_counts[0]
+        return new_lead_black - previous_lead_black
 
     @partial(jax.jit, static_argnums=(0,))
     def _get_all_reward(self, previous_state: VideoCheckersState, state: VideoCheckersState):
@@ -1178,7 +1188,7 @@ class JaxVideoCheckers(
         Args:
             state: The current game state.
         """
-        return False  # TODO: Implement game over logic
+        return state.game_phase == VideoCheckersConstants.GAME_OVER_PHASE
 
 
 def load_sprites():
