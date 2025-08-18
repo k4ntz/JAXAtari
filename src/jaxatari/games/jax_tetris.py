@@ -676,7 +676,7 @@ class TetrisRenderer(JAXGameRenderer):
         active = in_region & inside_tile & (board_on | piece_on)
 
         # Select row-colored sprite pixel per raster pixel
-        row_sel = (cell_r_c % jnp.int32(self.N_COLOR_ROWS))
+        row_sel = ((H_board - 1 - cell_r_c) % jnp.int32(self.N_COLOR_ROWS))
         off_y_c = jnp.clip(off_y, 0, cell_h - 1)
         off_x_c = jnp.clip(off_x, 0, cell_w - 1)
         sprite_px_rgba = self.SPRITE_ROW_COLORS[row_sel, off_y_c, off_x_c]  # (...,4)
