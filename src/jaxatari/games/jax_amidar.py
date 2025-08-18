@@ -5,14 +5,13 @@
 
 # Remove Inacuracies:
 # - Improve shadow rendering to match the original (variable sizes)
-# - Implement blinking before chicken mode and jumping is over
 # - Adjust the enemy speed for levels over Level 7 
 # - Implement random blinking for enemies and player
 
 # General & Environment:
 # - Update observation
+# - implement obs_to_flat_array
 # - Update spaces
-# - Update info
 
 # Possibly nice to have for future hacking 
 # - Make generating/changing the maze easier
@@ -835,6 +834,29 @@ class JaxAmidar(JaxEnvironment[AmidarState, AmidarObservation, AmidarInfo, Amida
         self.obs_size = 4 #TODO add as needed
         self.renderer = AmidarRenderer(constants)
 
+    @partial(jax.jit, static_argnums=(0,))
+    def _get_done(self, state: AmidarState) -> bool:
+        return state.lives <= 0
+    
+    @partial(jax.jit, static_argnums=(0,))
+    def _get_env_reward(self, previous_state: AmidarState, state: AmidarState):
+        return state.score - previous_state.score
+    
+    @partial(jax.jit, static_argnums=(0,))
+    def _get_all_rewards(self, previous_state: AmidarState, state: AmidarState) -> jnp.ndarray:
+        if self.reward_funcs is None:
+            return jnp.zeros(1)
+        rewards = jnp.array([reward_func(previous_state, state) for reward_func in self.reward_funcs])
+        return rewards
+    
+    @partial(jax.jit, static_argnums=(0,))
+    def _get_info(self, state: AmidarState, all_rewards: jnp.ndarray) -> AmidarInfo:
+        return AmidarInfo(
+            level=state.level,
+            frame_counter=state.frame_counter,
+            all_rewards=all_rewards,
+        )
+
     def reset(self, key=None) -> Tuple[AmidarObservation, AmidarState]:
         """
         Resets the game state to the initial state.
@@ -876,17 +898,17 @@ class JaxAmidar(JaxEnvironment[AmidarState, AmidarObservation, AmidarInfo, Amida
     def state_space(self) -> spaces.Box:
         return spaces.Box(low=0, high=255, shape=(self.constants.HEIGHT, self.constants.WIDTH, 4), dtype=jnp.uint8)
 
-    # NOTE: added this for compatibility
     def action_space(self) -> spaces.Discrete:
         return spaces.Discrete(len(self.action_set))
 
-    # NOTE: added this for compatibility (see changes from a few weeks ago), it just calls the renderer as a class attribute since that was more comfortable when writing wrappers and such (i.e. easier for me xD)
     @partial(jax.jit, static_argnums=(0,))
     def render(self, state: AmidarState) -> jnp.ndarray:
         return self.renderer.render(state)
 
     @partial(jax.jit, static_argnums=(0,))
     def step(self, state: AmidarState, action: chex.Array) -> Tuple[AmidarObservation, AmidarState, float, bool, AmidarInfo]:
+
+        previous_state = state
             
         def take_step():
             random_key, random_enemies_key = jax.random.split(state.random_key)
@@ -942,14 +964,6 @@ class JaxAmidar(JaxEnvironment[AmidarState, AmidarObservation, AmidarInfo, Amida
 
             level, lives, enemy_positions, enemy_directions, enemy_types, freeze_counter, walked_on_paths, completed_rectangles, player_x, player_y, player_direction, chicken_counter, jump_counter, times_jumped = jax.lax.cond(next_level, activate_next_level, lambda constants, level, lives, enemy_positions, enemy_directions, enemy_types: (level, lives, enemy_positions, enemy_directions, enemy_types, freeze_counter, walked_on_paths, completed_rectangles, player_x, player_y, player_direction, chicken_counter, jump_counter, times_jumped), self.constants, state.level, lives, enemy_positions, enemy_directions, enemy_types)
 
-            # Check for game over condition
-            # If lives are 0, the game is over
-            done, lives = jax.lax.cond(
-                lives <= 0,
-                lambda: (True, 0),
-                lambda: (False, lives)
-            )
-
             new_state = AmidarState(
                 frame_counter=state.frame_counter + 1,  # Increment the frame counter
                 random_key=random_key,
@@ -970,26 +984,27 @@ class JaxAmidar(JaxEnvironment[AmidarState, AmidarObservation, AmidarInfo, Amida
                 jump_counter=jump_counter,
                 times_jumped=times_jumped,
             )
-            env_reward = 0.0
-            info = AmidarInfo(
-                time=jnp.array(0),
-                all_rewards=jnp.array(0.0),
-            )
             
-            observation = self._get_observation(new_state)
-            return observation, new_state, env_reward, done, info
+            return new_state
         
-        # If the game is frozen, just return the current state
         def freeze_game():
-            # Decrement the freeze counter
-            new_state = state._replace(freeze_counter=state.freeze_counter - 1)
+            new_state = state._replace(freeze_counter=state.freeze_counter - 1) # Decrement the freeze counter
             new_state = new_state._replace(frame_counter=state.frame_counter + 1)  # Update the frame counter to ensure it changes with each step
-            return self._get_observation(new_state), new_state, 0.0, False, AmidarInfo(time=jnp.array(0), all_rewards=jnp.array(0.0))
+            return new_state
         
         # Check if the game is frozen
         is_frozen = state.freeze_counter > 0
         # jax.debug.print("Freeze counter: {freeze_counter}", freeze_counter=state.freeze_counter)
-        observation, new_state, env_reward, done, info = jax.lax.cond(is_frozen, freeze_game, take_step)
+        new_state= jax.lax.cond(is_frozen, freeze_game, take_step)
+
+
+        observation = self._get_observation(new_state)
+
+        done = self._get_done(new_state)
+        env_reward = self._get_env_reward(previous_state, new_state)
+        all_rewards = self._get_all_rewards(previous_state, new_state)
+        info = self._get_info(new_state, all_rewards)
+
         return observation, new_state, env_reward, done, info
 
     @partial(jax.jit, static_argnums=(0,))
