@@ -39,6 +39,8 @@ class SpaceInvadersConstants(NamedTuple):
     MAX_ENEMY_BULLETS: int = 3
 
     EXPLOSION_FRAMES: jnp.array = jnp.array([3, 11, 19, 27], dtype=jnp.int32)
+    PLAYER_EXPLOSION_FRAMES: int = 4
+    PLAYER_EXPLOSION_DURATION: int = 126
 
     MOVEMENT_RATE: int = 32
     ENEMY_FIRE_RATE: int = 60
@@ -78,6 +80,7 @@ def get_human_action():
 class SpaceInvadersState(NamedTuple):
     player_x: chex.Array
     player_speed: chex.Array
+    player_dead: int
     step_counter: chex.Array
     player_score: chex.Array
     player_lives: chex.Array
@@ -401,6 +404,7 @@ class JaxSpaceInvaders(JaxEnvironment[SpaceInvadersState, SpaceInvadersObservati
         state = SpaceInvadersState(
             player_x=jnp.array(self.consts.INITIAL_PLAYER_X).astype(jnp.int32),
             player_speed=jnp.array(0.0).astype(jnp.int32),
+            player_dead=0,
             step_counter=jnp.array(0).astype(jnp.int32),
             player_score=jnp.array(0).astype(jnp.int32),
             player_lives=jnp.array(self.consts.INITIAL_LIVES).astype(jnp.int32),
@@ -428,7 +432,7 @@ class JaxSpaceInvaders(JaxEnvironment[SpaceInvadersState, SpaceInvadersObservati
         new_player_x, new_player_speed = self._player_step(state.player_x, state.player_speed, action)
 
         new_player_x, new_player_speed = jax.lax.cond(
-            state.step_counter % 2 == 0,
+            jnp.logical_and(state.step_counter % 2 == 0, state.player_dead == 0),
             lambda _: (new_player_x, new_player_speed),
             lambda _: (state.player_x, state.player_speed),
             operand=None,
@@ -463,6 +467,20 @@ class JaxSpaceInvaders(JaxEnvironment[SpaceInvadersState, SpaceInvadersObservati
             )
         )
 
+        new_player_dead = jax.lax.cond(
+            jnp.logical_and(new_lives != state.player_lives, state.player_dead == 0),
+            lambda _: 1,
+            lambda _: jnp.where(state.player_dead > 0, state.player_dead + 1, state.player_dead),
+            None
+        )
+
+        new_player_dead = jax.lax.cond(
+            new_player_dead > self.consts.PLAYER_EXPLOSION_DURATION,
+            lambda _: 0,
+            lambda _: new_player_dead,
+            None
+        )
+
         step_counter = jax.lax.cond(
             state.step_counter > 255,
             lambda s: jnp.array(0),
@@ -494,6 +512,7 @@ class JaxSpaceInvaders(JaxEnvironment[SpaceInvadersState, SpaceInvadersObservati
         new_state = SpaceInvadersState(
             player_x=new_player_x,
             player_speed=new_player_speed,
+            player_dead=new_player_dead,
             step_counter=step_counter,
             player_score=new_score,
             player_lives=new_lives,
@@ -694,7 +713,7 @@ def load_sprites():
     # Explosions
     explosions = {}
     explosion_files = [
-        "explosion_1", "explosion_2", "explosion_3", "explosion_4", "explosion_purple_a", "explosion_purple_b", "player_explosion_a", "player_explosion_b"
+        "explosion_1", "explosion_2", "explosion_3", "explosion_4", "explosion_purple_a", "explosion_purple_b", "exp_player_1", "exp_player_2"
     ]
 
     for name in explosion_files:
@@ -730,7 +749,18 @@ class SpaceInvadersRenderer(JAXGameRenderer):
         raster = aj.render_at(raster, 0, self.consts.HEIGHT - self.consts.BACKGROUND_SIZE[1], background)
 
         # Load Player
-        frame_player = aj.get_sprite_frame(self.SPRITE_PLAYER, 0)
+        sprite_player = jax.lax.cond(
+            state.player_dead == 0,
+            lambda _: self.SPRITE_PLAYER,
+            lambda _: jnp.where(
+                jnp.floor(state.player_dead / self.consts.PLAYER_EXPLOSION_FRAMES) % 2 == 0,
+                PLAYER_EXPLOSION_A,
+                PLAYER_EXPLOSION_B
+            ),
+            None
+        )
+
+        frame_player = aj.get_sprite_frame(sprite_player, 0)
         raster = aj.render_at(raster, state.player_x - self.consts.PLAYER_SIZE[0], self.consts.PLAYER_Y, frame_player)
 
         # Render bullet every even frame 
