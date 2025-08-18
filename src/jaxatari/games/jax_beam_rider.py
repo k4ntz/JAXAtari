@@ -13,25 +13,12 @@ from jaxatari.renderers import JAXGameRenderer
 import jaxatari.spaces as spaces
 
 """TODOS:
-- Add torpedo shooting -> DONE
-- Add the rest of the enemies -> DONE
-- Merge the renderers --> DONE
-----If the steps above are finished, ask for feedback----
-- Logic Bugs for ships: --> DONE
-    - Green blockers and sentinel should not allow any laser to go through -> DONE
-    - change the yellow chirper ships height --> DONE
-    - spawn rate of green blockers needs to be fixed when sector == 6 && sentinal is active --> might be done
+- spawn rate of green blockers needs to be fixed when sector == 6 && sentinal is active --> might be done
 - Check the sentinal ship constants/Optimize the code/remove unnecessary code
 - Adjust the spawn rate of green blockers in sectors 1 - 5 (currently the sentinel moves faster through the screen than they can spawn) -> somewhat done
-- Add more movement Types for white enemies -> DONE
-- Difficulty Scaling -> DONE
-- Change enemy speeds -> DONE
-- Adjust points according to enemies -> done
 - Documentation
-- Should be playable through script
-- Add Yellow Rejuvinators --> DONE
-- Maybe some environment changes(depending on feedback)
 - White saucers movement needs to be update --> No teleporation and zigzag movement needs to be broader
+- Fix beam movement
 
 Nice to have:
 - Enemies get smaller/bigger according to the 3d rendering"""
@@ -222,16 +209,18 @@ class BeamRiderConstants(NamedTuple):
 
     @classmethod
     def get_beam_positions(cls) -> jnp.ndarray:
-        total_beams = 9
-        draw_indices = jnp.array([0, 2, 3, 4, 5, 6, 8])
-        rel_positions = jnp.linspace(-1.0, 1.0, total_beams)
+        """Get 5 beam positions evenly spaced within screen bounds"""
+        # Simply create 5 evenly spaced beams across the screen width
+        # with reasonable margins from the edges
+        margin = 20  # Distance from screen edges
 
-        center_x = cls.SCREEN_WIDTH / 2
-        bottom_spread = cls.SCREEN_WIDTH * 1.6
+        positions = jnp.linspace(
+            margin,  # Start position (left side with margin)
+            cls.SCREEN_WIDTH - margin,  # End position (right side with margin)
+            cls.NUM_BEAMS  # 5 beams total
+        )
 
-        positions = center_x + rel_positions * (bottom_spread / 2.0)
-        return positions[draw_indices]
-
+        return positions
 
 @struct.dataclass
 class Ship:
@@ -521,34 +510,25 @@ class BeamRiderEnv(JaxEnvironment[BeamRiderState, BeamRiderObservation, BeamRide
         return obs, state, reward, done, info
 
     def _update_ship(self, state: BeamRiderState, action: int) -> BeamRiderState:
-        """Update ship position smoothly using left/right actions"""
+        """Update ship position to move discretely between beams"""
         ship = state.ship
-        speed = 1.5  # adjust this for faster/slower ship
+        current_beam = ship.beam_position
 
-        # Compute new x position:
-        # - Move left if action == 1
-        # - Move right if action == 2
-        # - Clamp within screen bounds
-        new_x = jnp.where(
+        # Calculate new beam position based on action
+        new_beam_position = jnp.where(
             action == 1,  # Left movement
-            jnp.maximum(0, ship.x - speed),
+            jnp.maximum(0, current_beam - 1),  # Move to left beam
             jnp.where(
                 action == 2,  # Right movement
-                jnp.minimum(self.constants.SCREEN_WIDTH - self.constants.SHIP_WIDTH, ship.x + speed),
-                ship.x  # No movement
+                jnp.minimum(self.constants.NUM_BEAMS - 1, current_beam + 1),  # Move to right beam
+                current_beam  # No movement
             )
         )
-        # Calculate ship center position
-        ship_center_x = new_x + self.constants.SHIP_WIDTH // 2
 
-        # Calculate distances to each beam position
-        beam_distances = jnp.abs(self.beam_positions - ship_center_x)
-
-        # Find the closest beam
-        new_beam_position = jnp.argmin(beam_distances)
+        # Calculate new x position - center ship on the beam
+        new_x = self.beam_positions[new_beam_position] - self.constants.SHIP_WIDTH // 2
 
         return state.replace(ship=ship.replace(x=new_x, beam_position=new_beam_position))
-
     def _select_white_saucer_movement_pattern(self, rng_key: chex.PRNGKey) -> int:
         """Select movement pattern for a new white saucer"""
         # Generate random value for pattern selection
@@ -2315,7 +2295,7 @@ class BeamRiderRenderer(JAXGameRenderer):
         return screen
 
     def _draw_3d_grid(self, screen: chex.Array, frame_count: int) -> chex.Array:
-        """Draw 3D grid with 7 animated horizontal lines and 9 vertical beam positions, skipping 2 & 8"""
+        """Draw 3D grid with animated horizontal lines and 5 vertical beam positions"""
 
         height = self.constants.SCREEN_HEIGHT
         width = self.constants.SCREEN_WIDTH
@@ -2348,23 +2328,19 @@ class BeamRiderRenderer(JAXGameRenderer):
         # Draw each horizontal line
         screen = jax.lax.fori_loop(0, num_hlines, draw_hline, screen)
 
-        # === Vertical Lines ===
-        total_beams = 9  # Total line slots (for symmetry)
-        rel_positions = jnp.linspace(-1.0, 1.0, total_beams)
-        draw_indices = jnp.array([0, 2, 3, 4, 5, 6, 8])  # Skip lines 1 and 7 (for spacing)
+        # === Vertical Lines (5 beams) ===
+        # Use the actual beam positions for drawing the grid
+        beam_positions = self.beam_positions
 
         center_x = width / 2
-        bottom_spread = width * 1.6  # Line spread at bottom of screen
         y0 = height - bottom_margin  # Line starts here (bottom)
         y1 = -height * 0.7  # Line vanishes toward horizon (off-screen)
 
         def draw_vline(i, scr):
-            idx = draw_indices[i]
-            rel = rel_positions[idx]
-
-            # Starting and ending x positions for vanishing lines
-            x0 = center_x + rel * (bottom_spread / 2.0)
-            x1 = center_x  # All lines converge toward center top
+            # Starting x position at bottom
+            x0 = beam_positions[i]
+            # Ending x position at top (converge toward center for 3D effect)
+            x1 = center_x + (x0 - center_x) * 0.3  # Converge partially toward center
 
             # Scale y range so lines fade before reaching top_margin
             t_top = (top_margin - y0) / (y1 - y0)
@@ -2393,8 +2369,8 @@ class BeamRiderRenderer(JAXGameRenderer):
 
             return jax.lax.fori_loop(0, num_steps, body_fn, scr)
 
-        # Draw all selected vertical lines
-        screen = jax.lax.fori_loop(0, draw_indices.shape[0], draw_vline, screen)
+        # Draw all 5 vertical beam lines
+        screen = jax.lax.fori_loop(0, self.constants.NUM_BEAMS, draw_vline, screen)
 
         return screen
 
