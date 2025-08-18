@@ -88,11 +88,11 @@ def load_sprites():
                                axis=0)
     UI_NUM_9 = jnp.expand_dims(aj.loadFrame(os.path.join(MODULE_DIR, "tennis_from_scratch/sprites/ui_blue_9.npy")),
                                axis=0)
-    UI_DEUCE = jnp.expand_dims(aj.loadFrame(os.path.join(MODULE_DIR, "tennis_from_scratch/sprites/ui_deuce.npy")),
+    UI_DEUCE = jnp.expand_dims(aj.loadFrame(os.path.join(MODULE_DIR, "tennis_from_scratch/sprites/ui_blue_9.npy")),
                                axis=0)
-    UI_AD_IN = jnp.expand_dims(aj.loadFrame(os.path.join(MODULE_DIR, "tennis_from_scratch/sprites/ui_ad_in.npy")),
+    UI_AD_IN = jnp.expand_dims(aj.loadFrame(os.path.join(MODULE_DIR, "tennis_from_scratch/sprites/ui_blue_9.npy")),
                                axis=0)
-    UI_AD_OUT = jnp.expand_dims(aj.loadFrame(os.path.join(MODULE_DIR, "tennis_from_scratch/sprites/ui_ad_out.npy")),
+    UI_AD_OUT = jnp.expand_dims(aj.loadFrame(os.path.join(MODULE_DIR, "tennis_from_scratch/sprites/ui_blue_9.npy")),
                                 axis=0)
 
     return (BG, switch_blue_and_red(BG), BALL, BALL_SHADOW,
@@ -178,6 +178,9 @@ class TennisRenderer:
          self.UI_NUMBERS_RED, self.UI_DEUCE, self.UI_AD_IN, self.UI_AD_OUT) = load_sprites()
         # use bounding box as mockup
         self.BOUNDING_BOX = get_bounding_box(PLAYER_WIDTH, PLAYER_HEIGHT)
+        self.PLAYER_X_BOX = get_bounding_box(1, 3, border_color=(0, 0, 0, 255))
+        self.ENEMY_X_BOX = get_bounding_box(1, 3, border_color=(0, 0, 0, 255))
+        self.ENEMY_BOX = get_bounding_box(PLAYER_WIDTH, PLAYER_HEIGHT)
 
     def render_number_centered(self, raster, number: int, position, red=False):
         chars = list(str(number))
@@ -216,10 +219,7 @@ class TennisRenderer:
                               frame_ball)
 
         # print("x ball: {:0.2f}., y ball: {:0.2f}, z ball: {:0.2f}, vel: {:0.2f}".format(state.ball_state.ball_x, state.ball_state.ball_y, state.ball_state.ball_z, state.ball_state.ball_velocity_z_fp))
-        print(
-            "x player: {:0.2f}, x ball target: {:0.2f}, y ball: {:0.2f}, y ball target: {:0.2f}, player_side: {:0.2f}".format(
-                state.player_state.player_x, state.ball_state.ball_hit_target_x, state.ball_state.ball_y,
-                state.ball_state.ball_hit_target_y, state.player_state.player_field))
+        print(f"x ball: {state.ball_state.ball_x :0.2f} y ball: {state.ball_state.ball_y :0.2f} x enemy: {state.enemy_state.enemy_x :0.2f} y enemy: {state.enemy_state.enemy_y :0.2f}")
 
         frame_player = aj.get_sprite_frame(self.PLAYER_RED[state.animator_state.player_frame], 0)
         if state.player_state.player_direction == -1:
@@ -245,9 +245,15 @@ class TennisRenderer:
                               state.player_state.player_y + racket_offset[state.animator_state.player_racket_frame],
                               frame_racket_player)
 
+
+
         frame_bounding_box = aj.get_sprite_frame(self.BOUNDING_BOX, 0)
+        frame_enemy_box = aj.get_sprite_frame(self.ENEMY_BOX, 0)
+        enemy_box_pos = state.enemy_state.enemy_x if state.enemy_state.enemy_direction == 1 else state.enemy_state.enemy_x - PLAYER_WIDTH + 2
+        raster = aj.render_at(raster, enemy_box_pos, state.enemy_state.enemy_y, frame_enemy_box)
         bounding_box_pos = state.player_state.player_x if state.player_state.player_direction == 1 else state.player_state.player_x - PLAYER_WIDTH + 2
         raster = aj.render_at(raster, bounding_box_pos, state.player_state.player_y, frame_bounding_box)
+
 
         enemy_pos = state.enemy_state.enemy_x - 2 if state.enemy_state.enemy_direction == 1 else state.enemy_state.enemy_x - 4
         enemy_racket_pos = state.enemy_state.enemy_x - 2 if state.enemy_state.enemy_direction == 1 else state.enemy_state.enemy_x - \
@@ -268,6 +274,13 @@ class TennisRenderer:
         player_x_rec = player_x_rec.at[:, :, 3].set(255)  # Alpha
 
         raster = aj.render_at(raster, state.player_state.player_x, state.player_state.player_y, player_x_rec)
+
+        enemy_x_rec = jnp.zeros((2, 2, 4))
+        enemy_x_rec = enemy_x_rec.at[:, :, 1].set(255)  # Yellow
+        enemy_x_rec = enemy_x_rec.at[:, :, 2].set(255)  # Yellow
+        enemy_x_rec = enemy_x_rec.at[:, :, 3].set(255)  # Alpha
+
+        raster = aj.render_at(raster, state.enemy_state.enemy_x, state.enemy_state.enemy_y, enemy_x_rec)
 
         top_left_rec = jnp.zeros((2, 2, 4))
         top_left_rec = top_left_rec.at[:, :, 1].set(255)  # Yellow
