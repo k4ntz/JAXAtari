@@ -137,6 +137,13 @@ class DonkeyKongConstants(NamedTuple):
     # Barrel spawn timing
     SPAWN_STEP_COUNTER_BARREL: int = 236
 
+    # Scores added if mario doing following things:
+    SCORE_FOR_JUMPING_OVER_BARREL = 100
+    SCORE_FOR_DESTROYING_BARREL = 800
+    SCORE_FOR_REACHING_GOAL = 4100 
+
+    TIMER_REDUTION_DURATION = 128 # at every 128st frame, the timer will be reduced by 100, starting from 5000 "points"
+
 
 class InvisibleWallEachStage(NamedTuple):
     stage: chex.Array
