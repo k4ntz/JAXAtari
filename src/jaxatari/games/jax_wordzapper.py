@@ -2,7 +2,7 @@ import os
 import time
 from functools import partial
 from typing import NamedTuple, Tuple
-import jax.lax
+import jax
 import jax.numpy as jnp
 import chex
 from gymnax.environments import spaces
@@ -781,9 +781,16 @@ class JaxWordZapper(JaxEnvironment[WordZapperState, WordZapperObservation, WordZ
         self.obs_size = 3*4 + 1 + 1
         self.consts = consts or WordZapperConstants()
 
+    # --- public wrapper for randomness ---
+    # def reset_with_random_seed(self) -> Tuple[WordZapperObservation, WordZapperState]:
+    #     seed = int.from_bytes(os.urandom(4), byteorder="little", signed=False)
+    #     key = jax.random.PRNGKey(seed)
+    #     return self.reset(key)
+
     @partial(jax.jit, static_argnums=(0,))
     def reset(self, key: jax.random.PRNGKey = jax.random.PRNGKey(42)) -> Tuple[WordZapperObservation, WordZapperState]:
-        key, sub_word, next_key = jax.random.split(key, 3) # TODO: ask what does this do? why do we need this?
+        key = jax.random.PRNGKey(int(time.time() * 1000) % (2**32 - 1))
+        key, sub_word, next_key = jax.random.split(key, 3)
 
         word_idx = jax.random.randint(sub_word, (), 0, WORD_COUNT, dtype=jnp.int32)
         encoded = ENCODED_WORD_LIST[word_idx]
