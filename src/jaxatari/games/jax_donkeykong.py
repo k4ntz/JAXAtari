@@ -117,7 +117,7 @@ class DonkeyKongConstants(NamedTuple):
     MOVING_DOWN: int = 2
     MOVING_LEFT: int = 3
 
-    # Bar start/end positions
+    # Bar start/end positions -- Level 1
     BAR_LEFT_Y: int = 32
     BAR_RIGHT_Y: int = 120
     BAR_1_LEFT_X: int = 193
@@ -134,6 +134,20 @@ class DonkeyKongConstants(NamedTuple):
     BAR_6_RIGHT_X: int = 60
     BAR_7_LEFT_X: int = 34
     BAR_7_RIGHT_X: int = 34
+
+    # Bar start/end positions -- Level 2
+    LEVEL_2_BAR_LEFT_Y: int = 32
+    LEVEL_2_BAR_RIGHT_Y: int = 127
+    LEVEL_2_BAR_1_LEFT_X: int = 171
+    LEVEL_2_BAR_1_RIGHT_X: int = 171
+    LEVEL_2_BAR_2_LEFT_X: int = 143
+    LEVEL_2_BAR_2_RIGHT_X: int = 143
+    LEVEL_2_BAR_3_LEFT_X: int = 115
+    LEVEL_2_BAR_3_RIGHT_X: int = 115
+    LEVEL_2_BAR_4_LEFT_X: int = 87
+    LEVEL_2_BAR_4_RIGHT_X: int = 87
+    LEVEL_2_BAR_5_LEFT_X: int = 59
+    LEVEL_2_BAR_5_RIGHT_X: int = 59
 
     # Ladder
     LADDER_WIDTH: int = 4
@@ -243,12 +257,26 @@ class JaxDonkeyKong(JaxEnvironment[DonkeyKongState, DonkeyKongObservation, Donke
         self.obs_size = 0
 
     # Bars as lienar functions
-    def bar_linear_equation(self, stage, y):
-        y_1 = self.consts.BAR_LEFT_Y
-        y_2 = self.consts.BAR_RIGHT_Y
+    def bar_linear_equation(self, stage, y, level=1):
+        y_1, y_2 = jax.lax.cond(
+            level==1,
+            lambda _: (self.consts.BAR_LEFT_Y, self.consts.BAR_RIGHT_Y),
+            lambda _: (self.consts.LEVEL_2_BAR_LEFT_Y, self.consts.LEVEL_2_BAR_RIGHT_Y),
+            operand=None
+        )
 
-        x_1_values = [self.consts.BAR_1_LEFT_X, self.consts.BAR_2_LEFT_X, self.consts.BAR_3_LEFT_X, self.consts.BAR_4_LEFT_X, self.consts.BAR_5_LEFT_X, self.consts.BAR_6_LEFT_X, self.consts.BAR_7_LEFT_X]
-        x_2_values = [self.consts.BAR_1_RIGHT_X, self.consts.BAR_2_RIGHT_X, self.consts.BAR_3_RIGHT_X, self.consts.BAR_4_RIGHT_X, self.consts.BAR_5_RIGHT_X, self.consts.BAR_6_RIGHT_X, self.consts.BAR_7_RIGHT_X]
+        x_1_values = jax.lax.cond(
+            level==1,
+            lambda _: [self.consts.BAR_1_LEFT_X, self.consts.BAR_2_LEFT_X, self.consts.BAR_3_LEFT_X, self.consts.BAR_4_LEFT_X, self.consts.BAR_5_LEFT_X, self.consts.BAR_6_LEFT_X, self.consts.BAR_7_LEFT_X],
+            lambda _: [self.consts.LEVEL_2_BAR_1_LEFT_X, self.consts.LEVEL_2_BAR_2_LEFT_X, self.consts.LEVEL_2_BAR_3_LEFT_X, self.consts.LEVEL_2_BAR_4_LEFT_X, self.consts.LEVEL_2_BAR_5_LEFT_X, self.consts.LEVEL_2_BAR_5_LEFT_X, self.consts.LEVEL_2_BAR_5_LEFT_X],
+            operand=None
+        )
+        x_2_values = jax.lax.cond(
+            level==1,
+            lambda _: [self.consts.BAR_1_RIGHT_X, self.consts.BAR_2_RIGHT_X, self.consts.BAR_3_RIGHT_X, self.consts.BAR_4_RIGHT_X, self.consts.BAR_5_RIGHT_X, self.consts.BAR_6_RIGHT_X, self.consts.BAR_7_RIGHT_X],
+            lambda _: [self.consts.LEVEL_2_BAR_1_RIGHT_X, self.consts.LEVEL_2_BAR_2_RIGHT_X, self.consts.LEVEL_2_BAR_3_RIGHT_X, self.consts.LEVEL_2_BAR_4_RIGHT_X, self.consts.LEVEL_2_BAR_5_RIGHT_X, self.consts.LEVEL_2_BAR_5_RIGHT_X, self.consts.LEVEL_2_BAR_5_RIGHT_X],
+            operand=None
+        )
 
         index = stage - 1
         branches = [lambda _, v=val: jnp.array(v) for val in x_1_values]
@@ -264,18 +292,26 @@ class JaxDonkeyKong(JaxEnvironment[DonkeyKongState, DonkeyKongObservation, Donke
 
     @partial(jax.jit, static_argnums=(0,))
     def init_ladders_for_level(self, level: int) -> Ladder:
-        # Ladder positions for level 1
+        # Ladder positions for level 1  --- the last 3 ladders are dummy ladders which do not exist in the real game
+        # this is needed because jax needs same size of array for the Ladders to compile correctly
         Ladder_level_1 = Ladder(
-            stage=jnp.array([6, 5, 5, 4, 4, 4, 3, 3, 3, 2, 2, 1, 1], dtype=jnp.int32),
-            climbable=jnp.array([True, False, True, True, True, False, False, True, True, True, True, False, True]),
-            start_x=jnp.array([59, 77, 74, 102, 104, 106, 134, 132, 130, 158, 161, 185, 185], dtype=jnp.int32),
-            start_y=jnp.array([76, 74, 106, 46, 66, 98, 62, 86, 106, 46, 78, 70, 106], dtype=jnp.int32),
-            end_x=jnp.array([34, 53, 53, 79, 78, 76, 104, 106, 108, 135, 133, 161, 164], dtype=jnp.int32),
-            end_y=jnp.array([76, 74, 106, 46, 66, 98, 62, 86, 106, 46, 78, 70, 106], dtype=jnp.int32),
+            stage=jnp.array([6, 5, 5, 4, 4, 4, 3, 3, 3, 2, 2, 1, 1,                                                     -1, -1, -1], dtype=jnp.int32),
+            climbable=jnp.array([True, False, True, True, True, False, False, True, True, True, True, False, True,      False, False, False]),
+            start_x=jnp.array([59, 77, 74, 102, 104, 106, 134, 132, 130, 158, 161, 185, 185,                            -1, -1, -1], dtype=jnp.int32),
+            start_y=jnp.array([76, 74, 106, 46, 66, 98, 62, 86, 106, 46, 78, 70, 106,                                   -1, -1, -1], dtype=jnp.int32),
+            end_x=jnp.array([34, 53, 53, 79, 78, 76, 104, 106, 108, 135, 133, 161, 164,                                 -1, -1, -1], dtype=jnp.int32),
+            end_y=jnp.array([76, 74, 106, 46, 66, 98, 62, 86, 106, 46, 78, 70, 106,                                     -1, -1, -1], dtype=jnp.int32),
         )
 
         # Ladder positions for level 2
-        Ladder_level_2 = Ladder_level_1
+        Ladder_level_2 = Ladder(
+            stage=jnp.array([4, 4, 4, 4, 3, 3, 3, 3, 2, 2, 2, 2, 1, 1, 1, 1], dtype=jnp.int32),
+            climbable=jnp.array([True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True]),
+            start_x=jnp.array([171, 171, 171, 171, 143, 143, 143, 143, 115, 115, 115, 115, 87, 87, 87, 87], dtype=jnp.int32),
+            start_y=jnp.array([40, 60, 96, 116, 40, 60, 96, 116, 40, 60, 96, 116, 40, 60, 96, 116], dtype=jnp.int32),
+            end_x=jnp.array([143, 143, 143, 143, 115, 115, 115, 155, 87, 87, 87, 87, 59, 59, 59, 59], dtype=jnp.int32),
+            end_y=jnp.array([40, 60, 96, 116, 40, 60, 96, 116, 40, 60, 96, 116, 40, 60, 96, 116], dtype=jnp.int32),
+        )
 
         return jax.lax.cond(
             level == 1,
@@ -293,7 +329,11 @@ class JaxDonkeyKong(JaxEnvironment[DonkeyKongState, DonkeyKongObservation, Donke
             right_end=jnp.array([113, 120, 113, 120, 113, 120], dtype=jnp.int32),
         )
 
-        invisible_wall_level_2 = invisible_wall_level_1
+        invisible_wall_level_2 = InvisibleWallEachStage(
+            stage=jnp.array([6, 5, 4, 3, 2, 1], dtype=jnp.int32),
+            left_end=jnp.array([32, 32, 32, 32, 32, 32], dtype=jnp.int32),
+            right_end=jnp.array([127, 127, 127, 127, 127, 127], dtype=jnp.int32),
+        )
 
         return jax.lax.cond(
             level == 1,
@@ -999,8 +1039,11 @@ class JaxDonkeyKong(JaxEnvironment[DonkeyKongState, DonkeyKongObservation, Donke
         new_state = mario_reached_goal(new_state)
 
         # after mario reached the goal or hit by an enemy --> reset the level, calculate score
-        def reset_game_after_success_or_collision(state):
+        def reset_round_after_success_or_collision(state):
             _, new_state = JaxDonkeyKong.reset(self)
+            new_state = new_state._replace(
+                game_score = state.game_score,
+            )
             new_state_life_loose = new_state._replace(
                 mario_life_counter = state.mario_life_counter - 1,
             )
@@ -1017,7 +1060,7 @@ class JaxDonkeyKong(JaxEnvironment[DonkeyKongState, DonkeyKongObservation, Donke
                 ),
                 operand=None
             )    
-        new_state, game_can_be_resetted = reset_game_after_success_or_collision(new_state)
+        new_state, game_can_be_resetted = reset_round_after_success_or_collision(new_state)       
 
         return jax.lax.cond(
             jnp.logical_and(state.mario_got_hit, game_can_be_resetted == False),
@@ -1313,6 +1356,16 @@ class JaxDonkeyKong(JaxEnvironment[DonkeyKongState, DonkeyKongObservation, Donke
             mario_got_hit = mario_got_hit,
             game_freeze_start=game_freeze_start,
         )
+
+        # reset whole game if mario_life_counter < 0
+        _, resetted_game_state = self.reset()
+        new_state = jax.lax.cond(
+            new_state.mario_life_counter < 0,
+            lambda _: resetted_game_state,
+            lambda _: new_state,
+            operand=None
+        )
+
         
         # Check if game was even started --> with human_action FIRE
         def start_game():
@@ -1642,8 +1695,13 @@ class DonkeyKongRenderer(JAXGameRenderer):
         )
 
         # Scores/ Timer
-        score = state.game_remaining_time
-        show_game_score = False
+        show_game_score = jnp.logical_not(state.game_started)
+        score = jax.lax.cond(
+            show_game_score,
+            lambda _: state.game_score,
+            lambda _: state.game_remaining_time,
+            operand=None
+        )
         def create_score_in_raster(i, raster):
             digit = score // (10 ** i)
             pos_x = self.consts.FIRST_DIGIT_X - self.consts.DISTANCE_DIGIT_X * i
