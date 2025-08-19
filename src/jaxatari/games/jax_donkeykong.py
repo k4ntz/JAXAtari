@@ -87,6 +87,10 @@ class DonkeyKongConstants(NamedTuple):
     MARIO_WALK_SPRITE_2: int = 2
     MARIO_WALK_SPRITE_3: int = 3
 
+    # Donkey Kong Sprite
+    DONKEY_KONG_SPRITE_0: int = 0
+    DONKEY_KONG_SPRITE_1: int = 1
+
     # Mario climbing sprite indexes
     MARIO_CLIMB_SPRITE_0: int = 0
     MARIO_CLIMB_SPRITE_1: int = 1
@@ -173,6 +177,8 @@ class DonkeyKongState(NamedTuple):
     game_timer: int
     game_remaining_time: int
     step_counter: chex.Array
+
+    game_score: int
     
     mario_x: float
     mario_y: float  
@@ -188,7 +194,7 @@ class DonkeyKongState(NamedTuple):
     mario_stage: int
     mario_life_counter: int
 
-    mario_got_hit: bool  # game should freeze if mario got hit by an enemy
+    mario_got_hit: bool  # game should freeze if mario got hit by an enemy or the time is over
     game_freeze_start: int  # mario got hit, start frame
     mario_reached_goal: bool
 
@@ -205,6 +211,8 @@ class DonkeyKongState(NamedTuple):
     hammer_carry_time: int
     hammer_usage_expired: bool
     block_jumping_and_climbing: bool
+
+    donkey_kong_sprite: int
 
 class DonkeyKongObservation(NamedTuple):
     total_score: jnp.ndarray
@@ -649,12 +657,14 @@ class JaxDonkeyKong(JaxEnvironment[DonkeyKongState, DonkeyKongObservation, Donke
                     lambda _: state._replace(
                         mario_x=state.mario_x - self.consts.MARIO_CLIMBING_SPEED,
                         mario_climb_frame_counter= state.mario_climb_frame_counter + 1,
-                        mario_climb_sprite=self.consts.MARIO_CLIMB_SPRITE_1
+                        mario_climb_sprite=self.consts.MARIO_CLIMB_SPRITE_1,
+                        donkey_kong_sprite=self.consts.DONKEY_KONG_SPRITE_0,
                     ),
                     lambda _: state._replace(
                         mario_x=state.mario_x - self.consts.MARIO_CLIMBING_SPEED,
                         mario_climb_frame_counter= state.mario_climb_frame_counter + 1,
-                        mario_climb_sprite=self.consts.MARIO_CLIMB_SPRITE_0
+                        mario_climb_sprite=self.consts.MARIO_CLIMB_SPRITE_0,
+                        donkey_kong_sprite=self.consts.DONKEY_KONG_SPRITE_1,
                     ),
                     operand=None
                 ),
@@ -690,12 +700,14 @@ class JaxDonkeyKong(JaxEnvironment[DonkeyKongState, DonkeyKongObservation, Donke
                     lambda _: state._replace(
                         mario_x=state.mario_x + self.consts.MARIO_CLIMBING_SPEED,
                         mario_climb_frame_counter= state.mario_climb_frame_counter + 1,
-                        mario_climb_sprite=self.consts.MARIO_CLIMB_SPRITE_1
+                        mario_climb_sprite=self.consts.MARIO_CLIMB_SPRITE_1,
+                        donkey_kong_sprite=self.consts.DONKEY_KONG_SPRITE_0,
                     ),
                     lambda _: state._replace(
                         mario_x=state.mario_x + self.consts.MARIO_CLIMBING_SPEED,
                         mario_climb_frame_counter= state.mario_climb_frame_counter + 1,
-                        mario_climb_sprite=self.consts.MARIO_CLIMB_SPRITE_0
+                        mario_climb_sprite=self.consts.MARIO_CLIMB_SPRITE_0,
+                        donkey_kong_sprite=self.consts.DONKEY_KONG_SPRITE_1,
                     ),
                     operand=None
                 ),
@@ -830,6 +842,11 @@ class JaxDonkeyKong(JaxEnvironment[DonkeyKongState, DonkeyKongObservation, Donke
                 lambda _: new_state,
                 operand=None
             )
+
+            # change donkey kong sprite
+            new_state = new_state._replace(
+                donkey_kong_sprite = self.consts.DONKEY_KONG_SPRITE_0,
+            )
             return jax.lax.cond(
                 jnp.logical_and(jnp.logical_and(jnp.logical_and(jnp.logical_and(state.mario_climbing == False, state.mario_jumping == False), state.mario_jumping_wide == False), action == Action.RIGHT), state.mario_reached_goal == False),
                 lambda _: new_state,
@@ -884,6 +901,11 @@ class JaxDonkeyKong(JaxEnvironment[DonkeyKongState, DonkeyKongObservation, Donke
                 ),
                 lambda _: new_state,
                 operand=None
+            )
+
+            # change donkey kong sprite
+            new_state = new_state._replace(
+                donkey_kong_sprite = self.consts.DONKEY_KONG_SPRITE_1,
             )
             return jax.lax.cond(
                 jnp.logical_and(jnp.logical_and(jnp.logical_and(jnp.logical_and(state.mario_climbing == False, state.mario_jumping == False), state.mario_jumping_wide == False), action == Action.LEFT), state.mario_reached_goal == False),
@@ -1175,7 +1197,8 @@ class JaxDonkeyKong(JaxEnvironment[DonkeyKongState, DonkeyKongObservation, Donke
                         moving_direction=barrels.moving_direction.at[barrel_idx].set(self.consts.MOVING_RIGHT),
                         stage=barrels.stage.at[barrel_idx].set(6),
                         reached_the_end=barrels.reached_the_end.at[barrel_idx].set(True),
-                    )
+                    ),
+                    game_score = state.game_score + self.consts.SCORE_FOR_DESTROYING_BARREL,
                 )
 
                 return jax.lax.cond(
@@ -1207,6 +1230,8 @@ class JaxDonkeyKong(JaxEnvironment[DonkeyKongState, DonkeyKongObservation, Donke
             game_remaining_time = 5000,
             frames_since_last_barrel_spawn=jnp.array(0).astype(jnp.int32),
 
+            game_score = 0,
+
             mario_x=self.consts.MARIO_START_X,
             mario_y=self.consts.MARIO_START_Y,
             mario_jumping=False,
@@ -1223,6 +1248,8 @@ class JaxDonkeyKong(JaxEnvironment[DonkeyKongState, DonkeyKongObservation, Donke
             mario_got_hit = False,
             game_freeze_start = -1,
             mario_reached_goal = False,
+
+            donkey_kong_sprite = self.consts.DONKEY_KONG_SPRITE_0,
 
             barrels = BarrelPosition(
                 barrel_x = jnp.array([-1, -1, -1, -1]).astype(jnp.int32),
@@ -1272,10 +1299,10 @@ class JaxDonkeyKong(JaxEnvironment[DonkeyKongState, DonkeyKongObservation, Donke
             lambda _: new_state.game_remaining_time,
             operand=None
         )
-        mario_reached_goal, game_freeze_start = jax.lax.cond(
-            jnp.logical_and(new_state.game_remaining_time == 0, new_state.mario_reached_goal == False),
+        mario_got_hit, game_freeze_start = jax.lax.cond(
+            jnp.logical_and(new_state.game_remaining_time == 0, new_state.mario_got_hit == False),
             lambda _: (True, new_state.step_counter),
-            lambda _: (new_state.mario_reached_goal, -1),
+            lambda _: (new_state.mario_got_hit, new_state.game_freeze_start),
             operand=None
         )
         new_state = new_state._replace(
@@ -1283,7 +1310,7 @@ class JaxDonkeyKong(JaxEnvironment[DonkeyKongState, DonkeyKongObservation, Donke
             frames_since_last_barrel_spawn=new_state.frames_since_last_barrel_spawn+1,
             game_remaining_time=game_remaining_time,
             game_timer=new_state.game_timer+1,
-            mario_reached_goal = mario_reached_goal,
+            mario_got_hit = mario_got_hit,
             game_freeze_start=game_freeze_start,
         )
         
@@ -1496,7 +1523,7 @@ class DonkeyKongRenderer(JAXGameRenderer):
         )
 
         # DonkeyKong
-        frame_donkeyKong = aj.get_sprite_frame(self.SPRITES_DONKEYKONG, 0)
+        frame_donkeyKong = aj.get_sprite_frame(self.SPRITES_DONKEYKONG, state.donkey_kong_sprite)
         raster = aj.render_at(raster, self.consts.DONKEYKONG_X, self.consts.DONKEYKONG_Y, frame_donkeyKong)
 
         # Girlfriend
