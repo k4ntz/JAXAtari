@@ -9,7 +9,8 @@ import sys
 from typing import Tuple
 
 from jaxatari.environment import JaxEnvironment, JAXAtariAction as Action
-from jaxatari.renderers import AtraJaxisRenderer
+from jaxatari.wrappers import JaxatariWrapper
+from jaxatari.renderers import JAXGameRenderer
 
 
 def update_pygame(pygame_screen, raster, SCALING_FACTOR=3, WIDTH=400, HEIGHT=300):
@@ -17,27 +18,32 @@ def update_pygame(pygame_screen, raster, SCALING_FACTOR=3, WIDTH=400, HEIGHT=300
 
     Args:
         pygame_screen: The Pygame screen surface.
-        raster: JAX array of shape (Width, Height, 3/4) containing the image data.
+        raster: JAX array of shape (Height, Width, 3/4) containing the image data.
+        raster: JAX array of shape (Height, Width, 3/4) containing the image data.
         SCALING_FACTOR: Factor to scale the raster for display.
         WIDTH: Expected width of the input raster (used for scaling calculation).
         HEIGHT: Expected height of the input raster (used for scaling calculation).
     """
     pygame_screen.fill((0, 0, 0))
 
-    # Convert JAX array (W, H, C) to NumPy (W, H, C)
+    # Convert JAX array (H, W, C) to NumPy (H, W, C)
+    # Convert JAX array (H, W, C) to NumPy (H, W, C)
     raster_np = np.array(raster)
     raster_np = raster_np.astype(np.uint8)
 
     # Pygame surface needs (W, H). make_surface expects (W, H, C) correctly.
-    frame_surface = pygame.surfarray.make_surface(raster_np)
+    # Transpose from (H, W, C) to (W, H, C) for pygame
+    frame_surface = pygame.surfarray.make_surface(raster_np.transpose(1, 0, 2))
+    # Transpose from (H, W, C) to (W, H, C) for pygame
+    frame_surface = pygame.surfarray.make_surface(raster_np.transpose(1, 0, 2))
 
     # Pygame scale expects target (width, height)
-    target_width_px = int(WIDTH * SCALING_FACTOR)
-    target_height_px = int(HEIGHT * SCALING_FACTOR)
-    # Optional: Adjust scaling if raster size differs from constants
-    if raster_np.shape[0] != WIDTH or raster_np.shape[1] != HEIGHT:
-        target_width_px = int(raster_np.shape[0] * SCALING_FACTOR)
-        target_height_px = int(raster_np.shape[1] * SCALING_FACTOR)
+    # Note: raster_np is (H, W, C), so shape[1] is width and shape[0] is height
+    target_width_px = int(raster_np.shape[1] * SCALING_FACTOR)
+    target_height_px = int(raster_np.shape[0] * SCALING_FACTOR)
+    # Note: raster_np is (H, W, C), so shape[1] is width and shape[0] is height
+    target_width_px = int(raster_np.shape[1] * SCALING_FACTOR)
+    target_height_px = int(raster_np.shape[0] * SCALING_FACTOR)
 
 
     frame_surface_scaled = pygame.transform.scale(
@@ -125,12 +131,21 @@ def get_human_action() -> jax.numpy.ndarray: # Or chex.Array if you use chex
 
 
 
-def load_game_environment(game: str) -> Tuple[JaxEnvironment, AtraJaxisRenderer]:
+def load_game_environment(game: str) -> Tuple[JaxEnvironment, JAXGameRenderer]:
     """
     Dynamically loads a game environment and the renderer from a .py file.
     It looks for a class that inherits from JaxEnvironment.
     """
-    game_file_path = f"src/jaxatari/games/jax_{game.lower()}.py"
+    # Get the project root directory (parent of scripts directory)
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    project_root = os.path.dirname(script_dir)
+    game_file_path = os.path.join(project_root, "src", "jaxatari", "games", f"jax_{game.lower()}.py")
+    
+    # Get the project root directory (parent of scripts directory)
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    project_root = os.path.dirname(script_dir)
+    game_file_path = os.path.join(project_root, "src", "jaxatari", "games", f"jax_{game.lower()}.py")
+    
     if not os.path.exists(game_file_path):
         raise FileNotFoundError(f"Game file not found: {game_file_path}")
 
@@ -164,7 +179,7 @@ def load_game_environment(game: str) -> Tuple[JaxEnvironment, AtraJaxisRenderer]
             print(f"Found game environment: {name}")
             game = obj()  # Instantiate and return
 
-        if inspect.isclass(obj) and issubclass(obj, AtraJaxisRenderer) and obj is not AtraJaxisRenderer:
+        if inspect.isclass(obj) and issubclass(obj, JAXGameRenderer) and obj is not JAXGameRenderer:
             print(f"Found renderer: {name}")
             renderer = obj()
 
@@ -172,5 +187,50 @@ def load_game_environment(game: str) -> Tuple[JaxEnvironment, AtraJaxisRenderer]
         raise ImportError(f"No class found in {game_file_path} that inherits from JaxEnvironment")
 
     return game, renderer
+
+def load_game_mod(game: str, mod: str) -> JaxEnvironment:
+    """
+    Dynamically loads a game mod from a .py file.
+    It looks for a class that inherits from JaxEnvironment.
+    """
+    # Get the project root directory (parent of scripts directory)
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    project_root = os.path.dirname(script_dir)
+    mod_file_path = os.path.join(project_root, "src", "jaxatari", "games", "mods", f"{game.lower()}_mods.py")
+    
+    if not os.path.exists(mod_file_path):
+        raise FileNotFoundError(f"Mod file not found: {mod_file_path}")
+
+    module_name = os.path.splitext(os.path.basename(mod_file_path))[0]
+
+    # Add the directory of the mod file to sys.path to handle relative imports within the mod file
+    mod_dir = os.path.dirname(os.path.abspath(mod_file_path))
+    if mod_dir not in sys.path:
+        sys.path.insert(0, mod_dir)
+
+    spec = importlib.util.spec_from_file_location(module_name, mod_file_path)
+    if spec is None:
+        raise ImportError(f"Could not load spec for module {module_name} from {mod_file_path}")
+
+    mod_module = importlib.util.module_from_spec(spec)
+    try:
+        spec.loader.exec_module(mod_module)
+    except Exception as e:
+        if mod_dir in sys.path and sys.path[0] == mod_dir:  # Clean up sys.path if we added to it
+            sys.path.pop(0)
+        raise ImportError(f"Could not execute module {module_name}: {e}")
+
+    if mod_dir in sys.path and sys.path[0] == mod_dir:  # Clean up sys.path if we added to it
+        sys.path.pop(0)
+
+    # Find the class that inherits from JaxatariWrapper
+    for name, obj in inspect.getmembers(mod_module):
+        if inspect.isclass(obj) and issubclass(obj, JaxatariWrapper) and obj is not JaxatariWrapper:
+            if name.lower() != mod.lower():
+                continue
+            print(f"Found game mod: {name}")
+            return obj  # return the mod class
+
+    raise ImportError(f"No class found in {mod_file_path} that inherits from JaxatariWrapper")
 
 

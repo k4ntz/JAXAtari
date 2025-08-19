@@ -2,12 +2,25 @@ import jax
 import jax.numpy as jnp
 import pytest
 import jaxatari
+import ale_py
 from jaxatari.core import list_available_games
 from jaxatari.environment import JAXAtariAction
 from jaxatari.spaces import Space, Discrete, Box, Dict, Tuple, stack_space
-from jaxatari.wrappers import AtariWrapper, ObjectCentricWrapper, PixelAndObjectCentricWrapper, FlattenObservationWrapper, LogWrapper, MultiRewardLogWrapper
+from jaxatari.wrappers import AtariWrapper
+import gymnasium as gym
+import numpy as np
+
+# TODO: automate this mapping
+ALE_GAME_MAP = {
+    "pong": "Pong-v5",
+    #"breakout": "Breakout-v5", TODO: commented out because of the action space mismatch
+    "seaquest": "Seaquest-v5",
+    "kangaroo": "Kangaroo-v5",
+    # Add more mappings as needed
+}
 
 
+@pytest.mark.parametrize("game_name", list_available_games())
 def test_game_basic_functionality(game_name: str):
     """Test basic functionality of a game with 100 steps."""
     # Create environment
@@ -59,6 +72,7 @@ def test_game_basic_functionality(game_name: str):
     assert isinstance(total_reward, float), f"Total reward should be float for {game_name}"
 
 
+@pytest.mark.parametrize("game_name", list_available_games())
 def test_game_observation_consistency(game_name: str):
     """Test that observations are consistent across steps for a game."""
     env = jaxatari.make(game_name)
@@ -90,6 +104,7 @@ def test_game_observation_consistency(game_name: str):
             break
 
 
+@pytest.mark.parametrize("game_name", list_available_games())
 def test_game_state_transitions(game_name: str):
     """Test that state transitions are working correctly for a game."""
     env = jaxatari.make(game_name)
@@ -115,6 +130,7 @@ def test_game_state_transitions(game_name: str):
             break
 
 
+@pytest.mark.parametrize("game_name", list_available_games())
 def test_game_reward_consistency(game_name: str):
     """Test that rewards are consistent and reasonable for a game."""
     env = jaxatari.make(game_name)
@@ -151,6 +167,7 @@ def test_game_reward_consistency(game_name: str):
     assert len(rewards) > 0, f"Should have collected rewards for {game_name}"
 
 
+@pytest.mark.parametrize("game_name", list_available_games())
 def test_game_render_functionality(game_name: str):
     """Test that the render function works correctly for a game."""
     env = jaxatari.make(game_name)
@@ -174,6 +191,7 @@ def test_game_render_functionality(game_name: str):
     assert rendered_image.ndim >= 2, f"Rendered image should have at least 2 dimensions for {game_name}"
 
 
+@pytest.mark.parametrize("game_name", list_available_games())
 def test_game_observation_space(game_name: str):
     """Test that the observation space is correctly defined for a game."""
     env = jaxatari.make(game_name)
@@ -185,6 +203,7 @@ def test_game_observation_space(game_name: str):
     assert sample_obs is not None, f"Observation space sample should not be None for {game_name}"
 
 
+@pytest.mark.parametrize("game_name", list_available_games())
 def test_game_image_space(game_name: str):
     """Test that the image space is correctly defined for a game."""
     env = jaxatari.make(game_name)
@@ -196,6 +215,7 @@ def test_game_image_space(game_name: str):
     assert sample_image is not None, f"Image space sample should not be None for {game_name}"
 
 
+@pytest.mark.parametrize("game_name", list_available_games())
 def test_game_obs_to_flat_array(game_name: str):
     """Test that the obs_to_flat_array function works correctly for a game."""
     env = jaxatari.make(game_name)
@@ -207,6 +227,7 @@ def test_game_obs_to_flat_array(game_name: str):
     assert flat_obs.ndim == 1, f"Flat observation should be 1-dimensional for {game_name}"
 
 
+@pytest.mark.parametrize("game_name", list_available_games())
 def test_game_basic_wrapper_compatibility(game_name: str):
     """Test basic wrapper compatibility for a game."""
     env = jaxatari.make(game_name)
@@ -220,6 +241,53 @@ def test_game_basic_wrapper_compatibility(game_name: str):
     obs, state, reward, done, info = atari_wrapper.step(state, action)
     assert obs is not None, f"AtariWrapper step should return valid observation for {game_name}"
     assert state is not None, f"AtariWrapper step should return valid state for {game_name}"
+
+
+@pytest.mark.parametrize("game_name", list_available_games())
+def test_game_jit_compatibility(game_name: str):
+    """Test that games work correctly with JAX JIT compilation."""
+    env = jaxatari.make(game_name)
+    key = jax.random.PRNGKey(0)
+    
+    # JIT the reset and step functions
+    jitted_reset = jax.jit(env.reset)
+    jitted_step = jax.jit(env.step)
+    
+    # Test JIT reset
+    obs, state = jitted_reset(key)
+    assert obs is not None
+    assert state is not None
+    
+    # Test JIT step
+    action = env.action_space().sample(key)
+    obs, state, reward, done, info = jitted_step(state, action)
+    assert obs is not None
+    assert state is not None
+
+
+@pytest.mark.parametrize("game_name", list_available_games())
+def test_game_deterministic_behavior(game_name: str):
+    """Test that games produce deterministic results with same key and actions."""
+    env = jaxatari.make(game_name)
+    key = jax.random.PRNGKey(42)
+    
+    # Run two identical episodes
+    obs1, state1 = env.reset(key)
+    obs2, state2 = env.reset(key)
+    
+    # States should be identical
+    assert jax.tree_util.tree_all(jax.tree.map(jnp.array_equal, state1, state2))
+    
+    # Run same sequence of actions
+    actions = [0, 1, 2, 0, 1]  # Fixed action sequence
+    for action in actions:
+        obs1, state1, reward1, done1, info1 = env.step(state1, action)
+        obs2, state2, reward2, done2, info2 = env.step(state2, action)
+        
+        # Results should be identical
+        assert jax.tree_util.tree_all(jax.tree.map(jnp.array_equal, state1, state2))
+        assert jnp.array_equal(reward1, reward2)
+        assert jnp.array_equal(done1, done2)
 
 
 def test_jaxatari_action_constants():
@@ -282,8 +350,11 @@ def test_spaces_functionality():
     assert box_space.contains(sample)
     
     low, high = box_space.range()
-    assert jnp.array_equal(low, jnp.array(0))
-    assert jnp.array_equal(high, jnp.array(1))
+    # The low and high values should be arrays with the same shape as the space
+    assert low.shape == (3, 4)
+    assert high.shape == (3, 4)
+    assert jnp.all(low == 0)
+    assert jnp.all(high == 1)
     
     # Test Dict space
     dict_space = Dict({
@@ -340,205 +411,54 @@ def test_game_names_are_valid():
         assert game_name.replace('_', '').isalnum(), f"Game name '{game_name}' should contain only alphanumeric characters and underscores"
 
 
-def test_game_jit_compatibility(game_name: str):
-    """Test that games work correctly with JAX JIT compilation."""
-    env = jaxatari.make(game_name)
-    key = jax.random.PRNGKey(0)
-    
-    # JIT the reset and step functions
-    jitted_reset = jax.jit(env.reset)
-    jitted_step = jax.jit(env.step)
-    
-    # Test JIT reset
-    obs, state = jitted_reset(key)
-    assert obs is not None
-    assert state is not None
-    
-    # Test JIT step
-    action = env.action_space().sample(key)
-    obs, state, reward, done, info = jitted_step(state, action)
-    assert obs is not None
-    assert state is not None
+def test_jaxatari_vs_ale_image_and_action_space():
+    for jax_name, ale_name in ALE_GAME_MAP.items():
+        # JAXAtari env
+        jax_env = jaxatari.make(jax_name)
+        import jax
+        key = jax.random.PRNGKey(0)
+        jax_obs, jax_state = jax_env.reset(key)
+        jax_frame = jax_env.render(jax_state)
+        assert isinstance(jax_frame, jnp.ndarray)
 
+        # ALE env
+        ale_env = gym.make(f"ALE/{ale_name}", render_mode="rgb_array")
+        ale_obs, _ = ale_env.reset(seed=0)
+        ale_frame = ale_env.render()
+        assert isinstance(ale_frame, np.ndarray)
 
-def test_game_deterministic_behavior(game_name: str):
-    """Test that games produce deterministic results with same key and actions."""
-    env = jaxatari.make(game_name)
-    key = jax.random.PRNGKey(42)
-    
-    # Run two identical episodes
-    obs1, state1 = env.reset(key)
-    obs2, state2 = env.reset(key)
-    
-    # States should be identical
-    assert jax.tree_util.tree_all(jax.tree.map(jnp.array_equal, state1, state2))
-    
-    # Run same sequence of actions
-    actions = [0, 1, 2, 0, 1]  # Fixed action sequence
-    for action in actions:
-        obs1, state1, reward1, done1, info1 = env.step(state1, action)
-        obs2, state2, reward2, done2, info2 = env.step(state2, action)
-        
-        # Results should be identical
-        assert jax.tree_util.tree_all(jax.tree.map(jnp.array_equal, state1, state2))
-        assert jnp.array_equal(reward1, reward2)
-        assert jnp.array_equal(done1, done2)
+        # Compare image shapes
+        assert jax_frame.shape == ale_frame.shape, (
+            f"Image shape mismatch for {jax_name}: "
+            f"JAXAtari {jax_frame.shape} vs ALE {ale_frame.shape}"
+        )
+        assert jax_frame.dtype == ale_frame.dtype, (
+            f"Image dtype mismatch for {jax_name}: "
+            f"JAXAtari {jax_frame.dtype} vs ALE {ale_frame.dtype}"
+        )
 
+        # Compare action spaces
+        jax_action_space = jax_env.action_space()
+        ale_action_space = ale_env.action_space
 
-def run_all_game_tests():
-    """Run tests for all available games."""
-    print("Running tests for all available games...")
-    available_games = list_available_games()
-    print(f"Found {len(available_games)} games: {available_games}")
-    passed_tests = 0
-    failed_tests = 0
-    total_tests = 0
-    for game_name in available_games:
-        print(f"\n--- Testing {game_name} ---")
-        total_tests += 1
-        try:
-            test_game_basic_functionality(game_name)
-            print(f"✓ {game_name} basic functionality: PASSED")
-            passed_tests += 1
-        except Exception as e:
-            print(f"✗ {game_name} basic functionality: FAILED - {e}")
-            failed_tests += 1
-        total_tests += 1
-        try:
-            test_game_observation_consistency(game_name)
-            print(f"✓ {game_name} observation consistency: PASSED")
-            passed_tests += 1
-        except Exception as e:
-            print(f"✗ {game_name} observation consistency: FAILED - {e}")
-            failed_tests += 1
-        total_tests += 1
-        try:
-            test_game_state_transitions(game_name)
-            print(f"✓ {game_name} state transitions: PASSED")
-            passed_tests += 1
-        except Exception as e:
-            print(f"✗ {game_name} state transitions: FAILED - {e}")
-            failed_tests += 1
-        total_tests += 1
-        try:
-            test_game_reward_consistency(game_name)
-            print(f"✓ {game_name} reward consistency: PASSED")
-            passed_tests += 1
-        except Exception as e:
-            print(f"✗ {game_name} reward consistency: FAILED - {e}")
-            failed_tests += 1
-        total_tests += 1
-        try:
-            test_game_render_functionality(game_name)
-            print(f"✓ {game_name} render functionality: PASSED")
-            passed_tests += 1
-        except Exception as e:
-            print(f"✗ {game_name} render functionality: FAILED - {e}")
-            failed_tests += 1
-        total_tests += 1
-        try:
-            test_game_observation_space(game_name)
-            print(f"✓ {game_name} observation space: PASSED")
-            passed_tests += 1
-        except Exception as e:
-            print(f"✗ {game_name} observation space: FAILED - {e}")
-            failed_tests += 1
-        total_tests += 1
-        try:
-            test_game_image_space(game_name)
-            print(f"✓ {game_name} image space: PASSED")
-            passed_tests += 1
-        except Exception as e:
-            print(f"✗ {game_name} image space: FAILED - {e}")
-            failed_tests += 1
-        total_tests += 1
-        try:
-            test_game_obs_to_flat_array(game_name)
-            print(f"✓ {game_name} obs_to_flat_array: PASSED")
-            passed_tests += 1
-        except Exception as e:
-            print(f"✗ {game_name} obs_to_flat_array: FAILED - {e}")
-            failed_tests += 1
-        total_tests += 1
-        try:
-            test_game_basic_wrapper_compatibility(game_name)
-            print(f"✓ {game_name} basic wrapper compatibility: PASSED")
-            passed_tests += 1
-        except Exception as e:
-            print(f"✗ {game_name} basic wrapper compatibility: FAILED - {e}")
-            failed_tests += 1
-        total_tests += 1
-        try:
-            test_game_jit_compatibility(game_name)
-            print(f"✓ {game_name} JIT compatibility: PASSED")
-            passed_tests += 1
-        except Exception as e:
-            print(f"✗ {game_name} JIT compatibility: FAILED - {e}")
-            failed_tests += 1
-        total_tests += 1
-        try:
-            test_game_deterministic_behavior(game_name)
-            print(f"✓ {game_name} deterministic behavior: PASSED")
-            passed_tests += 1
-        except Exception as e:
-            print(f"✗ {game_name} deterministic behavior: FAILED - {e}")
-            failed_tests += 1
-    # Test general functionality
-    print(f"\n--- Testing general functionality ---")
-    
-    total_tests += 1
-    try:
-        test_all_games_available()
-        print("✓ All games available: PASSED")
-        passed_tests += 1
-    except Exception as e:
-        print(f"✗ All games available: FAILED - {e}")
-        failed_tests += 1
-    
-    total_tests += 1
-    try:
-        test_game_names_are_valid()
-        print("✓ Game names are valid: PASSED")
-        passed_tests += 1
-    except Exception as e:
-        print(f"✗ Game names are valid: FAILED - {e}")
-        failed_tests += 1
-    
-    # Test JAXAtariAction constants
-    total_tests += 1
-    try:
-        test_jaxatari_action_constants()
-        print("✓ JAXAtariAction constants: PASSED")
-        passed_tests += 1
-    except Exception as e:
-        print(f"✗ JAXAtariAction constants: FAILED - {e}")
-        failed_tests += 1
-    
-    # Test spaces functionality
-    total_tests += 1
-    try:
-        test_spaces_functionality()
-        print("✓ Spaces functionality: PASSED")
-        passed_tests += 1
-    except Exception as e:
-        print(f"✗ Spaces functionality: FAILED - {e}")
-        failed_tests += 1
-    
-    # Print summary
-    print(f"\n--- Test Summary ---")
-    print(f"Total tests: {total_tests}")
-    print(f"Passed: {passed_tests}")
-    print(f"Failed: {failed_tests}")
-    print(f"Success rate: {passed_tests/total_tests*100:.1f}%")
-    
-    if failed_tests > 0:
-        return False
-    else:
-        print(f"\nAll tests passed!")
-        return True
+        assert hasattr(jax_action_space, "n") and hasattr(ale_action_space, "n")
+        assert jax_action_space.n == ale_action_space.n, (
+            f"Action space size mismatch for {jax_name}: "
+            f"JAXAtari {jax_action_space.n} vs ALE {ale_action_space.n}"
+        )
+
+        # Optionally, compare action meanings if available
+        if hasattr(ale_env.unwrapped, "get_action_meanings"):
+            ale_meanings = ale_env.unwrapped.get_action_meanings()
+            if hasattr(jax_env, "get_action_meanings"):
+                jax_meanings = jax_env.get_action_meanings()
+                assert jax_meanings == ale_meanings, (
+                    f"Action meanings mismatch for {jax_name}: "
+                    f"JAXAtari {jax_meanings} vs ALE {ale_meanings}"
+                )
+
+        ale_env.close()
 
 
 if __name__ == "__main__":
-    # Run all tests when executed directly
-    success = run_all_game_tests()
-    exit(0 if success else 1)
+    pytest.main([__file__])

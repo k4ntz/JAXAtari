@@ -6,19 +6,35 @@ import jax
 import jax.random as jrandom
 import numpy as np
 
-from utils import get_human_action, load_game_environment, update_pygame
+from jaxatari.environment import JAXAtariAction
+from utils import get_human_action, load_game_environment, load_game_mod, update_pygame
 
 UPSCALE_FACTOR = 4
+
+# Map action names to their integer values
+ACTION_NAMES = {
+    v: k
+    for k, v in vars(JAXAtariAction).items()
+    if not k.startswith("_") and isinstance(v, int)
+}
+
 
 def main():
     parser = argparse.ArgumentParser(
         description="Play a JAXAtari game, record your actions or replay them."
     )
     parser.add_argument(
-        "-g", "--game",
+        "-g",
+        "--game",
         type=str,
         required=True,
-        help="Path to the Python file containing the game environment class (e.g., ./games/JaxFreeway.py).",
+        help="Name of the game to play (e.g. 'freeway', 'pong'). The game must be in the src/jaxatari/games directory.",
+    )
+    parser.add_argument(
+        "-m", "--mod",
+        type=str,
+        required=False,
+        help="Name of the mod class.",
     )
 
     mode_group = parser.add_mutually_exclusive_group(required=False)
@@ -51,6 +67,12 @@ def main():
         default=60,
         help="Frame rate for the game.",
     )
+    parser.add_argument(
+        "-v",
+        "--verbose",
+        action="store_true",
+        help="Verbose mode.",
+    )
 
     args = parser.parse_args()
 
@@ -58,6 +80,9 @@ def main():
     # Load the game environment
     try:
         env, renderer = load_game_environment(args.game)
+        if args.mod is not None:
+            mod = load_game_mod(args.game, args.mod)
+            env = mod(env)
 
         if renderer is None:
             execute_without_rendering = True
@@ -81,7 +106,9 @@ def main():
         pygame.init()
         pygame.display.set_caption(f"JAXAtari Game {args.game}")
         env_render_shape = jitted_render(state).shape[:2]
-        window = pygame.display.set_mode((env_render_shape[0] * UPSCALE_FACTOR, env_render_shape[1] * UPSCALE_FACTOR))
+        window = pygame.display.set_mode(
+            (env_render_shape[1] * UPSCALE_FACTOR, env_render_shape[0] * UPSCALE_FACTOR)
+        )
         clock = pygame.time.Clock()
 
     action_space = env.action_space()
@@ -99,20 +126,23 @@ def main():
             save_data = np.load(f, allow_pickle=True).item()
 
             # Extract saved data
-            actions_array = save_data['actions']
-            seed = save_data['seed']
-            loaded_frame_rate = save_data['frame_rate']
+            actions_array = save_data["actions"]
+            seed = save_data["seed"]
+            loaded_frame_rate = save_data["frame_rate"]
 
             frame_rate = loaded_frame_rate
 
             # Reset environment with the saved seed
             key = jrandom.PRNGKey(seed)
             obs, state = jitted_reset(key)
-        
+
         # loop over all the actions and play the game
         for action in actions_array:
             # Convert numpy action to JAX array
             action = jax.numpy.array(action, dtype=jax.numpy.int32)
+            if args.verbose:
+                print(f"Action: {ACTION_NAMES[int(action)]} ({int(action)})")
+
             obs, state, reward, done, info = jitted_step(state, action)
             image = jitted_render(state)
             update_pygame(window, image, UPSCALE_FACTOR, 160, 210)
@@ -137,9 +167,9 @@ def main():
                 running = False
                 continue
             elif event.type == pygame.KEYDOWN:
-                if event.key == pygame.K_p: # pause
+                if event.key == pygame.K_p:  # pause
                     pause = not pause
-                elif event.key == pygame.K_r: # reset
+                elif event.key == pygame.K_r:  # reset
                     obs, state = jitted_reset(key)
                 elif event.key == pygame.K_f:
                     frame_by_frame = not frame_by_frame
@@ -179,7 +209,6 @@ def main():
             update_pygame(window, image, UPSCALE_FACTOR, 160, 210)
 
             clock.tick(frame_rate)
-
 
     if args.record:
         # Convert dictionary to array of actions
