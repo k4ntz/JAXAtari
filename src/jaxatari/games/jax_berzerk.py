@@ -907,8 +907,8 @@ class JaxBerzerk(JaxEnvironment[BerzerkState, BerzerkObservation, BerzerkInfo, B
             )
 
             enemy_bullet_hits_player = jax.vmap(
-                lambda b_pos, b_size: rects_overlap(b_pos, b_size, new_pos, self.consts.PLAYER_SIZE)
-            )(enemy_bullets, enemy_bullet_sizes)
+                lambda b_pos, b_size, b_active: rects_overlap(b_pos, b_size, new_pos, self.consts.PLAYER_SIZE) & b_active
+            )(enemy_bullets, enemy_bullet_sizes, enemy_bullet_active)
 
             hit_by_enemy_bullet = jnp.any(enemy_bullet_hits_player)
 
@@ -1020,15 +1020,15 @@ class JaxBerzerk(JaxEnvironment[BerzerkState, BerzerkObservation, BerzerkInfo, B
                 return self.object_hits_enemy(bullet_pos, bullet_size, enemy_pos)
             
             # 6b. Check collision of enemy bullets with other enemies (friendly fire)
-            def enemy_bullet_hits_enemy(bullet_pos, bullet_size, target_pos, shooter_pos):
+            def enemy_bullet_hits_enemy(bullet_pos, bullet_size, target_pos, shooter_pos, active):
                 # Treffer, wenn Rechtecke überlappen UND nicht auf sich selbst schießen
-                return rects_overlap(bullet_pos, bullet_size, target_pos, jnp.array(self.consts.ENEMY_SIZE, dtype=jnp.float32)) & ~jnp.all(target_pos == shooter_pos)
+                return rects_overlap(bullet_pos, bullet_size, target_pos, jnp.array(self.consts.ENEMY_SIZE, dtype=jnp.float32)) & active & ~jnp.all(target_pos == shooter_pos)
 
             enemy_friendly_fire_hits = jax.vmap(
-                lambda bullet_pos, bullet_size, shooter_pos: jax.vmap(
-                    lambda target_pos: enemy_bullet_hits_enemy(bullet_pos, bullet_size, target_pos, shooter_pos)
+                lambda bullet_pos, bullet_size, shooter_pos, active: jax.vmap(
+                    lambda target_pos: enemy_bullet_hits_enemy(bullet_pos, bullet_size, target_pos, shooter_pos, active)
                 )(updated_enemy_pos)
-            )(enemy_bullets, enemy_bullet_sizes, updated_enemy_pos)
+            )(enemy_bullets, enemy_bullet_sizes, updated_enemy_pos, enemy_bullet_active)
 
             enemy_hit_by_friendly_fire = jnp.any(enemy_friendly_fire_hits, axis=0)  # (NUM_ENEMIES,)
 
