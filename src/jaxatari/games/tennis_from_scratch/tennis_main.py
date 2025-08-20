@@ -134,14 +134,14 @@ class TennisState(NamedTuple):
         jnp.array(1)
     )
     ball_state: BallState = BallState(  # all ball-related data
-        jnp.array(GAME_WIDTH / 2.0 - 2.5),
+        jnp.array(GAME_WIDTH / 2.0 - BALL_WIDTH / 2),
         jnp.array(GAME_OFFSET_TOP),
         jnp.array(0.0),
         jnp.array(0.0),
         jnp.array(0.0),
         jnp.array(0.0),
         jnp.array(0.0),
-        jnp.array(GAME_WIDTH / 2.0 - 2.5),
+        jnp.array(GAME_WIDTH / 2.0 - BALL_WIDTH / 2),
         jnp.array(GAME_OFFSET_TOP),
         jnp.array(0.0),
         jnp.array(0.0),
@@ -426,14 +426,14 @@ def check_score(state: TennisState) -> TennisState:
                 jnp.array(1)
             ),
             BallState(
-                jnp.array(FRAME_WIDTH / 2.0 - 2.5),
+                jnp.array(FRAME_WIDTH / 2.0 - BALL_WIDTH / 2),
                 ball_spawn_y,
                 jnp.array(0.0),
                 jnp.array(0.0),
                 jnp.array(0.0),
                 jnp.array(0.0),
                 jnp.array(0.0),
-                jnp.array(GAME_WIDTH / 2.0 - 2.5),
+                jnp.array(GAME_WIDTH / 2.0 - BALL_WIDTH / 2),
                 jnp.array(GAME_OFFSET_TOP),
                 jnp.array(0.0),
                 jnp.array(0.0),
