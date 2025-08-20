@@ -14,7 +14,6 @@ from jaxatari.environment import JaxEnvironment, JAXAtariAction as Action
 
 class WordZapperConstants(NamedTuple) :
     # Constants for game environment
-    MAX_ASTEROIDS_COUNT = 6 #TODO not sure about value
 
     # define object orientations
     FACE_LEFT = -1
@@ -26,7 +25,6 @@ class WordZapperConstants(NamedTuple) :
 
     # Object sizes (width, height)
     PLAYER_SIZE = (16, 16)
-    ASTEROID_SIZE = (8, 7)
     MISSILE_SIZE = (8, 1)
     ZAPPER_SIZE = (8, 1)
     LETTER_SIZE = (8, 8)
@@ -100,21 +98,17 @@ STATE_TRANSLATOR: dict = {
     1: "player_y",
     2: "player_speed",
     3: "cooldown_timer",
-    4: "asteroid_x",
-    5: "asteroid_y",
-    6: "asteroid_speed",
-    7: "asteroid_alive",
-    8: "letters_x",
-    9: "letters_y",
-    10: "letters_char",
-    11: "letters_alive",
-    12: "letters_speed",
-    13: "current_word",
-    14: "current_letter_index",
-    15: "player_score",
-    16: "timer",
-    17: "step_counter",
-    18: "buffer",
+    4: "letters_x",
+    5: "letters_y",
+    6: "letters_char",
+    7: "letters_alive",
+    8: "letters_speed",
+    9: "current_word",
+    10: "current_letter_index",
+    11: "player_score",
+    12: "timer",
+    13: "step_counter",
+    14: "buffer",
 }
 
 class WordZapperState(NamedTuple):
@@ -124,14 +118,7 @@ class WordZapperState(NamedTuple):
     player_direction: chex.Array
     cooldown_timer: chex.Array
 
-    asteroid_x: chex.Array
-    asteroid_y: chex.Array
-    asteroid_speed: chex.Array
-    asteroid_alive: chex.Array
-    asteroid_positions: (
-        chex.Array
-    ) # (12, 3) array for asteroids - separated into 4 lanes, 3 slots per lane [left to right]
-
+    
     letters_x: chex.Array # letters at the top
     letters_y: chex.Array
     letters_char: chex.Array
@@ -174,7 +161,6 @@ class EntityPosition(NamedTuple):
 
 class WordZapperObservation(NamedTuple):
     player: EntityPosition
-    asteroids: jnp.ndarray  # Shape (12, 5) - 12 asteroids each with x,y,w,h,active
     letters: jnp.ndarray # Shape (27, 5) - 27 letters+special each with x,y,w,h,active
 
     letters_char: jnp.ndarray 
@@ -819,12 +805,7 @@ class JaxWordZapper(JaxEnvironment[WordZapperState, WordZapperObservation, WordZ
             player_direction=jnp.array(0),
             cooldown_timer=jnp.array(0),
 
-            asteroid_x=jnp.array(0),
-            asteroid_y=jnp.array(0),
-            asteroid_speed=jnp.array(0),
-            asteroid_alive=jnp.array(0),
-            asteroid_positions=jnp.zeros((self.consts.MAX_ASTEROIDS_COUNT, 3)),
-
+            
             enemy_positions=enemy_positions_init,
             enemy_active=enemy_active_init,
             enemy_global_spawn_timer=jnp.array(60),
@@ -882,8 +863,6 @@ class JaxWordZapper(JaxEnvironment[WordZapperState, WordZapperObservation, WordZ
                 pos[2] != 0, # active flag
             ])
 
-        # Apply conversion to asteroid positions
-        asteroids = jax.vmap(lambda pos: convert_to_entity(pos, self.consts.ASTEROID_SIZE))(state.asteroid_positions)
         
         # Enemies
         def convert_enemy(pos, active):
@@ -931,7 +910,6 @@ class JaxWordZapper(JaxEnvironment[WordZapperState, WordZapperObservation, WordZ
 
         return WordZapperObservation(
             player=player,
-            asteroids=asteroids,
             enemies=enemies,
             letters=letters,
             letters_char=state.letters_char,
