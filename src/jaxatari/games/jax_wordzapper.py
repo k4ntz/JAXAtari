@@ -19,8 +19,6 @@ class WordZapperConstants(NamedTuple) :
     # Player 
     PLAYER_START_X = 80
     PLAYER_START_Y = 110
-    PLAYER_COOLDOWN_TIME = 100 # TODO find coorrect values
-    PLAYER_COOLDOWN = 2 # cooldown amount each game loop 
 
     # Object sizes (width, height)
     PLAYER_SIZE = (16, 12)
@@ -45,6 +43,7 @@ class WordZapperConstants(NamedTuple) :
     LETTER_RESET_X = 5 # at this coordinate letters reset back to right ! only coordinates change not real reset
     LETTERS_DISTANCE = 14 # spacing between letters
     LETTERS_END = LETTER_VISIBLE_MIN_X + 26 * LETTERS_DISTANCE # 27 symbols (letters + special) but 26 gaps
+    LETTER_COOLDOWN = 200 # cooldown after letters zapperd till they reappear
 
     # Enemies
     MAX_ENEMIES = 6
@@ -65,7 +64,12 @@ class WordZapperConstants(NamedTuple) :
     MAX_ZAPPER_POS = 49
     ZAPPER_SPR_WIDTH = 4
     ZAPPER_SPR_HEIGHT = Y_BOUNDS[1] # we assume this max zapper height
-
+    
+    ZAPPING_BOUNDS = (LETTER_VISIBLE_MIN_X, LETTER_VISIBLE_MAX_X - ZAPPER_SPR_WIDTH) # min x, max x
+    
+    PLAYER_ZAPPER_COOLDOWN_TIME = 15 # amount letters stop moving and zapper is active TODO find exact values
+    ZAPPER_BLOCK_TIME = 50 # dont allow zapper action during this time
+    
     TIME = 99
 
     WORD_DISPLAY_FRAMES = 5 * 60 # TODO this assumes 60 fps for some reason???
@@ -113,7 +117,7 @@ class WordZapperState(NamedTuple):
     letters_x: chex.Array # letters at the top
     letters_y: chex.Array
     letters_char: chex.Array
-    letters_alive: chex.Array
+    letters_alive: chex.Array # (1, 2) -> # letter_is_alive, letter_cooldown
     letters_speed: chex.Array
     letters_positions: chex.Array
 
@@ -121,7 +125,8 @@ class WordZapperState(NamedTuple):
     current_letter_index: chex.Array
     
     player_missile_position: chex.Array  # shape: (1,4) -> x, y, active, direction
-    player_zapper_position: chex.Array # shape: (1,5) -> x, y, active, cooldown, pulse
+    player_zapper_position: chex.Array  # shape: (1,7) -> x, y, active, cooldown, pulse, initial_x, block_zapper
+                                        # (initial_x  keeps track of which letter was zapped)
 
     enemy_positions: chex.Array  # shape (MAX_ENEMIES, 4): x, y, type, vx
     enemy_active: chex.Array     # shape (MAX_ENEMIES,)
@@ -400,17 +405,60 @@ def player_step(
 
 
 @jax.jit
-def scrolling_letters(letters_x, letters_speed, letters_alive, consts):
-    new_letters_x = letters_x - letters_speed
+def scrolling_letters(
+        state: WordZapperState, consts: WordZapperConstants
+    ) -> chex.Array :
+
+    new_letters_x = state.letters_x - state.letters_speed
 
     reset_x = jnp.max(new_letters_x) + consts.LETTERS_DISTANCE
 
     new_letters_x = jnp.where(
-        new_letters_x < consts.LETTER_RESET_X,
-        reset_x,
-        new_letters_x
+        state.player_zapper_position[2], # if zapper active
+        state.letters_x,
+        jnp.where(
+            new_letters_x < consts.LETTER_RESET_X,
+            reset_x,
+            new_letters_x
+        )
     )
-    return new_letters_x
+
+    # cooldown for letters
+    new_letters_alive = state.letters_alive.at[:, 1].set(
+        jnp.where(
+                state.letters_alive[:, 1] > 0,
+                state.letters_alive[:, 1] - 1,
+                state.letters_alive[:, 1]
+        )
+    )
+
+    # if cooldown is 0, letters reapper
+    new_letters_alive = new_letters_alive.at[:, 0].set(
+        jnp.where(
+            new_letters_alive[:, 1] <= 0,
+            1,
+            0
+        )
+    )
+    
+    # zapping letters TODO this is temp soultion, it could be more accurate
+    closest_letter_id = jnp.argmin(jnp.abs(state.letters_x - state.player_zapper_position[5]))
+
+    within_zapping_bounds = jnp.logical_and(
+        state.player_zapper_position[0] >= consts.ZAPPING_BOUNDS[0],
+        state.player_zapper_position[0] <= consts.ZAPPING_BOUNDS[1],
+    )
+
+    new_letters_alive = jax.lax.cond(
+        jnp.logical_and(state.player_zapper_position[2], within_zapping_bounds),
+        lambda l: l.at[closest_letter_id].set(
+                jnp.array([0, consts.LETTER_COOLDOWN], dtype=jnp.int32),
+        ),
+        lambda l: l,
+        new_letters_alive
+    )
+
+    return new_letters_x, new_letters_alive
 
 
 @jax.jit
@@ -506,21 +554,35 @@ def player_zapper_step(
             state.player_x + consts.PLAYER_SIZE[0] / 2 - 2,
             state.player_y,
             state.player_zapper_position[2],
-            state.player_zapper_position[3],
+            state.player_zapper_position[3] - 1, # cooldown/letter block speed
             state.player_zapper_position[4],
+            state.player_zapper_position[5],
+            state.player_zapper_position[6] - 1, # zapper block time speed
         ]),
         jnp.where(
-            fire,
+            jnp.logical_and(fire, state.player_zapper_position[6] <= 0),
             jnp.array([
                 state.player_x + consts.PLAYER_SIZE[0] / 2 - 2,
                 state.player_y,
                 1,
-                consts.PLAYER_COOLDOWN_TIME,
-                state.step_counter
+                consts.PLAYER_ZAPPER_COOLDOWN_TIME,
+                state.step_counter,
+                state.player_x + consts.PLAYER_SIZE[0] / 2 - 2,
+                consts.ZAPPER_BLOCK_TIME
             ]),
-            state.player_zapper_position
+            jnp.array([
+                0, 0, 0, 0, 0, 0, state.player_zapper_position[6] - 1
+            ])
         )
     )
+
+    # if cooldown is 0, deactivate zapper
+    new_zapper = jnp.where(
+        new_zapper[3] <= 0,
+        new_zapper.at[2].set(0),
+        new_zapper
+    )
+
 
     return new_zapper
 
@@ -596,12 +658,12 @@ class JaxWordZapper(JaxEnvironment[WordZapperState, WordZapperObservation, WordZ
             enemy_global_spawn_timer=jnp.array(60),
 
             player_missile_position=jnp.zeros(4),
-            player_zapper_position=jnp.zeros(5),
+            player_zapper_position=jnp.zeros(7),
 
             letters_x = jnp.linspace(self.consts.LETTER_VISIBLE_MIN_X, self.consts.LETTERS_END, 27), # 12px apart, offscreen right
             letters_y = jnp.full((27,), 30),  # All at y=30
             letters_char = jnp.arange(27),  # A-Z and special
-            letters_alive = jnp.ones((27,), dtype=jnp.int32),
+            letters_alive = jnp.stack([jnp.ones((27,), dtype=jnp.int32), jnp.zeros((27,), dtype=jnp.int32)], axis=1),
             letters_speed = jnp.ones((27,)) * 1,  # All move at 1px/frame
             letters_positions = jnp.stack([letters_x, letters_y], axis=1),  # shape (27,2)
             current_word = jnp.array([0, 1, 2, 3, 4]),  # Example: word "ABCDE"
@@ -765,29 +827,6 @@ class JaxWordZapper(JaxEnvironment[WordZapperState, WordZapperObservation, WordZ
 
     @partial(jax.jit, static_argnums=(0,))
     def _normal_game_step(self, state: WordZapperState, action: chex.Array):
-        # player zapper cooldown timer
-        new_player_zapper_cooldown = jnp.where(
-            state.player_zapper_position[3] > 0,
-            state.player_zapper_position[3] - jnp.array(self.consts.PLAYER_COOLDOWN),
-            jnp.array(0),
-        )
-
-        new_zapper_active = jnp.where(
-            jnp.logical_not(new_player_zapper_cooldown > 0),
-            jnp.array(0),
-            state.player_zapper_position[2]
-        )
-
-        state = state._replace(
-            player_zapper_position = jnp.array([
-                state.player_zapper_position[0],
-                state.player_zapper_position[1],
-                new_zapper_active,
-                new_player_zapper_cooldown,
-                state.player_zapper_position[4],
-            ])
-        )
-
         # player missile and zapper
         player_missile_position = player_missile_step(
             state, action, self.consts
@@ -827,7 +866,11 @@ class JaxWordZapper(JaxEnvironment[WordZapperState, WordZapperObservation, WordZ
         )
         
         # Scroll letters
-        new_letters_x = scrolling_letters(state.letters_x, state.letters_speed, state.letters_alive, self.consts)
+        new_letters_x, new_letters_alive = scrolling_letters(
+            state,
+            self.consts
+        )
+
 
         new_enemy_global_spawn_timer = jnp.maximum(state.enemy_global_spawn_timer - 1, 0)
         has_free_slot = jnp.any(new_enemy_active == 0)
@@ -875,6 +918,7 @@ class JaxWordZapper(JaxEnvironment[WordZapperState, WordZapperObservation, WordZ
             enemy_active = active,
             enemy_global_spawn_timer = global_timer,
             letters_x=new_letters_x,
+            letters_alive=new_letters_alive,
             step_counter = new_step_counter,
             timer = new_timer,
             rng_key = rng_key,
@@ -1037,7 +1081,7 @@ class WordZapperRenderer(JAXGameRenderer):
           
         # Render normal letters
         def _render_letter(i, raster):
-            is_alive = state.letters_alive[i]
+            is_alive = state.letters_alive[i, 0]
             x = state.letters_x[i]
             y = state.letters_y[i]
             char_idx = state.letters_char[i]
