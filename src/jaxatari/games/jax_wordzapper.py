@@ -1,4 +1,5 @@
 import os
+import time
 from functools import partial
 from typing import NamedTuple, Tuple
 import jax.lax
@@ -22,7 +23,6 @@ class WordZapperConstants(NamedTuple) :
 
     # Object sizes (width, height)
     PLAYER_SIZE = (16, 12)
-    ASTEROID_SIZE = (8, 7) # TODO find correct sizes
     MISSILE_SIZE = (8, 2)
     ZAPPER_SIZE = (8, 1)
     LETTER_SIZE = (8, 8)
@@ -49,13 +49,13 @@ class WordZapperConstants(NamedTuple) :
     MAX_ENEMIES = 6
     ENEMY_MIN_X = -16
     ENEMY_MAX_X = WIDTH + 16
-    ENEMY_Y_MIN = 50
-    ENEMY_Y_MAX = 150
-    ENEMY_ANIM_SWITCH_RATE = 15
+    ENEMY_Y_MIN = 55
+    ENEMY_Y_MAX = 133
+    ENEMY_ANIM_SWITCH_RATE = 2
     ENEMY_Y_MIN_SEPARATION = 16
 
 
-    ENEMY_GAME_SPEED = 1.2
+    ENEMY_GAME_SPEED = 0.7
     INTRO_PHASE_FRAMES = 3 * 60 # TODO this assumes 60 fps for some reason
     INTRO_SWEEP_SPEED = (ENEMY_MAX_X - ENEMY_MIN_X) / (3 * 60)
 
@@ -132,6 +132,14 @@ class WordZapperState(NamedTuple):
     enemy_active: chex.Array     # shape (MAX_ENEMIES,)
     enemy_global_spawn_timer: chex.Array
 
+    enemy_explosion_frame: chex.Array  # shape (MAX_ENEMIES,) - explosion frame index (0=none, 1-3=anim)
+    enemy_explosion_timer: chex.Array  # shape (MAX_ENEMIES,) - ticks left for explosion anim
+    enemy_explosion_frame_timer: chex.Array  # shape (MAX_ENEMIES,)
+    enemy_explosion_pos: chex.Array  # shape (MAX_ENEMIES, 2) - position where explosion anim is rendered
+
+    # current_word: chex.Array # the actual word
+    # current_letter_index: chex.Array
+
     target_word: chex.Array
     game_phase: chex.Array  
     phase_timer: chex.Array    
@@ -139,6 +147,7 @@ class WordZapperState(NamedTuple):
     timer: chex.Array
     step_counter: chex.Array
     rng_key: chex.PRNGKey
+    score: chex.Array
 
 class EntityPosition(NamedTuple):
     x: jnp.ndarray
@@ -206,6 +215,12 @@ def load_sprites():
     special = jr.loadFrame(os.path.join(MODULE_DIR, "sprites/wordzapper/letters/normal_letters/1special_symbol.npy"))
     letters.append(special)
 
+    # enemy explosion
+    exp1 = jr.loadFrame(os.path.join(MODULE_DIR, "sprites/wordzapper/explosions/enemy_explosions/exp1.npy"))
+    exp2 = jr.loadFrame(os.path.join(MODULE_DIR, "sprites/wordzapper/explosions/enemy_explosions/exp2.npy"))
+    exp3 = jr.loadFrame(os.path.join(MODULE_DIR, "sprites/wordzapper/explosions/enemy_explosions/exp3.npy"))
+    exp4 = jr.loadFrame(os.path.join(MODULE_DIR, "sprites/wordzapper/explosions/enemy_explosions/exp4.npy"))
+
     # Pad player sprites to match
     pl_sub_sprites, pl_sub_offsets = jr.pad_to_match([pl_1, pl_2])
     pl_sub_offsets = jnp.array(pl_sub_offsets)
@@ -262,6 +277,8 @@ def load_sprites():
     DIGITS = digits
 
     LETTERS = jnp.stack(letters, axis=0)  
+    
+    ENEMY_EXPLOSION_SPRITES = jnp.stack([exp1, exp2, exp3, exp4], axis=0)  # Now 4 sprites
 
     return (
         SPRITE_BG,
@@ -273,6 +290,7 @@ def load_sprites():
         YELLOW_LETTERS,
         QMARK_SPRITE,
         LETTERS,
+        ENEMY_EXPLOSION_SPRITES,  
         pl_sub_offsets,
         bonker_offsets,
         zonker_offsets,
@@ -290,6 +308,7 @@ def load_sprites():
     YELLOW_LETTERS,
     QMARK_SPRITE,
     LETTERS,
+    ENEMY_EXPLOSION_SPRITES, 
     PL_OFFSETS,
     BONKER_OFFSETS,
     ZONKER_OFFSETS,
@@ -583,8 +602,145 @@ def player_zapper_step(
         new_zapper
     )
 
-
     return new_zapper
+
+def handle_missile_enemy_explosions(
+    state: WordZapperState,
+    positions,
+    new_enemy_active,
+    player_missile_position,
+    consts: WordZapperConstants
+):
+    # Missile-Enemy Collision Logic 
+    missile_pos = player_missile_position
+    missile_active = missile_pos[2] != 0
+
+    def missile_enemy_collision(missile, enemies, active):
+        missile_x, missile_y = missile[0], missile[1]
+        missile_w, missile_h = consts.MISSILE_SIZE
+        enemy_x = enemies[:, 0]
+        enemy_y = enemies[:, 1]
+        enemy_w, enemy_h = 16, 16
+
+        m_left = missile_x
+        m_right = missile_x + missile_w
+        m_top = missile_y
+        m_bottom = missile_y + missile_h
+
+        e_left = enemy_x
+        e_right = enemy_x + enemy_w
+        e_top = enemy_y
+        e_bottom = enemy_y + enemy_h
+
+        h_overlap = (m_left <= e_right) & (m_right >= e_left)
+        v_overlap = (m_top <= e_bottom) & (m_bottom >= e_top)           
+        collisions = h_overlap & v_overlap & (active == 1)
+        return collisions
+
+    missile_collisions = jax.lax.cond(
+        missile_active & (missile_pos[2] != 0),
+        lambda: missile_enemy_collision(missile_pos, positions[:, 0:2], new_enemy_active),
+        lambda: jnp.zeros_like(new_enemy_active, dtype=bool)
+    )
+
+    # Explosion logic: start explosion for hit enemies
+    new_enemy_explosion_frame = jnp.where(missile_collisions, 1, state.enemy_explosion_frame)
+    new_enemy_explosion_timer = jnp.where(missile_collisions, consts.ENEMY_EXPLOSION_FRAMES, state.enemy_explosion_timer)
+    new_enemy_explosion_frame_timer = jnp.where(missile_collisions, consts.ENEMY_EXPLOSION_FRAME_DURATION, state.enemy_explosion_frame_timer)
+
+    # Prevent explosion animation from moving
+    if not hasattr(state, 'enemy_explosion_pos'):
+        enemy_explosion_pos = jnp.zeros((consts.MAX_ENEMIES, 2))
+    else:
+        enemy_explosion_pos = state.enemy_explosion_pos
+
+    explosion_started = missile_collisions
+    enemy_explosion_pos = jnp.where(
+        explosion_started[:, None],
+        positions[:, 0:2],
+        enemy_explosion_pos
+    )
+
+    frame_should_advance = (new_enemy_explosion_frame_timer == 0) & (new_enemy_explosion_frame > 0)
+    new_enemy_explosion_frame = jnp.where(
+        frame_should_advance,
+        new_enemy_explosion_frame + 1,
+        new_enemy_explosion_frame
+    )
+    new_enemy_explosion_frame_timer = jnp.where(
+        (new_enemy_explosion_frame > 0),
+        jnp.where(frame_should_advance, consts.ENEMY_EXPLOSION_FRAME_DURATION, new_enemy_explosion_frame_timer - 1),
+        0
+    )
+    new_enemy_explosion_frame = jnp.where(new_enemy_explosion_frame > consts.ENEMY_EXPLOSION_FRAMES, 0, new_enemy_explosion_frame)
+
+    new_enemy_active = jnp.where(missile_collisions, 0, new_enemy_active)
+    player_missile_position = jnp.where(
+        jnp.any(missile_collisions),
+        jnp.zeros_like(player_missile_position),
+        player_missile_position
+    )
+
+    return (
+        new_enemy_explosion_frame,
+        new_enemy_explosion_timer,
+        new_enemy_explosion_frame_timer,
+        enemy_explosion_pos,
+        new_enemy_active,
+        player_missile_position,
+    )
+
+def handle_player_enemy_collisions(
+    new_player_x,
+    new_player_y,
+    new_player_direction,
+    positions,
+    active,
+    consts: WordZapperConstants
+):
+    # Player rectangle
+    player_pos = jnp.array([new_player_x, new_player_y])
+    player_size = jnp.array(consts.PLAYER_SIZE)
+
+    # Enemy rectangles and actives
+    enemy_pos = positions[:, 0:2]  # shape (MAX_ENEMIES, 2)
+    enemy_size = jnp.array([16, 16])
+    enemy_active = active
+
+    # Calculate edges for player
+    p_left = player_pos[0] + player_size[0]/2
+    p_right = player_pos[0] + player_size[0]
+    p_top = player_pos[1]
+    p_bottom = player_pos[1] + player_size[1]
+
+    # Calculate edges for all enemies
+    e_left = enemy_pos[:, 0]
+    e_right = enemy_pos[:, 0] + enemy_size[0]
+    e_top = enemy_pos[:, 1]
+    e_bottom = enemy_pos[:, 1] + enemy_size[1]
+
+    # Check overlap for all enemies (trigger on edge contact)
+    horizontal_overlaps = (p_left <= e_right) & (p_right >= e_left)
+    vertical_overlaps = (p_top <= e_bottom) & (p_bottom >= e_top)           
+    collisions = horizontal_overlaps & vertical_overlaps & (enemy_active == 1)
+
+    # If any collision, move player by 13 in direction of enemy (positions[:,3])
+    any_collision = jnp.any(collisions)
+
+    # Find the first colliding enemy (lowest index)
+    colliding_idx = jnp.argmax(collisions)
+
+    # Only use the direction if there is a collision
+    enemy_dir = jnp.where(any_collision, positions[colliding_idx, 3], 0.0)
+
+    # Move player by 13 in direction of enemy_dir
+    new_player_x = jnp.where(any_collision & (enemy_dir < 0), new_player_x - 13, new_player_x)
+    new_player_x = jnp.where(any_collision & (enemy_dir > 0), new_player_x + 13, new_player_x)
+
+    # Deactivate ("disappear") collided enemy
+    new_enemy_active = jnp.where(collisions, 0, active)
+
+    return new_player_x, new_enemy_active
 
 class JaxWordZapper(JaxEnvironment[WordZapperState, WordZapperObservation, WordZapperInfo, WordZapperConstants]) :
     def __init__(self, consts: WordZapperConstants = None, reward_funcs: list[callable] =None):
@@ -677,7 +833,13 @@ class JaxWordZapper(JaxEnvironment[WordZapperState, WordZapperObservation, WordZ
             game_phase=jnp.array(0),
             phase_timer=jnp.array(0),
 
+            enemy_explosion_frame=jnp.zeros((self.consts.MAX_ENEMIES,), dtype=jnp.int32),
+            enemy_explosion_timer=jnp.zeros((self.consts.MAX_ENEMIES,), dtype=jnp.int32),
+            enemy_explosion_frame_timer=jnp.zeros((self.consts.MAX_ENEMIES,), dtype=jnp.int32),
+            enemy_explosion_pos=jnp.zeros((self.consts.MAX_ENEMIES, 2)),
+
             rng_key=next_key,
+            score=jnp.array(0),
         )
 
         initial_obs = self._get_observation(reset_state)
@@ -766,20 +928,53 @@ class JaxWordZapper(JaxEnvironment[WordZapperState, WordZapperObservation, WordZ
         """Check if the game should end due to timer expiring."""
         MAX_TIME = 60 * self.consts.TIME  # 90 seconds at 60 FPS
         return state.timer >= MAX_TIME
+    
+    def flatten_entity_position(self, entity: EntityPosition) -> jnp.ndarray:
+        return jnp.concatenate([
+            jnp.array([entity.x]),
+            jnp.array([entity.y]),
+            jnp.array([entity.width]),
+            jnp.array([entity.height]),
+            jnp.array([entity.active])
+        ])
+
+    @partial(jax.jit, static_argnums=(0,))
+    def obs_to_flat_array(self, obs: WordZapperObservation) -> jnp.ndarray:
+        # Flatten all entities and arrays for agent training
+        return jnp.concatenate([
+            self.flatten_entity_position(obs.player),
+            obs.enemies.flatten(),
+            obs.letters.flatten(),
+            obs.letters_char.flatten(),
+            obs.letters_alive.flatten(),
+            obs.current_word.flatten(),
+            obs.current_letter_index.flatten(),
+            self.flatten_entity_position(obs.player_missile),
+            self.flatten_entity_position(obs.player_zapper),
+            obs.cooldown_timer.flatten(),
+            obs.timer.flatten(),
+        ])
 
     @partial(jax.jit, static_argnums=(0,))
     def _get_env_reward(self, previous_state: WordZapperState, state: WordZapperState):
-        # TODO this is not implemented!!
-        return 10
+        # Reward is score difference (if score field exists)
+        return state.score - previous_state.score
 
     @partial(jax.jit, static_argnums=(0,))
     def _get_all_rewards(self, previous_state: WordZapperState, state: WordZapperState) -> jnp.ndarray:
-        pass
+        if self.reward_funcs is None:
+            return jnp.zeros(1)
+        rewards = jnp.array([reward_func(previous_state, state) for reward_func in self.reward_funcs])
+        return rewards
 
     @partial(jax.jit, static_argnums=(0,))
     def _get_info(self, state: WordZapperState, all_rewards: jnp.ndarray) -> WordZapperInfo:
-        pass
-
+        return WordZapperInfo(
+            timer=state.timer,
+            current_word=state.target_word,
+            game_over=self._get_done(state),
+        )
+    
     def _advance_phase(self, s: WordZapperState): # I think this is the one where stuff move on the screen when game starts
         timer = s.phase_timer + 1
         phase = s.game_phase           # 0=intro, 1=word, 2=gameplay
@@ -882,10 +1077,20 @@ class JaxWordZapper(JaxEnvironment[WordZapperState, WordZapperObservation, WordZ
             vx = direction * self.consts.ENEMY_GAME_SPEED
             x_pos = jnp.where(direction == 1.0, self.consts.ENEMY_MIN_X, self.consts.ENEMY_MAX_X)
             lanes = jnp.linspace(self.consts.ENEMY_Y_MIN, self.consts.ENEMY_Y_MAX, 4)
-            lane_idx = jax.random.randint(sk_lane, (), 0, 4)
-            final_y = lanes[lane_idx]
+            def lane_is_free(lane_y):
+                return jnp.all(jnp.logical_or((existing_act == 0), (jnp.abs(existing_pos[:, 1] - lane_y) > 1e-3)))
+            lane_free_mask = jax.vmap(lane_is_free)(lanes)
+            perm = jax.random.permutation(sk_lane, 4)
+            def pick_lane(i, chosen):
+                lane = perm[i]
+                is_free = lane_free_mask[lane]
+                return jnp.where((chosen == -1) & is_free, lane, chosen)
+            lane_idx = jax.lax.fori_loop(0, 4, pick_lane, -1)
+            final_y = jnp.where(lane_idx == -1, -9999, lanes[0])
             enemy_type = jax.random.randint(sk_type, (), 0, 2)
-            new_enemy = jnp.array([x_pos, final_y, enemy_type, vx, 1.0])
+            new_enemy = jnp.where(lane_idx == -1,
+                                  jnp.array([x_pos, final_y, enemy_type, vx, 0.0]),
+                                  jnp.array([x_pos, lanes[lane_idx], enemy_type, vx, 1.0]))
             return new_enemy, rng_key_out
 
         def spawn_enemy_branch(carry):
@@ -894,7 +1099,7 @@ class JaxWordZapper(JaxEnvironment[WordZapperState, WordZapperObservation, WordZ
             new_enemy, rng_key_out = spawn_one_enemy_fn(rng_key_inner, pos, act)
             pos = pos.at[free_idx].set(new_enemy)
             act = act.at[free_idx].set(1)
-            g_timer = jnp.array(30)
+            g_timer = jax.random.randint(rng_key_out, (), 30, 70)
             return pos, act, g_timer, rng_key_out
 
         def no_spawn_branch(carry):
@@ -907,21 +1112,50 @@ class JaxWordZapper(JaxEnvironment[WordZapperState, WordZapperObservation, WordZ
             (new_enemy_positions, new_enemy_active, new_enemy_global_spawn_timer, state.rng_key),
         )
 
-        # 7. Assemble new state
+        # Integrated Player-Enemy Collision Logic
+        new_player_x, new_enemy_active = handle_player_enemy_collisions(
+            new_player_x,
+            new_player_y,
+            new_player_direction,
+            positions,
+            active,
+            self.consts
+        )
+
+        # Missile-Enemy collision and explosion logic
+        (
+            new_enemy_explosion_frame,
+            new_enemy_explosion_timer,
+            new_enemy_explosion_frame_timer,
+            enemy_explosion_pos,
+            new_enemy_active,
+            player_missile_position,
+        ) = handle_missile_enemy_explosions(
+            state,
+            positions,
+            new_enemy_active,
+            player_missile_position,
+            self.consts
+        )
+
         return state._replace(
-            player_x = new_player_x,
-            player_y = new_player_y,
-            player_direction = new_player_direction,
-            player_missile_position = player_missile_position,
-            player_zapper_position = player_zapper_position,
-            enemy_positions = positions,
-            enemy_active = active,
-            enemy_global_spawn_timer = global_timer,
+            player_x=new_player_x,
+            player_y=new_player_y,
+            player_direction=new_player_direction,
+            player_missile_position=player_missile_position,
+            player_zapper_position=player_zapper_position,
+            enemy_positions=positions,
+            enemy_active=new_enemy_active,
+            enemy_global_spawn_timer=global_timer,
             letters_x=new_letters_x,
             letters_alive=new_letters_alive,
             step_counter = new_step_counter,
             timer = new_timer,
             rng_key = rng_key,
+            enemy_explosion_frame=new_enemy_explosion_frame,
+            enemy_explosion_timer=new_enemy_explosion_timer,
+            enemy_explosion_frame_timer=new_enemy_explosion_frame_timer,
+            enemy_explosion_pos=enemy_explosion_pos,
         )
 
     @partial(jax.jit, static_argnums=(0,))
@@ -955,7 +1189,7 @@ class JaxWordZapper(JaxEnvironment[WordZapperState, WordZapperObservation, WordZ
         info = self._get_info(state, all_rewards)
 
         return observation, state, env_reward, done, info
-    
+
 class WordZapperRenderer(JAXGameRenderer):
     def __init__(self, consts: WordZapperConstants = None):
         super().__init__()
@@ -1054,31 +1288,45 @@ class WordZapperRenderer(JAXGameRenderer):
         )
 
         # render enemies
-        frame_bonker = jr.get_sprite_frame(SPRITE_BONKER, state.step_counter)
-        frame_zonker = jr.get_sprite_frame(SPRITE_ZONKER ,state.step_counter)
+        frame_bonker = jr.get_sprite_frame(SPRITE_BONKER, state.step_counter // self.consts.ENEMY_ANIM_SWITCH_RATE)
+        frame_zonker = jr.get_sprite_frame(SPRITE_ZONKER ,state.step_counter // self.consts.ENEMY_ANIM_SWITCH_RATE)
 
         def body_fn(i, raster):
             should_render_enemy = state.enemy_active[i]
-            x = state.enemy_positions[i, 0]
-            y = state.enemy_positions[i, 1]
+            # Use explosion position if exploding, otherwise normal position
+            explosion_frame = state.enemy_explosion_frame[i]
+            is_exploding = explosion_frame > 0
+
+            # Use frozen explosion position if exploding
+            x = jnp.where(is_exploding, state.enemy_explosion_pos[i, 0], state.enemy_positions[i, 0])
+            y = jnp.where(is_exploding, state.enemy_explosion_pos[i, 1], state.enemy_positions[i, 1])
             enemy_type = state.enemy_positions[i, 2].astype(jnp.int32)
 
+            def render_explosion(r):
+                # explosion_frame: 1,2,3,4 -> index 0,1,2,3
+                idx = jnp.clip(explosion_frame - 1, 0, 3)
+                return jr.render_at(r, x, y, ENEMY_EXPLOSION_SPRITES[idx])
+
             raster = jax.lax.cond(
-                should_render_enemy,
+                explosion_frame > 0,
+                render_explosion,
                 lambda r: jax.lax.cond(
-                    enemy_type == 0,
-                    lambda rr: jr.render_at(rr, x, y, frame_bonker),
-                    lambda rr: jr.render_at(rr, x, y, frame_zonker),
+                    should_render_enemy,
+                    lambda rr: jax.lax.cond(
+                        enemy_type == 0,
+                        lambda rrr: jr.render_at(rrr, x, y, frame_bonker),
+                        lambda rrr: jr.render_at(rrr, x, y, frame_zonker),
+                        rr
+                    ),
+                    lambda rr: rr,
                     r
                 ),
-                lambda r: r,
                 raster
             )
             return raster
 
         raster = jax.lax.fori_loop(0, self.consts.MAX_ENEMIES, body_fn, raster)
 
-          
         # Render normal letters
         def _render_letter(i, raster):
             is_alive = state.letters_alive[i, 0]
@@ -1193,7 +1441,7 @@ class WordZapperRenderer(JAXGameRenderer):
         raster = jax.lax.switch(
             state.game_phase,
             [
-                lambda ras: ras,                                        # phase 0
+                lambda ras: ras,                                   # phase 0
                 lambda ras: _draw_word(ras,   state.target_word),  # phase 1
                 lambda ras: _draw_qmarks(ras, state.target_word),  # phase 2
             ],
