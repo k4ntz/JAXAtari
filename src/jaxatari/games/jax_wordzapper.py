@@ -74,6 +74,9 @@ class WordZapperConstants(NamedTuple) :
 
     WORD_DISPLAY_FRAMES = 5 * 60 # TODO this assumes 60 fps for some reason???
 
+    ENEMY_EXPLOSION_FRAME_DURATION = 8  # Number of ticks per explosion frame
+    ENEMY_EXPLOSION_FRAMES = 4          # NEW: number of explosion frames/sprites
+
 
 
 WORD_LIST = [
