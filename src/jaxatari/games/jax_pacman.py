@@ -559,6 +559,44 @@ class PacmanRenderer:
         pygame.display.flip()
 
 
+class GameManager:
+    def __init__(self, env, key):
+        self.env = env
+        self.key = key
+        self.level = 1
+        self.total_reward = 0.0
+        self.obs, self.state = env.reset(key, level=self.level)
+
+    def step(self, action):
+        # Step environment
+        self.key, subkey = random.split(self.key)
+        self.obs, self.state, reward, done, info = self.env.step(self.state, jnp.array(action))
+        self.total_reward += float(reward)
+
+        # Checking pellets left
+        pellets_left = int(jnp.sum(self.state.pellets)) + int(jnp.sum(self.state.power_pellets))
+
+        level_up = False
+        game_won = False
+
+        if pellets_left == 0:
+            self.level += 1
+            if self.level > MAX_LEVEL:
+                game_won = True
+            else:
+                # score & lives
+                carry_score = float(self.state.score)
+                carry_lives = int(self.state.lives)
+                self.obs, self.state = self.env.reset(self.key,
+                                                      level=self.level,
+                                                      keep_score_lives=True,
+                                                      carry_score=carry_score,
+                                                      carry_lives=carry_lives)
+                level_up = True
+
+        return self.obs, self.state, reward, done, info, level_up, game_won
+
+
 
 def main():
     pygame.init()
@@ -568,15 +606,13 @@ def main():
     font = pygame.font.SysFont(None, 24)
 
     env = JaxPacman()
-    renderer = PacmanRenderer(screen, font)
     key = random.PRNGKey(0)
 
-    level = 1
-    obs, state = env.reset(key, level=level)
+    manager = GameManager(env, key)
+    renderer = PacmanRenderer(screen, font)
 
     running = True
     action = 1  # Default DOWN
-    total_reward = 0.0
 
     while running:
         # Input
@@ -589,34 +625,29 @@ def main():
                 elif event.key == pygame.K_LEFT: action = 2
                 elif event.key == pygame.K_RIGHT: action = 3
 
-        # Step Environment
-        key, subkey = random.split(key)
-        obs, state, reward, done, info = env.step(state, jnp.array(action))
-        total_reward += float(reward)
+        # Game Step
+        obs, state, reward, done, info, level_up, game_won = manager.step(action)
 
-        # Level cleared
-        pellets_left = int(jnp.sum(state.pellets)) + int(jnp.sum(state.power_pellets))
-        if pellets_left == 0:
-            level += 1
-            if level > MAX_LEVEL:
-                print("🎉 You beat all levels! Final score:", int(total_reward))
-                pygame.time.wait(1500)
-                break
-            obs, state = env.reset(key, level=level, keep_score_lives=True,
-                                   carry_score=float(state.score), carry_lives=int(state.lives))
-            continue  # Skip stale frame
+        if game_won:
+            print("🎉 You beat all levels! Final score:", int(manager.total_reward))
+            pygame.time.wait(1500)
+            break
 
-        # Rendering
-        renderer.render(obs, state, total_reward, level)
+        if level_up:
+            continue  # Skipping stale frame, go to next loop
+
+        # Render
+        renderer.render(obs, state, manager.total_reward, manager.level)
         clock.tick(10)
 
         # Game Over
         if bool(done):
-            print("Game Over! Final score:", int(total_reward))
+            print("Game Over! Final score:", int(manager.total_reward))
             pygame.time.wait(1500)
             running = False
 
     pygame.quit()
+
 
 
 
