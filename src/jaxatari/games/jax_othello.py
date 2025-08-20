@@ -1743,12 +1743,12 @@ class JaxOthello(JaxEnvironment[OthelloState, OthelloObservation, OthelloInfo, O
 
 
         # first, it need to be checked if there is a valid place on the field the disc to be set
-        _, valid_field = check_if_there_is_a_valid_choice(state, white_player=True)
+        _, valid_field = self.check_if_there_is_a_valid_choice(state, white_player=True)
 
         # check if the new_field_choice is a valid option
         valid_choice, new_state = jax.lax.cond(
             decided,
-            lambda _: field_step(new_field_choice, state, True),
+            lambda _: self.field_step(new_field_choice, state, True),
             lambda _: (False, state),
             operand=None
         )
@@ -1763,9 +1763,9 @@ class JaxOthello(JaxEnvironment[OthelloState, OthelloObservation, OthelloInfo, O
         def body_fun(value):
             valid_choice, state, key = value
 
-            best_val = get_bot_move(state.field,state.difficulty, state.player_score,state.enemy_score,state.random_key)
+            best_val = self.get_bot_move(state.field,state.difficulty, state.player_score,state.enemy_score,state.random_key)
 
-            valid_choice, new_state = field_step(best_val, state, False)
+            valid_choice, new_state = self.field_step(best_val, state, False)
 
             return jax.lax.cond(
                 valid_choice,
@@ -1774,7 +1774,7 @@ class JaxOthello(JaxEnvironment[OthelloState, OthelloObservation, OthelloInfo, O
                 operand=None
             )
 
-        _, valid_field_enemy = check_if_there_is_a_valid_choice(new_state, white_player=False)
+        _, valid_field_enemy = self.check_if_there_is_a_valid_choice(new_state, white_player=False)
 
         key = state.random_key
         initial_x_y = (False, new_state, key)
@@ -1866,10 +1866,10 @@ def load_sprites():
     MODULE_DIR = os.path.dirname(os.path.abspath(__file__))
 
     # Load sprites
-    player = aj.loadFrame(os.path.join(MODULE_DIR, "sprites/othello/player_white_disc.npy"), transpose=True)
-    enemy = aj.loadFrame(os.path.join(MODULE_DIR, "sprites/othello/enemy_black_disc.npy"), transpose=True)
+    player = jr.loadFrame(os.path.join(MODULE_DIR, "sprites/othello/player_white_disc.npy"), transpose=True)
+    enemy = jr.loadFrame(os.path.join(MODULE_DIR, "sprites/othello/enemy_black_disc.npy"), transpose=True)
 
-    bg = aj.loadFrame(os.path.join(MODULE_DIR, "sprites/othello/othello_background.npy"), transpose=True)
+    bg = jr.loadFrame(os.path.join(MODULE_DIR, "sprites/othello/othello_background.npy"), transpose=True)
 
     # TODO: get a correctly sized background image / resize the saved image..
     #bg = jax.image.resize(bg, (WIDTH, HEIGHT, 4), method='bicubic')
@@ -1880,11 +1880,11 @@ def load_sprites():
     SPRITE_ENEMY = jnp.expand_dims(enemy, axis=0)
 
     # Load digits for scores
-    PLAYER_DIGIT_SPRITES = aj.load_and_pad_digits(
+    PLAYER_DIGIT_SPRITES = jr.load_and_pad_digits(
         os.path.join(MODULE_DIR, "sprites/othello/number_{}_player.npy"),
         num_chars=10,
     )
-    ENEMY_DIGIT_SPRITES = aj.load_and_pad_digits(
+    ENEMY_DIGIT_SPRITES = jr.load_and_pad_digits(
         os.path.join(MODULE_DIR, "sprites/othello/number_{}_enemy.npy"),
         num_chars=10,
     )
@@ -2014,7 +2014,7 @@ if __name__ == "__main__":
     screen = pygame.display.set_mode((WINDOW_WIDTH, WINDOW_HEIGHT))
     pygame.display.set_caption("Othello Game")
 
-    game = JaxOthello(frameskip=1)
+    game = JaxOthello(frameskip=1, consts=OthelloConstants())
 
     # Create the JAX renderer
     renderer = OthelloRenderer()
