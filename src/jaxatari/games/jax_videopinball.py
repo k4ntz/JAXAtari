@@ -70,7 +70,8 @@ class SceneObject:
     score_type: (
         chex.Array
     )  # 0: no score, 1: Bumper, 2: Spinner, 3: Left Rollover, 4: Atari Rollover, 5: Special Lit Up Target,
-    # 6: Left Lit Up Target, 7:Middle Lit Up Target, 8: Right Lit Up Target
+    # 6: Left Lit Up Target, 7:Middle Lit Up Target, 8: Right Lit Up Target, 9: Left Flipper, 10: Right Flipper
+    variant: chex.Array  # a more general property: Used along with score_type to identify the exact SceneObject for a specific game state.
 
 
 
@@ -90,6 +91,7 @@ HEIGHT = 210
 # TODO: check if these are correct
 GRAVITY = 0.03  # 0.12
 VELOCITY_DAMPENING_VALUE = 0.1  # 24
+VELOCITY_ACCELERATION_VALUE = 1.25
 BALL_MAX_SPEED = 3
 FLIPPER_MAX_ANGLE = 3
 FLIPPER_ANIMATION_Y_OFFSETS = jnp.array(
@@ -530,6 +532,7 @@ INVISIBLE_BLOCK_SCENE_OBJECT = SceneObject(
     hit_box_y_offset=jnp.array(INVISIBLE_BLOCK_TOP_Y_OFFSET),  # type: ignore
     reflecting=jnp.array(1),  # type: ignore
     score_type=jnp.array(0),  # type: ignore
+    variant=jnp.array(-1),
 )
 
 # Wall Scene Objects
@@ -541,6 +544,7 @@ TOP_WALL_SCENE_OBJECT = SceneObject(
     hit_box_y_offset=jnp.array(TOP_WALL_TOP_Y_OFFSET),  # type: ignore
     reflecting=jnp.array(1),  # type: ignore
     score_type=jnp.array(0),  # type: ignore
+    variant=jnp.array(-1),
 )
 BOTTOM_WALL_SCENE_OBJECT = SceneObject(
     hit_box_height=jnp.array(OUTER_WALL_THICKNESS),  # type: ignore
@@ -549,6 +553,7 @@ BOTTOM_WALL_SCENE_OBJECT = SceneObject(
     hit_box_y_offset=jnp.array(BOTTOM_WALL_TOP_Y_OFFSET),  # type: ignore
     reflecting=jnp.array(1),  # type: ignore
     score_type=jnp.array(0),  # type: ignore
+    variant=jnp.array(-1),
 )
 LEFT_WALL_SCENE_OBJECT = SceneObject(
     hit_box_height=jnp.array(176),  # type: ignore
@@ -557,6 +562,7 @@ LEFT_WALL_SCENE_OBJECT = SceneObject(
     hit_box_y_offset=jnp.array(TOP_WALL_TOP_Y_OFFSET),  # type: ignore
     reflecting=jnp.array(1),  # type: ignore
     score_type=jnp.array(0),  # type: ignore
+    variant=jnp.array(-1),
 )
 RIGHT_WALL_SCENE_OBJECT = SceneObject(
     hit_box_height=jnp.array(176),  # type: ignore
@@ -565,6 +571,7 @@ RIGHT_WALL_SCENE_OBJECT = SceneObject(
     hit_box_y_offset=jnp.array(TOP_WALL_TOP_Y_OFFSET),  # type: ignore
     reflecting=jnp.array(1),  # type: ignore
     score_type=jnp.array(0),  # type: ignore
+    variant=jnp.array(-1),
 )
 
 LEFT_INNER_WALL_SCENE_OBJECT = SceneObject(
@@ -574,6 +581,7 @@ LEFT_INNER_WALL_SCENE_OBJECT = SceneObject(
     hit_box_y_offset=jnp.array(INNER_WALL_TOP_Y_OFFSET),  # type: ignore
     reflecting=jnp.array(1),  # type: ignore
     score_type=jnp.array(0),  # type: ignore
+    variant=jnp.array(-1),
 )
 
 RIGHT_INNER_WALL_SCENE_OBJECT = SceneObject(
@@ -583,6 +591,7 @@ RIGHT_INNER_WALL_SCENE_OBJECT = SceneObject(
     hit_box_y_offset=jnp.array(INNER_WALL_TOP_Y_OFFSET),  # type: ignore
     reflecting=jnp.array(1),  # type: ignore
     score_type=jnp.array(0),  # type: ignore
+    variant=jnp.array(-1),
 )
 
 # Steps (Stairway left and right) Scene Objects
@@ -594,6 +603,7 @@ LEFT_QUADRUPLE_STEP_SCENE_OBJECT = SceneObject(
     hit_box_y_offset=jnp.array(QUADRUPLE_STEP_Y_OFFSET),  # type: ignore
     reflecting=jnp.array(1),  # type: ignore
     score_type=jnp.array(0),  # type: ignore
+    variant=jnp.array(-1),
 )
 RIGHT_QUADRUPLE_STEP_SCENE_OBJECT = SceneObject(
     hit_box_height=jnp.array(4 * STEP_HEIGHT),  # type: ignore
@@ -602,6 +612,7 @@ RIGHT_QUADRUPLE_STEP_SCENE_OBJECT = SceneObject(
     hit_box_y_offset=jnp.array(QUADRUPLE_STEP_Y_OFFSET),  # type: ignore
     reflecting=jnp.array(1),  # type: ignore
     score_type=jnp.array(0),  # type: ignore
+    variant=jnp.array(-1),
 )
 LEFT_TRIPLE_STEP_SCENE_OBJECT = SceneObject(
     hit_box_height=jnp.array(3 * STEP_HEIGHT),  # type: ignore
@@ -610,6 +621,7 @@ LEFT_TRIPLE_STEP_SCENE_OBJECT = SceneObject(
     hit_box_y_offset=jnp.array(TRIPLE_STEP_Y_OFFSET),  # type: ignore
     reflecting=jnp.array(1),  # type: ignore
     score_type=jnp.array(0),  # type: ignore
+    variant=jnp.array(-1),
 )
 RIGHT_TRIPLE_STEP_SCENE_OBJECT = SceneObject(
     hit_box_height=jnp.array(3 * STEP_HEIGHT),  # type: ignore
@@ -618,6 +630,7 @@ RIGHT_TRIPLE_STEP_SCENE_OBJECT = SceneObject(
     hit_box_y_offset=jnp.array(TRIPLE_STEP_Y_OFFSET),  # type: ignore
     reflecting=jnp.array(1),  # type: ignore
     score_type=jnp.array(0),  # type: ignore
+    variant=jnp.array(-1),
 )
 LEFT_DOUBLE_STEP_SCENE_OBJECT = SceneObject(
     hit_box_height=jnp.array(2 * STEP_HEIGHT),  # type: ignore
@@ -626,6 +639,7 @@ LEFT_DOUBLE_STEP_SCENE_OBJECT = SceneObject(
     hit_box_y_offset=jnp.array(DOUBLE_STEP_Y_OFFSET),  # type: ignore
     reflecting=jnp.array(1),  # type: ignore
     score_type=jnp.array(0),  # type: ignore
+    variant=jnp.array(-1),
 )
 RIGHT_DOUBLE_STEP_SCENE_OBJECT = SceneObject(
     hit_box_height=jnp.array(2 * STEP_HEIGHT),  # type: ignore
@@ -634,6 +648,7 @@ RIGHT_DOUBLE_STEP_SCENE_OBJECT = SceneObject(
     hit_box_y_offset=jnp.array(DOUBLE_STEP_Y_OFFSET),  # type: ignore
     reflecting=jnp.array(1),  # type: ignore
     score_type=jnp.array(0),  # type: ignore
+    variant=jnp.array(-1),
 )
 LEFT_SINGLE_STEP_SCENE_OBJECT = SceneObject(
     hit_box_height=jnp.array(1 * STEP_HEIGHT),  # type: ignore
@@ -642,6 +657,7 @@ LEFT_SINGLE_STEP_SCENE_OBJECT = SceneObject(
     hit_box_y_offset=jnp.array(SINGLE_STEP_Y_OFFSET),  # type: ignore
     reflecting=jnp.array(1),  # type: ignore
     score_type=jnp.array(0),  # type: ignore
+    variant=jnp.array(-1),
 )
 RIGHT_SINGLE_STEP_SCENE_OBJECT = SceneObject(
     hit_box_height=jnp.array(1 * STEP_HEIGHT),  # type: ignore
@@ -650,6 +666,7 @@ RIGHT_SINGLE_STEP_SCENE_OBJECT = SceneObject(
     hit_box_y_offset=jnp.array(SINGLE_STEP_Y_OFFSET),  # type: ignore
     reflecting=jnp.array(1),  # type: ignore
     score_type=jnp.array(0),  # type: ignore
+    variant=jnp.array(-1),
 )
 TOP_LEFT_STEP_SCENE_OBJECT = SceneObject(
     hit_box_height=jnp.array(1 * STEP_HEIGHT),  # type: ignore
@@ -658,6 +675,7 @@ TOP_LEFT_STEP_SCENE_OBJECT = SceneObject(
     hit_box_y_offset=jnp.array(24),  # type: ignore
     reflecting=jnp.array(1),  # type: ignore
     score_type=jnp.array(0),  # type: ignore
+    variant=jnp.array(-1),
 )
 TOP_RIGHT_STEP_SCENE_OBJECT = SceneObject(
     hit_box_height=jnp.array(1 * STEP_HEIGHT),  # type: ignore
@@ -666,6 +684,7 @@ TOP_RIGHT_STEP_SCENE_OBJECT = SceneObject(
     hit_box_y_offset=jnp.array(24),  # type: ignore
     reflecting=jnp.array(1),  # type: ignore
     score_type=jnp.array(0),  # type: ignore
+    variant=jnp.array(-1),
 )
 
 # Rollover Bars Scene Objects
@@ -677,6 +696,7 @@ LEFT_ROLLOVER_LEFT_BAR_SCENE_OBJECT = SceneObject(
     hit_box_y_offset=jnp.array(TOP_ROW_Y_OFFSET),  # type: ignore
     reflecting=jnp.array(1),  # type: ignore
     score_type=jnp.array(0),  # type: ignore
+    variant=jnp.array(-1),
 )
 
 LEFT_ROLLOVER_RIGHT_BAR_SCENE_OBJECT = SceneObject(
@@ -686,6 +706,7 @@ LEFT_ROLLOVER_RIGHT_BAR_SCENE_OBJECT = SceneObject(
     hit_box_y_offset=jnp.array(TOP_ROW_Y_OFFSET),  # type: ignore
     reflecting=jnp.array(1),  # type: ignore
     score_type=jnp.array(0),  # type: ignore
+    variant=jnp.array(-1),
 )
 
 ATARI_ROLLOVER_LEFT_BAR_SCENE_OBJECT = SceneObject(
@@ -695,6 +716,7 @@ ATARI_ROLLOVER_LEFT_BAR_SCENE_OBJECT = SceneObject(
     hit_box_y_offset=jnp.array(TOP_ROW_Y_OFFSET),  # type: ignore
     reflecting=jnp.array(1),  # type: ignore
     score_type=jnp.array(0),  # type: ignore
+    variant=jnp.array(-1),
 )
 
 ATARI_ROLLOVER_RIGHT_BAR_SCENE_OBJECT = SceneObject(
@@ -704,6 +726,7 @@ ATARI_ROLLOVER_RIGHT_BAR_SCENE_OBJECT = SceneObject(
     hit_box_y_offset=jnp.array(TOP_ROW_Y_OFFSET),  # type: ignore
     reflecting=jnp.array(1),  # type: ignore
     score_type=jnp.array(0),  # type: ignore
+    variant=jnp.array(-1),
 )
 
 # Bumper Scene Objects
@@ -715,6 +738,7 @@ TOP_BUMPER_SCENE_OBJECT = SceneObject(
     hit_box_y_offset=jnp.array(TOP_ROW_Y_OFFSET),  # type: ignore
     reflecting=jnp.array(1),  # type: ignore
     score_type=jnp.array(1),  # type: ignore
+    variant=jnp.array(-1),
 )
 
 LEFT_BUMPER_SCENE_OBJECT = SceneObject(
@@ -724,6 +748,7 @@ LEFT_BUMPER_SCENE_OBJECT = SceneObject(
     hit_box_y_offset=jnp.array(MIDDLE_ROW_Y_OFFSET),  # type: ignore
     reflecting=jnp.array(1),  # type: ignore
     score_type=jnp.array(1),  # type: ignore
+    variant=jnp.array(-1),
 )
 RIGHT_BUMPER_SCENE_OBJECT = SceneObject(
     hit_box_height=jnp.array(BUMPER_HEIGHT),  # type: ignore
@@ -732,6 +757,7 @@ RIGHT_BUMPER_SCENE_OBJECT = SceneObject(
     hit_box_y_offset=jnp.array(MIDDLE_ROW_Y_OFFSET),  # type: ignore
     reflecting=jnp.array(1),  # type: ignore
     score_type=jnp.array(1),  # type: ignore
+    variant=jnp.array(-1),
 )
 
 # Left Spinner Scene Objects
@@ -745,6 +771,7 @@ LEFT_SPINNER_BOTTOM_POSITION_JOINED_PART_SCENE_OBJECT = SceneObject(
     hit_box_y_offset=jnp.array(100),  # type: ignore
     reflecting=jnp.array(1),  # type: ignore
     score_type=jnp.array(2),  # type: ignore
+    variant=jnp.array(-1),
 )
 
 LEFT_SPINNER_BOTTOM_POSITION_LEFT_PART_1_SCENE_OBJECT = SceneObject(
@@ -754,6 +781,7 @@ LEFT_SPINNER_BOTTOM_POSITION_LEFT_PART_1_SCENE_OBJECT = SceneObject(
     hit_box_y_offset=jnp.array(94),  # type: ignore
     reflecting=jnp.array(1),  # type: ignore
     score_type=jnp.array(2),  # type: ignore
+    variant=jnp.array(-1),
 )
 
 LEFT_SPINNER_BOTTOM_POSITION_LEFT_PART_2_SCENE_OBJECT = SceneObject(
@@ -763,6 +791,7 @@ LEFT_SPINNER_BOTTOM_POSITION_LEFT_PART_2_SCENE_OBJECT = SceneObject(
     hit_box_y_offset=jnp.array(92),  # type: ignore
     reflecting=jnp.array(1),  # type: ignore
     score_type=jnp.array(2),  # type: ignore
+    variant=jnp.array(-1),
 )
 
 LEFT_SPINNER_BOTTOM_POSITION_RIGHT_PART_1_SCENE_OBJECT = SceneObject(
@@ -772,6 +801,7 @@ LEFT_SPINNER_BOTTOM_POSITION_RIGHT_PART_1_SCENE_OBJECT = SceneObject(
     hit_box_y_offset=jnp.array(94),  # type: ignore
     reflecting=jnp.array(1),  # type: ignore
     score_type=jnp.array(2),  # type: ignore
+    variant=jnp.array(-1),
 )
 
 LEFT_SPINNER_BOTTOM_POSITION_RIGHT_PART_2_SCENE_OBJECT = SceneObject(
@@ -781,6 +811,7 @@ LEFT_SPINNER_BOTTOM_POSITION_RIGHT_PART_2_SCENE_OBJECT = SceneObject(
     hit_box_y_offset=jnp.array(92),  # type: ignore
     reflecting=jnp.array(1),  # type: ignore
     score_type=jnp.array(2),  # type: ignore
+    variant=jnp.array(-1),
 )
 
 # Left Spinner Top Position
@@ -791,6 +822,7 @@ LEFT_SPINNER_TOP_POSITION_JOINED_PART_SCENE_OBJECT = SceneObject(
     hit_box_y_offset=jnp.array(90),  # type: ignore
     reflecting=jnp.array(1),  # type: ignore
     score_type=jnp.array(2),  # type: ignore
+    variant=jnp.array(-1),
 )
 LEFT_SPINNER_TOP_POSITION_LEFT_PART_1_SCENE_OBJECT = SceneObject(
     hit_box_height=jnp.array(SPINNER_TOP_BOTTOM_SMALL_HEIGHT),  # type: ignore
@@ -799,6 +831,7 @@ LEFT_SPINNER_TOP_POSITION_LEFT_PART_1_SCENE_OBJECT = SceneObject(
     hit_box_y_offset=jnp.array(96),  # type: ignore
     reflecting=jnp.array(1),  # type: ignore
     score_type=jnp.array(2),  # type: ignore
+    variant=jnp.array(-1),
 )
 
 LEFT_SPINNER_TOP_POSITION_LEFT_PART_2_SCENE_OBJECT = SceneObject(
@@ -808,6 +841,7 @@ LEFT_SPINNER_TOP_POSITION_LEFT_PART_2_SCENE_OBJECT = SceneObject(
     hit_box_y_offset=jnp.array(98),  # type: ignore
     reflecting=jnp.array(1),  # type: ignore
     score_type=jnp.array(2),  # type: ignore
+    variant=jnp.array(-1),
 )
 
 LEFT_SPINNER_TOP_POSITION_RIGHT_PART_1_SCENE_OBJECT = SceneObject(
@@ -817,6 +851,7 @@ LEFT_SPINNER_TOP_POSITION_RIGHT_PART_1_SCENE_OBJECT = SceneObject(
     hit_box_y_offset=jnp.array(96),  # type: ignore
     reflecting=jnp.array(1),  # type: ignore
     score_type=jnp.array(2),  # type: ignore
+    variant=jnp.array(-1),
 )
 
 LEFT_SPINNER_TOP_POSITION_RIGHT_PART_2_SCENE_OBJECT = SceneObject(
@@ -826,6 +861,7 @@ LEFT_SPINNER_TOP_POSITION_RIGHT_PART_2_SCENE_OBJECT = SceneObject(
     hit_box_y_offset=jnp.array(98),  # type: ignore
     reflecting=jnp.array(1),  # type: ignore
     score_type=jnp.array(2),  # type: ignore
+    variant=jnp.array(-1),
 )
 
 # Left Spinner Left Position
@@ -836,6 +872,7 @@ LEFT_SPINNER_LEFT_POSITION_JOINED_PART_SCENE_OBJECT = SceneObject(
     hit_box_y_offset=jnp.array(94),  # type: ignore
     reflecting=jnp.array(1),  # type: ignore
     score_type=jnp.array(2),  # type: ignore
+    variant=jnp.array(-1),
 )
 
 LEFT_SPINNER_LEFT_POSITION_LEFT_PART_1_SCENE_OBJECT = SceneObject(
@@ -845,6 +882,7 @@ LEFT_SPINNER_LEFT_POSITION_LEFT_PART_1_SCENE_OBJECT = SceneObject(
     hit_box_y_offset=jnp.array(90),  # type: ignore
     reflecting=jnp.array(1),  # type: ignore
     score_type=jnp.array(2),  # type: ignore
+    variant=jnp.array(-1),
 )
 
 LEFT_SPINNER_LEFT_POSITION_LEFT_PART_2_SCENE_OBJECT = SceneObject(
@@ -854,6 +892,7 @@ LEFT_SPINNER_LEFT_POSITION_LEFT_PART_2_SCENE_OBJECT = SceneObject(
     hit_box_y_offset=jnp.array(92),  # type: ignore
     reflecting=jnp.array(1),  # type: ignore
     score_type=jnp.array(2),  # type: ignore
+    variant=jnp.array(-1),
 )
 
 LEFT_SPINNER_LEFT_POSITION_RIGHT_PART_1_SCENE_OBJECT = SceneObject(
@@ -863,6 +902,7 @@ LEFT_SPINNER_LEFT_POSITION_RIGHT_PART_1_SCENE_OBJECT = SceneObject(
     hit_box_y_offset=jnp.array(100),  # type: ignore
     reflecting=jnp.array(1),  # type: ignore
     score_type=jnp.array(2),  # type: ignore
+    variant=jnp.array(-1),
 )
 
 LEFT_SPINNER_LEFT_POSITION_RIGHT_PART_2_SCENE_OBJECT = SceneObject(
@@ -872,6 +912,7 @@ LEFT_SPINNER_LEFT_POSITION_RIGHT_PART_2_SCENE_OBJECT = SceneObject(
     hit_box_y_offset=jnp.array(98),  # type: ignore
     reflecting=jnp.array(1),  # type: ignore
     score_type=jnp.array(2),  # type: ignore
+    variant=jnp.array(-1),
 )
 
 # Left Spinner Right Position
@@ -882,6 +923,7 @@ LEFT_SPINNER_RIGHT_POSITION_JOINED_PART_SCENE_OBJECT = SceneObject(
     hit_box_y_offset=jnp.array(94),  # type: ignore
     reflecting=jnp.array(1),  # type: ignore
     score_type=jnp.array(2),  # type: ignore
+    variant=jnp.array(-1),
 )
 
 LEFT_SPINNER_RIGHT_POSITION_LEFT_PART_1_SCENE_OBJECT = SceneObject(
@@ -891,6 +933,7 @@ LEFT_SPINNER_RIGHT_POSITION_LEFT_PART_1_SCENE_OBJECT = SceneObject(
     hit_box_y_offset=jnp.array(100),  # type: ignore
     reflecting=jnp.array(1),  # type: ignore
     score_type=jnp.array(2),  # type: ignore
+    variant=jnp.array(-1),
 )
 
 LEFT_SPINNER_RIGHT_POSITION_LEFT_PART_2_SCENE_OBJECT = SceneObject(
@@ -900,6 +943,7 @@ LEFT_SPINNER_RIGHT_POSITION_LEFT_PART_2_SCENE_OBJECT = SceneObject(
     hit_box_y_offset=jnp.array(98),  # type: ignore
     reflecting=jnp.array(1),  # type: ignore
     score_type=jnp.array(2),  # type: ignore
+    variant=jnp.array(-1),
 )
 
 LEFT_SPINNER_RIGHT_POSITION_RIGHT_PART_1_SCENE_OBJECT = SceneObject(
@@ -909,6 +953,7 @@ LEFT_SPINNER_RIGHT_POSITION_RIGHT_PART_1_SCENE_OBJECT = SceneObject(
     hit_box_y_offset=jnp.array(90),  # type: ignore
     reflecting=jnp.array(1),  # type: ignore
     score_type=jnp.array(2),  # type: ignore
+    variant=jnp.array(-1),
 )
 
 LEFT_SPINNER_RIGHT_POSITION_RIGHT_PART_2_SCENE_OBJECT = SceneObject(
@@ -918,6 +963,7 @@ LEFT_SPINNER_RIGHT_POSITION_RIGHT_PART_2_SCENE_OBJECT = SceneObject(
     hit_box_y_offset=jnp.array(92),  # type: ignore
     reflecting=jnp.array(1),  # type: ignore
     score_type=jnp.array(2),  # type: ignore
+    variant=jnp.array(-1),
 )
 
 # Right Spinner Scene Objects
@@ -930,6 +976,7 @@ RIGHT_SPINNER_BOTTOM_POSITION_JOINED_PART_SCENE_OBJECT = SceneObject(
     hit_box_y_offset=jnp.array(100),  # type: ignore
     reflecting=jnp.array(1),  # type: ignore
     score_type=jnp.array(2),  # type: ignore
+    variant=jnp.array(-1),
 )
 
 RIGHT_SPINNER_BOTTOM_POSITION_LEFT_PART_1_SCENE_OBJECT = SceneObject(
@@ -939,6 +986,7 @@ RIGHT_SPINNER_BOTTOM_POSITION_LEFT_PART_1_SCENE_OBJECT = SceneObject(
     hit_box_y_offset=jnp.array(94),  # type: ignore
     reflecting=jnp.array(1),  # type: ignore
     score_type=jnp.array(2),  # type: ignore
+    variant=jnp.array(-1),
 )
 
 RIGHT_SPINNER_BOTTOM_POSITION_LEFT_PART_2_SCENE_OBJECT = SceneObject(
@@ -948,6 +996,7 @@ RIGHT_SPINNER_BOTTOM_POSITION_LEFT_PART_2_SCENE_OBJECT = SceneObject(
     hit_box_y_offset=jnp.array(92),  # type: ignore
     reflecting=jnp.array(1),  # type: ignore
     score_type=jnp.array(2),  # type: ignore
+    variant=jnp.array(-1),
 )
 
 RIGHT_SPINNER_BOTTOM_POSITION_RIGHT_PART_1_SCENE_OBJECT = SceneObject(
@@ -957,6 +1006,7 @@ RIGHT_SPINNER_BOTTOM_POSITION_RIGHT_PART_1_SCENE_OBJECT = SceneObject(
     hit_box_y_offset=jnp.array(94),  # type: ignore
     reflecting=jnp.array(1),  # type: ignore
     score_type=jnp.array(2),  # type: ignore
+    variant=jnp.array(-1),
 )
 
 RIGHT_SPINNER_BOTTOM_POSITION_RIGHT_PART_2_SCENE_OBJECT = SceneObject(
@@ -966,6 +1016,7 @@ RIGHT_SPINNER_BOTTOM_POSITION_RIGHT_PART_2_SCENE_OBJECT = SceneObject(
     hit_box_y_offset=jnp.array(92),  # type: ignore
     reflecting=jnp.array(1),  # type: ignore
     score_type=jnp.array(2),  # type: ignore
+    variant=jnp.array(-1),
 )
 
 # Right Spinner Top Position
@@ -976,6 +1027,7 @@ RIGHT_SPINNER_TOP_POSITION_JOINED_PART_SCENE_OBJECT = SceneObject(
     hit_box_y_offset=jnp.array(90),  # type: ignore
     reflecting=jnp.array(1),  # type: ignore
     score_type=jnp.array(2),  # type: ignore
+    variant=jnp.array(-1),
 )
 
 RIGHT_SPINNER_TOP_POSITION_LEFT_PART_1_SCENE_OBJECT = SceneObject(
@@ -985,6 +1037,7 @@ RIGHT_SPINNER_TOP_POSITION_LEFT_PART_1_SCENE_OBJECT = SceneObject(
     hit_box_y_offset=jnp.array(96),  # type: ignore
     reflecting=jnp.array(1),  # type: ignore
     score_type=jnp.array(2),  # type: ignore
+    variant=jnp.array(-1),
 )
 
 RIGHT_SPINNER_TOP_POSITION_LEFT_PART_2_SCENE_OBJECT = SceneObject(
@@ -994,6 +1047,7 @@ RIGHT_SPINNER_TOP_POSITION_LEFT_PART_2_SCENE_OBJECT = SceneObject(
     hit_box_y_offset=jnp.array(98),  # type: ignore
     reflecting=jnp.array(1),  # type: ignore
     score_type=jnp.array(2),  # type: ignore
+    variant=jnp.array(-1),
 )
 
 RIGHT_SPINNER_TOP_POSITION_RIGHT_PART_1_SCENE_OBJECT = SceneObject(
@@ -1003,6 +1057,7 @@ RIGHT_SPINNER_TOP_POSITION_RIGHT_PART_1_SCENE_OBJECT = SceneObject(
     hit_box_y_offset=jnp.array(96),  # type: ignore
     reflecting=jnp.array(1),  # type: ignore
     score_type=jnp.array(2),  # type: ignore
+    variant=jnp.array(-1),
 )
 
 RIGHT_SPINNER_TOP_POSITION_RIGHT_PART_2_SCENE_OBJECT = SceneObject(
@@ -1012,6 +1067,7 @@ RIGHT_SPINNER_TOP_POSITION_RIGHT_PART_2_SCENE_OBJECT = SceneObject(
     hit_box_y_offset=jnp.array(98),  # type: ignore
     reflecting=jnp.array(1),  # type: ignore
     score_type=jnp.array(2),  # type: ignore
+    variant=jnp.array(-1),
 )
 
 # Right Spinner Left Position
@@ -1022,6 +1078,7 @@ RIGHT_SPINNER_LEFT_POSITION_JOINED_PART_SCENE_OBJECT = SceneObject(
     hit_box_y_offset=jnp.array(94),  # type: ignore
     reflecting=jnp.array(1),  # type: ignore
     score_type=jnp.array(2),  # type: ignore
+    variant=jnp.array(-1),
 )
 
 RIGHT_SPINNER_LEFT_POSITION_LEFT_PART_1_SCENE_OBJECT = SceneObject(
@@ -1031,6 +1088,7 @@ RIGHT_SPINNER_LEFT_POSITION_LEFT_PART_1_SCENE_OBJECT = SceneObject(
     hit_box_y_offset=jnp.array(90),  # type: ignore
     reflecting=jnp.array(1),  # type: ignore
     score_type=jnp.array(2),  # type: ignore
+    variant=jnp.array(-1),
 )
 
 RIGHT_SPINNER_LEFT_POSITION_LEFT_PART_2_SCENE_OBJECT = SceneObject(
@@ -1040,6 +1098,7 @@ RIGHT_SPINNER_LEFT_POSITION_LEFT_PART_2_SCENE_OBJECT = SceneObject(
     hit_box_y_offset=jnp.array(92),  # type: ignore
     reflecting=jnp.array(1),  # type: ignore
     score_type=jnp.array(2),  # type: ignore
+    variant=jnp.array(-1),
 )
 
 RIGHT_SPINNER_LEFT_POSITION_RIGHT_PART_1_SCENE_OBJECT = SceneObject(
@@ -1049,6 +1108,7 @@ RIGHT_SPINNER_LEFT_POSITION_RIGHT_PART_1_SCENE_OBJECT = SceneObject(
     hit_box_y_offset=jnp.array(100),  # type: ignore
     reflecting=jnp.array(1),  # type: ignore
     score_type=jnp.array(2),  # type: ignore
+    variant=jnp.array(-1),
 )
 
 RIGHT_SPINNER_LEFT_POSITION_RIGHT_PART_2_SCENE_OBJECT = SceneObject(
@@ -1058,6 +1118,7 @@ RIGHT_SPINNER_LEFT_POSITION_RIGHT_PART_2_SCENE_OBJECT = SceneObject(
     hit_box_y_offset=jnp.array(98),  # type: ignore
     reflecting=jnp.array(1),  # type: ignore
     score_type=jnp.array(2),  # type: ignore
+    variant=jnp.array(-1),
 )
 
 # Right Spinner Right Position
@@ -1068,6 +1129,7 @@ RIGHT_SPINNER_RIGHT_POSITION_JOINED_PART_SCENE_OBJECT = SceneObject(
     hit_box_y_offset=jnp.array(94),  # type: ignore
     reflecting=jnp.array(1),  # type: ignore
     score_type=jnp.array(2),  # type: ignore
+    variant=jnp.array(-1),
 )
 
 RIGHT_SPINNER_RIGHT_POSITION_LEFT_PART_1_SCENE_OBJECT = SceneObject(
@@ -1077,6 +1139,7 @@ RIGHT_SPINNER_RIGHT_POSITION_LEFT_PART_1_SCENE_OBJECT = SceneObject(
     hit_box_y_offset=jnp.array(100),  # type: ignore
     reflecting=jnp.array(1),  # type: ignore
     score_type=jnp.array(2),  # type: ignore
+    variant=jnp.array(-1),
 )
 
 RIGHT_SPINNER_RIGHT_POSITION_LEFT_PART_2_SCENE_OBJECT = SceneObject(
@@ -1086,6 +1149,7 @@ RIGHT_SPINNER_RIGHT_POSITION_LEFT_PART_2_SCENE_OBJECT = SceneObject(
     hit_box_y_offset=jnp.array(98),  # type: ignore
     reflecting=jnp.array(1),  # type: ignore
     score_type=jnp.array(2),  # type: ignore
+    variant=jnp.array(-1),
 )
 
 RIGHT_SPINNER_RIGHT_POSITION_RIGHT_PART_1_SCENE_OBJECT = SceneObject(
@@ -1095,6 +1159,7 @@ RIGHT_SPINNER_RIGHT_POSITION_RIGHT_PART_1_SCENE_OBJECT = SceneObject(
     hit_box_y_offset=jnp.array(90),  # type: ignore
     reflecting=jnp.array(1),  # type: ignore
     score_type=jnp.array(2),  # type: ignore
+    variant=jnp.array(-1),
 )
 
 RIGHT_SPINNER_RIGHT_POSITION_RIGHT_PART_2_SCENE_OBJECT = SceneObject(
@@ -1104,6 +1169,7 @@ RIGHT_SPINNER_RIGHT_POSITION_RIGHT_PART_2_SCENE_OBJECT = SceneObject(
     hit_box_y_offset=jnp.array(92),  # type: ignore
     reflecting=jnp.array(1),  # type: ignore
     score_type=jnp.array(2),  # type: ignore
+    variant=jnp.array(-1),
 )
 
 DIAMOND_VERTICAL_RECTANGLE_BOUNDING_BOX_HEIGHT = jnp.array(10)
@@ -1120,6 +1186,7 @@ LEFT_LIT_UP_TARGET_LARGE_VERTICAL_SCENE_OBJECT = SceneObject(
     hit_box_y_offset=jnp.array(26),  # type: ignore
     reflecting=jnp.array(0),  # type: ignore
     score_type=jnp.array(6),  # type: ignore
+    variant=jnp.array(0),
 )
 
 LEFT_LIT_UP_TARGET_LARGE_HORIZONTAL_SCENE_OBJECT = SceneObject(
@@ -1129,6 +1196,7 @@ LEFT_LIT_UP_TARGET_LARGE_HORIZONTAL_SCENE_OBJECT = SceneObject(
     hit_box_y_offset=jnp.array(30),  # type: ignore
     reflecting=jnp.array(0),  # type: ignore
     score_type=jnp.array(6),  # type: ignore
+    variant=jnp.array(0),
 )
 
 MIDDLE_LIT_UP_TARGET_LARGE_VERTICAL_SCENE_OBJECT = SceneObject(
@@ -1138,6 +1206,7 @@ MIDDLE_LIT_UP_TARGET_LARGE_VERTICAL_SCENE_OBJECT = SceneObject(
     hit_box_y_offset=jnp.array(26),  # type: ignore
     reflecting=jnp.array(0),  # type: ignore
     score_type=jnp.array(7),  # type: ignore
+    variant=jnp.array(1),
 )
 
 MIDDLE_LIT_UP_TARGET_LARGE_HORIZONTAL_SCENE_OBJECT = SceneObject(
@@ -1147,6 +1216,7 @@ MIDDLE_LIT_UP_TARGET_LARGE_HORIZONTAL_SCENE_OBJECT = SceneObject(
     hit_box_y_offset=jnp.array(28),  # type: ignore
     reflecting=jnp.array(0),  # type: ignore
     score_type=jnp.array(7),  # type: ignore
+    variant=jnp.array(1),
 )
 
 RIGHT_LIT_UP_TARGET_LARGE_VERTICAL_SCENE_OBJECT = SceneObject(
@@ -1156,6 +1226,7 @@ RIGHT_LIT_UP_TARGET_LARGE_VERTICAL_SCENE_OBJECT = SceneObject(
     hit_box_y_offset=jnp.array(26),  # type: ignore
     reflecting=jnp.array(0),  # type: ignore
     score_type=jnp.array(8),  # type: ignore
+    variant=jnp.array(2),
 )
 
 RIGHT_LIT_UP_TARGET_LARGE_HORIZONTAL_SCENE_OBJECT = SceneObject(
@@ -1165,6 +1236,7 @@ RIGHT_LIT_UP_TARGET_LARGE_HORIZONTAL_SCENE_OBJECT = SceneObject(
     hit_box_y_offset=jnp.array(28),  # type: ignore
     reflecting=jnp.array(0),  # type: ignore
     score_type=jnp.array(8),  # type: ignore
+    variant=jnp.array(2),
 )
 
 SPECIAL_LIT_UP_TARGET_LARGE_VERTICAL_SCENE_OBJECT = SceneObject(
@@ -1174,6 +1246,7 @@ SPECIAL_LIT_UP_TARGET_LARGE_VERTICAL_SCENE_OBJECT = SceneObject(
     hit_box_y_offset=jnp.array(122),  # type: ignore
     reflecting=jnp.array(0),  # type: ignore
     score_type=jnp.array(5),  # type: ignore
+    variant=jnp.array(3),
 )
 
 SPECIAL_LIT_UP_TARGET_LARGE_HORIZONTAL_SCENE_OBJECT = SceneObject(
@@ -1183,6 +1256,7 @@ SPECIAL_LIT_UP_TARGET_LARGE_HORIZONTAL_SCENE_OBJECT = SceneObject(
     hit_box_y_offset=jnp.array(124),  # type: ignore
     reflecting=jnp.array(0),  # type: ignore
     score_type=jnp.array(5),  # type: ignore
+    variant=jnp.array(3),
 )
 
 LEFT_ROLLOVER_SCENE_OBJECT = SceneObject(
@@ -1192,6 +1266,7 @@ LEFT_ROLLOVER_SCENE_OBJECT = SceneObject(
     hit_box_y_offset=jnp.array(58),  # type: ignore
     reflecting=jnp.array(0),  # type: ignore
     score_type=jnp.array(3),  # type: ignore
+    variant=jnp.array(-1),
 )
 
 ATARI_ROLLOVER_SCENE_OBJECT = SceneObject(
@@ -1201,6 +1276,7 @@ ATARI_ROLLOVER_SCENE_OBJECT = SceneObject(
     hit_box_y_offset=jnp.array(58),  # type: ignore
     reflecting=jnp.array(0),  # type: ignore
     score_type=jnp.array(4),  # type: ignore
+    variant=jnp.array(-1),
 )
 
 # Middle Bar Scene Object
@@ -1212,6 +1288,7 @@ MIDDLE_BAR_SCENE_OBJECT = SceneObject(
     hit_box_y_offset=jnp.array(MIDDLE_BAR_Y),  # type: ignore
     reflecting=jnp.array(1),  # type: ignore
     score_type=jnp.array(0),  # type: ignore
+    variant=jnp.array(-1),
 )
 
 # Left Flipper SceneObjects for different states
@@ -1222,6 +1299,7 @@ LEFT_FLIPPER_STATE_0_SCENE_OBJECT_1 = SceneObject(
     hit_box_y_offset=jnp.array(184),
     reflecting=jnp.array(1),
     score_type=jnp.array(0),
+    variant=jnp.array(0),
 )
 
 
@@ -1232,6 +1310,7 @@ LEFT_FLIPPER_STATE_0_SCENE_OBJECT_2 = SceneObject(
     hit_box_y_offset=jnp.array(185),
     reflecting=jnp.array(1),
     score_type=jnp.array(0),
+    variant=jnp.array(0),
 )
 
 LEFT_FLIPPER_STATE_0_SCENE_OBJECT_3 = SceneObject(
@@ -1241,6 +1320,7 @@ LEFT_FLIPPER_STATE_0_SCENE_OBJECT_3 = SceneObject(
     hit_box_y_offset=jnp.array(186),
     reflecting=jnp.array(1),
     score_type=jnp.array(0),
+    variant=jnp.array(0),
 )
 
 LEFT_FLIPPER_STATE_0_SCENE_OBJECT_4 = SceneObject(
@@ -1250,6 +1330,7 @@ LEFT_FLIPPER_STATE_0_SCENE_OBJECT_4 = SceneObject(
     hit_box_y_offset=jnp.array(187),
     reflecting=jnp.array(1),
     score_type=jnp.array(0),
+    variant=jnp.array(0),
 )
 
 LEFT_FLIPPER_STATE_0_SCENE_OBJECT_5 = SceneObject(
@@ -1259,6 +1340,7 @@ LEFT_FLIPPER_STATE_0_SCENE_OBJECT_5 = SceneObject(
     hit_box_y_offset=jnp.array(188),
     reflecting=jnp.array(1),
     score_type=jnp.array(0),
+    variant=jnp.array(0),
 )
 
 LEFT_FLIPPER_STATE_0_SCENE_OBJECT_6 = SceneObject(
@@ -1268,6 +1350,7 @@ LEFT_FLIPPER_STATE_0_SCENE_OBJECT_6 = SceneObject(
     hit_box_y_offset=jnp.array(189),
     reflecting=jnp.array(1),
     score_type=jnp.array(0),
+    variant=jnp.array(0),
 )
 
 
@@ -1279,6 +1362,7 @@ LEFT_FLIPPER_STATE_16_SCENE_OBJECT_1 = SceneObject(
     hit_box_y_offset=jnp.array(184),
     reflecting=jnp.array(1),
     score_type=jnp.array(0),
+    variant=jnp.array(1),
 )
 
 LEFT_FLIPPER_STATE_16_SCENE_OBJECT_2 = SceneObject(
@@ -1288,6 +1372,7 @@ LEFT_FLIPPER_STATE_16_SCENE_OBJECT_2 = SceneObject(
     hit_box_y_offset=jnp.array(185),
     reflecting=jnp.array(1),
     score_type=jnp.array(0),
+    variant=jnp.array(1),
 )
 
 LEFT_FLIPPER_STATE_16_SCENE_OBJECT_3 = SceneObject(
@@ -1297,6 +1382,7 @@ LEFT_FLIPPER_STATE_16_SCENE_OBJECT_3 = SceneObject(
     hit_box_y_offset=jnp.array(186),
     reflecting=jnp.array(1),
     score_type=jnp.array(0),
+    variant=jnp.array(1),
 )
 
 
@@ -1312,6 +1398,7 @@ LEFT_FLIPPER_STATE_32_SCENE_OBJECT_1 = SceneObject(
     hit_box_y_offset=jnp.array(184),
     reflecting=jnp.array(1),
     score_type=jnp.array(0),
+    variant=jnp.array(2),
 )
 
 LEFT_FLIPPER_STATE_32_SCENE_OBJECT_2 = SceneObject(
@@ -1321,6 +1408,7 @@ LEFT_FLIPPER_STATE_32_SCENE_OBJECT_2 = SceneObject(
     hit_box_y_offset=jnp.array(183),
     reflecting=jnp.array(1),
     score_type=jnp.array(0),
+    variant=jnp.array(2),
 )
 
 LEFT_FLIPPER_STATE_32_SCENE_OBJECT_3 = SceneObject(
@@ -1330,6 +1418,7 @@ LEFT_FLIPPER_STATE_32_SCENE_OBJECT_3 = SceneObject(
     hit_box_y_offset=jnp.array(182),
     reflecting=jnp.array(1),
     score_type=jnp.array(0),
+    variant=jnp.array(2),
 )
 
 LEFT_FLIPPER_STATE_32_SCENE_OBJECT_4 = SceneObject(
@@ -1339,6 +1428,7 @@ LEFT_FLIPPER_STATE_32_SCENE_OBJECT_4 = SceneObject(
     hit_box_y_offset=jnp.array(182),
     reflecting=jnp.array(1),
     score_type=jnp.array(0),
+    variant=jnp.array(2),
 )
 
 LEFT_FLIPPER_STATE_32_SCENE_OBJECT_5 = SceneObject(
@@ -1348,6 +1438,7 @@ LEFT_FLIPPER_STATE_32_SCENE_OBJECT_5 = SceneObject(
     hit_box_y_offset=jnp.array(181),
     reflecting=jnp.array(1),
     score_type=jnp.array(0),
+    variant=jnp.array(2),
 )
 
 
@@ -1359,6 +1450,7 @@ LEFT_FLIPPER_STATE_48_SCENE_OBJECT_1 = SceneObject(
     hit_box_y_offset=jnp.array(183),
     reflecting=jnp.array(1),
     score_type=jnp.array(0),
+    variant=jnp.array(3),
 )
 
 LEFT_FLIPPER_STATE_48_SCENE_OBJECT_2 = SceneObject(
@@ -1368,6 +1460,7 @@ LEFT_FLIPPER_STATE_48_SCENE_OBJECT_2 = SceneObject(
     hit_box_y_offset=jnp.array(182),
     reflecting=jnp.array(1),
     score_type=jnp.array(0),
+    variant=jnp.array(3),
 )
 
 LEFT_FLIPPER_STATE_48_SCENE_OBJECT_3 = SceneObject(
@@ -1377,6 +1470,7 @@ LEFT_FLIPPER_STATE_48_SCENE_OBJECT_3 = SceneObject(
     hit_box_y_offset=jnp.array(181),
     reflecting=jnp.array(1),
     score_type=jnp.array(0),
+    variant=jnp.array(3),
 )
 
 LEFT_FLIPPER_STATE_48_SCENE_OBJECT_4 = SceneObject(
@@ -1386,6 +1480,7 @@ LEFT_FLIPPER_STATE_48_SCENE_OBJECT_4 = SceneObject(
     hit_box_y_offset=jnp.array(180),
     reflecting=jnp.array(1),
     score_type=jnp.array(0),
+    variant=jnp.array(3),
 )
 
 LEFT_FLIPPER_STATE_48_SCENE_OBJECT_5 = SceneObject(
@@ -1395,6 +1490,7 @@ LEFT_FLIPPER_STATE_48_SCENE_OBJECT_5 = SceneObject(
     hit_box_y_offset=jnp.array(179),
     reflecting=jnp.array(1),
     score_type=jnp.array(0),
+    variant=jnp.array(3),
 )
 
 LEFT_FLIPPER_STATE_48_SCENE_OBJECT_6 = SceneObject(
@@ -1404,6 +1500,7 @@ LEFT_FLIPPER_STATE_48_SCENE_OBJECT_6 = SceneObject(
     hit_box_y_offset=jnp.array(177),
     reflecting=jnp.array(1),
     score_type=jnp.array(0),
+    variant=jnp.array(3),
 )
 
 
@@ -1416,6 +1513,7 @@ RIGHT_FLIPPER_STATE_0_SCENE_OBJECT_1 = SceneObject(
     hit_box_y_offset=jnp.array(184),
     reflecting=jnp.array(1),
     score_type=jnp.array(0),
+    variant=jnp.array(0),
 )
 
 
@@ -1426,6 +1524,7 @@ RIGHT_FLIPPER_STATE_0_SCENE_OBJECT_2 = SceneObject(
     hit_box_y_offset=jnp.array(185),
     reflecting=jnp.array(1),
     score_type=jnp.array(0),
+    variant=jnp.array(0),
 )
 
 RIGHT_FLIPPER_STATE_0_SCENE_OBJECT_3 = SceneObject(
@@ -1435,6 +1534,7 @@ RIGHT_FLIPPER_STATE_0_SCENE_OBJECT_3 = SceneObject(
     hit_box_y_offset=jnp.array(186),
     reflecting=jnp.array(1),
     score_type=jnp.array(0),
+    variant=jnp.array(0),
 )
 
 RIGHT_FLIPPER_STATE_0_SCENE_OBJECT_4 = SceneObject(
@@ -1444,6 +1544,7 @@ RIGHT_FLIPPER_STATE_0_SCENE_OBJECT_4 = SceneObject(
     hit_box_y_offset=jnp.array(187),
     reflecting=jnp.array(1),
     score_type=jnp.array(0),
+    variant=jnp.array(0),
 )
 
 RIGHT_FLIPPER_STATE_0_SCENE_OBJECT_5 = SceneObject(
@@ -1453,6 +1554,7 @@ RIGHT_FLIPPER_STATE_0_SCENE_OBJECT_5 = SceneObject(
     hit_box_y_offset=jnp.array(188),
     reflecting=jnp.array(1),
     score_type=jnp.array(0),
+    variant=jnp.array(0),
 )
 
 RIGHT_FLIPPER_STATE_0_SCENE_OBJECT_6 = SceneObject(
@@ -1462,6 +1564,7 @@ RIGHT_FLIPPER_STATE_0_SCENE_OBJECT_6 = SceneObject(
     hit_box_y_offset=jnp.array(189),
     reflecting=jnp.array(1),
     score_type=jnp.array(0),
+    variant=jnp.array(0),
 )
 
 
@@ -1473,6 +1576,7 @@ RIGHT_FLIPPER_STATE_16_SCENE_OBJECT_1 = SceneObject(
     hit_box_y_offset=jnp.array(185),
     reflecting=jnp.array(1),
     score_type=jnp.array(0),
+    variant=jnp.array(1),
 )
 
 RIGHT_FLIPPER_STATE_16_SCENE_OBJECT_2 = SceneObject(
@@ -1482,6 +1586,7 @@ RIGHT_FLIPPER_STATE_16_SCENE_OBJECT_2 = SceneObject(
     hit_box_y_offset=jnp.array(186),
     reflecting=jnp.array(1),
     score_type=jnp.array(0),
+    variant=jnp.array(1),
 )
 
 RIGHT_FLIPPER_STATE_16_SCENE_OBJECT_3 = SceneObject(
@@ -1491,6 +1596,7 @@ RIGHT_FLIPPER_STATE_16_SCENE_OBJECT_3 = SceneObject(
     hit_box_y_offset=jnp.array(187),
     reflecting=jnp.array(1),
     score_type=jnp.array(0),
+    variant=jnp.array(1),
 )
 
 
@@ -1502,6 +1608,7 @@ RIGHT_FLIPPER_STATE_32_SCENE_OBJECT_1 = SceneObject(
     hit_box_y_offset=jnp.array(184),
     reflecting=jnp.array(1),
     score_type=jnp.array(0),
+    variant=jnp.array(2),
 )
 
 RIGHT_FLIPPER_STATE_32_SCENE_OBJECT_2 = SceneObject(
@@ -1511,6 +1618,7 @@ RIGHT_FLIPPER_STATE_32_SCENE_OBJECT_2 = SceneObject(
     hit_box_y_offset=jnp.array(183),
     reflecting=jnp.array(1),
     score_type=jnp.array(0),
+    variant=jnp.array(2),
 )
 
 RIGHT_FLIPPER_STATE_32_SCENE_OBJECT_3 = SceneObject(
@@ -1520,6 +1628,7 @@ RIGHT_FLIPPER_STATE_32_SCENE_OBJECT_3 = SceneObject(
     hit_box_y_offset=jnp.array(182),
     reflecting=jnp.array(1),
     score_type=jnp.array(0),
+    variant=jnp.array(2),
 )
 
 RIGHT_FLIPPER_STATE_32_SCENE_OBJECT_4 = SceneObject(
@@ -1529,6 +1638,7 @@ RIGHT_FLIPPER_STATE_32_SCENE_OBJECT_4 = SceneObject(
     hit_box_y_offset=jnp.array(182),
     reflecting=jnp.array(1),
     score_type=jnp.array(0),
+    variant=jnp.array(2),
 )
 
 RIGHT_FLIPPER_STATE_32_SCENE_OBJECT_5 = SceneObject(
@@ -1538,6 +1648,7 @@ RIGHT_FLIPPER_STATE_32_SCENE_OBJECT_5 = SceneObject(
     hit_box_y_offset=jnp.array(181),
     reflecting=jnp.array(1),
     score_type=jnp.array(0),
+    variant=jnp.array(2),
 )
 
 
@@ -1549,6 +1660,7 @@ RIGHT_FLIPPER_STATE_48_SCENE_OBJECT_1 = SceneObject(
     hit_box_y_offset=jnp.array(183),
     reflecting=jnp.array(1),
     score_type=jnp.array(0),
+    variant=jnp.array(3),
 )
 
 RIGHT_FLIPPER_STATE_48_SCENE_OBJECT_2 = SceneObject(
@@ -1558,6 +1670,7 @@ RIGHT_FLIPPER_STATE_48_SCENE_OBJECT_2 = SceneObject(
     hit_box_y_offset=jnp.array(182),
     reflecting=jnp.array(1),
     score_type=jnp.array(0),
+    variant=jnp.array(3),
 )
 
 RIGHT_FLIPPER_STATE_48_SCENE_OBJECT_3 = SceneObject(
@@ -1567,6 +1680,7 @@ RIGHT_FLIPPER_STATE_48_SCENE_OBJECT_3 = SceneObject(
     hit_box_y_offset=jnp.array(181),
     reflecting=jnp.array(1),
     score_type=jnp.array(0),
+    variant=jnp.array(3),
 )
 
 RIGHT_FLIPPER_STATE_48_SCENE_OBJECT_4 = SceneObject(
@@ -1576,6 +1690,7 @@ RIGHT_FLIPPER_STATE_48_SCENE_OBJECT_4 = SceneObject(
     hit_box_y_offset=jnp.array(180),
     reflecting=jnp.array(1),
     score_type=jnp.array(0),
+    variant=jnp.array(3),
 )
 
 RIGHT_FLIPPER_STATE_48_SCENE_OBJECT_5 = SceneObject(
@@ -1585,6 +1700,7 @@ RIGHT_FLIPPER_STATE_48_SCENE_OBJECT_5 = SceneObject(
     hit_box_y_offset=jnp.array(179),
     reflecting=jnp.array(1),
     score_type=jnp.array(0),
+    variant=jnp.array(3),
 )
 
 RIGHT_FLIPPER_STATE_48_SCENE_OBJECT_6 = SceneObject(
@@ -1594,6 +1710,7 @@ RIGHT_FLIPPER_STATE_48_SCENE_OBJECT_6 = SceneObject(
     hit_box_y_offset=jnp.array(177),
     reflecting=jnp.array(1),
     score_type=jnp.array(0),
+    variant=jnp.array(3),
 )
 
 
@@ -1728,6 +1845,7 @@ REFLECTING_SCENE_OBJECTS = jnp.stack(
                 scene_object.hit_box_y_offset,
                 scene_object.reflecting,
                 scene_object.score_type,
+                scene_object.variant,
             ]
         )
         for scene_object in ALL_SCENE_OBJECTS_LIST
@@ -1742,7 +1860,8 @@ NON_REFLECTING_SCENE_OBJECTS = jnp.stack(
            scene_object.hit_box_x_offset,
            scene_object.hit_box_y_offset,
            scene_object.reflecting,
-           scene_object.score_type
+           scene_object.score_type,
+           scene_object.variant,
        ]) for scene_object in ALL_SCENE_OBJECTS_LIST
        if scene_object.reflecting == 0
    ]
@@ -1981,7 +2100,8 @@ def _calc_hit_point(
         hit_point[1]: jnp.ndarray, the x position of the hit point
         hit_point[2]: jnp.ndarray, the y position of the hit point
         hit_point[3]: jnp.ndarray, whether the obstacle was hit horizontally
-        hit_point[4,5]: scene_object properties: reflecting, score_type
+        hit_point[4]: jnp.ndarray, whether the obstacle was hit vertically
+        hit_point[5,6,7]: scene_object properties: reflecting, score_type, state
     """
     # Calculate trajectory of the ball in x and y direction
     trajectory_x = ball_movement.new_ball_x - ball_movement.old_ball_x
@@ -2038,14 +2158,15 @@ def _calc_hit_point(
             hit_point_y,
             hit_horizontal,
             hit_vertical,
-            scene_object[4],
-            scene_object[5],
+            scene_object[4], # reflecting
+            scene_object[5], # score/object type
+            scene_object[6], # permitted object state
         ]
     )
 
     hit_point = jax.lax.cond(
         no_collision,
-        lambda: jnp.array([T_ENTRY_NO_COLLISION, -1.0, -1.0, 0.0, 0.0, 1.0, 0.0]),
+        lambda: jnp.array([T_ENTRY_NO_COLLISION, -1.0, -1.0, 0.0, 0.0, 1.0, 0.0, -1.0]),
         lambda: hit_point,
     )
 
@@ -2089,13 +2210,14 @@ def _reflect_ball(
 
     r = d_hit_point / d_trajectory
 
-    new_ball_x = hit_point[1] + r * reflected_velocity_x
-    new_ball_y = hit_point[2] + r * reflected_velocity_y
-
     # If the ball hit a corner, reflect ball in the direction it came from instead of
     # via surface normal of the object
-    new_ball_x = jnp.where(jnp.logical_and(hit_point[3], hit_point[4]), hit_point[1] - r * velocity_x, new_ball_x)
-    new_ball_y = jnp.where(jnp.logical_and(hit_point[3], hit_point[4]), hit_point[2] - r * velocity_y, new_ball_y)
+    ball_hit_corner = jnp.logical_and(hit_point[3], hit_point[4])
+    reflected_velocity_x = jnp.where(ball_hit_corner, -velocity_x, reflected_velocity_x)
+    reflected_velocity_y = jnp.where(ball_hit_corner, -velocity_y, reflected_velocity_y)
+
+    new_ball_x = hit_point[1] + r * reflected_velocity_x
+    new_ball_y = hit_point[2] + r * reflected_velocity_y
 
     return new_ball_x, new_ball_y
 
@@ -2123,72 +2245,119 @@ def _check_obstacle_hits(
     HOW WE DO IT:
         Manually set the entry time for all the components of these objects to a very high number.
         This will then ignore them for reflections and point scoring as only the lowest entry time is to be considered.
+
+
+    Note by Jonas:
+    NEW IDEA:
+        identify the scene_objects via scoring_type and state;
+        set t_entry time to T_ENTRY_NO_COLLISIONS as in the original idea
+        This way we dont have to rely on knowing the exact scene_object indices
     """
 
+    # DISABLE NON-REFLECTING SCENCE OBJECTS THAT ARE NOT IN THE CURRENT GAME STATE
+    ###############################################################################################
+
+    # Disable inactive lit up targets (diamonds)
     is_left_lit_up_target_active = state.active_targets[0]
     is_middle_lit_up_target_active = state.active_targets[1]
     is_right_lit_up_target_active = state.active_targets[2]
     is_special_lit_up_target_active = state.active_targets[3]
-    # Disable inactive lit up targets (diamonds)
-    non_reflecting_hit_points = jax.lax.cond(is_left_lit_up_target_active, lambda a: a, lambda a: a.at[0, 0].set(T_ENTRY_NO_COLLISION), non_reflecting_hit_points)
-    non_reflecting_hit_points = jax.lax.cond(is_left_lit_up_target_active, lambda a: a, lambda a: a.at[1, 0].set(T_ENTRY_NO_COLLISION), non_reflecting_hit_points)
-
-    non_reflecting_hit_points = jax.lax.cond(is_middle_lit_up_target_active, lambda a: a, lambda a: a.at[2, 0].set(T_ENTRY_NO_COLLISION), non_reflecting_hit_points)
-    non_reflecting_hit_points = jax.lax.cond(is_middle_lit_up_target_active, lambda a: a, lambda a: a.at[3, 0].set(T_ENTRY_NO_COLLISION), non_reflecting_hit_points)
-
-    non_reflecting_hit_points = jax.lax.cond(is_right_lit_up_target_active, lambda a: a, lambda a: a.at[4, 0].set(T_ENTRY_NO_COLLISION), non_reflecting_hit_points)
-    non_reflecting_hit_points = jax.lax.cond(is_right_lit_up_target_active, lambda a: a, lambda a: a.at[5, 0].set(T_ENTRY_NO_COLLISION), non_reflecting_hit_points)
-
-    # Disable inactive special lit up target
-    non_reflecting_hit_points = jax.lax.cond(is_special_lit_up_target_active, lambda a: a, lambda a: a.at[6, 0].set(T_ENTRY_NO_COLLISION), non_reflecting_hit_points)
-    non_reflecting_hit_points = jax.lax.cond(is_special_lit_up_target_active, lambda a: a, lambda a: a.at[7, 0].set(T_ENTRY_NO_COLLISION), non_reflecting_hit_points)
+    is_lit_up_target = non_reflecting_hit_points[:,6] == 6
+    is_left_lit_up_target = jnp.logical_and(is_lit_up_target, non_reflecting_hit_points[:,7] == 0)
+    is_middle_lit_up_target = jnp.logical_and(is_lit_up_target, non_reflecting_hit_points[:,7] == 1)
+    is_right_lit_up_target = jnp.logical_and(is_lit_up_target, non_reflecting_hit_points[:,7] == 2)
+    is_special_lit_up_target = jnp.logical_and(is_lit_up_target, non_reflecting_hit_points[:,7] == 3)
+    t_entry_non_reflecting_hit_points = jnp.where(
+        jnp.logical_and(is_left_lit_up_target, jnp.logical_not(is_left_lit_up_target_active)),
+        T_ENTRY_NO_COLLISION,
+        non_reflecting_hit_points[:,0],
+    )
+    t_entry_non_reflecting_hit_points = jnp.where(
+        jnp.logical_and(is_middle_lit_up_target, jnp.logical_not(is_middle_lit_up_target_active)),
+        T_ENTRY_NO_COLLISION,
+        t_entry_non_reflecting_hit_points,
+    )
+    t_entry_non_reflecting_hit_points = jnp.where(
+        jnp.logical_and(is_right_lit_up_target, jnp.logical_not(is_right_lit_up_target_active)),
+        T_ENTRY_NO_COLLISION,
+        t_entry_non_reflecting_hit_points,
+    )
+    t_entry_non_reflecting_hit_points = jnp.where(
+        jnp.logical_and(is_special_lit_up_target, jnp.logical_not(is_special_lit_up_target_active)),
+        T_ENTRY_NO_COLLISION,
+        t_entry_non_reflecting_hit_points,
+    )
+    
+    # DISABLE REFLECTING SCENCE OBJECTS THAT ARE NOT IN THE CURRENT GAME STATE
+    ###############################################################################################
 
     # Disable inactive spinner parts
     # We do this by setting the entry time of inactive spinner parts to a high value
     spinner_state = state.step_counter % 8  # 0: Bottom, 1: Right, 2: Top, 3: Left
-    # Left Spinner SceneObject indices
-    # Bottom: 33,34,35,36,37
-    # Right:  38,39,40,41,42
-    # Top:    43,44,45,46,47
-    # Left:   48,49,50,51,52
-    initial_left_spinner_indices = jnp.array([33, 38, 43, 48]).astype(jnp.int32)
-    current_initial_left_spinner_index = initial_left_spinner_indices[spinner_state]
-    # Right Spinner SceneObject indices
-    # Bottom: 53,54,55,56,57
-    # Right:  58,59,60,61,62
-    # Top:    63,64,65,66,67
-    # Left:   68,69,70,71,72
-    initial_right_spinner_indices = jnp.array([53, 58, 63, 68]).astype(jnp.int32)
-    current_initial_right_spinner_index = initial_right_spinner_indices[spinner_state]
 
     # Disable all the spinner parts not matching the current step
-    reflecting_hit_points = jax.lax.cond(23 == current_initial_left_spinner_index, lambda a: a, lambda a: a.at[23:28, 0].set(T_ENTRY_NO_COLLISION), reflecting_hit_points)
-    reflecting_hit_points = jax.lax.cond(28 == current_initial_left_spinner_index, lambda a: a, lambda a: a.at[28:33, 0].set(T_ENTRY_NO_COLLISION), reflecting_hit_points)
-    reflecting_hit_points = jax.lax.cond(33 == current_initial_left_spinner_index, lambda a: a, lambda a: a.at[33:38, 0].set(T_ENTRY_NO_COLLISION), reflecting_hit_points)
-    reflecting_hit_points = jax.lax.cond(38 == current_initial_left_spinner_index, lambda a: a, lambda a: a.at[38:43, 0].set(T_ENTRY_NO_COLLISION), reflecting_hit_points)
-    reflecting_hit_points = jax.lax.cond(43 == current_initial_right_spinner_index, lambda a: a, lambda a: a.at[43:48, 0].set(T_ENTRY_NO_COLLISION), reflecting_hit_points)
-    reflecting_hit_points = jax.lax.cond(48 == current_initial_right_spinner_index, lambda a: a, lambda a: a.at[48:53, 0].set(T_ENTRY_NO_COLLISION), reflecting_hit_points)
-    reflecting_hit_points = jax.lax.cond(53 == current_initial_right_spinner_index, lambda a: a, lambda a: a.at[53:58, 0].set(T_ENTRY_NO_COLLISION), reflecting_hit_points)
-    reflecting_hit_points = jax.lax.cond(58 == current_initial_right_spinner_index, lambda a: a, lambda a: a.at[58:63, 0].set(T_ENTRY_NO_COLLISION), reflecting_hit_points)
+    t_entry_reflecting_hit_points = jnp.where(
+        jnp.logical_and(
+            jnp.logical_not(spinner_state == reflecting_hit_points[:,7]),  # scene_object.state == current spinner state
+            reflecting_hit_points[:,6] == 2,  # scoring_type == spinner (2)
+        ),
+        T_ENTRY_NO_COLLISION,
+        reflecting_hit_points[:,0],
+    )
 
     # Disable inactive flipper parts
     left_flipper_angle = state.left_flipper_angle
     right_flipper_angle = state.right_flipper_angle
     
-    reflecting_hit_points = jax.lax.cond(left_flipper_angle != 0, lambda a: a.at[74, 0].set(T_ENTRY_NO_COLLISION), lambda a: a, reflecting_hit_points)
-    reflecting_hit_points = jax.lax.cond(left_flipper_angle != 1, lambda a: a.at[75, 0].set(T_ENTRY_NO_COLLISION), lambda a: a, reflecting_hit_points)
-    reflecting_hit_points = jax.lax.cond(left_flipper_angle != 2, lambda a: a.at[76, 0].set(T_ENTRY_NO_COLLISION), lambda a: a, reflecting_hit_points)
-    reflecting_hit_points = jax.lax.cond(left_flipper_angle != 3, lambda a: a.at[77, 0].set(T_ENTRY_NO_COLLISION), lambda a: a, reflecting_hit_points)
+    t_entry_reflecting_hit_points = jnp.where(
+        jnp.logical_and(
+            jnp.logical_not(left_flipper_angle == reflecting_hit_points[:,7]),  # scene_object.state == left flipper angle
+            reflecting_hit_points[:,6] == 9  # scoring_type == left flipper
+        ),
+        T_ENTRY_NO_COLLISION,
+        t_entry_reflecting_hit_points,
+    )
 
-    reflecting_hit_points = jax.lax.cond(right_flipper_angle != 0, lambda a: a.at[78, 0].set(T_ENTRY_NO_COLLISION), lambda a: a, reflecting_hit_points)
-    reflecting_hit_points = jax.lax.cond(right_flipper_angle != 1, lambda a: a.at[79, 0].set(T_ENTRY_NO_COLLISION), lambda a: a, reflecting_hit_points)
-    reflecting_hit_points = jax.lax.cond(right_flipper_angle != 2, lambda a: a.at[80, 0].set(T_ENTRY_NO_COLLISION), lambda a: a, reflecting_hit_points)
-    reflecting_hit_points = jax.lax.cond(right_flipper_angle != 3, lambda a: a.at[81, 0].set(T_ENTRY_NO_COLLISION), lambda a: a, reflecting_hit_points)
+    t_entry_reflecting_hit_points = jnp.where(
+        jnp.logical_and(
+            jnp.logical_not(right_flipper_angle == reflecting_hit_points[:,7]),  # scene_object.state == right flipper angle
+            reflecting_hit_points[:,6] == 10  # scoring_type == right flipper
+        ),
+        T_ENTRY_NO_COLLISION,
+        t_entry_reflecting_hit_points,
+    )
 
-    # Get and return first object hit (argmin entry time)
-    lowest_reflecting_object_entry_time_index = jnp.argmin(reflecting_hit_points[:, 0])
-    hit_point = reflecting_hit_points[lowest_reflecting_object_entry_time_index]
-    lowest_entry_time = hit_point[0]
+    ###############################################################################################
+
+    # Update the hit_points with new entry times
+    reflecting_hit_points = jnp.concat([
+        jnp.expand_dims(t_entry_reflecting_hit_points, 1),
+        reflecting_hit_points[:,1:]
+    ], axis=1)
+    non_reflecting_hit_points = jnp.concat([
+        jnp.expand_dims(t_entry_non_reflecting_hit_points, 1),
+        non_reflecting_hit_points[:,1:]
+    ], axis=1)
+
+    # GET "FIRST" REFLECTING HIT POINT
+    ###############################################################################################
+
+    # (using if-statements for static attributes like ndim is permitted by jit)
+
+    # reflecting_hit_points: shape (n_objects, 8, batch_size) or (n_objects, 8)
+    if reflecting_hit_points.ndim == 2:
+        # Case: (n_objects, 8)
+        argmin = jnp.argmin(reflecting_hit_points[:, 0])
+        hit_point = reflecting_hit_points[argmin]
+    elif reflecting_hit_points.ndim == 3: # TODO test this
+        argmin = jnp.argmin(reflecting_hit_points[:, 0, :], axis=0)  # (batch_size,)
+        argmin_expanded = argmin[None, None, :]  # (1,1,batch_size)
+        hit_point = jnp.take_along_axis(reflecting_hit_points, argmin_expanded, axis=0).squeeze(0)
+    else:
+        raise ValueError
+    
+    # UPDATE SCORING LIST
+    ###############################################################################################
 
     # Probably could do this in a pythonic for-loop since jax unrolls those in jitted functions
     # reflecting scoring objects (only one possible)
@@ -2201,6 +2370,8 @@ def _check_obstacle_hits(
     scoring_list_6 = scoring_list[6]
     scoring_list_7 = scoring_list[7]
     scoring_list_8 = scoring_list[8]
+    scoring_list_9 = scoring_list[9]
+    scoring_list_10 = scoring_list[10]
 
     scoring_list_0 = jnp.logical_or(scoring_list_0, jnp.where(hit_point[6] == 0, 1, 0))
     scoring_list_1 = jnp.logical_or(scoring_list_1, jnp.where(hit_point[6] == 1, 1, 0))
@@ -2211,6 +2382,8 @@ def _check_obstacle_hits(
     scoring_list_6 = jnp.logical_or(scoring_list_6, jnp.where(hit_point[6] == 6, 1, 0))
     scoring_list_7 = jnp.logical_or(scoring_list_7, jnp.where(hit_point[6] == 7, 1, 0))
     scoring_list_8 = jnp.logical_or(scoring_list_8, jnp.where(hit_point[6] == 8, 1, 0))
+    scoring_list_9 = jnp.logical_or(scoring_list_9, jnp.where(hit_point[6] == 9, 1, 0))
+    scoring_list_10 = jnp.logical_or(scoring_list_10, jnp.where(hit_point[6] == 10, 1, 0))
 
     # non-reflecting scoring objects (multiple possible but only one of each type)
     # hit_before_reflection calculates for each object whether it was hit before hitting any rigid object, i.e. shape (, n_non_reflecting_objects)
@@ -2225,6 +2398,8 @@ def _check_obstacle_hits(
     scoring_list_6 = jnp.logical_or(scoring_list_6, jnp.where(jnp.any(jnp.logical_and(hit_before_reflection, non_reflecting_hit_points[:,6] == 6), axis=0), 1, 0))
     scoring_list_7 = jnp.logical_or(scoring_list_7, jnp.where(jnp.any(jnp.logical_and(hit_before_reflection, non_reflecting_hit_points[:,6] == 7), axis=0), 1, 0))
     scoring_list_8 = jnp.logical_or(scoring_list_8, jnp.where(jnp.any(jnp.logical_and(hit_before_reflection, non_reflecting_hit_points[:,6] == 8), axis=0), 1, 0))
+    scoring_list_9 = jnp.logical_or(scoring_list_9, jnp.where(jnp.any(jnp.logical_and(hit_before_reflection, non_reflecting_hit_points[:,6] == 9), axis=0), 1, 0))
+    scoring_list_10 = jnp.logical_or(scoring_list_10, jnp.where(jnp.any(jnp.logical_and(hit_before_reflection, non_reflecting_hit_points[:,6] == 10), axis=0), 1, 0))
     
     scoring_list = jnp.stack([
         scoring_list_0,
@@ -2236,6 +2411,8 @@ def _check_obstacle_hits(
         scoring_list_6,
         scoring_list_7,
         scoring_list_8,
+        scoring_list_9,
+        scoring_list_10,
     ], axis=0)
 
     return hit_point, scoring_list
@@ -2374,7 +2551,7 @@ def _calc_ball_collision_loop(state: VideoPinballState, ball_movement: BallMovem
         # jax.debug.print("Old ball x: {}, y: {}, New ball x: {}, y: {}.  Compute: {}", old_ball_x, old_ball_y, new_ball_x, new_ball_y, compute_flag)
         return jnp.any(compute_flag)
 
-    scoring_list = jnp.stack([jnp.zeros_like(ball_movement.old_ball_x, dtype=jnp.bool) for i in range(9)])
+    scoring_list = jnp.stack([jnp.zeros_like(ball_movement.old_ball_x, dtype=jnp.bool) for i in range(11)])
     compute_flag = jnp.ones_like(ball_movement.new_ball_x, dtype=jnp.bool)
     state, old_ball_x, old_ball_y, new_ball_x, new_ball_y, scoring_list, _ = (
         jax.lax.while_loop(
@@ -2405,6 +2582,9 @@ def _calc_ball_collision_loop(state: VideoPinballState, ball_movement: BallMovem
         scoring_list,
     )
 
+@jax.jit
+def special_velocity_change():
+    pass
 
 @jax.jit
 def ball_step(
@@ -2530,18 +2710,20 @@ def ball_step(
         new_ball_y=ball_y,  # type: ignore
     )
 
-    ball_movement, scoring_list = _calc_ball_collision_loop(state, ball_movement)
+    collision_ball_movement, scoring_list = _calc_ball_collision_loop(state, ball_movement)
 
-    ball_trajectory_x = ball_movement.new_ball_x - ball_movement.old_ball_x
-    ball_trajectory_y = ball_movement.new_ball_y - ball_movement.old_ball_y
+    ball_trajectory_x = collision_ball_movement.new_ball_x - collision_ball_movement.old_ball_x
+    ball_trajectory_y = collision_ball_movement.new_ball_y - collision_ball_movement.old_ball_y
 
-    ball_x = ball_movement.new_ball_x
-    ball_y = ball_movement.new_ball_y
+    ball_x = collision_ball_movement.new_ball_x
+    ball_y = collision_ball_movement.new_ball_y
 
     """
     Some final calculations
     """
     ball_direction = _get_ball_direction(ball_trajectory_x, ball_trajectory_y)
+
+
     # Clip the ball velocity to the maximum speed
     ball_vel_x = jnp.clip(jnp.abs(signed_ball_vel_x), 0, BALL_MAX_SPEED)
     ball_vel_y = jnp.clip(jnp.abs(signed_ball_vel_y), 0, BALL_MAX_SPEED)
