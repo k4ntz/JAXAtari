@@ -245,14 +245,13 @@ class TennisRenderer:
                               state.player_state.player_y + racket_offset[state.animator_state.player_racket_frame],
                               frame_racket_player)
 
-
-
-        frame_bounding_box = aj.get_sprite_frame(self.BOUNDING_BOX, 0)
-        frame_enemy_box = aj.get_sprite_frame(self.ENEMY_BOX, 0)
-        enemy_box_pos = state.enemy_state.enemy_x if state.enemy_state.enemy_direction == 1 else state.enemy_state.enemy_x - PLAYER_WIDTH + 2
-        raster = aj.render_at(raster, enemy_box_pos, state.enemy_state.enemy_y, frame_enemy_box)
-        bounding_box_pos = state.player_state.player_x if state.player_state.player_direction == 1 else state.player_state.player_x - PLAYER_WIDTH + 2
-        raster = aj.render_at(raster, bounding_box_pos, state.player_state.player_y, frame_bounding_box)
+        # bounding boxes
+        #frame_bounding_box = aj.get_sprite_frame(self.BOUNDING_BOX, 0)
+        #frame_enemy_box = aj.get_sprite_frame(self.ENEMY_BOX, 0)
+        #enemy_box_pos = state.enemy_state.enemy_x if state.enemy_state.enemy_direction == 1 else state.enemy_state.enemy_x - PLAYER_WIDTH + 2
+       # raster = aj.render_at(raster, enemy_box_pos, state.enemy_state.enemy_y, frame_enemy_box)
+        #bounding_box_pos = state.player_state.player_x if state.player_state.player_direction == 1 else state.player_state.player_x - PLAYER_WIDTH + 2
+        #raster = aj.render_at(raster, bounding_box_pos, state.player_state.player_y, frame_bounding_box)
 
 
         enemy_pos = state.enemy_state.enemy_x - 2 if state.enemy_state.enemy_direction == 1 else state.enemy_state.enemy_x - 4
@@ -268,7 +267,8 @@ class TennisRenderer:
                               state.enemy_state.enemy_y + racket_offset[state.animator_state.enemy_racket_frame],
                               frame_racket_enemy)
 
-        player_x_rec = jnp.zeros((2, 2, 4))
+        # player markers
+        """player_x_rec = jnp.zeros((2, 2, 4))
         player_x_rec = player_x_rec.at[:, :, 1].set(255)  # Yellow
         player_x_rec = player_x_rec.at[:, :, 2].set(255)  # Yellow
         player_x_rec = player_x_rec.at[:, :, 3].set(255)  # Alpha
@@ -280,9 +280,10 @@ class TennisRenderer:
         enemy_x_rec = enemy_x_rec.at[:, :, 2].set(255)  # Yellow
         enemy_x_rec = enemy_x_rec.at[:, :, 3].set(255)  # Alpha
 
-        raster = aj.render_at(raster, state.enemy_state.enemy_x, state.enemy_state.enemy_y, enemy_x_rec)
+        raster = aj.render_at(raster, state.enemy_state.enemy_x, state.enemy_state.enemy_y, enemy_x_rec)"""
 
-        top_left_rec = jnp.zeros((2, 2, 4))
+        # field markers
+        """top_left_rec = jnp.zeros((2, 2, 4))
         top_left_rec = top_left_rec.at[:, :, 1].set(255)  # Yellow
         top_left_rec = top_left_rec.at[:, :, 0].set(255)  # Yellow
         top_left_rec = top_left_rec.at[:, :, 3].set(255)  # Alpha
@@ -309,7 +310,7 @@ class TennisRenderer:
         bottom_right_rec = bottom_right_rec.at[:, :, 3].set(255)  # Alpha
         bottom_right_corner_coords = perspective_transform(GAME_WIDTH, GAME_HEIGHT)
 
-        raster = aj.render_at(raster, bottom_right_corner_coords[0], bottom_right_corner_coords[1], bottom_right_rec)
+        raster = aj.render_at(raster, bottom_right_corner_coords[0], bottom_right_corner_coords[1], bottom_right_rec)"""
 
         if (
                 state.game_state.player_game_score + state.game_state.enemy_game_score) > 0 and state.game_state.player_score == 0 and state.game_state.enemy_score == 0:
