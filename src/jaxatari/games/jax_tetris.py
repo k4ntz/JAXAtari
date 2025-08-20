@@ -14,6 +14,7 @@ from jaxatari.rendering import jax_rendering_utils as jr
 from jaxatari.renderers import JAXGameRenderer
 
 class TetrisConstants(NamedTuple):
+    # logical grid (Board)
     BOARD_WIDTH: int = 10
     BOARD_HEIGHT: int = 22
 
@@ -91,6 +92,8 @@ class TetrisConstants(NamedTuple):
 
 # ======================== State/Obs/Info =================
 class TetrisState(NamedTuple):
+
+    """ Environment state, Fields are given in arrays to keep everything compatible"""
     board: chex.Array        # (H,W) int32 {0,1}
     piece_type: chex.Array   # () int32 0..6
     pos: chex.Array          # (2,) int32 [y,x]
@@ -115,6 +118,7 @@ class TetrisState(NamedTuple):
     banner_code: chex.Array
 
 class TetrisObservation(NamedTuple):
+    """ Observation returned by state"""
     board: chex.Array
     piece_type: chex.Array
     pos: chex.Array
@@ -130,6 +134,8 @@ class TetrisInfo(NamedTuple):
 
 class JaxTetris(JaxEnvironment[TetrisState, TetrisObservation, TetrisInfo, TetrisConstants]):
     def __init__(self, consts: TetrisConstants = None, reward_funcs: list[callable]=None, instant_drop: bool = False):
+        """ Initialize the JaxTetris environment"""
+
         consts = consts or TetrisConstants()
         super().__init__(consts)
         self.renderer = TetrisRenderer(self.consts)
@@ -161,6 +167,8 @@ class JaxTetris(JaxEnvironment[TetrisState, TetrisObservation, TetrisInfo, Tetri
     def check_collision(self, board: chex.Array, grid4: chex.Array, pos: chex.Array) -> chex.Array:
         """
         Check if the tetromino at the given position collides with the board or is out of bounds.
+
+        blocks touching boundaries count as a collision
         """
         H = jnp.int32(self.consts.BOARD_HEIGHT)
         W = jnp.int32(self.consts.BOARD_WIDTH)
@@ -230,7 +238,7 @@ class JaxTetris(JaxEnvironment[TetrisState, TetrisObservation, TetrisInfo, Tetri
     @partial(jax.jit, static_argnums=0)
     def try_rotate(self, board: chex.Array, piece_type: chex.Array, pos: chex.Array, rot: chex.Array):
         """
-        Try to rotate the tetromino in place (no wall kick).
+        Try to rotate the tetromino (clockwise) in place (no wall kick).
         Returns the new position and rotation if successful, otherwise the original.
         """
         new_rot = (rot + 1) & 3
@@ -351,6 +359,7 @@ class JaxTetris(JaxEnvironment[TetrisState, TetrisObservation, TetrisInfo, Tetri
     def reset(self, key: jrandom.PRNGKey = None) -> Tuple[TetrisObservation, TetrisState]:
         """
         Reset the environment and return the initial observation and state.
+        - Clear board
         """
         key = jrandom.PRNGKey(0) if key is None else key
         board = jnp.zeros((self.consts.BOARD_HEIGHT, self.consts.BOARD_WIDTH), dtype=jnp.int32)
