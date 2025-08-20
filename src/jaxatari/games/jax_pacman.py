@@ -437,7 +437,7 @@ class JaxPacman(JaxEnvironment[PacmanState, PacmanObservation, PacmanInfo, Pacma
         pellets = (maze == 0).astype(jnp.int32)
         power = jnp.zeros_like(pellets)
 
-        # Place power pellets at 4 corners (if not a wall)
+        # Placing power pellets at 4 corners (if not a wall)
         for (py, px) in [(1, 1), (1, GRID_WIDTH - 2),
                          (GRID_HEIGHT - 2, 1), (GRID_HEIGHT - 2, GRID_WIDTH - 2)]:
             if maze[py, px] == 0:
@@ -454,14 +454,14 @@ class JaxPacman(JaxEnvironment[PacmanState, PacmanObservation, PacmanInfo, Pacma
             carry_score: float = 0.0,
             carry_lives: int = 3,
     ):
-        # Clamp level and fetch config
+        # Clamping level and fetching config
         level = max(1, min(MAX_LEVEL, int(level)))
         cfg = LEVELS[level - 1]
 
-        # Build maze and pellet layout
+        # Building maze and pellet layout
         maze, pellets, power = self._generate_level_maze(level)
 
-        # Build constants object
+        # Building constants object
         self.consts = PacmanConstants(
             level=level,
             ghost_move_interval=cfg["ghost_move_interval"],
@@ -472,7 +472,7 @@ class JaxPacman(JaxEnvironment[PacmanState, PacmanObservation, PacmanInfo, Pacma
             power_pellets=power,
         )
 
-        # Choose spawn positions from free cells
+        # Choosing spawn positions from free cells
         free_yx = jnp.argwhere(maze == 0)
         pac_yx = free_yx[0]
         pacman_pos = jnp.array([pac_yx[1], pac_yx[0]], dtype=jnp.int32)
@@ -517,6 +517,49 @@ class JaxPacman(JaxEnvironment[PacmanState, PacmanObservation, PacmanInfo, Pacma
         )
 
 
+
+class PacmanRenderer:
+    def __init__(self, screen, font):
+        self.screen = screen
+        self.font = font
+
+    def render(self, obs, state, total_reward, level):
+        self.screen.fill((0, 0, 0))
+
+        # Score & Level
+        score_surf = self.font.render(f"Score: {int(total_reward)}", True, (255, 255, 255))
+        level_surf = self.font.render(f"Level: {level}", True, (255, 255, 255))
+        self.screen.blit(score_surf, (10, 10))
+        self.screen.blit(level_surf, (10 + score_surf.get_width() + 20, 10))
+
+        # Lives
+        lives_start_x = 10 + score_surf.get_width() + 20 + level_surf.get_width() + 20
+        lives_y = 20
+        for i in range(int(state.lives)):
+            center = (lives_start_x + i * (CELL_SIZE + 5), lives_y)
+            pygame.draw.circle(self.screen, (255, 255, 0), center, CELL_SIZE // 2)
+
+        # Grid
+        for y in range(GRID_HEIGHT):
+            for x in range(GRID_WIDTH):
+                cell = int(obs.grid[y, x])
+                rect = pygame.Rect(x * CELL_SIZE, TOP_OFFSET + y * CELL_SIZE, CELL_SIZE, CELL_SIZE)
+                if cell == WALL:
+                    pygame.draw.rect(self.screen, (0, 0, 255), rect)  # Wall
+                elif cell == PACMAN:
+                    pygame.draw.circle(self.screen, (255, 255, 0), rect.center, CELL_SIZE // 2)  # Pacman
+                elif cell == GHOST:
+                    color = (0, 191, 255) if int(state.power_mode_timer) > 0 else (255, 0, 0)
+                    pygame.draw.circle(self.screen, color, rect.center, CELL_SIZE // 2)
+                elif cell == POWER_PELLET:
+                    pygame.draw.circle(self.screen, (0, 255, 255), rect.center, CELL_SIZE // 4)
+                elif cell == PELLET:
+                    pygame.draw.circle(self.screen, (255, 255, 255), rect.center, CELL_SIZE // 6)
+
+        pygame.display.flip()
+
+
+
 def main():
     pygame.init()
     screen = pygame.display.set_mode((GRID_WIDTH * CELL_SIZE, TOP_OFFSET + GRID_HEIGHT * CELL_SIZE))
@@ -525,91 +568,56 @@ def main():
     font = pygame.font.SysFont(None, 24)
 
     env = JaxPacman()
+    renderer = PacmanRenderer(screen, font)
     key = random.PRNGKey(0)
 
     level = 1
     obs, state = env.reset(key, level=level)
 
     running = True
-    action = 1  # Default to DOWN
+    action = 1  # Default DOWN
     total_reward = 0.0
 
     while running:
-        # Input Handling
+        # Input
         for event in pygame.event.get():
             if event.type == pygame.QUIT:
                 running = False
             elif event.type == pygame.KEYDOWN:
-                if event.key == pygame.K_UP:
-                    action = 0
-                elif event.key == pygame.K_DOWN:
-                    action = 1
-                elif event.key == pygame.K_LEFT:
-                    action = 2
-                elif event.key == pygame.K_RIGHT:
-                    action = 3
+                if event.key == pygame.K_UP: action = 0
+                elif event.key == pygame.K_DOWN: action = 1
+                elif event.key == pygame.K_LEFT: action = 2
+                elif event.key == pygame.K_RIGHT: action = 3
 
         # Step Environment
         key, subkey = random.split(key)
         obs, state, reward, done, info = env.step(state, jnp.array(action))
         total_reward += float(reward)
 
-        # Checking level cleared (no pellets left)
+        # Level cleared
         pellets_left = int(jnp.sum(state.pellets)) + int(jnp.sum(state.power_pellets))
         if pellets_left == 0:
             level += 1
             if level > MAX_LEVEL:
-                print("\ud83c\udf89 You beat all levels! Final score:", int(total_reward))
+                print("🎉 You beat all levels! Final score:", int(total_reward))
                 pygame.time.wait(1500)
                 break
-            # Carry score & lives forward
-            carry_score = float(state.score)
-            carry_lives = int(state.lives)
             obs, state = env.reset(key, level=level, keep_score_lives=True,
-                                   carry_score=carry_score, carry_lives=carry_lives)
-            # Continuing  loop without rendering stale frame
-            continue
+                                   carry_score=float(state.score), carry_lives=int(state.lives))
+            continue  # Skip stale frame
 
-        # Render
-        screen.fill((0, 0, 0))
-
-        score_surf = font.render(f"Score: {int(total_reward)}", True, (255, 255, 255))
-        level_surf = font.render(f"Level: {level}", True, (255, 255, 255))
-        screen.blit(score_surf, (10, 10))
-        screen.blit(level_surf, (10 + score_surf.get_width() + 20, 10))
-
-        lives_start_x = 10 + score_surf.get_width() + 20 + level_surf.get_width() + 20
-        lives_y = 20
-        for i in range(int(state.lives)):
-            center = (lives_start_x + i * (CELL_SIZE + 5), lives_y)
-            pygame.draw.circle(screen, (255, 255, 0), center, CELL_SIZE // 2)
-
-        # Grid
-        for y in range(GRID_HEIGHT):
-            for x in range(GRID_WIDTH):
-                cell = int(obs.grid[y, x])
-                rect = pygame.Rect(x * CELL_SIZE, TOP_OFFSET + y * CELL_SIZE, CELL_SIZE, CELL_SIZE)
-                if cell == 1:
-                    pygame.draw.rect(screen, (0, 0, 255), rect)  # Wall
-                elif cell == 2:
-                    pygame.draw.circle(screen, (255, 255, 0), rect.center, CELL_SIZE // 2)  # Pacman
-                elif cell == 3:
-                    color = (0, 191, 255) if int(state.power_mode_timer) > 0 else (255, 0, 0)
-                    pygame.draw.circle(screen, color, rect.center, CELL_SIZE // 2)
-                elif cell == 4:
-                    pygame.draw.circle(screen, (0, 255, 255), rect.center, CELL_SIZE // 4)
-                elif cell == 5:
-                    pygame.draw.circle(screen, (255, 255, 255), rect.center, CELL_SIZE // 6)
-
-        pygame.display.flip()
+        # Rendering
+        renderer.render(obs, state, total_reward, level)
         clock.tick(10)
 
+        # Game Over
         if bool(done):
             print("Game Over! Final score:", int(total_reward))
             pygame.time.wait(1500)
             running = False
 
     pygame.quit()
+
 
 
 if __name__ == "__main__":
