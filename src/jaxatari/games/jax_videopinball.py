@@ -1215,78 +1215,387 @@ MIDDLE_BAR_SCENE_OBJECT = SceneObject(
 )
 
 # Left Flipper SceneObjects for different states
-LEFT_FLIPPER_STATE_0_SCENE_OBJECT = SceneObject(
+LEFT_FLIPPER_STATE_0_SCENE_OBJECT_1 = SceneObject(
     hit_box_height=jnp.array(6),
-    hit_box_width=jnp.array(6),
-    hit_box_x_offset=jnp.array(64),
-    hit_box_y_offset=jnp.array(183),
-    reflecting=jnp.array(1),
-    score_type=jnp.array(0), #no score
-)
-
-LEFT_FLIPPER_STATE_16_SCENE_OBJECT = SceneObject(
-    hit_box_height=jnp.array(2),
-    hit_box_width=jnp.array(1),
+    hit_box_width=jnp.array(2),
     hit_box_x_offset=jnp.array(64),
     hit_box_y_offset=jnp.array(184),
     reflecting=jnp.array(1),
     score_type=jnp.array(0),
 )
 
-LEFT_FLIPPER_STATE_32_SCENE_OBJECT = SceneObject(
-    hit_box_height=jnp.array(2),
-    hit_box_width=jnp.array(5),
-    hit_box_x_offset=jnp.array(67),
-    hit_box_y_offset=jnp.array(181),
+
+LEFT_FLIPPER_STATE_0_SCENE_OBJECT_2 = SceneObject(
+    hit_box_height=jnp.array(5),
+    hit_box_width=jnp.array(2),
+    hit_box_x_offset=jnp.array(66),
+    hit_box_y_offset=jnp.array(185),
     reflecting=jnp.array(1),
     score_type=jnp.array(0),
 )
 
-LEFT_FLIPPER_STATE_48_SCENE_OBJECT = SceneObject(
+LEFT_FLIPPER_STATE_0_SCENE_OBJECT_3 = SceneObject(
+    hit_box_height=jnp.array(5),
+    hit_box_width=jnp.array(2),
+    hit_box_x_offset=jnp.array(68),
+    hit_box_y_offset=jnp.array(186),
+    reflecting=jnp.array(1),
+    score_type=jnp.array(0),
+)
+
+LEFT_FLIPPER_STATE_0_SCENE_OBJECT_4 = SceneObject(
+    hit_box_height=jnp.array(4),
+    hit_box_width=jnp.array(2),
+    hit_box_x_offset=jnp.array(70),
+    hit_box_y_offset=jnp.array(187),
+    reflecting=jnp.array(1),
+    score_type=jnp.array(0),
+)
+
+LEFT_FLIPPER_STATE_0_SCENE_OBJECT_5 = SceneObject(
+    hit_box_height=jnp.array(3),
+    hit_box_width=jnp.array(2),
+    hit_box_x_offset=jnp.array(72),
+    hit_box_y_offset=jnp.array(188),
+    reflecting=jnp.array(1),
+    score_type=jnp.array(0),
+)
+
+LEFT_FLIPPER_STATE_0_SCENE_OBJECT_6 = SceneObject(
+    hit_box_height=jnp.array(3),
+    hit_box_width=jnp.array(3),
+    hit_box_x_offset=jnp.array(74),
+    hit_box_y_offset=jnp.array(189),
+    reflecting=jnp.array(1),
+    score_type=jnp.array(0),
+)
+
+
+
+LEFT_FLIPPER_STATE_16_SCENE_OBJECT_1 = SceneObject(
+    hit_box_height=jnp.array(6),
+    hit_box_width=jnp.array(5),
+    hit_box_x_offset=jnp.array(64),
+    hit_box_y_offset=jnp.array(184),
+    reflecting=jnp.array(1),
+    score_type=jnp.array(0),
+)
+
+LEFT_FLIPPER_STATE_16_SCENE_OBJECT_2 = SceneObject(
+    hit_box_height=jnp.array(4),
+    hit_box_width=jnp.array(5),
+    hit_box_x_offset=jnp.array(69),
+    hit_box_y_offset=jnp.array(185),
+    reflecting=jnp.array(1),
+    score_type=jnp.array(0),
+)
+
+LEFT_FLIPPER_STATE_16_SCENE_OBJECT_3 = SceneObject(
+    hit_box_height=jnp.array(2),
+    hit_box_width=jnp.array(3),
+    hit_box_x_offset=jnp.array(74),
+    hit_box_y_offset=jnp.array(186),
+    reflecting=jnp.array(1),
+    score_type=jnp.array(0),
+)
+
+
+
+
+
+
+
+LEFT_FLIPPER_STATE_32_SCENE_OBJECT_1 = SceneObject(
+    hit_box_height=jnp.array(6),
+    hit_box_width=jnp.array(3),
+    hit_box_x_offset=jnp.array(64),
+    hit_box_y_offset=jnp.array(184),
+    reflecting=jnp.array(1),
+    score_type=jnp.array(0),
+)
+
+LEFT_FLIPPER_STATE_32_SCENE_OBJECT_2 = SceneObject(
+    hit_box_height=jnp.array(4),
+    hit_box_width=jnp.array(4),
+    hit_box_x_offset=jnp.array(67),
+    hit_box_y_offset=jnp.array(183),
+    reflecting=jnp.array(1),
+    score_type=jnp.array(0),
+)
+
+LEFT_FLIPPER_STATE_32_SCENE_OBJECT_3 = SceneObject(
+    hit_box_height=jnp.array(4),
+    hit_box_width=jnp.array(2),
+    hit_box_x_offset=jnp.array(71),
+    hit_box_y_offset=jnp.array(182),
+    reflecting=jnp.array(1),
+    score_type=jnp.array(0),
+)
+
+LEFT_FLIPPER_STATE_32_SCENE_OBJECT_4 = SceneObject(
     hit_box_height=jnp.array(2),
     hit_box_width=jnp.array(2),
     hit_box_x_offset=jnp.array(73),
-    hit_box_y_offset=jnp.array(176),
+    hit_box_y_offset=jnp.array(182),
     reflecting=jnp.array(1),
     score_type=jnp.array(0),
 )
 
-# Right Flipper SceneObjects for different states
-RIGHT_FLIPPER_STATE_0_SCENE_OBJECT = SceneObject(
+LEFT_FLIPPER_STATE_32_SCENE_OBJECT_5 = SceneObject(
+    hit_box_height=jnp.array(2),
+    hit_box_width=jnp.array(2),
+    hit_box_x_offset=jnp.array(75),
+    hit_box_y_offset=jnp.array(181),
+    reflecting=jnp.array(1),
+    score_type=jnp.array(0),
+)
+
+
+
+LEFT_FLIPPER_STATE_48_SCENE_OBJECT_1 = SceneObject(
     hit_box_height=jnp.array(6),
-    hit_box_width=jnp.array(10),
-    hit_box_x_offset=jnp.array(85),
+    hit_box_width=jnp.array(2),
+    hit_box_x_offset=jnp.array(64),
     hit_box_y_offset=jnp.array(183),
     reflecting=jnp.array(1),
     score_type=jnp.array(0),
 )
 
-RIGHT_FLIPPER_STATE_16_SCENE_OBJECT = SceneObject(
+LEFT_FLIPPER_STATE_48_SCENE_OBJECT_2 = SceneObject(
+    hit_box_height=jnp.array(5),
+    hit_box_width=jnp.array(2),
+    hit_box_x_offset=jnp.array(66),
+    hit_box_y_offset=jnp.array(182),
+    reflecting=jnp.array(1),
+    score_type=jnp.array(0),
+)
+
+LEFT_FLIPPER_STATE_48_SCENE_OBJECT_3 = SceneObject(
+    hit_box_height=jnp.array(4),
+    hit_box_width=jnp.array(2),
+    hit_box_x_offset=jnp.array(68),
+    hit_box_y_offset=jnp.array(181),
+    reflecting=jnp.array(1),
+    score_type=jnp.array(0),
+)
+
+LEFT_FLIPPER_STATE_48_SCENE_OBJECT_4 = SceneObject(
+    hit_box_height=jnp.array(3),
+    hit_box_width=jnp.array(2),
+    hit_box_x_offset=jnp.array(70),
+    hit_box_y_offset=jnp.array(180),
+    reflecting=jnp.array(1),
+    score_type=jnp.array(0),
+)
+
+LEFT_FLIPPER_STATE_48_SCENE_OBJECT_5 = SceneObject(
     hit_box_height=jnp.array(2),
-    hit_box_width=jnp.array(4),
-    hit_box_x_offset=jnp.array(83),
+    hit_box_width=jnp.array(2),
+    hit_box_x_offset=jnp.array(72),
+    hit_box_y_offset=jnp.array(179),
+    reflecting=jnp.array(1),
+    score_type=jnp.array(0),
+)
+
+LEFT_FLIPPER_STATE_48_SCENE_OBJECT_6 = SceneObject(
+    hit_box_height=jnp.array(2),
+    hit_box_width=jnp.array(2),
+    hit_box_x_offset=jnp.array(74),
+    hit_box_y_offset=jnp.array(177),
+    reflecting=jnp.array(1),
+    score_type=jnp.array(0),
+)
+
+
+
+# Right Flipper SceneObjects for different states
+RIGHT_FLIPPER_STATE_0_SCENE_OBJECT_1 = SceneObject(
+    hit_box_height=jnp.array(6),
+    hit_box_width=jnp.array(2),
+    hit_box_x_offset=jnp.array(94),
     hit_box_y_offset=jnp.array(184),
     reflecting=jnp.array(1),
     score_type=jnp.array(0),
 )
 
-RIGHT_FLIPPER_STATE_32_SCENE_OBJECT = SceneObject(
+
+RIGHT_FLIPPER_STATE_0_SCENE_OBJECT_2 = SceneObject(
+    hit_box_height=jnp.array(5),
+    hit_box_width=jnp.array(2),
+    hit_box_x_offset=jnp.array(92),
+    hit_box_y_offset=jnp.array(185),
+    reflecting=jnp.array(1),
+    score_type=jnp.array(0),
+)
+
+RIGHT_FLIPPER_STATE_0_SCENE_OBJECT_3 = SceneObject(
+    hit_box_height=jnp.array(5),
+    hit_box_width=jnp.array(2),
+    hit_box_x_offset=jnp.array(90),
+    hit_box_y_offset=jnp.array(186),
+    reflecting=jnp.array(1),
+    score_type=jnp.array(0),
+)
+
+RIGHT_FLIPPER_STATE_0_SCENE_OBJECT_4 = SceneObject(
+    hit_box_height=jnp.array(4),
+    hit_box_width=jnp.array(2),
+    hit_box_x_offset=jnp.array(88),
+    hit_box_y_offset=jnp.array(187),
+    reflecting=jnp.array(1),
+    score_type=jnp.array(0),
+)
+
+RIGHT_FLIPPER_STATE_0_SCENE_OBJECT_5 = SceneObject(
+    hit_box_height=jnp.array(3),
+    hit_box_width=jnp.array(2),
+    hit_box_x_offset=jnp.array(86),
+    hit_box_y_offset=jnp.array(188),
+    reflecting=jnp.array(1),
+    score_type=jnp.array(0),
+)
+
+RIGHT_FLIPPER_STATE_0_SCENE_OBJECT_6 = SceneObject(
+    hit_box_height=jnp.array(3),
+    hit_box_width=jnp.array(3),
+    hit_box_x_offset=jnp.array(83),
+    hit_box_y_offset=jnp.array(189),
+    reflecting=jnp.array(1),
+    score_type=jnp.array(0),
+)
+
+
+
+RIGHT_FLIPPER_STATE_16_SCENE_OBJECT_1 = SceneObject(
+    hit_box_height=jnp.array(6),
+    hit_box_width=jnp.array(5),
+    hit_box_x_offset=jnp.array(91),
+    hit_box_y_offset=jnp.array(185),
+    reflecting=jnp.array(1),
+    score_type=jnp.array(0),
+)
+
+RIGHT_FLIPPER_STATE_16_SCENE_OBJECT_2 = SceneObject(
+    hit_box_height=jnp.array(4),
+    hit_box_width=jnp.array(5),
+    hit_box_x_offset=jnp.array(86),
+    hit_box_y_offset=jnp.array(186),
+    reflecting=jnp.array(1),
+    score_type=jnp.array(0),
+)
+
+RIGHT_FLIPPER_STATE_16_SCENE_OBJECT_3 = SceneObject(
     hit_box_height=jnp.array(2),
+    hit_box_width=jnp.array(3),
+    hit_box_x_offset=jnp.array(83),
+    hit_box_y_offset=jnp.array(187),
+    reflecting=jnp.array(1),
+    score_type=jnp.array(0),
+)
+
+
+
+RIGHT_FLIPPER_STATE_32_SCENE_OBJECT_1 = SceneObject(
+    hit_box_height=jnp.array(6),
+    hit_box_width=jnp.array(3),
+    hit_box_x_offset=jnp.array(93),
+    hit_box_y_offset=jnp.array(184),
+    reflecting=jnp.array(1),
+    score_type=jnp.array(0),
+)
+
+RIGHT_FLIPPER_STATE_32_SCENE_OBJECT_2 = SceneObject(
+    hit_box_height=jnp.array(4),
     hit_box_width=jnp.array(4),
+    hit_box_x_offset=jnp.array(89),
+    hit_box_y_offset=jnp.array(183),
+    reflecting=jnp.array(1),
+    score_type=jnp.array(0),
+)
+
+RIGHT_FLIPPER_STATE_32_SCENE_OBJECT_3 = SceneObject(
+    hit_box_height=jnp.array(4),
+    hit_box_width=jnp.array(2),
+    hit_box_x_offset=jnp.array(87),
+    hit_box_y_offset=jnp.array(182),
+    reflecting=jnp.array(1),
+    score_type=jnp.array(0),
+)
+
+RIGHT_FLIPPER_STATE_32_SCENE_OBJECT_4 = SceneObject(
+    hit_box_height=jnp.array(2),
+    hit_box_width=jnp.array(2),
+    hit_box_x_offset=jnp.array(85),
+    hit_box_y_offset=jnp.array(182),
+    reflecting=jnp.array(1),
+    score_type=jnp.array(0),
+)
+
+RIGHT_FLIPPER_STATE_32_SCENE_OBJECT_5 = SceneObject(
+    hit_box_height=jnp.array(2),
+    hit_box_width=jnp.array(2),
     hit_box_x_offset=jnp.array(83),
     hit_box_y_offset=jnp.array(181),
     reflecting=jnp.array(1),
     score_type=jnp.array(0),
 )
 
-RIGHT_FLIPPER_STATE_48_SCENE_OBJECT = SceneObject(
-    hit_box_height=jnp.array(2),
+
+
+RIGHT_FLIPPER_STATE_48_SCENE_OBJECT_1 = SceneObject(
+    hit_box_height=jnp.array(6),
     hit_box_width=jnp.array(2),
-    hit_box_x_offset=jnp.array(84),
-    hit_box_y_offset=jnp.array(176),
+    hit_box_x_offset=jnp.array(94),
+    hit_box_y_offset=jnp.array(183),
     reflecting=jnp.array(1),
     score_type=jnp.array(0),
 )
+
+RIGHT_FLIPPER_STATE_48_SCENE_OBJECT_2 = SceneObject(
+    hit_box_height=jnp.array(5),
+    hit_box_width=jnp.array(2),
+    hit_box_x_offset=jnp.array(92),
+    hit_box_y_offset=jnp.array(182),
+    reflecting=jnp.array(1),
+    score_type=jnp.array(0),
+)
+
+RIGHT_FLIPPER_STATE_48_SCENE_OBJECT_3 = SceneObject(
+    hit_box_height=jnp.array(4),
+    hit_box_width=jnp.array(2),
+    hit_box_x_offset=jnp.array(90),
+    hit_box_y_offset=jnp.array(181),
+    reflecting=jnp.array(1),
+    score_type=jnp.array(0),
+)
+
+RIGHT_FLIPPER_STATE_48_SCENE_OBJECT_4 = SceneObject(
+    hit_box_height=jnp.array(3),
+    hit_box_width=jnp.array(2),
+    hit_box_x_offset=jnp.array(88),
+    hit_box_y_offset=jnp.array(180),
+    reflecting=jnp.array(1),
+    score_type=jnp.array(0),
+)
+
+RIGHT_FLIPPER_STATE_48_SCENE_OBJECT_5 = SceneObject(
+    hit_box_height=jnp.array(2),
+    hit_box_width=jnp.array(2),
+    hit_box_x_offset=jnp.array(86),
+    hit_box_y_offset=jnp.array(179),
+    reflecting=jnp.array(1),
+    score_type=jnp.array(0),
+)
+
+RIGHT_FLIPPER_STATE_48_SCENE_OBJECT_6 = SceneObject(
+    hit_box_height=jnp.array(2),
+    hit_box_width=jnp.array(2),
+    hit_box_x_offset=jnp.array(84),
+    hit_box_y_offset=jnp.array(177),
+    reflecting=jnp.array(1),
+    score_type=jnp.array(0),
+)
+
 
 # If you edit these make sure that the indexing over it is still correct
 # we do this in: _check_obstacle_hits
@@ -1367,14 +1676,46 @@ ALL_SCENE_OBJECTS_LIST = [
     RIGHT_SPINNER_LEFT_POSITION_RIGHT_PART_1_SCENE_OBJECT,  # 71
     RIGHT_SPINNER_LEFT_POSITION_RIGHT_PART_2_SCENE_OBJECT,  # 72
     MIDDLE_BAR_SCENE_OBJECT,  # 73
-    LEFT_FLIPPER_STATE_0_SCENE_OBJECT,  # 74
-    LEFT_FLIPPER_STATE_16_SCENE_OBJECT,  # 75
-    LEFT_FLIPPER_STATE_32_SCENE_OBJECT,  # 76
-    LEFT_FLIPPER_STATE_48_SCENE_OBJECT,  # 77
-    RIGHT_FLIPPER_STATE_0_SCENE_OBJECT,  # 78
-    RIGHT_FLIPPER_STATE_16_SCENE_OBJECT,  # 79
-    RIGHT_FLIPPER_STATE_32_SCENE_OBJECT,  # 80
-    RIGHT_FLIPPER_STATE_48_SCENE_OBJECT,  # 81
+    LEFT_FLIPPER_STATE_0_SCENE_OBJECT_1,  # 74
+    LEFT_FLIPPER_STATE_0_SCENE_OBJECT_2,
+    LEFT_FLIPPER_STATE_0_SCENE_OBJECT_3,
+    LEFT_FLIPPER_STATE_0_SCENE_OBJECT_4,
+    LEFT_FLIPPER_STATE_0_SCENE_OBJECT_5,
+    LEFT_FLIPPER_STATE_0_SCENE_OBJECT_6,
+    LEFT_FLIPPER_STATE_16_SCENE_OBJECT_1,  # 75
+    LEFT_FLIPPER_STATE_16_SCENE_OBJECT_2,
+    LEFT_FLIPPER_STATE_16_SCENE_OBJECT_3,
+    LEFT_FLIPPER_STATE_32_SCENE_OBJECT_1,  # 76
+    LEFT_FLIPPER_STATE_32_SCENE_OBJECT_2,
+    LEFT_FLIPPER_STATE_32_SCENE_OBJECT_3,
+    LEFT_FLIPPER_STATE_32_SCENE_OBJECT_4,
+    LEFT_FLIPPER_STATE_32_SCENE_OBJECT_5,
+    LEFT_FLIPPER_STATE_48_SCENE_OBJECT_1,  # 77
+    LEFT_FLIPPER_STATE_48_SCENE_OBJECT_2,
+    LEFT_FLIPPER_STATE_48_SCENE_OBJECT_3,
+    LEFT_FLIPPER_STATE_48_SCENE_OBJECT_4,
+    LEFT_FLIPPER_STATE_48_SCENE_OBJECT_5,
+    LEFT_FLIPPER_STATE_48_SCENE_OBJECT_6,
+    RIGHT_FLIPPER_STATE_0_SCENE_OBJECT_1,  # 78
+    RIGHT_FLIPPER_STATE_0_SCENE_OBJECT_2,
+    RIGHT_FLIPPER_STATE_0_SCENE_OBJECT_3,
+    RIGHT_FLIPPER_STATE_0_SCENE_OBJECT_4,
+    RIGHT_FLIPPER_STATE_0_SCENE_OBJECT_5,
+    RIGHT_FLIPPER_STATE_0_SCENE_OBJECT_6,
+    RIGHT_FLIPPER_STATE_16_SCENE_OBJECT_1,  # 79
+    RIGHT_FLIPPER_STATE_16_SCENE_OBJECT_2,
+    RIGHT_FLIPPER_STATE_16_SCENE_OBJECT_3,
+    RIGHT_FLIPPER_STATE_32_SCENE_OBJECT_1,  # 80
+    RIGHT_FLIPPER_STATE_32_SCENE_OBJECT_2,
+    RIGHT_FLIPPER_STATE_32_SCENE_OBJECT_3,
+    RIGHT_FLIPPER_STATE_32_SCENE_OBJECT_4,
+    RIGHT_FLIPPER_STATE_32_SCENE_OBJECT_5,
+    RIGHT_FLIPPER_STATE_48_SCENE_OBJECT_1,  # 81
+    RIGHT_FLIPPER_STATE_48_SCENE_OBJECT_2,
+    RIGHT_FLIPPER_STATE_48_SCENE_OBJECT_3,
+    RIGHT_FLIPPER_STATE_48_SCENE_OBJECT_4,
+    RIGHT_FLIPPER_STATE_48_SCENE_OBJECT_5,
+    RIGHT_FLIPPER_STATE_48_SCENE_OBJECT_6,
 ]
 
 REFLECTING_SCENE_OBJECTS = jnp.stack(
@@ -2742,11 +3083,12 @@ class JaxVideoPinball(
 
         color_cycling = color_cycler(color_cycling)
 
-        # TEST: This makes the rollover increase and make the ball hit the gutter after a short time
-        # rollover_counter = jnp.where(state.step_counter % 400 == 399, jnp.array(3).astype(jnp.int32), rollover_counter)
-        # ball_y_final = jnp.where(state.step_counter % 420 == 419, jnp.array(194).astype(jnp.int32), ball_y_final)
 
-        # active_targets = jnp.where(state.step_counter % 420 == 419, jnp.array([False, False, False, False]).astype(jnp.bool), active_targets)
+        # Use this to test the flippers
+        # ball_x_final = jnp.where(state.step_counter == 400, jnp.array(72), ball_x_final)
+        # ball_y_final = jnp.where(state.step_counter == 400, jnp.array(174), ball_y_final)
+        # ball_vel_x_final = jnp.where(state.step_counter == 400, jnp.array(0), ball_vel_x_final)
+        # ball_vel_y_final = jnp.where(state.step_counter == 400, jnp.array(0), ball_vel_y_final)
 
         new_state = VideoPinballState(
             ball_x=ball_x_final,
