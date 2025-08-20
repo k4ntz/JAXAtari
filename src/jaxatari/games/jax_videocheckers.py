@@ -1049,6 +1049,14 @@ class JaxVideoCheckers(
             operand=state
         )
 
+        #check if player lost
+        new_state = jax.lax.cond(
+            BoardHandler.count_pieces(new_state.board)[1] == 0,
+            lambda s: s._replace(game_phase=self.consts.GAME_OVER_PHASE, winner=self.consts.COLOUR_WHITE),
+            lambda s: s,
+            new_state
+        )
+
         return new_state
 
     def step_game_over_phase(self, state: VideoCheckersState, action: chex.Array) -> VideoCheckersState:
