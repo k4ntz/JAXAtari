@@ -12,9 +12,15 @@ import jaxatari.rendering.jax_rendering_utils as jr
 
 
 class TurmoilConstants(NamedTuple):
+    # pre-defined movement lanes
+    VERTICAL_LANE = 76 # x value
+    HORIZONTAL_LANES = [40, 61, 82, 103, 124, 145, 166] # y values
+
+    # player
     PLAYER_SPEED = 10
-    PLAYER_START_X = 80
-    PLAYER_START_Y = 100
+    PLAYER_START_POS = (VERTICAL_LANE, HORIZONTAL_LANES[3]) # (starting_x_pos, starting_y_pos)
+    PLAYER_STEP_COOLDOWN = (0, 20) # (x cooldown, y cooldown)
+    PLAYER_STEP = (1, 21) # (x_step_size, y_step_size)
 
     # sizes
     PLAYER_SIZE = (8, 11) # (width, height)
@@ -25,8 +31,8 @@ class TurmoilConstants(NamedTuple):
     FACE_RIGHT = 1
 
     # boundaries
-    MIN_BOUND = (0, 0) # (min x, min y)
-    MAX_BOUND = (134, 135)
+    MIN_BOUND = (2, HORIZONTAL_LANES[0]) # (min x, min y)
+    MAX_BOUND = (150, HORIZONTAL_LANES[-1])
 
 class SpawnState(NamedTuple):
     pass
@@ -36,6 +42,7 @@ class TurmoilState(NamedTuple):
     player_x: chex.Array
     player_y: chex.Array
     player_direction: chex.Array
+    player_step_cooldown: chex.Array # (2,) x_cooldown, y_cooldown 
     lives: chex.Array
     score: chex.Array
     
@@ -74,6 +81,7 @@ class TurmoilInfo(NamedTuple):
 # RENDER CONSTANTS
 def load_sprites():
     MODULE_DIR = os.path.dirname(os.path.abspath(__file__))
+    bg = jr.loadFrame(os.path.join(MODULE_DIR, "sprites/turmoil/bg/1.npy"))
     player = jr.loadFrame(os.path.join(MODULE_DIR, "sprites/turmoil/player/1.npy"))
     bullet = jr.loadFrame(os.path.join(MODULE_DIR, "sprites/turmoil/player/bullet/1.npy"))
     player_shrink_1 = jr.loadFrame(os.path.join(MODULE_DIR, "sprites/turmoil/player/shrink/1.npy"))
@@ -86,6 +94,7 @@ def load_sprites():
 
     player = [player]
     bullet = [bullet]
+    bg = [bg]
 
     # Pad player shrink sprites to match each other
     player_shrink_sprites, player_shrink_offsets = jr.pad_to_match([
@@ -97,6 +106,9 @@ def load_sprites():
         player_shrink_6
     ])
     player_shrink_offsets = jnp.array(player_shrink_offsets)
+
+    # bg sprites
+    SPRITE_BG = jnp.repeat(bg[0][None], 1, axis=0)
 
     # Player sprites
     PLAYER_SHIP = jnp.repeat(player[0][None], 1, axis=0)
@@ -120,6 +132,7 @@ def load_sprites():
 
 
     return (
+        SPRITE_BG,
         PLAYER_SHIP,
         BULLET,
         PLAYER_SHRINK,
@@ -129,6 +142,7 @@ def load_sprites():
 
 # Load sprites once at module level
 (
+    SPRITE_BG,
     PLAYER_SHIP,
     BULLET,
     PLAYER_SHRINK,
@@ -220,9 +234,10 @@ class JaxTurmoil(JaxEnvironment[TurmoilState, TurmoilObservation, TurmoilInfo, T
     def reset(self, key: jax.random.PRNGKey = jax.random.PRNGKey(42)) -> Tuple[TurmoilObservation, TurmoilState]:
         """Initialize game state"""
         reset_state = TurmoilState(
-            player_x=jnp.array(self.consts.PLAYER_START_X),
-            player_y=jnp.array(self.consts.PLAYER_START_Y),
+            player_x=jnp.array(self.consts.PLAYER_START_POS[0]),
+            player_y=jnp.array(self.consts.PLAYER_START_POS[1]),
             player_direction=jnp.array(0),
+            player_step_cooldown=jnp.zeros(2),
             lives=jnp.array(5), # TODO check this value
             score=jnp.array(0),
 
@@ -297,24 +312,40 @@ class JaxTurmoil(JaxEnvironment[TurmoilState, TurmoilObservation, TurmoilInfo, T
             )
         )
 
+        # cooldown so player does not go too fast
+        player_step_cooldown = jnp.where(
+            state.player_step_cooldown > 0,
+            state.player_step_cooldown - 1,
+            0
+        )        
+
+        # move player
         player_x = jnp.where(
-            right,
-            state.player_x + 2,
+            player_step_cooldown[0] <= 0,
             jnp.where(
-                left,
-                state.player_x - 2,
-                state.player_x
-            )
+                right,
+                state.player_x + self.consts.PLAYER_STEP[0],
+                jnp.where(
+                    left,
+                    state.player_x - self.consts.PLAYER_STEP[0],
+                    state.player_x
+                )
+            ),
+            state.player_x
         )
 
         player_y = jnp.where(
-            down,
-            state.player_y + 2,
+            player_step_cooldown[1] <= 0,
             jnp.where(
-                up,
-                state.player_y - 2,
-                state.player_y
-            )
+                down,
+                state.player_y + self.consts.PLAYER_STEP[1],
+                jnp.where(
+                    up,
+                    state.player_y - self.consts.PLAYER_STEP[1],
+                    state.player_y
+                )
+            ),
+            state.player_y
         )
 
         player_direction = jnp.where(
@@ -327,28 +358,52 @@ class JaxTurmoil(JaxEnvironment[TurmoilState, TurmoilObservation, TurmoilInfo, T
             )
         )
 
+        # right/left cooldown
+        player_step_cooldown = player_step_cooldown.at[0].set(
+            jnp.where(
+                jnp.logical_and(
+                    jnp.logical_or(left, right),
+                    player_step_cooldown[0] <= 0 # if not already on cooldown
+                ),
+                self.consts.PLAYER_STEP_COOLDOWN[0],
+                player_step_cooldown[0],
+            )
+        )
+
+        # up/down cool down
+        player_step_cooldown = player_step_cooldown.at[1].set(
+            jnp.where(
+                jnp.logical_and(
+                    jnp.logical_or(up, down),
+                    player_step_cooldown[1] <= 0
+                ),
+                self.consts.PLAYER_STEP_COOLDOWN[1],
+                player_step_cooldown[1],
+            )
+        )
+
         # keep player in boundaries
         player_x = jnp.where(
-            player_x < self.consts.MIN_BOUND[0],
+            player_x <= self.consts.MIN_BOUND[0],
             self.consts.MIN_BOUND[0],
             jnp.where(
-                player_x > self.consts.MAX_BOUND[0],
+                player_x >= self.consts.MAX_BOUND[0],
                 self.consts.MAX_BOUND[0],
                 player_x,
             ),
         )
 
         player_y = jnp.where(
-            player_y < self.consts.MIN_BOUND[1],
+            player_y <= self.consts.MIN_BOUND[1],
             self.consts.MIN_BOUND[1], 
             jnp.where(
-                player_y > self.consts.MAX_BOUND[1],
+                player_y >= self.consts.MAX_BOUND[1],
                 self.consts.MAX_BOUND[1],
                 player_y
             ),
         )
 
-        return player_x, player_y, player_direction
+        return player_x, player_y, player_direction, player_step_cooldown
 
     
     @partial(jax.jit, static_argnums=(0,))
@@ -430,7 +485,7 @@ class JaxTurmoil(JaxEnvironment[TurmoilState, TurmoilObservation, TurmoilInfo, T
     
         def normal_game_step() :
             # player movement
-            new_player_x, new_player_y, new_player_direction = self.player_step(
+            new_player_x, new_player_y, new_player_direction, new_player_step_cooldown = self.player_step(
                 state,
                 action
             )
@@ -445,6 +500,7 @@ class JaxTurmoil(JaxEnvironment[TurmoilState, TurmoilObservation, TurmoilInfo, T
                 player_x=new_player_x,
                 player_y=new_player_y,
                 player_direction=new_player_direction,
+                player_step_cooldown=new_player_step_cooldown,
                 bullet=new_bullet
             )
         
@@ -468,6 +524,11 @@ class TurmoilRenderer(JAXGameRenderer):
     def render(self, state):
         raster = jr.create_initial_frame(width=160, height=210)
 
+        # render background
+        frame_bg = jr.get_sprite_frame(SPRITE_BG, 0)
+        raster = jr.render_at(raster, 0, 0, frame_bg)
+
+        # render player
         frame_pl_ship = jr.get_sprite_frame(PLAYER_SHIP, 0)
         raster = jr.render_at(
             raster,
