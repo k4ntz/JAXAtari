@@ -132,6 +132,7 @@ def main():
     frame_by_frame = False
     next_frame_asked = False
     total_return = 0
+    pending_reset = False
     if args.replay:
         with open(args.replay, "rb") as f:
             save_data = np.load(f, allow_pickle=True).item()
@@ -191,13 +192,10 @@ def main():
         if pause or (frame_by_frame and not next_frame_asked):
             continue
 
-        if acc_ms >= step_ms and (not frame_by_frame or next_frame_asked):
+        # --- Show updated score for one frame before resetting ---
+        if acc_ms >= step_ms and not pending_reset:
             acc_ms -= step_ms
-            act = latest_action
-            if args.game.lower() == "surround":
-                joint_action = jnp.array([act, JAXAtariAction.NOOP], dtype=jnp.int32)
-            else:
-                joint_action = act
+            joint_action = jnp.array([latest_action, JAXAtariAction.NOOP], dtype=jnp.int32)
             obs, state, reward, done, info = jitted_step(state, joint_action)
             total_return += reward
             if next_frame_asked:
@@ -207,13 +205,21 @@ def main():
             if done:
                 print(f"Done. Total return {total_return}")
                 total_return = 0
-                obs, state = jitted_reset(key)
-                latest_action = JAXAtariAction.NOOP
-                acc_ms = 0
-
+                pending_reset = True
+        # Render the current state (including the just-updated score)
         if not execute_without_rendering:
             image = jitted_render(state)
             update_pygame(window, image, UPSCALE_FACTOR, 160, 210)
+        # Perform the reset *after* rendering the scored frame
+        if pending_reset:
+            # preserve scores across rounds
+            s0 = int(state.score0)
+            s1 = int(state.score1)
+            _obs, state = env.reset(scores=(s0, s1))
+            latest_action = JAXAtariAction.NOOP
+            acc_ms = 0
+            pending_reset = False
+            continue
 
     if args.record:
         # Convert dictionary to array of actions

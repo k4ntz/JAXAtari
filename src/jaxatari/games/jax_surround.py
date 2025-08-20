@@ -1,6 +1,7 @@
 import os
 import jax
 import jax.numpy as jnp
+import numpy as np
 from functools import partial
 from typing import NamedTuple, Tuple, Optional
 
@@ -24,29 +25,35 @@ class SurroundConstants(NamedTuple):
     SCREEN_SIZE: Tuple[int, int] = (160, 210)
 
     # Colors
-    P1_TRAIL_COLOR: Tuple[int, int, int] = (255, 221, 51) # Gelb
-    P2_TRAIL_COLOR: Tuple[int, int, int] = (221, 51, 136)   # Pink-Magenta
-    BACKGROUND_COLOR: Tuple[int, int, int] = (153, 153, 255) # Blau-Lila Hintergrund
+    P1_TRAIL_COLOR: Tuple[int, int, int] = (255, 102, 204)  # Border color
+    P2_TRAIL_COLOR: Tuple[int, int, int] = (255, 102, 204)  # Border color
+    BACKGROUND_COLOR: Tuple[int, int, int] = (153, 153, 255)  # Blau-Lila Hintergrund
+    # Head colors (small square on top of the trail)
+    P1_HEAD_COLOR: Tuple[int, int, int] = (255, 221, 51)    # yellow (score color)
+    P2_HEAD_COLOR: Tuple[int, int, int] = (221, 51, 136)    # magenta (score color)
+    HEAD_SCALE: float = 0.5  # fraction of the cell size (0< scale ≤1)
 
     # Border (Logik + Visual konsistent)
     BORDER_CELLS_X: int = 2    # linke/rechte Dicke in Zellen
     BORDER_CELLS_Y: int = 1    # obere/untere Dicke in Zellen
     BORDER_COLOR: Tuple[int, int, int] = (255, 102, 204)
 
-    # Gridline color and thickness
-    GRIDLINE_COLOR: Tuple[int, int, int] = (255, 153, 221)
-    GRIDLINE_THICKNESS: int = 1
+    # Divider stripes (thin red lines across the middle of each occupied cell)
+    DIVIDER_COLOR: Tuple[int, int, int] = (153, 153, 255)   # Match playfield background color
+    DIVIDER_THICKNESS: int = 1  # pixels (in screen space)
 
-    # Starting positions (x, y)
-    P1_START_POS: Tuple[int, int] = (5, 12)
-    P2_START_POS: Tuple[int, int] = (34, 12)
+    # Starting positions (x, y) - snapped to nearest rectangle (cell) on the field
+    # These should be integers and not between cells. Adjusted to be inside the playfield, not on borders.
+    # Middle of the playfield, within a rectangle (cell)
+    P1_START_POS: Tuple[int, int] = (4, 10.2)  # left side, vertical center
+    P2_START_POS: Tuple[int, int] = (35, 10.2) # right side, vertical center
 
     # Starting directions
     P1_START_DIR: int = Action.RIGHT
     P2_START_DIR: int = Action.LEFT
 
     # Rules
-    ALLOW_REVERSE: bool = True
+    ALLOW_REVERSE: bool = False
 
     # Maximum number of environment steps before truncation
     MAX_STEPS: int = 1000
@@ -81,6 +88,7 @@ class SurroundInfo(NamedTuple):
 
     time: jnp.ndarray
 
+
 def create_border_mask(consts: SurroundConstants) -> jnp.ndarray:
     mask = jnp.zeros((consts.GRID_WIDTH, consts.GRID_HEIGHT), dtype=jnp.bool_)
     bx, by = consts.BORDER_CELLS_X, consts.BORDER_CELLS_Y
@@ -102,8 +110,8 @@ class SurroundRenderer(JAXGameRenderer):
         module_dir = os.path.dirname(os.path.abspath(__file__))
         digit_path = os.path.join(module_dir, "sprites/seaquest/digits/{}" + ".npy")
         digits = jr.load_and_pad_digits(digit_path)
-        p1_color = jnp.array(self.consts.P1_TRAIL_COLOR, dtype=jnp.uint8)
-        p2_color = jnp.array(self.consts.P2_TRAIL_COLOR, dtype=jnp.uint8)
+        p1_color = jnp.array(self.consts.P1_HEAD_COLOR, dtype=jnp.uint8)
+        p2_color = jnp.array(self.consts.P2_HEAD_COLOR, dtype=jnp.uint8)
         self.p1_digits = digits.at[..., :3].set(jnp.where(digits[..., 3:] > 0, p1_color, 0))
         self.p2_digits = digits.at[..., :3].set(jnp.where(digits[..., 3:] > 0, p2_color, 0))
 
@@ -120,18 +128,6 @@ class SurroundRenderer(JAXGameRenderer):
 
         playfield = jnp.ones((field_h, field_w, 3), dtype=jnp.uint8) * bg
 
-        # Rasterlinien (JIT-freundlich)
-        gcol = jnp.array(getattr(self.consts, "GRIDLINE_COLOR", self.consts.BORDER_COLOR), dtype=jnp.uint8)
-        t = int(getattr(self.consts, "GRIDLINE_THICKNESS", 1))
-        ys = jnp.arange(field_h)
-        xs = jnp.arange(field_w)
-        vert_mask = (xs % cell_w) < t
-        hori_mask = (ys % cell_h) < t
-        vert_mask_2d = jnp.broadcast_to(vert_mask, (field_h, field_w))
-        hori_mask_2d = jnp.broadcast_to(hori_mask[:, None], (field_h, field_w))
-        grid_mask = jnp.logical_or(vert_mask_2d, hori_mask_2d)[..., None]
-        playfield = jnp.where(grid_mask, gcol, playfield)
-
         # Trails (upscale aus Zellen)
         def upscale(mask):
             return jnp.repeat(jnp.repeat(mask, cell_h, axis=0), cell_w, axis=1)
@@ -144,7 +140,28 @@ class SurroundRenderer(JAXGameRenderer):
         playfield = jnp.where(p1_mask, p1_color, playfield)
         playfield = jnp.where(p2_mask, p2_color, playfield)
 
-        # Köpfe (ohne Python-int())
+        # Border
+        bx = self.consts.BORDER_CELLS_X * cell_w
+        by = self.consts.BORDER_CELLS_Y * cell_h
+        border_color = jnp.array(self.consts.BORDER_COLOR, dtype=jnp.uint8)
+        playfield = playfield.at[:by, :, :].set(border_color)
+        playfield = playfield.at[-by:, :, :].set(border_color)
+        playfield = playfield.at[:, :bx, :].set(border_color)
+        playfield = playfield.at[:, -bx:, :].set(border_color)
+
+        # Divider stripes over trails and border (horizontal midline per cell)
+        trail_any = upscale((state.trail != 0).T)
+        border_up = upscale(state.border.T)
+        occupied = jnp.logical_or(trail_any, border_up)
+        ys = jnp.arange(field_h)
+        mid = cell_h // 2
+        band = (ys % cell_h >= mid) & (ys % cell_h < mid + max(1, self.consts.DIVIDER_THICKNESS))
+        band_2d = jnp.broadcast_to(band[:, None], (field_h, field_w))
+        divider_mask = jnp.logical_and(band_2d, occupied)[..., None]
+        divider_col = jnp.array(self.consts.DIVIDER_COLOR, dtype=jnp.uint8)
+        playfield = jnp.where(divider_mask, divider_col, playfield)
+
+        # Köpfe (ohne Python-int()) — draw after divider so heads remain solid
         p1x = (state.pos0[0] * cell_w).astype(jnp.int32)
         p1y = (state.pos0[1] * cell_h).astype(jnp.int32)
         p2x = (state.pos1[0] * cell_w).astype(jnp.int32)
@@ -155,15 +172,11 @@ class SurroundRenderer(JAXGameRenderer):
         playfield = jax.lax.dynamic_update_slice(playfield, head_patch1, (p1y, p1x, 0))
         playfield = jax.lax.dynamic_update_slice(playfield, head_patch2, (p2y, p2x, 0))
 
-        # Border
-        bx = self.consts.BORDER_CELLS_X * cell_w
-        by = self.consts.BORDER_CELLS_Y * cell_h
-        border_color = jnp.array(self.consts.BORDER_COLOR, dtype=jnp.uint8)
-        playfield = playfield.at[:by, :, :].set(border_color)
-        playfield = playfield.at[-by:, :, :].set(border_color)
-        playfield = playfield.at[:, :bx, :].set(border_color)
-        playfield = playfield.at[:, -bx:, :].set(border_color)
-
+        # ---- Head fills the entire cell, colored as in the score display ----
+        head_patch1 = jnp.ones((cell_h, cell_w, 3), dtype=jnp.uint8) * jnp.array(self.consts.P1_HEAD_COLOR, dtype=jnp.uint8)
+        head_patch2 = jnp.ones((cell_h, cell_w, 3), dtype=jnp.uint8) * jnp.array(self.consts.P2_HEAD_COLOR, dtype=jnp.uint8)
+        playfield = jax.lax.dynamic_update_slice(playfield, head_patch1, (p1y, p1x, 0))
+        playfield = jax.lax.dynamic_update_slice(playfield, head_patch2, (p2y, p2x, 0))
         # Playfield ins Bild
         img = img.at[y_off:y_off + field_h, :field_w, :].set(playfield)
 
@@ -176,8 +189,6 @@ class SurroundRenderer(JAXGameRenderer):
         img = jr.render_at(img, width - 10 - digit_p2.shape[1], 2, digit_p2)
 
         return img
-
-
 
 
 class JaxSurround(
@@ -198,12 +209,35 @@ class JaxSurround(
             Action.DOWN,
         ]
 
-    def reset(self, key: Optional[jax.random.PRNGKey] = None) -> Tuple[SurroundObservation, SurroundState]:
+    def reset(
+        self,
+        key: Optional[jax.random.PRNGKey] = None,
+        scores: Optional[Tuple[int, int]] = None,
+    ) -> Tuple[SurroundObservation, SurroundState]:
         del key
-        p0_start = jnp.array(self.consts.P1_START_POS, dtype=jnp.int32)
-        p1_start = jnp.array(self.consts.P2_START_POS, dtype=jnp.int32)
+        # Clamp start positions to inner playfield (never on border bricks)
+        p0_start = jnp.array((
+            jnp.clip(self.consts.P1_START_POS[0], self.consts.BORDER_CELLS_X, self.consts.GRID_WIDTH  - self.consts.BORDER_CELLS_X - 1),
+            jnp.clip(self.consts.P1_START_POS[1], self.consts.BORDER_CELLS_Y, self.consts.GRID_HEIGHT - self.consts.BORDER_CELLS_Y - 1),
+        ), dtype=jnp.int32)
+        p1_start = jnp.array((
+            jnp.clip(self.consts.P2_START_POS[0], self.consts.BORDER_CELLS_X, self.consts.GRID_WIDTH  - self.consts.BORDER_CELLS_X - 1),
+            jnp.clip(self.consts.P2_START_POS[1], self.consts.BORDER_CELLS_Y, self.consts.GRID_HEIGHT - self.consts.BORDER_CELLS_Y - 1),
+        ), dtype=jnp.int32)
         grid = jnp.zeros((self.consts.GRID_WIDTH, self.consts.GRID_HEIGHT), dtype=jnp.int32)
+        # Pre-fill starting cells as trail bricks
+        grid = grid.at[tuple(p0_start)].set(1)  # P1’s start cell is a trail brick
+        grid = grid.at[tuple(p1_start)].set(2)  # P2’s start cell is a trail brick
         border = create_border_mask(self.consts)
+
+        # keep scores from previous round if provided
+        if scores is None:
+            s0 = jnp.array(0, dtype=jnp.int32)
+            s1 = jnp.array(0, dtype=jnp.int32)
+        else:
+            s0 = jnp.array(int(scores[0]), dtype=jnp.int32)
+            s1 = jnp.array(int(scores[1]), dtype=jnp.int32)
+
         state = SurroundState(
             p0_start,
             p1_start,
@@ -211,10 +245,10 @@ class JaxSurround(
             jnp.array(self.consts.P2_START_DIR, dtype=jnp.int32),
             grid,
             border,
+            jnp.array(False, dtype=jnp.bool_),
             jnp.array(0, dtype=jnp.int32),
-            jnp.array(0, dtype=jnp.int32),
-            jnp.array(0, dtype=jnp.int32),
-            jnp.array(0, dtype=jnp.int32),
+            s0,
+            s1,
         )
         return self._get_observation(state), state
 
@@ -247,19 +281,22 @@ class JaxSurround(
             is_move = jnp.logical_and(action >= Action.UP, action <= Action.DOWN)
             candidate = jax.lax.select(is_move, action, curr_dir)
             if not self.consts.ALLOW_REVERSE:
+                # Define opposites: UP<->DOWN, LEFT<->RIGHT
                 opp = jnp.array([
-                    Action.NOOP,
-                    Action.NOOP,
-                    Action.DOWN,
-                    Action.LEFT,
-                    Action.RIGHT,
-                    Action.UP,
+                    Action.NOOP,   # NOOP
+                    Action.NOOP,   # FIRE
+                    Action.DOWN,   # UP -> DOWN
+                    Action.LEFT,   # RIGHT -> LEFT
+                    Action.RIGHT,  # LEFT -> RIGHT
+                    Action.UP,     # DOWN -> UP
                 ], dtype=jnp.int32)
+                # If trying to reverse, keep current direction
                 candidate = jax.lax.cond(candidate == opp[curr_dir], lambda: curr_dir, lambda: candidate)
             return candidate
 
         new_dir0 = update_dir(state.dir0, actions[0])
         new_dir1 = update_dir(state.dir1, actions[1])
+
 
         # NEU: immer bewegen, keine is_move-Checks mehr
         offset_p0 = offsets[new_dir0]
@@ -283,27 +320,25 @@ class JaxSurround(
         # Head-on (beide wollen gleiche Zielzelle)
         head_on = jnp.all(new_p0 == new_p1)
 
-        # Kollision prüfen
+    # Collision: if either touches trail or border, OR both land on same cell (head-on)
         hit_p0 = jax.lax.cond(
             out0,
             lambda: True,
-            lambda: jnp.logical_or(
-                state.border[tuple(new_p0)],
-                state.trail[tuple(new_p0)] != 0
-            ),
+            lambda: jnp.logical_or(state.border[tuple(new_p0)], state.trail[tuple(new_p0)] != 0),
         )
         hit_p1 = jax.lax.cond(
             out1,
             lambda: True,
-            lambda: jnp.logical_or(
-                state.border[tuple(new_p1)],
-                state.trail[tuple(new_p1)] != 0
-            ),
+            lambda: jnp.logical_or(state.border[tuple(new_p1)], state.trail[tuple(new_p1)] != 0),
         )
-
-        # Simultane Kollisionen berücksichtigen
+        # count head-on as simultaneous crash
         hit_p0 = jnp.logical_or(hit_p0, head_on)
         hit_p1 = jnp.logical_or(hit_p1, head_on)
+        # (optional) also count swapping positions as collision:
+        # cross_over = jnp.all(new_p0 == state.pos1) & jnp.all(new_p1 == state.pos0)
+        # hit_p0 = jnp.logical_or(hit_p0, cross_over)
+        # hit_p1 = jnp.logical_or(hit_p1, cross_over)
+        collision = jnp.logical_or(hit_p0, hit_p1)
 
         # Trail aktualisieren (immer setzen, weil immer Bewegung)
         grid0 = state.trail.at[tuple(state.pos0)].set(1)
@@ -313,15 +348,15 @@ class JaxSurround(
         new_p0 = jax.lax.select(out0, state.pos0, new_p0)
         new_p1 = jax.lax.select(out1, state.pos1, new_p1)
 
-        terminated = jnp.logical_or(hit_p0, hit_p1)
-        time_limit_reached = (state.time + 1) >= self.consts.MAX_STEPS
-        terminated = jnp.logical_or(terminated, time_limit_reached)
-
-        new_score0 = state.score0 + jnp.where(hit_p1 & ~hit_p0, 1, 0)
-        new_score1 = state.score1 + jnp.where(hit_p0 & ~hit_p1, 1, 0)
-        terminated = jnp.logical_or(
-            terminated, jnp.logical_or(new_score0 >= 10, new_score1 >= 10)
-        )
+        # Update scores: winner-only (no point on simultaneous crash)
+        p0_only_crashed = hit_p0 & ~hit_p1
+        p1_only_crashed = hit_p1 & ~hit_p0
+        new_score0 = state.score0 + jnp.where(p1_only_crashed, 1, 0)
+        new_score1 = state.score1 + jnp.where(p0_only_crashed, 1, 0)
+        win_score = 10
+        game_over = (new_score0 >= win_score) | (new_score1 >= win_score)
+        terminated = jnp.logical_or(collision, (state.time + 1) >= self.consts.MAX_STEPS)
+        terminated = jnp.logical_or(terminated, game_over)
 
         next_state = SurroundState(
             new_p0,
@@ -330,7 +365,7 @@ class JaxSurround(
             new_dir1,
             grid,
             state.border,
-            terminated.astype(jnp.int32),
+            terminated.astype(jnp.bool_),
             state.time + 1,
             new_score0,
             new_score1,
@@ -341,7 +376,6 @@ class JaxSurround(
         done = self._get_done(next_state)
         info = self._get_info(next_state)
         return obs, next_state, reward, done, info
-
 
     @partial(jax.jit, static_argnums=(0,))
     def _get_observation(self, state: SurroundState) -> SurroundObservation:
@@ -378,6 +412,16 @@ class JaxSurround(
         return spaces.Discrete(len(self.action_set))
 
     def observation_space(self) -> spaces.Dict:
+        # Prefer per-dimension bounds; fall back to scalar bounds if unsupported by spaces.Box
+        try:
+            pos_low = jnp.array([0, 0], dtype=jnp.int32)
+            pos_high = jnp.array([self.consts.GRID_WIDTH - 1, self.consts.GRID_HEIGHT - 1], dtype=jnp.int32)
+            pos_box0 = spaces.Box(low=pos_low, high=pos_high, shape=(2,), dtype=jnp.int32)
+            pos_box1 = spaces.Box(low=pos_low, high=pos_high, shape=(2,), dtype=jnp.int32)
+        except Exception:
+            pos_box0 = spaces.Box(0, self.consts.GRID_WIDTH, shape=(2,), dtype=jnp.int32)
+            pos_box1 = spaces.Box(0, self.consts.GRID_WIDTH, shape=(2,), dtype=jnp.int32)
+
         return spaces.Dict({
             "grid": spaces.Box(
                 low=0,
@@ -385,8 +429,8 @@ class JaxSurround(
                 shape=(self.consts.GRID_WIDTH, self.consts.GRID_HEIGHT),
                 dtype=jnp.int32,
             ),
-            "pos0": spaces.Box(0, self.consts.GRID_WIDTH, shape=(2,), dtype=jnp.int32),
-            "pos1": spaces.Box(0, self.consts.GRID_WIDTH, shape=(2,), dtype=jnp.int32),
+            "pos0": pos_box0,
+            "pos1": pos_box1,
             "agent_id": spaces.Box(0, 1, shape=(), dtype=jnp.int32),
         })
 
@@ -448,7 +492,7 @@ def main():
     clock.tick(0)     # dt zurücksetzen
     # -----------------------------------------
 
-    LOGIC_HZ = 2                # 2 Zellen pro Sekunde
+    LOGIC_HZ = 4                # 4 Zellen pro Sekunde
     RENDER_HZ = 60
     STEP_MS = 1000 // LOGIC_HZ
     acc_ms = 0
@@ -466,11 +510,16 @@ def main():
 
         # Eingabe (immer lesen, aber erst beim nächsten Logikstep anwenden)
         keys = pygame.key.get_pressed()
-        if keys[pygame.K_UP]:    latest_action = Action.UP
-        elif keys[pygame.K_RIGHT]: latest_action = Action.RIGHT
-        elif keys[pygame.K_LEFT]:  latest_action = Action.LEFT
-        elif keys[pygame.K_DOWN]:  latest_action = Action.DOWN
-        elif keys[pygame.K_SPACE]: latest_action = Action.FIRE
+        if keys[pygame.K_UP]:
+            latest_action = Action.UP
+        elif keys[pygame.K_RIGHT]:
+            latest_action = Action.RIGHT
+        elif keys[pygame.K_LEFT]:
+            latest_action = Action.LEFT
+        elif keys[pygame.K_DOWN]:
+            latest_action = Action.DOWN
+        elif keys[pygame.K_SPACE]:
+            latest_action = Action.FIRE
 
         # ---- feste Logikrate: max. 1 Step pro Frame (Clamping) ----
         if acc_ms >= STEP_MS:
@@ -483,15 +532,4 @@ def main():
                 acc_ms = 0
         # -----------------------------------------------------------
 
-        # Render
-        frame = np.array(env.render(state))  # (H, W, 3)
-        surf = pygame.surfarray.make_surface(frame.transpose(1, 0, 2))
-        surf = pygame.transform.scale(surf, (W * scale, H * scale))
-        screen.blit(surf, (0, 0))
-        pygame.display.flip()
-
-    pygame.quit()
-
-
-if __name__ == "__main__":  # pragma: no cover - manual play
     main()
