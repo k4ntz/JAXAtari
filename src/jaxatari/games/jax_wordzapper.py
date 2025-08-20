@@ -118,7 +118,6 @@ class WordZapperState(NamedTuple):
     player_direction: chex.Array
     cooldown_timer: chex.Array
 
-    
     letters_x: chex.Array # letters at the top
     letters_y: chex.Array
     letters_char: chex.Array
@@ -150,6 +149,7 @@ class WordZapperState(NamedTuple):
     timer: chex.Array
     step_counter: chex.Array
     rng_key: chex.PRNGKey
+    score: chex.Array
 
 class EntityPosition(NamedTuple):
     x: jnp.ndarray
@@ -835,6 +835,7 @@ class JaxWordZapper(JaxEnvironment[WordZapperState, WordZapperObservation, WordZ
             enemy_explosion_timer=jnp.zeros((self.consts.MAX_ENEMIES,), dtype=jnp.int32),
             enemy_explosion_frame_timer=jnp.zeros((self.consts.MAX_ENEMIES,), dtype=jnp.int32),
             enemy_explosion_pos=jnp.zeros((self.consts.MAX_ENEMIES, 2)),
+            score=jnp.array(0),
         )
 
         initial_obs = self._get_observation(reset_state)
@@ -928,18 +929,8 @@ class JaxWordZapper(JaxEnvironment[WordZapperState, WordZapperObservation, WordZ
         MAX_TIME = 60 * self.consts.TIME  # 90 seconds at 60 FPS
         return state.timer >= MAX_TIME
 
-    @partial(jax.jit, static_argnums=(0,))
-    def _get_env_reward(self, previous_state: WordZapperState, state: WordZapperState):
-        # TODO this is not implemented!!
-        return 10
 
-    @partial(jax.jit, static_argnums=(0,))
-    def _get_all_rewards(self, previous_state: WordZapperState, state: WordZapperState) -> jnp.ndarray:
-        pass
 
-    @partial(jax.jit, static_argnums=(0,))
-    def _get_info(self, state: WordZapperState, all_rewards: jnp.ndarray) -> WordZapperInfo:
-        pass
 
     def _advance_phase(self, s: WordZapperState): # I think this is the one where stuff move on the screen when game starts
         timer = s.phase_timer + 1
@@ -1148,6 +1139,52 @@ class JaxWordZapper(JaxEnvironment[WordZapperState, WordZapperObservation, WordZ
         info = self._get_info(state, all_rewards)
 
         return observation, state, env_reward, done, info
+
+    def flatten_entity_position(self, entity: EntityPosition) -> jnp.ndarray:
+        return jnp.concatenate([
+            jnp.array([entity.x]),
+            jnp.array([entity.y]),
+            jnp.array([entity.width]),
+            jnp.array([entity.height]),
+            jnp.array([entity.active])
+        ])
+
+    @partial(jax.jit, static_argnums=(0,))
+    def obs_to_flat_array(self, obs: WordZapperObservation) -> jnp.ndarray:
+        # Flatten all entities and arrays for agent training
+        return jnp.concatenate([
+            self.flatten_entity_position(obs.player),
+            obs.enemies.flatten(),
+            obs.letters.flatten(),
+            obs.letters_char.flatten(),
+            obs.letters_alive.flatten(),
+            obs.current_word.flatten(),
+            obs.current_letter_index.flatten(),
+            self.flatten_entity_position(obs.player_missile),
+            self.flatten_entity_position(obs.player_zapper),
+            obs.cooldown_timer.flatten(),
+            obs.timer.flatten(),
+        ])
+
+    @partial(jax.jit, static_argnums=(0,))
+    def _get_env_reward(self, previous_state: WordZapperState, state: WordZapperState):
+        # Reward is score difference (if score field exists)
+        return state.score - previous_state.score
+
+    @partial(jax.jit, static_argnums=(0,))
+    def _get_all_rewards(self, previous_state: WordZapperState, state: WordZapperState) -> jnp.ndarray:
+        if self.reward_funcs is None:
+            return jnp.zeros(1)
+        rewards = jnp.array([reward_func(previous_state, state) for reward_func in self.reward_funcs])
+        return rewards
+
+    @partial(jax.jit, static_argnums=(0,))
+    def _get_info(self, state: WordZapperState, all_rewards: jnp.ndarray) -> WordZapperInfo:
+        return WordZapperInfo(
+            timer=state.timer,
+            current_word=state.target_word,
+            game_over=self._get_done(state),
+        )
 
 class WordZapperRenderer(JAXGameRenderer):
     def __init__(self, consts: WordZapperConstants = None):
