@@ -17,7 +17,7 @@ from jaxatari.environment import JaxEnvironment, JAXAtariAction as Action
 
 class OthelloConstants(NamedTuple):
     # attribution of cases for the strategic tile score //starting at bottom right, then going left und and then up
-    STRATEGIC_TILE_SCORE_CASES =  jnp.array([
+    STRATEGIC_TILE_SCORE_CASES:  chex.Array = jnp.array([
     17, 16, 16, 16, 16, 16, 16, 15,
     11, 14, 13, 13, 13, 13, 12, 6,
     11, 10, 8, 9, 9, 8, 7, 6,
@@ -28,42 +28,42 @@ class OthelloConstants(NamedTuple):
     2, 1, 1, 1, 1, 1, 1, 0
     ])
 
-    __F3BA = jnp.array([
+    F3BA:  chex.Array = jnp.array([
         0x60, 0x40, 0x42, 0x40, 0x00, 0x00, 0x00, 0x46, 0x46, 0x44, 0x04, 0x08, 0x0c, 0x0a, 0x08,
         0x04, 0x10, 0x14, 0xbe, 0x9e, 0x02, 0x02, 0x02, 0x12, 0x48, 0x28, 0x10, 0x08, 0x18, 0x38,
         0x40, 0x00, 0x02, 0x02
     ], dtype=jnp.uint8)
 
-    __F3DC = jnp.array([
+    F3DC:  chex.Array = jnp.array([
         0x14, 0x28, 0x28, 0x2c, 0x46, 0x44, 0x40, 0x20, 0x08, 0x20, 0x60, 0x40, 0x40, 0x40, 0x42,
         0x40, 0x40, 0x40, 0x40, 0x60, 0x20, 0x28, 0x2c, 0x24, 0x32, 0x12, 0x4c, 0xf2, 0xe2, 0xc2,
         0x02, 0xbe, 0x18, 0x48
     ], dtype=jnp.uint8)
 
-    __F3FE = jnp.array([
+    F3FE:  chex.Array = jnp.array([
         0x30, 0x30, 0x30, 0x30, 0xc0, 0xc0, 0xc0, 0x30, 0x30, 0x30, 0xbb, 0xbb, 0xbb, 0xbb, 0xbb,
         0xbb, 0xbb, 0xbb, 0x60, 0x60, 0x40, 0x30, 0x30, 0x50, 0xe0, 0xbb, 0xbb, 0xd0, 0xd0, 0xd0,
         0xd0, 0xd8, 0xf0, 0xf0
     ], dtype=jnp.uint8)
 
-    BIT_MASKS_LOW_TO_HIGH = jnp.array([1, 2, 4, 8, 16, 32, 64, 128], dtype=jnp.uint8)
+    BIT_MASKS_LOW_TO_HIGH:  chex.Array = jnp.array([1, 2, 4, 8, 16, 32, 64, 128], dtype=jnp.uint8)
 
-    BIT_MASKS_HIGH_TO_LOW = jnp.array([0x80, 0x40, 0x20, 0x10, 8, 4, 2, 1], dtype=jnp.uint8)
+    BIT_MASKS_HIGH_TO_LOW:  chex.Array = jnp.array([0x80, 0x40, 0x20, 0x10, 8, 4, 2, 1], dtype=jnp.uint8)
 
-    __F7EC = jnp.array([
+    F7EC:  chex.Array = jnp.array([
         0x20, 0x20, 0x20, 0x20, 0x20, 0x10, 0x40, 0xe0, 0x20, 0x40, 0x15, 0xe0, 0x20, 0xe0, 0xe0,
         0x50, 0x00, 0xf0, 0xb0
     ], dtype=jnp.uint8) 
 
     # Constants to decide in which side the discs will be flipped
-    FLIP_UP_SIDE = 0
-    FLIP_DOWN_SIDE = 1
-    FLIP_RIGHT_SIDE = 2
-    FLIP_LEFT_SIDE = 3
-    FLIP_UP_RIGHT_SIDE = 4
-    FLIP_DOWN_RIGHT_SIDE = 5
-    FLIP_DOWN_LEFT_SIDE = 6
-    FLIP_UP_LEFT_SIDE = 7
+    FLIP_UP_SIDE: int = 0
+    FLIP_DOWN_SIDE: int = 1
+    FLIP_RIGHT_SIDE: int = 2
+    FLIP_LEFT_SIDE: int = 3
+    FLIP_UP_RIGHT_SIDE: int = 4
+    FLIP_DOWN_RIGHT_SIDE: int = 5
+    FLIP_DOWN_LEFT_SIDE: int = 6
+    FLIP_UP_LEFT_SIDE: int = 7
 
 # Game Environment
 WIDTH = 160
@@ -147,8 +147,8 @@ class OthelloInfo(NamedTuple):
 
 
 class JaxOthello(JaxEnvironment[OthelloState, OthelloObservation, OthelloInfo, OthelloConstants ]):
-    def __init__(self, consts: OthelloConstants, frameskip: int = 0, reward_funcs: list[callable]=None):
-        self.consts = consts or OthelloConstants()
+    def __init__(self, consts: OthelloConstants = None, frameskip: int = 0, reward_funcs: list[callable]=None):
+        consts = consts or OthelloConstants()
         super().__init__(consts)
         self.frameskip = frameskip + 1
         self.frame_stack_size = 4
@@ -170,7 +170,7 @@ class JaxOthello(JaxEnvironment[OthelloState, OthelloObservation, OthelloInfo, O
         ]
         self.obs_size = 130
 
-    @jax.jit
+    @partial(jax.jit, static_argnums=(0,))
     def has_player_decided_field(self, field_choice_player, action: chex.Array):
         # field_choice_player: the current positioning of the disc -> it is not jet placed down
         # action may include the action FIRE to place the disc down
@@ -300,7 +300,7 @@ class JaxOthello(JaxEnvironment[OthelloState, OthelloObservation, OthelloInfo, O
         )
 
 
-    @jax.jit
+    @partial(jax.jit, static_argnums=(0,))
     def field_step(self, field_choice, curr_state, white_player):  # -> valid_choice, new_state
         x, y = field_choice
         enemy_color = jax.lax.cond(
@@ -454,7 +454,7 @@ class JaxOthello(JaxEnvironment[OthelloState, OthelloObservation, OthelloInfo, O
         )
 
 
-    @jax.jit
+    @partial(jax.jit, static_argnums=(0,))
     def check_if_there_is_a_valid_choice(self, curr_state, white_player):
         # white_player == True --> player
         # white_player == False --> enemy
@@ -565,7 +565,7 @@ class JaxOthello(JaxEnvironment[OthelloState, OthelloObservation, OthelloInfo, O
         return (curr_state, valid_field)
 
 
-    @jax.jit
+    @partial(jax.jit, static_argnums=(0,))
     def get_bot_move(self, game_field: Field, difficulty: chex.Array, player_score: chex.Array, enemy_score: chex.Array, random_key: int):
         game_score = player_score+enemy_score
         list_of_all_moves = jnp.arange(64)
@@ -581,6 +581,7 @@ class JaxOthello(JaxEnvironment[OthelloState, OthelloObservation, OthelloInfo, O
         
         return jnp.array([jnp.floor_divide(random_chosen_max_index, 8), jnp.mod(random_chosen_max_index, 8)])
 
+    @partial(jax.jit, static_argnums=(0,))
     def compute_score_of_tiles(self, i, game_field, game_score, difficulty):
         # Decode tile position
         tile_y = jnp.floor_divide(i, 8)
@@ -602,7 +603,7 @@ class JaxOthello(JaxEnvironment[OthelloState, OthelloObservation, OthelloInfo, O
         )
         #jax.debug.print("tiles_flipped: {}, secondary_tile: {}, default_pos: {}", tiles_flipped, secondary_tile, default_pos)
         
-
+        
         def handle_calculation_of_strategic_score(args):
             i, game_field, default_pos, difficulty, secondary_tile = args
 
@@ -645,7 +646,7 @@ class JaxOthello(JaxEnvironment[OthelloState, OthelloObservation, OthelloInfo, O
         #jax.debug.print("score: {}", score)
         return score
 
-    @jax.jit
+    @partial(jax.jit, static_argnums=(0,))
     def compute_score_of_tile_1(self, args):
         tile_y, tile_x, game_field, game_score = args
         inner_corner_in_any_direction = (-2147483648, -2147483648)
@@ -703,7 +704,6 @@ class JaxOthello(JaxEnvironment[OthelloState, OthelloObservation, OthelloInfo, O
                     )
 
     # array size fixed at 64!!
-    @jax.jit
     def random_max_index(self, array, key:int):
         max_value  = jnp.max(array)
         max_value_count = 0
@@ -739,14 +739,14 @@ class JaxOthello(JaxEnvironment[OthelloState, OthelloObservation, OthelloInfo, O
         return jnp.take(max_indexes_for_random, rand_index, mode="clip")
 
 
-    @jax.jit
+    @partial(jax.jit, static_argnums=(0,))
     def compute_flipped_tiles_by_direction(self, i, tile_y: int, tile_x: int, game_field: Field, inner_corner_in_any_direction: tuple[int, int], inner_corner_in_final_direction: tuple[int, int]):
         args = (tile_y,tile_x,game_field,inner_corner_in_any_direction,inner_corner_in_final_direction)
 
         branches = [
             lambda args: self.compute_flipped_tiles_top(args),
             lambda args: self.compute_flipped_tiles_top_rigth(args),
-            lambda args: self.compute_flipped_tiles_rigth(args),
+            lambda args: self.compute_flipped_tiles_right(args),
             lambda args: self.compute_flipped_tiles_bottom_rigth(args),
             lambda args: self.compute_flipped_tiles_bottom(args),
             lambda args: self.compute_flipped_tiles_bottom_left(args),
@@ -771,7 +771,7 @@ class JaxOthello(JaxEnvironment[OthelloState, OthelloObservation, OthelloInfo, O
                             None),
                 None)
 
-    @jax.jit
+    
     def compute_flipped_tiles_top(self, input) -> int:
         # Returns the number of tiles to be flipped (only flipped tiles, same color tiles are disregarded)
 
@@ -812,7 +812,7 @@ class JaxOthello(JaxEnvironment[OthelloState, OthelloObservation, OthelloInfo, O
             lambda args: (jnp.int32(while_loop_return[3]), while_loop_return[6], while_loop_return[5]),
             args
         )
-    @jax.jit
+    
     def compute_flipped_tiles_right(self, input) -> int:
         # Returns the number of tiles to be flipped (only flipped tiles, same color tiles are disregarded)
 
@@ -840,7 +840,7 @@ class JaxOthello(JaxEnvironment[OthelloState, OthelloObservation, OthelloInfo, O
                 lambda args: (jax.lax.cond(
                     args[2].field_color[args[0], args[1]] == FieldColor.BLACK,  
                     lambda args: (args[0], args[1]+1, args[2], args[3] + args[4], 0,  args[5], args[5]),
-                    lambda args: (args[0], args[1]+1, args[2], args[3], args[4] + 1, check_if_inner_corner(args[0], args[1]), args[6]),
+                    lambda args: (args[0], args[1]+1, args[2], args[3], args[4] + 1, self.check_if_inner_corner(args[0], args[1]), args[6]),
                     args
                     )),
                 args
@@ -853,7 +853,7 @@ class JaxOthello(JaxEnvironment[OthelloState, OthelloObservation, OthelloInfo, O
             lambda args: (jnp.int32(while_loop_return[3]), while_loop_return[6], while_loop_return[5]),
             args
         )
-    @jax.jit
+    
     def compute_flipped_tiles_bottom(self, input) -> int:
         # Returns the number of tiles to be flipped (only flipped tiles, same color tiles are disregarded)
 
@@ -894,7 +894,7 @@ class JaxOthello(JaxEnvironment[OthelloState, OthelloObservation, OthelloInfo, O
             lambda args: (jnp.int32(while_loop_return[3]), while_loop_return[6], while_loop_return[5]),
             args
         )
-    @jax.jit
+    
     def compute_flipped_tiles_left(self, input) -> int:
         # Returns the number of tiles to be flipped (only flipped tiles, same color tiles are disregarded)
 
@@ -935,7 +935,7 @@ class JaxOthello(JaxEnvironment[OthelloState, OthelloObservation, OthelloInfo, O
             lambda _: (jnp.int32(while_loop_return[3]), while_loop_return[6], while_loop_return[5]),
             None
         )
-    @jax.jit
+    
     def compute_flipped_tiles_top_rigth(self, input) -> int:
         # Returns the number of tiles to be flipped (only flipped tiles, same color tiles are disregarded)
 
@@ -976,7 +976,7 @@ class JaxOthello(JaxEnvironment[OthelloState, OthelloObservation, OthelloInfo, O
             lambda args: (jnp.int32(while_loop_return[3]), while_loop_return[6], while_loop_return[5]),
             args
         )
-    @jax.jit
+    
     def compute_flipped_tiles_bottom_rigth(self, input) -> int:
         # Returns the number of tiles to be flipped (only flipped tiles, same color tiles are disregarded)
 
@@ -1017,7 +1017,7 @@ class JaxOthello(JaxEnvironment[OthelloState, OthelloObservation, OthelloInfo, O
             lambda args: (jnp.int32(while_loop_return[3]), while_loop_return[6], while_loop_return[5]),
             args
         )
-    @jax.jit
+    
     def compute_flipped_tiles_bottom_left(self, input) -> int:
         # Returns the number of tiles to be flipped (only flipped tiles, same color tiles are disregarded)
 
@@ -1059,7 +1059,7 @@ class JaxOthello(JaxEnvironment[OthelloState, OthelloObservation, OthelloInfo, O
             lambda args: (jnp.int32(while_loop_return[3]), while_loop_return[6], while_loop_return[5]),
             args
         )
-    @jax.jit
+    
     def compute_flipped_tiles_top_left(self, input) -> int:
         # Returns the number of tiles to be flipped (only flipped tiles, same color tiles are disregarded)
 
@@ -1135,7 +1135,6 @@ class JaxOthello(JaxEnvironment[OthelloState, OthelloObservation, OthelloInfo, O
             args
         )
 
-    @jax.jit
     def calculate_strategic_tile_score(self, tile_index: int, game_field: Field, default_pos: Tuple[int, int], difficulty: int):
         game_field_flipped = Field(field_id=game_field.field_id,
                                 field_color=jnp.flip(game_field.field_color))
@@ -1487,7 +1486,7 @@ class JaxOthello(JaxEnvironment[OthelloState, OthelloObservation, OthelloInfo, O
         )
 
         return_value = jax.lax.cond(jnp.logical_and(difficulty == 2, return_value[1] == False),
-            lambda _: ((jnp.int32(self.consts.__F7EC[combined_state]), right_pos), True),
+            lambda _: ((jnp.int32(self.consts.F7EC[combined_state]), right_pos), True),
             lambda _: return_value,
             None,
         )
@@ -1525,15 +1524,15 @@ class JaxOthello(JaxEnvironment[OthelloState, OthelloObservation, OthelloInfo, O
             #TODO can be vectorised
             return_value, black_mask_low, black_mask_high, white_mask_low, white_mask_high = loop_vals
             return_value = jax.lax.cond(
-                jnp.logical_and(self.consts.__F3BA[33-i] == white_mask_low, self.consts.__F3DC[33-i] == black_mask_low),
-                lambda _: ((jnp.int32(self.consts.__F3FE[33-i]), white_mask_high),True),
+                jnp.logical_and(self.consts.F3BA[33-i] == white_mask_low, self.consts.F3DC[33-i] == black_mask_low),
+                lambda _: ((jnp.int32(self.consts.F3FE[33-i]), white_mask_high),True),
                 lambda _: return_value,
                 None)
             
             return_value = jax.lax.cond(
                 jnp.logical_and(return_value[1] == False, 
-                    jnp.logical_and(self.consts.__F3BA[33-i] == white_mask_high, self.consts.__F3DC[33-i] == black_mask_high)),
-                lambda _: ((jnp.int32(self.consts.__F3FE[33-i]), white_mask_high),True), #TODO check in Assembly for correctnes!
+                    jnp.logical_and(self.consts.F3BA[33-i] == white_mask_high, self.consts.F3DC[33-i] == black_mask_high)),
+                lambda _: ((jnp.int32(self.consts.F3FE[33-i]), white_mask_high),True), #TODO check in Assembly for correctnes!
                 lambda _: return_value,
                 None)
             
@@ -1546,10 +1545,9 @@ class JaxOthello(JaxEnvironment[OthelloState, OthelloObservation, OthelloInfo, O
 
         return jax.lax.cond(return_value[1] == True,
             lambda _: return_value[0],
-            lambda _: (jnp.int32(self.consts.__F3FE[combined_state]), white_mask_high),
+            lambda _: (jnp.int32(self.consts.F3FE[combined_state]), white_mask_high),
             None)
     
-    @jax.jit
     #return a tuple of (state, position)
     def css_sub_f5c1_count_tiles_in_line_descending(self, array_of_tiles, start_index: int) ->Tuple[int, int]:
         adjacent_index = start_index-1
@@ -1732,7 +1730,7 @@ class JaxOthello(JaxEnvironment[OthelloState, OthelloObservation, OthelloInfo, O
         initial_obs = self._get_observation(state)
         return initial_obs, state
 
-    @partial(jax.jit, static_argnums=0)
+    @partial(jax.jit, static_argnums=(0,))
     def step(self, state: OthelloState, action: chex.Array) -> Tuple[OthelloObservation, OthelloState, float, bool, OthelloInfo]:
 
         state = state._replace(step_counter=state.step_counter+1)
@@ -1848,10 +1846,10 @@ class JaxOthello(JaxEnvironment[OthelloState, OthelloObservation, OthelloInfo, O
     def _get_done(self, state: OthelloState) -> bool:
         return state.end_of_game_reached
 
-    def get_action_space(self) -> jnp.ndarray:
-        return jnp.array(self.action_set)
+    def action_space(self) -> jnp.ndarray:
+        return jnp.array(len(self.action_set))
 
-    def get_observation_space(self) -> spaces.Box:
+    def observation_space(self) -> spaces.Box:
         return spaces.Box(
             low=0,
             high=2,
@@ -1904,7 +1902,9 @@ def render_point_of_disc(id):
 
 
 class OthelloRenderer(JAXGameRenderer):
-    def __init__(self):
+    def __init__(self,consts: OthelloConstants = None):
+        super().__init__()
+        self.consts = consts or OthelloConstants()
         (
             self.SPRITE_BG,
             self.SPRITE_PLAYER,
@@ -2008,42 +2008,42 @@ class OthelloRenderer(JAXGameRenderer):
         return raster
 
 
-if __name__ == "__main__":
-    # Initialize Pygame
-    pygame.init()
-    screen = pygame.display.set_mode((WINDOW_WIDTH, WINDOW_HEIGHT))
-    pygame.display.set_caption("Othello Game")
+# if __name__ == "__main__":
+#     # Initialize Pygame
+#     pygame.init()
+#     screen = pygame.display.set_mode((WINDOW_WIDTH, WINDOW_HEIGHT))
+#     pygame.display.set_caption("Othello Game")
 
-    game = JaxOthello(frameskip=1, consts=OthelloConstants())
+#     game = JaxOthello(frameskip=1, consts=OthelloConstants())
 
-    # Create the JAX renderer
-    renderer = OthelloRenderer()
+#     # Create the JAX renderer
+#     renderer = OthelloRenderer()
 
-    # get jitted functions
-    jitted_step = jax.jit(game.step)
-    jitted_reset = jax.jit(game.reset)
+#     # get jitted functions
+#     jitted_step = jax.jit(game.step)
+#     jitted_reset = jax.jit(game.reset)
 
-    obs, curr_state = jitted_reset()
+#     obs, curr_state = jitted_reset()
 
-    # Game Loop
-    running = True
-    move_delay = 0.15
-    last_move_time = 0
+#     # Game Loop
+#     running = True
+#     move_delay = 0.15
+#     last_move_time = 0
 
-    while running:
-        now = time.time()
+#     while running:
+#         now = time.time()
 
-        for event in pygame.event.get():
-            if event.type == pygame.QUIT:
-                running = False     
+#         for event in pygame.event.get():
+#             if event.type == pygame.QUIT:
+#                 running = False     
 
-        if (now - last_move_time) > move_delay:
-            action = get_human_action()
-            obs, curr_state, reward, done, info = jitted_step(curr_state, action)
-            last_move_time = now
+#         if (now - last_move_time) > move_delay:
+#             action = get_human_action()
+#             obs, curr_state, reward, done, info = jitted_step(curr_state, action)
+#             last_move_time = now
             
-        # Render and display
-        raster = renderer.render(curr_state)
-        aj.update_pygame(screen, raster, 3, WIDTH, HEIGHT)
+#         # Render and display
+#         raster = renderer.render(curr_state)
+#         jr.update_pygame(screen, raster, 3, WIDTH, HEIGHT)
 
-    pygame.quit()
+#     pygame.quit()
