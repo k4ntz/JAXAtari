@@ -405,48 +405,31 @@ def step_fn(state: PacmanState,
     return obs, new_state, reward, done, info
 
 
-class JaxPacman(JaxEnvironment[PacmanState, PacmanObservation, PacmanInfo]):
+class PacmanConstants(NamedTuple):
+    level: int
+    ghost_move_interval: int
+    power_time_ticks: int
+    ghost_count: int
+    maze: chex.Array
+    pellets: chex.Array
+    power_pellets: chex.Array
+
+
+class JaxPacman(JaxEnvironment[PacmanState, PacmanObservation, PacmanInfo, PacmanConstants]):
 
     def __init__(self):
-        super().__init__()
+        super().__init__(consts=None)  # constants will be set in reset()
         self.frame_stack_size = 1
-        self.action_set = jnp.arange(4)
-
-        self.level = 1
-        self.ghost_move_interval = LEVELS[0]["ghost_move_interval"]
-        self.power_time_ticks = LEVELS[0]["power_time"]
-        self.ghost_count = LEVELS[0]["ghost_count"]
-
-        # Maze placeholder — will be set in reset()
-        self.maze = None
-        self.initial_pellets = None
-        self.initial_power_pellets = None
-
-        # Pellet templates from the static maze
-        pellets = (maze_layout == 0).astype(jnp.int32)
-        power = jnp.zeros_like(pellets)
-        power = power.at[1, 1].set(1)
-        power = power.at[1, 17].set(1)
-        power = power.at[9, 1].set(1)
-        power = power.at[9, 17].set(1)
-        self.initial_power_pellets = power
-        self.initial_pellets = pellets - power
-
+        self.action_set = jnp.arange(4)  # UP, DOWN, LEFT, RIGHT
 
     def _generate_level_maze(self, level: int):
-
         """
-        Generates a maze layout for the given level dimensions.
-        Creates a base maze using the recursive backtracker algorithm,
-        optionally adding extra random walls based on `wall_density`.
-        Returns the maze as a list of lists with integer cell codes
-        (WALL, EMPTY, etc.).
+        Generates a maze layout for the given level.
+        Uses a static maze for easy levels, and procedural maps for higher ones.
         """
         if level <= 3:
-            # Keeping static maze for beginner levels
             maze = jnp.array(maze_layout, dtype=jnp.int32)
         else:
-            # Procedural maze: increasing complexity with level
             wall_density = 0.25 + (level - 3) * 0.05
             maze = create_random_map(GRID_WIDTH, GRID_HEIGHT, wall_density=wall_density)
 
@@ -454,7 +437,7 @@ class JaxPacman(JaxEnvironment[PacmanState, PacmanObservation, PacmanInfo]):
         pellets = (maze == 0).astype(jnp.int32)
         power = jnp.zeros_like(pellets)
 
-        # Place power pellets at 4 corners (only where not wall)
+        # Place power pellets at 4 corners (if not a wall)
         for (py, px) in [(1, 1), (1, GRID_WIDTH - 2),
                          (GRID_HEIGHT - 2, 1), (GRID_HEIGHT - 2, GRID_WIDTH - 2)]:
             if maze[py, px] == 0:
@@ -462,14 +445,6 @@ class JaxPacman(JaxEnvironment[PacmanState, PacmanObservation, PacmanInfo]):
                 pellets = pellets.at[py, px].set(0)
 
         return maze, pellets, power
-
-
-    def _apply_level_settings(self, level: int):
-        self.level = max(1, min(MAX_LEVEL, int(level)))
-        cfg = LEVELS[self.level - 1]
-        self.ghost_move_interval = cfg["ghost_move_interval"]
-        self.power_time_ticks = cfg["power_time"]
-        self.ghost_count = cfg["ghost_count"]
 
     def reset(
             self,
@@ -479,20 +454,31 @@ class JaxPacman(JaxEnvironment[PacmanState, PacmanObservation, PacmanInfo]):
             carry_score: float = 0.0,
             carry_lives: int = 3,
     ):
-        # Applying level settings (speed, power time, ghost_count)
-        self._apply_level_settings(level)
+        # Clamp level and fetch config
+        level = max(1, min(MAX_LEVEL, int(level)))
+        cfg = LEVELS[level - 1]
 
-        # Building maze and pellet layout for this level
-        self.maze, pellets, power = self._generate_level_maze(level)
+        # Build maze and pellet layout
+        maze, pellets, power = self._generate_level_maze(level)
 
-        # Choosing spawn positions from free cells (outside JIT)
-        free_yx = jnp.argwhere(self.maze == 0)  # rows are [y, x]
+        # Build constants object
+        self.consts = PacmanConstants(
+            level=level,
+            ghost_move_interval=cfg["ghost_move_interval"],
+            power_time_ticks=cfg["power_time"],
+            ghost_count=cfg["ghost_count"],
+            maze=maze,
+            pellets=pellets,
+            power_pellets=power,
+        )
+
+        # Choose spawn positions from free cells
+        free_yx = jnp.argwhere(maze == 0)
         pac_yx = free_yx[0]
-        pacman_pos = jnp.array([pac_yx[1], pac_yx[0]], dtype=jnp.int32)  # [x, y]
+        pacman_pos = jnp.array([pac_yx[1], pac_yx[0]], dtype=jnp.int32)
 
-        # Next free cells become ghost spawns
-        g_yx = free_yx[1:1 + self.ghost_count]
-        ghost_positions = jnp.stack([g_yx[:, 1], g_yx[:, 0]], axis=1).astype(jnp.int32)  # [x, y]
+        g_yx = free_yx[1:1 + self.consts.ghost_count]
+        ghost_positions = jnp.stack([g_yx[:, 1], g_yx[:, 0]], axis=1).astype(jnp.int32)
 
         ghost_dirs = jnp.zeros_like(ghost_positions)
         ghost_states = jnp.full((ghost_positions.shape[0],), CHASE, dtype=jnp.int32)
@@ -500,32 +486,34 @@ class JaxPacman(JaxEnvironment[PacmanState, PacmanObservation, PacmanInfo]):
         score = jnp.array(carry_score if keep_score_lives else 0.0, jnp.float32)
         lives = jnp.array(carry_lives if keep_score_lives else 3, dtype=jnp.int32)
 
-        # Initializing RNG in state
+        # RNG
         key, sk = random.split(key)
+
         state = PacmanState(
             pacman_pos=pacman_pos,
             pacman_dir=jnp.array([0, 0], dtype=jnp.int32),
             ghost_positions=ghost_positions,
             ghost_dirs=ghost_dirs,
             ghost_states=ghost_states,
-            pellets=pellets,
-            power_pellets=power,
+            pellets=self.consts.pellets,
+            power_pellets=self.consts.power_pellets,
             score=score,
             step_count=jnp.array(0, dtype=jnp.int32),
             game_over=jnp.array(False),
             power_mode_timer=jnp.array(0, dtype=jnp.int32),
             lives=lives,
-            rng_key=sk,  # NEW
+            rng_key=sk,
         )
-        obs = get_observation_fn(state, self.maze)
+        obs = get_observation_fn(state, maze)
         return obs, state
 
     def step(self, state, action):
         return step_fn(
-            state, jnp.array(action),
-            self.maze,
-            int(self.ghost_move_interval),
-            int(self.power_time_ticks),
+            state,
+            jnp.array(action),
+            self.consts.maze,
+            self.consts.ghost_move_interval,
+            self.consts.power_time_ticks,
         )
 
 
