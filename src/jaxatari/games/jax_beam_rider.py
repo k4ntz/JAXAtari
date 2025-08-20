@@ -487,6 +487,7 @@ class BeamRiderEnv(JaxEnvironment[BeamRiderState, BeamRiderObservation, BeamRide
         obs = self._get_observation(state)
         return obs, state
 
+    @partial(jax.jit, static_argnums=(0,))
     def _step_impl(self, state: BeamRiderState, action: int) -> Tuple[
         BeamRiderObservation, BeamRiderState, jnp.ndarray, jnp.ndarray, BeamRiderInfo]:
         """Execute one game step - JIT-compiled implementation"""
@@ -1169,6 +1170,7 @@ class BeamRiderEnv(JaxEnvironment[BeamRiderState, BeamRiderObservation, BeamRide
 
         return state.replace(enemies=enemies)
 
+    @partial(jax.jit, static_argnums=(0,))
     def _handle_firing(self, state: BeamRiderState, action: int) -> BeamRiderState:
         """Handle both laser and torpedo firing"""
 
@@ -1182,6 +1184,7 @@ class BeamRiderEnv(JaxEnvironment[BeamRiderState, BeamRiderObservation, BeamRide
 
         return state
 
+    @partial(jax.jit, static_argnums=(0,))
     def _fire_laser(self, state: BeamRiderState, should_fire: bool) -> BeamRiderState:
         """Fire regular laser projectile"""
         projectiles = state.projectiles
@@ -1209,6 +1212,7 @@ class BeamRiderEnv(JaxEnvironment[BeamRiderState, BeamRiderObservation, BeamRide
 
         return state.replace(projectiles=projectiles)
 
+    @partial(jax.jit, static_argnums=(0,))
     def _fire_torpedo(self, state: BeamRiderState, should_fire: bool) -> BeamRiderState:
         """Fire torpedo projectile (if any remaining)"""
 
@@ -1253,6 +1257,7 @@ class BeamRiderEnv(JaxEnvironment[BeamRiderState, BeamRiderObservation, BeamRide
             torpedoes_remaining=torpedoes_remaining
         )
 
+    @partial(jax.jit, static_argnums=(0,))
     def _update_projectiles(self, state: BeamRiderState) -> BeamRiderState:
         """Update all projectiles (lasers and torpedoes)"""
         projectiles = state.projectiles
@@ -1282,6 +1287,7 @@ class BeamRiderEnv(JaxEnvironment[BeamRiderState, BeamRiderObservation, BeamRide
             torpedo_projectiles=torpedo_projectiles
         )
 
+    @partial(jax.jit, static_argnums=(0,))
     def _update_sentinel_projectiles(self, state: BeamRiderState) -> BeamRiderState:
         """Update sentinel ship projectiles"""
         sentinel_projectiles = state.sentinel_projectiles
@@ -1301,6 +1307,7 @@ class BeamRiderEnv(JaxEnvironment[BeamRiderState, BeamRiderObservation, BeamRide
 
         return state.replace(sentinel_projectiles=sentinel_projectiles)
 
+    @partial(jax.jit, static_argnums=(0,))
     def _spawn_enemies(self, state: BeamRiderState) -> BeamRiderState:
         """Spawn new enemies with dynamic speed scaling based on sector - WITH YELLOW REJUVENATORS"""
 
@@ -1649,6 +1656,7 @@ class BeamRiderEnv(JaxEnvironment[BeamRiderState, BeamRiderObservation, BeamRide
         return state.replace(enemies=enemies,
                              rng_key=rng_key)  # Updated enemy speed calculation function (add this as a new method)
 
+    @partial(jax.jit, static_argnums=(0,))
     def _calculate_enemy_speed(self, base_speed: float, current_sector: int) -> float:
         """Calculate enemy speed based on sector with smooth scaling"""
         # Scale from base_speed to MAX_ENEMY_SPEED over 99 sectors
@@ -1664,6 +1672,7 @@ class BeamRiderEnv(JaxEnvironment[BeamRiderState, BeamRiderObservation, BeamRide
 
         return final_speed
 
+    @partial(jax.jit, static_argnums=(0,))
     def _select_enemy_type_excluding_blockers_early_sectors(self, sector: int, rng_key: chex.PRNGKey) -> int:
         """Select enemy type - UPDATED: prioritize white saucers when not at limit"""
 
@@ -1741,6 +1750,8 @@ class BeamRiderEnv(JaxEnvironment[BeamRiderState, BeamRiderObservation, BeamRide
         )
 
         return enemy_type
+
+    @partial(jax.jit, static_argnums=(0,))
     def _select_enemy_type(self, sector: int, rng_key: chex.PRNGKey) -> int:
         """Select enemy type based on current sector - UPDATED: includes sentinel ship"""
 
@@ -1800,6 +1811,7 @@ class BeamRiderEnv(JaxEnvironment[BeamRiderState, BeamRiderObservation, BeamRide
 
         return enemy_type
 
+    @partial(jax.jit, static_argnums=(0,))
     def _update_enemies(self, state: BeamRiderState) -> BeamRiderState:
         """Update enemy positions - WORKING VERSION: Simple blue charger movement"""
 
@@ -2162,6 +2174,7 @@ class BeamRiderEnv(JaxEnvironment[BeamRiderState, BeamRiderObservation, BeamRide
 
         return state.replace(enemies=enemies)
 
+    @partial(jax.jit, static_argnums=(0,))
     def _check_collisions(self, state: BeamRiderState) -> BeamRiderState:
         """Check for collisions between projectiles and enemies"""
         projectiles = state.projectiles
@@ -2392,6 +2405,7 @@ class BeamRiderEnv(JaxEnvironment[BeamRiderState, BeamRiderObservation, BeamRide
             enemies_killed_this_sector=state.enemies_killed_this_sector + enemies_killed_this_frame
         )
 
+    @partial(jax.jit, static_argnums=(0,))
     def _spawn_rejuvenator_debris(self, state: BeamRiderState, rejuvenator_hit_mask: chex.Array,
                                   enemies: chex.Array) -> BeamRiderState:
         """Spawn explosive debris when rejuvenator is shot"""
@@ -2467,6 +2481,7 @@ class BeamRiderEnv(JaxEnvironment[BeamRiderState, BeamRiderObservation, BeamRide
 
         return state.replace(enemies=enemies)
 
+    @partial(jax.jit, static_argnums=(0,))
     def _check_sector_progression(self, state: BeamRiderState) -> BeamRiderState:
         """Check if sector is complete and advance to next sector - Updated with smooth 99-sector scaling"""
 
@@ -2606,6 +2621,7 @@ class BeamRiderEnv(JaxEnvironment[BeamRiderState, BeamRiderObservation, BeamRide
             enemy_spawn_interval=spawn_interval
         )
 
+    @partial(jax.jit, static_argnums=(0,))
     def _check_game_over(self, state: BeamRiderState) -> BeamRiderState:
         """Check if game is over - Updated to include sector 99 limit"""
         # Original game over condition: no lives left
@@ -2619,6 +2635,7 @@ class BeamRiderEnv(JaxEnvironment[BeamRiderState, BeamRiderObservation, BeamRide
 
         return state.replace(game_over=game_over)
 
+    @partial(jax.jit, static_argnums=(0,))
     def _spawn_sentinel(self, state: BeamRiderState) -> BeamRiderState:
         """Spawn the sector sentinel ship - FIXED: Always spawns from left side"""
         enemies = state.enemies
@@ -2741,6 +2758,7 @@ class BeamRiderRenderer(JAXGameRenderer):
         small_sprite = pygame.transform.scale(self.ship_sprite_surface, (16, 10))
         return small_sprite
 
+    @partial(jax.jit, static_argnums=(0,))
     def _render_impl(self, state: BeamRiderState) -> chex.Array:
         """Render the current game state to a screen buffer"""
         # Create screen buffer (RGB)
@@ -2766,6 +2784,7 @@ class BeamRiderRenderer(JAXGameRenderer):
 
         return screen
 
+    @partial(jax.jit, static_argnums=(0,))
     def _draw_3d_grid(self, screen: chex.Array, frame_count: int) -> chex.Array:
         """Draw 3D grid with animated horizontal lines and 5 vertical beam positions"""
 
@@ -2846,6 +2865,7 @@ class BeamRiderRenderer(JAXGameRenderer):
 
         return screen
 
+    @partial(jax.jit, static_argnums=(0,))
     def _draw_torpedo_projectiles(self, screen: chex.Array, torpedo_projectiles: chex.Array) -> chex.Array:
         """Draw all active torpedo projectiles - vectorized for JIT"""
 
@@ -2884,6 +2904,7 @@ class BeamRiderRenderer(JAXGameRenderer):
         screen = jax.lax.fori_loop(0, self.constants.MAX_PROJECTILES, draw_single_torpedo, screen)
         return screen
 
+    @partial(jax.jit, static_argnums=(0,))
     def _draw_sentinel_projectiles(self, screen: chex.Array, sentinel_projectiles: chex.Array) -> chex.Array:
         """Draw all active sentinel projectiles - vectorized for JIT"""
 
@@ -2922,6 +2943,7 @@ class BeamRiderRenderer(JAXGameRenderer):
         screen = jax.lax.fori_loop(0, self.constants.MAX_PROJECTILES, draw_single_sentinel_projectile, screen)
         return screen
 
+    @partial(jax.jit, static_argnums=(0,))
     def _draw_ship(self, screen: chex.Array, ship: Ship) -> chex.Array:
         """Draw the player ship"""
         x, y = ship.x.astype(int), ship.y.astype(int)
@@ -2949,6 +2971,7 @@ class BeamRiderRenderer(JAXGameRenderer):
 
         return screen
 
+    @partial(jax.jit, static_argnums=(0,))
     def _draw_projectiles(self, screen: chex.Array, projectiles: chex.Array) -> chex.Array:
         """Draw all active projectiles"""
 
@@ -2987,6 +3010,7 @@ class BeamRiderRenderer(JAXGameRenderer):
         screen = jax.lax.fori_loop(0, self.constants.MAX_PROJECTILES, draw_single_projectile, screen)
         return screen
 
+    @partial(jax.jit, static_argnums=(0,))
     def _draw_enemies(self, screen: chex.Array, enemies: chex.Array) -> chex.Array:
         """Draw all active enemies"""
 
@@ -3068,6 +3092,7 @@ class BeamRiderRenderer(JAXGameRenderer):
         screen = jax.lax.fori_loop(0, self.constants.MAX_ENEMIES, draw_single_enemy, screen)
         return screen
 
+    @partial(jax.jit, static_argnums=(0,))
     def _draw_ui(self, screen: chex.Array, state: BeamRiderState) -> chex.Array:
         """Draw UI elements - placeholder for now"""
         return screen
