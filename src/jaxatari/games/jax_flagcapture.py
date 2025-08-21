@@ -5,9 +5,12 @@ import jax
 import jax.numpy as jnp
 import chex
 
+from jaxatari import spaces
 from jaxatari.environment import JaxEnvironment, JAXAtariAction
 from jaxatari.renderers import JAXGameRenderer
 import jaxatari.rendering.jax_rendering_utils as jr
+from jaxatari.spaces import Space
+
 
 #
 # by Tim Morgner and Jan Larionow
@@ -180,20 +183,19 @@ class JaxFlagCapture(JaxEnvironment[FlagCaptureState, FlagCaptureObservation, Fl
 
     @partial(jax.jit, static_argnums=(0,))
     def _get_reward(self, previous_state: FlagCaptureState, state: FlagCaptureState):
-        return self._get_env_reward(previous_state, state)
-
-    @partial(jax.jit, static_argnums=(0,))
-    def _get_all_reward(self, previous_state: FlagCaptureState, state: FlagCaptureState):
-        if self.reward_funcs is None:
-            return jnp.zeros(1)
-        rewards = jnp.array(
-            [reward_func(previous_state, state) for reward_func in self.reward_funcs]
-        )
-        return rewards
+        return state.score - previous_state.score
 
     @partial(jax.jit, static_argnums=(0,))
     def _get_done(self, state: FlagCaptureState) -> bool:
         return state.time <= 0
+
+    def action_space(self) -> Space:
+        """
+        Returns the action space of the environment as an array containing the actions that can be taken.
+        Returns: The action space of the environment as an array.
+        """
+        return spaces.Discrete(16)
+
 
     @partial(jax.jit, static_argnums=(0,))
     def step(self, state: FlagCaptureState, action: chex.Array):
@@ -376,7 +378,7 @@ class JaxFlagCapture(JaxEnvironment[FlagCaptureState, FlagCaptureObservation, Fl
                                  ))
 
         done = self._get_done(new_state)
-        env_reward = self._get_env_reward(state, new_state)
+        env_reward = self._get_reward(state, new_state)
         all_rewards = self._get_all_reward(state, new_state)
         info = self._get_info(new_state, all_rewards)
 
@@ -508,13 +510,13 @@ class JaxFlagCapture(JaxEnvironment[FlagCaptureState, FlagCaptureObservation, Fl
         return field
 
     @partial(jax.jit, static_argnums=(0,))
-    def get_action_space(self):
-        """
-        Returns the action space of the game environment.
-        Returns:
-            action_space: The action space of the game environment.
-        """
-        return jnp.array(list(self.action_set), dtype=jnp.int32)
+    def _get_all_reward(self, previous_state: FlagCaptureState, state: FlagCaptureState):
+        if self.reward_funcs is None:
+            return jnp.zeros(1)
+        rewards = jnp.array(
+            [reward_func(previous_state, state) for reward_func in self.reward_funcs]
+        )
+        return rewards
 
     @partial(jax.jit, static_argnums=(0,))
     def _get_info(self, state: FlagCaptureState, all_rewards: chex.Array) -> FlagCaptureInfo:
@@ -527,32 +529,6 @@ class JaxFlagCapture(JaxEnvironment[FlagCaptureState, FlagCaptureObservation, Fl
             FlagCaptureInfo: Additional information about the game state.
         """
         return FlagCaptureInfo(time=state.time, all_rewards=all_rewards, score=state.score)
-
-    @partial(jax.jit, static_argnums=(0,))
-    def _get_env_reward(self, previous_state: FlagCaptureState, state: FlagCaptureState):
-        """
-        Returns the environment reward based on the game state.
-        Args:
-            previous_state: The previous game state.
-        """
-        return state.score - previous_state.score
-
-    @partial(jax.jit, static_argnums=(0,))
-    def _get_all_reward(self, previous_state: FlagCaptureState, state: FlagCaptureState):
-        """
-        Returns all rewards based on the game state.
-        Args:
-            previous_state: The previous game state.
-            state: The current game state.
-        Returns:
-            rewards: The rewards received after taking the action.
-        """
-        if self.reward_funcs is None:
-            return jnp.zeros(1)
-        rewards = jnp.array(
-            [reward_func(previous_state, state) for reward_func in self.reward_funcs]
-        )
-        return rewards
 
     @partial(jax.jit, static_argnums=(0,))
     def _get_done(self, state: FlagCaptureState) -> bool:
