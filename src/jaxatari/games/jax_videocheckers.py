@@ -122,10 +122,10 @@ class VideoCheckersState(NamedTuple):
 
 class VideoCheckersObservation(NamedTuple):
     board: chex.Array  # All animation is already baked into the board observation
-    start_pos: chex.Array  # This is for the move number display
-    end_pos: chex.Array  # This is for the piece number display
-    must_jump: chex.Array  # This is for the must jump display, if a jump is available
-    # TODO: rework observation to include more information, e.g. cursor position, selected piece, etc.
+    start_pos: chex.Array
+    end_pos: chex.Array
+    must_jump: chex.Array
+    cursor_pos: chex.Array
 
 
 class VideoCheckersInfo(NamedTuple):
@@ -1130,16 +1130,20 @@ class JaxVideoCheckers(
         return jnp.array(list(self.action_set), dtype=jnp.int32)
 
     @partial(jax.jit, static_argnums=(0,))
-    def _get_info(self, state: VideoCheckersState, all_rewards: chex.Array) -> VideoCheckersInfo:
+    def _get_observation(self, state: VideoCheckersState):
         """
-        Returns additional information about the game state.
+        Returns the observation of the game state.
         Args:
             state: The current game state.
-            all_rewards: The rewards received after taking the action.
         Returns:
-            VideoCheckersInfo: Additional information about the game state.
+            VideoCheckersObservation: The observation of the game state.
         """
-        return VideoCheckersInfo(all_rewards=all_rewards)
+        _, must_jump = BoardHandler.get_movable_pieces(self.consts.COLOUR_BLACK, state.board)
+        return VideoCheckersObservation(board=state.board,
+                                        start_pos=state.cursor_pos,
+                                        end_pos=state.selected_piece,
+                                        must_jump=jnp.array(must_jump, dtype=jnp.bool_),
+                                        cursor_pos=state.cursor_pos)
 
     @partial(jax.jit, static_argnums=(0,))
     def _get_env_reward(self, previous_state: VideoCheckersState, state: VideoCheckersState) -> float:
