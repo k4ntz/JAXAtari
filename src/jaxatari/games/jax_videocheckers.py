@@ -382,7 +382,8 @@ class BoardHandler:
         can_jump_mask = jnp.any(jnp.all(jnp.abs(all_possible_moves) == 2, axis=2), axis=1)  # jump available
         any_jump_available = jnp.any(can_jump_mask)
 
-        movable_mask = jnp.where(any_jump_available, can_jump_mask,
+        movable_mask = jnp.where(any_jump_available,
+                                 can_jump_mask,
                                  can_move_mask)  # this is just an if statement (cond, x ,y)
 
         movable_positions = jnp.where(
@@ -391,7 +392,7 @@ class BoardHandler:
             jnp.array([-1, -1])
         )
 
-        return movable_positions
+        return movable_positions, any_jump_available
 
     @staticmethod
     def is_movable_piece(colour, position, board: chex.Array):
@@ -403,7 +404,7 @@ class BoardHandler:
             board: Current board
         Returns: True, if the piece is movable, False otherwise.
         """
-        movable_pieces = BoardHandler.get_movable_pieces(colour, board)
+        movable_pieces, _ = BoardHandler.get_movable_pieces(colour, board)
         is_movable = jnp.any(jnp.all(movable_pieces == position, axis=1))
         return is_movable
 
@@ -789,7 +790,7 @@ class JaxVideoCheckers(
                     rng_key=new_state.rng_key,
                 )
 
-            movable_pieces = BoardHandler.get_movable_pieces(self.consts.COLOUR_WHITE, state.board)
+            movable_pieces, _ = BoardHandler.get_movable_pieces(self.consts.COLOUR_WHITE, state.board)
 
             jax.debug.print("Movable pieces for opponent:\n{movable_pieces}\n", movable_pieces=movable_pieces)
 
