@@ -1,14 +1,10 @@
-import functools
 import os
 from functools import partial
 from typing import NamedTuple, Tuple
 import jax.lax
 import jax.numpy as jnp
 import chex
-from chex import PRNGKey
-from matplotlib.pyplot import connect
 
-import jaxatari.spaces as spaces
 from jaxatari.renderers import JAXGameRenderer
 from jaxatari.rendering import jax_rendering_utils as jr
 from jaxatari.environment import JaxEnvironment, JAXAtariAction as Action
@@ -51,11 +47,11 @@ class VideoCheckersConstants:
     ])
 
     # Opponent move scoring
-    CAPTURE_W = 10.0
-    UPGRADE_W = 5
-    ADVANCE_W = 1.0
-    CENTER_FWD = 0.5 #moving towards center
-    CENTER_BWD = -2.0 #moving away from center
+    CAPTURE_W = 10.0    #capturing opponent piece
+    UPGRADE_W = 5       #upgrading piece
+    ADVANCE_W = 1.0     #moving forward
+    CENTER_FWD = 0.5    #moving towards center
+    CENTER_BWD = -2.0   #moving away from center
     NO_MOVE = -jnp.inf
 
     EMPTY_TILE = 0
@@ -230,7 +226,6 @@ class BoardHandler:
         Returns: array of all possible moves. If a move in a given direction is not possible, it returns [0,0]
         """
 
-        piece = board[row, col]
         is_not_a_piece = (BoardHandler.tile_is_free(row, col, board)) | (row == -1)
 
         def _get_moves():
@@ -283,7 +278,7 @@ class BoardHandler:
         return jax.lax.cond(is_not_a_piece, lambda: jnp.zeros((4, 2), dtype=jnp.int32), _get_moves)
 
     @staticmethod
-    def count_pieces(board: jnp.ndarray):
+    def count_pieces(board: jnp.ndarray) -> (float, float):
         cnt_white = jnp.sum(board == 1) + jnp.sum(board == 3)
         cnt_black = jnp.sum(board == 2) + jnp.sum(board == 4)
         return cnt_white, cnt_black
@@ -351,7 +346,7 @@ class BoardHandler:
         return jax.lax.cond(is_jump, handle_jump, handle_move)
 
     @staticmethod
-    def get_movable_pieces(colour, board: chex.Array) -> jnp.ndarray:
+    def get_movable_pieces(colour, board: chex.Array) -> (jnp.ndarray, bool):
         """
         For the given colour, return the position of pieces that can perform a legal move. This method therefore enforces
         the "must jump if possible" rule, returning only the positions of pieces with a jump available.
@@ -1147,7 +1142,7 @@ class JaxVideoCheckers(
         return VideoCheckersInfo(all_rewards=all_rewards)
 
     @partial(jax.jit, static_argnums=(0,))
-    def _get_env_reward(self, previous_state: VideoCheckersState, state: VideoCheckersState):
+    def _get_env_reward(self, previous_state: VideoCheckersState, state: VideoCheckersState) -> float:
         """
         Returns the environment reward based on the game state.
         Args:
@@ -1376,7 +1371,7 @@ class VideoCheckersRenderer(JAXGameRenderer):
             # TODO This is either like the show opponent move phase or showing the last move of the player.
             return state.board[row, col]  # TODO
 
-        def render_pieces_on_board(state, raster):
+        def render_pieces_on_board(raster, state):
             def render_piece(row, col, raster):
                 # call 4 different function to determine which piece to render depending on the phase of the game. No logic just call the 4 functions
                 piece_type = jax.lax.cond(
