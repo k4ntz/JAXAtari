@@ -552,120 +552,370 @@ class JaxBackgammonEnv(JaxEnvironment[BackgammonState, jnp.ndarray, dict, Backga
 class BackgammonRenderer(JAXGameRenderer):
     def __init__(self, env=None):
         super().__init__(env)
-        asset_dir = Path("src/jaxatari/games/sprites/backgammon/")
 
-        # Load sprites (RGBA numpy arrays expected)
-        # jr.loadFrame returns an HxWx4 uint8 array for each sprite
-        self.sprite_board = jr.loadFrame(asset_dir / "backgammon_board.npy")
-        self.sprite_checker_white = jr.loadFrame(asset_dir / "white_checker.npy")
-        self.sprite_checker_black = jr.loadFrame(asset_dir / "black_checker.npy")
+        # Frame geometry - smaller to account for 4x upscale in play.py
+        self.frame_height = 210  # Standard Atari height
+        self.frame_width = 180  # Standard Atari width
 
-        # dimensions (python ints)
-        self.frame_height = int(self.sprite_board.shape[0])
-        self.frame_width = int(self.sprite_board.shape[1])
+        # Colors (RGB)
+        self.color_background = jnp.array([34, 139, 34], dtype=jnp.uint8)  # Forest green
+        self.color_board = jnp.array([139, 69, 19], dtype=jnp.uint8)  # Saddle brown
+        self.color_triangle_light = jnp.array([222, 184, 135], dtype=jnp.uint8)  # Burlywood
+        self.color_triangle_dark = jnp.array([160, 82, 45], dtype=jnp.uint8)  # Saddle brown
+        self.color_white_checker = jnp.array([255, 255, 255], dtype=jnp.uint8)  # White
+        self.color_black_checker = jnp.array([50, 50, 50], dtype=jnp.uint8)  # Dark gray
+        self.color_border = jnp.array([101, 67, 33], dtype=jnp.uint8)  # Dark brown
 
-        # checker sprite size (use max of white/black so we can center consistently)
-        self.checker_h = int(max(self.sprite_checker_white.shape[0], self.sprite_checker_black.shape[0]))
-        self.checker_w = int(max(self.sprite_checker_white.shape[1], self.sprite_checker_black.shape[1]))
+        # Game geometry - scaled for 160x210 canvas
+        self.board_margin = 8
+        self.triangle_height = 60
+        self.triangle_width = 12
+        self.bar_width = 16
+        self.checker_radius = 5
+        self.checker_stack_offset = 8
 
-        # compute triangle-tip positions (as CENTER coordinates) for the 26 indices
-        # This yields 13 positions across the top (left->right) then 13 across the bottom (right->left),
-        # which matches the layout used in other parts of the code (0..12 top, 13..25 bottom).
-        self.point_positions = self._compute_point_positions()
+        # Precompute positions
+        self.triangle_positions = self._compute_triangle_positions()
+        self.bar_position = (self.frame_width // 2 - self.bar_width // 2, self.board_margin)
+        self.home_position = (self.frame_width - 80, self.frame_height // 2)
 
-        # vertical spacing used when stacking checkers (overlap so they look like a stack)
-        # Use fraction of checker height (tweak 0.55-0.85 to taste)
-        self.stack_offset = int(self.checker_h * 0.72)
-
-    def _compute_point_positions(self):
-        """
-        Compute 26 point tip centers (x_center, y_tip) as jnp.array(dtype=int32).
-        Top row: indices 0..12 left->right
-        Bottom row: indices 13..25 right->left
-        """
+    def _compute_triangle_positions(self):
+        """Compute the base positions for all 24 triangles"""
         positions = []
 
-        # margins & geometry derived from board size (tweak multipliers if needed)
-        margin_x = int(self.frame_width * 0.07)        # small horizontal margin
-        margin_y = int(self.frame_height * 0.06)       # small vertical margin for triangle tips
-        usable_width = float(self.frame_width - 2 * margin_x)
+        # Left side triangles (points 12-7 top, 13-18 bottom)
+        left_start = self.board_margin
+        for i in range(6):
+            x = left_start + i * self.triangle_width
+            # Top triangles (points 12-7, displayed right to left)
+            positions.append((x, self.board_margin))
 
-        # we want 13 positions across the width (13 points -> 12 intervals)
-        # spacing between adjacent tip centers
-        point_spacing = usable_width / 12.0
+        # Right side triangles (points 6-1 top, 19-24 bottom)
+        right_start = self.board_margin + 6 * self.triangle_width + self.bar_width
+        for i in range(6):
+            x = right_start + i * self.triangle_width
+            # Top triangles (points 6-1, displayed right to left)
+            positions.append((x, self.board_margin))
 
-        # choose top and bottom tip y positions (tips pointing into the board)
-        top_tip_y = margin_y + int(self.frame_height * 0.02)   # a little lower than the very top border
-        bottom_tip_y = self.frame_height - margin_y - int(self.frame_height * 0.02)
+        # Bottom triangles - reverse order
+        for i in range(6):
+            x = right_start + (5 - i) * self.triangle_width
+            # Bottom triangles (points 19-24)
+            positions.append((x, self.frame_height - self.board_margin - self.triangle_height))
 
-        # top row: left -> right (i = 0..12)
-        for i in range(13):
-            x_center = int(round(margin_x + i * point_spacing))
-            positions.append((x_center, top_tip_y))
-
-        # bottom row: right -> left (i = 0..12)
-        for i in range(13):
-            # Notice the reversed order to match the original mapping
-            x_center = int(round(margin_x + (12 - i) * point_spacing))
-            positions.append((x_center, bottom_tip_y))
+        for i in range(6):
+            x = left_start + (5 - i) * self.triangle_width
+            # Bottom triangles (points 13-18)
+            positions.append((x, self.frame_height - self.board_margin - self.triangle_height))
 
         return jnp.array(positions, dtype=jnp.int32)
 
     @partial(jax.jit, static_argnums=(0,))
-    def render(self, state):
-        """
-        Render the current Backgammon state to an RGBA (H, W, 4) frame.
-        self is static (method decorated with static_argnums=(0,)) so accessing self.* values is fine.
-        """
-        frame = jr.create_initial_frame(self.frame_height, self.frame_width)
+    def _draw_rectangle(self, frame, x, y, width, height, color):
+        """Draw a filled rectangle"""
+        x, y = jnp.clip(x, 0, self.frame_width), jnp.clip(y, 0, self.frame_height)
+        x2 = jnp.clip(x + width, 0, self.frame_width)
+        y2 = jnp.clip(y + height, 0, self.frame_height)
 
-        # draw board first
-        frame = jr.render_at(frame, 0, 0, self.sprite_board)
+        # Create coordinate grids
+        yy, xx = jnp.mgrid[0:self.frame_height, 0:self.frame_width]
+        mask = (xx >= x) & (xx < x2) & (yy >= y) & (yy < y2)
 
-        checker_h = self.checker_h
-        checker_w = self.checker_w
-        stack_offset = self.stack_offset
-        frame_h = self.frame_height
-        frame_w = self.frame_width
+        # Apply color where mask is True
+        frame = jnp.where(mask[..., None], color, frame)
+        return frame
 
-        # draw each point's checkers
-        def draw_point(point_idx, fr):
-            pos = self.point_positions[point_idx]  # jnp (2,)
-            x_center = jnp.int32(pos[0])
-            y_tip = jnp.int32(pos[1])
-            x_left = x_center - (checker_w // 2)
+    @partial(jax.jit, static_argnums=(0,))
+    def _draw_triangle(self, frame, x, y, width, height, color, point_up=True):
+        """Draw a triangle"""
+        yy, xx = jnp.mgrid[0:self.frame_height, 0:self.frame_width]
 
-            count_white = jnp.int32(state.board[0, point_idx])
-            count_black = jnp.int32(state.board[1, point_idx])
+        def triangle_pointing_up():
+            # Triangle pointing up (for bottom row)
+            left_edge = yy >= (y + height) - ((xx - x) * height / width)
+            right_edge = yy >= (y + height) - ((x + width - xx) * height / width)
+            bottom_edge = yy <= y + height
+            top_edge = yy >= y
+            return left_edge & right_edge & bottom_edge & top_edge & (xx >= x) & (xx < x + width)
 
-            # Function to draw a stack with direction multiplier (+1 = down, -1 = up)
-            def draw_stack(f, count, sprite, direction):
-                def body(i, f_):
-                    y_top = y_tip + direction * (i * stack_offset) - (checker_h // 2)
-                    x_clamped = jnp.maximum(0, jnp.minimum(x_left, frame_w - checker_w))
-                    y_clamped = jnp.maximum(0, jnp.minimum(y_top, frame_h - checker_h))
-                    return jr.render_at(f_, x_clamped, y_clamped, sprite)
+        def triangle_pointing_down():
+            # Triangle pointing down (for top row)
+            left_edge = yy <= y + ((xx - x) * height / width)
+            right_edge = yy <= y + ((x + width - xx) * height / width)
+            bottom_edge = yy <= y + height
+            top_edge = yy >= y
+            return left_edge & right_edge & bottom_edge & top_edge & (xx >= x) & (xx < x + width)
 
-                return jax.lax.fori_loop(0, count, body, f)
+        mask = jax.lax.cond(point_up, triangle_pointing_up, triangle_pointing_down)
+        frame = jnp.where(mask[..., None], color, frame)
+        return frame
 
-            # If top row (point_idx < 12) → direction = +1 (down), else direction = -1 (up)
-            def top_row_dir(_):
-                f2 = draw_stack(fr, count_white, self.sprite_checker_white, +1)
-                f2 = draw_stack(f2, count_black, self.sprite_checker_black, +1)
-                return f2
+    @partial(jax.jit, static_argnums=(0,))
+    def _draw_circle(self, frame, center_x, center_y, radius, color):
+        """Draw a filled circle"""
+        yy, xx = jnp.mgrid[0:self.frame_height, 0:self.frame_width]
+        distance_sq = (xx - center_x) ** 2 + (yy - center_y) ** 2
+        mask = distance_sq <= radius ** 2
+        frame = jnp.where(mask[..., None], color, frame)
+        return frame
 
-            def bottom_row_dir(_):
-                f2 = draw_stack(fr, count_white, self.sprite_checker_white, -1)
-                f2 = draw_stack(f2, count_black, self.sprite_checker_black, -1)
-                return f2
+    @partial(jax.jit, static_argnums=(0,))
+    def _draw_board_outline(self, frame):
+        """Draw the board background and outline"""
+        # Background
+        frame = self._draw_rectangle(frame, 0, 0, self.frame_width, self.frame_height,
+                                     self.color_background)
 
-            return jax.lax.cond(point_idx < 12, top_row_dir, bottom_row_dir, operand=None)
+        # Board area
+        board_x = self.board_margin - 10
+        board_y = self.board_margin - 10
+        board_w = self.frame_width - 2 * (self.board_margin - 10)
+        board_h = self.frame_height - 2 * (self.board_margin - 10)
 
-        # loop over all 26 indices
-        frame = jax.lax.fori_loop(0, 26, draw_point, frame)
+        frame = self._draw_rectangle(frame, board_x, board_y, board_w, board_h,
+                                     self.color_board)
+
+        # Bar
+        bar_x = self.frame_width // 2 - self.bar_width // 2
+        bar_y = self.board_margin
+        bar_h = self.frame_height - 2 * self.board_margin
+
+        frame = self._draw_rectangle(frame, bar_x, bar_y, self.bar_width, bar_h,
+                                     self.color_border)
 
         return frame
 
+    @partial(jax.jit, static_argnums=(0,))
+    def _draw_triangles(self, frame):
+        """Draw all 24 triangles"""
+
+        def draw_triangle_at_index(i, fr):
+            pos = self.triangle_positions[i]
+            x, y = pos[0], pos[1]
+
+            # Alternate colors
+            color = jax.lax.select(i % 2 == 0,
+                                   self.color_triangle_light,
+                                   self.color_triangle_dark)
+
+            # Top triangles point down, bottom triangles point up
+            point_up = i >= 12
+
+            return self._draw_triangle(fr, x, y, self.triangle_width,
+                                       self.triangle_height, color, point_up)
+
+        return jax.lax.fori_loop(0, 24, draw_triangle_at_index, frame)
+
+    @partial(jax.jit, static_argnums=(0,))
+    def _draw_checkers_on_point(self, frame, point_idx, white_count, black_count):
+        """Draw checkers on a specific point"""
+        pos = self.triangle_positions[point_idx]
+        base_x = pos[0] + self.triangle_width // 2
+        base_y = pos[1]
+
+        # Adjust base_y for bottom triangles
+        base_y = jax.lax.select(point_idx >= 12,
+                                base_y + self.triangle_height - self.checker_radius,
+                                base_y + self.checker_radius)
+
+        # Direction of stacking
+        stack_direction = jax.lax.select(point_idx >= 12, -1, 1)
+
+        def draw_checker_stack(fr, count, color, start_offset):
+            def draw_single_checker(i, frame_inner):
+                y_offset = start_offset + i * self.checker_stack_offset * stack_direction
+                checker_y = base_y + y_offset
+                return self._draw_circle(frame_inner, base_x, checker_y,
+                                         self.checker_radius, color)
+
+            return jax.lax.fori_loop(0, count, draw_single_checker, fr)
+
+        # Draw white checkers first, then black checkers on top
+        frame = draw_checker_stack(frame, white_count, self.color_white_checker, 0)
+        white_offset = white_count * self.checker_stack_offset * stack_direction
+        frame = draw_checker_stack(frame, black_count, self.color_black_checker, white_offset)
+
+        return frame
+
+    @partial(jax.jit, static_argnums=(0,))
+    def _draw_bar_checkers(self, frame, white_count, black_count):
+        """Draw checkers on the bar"""
+        bar_center_x = self.frame_width // 2
+        bar_center_y = self.frame_height // 2
+
+        def draw_bar_stack(fr, count, color, y_offset):
+            def draw_single_checker(i, frame_inner):
+                checker_y = bar_center_y + y_offset + i * self.checker_stack_offset
+                return self._draw_circle(frame_inner, bar_center_x, checker_y,
+                                         self.checker_radius, color)
+
+            return jax.lax.fori_loop(0, count, draw_single_checker, fr)
+
+        # White checkers above center, black checkers below
+        frame = draw_bar_stack(frame, white_count, self.color_white_checker, -25)
+        frame = draw_bar_stack(frame, black_count, self.color_black_checker, 10)
+
+        return frame
+
+    @partial(jax.jit, static_argnums=(0,))
+    def _draw_home_checkers(self, frame, white_count, black_count):
+        """Draw checkers in the home area"""
+        home_x = self.frame_width - 20
+
+        def draw_home_stack(fr, count, color, y_start):
+            def draw_single_checker(i, frame_inner):
+                checker_y = y_start + i * self.checker_stack_offset
+                return self._draw_circle(frame_inner, home_x, checker_y,
+                                         self.checker_radius, color)
+
+            return jax.lax.fori_loop(0, count, draw_single_checker, fr)
+
+        # White checkers at bottom, black checkers at top
+        frame = draw_home_stack(frame, white_count, self.color_white_checker, 150)
+        frame = draw_home_stack(frame, black_count, self.color_black_checker, 40)
+
+        return frame
+
+    @partial(jax.jit, static_argnums=(0,))
+    def _draw_dice(self, frame, dice):
+        """Draw the current dice"""
+        dice_size = 12
+        dice_x_start = self.frame_width // 2 - 15
+        dice_y = self.frame_height // 2 - dice_size // 2
+
+        def draw_single_die(i, fr):
+            die_value = dice[i]
+            die_x = dice_x_start + i * 15
+
+            def draw_active_die(_):
+                # Draw die background (white square)
+                fr_with_bg = self._draw_rectangle(fr, die_x, dice_y, dice_size, dice_size,
+                                                  jnp.array([240, 240, 240], dtype=jnp.uint8))
+
+                # Draw die border
+                border_width = 1
+                fr_with_border = self._draw_rectangle(fr_with_bg, die_x - border_width,
+                                                      dice_y - border_width,
+                                                      dice_size + 2 * border_width,
+                                                      dice_size + 2 * border_width,
+                                                      self.color_border)
+                fr_with_border = self._draw_rectangle(fr_with_border, die_x, dice_y,
+                                                      dice_size, dice_size,
+                                                      jnp.array([240, 240, 240], dtype=jnp.uint8))
+
+                # Draw pips based on die value
+                pip_color = jnp.array([0, 0, 0], dtype=jnp.uint8)  # Black pips
+                pip_radius = 1
+                center_x = die_x + dice_size // 2
+                center_y = dice_y + dice_size // 2
+
+                def draw_pips_1(_):
+                    return self._draw_circle(fr_with_border, center_x, center_y, pip_radius, pip_color)
+
+                def draw_pips_2(_):
+                    fr2 = self._draw_circle(fr_with_border, center_x - 3, center_y - 3, pip_radius, pip_color)
+                    return self._draw_circle(fr2, center_x + 3, center_y + 3, pip_radius, pip_color)
+
+                def draw_pips_3(_):
+                    fr3 = self._draw_circle(fr_with_border, center_x - 3, center_y - 3, pip_radius, pip_color)
+                    fr3 = self._draw_circle(fr3, center_x, center_y, pip_radius, pip_color)
+                    return self._draw_circle(fr3, center_x + 3, center_y + 3, pip_radius, pip_color)
+
+                def draw_pips_4(_):
+                    fr4 = self._draw_circle(fr_with_border, center_x - 3, center_y - 3, pip_radius, pip_color)
+                    fr4 = self._draw_circle(fr4, center_x + 3, center_y - 3, pip_radius, pip_color)
+                    fr4 = self._draw_circle(fr4, center_x - 3, center_y + 3, pip_radius, pip_color)
+                    return self._draw_circle(fr4, center_x + 3, center_y + 3, pip_radius, pip_color)
+
+                def draw_pips_5(_):
+                    fr5 = self._draw_circle(fr_with_border, center_x - 3, center_y - 3, pip_radius, pip_color)
+                    fr5 = self._draw_circle(fr5, center_x + 3, center_y - 3, pip_radius, pip_color)
+                    fr5 = self._draw_circle(fr5, center_x, center_y, pip_radius, pip_color)
+                    fr5 = self._draw_circle(fr5, center_x - 3, center_y + 3, pip_radius, pip_color)
+                    return self._draw_circle(fr5, center_x + 3, center_y + 3, pip_radius, pip_color)
+
+                def draw_pips_6(_):
+                    fr6 = self._draw_circle(fr_with_border, center_x - 3, center_y - 3, pip_radius, pip_color)
+                    fr6 = self._draw_circle(fr6, center_x + 3, center_y - 3, pip_radius, pip_color)
+                    fr6 = self._draw_circle(fr6, center_x - 3, center_y, pip_radius, pip_color)
+                    fr6 = self._draw_circle(fr6, center_x + 3, center_y, pip_radius, pip_color)
+                    fr6 = self._draw_circle(fr6, center_x - 3, center_y + 3, pip_radius, pip_color)
+                    return self._draw_circle(fr6, center_x + 3, center_y + 3, pip_radius, pip_color)
+
+                def draw_nothing(_):
+                    return fr_with_border
+
+                # Switch based on die value
+                return jax.lax.switch(die_value - 1,
+                                      [draw_pips_1, draw_pips_2, draw_pips_3,
+                                       draw_pips_4, draw_pips_5, draw_pips_6],
+                                      operand=None)
+
+            def skip_die(_):
+                return fr
+
+            return jax.lax.cond(die_value > 0, draw_active_die, skip_die, operand=None)
+
+        return jax.lax.fori_loop(0, 4, draw_single_die, frame)
+
+    @partial(jax.jit, static_argnums=(0,))
+    def render(self, state):
+        """Main render function"""
+        # Create initial frame
+        frame = jnp.zeros((self.frame_height, self.frame_width, 3), dtype=jnp.uint8)
+
+        # Draw board elements
+        frame = self._draw_board_outline(frame)
+        frame = self._draw_triangles(frame)
+
+        # Draw checkers on all points
+        def draw_point_checkers(point_idx, fr):
+            white_count = jnp.maximum(state.board[0, point_idx], 0)
+            black_count = jnp.maximum(state.board[1, point_idx], 0)
+            return self._draw_checkers_on_point(fr, point_idx, white_count, black_count)
+
+        frame = jax.lax.fori_loop(0, 24, draw_point_checkers, frame)
+
+        # Draw bar checkers
+        white_bar = jnp.maximum(state.board[0, 24], 0)
+        black_bar = jnp.maximum(state.board[1, 24], 0)
+        frame = self._draw_bar_checkers(frame, white_bar, black_bar)
+
+        # Draw home checkers
+        white_home = jnp.maximum(state.board[0, 25], 0)
+        black_home = jnp.maximum(state.board[1, 25], 0)
+        frame = self._draw_home_checkers(frame, white_home, black_home)
+
+        # Draw dice
+        frame = self._draw_dice(frame, state.dice)
+
+        return frame
+
+    def display(self, state):
+        """Display function for interactive play"""
+        # Print text representation
+        print("\n" + "=" * 50)
+        print(f"Current player: {'White' if state.current_player == 1 else 'Black'}")
+        print(f"Dice: {state.dice}")
+        print(f"Game over: {state.is_game_over}")
+
+        # Print board state
+        print("\nBoard state:")
+        print("Point | White | Black")
+        print("-" * 20)
+        for i in range(24):
+            white_count = state.board[0, i]
+            black_count = state.board[1, i]
+            if white_count > 0 or black_count > 0:
+                print(f"{i + 1:4d} | {white_count:5d} | {black_count:5d}")
+
+        print(f"Bar  | {state.board[0, 24]:5d} | {state.board[1, 24]:5d}")
+        print(f"Home | {state.board[0, 25]:5d} | {state.board[1, 25]:5d}")
+        print("=" * 50)
+
+    def close(self):
+        """Clean up resources"""
+        pass
 
 def get_user_move(state: BackgammonState, env: JaxBackgammonEnv) -> Tuple[int, int]:
     """Get a move from the user via keyboard input."""
@@ -697,53 +947,6 @@ def get_user_move(state: BackgammonState, env: JaxBackgammonEnv) -> Tuple[int, i
         except ValueError:
             print("Please enter a valid number")
 
-def run_game_without_input(key: jax.Array, max_steps=400):
-    """Run the backgammon game without user input, using random moves."""
-    env = JaxBackgammonEnv()
-    obs, state = env.reset(key)
-    renderer = BackgammonRenderer(env)
-    env.renderer = renderer
-
-    print(f"Initial roll: White {state.dice[0]}, Black {state.dice[1]}")
-    print(f"{'White' if state.current_player == env.consts.WHITE else 'Black'} will start the game!")
-
-    for i in range(max_steps):
-        if state.is_game_over:
-            print("\nGame Over!")
-            break
-
-        valid_moves = env.get_valid_moves(state)
-        new_dice, new_key  = env.roll_dice(state.key) # change the RNG key to get better randomness
-        state = state._replace(key = new_key)
-
-        if len(valid_moves) == 0:
-            state = state._replace(
-                dice=new_dice,
-                current_player=-state.current_player
-            )
-            env.render(state)
-            continue
-
-        # Choose random move
-        new_key, move_key = jax.random.split(state.key)
-        state = state._replace(key=new_key)
-        idx = jax.random.randint(move_key, (), 0, len(valid_moves))
-        action = valid_moves[idx]
-
-        renderer.display(state)
-        print(f"\nMove: {action[0] + 1} → {action[1] + 1}")
-        obs, state, reward, done, info = env.step(state, action)
-
-        if done:
-            renderer.display(state)
-            white_home = state.board[0, env.consts.HOME_INDEX]
-            black_home = state.board[1, env.consts.HOME_INDEX]
-            winner = "White" if white_home == env.consts.NUM_CHECKERS else "Black"
-            print(f"\n==== Game Over! {winner} wins! ====")
-            print(f"White home: {white_home}, Black home: {black_home}")
-            break
-
-    return state
 
 def run_game_with_input(key: jax.Array, max_steps=200):
     """Run the backgammon game with keyboard input for moves."""
@@ -751,8 +954,7 @@ def run_game_with_input(key: jax.Array, max_steps=200):
     # Create and attach the renderer
     renderer = BackgammonRenderer(env)
     env.renderer = renderer
-    print('key')
-    print(key)
+
     obs, state = env.reset(key)
 
     print("\n==== Welcome to JAX Backgammon ====")
@@ -761,6 +963,7 @@ def run_game_with_input(key: jax.Array, max_steps=200):
 
     print(f"Initial roll: White {state.dice[0]}, Black {state.dice[1]}")
     print(f"{'White' if state.current_player == env.consts.WHITE else 'Black'} will start the game!")
+
     step_count = 0
     while step_count < max_steps and not state.is_game_over:
         # Use the renderer to display the board
@@ -779,15 +982,26 @@ def run_game_with_input(key: jax.Array, max_steps=200):
             state = state._replace(
                 dice=new_dice,
                 current_player=-state.current_player,
-                key = new_key
+                key=new_key
             )
+            continue
+
+        # Execute the move - convert to action index
+        action_idx = None
+        for i, move_pair in enumerate(env._action_pairs):
+            if tuple(move_pair) == action:
+                action_idx = i
+                break
+
+        if action_idx is None:
+            print("Error: Invalid move")
             continue
 
         # Execute the move
         from_display = "BAR" if action[0] == env.consts.BAR_INDEX else str(action[0] + 1)
         to_display = "HOME" if action[1] == env.consts.HOME_INDEX else str(action[1] + 1)
         print(f"\nExecuting move: {from_display} → {to_display}")
-        obs, state, reward, done, info = env.step(state, action)
+        obs, state, reward, done, info = env.step(state, action_idx)
 
         step_count += 1
 
@@ -802,11 +1016,71 @@ def run_game_with_input(key: jax.Array, max_steps=200):
     renderer.close()
     return state
 
+
+def run_game_without_input(key: jax.Array, max_steps=400):
+    """Run the backgammon game without user input, using random moves."""
+    env = JaxBackgammonEnv()
+    obs, state = env.reset(key)
+    renderer = BackgammonRenderer(env)
+    env.renderer = renderer
+
+    print(f"Initial roll: White {state.dice[0]}, Black {state.dice[1]}")
+    print(f"{'White' if state.current_player == env.consts.WHITE else 'Black'} will start the game!")
+
+    for i in range(max_steps):
+        if state.is_game_over:
+            print("\nGame Over!")
+            break
+
+        valid_moves = env.get_valid_moves(state)
+
+        if len(valid_moves) == 0:
+            # No valid moves, switch player and roll new dice
+            new_dice, new_key = env.roll_dice(state.key)
+            state = state._replace(
+                dice=new_dice,
+                current_player=-state.current_player,
+                key=new_key
+            )
+            continue
+
+        # Choose random move
+        new_key, move_key = jax.random.split(state.key)
+        state = state._replace(key=new_key)
+        idx = jax.random.randint(move_key, (), 0, len(valid_moves))
+        selected_move = valid_moves[idx]
+
+        # Convert move to action index
+        action_idx = None
+        for j, move_pair in enumerate(env._action_pairs):
+            if tuple(move_pair) == selected_move:
+                action_idx = j
+                break
+
+        if action_idx is None:
+            continue
+
+        print(f"\nMove: {selected_move[0] + 1} → {selected_move[1] + 1}")
+        obs, state, reward, done, info = env.step(state, action_idx)
+
+        # Display every 10 moves or when game ends
+        if i % 10 == 0 or done:
+            renderer.display(state)
+
+        if done:
+            white_home = state.board[0, env.consts.HOME_INDEX]
+            black_home = state.board[1, env.consts.HOME_INDEX]
+            winner = "White" if white_home == env.consts.NUM_CHECKERS else "Black"
+            print(f"\n==== Game Over! {winner} wins! ====")
+            print(f"White home: {white_home}, Black home: {black_home}")
+            break
+
+    return state
+
+
 def main():
     key = jax.random.PRNGKey(0)
-    # run_game_without_input(key)
+    # Test with input
+    # run_game_with_input(key)
+    # Or test without input
     run_game_without_input(key)
-
-
-if __name__ == "__main__":
-    main()
