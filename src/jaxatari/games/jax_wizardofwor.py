@@ -131,7 +131,7 @@ class WizardOfWorConstants(NamedTuple):
     PLAYER_SPAWN_POSITION: Tuple[int, int, int] = (100, 50, LEFT)  # Startposition der Spielfigur
 
     # How far one walk step is
-    STEP_SIZE: int = 5
+    STEP_SIZE: int = 1
 
     # IMPORTANT: About the coordinates
     # The board goes from 0,0 (top-left) to 110,60 (bottom-right)
