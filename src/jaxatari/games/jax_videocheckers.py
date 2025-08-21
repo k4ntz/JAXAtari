@@ -1415,10 +1415,34 @@ class VideoCheckersRenderer(JAXGameRenderer):
 
             return jax.lax.fori_loop(0, self.consts.NUM_FIELDS_Y, render_row, raster)
 
+        def render_jump_indicator(raster, state: VideoCheckersState):
+            _, must_jump = BoardHandler.get_movable_pieces(VideoCheckersConstants.BLACK_PIECE, state.board)
+            def _render(raster):
+                x_offset = 100
+                j_sprite = jr.get_sprite_frame(self.SPRITE_TEXT, 10)
+                p_sprite = jr.get_sprite_frame(self.SPRITE_TEXT, 11)
+                pos_xj = x_offset
+                pos_xp = x_offset + 10
+                pos_y = 20
+                raster = jr.render_at(raster, pos_xj, pos_y, j_sprite)
+                raster = jr.render_at(raster, pos_xp, pos_y, p_sprite)
+
+                return raster
+
+            new_raster = jax.lax.cond(
+                must_jump,
+                _render,
+                lambda r: r,
+                raster
+            )
+            return new_raster
+
+
         frame_bg = jr.get_sprite_frame(self.SPRITE_BG, 0)
         # fill background with [160, 96, 64]
         raster = raster.at[:, :].set(jnp.array([160, 96, 64], dtype=jnp.uint8))
         raster = jr.render_at(raster, self.consts.OFFSET_X_BOARD, self.consts.OFFSET_Y_BOARD, frame_bg)
-        raster = render_pieces_on_board(state, raster)
+        raster = render_pieces_on_board(raster, state)
+        raster = render_jump_indicator(raster, state)
 
         return raster
