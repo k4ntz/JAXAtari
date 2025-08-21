@@ -5,7 +5,6 @@
 # - In general, there are a lot of constants which can be changed in order to change the behavior 
 
 # remaining Inacuracies:
-# - shadow rendering does not match ALE, which has variable sizes for the shadows
 # - enemy speed for levels over Level 7 does not change, in ALE it still changes
 # - the bottom path is the same as any other path, in ALE it's thinner and the sprites are further up on the path
 
@@ -299,7 +298,7 @@ class AmidarConstants(NamedTuple):
     # General
     WIDTH: int = 160
     HEIGHT: int = 210
-    RANDOM_KEY_SEED: int = 0
+    RANDOM_KEY_SEED: int = 3
     DIFFICULTY_SETTING: int = 0 # Valid settings are 0 (starts at level 3) and 3 (starts at level 1). If invalid, the game starts at Level 3
     INITIAL_LIVES: int = 3
     MAX_LIVES: int = 3
@@ -1296,8 +1295,9 @@ class AmidarRenderer(JAXGameRenderer):
         frame_warrior = aj.get_sprite_frame(self.SPRITE_WARRIOR, 0)
         frame_pig = aj.get_sprite_frame(self.SPRITE_PIG, 0)
         frame_chicken = aj.get_sprite_frame(self.SPRITE_CHICKEN, 0)
+        frame_shadow = jnp.broadcast_to(jnp.array([0, 0, 0, 255]), frame_warrior.shape).at[5:].set(0).at[:, :3].set(0)
         # jax.debug.print("w: {}, c: {}", frame_warrior.shape, frame_chicken.shape)
-        frames_enemies = jnp.array([jnp.broadcast_to(jnp.array([0, 0, 0, 255]), frame_warrior.shape), frame_warrior, frame_pig, frame_chicken, jnp.zeros_like(frame_warrior)])
+        frames_enemies = jnp.array([frame_shadow, frame_warrior, frame_pig, frame_chicken, jnp.zeros_like(frame_warrior)])
 
         # Use scan to accumulate the raster updates
         def scan_render_enemy(raster, enemy_data):
