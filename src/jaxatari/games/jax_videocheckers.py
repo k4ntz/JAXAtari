@@ -21,11 +21,12 @@ from jaxatari.environment import JaxEnvironment, JAXAtariAction as Action
 # MOVE_PIECE -> MOVE_PIECE: # Player moves the piece with further jumps available
 # SHOW_OPPONENT_MOVE -> SELECT_PIECE: # Player makes an input to select a piece after the opponent's move
 
-MAX_PIECES = 12
 
 
 # class VideoCheckersConstants(NamedTuple):
 class VideoCheckersConstants:
+    MAX_PIECES = 12
+
     COLOUR_WHITE: int = 0
     COLOUR_BLACK: int = 1
 
@@ -371,7 +372,7 @@ class BoardHandler:
             own_pieces_mask |= (board == piece)
 
         # get positions of own pieces. static output shape, which is required for jit compilation.
-        rows, cols = jnp.where(own_pieces_mask, size=MAX_PIECES, fill_value=-1)
+        rows, cols = jnp.where(own_pieces_mask, size=VideoCheckersConstants.MAX_PIECES, fill_value=-1)
         positions = jnp.stack([rows, cols], axis=1)
 
         # vectorise function and apply to all positions
