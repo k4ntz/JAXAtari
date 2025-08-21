@@ -5,8 +5,7 @@ import jax
 import jax.numpy as jnp
 import chex
 
-import jaxatari.spaces as spaces
-from jaxatari.environment import JaxEnvironment, JAXAtariAction as Action, JAXAtariAction
+from jaxatari.environment import JaxEnvironment, JAXAtariAction
 from jaxatari.renderers import JAXGameRenderer
 import jaxatari.rendering.jax_rendering_utils as jr
 
@@ -71,7 +70,7 @@ class FlagCaptureState(NamedTuple):
     time: chex.Array
     is_checking: chex.Array
     score: chex.Array
-    field: chex.Array  # Shape (9, 7)
+    field: chex.Array
     player_move_cooldown: chex.Array
     animation_cooldown: chex.Array
     animation_type: chex.Array
@@ -164,7 +163,6 @@ class JaxFlagCapture(JaxEnvironment[FlagCaptureState, FlagCaptureObservation, Fl
         Returns:
             FlagCaptureObservation: The observation of the game state.
         """
-        # create player
         return FlagCaptureObservation(
             player=PlayerEntity(
                 x=jnp.array(
@@ -198,7 +196,7 @@ class JaxFlagCapture(JaxEnvironment[FlagCaptureState, FlagCaptureObservation, Fl
         return state.time <= 0
 
     @partial(jax.jit, static_argnums=(0,))
-    def step(self, state: FlagCaptureState, action: chex.Array) -> Tuple[FlagCaptureObservation, FlagCaptureState, float, bool, FlagCaptureInfo]:
+    def step(self, state: FlagCaptureState, action: chex.Array):
         """
         Takes a step in the game environment based on the action taken.
         Args:
@@ -230,13 +228,10 @@ class JaxFlagCapture(JaxEnvironment[FlagCaptureState, FlagCaptureObservation, Fl
                 new_is_checking: Updated state of the player (checking or not).
                 new_player_move_cooldown: Updated cooldown for player movement.
             """
-            # check if the player is firing(checking). This is any action like FIRE, UPFIRE, DOWNFIRE, etc.
-            # do this by checking if the action is 1 (FIRE) or between 10 and 17 (UPFIRE, DOWNFIRE, etc.)
             new_is_checking = jax.lax.cond(jnp.logical_or(jnp.equal(action, JAXAtariAction.FIRE),
                                                           jnp.logical_and(jnp.greater_equal(action, JAXAtariAction.UPFIRE),
                                                                           jnp.less_equal(action, JAXAtariAction.DOWNLEFTFIRE))),
                                            lambda: 1, lambda: 0)
-            # check if the player is moving upwards. This is any action like UP, UPRIGHT, UPLEFT, UPFIRE, UPRIGHTFIRE, UPLEFTFIRE
             is_up = jnp.logical_or(jnp.equal(action, JAXAtariAction.UP),
                                    jnp.logical_or(jnp.equal(action, JAXAtariAction.UPFIRE),
                                                   jnp.logical_or(jnp.equal(action, JAXAtariAction.UPRIGHT),
@@ -270,16 +265,10 @@ class JaxFlagCapture(JaxEnvironment[FlagCaptureState, FlagCaptureObservation, Fl
                                                                                                   jnp.equal(action,
                                                                                                             JAXAtariAction.DOWNRIGHTFIRE))))))
 
-            # if player is moving down add 1 to player_y
             new_player_y = jax.lax.cond(is_down, lambda: player_y + 1, lambda: player_y)
-            # if player is moving up subtract 1 from player_y
             new_player_y = jax.lax.cond(is_up, lambda: player_y - 1, lambda: new_player_y)
-            # if player is moving left subtract 1 from player_x
             new_player_x = jax.lax.cond(is_left, lambda: player_x - 1, lambda: player_x)
-            # if player is moving right add 1 to player_x
             new_player_x = jax.lax.cond(is_right, lambda: player_x + 1, lambda: new_player_x)
-            # modulo the player_x and player_y to be on the field
-            # This adds the movement cooldown, border wrapping and prevents moving while checking or animating
             new_player_x = jax.lax.cond(jnp.logical_or(new_is_checking,
                                                        jnp.logical_or(jnp.not_equal(animation_type, self.consts.ANIMATION_TYPE_NONE),
                                                                       jnp.greater(player_move_cooldown, 0))), lambda: player_x,
@@ -288,8 +277,6 @@ class JaxFlagCapture(JaxEnvironment[FlagCaptureState, FlagCaptureObservation, Fl
                                                        jnp.logical_or(jnp.not_equal(animation_type, self.consts.ANIMATION_TYPE_NONE),
                                                                       jnp.greater(player_move_cooldown, 0))), lambda: player_y,
                                         lambda: jnp.mod(new_player_y, self.consts.NUM_FIELDS_Y))
-
-            # if cooldown is <= 0 set it to MOVE_COOLDOWN else subtract 1
             new_player_move_cooldown = jax.lax.cond(jnp.less_equal(player_move_cooldown, 0), lambda: self.consts.MOVE_COOLDOWN,
                                                     lambda: player_move_cooldown - 1)
 
@@ -304,9 +291,6 @@ class JaxFlagCapture(JaxEnvironment[FlagCaptureState, FlagCaptureObservation, Fl
             action,
         )
 
-        # Check if the animation cooldown is less or equal to 0 and a animation type is set
-        # If the animation type is bomb, reset the player position
-        # If the animation type is flag, reset the player position, set the score to 1 and generate a new field
         bomb_animation_over = jnp.logical_and(
             jnp.less_equal(state.animation_cooldown, 0),
             jnp.equal(state.animation_type, self.consts.ANIMATION_TYPE_EXPLOSION)
@@ -316,7 +300,6 @@ class JaxFlagCapture(JaxEnvironment[FlagCaptureState, FlagCaptureObservation, Fl
             jnp.equal(state.animation_type, self.consts.ANIMATION_TYPE_FLAG)
         )
 
-        # Increment the score if the animation is over and the animation type is flag
         new_score = jax.lax.cond(
             flag_animation_over,
             lambda: state.score + 1,
@@ -335,9 +318,6 @@ class JaxFlagCapture(JaxEnvironment[FlagCaptureState, FlagCaptureObservation, Fl
         new_player_y = jax.lax.cond(jnp.logical_or(bomb_animation_over, flag_animation_over),
                                     lambda: 0,
                                     lambda: new_player_y)
-
-        # Check if the player is checking (firing) and if the current field is a bomb or a flag (only if the animation_type is currently none)
-        # If the player is checking and the field is a bomb or flag, set the animation type
 
         new_animation_type = jax.lax.cond(
             jnp.logical_or(bomb_animation_over, flag_animation_over),
@@ -427,14 +407,13 @@ class JaxFlagCapture(JaxEnvironment[FlagCaptureState, FlagCaptureObservation, Fl
         bombs = jnp.full((n_bombs,), self.consts.PLAYER_STATUS_BOMB, dtype=jnp.int32)
         number_clues = jnp.full((n_number_clues,), self.consts.PLAYER_STATUS_CLUE_PLACEHOLDER_NUMBER, dtype=jnp.int32)
         direction_clues = jnp.full((n_direction_clues,), self.consts.PLAYER_STATUS_CLUE_PLACEHOLDER_DIRECTION, dtype=jnp.int32)
-        # This is only to handle possibly misconfigured constants
         filler_fields = jnp.full(((self.consts.NUM_FIELDS_X * self.consts.NUM_FIELDS_Y) - n_bombs - n_number_clues - n_direction_clues,),
                                  self.consts.PLAYER_STATUS_ALIVE, dtype=jnp.int32)
 
         field = jnp.concatenate((bombs, number_clues, direction_clues, filler_fields))
         field = jax.random.permutation(splitkey, field)
         field = jnp.reshape(field, (self.consts.NUM_FIELDS_X, self.consts.NUM_FIELDS_Y))
-        field = field.at[flag_x, flag_y].set(self.consts.PLAYER_STATUS_FLAG)  # This may override the bomb, but that is not a problem
+        field = field.at[flag_x, flag_y].set(self.consts.PLAYER_STATUS_FLAG)
 
         def resolve_number_clue(x, y) -> chex.Array:
             """
@@ -524,9 +503,7 @@ class JaxFlagCapture(JaxEnvironment[FlagCaptureState, FlagCaptureObservation, Fl
             """
             return resolve_clue(x, y, field[x.astype(jnp.int32), y.astype(jnp.int32)])
 
-        # This calls vectorized_resolve for every cell in the field and returns a new field from the result
         field = jnp.fromfunction(vectorized_resolve, (self.consts.NUM_FIELDS_X, self.consts.NUM_FIELDS_Y), dtype=jnp.int32)
-        # jax.debug.print("field after:\n{field}", field=field)
 
         return field
 
@@ -600,7 +577,6 @@ def load_sprites():
 
     background = jr.loadFrame(os.path.join(MODULE_DIR, "sprites/flagcapture/background.npy"))
 
-    # Convert all sprites to the expected format (add frame dimension)
     SPRITE_BG = jnp.expand_dims(background, axis=0)
     SPRITE_PLAYER = jr.load_and_pad_digits(os.path.join(MODULE_DIR, "sprites/flagcapture/player_states/player_{}.npy"),
                                            num_chars=19)
@@ -639,23 +615,14 @@ class FlagCaptureRenderer(JAXGameRenderer):
         Returns:
             A JAX array representing the rendered frame.
         """
-        # Create empty raster with CORRECT orientation for atraJaxis framework
-        # Note: For pygame, the raster is expected to be (width, height, channels)
-        # where width corresponds to the horizontal dimension of the screen
         raster: jnp.ndarray = jnp.zeros((self.consts.WIDTH, self.consts.HEIGHT, 3))
 
         frame_bg = jr.get_sprite_frame(self.SPRITE_BG, 0)
         raster = jr.render_at(raster, 0, 0, frame_bg)
 
-        # Draw the player
         player_x = self.consts.FIELD_PADDING_LEFT + (state.player_x * self.consts.FIELD_WIDTH) + (state.player_x * self.consts.FIELD_GAP_X)
         player_y = self.consts.FIELD_PADDING_TOP + (state.player_y * self.consts.FIELD_HEIGHT) + (state.player_y * self.consts.FIELD_GAP_Y)
 
-        # Wenn keine Animation läuft:
-        # Wenn is_checking == 1, dann ist die Spieler Sprite >= 1 (Bombe, Flag, Zahl, ect.)
-        # Die genaue Sprite wird durch den wert von field[x][y] bestimmt
-        # Ansonsten ist die Spieler Sprite == 0 aka Männchen
-        # Wenn eine Animation läuft dann bei jedem ungraden animation_cooldown frame nichts rendern (das ist die "animation")
         raster = jax.lax.cond(jax.lax.eq(state.animation_type, self.consts.ANIMATION_TYPE_NONE),
                               lambda: jax.lax.cond(jax.lax.eq(state.is_checking, 0),
                                                    lambda: jr.render_at(raster, player_x, player_y,
@@ -698,23 +665,19 @@ class FlagCaptureRenderer(JAXGameRenderer):
             number: The number to be rendered (score or timer).
             raster: The raster to render on.
             sprites: The sprite array for rendering the digits.
-            single_digit_x: X position for single digit rendering.
-            double_digit_x: X position for double digit rendering.
+            single_digit_x: X position for single-digit rendering.
+            double_digit_x: X position for double-digit rendering.
             y: Y position for rendering.
         """
-        # 1. Get digit arrays (always 2 digits)
         digits = jr.int_to_digits(number, max_digits=2)
 
-        # 2. Determine parameters for timer rendering using jax.lax.select
         is_single_digit = number < 10
-        start_index = jax.lax.select(is_single_digit, 1, 0)  # Start at index 1 if single, 0 if double
-        num_to_render = jax.lax.select(is_single_digit, 1, 2)  # Render 1 digit if single, 2 if double
-        # Adjust X position: If single digit, center it slightly by moving right by one spacing
+        start_index = jax.lax.select(is_single_digit, 1, 0)
+        num_to_render = jax.lax.select(is_single_digit, 1, 2)
         render_x = jax.lax.select(is_single_digit,
                                   single_digit_x,
                                   double_digit_x)
 
-        # 3. Render player score using the selective renderer
         raster = jr.render_label_selective(raster, render_x, y,
                                            digits, sprites,
                                            start_index, num_to_render,
