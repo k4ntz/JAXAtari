@@ -43,7 +43,7 @@ class TurmoilState(NamedTuple):
     player_y: chex.Array
     player_direction: chex.Array
     player_step_cooldown: chex.Array # (2,) x_cooldown, y_cooldown 
-    lives: chex.Array
+    ships: chex.Array
     score: chex.Array
     
     bullet: chex.Array # x, y, active, direction
@@ -70,7 +70,7 @@ class EntityPosition(NamedTuple):
 
 class TurmoilObservation(NamedTuple):
     player: PlayerEntity
-    lives: jnp.array
+    ships: jnp.array
 
 class TurmoilInfo(NamedTuple):
     step_counter: jnp.ndarray  # Current step count
@@ -205,7 +205,7 @@ class JaxTurmoil(JaxEnvironment[TurmoilState, TurmoilObservation, TurmoilInfo, T
 
         return TurmoilObservation(
             player=player,
-            lives=state.lives
+            ships=state.ships
         )
 
     @partial(jax.jit, static_argnums=(0,))
@@ -228,7 +228,7 @@ class JaxTurmoil(JaxEnvironment[TurmoilState, TurmoilObservation, TurmoilInfo, T
 
     @partial(jax.jit, static_argnums=(0,))
     def _get_done(self, state: TurmoilState) -> bool:
-        return state.lives < 0
+        return state.ships < 0
 
     @partial(jax.jit, static_argnums=(0,))
     def reset(self, key: jax.random.PRNGKey = jax.random.PRNGKey(42)) -> Tuple[TurmoilObservation, TurmoilState]:
@@ -238,7 +238,7 @@ class JaxTurmoil(JaxEnvironment[TurmoilState, TurmoilObservation, TurmoilInfo, T
             player_y=jnp.array(self.consts.PLAYER_START_POS[1]),
             player_direction=jnp.array(0),
             player_step_cooldown=jnp.zeros(2),
-            lives=jnp.array(5), # TODO check this value
+            ships=jnp.array(5),
             score=jnp.array(0),
 
             bullet=jnp.zeros(4),
@@ -538,6 +538,7 @@ class TurmoilRenderer(JAXGameRenderer):
             flip_horizontal = state.player_direction == self.consts.FACE_LEFT,
         )
 
+        # render bullet
         frame_bullet = jr.get_sprite_frame(BULLET, 0)
         raster = jax.lax.cond(
             state.bullet[2],
@@ -548,6 +549,25 @@ class TurmoilRenderer(JAXGameRenderer):
                 frame_bullet
             ),
             lambda r: r,
+            raster
+        )
+
+        # show the score
+        score_array = jr.int_to_digits(state.score, max_digits=4)
+        raster = jr.render_label(raster, 65, 10, score_array, DIGITS, spacing=8)
+
+        # show remaining ships
+        frame_pl_ship = jr.get_sprite_frame(PLAYER_SHIP, 0)
+        raster = jnp.where(
+            state.ships - 1 >= 0,
+            jr.render_indicator(
+                raster,
+                55 + (self.consts.PLAYER_SIZE[0]) * (5 - state.ships),
+                190,
+                state.ships - 1,
+                frame_pl_ship,
+                spacing=15
+            ),
             raster
         )
 
