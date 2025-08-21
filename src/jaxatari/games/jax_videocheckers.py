@@ -475,26 +475,26 @@ class JaxVideoCheckers(
                                    , rng_key=key)
         """
         # Debug state show opponent move phase
-        """
-        testboard = jnp.zeros((NUM_FIELDS_Y, NUM_FIELDS_X), dtype=jnp.int32)
-        testboard = testboard.at[1, 0].set(WHITE_PIECE)
-        testboard = testboard.at[2, 1].set(BLACK_PIECE)
-        testboard = testboard.at[4, 3].set(BLACK_PIECE)
-        testboard = testboard.at[6, 5].set(BLACK_PIECE)
-        testboard = testboard.at[0,1].set(WHITE_PIECE)
-        testboard = testboard.at[0,3].set(WHITE_PIECE)
-        testboard = testboard.at[0,5].set(WHITE_PIECE)
-        testboard = testboard.at[0,7].set(WHITE_PIECE)
-        testboard = testboard.at[7,0].set(BLACK_PIECE)
-        testboard = testboard.at[7,2].set(BLACK_PIECE)
-        testboard = testboard.at[6,1].set(BLACK_PIECE)
-        state = VideoCheckersState(cursor_pos=jnp.array([4, 3]), board=testboard, game_phase=SHOW_OPPONENT_MOVE_PHASE,
+        """testboard = jnp.zeros((self.consts.NUM_FIELDS_Y, self.consts.NUM_FIELDS_X), dtype=jnp.int32)
+        testboard = testboard.at[1, 0].set(self.consts.WHITE_PIECE)
+        testboard = testboard.at[2, 1].set(self.consts.BLACK_PIECE)
+        testboard = testboard.at[4, 3].set(self.consts.BLACK_PIECE)
+        testboard = testboard.at[6, 5].set(self.consts.BLACK_PIECE)
+        testboard = testboard.at[0,1].set(self.consts.WHITE_PIECE)
+        testboard = testboard.at[0,3].set(self.consts.WHITE_PIECE)
+        testboard = testboard.at[0,5].set(self.consts.WHITE_PIECE)
+        testboard = testboard.at[0,7].set(self.consts.WHITE_PIECE)
+        testboard = testboard.at[7,0].set(self.consts.BLACK_PIECE)
+        testboard = testboard.at[7,2].set(self.consts.BLACK_PIECE)
+        testboard = testboard.at[6,1].set(self.consts.BLACK_PIECE)
+        state = VideoCheckersState(cursor_pos=jnp.array([4, 3]), board=testboard, game_phase=self.consts.SHOW_OPPONENT_MOVE_PHASE,
                                       selected_piece=jnp.array([-1, -1]), frame_counter=jnp.array(0), winner=-1, additional_jump=False,
                                       opponent_move=OpponentMove(start_pos=jnp.array([1, 0]),
                                                                   end_pos=jnp.array([7, 6]),
-                                                                  piece_type=WHITE_KING,
-                                                                  captured_positions=jnp.array([[2, 1], [4, 3], [6, 5]])
-                                                                  ))"""
+                                                                  piece_type=self.consts.WHITE_KING,
+                                                                  captured_positions=jnp.array([[2, 1], [4, 3], [6, 5]]),
+                                                                  resulting_board=board
+                                                                  ), has_jumped=False, rng_key=key)"""
 
         # Debug state game over phase
         """state = VideoCheckersState(cursor_pos=jnp.array([4, 1]), board=board, game_phase=GAME_OVER_PHASE,
