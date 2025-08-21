@@ -1,11 +1,17 @@
-# TODO's:
+# Hacking tips: 
+# - use scripts\amidar_maze_generator.py to change the maze
+# - to deactivate enemies, set enemy_types[x] to constants.INVALID_ENEMY. This will make the enemy disappear
+# - you can change the number of enemies for the starting levels, the maximal number of enemies and at which level this switch happens in the constants. 
+# - In general, there are a lot of constants which can be changed in order to change the behavior 
 
-# Remove Inacuracies:
-# - Improve shadow rendering to match the original (variable sizes)
-# - Adjust the enemy speed for levels over Level 7 
+# remaining Inacuracies:
+# - shadow rendering does not match ALE, which has variable sizes for the shadows
+# - enemy speed for levels over Level 7 does not change, in ALE it still changes
+# - the bottom path is the same as any other path, in ALE it's thinner and the sprites are further up on the path
 
-# Possibly nice to have for future hacking, but not relevant if the game is played/used in the ALE way:
-# - Make generating/changing the maze easier
+# TODO handle generated mazes better (starting path, starting pos., tracer,...)
+# TODO remove the INITIAL_ENEMY_TYPES constant and calculate them based on the level --> make a function for that since its used at a few places --> makes it possible to change which level has which enemies, only have one type etc. 
+
 
 from functools import partial
 import os
@@ -17,6 +23,7 @@ from jaxatari import spaces
 from jaxatari.environment import JaxEnvironment, JAXAtariAction as Action
 from jaxatari.renderers import JAXGameRenderer
 from jaxatari.rendering import jax_rendering_utils as aj
+from jaxatari.games.amidar_mazes import original as chosen_maze
 
 # Functions to precompute some constants so they only need to be calculated once
 
@@ -323,7 +330,7 @@ class AmidarConstants(NamedTuple):
     PLAYER_SPRITE_OFFSET: tuple[int, int] = (-1, 0) # Offset for the player sprite in relation to the position in the code (because the top left corner of the player sprite is of the path to the left)
     INITIAL_PLAYER_POSITION: chex.Array = jnp.array([140, 89])
     INITIAL_PLAYER_DIRECTION: chex.Array = UP
-    PLAYER_STARTING_PATH: int = 85  # The path edge the player starts on, this is the index in PATH_EDGES
+    PLAYER_STARTING_PATH: int = 85  # The path edge the player starts on, this is the index in PATH_EDGES TODO calculate this
 
     # Jumping
     # The jumping mechanics are like this to resemble the ALE version. 
@@ -362,40 +369,9 @@ class AmidarConstants(NamedTuple):
     INITIAL_ENEMY_TYPES: chex.Array = jnp.array([WARRIOR] * MAX_ENEMIES)
 
     # Path Structure
-    PATH_CORNERS: chex.Array = jnp.array([[16, 14], [40, 14], [56, 14], [72, 14], [84, 14], [100, 14], [116, 14], [140, 14], 
-                            [16, 44], [40, 44], [56, 44], [72, 44], [84, 44], [100, 44], [116, 44], [140, 44], 
-                            [32, 44], [52, 44], [64, 44], [92, 44], [104, 44], [124, 44], [16, 74], [32, 74], 
-                            [52, 74], [64, 74], [92, 74], [104, 74], [124, 74], [140, 74], [28, 74], [60, 74], 
-                            [96, 74], [128, 74], [16, 104], [28, 104], [60, 104], [96, 104], [128, 104], [140, 104], 
-                            [36, 104], [72, 104], [84, 104], [120, 104], [16, 134], [36, 134], [72, 134], [84, 134], 
-                            [120, 134], [140, 134], [40, 134], [64, 134], [92, 134], [116, 134], [16, 164], [40, 164], 
-                            [64, 164], [92, 164], [116, 164], [140, 164]]
-    ) # Coordinates where at least two path edges meet
-    HORIZONTAL_PATH_EDGES: chex.Array = jnp.array([[[16, 14], [40, 14]], [[40, 14], [56, 14]], [[56, 14], [72, 14]], [[72, 14], [84, 14]], 
-                                    [[84, 14], [100, 14]], [[100, 14], [116, 14]], [[116, 14], [140, 14]], [[16, 44], [32, 44]], 
-                                    [[32, 44], [40, 44]], [[40, 44], [52, 44]], [[52, 44], [56, 44]], [[56, 44], [64, 44]], 
-                                    [[64, 44], [72, 44]], [[72, 44], [84, 44]], [[84, 44], [92, 44]], [[92, 44], [100, 44]], 
-                                    [[100, 44], [104, 44]], [[104, 44], [116, 44]], [[116, 44], [124, 44]], [[124, 44], [140, 44]], 
-                                    [[16, 74], [28, 74]], [[28, 74], [32, 74]], [[32, 74], [52, 74]], [[52, 74], [60, 74]], 
-                                    [[60, 74], [64, 74]], [[64, 74], [92, 74]], [[92, 74], [96, 74]], [[96, 74], [104, 74]], 
-                                    [[104, 74], [124, 74]], [[124, 74], [128, 74]], [[128, 74], [140, 74]], [[16, 104], [28, 104]], 
-                                    [[28, 104], [36, 104]], [[36, 104], [60, 104]], [[60, 104], [72, 104]], [[72, 104], [84, 104]], 
-                                    [[84, 104], [96, 104]], [[96, 104], [120, 104]], [[120, 104], [128, 104]], [[128, 104], [140, 104]], 
-                                    [[16, 134], [36, 134]], [[36, 134], [40, 134]], [[40, 134], [64, 134]], [[64, 134], [72, 134]], 
-                                    [[72, 134], [84, 134]], [[84, 134], [92, 134]], [[92, 134], [116, 134]], [[116, 134], [120, 134]], 
-                                    [[120, 134], [140, 134]], [[16, 164], [40, 164]], [[40, 164], [64, 164]], [[64, 164], [92, 164]], 
-                                    [[92, 164], [116, 164]], [[116, 164], [140, 164]]] 
-    ) # Tuples of (start, end); coordinates are of the top left corner of the path-corner; x_start must be less than x_end
-    VERTICAL_PATH_EDGES: chex.Array = jnp.array([[[16, 14], [16, 44]], [[16, 44], [16, 74]], [[16, 74], [16, 104]], [[16, 104], [16, 134]], 
-                                    [[16, 134], [16, 164]], [[28, 74], [28, 104]], [[32, 44], [32, 74]], [[36, 104], [36, 134]], 
-                                    [[40, 14], [40, 44]], [[40, 134], [40, 164]], [[52, 44], [52, 74]], [[56, 14], [56, 44]], 
-                                    [[60, 74], [60, 104]], [[64, 44], [64, 74]], [[64, 134], [64, 164]], [[72, 14], [72, 44]], 
-                                    [[72, 104], [72, 134]], [[84, 14], [84, 44]], [[84, 104], [84, 134]], [[92, 44], [92, 74]], 
-                                    [[92, 134], [92, 164]], [[96, 74], [96, 104]], [[100, 14], [100, 44]], [[104, 44], [104, 74]], 
-                                    [[116, 14], [116, 44]], [[116, 134], [116, 164]], [[120, 104], [120, 134]], [[124, 44], [124, 74]], 
-                                    [[128, 74], [128, 104]], [[140, 14], [140, 44]], [[140, 44], [140, 74]], [[140, 74], [140, 104]], 
-                                    [[140, 104], [140, 134]], [[140, 134], [140, 164]]]
-    ) # Tuples of (start, end); coordinates are of the top left corner of the path-corner; y_start must be less than y_end
+    PATH_CORNERS: chex.Array = chosen_maze.PATH_CORNERS
+    HORIZONTAL_PATH_EDGES: chex.Array = chosen_maze.HORIZONTAL_PATH_EDGES
+    VERTICAL_PATH_EDGES: chex.Array = chosen_maze.VERTICAL_PATH_EDGES
 
     # Precomputed Constants
     PATH_EDGES: chex.Array = jnp.concatenate((HORIZONTAL_PATH_EDGES, VERTICAL_PATH_EDGES), axis=0)
