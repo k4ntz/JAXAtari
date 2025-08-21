@@ -22,8 +22,6 @@ from jaxatari.environment import JaxEnvironment, JAXAtariAction as Action
 # SHOW_OPPONENT_MOVE -> SELECT_PIECE: # Player makes an input to select a piece after the opponent's move
 
 
-
-# class VideoCheckersConstants(NamedTuple):
 class VideoCheckersConstants:
     MAX_PIECES = 12
 
@@ -53,7 +51,7 @@ class VideoCheckersConstants:
     ADVANCE_W = 1.0  # moving forward
     CENTER_FWD = 0.5  # moving towards center
     CENTER_BWD = -2.0  # moving away from center
-    NO_MOVE = -jnp.inf
+    NO_MOVE = -jnp.inf  # avoid standing still
 
     EMPTY_TILE = 0
     WHITE_PIECE = 1
@@ -105,7 +103,13 @@ class OpponentMoveHandler:
 
     @staticmethod
     def clear_captured_positions(opponent_move: OpponentMove) -> OpponentMove:
-        jax.debug.print("Cleared captured positions.")
+        """
+        Resets the array containing the captured positions back to only sentinel positions.
+        Args:
+            opponent_move: opponent move with the captured positions array to be reset.
+        Returns:
+            new OpponentMove with a clean captures positions array.
+        """
         return opponent_move._replace(captured_positions=jnp.full(opponent_move.captured_positions.shape, -1))
 
 
@@ -123,7 +127,7 @@ class VideoCheckersState(NamedTuple):
 
 
 class VideoCheckersObservation(NamedTuple):
-    board: chex.Array  # All animation is already baked into the board observation
+    board: chex.Array
     start_pos: chex.Array
     end_pos: chex.Array
     must_jump: chex.Array
@@ -139,6 +143,11 @@ class BoardHandler:
 
     @staticmethod
     def reset_board():
+        """
+        Returns a clean board with all pieces in their initial position.
+        Returns:
+            new board with all pieces in their initial position.
+        """
         # Initialize the board with pieces, this is a placeholder
         board = jnp.zeros((VideoCheckersConstants.NUM_FIELDS_X,
                            VideoCheckersConstants.NUM_FIELDS_Y), dtype=jnp.int32)
@@ -157,8 +166,17 @@ class BoardHandler:
     @staticmethod
     def move_piece(row, col, drow, dcol, board) -> (jnp.ndarray, int, bool, int, int):
         """
-        Returns new board with the move applied, the type of the piece after the move (e.g. if piece was upgraded)
-        and the coordinates of the captured piece (-1,-1 if nothing was captured)
+        Moves a piece and handles all side effects (upgrading pieces, capturing).
+        Args:
+            row: row that the pieces is in
+            col: column that the pieces is in
+            drow: movement in a row
+            dcol: movement in a column
+            board: current game board
+        Returns:
+             - new board with the move applied,
+             - the type of the piece after the move (e.g. if piece was upgraded) and
+             - the coordinates of the captured piece (-1,-1 if nothing was captured)
         """
         # 1. move & upgrade piece
         piece = board[row, col]
@@ -200,6 +218,12 @@ class BoardHandler:
 
     @staticmethod
     def tile_is_free(row, col, board):
+        """
+        Args:
+            row: row of tile to check
+            col: column of tile to check
+            board: current game board
+        """
         return board[row, col] == VideoCheckersConstants.EMPTY_TILE
 
     @staticmethod
@@ -312,7 +336,8 @@ class BoardHandler:
             jump is not possible if the jumped piece is of the same color as the jumping one
             BE SURE not just to check if the jumped pice is the same piece, but the same colour. (A white piece still cant jump a white king)
             jump movement for normal, non-king pieces is only possible forwards (row - 2 for black, row + 2 for white)
-            Returns: True if that movement is available, False otherwise.
+            Returns:
+                True if that movement is available, False otherwise.
             """
             piece = board[row, col]
             jumped_piece = board[row + drow // 2, col + dcol // 2]
@@ -361,8 +386,10 @@ class BoardHandler:
             colour: Piece's colour
             board: Current game board
 
-        Returns: Array of size (MAX_PIECES, 2), containing the positions of pieces that can perform a legal move. If no legal
-        move is available for a piece, it is instead padded with [-1, -1]. Also returns a flag if any of the pieces can jump.
+        Returns:
+            Array of size (MAX_PIECES, 2), containing the positions of pieces that can perform a legal move. If no legal
+            move is available for a piece, it is instead padded with [-1, -1]. Also returns a flag if any of the pieces
+            can jump.
         """
         own_pieces = jax.lax.cond(colour == VideoCheckersConstants.COLOUR_WHITE,
                                   lambda: [VideoCheckersConstants.WHITE_PIECE, VideoCheckersConstants.WHITE_KING],
