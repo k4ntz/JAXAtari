@@ -24,7 +24,7 @@ from jaxatari.environment import JaxEnvironment, JAXAtariAction as Action
 MAX_PIECES = 12
 
 
-#class VideoCheckersConstants(NamedTuple):
+# class VideoCheckersConstants(NamedTuple):
 class VideoCheckersConstants:
     COLOUR_WHITE: int = 0
     COLOUR_BLACK: int = 1
@@ -47,11 +47,11 @@ class VideoCheckersConstants:
     ])
 
     # Opponent move scoring
-    CAPTURE_W = 10.0    #capturing opponent piece
-    UPGRADE_W = 5       #upgrading piece
-    ADVANCE_W = 1.0     #moving forward
-    CENTER_FWD = 0.5    #moving towards center
-    CENTER_BWD = -2.0   #moving away from center
+    CAPTURE_W = 10.0  # capturing opponent piece
+    UPGRADE_W = 5  # upgrading piece
+    ADVANCE_W = 1.0  # moving forward
+    CENTER_FWD = 0.5  # moving towards center
+    CENTER_BWD = -2.0  # moving away from center
     NO_MOVE = -jnp.inf
 
     EMPTY_TILE = 0
@@ -79,13 +79,14 @@ class OpponentMove(NamedTuple):
     end_pos: chex.Array  # End position of the opponent's piece
     piece_type: int  # Type of the piece at the end position (king or normal)
     captured_positions: chex.Array  # Array of positions of captured pieces
-    resulting_board: chex.Array # New board with all moves applied
+    resulting_board: chex.Array  # New board with all moves applied
 
 
 class OpponentMoveHandler:
     """
     Handles modifications to the opponent's move. All methods should be of type OpponentMove, args -> OpponentMove.
     """
+
     @staticmethod
     def add_captured_position(opponent_move: OpponentMove, position: chex.Array) -> OpponentMove:
         # 1. find empty slot in array to store the new position
@@ -180,6 +181,7 @@ class BoardHandler:
 
         # 2. handle capture
         is_jump = (jnp.abs(drow) == 2) & (jnp.abs(dcol) == 2)
+
         def _handle_capture(board):
             captured_row = row + drow // 2
             captured_col = col + dcol // 2
@@ -249,9 +251,9 @@ class BoardHandler:
             def check_move(move):
                 drow, dcol = move
                 jump_available = BoardHandler.move_is_available(row=row, col=col, drow=2 * drow, dcol=2 * dcol,
-                                                        board=board)  # check jump
+                                                                board=board)  # check jump
                 move_available = BoardHandler.move_is_available(row=row, col=col, drow=drow, dcol=dcol,
-                                                        board=board)  # check normal move
+                                                                board=board)  # check normal move
 
                 # Return jump move if available, else normal move if available, else [0,0]
                 return jax.lax.cond(
@@ -314,15 +316,18 @@ class BoardHandler:
             piece = board[row, col]
             jumped_piece = board[row + drow // 2, col + dcol // 2]
             piece_is_king = (piece == VideoCheckersConstants.WHITE_KING) | (piece == VideoCheckersConstants.BLACK_KING)
-            drow_forward = jax.lax.cond((piece == VideoCheckersConstants.WHITE_PIECE) | (piece == VideoCheckersConstants.WHITE_KING),
-                                        lambda: 2, lambda: -2)
+            drow_forward = jax.lax.cond(
+                (piece == VideoCheckersConstants.WHITE_PIECE) | (piece == VideoCheckersConstants.WHITE_KING),
+                lambda: 2, lambda: -2)
             is_forward = (drow == drow_forward)
             can_jump_in_direction = piece_is_king | is_forward
             tile_is_free = BoardHandler.tile_is_free(row + drow, col + dcol, board)
             jumped_piece_is_opponent = jax.lax.cond(
                 jnp.logical_or(piece == VideoCheckersConstants.WHITE_PIECE, piece == VideoCheckersConstants.WHITE_KING),
-                lambda: jnp.logical_or(jumped_piece == VideoCheckersConstants.BLACK_PIECE, jumped_piece == VideoCheckersConstants.BLACK_KING),
-                lambda: jnp.logical_or(jumped_piece == VideoCheckersConstants.WHITE_PIECE, jumped_piece == VideoCheckersConstants.WHITE_KING),
+                lambda: jnp.logical_or(jumped_piece == VideoCheckersConstants.BLACK_PIECE,
+                                       jumped_piece == VideoCheckersConstants.BLACK_KING),
+                lambda: jnp.logical_or(jumped_piece == VideoCheckersConstants.WHITE_PIECE,
+                                       jumped_piece == VideoCheckersConstants.WHITE_KING),
             )
             return landing_in_bounds & tile_is_free & jumped_piece_is_opponent & can_jump_in_direction
 
@@ -334,8 +339,9 @@ class BoardHandler:
             piece = board[row, col]
             piece_is_king = (piece == VideoCheckersConstants.WHITE_KING) | (piece == VideoCheckersConstants.BLACK_KING)
 
-            drow_forward = jax.lax.cond((piece == VideoCheckersConstants.WHITE_PIECE) | (piece == VideoCheckersConstants.WHITE_KING),
-                                        lambda: 1, lambda: -1)
+            drow_forward = jax.lax.cond(
+                (piece == VideoCheckersConstants.WHITE_PIECE) | (piece == VideoCheckersConstants.WHITE_KING),
+                lambda: 1, lambda: -1)
             is_forward = (drow == drow_forward)
             can_move_in_direction = piece_is_king | is_forward
 
@@ -355,7 +361,7 @@ class BoardHandler:
             board: Current game board
 
         Returns: Array of size (MAX_PIECES, 2), containing the positions of pieces that can perform a legal move. If no legal
-        move is available for a piece, it is instead padded with [-1, -1].
+        move is available for a piece, it is instead padded with [-1, -1]. Also returns a flag if any of the pieces can jump.
         """
         own_pieces = jax.lax.cond(colour == VideoCheckersConstants.COLOUR_WHITE,
                                   lambda: [VideoCheckersConstants.WHITE_PIECE, VideoCheckersConstants.WHITE_KING],
@@ -521,23 +527,6 @@ class JaxVideoCheckers(
         return initial_obs, state
 
     @partial(jax.jit, static_argnums=(0,))
-    def _get_observation(self, state: VideoCheckersState):
-        """
-        Returns the observation of the game state.
-        Args:
-            state: The current game state.
-        Returns:
-            VideoCheckersObservation: The observation of the game state.
-        """
-        return VideoCheckersObservation(board=state.board,
-                                        start_pos=state.cursor_pos,
-                                        end_pos=state.selected_piece,
-                                        must_jump=jnp.array(True, dtype=jnp.bool_))
-        # TODO generate valid observation instead of placeholder
-
-    # Important for phase changes. The fields used by the next phase must be reset. This means select_piece, etc.
-
-    @partial(jax.jit, static_argnums=(0,))
     def step_select_piece_phase(self, state: VideoCheckersState, action: chex.Array) -> VideoCheckersState:
         """
         Handles moving the cursor and selecting a piece in the select piece phase.
@@ -599,6 +588,8 @@ class JaxVideoCheckers(
             operand=state)
 
         return new_state
+
+    # Important for phase changes. The fields used by the next phase must be reset. This means select_piece, etc.
 
     @staticmethod
     def calculate_best_move_per_piece(self, piece: chex.Array, key, board: chex.Array) -> Tuple[chex.Array, chex.Array]:
@@ -682,7 +673,8 @@ class JaxVideoCheckers(
 
         newest_opponent_move = jax.lax.cond(is_jump,
                                             lambda: OpponentMoveHandler.add_captured_position(new_opponent_move,
-                                                                                              jnp.array((c_row,c_col), dtype=jnp.int32)),
+                                                                                              jnp.array((c_row, c_col),
+                                                                                                        dtype=jnp.int32)),
                                             lambda: new_opponent_move)
 
         return state._replace(has_jumped=is_jump, opponent_move=newest_opponent_move)
@@ -695,6 +687,7 @@ class JaxVideoCheckers(
         Do so in a fori loop with index 50 to prevent infinite loops.
         """
         jax.debug.print("Computing further opponent move...")
+
         def loop_body(i, state: VideoCheckersState) -> VideoCheckersState:
             """
             Loop body for the fori_loop, which calculates the best further opponent move.
@@ -718,8 +711,11 @@ class JaxVideoCheckers(
                     row=piece[0], col=piece[1], drow=best_move[0], dcol=best_move[1], board=board)
                 new_pos = piece + best_move
 
-                new_opponent_move = state.opponent_move._replace(end_pos=new_pos, piece_type=new_piece, resulting_board=new_board)
-                new_opponent_move = OpponentMoveHandler.add_captured_position(new_opponent_move, jnp.array((c_row, c_col), dtype=jnp.int32))
+                new_opponent_move = state.opponent_move._replace(end_pos=new_pos, piece_type=new_piece,
+                                                                 resulting_board=new_board)
+                new_opponent_move = OpponentMoveHandler.add_captured_position(new_opponent_move,
+                                                                              jnp.array((c_row, c_col),
+                                                                                        dtype=jnp.int32))
                 return jax.lax.cond(
                     is_jump,
                     lambda: state._replace(
@@ -851,8 +847,9 @@ class JaxVideoCheckers(
                 """
 
                 # Ermittle die möglichen Züge für die ausgewählte Figur
-                possible_moves = BoardHandler.get_possible_moves_for_piece(state.selected_piece[0], state.selected_piece[1],
-                                                                   state.board)
+                possible_moves = BoardHandler.get_possible_moves_for_piece(state.selected_piece[0],
+                                                                           state.selected_piece[1],
+                                                                           state.board)
 
                 # jax.debug.print("Possible moves for selected piece: {possible_moves}", possible_moves=possible_moves)
 
@@ -967,8 +964,9 @@ class JaxVideoCheckers(
                 new_state = state._replace(board=new_board)
                 captured_piece = state.selected_piece + (
                         move // 2)  # mid position for jumped piece if jumps are available from new pos
-                new_moves = BoardHandler.get_possible_moves_for_piece(row=new_state.cursor_pos[0], col=new_state.cursor_pos[1],
-                                                              board=new_state.board)
+                new_moves = BoardHandler.get_possible_moves_for_piece(row=new_state.cursor_pos[0],
+                                                                      col=new_state.cursor_pos[1],
+                                                                      board=new_state.board)
                 move_distances = jnp.abs(new_moves)  # Shape: (n_moves, 2)
                 max_distances = jnp.max(move_distances, axis=1)  # Max distance per move
                 has_jump_from_new_pos = jnp.any(max_distances > 1)
@@ -1045,7 +1043,7 @@ class JaxVideoCheckers(
             operand=state
         )
 
-        #check if player lost
+        # check if player lost
         new_state = jax.lax.cond(
             BoardHandler.count_pieces(new_state.board)[1] == 0,
             lambda s: s._replace(game_phase=self.consts.GAME_OVER_PHASE, winner=self.consts.COLOUR_WHITE),
@@ -1128,6 +1126,18 @@ class JaxVideoCheckers(
             action_space: The action space of the game environment.
         """
         return jnp.array(list(self.action_set), dtype=jnp.int32)
+
+    @partial(jax.jit, static_argnums=(0,))
+    def _get_info(self, state: VideoCheckersState, all_rewards: chex.Array) -> VideoCheckersInfo:
+        """
+        Returns additional information about the game state.
+        Args:
+            state: The current game state.
+            all_rewards: The rewards received after taking the action.
+        Returns:
+            VideoCheckersInfo: Additional information about the game state.
+        """
+        return VideoCheckersInfo(all_rewards=all_rewards)
 
     @partial(jax.jit, static_argnums=(0,))
     def _get_observation(self, state: VideoCheckersState):
@@ -1416,6 +1426,7 @@ class VideoCheckersRenderer(JAXGameRenderer):
 
         def render_jump_indicator(raster, state: VideoCheckersState):
             _, must_jump = BoardHandler.get_movable_pieces(VideoCheckersConstants.BLACK_PIECE, state.board)
+
             def _render(raster):
                 x_offset = 100
                 j_sprite = jr.get_sprite_frame(self.SPRITE_TEXT, 10)
@@ -1435,7 +1446,6 @@ class VideoCheckersRenderer(JAXGameRenderer):
                 raster
             )
             return new_raster
-
 
         frame_bg = jr.get_sprite_frame(self.SPRITE_BG, 0)
         # fill background with [160, 96, 64]
