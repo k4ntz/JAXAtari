@@ -131,7 +131,7 @@ class WizardOfWorConstants(NamedTuple):
     PLAYER_SPAWN_POSITION: Tuple[int, int, int] = (100, 50, LEFT)  # Startposition der Spielfigur
 
     # How far one walk step is
-    STEP_SIZE: int = 1
+    STEP_SIZE: int = 5
 
     # IMPORTANT: About the coordinates
     # The board goes from 0,0 (top-left) to 110,60 (bottom-right)
@@ -473,7 +473,7 @@ class JaxWizardOfWor(JaxEnvironment[WizardOfWorState, WizardOfWorObservation, Wi
                     self.consts.TILE_SIZE[1] + self.consts.WALL_THICKNESS)
             direction = jax.random.choice(rng_key, jnp.array(
                 [self.consts.UP, self.consts.DOWN, self.consts.LEFT, self.consts.RIGHT]))
-            return jnp.array([x, y, direction, self.consts.ENEMY_THORWOR, 0, 0, 0], dtype=jnp.int32)
+            return jnp.array([x, y, direction, self.consts.ENEMY_BURWOR, 0, 0, 0], dtype=jnp.int32)
 
         return jax.vmap(_generate_single_enemy)(jax.random.split(rng_key, self.consts.MAX_ENEMIES))
 
@@ -1439,17 +1439,6 @@ class JaxWizardOfWor(JaxEnvironment[WizardOfWorState, WizardOfWorObservation, Wi
         )
         return new_state
 
-        # In this function we handle the enemy level progression and the "cleanup" of dead enemies.
-        # when we "clean up" an enemy, we check if:
-        # if it is one of the n last burwors on the board. n is the level were in up to 6.
-        #   - in this case we spawn a garwor on the board.
-        # if it is a garwor, we spawn a thorwor.
-        # if it is the last thorwor (so no other burwor, garwor or thorwor is on the board), we spawn a worluk.
-        # if it is a worluk, we maybe (50% chance) spawn a wizard.
-        # if none of these conditions are met, we just remove the enemy.
-        # A enemy is considered dead if its death_animation > DEATH_ANIMATION_STEPS[1] and its type is not NONE.
-        # A enemy is always spawned on a tile. so that means x between 0 and 10 and y between 0 and 5; and then multiplied by (TILE_SIZE[0] + WALL_THICKNESS) or (TILE_SIZE[1] + WALL_THICKNESS).
-
     def _step_enemy_level_progression(self, state):
         """
         Handles the enemy level progression and the cleanup of dead enemies.
@@ -1548,15 +1537,6 @@ class JaxWizardOfWor(JaxEnvironment[WizardOfWorState, WizardOfWorObservation, Wi
     @partial(jax.jit, static_argnums=(0,))
     def _step_collision_detection(self, state):
         """Detects and handles collisions between player, enemies, and bullets."""
-        # We have 3 types of collisions:
-        # 1. Player vs Enemy
-        #    - If a player collides with an enemy, the player dies (death_animation is set to 1)
-        # 2. Player vs Enemy Bullet
-        #    - If a player collides with an enemy bullet, the player dies (death_animation is set to 1) and
-        #      the bullet is removed (direction is set to NONE)
-        # 3. Enemy vs Player Bullet
-        #    - If an enemy collides with a player bullet, the enemy dies (death_animation is set to 1)
-        #      and the bullet is removed (direction is set to NONE)
 
         def check_player_enemy_collision(player: EntityPosition, enemy: chex.Array) -> bool:
             x, y, direction, enemy_type, death_animation, timer, last_seen = enemy
