@@ -1,7 +1,7 @@
 import pygame
 import tennis_renderer as renderer
 from jaxatari.environment import JAXAtariAction
-from jaxatari.rendering import atraJaxis as aj
+import jaxatari.rendering.jax_rendering_utils as aj
 from typing import NamedTuple
 import chex
 import jax.lax

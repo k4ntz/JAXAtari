@@ -1,9 +1,9 @@
 from jaxatari.environment import JaxEnvironment, EnvState, EnvObs, EnvInfo
-from jaxatari.games.tennis_from_scratch.tennis_main import TennisState
+from jaxatari.games.tennis_main import TennisState
 from typing import NamedTuple, Tuple
 import jax.numpy as jnp
 
-from jaxatari.renderers import AtraJaxisRenderer
+from jaxatari.renderers import JAXGameRenderer
 from tennis_main import tennis_step, tennis_reset
 from tennis_renderer import TennisRenderer as tr
 
@@ -15,12 +15,15 @@ class TennisObs(NamedTuple):
 class TennisInfo(NamedTuple):
     pass
 
-class AtraJaxisTennisRenderer(AtraJaxisRenderer):
+class AtraJaxisTennisRenderer(JAXGameRenderer):
 
     def render(self, state: TennisState):
         return renderer.render(state)
 
-class TennisJaxEnv(JaxEnvironment[TennisState, TennisObs, TennisInfo]):
+class TennisConstants(NamedTuple):
+    pass
+
+class TennisJaxEnv(JaxEnvironment[TennisState, TennisObs, TennisInfo, TennisConstants]):
 
     def reset(self, key) -> Tuple[TennisObs, TennisState]:
         reset_state = tennis_reset()

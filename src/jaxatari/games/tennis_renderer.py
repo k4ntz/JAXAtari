@@ -1,6 +1,6 @@
 import jax
 import jax.numpy as jnp
-import jaxatari.rendering.atraJaxis as aj
+import jaxatari.rendering.jax_rendering_utils as aj
 import os
 import chex
 
@@ -50,49 +50,49 @@ def switch_blue_and_red(sprite, blue_color=[117, 128, 240, 255], red_color=[240,
 
 def load_sprites():
     MODULE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    BG = jnp.expand_dims(aj.loadFrame(os.path.join(MODULE_DIR, "tennis_from_scratch/sprites/background.npy")), axis=0)
-    BALL = jnp.expand_dims(aj.loadFrame(os.path.join(MODULE_DIR, "tennis_from_scratch/sprites/ball.npy")), axis=0)
-    BALL_SHADOW = jnp.expand_dims(aj.loadFrame(os.path.join(MODULE_DIR, "tennis_from_scratch/sprites/ball_shadow.npy")),
+    BG = jnp.expand_dims(aj.loadFrame(os.path.join(MODULE_DIR, "games/sprites/tennis/background.npy")), axis=0)
+    BALL = jnp.expand_dims(aj.loadFrame(os.path.join(MODULE_DIR, "games/sprites/tennis/ball.npy")), axis=0)
+    BALL_SHADOW = jnp.expand_dims(aj.loadFrame(os.path.join(MODULE_DIR, "games/sprites/tennis/ball_shadow.npy")),
                                   axis=0)
     PLAYER_0 = jnp.expand_dims(
-        aj.loadFrame(os.path.join(MODULE_DIR, "tennis_from_scratch/sprites/player_no_racket.npy")), axis=0)
+        aj.loadFrame(os.path.join(MODULE_DIR, "games/sprites/tennis/player_no_racket.npy")), axis=0)
     PLAYER_1 = jnp.expand_dims(
-        aj.loadFrame(os.path.join(MODULE_DIR, "tennis_from_scratch/sprites/player_no_racket_1.npy")), axis=0)
+        aj.loadFrame(os.path.join(MODULE_DIR, "games/sprites/tennis/player_no_racket_1.npy")), axis=0)
     PLAYER_2 = jnp.expand_dims(
-        aj.loadFrame(os.path.join(MODULE_DIR, "tennis_from_scratch/sprites/player_no_racket_2.npy")), axis=0)
+        aj.loadFrame(os.path.join(MODULE_DIR, "games/sprites/tennis/player_no_racket_2.npy")), axis=0)
     PLAYER_3 = jnp.expand_dims(
-        aj.loadFrame(os.path.join(MODULE_DIR, "tennis_from_scratch/sprites/player_no_racket_3.npy")), axis=0)
-    RACKET_0 = jnp.expand_dims(aj.loadFrame(os.path.join(MODULE_DIR, "tennis_from_scratch/sprites/1.npy")), axis=0)
-    RACKET_1 = jnp.expand_dims(aj.loadFrame(os.path.join(MODULE_DIR, "tennis_from_scratch/sprites/2.npy")), axis=0)
-    RACKET_2 = jnp.expand_dims(aj.loadFrame(os.path.join(MODULE_DIR, "tennis_from_scratch/sprites/3.npy")), axis=0)
-    RACKET_3 = jnp.expand_dims(aj.loadFrame(os.path.join(MODULE_DIR, "tennis_from_scratch/sprites/4.npy")), axis=0)
+        aj.loadFrame(os.path.join(MODULE_DIR, "games/sprites/tennis/player_no_racket_3.npy")), axis=0)
+    RACKET_0 = jnp.expand_dims(aj.loadFrame(os.path.join(MODULE_DIR, "games/sprites/tennis/1.npy")), axis=0)
+    RACKET_1 = jnp.expand_dims(aj.loadFrame(os.path.join(MODULE_DIR, "games/sprites/tennis/2.npy")), axis=0)
+    RACKET_2 = jnp.expand_dims(aj.loadFrame(os.path.join(MODULE_DIR, "games/sprites/tennis/3.npy")), axis=0)
+    RACKET_3 = jnp.expand_dims(aj.loadFrame(os.path.join(MODULE_DIR, "games/sprites/tennis/4.npy")), axis=0)
 
     # UI sprites
-    UI_NUM_0 = jnp.expand_dims(aj.loadFrame(os.path.join(MODULE_DIR, "tennis_from_scratch/sprites/ui_blue_0.npy")),
+    UI_NUM_0 = jnp.expand_dims(aj.loadFrame(os.path.join(MODULE_DIR, "games/sprites/tennis/ui_blue_0.npy")),
                                axis=0)
-    UI_NUM_1 = jnp.expand_dims(aj.loadFrame(os.path.join(MODULE_DIR, "tennis_from_scratch/sprites/ui_blue_1.npy")),
+    UI_NUM_1 = jnp.expand_dims(aj.loadFrame(os.path.join(MODULE_DIR, "games/sprites/tennis/ui_blue_1.npy")),
                                axis=0)
-    UI_NUM_2 = jnp.expand_dims(aj.loadFrame(os.path.join(MODULE_DIR, "tennis_from_scratch/sprites/ui_blue_2.npy")),
+    UI_NUM_2 = jnp.expand_dims(aj.loadFrame(os.path.join(MODULE_DIR, "games/sprites/tennis/ui_blue_2.npy")),
                                axis=0)
-    UI_NUM_3 = jnp.expand_dims(aj.loadFrame(os.path.join(MODULE_DIR, "tennis_from_scratch/sprites/ui_blue_3.npy")),
+    UI_NUM_3 = jnp.expand_dims(aj.loadFrame(os.path.join(MODULE_DIR, "games/sprites/tennis/ui_blue_3.npy")),
                                axis=0)
-    UI_NUM_4 = jnp.expand_dims(aj.loadFrame(os.path.join(MODULE_DIR, "tennis_from_scratch/sprites/ui_blue_4.npy")),
+    UI_NUM_4 = jnp.expand_dims(aj.loadFrame(os.path.join(MODULE_DIR, "games/sprites/tennis/ui_blue_4.npy")),
                                axis=0)
-    UI_NUM_5 = jnp.expand_dims(aj.loadFrame(os.path.join(MODULE_DIR, "tennis_from_scratch/sprites/ui_blue_5.npy")),
+    UI_NUM_5 = jnp.expand_dims(aj.loadFrame(os.path.join(MODULE_DIR, "games/sprites/tennis/ui_blue_5.npy")),
                                axis=0)
-    UI_NUM_6 = jnp.expand_dims(aj.loadFrame(os.path.join(MODULE_DIR, "tennis_from_scratch/sprites/ui_blue_6.npy")),
+    UI_NUM_6 = jnp.expand_dims(aj.loadFrame(os.path.join(MODULE_DIR, "games/sprites/tennis/ui_blue_6.npy")),
                                axis=0)
-    UI_NUM_7 = jnp.expand_dims(aj.loadFrame(os.path.join(MODULE_DIR, "tennis_from_scratch/sprites/ui_blue_7.npy")),
+    UI_NUM_7 = jnp.expand_dims(aj.loadFrame(os.path.join(MODULE_DIR, "games/sprites/tennis/ui_blue_7.npy")),
                                axis=0)
-    UI_NUM_8 = jnp.expand_dims(aj.loadFrame(os.path.join(MODULE_DIR, "tennis_from_scratch/sprites/ui_blue_8.npy")),
+    UI_NUM_8 = jnp.expand_dims(aj.loadFrame(os.path.join(MODULE_DIR, "games/sprites/tennis/ui_blue_8.npy")),
                                axis=0)
-    UI_NUM_9 = jnp.expand_dims(aj.loadFrame(os.path.join(MODULE_DIR, "tennis_from_scratch/sprites/ui_blue_9.npy")),
+    UI_NUM_9 = jnp.expand_dims(aj.loadFrame(os.path.join(MODULE_DIR, "games/sprites/tennis/ui_blue_9.npy")),
                                axis=0)
-    UI_DEUCE = jnp.expand_dims(aj.loadFrame(os.path.join(MODULE_DIR, "tennis_from_scratch/sprites/ui_blue_9.npy")),
+    UI_DEUCE = jnp.expand_dims(aj.loadFrame(os.path.join(MODULE_DIR, "games/sprites/tennis/ui_blue_9.npy")),
                                axis=0)
-    UI_AD_IN = jnp.expand_dims(aj.loadFrame(os.path.join(MODULE_DIR, "tennis_from_scratch/sprites/ui_blue_9.npy")),
+    UI_AD_IN = jnp.expand_dims(aj.loadFrame(os.path.join(MODULE_DIR, "games/sprites/tennis/ui_blue_9.npy")),
                                axis=0)
-    UI_AD_OUT = jnp.expand_dims(aj.loadFrame(os.path.join(MODULE_DIR, "tennis_from_scratch/sprites/ui_blue_9.npy")),
+    UI_AD_OUT = jnp.expand_dims(aj.loadFrame(os.path.join(MODULE_DIR, "games/sprites/tennis/ui_blue_9.npy")),
                                 axis=0)
 
     return (BG, switch_blue_and_red(BG), BALL, BALL_SHADOW,
