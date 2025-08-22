@@ -431,7 +431,12 @@ class JaxDonkeyKong(JaxEnvironment[DonkeyKongState, DonkeyKongObservation, Donke
         def check_for_each_trap_if_triggered(i, state):
             # prepare new state, where the i-th trap is triggered
             triggered = state.traps.triggered.at[i].set(True)
-            fall_protection = state.traps.fall_protection.at[i].set(state.mario_view_direction)
+            fall_protection = jax.lax.cond(
+                state.traps.triggered[i] == False,
+                lambda _: state.traps.fall_protection.at[i].set(state.mario_view_direction),
+                lambda _: state.traps.fall_protection,
+                operand=None
+            )
             traps = state.traps._replace(triggered=triggered, fall_protection=fall_protection)
             new_state = state._replace(traps=traps)
 
@@ -467,9 +472,15 @@ class JaxDonkeyKong(JaxEnvironment[DonkeyKongState, DonkeyKongObservation, Donke
             state_fall_protection_reset = state._replace(traps=traps)
 
             # if mario is not protected anymore (mario_protected) and he is not jumping --> mario_got_hit = True --> reset game round
+            game_freeze_start = jax.lax.cond(
+                state.mario_got_hit == False,
+                lambda _: state.step_counter,
+                lambda _: state.game_freeze_start,
+                operand=None
+            )
             state_mario_falls = state._replace(
                 mario_got_hit = True,
-                game_freeze_start = state.step_counter,
+                game_freeze_start = game_freeze_start,
             )
 
             return jax.lax.cond(
@@ -1217,8 +1228,23 @@ class JaxDonkeyKong(JaxEnvironment[DonkeyKongState, DonkeyKongObservation, Donke
             new_state = new_state._replace(
                 game_score = state.game_score,
             )
+            ladder = self.init_ladders_for_level(state.level)
+            invisible_wall = self.init_invisible_wall_for_level(state.level)
+            mario_x, mario_y, hammer_x, hammer_y = jax.lax.cond(
+                state.level == 1,
+                lambda _: (self.consts.LEVEL_1_MARIO_START_X, self.consts.LEVEL_1_MARIO_START_Y, self.consts.LEVEL_1_HAMMER_X, self.consts.LEVEL_1_HAMMER_Y),
+                lambda _: (self.consts.LEVEL_2_MARIO_START_X, self.consts.LEVEL_2_MARIO_START_Y, self.consts.LEVEL_2_HAMMER_X, self.consts.LEVEL_2_HAMMER_Y),
+                operand=None
+            )
             new_state_life_loose = new_state._replace(
                 mario_life_counter = state.mario_life_counter - 1,
+                level = state.level,
+                ladders = ladder,
+                invisibleWallEachStage = invisible_wall,
+                mario_x = mario_x,
+                mario_y = mario_y,
+                hammer_x = hammer_x,
+                hammer_y = hammer_y,
             )
             level = jax.lax.cond(
                 state.level == 1,
@@ -1242,9 +1268,11 @@ class JaxDonkeyKong(JaxEnvironment[DonkeyKongState, DonkeyKongObservation, Donke
                 mario_y = mario_y,
                 hammer_x = hammer_x,
                 hammer_y = hammer_y,
-            )
+                game_score = new_state.game_score + self.consts.SCORE_FOR_REACHING_GOAL,
+            )            
 
             game_freeze_over = self.consts.GAME_FREEZE_DURATION < (state.step_counter - state.game_freeze_start)
+
             return jax.lax.cond(
                 jnp.logical_and(game_freeze_over, state.mario_got_hit),
                 lambda _: (new_state_life_loose, True),
