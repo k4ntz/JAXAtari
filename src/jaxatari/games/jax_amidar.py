@@ -9,7 +9,7 @@
 # - enemy speed for levels over Level 7 does not change, in ALE it still changes
 # - the bottom path is the same as any other path, in ALE it's thinner and the sprites are further up on the path
 
-# TODO handle generated mazes better (starting path, starting pos., tracer (needs to go left if it can not go straight but can go both left and right), which rectangles are corners --> chicken mode (should just be clearly defined I guess) ,...)
+# TODO handle generated mazes better (starting pos., which rectangles are corners --> chicken mode (should just be clearly defined I guess) ,...)
 
 from functools import partial
 import os
@@ -21,7 +21,7 @@ from jaxatari import spaces
 from jaxatari.environment import JaxEnvironment, JAXAtariAction as Action
 from jaxatari.renderers import JAXGameRenderer
 from jaxatari.rendering import jax_rendering_utils as aj
-from jaxatari.games.amidar_mazes import maze_4 as chosen_maze #XXX
+from jaxatari.games.amidar_mazes import original as chosen_maze #XXX
 
 # Functions to precompute some constants so they only need to be calculated once
 
@@ -291,6 +291,30 @@ def calculate_corner_rectangles(RECTANGLE_BOUNDS):
     # jax.debug.print("Corners found: {corners}", corners=corners)
     return corners
 
+def get_player_starting_path(HORIZONTAL_PATH_EDGES, VERTICAL_PATH_EDGES, INITIAL_PLAYER_POSITION):
+
+    player_x, player_y = INITIAL_PLAYER_POSITION
+
+    def check_horizontal(edge):
+        edge_y = edge[0, 1]
+        correct_y = player_y == edge_y
+        edge_start_x, edge_end_x = edge[:, 0]
+        correct_x = jnp.logical_and(player_x >= edge_start_x, player_x <= edge_end_x)
+        return jnp.logical_and(correct_y, correct_x)
+
+    def check_vertical(edge):
+        edge_x = edge[0, 0]
+        correct_x = player_x == edge_x
+        edge_start_y, edge_end_y = edge[:, 1]
+        correct_y = jnp.logical_and(player_y >= edge_start_y, player_y <= edge_end_y)
+        return jnp.logical_and(correct_x, correct_y)
+
+    horizontal_matches = jax.vmap(check_horizontal)(HORIZONTAL_PATH_EDGES)
+    vertical_matches = jax.vmap(check_vertical)(VERTICAL_PATH_EDGES)
+    matches = jnp.concatenate((horizontal_matches, vertical_matches))
+
+    return jnp.nonzero(matches, size=1, fill_value=0)
+
 
 class AmidarConstants(NamedTuple):
     """Constants for the Amidar game. Some constants are precomputed from others to avoid recomputation."""
@@ -327,7 +351,6 @@ class AmidarConstants(NamedTuple):
     PLAYER_SPRITE_OFFSET: tuple[int, int] = (-1, 0) # Offset for the player sprite in relation to the position in the code (because the top left corner of the player sprite is of the path to the left)
     INITIAL_PLAYER_POSITION: chex.Array = jnp.array([140, 89])
     INITIAL_PLAYER_DIRECTION: chex.Array = UP
-    PLAYER_STARTING_PATH: int = 85  # The path edge the player starts on, this is the index in PATH_EDGES TODO calculate this
 
     # Jumping
     # The jumping mechanics are like this to resemble the ALE version. 
@@ -370,6 +393,7 @@ class AmidarConstants(NamedTuple):
     VERTICAL_PATH_EDGES: chex.Array = chosen_maze.VERTICAL_PATH_EDGES
 
     # Precomputed Constants
+    # Path
     PATH_EDGES: chex.Array = jnp.concatenate((HORIZONTAL_PATH_EDGES, VERTICAL_PATH_EDGES), axis=0)
     RECTANGLES: chex.Array = jnp.array(calculate_rectangles(HORIZONTAL_PATH_EDGES, VERTICAL_PATH_EDGES, PATH_EDGES, PATH_CORNERS))
     RECTANGLE_BOUNDS: chex.Array = jax.vmap(precompute_rectangle_bounds, in_axes=(0, None))(RECTANGLES, PATH_EDGES)
@@ -378,6 +402,8 @@ class AmidarConstants(NamedTuple):
     PATH_PATTERN_BROWN, PATH_PATTERN_GREEN, WALKED_ON_PATTERN = generate_path_pattern(WIDTH, HEIGHT, PATH_COLOR_BROWN, PATH_COLOR_GREEN, WALKED_ON_COLOR)
     PATH_SPRITE_BROWN: chex.Array = jnp.where(RENDERING_PATH_MASK[:, :, None] == 1, PATH_PATTERN_BROWN, jnp.full((HEIGHT, WIDTH, 4), 0, dtype=jnp.uint8))
     PATH_SPRITE_GREEN: chex.Array = jnp.where(RENDERING_PATH_MASK[:, :, None] == 1, PATH_PATTERN_GREEN, jnp.full((HEIGHT, WIDTH, 4), 0, dtype=jnp.uint8))
+    # player
+    PLAYER_STARTING_PATH: chex.Array = get_player_starting_path(HORIZONTAL_PATH_EDGES, VERTICAL_PATH_EDGES, INITIAL_PLAYER_POSITION)
 
 # immutable state container
 class AmidarState(NamedTuple):
@@ -655,7 +681,7 @@ def enemies_step(constants: AmidarConstants, state: AmidarState, random_key: che
 
     # jax.debug.print("good: \n {}, \n okay: \n {}, \n possible: \n {}", good_directions_per_enemy, possible_directions_without_u_turns_per_enemy, possible_directions_per_enemy)
 
-    def move_enemy(enemy_x, enemy_y, direction, possible_directions, possible_directions_without_u_turns, good_directions, random_key):
+    def move_enemy(enemy_x, enemy_y, direction, possible_directions, possible_directions_without_u_turns, good_directions, random_key, index):
         """Makes the enemy move according to it's movement pattern."""
 
         def choose_direction():
@@ -667,6 +693,9 @@ def enemies_step(constants: AmidarConstants, state: AmidarState, random_key: che
                                                              lambda: jax.random.choice(random_key, jnp.arange(4), shape=(), p=jnp.where(possible_directions, 1/jnp.count_nonzero(possible_directions), 0))
                                                             )
                                             )  
+            # the tracer has to turn left if it can, otherwise it will deviate from the border 
+            left_turn_direction = (direction + 1) % 4
+            chosen_direction = jax.lax.cond(jnp.logical_and(index == 0, possible_directions_without_u_turns[left_turn_direction]), lambda: left_turn_direction, lambda: chosen_direction)
             return chosen_direction
 
         # if no directions are possible stay with the current one
@@ -678,7 +707,7 @@ def enemies_step(constants: AmidarConstants, state: AmidarState, random_key: che
             lambda: (enemy_x, enemy_y))  # If the direction is not possible, stay in place
         return jnp.array([new_x, new_y]), chosen_direction
 
-    new_enemy_positions, new_enemy_directions = jax.vmap(move_enemy, in_axes=0)(state.enemy_positions[:, 0], state.enemy_positions[:, 1], state.enemy_directions, possible_directions_per_enemy, possible_directions_without_u_turns_per_enemy, good_directions_per_enemy, enemy_keys)
+    new_enemy_positions, new_enemy_directions = jax.vmap(move_enemy, in_axes=0)(state.enemy_positions[:, 0], state.enemy_positions[:, 1], state.enemy_directions, possible_directions_per_enemy, possible_directions_without_u_turns_per_enemy, good_directions_per_enemy, enemy_keys, jnp.arange(state.enemy_directions.shape[0]))
 
     return new_enemy_positions, new_enemy_directions
 
@@ -1333,6 +1362,20 @@ class AmidarRenderer(JAXGameRenderer):
         # all_white = jnp.full_like(raster, 255, dtype=jnp.uint8)
         # raster = jnp.where(self.constants.RENDERING_PATH_MASK[:, :, None] == 1, all_white, raster)
 
+        # Render corner rectangles
+        edges_in_corner_rectangle = jnp.any(self.constants.RECTANGLES[self.constants.CORNER_RECTANGLES], axis=0)
+        def render_corner_rectangle_edges(i, raster):
+            in_corner = edges_in_corner_rectangle[i] == 1   
+            raster = jax.lax.cond(
+                in_corner,
+                lambda raster: render_line(raster, self.constants.PATH_EDGES[i], (0, 255, 0)),  # Render in green if part of a corner rectangle
+                lambda raster: raster,  # Otherwise, do nothing
+                raster
+            )
+            return raster
+        raster = jax.lax.fori_loop(0, jnp.shape(self.constants.PATH_EDGES)[0], render_corner_rectangle_edges, raster)
+
+
         # # Render completed rectangles mask
         # all_white = jnp.full_like(raster, 255, dtype=jnp.uint8)
         # raster = jnp.where(completed_rectangles_mask[:, :, None] == 1, all_white, raster)
@@ -1364,55 +1407,65 @@ class AmidarRenderer(JAXGameRenderer):
 @jax.jit
 def render_line(raster, coords, color):
     """Renders a line on the raster from coords [[x1, y1], [x2, y2]] with the given color.
-    Only used for debugging, so using loops is fine.
+    Coordinates are given as (w, h) i.e., (x, y), while raster is indexed as (h, w, c).
 
     Args:
-        raster: JAX array of shape (Width, Height, Channels) for the target image.
+        raster: JAX array of shape (Height, Width, Channels) for the target image.
         coords: JAX array of shape (2, 2), where coords[0] = [x1, y1] and coords[1] = [x2, y2].
         color: RGB or RGBA tuple/list/array for the line color.
 
     Returns:
         Updated raster with the line rendered.
     """
-    color = jnp.asarray(color, dtype=jnp.uint8)  # Ensure color is a JAX array
+    color = jnp.asarray(color)
+    coords = jnp.asarray(coords, dtype=jnp.int32)
+
     if color.shape[0] not in (3, 4):
         raise ValueError("Color must be an RGB or RGBA array.")
 
-    coords = jnp.asarray(coords, dtype=jnp.int32)  # Ensure coords are JAX arrays
+    # Match raster dtype and clamp channels to raster channels (use static Python int to avoid dynamic slice)
+    channels = min(color.shape[0], raster.shape[2])
+    color = color[:channels].astype(raster.dtype)
+
     x1, y1 = coords[0]
     x2, y2 = coords[1]
 
-    # Compute Bresenham's algorithm parameters
+    # Bresenham parameters
     dx = jnp.abs(x2 - x1)
     dy = jnp.abs(y2 - y1)
     sx = jnp.where(x1 < x2, 1, -1)
     sy = jnp.where(y1 < y2, 1, -1)
     err = dx - dy
 
-    # Total number of steps
-    num_steps = dx + dy + 1
+    # Steps: cover longest axis
+    num_steps = jnp.maximum(dx, dy) + 1
+
+    raster_h, raster_w, _ = raster.shape
 
     def loop_body(i, carry):
         raster, x, y, err = carry
 
-        # Clip coordinates to raster bounds
-        raster_width, raster_height, _ = raster.shape
-        raster = jax.lax.cond(jnp.logical_and(jnp.logical_and(0 <= x, x < raster_width), jnp.logical_and(0 <= y, y < raster_height)), 
-                     lambda raster: raster.at[x, y, :color.shape[0]].set(color), lambda raster: raster, raster)
+        # Bounds check for (y, x) since raster is (h, w, c)
+        in_bounds = jnp.logical_and(
+            jnp.logical_and(0 <= x, x < raster_w),
+            jnp.logical_and(0 <= y, y < raster_h),
+        )
 
-        # Update Bresenham's algorithm variables
+        def set_pixel(r):
+            return r.at[y, x, :channels].set(color)
+
+        raster = jax.lax.cond(in_bounds, set_pixel, lambda r: r, operand=raster)
+
+        # Update Bresenham
         e2 = 2 * err
-        new_err = jnp.where(e2 > -dy, err - dy, err)
-        new_x = jnp.where(e2 > -dy, x + sx, x)
-        new_err = jnp.where(e2 < dx, new_err + dx, new_err)
-        new_y = jnp.where(e2 < dx, y + sy, y)
+        err = jnp.where(e2 > -dy, err - dy, err)
+        x = jnp.where(e2 > -dy, x + sx, x)
+        err = jnp.where(e2 < dx, err + dx, err)
+        y = jnp.where(e2 < dx, y + sy, y)
 
-        return raster, new_x, new_y, new_err
+        return raster, x, y, err
 
-    # Use fori_loop to iterate
-    raster, _, _, _ = jax.lax.fori_loop(
-        0, num_steps, loop_body, (raster, x1, y1, err)
-    )
+    raster, _, _, _ = jax.lax.fori_loop(0, num_steps, loop_body, (raster, x1, y1, err))
 
     return raster
 
