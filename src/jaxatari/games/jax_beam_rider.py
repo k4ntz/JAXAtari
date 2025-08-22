@@ -2663,10 +2663,12 @@ class BeamRiderEnv(JaxEnvironment[BeamRiderState, BeamRiderObservation, BeamRide
                 (state.current_sector >= self.constants.SENTINEL_SHIP_SPAWN_SECTOR)
         )
 
-        # Spawn sentinel if needed
+        # Spawn sentinel if needed (and despawn any lingering white saucers)
         state = jax.lax.cond(
             should_spawn_sentinel,
-            lambda s: self._spawn_sentinel(s).replace(sentinel_spawned_this_sector=True),  # Mark as spawned
+            lambda s: self._despawn_white_saucers(
+                self._spawn_sentinel(s)
+            ).replace(sentinel_spawned_this_sector=True),
             lambda s: s,
             state
         )
@@ -2783,6 +2785,16 @@ class BeamRiderEnv(JaxEnvironment[BeamRiderState, BeamRiderObservation, BeamRide
             enemy_spawn_timer=new_spawn_timer,
             enemy_spawn_interval=spawn_interval
         )
+
+    @partial(jax.jit, static_argnums=(0,))
+    def _despawn_white_saucers(self, state: BeamRiderState) -> BeamRiderState:
+        """Immediately deactivate all remaining white saucers (e.g., when the sentinel appears)."""
+        enemies = state.enemies
+        white_mask = enemies[:, 5] == self.constants.ENEMY_TYPE_WHITE_SAUCER
+        # Set 'active' (col 3) to 0 for all white saucers
+        enemies = enemies.at[:, 3].set(jnp.where(white_mask, 0, enemies[:, 3]))
+        return state.replace(enemies=enemies)
+
 
     @partial(jax.jit, static_argnums=(0,))
     def _check_game_over(self, state: BeamRiderState) -> BeamRiderState:
