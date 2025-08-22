@@ -168,6 +168,8 @@ class DonkeyKongConstants(NamedTuple):
 
     # Scores added if mario doing following things:
     SCORE_FOR_JUMPING_OVER_BARREL = 100
+    SCORE_FOR_JUMPING_OVER_FIRE = 100
+    SCORE_FOR_TRIGGERING_TRAP = 100
     SCORE_FOR_DESTROYING_BARREL = 800
     SCORE_FOR_REACHING_GOAL = 4100 
 
@@ -427,7 +429,6 @@ class JaxDonkeyKong(JaxEnvironment[DonkeyKongState, DonkeyKongObservation, Donke
     @partial(jax.jit, static_argnums=(0,))
     def _trap_step(self, state):
         new_state = state
-
         def check_for_each_trap_if_triggered(i, state):
             # prepare new state, where the i-th trap is triggered
             triggered = state.traps.triggered.at[i].set(True)
@@ -445,6 +446,15 @@ class JaxDonkeyKong(JaxEnvironment[DonkeyKongState, DonkeyKongObservation, Donke
                 (state.traps.stage[i] == state.mario_stage)
                 & (state.mario_y <= state.traps.trap_y[i])
                 & ((state.mario_y + self.consts.MARIO_HIT_BOX_Y) >= (state.traps.trap_y[i] + self.consts.TRAP_WIDTH))
+            )
+
+            # update game score if trap is triggered for the first time
+            game_score = state.game_score + self.consts.SCORE_FOR_TRIGGERING_TRAP
+            new_state = jax.lax.cond(
+                state.traps.triggered[i] == False,
+                lambda _: new_state._replace(game_score=game_score),
+                lambda _: new_state,
+                operand=None
             )
 
             return jax.lax.cond(
@@ -495,6 +505,21 @@ class JaxDonkeyKong(JaxEnvironment[DonkeyKongState, DonkeyKongObservation, Donke
                 operand=None
             )
         new_state = jax.lax.fori_loop(0, len(new_state.traps.trap_x), check_if_mario_can_fall_trap, new_state)
+
+        def check_all_traps_triggered(state):
+            all_traps_triggered = jnp.all(state.traps.triggered)
+            game_freeze_start = jax.lax.cond(
+                state.mario_reached_goal == False,
+                lambda _: state.step_counter,
+                lambda _: state.game_freeze_start,
+                operand=None
+            )
+            new_state = state._replace(
+                mario_reached_goal = all_traps_triggered,
+                game_freeze_start = game_freeze_start,
+            )
+            return new_state
+        new_state = check_all_traps_triggered(new_state)
 
         return new_state
 
@@ -2005,7 +2030,7 @@ class DonkeyKongRenderer(JAXGameRenderer):
         )
 
         # Scores/ Timer
-        show_game_score = jnp.logical_not(state.game_started)
+        show_game_score = jnp.logical_or(jnp.logical_not(state.game_started), state.mario_reached_goal)
         score = jax.lax.cond(
             show_game_score,
             lambda _: state.game_score,
