@@ -78,7 +78,7 @@ class BeamRiderConstants(NamedTuple):
     TORPEDO_HEIGHT = 6
 
     # Sector progression
-    ENEMIES_PER_SECTOR = 15
+    ENEMIES_PER_SECTOR = 1
     BASE_ENEMY_SPAWN_INTERVAL = 90  # Start slower (was 60)
     MIN_ENEMY_SPAWN_INTERVAL = 12  # End faster (was 20)
     MAX_ENEMY_SPEED = 2.5  # Maximum enemy speed at sector 99
@@ -135,13 +135,8 @@ class BeamRiderConstants(NamedTuple):
     WHITE_SAUCER_HORIZONTAL_SPEED = 1.5  # Pixels per frame horizontal movement
     WHITE_SAUCER_BEAM_SNAP_DISTANCE = 3
 
-    WHITE_SAUCER_RETREAT_AFTER_SHOT = 1  # State flag for retreating after shooting
-    WHITE_SAUCER_RETREAT_SPEED = -3.0  # Faster retreat speed after shooting
-    WHITE_SAUCER_BEAM_CHANGE_CHANCE = 0.4  # 40% chance to change beam before retreating
-    WHITE_SAUCER_RETREAT_BEAM_CHANGE_TIME = 30  # Frames to move to new beam before retreating
-
     # Sentinel ship specific constants - UPDATED speeds
-    SENTINEL_SHIP_SPEED = 0.1  # Moderate base speed, will scale
+    SENTINEL_SHIP_SPEED = 0.3  # Moderate base speed, will scale
     SENTINEL_SHIP_POINTS = 200  # High points when destroyed with torpedo
     SENTINEL_SHIP_COLOR = (192, 192, 192)  # Silver/grey color RGB
     SENTINEL_SHIP_SPAWN_SECTOR = 1  # Starts appearing from sector 1
@@ -193,7 +188,7 @@ class BeamRiderConstants(NamedTuple):
     YELLOW_CHIRPER_SPAWN_CHANCE = 0.1  # 10% chance to spawn yellow chirper
 
     # Green blocker specific constants
-    GREEN_BLOCKER_SPEED = 0.15  # Much slower ramming speed
+    GREEN_BLOCKER_SPEED = 0.8  # Much slower ramming speed
     GREEN_BLOCKER_POINTS = 75  # High points when destroyed
     GREEN_BLOCKER_COLOR = (0, 255, 0)  # Green color RGB
     GREEN_BLOCKER_SPAWN_Y_MIN = 30  # Spawn higher up for targeting
@@ -1298,6 +1293,10 @@ class BeamRiderEnv(JaxEnvironment[BeamRiderState, BeamRiderObservation, BeamRide
         sentinel_active = jnp.any(
             (state.enemies[:, 3] == 1) & (state.enemies[:, 5] == self.constants.ENEMY_TYPE_SENTINEL_SHIP)
         )
+        active_green_blockers = jnp.sum(
+            (state.enemies[:, 3] == 1) &
+            (state.enemies[:, 5] == self.constants.ENEMY_TYPE_GREEN_BLOCKER)
+        )
 
         state = state.replace(enemy_spawn_timer=state.enemy_spawn_timer + 1)
 
@@ -1310,15 +1309,26 @@ class BeamRiderEnv(JaxEnvironment[BeamRiderState, BeamRiderObservation, BeamRide
         # More balanced spawn rate for green blockers
         early_sector = state.current_sector <= 5
 
-        # More conservative blocker spawn timing - fast enough to challenge sentinel but not spam
+        # FIXED: Significantly longer spawn intervals and stricter limits for green blockers
         blocker_spawn_interval = jnp.where(
             early_sector,
-            jnp.maximum(45, state.enemy_spawn_interval // 2),  # 45-60 frames (0.75-1.0 seconds)
-            state.enemy_spawn_interval  # Normal rate for sectors 6+ (60 frames)
+            # Early sectors: Much slower spawning (2-3 seconds instead of 0.75-1.0 seconds)
+            jnp.maximum(180, state.enemy_spawn_interval * 2),  # 120-180 frames (2-3 seconds)
+            # Later sectors: Still conservative
+            jnp.maximum(150, state.enemy_spawn_interval + 30)  # 90-120 frames (1.5-2.0 seconds)
         )
+        max_green_blockers = jnp.where(
+            early_sector,
+            2,  # Max 2 green blockers in early sectors (sectors 1-5)
+            4  # Max 4 green blockers in later sectors
+        )
+        can_spawn_green_blocker = active_green_blockers < max_green_blockers
 
-        should_spawn_blocker = (state.enemy_spawn_timer >= blocker_spawn_interval) & blocker_spawn_allowed
-
+        should_spawn_blocker = (
+                (state.enemy_spawn_timer >= blocker_spawn_interval) &
+                blocker_spawn_allowed &
+                can_spawn_green_blocker  # NEW: Check blocker limit
+        )
         should_spawn = should_spawn_normal | should_spawn_blocker
 
         # Generate random values
@@ -1342,8 +1352,15 @@ class BeamRiderEnv(JaxEnvironment[BeamRiderState, BeamRiderObservation, BeamRide
         can_actually_spawn = should_spawn & ~selected_white_saucer_when_cant
 
         # Reset spawn timer when spawn attempt was made (even if we skipped due to white saucer limit)
-        # This maintains normal spawn timing
-        new_spawn_timer = jnp.where(should_spawn, 0, state.enemy_spawn_timer)
+        # Reset spawn timer based on what type of spawn was attempted
+        reset_for_blocker = should_spawn_blocker
+        reset_for_normal = should_spawn_normal
+
+        new_spawn_timer = jnp.where(
+            reset_for_blocker | reset_for_normal,
+            0,
+            state.enemy_spawn_timer
+        )
         state = state.replace(enemy_spawn_timer=new_spawn_timer)
 
         # Find inactive enemy slot
@@ -1376,8 +1393,8 @@ class BeamRiderEnv(JaxEnvironment[BeamRiderState, BeamRiderObservation, BeamRide
         # GREEN BLOCKERS: Target fixed X coordinate (where player was when blocker spawned)
         is_green_blocker = enemy_type == self.constants.ENEMY_TYPE_GREEN_BLOCKER
 
-        # Calculate player ship center X coordinate (exact position)
-        player_ship_center_x = state.ship.x + self.constants.SHIP_WIDTH // 2
+        # Get player beam position (simpler since ship can only be on beam centers)
+        player_beam_x = self.beam_positions[state.ship.beam_position]
 
         # Choose spawn side randomly for blockers (0 = left, 1 = right)
         rng_key, blocker_side_key = random.split(rng_key)
@@ -1611,7 +1628,7 @@ class BeamRiderEnv(JaxEnvironment[BeamRiderState, BeamRiderObservation, BeamRide
         # Modify existing target_x assignment to include horizon patrol
         target_x = jnp.where(
             is_green_blocker,
-            player_ship_center_x,  # Blocker targets player's current position
+            player_beam_x,  # Blocker targets player's current position
             jnp.where(
                 enemy_type == self.constants.ENEMY_TYPE_ORANGE_TRACKER,
                 self.beam_positions[state.ship.beam_position],  # Tracker targets current player beam
@@ -1980,7 +1997,7 @@ class BeamRiderEnv(JaxEnvironment[BeamRiderState, BeamRiderObservation, BeamRide
         # Once reached target X coordinate, move down slowly
         blocker_new_y = jnp.where(
             blocker_mask & reached_target,
-            blocker_y + (self.constants.GREEN_BLOCKER_SPEED * 0.5),  # Slower downward movement
+            blocker_y + self.constants.GREEN_BLOCKER_SPEED,  # Slower downward movement
             blocker_y  # Don't move down until reached target
         )
 
