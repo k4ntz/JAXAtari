@@ -9,7 +9,6 @@ from jax import lax
 import jax.lax
 
 from gymnax.environments import spaces
-#from ocatari.vision.skiing import player_c
 
 from jaxatari.environment import JaxEnvironment, JAXAtariAction as Action
 from jaxatari.renderers import AtraJaxisRenderer
@@ -25,6 +24,7 @@ MAX_RIVER_WIDTH = 130
 MAX_ENEMIES = 10
 MINIMUM_SPAWN_COOLDOWN = 20
 MAX_FUEL = 30
+UI_HEIGHT = 35
 
 
 class RiverraidState(NamedTuple):
@@ -80,8 +80,9 @@ class RiverraidObservation(NamedTuple):
 # logic sperated into 3 branches: island, no_island, island_transition
 # except for the transition phases, the states are managed at the top level
 # islands are randomly spawned in no_island branch within expanse
-# real game always spawns after expanse - straight - island, therefore island_transition_state
-# islands are terminated when it randomly shrinks to 0 OR when the logic decides to remove the island
+# before islands spawn, the river always
+# therefore island_transition_state that manages expanse - straight - island
+# islands are terminated when it randomly shrinks to smaller minimum island size OR when the logic decides to remove the island
 # then also shrink - straight - river shrink
 @jax.jit
 def generate_altering_river(state: RiverraidState) -> RiverraidState:
@@ -851,6 +852,7 @@ def spawn_entities(state: RiverraidState) -> RiverraidState:
     return new_state._replace(master_key=key,
                               spawn_cooldown=new_spawn_cooldown)
 
+@jax.jit
 def scroll_entities(state: RiverraidState) -> RiverraidState:
     new_enemy_y = state.enemy_y + 1
     new_enemy_state = jnp.where(new_enemy_y > SCREEN_HEIGHT + 1, 0, state.enemy_state)
@@ -869,7 +871,7 @@ def scroll_entities(state: RiverraidState) -> RiverraidState:
         fuel_x=new_fuel_x
     )
 
-
+@jax.jit
 def enemy_collision(state: RiverraidState) -> RiverraidState:
     def handle_bullet_collision(state: RiverraidState) -> RiverraidState:
         active_enemy_mask = state.enemy_state == 1
@@ -917,6 +919,7 @@ def enemy_collision(state: RiverraidState) -> RiverraidState:
     return new_state._replace(player_state=new_player_state)
 
 
+@jax.jit
 def fuel_collision(state: RiverraidState) -> RiverraidState:
     active_fuel_mask = state.fuel_state == 1
 
@@ -997,7 +1000,7 @@ def update_enemy_movement_status(state: RiverraidState) -> RiverraidState:
     )
     return state._replace(enemy_direction=new_enemy_direction, master_key=key)
 
-
+@jax.jit
 def enemy_movement(state: RiverraidState) -> RiverraidState:
     new_enemy_x = state.enemy_x.copy()
     move_left_mask = (state.enemy_state == 1) & (state.enemy_direction == 2)
@@ -1067,7 +1070,7 @@ class JaxRiverraid(JaxEnvironment):
                                segment_straigt_counter=jnp.array(8),
                                dam_position= jnp.full((SCREEN_HEIGHT,), -1, dtype=jnp.int32),
                                player_x= jnp.array(SCREEN_WIDTH // 2 - 2, dtype=jnp.float32),
-                               player_y=jnp.array(SCREEN_HEIGHT - 40),
+                               player_y=jnp.array(SCREEN_HEIGHT - 20 - UI_HEIGHT),
                                player_velocity=jnp.array(0, dtype=jnp.float32),
                                player_direction=jnp.array(1),
                                player_state= jnp.array(0),
@@ -1156,7 +1159,7 @@ class JaxRiverraid(JaxEnvironment):
         return False
 
     @partial(jax.jit, static_argnums=(0,))
-    def _get_info(self, state: RiverraidState, all_rewards: chex.Array) -> RiverraidState:
+    def _get_info(self, state: RiverraidState, all_rewards: chex.Array) -> RiverraidInfo:
         return RiverraidInfo(time=state.turn_step, all_rewards=all_rewards)
 
 
@@ -1197,17 +1200,18 @@ class RiverraidRenderer(AtraJaxisRenderer):
         green_banks = jnp.array([26, 132, 26], dtype=jnp.uint8)
         blue_river = jnp.array([42, 42, 189], dtype=jnp.uint8)
         dam_color = jnp.array([139, 69, 19], dtype=jnp.uint8)
+        ui_color = jnp.array([128, 128, 128], dtype=jnp.uint8)
 
         left_banks = state.river_left[:, None]
         right_banks = state.river_right[:, None]
-
         inner_left_banks = state.river_inner_left[:, None]
         inner_right_banks = state.river_inner_right[:, None]
 
         x_coords = jnp.arange(SCREEN_WIDTH)
-        is_river =  (x_coords > left_banks) & (x_coords < right_banks) & jnp.logical_or(x_coords < inner_left_banks, x_coords > inner_right_banks)
+        is_river = (x_coords > left_banks) & (x_coords < right_banks) & jnp.logical_or(
+            x_coords < inner_left_banks, x_coords > inner_right_banks)
 
-        # The raster is  (HEIGHT, WIDTH, 3)
+        # The raster is (HEIGHT, WIDTH, 3)
         raster = jnp.where(is_river[..., None], blue_river, green_banks)
 
         is_dam = (state.dam_position[:, None] == 1) & (x_coords > left_banks) & (x_coords < right_banks)
@@ -1217,8 +1221,9 @@ class RiverraidRenderer(AtraJaxisRenderer):
         player_frame = aj.get_sprite_frame(self.SPRITE_PLAYER, 0)
         px = jnp.round(state.player_x).astype(jnp.int32)
         py = jnp.round(state.player_y).astype(jnp.int32)
-        raster = aj.render_at(raster, py, px, player_frame) # x and y swapped cuz its transposed later
+        raster = aj.render_at(raster, py, px, player_frame)
 
+        # Bullet
         bullet_frame = aj.get_sprite_frame(self.BULLET, 0)
         bx = jnp.round(state.player_bullet_x).astype(jnp.int32)
         by = jnp.round(state.player_bullet_y).astype(jnp.int32)
@@ -1239,7 +1244,6 @@ class RiverraidRenderer(AtraJaxisRenderer):
                 ]
             )
             return aj.render_at(raster, ey, ex, frame_to_render)
-
 
         def render_alive_enemies(i, raster):
             raster = jax.lax.cond(
@@ -1268,7 +1272,12 @@ class RiverraidRenderer(AtraJaxisRenderer):
 
         raster = jax.lax.fori_loop(0, MAX_ENEMIES, render_alive_fuel, raster)
 
-        # transpose it to (WIDTH, HEIGHT, 3)
+        # UI mask
+        y_coords = jnp.arange(SCREEN_HEIGHT)
+        ui_mask = y_coords >= (SCREEN_HEIGHT - UI_HEIGHT)
+        raster = jnp.where(ui_mask[:, None, None], ui_color, raster)
+
+        # Transpose it to (WIDTH, HEIGHT, 3) for display
         return jnp.transpose(raster, (1, 0, 2))
 
 
