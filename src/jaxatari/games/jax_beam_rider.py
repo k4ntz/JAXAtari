@@ -19,7 +19,6 @@ Top Priorities:
 - "Fix" the renderer as some components are not being shown with Play.py(Player ship, Points, lives, torpedoes, enemies left) (Mahta)
 - make sure that all of the enemies follow the dotted lines/make the beams follow the dotted lines
 For later:
-- spawn rate of green blockers needs to be fixed when sector == 6 && sentinal is active --> might be done
 - Check the sentinal ship constants/Optimize the code/remove unnecessary code
 - Adjust the spawn rate of green blockers in sectors 1 - 5 (currently the sentinel moves faster through the screen than they can spawn) -> somewhat done
 - Documentation
@@ -78,7 +77,7 @@ class BeamRiderConstants(NamedTuple):
     TORPEDO_HEIGHT = 6
 
     # Sector progression
-    ENEMIES_PER_SECTOR = 1
+    ENEMIES_PER_SECTOR = 15
     BASE_ENEMY_SPAWN_INTERVAL = 90  # Start slower (was 60)
     MIN_ENEMY_SPAWN_INTERVAL = 12  # End faster (was 20)
     MAX_ENEMY_SPEED = 2.5  # Maximum enemy speed at sector 99
@@ -117,7 +116,13 @@ class BeamRiderConstants(NamedTuple):
     WHITE_SAUCER_RETREAT_BEAM_CHANGE_TIME = 30  # Frames to move to new beam before retreating
     WHITE_SAUCER_RETREAT_AFTER_SHOT = 1  # State flag for retreating after shooting
     WHITE_SAUCER_RETREAT_SPEED = -3.0  # Faster retreat speed after shooting
-
+    # White saucer ramming pattern
+    WHITE_SAUCER_RAMMING = 6  # New movement pattern for ramming
+    WHITE_SAUCER_RAMMING_CHANCE = 0.15  # 15% chance for ramming pattern
+    WHITE_SAUCER_RAMMING_SPEED = 3.5  # Fast speed for ramming movement
+    WHITE_SAUCER_RAMMING_MIN_SECTOR = 10  # Start ramming from sector 10
+    WHITE_SAUCER_RAMMING_INCREASED_CHANCE_SECTOR = 20  # Increased chance from sector 20
+    WHITE_SAUCER_RAMMING_HIGH_SECTOR_CHANCE = 0.25  # 25% chance in high sectors
     # Horizon patrol system
     HORIZON_LINE_Y = 40  # Y position of the horizon line where saucers patrol
     WHITE_SAUCER_HORIZON_PATROL = 5  # New movement pattern for horizon patrol
@@ -570,7 +575,7 @@ class BeamRiderEnv(JaxEnvironment[BeamRiderState, BeamRiderObservation, BeamRide
     def _select_white_saucer_movement_pattern(self, rng_key: chex.PRNGKey) -> int:
         """Select movement pattern for a new white saucer - UPDATED: includes horizon patrol"""
         # Generate random value for pattern selection
-        pattern_rand = random.uniform(rng_key, (), minval=0.0, maxval=1.0, dtype=jnp.float32)
+        pattern_rand = random.uniform(rng_key, (), minval=0.0, maxval=1.0)
 
         # Determine movement pattern based on probabilities
         pattern = jnp.where(
@@ -592,7 +597,6 @@ class BeamRiderEnv(JaxEnvironment[BeamRiderState, BeamRiderObservation, BeamRide
         )
 
         return pattern
-
     @partial(jax.jit, static_argnums=(0,))
     def _handle_white_saucer_shooting(self, state: BeamRiderState) -> BeamRiderState:
         """Handle white saucer projectile firing with beam change and pattern switching"""
@@ -1066,45 +1070,65 @@ class BeamRiderEnv(JaxEnvironment[BeamRiderState, BeamRiderObservation, BeamRide
         reverse_new_beam = current_beam
         reverse_new_target_beam = target_beam
 
+        # PATTERN 6: RAMMING (new - fast straight down to bottom for higher sectors)
+        ramming_mask = white_saucer_active & (movement_pattern == self.constants.WHITE_SAUCER_RAMMING)
+
+        # Use increased speed for ramming
+        ramming_new_speed = self.constants.WHITE_SAUCER_RAMMING_SPEED
+        ramming_new_x = current_x  # No horizontal movement
+        ramming_new_y = current_y + ramming_new_speed  # Fast straight down
+        ramming_new_beam = current_beam  # Stay on same beam
+        ramming_new_target_beam = target_beam  # No change
+        ramming_new_direction_x = direction_x  # No change
+        # === APPLY MOVEMENT PATTERNS ===
         # === APPLY MOVEMENT PATTERNS ===
         new_x = jnp.where(horizon_patrol_mask, horizon_new_x,
-                          jnp.where(straight_mask, straight_new_x,
-                                    jnp.where(jump_mask, jump_new_x,
-                                              jnp.where(reverse_mask, reverse_new_x,
-                                                        jnp.where(shooting_mask, shooting_new_x, current_x)))))
+                          jnp.where(ramming_mask, ramming_new_x,
+                                    jnp.where(straight_mask, straight_new_x,
+                                              jnp.where(jump_mask, jump_new_x,
+                                                        jnp.where(reverse_mask, reverse_new_x,
+                                                                  jnp.where(shooting_mask, shooting_new_x,
+                                                                            current_x))))))
 
         new_y = jnp.where(horizon_patrol_mask, horizon_new_y,
-                          jnp.where(straight_mask, straight_new_y,
-                                    jnp.where(jump_mask, jump_new_y,
-                                              jnp.where(reverse_mask, reverse_new_y,
-                                                        jnp.where(shooting_mask, shooting_new_y, current_y)))))
+                          jnp.where(ramming_mask, ramming_new_y,
+                                    jnp.where(straight_mask, straight_new_y,
+                                              jnp.where(jump_mask, jump_new_y,
+                                                        jnp.where(reverse_mask, reverse_new_y,
+                                                                  jnp.where(shooting_mask, shooting_new_y,
+                                                                            current_y))))))
 
         new_beam = jnp.where(horizon_patrol_mask, horizon_new_beam,
-                             jnp.where(straight_mask, straight_new_beam,
-                                       jnp.where(jump_mask, jump_new_beam,
-                                                 jnp.where(reverse_mask, reverse_new_beam,
-                                                           jnp.where(shooting_mask, shooting_new_beam, current_beam)))))
+                             jnp.where(ramming_mask, ramming_new_beam,
+                                       jnp.where(straight_mask, straight_new_beam,
+                                                 jnp.where(jump_mask, jump_new_beam,
+                                                           jnp.where(reverse_mask, reverse_new_beam,
+                                                                     jnp.where(shooting_mask, shooting_new_beam,
+                                                                               current_beam))))))
 
         new_speed = jnp.where(horizon_patrol_mask, horizon_new_speed,
-                              jnp.where(straight_mask, straight_new_speed,
-                                        jnp.where(jump_mask, jump_new_speed,
-                                                  jnp.where(reverse_mask, reverse_new_speed,
-                                                            jnp.where(shooting_mask, shooting_new_speed,
-                                                                      current_speed)))))
+                              jnp.where(ramming_mask, ramming_new_speed,
+                                        jnp.where(straight_mask, straight_new_speed,
+                                                  jnp.where(jump_mask, jump_new_speed,
+                                                            jnp.where(reverse_mask, reverse_new_speed,
+                                                                      jnp.where(shooting_mask, shooting_new_speed,
+                                                                                current_speed))))))
 
         new_target_beam = jnp.where(horizon_patrol_mask, horizon_new_target_beam,
-                                    jnp.where(straight_mask, straight_new_target_beam,
-                                              jnp.where(jump_mask, jump_new_target_beam,
-                                                        jnp.where(reverse_mask, reverse_new_target_beam,
-                                                                  target_beam))))
+                                    jnp.where(ramming_mask, ramming_new_target_beam,
+                                              jnp.where(straight_mask, straight_new_target_beam,
+                                                        jnp.where(jump_mask, jump_new_target_beam,
+                                                                  jnp.where(reverse_mask, reverse_new_target_beam,
+                                                                            target_beam)))))
 
         # Direction and timer updates
         new_direction_x = jnp.where(horizon_patrol_mask, horizon_new_direction,
-                                    jnp.where(straight_mask, enemies[:, 6],
-                                              jnp.where(jump_mask, enemies[:, 6],
-                                                        jnp.where(reverse_mask, enemies[:, 6],
-                                                                  jnp.where(shooting_mask, enemies[:, 6],
-                                                                            enemies[:, 6])))))
+                                    jnp.where(ramming_mask, ramming_new_direction_x,
+                                              jnp.where(straight_mask, enemies[:, 6],
+                                                        jnp.where(jump_mask, enemies[:, 6],
+                                                                  jnp.where(reverse_mask, enemies[:, 6],
+                                                                            jnp.where(shooting_mask, enemies[:, 6],
+                                                                                      enemies[:, 6]))))))
 
         # Updated pause timer logic (beam change timer for shooting saucers)
         new_pause_timer = jnp.where(horizon_patrol_mask, horizon_new_pause_timer,
@@ -1315,7 +1339,7 @@ class BeamRiderEnv(JaxEnvironment[BeamRiderState, BeamRiderObservation, BeamRide
             # Early sectors: Much slower spawning (2-3 seconds instead of 0.75-1.0 seconds)
             jnp.maximum(180, state.enemy_spawn_interval * 2),  # 120-180 frames (2-3 seconds)
             # Later sectors: Still conservative
-            jnp.maximum(150, state.enemy_spawn_interval + 30)  # 90-120 frames (1.5-2.0 seconds)
+            jnp.maximum(50, state.enemy_spawn_interval + 30)  # 90-120 frames (1.5-2.0 seconds)
         )
         max_green_blockers = jnp.where(
             early_sector,
@@ -1568,6 +1592,26 @@ class BeamRiderEnv(JaxEnvironment[BeamRiderState, BeamRiderObservation, BeamRide
             is_white_saucer,
             self._select_white_saucer_movement_pattern(subkey2),
             0  # Default pattern for non-white saucers
+        )
+
+        # WHITE SAUCER RAMMING: Override pattern for higher sectors
+        is_ramming_available = state.current_sector >= self.constants.WHITE_SAUCER_RAMMING_MIN_SECTOR
+        ramming_chance = jnp.where(
+            state.current_sector >= self.constants.WHITE_SAUCER_RAMMING_INCREASED_CHANCE_SECTOR,
+            self.constants.WHITE_SAUCER_RAMMING_HIGH_SECTOR_CHANCE,
+            self.constants.WHITE_SAUCER_RAMMING_CHANCE
+        )
+
+        # Generate additional random value for ramming check
+        rng_key, ramming_key = random.split(rng_key)
+        ramming_rand = random.uniform(ramming_key, (), minval=0.0, maxval=1.0)
+        should_ram = is_white_saucer & is_ramming_available & (ramming_rand < ramming_chance)
+
+        # Override movement pattern if ramming
+        movement_pattern = jnp.where(
+            should_ram,
+            self.constants.WHITE_SAUCER_RAMMING,
+            movement_pattern
         )
 
         # Set initial firing timer for shooting white saucers
