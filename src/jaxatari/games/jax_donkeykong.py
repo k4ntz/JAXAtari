@@ -118,9 +118,9 @@ class DonkeyKongConstants(NamedTuple):
     FIRE_HIT_BOX_Y: int = 8
 
     # Fire
-    FIRE_MOVING_SPEED: float = 0.5
+    FIRE_MOVING_SPEED: float = 0.49
     FIRE_START_Y: int = 60
-
+    FIRE_CHANGING_DIRECTION_PROP = 0.005
 
     # Movement directions
     MOVING_UP: int = 0
@@ -177,7 +177,7 @@ class DonkeyKongConstants(NamedTuple):
     TIMER_REDUTION_AMOUNT = 100
     
 
-class InvisibleWallEachStage(NamedTuple):
+class invisible_wall_each_stage(NamedTuple):
     stage: chex.Array
     left_end: chex.Array
     right_end: chex.Array
@@ -246,7 +246,7 @@ class DonkeyKongState(NamedTuple):
     fires: FirePosition
     traps: TrapPosition
     ladders: Ladder
-    invisibleWallEachStage: InvisibleWallEachStage
+    invisible_wall_each_stage: invisible_wall_each_stage
     random_key: int
     frames_since_last_barrel_spawn: int
 
@@ -353,15 +353,15 @@ class JaxDonkeyKong(JaxEnvironment[DonkeyKongState, DonkeyKongObservation, Donke
         )
 
     @partial(jax.jit, static_argnums=(0,))
-    def init_invisible_wall_for_level(self, level: int) -> InvisibleWallEachStage:
+    def init_invisible_wall_for_level(self, level: int) -> invisible_wall_each_stage:
         # Set invisible wall depending of level
-        invisible_wall_level_1 = InvisibleWallEachStage(
+        invisible_wall_level_1 = invisible_wall_each_stage(
             stage=jnp.array([6, 5, 4, 3, 2, 1], dtype=jnp.int32),
             left_end=jnp.array([32, 37, 32, 37, 32, 37], dtype=jnp.int32),
             right_end=jnp.array([113, 120, 113, 120, 113, 120], dtype=jnp.int32),
         )
 
-        invisible_wall_level_2 = InvisibleWallEachStage(
+        invisible_wall_level_2 = invisible_wall_each_stage(
             stage=jnp.array([6, 5, 4, 3, 2, 1], dtype=jnp.int32),
             left_end=jnp.array([32, 32, 32, 32, 32, 32], dtype=jnp.int32),
             right_end=jnp.array([120, 120, 120, 120, 120, 120], dtype=jnp.int32),
@@ -469,6 +469,50 @@ class JaxDonkeyKong(JaxEnvironment[DonkeyKongState, DonkeyKongObservation, Donke
 
             return new_state
         new_state = fire_move(new_state)
+
+        # implement the change of moving direction of the fires
+        def change_moving_direction_fire(state):
+            def change_direction_for_each_fire(i, state):
+                direction_change_prop = self.consts.FIRE_CHANGING_DIRECTION_PROP  # basic prop to change direction
+                fire_y, moving_direction = jax.lax.cond(
+                    state.fires.moving_direction[i] == self.consts.MOVING_RIGHT,
+                    lambda _: (state.fires.fire_y[i] + self.consts.FIRE_MOVING_SPEED, state.fires.moving_direction.at[i].set(self.consts.MOVING_LEFT)),
+                    lambda _: (state.fires.fire_y[i] - self.consts.FIRE_MOVING_SPEED, state.fires.moving_direction.at[i].set(self.consts.MOVING_RIGHT)),
+                    operand=None
+                )
+
+                # check if fire is already at the invisible wall on right or left side
+                direction_change_prop = jax.lax.cond(
+                    state.invisible_wall_each_stage.left_end[0] >= fire_y,
+                    lambda _: 1.0,
+                    lambda _: direction_change_prop,
+                    operand=None
+                )
+                direction_change_prop = jax.lax.cond(
+                    state.invisible_wall_each_stage.right_end[0] <= fire_y,
+                    lambda _: 1.0,
+                    lambda _: direction_change_prop,
+                    operand=None
+                )
+
+                def should_change(key, direction_change_prop: float) -> bool:
+                    rnd = jax.random.uniform(key, shape=())
+                    return rnd < direction_change_prop
+                key = jax.random.PRNGKey(jnp.round(state.fires.fire_x[i]).astype(jnp.int32) + jnp.round(state.fires.fire_y[i]).astype(jnp.int32) + state.fires.stage[i])
+                change_direction = should_change(key, direction_change_prop)
+
+                # new_state with opposite moving direction
+                fires = state.fires._replace(moving_direction=moving_direction)
+                new_state = state._replace(fires=fires)
+                return jax.lax.cond(
+                    change_direction,
+                    lambda _: new_state,
+                    lambda _: state,
+                    operand=None
+                )
+            new_state = jax.lax.fori_loop(0, len(state.fires.fire_y), change_direction_for_each_fire, state)
+            return new_state
+        new_state = change_moving_direction_fire(new_state)
 
         return new_state
 
@@ -1184,8 +1228,8 @@ class JaxDonkeyKong(JaxEnvironment[DonkeyKongState, DonkeyKongObservation, Donke
         def mario_walking_into_invisible_wall(state):
             def look_for_invisible_wall_of_given_stage(i, hit):
                 wall_hit = True
-                wall_hit &= state.invisibleWallEachStage.stage[i] == state.mario_stage
-                mario_reaches_invisible_wall = jnp.logical_or(state.invisibleWallEachStage.right_end[i] < state.mario_y, state.invisibleWallEachStage.left_end[i] > state.mario_y) 
+                wall_hit &= state.invisible_wall_each_stage.stage[i] == state.mario_stage
+                mario_reaches_invisible_wall = jnp.logical_or(state.invisible_wall_each_stage.right_end[i] < state.mario_y, state.invisible_wall_each_stage.left_end[i] > state.mario_y) 
                 wall_hit &= mario_reaches_invisible_wall
                 return jax.lax.cond(
                     wall_hit,
@@ -1193,7 +1237,7 @@ class JaxDonkeyKong(JaxEnvironment[DonkeyKongState, DonkeyKongObservation, Donke
                     lambda _: hit,
                     operand=None
                 )
-            hit = jax.lax.fori_loop(0, len(state.invisibleWallEachStage.stage), look_for_invisible_wall_of_given_stage, False)
+            hit = jax.lax.fori_loop(0, len(state.invisible_wall_each_stage.stage), look_for_invisible_wall_of_given_stage, False)
 
             new_state_right_wall = state._replace(
                 mario_walk_sprite = self.consts.MARIO_WALK_SPRITE_0,
@@ -1315,7 +1359,7 @@ class JaxDonkeyKong(JaxEnvironment[DonkeyKongState, DonkeyKongObservation, Donke
                 mario_life_counter = state.mario_life_counter - 1,
                 level = state.level,
                 ladders = ladder,
-                invisibleWallEachStage = invisible_wall,
+                invisible_wall_each_stage = invisible_wall,
                 mario_x = mario_x,
                 mario_y = mario_y,
                 hammer_x = hammer_x,
@@ -1338,7 +1382,7 @@ class JaxDonkeyKong(JaxEnvironment[DonkeyKongState, DonkeyKongObservation, Donke
             new_state_clear_level = new_state._replace(
                 level=level,
                 ladders=ladder,
-                invisibleWallEachStage=invisible_wall,
+                invisible_wall_each_stage=invisible_wall,
                 mario_x = mario_x,
                 mario_y = mario_y,
                 hammer_x = hammer_x,
@@ -1563,7 +1607,7 @@ class JaxDonkeyKong(JaxEnvironment[DonkeyKongState, DonkeyKongObservation, Donke
         Returns the initial state and the reward (i.e. 0)
         """
         ladders = self.init_ladders_for_level(level=1)
-        invisibleWallEachStage = self.init_invisible_wall_for_level(level=1)
+        invisible_wall_each_stage = self.init_invisible_wall_for_level(level=1)
         state = DonkeyKongState(
             game_started = False,
             level = 1,
@@ -1622,7 +1666,7 @@ class JaxDonkeyKong(JaxEnvironment[DonkeyKongState, DonkeyKongObservation, Donke
             ),
 
             ladders=ladders,
-            invisibleWallEachStage=invisibleWallEachStage,
+            invisible_wall_each_stage=invisible_wall_each_stage,
             random_key = jax.random.PRNGKey(key[0]),
 
             hammer_x = self.consts.LEVEL_1_HAMMER_X,
