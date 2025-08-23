@@ -12,8 +12,8 @@ from gymnax.environments import spaces
 #from ocatari.vision.skiing import player_c
 
 from jaxatari.environment import JaxEnvironment, JAXAtariAction as Action
-from jaxatari.renderers import AtraJaxisRenderer
-from jaxatari.rendering import atraJaxis as aj
+from jaxatari.renderers import JAXGameRenderer
+import jaxatari.rendering.jax_rendering_utils as aj
 
 
 # -------- Game constants --------
@@ -1182,7 +1182,7 @@ def load_sprites():
         ENEMY_AIRPLANE
     )
 
-class RiverraidRenderer(AtraJaxisRenderer):
+class RiverraidRenderer(JAXGameRenderer):
     def __init__(self):
         (
             self.SPRITE_PLAYER,
@@ -1217,12 +1217,12 @@ class RiverraidRenderer(AtraJaxisRenderer):
         player_frame = aj.get_sprite_frame(self.SPRITE_PLAYER, 0)
         px = jnp.round(state.player_x).astype(jnp.int32)
         py = jnp.round(state.player_y).astype(jnp.int32)
-        raster = aj.render_at(raster, py, px, player_frame) # x and y swapped cuz its transposed later
+        raster = aj.render_at(raster, px, py, player_frame) # x and y swapped cuz its transposed later
 
         bullet_frame = aj.get_sprite_frame(self.BULLET, 0)
         bx = jnp.round(state.player_bullet_x).astype(jnp.int32)
         by = jnp.round(state.player_bullet_y).astype(jnp.int32)
-        raster = aj.render_at(raster, by, bx, bullet_frame)
+        raster = aj.render_at(raster, bx, by, bullet_frame)
 
         def render_enemy_at_idx(raster, i):
             ex = jnp.round(state.enemy_x[i]).astype(jnp.int32)
@@ -1238,7 +1238,7 @@ class RiverraidRenderer(AtraJaxisRenderer):
                     lambda: airplane_frame,
                 ]
             )
-            return aj.render_at(raster, ey, ex, frame_to_render)
+            return aj.render_at(raster, ex, ey, frame_to_render)
 
 
         def render_alive_enemies(i, raster):
@@ -1255,7 +1255,7 @@ class RiverraidRenderer(AtraJaxisRenderer):
         def render_fuel_at_idx(raster, i):
             fx = jnp.round(state.fuel_x[i]).astype(jnp.int32)
             fy = jnp.round(state.fuel_y[i]).astype(jnp.int32)
-            return aj.render_at(raster, fy, fx, aj.get_sprite_frame(self.SPRITE_PLAYER, 0))
+            return aj.render_at(raster, fx, fy, aj.get_sprite_frame(self.SPRITE_PLAYER, 0))
 
         def render_alive_fuel(i, raster):
             raster = jax.lax.cond(
@@ -1269,7 +1269,7 @@ class RiverraidRenderer(AtraJaxisRenderer):
         raster = jax.lax.fori_loop(0, MAX_ENEMIES, render_alive_fuel, raster)
 
         # transpose it to (WIDTH, HEIGHT, 3)
-        return jnp.transpose(raster, (1, 0, 2))
+        return raster
 
 
 if __name__ == "__main__":
