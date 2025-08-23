@@ -65,50 +65,50 @@ class OthelloConstants(NamedTuple):
     FLIP_DOWN_LEFT_SIDE: int = 6
     FLIP_UP_LEFT_SIDE: int = 7
 
-# Game Environment
-WIDTH = 160
-HEIGHT = 210
-FIELD_WIDTH = 8
-FIELD_HEIGHT = 8
+    # Game Environment
+    HEIGHT = 210
+    WIDTH = 160
+    FIELD_WIDTH = 8
+    FIELD_HEIGHT = 8
 
-# Pygame window dimensions
-WINDOW_WIDTH = 160 * 3
-WINDOW_HEIGHT = 210 * 3
+    # Pygame window dimensions
+    WINDOW_HEIGHT = 210 * 3
+    WINDOW_WIDTH = 160 * 3
 
-# Actions constants
-NOOP = Action.NOOP
-UP = Action.UP
-DOWN = Action.DOWN
-LEFT = Action.LEFT
-RIGHT = Action.RIGHT
-UPRIGHT = Action.UPRIGHT
-UPLEFT = Action.UPLEFT
-DOWNRIGHT = Action.DOWNRIGHT
-DOWNLEFT = Action.DOWNLEFT
-PLACE = Action.FIRE
+    # Actions constants
+    NOOP = Action.NOOP
+    UP = Action.UP
+    DOWN = Action.DOWN
+    LEFT = Action.LEFT
+    RIGHT = Action.RIGHT
+    UPRIGHT = Action.UPRIGHT
+    UPLEFT = Action.UPLEFT
+    DOWNRIGHT = Action.DOWNRIGHT
+    DOWNLEFT = Action.DOWNLEFT
+    PLACE = Action.FIRE
 
-def get_human_action() -> chex.Array:
-    keys = pygame.key.get_pressed()
-    if keys[pygame.K_w] and keys[pygame.K_a]:
-        return jnp.array(UPLEFT)
-    elif keys[pygame.K_w] and keys[pygame.K_d]:
-        return jnp.array(UPRIGHT)
-    elif keys[pygame.K_s] and keys[pygame.K_a]:
-        return jnp.array(DOWNLEFT)
-    elif keys[pygame.K_s] and keys[pygame.K_d]:
-        return jnp.array(DOWNRIGHT)
-    elif keys[pygame.K_w]:
-        return jnp.array(UP)
-    elif keys[pygame.K_s]:
-        return jnp.array(DOWN)
-    elif keys[pygame.K_a]:
-        return jnp.array(LEFT)
-    elif keys[pygame.K_d]:
-        return jnp.array(RIGHT)
-    elif keys[pygame.K_LCTRL]:
-        return jnp.array(PLACE)
-    else:
-        return jnp.array(NOOP)
+# def get_human_action() -> chex.Array:
+#     keys = pygame.key.get_pressed()
+#     if keys[pygame.K_w] and keys[pygame.K_a]:
+#         return jnp.array(self.consts.UPLEFT)
+#     elif keys[pygame.K_w] and keys[pygame.K_d]:
+#         return jnp.array(self.consts.UPRIGHT)
+#     elif keys[pygame.K_s] and keys[pygame.K_a]:
+#         return jnp.array(self.consts.DOWNLEFT)
+#     elif keys[pygame.K_s] and keys[pygame.K_d]:
+#         return jnp.array(self.consts.DOWNRIGHT)
+#     elif keys[pygame.K_w]:
+#         return jnp.array(self.consts.UP)
+#     elif keys[pygame.K_s]:
+#         return jnp.array(self.consts.DOWN)
+#     elif keys[pygame.K_a]:
+#         return jnp.array(self.consts.LEFT)
+#     elif keys[pygame.K_d]:
+#         return jnp.array(self.consts.RIGHT)
+#     elif keys[pygame.K_LCTRL]:
+#         return jnp.array(self.consts.PLACE)
+#     else:
+#         return jnp.array(self.consts.NOOP)
 
 
 
@@ -157,16 +157,16 @@ class JaxOthello(JaxEnvironment[OthelloState, OthelloObservation, OthelloInfo, O
             reward_funcs = tuple(reward_funcs)
         self.reward_funcs = reward_funcs
         self.action_set = self.action_set = [
-            NOOP,
-            PLACE,
-            RIGHT,
-            LEFT,
-            UP,
-            DOWN,
-            UPLEFT,
-            UPRIGHT,
-            DOWNLEFT,
-            DOWNRIGHT
+            self.consts.NOOP,
+            self.consts.PLACE,
+            self.consts.RIGHT,
+            self.consts.LEFT,
+            self.consts.UP,
+            self.consts.DOWN,
+            self.consts.UPLEFT,
+            self.consts.UPRIGHT,
+            self.consts.DOWNLEFT,
+            self.consts.DOWNRIGHT
         ]
         self.obs_size = 130
 
@@ -174,17 +174,17 @@ class JaxOthello(JaxEnvironment[OthelloState, OthelloObservation, OthelloInfo, O
     def has_player_decided_field(self, field_choice_player, action: chex.Array):
         # field_choice_player: the current positioning of the disc -> it is not jet placed down
         # action may include the action FIRE to place the disc down
-        
-        is_place = jnp.equal(action, PLACE)
-        is_up = jnp.equal(action, UP)
-        is_right = jnp.equal(action, RIGHT)
-        is_down = jnp.equal(action, DOWN)
-        is_left = jnp.equal(action, LEFT)
-        is_upleft = jnp.equal(action, UPLEFT)
-        is_upright = jnp.equal(action, UPRIGHT)
-        is_downleft = jnp.equal(action, DOWNLEFT)
-        is_downright = jnp.equal(action, DOWNRIGHT)
-        
+
+        is_place = jnp.equal(action, self.consts.PLACE)
+        is_up = jnp.equal(action, self.consts.UP)
+        is_right = jnp.equal(action, self.consts.RIGHT)
+        is_down = jnp.equal(action, self.consts.DOWN)
+        is_left = jnp.equal(action, self.consts.LEFT)
+        is_upleft = jnp.equal(action, self.consts.UPLEFT)
+        is_upright = jnp.equal(action, self.consts.UPRIGHT)
+        is_downleft = jnp.equal(action, self.consts.DOWNLEFT)
+        is_downright = jnp.equal(action, self.consts.DOWNRIGHT)
+
         def place_disc(field_choice_player):
             return True, field_choice_player
 
@@ -374,13 +374,13 @@ class JaxOthello(JaxEnvironment[OthelloState, OthelloObservation, OthelloInfo, O
             curr_state = new_state
 
             # flip disc on the down side
-            new_state, discs_flippable, _, _ = jax.lax.fori_loop(0, FIELD_HEIGHT - x - 1, loop_horizontal_and_vertical_line_to_flip_discs, (curr_state, False, False, self.consts.FLIP_DOWN_SIDE))
+            new_state, discs_flippable, _, _ = jax.lax.fori_loop(0, self.consts.FIELD_HEIGHT - x - 1, loop_horizontal_and_vertical_line_to_flip_discs, (curr_state, False, False, self.consts.FLIP_DOWN_SIDE))
             new_state = jax.lax.cond(discs_flippable, lambda _: new_state, lambda _: curr_state, operand=None)
             valid_choice = valid_choice | discs_flippable
             curr_state = new_state
 
             # flip disc on the right side
-            new_state, discs_flippable, _, _ = jax.lax.fori_loop(0, FIELD_WIDTH - y - 1, loop_horizontal_and_vertical_line_to_flip_discs, (curr_state, False, False, self.consts.FLIP_RIGHT_SIDE))
+            new_state, discs_flippable, _, _ = jax.lax.fori_loop(0, self.consts.FIELD_WIDTH - y - 1, loop_horizontal_and_vertical_line_to_flip_discs, (curr_state, False, False, self.consts.FLIP_RIGHT_SIDE))
             new_state = jax.lax.cond(discs_flippable, lambda _: new_state, lambda _: curr_state, operand=None)
             valid_choice = valid_choice | discs_flippable
             curr_state = new_state
@@ -392,7 +392,7 @@ class JaxOthello(JaxEnvironment[OthelloState, OthelloObservation, OthelloInfo, O
             curr_state = new_state
 
             # flip disc on upper right side
-            gap_upper_border, gap_right_border = x, FIELD_WIDTH - y - 1
+            gap_upper_border, gap_right_border = x, self.consts.FIELD_WIDTH - y - 1
             it_number = jax.lax.cond((gap_upper_border < gap_right_border), lambda _: gap_upper_border, lambda _: gap_right_border, operand=None)
             new_state, discs_flippable, _, _ = jax.lax.fori_loop(0, it_number, loop_horizontal_and_vertical_line_to_flip_discs, (curr_state, False, False, self.consts.FLIP_UP_RIGHT_SIDE))
             new_state = jax.lax.cond(discs_flippable, lambda _: new_state, lambda _: curr_state, operand=None)
@@ -400,7 +400,7 @@ class JaxOthello(JaxEnvironment[OthelloState, OthelloObservation, OthelloInfo, O
             curr_state = new_state
 
             # flip disc on down right side
-            gap_down_border, gap_right_border = FIELD_WIDTH - x - 1, FIELD_WIDTH - y - 1
+            gap_down_border, gap_right_border = self.consts.FIELD_WIDTH - x - 1, self.consts.FIELD_WIDTH - y - 1
             it_number = jax.lax.cond((gap_down_border < gap_right_border), lambda _: gap_down_border, lambda _: gap_right_border, operand=None)
             new_state, discs_flippable, _, _ = jax.lax.fori_loop(0, it_number, loop_horizontal_and_vertical_line_to_flip_discs, (curr_state, False, False, self.consts.FLIP_DOWN_RIGHT_SIDE))
             new_state = jax.lax.cond(discs_flippable, lambda _: new_state, lambda _: curr_state, operand=None)
@@ -408,7 +408,7 @@ class JaxOthello(JaxEnvironment[OthelloState, OthelloObservation, OthelloInfo, O
             curr_state = new_state
 
             # flip disc on down left side
-            gap_down_border, gap_left_border = FIELD_WIDTH - x - 1, y
+            gap_down_border, gap_left_border = self.consts.FIELD_WIDTH - x - 1, y
             it_number = jax.lax.cond((gap_down_border < gap_left_border), lambda _: gap_down_border, lambda _: gap_left_border, operand=None)
             new_state, discs_flippable, _, _ = jax.lax.fori_loop(0, it_number, loop_horizontal_and_vertical_line_to_flip_discs, (curr_state, False, False, self.consts.FLIP_DOWN_LEFT_SIDE))
             new_state = jax.lax.cond(discs_flippable, lambda _: new_state, lambda _: curr_state, operand=None)
@@ -523,26 +523,26 @@ class JaxOthello(JaxEnvironment[OthelloState, OthelloObservation, OthelloInfo, O
                     valid_field, _, _ = jax.lax.fori_loop(0, x, check_horizontal_vertical_and_diagonal_line,  (valid_field, False, self.consts.FLIP_UP_SIDE))
 
                     # check disc on the down side
-                    valid_field, _, _ = jax.lax.fori_loop(0, FIELD_HEIGHT - x - 1, check_horizontal_vertical_and_diagonal_line, (valid_field, False, self.consts.FLIP_DOWN_SIDE))
+                    valid_field, _, _ = jax.lax.fori_loop(0, self.consts.FIELD_HEIGHT - x - 1, check_horizontal_vertical_and_diagonal_line, (valid_field, False, self.consts.FLIP_DOWN_SIDE))
 
                     # check disc on the right side
-                    valid_field, _, _ = jax.lax.fori_loop(0, FIELD_WIDTH - y - 1, check_horizontal_vertical_and_diagonal_line, (valid_field, False, self.consts.FLIP_RIGHT_SIDE))
-                    
+                    valid_field, _, _ = jax.lax.fori_loop(0, self.consts.FIELD_WIDTH - y - 1, check_horizontal_vertical_and_diagonal_line, (valid_field, False, self.consts.FLIP_RIGHT_SIDE))
+
                     # check disc on the left side
                     valid_field, _, _ = jax.lax.fori_loop(0, y, check_horizontal_vertical_and_diagonal_line, (valid_field, False, self.consts.FLIP_LEFT_SIDE))
                     
                     # check disc on upper right side
-                    gap_upper_border, gap_right_border = x, FIELD_WIDTH - y - 1
+                    gap_upper_border, gap_right_border = x, self.consts.FIELD_WIDTH - y - 1
                     it_number = jax.lax.cond((gap_upper_border < gap_right_border), lambda _: gap_upper_border, lambda _: gap_right_border, operand=None)
                     valid_field, _, _ = jax.lax.fori_loop(0, it_number, check_horizontal_vertical_and_diagonal_line, (valid_field, False, self.consts.FLIP_UP_RIGHT_SIDE))
                     
                     # check disc on down right side
-                    gap_down_border, gap_right_border = FIELD_WIDTH - x - 1, FIELD_WIDTH - y - 1
+                    gap_down_border, gap_right_border = self.consts.FIELD_WIDTH - x - 1, self.consts.FIELD_WIDTH - y - 1
                     it_number = jax.lax.cond((gap_down_border < gap_right_border), lambda _: gap_down_border, lambda _: gap_right_border, operand=None)
                     valid_field, _, _ = jax.lax.fori_loop(0, it_number, check_horizontal_vertical_and_diagonal_line, (valid_field, False, self.consts.FLIP_DOWN_RIGHT_SIDE))
                     
                     # check disc on down left side
-                    gap_down_border, gap_left_border = FIELD_WIDTH - x - 1, y
+                    gap_down_border, gap_left_border = self.consts.FIELD_WIDTH - x - 1, y
                     it_number = jax.lax.cond((gap_down_border < gap_left_border), lambda _: gap_down_border, lambda _: gap_left_border, operand=None)
                     valid_field, _, _ = jax.lax.fori_loop(0, it_number, check_horizontal_vertical_and_diagonal_line, (valid_field, False, self.consts.FLIP_DOWN_LEFT_SIDE))
                     
@@ -560,8 +560,8 @@ class JaxOthello(JaxEnvironment[OthelloState, OthelloObservation, OthelloInfo, O
                     lambda x: x,
                     valid_field
                 )
-            return jax.lax.fori_loop(0, FIELD_WIDTH, inner_loop, (valid_field))
-        valid_field = jax.lax.fori_loop(0, FIELD_HEIGHT, outer_loop, (valid_field))
+            return jax.lax.fori_loop(0, self.consts.FIELD_WIDTH, inner_loop, (valid_field))
+        valid_field = jax.lax.fori_loop(0, self.consts.FIELD_HEIGHT, outer_loop, (valid_field))
         return (curr_state, valid_field)
 
 
@@ -1796,8 +1796,8 @@ class JaxOthello(JaxEnvironment[OthelloState, OthelloObservation, OthelloInfo, O
                     ended
                 )
                 return ended
-            return jax.lax.fori_loop(0, FIELD_WIDTH, inner_loop, ended)
-        has_game_ended = jax.lax.fori_loop(0, FIELD_HEIGHT, outer_loop, True)
+            return jax.lax.fori_loop(0, self.consts.FIELD_WIDTH, inner_loop, ended)
+        has_game_ended = jax.lax.fori_loop(0, self.consts.FIELD_HEIGHT, outer_loop, True)
         has_game_ended = jax.lax.cond(
             jnp.logical_or(final__step_state.player_score == 0, final__step_state.enemy_score == 0),
             lambda _: True,
@@ -1864,10 +1864,10 @@ def load_sprites():
     MODULE_DIR = os.path.dirname(os.path.abspath(__file__))
 
     # Load sprites
-    player = jr.loadFrame(os.path.join(MODULE_DIR, "sprites/othello/player_white_disc.npy"), transpose=True)
-    enemy = jr.loadFrame(os.path.join(MODULE_DIR, "sprites/othello/enemy_black_disc.npy"), transpose=True)
+    player = jr.loadFrame(os.path.join(MODULE_DIR, "sprites/othello/player_white_disc.npy"), transpose=False)
+    enemy = jr.loadFrame(os.path.join(MODULE_DIR, "sprites/othello/enemy_black_disc.npy"), transpose=False)
 
-    bg = jr.loadFrame(os.path.join(MODULE_DIR, "sprites/othello/othello_background.npy"), transpose=True)
+    bg = jr.loadFrame(os.path.join(MODULE_DIR, "sprites/othello/othello_background.npy"), transpose=False)
 
     # TODO: get a correctly sized background image / resize the saved image..
     #bg = jax.image.resize(bg, (WIDTH, HEIGHT, 4), method='bicubic')
@@ -1918,7 +1918,7 @@ class OthelloRenderer(JAXGameRenderer):
         # Create empty raster with CORRECT orientation for atraJaxis framework
         # Note: For pygame, the raster is expected to be (width, height, channels)
         # where width corresponds to the horizontal dimension of the screen
-        raster = jnp.zeros((WIDTH, HEIGHT, 3))
+        raster = jnp.zeros((self.consts.HEIGHT, self.consts.WIDTH, 3))
 
         # Render Background - (0, 0) is top-left corner
         frame_bg = jr.get_sprite_frame(self.SPRITE_BG, 0)
@@ -1948,10 +1948,10 @@ class OthelloRenderer(JAXGameRenderer):
                         color
                     )
 
-                return jax.lax.fori_loop(0, FIELD_HEIGHT, inner_loop, carry)
+                return jax.lax.fori_loop(0, self.consts.FIELD_HEIGHT, inner_loop, carry)
 
             current_raster = raster
-            return jax.lax.fori_loop(0, FIELD_WIDTH, outer_loop, current_raster)
+            return jax.lax.fori_loop(0, self.consts.FIELD_WIDTH, outer_loop, current_raster)
         raster = set_discs_to_the_raster(raster, state.field.field_color)
 
         # rendering the disc in flipping modus to show where the current disc is 
@@ -2006,44 +2006,3 @@ class OthelloRenderer(JAXGameRenderer):
         )
 
         return raster
-
-
-# if __name__ == "__main__":
-#     # Initialize Pygame
-#     pygame.init()
-#     screen = pygame.display.set_mode((WINDOW_WIDTH, WINDOW_HEIGHT))
-#     pygame.display.set_caption("Othello Game")
-
-#     game = JaxOthello(frameskip=1, consts=OthelloConstants())
-
-#     # Create the JAX renderer
-#     renderer = OthelloRenderer()
-
-#     # get jitted functions
-#     jitted_step = jax.jit(game.step)
-#     jitted_reset = jax.jit(game.reset)
-
-#     obs, curr_state = jitted_reset()
-
-#     # Game Loop
-#     running = True
-#     move_delay = 0.15
-#     last_move_time = 0
-
-#     while running:
-#         now = time.time()
-
-#         for event in pygame.event.get():
-#             if event.type == pygame.QUIT:
-#                 running = False     
-
-#         if (now - last_move_time) > move_delay:
-#             action = get_human_action()
-#             obs, curr_state, reward, done, info = jitted_step(curr_state, action)
-#             last_move_time = now
-            
-#         # Render and display
-#         raster = renderer.render(curr_state)
-#         jr.update_pygame(screen, raster, 3, WIDTH, HEIGHT)
-
-#     pygame.quit()
