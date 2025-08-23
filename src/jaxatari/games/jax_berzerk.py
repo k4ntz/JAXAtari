@@ -1512,7 +1512,7 @@ class BerzerkRenderer(JAXGameRenderer):
         )
 
         # Draw enemies
-        color_cycle = ["yellow", "orange", "white", "green", "red", "yellow2", "pink", "yellow"]
+        color_cycle = ["yellow", "orange", "white", "green", "red", "blue", "yellow2", "pink"]
 
         def get_enemy_color_index(room_counter: jnp.ndarray) -> jnp.ndarray:
             num_colors = len(color_cycle)
@@ -1523,14 +1523,14 @@ class BerzerkRenderer(JAXGameRenderer):
             )
 
         color_names = jnp.array([
-            [255, 255, 0, 255],    # yellow
-            [255, 165, 0, 255],    # orange
-            [255, 255, 255, 255],  # white
-            [0, 255, 0, 255],      # green
-            [255, 0, 0, 255],      # red
-            [255, 255, 128, 255],  # yellow2
-            [255, 192, 203, 255],  # pink
-            [255, 255, 0, 255],    # yellow (wiederholung)
+            [210, 210, 91, 255],    # yellow
+            [186, 112, 69, 255],    # orange
+            [214, 214, 214, 255],  # white
+            [109, 210, 111, 255],      # green
+            [239, 127, 128, 255],      # red
+            [102, 158, 193, 255],      # blue
+            [227, 205, 115, 255],  # yellow2
+            [185, 96, 175, 255],  # pink
         ], dtype=jnp.uint8)
 
         def get_new_color(color_idx: jnp.ndarray) -> jnp.ndarray:
