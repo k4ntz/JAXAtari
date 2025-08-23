@@ -421,8 +421,56 @@ class JaxDonkeyKong(JaxEnvironment[DonkeyKongState, DonkeyKongObservation, Donke
     # Fire enemy
     @partial(jax.jit, static_argnums=(0,))
     def _fire_step(self, state):
+        # somehow in the original game: fires are not spanwning simultaneously, but after frame by frame
+        def respawn_new_fires(state):
+            destroyed = jax.lax.cond(
+                jnp.logical_and(state.fires.destroyed[0] == False, jnp.logical_and(state.fires.destroyed[1], jnp.logical_and(state.fires.destroyed[2], state.fires.destroyed[3]))),
+                lambda _: state.fires.destroyed.at[1].set(False),
+                lambda _: jax.lax.cond(
+                    jnp.logical_and(state.fires.destroyed[0] == False, jnp.logical_and(state.fires.destroyed[1] == False, jnp.logical_and(state.fires.destroyed[2], state.fires.destroyed[3]))),
+                    lambda _: state.fires.destroyed.at[2].set(False),
+                    lambda _: jax.lax.cond(
+                        jnp.logical_and(state.fires.destroyed[0] == False, jnp.logical_and(state.fires.destroyed[1] == False, jnp.logical_and(state.fires.destroyed[2] == False, state.fires.destroyed[3]))),
+                        lambda _: state.fires.destroyed.at[3].set(False),
+                        lambda _: state.fires.destroyed,
+                        operand=None
+                    ),
+                    operand=None
+                ),
+                operand=None 
+            )
+            fires = state.fires._replace(destroyed=destroyed)
+            new_state = state._replace(fires=fires)
+            return new_state
+        new_state = respawn_new_fires(state)
 
-        return state
+        # implement moving of fires
+        def fire_move(state):
+            # for loop implements movement for each fire
+            def each_fire_movement(i, state):
+                # movement can only be towards right or left
+                new_fire_y = jax.lax.cond(
+                    state.fires.moving_direction[i] == self.consts.MOVING_RIGHT,
+                    lambda _: state.fires.fire_y[i] + self.consts.FIRE_MOVING_SPEED,
+                    lambda _: state.fires.fire_y[i] - self.consts.FIRE_MOVING_SPEED,
+                    operand=None
+                )
+                fire_y = state.fires.fire_y.at[i].set(new_fire_y)
+                fires = state.fires._replace(fire_y = fire_y)
+                new_state = state._replace(fires=fires)
+                fire_can_move = jnp.logical_not(state.fires.destroyed[i])
+                return jax.lax.cond(
+                    fire_can_move,
+                    lambda _: new_state,
+                    lambda _: state,
+                    operand=None
+                )
+            new_state = jax.lax.fori_loop(0, len(state.fires.fire_x), each_fire_movement, state)
+
+            return new_state
+        new_state = fire_move(new_state)
+
+        return new_state
 
     # Level 2 enemy step
     # Traps 
@@ -506,10 +554,12 @@ class JaxDonkeyKong(JaxEnvironment[DonkeyKongState, DonkeyKongObservation, Donke
             )
         new_state = jax.lax.fori_loop(0, len(new_state.traps.trap_x), check_if_mario_can_fall_trap, new_state)
 
+        # check if all traps are triggered --> if so player succefully cleared the level 2 
+        # set mario_reached_goal = True to indicated other function to reset the level to level 1.
         def check_all_traps_triggered(state):
             all_traps_triggered = jnp.all(state.traps.triggered)
             game_freeze_start = jax.lax.cond(
-                state.mario_reached_goal == False,
+                jnp.logical_and(state.mario_reached_goal == False, all_traps_triggered == True),
                 lambda _: state.step_counter,
                 lambda _: state.game_freeze_start,
                 operand=None
@@ -1650,8 +1700,8 @@ class JaxDonkeyKong(JaxEnvironment[DonkeyKongState, DonkeyKongObservation, Donke
             started_state_level_2 = state._replace(
                 game_started = True,
                 fires = FirePosition(
-                    fire_x = jnp.array([self.bar_linear_equation(5, self.consts.FIRE_START_Y, 2) - self.consts.FIRE_HIT_BOX_X, -1., -1., -1.]).astype(jnp.float32),
-                    fire_y = jnp.array([self.consts.FIRE_START_Y, -1., -1., -1.]).astype(jnp.float32),
+                    fire_x = jnp.array([self.bar_linear_equation(5, self.consts.FIRE_START_Y, 2) - self.consts.FIRE_HIT_BOX_X, self.bar_linear_equation(4, self.consts.FIRE_START_Y, 2) - self.consts.FIRE_HIT_BOX_X, self.bar_linear_equation(3, self.consts.FIRE_START_Y, 2) - self.consts.FIRE_HIT_BOX_X, self.bar_linear_equation(2, self.consts.FIRE_START_Y, 2) - self.consts.FIRE_HIT_BOX_X]).astype(jnp.float32),
+                    fire_y = jnp.array([self.consts.FIRE_START_Y, self.consts.FIRE_START_Y, self.consts.FIRE_START_Y, self.consts.FIRE_START_Y]).astype(jnp.float32),
                     moving_direction = jnp.array([self.consts.MOVING_RIGHT, self.consts.MOVING_LEFT, self.consts.MOVING_RIGHT, self.consts.MOVING_LEFT]).astype(jnp.int32),
                     stage = jnp.array([5, 4, 3, 2]).astype(jnp.int32),
                     destroyed=jnp.array([False, True, True, True]).astype(bool)
