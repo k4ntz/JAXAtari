@@ -20,7 +20,6 @@ Top Priorities:
 - make sure that all of the enemies follow the dotted lines/make the beams follow the dotted lines
 For later:
 - Check the sentinal ship constants/Optimize the code/remove unnecessary code
-- Adjust the spawn rate of green blockers in sectors 1 - 5 (currently the sentinel moves faster through the screen than they can spawn) -> somewhat done
 - Documentation
 
 Nice to have:
@@ -857,12 +856,25 @@ class BeamRiderEnv(JaxEnvironment[BeamRiderState, BeamRiderObservation, BeamRide
         start_diving = patrolling_horizon & patrol_time_expired & should_dive
         continue_patrolling = patrolling_horizon & patrol_time_expired & ~should_dive
 
-        # DIVING BEHAVIOR: Move down when diving
-        diving = horizon_patrol_mask & (current_y > self.constants.HORIZON_LINE_Y) & (current_y < 150)
-        horizon_new_y_diving = current_y + 2.0  # Move down when diving
+        # DIVING BEHAVIOR: Use bounce_count field to track diving state for horizon patrol saucers
+        # (bounce_count is unused for white saucers, so we can repurpose it as a diving flag)
+        current_diving_flag = enemies[:, 8]  # bounce_count field, 0 = not diving, 1 = diving
 
+        # Set diving flag when starting to dive
+        new_diving_flag = jnp.where(
+            start_diving,
+            1.0,  # Set diving flag
+            jnp.where(
+                should_be_moving_up | (current_y > 200),  # Clear diving flag when reversing or off screen
+                0.0,
+                current_diving_flag  # Keep current state
+            )
+        )
+
+        # Combined diving condition: just started diving OR already has diving flag set
+        diving = horizon_patrol_mask & ((start_diving) | (current_diving_flag == 1.0)) & ~should_be_moving_up
         # HORIZONTAL PATROL BEHAVIOR (only when at horizon and not diving)
-        doing_horizontal_patrol = patrolling_horizon & ~start_diving
+        doing_horizontal_patrol = patrolling_horizon & ~diving
 
         # Decide on new patrol behavior when pause ends
         pause_ending = doing_horizontal_patrol & (jump_timer == 1) & (new_jump_timer == 0)
@@ -947,7 +959,7 @@ class BeamRiderEnv(JaxEnvironment[BeamRiderState, BeamRiderObservation, BeamRide
                 jnp.where(
                     should_be_moving_up,  # Apply universal reverse
                     current_y + self.constants.WHITE_SAUCER_REVERSE_SPEED_FAST,
-                    self.constants.HORIZON_LINE_Y  # Stay at horizon
+                    current_y + self.constants.HORIZON_PATROL_SPEED  # FIXED: Move down slowly while patrolling
                 )
             )
         )
