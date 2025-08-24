@@ -1247,8 +1247,8 @@ LEFT_LIT_UP_TARGET_LARGE_VERTICAL_SCENE_OBJECT = SceneObject(
 LEFT_LIT_UP_TARGET_LARGE_HORIZONTAL_SCENE_OBJECT = SceneObject(
     hit_box_height=jnp.array(DIAMOND_HORIZONTAL_RECTANGLE_BOUNDING_BOX_HEIGHT),  # type: ignore
     hit_box_width=jnp.array(DIAMOND_HORIZONTAL_RECTANGLE_BOUNDING_BOX_WIDTH),  # type: ignore
-    hit_box_x_offset=jnp.array(60),  # type: ignore
-    hit_box_y_offset=jnp.array(30),  # type: ignore
+    hit_box_x_offset=jnp.array(61),  # type: ignore
+    hit_box_y_offset=jnp.array(28),  # type: ignore
     reflecting=jnp.array(0),  # type: ignore
     score_type=jnp.array(6),  # type: ignore
     variant=jnp.array(0),
@@ -4114,7 +4114,7 @@ class VideoPinballRenderer(JAXGameRenderer):
             color > 0, lambda r: handle_color_cycling(r, color), lambda r: r, raster
         )
 
-        # raster = render_scene_object_boundaries(raster)
+        raster = render_scene_object_boundaries(raster)
 
         return raster
 
