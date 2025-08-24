@@ -34,7 +34,7 @@ jobs:
       - name: Set final matrix
         id: set-matrix
         run: |
-          echo "matrix='${{ steps.set-matrix-pr.outputs.matrix || steps.set-matrix-push.outputs.matrix }}'" >> $GITHUB_OUTPUT
+          echo "matrix=${{ steps.set-matrix-pr.outputs.matrix || steps.set-matrix-push.outputs.matrix }}" >> $GITHUB_OUTPUT
 
   run-tests:
     needs: prepare-matrix
