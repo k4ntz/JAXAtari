@@ -365,19 +365,19 @@ STEP_WIDTH = 4
 
 # Inner Objects Positions and Dimensions
 
-VERTICAL_BAR_HEIGHT = 30
-VERTICAL_BAR_WIDTH = 3
+VERTICAL_BAR_HEIGHT = 32
+VERTICAL_BAR_WIDTH = 4
 
 ROLLOVER_BAR_DISTANCE = 12  # Distance between the left and right rollover bar
 
-BUMPER_WIDTH = 15
-BUMPER_HEIGHT = 30
+BUMPER_WIDTH = 16
+BUMPER_HEIGHT = 32
 
 LEFT_COLUMN_X_OFFSET = 40
 MIDDLE_COLUMN_X_OFFSET = 72
 RIGHT_COLUMN_X_OFFSET = 104
 TOP_ROW_Y_OFFSET = 48
-MIDDLE_ROW_Y_OFFSET = 113
+MIDDLE_ROW_Y_OFFSET = 112
 BOTTOM_ROW_Y_OFFSET = 177
 
 MIDDLE_BAR_X = 72
@@ -393,7 +393,7 @@ MIDDLE_BAR_HEIGHT = 8
 BOUNDING_BOX_1_2 = jnp.ones((1, 2)).astype(jnp.bool)
 BOUNDING_BOX_2_3 = jnp.ones((2, 3)).astype(jnp.bool)
 BOUNDING_BOX_2_4 = jnp.ones((2, 4)).astype(jnp.bool)
-BOUDNING_BOX_1_5 = jnp.ones((1, 5)).astype(jnp.bool)
+BOUNDING_BOX_1_5 = jnp.ones((1, 5)).astype(jnp.bool)
 BOUNDING_BOX_1_4 = jnp.ones((1, 4)).astype(jnp.bool)
 BOUNDING_BOX_2_5 = jnp.ones((2, 5)).astype(jnp.bool)
 BOUNDING_BOX_2_6 = jnp.ones((2, 6)).astype(jnp.bool)
@@ -1316,7 +1316,7 @@ SPECIAL_LIT_UP_TARGET_LARGE_HORIZONTAL_SCENE_OBJECT = SceneObject(
 
 LEFT_ROLLOVER_SCENE_OBJECT = SceneObject(
     hit_box_height=jnp.array(12),  # type: ignore
-    hit_box_width=jnp.array(6),  # type: ignore
+    hit_box_width=jnp.array(8),  # type: ignore
     hit_box_x_offset=jnp.array(44),  # type: ignore
     hit_box_y_offset=jnp.array(58),  # type: ignore
     reflecting=jnp.array(0),  # type: ignore
@@ -1326,7 +1326,7 @@ LEFT_ROLLOVER_SCENE_OBJECT = SceneObject(
 
 ATARI_ROLLOVER_SCENE_OBJECT = SceneObject(
     hit_box_height=jnp.array(12),  # type: ignore
-    hit_box_width=jnp.array(6),  # type: ignore
+    hit_box_width=jnp.array(8),  # type: ignore
     hit_box_x_offset=jnp.array(108),  # type: ignore
     hit_box_y_offset=jnp.array(58),  # type: ignore
     reflecting=jnp.array(0),  # type: ignore
@@ -2937,6 +2937,8 @@ def process_objects_hit(state: VideoPinballState, objects_hit):
     # [0: no score, 1: Bumper, 2: Spinner, 3: Left Rollover, 4: Atari Rollover,
     # 5: Special Lit Up Target, 6: Left Lit Up Target, 7: Middle Lit Up Target, 8: Right Lit Up Target]
 
+    jax.debug.print("Object Hit List: {}", objects_hit)
+
     # Bumper points
     score = state.score
     active_targets = state.active_targets
@@ -2977,7 +2979,7 @@ def process_objects_hit(state: VideoPinballState, objects_hit):
     )
 
     # Bottom Bonus Target
-    score += jnp.where(objects_hit[6], 1100, 0)
+    score += jnp.where(objects_hit[5], 1100, 0)
     active_targets, color_cycling = jax.lax.cond(
         objects_hit[5],
         lambda s, cc: (
@@ -2992,7 +2994,7 @@ def process_objects_hit(state: VideoPinballState, objects_hit):
     # Give score for hitting the rollover and increase its number
     score += jnp.where(objects_hit[3], 100, 0)
     rollover_counter = jax.lax.cond(
-        objects_hit[7],
+        objects_hit[3],
         lambda s: s + 1,
         lambda s: s,
         operand=rollover_counter,
@@ -3001,7 +3003,7 @@ def process_objects_hit(state: VideoPinballState, objects_hit):
     # Give score for hitting the Atari symbol and make a symbol appear at the bottom
     score += jnp.where(objects_hit[4], 100, 0)
     atari_symbols = jax.lax.cond(
-        jnp.logical_and(objects_hit[8], atari_symbols < 4),
+        jnp.logical_and(objects_hit[4], atari_symbols < 4),
         lambda s: s + 1,
         lambda s: s,
         operand=atari_symbols,
