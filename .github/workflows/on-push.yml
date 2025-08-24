@@ -1,0 +1,29 @@
+# .github/workflows/on-push.yml
+name: Push Tests
+
+on:
+  push:
+    branches:
+      - master
+
+jobs:
+  prepare-matrix:
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.set-matrix-push.outputs.matrix }}
+    steps:
+      - name: Check out code
+        uses: actions/checkout@v4
+
+      - name: Generate matrix of all game files for push
+        id: set-matrix-push
+        run: |
+          cd src/jaxatari/games/
+          GAME_MATRIX=$(find . -type f -name "jax_*.py" -printf "%f\n" | sed -e 's/^jax_//' -e 's/\.py$//' | jq -R . | jq -cs .)
+          echo "matrix=$GAME_MATRIX" >> $GITHUB_OUTPUT
+
+  call-reusable-workflow:
+    needs: prepare-matrix
+    uses: ./.github/workflows/reusable-run-tests.yml
+    with:
+      game_matrix: ${{ needs.prepare-matrix.outputs.matrix }}
