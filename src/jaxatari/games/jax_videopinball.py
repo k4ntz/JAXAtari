@@ -2937,8 +2937,6 @@ def process_objects_hit(state: VideoPinballState, objects_hit):
     # [0: no score, 1: Bumper, 2: Spinner, 3: Left Rollover, 4: Atari Rollover,
     # 5: Special Lit Up Target, 6: Left Lit Up Target, 7: Middle Lit Up Target, 8: Right Lit Up Target]
 
-    jax.debug.print("Object Hit List: {}", objects_hit)
-
     # Bumper points
     score = state.score
     active_targets = state.active_targets
