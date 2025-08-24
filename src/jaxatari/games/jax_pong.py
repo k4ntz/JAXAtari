@@ -10,8 +10,6 @@ from jaxatari.renderers import JAXGameRenderer
 from jaxatari.rendering import jax_rendering_utils as jr
 from jaxatari.environment import JaxEnvironment, JAXAtariAction as Action
 
-# This is an irrelevant change to trigger the testing pipeline
-
 class PongConstants(NamedTuple):
     MAX_SPEED: int = 12
     BALL_SPEED: chex.Array = jnp.array([-1, 1])
