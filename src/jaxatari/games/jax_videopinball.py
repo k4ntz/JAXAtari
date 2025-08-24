@@ -2574,7 +2574,7 @@ def special_velocity_change():
     pass
 
 # produce updated values (inline-style, returns new values so you can reassign)
-def _update_tilt(state, ball_vel_x):
+def _update_tilt(state: VideoPinballState, ball_vel_x):
     # branch executed when not currently in tilt mode
     def _not_tilt_branch(state, ball_vel_x):
         # branch when there *is* a nudge (nudge_direction != 0)
@@ -2609,7 +2609,7 @@ def _update_tilt(state, ball_vel_x):
 
             return tilt_mode_from_counter, tilt_counter_capped, ball_vel_x_new
 
-        def _no_nudge_branch(state, ball_vel_x):
+        def _no_nudge_branch(state: VideoPinballState, ball_vel_x):
             dec_cond = jnp.equal(jnp.mod(state.step_counter, TILT_COUNT_DECREASE_INTERVAL), 0)
             tilt_counter_dec = jax.lax.cond(
                 dec_cond,
@@ -2620,7 +2620,7 @@ def _update_tilt(state, ball_vel_x):
             tilt_counter_nonneg = jnp.maximum(tilt_counter_dec, 0)
             return jnp.array(False), tilt_counter_nonneg, ball_vel_x
 
-        return jax.lax.cond(jnp.not_equal(nudge_direction, 0), _nudge_branch, _no_nudge_branch, operand=(state, ball_vel_x))
+        return jax.lax.cond(jnp.not_equal(state.nudge_direction, 0), _nudge_branch, _no_nudge_branch, operand=(state, ball_vel_x))
 
 
     # if already in tilt_mode: keep values unchanged
