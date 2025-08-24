@@ -611,7 +611,7 @@ class JaxOthello(JaxEnvironment[OthelloState, OthelloObservation, OthelloInfo, O
             #Calculate the strategic value (score) of the current_square itself
             ((score, _), skip_secondary_eval) = self.calculate_strategic_tile_score(i, game_field, jax.lax.cond(default_pos[0] == -2147483648, lambda _: (0,0),lambda _: default_pos, None), difficulty)
 
-            jax.debug.print("score: {}, skip_secondary_eval: {}", score, skip_secondary_eval)
+            #jax.debug.print("score: {}, skip_secondary_eval: {}", score, skip_secondary_eval)
             secondary_tile = jax.lax.cond(
                 skip_secondary_eval,
                 lambda _: (-2147483648, -2147483648),
@@ -634,7 +634,7 @@ class JaxOthello(JaxEnvironment[OthelloState, OthelloObservation, OthelloInfo, O
         
         #only execute the strategic score calculation if tiles were flipped = is a valid move
         #jax.debug.print(str(tiles_flipped != jnp.array(-2147483648, dtype=jnp.int32)))
-        jax.debug.print("tiles_flipped: {}", tiles_flipped != -2147483648)
+        #jax.debug.print("tiles_flipped: {}", tiles_flipped != -2147483648)
 
         args = (i, game_field, default_pos, difficulty, secondary_tile)
         score = jax.lax.cond(tiles_flipped != -2147483648,
@@ -1751,8 +1751,10 @@ class JaxOthello(JaxEnvironment[OthelloState, OthelloObservation, OthelloInfo, O
             operand=None
         )
 
+        #check whether there is a valid move for the bot, otherwise mark the game as ended
+        has_game_ended = jnp.logical_not(self.check_if_there_is_a_valid_choice(new_state, white_player=False)[1])
         # now enemy step are required
-        # for now - choose a random field if a given step by agent/human was valid
+
         def condition_fun(value):
             valid_choice, new_state, _ = value
             valid_choice = jnp.logical_not(valid_choice)
@@ -1787,17 +1789,23 @@ class JaxOthello(JaxEnvironment[OthelloState, OthelloObservation, OthelloInfo, O
         )
 
         # check if game is ended
-        def outer_loop(i, ended):
-            def inner_loop(j, ended):
-                ended = jax.lax.cond(
-                    final__step_state.field.field_color[i,j] == FieldColor.EMPTY,
-                    lambda _: False,
-                    lambda x: x,
-                    ended
-                )
-                return ended
-            return jax.lax.fori_loop(0, self.consts.FIELD_WIDTH, inner_loop, ended)
-        has_game_ended = jax.lax.fori_loop(0, self.consts.FIELD_HEIGHT, outer_loop, True)
+        # def outer_loop(i, ended):
+        #     def inner_loop(j, ended):
+        #         ended = jax.lax.cond(
+        #             final__step_state.field.field_color[i,j] == FieldColor.EMPTY,
+        #             lambda _: False,
+        #             lambda x: x,
+        #             ended
+        #         )
+        #         return ended
+        #     return jax.lax.fori_loop(0, self.consts.FIELD_WIDTH, inner_loop, ended)
+        #has_game_ended = jax.lax.fori_loop(0, self.consts.FIELD_HEIGHT, outer_loop, True)
+        has_game_ended = jax.lax.cond(has_game_ended,
+            lambda _: True,
+            lambda x: jnp.logical_not(self.check_if_there_is_a_valid_choice(final__step_state, white_player=True)[1]),
+            has_game_ended
+        )
+
         has_game_ended = jax.lax.cond(
             jnp.logical_or(final__step_state.player_score == 0, final__step_state.enemy_score == 0),
             lambda _: True,
@@ -1805,6 +1813,8 @@ class JaxOthello(JaxEnvironment[OthelloState, OthelloObservation, OthelloInfo, O
             has_game_ended
         )
         final__step_state = final__step_state._replace(end_of_game_reached=has_game_ended)
+
+        jax.debug.print("has_game_ended: {}, Valid Choice: {}", final__step_state.end_of_game_reached, self.check_if_there_is_a_valid_choice(final__step_state, white_player=True)[1])
 
         done = self._get_done(final__step_state)
         env_reward = self._get_env_reward(state, final__step_state)
