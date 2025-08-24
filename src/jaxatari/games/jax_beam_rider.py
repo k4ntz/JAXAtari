@@ -570,8 +570,7 @@ class BeamRiderEnv(JaxEnvironment[BeamRiderState, BeamRiderObservation, BeamRide
         )
 
         # Set ship x position to exactly match the beam center
-        new_x = self.beam_positions[new_beam_position] - self.constants.SHIP_WIDTH // 2
-
+        new_x = self._get_beam_x_at_y(new_beam_position, ship.y) - self.constants.SHIP_WIDTH // 2
         return state.replace(ship=ship.replace(x=new_x, beam_position=new_beam_position))
 
     @partial(jax.jit, static_argnums=(0,))
@@ -768,7 +767,7 @@ class BeamRiderEnv(JaxEnvironment[BeamRiderState, BeamRiderObservation, BeamRide
 
         # ONLY HANDLE BEAM CHANGING - let REVERSE_UP pattern handle the actual retreat
         changing_beam_before_retreat = shooting_mask & is_retreating & has_beam_change_timer
-        retreat_target_x = self.beam_positions[target_beam] - self.constants.ENEMY_WIDTH // 2
+        retreat_target_x = jax.vmap(self._get_beam_x_at_y)(target_beam, current_y) - self.constants.ENEMY_WIDTH // 2
         retreat_x_diff = retreat_target_x - current_x
         retreat_close_to_target = jnp.abs(retreat_x_diff) <= 3
 
@@ -915,7 +914,8 @@ class BeamRiderEnv(JaxEnvironment[BeamRiderState, BeamRiderObservation, BeamRide
         )
 
         # Calculate movement toward target beam (only when doing horizontal patrol and not paused)
-        target_x_pos = self.beam_positions[horizon_new_target_beam] - self.constants.ENEMY_WIDTH // 2
+        target_x_pos = jax.vmap(self._get_beam_x_at_y)(horizon_new_target_beam,
+                                                       current_y) - self.constants.ENEMY_WIDTH // 2
         x_diff = target_x_pos - current_x
         close_to_target = jnp.abs(x_diff) <= 3
 
@@ -1021,8 +1021,7 @@ class BeamRiderEnv(JaxEnvironment[BeamRiderState, BeamRiderObservation, BeamRide
         )
 
         # Calculate target position
-        jump_target_x = self.beam_positions[jump_new_target_beam] - self.constants.ENEMY_WIDTH // 2
-
+        jump_target_x = jax.vmap(self._get_beam_x_at_y)(jump_new_target_beam, current_y) - self.constants.ENEMY_WIDTH // 2
         # Smooth horizontal movement toward target (ONLY when moving down)
         jump_x_diff = jump_target_x - current_x
         movement_needed = jnp.abs(jump_x_diff) > self.constants.WHITE_SAUCER_BEAM_SNAP_DISTANCE
@@ -1486,13 +1485,13 @@ class BeamRiderEnv(JaxEnvironment[BeamRiderState, BeamRiderObservation, BeamRide
         # Choose random beam for rejuvenator spawning
         rng_key, rejuv_beam_key = random.split(rng_key)
         rejuv_spawn_beam = random.randint(rejuv_beam_key, (), 0, self.constants.NUM_BEAMS)
-        rejuv_spawn_x = self.beam_positions[rejuv_spawn_beam] - self.constants.ENEMY_WIDTH // 2
         rejuv_spawn_y = self.constants.ENEMY_SPAWN_Y
+        rejuv_spawn_x = self._get_beam_x_at_y(rejuv_spawn_beam, rejuv_spawn_y) - self.constants.ENEMY_WIDTH // 2
 
         # Regular enemy spawn (from top, random beam)
         regular_spawn_beam = random.randint(subkey3, (), 0, self.constants.NUM_BEAMS)
-        regular_spawn_x = self.beam_positions[regular_spawn_beam] - self.constants.ENEMY_WIDTH // 2
         regular_spawn_y = self.constants.ENEMY_SPAWN_Y
+        regular_spawn_x = self._get_beam_x_at_y(regular_spawn_beam, regular_spawn_y) - self.constants.ENEMY_WIDTH // 2
 
         # Choose final spawn position based on enemy type
         spawn_x = jnp.where(
@@ -2017,6 +2016,25 @@ class BeamRiderEnv(JaxEnvironment[BeamRiderState, BeamRiderObservation, BeamRide
         return enemy_type
 
     @partial(jax.jit, static_argnums=(0,))
+    def _get_beam_x_at_y(self, beam_index: int, y_pos: float) -> float:
+        """Calculate the correct X position for a given beam at a specific Y position"""
+        height = self.constants.SCREEN_HEIGHT
+        width = self.constants.SCREEN_WIDTH
+        top_margin = int(height * 0.12)
+        bottom_margin = int(height * 0.14)
+        center_x = width / 2
+        y0 = height - bottom_margin
+        y1 = top_margin
+
+        x0 = self.beam_positions[beam_index]
+        x1 = center_x + (x0 - center_x) * 0.3
+        t = jnp.clip((y_pos - y0) / (y1 - y0), 0.0, 1.0)
+        x_perspective = x0 + (x1 - x0) * t
+
+        return x_perspective
+
+
+    @partial(jax.jit, static_argnums=(0,))
     def _update_enemies(self, state: BeamRiderState) -> BeamRiderState:
         """Update enemy positions - CORRECTED GREEN BOUNCE CRAFT MOVEMENT"""
 
@@ -2099,9 +2117,12 @@ class BeamRiderEnv(JaxEnvironment[BeamRiderState, BeamRiderObservation, BeamRide
             tracker_current_target_beam  # Keep current target
         )
 
+        # Broadcast the scalar beam to match tracker array size
+        current_player_beam_array = jnp.full_like(tracker_y, current_player_beam, dtype=jnp.int32)
         new_target_x = jnp.where(
             should_change_course,
-            self.beam_positions[current_player_beam],  # New beam X position
+            jax.vmap(self._get_beam_x_at_y)(current_player_beam_array, tracker_y),
+            # New beam X position with 3D perspective
             tracker_target_x  # Keep current target X
         )
 
@@ -2171,7 +2192,7 @@ class BeamRiderEnv(JaxEnvironment[BeamRiderState, BeamRiderObservation, BeamRide
 
         # Player beam detection (only for deciding to move down, not for course changes)
         player_beam = state.ship.beam_position
-        player_beam_x = self.beam_positions[player_beam]
+        player_beam_x = self._get_beam_x_at_y(player_beam, bounce_y)
         BEAM_THRESHOLD = 12.0
         is_on_player_beam = jnp.abs(bounce_x - player_beam_x) < BEAM_THRESHOLD
 
@@ -2681,7 +2702,7 @@ class BeamRiderEnv(JaxEnvironment[BeamRiderState, BeamRiderObservation, BeamRide
         center_beam = self.constants.INITIAL_BEAM
         new_ship_x = jnp.where(
             any_ship_collision,
-            self.beam_positions[center_beam] - self.constants.SHIP_WIDTH // 2,
+            self._get_beam_x_at_y(center_beam, state.ship.y) - self.constants.SHIP_WIDTH // 2,
             state.ship.x
         )
         new_ship_beam = jnp.where(
@@ -3257,7 +3278,7 @@ class BeamRiderRenderer(JAXGameRenderer):
 
     @partial(jax.jit, static_argnums=(0,))
     def _draw_3d_grid(self, screen: chex.Array, frame_count: int) -> chex.Array:
-        """Draw 3D grid with animated horizontal lines and 5 vertical beam positions"""
+        """Draw 3D grid with animated horizontal lines and 5 vertical dotted beam positions"""
 
         height = self.constants.SCREEN_HEIGHT
         width = self.constants.SCREEN_WIDTH
@@ -3275,8 +3296,6 @@ class BeamRiderRenderer(JAXGameRenderer):
 
         # === Horizontal Lines ===
         num_hlines = 7  # Number of animated lines
-        speed = 1  # Pixels per frame (for timing)
-        spacing = grid_height // (num_hlines + 1)
         phase = (frame_count * 0.003) % 1.0  # Smooth looping animation phase
 
         def draw_hline(i, scr):
@@ -3290,40 +3309,39 @@ class BeamRiderRenderer(JAXGameRenderer):
         # Draw each horizontal line
         screen = jax.lax.fori_loop(0, num_hlines, draw_hline, screen)
 
-        # === Vertical Lines (5 beams) ===
-        # Use the actual beam positions for drawing the grid
+        # === Vertical Dotted Lines (5 beams with 3D perspective) ===
         beam_positions = self.beam_positions
-
         center_x = width / 2
         y0 = height - bottom_margin  # Line starts here (bottom)
-        y1 = -height * 0.7  # Line vanishes toward horizon (off-screen)
+        y1 = top_margin  # Line converges toward horizon
 
         def draw_vline(i, scr):
-            # Starting x position at bottom
+            # Starting x position at bottom (beam position)
             x0 = beam_positions[i]
             # Ending x position at top (converge toward center for 3D effect)
             x1 = center_x + (x0 - center_x) * 0.3  # Converge partially toward center
 
-            # Scale y range so lines fade before reaching top_margin
-            t_top = (top_margin - y0) / (y1 - y0)
-            t_top = jnp.clip(t_top, 0.0, 1.0)
-
-            num_steps = 200
-            dot_spacing = 25  # Only draw dots every N steps for stylized effect
+            # Number of dots along the line
+            num_steps = 120
+            dot_spacing = 8  # Draw dots every N steps for dotted effect
 
             def body_fn(j, scr_inner):
-                # Parametric interpolation along line
+                # Parametric interpolation along line (0.0 to 1.0)
                 t = j / (num_steps - 1)
-                t_clipped = t * t_top
 
-                y = y0 + (y1 - y0) * t_clipped
-                x = x0 + (x1 - x0) * t_clipped
+                # Interpolate position along the 3D perspective line
+                y = y0 + (y1 - y0) * t
+                x = x0 + (x1 - x0) * t
 
+                # Convert to integer pixel coordinates
                 xi = jnp.clip(jnp.round(x).astype(int), 0, width - 1)
                 yi = jnp.clip(jnp.round(y).astype(int), 0, height - 1)
 
+                # Only draw dots at specified intervals to create dotted effect
+                should_draw_dot = (j % dot_spacing == 0) & (yi >= top_margin) & (yi <= y0)
+
                 return jax.lax.cond(
-                    j % dot_spacing == 0,  # Place dot only at intervals
+                    should_draw_dot,
                     lambda s: s.at[yi, xi].set(line_color),  # Set pixel color
                     lambda s: s,  # Else do nothing
                     scr_inner
@@ -3331,11 +3349,10 @@ class BeamRiderRenderer(JAXGameRenderer):
 
             return jax.lax.fori_loop(0, num_steps, body_fn, scr)
 
-        # Draw all 5 vertical beam lines
+        # Draw all 5 vertical dotted beam lines
         screen = jax.lax.fori_loop(0, self.constants.NUM_BEAMS, draw_vline, screen)
 
         return screen
-
     @partial(jax.jit, static_argnums=(0,))
     def _draw_torpedo_projectiles(self, screen: chex.Array, torpedo_projectiles: chex.Array) -> chex.Array:
         """Draw all active torpedo projectiles - vectorized for JIT"""
