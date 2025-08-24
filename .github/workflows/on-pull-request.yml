@@ -3,6 +3,8 @@ name: PR Tests
 
 on:
   pull_request:
+    branches-ignore:
+      - master
 
 jobs:
   prepare-matrix:
