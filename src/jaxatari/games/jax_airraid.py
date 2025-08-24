@@ -19,30 +19,30 @@ HEIGHT = 210
 # Constants for player
 PLAYER_WIDTH = 14
 PLAYER_HEIGHT = 12
-PLAYER_SPEED = 4
+PLAYER_SPEED = 5
 PLAYER_INITIAL_X = 80
 PLAYER_INITIAL_Y = 140
 
 # Constants for buildings
-NUM_BUILDINGS = 3
-BUILDING_WIDTH = 25
+NUM_BUILDINGS = 2
+BUILDING_WIDTH = 50
 BUILDING_HEIGHT = 25
-MAX_BUILDING_DAMAGE = 14
+MAX_BUILDING_DAMAGE = 6
 BUILDING_INITIAL_Y = 160
 BUILDING_VELOCITY = 1  # Building moves to the right
-BUILDING_SPACING = 70
+BUILDING_SPACING = 90
 
-# Height and Y position based on damage level
-BUILDING_HEIGHTS = jnp.array([225, 23, 21, 19, 17, 15, 13, 11, 9, 7, 5, 3, 1, 0])
-BUILDING_Y_POSITIONS = jnp.array([ 160, 163, 168, 170, 172, 174, 176, 178, 180, 182, 184, 186, 188, 190])
+# Height and Y position based on damage level 
+BUILDING_HEIGHTS = jnp.array([25, 21, 17, 13, 9, 5, 0])
+BUILDING_Y_POSITIONS = jnp.array([160, 164, 168, 172, 176, 180, 190])
 
 # Constants for enemies
 NUM_ENEMIES_PER_TYPE = 3
 TOTAL_ENEMIES = NUM_ENEMIES_PER_TYPE * 4
 ENEMY_INITIAL_Y = 69
-ENEMY_SPEED = 1
+ENEMY_SPEED = 1.5
 ENEMY_SPAWN_Y = 30  # Initial Y position for newly spawned enemies
-ENEMY_SPAWN_PROB = 0.02  # Probability to spawn a new enemy (SPEED)
+ENEMY_SPAWN_PROB = 0.03  # Probability to spawn a new enemy (SPEED)
 
 
 # Constants for missiles
@@ -52,7 +52,7 @@ NUM_PLAYER_MISSILES = 1
 NUM_ENEMY_MISSILES = 1
 PLAYER_MISSILE_SPEED = -6
 ENEMY_MISSILE_SPEED = 4
-ENEMY_FIRE_PROB = 0.02     # Probability of an enemy firing per step
+ENEMY_FIRE_PROB = 0.05     # Probability of an enemy firing per step
 
 # Action constants
 NOOP = JAXAtariAction.NOOP
@@ -161,43 +161,52 @@ def player_step(player_x: chex.Array, action: chex.Array) -> chex.Array:
 @jax.jit
 def spawn_enemy(state: AirRaidState) -> Tuple[chex.Array, chex.Array, chex.Array, chex.Array, chex.Array]:
     """
-    Spawns a new enemy if conditions are met.
+    Spawns a new enemy if conditions are met and position doesn't overlap with existing enemies.
     Args: state: Current game state
     Returns: Updated enemy arrays
     """
-    # Extract state components
-    enemy_x = state.enemy_x
-    enemy_y = state.enemy_y
-    enemy_type = state.enemy_type
-    enemy_active = state.enemy_active
-    rng = state.rng
-
-    rng, spawn_key = random.split(rng)
+    rng, spawn_key, type_key, pos_key1, pos_key2 = random.split(state.rng, 5)
     spawn_prob = random.uniform(spawn_key)
 
-    # Find the first inactive enemy
-    inactive_mask = 1 - enemy_active
-    inactive_indices = jnp.where(inactive_mask, jnp.arange(TOTAL_ENEMIES), -1)
-    first_inactive = jnp.max(inactive_indices)  # Get the highest valid index
+    # Find the first inactive enemy slot
+    inactive_mask = 1 - state.enemy_active
+    first_inactive = jnp.max(jnp.where(inactive_mask, jnp.arange(TOTAL_ENEMIES), -1))
 
-    # Randomize enemy type
-    rng, type_key, pos_key = random.split(rng, 3)
-    new_type = random.randint(type_key, shape=(), minval=0, maxval=4)  # 0-3 for enemy types
-    new_x = random.randint(pos_key, shape=(), minval=10, maxval=WIDTH - 30)
-    should_spawn = jnp.logical_and(spawn_prob < ENEMY_SPAWN_PROB, first_inactive >= 0)
+    # Generate new enemy properties
+    new_type = random.randint(type_key, shape=(), minval=0, maxval=4)
+    new_width = jnp.where(new_type == 0, 16, 14)  # Simplified: type 0 = 16px, others = 14px
+    
+    # Helper function for overlap checking
+    def has_overlap(x):
+        active_in_spawn = jnp.logical_and(state.enemy_active == 1, state.enemy_y < 120)
+        existing_widths = jnp.where(state.enemy_type == 0, 16, 14)
+        return jnp.any(jnp.logical_and(
+            active_in_spawn,
+            jnp.logical_and(x < state.enemy_x + existing_widths, x + new_width > state.enemy_x)
+        ))
+    
+    # Try two candidate positions
+    candidates = jnp.array([
+        random.randint(pos_key1, shape=(), minval=10, maxval=WIDTH - 30),
+        random.randint(pos_key2, shape=(), minval=10, maxval=WIDTH - 30)
+    ])
+    
+    # Check overlaps and select first valid position
+    overlaps = jnp.array([has_overlap(candidates[0]), has_overlap(candidates[1])])
+    valid_candidates = ~overlaps
+    new_x = jnp.where(valid_candidates[0], candidates[0], candidates[1])
+    
+    # Spawn conditions: probability + slot available + at least one valid position
+    should_spawn = jnp.logical_and(
+        jnp.logical_and(spawn_prob < ENEMY_SPAWN_PROB, first_inactive >= 0),
+        jnp.any(valid_candidates)
+    )
 
-    enemy_x = enemy_x.at[first_inactive].set(
-        jnp.where(should_spawn, new_x, enemy_x[first_inactive])
-    )
-    enemy_y = enemy_y.at[first_inactive].set(
-        jnp.where(should_spawn, ENEMY_SPAWN_Y, enemy_y[first_inactive])
-    )
-    enemy_type = enemy_type.at[first_inactive].set(
-        jnp.where(should_spawn, new_type, enemy_type[first_inactive])
-    )
-    enemy_active = enemy_active.at[first_inactive].set(
-        jnp.where(should_spawn, 1, enemy_active[first_inactive])
-    )
+    # Update enemy arrays
+    enemy_x = state.enemy_x.at[first_inactive].set(jnp.where(should_spawn, jnp.int32(new_x), state.enemy_x[first_inactive]))
+    enemy_y = state.enemy_y.at[first_inactive].set(jnp.where(should_spawn, jnp.int32(ENEMY_SPAWN_Y), state.enemy_y[first_inactive]))
+    enemy_type = state.enemy_type.at[first_inactive].set(jnp.where(should_spawn, jnp.int32(new_type), state.enemy_type[first_inactive]))
+    enemy_active = state.enemy_active.at[first_inactive].set(jnp.where(should_spawn, jnp.int32(1), state.enemy_active[first_inactive]))
 
     return enemy_x, enemy_y, enemy_type, enemy_active, rng
 
@@ -210,11 +219,11 @@ def update_enemies(state: AirRaidState) -> Tuple[chex.Array, chex.Array, chex.Ar
     building_damage = state.building_damage
 
     # Move active enemies down
-    enemy_y = jnp.where(enemy_active == 1, enemy_y + ENEMY_SPEED, enemy_y)
+    enemy_y = jnp.where(enemy_active == 1, enemy_y + jnp.int32(ENEMY_SPEED), enemy_y)
 
     # Deactivate enemies that reach the bottom
-    reached_player = enemy_y > PLAYER_INITIAL_Y - 20  # Changed from HEIGHT to PLAYER_INITIAL_Y
-    enemy_active = jnp.where(reached_player, 0, enemy_active)
+    reached_player = enemy_y > jnp.int32(PLAYER_INITIAL_Y - 20)  # Changed from HEIGHT to PLAYER_INITIAL_Y
+    enemy_active = jnp.where(reached_player, jnp.int32(0), enemy_active)
 
     return enemy_y, enemy_active, building_damage
 
@@ -530,10 +539,9 @@ class JaxAirRaid(JaxEnvironment[AirRaidState, AirRaidObservation, AirRaidInfo]):
         # Initialize building positions
         building_x = jnp.array([
                 -BUILDING_WIDTH,
-                -BUILDING_WIDTH + BUILDING_SPACING,
-                -BUILDING_WIDTH + BUILDING_SPACING * 2
+                -BUILDING_WIDTH + BUILDING_SPACING
         ])
-        building_y = jnp.array([BUILDING_INITIAL_Y, BUILDING_INITIAL_Y, BUILDING_INITIAL_Y])
+        building_y = jnp.array([BUILDING_INITIAL_Y, BUILDING_INITIAL_Y])
         building_damage = jnp.zeros(NUM_BUILDINGS, dtype=jnp.int32)
 
         # Initialize enemy arrays (all inactive initially)
@@ -594,7 +602,7 @@ class JaxAirRaid(JaxEnvironment[AirRaidState, AirRaidObservation, AirRaidInfo]):
         new_building_x = state.building_x + BUILDING_VELOCITY
         new_building_x = jnp.where(
             new_building_x > WIDTH,
-            new_building_x - (WIDTH + BUILDING_WIDTH + BUILDING_SPACING),
+            new_building_x - (WIDTH + BUILDING_WIDTH + 10), 
             new_building_x
         )
 
