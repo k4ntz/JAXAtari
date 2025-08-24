@@ -22,7 +22,7 @@ jobs:
           GAME_MATRIX=$(find . -type f -name "jax_*.py" -printf "%f\n" | sed -e 's/^jax_//' -e 's/\.py$//' | jq -R . | jq -cs .)
           echo "matrix=$GAME_MATRIX" >> $GITHUB_OUTPUT
 
-  call-reusable-workflow:
+  trigger:
     needs: prepare-matrix
     uses: ./.github/workflows/reusable-run-tests.yml
     with:
