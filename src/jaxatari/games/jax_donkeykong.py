@@ -106,7 +106,7 @@ class DonkeyKongConstants(NamedTuple):
     BARREL_SPRITE_LEFT: int = 2
 
     # Barrel rolling probability
-    BASE_PROBABILITY_BARREL_ROLLING_A_LADDER_DOWN: float = 0.0
+    BASE_PROBABILITY_BARREL_ROLLING_A_LADDER_DOWN: float = 0.15
     BARREL_MOVING_SPEED: int = 1 # moving 1 pixel per frame
 
     # Hit boxes
@@ -167,8 +167,7 @@ class DonkeyKongConstants(NamedTuple):
     SPAWN_STEP_COUNTER_BARREL: int = 236
 
     # Scores added if mario doing following things:
-    SCORE_FOR_JUMPING_OVER_BARREL = 100
-    SCORE_FOR_JUMPING_OVER_FIRE = 100
+    SCORE_FOR_JUMPING_OVER_ENEMY = 100
     SCORE_FOR_TRIGGERING_TRAP = 100
     SCORE_FOR_DESTROYING_BARREL = 800
     SCORE_FOR_DESTROYING_FIRE = 800
@@ -215,55 +214,101 @@ class TrapPosition(NamedTuple):
     fall_protection: chex.Array # variable for protecting mario for the first instance after he triggers a trap; prevent mario to fall instantly
 
 class DonkeyKongState(NamedTuple):
-    game_started: bool
+    game_started: chex.Array
     level: chex.Array
-    game_timer: int
-    game_remaining_time: int
+    game_timer: chex.Array
+    game_remaining_time: chex.Array
     step_counter: chex.Array
 
-    game_score: int
+    game_score: chex.Array
     
-    mario_x: float
-    mario_y: float  
-    mario_jumping: bool   # jumping on spot
-    mario_jumping_wide: bool
-    mario_jumping_over_enemy: bool
-    mario_climbing: bool
-    start_frame_when_mario_jumped: int
-    mario_view_direction: int
-    mario_walk_frame_counter: int
-    mario_climb_frame_counter: int
-    mario_walk_sprite: int
-    mario_climb_sprite: int
-    mario_stage: int
-    mario_life_counter: int
+    mario_x: chex.Array
+    mario_y: chex.Array  
+    mario_jumping: chex.Array   # jumping on spot
+    mario_jumping_wide: chex.Array
+    mario_jumping_over_enemy: chex.Array
+    mario_climbing: chex.Array
+    start_frame_when_mario_jumped: chex.Array
+    mario_view_direction: chex.Array
+    mario_walk_frame_counter: chex.Array
+    mario_climb_frame_counter: chex.Array
+    mario_walk_sprite: chex.Array
+    mario_climb_sprite: chex.Array
+    mario_stage: chex.Array
+    mario_life_counter: chex.Array
 
-    mario_climbing_delay: bool # variable needed especially for level 2 to prevent mario climbing all ladder from bottom to top without give the player the possibility to go right or left or jump
+    mario_climbing_delay: chex.Array # variable needed especially for level 2 to prevent mario climbing all ladder from bottom to top without give the player the possibility to go right or left or jump
 
-    mario_got_hit: bool  # game should freeze if mario got hit by an enemy or the time is over
-    game_freeze_start: int  # mario got hit, start frame
-    mario_reached_goal: bool
+    mario_got_hit: chex.Array  # game should freeze if mario got hit by an enemy or the time is over
+    game_freeze_start: chex.Array  # mario got hit, start frame
+    mario_reached_goal: chex.Array
 
     barrels: BarrelPosition
     fires: FirePosition
     traps: TrapPosition
     ladders: Ladder
     invisible_wall_each_stage: invisible_wall_each_stage
-    random_key: int
-    frames_since_last_barrel_spawn: int
+    random_key: chex.Array
+    frames_since_last_barrel_spawn: chex.Array
 
-    hammer_x: int
-    hammer_y: int
-    hammer_can_hit: bool
-    hammer_taken: bool
-    hammer_carry_time: int
-    hammer_usage_expired: bool
-    block_jumping_and_climbing: bool
+    hammer_x: chex.Array
+    hammer_y: chex.Array
+    hammer_can_hit: chex.Array
+    hammer_taken: chex.Array
+    hammer_carry_time: chex.Array
+    hammer_usage_expired: chex.Array
+    block_jumping_and_climbing: chex.Array
 
-    donkey_kong_sprite: int
+    donkey_kong_sprite: chex.Array
+
+class EntityPosition(NamedTuple):
+    x: jnp.ndarray
+    y: jnp.ndarray
+    width: jnp.ndarray
+    height: jnp.ndarray
+
+class EntityPositionTraps(NamedTuple):
+    x: jnp.ndarray
+    y: jnp.ndarray
+    width: jnp.ndarray
+    height: jnp.ndarray
+    triggered: jnp.ndarray
 
 class DonkeyKongObservation(NamedTuple):
+    # Scores / Timer
     total_score: jnp.ndarray
+    time_remaining: jnp.ndarray
+    mario_lives: jnp.ndarray
+    game_over: jnp.ndarray
+    goal_reached: jnp.ndarray
+    level: jnp.ndarray
+
+    # Player / Mario Position
+    # mario_position: EntityPosition # [x, y]
+    # mario_view_direction: jnp.ndarray # left and right
+    # mario_jumping: jnp.ndarray
+    # mario_climbing: jnp.ndarray
+    
+    # # Hammer
+    # hammer_position: EntityPosition
+    # hammer_active: jnp.ndarray
+
+    # # Enemy
+    # barrels: EntityPosition
+    # barrel_mask: jnp.ndarray # 0 = inactive barrels, 1 = active barrels
+    # fires: EntityPosition
+    # fire_mask: jnp.ndarray  
+
+    # # Traps
+    # traps: EntityPositionTraps
+
+    # # Ladders
+    # ladder_start_x: jnp.ndarray
+    # ladder_start_y: jnp.ndarray
+    # ladder_end_x: jnp.ndarray
+    # ladder_end_y: jnp.ndarray
+    # ladder_width: jnp.ndarray
+
 
 class DonkeyKongInfo(NamedTuple):
     time: jnp.ndarray
@@ -715,12 +760,32 @@ class JaxDonkeyKong(JaxEnvironment[DonkeyKongState, DonkeyKongObservation, Donke
             # check if barrel can fall (ladder or end of bar)
             def check_if_barrel_will_fall(x, y, direction, sprite, stage):
                 prob_barrel_rolls_down_a_ladder = self.consts.BASE_PROBABILITY_BARREL_ROLLING_A_LADDER_DOWN
+                curr_stage = stage - 1
+
+                # check if there is an another barrel directly under that stage
+                # if so this barrel should not fall
+                # prob -> 0.0 %
+                def check_for_blocking_barrels(i, value):
+                    blocking = curr_stage == state.barrels.stage[i]
+                    return jax.lax.cond(
+                        blocking,
+                        lambda _: True,
+                        lambda _: value,
+                        operand=None
+                    )
+                another_barrel_blocking_from_falling = jax.lax.fori_loop(0, len(state.barrels.barrel_x), check_for_blocking_barrels, False)
+                prob_barrel_rolls_down_a_ladder = jax.lax.cond(
+                    another_barrel_blocking_from_falling,
+                    lambda _: 0.0,
+                    lambda _: prob_barrel_rolls_down_a_ladder,
+                    operand=None
+                )
                 
                 # check first if barrel is positioned on top of a ladder
-                curr_stage = stage - 1
                 mask = jnp.logical_and(ladders.stage == curr_stage, ladders.end_y == y)
                 barrel_is_on_ladder = jnp.any(mask)
-                roll_down_prob = jax.random.bernoulli(state.random_key, prob_barrel_rolls_down_a_ladder)
+                key = jax.random.PRNGKey(jnp.round(x).astype(jnp.int32) + jnp.round(y).astype(jnp.int32) + stage + state.step_counter)
+                roll_down_prob = jax.random.bernoulli(key, prob_barrel_rolls_down_a_ladder)
 
                 new_direction = self.consts.MOVING_DOWN
                 new_sprite = self.consts.BARREL_SPRITE_FALL
@@ -821,7 +886,6 @@ class JaxDonkeyKong(JaxEnvironment[DonkeyKongState, DonkeyKongObservation, Donke
         key, subkey = jax.random.split(state.random_key)
         new_state = new_state._replace(random_key=key)
 
-
         # Skip every second frame
         should_move = step_counter % 2 == 0
 
@@ -912,8 +976,10 @@ class JaxDonkeyKong(JaxEnvironment[DonkeyKongState, DonkeyKongObservation, Donke
                 mario_x = state.mario_x - self.consts.MARIO_JUMPING_HEIGHT,
                 mario_y = state.mario_y + self.consts.MARIO_MOVING_SPEED
             )
+            new_mario_x = jnp.round(self.bar_linear_equation(state.mario_stage, state.mario_y, state.level) - self.consts.MARIO_HIT_BOX_X) - 2
             new_state_already_jumping = state._replace(
-                mario_y = state.mario_y + self.consts.MARIO_MOVING_SPEED
+                mario_y = state.mario_y + self.consts.MARIO_MOVING_SPEED,
+                mario_x = new_mario_x - self.consts.MARIO_JUMPING_HEIGHT,
             )
             return jax.lax.cond(
                 jnp.logical_and(action == Action.RIGHTFIRE, jnp.logical_and(jnp.logical_and(jnp.logical_and(state.mario_climbing == False, state.mario_jumping_wide == False), state.mario_jumping == False), jnp.logical_and(state.block_jumping_and_climbing == False, state.mario_reached_goal == False))),
@@ -936,8 +1002,10 @@ class JaxDonkeyKong(JaxEnvironment[DonkeyKongState, DonkeyKongObservation, Donke
                 mario_x = state.mario_x - self.consts.MARIO_JUMPING_HEIGHT,
                 mario_y = state.mario_y - self.consts.MARIO_MOVING_SPEED
             )
+            new_mario_x = jnp.round(self.bar_linear_equation(state.mario_stage, state.mario_y, state.level) - self.consts.MARIO_HIT_BOX_X) - 2
             new_state_already_jumping = state._replace(
-                mario_y = state.mario_y - self.consts.MARIO_MOVING_SPEED
+                mario_y = state.mario_y - self.consts.MARIO_MOVING_SPEED,
+                mario_x = new_mario_x - self.consts.MARIO_JUMPING_HEIGHT,
             )
             return jax.lax.cond(
                 jnp.logical_and(action == Action.LEFTFIRE, jnp.logical_and(jnp.logical_and(jnp.logical_and(jnp.logical_and(state.mario_climbing == False, state.mario_jumping_wide == False), state.mario_jumping == False), state.block_jumping_and_climbing == False), state.mario_reached_goal == False)),
@@ -1150,7 +1218,7 @@ class JaxDonkeyKong(JaxEnvironment[DonkeyKongState, DonkeyKongObservation, Donke
             
             new_state = jax.lax.cond(
                 last_mario_move_was_moving_to_right,
-                lambda _:  state._replace(
+                lambda _: state._replace(
                     mario_x = new_mario_x,
                     mario_y=state.mario_y + self.consts.MARIO_MOVING_SPEED,
                     mario_view_direction=self.consts.MOVING_RIGHT,
@@ -1375,7 +1443,7 @@ class JaxDonkeyKong(JaxEnvironment[DonkeyKongState, DonkeyKongObservation, Donke
             # CAREFUL: one step before, it was checked if there is a collision between mario and enemy
             game_score = jax.lax.cond(
                 jnp.logical_and(state.mario_jumping_over_enemy == True, state.mario_got_hit == False),
-                lambda _: state.game_score + self.consts.SCORE_FOR_JUMPING_OVER_BARREL,
+                lambda _: state.game_score + self.consts.SCORE_FOR_JUMPING_OVER_ENEMY,
                 lambda _: state.game_score,
                 operand=None
             )
@@ -1869,9 +1937,16 @@ class JaxDonkeyKong(JaxEnvironment[DonkeyKongState, DonkeyKongObservation, Donke
     
     @partial(jax.jit, static_argnums=(0,))
     def _get_observation(self, state: DonkeyKongState):
+
+        game_over = state.mario_life_counter < 0 
         
         return DonkeyKongObservation(
-            total_score = 0,
+            total_score = state.game_score,
+            time_remaining = state.game_remaining_time,
+            mario_lives = state.mario_life_counter, 
+            game_over = game_over,
+            goal_reached = state.mario_reached_goal,
+            level = state.level,
         )
 
     def action_space(self) -> spaces.Discrete:
@@ -2231,56 +2306,5 @@ class DonkeyKongRenderer(JAXGameRenderer):
             lambda x: jax.lax.fori_loop(0, self.consts.NUMBER_OF_DIGITS_FOR_TIMER_SCORE, create_score_in_raster, x),
             raster
         )
-
-
-        # Barrels - example for now
-        frame_barrel = aj.get_sprite_frame(self.SPRITES_BARREL, 0)
-        raster = aj.render_at(raster, 5, 5, frame_barrel)
-        frame_barrel = aj.get_sprite_frame(self.SPRITES_BARREL, 1)
-        raster = aj.render_at(raster, 5, 15, frame_barrel)
-        frame_barrel = aj.get_sprite_frame(self.SPRITES_BARREL, 2)
-        raster = aj.render_at(raster, 5, 25, frame_barrel)
-
-        # Mario - example raster on the left of the screen
-        frame_mario = aj.get_sprite_frame(self.SPRITES_MARIO_STANDING, 0)
-        raster = aj.render_at(raster, 5, 35, frame_mario)
-        frame_mario = aj.get_sprite_frame(self.SPRITES_MARIO_STANDING, 1)
-        raster = aj.render_at(raster, 15, 35, frame_mario)
-
-        frame_mario = aj.get_sprite_frame(self.SPRITES_MARIO_JUMPING, 0)
-        raster = aj.render_at(raster, 5, 55, frame_mario)
-        frame_mario = aj.get_sprite_frame(self.SPRITES_MARIO_JUMPING, 1)
-        raster = aj.render_at(raster, 15, 55, frame_mario)
-
-        frame_mario = aj.get_sprite_frame(self.SPRITES_MARIO_WALKING_1, 0)
-        raster = aj.render_at(raster, 5, 75, frame_mario)
-        frame_mario = aj.get_sprite_frame(self.SPRITES_MARIO_WALKING_1, 1)
-        raster = aj.render_at(raster, 15, 75, frame_mario)
-
-        frame_mario = aj.get_sprite_frame(self.SPRITES_MARIO_WALKING_2, 0)
-        raster = aj.render_at(raster, 5, 95, frame_mario)
-        frame_mario = aj.get_sprite_frame(self.SPRITES_MARIO_WALKING_2, 1)
-        raster = aj.render_at(raster, 15, 95, frame_mario)
-
-        frame_mario = aj.get_sprite_frame(self.SPRITES_MARIO_CLIMBING, 0)
-        raster = aj.render_at(raster, 5, 115, frame_mario)
-        frame_mario = aj.get_sprite_frame(self.SPRITES_MARIO_CLIMBING, 1)
-        raster = aj.render_at(raster, 15, 115, frame_mario)
-
-        # Hammer down examples
-        frame_hammer_down = aj.get_sprite_frame(self.SPRITES_HAMMER_DOWN, 0)
-        raster = aj.render_at(raster, 5, 135, frame_hammer_down)
-        frame_hammer_down = aj.get_sprite_frame(self.SPRITES_HAMMER_DOWN, 1)
-        raster = aj.render_at(raster, 15, 135, frame_hammer_down)
-        frame_hammer_up_level_2 = aj.get_sprite_frame(self.SPRITES_HAMMER_UP, 1)
-        raster = aj.render_at(raster, 5, 145, frame_hammer_up_level_2)
-        frame_hammer_down = aj.get_sprite_frame(self.SPRITES_HAMMER_DOWN, 2)
-        raster = aj.render_at(raster, 5, 155, frame_hammer_down)
-        frame_hammer_down = aj.get_sprite_frame(self.SPRITES_HAMMER_DOWN, 3)
-        raster = aj.render_at(raster, 15, 155, frame_hammer_down)
-
-        # Fire
-        frame_fire = aj.get_sprite_frame(self.SPRITE_FIRE, 0)
-        raster = aj.render_at(raster, 5, 165, frame_fire)
 
         return raster
