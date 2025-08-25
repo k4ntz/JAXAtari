@@ -3294,6 +3294,12 @@ class JaxVideoPinball(
     ]:
         # chex provides jax with additional debug/testing functionality.
         # Probably best to use it instead of simply jnp.array
+        
+        action = jax.lax.cond(state.tilt_mode_active,
+                              lambda a: Action.NOOP,
+                              lambda a: a,
+                              action
+                              )
 
         # Step 1: Update Plunger and Flippers
         plunger_position, new_plunger_power = plunger_step(state, action)
