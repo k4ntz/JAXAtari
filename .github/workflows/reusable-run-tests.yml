@@ -46,6 +46,12 @@ jobs:
           rsync -av pr_head/src/jaxatari/ src/jaxatari/
         shell: bash
 
+      - name: Remove PR head sources
+        if: ${{ inputs.pr_head_sha != '' }}
+        run: |
+          rm -rf pr_head
+        shell: bash
+
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
