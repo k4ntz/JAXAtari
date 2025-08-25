@@ -212,7 +212,7 @@ class JaxFlagCapture(JaxEnvironment[FlagCaptureState, FlagCaptureObservation, Fl
         return spaces.Box(
             low=0,
             high=255,
-            shape=( self.consts.WIDTH,self.consts.HEIGHT, 3),
+            shape=(self.consts.HEIGHT,self.consts.WIDTH, 3),
             dtype=jnp.uint8,
         )
 
