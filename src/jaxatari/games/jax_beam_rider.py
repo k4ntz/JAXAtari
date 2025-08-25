@@ -3712,14 +3712,23 @@ class BeamRiderRenderer(JAXGameRenderer):
 
                 # TORPEDO ACTIONS (actions 6, 7, 8) - CHECK FIRST!
                 if keys[pygame.K_t]:  # T for torpedo only
-                    action = 10
+                    action = 6
+                elif keys[pygame.K_q]:  # Q for left + torpedo
+                    action = 7
+                elif keys[pygame.K_e]:  # E for right + torpedo
+                    action = 8
+                # LASER ACTIONS (actions 3, 4, 5)
+                elif keys[pygame.K_LEFT] and keys[pygame.K_SPACE]:
+                    action = 4  # left + fire laser
+                elif keys[pygame.K_RIGHT] and keys[pygame.K_SPACE]:
+                    action = 5  # right + fire laser
                 elif keys[pygame.K_SPACE]:
-                    action = 1  # fire laser only
+                    action = 3  # fire laser only
                 # MOVEMENT ACTIONS (actions 1, 2)
                 elif keys[pygame.K_LEFT]:
-                    action = 4  # left
+                    action = 1  # left
                 elif keys[pygame.K_RIGHT]:
-                    action = 3  # right
+                    action = 2  # right
 
                 # Step and render
                 prev_state = state  # Store previous state
