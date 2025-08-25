@@ -860,34 +860,16 @@ class JaxWordZapper(JaxEnvironment[WordZapperState, WordZapperObservation, WordZ
 
     @partial(jax.jit, static_argnums=(0,))
     def reset(self, key: jax.random.PRNGKey = jax.random.PRNGKey(42)) -> Tuple[WordZapperObservation, WordZapperState]:
-        key, sub_word, next_key = jax.random.split(key, 3) # TODO: ask what does this do? why do we need this?
-
+        key, sub_word, next_key = jax.random.split(key, 3)
         word_idx = jax.random.randint(sub_word, (), 0, WORD_COUNT, dtype=jnp.int32)
         encoded = ENCODED_WORD_LIST[word_idx]
 
-        intro_y = jnp.linspace(self.consts.ENEMY_Y_MIN, self.consts.ENEMY_Y_MAX, 4)
-        intro_vx = jnp.ones((4,)) * self.consts.INTRO_SWEEP_SPEED
-        intro_x = jnp.full((4,), self.consts.ENEMY_MIN_X)
-        intro_typ = jnp.array([0, 1, 0, 1])
-        intro_on = jnp.ones((4,))
+        # No intro enemies, start with normal gameplay phase
+        enemy_positions_init = jnp.zeros((self.consts.MAX_ENEMIES, 5), dtype=jnp.float32)
+        enemy_active_init = jnp.zeros((self.consts.MAX_ENEMIES,), jnp.int32)
 
-        intro_enemies = jnp.stack(
-            [intro_x, intro_y, intro_typ, intro_vx, intro_on], axis=1
-        )
-        enemy_positions_init = jnp.concatenate(
-            [intro_enemies,
-            jnp.zeros((self.consts.MAX_ENEMIES - 4, 5), dtype=jnp.float32)],
-            axis=0,
-        )
-        enemy_active_init = jnp.concatenate(
-            [jnp.ones((4,), jnp.int32),
-            jnp.zeros((self.consts.MAX_ENEMIES - 4,), jnp.int32)],
-            axis=0,
-        )
-
-        # TODO get rid of these for more elegant solution, these are reused in reset below
-        letters_x = jnp.linspace(self.consts.WIDTH, self.consts.WIDTH + 25 * 14, 27) # 12px apart, offscreen right
-        letters_y = jnp.full((27,), 30)  # All at y=30
+        letters_x = jnp.linspace(self.consts.LETTER_VISIBLE_MIN_X, self.consts.LETTERS_END, 27)
+        letters_y = jnp.full((27,), 30)
 
         reset_state = WordZapperState(
             player_x=jnp.array(self.consts.PLAYER_START_X),
@@ -902,21 +884,20 @@ class JaxWordZapper(JaxEnvironment[WordZapperState, WordZapperObservation, WordZ
             player_missile_position=jnp.zeros(4),
             player_zapper_position=jnp.zeros(7),
 
-            letters_x = jnp.linspace(self.consts.LETTER_VISIBLE_MIN_X, self.consts.LETTERS_END, 27), # 12px apart, offscreen right
-            letters_y = jnp.full((27,), 30),  # All at y=30
-            letters_char = jnp.arange(27),  # A-Z and special
-            letters_alive = jnp.stack([jnp.ones((27,), dtype=jnp.int32), jnp.zeros((27,), dtype=jnp.int32)], axis=1),
-            letters_speed = jnp.ones((27,)) * 1,  # All move at 1px/frame
-            letters_positions = jnp.stack([letters_x, letters_y], axis=1),  # shape (27,2)
-            current_word = jnp.array([0, 1, 2, 3, 4]),  # Example: word "ABCDE"
-            current_letter_index = jnp.array(0),
+            letters_x=letters_x,
+            letters_y=letters_y,
+            letters_char=jnp.arange(27),
+            letters_alive=jnp.stack([jnp.ones((27,), dtype=jnp.int32), jnp.zeros((27,), dtype=jnp.int32)], axis=1),
+            letters_speed=jnp.ones((27,)) * 1,
+            letters_positions=jnp.stack([letters_x, letters_y], axis=1),
+            current_word=jnp.array([0, 1, 2, 3, 4]),
+            current_letter_index=jnp.array(0),
 
             timer=jnp.array(self.consts.TIME),
-          
             target_word=encoded,
             step_counter=jnp.array(0),
 
-            game_phase=jnp.array(0),
+            game_phase=jnp.array(2),  # Start directly in gameplay phase
             phase_timer=jnp.array(0),
 
             enemy_explosion_frame=jnp.zeros((self.consts.MAX_ENEMIES,), dtype=jnp.int32),
@@ -924,7 +905,6 @@ class JaxWordZapper(JaxEnvironment[WordZapperState, WordZapperObservation, WordZ
             enemy_explosion_frame_timer=jnp.zeros((self.consts.MAX_ENEMIES,), dtype=jnp.int32),
             enemy_explosion_pos=jnp.zeros((self.consts.MAX_ENEMIES, 2)),
 
-            # Letter explosion animation state
             letter_explosion_frame=jnp.zeros((27,), dtype=jnp.int32),
             letter_explosion_timer=jnp.zeros((27,), dtype=jnp.int32),
             letter_explosion_frame_timer=jnp.zeros((27,), dtype=jnp.int32),
@@ -1067,23 +1047,9 @@ class JaxWordZapper(JaxEnvironment[WordZapperState, WordZapperObservation, WordZ
             game_over=self._get_done(state),
         )
     
-    def _advance_phase(self, s: WordZapperState): # I think this is the one where stuff move on the screen when game starts
-        timer = s.phase_timer + 1
-        phase = s.game_phase           # 0=intro, 1=word, 2=gameplay
-
-        phase = jax.lax.cond(
-            (phase == 0) & (timer >= self.consts.INTRO_PHASE_FRAMES),
-            lambda: jnp.array(1), lambda: phase
-        )
-        phase = jax.lax.cond(
-            (phase == 1) & (timer >= self.consts.WORD_DISPLAY_FRAMES),
-            lambda: jnp.array(2), lambda: phase
-        )
-
-        timer = jax.lax.cond(phase != s.game_phase,
-                            lambda: jnp.array(0),
-                            lambda: timer)
-        return phase, timer
+    def _advance_phase(self, s: WordZapperState):
+        # Skip intro and word display phases, always stay in gameplay
+        return jnp.array(2), s.phase_timer
 
     @partial(jax.jit, static_argnums=(0,))
     def _intro_step(self, s: WordZapperState):
@@ -1274,17 +1240,9 @@ class JaxWordZapper(JaxEnvironment[WordZapperState, WordZapperObservation, WordZ
             WordZapperInfo,
         ]:
         previous_state = state
-        phase, p_timer = self._advance_phase(state)
-        state = state._replace(game_phase=phase, phase_timer=p_timer)
-        state = jax.lax.switch(
-            phase,
-            [
-                lambda s: self._intro_step(s),                # phase 0
-                lambda s: self._word_step(s),                 # phase 1
-                lambda s: self._normal_game_step(s, action),  # phase 2
-            ],
-            state,
-        )
+        # Always stay in gameplay phase
+        state = state._replace(game_phase=jnp.array(2))
+        state = self._normal_game_step(state, action)
         observation = self._get_observation(state)
         done = self._get_done(state)
         env_reward = self._get_env_reward(previous_state, state)
