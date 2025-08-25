@@ -559,15 +559,7 @@ class JaxVideoCheckers(
             lambda: None,
 
         )
-
         initial_obs = self._get_observation(state)
-
-        def expand_and_copy(x):
-            x_expanded = jnp.expand_dims(x, axis=0)
-            return jnp.concatenate([x_expanded] * self.frame_stack_size, axis=0)
-
-        # Apply transformation to each leaf in the pytree
-        initial_obs = jax.tree.map(expand_and_copy, initial_obs)
 
         return initial_obs, state
 
