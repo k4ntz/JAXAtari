@@ -6,7 +6,7 @@ import jax.numpy as jnp
 import chex
 
 from jaxatari import spaces
-from jaxatari.environment import JaxEnvironment, JAXAtariAction
+from jaxatari.environment import JaxEnvironment, JAXAtariAction, EnvObs
 from jaxatari.renderers import JAXGameRenderer
 import jaxatari.rendering.jax_rendering_utils as jr
 from jaxatari.spaces import Space
@@ -194,8 +194,40 @@ class JaxFlagCapture(JaxEnvironment[FlagCaptureState, FlagCaptureObservation, Fl
         Returns the action space of the environment as an array containing the actions that can be taken.
         Returns: The action space of the environment as an array.
         """
-        return spaces.Discrete(16)
+        return spaces.Discrete(18)
 
+    def observation_space(self) -> spaces:
+        return spaces.Dict({
+            "player": spaces.Dict({
+                "x": spaces.Box(low=0, high=self.consts.WIDTH, shape=(), dtype=jnp.int32),
+                "y": spaces.Box(low=0, high=self.consts.HEIGHT, shape=(), dtype=jnp.int32),
+                "width": spaces.Box(low=0, high=self.consts.WIDTH, shape=(), dtype=jnp.int32),
+                "height": spaces.Box(low=0, high=self.consts.HEIGHT, shape=(), dtype=jnp.int32),
+                "status": spaces.Box(low=0, high=20, shape=(), dtype=jnp.int32),
+            }),
+            "score": spaces.Box(low=0, high=100, shape=(), dtype=jnp.int32),
+        })
+
+    def image_space(self) -> spaces.Box:
+        return spaces.Box(
+            low=0,
+            high=255,
+            shape=( self.consts.WIDTH,self.consts.HEIGHT, 3),
+            dtype=jnp.uint8,
+        )
+
+    def obs_to_flat_array(self, obs: FlagCaptureObservation) -> jnp.ndarray:
+        return jnp.array([
+            obs.player.x.flatten(),
+            obs.player.y.flatten(),
+            obs.player.width.flatten(),
+            obs.player.height.flatten(),
+            obs.player.status.flatten(),
+            obs.score.flatten(),
+        ]).flatten()
+
+    def render(self, state: FlagCaptureState) -> jnp.ndarray:
+        return self.renderer.render(state)
 
     @partial(jax.jit, static_argnums=(0,))
     def step(self, state: FlagCaptureState, action: chex.Array):
@@ -591,7 +623,7 @@ class FlagCaptureRenderer(JAXGameRenderer):
         Returns:
             A JAX array representing the rendered frame.
         """
-        raster: jnp.ndarray = jnp.zeros((self.consts.WIDTH, self.consts.HEIGHT, 3))
+        raster: jnp.ndarray = jr.create_initial_frame(width=self.consts.WIDTH,height=self.consts.HEIGHT)
 
         frame_bg = jr.get_sprite_frame(self.SPRITE_BG, 0)
         raster = jr.render_at(raster, 0, 0, frame_bg)
