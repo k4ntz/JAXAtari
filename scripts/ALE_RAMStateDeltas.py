@@ -621,7 +621,7 @@ if __name__ == "__main__":
     from argparse import ArgumentParser
 
     parser = ArgumentParser(description="Gymnasium ALE RAM Explorer")
-    parser.add_argument("-g", "--game", type=str, default="Assault", help="Name of the Atari game (e.g., 'Pong', 'Breakout').")
+    parser.add_argument("-g", "--game", type=str, default="BankHeist", help="Name of the Atari game (e.g., 'Pong', 'Breakout').")
     # Add scale argument
     parser.add_argument('--scale', type=int, default=4, help='Scale factor for the game display window')
     parser.add_argument("-ls", "--load_state", type=str, default=None, help="Path to a pickled ALE state file (.pkl) to load.")

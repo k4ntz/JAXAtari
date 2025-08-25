@@ -35,7 +35,9 @@ POLICE_SPAWN_DELAY = 120
 
 # Police AI bias factors
 POLICE_RANDOM_FACTOR = 0.7  # 70% random movement
-POLICE_BIAS_FACTOR = 0.3    # 30% bias towards player
+POLICE_BIAS_FACTOR = 0.5    # 50% bias towards player
+
+DYNAMITE_EXPLOSION_DELAY = 30
 
 MODULE_DIR = os.path.dirname(os.path.abspath(__file__))
 SPRITES_DIR = os.path.join(MODULE_DIR, "sprites", "bankheist")
@@ -178,7 +180,7 @@ class JaxBankHeist(JaxEnvironment[BankHeistState, BankHeistObservation, BankHeis
                 direction=jnp.array(4).astype(jnp.int32),
                 visibility=jnp.array([1]).astype(jnp.int32)
             ),
-            dynamite_position=jnp.array([]).astype(jnp.int32),
+            dynamite_position=jnp.array([-1, -1]).astype(jnp.int32),  # Inactive at [-1, -1]
             enemy_positions=init_banks_or_police(),
             bank_positions=init_banks_or_police(),
             speed=jnp.array(1).astype(jnp.int32),
@@ -236,19 +238,19 @@ class JaxBankHeist(JaxEnvironment[BankHeistState, BankHeistObservation, BankHeis
         return max_value
 
     @partial(jax.jit, static_argnums=(0,))
-    def portal_handler(self, car: Entity, collision: int) -> Entity:
+    def portal_handler(self, entity: Entity, collision: int) -> Entity:
         """
-        Handle portal collisions by moving the player to the corresponding portal exit.
+        Handle portal collisions by moving the entity to the corresponding portal exit.
 
         Returns:
-            EntityPosition: The new position of the player after handling the portal collision.
+            Entity: The new position of the entity after handling the portal collision.
         """
-        side = car.position[0] <= 80
+        side = entity.position[0] <= 80
         side = side.astype(int)
         portal_collision = collision == 100
         new_position = jax.lax.cond(portal_collision,
-            lambda: car._replace(position=jnp.array([PORTAL_X[side], car.position[1]])),
-            lambda: car
+            lambda: entity._replace(position=jnp.array([PORTAL_X[side], entity.position[1]])),
+            lambda: entity
         )
         return new_position
 
@@ -370,6 +372,106 @@ class JaxBankHeist(JaxEnvironment[BankHeistState, BankHeistObservation, BankHeis
         return jax.lax.fori_loop(0, len(state.pending_police_spawns), process_single_spawn, state)
     
     @partial(jax.jit, static_argnums=(0,))
+    def place_dynamite(self, state: BankHeistState, player: Entity) -> BankHeistState:
+        """
+        Place dynamite 4 pixels behind the player if dynamite is currently inactive.
+
+        Args:
+            state: Current game state
+            player: Current player entity with position and direction
+
+        Returns:
+            BankHeistState: Updated state with dynamite placed (if it was inactive)
+        """
+        # Check if dynamite is currently inactive (at [-1, -1])
+        dynamite_inactive = jnp.all(state.dynamite_position == jnp.array([-1, -1]))
+        
+        def place_new_dynamite():
+            # Calculate position 4 pixels behind the player based on their direction
+            player_position = player.position
+            player_direction = player.direction
+            
+            # Calculate offset based on direction (opposite to movement direction)
+            offset_branches = [
+                lambda: jnp.array([0, -5]),   # DOWN -> place 4 pixels UP (behind)
+                lambda: jnp.array([0, 5]),    # UP -> place 4 pixels DOWN (behind)
+                lambda: jnp.array([-5, 2]),   # RIGHT -> place 4 pixels LEFT (behind)
+                lambda: jnp.array([5, 2]),    # LEFT -> place 4 pixels RIGHT (behind)
+                lambda: jnp.array([0, 0]),    # NOOP/FIRE -> place at current position
+            ]
+            offset = jax.lax.switch(player_direction, offset_branches)
+            
+            # Place dynamite 4 pixels behind the player
+            new_dynamite_position = player_position + offset
+            new_dynamite_timer = jnp.array([DYNAMITE_EXPLOSION_DELAY]).astype(jnp.int32)  # 90 frames until explosion
+            return state._replace(
+                dynamite_position=new_dynamite_position,
+                dynamite_timer=new_dynamite_timer
+            )
+        
+        # Only place dynamite if it's currently inactive
+        return jax.lax.cond(dynamite_inactive, place_new_dynamite, lambda: state)
+
+    @partial(jax.jit, static_argnums=(0,))
+    def kill_police_in_explosion_range(self, state: BankHeistState) -> BankHeistState:
+        """
+        Kill police cars within a 5x5 range of the dynamite explosion.
+
+        Args:
+            state: Current game state
+
+        Returns:
+            BankHeistState: Updated state with police cars killed if within explosion range
+        """
+        dynamite_pos = state.dynamite_position
+        
+        def check_and_kill_police(i, current_state):
+            police_pos = current_state.enemy_positions.position[i]
+            police_visible = current_state.enemy_positions.visibility[i] > 0
+            
+            # Calculate distance between dynamite and police car
+            distance = jnp.linalg.norm(dynamite_pos - police_pos)
+            
+            # Kill police car if it's visible and within 5x5 range (distance <= ~3.5 pixels)
+            # Using 2.5 as threshold for a 5x5 area (half the diagonal of 5x5 square)
+            within_range = distance <= 5
+            should_kill = police_visible & within_range
+            
+            # Set visibility to 0 (kill) if within range
+            new_visibility = current_state.enemy_positions.visibility.at[i].set(
+                jnp.where(should_kill, 0, current_state.enemy_positions.visibility[i])
+            )
+            
+            new_police = current_state.enemy_positions._replace(visibility=new_visibility)
+            return current_state._replace(enemy_positions=new_police)
+        
+        # Process all police cars
+        return jax.lax.fori_loop(0, len(state.enemy_positions.visibility), check_and_kill_police, state)
+
+    @partial(jax.jit, static_argnums=(0,))
+    def explode_dynamite(self, state: BankHeistState) -> BankHeistState:
+        """
+        Handle dynamite explosion - kill police cars within 5x5 range and make dynamite inactive.
+
+        Args:
+            state: Current game state
+
+        Returns:
+            BankHeistState: Updated state with police cars killed and dynamite deactivated
+        """
+        # Kill police cars within 5x5 range of dynamite explosion
+        updated_state = self.kill_police_in_explosion_range(state)
+        
+        # Deactivate the dynamite by setting position to [-1, -1] and timer to -1
+        new_dynamite_position = jnp.array([-1, -1]).astype(jnp.int32)
+        new_dynamite_timer = jnp.array([-1]).astype(jnp.int32)
+        
+        return updated_state._replace(
+            dynamite_position=new_dynamite_position,
+            dynamite_timer=new_dynamite_timer
+        )
+    
+    @partial(jax.jit, static_argnums=(0,))
     def map_transition(self, state: BankHeistState) -> BankHeistState:
 
         new_level = state.level+1
@@ -383,7 +485,7 @@ class JaxBankHeist(JaxEnvironment[BankHeistState, BankHeistObservation, BankHeis
         map_id = new_level % len(CITY_COLLISION_MAPS)
         new_map_collision = jax.lax.dynamic_index_in_dim(CITY_COLLISION_MAPS, map_id, axis=0, keepdims=False)
         new_spawn_points = jax.lax.dynamic_index_in_dim(CITY_SPAWNS, map_id, axis=0, keepdims=False)
-        new_dynamite_position = jnp.array([]).astype(jnp.int32)
+        new_dynamite_position = jnp.array([-1, -1]).astype(jnp.int32)  # Inactive dynamite
         new_bank_spawn_timers = jnp.array([1,1,1]).astype(jnp.int32)
         new_police_spawn_timers = jnp.array([-1,-1,-1]).astype(jnp.int32)
         new_dynamite_timer = jnp.array([-1]).astype(jnp.int32)
@@ -571,6 +673,18 @@ class JaxBankHeist(JaxEnvironment[BankHeistState, BankHeistObservation, BankHeis
                 )
                 moved_entity = self.move(temp_entity, new_direction, state_inner.speed)
                 
+                # Check for collisions and handle portals (but not walls or city transitions)
+                collision = self.check_background_collision(state_inner, moved_entity)
+                
+                # Handle wall collisions (stop movement)
+                moved_entity = jax.lax.cond(collision >= 255,
+                    lambda: temp_entity,  # Don't move if hitting wall
+                    lambda: moved_entity  # Allow movement
+                )
+                
+                # Handle portal teleportation (same as player)
+                moved_entity = self.portal_handler(moved_entity, collision)
+                
                 # Update police positions
                 new_positions = state_inner.enemy_positions.position.at[i].set(moved_entity.position)
                 new_directions = state_inner.enemy_positions.direction.at[i].set(new_direction)
@@ -623,6 +737,7 @@ class JaxBankHeist(JaxEnvironment[BankHeistState, BankHeistObservation, BankHeis
             BankHeistState: The new state of the game after the player's action.
         """
         player_input = jnp.where(action == NOOP, state.player.direction, action)  # Convert NOOP to direction 4
+        player_input = jnp.where(action == FIRE, state.player.direction, player_input)  # Ignore FIRE for movement
         current_player = self.validate_input(state, state.player, player_input)
         new_player = self.move(current_player, current_player.direction, state.speed)
         collision = self.check_background_collision(state, new_player)
@@ -636,12 +751,18 @@ class JaxBankHeist(JaxEnvironment[BankHeistState, BankHeistObservation, BankHeis
             player=new_player,
             )
 
-        # Check for bank collisions and handle bank robberies
+        # Check for bank collisions and handle bank robberies (before any other state changes)
         bank_collision_mask, bank_hit_index = self.check_bank_collision(new_player, state.bank_positions)
         
         # Apply bank robbery logic if any bank was hit
         bank_hit = bank_hit_index >= 0
         new_state = jax.lax.cond(bank_hit, lambda: self.handle_bank_robbery(new_state, bank_hit_index), lambda: new_state)
+
+        # Handle dynamite placement when FIRE action is pressed
+        new_state = jax.lax.cond(action == FIRE, 
+            lambda: self.place_dynamite(new_state, new_player),
+            lambda: new_state
+        )
 
         new_state = jax.lax.cond(collision == 200, lambda: self.map_transition(new_state), lambda: new_state)
         return new_state
@@ -688,8 +809,10 @@ class JaxBankHeist(JaxEnvironment[BankHeistState, BankHeistObservation, BankHeis
         spawn_police_condition = jnp.any(new_pending_police_spawns == 0)
         new_state = jax.lax.cond(spawn_police_condition, lambda: self.process_pending_police_spawns(new_state), lambda: new_state)
         
-        #new_state = jnp.where(new_police_spawn_timers == 0, self.spawn_police(new_state), new_state)
-        #new_state = jnp.where(new_dynamite_timer == 0, self.explode_dynamite(new_state), new_state)
+        # Handle dynamite explosion when timer reaches 0 (check original timer before decrementing)
+        dynamite_explode_condition = state.dynamite_timer[0] == 0
+        new_state = jax.lax.cond(dynamite_explode_condition, lambda: self.explode_dynamite(new_state), lambda: new_state)
+        
         return new_state
 
     @partial(jax.jit, static_argnums=(0,))
@@ -709,6 +832,7 @@ def load_bankheist_sprites():
     police_side = aj.loadFrame(os.path.join(SPRITES_DIR, "police_side.npy"), transpose=True)
     police_front = aj.loadFrame(os.path.join(SPRITES_DIR, "police_front.npy"), transpose=True)
     bank = aj.loadFrame(os.path.join(SPRITES_DIR, "bank.npy"), transpose=True)
+    dynamite = aj.loadFrame(os.path.join(SPRITES_DIR, "dynamite_0.npy"), transpose=True)
 
     # Add padding to front sprites so they have same dimensions as side sprites
     player_front_padded = jnp.pad(player_front, ((1,1), (0,0), (0,0)), mode='constant')
@@ -720,8 +844,9 @@ def load_bankheist_sprites():
     POLICE_SIDE_SPRITE = jnp.expand_dims(police_side, axis=0)
     POLICE_FRONT_SPRITE = jnp.expand_dims(police_front_padded, axis=0)
     BANK_SPRITE = jnp.expand_dims(bank, axis=0)
+    DYNAMITE_SPRITE = jnp.expand_dims(dynamite, axis=0)
 
-    return (PLAYER_SIDE_SPRITE, PLAYER_FRONT_SPRITE, POLICE_SIDE_SPRITE, POLICE_FRONT_SPRITE, BANK_SPRITE, CITY_SPRITES)
+    return (PLAYER_SIDE_SPRITE, PLAYER_FRONT_SPRITE, POLICE_SIDE_SPRITE, POLICE_FRONT_SPRITE, BANK_SPRITE, DYNAMITE_SPRITE, CITY_SPRITES)
 
 class Renderer_AtraBankisHeist:
     def __init__(self):
@@ -731,6 +856,7 @@ class Renderer_AtraBankisHeist:
             self.SPRITE_POLICE_SIDE,
             self.SPRITE_POLICE_FRONT,
             self.SPRITE_BANK,
+            self.SPRITE_DYNAMITE,
             self.SPRITES_CITY,
         ) = load_bankheist_sprites() 
 
@@ -793,6 +919,15 @@ class Renderer_AtraBankisHeist:
                 lambda r: r,
                 raster
             )
+
+        ### Render Dynamite (only when active)
+        def render_dynamite(raster_input):
+            dynamite_frame = aj.get_sprite_frame(self.SPRITE_DYNAMITE, 0)
+            return aj.render_at(raster_input, state.dynamite_position[0], state.dynamite_position[1], dynamite_frame)
+        
+        # Check if dynamite is active (not at [-1, -1])
+        dynamite_active = ~jnp.all(state.dynamite_position == jnp.array([-1, -1]))
+        raster = jax.lax.cond(dynamite_active, render_dynamite, lambda r: r, raster)
 
         return raster
 

@@ -1,7 +1,7 @@
 import numpy as np
 import matplotlib.pyplot as plt
 
-filename = 'frame_00001.npy'  # Replace with your actual file name
+filename = 'dynamite_2.npy'  # Replace with your actual file name
 # Load the image data
 file_path = 'new_screenshots/' + filename # Replace with your actual file path
 image = np.load(file_path)
