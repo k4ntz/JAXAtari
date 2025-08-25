@@ -5,9 +5,12 @@ import jax.lax
 import jax.numpy as jnp
 import chex
 
+import jaxatari.spaces as spaces
 from jaxatari.renderers import JAXGameRenderer
 from jaxatari.rendering import jax_rendering_utils as jr
-from jaxatari.environment import JaxEnvironment, JAXAtariAction as Action
+from jaxatari.environment import JaxEnvironment, JAXAtariAction as Action, EnvObs
+from jaxatari.spaces import Space
+
 
 #
 # by Tim Morgner and Jan Larionow
@@ -457,6 +460,19 @@ class JaxVideoCheckers(
             Action.DOWNLEFT
         }
 
+    def render(self, state: VideoCheckersState) -> jnp.ndarray:
+        return self.renderer.render(state)
+
+    @partial(jax.jit, static_argnums=(0,))
+    def obs_to_flat_array(self, obs: VideoCheckersObservation) -> jnp.ndarray:
+        return jnp.concatenate([
+          obs.board.flatten(),
+            obs.start_pos.flatten(),
+            obs.end_pos.flatten(),
+            obs.must_jump.flatten(),
+            obs.cursor_pos.flatten()
+        ])
+
     def reset(self, key: jax.random.PRNGKey = jax.random.PRNGKey(0)) \
             -> Tuple[VideoCheckersObservation, VideoCheckersState]:
         """
@@ -554,6 +570,8 @@ class JaxVideoCheckers(
         initial_obs = jax.tree.map(expand_and_copy, initial_obs)
 
         return initial_obs, state
+
+
 
     @partial(jax.jit, static_argnums=(0,))
     def step_select_piece_phase(self, state: VideoCheckersState, action: chex.Array) -> VideoCheckersState:
@@ -1142,7 +1160,35 @@ class JaxVideoCheckers(
         Returns:
             action_space: The action space of the game environment.
         """
-        return jnp.array(list(self.action_set), dtype=jnp.int32)
+        return spaces.Discrete(5)
+
+    def observation_space(self) -> spaces:
+        return spaces.Dict({
+            'board': spaces.Dict({
+
+            }),
+            'start_pos': spaces.Dict({
+                'x': spaces.Box(low=0, high=160, shape=(), dtype=jnp.int32),
+                'y': spaces.Box(low=0, high=210, shape=(), dtype=jnp.int32),
+            }),
+            'end_pos': spaces.Dict({
+                'x': spaces.Box(low=0, high=160, shape=(), dtype=jnp.int32),
+                'y': spaces.Box(low=0, high=210, shape=(), dtype=jnp.int32),
+            }),
+            'must_jump': spaces.Box(low=0, high=1, shape=(), dtype=jnp.int32),
+            'cursor_pos': spaces.Dict({
+                'x': spaces.Box(low=0, high=160, shape=(), dtype=jnp.int32),
+                'y': spaces.Box(low=0, high=210, shape=(), dtype=jnp.int32),
+            }),
+        })
+
+    def image_space(self) -> spaces.Box:
+        return spaces.Box(
+            low=0,
+            high=255,
+            shape=(self.consts.HEIGHT, self.consts.WIDTH, 3),
+            dtype=jnp.uint8,
+        )
 
     @partial(jax.jit, static_argnums=(0,))
     def _get_info(self, state: VideoCheckersState, all_rewards: chex.Array) -> VideoCheckersInfo:
