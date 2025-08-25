@@ -138,7 +138,7 @@ LEG_L_X = TORSO_X - 4
 LEG_R_X = TORSO_X + TORSO_W - 2
 
 #lives bar 
-PIP_N   = MAX_MISSES        # 11
+PIP_N   = MAX_MISSES        
 PIP_W   = 6
 PIP_H   = 8
 PIP_GAP = 4
@@ -156,9 +156,9 @@ DRAW_PREVIEW_BORDER = False
     
 
 #scoreboard positions
-SCORE_X = GOLD_XL + GOLD_SQ + 4   # e.g. 16
+SCORE_X = GOLD_XL + GOLD_SQ + 4   
 SCORE_Y = GOLD_Y
-ROUND_RIGHT_X = GOLD_XR - 2       # keep as right margin if you draw round/cpu score there
+ROUND_RIGHT_X = GOLD_XR - 2       
 ROUND_Y       = GOLD_Y 
 SCORE_SCALE = 2
 
