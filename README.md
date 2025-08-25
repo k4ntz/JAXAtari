@@ -12,10 +12,6 @@ Quentin Delfosse, Paul Seitz, Sebastian Wette, Daniel Kirn, Dominik Mandok, Lars
 <!-- --- -->
 
 ## Features
-- **Object-centric extraction** of Atari game states with structured observations
-- **JAX-based vectorized execution** with full GPU support and JIT compilation
-- **Comprehensive wrapper system** for different observation types (pixel, object-centric, combined)
-
 
 📘 [Read the Documentation](https://jaxatari.readthedocs.io/en/latest/) 
 
