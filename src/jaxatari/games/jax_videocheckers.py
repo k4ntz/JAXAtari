@@ -1162,26 +1162,6 @@ class JaxVideoCheckers(
         """
         return spaces.Discrete(5)
 
-    def observation_space(self) -> spaces:
-        return spaces.Dict({
-            'board': spaces.Dict({
-
-            }),
-            'start_pos': spaces.Dict({
-                'x': spaces.Box(low=0, high=160, shape=(), dtype=jnp.int32),
-                'y': spaces.Box(low=0, high=210, shape=(), dtype=jnp.int32),
-            }),
-            'end_pos': spaces.Dict({
-                'x': spaces.Box(low=0, high=160, shape=(), dtype=jnp.int32),
-                'y': spaces.Box(low=0, high=210, shape=(), dtype=jnp.int32),
-            }),
-            'must_jump': spaces.Box(low=0, high=1, shape=(), dtype=jnp.int32),
-            'cursor_pos': spaces.Dict({
-                'x': spaces.Box(low=0, high=160, shape=(), dtype=jnp.int32),
-                'y': spaces.Box(low=0, high=210, shape=(), dtype=jnp.int32),
-            }),
-        })
-
     def image_space(self) -> spaces.Box:
         return spaces.Box(
             low=0,
@@ -1202,6 +1182,24 @@ class JaxVideoCheckers(
         """
         return VideoCheckersInfo(all_rewards=all_rewards)
 
+    def observation_space(self) -> spaces:
+        """
+        Returns the observation space of the game environment.
+        The observation contains:
+        - board: array of shape (8, 8) representing the game board
+        - start_pos: array of shape (2,) representing the starting position of the selected piece
+        - end_pos: array of shape (2,) representing the ending position of the selected piece
+        - must_jump: boolean indicating if the player must jump
+        - cursor_pos: array of shape (2,) representing the position of the cursor
+        """
+        return spaces.Dict({
+            'board': spaces.Box(low=0,high=160, shape=(8, 8), dtype=jnp.int32),
+            'start_pos': spaces.Box(low=-1,high=7, shape=(2,), dtype=jnp.int32),
+            'end_pos': spaces.Box(low=-1,high=7, shape=(2,), dtype=jnp.int32),
+            'must_jump': spaces.Box(low=0, high=1, shape=(), dtype=jnp.int32),
+            'cursor_pos': spaces.Box(low=0, high=7, shape=(2,), dtype=jnp.int32),
+        })
+
     @partial(jax.jit, static_argnums=(0,))
     def _get_observation(self, state: VideoCheckersState):
         """
@@ -1215,7 +1213,7 @@ class JaxVideoCheckers(
         return VideoCheckersObservation(board=state.board,
                                         start_pos=state.cursor_pos,
                                         end_pos=state.selected_piece,
-                                        must_jump=jnp.array(must_jump, dtype=jnp.bool_),
+                                        must_jump=must_jump.astype(jnp.int32),
                                         cursor_pos=state.cursor_pos)
 
     @partial(jax.jit, static_argnums=(0,))
