@@ -81,6 +81,7 @@ class SceneObject:
 # TODO: Finally we need to update all the Constants calls to self.consts.<const_name>
 class VideoPinballConstants(NamedTuple):
     WIDTH: int = 160
+    HEIGHT: int = 210
 
 # Constants for game environment
 WIDTH = 160
@@ -364,19 +365,19 @@ STEP_WIDTH = 4
 
 # Inner Objects Positions and Dimensions
 
-VERTICAL_BAR_HEIGHT = 30
-VERTICAL_BAR_WIDTH = 3
+VERTICAL_BAR_HEIGHT = 32
+VERTICAL_BAR_WIDTH = 4
 
 ROLLOVER_BAR_DISTANCE = 12  # Distance between the left and right rollover bar
 
-BUMPER_WIDTH = 15
-BUMPER_HEIGHT = 30
+BUMPER_WIDTH = 16
+BUMPER_HEIGHT = 32
 
 LEFT_COLUMN_X_OFFSET = 40
 MIDDLE_COLUMN_X_OFFSET = 72
 RIGHT_COLUMN_X_OFFSET = 104
 TOP_ROW_Y_OFFSET = 48
-MIDDLE_ROW_Y_OFFSET = 113
+MIDDLE_ROW_Y_OFFSET = 112
 BOTTOM_ROW_Y_OFFSET = 177
 
 MIDDLE_BAR_X = 72
@@ -392,7 +393,7 @@ MIDDLE_BAR_HEIGHT = 8
 BOUNDING_BOX_1_2 = jnp.ones((1, 2)).astype(jnp.bool)
 BOUNDING_BOX_2_3 = jnp.ones((2, 3)).astype(jnp.bool)
 BOUNDING_BOX_2_4 = jnp.ones((2, 4)).astype(jnp.bool)
-BOUDNING_BOX_1_5 = jnp.ones((1, 5)).astype(jnp.bool)
+BOUNDING_BOX_1_5 = jnp.ones((1, 5)).astype(jnp.bool)
 BOUNDING_BOX_1_4 = jnp.ones((1, 4)).astype(jnp.bool)
 BOUNDING_BOX_2_5 = jnp.ones((2, 5)).astype(jnp.bool)
 BOUNDING_BOX_2_6 = jnp.ones((2, 6)).astype(jnp.bool)
@@ -551,15 +552,64 @@ TOP_WALL_SCENE_OBJECT = SceneObject(
     score_type=jnp.array(0),  # type: ignore
     variant=jnp.array(-1),
 )
-BOTTOM_WALL_SCENE_OBJECT = SceneObject(
+BOTTOM_WALL_SCENE_OBJECT_1 = SceneObject(
     hit_box_height=jnp.array(OUTER_WALL_THICKNESS),  # type: ignore
-    hit_box_width=jnp.array(160),  # type: ignore
+    hit_box_width=jnp.array(24),  # type: ignore
     hit_box_x_offset=jnp.array(BOTTOM_WALL_LEFT_X_OFFSET),  # type: ignore
     hit_box_y_offset=jnp.array(BOTTOM_WALL_TOP_Y_OFFSET),  # type: ignore
     reflecting=jnp.array(1),  # type: ignore
     score_type=jnp.array(0),  # type: ignore
     variant=jnp.array(-1),
 )
+BOTTOM_WALL_SCENE_OBJECT_2 = SceneObject(
+    hit_box_height=jnp.array(OUTER_WALL_THICKNESS),  # type: ignore
+    hit_box_width=jnp.array(24),  # type: ignore
+    hit_box_x_offset=jnp.array(40),  # type: ignore
+    hit_box_y_offset=jnp.array(BOTTOM_WALL_TOP_Y_OFFSET),  # type: ignore
+    reflecting=jnp.array(1),  # type: ignore
+    score_type=jnp.array(0),  # type: ignore
+    variant=jnp.array(-1),
+)
+
+BOTTOM_WALL_SCENE_OBJECT_3 = SceneObject(
+    hit_box_height=jnp.array(OUTER_WALL_THICKNESS),  # type: ignore
+    hit_box_width=jnp.array(24),  # type: ignore
+    hit_box_x_offset=jnp.array(96),  # type: ignore
+    hit_box_y_offset=jnp.array(BOTTOM_WALL_TOP_Y_OFFSET),  # type: ignore
+    reflecting=jnp.array(1),  # type: ignore
+    score_type=jnp.array(0),  # type: ignore
+    variant=jnp.array(-1),
+)
+BOTTOM_WALL_SCENE_OBJECT_4 = SceneObject(
+    hit_box_height=jnp.array(OUTER_WALL_THICKNESS),  # type: ignore
+    hit_box_width=jnp.array(24),  # type: ignore
+    hit_box_x_offset=jnp.array(124),  # type: ignore
+    hit_box_y_offset=jnp.array(BOTTOM_WALL_TOP_Y_OFFSET),  # type: ignore
+    reflecting=jnp.array(1),  # type: ignore
+    score_type=jnp.array(0),  # type: ignore
+    variant=jnp.array(-1),
+)
+
+TILT_MODE_HOLE_PLUG_LEFT = SceneObject(
+    hit_box_height=jnp.array(OUTER_WALL_THICKNESS),  # type: ignore
+    hit_box_width=jnp.array(4),  # type: ignore
+    hit_box_x_offset=jnp.array(36),  # type: ignore
+    hit_box_y_offset=jnp.array(BOTTOM_WALL_TOP_Y_OFFSET),  # type: ignore
+    reflecting=jnp.array(1),  # type: ignore
+    score_type=jnp.array(0),  # type: ignore
+    variant=jnp.array(-1),
+)
+
+TILT_MODE_HOLE_PLUG_RIGHT = SceneObject(
+    hit_box_height=jnp.array(OUTER_WALL_THICKNESS),  # type: ignore
+    hit_box_width=jnp.array(4),  # type: ignore
+    hit_box_x_offset=jnp.array(120),  # type: ignore
+    hit_box_y_offset=jnp.array(BOTTOM_WALL_TOP_Y_OFFSET),  # type: ignore
+    reflecting=jnp.array(1),  # type: ignore
+    score_type=jnp.array(0),  # type: ignore
+    variant=jnp.array(-1),
+)
+
 LEFT_WALL_SCENE_OBJECT = SceneObject(
     hit_box_height=jnp.array(176),  # type: ignore
     hit_box_width=jnp.array(OUTER_WALL_THICKNESS),  # type: ignore
@@ -1197,8 +1247,8 @@ LEFT_LIT_UP_TARGET_LARGE_VERTICAL_SCENE_OBJECT = SceneObject(
 LEFT_LIT_UP_TARGET_LARGE_HORIZONTAL_SCENE_OBJECT = SceneObject(
     hit_box_height=jnp.array(DIAMOND_HORIZONTAL_RECTANGLE_BOUNDING_BOX_HEIGHT),  # type: ignore
     hit_box_width=jnp.array(DIAMOND_HORIZONTAL_RECTANGLE_BOUNDING_BOX_WIDTH),  # type: ignore
-    hit_box_x_offset=jnp.array(60),  # type: ignore
-    hit_box_y_offset=jnp.array(30),  # type: ignore
+    hit_box_x_offset=jnp.array(61),  # type: ignore
+    hit_box_y_offset=jnp.array(28),  # type: ignore
     reflecting=jnp.array(0),  # type: ignore
     score_type=jnp.array(6),  # type: ignore
     variant=jnp.array(0),
@@ -1266,7 +1316,7 @@ SPECIAL_LIT_UP_TARGET_LARGE_HORIZONTAL_SCENE_OBJECT = SceneObject(
 
 LEFT_ROLLOVER_SCENE_OBJECT = SceneObject(
     hit_box_height=jnp.array(12),  # type: ignore
-    hit_box_width=jnp.array(6),  # type: ignore
+    hit_box_width=jnp.array(8),  # type: ignore
     hit_box_x_offset=jnp.array(44),  # type: ignore
     hit_box_y_offset=jnp.array(58),  # type: ignore
     reflecting=jnp.array(0),  # type: ignore
@@ -1276,7 +1326,7 @@ LEFT_ROLLOVER_SCENE_OBJECT = SceneObject(
 
 ATARI_ROLLOVER_SCENE_OBJECT = SceneObject(
     hit_box_height=jnp.array(12),  # type: ignore
-    hit_box_width=jnp.array(6),  # type: ignore
+    hit_box_width=jnp.array(8),  # type: ignore
     hit_box_x_offset=jnp.array(108),  # type: ignore
     hit_box_y_offset=jnp.array(58),  # type: ignore
     reflecting=jnp.array(0),  # type: ignore
@@ -1735,7 +1785,12 @@ ALL_SCENE_OBJECTS_LIST = [
     ATARI_ROLLOVER_SCENE_OBJECT,  # 9
     # Reflective scene objects
     TOP_WALL_SCENE_OBJECT,  # 10
-    BOTTOM_WALL_SCENE_OBJECT,  # 11
+    BOTTOM_WALL_SCENE_OBJECT_1,  # 11
+    BOTTOM_WALL_SCENE_OBJECT_2,
+    BOTTOM_WALL_SCENE_OBJECT_3,
+    BOTTOM_WALL_SCENE_OBJECT_4,
+    TILT_MODE_HOLE_PLUG_LEFT,
+    TILT_MODE_HOLE_PLUG_RIGHT,
     LEFT_WALL_SCENE_OBJECT,  # 12
     RIGHT_WALL_SCENE_OBJECT,  # 13
     LEFT_INNER_WALL_SCENE_OBJECT,  # 14
@@ -2574,11 +2629,11 @@ def special_velocity_change():
     pass
 
 # produce updated values (inline-style, returns new values so you can reassign)
-def _update_tilt(state, action, ball_vel_x):
+def _update_tilt(state: VideoPinballState, action: Action, ball_vel_x: chex.Array):
     # branch executed when not currently in tilt mode
-    def _not_tilt_branch(state, action, ball_vel_x):
+    def _not_tilt_branch(state: VideoPinballState, action: Action, ball_vel_x: chex.Array):
         # branch when there *is* a nudge (nudge_direction != 0)
-        def _nudge_branch(state, action, ball_vel_x):
+        def _nudge_branch(state: VideoPinballState, action: Action, ball_vel_x: chex.Array):
             # increase tilt counter on interval
             inc_cond = jnp.equal(jnp.mod(state.step_counter, TILT_COUNT_INCREASE_INTERVAL), 0)
 
@@ -2630,7 +2685,7 @@ def _update_tilt(state, action, ball_vel_x):
 
             return tilt_mode_from_counter, tilt_counter_capped, ball_vel_x_new, ball_direction
 
-        def _no_nudge_branch(state, action, ball_vel_x):
+        def _no_nudge_branch(state: VideoPinballState, action:Action, ball_vel_x: chex.Array):
             dec_cond = jnp.equal(jnp.mod(state.step_counter, TILT_COUNT_DECREASE_INTERVAL), 0)
 
             tilt_counter_dec = jax.lax.cond(
@@ -2949,7 +3004,7 @@ def process_objects_hit(state: VideoPinballState, objects_hit):
     )
 
     # Bottom Bonus Target
-    score += jnp.where(objects_hit[6], 1100, 0)
+    score += jnp.where(objects_hit[5], 1100, 0)
     active_targets, color_cycling = jax.lax.cond(
         objects_hit[5],
         lambda s, cc: (
@@ -2964,7 +3019,7 @@ def process_objects_hit(state: VideoPinballState, objects_hit):
     # Give score for hitting the rollover and increase its number
     score += jnp.where(objects_hit[3], 100, 0)
     rollover_counter = jax.lax.cond(
-        objects_hit[7],
+        objects_hit[3],
         lambda s: s + 1,
         lambda s: s,
         operand=rollover_counter,
@@ -2973,7 +3028,7 @@ def process_objects_hit(state: VideoPinballState, objects_hit):
     # Give score for hitting the Atari symbol and make a symbol appear at the bottom
     score += jnp.where(objects_hit[4], 100, 0)
     atari_symbols = jax.lax.cond(
-        jnp.logical_and(objects_hit[8], atari_symbols < 4),
+        jnp.logical_and(objects_hit[4], atari_symbols < 4),
         lambda s: s + 1,
         lambda s: s,
         operand=atari_symbols,
@@ -3797,6 +3852,100 @@ def render_tilt_mode(r):
     return r
 
 
+@jax.jit
+def render_scene_object_boundaries(raster: chex.Array) -> chex.Array:
+    """
+    Renders the one-pixel boundaries of all SceneObjects onto a raster using vmap.
+
+    Args:
+        raster: A JAX array of shape (height, width, 4) representing the game screen.
+
+    Returns:
+        A new JAX array with the scene object boundaries drawn onto it.
+    """
+
+    BOUNDARY_COLOR = 0, 255, 0
+    # Use vmap to apply the rendering function to all objects in the list.
+    # The `in_axes=(None, 0)` tells vmap to not vectorize the `raster` argument
+    # and to vectorize the `scene_object` argument.
+    def _draw_pixel(current_raster, y, x):
+        """Draws a single pixel on the raster."""
+        return jax.lax.cond(
+            (y >= 0) & (y < current_raster.shape[0]) & (x >= 0) & (x < current_raster.shape[1]),
+            lambda r: r.at[y, x].set(BOUNDARY_COLOR),
+            lambda r: r,
+            current_raster
+        )
+
+    def _draw_line(current_raster, start, end):
+        """
+        Draws a line between two points on the raster.
+        `start` and `end` are (y, x) tuples.
+        """
+        y1, x1 = start
+        y2, x2 = end
+
+        is_horizontal = jnp.abs(x2 - x1) > jnp.abs(y2 - y1)
+
+        def body_fun_h(i, r):
+            x = x1 + i
+            return _draw_pixel(r, y1, x)
+
+        def body_fun_v(i, r):
+            y = y1 + i
+            return _draw_pixel(r, y, x1)
+
+        raster = jax.lax.cond(
+            is_horizontal,
+            lambda r: jax.lax.fori_loop(0, jnp.abs(x2 - x1) + 1, body_fun_h, r),
+            lambda r: jax.lax.fori_loop(0, jnp.abs(y2 - y1) + 1, body_fun_v, r),
+            current_raster
+        )
+        return raster
+
+    def _render_single_object_boundaries(raster: chex.Array, scene_object: SceneObject) -> chex.Array:
+        """
+        Renders the one-pixel boundary of a single SceneObject onto a raster.
+
+        Args:
+            raster: A JAX array of shape (height, width, 4) representing the game screen.
+            scene_object: A single SceneObject chex.dataclass instance.
+
+        Returns:
+            A new JAX array with the scene object boundary drawn onto it.
+        """
+        x = scene_object.hit_box_x_offset
+        y = scene_object.hit_box_y_offset
+        width = scene_object.hit_box_width
+        height = scene_object.hit_box_height
+
+        # Calculate corner points
+        top_left = (y, x)
+        top_right = (y, x + width - 1)
+        bottom_left = (y + height - 1, x)
+        bottom_right = (y + height - 1, x + width - 1)
+
+        # Draw the four boundary lines
+        raster = _draw_line(raster, top_left, top_right)
+        raster = _draw_line(raster, top_left, bottom_left)
+        raster = _draw_line(raster, top_right, bottom_right)
+        raster = _draw_line(raster, bottom_left, bottom_right)
+
+        return raster
+
+    # First, convert the list of Python dataclasses into a single JAX dataclass
+    # where each field is a stacked array.
+    stacked_objects = jax.tree_util.tree_map(lambda *x: jnp.stack(x), *ALL_SCENE_OBJECTS_LIST)
+
+    # Use vmap to apply the rendering function to all objects.
+    # We pass the raster without vectorizing it (in_axes=None) and
+    # vectorize over the stacked scene_objects (in_axes=0).
+    return jax.vmap(
+        _render_single_object_boundaries,
+        in_axes=(None, 0))(raster, stacked_objects).sum(axis=0)
+
+
+
 class VideoPinballRenderer(JAXGameRenderer):
     """JAX-based Video Pinball game renderer, optimized with JIT compilation."""
 
@@ -3993,6 +4142,8 @@ class VideoPinballRenderer(JAXGameRenderer):
         raster = jax.lax.cond(
             color > 0, lambda r: handle_color_cycling(r, color), lambda r: r, raster
         )
+
+        # raster = render_scene_object_boundaries(raster)
 
         return raster
 
