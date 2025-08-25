@@ -10,6 +10,8 @@ from jaxatari.renderers import JAXGameRenderer
 from jaxatari.rendering import jax_rendering_utils as jr
 from jaxatari.environment import JaxEnvironment, JAXAtariAction as Action
 
+# Kong
+
 class PongConstants(NamedTuple):
     MAX_SPEED: int = 12
     BALL_SPEED: chex.Array = jnp.array([-1, 1])
