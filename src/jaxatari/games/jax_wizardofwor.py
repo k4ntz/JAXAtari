@@ -120,7 +120,7 @@ class WizardOfWorConstants(NamedTuple):
         [0, 0, 0, 1, 0, 0, 1, 0, 0, 0],
         [0, 0, 0, 0, 1, 1, 0, 0, 0, 0]])
 
-    #Positions of the teleporters
+    # Positions of the teleporters
     TELEPORTER_LEFT_POSITION: Tuple[int, int] = (-2, 20)
     TELEPORTER_RIGHT_POSITION: Tuple[int, int] = (108, 20)
 
@@ -379,9 +379,6 @@ class JaxWizardOfWor(JaxEnvironment[WizardOfWorState, WizardOfWorObservation, Wi
         """Returns the action space of the game."""
         return spaces.Discrete(6)  # Platzhalter
 
-
-
-    @partial(jax.jit, static_argnums=(0,))
     def image_space(self) -> spaces.Box:
         """Returns the image space of the game."""
         return spaces.Box(
@@ -391,55 +388,75 @@ class JaxWizardOfWor(JaxEnvironment[WizardOfWorState, WizardOfWorObservation, Wi
             dtype=jnp.uint8
         )
 
-    @partial(jax.jit, static_argnums=(0,))
     def _get_done(self, state: WizardOfWorState) -> chex.Array:
         """Checks if the game is over."""
         return jnp.array(state.game_over, dtype=jnp.bool_)
 
-    @partial(jax.jit, static_argnums=(0,))
     def _get_all_reward(self, previous_state: WizardOfWorState, state: WizardOfWorState):
         """Calculates all rewards based on the previous and current state."""
         if self.reward_funcs is None:
             return jnp.zeros(1)
         return jnp.array([reward_func(previous_state, state) for reward_func in self.reward_funcs])
 
-    @partial(jax.jit, static_argnums=(0,))
     def _get_info(self, state: WizardOfWorState, all_rewards: chex.Array = None) -> WizardOfWorInfo:
         """Returns additional information about the game state."""
         return WizardOfWorInfo(all_rewards=all_rewards)
 
+    @partial(jax.jit, static_argnums=(0,))
     def _get_reward(self, previous_state: WizardOfWorState, state: WizardOfWorState) -> chex.Array:
         """Calculates the reward based on the previous and current state."""
         return state.score - previous_state.score
 
     @partial(jax.jit, static_argnums=(0,))
+    def obs_to_flat_array(self, obs: WizardOfWorObservation) -> jnp.ndarray:
+        return jnp.concatenate([
+            jnp.array(obs.player.x).flatten(),
+            jnp.array(obs.player.y).flatten(),
+            jnp.array(obs.player.width).flatten(),
+            jnp.array(obs.player.height).flatten(),
+            jnp.array(obs.player.direction).flatten(),
+            obs.enemies.flatten(),
+            jnp.array(obs.bullet.x).flatten(),
+            jnp.array(obs.bullet.y).flatten(),
+            jnp.array(obs.bullet.width).flatten(),
+            jnp.array(obs.bullet.height).flatten(),
+            jnp.array(obs.bullet.direction).flatten(),
+            jnp.array(obs.enemy_bullet.x).flatten(),
+            jnp.array(obs.enemy_bullet.y).flatten(),
+            jnp.array(obs.enemy_bullet.width).flatten(),
+            jnp.array(obs.enemy_bullet.height).flatten(),
+            jnp.array(obs.enemy_bullet.direction).flatten(),
+            obs.score.flatten(),
+            obs.lives.flatten()
+        ]).astype(jnp.int32)
+
     def observation_space(self) -> spaces.Dict:
         """Returns the observation space of the game."""
         return spaces.Dict({
             "player": spaces.Dict({
-                "x": spaces.Box(low=0, high=160, shape=(), dtype=jnp.int32),
-                "y": spaces.Box(low=0, high=210, shape=(), dtype=jnp.int32),
-                "width": spaces.Box(low=0, high=160, shape=(), dtype=jnp.int32),
-                "height": spaces.Box(low=0, high=210, shape=(), dtype=jnp.int32),
-                "direction": spaces.Box(low=0, high=4, shape=(), dtype=jnp.int32),  # NONE, UP, DOWN, LEFT, RIGHT
+                "x": spaces.Box(low=-100, high=160, shape=(), dtype=jnp.int32),
+                "y": spaces.Box(low=-100, high=210, shape=(), dtype=jnp.int32),
+                "width": spaces.Box(low=-100, high=160, shape=(), dtype=jnp.int32),
+                "height": spaces.Box(low=-100, high=210, shape=(), dtype=jnp.int32),
+                "direction": spaces.Box(low=-1, high=4, shape=(), dtype=jnp.int32),  # NONE, UP, DOWN, LEFT, RIGHT
             }),
-            "enemies": spaces.Box(low=0, high=999999, shape=(6, 7), dtype=jnp.int32),
+            "enemies": spaces.Box(low=-100, high=999999, shape=(6, 7), dtype=jnp.int32),
             "bullet": spaces.Dict({
-                "x": spaces.Box(low=0, high=160, shape=(), dtype=jnp.int32),
-                "y": spaces.Box(low=0, high=210, shape=(), dtype=jnp.int32),
-                "width": spaces.Box(low=0, high=160, shape=(), dtype=jnp.int32),
-                "height": spaces.Box(low=0, high=210, shape=(), dtype=jnp.int32),
-                "direction": spaces.Box(low=0, high=4, shape=(), dtype=jnp.int32),  # NONE, UP, DOWN, LEFT, RIGHT
+                "x": spaces.Box(low=-100, high=160, shape=(), dtype=jnp.int32),
+                "y": spaces.Box(low=-100, high=210, shape=(), dtype=jnp.int32),
+                "width": spaces.Box(low=-100, high=160, shape=(), dtype=jnp.int32),
+                "height": spaces.Box(low=-100, high=210, shape=(), dtype=jnp.int32),
+                "direction": spaces.Box(low=-1, high=4, shape=(), dtype=jnp.int32),  # NONE, UP, DOWN, LEFT, RIGHT
             }),
             "enemy_bullet": spaces.Dict({
-                "x": spaces.Box(low=0, high=160, shape=(), dtype=jnp.int32),
-                "y": spaces.Box(low=0, high=210, shape=(), dtype=jnp.int32),
-                "width": spaces.Box(low=0, high=160, shape=(), dtype=jnp.int32),
-                "height": spaces.Box(low=0, high=210, shape=(), dtype=jnp.int32),
-                "direction": spaces.Box(low=0, high=4, shape=(), dtype=jnp.int32),  # NONE, UP, DOWN, LEFT, RIGHT
+                "x": spaces.Box(low=-100, high=160, shape=(), dtype=jnp.int32),
+                "y": spaces.Box(low=-100, high=210, shape=(), dtype=jnp.int32),
+                "width": spaces.Box(low=-100, high=160, shape=(), dtype=jnp.int32),
+                "height": spaces.Box(low=-100, high=210, shape=(), dtype=jnp.int32),
+                "direction": spaces.Box(low=-1, high=4, shape=(), dtype=jnp.int32),  # NONE, UP, DOWN, LEFT, RIGHT
             }),
             "score": spaces.Box(low=0, high=999999, shape=(), dtype=jnp.int32),
-            "lives": spaces.Box(low=0, high=10, shape=(), dtype=jnp.int32),
+            "lives": spaces.Box(low=-1, high=10, shape=(), dtype=jnp.int32),
         })
 
     @partial(jax.jit, static_argnums=(0,))
@@ -468,6 +485,7 @@ class JaxWizardOfWor(JaxEnvironment[WizardOfWorState, WizardOfWorObservation, Wi
     @partial(jax.jit, static_argnums=(0,))
     def _get_start_enemies(self, rng_key) -> chex.Array:
         """Generates the starting enemies for the game."""
+
         def _generate_single_enemy(rng_key) -> chex.Array:
             x = jax.random.randint(rng_key, shape=(), minval=0, maxval=11) * (
                     self.consts.TILE_SIZE[0] + self.consts.WALL_THICKNESS)
@@ -950,6 +968,7 @@ class JaxWizardOfWor(JaxEnvironment[WizardOfWorState, WizardOfWorObservation, Wi
     @partial(jax.jit, static_argnums=(0,))
     def _step_bullet_movement(self, state):
         """Updates the positions of the bullets in the game."""
+
         # move the bullet in the direction it is facing
         # if the bullet collides with a wall, it is removed
         # there are up to 2 bullets, one for the player and one for the enemy
@@ -1013,6 +1032,7 @@ class JaxWizardOfWor(JaxEnvironment[WizardOfWorState, WizardOfWorObservation, Wi
     @partial(jax.jit, static_argnums=(0,))
     def _step_enemy_movement(self, state):
         """Updates the positions of the enemies in the game."""
+
         # scan over all enemies and update the state based on their movement
 
         def move_enemy(carry, enemy_index):
