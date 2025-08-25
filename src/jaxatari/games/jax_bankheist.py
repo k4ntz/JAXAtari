@@ -144,7 +144,8 @@ class BankHeistState(NamedTuple):
     police_spawn_timers: chex.Array
     dynamite_timer: chex.Array
     pending_police_spawns: chex.Array  # Timer for delayed police spawning
-    pending_police_bank_indices: chex.Array  # Bank indices where police should spawn  
+    pending_police_bank_indices: chex.Array  # Bank indices where police should spawn
+    random_key: chex.PRNGKey  # Persistent random key that advances each step  
 
 #TODO: Add Background collision Map, Fuel, Fuel Refill and others
 class BankHeistObservation(NamedTuple):
@@ -191,7 +192,8 @@ class JaxBankHeist(JaxEnvironment[BankHeistState, BankHeistObservation, BankHeis
             police_spawn_timers=jnp.array([-1, -1, -1]).astype(jnp.int32),
             dynamite_timer=jnp.array([-1]).astype(jnp.int32),
             pending_police_spawns=jnp.array([-1, -1, -1]).astype(jnp.int32),  # -1 means no pending spawn
-            pending_police_bank_indices=jnp.array([-1, -1, -1]).astype(jnp.int32)  # Bank indices for pending spawns
+            pending_police_bank_indices=jnp.array([-1, -1, -1]).astype(jnp.int32),  # Bank indices for pending spawns
+            random_key=jax.random.PRNGKey(42)  # Initialize with a fixed seed
         )
         obs = self._get_observation(state)
         def expand_and_copy(x):
@@ -400,7 +402,8 @@ class JaxBankHeist(JaxEnvironment[BankHeistState, BankHeistObservation, BankHeis
             police_spawn_timers=new_police_spawn_timers,
             dynamite_timer=new_dynamite_timer,
             pending_police_spawns=jnp.array([-1, -1, -1]).astype(jnp.int32),
-            pending_police_bank_indices=jnp.array([-1, -1, -1]).astype(jnp.int32)
+            pending_police_bank_indices=jnp.array([-1, -1, -1]).astype(jnp.int32),
+            random_key=jax.random.PRNGKey(new_level + 100)  # New random key for new level
         )
 
     @partial(jax.jit, static_argnums=(0,))
@@ -585,18 +588,30 @@ class JaxBankHeist(JaxEnvironment[BankHeistState, BankHeistObservation, BankHeis
         return jax.lax.fori_loop(0, len(state.enemy_positions.visibility), move_single_police, state)
 
     @partial(jax.jit, static_argnums=(0,))
+    def advance_random_key(self, state: BankHeistState) -> Tuple[chex.PRNGKey, BankHeistState]:
+        """
+        Split the random key and advance the state's random key for the next step.
+        
+        Returns:
+            Tuple of (current_step_key, updated_state)
+        """
+        step_random_key, next_random_key = jax.random.split(state.random_key)
+        updated_state = state._replace(random_key=next_random_key)
+        return step_random_key, updated_state
+
+    @partial(jax.jit, static_argnums=(0,))
     def step(self, state: BankHeistState, action: chex.Array) -> Tuple[BankHeistState, BankHeistObservation, float, bool, BankHeistInfo]:
-        # Generate random key for this step
-        step_key = jax.random.PRNGKey(state.level + jnp.sum(state.player.position))
+        # Get random key for this step and advance state's random key
+        step_random_key, new_state = self.advance_random_key(state)
         
         # Player step
-        new_state = self.player_step(state, action)
+        new_state = self.player_step(new_state, action)
         
         # Police AI movement step
-        new_state = self.move_police_cars(new_state, step_key)
+        new_state = self.move_police_cars(new_state, step_random_key)
         
         # Timer step
-        new_state = self.timer_step(new_state)
+        new_state = self.timer_step(new_state, step_random_key)
         return state.obs_stack, new_state, 0.0, 1, {}
 
     @partial(jax.jit, static_argnums=(0,))
@@ -632,7 +647,7 @@ class JaxBankHeist(JaxEnvironment[BankHeistState, BankHeistObservation, BankHeis
         return new_state
 
     @partial(jax.jit, static_argnums=(0,))
-    def timer_step(self, state: BankHeistState) -> BankHeistState:
+    def timer_step(self, state: BankHeistState, step_random_key: chex.PRNGKey) -> BankHeistState:
         """
         Handles the countdown of timers for the spawning of police cars and banks as well as dynamite explosions.
 
@@ -640,8 +655,8 @@ class JaxBankHeist(JaxEnvironment[BankHeistState, BankHeistObservation, BankHeis
             BankHeistState: The new state of the game after the timer step.
         """
         def spawn_bank(state: BankHeistState) -> BankHeistState:
-            key = jax.random.PRNGKey(0)  # Use a fixed key for reproducibility
-            new_bank_spawns = jax.random.randint(key, shape=(state.bank_positions.position.shape[0],), minval=0, maxval=state.spawn_points.shape[0])
+            # Use the step random key for bank spawning
+            new_bank_spawns = jax.random.randint(step_random_key, shape=(state.bank_positions.position.shape[0],), minval=0, maxval=state.spawn_points.shape[0])
             chosen_points = state.spawn_points[new_bank_spawns]
             mask = (state.bank_spawn_timers == 0)[:, None]  # shape (3, 1)
             new_bank_positions = jnp.where(mask, chosen_points, state.bank_positions.position)
