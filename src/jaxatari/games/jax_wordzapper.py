@@ -18,8 +18,8 @@ class WordZapperConstants(NamedTuple) :
     FACE_RIGHT = 1
 
     # Player 
-    PLAYER_START_X = 80
-    PLAYER_START_Y = 110
+    PLAYER_START_X = 36
+    PLAYER_START_Y = 135
 
     # Object sizes (width, height)
     PLAYER_SIZE = (16, 12)
