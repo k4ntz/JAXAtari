@@ -21,7 +21,7 @@ Quentin Delfosse, Paul Seitz, Sebastian Wette, Daniel Kirn, Dominik Mandok, Lars
 
 ## Getting Started
 
-<!-- ### Prerequisites -->
+<!-- ### Prerequisites --> RANDOM CHANGES
 ### Install
 ```bash
 python3 -m venv .venv
