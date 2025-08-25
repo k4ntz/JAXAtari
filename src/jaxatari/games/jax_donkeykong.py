@@ -120,7 +120,7 @@ class DonkeyKongConstants(NamedTuple):
     # Fire
     FIRE_MOVING_SPEED: float = 0.49
     FIRE_START_Y: int = 60
-    FIRE_CHANGING_DIRECTION_PROP = 0.005
+    FIRE_CHANGING_DIRECTION_PROP = 0.008
 
     # Movement directions
     MOVING_UP: int = 0
@@ -171,7 +171,9 @@ class DonkeyKongConstants(NamedTuple):
     SCORE_FOR_JUMPING_OVER_FIRE = 100
     SCORE_FOR_TRIGGERING_TRAP = 100
     SCORE_FOR_DESTROYING_BARREL = 800
-    SCORE_FOR_REACHING_GOAL = 4100 
+    SCORE_FOR_DESTROYING_FIRE = 800
+    SCORE_FOR_REACHING_GOAL_LEVEL_1 = 4100
+    SCORE_FOR_REACHING_GOAL_LEVEL_2 = 3500 
 
     TIMER_REDUTION_DURATION = 128 # at every 128st frame, the timer will be reduced by 100, starting from 5000 "points"
     TIMER_REDUTION_AMOUNT = 100
@@ -467,7 +469,12 @@ class JaxDonkeyKong(JaxEnvironment[DonkeyKongState, DonkeyKongObservation, Donke
                 )
             new_state = jax.lax.fori_loop(0, len(state.fires.fire_x), each_fire_movement, state)
 
-            return new_state
+            return jax.lax.cond(
+                jnp.logical_and(state.mario_reached_goal == False, state.mario_got_hit == False),
+                lambda _: new_state,
+                lambda _: state,
+                operand=None
+            )
         new_state = fire_move(new_state)
 
         # implement the change of moving direction of the fires
@@ -495,10 +502,34 @@ class JaxDonkeyKong(JaxEnvironment[DonkeyKongState, DonkeyKongObservation, Donke
                     operand=None
                 )
 
+                # check if fire must change the direction if traps are triggered, so it can not move over it
+                def check_for_each_trap(j, has_to_change_dir):
+                    fire_flying_over_trap = (
+                        (state.traps.stage[j] == state.fires.stage[i])
+                        & (state.fires.fire_y[i] <= state.traps.trap_y[j])
+                        & ((state.fires.fire_y[i] + self.consts.FIRE_HIT_BOX_Y) >= (state.traps.trap_y[j] + self.consts.TRAP_WIDTH))
+                    ) 
+                    change_in_dir = jnp.logical_and(fire_flying_over_trap, state.traps.triggered[j])
+                    return jax.lax.cond(
+                        change_in_dir,
+                        lambda _: True,
+                        lambda _: has_to_change_dir,
+                        operand=None
+                    )
+                has_to_change_dir = jax.lax.fori_loop(0, len(state.traps.trap_x), check_for_each_trap, False)
+                direction_change_prop = jax.lax.cond(
+                    has_to_change_dir,
+                    lambda _: 1.0,
+                    lambda _: direction_change_prop,
+                    operand=None
+                )
+
+                # use the propability to change the direction
+                # if a fire forced to change his direction --> direction_change_prop == 1.0
                 def should_change(key, direction_change_prop: float) -> bool:
                     rnd = jax.random.uniform(key, shape=())
                     return rnd < direction_change_prop
-                key = jax.random.PRNGKey(jnp.round(state.fires.fire_x[i]).astype(jnp.int32) + jnp.round(state.fires.fire_y[i]).astype(jnp.int32) + state.fires.stage[i])
+                key = jax.random.PRNGKey(jnp.round(state.fires.fire_x[i]).astype(jnp.int32) + jnp.round(state.fires.fire_y[i]).astype(jnp.int32) + state.fires.stage[i] + state.step_counter)
                 change_direction = should_change(key, direction_change_prop)
 
                 # new_state with opposite moving direction
@@ -929,7 +960,7 @@ class JaxDonkeyKong(JaxEnvironment[DonkeyKongState, DonkeyKongObservation, Donke
             mario_jumping_over_enemy = False
             mario_x = state.mario_x + self.consts.MARIO_HIT_BOX_X
 
-            def check_collision_for_each_enemy(idx, hit):
+            def check_collision_for_each_barrel(idx, hit):
                 mario_got_hit = JaxDonkeyKong._collision_between_two_objects(mario_x, state.mario_y, self.consts.MARIO_HIT_BOX_X, self.consts.MARIO_HIT_BOX_Y,
                                                                         state.barrels.barrel_x[idx], state.barrels.barrel_y[idx], self.consts.BARREL_HIT_BOX_X, self.consts.BARREL_HIT_BOX_Y)
                 
@@ -939,7 +970,19 @@ class JaxDonkeyKong(JaxEnvironment[DonkeyKongState, DonkeyKongObservation, Donke
                     lambda _: hit,
                     operand=None
                 )
-            mario_jumping_over_enemy = jax.lax.fori_loop(0, len(state.barrels.barrel_x), check_collision_for_each_enemy, False)
+            mario_jumping_over_enemy = jax.lax.fori_loop(0, len(state.barrels.barrel_x), check_collision_for_each_barrel, False)
+
+            def check_collision_for_each_fire(idx, hit):
+                mario_got_hit = JaxDonkeyKong._collision_between_two_objects(mario_x, state.mario_y, self.consts.MARIO_HIT_BOX_X, self.consts.MARIO_HIT_BOX_Y,
+                                                                        state.fires.fire_x[idx], state.fires.fire_y[idx], self.consts.FIRE_HIT_BOX_X, self.consts.FIRE_HIT_BOX_Y)
+                
+                return jax.lax.cond(
+                    mario_got_hit,
+                    lambda _: True,
+                    lambda _: hit,
+                    operand=None
+                )
+            mario_jumping_over_enemy = jax.lax.fori_loop(0, len(state.fires.fire_x), check_collision_for_each_fire, mario_jumping_over_enemy)
 
             mario_is_jumping = jnp.logical_or(state.mario_jumping, state.mario_jumping_wide)
             return jax.lax.cond(
@@ -1265,7 +1308,7 @@ class JaxDonkeyKong(JaxEnvironment[DonkeyKongState, DonkeyKongObservation, Donke
 
         # Check if mario is hitted by barrel/fire
         def mario_enemy_collision(state):
-            def check_collision_for_each_enemy(idx, state):
+            def check_collision_for_each_barrel(idx, state):
                 mario_got_hit = JaxDonkeyKong._collision_between_two_objects(state.mario_x, state.mario_y, self.consts.MARIO_HIT_BOX_X, self.consts.MARIO_HIT_BOX_Y,
                                                                         state.barrels.barrel_x[idx], state.barrels.barrel_y[idx], self.consts.BARREL_HIT_BOX_X, self.consts.BARREL_HIT_BOX_Y)
                 mario_got_hit &= jnp.logical_not(state.barrels.reached_the_end[idx])
@@ -1286,8 +1329,33 @@ class JaxDonkeyKong(JaxEnvironment[DonkeyKongState, DonkeyKongObservation, Donke
                     lambda _: state,
                     operand=None
                 )
-
-            new_state = jax.lax.fori_loop(0, len(state.barrels.barrel_x), check_collision_for_each_enemy, state)
+            def check_collision_for_each_fire(idx, state):
+                mario_got_hit = JaxDonkeyKong._collision_between_two_objects(state.mario_x, state.mario_y, self.consts.MARIO_HIT_BOX_X, self.consts.MARIO_HIT_BOX_Y,
+                                                                        state.fires.fire_x[idx], state.fires.fire_y[idx], self.consts.FIRE_HIT_BOX_X, self.consts.FIRE_HIT_BOX_Y)
+                mario_got_hit &= jnp.logical_not(state.fires.destroyed[idx])
+                mario_got_hit &= jnp.logical_not(jnp.logical_or(state.mario_jumping, state.mario_jumping_wide))
+                game_freeze_start = jax.lax.cond(
+                    state.mario_got_hit,
+                    lambda _: state.game_freeze_start,
+                    lambda _: state.step_counter,
+                    operand=None
+                )
+                new_state = state._replace(
+                    mario_got_hit = True,
+                    game_freeze_start = game_freeze_start,
+                )
+                return jax.lax.cond(
+                    mario_got_hit,
+                    lambda _: new_state,
+                    lambda _: state,
+                    operand=None
+                )
+            new_state = jax.lax.cond(
+                state.level == 1,
+                lambda _: jax.lax.fori_loop(0, len(state.barrels.barrel_x), check_collision_for_each_barrel, state),
+                lambda _: jax.lax.fori_loop(0, len(state.fires.fire_x), check_collision_for_each_fire, state),
+                operand=None
+            )
             return new_state
         new_state = mario_enemy_collision(new_state)
 
@@ -1379,6 +1447,12 @@ class JaxDonkeyKong(JaxEnvironment[DonkeyKongState, DonkeyKongObservation, Donke
                 lambda _: (self.consts.LEVEL_2_MARIO_START_X, self.consts.LEVEL_2_MARIO_START_Y, self.consts.LEVEL_2_HAMMER_X, self.consts.LEVEL_2_HAMMER_Y),
                 operand=None
             )
+            game_score = jax.lax.cond(
+                state.level == 1,
+                lambda _: new_state.game_score + self.consts.SCORE_FOR_REACHING_GOAL_LEVEL_1,
+                lambda _: new_state.game_score + self.consts.SCORE_FOR_REACHING_GOAL_LEVEL_2,
+                operand=None
+            )
             new_state_clear_level = new_state._replace(
                 level=level,
                 ladders=ladder,
@@ -1387,7 +1461,7 @@ class JaxDonkeyKong(JaxEnvironment[DonkeyKongState, DonkeyKongObservation, Donke
                 mario_y = mario_y,
                 hammer_x = hammer_x,
                 hammer_y = hammer_y,
-                game_score = new_state.game_score + self.consts.SCORE_FOR_REACHING_GOAL,
+                game_score = game_score,
             )            
 
             game_freeze_over = self.consts.GAME_FREEZE_DURATION < (state.step_counter - state.game_freeze_start)
@@ -1567,8 +1641,8 @@ class JaxDonkeyKong(JaxEnvironment[DonkeyKongState, DonkeyKongObservation, Donke
 
 
         # Check if hammer hits barrel; if so, barrel will be "destroyed"
-        def hammer_enemy_collision(state):
-            def check_collision_for_each_enemy(barrel_idx, state):
+        def hammer_barrel_collision(state):
+            def check_collision_for_each_barrel(barrel_idx, state):
                 collision = JaxDonkeyKong._collision_between_two_objects( state.barrels.barrel_x[barrel_idx], state.barrels.barrel_y[barrel_idx], self.consts.BARREL_HIT_BOX_X, self.consts.BARREL_HIT_BOX_Y,
                                                             state.hammer_x, state.hammer_y, self.consts.HAMMER_SWING_HIT_BOX_X, self.consts.HAMMER_SWING_HIT_BOX_Y)
                 collision &= state.hammer_can_hit
@@ -1593,10 +1667,30 @@ class JaxDonkeyKong(JaxEnvironment[DonkeyKongState, DonkeyKongObservation, Donke
                     lambda _: state,
                     operand=None
                 )
-            new_state = jax.lax.fori_loop(0, len(state.barrels.barrel_x), check_collision_for_each_enemy, state)
-
+            new_state = jax.lax.fori_loop(0, len(state.barrels.barrel_x), check_collision_for_each_barrel, state)
             return new_state
-        new_state = hammer_enemy_collision(new_state)
+        new_state = hammer_barrel_collision(new_state)
+
+        # Check if hammer hits fire on stage 4; if so, fire will be "destroyed"
+        # in donkeyKong Level 2: only fire on stage 4 can be destroyed
+        def hammer_fire_stage_4_collision(state):
+            stage_4_fire_idx = 1
+            collision = JaxDonkeyKong._collision_between_two_objects( state.fires.fire_x[stage_4_fire_idx], state.fires.fire_y[stage_4_fire_idx], self.consts.FIRE_HIT_BOX_X, self.consts.FIRE_HIT_BOX_Y,
+                                                            state.hammer_x, state.hammer_y, self.consts.HAMMER_SWING_HIT_BOX_X, self.consts.HAMMER_SWING_HIT_BOX_Y)
+            collision &= state.hammer_can_hit
+            collision &= jnp.logical_not(state.fires.destroyed[stage_4_fire_idx])
+
+            destroyed = state.fires.destroyed.at[stage_4_fire_idx].set(True)
+            fires = state.fires._replace(destroyed=destroyed)
+            new_state = state._replace(fires=fires, game_score = state.game_score + self.consts.SCORE_FOR_DESTROYING_FIRE)
+
+            return jax.lax.cond(
+                collision,
+                lambda _: new_state,
+                lambda _: state,
+                operand=None
+            )
+        new_state = hammer_fire_stage_4_collision(new_state)
 
         return new_state
     
@@ -1928,16 +2022,6 @@ class DonkeyKongRenderer(JAXGameRenderer):
             frame_bg = aj.get_sprite_frame(self.SPRITES_BG, 1)
             raster = aj.render_at(raster, 0, 0, frame_bg)
             frame_drop_pit = aj.get_sprite_frame(self.SPRITE_DROP_PIT, 0)
-
-            # some traps might be already triggered - in that case, drop pits at those position will not be rendered
-            # raster = aj.render_at(raster, self.consts.TRAP_LEFT_Y, self.consts.TRAP_FLOOR_2_X, frame_drop_pit)
-            # raster = aj.render_at(raster, self.consts.TRAP_LEFT_Y, self.consts.TRAP_FLOOR_3_X, frame_drop_pit)
-            # raster = aj.render_at(raster, self.consts.TRAP_LEFT_Y, self.consts.TRAP_FLOOR_4_X, frame_drop_pit)
-            # raster = aj.render_at(raster, self.consts.TRAP_LEFT_Y, self.consts.TRAP_FLOOR_5_X, frame_drop_pit)
-            # raster = aj.render_at(raster, self.consts.TRAP_RIGHT_Y, self.consts.TRAP_FLOOR_2_X, frame_drop_pit)
-            # raster = aj.render_at(raster, self.consts.TRAP_RIGHT_Y, self.consts.TRAP_FLOOR_3_X, frame_drop_pit)
-            # raster = aj.render_at(raster, self.consts.TRAP_RIGHT_Y, self.consts.TRAP_FLOOR_4_X, frame_drop_pit)
-            # raster = aj.render_at(raster, self.consts.TRAP_RIGHT_Y, self.consts.TRAP_FLOOR_5_X, frame_drop_pit)
 
             def look_for_triggered_traps(i, raster):
                 return jax.lax.cond(
