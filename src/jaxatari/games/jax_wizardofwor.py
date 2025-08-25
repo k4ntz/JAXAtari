@@ -379,35 +379,7 @@ class JaxWizardOfWor(JaxEnvironment[WizardOfWorState, WizardOfWorObservation, Wi
         """Returns the action space of the game."""
         return spaces.Discrete(6)  # Platzhalter
 
-    @partial(jax.jit, static_argnums=(0,))
-    def observation_space(self) -> spaces.Dict:
-        """Returns the observation space of the game."""
-        return spaces.Dict({
-            "player": spaces.Dict({
-                "x": spaces.Box(low=0, high=self.consts.BOARD_SIZE[0], shape=(), dtype=jnp.int32),
-                "y": spaces.Box(low=0, high=self.consts.BOARD_SIZE[1], shape=(), dtype=jnp.int32),
-                "width": spaces.Box(low=0, high=self.consts.PLAYER_SIZE[0], shape=(), dtype=jnp.int32),
-                "height": spaces.Box(low=0, high=self.consts.PLAYER_SIZE[1], shape=(), dtype=jnp.int32),
-                "direction": spaces.Discrete(5),  # NONE, UP, DOWN, LEFT, RIGHT
-            }),
-            "enemies": spaces.Box(low=0, high=999999, shape=(self.consts.MAX_ENEMIES, 7), dtype=jnp.int32),
-            "bullet": spaces.Dict({
-                "x": spaces.Box(low=0, high=self.consts.BOARD_SIZE[0], shape=(), dtype=jnp.int32),
-                "y": spaces.Box(low=0, high=self.consts.BOARD_SIZE[1], shape=(), dtype=jnp.int32),
-                "width": spaces.Box(low=0, high=self.consts.BULLET_SIZE[0], shape=(), dtype=jnp.int32),
-                "height": spaces.Box(low=0, high=self.consts.BULLET_SIZE[1], shape=(), dtype=jnp.int32),
-                "direction": spaces.Discrete(5),  # NONE, UP, DOWN, LEFT, RIGHT
-            }),
-            "enemy_bullet": spaces.Dict({
-                "x": spaces.Box(low=0, high=self.consts.BOARD_SIZE[0], shape=(), dtype=jnp.int32),
-                "y": spaces.Box(low=0, high=self.consts.BOARD_SIZE[1], shape=(), dtype=jnp.int32),
-                "width": spaces.Box(low=0, high=self.consts.BULLET_SIZE[0], shape=(), dtype=jnp.int32),
-                "height": spaces.Box(low=0, high=self.consts.BULLET_SIZE[1], shape=(), dtype=jnp.int32),
-                "direction": spaces.Discrete(5),  # NONE, UP, DOWN, LEFT, RIGHT
-            }),
-            "score": spaces.Box(low=0, high=999999, shape=(), dtype=jnp.int32),
-            "lives": spaces.Box(low=0, high=10, shape=(), dtype=jnp.int32),
-        })
+
 
     @partial(jax.jit, static_argnums=(0,))
     def image_space(self) -> spaces.Box:
@@ -439,6 +411,36 @@ class JaxWizardOfWor(JaxEnvironment[WizardOfWorState, WizardOfWorObservation, Wi
     def _get_reward(self, previous_state: WizardOfWorState, state: WizardOfWorState) -> chex.Array:
         """Calculates the reward based on the previous and current state."""
         return state.score - previous_state.score
+
+    @partial(jax.jit, static_argnums=(0,))
+    def observation_space(self) -> spaces.Dict:
+        """Returns the observation space of the game."""
+        return spaces.Dict({
+            "player": spaces.Dict({
+                "x": spaces.Box(low=0, high=160, shape=(), dtype=jnp.int32),
+                "y": spaces.Box(low=0, high=210, shape=(), dtype=jnp.int32),
+                "width": spaces.Box(low=0, high=160, shape=(), dtype=jnp.int32),
+                "height": spaces.Box(low=0, high=210, shape=(), dtype=jnp.int32),
+                "direction": spaces.Box(low=0, high=4, shape=(), dtype=jnp.int32),  # NONE, UP, DOWN, LEFT, RIGHT
+            }),
+            "enemies": spaces.Box(low=0, high=999999, shape=(6, 7), dtype=jnp.int32),
+            "bullet": spaces.Dict({
+                "x": spaces.Box(low=0, high=160, shape=(), dtype=jnp.int32),
+                "y": spaces.Box(low=0, high=210, shape=(), dtype=jnp.int32),
+                "width": spaces.Box(low=0, high=160, shape=(), dtype=jnp.int32),
+                "height": spaces.Box(low=0, high=210, shape=(), dtype=jnp.int32),
+                "direction": spaces.Box(low=0, high=4, shape=(), dtype=jnp.int32),  # NONE, UP, DOWN, LEFT, RIGHT
+            }),
+            "enemy_bullet": spaces.Dict({
+                "x": spaces.Box(low=0, high=160, shape=(), dtype=jnp.int32),
+                "y": spaces.Box(low=0, high=210, shape=(), dtype=jnp.int32),
+                "width": spaces.Box(low=0, high=160, shape=(), dtype=jnp.int32),
+                "height": spaces.Box(low=0, high=210, shape=(), dtype=jnp.int32),
+                "direction": spaces.Box(low=0, high=4, shape=(), dtype=jnp.int32),  # NONE, UP, DOWN, LEFT, RIGHT
+            }),
+            "score": spaces.Box(low=0, high=999999, shape=(), dtype=jnp.int32),
+            "lives": spaces.Box(low=0, high=10, shape=(), dtype=jnp.int32),
+        })
 
     @partial(jax.jit, static_argnums=(0,))
     def _get_observation(self, state: WizardOfWorState) -> WizardOfWorObservation:
