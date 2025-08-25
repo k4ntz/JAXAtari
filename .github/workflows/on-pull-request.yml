@@ -2,7 +2,7 @@
 name: PR Tests
 
 on:
-  pull_request:
+  pull_request_target:
     branches-ignore:
       - master
 
@@ -12,16 +12,20 @@ jobs:
     outputs:
       matrix: ${{ steps.set-matrix-pr.outputs.matrix }}
     steps:
-      - name: Check out code
+      - name: Check out base branch
         uses: actions/checkout@v4
         with:
-          fetch-depth: 0 # Needed for git diff
+          ref: ${{ github.event.pull_request.base.sha }}
+          fetch-depth: 0 # Fetch all history for all branches and tags
+
+      - name: Fetch PR head
+        run: git fetch origin pull/${{ github.event.pull_request.number }}/head:${{ github.event.pull_request.head.sha }}
+        shell: bash
 
       - name: Generate matrix of changed game files for PR
         id: set-matrix-pr
         run: |
-          git fetch origin ${{ github.base_ref }}
-          CHANGED_GAMES=$(git diff --name-only origin/${{ github.base_ref }}...HEAD | grep 'src/jaxatari/games/jax_.*\.py' | sed -e 's|src/jaxatari/games/jax_||' -e 's|\.py$||' | jq -R . | jq -cs .)
+          CHANGED_GAMES=$(git diff --name-only ${{ github.event.pull_request.base.sha }}...${{ github.event.pull_request.head.sha }} | grep 'src/jaxatari/games/jax_.*\.py' | sed -e 's|src/jaxatari/games/jax_||' -e 's|\.py$||' | jq -R . | jq -cs .)
           echo "matrix=$CHANGED_GAMES" >> $GITHUB_OUTPUT
 
   trigger:
@@ -29,3 +33,4 @@ jobs:
     uses: ./.github/workflows/reusable-run-tests.yml
     with:
       game_matrix: ${{ needs.prepare-matrix.outputs.matrix }}
+      pr_head_sha: ${{ github.event.pull_request.head.sha }}

@@ -8,6 +8,10 @@ on:
         description: 'A JSON string of the game matrix to test'
         required: true
         type: string
+      pr_head_sha:
+        description: 'The SHA of the PR head'
+        required: false
+        type: string
 
 jobs:
   run-tests:
@@ -19,9 +23,29 @@ jobs:
         game: ${{ fromJSON(inputs.game_matrix) }}
 
     steps:
-      - name: Check out code
+      - name: Checkout code
         uses: actions/checkout@v4
-      
+        if: ${{ inputs.pr_head_sha == '' }}
+
+      - name: Check out base branch
+        uses: actions/checkout@v4
+        if: ${{ inputs.pr_head_sha != '' }}
+        with:
+          ref: ${{ github.event.pull_request.base.sha }}
+
+      - name: Check out PR head
+        if: ${{ inputs.pr_head_sha != '' }}
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.pr_head_sha }}
+          path: pr_head
+
+      - name: Override src with PR changes
+        if: ${{ inputs.pr_head_sha != '' }}
+        run: |
+          rsync -av pr_head/src/jaxatari/ src/jaxatari/
+        shell: bash
+
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
