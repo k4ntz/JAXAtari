@@ -831,8 +831,8 @@ class BeamRiderEnv(JaxEnvironment[BeamRiderState, BeamRiderObservation, BeamRide
         at_horizon = jnp.abs(current_y - self.constants.HORIZON_LINE_Y) <= 5
 
         # Saucers not at horizon move toward it first
-        moving_to_horizon = horizon_patrol_mask & ~at_horizon & (current_y > self.constants.HORIZON_LINE_Y)
-        horizon_new_y_moving = current_y - 2.0  # Move up to horizon
+        moving_to_horizon = horizon_patrol_mask & ~at_horizon & (current_y < self.constants.HORIZON_LINE_Y)
+        horizon_new_y_moving = current_y + 2.0  # Move down to horizon
 
         # Saucers at horizon do patrol behavior OR dive
         patrolling_horizon = horizon_patrol_mask & at_horizon
