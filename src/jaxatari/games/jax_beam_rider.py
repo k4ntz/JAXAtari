@@ -15,12 +15,10 @@ import jaxatari.spaces as spaces
 
 """TODOS:
 Top Priorities:
-- The movements of the enemies (slightly reworked so that they follow the beams(more depending on Analysis from Mahta))
-- "Fix" the renderer as some components are not being shown with Play.py(Player ship, Points, lives, torpedoes, enemies left) (Mahta)
+- Fix the renderer as some components are not being shown with Play.py(Player ship, Points, lives, torpedoes, enemies left) (Mahta)
 - make sure that all of the enemies follow the dotted lines/make the beams follow the dotted lines
 For later:
 - Check the sentinal ship constants/Optimize the code/remove unnecessary code
-- Adjust the spawn rate of green blockers in sectors 1 - 5 (currently the sentinel moves faster through the screen than they can spawn) -> somewhat done
 - Documentation
 
 Nice to have:
