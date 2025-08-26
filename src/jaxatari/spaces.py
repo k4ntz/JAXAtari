@@ -96,22 +96,24 @@ class Box(Space):
             shape: The shape of the space. If None, it's inferred from `low` and `high`.
             dtype: The data type of the space.
         """
-        # Convert inputs to JAX arrays for consistency
-        self.low = jnp.asarray(low, dtype=dtype)
-        self.high = jnp.asarray(high, dtype=dtype)
-        self.dtype = dtype
-
         # Determine the shape of the space
         if shape is not None:
             self.shape = shape
         else:
             # If shape is not provided, it must be inferred from the bounds.
             # We require the bounds to have the same shape.
-            if self.low.shape != self.high.shape:
+            low_arr = np.asarray(low)
+            high_arr = np.asarray(high)
+            if low_arr.shape != high_arr.shape:
                 raise ValueError(
-                    f"low and high must have the same shape, got {self.low.shape} and {self.high.shape}"
+                    f"low and high must have the same shape, got {low_arr.shape} and {high_arr.shape}"
                 )
-            self.shape = self.low.shape
+            self.shape = low_arr.shape
+
+        # Broadcast low and high to the correct shape
+        self.low = jnp.broadcast_to(jnp.asarray(low, dtype=dtype), self.shape)
+        self.high = jnp.broadcast_to(jnp.asarray(high, dtype=dtype), self.shape)
+        self.dtype = dtype
         
         # Broadcasting checks to ensure compatibility
         try:
@@ -181,6 +183,10 @@ class Dict(Space):
 
     def contains(self, x: dict) -> jax.Array:
         """Check whether the given Pytree is contained in the space."""
+        # Handle named tuples by converting to dict
+        if hasattr(x, '_asdict'):
+            x = x._asdict()
+        
         if not isinstance(x, dict) or self.spaces.keys() != x.keys():
             return jnp.asarray(False)
 
@@ -218,6 +224,11 @@ class Tuple(Space):
         """
         Check whether the given Pytree is contained in the space.
         """
+        # Handle named tuples by converting to tuple
+        if hasattr(x, '_asdict'):
+            # Convert named tuple to regular tuple
+            x = tuple(x._asdict().values())
+        
         # 1. Initial validation: check if x is a tuple of the correct length.
         if not isinstance(x, (tuple, list)) or len(x) != len(self.spaces):
             return jnp.asarray(False)

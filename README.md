@@ -1,6 +1,6 @@
 # 🎮 JAXAtari: JAX-Based Object-Centric Atari Environments
 
-Quentin Delfosse, Daniel Kirn, Dominik Mandok, Paul Seitz, Lars Teubner, Sebastian Wette  
+Quentin Delfosse, Paul Seitz, Sebastian Wette, Daniel Kirn, Dominik Mandok, Lars Teubner
 [Machine Learning Lab – TU Darmstadt](https://www.ml.informatik.tu-darmstadt.de/)
 
 > A GPU-accelerated, object-centric Atari environment suite built with JAX for fast, scalable reinforcement learning research.
@@ -133,9 +133,13 @@ _, (rewards, dones, infos) = jax.lax.scan(
 
 ### Manual Game Play
 
-Run a game manually with human input:
+Run a game manually with human input (e.g. on Pong):
 ```bash
-python3 -m jaxatari.games.jax_seaquest
+pip install pygame
+```
+
+```bash
+python3 scripts/play.py -g Pong
 ```
 
 ---
@@ -144,10 +148,10 @@ python3 -m jaxatari.games.jax_seaquest
 
 | Game     | Supported |
 |----------|-----------|
-| Seaquest | ✅        |
-| Pong     | ✅        |
-| Kangaroo | ✅        |
-| Freeway  | ✅        |
+| Freeway  |    ✅     |
+| Kangaroo |    ✅     |
+| Pong     |    ✅     |
+| Seaquest |    ✅     |
 
 > More games can be added via the uniform wrapper system.
 

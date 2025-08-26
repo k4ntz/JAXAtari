@@ -279,13 +279,14 @@ class OCAtariPlayer:
             if event.type == pygame.QUIT:
                 return False  # Signal to stop the game loop
 
+            # --- MOUSE (Keep existing logic if needed) ---
             elif event.type == pygame.MOUSEBUTTONDOWN:
                 if event.button == 1:  # Left mouse button
                     # Click handling logic can be added here
                     pass
                 elif event.button == 2:
                     # TODO: here you can put ram manipulations to get the sprites faster (for example increasing the score manually)
-                    self.env.set_ram(16, 10)
+                    self.env.unwrapped.ale.setRAM(103, self.env.unwrapped.ale.getRAM()[103] + 1)
 
             elif event.type == pygame.KEYDOWN:
                 if event.key == pygame.K_p:  # Pause/resume
