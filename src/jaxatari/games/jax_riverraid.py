@@ -920,7 +920,7 @@ def enemy_collision(state: RiverraidState) -> RiverraidState:
 
 
 @jax.jit
-def fuel_collision(state: RiverraidState) -> RiverraidState:
+def handle_fuel(state: RiverraidState) -> RiverraidState:
     active_fuel_mask = state.fuel_state == 1
 
     # player collision
@@ -947,12 +947,17 @@ def fuel_collision(state: RiverraidState) -> RiverraidState:
 
     new_player_fuel = jax.lax.cond(
         player_collision_present,
-        lambda state: jnp.clip(state.player_fuel + 1, 0, MAX_FUEL),  # TODO every 5th frame after first contact
-        lambda state: jax.lax.cond(                                         # every 50th frame
+        lambda state: jax.lax.cond(
+            state.turn_step % 2 == 0,
+            lambda state: jnp.clip(state.player_fuel + 1, 0, MAX_FUEL),
+            lambda state: state.player_fuel,
+            operand=state
+        ),
+        lambda state: jax.lax.cond(
             state.turn_step % 50 == 0,
-            lambda _: jnp.clip(state.player_fuel - 1, 0, MAX_FUEL),
-            lambda _: state.player_fuel,
-            operand=None
+            lambda state: jnp.clip(state.player_fuel - 1, 0, MAX_FUEL),
+            lambda state: state.player_fuel,
+            operand=state
         ),
         operand=state
     )
@@ -1108,7 +1113,7 @@ class JaxRiverraid(JaxEnvironment):
             new_state = enemy_collision(new_state)
             new_state = update_enemy_movement_status(new_state)
             new_state = enemy_movement(new_state)
-            new_state = fuel_collision(new_state)
+            new_state = handle_fuel(new_state)
             return new_state
 
         def respawn(state: RiverraidState) -> RiverraidState:
@@ -1171,18 +1176,24 @@ def load_sprites():
     enemy_boat = aj.loadFrame(os.path.join(MODULE_DIR, "sprites/galaxian/red_orange_enemy_1.npy"), transpose=False)
     enemy_helicopter = aj.loadFrame(os.path.join(MODULE_DIR, "sprites/galaxian/gray_enemy_1.npy"), transpose=False)
     enemy_airplane = aj.loadFrame(os.path.join(MODULE_DIR, "sprites/galaxian/purple_blue_enemy_1.npy"), transpose=False)
+    fuel_display = aj.loadFrame(os.path.join(MODULE_DIR, "sprites/riverraid/fuel_display.npy"), transpose=False)
+    fuel_indicator = aj.loadFrame(os.path.join(MODULE_DIR, "sprites/riverraid/fuel_indicator.npy"), transpose=False)
 
     SPRITE_PLAYER = jnp.expand_dims(player, axis = 0)
     BULLET = jnp.expand_dims(bullet, axis=0)
     ENEMY_BOAT = jnp.expand_dims(enemy_boat, axis=0)
     ENEMY_HELICOPTER = jnp.expand_dims(enemy_helicopter, axis=0)
     ENEMY_AIRPLANE = jnp.expand_dims(enemy_airplane, axis=0)
+    FUEL_DISPLAY = jnp.expand_dims(fuel_display, axis=0)
+    FUEL_INDICATOR = jnp.expand_dims(fuel_indicator, axis=0)
     return(
         SPRITE_PLAYER,
         BULLET,
         ENEMY_BOAT,
         ENEMY_HELICOPTER,
-        ENEMY_AIRPLANE
+        ENEMY_AIRPLANE,
+        FUEL_DISPLAY,
+        FUEL_INDICATOR
     )
 
 class RiverraidRenderer(JAXGameRenderer):
@@ -1192,7 +1203,9 @@ class RiverraidRenderer(JAXGameRenderer):
             self.BULLET,
             self.ENEMY_BOAT,
             self.ENEMY_HELICOPTER,
-            self.ENEMY_AIRPLANE
+            self.ENEMY_AIRPLANE,
+            self.FUEL_DISPLAY,
+            self.FUEL_INDICATOR
         ) = load_sprites()
 
     @partial(jax.jit, static_argnums=(0,))
@@ -1275,6 +1288,17 @@ class RiverraidRenderer(JAXGameRenderer):
         y_coords = jnp.arange(SCREEN_HEIGHT)
         ui_mask = y_coords >= (SCREEN_HEIGHT - UI_HEIGHT)
         raster = jnp.where(ui_mask[:, None, None], ui_color, raster)
+
+        fuel_frame = aj.get_sprite_frame(self.FUEL_DISPLAY, 0)
+        fuel_display_x = SCREEN_WIDTH // 2 - fuel_frame.shape[1] // 2
+        fuel_display_y = SCREEN_HEIGHT - UI_HEIGHT // 2 - fuel_frame.shape[0] // 2
+        raster = aj.render_at(raster, fuel_display_x, fuel_display_y, fuel_frame)
+
+        fuel_indicator_frame = aj.get_sprite_frame(self.FUEL_INDICATOR, 0)
+        fuel_fill = state.player_fuel
+        indicator_x = fuel_display_x + fuel_fill + 3
+        raster = aj.render_at(raster, indicator_x, fuel_display_y + 4, fuel_indicator_frame)
+
         return raster
 
 
