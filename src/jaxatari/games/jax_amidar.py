@@ -9,8 +9,6 @@
 # - enemy speed for levels over Level 7 does not change, in ALE it still changes
 # - the bottom path is the same as any other path, in ALE it's thinner and the sprites are further up on the path
 
-# TODO handle generated mazes better (starting pos., which rectangles are corners --> chicken mode (should just be clearly defined I guess) ,...)
-
 from functools import partial
 import os
 from typing import NamedTuple, Tuple
@@ -21,124 +19,9 @@ from jaxatari import spaces
 from jaxatari.environment import JaxEnvironment, JAXAtariAction as Action
 from jaxatari.renderers import JAXGameRenderer
 from jaxatari.rendering import jax_rendering_utils as aj
-from jaxatari.games.amidar_mazes import original as chosen_maze #XXX
+from jaxatari.games.amidar_mazes import original as chosen_maze
 
 # Functions to precompute some constants so they only need to be calculated once
-
-def calculate_rectangles(HORIZONTAL_PATH_EDGES, VERTICAL_PATH_EDGES, PATH_EDGES, PATH_CORNERS):
-    """not jited since it is only ran once; assumes the vertical edges are top to bottom and horizontal edges are left to right"""
-
-    def convert_vertical_index(index):
-        """Converts an index in VERTICAL_PATH_EDGES to the corresponding index in PATH_EDGES."""
-        return index + HORIZONTAL_PATH_EDGES.shape[0]
-    
-    def add_edge(rectangle, edge_index):
-        """Adds an edge to the rectangle."""
-        rectangle = rectangle.at[edge_index].set(1)
-        return rectangle
-    
-    no_edges = jnp.zeros(PATH_EDGES.shape[0], dtype=jnp.int32)
-    
-    def left_and_check_down(rectangle, corner):
-        """Checks if there is a horizontal edge going left from the corner and adds it to the rectangle,
-        then checks if there is a vertical edge going down from the new corner (in this case the rectangle should be complete)."""
-        if jnp.any(jnp.apply_along_axis(jnp.all, 1, (HORIZONTAL_PATH_EDGES[:, 1] == corner))):
-            edge_index = jnp.where(jnp.apply_along_axis(jnp.all, 1, (HORIZONTAL_PATH_EDGES[:, 1] == corner)), size=1)[0][0]
-            rectangle = add_edge(rectangle, edge_index)
-            new_corner = PATH_EDGES[edge_index, 0]
-
-            if not jnp.any(jnp.apply_along_axis(jnp.all, 1, (VERTICAL_PATH_EDGES[:, 0] == new_corner))): # if there is NOT a vertical edge that goes down from there
-                rectangle, new_corner = left_and_check_down(rectangle, new_corner) # find another edge that goes left
-            
-            return rectangle, new_corner
-        else: 
-            return no_edges, None
-    
-    def up_and_check_left(rectangle, corner):
-        """Checks if there is a vertical edge going up from the corner and adds it to the rectangle,
-        then checks if there is a horizontal edge going left from the new corner."""
-        if jnp.any(jnp.apply_along_axis(jnp.all, 1, (VERTICAL_PATH_EDGES[:, 1] == corner))): # if there is an edge that goes up
-            edge_index = convert_vertical_index(jnp.where(jnp.apply_along_axis(jnp.all, 1, (VERTICAL_PATH_EDGES[:, 1] == corner)), size=1)[0][0]) # get the index of the edge that goes up
-            rectangle = add_edge(rectangle, edge_index)  # Add the vertical edge going up
-            new_corner = PATH_EDGES[edge_index, 0]  # This is the new corner after going up
-
-            if jnp.any(jnp.apply_along_axis(jnp.all, 1, (HORIZONTAL_PATH_EDGES[:, 1] == new_corner))): # if there is a horizontal edge that goes left from there 
-                rectangle, new_corner = left_and_check_down(rectangle, new_corner)
-            else:
-                rectangle, new_corner = up_and_check_left(rectangle, new_corner) # find another edge that goes up
-
-            return rectangle, new_corner
-        else: 
-            return no_edges, None
-
-    def right_and_check_up(rectangle, corner):
-        """Checks if there is a horizontal edge going right from the corner and adds it to the rectangle,
-        then checks if there is a vertical edge going up from the new corner."""
-        if jnp.any(jnp.apply_along_axis(jnp.all, 1, (HORIZONTAL_PATH_EDGES[:, 0] == corner))):
-            edge_index = jnp.where(jnp.apply_along_axis(jnp.all, 1, (HORIZONTAL_PATH_EDGES[:, 0] == corner)), size=1)[0][0]
-            rectangle = add_edge(rectangle, edge_index)
-            new_corner = PATH_EDGES[edge_index, 1]
-
-            if jnp.any(jnp.apply_along_axis(jnp.all, 1, (VERTICAL_PATH_EDGES[:, 1] == new_corner))): # if there is a vertical edge that goes up from there 
-                rectangle, new_corner = up_and_check_left(rectangle, new_corner)
-            else:
-                rectangle, new_corner = right_and_check_up(rectangle, new_corner) #find another edge that goes right
-            
-            return rectangle, new_corner
-        else: 
-            return no_edges, None
-
-    def down_and_check_right(rectangle, corner):
-        """Checks if there is a vertical edge going down from the corner and adds it to the rectangle,
-        then checks if there is a horizontal edge going right from the new corner."""
-        if jnp.any(jnp.apply_along_axis(jnp.all, 1, (VERTICAL_PATH_EDGES[:, 0] == corner))): # if there is an edge that goes down
-            edge_index = convert_vertical_index(jnp.where(jnp.apply_along_axis(jnp.all, 1, (VERTICAL_PATH_EDGES[:, 0] == corner)), size=1)[0][0]) # get the index of the edge that goes down
-            rectangle = add_edge(rectangle, edge_index)  # Add the vertical edge going down
-            new_corner = PATH_EDGES[edge_index, 1]  # This is the new corner after going down
-
-            if jnp.any(jnp.apply_along_axis(jnp.all, 1, (HORIZONTAL_PATH_EDGES[:, 0] == new_corner))): # if there is a horizontal edge that goes right from there
-                rectangle, new_corner = right_and_check_up(rectangle, new_corner)
-            else:
-                rectangle, new_corner = down_and_check_right(rectangle, new_corner) # find another edge that goes down
-            
-            return rectangle, new_corner
-        else: 
-            return no_edges, None
-
-    rectangles = []
-    for corner in PATH_CORNERS:
-        rectangle = jnp.zeros(PATH_EDGES.shape[0], dtype=jnp.int32)
-        
-        rectangle, new_corner = down_and_check_right(rectangle, corner)
-
-        if jnp.array_equal(rectangle, no_edges) or not jnp.array_equal(corner, new_corner):
-            continue
-        else:
-            # If the rectangle is not empty and we arrived back at the starting corner, add it to the list
-            rectangles.append(rectangle)
-
-    return rectangles
-
-@jax.jit
-def precompute_rectangle_bounds(rectangle, PATH_EDGES):
-    """Gets the top-left and bottom-right corners of a rectangle."""
-    def calculate():
-        # Get only the edges that belong to this rectangle
-        rectangle_edges = jnp.where(rectangle[:, None, None], PATH_EDGES, jnp.full(PATH_EDGES.shape, jnp.inf, dtype=jnp.float32))
-        
-        # Flatten the coordinates to make min/max operations easier
-        all_x_coords = rectangle_edges[:, :, 0].flatten()
-        all_y_coords = rectangle_edges[:, :, 1].flatten()
-        
-        # Instead of boolean indexing, use conditional operations
-        # Find min/max while ignoring inf values
-        min_x = jnp.min(jnp.where(all_x_coords != jnp.inf, all_x_coords, jnp.inf)).astype(jnp.int32)
-        min_y = jnp.min(jnp.where(all_y_coords != jnp.inf, all_y_coords, jnp.inf)).astype(jnp.int32)
-        max_x = jnp.max(jnp.where(all_x_coords != jnp.inf, all_x_coords, -jnp.inf)).astype(jnp.int32)
-        max_y = jnp.max(jnp.where(all_y_coords != jnp.inf, all_y_coords, -jnp.inf)).astype(jnp.int32)
-        
-        return jnp.stack((min_x, min_y, max_x, max_y))
-    return jax.lax.cond(jnp.any(rectangle), calculate, lambda: jnp.zeros(4, dtype=jnp.int32))
 
 @partial(jax.jit, static_argnames=['WIDTH', 'HEIGHT', 'PATH_THICKNESS_HORIZONTAL', 'PATH_THICKNESS_VERTICAL'])
 def generate_path_mask(WIDTH, HEIGHT, PATH_THICKNESS_HORIZONTAL, PATH_THICKNESS_VERTICAL, horizontal_edges, vertical_edges, horizontal_cond, vertical_cond):
@@ -291,31 +174,6 @@ def calculate_corner_rectangles(RECTANGLE_BOUNDS):
     # jax.debug.print("Corners found: {corners}", corners=corners)
     return corners
 
-def get_player_starting_path(HORIZONTAL_PATH_EDGES, VERTICAL_PATH_EDGES, INITIAL_PLAYER_POSITION):
-
-    player_x, player_y = INITIAL_PLAYER_POSITION
-
-    def check_horizontal(edge):
-        edge_y = edge[0, 1]
-        correct_y = player_y == edge_y
-        edge_start_x, edge_end_x = edge[:, 0]
-        correct_x = jnp.logical_and(player_x >= edge_start_x, player_x <= edge_end_x)
-        return jnp.logical_and(correct_y, correct_x)
-
-    def check_vertical(edge):
-        edge_x = edge[0, 0]
-        correct_x = player_x == edge_x
-        edge_start_y, edge_end_y = edge[:, 1]
-        correct_y = jnp.logical_and(player_y >= edge_start_y, player_y <= edge_end_y)
-        return jnp.logical_and(correct_x, correct_y)
-
-    horizontal_matches = jax.vmap(check_horizontal)(HORIZONTAL_PATH_EDGES)
-    vertical_matches = jax.vmap(check_vertical)(VERTICAL_PATH_EDGES)
-    matches = jnp.concatenate((horizontal_matches, vertical_matches))
-
-    return jnp.nonzero(matches, size=1, fill_value=0)
-
-
 class AmidarConstants(NamedTuple):
     """Constants for the Amidar game. Some constants are precomputed from others to avoid recomputation."""
     # General
@@ -337,8 +195,8 @@ class AmidarConstants(NamedTuple):
     PATH_COLOR_BROWN = jnp.array([162, 98, 33, 255], dtype=jnp.uint8)  # Brown color for the path
     PATH_COLOR_GREEN = jnp.array([82, 126, 45, 255], dtype=jnp.uint8)  # Green color for the path
     WALKED_ON_COLOR = jnp.array([104, 72, 198, 255], dtype=jnp.uint8)  # Purple color for the walked on paths
-    PATH_THICKNESS_HORIZONTAL = 5  # Thickness of the path in horizontal direction 
-    PATH_THICKNESS_VERTICAL = 4  # Thickness of the path in vertical direction 
+    PATH_THICKNESS_HORIZONTAL = chosen_maze.PATH_THICKNESS_HORIZONTAL
+    PATH_THICKNESS_VERTICAL = chosen_maze.PATH_THICKNESS_VERTICAL 
 
     # Points
     PIXELS_PER_POINT_HORIZONTAL: int = 3 # Values to calculate how many points an Edge is worth based on how long it is
@@ -349,8 +207,9 @@ class AmidarConstants(NamedTuple):
     # Player
     PLAYER_SIZE: tuple[int, int] = (7, 7)  # Object sizes (width, height)
     PLAYER_SPRITE_OFFSET: tuple[int, int] = (-1, 0) # Offset for the player sprite in relation to the position in the code (because the top left corner of the player sprite is of the path to the left)
-    INITIAL_PLAYER_POSITION: chex.Array = jnp.array([140, 89])
+    INITIAL_PLAYER_POSITION: chex.Array = chosen_maze.INITIAL_PLAYER_POSITION
     INITIAL_PLAYER_DIRECTION: chex.Array = UP
+    PLAYER_STARTING_PATH = chosen_maze.PLAYER_STARTING_PATH
 
     # Jumping
     # The jumping mechanics are like this to resemble the ALE version. 
@@ -365,20 +224,13 @@ class AmidarConstants(NamedTuple):
     END_JUMP_DURATION_INCREASE: int = 508  # End of jump duration increase (frames)
 
     # Enemies
-    MAX_ENEMIES: int = 6  # Maximum number of enemies on screen
+    MAX_ENEMIES: int = chosen_maze.MAX_ENEMIES  # Maximum number of enemies on screen
     START_ENEMIES: int = 5  # Number of enemies the lower levels have
     INCREASE_ENEMY_NUMBER_LEVEL: int = 3 # Level at which to switch from START_ENEMIES to MAX_ENEMIES
     ENEMY_SIZE: tuple[int, int] = (7, 7)  # Object sizes (width, height)
     CHICKEN_SIZE: tuple[int, int] = (5, 7)  # Object sizes (width, height)
     ENEMY_SPRITE_OFFSET: tuple[int, int] = (-1, 0) # Offset for the enemy sprite in relation to the position in the code (because the top left corner of the enemy sprite is of the path to the left)
-    INITIAL_ENEMY_POSITIONS: chex.Array = jnp.array(
-        [   [16, 14],  # Enemy 1
-            [16, 14],  # Enemy 2
-            [44, 14],  # Enemy 3
-            [16, 137],  # Enemy 4
-            [52, 164],  # Enemy 5
-            [16, 164],  # Enemy 6
-        ]) # has to have MAX_ENEMIES positions
+    INITIAL_ENEMY_POSITIONS: chex.Array = chosen_maze.INITIAL_ENEMY_POSITIONS
     INITIAL_ENEMY_DIRECTIONS: chex.Array = jnp.array([RIGHT] * MAX_ENEMIES)  # All enemies start moving right
     # Enemy Types
     SHADOW: int = 0 
@@ -391,20 +243,18 @@ class AmidarConstants(NamedTuple):
     PATH_CORNERS: chex.Array = chosen_maze.PATH_CORNERS
     HORIZONTAL_PATH_EDGES: chex.Array = chosen_maze.HORIZONTAL_PATH_EDGES
     VERTICAL_PATH_EDGES: chex.Array = chosen_maze.VERTICAL_PATH_EDGES
+    PATH_EDGES: chex.Array = chosen_maze.PATH_EDGES
+    RECTANGLES: chex.Array = chosen_maze.RECTANGLES
+    RECTANGLE_BOUNDS: chex.Array = chosen_maze.RECTANGLE_BOUNDS
+    CORNER_RECTANGLES: chex.Array = chosen_maze.CORNER_RECTANGLES
 
     # Precomputed Constants
-    # Path
-    PATH_EDGES: chex.Array = jnp.concatenate((HORIZONTAL_PATH_EDGES, VERTICAL_PATH_EDGES), axis=0)
-    RECTANGLES: chex.Array = jnp.array(calculate_rectangles(HORIZONTAL_PATH_EDGES, VERTICAL_PATH_EDGES, PATH_EDGES, PATH_CORNERS))
-    RECTANGLE_BOUNDS: chex.Array = jax.vmap(precompute_rectangle_bounds, in_axes=(0, None))(RECTANGLES, PATH_EDGES)
-    CORNER_RECTANGLES: chex.Array = calculate_corner_rectangles(RECTANGLE_BOUNDS)
+    # Path/Rendering
     PATH_MASK, RENDERING_PATH_MASK = generate_path_mask(WIDTH, HEIGHT, PATH_THICKNESS_HORIZONTAL, PATH_THICKNESS_VERTICAL, HORIZONTAL_PATH_EDGES, VERTICAL_PATH_EDGES, jnp.full((HORIZONTAL_PATH_EDGES.shape[0],), True), jnp.full((VERTICAL_PATH_EDGES.shape[0],), True))  # Path mask are the single lines which restrict the movement, while rendering path mask includes the width of the paths for rendering
     PATH_PATTERN_BROWN, PATH_PATTERN_GREEN, WALKED_ON_PATTERN = generate_path_pattern(WIDTH, HEIGHT, PATH_COLOR_BROWN, PATH_COLOR_GREEN, WALKED_ON_COLOR)
     PATH_SPRITE_BROWN: chex.Array = jnp.where(RENDERING_PATH_MASK[:, :, None] == 1, PATH_PATTERN_BROWN, jnp.full((HEIGHT, WIDTH, 4), 0, dtype=jnp.uint8))
     PATH_SPRITE_GREEN: chex.Array = jnp.where(RENDERING_PATH_MASK[:, :, None] == 1, PATH_PATTERN_GREEN, jnp.full((HEIGHT, WIDTH, 4), 0, dtype=jnp.uint8))
-    # player
-    PLAYER_STARTING_PATH: chex.Array = get_player_starting_path(HORIZONTAL_PATH_EDGES, VERTICAL_PATH_EDGES, INITIAL_PLAYER_POSITION)
-
+    
 # immutable state container
 class AmidarState(NamedTuple):
     frame_counter: chex.Array
@@ -1362,18 +1212,18 @@ class AmidarRenderer(JAXGameRenderer):
         # all_white = jnp.full_like(raster, 255, dtype=jnp.uint8)
         # raster = jnp.where(self.constants.RENDERING_PATH_MASK[:, :, None] == 1, all_white, raster)
 
-        # Render corner rectangles
-        edges_in_corner_rectangle = jnp.any(self.constants.RECTANGLES[self.constants.CORNER_RECTANGLES], axis=0)
-        def render_corner_rectangle_edges(i, raster):
-            in_corner = edges_in_corner_rectangle[i] == 1   
-            raster = jax.lax.cond(
-                in_corner,
-                lambda raster: render_line(raster, self.constants.PATH_EDGES[i], (0, 255, 0)),  # Render in green if part of a corner rectangle
-                lambda raster: raster,  # Otherwise, do nothing
-                raster
-            )
-            return raster
-        raster = jax.lax.fori_loop(0, jnp.shape(self.constants.PATH_EDGES)[0], render_corner_rectangle_edges, raster)
+        # # Render corner rectangles
+        # edges_in_corner_rectangle = jnp.any(self.constants.RECTANGLES[self.constants.CORNER_RECTANGLES], axis=0)
+        # def render_corner_rectangle_edges(i, raster):
+        #     in_corner = edges_in_corner_rectangle[i] == 1   
+        #     raster = jax.lax.cond(
+        #         in_corner,
+        #         lambda raster: render_line(raster, self.constants.PATH_EDGES[i], (0, 255, 0)),  # Render in green if part of a corner rectangle
+        #         lambda raster: raster,  # Otherwise, do nothing
+        #         raster
+        #     )
+        #     return raster
+        # raster = jax.lax.fori_loop(0, jnp.shape(self.constants.PATH_EDGES)[0], render_corner_rectangle_edges, raster)
 
 
         # # Render completed rectangles mask

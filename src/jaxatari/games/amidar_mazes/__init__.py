@@ -1,0 +1,1 @@
+# Amidar maze variants
