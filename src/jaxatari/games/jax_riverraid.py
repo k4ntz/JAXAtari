@@ -52,6 +52,7 @@ class RiverraidState(NamedTuple):
     player_direction: chex.Array  # 0 left, 1 straight, 2 right
     player_state: chex.Array
     player_fuel: chex.Array
+    player_score: chex.Array
 
     player_bullet_x: chex.Array
     player_bullet_y: chex.Array
@@ -826,7 +827,7 @@ def spawn_entities(state: RiverraidState) -> RiverraidState:
     key, subkey1, subkey2 = jax.random.split(state.master_key, 3)
 
     def spawn_entity(state: RiverraidState) -> RiverraidState:
-        spawn_fuel_flag = jax.random.bernoulli(subkey2, 0.1) # TODO balance
+        spawn_fuel_flag = jax.random.bernoulli(subkey2, 0.2) # TODO balance
         return jax.lax.cond(
             spawn_fuel_flag,
             lambda state: spawn_fuel(state),
@@ -888,6 +889,18 @@ def enemy_collision(state: RiverraidState) -> RiverraidState:
             state.enemy_state.at[hit_index].set(0),
             state.enemy_state
         )
+        new_score = jnp.where(
+            collision_present,
+            state.player_score + jax.lax.switch(
+                state.enemy_type[hit_index],
+                [
+                    lambda: 30,  # ship
+                    lambda: 60,  # helicopter
+                    lambda: 100  # plane
+                ]
+            ),
+            state.player_score
+        )
 
         new_bullet_x = jnp.where(collision_present, -1.0, state.player_bullet_x)
         new_bullet_y = jnp.where(collision_present, -1.0, state.player_bullet_y)
@@ -895,7 +908,8 @@ def enemy_collision(state: RiverraidState) -> RiverraidState:
         return state._replace(
             enemy_state=new_enemy_state,
             player_bullet_x=new_bullet_x,
-            player_bullet_y=new_bullet_y
+            player_bullet_y=new_bullet_y,
+            player_score=new_score
         )
 
     # Bullet - Enemy Collision only when bullet present
@@ -941,6 +955,11 @@ def handle_fuel(state: RiverraidState) -> RiverraidState:
         state.fuel_state.at[bullet_hit_index].set(0),
         state.fuel_state
     )
+    new_score = jnp.where(
+        bullet_collision_present,
+        state.player_score + 80,
+        state.player_score
+    )
 
     new_bullet_x = jnp.where(bullet_collision_present, -1.0, state.player_bullet_x)
     new_bullet_y = jnp.where(bullet_collision_present, -1.0, state.player_bullet_y)
@@ -967,7 +986,8 @@ def handle_fuel(state: RiverraidState) -> RiverraidState:
         fuel_state=new_fuel_state,
         player_bullet_x=new_bullet_x,
         player_bullet_y=new_bullet_y,
-        player_fuel=new_player_fuel
+        player_fuel=new_player_fuel,
+        player_score=new_score
     )
 
 
@@ -1090,7 +1110,8 @@ class JaxRiverraid(JaxEnvironment):
                                fuel_y=jnp.full((MAX_ENEMIES,), SCREEN_HEIGHT + 1, dtype=jnp.float32),
                                fuel_state=jnp.full((MAX_ENEMIES,), 0, dtype=jnp.int32),
                                player_fuel=jnp.array(MAX_FUEL),
-                               spawn_cooldown=jnp.array(50)
+                               spawn_cooldown=jnp.array(50),
+                               player_score=jnp.array(0)
                                )
         observation = self._get_observation(state)
         return observation, state
@@ -1114,6 +1135,7 @@ class JaxRiverraid(JaxEnvironment):
             new_state = update_enemy_movement_status(new_state)
             new_state = enemy_movement(new_state)
             new_state = handle_fuel(new_state)
+            jax.debug.print("SCORE: {player_state}", player_state=new_state.player_score)
             return new_state
 
         def respawn(state: RiverraidState) -> RiverraidState:
@@ -1171,41 +1193,70 @@ class JaxRiverraid(JaxEnvironment):
 def load_sprites():
     MODULE_DIR = os.path.dirname(os.path.abspath(__file__))
 
-    player = aj.loadFrame(os.path.join(MODULE_DIR, "sprites/galaxian/player.npy"),transpose=False)
-    bullet = aj.loadFrame(os.path.join(MODULE_DIR, "sprites/galaxian/bullet.npy"), transpose=False)
+    player_center = aj.loadFrame(os.path.join(MODULE_DIR, "sprites/riverraid/plane_center.npy"),transpose=False)
+    player_left = aj.loadFrame(os.path.join(MODULE_DIR, "sprites/riverraid/plane_left.npy"), transpose=False)
+    player_right = aj.loadFrame(os.path.join(MODULE_DIR, "sprites/riverraid/plane_right.npy"), transpose=False)
+    bullet = aj.loadFrame(os.path.join(MODULE_DIR, "sprites/riverraid/bullet.npy"), transpose=False)
     enemy_boat = aj.loadFrame(os.path.join(MODULE_DIR, "sprites/galaxian/red_orange_enemy_1.npy"), transpose=False)
     enemy_helicopter = aj.loadFrame(os.path.join(MODULE_DIR, "sprites/galaxian/gray_enemy_1.npy"), transpose=False)
     enemy_airplane = aj.loadFrame(os.path.join(MODULE_DIR, "sprites/galaxian/purple_blue_enemy_1.npy"), transpose=False)
     fuel_display = aj.loadFrame(os.path.join(MODULE_DIR, "sprites/riverraid/fuel_display.npy"), transpose=False)
     fuel_indicator = aj.loadFrame(os.path.join(MODULE_DIR, "sprites/riverraid/fuel_indicator.npy"), transpose=False)
 
-    SPRITE_PLAYER = jnp.expand_dims(player, axis = 0)
+    score_sprites = []
+    for i in range(10):
+        sprite_path = os.path.join(MODULE_DIR, f"sprites/riverraid/score_{i}.npy")
+        score_sprite = aj.loadFrame(sprite_path, transpose=False)
+        score_sprites.append(score_sprite)
+
+    SPRITE_PLAYER = jnp.expand_dims(player_center, axis = 0)
+    SPRITE_PLAYER_LEFT = jnp.expand_dims(player_left, axis=0)
+    SPRITE_PLAYER_RIGHT = jnp.expand_dims(player_right, axis=0)
     BULLET = jnp.expand_dims(bullet, axis=0)
     ENEMY_BOAT = jnp.expand_dims(enemy_boat, axis=0)
     ENEMY_HELICOPTER = jnp.expand_dims(enemy_helicopter, axis=0)
     ENEMY_AIRPLANE = jnp.expand_dims(enemy_airplane, axis=0)
     FUEL_DISPLAY = jnp.expand_dims(fuel_display, axis=0)
     FUEL_INDICATOR = jnp.expand_dims(fuel_indicator, axis=0)
+    SCORE_0 = jnp.expand_dims(score_sprites[0], axis=0)
+    SCORE_1 = jnp.expand_dims(score_sprites[1], axis=0)
+    SCORE_2 = jnp.expand_dims(score_sprites[2], axis=0)
+    SCORE_3 = jnp.expand_dims(score_sprites[3], axis=0)
+    SCORE_4 = jnp.expand_dims(score_sprites[4], axis=0)
+    SCORE_5 = jnp.expand_dims(score_sprites[5], axis=0)
+    SCORE_6 = jnp.expand_dims(score_sprites[6], axis=0)
+    SCORE_7 = jnp.expand_dims(score_sprites[7], axis=0)
+    SCORE_8 = jnp.expand_dims(score_sprites[8], axis=0)
+    SCORE_9 = jnp.expand_dims(score_sprites[9], axis=0)
+    #SPRITE_DIGIT = jnp.stack([SCORE_0, SCORE_1, SCORE_2, SCORE_3, SCORE_4, SCORE_5, SCORE_6, SCORE_7, SCORE_8, SCORE_9])
+    SPRITE_DIGIT = SCORE_0
+
     return(
         SPRITE_PLAYER,
+        SPRITE_PLAYER_LEFT,
+        SPRITE_PLAYER_RIGHT,
         BULLET,
         ENEMY_BOAT,
         ENEMY_HELICOPTER,
         ENEMY_AIRPLANE,
         FUEL_DISPLAY,
-        FUEL_INDICATOR
+        FUEL_INDICATOR,
+        SPRITE_DIGIT
     )
 
 class RiverraidRenderer(JAXGameRenderer):
     def __init__(self):
         (
             self.SPRITE_PLAYER,
+            self.SPRITE_PLAYER_LEFT,
+            self.SPRITE_PLAYER_RIGHT,
             self.BULLET,
             self.ENEMY_BOAT,
             self.ENEMY_HELICOPTER,
             self.ENEMY_AIRPLANE,
             self.FUEL_DISPLAY,
-            self.FUEL_INDICATOR
+            self.FUEL_INDICATOR,
+            self.SPRITE_DIGIT
         ) = load_sprites()
 
     @partial(jax.jit, static_argnums=(0,))
@@ -1231,10 +1282,18 @@ class RiverraidRenderer(JAXGameRenderer):
         raster = jnp.where(is_dam[..., None], dam_color, raster)
 
         # Player
-        player_frame = aj.get_sprite_frame(self.SPRITE_PLAYER, 0)
+        player_frame = jax.lax.switch(
+            state.player_direction,
+            [
+                lambda _: aj.get_sprite_frame(self.SPRITE_PLAYER, 0), # TODO _left
+                lambda _: aj.get_sprite_frame(self.SPRITE_PLAYER, 0),
+                lambda _: aj.get_sprite_frame(self.SPRITE_PLAYER, 0)  # TODO _right
+            ],
+            operand=None
+        )
         px = jnp.round(state.player_x).astype(jnp.int32)
         py = jnp.round(state.player_y).astype(jnp.int32)
-        raster = aj.render_at(raster, px, py, player_frame) # x and y swapped cuz its transposed later
+        raster = aj.render_at(raster, px, py, player_frame)
 
         bullet_frame = aj.get_sprite_frame(self.BULLET, 0)
         bx = jnp.round(state.player_bullet_x).astype(jnp.int32)
@@ -1298,6 +1357,28 @@ class RiverraidRenderer(JAXGameRenderer):
         fuel_fill = state.player_fuel
         indicator_x = fuel_display_x + fuel_fill + 3
         raster = aj.render_at(raster, indicator_x, fuel_display_y + 4, fuel_indicator_frame)
+
+
+        def get_digit(i, score):
+            digit = (score // jnp.power(10, i)) % 10
+            return digit.astype(jnp.int32)
+
+        def score_loop_body(i, r_acc):
+            draw_digit = False
+
+            def draw(r0):
+                x0 = jnp.int32(
+                    SCREEN_WIDTH - 100 - (i + 1) * 10
+                )
+                y0 = jnp.int32(
+                    5
+                )
+                #return aj.render_at(r0, x0, y0, aj.get_sprite_frame(self.SPRITE_DIGIT, get_digit(i, state.player_score))) # TODO use this after sprites are fixed
+                return aj.render_at(r0, x0, y0, aj.get_sprite_frame(self.SPRITE_DIGIT, 0))
+
+            return lax.cond(i < jnp.maximum(1, jnp.ceil(jnp.log10(state.player_score + 1)).astype(jnp.int32)), draw, lambda r0: r0, r_acc)
+
+        raster = lax.fori_loop(0, 10, score_loop_body, raster) # TODO make better with above condition
 
         return raster
 
