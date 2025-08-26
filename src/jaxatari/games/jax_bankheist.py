@@ -282,6 +282,37 @@ class JaxBankHeist(JaxEnvironment[BankHeistState, BankHeistObservation, BankHeis
         return collision_mask, first_bank_hit
 
     @partial(jax.jit, static_argnums=(0,))
+    def check_police_collision(self, player: Entity, police: Entity) -> Tuple[chex.Array, chex.Array]:
+        """
+        Check if the player collides with any visible police cars.
+
+        Args:
+            player: The player entity with position
+            police: The police entities with positions and visibility
+
+        Returns:
+            Tuple of (collision_mask, police_index) where collision_mask indicates which police cars were hit
+            and police_index is the index of the first police car hit (-1 if none).
+        """
+        # Calculate distance between player and each police car
+        player_pos = player.position
+        police_positions = police.position
+        
+        # Check collision for each police car (simple distance-based collision)
+        distances = jnp.linalg.norm(police_positions - player_pos[None, :], axis=1)
+        collision_distance = 8  # Collision threshold
+        
+        # Only consider visible police cars
+        visible_mask = police.visibility > 0
+        collision_mask = (distances < collision_distance) & visible_mask
+        
+        # Find first colliding police car index (-1 if none)
+        police_index = jnp.where(collision_mask, jnp.arange(len(collision_mask)), -1)
+        first_police_hit = jnp.max(police_index)  # Get the first valid index or -1
+        
+        return collision_mask, first_police_hit
+
+    @partial(jax.jit, static_argnums=(0,))
     def handle_bank_robbery(self, state: BankHeistState, bank_hit_index: chex.Array) -> BankHeistState:
         """
         Handle a bank robbery by hiding the bank and setting up delayed police spawn.
@@ -311,6 +342,40 @@ class JaxBankHeist(JaxEnvironment[BankHeistState, BankHeistObservation, BankHeis
             bank_positions=new_banks,
             pending_police_spawns=new_pending_spawns,
             pending_police_bank_indices=new_pending_bank_indices
+        )
+
+    @partial(jax.jit, static_argnums=(0,))
+    def handle_police_collision(self, state: BankHeistState, police_hit_index: chex.Array) -> BankHeistState:
+        """
+        Handle collision with police cars by reducing player lives and resetting player position.
+
+        Args:
+            state: Current game state
+            police_hit_index: Index of the police car that was hit
+
+        Returns:
+            BankHeistState: Updated state with reduced lives and reset player position
+        """
+        # Reduce player lives by 1
+        new_player_lives = state.player_lives - 1
+        
+        # Reset player to default position (same as level transition)
+        default_player_position = jnp.array([12, 78]).astype(jnp.int32)
+        new_player = state.player._replace(position=default_player_position)
+
+        # Reset all police cars to spawn point (76, 132)
+        reset_police_position = jnp.array([76, 132]).astype(jnp.int32)
+        # Create array with reset position for all police cars
+        reset_positions = jnp.tile(reset_police_position[None, :], (state.enemy_positions.position.shape[0], 1))
+        # Only reset visible police cars, keep invisible ones at their current position
+        visible_mask = state.enemy_positions.visibility > 0
+        new_police_positions = jnp.where(visible_mask[:, None], reset_positions, state.enemy_positions.position)
+        new_police = state.enemy_positions._replace(position=new_police_positions)
+        
+        return state._replace(
+            player_lives=new_player_lives,
+            player=new_player,
+            enemy_positions=new_police
         )
 
     @partial(jax.jit, static_argnums=(0,))
@@ -758,6 +823,13 @@ class JaxBankHeist(JaxEnvironment[BankHeistState, BankHeistObservation, BankHeis
         bank_hit = bank_hit_index >= 0
         new_state = jax.lax.cond(bank_hit, lambda: self.handle_bank_robbery(new_state, bank_hit_index), lambda: new_state)
 
+        # Check for police collisions and handle player death
+        police_collision_mask, police_hit_index = self.check_police_collision(new_player, state.enemy_positions)
+        
+        # Apply police collision logic if any police car was hit
+        police_hit = police_hit_index >= 0
+        new_state = jax.lax.cond(police_hit, lambda: self.handle_police_collision(new_state, police_hit_index), lambda: new_state)
+
         # Handle dynamite placement when FIRE action is pressed
         new_state = jax.lax.cond(action == FIRE, 
             lambda: self.place_dynamite(new_state, new_player),
@@ -928,6 +1000,28 @@ class Renderer_AtraBankisHeist:
         # Check if dynamite is active (not at [-1, -1])
         dynamite_active = ~jnp.all(state.dynamite_position == jnp.array([-1, -1]))
         raster = jax.lax.cond(dynamite_active, render_dynamite, lambda r: r, raster)
+
+        ### Render Player Lives (top right corner)
+        # Use the right-facing player sprite for lives display
+        life_sprite = aj.get_sprite_frame(self.SPRITE_PLAYER_SIDE, 0)
+        life_sprite_height, life_sprite_width = life_sprite.shape[:2]
+        
+        # Position lives in top right corner with some padding
+        lives_start_x = WIDTH - (4 * (life_sprite_width + 2) ) - 12  # 4 lives with 5 pixel padding from right edge
+        lives_y = 12  # 12 pixels from top
+        
+        # Render each life sprite
+        def render_single_life(i, current_raster):
+            def render_life_sprite(raster_input):
+                life_x = lives_start_x + (i * (life_sprite_width + 2))
+                return aj.render_at(raster_input, life_x, lives_y, life_sprite)
+            
+            # Only render if player has this many lives remaining
+            has_life = i < state.player_lives
+            return jax.lax.cond(has_life, render_life_sprite, lambda r: r, current_raster)
+        
+        # Render up to 4 life sprites using fori_loop
+        raster = jax.lax.fori_loop(0, 4, render_single_life, raster)
 
         return raster
 
