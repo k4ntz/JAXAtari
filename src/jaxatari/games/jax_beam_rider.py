@@ -555,9 +555,9 @@ class BeamRiderEnv(JaxEnvironment[BeamRiderState, BeamRiderObservation, BeamRide
         frames_since_last_move = state.frame_count % movement_cooldown
         can_move_this_frame = frames_since_last_move == 0
 
-        # Use standard JAXAtari action constants: LEFT=1, RIGHT=2
-        should_move_left = (action == 1) & (current_beam > 0) & can_move_this_frame
-        should_move_right = (action == 2) & (current_beam < self.constants.NUM_BEAMS - 1) & can_move_this_frame
+        # Use standard JAXAtari action constants: LEFT=4, RIGHT=3
+        should_move_left = (action == 4) & (current_beam > 0) & can_move_this_frame
+        should_move_right = (action == 3) & (current_beam < self.constants.NUM_BEAMS - 1) & can_move_this_frame
 
         # Discrete beam movement with cooldown
         new_beam_position = jnp.where(
@@ -1228,20 +1228,20 @@ class BeamRiderEnv(JaxEnvironment[BeamRiderState, BeamRiderObservation, BeamRide
         enemies = enemies.at[:, 16].set(jnp.where(white_saucer_active, new_pause_timer, enemies[:, 16]))  # pause timer
 
         return state.replace(enemies=enemies)
+
     @partial(jax.jit, static_argnums=(0,))
     def _handle_firing(self, state: BeamRiderState, action: int) -> BeamRiderState:
         """Handle both laser and torpedo firing"""
 
-        # Laser firing (actions 3, 4, 5)
-        should_fire_laser = jnp.isin(action, jnp.array([3, 4, 5]))
-        state = self._fire_laser(state, should_fire_laser)
-
-        # Torpedo firing (actions 6, 7, 8)
-        should_fire_torpedo = jnp.isin(action, jnp.array([6, 7, 8]))
+        # Torpedo firing - T key maps to action 10 (UPFIRE)
+        should_fire_torpedo = (action == 10)
         state = self._fire_torpedo(state, should_fire_torpedo)
 
-        return state
+        # Laser firing - SPACE key maps to action 1 (FIRE)
+        should_fire_laser = (action == 1)
+        state = self._fire_laser(state, should_fire_laser)
 
+        return state
     @partial(jax.jit, static_argnums=(0,))
     def _fire_laser(self, state: BeamRiderState, should_fire: bool) -> BeamRiderState:
         """Fire regular laser projectile"""
@@ -3661,23 +3661,15 @@ class BeamRiderRenderer(JAXGameRenderer):
 
                 # TORPEDO ACTIONS (actions 6, 7, 8) - CHECK FIRST!
                 if keys[pygame.K_t]:  # T for torpedo only
-                    action = 6
-                elif keys[pygame.K_q]:  # Q for left + torpedo
-                    action = 7
-                elif keys[pygame.K_e]:  # E for right + torpedo
-                    action = 8
+                    action = 10
                 # LASER ACTIONS (actions 3, 4, 5)
-                elif keys[pygame.K_LEFT] and keys[pygame.K_SPACE]:
-                    action = 4  # left + fire laser
-                elif keys[pygame.K_RIGHT] and keys[pygame.K_SPACE]:
-                    action = 5  # right + fire laser
                 elif keys[pygame.K_SPACE]:
-                    action = 3  # fire laser only
+                    action = 1  # fire laser only
                 # MOVEMENT ACTIONS (actions 1, 2)
                 elif keys[pygame.K_LEFT]:
-                    action = 1  # left
+                    action = 4  # left
                 elif keys[pygame.K_RIGHT]:
-                    action = 2  # right
+                    action = 3  # right
 
                 # Step and render
                 prev_state = state  # Store previous state
