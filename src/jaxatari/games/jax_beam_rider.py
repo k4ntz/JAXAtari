@@ -774,7 +774,6 @@ class BeamRiderEnv(JaxEnvironment[BeamRiderState, BeamRiderObservation, BeamRide
         new_retreat_flag = jnp.where(start_retreat_now, self.constants.WHITE_SAUCER_RETREAT_AFTER_SHOT,
                                      enemies[:, 13].astype(int))
 
-
         clear_retreat = should_be_moving_up & (current_y <= self.constants.HORIZON_LINE_Y)
         final_retreat_flag = jnp.where(clear_retreat, 0, new_retreat_flag)
 
@@ -835,9 +834,7 @@ class BeamRiderEnv(JaxEnvironment[BeamRiderState, BeamRiderObservation, BeamRide
             current_speed
         )
 
-
-
-        # === HORIZON PATROL PATTERN WITH DIVING ===
+        # === HORIZON PATROL PATTERN WITH BEAM-CONSTRAINED DIVING ===
         horizon_patrol_mask = white_saucer_active & (movement_pattern == self.constants.WHITE_SAUCER_HORIZON_PATROL)
 
         # Check if saucer is at horizon line
@@ -855,6 +852,16 @@ class BeamRiderEnv(JaxEnvironment[BeamRiderState, BeamRiderObservation, BeamRide
         patrol_time = firing_timer
         patrol_time_expired = patrol_time >= self.constants.HORIZON_PATROL_TIME
 
+        # === BEAM ALIGNMENT CHECK FOR DIVING (NEW) ===
+        # Calculate distance to nearest beam position
+        beam_distances = jnp.abs(current_x[..., None] - self.beam_positions[None, :])  # Shape: (MAX_ENEMIES, NUM_BEAMS)
+        nearest_beam_distance = jnp.min(beam_distances, axis=1)
+        nearest_beam_idx = jnp.argmin(beam_distances, axis=1)
+
+        # Saucer is aligned with a beam if within threshold distance
+        BEAM_ALIGNMENT_THRESHOLD = 4.0
+        aligned_with_beam = nearest_beam_distance <= BEAM_ALIGNMENT_THRESHOLD
+
         # Generate random values for horizon patrol decisions
         patrol_indices = jnp.arange(self.constants.MAX_ENEMIES)
         patrol_rng_keys = jax.vmap(lambda i: random.fold_in(state.rng_key, state.frame_count + i + 1000))(
@@ -866,10 +873,11 @@ class BeamRiderEnv(JaxEnvironment[BeamRiderState, BeamRiderObservation, BeamRide
             dive_rng_keys)
         should_dive = should_dive_rng < self.constants.HORIZON_DIVE_CHANCE
 
-        # Decide whether to dive or continue patrolling when patrol time expires
-        start_diving = patrolling_horizon & patrol_time_expired & should_dive
-        continue_patrolling = patrolling_horizon & patrol_time_expired & ~should_dive
+        # UPDATED: Only start diving if time expired, wants to dive, AND aligned with beam
+        start_diving = patrolling_horizon & patrol_time_expired & should_dive & aligned_with_beam
 
+        # If time expired but not aligned with beam, continue patrolling toward nearest beam
+        continue_patrolling = patrolling_horizon & patrol_time_expired & (~should_dive | ~aligned_with_beam)
 
         # --- choose a dive pattern when we leave the horizon ---
         sector = state.current_sector
@@ -899,6 +907,7 @@ class BeamRiderEnv(JaxEnvironment[BeamRiderState, BeamRiderObservation, BeamRide
                           self.constants.WHITE_SAUCER_STRAIGHT_DOWN)
             )
         )
+
         # SWITCH MOVEMENT PATTERN TO REVERSE_UP when beam change is complete
         new_movement_pattern = jnp.where(
             start_diving,
@@ -909,6 +918,7 @@ class BeamRiderEnv(JaxEnvironment[BeamRiderState, BeamRiderObservation, BeamRide
                 movement_pattern
             )
         )
+
         # DIVING BEHAVIOR: Move down when diving
         diving = horizon_patrol_mask \
                  & ~should_be_moving_up \
@@ -942,11 +952,19 @@ class BeamRiderEnv(JaxEnvironment[BeamRiderState, BeamRiderObservation, BeamRide
         new_target_beam_calc = current_beam + (direction_for_jump * lane_jump_rng).astype(int)
         new_target_beam_clamped = jnp.clip(new_target_beam_calc, 0, self.constants.NUM_BEAMS - 1)
 
-        # Update target beam when pause ends
+        # UPDATED: Handle beam alignment for patrolling saucers
+        # If not aligned with beam and patrol time expired, target the nearest beam instead of jumping
+        needs_beam_alignment = doing_horizontal_patrol & ~aligned_with_beam & patrol_time_expired
+
+        # Update target beam when pause ends OR when need alignment
         horizon_new_target_beam = jnp.where(
-            pause_ending,
-            new_target_beam_clamped,
-            target_beam
+            needs_beam_alignment,
+            nearest_beam_idx,  # Target nearest beam when not aligned
+            jnp.where(
+                pause_ending,
+                new_target_beam_clamped,  # Normal target beam selection
+                target_beam
+            )
         )
 
         # Update direction when pause ends
@@ -977,18 +995,26 @@ class BeamRiderEnv(JaxEnvironment[BeamRiderState, BeamRiderObservation, BeamRide
             new_jump_timer
         )
 
-        # Update current beam when close to target
+        # UPDATED: Update current beam when close to target OR when starting to dive
         horizon_new_beam = jnp.where(
-            doing_horizontal_patrol & close_to_target,
-            horizon_new_target_beam,
-            current_beam
+            start_diving,
+            nearest_beam_idx,  # Snap to nearest beam when diving
+            jnp.where(
+                doing_horizontal_patrol & close_to_target,
+                horizon_new_target_beam,
+                current_beam
+            )
         )
 
         # Final horizon patrol positions
         horizon_new_x = jnp.where(
             moving_to_horizon,
             current_x,  # Don't move horizontally while moving to horizon
-            current_x + horizontal_movement
+            jnp.where(
+                start_diving,
+                self.beam_positions[nearest_beam_idx] - self.constants.ENEMY_WIDTH // 2,  # Snap to beam X when diving
+                current_x + horizontal_movement
+            )
         )
 
         # Decide final Y movement - FIXED DIVING LOGIC
@@ -1136,7 +1162,7 @@ class BeamRiderEnv(JaxEnvironment[BeamRiderState, BeamRiderObservation, BeamRide
         ramming_new_beam = current_beam  # Stay on same beam
         ramming_new_target_beam = target_beam  # No change
         ramming_new_direction_x = direction_x  # No change
-        # === APPLY MOVEMENT PATTERNS ===
+
         # === APPLY MOVEMENT PATTERNS ===
         new_x = jnp.where(horizon_patrol_mask, horizon_new_x,
                           jnp.where(ramming_mask, ramming_new_x,
@@ -1200,7 +1226,7 @@ class BeamRiderEnv(JaxEnvironment[BeamRiderState, BeamRiderObservation, BeamRide
         # --- update sticky retreat flag in enemies[:,13] ---
         # Start retreat as soon as we cross reverse depth; keep it until off the top next step
         will_be_off_top_next = (
-                                           current_y + self.constants.WHITE_SAUCER_REVERSE_SPEED_FAST) <= -self.constants.ENEMY_HEIGHT
+                                       current_y + self.constants.WHITE_SAUCER_REVERSE_SPEED_FAST) <= -self.constants.ENEMY_HEIGHT
         start_universal_retreat = white_saucer_active & reached_reverse_point
 
         retreat_flag_next = jnp.where(
@@ -1220,7 +1246,8 @@ class BeamRiderEnv(JaxEnvironment[BeamRiderState, BeamRiderObservation, BeamRide
         enemies = enemies.at[:, 4].set(jnp.where(white_saucer_active, new_speed, enemies[:, 4]))  # speed
         enemies = enemies.at[:, 6].set(jnp.where(white_saucer_active, new_direction_x, enemies[:, 6]))  # direction_x
         enemies = enemies.at[:, 10].set(jnp.where(white_saucer_active, new_target_beam, enemies[:, 10]))  # target beam
-        enemies = enemies.at[:, 13].set(jnp.where(white_saucer_active, retreat_flag_next, enemies[:, 13]))  # sticky retreat
+        enemies = enemies.at[:, 13].set(
+            jnp.where(white_saucer_active, retreat_flag_next, enemies[:, 13]))  # sticky retreat
         enemies = enemies.at[:, 14].set(
             jnp.where(white_saucer_active, new_movement_pattern, enemies[:, 14]))  # movement pattern
         enemies = enemies.at[:, 15].set(
