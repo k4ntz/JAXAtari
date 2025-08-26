@@ -891,7 +891,7 @@ class JaxAirRaid(JaxEnvironment[AirRaidState, AirRaidObservation, AirRaidInfo, A
         return spaces.Box(
             low=0,
             high=255,
-            shape=(WIDTH, HEIGHT, 3),
+            shape=(HEIGHT, WIDTH, 3),
             dtype=jnp.uint8
         )
 
