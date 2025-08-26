@@ -45,8 +45,9 @@ class SurroundConstants(NamedTuple):
     # Starting positions (x, y) - snapped to nearest rectangle (cell) on the field
     # These should be integers and not between cells. Adjusted to be inside the playfield, not on borders.
     # Middle of the playfield, within a rectangle (cell)
-    P1_START_POS: Tuple[int, int] = (4, 10.2)  # left side, vertical center
-    P2_START_POS: Tuple[int, int] = (35, 10.2) # right side, vertical center
+    # Set to the exact center row of the grid
+    P1_START_POS: Tuple[int, int] = (4, 9)  # left side, vertical center
+    P2_START_POS: Tuple[int, int] = (35, 9) # right side, vertical center
 
     # Starting directions
     P1_START_DIR: int = Action.RIGHT
@@ -124,7 +125,8 @@ class SurroundRenderer(JAXGameRenderer):
         cell_w, cell_h = self.consts.CELL_SIZE
         field_h = self.consts.GRID_HEIGHT * cell_h
         field_w = self.consts.GRID_WIDTH * cell_w
-        y_off = height - field_h
+        slack = height - field_h
+        y_off = (slack // cell_h) * cell_h  # snap offset to cell size for grid alignment
 
         playfield = jnp.ones((field_h, field_w, 3), dtype=jnp.uint8) * bg
 
@@ -180,13 +182,16 @@ class SurroundRenderer(JAXGameRenderer):
         # Playfield ins Bild
         img = img.at[y_off:y_off + field_h, :field_w, :].set(playfield)
 
-        # Scores (einstellig, JIT-freundlich)
+        # Scores: directly above the box surrounding the playfield
         idx0 = jnp.clip(state.score0 % 10, 0, 9)
         idx1 = jnp.clip(state.score1 % 10, 0, 9)
         digit_p1 = jr.get_sprite_frame(self.p1_digits, idx0)
         digit_p2 = jr.get_sprite_frame(self.p2_digits, idx1)
-        img = jr.render_at(img, 10, 2, digit_p1)
-        img = jr.render_at(img, width - 10 - digit_p2.shape[1], 2, digit_p2)
+        # Calculate y position: just above the playfield border
+        border_y = self.consts.BORDER_CELLS_Y * self.consts.CELL_SIZE[1]
+        score_y = max(0, y_off + border_y - digit_p1.shape[0] - 8)  # 8px padding for higher placement
+        img = jr.render_at(img, 10, score_y, digit_p1)
+        img = jr.render_at(img, width - 10 - digit_p2.shape[1], score_y, digit_p2)
 
         return img
 
@@ -532,4 +537,6 @@ def main():
                 acc_ms = 0
         # -----------------------------------------------------------
 
-    main()
+    if __name__ == "__main__":
+        main()
+
