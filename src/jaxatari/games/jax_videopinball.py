@@ -2096,7 +2096,7 @@ def flipper_step(state: VideoPinballState, action: chex.Array):
 
     left_flipper_angle = jax.lax.cond(
         jnp.logical_and(
-            action == Action.LEFT, state.left_flipper_angle < FLIPPER_MAX_ANGLE
+            jnp.logical_or(action == Action.LEFT, action == Action.UP), state.left_flipper_angle < FLIPPER_MAX_ANGLE
         ),
         lambda a: a + 1,
         lambda a: a,
@@ -2105,7 +2105,7 @@ def flipper_step(state: VideoPinballState, action: chex.Array):
 
     right_flipper_angle = jax.lax.cond(
         jnp.logical_and(
-            action == Action.RIGHT, state.right_flipper_angle < FLIPPER_MAX_ANGLE
+            jnp.logical_or(action == Action.RIGHT, action == Action.UP), state.right_flipper_angle < FLIPPER_MAX_ANGLE
         ),
         lambda a: a + 1,
         lambda a: a,
@@ -2114,7 +2114,7 @@ def flipper_step(state: VideoPinballState, action: chex.Array):
 
     left_flipper_angle = jax.lax.cond(
         jnp.logical_and(
-            jnp.logical_not(action == Action.LEFT), state.left_flipper_angle > 0
+            jnp.logical_not(jnp.logical_or(action == Action.LEFT, action == Action.UP)), state.left_flipper_angle > 0
         ),
         lambda a: a - 1,
         lambda a: a,
@@ -2123,7 +2123,7 @@ def flipper_step(state: VideoPinballState, action: chex.Array):
 
     right_flipper_angle = jax.lax.cond(
         jnp.logical_and(
-            jnp.logical_not(action == Action.RIGHT), state.right_flipper_angle > 0
+            jnp.logical_not(jnp.logical_or(action == Action.RIGHT, action == Action.UP)), state.right_flipper_angle > 0
         ),
         lambda a: a - 1,
         lambda a: a,
