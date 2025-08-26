@@ -176,6 +176,12 @@ class DonkeyKongConstants(NamedTuple):
 
     TIMER_REDUTION_DURATION = 128 # at every 128st frame, the timer will be reduced by 100, starting from 5000 "points"
     TIMER_REDUTION_AMOUNT = 100
+
+    # Observation
+    MAX_BARRELS = 4
+    MAX_FIRES = 4
+    MAX_TRAPS = 8
+    MAX_LADDERS = 16
     
 
 class invisible_wall_each_stage(NamedTuple):
@@ -267,48 +273,51 @@ class EntityPosition(NamedTuple):
     width: jnp.ndarray
     height: jnp.ndarray
 
-class EntityPositionTraps(NamedTuple):
+class EntityPositionTrap(NamedTuple):
     x: jnp.ndarray
     y: jnp.ndarray
     width: jnp.ndarray
-    height: jnp.ndarray
     triggered: jnp.ndarray
+
+class EntityPositionLadder(NamedTuple):
+    start_x: jnp.ndarray
+    start_y: jnp.ndarray
+    end_x: jnp.ndarray
+    end_y: jnp.ndarray
+    width: jnp.ndarray
+    
 
 class DonkeyKongObservation(NamedTuple):
     # Scores / Timer
     total_score: jnp.ndarray
     time_remaining: jnp.ndarray
     mario_lives: jnp.ndarray
-    game_over: jnp.ndarray
     goal_reached: jnp.ndarray
     level: jnp.ndarray
 
     # Player / Mario Position
-    # mario_position: EntityPosition # [x, y]
-    # mario_view_direction: jnp.ndarray # left and right
-    # mario_jumping: jnp.ndarray
-    # mario_climbing: jnp.ndarray
+    mario_position: EntityPosition # [x, y]
+    mario_view_direction: jnp.ndarray # left and right
+    mario_jumping: jnp.ndarray
+    mario_climbing: jnp.ndarray
     
     # # Hammer
-    # hammer_position: EntityPosition
-    # hammer_active: jnp.ndarray
+    hammer_position: EntityPosition
+    hammer_can_destroy_enemy: jnp.ndarray
 
     # # Enemy
-    # barrels: EntityPosition
-    # barrel_mask: jnp.ndarray # 0 = inactive barrels, 1 = active barrels
-    # fires: EntityPosition
-    # fire_mask: jnp.ndarray  
+    barrels: EntityPosition
+    barrel_mask: jnp.ndarray # 0 = inactive barrels, 1 = active barrels
+    fires: EntityPosition
+    fire_mask: jnp.ndarray  
 
     # # Traps
-    # traps: EntityPositionTraps
+    traps: EntityPositionTrap
 
     # # Ladders
-    # ladder_start_x: jnp.ndarray
-    # ladder_start_y: jnp.ndarray
-    # ladder_end_x: jnp.ndarray
-    # ladder_end_y: jnp.ndarray
-    # ladder_width: jnp.ndarray
-
+    ladders: EntityPositionLadder
+    ladder_mask: jnp.ndarray # 0 for some ladders for level 1 which are no ladders, its only a place holder because JAX needs consistent array sizes
+                             # ladder_mask do NOT implie if those ladders are climbable or not
 
 class DonkeyKongInfo(NamedTuple):
     time: jnp.ndarray
@@ -1601,6 +1610,7 @@ class JaxDonkeyKong(JaxEnvironment[DonkeyKongState, DonkeyKongObservation, Donke
                 hammer_x = hammer_x,
                 hammer_y = hammer_y,
                 game_score = game_score,
+                mario_life_counter = state.mario_life_counter,
             )            
 
             game_freeze_over = self.consts.GAME_FREEZE_DURATION < (state.step_counter - state.game_freeze_start)
@@ -1999,20 +2009,134 @@ class JaxDonkeyKong(JaxEnvironment[DonkeyKongState, DonkeyKongObservation, Donke
     
     @partial(jax.jit, static_argnums=(0,))
     def _get_observation(self, state: DonkeyKongState):
-
-        game_over = state.mario_life_counter < 0 
+        mario_position = EntityPosition(
+            x = state.mario_x,
+            y = state.mario_y,
+            width = self.consts.MARIO_HIT_BOX_Y,
+            height = self.consts.MARIO_HIT_BOX_X
+        )
+        mario_jumping = jnp.logical_or(state.mario_jumping, state.mario_jumping_wide)
+        hammer_position = EntityPosition(
+            x = state.hammer_x,
+            y = state.hammer_y,
+            width = self.consts.HAMMER_HIT_BOX_Y,
+            height = self.consts.HAMMER_HIT_BOX_X,
+        )
+        nums_barrels = state.barrels.barrel_x.shape[0]
+        barrels = EntityPosition(
+            x = state.barrels.barrel_x,
+            y = state.barrels.barrel_y,
+            width = jnp.full((nums_barrels,), self.consts.BARREL_HIT_BOX_Y),
+            height = jnp.full((nums_barrels,), self.consts.BARREL_HIT_BOX_X),
+        )
+        barrel_mask = jnp.where(state.barrels.reached_the_end, 0, 1)
+        nums_fires = state.fires.fire_x.shape[0]
+        fires = EntityPosition(
+            x = state.fires.fire_x,
+            y = state.fires.fire_y,
+            width = jnp.full((nums_fires,), self.consts.FIRE_HIT_BOX_Y),
+            height = jnp.full((nums_fires,), self.consts.FIRE_HIT_BOX_X),
+        )
+        fire_mask = jnp.where(state.fires.destroyed, 0, 1)
+        nums_traps = state.traps.trap_x.shape[0]
+        traps = EntityPositionTrap(
+            x = state.traps.trap_x,
+            y = state.traps.trap_y,
+            width = jnp.full((nums_traps,), self.consts.TRAP_WIDTH),
+            triggered = state.traps.triggered,
+        )
+        nums_ladders = state.ladders.start_x.shape[0]
+        ladders = EntityPositionLadder(
+            start_x = state.ladders.start_x,
+            start_y = state.ladders.start_y,
+            end_x = state.ladders.end_x,
+            end_y = state.ladders.end_y,
+            width = jnp.full((nums_ladders,), self.consts.LADDER_WIDTH),
+        )
+        ladder_mask = jnp.where(state.ladders.start_x != -1, 1, 0)
         
         return DonkeyKongObservation(
             total_score = state.game_score,
             time_remaining = state.game_remaining_time,
             mario_lives = state.mario_life_counter, 
-            game_over = game_over,
             goal_reached = state.mario_reached_goal,
             level = state.level,
+            mario_position = mario_position,
+            mario_view_direction = state.mario_view_direction,
+            mario_jumping = mario_jumping,
+            mario_climbing = state.mario_climbing,
+            hammer_position = hammer_position,
+            hammer_can_destroy_enemy = state.hammer_can_hit,
+            barrels = barrels,
+            barrel_mask = barrel_mask,
+            fires = fires,
+            fire_mask = fire_mask,
+            traps = traps,
+            ladders = ladders,
+            ladder_mask = ladder_mask,
         )
+
+    def render(self, state: DonkeyKongState) -> jnp.ndarray:
+        return self.renderer.render(state)
 
     def action_space(self) -> spaces.Discrete:
         return spaces.Discrete(8)
+
+    def observation_space(self) -> spaces.Dict:
+        MAX_BARRELS = self.consts.MAX_BARRELS
+        MAX_FIRES = self.consts.MAX_FIRES
+        MAX_TRAPS = self.consts.MAX_TRAPS
+        MAX_LADDERS = self.consts.MAX_LADDERS
+        
+        return spaces.Dict({
+            "total_score": spaces.Box(low=0, high=1e6, shape=(), dtype=jnp.int32),
+            "time_remaining": spaces.Box(low=0, high=9999, shape=(), dtype=jnp.int32),
+            "mario_lives": spaces.Box(low=0, high=2, shape=(), dtype=jnp.int32),
+            "goal_reached": spaces.Box(low=0, high=1, shape=(), dtype=jnp.int32),
+            "level": spaces.Discrete(2), 
+
+            # Mario
+            "mario_position": spaces.Box(
+                low=jnp.array([0,0]), 
+                high=jnp.array([210,160]), 
+                shape=(2,), dtype=jnp.int32
+            ),
+            "mario_view_direction": spaces.Box(low=-1, high=1, shape=(), dtype=jnp.int32),
+            "mario_jumping": spaces.Box(low=0, high=1, shape=(), dtype=jnp.int32),
+            "mario_climbing": spaces.Box(low=0, high=1, shape=(), dtype=jnp.int32),
+
+            # Hammer
+            "hammer_position": spaces.Box(
+                low=jnp.array([0,0]),
+                high=jnp.array([210,160]),
+                shape=(2,), dtype=jnp.int32
+            ),
+            "hammer_can_destroy_enemy": spaces.Box(low=0, high=1, shape=(), dtype=jnp.int32),
+
+            # Barrels
+            "barrels_x": spaces.Box(low=0, high=210, shape=(MAX_BARRELS,), dtype=jnp.int32),
+            "barrels_y": spaces.Box(low=0, high=160, shape=(MAX_BARRELS,), dtype=jnp.int32),
+            "barrels_width": spaces.Box(low=0, high=self.consts.BARREL_HIT_BOX_Y, shape=(MAX_BARRELS,), dtype=jnp.int32),
+            "barrels_height": spaces.Box(low=0, high=self.consts.BARREL_HIT_BOX_X, shape=(MAX_BARRELS,), dtype=jnp.int32),
+
+            # Fires
+            "fires_x": spaces.Box(low=0, high=210, shape=(MAX_FIRES,), dtype=jnp.int32),
+            "fires_y": spaces.Box(low=0, high=160, shape=(MAX_FIRES,), dtype=jnp.int32),
+            "fires_width": spaces.Box(low=0, high=self.consts.FIRE_HIT_BOX_Y, shape=(MAX_FIRES,), dtype=jnp.int32),
+            "fires_height": spaces.Box(low=0, high=self.consts.FIRE_HIT_BOX_X, shape=(MAX_FIRES,), dtype=jnp.int32),
+
+            # Traps
+            "traps_x": spaces.Box(low=0, high=210, shape=(MAX_TRAPS,), dtype=jnp.int32),
+            "traps_y": spaces.Box(low=0, high=160, shape=(MAX_TRAPS,), dtype=jnp.int32),
+            "traps_width": spaces.Box(low=0, high=self.consts.TRAP_WIDTH, shape=(MAX_TRAPS,), dtype=jnp.int32),
+
+            # Ladders
+            "ladders_start_x": spaces.Box(low=0, high=210, shape=(MAX_LADDERS,), dtype=jnp.int32),
+            "ladders_start_y": spaces.Box(low=0, high=160, shape=(MAX_LADDERS,), dtype=jnp.int32),
+            "ladders_end_x": spaces.Box(low=0, high=210, shape=(MAX_LADDERS,), dtype=jnp.int32),
+            "ladders_end_y": spaces.Box(low=0, high=160, shape=(MAX_LADDERS,), dtype=jnp.int32),
+            "ladders_width": spaces.Box(low=0, high=self.consts.LADDER_WIDTH, shape=(MAX_LADDERS,), dtype=jnp.int32),
+        })
 
 
     @partial(jax.jit, static_argnums=(0,))
