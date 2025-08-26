@@ -403,21 +403,19 @@ class JaxSpaceInvaders(JaxEnvironment[SpaceInvadersState, SpaceInvadersObservati
         opponent_rect_width = self.consts.OPPONENT_SIZE[0] * self.consts.ENEMY_COLS + self.consts.OFFSET_OPPONENT[0] * (self.consts.ENEMY_COLS - 1)
         opponent_rect_height = self.consts.OPPONENT_SIZE[1] * self.consts.ENEMY_ROWS + self.consts.OFFSET_OPPONENT[1] * (self.consts.ENEMY_ROWS - 1)
 
-        enemy_count = self.consts.ENEMY_ROWS * self.consts.ENEMY_COLS
-
         state = SpaceInvadersState(
             player_x=jnp.array(self.consts.INITIAL_PLAYER_X).astype(jnp.int32),
             player_speed=jnp.array(0.0).astype(jnp.int32),
-            player_dead=0,
+            player_dead=self.consts.PLAYER_EXPLOSION_DURATION,
             step_counter=jnp.array(0).astype(jnp.int32),
             player_score=jnp.array(0).astype(jnp.int32),
             player_lives=jnp.array(self.consts.INITIAL_LIVES).astype(jnp.int32),
-            destroyed=jnp.zeros((enemy_count,), dtype=jnp.int32), # If 0 its alive, after it counts up to 28 each frame showing a different animation state depending on this value. Starting with 29 its gone 
+            destroyed=jnp.zeros((self.consts.ENEMY_ROWS * self.consts.ENEMY_COLS,), dtype=jnp.int32), # If 0 its alive, after it counts up to 28 each frame showing a different animation state depending on this value. Starting with 29 its gone 
             opponent_current_x=self.consts.OPPONENT_LIMIT_X[0],
             opponent_current_y=self.consts.OPPONENT_LIMIT_Y[0],
             opponent_bounding_rect=(opponent_rect_width, opponent_rect_height),
             opponent_direction=self.consts.INITIAL_OPPONENT_DIRECTION,
-            bullet_active=jnp.array(0).astype(jnp.int32),
+            bullet_active=jnp.array(0).astype(jnp.bool),
             bullet_x=jnp.array(self.consts.INITIAL_BULLET_POS).astype(jnp.int32),
             bullet_y=jnp.array(self.consts.INITIAL_BULLET_POS).astype(jnp.int32),
             enemy_bullets_active=jnp.zeros(self.consts.MAX_ENEMY_BULLETS, dtype=jnp.bool),
@@ -428,11 +426,50 @@ class JaxSpaceInvaders(JaxEnvironment[SpaceInvadersState, SpaceInvadersObservati
         initial_obs = self._get_observation(state)
         return initial_obs, state
 
-    @partial(jax.jit, static_argnums=(0,))
-    def step(self, state: SpaceInvadersState, action: chex.Array, key=None) -> Tuple[SpaceInvadersObservation, SpaceInvadersState, float, bool, SpaceInvadersInfo]:
-        if key is None:
-            key = jax.random.PRNGKey(state.step_counter)
+    def reset_level(self, state: SpaceInvadersState) -> SpaceInvadersState:
+        # new_state = SpaceInvadersState(
+        state = state._replace(
+            player_x = jnp.array(self.consts.INITIAL_PLAYER_X).astype(jnp.int32),
+            player_speed = jnp.array(0.0).astype(jnp.int32),
+            player_dead = state.player_dead,
+            step_counter = state.step_counter,
+            player_score = state.player_score,
+            player_lives = state.player_lives,
+            destroyed = jnp.zeros((self.consts.ENEMY_ROWS * self.consts.ENEMY_COLS,), dtype=jnp.int32),
+            opponent_current_x = self.consts.OPPONENT_LIMIT_X[0],
+            opponent_current_y = self.consts.OPPONENT_LIMIT_Y[0],
+            opponent_bounding_rect = state.opponent_bounding_rect,
+            opponent_direction = self.consts.INITIAL_OPPONENT_DIRECTION,
+            bullet_active = jnp.array(0).astype(jnp.bool),
+            bullet_x = jnp.array(self.consts.INITIAL_BULLET_POS).astype(jnp.int32),
+            bullet_y = jnp.array(self.consts.INITIAL_BULLET_POS).astype(jnp.int32),
+            enemy_bullets_active = jnp.zeros(self.consts.MAX_ENEMY_BULLETS, dtype=jnp.bool),
+            enemy_bullets_x = jnp.zeros(self.consts.MAX_ENEMY_BULLETS, dtype=jnp.int32),
+            enemy_bullets_y = jnp.zeros(self.consts.MAX_ENEMY_BULLETS, dtype=jnp.int32),
+            enemy_fire_cooldown = jnp.array(self.consts.ENEMY_FIRE_RATE).astype(jnp.int32)
+        )
 
+        return state
+
+    def step_paused(self, state: SpaceInvadersState) -> SpaceInvadersState:
+        new_player_dead = jax.lax.cond(
+            state.player_dead + 1 > self.consts.FULL_PAUSE_DURATION,
+            lambda _: 0,
+            lambda _: state.player_dead + 1,
+            None
+        )
+
+        # Resets the level only once during the pause animation
+        state = jax.lax.cond(
+            state.player_dead == self.consts.PLAYER_EXPLOSION_DURATION + 1, 
+            lambda: self.reset_level(state), 
+            lambda: state
+        )
+        state = state._replace(player_dead = new_player_dead)
+
+        return state
+    
+    def step_running(self, state: SpaceInvadersState, action: chex.Array, key=None) -> SpaceInvadersState:
         new_player_x, new_player_speed = self._player_step(state.player_x, state.player_speed, action)
 
         new_player_x, new_player_speed = jax.lax.cond(
@@ -478,28 +515,6 @@ class JaxSpaceInvaders(JaxEnvironment[SpaceInvadersState, SpaceInvadersObservati
             None
         )
 
-        # ggf. Ersetzen durch Reset Funktion für gesamtes Level
-        new_player_x, new_player_speed = jax.lax.cond(
-            new_player_dead > self.consts.PLAYER_EXPLOSION_DURATION,
-            lambda _: (self.consts.INITIAL_PLAYER_X, 0),
-            lambda _: (new_player_x, new_player_speed),
-            None
-        )
-
-        new_player_dead = jax.lax.cond(
-            new_player_dead > self.consts.FULL_PAUSE_DURATION,
-            lambda _: 0,
-            lambda _: new_player_dead,
-            None
-        )
-
-        step_counter = jax.lax.cond(
-            state.step_counter > 255,
-            lambda s: jnp.array(0),
-            lambda s: s + 1,
-            operand=state.step_counter,
-        )
-
         def get_opponent_position():
             direction = jax.lax.cond(
                 state.opponent_direction < 0,
@@ -518,14 +533,17 @@ class JaxSpaceInvaders(JaxEnvironment[SpaceInvadersState, SpaceInvadersObservati
             return (direction, new_position)
 
         is_opponent_step = state.step_counter % self.consts.MOVEMENT_RATE == 0
-        (direction, position) = jax.lax.cond(is_opponent_step, lambda: get_opponent_position(),
-                                              lambda: (state.opponent_direction, state.opponent_current_x))
+        (direction, position) = jax.lax.cond(
+            is_opponent_step, 
+            lambda: get_opponent_position(),
+            lambda: (state.opponent_direction, state.opponent_current_x)
+        )
 
         new_state = SpaceInvadersState(
             player_x=new_player_x,
             player_speed=new_player_speed,
             player_dead=new_player_dead,
-            step_counter=step_counter,
+            step_counter=state.step_counter,
             player_score=new_score,
             player_lives=new_lives,
             destroyed=new_destroyed,
@@ -541,6 +559,28 @@ class JaxSpaceInvaders(JaxEnvironment[SpaceInvadersState, SpaceInvadersObservati
             enemy_bullets_y=enemy_bullets_y,
             enemy_fire_cooldown=enemy_fire_cooldown
         )
+
+        return new_state
+
+    @partial(jax.jit, static_argnums=(0,))
+    def step(self, state: SpaceInvadersState, action: chex.Array, key=None) -> Tuple[SpaceInvadersObservation, SpaceInvadersState, float, bool, SpaceInvadersInfo]:
+        if key is None:
+            key = jax.random.PRNGKey(state.step_counter)
+
+        new_step_counter = jax.lax.cond(
+            state.step_counter > 255,
+            lambda _: jnp.array(0),
+            lambda s: s + 1,
+            operand=state.step_counter,
+        )
+
+        state = state._replace(step_counter = new_step_counter)
+
+        new_state: SpaceInvadersState = jax.lax.cond(
+            state.player_dead > 0,
+            lambda: self.step_paused(state),
+            lambda: self.step_running(state, action, key)
+        )   
 
         done = self._get_done(new_state)
         env_reward = self._get_env_reward(state, new_state)
@@ -853,7 +893,11 @@ class SpaceInvadersRenderer(JAXGameRenderer):
             raster = aj.render_at(raster, x_pos, self.consts.HEIGHT - 53, frame_defense)
 
         # Load Opponent Sprites
-        flip = jax.numpy.floor(state.step_counter / self.consts.MOVEMENT_RATE) % 2 == 1
+        flip = jax.lax.cond(
+            state.player_dead != 0,
+            lambda: False,
+            lambda: jax.numpy.floor(state.step_counter / self.consts.MOVEMENT_RATE) % 2 == 1
+        )
 
         opponent_sprites_a = [SPRITE_OPPONENT_1_A, SPRITE_OPPONENT_2_A, SPRITE_OPPONENT_3_A, SPRITE_OPPONENT_4_A, SPRITE_OPPONENT_5, SPRITE_OPPONENT_6_A]
         opponent_sprites_b = [SPRITE_OPPONENT_1_B, SPRITE_OPPONENT_2_B, SPRITE_OPPONENT_3_B, SPRITE_OPPONENT_4_B, SPRITE_OPPONENT_5, SPRITE_OPPONENT_6_B]
