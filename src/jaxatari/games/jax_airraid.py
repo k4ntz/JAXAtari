@@ -1163,7 +1163,7 @@ class AirRaidRenderer(JAXGameRenderer):
 
         raster = jax.lax.fori_loop(0, 5, render_life, raster)
 
-        return raster
+        return raster.transpose(1, 0, 2)  # Convert to (H, W, C) format
 
 if __name__ == "__main__":
     pygame.init()
