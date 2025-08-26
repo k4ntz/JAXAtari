@@ -70,7 +70,7 @@ class SceneObject:
     score_type: (
         chex.Array
     )  # 0: no score, 1: Bumper, 2: Spinner, 3: Left Rollover, 4: Atari Rollover, 5: Special Lit Up Target,
-    # 6: Left Lit Up Target, 7:Middle Lit Up Target, 8: Right Lit Up Target, 9: Left Flipper, 10: Right Flipper
+    # 6: Left Lit Up Target, 7:Middle Lit Up Target, 8: Right Lit Up Target, 9: Left Flipper, 10: Right Flipper, 11: Tilt Mode Hole Plug
     variant: chex.Array  # a more general property: Used along with score_type to identify the exact SceneObject for a specific game state.
 
 
@@ -597,7 +597,7 @@ TILT_MODE_HOLE_PLUG_LEFT = SceneObject(
     hit_box_y_offset=jnp.array(BOTTOM_WALL_TOP_Y_OFFSET),  # type: ignore
     reflecting=jnp.array(1),  # type: ignore
     score_type=jnp.array(0),  # type: ignore
-    variant=jnp.array(-1),
+    variant=jnp.array(11),
 )
 
 TILT_MODE_HOLE_PLUG_RIGHT = SceneObject(
@@ -607,7 +607,7 @@ TILT_MODE_HOLE_PLUG_RIGHT = SceneObject(
     hit_box_y_offset=jnp.array(BOTTOM_WALL_TOP_Y_OFFSET),  # type: ignore
     reflecting=jnp.array(1),  # type: ignore
     score_type=jnp.array(0),  # type: ignore
-    variant=jnp.array(-1),
+    variant=jnp.array(11),
 )
 
 LEFT_WALL_SCENE_OBJECT = SceneObject(
@@ -2330,6 +2330,13 @@ def _check_obstacle_hits(
         t_entry_non_reflecting_hit_points,
     )
     
+    # Disable tilt mode hole plugs if in tilt mode
+    t_entry_non_reflecting_hit_points = jnp.where(
+        jnp.logical_and(non_reflecting_hit_points[:,6] == 11, state.tilt_mode_active),
+        T_ENTRY_NO_COLLISION,
+        t_entry_non_reflecting_hit_points,
+    )
+
     # DISABLE REFLECTING SCENCE OBJECTS THAT ARE NOT IN THE CURRENT GAME STATE
     ###############################################################################################
 
@@ -2908,6 +2915,8 @@ def handle_ball_in_gutter(
     lives,
     active_targets,
     special_target_cooldown,
+    tilt_mode_active,
+    tilt_counter
 ):
 
     multiplier = jnp.clip(atari_symbols + 1, max=4)
@@ -2923,6 +2932,9 @@ def handle_ball_in_gutter(
         atari_symbols,
     )
 
+    tilt_mode_active = jnp.where(respawn_timer == 0, False, tilt_mode_active)
+    tilt_counter = jnp.where(respawn_timer == 0, 0, tilt_counter)
+
     return (
         respawn_timer,
         rollover_counter,
@@ -2931,6 +2943,8 @@ def handle_ball_in_gutter(
         lives,
         active_targets,
         special_target_cooldown,
+        tilt_mode_active,
+        tilt_counter
     )
 
 
@@ -3390,12 +3404,14 @@ class JaxVideoPinball(
             lives,
             active_targets,
             special_target_cooldown,
+            tilt_mode_active,
+            tilt_counter
         ) = jax.lax.cond(
             respawn_timer > 0,
-            lambda rt, rc, s, asym, l, at, stc: handle_ball_in_gutter(
-                rt, rc, s, asym, l, at, stc
+            lambda rt, rc, s, asym, l, at, stc, tma, tmc: handle_ball_in_gutter(
+                rt, rc, s, asym, l, at, stc, tma, tmc
             ),
-            lambda rt, rc, s, asym, l, at, stc: (rt, rc, s, asym, l, at, stc),
+            lambda rt, rc, s, asym, l, at, stc, tma, tmc: (rt, rc, s, asym, l, at, stc, tma, tmc),
             respawn_timer,
             rollover_counter,
             score,
@@ -3403,6 +3419,8 @@ class JaxVideoPinball(
             state.lives,
             active_targets,
             special_target_cooldown,
+            tilt_mode_active,
+            tilt_counter,
         )
 
         ball_in_play = jnp.where(
