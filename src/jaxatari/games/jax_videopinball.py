@@ -2431,17 +2431,17 @@ def _check_obstacle_hits(
     Check if the ball is hitting an obstacle.
     """
     reflecting_hit_points = jax.vmap(
-        lambda scene_objects: _calc_hit_point(ball_movement, scene_objects)
+        lambda scene_object: _calc_hit_point(ball_movement, scene_object)
     )(REFLECTING_SCENE_OBJECTS)
 
     # In tilt mode we do not hit non-reflecting objects
     non_reflecting_hit_points = jax.lax.cond(
         state.tilt_mode_active,
         lambda: jax.vmap(
-            lambda scene_objects: jnp.array([T_ENTRY_NO_COLLISION, -1.0, -1.0, 0.0, 0.0, 1.0, 0.0, -1.0])
+            lambda scene_object: jnp.array([T_ENTRY_NO_COLLISION, -1.0, -1.0, 0.0, 0.0, *scene_object])
         )(NON_REFLECTING_SCENE_OBJECTS),
         lambda: jax.vmap(
-            lambda scene_objects: _calc_hit_point(ball_movement, scene_objects)
+            lambda scene_object: _calc_hit_point(ball_movement, scene_object)
         )(NON_REFLECTING_SCENE_OBJECTS)
     )
     """
@@ -2529,8 +2529,8 @@ def _check_obstacle_hits(
     
     t_entry_reflecting_hit_points = jnp.where(
         jnp.logical_and(
-            jnp.logical_not(left_flipper_angle == reflecting_hit_points[:,HitPointSelector.OBJECT_VARIANT]),  # scene_object.state == left flipper angle
-            reflecting_hit_points[:,HitPointSelector.OBJECT_SCORE_TYPE] == 9  # scoring_type == left flipper (9)
+            reflecting_hit_points[:,HitPointSelector.OBJECT_SCORE_TYPE] == 9,  # scoring_type == left flipper (9)
+            jnp.logical_not(left_flipper_angle == reflecting_hit_points[:,HitPointSelector.OBJECT_VARIANT])  # scene_object.state == left flipper angle
         ),
         T_ENTRY_NO_COLLISION,
         t_entry_reflecting_hit_points,
@@ -2538,8 +2538,8 @@ def _check_obstacle_hits(
 
     t_entry_reflecting_hit_points = jnp.where(
         jnp.logical_and(
-            jnp.logical_not(right_flipper_angle == reflecting_hit_points[:,HitPointSelector.OBJECT_VARIANT]),  # scene_object.state == right flipper angle
-            reflecting_hit_points[:,HitPointSelector.OBJECT_SCORE_TYPE] == 10  # scoring_type == right flipper (10)
+            reflecting_hit_points[:,HitPointSelector.OBJECT_SCORE_TYPE] == 10,  # scoring_type == right flipper (10)
+            jnp.logical_not(right_flipper_angle == reflecting_hit_points[:,HitPointSelector.OBJECT_VARIANT])  # scene_object.state == right flipper angle
         ),
         T_ENTRY_NO_COLLISION,
         t_entry_reflecting_hit_points,
@@ -2547,7 +2547,7 @@ def _check_obstacle_hits(
     # Disable tilt mode hole plugs if in tilt mode
     t_entry_reflecting_hit_points = jnp.where(
         jnp.logical_and(
-            non_reflecting_hit_points[:,HitPointSelector.OBJECT_SCORE_TYPE] == 11, # Hole plug
+            reflecting_hit_points[:,HitPointSelector.OBJECT_SCORE_TYPE] == 11, # Hole plug
             state.tilt_mode_active
         ),
         T_ENTRY_NO_COLLISION,
