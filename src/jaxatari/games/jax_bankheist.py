@@ -25,8 +25,10 @@ DOWN = 0
 FUEL_CAPACITY = 10200.0
 # Height of the Fuel Tank in pixels
 TANK_HEIGHT = 25.0
+# Levels to which the tank can be refilled
+TANK_LEVELS = jnp.array([0, 1, 2, 4, 6, 9, 12, 16, 18, 25])
 # Fuel Refill amounts by amount of banks cleared
-REFILL_TABLE = jnp.array([0, 1, 2, 4, 6, 9, 12, 16, 18, 25]) / TANK_HEIGHT * FUEL_CAPACITY
+REFILL_TABLE = TANK_LEVELS / TANK_HEIGHT * FUEL_CAPACITY
 # Fuel Cost of using Dynamite
 DYNAMITE_COST = FUEL_CAPACITY * 0.02
 # Delay before Dynamite Explodes (1 second at 60fps)
@@ -160,6 +162,7 @@ class Entity(NamedTuple):
 
 class BankHeistState(NamedTuple):
     level: chex.Array
+    difficulty_level: chex.Array
     player: Entity
     dynamite_position: chex.Array
     enemy_positions: Entity
@@ -178,6 +181,7 @@ class BankHeistState(NamedTuple):
     pending_police_spawns: chex.Array  # Timer for delayed police spawning
     pending_police_bank_indices: chex.Array  # Bank indices where police should spawn
     game_paused: chex.Array  # Game paused state Is set at beginning and after life was lost
+    bank_heists: chex.Array  # number of bank heists completed in the current level
 
 #TODO: Add Background collision Map, Fuel, Fuel Refill and others
 class BankHeistObservation(NamedTuple):
@@ -204,6 +208,7 @@ class JaxBankHeist(JaxEnvironment[BankHeistState, BankHeistObservation, BankHeis
         # Minimal state initialization
         state = BankHeistState(
             level=jnp.array(0).astype(jnp.int32),
+            difficulty_level=jnp.array(0).astype(jnp.int32),
             fuel=jnp.array(FUEL_CAPACITY).astype(jnp.float32),
             player=Entity(
                 position=jnp.array([12, 78]).astype(jnp.int32),
@@ -225,7 +230,8 @@ class JaxBankHeist(JaxEnvironment[BankHeistState, BankHeistObservation, BankHeis
             dynamite_timer=jnp.array([-1]).astype(jnp.int32),
             pending_police_spawns=jnp.array([-1, -1, -1]).astype(jnp.int32),  # -1 means no pending spawn
             pending_police_bank_indices=jnp.array([-1, -1, -1]).astype(jnp.int32),  # Bank indices for pending spawns
-            game_paused=jnp.array(True).astype(jnp.bool_)
+            game_paused=jnp.array(True).astype(jnp.bool_),
+            bank_heists=jnp.array(0).astype(jnp.int32)
         )
         obs = self._get_observation(state)
         def expand_and_copy(x):
@@ -336,11 +342,15 @@ class JaxBankHeist(JaxEnvironment[BankHeistState, BankHeistObservation, BankHeis
         # Set up delayed spawn using constant
         new_pending_spawns = state.pending_police_spawns.at[first_available_slot].set(POLICE_SPAWN_DELAY)
         new_pending_bank_indices = state.pending_police_bank_indices.at[first_available_slot].set(bank_hit_index)
-        
+
+        # Increase bank heists count by 1
+        new_bank_heists = state.bank_heists + 1
+
         return state._replace(
             bank_positions=new_banks,
             pending_police_spawns=new_pending_spawns,
-            pending_police_bank_indices=new_pending_bank_indices
+            pending_police_bank_indices=new_pending_bank_indices,
+            bank_heists=new_bank_heists
         )
 
     @partial(jax.jit, static_argnums=(0,))
@@ -404,12 +414,13 @@ class JaxBankHeist(JaxEnvironment[BankHeistState, BankHeistObservation, BankHeis
     @partial(jax.jit, static_argnums=(0,))
     def map_transition(self, state: BankHeistState) -> BankHeistState:
         new_level = state.level+1
+        new_difficulty_level = jnp.minimum(new_level // CITIES_PER_LEVEL, MAX_LEVEL-1)
         default_player_position = jnp.array([12, 78]).astype(jnp.int32)
         new_player = state.player._replace(position=default_player_position)
         empty_police = init_banks_or_police()
         empty_banks = init_banks_or_police()
         new_speed = state.speed * 1
-        new_fuel = state.fuel
+        new_fuel = jnp.maximum(state.fuel, jax.lax.dynamic_index_in_dim(REFILL_TABLE, state.bank_heists, axis=0, keepdims=False))
         new_fuel_refill=jnp.array(0).astype(jnp.int32)
         map_id = new_level % len(CITY_COLLISION_MAPS)
         new_map_collision = jax.lax.dynamic_index_in_dim(CITY_COLLISION_MAPS, map_id, axis=0, keepdims=False)
@@ -418,9 +429,12 @@ class JaxBankHeist(JaxEnvironment[BankHeistState, BankHeistObservation, BankHeis
         new_bank_spawn_timers = jnp.array([1,1,1]).astype(jnp.int32)
         new_police_spawn_timers = jnp.array([-1,-1,-1]).astype(jnp.int32)
         new_dynamite_timer = jnp.array([-1]).astype(jnp.int32)
+        new_player_lives = jax.lax.cond(state.bank_heists >= 9, lambda: state.player_lives + 1, lambda: state.player_lives)
         return state._replace(
             level=new_level,
+            difficulty_level=new_difficulty_level,
             player=new_player,
+            player_lives=new_player_lives,
             enemy_positions=empty_police,
             bank_positions=empty_banks,
             speed=new_speed,
@@ -433,7 +447,8 @@ class JaxBankHeist(JaxEnvironment[BankHeistState, BankHeistObservation, BankHeis
             police_spawn_timers=new_police_spawn_timers,
             dynamite_timer=new_dynamite_timer,
             pending_police_spawns=jnp.array([-1, -1, -1]).astype(jnp.int32),
-            pending_police_bank_indices=jnp.array([-1, -1, -1]).astype(jnp.int32)
+            pending_police_bank_indices=jnp.array([-1, -1, -1]).astype(jnp.int32),
+            bank_heists=jnp.array(0).astype(jnp.int32)
         )
 
     @partial(jax.jit, static_argnums=(0,))
@@ -776,6 +791,7 @@ def load_bankheist_sprites():
     police_front = aj.loadFrame(os.path.join(SPRITES_DIR, "police_front.npy"), transpose=True)
     bank = aj.loadFrame(os.path.join(SPRITES_DIR, "bank.npy"), transpose=True)
     fuel_tank = aj.loadFrame(os.path.join(SPRITES_DIR, "fuel_tank.npy"), transpose=True)
+    fuel_gauge = aj.loadFrame(os.path.join(SPRITES_DIR, "fuel_gauge.npy"), transpose=True)
 
     # Add padding to front sprites so they have same dimensions as side sprites
     player_front_padded = jnp.pad(player_front, ((1,1), (0,0), (0,0)), mode='constant')
@@ -788,8 +804,9 @@ def load_bankheist_sprites():
     POLICE_FRONT_SPRITE = jnp.expand_dims(police_front_padded, axis=0)
     BANK_SPRITE = jnp.expand_dims(bank, axis=0)
     FUEL_TANK_SPRITE = jnp.expand_dims(fuel_tank, axis=0)
+    FUEL_GAUGE_SPRITE = jnp.expand_dims(fuel_gauge, axis=0)
 
-    return (PLAYER_SIDE_SPRITE, PLAYER_FRONT_SPRITE, POLICE_SIDE_SPRITE, POLICE_FRONT_SPRITE, BANK_SPRITE, CITY_SPRITES, FUEL_TANK_SPRITE)
+    return (PLAYER_SIDE_SPRITE, PLAYER_FRONT_SPRITE, POLICE_SIDE_SPRITE, POLICE_FRONT_SPRITE, BANK_SPRITE, CITY_SPRITES, FUEL_TANK_SPRITE, FUEL_GAUGE_SPRITE)
 
 class Renderer_AtraBankisHeist:
     def __init__(self):
@@ -800,7 +817,8 @@ class Renderer_AtraBankisHeist:
             self.SPRITE_POLICE_FRONT,
             self.SPRITE_BANK,
             self.SPRITES_CITY,
-            self.SPRITE_FUEL_TANK
+            self.SPRITE_FUEL_TANK,
+            self.SPRITE_FUEL_GAUGE
         ) = load_bankheist_sprites() 
 
     @partial(jax.jit, static_argnums=(0,))
@@ -878,6 +896,13 @@ class Renderer_AtraBankisHeist:
         # color in the bottom of the fuel tank in red
         fuel_tank_frame = self.fuel_tank_filler(fuel_tank_frame, state)
         raster = aj.render_at(raster, FUEL_TANK_POSITION[0], FUEL_TANK_POSITION[1], fuel_tank_frame)
+        # Render the Fuel gauge
+        fuel_gauge_position = jax.lax.dynamic_index_in_dim(TANK_LEVELS, state.bank_heists, axis=0, keepdims=False)
+        fuel_gauge_frame = aj.get_sprite_frame(self.SPRITE_FUEL_GAUGE, 0)
+        raster = jax.lax.cond(fuel_gauge_position > 0,
+                              lambda: aj.render_at(raster, FUEL_TANK_POSITION[0]+8, FUEL_TANK_POSITION[1]+(TANK_HEIGHT - fuel_gauge_position), fuel_gauge_frame),
+                              lambda: raster,
+                              )
 
         ### Render Player Lives
         life_frame = aj.get_sprite_frame(self.SPRITE_PLAYER_SIDE, 0)
