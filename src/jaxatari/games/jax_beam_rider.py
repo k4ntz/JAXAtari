@@ -76,8 +76,8 @@ class BeamRiderConstants(NamedTuple):
 
     # Sector progression
     ENEMIES_PER_SECTOR = 15
-    BASE_ENEMY_SPAWN_INTERVAL = 90  # Start slower (was 60)
-    MIN_ENEMY_SPAWN_INTERVAL = 12  # End faster (was 20)
+    BASE_ENEMY_SPAWN_INTERVAL = 90  # Start slower
+    MIN_ENEMY_SPAWN_INTERVAL = 12  # End faster
     MAX_ENEMY_SPEED = 2.5  # Maximum enemy speed at sector 99
 
     # Enemy spawn position
@@ -90,7 +90,7 @@ class BeamRiderConstants(NamedTuple):
     ENEMY_TYPE_GREEN_BOUNCE = 4  # Green bounce craft
     ENEMY_TYPE_BLUE_CHARGER = 5  # Blue charger
     ENEMY_TYPE_ORANGE_TRACKER = 6  # Orange tracker
-    ENEMY_TYPE_SENTINEL_SHIP = 7  # NEW: Sentinel ship
+    ENEMY_TYPE_SENTINEL_SHIP = 7  # Sentinel ship
 
     # White saucer behavior constants
     WHITE_SAUCER_SHOOT_CHANCE = 0.2  # 20% of white saucers can shoot
@@ -108,7 +108,7 @@ class BeamRiderConstants(NamedTuple):
     # White saucer reverse pattern constants
     WHITE_SAUCER_REVERSE_TRIGGER_Y = 150  # Y position where reverse pattern triggers
     WHITE_SAUCER_REVERSE_SPEED_FAST = -4.0
-    UPPER_THIRD_Y = 70  # Y = 70, upper third boundary
+    UPPER_THIRD_Y = 70  # upper third boundary
     # White saucer beam change and retreat constants
     WHITE_SAUCER_BEAM_CHANGE_CHANCE = 0.4  # 40% chance to change beam before retreating
     WHITE_SAUCER_RETREAT_BEAM_CHANGE_TIME = 30  # Frames to move to new beam before retreating
@@ -143,7 +143,7 @@ class BeamRiderConstants(NamedTuple):
     SENTINEL_SHIP_POINTS = 200  # High points when destroyed with torpedo
     SENTINEL_SHIP_COLOR = (192, 192, 192)  # Silver/grey color RGB
     SENTINEL_SHIP_SPAWN_SECTOR = 1  # Starts appearing from sector 1
-    SENTINEL_SHIP_SPAWN_CHANCE = 0.05  # 5% chance to spawn sentinel ship (rare)
+    SENTINEL_SHIP_SPAWN_CHANCE = 0.05  # 5% chance to spawn sentinel ship
     SENTINEL_SHIP_WIDTH = 12  # Larger than regular enemies
     SENTINEL_SHIP_HEIGHT = 10  # Larger than regular enemies
     SENTINEL_SHIP_FIRING_INTERVAL = 120  # Frames between shots (2 seconds at 60fps)
