@@ -2345,7 +2345,7 @@ def _get_bumper_reflection_modifiers(
     final_velocity_x = jnp.where(is_bumper, (bumper_velocity_x + reflected_velocity_x) / 2, reflected_velocity_x)
     final_velocity_y = jnp.where(is_bumper, (bumper_velocity_y + reflected_velocity_y) / 2, reflected_velocity_y)
 
-    velocity_factor = jnp.where(is_bumper, VELOCITY_ACCELERATION_VALUE, velocity_factor)
+    velocity_factor = jnp.where(is_bumper, 1.0, velocity_factor)
     return velocity_factor, final_velocity_x, final_velocity_y
 
 
@@ -3063,10 +3063,11 @@ def ball_step(
     ball_vel_x = jnp.clip(jnp.abs(signed_ball_vel_x * velocity_factor), 0, BALL_MAX_SPEED)
     ball_vel_y = jnp.clip(jnp.abs(signed_ball_vel_y * velocity_factor), 0, BALL_MAX_SPEED)
 
-    # If ball velocity reaches a threshold, accelerate it
-    small_vel = jnp.logical_and(ball_vel_x < 1e-3, ball_vel_y < 1e-3)
-    ball_vel_x = jnp.where(small_vel, jnp.clip(ball_vel_x * 10, 0, BALL_MAX_SPEED), ball_vel_x)
-    ball_vel_y = jnp.where(small_vel, jnp.clip(ball_vel_y * 10, 0, BALL_MAX_SPEED), ball_vel_y)
+    # If ball velocity reaches a small threshold, accelerate it after hitting something
+    small_vel = jnp.logical_and(ball_vel_x < 1e-1, ball_vel_y < 1e-1)
+    ball_deflected = jnp.logical_or(ball_x != ball_movement.new_ball_x, ball_y != ball_movement.new_ball_y)
+    ball_vel_x = jnp.where(jnp.logical_and(ball_deflected, small_vel), jnp.clip(ball_vel_x * 10, 0, BALL_MAX_SPEED), ball_vel_x)
+    ball_vel_y = jnp.where(jnp.logical_and(ball_deflected, small_vel), jnp.clip(ball_vel_y * 10, 0, BALL_MAX_SPEED), ball_vel_y)
 
     return (
         ball_x,
