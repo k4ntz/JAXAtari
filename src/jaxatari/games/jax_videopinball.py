@@ -2345,7 +2345,7 @@ def _get_bumper_reflection_modifiers(
     final_velocity_x = jnp.where(is_bumper, (bumper_velocity_x + reflected_velocity_x) / 2, reflected_velocity_x)
     final_velocity_y = jnp.where(is_bumper, (bumper_velocity_y + reflected_velocity_y) / 2, reflected_velocity_y)
 
-    velocity_factor = jnp.where(is_bumper, 1.0, velocity_factor)
+    velocity_factor = jnp.where(is_bumper, VELOCITY_ACCELERATION_VALUE, velocity_factor)
     return velocity_factor, final_velocity_x, final_velocity_y
 
 
