@@ -36,7 +36,7 @@ DYNAMITE_DELAY = 60
 # Fuel gained on revival after "dying" of lack of fuel
 REVIVAL_FUEL = jnp.array(0.2 * FUEL_CAPACITY).astype(jnp.float32)
 # Speed Increase per level higher than 1
-SPEED_INCREASE_PER_LEVEL = 1.15
+SPEED_INCREASE_PER_LEVEL = jnp.array(1.15)
 # Number of cities to clear before level increases
 CITIES_PER_LEVEL = 4
 # Max Level
@@ -51,6 +51,7 @@ FUEL_TANK_POSITION = (42, 12)
 FIRST_LIFE_POSITION = (WIDTH-70, 27)
 # Offset of the lives first value is the x dimension offset second offset between rows
 LIFE_OFFSET = (16, 12)
+SLOW_DOWN_FACTOR = 0.5
 
 # Array containing position of all 6 lives calculated from FIRST_LIFE_POSITION and LIFE_OFFSET
 LIFE_POSITIONS = jnp.array([
@@ -168,6 +169,7 @@ class BankHeistState(NamedTuple):
     enemy_positions: Entity
     bank_positions: Entity
     speed: chex.Array
+    reserve_speed: chex.Array # how much movement could not be used in the last tick 
     money: chex.Array
     player_lives: chex.Array
     fuel: chex.Array
@@ -218,7 +220,8 @@ class JaxBankHeist(JaxEnvironment[BankHeistState, BankHeistObservation, BankHeis
             dynamite_position=jnp.array([]).astype(jnp.int32),
             enemy_positions=init_banks_or_police(),
             bank_positions=init_banks_or_police(),
-            speed=jnp.array(1).astype(jnp.int32),
+            speed=jnp.array(1).astype(jnp.float32),
+            reserve_speed=jnp.array(0.0).astype(jnp.float32),
             money=jnp.array(0).astype(jnp.int32),
             player_lives=jnp.array(STARTING_LIVES).astype(jnp.int32),
             fuel_refill=jnp.array(0).astype(jnp.int32),
@@ -250,7 +253,7 @@ class JaxBankHeist(JaxEnvironment[BankHeistState, BankHeistObservation, BankHeis
         Returns:
             EntityPosition: Contains the new direction of the player after validating the input.
         """
-        new_position = self.move(player, input, state.speed)
+        new_position = self.move(player, input)
         new_position = new_position._replace(direction=input)
         collision = self.check_background_collision(state, new_position)
         direction = jax.lax.cond(collision >= 255,
@@ -419,7 +422,7 @@ class JaxBankHeist(JaxEnvironment[BankHeistState, BankHeistObservation, BankHeis
         new_player = state.player._replace(position=default_player_position)
         empty_police = init_banks_or_police()
         empty_banks = init_banks_or_police()
-        new_speed = state.speed * 1
+        new_speed = jnp.power(SPEED_INCREASE_PER_LEVEL, new_difficulty_level)
         new_fuel = jnp.maximum(state.fuel, jax.lax.dynamic_index_in_dim(REFILL_TABLE, state.bank_heists, axis=0, keepdims=False))
         new_fuel_refill=jnp.array(0).astype(jnp.int32)
         map_id = new_level % len(CITY_COLLISION_MAPS)
@@ -452,7 +455,7 @@ class JaxBankHeist(JaxEnvironment[BankHeistState, BankHeistObservation, BankHeis
         )
 
     @partial(jax.jit, static_argnums=(0,))
-    def move(self, position: Entity, direction: int, speed: int) -> Entity:
+    def move(self, position: Entity, direction: int) -> Entity:
         """
         Move the player in the specified direction by the specified speed.
 
@@ -461,13 +464,14 @@ class JaxBankHeist(JaxEnvironment[BankHeistState, BankHeistObservation, BankHeis
         """
         new_position = position
         branches = [
-            lambda: new_position._replace(position=jnp.array([new_position.position[0], new_position.position[1] + speed])),  # DOWN
-            lambda: new_position._replace(position=jnp.array([new_position.position[0], new_position.position[1] - speed])),  # UP
-            lambda: new_position._replace(position=jnp.array([new_position.position[0] + speed, new_position.position[1]])),  # RIGHT
-            lambda: new_position._replace(position=jnp.array([new_position.position[0] - speed, new_position.position[1]])),  # LEFT
+            lambda: new_position._replace(position=jnp.array([new_position.position[0], new_position.position[1] + 1])),  # DOWN
+            lambda: new_position._replace(position=jnp.array([new_position.position[0], new_position.position[1] - 1])),  # UP
+            lambda: new_position._replace(position=jnp.array([new_position.position[0] + 1, new_position.position[1]])),  # RIGHT
+            lambda: new_position._replace(position=jnp.array([new_position.position[0] - 1, new_position.position[1]])),  # LEFT
             lambda: new_position,  # NOOP
         ]
-        return jax.lax.switch(direction, branches)
+        new_position = jax.lax.switch(direction, branches)
+        return new_position
 
     @partial(jax.jit, static_argnums=(0,))
     def check_valid_direction(self, state: BankHeistState, position: chex.Array, direction: int) -> bool:
@@ -478,8 +482,8 @@ class JaxBankHeist(JaxEnvironment[BankHeistState, BankHeistObservation, BankHeis
             bool: True if the direction is valid, False otherwise.
         """
         # Create a temporary entity to test the movement
-        temp_entity = Entity(position=position, direction=jnp.array(direction), visibility=jnp.array(1))
-        new_position = self.move(temp_entity, direction, state.speed)
+        temp_entity = Entity(position=position,direction=jnp.array(direction), visibility=jnp.array(1))
+        new_position = self.move(temp_entity, direction)
         collision = self.check_background_collision(state, new_position)
         return collision < 255  # Valid if not hitting a wall
 
@@ -546,7 +550,7 @@ class JaxBankHeist(JaxEnvironment[BankHeistState, BankHeistObservation, BankHeis
             def get_new_position(direction):
                 # Create temporary entity and move it
                 temp_entity = Entity(position=police_position, direction=jnp.array(direction), visibility=jnp.array(1))
-                moved_entity = self.move(temp_entity, direction, state.speed)
+                moved_entity = self.move(temp_entity, direction)
                 return moved_entity.position
             
             # Get new positions for all directions
@@ -622,7 +626,7 @@ class JaxBankHeist(JaxEnvironment[BankHeistState, BankHeistObservation, BankHeis
                     direction=jnp.array(new_direction),
                     visibility=jnp.array(1)
                 )
-                moved_entity = self.move(temp_entity, new_direction, state_inner.speed)
+                moved_entity = self.move(temp_entity, new_direction)
                 
                 # Update police positions
                 new_positions = state_inner.enemy_positions.position.at[i].set(moved_entity.position)
@@ -644,18 +648,20 @@ class JaxBankHeist(JaxEnvironment[BankHeistState, BankHeistObservation, BankHeis
     def step(self, state: BankHeistState, action: chex.Array) -> Tuple[BankHeistState, BankHeistObservation, float, bool, BankHeistInfo]:
         # Generate random key for this step
         step_key = jax.random.PRNGKey(state.level + jnp.sum(state.player.position))
-        
+
+        full_speed = state.speed * SLOW_DOWN_FACTOR + state.reserve_speed
+        state = state._replace(reserve_speed=jnp.mod(full_speed, 1.0))
+        full_speed = full_speed.astype(jnp.int32)
         # Player step. Must be run first as this step unpauses the game if it is paused!
-        new_state = self.player_step(state, action)
-        
-        # Police AI movement step
-        new_state = jax.lax.cond(
+        new_state = jax.lax.fori_loop(0, full_speed, lambda i, s: self.player_step(s, action), state)
+        full_speed = jax.lax.cond(
             new_state.game_paused,
-            lambda: state,
-            lambda: self.move_police_cars(new_state, step_key)
+            lambda: jnp.array(0).astype(jnp.int32),
+            lambda: full_speed
         )
-        
-        
+        # Police AI movement step
+        new_state = jax.lax.fori_loop(0, full_speed, lambda i, s: self.move_police_cars(s, step_key), new_state)
+
         # Timer step
         new_state = jax.lax.cond(
             new_state.game_paused,
@@ -682,7 +688,7 @@ class JaxBankHeist(JaxEnvironment[BankHeistState, BankHeistObservation, BankHeis
         """
         player_input = jnp.where(action == NOOP, state.player.direction, action)  # Convert NOOP to direction 4
         current_player, invalid_input = self.validate_input(state, state.player, player_input)
-        new_player = self.move(current_player, current_player.direction, state.speed)
+        new_player = self.move(current_player, current_player.direction)
         collision = self.check_background_collision(state, new_player)
         new_player = jax.lax.cond(collision >= 255,
             lambda: current_player,
