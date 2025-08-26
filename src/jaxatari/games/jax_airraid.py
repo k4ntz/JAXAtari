@@ -1098,7 +1098,8 @@ class AirRaidRenderer(JAXGameRenderer):
         # Add a black bar at the bottom of the screen
         black_bar_height = 20
         black_bar_y = HEIGHT - black_bar_height
-        raster = raster.at[:, black_bar_y:, :].set(0)
+        # raster = raster.at[:, black_bar_y:, :].set(0)
+        raster = raster.at[black_bar_y:, :, :].set(0)  # Swapped indices to match pre-transpose orientation
 
         score_value = state_or_obs.score
         score_y = 5
@@ -1163,7 +1164,8 @@ class AirRaidRenderer(JAXGameRenderer):
 
         raster = jax.lax.fori_loop(0, 5, render_life, raster)
 
-        return raster.transpose(1, 0, 2)  # Convert to (H, W, C) format
+        # return raster.transpose(1, 0, 2)  # Convert to (H, W, C) format
+        return raster
 
 if __name__ == "__main__":
     pygame.init()
