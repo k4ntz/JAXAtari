@@ -1383,7 +1383,7 @@ LEFT_FLIPPER_STATE_0_SCENE_OBJECT_2 = SceneObject(
     hit_box_x_offset=jnp.array(66),
     hit_box_y_offset=jnp.array(185),
     reflecting=jnp.array(1),
-    score_type=jnp.array(0),
+    score_type=jnp.array(9),
     variant=jnp.array(0),
 )
 
@@ -1393,7 +1393,7 @@ LEFT_FLIPPER_STATE_0_SCENE_OBJECT_3 = SceneObject(
     hit_box_x_offset=jnp.array(68),
     hit_box_y_offset=jnp.array(186),
     reflecting=jnp.array(1),
-    score_type=jnp.array(0),
+    score_type=jnp.array(9),
     variant=jnp.array(0),
 )
 
@@ -1403,7 +1403,7 @@ LEFT_FLIPPER_STATE_0_SCENE_OBJECT_4 = SceneObject(
     hit_box_x_offset=jnp.array(70),
     hit_box_y_offset=jnp.array(187),
     reflecting=jnp.array(1),
-    score_type=jnp.array(0),
+    score_type=jnp.array(9),
     variant=jnp.array(0),
 )
 
@@ -1413,7 +1413,7 @@ LEFT_FLIPPER_STATE_0_SCENE_OBJECT_5 = SceneObject(
     hit_box_x_offset=jnp.array(72),
     hit_box_y_offset=jnp.array(188),
     reflecting=jnp.array(1),
-    score_type=jnp.array(0),
+    score_type=jnp.array(9),
     variant=jnp.array(0),
 )
 
@@ -1423,7 +1423,7 @@ LEFT_FLIPPER_STATE_0_SCENE_OBJECT_6 = SceneObject(
     hit_box_x_offset=jnp.array(74),
     hit_box_y_offset=jnp.array(189),
     reflecting=jnp.array(1),
-    score_type=jnp.array(0),
+    score_type=jnp.array(9),
     variant=jnp.array(0),
 )
 
@@ -1435,7 +1435,7 @@ LEFT_FLIPPER_STATE_16_SCENE_OBJECT_1 = SceneObject(
     hit_box_x_offset=jnp.array(64),
     hit_box_y_offset=jnp.array(184),
     reflecting=jnp.array(1),
-    score_type=jnp.array(0),
+    score_type=jnp.array(9),
     variant=jnp.array(1),
 )
 
@@ -1445,7 +1445,7 @@ LEFT_FLIPPER_STATE_16_SCENE_OBJECT_2 = SceneObject(
     hit_box_x_offset=jnp.array(69),
     hit_box_y_offset=jnp.array(185),
     reflecting=jnp.array(1),
-    score_type=jnp.array(0),
+    score_type=jnp.array(9),
     variant=jnp.array(1),
 )
 
@@ -1455,7 +1455,7 @@ LEFT_FLIPPER_STATE_16_SCENE_OBJECT_3 = SceneObject(
     hit_box_x_offset=jnp.array(74),
     hit_box_y_offset=jnp.array(186),
     reflecting=jnp.array(1),
-    score_type=jnp.array(0),
+    score_type=jnp.array(9),
     variant=jnp.array(1),
 )
 
@@ -1471,7 +1471,7 @@ LEFT_FLIPPER_STATE_32_SCENE_OBJECT_1 = SceneObject(
     hit_box_x_offset=jnp.array(64),
     hit_box_y_offset=jnp.array(184),
     reflecting=jnp.array(1),
-    score_type=jnp.array(0),
+    score_type=jnp.array(9),
     variant=jnp.array(2),
 )
 
@@ -1481,7 +1481,7 @@ LEFT_FLIPPER_STATE_32_SCENE_OBJECT_2 = SceneObject(
     hit_box_x_offset=jnp.array(67),
     hit_box_y_offset=jnp.array(183),
     reflecting=jnp.array(1),
-    score_type=jnp.array(0),
+    score_type=jnp.array(9),
     variant=jnp.array(2),
 )
 
@@ -1491,7 +1491,7 @@ LEFT_FLIPPER_STATE_32_SCENE_OBJECT_3 = SceneObject(
     hit_box_x_offset=jnp.array(71),
     hit_box_y_offset=jnp.array(182),
     reflecting=jnp.array(1),
-    score_type=jnp.array(0),
+    score_type=jnp.array(9),
     variant=jnp.array(2),
 )
 
@@ -1501,7 +1501,7 @@ LEFT_FLIPPER_STATE_32_SCENE_OBJECT_4 = SceneObject(
     hit_box_x_offset=jnp.array(73),
     hit_box_y_offset=jnp.array(182),
     reflecting=jnp.array(1),
-    score_type=jnp.array(0),
+    score_type=jnp.array(9),
     variant=jnp.array(2),
 )
 
@@ -1511,7 +1511,7 @@ LEFT_FLIPPER_STATE_32_SCENE_OBJECT_5 = SceneObject(
     hit_box_x_offset=jnp.array(75),
     hit_box_y_offset=jnp.array(181),
     reflecting=jnp.array(1),
-    score_type=jnp.array(0),
+    score_type=jnp.array(9),
     variant=jnp.array(2),
 )
 
@@ -1523,7 +1523,7 @@ LEFT_FLIPPER_STATE_48_SCENE_OBJECT_1 = SceneObject(
     hit_box_x_offset=jnp.array(64),
     hit_box_y_offset=jnp.array(183),
     reflecting=jnp.array(1),
-    score_type=jnp.array(0),
+    score_type=jnp.array(9),
     variant=jnp.array(3),
 )
 
@@ -1533,7 +1533,7 @@ LEFT_FLIPPER_STATE_48_SCENE_OBJECT_2 = SceneObject(
     hit_box_x_offset=jnp.array(66),
     hit_box_y_offset=jnp.array(182),
     reflecting=jnp.array(1),
-    score_type=jnp.array(0),
+    score_type=jnp.array(9),
     variant=jnp.array(3),
 )
 
@@ -1543,7 +1543,7 @@ LEFT_FLIPPER_STATE_48_SCENE_OBJECT_3 = SceneObject(
     hit_box_x_offset=jnp.array(68),
     hit_box_y_offset=jnp.array(181),
     reflecting=jnp.array(1),
-    score_type=jnp.array(0),
+    score_type=jnp.array(9),
     variant=jnp.array(3),
 )
 
@@ -1553,7 +1553,7 @@ LEFT_FLIPPER_STATE_48_SCENE_OBJECT_4 = SceneObject(
     hit_box_x_offset=jnp.array(70),
     hit_box_y_offset=jnp.array(180),
     reflecting=jnp.array(1),
-    score_type=jnp.array(0),
+    score_type=jnp.array(9),
     variant=jnp.array(3),
 )
 
@@ -1563,7 +1563,7 @@ LEFT_FLIPPER_STATE_48_SCENE_OBJECT_5 = SceneObject(
     hit_box_x_offset=jnp.array(72),
     hit_box_y_offset=jnp.array(179),
     reflecting=jnp.array(1),
-    score_type=jnp.array(0),
+    score_type=jnp.array(9),
     variant=jnp.array(3),
 )
 
@@ -1573,7 +1573,7 @@ LEFT_FLIPPER_STATE_48_SCENE_OBJECT_6 = SceneObject(
     hit_box_x_offset=jnp.array(74),
     hit_box_y_offset=jnp.array(177),
     reflecting=jnp.array(1),
-    score_type=jnp.array(0),
+    score_type=jnp.array(9),
     variant=jnp.array(3),
 )
 
@@ -1586,7 +1586,7 @@ RIGHT_FLIPPER_STATE_0_SCENE_OBJECT_1 = SceneObject(
     hit_box_x_offset=jnp.array(94),
     hit_box_y_offset=jnp.array(184),
     reflecting=jnp.array(1),
-    score_type=jnp.array(0),
+    score_type=jnp.array(10),
     variant=jnp.array(0),
 )
 
@@ -1597,7 +1597,7 @@ RIGHT_FLIPPER_STATE_0_SCENE_OBJECT_2 = SceneObject(
     hit_box_x_offset=jnp.array(92),
     hit_box_y_offset=jnp.array(185),
     reflecting=jnp.array(1),
-    score_type=jnp.array(0),
+    score_type=jnp.array(10),
     variant=jnp.array(0),
 )
 
@@ -1607,7 +1607,7 @@ RIGHT_FLIPPER_STATE_0_SCENE_OBJECT_3 = SceneObject(
     hit_box_x_offset=jnp.array(90),
     hit_box_y_offset=jnp.array(186),
     reflecting=jnp.array(1),
-    score_type=jnp.array(0),
+    score_type=jnp.array(10),
     variant=jnp.array(0),
 )
 
@@ -1617,7 +1617,7 @@ RIGHT_FLIPPER_STATE_0_SCENE_OBJECT_4 = SceneObject(
     hit_box_x_offset=jnp.array(88),
     hit_box_y_offset=jnp.array(187),
     reflecting=jnp.array(1),
-    score_type=jnp.array(0),
+    score_type=jnp.array(10),
     variant=jnp.array(0),
 )
 
@@ -1627,7 +1627,7 @@ RIGHT_FLIPPER_STATE_0_SCENE_OBJECT_5 = SceneObject(
     hit_box_x_offset=jnp.array(86),
     hit_box_y_offset=jnp.array(188),
     reflecting=jnp.array(1),
-    score_type=jnp.array(0),
+    score_type=jnp.array(10),
     variant=jnp.array(0),
 )
 
@@ -1649,7 +1649,7 @@ RIGHT_FLIPPER_STATE_16_SCENE_OBJECT_1 = SceneObject(
     hit_box_x_offset=jnp.array(91),
     hit_box_y_offset=jnp.array(185),
     reflecting=jnp.array(1),
-    score_type=jnp.array(0),
+    score_type=jnp.array(10),
     variant=jnp.array(1),
 )
 
@@ -1659,7 +1659,7 @@ RIGHT_FLIPPER_STATE_16_SCENE_OBJECT_2 = SceneObject(
     hit_box_x_offset=jnp.array(86),
     hit_box_y_offset=jnp.array(186),
     reflecting=jnp.array(1),
-    score_type=jnp.array(0),
+    score_type=jnp.array(10),
     variant=jnp.array(1),
 )
 
@@ -1669,7 +1669,7 @@ RIGHT_FLIPPER_STATE_16_SCENE_OBJECT_3 = SceneObject(
     hit_box_x_offset=jnp.array(83),
     hit_box_y_offset=jnp.array(187),
     reflecting=jnp.array(1),
-    score_type=jnp.array(0),
+    score_type=jnp.array(10),
     variant=jnp.array(1),
 )
 
@@ -1681,7 +1681,7 @@ RIGHT_FLIPPER_STATE_32_SCENE_OBJECT_1 = SceneObject(
     hit_box_x_offset=jnp.array(93),
     hit_box_y_offset=jnp.array(184),
     reflecting=jnp.array(1),
-    score_type=jnp.array(0),
+    score_type=jnp.array(10),
     variant=jnp.array(2),
 )
 
@@ -1691,7 +1691,7 @@ RIGHT_FLIPPER_STATE_32_SCENE_OBJECT_2 = SceneObject(
     hit_box_x_offset=jnp.array(89),
     hit_box_y_offset=jnp.array(183),
     reflecting=jnp.array(1),
-    score_type=jnp.array(0),
+    score_type=jnp.array(10),
     variant=jnp.array(2),
 )
 
@@ -1701,7 +1701,7 @@ RIGHT_FLIPPER_STATE_32_SCENE_OBJECT_3 = SceneObject(
     hit_box_x_offset=jnp.array(87),
     hit_box_y_offset=jnp.array(182),
     reflecting=jnp.array(1),
-    score_type=jnp.array(0),
+    score_type=jnp.array(10),
     variant=jnp.array(2),
 )
 
@@ -1711,7 +1711,7 @@ RIGHT_FLIPPER_STATE_32_SCENE_OBJECT_4 = SceneObject(
     hit_box_x_offset=jnp.array(85),
     hit_box_y_offset=jnp.array(182),
     reflecting=jnp.array(1),
-    score_type=jnp.array(0),
+    score_type=jnp.array(10),
     variant=jnp.array(2),
 )
 
@@ -1721,7 +1721,7 @@ RIGHT_FLIPPER_STATE_32_SCENE_OBJECT_5 = SceneObject(
     hit_box_x_offset=jnp.array(83),
     hit_box_y_offset=jnp.array(181),
     reflecting=jnp.array(1),
-    score_type=jnp.array(0),
+    score_type=jnp.array(10),
     variant=jnp.array(2),
 )
 
@@ -1733,7 +1733,7 @@ RIGHT_FLIPPER_STATE_48_SCENE_OBJECT_1 = SceneObject(
     hit_box_x_offset=jnp.array(94),
     hit_box_y_offset=jnp.array(183),
     reflecting=jnp.array(1),
-    score_type=jnp.array(0),
+    score_type=jnp.array(10),
     variant=jnp.array(3),
 )
 
@@ -1743,7 +1743,7 @@ RIGHT_FLIPPER_STATE_48_SCENE_OBJECT_2 = SceneObject(
     hit_box_x_offset=jnp.array(92),
     hit_box_y_offset=jnp.array(182),
     reflecting=jnp.array(1),
-    score_type=jnp.array(0),
+    score_type=jnp.array(10),
     variant=jnp.array(3),
 )
 
@@ -1753,7 +1753,7 @@ RIGHT_FLIPPER_STATE_48_SCENE_OBJECT_3 = SceneObject(
     hit_box_x_offset=jnp.array(90),
     hit_box_y_offset=jnp.array(181),
     reflecting=jnp.array(1),
-    score_type=jnp.array(0),
+    score_type=jnp.array(10),
     variant=jnp.array(3),
 )
 
@@ -1763,7 +1763,7 @@ RIGHT_FLIPPER_STATE_48_SCENE_OBJECT_4 = SceneObject(
     hit_box_x_offset=jnp.array(88),
     hit_box_y_offset=jnp.array(180),
     reflecting=jnp.array(1),
-    score_type=jnp.array(0),
+    score_type=jnp.array(10),
     variant=jnp.array(3),
 )
 
@@ -1773,7 +1773,7 @@ RIGHT_FLIPPER_STATE_48_SCENE_OBJECT_5 = SceneObject(
     hit_box_x_offset=jnp.array(86),
     hit_box_y_offset=jnp.array(179),
     reflecting=jnp.array(1),
-    score_type=jnp.array(0),
+    score_type=jnp.array(10),
     variant=jnp.array(3),
 )
 
@@ -1783,7 +1783,7 @@ RIGHT_FLIPPER_STATE_48_SCENE_OBJECT_6 = SceneObject(
     hit_box_x_offset=jnp.array(84),
     hit_box_y_offset=jnp.array(177),
     reflecting=jnp.array(1),
-    score_type=jnp.array(0),
+    score_type=jnp.array(10),
     variant=jnp.array(3),
 )
 
@@ -2404,22 +2404,22 @@ def _reflect_ball(
     new_ball_x = hit_point[HitPointSelector.X] + r * reflected_velocity_x
     new_ball_y = hit_point[HitPointSelector.Y] + r * reflected_velocity_y
 
-    jax.debug.print(
-        "T_ENTRY: {}\n"
-        "X: {}\n"
-        "Y: {}\n"
-        "HORIZONTAL: {}\n"
-        "VERTICAL: {}\n"
-        "OBJECT_WIDTH: {}\n"
-        "OBJECT_HEIGHT: {}\n"
-        "OBJECT_X: {}\n"
-        "OBJECT_Y: {}\n"
-        "OBJECT_REFLECTING: {}\n"
-        "OBJECT_SCORE_TYPE: {}\n"
-        "OBJECT_VARIANT: {}\n"
-    ,
-    *hit_point,
-    )
+    # jax.debug.print(
+    #     "T_ENTRY: {}\n"
+    #     "X: {}\n"
+    #     "Y: {}\n"
+    #     "HORIZONTAL: {}\n"
+    #     "VERTICAL: {}\n"
+    #     "OBJECT_WIDTH: {}\n"
+    #     "OBJECT_HEIGHT: {}\n"
+    #     "OBJECT_X: {}\n"
+    #     "OBJECT_Y: {}\n"
+    #     "OBJECT_REFLECTING: {}\n"
+    #     "OBJECT_SCORE_TYPE: {}\n"
+    #     "OBJECT_VARIANT: {}\n"
+    # ,
+    # *hit_point,
+    # )
 
     return new_ball_x, new_ball_y, velocity_factor
 
@@ -2790,10 +2790,6 @@ def _calc_ball_collision_loop(state: VideoPinballState, ball_movement: BallMovem
         velocity_factor,
     )
 
-@jax.jit
-def special_velocity_change():
-    pass
-
 # produce updated values (inline-style, returns new values so you can reassign)
 def _update_tilt(state: VideoPinballState, action: Action, ball_vel_x: chex.Array):
     # branch executed when not currently in tilt mode
@@ -2882,6 +2878,53 @@ def _update_tilt(state: VideoPinballState, action: Action, ball_vel_x: chex.Arra
         ball_vel_x
     )
 
+@jax.jit
+def _apply_gravity(
+    ball_x: chex.Array,
+    ball_vel_x: chex.Array,
+    ball_vel_y: chex.Array,
+    ball_direction: chex.Array,
+):
+    initial_ball_vel_x = ball_vel_x
+    initial_ball_vel_y = ball_vel_y
+    initial_ball_direction = ball_direction
+
+    # Gravity calculation
+    gravity_delta = jnp.where(
+        jnp.logical_or(ball_direction == 0, ball_direction == 2), -GRAVITY, GRAVITY
+    )  # Subtract gravity if the ball is moving up otherwise add it
+    ball_vel_y = ball_vel_y + gravity_delta
+    ball_direction = jnp.where(
+        ball_vel_y < 0,
+        ball_direction + 1,  # if ball direction was towards upper left
+        ball_direction,
+    )
+    ball_vel_y = jnp.abs(ball_vel_y)
+    
+    # Center pull calculation
+    ball_goes_left = jnp.logical_or(ball_direction == 0, ball_direction == 1)
+    ball_is_left = ball_x < (WIDTH / 2)
+    center_pull_delta = jnp.where(
+        jnp.logical_or(  # if ball is on one side and goes further in that direction, decrease velocity, else increase
+            jnp.logical_and(ball_is_left, ball_goes_left),
+            jnp.logical_and(jnp.logical_not(ball_is_left), jnp.logical_not(ball_goes_left))
+        ),
+        -CENTER_PULL,
+        CENTER_PULL
+    )
+    ball_vel_x = ball_vel_x + center_pull_delta
+    ball_direction = jnp.where(
+        ball_vel_x < 0,
+        (ball_direction + 2) % 4,  # if ball direction changes in x-direction
+        ball_direction,
+    )
+    ball_vel_x = jnp.abs(ball_vel_x)
+
+    # If ball is at starting position (x), ignore gravity calculations
+    ball_vel_x = jnp.where(ball_x == BALL_START_X, initial_ball_vel_x, ball_vel_x)
+    ball_vel_y = jnp.where(ball_x == BALL_START_X, initial_ball_vel_y, ball_vel_y)
+    ball_direction = jnp.where(ball_x == BALL_START_X, initial_ball_direction, ball_direction)
+    return ball_vel_x, ball_vel_y, ball_direction
 
 @jax.jit
 def ball_step(
@@ -2916,47 +2959,14 @@ def ball_step(
     """
     Gravity/Center Pull calculation
     """
-    # TODO: Test if the ball ever has velocity of state.plunger_power because right now we always
-    # immediately deduct the gravity from the velocity
-    # Direction has to be figured into the gravity calculation
-    gravity_delta = jnp.where(
-        jnp.logical_or(ball_direction == 0, ball_direction == 2), -GRAVITY, GRAVITY
-    )  # Subtract gravity if the ball is moving up otherwise add it
-    ball_vel_y = ball_vel_y + gravity_delta
-    ball_direction = jnp.where(
-        ball_vel_y < 0,
-        ball_direction + 1,  # if ball direction was towards upper left
-        ball_direction,
-    )
-    ball_vel_y = jnp.abs(ball_vel_y)
-    
-    ball_goes_left = jnp.logical_or(ball_direction == 0, ball_direction == 1)
-    ball_is_left = ball_x < (WIDTH // 2)
-    center_pull_delta = jnp.where(
-        jnp.logical_or(  # if ball is on one side and goes further in that direction, decrease velocity, else increase
-            jnp.logical_and(ball_is_left, ball_goes_left),
-            jnp.logical_and(jnp.logical_not(ball_is_left), jnp.logical_not(ball_goes_left))
-        ),
-        -CENTER_PULL,
-        CENTER_PULL
-    )
-    ball_vel_x = jnp.where(
-        ball_x == BALL_START_X,
-        ball_vel_x,
-        ball_vel_x + center_pull_delta
-    )
-    ball_direction = jnp.where(
-        ball_vel_x < 0,
-        (ball_direction + 2) % 4,  # if ball direction changes in x-direction
-        ball_direction,
-    )
-    ball_vel_x = jnp.abs(ball_vel_x)
+    ball_vel_x, ball_vel_y, ball_direction = _apply_gravity(ball_x, ball_vel_x, ball_vel_y, ball_direction)
     
     """
     Nudge effect calculation and tilt counter update
     """
     tilt_mode, tilt_counter, ball_vel_x, ball_direction = _update_tilt(state, action, ball_vel_x)
-
+    #tilt_mode = jnp.array(False)
+    #tilt_counter = jnp.array(0)
     """
     Ball movement calculation observing its direction 
     """
@@ -2979,8 +2989,8 @@ def ball_step(
         ball_movement,
         jnp.array(
             [
-                INVISIBLE_BLOCK_SCENE_OBJECT.hit_box_height,
                 INVISIBLE_BLOCK_SCENE_OBJECT.hit_box_width,
+                INVISIBLE_BLOCK_SCENE_OBJECT.hit_box_height,
                 INVISIBLE_BLOCK_SCENE_OBJECT.hit_box_x_offset,
                 INVISIBLE_BLOCK_SCENE_OBJECT.hit_box_y_offset,
                 INVISIBLE_BLOCK_SCENE_OBJECT.reflecting,
@@ -3002,16 +3012,16 @@ def ball_step(
     # set ball_x, ball_y to below invisible element and proceed with new ball_movement
     ball_x = jnp.where(
         is_invisible_block_hit,
-        jnp.array(INVISIBLE_BLOCK_LEFT_X_OFFSET, dtype=jnp.float32),
+        invisible_block_hit_data[HitPointSelector.X],
         ball_x,
     )
     ball_y = jnp.where(
         is_invisible_block_hit,
-        jnp.array(INVISIBLE_BLOCK_TOP_Y_OFFSET, dtype=jnp.float32),
+        invisible_block_hit_data[HitPointSelector.Y],
         ball_y,
     )
     new_ball_direction = jnp.where(
-        (plunger_power // 2) % 2 == 0, 0, 1  # semi random y direction
+        state.step_counter % 2 == 0, 0, 1  # semi random y direction
     )
     ball_direction = jnp.where(
         is_invisible_block_hit, new_ball_direction, ball_direction
