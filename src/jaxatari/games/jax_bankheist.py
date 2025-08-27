@@ -1053,7 +1053,12 @@ def load_bankheist_sprites():
     FUEL_TANK_SPRITE = jnp.expand_dims(fuel_tank, axis=0)
     FUEL_GAUGE_SPRITE = jnp.expand_dims(fuel_gauge, axis=0)
 
-    return (PLAYER_SIDE_SPRITE, PLAYER_FRONT_SPRITE, POLICE_SIDE_SPRITE, POLICE_FRONT_SPRITE, BANK_SPRITE,DYNAMITE_SPRITE, CITY_SPRITES, FUEL_TANK_SPRITE, FUEL_GAUGE_SPRITE)
+    DIGIT_SPRITES = aj.load_and_pad_digits(
+        os.path.join(MODULE_DIR, os.path.join(SPRITES_DIR, "score_{}.npy")),
+        num_chars=10,
+    )
+
+    return (PLAYER_SIDE_SPRITE, PLAYER_FRONT_SPRITE, POLICE_SIDE_SPRITE, POLICE_FRONT_SPRITE, BANK_SPRITE,DYNAMITE_SPRITE, CITY_SPRITES, FUEL_TANK_SPRITE, FUEL_GAUGE_SPRITE, DIGIT_SPRITES)
 
 class Renderer_AtraBankisHeist:
     def __init__(self):
@@ -1066,7 +1071,8 @@ class Renderer_AtraBankisHeist:
             self.SPRITE_DYNAMITE,
             self.SPRITES_CITY,
             self.SPRITE_FUEL_TANK,
-            self.SPRITE_FUEL_GAUGE
+            self.SPRITE_FUEL_GAUGE,
+            self.DIGIT_SPRITES
         ) = load_bankheist_sprites() 
 
     @partial(jax.jit, static_argnums=(0,))
@@ -1222,6 +1228,11 @@ class Renderer_AtraBankisHeist:
         
         # Render up to 4 life sprites using fori_loop
         raster = jax.lax.fori_loop(0, 4, render_single_life, raster)
+
+        score_digits = aj.int_to_digits(state.money, max_digits=4)
+        raster = aj.render_label_selective(
+            raster, 90, 179, score_digits, self.DIGIT_SPRITES, 0, len(score_digits), spacing=12
+        )
 
         return raster
 
