@@ -29,11 +29,11 @@ class SurroundConstants(NamedTuple):
     P2_TRAIL_COLOR: Tuple[int, int, int] = (255, 102, 204)  # Border color
     BACKGROUND_COLOR: Tuple[int, int, int] = (153, 153, 255)  # Blau-Lila Hintergrund
     # Head colors (small square on top of the trail)
-    P1_HEAD_COLOR: Tuple[int, int, int] = (255, 221, 51)    # yellow (score color)
-    P2_HEAD_COLOR: Tuple[int, int, int] = (221, 51, 136)    # magenta (score color)
+    P1_HEAD_COLOR: Tuple[int, int, int] = (221, 51, 136)    # yellow (score color)
+    P2_HEAD_COLOR: Tuple[int, int, int] = (255, 221, 51)    # magenta (score color)
     HEAD_SCALE: float = 0.5  # fraction of the cell size (0< scale ≤1)
 
-    # Border (Logik + Visual konsistent)
+    # Border 
     BORDER_CELLS_X: int = 2    # linke/rechte Dicke in Zellen
     BORDER_CELLS_Y: int = 1    # obere/untere Dicke in Zellen
     BORDER_COLOR: Tuple[int, int, int] = (255, 102, 204)
@@ -46,8 +46,8 @@ class SurroundConstants(NamedTuple):
     # These should be integers and not between cells. Adjusted to be inside the playfield, not on borders.
     # Middle of the playfield, within a rectangle (cell)
     # Set to the exact center row of the grid
-    P1_START_POS: Tuple[int, int] = (4, 9)  # left side, vertical center
-    P2_START_POS: Tuple[int, int] = (35, 9) # right side, vertical center
+    P1_START_POS: Tuple[int, int] = (4, 10)  # left side, vertical center
+    P2_START_POS: Tuple[int, int] = (35, 10) # right side, vertical center
 
     # Starting directions
     P1_START_DIR: int = Action.RIGHT
@@ -187,11 +187,20 @@ class SurroundRenderer(JAXGameRenderer):
         idx1 = jnp.clip(state.score1 % 10, 0, 9)
         digit_p1 = jr.get_sprite_frame(self.p1_digits, idx0)
         digit_p2 = jr.get_sprite_frame(self.p2_digits, idx1)
-        # Calculate y position: just above the playfield border
+        
+        # Größer skalieren
+        scale_digits = 2
+        digit_p1 = jnp.kron(digit_p1, jnp.ones((scale_digits, scale_digits, 1), dtype=jnp.uint8))
+        digit_p2 = jnp.kron(digit_p2, jnp.ones((scale_digits, scale_digits, 1), dtype=jnp.uint8))
+
+        # Y-Position (wie gehabt)
         border_y = self.consts.BORDER_CELLS_Y * self.consts.CELL_SIZE[1]
-        score_y = max(0, y_off + border_y - digit_p1.shape[0] - 8)  # 8px padding for higher placement
-        img = jr.render_at(img, 10, score_y, digit_p1)
-        img = jr.render_at(img, width - 10 - digit_p2.shape[1], score_y, digit_p2)
+        score_y = max(0, y_off + border_y - digit_p1.shape[0] - 8)
+
+        # X-Position: näher zusammengerückt
+        padding_x = 30
+        img = jr.render_at(img, padding_x, score_y, digit_p1)
+        img = jr.render_at(img, width - padding_x - digit_p2.shape[1], score_y, digit_p2)
 
         return img
 
@@ -230,9 +239,6 @@ class JaxSurround(
             jnp.clip(self.consts.P2_START_POS[1], self.consts.BORDER_CELLS_Y, self.consts.GRID_HEIGHT - self.consts.BORDER_CELLS_Y - 1),
         ), dtype=jnp.int32)
         grid = jnp.zeros((self.consts.GRID_WIDTH, self.consts.GRID_HEIGHT), dtype=jnp.int32)
-        # Pre-fill starting cells as trail bricks
-        grid = grid.at[tuple(p0_start)].set(1)  # P1’s start cell is a trail brick
-        grid = grid.at[tuple(p1_start)].set(2)  # P2’s start cell is a trail brick
         border = create_border_mask(self.consts)
 
         # keep scores from previous round if provided

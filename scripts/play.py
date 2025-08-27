@@ -21,6 +21,50 @@ ACTION_NAMES = {
 
 
 def main():
+    # --- AI helper functions for P1 (left player) ---
+    def _dir_left(d):
+        return {
+            JAXAtariAction.UP: JAXAtariAction.LEFT,
+            JAXAtariAction.LEFT: JAXAtariAction.DOWN,
+            JAXAtariAction.DOWN: JAXAtariAction.RIGHT,
+            JAXAtariAction.RIGHT: JAXAtariAction.UP,
+        }.get(int(d), JAXAtariAction.UP)
+
+    def _dir_right(d):
+        return {
+            JAXAtariAction.UP: JAXAtariAction.RIGHT,
+            JAXAtariAction.RIGHT: JAXAtariAction.DOWN,
+            JAXAtariAction.DOWN: JAXAtariAction.LEFT,
+            JAXAtariAction.LEFT: JAXAtariAction.UP,
+        }.get(int(d), JAXAtariAction.UP)
+
+    def _dir_offset(d):
+        return {
+            JAXAtariAction.UP:    (0, -1),
+            JAXAtariAction.RIGHT: (1,  0),
+            JAXAtariAction.LEFT:  (-1, 0),
+            JAXAtariAction.DOWN:  (0,  1),
+        }.get(int(d), (0, 0))
+
+    def _is_blocked(env, state, pos_xy, action_dir):
+        dx, dy = _dir_offset(action_dir)
+        x = int(pos_xy[0]) + dx
+        y = int(pos_xy[1]) + dy
+        if x < 0 or x >= env.consts.GRID_WIDTH or y < 0 or y >= env.consts.GRID_HEIGHT:
+            return True
+        if bool(state.border[x, y]) or int(state.trail[x, y]) != 0:
+            return True
+        return False
+
+    def opponent_policy(env, state):
+        curr = int(state.dir0)
+        keep = curr
+        left = _dir_left(curr)
+        right = _dir_right(curr)
+        for cand in (keep, left, right):
+            if not _is_blocked(env, state, state.pos0, cand):
+                return cand
+        return JAXAtariAction.NOOP
     parser = argparse.ArgumentParser(
         description="Play a JAXAtari game, record your actions or replay them."
     )
@@ -193,9 +237,16 @@ def main():
             continue
 
         # --- Show updated score for one frame before resetting ---
+        # ---- feste Logikrate: max. 1 Step pro Frame (Clamping) ----
         if acc_ms >= step_ms and not pending_reset:
             acc_ms -= step_ms
-            joint_action = jnp.array([latest_action, JAXAtariAction.NOOP], dtype=jnp.int32)
+
+            # Gegner (P1, links) – einfache Avoider-Policy
+            ai_action = opponent_policy(env, state)
+
+            # Human spielt P2 (rechts, gelb)
+            joint_action = jnp.array([ai_action, latest_action], dtype=jnp.int32)
+
             obs, state, reward, done, info = jitted_step(state, joint_action)
             total_return += reward
             if next_frame_asked:
@@ -206,6 +257,7 @@ def main():
                 print(f"Done. Total return {total_return}")
                 total_return = 0
                 pending_reset = True
+        # ...existing code...
         # Render the current state (including the just-updated score)
         if not execute_without_rendering:
             image = jitted_render(state)
