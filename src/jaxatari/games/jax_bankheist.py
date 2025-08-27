@@ -1207,27 +1207,7 @@ class Renderer_AtraBankisHeist:
         dynamite_active = ~jnp.all(state.dynamite_position == jnp.array([-1, -1]))
         raster = jax.lax.cond(dynamite_active, render_dynamite, lambda r: r, raster)
 
-        ### Render Player Lives (top right corner)
-        # Use the right-facing player sprite for lives display
-        life_sprite = aj.get_sprite_frame(self.SPRITE_PLAYER_SIDE, 0)
-        life_sprite_height, life_sprite_width = life_sprite.shape[:2]
-        
-        # Position lives in top right corner with some padding
-        lives_start_x = WIDTH - (4 * (life_sprite_width + 2) ) - 12  # 4 lives with 5 pixel padding from right edge
-        lives_y = 12  # 12 pixels from top
-        
-        # Render each life sprite
-        def render_single_life(i, current_raster):
-            def render_life_sprite(raster_input):
-                life_x = lives_start_x + (i * (life_sprite_width + 2))
-                return aj.render_at(raster_input, life_x, lives_y, life_sprite)
-            
-            # Only render if player has this many lives remaining
-            has_life = i < state.player_lives
-            return jax.lax.cond(has_life, render_life_sprite, lambda r: r, current_raster)
-        
-        # Render up to 4 life sprites using fori_loop
-        raster = jax.lax.fori_loop(0, 4, render_single_life, raster)
+
 
         score_digits = aj.int_to_digits(state.money, max_digits=4)
         raster = aj.render_label_selective(
