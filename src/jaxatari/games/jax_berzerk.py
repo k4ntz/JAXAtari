@@ -675,14 +675,12 @@ class JaxBerzerk(JaxEnvironment[BerzerkState, BerzerkObservation, BerzerkInfo, B
             # Nur wenn Tod vorbei, Leben verringern
             lives_after = jnp.where(death_timer == 0, state.lives - 1, state.lives)
             score_after = jnp.where(lives_after == -1, 0, state.score)
-            room_after = jnp.where(lives_after == -1, 0, state.room_counter + 1)
 
             # Basis-Update nach Tod
             base_state = state._replace(
                 death_timer=0,
                 lives=lives_after,
                 score=score_after,
-                room_counter=room_after,
                 entry_direction=3
             )
 
