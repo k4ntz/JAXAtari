@@ -33,6 +33,7 @@ class BerzerkConstants(NamedTuple):
     MOVEMENT_PROB = 0.0025  # Value for testing, has to be adjusted
     ENEMY_SPEED = 0.05
     ENEMY_SHOOT_PROB = 0.005
+    ENEMY_BULLET_SPEED = 0.235
 
     BULLET_SIZE_HORIZONTAL = (4, 2)
     BULLET_SIZE_VERTICAL = (1, 6)
@@ -163,8 +164,31 @@ class JaxBerzerk(JaxEnvironment[BerzerkState, BerzerkObservation, BerzerkInfo, B
                 lambda: jnp.array(get_random_index(room_num), dtype=jnp.int32)
             )
     
+    @staticmethod
+    def get_enemy_bullet_speed(level: jnp.ndarray) -> jnp.ndarray:
+        base_bullet_speed = BerzerkConstants.ENEMY_BULLET_SPEED
+        bullet_speed_increment = 0.065  # anpassen nach Bedarf
 
+        # capped_level = min(level, 13)
+        capped_level = jnp.minimum(level + 1, 13)
 
+        # Schrittzahl (2,3 = 0; 4,5 = 1; …; 12,13 = 5)
+        step = (capped_level - 1) // 2
+        step = jnp.maximum(step, 0)
+
+        value = base_bullet_speed + step * bullet_speed_increment
+
+        return value
+
+    @staticmethod
+    def get_enemy_speed(level: jnp.ndarray) -> jnp.ndarray:
+        base_enemy_speed = BerzerkConstants.ENEMY_SPEED
+        enemy_speed_increment = 0.007  # anpassen nach Bedarf
+
+        # Schrittzahl berechnen, rotiert nach 8 Stufen
+        step = ((level + 1) // 2) % 8
+
+        return base_enemy_speed + step * enemy_speed_increment
 
     
     @partial(jax.jit, static_argnums=(0, ))
@@ -409,13 +433,13 @@ class JaxBerzerk(JaxEnvironment[BerzerkState, BerzerkObservation, BerzerkInfo, B
 
 
     @partial(jax.jit, static_argnums=(0, ))
-    def update_enemies(self, player_pos, enemy_pos, enemy_axis, enemy_dir, rng, move_prob):
+    def update_enemies(self, player_pos, enemy_pos, enemy_axis, enemy_dir, rng, move_prob, room_counter):
         enemy_rngs = jax.random.split(rng, self.consts.NUM_ENEMIES)
 
         def update_one_enemy(_, inputs):
             rng, pos, axis, dir_, prob = inputs
             new_pos, new_axis, new_dir, _ = self.update_enemy_position(
-                player_pos, pos, axis, dir_, rng, prob, enemy_pos
+                player_pos, pos, axis, dir_, rng, prob, enemy_pos, room_counter
             )
             return None, (new_pos, new_axis, new_dir)
 
@@ -431,7 +455,7 @@ class JaxBerzerk(JaxEnvironment[BerzerkState, BerzerkObservation, BerzerkInfo, B
     @partial(jax.jit, static_argnums=(0, ))
     def update_enemy_position(self, player_pos: chex.Array, enemy_pos: chex.Array, 
                             enemy_move_axis: chex.Array, enemy_move_dir: chex.Array,
-                            rng: chex.PRNGKey, move_prob: float, all_enemy_pos: chex.Array):
+                            rng: chex.PRNGKey, move_prob: float, all_enemy_pos: chex.Array, room_counter: chex.Array):
         """
         Update enemy position with movement probability.
         Once started moving, continues until aligned with player.
@@ -466,8 +490,8 @@ class JaxBerzerk(JaxEnvironment[BerzerkState, BerzerkObservation, BerzerkInfo, B
         
          # Bewegungsvektor berechnen
         move_vec = jnp.array([
-            jnp.where(new_axis == 0, new_dir * self.consts.ENEMY_SPEED, 0),
-            jnp.where(new_axis == 1, new_dir * self.consts.ENEMY_SPEED, 0),
+            jnp.where(new_axis == 0, new_dir * self.get_enemy_speed(room_counter), 0),
+            jnp.where(new_axis == 1, new_dir * self.get_enemy_speed(room_counter), 0),
         ])
         proposed_pos = enemy_pos + move_vec
 
@@ -816,13 +840,13 @@ class JaxBerzerk(JaxEnvironment[BerzerkState, BerzerkObservation, BerzerkInfo, B
             entry_direction = jnp.where(hit_exit, self.get_exit_direction(new_pos), state.entry_direction)
             hit_wall = self.object_hits_wall((player_x, player_y), self.consts.PLAYER_SIZE, state.room_counter, state.entry_direction) & ~hit_exit
             #jax.debug.print("Exzr: {hit_exit}", hit_exit=hit_exit)
-            #jax.debug.print("Room: {new_room_counter}", new_room_counter=new_room_counter)
+            #jax.debug.print("Room: {new_room_counter}", new_room_counter=state.room_counter)
             # 2. Update position and direction of enemies
             rng, enemy_rng = jax.random.split(state.rng)
 
             updated_enemy_pos, updated_enemy_axis, updated_enemy_dir = self.update_enemies(
                 new_pos, state.enemy_pos, state.enemy_move_axis, state.enemy_move_dir,
-                enemy_rng, state.enemy_move_prob
+                enemy_rng, state.enemy_move_prob, state.room_counter
             )
 
             #enemy_moving = updated_enemy_axis != -1
@@ -876,17 +900,23 @@ class JaxBerzerk(JaxEnvironment[BerzerkState, BerzerkObservation, BerzerkInfo, B
             )
 
             # Nur feuern, wenn nicht bereits aktiv
+            can_shoot = (state.room_counter > 0)
+            can_shoot_mask = jnp.broadcast_to(can_shoot, active_new.shape)  # gleiche Länge wie NUM_ENEMIES
+
             enemy_bullets = jnp.where(
-                ~state.enemy_bullet_active[:, None] & active_new[:, None],
+                ~state.enemy_bullet_active[:, None] & active_new[:, None] & can_shoot_mask[:, None],
                 enemy_bullets_new,
                 state.enemy_bullets
             )
+
             enemy_bullet_dirs = jnp.where(
-                ~state.enemy_bullet_active[:, None] & active_new[:, None],
+                ~state.enemy_bullet_active[:, None] & active_new[:, None] & can_shoot_mask[:, None],
                 dirs_new,
                 state.enemy_bullet_dirs
             )
-            enemy_bullet_active = state.enemy_bullet_active | active_new
+
+            enemy_bullet_active = state.enemy_bullet_active | (active_new & can_shoot_mask)
+
 
             enemy_bullet_sizes = jax.vmap(
                 lambda d: jax.lax.select(
@@ -896,7 +926,7 @@ class JaxBerzerk(JaxEnvironment[BerzerkState, BerzerkObservation, BerzerkInfo, B
                 )
             )(enemy_bullet_dirs)
 
-            enemy_bullets = enemy_bullets + enemy_bullet_dirs * self.consts.BULLET_SPEED * enemy_bullet_active[:, None]
+            enemy_bullets = enemy_bullets + enemy_bullet_dirs * self.get_enemy_bullet_speed(state.room_counter) * enemy_bullet_active[:, None]
 
             # Deaktiviere wenn außerhalb
             enemy_bullet_active = enemy_bullet_active & (
