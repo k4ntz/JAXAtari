@@ -187,47 +187,53 @@ class JaxSpaceInvaders(JaxEnvironment[SpaceInvadersState, SpaceInvadersObservati
 
     @partial(jax.jit, static_argnums=(0,))
     def _check_bullet_enemy_collisions(self, state: SpaceInvadersState):
-        def check_loop(carry):
-            def body(i, carry):
-                destroyed, score, bullet_active = carry
+        def check_single_enemy(i):
+            row = i // self.consts.ENEMY_COLS
+            col = i % self.consts.ENEMY_COLS
+            
+            enemy_x, enemy_y = self._get_enemy_position(
+                state.opponent_current_x,
+                state.opponent_current_y,
+                row,
+                col
+            )
+            
+            enemy_alive = jnp.logical_not(state.destroyed[i])
+            collision = jnp.logical_and(
+                jnp.logical_and(enemy_alive, state.bullet_active),
+                self._check_collision(state.bullet_x, state.bullet_y, enemy_x, enemy_y, 
+                                self.consts.OPPONENT_SIZE[0], self.consts.OPPONENT_SIZE[1])
+            )
+            
+            new_destroyed = jnp.where((state.destroyed[i] == 0) & collision, 1, state.destroyed[i])
+            score_contrib = jnp.where(collision, 10, 0)
+            bullet_hit = collision
+            
+            # Returns if destroyed, the contribution to the score and if the bullet hit 
+            return new_destroyed, score_contrib, bullet_hit
 
-                row = i // self.consts.ENEMY_COLS
-                col = i % self.consts.ENEMY_COLS
-                idx = row * self.consts.ENEMY_COLS + col
+        def check_all_enemies():
+            # vmap over all enemy indices
+            enemy_indices = jnp.arange(self.consts.ENEMY_ROWS * self.consts.ENEMY_COLS)
+            destroyed_vals, score_contribs, bullet_hits = jax.vmap(check_single_enemy)(enemy_indices)
+            
+            # Update destroyed states (handle explosion animation)
+            destroyed_updated = jnp.where(state.destroyed != 0, jnp.minimum(state.destroyed + 1, 29), 0)
+            final_destroyed = jnp.where(destroyed_vals > state.destroyed, destroyed_vals, destroyed_updated)
+            
+            total_score = state.player_score + jnp.sum(score_contribs)
+            bullet_active = jnp.logical_not(jnp.any(bullet_hits))
+            
+            return final_destroyed, total_score, bullet_active
 
-                enemy_x, enemy_y = self._get_enemy_position(
-                    state.opponent_current_x,
-                    state.opponent_current_y,
-                    row,
-                    col
-                )
-
-                enemy_alive = jnp.logical_not(destroyed[idx])
-                collision = jnp.logical_and(
-                    jnp.logical_and(enemy_alive, bullet_active),
-                    self._check_collision(state.bullet_x, state.bullet_y, enemy_x, enemy_y, self.consts.OPPONENT_SIZE[0],
-                                         self.consts.OPPONENT_SIZE[1])
-                )
-
-                destroyed = destroyed.at[idx].set(
-                    jnp.where((destroyed[idx] == 0) & collision, 1, destroyed[idx])
-                )
-
-                score += jnp.where(collision, 10, 0)  # +10 score
-                bullet_active = jnp.where(collision, False, bullet_active)
-
-                return destroyed, score, bullet_active
-
-            return jax.lax.fori_loop(0, self.consts.ENEMY_ROWS * self.consts.ENEMY_COLS, body, carry)
-
-        destroyed = jnp.where(state.destroyed != 0, jnp.minimum(state.destroyed + 1, 29), 0)
-        init = (destroyed, state.player_score, state.bullet_active)
+        def no_bullet():
+            destroyed = jnp.where(state.destroyed != 0, jnp.minimum(state.destroyed + 1, 29), 0)
+            return destroyed, state.player_score, state.bullet_active
 
         return jax.lax.cond(
             state.bullet_active,
-            check_loop,
-            lambda carry: carry,
-            init
+            check_all_enemies,
+            no_bullet
         )
 
     @partial(jax.jit, static_argnums=(0,))
