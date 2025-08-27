@@ -20,10 +20,11 @@ class DonkeyKongConstants(NamedTuple):
     WINDOW_HEIGHT: int = 210 * 3
 
     # Donkey Kong position
+    # Donkey Kong actually does nothing in game - only change sprites
     DONKEYKONG_X: int = 33
     DONKEYKONG_Y: int = 14
 
-    # Girlfriend position
+    # Girlfriend position - only single image of girlfriend
     GIRLFRIEND_X: int = 62
     GIRLFRIEND_Y: int = 17
 
@@ -41,10 +42,11 @@ class DonkeyKongConstants(NamedTuple):
     LEVEL_2_HAMMER_X: int = 68
     LEVEL_2_HAMMER_Y: int = 78
 
-    # Hammer Carry
-    HAMMER_MAX_CARRY_DURATION = 654
-    HAMMER_SWING_DURATION = 8
+    # Hammer Carry Duration
+    HAMMER_MAX_CARRY_DURATION = 654  # maximal carry duration
+    HAMMER_SWING_DURATION = 8        # if mario takes the hammer, swing up and down at each 8th frame
 
+    # Hammer Hit Boxes
     HAMMER_HIT_BOX_X = 7
     HAMMER_HIT_BOX_Y = 4
     HAMMER_SWING_HIT_BOX_X = 6
@@ -59,7 +61,7 @@ class DonkeyKongConstants(NamedTuple):
     TRAP_FLOOR_5_X: int = 60
     TRAP_WIDTH: int = 4
 
-    # Digits position
+    # Digits position - for Game Score
     DIGIT_Y: int = 7
     FIRST_DIGIT_X: int = 96
     DISTANCE_DIGIT_X: int = 8
@@ -183,12 +185,14 @@ class DonkeyKongConstants(NamedTuple):
     MAX_TRAPS = 8
     MAX_LADDERS = 16
     
-
+# To prevent Mario to walk outside the game spaces, set invisible wall on the left and right side of each stage
+# stage means not level = 1 or 2, rather the bars on which Mario will walk during game play
 class invisible_wall_each_stage(NamedTuple):
     stage: chex.Array
     left_end: chex.Array
     right_end: chex.Array
 
+# Ladder - climbable -> some ladders are not supposed to be climbed by Mario, but barrel can roll down at those
 class Ladder(NamedTuple):
     stage: chex.Array
     climbable: chex.Array
@@ -197,6 +201,7 @@ class Ladder(NamedTuple):
     end_x: chex.Array
     end_y: chex.Array
 
+# Barrels - Level 1 Enemy
 class BarrelPosition(NamedTuple):
     barrel_x: chex.Array
     barrel_y: chex.Array
@@ -205,6 +210,7 @@ class BarrelPosition(NamedTuple):
     stage: chex.Array
     reached_the_end: chex.Array
 
+# Fire - Level 2 enemy
 class FirePosition(NamedTuple):
     fire_x: chex.Array
     fire_y: chex.Array
@@ -212,6 +218,7 @@ class FirePosition(NamedTuple):
     stage: chex.Array
     destroyed: chex.Array
 
+# Traps - Level 2 enemy or to Mario reaching goal
 class TrapPosition(NamedTuple):
     trap_x: chex.Array
     trap_y: chex.Array
@@ -222,8 +229,8 @@ class TrapPosition(NamedTuple):
 class DonkeyKongState(NamedTuple):
     game_started: chex.Array
     level: chex.Array
-    game_timer: chex.Array
-    game_remaining_time: chex.Array
+    game_timer: chex.Array  # needed basically to calculate the remaining time for the game
+    game_remaining_time: chex.Array # if 0 Mario loses a life
     step_counter: chex.Array
 
     game_score: chex.Array
@@ -231,10 +238,10 @@ class DonkeyKongState(NamedTuple):
     mario_x: chex.Array
     mario_y: chex.Array  
     mario_jumping: chex.Array   # jumping on spot
-    mario_jumping_wide: chex.Array
+    mario_jumping_wide: chex.Array # jumping to left or right - Action.LEFTFIRE, Action.RIGHTFIRE
     mario_jumping_over_enemy: chex.Array
     mario_climbing: chex.Array
-    start_frame_when_mario_jumped: chex.Array
+    start_frame_when_mario_jumped: chex.Array # variable to help calculating the frame time at which Mario can jump and reset his jump
     mario_view_direction: chex.Array
     mario_walk_frame_counter: chex.Array
     mario_climb_frame_counter: chex.Array
@@ -255,14 +262,14 @@ class DonkeyKongState(NamedTuple):
     ladders: Ladder
     invisible_wall_each_stage: invisible_wall_each_stage
     random_key: chex.Array
-    frames_since_last_barrel_spawn: chex.Array
+    frames_since_last_barrel_spawn: chex.Array # some frames must be waited until next barrel can spawn
 
     hammer_x: chex.Array
     hammer_y: chex.Array
     hammer_can_hit: chex.Array
     hammer_taken: chex.Array
     hammer_carry_time: chex.Array
-    hammer_usage_expired: chex.Array
+    hammer_usage_expired: chex.Array # only once per game round, hammer can be used
     block_jumping_and_climbing: chex.Array
 
     donkey_kong_sprite: chex.Array
@@ -2003,8 +2010,11 @@ class JaxDonkeyKong(JaxEnvironment[DonkeyKongState, DonkeyKongObservation, Donke
         )
 
         done = self._get_done(new_state)
+        env_reward = self._get_reward(state, new_state)
+        all_rewards = self._get_all_reward(state, new_state)
+        info = self._get_info(new_state, all_rewards)
         observation = self._get_observation(new_state)
-        return observation, new_state, 0, done, None
+        return observation, new_state, env_reward, done, info
 
     
     @partial(jax.jit, static_argnums=(0,))
@@ -2079,6 +2089,61 @@ class JaxDonkeyKong(JaxEnvironment[DonkeyKongState, DonkeyKongObservation, Donke
     def render(self, state: DonkeyKongState) -> jnp.ndarray:
         return self.renderer.render(state)
 
+    @partial(jax.jit, static_argnums=(0,))
+    def obs_to_flat_array(self, obs: DonkeyKongObservation) -> jnp.ndarray:
+        return jnp.concatenate([
+            # --- Meta ---
+            obs.total_score.flatten(),
+            obs.time_remaining.flatten(),
+            obs.mario_lives.flatten(),
+            obs.goal_reached.flatten(),
+            obs.level.flatten(),
+
+            # --- Mario ---
+            obs.mario_position.x.flatten(),
+            obs.mario_position.y.flatten(),
+            obs.mario_position.width.flatten(),
+            obs.mario_position.height.flatten(),
+            obs.mario_view_direction.flatten(),
+            obs.mario_jumping.flatten(),
+            obs.mario_climbing.flatten(),
+
+            # --- Hammer ---
+            obs.hammer_position.x.flatten(),
+            obs.hammer_position.y.flatten(),
+            obs.hammer_position.width.flatten(),
+            obs.hammer_position.height.flatten(),
+            obs.hammer_can_destroy_enemy.flatten(),
+
+            # --- Barrels ---
+            obs.barrels.x.flatten(),
+            obs.barrels.y.flatten(),
+            obs.barrels.width.flatten(),
+            obs.barrels.height.flatten(),
+            obs.barrel_mask.flatten(),
+
+            # --- Fires ---
+            obs.fires.x.flatten(),
+            obs.fires.y.flatten(),
+            obs.fires.width.flatten(),
+            obs.fires.height.flatten(),
+            obs.fire_mask.flatten(),
+
+            # --- Traps ---
+            obs.traps.x.flatten(),
+            obs.traps.y.flatten(),
+            obs.traps.width.flatten(),
+            obs.traps.triggered.flatten(),
+
+            # --- Ladders ---
+            obs.ladders.start_x.flatten(),
+            obs.ladders.start_y.flatten(),
+            obs.ladders.end_x.flatten(),
+            obs.ladders.end_y.flatten(),
+            obs.ladders.width.flatten(),
+            obs.ladder_mask.flatten(),
+        ])
+
     def action_space(self) -> spaces.Discrete:
         return spaces.Discrete(8)
 
@@ -2096,48 +2161,86 @@ class JaxDonkeyKong(JaxEnvironment[DonkeyKongState, DonkeyKongObservation, Donke
             "level": spaces.Discrete(2), 
 
             # Mario
-            "mario_position": spaces.Box(
-                low=jnp.array([0,0]), 
-                high=jnp.array([210,160]), 
-                shape=(2,), dtype=jnp.int32
-            ),
+            "mario_position": spaces.Dict({
+                "x": spaces.Box(low=0, high=210, shape=(), dtype=jnp.int32),
+                "y": spaces.Box(low=0, high=160, shape=(), dtype=jnp.int32),    
+                "width": spaces.Box(low=0, high=160, shape=(), dtype=jnp.int32),
+                "height": spaces.Box(low=0, high=210, shape=(), dtype=jnp.int32),
+            }),
             "mario_view_direction": spaces.Box(low=-1, high=1, shape=(), dtype=jnp.int32),
             "mario_jumping": spaces.Box(low=0, high=1, shape=(), dtype=jnp.int32),
             "mario_climbing": spaces.Box(low=0, high=1, shape=(), dtype=jnp.int32),
 
             # Hammer
-            "hammer_position": spaces.Box(
-                low=jnp.array([0,0]),
-                high=jnp.array([210,160]),
-                shape=(2,), dtype=jnp.int32
-            ),
+            "hammer_position": spaces.Dict({
+                "x": spaces.Box(low=0, high=210, shape=(), dtype=jnp.int32),
+                "y": spaces.Box(low=0, high=160, shape=(), dtype=jnp.int32),    
+                "width": spaces.Box(low=0, high=160, shape=(), dtype=jnp.int32),
+                "height": spaces.Box(low=0, high=210, shape=(), dtype=jnp.int32),
+            }),
             "hammer_can_destroy_enemy": spaces.Box(low=0, high=1, shape=(), dtype=jnp.int32),
 
             # Barrels
-            "barrels_x": spaces.Box(low=0, high=210, shape=(MAX_BARRELS,), dtype=jnp.int32),
-            "barrels_y": spaces.Box(low=0, high=160, shape=(MAX_BARRELS,), dtype=jnp.int32),
-            "barrels_width": spaces.Box(low=0, high=self.consts.BARREL_HIT_BOX_Y, shape=(MAX_BARRELS,), dtype=jnp.int32),
-            "barrels_height": spaces.Box(low=0, high=self.consts.BARREL_HIT_BOX_X, shape=(MAX_BARRELS,), dtype=jnp.int32),
+            "barrels": spaces.Dict({
+                "x": spaces.Box(low=0, high=210, shape=(MAX_BARRELS,), dtype=jnp.int32),
+                "y": spaces.Box(low=0, high=160, shape=(MAX_BARRELS, ), dtype=jnp.int32),    
+                "width": spaces.Box(low=0, high=160, shape=(MAX_BARRELS, ), dtype=jnp.int32),
+                "height": spaces.Box(low=0, high=210, shape=(MAX_BARRELS, ), dtype=jnp.int32),
+            }),
+            "barrel_mask": spaces.Box(low=0, high=1, shape=(MAX_BARRELS,), dtype=jnp.int32),
 
-            # Fires
-            "fires_x": spaces.Box(low=0, high=210, shape=(MAX_FIRES,), dtype=jnp.int32),
-            "fires_y": spaces.Box(low=0, high=160, shape=(MAX_FIRES,), dtype=jnp.int32),
-            "fires_width": spaces.Box(low=0, high=self.consts.FIRE_HIT_BOX_Y, shape=(MAX_FIRES,), dtype=jnp.int32),
-            "fires_height": spaces.Box(low=0, high=self.consts.FIRE_HIT_BOX_X, shape=(MAX_FIRES,), dtype=jnp.int32),
+            # Fire
+            "fires": spaces.Dict({
+                "x": spaces.Box(low=0, high=210, shape=(MAX_FIRES,), dtype=jnp.int32),
+                "y": spaces.Box(low=0, high=160, shape=(MAX_FIRES, ), dtype=jnp.int32),    
+                "width": spaces.Box(low=0, high=160, shape=(MAX_FIRES, ), dtype=jnp.int32),
+                "height": spaces.Box(low=0, high=210, shape=(MAX_FIRES, ), dtype=jnp.int32),
+            }),
+            "fire_mask": spaces.Box(low=0, high=1, shape=(MAX_BARRELS,), dtype=jnp.int32),
 
             # Traps
-            "traps_x": spaces.Box(low=0, high=210, shape=(MAX_TRAPS,), dtype=jnp.int32),
-            "traps_y": spaces.Box(low=0, high=160, shape=(MAX_TRAPS,), dtype=jnp.int32),
-            "traps_width": spaces.Box(low=0, high=self.consts.TRAP_WIDTH, shape=(MAX_TRAPS,), dtype=jnp.int32),
+            "traps": spaces.Dict({
+                "x": spaces.Box(low=0, high=210, shape=(MAX_TRAPS,), dtype=jnp.int32),
+                "y": spaces.Box(low=0, high=160, shape=(MAX_TRAPS,), dtype=jnp.int32),
+                "width": spaces.Box(low=0, high=160, shape=(MAX_TRAPS,), dtype=jnp.int32),
+                "triggered": spaces.Box(low=0, high=1, shape=(MAX_TRAPS,), dtype=jnp.int32),
+            }),
 
             # Ladders
-            "ladders_start_x": spaces.Box(low=0, high=210, shape=(MAX_LADDERS,), dtype=jnp.int32),
-            "ladders_start_y": spaces.Box(low=0, high=160, shape=(MAX_LADDERS,), dtype=jnp.int32),
-            "ladders_end_x": spaces.Box(low=0, high=210, shape=(MAX_LADDERS,), dtype=jnp.int32),
-            "ladders_end_y": spaces.Box(low=0, high=160, shape=(MAX_LADDERS,), dtype=jnp.int32),
-            "ladders_width": spaces.Box(low=0, high=self.consts.LADDER_WIDTH, shape=(MAX_LADDERS,), dtype=jnp.int32),
+            "ladders": spaces.Dict({
+                "start_x": spaces.Box(low=0, high=210, shape=(MAX_LADDERS,), dtype=jnp.int32),
+                "start_y": spaces.Box(low=0, high=160, shape=(MAX_LADDERS,), dtype=jnp.int32),
+                "end_x": spaces.Box(low=0, high=210, shape=(MAX_LADDERS,), dtype=jnp.int32),
+                "end_y": spaces.Box(low=0, high=160, shape=(MAX_LADDERS,), dtype=jnp.int32),
+                "width": spaces.Box(low=0, high=160, shape=(MAX_LADDERS,), dtype=jnp.int32),
+            }),
+            "ladder_mask": spaces.Box(low=0, high=1, shape=(MAX_LADDERS,), dtype=jnp.int32),
         })
 
+    def image_space(self) -> spaces.Box:
+        return spaces.Box(
+            low=0,
+            high=255,
+            shape=(210, 160, 3),
+            dtype=jnp.uint8
+        )
+
+    @partial(jax.jit, static_argnums=(0,))
+    def _get_info(self, state: DonkeyKongState, all_rewards: chex.Array = None) -> DonkeyKongInfo:
+        return DonkeyKongInfo(time=state.step_counter, all_rewards=all_rewards)
+
+    @partial(jax.jit, static_argnums=(0,))
+    def _get_reward(self, previous_state: DonkeyKongState, state: DonkeyKongState):
+        return state.game_score - previous_state.game_score
+
+    @partial(jax.jit, static_argnums=(0,))
+    def _get_all_reward(self, previous_state: DonkeyKongState, state: DonkeyKongState):
+        if self.reward_funcs is None:
+            return jnp.zeros(1)
+        rewards = jnp.array(
+            [reward_func(previous_state, state) for reward_func in self.reward_funcs]
+        )
+        return rewards
 
     @partial(jax.jit, static_argnums=(0,))
     def _get_done(self, state) -> bool:
@@ -2498,4 +2601,4 @@ class DonkeyKongRenderer(JAXGameRenderer):
             raster
         )
 
-        return raster
+        return raster.astype(jnp.uint8)
