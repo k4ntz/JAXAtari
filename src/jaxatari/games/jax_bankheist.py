@@ -45,6 +45,10 @@ MAX_LEVEL = 8
 MAX_LIVES = 6
 # Starting_Lives
 STARTING_LIVES = 4
+# Reward for robbing a bank
+BANK_ROBBERY_REWARD = 10
+# Reward for killing a police car with dynamite
+POLICE_KILL_REWARD = 40
 # Position of the Fuel_Tank Sprite
 FUEL_TANK_POSITION = (42, 12)
 # Position of the first life
@@ -385,45 +389,15 @@ class JaxBankHeist(JaxEnvironment[BankHeistState, BankHeistObservation, BankHeis
         # Increase bank heists count by 1
         new_bank_heists = state.bank_heists + 1
 
+        # Increase score by bank robbery reward
+        new_money = state.money + BANK_ROBBERY_REWARD
+
         return state._replace(
             bank_positions=new_banks,
             pending_police_spawns=new_pending_spawns,
             pending_police_bank_indices=new_pending_bank_indices,
-            bank_heists=new_bank_heists
-        )
-
-    @partial(jax.jit, static_argnums=(0,))
-    def handle_police_collision(self, state: BankHeistState, police_hit_index: chex.Array) -> BankHeistState:
-        """
-        Handle collision with police cars by reducing player lives and resetting player position.
-
-        Args:
-            state: Current game state
-            police_hit_index: Index of the police car that was hit
-
-        Returns:
-            BankHeistState: Updated state with reduced lives and reset player position
-        """
-        # Reduce player lives by 1
-        new_player_lives = state.player_lives - 1
-        
-        # Reset player to default position (same as level transition)
-        default_player_position = jnp.array([12, 78]).astype(jnp.int32)
-        new_player = state.player._replace(position=default_player_position)
-
-        # Reset all police cars to spawn point (76, 132)
-        reset_police_position = jnp.array([76, 132]).astype(jnp.int32)
-        # Create array with reset position for all police cars
-        reset_positions = jnp.tile(reset_police_position[None, :], (state.enemy_positions.position.shape[0], 1))
-        # Only reset visible police cars, keep invisible ones at their current position
-        visible_mask = state.enemy_positions.visibility > 0
-        new_police_positions = jnp.where(visible_mask[:, None], reset_positions, state.enemy_positions.position)
-        new_police = state.enemy_positions._replace(position=new_police_positions)
-        
-        return state._replace(
-            player_lives=new_player_lives,
-            player=new_player,
-            enemy_positions=new_police
+            bank_heists=new_bank_heists,
+            money=new_money
         )
 
     @partial(jax.jit, static_argnums=(0,))
@@ -571,8 +545,10 @@ class JaxBankHeist(JaxEnvironment[BankHeistState, BankHeistObservation, BankHeis
             BankHeistState: Updated state with police cars killed if within explosion range
         """
         dynamite_pos = state.dynamite_position
+        police_killed_count = jnp.array(0)
         
-        def check_and_kill_police(i, current_state):
+        def check_and_kill_police(i, carry):
+            current_state, killed_count = carry
             police_pos = current_state.enemy_positions.position[i]
             police_visible = current_state.enemy_positions.visibility[i] > 0
             
@@ -590,111 +566,25 @@ class JaxBankHeist(JaxEnvironment[BankHeistState, BankHeistObservation, BankHeis
             )
             
             new_police = current_state.enemy_positions._replace(visibility=new_visibility)
-            return current_state._replace(enemy_positions=new_police)
+            updated_state = current_state._replace(enemy_positions=new_police)
+            
+            # Increment killed count if a police car was killed
+            new_killed_count = killed_count + jnp.where(should_kill, 1, 0)
+            
+            return (updated_state, new_killed_count)
         
-        # Process all police cars
-        return jax.lax.fori_loop(0, len(state.enemy_positions.visibility), check_and_kill_police, state)
-
-    @partial(jax.jit, static_argnums=(0,))
-    def explode_dynamite(self, state: BankHeistState) -> BankHeistState:
-        """
-        Handle dynamite explosion - kill police cars within 5x5 range and make dynamite inactive.
-
-        Args:
-            state: Current game state
-
-        Returns:
-            BankHeistState: Updated state with police cars killed and dynamite deactivated
-        """
-        # Kill police cars within 5x5 range of dynamite explosion
-        updated_state = self.kill_police_in_explosion_range(state)
-        
-        # Deactivate the dynamite by setting position to [-1, -1] and timer to -1
-        new_dynamite_position = jnp.array([-1, -1]).astype(jnp.int32)
-        new_dynamite_timer = jnp.array([-1]).astype(jnp.int32)
-        
-        return updated_state._replace(
-            dynamite_position=new_dynamite_position,
-            dynamite_timer=new_dynamite_timer
+        # Process all police cars and count kills
+        final_state, total_killed = jax.lax.fori_loop(
+            0, len(state.enemy_positions.visibility), 
+            check_and_kill_police, 
+            (state, police_killed_count)
         )
+        
+        # Add score for killed police cars
+        new_money = final_state.money + (total_killed * POLICE_KILL_REWARD)
+
+        return final_state._replace(money=new_money)
     
-    @partial(jax.jit, static_argnums=(0,))
-    def place_dynamite(self, state: BankHeistState, player: Entity) -> BankHeistState:
-        """
-        Place dynamite 4 pixels behind the player if dynamite is currently inactive.
-
-        Args:
-            state: Current game state
-            player: Current player entity with position and direction
-
-        Returns:
-            BankHeistState: Updated state with dynamite placed (if it was inactive)
-        """
-        # Check if dynamite is currently inactive (at [-1, -1])
-        dynamite_inactive = jnp.all(state.dynamite_position == jnp.array([-1, -1]))
-        
-        def place_new_dynamite():
-            # Calculate position 4 pixels behind the player based on their direction
-            player_position = player.position
-            player_direction = player.direction
-            
-            # Calculate offset based on direction (opposite to movement direction)
-            offset_branches = [
-                lambda: jnp.array([0, -5]),   # DOWN -> place 4 pixels UP (behind)
-                lambda: jnp.array([0, 5]),    # UP -> place 4 pixels DOWN (behind)
-                lambda: jnp.array([-5, 2]),   # RIGHT -> place 4 pixels LEFT (behind)
-                lambda: jnp.array([5, 2]),    # LEFT -> place 4 pixels RIGHT (behind)
-                lambda: jnp.array([0, 0]),    # NOOP/FIRE -> place at current position
-            ]
-            offset = jax.lax.switch(player_direction, offset_branches)
-            
-            # Place dynamite 4 pixels behind the player
-            new_dynamite_position = player_position + offset
-            new_dynamite_timer = jnp.array([DYNAMITE_EXPLOSION_DELAY]).astype(jnp.int32)  # 90 frames until explosion
-            return state._replace(
-                dynamite_position=new_dynamite_position,
-                dynamite_timer=new_dynamite_timer
-            )
-        
-        # Only place dynamite if it's currently inactive
-        return jax.lax.cond(dynamite_inactive, place_new_dynamite, lambda: state)
-
-    @partial(jax.jit, static_argnums=(0,))
-    def kill_police_in_explosion_range(self, state: BankHeistState) -> BankHeistState:
-        """
-        Kill police cars within a 5x5 range of the dynamite explosion.
-
-        Args:
-            state: Current game state
-
-        Returns:
-            BankHeistState: Updated state with police cars killed if within explosion range
-        """
-        dynamite_pos = state.dynamite_position
-        
-        def check_and_kill_police(i, current_state):
-            police_pos = current_state.enemy_positions.position[i]
-            police_visible = current_state.enemy_positions.visibility[i] > 0
-            
-            # Calculate distance between dynamite and police car
-            distance = jnp.linalg.norm(dynamite_pos - police_pos)
-            
-            # Kill police car if it's visible and within 5x5 range (distance <= ~3.5 pixels)
-            # Using 2.5 as threshold for a 5x5 area (half the diagonal of 5x5 square)
-            within_range = distance <= 5
-            should_kill = police_visible & within_range
-            
-            # Set visibility to 0 (kill) if within range
-            new_visibility = current_state.enemy_positions.visibility.at[i].set(
-                jnp.where(should_kill, 0, current_state.enemy_positions.visibility[i])
-            )
-            
-            new_police = current_state.enemy_positions._replace(visibility=new_visibility)
-            return current_state._replace(enemy_positions=new_police)
-        
-        # Process all police cars
-        return jax.lax.fori_loop(0, len(state.enemy_positions.visibility), check_and_kill_police, state)
-
     @partial(jax.jit, static_argnums=(0,))
     def explode_dynamite(self, state: BankHeistState) -> BankHeistState:
         """
@@ -1356,6 +1246,14 @@ if __name__ == "__main__":
     counter = 1
 
     while running:
+        game_over = jnp.logical_or(
+            jnp.less(curr_state.player_lives, 0),  # Player has 0 or fewer lives
+            jnp.greater_equal(curr_state.money, 999999)  # Score reached 999999
+        )
+
+        if game_over:
+            print(f"Game Over! Final Score: {curr_state.money}, Lives: {curr_state.player_lives}")
+            running = False
 
         for event in pygame.event.get():
             if event.type == pygame.QUIT:
