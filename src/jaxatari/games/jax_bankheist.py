@@ -119,7 +119,6 @@ def get_spawn_points(maps: chex.Array) -> chex.Array:
     shuffled_spawn_maps = [jax.random.permutation(key,spawn_points)[:min_length] for spawn_points in spawn_maps]
     return jnp.stack(shuffled_spawn_maps, axis=0)
 
-
 def find_free_areas(map, h, w):
     free_mask = (map == 0)
     H, W = free_mask.shape
@@ -417,7 +416,7 @@ class JaxBankHeist(JaxEnvironment[BankHeistState, BankHeistObservation, BankHeis
         )
 
     @partial(jax.jit, static_argnums=(0,))
-    def handle_police_collision(self, state: BankHeistState, police_hit_index: chex.Array) -> BankHeistState:
+    def lose_life(self, state: BankHeistState) -> BankHeistState:
         """
         Handle collision with police cars by reducing player lives and resetting player position.
 
@@ -447,7 +446,8 @@ class JaxBankHeist(JaxEnvironment[BankHeistState, BankHeistObservation, BankHeis
         return state._replace(
             player_lives=new_player_lives,
             player=new_player,
-            enemy_positions=new_police
+            enemy_positions=new_police,
+            game_paused=jnp.array(True)
         )
 
     @partial(jax.jit, static_argnums=(0,))
@@ -543,9 +543,10 @@ class JaxBankHeist(JaxEnvironment[BankHeistState, BankHeistObservation, BankHeis
             new_dynamite_timer = jnp.array([DYNAMITE_EXPLOSION_DELAY]).astype(jnp.int32)  # 90 frames until explosion
             return state._replace(
                 dynamite_position=new_dynamite_position,
-                dynamite_timer=new_dynamite_timer
+                dynamite_timer=new_dynamite_timer,
+                fuel=state.fuel - DYNAMITE_COST
             )
-        
+        # Reduce Fuel if dynamite was placed
         # Only place dynamite if it's currently inactive
         return jax.lax.cond(dynamite_inactive, place_new_dynamite, lambda: state)
 
@@ -636,7 +637,6 @@ class JaxBankHeist(JaxEnvironment[BankHeistState, BankHeistObservation, BankHeis
     
     @partial(jax.jit, static_argnums=(0,))
     def map_transition(self, state: BankHeistState) -> BankHeistState:
-
         new_level = state.level+1
         new_difficulty_level = jnp.minimum(new_level // CITIES_PER_LEVEL, MAX_LEVEL-1)
         default_player_position = jnp.array([12, 78]).astype(jnp.int32)
@@ -832,14 +832,6 @@ class JaxBankHeist(JaxEnvironment[BankHeistState, BankHeistObservation, BankHeis
                 multiple_valid_directions
             )
         )
-    
-    @partial(jax.jit, static_argnums=(0,))
-    def lose_life(self, state: BankHeistState) -> BankHeistState:
-        """
-        Handle losing a life.
-        """
-        new_player = state.player._replace(position=jnp.array([12, 78]).astype(jnp.int32), direction=jnp.array(4))
-        return state._replace(player_lives=state.player_lives - 1, player=new_player, game_paused=jnp.array(True))
 
     @partial(jax.jit, static_argnums=(0,))
     def move_police_cars(self, state: BankHeistState, random_key: chex.PRNGKey) -> BankHeistState:
@@ -921,23 +913,23 @@ class JaxBankHeist(JaxEnvironment[BankHeistState, BankHeistObservation, BankHeis
         new_state = jax.lax.fori_loop(0, full_speed, lambda i, s: self.player_step(s, action), state)
         police_speed = jax.lax.cond(
             new_state.game_paused,
-            lambda: jnp.array(0).astype(jnp.int32),
-            lambda: (state.speed * POLICE_SLOW_DOWN_FACTOR + state.police_reserve_speed).astype(jnp.int32)
-        )
+            lambda: jnp.array(0).astype(jnp.float32),
+            lambda: (state.speed * POLICE_SLOW_DOWN_FACTOR + state.police_reserve_speed)        )
         new_state = new_state._replace(police_reserve_speed=jnp.mod(police_speed, 1.0))
-        new_state = jax.lax.fori_loop(0, full_speed, lambda i, s: self.move_police_cars(s, step_random_key), new_state)
+        police_speed = police_speed.astype(jnp.int32)
+        new_state = jax.lax.fori_loop(0, police_speed, lambda i, s: self.move_police_cars(s, step_random_key), new_state)
 
         # Timer step
         new_state = jax.lax.cond(
             new_state.game_paused,
-            lambda: state,
+            lambda: new_state,
             lambda: self.timer_step(new_state,step_random_key)
         )
 
         # Fuel Consumption
         new_state = jax.lax.cond(
             new_state.game_paused,
-            lambda: state,
+            lambda: new_state,
             lambda: self.fuel_step(new_state)
         )
 
@@ -979,7 +971,7 @@ class JaxBankHeist(JaxEnvironment[BankHeistState, BankHeistObservation, BankHeis
         
         # Apply police collision logic if any police car was hit
         police_hit = police_hit_index >= 0
-        new_state = jax.lax.cond(police_hit, lambda: self.handle_police_collision(new_state, police_hit_index), lambda: new_state)
+        new_state = jax.lax.cond(police_hit, lambda: self.lose_life(new_state), lambda: new_state)
 
         # Handle dynamite placement when FIRE action is pressed
         new_state = jax.lax.cond(action == FIRE, 
@@ -990,7 +982,7 @@ class JaxBankHeist(JaxEnvironment[BankHeistState, BankHeistObservation, BankHeis
         new_state = jax.lax.cond(collision == 200, lambda: self.map_transition(new_state), lambda: new_state)
 
         new_state = jax.lax.cond(
-            new_state.game_paused,
+            jnp.logical_and(new_state.game_paused, jnp.logical_not(police_hit)),
             lambda: state,
             lambda: new_state
         )
