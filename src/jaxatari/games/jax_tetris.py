@@ -28,8 +28,8 @@ class TetrisConstants(NamedTuple):
     LINE_CLEAR_SCORE = (0, 1, 2, 3, 4)  # 0 -> if no row is cleared, 1 -> only 1 row, 2 -> 2 rows, 3-> 3 rows, 4 -> 4 rows, just like the original game
 
     # Render tiling
-    BOARD_X: int = 21  # left margin
-    BOARD_Y: int = 27  # top margin
+    BOARD_X: int = 21       # left margin
+    BOARD_Y: int = 27       # top margin
     BOARD_PADDING: int = 2
     CELL_WIDTH: int = 3
     CELL_HEIGHT: int = 7
