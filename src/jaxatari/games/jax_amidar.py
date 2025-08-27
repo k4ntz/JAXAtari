@@ -6,7 +6,6 @@
 # - In general, there are a lot of constants which can be changed in order to change the behavior 
 
 # remaining Inacuracies:
-# - enemy speed for levels over Level 7 does not change, in ALE it still changes
 # - the bottom path is the same as any other path, in ALE it's thinner and the sprites are further up on the path
 
 from functools import partial
@@ -19,7 +18,7 @@ from jaxatari import spaces
 from jaxatari.environment import JaxEnvironment, JAXAtariAction as Action
 from jaxatari.renderers import JAXGameRenderer
 from jaxatari.rendering import jax_rendering_utils as aj
-from jaxatari.games.amidar_mazes import original as chosen_maze
+from jaxatari.games.amidar_mazes import original as chosen_maze # change this to change the maze
 
 # Functions to precompute some constants so they only need to be calculated once
 
@@ -356,9 +355,8 @@ def get_player_speed(frame_counter: chex.Array) -> chex.Array:
 def get_enemy_speed(frame_counter: chex.Array, level: chex.Array) -> chex.Array:
     """
     Gets the enemy speed based on the frame counter and level.
-    For now only up to level 7, it doesn't change after that. TODO change in the future?
+    The speed stays the same after level 7 (tested until level 10)
     """
-
     compute_for_level_functions = [
         lambda: jnp.isin(frame_counter % 5, jnp.array([0, 3])), # level 1
         lambda: jnp.isin(frame_counter % 25, jnp.array([2, 4, 7, 9, 12, 14, 16, 17, 19, 22, 24])), # level 2
