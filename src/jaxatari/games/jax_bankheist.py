@@ -613,18 +613,44 @@ class JaxBankHeist(JaxEnvironment[BankHeistState, BankHeistObservation, BankHeis
         return final_state._replace(money=new_money)
     
     @partial(jax.jit, static_argnums=(0,))
-    def explode_dynamite(self, state: BankHeistState) -> BankHeistState:
+    def check_player_in_explosion_range(self, state: BankHeistState) -> chex.Array:
         """
-        Handle dynamite explosion - kill police cars within 5x5 range and make dynamite inactive.
+        Check if the player is within the 5x5 explosion range of the dynamite.
 
         Args:
             state: Current game state
 
         Returns:
-            BankHeistState: Updated state with police cars killed and dynamite deactivated
+            chex.Array: Boolean indicating if player is within explosion range
+        """
+        dynamite_pos = state.dynamite_position
+        player_pos = state.player.position
+        
+        # Calculate distance between dynamite and player
+        distance = jnp.linalg.norm(dynamite_pos - player_pos)
+        
+        # Check if player is within 5x5 range (distance <= 5, same as police cars)
+        within_range = distance <= 5
+        
+        return within_range
+    
+    @partial(jax.jit, static_argnums=(0,))
+    def explode_dynamite(self, state: BankHeistState) -> BankHeistState:
+        """
+        Handle dynamite explosion - kill police cars within 5x5 range, check player collision, and make dynamite inactive.
+
+        Args:
+            state: Current game state
+
+        Returns:
+            BankHeistState: Updated state with police cars killed, player life decreased if in range, and dynamite deactivated
         """
         # Kill police cars within 5x5 range of dynamite explosion
         updated_state = self.kill_police_in_explosion_range(state)
+        
+        # Check if player is within explosion range and handle like police collision
+        player_in_range = self.check_player_in_explosion_range(updated_state)
+        updated_state = jax.lax.cond(player_in_range, lambda: self.lose_life(updated_state), lambda: updated_state)
         
         # Deactivate the dynamite by setting position to [-1, -1] and timer to -1
         new_dynamite_position = jnp.array([-1, -1]).astype(jnp.int32)
