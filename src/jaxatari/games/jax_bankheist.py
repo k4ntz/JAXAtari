@@ -720,7 +720,7 @@ class JaxBankHeist(JaxEnvironment[BankHeistState, BankHeistObservation, BankHeis
     
     @partial(jax.jit, static_argnums=(0,))
     def map_transition(self, state: BankHeistState) -> BankHeistState:
-        
+
         new_level = state.level+1
         new_difficulty_level = jnp.minimum(new_level // CITIES_PER_LEVEL, MAX_LEVEL-1)
         default_player_position = jnp.array([12, 78]).astype(jnp.int32)
@@ -995,7 +995,7 @@ class JaxBankHeist(JaxEnvironment[BankHeistState, BankHeistObservation, BankHeis
         new_state = jax.lax.cond(
             new_state.game_paused,
             lambda: state,
-            lambda: self.timer_step(new_state)
+            lambda: self.timer_step(new_state,step_random_key)
         )
 
         # Fuel Consumption
@@ -1017,8 +1017,8 @@ class JaxBankHeist(JaxEnvironment[BankHeistState, BankHeistObservation, BankHeis
         """
         player_input = jnp.where(action == NOOP, state.player.direction, action)  # Convert NOOP to direction 4
         player_input = jnp.where(action == FIRE, state.player.direction, player_input)  # Ignore FIRE for movement
-        current_player = self.validate_input(state, state.player, player_input)
-        new_player = self.move(current_player, current_player.direction, state.speed)
+        current_player, invalid_input = self.validate_input(state, state.player, player_input)
+        new_player = self.move(current_player, current_player.direction)
         collision = self.check_background_collision(state, new_player)
         new_player = jax.lax.cond(collision >= 255,
             lambda: current_player,
