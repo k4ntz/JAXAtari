@@ -35,8 +35,12 @@ DYNAMITE_COST = FUEL_CAPACITY * 0.02
 DYNAMITE_DELAY = 60
 # Fuel gained on revival after "dying" of lack of fuel
 REVIVAL_FUEL = jnp.array(0.2 * FUEL_CAPACITY).astype(jnp.float32)
+# Base Speed in the first difficulty level
+BASE_SPEED = 0.5
 # Speed Increase per level higher than 1
-SPEED_INCREASE_PER_LEVEL = jnp.array(1.15)
+SPEED_INCREASE_PER_LEVEL = jnp.array(1.1)
+# Fuel Consumption Increase per level higher than 1
+FUEL_CONSUMPTION_INCREASE_PER_LEVEL = jnp.array(1.15)
 # Number of cities to clear before level increases
 CITIES_PER_LEVEL = 4
 # Max Level
@@ -51,7 +55,8 @@ FUEL_TANK_POSITION = (42, 12)
 FIRST_LIFE_POSITION = (WIDTH-70, 27)
 # Offset of the lives first value is the x dimension offset second offset between rows
 LIFE_OFFSET = (16, 12)
-SLOW_DOWN_FACTOR = 0.5
+# Speed factor for police cars, police cars are slower than player
+POLICE_SLOW_DOWN_FACTOR = 0.9
 
 # Array containing position of all 6 lives calculated from FIRST_LIFE_POSITION and LIFE_OFFSET
 LIFE_POSITIONS = jnp.array([
@@ -171,7 +176,9 @@ class BankHeistState(NamedTuple):
     enemy_positions: Entity
     bank_positions: Entity
     speed: chex.Array
-    reserve_speed: chex.Array # how much movement could not be used in the last tick 
+    fuel_consumption: chex.Array
+    reserve_speed: chex.Array # how much movement could not be used in the last tick
+    police_reserve_speed: chex.Array # how much movement the police could not use in the last tick
     money: chex.Array
     player_lives: chex.Array
     fuel: chex.Array
@@ -224,8 +231,10 @@ class JaxBankHeist(JaxEnvironment[BankHeistState, BankHeistObservation, BankHeis
             dynamite_position=jnp.array([-1, -1]).astype(jnp.int32),  # Inactive at [-1, -1]
             enemy_positions=init_banks_or_police(),
             bank_positions=init_banks_or_police(),
-            speed=jnp.array(1).astype(jnp.float32),
+            speed=jnp.array(BASE_SPEED).astype(jnp.float32),
+            fuel_consumption=jnp.array(1).astype(jnp.float32),
             reserve_speed=jnp.array(0.0).astype(jnp.float32),
+            police_reserve_speed=jnp.array(0.0).astype(jnp.float32),
             money=jnp.array(0).astype(jnp.int32),
             player_lives=jnp.array(STARTING_LIVES).astype(jnp.int32),
             fuel_refill=jnp.array(0).astype(jnp.int32),
@@ -727,7 +736,8 @@ class JaxBankHeist(JaxEnvironment[BankHeistState, BankHeistObservation, BankHeis
         new_player = state.player._replace(position=default_player_position)
         empty_police = init_banks_or_police()
         empty_banks = init_banks_or_police()
-        new_speed = jnp.power(SPEED_INCREASE_PER_LEVEL, new_difficulty_level)
+        new_speed = BASE_SPEED * jnp.power(SPEED_INCREASE_PER_LEVEL, new_difficulty_level)
+        new_fuel_consumption = jnp.power(FUEL_CONSUMPTION_INCREASE_PER_LEVEL, new_difficulty_level)
         new_fuel = jnp.maximum(state.fuel, jax.lax.dynamic_index_in_dim(REFILL_TABLE, state.bank_heists, axis=0, keepdims=False))
         new_fuel_refill=jnp.array(0).astype(jnp.int32)
         map_id = new_level % len(CITY_COLLISION_MAPS)
@@ -746,6 +756,7 @@ class JaxBankHeist(JaxEnvironment[BankHeistState, BankHeistObservation, BankHeis
             enemy_positions=empty_police,
             bank_positions=empty_banks,
             speed=new_speed,
+            fuel_consumption=new_fuel_consumption,
             fuel=new_fuel,
             fuel_refill=new_fuel_refill,
             map_collision=new_map_collision,
@@ -979,18 +990,19 @@ class JaxBankHeist(JaxEnvironment[BankHeistState, BankHeistObservation, BankHeis
         # Get random key for this step and advance state's random key
         step_random_key, new_state = self.advance_random_key(state)
 
-        full_speed = state.speed * SLOW_DOWN_FACTOR + state.reserve_speed
+        full_speed = state.speed + state.reserve_speed
         state = state._replace(reserve_speed=jnp.mod(full_speed, 1.0))
         full_speed = full_speed.astype(jnp.int32)
         # Player step. Must be run first as this step unpauses the game if it is paused!
         new_state = jax.lax.fori_loop(0, full_speed, lambda i, s: self.player_step(s, action), state)
-        full_speed = jax.lax.cond(
+        police_speed = jax.lax.cond(
             new_state.game_paused,
             lambda: jnp.array(0).astype(jnp.int32),
-            lambda: full_speed
+            lambda: (state.speed * POLICE_SLOW_DOWN_FACTOR + state.police_reserve_speed).astype(jnp.int32)
         )
-        new_state = jax.lax.fori_loop(0, full_speed, lambda i, s: self.move_police_cars(s, step_random_key), new_state) 
-        
+        new_state = new_state._replace(police_reserve_speed=jnp.mod(police_speed, 1.0))
+        new_state = jax.lax.fori_loop(0, full_speed, lambda i, s: self.move_police_cars(s, step_random_key), new_state)
+
         # Timer step
         new_state = jax.lax.cond(
             new_state.game_paused,
@@ -1065,7 +1077,7 @@ class JaxBankHeist(JaxEnvironment[BankHeistState, BankHeistObservation, BankHeis
         """
         Handles fuel consumption for the player's vehicle.
         """
-        new_fuel = jnp.maximum(state.fuel - state.speed, 0)
+        new_fuel = jnp.maximum(state.fuel - state.fuel_consumption, 0)
 
         new_state = state._replace(fuel=new_fuel)
         new_state = jax.lax.cond(
