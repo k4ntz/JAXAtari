@@ -69,6 +69,7 @@ class SpaceInvadersConstants(NamedTuple):
     BACKGROUND_SIZE: Tuple[int, int] = (WIDTH, 15)
     NUMBER_SIZE: Tuple[int, int] = (12, 9)
     OPPONENT_SIZE: Tuple[int, int] = (8, 10)
+    OPPONENT_VERTICAL_STEP_SIZE : int = 10 # vertical moving distance of opponents
     OFFSET_OPPONENT: Tuple[int, int] = (8, 8)
 
     PLAYER_Y: int = HEIGHT - PLAYER_SIZE[1] - BACKGROUND_SIZE[1]
@@ -543,14 +544,22 @@ class JaxSpaceInvaders(JaxEnvironment[SpaceInvadersState, SpaceInvadersObservati
                     lambda: -1
                 )
             )
-            new_position = state.opponent_current_x + direction
-            return (direction, new_position)
+
+            new_position_y = jax.lax.cond(
+                direction != state.opponent_direction,
+                lambda y: y + self.consts.OPPONENT_VERTICAL_STEP_SIZE,
+                lambda y: y,
+                state.opponent_current_y
+            )
+
+            new_position_x = state.opponent_current_x + direction
+            return (direction, new_position_x, new_position_y)
 
         is_opponent_step = state.step_counter % self.consts.MOVEMENT_RATE == 0
-        (direction, position) = jax.lax.cond(
+        (direction, new_position_x, new_position_y) = jax.lax.cond(
             is_opponent_step, 
             lambda: get_opponent_position(),
-            lambda: (state.opponent_direction, state.opponent_current_x)
+            lambda: (state.opponent_direction, state.opponent_current_x, state.opponent_current_y)
         )
 
         new_state = SpaceInvadersState(
@@ -561,8 +570,8 @@ class JaxSpaceInvaders(JaxEnvironment[SpaceInvadersState, SpaceInvadersObservati
             player_score=new_score,
             player_lives=new_lives,
             destroyed=new_destroyed,
-            opponent_current_x=position,
-            opponent_current_y=state.opponent_current_y,
+            opponent_current_x=new_position_x,
+            opponent_current_y=new_position_y,
             opponent_bounding_rect=state.opponent_bounding_rect,
             opponent_direction=direction,
             bullet_active=final_bullet_active.astype(jnp.int32),
