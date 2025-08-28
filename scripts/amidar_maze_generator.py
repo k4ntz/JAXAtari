@@ -22,7 +22,7 @@ if PROJECT_SRC not in sys.path:
 
 try:
     # Use the original template module for constants and default maze
-    from jaxatari.games.amidar_mazes import original as ORIG
+    from jaxatari.games.amidar_mazes import original as ORIG # You can change the template here
 except Exception as e:
     messagebox.showerror("Import Error", f"Failed to import original template: {e}")
     raise
@@ -758,8 +758,9 @@ Template
 - Show: Toggle background rendering of the original maze.
 - Snap template: Snap to the original template's grid (from amidar_mazes.original).
 - Add corners: Add all template corners to your current set.
-- Add player & enemies: Loads MAX_ENEMIES, INITIAL_PLAYER_POSITION and INITIAL_ENEMY_POSITIONS from the original maze module.
+- Add player & enemies: Loads INITIAL_PLAYER_POSITION and INITIAL_ENEMY_POSITIONS from the original maze module.
     • These are defined in src/jaxatari/games/amidar_mazes/original.py.
+If you would like to use a different maze than the original as the template, search the script for "You can change the template here". There you can choose to import a different maze as the original.
 
 Tools
 - Snap axis: Snap to existing corners' X/Y to keep lines straight.
