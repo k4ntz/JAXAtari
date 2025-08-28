@@ -61,6 +61,8 @@ FIRST_LIFE_POSITION = (WIDTH-70, 27)
 LIFE_OFFSET = (16, 12)
 # Speed factor for police cars, police cars are slower than player
 POLICE_SLOW_DOWN_FACTOR = 0.9
+# Time until new bank spawns after police car is defeated
+BANK_RESPAWN_TIME = 300
 
 # Array containing position of all 6 lives calculated from FIRST_LIFE_POSITION and LIFE_OFFSET
 LIFE_POSITIONS = jnp.array([
@@ -260,7 +262,6 @@ class JaxBankHeist(JaxEnvironment[BankHeistState, BankHeistObservation, BankHeis
         obs_stack = jax.tree.map(expand_and_copy, obs)
         state = state._replace(obs_stack=obs_stack)
         return  obs_stack, state
-
     
     @partial(jax.jit, static_argnums=(0,))
     def validate_input(self, state: BankHeistState, player: Entity, input: jnp.ndarray) -> Entity:
@@ -450,23 +451,15 @@ class JaxBankHeist(JaxEnvironment[BankHeistState, BankHeistObservation, BankHeis
 
         Returns:
             BankHeistState: Updated state with a police car spawned.
-        """
-        # Find an available police slot (visibility == 0)
-        available_slots = state.enemy_positions.visibility == 0
-        
-        # If no slots available, use the first slot
-        slot_index = jnp.where(available_slots, jnp.arange(len(available_slots)), len(available_slots))
-        first_available = jnp.min(slot_index)
-        first_available = jnp.where(first_available >= len(available_slots), 0, first_available)
-        
+        """        
         # Get spawn position from bank index
         spawn_position = state.bank_positions.position[bank_index]
         
         # Update police positions
-        new_positions = state.enemy_positions.position.at[first_available].set(spawn_position)
-        new_directions = state.enemy_positions.direction.at[first_available].set(4)  # Default direction
-        new_visibility = state.enemy_positions.visibility.at[first_available].set(1)  # Make visible
-        
+        new_positions = state.enemy_positions.position.at[bank_index].set(spawn_position)
+        new_directions = state.enemy_positions.direction.at[bank_index].set(4)  # Default direction
+        new_visibility = state.enemy_positions.visibility.at[bank_index].set(1)  # Make visible
+
         new_police = state.enemy_positions._replace(
             position=new_positions,
             direction=new_directions, 
@@ -574,10 +567,14 @@ class JaxBankHeist(JaxEnvironment[BankHeistState, BankHeistObservation, BankHeis
             new_visibility = current_state.enemy_positions.visibility.at[i].set(
                 jnp.where(should_kill, 0, current_state.enemy_positions.visibility[i])
             )
-            
+            # Set respawn timer for corresponding Bank
+            new_respawn_timer = current_state.bank_spawn_timers.at[i].set(
+                jnp.where(should_kill, BANK_RESPAWN_TIME, current_state.bank_spawn_timers[i])
+            )
+
             new_police = current_state.enemy_positions._replace(visibility=new_visibility)
-            updated_state = current_state._replace(enemy_positions=new_police)
-            
+            updated_state = current_state._replace(enemy_positions=new_police, bank_spawn_timers=new_respawn_timer)
+
             # Increment killed count if a police car was killed
             new_killed_count = killed_count + jnp.where(should_kill, 1, 0)
             
@@ -863,7 +860,7 @@ class JaxBankHeist(JaxEnvironment[BankHeistState, BankHeistObservation, BankHeis
         Returns:
             Tuple of (current_step_key, updated_state)
         """
-        step_random_key, next_random_key = jax.random.split(state.random_key)
+        step_random_key, next_random_key  = jax.random.split(state.random_key)
         updated_state = state._replace(random_key=next_random_key)
         return step_random_key, updated_state
 
@@ -871,16 +868,15 @@ class JaxBankHeist(JaxEnvironment[BankHeistState, BankHeistObservation, BankHeis
     def step(self, state: BankHeistState, action: chex.Array) -> Tuple[BankHeistState, BankHeistObservation, float, bool, BankHeistInfo]:
         # Get random key for this step and advance state's random key
         step_random_key, new_state = self.advance_random_key(state)
-
-        full_speed = state.speed + state.reserve_speed
-        state = state._replace(reserve_speed=jnp.mod(full_speed, 1.0))
+        full_speed = new_state.speed + new_state.reserve_speed
+        new_state = new_state._replace(reserve_speed=jnp.mod(full_speed, 1.0))
         full_speed = full_speed.astype(jnp.int32)
         # Player step. Must be run first as this step unpauses the game if it is paused!
-        new_state = jax.lax.fori_loop(0, full_speed, lambda i, s: self.player_step(s, action), state)
+        new_state = jax.lax.fori_loop(0, full_speed, lambda i, s: self.player_step(s, action), new_state)
         police_speed = jax.lax.cond(
             new_state.game_paused,
             lambda: jnp.array(0).astype(jnp.float32),
-            lambda: (state.speed * POLICE_SLOW_DOWN_FACTOR + state.police_reserve_speed)        )
+            lambda: (new_state.speed * POLICE_SLOW_DOWN_FACTOR + state.police_reserve_speed)        )
         new_state = new_state._replace(police_reserve_speed=jnp.mod(police_speed, 1.0))
         police_speed = police_speed.astype(jnp.int32)
         new_state = jax.lax.fori_loop(0, police_speed, lambda i, s: self.move_police_cars(s, step_random_key), new_state)
