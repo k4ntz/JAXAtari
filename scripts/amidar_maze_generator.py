@@ -467,6 +467,26 @@ class MazeEditor(tk.Tk):
         return rect_masks, rect_bounds
 
     @staticmethod
+    def _compute_short_paths(corners_arr: np.ndarray, h_arr: np.ndarray, v_arr: np.ndarray):
+        """ 
+        Return an array of [corner_index, corner_index, edge_index] for each edge which is short. 
+        An edge is short, if the corners are touching each other, i.e. they are (no more than) PATH_THICKNESS apart.
+        """
+        short_paths = []
+        for i, h_edge in enumerate(h_arr):
+            if abs(h_edge[0, 0] - h_edge[1, 0]) <= TH_V:
+                corner_index_start = np.where(np.all(corners_arr == h_edge[0], axis=1))[0][0]
+                corner_index_end = np.where(np.all(corners_arr == h_edge[1], axis=1))[0][0]
+                print(f"horizontal short edge, start {corner_index_start}, end {corner_index_end}, i {i}")
+                short_paths.append([corner_index_start, corner_index_end, i])
+        for i, v_edge in enumerate(v_arr):
+            if abs(v_edge[0, 1] - v_edge[1, 1]) <= TH_H:
+                corner_index_start = np.where(np.all(corners_arr == v_edge[0], axis=1))[0][0]
+                corner_index_end = np.where(np.all(corners_arr == v_edge[1], axis=1))[0][0]
+                short_paths.append([corner_index_start, corner_index_end, i+len(h_arr)])
+        return np.asarray(short_paths, dtype=np.int32)
+
+    @staticmethod
     def _compute_corner_rectangles(rect_bounds: np.ndarray):
         """Return indices of the four corner-most rectangles (top-left, top-right, bottom-left, bottom-right)."""
         if rect_bounds.size == 0:
@@ -1339,6 +1359,8 @@ Tips
         # Precompute derived path constants (rectangles, bounds)
         rect_masks, rect_bounds = self._compute_rectangles(corners_arr, h_arr, v_arr)
 
+        short_paths = self._compute_short_paths(corners_arr, h_arr, v_arr)
+
         # Prepare placements
         player_pos = np.array(list(self.player_pos), dtype=np.int32)
 
@@ -1474,6 +1496,7 @@ Tips
         content.append(f"RECTANGLES = jnp.array({rect_masks.tolist()}, dtype=jnp.int32)")
         content.append(f"RECTANGLE_BOUNDS = jnp.array({rect_bounds.tolist()}, dtype=jnp.int32)")
         content.append(f"CORNER_RECTANGLES = jnp.array({corner_rect_idxs.tolist()}, dtype=jnp.int32)")
+        content.append(f"SHORT_PATHS = jnp.array({short_paths.tolist()}, dtype=jnp.int32)")
         content.append("")
         content.append(f"INITIAL_PLAYER_POSITION = jnp.array({player_pos.tolist()}, dtype=jnp.int32)")
         content.append(f"INITIAL_ENEMY_POSITIONS = jnp.array({enemy_pos.tolist()}, dtype=jnp.int32)")
