@@ -819,6 +819,24 @@ class JaxAmidar(JaxEnvironment[AmidarState, AmidarObservation, AmidarInfo, Amida
         WIDTH = self.constants.WIDTH
         MAX_ENEMIES = self.constants.MAX_ENEMIES
         path_shape = self.constants.PATH_EDGES.shape[0]
+
+        def enemy_box(enemy_size_wh):
+            # per-entity [x, y, w, h, active] bounds
+            hi_vec = jnp.array([WIDTH, HEIGHT, enemy_size_wh[0], enemy_size_wh[1], 1], dtype=jnp.int32)
+            lo_vec = jnp.zeros_like(hi_vec)
+            high = jnp.broadcast_to(hi_vec, (MAX_ENEMIES, 5))
+            low = jnp.broadcast_to(lo_vec, (MAX_ENEMIES, 5))
+            return spaces.Box(low=low, high=high, shape=(MAX_ENEMIES, 5), dtype=jnp.int32)
+
+        def wha_box(n):
+            # generic [x, y, w, h, active] for paths/rectangles
+            hi_vec = jnp.array([WIDTH, HEIGHT, WIDTH, HEIGHT, 1], dtype=jnp.int32)
+            lo_vec = jnp.zeros_like(hi_vec)
+            high = jnp.broadcast_to(hi_vec, (n, 5))
+            low = jnp.broadcast_to(lo_vec, (n, 5))
+            return spaces.Box(low=low, high=high, shape=(n, 5), dtype=jnp.int32)
+
+
         return spaces.Dict({
             "player_gorilla": spaces.Dict({
                 "x": spaces.Box(low=0, high=WIDTH, shape=(), dtype=jnp.int32),
@@ -834,14 +852,14 @@ class JaxAmidar(JaxEnvironment[AmidarState, AmidarObservation, AmidarInfo, Amida
                 "height": spaces.Box(low=0, high=HEIGHT, shape=(), dtype=jnp.int32),
                 "active": spaces.Box(low=0, high=1, shape=(), dtype=jnp.int32),
             }),
-            "shadows": spaces.Box(low=0, high=WIDTH, shape=(MAX_ENEMIES, 5), dtype=jnp.int32),
-            "warriors": spaces.Box(low=0, high=WIDTH, shape=(MAX_ENEMIES, 5), dtype=jnp.int32),
-            "pigs": spaces.Box(low=0, high=WIDTH, shape=(MAX_ENEMIES, 5), dtype=jnp.int32),
-            "chickens": spaces.Box(low=0, high=WIDTH, shape=(MAX_ENEMIES, 5), dtype=jnp.int32),
+            "shadows": enemy_box(self.constants.ENEMY_SIZE),
+            "warriors": enemy_box(self.constants.ENEMY_SIZE),
+            "pigs": enemy_box(self.constants.ENEMY_SIZE),
+            "chickens": enemy_box(self.constants.CHICKEN_SIZE),
             "lives": spaces.Box(low=0, high=self.constants.MAX_LIVES, shape=(), dtype=jnp.int32),
-            "paths": spaces.Box(low=0, high=HEIGHT, shape=(path_shape, 5), dtype=jnp.int32),
-            "walked_on_paths": spaces.Box(low=0, high=HEIGHT, shape=(path_shape, 5), dtype=jnp.int32),
-            "completed_rectangles": spaces.Box(low=0, high=HEIGHT, shape=(self.constants.RECTANGLES.shape[0], 5), dtype=jnp.int32),
+            "paths": wha_box(path_shape),
+            "walked_on_paths": wha_box(path_shape),
+            "completed_rectangles": wha_box(self.constants.RECTANGLES.shape[0]),
         })
 
     def state_space(self) -> spaces.Box:
@@ -867,6 +885,18 @@ class JaxAmidar(JaxEnvironment[AmidarState, AmidarObservation, AmidarInfo, Amida
             obs.walked_on_paths.flatten(),
             obs.completed_rectangles.flatten(),
         ])
+
+    def image_space(self) -> spaces.Box:
+        """
+        Returns the image space of the renderer output.
+        Shape is (HEIGHT, WIDTH, 3) with uint8 values in [0, 255].
+        """
+        return spaces.Box(
+            low=0,
+            high=255,
+            shape=(self.constants.HEIGHT, self.constants.WIDTH, 3),
+            dtype=jnp.uint8,
+        )
 
     @partial(jax.jit, static_argnums=(0,))
     def render(self, state: AmidarState) -> jnp.ndarray:
