@@ -183,6 +183,10 @@ class Dict(Space):
 
     def contains(self, x: dict) -> jax.Array:
         """Check whether the given Pytree is contained in the space."""
+        # Handle named tuples by converting to dict
+        if hasattr(x, '_asdict'):
+            x = x._asdict()
+        
         if not isinstance(x, dict) or self.spaces.keys() != x.keys():
             return jnp.asarray(False)
 
@@ -220,6 +224,11 @@ class Tuple(Space):
         """
         Check whether the given Pytree is contained in the space.
         """
+        # Handle named tuples by converting to tuple
+        if hasattr(x, '_asdict'):
+            # Convert named tuple to regular tuple
+            x = tuple(x._asdict().values())
+        
         # 1. Initial validation: check if x is a tuple of the correct length.
         if not isinstance(x, (tuple, list)) or len(x) != len(self.spaces):
             return jnp.asarray(False)
