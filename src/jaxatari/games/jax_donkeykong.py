@@ -19,6 +19,9 @@ class DonkeyKongConstants(NamedTuple):
     WINDOW_WIDTH: int = 160 * 3
     WINDOW_HEIGHT: int = 210 * 3
 
+    # Frame rate
+    FRAME_RATE: int = 30 # if more frame rate is provided, one needs to change the game behaviour
+
     # Donkey Kong position
     # Donkey Kong actually does nothing in game - only change sprites
     DONKEYKONG_X: int = 33
@@ -108,7 +111,11 @@ class DonkeyKongConstants(NamedTuple):
     BARREL_SPRITE_LEFT: int = 2
 
     # Barrel rolling probability
-    BASE_PROBABILITY_BARREL_ROLLING_A_LADDER_DOWN: float = 0.2
+    BASE_PROBABILITY_BARREL_ROLLING_A_LADDER_DOWN_ROUND_1: float = 0.14
+    BASE_PROBABILITY_BARREL_ROLLING_A_LADDER_DOWN_ROUND_2: float = 0.36
+    BASE_PROBABILITY_BARREL_ROLLING_A_LADDER_DOWN_ROUND_3: float = 0.34
+    BASE_PROBABILITY_BARREL_ROLLING_A_LADDER_DOWN_ROUND_4: float = 0.34
+    BASE_PROBABILITY_BARREL_ROLLING_A_LADDER_DOWN_ROUND_5: float = 0.5
     BARREL_MOVING_SPEED: int = 1 # moving 1 pixel per frame
 
     # Hit boxes
@@ -122,7 +129,17 @@ class DonkeyKongConstants(NamedTuple):
     # Fire
     FIRE_MOVING_SPEED: float = 0.49
     FIRE_START_Y: int = 60
-    FIRE_CHANGING_DIRECTION_PROP = 0.008
+    FIRE_CHANGING_DIRECTION_PROB = 0.008
+
+    STAGE_2_FIRE_CHANGING_DIRECTION_DEFAULT_PROB: float = 0.0
+    STAGE_3_FIRE_CHANGING_DIRECTION_DEFAULT_PROB: float = 0.17
+    STAGE_4_FIRE_CHANGING_DIRECTION_DEFAULT_PROB: float = 0.0
+    STAGE_5_FIRE_CHANGING_DIRECTION_DEFAULT_PROB: float = 0.21
+
+    STAGE_2_FIRE_CHANGING_DIRECTION_INC_PROB: float = 0.008
+    STAGE_3_FIRE_CHANGING_DIRECTION_INC_PROB: float = 0.061
+    STAGE_4_FIRE_CHANGING_DIRECTION_INC_PROB: float = 0.011
+    STAGE_5_FIRE_CHANGING_DIRECTION_INC_PROB: float = 0.049
 
     # Movement directions
     MOVING_UP: int = 0
@@ -217,6 +234,7 @@ class FirePosition(NamedTuple):
     moving_direction: chex.Array
     stage: chex.Array
     destroyed: chex.Array
+    change_direction_prob: chex.Array # every fire has onw propability to change its direction
 
 # Traps - Level 2 enemy or to Mario reaching goal
 class TrapPosition(NamedTuple):
@@ -234,6 +252,7 @@ class DonkeyKongState(NamedTuple):
     step_counter: chex.Array
 
     game_score: chex.Array
+    game_round: chex.Array
     
     mario_x: chex.Array
     mario_y: chex.Array  
@@ -257,6 +276,7 @@ class DonkeyKongState(NamedTuple):
     mario_reached_goal: chex.Array
 
     barrels: BarrelPosition
+    barrels_change_direction_prob: chex.Array
     fires: FirePosition
     traps: TrapPosition
     ladders: Ladder
@@ -549,7 +569,8 @@ class JaxDonkeyKong(JaxEnvironment[DonkeyKongState, DonkeyKongObservation, Donke
         # changing the direction is based on a propability
         def change_moving_direction_fire(state):
             def change_direction_for_each_fire(i, state):
-                direction_change_prop = self.consts.FIRE_CHANGING_DIRECTION_PROP  # basic prop to change direction
+                prob_per_sec = state.fires.change_direction_prob[i] # prob of change PER Sec
+                direction_change_prob = 1.0 - (1.0 - prob_per_sec) ** (1.0 / self.consts.FRAME_RATE) # basic prop to change direction PER FRAME
                 fire_y, moving_direction = jax.lax.cond(
                     state.fires.moving_direction[i] == self.consts.MOVING_RIGHT,
                     lambda _: (state.fires.fire_y[i] + self.consts.FIRE_MOVING_SPEED, state.fires.moving_direction.at[i].set(self.consts.MOVING_LEFT)),
@@ -558,16 +579,16 @@ class JaxDonkeyKong(JaxEnvironment[DonkeyKongState, DonkeyKongObservation, Donke
                 )
 
                 # check if fire is already at the invisible wall on right or left side, if so prop = 1.0
-                direction_change_prop = jax.lax.cond(
+                direction_change_prob = jax.lax.cond(
                     state.invisible_wall_each_stage.left_end[0] >= fire_y,
                     lambda _: 1.0,
-                    lambda _: direction_change_prop,
+                    lambda _: direction_change_prob,
                     operand=None
                 )
-                direction_change_prop = jax.lax.cond(
+                direction_change_prob = jax.lax.cond(
                     state.invisible_wall_each_stage.right_end[0] <= fire_y,
                     lambda _: 1.0,
-                    lambda _: direction_change_prop,
+                    lambda _: direction_change_prob,
                     operand=None
                 )
 
@@ -587,20 +608,20 @@ class JaxDonkeyKong(JaxEnvironment[DonkeyKongState, DonkeyKongObservation, Donke
                         operand=None
                     )
                 has_to_change_dir = jax.lax.fori_loop(0, len(state.traps.trap_x), check_for_each_trap, False)
-                direction_change_prop = jax.lax.cond(
+                direction_change_prob = jax.lax.cond(
                     has_to_change_dir,
                     lambda _: 1.0,
-                    lambda _: direction_change_prop,
+                    lambda _: direction_change_prob,
                     operand=None
                 )
 
                 # use the propability to change the direction
-                # if a fire forced to change his direction --> direction_change_prop == 1.0
-                def should_change(key, direction_change_prop: float) -> bool:
+                # if a fire forced to change his direction --> direction_change_prob == 1.0
+                def should_change(key, direction_change_prob: float) -> bool:
                     rnd = jax.random.uniform(key, shape=())
-                    return rnd < direction_change_prop
+                    return rnd < direction_change_prob
                 key = jax.random.PRNGKey(jnp.round(state.fires.fire_x[i]).astype(jnp.int32) + jnp.round(state.fires.fire_y[i]).astype(jnp.int32) + state.fires.stage[i] + state.step_counter)
-                change_direction = should_change(key, direction_change_prop)
+                change_direction = should_change(key, direction_change_prob)
 
                 # new_state with opposite moving direction
                 fires = state.fires._replace(moving_direction=moving_direction)
@@ -793,7 +814,7 @@ class JaxDonkeyKong(JaxEnvironment[DonkeyKongState, DonkeyKongObservation, Donke
             # change position
             # check if barrel can fall (ladder or end of bar)
             def check_if_barrel_will_fall(x, y, direction, sprite, stage):
-                prob_barrel_rolls_down_a_ladder = self.consts.BASE_PROBABILITY_BARREL_ROLLING_A_LADDER_DOWN
+                prob_barrel_rolls_down_a_ladder = state.barrels_change_direction_prob
                 curr_stage = stage - 1
 
                 # check if there is an another barrel directly under that stage
@@ -1537,6 +1558,8 @@ class JaxDonkeyKong(JaxEnvironment[DonkeyKongState, DonkeyKongObservation, Donke
 
         # after mario reached the goal or hit by an enemy --> reset the level, calculate score
         def reset_round_after_success_or_collision(state):
+            # first reset the game state
+            # and change only some variable to implement either a succefull or Mario lose state
             ladders = self.init_ladders_for_level(level=1)
             invisible_wall_each_stage = self.init_invisible_wall_for_level(level=1)
             new_state = DonkeyKongState(
@@ -1549,7 +1572,8 @@ class JaxDonkeyKong(JaxEnvironment[DonkeyKongState, DonkeyKongObservation, Donke
 
                 mario_climbing_delay = False,
 
-                game_score = 0,
+                game_score = state.game_score,
+                game_round = state.game_round,
 
                 mario_x=self.consts.LEVEL_1_MARIO_START_X,
                 mario_y=self.consts.LEVEL_1_MARIO_START_Y,
@@ -1579,13 +1603,15 @@ class JaxDonkeyKong(JaxEnvironment[DonkeyKongState, DonkeyKongObservation, Donke
                     stage = jnp.array([6, 6, 6, 6]).astype(jnp.int32),
                     reached_the_end=jnp.array([True, True, True, True]).astype(bool)
                 ),
+                barrels_change_direction_prob = self.consts.BASE_PROBABILITY_BARREL_ROLLING_A_LADDER_DOWN_ROUND_1,
 
                 fires = FirePosition(
                     fire_x = jnp.array([-1., -1., -1., -1.]).astype(jnp.float32),
                     fire_y = jnp.array([-1., -1., -1., -1.]).astype(jnp.float32),
                     moving_direction = jnp.array([self.consts.MOVING_RIGHT, self.consts.MOVING_LEFT, self.consts.MOVING_RIGHT, self.consts.MOVING_LEFT]).astype(jnp.int32),
                     stage = jnp.array([5, 4, 3, 2]).astype(jnp.int32),
-                    destroyed=jnp.array([True, True, True, True]).astype(bool)
+                    destroyed=jnp.array([True, True, True, True]).astype(bool),
+                    change_direction_prob=jnp.array([self.consts.STAGE_5_FIRE_CHANGING_DIRECTION_DEFAULT_PROB, self.consts.STAGE_4_FIRE_CHANGING_DIRECTION_DEFAULT_PROB, self.consts.STAGE_3_FIRE_CHANGING_DIRECTION_DEFAULT_PROB, self.consts.STAGE_2_FIRE_CHANGING_DIRECTION_DEFAULT_PROB])
                 ),
 
                 traps = TrapPosition(
@@ -1609,9 +1635,6 @@ class JaxDonkeyKong(JaxEnvironment[DonkeyKongState, DonkeyKongObservation, Donke
                 hammer_usage_expired = False,
             )
 
-            new_state = new_state._replace(
-                game_score = state.game_score,
-            )
             ladder = self.init_ladders_for_level(state.level)
             invisible_wall = self.init_invisible_wall_for_level(state.level)
             mario_x, mario_y, hammer_x, hammer_y = jax.lax.cond(
@@ -1637,6 +1660,8 @@ class JaxDonkeyKong(JaxEnvironment[DonkeyKongState, DonkeyKongObservation, Donke
                 lambda _: 1,
                 operand=None
             )
+
+
             ladder = self.init_ladders_for_level(level)
             invisible_wall = self.init_invisible_wall_for_level(level)
             mario_x, mario_y, hammer_x, hammer_y = jax.lax.cond(
@@ -1652,6 +1677,42 @@ class JaxDonkeyKong(JaxEnvironment[DonkeyKongState, DonkeyKongObservation, Donke
                 operand=None
             )
             # new_state_clear_level --> Mario reached the next level state
+            def update_enemy_probability(game_round):
+                # change the prob fpr barrel falling the ladder correspoding to the given game round
+                barrels_change_direction_prob = jax.lax.cond(
+                    game_round == 2,
+                    lambda _: self.consts.BASE_PROBABILITY_BARREL_ROLLING_A_LADDER_DOWN_ROUND_2,
+                    lambda _: jax.lax.cond(
+                        game_round == 3,
+                        lambda _: self.consts.BASE_PROBABILITY_BARREL_ROLLING_A_LADDER_DOWN_ROUND_3,
+                        lambda _: jax.lax.cond(
+                            game_round >= 4,
+                            lambda _: self.consts.BASE_PROBABILITY_BARREL_ROLLING_A_LADDER_DOWN_ROUND_4,
+                            lambda _: self.consts.BASE_PROBABILITY_BARREL_ROLLING_A_LADDER_DOWN_ROUND_1,
+                            operand=None
+                        ),
+                        operand=None
+                    ),
+                    operand=None
+                )
+
+                fires_change_direction_prob = jax.lax.cond(
+                    game_round == 1,
+                    lambda _: jnp.array([self.consts.STAGE_5_FIRE_CHANGING_DIRECTION_DEFAULT_PROB, self.consts.STAGE_4_FIRE_CHANGING_DIRECTION_DEFAULT_PROB, self.consts.STAGE_3_FIRE_CHANGING_DIRECTION_DEFAULT_PROB, self.consts.STAGE_2_FIRE_CHANGING_DIRECTION_DEFAULT_PROB]),
+                    lambda _: jnp.array([self.consts.STAGE_5_FIRE_CHANGING_DIRECTION_DEFAULT_PROB + self.consts.STAGE_5_FIRE_CHANGING_DIRECTION_INC_PROB * game_round, self.consts.STAGE_4_FIRE_CHANGING_DIRECTION_DEFAULT_PROB + self.consts.STAGE_4_FIRE_CHANGING_DIRECTION_INC_PROB * game_round, self.consts.STAGE_3_FIRE_CHANGING_DIRECTION_DEFAULT_PROB + self.consts.STAGE_3_FIRE_CHANGING_DIRECTION_INC_PROB * game_round, self.consts.STAGE_2_FIRE_CHANGING_DIRECTION_DEFAULT_PROB + self.consts.STAGE_2_FIRE_CHANGING_DIRECTION_INC_PROB * game_round]),
+                    operand=None
+                )
+
+                return barrels_change_direction_prob, fires_change_direction_prob
+
+            game_round = jax.lax.cond(
+                state.level == 2,
+                lambda _: state.game_round + 1,
+                lambda _: state.game_round,
+                operand=None
+            )
+            barrels_change_direction_prob, fires_change_direction_prob = update_enemy_probability(game_round)
+            fires = new_state.fires._replace(change_direction_prob = fires_change_direction_prob)
             new_state_clear_level = new_state._replace(
                 level=level,
                 ladders=ladder,
@@ -1661,7 +1722,10 @@ class JaxDonkeyKong(JaxEnvironment[DonkeyKongState, DonkeyKongObservation, Donke
                 hammer_x = hammer_x,
                 hammer_y = hammer_y,
                 game_score = game_score,
+                game_round = game_round,
                 mario_life_counter = state.mario_life_counter,
+                barrels_change_direction_prob=barrels_change_direction_prob,
+                fires = fires,
             )            
 
             game_freeze_over = self.consts.GAME_FREEZE_DURATION < (state.step_counter - state.game_freeze_start)
@@ -1677,7 +1741,7 @@ class JaxDonkeyKong(JaxEnvironment[DonkeyKongState, DonkeyKongObservation, Donke
                 ),
                 operand=None
             )    
-        new_state, game_can_be_resetted = reset_round_after_success_or_collision(new_state)       
+        new_state, game_can_be_resetted = reset_round_after_success_or_collision(new_state)    
 
         return jax.lax.cond(
             jnp.logical_and(state.mario_got_hit, game_can_be_resetted == False),
@@ -1917,6 +1981,7 @@ class JaxDonkeyKong(JaxEnvironment[DonkeyKongState, DonkeyKongObservation, Donke
             mario_climbing_delay = False,
 
             game_score = 0,
+            game_round = 1,
 
             mario_x=self.consts.LEVEL_1_MARIO_START_X,
             mario_y=self.consts.LEVEL_1_MARIO_START_Y,
@@ -1946,13 +2011,15 @@ class JaxDonkeyKong(JaxEnvironment[DonkeyKongState, DonkeyKongObservation, Donke
                 stage = jnp.array([6, 6, 6, 6]).astype(jnp.int32),
                 reached_the_end=jnp.array([True, True, True, True]).astype(bool)
             ),
+            barrels_change_direction_prob = self.consts.BASE_PROBABILITY_BARREL_ROLLING_A_LADDER_DOWN_ROUND_1,
 
             fires = FirePosition(
                 fire_x = jnp.array([-1., -1., -1., -1.]).astype(jnp.float32),
                 fire_y = jnp.array([-1., -1., -1., -1.]).astype(jnp.float32),
                 moving_direction = jnp.array([self.consts.MOVING_RIGHT, self.consts.MOVING_LEFT, self.consts.MOVING_RIGHT, self.consts.MOVING_LEFT]).astype(jnp.int32),
                 stage = jnp.array([5, 4, 3, 2]).astype(jnp.int32),
-                destroyed=jnp.array([True, True, True, True]).astype(bool)
+                destroyed=jnp.array([True, True, True, True]).astype(bool),
+                change_direction_prob=jnp.array([self.consts.STAGE_5_FIRE_CHANGING_DIRECTION_DEFAULT_PROB, self.consts.STAGE_4_FIRE_CHANGING_DIRECTION_DEFAULT_PROB, self.consts.STAGE_3_FIRE_CHANGING_DIRECTION_DEFAULT_PROB, self.consts.STAGE_2_FIRE_CHANGING_DIRECTION_DEFAULT_PROB])
             ),
 
             traps = TrapPosition(
@@ -2036,7 +2103,8 @@ class JaxDonkeyKong(JaxEnvironment[DonkeyKongState, DonkeyKongObservation, Donke
                     fire_y = jnp.array([self.consts.FIRE_START_Y, self.consts.FIRE_START_Y, self.consts.FIRE_START_Y, self.consts.FIRE_START_Y]).astype(jnp.float32),
                     moving_direction = jnp.array([self.consts.MOVING_RIGHT, self.consts.MOVING_LEFT, self.consts.MOVING_RIGHT, self.consts.MOVING_LEFT]).astype(jnp.int32),
                     stage = jnp.array([5, 4, 3, 2]).astype(jnp.int32),
-                    destroyed=jnp.array([False, True, True, True]).astype(bool)
+                    destroyed=jnp.array([False, True, True, True]).astype(bool),
+                    change_direction_prob = state.fires.change_direction_prob,
                 )
             )
             return jax.lax.cond(
