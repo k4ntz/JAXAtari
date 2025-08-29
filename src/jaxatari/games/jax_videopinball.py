@@ -109,9 +109,8 @@ HEIGHT = 210
 # Physics constants
 # TODO: check if these are correct
 GRAVITY = 0.03  # 0.12
-CENTER_PULL = 0.005
 VELOCITY_DAMPENING_VALUE = 0.1  # 24
-VELOCITY_ACCELERATION_VALUE = 1.1
+VELOCITY_ACCELERATION_VALUE = 1.2
 BALL_MAX_SPEED = 3
 NUDGE_EFFECT_INTERVAL = 1  # Num steps in between nudge changing 
 NUDGE_EFFECT_AMOUNT = jnp.array(0.01).astype(jnp.float32)  # Amount of nudge effect applied to the ball's velocity
@@ -2257,7 +2256,7 @@ def _get_spinner_velocity_modifier(
 
     hit_corner = jnp.logical_and(hit_point[HitPointSelector.HORIZONTAL], hit_point[HitPointSelector.VERTICAL])
     velocity_factor = jnp.where(jnp.logical_and(modifier_is_spinner, hit_corner), VELOCITY_ACCELERATION_VALUE, velocity_factor)
-    velocity_factor = jnp.where(jnp.logical_and(modifier_is_spinner, jnp.logical_not(hit_corner)), 1 / VELOCITY_ACCELERATION_VALUE, velocity_factor)
+    velocity_factor = jnp.where(jnp.logical_and(modifier_is_spinner, jnp.logical_not(hit_corner)), 1 - VELOCITY_DAMPENING_VALUE, velocity_factor)
     return velocity_factor
 
 @jax.jit
@@ -2313,7 +2312,7 @@ def _get_flipper_velocity_modifier(
     decelerate = jnp.logical_or(left_flipper_deceleration_active, right_flipper_deceleration_active)
 
     velocity_factor = jnp.where(accelerate, VELOCITY_ACCELERATION_VALUE, velocity_factor)
-    velocity_factor = jnp.where(decelerate, 1 / VELOCITY_ACCELERATION_VALUE, velocity_factor)
+    velocity_factor = jnp.where(decelerate, 1 - VELOCITY_DAMPENING_VALUE, velocity_factor)
     return velocity_factor
 
 
@@ -2345,7 +2344,7 @@ def _get_bumper_reflection_modifiers(
     final_velocity_x = jnp.where(is_bumper, (bumper_velocity_x + reflected_velocity_x) / 2, reflected_velocity_x)
     final_velocity_y = jnp.where(is_bumper, (bumper_velocity_y + reflected_velocity_y) / 2, reflected_velocity_y)
 
-    velocity_factor = jnp.where(is_bumper, 1.0, velocity_factor)
+    velocity_factor = jnp.where(is_bumper, VELOCITY_ACCELERATION_VALUE, velocity_factor)
     return velocity_factor, final_velocity_x, final_velocity_y
 
 
@@ -2377,9 +2376,6 @@ def _reflect_ball(
 
     # Calculate the dot product of the velocity and the surface normal
     velocity_normal_prod = velocity_x * surface_normal_x + velocity_y * surface_normal_y
-    velocity_normal_prod = (
-        velocity_normal_prod * (1 - VELOCITY_DAMPENING_VALUE)
-    )  # Dampen the velocity a bit (value taken from RAM values)
 
     reflected_velocity_x = velocity_x - 2 * velocity_normal_prod * surface_normal_x
     reflected_velocity_y = velocity_y - 2 * velocity_normal_prod * surface_normal_y
@@ -2704,7 +2700,7 @@ def _calc_ball_collision_loop(state: VideoPinballState, ball_movement: BallMovem
     def _body_fun(
         args: tuple[VideoPinballState, chex.Array, chex.Array, chex.Array, chex.Array, chex.Array, chex.Array],
     ):
-        old_ball_x, old_ball_y, new_ball_x, new_ball_y, velocity_factor, scoring_list, compute_flag = (
+        old_ball_x, old_ball_y, new_ball_x, new_ball_y, velocity_factor, scoring_list, any_collision, iteration_counter, compute_flag = (
             args
         )
 
@@ -2734,7 +2730,10 @@ def _calc_ball_collision_loop(state: VideoPinballState, ball_movement: BallMovem
         )
         # If there was no collision, set compute_flag to False
         compute_flag = jnp.logical_and(compute_flag, collision)
-        
+        # If there was any collision, set any_collision to True
+        any_collision = jnp.logical_or(any_collision, collision)
+
+        iteration_counter = iteration_counter + 1
         return (
             old_ball_x,
             old_ball_y,
@@ -2742,6 +2741,8 @@ def _calc_ball_collision_loop(state: VideoPinballState, ball_movement: BallMovem
             new_ball_y,
             velocity_factor,
             scoring_list,
+            any_collision,
+            iteration_counter,
             compute_flag,
         )
 
@@ -2749,22 +2750,27 @@ def _calc_ball_collision_loop(state: VideoPinballState, ball_movement: BallMovem
     def _cond_fun(
         args: tuple[VideoPinballState, chex.Array, chex.Array, chex.Array, chex.Array, chex.Array, chex.Array],
     ):
-        old_ball_x, old_ball_y, new_ball_x, new_ball_y, velocity_factor, scoring_list, compute_flag = (
+        old_ball_x, old_ball_y, new_ball_x, new_ball_y, velocity_factor, scoring_list, any_collision, iteration_counter, compute_flag = (
             args
         )
         # jax.debug.print("Old ball x: {}, y: {}, New ball x: {}, y: {}.  Compute: {}", old_ball_x, old_ball_y, new_ball_x, new_ball_y, compute_flag)
-        return jnp.any(compute_flag)
+        return jnp.logical_or(jnp.any(compute_flag), jnp.any(iteration_counter >= 10))
 
     # Create initial arrays
     scoring_list = jnp.stack([jnp.zeros_like(ball_movement.old_ball_x, dtype=jnp.bool) for i in range(12)])
     compute_flag = jnp.ones_like(ball_movement.new_ball_x, dtype=jnp.bool)
     velocity_factor = jnp.ones_like(ball_movement.new_ball_x)
+    any_collision = jnp.zeros_like(compute_flag, dtype=jnp.bool)
+    iteration_counter = jnp.zeros_like(compute_flag, dtype=jnp.int32)
 
-    old_ball_x, old_ball_y, new_ball_x, new_ball_y, velocity_factor, scoring_list, _ = (
+    old_ball_x, old_ball_y, new_ball_x, new_ball_y, velocity_factor, scoring_list, any_collision, _, _ = (
         jax.lax.while_loop(
             # while there are new BallMovements along whose trajectory there might be collisions (compute_flag set to True),
             # compute whether there are collisions and if so, calculate a new BallMovement and keep
             # corresponding compute_flag set to True, else set it to False to keep the BallMovement
+
+            # After 10 iterations (see _cond_fun) this loop will terminate to prevent locking the game.
+            # In such a case, the ball will likely pass through the object that it would hit next in the loop
             _cond_fun,
             _body_fun,
             (
@@ -2774,10 +2780,15 @@ def _calc_ball_collision_loop(state: VideoPinballState, ball_movement: BallMovem
                 ball_movement.new_ball_y,
                 velocity_factor,
                 scoring_list,
+                any_collision,
+                iteration_counter,
                 compute_flag,
             ),
         )
     )
+
+    # Set velocity_factor to a dampening value if there was a collision, but not a special one, where velocity_factor is already modified:
+    velocity_factor = jnp.where(jnp.logical_and(any_collision, velocity_factor == 1.0), 1 - VELOCITY_DAMPENING_VALUE, velocity_factor)
 
     return (
         BallMovement(
@@ -2788,6 +2799,7 @@ def _calc_ball_collision_loop(state: VideoPinballState, ball_movement: BallMovem
         ),
         scoring_list,
         velocity_factor,
+        any_collision,
     )
 
 # produce updated values (inline-style, returns new values so you can reassign)
@@ -2902,23 +2914,23 @@ def _apply_gravity(
     ball_vel_y = jnp.abs(ball_vel_y)
     
     # Center pull calculation
-    ball_goes_left = jnp.logical_or(ball_direction == 0, ball_direction == 1)
-    ball_is_left = ball_x < (WIDTH / 2)
-    center_pull_delta = jnp.where(
-        jnp.logical_or(  # if ball is on one side and goes further in that direction, decrease velocity, else increase
-            jnp.logical_and(ball_is_left, ball_goes_left),
-            jnp.logical_and(jnp.logical_not(ball_is_left), jnp.logical_not(ball_goes_left))
-        ),
-        -CENTER_PULL,
-        CENTER_PULL
-    )
-    ball_vel_x = ball_vel_x + center_pull_delta
-    ball_direction = jnp.where(
-        ball_vel_x < 0,
-        (ball_direction + 2) % 4,  # if ball direction changes in x-direction
-        ball_direction,
-    )
-    ball_vel_x = jnp.abs(ball_vel_x)
+    # ball_goes_left = jnp.logical_or(ball_direction == 0, ball_direction == 1)
+    # ball_is_left = ball_x < (WIDTH / 2)
+    # center_pull_delta = jnp.where(
+    #     jnp.logical_or(  # if ball is on one side and goes further in that direction, decrease velocity, else increase
+    #         jnp.logical_and(ball_is_left, ball_goes_left),
+    #         jnp.logical_and(jnp.logical_not(ball_is_left), jnp.logical_not(ball_goes_left))
+    #     ),
+    #     -CENTER_PULL,
+    #     CENTER_PULL
+    # )
+    # ball_vel_x = ball_vel_x + center_pull_delta
+    # ball_direction = jnp.where(
+    #     ball_vel_x < 0,
+    #     (ball_direction + 2) % 4,  # if ball direction changes in x-direction
+    #     ball_direction,
+    # )
+    # ball_vel_x = jnp.abs(ball_vel_x)
 
     # If ball is at starting position (x), ignore gravity calculations
     ball_vel_x = jnp.where(ball_x == BALL_START_X, initial_ball_vel_x, ball_vel_x)
@@ -2964,9 +2976,9 @@ def ball_step(
     """
     Nudge effect calculation and tilt counter update
     """
-    tilt_mode, tilt_counter, ball_vel_x, ball_direction = _update_tilt(state, action, ball_vel_x)
-    #tilt_mode = jnp.array(False)
-    #tilt_counter = jnp.array(0)
+    #tilt_mode, tilt_counter, ball_vel_x, ball_direction = _update_tilt(state, action, ball_vel_x)
+    tilt_mode = jnp.array(False)
+    tilt_counter = jnp.array(0)
     """
     Ball movement calculation observing its direction 
     """
@@ -3045,7 +3057,7 @@ def ball_step(
         new_ball_y=ball_y,  # type: ignore
     )
 
-    collision_ball_movement, scoring_list, velocity_factor = _calc_ball_collision_loop(state, ball_movement, action)
+    collision_ball_movement, scoring_list, velocity_factor, any_collision = _calc_ball_collision_loop(state, ball_movement, action)
 
     ball_trajectory_x = collision_ball_movement.new_ball_x - collision_ball_movement.old_ball_x
     ball_trajectory_y = collision_ball_movement.new_ball_y - collision_ball_movement.old_ball_y
@@ -3064,10 +3076,9 @@ def ball_step(
     ball_vel_y = jnp.clip(jnp.abs(signed_ball_vel_y * velocity_factor), 0, BALL_MAX_SPEED)
 
     # If ball velocity reaches a small threshold, accelerate it after hitting something
-    small_vel = jnp.logical_and(ball_vel_x < 1e-1, ball_vel_y < 1e-1)
-    ball_deflected = jnp.logical_or(ball_x != ball_movement.new_ball_x, ball_y != ball_movement.new_ball_y)
-    ball_vel_x = jnp.where(jnp.logical_and(ball_deflected, small_vel), jnp.clip(ball_vel_x * 10, 0, BALL_MAX_SPEED), ball_vel_x)
-    ball_vel_y = jnp.where(jnp.logical_and(ball_deflected, small_vel), jnp.clip(ball_vel_y * 10, 0, BALL_MAX_SPEED), ball_vel_y)
+    small_vel = jnp.logical_and(ball_vel_x < 5e-1, ball_vel_y < 5e-1)
+    ball_vel_x = jnp.where(jnp.logical_and(any_collision, small_vel), jnp.clip(ball_vel_x * 10, 0, BALL_MAX_SPEED), ball_vel_x)
+    ball_vel_y = jnp.where(jnp.logical_and(any_collision, small_vel), jnp.clip(ball_vel_y * 10, 0, BALL_MAX_SPEED), ball_vel_y)
 
     return (
         ball_x,
