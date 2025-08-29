@@ -4376,7 +4376,7 @@ class VideoPinballRenderer(JAXGameRenderer):
             color > 0, lambda r: handle_color_cycling(r, color), lambda r: r, raster
         )
 
-        raster = render_scene_object_boundaries(raster)
+        # raster = render_scene_object_boundaries(raster)
 
         return raster
 
