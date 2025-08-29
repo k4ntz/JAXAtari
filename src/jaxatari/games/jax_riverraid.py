@@ -1205,9 +1205,11 @@ def load_sprites():
 
     score_sprites = []
     for i in range(10):
-        sprite_path = os.path.join(MODULE_DIR, f"sprites/riverraid/score_{i}.npy")
+        #sprite_path = os.path.join(MODULE_DIR, f"sprites/riverraid/score_{i}.npy") #TODO use correct sprites
+        sprite_path = os.path.join(MODULE_DIR, f"sprites/riverraid/temporary_score_sprites/score_{i}.npy")
         score_sprite = aj.loadFrame(sprite_path, transpose=False)
         score_sprites.append(score_sprite)
+        #print(f"Score Sprite {i} Dimension: {score_sprites[i].shape}")
 
     SPRITE_PLAYER = jnp.expand_dims(player_center, axis = 0)
     SPRITE_PLAYER_LEFT = jnp.expand_dims(player_left, axis=0)
@@ -1218,18 +1220,7 @@ def load_sprites():
     ENEMY_AIRPLANE = jnp.expand_dims(enemy_airplane, axis=0)
     FUEL_DISPLAY = jnp.expand_dims(fuel_display, axis=0)
     FUEL_INDICATOR = jnp.expand_dims(fuel_indicator, axis=0)
-    SCORE_0 = jnp.expand_dims(score_sprites[0], axis=0)
-    SCORE_1 = jnp.expand_dims(score_sprites[1], axis=0)
-    SCORE_2 = jnp.expand_dims(score_sprites[2], axis=0)
-    SCORE_3 = jnp.expand_dims(score_sprites[3], axis=0)
-    SCORE_4 = jnp.expand_dims(score_sprites[4], axis=0)
-    SCORE_5 = jnp.expand_dims(score_sprites[5], axis=0)
-    SCORE_6 = jnp.expand_dims(score_sprites[6], axis=0)
-    SCORE_7 = jnp.expand_dims(score_sprites[7], axis=0)
-    SCORE_8 = jnp.expand_dims(score_sprites[8], axis=0)
-    SCORE_9 = jnp.expand_dims(score_sprites[9], axis=0)
-    #SPRITE_DIGIT = jnp.stack([SCORE_0, SCORE_1, SCORE_2, SCORE_3, SCORE_4, SCORE_5, SCORE_6, SCORE_7, SCORE_8, SCORE_9])
-    SPRITE_DIGIT = SCORE_0
+    SPRITE_DIGIT = jnp.stack(score_sprites)
 
     return(
         SPRITE_PLAYER,
@@ -1358,29 +1349,26 @@ class RiverraidRenderer(JAXGameRenderer):
         indicator_x = fuel_display_x + fuel_fill + 3
         raster = aj.render_at(raster, indicator_x, fuel_display_y + 4, fuel_indicator_frame)
 
+        num_digits = jnp.maximum(1, jnp.ceil(jnp.log10(state.player_score + 1)).astype(jnp.int32))
 
-        def get_digit(i, score):
-            digit = (score // jnp.power(10, i)) % 10
+        def get_digit(digit_place, score):
+            digit = (score // jnp.power(10, digit_place)) % 10
             return digit.astype(jnp.int32)
 
         def score_loop_body(i, r_acc):
-            draw_digit = False
+            # i is the position from the left (0 = leftmost digit, 1 = next, etc.).
+            digit_place = num_digits - 1 - i
+            digit_to_draw = get_digit(digit_place, state.player_score)
 
-            def draw(r0):
-                x0 = jnp.int32(
-                    SCREEN_WIDTH - 100 - (i + 1) * 10
-                )
-                y0 = jnp.int32(
-                    5
-                )
-                #return aj.render_at(r0, x0, y0, aj.get_sprite_frame(self.SPRITE_DIGIT, get_digit(i, state.player_score))) # TODO use this after sprites are fixed
-                return aj.render_at(r0, x0, y0, aj.get_sprite_frame(self.SPRITE_DIGIT, 0))
+            x0 = jnp.int32(fuel_display_x + (i * 12) + 5)
+            y0 = jnp.int32(fuel_display_y - 10)
 
-            return lax.cond(i < jnp.maximum(1, jnp.ceil(jnp.log10(state.player_score + 1)).astype(jnp.int32)), draw, lambda r0: r0, r_acc)
+            sprite_frame = aj.get_sprite_frame(self.SPRITE_DIGIT, digit_to_draw)
+            return aj.render_at(r_acc, x0, y0, sprite_frame)
 
-        raster = lax.fori_loop(0, 10, score_loop_body, raster) # TODO make better with above condition
-
+        raster = lax.fori_loop(0, num_digits, score_loop_body, raster)
         return raster
+
 
 
 if __name__ == "__main__":
