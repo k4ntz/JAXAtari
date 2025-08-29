@@ -1334,8 +1334,8 @@ SPECIAL_LIT_UP_TARGET_LARGE_HORIZONTAL_SCENE_OBJECT = SceneObject(
 
 LEFT_ROLLOVER_SCENE_OBJECT = SceneObject(
     hit_box_height=jnp.array(12),  # type: ignore
-    hit_box_width=jnp.array(8),  # type: ignore
-    hit_box_x_offset=jnp.array(44),  # type: ignore
+    hit_box_width=jnp.array(10),  # type: ignore
+    hit_box_x_offset=jnp.array(43),  # type: ignore
     hit_box_y_offset=jnp.array(58),  # type: ignore
     reflecting=jnp.array(0),  # type: ignore
     score_type=jnp.array(3),  # type: ignore
@@ -1344,8 +1344,8 @@ LEFT_ROLLOVER_SCENE_OBJECT = SceneObject(
 
 ATARI_ROLLOVER_SCENE_OBJECT = SceneObject(
     hit_box_height=jnp.array(12),  # type: ignore
-    hit_box_width=jnp.array(8),  # type: ignore
-    hit_box_x_offset=jnp.array(108),  # type: ignore
+    hit_box_width=jnp.array(10),  # type: ignore
+    hit_box_x_offset=jnp.array(107),  # type: ignore
     hit_box_y_offset=jnp.array(58),  # type: ignore
     reflecting=jnp.array(0),  # type: ignore
     score_type=jnp.array(4),  # type: ignore
@@ -2010,6 +2010,7 @@ class VideoPinballState(NamedTuple):
     special_target_cooldown: chex.Array
     atari_symbols: chex.Array
     rollover_counter: chex.Array
+    rollover_enabled: chex.Array
     step_counter: chex.Array
     ball_in_play: chex.Array
     respawn_timer: chex.Array
@@ -3187,12 +3188,13 @@ def process_objects_hit(state: VideoPinballState, objects_hit):
     # [0: no score, 1: Bumper, 2: Spinner, 3: Left Rollover, 4: Atari Rollover,
     # 5: Special Lit Up Target, 6: Left Lit Up Target, 7: Middle Lit Up Target, 8: Right Lit Up Target]
 
-    # Bumper points
     score = state.score
     active_targets = state.active_targets
     atari_symbols = state.atari_symbols
     rollover_counter = state.rollover_counter
+    rollover_enabled = state.rollover_enabled
 
+    # Bumper points
     score += jnp.where(
         objects_hit[1],
         100 * state.bumper_multiplier,
@@ -3242,7 +3244,7 @@ def process_objects_hit(state: VideoPinballState, objects_hit):
     # Give score for hitting the rollover and increase its number
     score += jnp.where(objects_hit[3], 100, 0)
     rollover_counter = jax.lax.cond(
-        objects_hit[3],
+        jnp.logical_and(objects_hit[3], rollover_enabled),
         lambda s: s + 1,
         lambda s: s,
         operand=rollover_counter,
@@ -3251,11 +3253,14 @@ def process_objects_hit(state: VideoPinballState, objects_hit):
     # Give score for hitting the Atari symbol and make a symbol appear at the bottom
     score += jnp.where(objects_hit[4], 100, 0)
     atari_symbols = jax.lax.cond(
-        jnp.logical_and(objects_hit[4], atari_symbols < 4),
+        jnp.logical_and(jnp.logical_and(objects_hit[4], atari_symbols < 4), rollover_enabled),
         lambda s: s + 1,
         lambda s: s,
         operand=atari_symbols,
     )
+
+    # Prevents hitting Atari symbol and rollover multiple times
+    rollover_enabled = jnp.logical_not(jnp.logical_or(objects_hit[3], objects_hit[4]))
 
     # Do color cycling when the fourth Atari symbol has been hit
     color_cycling = jnp.where(
@@ -3267,7 +3272,7 @@ def process_objects_hit(state: VideoPinballState, objects_hit):
     # Give 1 point for hitting a spinner
     score += jnp.where(objects_hit[2], 1, 0)
 
-    return score, active_targets, atari_symbols, rollover_counter, color_cycling
+    return score, active_targets, atari_symbols, rollover_counter, rollover_enabled, color_cycling
 
 
 @jax.jit
@@ -3498,6 +3503,7 @@ class JaxVideoPinball(
             special_target_cooldown=jnp.array(-120).astype(jnp.int32),
             atari_symbols=jnp.array(0).astype(jnp.int32),
             rollover_counter=jnp.array(1).astype(jnp.int32),
+            rollover_enabled=jnp.array(False).astype(jnp.bool_),
             step_counter=jnp.array(0).astype(jnp.int32),
             ball_in_play=jnp.array(False).astype(jnp.bool_),
             respawn_timer=jnp.array(0).astype(jnp.int32),
@@ -3568,7 +3574,7 @@ class JaxVideoPinball(
         )
 
         # Step 4: Update scores and handle special objects
-        score, active_targets, atari_symbols, rollover_counter, color_cycling = process_objects_hit(
+        score, active_targets, atari_symbols, rollover_counter, rollover_enabled, color_cycling = process_objects_hit(
             state,
             scoring_list,
         )
@@ -3666,6 +3672,7 @@ class JaxVideoPinball(
             special_target_cooldown=special_target_cooldown,
             atari_symbols=atari_symbols,
             rollover_counter=rollover_counter,
+            rollover_enabled=rollover_enabled,
             step_counter=jnp.array(state.step_counter + 1).astype(jnp.int32),
             ball_in_play=ball_in_play,
             respawn_timer=respawn_timer,
