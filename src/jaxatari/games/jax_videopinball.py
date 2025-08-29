@@ -137,8 +137,8 @@ FLIPPER_LEFT_POS = (30, 180)
 FLIPPER_RIGHT_POS = (110, 180)
 PLUNGER_POS = (150, 120)
 PLUNGER_MAX_HEIGHT = 20  # Taken from RAM values (67-87)
-INVISIBLE_BLOCK_REFLECTION_FACTOR = (
-    2  # 8 times the plunger power is added to ball_vel_x
+INVISIBLE_BLOCK_MEAN_REFLECTION_FACTOR = (
+    1  # 8 times the plunger power is added to ball_vel_x
 )
 
 
@@ -2440,26 +2440,7 @@ def _check_obstacle_hits(
             lambda scene_object: _calc_hit_point(ball_movement, scene_object)
         )(NON_REFLECTING_SCENE_OBJECTS)
     )
-    """
-    TODO FOR MAX:
-
-    IDEA:
-        We do not want to consider objects to be hit if they are not at the right position/in the right state/etc.
-        I.e. if the flipper currently has the smallest angle, all the scene objects for the other angles should be ignored.
-        The same goes for spinners, lit up special target, the lit up targets (diamonds).
-        
-    HOW WE DO IT:
-        Manually set the entry time for all the components of these objects to T_ENTRY_NO_COLLISION.
-        This will then ignore them for reflections and point scoring.
-
-
-    Note by Jonas:
-    NEW IDEA:
-        identify the scene_objects via scoring_type and variant;
-        set t_entry time to T_ENTRY_NO_COLLISIONS as in the original idea
-        This way we dont have to rely on knowing the exact scene_object indices
-    """
-
+    
     # DISABLE NON-REFLECTING SCENCE OBJECTS THAT ARE NOT IN THE CURRENT GAME STATE
     ###############################################################################################
     # Scoring types:
@@ -2842,22 +2823,14 @@ def _update_tilt(state: VideoPinballState, action: Action, ball_vel_x: chex.Arra
                 ball_vel_x
             )
             
-            # If the velocity goes negative, change ball direction and revert to positive (new direction)
-            ball_direction = jax.lax.cond(
-                jnp.greater_equal(ball_vel_x_new, 0),
-                lambda bd: bd,
-                lambda bd: bd + 2,
-                state.ball_direction
-            )
-            
             ball_vel_x_new = jax.lax.cond(
                 jnp.greater_equal(ball_vel_x_new, 0),
                 lambda bv: bv,
                 lambda bv: -bv,
                 ball_vel_x_new
             )
-
-            return tilt_mode_from_counter, tilt_counter_capped, ball_vel_x_new, ball_direction
+            
+            return tilt_mode_from_counter, tilt_counter_capped, ball_vel_x_new
 
         def _no_nudge_branch(state: VideoPinballState, action:Action, ball_vel_x: chex.Array):
             dec_cond = jnp.equal(jnp.mod(state.step_counter, TILT_COUNT_DECREASE_INTERVAL), 0)
@@ -2874,7 +2847,7 @@ def _update_tilt(state: VideoPinballState, action: Action, ball_vel_x: chex.Arra
                 state.tilt_counter
             )
             tilt_counter_nonneg = jnp.maximum(tilt_counter_dec, 0)
-            return jnp.array(False), tilt_counter_nonneg, ball_vel_x, state.ball_direction
+            return jnp.array(False), tilt_counter_nonneg, ball_vel_x
 
         is_nudging = jnp.logical_or(action == Action.LEFTFIRE, action == Action.RIGHTFIRE)
         return jax.lax.cond(is_nudging, _nudge_branch, _no_nudge_branch, state, action, ball_vel_x)
@@ -2883,7 +2856,7 @@ def _update_tilt(state: VideoPinballState, action: Action, ball_vel_x: chex.Arra
     # if already in tilt_mode: keep values unchanged
     return jax.lax.cond(
         state.tilt_mode_active,
-        lambda state, action, ball_vel_x: (state.tilt_mode_active, state.tilt_counter, ball_vel_x, state.ball_direction),
+        lambda state, action, ball_vel_x: (state.tilt_mode_active, state.tilt_counter, ball_vel_x),
         _not_tilt_branch,
         state,
         action,
@@ -2976,9 +2949,7 @@ def ball_step(
     """
     Nudge effect calculation and tilt counter update
     """
-    #tilt_mode, tilt_counter, ball_vel_x, ball_direction = _update_tilt(state, action, ball_vel_x)
-    tilt_mode = jnp.array(False)
-    tilt_counter = jnp.array(0)
+    tilt_mode, tilt_counter, ball_vel_x = _update_tilt(state, action, ball_vel_x)
     """
     Ball movement calculation observing its direction 
     """
@@ -3015,9 +2986,16 @@ def ball_step(
         jnp.logical_not(ball_in_play),
         invisible_block_hit_data[0] != T_ENTRY_NO_COLLISION,
     )
+
+    invisible_block_velocity_modifier = jnp.where(
+        is_invisible_block_hit,
+        INVISIBLE_BLOCK_MEAN_REFLECTION_FACTOR + jnp.remainder(state.step_counter, 64) - 32,
+        1.0
+    )
+
     ball_vel_x = jnp.where(
         is_invisible_block_hit,
-        ball_vel_y,
+        ball_vel_y * invisible_block_velocity_modifier,
         ball_vel_x,
     )
     ball_vel_y = jnp.where(is_invisible_block_hit, ball_vel_y / 5, ball_vel_y)
@@ -3100,7 +3078,7 @@ def _reset_ball(state: VideoPinballState):
     respawn the ball on the launcher.
     """
 
-    return BALL_START_X, BALL_START_Y, jnp.array(0.0), jnp.array(0.0)
+    return BALL_START_X, BALL_START_Y, jnp.array(0.0), jnp.array(0.0), jnp.array(False)
 
 
 @jax.jit
@@ -3561,7 +3539,6 @@ class JaxVideoPinball(
 
         # Step 3: Check if ball is in the gutter or in plunger hole
         ball_in_gutter = ball_y > 192
-        # TODO if ball is back in plunger hole reset, not instantly
         ball_reset = jnp.logical_or(
             ball_in_gutter,
             jnp.logical_and(ball_x > 148, ball_y > 129),
@@ -3587,9 +3564,10 @@ class JaxVideoPinball(
             ball_y,
             ball_vel_x,
             ball_vel_y,
+            tilt_mode_active,
         )
 
-        ball_x_final, ball_y_final, ball_vel_x_final, ball_vel_y_final = jax.lax.cond(
+        ball_x_final, ball_y_final, ball_vel_x_final, ball_vel_y_final, tilt_mode_active = jax.lax.cond(
             ball_reset,
             lambda x: _reset_ball(state),
             lambda x: x,
