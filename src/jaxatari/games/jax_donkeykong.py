@@ -1603,7 +1603,7 @@ class JaxDonkeyKong(JaxEnvironment[DonkeyKongState, DonkeyKongObservation, Donke
                     stage = jnp.array([6, 6, 6, 6]).astype(jnp.int32),
                     reached_the_end=jnp.array([True, True, True, True]).astype(bool)
                 ),
-                barrels_change_direction_prob = self.consts.BASE_PROBABILITY_BARREL_ROLLING_A_LADDER_DOWN_ROUND_1,
+                barrels_change_direction_prob = state.barrels_change_direction_prob,
 
                 fires = FirePosition(
                     fire_x = jnp.array([-1., -1., -1., -1.]).astype(jnp.float32),
@@ -1611,7 +1611,7 @@ class JaxDonkeyKong(JaxEnvironment[DonkeyKongState, DonkeyKongObservation, Donke
                     moving_direction = jnp.array([self.consts.MOVING_RIGHT, self.consts.MOVING_LEFT, self.consts.MOVING_RIGHT, self.consts.MOVING_LEFT]).astype(jnp.int32),
                     stage = jnp.array([5, 4, 3, 2]).astype(jnp.int32),
                     destroyed=jnp.array([True, True, True, True]).astype(bool),
-                    change_direction_prob=jnp.array([self.consts.STAGE_5_FIRE_CHANGING_DIRECTION_DEFAULT_PROB, self.consts.STAGE_4_FIRE_CHANGING_DIRECTION_DEFAULT_PROB, self.consts.STAGE_3_FIRE_CHANGING_DIRECTION_DEFAULT_PROB, self.consts.STAGE_2_FIRE_CHANGING_DIRECTION_DEFAULT_PROB])
+                    change_direction_prob=state.fires.change_direction_prob,
                 ),
 
                 traps = TrapPosition(
