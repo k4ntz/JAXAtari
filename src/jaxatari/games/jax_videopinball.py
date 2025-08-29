@@ -2785,69 +2785,57 @@ def _calc_ball_collision_loop(state: VideoPinballState, ball_movement: BallMovem
 
 # produce updated values (inline-style, returns new values so you can reassign)
 def _update_tilt(state: VideoPinballState, action: Action, ball_x: chex.Array):
-    # branch executed when not currently in tilt mode
-    def _not_tilt_branch(state: VideoPinballState, action: Action, ball_x: chex.Array):
-        # branch when there *is* a nudge (nudge_direction != 0)
-        def _nudge_branch(state: VideoPinballState, action: Action, ball_x: chex.Array):
-            # increase tilt counter on interval
-            inc_cond = jnp.equal(jnp.mod(state.step_counter, TILT_COUNT_INCREASE_INTERVAL), 0)
+    # branch when there *is* a nudge (nudge_direction != 0)
+    def _nudge_branch(state: VideoPinballState, action: Action, ball_x: chex.Array):
+        # increase tilt counter on interval
+        inc_cond = jnp.equal(jnp.mod(state.step_counter, TILT_COUNT_INCREASE_INTERVAL), 0)
 
-            tilt_counter_inc = jax.lax.cond(
-                inc_cond,
-                lambda tc: jax.lax.cond(
-                    jnp.greater(tc, 0),
-                    lambda t: 2 * t,
-                    lambda t: jnp.array(1, dtype=t.dtype),
-                    tc),
-                lambda tc: tc,
-                state.tilt_counter
-            )
+        tilt_counter_inc = jax.lax.cond(
+            inc_cond,
+            lambda tc: jax.lax.cond(
+                jnp.greater(tc, 0),
+                lambda t: 2 * t,
+                lambda t: jnp.array(1, dtype=t.dtype),
+                tc),
+            lambda tc: tc,
+            state.tilt_counter
+        )
 
 
-            # detect / cap tilt mode activation
-            tilt_mode_from_counter = jnp.greater_equal(tilt_counter_inc, TILT_COUNT_TILT_MODE_ACTIVE)
-            tilt_counter_capped = jnp.minimum(tilt_counter_inc, TILT_COUNT_TILT_MODE_ACTIVE)
+        # detect / cap tilt mode activation
+        tilt_mode_from_counter = jnp.greater_equal(tilt_counter_inc, TILT_COUNT_TILT_MODE_ACTIVE)
+        tilt_counter_capped = jnp.minimum(tilt_counter_inc, TILT_COUNT_TILT_MODE_ACTIVE)
 
-            # adjust horizontal velocity depending on nudge direction
-            ball_x_new = jax.lax.cond(
-                jnp.logical_and(jnp.equal(action, Action.RIGHTFIRE), jnp.remainder(state.step_counter, NUDGE_EFFECT_INTERVAL) == 0),
-                lambda bv: bv + NUDGE_EFFECT_AMOUNT,
-                lambda bv: bv - NUDGE_EFFECT_AMOUNT,
-                ball_x
-            )
-            
-            return tilt_mode_from_counter, tilt_counter_capped, ball_x_new
+        # adjust horizontal velocity depending on nudge direction
+        ball_x_new = jax.lax.cond(
+            jnp.logical_and(jnp.equal(action, Action.RIGHTFIRE), jnp.remainder(state.step_counter, NUDGE_EFFECT_INTERVAL) == 0),
+            lambda bv: bv + NUDGE_EFFECT_AMOUNT,
+            lambda bv: bv - NUDGE_EFFECT_AMOUNT,
+            ball_x
+        )
+        
+        return tilt_mode_from_counter, tilt_counter_capped, ball_x_new
 
-        def _no_nudge_branch(state: VideoPinballState, action:Action, ball_x: chex.Array):
-            dec_cond = jnp.equal(jnp.mod(state.step_counter, TILT_COUNT_DECREASE_INTERVAL), 0)
+    def _no_nudge_branch(state: VideoPinballState, action:Action, ball_x: chex.Array):
+        dec_cond = jnp.equal(jnp.mod(state.step_counter, TILT_COUNT_DECREASE_INTERVAL), 0)
+        dec_cond = jnp.logical_and(dec_cond, jnp.logical_not(state.tilt_mode_active))
 
-            tilt_counter_dec = jax.lax.cond(
-                dec_cond,
-                lambda tc: jax.lax.cond(
-                    jnp.equal(tc, 1),
-                    lambda tc: jnp.array(0, dtype=tc.dtype),
-                    lambda tc: jnp.floor_divide(tc, 2),
-                    tc
-                ),
-                lambda tc: tc,
-                state.tilt_counter
-            )
-            tilt_counter_nonneg = jnp.maximum(tilt_counter_dec, 0)
-            return jnp.array(False), tilt_counter_nonneg, ball_x
+        tilt_counter_dec = jax.lax.cond(
+            dec_cond,
+            lambda tc: jax.lax.cond(
+                jnp.equal(tc, 1),
+                lambda tc: jnp.array(0, dtype=tc.dtype),
+                lambda tc: jnp.floor_divide(tc, 2),
+                tc
+            ),
+            lambda tc: tc,
+            state.tilt_counter
+        )
+        tilt_counter_nonneg = jnp.maximum(tilt_counter_dec, 0)
+        return state.tilt_mode_active, tilt_counter_nonneg, ball_x
 
-        is_nudging = jnp.logical_or(action == Action.LEFTFIRE, action == Action.RIGHTFIRE)
-        return jax.lax.cond(is_nudging, _nudge_branch, _no_nudge_branch, state, action, ball_x)
-
-
-    # if already in tilt_mode: keep values unchanged
-    return jax.lax.cond(
-        state.tilt_mode_active,
-        lambda state, action, ball_x: (state.tilt_mode_active, state.tilt_counter, ball_x),
-        _not_tilt_branch,
-        state,
-        action,
-        ball_x
-    )
+    is_nudging = jnp.logical_or(action == Action.LEFTFIRE, action == Action.RIGHTFIRE)
+    return jax.lax.cond(is_nudging, _nudge_branch, _no_nudge_branch, state, action, ball_x)
 
 @jax.jit
 def _apply_gravity(
@@ -3482,7 +3470,12 @@ class JaxVideoPinball(
         # chex provides jax with additional debug/testing functionality.
         # Probably best to use it instead of simply jnp.array
         
-        action = jax.lax.cond(state.tilt_mode_active,
+        # Check if action is LEFT_FIRE or RIGHT_FIRE
+        action_is_left_fire = action == Action.LEFTFIRE
+        action_is_right_fire = action == Action.RIGHTFIRE
+        action_is_fire = jnp.logical_or(action_is_left_fire, action_is_right_fire)
+
+        action = jax.lax.cond(jnp.logical_and(jnp.logical_not(action_is_fire), state.tilt_mode_active),
                               lambda a: Action.NOOP,
                               lambda a: a,
                               action
