@@ -433,15 +433,15 @@ BOUNDING_BOX_1_3  = jnp.ones((1, 3)).astype(jnp.bool)
 
 # Bounding boxes of the spinner if the joined (single larger) spinner part is on the top or bottom
 SPINNER_TOP_BOTTOM_LARGE_HEIGHT = jnp.array(2)
-SPINNER_TOP_BOTTOM_LARGE_WIDTH = jnp.array(3)
-SPINNER_TOP_BOTTOM_SMALL_HEIGHT = jnp.array(1)
-SPINNER_TOP_BOTTOM_SMALL_WIDTH = jnp.array(2)
+SPINNER_TOP_BOTTOM_LARGE_WIDTH = jnp.array(2)
+SPINNER_TOP_BOTTOM_SMALL_HEIGHT = jnp.array(2)
+SPINNER_TOP_BOTTOM_SMALL_WIDTH = jnp.array(1)
 
 # Bounding boxes of the spinner if the joined (single larger) spinner part is on the left or right
-SPINNER_LEFT_RIGHT_LARGE_HEIGHT = jnp.array(1)
-SPINNER_LEFT_RIGHT_LARGE_WIDTH = jnp.array(4)
-SPINNER_LEFT_RIGHT_SMALL_HEIGHT = jnp.array(1)
-SPINNER_LEFT_RIGHT_SMALL_WIDTH = jnp.array(2)
+SPINNER_LEFT_RIGHT_LARGE_HEIGHT = jnp.array(2)
+SPINNER_LEFT_RIGHT_LARGE_WIDTH = jnp.array(1)
+SPINNER_LEFT_RIGHT_SMALL_HEIGHT = jnp.array(2)
+SPINNER_LEFT_RIGHT_SMALL_WIDTH = jnp.array(1)
 
 
 FLIPPER_OFFSETS_STATE_0_LEFT = jnp.array(
@@ -4352,7 +4352,7 @@ class VideoPinballRenderer(JAXGameRenderer):
         frame_X = jr.get_sprite_frame(self.sprites["x"], 0)
         raster = jax.lax.cond(
             jnp.logical_and(state.atari_symbols == 4, state.respawn_timer == 0),
-            lambda r: jr.render_at(raster, 76, 157, frame_X),
+            lambda r: jr.render_at(raster, 76, 152, frame_X),
             lambda r: raster,
             operand=raster,
         )
@@ -4365,7 +4365,7 @@ class VideoPinballRenderer(JAXGameRenderer):
             color > 0, lambda r: handle_color_cycling(r, color), lambda r: r, raster
         )
 
-        # raster = render_scene_object_boundaries(raster)
+        raster = render_scene_object_boundaries(raster)
 
         return raster
 
