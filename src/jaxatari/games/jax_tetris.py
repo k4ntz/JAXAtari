@@ -141,8 +141,6 @@ class JaxTetris(JaxEnvironment[TetrisState, TetrisObservation, TetrisInfo, Tetri
         super().__init__(consts)
         self.renderer = TetrisRenderer(self.consts)
         self.instant_drop = instant_drop
-        if reward_funcs is not None:
-            reward_funcs = tuple(reward_funcs)
         self.reward_funcs = reward_funcs
 
     # ----- Helpers -----
