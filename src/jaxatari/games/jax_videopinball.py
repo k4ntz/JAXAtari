@@ -113,7 +113,7 @@ VELOCITY_DAMPENING_VALUE = 0.1  # 24
 VELOCITY_ACCELERATION_VALUE = 1.2
 BALL_MAX_SPEED = 3
 NUDGE_EFFECT_INTERVAL = 1  # Num steps in between nudge changing 
-NUDGE_EFFECT_AMOUNT = jnp.array(0.01).astype(jnp.float32)  # Amount of nudge effect applied to the ball's velocity
+NUDGE_EFFECT_AMOUNT = jnp.array(0.3).astype(jnp.float32)  # Amount of nudge effect applied to the ball's velocity
 TILT_COUNT_INCREASE_INTERVAL = jnp.array(4).astype(jnp.int32)  # Number of steps after which the tilt counter increases
 TILT_COUNT_DECREASE_INTERVAL = TILT_COUNT_INCREASE_INTERVAL
 TILT_COUNT_TILT_MODE_ACTIVE = jnp.array(512).astype(jnp.int32)
@@ -138,7 +138,7 @@ FLIPPER_RIGHT_POS = (110, 180)
 PLUNGER_POS = (150, 120)
 PLUNGER_MAX_HEIGHT = 20  # Taken from RAM values (67-87)
 INVISIBLE_BLOCK_MEAN_REFLECTION_FACTOR = (
-    1  # 8 times the plunger power is added to ball_vel_x
+    0.001  # 8 times the plunger power is added to ball_vel_x
 )
 
 
@@ -2784,11 +2784,11 @@ def _calc_ball_collision_loop(state: VideoPinballState, ball_movement: BallMovem
     )
 
 # produce updated values (inline-style, returns new values so you can reassign)
-def _update_tilt(state: VideoPinballState, action: Action, ball_vel_x: chex.Array):
+def _update_tilt(state: VideoPinballState, action: Action, ball_x: chex.Array):
     # branch executed when not currently in tilt mode
-    def _not_tilt_branch(state: VideoPinballState, action: Action, ball_vel_x: chex.Array):
+    def _not_tilt_branch(state: VideoPinballState, action: Action, ball_x: chex.Array):
         # branch when there *is* a nudge (nudge_direction != 0)
-        def _nudge_branch(state: VideoPinballState, action: Action, ball_vel_x: chex.Array):
+        def _nudge_branch(state: VideoPinballState, action: Action, ball_x: chex.Array):
             # increase tilt counter on interval
             inc_cond = jnp.equal(jnp.mod(state.step_counter, TILT_COUNT_INCREASE_INTERVAL), 0)
 
@@ -2808,31 +2808,17 @@ def _update_tilt(state: VideoPinballState, action: Action, ball_vel_x: chex.Arra
             tilt_mode_from_counter = jnp.greater_equal(tilt_counter_inc, TILT_COUNT_TILT_MODE_ACTIVE)
             tilt_counter_capped = jnp.minimum(tilt_counter_inc, TILT_COUNT_TILT_MODE_ACTIVE)
 
-            # determine nudge effect sign based on ball_direction
-            nudge_effect_amount = jnp.where(
-                jnp.logical_or(jnp.equal(state.ball_direction, 0), jnp.equal(state.ball_direction, 1)),
-                NUDGE_EFFECT_AMOUNT,
-                -NUDGE_EFFECT_AMOUNT
-            )
-
             # adjust horizontal velocity depending on nudge direction
-            ball_vel_x_new = jax.lax.cond(
-                jnp.equal(action, Action.RIGHTFIRE),
-                lambda bv: bv - nudge_effect_amount,
-                lambda bv: bv + nudge_effect_amount,
-                ball_vel_x
+            ball_x_new = jax.lax.cond(
+                jnp.logical_and(jnp.equal(action, Action.RIGHTFIRE), jnp.remainder(state.step_counter, NUDGE_EFFECT_INTERVAL) == 0),
+                lambda bv: bv + NUDGE_EFFECT_AMOUNT,
+                lambda bv: bv - NUDGE_EFFECT_AMOUNT,
+                ball_x
             )
             
-            ball_vel_x_new = jax.lax.cond(
-                jnp.greater_equal(ball_vel_x_new, 0),
-                lambda bv: bv,
-                lambda bv: -bv,
-                ball_vel_x_new
-            )
-            
-            return tilt_mode_from_counter, tilt_counter_capped, ball_vel_x_new
+            return tilt_mode_from_counter, tilt_counter_capped, ball_x_new
 
-        def _no_nudge_branch(state: VideoPinballState, action:Action, ball_vel_x: chex.Array):
+        def _no_nudge_branch(state: VideoPinballState, action:Action, ball_x: chex.Array):
             dec_cond = jnp.equal(jnp.mod(state.step_counter, TILT_COUNT_DECREASE_INTERVAL), 0)
 
             tilt_counter_dec = jax.lax.cond(
@@ -2847,20 +2833,20 @@ def _update_tilt(state: VideoPinballState, action: Action, ball_vel_x: chex.Arra
                 state.tilt_counter
             )
             tilt_counter_nonneg = jnp.maximum(tilt_counter_dec, 0)
-            return jnp.array(False), tilt_counter_nonneg, ball_vel_x
+            return jnp.array(False), tilt_counter_nonneg, ball_x
 
         is_nudging = jnp.logical_or(action == Action.LEFTFIRE, action == Action.RIGHTFIRE)
-        return jax.lax.cond(is_nudging, _nudge_branch, _no_nudge_branch, state, action, ball_vel_x)
+        return jax.lax.cond(is_nudging, _nudge_branch, _no_nudge_branch, state, action, ball_x)
 
 
     # if already in tilt_mode: keep values unchanged
     return jax.lax.cond(
         state.tilt_mode_active,
-        lambda state, action, ball_vel_x: (state.tilt_mode_active, state.tilt_counter, ball_vel_x),
+        lambda state, action, ball_x: (state.tilt_mode_active, state.tilt_counter, ball_x),
         _not_tilt_branch,
         state,
         action,
-        ball_vel_x
+        ball_x
     )
 
 @jax.jit
@@ -2949,13 +2935,13 @@ def ball_step(
     """
     Nudge effect calculation and tilt counter update
     """
-    tilt_mode, tilt_counter, ball_vel_x = _update_tilt(state, action, ball_vel_x)
+    tilt_mode, tilt_counter, ball_x = _update_tilt(state, action, ball_x)
     """
     Ball movement calculation observing its direction 
     """
     ball_x, ball_y, ball_vel_x, ball_vel_y, signed_ball_vel_x, signed_ball_vel_y = (
         _calc_ball_change(
-            state.ball_x, state.ball_y, ball_vel_x, ball_vel_y, ball_direction
+            ball_x, state.ball_y, ball_vel_x, ball_vel_y, ball_direction
         )
     )
 
@@ -2988,14 +2974,14 @@ def ball_step(
     )
 
     invisible_block_velocity_modifier = jnp.where(
-        is_invisible_block_hit,
-        INVISIBLE_BLOCK_MEAN_REFLECTION_FACTOR + jnp.remainder(state.step_counter, 64) - 32,
-        1.0
+        False,
+        INVISIBLE_BLOCK_MEAN_REFLECTION_FACTOR * jnp.remainder(state.step_counter, 64) - 32,
+        0.0
     )
 
     ball_vel_x = jnp.where(
         is_invisible_block_hit,
-        ball_vel_y * invisible_block_velocity_modifier,
+        ball_vel_y + invisible_block_velocity_modifier,
         ball_vel_x,
     )
     ball_vel_y = jnp.where(is_invisible_block_hit, ball_vel_y / 5, ball_vel_y)
