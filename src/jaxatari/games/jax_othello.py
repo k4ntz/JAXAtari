@@ -16,29 +16,41 @@ from jaxatari.environment import JaxEnvironment, JAXAtariAction as Action
 
 
 class OthelloConstants(NamedTuple):
+    # attribution of cases for the strategic tile score //starting at bottom right, then going left und and then up
+    STRATEGIC_TILE_SCORE_CASES:  chex.Array = jnp.array([
+    17, 16, 16, 16, 16, 16, 16, 15,
+    11, 14, 13, 13, 13, 13, 12, 6,
+    11, 10, 8, 9, 9, 8, 7, 6,
+    11, 10, 9, 9, 9, 9, 7, 6,
+    11, 10, 9, 9, 9, 9, 7, 6,
+    11, 10, 8, 9, 9, 8, 7, 6,
+    11, 5, 4, 4, 4, 4, 3, 6,
+    2, 1, 1, 1, 1, 1, 1, 0
+    ])
+
     # stores patterns used in the strategic tile score for stability of white lines
-    __F3BA = jnp.array([
+    F3BA = jnp.array([
         0x60, 0x40, 0x42, 0x40, 0x00, 0x00, 0x00, 0x46, 0x46, 0x44, 0x04, 0x08, 0x0c, 0x0a, 0x08,
         0x04, 0x10, 0x14, 0xbe, 0x9e, 0x02, 0x02, 0x02, 0x12, 0x48, 0x28, 0x10, 0x08, 0x18, 0x38,
         0x40, 0x00, 0x02, 0x02
     ], dtype=jnp.uint8)
 
     # stores patterns used in the strategic tile score for stability of black lines
-    __F3DC = jnp.array([
+    F3DC = jnp.array([
         0x14, 0x28, 0x28, 0x2c, 0x46, 0x44, 0x40, 0x20, 0x08, 0x20, 0x60, 0x40, 0x40, 0x40, 0x42,
         0x40, 0x40, 0x40, 0x40, 0x60, 0x20, 0x28, 0x2c, 0x24, 0x32, 0x12, 0x4c, 0xf2, 0xe2, 0xc2,
         0x02, 0xbe, 0x18, 0x48
     ], dtype=jnp.uint8)
 
     # stores strategic tile scores for certain patterns of black and white configurations (used when only one side of the line is considered)
-    __F3FE = jnp.array([
+    F3FE = jnp.array([
         0x30, 0x30, 0x30, 0x30, 0xc0, 0xc0, 0xc0, 0x30, 0x30, 0x30, 0xbb, 0xbb, 0xbb, 0xbb, 0xbb,
         0xbb, 0xbb, 0xbb, 0x60, 0x60, 0x40, 0x30, 0x30, 0x50, 0xe0, 0xbb, 0xbb, 0xd0, 0xd0, 0xd0,
         0xd0, 0xd8, 0xf0, 0xf0
     ], dtype=jnp.uint8)
 
     # stores strategic tile scores for certain patterns of of whole lines 
-    __F7EC = jnp.array([
+    F7EC = jnp.array([
         0x20, 0x20, 0x20, 0x20, 0x20, 0x10, 0x40, 0xe0, 0x20, 0x40, 0x15, 0xe0, 0x20, 0xe0, 0xe0,
         0x50, 0x00, 0xf0, 0xb0
     ], dtype=jnp.uint8) #TODO difference to np.int8
@@ -52,6 +64,28 @@ class OthelloConstants(NamedTuple):
     FLIP_DOWN_RIGHT_SIDE = 5
     FLIP_DOWN_LEFT_SIDE = 6
     FLIP_UP_LEFT_SIDE = 7
+
+    # Game Environment
+    HEIGHT = 210
+    WIDTH = 160
+    FIELD_WIDTH = 8
+    FIELD_HEIGHT = 8
+
+    # Pygame window dimensions
+    WINDOW_HEIGHT = 210 * 3
+    WINDOW_WIDTH = 160 * 3
+
+    # Actions constants
+    NOOP = Action.NOOP
+    UP = Action.UP
+    DOWN = Action.DOWN
+    LEFT = Action.LEFT
+    RIGHT = Action.RIGHT
+    UPRIGHT = Action.UPRIGHT
+    UPLEFT = Action.UPLEFT
+    DOWNRIGHT = Action.DOWNRIGHT
+    DOWNLEFT = Action.DOWNLEFT
+    PLACE = Action.FIRE
 
 
 # Describes the possible configurations of one individual field (Not Taken, Player and Enemy)
@@ -253,9 +287,16 @@ class JaxOthello(JaxEnvironment[OthelloState, OthelloObservation, OthelloInfo, O
         - Determines if the chosen position is valid according to Othello rules.
         - Flips opponent discs along all valid directions (horizontal, vertical, diagonal).
         - Updates the board state, player scores, and last move.
-        - Returns a tuple:
-            valid_choice (bool): whether the move was valid and discs were flipped.
-            new_state (OthelloState): the updated game state after the move.
+
+        Args:
+            curr_state (OthelloState): The current game state, including the board.
+            white_player (bool): True if checking moves for the white player, 
+                                 False if for the black player.
+
+        Returns:
+            tuple ([bool, OthelloState]):
+                - bool: whether the move was valid and discs were flipped.
+                - OthelloState: the updated game state after the move.
         """
         x, y = field_choice
         enemy_color = jax.lax.cond(
@@ -410,7 +451,30 @@ class JaxOthello(JaxEnvironment[OthelloState, OthelloObservation, OthelloInfo, O
 
 
     @partial(jax.jit, static_argnums=(0,))
-    def check_if_there_is_a_valid_choice(self, curr_state, white_player):
+    def check_if_there_is_a_valid_choice(self, curr_state: OthelloState, white_player: bool) -> tuple[OthelloState, bool]:
+        """
+        Checks if the active player has at least one valid move available.
+
+        Given the current game state (curr_state) and the active player's color 
+        (white_player), this function systematically scans the board to determine 
+        whether any empty position allows a legal Othello move:
+          - Iterates over all empty board positions.
+          - For each candidate position, evaluates in all eight directions 
+            (horizontal, vertical, diagonal).
+          - Verifies if placing a disc would flip at least one opponent disc.
+          - Terminates early if a valid move is found.
+
+        Args:
+            curr_state (OthelloState): The current game state, including the board.
+            white_player (bool): True if checking moves for the white player, 
+                                 False if for the black player.
+
+        Returns:
+            tuple:
+                - OthelloState: The unchanged current state.
+                - bool: True if the player has at least one valid move, 
+                        False otherwise.
+        """
         # white_player == True --> player
         # white_player == False --> enemy
         enemy_color = jax.lax.cond(
@@ -521,7 +585,30 @@ class JaxOthello(JaxEnvironment[OthelloState, OthelloObservation, OthelloInfo, O
 
 
     @partial(jax.jit, static_argnums=(0,))
-    def get_bot_move(self, game_field: Field, difficulty: chex.Array, player_score: chex.Array, enemy_score: chex.Array, random_key: int):
+    def get_bot_move(self, game_field: Field, difficulty: chex.Array, player_score: chex.Array, enemy_score: chex.Array, random_key: chex.Array):
+        """
+        Determines the bot’s next move on the Othello board.
+
+        Steps:
+          1. Generate all possible board positions (0–63).
+          2. For each position, evaluate its quality parallelly using jax.vmap
+          3. Identify all moves that achieve the maximum score.
+          4. Randomly choose one of these best moves using `random_max_index`
+             and the provided PRNG key.
+          5. Convert the chosen index into 2D board coordinates (row, column).
+
+        Args:
+            game_field (Field): Current board state, including disc colors.
+            difficulty (chex.Array): Difficulty level that influences how strongly
+                                     strategic heuristics weigh into scoring.
+            player_score (chex.Array): Current score of the bot/player.
+            enemy_score (chex.Array): Current score of the opponent.
+            random_key (chex.Array): PRNG key used for random tie-breaking.
+
+        Returns:
+            chex.Array: A length-2 array `[y, x]` representing the chosen move’s
+                        board coordinates.
+        """
         game_score = player_score+enemy_score
         list_of_all_moves = jnp.arange(64)
 
@@ -537,12 +624,41 @@ class JaxOthello(JaxEnvironment[OthelloState, OthelloObservation, OthelloInfo, O
         return jnp.array([jnp.floor_divide(random_chosen_max_index, 8), jnp.mod(random_chosen_max_index, 8)])
 
     @partial(jax.jit, static_argnums=(0,))
-    def compute_score_of_tiles(self, i, game_field, game_score, difficulty):
+    def compute_score_of_tiles(self, i: int, game_field: Field, game_score: chex.Array, difficulty: chex.Array) -> int:
+        """
+        Evaluates the score of placing a tile at a given board position.
+       
+
+        Steps:
+          1. Decode the board index `i` into (x, y) coordinates.
+          2. If the position is already occupied, return a sentinel invalid score
+             (`-2147483648`) and placeholder positions.
+          3. Otherwise, call `compute_tiles_flipped_bot_move` to determine:
+                - how many discs would be flipped (`tiles_flipped`),
+                - a secondary tile relevant for strategic evaluation,
+                - default fallback positions.
+          4. If the move is valid (i.e., flips at least one disc):
+                - Compute the *strategic score* of the move using 
+                  `calculate_strategic_tile_score`, factoring in positional weights 
+                  and difficulty settings.
+                - Optionally consider a related secondary tile’s influence on the move.
+                - Combine flipped-disc score with strategic score.
+          5. If the move is invalid, return the sentinel score directly.
+
+        Args:
+            i (int): Linear index of the tile on an 8x8 board (0–63).
+            game_field (Field): Current board state, including disc colors.
+            game_score (chex.Array): Current score values used for evaluation.
+            difficulty (int): Difficulty setting, influencing how strongly strategic
+                              heuristics weigh into scoring.
+
+        Returns:
+            int: A scalar score (int32) representing the quality of the move.
+                        Invalid moves return `-2147483648`.
+        """
         # Decode tile position
         tile_y = jnp.floor_divide(i, 8)
         tile_x = jnp.mod(i, 8)
-
-        #jax.debug.print("tile_y: {}, tile_x: {}", tile_y, tile_x)
 
         def helper_return_default_pos():
             return (jnp.int32(-2147483648),(jnp.int32(-2147483648), jnp.int32(-2147483648)),(jnp.int32(-2147483648), jnp.int32(-2147483648)))
@@ -553,20 +669,31 @@ class JaxOthello(JaxEnvironment[OthelloState, OthelloObservation, OthelloInfo, O
         tiles_flipped, secondary_tile, default_pos = jax.lax.cond(
             game_field.field_color[tile_y, tile_x] != FieldColor.EMPTY,
             lambda args_compute_score_of_tile_1: helper_return_default_pos(),
-            lambda args_compute_score_of_tile_1: self.compute_score_of_tile_1(args_compute_score_of_tile_1),
+            lambda args_compute_score_of_tile_1: self.compute_tiles_flipped_bot_move(args_compute_score_of_tile_1),
             args_compute_score_of_tile_1
         )
-        #jax.debug.print("tiles_flipped: {}, secondary_tile: {}, default_pos: {}", tiles_flipped, secondary_tile, default_pos)
         
-        
-        def handle_calculation_of_strategic_score(args):
+        def handle_calculation_of_strategic_score(args: Tuple[int, Field, Tuple[int, int], chex.Array, Tuple[int, int]]) -> int:
+            """
+            Handles the calculation of the strategic score for a given tile.
+            Seperated into calculation of strategic score for tile itself and a possible secondary tile.
+            Args:
+                tuple ([int, Field, Tuple[int, int], chex.Array, Tuple[int, int]])
+                    - i (int): Linear index of the tile on an 8x8 board (0–63).
+                    - game_field (Field): Current board state, including disc colors.
+                    - default_pos (Tuple[int, int]): Default position to use if the tile is invalid.
+                    - difficulty (chex.Array): Difficulty setting, influencing how strongly strategic
+                                        heuristics weigh into scoring.
+                    - secondary_tile (Tuple[int, int]): A secondary tile relevant for strategic evaluation.
+            
+            Returns:
+                int: A scalar score (int32) representing the quality of the move.
+            """
             i, game_field, default_pos, difficulty, secondary_tile = args
 
-            
             #Calculate the strategic value (score) of the current_square itself
             ((score, _), skip_secondary_eval) = self.calculate_strategic_tile_score(i, game_field, jax.lax.cond(default_pos[0] == -2147483648, lambda _: (0,0),lambda _: default_pos, None), difficulty)
 
-            #jax.debug.print("score: {}, skip_secondary_eval: {}", score, skip_secondary_eval)
             secondary_tile = jax.lax.cond(
                 skip_secondary_eval,
                 lambda _: (-2147483648, -2147483648),
@@ -574,10 +701,8 @@ class JaxOthello(JaxEnvironment[OthelloState, OthelloObservation, OthelloInfo, O
                 None
             )
 
-            #jax.debug.print("i: {},secondary_tile[0]: {},secondary_tile[1]: {}", i, secondary_tile[0], secondary_tile[1])
             #Re-evaluate or combine with a secondary related square's score
             args_handle_secondary_calculation_of_strategic_score = (secondary_tile[0] + secondary_tile[1]*8, game_field, default_pos, difficulty, score)
-            #jax.debug.print("skip_secondary_eval: {}", skip_secondary_eval)
             score = jax.lax.cond(
                 skip_secondary_eval,
                 #lambda args_handle_secondary_calculation_of_strategic_score: handle_secondary_calculation_of_strategic_score(args_handle_secondary_calculation_of_strategic_score), #TODO fix outer corners- take a look at index changes by check neighbor conflict with loop borders
@@ -588,9 +713,6 @@ class JaxOthello(JaxEnvironment[OthelloState, OthelloObservation, OthelloInfo, O
             return score
         
         #only execute the strategic score calculation if tiles were flipped = is a valid move
-        #jax.debug.print(str(tiles_flipped != jnp.array(-2147483648, dtype=jnp.int32)))
-        #jax.debug.print("tiles_flipped: {}", tiles_flipped != -2147483648)
-
         args = (i, game_field, default_pos, difficulty, secondary_tile)
         score = jax.lax.cond(tiles_flipped != -2147483648,
                     lambda args: tiles_flipped + handle_calculation_of_strategic_score(args),
@@ -598,11 +720,44 @@ class JaxOthello(JaxEnvironment[OthelloState, OthelloObservation, OthelloInfo, O
                     args)
 
 
-        #jax.debug.print("score: {}", score)
         return score
 
     @partial(jax.jit, static_argnums=(0,))
-    def compute_score_of_tile_1(self, args):
+    def compute_tiles_flipped_bot_move(self, args: Tuple[int, int, Field, chex.Array]) -> Tuple[int, Tuple[int, int], Tuple[int, int]]:
+        """
+        Computes the number of discs flipped and determines positions for further evaluation
+        for a given tile.
+
+        Steps:
+          1. For each of the 8 directions around the candidate tile:
+                - Use `compute_flipped_tiles_by_direction` (via `jax.vmap`)
+                  to determine:
+                    • how many discs would be flipped in that direction,
+                    • whether an "inner corner" (strategically relevant square)
+                      is encountered along the line.
+          2. Aggregate results across all directions:
+                - Sum the number of flipped discs.
+                - Identify the last valid "inner corner" encountered, both in
+                  *any* direction and in the *final* direction.
+          3. Compute the base score of the tile (includes adjusting for game stage):
+                - If no discs are flipped → mark as invalid (`-2147483648`).
+                - Otherwise → adjust the raw flipped-disc score depending on
+                  the current game stage (`game_score`), penalizing flips in
+                  the midgame.
+
+        Args:
+            args (Tuple[int, int, Field, chex.Array]):
+                - tile_y (int): Row index of the candidate move.
+                - tile_x (int): Column index of the candidate move.
+                - game_field (Field): Current board state.
+                - game_score (chex.Array): Total number of discs currently placed,used to infer game stage.
+
+        Returns:
+            Tuple[int, Tuple[int, int], Tuple[int, int]]:
+                - score_of_tile (int): The flipped-disc-based score or sentinel `-2147483648` if invalid.
+                - inner_corner_any (Tuple[int, int]): Coordinates of a relevant inner corner (if any).
+                - inner_corner_final (Tuple[int, int]): Coordinates of a final direction inner corner (if any).
+        """
         tile_y, tile_x, game_field, game_score = args
         inner_corner_in_any_direction = (-2147483648, -2147483648)
         inner_corner_in_final_direction = (-2147483648, -2147483648)
@@ -658,8 +813,27 @@ class JaxOthello(JaxEnvironment[OthelloState, OthelloObservation, OthelloInfo, O
                     None
                     )
 
-    # array size fixed at 64!!
-    def random_max_index(self, array, key:int):
+    def random_max_index(self, array: chex.Array, key: chex.Array) -> chex.Array:
+        """
+        Selects a random index among the maximum values in the input array.
+
+        The function assumes the array has a fixed size of 64 (Important! Only works with arrays of size 64). It performs the following steps:
+
+          1. Finds the maximum value in the array.
+          2. Iterates over all elements to count how many times the maximum value appears 
+             and records their indices.
+          3. Constructs an array (`max_indexes_for_random`) where valid maximum-value 
+             indices are compacted to the left (others filled with -1).
+          4. Uses a PRNG key to select a random index among these maximum positions.
+
+        Args:
+            array (chex.Array): Input array of fixed size 64 containing move values.
+            key (int): JAX random key used to generate a reproducible random choice.
+
+        Returns:
+            chex.Array: A single index (int32 scalar) corresponding to one of the 
+                        maximum-value positions in the array, chosen at random.
+        """
         max_value  = jnp.max(array)
         max_value_count = 0
         max_values = jnp.zeros_like(array)
