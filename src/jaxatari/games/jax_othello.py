@@ -16,98 +16,65 @@ from jaxatari.environment import JaxEnvironment, JAXAtariAction as Action
 
 
 class OthelloConstants(NamedTuple):
-    # attribution of cases for the strategic tile score //starting at bottom right, then going left und and then up
-    STRATEGIC_TILE_SCORE_CASES:  chex.Array = jnp.array([
-    17, 16, 16, 16, 16, 16, 16, 15,
-    11, 14, 13, 13, 13, 13, 12, 6,
-    11, 10, 8, 9, 9, 8, 7, 6,
-    11, 10, 9, 9, 9, 9, 7, 6,
-    11, 10, 9, 9, 9, 9, 7, 6,
-    11, 10, 8, 9, 9, 8, 7, 6,
-    11, 5, 4, 4, 4, 4, 3, 6,
-    2, 1, 1, 1, 1, 1, 1, 0
-    ])
-
-    F3BA:  chex.Array = jnp.array([
+    # stores patterns used in the strategic tile score for stability of white lines
+    __F3BA = jnp.array([
         0x60, 0x40, 0x42, 0x40, 0x00, 0x00, 0x00, 0x46, 0x46, 0x44, 0x04, 0x08, 0x0c, 0x0a, 0x08,
         0x04, 0x10, 0x14, 0xbe, 0x9e, 0x02, 0x02, 0x02, 0x12, 0x48, 0x28, 0x10, 0x08, 0x18, 0x38,
         0x40, 0x00, 0x02, 0x02
     ], dtype=jnp.uint8)
 
-    F3DC:  chex.Array = jnp.array([
+    # stores patterns used in the strategic tile score for stability of black lines
+    __F3DC = jnp.array([
         0x14, 0x28, 0x28, 0x2c, 0x46, 0x44, 0x40, 0x20, 0x08, 0x20, 0x60, 0x40, 0x40, 0x40, 0x42,
         0x40, 0x40, 0x40, 0x40, 0x60, 0x20, 0x28, 0x2c, 0x24, 0x32, 0x12, 0x4c, 0xf2, 0xe2, 0xc2,
         0x02, 0xbe, 0x18, 0x48
     ], dtype=jnp.uint8)
 
-    F3FE:  chex.Array = jnp.array([
+    # stores strategic tile scores for certain patterns of black and white configurations (used when only one side of the line is considered)
+    __F3FE = jnp.array([
         0x30, 0x30, 0x30, 0x30, 0xc0, 0xc0, 0xc0, 0x30, 0x30, 0x30, 0xbb, 0xbb, 0xbb, 0xbb, 0xbb,
         0xbb, 0xbb, 0xbb, 0x60, 0x60, 0x40, 0x30, 0x30, 0x50, 0xe0, 0xbb, 0xbb, 0xd0, 0xd0, 0xd0,
         0xd0, 0xd8, 0xf0, 0xf0
     ], dtype=jnp.uint8)
 
-    BIT_MASKS_LOW_TO_HIGH:  chex.Array = jnp.array([1, 2, 4, 8, 16, 32, 64, 128], dtype=jnp.uint8)
-
-    BIT_MASKS_HIGH_TO_LOW:  chex.Array = jnp.array([0x80, 0x40, 0x20, 0x10, 8, 4, 2, 1], dtype=jnp.uint8)
-
-    F7EC:  chex.Array = jnp.array([
+    # stores strategic tile scores for certain patterns of of whole lines 
+    __F7EC = jnp.array([
         0x20, 0x20, 0x20, 0x20, 0x20, 0x10, 0x40, 0xe0, 0x20, 0x40, 0x15, 0xe0, 0x20, 0xe0, 0xe0,
         0x50, 0x00, 0xf0, 0xb0
-    ], dtype=jnp.uint8) 
+    ], dtype=jnp.uint8) #TODO difference to np.int8
 
     # Constants to decide in which side the discs will be flipped
-    FLIP_UP_SIDE: int = 0
-    FLIP_DOWN_SIDE: int = 1
-    FLIP_RIGHT_SIDE: int = 2
-    FLIP_LEFT_SIDE: int = 3
-    FLIP_UP_RIGHT_SIDE: int = 4
-    FLIP_DOWN_RIGHT_SIDE: int = 5
-    FLIP_DOWN_LEFT_SIDE: int = 6
-    FLIP_UP_LEFT_SIDE: int = 7
-
-    # Game Environment
-    HEIGHT = 210
-    WIDTH = 160
-    FIELD_WIDTH = 8
-    FIELD_HEIGHT = 8
-
-    # Pygame window dimensions
-    WINDOW_HEIGHT = 210 * 3
-    WINDOW_WIDTH = 160 * 3
-
-    # Actions constants
-    NOOP = Action.NOOP
-    UP = Action.UP
-    DOWN = Action.DOWN
-    LEFT = Action.LEFT
-    RIGHT = Action.RIGHT
-    UPRIGHT = Action.UPRIGHT
-    UPLEFT = Action.UPLEFT
-    DOWNRIGHT = Action.DOWNRIGHT
-    DOWNLEFT = Action.DOWNLEFT
-    PLACE = Action.FIRE
+    FLIP_UP_SIDE = 0
+    FLIP_DOWN_SIDE = 1
+    FLIP_RIGHT_SIDE = 2
+    FLIP_LEFT_SIDE = 3
+    FLIP_UP_RIGHT_SIDE = 4
+    FLIP_DOWN_RIGHT_SIDE = 5
+    FLIP_DOWN_LEFT_SIDE = 6
+    FLIP_UP_LEFT_SIDE = 7
 
 
-
-# state container
+# Describes the possible configurations of one individual field (Not Taken, Player and Enemy)
 class FieldColor(enum.IntEnum):
     EMPTY = 0
     WHITE = 1
     BLACK = 2
 
+# Describes the structure of the game field, each individual field has an ID and a color, the id enumerated from the left top the right bottom with 0-63
 class Field(NamedTuple):
     field_id: chex.Array
     field_color: chex.Array
 
+# Basis State of an Othello game
 class OthelloState(NamedTuple):
-    player_score: chex.Array
-    enemy_score: chex.Array
-    step_counter: chex.Array
-    field: Field
-    field_choice_player: chex.Array
-    difficulty: chex.Array
-    end_of_game_reached: chex.Array
-    random_key: int
+    player_score: chex.Array #Stores the number of disks owned by player, used as 0d int
+    enemy_score: chex.Array #Stores the number of disks owned by enemy, used as 0d int
+    step_counter: chex.Array #Stores the number of steps passed in the game, used as 0d int
+    field: Field #Stores the current state of the game board
+    field_choice_player: chex.Array #Stores the currently selected disk for the player to place, used as 1d int array with shape (2,) and (y,x)
+    difficulty: chex.Array #Stores the selected difficulty level, currently the game supports 1-3, but not 4, since this would be a multiagent game
+    end_of_game_reached: chex.Array #Used to check if the game has ended to reset, only true for one state and afterwards resets with a new field to false
+    random_key: chex.Array #Stores a random key for random decision used as 0d int
 
 class OthelloObservation(NamedTuple):
     field: Field
@@ -278,7 +245,18 @@ class JaxOthello(JaxEnvironment[OthelloState, OthelloObservation, OthelloInfo, O
 
 
     @partial(jax.jit, static_argnums=(0,))
-    def field_step(self, field_choice, curr_state, white_player):  # -> valid_choice, new_state
+    def field_step(self, field_choice, curr_state, white_player) -> Tuple[bool, OthelloState]:
+        """
+        Executes a single move in the Othello game.
+        Given the chosen board position (field_choice), the current game state 
+        (curr_state), and the active player's color (white_player), this function:
+        - Determines if the chosen position is valid according to Othello rules.
+        - Flips opponent discs along all valid directions (horizontal, vertical, diagonal).
+        - Updates the board state, player scores, and last move.
+        - Returns a tuple:
+            valid_choice (bool): whether the move was valid and discs were flipped.
+            new_state (OthelloState): the updated game state after the move.
+        """
         x, y = field_choice
         enemy_color = jax.lax.cond(
             white_player,
