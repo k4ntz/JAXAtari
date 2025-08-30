@@ -87,29 +87,6 @@ class OthelloConstants(NamedTuple):
     DOWNLEFT = Action.DOWNLEFT
     PLACE = Action.FIRE
 
-# def get_human_action() -> chex.Array:
-#     keys = pygame.key.get_pressed()
-#     if keys[pygame.K_w] and keys[pygame.K_a]:
-#         return jnp.array(self.consts.UPLEFT)
-#     elif keys[pygame.K_w] and keys[pygame.K_d]:
-#         return jnp.array(self.consts.UPRIGHT)
-#     elif keys[pygame.K_s] and keys[pygame.K_a]:
-#         return jnp.array(self.consts.DOWNLEFT)
-#     elif keys[pygame.K_s] and keys[pygame.K_d]:
-#         return jnp.array(self.consts.DOWNRIGHT)
-#     elif keys[pygame.K_w]:
-#         return jnp.array(self.consts.UP)
-#     elif keys[pygame.K_s]:
-#         return jnp.array(self.consts.DOWN)
-#     elif keys[pygame.K_a]:
-#         return jnp.array(self.consts.LEFT)
-#     elif keys[pygame.K_d]:
-#         return jnp.array(self.consts.RIGHT)
-#     elif keys[pygame.K_LCTRL]:
-#         return jnp.array(self.consts.PLACE)
-#     else:
-#         return jnp.array(self.consts.NOOP)
-
 
 
 # state container
