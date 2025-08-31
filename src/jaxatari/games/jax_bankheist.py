@@ -21,6 +21,15 @@ LEFT = 3
 RIGHT = 2
 UP = 1
 DOWN = 0
+ACTION_TRANSLATOR = jnp.array([
+    NOOP,
+    FIRE,
+    LEFT,
+    RIGHT,
+    UP,
+    DOWN
+])
+# DOWN = 5
 
 # Max Amount of Fuel, results in 170 seconds of time with speed of 1 and 60 fps
 FUEL_CAPACITY = 10200.0
@@ -297,7 +306,7 @@ class JaxBankHeist(JaxEnvironment[BankHeistState, BankHeistObservation, BankHeis
             dynamite_timer=jnp.array([-1]).astype(jnp.int32),
             pending_police_spawns=jnp.array([-1, -1, -1]).astype(jnp.int32),  # -1 means no pending spawn
             pending_police_bank_indices=jnp.array([-1, -1, -1]).astype(jnp.int32),  # Bank indices for pending spawns
-            game_paused=jnp.array(True).astype(jnp.bool_),
+            game_paused=jnp.array(False).astype(jnp.bool_),
             bank_heists=jnp.array(0).astype(jnp.int32),
             random_key=key  # Use the provided random key
         )
@@ -970,6 +979,11 @@ class JaxBankHeist(JaxEnvironment[BankHeistState, BankHeistObservation, BankHeis
 
     @partial(jax.jit, static_argnums=(0,))
     def step(self, state: BankHeistState, action: chex.Array) -> Tuple[BankHeistState, BankHeistObservation, float, bool, BankHeistInfo]:
+        # Translate action
+        jax.debug.print("Step Action: {}", action)
+        action = ACTION_TRANSLATOR[action]
+        jax.debug.print("Translated Action: {}", action)
+
         # Get random key for this step and advance state's random key
         step_random_key, new_state = self.advance_random_key(state)
         full_speed = new_state.speed + new_state.reserve_speed
@@ -1129,19 +1143,19 @@ class JaxBankHeist(JaxEnvironment[BankHeistState, BankHeistObservation, BankHeis
 
 
 def load_bankheist_sprites():
-    cities = [aj.loadFrame(os.path.join(SPRITES_DIR, f"map_{i+1}.npy"), transpose=True) for i in range(8)]
-    player_side = aj.loadFrame(os.path.join(SPRITES_DIR, "player_side.npy"), transpose=True)
-    player_front = aj.loadFrame(os.path.join(SPRITES_DIR, "player_front.npy"), transpose=True)
-    police_side = aj.loadFrame(os.path.join(SPRITES_DIR, "police_side.npy"), transpose=True)
-    police_front = aj.loadFrame(os.path.join(SPRITES_DIR, "police_front.npy"), transpose=True)
-    bank = aj.loadFrame(os.path.join(SPRITES_DIR, "bank.npy"), transpose=True)
-    dynamite = aj.loadFrame(os.path.join(SPRITES_DIR, "dynamite_0.npy"), transpose=True)
+    cities = [aj.loadFrame(os.path.join(SPRITES_DIR, f"map_{i+1}.npy"), transpose=False) for i in range(8)]
+    player_side = aj.loadFrame(os.path.join(SPRITES_DIR, "player_side.npy"), transpose=False)
+    player_front = aj.loadFrame(os.path.join(SPRITES_DIR, "player_front.npy"), transpose=False)
+    police_side = aj.loadFrame(os.path.join(SPRITES_DIR, "police_side.npy"), transpose=False)
+    police_front = aj.loadFrame(os.path.join(SPRITES_DIR, "police_front.npy"), transpose=False)
+    bank = aj.loadFrame(os.path.join(SPRITES_DIR, "bank.npy"), transpose=False)
+    dynamite = aj.loadFrame(os.path.join(SPRITES_DIR, "dynamite_0.npy"), transpose=False)
     fuel_tank = aj.loadFrame(os.path.join(SPRITES_DIR, "fuel_tank.npy"), transpose=True)
-    fuel_gauge = aj.loadFrame(os.path.join(SPRITES_DIR, "fuel_gauge.npy"), transpose=True)
+    fuel_gauge = aj.loadFrame(os.path.join(SPRITES_DIR, "fuel_gauge.npy"), transpose=False)
 
     # Add padding to front sprites so they have same dimensions as side sprites
-    player_front_padded = jnp.pad(player_front, ((1,1), (0,0), (0,0)), mode='constant')
-    police_front_padded = jnp.pad(police_front, ((1,1), (0,0), (0,0)), mode='constant')
+    player_front_padded = jnp.pad(player_front, ((0,0), (1,1), (0,0)), mode='constant')
+    police_front_padded = jnp.pad(police_front, ((0,0), (1,1), (0,0)), mode='constant')
 
     CITY_SPRITES = jnp.stack([jnp.expand_dims(city, axis=0) for city in cities])
     PLAYER_SIDE_SPRITE = jnp.expand_dims(player_side, axis=0)
@@ -1223,7 +1237,7 @@ class Renderer_AtraBankisHeist(JAXGameRenderer):
 
     @partial(jax.jit, static_argnums=(0,))
     def render(self, state):
-        raster = jnp.zeros((WIDTH, HEIGHT, 3), dtype=jnp.uint8)
+        raster = jnp.zeros((HEIGHT, WIDTH, 3), dtype=jnp.uint8)
 
         ### Render City
         frame_city = aj.get_sprite_frame(self.SPRITES_CITY[state.level % self.SPRITES_CITY.shape[0]], 0)
