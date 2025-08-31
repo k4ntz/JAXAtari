@@ -869,14 +869,41 @@ class JaxOthello(JaxEnvironment[OthelloState, OthelloObservation, OthelloInfo, O
 
 
     @partial(jax.jit, static_argnums=(0,))
-    def compute_flipped_tiles_by_direction(self, i, tile_y: int, tile_x: int, game_field: Field, inner_corner_in_any_direction: tuple[int, int], inner_corner_in_final_direction: tuple[int, int]):
+    def compute_flipped_tiles_by_direction(self, i, tile_y: int, tile_x: int, game_field: Field, inner_corner_in_any_direction: tuple[int, int], inner_corner_in_final_direction: tuple[int, int]) -> tuple[int, tuple[int, int], tuple[int, int]]:
+        """
+        Computes the number of tiles that would be flipped in a specific direction
+        if a tile were placed at the given position (tile_y, tile_x).
+
+        The direction is selected by the parameter `i` (0–7).
+
+        Each branch calls the corresponding directional helper
+        (e.g., `compute_flipped_tiles_top`, `compute_flipped_tiles_right`, etc.)
+        to determine flips and update potential "inner corner" positions relevant 
+        for strategic evaluation.
+
+        Args:
+            i (int): Direction index (0–7).
+            tile_y (int): Row index of the tile (0–7).
+            tile_x (int): Column index of the tile (0–7).
+            game_field (Field): Current board state, including disc colors.
+            inner_corner_in_any_direction (tuple[int, int]): Tracks the first inner-corner 
+                encountered in any direction (if any).
+            inner_corner_in_final_direction (tuple[int, int]): Tracks the first inner-corner 
+                encountered specifically in the evaluated direction (if any).
+
+        Returns:
+            Tuple ([int, tuple[int, int], tuple[int, int]]):
+                - int: Number of flipped tiles in the given direction.
+                - tuple[int, int]: "inner corner in any direction".
+                - tuple[int, int]: "inner corner in final direction".
+        """
         args = (tile_y,tile_x,game_field,inner_corner_in_any_direction,inner_corner_in_final_direction)
 
         branches = [
             lambda args: self.compute_flipped_tiles_top(args),
-            lambda args: self.compute_flipped_tiles_top_rigth(args),
+            lambda args: self.compute_flipped_tiles_top_right(args),
             lambda args: self.compute_flipped_tiles_right(args),
-            lambda args: self.compute_flipped_tiles_bottom_rigth(args),
+            lambda args: self.compute_flipped_tiles_bottom_right(args),
             lambda args: self.compute_flipped_tiles_bottom(args),
             lambda args: self.compute_flipped_tiles_bottom_left(args),
             lambda args: self.compute_flipped_tiles_left(args),
@@ -885,25 +912,80 @@ class JaxOthello(JaxEnvironment[OthelloState, OthelloObservation, OthelloInfo, O
 
         return jax.lax.switch(i, branches, args)
 
-    def check_if_inner_corner(self, tile_y, tile_x):
+    def check_if_inner_corner(self, tile_y: int, tile_x: int) -> Tuple[bool, Tuple[int, int]]:
+        """
+        Checks whether a given board position corresponds to an "inner corner"
+        (a square directly adjacent to one of the four outer corners, diagonally inward).
+
+        If the tile is an inner corner ((1,1), (1,6), (6,1), or (6,6)), this method 
+        returns a mirrored coordinate used for consistent strategic evaluation 
+        in `calculate_strategic_tile_score`. Otherwise, it simply returns the 
+        original (tile_y, tile_x).
+
+        Args:
+            tile_y (int): Row index of the tile (0–7).
+            tile_x (int): Column index of the tile (0–7).
+
+        Returns:
+            Tuple ([bool, Tuple[int, int]]): 
+                - Whether the tile is an inner corner.
+                - Either the mirrored coordinates for an inner corner or the original (tile_y, tile_x) if not an inner corner.
+        """
         return jax.lax.cond(jnp.logical_and(tile_y == 1, tile_x == 1),
-                lambda _: (6,6), #account for flipped game field in calculate_strategic_tile_score
+                lambda _: (True, (6,6)), #account for flipped game field in calculate_strategic_tile_score
                 lambda _: jax.lax.cond(jnp.logical_and(tile_y == 1, tile_x == 6),
-                            lambda _: (6,1),
+                            lambda _: (True, (6,1)),
                             lambda _: jax.lax.cond(jnp.logical_and(tile_y == 6, tile_x == 1),
-                                        lambda _: (1,6),
+                                        lambda _: (True, (1,6)),
                                         lambda _: jax.lax.cond(jnp.logical_and(tile_y == 6, tile_x == 6),
-                                                    lambda _: (1,1),
-                                                    lambda _: (tile_y, tile_x),
+                                                    lambda _: (True, (1,1)),
+                                                    lambda _: (False, (tile_y, tile_x)),
                                                     None),
                                         None),
                             None),
                 None)
 
-    
-    def compute_flipped_tiles_top(self, input) -> int:
-        # Returns the number of tiles to be flipped (only flipped tiles, same color tiles are disregarded)
 
+    def compute_flipped_tiles_top(self, input:Tuple[int, int, Field, int, int, Tuple[int, int], Tuple[int, int]]) -> Tuple[int, tuple[int, int], tuple[int, int]]:
+        """
+        Handle case 1: Upward direction
+
+        Computes how many tiles would be flipped when placing a piece
+        and searching upwards (towards lower row indices) on the Othello board.
+
+        The algorithm iteratively checks tiles in the upward direction starting
+        from the current tile, applying Othello rules:
+
+        - If the immediate neighbor is already the bot's tile (black),
+        the move is invalid → no tiles flipped.
+        - If empty space is encountered before finding a black tile,
+        the move is invalid → no tiles flipped.
+        - Otherwise, counts opponent tiles until a black tile is found,
+        flipping all tiles in between.
+
+        Additionally, the method checks whether an encountered tile is an
+        "inner corner". If we encounter one the value for inner_corner_in_final_direction is set to the coordinates of the inner corner. 
+        If we additionally encounter a flippable configuration after that, we update inner_corner_in_any_direction.
+
+        Args:
+            input (Tuple[int, int, Field, int, int, Tuple[int, int], Tuple[int, int]]): A tuple with the structure
+                (tile_y, tile_x, game_field, flipped, tmp_flipped,
+                inner_corner_in_final_direction, inner_corner_in_any_direction),
+                where:
+                    - tile_y (int): Starting row index.
+                    - tile_x (int): Starting column index.
+                    - game_field (Field): Current game state (disc colors).
+                    - flipped (int): Accumulated flipped tile count.
+                    - tmp_flipped (int): Tiles tentatively flipped until a closing black tile is found.
+                    - inner_corner_in_final_direction (tuple[int, int]): Tracks inner corner found in this direction.
+                    - inner_corner_in_any_direction (tuple[int, int]): Tracks first inner corner found in any direction.
+
+        Returns:
+            Tuple ([int, tuple[int, int], tuple[int, int]]):
+                - int: Number of tiles flipped in the upward direction.
+                - tuple[int, int]: Updated "inner corner in any direction".
+                - tuple[int, int]: Updated "inner corner in final direction".
+        """
         #checks wether the first element in the direction of look-up is invalid, becasause its already taken by bot, sets it to nan, to prevent while loop from running
         args = jax.lax.cond(
             input[2].field_color[input[0]-1][input[1]] == FieldColor.BLACK,
@@ -921,14 +1003,16 @@ class JaxOthello(JaxEnvironment[OthelloState, OthelloObservation, OthelloInfo, O
             return check_for_outside_borders_of_game_field
 
         def while_body(args):
-            #when we encounter a not black field increase tmp_flipped, when we encounter a black field add the tmp_flipped (tiles we encountered before black field:= tiles to be flipped) to flipped tiles      
+            #check if we are a inner corner
+            inner_corner_check = self.check_if_inner_corner(args[0], args[1])
+            #when we encounter a not black field increase tmp_flipped, when we encounter a black field add the tmp_flipped (tiles we encountered before black field:= tiles to be flipped) to flipped tiles
             return jax.lax.cond(
                 args[2].field_color[args[0], args[1]] == FieldColor.EMPTY,  
                 lambda args: (-2, args[1], args[2], args[3],  args[4], args[5], args[6]),#if field is empthy, no further tiles can be flipped use set y to -2 to exit next loop iteration
                 lambda args: (jax.lax.cond(
                     args[2].field_color[args[0], args[1]] == FieldColor.BLACK,  
                     lambda args: (args[0]-1, args[1], args[2], args[3] + args[4], 0, args[5], args[5]), #args[5] is no typo (set inner_corner_in_any_direction only when valid move is found)
-                    lambda args: (args[0]-1, args[1], args[2], args[3], args[4] + 1, self.check_if_inner_corner(args[0], args[1]), args[6]),
+                    lambda args: (args[0]-1, args[1], args[2], args[3], args[4] + 1, jax.lax.cond(inner_corner_check[0], lambda _: inner_corner_check[1], lambda _: args[5], None), args[6]),
                     args
                     )),
                 args
@@ -936,15 +1020,53 @@ class JaxOthello(JaxEnvironment[OthelloState, OthelloObservation, OthelloInfo, O
 
         while_loop_return = jax.lax.while_loop(while_cond, while_body, args)
         return jax.lax.cond(
+            #check if we are end of line, then return no tiles flipped and no alt positions found
             input[0] < 0,
             lambda args: (jnp.int32(0.0), (-2147483648,-2147483648), (-2147483648,-2147483648)),
             lambda args: (jnp.int32(while_loop_return[3]), while_loop_return[6], while_loop_return[5]),
             args
         )
     
-    def compute_flipped_tiles_right(self, input) -> int:
-        # Returns the number of tiles to be flipped (only flipped tiles, same color tiles are disregarded)
+    def compute_flipped_tiles_right(self, input:Tuple[int, int, Field, int, int, Tuple[int, int], Tuple[int, int]]) -> Tuple[int, tuple[int, int], tuple[int, int]]:
+        """
+        Handle case 3: Right direction
 
+        Computes how many tiles would be flipped when placing a piece
+        and searching right (towards higher column indices) on the Othello board.
+
+        The algorithm iteratively checks tiles in the right direction starting
+        from the current tile, applying Othello rules:
+
+        - If the immediate neighbor is already the bot's tile (black),
+        the move is invalid → no tiles flipped.
+        - If empty space is encountered before finding a black tile,
+        the move is invalid → no tiles flipped.
+        - Otherwise, counts opponent tiles until a black tile is found,
+        flipping all tiles in between.
+
+        Additionally, the method checks whether an encountered tile is an
+        "inner corner". If we encounter one the value for inner_corner_in_final_direction is set to the coordinates of the inner corner. 
+        If we additionally encounter a flippable configuration after that, we update inner_corner_in_any_direction.
+
+        Args:
+            input (Tuple[int, int, Field, int, int, Tuple[int, int], Tuple[int, int]]): A tuple with the structure
+                (tile_y, tile_x, game_field, flipped, tmp_flipped,
+                inner_corner_in_final_direction, inner_corner_in_any_direction),
+                where:
+                    - tile_y (int): Starting row index.
+                    - tile_x (int): Starting column index.
+                    - game_field (Field): Current game state (disc colors).
+                    - flipped (int): Accumulated flipped tile count.
+                    - tmp_flipped (int): Tiles tentatively flipped until a closing black tile is found.
+                    - inner_corner_in_final_direction (tuple[int, int]): Tracks inner corner found in this direction.
+                    - inner_corner_in_any_direction (tuple[int, int]): Tracks first inner corner found in any direction.
+
+        Returns:
+            Tuple ([int, tuple[int, int], tuple[int, int]]):
+                - int: Number of tiles flipped in the upward direction.
+                - tuple[int, int]: Updated "inner corner in any direction".
+                - tuple[int, int]: Updated "inner corner in final direction".
+        """
         #checks wether the first element in the direction of look-up is invalid, becasause its already taken by bot, sets it to nan, to prevent while loop from running
         args = jax.lax.cond(
             input[2].field_color[input[0]][input[1]+1] == FieldColor.BLACK,
@@ -962,6 +1084,8 @@ class JaxOthello(JaxEnvironment[OthelloState, OthelloObservation, OthelloInfo, O
             return check_for_outside_borders_of_game_field
 
         def while_body(args):
+            #check if we are a inner corner
+            inner_corner_check = self.check_if_inner_corner(args[0], args[1])
             #when we encounter a not black field increase tmp_flipped, when we encounter a black field add the tmp_flipped (tiles we encountered before black field:= tiles to be flipped) to flipped tiles      
             return jax.lax.cond(
                 args[2].field_color[args[0], args[1]] == FieldColor.EMPTY,  
@@ -969,7 +1093,7 @@ class JaxOthello(JaxEnvironment[OthelloState, OthelloObservation, OthelloInfo, O
                 lambda args: (jax.lax.cond(
                     args[2].field_color[args[0], args[1]] == FieldColor.BLACK,  
                     lambda args: (args[0], args[1]+1, args[2], args[3] + args[4], 0,  args[5], args[5]),
-                    lambda args: (args[0], args[1]+1, args[2], args[3], args[4] + 1, self.check_if_inner_corner(args[0], args[1]), args[6]),
+                    lambda args: (args[0], args[1]+1, args[2], args[3], args[4] + 1, jax.lax.cond(inner_corner_check[0], lambda _: inner_corner_check[1], lambda _: args[5], None), args[6]),
                     args
                     )),
                 args
@@ -977,15 +1101,53 @@ class JaxOthello(JaxEnvironment[OthelloState, OthelloObservation, OthelloInfo, O
 
         while_loop_return = jax.lax.while_loop(while_cond, while_body, args)
         return jax.lax.cond(
+            #check if we are end of line, then return no tiles flipped and no alt positions found
             input[1] > 7,
             lambda args: (jnp.int32(0.0), (-2147483648,-2147483648), (-2147483648,-2147483648)),
             lambda args: (jnp.int32(while_loop_return[3]), while_loop_return[6], while_loop_return[5]),
             args
         )
     
-    def compute_flipped_tiles_bottom(self, input) -> int:
-        # Returns the number of tiles to be flipped (only flipped tiles, same color tiles are disregarded)
+    def compute_flipped_tiles_bottom(self, input:Tuple[int, int, Field, int, int, Tuple[int, int], Tuple[int, int]]) -> Tuple[int, tuple[int, int], tuple[int, int]]:
+        """
+        Handle case 5: Bottom direction
 
+        Computes how many tiles would be flipped when placing a piece
+        and searching down (towards higher row indices) on the Othello board.
+
+        The algorithm iteratively checks tiles in the down direction starting
+        from the current tile, applying Othello rules:
+
+        - If the immediate neighbor is already the bot's tile (black),
+        the move is invalid → no tiles flipped.
+        - If empty space is encountered before finding a black tile,
+        the move is invalid → no tiles flipped.
+        - Otherwise, counts opponent tiles until a black tile is found,
+        flipping all tiles in between.
+
+        Additionally, the method checks whether an encountered tile is an
+        "inner corner". If we encounter one the value for inner_corner_in_final_direction is set to the coordinates of the inner corner. 
+        If we additionally encounter a flippable configuration after that, we update inner_corner_in_any_direction.
+
+        Args:
+            input (Tuple[int, int, Field, int, int, Tuple[int, int], Tuple[int, int]]): A tuple with the structure
+                (tile_y, tile_x, game_field, flipped, tmp_flipped,
+                inner_corner_in_final_direction, inner_corner_in_any_direction),
+                where:
+                    - tile_y (int): Starting row index.
+                    - tile_x (int): Starting column index.
+                    - game_field (Field): Current game state (disc colors).
+                    - flipped (int): Accumulated flipped tile count.
+                    - tmp_flipped (int): Tiles tentatively flipped until a closing black tile is found.
+                    - inner_corner_in_final_direction (tuple[int, int]): Tracks inner corner found in this direction.
+                    - inner_corner_in_any_direction (tuple[int, int]): Tracks first inner corner found in any direction.
+
+        Returns:
+            Tuple ([int, tuple[int, int], tuple[int, int]]):
+                - int: Number of tiles flipped in the upward direction.
+                - tuple[int, int]: Updated "inner corner in any direction".
+                - tuple[int, int]: Updated "inner corner in final direction".
+        """
         #checks wether the first element in the direction of look-up is invalid, becasause its already taken by bot, sets it to nan, to prevent while loop from running
         args = jax.lax.cond(
             input[2].field_color[input[0]+1][input[1]] == FieldColor.BLACK,
@@ -1003,6 +1165,8 @@ class JaxOthello(JaxEnvironment[OthelloState, OthelloObservation, OthelloInfo, O
             return check_for_outside_borders_of_game_field
 
         def while_body(args):
+            #check if we are a inner corner
+            inner_corner_check = self.check_if_inner_corner(args[0], args[1])
             #when we encounter a not black field increase tmp_flipped, when we encounter a black field add the tmp_flipped (tiles we encountered before black field:= tiles to be flipped) to flipped tiles      
             return jax.lax.cond(
                 args[2].field_color[args[0], args[1]] == FieldColor.EMPTY,  
@@ -1010,7 +1174,7 @@ class JaxOthello(JaxEnvironment[OthelloState, OthelloObservation, OthelloInfo, O
                 lambda args: (jax.lax.cond(
                     args[2].field_color[args[0], args[1]] == FieldColor.BLACK,  
                     lambda args: (args[0]+1, args[1], args[2], args[3] + args[4], 0, args[5], args[5]),
-                    lambda args: (args[0]+1, args[1], args[2], args[3], args[4] + 1, self.check_if_inner_corner(args[0], args[1]), args[6]),
+                    lambda args: (args[0]+1, args[1], args[2], args[3], args[4] + 1, jax.lax.cond(inner_corner_check[0], lambda _: inner_corner_check[1], lambda _: args[5], None), args[6]),
                     args
                     )),
                 args
@@ -1018,15 +1182,53 @@ class JaxOthello(JaxEnvironment[OthelloState, OthelloObservation, OthelloInfo, O
 
         while_loop_return = jax.lax.while_loop(while_cond, while_body, args)
         return jax.lax.cond(
+            #check if we are end of line, then return no tiles flipped and no alt positions found
             input[0] > 7,
             lambda args: (jnp.int32(0.0), (-2147483648,-2147483648), (-2147483648,-2147483648)),
             lambda args: (jnp.int32(while_loop_return[3]), while_loop_return[6], while_loop_return[5]),
             args
         )
     
-    def compute_flipped_tiles_left(self, input) -> int:
-        # Returns the number of tiles to be flipped (only flipped tiles, same color tiles are disregarded)
+    def compute_flipped_tiles_left(self, input:Tuple[int, int, Field, int, int, Tuple[int, int], Tuple[int, int]]) -> Tuple[int, tuple[int, int], tuple[int, int]]:
+        """
+        Handle case 7: Left direction
 
+        Computes how many tiles would be flipped when placing a piece
+        and searching left (towards lower column indices) on the Othello board.
+
+        The algorithm iteratively checks tiles in the left direction starting
+        from the current tile, applying Othello rules:
+
+        - If the immediate neighbor is already the bot's tile (black),
+        the move is invalid → no tiles flipped.
+        - If empty space is encountered before finding a black tile,
+        the move is invalid → no tiles flipped.
+        - Otherwise, counts opponent tiles until a black tile is found,
+        flipping all tiles in between.
+
+        Additionally, the method checks whether an encountered tile is an
+        "inner corner". If we encounter one the value for inner_corner_in_final_direction is set to the coordinates of the inner corner. 
+        If we additionally encounter a flippable configuration after that, we update inner_corner_in_any_direction.
+
+        Args:
+            input (Tuple[int, int, Field, int, int, Tuple[int, int], Tuple[int, int]]): A tuple with the structure
+                (tile_y, tile_x, game_field, flipped, tmp_flipped,
+                inner_corner_in_final_direction, inner_corner_in_any_direction),
+                where:
+                    - tile_y (int): Starting row index.
+                    - tile_x (int): Starting column index.
+                    - game_field (Field): Current game state (disc colors).
+                    - flipped (int): Accumulated flipped tile count.
+                    - tmp_flipped (int): Tiles tentatively flipped until a closing black tile is found.
+                    - inner_corner_in_final_direction (tuple[int, int]): Tracks inner corner found in this direction.
+                    - inner_corner_in_any_direction (tuple[int, int]): Tracks first inner corner found in any direction.
+
+        Returns:
+            Tuple ([int, tuple[int, int], tuple[int, int]]):
+                - int: Number of tiles flipped in the upward direction.
+                - tuple[int, int]: Updated "inner corner in any direction".
+                - tuple[int, int]: Updated "inner corner in final direction".
+        """
         #checks wether the first element in the direction of look-up is invalid, becasause its already taken by bot, sets it to nan, to prevent while loop from running
         args = jax.lax.cond(
             input[2].field_color[input[0]][input[1]-1] == FieldColor.BLACK,
@@ -1044,6 +1246,8 @@ class JaxOthello(JaxEnvironment[OthelloState, OthelloObservation, OthelloInfo, O
             return check_for_outside_borders_of_game_field
 
         def while_body(args):
+            #check if we are a inner corner
+            inner_corner_check = self.check_if_inner_corner(args[0], args[1])
             #when we encounter a not black field increase tmp_flipped, when we encounter a black field add the tmp_flipped (tiles we encountered before black field:= tiles to be flipped) to flipped tiles      
             return jax.lax.cond(
                 args[2].field_color[args[0], args[1]] == FieldColor.EMPTY,
@@ -1051,7 +1255,7 @@ class JaxOthello(JaxEnvironment[OthelloState, OthelloObservation, OthelloInfo, O
                 lambda args: (jax.lax.cond(
                     args[2].field_color[args[0], args[1]] == FieldColor.BLACK,
                     lambda args: (args[0], args[1]-1, args[2], args[3] + args[4], 0, args[5], args[5]),
-                    lambda args: (args[0], args[1]-1, args[2], args[3], args[4] + 1, self.check_if_inner_corner(args[0], args[1]), args[6]),
+                    lambda args: (args[0], args[1]-1, args[2], args[3], args[4] + 1, jax.lax.cond(inner_corner_check[0], lambda _: inner_corner_check[1], lambda _: args[5], None), args[6]),
                     args
                     )),
                 args
@@ -1060,14 +1264,52 @@ class JaxOthello(JaxEnvironment[OthelloState, OthelloObservation, OthelloInfo, O
         while_loop_return = jax.lax.while_loop(while_cond, while_body, args)
         return jax.lax.cond(
             input[1] > 7,
+            #check if we are end of line, then return no tiles flipped and no alt positions found
             lambda _: (jnp.int32(0.0), (-2147483648,-2147483648), (-2147483648,-2147483648)),
             lambda _: (jnp.int32(while_loop_return[3]), while_loop_return[6], while_loop_return[5]),
             None
         )
     
-    def compute_flipped_tiles_top_rigth(self, input) -> int:
-        # Returns the number of tiles to be flipped (only flipped tiles, same color tiles are disregarded)
+    def compute_flipped_tiles_top_right(self, input:Tuple[int, int, Field, int, int, Tuple[int, int], Tuple[int, int]]) -> Tuple[int, tuple[int, int], tuple[int, int]]:
+        """
+        Handle case 2: Top-right direction
 
+        Computes how many tiles would be flipped when placing a piece
+        and searching top-right (towards higher row indices and lower column indices) on the Othello board.
+
+        The algorithm iteratively checks tiles in the top-right direction starting
+        from the current tile, applying Othello rules:
+
+        - If the immediate neighbor is already the bot's tile (black),
+        the move is invalid → no tiles flipped.
+        - If empty space is encountered before finding a black tile,
+        the move is invalid → no tiles flipped.
+        - Otherwise, counts opponent tiles until a black tile is found,
+        flipping all tiles in between.
+
+        Additionally, the method checks whether an encountered tile is an
+        "inner corner". If we encounter one the value for inner_corner_in_final_direction is set to the coordinates of the inner corner. 
+        If we additionally encounter a flippable configuration after that, we update inner_corner_in_any_direction.
+
+        Args:
+            input (Tuple[int, int, Field, int, int, Tuple[int, int], Tuple[int, int]]): A tuple with the structure
+                (tile_y, tile_x, game_field, flipped, tmp_flipped,
+                inner_corner_in_final_direction, inner_corner_in_any_direction),
+                where:
+                    - tile_y (int): Starting row index.
+                    - tile_x (int): Starting column index.
+                    - game_field (Field): Current game state (disc colors).
+                    - flipped (int): Accumulated flipped tile count.
+                    - tmp_flipped (int): Tiles tentatively flipped until a closing black tile is found.
+                    - inner_corner_in_final_direction (tuple[int, int]): Tracks inner corner found in this direction.
+                    - inner_corner_in_any_direction (tuple[int, int]): Tracks first inner corner found in any direction.
+
+        Returns:
+            Tuple ([int, tuple[int, int], tuple[int, int]]):
+                - int: Number of tiles flipped in the upward direction.
+                - tuple[int, int]: Updated "inner corner in any direction".
+                - tuple[int, int]: Updated "inner corner in final direction".
+        """
         #checks wether the first element in the direction of look-up is invalid, becasause its already taken by bot, sets it to nan, to prevent while loop from running
         args = jax.lax.cond(
             input[2].field_color[input[0]-1][input[1]+1] == FieldColor.BLACK,
@@ -1085,6 +1327,8 @@ class JaxOthello(JaxEnvironment[OthelloState, OthelloObservation, OthelloInfo, O
             return check_for_outside_borders_of_game_field
 
         def while_body(args):
+            #check if we are a inner corner
+            inner_corner_check = self.check_if_inner_corner(args[0], args[1])
             #when we encounter a not black field increase tmp_flipped, when we encounter a black field add the tmp_flipped (tiles we encountered before black field:= tiles to be flipped) to flipped tiles      
             return jax.lax.cond(
                 args[2].field_color[args[0], args[1]] == FieldColor.EMPTY,  
@@ -1092,7 +1336,7 @@ class JaxOthello(JaxEnvironment[OthelloState, OthelloObservation, OthelloInfo, O
                 lambda args: (jax.lax.cond(
                     args[2].field_color[args[0], args[1]] == FieldColor.BLACK,
                     lambda args: (args[0]-1, args[1]+1, args[2], args[3] + args[4], 0, args[5], args[5]),
-                    lambda args: (args[0]-1, args[1]+1, args[2], args[3], args[4] + 1, self.check_if_inner_corner(args[0], args[1]), args[6]),
+                    lambda args: (args[0]-1, args[1]+1, args[2], args[3], args[4] + 1, jax.lax.cond(inner_corner_check[0], lambda _: inner_corner_check[1], lambda _: args[5], None), args[6]),
                     args
                     )),
                 args
@@ -1100,15 +1344,53 @@ class JaxOthello(JaxEnvironment[OthelloState, OthelloObservation, OthelloInfo, O
 
         while_loop_return = jax.lax.while_loop(while_cond, while_body, args)
         return jax.lax.cond(
+            #check if we are end of line, then return no tiles flipped and no alt positions found
             jnp.logical_and(input[0] < 0, input[1] > 7),
             lambda args: (jnp.int32(0.0), (-2147483648, -2147483648), (-2147483648, -2147483648)),
             lambda args: (jnp.int32(while_loop_return[3]), while_loop_return[6], while_loop_return[5]),
             args
         )
     
-    def compute_flipped_tiles_bottom_rigth(self, input) -> int:
-        # Returns the number of tiles to be flipped (only flipped tiles, same color tiles are disregarded)
+    def compute_flipped_tiles_bottom_right(self, input:Tuple[int, int, Field, int, int, Tuple[int, int], Tuple[int, int]]) -> Tuple[int, tuple[int, int], tuple[int, int]]:
+        """
+        Handle case 4: Bottom-right direction
 
+        Computes how many tiles would be flipped when placing a piece
+        and searching bottom-right (towards lower row indices and lower column indices) on the Othello board.
+
+        The algorithm iteratively checks tiles in the bottom-right direction starting
+        from the current tile, applying Othello rules:
+
+        - If the immediate neighbor is already the bot's tile (black),
+        the move is invalid → no tiles flipped.
+        - If empty space is encountered before finding a black tile,
+        the move is invalid → no tiles flipped.
+        - Otherwise, counts opponent tiles until a black tile is found,
+        flipping all tiles in between.
+
+        Additionally, the method checks whether an encountered tile is an
+        "inner corner". If we encounter one the value for inner_corner_in_final_direction is set to the coordinates of the inner corner. 
+        If we additionally encounter a flippable configuration after that, we update inner_corner_in_any_direction.
+
+        Args:
+            input (Tuple[int, int, Field, int, int, Tuple[int, int], Tuple[int, int]]): A tuple with the structure
+                (tile_y, tile_x, game_field, flipped, tmp_flipped,
+                inner_corner_in_final_direction, inner_corner_in_any_direction),
+                where:
+                    - tile_y (int): Starting row index.
+                    - tile_x (int): Starting column index.
+                    - game_field (Field): Current game state (disc colors).
+                    - flipped (int): Accumulated flipped tile count.
+                    - tmp_flipped (int): Tiles tentatively flipped until a closing black tile is found.
+                    - inner_corner_in_final_direction (tuple[int, int]): Tracks inner corner found in this direction.
+                    - inner_corner_in_any_direction (tuple[int, int]): Tracks first inner corner found in any direction.
+
+        Returns:
+            Tuple ([int, tuple[int, int], tuple[int, int]]):
+                - int: Number of tiles flipped in the upward direction.
+                - tuple[int, int]: Updated "inner corner in any direction".
+                - tuple[int, int]: Updated "inner corner in final direction".
+        """
         #checks wether the first element in the direction of look-up is invalid, becasause its already taken by bot, sets it to nan, to prevent while loop from running
         args = jax.lax.cond(
             input[2].field_color[input[0]+1][input[1]+1] == FieldColor.BLACK,
@@ -1126,6 +1408,8 @@ class JaxOthello(JaxEnvironment[OthelloState, OthelloObservation, OthelloInfo, O
             return check_for_outside_borders_of_game_field
 
         def while_body(args):
+            #check if we are a inner corner
+            inner_corner_check = self.check_if_inner_corner(args[0], args[1])
             #when we encounter a not black field increase tmp_flipped, when we encounter a black field add the tmp_flipped (tiles we encountered before black field:= tiles to be flipped) to flipped tiles      
             return jax.lax.cond(
                 args[2].field_color[args[0], args[1]] == FieldColor.EMPTY,  
@@ -1133,7 +1417,7 @@ class JaxOthello(JaxEnvironment[OthelloState, OthelloObservation, OthelloInfo, O
                 lambda args: (jax.lax.cond(
                     args[2].field_color[args[0], args[1]] == FieldColor.BLACK,
                     lambda args: (args[0]+1, args[1]+1, args[2], args[3] + args[4], 0, args[5], args[5]),
-                    lambda args: (args[0]+1, args[1]+1, args[2], args[3], args[4] + 1, self.check_if_inner_corner(args[0], args[1]), args[6]),
+                    lambda args: (args[0]+1, args[1]+1, args[2], args[3], args[4] + 1, jax.lax.cond(inner_corner_check[0], lambda _: inner_corner_check[1], lambda _: args[5], None), args[6]),
                     args
                     )),
                 args
@@ -1141,15 +1425,53 @@ class JaxOthello(JaxEnvironment[OthelloState, OthelloObservation, OthelloInfo, O
 
         while_loop_return = jax.lax.while_loop(while_cond, while_body, args)
         return jax.lax.cond(
+            #check if we are end of line, then return no tiles flipped and no alt positions found
             jnp.logical_and(input[0] > 7, input[1] > 7),
             lambda args: (jnp.int32(0.0), (-2147483648, -2147483648), (-2147483648, -2147483648)),
             lambda args: (jnp.int32(while_loop_return[3]), while_loop_return[6], while_loop_return[5]),
             args
         )
     
-    def compute_flipped_tiles_bottom_left(self, input) -> int:
-        # Returns the number of tiles to be flipped (only flipped tiles, same color tiles are disregarded)
+    def compute_flipped_tiles_bottom_left(self, input:Tuple[int, int, Field, int, int, Tuple[int, int], Tuple[int, int]]) -> Tuple[int, tuple[int, int], tuple[int, int]]:
+        """
+        Handle case 6: Bottom-left direction
 
+        Computes how many tiles would be flipped when placing a piece
+        and searching bottom-left (towards lower row indices and higher column indices) on the Othello board.
+
+        The algorithm iteratively checks tiles in the bottom-left direction starting
+        from the current tile, applying Othello rules:
+
+        - If the immediate neighbor is already the bot's tile (black),
+        the move is invalid → no tiles flipped.
+        - If empty space is encountered before finding a black tile,
+        the move is invalid → no tiles flipped.
+        - Otherwise, counts opponent tiles until a black tile is found,
+        flipping all tiles in between.
+
+        Additionally, the method checks whether an encountered tile is an
+        "inner corner". If we encounter one the value for inner_corner_in_final_direction is set to the coordinates of the inner corner. 
+        If we additionally encounter a flippable configuration after that, we update inner_corner_in_any_direction.
+
+        Args:
+            input (Tuple[int, int, Field, int, int, Tuple[int, int], Tuple[int, int]]): A tuple with the structure
+                (tile_y, tile_x, game_field, flipped, tmp_flipped,
+                inner_corner_in_final_direction, inner_corner_in_any_direction),
+                where:
+                    - tile_y (int): Starting row index.
+                    - tile_x (int): Starting column index.
+                    - game_field (Field): Current game state (disc colors).
+                    - flipped (int): Accumulated flipped tile count.
+                    - tmp_flipped (int): Tiles tentatively flipped until a closing black tile is found.
+                    - inner_corner_in_final_direction (tuple[int, int]): Tracks inner corner found in this direction.
+                    - inner_corner_in_any_direction (tuple[int, int]): Tracks first inner corner found in any direction.
+
+        Returns:
+            Tuple ([int, tuple[int, int], tuple[int, int]]):
+                - int: Number of tiles flipped in the upward direction.
+                - tuple[int, int]: Updated "inner corner in any direction".
+                - tuple[int, int]: Updated "inner corner in final direction".
+        """
         #checks wether the first element in the direction of look-up is invalid, becasause its already taken by bot, sets it to nan, to prevent while loop from running
         args = jax.lax.cond(
             input[2].field_color[input[0]+1][input[1]-1] == FieldColor.BLACK,
@@ -1167,6 +1489,8 @@ class JaxOthello(JaxEnvironment[OthelloState, OthelloObservation, OthelloInfo, O
             return check_for_outside_borders_of_game_field
 
         def while_body(args):
+            #check if we are a inner corner
+            inner_corner_check = self.check_if_inner_corner(args[0], args[1])
             #when we encounter a not black field increase tmp_flipped, when we encounter a black field add the tmp_flipped (tiles we encountered before black field:= tiles to be flipped) to flipped tiles      
             return jax.lax.cond(
                 args[2].field_color[args[0], args[1]] == FieldColor.EMPTY,  
@@ -1174,7 +1498,7 @@ class JaxOthello(JaxEnvironment[OthelloState, OthelloObservation, OthelloInfo, O
                 lambda args: (jax.lax.cond(
                     args[2].field_color[args[0], args[1]] == FieldColor.BLACK,
                     lambda args: (args[0]+1, args[1]-1, args[2], args[3] + args[4], 0, args[5], args[5]),
-                    lambda args: (args[0]+1, args[1]-1, args[2], args[3], args[4] + 1, self.check_if_inner_corner(args[0], args[1]), args[6]),
+                    lambda args: (args[0]+1, args[1]-1, args[2], args[3], args[4] + 1, jax.lax.cond(inner_corner_check[0], lambda _: inner_corner_check[1], lambda _: args[5], None), args[6]),
                     args
                     )),
                 args
@@ -1183,15 +1507,53 @@ class JaxOthello(JaxEnvironment[OthelloState, OthelloObservation, OthelloInfo, O
 
         while_loop_return = jax.lax.while_loop(while_cond, while_body, args)
         return jax.lax.cond(
+            #check if we are end of line, then return no tiles flipped and no alt positions found
             jnp.logical_and(input[0] < 0, input[1] > 7),
             lambda args: (jnp.int32(0.0), (-2147483648, -2147483648), (-2147483648, -2147483648)),
             lambda args: (jnp.int32(while_loop_return[3]), while_loop_return[6], while_loop_return[5]),
             args
         )
     
-    def compute_flipped_tiles_top_left(self, input) -> int:
-        # Returns the number of tiles to be flipped (only flipped tiles, same color tiles are disregarded)
+    def compute_flipped_tiles_top_left(self, input:Tuple[int, int, Field, int, int, Tuple[int, int], Tuple[int, int]]) -> Tuple[int, tuple[int, int], tuple[int, int]]:
+        """
+        Handle case 8: Top-left direction
 
+        Computes how many tiles would be flipped when placing a piece
+        and searching top-left (towards higher row indices and lower column indices) on the Othello board.
+
+        The algorithm iteratively checks tiles in the top-left direction starting
+        from the current tile, applying Othello rules:
+
+        - If the immediate neighbor is already the bot's tile (black),
+        the move is invalid → no tiles flipped.
+        - If empty space is encountered before finding a black tile,
+        the move is invalid → no tiles flipped.
+        - Otherwise, counts opponent tiles until a black tile is found,
+        flipping all tiles in between.
+
+        Additionally, the method checks whether an encountered tile is an
+        "inner corner". If we encounter one the value for inner_corner_in_final_direction is set to the coordinates of the inner corner. 
+        If we additionally encounter a flippable configuration after that, we update inner_corner_in_any_direction.
+
+        Args:
+            input (Tuple[int, int, Field, int, int, Tuple[int, int], Tuple[int, int]]): A tuple with the structure
+                (tile_y, tile_x, game_field, flipped, tmp_flipped,
+                inner_corner_in_final_direction, inner_corner_in_any_direction),
+                where:
+                    - tile_y (int): Starting row index.
+                    - tile_x (int): Starting column index.
+                    - game_field (Field): Current game state (disc colors).
+                    - flipped (int): Accumulated flipped tile count.
+                    - tmp_flipped (int): Tiles tentatively flipped until a closing black tile is found.
+                    - inner_corner_in_final_direction (tuple[int, int]): Tracks inner corner found in this direction.
+                    - inner_corner_in_any_direction (tuple[int, int]): Tracks first inner corner found in any direction.
+
+        Returns:
+            Tuple ([int, tuple[int, int], tuple[int, int]]):
+                - int: Number of tiles flipped in the upward direction.
+                - tuple[int, int]: Updated "inner corner in any direction".
+                - tuple[int, int]: Updated "inner corner in final direction".
+        """
         #checks wether the first element in the direction of look-up is invalid, becasause its already taken by bot, sets it to nan, to prevent while loop from running
         args = jax.lax.cond(
             input[2].field_color[input[0]-1][input[1]-1] == FieldColor.BLACK,
@@ -1209,6 +1571,8 @@ class JaxOthello(JaxEnvironment[OthelloState, OthelloObservation, OthelloInfo, O
             return check_for_outside_borders_of_game_field
 
         def while_body(args):
+            #check if we are a inner corner
+            inner_corner_check = self.check_if_inner_corner(args[0], args[1])
             #when we encounter a not black field increase tmp_flipped, when we encounter a black field add the tmp_flipped (tiles we encountered before black field:= tiles to be flipped) to flipped tiles      
             return jax.lax.cond(
                 args[2].field_color[args[0], args[1]] == FieldColor.EMPTY,
@@ -1216,7 +1580,7 @@ class JaxOthello(JaxEnvironment[OthelloState, OthelloObservation, OthelloInfo, O
                 lambda args: (jax.lax.cond(
                     args[2].field_color[args[0], args[1]] == FieldColor.BLACK,
                     lambda args: (args[0]-1, args[1]-1, args[2], args[3] + args[4], 0, args[5], args[6]),
-                    lambda args: (args[0]-1, args[1]-1, args[2], args[3], args[4] + 1, self.check_if_inner_corner(args[0], args[1]), args[6]),
+                    lambda args: (args[0]-1, args[1]-1, args[2], args[3], args[4] + 1, jax.lax.cond(inner_corner_check[0], lambda _: inner_corner_check[1], lambda _: args[5], None), args[6]),
                     args
                     )),
                 args
@@ -1225,6 +1589,7 @@ class JaxOthello(JaxEnvironment[OthelloState, OthelloObservation, OthelloInfo, O
 
         while_loop_return = jax.lax.while_loop(while_cond, while_body, args)
         return jax.lax.cond(
+            #check if we are end of line, then return no tiles flipped and no alt positions found
             jnp.logical_and(input[0] < 0, input[1] < 0),
             lambda args: (jnp.int32(0.0), (-2147483648, -2147483648), (-2147483648, -2147483648)),
             lambda args: (jnp.int32(while_loop_return[3]), while_loop_return[6], while_loop_return[5]),
