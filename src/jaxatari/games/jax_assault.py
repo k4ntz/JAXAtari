@@ -1011,19 +1011,19 @@ def load_assault_sprites():
     MODULE_DIR = os.path.dirname(os.path.abspath(__file__))
     SPRITES_DIR = os.path.join(MODULE_DIR, "sprites", "assault")
 
-    background = aj.loadFrame(os.path.join(SPRITES_DIR, "background.npy"), transpose=True)
-    enemy = aj.loadFrame(os.path.join(SPRITES_DIR, "enemy_0.npy"), transpose=True)
+    background = aj.loadFrame(os.path.join(SPRITES_DIR, "background.npy"), transpose=False)
+    enemy = aj.loadFrame(os.path.join(SPRITES_DIR, "enemy_0.npy"), transpose=False)
     #life = aj.loadFrame(os.path.join(SPRITES_DIR, "life.npy"), transpose=True)
-    mothership = aj.loadFrame(os.path.join(SPRITES_DIR, "mothership_0.npy"), transpose=True)
-    player = aj.loadFrame(os.path.join(SPRITES_DIR, "player.npy"), transpose=True)
-    player_projectile = aj.loadFrame(os.path.join(SPRITES_DIR, "player_projectile.npy"), transpose=True)
-    enemy_projectile = aj.loadFrame(os.path.join(SPRITES_DIR, "enemy_projectile.npy"), transpose=True)
-    enemy_projectile = aj.loadFrame(os.path.join(SPRITES_DIR, "enemy_projectile.npy"), transpose=True)
-    enemy_rain = aj.loadFrame(os.path.join(SPRITES_DIR, "proj_wide.npy"), transpose=True)
-    enemy_sphere = aj.loadFrame(os.path.join(SPRITES_DIR, "proj_sphere.npy"), transpose=True)
-    enemy_projectile_lateral = aj.loadFrame(os.path.join(SPRITES_DIR, "proj_lateral.npy"), transpose=True)
-    life = aj.loadFrame(os.path.join(SPRITES_DIR, "life.npy"), transpose=True)
-    enemy_tiny = aj.loadFrame(os.path.join(SPRITES_DIR, "enemy_tiny.npy"), transpose=True)
+    mothership = aj.loadFrame(os.path.join(SPRITES_DIR, "mothership_0.npy"), transpose=False)
+    player = aj.loadFrame(os.path.join(SPRITES_DIR, "player.npy"), transpose=False)
+    player_projectile = aj.loadFrame(os.path.join(SPRITES_DIR, "player_projectile.npy"), transpose=False)
+    enemy_projectile = aj.loadFrame(os.path.join(SPRITES_DIR, "enemy_projectile.npy"), transpose=False)
+    enemy_projectile = aj.loadFrame(os.path.join(SPRITES_DIR, "enemy_projectile.npy"), transpose=False)
+    enemy_rain = aj.loadFrame(os.path.join(SPRITES_DIR, "proj_wide.npy"), transpose=False)
+    enemy_sphere = aj.loadFrame(os.path.join(SPRITES_DIR, "proj_sphere.npy"), transpose=False)
+    enemy_projectile_lateral = aj.loadFrame(os.path.join(SPRITES_DIR, "proj_lateral.npy"), transpose=False)
+    life = aj.loadFrame(os.path.join(SPRITES_DIR, "life.npy"), transpose=False)
+    enemy_tiny = aj.loadFrame(os.path.join(SPRITES_DIR, "enemy_tiny.npy"), transpose=False)
 
     # Optionally expand dims if you want a batch/frame dimension
     BACKGROUND_SPRITE = jnp.expand_dims(background, axis=0)
@@ -1113,7 +1113,7 @@ class Renderer_AtraJaxisAssault(JAXGameRenderer):
         Returns:
             A JAX array representing the rendered frame.
         """
-        raster = jnp.zeros((WIDTH, HEIGHT, 3), dtype=jnp.uint8)
+        raster = jnp.zeros((HEIGHT, WIDTH, 3), dtype=jnp.uint8)
 
         # last minute change to make render work with newest upstream version without changing all 12 calls
         def render_at(raster, y, x, frame):
