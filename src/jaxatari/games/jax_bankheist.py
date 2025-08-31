@@ -980,9 +980,7 @@ class JaxBankHeist(JaxEnvironment[BankHeistState, BankHeistObservation, BankHeis
     @partial(jax.jit, static_argnums=(0,))
     def step(self, state: BankHeistState, action: chex.Array) -> Tuple[BankHeistState, BankHeistObservation, float, bool, BankHeistInfo]:
         # Translate action
-        jax.debug.print("Step Action: {}", action)
         action = ACTION_TRANSLATOR[action]
-        jax.debug.print("Translated Action: {}", action)
 
         # Get random key for this step and advance state's random key
         step_random_key, new_state = self.advance_random_key(state)
@@ -1013,7 +1011,33 @@ class JaxBankHeist(JaxEnvironment[BankHeistState, BankHeistObservation, BankHeis
             lambda: self.fuel_step(new_state)
         )
 
-        return state.obs_stack, new_state, 0.0, 1, {}
+        reward = 0.0
+        # Game is done when player runs out of lives
+        done = new_state.player_lives < 0
+        
+        # Get new observation and update obs_stack
+        obs = self._get_observation(new_state)
+        
+        # Update observation stack by shifting and adding new observation
+        if new_state.obs_stack is not None:
+            # Shift the stack and add new observation
+            old_stack = new_state.obs_stack
+            def shift_and_add(x_old, x_new):
+                # Shift existing frames and add new one at the end
+                shifted = x_old[1:]  # Remove oldest frame
+                x_new_expanded = jnp.expand_dims(x_new, axis=0)
+                return jnp.concatenate([shifted, x_new_expanded], axis=0)
+            
+            new_obs_stack = jax.tree.map(shift_and_add, old_stack, obs)
+            new_state = new_state._replace(obs_stack=new_obs_stack)
+        
+        # Create info
+        info = BankHeistInfo(
+            time=jnp.array(0),  # You can add proper time tracking if needed
+            all_rewards=jnp.array([reward])
+        )
+        
+        return new_state.obs_stack, new_state, reward, done, info
 
     @partial(jax.jit, static_argnums=(0,))
     def player_step(self, state: BankHeistState, action: chex.Array) -> BankHeistState:
