@@ -1596,16 +1596,52 @@ class JaxOthello(JaxEnvironment[OthelloState, OthelloObservation, OthelloInfo, O
             args
         )
 
-    def handle_secondary_calculation_of_strategic_score(self, args) -> int:
+    def handle_secondary_calculation_of_strategic_score(self, args: tuple[int, Field, tuple[int, int], chex.Array, int]) -> int:
+        """
+        Computes the strategic score for a secondary tile associated 
+        with a potential move in Othello.
 
-        def handle_secondary_calculation_of_strategic_score_limit_to_valid(args):
+        Steps:
+        2. Call `calculate_strategic_tile_score` for the secondary tile.
+        3. If a valid alternate position is returned, its strategic score takes precedence over the score of the original tile, 
+            if no valid position is found the tile gets the same score as the primary tile.
+        4. Computes the total score by summing the primary and secondary contributions.
+        5. Caps the total score to a valid range (-128 to 127); if out of range, 
+            sets to a sentinel value (-104). This is due to potential overflow issues in the original code.
+        6. If the tile index is outside valid bounds (<0 or ≥64), returns an invalid score (-2147483648).
+
+        Args:
+            args (tuple[int, Field, tuple[int, int], chex.Array, int]): A tuple containing:
+                - tile_index (int): Linear index of the secondary tile.
+                - game_field (Field): Current board state.
+                - default_pos (tuple[int, int]): Default fallback position.
+                - difficulty (chex.Array): Difficulty setting for strategic evaluation.
+                - new_score (int): Primary tile's computed score.
+
+        Returns:
+            int: Adjusted score combining primary and secondary contributions, 
+        """
+        def handle_secondary_calculation_of_strategic_score_limit_to_valid(args: tuple[int, Field, tuple[int, int], chex.Array, int]) -> int:
+            """
+            Handles the logic of handle_secondary_calculation_of_strategic_score, guarded by a check for valid tile indexes.
+
+            Args:
+            args (tuple[int, Field, tuple[int, int], chex.Array, int]): A tuple containing:
+                - tile_index (int): Linear index of the secondary tile.
+                - game_field (Field): Current board state.
+                - default_pos (tuple[int, int]): Default fallback position.
+                - difficulty (chex.Array): Difficulty setting for strategic evaluation.
+                - new_score (int): Primary tile's computed score.
+
+            Returns:
+                int: Adjusted score combining primary and secondary contributions,
+            """
             tile_index, game_field, default_pos, difficulty, new_score = args
-            #jax.debug.print("tile_index: {}, default_pos: {}, difficulty: {}", tile_index, default_pos, difficulty)
             new_score_copy = new_score
             ((new_score, new_alt_position), _) = self.calculate_strategic_tile_score(63-tile_index, game_field, default_pos, difficulty)
 
 
-
+            # if no new alternative position found, keep original score
             new_score_copy = jax.lax.cond(
                 new_alt_position != -2147483648,
                 lambda _: new_alt_position,
@@ -1615,6 +1651,7 @@ class JaxOthello(JaxEnvironment[OthelloState, OthelloObservation, OthelloInfo, O
 
             total_score = new_score + new_score_copy
 
+            #account for possible overflow handling of original code
             total_score = jax.lax.cond(jnp.logical_or(total_score > 127, total_score < -128),
                 lambda _: -104,
                 lambda _: total_score,
@@ -1629,9 +1666,35 @@ class JaxOthello(JaxEnvironment[OthelloState, OthelloObservation, OthelloInfo, O
             args
         )
 
-    def calculate_strategic_tile_score(self, tile_index: int, game_field: Field, default_pos: Tuple[int, int], difficulty: int):
-        game_field_flipped = Field(field_id=game_field.field_id,
-                                field_color=jnp.flip(game_field.field_color))
+    def calculate_strategic_tile_score(self, tile_index: int, game_field: Field, default_pos: Tuple[int, int], difficulty: chex.Array) -> Tuple[Tuple[int, int], bool]:
+        """
+        Calculates the strategic value of placing a tile at a specific board position.
+
+        The strategic score is determined by a set of precalculated heuristics that
+        evaluate the importance of each position on the board. 
+
+        For an easier reimplementation of the original code, the board was flipped.
+
+        Othello uses 18 different evaluation functions to assess the strategic value of each tile position.
+        The attribution of these functions to the tile indices is stored in STRATEGIC_TILE_SCORE_CASES.
+
+        Each case has its own helper function, which is called using a `jax.lax.switch`.
+        Different functions have different complexities and call for different subroutines.
+
+        Args : 
+            tile_index (int): Linear index of the tile on an 8x8 board (0–63).
+            game_field (Field): Current state of the game board including disc colors.
+            default_pos (Tuple[int, int]): Default fallback position.
+            difficulty (chex.Array): Difficulty setting affecting the weighting of strategic heuristics.
+
+        Returns:
+            Tuple ([[int, int], bool]): A tuple containing:
+                - A Tuple with: 
+                    - int: primary strategic score of the tile,
+                    - int: secondary tile position for further strategic evaluation, or a sentinel (-2147483648) if not applicable.
+                - bool: Whether a secondary evaluation needs to be performed.
+        """
+        game_field_flipped = Field(field_id=game_field.field_id, field_color=jnp.flip(game_field.field_color))
         default_pos_combined = default_pos[0] + default_pos[1] * 8
 
         #determine the position of the tile within the game field, account for flipped game field
@@ -1658,18 +1721,18 @@ class JaxOthello(JaxEnvironment[OthelloState, OthelloObservation, OthelloInfo, O
         ]
 
         def compute_strategic_score_top_left(args):
-            _, _, game_field_flipped, unknown_arg, difficulty = args
-            return ((self.css_calculate_top_left_score(game_field_flipped, unknown_arg, difficulty)), True)
+            _, _, game_field_flipped, default_pos_combined, difficulty = args
+            return ((self.css_calculate_top_left_score(game_field_flipped, default_pos_combined, difficulty)), True)
 
         def compute_strategic_score_top(args):
-            tile_y, tile_x, game_field_flipped, unknown_arg, difficulty = args
+            tile_y, tile_x, game_field_flipped, default_pos_combined, difficulty = args
 
-            return ((self.css__f2d3_count_tiles_horizontally(game_field_flipped, tile_y, tile_x, unknown_arg, difficulty)), False)
+            return ((self.css__f2d3_count_tiles_horizontally(game_field_flipped, tile_y, tile_x, default_pos_combined, difficulty)), False)
 
         def compute_strategic_score_top_right(args):
-            _, _, game_field_flipped, unknown_arg, difficulty = args
+            _, _, game_field_flipped, default_pos_combined, difficulty = args
 
-            return ((self.css_calculate_top_right_score(game_field_flipped, unknown_arg, difficulty)), True)
+            return ((self.css_calculate_top_right_score(game_field_flipped, default_pos_combined, difficulty)), True)
 
         def compute_strategic_score_top_left_inner(args):
             _, _, game_field_flipped, _, _ = args
@@ -1685,9 +1748,9 @@ class JaxOthello(JaxEnvironment[OthelloState, OthelloObservation, OthelloInfo, O
             return ((self.css_check_three_tiles(game_field_flipped, 0x8, 0x3e, 0x38), -2147483648), False)
 
         def compute_strategic_score_left(args):
-            tile_y, tile_x, game_field_flipped, unknown_arg, difficulty = args
+            tile_y, tile_x, game_field_flipped, default_pos_combined, difficulty = args
 
-            return ((self.css__f2d3_count_tiles_vertically(game_field_flipped, tile_y, tile_x, unknown_arg, difficulty)), False)
+            return ((self.css__f2d3_count_tiles_vertically(game_field_flipped, tile_y, tile_x, default_pos_combined, difficulty)), False)
 
         def compute_strategic_score_left_inner(args):
             #Strategic score for left inner field is influenced by the field to the left of it
@@ -1704,13 +1767,13 @@ class JaxOthello(JaxEnvironment[OthelloState, OthelloObservation, OthelloInfo, O
 
         def compute_strategic_score_right_inner(args):
             #Strategic score for right inner field is influenced by the field to the right of it
-            tile_y, tile_x, game_field_flipped, unknown_arg, difficulty = args
+            tile_y, tile_x, game_field_flipped, _, _ = args
             return ((self.css_check_tile_right(tile_y, tile_x, game_field_flipped), -2147483648), False)
 
         def compute_strategic_score_right(args):
-            tile_y, tile_x, game_field_flipped, unknown_arg, difficulty = args
+            tile_y, tile_x, game_field_flipped, default_pos_combined, difficulty = args
 
-            return ((self.css__f2d3_count_tiles_vertically(game_field_flipped, tile_y, tile_x, unknown_arg, difficulty)), False)
+            return ((self.css__f2d3_count_tiles_vertically(game_field_flipped, tile_y, tile_x, default_pos_combined, difficulty)), False)
 
 
         def compute_strategic_score_bottom_left_inner(args):
@@ -1727,24 +1790,35 @@ class JaxOthello(JaxEnvironment[OthelloState, OthelloObservation, OthelloInfo, O
             return ((self.css_check_three_tiles(game_field_flipped, 0x6, 0x30, 0x0), -2147483648), False)
 
         def compute_strategic_score_bottom_left(args):
-            _, _, game_field_flipped, unknown_arg, difficulty = args
+            _, _, game_field_flipped, default_pos_combined, difficulty = args
 
-            return ((self.css_calculate_bottom_left_score(game_field_flipped, unknown_arg, difficulty)), True)
+            return ((self.css_calculate_bottom_left_score(game_field_flipped, default_pos_combined, difficulty)), True)
 
         def compute_strategic_score_bottom(args):
-            tile_y, tile_x, game_field_flipped, unknown_arg, difficulty = args
+            tile_y, tile_x, game_field_flipped, default_pos_combined, difficulty = args
 
-            return ((self.css__f2d3_count_tiles_horizontally(game_field_flipped, tile_y, tile_x, unknown_arg, difficulty)), False)
+            return ((self.css__f2d3_count_tiles_horizontally(game_field_flipped, tile_y, tile_x, default_pos_combined, difficulty)), False)
 
         def compute_strategic_score_bottom_right(args):
-            _, _, game_field_flipped, unknown_arg, difficulty = args
+            _, _, game_field_flipped, default_pos_combined, difficulty = args
 
-            return ((self.css_calculate_bottom_right_score(game_field_flipped, unknown_arg, difficulty)), True)
+            return ((self.css_calculate_bottom_right_score(game_field_flipped, default_pos_combined, difficulty)), True)
 
         return jax.lax.switch(self.consts.STRATEGIC_TILE_SCORE_CASES[tile_index], branches, args)
 
     def css_check_tile_down(self,tile_y: int, tile_x: int, game_field: Field) -> int:
-        # If field below has the same color as the current tile, return 4, else return -8
+        """
+        Handles the evaluation of bottom_inner tiles.
+        If the field below has the same color as the current tile, the score is 4, else it is -8.
+
+        Args:
+            tile_y (int): The y-coordinate of the current tile.
+            tile_x (int): The x-coordinate of the current tile.
+            game_field (Field): The game field in its current state.
+
+        Returns:
+            int: The strategic score for the tile.
+        """
         return jax.lax.cond(
             game_field.field_color[tile_y - 1, tile_x] == game_field.field_color[tile_y , tile_x],
             lambda _: 4,
@@ -1752,7 +1826,18 @@ class JaxOthello(JaxEnvironment[OthelloState, OthelloObservation, OthelloInfo, O
             None)
 
     def css_check_tile_up(self,tile_y: int, tile_x: int, game_field: Field) -> int:
-        # If field above has the same color as the current tile, return 4, else return -8
+        """
+        Handles the evaluation of top_inner tiles.
+        If the field above has the same color as the current tile, the score is 4, else it is -8.
+
+        Args:
+            tile_y (int): The y-coordinate of the current tile.
+            tile_x (int): The x-coordinate of the current tile.
+            game_field (Field): The game field in its current state.
+
+        Returns:
+            int: The strategic score for the tile.
+        """
         return jax.lax.cond(
             game_field.field_color[tile_y + 1, tile_x] == game_field.field_color[tile_y , tile_x],
             lambda _: 4,
@@ -1760,7 +1845,18 @@ class JaxOthello(JaxEnvironment[OthelloState, OthelloObservation, OthelloInfo, O
             None)
 
     def css_check_tile_left(self, tile_y: int, tile_x: int, game_field: Field) -> int:
-        # If field to the left has the same color as the current tile, return 4, else return -8
+        """
+        Handles the evaluation of left_inner tiles.
+        If the field to the left has the same color as the current tile, the score is 4, else it is -8.
+
+        Args:
+            tile_y (int): The y-coordinate of the current tile.
+            tile_x (int): The x-coordinate of the current tile.
+            game_field (Field): The game field in its current state.
+
+        Returns:
+            int: The strategic score for the tile.
+        """
         return jax.lax.cond(
             game_field.field_color[tile_y, tile_x + 1] == game_field.field_color[tile_y , tile_x],
             lambda _: 4,
@@ -1768,7 +1864,18 @@ class JaxOthello(JaxEnvironment[OthelloState, OthelloObservation, OthelloInfo, O
             None)
 
     def css_check_tile_right(self, tile_y: int, tile_x: int, game_field: Field) -> int:
-        # If field to the right has the same color as the current tile, return 4, else return -8
+        """
+        Handles the evaluation of right_inner tiles.
+        If the field to the right has the same color as the current tile, the score is 4, else it is -8.
+
+        Args:
+            tile_y (int): The y-coordinate of the current tile.
+            tile_x (int): The x-coordinate of the current tile.
+            game_field (Field): The game field in its current state.
+
+        Returns:
+            int: The strategic score for the tile.
+        """
         return jax.lax.cond(
             game_field.field_color[tile_y, tile_x - 1] == game_field.field_color[tile_y , tile_x],
             lambda _: 4,
@@ -1776,6 +1883,20 @@ class JaxOthello(JaxEnvironment[OthelloState, OthelloObservation, OthelloInfo, O
             None)
 
     def css_check_three_tiles(self, game_field: Field, field_1: int, field_2: int, field_3: int) -> int:
+        """
+        Handles the evaluation of the inner_corner tiles.
+        Checks for the color of the other three inner corners, with field_3 posing as the opposing corner.
+        Inner corners are heavily punished, if one of the adjacent corners is already occupied by the player and even more if the opposing on is alredy owned by the player,
+
+        Args:
+            game_field (Field): The game field in its current state.
+            field_1 (int): The position of the first adjacent corner.
+            field_2 (int): The position of the second adjacent corner.
+            field_3 (int): The position of the opposing corner.
+
+        Returns:
+            int: The strategic score for the tile.
+        """
         # checks for colors of the fields and returns a score based on the colors
         # field_1, field_2 are are on the opposing line end of the to be checked field, field_3 is in the opposing corner
         secondary_condition = jnp.logical_or(game_field.field_color[field_1 % 8, field_1 // 8 ] == FieldColor.WHITE,
@@ -1789,17 +1910,35 @@ class JaxOthello(JaxEnvironment[OthelloState, OthelloObservation, OthelloInfo, O
                 None),
             secondary_condition)
 
-    def css_calculate_bottom_right_score(self, game_field: Field, default_pos: int, difficulty: int):
+    def css_calculate_bottom_right_score(self, game_field: Field, default_pos_combined: int, difficulty: int) -> Tuple[int, int]:
+        """
+        Computes the strategic score for the bottom-right corner tile on the board.
+        A score for the bottom row and right column is used to determine the strategic value of this position.
+        By default the position receives a score of 56, and the default secondary position is taken from the initial calculation of the flipped tiles.
+        -> Represents one of the inner corners
+
+        if a valid configuration is found in one of the evaluated lines, the score and secondary position is adjusted accordingly.
+
+        Args:
+            game_field (Field): Current state of the board including disc colors.
+            default_pos_combined (int): Default fallback position for secondary evaluation.
+            difficulty (int): Difficulty level.
+
+        Returns:
+            Tuple([int, int]): A tuple containing:
+                - Calculated strategic score for the bottom-right tile,
+                - Position to consider as an alternate if necessary.
+        """
         #alt singature: game_field: Field, ai_think_timer: int, default_pos: int, difficulty: int, y_pos: int, x_pos: int
-        return_value = ((56,default_pos), False) # (Touple to be returned, Aborted)
-        (horizontal_score, alternate_pos_horz) = self.css__f2d3_count_tiles_horizontally(game_field, 0, 7, default_pos, difficulty) #TODO check for correctness of 0,7
+        return_value = ((56,default_pos_combined), False) # (Touple to be returned, Aborted)
+        (horizontal_score, alternate_pos_horz) = self.css__f2d3_count_tiles_horizontally(game_field, 0, 7, default_pos_combined, difficulty) #TODO check for correctness of 0,7
 
         jax.lax.cond(horizontal_score < 0,
             lambda _: ((horizontal_score, alternate_pos_horz), True),
             lambda _: return_value,
             None)
 
-        (vertical_score, alternate_pos_vert) = self.css__f2d3_count_tiles_vertically(game_field, 7, 0, default_pos, difficulty) #TODO check for correctness of 7,0
+        (vertical_score, alternate_pos_vert) = self.css__f2d3_count_tiles_vertically(game_field, 7, 0, default_pos_combined, difficulty) #TODO check for correctness of 7,0
 
         jax.lax.cond(jnp.logical_and(vertical_score < 0, return_value[1] == False),
             lambda _: ((vertical_score, alternate_pos_vert), True),
@@ -1808,16 +1947,34 @@ class JaxOthello(JaxEnvironment[OthelloState, OthelloObservation, OthelloInfo, O
 
         return return_value[0]
 
-    def css_calculate_top_left_score(self,game_field: Field, default_pos: int, difficulty: int):
-        return_value = ((56,default_pos), False) # (Touple to be returned, Aborted)
-        (horizontal_score, alternate_pos_horz) = self.css__f2d3_count_tiles_horizontally(game_field, 7, 0, default_pos, difficulty) #TODO check for correctness of 7,0
+    def css_calculate_top_left_score(self,game_field: Field, default_pos_combined: int, difficulty: int) -> Tuple([int, int]):
+        """
+        Computes the strategic score for the top-left corner tile on the board.
+        A score for the top row and left column is used to determine the strategic value of this position.
+        By default the position receives a score of 56, and the default secondary position is taken from the initial calculation of the flipped tiles.
+        -> Represents one of the inner corners
+
+        if a valid configuration is found in one of the evaluated lines, the score and secondary position is adjusted accordingly.
+
+        Args:
+            game_field (Field): Current state of the board including disc colors.
+            default_pos_combined (int): Default fallback position for secondary evaluation.
+            difficulty (int): Difficulty level.
+
+        Returns:
+            Tuple([int, int]): A tuple containing:
+                - Calculated strategic score for the bottom-right tile,
+                - Position to consider as an alternate if necessary.
+        """
+        return_value = ((56,default_pos_combined), False) # (Touple to be returned, Aborted)
+        (horizontal_score, alternate_pos_horz) = self.css__f2d3_count_tiles_horizontally(game_field, 7, 0, default_pos_combined, difficulty) #TODO check for correctness of 7,0
 
         jax.lax.cond(horizontal_score < 0,
             lambda _: ((horizontal_score, alternate_pos_horz), True),
             lambda _: return_value,
             None)
 
-        (vertical_score, alternate_pos_vert) = self.css__f2d3_count_tiles_vertically(game_field, 0, 7, default_pos, difficulty) #TODO check for correctness of 0,7
+        (vertical_score, alternate_pos_vert) = self.css__f2d3_count_tiles_vertically(game_field, 0, 7, default_pos_combined, difficulty) #TODO check for correctness of 0,7
 
         jax.lax.cond(jnp.logical_and(vertical_score < 0, return_value[1] == False),
             lambda _: ((vertical_score, alternate_pos_vert), True),
@@ -1826,16 +1983,34 @@ class JaxOthello(JaxEnvironment[OthelloState, OthelloObservation, OthelloInfo, O
 
         return return_value[0]
 
-    def css_calculate_top_right_score(self, game_field: Field, default_pos: int, difficulty: int):
-        return_value = ((56,default_pos), False) # (Touple to be returned, Aborted)
-        (horizontal_score, alternate_pos_horz) = self.css__f2d3_count_tiles_horizontally(game_field, 0, 0, default_pos, difficulty) #TODO check for correctness of 0,0
+    def css_calculate_top_right_score(self, game_field: Field, default_pos_combined: int, difficulty: int) -> Tuple[int, int]:
+        """
+        Computes the strategic score for the top-right corner tile on the board.
+        A score for the top row and right column is used to determine the strategic value of this position.
+        By default the position receives a score of 56, and the default secondary position is taken from the initial calculation of the flipped tiles.
+        -> Represents one of the inner corners
+
+        if a valid configuration is found in one of the evaluated lines, the score and secondary position is adjusted accordingly.
+
+        Args:
+            game_field (Field): Current state of the board including disc colors.
+            default_pos_combined (int): Default fallback position for secondary evaluation.
+            difficulty (int): Difficulty level.
+
+        Returns:
+            Tuple([int, int]): A tuple containing:
+                - Calculated strategic score for the bottom-right tile,
+                - Position to consider as an alternate if necessary.
+        """
+        return_value = ((56,default_pos_combined), False) # (Touple to be returned, Aborted)
+        (horizontal_score, alternate_pos_horz) = self.css__f2d3_count_tiles_horizontally(game_field, 0, 0, default_pos_combined, difficulty) #TODO check for correctness of 0,0
 
         jax.lax.cond(horizontal_score < 0,
             lambda _: ((horizontal_score, alternate_pos_horz), True),
             lambda _: return_value,
             None)
 
-        (vertical_score, alternate_pos_vert) = self.css__f2d3_count_tiles_vertically(game_field, 7, 7, default_pos, difficulty) #TODO check for correctness of 7,7
+        (vertical_score, alternate_pos_vert) = self.css__f2d3_count_tiles_vertically(game_field, 7, 7, default_pos_combined, difficulty) #TODO check for correctness of 7,7
 
         jax.lax.cond(jnp.logical_and(vertical_score < 0, return_value[1] == False),
             lambda _: ((vertical_score, alternate_pos_vert), True),
@@ -1844,16 +2019,34 @@ class JaxOthello(JaxEnvironment[OthelloState, OthelloObservation, OthelloInfo, O
 
         return return_value[0]
 
-    def css_calculate_bottom_left_score(self, game_field: Field, default_pos: int, difficulty: int):
-        return_value = ((56,default_pos), False) # (Touple to be returned, Aborted)
-        (horizontal_score, alternate_pos_horz) = self.css__f2d3_count_tiles_horizontally(game_field, 7, 7, default_pos, difficulty) #TODO check for correctness of 7,7
+    def css_calculate_bottom_left_score(self, game_field: Field, default_pos_combined: int, difficulty: int) -> Tuple[int, int]:
+        """
+        Computes the strategic score for the bottom-left corner tile on the board.
+        A score for the bottom row and left column is used to determine the strategic value of this position.
+        By default the position receives a score of 56, and the default secondary position is taken from the initial calculation of the flipped tiles.
+        -> Represents one of the inner corners
+
+        if a valid configuration is found in one of the evaluated lines, the score and secondary position is adjusted accordingly.
+
+        Args:
+            game_field (Field): Current state of the board including disc colors.
+            default_pos_combined (int): Default fallback position for secondary evaluation.
+            difficulty (int): Difficulty level.
+
+        Returns:
+            Tuple([int, int]): A tuple containing:
+                - Calculated strategic score for the bottom-right tile,
+                - Position to consider as an alternate if necessary.
+        """
+        return_value = ((56,default_pos_combined), False) # (Touple to be returned, Aborted)
+        (horizontal_score, alternate_pos_horz) = self.css__f2d3_count_tiles_horizontally(game_field, 7, 7, default_pos_combined, difficulty) #TODO check for correctness of 7,7
 
         jax.lax.cond(horizontal_score < 0,
             lambda _: ((horizontal_score, alternate_pos_horz), True),
             lambda _: return_value,
             None)
 
-        (vertical_score, alternate_pos_vert) = self.css__f2d3_count_tiles_vertically(game_field, 0, 0, default_pos, difficulty) #TODO check for correctness of 0,0
+        (vertical_score, alternate_pos_vert) = self.css__f2d3_count_tiles_vertically(game_field, 0, 0, default_pos_combined, difficulty) #TODO check for correctness of 0,0
 
         jax.lax.cond(jnp.logical_and(vertical_score < 0, return_value[1] == False),
             lambda _: ((vertical_score, alternate_pos_vert), True),
