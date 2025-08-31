@@ -68,12 +68,26 @@ class Renderer:
         try:
              action_meanings = self.env.unwrapped.get_action_meanings()
              print(f"Action meanings: {action_meanings}")
-             self.keys2actions = {(): 0}
-             if 'UP' in action_meanings: self.keys2actions[(pygame.K_UP,)] = action_meanings.index('UP')
-             if 'DOWN' in action_meanings: self.keys2actions[(pygame.K_DOWN,)] = action_meanings.index('DOWN')
-             if 'LEFT' in action_meanings: self.keys2actions[(pygame.K_LEFT,)] = action_meanings.index('LEFT')
-             if 'RIGHT' in action_meanings: self.keys2actions[(pygame.K_RIGHT,)] = action_meanings.index('RIGHT')
-             if 'FIRE' in action_meanings: self.keys2actions[(pygame.K_SPACE,)] = action_meanings.index('FIRE')
+             self.keys2actions = {(): 0}  # NOOP action
+             if 'UP' in action_meanings: self.keys2actions[tuple(sorted([pygame.K_UP]))] = action_meanings.index('UP')
+             if 'DOWN' in action_meanings: self.keys2actions[tuple(sorted([pygame.K_DOWN]))] = action_meanings.index('DOWN')
+             if 'LEFT' in action_meanings: self.keys2actions[tuple(sorted([pygame.K_LEFT]))] = action_meanings.index('LEFT')
+             if 'RIGHT' in action_meanings: self.keys2actions[tuple(sorted([pygame.K_RIGHT]))] = action_meanings.index('RIGHT')
+             if 'FIRE' in action_meanings: self.keys2actions[tuple(sorted([pygame.K_SPACE]))] = action_meanings.index('FIRE')
+             if 'LEFTFIRE' in action_meanings: self.keys2actions[tuple(sorted([pygame.K_LEFT, pygame.K_SPACE]))] = action_meanings.index('LEFTFIRE')
+             if 'RIGHTFIRE' in action_meanings: self.keys2actions[tuple(sorted([pygame.K_RIGHT, pygame.K_SPACE]))] = action_meanings.index('RIGHTFIRE')
+             if 'DOWNFIRE' in action_meanings: self.keys2actions[tuple(sorted([pygame.K_DOWN, pygame.K_SPACE]))] = action_meanings.index('DOWNFIRE')
+             if 'UPFIRE' in action_meanings: self.keys2actions[tuple(sorted([pygame.K_UP, pygame.K_SPACE]))] = action_meanings.index('UPFIRE')
+             if 'UPRIGHTFIRE' in action_meanings: self.keys2actions[tuple(sorted([pygame.K_UP, pygame.K_RIGHT, pygame.K_SPACE]))] = action_meanings.index('UPRIGHTFIRE')
+             if 'UPLEFTFIRE' in action_meanings: self.keys2actions[tuple(sorted([pygame.K_UP, pygame.K_LEFT, pygame.K_SPACE]))] = action_meanings.index('UPLEFTFIRE')
+             if 'DOWNRIGHTFIRE' in action_meanings: self.keys2actions[tuple(sorted([pygame.K_DOWN, pygame.K_RIGHT, pygame.K_SPACE]))] = action_meanings.index('DOWNRIGHTFIRE')
+             if 'DOWNLEFTFIRE' in action_meanings: self.keys2actions[tuple(sorted([pygame.K_DOWN, pygame.K_LEFT, pygame.K_SPACE]))] = action_meanings.index('DOWNLEFTFIRE')
+             if 'UPRIGHT' in action_meanings: self.keys2actions[tuple(sorted([pygame.K_UP, pygame.K_RIGHT]))] = action_meanings.index('UPRIGHT')
+             if 'UPLEFT' in action_meanings: self.keys2actions[tuple(sorted([pygame.K_UP, pygame.K_LEFT]))] = action_meanings.index('UPLEFT')
+             if 'DOWNRIGHT' in action_meanings: self.keys2actions[tuple(sorted([pygame.K_DOWN, pygame.K_RIGHT]))] = action_meanings.index('DOWNRIGHT')
+             if 'DOWNLEFT' in action_meanings: self.keys2actions[tuple(sorted([pygame.K_DOWN, pygame.K_LEFT]))] = action_meanings.index('DOWNLEFT')
+             if 'UPRIGHTFIRE' in action_meanings: self.keys2actions[tuple(sorted([pygame.K_UP, pygame.K_RIGHT, pygame.K_SPACE]))] = action_meanings.index('UPRIGHTFIRE')
+
              # Add more complex combos if needed, check action_meanings list first
              print(f"Key to action mapping: {self.keys2actions}")
         except AttributeError:
@@ -255,10 +269,12 @@ class Renderer:
 
     def _get_action(self):
         pressed_keys = tuple(sorted(list(self.current_keys_down)))
+        print(f"Pressed keys: {[pygame.key.name(k) for k in pressed_keys]}")
         action = self.keys2actions.get(pressed_keys, 0)
         if self.env.action_space.contains(action):
             return action
         else:
+            print(f"Invalid action {action}, defaulting to NOOP")
             return 0
 
 
@@ -621,7 +637,7 @@ if __name__ == "__main__":
     from argparse import ArgumentParser
 
     parser = ArgumentParser(description="Gymnasium ALE RAM Explorer")
-    parser.add_argument("-g", "--game", type=str, default="BankHeist", help="Name of the Atari game (e.g., 'Pong', 'Breakout').")
+    parser.add_argument("-g", "--game", type=str, default="Seaquest", help="Name of the Atari game (e.g., 'Pong', 'Breakout').")
     # Add scale argument
     parser.add_argument('--scale', type=int, default=4, help='Scale factor for the game display window')
     parser.add_argument("-ls", "--load_state", type=str, default=None, help="Path to a pickled ALE state file (.pkl) to load.")

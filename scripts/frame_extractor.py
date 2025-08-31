@@ -115,11 +115,8 @@ class AtariPlayer:
     """
 
     def __init__(self,
-                 game_name: str = "BankHeist",
-                 mode: str = "ram",
-                 hud: bool = True,
-                 obs_mode: str = "ori",
-                 render_scale: int = None,
+                 game_name: str = "Pong",
+                 render_scale: int = 4,
                  screenshot_dir: str = None,
                  fps: int = 30):
         self.game_name = game_name
@@ -472,23 +469,11 @@ class AtariPlayer:
 
 # --- Main Execution (Unchanged) ---
 def main():
-    """Parse command line arguments and run the game."""
-    parser = argparse.ArgumentParser(description='Play any Atari game using OCAtari')
-    parser.add_argument('--game', type=str, default='BankHeist',
-                        help='Name of the Atari game to play (e.g., Boxing, Breakout, Pong)')
-    parser.add_argument('--mode', type=str, default='ram', choices=['ram', 'vision', 'both'],
-                        help='OCAtari mode for object detection')
-    parser.add_argument('--no-hud', action='store_true', default=False,  # Changed default to False for clarity
-                        help='Exclude HUD elements in object detection')
-    parser.add_argument('--obs-mode', type=str, default='ori', choices=['ori', 'dqn', 'obj'],
-                        help='Observation mode')
-    parser.add_argument('--scale', type=int, default=4,
-                        help='Scale factor for the display window')
-    parser.add_argument('--fps', type=int, default=30,
-                        help='Target frames per second')
-    parser.add_argument('--screenshot-dir', type=str, default="new_screenshots",
-                        help='Directory to save screenshots (optional)')
-
+    parser = argparse.ArgumentParser(description='Play Atari games using Gymnasium')
+    parser.add_argument('-g', '--game', type=str, default='Pong', help='Name of the Atari game ROM (e.g., Pong, Breakout)')
+    parser.add_argument('--scale', type=int, default=4, help='Scale factor for the display window')
+    parser.add_argument('--fps', type=int, default=30, help='Target frames per second')
+    parser.add_argument('--screenshot-dir', type=str, default=None, help='Directory to save screenshots as .npy files (optional)')
     args = parser.parse_args()
 
     # if the screenshot_dir is None, set it to {game_name}_screenshots
