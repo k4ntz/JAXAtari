@@ -24,9 +24,9 @@ DOWN = 0
 ACTION_TRANSLATOR = jnp.array([
     NOOP,
     FIRE,
-    LEFT,
-    RIGHT,
     UP,
+    RIGHT,
+    LEFT,
     DOWN
 ])
 # DOWN = 5
@@ -1272,7 +1272,7 @@ class Renderer_AtraBankisHeist(JAXGameRenderer):
             lambda: aj.get_sprite_frame(self.SPRITE_PLAYER_FRONT, 0),  # DOWN
             lambda: aj.get_sprite_frame(self.SPRITE_PLAYER_FRONT, 0),  # UP
             lambda: aj.get_sprite_frame(self.SPRITE_PLAYER_SIDE, 0),   # RIGHT
-            lambda: jnp.flip(aj.get_sprite_frame(self.SPRITE_PLAYER_SIDE, 0), axis=0),   # LEFT, Frame is Mirrored
+            lambda: jnp.flip(aj.get_sprite_frame(self.SPRITE_PLAYER_SIDE, 0), axis=1),   # LEFT, Frame is Mirrored
         ]
         # Make no Direction equal to right for rendering
         player_direction = jax.lax.cond(
@@ -1286,7 +1286,7 @@ class Renderer_AtraBankisHeist(JAXGameRenderer):
         ### Render Fuel Tank
         fuel_tank_frame = aj.get_sprite_frame(self.SPRITE_FUEL_TANK, 0)
         # color in the bottom of the fuel tank in red
-        fuel_tank_frame = self.fuel_tank_filler(fuel_tank_frame, state)
+        fuel_tank_frame = self.fuel_tank_filler(fuel_tank_frame, state).transpose(1, 0, 2)
         raster = aj.render_at(raster, FUEL_TANK_POSITION[0], FUEL_TANK_POSITION[1], fuel_tank_frame)
         # Render the Fuel gauge
         fuel_gauge_position = jax.lax.dynamic_index_in_dim(TANK_LEVELS, state.bank_heists, axis=0, keepdims=False)
@@ -1314,7 +1314,7 @@ class Renderer_AtraBankisHeist(JAXGameRenderer):
         police_branches = [
             lambda: aj.get_sprite_frame(self.SPRITE_POLICE_FRONT, 0),  # DOWN
             lambda: aj.get_sprite_frame(self.SPRITE_POLICE_FRONT, 0),  # UP
-            lambda: jnp.flip(aj.get_sprite_frame(self.SPRITE_POLICE_SIDE, 0), axis=0),   # RIGHT
+            lambda: jnp.flip(aj.get_sprite_frame(self.SPRITE_POLICE_SIDE, 0), axis=1),   # RIGHT
             lambda: aj.get_sprite_frame(self.SPRITE_POLICE_SIDE, 0),   # LEFT, Frame is Mirrored
         ]
         
