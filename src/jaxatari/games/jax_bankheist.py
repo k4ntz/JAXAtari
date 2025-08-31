@@ -79,14 +79,14 @@ WINDOW_WIDTH = 160 * 3
 WINDOW_HEIGHT = 210 * 3
 
 COLLISION_BOX = (8, 8)
-PORTAL_X = jnp.array([12, 140])
+PORTAL_X = jnp.array([18, 136])
 
 # Police spawn delay (120 frames = 2 seconds at 60 FPS)
 POLICE_SPAWN_DELAY = 120
 
 # Police AI bias factors
 POLICE_RANDOM_FACTOR = 0.7  # 70% random movement
-POLICE_BIAS_FACTOR = 0.5    # 50% bias towards player
+POLICE_BIAS_FACTOR = 0.4    # 50% bias towards player
 
 DYNAMITE_EXPLOSION_DELAY = 30
 
@@ -301,7 +301,7 @@ class JaxBankHeist(JaxEnvironment[BankHeistState, BankHeistObservation, BankHeis
         return max_value
 
     @partial(jax.jit, static_argnums=(0,))
-    def portal_handler(self, entity: Entity, collision: int) -> Entity:
+    def portal_handler(self, entity: Entity, collision: int, is_police: bool) -> Entity:
         """
         Handle portal collisions by moving the entity to the corresponding portal exit.
 
@@ -310,11 +310,15 @@ class JaxBankHeist(JaxEnvironment[BankHeistState, BankHeistObservation, BankHeis
         """
         side = entity.position[0] <= 80
         side = side.astype(int)
-        portal_collision = collision == 100
+        
+        police_hit_exit = jnp.logical_and(is_police, collision == 200)
+        portal_collision = jnp.logical_or(collision == 100, police_hit_exit)
+
         new_position = jax.lax.cond(portal_collision,
             lambda: entity._replace(position=jnp.array([PORTAL_X[side], entity.position[1]])),
             lambda: entity
         )
+        
         return new_position
 
     @partial(jax.jit, static_argnums=(0,))
@@ -894,7 +898,7 @@ class JaxBankHeist(JaxEnvironment[BankHeistState, BankHeistObservation, BankHeis
                 )
                 
                 # Handle portal teleportation (same as player)
-                moved_entity = self.portal_handler(moved_entity, collision)
+                moved_entity = self.portal_handler(moved_entity, collision, True)
                 
                 # Update police positions
                 new_positions = state_inner.enemy_positions.position.at[i].set(moved_entity.position)
@@ -974,7 +978,7 @@ class JaxBankHeist(JaxEnvironment[BankHeistState, BankHeistObservation, BankHeis
             lambda: current_player,
             lambda: new_player
         )
-        new_player = self.portal_handler(new_player, collision)
+        new_player = self.portal_handler(new_player, collision, False)
 
         new_state = state._replace(
             player=new_player,
