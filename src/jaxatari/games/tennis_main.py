@@ -96,7 +96,7 @@ class EnemyState(NamedTuple):
     enemy_y: chex.Array  # y-coordinate of the enemy
     prev_walking_direction: chex.Array  # previous walking direction (in x-direction) of the enemy, -1 = towards x=min, 1 = towards x=max
     enemy_direction: chex.Array
-    y_movement_direction: chex.Array # direction in which the enemy is moving until it hits the ball, -1 towards net 1 away from net
+    y_movement_direction: chex.Array  # direction in which the enemy is moving until it hits the ball, -1 towards net 1 away from net
 
 
 class GameState(NamedTuple):
@@ -635,7 +635,7 @@ y - coordinate:
 @jax.jit
 def enemy_step(state: TennisState) -> EnemyState:
     # x-coordinate
-    enemy_hit_offset = state.enemy_state.prev_walking_direction * 5 * -1 * 0 #todo this is always 0
+    enemy_hit_offset = state.enemy_state.prev_walking_direction * 5 * -1 * 0  # todo this is always 0
     enemy_x_hit_point = state.enemy_state.enemy_x + PLAYER_WIDTH / 2 + enemy_hit_offset
 
     player_x_hit_point = state.player_state.player_x + PLAYER_WIDTH / 2
@@ -699,15 +699,16 @@ def enemy_step(state: TennisState) -> EnemyState:
     # y-coordinate
 
     def enemy_y_step():
-
         state_after_y = jax.lax.cond(
             state.ball_state.last_hit == 1,
             # last hit was enemy rush net
-            lambda _: EnemyState(state.enemy_state.enemy_x, jnp.where(jnp.logical_and(state.enemy_state.enemy_y != PLAYER_Y_LOWER_BOUND_TOP,
-                                      state.enemy_state.enemy_y != PLAYER_Y_UPPER_BOUND_BOTTOM),
-                      state.enemy_state.enemy_y - state.player_state.player_field,
-                      state.enemy_state.enemy_y
-                      ), state.enemy_state.prev_walking_direction, state.enemy_state.enemy_direction, jnp.array(1)),
+            lambda _: EnemyState(state.enemy_state.enemy_x,
+                                 jnp.where(jnp.logical_and(state.enemy_state.enemy_y != PLAYER_Y_LOWER_BOUND_TOP,
+                                                           state.enemy_state.enemy_y != PLAYER_Y_UPPER_BOUND_BOTTOM),
+                                           state.enemy_state.enemy_y - state.player_state.player_field,
+                                           state.enemy_state.enemy_y
+                                           ), state.enemy_state.prev_walking_direction,
+                                 state.enemy_state.enemy_direction, jnp.array(1)),
             # last hit was player move away from net until baseline is hit then move towards ball
             lambda _: EnemyState(state.enemy_state.enemy_x,
                                  jnp.where(state.player_state.player_field == 1,
@@ -721,13 +722,14 @@ def enemy_step(state: TennisState) -> EnemyState:
                                                           PLAYER_Y_LOWER_BOUND_TOP)),
                                  state.enemy_state.prev_walking_direction,
                                  state.enemy_state.enemy_direction,
-                                 jnp.where(jnp.logical_or(state.enemy_state.enemy_y == PLAYER_Y_UPPER_BOUND_TOP, state.enemy_state.enemy_y == PLAYER_Y_LOWER_BOUND_BOTTOM),
+                                 jnp.where(jnp.logical_or(state.enemy_state.enemy_y == PLAYER_Y_UPPER_BOUND_TOP,
+                                                          state.enemy_state.enemy_y == PLAYER_Y_LOWER_BOUND_BOTTOM),
                                            jnp.array(-1),
                                            state.enemy_state.y_movement_direction)), operand=None)
 
         return jax.lax.cond(
             state.game_state.is_serving,
-            lambda _:state.enemy_state,
+            lambda _: state.enemy_state,
             lambda _: state_after_y,
             operand=None
         )
@@ -870,8 +872,8 @@ def ball_step(state: TennisState, action) -> TennisState:
             PLAYER_HEIGHT,
             ball_state.ball_x,
             BALL_WIDTH,
-            #ball_state.ball_z,
-            0, # the original game ignores height when checking collision
+            # ball_state.ball_z,
+            0,  # the original game ignores height when checking collision
             BALL_WIDTH  # todo rename to BALL_SIZE because ball is square
         ),
         jnp.absolute(upper_entity_y + PLAYER_HEIGHT - ball_state.ball_y) <= 3
@@ -885,7 +887,7 @@ def ball_step(state: TennisState, action) -> TennisState:
             PLAYER_HEIGHT,
             ball_state.ball_x,
             BALL_WIDTH,
-            #ball_state.ball_z,
+            # ball_state.ball_z,
             0,  # the original game ignores height when checking collision
             BALL_WIDTH
         ),

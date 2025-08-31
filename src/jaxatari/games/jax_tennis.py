@@ -9,19 +9,24 @@ from tennis_renderer import TennisRenderer as tr
 
 renderer = tr()
 
+
 class TennisObs(NamedTuple):
     some_shit: jnp.ndarray = 0
 
+
 class TennisInfo(NamedTuple):
     pass
+
 
 class AtraJaxisTennisRenderer(JAXGameRenderer):
 
     def render(self, state: TennisState):
         return renderer.render(state)
 
+
 class TennisConstants(NamedTuple):
     pass
+
 
 class TennisJaxEnv(JaxEnvironment[TennisState, TennisObs, TennisInfo, TennisConstants]):
 
@@ -43,7 +48,7 @@ class TennisJaxEnv(JaxEnvironment[TennisState, TennisObs, TennisInfo, TennisCons
     def render(self, state: TennisState) -> Tuple[jnp.ndarray]:
         return renderer.render(state)
 
-    def get_action_space(self) -> jnp.ndarray:
+    def action_space(self) -> jnp.ndarray:
         return jnp.array([0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17])
 
     def get_observation_space(self) -> Tuple:
