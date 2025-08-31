@@ -1,1 +1,1 @@
-from jaxatari.core import JAXAtari
+from jaxatari.core import make, list_available_games
