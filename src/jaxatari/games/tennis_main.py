@@ -158,7 +158,7 @@ class TennisState(NamedTuple):
         jnp.array(False),
     )
     counter: chex.Array = jnp.array(
-        0)  # not currently used, just a counter that is increased by one each frame todo evaluate if we can remove this
+        0)
     animator_state: AnimatorState = AnimatorState()
 
 
@@ -211,9 +211,6 @@ def normal_step(state: TennisState, action) -> TennisState:
 
 @jax.jit
 def animator_step(state: TennisState, new_player_state, new_enemy_state) -> AnimatorState:
-    # Change player/enemy frame every 4 ticks
-    player_enemy_frame_change_ready = state.counter % 4 == 0
-
     @jax.jit
     def check_has_moved(prev_x, cur_x, prev_y, cur_y):
         return jnp.logical_or(
