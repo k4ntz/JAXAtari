@@ -1927,7 +1927,7 @@ class JaxOthello(JaxEnvironment[OthelloState, OthelloObservation, OthelloInfo, O
         Returns:
             Tuple([int, int]): A tuple containing:
                 - Calculated strategic score for the bottom-right tile,
-                - Position to consider as an alternate if necessary.
+                - Possible secondary position for further evaluation.
         """
         #alt singature: game_field: Field, ai_think_timer: int, default_pos: int, difficulty: int, y_pos: int, x_pos: int
         return_value = ((56,default_pos_combined), False) # (Touple to be returned, Aborted)
@@ -1947,7 +1947,7 @@ class JaxOthello(JaxEnvironment[OthelloState, OthelloObservation, OthelloInfo, O
 
         return return_value[0]
 
-    def css_calculate_top_left_score(self,game_field: Field, default_pos_combined: int, difficulty: int) -> Tuple([int, int]):
+    def css_calculate_top_left_score(self,game_field: Field, default_pos_combined: int, difficulty: int) -> Tuple[int, int]:
         """
         Computes the strategic score for the top-left corner tile on the board.
         A score for the top row and left column is used to determine the strategic value of this position.
@@ -1964,7 +1964,7 @@ class JaxOthello(JaxEnvironment[OthelloState, OthelloObservation, OthelloInfo, O
         Returns:
             Tuple([int, int]): A tuple containing:
                 - Calculated strategic score for the bottom-right tile,
-                - Position to consider as an alternate if necessary.
+                - Possible secondary position for further evaluation.
         """
         return_value = ((56,default_pos_combined), False) # (Touple to be returned, Aborted)
         (horizontal_score, alternate_pos_horz) = self.css__f2d3_count_tiles_horizontally(game_field, 7, 0, default_pos_combined, difficulty) #TODO check for correctness of 7,0
@@ -2000,7 +2000,7 @@ class JaxOthello(JaxEnvironment[OthelloState, OthelloObservation, OthelloInfo, O
         Returns:
             Tuple([int, int]): A tuple containing:
                 - Calculated strategic score for the bottom-right tile,
-                - Position to consider as an alternate if necessary.
+                - Possible secondary position for further evaluation.
         """
         return_value = ((56,default_pos_combined), False) # (Touple to be returned, Aborted)
         (horizontal_score, alternate_pos_horz) = self.css__f2d3_count_tiles_horizontally(game_field, 0, 0, default_pos_combined, difficulty) #TODO check for correctness of 0,0
@@ -2036,7 +2036,7 @@ class JaxOthello(JaxEnvironment[OthelloState, OthelloObservation, OthelloInfo, O
         Returns:
             Tuple([int, int]): A tuple containing:
                 - Calculated strategic score for the bottom-right tile,
-                - Position to consider as an alternate if necessary.
+                - Possible secondary position for further evaluation.
         """
         return_value = ((56,default_pos_combined), False) # (Touple to be returned, Aborted)
         (horizontal_score, alternate_pos_horz) = self.css__f2d3_count_tiles_horizontally(game_field, 7, 7, default_pos_combined, difficulty) #TODO check for correctness of 7,7
@@ -2055,19 +2055,49 @@ class JaxOthello(JaxEnvironment[OthelloState, OthelloObservation, OthelloInfo, O
 
         return return_value[0]
 
-    def css__f2d3_count_tiles_vertically(self,game_field: Field, y_pos:int, x_pos: int, default_pos: int, difficulty: int):
-        empty_line = jnp.arange(8, dtype=jnp.int32)
+    def css__f2d3_count_tiles_vertically(self,game_field: Field, y_pos:int, x_pos: int, default_pos: int, difficulty: int) -> Tuple[int, int]:
+        """
+        Extracts the vertical line from the field, given the x position.
+        Evaluates the configuration of tiles in the vertical line using a set of given heuristics in look-up tables.
+        Calls css__f2d3_count_tiles_in_line for further evaluation.
 
-        def get_field_color_tiles_vertically(i, y_pos, x_pos, game_field):
-            return game_field.field_color[i, x_pos]
+        Args:
+            game_field (Field): Current state of the board including disc colors.
+            y_pos (int): Y-coordinate of the tile to evaluate.
+            x_pos (int): X-coordinate of the tile to evaluate.
+            default_pos (int): Default fallback tile for secondary evaluation.
+            difficulty (int): Difficulty level.
 
-        vectorized_array_of_tiles = jax.vmap(get_field_color_tiles_vertically, in_axes=(0, None, None, None))
-        array_of_tiles = Field(field_id=jnp.arange(8),
-                            field_color=vectorized_array_of_tiles(empty_line, y_pos, x_pos, game_field)) #TODO check if flip is needed
+        Returns:
+            Tuple ([int, int]): A tuple containing:
+                - Calculated strategic score for the vertical line,
+                - Possible secondary position for further evaluation.
+        """
+        array_of_tiles = Field(
+            field_id=jnp.arange(8),
+            field_color=game_field.field_color[:, x_pos]  
+        )
 
         return self.css__f2d3_count_tiles_in_line(array_of_tiles, y_pos, default_pos, difficulty)
 
-    def css__f2d3_count_tiles_horizontally(self, game_field: Field, y_pos:int, x_pos: int, default_pos: int, difficulty: int):
+    def css__f2d3_count_tiles_horizontally(self, game_field: Field, y_pos:int, x_pos: int, default_pos: int, difficulty: int) -> Tuple[int, int]:
+        """
+        Extracts the vertical line from the field, given the x position.
+        Evaluates the configuration of tiles in the vertical line using a set of given heuristics in look-up tables.
+        Calls css__f2d3_count_tiles_in_line for further evaluation.
+
+        Args:
+            game_field (Field): Current state of the board including disc colors.
+            y_pos (int): Y-coordinate of the tile to evaluate.
+            x_pos (int): X-coordinate of the tile to evaluate.
+            default_pos (int): Default fallback tile for secondary evaluation.
+            difficulty (int): Difficulty level.
+
+        Returns:
+            Tuple ([int, int]): A tuple containing:
+                - Calculated strategic score for the vertical line,
+                - Possible secondary position for further evaluation.
+        """
         array_of_tiles = Field(
             field_id=jnp.arange(8),
             field_color=game_field.field_color[y_pos] #TODO check if flip is needed
@@ -2079,8 +2109,9 @@ class JaxOthello(JaxEnvironment[OthelloState, OthelloObservation, OthelloInfo, O
 
 
     def css__f2d3_count_tiles_in_line(self, array_of_tiles, pos: int, default_pos_combined: int, difficulty: int):
-        return_value = ((-1, -1), False) # (Touple to be returned, Aborted) 
+        return_value = ((-1, -1), False) # (Touple to be returned, Aborted) Use -1,-1 as invalid values
 
+        # If difficulty is set to one, we skip all heuristic evaluations and only use the number of flipped tiles -> applies for all outer tiles, all inner tiles are not affected by difficulty
         return_value = jax.lax.cond(difficulty == 1,
             lambda _: ((0, -1), True),
             lambda _: return_value,
@@ -2091,6 +2122,7 @@ class JaxOthello(JaxEnvironment[OthelloState, OthelloObservation, OthelloInfo, O
             field_color=jnp.flip(array_of_tiles.field_color)
         )
 
+        #Evaluate the configuration of tiles to each side of our current tile seperatly, both can deliver 4 possible states
         left_state, left_pos_opt = self.css_sub_f5c1_count_tiles_in_line_descending(array_of_tiles, pos)
         right_state, right_pos_opt = self.css_sub_f5c1_count_tiles_in_line_descending(reversed_array_of_tiles,7 - pos)
 
@@ -2103,7 +2135,10 @@ class JaxOthello(JaxEnvironment[OthelloState, OthelloObservation, OthelloInfo, O
             lambda _: left_pos,
             None) #TODO check in assembly if left_pos is the correct value
 
+        #combine the left and right configuration states, by shifting the left configuration two bits higher and appending the right configuration
         combined_state = (left_state << 2) | right_state
+
+        #TODO add more comments
 
         return_value = jax.lax.cond(jnp.logical_and(
             return_value[1] == False,
@@ -2236,7 +2271,29 @@ class JaxOthello(JaxEnvironment[OthelloState, OthelloObservation, OthelloInfo, O
             None)
     
     #return a tuple of (state, position)
-    def css_sub_f5c1_count_tiles_in_line_descending(self, array_of_tiles, start_index: int) ->Tuple[int, int]:
+    def css_sub_f5c1_count_tiles_in_line_descending(self, array_of_tiles: Field, start_index: int) ->Tuple[int, int]:
+        """
+        Evaluates the configuration of tiles in a line starting from a given index and moving 
+        in the descending direction (towards lower indices).
+
+        If we are at the first tile (index 0), we return state 0b00 and delegate further evaluation to `css_sub_f5c1_count_tiles_in_line_descending_not_first_tile`.
+
+        Possible states from this and submethods:
+            - 0b00: No valid move / neutral condition.
+            - 0b01: Empty space encountered, possibly usable.
+            - 0b10: Interrupted pattern.
+            - 0b11: Invalid pattern for move / own color blocking.
+
+        Args:
+            array_of_tiles (Field): A sequence or array representing the tiles in the line.
+            start_index (int): The starting index in the array from which to begin the descending count.
+
+        Returns:
+            Tuple ([int, int]):
+                - state (int): Encodes the tile configuration as a bit pattern.
+                - position (int): The index of the adjacent tile considered, or -1 if out of bounds.
+        """
+
         adjacent_index = start_index-1
 
         args = (array_of_tiles, adjacent_index)
@@ -2247,6 +2304,23 @@ class JaxOthello(JaxEnvironment[OthelloState, OthelloObservation, OthelloInfo, O
     )
 
     def css_sub_f5c1_count_tiles_in_line_descending_not_first_tile(self, args) ->Tuple[int, int]:
+        """
+        Evaluates the configuration of tiles in a line starting from a given index and moving 
+        in the descending direction (towards lower indices).
+
+        Is protected by a guard clause against being the tile directly at the border of the game field.
+
+        Returns (0b01, adjacent_index = tile adjacent to the original tile) if an empty space is encountered, otherwise delegates evaluation to the handler for white/black.
+
+        Args:
+            array_of_tiles (Field): A sequence or array representing the tiles in the line.
+            adjacent_index (int): One below the starting index, but now the basis for our further evaluation.
+
+        Returns:
+            Tuple ([int, int]):
+                - state (int): Encodes the tile configuration as a bit pattern.
+                - position (int): The index of the adjacent tile considered, or -1 if nothing valid is found.
+        """
         array_of_tiles, adjacent_index = args
 
         return jax.lax.cond(
@@ -2261,7 +2335,30 @@ class JaxOthello(JaxEnvironment[OthelloState, OthelloObservation, OthelloInfo, O
             args
         )
 
-    def css_sub_f5c1_count_tiles_in_line_descending_handle_white(self, args) ->Tuple[int, int]:
+    def css_sub_f5c1_count_tiles_in_line_descending_handle_white(self, args: Tuple[Field, int]) ->Tuple[int, int]:
+        """
+        Handles the counting of tiles in a line descending from a position, if the starting tile is white.
+
+        This function manages the basic loop, that iterates down the line beginning with a white tile.
+        We can encounter the following configurations after our white starting tile:
+
+
+        1: Empty tile encountered: -> 0b11,report own color as blocking, since we only encountered white so far.
+        2: White tile, followed by empty tile: -> 0b11, report own color as blocking, since we only encountered white so far.
+        3: Black tile, followed by black until end of board: -> 0b00, report no useful pattern found.
+        4: Black tile, followed by white tile: -> 0b11, report own color as blocking, since we encountered white after black.
+        5: Black tile, followed by empty tile: -> 0b10, report interrupted pattern.
+
+        Args:
+            array_of_tiles (Field): A sequence or array representing the tiles in the line.
+            adjacent_index (int): One below the starting index, but now the basis for our further evaluation.
+
+        Returns:
+            Tuple ([int, int]):
+                - state (int): Encodes the tile configuration as a bit pattern.
+                - position (int): The index of the adjacent tile considered, or -1 if nothing valid is found.
+        """
+
         array_of_tiles, adjacent_index = args
         init_val = array_of_tiles, (-1, -1), adjacent_index-1
 
@@ -2278,15 +2375,36 @@ class JaxOthello(JaxEnvironment[OthelloState, OthelloObservation, OthelloInfo, O
             None
         )
 
-    def css_sub_f5c1_count_tiles_in_line_descending_handle_white_loop(self, i, loop_vals):
-        array_of_tiles, touple, custom_iterator = loop_vals
+    def css_sub_f5c1_count_tiles_in_line_descending_handle_white_loop(self, i: int, loop_vals: Tuple[Field, Tuple[int, int], int]) -> Tuple[Field, Tuple[int, int], int]:
+        """
+        Represents the loop body which is called in the fori loop from css_sub_f5c1_count_tiles_in_line_descending_handle_white.
+
+        Loop logic: 
+        - If white tile: ignore
+        - If empty tile: report own color as blocking
+        - If black tile: use css_sub_f5c1_count_tiles_in_line_descending_handle_white_loop_black_tile for further evaluation
+
+        Refer to css_sub_f5c1_count_tiles_in_line_descending_handle_white for further logic explanation.
+
+        Args:
+            i (int): The current iteration index.
+            loop_vals (Tuple[Field, Tuple[int, int], int]): 
+                - Array of tiles: Field
+                - Current tuple state: Tuple[int, int] 
+                - Custom iterator: int
+
+        Returns:
+            loop_vals (Tuple[Field, Tuple[int, int], int]): The loop values after the current iteration.
+
+        """
+        array_of_tiles, touple, custom_iterator = loop_vals #The custom iterator allows to count down from adjacent_index to 0, since jax doesnt allow for reversed loops
 
         touple = jax.lax.cond(
             jnp.logical_or(array_of_tiles.field_color[custom_iterator] == FieldColor.WHITE, jnp.logical_or(touple[0] == 0b11, jnp.logical_or(touple[0] == 0b10, touple[0] == 0b00))),
-            lambda loop_vals: touple , # interrrupt the loop if there is an empty space before a Black tile
+            lambda loop_vals: touple , # interupt if we find white tile
             lambda loop_vals: jax.lax.cond(
                 array_of_tiles.field_color[custom_iterator] == FieldColor.EMPTY,
-                lambda loop_vals: (0b11, -1), # do nothing for white tiles
+                lambda loop_vals: (0b11, -1), # do nothing for white tiles, report own color as blocking, since we only encountered white so far
                 lambda loop_vals: self.css_sub_f5c1_count_tiles_in_line_descending_handle_white_loop_black_tile(loop_vals), 
                 loop_vals
             ),
@@ -2296,7 +2414,24 @@ class JaxOthello(JaxEnvironment[OthelloState, OthelloObservation, OthelloInfo, O
         custom_iterator -= 1
         return (array_of_tiles, touple, custom_iterator)
 
-    def css_sub_f5c1_count_tiles_in_line_descending_handle_white_loop_black_tile(self, args) -> Tuple[int, int]:
+    def css_sub_f5c1_count_tiles_in_line_descending_handle_white_loop_black_tile(self, args: Tuple[Field, Tuple[int, int], int]) -> Tuple[int, int]:
+        """
+        Guard clause, in case we encounter a black tile after one or multiple white tiles in the white loop, but it is already the last tile in the line.
+        Returns 0b00 as a pattern without meaningful outcome, otherwise delegates handling of further eval to css_sub_f5c1_count_tiles_in_line_descending_handle_white_loop_black_tile_2.
+
+        Refer to css_sub_f5c1_count_tiles_in_line_descending_handle_white for further logic explanation.
+
+        Args:
+            loop_vals (Tuple[Field, Tuple[int, int], int]): 
+                - Array of tiles: Field
+                - Current tuple state: Tuple[int, int] 
+                - Custom iterator: int
+
+        Returns:
+            Tuple ([int, int]):
+                - state (int): Encodes the tile configuration as a bit pattern.
+                - position (int): The index of the adjacent tile considered, or -1 if nothing valid is found.
+        """
         #guard against us being already in the last iteration
         _, _, custom_iterator = args
         return jax.lax.cond(custom_iterator != 0,
