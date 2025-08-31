@@ -10,6 +10,7 @@ from gymnax.environments import spaces
 
 from jaxatari.rendering import jax_rendering_utils as aj
 from jaxatari.environment import JaxEnvironment
+from jaxatari.renderers import JAXGameRenderer
 
 WIDTH = 160
 HEIGHT = 210
@@ -249,7 +250,25 @@ class JaxBankHeist(JaxEnvironment[BankHeistState, BankHeistObservation, BankHeis
         self.action_set = {NOOP, FIRE, RIGHT, LEFT, UP, DOWN}
         self.reward_funcs = None
     
-    def reset(self) -> BankHeistState:
+    def action_space(self) -> spaces.Discrete:
+        """
+        Returns the action space of the environment.
+        """
+        return spaces.Discrete(len(self.action_set))
+    
+    def observation_space(self) -> spaces.Box:
+        """
+        Returns the observation space of the environment.
+        """
+        # Return a box space representing the stacked frames
+        return spaces.Box(
+            low=0, 
+            high=255, 
+            shape=(self.frame_stack_size, WIDTH, HEIGHT, 3), 
+            dtype=jnp.uint8
+        )
+    
+    def reset(self, key: chex.PRNGKey) -> BankHeistState:
         # Minimal state initialization
         state = BankHeistState(
             level=jnp.array(0).astype(jnp.int32),
@@ -280,7 +299,7 @@ class JaxBankHeist(JaxEnvironment[BankHeistState, BankHeistObservation, BankHeis
             pending_police_bank_indices=jnp.array([-1, -1, -1]).astype(jnp.int32),  # Bank indices for pending spawns
             game_paused=jnp.array(True).astype(jnp.bool_),
             bank_heists=jnp.array(0).astype(jnp.int32),
-            random_key=jax.random.PRNGKey(42)  # Initialize with a fixed seed
+            random_key=key  # Use the provided random key
         )
         obs = self._get_observation(state)
         def expand_and_copy(x):
@@ -1141,7 +1160,7 @@ def load_bankheist_sprites():
 
     return (PLAYER_SIDE_SPRITE, PLAYER_FRONT_SPRITE, POLICE_SIDE_SPRITE, POLICE_FRONT_SPRITE, BANK_SPRITE,DYNAMITE_SPRITE, CITY_SPRITES, FUEL_TANK_SPRITE, FUEL_GAUGE_SPRITE, DIGIT_SPRITES)
 
-class Renderer_AtraBankisHeist:
+class Renderer_AtraBankisHeist(JAXGameRenderer):
     def __init__(self):
         (
             self.SPRITE_PLAYER_SIDE,
@@ -1296,7 +1315,7 @@ class Renderer_AtraBankisHeist:
         )
 
         return raster
-
+"""
 if __name__ == "__main__":
     # Initialize Pygame
     pygame.init()
@@ -1357,9 +1376,10 @@ if __name__ == "__main__":
         # Render and display
         raster = renderer.render(curr_state)
 
-        aj.update_pygame(screen, raster, 3, WIDTH, HEIGHT)
+        update_pygame(screen, raster, 3, WIDTH, HEIGHT)
 
         counter += 1
         clock.tick(60)
 
     pygame.quit()
+"""

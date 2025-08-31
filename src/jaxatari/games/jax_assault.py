@@ -10,39 +10,8 @@ from gymnax.environments import spaces
 
 from jaxatari.rendering import jax_rendering_utils as aj
 from jaxatari.environment import JaxEnvironment
+from jaxatari.renderers import JAXGameRenderer
 
-"""
-Things that have been implemented:
-- Player movement
-- Player shooting
-- Enemy movement
-- Enemy shooting
-- Enemy splitting and collision detection
-- Mothership movement
-- Player lives and score tracking
-- Stage progression
-- Enemy spawning
-
-Things that need to be implemented:
-Emanuele
-- Enemy random direction changes -> done
-- Enemy invisibility -> done
-- Stop spawning enemies when 10 have been spawned -> done
-- Delays for enemy projectile firing -> done
-
-Milan
-- Heat tracking [x]
-- Setting correct constants for the game
-- Game over conditions -> done
-- Game accurate player projectile movement
-
-Things that "should" be implemented:
-- Use arrays for enemy positions and states instead of individual variables
-
-Things that could be implemented:
-- loading more sprites to be more similar to the original game
-- Transition to linking enemy y positions to enemy_index
-"""
 
 WIDTH = 160
 HEIGHT = 210
@@ -603,7 +572,25 @@ class JaxAssault(JaxEnvironment[AssaultState, AssaultObservation, AssaultInfo, A
         self.reward_funcs = None
         self.occupied_y = jnp.array([0, 0, 0])
 
-    def reset(self) -> AssaultState:
+    def action_space(self) -> spaces.Discrete:
+        """
+        Returns the action space of the environment.
+        """
+        return spaces.Discrete(len(self.action_set))
+    
+    def observation_space(self) -> spaces.Box:
+        """
+        Returns the observation space of the environment.
+        """
+        # Return a box space representing the stacked frames
+        return spaces.Box(
+            low=0, 
+            high=255, 
+            shape=(self.frame_stack_size, WIDTH, HEIGHT, 3), 
+            dtype=jnp.uint8
+        )
+
+    def reset(self, key: chex.PRNGKey) -> AssaultState:
         # Minimal state initialization
         state = AssaultState(
             player_x=jnp.array(80).astype(jnp.int32),
@@ -1059,7 +1046,7 @@ def load_assault_sprites():
 
     return BACKGROUND_SPRITE,ENEMY_SPRITE, MOTHERSHIP_SPRITE, PLAYER_SPRITE, DIGIT_SPRITES, PLAYER_PROJECTILE,ENEMY_PROJECTILE, ENEMY_RAIN, ENEMY_SPHERE, ENEMY_PROJECTILE_LATERAL, LIFE_SPRITE, ENEMY_TINY
 
-class Renderer_AtraJaxisAssault:
+class Renderer_AtraJaxisAssault(JAXGameRenderer):
     """JAX-based Assault game renderer, optimized with JIT compilation."""
 
     def __init__(self):
@@ -1286,7 +1273,7 @@ class Renderer_AtraJaxisAssault:
         raster = heat_bar_fn(state.heat, raster)
         print(self.PLAYER_PROJECTILE)
         return raster
-    
+    """
 if __name__ == "__main__":
     # Initialize Pygame
     pygame.init()
@@ -1347,9 +1334,10 @@ if __name__ == "__main__":
         # Render and display
         raster = renderer.render(curr_state)
 
-        aj.update_pygame(screen, raster, 3, WIDTH, HEIGHT)
+        update_pygame(screen, raster, 3, WIDTH, HEIGHT)
 
         counter += 1
         clock.tick(60)
 
     pygame.quit()
+"""
