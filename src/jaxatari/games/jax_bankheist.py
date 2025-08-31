@@ -50,9 +50,14 @@ MAX_LIVES = 6
 # Starting_Lives
 STARTING_LIVES = 4
 # Reward for robbing a bank
-BANK_ROBBERY_REWARD = 10
-# Reward for killing a police car with dynamite
-POLICE_KILL_REWARD = 40
+BASE_BANK_ROBBERY_REWARD = 10
+# Reward for killing a police car with dynamite (indexed by number of inactive police cars)
+# [50, 30, 10] means: 50 points when 0 inactive (3 active), 30 when 1 inactive (2 active), 10 when 2 inactive (1 active)
+POLICE_KILL_REWARD = [50,30,10]
+# Bonus reward for each city
+CITY_REWARD =[93,186,279,372]
+#Bonus level reward
+BONUS_REWARD = 372
 # Position of the Fuel_Tank Sprite
 FUEL_TANK_POSITION = (42, 12)
 # Position of the first life
@@ -87,6 +92,7 @@ DYNAMITE_EXPLOSION_DELAY = 30
 
 MODULE_DIR = os.path.dirname(os.path.abspath(__file__))
 SPRITES_DIR = os.path.join(MODULE_DIR, "sprites", "bankheist")
+
 
 def init_banks_or_police() -> chex.Array:
     """
@@ -398,8 +404,9 @@ class JaxBankHeist(JaxEnvironment[BankHeistState, BankHeistObservation, BankHeis
         # Increase bank heists count by 1
         new_bank_heists = state.bank_heists + 1
 
+        money_bonus = jnp.minimum(new_bank_heists, 9)
         # Increase score by bank robbery reward
-        new_money = state.money + BANK_ROBBERY_REWARD
+        new_money = state.money + (BASE_BANK_ROBBERY_REWARD * money_bonus)
 
         return state._replace(
             bank_positions=new_banks,
@@ -549,9 +556,10 @@ class JaxBankHeist(JaxEnvironment[BankHeistState, BankHeistObservation, BankHeis
         """
         dynamite_pos = state.dynamite_position
         police_killed_count = jnp.array(0)
+        total_score_added = jnp.array(0)
         
         def check_and_kill_police(i, carry):
-            current_state, killed_count = carry
+            current_state, killed_count, score_added = carry
             police_pos = current_state.enemy_positions.position[i]
             police_visible = current_state.enemy_positions.visibility[i] > 0
             
@@ -562,6 +570,14 @@ class JaxBankHeist(JaxEnvironment[BankHeistState, BankHeistObservation, BankHeis
             # Using 2.5 as threshold for a 5x5 area (half the diagonal of 5x5 square)
             within_range = distance <= 5
             should_kill = police_visible & within_range
+            
+            # Calculate score before killing this police car
+            # Count inactive police cars (visibility == 0) before this kill
+            inactive_count = jnp.sum(current_state.enemy_positions.visibility == 0)
+            # Use JAX where operations to select reward based on inactive count
+            # 0 inactive (3 active) -> 50 points, 1 inactive (2 active) -> 30 points, 2+ inactive (1 active) -> 10 points
+            kill_reward = jnp.where(inactive_count == 0, 50,
+                         jnp.where(inactive_count == 1, 30, 10))
             
             # Set visibility to 0 (kill) if within range
             new_visibility = current_state.enemy_positions.visibility.at[i].set(
@@ -574,37 +590,64 @@ class JaxBankHeist(JaxEnvironment[BankHeistState, BankHeistObservation, BankHeis
 
             new_police = current_state.enemy_positions._replace(visibility=new_visibility)
             updated_state = current_state._replace(enemy_positions=new_police, bank_spawn_timers=new_respawn_timer)
-
-            # Increment killed count if a police car was killed
-            new_killed_count = killed_count + jnp.where(should_kill, 1, 0)
             
-            return (updated_state, new_killed_count)
+            # Increment killed count and add score if a police car was killed
+            new_killed_count = killed_count + jnp.where(should_kill, 1, 0)
+            new_score_added = score_added + jnp.where(should_kill, kill_reward, 0)
+            
+            return (updated_state, new_killed_count, new_score_added)
         
         # Process all police cars and count kills
-        final_state, total_killed = jax.lax.fori_loop(
+        final_state, total_killed, total_score = jax.lax.fori_loop(
             0, len(state.enemy_positions.visibility), 
             check_and_kill_police, 
-            (state, police_killed_count)
+            (state, police_killed_count, total_score_added)
         )
         
-        # Add score for killed police cars
-        new_money = final_state.money + (total_killed * POLICE_KILL_REWARD)
+        # Add accumulated score for killed police cars
+        new_money = final_state.money + total_score
 
         return final_state._replace(money=new_money)
     
     @partial(jax.jit, static_argnums=(0,))
-    def explode_dynamite(self, state: BankHeistState) -> BankHeistState:
+    def check_player_in_explosion_range(self, state: BankHeistState) -> chex.Array:
         """
-        Handle dynamite explosion - kill police cars within 5x5 range and make dynamite inactive.
+        Check if the player is within the 5x5 explosion range of the dynamite.
 
         Args:
             state: Current game state
 
         Returns:
-            BankHeistState: Updated state with police cars killed and dynamite deactivated
+            chex.Array: Boolean indicating if player is within explosion range
+        """
+        dynamite_pos = state.dynamite_position
+        player_pos = state.player.position
+        
+        # Calculate distance between dynamite and player
+        distance = jnp.linalg.norm(dynamite_pos - player_pos)
+        
+        # Check if player is within 5x5 range (distance <= 5, same as police cars)
+        within_range = distance <= 5
+        
+        return within_range
+    
+    @partial(jax.jit, static_argnums=(0,))
+    def explode_dynamite(self, state: BankHeistState) -> BankHeistState:
+        """
+        Handle dynamite explosion - kill police cars within 5x5 range, check player collision, and make dynamite inactive.
+
+        Args:
+            state: Current game state
+
+        Returns:
+            BankHeistState: Updated state with police cars killed, player life decreased if in range, and dynamite deactivated
         """
         # Kill police cars within 5x5 range of dynamite explosion
         updated_state = self.kill_police_in_explosion_range(state)
+        
+        # Check if player is within explosion range and handle like police collision
+        player_in_range = self.check_player_in_explosion_range(updated_state)
+        updated_state = jax.lax.cond(player_in_range, lambda: self.lose_life(updated_state), lambda: updated_state)
         
         # Deactivate the dynamite by setting position to [-1, -1] and timer to -1
         new_dynamite_position = jnp.array([-1, -1]).astype(jnp.int32)
@@ -635,11 +678,28 @@ class JaxBankHeist(JaxEnvironment[BankHeistState, BankHeistObservation, BankHeis
         new_police_spawn_timers = jnp.array([-1,-1,-1]).astype(jnp.int32)
         new_dynamite_timer = jnp.array([-1]).astype(jnp.int32)
         new_player_lives = jax.lax.cond(state.bank_heists >= 9, lambda: state.player_lives + 1, lambda: state.player_lives)
+        
+        # Calculate city reward if 9 or more banks were robbed
+        # Use level % 4 to cycle through CITY_REWARD indices (0, 1, 2, 3)
+        city_reward_index = state.level % 4
+        # Use JAX operations to select reward based on index
+        # city_reward_index cycles through 0, 1, 2, 3 -> rewards are 93, 186, 279, 372
+        city_reward = jnp.where(city_reward_index == 0, 93,
+                      jnp.where(city_reward_index == 1, 186,
+                      jnp.where(city_reward_index == 2, 279, 372)))
+        city_reward_bonus = jax.lax.cond(
+            state.bank_heists >= 9,
+            lambda: city_reward,
+            lambda: 0
+        )
+        new_money = state.money + city_reward_bonus + (state.difficulty_level * BONUS_REWARD)
+        
         return state._replace(
             level=new_level,
             difficulty_level=new_difficulty_level,
             player=new_player,
             player_lives=new_player_lives,
+            money=new_money,
             enemy_positions=empty_police,
             bank_positions=empty_banks,
             speed=new_speed,
