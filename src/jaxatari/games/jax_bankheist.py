@@ -8,7 +8,7 @@ import chex
 import pygame
 from gymnax.environments import spaces
 
-from jaxatari.rendering import atraJaxis as aj
+from jaxatari.rendering import jax_rendering_utils as aj
 from jaxatari.environment import JaxEnvironment
 
 WIDTH = 160
@@ -174,6 +174,27 @@ def get_human_action() -> chex.Array:
         return jnp.array(FIRE)
     return jnp.array(NOOP)
 
+class BankHeistConstants(NamedTuple):
+    WIDTH: int = WIDTH
+    HEIGHT: int = HEIGHT
+    FUEL_CAPACITY: float = FUEL_CAPACITY
+    TANK_HEIGHT: float = TANK_HEIGHT
+    DYNAMITE_COST: float = DYNAMITE_COST
+    DYNAMITE_DELAY: int = DYNAMITE_DELAY
+    REVIVAL_FUEL: float = REVIVAL_FUEL
+    BASE_SPEED: float = BASE_SPEED
+    CITIES_PER_LEVEL: int = CITIES_PER_LEVEL
+    MAX_LEVEL: int = MAX_LEVEL
+    MAX_LIVES: int = MAX_LIVES
+    STARTING_LIVES: int = STARTING_LIVES
+    BASE_BANK_ROBBERY_REWARD: int = BASE_BANK_ROBBERY_REWARD
+    POLICE_SLOW_DOWN_FACTOR: float = POLICE_SLOW_DOWN_FACTOR
+    BANK_RESPAWN_TIME: int = BANK_RESPAWN_TIME
+    POLICE_SPAWN_DELAY: int = POLICE_SPAWN_DELAY
+    POLICE_RANDOM_FACTOR: float = POLICE_RANDOM_FACTOR
+    POLICE_BIAS_FACTOR: float = POLICE_BIAS_FACTOR
+    DYNAMITE_EXPLOSION_DELAY: int = DYNAMITE_EXPLOSION_DELAY
+
 class Entity(NamedTuple):
     position: chex.Array
     direction: chex.Array
@@ -219,7 +240,7 @@ class BankHeistInfo(NamedTuple):
     time: jnp.ndarray
     all_rewards: chex.Array
 
-class JaxBankHeist(JaxEnvironment[BankHeistState, BankHeistObservation, BankHeistInfo]):
+class JaxBankHeist(JaxEnvironment[BankHeistState, BankHeistObservation, BankHeistInfo, BankHeistConstants]):
     
     def __init__(self):
         super().__init__()

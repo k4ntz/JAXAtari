@@ -8,7 +8,7 @@ import chex
 import pygame
 from gymnax.environments import spaces
 
-from jaxatari.rendering import atraJaxis as aj
+from jaxatari.rendering import jax_rendering_utils as aj
 from jaxatari.environment import JaxEnvironment
 
 """
@@ -134,6 +134,26 @@ def get_human_action() -> chex.Array:
         return jnp.array(FIRE)
     else:
         return jnp.array(NOOP)
+
+class AssaultConstants(NamedTuple):
+    WIDTH: int = WIDTH
+    HEIGHT: int = HEIGHT
+    SPEED: int = SPEED
+    PLAYER_PROJECTILE_SPEED: int = PLAYER_PROJECTILE_SPEED
+    ENEMY_PROJECTILE_SPEED: int = ENEMY_PROJECTILE_SPEED
+    MOTHERSHIP_Y: int = MOTHERSHIP_Y
+    PLAYER_Y: int = PLAYER_Y
+    MAX_HEAT: int = MAX_HEAT
+    COOLDOWN_STEPS: int = COOLDOWN_STEPS
+    MAX_LIVES: int = MAX_LIVES
+    LIVES_Y: int = LIVES_Y
+    LIFE_ONE_X: int = LIFE_ONE_X
+    LIFE_OFFSET: int = LIFE_OFFSET
+    Y_STEP_DELAY: int = Y_STEP_DELAY
+    ENEMY_Y_POSITIONS: Tuple[int, int, int] = ENEMY_Y_POSITIONS
+    PLAYER_SIZE: Tuple[int, int] = PLAYER_SIZE
+    ENEMY_SIZE: Tuple[int, int] = ENEMY_SIZE
+    MOTHERSHIP_SIZE: Tuple[int, int] = MOTHERSHIP_SIZE
 
 class EntityPosition(NamedTuple):
     x: jnp.ndarray
@@ -573,7 +593,7 @@ def check_collision(px, py, ex, ey, ew, eh):
         jnp.logical_and(py >= ey, py < ey + eh)
     )
 
-class JaxAssault(JaxEnvironment[AssaultState, AssaultObservation, AssaultInfo]):
+class JaxAssault(JaxEnvironment[AssaultState, AssaultObservation, AssaultInfo, AssaultConstants]):
 
     def __init__(self):
         super().__init__()
