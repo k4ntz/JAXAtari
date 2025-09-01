@@ -1256,10 +1256,12 @@ class JaxDonkeyKong(JaxEnvironment[DonkeyKongState, DonkeyKongObservation, Donke
             def look_for_valid_ladder_to_climb(i, value):
                 mario_can_climb = value[0]
                 mario_stage = value[1]
-                current_ladder_climbable = True
-                current_ladder_climbable &= mario_stage == ladders.stage[i]
-                current_ladder_climbable &= state.mario_y <= ladders.start_y[i]
-                current_ladder_climbable &= state.mario_y + self.consts.MARIO_HIT_BOX_Y - 1 > ladders.start_y[i] + self.consts.LADDER_WIDTH
+                current_ladder_climbable = (
+                    (mario_stage == ladders.stage[i])
+                    & (state.mario_y-1 <= ladders.start_y[i])
+                    & ((state.mario_y + self.consts.MARIO_HIT_BOX_Y + 1) >= (ladders.start_y[i] + self.consts.LADDER_WIDTH))
+                    & (ladders.climbable[i])
+                )
 
                 return jax.lax.cond(
                     mario_can_climb,
