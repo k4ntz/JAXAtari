@@ -66,6 +66,7 @@ GAME_MIDDLE_HORIZONTAL = (FRAME_WIDTH - PLAYER_WIDTH) / 2
 
 rand_key = random.key(0)
 
+
 class BallState(NamedTuple):
     ball_x: chex.Array  # x-coordinate of the ball
     ball_y: chex.Array  # y-coordinate of the ball
@@ -81,6 +82,7 @@ class BallState(NamedTuple):
     bounces: chex.Array  # how many times the ball has hit the ground since it was last hit by an entity
     last_hit: chex.Array  # 0 if last hit was performed by player, 1 if last hit was by enemy
 
+
 class PlayerState(NamedTuple):
     player_x: chex.Array  # x-coordinate of the player
     player_y: chex.Array  # y-coordinate of the player
@@ -88,12 +90,14 @@ class PlayerState(NamedTuple):
     player_field: chex.Array  # top (1) or bottom (-1) field
     player_serving: chex.Array  # true: Player is serving, false: Enemy is serving
 
+
 class EnemyState(NamedTuple):
     enemy_x: chex.Array  # x-coordinate of the enemy
     enemy_y: chex.Array  # y-coordinate of the enemy
     prev_walking_direction: chex.Array  # previous walking direction (in x-direction) of the enemy, -1 = towards x=min, 1 = towards x=max
     enemy_direction: chex.Array
     y_movement_direction: chex.Array  # direction in which the enemy is moving until it hits the ball, -1 towards net 1 away from net
+
 
 class GameState(NamedTuple):
     is_serving: chex.Array  # whether the game is currently in serving state (ball bouncing on one side until player hits)
@@ -104,6 +108,7 @@ class GameState(NamedTuple):
     enemy_game_score: chex.Array
     is_finished: chex.Array  # True if the game is finished (Player or enemy has won the game)
 
+
 class AnimatorState(NamedTuple):
     player_frame: chex.Array = 0
     enemy_frame: chex.Array = 0
@@ -111,6 +116,7 @@ class AnimatorState(NamedTuple):
     player_racket_animation: chex.Array = False
     enemy_racket_frame: chex.Array = 0
     enemy_racket_animation: chex.Array = False
+
 
 class TennisState(NamedTuple):
     player_state: PlayerState = PlayerState(  # all player-related data
@@ -155,6 +161,7 @@ class TennisState(NamedTuple):
         0)
     animator_state: AnimatorState = AnimatorState()
 
+
 @jax.jit
 def tennis_step(state: TennisState, action) -> TennisState:
     """
@@ -189,6 +196,7 @@ def tennis_step(state: TennisState, action) -> TennisState:
                         None
                         )
 
+
 @jax.jit
 def normal_step(state: TennisState, action) -> TennisState:
     """
@@ -210,6 +218,7 @@ def normal_step(state: TennisState, action) -> TennisState:
 
     return TennisState(new_player_state, new_enemy_state, new_state_after_ball_step.ball_state,
                        new_state_after_ball_step.game_state, state.counter + 1, new_animator_state)
+
 
 @jax.jit
 def animator_step(state: TennisState, new_player_state, new_enemy_state) -> AnimatorState:
@@ -335,6 +344,7 @@ def animator_step(state: TennisState, new_player_state, new_enemy_state) -> Anim
                                        new_player_racket_animation, new_enemy_racket_frame, new_enemy_racket_animation)
 
     return new_animator_state
+
 
 @jax.jit
 def check_score(state: TennisState) -> TennisState:
@@ -476,6 +486,7 @@ def check_score(state: TennisState) -> TennisState:
         None
     )
 
+
 @jax.jit
 def check_set(state: GameState) -> GameState:
     """
@@ -509,6 +520,7 @@ def check_set(state: GameState) -> GameState:
         None
     )
 
+
 @jax.jit
 def check_end(state: GameState) -> GameState:
     """
@@ -526,6 +538,7 @@ def check_end(state: GameState) -> GameState:
     is_finished = jnp.where(jnp.logical_or(player_won, enemy_won), True, False)
     return GameState(state.is_serving, state.pause_counter, state.player_score, state.enemy_score,
                      state.player_game_score, state.enemy_game_score, is_finished)
+
 
 @jax.jit
 def player_step(state: TennisState, action: chex.Array) -> PlayerState:
@@ -636,6 +649,7 @@ def player_step(state: TennisState, action: chex.Array) -> PlayerState:
         player_state.player_serving
     )
 
+
 @jax.jit
 def enemy_step(state: TennisState) -> EnemyState:
     """
@@ -658,7 +672,6 @@ def enemy_step(state: TennisState) -> EnemyState:
     Returns:
         EnemyState: The updated enemy state.
     """
-
 
     # x-coordinate
     enemy_hit_offset = state.enemy_state.prev_walking_direction * 5 * -1 * 0  # this is always 0
@@ -885,8 +898,8 @@ def ball_step(state: TennisState, action) -> TennisState:
             PLAYER_HEIGHT,
             ball_state.ball_x,
             BALL_WIDTH,
-            0, # the original game ignores height when checking collision
-            BALL_WIDTH # could be renamed to to BALL_SIZE because ball is square
+            0,  # the original game ignores height when checking collision
+            BALL_WIDTH  # could be renamed to to BALL_SIZE because ball is square
         ),
         jnp.absolute(upper_entity_y + PLAYER_HEIGHT - ball_state.ball_y) <= 3
     )
@@ -899,8 +912,8 @@ def ball_step(state: TennisState, action) -> TennisState:
             PLAYER_HEIGHT,
             ball_state.ball_x,
             BALL_WIDTH,
-            0, # the original game ignores height when checking collision
-            BALL_WIDTH # could be renamed to to BALL_SIZE because ball is square
+            0,  # the original game ignores height when checking collision
+            BALL_WIDTH  # could be renamed to to BALL_SIZE because ball is square
         ),
         jnp.absolute(lower_entity_y + PLAYER_HEIGHT - ball_state.ball_y) <= 3
     )
@@ -1187,7 +1200,6 @@ def handle_ball_fire(state: TennisState, hitting_entity_x, hitting_entity_y, dir
         jnp.array(0),  # ball has not bounced after last hit
         state.ball_state.last_hit
     )
-
 
 
 @jax.jit
