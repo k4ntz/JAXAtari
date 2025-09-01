@@ -1,0 +1,6 @@
+Initially our plan was to simply fix the existing partial implementation of the tennis game.
+However, since progress in fixing the problems related to the physics of the game was too slow and overall inefficient, we
+decided to start rewriting the game once more. Working with a smaller codebase made it significantly easier to create
+a decent approximation of the original game's ball behaviour. Because of our decision to start from scratch we were not able
+to implement as many parts of the game as we hoped, but now that we have a vastly improved understanding of the game's physics
+we feel confident that we can build an accurate recreation of the original game.
