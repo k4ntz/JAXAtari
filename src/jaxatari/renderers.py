@@ -12,6 +12,3 @@ class JAXGameRenderer():
 
     def render(self, state):
         pass
-
-    def render(self, state):
-        pass
