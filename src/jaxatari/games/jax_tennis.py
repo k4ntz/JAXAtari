@@ -11,7 +11,7 @@ renderer = tr()
 
 
 class TennisObs(NamedTuple):
-    some_shit: jnp.ndarray = 0
+    pass
 
 
 class TennisInfo(NamedTuple):
