@@ -715,47 +715,93 @@ class GameRenderer:
         )
         pygame.display.set_caption("JAX Skiing Game")
 
-        # Erstelle alle Sprites mit der neuen Hilfsmethode
+        # Skier (Basisgröße – Jump wird später dynamisch gezoomt)
         self.skier_sprite = self._create_skier_sprite()
         self.skier_jump_sprite = self._create_object_sprite(
             "skiier_jump.npy",
-            int(self.game_config.skier_width * self.render_config.scale_factor * 2),
-            int(self.game_config.skier_height * self.render_config.scale_factor * 2),
+            int(self.game_config.skier_width * self.render_config.scale_factor),
+            int(self.game_config.skier_height * self.render_config.scale_factor),
         )
         self.skier_fallen_sprite = self._create_object_sprite(
             "skier_fallen.npy",
-            int(self.game_config.skier_width * self.render_config.scale_factor * 2),
-            int(self.game_config.skier_height * self.render_config.scale_factor * 2),
+            int(self.game_config.skier_width * self.render_config.scale_factor),
+            int(self.game_config.skier_height * self.render_config.scale_factor),
         )
-        # JAX arrays for vectorized operations
-        self.skier_jump_array = self._load_object_array("skiier_jump.npy")
-        self.skier_fallen_array = self._load_object_array("skier_fallen.npy")
-        self.flag_sprite = self._create_object_sprite(
-            "checkered_flag.npy",
-            int(self.game_config.flag_width * self.render_config.scale_factor * 2),
-            int(self.game_config.flag_height * self.render_config.scale_factor * 2),
-        )
-        self.flag_array = self._load_object_array("checkered_flag.npy")
+
+        # --- Flaggen rot + blau Varianten laden ---
+        w = int(self.game_config.flag_width * self.render_config.scale_factor)
+        h = int(self.game_config.flag_height * self.render_config.scale_factor)
+
+
+        # normale rote Flagge
+        self.flag_red_surface = self._create_object_sprite("checkered_flag.npy", w, h)
+
+
+        # blaue Variante erzeugen (per recolor und temporäre npy-Datei)
+        flag_arr = self._load_object_array("checkered_flag.npy")
+        def recolor_npy(npy_arr, rgb):
+            out = np.array(npy_arr)
+            mask = out[..., 3] > 0
+            out[..., :3][mask] = rgb
+            return out
+
+        blue_arr = recolor_npy(flag_arr, (0, 96, 255))
+        tmpfile = os.path.join(os.path.dirname(__file__), "..", "..", "jaxatari", "games", "sprites", "skiing", "checkered_flag_blue.npy")
+        np.save(tmpfile, blue_arr)
+        self.flag_blue_surface = self._npy_to_surface(tmpfile, w, h)
+
+        # Steine
         self.rock_sprite = self._create_object_sprite(
             "stone.npy",
-            int(self.game_config.rock_width * self.render_config.scale_factor * 3),
-            int(self.game_config.rock_height * self.render_config.scale_factor * 6),
+            int(self.game_config.rock_width * self.render_config.scale_factor),
+            int(self.game_config.rock_height * self.render_config.scale_factor),
         )
-        self.rock_array = self._load_object_array("stone.npy")
+
+        # Bäume
         self.tree_sprite = self._create_object_sprite(
             "tree.npy",
-            int(self.game_config.tree_width * self.render_config.scale_factor * 1.5),
-            int(self.game_config.tree_height * self.render_config.scale_factor * 1.5),
+            int(self.game_config.tree_width * self.render_config.scale_factor),
+            int(self.game_config.tree_height * self.render_config.scale_factor),
         )
         self.tree_array = self._load_object_array("tree.npy")
         self.font = pygame.font.Font(None, 36)
+        
+    def render(self, state: GameState):
+        left_centers, right_centers = self._calc_flag_centers(state.flags)
+        for idx, (left, right) in enumerate(zip(np.array(left_centers), np.array(right_centers)), start=1):
+            # Jede 20. Flagge rot, sonst blau
+            flag_surface = self.flag_red_surface if idx % 20 == 0 else self.flag_blue_surface
+            
+            flag_rect = flag_surface.get_rect()
+            flag_rect.center = (int(left[0]), int(left[1]))
+            self.screen.blit(flag_surface, flag_rect)
+            
+            second_flag_rect = flag_surface.get_rect()
+            second_flag_rect.center = (int(right[0]), int(right[1]))
+            self.screen.blit(flag_surface, second_flag_rect)
 
     def _npy_to_surface(self, npy_path, width, height):
-        arr = np.load(npy_path)  # Erwartet (H, W, 4) RGBA
-        arr = arr.astype(np.uint8)
-        surf = pygame.Surface((arr.shape[1], arr.shape[0]), pygame.SRCALPHA)
-        pygame.surfarray.pixels3d(surf)[:, :, :] = arr[..., :3]
-        pygame.surfarray.pixels_alpha(surf)[:, :] = arr[..., 3]
+        # Erwartet (H, W, 4) RGBA
+        arr = np.load(npy_path).astype(np.uint8)
+
+        # Falls kein Alpha vorhanden, künstlich hinzufügen
+        if arr.shape[-1] == 3:
+            a = np.full(arr.shape[:2] + (1,), 255, dtype=np.uint8)
+            arr = np.concatenate([arr, a], axis=-1)
+
+        H, W, _ = arr.shape
+        surf = pygame.Surface((W, H), pygame.SRCALPHA)
+
+        # Pygame erwartet (W, H, 3) für pixels3d und (W, H) für pixels_alpha
+        rgb = arr[..., :3].transpose(1, 0, 2)   # -> (W, H, 3)
+        alpha = arr[..., 3].T                   # -> (W, H)
+    
+        pygame.surfarray.pixels3d(surf)[:] = rgb
+        pygame.surfarray.pixels_alpha(surf)[:] = alpha
+    
+        # optional drehen, wenn nötig (z.B. 0, 90, 180, 270)
+        # surf = pygame.transform.rotate(surf, 0)
+    
         surf = pygame.transform.scale(surf, (width, height))
         return surf
 
@@ -912,14 +958,16 @@ class GameRenderer:
 
         # Flags
         left_centers, right_centers = self._calc_flag_centers(state.flags)
-        for left, right in zip(np.array(left_centers), np.array(right_centers)):
-            flag_rect = self.flag_sprite.get_rect()
-            flag_rect.center = (int(left[0]), int(left[1]))
-            self.screen.blit(self.flag_sprite, flag_rect)
+        for idx, (left, right) in enumerate(zip(np.array(left_centers),
+                                        np.array(right_centers)), start=1):
+            surf = self.flag_red_surface if (idx % 20) == 0 else self.flag_blue_surface
 
-            second_flag_rect = self.flag_sprite.get_rect()
-            second_flag_rect.center = (int(right[0]), int(right[1]))
-            self.screen.blit(self.flag_sprite, second_flag_rect)
+            r1 = surf.get_rect(center=(int(left[0]), int(left[1])))
+            self.screen.blit(surf, r1)
+
+            r2 = surf.get_rect(center=(int(right[0]), int(right[1])))
+            self.screen.blit(surf, r2)
+
 
         # Trees
         tree_centers = self._calc_tree_centers(state.trees)
