@@ -244,8 +244,8 @@ def player_projectile_step(
     final_proj_x = jnp.where(out_of_bounds, jnp.array(-1), moved_proj_x)
     final_proj_dir = jnp.where(out_of_bounds, jnp.array(0), new_proj_dir)
     return state._replace(
-        player_projectile_x=final_proj_x,
-        player_projectile_y=final_proj_y,
+        player_projectile_x= final_proj_x,
+        player_projectile_y= final_proj_y,
         player_projectile_dir=final_proj_dir,
         fired=new_fired
     )
