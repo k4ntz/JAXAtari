@@ -3,6 +3,7 @@ import pygame
 import chex
 import jax
 import jax.numpy as jnp
+import jax.image as jimage
 from dataclasses import dataclass
 from typing import Tuple, NamedTuple
 import random
@@ -699,6 +700,239 @@ class RenderConfig:
     rock_color: Tuple[int, int, int] = (128, 128, 128)
     game_over_color: Tuple[int, int, int] = (255, 0, 0)
     jump_text_color: Tuple[int, int, int] = (0, 0, 255)
+    
+    # Text-Overlay-Option: True = UI-Text via Pygame auf fertiges JAX-Frame
+    # False = (optionale) JAX-Bitmap-Font (siehe Kommentar unten im Code)
+    use_pygame_text: bool = True
+
+# ---- Sprite-Assets als JAX-Arrays ------------------------------------------------
+
+class RenderAssets(NamedTuple):
+    skier_left: jnp.ndarray      # (Hs, Ws, 4) uint8
+    skier_front: jnp.ndarray
+    skier_right: jnp.ndarray
+    skier_jump: jnp.ndarray
+    skier_fallen: jnp.ndarray
+    flag_red: jnp.ndarray
+    flag_blue: jnp.ndarray
+    tree: jnp.ndarray
+    rock: jnp.ndarray
+
+def _device_put_u8(arr: np.ndarray) -> jnp.ndarray:
+    return jax.device_put(jnp.asarray(arr, dtype=jnp.uint8))
+
+def _load_sprite_npy(base_dir: str, name: str) -> jnp.ndarray:
+    path = os.path.join(base_dir, name)
+    rgba = np.load(path).astype(np.uint8)  # (H, W, 4)
+    if rgba.shape[-1] == 3:
+        a = np.full(rgba.shape[:2] + (1,), 255, np.uint8)
+        rgba = np.concatenate([rgba, a], axis=-1)
+    return _device_put_u8(rgba)
+
+def _recolor_rgba(sprite_rgba: jnp.ndarray, rgb: Tuple[int,int,int]) -> jnp.ndarray:
+    """Ersetzt RGB an allen Pixeln mit Alpha>0 (gerade, einfache Variante)."""
+    mask = (sprite_rgba[..., 3:4] > 0).astype(jnp.uint8)  # (H,W,1)
+    rgb_arr = jnp.asarray(jnp.array(rgb, dtype=jnp.uint8))[None, None, :].astype(jnp.uint8)
+    new_rgb = (sprite_rgba[..., :3] * (1 - mask)) + (rgb_arr * mask)
+    return jnp.concatenate([new_rgb, sprite_rgba[..., 3:4]], axis=-1)
+
+# ---- JAX Hilfsfunktionen: Skalierung & Blitting ----------------------------------
+
+def _nn_resize_rgba(img: jnp.ndarray, new_h: int, new_w: int) -> jnp.ndarray:
+    out = jimage.resize(img, (new_h, new_w, 4), method="nearest")
+    return jnp.clip(out, 0, 255).astype(jnp.uint8)
+
+def _alpha_over(dst: jnp.ndarray, src: jnp.ndarray, top: jnp.ndarray, left: jnp.ndarray) -> jnp.ndarray:
+    """
+    Alpha-Compositing (SrcOver) eines RGBA-Sprites in ein RGBA-Frame – JIT-sicher.
+    Verwendet Padding + dynamic_slice/update, damit alle Slice-Größen statisch sind.
+    """
+    H, W, _ = dst.shape
+    h, w, _ = src.shape
+
+    top  = jnp.asarray(top,  jnp.int32)
+    left = jnp.asarray(left, jnp.int32)
+
+    # Puffer-Padding: groß genug, dass wir immer (h,w) aus der gepaddeten Fläche schneiden können
+    ph = h
+    pw = w
+    pad_cfg = ((ph, ph), (pw, pw), (0, 0))
+    dst_pad = jnp.pad(dst, pad_cfg, mode="constant", constant_values=0)
+
+    # Startkoordinaten in der gepaddeten Fläche (immer gültig)
+    start_y = jnp.clip(top  + ph, 0, H + 2*ph - h).astype(jnp.int32)
+    start_x = jnp.clip(left + pw, 0, W + 2*pw - w).astype(jnp.int32)
+
+    # Fixe (statische) Slice-Größen: (h, w, 4)
+    dst_sub = jax.lax.dynamic_slice(dst_pad, (start_y, start_x, 0), (h, w, 4)).astype(jnp.float32)
+    src_sub = src.astype(jnp.float32)
+
+    sa = src_sub[..., 3:4] / 255.0
+    da = dst_sub[..., 3:4] / 255.0
+    out_a   = sa + da * (1.0 - sa)
+    out_rgb = src_sub[..., :3] * sa + dst_sub[..., :3] * (1.0 - sa)
+    out = jnp.concatenate([out_rgb, out_a * 255.0], axis=-1)
+    out = jnp.clip(out, 0.0, 255.0).astype(jnp.uint8)
+
+    # Patch zurückschreiben
+    dst_pad = jax.lax.dynamic_update_slice(dst_pad, out, (start_y, start_x, 0))
+
+    # Originalbereich aus der gepaddeten Fläche zurückschneiden
+    dst_final = jax.lax.dynamic_slice(dst_pad, (ph, pw, 0), (H, W, 4))
+    return dst_final
+
+def _blit_center(dst: jnp.ndarray, sprite: jnp.ndarray, cx: jnp.ndarray, cy: jnp.ndarray) -> jnp.ndarray:
+    """Blit Sprite so, dass seine Mitte bei (cx, cy) in Pixelkoordinaten liegt (JIT-sicher)."""
+    h = sprite.shape[0]
+    w = sprite.shape[1]
+    # cx, cy sind JAX-Scalars; rechne alles als jnp.int32 weiter
+    top  = (cy - (h // 2)).astype(jnp.int32)
+    left = (cx - (w // 2)).astype(jnp.int32)
+    return _alpha_over(dst, sprite, top, left)
+
+def _scan_blit(dst: jnp.ndarray, sprites: jnp.ndarray, centers_xy: jnp.ndarray) -> jnp.ndarray:
+    """Zeichnet mehrere Sprites nacheinander (Reihenfolge bleibt erhalten).
+       sprites: (N, hs, ws, 4) oder (N, 1, 1, 4) wenn gleiche Größe → wir vmap’en nicht über Größe.
+       centers_xy: (N, 2) int32 Pixelcenter."""
+    def body(frame, inputs):
+        spr, cxy = inputs
+        frame = _blit_center(frame, spr, cxy[0], cxy[1])
+        return frame, None
+    out, _ = jax.lax.scan(body, dst, (sprites, centers_xy))
+    return out
+
+# ---- Pure JAX Renderer -----------------------------------------------------------
+
+@partial(jax.jit,
+         static_argnames=("screen_width","screen_height","scale_factor","skier_y","flag_distance","use_jump","draw_ui_jax"))
+def render_frame(
+    state: GameState,
+    assets: RenderAssets,
+    *,
+    screen_width: int,
+    screen_height: int,
+    scale_factor: int,
+    skier_y: int,
+    flag_distance: int,
+    use_jump: bool = True,
+    draw_ui_jax: bool = False,
+) -> jnp.ndarray:
+    """Erzeugt ein RGBA-Frame (uint8) rein in JAX – keine Seiteneffekte."""
+    # 1) Leeres (upgescaltes) RGBA-Frame
+    H = screen_height * scale_factor
+    W = screen_width * scale_factor
+    bg_rgb = jnp.array([255, 255, 255], dtype=jnp.uint8)
+    frame = jnp.concatenate(
+        [jnp.full((H, W, 3), bg_rgb, dtype=jnp.uint8),
+         jnp.full((H, W, 1), 255, dtype=jnp.uint8)],
+        axis=-1
+    )
+
+    # 2) Hilfsfunktionen für Koordinaten (Game→Pixel)
+    def to_px_x(x): return jnp.round(x * scale_factor).astype(jnp.int32)
+    def to_px_y(y): return jnp.round(y * scale_factor).astype(jnp.int32)
+
+    # 3) Skier-Sprite auswählen (links/front/rechts; „fallen“ hat Vorrang)
+    # mapping wie bisher: 0..2 = left, 3..4 = front, 5..7 = right
+    pos = jnp.clip(state.skier_pos, 0, 7)
+  
+    skier_base = jax.lax.cond(
+        pos <= 2,
+        lambda _: assets.skier_left,
+        lambda _: jax.lax.cond(
+            pos >= 5,
+            lambda __: assets.skier_right,
+            lambda __: assets.skier_front,
+            operand=None,   # <— WICHTIG: inneres cond bekommt ein operand
+        ),
+        operand=None,       # <— WICHTIG: äußeres cond bekommt ein operand
+    )
+
+    skier_sprite = jax.lax.cond(
+        jnp.logical_and(state.skier_fell > 0, jnp.logical_or(state.collision_type == 1, state.collision_type == 2)),
+        lambda _: assets.skier_fallen,
+        lambda _: skier_base,
+        operand=None,       # <— operand setzen
+    )
+
+    skier_cx = to_px_x(state.skier_x)
+    skier_cy = to_px_y(jnp.array(skier_y))
+
+    # Wenn gefallen: Position am nächsten Kollisionsobjekt (Tree/Rock)
+    def fallen_center(_):
+        # Distanz zu Trees/Rocks in Pixeln (L1), argmin
+        tree_xy = jnp.round(state.trees * scale_factor).astype(jnp.int32)
+        rock_xy = jnp.round(state.rocks * scale_factor).astype(jnp.int32)
+        sx = skier_cx
+        sy = skier_cy
+        def nearest(xy):
+            d = jnp.abs(xy[:,0] - sx) + jnp.abs(xy[:,1] - sy)
+            idx = jnp.argmin(d)
+            return xy[idx]
+        cxcy = jax.lax.cond(
+            state.collision_type == 1,  # tree
+            lambda __: nearest(tree_xy),
+            lambda __: jax.lax.cond(
+                state.collision_type == 2,
+                lambda ___: nearest(rock_xy),
+                lambda ___: jnp.array([sx, sy], jnp.int32),
+                operand=None,  # 👈 inneres cond braucht das operand
+            ),
+            operand=None
+        )
+        return cxcy[0], cxcy[1]
+    skier_cx, skier_cy = jax.lax.cond(
+        jnp.logical_and(state.skier_fell > 0, jnp.logical_or(state.collision_type == 1, state.collision_type == 2)),
+        fallen_center,
+        lambda _: (skier_cx, skier_cy),
+        operand=None
+    )
+
+    # 4) Flags (links & rechts), jede 20. Gate rot, sonst blau
+    #    centers sind Pixelcenter; Reihenfolge: Skier -> Flags -> Trees -> Rocks (wie zuvor)
+    flags = state.flags  # (N,2) in Game-Koordinaten
+    left_px  = jnp.round(flags * scale_factor).astype(jnp.int32)               # (N,2)
+    right_px = jnp.round((flags + jnp.array([float(flag_distance), 0.0])) * scale_factor).astype(jnp.int32)
+    # Farbe wählen: 1..N, idx%20==0 => red
+    n_flags = flags.shape[0]
+    idxs = jnp.arange(1, n_flags+1, dtype=jnp.int32)
+    is_red = (idxs % 20) == 0
+    # je Gate zwei Sprites (links & rechts)
+    flag_sprites_gate = jax.vmap(lambda r: jax.lax.cond(r, lambda _: assets.flag_red, lambda _: assets.flag_blue, operand=None))(is_red)
+    # tiles: (N*2, ...)
+    flag_sprites = jnp.concatenate([flag_sprites_gate, flag_sprites_gate], axis=0)
+    flag_centers = jnp.concatenate([left_px, right_px], axis=0)
+
+    # 5) Trees & Rocks (Pixelcenter)
+    tree_px = jnp.round(state.trees * scale_factor).astype(jnp.int32)
+    rock_px = jnp.round(state.rocks * scale_factor).astype(jnp.int32)
+
+    # 6) Skalierungen der Sprites für Ausgabeauflösung (scale_factor)
+    def scale_sprite(spr: jnp.ndarray) -> jnp.ndarray:
+        # Zielgröße ist immer "input * scale_factor"
+        h = spr.shape[0]
+        w = spr.shape[1]
+        return _nn_resize_rgba(spr, h * scale_factor, w * scale_factor)
+
+    skier_draw = scale_sprite(skier_sprite)
+    flag_red_draw  = scale_sprite(assets.flag_red)
+    flag_blue_draw = scale_sprite(assets.flag_blue)
+    tree_draw = scale_sprite(assets.tree)
+    rock_draw = scale_sprite(assets.rock)
+    # Da Flags gemischt sind, bauen wir ein Array der tatsächlich verwendeten Sprites:
+    # (N*2, h, w, 4) – wir mappen „is_red“ erneut:
+    flag_sprites = jax.vmap(lambda r: jax.lax.cond(r, lambda _: flag_red_draw, lambda _: flag_blue_draw, operand=None))(jnp.concatenate([is_red, is_red], axis=0))
+
+    # 7) Zeichnen in der korrekten Reihenfolge
+    frame = _blit_center(frame, skier_draw, skier_cx, skier_cy)
+    frame = _scan_blit(frame, flag_sprites, flag_centers)
+    frame = _scan_blit(frame, jnp.repeat(tree_draw[None, ...], tree_px.shape[0], axis=0), tree_px)
+    frame = _scan_blit(frame, jnp.repeat(rock_draw[None, ...], rock_px.shape[0], axis=0), rock_px)
+
+    # 8) (Optional) UI/Text direkt in JAX – hier deaktiviert um identische Optik
+    #    Du kannst hier eine 5x7-Ziffern-Bitmap hinterlegen und blitten.
+    #    Für 1:1 identischen Look nutze unten den Pygame-Fallback im Display-Bridge.
+    return frame
 
 
 class GameRenderer:
@@ -715,70 +949,95 @@ class GameRenderer:
         )
         pygame.display.set_caption("JAX Skiing Game")
 
-        # Skier (Basisgröße – Jump wird später dynamisch gezoomt)
-        self.skier_sprite = self._create_skier_sprite()
-        self.skier_jump_sprite = self._create_object_sprite(
-            "skiier_jump.npy",
-            int(self.game_config.skier_width * self.render_config.scale_factor),
-            int(self.game_config.skier_height * self.render_config.scale_factor),
-        )
-        self.skier_fallen_sprite = self._create_object_sprite(
-            "skier_fallen.npy",
-            int(self.game_config.skier_width * self.render_config.scale_factor),
-            int(self.game_config.skier_height * self.render_config.scale_factor),
-        )
+        # ---- Sprite-Assets als JAX Arrays laden (einmalig) ----
+        base_path = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
+        sprite_dir = os.path.join(base_path, "jaxatari", "games", "sprites", "skiing")
 
-        # --- Flaggen rot + blau Varianten laden ---
-        w = int(self.game_config.flag_width * self.render_config.scale_factor)
-        h = int(self.game_config.flag_height * self.render_config.scale_factor)
+        skier_left   = _load_sprite_npy(sprite_dir, "skiier_right.npy")  # (ALE links/rechts sind invertiert in deinem Bestand)
+        skier_front  = _load_sprite_npy(sprite_dir, "skiier_front.npy")
+        skier_right  = _load_sprite_npy(sprite_dir, "skiier_left.npy")
+        skier_jump   = _load_sprite_npy(sprite_dir, "skiier_jump.npy")
+        skier_fallen = _load_sprite_npy(sprite_dir, "skier_fallen.npy")
 
+        flag_red = _load_sprite_npy(sprite_dir, "checkered_flag.npy")
+        flag_blue = _recolor_rgba(flag_red, (0, 96, 255))
+        tree = _load_sprite_npy(sprite_dir, "tree.npy")
+        rock = _load_sprite_npy(sprite_dir, "stone.npy")
 
-        # normale rote Flagge
-        self.flag_red_surface = self._create_object_sprite("checkered_flag.npy", w, h)
-
-
-        # blaue Variante erzeugen (per recolor und temporäre npy-Datei)
-        flag_arr = self._load_object_array("checkered_flag.npy")
-        def recolor_npy(npy_arr, rgb):
-            out = np.array(npy_arr)
-            mask = out[..., 3] > 0
-            out[..., :3][mask] = rgb
-            return out
-
-        blue_arr = recolor_npy(flag_arr, (0, 96, 255))
-        tmpfile = os.path.join(os.path.dirname(__file__), "..", "..", "jaxatari", "games", "sprites", "skiing", "checkered_flag_blue.npy")
-        np.save(tmpfile, blue_arr)
-        self.flag_blue_surface = self._npy_to_surface(tmpfile, w, h)
-
-        # Steine
-        self.rock_sprite = self._create_object_sprite(
-            "stone.npy",
-            int(self.game_config.rock_width * self.render_config.scale_factor),
-            int(self.game_config.rock_height * self.render_config.scale_factor),
+        self.assets = RenderAssets(
+            skier_left=skier_left,
+            skier_front=skier_front,
+            skier_right=skier_right,
+            skier_jump=skier_jump,
+            skier_fallen=skier_fallen,
+            flag_red=flag_red,
+            flag_blue=flag_blue,
+            tree=tree,
+            rock=rock,
         )
 
-        # Bäume
-        self.tree_sprite = self._create_object_sprite(
-            "tree.npy",
-            int(self.game_config.tree_width * self.render_config.scale_factor),
-            int(self.game_config.tree_height * self.render_config.scale_factor),
+        # JIT-Compile die Renderfunktion mit statischen Parametern (Ints/Bools)
+        self._render_jit = partial(
+            render_frame,
+            screen_width=self.game_config.screen_width,
+            screen_height=self.game_config.screen_height,
+            scale_factor=self.render_config.scale_factor,
+            skier_y=self.game_config.skier_y,
+            flag_distance=self.game_config.flag_distance,
+            use_jump=False,       # <<<<< Jump-Visuals AUS
+            draw_ui_jax=False,
         )
-        self.tree_array = self._load_object_array("tree.npy")
+        # Warmup (optional)
+        # _ = self._render_jit(self._fake_state(), self.assets)
+
+        # Font nur noch für optionalen UI-Fallback:
         self.font = pygame.font.Font(None, 36)
-        
+
+    # --- Mini-Helfer: RGBA-ndarray auf den Screen bringen (ohne Layout-Logik) ---
+    def _blit_rgba_to_screen(self, rgba: np.ndarray):
+        # rgba: (H, W, 4) uint8
+        H, W, _ = rgba.shape
+        surf = pygame.Surface((W, H), pygame.SRCALPHA)
+        # Pygame erwartet (W,H,3) und (W,H) für alpha
+        rgb = rgba[..., :3].transpose(1, 0, 2).copy()
+        a   = rgba[..., 3].T.copy()
+        pygame.surfarray.pixels3d(surf)[:] = rgb
+        pygame.surfarray.pixels_alpha(surf)[:] = a
+        self.screen.blit(surf, (0, 0))
+
     def render(self, state: GameState):
-        left_centers, right_centers = self._calc_flag_centers(state.flags)
-        for idx, (left, right) in enumerate(zip(np.array(left_centers), np.array(right_centers)), start=1):
-            # Jede 20. Flagge rot, sonst blau
-            flag_surface = self.flag_red_surface if idx % 20 == 0 else self.flag_blue_surface
-            
-            flag_rect = flag_surface.get_rect()
-            flag_rect.center = (int(left[0]), int(left[1]))
-            self.screen.blit(flag_surface, flag_rect)
-            
-            second_flag_rect = flag_surface.get_rect()
-            second_flag_rect.center = (int(right[0]), int(right[1]))
-            self.screen.blit(flag_surface, second_flag_rect)
+        # 1) Pure JAX Frame rendern
+        frame = self._render_jit(state, self.assets)  # jnp.uint8[H,W,4]
+        frame_np = np.asarray(frame)
+        # 2) Optional: UI-Text via Pygame oben drauf (identische Optik)
+        if self.render_config.use_pygame_text:
+            self._blit_rgba_to_screen(frame_np)
+            # Score mittig oben, Zeit darunter (wie vorher)
+            score_text = self.font.render(f"Score: {int(state.score)}", True, self.render_config.text_color)
+            total_time = int(state.time)
+            minutes = total_time // (60 * 60)
+            seconds = (total_time // 60) % 60
+            hundredths = total_time % 60
+            time_str = f"{minutes:02}:{seconds:02}.{hundredths:02}"
+            time_text = self.font.render(time_str, True, self.render_config.text_color)
+
+            screen_width_px = self.game_config.screen_width * self.render_config.scale_factor
+            score_rect = score_text.get_rect(center=(screen_width_px // 2, 10 + score_text.get_height() // 2))
+            time_rect = time_text.get_rect(center=(screen_width_px // 2, 10 + score_text.get_height() + time_text.get_height() // 2))
+            self.screen.blit(score_text, score_rect)
+            self.screen.blit(time_text, time_rect)
+
+            if state.game_over:
+                game_over_text = self.font.render("You Won!", True, self.render_config.game_over_color)
+                text_rect = game_over_text.get_rect(
+                    center=(self.game_config.screen_width * self.render_config.scale_factor // 2,
+                            self.game_config.screen_height * self.render_config.scale_factor // 2)
+                )
+                self.screen.blit(game_over_text, text_rect)
+        else:
+            self._blit_rgba_to_screen(frame_np)
+
+        pygame.display.flip()
 
     def _npy_to_surface(self, npy_path, width, height):
         # Erwartet (H, W, 4) RGBA
@@ -877,161 +1136,6 @@ class GameRenderer:
 
         scale = jnp.array(self.render_config.scale_factor, dtype=jnp.float32)
         return jnp.round(trees * scale).astype(jnp.int32)
-
-    def render(self, state: GameState):
-        """Render the current game state"""
-        self.screen.fill(self.render_config.background_color)
-
-        # Skier
-        skier_img = None
-        # Zeige "skier_fallen" Sprite bei Baum- oder Stein-Kollision
-        if state.skier_fell > 0 and state.collision_type in (1, 2):
-            skier_img = self.skier_fallen_sprite
-            # Zentriere Sprite exakt auf das kollidierte Hindernis
-            if state.collision_type == 1:  # Baum
-                # Finde den ersten Baum, der mit dem Skifahrer kollidiert
-                tree_centers = self._calc_tree_centers(state.trees)
-                skier_x_px = int(state.skier_x * self.render_config.scale_factor)
-                skier_y_px = int(
-                    self.game_config.skier_y * self.render_config.scale_factor
-                )
-                # Suche den Baum mit minimalem Abstand zum Skifahrer
-                dists = [
-                    abs(tx - skier_x_px) + abs(ty - skier_y_px)
-                    for tx, ty in np.array(tree_centers)
-                ]
-                idx = int(np.argmin(dists))
-                cx, cy = np.array(tree_centers[idx])
-            elif state.collision_type == 2:  # Stein
-                rock_centers = np.round(
-                    np.array(state.rocks) * self.render_config.scale_factor
-                ).astype(int)
-                skier_x_px = int(state.skier_x * self.render_config.scale_factor)
-                skier_y_px = int(
-                    self.game_config.skier_y * self.render_config.scale_factor
-                )
-                dists = [
-                    abs(rx - skier_x_px) + abs(ry - skier_y_px)
-                    for rx, ry in np.array(rock_centers)
-                ]
-                idx = int(np.argmin(dists))
-                cx, cy = rock_centers[idx]
-            else:
-                # Fallback auf Skier-Position
-                cx = int(state.skier_x * self.render_config.scale_factor)
-                cy = int(self.game_config.skier_y * self.render_config.scale_factor)
-            skier_rect = skier_img.get_rect(center=(cx, cy))
-        else:
-            if state.jumping:
-                skier_img = self.skier_jump_sprite
-            else:
-                skier_img = self.skier_sprite[int(state.skier_pos)]
-            skier_rect = skier_img.get_rect(
-                center=(
-                    int(state.skier_x * self.render_config.scale_factor),
-                    int(self.game_config.skier_y * self.render_config.scale_factor),
-                )
-            )
-
-        if state.jumping and not (
-            state.skier_fell > 0 and state.collision_type in (1, 2)
-        ):
-            jump_progress = state.jump_timer / self.game_config.jump_duration
-            scale_factor = 1.0 + (self.config.jump_scale_factor - 1.0) * (
-                4 * jump_progress * (1 - jump_progress)
-            )
-            new_size = (
-                int(
-                    self.game_config.skier_width
-                    * self.render_config.scale_factor
-                    * scale_factor
-                ),
-                int(
-                    self.game_config.skier_height
-                    * self.render_config.scale_factor
-                    * scale_factor
-                ),
-            )
-            skier_img = pygame.transform.scale(skier_img, new_size)
-            skier_rect = skier_img.get_rect(center=skier_rect.center)
-        self.screen.blit(skier_img, skier_rect)
-
-        # Flags
-        left_centers, right_centers = self._calc_flag_centers(state.flags)
-        for idx, (left, right) in enumerate(zip(np.array(left_centers),
-                                        np.array(right_centers)), start=1):
-            surf = self.flag_red_surface if (idx % 20) == 0 else self.flag_blue_surface
-
-            r1 = surf.get_rect(center=(int(left[0]), int(left[1])))
-            self.screen.blit(surf, r1)
-
-            r2 = surf.get_rect(center=(int(right[0]), int(right[1])))
-            self.screen.blit(surf, r2)
-
-
-        # Trees
-        tree_centers = self._calc_tree_centers(state.trees)
-        for tx, ty in np.array(tree_centers):
-            tree_rect = self.tree_sprite.get_rect()
-            tree_rect.center = (int(tx), int(ty))
-            self.screen.blit(self.tree_sprite, tree_rect)
-
-        # Rocks
-        for fx, fy in state.rocks:
-            rock_rect = self.rock_sprite.get_rect()
-            rock_rect.center = (
-                int(fx * self.render_config.scale_factor),
-                int(fy * self.render_config.scale_factor),
-            )
-            self.screen.blit(self.rock_sprite, rock_rect)
-
-        # Draw UI
-        score_text = self.font.render(
-            f"Score: {state.score}", True, self.render_config.text_color
-        )
-        # Zeit formatieren wie 00:00.00
-        total_time = int(state.time)
-        minutes = total_time // (60 * 60)
-        seconds = (total_time // 60) % 60
-        hundredths = total_time % 60
-        time_str = f"{minutes:02}:{seconds:02}.{hundredths:02}"
-        time_text = self.font.render(time_str, True, self.render_config.text_color)
-
-        # Score mittig oben, Zeit darunter mittig
-        screen_width_px = (
-            self.game_config.screen_width * self.render_config.scale_factor
-        )
-
-        score_rect = score_text.get_rect(
-            center=(screen_width_px // 2, 10 + score_text.get_height() // 2)
-        )
-        time_rect = time_text.get_rect(
-            center=(
-                screen_width_px // 2,
-                10 + score_text.get_height() + time_text.get_height() // 2,
-            )
-        )
-
-        self.screen.blit(score_text, score_rect)
-        self.screen.blit(time_text, time_rect)
-
-        if state.game_over:
-            game_over_text = self.font.render(
-                "You Won!", True, self.render_config.game_over_color
-            )
-            text_rect = game_over_text.get_rect(
-                center=(
-                    self.game_config.screen_width
-                    * self.render_config.scale_factor
-                    // 2,
-                    self.game_config.screen_height
-                    * self.render_config.scale_factor
-                    // 2,
-                )
-            )
-            self.screen.blit(game_over_text, text_rect)
-
-        pygame.display.flip()
 
     def close(self):
         """Clean up pygame resources"""
