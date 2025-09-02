@@ -89,7 +89,7 @@ WINDOW_WIDTH = 160 * 3
 WINDOW_HEIGHT = 210 * 3
 
 COLLISION_BOX = (8, 8)
-PORTAL_X = jnp.array([18, 136])
+PORTAL_X = jnp.array([16, 138])
 
 # Police spawn delay (120 frames = 2 seconds at 60 FPS)
 POLICE_SPAWN_DELAY = 120
