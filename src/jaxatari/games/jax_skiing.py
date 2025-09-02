@@ -12,6 +12,8 @@ from sys import maxsize
 import numpy as np
 
 from jaxatari.environment import JaxEnvironment
+from jaxatari.renderers import JAXGameRenderer
+import jaxatari.spaces as spaces
 
 NOOP = 0
 LEFT = 1
@@ -113,6 +115,11 @@ class JaxSkiing(JaxEnvironment[GameState, SkiingObservation, SkiingInfo, None]):
         super().__init__()
         self.config = GameConfig()
         self.state = self.reset()
+        self.renderer = SkiingRenderer(self.consts)
+
+    def action_space(self) -> spaces.Discrete:
+        # Aktionen sind bei dir: NOOP=0, LEFT=1, RIGHT=2, JUMP=3
+        return spaces.Discrete(4)
 
     def _npy_to_surface(self, npy_path, width, height):
         arr = np.load(npy_path)  # Erwartet (H, W, 4) RGBA
@@ -934,6 +941,45 @@ def render_frame(
     #    Für 1:1 identischen Look nutze unten den Pygame-Fallback im Display-Bridge.
     return frame
 
+class SkiingRenderer(JAXGameRenderer):
+    def __init__(self, consts=None):
+        super().__init__()
+        # Deine Game-Konstanten (Breite/Höhe/Abstände) – wie bei Pong: env.consts
+        self.consts = consts or GameConfig()
+
+        # Sprites einmalig als JAX-Arrays laden (RGBA)
+        base_dir = os.path.dirname(os.path.abspath(__file__))
+        sprite_dir = os.path.join(base_dir, "sprites", "skiing")
+
+        flag_red = _load_sprite_npy(sprite_dir, "checkered_flag.npy")
+        self.assets = RenderAssets(
+            skier_left   = _load_sprite_npy(sprite_dir, "skiier_right.npy"),  # (deine Spiegelung beibehalten)
+            skier_front  = _load_sprite_npy(sprite_dir, "skiier_front.npy"),
+            skier_right  = _load_sprite_npy(sprite_dir, "skiier_left.npy"),
+            skier_jump   = _load_sprite_npy(sprite_dir, "skiier_jump.npy"),
+            skier_fallen = _load_sprite_npy(sprite_dir, "skier_fallen.npy"),
+            flag_red     = flag_red,
+            flag_blue    = _recolor_rgba(flag_red, (0, 96, 255)),
+            tree         = _load_sprite_npy(sprite_dir, "tree.npy"),
+            rock         = _load_sprite_npy(sprite_dir, "stone.npy"),
+        )
+
+        # JIT’ter für deine pure Renderfunktion, **ohne Upscaling**
+        self._render_fn = partial(
+            render_frame,
+            screen_width   = self.consts.screen_width,    # 160
+            screen_height  = self.consts.screen_height,   # 210
+            scale_factor   = 1,         # play.py skaliert selbst
+            skier_y        = self.consts.skier_y,
+            flag_distance  = self.consts.flag_distance,
+            use_jump       = False,      # Jump-Optik off (wie zuvor besprochen)
+            draw_ui_jax    = False,
+        )
+
+    @partial(jax.jit, static_argnums=(0,))
+    def render(self, state) -> jnp.ndarray:
+        rgba = self._render_fn(state, self.assets)   # (210,160,4) uint8
+        return rgba[..., :3]                         # -> (210,160,3) RGB
 
 class GameRenderer:
     def __init__(self, game_config: GameConfig, render_config: RenderConfig):
