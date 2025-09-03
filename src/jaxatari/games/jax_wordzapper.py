@@ -45,6 +45,7 @@ class WordZapperConstants(NamedTuple) :
     LETTERS_DISTANCE = 14 # spacing between letters
     LETTERS_END = LETTER_VISIBLE_MIN_X + 26 * LETTERS_DISTANCE # 27 symbols (letters + special) but 26 gaps
     LETTER_COOLDOWN = 200 # cooldown after letters zapperd till they reappear
+    LETTER_SCROLLING_SPEED = 1 # speed at which letters move left
 
     # Enemies
     MAX_ENEMIES = 6
@@ -574,15 +575,12 @@ def player_missile_step(
     fire = jnp.any(
         jnp.array(
             [
-                action == Action.FIRE,
                 action == Action.UPRIGHTFIRE,
                 action == Action.UPLEFTFIRE,
-                action == Action.DOWNFIRE,
                 action == Action.DOWNRIGHTFIRE,
                 action == Action.DOWNLEFTFIRE,
                 action == Action.RIGHTFIRE,
                 action == Action.LEFTFIRE,
-                action == Action.UPFIRE, ## TODO downfire upfire are not missile step? right? right? look at frate extractor, when running it in terminal you can see key mappings 
             ]
         )
     )
@@ -888,7 +886,7 @@ class JaxWordZapper(JaxEnvironment[WordZapperState, WordZapperObservation, WordZ
             letters_y=letters_y,
             letters_char=jnp.arange(27),
             letters_alive=jnp.stack([jnp.ones((27,), dtype=jnp.int32), jnp.zeros((27,), dtype=jnp.int32)], axis=1),
-            letters_speed=jnp.ones((27,)) * 1,
+            letters_speed=jnp.ones((27,)) * self.consts.LETTER_SCROLLING_SPEED,
             letters_positions=jnp.stack([letters_x, letters_y], axis=1),
             current_word=jnp.array([0, 1, 2, 3, 4]),
             current_letter_index=jnp.array(0),
