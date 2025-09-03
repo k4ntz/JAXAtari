@@ -18,6 +18,7 @@ import jaxatari.spaces as spaces
 NOOP = 0
 LEFT = 1
 RIGHT = 2
+FIRE = 3
 
 BOTTOM_BORDER = 176
 TOP_BORDER = 23
@@ -62,6 +63,7 @@ class GameState(NamedTuple):
     key: chex.Array
     collision_type: chex.Array  # 0 = keine, 1 = Baum, 2 = Stein, 3 = Flagge
     flags_passed: chex.Array
+    collision_cooldown: chex.Array  # Frames, in denen Kollisionen ignoriert werden (Debounce nach Recovery)
 
 
 class EntityPosition(NamedTuple):
@@ -153,6 +155,7 @@ class JaxSkiing(JaxEnvironment[GameState, SkiingObservation, SkiingInfo, None]):
             key=key,
             collision_type=jnp.array(0),
             flags_passed=jnp.zeros(self.config.max_num_flags, dtype=bool),
+            collision_cooldown=jnp.array(0, dtype=jnp.int32),
         )
         obs = self._get_observation(state)
 
@@ -247,311 +250,224 @@ class JaxSkiing(JaxEnvironment[GameState, SkiingObservation, SkiingInfo, None]):
         self, state: GameState, action: int
     ) -> tuple[SkiingObservation, GameState, float, bool, SkiingInfo]:
         #                              -->  --_      \     |     |    /    _-- <--
-        side_speed = jnp.array(
-            [-1.0, -0.5, -0.333, 0.0, 0.0, 0.333, 0.5, 1], jnp.float32
-        )
-
+        side_speed = jnp.array([-1.0, -0.5, -0.333, 0.0, 0.0, 0.333, 0.5, 1.0], jnp.float32)
         #                              -->  --_   \     |    |     /    _--  <--
-        down_speed = jnp.array(
-            [0.0, 0.5, 0.875, 1.0, 1.0, 0.875, 0.5, 0.0], jnp.float32
-        )
+        down_speed = jnp.array([0.0, 0.5, 0.875, 1.0, 1.0, 0.875, 0.5, 0.0], jnp.float32)
 
-        # --- NEU: Fallen-Logik ---
-        def handle_fallen(state, action):
-            # Nur auf LEFT oder RIGHT reagieren
-            is_side = jnp.logical_or(jnp.equal(action, LEFT), jnp.equal(action, RIGHT))
-            # Wenn seitliche Eingabe: skier_fell auf 0, sonst dekrementieren
-            skier_fell = jax.lax.cond(
-                is_side,
-                lambda _: jnp.array(0),
-                lambda _: jnp.maximum(state.skier_fell - 1, 0),
-                operand=None,
-            )
-            # Keine Bewegung, keine Punkteänderung, keine Objektbewegung
-            flags_passed = (
-                state.flags_passed
-            )  # Fix: Use the existing flags_passed from state
-            new_state = GameState(
-                skier_x=state.skier_x,
-                skier_pos=state.skier_pos,
-                skier_fell=skier_fell,
-                skier_x_speed=jnp.array(0.0),
-                skier_y_speed=jnp.array(0.0),
-                flags=state.flags,
-                trees=state.trees,
-                rocks=state.rocks,
-                score=state.score,
-                time=state.time,
-                direction_change_counter=state.direction_change_counter,
-                game_over=state.game_over,
-                key=state.key,
-                collision_type=state.collision_type,
-                flags_passed=flags_passed,
-            )
-            obs = self._get_observation(new_state)
-            info = self._get_info(new_state)
-            reward = jnp.array(0.0, dtype=jnp.float32)  # Typ explizit setzen
-            done = self._get_done(new_state)
-            return obs, new_state, reward, done, info
+        RECOVERY_FRAMES = jnp.int32(60)
+        TREE_X_DIST = jnp.float32(3.0)
+        ROCK_X_DIST = jnp.float32(1.0)
+        Y_HIT_DIST  = jnp.float32(1.0)
 
-        # --- Standardspielablauf ---
-        def normal_step(state, action):
-            # Handle left/right movement
-            new_skier_pos = jax.lax.cond(
-                jnp.equal(action, LEFT),
-                lambda _: state.skier_pos - 1,
-                lambda _: state.skier_pos,
-                operand=None,
-            )
-            new_skier_pos = jax.lax.cond(
-                jnp.equal(action, RIGHT),
-                lambda _: state.skier_pos + 1,
-                lambda _: new_skier_pos,
-                operand=None,
-            )
-            skier_pos = jnp.clip(new_skier_pos, 0, 7)
+        # 1) Eingabe -> Zielpose
+        new_skier_pos = jax.lax.cond(jnp.equal(action, LEFT),
+                                     lambda _: state.skier_pos - 1,
+                                     lambda _: state.skier_pos,
+                                     operand=None)
+        new_skier_pos = jax.lax.cond(jnp.equal(action, RIGHT),
+                                     lambda _: state.skier_pos + 1,
+                                     lambda _: new_skier_pos,
+                                     operand=None)
+        skier_pos = jnp.clip(new_skier_pos, 0, 7)
 
-            skier_pos, direction_change_counter = jax.lax.cond(
-                jnp.greater(state.direction_change_counter, 0),
-                lambda _: (state.skier_pos, state.direction_change_counter - 1),
-                lambda _: (skier_pos, 0),
-                operand=None,
-            )
-
-            direction_change_counter = jax.lax.cond(
-                jnp.logical_and(
-                    jnp.not_equal(skier_pos, state.skier_pos),
-                    jnp.equal(direction_change_counter, 0),
-                ),
-                lambda _: jnp.array(16),
-                lambda _: direction_change_counter,
-                operand=None,
-            )
-
-            dy = down_speed.at[skier_pos].get()
-            dx = side_speed.at[skier_pos].get()
-
-            new_skier_x_speed = state.skier_x_speed + ((dx - state.skier_x_speed) * 0.1)
-
-            # Instead, maintain normal vertical speed but handle the visual effect separately
-            new_skier_y_speed = state.skier_y_speed + (
-                (dy - state.skier_y_speed) * 0.05
-            )
-
-            new_x = jnp.clip(
-                state.skier_x + new_skier_x_speed,
-                self.config.skier_width / 2,
-                self.config.screen_width - self.config.skier_width / 2,
-            )
-
-            # Move objects using vectorized operations instead of Python loops
-            new_trees = state.trees.at[:, 1].add(-new_skier_y_speed)
-            new_rocks = state.rocks.at[:, 1].add(-new_skier_y_speed)
-            new_flags = state.flags.at[:, 1].add(-new_skier_y_speed)
-
-            # ---------------------------
-            # Gate-Pass-Detection (pro Gate, nicht pro Flagge):
-            #   - "eligible": Skier-X strikt zwischen linker und rechter Stange
-            #   - "crossed": Gate-Y kreuzt die Skifahrer-Y-Linie von >Y auf <=Y
-            #   - "once": Gate nur einmal punkten, bis es despawned/respawned
-            # ---------------------------
-            left_x  = state.flags[:, 0]
-            right_x = left_x + self.config.flag_distance
-            eligible = jnp.logical_and(new_x > left_x, new_x < right_x)
-            crossed  = jnp.logical_and(state.flags[:, 1] > self.config.skier_y,
-                                       new_flags[:, 1] <= self.config.skier_y)
-            gate_pass = jnp.logical_and(eligible,
-                         jnp.logical_and(crossed, jnp.logical_not(state.flags_passed)))
-
-            def check_collision_flag(obj_pos, x_distance=1, y_distance=1):
-                x, y = obj_pos
-                dx_1 = jnp.abs(new_x - x)
-                dy_1 = jnp.abs(jnp.round(self.config.skier_y) - jnp.round(y))
-
-                dx_2 = jnp.abs(new_x - (x + self.config.flag_distance))
-                dy_2 = jnp.abs(jnp.round(self.config.skier_y) - jnp.round(y))
-
-                return jnp.logical_or(
-                    jnp.logical_and(dx_1 <= x_distance, dy_1 < y_distance),
-                    jnp.logical_and(dx_2 <= x_distance, dy_2 < y_distance),
-                )
-
-            def check_collision_tree(tree_pos, x_distance=3, y_distance=1):
-                x, y = tree_pos
-                dx = jnp.abs(new_x - x)
-                dy = jnp.abs(jnp.round(self.config.skier_y) - jnp.round(y))
-
-                return jnp.logical_and(dx <= x_distance, dy < y_distance)
-
-            def check_collision_rock(rock_pos, x_distance=1, y_distance=1):
-                x, y = rock_pos
-                dx = jnp.abs(new_x - x)
-                dy = jnp.abs(jnp.round(self.config.skier_y) - jnp.round(y))
-
-                return jnp.logical_and(dx < x_distance, dy < y_distance)
-
-            # Gate-Consume-Flag setzen (bleibt bis Despawn bestehen)
-            flags_passed = jnp.logical_or(state.flags_passed, gate_pass)
-
-            # Determine which flags despawn this frame (y < TOP_BORDER)
-            despawn_mask = new_flags[:, 1] < TOP_BORDER
-            missed_penalty_mask = jnp.logical_and(
-                despawn_mask, jnp.logical_not(flags_passed)
-            )
-            missed_penalty_count = jnp.sum(missed_penalty_mask)
-            missed_penalty = missed_penalty_count * 300
-
-            # Reset flags_passed when a flag despawns
-            flags_passed = jnp.where(despawn_mask, False, flags_passed)
-
-            # Spawn new objects after calculating penalties
-            new_flags, new_trees, new_rocks, new_key = self._create_new_objs(
-                state, new_flags, new_trees, new_rocks
-            )
-            
-            # Anzahl neu passierter Gates in diesem Frame (1 Punkt pro Gate)
-            gates_scored = jnp.sum(gate_pass)
-
-            collisions_flag = jax.vmap(check_collision_flag)(jnp.array(new_flags))
-            collisions_tree = jax.vmap(check_collision_tree)(jnp.array(new_trees))
-            collisions_rocks = jax.vmap(check_collision_rock)(jnp.array(new_rocks))
-
-            num_colls_pre = (
-                jnp.sum(collisions_tree)
-                + jnp.sum(collisions_rocks)
-                + jnp.sum(collisions_flag)
-            )
-
-            collision_occurred = jnp.logical_and(
-                jnp.greater(num_colls_pre, 0), jnp.equal(state.skier_fell, 0)
-            )
-
-            # Bestimme, wodurch die erste Kollision verursacht wurde
-            collision_type = jax.lax.select(
-                jnp.sum(collisions_tree) > 0,
-                jnp.array(1),  # Baum
-                jax.lax.select(
-                    jnp.sum(collisions_rocks) > 0,
-                    jnp.array(2),  # Stein
-                    jax.lax.select(
-                        jnp.sum(collisions_flag) > 0,
-                        jnp.array(3),  # Flagge
-                        jnp.array(0),  # Keine
-                    ),
-                ),
-            )
-
-            (
-                new_x,
-                skier_fell,
-                num_colls,
-                new_flags,
-                new_trees,
-                new_rocks,
-                skier_pos,
-                new_skier_x_speed,
-                new_skier_y_speed,
-            ) = jax.lax.cond(
-                jnp.greater(state.skier_fell, 0),
-                lambda _: (
-                    state.skier_x,
-                    state.skier_fell - 1,
-                    0,
-                    state.flags,
-                    state.trees,
-                    state.rocks,
-                    state.skier_pos,
-                    state.skier_x_speed,
-                    state.skier_y_speed,
-                ),
-                lambda _: (
-                    new_x,
-                    state.skier_fell,
-                    num_colls_pre,
-                    new_flags,
-                    new_trees,
-                    new_rocks,
-                    skier_pos,
-                    new_skier_x_speed,
-                    new_skier_y_speed,
-                ),
-                operand=None,
-            )
-
-            # Apply small knockback when colliding with an obstacle
-            new_x = jax.lax.cond(
-                collision_occurred,
-                lambda _: jnp.clip(
-                    new_x - 5.0,
-                    self.config.skier_width / 2,
-                    self.config.screen_width - self.config.skier_width / 2,
-                ),
-                lambda _: new_x,
-                operand=None,
-            )
-
-            skier_fell = jax.lax.cond(
-                jnp.logical_and(jnp.greater(num_colls, 0), jnp.equal(skier_fell, 0)),
-                lambda _: jnp.array(60),
-                lambda _: skier_fell,
-                operand=None,
-            )
-
-            # Score ändert sich NUR durch Gate-Pass (1 pro Gate).
-            # Keine Score-Änderung durch Kollisionen mit Trees/Rocks/Flags.
-            new_score_if_pass = state.score - gates_scored
-            new_score = jax.lax.cond(
-                jnp.equal(skier_fell, 0),  # wie bisher: bei "fallen" kein Punktzuwachs
-                lambda _: new_score_if_pass,
-                lambda _: state.score,
-                operand=None,
-            )
-            game_over = jax.lax.cond(
-                jnp.equal(new_score, 0),
-                lambda _: jnp.array(True),
-                lambda _: jnp.array(False),
-                operand=None,
-            )
-            new_time = jax.lax.cond(
-                jnp.greater(state.time, 9223372036854775807 / 2),
-                lambda _: 0,
-                lambda _: state.time + 1 + missed_penalty,
-                operand=None,
-            )
-
-            new_state = GameState(
-                skier_x=new_x,
-                skier_pos=jnp.array(skier_pos),
-                skier_fell=skier_fell,
-                skier_x_speed=new_skier_x_speed,
-                skier_y_speed=new_skier_y_speed,
-                flags=jnp.array(new_flags),
-                trees=jnp.array(new_trees),
-                rocks=jnp.array(new_rocks),
-                score=new_score,
-                time=new_time,
-                direction_change_counter=direction_change_counter,
-                game_over=game_over,
-                key=new_key,
-                collision_type=collision_type,
-                flags_passed=flags_passed,
-            )
-
-            done = self._get_done(new_state)
-            reward = self._get_reward(state, new_state)
-            reward = jnp.asarray(reward, dtype=jnp.float32)
-            obs = self._get_observation(new_state)
-            info = self._get_info(new_state)
-
-            return obs, new_state, reward, done, info
-
-        # Hauptlogik: Fallen oder normal
-        obs, new_state, reward, done, info = jax.lax.cond(
-            jnp.greater(state.skier_fell, 0),
-            lambda _: handle_fallen(state, action),
-            lambda _: normal_step(state, action),
+        # Entprellung beibehalten
+        skier_pos, direction_change_counter = jax.lax.cond(
+            jnp.greater(state.direction_change_counter, 0),
+            lambda _: (state.skier_pos, state.direction_change_counter - 1),
+            lambda _: (skier_pos, jnp.array(0)),
             operand=None,
         )
+        direction_change_counter = jax.lax.cond(
+            jnp.logical_and(jnp.not_equal(skier_pos, state.skier_pos),
+                            jnp.equal(direction_change_counter, 0)),
+            lambda _: jnp.array(16),
+            lambda _: direction_change_counter,
+            operand=None,
+        )
+
+        # 2) Basisgeschwindigkeiten
+        dx_target = side_speed.at[skier_pos].get()
+        dy_target = down_speed.at[skier_pos].get()
+
+        in_recovery = jnp.greater(state.skier_fell, 0)
+
+        # Recovery: Front, x=0, y wie front
+        skier_pos = jax.lax.select(in_recovery, jnp.array(3), skier_pos)
+        dx_target = jax.lax.select(in_recovery, jnp.array(0.0, dtype=jnp.float32), dx_target)
+        dy_target = jax.lax.select(in_recovery, down_speed.at[3].get(), dy_target)
+
+        new_skier_x_speed_nom = jax.lax.select(
+            in_recovery,
+            jnp.array(0.0, dtype=jnp.float32),
+            state.skier_x_speed + ((dx_target - state.skier_x_speed) * jnp.array(0.1, jnp.float32)),
+        )
+        new_skier_y_speed_nom = state.skier_y_speed + ((dy_target - state.skier_y_speed) * jnp.array(0.05, jnp.float32))
+
+        min_x = self.config.skier_width / 2
+        max_x = self.config.screen_width - self.config.skier_width / 2
+        new_x_nom = jnp.clip(state.skier_x + new_skier_x_speed_nom, min_x, max_x)
+
+        # 3) Welt – zunächst "nominal" bewegen (für Kollisionsprüfung),
+        #    Freeze wird nach Kollisionsentscheidung angewandt.
+        new_trees_nom = state.trees.at[:, 1].add(-new_skier_y_speed_nom)
+        new_rocks_nom = state.rocks.at[:, 1].add(-new_skier_y_speed_nom)
+        new_flags_nom = state.flags.at[:, 1].add(-new_skier_y_speed_nom)
+
+        # 5) Kollisionen (seitliche Annäherung abfangen)
+        skier_y_px = jnp.round(self.config.skier_y)
+
+        def coll_tree(tree_pos, x_d=TREE_X_DIST, y_d=Y_HIT_DIST):
+            x, y = tree_pos
+            dx = jnp.abs(new_x_nom - x)
+            dy = jnp.abs(jnp.round(skier_y_px) - jnp.round(y))
+            return jnp.logical_and(dx <= x_d, dy < y_d)
+
+        def coll_rock(rock_pos, x_d=ROCK_X_DIST, y_d=Y_HIT_DIST):
+            x, y = rock_pos
+            dx = jnp.abs(new_x_nom - x)
+            dy = jnp.abs(jnp.round(skier_y_px) - jnp.round(y))
+            return jnp.logical_and(dx < x_d, dy < y_d)
+
+        def coll_flag(flag_pos, x_d=jnp.float32(1.0), y_d=Y_HIT_DIST):
+            x, y = flag_pos
+            dx1 = jnp.abs(new_x_nom - x)
+            dx2 = jnp.abs(new_x_nom - (x + self.config.flag_distance))
+            dy  = jnp.abs(jnp.round(skier_y_px) - jnp.round(y))
+            return jnp.logical_or(jnp.logical_and(dx1 <= x_d, dy < y_d),
+                                  jnp.logical_and(dx2 <= x_d, dy < y_d))
+
+        collisions_tree = jax.vmap(coll_tree)(jnp.array(new_trees_nom))
+        collisions_rock = jax.vmap(coll_rock)(jnp.array(new_rocks_nom))
+        collisions_flag = jax.vmap(coll_flag)(jnp.array(new_flags_nom))
+        
+        # Während Recovery ODER Cooldown keine neuen Kollisionen auslösen
+        ignore_collisions = jnp.logical_or(in_recovery, jnp.greater(state.collision_cooldown, 0))
+        collisions_tree = jnp.where(ignore_collisions, jnp.zeros_like(collisions_tree), collisions_tree)
+        collisions_rock = jnp.where(ignore_collisions, jnp.zeros_like(collisions_rock), collisions_rock)
+        collisions_flag = jnp.where(ignore_collisions, jnp.zeros_like(collisions_flag), collisions_flag)
+
+        collided_tree = jnp.sum(collisions_tree) > 0
+        collided_rock = jnp.sum(collisions_rock) > 0
+        collided_flag = jnp.sum(collisions_flag) > 0
+
+        # Recovery bei *jeder* Hinderniskollision (Baum/Stein/Flagge)
+        start_recovery = jnp.logical_and(
+            jnp.logical_not(in_recovery),
+            jnp.logical_or(jnp.logical_or(collided_tree, collided_rock), collided_flag),
+        )
+        freeze = jnp.logical_or(in_recovery, start_recovery)
+        # (removed) 6) Minimum-Separation block disabled to avoid pushback.
+
+
+        # 7) skier_fell & collision_type aktualisieren
+        new_skier_fell = jax.lax.cond(
+            start_recovery,
+            lambda _: RECOVERY_FRAMES,
+            lambda _: jax.lax.cond(in_recovery,
+                                   lambda __: jnp.maximum(state.skier_fell - 1, 0),
+                                   lambda __: jnp.array(0, dtype=jnp.int32),
+                                   operand=None),
+            operand=None,
+        )
+        # Kollisions-Entprellung: Nach Recovery-Ende noch kurz Kollisionen ignorieren
+        COOLDOWN_FRAMES = jnp.int32(6)
+        new_collision_cooldown = jax.lax.cond(
+            # Wenn gerade Recovery endet (vorher >0, jetzt ==0) → Cooldown setzen
+            jnp.logical_and(in_recovery, jnp.equal(new_skier_fell, 0)),
+            lambda _: COOLDOWN_FRAMES,
+            # sonst Count-down laufen lassen (nicht negativ)
+            lambda _: jnp.maximum(state.collision_cooldown - 1, 0),
+            operand=None
+        )
+        new_collision_type = jax.lax.cond(
+            start_recovery,
+            lambda _: jnp.where(
+                collided_tree, jnp.array(1, dtype=jnp.int32),
+                jnp.where(
+                    collided_rock, jnp.array(2, dtype=jnp.int32),
+                    jnp.where(collided_flag, jnp.array(3, dtype=jnp.int32), jnp.array(0, dtype=jnp.int32))
+                )
+            ),
+            lambda _: state.collision_type,
+            operand=None,
+        )
+        # Recompute freeze based on updated recovery counter
+        freeze = jnp.greater(new_skier_fell, 0)
+
+        # Apply freeze to speeds and world positions
+        new_skier_x_speed = jax.lax.select(freeze, jnp.array(0.0, jnp.float32), new_skier_x_speed_nom)
+        new_skier_y_speed = jax.lax.select(freeze, jnp.array(0.0, jnp.float32), new_skier_y_speed_nom)
+        new_flags = jax.lax.select(freeze, state.flags, new_flags_nom)
+        new_trees = jax.lax.select(freeze, state.trees, new_trees_nom)
+        new_rocks = jax.lax.select(freeze, state.rocks, new_rocks_nom)
+        # Freeze-aware skier X position (no pushback or lateral offset during recovery)
+        new_x = jax.lax.select(freeze, state.skier_x, new_x_nom)
+
+
+        
+        # 8) Gate-Scoring & Missed-Penalty (erst JETZT, nach finalen Flag-Positionen)
+        left_x  = state.flags[:, 0]
+        right_x = left_x + self.config.flag_distance
+
+        eligible = jnp.logical_and(new_x > left_x, new_x < right_x)
+        crossed  = jnp.logical_and(state.flags[:, 1] > self.config.skier_y,
+                                   new_flags[:, 1] <= self.config.skier_y)
+        gate_pass = jnp.logical_and(eligible, jnp.logical_and(crossed, jnp.logical_not(state.flags_passed)))
+        flags_passed = jnp.logical_or(state.flags_passed, gate_pass)
+
+        # Despawn/Strafe nur anhand der "gefreezten" (finalen) Flags berechnen
+        despawn_mask = new_flags[:, 1] < TOP_BORDER
+        missed_penalty_mask = jnp.logical_and(despawn_mask, jnp.logical_not(flags_passed))
+        missed_penalty_count = jnp.sum(missed_penalty_mask)
+        missed_penalty = missed_penalty_count * 300
+        flags_passed = jnp.where(despawn_mask, False, flags_passed)
+
+        # Respawns/Despawns nur, wenn NICHT gefreezt
+        new_flags, new_trees, new_rocks, new_key = jax.lax.cond(
+            freeze,
+            lambda _: (new_flags, new_trees, new_rocks, state.key),
+            lambda _: self._create_new_objs(state, new_flags, new_trees, new_rocks),
+            operand=None
+        )
+
+        # Score/Time aktualisieren (nur Gates zählen)
+        gates_scored = jnp.sum(gate_pass)
+        new_score = state.score - gates_scored
+        game_over = jax.lax.cond(jnp.equal(new_score, 0),
+                                 lambda _: jnp.array(True),
+                                 lambda _: jnp.array(False),
+                                 operand=None)
+        new_time = jax.lax.cond(
+            jnp.greater(state.time, 9223372036854775807 / 2),
+            lambda _: jnp.array(0, dtype=jnp.int32),
+            lambda _: state.time + 1 + missed_penalty,
+            operand=None,
+        )
+
+        new_state = GameState(
+            skier_x=new_x,
+            skier_pos=jnp.array(skier_pos),
+            skier_fell=new_skier_fell,
+            skier_x_speed=new_skier_x_speed,
+            skier_y_speed=new_skier_y_speed,
+            flags=jnp.array(new_flags),
+            trees=jnp.array(new_trees),
+            rocks=jnp.array(new_rocks),
+            score=new_score,
+            time=new_time,
+            direction_change_counter=direction_change_counter,
+            game_over=game_over,
+            key=new_key,
+            collision_type=new_collision_type,
+            flags_passed=flags_passed,
+            collision_cooldown=new_collision_cooldown,
+        )
+
+        done = self._get_done(new_state)
+        reward = self._get_reward(state, new_state)
+        reward = jnp.asarray(reward, dtype=jnp.float32)
+        obs = self._get_observation(new_state)
+        info = self._get_info(new_state)
         return obs, new_state, reward, done, info
 
     @partial(jax.jit, static_argnums=(0,))
@@ -643,7 +559,7 @@ class RenderConfig:
     game_over_color: Tuple[int, int, int] = (255, 0, 0)
     
     # Text-Overlay-Option: True = UI-Text via Pygame auf fertiges JAX-Frame
-    # False = (optionale) JAX-Bitmap-Font (siehe Kommentar unten im Code)
+    # False = JAX-Bitmap-Font
     use_pygame_text: bool = True
 
 # ---- Sprite-Assets als JAX-Arrays ------------------------------------------------
@@ -786,46 +702,16 @@ def render_frame(
         ),
         operand=None,       # <— WICHTIG: äußeres cond bekommt ein operand
     )
-
-    skier_sprite = jax.lax.cond(
-        jnp.logical_and(state.skier_fell > 0, jnp.logical_or(state.collision_type == 1, state.collision_type == 2)),
-        lambda _: assets.skier_fallen,
-        lambda _: skier_base,
-        operand=None,       # <— operand setzen
+    
+    is_fallen = jnp.logical_and(
+        state.skier_fell > 0,
+        jnp.logical_or(state.collision_type == 1,
+                       jnp.logical_or(state.collision_type == 2, state.collision_type == 3))
     )
+    skier_sprite = jax.lax.cond(is_fallen, lambda _: assets.skier_fallen, lambda _: skier_base, operand=None)
 
     skier_cx = to_px_x(state.skier_x)
     skier_cy = to_px_y(jnp.array(skier_y))
-
-    # Wenn gefallen: Position am nächsten Kollisionsobjekt (Tree/Rock)
-    def fallen_center(_):
-        # Distanz zu Trees/Rocks in Pixeln (L1), argmin
-        tree_xy = jnp.round(state.trees * scale_factor).astype(jnp.int32)
-        rock_xy = jnp.round(state.rocks * scale_factor).astype(jnp.int32)
-        sx = skier_cx
-        sy = skier_cy
-        def nearest(xy):
-            d = jnp.abs(xy[:,0] - sx) + jnp.abs(xy[:,1] - sy)
-            idx = jnp.argmin(d)
-            return xy[idx]
-        cxcy = jax.lax.cond(
-            state.collision_type == 1,  # tree
-            lambda __: nearest(tree_xy),
-            lambda __: jax.lax.cond(
-                state.collision_type == 2,
-                lambda ___: nearest(rock_xy),
-                lambda ___: jnp.array([sx, sy], jnp.int32),
-                operand=None,  # 👈 inneres cond braucht das operand
-            ),
-            operand=None
-        )
-        return cxcy[0], cxcy[1]
-    skier_cx, skier_cy = jax.lax.cond(
-        jnp.logical_and(state.skier_fell > 0, jnp.logical_or(state.collision_type == 1, state.collision_type == 2)),
-        fallen_center,
-        lambda _: (skier_cx, skier_cy),
-        operand=None
-    )
 
     # 4) Flags (links & rechts), jede 20. Gate rot, sonst blau
     #    centers sind Pixelcenter; Reihenfolge: Skier -> Flags -> Trees -> Rocks (wie zuvor)
@@ -868,9 +754,7 @@ def render_frame(
     frame = _scan_blit(frame, jnp.repeat(tree_draw[None, ...], tree_px.shape[0], axis=0), tree_px)
     frame = _scan_blit(frame, jnp.repeat(rock_draw[None, ...], rock_px.shape[0], axis=0), rock_px)
 
-    # 8) (Optional) UI/Text direkt in JAX – hier deaktiviert um identische Optik
-    #    Du kannst hier eine 5x7-Ziffern-Bitmap hinterlegen und blitten.
-    #    Für 1:1 identischen Look nutze unten den Pygame-Fallback im Display-Bridge.
+    # 8) UI/Text direkt in JAX – hier deaktiviert um identische Optik
     return frame
 
 class SkiingRenderer(JAXGameRenderer):
@@ -960,10 +844,10 @@ class GameRenderer:
             flag_distance=self.game_config.flag_distance,
             draw_ui_jax=False,
         )
-        # Warmup (optional)
+        # Warmup
         # _ = self._render_jit(self._fake_state(), self.assets)
 
-        # Font nur noch für optionalen UI-Fallback:
+        # Font nur noch für UI-Fallback:
         self.font = pygame.font.Font(None, 36)
 
     # --- Mini-Helfer: RGBA-ndarray auf den Screen bringen (ohne Layout-Logik) ---
@@ -982,7 +866,7 @@ class GameRenderer:
         # 1) Pure JAX Frame rendern
         frame = self._render_jit(state, self.assets)  # jnp.uint8[H,W,4]
         frame_np = np.asarray(frame)
-        # 2) Optional: UI-Text via Pygame oben drauf (identische Optik)
+        # 2) UI-Text via Pygame oben drauf (identische Optik)
         if self.render_config.use_pygame_text:
             self._blit_rgba_to_screen(frame_np)
             # Score mittig oben, Zeit darunter (wie vorher)
@@ -1038,10 +922,13 @@ def main():
                     return
             keys = pygame.key.get_pressed()
             action = NOOP
+            VALID_ACTIONS = {NOOP, LEFT, RIGHT}
             if keys[pygame.K_a]:
                 action = LEFT
             elif keys[pygame.K_d]:
                 action = RIGHT
+            if action not in VALID_ACTIONS:
+                action = NOOP
 
             obs, state, reward, done, info = game.step(state, action)
             renderer.render(state)
