@@ -887,11 +887,19 @@ class BeamRiderEnv(JaxEnvironment[BeamRiderState, BeamRiderObservation, BeamRide
             dive_rng_keys)
         should_dive = should_dive_rng < self.constants.HORIZON_DIVE_CHANCE
 
-        # UPDATED: Only start diving if time expired, wants to dive, AND aligned with beam
-        start_diving = patrolling_horizon & patrol_time_expired & should_dive & aligned_with_beam
+        # FIXED: Ensure white saucers always dive eventually, with forced diving after extended patrol time
+        extended_patrol_time = patrol_time >= (
+                    self.constants.HORIZON_PATROL_TIME * 2)  # Force dive after 2x normal time
 
-        # If time expired but not aligned with beam, continue patrolling toward nearest beam
-        continue_patrolling = patrolling_horizon & patrol_time_expired & (~should_dive | ~aligned_with_beam)
+        # Start diving if: (time expired AND wants to dive AND aligned) OR extended patrol time reached
+        start_diving = patrolling_horizon & (
+                (patrol_time_expired & should_dive & aligned_with_beam) |  # Normal diving condition
+                extended_patrol_time  # Force dive after extended time regardless of alignment
+        )
+
+        # If time expired but conditions not met, continue patrolling (but not indefinitely)
+        continue_patrolling = patrolling_horizon & patrol_time_expired & (
+                    ~should_dive | ~aligned_with_beam) & ~extended_patrol_time
 
         # --- choose a dive pattern when we leave the horizon ---
         sector = state.current_sector
@@ -1049,9 +1057,13 @@ class BeamRiderEnv(JaxEnvironment[BeamRiderState, BeamRiderObservation, BeamRide
             doing_horizontal_patrol & ~start_diving,
             patrol_time + 1,  # Increment patrol time
             jnp.where(
-                start_diving | continue_patrolling,
-                0,  # Reset timer when starting to dive or continuing patrol
-                patrol_time  # Keep current value
+                start_diving,
+                0,  # Reset timer when starting to dive
+                jnp.where(
+                    continue_patrolling,
+                    patrol_time + 1,  # FIXED: Continue incrementing even when continuing patrol
+                    patrol_time  # Keep current value
+                )
             )
         )
 
