@@ -13,6 +13,7 @@ from jaxatari.environment import JaxEnvironment, JAXAtariAction as Action
 
 
 class WordZapperConstants(NamedTuple) :
+    START_PHASE_FRAMES = 250  # Number of frames for start phase (2 seconds at 60 FPS)
     # define object orientations
     FACE_LEFT = -1
     FACE_RIGHT = 1
@@ -864,7 +865,6 @@ class JaxWordZapper(JaxEnvironment[WordZapperState, WordZapperObservation, WordZ
         word_idx = jax.random.randint(sub_word, (), 0, WORD_COUNT, dtype=jnp.int32)
         encoded = ENCODED_WORD_LIST[word_idx]
 
-        # No intro enemies, start with normal gameplay phase
         enemy_positions_init = jnp.zeros((self.consts.MAX_ENEMIES, 5), dtype=jnp.float32)
         enemy_active_init = jnp.zeros((self.consts.MAX_ENEMIES,), jnp.int32)
 
@@ -897,7 +897,7 @@ class JaxWordZapper(JaxEnvironment[WordZapperState, WordZapperObservation, WordZ
             target_word=encoded,
             step_counter=jnp.array(0),
 
-            game_phase=jnp.array(2),  # Start directly in gameplay phase
+            game_phase=jnp.array(0),  # Start in start phase
             phase_timer=jnp.array(0),
 
             enemy_explosion_frame=jnp.zeros((self.consts.MAX_ENEMIES,), dtype=jnp.int32),
@@ -1048,8 +1048,15 @@ class JaxWordZapper(JaxEnvironment[WordZapperState, WordZapperObservation, WordZ
         )
     
     def _advance_phase(self, s: WordZapperState):
-        # Skip intro and word display phases, always stay in gameplay
-        return jnp.array(2), s.phase_timer
+        # Start phase: player immobile, letters do not scroll
+        phase = s.game_phase
+        timer = s.phase_timer + 1
+        phase = jax.lax.cond(
+            (phase == 0) & (timer >= self.consts.START_PHASE_FRAMES),
+            lambda: jnp.array(2), lambda: phase
+        )
+        timer = jax.lax.cond(phase != s.game_phase, lambda: jnp.array(0), lambda: timer)
+        return phase, timer
 
     @partial(jax.jit, static_argnums=(0,))
     def _intro_step(self, s: WordZapperState):
@@ -1240,9 +1247,21 @@ class JaxWordZapper(JaxEnvironment[WordZapperState, WordZapperObservation, WordZ
             WordZapperInfo,
         ]:
         previous_state = state
-        # Always stay in gameplay phase
-        state = state._replace(game_phase=jnp.array(2))
-        state = self._normal_game_step(state, action)
+        phase, p_timer = self._advance_phase(state)
+        state = state._replace(game_phase=phase, phase_timer=p_timer)
+        def start_phase_step(s, a):
+            # Player does not move, letters do not scroll, but animations can update (e.g. step_counter)
+            return s._replace(
+                step_counter=s.step_counter + 1
+            )
+        state = jax.lax.switch(
+            phase,
+            [
+                lambda s: start_phase_step(s, action),         # phase 0: start phase
+                lambda s: self._normal_game_step(s, action),   # phase 2: gameplay
+            ],
+            state,
+        )
         observation = self._get_observation(state)
         done = self._get_done(state)
         env_reward = self._get_env_reward(previous_state, state)
@@ -1342,7 +1361,7 @@ class WordZapperRenderer(JAXGameRenderer):
             return raster
 
         raster = jax.lax.cond(
-            state.game_phase == 2,
+            jnp.logical_or(state.game_phase == 0, state.game_phase == 2),
             _draw_player_bundle,
             lambda r: r,
             raster,
@@ -1434,7 +1453,7 @@ class WordZapperRenderer(JAXGameRenderer):
             return raster
 
         raster = jax.lax.cond(
-            state.game_phase == 2,
+            jnp.logical_or(state.game_phase == 0, state.game_phase == 2),
             lambda r: jax.lax.fori_loop(0, state.letters_x.shape[0], _render_letter, r),
             lambda r: r,
             raster,
@@ -1518,9 +1537,9 @@ class WordZapperRenderer(JAXGameRenderer):
         raster = jax.lax.switch(
             state.game_phase,
             [
-                lambda ras: ras,                                   # phase 0
-                lambda ras: _draw_word(ras,   state.target_word),  # phase 1
-                lambda ras: _draw_qmarks(ras, state.target_word),  # phase 2
+                lambda ras: _draw_word(ras, state.target_word),    # phase 0: show word
+                lambda ras: _draw_word(ras, state.target_word),    # phase 1: show word (if used)
+                lambda ras: _draw_qmarks(ras, state.target_word),  # phase 2: show question marks
             ],
             raster,
         )
