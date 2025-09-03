@@ -349,11 +349,19 @@ class JaxSkiing(JaxEnvironment[GameState, SkiingObservation, SkiingInfo, None]):
             new_rocks = state.rocks.at[:, 1].add(-new_skier_y_speed)
             new_flags = state.flags.at[:, 1].add(-new_skier_y_speed)
 
-            def check_pass_flag(flag_pos):
-                fx, fy = flag_pos
-                dx_0 = new_x - fx
-                dy_0 = jnp.abs(self.config.skier_y - jnp.round(fy))
-                return (dx_0 > 0) & (dx_0 < self.config.flag_distance) & (dy_0 < 1)
+            # ---------------------------
+            # Gate-Pass-Detection (pro Gate, nicht pro Flagge):
+            #   - "eligible": Skier-X strikt zwischen linker und rechter Stange
+            #   - "crossed": Gate-Y kreuzt die Skifahrer-Y-Linie von >Y auf <=Y
+            #   - "once": Gate nur einmal punkten, bis es despawned/respawned
+            # ---------------------------
+            left_x  = state.flags[:, 0]
+            right_x = left_x + self.config.flag_distance
+            eligible = jnp.logical_and(new_x > left_x, new_x < right_x)
+            crossed  = jnp.logical_and(state.flags[:, 1] > self.config.skier_y,
+                                       new_flags[:, 1] <= self.config.skier_y)
+            gate_pass = jnp.logical_and(eligible,
+                         jnp.logical_and(crossed, jnp.logical_not(state.flags_passed)))
 
             def check_collision_flag(obj_pos, x_distance=1, y_distance=1):
                 x, y = obj_pos
@@ -382,9 +390,8 @@ class JaxSkiing(JaxEnvironment[GameState, SkiingObservation, SkiingInfo, None]):
 
                 return jnp.logical_and(dx < x_distance, dy < y_distance)
 
-            # Check if gates have been passed before respawn
-            passed_flags = jax.vmap(check_pass_flag)(jnp.array(new_flags))
-            flags_passed = state.flags_passed | passed_flags
+            # Gate-Consume-Flag setzen (bleibt bis Despawn bestehen)
+            flags_passed = jnp.logical_or(state.flags_passed, gate_pass)
 
             # Determine which flags despawn this frame (y < TOP_BORDER)
             despawn_mask = new_flags[:, 1] < TOP_BORDER
@@ -401,6 +408,9 @@ class JaxSkiing(JaxEnvironment[GameState, SkiingObservation, SkiingInfo, None]):
             new_flags, new_trees, new_rocks, new_key = self._create_new_objs(
                 state, new_flags, new_trees, new_rocks
             )
+            
+            # Anzahl neu passierter Gates in diesem Frame (1 Punkt pro Gate)
+            gates_scored = jnp.sum(gate_pass)
 
             collisions_flag = jax.vmap(check_collision_flag)(jnp.array(new_flags))
             collisions_tree = jax.vmap(check_collision_tree)(jnp.array(new_trees))
@@ -487,14 +497,15 @@ class JaxSkiing(JaxEnvironment[GameState, SkiingObservation, SkiingInfo, None]):
                 operand=None,
             )
 
+            # Score ändert sich NUR durch Gate-Pass (1 pro Gate).
+            # Keine Score-Änderung durch Kollisionen mit Trees/Rocks/Flags.
+            new_score_if_pass = state.score - gates_scored
             new_score = jax.lax.cond(
-                jnp.equal(skier_fell, 0),
-                lambda _: state.score - jnp.sum(passed_flags),
+                jnp.equal(skier_fell, 0),  # wie bisher: bei "fallen" kein Punktzuwachs
+                lambda _: new_score_if_pass,
                 lambda _: state.score,
                 operand=None,
             )
-            penalty = jax.lax.select(collision_occurred, jnp.array(1), jnp.array(0))
-            new_score = new_score - penalty
             game_over = jax.lax.cond(
                 jnp.equal(new_score, 0),
                 lambda _: jnp.array(True),
@@ -523,7 +534,7 @@ class JaxSkiing(JaxEnvironment[GameState, SkiingObservation, SkiingInfo, None]):
                 game_over=game_over,
                 key=new_key,
                 collision_type=collision_type,
-                flags_passed=flags_passed,  # <--- Argument ergänzt
+                flags_passed=flags_passed,
             )
 
             done = self._get_done(new_state)
