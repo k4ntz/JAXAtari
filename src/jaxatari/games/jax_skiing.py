@@ -18,30 +18,9 @@ import jaxatari.spaces as spaces
 NOOP = 0
 LEFT = 1
 RIGHT = 2
-JUMP = 3  # New action for jumping
 
 BOTTOM_BORDER = 176
 TOP_BORDER = 23
-
-
-def _npy_to_jax_array(npy_path: str) -> jnp.ndarray:
-    """Load a sprite stored as ``.npy`` into a JAX array.
-
-    Parameters
-    ----------
-    npy_path : str
-        Path to the ``.npy`` file containing RGBA pixel data in
-        ``(H, W, 4)`` format.
-
-    Returns
-    -------
-    jnp.ndarray
-        Sprite as a ``uint8`` JAX array with shape ``(H, W, 4)``.
-    """
-
-    arr = np.load(npy_path).astype(np.uint8)
-    return jnp.array(arr)
-
 
 @dataclass
 class GameConfig:
@@ -63,8 +42,6 @@ class GameConfig:
     max_num_trees: int = 4
     max_num_rocks: int = 3
     speed: float = 1.0
-    jump_duration: int = 30  # Duration of jump in frames (adjust if needed)
-    jump_scale_factor: float = 1.5  # Maximum size increase during jump
 
 
 class GameState(NamedTuple):
@@ -83,8 +60,6 @@ class GameState(NamedTuple):
     direction_change_counter: chex.Array
     game_over: chex.Array
     key: chex.Array
-    jumping: chex.Array  # Is the skier currently jumping?
-    jump_timer: chex.Array  # Frames left in current jump
     collision_type: chex.Array  # 0 = keine, 1 = Baum, 2 = Stein, 3 = Flagge
     flags_passed: chex.Array
 
@@ -102,8 +77,6 @@ class SkiingObservation(NamedTuple):
     trees: jnp.ndarray
     rocks: jnp.ndarray
     score: jnp.ndarray
-    jumping: jnp.ndarray
-    jump_timer: jnp.ndarray
 
 
 class SkiingInfo(NamedTuple):
@@ -118,18 +91,8 @@ class JaxSkiing(JaxEnvironment[GameState, SkiingObservation, SkiingInfo, None]):
         self.renderer = SkiingRenderer(self.consts)
 
     def action_space(self) -> spaces.Discrete:
-        # Aktionen sind bei dir: NOOP=0, LEFT=1, RIGHT=2, JUMP=3
+        # Aktionen sind bei dir: NOOP=0, LEFT=1, RIGHT=2
         return spaces.Discrete(4)
-
-    def _npy_to_surface(self, npy_path, width, height):
-        arr = np.load(npy_path)  # Erwartet (H, W, 4) RGBA
-        arr = arr.astype(np.uint8)
-        surf = pygame.Surface((arr.shape[1], arr.shape[0]), pygame.SRCALPHA)
-        pygame.surfarray.pixels3d(surf)[:, :, :] = arr[..., :3]
-        pygame.surfarray.pixels_alpha(surf)[:, :] = arr[..., 3]
-        surf = pygame.transform.rotate(surf)  # <--- Kopf zeigt jetzt nach oben
-        surf = pygame.transform.scale(surf, (width, height))
-        return surf
 
     def reset(
         self, key: jax.random.PRNGKey = jax.random.key(1701)
@@ -188,14 +151,16 @@ class JaxSkiing(JaxEnvironment[GameState, SkiingObservation, SkiingInfo, None]):
             direction_change_counter=jnp.array(0),
             game_over=jnp.array(False),
             key=key,
-            jumping=jnp.array(False),
-            jump_timer=jnp.array(0),
             collision_type=jnp.array(0),
             flags_passed=jnp.zeros(self.config.max_num_flags, dtype=bool),
         )
         obs = self._get_observation(state)
 
         return obs, state
+    
+    def render(self, state: GameState) -> jnp.ndarray:
+        """Delegiert an den SkiingRenderer, sodass play.py ein RGB-Frame bekommt."""
+        return self.renderer.render(state)
 
     def _create_new_objs(self, state, new_flags, new_trees, new_rocks):
         k, k1, k2, k3, k4 = jax.random.split(state.key, num=5)
@@ -291,35 +256,6 @@ class JaxSkiing(JaxEnvironment[GameState, SkiingObservation, SkiingInfo, None]):
             [0.0, 0.5, 0.875, 1.0, 1.0, 0.875, 0.5, 0.0], jnp.float32
         )
 
-        """Take a step in the game given an action"""
-        # Handle jump action
-        jumping = state.jumping
-        jump_timer = state.jump_timer
-
-        # If JUMP action and not currently jumping, start a jump
-        jumping, jump_timer = jax.lax.cond(
-            jnp.logical_and(jnp.equal(action, JUMP), jnp.logical_not(jumping)),
-            lambda _: (jnp.array(True), jnp.array(self.config.jump_duration)),
-            lambda _: (state.jumping, state.jump_timer),
-            operand=None,
-        )
-
-        # If already jumping, decrement timer
-        jump_timer = jax.lax.cond(
-            jumping,
-            lambda t: jnp.maximum(t - 1, 0),
-            lambda t: t,
-            operand=jump_timer,
-        )
-
-        # End jump if timer reaches 0
-        jumping = jax.lax.cond(
-            jnp.equal(jump_timer, 0),
-            lambda _: jnp.array(False),
-            lambda _: jumping,
-            operand=None,
-        )
-
         # --- NEU: Fallen-Logik ---
         def handle_fallen(state, action):
             # Nur auf LEFT oder RIGHT reagieren
@@ -349,8 +285,6 @@ class JaxSkiing(JaxEnvironment[GameState, SkiingObservation, SkiingInfo, None]):
                 direction_change_counter=state.direction_change_counter,
                 game_over=state.game_over,
                 key=state.key,
-                jumping=state.jumping,
-                jump_timer=state.jump_timer,
                 collision_type=state.collision_type,
                 flags_passed=flags_passed,
             )
@@ -399,7 +333,6 @@ class JaxSkiing(JaxEnvironment[GameState, SkiingObservation, SkiingInfo, None]):
 
             new_skier_x_speed = state.skier_x_speed + ((dx - state.skier_x_speed) * 0.1)
 
-            # IMPORTANT FIX: Don't increase vertical speed during jumps
             # Instead, maintain normal vertical speed but handle the visual effect separately
             new_skier_y_speed = state.skier_y_speed + (
                 (dy - state.skier_y_speed) * 0.05
@@ -411,7 +344,6 @@ class JaxSkiing(JaxEnvironment[GameState, SkiingObservation, SkiingInfo, None]):
                 self.config.screen_width - self.config.skier_width / 2,
             )
 
-            # Move objects at normal speed regardless of jumping state
             # Move objects using vectorized operations instead of Python loops
             new_trees = state.trees.at[:, 1].add(-new_skier_y_speed)
             new_rocks = state.rocks.at[:, 1].add(-new_skier_y_speed)
@@ -448,11 +380,7 @@ class JaxSkiing(JaxEnvironment[GameState, SkiingObservation, SkiingInfo, None]):
                 dx = jnp.abs(new_x - x)
                 dy = jnp.abs(jnp.round(self.config.skier_y) - jnp.round(y))
 
-                # No collision with rocks when jumping
-                return jnp.logical_and(
-                    jnp.logical_and(dx < x_distance, dy < y_distance),
-                    jnp.logical_not(jumping),  # This ensures no collision when jumping
-                )
+                return jnp.logical_and(dx < x_distance, dy < y_distance)
 
             # Check if gates have been passed before respawn
             passed_flags = jax.vmap(check_pass_flag)(jnp.array(new_flags))
@@ -594,8 +522,6 @@ class JaxSkiing(JaxEnvironment[GameState, SkiingObservation, SkiingInfo, None]):
                 direction_change_counter=direction_change_counter,
                 game_over=game_over,
                 key=new_key,
-                jumping=jumping,
-                jump_timer=jump_timer,
                 collision_type=collision_type,
                 flags_passed=flags_passed,  # <--- Argument ergänzt
             )
@@ -659,9 +585,7 @@ class JaxSkiing(JaxEnvironment[GameState, SkiingObservation, SkiingInfo, None]):
             trees=trees,
             flags=flags,
             rocks=rocks,
-            score=state.score,
-            jumping=state.jumping,
-            jump_timer=state.jump_timer,
+            score=state.score
         )
 
     @partial(jax.jit, static_argnums=(0,))
@@ -706,7 +630,6 @@ class RenderConfig:
     tree_color: Tuple[int, int, int] = (0, 100, 0)
     rock_color: Tuple[int, int, int] = (128, 128, 128)
     game_over_color: Tuple[int, int, int] = (255, 0, 0)
-    jump_text_color: Tuple[int, int, int] = (0, 0, 255)
     
     # Text-Overlay-Option: True = UI-Text via Pygame auf fertiges JAX-Frame
     # False = (optionale) JAX-Bitmap-Font (siehe Kommentar unten im Code)
@@ -718,7 +641,6 @@ class RenderAssets(NamedTuple):
     skier_left: jnp.ndarray      # (Hs, Ws, 4) uint8
     skier_front: jnp.ndarray
     skier_right: jnp.ndarray
-    skier_jump: jnp.ndarray
     skier_fallen: jnp.ndarray
     flag_red: jnp.ndarray
     flag_blue: jnp.ndarray
@@ -811,7 +733,7 @@ def _scan_blit(dst: jnp.ndarray, sprites: jnp.ndarray, centers_xy: jnp.ndarray) 
 # ---- Pure JAX Renderer -----------------------------------------------------------
 
 @partial(jax.jit,
-         static_argnames=("screen_width","screen_height","scale_factor","skier_y","flag_distance","use_jump","draw_ui_jax"))
+         static_argnames=("screen_width","screen_height","scale_factor","skier_y","flag_distance","draw_ui_jax"))
 def render_frame(
     state: GameState,
     assets: RenderAssets,
@@ -821,7 +743,6 @@ def render_frame(
     scale_factor: int,
     skier_y: int,
     flag_distance: int,
-    use_jump: bool = True,
     draw_ui_jax: bool = False,
 ) -> jnp.ndarray:
     """Erzeugt ein RGBA-Frame (uint8) rein in JAX – keine Seiteneffekte."""
@@ -956,7 +877,6 @@ class SkiingRenderer(JAXGameRenderer):
             skier_left   = _load_sprite_npy(sprite_dir, "skiier_right.npy"),  # (deine Spiegelung beibehalten)
             skier_front  = _load_sprite_npy(sprite_dir, "skiier_front.npy"),
             skier_right  = _load_sprite_npy(sprite_dir, "skiier_left.npy"),
-            skier_jump   = _load_sprite_npy(sprite_dir, "skiier_jump.npy"),
             skier_fallen = _load_sprite_npy(sprite_dir, "skier_fallen.npy"),
             flag_red     = flag_red,
             flag_blue    = _recolor_rgba(flag_red, (0, 96, 255)),
@@ -972,7 +892,6 @@ class SkiingRenderer(JAXGameRenderer):
             scale_factor   = 1,         # play.py skaliert selbst
             skier_y        = self.consts.skier_y,
             flag_distance  = self.consts.flag_distance,
-            use_jump       = False,      # Jump-Optik off (wie zuvor besprochen)
             draw_ui_jax    = False,
         )
 
@@ -1002,7 +921,6 @@ class GameRenderer:
         skier_left   = _load_sprite_npy(sprite_dir, "skiier_right.npy")  # (ALE links/rechts sind invertiert in deinem Bestand)
         skier_front  = _load_sprite_npy(sprite_dir, "skiier_front.npy")
         skier_right  = _load_sprite_npy(sprite_dir, "skiier_left.npy")
-        skier_jump   = _load_sprite_npy(sprite_dir, "skiier_jump.npy")
         skier_fallen = _load_sprite_npy(sprite_dir, "skier_fallen.npy")
 
         flag_red = _load_sprite_npy(sprite_dir, "checkered_flag.npy")
@@ -1014,7 +932,6 @@ class GameRenderer:
             skier_left=skier_left,
             skier_front=skier_front,
             skier_right=skier_right,
-            skier_jump=skier_jump,
             skier_fallen=skier_fallen,
             flag_red=flag_red,
             flag_blue=flag_blue,
@@ -1030,7 +947,6 @@ class GameRenderer:
             scale_factor=self.render_config.scale_factor,
             skier_y=self.game_config.skier_y,
             flag_distance=self.game_config.flag_distance,
-            use_jump=False,       # <<<<< Jump-Visuals AUS
             draw_ui_jax=False,
         )
         # Warmup (optional)
@@ -1085,104 +1001,6 @@ class GameRenderer:
 
         pygame.display.flip()
 
-    def _npy_to_surface(self, npy_path, width, height):
-        # Erwartet (H, W, 4) RGBA
-        arr = np.load(npy_path).astype(np.uint8)
-
-        # Falls kein Alpha vorhanden, künstlich hinzufügen
-        if arr.shape[-1] == 3:
-            a = np.full(arr.shape[:2] + (1,), 255, dtype=np.uint8)
-            arr = np.concatenate([arr, a], axis=-1)
-
-        H, W, _ = arr.shape
-        surf = pygame.Surface((W, H), pygame.SRCALPHA)
-
-        # Pygame erwartet (W, H, 3) für pixels3d und (W, H) für pixels_alpha
-        rgb = arr[..., :3].transpose(1, 0, 2)   # -> (W, H, 3)
-        alpha = arr[..., 3].T                   # -> (W, H)
-    
-        pygame.surfarray.pixels3d(surf)[:] = rgb
-        pygame.surfarray.pixels_alpha(surf)[:] = alpha
-    
-        # optional drehen, wenn nötig (z.B. 0, 90, 180, 270)
-        # surf = pygame.transform.rotate(surf, 0)
-    
-        surf = pygame.transform.scale(surf, (width, height))
-        return surf
-
-    def _create_object_sprite(self, filename, width, height):
-        base_path = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
-        sprite_dir = os.path.join(base_path, "jaxatari", "games", "sprites", "skiing")
-        full_path = os.path.join(sprite_dir, filename)
-        return self._npy_to_surface(full_path, width, height)
-
-    def _load_object_array(self, filename) -> jnp.ndarray:
-        base_path = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
-        sprite_dir = os.path.join(base_path, "jaxatari", "games", "sprites", "skiing")
-        full_path = os.path.join(sprite_dir, filename)
-        return _npy_to_jax_array(full_path)
-
-    def _create_skier_sprite(self) -> list[pygame.Surface]:
-        base_path = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
-        sprite_dir = os.path.join(base_path, "jaxatari", "games", "sprites", "skiing")
-        filenames = {
-            "right": "skiier_left.npy",
-            "front": "skiier_front.npy",
-            "left": "skiier_right.npy",
-        }
-        width = self.game_config.skier_width * self.render_config.scale_factor
-        height = self.game_config.skier_height * self.render_config.scale_factor
-        sprites = {}
-        for direction, filename in filenames.items():
-            full_path = os.path.join(sprite_dir, filename)
-            sprites[direction] = self._npy_to_surface(full_path, width, height)
-        self.skier_array = {
-            d: _npy_to_jax_array(os.path.join(sprite_dir, f))
-            for d, f in filenames.items()
-        }
-        sprite_list = []
-        for i in range(8):
-            if i <= 2:
-                sprite_list.append(sprites["left"])
-            elif i >= 5:
-                sprite_list.append(sprites["right"])
-            else:
-                sprite_list.append(sprites["front"])
-        return sprite_list
-
-    @partial(jax.jit, static_argnums=(0,))
-    def _calc_flag_centers(self, flags: jnp.ndarray) -> tuple[jnp.ndarray, jnp.ndarray]:
-        """Calculate pixel centers for all flags.
-
-        Parameters
-        ----------
-        flags : jnp.ndarray
-            Array with shape (N, 2) containing flag positions in game
-            coordinates.
-
-        Returns
-        -------
-        tuple[jnp.ndarray, jnp.ndarray]
-            Pixel coordinates for the left and right flag of each gate.
-        """
-
-        scale = jnp.array(self.render_config.scale_factor, dtype=jnp.float32)
-        distance = jnp.array(self.game_config.flag_distance, dtype=jnp.float32)
-
-        left = jnp.round(flags * scale).astype(jnp.int32)
-        right = jnp.round((flags + jnp.array([distance, 0.0])) * scale).astype(
-            jnp.int32
-        )
-
-        return left, right
-
-    @partial(jax.jit, static_argnums=(0,))
-    def _calc_tree_centers(self, trees: jnp.ndarray) -> jnp.ndarray:
-        """Calculate pixel centers for all trees."""
-
-        scale = jnp.array(self.render_config.scale_factor, dtype=jnp.float32)
-        return jnp.round(trees * scale).astype(jnp.int32)
-
     def close(self):
         """Clean up pygame resources"""
         pygame.quit()
@@ -1209,9 +1027,7 @@ def main():
                     return
             keys = pygame.key.get_pressed()
             action = NOOP
-            if keys[pygame.K_SPACE]:
-                action = JUMP
-            elif keys[pygame.K_a]:
+            if keys[pygame.K_a]:
                 action = LEFT
             elif keys[pygame.K_d]:
                 action = RIGHT
