@@ -10,4 +10,3 @@ Object-centric environments for Atari games.
    kangaroo
    pong
    seaquest
-   surround

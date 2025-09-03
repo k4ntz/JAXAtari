@@ -4,7 +4,6 @@ import pygame
 
 import jax
 import jax.random as jrandom
-import jax.numpy as jnp
 import numpy as np
 
 from jaxatari.environment import JAXAtariAction
@@ -21,50 +20,6 @@ ACTION_NAMES = {
 
 
 def main():
-    # --- AI helper functions for P1 (left player) ---
-    def _dir_left(d):
-        return {
-            JAXAtariAction.UP: JAXAtariAction.LEFT,
-            JAXAtariAction.LEFT: JAXAtariAction.DOWN,
-            JAXAtariAction.DOWN: JAXAtariAction.RIGHT,
-            JAXAtariAction.RIGHT: JAXAtariAction.UP,
-        }.get(int(d), JAXAtariAction.UP)
-
-    def _dir_right(d):
-        return {
-            JAXAtariAction.UP: JAXAtariAction.RIGHT,
-            JAXAtariAction.RIGHT: JAXAtariAction.DOWN,
-            JAXAtariAction.DOWN: JAXAtariAction.LEFT,
-            JAXAtariAction.LEFT: JAXAtariAction.UP,
-        }.get(int(d), JAXAtariAction.UP)
-
-    def _dir_offset(d):
-        return {
-            JAXAtariAction.UP:    (0, -1),
-            JAXAtariAction.RIGHT: (1,  0),
-            JAXAtariAction.LEFT:  (-1, 0),
-            JAXAtariAction.DOWN:  (0,  1),
-        }.get(int(d), (0, 0))
-
-    def _is_blocked(env, state, pos_xy, action_dir):
-        dx, dy = _dir_offset(action_dir)
-        x = int(pos_xy[0]) + dx
-        y = int(pos_xy[1]) + dy
-        if x < 0 or x >= env.consts.GRID_WIDTH or y < 0 or y >= env.consts.GRID_HEIGHT:
-            return True
-        if bool(state.border[x, y]) or int(state.trail[x, y]) != 0:
-            return True
-        return False
-
-    def opponent_policy(env, state):
-        curr = int(state.dir0)
-        keep = curr
-        left = _dir_left(curr)
-        right = _dir_right(curr)
-        for cand in (keep, left, right):
-            if not _is_blocked(env, state, state.pos0, cand):
-                return cand
-        return JAXAtariAction.NOOP
     parser = argparse.ArgumentParser(
         description="Play a JAXAtari game, record your actions or replay them."
     )
@@ -113,12 +68,6 @@ def main():
         help="Frame rate for the game.",
     )
     parser.add_argument(
-        "--logic-fps",
-        type=int,
-        default=None,
-        help="Logic update rate (steps per second). Defaults to 2 for Surround.",
-    )
-    parser.add_argument(
         "-v",
         "--verbose",
         action="store_true",
@@ -126,12 +75,6 @@ def main():
     )
 
     args = parser.parse_args()
-
-    logic_fps = args.logic_fps or (2 if args.game.lower() == "surround" else args.fps)
-    render_fps = args.fps
-    step_ms = 1000 // logic_fps
-    acc_ms = 0
-    latest_action = JAXAtariAction.NOOP
 
     execute_without_rendering = False
     # Load the game environment
@@ -174,21 +117,28 @@ def main():
     running = True
     pause = False
     frame_by_frame = False
+    frame_rate = args.fps
     next_frame_asked = False
     total_return = 0
-    pending_reset = False
     if args.replay:
         with open(args.replay, "rb") as f:
+            # Load the saved data
             save_data = np.load(f, allow_pickle=True).item()
+
+            # Extract saved data
             actions_array = save_data["actions"]
             seed = save_data["seed"]
-            render_fps = save_data.get("frame_rate", render_fps)
-            logic_fps = save_data.get("logic_fps", logic_fps)
-            step_ms = 1000 // logic_fps
+            loaded_frame_rate = save_data["frame_rate"]
+
+            frame_rate = loaded_frame_rate
+
+            # Reset environment with the saved seed
             key = jrandom.PRNGKey(seed)
             obs, state = jitted_reset(key)
 
+        # loop over all the actions and play the game
         for action in actions_array:
+            # Convert numpy action to JAX array
             action = jax.numpy.array(action, dtype=jax.numpy.int32)
             if args.verbose:
                 print(f"Action: {ACTION_NAMES[int(action)]} ({int(action)})")
@@ -196,8 +146,9 @@ def main():
             obs, state, reward, done, info = jitted_step(state, action)
             image = jitted_render(state)
             update_pygame(window, image, UPSCALE_FACTOR, 160, 210)
-            clock.tick(logic_fps)
+            clock.tick(frame_rate)
 
+            # Check for quit event
             for event in pygame.event.get():
                 if event.type == pygame.QUIT or (
                     event.type == pygame.KEYDOWN and event.key == pygame.K_ESCAPE
@@ -210,68 +161,54 @@ def main():
 
     # main game loop
     while running:
-        dt = clock.tick(render_fps)
-        acc_ms += dt
-
-        events = pygame.event.get()
-        for event in events:
+        # check for external actions
+        for event in pygame.event.get():
             if event.type == pygame.QUIT:
                 running = False
+                continue
             elif event.type == pygame.KEYDOWN:
-                if event.key == pygame.K_p:
+                if event.key == pygame.K_p:  # pause
                     pause = not pause
-                elif event.key == pygame.K_r:
+                elif event.key == pygame.K_r:  # reset
                     obs, state = jitted_reset(key)
                 elif event.key == pygame.K_f:
                     frame_by_frame = not frame_by_frame
                 elif event.key == pygame.K_n:
                     next_frame_asked = True
-
-        if args.random:
-            key, subkey = jax.random.split(key)
-            latest_action = action_space.sample(subkey)
-        else:
-            latest_action = get_human_action(events)
-
         if pause or (frame_by_frame and not next_frame_asked):
             continue
+        if args.random:
+            # sample an action from the action space array
+            action = action_space.sample(key)
+            key, subkey = jax.random.split(key)
+        else:
+            # get the pressed keys
+            action = get_human_action()
 
-        # --- Show updated score for one frame before resetting ---
-        # ---- feste Logikrate: max. 1 Step pro Frame (Clamping) ----
-        if acc_ms >= step_ms and not pending_reset:
-            acc_ms -= step_ms
+            # Save the action to the save_keys dictionary
+            if args.record:
+                # Save the action to the save_keys dictionary
+                save_keys[len(save_keys)] = action
 
-            # Gegner (P1, links) – einfache Avoider-Policy
-            ai_action = opponent_policy(env, state)
-
-            # Human spielt P2 (rechts, gelb)
-            joint_action = jnp.array([ai_action, latest_action], dtype=jnp.int32)
-
-            obs, state, reward, done, info = jitted_step(state, joint_action)
+        if not frame_by_frame or next_frame_asked:
+            action = get_human_action()
+            obs, state, reward, done, info = jitted_step(state, action)
             total_return += reward
             if next_frame_asked:
                 next_frame_asked = False
-            if args.record:
-                save_keys[len(save_keys)] = act
-            if done:
-                print(f"Done. Total return {total_return}")
-                total_return = 0
-                pending_reset = True
-        # ...existing code...
-        # Render the current state (including the just-updated score)
+
+        if done:
+            print(f"Done. Total return {total_return}")
+            total_return = 0
+            obs, state = jitted_reset(key)
+
+        # Render the environment
         if not execute_without_rendering:
             image = jitted_render(state)
+
             update_pygame(window, image, UPSCALE_FACTOR, 160, 210)
-        # Perform the reset *after* rendering the scored frame
-        if pending_reset:
-            # preserve scores across rounds
-            s0 = int(state.score0)
-            s1 = int(state.score1)
-            _obs, state = env.reset(scores=(s0, s1))
-            latest_action = JAXAtariAction.NOOP
-            acc_ms = 0
-            pending_reset = False
-            continue
+
+            clock.tick(frame_rate)
 
     if args.record:
         # Convert dictionary to array of actions
@@ -280,8 +217,7 @@ def main():
                 [action for action in save_keys.values()], dtype=np.int32
             ),
             "seed": args.seed,  # The random seed used
-            "frame_rate": render_fps,  # The frame rate for consistent replay
-            "logic_fps": logic_fps,
+            "frame_rate": frame_rate,  # The frame rate for consistent replay
         }
         with open(args.record, "wb") as f:
             np.save(f, save_data)
