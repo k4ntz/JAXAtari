@@ -99,33 +99,42 @@ class JaxSkiing(JaxEnvironment[GameState, SkiingObservation, SkiingInfo, SkiingC
         return spaces.Discrete(4)
 
     def observation_space(self):
-        """Objektzentrierter Dict-Space für eine Einzel-Observation."""
         c = self.config
-        def scalar_box(low, high, dtype=jnp.float32):
-            return spaces.Box(low=low, high=high, shape=(), dtype=dtype)
+
+        def f32(x):  # kleine Hilfe für konsistente Dtypes
+            return jnp.array(x, dtype=jnp.float32)
 
         skier_space = spaces.Dict(collections.OrderedDict({
-            "x":      scalar_box(0.0, float(c.screen_width)),
-            "y":      scalar_box(0.0, float(c.screen_height)),
-            "width":  scalar_box(0.0, float(c.skier_width)),
-            "height": scalar_box(0.0, float(c.skier_height)),
+            "x":      spaces.Box(low=f32(0.0),               high=f32(float(c.screen_width)),  shape=(), dtype=jnp.float32),
+            "y":      spaces.Box(low=f32(0.0),               high=f32(float(c.screen_height)), shape=(), dtype=jnp.float32),
+            "width":  spaces.Box(low=f32(float(c.skier_width)),  high=f32(float(c.skier_width)),  shape=(), dtype=jnp.float32),
+            "height": spaces.Box(low=f32(float(c.skier_height)), high=f32(float(c.skier_height)), shape=(), dtype=jnp.float32),
         }))
 
-        flags_space = spaces.Box(low=0.0,
-                                 high=jnp.array([float(c.screen_width), float(c.screen_height),
-                                                 float(c.flag_width),  float(c.flag_height)], dtype=jnp.float32),
-                                 shape=(c.max_num_flags, 4), dtype=jnp.float32)
-        trees_space = spaces.Box(low=0.0,
-                                 high=jnp.array([float(c.screen_width), float(c.screen_height),
-                                                 float(c.tree_width),  float(c.tree_height)], dtype=jnp.float32),
-                                 shape=(c.max_num_trees, 4), dtype=jnp.float32)
-        rocks_space = spaces.Box(low=0.0,
-                                 high=jnp.array([float(c.screen_width), float(c.screen_height),
-                                                 float(c.rock_width),  float(c.rock_height)], dtype=jnp.float32),
-                                 shape=(c.max_num_rocks, 4), dtype=jnp.float32)
-        score_space = spaces.Box(low=jnp.array(0, dtype=jnp.int32),
-                                 high=jnp.array(1_000_000, dtype=jnp.int32),
-                                 shape=(), dtype=jnp.int32)
+        flags_space = spaces.Box(
+            low=f32([0.0, 0.0]),
+            high=f32([float(c.screen_width), float(c.screen_height)]),
+            shape=(c.max_num_flags, 2),
+            dtype=jnp.float32,
+        )
+        trees_space = spaces.Box(
+            low=f32([0.0, 0.0]),
+            high=f32([float(c.screen_width), float(c.screen_height)]),
+            shape=(c.max_num_trees, 2),
+            dtype=jnp.float32,
+        )
+        rocks_space = spaces.Box(
+            low=f32([0.0, 0.0]),
+            high=f32([float(c.screen_width), float(c.screen_height)]),
+            shape=(c.max_num_rocks, 2),
+            dtype=jnp.float32,
+        )
+        score_space = spaces.Box(
+            low=jnp.array(0, dtype=jnp.int32),
+            high=jnp.array(1_000_000, dtype=jnp.int32),
+            shape=(),
+            dtype=jnp.int32,
+        )
 
         return spaces.Dict(collections.OrderedDict({
             "skier": skier_space,
@@ -139,15 +148,20 @@ class JaxSkiing(JaxEnvironment[GameState, SkiingObservation, SkiingInfo, SkiingC
         c = self.config
         return spaces.Box(low=0, high=255, shape=(c.screen_height, c.screen_width, 3), dtype=jnp.uint8)
 
-    def obs_to_flat_array(self, obs):
-        """Flatten in fester Reihenfolge passend zu observation_space()."""
-        skier_vec  = jnp.array([obs.skier.x, obs.skier.y, obs.skier.width, obs.skier.height],
-                               dtype=jnp.float32).reshape(-1)
+    def obs_to_flat_array(self, obs: SkiingObservation) -> jnp.ndarray:
+        # Reihenfolge muss mit observation_space übereinstimmen:
+        skier_vec  = jnp.array(
+            [obs.skier.x, obs.skier.y, obs.skier.width, obs.skier.height],
+            dtype=jnp.float32
+        ).reshape(-1)
+
         flags_flat = jnp.asarray(obs.flags, dtype=jnp.float32).reshape(-1)
         trees_flat = jnp.asarray(obs.trees, dtype=jnp.float32).reshape(-1)
         rocks_flat = jnp.asarray(obs.rocks, dtype=jnp.float32).reshape(-1)
-        score_flat = jnp.asarray(obs.score, dtype=jnp.float32).reshape(-1)
-        return jnp.concatenate([skier_vec, flags_flat, trees_flat, rocks_flat, score_flat], axis=0)
+        score_flat = jnp.asarray(obs.score, dtype=jnp.float32).reshape(-1)  # Score als Feature erlaubt
+
+        flat = jnp.concatenate([skier_vec, flags_flat, trees_flat, rocks_flat, score_flat], axis=0)
+        return flat.astype(jnp.float64)
 
     def reset(self, key: jax.random.PRNGKey = jax.random.key(1701)) -> Tuple[SkiingObservation, GameState]:
         """Initialize a new game state deterministically from `key`."""
@@ -536,17 +550,17 @@ class JaxSkiing(JaxEnvironment[GameState, SkiingObservation, SkiingInfo, SkiingC
             height=jnp.asarray(self.config.skier_height, dtype=jnp.float32),
         )
 
-        # Nur (x,y) für Objekte in der *Observation*
-        trees = jnp.asarray(state.trees, dtype=jnp.float32)   # shape: (max_num_trees, 2)
-        flags = jnp.asarray(state.flags, dtype=jnp.float32)   # shape: (max_num_flags, 2)
-        rocks = jnp.asarray(state.rocks, dtype=jnp.float32)   # shape: (max_num_rocks, 2)
+        # WICHTIG: Nur (x, y) in die Observation geben
+        flags = jnp.asarray(state.flags, dtype=jnp.float32)[..., :2]
+        trees = jnp.asarray(state.trees, dtype=jnp.float32)[..., :2]
+        rocks = jnp.asarray(state.rocks, dtype=jnp.float32)[..., :2]
 
         return SkiingObservation(
             skier=skier,
-            trees=trees,
-            flags=flags,
-            rocks=rocks,
-            score=state.score,   # int32 passt zum Space
+            flags=flags,   # shape: (max_num_flags, 2)
+            trees=trees,   # shape: (max_num_trees, 2)
+            rocks=rocks,   # shape: (max_num_rocks, 2)
+            score=jnp.asarray(state.score, dtype=jnp.int32),
         )
 
     @partial(jax.jit, static_argnums=(0,))
