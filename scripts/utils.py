@@ -29,6 +29,9 @@ def update_pygame(pygame_screen, raster, SCALING_FACTOR=3, WIDTH=400, HEIGHT=300
     raster_np = np.array(raster)
     raster_np = raster_np.astype(np.uint8)
 
+    if raster_np.ndim == 3 and raster_np.shape[2] == 1:
+        raster_np = np.repeat(raster_np, 3, axis=2)
+
     # Pygame surface needs (W, H). make_surface expects (W, H, C) correctly.
     # Transpose from (H, W, C) to (W, H, C) for pygame
     frame_surface = pygame.surfarray.make_surface(raster_np.transpose(1, 0, 2))

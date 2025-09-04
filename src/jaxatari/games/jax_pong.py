@@ -559,7 +559,7 @@ class JaxPong(JaxEnvironment[PongState, PongObservation, PongInfo, PongConstants
 
 class PongRenderer(JAXGameRenderer):
     def __init__(self, consts: PongConstants = None):
-        super().__init__()
+        super().__init__(mode='performance')
         self.consts = consts or PongConstants()
         (
             self.SPRITE_BG,
@@ -593,6 +593,13 @@ class PongRenderer(JAXGameRenderer):
             num_chars=10,
         )
 
+        SPRITE_BG = self.manager._preprocess_sprite(SPRITE_BG)
+        SPRITE_PLAYER = self.manager._preprocess_sprite(SPRITE_PLAYER)
+        SPRITE_ENEMY = self.manager._preprocess_sprite(SPRITE_ENEMY)
+        SPRITE_BALL = self.manager._preprocess_sprite(SPRITE_BALL)
+        PLAYER_DIGIT_SPRITES = self.manager._preprocess_sprite(PLAYER_DIGIT_SPRITES)
+        ENEMY_DIGIT_SPRITES = self.manager._preprocess_sprite(ENEMY_DIGIT_SPRITES)
+
         return (
             SPRITE_BG,
             SPRITE_PLAYER,
@@ -604,29 +611,37 @@ class PongRenderer(JAXGameRenderer):
 
     @partial(jax.jit, static_argnums=(0,))
     def render(self, state):
-        raster = jr.create_initial_frame(width=160, height=210)
+        raster = self.manager.create_initial_frame()
 
         frame_bg = jr.get_sprite_frame(self.SPRITE_BG, 0)
-        raster = jr.render_at(raster, 0, 0, frame_bg)
+        raster = self.manager.render_at(raster, 0, 0, frame_bg)
 
         frame_player = jr.get_sprite_frame(self.SPRITE_PLAYER, 0)
-        raster = jr.render_at(raster, self.consts.PLAYER_X, state.player_y, frame_player)
+        raster = self.manager.render_at(raster, self.consts.PLAYER_X, state.player_y, frame_player)
 
         frame_enemy = jr.get_sprite_frame(self.SPRITE_ENEMY, 0)
-        raster = jr.render_at(raster, self.consts.ENEMY_X, state.enemy_y, frame_enemy)
+        raster = self.manager.render_at(raster, self.consts.ENEMY_X, state.enemy_y, frame_enemy)
 
         frame_ball = jr.get_sprite_frame(self.SPRITE_BALL, 0)
-        raster = jr.render_at(raster, state.ball_x, state.ball_y, frame_ball)
+        raster = self.manager.render_at(raster, state.ball_x, state.ball_y, frame_ball)
 
-        # Direct wall rendering with HWC indexing
-        wall_color = jnp.array(self.consts.WALL_COLOR, dtype=jnp.uint8)
-        top_wall_y_start = self.consts.WALL_TOP_Y
-        top_wall_y_end = self.consts.WALL_TOP_Y + self.consts.WALL_TOP_HEIGHT
-        raster = raster.at[top_wall_y_start:top_wall_y_end, :, :].set(wall_color)
-
-        bottom_wall_y_start = self.consts.WALL_BOTTOM_Y
-        bottom_wall_y_end = self.consts.WALL_BOTTOM_Y + self.consts.WALL_BOTTOM_HEIGHT
-        raster = raster.at[bottom_wall_y_start:bottom_wall_y_end, :, :].set(wall_color)
+        wall_color = self.consts.WALL_COLOR
+        
+        # Draw top wall
+        raster = self.manager.draw_rect_fill(raster,
+                                            x=0,
+                                            y=self.consts.WALL_TOP_Y,
+                                            width=160,
+                                            height=self.consts.WALL_TOP_HEIGHT,
+                                            color=wall_color)
+        
+        # Draw bottom wall
+        raster = self.manager.draw_rect_fill(raster,
+                                            x=0,
+                                            y=self.consts.WALL_BOTTOM_Y,
+                                            width=160,
+                                            height=self.consts.WALL_BOTTOM_HEIGHT,
+                                            color=wall_color)
 
         player_score_digits = jr.int_to_digits(state.player_score, max_digits=2)
         enemy_score_digits = jr.int_to_digits(state.enemy_score, max_digits=2)
@@ -638,7 +653,7 @@ class PongRenderer(JAXGameRenderer):
                                          120 + 16 // 2,
                                          120)
 
-        raster = jr.render_label_selective(raster, player_render_x, 3,
+        raster = self.manager.render_label_selective(raster, player_render_x, 3,
                                             player_score_digits, self.PLAYER_DIGIT_SPRITES,
                                             player_start_index, player_num_to_render,
                                             spacing=16)
@@ -650,9 +665,9 @@ class PongRenderer(JAXGameRenderer):
                                         10 + 16 // 2,
                                         10)
 
-        raster = jr.render_label_selective(raster, enemy_render_x, 3,
+        raster = self.manager.render_label_selective(raster, enemy_render_x, 3,
                                            enemy_score_digits, self.ENEMY_DIGIT_SPRITES,
                                            enemy_start_index, enemy_num_to_render,
                                            spacing=16)
-
+        
         return raster

@@ -4,8 +4,9 @@ import numpy as np
 import jax.numpy as jnp
 import jax
 from functools import partial
-from jax import lax
+from jax import ShapeDtypeStruct, lax
 from typing import List, Tuple
+import jax.experimental.pallas as pallas
 
 BORDER = False
 
@@ -21,62 +22,6 @@ class AgnosticPath(Path):
             if parts and not parts[0] in ("/", "\\"):
                 parts = ("/",) + parts
         return super().__new__(cls, *parts, **kwargs)
-
-
-@partial(jax.jit, static_argnames=["width", "height", "channels"])
-def create_initial_frame(width=160, height=210, channels=3):
-    """Creates an initial frame in HWC format (Height, Width, Channels).
-    Arguments are still in the x,y order since this is the coordinate order the environments use internally.
-    
-    Args:
-        width: Width of the frame (default: 160)
-        height: Height of the frame (default: 210) 
-        channels: Number of color channels (default: 3 for RGB)
-        
-    Returns:
-        JAX array of shape (height, width, channels) filled with zeros.
-    """
-    # uses HWC same as ALE
-    return jnp.zeros((height, width, channels), dtype=jnp.uint8)
-
-
-def add_border(frame):
-    if frame.shape[:2] == (210, 160):
-        return frame  # No border for background
-    h, w, c = frame.shape
-    flat_frame = frame.reshape(h*w, 4)  # Ensure the last dimension is RGBA
-    border_color = jnp.array([255, 255, 255, 50], dtype=jnp.uint8) # set alpha to 50 transparency
-    # Top and bottom borders
-    frame = frame.at[0, :, :].set(border_color)
-    frame = frame.at[-1, :, :].set(border_color)
-    
-    # Left and right borders
-    frame = frame.at[:, 0, :].set(border_color)
-    frame = frame.at[:, -1, :].set(border_color)
-    return frame
-
-
-def loadFrame(fileName, transpose=False):
-    """Loads a frame from .npy, ensuring output is (Height, Width, Channels).
-
-    Args:
-        fileName: Path to the .npy file.
-        transpose: If True, assumes source is (W, H, C) and transposes
-                   to (H, W, C). If False (default), assumes source is already (H, W, C).
-
-    Returns:
-        JAX array of shape (Height, Width, 4).
-    """
-    frame = jnp.load(fileName)
-    if frame.ndim != 3 or frame.shape[2] != 4:
-         raise ValueError(
-            f"Invalid frame format in {fileName}. Source .npy must be loadable with 3 dims and 4 channels."
-        )
-
-    if transpose:
-        # Source assumed W, H, C -> transpose to H, W, C
-        frame = jnp.transpose(frame, (1, 0, 2))
-    return frame
 
 
 @partial(jax.jit, static_argnames=["path_pattern", "num_chars"])
@@ -152,145 +97,248 @@ def get_sprite_frame(frames, frame_idx, loop=True):
     )
 
 
-@jax.jit
-def render_at(raster, x, y, sprite_frame, 
-              flip_horizontal=False, 
-              flip_vertical=False, 
-              flip_offset: jnp.ndarray = jnp.array([0, 0])):
-    """
-    Renders a sprite, when using padded sprites can correct displacing flipping logic using the flip offsets.
+def loadFrame(fileName, transpose=False):
+    """Loads a frame from .npy, ensuring output is RGBA (Height, Width, 4).
 
     Args:
-        raster: JAX array (H, W, C) for the target image.
-        x: World x-coordinate for the top-left of the sprite's content.
-        y: World y-coordinate for the top-left of the sprite's content.
-        sprite_frame: JAX array (H, W, 4) with sprite data.
-        flip_horizontal: Boolean flag to flip the sprite horizontally.
-        flip_vertical: Boolean flag to flip the sprite vertically.
-        flip_offset: A [dx, dy] array (width, height padding) for flip correction.
+        fileName: Path to the .npy file.
+        transpose: If True, assumes source is (W, H, C) and transposes to (H, W, C).
+
+    Returns:
+        JAX array of shape (Height, Width, 4).
     """
-    # --- Setup ---
-    x, y = jnp.asarray(x, dtype=jnp.int32), jnp.asarray(y, dtype=jnp.int32)
-    raster_height, raster_width, _ = raster.shape
-    sprite_height, sprite_width, _ = sprite_frame.shape
+    frame = jnp.load(fileName)
+    if frame.ndim != 3 or frame.shape[2] != 4:
+        raise ValueError(
+            f"Invalid frame format in {fileName}. Source .npy must be loadable with 3 dims and 4 channels (RGBA)."
+        )
 
-    # --- Position Calculation with Flip Correction ---
-    top_left_x, top_left_y = x, y
+    if transpose:
+        # Source assumed W, H, C -> transpose to H, W, C
+        frame = jnp.transpose(frame, (1, 0, 2))
+    # Return the full RGBA frame. Do NOT slice with [:,:,:3]
+    return frame
 
-    # If flipping horizontally, shift the drawing position left by the offset
-    # to compensate for the padding that is now on the left side.
-    top_left_x = jax.lax.cond(
-        flip_horizontal,
-        lambda: (x - flip_offset[0]).astype(jnp.int32),
-        lambda: x.astype(jnp.int32)
-    )
-    # Apply the same logic for vertical flipping.
-    top_left_y = jax.lax.cond(
-        flip_vertical,
-        lambda: (y - flip_offset[1]).astype(jnp.int32),
-        lambda: y.astype(jnp.int32)
-    )
 
-    # --- Sprite Flipping ---
-    sprite = jax.lax.cond(flip_horizontal, lambda s: jnp.flip(s, axis=1), lambda s: s, sprite_frame) # Axis 1 is Width
-    sprite = jax.lax.cond(flip_vertical,   lambda s: jnp.flip(s, axis=0), lambda s: s, sprite)          # Axis 0 is Height
+class RenderingManager:
+    def __init__(self, mode: str = 'performance'):
+        self.mode = mode
+        if self.mode == 'performance':
+            self.target_shape = (84, 84, 1)  # H, W, C for the final raster
+            self.scale_y = 84 / 210
+            self.scale_x = 84 / 160
+            self.is_grayscale = True
+        else:  # 'fidelity' mode
+            self.target_shape = (210, 160, 3) # Final raster is RGB
+            self.scale_y = 1.0
+            self.scale_x = 1.0
+            self.is_grayscale = False
 
-    # --- Blending Logic ---
-    # Use 'xy' indexing for HWC to get grids of shape (H, W)
-    raster_xx, raster_yy = jnp.meshgrid(jnp.arange(raster_width), jnp.arange(raster_height), indexing='xy')
+    def _preprocess_sprite(self, sprite):
+        """
+        Helper to SCALE a sprite or batch of sprites to the correct dimensions
+        for the current mode, preserving RGBA data.
+        """
+        is_batched = sprite.ndim == 4
+
+        # Get original sprite dimensions
+        if is_batched:
+            # Assumes all sprites in a batch have the same H/W dimensions,
+            # which is ensured by the padding functions.
+            _, h, w, _ = sprite.shape
+        else:
+            h, w, _ = sprite.shape
+
+        # Calculate SCALED target dimensions
+        target_h = jnp.round(h * self.scale_y).astype(jnp.int32)
+        target_w = jnp.round(w * self.scale_x).astype(jnp.int32)
+
+        # Ensure dimensions are at least 1 pixel after scaling
+        target_h = jnp.maximum(target_h, 1)
+        target_w = jnp.maximum(target_w, 1)
+
+        # The resize operation will be on RGBA data
+        resize_shape_rgba = (target_h, target_w, 4)
+
+        sprite_float = sprite.astype(jnp.float32)
+
+        if is_batched:
+            # Since the target shape is now computed from the input shape,
+            # it remains consistent for all items in a padded batch.
+            vmap_resize = jax.vmap(lambda s: jax.image.resize(s, resize_shape_rgba, 'bilinear'))
+            resized_sprite_float = vmap_resize(sprite_float)
+        else:
+            resized_sprite_float = jax.image.resize(sprite_float, resize_shape_rgba, 'bilinear')
+
+        # Clip and convert back to uint8 (this part was already correct)
+        return jnp.round(jnp.clip(resized_sprite_float, 0, 255)).astype(jnp.uint8)
+
+
+    @partial(jax.jit, static_argnames=("self",))
+    def create_initial_frame(self):
+        return jnp.zeros(self.target_shape, dtype=jnp.uint8)
+
+    MAX_LABEL_WIDTH = 100
+    MAX_LABEL_HEIGHT = 20
+
+
+    @partial(jax.jit, static_argnums=(0,))
+    def render_at(self, raster, x, y, sprite_frame,
+                flip_horizontal=False,
+                flip_vertical=False,
+                flip_offset: jnp.ndarray = jnp.array([0, 0])):
+        """
+        Renders an RGBA sprite onto the raster using masking (ignores pixels with alpha=0).
+        """
+        # 1. Scale coordinates and handle flipping (same as before)
+        scaled_y = jnp.round(y * self.scale_y).astype(jnp.int32)
+        scaled_x = jnp.round(x * self.scale_x).astype(jnp.int32)
+
+        processed_sprite = sprite_frame
+        processed_sprite = lax.cond(
+            flip_horizontal, lambda s: jnp.flip(s, axis=1), lambda s: s, processed_sprite
+        )
+        processed_sprite = lax.cond(
+            flip_vertical, lambda s: jnp.flip(s, axis=0), lambda s: s, processed_sprite
+        )
+
+        sprite_h, sprite_w, _ = processed_sprite.shape
+
+        # 2. Create a boolean mask from the sprite's alpha channel
+        # The new dimension allows it to work with both single-channel and multi-channel rasters.
+        opaque_mask = processed_sprite[..., 3:] > 128  # Shape becomes (H, W, 1)
+
+        # 3. Prepare the sprite's color data, matching the raster's format (this is fine in a jitted context since is_grayscale is static)
+        if self.is_grayscale:
+            # Average the RGB channels for grayscale output
+            sprite_color = jnp.mean(processed_sprite[..., :3], axis=-1, keepdims=True)
+        else:
+            # Use the RGB channels directly
+            sprite_color = processed_sprite[..., :3]
+
+        # 4. Get the corresponding slice from the background raster
+        start_indices = (scaled_y, scaled_x, 0)
+        background_slice = lax.dynamic_slice(raster, start_indices,
+                                            (sprite_h, sprite_w, raster.shape[-1]))
+
+        # 5. Use the mask to conditionally select pixels
+        # Where the mask is True, use the sprite's color; otherwise, keep the background.
+        output_slice = jnp.where(
+            opaque_mask,                         # The condition
+            sprite_color.astype(raster.dtype),   # Value if True (from sprite)
+            background_slice                     # Value if False (from background)
+        )
+
+        # 6. Update the raster with the result
+        return lax.dynamic_update_slice(
+            raster,
+            output_slice,
+            start_indices
+        )
+
+
+
+    @partial(jax.jit, static_argnums=(0,))
+    def draw_rect_fill(self, raster, x, y, width, height, color):
+        """Draws a filled rectangle using a JIT-compatible masking approach."""
+        # 1. Scale geometry
+        x_start = jnp.round(x * self.scale_x).astype(jnp.int32)
+        y_start = jnp.round(y * self.scale_y).astype(jnp.int32)
+        x_end = jnp.round((x + width) * self.scale_x).astype(jnp.int32)
+        y_end = jnp.round((y + height) * self.scale_y).astype(jnp.int32)
+
+        # 2. Process color for the current mode
+        color_arr = jnp.asarray(color, dtype=jnp.uint8)
+        if self.is_grayscale:
+            # Correctly shape the color for broadcasting: (1,) for a single channel
+            processed_color = jnp.mean(color_arr).astype(jnp.uint8).reshape(1)
+        else:
+            processed_color = color_arr
+
+        # 3. Create coordinate grids and mask for the rectangle area
+        H, W, _ = self.target_shape
+        yy, xx = jnp.meshgrid(jnp.arange(H), jnp.arange(W), indexing='ij')
+        mask = (xx >= x_start) & (xx < x_end) & (yy >= y_start) & (yy < y_end)
+        
+        # 4. Use jnp.where to apply the color, expanding mask to match channel dimension
+        return jnp.where(mask[..., None], processed_color, raster)
+
+    # The other rendering methods (render_label, render_indicator, etc.) do not need
+    # changes as they correctly delegate the core drawing logic to render_at.
+    @jax.jit
+    def render_label(self, raster, x, y, text_digits, char_sprites, spacing=15):
+        """Renders a sequence of digits horizontally starting at (x, y)."""
+        sprites = char_sprites[text_digits]
+        def render_char(i, current_raster):
+            char_x = x + i * spacing
+            return self.render_at(current_raster, char_x, y, sprites[i], flip_offset=jnp.array([0.0, 0.0]))
+
+        raster = jax.lax.fori_loop(0, sprites.shape[0], render_char, raster)
+        return raster
     
-    sprite_coord_x = raster_xx - top_left_x
-    sprite_coord_y = raster_yy - top_left_y
-    sprite_bounds_mask = (sprite_coord_x >= 0) & (sprite_coord_x < sprite_width) & \
-                         (sprite_coord_y >= 0) & (sprite_coord_y < sprite_height)
+    @partial(jax.jit, static_argnums=(0,))
+    def render_label_selective(self, raster, x, y,
+                               all_digits,
+                               char_sprites,
+                               start_index,
+                               num_to_render,
+                               spacing=15):
+        """Renders a label, automatically scaling position and spacing based on mode."""
+
+        def render_char(i, current_raster):
+            digit_index_in_array = start_index + i
+            digit_value = all_digits[digit_index_in_array]
+            sprite_to_render = char_sprites[digit_value]
+            render_x = x + i * spacing
+            return self.render_at(current_raster, render_x, y, sprite_to_render)
+
+        return lax.fori_loop(0, num_to_render, render_char, raster)
+
+
+    @jax.jit
+    def render_indicator(self, raster, x, y, value, sprite, spacing=15):
+        """Renders 'value' copies of 'sprite' horizontally starting at (x, y)."""
+        def render_single_indicator(i, current_raster):
+            indicator_x = x + i * spacing
+            return self.render_at(current_raster, indicator_x, y, sprite, flip_offset=jnp.array([0.0, 0.0]))
+
+        return jax.lax.fori_loop(0, value, render_single_indicator, raster)
+
+
+    @partial(jax.jit, static_argnames=["width", "height"])
+    def render_bar(self, raster, x, y, value, max_value, width, height, color, default_color):
+        """Renders a horizontal progress bar at (x, y) with specified geometry."""
+        color = jnp.asarray(color, dtype=jnp.uint8)
+        default_color = jnp.asarray(default_color, dtype=jnp.uint8)
+        
+        fill_width = jnp.clip(jnp.nan_to_num((value / max_value) * width), 0, width).astype(jnp.int32)
+        bar_xx, _ = jnp.meshgrid(jnp.arange(width), jnp.arange(height), indexing='xy')
+        fill_mask = (bar_xx < fill_width)[..., None]
+        
+        bar_content = jnp.where(
+            fill_mask,
+            color,
+            default_color
+        )
+        raster = self.render_at(raster, x, y, bar_content, flip_offset=jnp.array([0.0, 0.0]))
+
+        return raster
+
+
+def add_border(self, frame):
+    if frame.shape[:2] == (210, 160):
+        return frame  # No border for background
+    h, w, c = frame.shape
+    flat_frame = frame.reshape(h*w, 4)  # Ensure the last dimension is RGBA
+    border_color = jnp.array([255, 255, 255, 50], dtype=jnp.uint8) # set alpha to 50 transparency
+    # Top and bottom borders
+    frame = frame.at[0, :, :].set(border_color)
+    frame = frame.at[-1, :, :].set(border_color)
     
-    pad_width_spec = ((1, 1), (1, 1), (0, 0)) # Pad H and W axes
-    sprite_padded = jnp.pad(sprite, pad_width_spec, mode='constant', constant_values=0)
-    
-    sprite_coord_x_padded = sprite_coord_x + 1
-    sprite_coord_y_padded = sprite_coord_y + 1
-    
-    # Indexing for HWC is [y, x]
-    gathered_sprite_rgba = sprite_padded[sprite_coord_y_padded, sprite_coord_x_padded]
-    
-    gathered_sprite_rgb = gathered_sprite_rgba[..., :3].astype(jnp.float32)
-    gathered_sprite_alpha = (gathered_sprite_rgba[..., 3:].astype(jnp.float32) / 255.0)
-    current_raster_rgb = raster[..., :raster.shape[2]].astype(jnp.float32)
-    blended_rgb = gathered_sprite_rgb * gathered_sprite_alpha + current_raster_rgb * (1.0 - gathered_sprite_alpha)
-    final_mask_broadcasted = sprite_bounds_mask[..., None]
-    new_raster_float = jnp.where(final_mask_broadcasted, blended_rgb, current_raster_rgb)
-    
-    return new_raster_float.astype(raster.dtype)
-
-MAX_LABEL_WIDTH = 100
-MAX_LABEL_HEIGHT = 20
-
-
-@jax.jit
-def render_label(raster, x, y, text_digits, char_sprites, spacing=15):
-    """Renders a sequence of digits horizontally starting at (x, y)."""
-    sprites = char_sprites[text_digits]
-    def render_char(i, current_raster):
-        char_x = x + i * spacing
-        # Use a (0,0) pivot to maintain top-left rendering for each character
-        return render_at(current_raster, char_x, y, sprites[i], flip_offset=jnp.array([0.0, 0.0]))
-
-    raster = jax.lax.fori_loop(0, sprites.shape[0], render_char, raster)
-    return raster
-
-
-@jax.jit
-def render_label_selective(raster, x, y,
-                           all_digits,
-                           char_sprites,
-                           start_index,
-                           num_to_render,
-                           spacing=15):
-    """Renders a specified number of digits from a digit array at (x, y)."""
-    def render_char(i, current_raster):
-        digit_index_in_array = start_index + i
-        digit_value = all_digits[digit_index_in_array]
-        sprite_to_render = char_sprites[digit_value]
-        render_x = x + i * spacing
-        # Use a (0,0) pivot for top-left rendering
-        return render_at(current_raster, render_x, y, sprite_to_render, flip_offset=jnp.array([0.0, 0.0]))
-
-    raster = jax.lax.fori_loop(0, num_to_render, render_char, raster)
-    return raster
-
-
-@jax.jit
-def render_indicator(raster, x, y, value, sprite, spacing=15):
-    """Renders 'value' copies of 'sprite' horizontally starting at (x, y)."""
-    def render_single_indicator(i, current_raster):
-        indicator_x = x + i * spacing
-        # Use a (0,0) pivot for top-left rendering
-        return render_at(current_raster, indicator_x, y, sprite, flip_offset=jnp.array([0.0, 0.0]))
-
-    return jax.lax.fori_loop(0, value, render_single_indicator, raster)
-
-
-@partial(jax.jit, static_argnames=["width", "height"])
-def render_bar(raster, x, y, value, max_value, width, height, color, default_color):
-    """Renders a horizontal progress bar at (x, y) with specified geometry."""
-    color = jnp.asarray(color, dtype=jnp.uint8)
-    default_color = jnp.asarray(default_color, dtype=jnp.uint8)
-    
-    fill_width = jnp.clip(jnp.nan_to_num((value / max_value) * width), 0, width).astype(jnp.int32)
-    # Use 'xy' indexing for an (H, W) grid
-    bar_xx, _ = jnp.meshgrid(jnp.arange(width), jnp.arange(height), indexing='xy')
-    fill_mask = (bar_xx < fill_width)[..., None]
-    
-    bar_content = jnp.where(
-        fill_mask,
-        color,
-        default_color
-    )
-
-    # Render the generated bar using a (0,0) pivot for top-left behavior
-    raster = render_at(raster, x, y, bar_content, flip_offset=jnp.array([0.0, 0.0]))
-
-    return raster
+    # Left and right borders
+    frame = frame.at[:, 0, :].set(border_color)
+    frame = frame.at[:, -1, :].set(border_color)
+    return frame
 
 
 def _find_content_bbox_np(sprite_frame: np.ndarray) -> tuple[int, int, int, int]:
