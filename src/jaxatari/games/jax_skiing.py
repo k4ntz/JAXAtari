@@ -15,13 +15,13 @@ from jaxatari.environment import JaxEnvironment
 from jaxatari.renderers import JAXGameRenderer
 import jaxatari.spaces as spaces
 
-NOOP = 0
-LEFT = 1
-RIGHT = 2
-FIRE = 3
-
-BOTTOM_BORDER = 176
-TOP_BORDER = 23
+class SkiingConstants(NamedTuple):
+    NOOP = 0
+    LEFT = 1
+    RIGHT = 2
+    FIRE = 3
+    BOTTOM_BORDER = 176
+    TOP_BORDER = 23
 
 @dataclass
 class GameConfig:
@@ -85,12 +85,13 @@ class SkiingInfo(NamedTuple):
     time: jnp.ndarray
 
 
-class JaxSkiing(JaxEnvironment[GameState, SkiingObservation, SkiingInfo, None]):
-    def __init__(self):
-        super().__init__()
+class JaxSkiing(JaxEnvironment[GameState, SkiingObservation, SkiingInfo, SkiingConstants]):
+    def __init__(self, consts: SkiingConstants | None = None):
+        consts = consts or SkiingConstants()
+        super().__init__(consts)
         self.config = GameConfig()
         self.state = self.reset()
-        self.renderer = SkiingRenderer(self.consts)
+        self.renderer = SkiingRenderer(self.config)
 
     def action_space(self) -> spaces.Discrete:
         # Aktionen sind bei dir: NOOP=0, LEFT=1, RIGHT=2
@@ -180,10 +181,10 @@ class JaxSkiing(JaxEnvironment[GameState, SkiingObservation, SkiingInfo, None]):
                 - self.config.flag_distance,
             )
             x_flag = jnp.array(x_flag, jnp.float32)
-            y = BOTTOM_BORDER + jax.random.randint(k1.at[3 - i].get(), [], 0, 100)
+            y = self.consts.BOTTOM_BORDER + jax.random.randint(k1.at[3 - i].get(), [], 0, 100)
 
             new_f = jax.lax.cond(
-                jnp.less(flags.at[i, 1].get(), TOP_BORDER),
+                jnp.less(flags.at[i, 1].get(), self.consts.TOP_BORDER),
                 lambda _: jnp.array([x_flag, y], jnp.float32),
                 lambda _: flags.at[i].get(),
                 operand=None,
@@ -206,10 +207,10 @@ class JaxSkiing(JaxEnvironment[GameState, SkiingObservation, SkiingInfo, None]):
                 self.config.screen_width - self.config.tree_width,
             )
             x_tree = jnp.array(x_tree, jnp.float32)
-            y = BOTTOM_BORDER + jax.random.randint(k1.at[7 - i].get(), [], 0, 100)
+            y = self.consts.BOTTOM_BORDER + jax.random.randint(k1.at[7 - i].get(), [], 0, 100)
 
             new_f = jax.lax.cond(
-                jnp.less(trees.at[i, 1].get(), TOP_BORDER),
+                jnp.less(trees.at[i, 1].get(), self.consts.TOP_BORDER),
                 lambda _: jnp.array([x_tree, y], jnp.float32),
                 lambda _: trees.at[i].get(),
                 operand=None,
@@ -230,10 +231,10 @@ class JaxSkiing(JaxEnvironment[GameState, SkiingObservation, SkiingInfo, None]):
                 self.config.screen_width - self.config.rock_width,
             )
             x_rock = jnp.array(x_rock, jnp.float32)
-            y = BOTTOM_BORDER + jax.random.randint(k1.at[5 - i].get(), [], 0, 100)
+            y = self.consts.BOTTOM_BORDER + jax.random.randint(k1.at[5 - i].get(), [], 0, 100)
 
             new_f = jax.lax.cond(
-                jnp.less(rocks.at[i, 1].get(), TOP_BORDER),
+                jnp.less(rocks.at[i, 1].get(), self.consts.TOP_BORDER),
                 lambda _: jnp.array([x_rock, y], jnp.float32),
                 lambda _: rocks.at[i].get(),
                 operand=None,
@@ -260,11 +261,11 @@ class JaxSkiing(JaxEnvironment[GameState, SkiingObservation, SkiingInfo, None]):
         Y_HIT_DIST  = jnp.float32(1.0)
 
         # 1) Eingabe -> Zielpose
-        new_skier_pos = jax.lax.cond(jnp.equal(action, LEFT),
+        new_skier_pos = jax.lax.cond(jnp.equal(action, self.consts.LEFT),
                                      lambda _: state.skier_pos - 1,
                                      lambda _: state.skier_pos,
                                      operand=None)
-        new_skier_pos = jax.lax.cond(jnp.equal(action, RIGHT),
+        new_skier_pos = jax.lax.cond(jnp.equal(action, self.consts.RIGHT),
                                      lambda _: state.skier_pos + 1,
                                      lambda _: new_skier_pos,
                                      operand=None)
@@ -416,7 +417,7 @@ class JaxSkiing(JaxEnvironment[GameState, SkiingObservation, SkiingInfo, None]):
         flags_passed = jnp.logical_or(state.flags_passed, gate_pass)
 
         # Despawn/Strafe nur anhand der "gefreezten" (finalen) Flags berechnen
-        despawn_mask = new_flags[:, 1] < TOP_BORDER
+        despawn_mask = new_flags[:, 1] < self.consts.TOP_BORDER
         missed_penalty_mask = jnp.logical_and(despawn_mask, jnp.logical_not(flags_passed))
         missed_penalty_count = jnp.sum(missed_penalty_mask)
         missed_penalty = missed_penalty_count * 300
@@ -905,6 +906,7 @@ def main():
     # Create configurations
     game_config = GameConfig()
     render_config = RenderConfig()
+    consts = SkiingConstants()
 
     while True:
         # Initialize game and renderer
@@ -921,14 +923,14 @@ def main():
                     pygame.quit()
                     return
             keys = pygame.key.get_pressed()
-            action = NOOP
-            VALID_ACTIONS = {NOOP, LEFT, RIGHT}
+            action = consts.NOOP
+            VALID_ACTIONS = {consts.NOOP, consts.LEFT, consts.RIGHT}
             if keys[pygame.K_a]:
-                action = LEFT
+                action = consts.LEFT
             elif keys[pygame.K_d]:
-                action = RIGHT
+                action = consts.RIGHT
             if action not in VALID_ACTIONS:
-                action = NOOP
+                action = consts.NOOP
 
             obs, state, reward, done, info = game.step(state, action)
             renderer.render(state)
