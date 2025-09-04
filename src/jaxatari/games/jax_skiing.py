@@ -101,33 +101,35 @@ class JaxSkiing(JaxEnvironment[GameState, SkiingObservation, SkiingInfo, SkiingC
     def observation_space(self):
         c = self.config
 
-        def f32(x):  # kleine Hilfe für konsistente Dtypes
-            return jnp.array(x, dtype=jnp.float32)
+        def f64(x):  # konsistente float64-Dtypes
+            return jnp.array(x, dtype=jnp.float64)
+
+        y_high = float(max(c.screen_height, self.consts.BOTTOM_BORDER + 100))  # erlaubt z.B. 276
 
         skier_space = spaces.Dict(collections.OrderedDict({
-            "x":      spaces.Box(low=f32(0.0),               high=f32(float(c.screen_width)),  shape=(), dtype=jnp.float32),
-            "y":      spaces.Box(low=f32(0.0),               high=f32(float(c.screen_height)), shape=(), dtype=jnp.float32),
-            "width":  spaces.Box(low=f32(float(c.skier_width)),  high=f32(float(c.skier_width)),  shape=(), dtype=jnp.float32),
-            "height": spaces.Box(low=f32(float(c.skier_height)), high=f32(float(c.skier_height)), shape=(), dtype=jnp.float32),
+            "x":      spaces.Box(low=f64(0.0),               high=f64(float(c.screen_width)),  shape=(), dtype=jnp.float64),
+            "y":      spaces.Box(low=f64(0.0),               high=f64(float(c.screen_height)), shape=(), dtype=jnp.float64),
+            "width":  spaces.Box(low=f64(float(c.skier_width)),  high=f64(float(c.skier_width)),  shape=(), dtype=jnp.float64),
+            "height": spaces.Box(low=f64(float(c.skier_height)), high=f64(float(c.skier_height)), shape=(), dtype=jnp.float64),
         }))
 
         flags_space = spaces.Box(
-            low=f32([0.0, 0.0]),
-            high=f32([float(c.screen_width), float(c.screen_height)]),
+            low=f64([0.0, 0.0]),
+            high=f64([float(c.screen_width), y_high]),
             shape=(c.max_num_flags, 2),
-            dtype=jnp.float32,
+            dtype=jnp.float64,
         )
         trees_space = spaces.Box(
-            low=f32([0.0, 0.0]),
-            high=f32([float(c.screen_width), float(c.screen_height)]),
+            low=f64([0.0, 0.0]),
+            high=f64([float(c.screen_width), y_high]),
             shape=(c.max_num_trees, 2),
-            dtype=jnp.float32,
+            dtype=jnp.float64,
         )
         rocks_space = spaces.Box(
-            low=f32([0.0, 0.0]),
-            high=f32([float(c.screen_width), float(c.screen_height)]),
+            low=f64([0.0, 0.0]),
+            high=f64([float(c.screen_width), y_high]),
             shape=(c.max_num_rocks, 2),
-            dtype=jnp.float32,
+            dtype=jnp.float64,
         )
         score_space = spaces.Box(
             low=jnp.array(0, dtype=jnp.int32),
@@ -542,24 +544,21 @@ class JaxSkiing(JaxEnvironment[GameState, SkiingObservation, SkiingInfo, SkiingC
 
     @partial(jax.jit, static_argnums=(0,))
     def _get_observation(self, state: GameState):
-        # Skier (alles float32)
         skier = EntityPosition(
-            x=jnp.asarray(state.skier_x, dtype=jnp.float32),
-            y=jnp.asarray(self.config.skier_y, dtype=jnp.float32),
-            width=jnp.asarray(self.config.skier_width, dtype=jnp.float32),
-            height=jnp.asarray(self.config.skier_height, dtype=jnp.float32),
+            x=jnp.asarray(state.skier_x, dtype=jnp.float64),
+            y=jnp.asarray(self.config.skier_y, dtype=jnp.float64),
+            width=jnp.asarray(self.config.skier_width, dtype=jnp.float64),
+            height=jnp.asarray(self.config.skier_height, dtype=jnp.float64),
         )
-
-        # WICHTIG: Nur (x, y) in die Observation geben
-        flags = jnp.asarray(state.flags, dtype=jnp.float32)[..., :2]
-        trees = jnp.asarray(state.trees, dtype=jnp.float32)[..., :2]
-        rocks = jnp.asarray(state.rocks, dtype=jnp.float32)[..., :2]
-
+        flags = jnp.asarray(state.flags, dtype=jnp.float64)[..., :2]
+        trees = jnp.asarray(state.trees, dtype=jnp.float64)[..., :2]
+        rocks = jnp.asarray(state.rocks, dtype=jnp.float64)[..., :2]
+    
         return SkiingObservation(
             skier=skier,
-            flags=flags,   # shape: (max_num_flags, 2)
-            trees=trees,   # shape: (max_num_trees, 2)
-            rocks=rocks,   # shape: (max_num_rocks, 2)
+            flags=flags,
+            trees=trees,
+            rocks=rocks,
             score=jnp.asarray(state.score, dtype=jnp.int32),
         )
 
