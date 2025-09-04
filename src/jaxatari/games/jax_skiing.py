@@ -101,7 +101,7 @@ class JaxSkiing(JaxEnvironment[GameState, SkiingObservation, SkiingInfo, SkiingC
     def observation_space(self):
         c = self.config
 
-        def f32(x):
+        def f64(x):
             return jnp.array(x, dtype=jnp.float32)
 
         skier_space = spaces.Dict(collections.OrderedDict({
