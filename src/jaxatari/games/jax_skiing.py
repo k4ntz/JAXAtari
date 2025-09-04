@@ -101,8 +101,8 @@ class JaxSkiing(JaxEnvironment[GameState, SkiingObservation, SkiingInfo, SkiingC
     def observation_space(self):
         c = self.config
 
-        def f64(x):
-            return jnp.array(x, dtype=jnp.float64)
+        def f32(x):
+            return jnp.array(x, dtype=jnp.float32)
 
         skier_space = spaces.Dict(collections.OrderedDict({
             "x":      spaces.Box(low=f64(0.0),               high=f64(float(c.screen_width)),  shape=(), dtype=jnp.float64),
@@ -134,12 +134,16 @@ class JaxSkiing(JaxEnvironment[GameState, SkiingObservation, SkiingInfo, SkiingC
         return spaces.Box(low=0, high=255, shape=(c.screen_height, c.screen_width, 3), dtype=jnp.uint8)
 
     def obs_to_flat_array(self, obs: SkiingObservation) -> jnp.ndarray:
-        skier_vec  = jnp.array([obs.skier.x, obs.skier.y, obs.skier.width, obs.skier.height],
-                               dtype=jnp.float64).reshape(-1)
-        flags_flat = jnp.asarray(obs.flags, dtype=jnp.float64).reshape(-1)
-        trees_flat = jnp.asarray(obs.trees, dtype=jnp.float64).reshape(-1)
-        rocks_flat = jnp.asarray(obs.rocks, dtype=jnp.float64).reshape(-1)
-        score_flat = jnp.asarray(obs.score, dtype=jnp.float64).reshape(-1)
+        skier_vec  = jnp.array(
+            [obs.skier.x, obs.skier.y, obs.skier.width, obs.skier.height],
+            dtype=jnp.float32
+        ).reshape(-1)
+    
+        flags_flat = jnp.asarray(obs.flags, dtype=jnp.float32).reshape(-1)
+        trees_flat = jnp.asarray(obs.trees, dtype=jnp.float32).reshape(-1)
+        rocks_flat = jnp.asarray(obs.rocks, dtype=jnp.float32).reshape(-1)
+        score_flat = jnp.asarray(obs.score, dtype=jnp.float32).reshape(-1)
+    
         return jnp.concatenate([skier_vec, flags_flat, trees_flat, rocks_flat, score_flat], axis=0)
 
     def reset(self, key: jax.random.PRNGKey = jax.random.key(1701)) -> Tuple[SkiingObservation, GameState]:
@@ -521,18 +525,44 @@ class JaxSkiing(JaxEnvironment[GameState, SkiingObservation, SkiingInfo, SkiingC
 
     @partial(jax.jit, static_argnums=(0,))
     def _get_observation(self, state: GameState):
+        # Skier (float32)
         skier = EntityPosition(
-            x=jnp.asarray(state.skier_x, dtype=jnp.float64),
-            y=jnp.asarray(self.config.skier_y, dtype=jnp.float64),
-            width=jnp.asarray(self.config.skier_width, dtype=jnp.float64),
-            height=jnp.asarray(self.config.skier_height, dtype=jnp.float64),
+            x=jnp.asarray(state.skier_x, dtype=jnp.float32),
+            y=jnp.asarray(self.config.skier_y, dtype=jnp.float32),
+            width=jnp.asarray(self.config.skier_width, dtype=jnp.float32),
+            height=jnp.asarray(self.config.skier_height, dtype=jnp.float32),
         )
-        flags = jnp.asarray(state.flags, dtype=jnp.float64)[..., :2]
-        trees = jnp.asarray(state.trees, dtype=jnp.float64)[..., :2]
-        rocks = jnp.asarray(state.rocks, dtype=jnp.float64)[..., :2]
 
-        return SkiingObservation(skier=skier, flags=flags, trees=trees, rocks=rocks,
-                                 score=jnp.asarray(state.score, dtype=jnp.int32))
+        # Positionsspalten aus dem State holen
+        flags_xy = jnp.asarray(state.flags, dtype=jnp.float32)[..., :2]
+        trees_xy = jnp.asarray(state.trees, dtype=jnp.float32)[..., :2]
+        rocks_xy = jnp.asarray(state.rocks, dtype=jnp.float32)[..., :2]
+
+        # In-Space clippen (gegen Ausreißer wie y=240)
+        W = jnp.float32(self.config.screen_width  - 1)
+        H = jnp.float32(self.config.screen_height - 1)
+
+        flags_xy = flags_xy.at[:, 0].set(jnp.clip(flags_xy[:, 0], 0.0, W))
+        flags_xy = flags_xy.at[:, 1].set(jnp.clip(flags_xy[:, 1], 0.0, H))
+
+        trees_xy = jnp.stack(
+            [jnp.clip(trees_xy[:, 0], 0.0, W),
+             jnp.clip(trees_xy[:, 1], 0.0, H)],
+            axis=1
+        )
+        rocks_xy = jnp.stack(
+            [jnp.clip(rocks_xy[:, 0], 0.0, W),
+             jnp.clip(rocks_xy[:, 1], 0.0, H)],
+            axis=1
+        )
+
+        return SkiingObservation(
+            skier=skier,
+            flags=flags_xy,
+            trees=trees_xy,
+            rocks=rocks_xy,
+            score=jnp.asarray(state.score, dtype=jnp.int32),
+        )
 
 
     @partial(jax.jit, static_argnums=(0,))
