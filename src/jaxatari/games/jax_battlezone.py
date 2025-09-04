@@ -120,6 +120,8 @@ class BattleZoneState(NamedTuple):
     spawn_timer: chex.Array  # Timer for enemy spawning
     prev_player_x: chex.Array  # Previous player x (for motion-based rendering)
     prev_player_y: chex.Array  # Previous player y (for motion-based rendering)
+    player_score: chex.Array   # HUD: player's score
+    player_lives: chex.Array   # HUD: player's remaining lives
 
 class BattleZoneObservation(NamedTuple):
     player_tank: Tank
@@ -531,28 +533,41 @@ def update_enemy_tanks(obstacles: Obstacle, player_tank: Tank, bullets: Bullet, 
         # Small positioning tweaks: if too close, back away a bit; if too far, close in a bit
         too_close = distance_to_player < ENEMY_OPTIMAL_DISTANCE
         too_far = distance_to_player > ENEMY_OPTIMAL_DISTANCE
-        new_x = jnp.where(jnp.logical_and(engage_condition, too_close), enemy_x - jnp.cos(new_angle) * ENEMY_MOVE_SPEED * 0.35, new_x)
-        new_y = jnp.where(jnp.logical_and(engage_condition, too_close), enemy_y - jnp.sin(new_angle) * ENEMY_MOVE_SPEED * 0.35, new_y)
-        new_x = jnp.where(jnp.logical_and(engage_condition, too_far), enemy_x + jnp.cos(new_angle) * ENEMY_MOVE_SPEED * 0.45, new_x)
-        new_y = jnp.where(jnp.logical_and(engage_condition, too_far), enemy_y + jnp.sin(new_angle) * ENEMY_MOVE_SPEED * 0.45, new_y)
+        # Use smaller multipliers to avoid large per-frame jumps
+        new_x = jnp.where(jnp.logical_and(engage_condition, too_close), enemy_x - jnp.cos(new_angle) * ENEMY_MOVE_SPEED * 0.15, new_x)
+        new_y = jnp.where(jnp.logical_and(engage_condition, too_close), enemy_y - jnp.sin(new_angle) * ENEMY_MOVE_SPEED * 0.15, new_y)
+        new_x = jnp.where(jnp.logical_and(engage_condition, too_far), enemy_x + jnp.cos(new_angle) * ENEMY_MOVE_SPEED * 0.25, new_x)
+        new_y = jnp.where(jnp.logical_and(engage_condition, too_far), enemy_y + jnp.sin(new_angle) * ENEMY_MOVE_SPEED * 0.25, new_y)
 
         # Update cooldown: if should_fire triggered set cooldown, otherwise decrement
         new_cooldown = jnp.where(should_fire, ENEMY_FIRE_COOLDOWN, jnp.maximum(0, enemy_cooldown - 1))
 
-        # Create bullet data (use new_angle so bullet points where the tank currently faces)
+        # Create bullet data. When firing, aim directly at the player's current position so bullets approach the player.
         bullet_offset = 15.0
-        bullet_x = new_x + jnp.cos(new_angle) * bullet_offset
-        bullet_y = new_y + jnp.sin(new_angle) * bullet_offset
-        bullet_vel_x = jnp.cos(new_angle) * BULLET_SPEED
-        bullet_vel_y = jnp.sin(new_angle) * BULLET_SPEED
+        # Default spawn position based on current facing (keeps visuals consistent)
+        spawn_bx = new_x + jnp.cos(new_angle) * bullet_offset
+        spawn_by = new_y + jnp.sin(new_angle) * bullet_offset
+
+        # Compute aim vector toward player (use player's current location)
+        aim_dx = player_tank.x - new_x
+        aim_dy = player_tank.y - new_y
+        aim_dist = jnp.sqrt(aim_dx * aim_dx + aim_dy * aim_dy) + 1e-6  # avoid div0
+        aim_vx = (aim_dx / aim_dist) * BULLET_SPEED
+        aim_vy = (aim_dy / aim_dist) * BULLET_SPEED
+
+        # Use aim velocity for bullets so they always head toward the player when fired.
+        bullet_x = spawn_bx
+        bullet_y = spawn_by
+        bullet_vel_x = aim_vx
+        bullet_vel_y = aim_vy
 
         # Boundary checking and normalization
         new_x = jnp.clip(new_x, BOUNDARY_MIN, BOUNDARY_MAX)
         new_y = jnp.clip(new_y, BOUNDARY_MIN, BOUNDARY_MAX)
         new_angle = jnp.arctan2(jnp.sin(new_angle), jnp.cos(new_angle))
 
-        return (new_x, new_y, new_angle, enemy_alive, new_cooldown, new_state,
-				new_target_angle, new_state_timer, should_fire, bullet_x, bullet_y, bullet_vel_x, bullet_vel_y)
+        return (new_x, new_y, new_angle, enemy_alive, new_cooldown, new_state, 
+                new_target_angle, new_state_timer, should_fire, bullet_x, bullet_y, bullet_vel_x, bullet_vel_y)
     
     # Process all enemies
     results = jax.vmap(update_single_enemy)(jnp.arange(len(obstacles.x)))
@@ -654,7 +669,7 @@ def spawn_new_enemy(obstacles: Obstacle, player_tank: Tank, step_counter: chex.A
 	# Initial enemy angle: roughly face towards the player so they move inward
 	initial_angle = jnp.arctan2(player_tank.y - spawn_y, player_tank.x - spawn_x)
 
-	# Write into the dead slot and set to HUNT so it approaches player; give short wait before shooting
+	# Write into the dead slot and set to HUNT so it will approach the player; give short wait before shooting
 	new_x = jnp.where(can_spawn, obstacles.x.at[dead_enemy_idx].set(spawn_x), obstacles.x)
 	new_y = jnp.where(can_spawn, obstacles.y.at[dead_enemy_idx].set(spawn_y), obstacles.y)
 	new_angle = jnp.where(can_spawn, obstacles.angle.at[dead_enemy_idx].set(initial_angle), obstacles.angle)
@@ -743,7 +758,9 @@ class JaxBattleZone(JaxEnvironment[BattleZoneState, BattleZoneObservation, chex.
             step_counter=jnp.array(0),
             spawn_timer=jnp.array(ENEMY_SPAWN_COOLDOWN),
             prev_player_x=player_tank.x,
-            prev_player_y=player_tank.y
+            prev_player_y=player_tank.y,
+            player_score=jnp.array(0),   # initialize score
+            player_lives=jnp.array(3)    # initialize lives (3 as example)
         )
         
         observation = self._get_observation(state)
@@ -819,7 +836,9 @@ class JaxBattleZone(JaxEnvironment[BattleZoneState, BattleZoneObservation, chex.
             step_counter=state.step_counter + 1,
             spawn_timer=new_spawn_timer,
             prev_player_x=state.player_tank.x,
-            prev_player_y=state.player_tank.y
+            prev_player_y=state.player_tank.y,
+            player_score=state.player_score,   # preserve score (logic for changing score can be added later)
+            player_lives=state.player_lives    # preserve lives (logic for decrementing on death can be added later)
         )
         
         observation = self._get_observation(new_state)
@@ -864,6 +883,16 @@ class BattleZoneRenderer:
     def __init__(self):
         self.view_distance = 400.0  # How far we can see
         self.fov = 60.0  # Field of view in degrees
+
+        # HUD bar height used for top radar container and bottom HUD
+        self.hud_bar_height = 28
+
+        # HUD font (requires pygame to be initialized before renderer creation)
+        try:
+            pygame.font.init()
+            self.hud_font = pygame.font.SysFont("monospace", 14, bold=True)
+        except Exception:
+            self.hud_font = None
 
         # Load player tank sprite
         try:
@@ -1149,10 +1178,8 @@ class BattleZoneRenderer:
     def draw_player_tank(self, screen):
         """Draw player tank using sprite or wireframe fallback."""
         base_x = WIDTH // 2
-        # Place the tank just above the bottom edge, not below the ground
-        # The tank should be visually on the ground, not at HEIGHT-10
-        # Place it a few pixels above the bottom, but below the horizon
-        base_y = HEIGHT - 28  # This value works well for a 20px tall sprite
+        # Place the tank directly above the bottom HUD bar so it is visible over the scene
+        base_y = HEIGHT - self.hud_bar_height - 10  # slight vertical offset above the bar
 
         if self.sprite_loaded:
             sprite_surface = self.numpy_to_pygame_surface(self.player_tank_sprite)
@@ -1162,127 +1189,112 @@ class BattleZoneRenderer:
             scaled_height = int(sprite_height * scale_factor)
             sprite_surface = pygame.transform.scale(sprite_surface, (scaled_width, scaled_height))
             sprite_rect = sprite_surface.get_rect()
-            # Align the bottom center of the sprite with the ground
-            sprite_rect.midbottom = (base_x, HEIGHT - 2)
+            # Align the bottom center of the sprite directly above the bottom HUD bar
+            sprite_rect.midbottom = (base_x, HEIGHT - self.hud_bar_height - 1)
             screen.blit(sprite_surface, sprite_rect)
         else:
             # Fallback to wireframe rendering
-            pygame.draw.ellipse(screen, (0, 255, 0), (base_x - 30, base_y - 10, 60, 20), 1)
-            pygame.draw.rect(screen, (0, 255, 0), (base_x - 3, base_y - 30, 6, 20), 1)
-            pygame.draw.rect(screen, (0, 255, 0), (base_x - 40, base_y - 10, 10, 20), 1)
-            pygame.draw.rect(screen, (0, 255, 0), (base_x + 30, base_y - 10, 10, 20), 1)
+            pygame.draw.ellipse(screen, WIREFRAME_COLOR, (base_x - 30, base_y - 10, 60, 20), 1)
+            pygame.draw.rect(screen, WIREFRAME_COLOR, (base_x - 3, base_y - 30, 6, 20), 1)
+            pygame.draw.rect(screen, WIREFRAME_COLOR, (base_x - 40, base_y - 10, 10, 20), 1)
+            pygame.draw.rect(screen, WIREFRAME_COLOR, (base_x + 30, base_y - 10, 10, 20), 1)
 
     def draw_radar(self, screen, state: BattleZoneState):
         """Draw the BattleZone radar matching the classic appearance with proper rotation."""
-        # Radar should cover ~20% of the screen width, and not steal space from the main game area
-        radar_radius = int(WIDTH * 0.12)  # ~20% of width as diameter
-        radar_center_x = WIDTH - radar_radius - 8  # Right margin
-        radar_center_y = radar_radius + 8          # Top margin
+        radar_radius = int(WIDTH * 0.12)
+        # Top black bar to contain radar (full width)
+        top_bar_height = radar_radius * 2 + 12
+        pygame.draw.rect(screen, (0, 0, 0), (0, 0, WIDTH, top_bar_height))
 
-        # Draw black bar background (just behind radar)
-        bar_width = radar_radius * 2 + 8
-        bar_height = radar_radius * 2 + 8
-        pygame.draw.rect( # Draw black bar background (just behind radar)
-            screen, (0, 0, 0),
-            (radar_center_x - radar_radius - 4, radar_center_y - radar_radius - 4, bar_width, bar_height)
-        )
+        # Center the radar horizontally in that top bar
+        radar_center_x = WIDTH // 2
+        radar_center_y = top_bar_height // 2
 
-        # Draw radar circle
+        # Draw radar circle at centered location
         pygame.draw.circle(screen, (0, 255, 0), (radar_center_x, radar_center_y), radar_radius, 1)
 
-        # Draw crosshairs
-        pygame.draw.line(
-            screen, (0, 80, 0),
-            (radar_center_x - radar_radius, radar_center_y),
-            (radar_center_x + radar_radius, radar_center_y), 1
-        )
-        pygame.draw.line(
-            screen, (0, 80, 0),
-            (radar_center_x, radar_center_y - radar_radius),
-            (radar_center_x, radar_center_y + radar_radius), 1
-        )
-
-        # Player is always at center
-        pygame.draw.circle(screen, (0, 255, 0), (radar_center_x, radar_center_y), 2)
-
-        # Radar sweep: white line circulating clockwise
-        sweep_speed = 0.025  # radians per frame
+        # Radar sweep (keep same visual behaviour but centered)
+        sweep_speed = 0.025
         angle = float(state.step_counter) * sweep_speed % (2 * math.pi)
         sweep_length = radar_radius - 2
         sweep_x = int(radar_center_x + sweep_length * math.cos(angle - math.pi/2))
         sweep_y = int(radar_center_y + sweep_length * math.sin(angle - math.pi/2))
         pygame.draw.line(screen, (255, 255, 255), (radar_center_x, radar_center_y), (sweep_x, sweep_y), 2)
 
-        # Radar scale: fit WORLD_SIZE into radar
+        # Radar scale as before
         scale = (radar_radius - 4) / (WORLD_SIZE / 2)
 
-        # Convert player values to floats for Python math operations
+        # Convert player values
         player_x = float(state.player_tank.x)
         player_y = float(state.player_tank.y)
         player_angle = float(state.player_tank.angle)
         
+        # Draw obstacles/bullets relative positions using centered radar origin
         for i, (ox, oy, alive) in enumerate(zip(state.obstacles.x, state.obstacles.y, state.obstacles.alive)):
-            if alive:  # Only show living enemies
-                # Convert obstacle coordinates to floats
-                ox_f = float(ox)
-                oy_f = float(oy)
-
-                # Calculate world-relative position to player
+            if alive:
+                ox_f = float(ox); oy_f = float(oy)
                 rel_x = ox_f - player_x
                 rel_y = oy_f - player_y
-
-                # Convert to view-space (same as world_to_screen_3d): view_x = right, view_y = forward
-                cos_a = math.cos(player_angle)
-                sin_a = math.sin(player_angle)
-                view_x = -rel_x * sin_a + rel_y * cos_a   # right (positive -> radar east)
-                view_y = rel_x * cos_a + rel_y * sin_a    # forward (positive -> in front of player)
-
-                # Map to radar: radar X = view_x, radar Y = -view_y so "forward" appears north (up)
+                cos_a = math.cos(player_angle); sin_a = math.sin(player_angle)
+                view_x = -rel_x * sin_a + rel_y * cos_a
+                view_y = rel_x * cos_a + rel_y * sin_a
                 radar_dx = view_x
                 radar_dy = -view_y
-
-                # Convert to radar screen coordinates
                 rx = int(radar_center_x + radar_dx * scale)
                 ry = int(radar_center_y + radar_dy * scale)
-                
-                # Only draw if inside radar circle
                 if (rx - radar_center_x) ** 2 + (ry - radar_center_y) ** 2 <= (radar_radius - 3) ** 2:
-                    # Different enemy types could have different colors
-                    enemy_color = (255, 0, 0)  # Red for standard tanks
+                    enemy_color = (255, 0, 0)
                     pygame.draw.circle(screen, enemy_color, (rx, ry), 3)
-                    
-                    # Add a small direction indicator showing enemy tank orientation relative to player
                     enemy_angle = float(state.obstacles.angle[i])
-                    # Determine orientation relative to player's view (use view-space angle)
                     rel_angle = enemy_angle - player_angle
                     indicator_length = 4
                     end_x = rx + int(indicator_length * math.cos(rel_angle))
                     end_y = ry + int(indicator_length * math.sin(rel_angle))
                     pygame.draw.line(screen, enemy_color, (rx, ry), (end_x, end_y), 1)
 
-        # Draw all bullets as dots (player white, enemy red) with proper rotation
         bullets = state.bullets
         for i in range(len(bullets.x)):
             if bullets.active[i]:
-                bx = float(bullets.x[i])
-                by = float(bullets.y[i])
-                rel_x = bx - player_x
-                rel_y = by - player_y
-
-                cos_a = math.cos(player_angle)
-                sin_a = math.sin(player_angle)
+                bx = float(bullets.x[i]); by = float(bullets.y[i])
+                rel_x = bx - player_x; rel_y = by - player_y
+                cos_a = math.cos(player_angle); sin_a = math.sin(player_angle)
                 view_x = -rel_x * sin_a + rel_y * cos_a
                 view_y = rel_x * cos_a + rel_y * sin_a
-
-                radar_dx = view_x
-                radar_dy = -view_y
-
+                radar_dx = view_x; radar_dy = -view_y
                 rx = int(radar_center_x + radar_dx * scale)
                 ry = int(radar_center_y + radar_dy * scale)
-                
                 if (rx - radar_center_x) ** 2 + (ry - radar_center_y) ** 2 <= (radar_radius - 3) ** 2:
                     color = (255, 255, 255) if bullets.owner[i] == 0 else (255, 100, 100)
                     pygame.draw.circle(screen, color, (rx, ry), 1)
+
+        # Bottom black bar for HUD (score & lives) - use shared HUD bar height
+        bottom_bar_height = self.hud_bar_height
+        pygame.draw.rect(screen, (0, 0, 0), (0, HEIGHT - bottom_bar_height, WIDTH, bottom_bar_height))
+
+        # Render score (centered) and lives (icons left of center)
+        try:
+            score_val = int(float(state.player_score))
+        except Exception:
+            score_val = 0
+        try:
+            lives_val = int(float(state.player_lives))
+        except Exception:
+            lives_val = 0
+
+        # Draw score centered
+        if self.hud_font is not None:
+            score_surf = self.hud_font.render(f"{score_val:03d}", True, WIREFRAME_COLOR)
+            score_rect = score_surf.get_rect(center=(WIDTH // 2, HEIGHT - bottom_bar_height // 2))
+            screen.blit(score_surf, score_rect)
+
+        # Draw simple life icons (small green rectangles) left of the score
+        life_start_x = WIDTH // 2 - 60
+        life_y = HEIGHT - bottom_bar_height // 2
+        life_spacing = 14
+        for i in range(max(0, lives_val)):
+            lx = int(life_start_x + i * life_spacing)
+            ly = int(life_y - 6)
+            pygame.draw.rect(screen, WIREFRAME_COLOR, (lx, ly, 10, 12), 1)  # outline tank icon
 
     def render(self, state: BattleZoneState, screen):
         """Render the 3D wireframe view with dynamic ground and moving sky/mountains."""
