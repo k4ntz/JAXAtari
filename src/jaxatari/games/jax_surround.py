@@ -65,6 +65,11 @@ class SurroundConstants(NamedTuple):
     # Rough logic rate control when caller steps at ~60 FPS
     # Move only every N calls to step (e.g., 60/4 = 15 for ~4 Hz)
     MOVE_EVERY_N_STEPS: int = 15
+    # --- Speed-up schedule (game accelerates over time) ---
+    # Every SPEEDUP_STEPS logic ticks, reduce the effective MOVE_EVERY by SPEEDUP_DELTA, but not below MIN_MOVE_EVERY.
+    SPEEDUP_STEPS: int = 200          # how many logic ticks until next speed bump
+    SPEEDUP_DELTA: int = 1            # how much to reduce the period each bump
+    MIN_MOVE_EVERY_N_STEPS: int = 4   # lower bound (higher speed)
 
 
 class SurroundState(NamedTuple):
@@ -296,30 +301,74 @@ class JaxSurround(
         )
         return jnp.logical_or(out, jnp.logical_or(hit_border, hit_trail))
 
-    def _opponent_policy(self, state) -> jnp.ndarray:
-        """Wählt eine Richtung für P1: bevorzugt 'geradeaus', sonst links, dann rechts."""
-        curr = state.dir0.astype(jnp.int32)
+    def _open_steps_ahead(self, state, pos_xy: jnp.ndarray, action_dir: jnp.ndarray, k: int = 3) -> jnp.ndarray:
+        """Lightweight Heuristik: zähle freie Felder in Richtung action_dir bis max. k."""
+        off = self._dir_offset(action_dir)  # (2,)
+        def step_once(carry, _):
+            p = carry
+            nxt = p + off
+            x, y = nxt[0], nxt[1]
+            out = jnp.logical_or(
+                jnp.logical_or(x < 0, x >= self.consts.GRID_WIDTH),
+                jnp.logical_or(y < 0, y >= self.consts.GRID_HEIGHT),
+            )
+            # belegt?
+            occ = jax.lax.cond(
+                out, lambda: True, lambda: (state.border[x, y] | (state.trail[x, y] != 0))
+            )
+            nxt_ok = jnp.logical_not(jnp.logical_or(out, occ))
+            # Wenn blockiert, bleibe stehen (keine weiteren Felder)
+            nxt_pos = jax.lax.select(nxt_ok, nxt, p)
+            return nxt_pos, nxt_ok.astype(jnp.int32)
+        _, seen = jax.lax.scan(step_once, pos_xy, xs=None, length=k)
+        return jnp.sum(seen).astype(jnp.int32)
 
+    def _neighbor_free_count(self, state, pos_xy: jnp.ndarray) -> jnp.ndarray:
+        """Zähle freie Nachbarzellen (UP/RIGHT/LEFT/DOWN)."""
+        dirs = jnp.array([Action.UP, Action.RIGHT, Action.LEFT, Action.DOWN], dtype=jnp.int32)
+        def free(d):
+            return jnp.logical_not(self._is_blocked(state, pos_xy, d)).astype(jnp.int32)
+        return jnp.sum(jax.vmap(free)(dirs))
+    
+    def _opponent_policy(self, state) -> jnp.ndarray:
+        """Heuristik: keep > left > right, aber mit Scoring:
+        - blockiert = sehr schlecht
+        - mehr freie Schritte voraus (k=3) = besser
+        - mehr freie Nachbarn nach dem Zug = besser
+        - kleine Präferenz für 'geradeaus' (ruhiges Fahren)"""
+        curr  = state.dir0.astype(jnp.int32)
         keep  = curr
         left  = self._dir_left(curr)
         right = self._dir_right(curr)
-
         cand_dirs = jnp.stack([keep, left, right], axis=0)  # (3,)
-        # Für jede Kandidatenrichtung prüfen, ob blockiert
-        def chk(d):
-            return self._is_blocked(state, state.pos0, d)
-        blocked = jax.vmap(chk)(cand_dirs)                  # (3,) bool
 
-        free_mask = jnp.logical_not(blocked).astype(jnp.int32)
-        # Index des ersten True in free_mask bestimmen:
-        # argmax liefert das erste Maximum; falls alles 0 ist → 0, das behandeln wir separat
-        idx_first = jnp.argmax(free_mask)
-        any_free = jnp.any(free_mask == 1)
-
-        chosen = cand_dirs[idx_first]
-        # Wenn keiner frei, NOOP
-        noop = jnp.array(int(Action.NOOP), dtype=jnp.int32)
-        return jax.lax.select(any_free, chosen, noop)
+        def score_dir(d):
+            blocked = self._is_blocked(state, state.pos0, d)
+            # Position nach einer Schritt- hypothetisch
+            nxt = state.pos0 + self._dir_offset(d)
+            # Feature 1: freie Schritte voraus
+            open_ahead = self._open_steps_ahead(state, state.pos0, d, k=3)
+            # Feature 2: lokale Bewegungsfreiheit am Ziel
+            local_free = self._neighbor_free_count(state, nxt)
+            # Basis-Score
+            base = 0
+            base += 10 * open_ahead
+            base += 2 * local_free
+            # leichte Präferenz geradeaus
+            base += jnp.where(d == keep, 1, 0)
+            # harter Penalty wenn blockiert
+            return jnp.where(blocked, -1_000_000, base)
+        
+        scores = jax.vmap(score_dir)(cand_dirs)  # (3,)
+        # Bei Punktegleichheit Reihenfolge: keep, left, right
+        # -> wir fügen winzige Tiebreaker abnehmend hinzu
+        tie = jnp.array([3e-4, 2e-4, 1e-4], dtype=jnp.float32)
+        scores = scores.astype(jnp.float32) + tie
+        idx = jnp.argmax(scores)
+        choice = cand_dirs[idx]
+        # Falls wirklich alles blockiert -> NOOP
+        all_blocked = jnp.all(scores < -999999)
+        return jax.lax.select(all_blocked, jnp.array(int(Action.NOOP), jnp.int32), choice)
 
 
     def reset(
@@ -402,10 +451,14 @@ class JaxSurround(
         # If a reset was pending (we showed the scored frame), perform it now.
         state = jax.lax.cond(state.pending_reset, lambda: _round_reset(state), lambda: state)
 
-        # --- Frame skip / logic gating ---
-        # Only move every N steps to emulate a logic fps when the caller runs at high fps.
+        # --- Frame skip / logic gating (+ dynamic speed-up) ---
+        # Effective period decreases over time according to SPEEDUP_* constants.
         substep = state.substep + 1
-        do_logic = (substep % jnp.maximum(self.consts.MOVE_EVERY_N_STEPS, 1)) == 0
+        bumps = (state.time // jnp.maximum(self.consts.SPEEDUP_STEPS, 1)) * self.consts.SPEEDUP_DELTA
+        eff_period = self.consts.MOVE_EVERY_N_STEPS - bumps
+        eff_period = jnp.maximum(self.consts.MIN_MOVE_EVERY_N_STEPS, eff_period)
+        eff_period = jnp.maximum(eff_period, 1)
+        do_logic = (substep % eff_period) == 0
 
         # Parse action(s)
         actions = jnp.asarray(actions, dtype=jnp.int32)
