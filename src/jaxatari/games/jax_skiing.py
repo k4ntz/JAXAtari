@@ -101,8 +101,9 @@ class JaxSkiing(JaxEnvironment[GameState, SkiingObservation, SkiingInfo, SkiingC
     def observation_space(self):
         c = self.config
 
+        # --- CHANGED: make helper actually produce float64 tensors (not float32)
         def f64(x):
-            return jnp.array(x, dtype=jnp.float32)
+            return jnp.array(x, dtype=jnp.float64)
 
         skier_space = spaces.Dict(collections.OrderedDict({
             "x":      spaces.Box(low=f64(0.0),               high=f64(float(c.screen_width)),  shape=(), dtype=jnp.float64),
@@ -134,15 +135,17 @@ class JaxSkiing(JaxEnvironment[GameState, SkiingObservation, SkiingInfo, SkiingC
         return spaces.Box(low=0, high=255, shape=(c.screen_height, c.screen_width, 3), dtype=jnp.uint8)
 
     def obs_to_flat_array(self, obs: SkiingObservation) -> jnp.ndarray:
+        # --- CHANGED: return flattened float64
         skier_vec  = jnp.array(
             [obs.skier.x, obs.skier.y, obs.skier.width, obs.skier.height],
-            dtype=jnp.float32
+            dtype=jnp.float64
         ).reshape(-1)
     
-        flags_flat = jnp.asarray(obs.flags, dtype=jnp.float32).reshape(-1)
-        trees_flat = jnp.asarray(obs.trees, dtype=jnp.float32).reshape(-1)
-        rocks_flat = jnp.asarray(obs.rocks, dtype=jnp.float32).reshape(-1)
-        score_flat = jnp.asarray(obs.score, dtype=jnp.float32).reshape(-1)
+        flags_flat = jnp.asarray(obs.flags, dtype=jnp.float64).reshape(-1)
+        trees_flat = jnp.asarray(obs.trees, dtype=jnp.float64).reshape(-1)
+        rocks_flat = jnp.asarray(obs.rocks, dtype=jnp.float64).reshape(-1)
+        # Score is int32; keep as float64 in flat vector for consistency
+        score_flat = jnp.asarray(obs.score, dtype=jnp.float64).reshape(-1)
     
         return jnp.concatenate([skier_vec, flags_flat, trees_flat, rocks_flat, score_flat], axis=0)
 
@@ -525,36 +528,43 @@ class JaxSkiing(JaxEnvironment[GameState, SkiingObservation, SkiingInfo, SkiingC
 
     @partial(jax.jit, static_argnums=(0,))
     def _get_observation(self, state: GameState):
-        # Skier (float32)
+        # --- CHANGED: cast observation leaves to float64 (score stays int32)
+
+        # Skier (float64 now)
         skier = EntityPosition(
-            x=jnp.asarray(state.skier_x, dtype=jnp.float32),
-            y=jnp.asarray(self.config.skier_y, dtype=jnp.float32),
-            width=jnp.asarray(self.config.skier_width, dtype=jnp.float32),
-            height=jnp.asarray(self.config.skier_height, dtype=jnp.float32),
+            x=jnp.asarray(state.skier_x, dtype=jnp.float64),           # CHANGED
+            y=jnp.asarray(self.config.skier_y, dtype=jnp.float64),     # CHANGED
+            width=jnp.asarray(self.config.skier_width, dtype=jnp.float64),   # CHANGED
+            height=jnp.asarray(self.config.skier_height, dtype=jnp.float64), # CHANGED
         )
 
         # Positionsspalten aus dem State holen
-        flags_xy = jnp.asarray(state.flags, dtype=jnp.float32)[..., :2]
-        trees_xy = jnp.asarray(state.trees, dtype=jnp.float32)[..., :2]
-        rocks_xy = jnp.asarray(state.rocks, dtype=jnp.float32)[..., :2]
+        flags_xy_f32 = jnp.asarray(state.flags, dtype=jnp.float32)[..., :2]
+        trees_xy_f32 = jnp.asarray(state.trees, dtype=jnp.float32)[..., :2]
+        rocks_xy_f32 = jnp.asarray(state.rocks, dtype=jnp.float32)[..., :2]
 
         # In-Space clippen (gegen Ausreißer wie y=240)
         W = jnp.float32(self.config.screen_width  - 1)
         H = jnp.float32(self.config.screen_height - 1)
 
-        flags_xy = flags_xy.at[:, 0].set(jnp.clip(flags_xy[:, 0], 0.0, W))
-        flags_xy = flags_xy.at[:, 1].set(jnp.clip(flags_xy[:, 1], 0.0, H))
+        flags_xy_f32 = flags_xy_f32.at[:, 0].set(jnp.clip(flags_xy_f32[:, 0], 0.0, W))
+        flags_xy_f32 = flags_xy_f32.at[:, 1].set(jnp.clip(flags_xy_f32[:, 1], 0.0, H))
 
-        trees_xy = jnp.stack(
-            [jnp.clip(trees_xy[:, 0], 0.0, W),
-             jnp.clip(trees_xy[:, 1], 0.0, H)],
+        trees_xy_f32 = jnp.stack(
+            [jnp.clip(trees_xy_f32[:, 0], 0.0, W),
+             jnp.clip(trees_xy_f32[:, 1], 0.0, H)],
             axis=1
         )
-        rocks_xy = jnp.stack(
-            [jnp.clip(rocks_xy[:, 0], 0.0, W),
-             jnp.clip(rocks_xy[:, 1], 0.0, H)],
+        rocks_xy_f32 = jnp.stack(
+            [jnp.clip(rocks_xy_f32[:, 0], 0.0, W),
+             jnp.clip(rocks_xy_f32[:, 1], 0.0, H)],
             axis=1
         )
+
+        # --- CHANGED: upcast clipped positions to float64 for the observation
+        flags_xy = jnp.asarray(flags_xy_f32, dtype=jnp.float64)  # CHANGED
+        trees_xy = jnp.asarray(trees_xy_f32, dtype=jnp.float64)  # CHANGED
+        rocks_xy = jnp.asarray(rocks_xy_f32, dtype=jnp.float64)  # CHANGED
 
         return SkiingObservation(
             skier=skier,
