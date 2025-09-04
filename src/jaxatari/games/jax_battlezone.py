@@ -40,7 +40,16 @@ WIDTH = 160
 HEIGHT = 210
 MAX_BULLETS = 16       # Total bullets in the pool
 PLAYER_BULLET_LIMIT = 8  # Reserve first 8 for the player
+ENEMY_BULLET_LIMIT = 8   # Reserve last 8 for enemies
 MAX_OBSTACLES = 16
+
+# Enemy AI constants
+ENEMY_DETECTION_RANGE = 400.0
+ENEMY_MOVE_SPEED = 0.2
+ENEMY_TURN_SPEED = 0.01
+ENEMY_FIRE_COOLDOWN = 120  # frames between shots
+ENEMY_FIRE_RANGE = 300.0
+ENEMY_STOP_DISTANCE = 80.0  # Stop at this distance to aim and fire
 
 
 # Tank movement constants
@@ -82,6 +91,8 @@ class Obstacle(NamedTuple):
     y: chex.Array
     obstacle_type: chex.Array  # 0: enemy tank, 1: other obstacles
     angle: chex.Array  # Add tank facing direction
+    alive: chex.Array  # Add alive status for enemy tanks
+    fire_cooldown: chex.Array  # Cooldown timer for enemy firing
 
 class BattleZoneState(NamedTuple):
     player_tank: Tank
@@ -251,15 +262,16 @@ def check_bullet_obstacle_collisions(bullets: Bullet, obstacles: Obstacle) -> Tu
     
     obstacle_x = obstacles.x[None, :]  # Shape: (1, num_obstacles)
     obstacle_y = obstacles.y[None, :]  # Shape: (1, num_obstacles)
+    obstacle_alive = obstacles.alive[None, :]  # Add alive check
     
     # Calculate distances between all bullet-obstacle pairs
     dx = bullet_x - obstacle_x  # Shape: (num_bullets, num_obstacles)
     dy = bullet_y - obstacle_y  # Shape: (num_bullets, num_obstacles)
     distances = jnp.sqrt(dx * dx + dy * dy)
     
-    # Check collisions (only for active bullets)
+    # Check collisions (only for active bullets and alive obstacles)
     collisions = jnp.logical_and(
-        bullet_active,  # Only active bullets can collide
+        jnp.logical_and(bullet_active, obstacle_alive),  # Only active bullets and alive obstacles
         distances < collision_radius
     )
     
@@ -276,10 +288,8 @@ def check_bullet_obstacle_collisions(bullets: Bullet, obstacles: Obstacle) -> Tu
         bullets.active
     )
     
-    # Update obstacles - move collided obstacles far away
-    far_away = BOUNDARY_MAX + 1000.0
-    new_obstacle_x = jnp.where(obstacles_to_remove, far_away, obstacles.x)
-    new_obstacle_y = jnp.where(obstacles_to_remove, far_away, obstacles.y)
+    # Update obstacles - set collided obstacles to not alive
+    new_obstacle_alive = jnp.where(obstacles_to_remove, 0, obstacles.alive)
     
     # Create updated structures
     updated_bullets = Bullet(
@@ -294,10 +304,12 @@ def check_bullet_obstacle_collisions(bullets: Bullet, obstacles: Obstacle) -> Tu
     )
     
     updated_obstacles = Obstacle(
-        x=new_obstacle_x,
-        y=new_obstacle_y,
+        x=obstacles.x,
+        y=obstacles.y,
         obstacle_type=obstacles.obstacle_type,
-        angle=obstacles.angle  # Add the missing angle field
+        angle=obstacles.angle,
+        alive=new_obstacle_alive,
+        fire_cooldown=obstacles.fire_cooldown
     )
     
     return updated_bullets, updated_obstacles
@@ -362,6 +374,189 @@ def update_bullets(bullets: Bullet) -> Bullet:
         owner=bullets.owner
     )
 
+@jax.jit
+def check_player_hit(player_tank: Tank, bullets: Bullet) -> Tank:
+    """Check if player is hit by enemy bullets."""
+    
+    # Check collision with enemy bullets
+    enemy_bullets = jnp.logical_and(bullets.active, bullets.owner > 0)
+    
+    # Calculate distances to player
+    dx = bullets.x - player_tank.x
+    dy = bullets.y - player_tank.y
+    distances = jnp.sqrt(dx * dx + dy * dy)
+    
+    # Check for hits (collision radius)
+    collision_radius = 10.0
+    hits = jnp.logical_and(enemy_bullets, distances < collision_radius)
+    
+    # If any hit, player dies
+    player_hit = jnp.any(hits)
+    new_alive = jnp.where(player_hit, 0, player_tank.alive)
+    
+    return Tank(
+        x=player_tank.x,
+        y=player_tank.y,
+        angle=player_tank.angle,
+        alive=new_alive
+    )
+
+@jax.jit
+def update_enemy_tanks(obstacles: Obstacle, player_tank: Tank, bullets: Bullet, step_counter: chex.Array) -> Tuple[Obstacle, Bullet]:
+    """Update enemy tank AI: movement, aiming, and shooting with BattleZone-style behavior."""
+    
+    def update_single_enemy(i):
+        enemy_x = obstacles.x[i]
+        enemy_y = obstacles.y[i]
+        enemy_angle = obstacles.angle[i]
+        enemy_alive = obstacles.alive[i]
+        enemy_cooldown = obstacles.fire_cooldown[i]
+        is_enemy_tank = obstacles.obstacle_type[i] == 0
+        
+        # Check if this enemy should be processed (alive and is enemy tank)
+        should_process = jnp.logical_and(enemy_alive, is_enemy_tank)
+        
+        # Calculate distance to player
+        dx = player_tank.x - enemy_x
+        dy = player_tank.y - enemy_y
+        distance_to_player = jnp.sqrt(dx * dx + dy * dy)
+        
+        # Calculate angle to player
+        angle_to_player = jnp.arctan2(dy, dx)
+        
+        # Initialize return values
+        new_x = enemy_x
+        new_y = enemy_y
+        new_angle = enemy_angle
+        should_fire = False
+        bullet_x = 0.0
+        bullet_y = 0.0
+        bullet_vel_x = 0.0
+        bullet_vel_y = 0.0
+        
+        # Enemy AI behavior - only if should_process is True
+        in_range = distance_to_player < ENEMY_DETECTION_RANGE
+        should_act = jnp.logical_and(should_process, in_range)
+        
+        # Calculate angle difference
+        angle_diff = angle_to_player - enemy_angle
+        # Normalize angle difference to [-π, π]
+        angle_diff = jnp.arctan2(jnp.sin(angle_diff), jnp.cos(angle_diff))
+        
+        # BattleZone-style behavior: Turn towards player more gradually
+        turn_threshold = 0.05
+        should_turn_left = jnp.logical_and(should_act, angle_diff > turn_threshold)
+        should_turn_right = jnp.logical_and(should_act, angle_diff < -turn_threshold)
+        
+        new_angle = jnp.where(should_turn_left, enemy_angle + ENEMY_TURN_SPEED, new_angle)
+        new_angle = jnp.where(should_turn_right, enemy_angle - ENEMY_TURN_SPEED, new_angle)
+        
+        # Movement behavior: Stop at optimal firing distance, move closer if too far
+        should_move_closer = jnp.logical_and(should_act, distance_to_player > ENEMY_STOP_DISTANCE)
+        should_retreat = jnp.logical_and(should_act, distance_to_player < ENEMY_STOP_DISTANCE * 0.7)
+        
+        # Move towards player if too far
+        new_x = jnp.where(should_move_closer, enemy_x + jnp.cos(new_angle) * ENEMY_MOVE_SPEED, new_x)
+        new_y = jnp.where(should_move_closer, enemy_y + jnp.sin(new_angle) * ENEMY_MOVE_SPEED, new_y)
+        
+        # Retreat if too close
+        new_x = jnp.where(should_retreat, enemy_x - jnp.cos(new_angle) * ENEMY_MOVE_SPEED * 0.5, new_x)
+        new_y = jnp.where(should_retreat, enemy_y - jnp.sin(new_angle) * ENEMY_MOVE_SPEED * 0.5, new_y)
+        
+        # Fire at player if aimed correctly and in range (more precise aiming)
+        is_aimed = jnp.abs(angle_diff) < 0.15
+        can_fire = enemy_cooldown <= 0
+        in_fire_range = jnp.logical_and(
+            distance_to_player < ENEMY_FIRE_RANGE,
+            distance_to_player > 30.0  # Don't fire if too close
+        )
+        
+        should_fire = jnp.logical_and(
+            should_act,
+            jnp.logical_and(jnp.logical_and(is_aimed, can_fire), in_fire_range)
+        )
+        
+        # Create bullet data (will only be used if should_fire is True)
+        bullet_offset = 15.0
+        bullet_x = new_x + jnp.cos(new_angle) * bullet_offset
+        bullet_y = new_y + jnp.sin(new_angle) * bullet_offset
+        bullet_vel_x = jnp.cos(new_angle) * BULLET_SPEED
+        bullet_vel_y = jnp.sin(new_angle) * BULLET_SPEED
+        
+        # Boundary checking
+        new_x = jnp.clip(new_x, BOUNDARY_MIN, BOUNDARY_MAX)
+        new_y = jnp.clip(new_y, BOUNDARY_MIN, BOUNDARY_MAX)
+        
+        # Normalize angle
+        new_angle = jnp.arctan2(jnp.sin(new_angle), jnp.cos(new_angle))
+        
+        # Update cooldown
+        new_cooldown = jnp.where(should_fire, ENEMY_FIRE_COOLDOWN, jnp.maximum(0, enemy_cooldown - 1))
+        
+        return new_x, new_y, new_angle, enemy_alive, new_cooldown, should_fire, bullet_x, bullet_y, bullet_vel_x, bullet_vel_y
+    
+    # Process all enemies
+    results = jax.vmap(update_single_enemy)(jnp.arange(len(obstacles.x)))
+    new_x, new_y, new_angle, new_alive, new_cooldown, fire_flags, bullet_xs, bullet_ys, bullet_vel_xs, bullet_vel_ys = results
+    
+    # Update obstacles
+    updated_obstacles = Obstacle(
+        x=new_x,
+        y=new_y,
+        obstacle_type=obstacles.obstacle_type,
+        angle=new_angle,
+        alive=new_alive,
+        fire_cooldown=new_cooldown
+    )
+    
+    # Handle enemy bullets using JAX-compatible operations
+    updated_bullets = bullets
+    enemy_bullet_start = PLAYER_BULLET_LIMIT
+    
+    # Use a more JAX-friendly approach for bullet creation
+    def add_enemy_bullets(bullets_state):
+        # Find available slots for enemy bullets
+        enemy_slots = jnp.arange(enemy_bullet_start, MAX_BULLETS)
+        available_slots = jnp.logical_not(bullets_state.active[enemy_bullet_start:MAX_BULLETS])
+        
+        # For each enemy that wants to fire, try to add a bullet
+        for i in range(len(fire_flags)):
+            # Find first available slot for this enemy
+            slot_mask = jnp.logical_and(fire_flags[i], available_slots)
+            
+            # If any slot is available, use the first one
+            slot_available = jnp.any(slot_mask)
+            first_slot_idx = jnp.argmax(slot_mask)
+            actual_slot = enemy_bullet_start + first_slot_idx
+            
+            # Update the bullets array conditionally
+            bullets_state = jax.lax.cond(
+                slot_available,
+                lambda b: Bullet(
+                    x=b.x.at[actual_slot].set(bullet_xs[i]),
+                    y=b.y.at[actual_slot].set(bullet_ys[i]),
+                    z=b.z.at[actual_slot].set(3.0),
+                    vel_x=b.vel_x.at[actual_slot].set(bullet_vel_xs[i]),
+                    vel_y=b.vel_y.at[actual_slot].set(bullet_vel_ys[i]),
+                    active=b.active.at[actual_slot].set(1),
+                    lifetime=b.lifetime.at[actual_slot].set(BULLET_LIFETIME),
+                    owner=b.owner.at[actual_slot].set(i + 1)
+                ),
+                lambda b: b,
+                bullets_state
+            )
+            
+            # Mark this slot as used
+            available_slots = available_slots.at[first_slot_idx].set(
+                jnp.logical_and(available_slots[first_slot_idx], jnp.logical_not(slot_available))
+            )
+        
+        return bullets_state
+    
+    updated_bullets = add_enemy_bullets(updated_bullets)
+    
+    return updated_obstacles, updated_bullets
+
 class JaxBattleZone(JaxEnvironment[BattleZoneState, BattleZoneObservation, chex.Array, BattleZoneInfo]):
     def __init__(self, reward_funcs: list[callable] = None):
         super().__init__()
@@ -402,12 +597,16 @@ class JaxBattleZone(JaxEnvironment[BattleZoneState, BattleZoneObservation, chex.
         # Random initial angles for enemy tanks
         enemy_angles = jnp.array([0.0, math.pi/2, math.pi, -math.pi/2, 0.0, math.pi/2, math.pi, -math.pi/2,
                                  0.0, math.pi/2, math.pi, -math.pi/2, 0.0, math.pi/2, math.pi, -math.pi/2])
+        enemy_alive = jnp.ones(16, dtype=jnp.int32)  # All alive initially
+        enemy_fire_cooldown = jnp.zeros(16)  # No initial cooldown
         
         obstacles = Obstacle(
             x=enemy_positions_x,
             y=enemy_positions_y,
             obstacle_type=enemy_types,
-            angle=enemy_angles
+            angle=enemy_angles,
+            alive=enemy_alive,
+            fire_cooldown=enemy_fire_cooldown
         )
         
         state = BattleZoneState(
@@ -431,17 +630,12 @@ class JaxBattleZone(JaxEnvironment[BattleZoneState, BattleZoneObservation, chex.
         
         # Handle player firing
         fire_bullet = should_fire(action)
-
-        # Reserve only the first PLAYER_BULLET_LIMIT slots for the player
         inactive_player_slots = jnp.logical_not(state.bullets.active[:PLAYER_BULLET_LIMIT])
-        inactive_bullet_idx = jnp.argmax(inactive_player_slots)  # Find first inactive slot
+        inactive_bullet_idx = jnp.argmax(inactive_player_slots)
         can_fire = inactive_player_slots[inactive_bullet_idx]
-
         
-        # Create new bullet if firing and slot available
         new_bullet = create_bullet(new_player_tank, jnp.array(0))
         
-        # Update bullets array with new player bullet
         updated_bullets = jax.lax.cond(
             jnp.logical_and(fire_bullet, can_fire),
             lambda b: Bullet(
@@ -461,13 +655,21 @@ class JaxBattleZone(JaxEnvironment[BattleZoneState, BattleZoneObservation, chex.
         # Update all bullet positions
         updated_bullets = update_bullets(updated_bullets)
         
-        # Check for bullet-obstacle collisions (ADD THIS HERE)
-        updated_bullets, updated_obstacles = check_bullet_obstacle_collisions(updated_bullets, state.obstacles)
+        # Update enemy tanks AI
+        updated_obstacles, updated_bullets = update_enemy_tanks(
+            state.obstacles, new_player_tank, updated_bullets, state.step_counter
+        )
+        
+        # Check for bullet-obstacle collisions
+        updated_bullets, updated_obstacles = check_bullet_obstacle_collisions(updated_bullets, updated_obstacles)
+        
+        # Check if player is hit by enemy bullets
+        new_player_tank = check_player_hit(new_player_tank, updated_bullets)
         
         new_state = BattleZoneState(
             player_tank=new_player_tank,
             bullets=updated_bullets,
-            obstacles=updated_obstacles,  # Use updated obstacles (not state.obstacles)
+            obstacles=updated_obstacles,
             step_counter=state.step_counter + 1
         )
         
@@ -499,7 +701,8 @@ class JaxBattleZone(JaxEnvironment[BattleZoneState, BattleZoneObservation, chex.
 
     @partial(jax.jit, static_argnums=(0,))
     def _get_done(self, state: BattleZoneState) -> bool:
-        return False  # Game never ends
+        # Game ends if player dies
+        return state.player_tank.alive == 0
 
     @partial(jax.jit, static_argnums=(0,))
     def _get_info(self, state: BattleZoneState, all_rewards: chex.Array) -> BattleZoneInfo:
@@ -530,17 +733,15 @@ class BattleZoneRenderer:
             self.sprite_loaded = False
 
     def draw_player_bullet(self, screen, state: BattleZoneState):
-        """Draw the player's bullet as a moving line toward the horizon."""
+        """Draw all bullets (player and enemy) as moving lines."""
         bullets = state.bullets
-        player_bullets = jnp.logical_and(bullets.active, bullets.owner == 0)
-        if not jnp.any(player_bullets):
-            return
-
-        # Draw all active player bullets
-        for i in range(PLAYER_BULLET_LIMIT):
-            if bullets.active[i] and bullets.owner[i] == 0:
+        
+        # Draw all active bullets
+        for i in range(MAX_BULLETS):
+            if bullets.active[i]:
                 bullet_x = bullets.x[i]
                 bullet_y = bullets.y[i]
+                owner = bullets.owner[i]
 
                 # Transform bullet position to screen
                 screen_x, screen_y, distance, visible = self.world_to_screen_3d(
@@ -551,10 +752,11 @@ class BattleZoneRenderer:
                 )
 
                 if visible and 0 <= screen_x < WIDTH and 0 <= screen_y < HEIGHT:
-                    # Draw the bullet as a short thick vertical line
+                    # Different colors for player vs enemy bullets
+                    color = BULLET_COLOR if owner == 0 else (255, 100, 100)  # Red for enemy bullets
                     pygame.draw.line(
                         screen,
-                        BULLET_COLOR,
+                        color,
                         (screen_x, screen_y - 3),
                         (screen_x, screen_y + 3),
                         3
@@ -645,93 +847,126 @@ class BattleZoneRenderer:
             return 0, 0, 0, False  # Behind player or too close
 
     def draw_enemy_tank_frontal(self, screen, x, y, scale, color):
-        """Draw frontal view of enemy tank (tank facing toward/away from player)."""
+        """Draw frontal view of enemy tank matching BattleZone style."""
         try:
-            # Tank body (wider rectangle for frontal view)
-            body_width = int(scale * 1.2)
-            body_height = int(scale * 0.8)
+            # Tank body - more angular and authentic BattleZone style
+            body_width = int(scale * 1.0)
+            body_height = int(scale * 0.7)
             
-            # Main body
-            pygame.draw.rect(screen, color, 
-                           (x - body_width//2, y - body_height//2, body_width, body_height), 1)
+            # Main body - trapezoidal shape
+            body_points = [
+                (x - body_width//2, y + body_height//2),      # bottom-left
+                (x + body_width//2, y + body_height//2),      # bottom-right
+                (x + body_width//3, y - body_height//2),      # top-right
+                (x - body_width//3, y - body_height//2),      # top-left
+            ]
+            pygame.draw.polygon(screen, color, body_points, 1)
             
-            # Turret (centered circle/rectangle)
-            turret_size = scale // 2
+            # Turret - small rectangular turret
+            turret_width = scale // 3
+            turret_height = scale // 3
             pygame.draw.rect(screen, color,
-                           (x - turret_size//2, y - turret_size//2, turret_size, turret_size), 1)
+                           (x - turret_width//2, y - turret_height//2, turret_width, turret_height), 1)
             
-            # Cannon (short line pointing toward player)
-            cannon_length = scale // 3
-            pygame.draw.line(screen, color, (x, y), (x, y + cannon_length), 2)
+            # Cannon - thin line extending forward
+            cannon_length = scale // 2
+            pygame.draw.line(screen, color, (x, y), (x, y + cannon_length), 1)
             
-            # Tracks on sides
-            track_width = 3
-            pygame.draw.rect(screen, color,
-                           (x - body_width//2 - track_width, y - body_height//2, track_width, body_height), 1)
-            pygame.draw.rect(screen, color,
-                           (x + body_width//2, y - body_height//2, track_width, body_height), 1)
+            # Tank treads/tracks - vertical lines on sides
+            track_height = body_height
+            for i in range(3):
+                track_x_left = x - body_width//2 - 2
+                track_x_right = x + body_width//2 + 2
+                track_y = y - track_height//2 + i * (track_height//3)
+                pygame.draw.line(screen, color, (track_x_left, track_y), (track_x_left, track_y + 3), 1)
+                pygame.draw.line(screen, color, (track_x_right, track_y), (track_x_right, track_y + 3), 1)
+            
         except:
             pass
 
     def draw_enemy_tank_profile_left(self, screen, x, y, scale, color):
-        """Draw left profile of enemy tank (tank facing left relative to player)."""
+        """Draw left profile of enemy tank matching BattleZone style."""
         try:
-            # Tank body (longer rectangle for side view)
-            body_width = int(scale * 1.5)
+            # Tank body - elongated hexagonal shape
+            body_width = int(scale * 1.8)
             body_height = int(scale * 0.6)
             
-            # Main body
-            pygame.draw.rect(screen, color,
-                           (x - body_width//2, y - body_height//2, body_width, body_height), 1)
+            # Main body points for side view
+            body_points = [
+                (x - body_width//2, y + body_height//3),      # rear-bottom
+                (x - body_width//3, y + body_height//2),      # rear-bottom-slope
+                (x + body_width//3, y + body_height//2),      # front-bottom-slope
+                (x + body_width//2, y + body_height//3),      # front-bottom
+                (x + body_width//2 - 2, y - body_height//2),  # front-top
+                (x - body_width//2 + 2, y - body_height//2),  # rear-top
+            ]
+            pygame.draw.polygon(screen, color, body_points, 1)
             
-            # Turret (offset to show 3D perspective)
+            # Turret - offset rectangular turret
             turret_width = scale // 2
-            turret_height = scale // 3
-            turret_x = x - scale // 4
+            turret_height = scale // 4
+            turret_x = x - scale // 6
             pygame.draw.rect(screen, color,
                            (turret_x - turret_width//2, y - turret_height//2, turret_width, turret_height), 1)
             
             # Cannon pointing left
-            cannon_length = scale
+            cannon_length = int(scale * 1.2)
             pygame.draw.line(screen, color, (turret_x, y), (turret_x - cannon_length, y), 2)
             
-            # Track details (visible from side)
-            track_y1 = y + body_height//2
-            track_y2 = y + body_height//2 + 3
-            for i in range(0, body_width, 4):
-                track_x = x - body_width//2 + i
-                pygame.draw.line(screen, color, (track_x, track_y1), (track_x, track_y2), 1)
+            # Track wheels/details
+            wheel_y = y + body_height//2 + 2
+            for i in range(0, body_width - 4, 6):
+                wheel_x = x - body_width//2 + 2 + i
+                pygame.draw.circle(screen, color, (wheel_x, wheel_y), 2, 1)
+            
+            # Track line
+            pygame.draw.line(screen, color, 
+                           (x - body_width//2, wheel_y), 
+                           (x + body_width//2, wheel_y), 1)
+            
         except:
             pass
 
     def draw_enemy_tank_profile_right(self, screen, x, y, scale, color):
-        """Draw right profile of enemy tank (tank facing right relative to player)."""
+        """Draw right profile of enemy tank matching BattleZone style."""
         try:
-            # Tank body (longer rectangle for side view)
-            body_width = int(scale * 1.5)
+            # Tank body - elongated hexagonal shape (mirrored)
+            body_width = int(scale * 1.8)
             body_height = int(scale * 0.6)
             
-            # Main body
-            pygame.draw.rect(screen, color,
-                           (x - body_width//2, y - body_height//2, body_width, body_height), 1)
+            # Main body points for side view
+            body_points = [
+                (x + body_width//2, y + body_height//3),      # front-bottom
+                (x + body_width//3, y + body_height//2),      # front-bottom-slope
+                (x - body_width//3, y + body_height//2),      # rear-bottom-slope
+                (x - body_width//2, y + body_height//3),      # rear-bottom
+                (x - body_width//2 + 2, y - body_height//2),  # rear-top
+                (x + body_width//2 - 2, y - body_height//2),  # front-top
+            ]
+            pygame.draw.polygon(screen, color, body_points, 1)
             
-            # Turret (offset to show 3D perspective)
+            # Turret - offset rectangular turret
             turret_width = scale // 2
-            turret_height = scale // 3
-            turret_x = x + scale // 4
+            turret_height = scale // 4
+            turret_x = x + scale // 6
             pygame.draw.rect(screen, color,
                            (turret_x - turret_width//2, y - turret_height//2, turret_width, turret_height), 1)
             
             # Cannon pointing right
-            cannon_length = scale
+            cannon_length = int(scale * 1.2)
             pygame.draw.line(screen, color, (turret_x, y), (turret_x + cannon_length, y), 2)
             
-            # Track details (visible from side)
-            track_y1 = y + body_height//2
-            track_y2 = y + body_height//2 + 3
-            for i in range(0, body_width, 4):
-                track_x = x - body_width//2 + i
-                pygame.draw.line(screen, color, (track_x, track_y1), (track_x, track_y2), 1)
+            # Track wheels/details
+            wheel_y = y + body_height//2 + 2
+            for i in range(0, body_width - 4, 6):
+                wheel_x = x - body_width//2 + 2 + i
+                pygame.draw.circle(screen, color, (wheel_x, wheel_y), 2, 1)
+            
+            # Track line
+            pygame.draw.line(screen, color, 
+                           (x - body_width//2, wheel_y), 
+                           (x + body_width//2, wheel_y), 1)
+            
         except:
             pass
 
@@ -788,7 +1023,7 @@ class BattleZoneRenderer:
             pygame.draw.rect(screen, (0, 255, 0), (base_x + 30, base_y - 10, 10, 20), 1)
 
     def draw_radar(self, screen, state: BattleZoneState):
-        """Draw the BattleZone radar as a small circle with a sweeping white line and enemy dots."""
+        """Draw the BattleZone radar matching the classic appearance with proper rotation."""
         # Radar should cover ~20% of the screen width, and not steal space from the main game area
         radar_radius = int(WIDTH * 0.12)  # ~20% of width as diameter
         radar_center_x = WIDTH - radar_radius - 8  # Right margin
@@ -831,28 +1066,65 @@ class BattleZoneRenderer:
         # Radar scale: fit WORLD_SIZE into radar
         scale = (radar_radius - 4) / (WORLD_SIZE / 2)
 
-        # Draw obstacles (enemies) as dots
+        # Draw obstacles (enemies) as dots - different colors for different tank types
         player_x = state.player_tank.x
         player_y = state.player_tank.y
-        for ox, oy in zip(state.obstacles.x, state.obstacles.y):
-            dx = ox - player_x
-            dy = oy - player_y
-            rx = int(radar_center_x + dx * scale)
-            ry = int(radar_center_y + dy * scale)
-            # Only draw if inside radar circle
-            if (rx - radar_center_x) ** 2 + (ry - radar_center_y) ** 2 <= (radar_radius - 3) ** 2:
-                pygame.draw.circle(screen, (255, 0, 0), (rx, ry), 2)
+        player_angle = state.player_tank.angle
+        
+        for i, (ox, oy, alive) in enumerate(zip(state.obstacles.x, state.obstacles.y, state.obstacles.alive)):
+            if alive:  # Only show living enemies
+                # Calculate relative position to player
+                dx = ox - player_x
+                dy = oy - player_y
+                
+                # Rotate the relative position based on player's facing direction
+                # This makes the radar show enemies relative to where the player is looking
+                cos_a = math.cos(-player_angle)  # Negative to rotate radar view with player
+                sin_a = math.sin(-player_angle)
+                
+                # Apply rotation matrix to get radar-relative coordinates
+                radar_dx = dx * cos_a - dy * sin_a
+                radar_dy = dx * sin_a + dy * cos_a
+                
+                # Convert to radar screen coordinates
+                rx = int(radar_center_x + radar_dx * scale)
+                ry = int(radar_center_y + radar_dy * scale)
+                
+                # Only draw if inside radar circle
+                if (rx - radar_center_x) ** 2 + (ry - radar_center_y) ** 2 <= (radar_radius - 3) ** 2:
+                    # Different enemy types could have different colors
+                    enemy_color = (255, 0, 0)  # Red for standard tanks
+                    pygame.draw.circle(screen, enemy_color, (rx, ry), 3)
+                    
+                    # Add a small direction indicator showing enemy tank orientation relative to player
+                    enemy_angle = state.obstacles.angle[i] - player_angle  # Relative to player
+                    indicator_length = 4
+                    end_x = rx + int(indicator_length * math.cos(enemy_angle))
+                    end_y = ry + int(indicator_length * math.sin(enemy_angle))
+                    pygame.draw.line(screen, enemy_color, (rx, ry), (end_x, end_y), 1)
 
-        # Optionally: draw player bullets as white dots
+        # Draw all bullets as dots (player white, enemy red) with proper rotation
         bullets = state.bullets
         for i in range(len(bullets.x)):
-            if bullets.active[i] and bullets.owner[i] == 0:
+            if bullets.active[i]:
+                # Calculate relative position to player
                 dx = bullets.x[i] - player_x
                 dy = bullets.y[i] - player_y
-                rx = int(radar_center_x + dx * scale)
-                ry = int(radar_center_y + dy * scale)
+                
+                # Rotate the relative position based on player's facing direction
+                cos_a = math.cos(-player_angle)
+                sin_a = math.sin(-player_angle)
+                
+                radar_dx = dx * cos_a - dy * sin_a
+                radar_dy = dx * sin_a + dy * cos_a
+                
+                # Convert to radar screen coordinates
+                rx = int(radar_center_x + radar_dx * scale)
+                ry = int(radar_center_y + radar_dy * scale)
+                
                 if (rx - radar_center_x) ** 2 + (ry - radar_center_y) ** 2 <= (radar_radius - 3) ** 2:
-                    pygame.draw.circle(screen, (255, 255, 255), (rx, ry), 1)
+                    color = (255, 255, 255) if bullets.owner[i] == 0 else (255, 100, 100)
+                    pygame.draw.circle(screen, color, (rx, ry), 1)
 
     def render(self, state: BattleZoneState, screen):
         """Render the 3D wireframe view with dynamic ground and moving sky/mountains."""
@@ -869,7 +1141,7 @@ class BattleZoneRenderer:
             b = int(200 * (1 - t) + 120 * t)
             pygame.draw.line(screen, (r, g, b), (0, y), (WIDTH, y))
 
-        # --- Moving mountains (parallax effect) ---
+        # --- Moving mountains (parallax effect) - now responds to player rotation ---
         mountain_layers = [
             # (color, amplitude, freq, y_offset, speed_factor)
             ((110, 110, 110), 18, 0.025, 30, 0.25),  # farthest, lightest, slowest
@@ -878,7 +1150,8 @@ class BattleZoneRenderer:
         ]
         for color, amp, freq, y_off, speed in mountain_layers:
             points = []
-            phase = (player.x * speed * 0.03) % (2 * math.pi)
+            # Include player angle in the phase calculation to make mountains rotate with view
+            phase = (player.x * speed * 0.03 + player.angle * 20.0) % (2 * math.pi)
             for x in range(0, WIDTH + 1, 2):
                 y = int(
                     sky_height
@@ -889,7 +1162,7 @@ class BattleZoneRenderer:
             points.append((0, sky_height))
             pygame.draw.polygon(screen, color, points)
 
-        # --- Restore previous ground logic (dynamic bands and perspective lines) ---
+        # --- Ground rendering with rotation awareness ---
         ground_bands = 16
         ground_colors = [
             (60, 120, 60), (70, 130, 60), (80, 140, 60), (90, 150, 60),
@@ -897,7 +1170,8 @@ class BattleZoneRenderer:
             (140, 200, 60), (150, 210, 60), (160, 220, 60), (170, 230, 60),
             (180, 240, 60), (170, 230, 60), (160, 220, 60), (150, 210, 60)
         ]
-        ground_offset = int(player.y * 0.15) % ground_bands
+        # Make ground pattern respond to both position and rotation
+        ground_offset = int((player.y * 0.15 + player.angle * 5.0)) % ground_bands
         band_height = (HEIGHT - HORIZON_Y) // ground_bands
         for i in range(ground_bands):
             color = ground_colors[(i + ground_offset) % ground_bands]
@@ -923,7 +1197,12 @@ class BattleZoneRenderer:
             obstacle_x = obstacles.x[i]
             obstacle_y = obstacles.y[i]
             obstacle_type = obstacles.obstacle_type[i]
-            obstacle_angle = obstacles.angle[i] if hasattr(obstacles, 'angle') else 0.0
+            obstacle_angle = obstacles.angle[i]
+            obstacle_alive = obstacles.alive[i]
+            
+            # Only draw if alive
+            if not obstacle_alive:
+                continue
             
             # Transform obstacle position to screen coordinates
             screen_x, screen_y, distance, visible = self.world_to_screen_3d(
