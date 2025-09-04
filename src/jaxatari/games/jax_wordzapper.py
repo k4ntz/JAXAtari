@@ -482,13 +482,20 @@ def scrolling_letters(state: WordZapperState, consts: WordZapperConstants) -> ch
         )
     )
     
+    # TODO this is temp solution it could be more accurate 
     # zapping letters and triggering explosion
     closest_letter_id = jnp.argmin(jnp.abs(state.letters_x - state.player_zapper_position[5]))
 
-    within_zapping_bounds = jnp.logical_and(
+    # Only allow zapping if zapper is within bounds AND the closest letter is visible
+    zapper_in_bounds = jnp.logical_and(
         state.player_zapper_position[0] >= consts.ZAPPING_BOUNDS[0],
         state.player_zapper_position[0] <= consts.ZAPPING_BOUNDS[1],
     )
+    letter_in_bounds = jnp.logical_and(
+        state.letters_x[closest_letter_id] >= consts.LETTER_VISIBLE_MIN_X,
+        state.letters_x[closest_letter_id] < consts.LETTER_VISIBLE_MAX_X,
+    )
+    within_zapping_bounds = jnp.logical_and(zapper_in_bounds, letter_in_bounds)
 
     def zap_letter(l, frame, timer, frame_timer, pos):
         # Set letter as not alive and start explosion
