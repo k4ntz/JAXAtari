@@ -80,7 +80,8 @@ class Bullet(NamedTuple):
 class Obstacle(NamedTuple):
     x: chex.Array
     y: chex.Array
-    obstacle_type: chex.Array  # 0: cube, 1: pyramid 
+    obstacle_type: chex.Array  # 0: enemy tank, 1: other obstacles
+    angle: chex.Array  # Add tank facing direction
 
 class BattleZoneState(NamedTuple):
     player_tank: Tank
@@ -295,7 +296,8 @@ def check_bullet_obstacle_collisions(bullets: Bullet, obstacles: Obstacle) -> Tu
     updated_obstacles = Obstacle(
         x=new_obstacle_x,
         y=new_obstacle_y,
-        obstacle_type=obstacles.obstacle_type
+        obstacle_type=obstacles.obstacle_type,
+        angle=obstacles.angle  # Add the missing angle field
     )
     
     return updated_bullets, updated_obstacles
@@ -391,18 +393,21 @@ class JaxBattleZone(JaxEnvironment[BattleZoneState, BattleZoneObservation, chex.
             owner=jnp.zeros(MAX_BULLETS)
         )
         
-        # Replace later with actual enemy tanks and other enemy entities...
-        # Initialize obstacles (cubes and pyramids scattered around)
-        obstacle_positions_x = jnp.array([100.0, -150.0, 250.0, -250.0, 350.0, -350.0, 450.0, -450.0,
-                                         150.0, -100.0, 300.0, -300.0, 400.0, -400.0, 500.0, -500.0])
-        obstacle_positions_y = jnp.array([150.0, 200.0, -200.0, 250.0, -300.0, 300.0, -400.0, 400.0,
-                                         -150.0, -200.0, 200.0, -250.0, 300.0, -300.0, 400.0, -400.0])
-        obstacle_types = jnp.array([0, 1, 0, 1, 0, 1, 0, 1, 1, 0, 1, 0, 1, 0, 1, 0])  # Mix of cubes and pyramids
+        # Replace abstract obstacles with enemy tanks
+        enemy_positions_x = jnp.array([100.0, -150.0, 250.0, -250.0, 350.0, -350.0, 450.0, -450.0,
+                                      150.0, -100.0, 300.0, -300.0, 400.0, -400.0, 500.0, -500.0])
+        enemy_positions_y = jnp.array([150.0, 200.0, -200.0, 250.0, -300.0, 300.0, -400.0, 400.0,
+                                      -150.0, -200.0, 200.0, -250.0, 300.0, -300.0, 400.0, -400.0])
+        enemy_types = jnp.zeros(16)  # All enemy tanks (type 0)
+        # Random initial angles for enemy tanks
+        enemy_angles = jnp.array([0.0, math.pi/2, math.pi, -math.pi/2, 0.0, math.pi/2, math.pi, -math.pi/2,
+                                 0.0, math.pi/2, math.pi, -math.pi/2, 0.0, math.pi/2, math.pi, -math.pi/2])
         
         obstacles = Obstacle(
-            x=obstacle_positions_x,
-            y=obstacle_positions_y,
-            obstacle_type=obstacle_types
+            x=enemy_positions_x,
+            y=enemy_positions_y,
+            obstacle_type=enemy_types,
+            angle=enemy_angles
         )
         
         state = BattleZoneState(
@@ -639,60 +644,122 @@ class BattleZoneRenderer:
         else:
             return 0, 0, 0, False  # Behind player or too close
 
-    def draw_wireframe_cube(self, screen, x, y, distance, color):
-        """Draw a 3D wireframe cube."""
-        if distance > self.view_distance:
-            return
-        scale = max(1, int(15 / max(distance / 50, 1)))
-        # Perspective offset
-        dz = scale // 2
-        # 8 corners of the cube
-        pts = [
-            (x - scale, y - scale),           # 0: front-top-left
-            (x + scale, y - scale),           # 1: front-top-right
-            (x + scale, y + scale),           # 2: front-bottom-right
-            (x - scale, y + scale),           # 3: front-bottom-left
-            (x - scale + dz, y - scale - dz), # 4: back-top-left
-            (x + scale + dz, y - scale - dz), # 5: back-top-right
-            (x + scale + dz, y + scale - dz), # 6: back-bottom-right
-            (x - scale + dz, y + scale - dz), # 7: back-bottom-left
-        ]
-        edges = [
-            (0,1),(1,2),(2,3),(3,0), # front face
-            (4,5),(5,6),(6,7),(7,4), # back face
-            (0,4),(1,5),(2,6),(3,7)  # connections
-        ]
+    def draw_enemy_tank_frontal(self, screen, x, y, scale, color):
+        """Draw frontal view of enemy tank (tank facing toward/away from player)."""
         try:
-            for e in edges:
-                pygame.draw.line(screen, color, pts[e[0]], pts[e[1]], 1)
+            # Tank body (wider rectangle for frontal view)
+            body_width = int(scale * 1.2)
+            body_height = int(scale * 0.8)
+            
+            # Main body
+            pygame.draw.rect(screen, color, 
+                           (x - body_width//2, y - body_height//2, body_width, body_height), 1)
+            
+            # Turret (centered circle/rectangle)
+            turret_size = scale // 2
+            pygame.draw.rect(screen, color,
+                           (x - turret_size//2, y - turret_size//2, turret_size, turret_size), 1)
+            
+            # Cannon (short line pointing toward player)
+            cannon_length = scale // 3
+            pygame.draw.line(screen, color, (x, y), (x, y + cannon_length), 2)
+            
+            # Tracks on sides
+            track_width = 3
+            pygame.draw.rect(screen, color,
+                           (x - body_width//2 - track_width, y - body_height//2, track_width, body_height), 1)
+            pygame.draw.rect(screen, color,
+                           (x + body_width//2, y - body_height//2, track_width, body_height), 1)
         except:
             pass
 
-    def draw_wireframe_pyramid(self, screen, x, y, distance, color):
-        """Draw a 3D wireframe pyramid."""
-        if distance > self.view_distance:
-            return
-        scale = max(1, int(15 / max(distance / 50, 1)))
-        # Base corners
-        base = [
-            (x - scale, y + scale),
-            (x + scale, y + scale),
-            (x + scale, y - scale),
-            (x - scale, y - scale)
-        ]
-        # Apex
-        apex = (x, y - scale*2)
+    def draw_enemy_tank_profile_left(self, screen, x, y, scale, color):
+        """Draw left profile of enemy tank (tank facing left relative to player)."""
         try:
-            # Base square
-            pygame.draw.line(screen, color, base[0], base[1], 1)
-            pygame.draw.line(screen, color, base[1], base[2], 1)
-            pygame.draw.line(screen, color, base[2], base[3], 1)
-            pygame.draw.line(screen, color, base[3], base[0], 1)
-            # Sides
-            for b in base:
-                pygame.draw.line(screen, color, b, apex, 1)
+            # Tank body (longer rectangle for side view)
+            body_width = int(scale * 1.5)
+            body_height = int(scale * 0.6)
+            
+            # Main body
+            pygame.draw.rect(screen, color,
+                           (x - body_width//2, y - body_height//2, body_width, body_height), 1)
+            
+            # Turret (offset to show 3D perspective)
+            turret_width = scale // 2
+            turret_height = scale // 3
+            turret_x = x - scale // 4
+            pygame.draw.rect(screen, color,
+                           (turret_x - turret_width//2, y - turret_height//2, turret_width, turret_height), 1)
+            
+            # Cannon pointing left
+            cannon_length = scale
+            pygame.draw.line(screen, color, (turret_x, y), (turret_x - cannon_length, y), 2)
+            
+            # Track details (visible from side)
+            track_y1 = y + body_height//2
+            track_y2 = y + body_height//2 + 3
+            for i in range(0, body_width, 4):
+                track_x = x - body_width//2 + i
+                pygame.draw.line(screen, color, (track_x, track_y1), (track_x, track_y2), 1)
         except:
             pass
+
+    def draw_enemy_tank_profile_right(self, screen, x, y, scale, color):
+        """Draw right profile of enemy tank (tank facing right relative to player)."""
+        try:
+            # Tank body (longer rectangle for side view)
+            body_width = int(scale * 1.5)
+            body_height = int(scale * 0.6)
+            
+            # Main body
+            pygame.draw.rect(screen, color,
+                           (x - body_width//2, y - body_height//2, body_width, body_height), 1)
+            
+            # Turret (offset to show 3D perspective)
+            turret_width = scale // 2
+            turret_height = scale // 3
+            turret_x = x + scale // 4
+            pygame.draw.rect(screen, color,
+                           (turret_x - turret_width//2, y - turret_height//2, turret_width, turret_height), 1)
+            
+            # Cannon pointing right
+            cannon_length = scale
+            pygame.draw.line(screen, color, (turret_x, y), (turret_x + cannon_length, y), 2)
+            
+            # Track details (visible from side)
+            track_y1 = y + body_height//2
+            track_y2 = y + body_height//2 + 3
+            for i in range(0, body_width, 4):
+                track_x = x - body_width//2 + i
+                pygame.draw.line(screen, color, (track_x, track_y1), (track_x, track_y2), 1)
+        except:
+            pass
+
+    def draw_enemy_tank(self, screen, x, y, distance, color, tank_angle, player_angle):
+        """Draw enemy tank with directional appearance based on relative orientation."""
+        if distance > self.view_distance:
+            return
+            
+        # Scale based on distance for perspective
+        scale = max(4, int(20 / max(distance / 50, 1)))
+        
+        # Calculate relative angle between tank and player
+        # Determine which view to show based on tank's orientation relative to player's view
+        relative_angle = tank_angle - player_angle
+        
+        # Normalize angle to [-π, π]
+        relative_angle = math.atan2(math.sin(relative_angle), math.cos(relative_angle))
+        
+        # Determine tank appearance based on relative angle
+        if abs(relative_angle) < math.pi/4 or abs(relative_angle) > 3*math.pi/4:
+            # Tank is facing toward or away from player (frontal view)
+            self.draw_enemy_tank_frontal(screen, x, y, scale, color)
+        elif relative_angle > 0:
+            # Tank is facing to the left relative to player view
+            self.draw_enemy_tank_profile_left(screen, x, y, scale, color)
+        else:
+            # Tank is facing to the right relative to player view
+            self.draw_enemy_tank_profile_right(screen, x, y, scale, color)
 
     def draw_player_tank(self, screen):
         """Draw player tank using sprite or wireframe fallback."""
@@ -850,12 +917,13 @@ class BattleZoneRenderer:
         pygame.draw.line(screen, WIREFRAME_COLOR, (0, HORIZON_Y), (WIDTH, HORIZON_Y), 1)
 
         # --- Draw game objects ---
-        # Draw obstacles (cubes and pyramids)
+        # Draw obstacles (now enemy tanks and other objects)
         obstacles = state.obstacles
         for i in range(len(obstacles.x)):
             obstacle_x = obstacles.x[i]
             obstacle_y = obstacles.y[i]
             obstacle_type = obstacles.obstacle_type[i]
+            obstacle_angle = obstacles.angle[i] if hasattr(obstacles, 'angle') else 0.0
             
             # Transform obstacle position to screen coordinates
             screen_x, screen_y, distance, visible = self.world_to_screen_3d(
@@ -866,9 +934,12 @@ class BattleZoneRenderer:
             )
             
             if visible and 0 <= screen_x < WIDTH and 0 <= screen_y < HEIGHT:
-                if obstacle_type == 0:  # Cube
+                if obstacle_type == 0:  # Enemy tank
+                    self.draw_enemy_tank(screen, screen_x, screen_y, distance, WIREFRAME_COLOR, 
+                                       obstacle_angle, state.player_tank.angle)
+                elif obstacle_type == 1:  # Cube obstacle
                     self.draw_wireframe_cube(screen, screen_x, screen_y, distance, WIREFRAME_COLOR)
-                else:  # Pyramid
+                else:  # Pyramid obstacle
                     self.draw_wireframe_pyramid(screen, screen_x, screen_y, distance, WIREFRAME_COLOR)
 
         # Draw bullets
