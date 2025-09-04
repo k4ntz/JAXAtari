@@ -5,7 +5,7 @@ import jax
 import jax.numpy as jnp
 import jax.image as jimage
 from dataclasses import dataclass
-from typing import Tuple, NamedTuple
+from typing import Tuple, NamedTuple, Callable, Sequence, Optional
 import os
 import numpy as np
 import collections
@@ -82,13 +82,15 @@ class SkiingObservation(NamedTuple):
 
 class SkiingInfo(NamedTuple):
     time: jnp.ndarray
+    all_rewards: jnp.ndarray
 
 
 class JaxSkiing(JaxEnvironment[GameState, SkiingObservation, SkiingInfo, SkiingConstants]):
-    def __init__(self, consts: SkiingConstants | None = None):
+    def __init__(self, consts: SkiingConstants | None = None, reward_funcs: Optional[Sequence[Callable[[GameState, GameState], jnp.ndarray]]] = None,):
         consts = consts or SkiingConstants()
         super().__init__(consts)
         self.config = GameConfig()
+        self.reward_funcs = tuple(reward_funcs) if reward_funcs is not None else None
         self.state = self.reset()
         self.renderer = SkiingRenderer(self.config)
 
@@ -520,57 +522,39 @@ class JaxSkiing(JaxEnvironment[GameState, SkiingObservation, SkiingInfo, SkiingC
         reward = self._get_reward(state, new_state)
         reward = jnp.asarray(reward, dtype=jnp.float32)
         obs = self._get_observation(new_state)
-        info = self._get_info(new_state)
+        all_rewards = self._get_all_rewards(state, new_state)
+        info = self._get_info(new_state, all_rewards)
         return obs, new_state, reward, done, info
 
     @partial(jax.jit, static_argnums=(0,))
     def _get_observation(self, state: GameState):
-        # create skier
+        # Skier (alles float32)
         skier = EntityPosition(
-            x=state.skier_x,
-            y=jnp.array(self.config.skier_y),
-            width=jnp.array(self.config.skier_width),
-            height=jnp.array(self.config.skier_height),
+            x=jnp.asarray(state.skier_x, dtype=jnp.float32),
+            y=jnp.asarray(self.config.skier_y, dtype=jnp.float32),
+            width=jnp.asarray(self.config.skier_width, dtype=jnp.float32),
+            height=jnp.asarray(self.config.skier_height, dtype=jnp.float32),
         )
 
-        # create trees
-        tree_static = jnp.array(
-            [self.config.tree_width, self.config.tree_height], dtype=jnp.float32
-        )
-        trees = jnp.concatenate(
-            [state.trees, jnp.tile(tree_static, (self.config.max_num_trees, 1))],
-            axis=1,
-        )
-
-        # create flags
-        flag_static = jnp.array(
-            [self.config.flag_width, self.config.flag_height], dtype=jnp.float32
-        )
-        flags = jnp.concatenate(
-            [state.flags, jnp.tile(flag_static, (self.config.max_num_flags, 1))],
-            axis=1,
-        )
-
-        # create rocks
-        rock_static = jnp.array(
-            [self.config.rock_width, self.config.rock_height], dtype=jnp.float32
-        )
-        rocks = jnp.concatenate(
-            [state.rocks, jnp.tile(rock_static, (self.config.max_num_rocks, 1))],
-            axis=1,
-        )
+        # Nur (x,y) für Objekte in der *Observation*
+        trees = jnp.asarray(state.trees, dtype=jnp.float32)   # shape: (max_num_trees, 2)
+        flags = jnp.asarray(state.flags, dtype=jnp.float32)   # shape: (max_num_flags, 2)
+        rocks = jnp.asarray(state.rocks, dtype=jnp.float32)   # shape: (max_num_rocks, 2)
 
         return SkiingObservation(
             skier=skier,
             trees=trees,
             flags=flags,
             rocks=rocks,
-            score=state.score
+            score=state.score,   # int32 passt zum Space
         )
 
     @partial(jax.jit, static_argnums=(0,))
-    def _get_info(self, state: GameState) -> SkiingInfo:
-        return SkiingInfo(time=state.time)
+    def _get_info(self, state: GameState, all_rewards: jnp.ndarray) -> SkiingInfo:
+        return SkiingInfo(
+            time=state.time,
+            all_rewards=all_rewards,
+        )
 
     @partial(jax.jit, static_argnums=(0,))
     def _get_reward(self, previous_state: GameState, state: GameState):
@@ -579,6 +563,15 @@ class JaxSkiing(JaxEnvironment[GameState, SkiingObservation, SkiingInfo, SkiingC
     @partial(jax.jit, static_argnums=(0,))
     def _get_done(self, state: GameState) -> bool:
         return jnp.equal(state.score, 0)
+    
+    @partial(jax.jit, static_argnums=(0,))
+    def _get_all_rewards(self, previous_state: GameState, state: GameState) -> jnp.ndarray:
+        # Falls keine Liste übergeben wurde → 1-dimensionaler Nullvektor
+        if self.reward_funcs is None or len(self.reward_funcs) == 0:
+            return jnp.zeros((1,), dtype=jnp.float32)
+        # Liste statisch → comprehension ist JIT-ok
+        rewards = jnp.array([rf(previous_state, state) for rf in self.reward_funcs], dtype=jnp.float32)
+        return rewards
 
 
 @dataclass
