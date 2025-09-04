@@ -439,7 +439,7 @@ def check_player_hit(player_tank: Tank, bullets: Bullet) -> Tank:
 
 @jax.jit
 def update_enemy_tanks(obstacles: Obstacle, player_tank: Tank, bullets: Bullet, step_counter: chex.Array) -> Tuple[Obstacle, Bullet]:
-    """Update enemy tank AI with authentic BattleZone behavior patterns."""
+    """Update enemy tank AI with Atari-like behaviour: instantly face player and approach along the direct vector."""
     
     def update_single_enemy(i):
         enemy_x = obstacles.x[i]
@@ -452,16 +452,17 @@ def update_enemy_tanks(obstacles: Obstacle, player_tank: Tank, bullets: Bullet, 
         enemy_state_timer = obstacles.state_timer[i]
         is_enemy_tank = obstacles.obstacle_type[i] == 0
         
-        # Check if this enemy should be processed
         should_process = jnp.logical_and(enemy_alive, is_enemy_tank)
-        
-        # Calculate distance and angle to player
+
+        # Vector to player and distance
         dx = player_tank.x - enemy_x
         dy = player_tank.y - enemy_y
-        distance_to_player = jnp.sqrt(dx * dx + dy * dy)
+        distance_to_player = jnp.sqrt(dx * dx + dy * dy) + 1e-8
+        dir_x = dx / distance_to_player
+        dir_y = dy / distance_to_player
         angle_to_player = jnp.arctan2(dy, dx)
-        
-        # Initialize return values
+
+        # Defaults
         new_x = enemy_x
         new_y = enemy_y
         new_angle = enemy_angle
@@ -469,121 +470,77 @@ def update_enemy_tanks(obstacles: Obstacle, player_tank: Tank, bullets: Bullet, 
         new_target_angle = enemy_target_angle
         new_state_timer = jnp.maximum(0, enemy_state_timer - 1)
         should_fire = False
-        bullet_x = 0.0
-        bullet_y = 0.0
-        bullet_vel_x = 0.0
-        bullet_vel_y = 0.0
-        
-        # Only process if enemy should be active
-        player_in_detection = distance_to_player < ENEMY_DETECTION_RANGE
 
-        # Enemies that just spawned wait for state_timer to expire before reacting to the player.
-        detection_ready = jnp.logical_and(player_in_detection, new_state_timer <= 0)
-        should_act = jnp.logical_and(should_process, detection_ready)
-
-        # --- Replace the old, more-random patrol/hunt mixture with a straightforward approach behaviour ---
-        # If not yet ready to act, keep patrolling; otherwise enter HUNT (approach player) behavior.
-        patrol_condition = jnp.logical_and(jnp.logical_not(detection_ready), should_process)
+        # Spawn/waiting patrol (do not aggressively approach while waiting)
+        waiting = new_state_timer > 0
+        patrol_condition = jnp.logical_and(should_process, waiting)
+        patrol_turn_speed = ENEMY_TURN_SPEED * 0.4
+        angle_diff_to_target = new_target_angle - enemy_angle
+        angle_diff_to_target = jnp.arctan2(jnp.sin(angle_diff_to_target), jnp.cos(angle_diff_to_target))
+        new_angle = jnp.where(jnp.logical_and(patrol_condition, jnp.abs(angle_diff_to_target) > 0.1),
+                              enemy_angle + jnp.sign(angle_diff_to_target) * patrol_turn_speed,
+                              new_angle)
+        new_x = jnp.where(patrol_condition, enemy_x + jnp.cos(new_angle) * ENEMY_MOVE_SPEED * 0.5, new_x)
+        new_y = jnp.where(patrol_condition, enemy_y + jnp.sin(new_angle) * ENEMY_MOVE_SPEED * 0.5, new_y)
         new_state = jnp.where(patrol_condition, ENEMY_STATE_PATROL, new_state)
 
-        # Patrol (keeps previous mild turning behavior but no large random moves)
-        patrol_turn_speed = ENEMY_TURN_SPEED * 0.4
-        angle_diff_to_target = enemy_target_angle - enemy_angle
-        angle_diff_to_target = jnp.arctan2(jnp.sin(angle_diff_to_target), jnp.cos(angle_diff_to_target))
-        should_turn_to_target = jnp.abs(angle_diff_to_target) > 0.1
-        new_angle = jnp.where(jnp.logical_and(patrol_condition, should_turn_to_target),
-							  enemy_angle + jnp.sign(angle_diff_to_target) * patrol_turn_speed,
-							  new_angle)
-        patrol_move_speed = ENEMY_MOVE_SPEED * 0.5
-        new_x = jnp.where(patrol_condition, enemy_x + jnp.cos(new_angle) * patrol_move_speed, new_x)
-        new_y = jnp.where(patrol_condition, enemy_y + jnp.sin(new_angle) * patrol_move_speed, new_y)
-
-        # HUNT/APPROACH behaviour: if ready to act, always turn toward player and move forward toward them.
-        hunt_condition = jnp.logical_and(should_process, player_in_detection)
-        angle_diff_to_player = angle_to_player - enemy_angle
-        angle_diff_to_player = jnp.arctan2(jnp.sin(angle_diff_to_player), jnp.cos(angle_diff_to_player))
-
-        # Turn towards player every step (proportional step limited by ENEMY_TURN_SPEED)
-        turn_direction = jnp.sign(angle_diff_to_player)
-        new_angle_turn = enemy_angle + turn_direction * ENEMY_TURN_SPEED
-        # Use the turn only when hunting; otherwise keep current angle
-        new_angle = jnp.where(hunt_condition, new_angle_turn, new_angle)
-
-        # Move towards player when farther than a close threshold, else small adjustments
-        move_forward = jnp.where(distance_to_player > ENEMY_MIN_DISTANCE, 1.0, 0.0)
-        new_x = jnp.where(hunt_condition, enemy_x + jnp.cos(new_angle) * ENEMY_MOVE_SPEED * move_forward, new_x)
-        new_y = jnp.where(hunt_condition, enemy_y + jnp.sin(new_angle) * ENEMY_MOVE_SPEED * move_forward, new_y)
+        # HUNT: instantly face the player and move directly toward them (classic 2600 behaviour)
+        hunt_condition = jnp.logical_and(should_process, distance_to_player < ENEMY_DETECTION_RANGE)
+        # Instant facing
+        new_angle = jnp.where(hunt_condition, angle_to_player, new_angle)
+        # Move along direct vector so they reliably approach and get larger on screen
+        move_allowed = jnp.where(distance_to_player > ENEMY_MIN_DISTANCE, 1.0, 0.0)
+        new_x = jnp.where(hunt_condition, enemy_x + dir_x * ENEMY_MOVE_SPEED * move_allowed, new_x)
+        new_y = jnp.where(hunt_condition, enemy_y + dir_y * ENEMY_MOVE_SPEED * move_allowed, new_y)
         new_state = jnp.where(hunt_condition, ENEMY_STATE_HUNT, new_state)
 
-        # ENGAGE: when within optimal range, aim precisely and potentially fire.
+        # ENGAGE: if within engagement band, stop big advances and allow small adjustments; since we face instantly,
+        # alignment is immediate and firing will be more responsive (like the original)
         engage_condition = jnp.logical_and(should_process,
-										   jnp.logical_and(distance_to_player <= ENEMY_MAX_DISTANCE,
-														   distance_to_player >= ENEMY_MIN_DISTANCE))
-        # Fine aiming while engaging; use a larger fine_turn_speed so they actively face player
-        engage_turn_threshold = 0.05
-        should_fine_turn_left = jnp.logical_and(engage_condition, angle_diff_to_player > engage_turn_threshold)
-        should_fine_turn_right = jnp.logical_and(engage_condition, angle_diff_to_player < -engage_turn_threshold)
-        fine_turn_speed = ENEMY_TURN_SPEED * 1.8
-        new_angle = jnp.where(should_fine_turn_left, enemy_angle + fine_turn_speed, new_angle)
-        new_angle = jnp.where(should_fine_turn_right, enemy_angle - fine_turn_speed, new_angle)
-
-        # Recompute angular alignment after fine turn
-        angle_diff_after = angle_to_player - new_angle
-        angle_diff_after = jnp.arctan2(jnp.sin(angle_diff_after), jnp.cos(angle_diff_after))
-        is_frontal = jnp.abs(angle_diff_after) < 0.25  # frontal threshold (radians)
-
-        # Fire when frontal, within firing range, and cooldown is ready
-        can_fire = enemy_cooldown <= 0
-        should_fire = jnp.logical_and(jnp.logical_and(engage_condition, is_frontal),
-									  jnp.logical_and(can_fire, distance_to_player < ENEMY_FIRE_RANGE))
-
-        new_state = jnp.where(engage_condition, ENEMY_STATE_ENGAGE, new_state)
-
-        # Small positioning tweaks: if too close, back away a bit; if too far, close in a bit
+                                           jnp.logical_and(distance_to_player <= ENEMY_MAX_DISTANCE,
+                                                           distance_to_player >= ENEMY_MIN_DISTANCE))
+        # Small corrections (soft)
         too_close = distance_to_player < ENEMY_OPTIMAL_DISTANCE
         too_far = distance_to_player > ENEMY_OPTIMAL_DISTANCE
-        # Use smaller multipliers to avoid large per-frame jumps
-        new_x = jnp.where(jnp.logical_and(engage_condition, too_close), enemy_x - jnp.cos(new_angle) * ENEMY_MOVE_SPEED * 0.15, new_x)
-        new_y = jnp.where(jnp.logical_and(engage_condition, too_close), enemy_y - jnp.sin(new_angle) * ENEMY_MOVE_SPEED * 0.15, new_y)
-        new_x = jnp.where(jnp.logical_and(engage_condition, too_far), enemy_x + jnp.cos(new_angle) * ENEMY_MOVE_SPEED * 0.25, new_x)
-        new_y = jnp.where(jnp.logical_and(engage_condition, too_far), enemy_y + jnp.sin(new_angle) * ENEMY_MOVE_SPEED * 0.25, new_y)
+        new_x = jnp.where(jnp.logical_and(engage_condition, too_close), new_x - dir_x * ENEMY_MOVE_SPEED * 0.12, new_x)
+        new_y = jnp.where(jnp.logical_and(engage_condition, too_close), new_y - dir_y * ENEMY_MOVE_SPEED * 0.12, new_y)
+        new_x = jnp.where(jnp.logical_and(engage_condition, too_far), new_x + dir_x * ENEMY_MOVE_SPEED * 0.18, new_x)
+        new_y = jnp.where(jnp.logical_and(engage_condition, too_far), new_y + dir_y * ENEMY_MOVE_SPEED * 0.18, new_y)
 
-        # Update cooldown: if should_fire triggered set cooldown, otherwise decrement
+        # With instant facing, frontal alignment is true (or nearly true); use a small angular tolerance in case
+        angle_diff = angle_to_player - new_angle
+        angle_diff = jnp.arctan2(jnp.sin(angle_diff), jnp.cos(angle_diff))
+        is_frontal = jnp.abs(angle_diff) < 0.35
+
+        # Fire when frontal, in range and cooldown ready; respect spawn waiting via cooldown/state_timer
+        can_fire = enemy_cooldown <= 0
+        should_fire = jnp.logical_and(jnp.logical_and(engage_condition, is_frontal),
+                                      jnp.logical_and(can_fire, distance_to_player < ENEMY_FIRE_RANGE))
+        new_state = jnp.where(engage_condition, ENEMY_STATE_ENGAGE, new_state)
         new_cooldown = jnp.where(should_fire, ENEMY_FIRE_COOLDOWN, jnp.maximum(0, enemy_cooldown - 1))
 
-        # Create bullet data. When firing, aim directly at the player's current position so bullets approach the player.
+        # Bullet spawn/aim toward player's current position
         bullet_offset = 15.0
-        # Default spawn position based on current facing (keeps visuals consistent)
         spawn_bx = new_x + jnp.cos(new_angle) * bullet_offset
         spawn_by = new_y + jnp.sin(new_angle) * bullet_offset
-
-        # Compute aim vector toward player (use player's current location)
         aim_dx = player_tank.x - new_x
         aim_dy = player_tank.y - new_y
-        aim_dist = jnp.sqrt(aim_dx * aim_dx + aim_dy * aim_dy) + 1e-6  # avoid div0
+        aim_dist = jnp.sqrt(aim_dx * aim_dx + aim_dy * aim_dy) + 1e-6
         aim_vx = (aim_dx / aim_dist) * BULLET_SPEED
         aim_vy = (aim_dy / aim_dist) * BULLET_SPEED
 
-        # Use aim velocity for bullets so they always head toward the player when fired.
-        bullet_x = spawn_bx
-        bullet_y = spawn_by
-        bullet_vel_x = aim_vx
-        bullet_vel_y = aim_vy
-
-        # Boundary checking and normalization
+        # Finalize
         new_x = jnp.clip(new_x, BOUNDARY_MIN, BOUNDARY_MAX)
         new_y = jnp.clip(new_y, BOUNDARY_MIN, BOUNDARY_MAX)
         new_angle = jnp.arctan2(jnp.sin(new_angle), jnp.cos(new_angle))
 
-        return (new_x, new_y, new_angle, enemy_alive, new_cooldown, new_state, 
-                new_target_angle, new_state_timer, should_fire, bullet_x, bullet_y, bullet_vel_x, bullet_vel_y)
-    
-    # Process all enemies
+        return (new_x, new_y, new_angle, enemy_alive, new_cooldown, new_state,
+                new_target_angle, new_state_timer, should_fire, spawn_bx, spawn_by, aim_vx, aim_vy)
+
     results = jax.vmap(update_single_enemy)(jnp.arange(len(obstacles.x)))
-    (new_x, new_y, new_angle, new_alive, new_cooldown, new_state, 
+    (new_x, new_y, new_angle, new_alive, new_cooldown, new_state,
      new_target_angle, new_state_timer, fire_flags, bullet_xs, bullet_ys, bullet_vel_xs, bullet_vel_ys) = results
-    
-    # Update obstacles
+
     updated_obstacles = Obstacle(
         x=new_x,
         y=new_y,
@@ -838,7 +795,83 @@ class JaxBattleZone(JaxEnvironment[BattleZoneState, BattleZoneObservation, chex.
         # Detect whether the player was shot this step (alive -> dead)
         player_was_shot = jnp.logical_and(state.player_tank.alive == 1, new_player_tank.alive == 0)
 
-        new_state = BattleZoneState(
+        # After computing new_player_tank and collisions, we already created a tentative new_state.
+        # If the player was shot this frame, decrement lives. If lives remain, restart game (reset)
+        lives_after = state.player_lives - 1
+
+        # Build a reset-state (same layout as reset) but preserve score and set player_lives = lives_after
+        def build_reset_state():
+            # player tank reset
+            player_tank_rst = Tank(x=jnp.array(0.0), y=jnp.array(0.0), angle=jnp.array(0.0), alive=jnp.array(1, dtype=jnp.int32))
+            # bullets cleared
+            bullets_rst = Bullet(
+                x=jnp.zeros(MAX_BULLETS),
+                y=jnp.zeros(MAX_BULLETS),
+                z=jnp.zeros(MAX_BULLETS),
+                vel_x=jnp.zeros(MAX_BULLETS),
+                vel_y=jnp.zeros(MAX_BULLETS),
+                active=jnp.zeros(MAX_BULLETS, dtype=jnp.int32),
+                lifetime=jnp.zeros(MAX_BULLETS),
+                owner=jnp.zeros(MAX_BULLETS)
+            )
+            # initial enemy positions/angles (same as reset)
+            enemy_positions_x = jnp.array([200.0, -200.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
+                                          0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0])
+            enemy_positions_y = jnp.array([0.0, 0.0, 200.0, -200.0, 0.0, 0.0, 0.0, 0.0,
+                                          0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0])
+            enemy_types = jnp.zeros(16)
+            enemy_angles = jnp.array([jnp.pi, 0.0, -jnp.pi/2, jnp.pi/2] + [0.0]*12)
+            enemy_alive = jnp.array([1,1,1,1] + [0]*12, dtype=jnp.int32)
+            enemy_fire_cooldown = jnp.zeros(16)
+            enemy_ai_state = jnp.zeros(16, dtype=jnp.int32)
+            enemy_target_angle = enemy_angles.copy()
+            enemy_state_timer = jnp.zeros(16)
+
+            obstacles_rst = Obstacle(
+                x=enemy_positions_x,
+                y=enemy_positions_y,
+                obstacle_type=enemy_types,
+                angle=enemy_angles,
+                alive=enemy_alive,
+                fire_cooldown=enemy_fire_cooldown,
+                ai_state=enemy_ai_state,
+                target_angle=enemy_target_angle,
+                state_timer=enemy_state_timer
+            )
+
+            return BattleZoneState(
+                player_tank=player_tank_rst,
+                bullets=bullets_rst,
+                obstacles=obstacles_rst,
+                step_counter=jnp.array(0),
+                spawn_timer=jnp.array(ENEMY_SPAWN_COOLDOWN),
+                prev_player_x=player_tank_rst.x,
+                prev_player_y=player_tank_rst.y,
+                player_score=state.player_score,      # preserve score
+                player_lives=lives_after
+            )
+
+        # If player was shot and still has lives left -> restart. If no lives left, keep dead state (game over).
+        def keep_or_gameover():
+            # if lives_after > 0 then return reset state else return the normal new_state with decremented lives (game over)
+            def return_reset():
+                return build_reset_state()
+            def return_gameover():
+                # keep new_state but with updated lives (0) so _get_done() will see player dead
+                return BattleZoneState(
+                    player_tank=new_player_tank,
+                    bullets=updated_bullets,
+                    obstacles=updated_obstacles,
+                    step_counter=state.step_counter + 1,
+                    spawn_timer=new_spawn_timer,
+                    prev_player_x=state.player_tank.x,
+                    prev_player_y=state.player_tank.y,
+                    player_score=state.player_score + score_delta,
+                    player_lives=lives_after
+                )
+            return jax.lax.cond(lives_after > 0, return_reset, return_gameover)
+
+        final_state = jax.lax.cond(player_was_shot, lambda: keep_or_gameover(), lambda: BattleZoneState(
             player_tank=new_player_tank,
             bullets=updated_bullets,
             obstacles=updated_obstacles,
@@ -846,17 +879,17 @@ class JaxBattleZone(JaxEnvironment[BattleZoneState, BattleZoneObservation, chex.
             spawn_timer=new_spawn_timer,
             prev_player_x=state.player_tank.x,
             prev_player_y=state.player_tank.y,
-            player_score=state.player_score + score_delta,   # increment score when player shot enemies
-            player_lives=state.player_lives    # preserve lives (logic for decrementing on death can be added later)
-        )
-        
-        observation = self._get_observation(new_state)
-        reward = self._get_env_reward(state, new_state)
-        done = self._get_done(new_state)
-        all_rewards = self._get_all_reward(state, new_state)
-        info = self._get_info(new_state, all_rewards, player_was_shot)
+            player_score=state.player_score + score_delta,
+            player_lives=state.player_lives
+        ))
 
-        return observation, new_state, reward, done, info
+        observation = self._get_observation(final_state)
+        reward = self._get_env_reward(state, final_state)
+        done = self._get_done(final_state)
+        all_rewards = self._get_all_reward(state, final_state)
+        info = self._get_info(final_state, all_rewards, player_was_shot)
+
+        return observation, final_state, reward, done, info
 
     @partial(jax.jit, static_argnums=(0,))
     def _get_observation(self, state: BattleZoneState) -> BattleZoneObservation:
