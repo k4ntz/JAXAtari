@@ -29,6 +29,7 @@ UI_HEIGHT = 35
 
 class RiverraidState(NamedTuple):
     turn_step: chex.Array
+    turn_step_linear: chex.Array
     master_key: chex.Array
     river_left: chex.Array
     river_right: chex.Array
@@ -53,6 +54,7 @@ class RiverraidState(NamedTuple):
     player_state: chex.Array
     player_fuel: chex.Array
     player_score: chex.Array
+    player_lives: chex.Array
 
     player_bullet_x: chex.Array
     player_bullet_y: chex.Array
@@ -990,8 +992,6 @@ def handle_fuel(state: RiverraidState) -> RiverraidState:
         player_score=new_score
     )
 
-
-
 @jax.jit
 def update_enemy_movement_status(state: RiverraidState) -> RiverraidState:
     active_static_mask = (state.enemy_state == 1) & (state.enemy_direction <= 1)
@@ -1079,6 +1079,7 @@ class JaxRiverraid(JaxEnvironment):
         initial_key = jax.random.PRNGKey(1)
 
         state = RiverraidState(turn_step=0,
+                               turn_step_linear=0,
                                river_left=jnp.full((SCREEN_HEIGHT,), river_start_x, dtype=jnp.int32),
                                river_right=jnp.full((SCREEN_HEIGHT,), river_end_x, dtype=jnp.int32),
                                river_inner_left=jnp.full((SCREEN_HEIGHT,), -1, dtype=jnp.int32),
@@ -1111,7 +1112,8 @@ class JaxRiverraid(JaxEnvironment):
                                fuel_state=jnp.full((MAX_ENEMIES,), 0, dtype=jnp.int32),
                                player_fuel=jnp.array(MAX_FUEL),
                                spawn_cooldown=jnp.array(50),
-                               player_score=jnp.array(0)
+                               player_score=jnp.array(0),
+                               player_lives=jnp.array(3)
                                )
         observation = self._get_observation(state)
         return observation, state
@@ -1140,12 +1142,52 @@ class JaxRiverraid(JaxEnvironment):
 
         def respawn(state: RiverraidState) -> RiverraidState:
             jax.debug.print("YOU DIED GIT GUD")
-            #new_state = state._replace(player_state = jnp.array(0, dtype=state.player_state.dtype))
-            return state
+            river_start_x = (SCREEN_WIDTH - DEFAULT_RIVER_WIDTH) // 2
+            river_end_x = river_start_x + DEFAULT_RIVER_WIDTH
+            initial_key = jax.random.PRNGKey(1)
+            new_state = RiverraidState(turn_step=0,
+                                   turn_step_linear=state.turn_step_linear,
+                                   river_left=jnp.full((SCREEN_HEIGHT,), river_start_x, dtype=jnp.int32),
+                                   river_right=jnp.full((SCREEN_HEIGHT,), river_end_x, dtype=jnp.int32),
+                                   river_inner_left=jnp.full((SCREEN_HEIGHT,), -1, dtype=jnp.int32),
+                                   river_inner_right=jnp.full((SCREEN_HEIGHT,), -1, dtype=jnp.int32),
+                                   river_state=jnp.array(0),
+                                   river_alternation_length=jnp.array(0),
+                                   master_key=initial_key,
+                                   river_ongoing_alternation=jnp.array(0),
+                                   river_island_present=jnp.array(0),
+                                   alternation_cooldown=jnp.array(10),
+                                   island_transition_state=jnp.array(0),
+                                   segment_state=jnp.array(0),
+                                   segment_transition_state=jnp.array(0),
+                                   segment_straigt_counter=jnp.array(8),
+                                   dam_position=jnp.full((SCREEN_HEIGHT,), -1, dtype=jnp.int32),
+                                   player_x=jnp.array(SCREEN_WIDTH // 2 - 2, dtype=jnp.float32),
+                                   player_y=jnp.array(SCREEN_HEIGHT - 20 - UI_HEIGHT),
+                                   player_velocity=jnp.array(0, dtype=jnp.float32),
+                                   player_direction=jnp.array(1),
+                                   player_state=jnp.array(0),
+                                   player_bullet_x=jnp.array(-1, dtype=jnp.float32),
+                                   player_bullet_y=jnp.array(-1, dtype=jnp.float32),
+                                   enemy_x=jnp.full((MAX_ENEMIES,), -1, dtype=jnp.float32),
+                                   enemy_y=jnp.full((MAX_ENEMIES,), SCREEN_HEIGHT + 1, dtype=jnp.float32),
+                                   enemy_state=jnp.full((MAX_ENEMIES,), 0, dtype=jnp.int32),
+                                   enemy_type=jnp.full((MAX_ENEMIES,), 0, dtype=jnp.int32),
+                                   enemy_direction=jnp.full((MAX_ENEMIES,), 0, dtype=jnp.int32),
+                                   fuel_x=jnp.full((MAX_ENEMIES,), -1, dtype=jnp.float32),
+                                   fuel_y=jnp.full((MAX_ENEMIES,), SCREEN_HEIGHT + 1, dtype=jnp.float32),
+                                   fuel_state=jnp.full((MAX_ENEMIES,), 0, dtype=jnp.int32),
+                                   player_fuel=jnp.array(MAX_FUEL),
+                                   spawn_cooldown=jnp.array(50),
+                                   player_score=state.player_score,
+                                   player_lives= state.player_lives - 1
+                                   )
+            return new_state
 
         jax.debug.print("new step \n")
-        new_state = state._replace(turn_step=state.turn_step + 1)
-        state = state._replace(player_state=jnp.array(0, dtype=state.player_state.dtype)) # immortal for testing
+        new_state = state._replace(turn_step=state.turn_step + 1,
+                                   turn_step_linear=state.turn_step_linear + 1)
+        #state = state._replace(player_state=jnp.array(0, dtype=state.player_state.dtype)) # immortal for testing
         new_state = jax.lax.cond(state.player_state == 0,
                                  lambda state: player_alive(state),
                                  lambda state: respawn(state),
@@ -1170,7 +1212,7 @@ class JaxRiverraid(JaxEnvironment):
 
     @partial(jax.jit, static_argnums=(0,))
     def _get_env_reward(self, previous_state: RiverraidState, state: RiverraidState):
-        return 420
+        return state.player_score - previous_state.player_score
 
     @partial(jax.jit, static_argnums=(0,))
     def _get_all_reward(self, previous_state: RiverraidState, state: RiverraidState) -> chex.Array:
@@ -1183,11 +1225,11 @@ class JaxRiverraid(JaxEnvironment):
 
     @partial(jax.jit, static_argnums=(0,))
     def _get_done(self, state: RiverraidState) -> bool:
-        return False
+        return jax.lax.cond(state.player_lives < 0, lambda _: True, lambda _: False, operand=None)
 
     @partial(jax.jit, static_argnums=(0,))
     def _get_info(self, state: RiverraidState, all_rewards: chex.Array) -> RiverraidInfo:
-        return RiverraidInfo(time=state.turn_step, all_rewards=all_rewards)
+        return RiverraidInfo(time=state.turn_step_linear, all_rewards=all_rewards)
 
 
 def load_sprites():
@@ -1365,8 +1407,12 @@ class RiverraidRenderer(JAXGameRenderer):
 
             sprite_frame = aj.get_sprite_frame(self.SPRITE_DIGIT, digit_to_draw)
             return aj.render_at(r_acc, x0, y0, sprite_frame)
-
         raster = lax.fori_loop(0, num_digits, score_loop_body, raster)
+
+        lives_frame = aj.get_sprite_frame(self.SPRITE_DIGIT, state.player_lives)
+        lives_x = fuel_display_x - 8
+        lives_y = fuel_display_y + fuel_frame.shape[0] + 1
+        raster = aj.render_at(raster, lives_x, lives_y, lives_frame)
         return raster
 
 
