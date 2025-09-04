@@ -3,7 +3,7 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 from functools import partial
-from typing import NamedTuple, Tuple, Optional
+from typing import NamedTuple, Tuple, Optional, Callable, Sequence
 
 from jaxatari.environment import JaxEnvironment, JAXAtariAction as Action
 from jaxatari.renderers import JAXGameRenderer
@@ -98,6 +98,7 @@ class SurroundInfo(NamedTuple):
     """Additional environment information."""
 
     time: jnp.ndarray
+    all_rewards: jnp.ndarray
 
 
 def create_border_mask(consts: SurroundConstants) -> jnp.ndarray:
@@ -220,7 +221,11 @@ class JaxSurround(
 ):
     """A very small two player Surround implementation."""
 
-    def __init__(self, consts: Optional[SurroundConstants] = None):
+    def __init__(
+        self,
+        consts: Optional[SurroundConstants] = None,
+        reward_funcs: Optional[Sequence[Callable[[SurroundState, SurroundState], jnp.ndarray]]] = None,
+    ):
         consts = consts or SurroundConstants()
         super().__init__(consts)
         self.renderer = SurroundRenderer(self.consts)
@@ -232,6 +237,9 @@ class JaxSurround(
             Action.LEFT,
             Action.DOWN,
         ]
+        # Wichtig: reward_funcs für _get_all_rewards speichern.
+        # Bleibt während der Laufzeit statisch -> JAX-jit-freundlich.
+        self.reward_funcs = reward_funcs
 
     # --- Internal AI helper for P1 (left player) ---
 
@@ -447,7 +455,9 @@ class JaxSurround(
         def _skip_move(_):
             # Kein Logik-Tick: nur Blickrichtung aktualisiert zurückgeben
             obs = self._get_observation(state_no_move)
-            info = self._get_info(state_no_move)
+            # "Keine Bewegung" -> Rewards relativ zum alten Zustand berechnen
+            all_rewards = self._get_all_rewards(state, state_no_move)
+            info = self._get_info(state_no_move, all_rewards)
             reward = jnp.array(0, dtype=jnp.int32)
             done = jnp.array(False, dtype=jnp.bool_)
             return obs, state_no_move, reward, done, info
@@ -536,7 +546,7 @@ class JaxSurround(
             next_state = next_state._replace(terminated=jnp.array(done, dtype=jnp.bool_))
 
             obs = self._get_observation(next_state)
-            info = self._get_info(next_state)
+            info = self._get_info(next_state, self._get_all_rewards(state, next_state))
             return obs, next_state, reward, done, info
 
         # WICHTIG: JAX-kompatible Verzweigung ohne Python-`if`
@@ -560,14 +570,23 @@ class JaxSurround(
         )
 
     @partial(jax.jit, static_argnums=(0,))
-    def _get_info(self, state: SurroundState) -> SurroundInfo:
-        return SurroundInfo(time=state.time)    
+    def _get_info(self, state: SurroundState, all_rewards: jnp.ndarray) -> SurroundInfo:
+        return SurroundInfo(time=state.time, all_rewards=all_rewards)   
 
     @partial(jax.jit, static_argnums=(0,))
     def _get_reward(self, previous_state: SurroundState, state: SurroundState) -> jnp.ndarray:
         previous_diff = previous_state.score0 - previous_state.score1
         diff = state.score0 - state.score1
         return diff - previous_diff
+    
+    @partial(jax.jit, static_argnums=(0,))
+    def _get_all_rewards(self, previous_state: SurroundState, state: SurroundState) -> jnp.ndarray:
+        # Statische Verzweigung: self ist per static_argnums=(0,) statisch.
+        if self.reward_funcs is None:
+            return jnp.zeros((1,), dtype=jnp.float32)
+        # reward_funcs ist eine Sequenz von Callables: rf(prev, curr) -> scalar/array
+        rewards = [rf(previous_state, state) for rf in self.reward_funcs]
+        return jnp.asarray(rewards, dtype=jnp.float32)
 
     
     @partial(jax.jit, static_argnums=(0,))
