@@ -16,9 +16,6 @@ import jaxatari.spaces as spaces
 """TODOS:
 Top Priorities:
 - Fix the renderer as some components are not being shown with Play.py(Player ship, Points, lives, torpedoes, enemies left) (Mahta)
-- make sure that all of the enemies follow the dotted lines/make the beams follow the dotted lines
-    - Errors:
-        - beam jump pattern isn't working
 - While running play.py script the player is unable to shoot the torpedoes with the key T 
 For later:
 - Check the sentinal ship constants/Optimize the code/remove unnecessary code
