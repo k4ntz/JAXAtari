@@ -101,7 +101,7 @@ class JaxSkiing(JaxEnvironment[GameState, SkiingObservation, SkiingInfo, SkiingC
     def observation_space(self):
         c = self.config
 
-        # --- CHANGED: make helper actually produce float64 tensors (not float32)
+        # --- CHANGED: make helper actually produce float64 tensors (not float64)
         def f64(x):
             return jnp.array(x, dtype=jnp.float64)
 
@@ -156,17 +156,17 @@ class JaxSkiing(JaxEnvironment[GameState, SkiingObservation, SkiingInfo, SkiingC
 
         # Flags: y gleichmäßig verteilt, x zufällig
         y_spacing = (c.screen_height - 4 * c.flag_height) / c.max_num_flags
-        i = jnp.arange(c.max_num_flags, dtype=jnp.float32)
+        i = jnp.arange(c.max_num_flags, dtype=jnp.float64)
         flags_y = (i + 1.0) * y_spacing + float(c.flag_height)
         flags_x = jax.random.randint(
             k_flags, (c.max_num_flags,),
             minval=int(c.flag_width),
             maxval=int(c.screen_width - c.flag_width - c.flag_distance) + 1
-        ).astype(jnp.float32)
+        ).astype(jnp.float64)
         flags = jnp.stack([
             flags_x, flags_y,
-            jnp.full((c.max_num_flags,), float(c.flag_width),  dtype=jnp.float32),
-            jnp.full((c.max_num_flags,), float(c.flag_height), dtype=jnp.float32)
+            jnp.full((c.max_num_flags,), float(c.flag_width),  dtype=jnp.float64),
+            jnp.full((c.max_num_flags,), float(c.flag_height), dtype=jnp.float64)
         ], axis=1)
 
         # Trees
@@ -174,16 +174,16 @@ class JaxSkiing(JaxEnvironment[GameState, SkiingObservation, SkiingInfo, SkiingC
             k_trees, (c.max_num_trees,),
             minval=int(c.tree_width),
             maxval=int(c.screen_width - c.tree_width) + 1
-        ).astype(jnp.float32)
+        ).astype(jnp.float64)
         trees_y = jax.random.randint(
             k_trees, (c.max_num_trees,),
             minval=int(c.tree_height),
             maxval=int(c.screen_height - c.tree_height) + 1
-        ).astype(jnp.float32)
+        ).astype(jnp.float64)
         trees = jnp.stack([
             trees_x, trees_y,
-            jnp.full((c.max_num_trees,), float(c.tree_width),  dtype=jnp.float32),
-            jnp.full((c.max_num_trees,), float(c.tree_height), dtype=jnp.float32)
+            jnp.full((c.max_num_trees,), float(c.tree_width),  dtype=jnp.float64),
+            jnp.full((c.max_num_trees,), float(c.tree_height), dtype=jnp.float64)
         ], axis=1)
 
         # Rocks
@@ -191,16 +191,16 @@ class JaxSkiing(JaxEnvironment[GameState, SkiingObservation, SkiingInfo, SkiingC
             k_rocks, (c.max_num_rocks,),
             minval=int(c.rock_width),
             maxval=int(c.screen_width - c.rock_width) + 1
-        ).astype(jnp.float32)
+        ).astype(jnp.float64)
         rocks_y = jax.random.randint(
             k_rocks, (c.max_num_rocks,),
             minval=int(c.rock_height),
             maxval=int(c.screen_height - c.rock_height) + 1
-        ).astype(jnp.float32)
+        ).astype(jnp.float64)
         rocks = jnp.stack([
             rocks_x, rocks_y,
-            jnp.full((c.max_num_rocks,), float(c.rock_width),  dtype=jnp.float32),
-            jnp.full((c.max_num_rocks,), float(c.rock_height), dtype=jnp.float32)
+            jnp.full((c.max_num_rocks,), float(c.rock_width),  dtype=jnp.float64),
+            jnp.full((c.max_num_rocks,), float(c.rock_height), dtype=jnp.float64)
         ], axis=1)
 
         state = GameState(
@@ -238,9 +238,9 @@ class JaxSkiing(JaxEnvironment[GameState, SkiingObservation, SkiingInfo, SkiingC
                 k1.at[i].get(), [], 
                 self.config.flag_width,
                 self.config.screen_width - self.config.flag_width - self.config.flag_distance
-            ).astype(jnp.float32)
+            ).astype(jnp.float64)
             y = (self.consts.BOTTOM_BORDER + 
-                 jax.random.randint(k1.at[3 - i].get(), [], 0, 100)).astype(jnp.float32)
+                 jax.random.randint(k1.at[3 - i].get(), [], 0, 100)).astype(jnp.float64)
 
             row_old = flags.at[i].get()                      # Shape (2,) oder (4,)
             row_new = row_old.at[0].set(x_flag).at[1].set(y) # gleiche Shape wie row_old
@@ -260,9 +260,9 @@ class JaxSkiing(JaxEnvironment[GameState, SkiingObservation, SkiingInfo, SkiingC
                 k1.at[i].get(), [], 
                 self.config.tree_width,
                 self.config.screen_width - self.config.tree_width
-            ).astype(jnp.float32)
+            ).astype(jnp.float64)
             y = (self.consts.BOTTOM_BORDER + 
-                 jax.random.randint(k1.at[7 - i].get(), [], 0, 100)).astype(jnp.float32)
+                 jax.random.randint(k1.at[7 - i].get(), [], 0, 100)).astype(jnp.float64)
 
             row_old = trees.at[i].get()
             row_new = row_old.at[0].set(x_tree).at[1].set(y)
@@ -282,9 +282,9 @@ class JaxSkiing(JaxEnvironment[GameState, SkiingObservation, SkiingInfo, SkiingC
                 k1.at[i].get(), [], 
                 self.config.rock_width,
                 self.config.screen_width - self.config.rock_width
-            ).astype(jnp.float32)
+            ).astype(jnp.float64)
             y = (self.consts.BOTTOM_BORDER + 
-                 jax.random.randint(k1.at[5 - i].get(), [], 0, 100)).astype(jnp.float32)
+                 jax.random.randint(k1.at[5 - i].get(), [], 0, 100)).astype(jnp.float64)
 
             row_old = rocks.at[i].get()
             row_new = row_old.at[0].set(x_rock).at[1].set(y)
@@ -302,14 +302,14 @@ class JaxSkiing(JaxEnvironment[GameState, SkiingObservation, SkiingInfo, SkiingC
         self, state: GameState, action: int
     ) -> tuple[SkiingObservation, GameState, float, bool, SkiingInfo]:
         #                              -->  --_      \     |     |    /    _-- <--
-        side_speed = jnp.array([-1.0, -0.5, -0.333, 0.0, 0.0, 0.333, 0.5, 1.0], jnp.float32)
+        side_speed = jnp.array([-1.0, -0.5, -0.333, 0.0, 0.0, 0.333, 0.5, 1.0], jnp.float64)
         #                              -->  --_   \     |    |     /    _--  <--
-        down_speed = jnp.array([0.0, 0.5, 0.875, 1.0, 1.0, 0.875, 0.5, 0.0], jnp.float32)
+        down_speed = jnp.array([0.0, 0.5, 0.875, 1.0, 1.0, 0.875, 0.5, 0.0], jnp.float64)
 
         RECOVERY_FRAMES = jnp.int32(60)
-        TREE_X_DIST = jnp.float32(3.0)
-        ROCK_X_DIST = jnp.float32(1.0)
-        Y_HIT_DIST  = jnp.float32(1.0)
+        TREE_X_DIST = jnp.float64(3.0)
+        ROCK_X_DIST = jnp.float64(1.0)
+        Y_HIT_DIST  = jnp.float64(1.0)
 
         # 1) Eingabe -> Zielpose
         new_skier_pos = jax.lax.cond(jnp.equal(action, self.consts.LEFT),
@@ -345,15 +345,15 @@ class JaxSkiing(JaxEnvironment[GameState, SkiingObservation, SkiingInfo, SkiingC
 
         # Recovery: Front, x=0, y wie front
         skier_pos = jax.lax.select(in_recovery, jnp.array(3), skier_pos)
-        dx_target = jax.lax.select(in_recovery, jnp.array(0.0, dtype=jnp.float32), dx_target)
+        dx_target = jax.lax.select(in_recovery, jnp.array(0.0, dtype=jnp.float64), dx_target)
         dy_target = jax.lax.select(in_recovery, down_speed.at[3].get(), dy_target)
 
         new_skier_x_speed_nom = jax.lax.select(
             in_recovery,
-            jnp.array(0.0, dtype=jnp.float32),
-            state.skier_x_speed + ((dx_target - state.skier_x_speed) * jnp.array(0.1, jnp.float32)),
+            jnp.array(0.0, dtype=jnp.float64),
+            state.skier_x_speed + ((dx_target - state.skier_x_speed) * jnp.array(0.1, jnp.float64)),
         )
-        new_skier_y_speed_nom = state.skier_y_speed + ((dy_target - state.skier_y_speed) * jnp.array(0.05, jnp.float32))
+        new_skier_y_speed_nom = state.skier_y_speed + ((dy_target - state.skier_y_speed) * jnp.array(0.05, jnp.float64))
 
         min_x = self.config.skier_width / 2
         max_x = self.config.screen_width - self.config.skier_width / 2
@@ -382,7 +382,7 @@ class JaxSkiing(JaxEnvironment[GameState, SkiingObservation, SkiingInfo, SkiingC
             dy = jnp.abs(jnp.round(skier_y_px) - jnp.round(y))
             return jnp.logical_and(dx < x_d, dy < y_d)
 
-        def coll_flag(flag_pos, x_d=jnp.float32(1.0), y_d=Y_HIT_DIST):
+        def coll_flag(flag_pos, x_d=jnp.float64(1.0), y_d=Y_HIT_DIST):
             x = flag_pos[..., 0]
             y = flag_pos[..., 1]
             dx1 = jnp.abs(new_x_nom - x)
@@ -450,8 +450,8 @@ class JaxSkiing(JaxEnvironment[GameState, SkiingObservation, SkiingInfo, SkiingC
         freeze = jnp.greater(new_skier_fell, 0)
 
         # Apply freeze to speeds and world positions
-        new_skier_x_speed = jax.lax.select(freeze, jnp.array(0.0, jnp.float32), new_skier_x_speed_nom)
-        new_skier_y_speed = jax.lax.select(freeze, jnp.array(0.0, jnp.float32), new_skier_y_speed_nom)
+        new_skier_x_speed = jax.lax.select(freeze, jnp.array(0.0, jnp.float64), new_skier_x_speed_nom)
+        new_skier_y_speed = jax.lax.select(freeze, jnp.array(0.0, jnp.float64), new_skier_y_speed_nom)
         new_flags = jax.lax.select(freeze, state.flags, new_flags_nom)
         new_trees = jax.lax.select(freeze, state.trees, new_trees_nom)
         new_rocks = jax.lax.select(freeze, state.rocks, new_rocks_nom)
@@ -520,7 +520,7 @@ class JaxSkiing(JaxEnvironment[GameState, SkiingObservation, SkiingInfo, SkiingC
 
         done = self._get_done(new_state)
         reward = self._get_reward(state, new_state)
-        reward = jnp.asarray(reward, dtype=jnp.float32)
+        reward = jnp.asarray(reward, dtype=jnp.float64)
         obs = self._get_observation(new_state)
         all_rewards = self._get_all_rewards(state, new_state)
         info = self._get_info(new_state, all_rewards)
@@ -539,13 +539,13 @@ class JaxSkiing(JaxEnvironment[GameState, SkiingObservation, SkiingInfo, SkiingC
         )
 
         # Positionsspalten aus dem State holen
-        flags_xy_f32 = jnp.asarray(state.flags, dtype=jnp.float32)[..., :2]
-        trees_xy_f32 = jnp.asarray(state.trees, dtype=jnp.float32)[..., :2]
-        rocks_xy_f32 = jnp.asarray(state.rocks, dtype=jnp.float32)[..., :2]
+        flags_xy_f32 = jnp.asarray(state.flags, dtype=jnp.float64)[..., :2]
+        trees_xy_f32 = jnp.asarray(state.trees, dtype=jnp.float64)[..., :2]
+        rocks_xy_f32 = jnp.asarray(state.rocks, dtype=jnp.float64)[..., :2]
 
         # In-Space clippen (gegen Ausreißer wie y=240)
-        W = jnp.float32(self.config.screen_width  - 1)
-        H = jnp.float32(self.config.screen_height - 1)
+        W = jnp.float64(self.config.screen_width  - 1)
+        H = jnp.float64(self.config.screen_height - 1)
 
         flags_xy_f32 = flags_xy_f32.at[:, 0].set(jnp.clip(flags_xy_f32[:, 0], 0.0, W))
         flags_xy_f32 = flags_xy_f32.at[:, 1].set(jnp.clip(flags_xy_f32[:, 1], 0.0, H))
@@ -594,9 +594,9 @@ class JaxSkiing(JaxEnvironment[GameState, SkiingObservation, SkiingInfo, SkiingC
     def _get_all_rewards(self, previous_state: GameState, state: GameState) -> jnp.ndarray:
         # Falls keine Liste übergeben wurde → 1-dimensionaler Nullvektor
         if self.reward_funcs is None or len(self.reward_funcs) == 0:
-            return jnp.zeros((1,), dtype=jnp.float32)
+            return jnp.zeros((1,), dtype=jnp.float64)
         # Liste statisch → comprehension ist JIT-ok
-        rewards = jnp.array([rf(previous_state, state) for rf in self.reward_funcs], dtype=jnp.float32)
+        rewards = jnp.array([rf(previous_state, state) for rf in self.reward_funcs], dtype=jnp.float64)
         return rewards
 
 
@@ -692,8 +692,8 @@ def _alpha_over(dst: jnp.ndarray, src: jnp.ndarray, top: jnp.ndarray, left: jnp.
     start_x = jnp.clip(left + pw, 0, W + 2*pw - w).astype(jnp.int32)
 
     # Fixe (statische) Slice-Größen: (h, w, 4)
-    dst_sub = jax.lax.dynamic_slice(dst_pad, (start_y, start_x, 0), (h, w, 4)).astype(jnp.float32)
-    src_sub = src.astype(jnp.float32)
+    dst_sub = jax.lax.dynamic_slice(dst_pad, (start_y, start_x, 0), (h, w, 4)).astype(jnp.float64)
+    src_sub = src.astype(jnp.float64)
 
     sa = src_sub[..., 3:4] / 255.0
     da = dst_sub[..., 3:4] / 255.0
@@ -792,7 +792,7 @@ def render_frame(
     flags_xy = flags[..., :2]  # -> (N,2)
     
     left_px  = jnp.round(flags_xy * scale_factor).astype(jnp.int32)
-    right_px = jnp.round((flags_xy + jnp.array([float(flag_distance), 0.0], dtype=jnp.float32))
+    right_px = jnp.round((flags_xy + jnp.array([float(flag_distance), 0.0], dtype=jnp.float64))
                          * scale_factor).astype(jnp.int32)
     
     # Farbe wählen: 1..N, idx%20==0 => red
