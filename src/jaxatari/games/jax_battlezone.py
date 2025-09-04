@@ -273,8 +273,10 @@ def update_tank_position(tank: Tank, action: chex.Array) -> Tank:
     )
 
 @jax.jit
-def check_bullet_obstacle_collisions(bullets: Bullet, obstacles: Obstacle) -> Tuple[Bullet, Obstacle]:
-    """Check for collisions between bullets and obstacles, removing both on hit."""
+def check_bullet_obstacle_collisions(bullets: Bullet, obstacles: Obstacle) -> Tuple[Bullet, Obstacle, chex.Array]:
+    """Check for collisions between bullets and obstacles, removing both on hit.
+    Returns updated bullets, updated obstacles, and score_delta (1000 per obstacle killed by a player bullet).
+    """
     
     # Define collision radius
     collision_radius = 15.0
@@ -304,6 +306,13 @@ def check_bullet_obstacle_collisions(bullets: Bullet, obstacles: Obstacle) -> Tu
     
     # Mark obstacles for removal (any obstacle that collides with any bullet)
     obstacles_to_remove = jnp.any(collisions, axis=0)  # Shape: (num_obstacles,)
+    
+    # Compute score delta: count obstacles killed by player bullets (owner == 0) and multiply by 1000
+    # collisions_by_player: True where a player bullet hits an obstacle
+    player_bullet_mask = (bullets.owner[:, None] == 0)
+    collisions_by_player = jnp.logical_and(collisions, player_bullet_mask)
+    obstacles_killed_by_player = jnp.any(collisions_by_player, axis=0)  # per-obstacle
+    score_delta = jnp.sum(obstacles_killed_by_player).astype(jnp.int32) * jnp.array(1000, dtype=jnp.int32)
     
     # Update bullets - set collided bullets to inactive
     new_bullet_active = jnp.where(
@@ -339,7 +348,7 @@ def check_bullet_obstacle_collisions(bullets: Bullet, obstacles: Obstacle) -> Tu
         state_timer=obstacles.state_timer
     )
     
-    return updated_bullets, updated_obstacles
+    return updated_bullets, updated_obstacles, score_delta
 @jax.jit
 def should_fire(action: chex.Array) -> chex.Array:
     """Check if the action includes firing."""
@@ -820,8 +829,8 @@ class JaxBattleZone(JaxEnvironment[BattleZoneState, BattleZoneObservation, chex.
         
         new_spawn_timer = jnp.where(should_try_spawn, ENEMY_SPAWN_COOLDOWN, new_spawn_timer)
         
-        # Check for bullet-obstacle collisions
-        updated_bullets, updated_obstacles = check_bullet_obstacle_collisions(updated_bullets, updated_obstacles)
+        # Check for bullet-obstacle collisions (now returns score delta when player killed obstacles)
+        updated_bullets, updated_obstacles, score_delta = check_bullet_obstacle_collisions(updated_bullets, updated_obstacles)
         
         # Check if player is hit by enemy bullets
         new_player_tank = check_player_hit(new_player_tank, updated_bullets)
@@ -837,7 +846,7 @@ class JaxBattleZone(JaxEnvironment[BattleZoneState, BattleZoneObservation, chex.
             spawn_timer=new_spawn_timer,
             prev_player_x=state.player_tank.x,
             prev_player_y=state.player_tank.y,
-            player_score=state.player_score,   # preserve score (logic for changing score can be added later)
+            player_score=state.player_score + score_delta,   # increment score when player shot enemies
             player_lives=state.player_lives    # preserve lives (logic for decrementing on death can be added later)
         )
         
