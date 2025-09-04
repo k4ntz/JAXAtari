@@ -10,6 +10,8 @@ import os
 from sys import maxsize
 import numpy as np
 import math
+import gym
+from gym import spaces
 
 from jaxatari.environment import JaxEnvironment
 from jaxatari.renderers import JAXGameRenderer
@@ -666,7 +668,27 @@ class JaxBattleZone(JaxEnvironment[BattleZoneState, BattleZoneObservation, chex.
             reward_funcs = tuple(reward_funcs)
         self.reward_funcs = reward_funcs
         self.action_set = list(range(18))  # All 18 BattleZone actions
-        self.obs_size = 50
+        # compute flattened observation size so obs_to_flat_array is consistent with the representation used by wrappers/tests
+        # layout: player (x,y,angle,alive) = 4
+        # bullets: MAX_BULLETS * (x,y,active,owner) = MAX_BULLETS*4
+        # obstacles: MAX_OBSTACLES * (x,y,angle,type,alive) = MAX_OBSTACLES*5
+        self.obs_size = 4 + MAX_BULLETS * 4 + MAX_OBSTACLES * 5
+
+        # Create renderer instance for env-level rendering (pygame Surface drawing does not require display mode)
+        try:
+            self.renderer = BattleZoneRenderer()
+        except Exception:
+            self.renderer = None
+
+        # Gym-style spaces used by wrappers/tests
+        # Observation is the flattened vector defined by obs_to_flat_array
+        self.observation_space = spaces.Box(
+            low=-np.finfo(np.float32).max,
+            high=np.finfo(np.float32).max,
+            shape=(self.obs_size,),
+            dtype=np.float32
+        )
+        self.action_space = spaces.Discrete(len(self.action_set))
 
     def reset(self, key=None) -> Tuple[BattleZoneObservation, BattleZoneState]:
         """Reset the game to initial state."""
