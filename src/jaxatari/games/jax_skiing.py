@@ -6,10 +6,9 @@ import jax.numpy as jnp
 import jax.image as jimage
 from dataclasses import dataclass
 from typing import Tuple, NamedTuple
-import random
 import os
-from sys import maxsize
 import numpy as np
+import collections
 
 from jaxatari.environment import JaxEnvironment
 from jaxatari.renderers import JAXGameRenderer
@@ -97,69 +96,130 @@ class JaxSkiing(JaxEnvironment[GameState, SkiingObservation, SkiingInfo, SkiingC
         # Aktionen sind bei dir: NOOP=0, LEFT=1, RIGHT=2
         return spaces.Discrete(4)
 
-    def reset(
-        self, key: jax.random.PRNGKey = jax.random.key(1701)
-    ) -> Tuple[SkiingObservation, GameState]:
-        """Initialize a new game state"""
-        flags = []
+    def observation_space(self):
+        """Objektzentrierter Dict-Space für eine Einzel-Observation."""
+        c = self.config
+        def scalar_box(low, high, dtype=jnp.float32):
+            return spaces.Box(low=low, high=high, shape=(), dtype=dtype)
 
-        y_spacing = (
-            self.config.screen_height - 4 * self.config.flag_height
-        ) / self.config.max_num_flags
-        for i in range(self.config.max_num_flags):
-            x = random.randint(
-                self.config.flag_width,
-                self.config.screen_width
-                - self.config.flag_width
-                - self.config.flag_distance,
-            )
-            y = int((i + 1) * y_spacing + self.config.flag_height)
-            flags.append((float(x), float(y)))
+        skier_space = spaces.Dict(collections.OrderedDict({
+            "x":      scalar_box(0.0, float(c.screen_width)),
+            "y":      scalar_box(0.0, float(c.screen_height)),
+            "width":  scalar_box(0.0, float(c.skier_width)),
+            "height": scalar_box(0.0, float(c.skier_height)),
+        }))
 
-        trees = []
-        for _ in range(self.config.max_num_trees):
-            x = random.randint(
-                self.config.tree_width,
-                self.config.screen_width - self.config.tree_width,
-            )
-            y = random.randint(
-                self.config.tree_height,
-                self.config.screen_height - self.config.tree_height,
-            )
-            trees.append((float(x), float(y)))
+        flags_space = spaces.Box(low=0.0,
+                                 high=jnp.array([float(c.screen_width), float(c.screen_height),
+                                                 float(c.flag_width),  float(c.flag_height)], dtype=jnp.float32),
+                                 shape=(c.max_num_flags, 4), dtype=jnp.float32)
+        trees_space = spaces.Box(low=0.0,
+                                 high=jnp.array([float(c.screen_width), float(c.screen_height),
+                                                 float(c.tree_width),  float(c.tree_height)], dtype=jnp.float32),
+                                 shape=(c.max_num_trees, 4), dtype=jnp.float32)
+        rocks_space = spaces.Box(low=0.0,
+                                 high=jnp.array([float(c.screen_width), float(c.screen_height),
+                                                 float(c.rock_width),  float(c.rock_height)], dtype=jnp.float32),
+                                 shape=(c.max_num_rocks, 4), dtype=jnp.float32)
+        score_space = spaces.Box(low=jnp.array(0, dtype=jnp.int32),
+                                 high=jnp.array(1_000_000, dtype=jnp.int32),
+                                 shape=(), dtype=jnp.int32)
 
-        rocks = []
-        for _ in range(self.config.max_num_rocks):
-            x = random.randint(
-                self.config.rock_width,
-                self.config.screen_width - self.config.rock_width,
-            )
-            y = random.randint(
-                self.config.rock_height,
-                self.config.screen_height - self.config.rock_height,
-            )
-            rocks.append((float(x), float(y)))
+        return spaces.Dict(collections.OrderedDict({
+            "skier": skier_space,
+            "flags": flags_space,
+            "trees": trees_space,
+            "rocks": rocks_space,
+            "score": score_space,
+        }))
+
+    def image_space(self):
+        c = self.config
+        return spaces.Box(low=0, high=255, shape=(c.screen_height, c.screen_width, 3), dtype=jnp.uint8)
+
+    def obs_to_flat_array(self, obs):
+        """Flatten in fester Reihenfolge passend zu observation_space()."""
+        skier_vec  = jnp.array([obs.skier.x, obs.skier.y, obs.skier.width, obs.skier.height],
+                               dtype=jnp.float32).reshape(-1)
+        flags_flat = jnp.asarray(obs.flags, dtype=jnp.float32).reshape(-1)
+        trees_flat = jnp.asarray(obs.trees, dtype=jnp.float32).reshape(-1)
+        rocks_flat = jnp.asarray(obs.rocks, dtype=jnp.float32).reshape(-1)
+        score_flat = jnp.asarray(obs.score, dtype=jnp.float32).reshape(-1)
+        return jnp.concatenate([skier_vec, flags_flat, trees_flat, rocks_flat, score_flat], axis=0)
+
+    def reset(self, key: jax.random.PRNGKey = jax.random.key(1701)) -> Tuple[SkiingObservation, GameState]:
+        """Initialize a new game state deterministically from `key`."""
+        c = self.config
+        k_flags, k_trees, k_rocks, new_key = jax.random.split(key, 4)
+
+        # Flags: y gleichmäßig verteilt, x zufällig
+        y_spacing = (c.screen_height - 4 * c.flag_height) / c.max_num_flags
+        i = jnp.arange(c.max_num_flags, dtype=jnp.float32)
+        flags_y = (i + 1.0) * y_spacing + float(c.flag_height)
+        flags_x = jax.random.randint(
+            k_flags, (c.max_num_flags,),
+            minval=int(c.flag_width),
+            maxval=int(c.screen_width - c.flag_width - c.flag_distance) + 1
+        ).astype(jnp.float32)
+        flags = jnp.stack([
+            flags_x, flags_y,
+            jnp.full((c.max_num_flags,), float(c.flag_width),  dtype=jnp.float32),
+            jnp.full((c.max_num_flags,), float(c.flag_height), dtype=jnp.float32)
+        ], axis=1)
+
+        # Trees
+        trees_x = jax.random.randint(
+            k_trees, (c.max_num_trees,),
+            minval=int(c.tree_width),
+            maxval=int(c.screen_width - c.tree_width) + 1
+        ).astype(jnp.float32)
+        trees_y = jax.random.randint(
+            k_trees, (c.max_num_trees,),
+            minval=int(c.tree_height),
+            maxval=int(c.screen_height - c.tree_height) + 1
+        ).astype(jnp.float32)
+        trees = jnp.stack([
+            trees_x, trees_y,
+            jnp.full((c.max_num_trees,), float(c.tree_width),  dtype=jnp.float32),
+            jnp.full((c.max_num_trees,), float(c.tree_height), dtype=jnp.float32)
+        ], axis=1)
+
+        # Rocks
+        rocks_x = jax.random.randint(
+            k_rocks, (c.max_num_rocks,),
+            minval=int(c.rock_width),
+            maxval=int(c.screen_width - c.rock_width) + 1
+        ).astype(jnp.float32)
+        rocks_y = jax.random.randint(
+            k_rocks, (c.max_num_rocks,),
+            minval=int(c.rock_height),
+            maxval=int(c.screen_height - c.rock_height) + 1
+        ).astype(jnp.float32)
+        rocks = jnp.stack([
+            rocks_x, rocks_y,
+            jnp.full((c.max_num_rocks,), float(c.rock_width),  dtype=jnp.float32),
+            jnp.full((c.max_num_rocks,), float(c.rock_height), dtype=jnp.float32)
+        ], axis=1)
 
         state = GameState(
             skier_x=jnp.array(76.0),
-            skier_pos=jnp.array(4),
-            skier_fell=jnp.array(0),
+            skier_pos=jnp.array(4, dtype=jnp.int32),
+            skier_fell=jnp.array(0, dtype=jnp.int32),
             skier_x_speed=jnp.array(0.0),
             skier_y_speed=jnp.array(1.0),
-            flags=jnp.array(flags),
-            trees=jnp.array(trees),
-            rocks=jnp.array(rocks),
-            score=jnp.array(20),
-            time=jnp.array(0),
-            direction_change_counter=jnp.array(0),
+            flags=flags,
+            trees=trees,
+            rocks=rocks,
+            score=jnp.array(20, dtype=jnp.int32),
+            time=jnp.array(0, dtype=jnp.int32),
+            direction_change_counter=jnp.array(0, dtype=jnp.int32),
             game_over=jnp.array(False),
-            key=key,
-            collision_type=jnp.array(0),
-            flags_passed=jnp.zeros(self.config.max_num_flags, dtype=bool),
+            key=new_key,
+            collision_type=jnp.array(0, dtype=jnp.int32),
+            flags_passed=jnp.zeros(c.max_num_flags, dtype=bool),
             collision_cooldown=jnp.array(0, dtype=jnp.int32),
         )
         obs = self._get_observation(state)
-
         return obs, state
     
     def render(self, state: GameState) -> jnp.ndarray:
@@ -168,79 +228,68 @@ class JaxSkiing(JaxEnvironment[GameState, SkiingObservation, SkiingInfo, SkiingC
 
     def _create_new_objs(self, state, new_flags, new_trees, new_rocks):
         k, k1, k2, k3, k4 = jax.random.split(state.key, num=5)
-
         k1 = jnp.array([k1, k2, k3, k4])
 
         def check_flags(i, flags):
+            # neue x/y
             x_flag = jax.random.randint(
-                k1.at[i].get(),
-                [],
+                k1.at[i].get(), [], 
                 self.config.flag_width,
-                self.config.screen_width
-                - self.config.flag_width
-                - self.config.flag_distance,
-            )
-            x_flag = jnp.array(x_flag, jnp.float32)
-            y = self.consts.BOTTOM_BORDER + jax.random.randint(k1.at[3 - i].get(), [], 0, 100)
+                self.config.screen_width - self.config.flag_width - self.config.flag_distance
+            ).astype(jnp.float32)
+            y = (self.consts.BOTTOM_BORDER + 
+                 jax.random.randint(k1.at[3 - i].get(), [], 0, 100)).astype(jnp.float32)
 
-            new_f = jax.lax.cond(
-                jnp.less(flags.at[i, 1].get(), self.consts.TOP_BORDER),
-                lambda _: jnp.array([x_flag, y], jnp.float32),
-                lambda _: flags.at[i].get(),
-                operand=None,
-            )
+            row_old = flags.at[i].get()                      # Shape (2,) oder (4,)
+            row_new = row_old.at[0].set(x_flag).at[1].set(y) # gleiche Shape wie row_old
 
-            flags = flags.at[i].set(new_f)
-
-            return flags
+            cond = jnp.less(flags.at[i, 1].get(), self.consts.TOP_BORDER)
+            out_row = jax.lax.cond(cond, lambda _: row_new, lambda _: row_old, operand=None)
+            return flags.at[i].set(out_row)
 
         flags = jax.lax.fori_loop(0, 2, check_flags, new_flags)
 
+        # ---- Trees ----
         k, k1, k2, k3, k4, k5, k6, k7, k8 = jax.random.split(k, 9)
         k1 = jnp.array([k1, k2, k3, k4, k5, k6, k7, k8])
 
         def check_trees(i, trees):
             x_tree = jax.random.randint(
-                k1.at[i].get(),
-                [],
+                k1.at[i].get(), [], 
                 self.config.tree_width,
-                self.config.screen_width - self.config.tree_width,
-            )
-            x_tree = jnp.array(x_tree, jnp.float32)
-            y = self.consts.BOTTOM_BORDER + jax.random.randint(k1.at[7 - i].get(), [], 0, 100)
+                self.config.screen_width - self.config.tree_width
+            ).astype(jnp.float32)
+            y = (self.consts.BOTTOM_BORDER + 
+                 jax.random.randint(k1.at[7 - i].get(), [], 0, 100)).astype(jnp.float32)
 
-            new_f = jax.lax.cond(
-                jnp.less(trees.at[i, 1].get(), self.consts.TOP_BORDER),
-                lambda _: jnp.array([x_tree, y], jnp.float32),
-                lambda _: trees.at[i].get(),
-                operand=None,
-            )
-            trees = trees.at[i].set(new_f)
-            return trees
+            row_old = trees.at[i].get()
+            row_new = row_old.at[0].set(x_tree).at[1].set(y)
+
+            cond = jnp.less(trees.at[i, 1].get(), self.consts.TOP_BORDER)
+            out_row = jax.lax.cond(cond, lambda _: row_new, lambda _: row_old, operand=None)
+            return trees.at[i].set(out_row)
 
         trees = jax.lax.fori_loop(0, 4, check_trees, new_trees)
 
+        # ---- Rocks ----
         k, k1, k2, k3, k4, k5, k6 = jax.random.split(k, 7)
         k1 = jnp.array([k1, k2, k3, k4, k5, k6])
 
         def check_rocks(i, rocks):
             x_rock = jax.random.randint(
-                k1.at[i].get(),
-                [],
+                k1.at[i].get(), [], 
                 self.config.rock_width,
-                self.config.screen_width - self.config.rock_width,
-            )
-            x_rock = jnp.array(x_rock, jnp.float32)
-            y = self.consts.BOTTOM_BORDER + jax.random.randint(k1.at[5 - i].get(), [], 0, 100)
+                self.config.screen_width - self.config.rock_width
+            ).astype(jnp.float32)
+            y = (self.consts.BOTTOM_BORDER + 
+                 jax.random.randint(k1.at[5 - i].get(), [], 0, 100)).astype(jnp.float32)
 
-            new_f = jax.lax.cond(
-                jnp.less(rocks.at[i, 1].get(), self.consts.TOP_BORDER),
-                lambda _: jnp.array([x_rock, y], jnp.float32),
-                lambda _: rocks.at[i].get(),
-                operand=None,
-            )
-            rocks = rocks.at[i].set(new_f)
-            return rocks
+            row_old = rocks.at[i].get()
+            row_new = row_old.at[0].set(x_rock).at[1].set(y)
+
+            cond = jnp.less(rocks.at[i, 1].get(), self.consts.TOP_BORDER)
+            out_row = jax.lax.cond(cond, lambda _: row_new, lambda _: row_old, operand=None)
+            return rocks.at[i].set(out_row)
 
         rocks = jax.lax.fori_loop(0, 3, check_rocks, new_rocks)
 
@@ -318,19 +367,22 @@ class JaxSkiing(JaxEnvironment[GameState, SkiingObservation, SkiingInfo, SkiingC
         skier_y_px = jnp.round(self.config.skier_y)
 
         def coll_tree(tree_pos, x_d=TREE_X_DIST, y_d=Y_HIT_DIST):
-            x, y = tree_pos
+            x = tree_pos[..., 0]
+            y = tree_pos[..., 1]
             dx = jnp.abs(new_x_nom - x)
             dy = jnp.abs(jnp.round(skier_y_px) - jnp.round(y))
             return jnp.logical_and(dx <= x_d, dy < y_d)
 
         def coll_rock(rock_pos, x_d=ROCK_X_DIST, y_d=Y_HIT_DIST):
-            x, y = rock_pos
+            x = rock_pos[..., 0]
+            y = rock_pos[..., 1]
             dx = jnp.abs(new_x_nom - x)
             dy = jnp.abs(jnp.round(skier_y_px) - jnp.round(y))
             return jnp.logical_and(dx < x_d, dy < y_d)
 
         def coll_flag(flag_pos, x_d=jnp.float32(1.0), y_d=Y_HIT_DIST):
-            x, y = flag_pos
+            x = flag_pos[..., 0]
+            y = flag_pos[..., 1]
             dx1 = jnp.abs(new_x_nom - x)
             dx2 = jnp.abs(new_x_nom - (x + self.config.flag_distance))
             dy  = jnp.abs(jnp.round(skier_y_px) - jnp.round(y))
@@ -717,8 +769,13 @@ def render_frame(
     # 4) Flags (links & rechts), jede 20. Gate rot, sonst blau
     #    centers sind Pixelcenter; Reihenfolge: Skier -> Flags -> Trees -> Rocks (wie zuvor)
     flags = state.flags  # (N,2) in Game-Koordinaten
-    left_px  = jnp.round(flags * scale_factor).astype(jnp.int32)               # (N,2)
-    right_px = jnp.round((flags + jnp.array([float(flag_distance), 0.0])) * scale_factor).astype(jnp.int32)
+    # Nur (x,y) verwenden – robust, egal ob flags (N,2) oder (N,4) ist
+    flags_xy = flags[..., :2]  # -> (N,2)
+    
+    left_px  = jnp.round(flags_xy * scale_factor).astype(jnp.int32)
+    right_px = jnp.round((flags_xy + jnp.array([float(flag_distance), 0.0], dtype=jnp.float32))
+                         * scale_factor).astype(jnp.int32)
+    
     # Farbe wählen: 1..N, idx%20==0 => red
     n_flags = flags.shape[0]
     idxs = jnp.arange(1, n_flags+1, dtype=jnp.int32)
