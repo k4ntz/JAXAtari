@@ -611,6 +611,18 @@ def player_movement(state: RiverraidState, action: Action) -> RiverraidState:
         jnp.array([action == Action.LEFT, action == Action.LEFTFIRE])
     )
 
+    new_direction = jax.lax.cond(
+            press_left,
+            lambda _: jnp.array(0),  # left
+            lambda _: jax.lax.cond(
+                press_right,
+                lambda _: jnp.array(2),  # right
+                lambda _: jnp.array(1),  # center
+                operand=None
+            ),
+            operand=None
+        )
+
     new_velocity = jax.lax.cond(
         (press_left == 0) & (press_right == 0),
         lambda state: jnp.array(0, dtype=state.player_velocity.dtype),
@@ -648,7 +660,8 @@ def player_movement(state: RiverraidState, action: Action) -> RiverraidState:
 
     return state._replace(player_x=new_x,
                           player_velocity=new_velocity,
-                          player_state=player_state)
+                          player_state=player_state,
+                          player_direction=new_direction)
 
 @jax.jit
 def get_action_from_keyboard(state: RiverraidState) -> Action:
@@ -707,8 +720,6 @@ def player_shooting(state, action):
         operand=state
     )
 
-
-    jax.debug.print("Riverraid: player_bullet_x: {bullet_x}, player_bullet_y: {bullet_y}", bullet_x=new_bullet_x, bullet_y=new_bullet_y)
     return state._replace(player_bullet_x=new_bullet_x,
                               player_bullet_y=new_bullet_y)
 
@@ -1233,25 +1244,58 @@ class JaxRiverraid(JaxEnvironment):
 
 
 def load_sprites():
+    def normalize_frame(frame: jnp.ndarray, target_shape: Tuple[int, int, int]) -> jnp.ndarray:
+        h, w, c = frame.shape
+        th, tw, tc = target_shape
+        assert c == tc, f"Channel mismatch: {c} vs {tc}"
+
+        # Pad or crop vertically
+        if h < th:
+            top = (th - h) // 2
+            bottom = th - h - top
+            frame = jnp.pad(frame, ((top, bottom), (0, 0), (0, 0)), constant_values=0)
+        elif h > th:
+            crop = (h - th) // 2
+            frame = frame[crop:crop + th, :, :]
+
+        # Pad or crop horizontally
+        if w < tw:
+            left = (tw - w) // 2
+            right = tw - w - left
+            frame = jnp.pad(frame, ((0, 0), (left, right), (0, 0)), constant_values=0)
+        elif w > tw:
+            crop = (w - tw) // 2
+            frame = frame[:, crop:crop + tw, :]
+
+        return frame
     MODULE_DIR = os.path.dirname(os.path.abspath(__file__))
 
     player_center = aj.loadFrame(os.path.join(MODULE_DIR, "sprites/riverraid/plane_center.npy"),transpose=False)
+    player_center = normalize_frame(player_center, (14, 7, 4))
     player_left = aj.loadFrame(os.path.join(MODULE_DIR, "sprites/riverraid/plane_left.npy"), transpose=False)
+    player_left = normalize_frame(player_left, (14, 7, 4))
     player_right = aj.loadFrame(os.path.join(MODULE_DIR, "sprites/riverraid/plane_right.npy"), transpose=False)
+    player_right = normalize_frame(player_right, (14, 7, 4))
     bullet = aj.loadFrame(os.path.join(MODULE_DIR, "sprites/riverraid/bullet.npy"), transpose=False)
-    enemy_boat = aj.loadFrame(os.path.join(MODULE_DIR, "sprites/galaxian/red_orange_enemy_1.npy"), transpose=False)
-    enemy_helicopter = aj.loadFrame(os.path.join(MODULE_DIR, "sprites/galaxian/gray_enemy_1.npy"), transpose=False)
-    enemy_airplane = aj.loadFrame(os.path.join(MODULE_DIR, "sprites/galaxian/purple_blue_enemy_1.npy"), transpose=False)
+    enemy_boat = aj.loadFrame(os.path.join(MODULE_DIR, "sprites/riverraid/boat.npy"), transpose=False)
+    enemy_boat = normalize_frame(enemy_boat, (10, 16, 4))
+    enemy_boat = jnp.flip(enemy_boat, axis=1)
+    enemy_helicopter = aj.loadFrame(os.path.join(MODULE_DIR, "sprites/riverraid/helicopter_1.npy"), transpose=False)
+    enemy_helicopter = normalize_frame(enemy_helicopter, (10, 16, 4))
+    enemy_helicopter_2 = aj.loadFrame(os.path.join(MODULE_DIR, "sprites/riverraid/helicopter_2.npy"), transpose=False)
+    enemy_helicopter_2 = normalize_frame(enemy_helicopter_2, (10, 16, 4))
+    enemy_airplane = aj.loadFrame(os.path.join(MODULE_DIR, "sprites/riverraid/enemy_plane.npy"), transpose=False)
+    enemy_airplane = normalize_frame(enemy_airplane, (10, 16, 4))
+    enemy_airplane = jnp.flip(enemy_airplane, axis=1)
     fuel_display = aj.loadFrame(os.path.join(MODULE_DIR, "sprites/riverraid/fuel_display.npy"), transpose=False)
     fuel_indicator = aj.loadFrame(os.path.join(MODULE_DIR, "sprites/riverraid/fuel_indicator.npy"), transpose=False)
 
     score_sprites = []
     for i in range(10):
-        #sprite_path = os.path.join(MODULE_DIR, f"sprites/riverraid/score_{i}.npy") #TODO use correct sprites
-        sprite_path = os.path.join(MODULE_DIR, f"sprites/riverraid/temporary_score_sprites/score_{i}.npy")
+        sprite_path = os.path.join(MODULE_DIR, f"sprites/riverraid/score_{i}.npy")
         score_sprite = aj.loadFrame(sprite_path, transpose=False)
+        score_sprite = normalize_frame(score_sprite, (8, 6, 4))
         score_sprites.append(score_sprite)
-        #print(f"Score Sprite {i} Dimension: {score_sprites[i].shape}")
 
     SPRITE_PLAYER = jnp.expand_dims(player_center, axis = 0)
     SPRITE_PLAYER_LEFT = jnp.expand_dims(player_left, axis=0)
@@ -1259,6 +1303,7 @@ def load_sprites():
     BULLET = jnp.expand_dims(bullet, axis=0)
     ENEMY_BOAT = jnp.expand_dims(enemy_boat, axis=0)
     ENEMY_HELICOPTER = jnp.expand_dims(enemy_helicopter, axis=0)
+    ENEMY_HELICOPTER_2 = jnp.expand_dims(enemy_helicopter_2, axis=0)
     ENEMY_AIRPLANE = jnp.expand_dims(enemy_airplane, axis=0)
     FUEL_DISPLAY = jnp.expand_dims(fuel_display, axis=0)
     FUEL_INDICATOR = jnp.expand_dims(fuel_indicator, axis=0)
@@ -1271,6 +1316,7 @@ def load_sprites():
         BULLET,
         ENEMY_BOAT,
         ENEMY_HELICOPTER,
+        ENEMY_HELICOPTER_2,
         ENEMY_AIRPLANE,
         FUEL_DISPLAY,
         FUEL_INDICATOR,
@@ -1286,6 +1332,7 @@ class RiverraidRenderer(JAXGameRenderer):
             self.BULLET,
             self.ENEMY_BOAT,
             self.ENEMY_HELICOPTER,
+            self.ENEMY_HELICOPTER_2,
             self.ENEMY_AIRPLANE,
             self.FUEL_DISPLAY,
             self.FUEL_INDICATOR,
@@ -1318,9 +1365,9 @@ class RiverraidRenderer(JAXGameRenderer):
         player_frame = jax.lax.switch(
             state.player_direction,
             [
-                lambda _: aj.get_sprite_frame(self.SPRITE_PLAYER, 0), # TODO _left
+                lambda _: aj.get_sprite_frame(self.SPRITE_PLAYER_LEFT, 0),
                 lambda _: aj.get_sprite_frame(self.SPRITE_PLAYER, 0),
-                lambda _: aj.get_sprite_frame(self.SPRITE_PLAYER, 0)  # TODO _right
+                lambda _: aj.get_sprite_frame(self.SPRITE_PLAYER_RIGHT, 0)
             ],
             operand=None
         )
@@ -1337,7 +1384,12 @@ class RiverraidRenderer(JAXGameRenderer):
             ex = jnp.round(state.enemy_x[i]).astype(jnp.int32)
             ey = jnp.round(state.enemy_y[i]).astype(jnp.int32)
             boat_frame = aj.get_sprite_frame(self.ENEMY_BOAT, 0)
-            helicopter_frame = aj.get_sprite_frame(self.ENEMY_HELICOPTER, 0)
+            helicopter_frame = jax.lax.cond(
+                state.turn_step % 2 == 0,
+                lambda _: aj.get_sprite_frame(self.ENEMY_HELICOPTER, 0),
+                lambda _: aj.get_sprite_frame(self.ENEMY_HELICOPTER_2, 0),
+                operand=None
+            )
             airplane_frame = aj.get_sprite_frame(self.ENEMY_AIRPLANE, 0)
             frame_to_render = jax.lax.switch(
                 state.enemy_type[i],
@@ -1346,6 +1398,12 @@ class RiverraidRenderer(JAXGameRenderer):
                     lambda: helicopter_frame,
                     lambda: airplane_frame,
                 ]
+            )
+            frame_to_render = jax.lax.cond(
+                (state.enemy_direction[i] == 0) | (state.enemy_direction[i] == 2),
+                lambda _: jnp.flip(frame_to_render, axis=1),
+                lambda _: frame_to_render,
+                operand=None
             )
             return aj.render_at(raster, ex, ey, frame_to_render)
 
