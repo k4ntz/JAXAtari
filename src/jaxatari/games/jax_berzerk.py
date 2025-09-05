@@ -1236,8 +1236,10 @@ class JaxBerzerk(JaxEnvironment[BerzerkState, BerzerkObservation, BerzerkInfo, B
                 otto_animation_counter = state.otto_anim_counter + 1
 
                 # Sprungbewegung: Otto wippt auf/ab
-                jump_phase = (otto_animation_counter // 32) % 2  # 0 oder 1
-                jump_offset = jnp.where(jump_phase == 0, -0.5, 0.5)  # springt hoch/runter
+                jump_phase = (otto_animation_counter // 18) % 6  # 0 oder 1
+                jump_offset = jnp.where(jump_phase == 0, 0.5, 
+                                        jnp.where(jump_phase == 5, 0.8, 
+                                                  jnp.where(jump_phase == 1, -0.7, -0.2)))  # springt hoch/runter
                 otto_pos_with_jump = new_otto_pos.at[1].add(jump_offset)
 
                 return otto_pos_with_jump
@@ -1371,7 +1373,7 @@ class BerzerkRenderer(JAXGameRenderer):
             'door_horizontal_up', 'door_horizontal_down',
             'level_outer_walls', 'mid_walls_1', 'mid_walls_2', 'mid_walls_3', 'mid_walls_4',
             'life', 'start_title',
-            'evil_otto'
+            'evil_otto', 'evil_otto_2'
         ]
         for name in sprite_names:
             sprites[name] = _load_sprite_frame(name)
@@ -1408,6 +1410,15 @@ class BerzerkRenderer(JAXGameRenderer):
         ]
         pad_and_store(enemy_keys)
 
+        # Add padding to otto sprites for same size
+        otto_keys = ['evil_otto', 'evil_otto_2']
+        otto_frames = [sprites[k] for k in otto_keys]
+
+        otto_sprites_padded, otto_offsets = jr.pad_to_match(otto_frames)
+        for i, key in enumerate(otto_keys):
+            sprites[key] = jnp.expand_dims(otto_sprites_padded[i], axis=0)
+            pad_offsets[key] = otto_offsets[i]
+
         # Pad mid_walls sprites to same shape
         mid_keys = ['mid_walls_1', 'mid_walls_2', 'mid_walls_3', 'mid_walls_4', 'level_outer_walls', 
                     'door_vertical_left', 'door_vertical_right', 'door_horizontal_up', 'door_horizontal_down',]
@@ -1419,7 +1430,7 @@ class BerzerkRenderer(JAXGameRenderer):
 
         # Expand other sprites
         for key in sprites.keys():
-            if key not in player_keys and key not in enemy_keys and key not in mid_keys:
+            if key not in player_keys and key not in enemy_keys and key not in mid_keys and key not in otto_keys:
                 if isinstance(sprites[key], (list, tuple)):
                     sprites[key] = [jnp.expand_dims(sprite, axis=0) for sprite in sprites[key]]
                 else:
@@ -1784,7 +1795,13 @@ class BerzerkRenderer(JAXGameRenderer):
             raster = jax.lax.cond(cond, draw_enemy_bullet, lambda r: r, raster)
 
 
-        otto_sprites = self.sprites.get('evil_otto')  # shape (2,H,W,C)
+        otto_sprites = self.sprites.get('evil_otto')
+        otto_sprites = jax.lax.cond(
+            (state.otto_anim_counter // 18) % 6,
+            lambda s: s.get('evil_otto'), 
+            lambda s: s.get('evil_otto_2'),
+            self.sprites)
+
         otto_frame = jr.get_sprite_frame(otto_sprites, 0)
         jr.render_at(raster, state.otto_pos[0], state.otto_pos[1], otto_frame)
 
@@ -1794,9 +1811,6 @@ class BerzerkRenderer(JAXGameRenderer):
                 lambda r: r,
                 raster
             )
-
-
-
 
 
         # Draw score
