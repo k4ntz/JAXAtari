@@ -107,13 +107,25 @@ jobs:
     needs: run-tests
     if: always()
     runs-on: ubuntu-latest
+    outputs:
+      test_report_b64: ${{ steps.set_outputs.outputs.test_reports }}
+      test_outcome: ${{ steps.set_outputs.outputs.test_outcomes }}
     steps:
       - uses: cloudposse/github-action-matrix-outputs-read@v1
         id: read
         with:
           matrix-step-name: run-tests
 
+      - id: set_outputs
+        run: |
+          result='${{ steps.read.outputs.result }}'
+          test_reports=$(echo "$result" | jq -c .test_report_b64)
+          test_outcomes=$(echo "$result" | jq -c .test_outcome)
+          echo "test_reports=$test_reports" >> $GITHUB_OUTPUT
+          echo "test_outcomes=$test_outcomes" >> $GITHUB_OUTPUT
+        shell: bash
+
       - run: |
-          echo "Test reports: ${{ steps.read.outputs.test_report_b64 }}"
-          echo "Test outcomes: ${{ steps.read.outputs.test_outcome }}"
+          echo "Test reports: ${{ steps.set_outputs.outputs.test_reports }}"
+          echo "Test outcomes: ${{ steps.set_outputs.outputs.test_outcomes }}"
         shell: bash
