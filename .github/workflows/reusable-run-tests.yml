@@ -13,12 +13,12 @@ on:
         required: false
         type: string
     outputs:
-      test_report_b64:
-        description: "Base64-encoded test report"
-        value: ${{ steps.out.outputs.test_report_b64 }}
-      test_outcome:
-        description: "Outcome of the test job"
-        value: ${{ steps.out.outputs.test_outcome }}
+      test_reports:
+        description: "JSON object of test reports"
+        value: ${{ jobs.results.outputs.test_report_b64 }}
+      test_outcomes:
+        description: "JSON object of test outcomes"
+        value: ${{ jobs.results.outputs.test_outcome }}
 
 jobs:
   run-tests:
@@ -102,3 +102,24 @@ jobs:
           outputs: |-
             test_report_b64: ${{ steps.pytest_output.outputs.report }}
             test_outcome: ${{ steps.run_tests.outcome }}
+    outputs:
+      matrix: ${{ steps.out.outputs.matrix }}
+
+  results:
+    needs: run-tests
+    if: always()
+    runs-on: ubuntu-latest
+    outputs:
+      test_report_b64: ${{ steps.read.outputs.test_report_b64 }}
+      test_outcome: ${{ steps.read.outputs.test_outcome }}
+    steps:
+      - uses: cloudposse/github-action-matrix-outputs-read@v1
+        id: read
+        with:
+          matrix-job-name: run-tests
+          matrix-job-outputs: ${{ needs.run-tests.outputs.matrix }}
+
+      - run: |
+          echo "Test reports: ${{ steps.read.outputs.test_report_b64 }}"
+          echo "Test outcomes: ${{ steps.read.outputs.test_outcome }}"
+        shell: bash
