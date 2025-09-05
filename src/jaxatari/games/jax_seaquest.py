@@ -10,6 +10,7 @@ from jaxatari.environment import JaxEnvironment, JAXAtariAction as Action
 from jaxatari.renderers import JAXGameRenderer
 import jaxatari.rendering.jax_rendering_utils as jr
 
+
 class SeaquestConstants(NamedTuple):
     # Colors
     BACKGROUND_COLOR = (0, 0, 139)  # Dark blue for water
