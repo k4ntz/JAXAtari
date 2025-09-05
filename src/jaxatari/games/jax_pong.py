@@ -11,7 +11,7 @@ from jaxatari.rendering import jax_rendering_utils as jr
 from jaxatari.environment import JaxEnvironment, JAXAtariAction as Action
 
 # Kong # imaging
-
+# choinges
 class PongConstants(NamedTuple):
     MAX_SPEED: int = 12
     BALL_SPEED: chex.Array = jnp.array([-1, 1])
