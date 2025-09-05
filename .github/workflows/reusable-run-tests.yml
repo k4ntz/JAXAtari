@@ -102,8 +102,6 @@ jobs:
           outputs: |-
             test_report_b64: ${{ steps.pytest_output.outputs.report }}
             test_outcome: ${{ steps.run_tests.outcome }}
-    outputs:
-      matrix: ${{ steps.out.outputs.matrix }}
 
   results:
     needs: run-tests
@@ -117,7 +115,6 @@ jobs:
         id: read
         with:
           matrix-step-name: run-tests
-          matrix-job-outputs: ${{ needs.run-tests.outputs.matrix }}
 
       - run: |
           echo "Test reports: ${{ steps.read.outputs.test_report_b64 }}"
