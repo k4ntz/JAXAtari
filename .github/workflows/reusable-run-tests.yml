@@ -117,7 +117,7 @@ jobs:
         id: read
         with:
           matrix-step-name: run-tests
-          matrix-step-outputs: ${{ needs.run-tests.outputs.matrix }}
+          matrix-job-outputs: ${{ needs.run-tests.outputs.matrix }}
 
       - run: |
           echo "Test reports: ${{ steps.read.outputs.test_report_b64 }}"
