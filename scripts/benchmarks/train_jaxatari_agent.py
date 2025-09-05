@@ -1,8 +1,20 @@
 import faulthandler
 
+import flax
+
 import jaxatari.core
 faulthandler.enable()
+import os
 
+os.environ["XLA_PYTHON_CLIENT_PREALLOCATE"] = "false"
+os.environ["XLA_PYTHON_CLIENT_ALLOCATOR"] = "platform"
+# optional:
+os.environ["XLA_PYTHON_CLIENT_MEM_FRACTION"] = "0.5"
+
+import argparse
+from datetime import datetime
+import imageio
+import shutil
 import jax
 import jax.numpy as jnp
 import flax.linen as nn
@@ -10,27 +22,69 @@ import numpy as np
 from typing import Dict, Any, Tuple, List, Callable
 from collections import deque
 from tqdm import tqdm
-from ppo_agent import ActorCritic, create_ppo_train_state, ppo_loss_fn, ppo_update_minibatch 
 import pygame
 from functools import partial
+import matplotlib.pyplot as plt
 
 import jaxatari
 from jaxatari.wrappers import AtariWrapper, FlattenObservationWrapper, ObjectCentricWrapper, PixelAndObjectCentricWrapper
 import jaxatari.games.jax_pong as jax_pong
 import jaxatari.spaces as spaces
+from ppo_agent import (ActorCritic, create_ppo_train_state,
+                       ppo_update_minibatch)
+from jaxatari.wrappers import (AtariWrapper, FlattenObservationWrapper,
+                        ObjectCentricWrapper, PixelObsWrapper, NormalizeObservationWrapper)
+
+# Default configuration
+PPO_CONFIG = {
+    "ENV_NAME_JAXATARI": "pong",
+    "TOTAL_TIMESTEPS": 100_000_000,
+    "LR": 5e-4,
+    "NUM_ENVS": 128,
+    "NUM_STEPS": 256,
+    "GAMMA": 0.99,
+    "GAE_LAMBDA": 0.95,
+    "NUM_MINIBATCHES": 16,
+    "UPDATE_EPOCHS": 10,
+    "CLIP_EPS": 0.2,
+    "CLIP_VF_EPS": 0.2,
+    "ENT_COEF": 0.01,
+    "VF_COEF": 0.5,
+    "MAX_GRAD_NORM": 0.5,
+    "ACTIVATION": "relu",
+    "ANNEAL_LR": True,
+    "SEED": 42,
+    "BUFFER_WINDOW": 4,
+    "FRAMESKIP": 4,
+    "LOG_INTERVAL_UPDATES": 20, # Log less frequently (since updates are less frequent)
+}
+
+def update_pygame(window, image_data, upscale_factor, width, height):
+    """Updates the Pygame window with a new frame."""
+    image_surface = pygame.surfarray.make_surface(np.transpose(image_data, (1, 0, 2)))
+    upscaled_surface = pygame.transform.scale(
+        image_surface, (width * upscale_factor, height * upscale_factor)
+    )
+    window.blit(upscaled_surface, (0, 0))
+    pygame.display.flip()
 
 
-def normalize_observation_jaxatari(obs: jnp.ndarray, obs_space: spaces.Space) -> jnp.ndarray:
-    # assuming the obs space is flattened at this point, get the max values for each feature
-    max_values = obs_space.high.flatten()
-    min_values = obs_space.low.flatten()
-
-    num_features_per_frame = len(max_values)
-    num_frames = obs.shape[-1] // num_features_per_frame
-    max_values = jnp.tile(max_values, num_frames)
-    min_values = jnp.tile(min_values, num_frames)
-
-    return 2* ((obs - min_values)/(max_values-min_values)) - 1.0
+def create_env(game_name: str, buffer_window: int, frameskip: int, use_pixels: bool):
+    """Creates and wraps the JAXAtari environment based on config."""
+    env = jaxatari.make(game_name)
+    env = AtariWrapper(env, sticky_actions=True, frame_stack_size=buffer_window, frame_skip=frameskip, episodic_life=False)
+    
+    if use_pixels:
+        print("Using Pixel-based observations.")
+        # We use PixelObsWrapper to only output pixel observations.
+        env = PixelObsWrapper(env)
+    else:
+        print("Using Object-centric observations.")
+        env = ObjectCentricWrapper(env)
+        
+    env = FlattenObservationWrapper(env)
+    env = NormalizeObservationWrapper(env, to_neg_one=True)
+    return env
 
 
 def env_step(env_step_fn, state, action, agent_key):
@@ -69,25 +123,24 @@ def collect_rollout_step_vmapped(
     next_raw_obs_batched, next_env_states_batched, rewards_batched, dones_batched, _ = \
         vmapped_step_fn(current_env_states_batched, actions.astype(jnp.int32))
 
-    # 3. Normalize observations
-    next_obs_norm_batched = normalize_observation_jaxatari(next_raw_obs_batched, obs_space)
+    # Observations are already normalized by the wrapper
     # Ensure it's (num_envs, features_flat_after_norm)
-    if next_obs_norm_batched.ndim == 1 and num_envs == 1:  # Special case for num_envs=1
-        next_obs_norm_batched = next_obs_norm_batched.reshape(1, -1)
-    elif next_obs_norm_batched.ndim == 2:  # Expected case (num_envs, features)
+    if next_raw_obs_batched.ndim == 1 and num_envs == 1:  # Special case for num_envs=1
+        next_raw_obs_batched = next_raw_obs_batched.reshape(1, -1)
+    elif next_raw_obs_batched.ndim == 2:  # Expected case (num_envs, features)
         pass
     else:  # Potentially (num_envs, H, W, C*F) if not flattened before normalization
-        next_obs_norm_batched = next_obs_norm_batched.reshape(num_envs, -1)
+        next_raw_obs_batched = next_raw_obs_batched.reshape(num_envs, -1)
 
     return (
-        next_obs_norm_batched,
+        next_raw_obs_batched,
         next_env_states_batched,
         actions,
         log_probs,
-        rewards_batched,
-        dones_batched,
-        value_squeezed
-    )
+    rewards_batched,
+    dones_batched,
+    value_squeezed
+)
 
 
 # Create a JIT-compiled version with static arguments
@@ -181,238 +234,296 @@ def update_minibatch_vmapped(
     return final_state, avg_loss, avg_aux_info
 
 
+@partial(jax.jit, static_argnums=(3, 4))
+def collect_rollout_step(
+    train_state,
+    current_obs_batched: jnp.ndarray,
+    current_env_states_batched: Any,
+    vmapped_step_fn: Callable,
+    obs_space: spaces.Space,
+    agent_key: jnp.ndarray,
+) -> Tuple[jnp.ndarray, Any, jnp.ndarray, jnp.ndarray, jnp.ndarray, jnp.ndarray, jnp.ndarray, jnp.ndarray]:
+    """Function to collect a single step of rollout data."""
+    pi, value = train_state.apply_fn({'params': train_state.params}, current_obs_batched)
+    if value.ndim > 1:
+        value_squeezed = value.squeeze(axis=-1)
+    else:
+        value_squeezed = value
+    actions = pi.sample(seed=agent_key)
+    log_probs = pi.log_prob(actions)
+
+    next_raw_obs_batched, next_env_states_batched, rewards_batched, dones_batched, _ = \
+        vmapped_step_fn(current_env_states_batched, actions.astype(jnp.int32))
+
+    # Observations are already normalized by the wrapper
+    return (
+        next_raw_obs_batched,
+        next_raw_obs_batched,
+        next_env_states_batched,
+        actions,
+        log_probs,
+        rewards_batched,
+        dones_batched,
+        value_squeezed
+    )
+
+
 def train_ppo_with_jaxatari(config: Dict[str, Any]):
-    np.random.seed(config["SEED"]) 
+    """Main training loop for PPO on a JAXAtari environment."""
+    np.random.seed(config["SEED"])
     main_rng = jax.random.PRNGKey(config["SEED"])
 
-    game_name = config["ENV_NAME_JAXATARI"] 
-
-    if game_name != "pong":
-        # TODO: change the core to support other games
-        raise ValueError(f"Game {game_name} is not supported for PPO training right now.")
-
-    buffer_window = config["BUFFER_WINDOW"]
+    game_name = config["ENV_NAME_JAXATARI"]
     
     config["NUM_UPDATES"] = (
         config["TOTAL_TIMESTEPS"] // config["NUM_STEPS"] // config["NUM_ENVS"]
     )
-    config["MINIBATCH_SIZE_CALCULATED"] = (
-        config["NUM_ENVS"] * config["NUM_STEPS"] // config["NUM_MINIBATCHES"]
-    )
 
-    print(f"Using JaxAtari environment: {game_name}")
-    # create all environments
-    envs = []
-    for i in range(config["NUM_ENVS"]):
-        env = jaxatari.make(game_name)
-        env: AtariWrapper = AtariWrapper(env, sticky_actions=True, frame_stack_size=buffer_window, frame_skip=config["FRAMESKIP"]) # get the atari wrapper to handle things like frame stacking, sticky actions, etc.
-        env: ObjectCentricWrapper = ObjectCentricWrapper(env) # use the object centric wrapper to only return object centric observations
-        env: FlattenObservationWrapper = FlattenObservationWrapper(env) # flatten the object centric observation to a single vector
-        envs.append(env)
+    print(f"--- Starting Training on {game_name.upper()} ---")
+    print(f"Total Timesteps: {config['TOTAL_TIMESTEPS']:,}")
+    print(f"Num Updates: {config['NUM_UPDATES']:,}")
+    print("-------------------------------------------------")
 
-    # We will use envs[0].step as the representative_env_step_fn
-    representative_env_step_fn = envs[0].step
+    # Vectorized environment creation using the new standalone function
+    proto_env = create_env(game_name, config["BUFFER_WINDOW"], config["FRAMESKIP"], config["USE_PIXELS"])
+    vmapped_reset_fn = jax.vmap(proto_env.reset)
+    vmapped_step_fn = jax.vmap(proto_env.step)
 
-    obs_list = []
-    states_list_py = []  # Keep as Python list of individual PyTree states initially
-    reset_keys = jax.random.split(main_rng, config["NUM_ENVS"] + 1)  # +1 for main_rng split later
-    main_rng = reset_keys[0]
+    # Initial Reset
+    reset_keys = jax.random.split(main_rng, config["NUM_ENVS"] + 1)
+    main_rng, agent_key, init_key = jax.random.split(reset_keys[0], 3)
+    current_raw_obs, current_batched_env_states = vmapped_reset_fn(reset_keys[1:])
 
-    obs_space = envs[0].observation_space()
-
-    for i, env in enumerate(envs):
-        # Each env.reset needs its own key
-        obs, curr_state = env.reset(key=reset_keys[i+1])
-        obs_list.append(obs)
-        states_list_py.append(curr_state)
-
-    current_raw_obs_stacked = jnp.stack(obs_list)  # (num_envs, *raw_obs_shape)
-    obs_shape_flat = current_raw_obs_stacked.shape[1:]  # Shape of one flattened raw observation
-
-    # Get the base environment directly TODO: maybe pass the action space through as well?
-    possible_actions = envs[0]._env.action_space()
-
-    # at this point print the possible actions
-    print(f"Possible actions: {possible_actions}")
-
-    agent_key, init_key = jax.random.split(main_rng)
-    train_state = create_ppo_train_state(init_key, config, obs_shape_flat, possible_actions.n)
-
-    # Initial normalization and state batching
-    current_obs_stacked_norm_flat = normalize_observation_jaxatari(current_raw_obs_stacked, obs_space).reshape(config["NUM_ENVS"], -1)
-    # Batch the list of PyTree states into a single PyTree with leading batch dimension
-    current_batched_env_states = jax.tree_util.tree_map(lambda *xs: jnp.stack(xs, axis=0), *states_list_py)
-
-    rollout_obs_flat = jnp.zeros((config["NUM_STEPS"], config["NUM_ENVS"]) + obs_shape_flat, dtype=jnp.float32)
-    rollout_actions = jnp.zeros((config["NUM_STEPS"], config["NUM_ENVS"]), dtype=jnp.int32)
-    rollout_log_probs = jnp.zeros((config["NUM_STEPS"], config["NUM_ENVS"]), dtype=jnp.float32)
-    rollout_rewards = jnp.zeros((config["NUM_STEPS"], config["NUM_ENVS"]), dtype=jnp.float32)
-    rollout_dones = jnp.zeros((config["NUM_STEPS"], config["NUM_ENVS"]), dtype=jnp.bool_)
-    rollout_values = jnp.zeros((config["NUM_STEPS"], config["NUM_ENVS"]), dtype=jnp.float32)
-
-    episode_rewards_deque = deque(maxlen=100 * config["NUM_ENVS"]) 
-    all_episode_rewards_history = [] 
-    all_mean_rewards_history, all_timesteps_history = [], []
-    all_pg_loss_hist, all_vf_loss_hist, all_ent_hist = [], [], []
-    current_episode_rewards_np = np.zeros(config["NUM_ENVS"]) 
-
-    # Create progress bar for overall training
-    pbar = tqdm(total=config["NUM_UPDATES"], desc="Training Progress", position=0)
-
-    for update_idx in range(1, config["NUM_UPDATES"] + 1):
-        agent_key, rollout_sample_key, update_perm_key = jax.random.split(agent_key, 3)
-
-        # Create progress bar for rollout steps
-        rollout_pbar = tqdm(total=config["NUM_STEPS"], desc="Rollout", position=1, leave=False)
-        
-        # Track rewards during rollout for immediate feedback
-        rollout_rewards_sum = 0
-        rollout_rewards_count = 0
-
-        for step_idx in range(config["NUM_STEPS"]):
-            total_env_steps_so_far = (update_idx - 1) * config["NUM_STEPS"] * config["NUM_ENVS"] + step_idx * config["NUM_ENVS"]
-
-            # Use JIT-compiled rollout collection with vmapped step function
-            next_obs_norm, next_batched_env_states, actions, log_probs, rewards, dones, value = collect_rollout_step_vmapped_jit(
-                train_state,
-                current_obs_stacked_norm_flat,  # Already normalized
-                current_batched_env_states,     # Batched PyTree of env states
-                rollout_sample_key,             # Key for this step
-                representative_env_step_fn,     # Single step function to vmap over
-                config["NUM_ENVS"],
-                obs_space
-            )
-
-            # Split key for next iteration
-            agent_key, rollout_sample_key = jax.random.split(agent_key)
-
-            # Convert JAX arrays to NumPy for CPU-side logic
-            rewards_np = np.array(rewards)
-            dones_np = np.array(dones)
-
-            # Update episode rewards and logging
-            current_episode_rewards_np += rewards_np
-            for i in range(config["NUM_ENVS"]):
-                if dones_np[i]:
-                    episode_rewards_deque.append(current_episode_rewards_np[i])
-                    all_episode_rewards_history.append(current_episode_rewards_np[i])
-                    current_episode_rewards_np[i] = 0.0
-                    # Important: If an env is done, its state needs to be reset
-                    # Get reset_obs and reset_state for done environments
-                    reset_key, agent_key = jax.random.split(agent_key)
-                    new_obs_done, new_state_done = envs[i].reset(reset_key)
-                    # Update the corresponding slices in next_obs_norm and next_batched_env_states
-                    next_obs_norm = next_obs_norm.at[i].set(normalize_observation_jaxatari(new_obs_done, obs_space).flatten())
-                    # Update the batched state PyTree
-                    next_batched_env_states = jax.tree_util.tree_map(
-                        lambda leaf, new_state: leaf.at[i].set(new_state),
-                        next_batched_env_states,
-                        new_state_done
-                    )
-
-            # Update rollout progress bar metrics
-            rollout_rewards_sum += jnp.sum(rewards).item()
-            rollout_rewards_count += config["NUM_ENVS"]
-
-            rollout_obs_flat = rollout_obs_flat.at[step_idx].set(current_obs_stacked_norm_flat)
-            rollout_actions = rollout_actions.at[step_idx].set(actions)
-            rollout_log_probs = rollout_log_probs.at[step_idx].set(log_probs)
-            rollout_rewards = rollout_rewards.at[step_idx].set(rewards)
-            rollout_dones = rollout_dones.at[step_idx].set(dones)
-            
-            current_obs_stacked_norm_flat = next_obs_norm
-            current_batched_env_states = next_batched_env_states
-
-            rollout_pbar.update(1)
-            rollout_pbar.set_postfix({
-                "env_steps": total_env_steps_so_far,
-                "avg_reward": f"{rollout_rewards_sum / rollout_rewards_count:.2f}" if rollout_rewards_count > 0 else "N/A"
-            })
+    # Prepare for training
+    obs_space = proto_env.observation_space()
+    obs_shape_flat = current_raw_obs.shape[1:]
+    train_state = create_ppo_train_state(init_key, config, obs_shape_flat, proto_env.action_space().n)
     
-        rollout_pbar.close()
+    # Logging
+    episode_rewards_deque = deque(maxlen=100)
+    all_mean_rewards_history, all_timesteps_history = [], []
+    
+    pbar = tqdm(total=config["TOTAL_TIMESTEPS"], desc="Training Progress")
+    
+    @jax.jit
+    def collect_full_rollout(train_state, initial_obs_norm, initial_env_states, rollout_key):
+        def _step_body(carry, _):
+            obs_norm, env_states, key = carry
+            key, step_key = jax.random.split(key)
+            pi, value = train_state.apply_fn({'params': train_state.params}, obs_norm)
+            actions = pi.sample(seed=step_key)
+            log_probs = pi.log_prob(actions)
+            next_raw_obs, next_env_states, rewards, dones, _ = vmapped_step_fn(env_states, actions.astype(jnp.int32))
+            # Observations are already normalized by the wrapper
+            transition = {"obs": obs_norm, "actions": actions, "log_probs": log_probs, "rewards": rewards, "dones": dones, "values": value if value.ndim == 1 else value.squeeze(-1)}
+            return (next_raw_obs, next_env_states, key), transition
+        (final_obs, final_states, _), collected_transitions = jax.lax.scan(_step_body, (initial_obs_norm, initial_env_states, rollout_key), None, length=config["NUM_STEPS"])
+        _, last_val = train_state.apply_fn({'params': train_state.params}, final_obs)
+        return final_obs, final_states, collected_transitions, last_val
 
-        # Get final value for advantage calculation
-        _, last_val = train_state.apply_fn({'params': train_state.params}, current_obs_stacked_norm_flat)
-        
-        # Use JIT-compiled advantage calculation
+    # JIT-compiled function for a SINGLE minibatch update.
+    @jax.jit
+    def _update_minibatch_jit(train_state, minibatch_data, ppo_hparams):
+        obs_mb, act_mb, logp_mb, val_mb, adv_mb, ret_mb = minibatch_data
+        new_train_state, _, _ = ppo_update_minibatch(
+            train_state, obs_mb, act_mb, logp_mb, val_mb, adv_mb, ret_mb, ppo_hparams
+        )
+        return new_train_state
+
+    # Simplified update loop using standard Python loops for clarity and robustness.
+    def ppo_update_epochs(train_state, batch_data, update_key):
+        b_obs, b_actions, b_log_probs, b_values, b_advantages, b_returns = batch_data
+        ppo_hparams = {k: config[k] for k in ["CLIP_EPS", "CLIP_VF_EPS", "ENT_COEF", "VF_COEF", "MAX_GRAD_NORM"]}
+
+        for _ in range(config["UPDATE_EPOCHS"]):
+            update_key, perm_key = jax.random.split(update_key)
+            total_batch_size = b_obs.shape[0]
+            permutation = jax.random.permutation(perm_key, total_batch_size)
+            shuffled_batch = jax.tree.map(lambda x: x[permutation], (b_obs, b_actions, b_log_probs, b_values, b_advantages, b_returns))
+
+            num_minibatches = config["NUM_MINIBATCHES"]
+            minibatch_size = total_batch_size // num_minibatches
+            
+            for i in range(num_minibatches):
+                start, end = i * minibatch_size, (i + 1) * minibatch_size
+                minibatch = jax.tree.map(lambda x: x[start:end], shuffled_batch)
+                train_state = _update_minibatch_jit(train_state, minibatch, ppo_hparams)
+                
+        return train_state
+
+    # Main training loop
+    for update_idx in range(1, config["NUM_UPDATES"] + 1):
+        agent_key, rollout_key, update_key = jax.random.split(agent_key, 3)
+        current_raw_obs, current_batched_env_states, rollout_data, last_val = collect_full_rollout(train_state, current_raw_obs, current_batched_env_states, rollout_key)
+
         advantages, returns = compute_advantages(
-            rollout_rewards,
-            rollout_values,
-            rollout_dones,
-            last_val,
-            config["NUM_STEPS"],
-            config["GAMMA"],
-            config["GAE_LAMBDA"]
+            rollout_data["rewards"], rollout_data["values"], rollout_data["dones"],
+            last_val if last_val.ndim == 1 else last_val.squeeze(), config["NUM_STEPS"], config["GAMMA"], config["GAE_LAMBDA"]
         )
 
-        b_obs = rollout_obs_flat.reshape((-1,) + obs_shape_flat)
-        b_actions = rollout_actions.reshape(-1)
-        b_log_probs_old = rollout_log_probs.reshape(-1)
-        b_values_old = rollout_values.reshape(-1) 
-        b_advantages = advantages.reshape(-1)
-        b_returns = returns.reshape(-1)
+        if update_idx % config["LOG_INTERVAL_UPDATES"] == 0:
+            rewards_np = np.asarray(rollout_data["rewards"])
+            mean_rollout_reward = np.mean(np.sum(rewards_np, axis=0))
+            episode_rewards_deque.append(mean_rollout_reward)
+            if len(episode_rewards_deque) > 0:
+                mean_reward = np.mean(list(episode_rewards_deque))
+                current_timesteps = update_idx * config["NUM_STEPS"] * config["NUM_ENVS"]
+                all_mean_rewards_history.append(mean_reward)
+                all_timesteps_history.append(current_timesteps)
+                pbar.set_postfix({"mean_reward": f"{mean_reward:.2f}"})
 
-        # Use vmapped minibatch updates
-        for epoch in range(config["UPDATE_EPOCHS"]):
-            # Ensure permutation is applied to all data consistently
-            epoch_perm_key, agent_key = jax.random.split(agent_key)
-            permutation = jax.random.permutation(epoch_perm_key, b_obs.shape[0])
+        batch_data = (
+            rollout_data["obs"].swapaxes(0, 1).reshape((-1,) + obs_shape_flat),
+            rollout_data["actions"].swapaxes(0, 1).reshape(-1),
+            rollout_data["log_probs"].swapaxes(0, 1).reshape(-1),
+            rollout_data["values"].swapaxes(0, 1).reshape(-1),
+            advantages.swapaxes(0, 1).reshape(-1),
+            returns.swapaxes(0, 1).reshape(-1)
+        )
 
-            # Apply permutation to all batch elements
-            shuffled_b_obs = b_obs[permutation]
-            shuffled_b_actions = b_actions[permutation]
-            shuffled_b_log_probs_old = b_log_probs_old[permutation]
-            shuffled_b_values_old = b_values_old[permutation]
-            shuffled_b_advantages = b_advantages[permutation]
-            shuffled_b_returns = b_returns[permutation]
-
-            train_state, loss, aux_info = update_minibatch_vmapped(
-                train_state,
-                shuffled_b_obs,
-                shuffled_b_actions,
-                shuffled_b_log_probs_old,
-                shuffled_b_values_old,
-                shuffled_b_advantages,
-                shuffled_b_returns,
-                config["NUM_MINIBATCHES"],
-                config["CLIP_EPS"],
-                config["CLIP_VF_EPS"],
-                config["ENT_COEF"],
-                config["VF_COEF"],
-                config["MAX_GRAD_NORM"]
-            )
-            
-        if update_idx % config.get("LOG_INTERVAL_UPDATES", 10) == 0:
-            mean_all_rewards = np.mean(list(episode_rewards_deque))
-            all_mean_rewards_history.append(mean_all_rewards)
-            # Convert JAX arrays to Python values
-            loss_float = float(loss)
-            aux_info_dict = jax.tree_util.tree_map(lambda x: float(x), aux_info)
-            all_pg_loss_hist.append(aux_info_dict["pg_loss"])
-            all_vf_loss_hist.append(aux_info_dict["vf_loss"])
-            all_ent_hist.append(aux_info_dict["entropy"])
-            current_total_steps_log = update_idx * config["NUM_STEPS"] * config["NUM_ENVS"]
-            all_timesteps_history.append(current_total_steps_log)
-
-            pbar.set_postfix({
-                "mean_all_rewards": f"{mean_all_rewards:.2f}",
-                "pg_loss": f"{aux_info_dict['pg_loss']:.4f}",
-                "vf_loss": f"{aux_info_dict['vf_loss']:.4f}",
-                "entropy": f"{aux_info_dict['entropy']:.4f}"
-            })
-
-        pbar.update(1)
+        train_state = ppo_update_epochs(train_state, batch_data, update_key)
+        pbar.update(config["NUM_STEPS"] * config["NUM_ENVS"])
 
     pbar.close()
-    print("Training finished.")
+    print("--- Training Finished ---")
+    
+    return train_state, {"timesteps": all_timesteps_history, "mean_rewards": all_mean_rewards_history}
 
-    training_results_metrics = {
-        "timesteps": all_timesteps_history,
-        "mean_rewards": all_mean_rewards_history,
-        "pg_losses": all_pg_loss_hist,
-        "vf_losses": all_vf_loss_hist,
-        "ent_losses": all_ent_hist,
-        "all_episode_rewards": all_episode_rewards_history
-    }
 
-    return train_state, training_results_metrics
+def plot_training_rewards(metrics: Dict[str, Any], save_path: str):
+    """Plots and saves the training reward curve."""
+    if not metrics["timesteps"]:
+        print("No metrics recorded, skipping plot generation.")
+        return
+        
+    print(f"Generating reward plot at {save_path}...")
+    plt.figure(figsize=(10, 5))
+    plt.plot(metrics["timesteps"], metrics["mean_rewards"])
+    plt.xlabel("Timesteps")
+    plt.ylabel("Mean Episode Reward")
+    plt.title("PPO Training Reward Curve")
+    plt.grid(True)
+    plt.tight_layout()
+    plt.savefig(save_path)
+    plt.close()
+    print("Plot saved successfully.")
+
+
+def visualize_agent_gameplay(train_state, config: Dict[str, Any]):
+    """Visualizes one episode of the trained agent's gameplay and saves it as an MP4."""
+    print("\n--- Starting Visualization ---")
+    
+    UPSCALE_FACTOR = 4
+    WIDTH, HEIGHT = 160, 210
+    FPS = 30
+
+    # Create a temporary directory for frames
+    frames_dir = os.path.join(config["RESULTS_DIR"], "temp_frames")
+    os.makedirs(frames_dir, exist_ok=True)
+
+    pygame.init()
+    window = pygame.display.set_mode((WIDTH * UPSCALE_FACTOR, HEIGHT * UPSCALE_FACTOR))
+    pygame.display.set_caption(f"PPO Agent Playing {config['ENV_NAME_JAXATARI'].upper()}")
+    clock = pygame.time.Clock()
+
+    # Create the environment with the correct wrapper (pixel or object)
+    env = create_env(config["ENV_NAME_JAXATARI"], config["BUFFER_WINDOW"], config["FRAMESKIP"], config["USE_PIXELS"])
+    
+    vis_key = jax.random.PRNGKey(config["SEED"] + 1)
+    obs, state = env.reset(key=vis_key)
+    obs_space = env.observation_space()
+
+    done, running = False, True
+    total_reward, frame_count = 0.0, 0
+
+    while not done and running:
+        for event in pygame.event.get():
+            if event.type == pygame.QUIT:
+                running = False
+        
+        # Observations are already normalized by the wrapper
+        pi, _ = train_state.apply_fn({'params': train_state.params}, jnp.expand_dims(obs, axis=0))
+        action = pi.mode()[0]
+
+        obs, state, reward, done, _ = env.step(state, action)
+        total_reward += reward
+
+        image = env._env.render(state.env_state)
+        image_cpu = np.asarray(image)
+        update_pygame(window, image_cpu, UPSCALE_FACTOR, WIDTH, HEIGHT)
+
+        # Save the current frame
+        frame_path = os.path.join(frames_dir, f"frame_{frame_count:05d}.png")
+        pygame.image.save(window, frame_path)
+        frame_count += 1
+
+        clock.tick(FPS)
+
+    pygame.quit()
+    print(f"--- Visualization Finished ---")
+    print(f"Episode Score: {total_reward:.2f}")
+
+    # --- Compile frames into a video ---
+    video_path = os.path.join(config["RESULTS_DIR"], f"gameplay_{config['ENV_NAME_JAXATARI']}_{config['TIMESTAMP']}.mp4")
+    print(f"\nCompiling {frame_count} frames into video: {video_path}")
+    
+    try:
+        with imageio.get_writer(video_path, fps=FPS) as writer:
+            for i in tqdm(range(frame_count), desc="Creating MP4"):
+                frame_file = os.path.join(frames_dir, f"frame_{i:05d}.png")
+                writer.append_data(imageio.imread(frame_file))
+        print("Video saved successfully.")
+    except Exception as e:
+        print(f"Error creating video: {e}")
+    finally:
+        # Clean up temporary frames
+        print("Cleaning up temporary frames...")
+        shutil.rmtree(frames_dir)
+
+
+def main():
+    parser = argparse.ArgumentParser(description="Train a PPO agent on a JAXAtari game, then visualize it.")
+    parser.add_argument("--game", type=str, default="pong", help="Name of the JAXAtari game to play.")
+    parser.add_argument("--timesteps", type=int, default=20_000_000, help="Total number of timesteps for training.")
+    parser.add_argument("--seed", type=int, default=42, help="Random seed for reproducibility.")
+    parser.add_argument("--num_envs", type=int, default=128, help="Number of parallel environments for training.")
+    parser.add_argument("--use-pixels", action="store_true", default=False, help="Use pixel observations instead of object-centric ones.")
+
+    args = parser.parse_args()
+
+    config = PPO_CONFIG.copy()
+    config["ENV_NAME_JAXATARI"] = args.game
+    config["TOTAL_TIMESTEPS"] = args.timesteps
+    config["SEED"] = args.seed
+    config["NUM_ENVS"] = args.num_envs
+    config["USE_PIXELS"] = args.use_pixels
+    
+    results_dir = "results"
+    os.makedirs(results_dir, exist_ok=True)
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    
+    # Add results info to config for easy access
+    config["RESULTS_DIR"] = results_dir
+    config["TIMESTAMP"] = timestamp
+
+    # 1. Train the agent
+    trained_state, metrics = train_ppo_with_jaxatari(config)
+
+    # 2. Plot the results
+    plot_filename = f"reward_curve_{args.game}_{timestamp}.png"
+    plot_path = os.path.join(results_dir, plot_filename)
+    plot_training_rewards(metrics, plot_path)
+    
+    # 3. Save the trained agent's parameters
+    print(f"\n--- Saving Agent Parameters ---")
+    model_filename = f"ppo_agent_{args.game}_{timestamp}.npz"
+    model_path = os.path.join(results_dir, model_filename)
+    params_to_save = flax.serialization.to_state_dict(trained_state.params)
+    np.savez(model_path, **params_to_save)
+    print(f"Agent parameters saved to {model_path}")
+
+    # 4. Visualize the trained agent
+    visualize_agent_gameplay(trained_state, config)
+
+if __name__ == "__main__":
+    main()

@@ -307,7 +307,9 @@ def run_parallel_jax(
             # Call render on the next_state.
             # Its output must be part of this function's return to ensure computation by JIT.
             rendered_image = jax_env.render(next_state)
-            aux_output = rendered_image 
+            # ensure its really performed by accessing the first pixel and returning it
+            first_pixel = rendered_image[0, 0]
+            aux_output = first_pixel
         else:
             # Provide a structurally similar placeholder if render is not called.
             # Using a dummy array. The actual content doesn't matter if not used later,
@@ -327,16 +329,14 @@ def run_parallel_jax(
     def run_one_step(carry, _):
         current_states_batch, current_rng_key = carry
         action_rng_key, next_rng_key_for_carry = jax.random.split(current_rng_key)
-        
-        # Generate a batch of actions by creating a batch of random keys and vmapping the sample function.
+
         action_keys = jax.random.split(action_rng_key, num_envs)
         actions_to_take = vmapped_action_sample(action_keys)
-        
-        # jit_parallel_step returns (next_states_batch, obs_batch, aux_output_batch)
-        # The scan only needs to carry 'next_states_batch' and the new RNG key.
+
         next_states_batch, _obs_batch, _aux_output_batch = jit_parallel_step(current_states_batch, actions_to_take)
-        
-        return (next_states_batch, next_rng_key_for_carry), None # Scan's per-iteration output is None
+
+        # NEW: Return the statistic. This connects the render call to the final output.
+        return (next_states_batch, next_rng_key_for_carry), _aux_output_batch
 
     warmup_steps = 1000
     print(f"JAX: Starting warmup ({warmup_steps} steps) and compilation...")
@@ -366,10 +366,12 @@ def run_parallel_jax(
     time.sleep(1)
 
     start_time = time.time()
-    (final_states, _), _ = jax.lax.scan(
+    # NEW: Capture the image_stats output from the scan.
+    (final_states, _), image_stats = jax.lax.scan(
         run_one_step, (states_for_benchmark_run, run_key), None, length=num_steps_per_env
     )
-    jax.block_until_ready(final_states)
+    # NEW: Wait for both the final states and the final statistics to be computed.
+    jax.block_until_ready((final_states, image_stats))
     total_time = time.time() - start_time
 
     total_steps = num_steps_per_env * num_envs
@@ -768,7 +770,7 @@ if __name__ == "__main__":
     parser.add_argument("--jax-game-path", type=str, required=True, help="Path to the Python file for the JAX game environment.")
     parser.add_argument("--ale-game-name", type=str, required=True, help="Name of the ALE ROM for Gymnasium (e.g., Pong-v5, Breakout-v5).")
     
-    parser.add_argument("--steps-per-env", type=int, default=250_000, help="Steps per environment for benchmarks.")
+    parser.add_argument("--steps-per-env", type=int, default=50_000, help="Steps per environment for benchmarks.")
     parser.add_argument("--output-dir", type=str, default="./benchmark_results", help="Directory to save results.")
 
     parser.add_argument("--run-std-benchmark", action=argparse.BooleanOptionalAction, default=True, help="Run the standard (single point) benchmark.")
@@ -776,7 +778,7 @@ if __name__ == "__main__":
     
     parser.add_argument("--render-jax", action=argparse.BooleanOptionalAction, default=False, help="Use JAX environment's 'step_with_render' method (if available).")
     
-    parser.add_argument("--num-envs-jax-std", type=int, default=2048, help="Number of environments for JAX standard benchmark.")
+    parser.add_argument("--num-envs-jax-std", type=int, default=512, help="Number of environments for JAX standard benchmark.")
     parser.add_argument("--num-envs-gym-std", type=int, default=mp.cpu_count(), help="Number of workers for Gymnasium standard benchmark.")
     parser.add_argument("--seed", type=int, default=42, help="Base random seed.")
 

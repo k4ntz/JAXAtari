@@ -4,9 +4,37 @@ import flax.linen as nn
 import optax
 from flax.linen.initializers import constant, he_normal, variance_scaling
 import flax.core
-from typing import Sequence, NamedTuple, Any, Dict
+from typing import Sequence, NamedTuple, Any, Dict, Protocol
 from flax.training.train_state import TrainState
-import distrax
+
+
+# JAX-based categorical distribution implementation # NOTE: temporary
+class Categorical:
+    def __init__(self, logits):
+        self.logits = logits
+        self.probs = jax.nn.softmax(logits, axis=-1)
+
+    def sample(self, seed: jax.random.PRNGKey):
+        """Draws a random sample from the distribution."""
+        return jax.random.categorical(seed, self.logits)
+
+    def mode(self):
+        """Returns the most likely action (the one with the highest logit)."""
+        return jnp.argmax(self.logits, axis=-1)
+    
+    def log_prob(self, value):
+        one_hot = jax.nn.one_hot(value, self.logits.shape[-1])
+        # Add a small epsilon to prevent log(0)
+        log_probs = jnp.log(self.probs + 1e-8)
+        return jnp.sum(log_probs * one_hot, axis=-1)
+    
+    def entropy(self):
+        return -jnp.sum(self.probs * jnp.log(self.probs + 1e-8), axis=-1)
+    
+    def kl_divergence(self, other: 'Categorical'):
+        """Calculates KL-divergence D_KL(self || other)."""
+        # It's defined as cross_entropy - entropy
+        return -jnp.sum(self.probs * jnp.log(other.probs / (self.probs + 1e-8) + 1e-8), axis=-1)
 
 # inspired by https://github.com/luchris429/purejaxrl/blob/main/purejaxrl/ppo.py
 class ActorCritic(nn.Module):
@@ -49,7 +77,7 @@ class ActorCritic(nn.Module):
         actor_logits = nn.Dense(
             self.action_dim, kernel_init=actor_logits_kernel_init_fn, bias_init=constant(0.0)
         )(actor_hidden)
-        pi = distrax.Categorical(logits=actor_logits)
+        pi = Categorical(logits=actor_logits)
 
         # Critic Stream
         critic_hidden = nn.Dense(
