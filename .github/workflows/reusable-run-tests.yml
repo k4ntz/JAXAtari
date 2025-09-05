@@ -116,8 +116,8 @@ jobs:
       - uses: cloudposse/github-action-matrix-outputs-read@v1
         id: read
         with:
-          matrix-job-name: run-tests
-          matrix-job-outputs: ${{ needs.run-tests.outputs.matrix }}
+          matrix-step-name: run-tests
+          matrix-step-outputs: ${{ needs.run-tests.outputs.matrix }}
 
       - run: |
           echo "Test reports: ${{ steps.read.outputs.test_report_b64 }}"
