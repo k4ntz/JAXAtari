@@ -107,9 +107,6 @@ jobs:
     needs: run-tests
     if: always()
     runs-on: ubuntu-latest
-    outputs:
-      test_report_b64: ${{ steps.read.outputs.test_report_b64 }}
-      test_outcome: ${{ steps.read.outputs.test_outcome }}
     steps:
       - uses: cloudposse/github-action-matrix-outputs-read@v1
         id: read
