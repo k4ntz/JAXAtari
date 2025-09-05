@@ -3,12 +3,60 @@ name: Fork PR Tests
 
 on:
   pull_request_target:
-    branches-ignore:
-      - master
     types: [opened, synchronize, reopened, edited]
 
-
 jobs:
+  branch:
+    if: github.event.pull_request.head.repo.full_name != github.repository
+    runs-on: ubuntu-latest
+    outputs:
+      result: ${{ steps.check_branch.outputs.result }}
+    steps:
+      - name: Check if base branch is dev
+        id: check_branch
+        run: |
+          if [[ "${{ github.event.pull_request.base.ref }}" != "dev" ]]; then
+            echo "Base branch is not 'dev'. Exiting."
+            echo "result=failure" >> $GITHUB_OUTPUT
+            exit 1
+          else
+            echo "result=success" >> $GITHUB_OUTPUT
+          fi
+        shell: bash
+
+  changed-files:
+    if: github.event.pull_request.head.repo.full_name != github.repository
+    runs-on: ubuntu-latest
+    outputs:
+      result: ${{ steps.check_files.outputs.result }}
+      forbidden_changes: ${{ steps.check_files.outputs.forbidden_changes }}
+    steps:
+      - name: Check out code
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.base.sha }}
+          fetch-depth: 0
+
+      - name: Check if files are changed that should not be changed
+        id: check_files
+        run: |
+          git fetch origin pull/${{ github.event.pull_request.number }}/head:pr_head
+          CHANGED_FILES=$(git diff --name-only ${{ github.event.pull_request.base.sha }}...pr_head || true)
+          echo "$CHANGED_FILES" # debug
+          FORBIDDEN_CHANGES=$(echo "$CHANGED_FILES" | grep -v '^src/jaxatari/games/' || true)
+          if [[ -n "$FORBIDDEN_CHANGES" ]]; then
+            echo "The following files were changed but should not be changed in a game update PR:"
+            echo "$FORBIDDEN_CHANGES"
+            echo "result=failure" >> $GITHUB_OUTPUT
+            FORBIDDEN_CHANGES_B64=$(echo "$FORBIDDEN_CHANGES" | base64 -w 0)
+            echo "forbidden_changes=$FORBIDDEN_CHANGES_B64" >> $GITHUB_OUTPUT
+            exit 1
+          else
+            echo "result=success" >> $GITHUB_OUTPUT
+            echo "forbidden_changes=" >> $GITHUB_OUTPUT
+          fi
+        shell: bash
+
   prepare-matrix:
     if: github.event.pull_request.head.repo.full_name != github.repository
     runs-on: ubuntu-latest
@@ -43,3 +91,32 @@ jobs:
     with:
       game_matrix: ${{ needs.prepare-matrix.outputs.matrix }}
       pr_head_sha: ${{ needs.prepare-matrix.outputs.pr_head_sha }}
+
+  read-matrix:
+    needs: [trigger]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: cloudposse/github-action-matrix-outputs-read@v1
+        id: read
+        with:
+          matrix-step-name: trigger
+    outputs:
+      result: "${{ steps.read-matrix.outputs.result }}"
+
+  report:
+    needs: [read-matrix]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Print results
+        run: |
+          echo "Branch check result: ${{ needs.branch.outputs.result }}"
+          echo "Changed files check result: ${{ needs.changed-files.outputs.result }}"
+          if [[ -n "${{ needs.changed-files.outputs.forbidden_changes }}" ]]; then
+            echo "Forbidden changes (decoded):"
+            echo "${{ needs.changed-files.outputs.forbidden_changes }}" | base64 -d || true
+          fi
+          echo "Test job result: ${{ needs.read-matrix.outputs.result }}"
+          if [[ "${{ needs.read-matrix.outputs.result }}" == "failure" ]]; then
+            echo "Tests failed. See details in the 'trigger' job."
+          fi
+        shell: bash

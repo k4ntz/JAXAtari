@@ -12,6 +12,13 @@ on:
         description: "The SHA of the PR head"
         required: false
         type: string
+    outputs:
+      test_report_b64:
+        description: "Base64-encoded test report"
+        value: ${{ steps.out.outputs.test_report_b64 }}
+      test_outcome:
+        description: "Outcome of the test job"
+        value: ${{ steps.out.outputs.test_outcome }}
 
 jobs:
   run-tests:
@@ -67,9 +74,31 @@ jobs:
         shell: bash
 
       - name: Run tests
+        id: run_tests
         run: |
+          set -o pipefail
           echo "Running tests for game: ${{ matrix.game }}"
 
           . .venv/bin/activate
-          pytest --game ${{ matrix.game }} --snapshot-warn-unused --tb=line -ra --color=yes
+          pytest --game ${{ matrix.game }} --snapshot-warn-unused --tb=line -ra --color=yes 2>&1 | tee pytest_output_with_color.txt
         shell: bash
+
+      - name: Get pytest output
+        id: pytest_output
+        if: always()
+        run: |
+          # Strip ANSI color codes for the report
+          sed -r "s/\x1B\[[0-9;]*[mK]//g" pytest_output_with_color.txt > pytest_output.txt
+          output_b64=$(base64 -w 0 pytest_output.txt)
+          echo "report=$output_b64" >> $GITHUB_OUTPUT
+        shell: bash
+
+      - uses: cloudposse/github-action-matrix-outputs-write@v1
+        id: out
+        if: always()
+        with:
+          matrix-step-name: ${{ github.job }}
+          matrix-key: ${{ matrix.game }}
+          outputs: |-
+            test_report_b64: ${{ steps.pytest_output.outputs.report }}
+            test_outcome: ${{ steps.run_tests.outcome }}
