@@ -1214,6 +1214,17 @@ class JaxWordZapper(JaxEnvironment[WordZapperState, WordZapperObservation, WordZ
             player_missile_position,
             self.consts
         )
+        # --- WORD FORMATION LOGIC ---
+        # Reveal letters as they are shot in order
+        current_letter_index = state.current_letter_index
+        target_word = state.target_word
+        zapped_letters = (new_letter_explosion_frame == 1)
+        def update_letter_index(idx, zapped, chars, current_idx, word):
+            is_correct = (chars[idx] == word[current_idx])
+            return jnp.where(zapped & is_correct & (current_idx < 6), current_idx + 1, current_idx)
+        new_current_letter_index = current_letter_index
+        for i in range(27):
+            new_current_letter_index = update_letter_index(i, zapped_letters[i], state.letters_char, new_current_letter_index, target_word)
 
         return state._replace(
             player_x=new_player_x,
@@ -1237,6 +1248,7 @@ class JaxWordZapper(JaxEnvironment[WordZapperState, WordZapperObservation, WordZ
             letter_explosion_timer=new_letter_explosion_timer,
             letter_explosion_frame_timer=new_letter_explosion_frame_timer,
             letter_explosion_pos=new_letter_explosion_pos,
+            current_letter_index=new_current_letter_index,
         )
 
     @partial(jax.jit, static_argnums=(0,))
@@ -1539,12 +1551,46 @@ class WordZapperRenderer(JAXGameRenderer):
             return ras_final
 
 
+        def _draw_progress_word(raster, word_arr, current_letter_index):
+            # Draw revealed yellow letters up to current_letter_index, then question marks
+            GAP_PX = 10
+            BASELINE_SHIFT = 22
+            sprite_h = YELLOW_LETTERS.shape[1]
+            sprite_w = YELLOW_LETTERS.shape[2]
+            y_pos = self.consts.HEIGHT - sprite_h - BASELINE_SHIFT
+            n = word_arr.shape[0]
+            # Compute widths for all letters
+            def glyph_w(idx):
+                sprite = YELLOW_LETTERS[idx]
+                cols = jnp.any(sprite[..., 3] > 0, axis=0)
+                last = jnp.argmax(cols[::-1]) ^ (sprite_w - 1)
+                return last + 1
+            widths = jax.vmap(lambda i: jax.lax.cond(i >= 0, glyph_w, lambda _: 0, i))(word_arr)
+            n_letters = jnp.sum(word_arr >= 0)
+            total = jnp.sum(widths) + GAP_PX * jnp.maximum(n_letters - 1, 0)
+            start = (self.consts.WIDTH - total) // 2
+            carry0 = (raster, start)
+            def body_fn(i, carry):
+                ras, x = carry
+                idx = word_arr[i]
+                def draw_letter(c):
+                    r, cur_x = c
+                    r = jr.render_at(r, cur_x, y_pos, YELLOW_LETTERS[idx])
+                    return (r, cur_x + widths[i] + GAP_PX)
+                def draw_qmark(c):
+                    r, cur_x = c
+                    r = jr.render_at(r, cur_x, y_pos, QMARK_SPRITE)
+                    return (r, cur_x + widths[i] + GAP_PX)
+                return jax.lax.cond(i < current_letter_index, draw_letter, draw_qmark, carry)
+            ras_final, _ = jax.lax.fori_loop(0, word_arr.shape[0], body_fn, carry0)
+            return ras_final
+
         raster = jax.lax.switch(
             state.game_phase,
             [
                 lambda ras: _draw_word(ras, state.target_word),    # phase 0: show word
                 lambda ras: _draw_word(ras, state.target_word),    # phase 1: show word (if used)
-                lambda ras: _draw_qmarks(ras, state.target_word),  # phase 2: show question marks
+                lambda ras: _draw_progress_word(ras, state.target_word, state.current_letter_index),  # phase 2: show progress
             ],
             raster,
         )
