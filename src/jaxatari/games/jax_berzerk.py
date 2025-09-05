@@ -64,6 +64,7 @@ class BerzerkConstants(NamedTuple):
     EVIL_OTTO_SIZE = (8, 7)
     EVIL_OTTO_SPEED = 0.2
     EVIL_OTTO_DELAY = 900
+    
 
 
 class BerzerkState(NamedTuple):
@@ -640,7 +641,7 @@ class JaxBerzerk(JaxEnvironment[BerzerkState, BerzerkObservation, BerzerkInfo, B
         otto_pos = jnp.array([-100.0, -100.0], dtype=jnp.float32)
         otto_active = jnp.array(False)
         otto_timer = self.consts.EVIL_OTTO_DELAY
-        otto_anim_counter = 0
+        otto_anim_counter = jnp.array(0, dtype=jnp.int32)
 
 
         state = BerzerkState(player_pos=pos, 
@@ -1230,8 +1231,18 @@ class JaxBerzerk(JaxEnvironment[BerzerkState, BerzerkObservation, BerzerkInfo, B
             def move_otto(otto_pos, player_pos):
                 direction = player_pos - otto_pos
                 norm = jnp.linalg.norm(direction) + 1e-6
-                step = (direction / norm) * self.consts.EVIL_OTTO_SPEED
-                return otto_pos + step
+                new_otto_pos = otto_pos + (direction / norm) * self.consts.EVIL_OTTO_SPEED
+
+                otto_animation_counter = state.otto_anim_counter + 1
+
+                # Sprungbewegung: Otto wippt auf/ab
+                jump_phase = (otto_animation_counter // 32) % 2  # 0 oder 1
+                jump_offset = jnp.where(jump_phase == 0, -0.5, 0.5)  # springt hoch/runter
+                otto_pos_with_jump = new_otto_pos.at[1].add(jump_offset)
+
+                return otto_pos_with_jump
+            
+            
 
             otto_pos = jnp.where(otto_active, move_otto(spawn_pos, new_pos), spawn_pos)
 
@@ -1783,6 +1794,8 @@ class BerzerkRenderer(JAXGameRenderer):
                 lambda r: r,
                 raster
             )
+
+
 
 
 
