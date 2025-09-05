@@ -10,7 +10,7 @@ from jaxatari.renderers import JAXGameRenderer
 from jaxatari.rendering import jax_rendering_utils as jr
 from jaxatari.environment import JaxEnvironment, JAXAtariAction as Action
 
-# Kong # imaging whatever
+# Kong # imaging whatever i cant believe it
 # choinges
 class PongConstants(NamedTuple):
     MAX_SPEED: int = 12
