@@ -61,6 +61,10 @@ class BerzerkConstants(NamedTuple):
         (WALL_THICKNESS + WALL_OFFSET[1], HEIGHT - WALL_THICKNESS - WALL_OFFSET[3])
     )
 
+    EVIL_OTTO_SIZE = (8, 7)
+    EVIL_OTTO_SPEED = 0.2
+    EVIL_OTTO_DELAY = 900
+
 
 class BerzerkState(NamedTuple):
     player_pos: chex.Array             # (2,)
@@ -92,6 +96,11 @@ class BerzerkState(NamedTuple):
     enemy_death_pos: chex.Array
     game_over_timer: chex.Array
     num_enemies: chex.Array
+    otto_pos: chex.Array        # (2,)
+    otto_active: bool
+    otto_timer: int
+    otto_anim_counter: int
+
 
 class BerzerkObservation(NamedTuple):
     player: chex.Array
@@ -628,6 +637,11 @@ class JaxBerzerk(JaxEnvironment[BerzerkState, BerzerkObservation, BerzerkInfo, B
 
         enemy_pos = jnp.full((self.consts.NUM_ENEMIES, 2), -100.0, dtype=jnp.float32)
 
+        otto_pos = jnp.array([-100.0, -100.0], dtype=jnp.float32)
+        otto_active = jnp.array(False)
+        otto_timer = self.consts.EVIL_OTTO_DELAY
+        otto_anim_counter = 0
+
 
         state = BerzerkState(player_pos=pos, 
                              lives=lives, 
@@ -656,7 +670,11 @@ class JaxBerzerk(JaxEnvironment[BerzerkState, BerzerkObservation, BerzerkInfo, B
                              enemy_death_timer=enemy_death_timer,
                              enemy_death_pos=enemy_death_pos,
                              game_over_timer=game_over_timer,
-                             num_enemies=num_enemies
+                             num_enemies=num_enemies,
+                             otto_pos=otto_pos,
+                             otto_active=otto_active,
+                             otto_timer=otto_timer,
+                             otto_anim_counter=otto_anim_counter,
                             )
         
         state = self.spawn_enemies(state, jax.random.split(rng)[0])
@@ -834,6 +852,11 @@ class JaxBerzerk(JaxEnvironment[BerzerkState, BerzerkObservation, BerzerkInfo, B
 
             
             hit_exit = self.check_exit_crossing(new_pos)
+
+            otto_active = jnp.where(hit_exit, False, state.otto_active)
+            new_otto_timer = jnp.where(hit_exit, self.consts.EVIL_OTTO_DELAY, state.otto_timer)
+            otto_pos = jnp.where(hit_exit, jnp.array([-100.0, -100.0], dtype=jnp.float32), state.otto_pos)
+
             transition_timer = jnp.where(hit_exit, self.consts.TRANSITION_ANIMATION_FRAMES, state.room_transition_timer)
             entry_direction = jnp.where(hit_exit, self.get_exit_direction(new_pos), state.entry_direction)
             hit_wall = self.object_hits_wall((player_x, player_y), self.consts.PLAYER_SIZE, state.room_counter, state.entry_direction) & ~hit_exit
@@ -945,9 +968,14 @@ class JaxBerzerk(JaxEnvironment[BerzerkState, BerzerkObservation, BerzerkInfo, B
             player_hits = jax.vmap(
                 lambda enemy_pos: self.object_hits_enemy(player_pos, self.consts.PLAYER_SIZE, enemy_pos)
             )(updated_enemy_pos)
+
+            otto_hits_player = rects_overlap(
+                otto_pos, jnp.array(self.consts.EVIL_OTTO_SIZE, dtype=jnp.float32),
+                new_pos, self.consts.PLAYER_SIZE
+            )
             
             hit_by_enemy = jnp.any(player_hits)
-            hit_something = hit_by_enemy | hit_wall | hit_by_enemy_bullet
+            hit_something = hit_by_enemy | hit_wall | hit_by_enemy_bullet | otto_hits_player
             death_timer = jnp.where(hit_something, self.consts.DEATH_ANIMATION_FRAMES, state.death_timer)
 
 
@@ -1132,6 +1160,8 @@ class JaxBerzerk(JaxEnvironment[BerzerkState, BerzerkObservation, BerzerkInfo, B
                 enemy_hit_enemy
             )
 
+
+
             # Punkte berechnen: 50 pro gestorbenem Gegner
             score_after = state.score + jnp.sum(enemy_dies_mask) * 50
 
@@ -1155,6 +1185,58 @@ class JaxBerzerk(JaxEnvironment[BerzerkState, BerzerkObservation, BerzerkInfo, B
             # 8. Deactivate bullets on hit
             bullet_hit = jnp.any(all_hits, axis=0)
             bullet_active = bullet_active & ~bullet_hit
+
+            # 1. Timer runterzählen
+            new_otto_timer = jnp.maximum(state.otto_timer - 1, 0)
+
+            # 2. Spawn wenn Timer abgelaufen und noch nicht aktiv
+            spawn_otto = jnp.logical_not(new_otto_timer) & jnp.logical_not(state.otto_active)
+
+            otto_spawn_pos = jax.lax.switch(
+                    state.entry_direction,
+                    [
+                        lambda _: jnp.array([
+                            self.consts.PLAYER_BOUNDS[0][1] // 2,
+                            self.consts.PLAYER_BOUNDS[1][1] - 25
+                            ], dtype=jnp.float32),  # oben → unten spawnen
+                        
+                        lambda _: jnp.array([
+                            self.consts.PLAYER_BOUNDS[0][1] // 2, 
+                            self.consts.PLAYER_BOUNDS[1][0] + 5], dtype=jnp.float32),  # unten → oben spawnen
+                        
+                        lambda _: jnp.array([
+                            self.consts.PLAYER_BOUNDS[0][1] - 12, 
+                            self.consts.PLAYER_BOUNDS[1][1] // 2
+                            ], dtype=jnp.float32),  # links → rechts
+                        
+                        lambda _: jnp.array([
+                            self.consts.PLAYER_BOUNDS[0][0] + 2,
+                            self.consts.PLAYER_BOUNDS[1][1] // 2
+                        ], dtype=jnp.float32),  # rechts → links
+                    ],
+                    jnp.array([
+                            self.consts.PLAYER_BOUNDS[0][0] + 2,
+                            self.consts.PLAYER_BOUNDS[1][1] // 2
+                        ], dtype=jnp.float32)  # fallback
+                )
+
+
+
+            spawn_pos = jnp.where(spawn_otto, otto_spawn_pos, state.otto_pos)
+
+            otto_active = state.otto_active | spawn_otto
+
+            # 3. Bewegung Richtung Spieler, wenn aktiv
+            def move_otto(otto_pos, player_pos):
+                direction = player_pos - otto_pos
+                norm = jnp.linalg.norm(direction) + 1e-6
+                step = (direction / norm) * self.consts.EVIL_OTTO_SPEED
+                return otto_pos + step
+
+            otto_pos = jnp.where(otto_active, move_otto(spawn_pos, new_pos), spawn_pos)
+
+            # 4. Animation Counter
+            otto_anim_counter = jnp.where(otto_active, state.otto_anim_counter + 1, 0)
 
             # 9. New state
             new_state = BerzerkState(
@@ -1186,7 +1268,11 @@ class JaxBerzerk(JaxEnvironment[BerzerkState, BerzerkObservation, BerzerkInfo, B
                 enemy_death_timer=enemy_death_timer_next,
                 enemy_death_pos=new_enemy_death_pos,
                 game_over_timer=game_over_timer,
-                num_enemies=state.num_enemies
+                num_enemies=state.num_enemies,
+                otto_pos=otto_pos,
+                otto_active=otto_active,
+                otto_timer=new_otto_timer,
+                otto_anim_counter=otto_anim_counter,
             )
 
             # 10. Observation + Info + Reward/Done
@@ -1273,7 +1359,8 @@ class BerzerkRenderer(JAXGameRenderer):
             'door_vertical_left', 'door_vertical_right',
             'door_horizontal_up', 'door_horizontal_down',
             'level_outer_walls', 'mid_walls_1', 'mid_walls_2', 'mid_walls_3', 'mid_walls_4',
-            'life', 'start_title'
+            'life', 'start_title',
+            'evil_otto'
         ]
         for name in sprite_names:
             sprites[name] = _load_sprite_frame(name)
@@ -1684,6 +1771,19 @@ class BerzerkRenderer(JAXGameRenderer):
 
             cond = jnp.logical_and(is_active, jnp.logical_not(room_transition_anim))
             raster = jax.lax.cond(cond, draw_enemy_bullet, lambda r: r, raster)
+
+
+        otto_sprites = self.sprites.get('evil_otto')  # shape (2,H,W,C)
+        otto_frame = jr.get_sprite_frame(otto_sprites, 0)
+        jr.render_at(raster, state.otto_pos[0], state.otto_pos[1], otto_frame)
+
+        raster = jax.lax.cond(
+                state.otto_active,
+                lambda r: jr.render_at(r, state.otto_pos[0], state.otto_pos[1], otto_frame),
+                lambda r: r,
+                raster
+            )
+
 
 
         # Draw score
