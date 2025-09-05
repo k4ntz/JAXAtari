@@ -106,20 +106,20 @@ class JaxSkiing(JaxEnvironment[GameState, SkiingObservation, SkiingInfo, SkiingC
             return jnp.array(x, dtype=jnp.float32)
 
         skier_space = spaces.Dict(collections.OrderedDict({
-            "x":      spaces.Box(low=f64(0.0),               high=f64(float(c.screen_width)),  shape=(), dtype=jnp.float32),
-            "y":      spaces.Box(low=f64(0.0),               high=f64(float(c.screen_height)), shape=(), dtype=jnp.float32),
-            "width":  spaces.Box(low=f64(float(c.skier_width)),  high=f64(float(c.skier_width)),  shape=(), dtype=jnp.float32),
-            "height": spaces.Box(low=f64(float(c.skier_height)), high=f64(float(c.skier_height)), shape=(), dtype=jnp.float32),
+            "x":      spaces.Box(low=f32(0.0),               high=f32(float(c.screen_width)),  shape=(), dtype=jnp.float32),
+            "y":      spaces.Box(low=f32(0.0),               high=f32(float(c.screen_height)), shape=(), dtype=jnp.float32),
+            "width":  spaces.Box(low=f32(float(c.skier_width)),  high=f32(float(c.skier_width)),  shape=(), dtype=jnp.float32),
+            "height": spaces.Box(low=f32(float(c.skier_height)), high=f32(float(c.skier_height)), shape=(), dtype=jnp.float32),
         }))
 
-        flags_space = spaces.Box(low=f64([0.0, 0.0]),
-                                 high=f64([float(c.screen_width), float(c.screen_height)]),
+        flags_space = spaces.Box(low=f32([0.0, 0.0]),
+                                 high=f32([float(c.screen_width), float(c.screen_height)]),
                                  shape=(c.max_num_flags, 2), dtype=jnp.float32)
-        trees_space = spaces.Box(low=f64([0.0, 0.0]),
-                                 high=f64([float(c.screen_width), float(c.screen_height)]),
+        trees_space = spaces.Box(low=f32([0.0, 0.0]),
+                                 high=f32([float(c.screen_width), float(c.screen_height)]),
                                  shape=(c.max_num_trees, 2), dtype=jnp.float32)
-        rocks_space = spaces.Box(low=f64([0.0, 0.0]),
-                                 high=f64([float(c.screen_width), float(c.screen_height)]),
+        rocks_space = spaces.Box(low=f32([0.0, 0.0]),
+                                 high=f32([float(c.screen_width), float(c.screen_height)]),
                                  shape=(c.max_num_rocks, 2), dtype=jnp.float32)
 
         score_space = spaces.Box(low=jnp.array(0, dtype=jnp.int32),
