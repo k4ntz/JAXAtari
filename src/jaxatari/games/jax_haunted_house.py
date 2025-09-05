@@ -26,6 +26,11 @@ class EntityPosition(NamedTuple):
 class HauntedHouseConstants(NamedTuple):
     WIDTH: int = 160
     HEIGHT: int = 210
+
+    Y_WALKING_DISTANCE: int = 2  # This is compensation for the stretched pixels in the ALE version. However, the game
+                                 # feels much better when this is set to 1. Possible values: [1, 2]
+
+
     WALL_Y_OFFSET: int = 4
     BACKGROUND_COLOR: Tuple[int, int, int] = (0, 0, 0)
     WALL_COLOR_BLUE: chex.Array = jnp.array([24, 26, 167, 255], dtype=jnp.uint8)
@@ -298,10 +303,13 @@ class JaxHauntedHouse(JaxEnvironment[HauntedHouseState, HauntedHouseObservation,
     def enemy_roaming(self, enemy, c_node, p_node, random_key):
         direction_x = jnp.sign(self.consts.LOCATIONS[c_node][0] - enemy[0])
         direction_y = jnp.sign(self.consts.LOCATIONS[c_node][1] - enemy[1])
-        new_x = enemy[0] + direction_x.astype(jnp.int32)
-        new_y = enemy[1] + direction_y.astype(jnp.int32) # Compensation for the long stretched pixels
+        direction_y = jnp.where(jnp.logical_and(self.consts.Y_WALKING_DISTANCE == 2, self.consts.LOCATIONS[c_node][1] - enemy[1] == 1), 0, direction_y)
 
-        arrived = jnp.logical_and(new_x == self.consts.LOCATIONS[c_node][0], new_y == self.consts.LOCATIONS[c_node][1])
+        new_x = enemy[0] + direction_x.astype(jnp.int32)
+        new_y = enemy[1] + (direction_y.astype(jnp.int32) * self.consts.Y_WALKING_DISTANCE) # Compensation for the long stretched pixels
+        arrived = jnp.where(self.consts.Y_WALKING_DISTANCE == 2,
+                            jnp.logical_and(new_x == self.consts.LOCATIONS[c_node][0], jnp.logical_or(new_y == self.consts.LOCATIONS[c_node][1], new_y == self.consts.LOCATIONS[c_node][1] - 1)),
+                            jnp.logical_and(new_x == self.consts.LOCATIONS[c_node][0], new_y == self.consts.LOCATIONS[c_node][1]))
         up = jnp.any((c_node == self.consts.UP_STAIRS))
         down = jnp.any((c_node == self.consts.DOWN_STAIRS))
 
@@ -430,8 +438,8 @@ class JaxHauntedHouse(JaxEnvironment[HauntedHouseState, HauntedHouseObservation,
                                operand=player)
 
 
-        player = player.at[1].set(jnp.where(move_up, jnp.clip(player[1] - 1, min=6, max=506), player[1]))
-        player = player.at[1].set(jnp.where(move_down, jnp.clip(player[1] + 1, min=6, max=506), player[1]))
+        player = player.at[1].set(jnp.where(move_up, jnp.clip(player[1] - self.consts.Y_WALKING_DISTANCE, min=6, max=506), player[1]))
+        player = player.at[1].set(jnp.where(move_down, jnp.clip(player[1] + self.consts.Y_WALKING_DISTANCE, min=6, max=506), player[1]))
         player = player.at[0].set(jnp.where(move_left, jnp.clip(player[0] - 1, min=4, max=156), player[0]))
         player = player.at[0].set(jnp.where(move_right, jnp.clip(player[0] + 1, min=4, max=156), player[0]))
 
