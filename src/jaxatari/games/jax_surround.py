@@ -67,9 +67,9 @@ class SurroundConstants(NamedTuple):
     MOVE_EVERY_N_STEPS: int = 15
     # --- Speed-up schedule (game accelerates over time) ---
     # Every SPEEDUP_STEPS logic ticks, reduce the effective MOVE_EVERY by SPEEDUP_DELTA, but not below MIN_MOVE_EVERY.
-    SPEEDUP_STEPS: int = 200          # how many logic ticks until next speed bump
-    SPEEDUP_DELTA: int = 1            # how much to reduce the period each bump
-    MIN_MOVE_EVERY_N_STEPS: int = 4   # lower bound (higher speed)
+    # SPEEDUP_STEPS: int = 200          # how many logic ticks until next speed bump
+    # SPEEDUP_DELTA: int = 1            # how much to reduce the period each bump
+    # MIN_MOVE_EVERY_N_STEPS: int = 4   # lower bound (higher speed)
 
 
 class SurroundState(NamedTuple):
@@ -454,11 +454,13 @@ class JaxSurround(
         # --- Frame skip / logic gating (+ dynamic speed-up) ---
         # Effective period decreases over time according to SPEEDUP_* constants.
         substep = state.substep + 1
-        bumps = (state.time // jnp.maximum(self.consts.SPEEDUP_STEPS, 1)) * self.consts.SPEEDUP_DELTA
-        eff_period = self.consts.MOVE_EVERY_N_STEPS - bumps
-        eff_period = jnp.maximum(self.consts.MIN_MOVE_EVERY_N_STEPS, eff_period)
-        eff_period = jnp.maximum(eff_period, 1)
-        do_logic = (substep % eff_period) == 0
+        # bumps = (state.time // jnp.maximum(self.consts.SPEEDUP_STEPS, 1)) * self.consts.SPEEDUP_DELTA
+        # eff_period = self.consts.MOVE_EVERY_N_STEPS - bumps
+        # eff_period = jnp.maximum(self.consts.MIN_MOVE_EVERY_N_STEPS, eff_period)
+        # eff_period = jnp.maximum(eff_period, 1)
+        # do_logic = (substep % eff_period) == 0
+        do_logic = (substep % jnp.maximum(self.consts.MOVE_EVERY_N_STEPS, 1)) == 0
+
 
         # Parse action(s)
         actions = jnp.asarray(actions, dtype=jnp.int32)
@@ -547,20 +549,28 @@ class JaxSurround(
             out0 = out_of_bounds(new_p0)
             out1 = out_of_bounds(new_p1)
 
+            # 1) Kopf auf dasselbe Feld
             head_on = jnp.all(new_p0 == new_p1)
+            # 2) Swap-Collision (Spieler tauschen die Felder im selben Tick)
+            swap_collision = jnp.all(new_p0 == state.pos1) & jnp.all(new_p1 == state.pos0)
 
-            hit_p0 = jax.lax.cond(
+            # Basistreffer (Border/Trail oder OOB), noch ohne head_on/swap
+            base_hit_p0 = jax.lax.cond(
                 out0,
                 lambda: True,
                 lambda: jnp.logical_or(state.border[tuple(new_p0)], state.trail[tuple(new_p0)] != 0),
             )
-            hit_p1 = jax.lax.cond(
+            base_hit_p1 = jax.lax.cond(
                 out1,
                 lambda: True,
                 lambda: jnp.logical_or(state.border[tuple(new_p1)], state.trail[tuple(new_p1)] != 0),
             )
-            hit_p0 = jnp.logical_or(hit_p0, head_on)
-            hit_p1 = jnp.logical_or(hit_p1, head_on)
+
+            # Endgültige Treffer (funktional, ohne spätere += / Re-Zuweisung)
+            hit_extra = jnp.logical_or(head_on, swap_collision)
+            hit_p0 = jnp.logical_or(base_hit_p0, hit_extra)
+            hit_p1 = jnp.logical_or(base_hit_p1, hit_extra)
+
 
             # Trail aktualisieren (mit alten Köpfen)
             grid0 = state.trail.at[tuple(state.pos0)].set(1)
