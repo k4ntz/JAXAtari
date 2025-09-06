@@ -8,12 +8,13 @@ from typing import Tuple, NamedTuple
 import random
 import os
 from sys import maxsize
-import numpy as np
 import math
+import numpy as np
 
 from jaxatari.environment import JaxEnvironment
 from jaxatari.renderers import JAXGameRenderer
 from jaxatari.rendering import jax_rendering_utils as aj
+import jaxatari.spaces as spaces
 
 # Action constants for BattleZone
 NOOP = 0
@@ -439,8 +440,16 @@ def check_player_hit(player_tank: Tank, bullets: Bullet) -> Tank:
 
 @jax.jit
 def update_enemy_tanks(obstacles: Obstacle, player_tank: Tank, bullets: Bullet, step_counter: chex.Array) -> Tuple[Obstacle, Bullet]:
-    """Update enemy tank AI with Atari-like behaviour: instantly face player and approach along the direct vector."""
-    
+    """JAX-friendly enemy AI that more closely matches Atari BattleZone behaviour.
+
+    Key behaviours restored:
+    - Instant facing toward player when in detection range.
+    - Simple distance-band movement (advance/retreat/hold).
+    - Fire only while in engagement band, roughly frontal, within range, cooldown ready,
+      and not during the spawn waiting timer.
+    - Deterministic per-enemy bullet slot assignment (JAX fori_loop).
+    """
+
     def update_single_enemy(i):
         enemy_x = obstacles.x[i]
         enemy_y = obstacles.y[i]
@@ -451,10 +460,10 @@ def update_enemy_tanks(obstacles: Obstacle, player_tank: Tank, bullets: Bullet, 
         enemy_target_angle = obstacles.target_angle[i]
         enemy_state_timer = obstacles.state_timer[i]
         is_enemy_tank = obstacles.obstacle_type[i] == 0
-        
-        should_process = jnp.logical_and(enemy_alive, is_enemy_tank)
 
-        # Vector to player and distance
+        should_process = jnp.logical_and(enemy_alive == 1, is_enemy_tank)
+
+        # Vector to player and normalized direction
         dx = player_tank.x - enemy_x
         dy = player_tank.y - enemy_y
         distance_to_player = jnp.sqrt(dx * dx + dy * dy) + 1e-8
@@ -462,64 +471,49 @@ def update_enemy_tanks(obstacles: Obstacle, player_tank: Tank, bullets: Bullet, 
         dir_y = dy / distance_to_player
         angle_to_player = jnp.arctan2(dy, dx)
 
-        # Defaults
+        # Timers and defaults
+        new_state_timer = jnp.maximum(0, enemy_state_timer - 1)
+        waiting = new_state_timer > 0
+
+        # Default outputs equal inputs
         new_x = enemy_x
         new_y = enemy_y
         new_angle = enemy_angle
         new_state = enemy_state
         new_target_angle = enemy_target_angle
-        new_state_timer = jnp.maximum(0, enemy_state_timer - 1)
-        should_fire = False
+        new_cooldown = jnp.maximum(0, enemy_cooldown - 1)
+        should_fire = jnp.array(False)
 
-        # Spawn/waiting patrol (do not aggressively approach while waiting)
-        waiting = new_state_timer > 0
-        patrol_condition = jnp.logical_and(should_process, waiting)
-        patrol_turn_speed = ENEMY_TURN_SPEED * 0.4
-        angle_diff_to_target = new_target_angle - enemy_angle
-        angle_diff_to_target = jnp.arctan2(jnp.sin(angle_diff_to_target), jnp.cos(angle_diff_to_target))
-        new_angle = jnp.where(jnp.logical_and(patrol_condition, jnp.abs(angle_diff_to_target) > 0.1),
-                              enemy_angle + jnp.sign(angle_diff_to_target) * patrol_turn_speed,
-                              new_angle)
-        new_x = jnp.where(patrol_condition, enemy_x + jnp.cos(new_angle) * ENEMY_MOVE_SPEED * 0.5, new_x)
-        new_y = jnp.where(patrol_condition, enemy_y + jnp.sin(new_angle) * ENEMY_MOVE_SPEED * 0.5, new_y)
-        new_state = jnp.where(patrol_condition, ENEMY_STATE_PATROL, new_state)
+        # If player is within detection range, instantly face them
+        in_detection = jnp.logical_and(should_process, distance_to_player < ENEMY_DETECTION_RANGE)
+        new_angle = jnp.where(in_detection, angle_to_player, new_angle)
 
-        # HUNT: instantly face the player and move directly toward them (classic 2600 behaviour)
-        hunt_condition = jnp.logical_and(should_process, distance_to_player < ENEMY_DETECTION_RANGE)
-        # Instant facing
-        new_angle = jnp.where(hunt_condition, angle_to_player, new_angle)
-        # Move along direct vector so they reliably approach and get larger on screen
-        move_allowed = jnp.where(distance_to_player > ENEMY_MIN_DISTANCE, 1.0, 0.0)
-        new_x = jnp.where(hunt_condition, enemy_x + dir_x * ENEMY_MOVE_SPEED * move_allowed, new_x)
-        new_y = jnp.where(hunt_condition, enemy_y + dir_y * ENEMY_MOVE_SPEED * move_allowed, new_y)
-        new_state = jnp.where(hunt_condition, ENEMY_STATE_HUNT, new_state)
+        # Movement bands (advance if too far, retreat if too close)
+        too_close = distance_to_player < ENEMY_MIN_DISTANCE
+        too_far = distance_to_player > ENEMY_MAX_DISTANCE
+        in_engage_band = jnp.logical_and(distance_to_player <= ENEMY_MAX_DISTANCE, distance_to_player >= ENEMY_MIN_DISTANCE)
 
-        # ENGAGE: if within engagement band, stop big advances and allow small adjustments; since we face instantly,
-        # alignment is immediate and firing will be more responsive (like the original)
-        engage_condition = jnp.logical_and(should_process,
-                                           jnp.logical_and(distance_to_player <= ENEMY_MAX_DISTANCE,
-                                                           distance_to_player >= ENEMY_MIN_DISTANCE))
-        # Small corrections (soft)
-        too_close = distance_to_player < ENEMY_OPTIMAL_DISTANCE
-        too_far = distance_to_player > ENEMY_OPTIMAL_DISTANCE
-        new_x = jnp.where(jnp.logical_and(engage_condition, too_close), new_x - dir_x * ENEMY_MOVE_SPEED * 0.12, new_x)
-        new_y = jnp.where(jnp.logical_and(engage_condition, too_close), new_y - dir_y * ENEMY_MOVE_SPEED * 0.12, new_y)
-        new_x = jnp.where(jnp.logical_and(engage_condition, too_far), new_x + dir_x * ENEMY_MOVE_SPEED * 0.18, new_x)
-        new_y = jnp.where(jnp.logical_and(engage_condition, too_far), new_y + dir_y * ENEMY_MOVE_SPEED * 0.18, new_y)
+        move_forward = jnp.logical_and(in_detection, jnp.logical_or(too_far, jnp.logical_and(in_engage_band, distance_to_player > ENEMY_OPTIMAL_DISTANCE)))
+        move_backward = jnp.logical_and(in_detection, too_close)
 
-        # With instant facing, frontal alignment is true (or nearly true); use a small angular tolerance in case
+        new_x = jnp.where(move_forward, enemy_x + dir_x * ENEMY_MOVE_SPEED, new_x)
+        new_y = jnp.where(move_forward, enemy_y + dir_y * ENEMY_MOVE_SPEED, new_y)
+        new_x = jnp.where(move_backward, enemy_x - dir_x * ENEMY_MOVE_SPEED, new_x)
+        new_y = jnp.where(move_backward, enemy_y - dir_y * ENEMY_MOVE_SPEED, new_y)
+
+        # Firing conditions: engagement band, roughly frontal, cooldown ready, within range, and not waiting
         angle_diff = angle_to_player - new_angle
         angle_diff = jnp.arctan2(jnp.sin(angle_diff), jnp.cos(angle_diff))
         is_frontal = jnp.abs(angle_diff) < 0.35
-
-        # Fire when frontal, in range and cooldown ready; respect spawn waiting via cooldown/state_timer
         can_fire = enemy_cooldown <= 0
-        should_fire = jnp.logical_and(jnp.logical_and(engage_condition, is_frontal),
+        should_fire = jnp.logical_and(jnp.logical_and(in_engage_band, is_frontal),
                                       jnp.logical_and(can_fire, distance_to_player < ENEMY_FIRE_RANGE))
-        new_state = jnp.where(engage_condition, ENEMY_STATE_ENGAGE, new_state)
-        new_cooldown = jnp.where(should_fire, ENEMY_FIRE_COOLDOWN, jnp.maximum(0, enemy_cooldown - 1))
+        should_fire = jnp.logical_and(should_fire, jnp.logical_not(waiting))
 
-        # Bullet spawn/aim toward player's current position
+        new_state = jnp.where(in_engage_band, ENEMY_STATE_ENGAGE, new_state)
+        new_cooldown = jnp.where(should_fire, ENEMY_FIRE_COOLDOWN, new_cooldown)
+
+        # Bullet spawn and aim
         bullet_offset = 15.0
         spawn_bx = new_x + jnp.cos(new_angle) * bullet_offset
         spawn_by = new_y + jnp.sin(new_angle) * bullet_offset
@@ -529,7 +523,7 @@ def update_enemy_tanks(obstacles: Obstacle, player_tank: Tank, bullets: Bullet, 
         aim_vx = (aim_dx / aim_dist) * BULLET_SPEED
         aim_vy = (aim_dy / aim_dist) * BULLET_SPEED
 
-        # Finalize
+        # Clamp position and normalize angle
         new_x = jnp.clip(new_x, BOUNDARY_MIN, BOUNDARY_MAX)
         new_y = jnp.clip(new_y, BOUNDARY_MIN, BOUNDARY_MAX)
         new_angle = jnp.arctan2(jnp.sin(new_angle), jnp.cos(new_angle))
@@ -537,7 +531,10 @@ def update_enemy_tanks(obstacles: Obstacle, player_tank: Tank, bullets: Bullet, 
         return (new_x, new_y, new_angle, enemy_alive, new_cooldown, new_state,
                 new_target_angle, new_state_timer, should_fire, spawn_bx, spawn_by, aim_vx, aim_vy)
 
-    results = jax.vmap(update_single_enemy)(jnp.arange(len(obstacles.x)))
+    obstacles_count = obstacles.x.shape[0]
+    idxs = jnp.arange(obstacles_count)
+    results = jax.vmap(update_single_enemy)(idxs)
+
     (new_x, new_y, new_angle, new_alive, new_cooldown, new_state,
      new_target_angle, new_state_timer, fire_flags, bullet_xs, bullet_ys, bullet_vel_xs, bullet_vel_ys) = results
 
@@ -552,53 +549,33 @@ def update_enemy_tanks(obstacles: Obstacle, player_tank: Tank, bullets: Bullet, 
         target_angle=new_target_angle,
         state_timer=new_state_timer
     )
-    
-    # Handle enemy bullets using JAX-compatible operations
+
+    # Enemy bullets: deterministic per-enemy slots using fori_loop to keep JAX-friendly
     updated_bullets = bullets
     enemy_bullet_start = PLAYER_BULLET_LIMIT
-    
-    # Use a more JAX-friendly approach for bullet creation
-    def add_enemy_bullets(bullets_state):
-        # Find available slots for enemy bullets
-        enemy_slots = jnp.arange(enemy_bullet_start, MAX_BULLETS)
-        available_slots = jnp.logical_not(bullets_state.active[enemy_bullet_start:MAX_BULLETS])
-        
-        # For each enemy that wants to fire, try to add a bullet
-        for i in range(len(fire_flags)):
-            # Find first available slot for this enemy
-            slot_mask = jnp.logical_and(fire_flags[i], available_slots)
-            
-            # If any slot is available, use the first one
-            slot_available = jnp.any(slot_mask)
-            first_slot_idx = jnp.argmax(slot_mask)
-            actual_slot = enemy_bullet_start + first_slot_idx
-            
-            # Update the bullets array conditionally
-            bullets_state = jax.lax.cond(
-                slot_available,
-                lambda b: Bullet(
-                    x=b.x.at[actual_slot].set(bullet_xs[i]),
-                    y=b.y.at[actual_slot].set(bullet_ys[i]),
-                    z=b.z.at[actual_slot].set(3.0),
-                    vel_x=b.vel_x.at[actual_slot].set(bullet_vel_xs[i]),
-                    vel_y=b.vel_y.at[actual_slot].set(bullet_vel_ys[i]),
-                    active=b.active.at[actual_slot].set(1),
-                    lifetime=b.lifetime.at[actual_slot].set(BULLET_LIFETIME),
-                    owner=b.owner.at[actual_slot].set(i + 1)
-                ),
-                lambda b: b,
-                bullets_state
-            )
-            
-            # Mark this slot as used
-            available_slots = available_slots.at[first_slot_idx].set(
-                jnp.logical_and(available_slots[first_slot_idx], jnp.logical_not(slot_available))
-            )
-        
-        return bullets_state
-    
-    updated_bullets = add_enemy_bullets(updated_bullets)
-    
+    num_enemies = obstacles_count
+
+    def add_enemy_bullets_loop(bullets_state):
+        def body(i, b):
+            slot = enemy_bullet_start + (i % ENEMY_BULLET_LIMIT)
+            cond = fire_flags[i]
+            def set_b(bb):
+                return Bullet(
+                    x=bb.x.at[slot].set(bullet_xs[i]),
+                    y=bb.y.at[slot].set(bullet_ys[i]),
+                    z=bb.z.at[slot].set(3.0),
+                    vel_x=bb.vel_x.at[slot].set(bullet_vel_xs[i]),
+                    vel_y=bb.vel_y.at[slot].set(bullet_vel_ys[i]),
+                    active=bb.active.at[slot].set(1),
+                    lifetime=bb.lifetime.at[slot].set(BULLET_LIFETIME),
+                    owner=bb.owner.at[slot].set(i + 1)
+                )
+            return jax.lax.cond(cond, set_b, lambda bb: bb, b)
+
+        return jax.lax.fori_loop(0, num_enemies, body, bullets_state)
+
+    updated_bullets = add_enemy_bullets_loop(updated_bullets)
+
     return updated_obstacles, updated_bullets
 
 @jax.jit
@@ -667,6 +644,11 @@ class JaxBattleZone(JaxEnvironment[BattleZoneState, BattleZoneObservation, chex.
         self.reward_funcs = reward_funcs
         self.action_set = list(range(18))  # All 18 BattleZone actions
         self.obs_size = 50
+        # Non-jitted renderer for raster output (used by image_space/render)
+        try:
+            self.renderer = BattleZoneRenderer()
+        except Exception:
+            self.renderer = None
 
     def reset(self, key=None) -> Tuple[BattleZoneObservation, BattleZoneState]:
         """Reset the game to initial state."""
@@ -898,6 +880,110 @@ class JaxBattleZone(JaxEnvironment[BattleZoneState, BattleZoneObservation, chex.
             bullets=state.bullets,
             obstacles=state.obstacles
         )
+
+    @property
+    def action_space(self) -> spaces.Discrete:
+        """Discrete action space as an attribute (gym-style).
+
+        Returning a property ensures wrappers that expect `env.action_space`
+        (attribute access) get a Space instance rather than a bound method.
+        """
+        # action_set is defined elsewhere on this class; keep the same size
+        return spaces.Discrete(len(self.action_set))
+
+    @property
+    def observation_space(self) -> spaces.Dict:
+        """Observation space as an attribute (gym-style) using numpy dtypes.
+
+        Tests and wrappers expect numpy dtypes (np.float32 / np.int32).
+        """
+        # Constants referenced below exist earlier in the file (MAX_BULLETS, MAX_OBSTACLES, etc.)
+        MAX_BULLETS = getattr(self, 'MAX_BULLETS', 32)
+        MAX_OBSTACLES = getattr(self, 'MAX_OBSTACLES', 32)
+        BOUNDARY_MIN = getattr(self, 'WORLD_MIN', -1000.0)
+        BOUNDARY_MAX = getattr(self, 'WORLD_MAX', 1000.0)
+        BULLET_LIFETIME = getattr(self, 'BULLET_LIFETIME', 120)
+        ENEMY_FIRE_COOLDOWN = getattr(self, 'ENEMY_FIRE_COOLDOWN', 60)
+        ENEMY_SPAWN_COOLDOWN = getattr(self, 'ENEMY_SPAWN_COOLDOWN', 180)
+
+        player_space = spaces.Dict({
+            "x": spaces.Box(low=BOUNDARY_MIN, high=BOUNDARY_MAX, shape=(), dtype=np.float32),
+            "y": spaces.Box(low=BOUNDARY_MIN, high=BOUNDARY_MAX, shape=(), dtype=np.float32),
+            "angle": spaces.Box(low=-math.pi, high=math.pi, shape=(), dtype=np.float32),
+            "alive": spaces.Box(low=0, high=1, shape=(), dtype=np.int32),
+        })
+
+        bullets_space = spaces.Dict({
+            "x": spaces.Box(low=BOUNDARY_MIN, high=BOUNDARY_MAX, shape=(MAX_BULLETS,), dtype=np.float32),
+            "y": spaces.Box(low=BOUNDARY_MIN, high=BOUNDARY_MAX, shape=(MAX_BULLETS,), dtype=np.float32),
+            "z": spaces.Box(low=0.0, high=1000.0, shape=(MAX_BULLETS,), dtype=np.float32),
+            "vel_x": spaces.Box(low=-1000.0, high=1000.0, shape=(MAX_BULLETS,), dtype=np.float32),
+            "vel_y": spaces.Box(low=-1000.0, high=1000.0, shape=(MAX_BULLETS,), dtype=np.float32),
+            "active": spaces.Box(low=0, high=1, shape=(MAX_BULLETS,), dtype=np.int32),
+            "lifetime": spaces.Box(low=0, high=BULLET_LIFETIME, shape=(MAX_BULLETS,), dtype=np.int32),
+            "owner": spaces.Box(low=0, high=MAX_BULLETS, shape=(MAX_BULLETS,), dtype=np.int32),
+        })
+
+        obstacles_space = spaces.Dict({
+            "x": spaces.Box(low=BOUNDARY_MIN, high=BOUNDARY_MAX, shape=(MAX_OBSTACLES,), dtype=np.float32),
+            "y": spaces.Box(low=BOUNDARY_MIN, high=BOUNDARY_MAX, shape=(MAX_OBSTACLES,), dtype=np.float32),
+            "obstacle_type": spaces.Box(low=0, high=10, shape=(MAX_OBSTACLES,), dtype=np.int32),
+            "angle": spaces.Box(low=-math.pi, high=math.pi, shape=(MAX_OBSTACLES,), dtype=np.float32),
+            "alive": spaces.Box(low=0, high=1, shape=(MAX_OBSTACLES,), dtype=np.int32),
+            "fire_cooldown": spaces.Box(low=0, high=ENEMY_FIRE_COOLDOWN * 4, shape=(MAX_OBSTACLES,), dtype=np.int32),
+            "ai_state": spaces.Box(low=0, high=10, shape=(MAX_OBSTACLES,), dtype=np.int32),
+            "target_angle": spaces.Box(low=-math.pi, high=math.pi, shape=(MAX_OBSTACLES,), dtype=np.float32),
+            "state_timer": spaces.Box(low=0, high=ENEMY_SPAWN_COOLDOWN * 4, shape=(MAX_OBSTACLES,), dtype=np.int32),
+        })
+
+        return spaces.Dict({
+            "player_tank": player_space,
+            "bullets": bullets_space,
+            "obstacles": obstacles_space,
+            "step_counter": spaces.Box(low=0, high=np.iinfo(np.int32).max, shape=(), dtype=np.int32),
+            "spawn_timer": spaces.Box(low=0, high=ENEMY_SPAWN_COOLDOWN * 4, shape=(), dtype=np.int32),
+            "player_score": spaces.Box(low=0, high=np.iinfo(np.int32).max, shape=(), dtype=np.int32),
+            "player_lives": spaces.Box(low=0, high=99, shape=(), dtype=np.int32),
+        })
+
+    def obs_to_flat_array(self, obs) -> np.ndarray:
+        """Convert observation to a flat numpy float32 array.
+
+        Tests/wrappers expect a numpy ndarray (not a jax array) from this method.
+        """
+        # Player
+        pt = obs.player_tank
+        player_flat = np.array([float(pt.x), float(pt.y), float(pt.angle), int(pt.alive)], dtype=np.float32).reshape(-1)
+
+        # Bullets
+        b = obs.bullets
+        # Convert each field to numpy and concatenate
+        bullets_flat = np.concatenate([
+            np.asarray(b.x, dtype=np.float32).reshape(-1),
+            np.asarray(b.y, dtype=np.float32).reshape(-1),
+            np.asarray(b.z, dtype=np.float32).reshape(-1),
+            np.asarray(b.vel_x, dtype=np.float32).reshape(-1),
+            np.asarray(b.vel_y, dtype=np.float32).reshape(-1),
+            np.asarray(b.active, dtype=np.float32).reshape(-1),
+            np.asarray(b.lifetime, dtype=np.float32).reshape(-1),
+            np.asarray(b.owner, dtype=np.float32).reshape(-1),
+        ])
+
+        # Obstacles
+        o = obs.obstacles
+        obstacles_flat = np.concatenate([
+            np.asarray(o.x, dtype=np.float32).reshape(-1),
+            np.asarray(o.y, dtype=np.float32).reshape(-1),
+            np.asarray(o.obstacle_type, dtype=np.float32).reshape(-1),
+            np.asarray(o.angle, dtype=np.float32).reshape(-1),
+            np.asarray(o.alive, dtype=np.float32).reshape(-1),
+            np.asarray(o.fire_cooldown, dtype=np.float32).reshape(-1),
+            np.asarray(o.ai_state, dtype=np.float32).reshape(-1),
+            np.asarray(o.target_angle, dtype=np.float32).reshape(-1),
+            np.asarray(o.state_timer, dtype=np.float32).reshape(-1),
+        ])
+
+        return np.concatenate([player_flat, bullets_flat, obstacles_flat]).astype(np.float32)
 
     @partial(jax.jit, static_argnums=(0,))
     def _get_env_reward(self, previous_state: BattleZoneState, state: BattleZoneState) -> float:
