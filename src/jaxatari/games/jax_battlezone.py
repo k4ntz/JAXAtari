@@ -74,6 +74,111 @@ MAX_ACTIVE_ENEMIES = 4  # Maximum enemies active at once
 ENEMY_SPAWN_COOLDOWN = 300  # frames between spawns (5 seconds at 60fps)
 ENEMY_SPAWN_WAIT = 120  # frames enemies wait after spawn before aiming/shooting
 
+# =============================================================
+# Atari BattleZone-inspired enemy AI tuning constants (new)
+# Enemy AI adapted to Atari 2600 Battlezone rules — see Atari manual & gameplay.
+# Tunable parameters for designers.
+# =============================================================
+DEBUG_ENEMY_AI = False  # Set True to enable on-screen and console debug for enemy AI
+DEBUG_ENEMY_SPAWN = False  # Set True to enable spawn-time debug prints
+DEBUG_ENEMY_STEERING = False  # Set True to enable steering debug prints
+DEBUG_ENEMY_FIRING = False  # Set True to enable firing debug prints
+
+# Enemy types
+ENEMY_TYPE_TANK = 0
+ENEMY_TYPE_SUPERTANK = 1
+ENEMY_TYPE_FIGHTER = 2
+ENEMY_TYPE_SAUCER = 3
+
+# Speed factors relative to player speed (player uses TANK_SPEED constant)
+SLOW_TANK_SPEED_FACTOR = 0.85
+SUPERTANK_SPEED_FACTOR = 1.25
+FIGHTER_SPEED_FACTOR = 1.6
+SAUCER_SPEED_FACTOR = 0.6
+
+# Turn rates (degrees per second) - converted to per-frame using 60 fps assumption
+TANK_MAX_TURN_DEG = 120.0
+SUPERTANK_MAX_TURN_DEG = 200.0
+FIGHTER_MAX_TURN_DEG = 380.0
+
+# Firing / engagement parameters
+FIRING_ANGLE_THRESHOLD_DEG = 6.0  # degrees tolerance to consider 'on target'
+FIRING_RANGE = 400.0  # max distance to consider firing
+ENEMY_NO_FIRE_AFTER_SPAWN_SEC = 2.0  # seconds to wait before firing after spawn
+FPS = 60.0
+ENEMY_NO_FIRE_AFTER_SPAWN = int(ENEMY_NO_FIRE_AFTER_SPAWN_SEC * FPS)
+
+# Fire cooldowns in seconds -> frames
+ENEMY_FIRE_COOLDOWN_TANK_SEC = 1.2
+ENEMY_FIRE_COOLDOWN_SUPERTANK_SEC = 0.8
+ENEMY_FIRE_COOLDOWN_FIGHTER_SEC = 1.0
+ENEMY_FIRE_COOLDOWN_TANK = int(ENEMY_FIRE_COOLDOWN_TANK_SEC * FPS)
+ENEMY_FIRE_COOLDOWN_SUPERTANK = int(ENEMY_FIRE_COOLDOWN_SUPERTANK_SEC * FPS)
+ENEMY_FIRE_COOLDOWN_FIGHTER = int(ENEMY_FIRE_COOLDOWN_FIGHTER_SEC * FPS)
+
+# Fighter zigzag parameters
+def _deg_per_sec_to_rad_per_frame(deg_per_sec: float) -> float:
+    """Convert degrees/sec to radians/frame assuming FPS frames per second."""
+    return (deg_per_sec * (math.pi / 180.0)) / FPS
+
+# Per-type speed multipliers (relative to ENEMY_MOVE_SPEED)
+ENEMY_SPEED_MULTIPLIERS = jnp.array([
+    SLOW_TANK_SPEED_FACTOR,
+    SUPERTANK_SPEED_FACTOR,
+    FIGHTER_SPEED_FACTOR,
+    SAUCER_SPEED_FACTOR,
+], dtype=jnp.float32)
+
+# Per-type firing parameters (based on ENEMY_FIRING spec)
+ENEMY_FIRING_ANGLE_DEG = jnp.array([3.0, 3.0, 3.0, 3.0], dtype=jnp.float32)
+ENEMY_FIRING_ANGLE_THRESH_RAD = (ENEMY_FIRING_ANGLE_DEG * (math.pi / 180.0)) / 1.0
+ENEMY_FIRING_RANGE = jnp.array([30.0, 30.0, 15.0, 0.0], dtype=jnp.float32)
+ENEMY_NO_FIRE_AFTER_SPAWN_FRAMES = jnp.array([int(2.0 * FPS), int(2.0 * FPS), int(0.5 * FPS), int(2.0 * FPS)], dtype=jnp.int32)
+FIGHTER_POINT_BLANK_DIST = 5.0
+FIGHTER_VEER_ANGLE_RAD = math.radians(90.0)
+
+# Lateral angle to apply during HUNT state so enemies move left/right rather than directly at player
+# Values per subtype (TANK, SUPERTANK, FIGHTER, SAUCER)
+ENEMY_HUNT_LATERAL_ANGLE_DEG = jnp.array([35.0, 20.0, 0.0, 0.0], dtype=jnp.float32)
+ENEMY_HUNT_LATERAL_ANGLE_RAD = ENEMY_HUNT_LATERAL_ANGLE_DEG * (math.pi / 180.0)
+
+# Fighter zigzag parameters
+
+ENEMY_TURN_RATES = jnp.array([
+    _deg_per_sec_to_rad_per_frame(TANK_MAX_TURN_DEG),
+    _deg_per_sec_to_rad_per_frame(SUPERTANK_MAX_TURN_DEG),
+    _deg_per_sec_to_rad_per_frame(FIGHTER_MAX_TURN_DEG),
+    _deg_per_sec_to_rad_per_frame(60.0),
+], dtype=jnp.float32)
+
+ENEMY_FIRE_COOLDOWNS = jnp.array([
+    ENEMY_FIRE_COOLDOWN_TANK,
+    ENEMY_FIRE_COOLDOWN_SUPERTANK,
+    ENEMY_FIRE_COOLDOWN_FIGHTER,
+    0,
+], dtype=jnp.int32)
+
+# Per-type can_fire flags (1 = can fire, 0 = cannot)
+ENEMY_CAN_FIRE = jnp.array([1, 1, 1, 0], dtype=jnp.int32)
+
+
+# World boundaries
+WORLD_SIZE = 2000
+BOUNDARY_MIN = -WORLD_SIZE // 2
+BOUNDARY_MAX = WORLD_SIZE // 2
+
+# Map-based spawn radii (computed from boundaries)
+MAP_RADIUS = float(BOUNDARY_MAX - BOUNDARY_MIN) / 2.0
+SPAWN_NEAR_RADIUS = MAP_RADIUS * 0.375
+SPAWN_FAR_RADIUS = MAP_RADIUS * 0.75
+
+# Projectile tuning (enemy)
+ENEMY_PROJECTILE_SPEED = BULLET_SPEED * 0.9
+ENEMY_PROJECTILE_LIFETIME = BULLET_LIFETIME
+
+# Ensure existing uses of ENEMY_MOVE_SPEED are preserved for legacy behavior but will be adapted
+# ...existing code continues...
+
 # 3D rendering constants
 HORIZON_Y = 105  # Middle of screen
 GROUND_COLOR = (0, 100, 0)  # Dark green
@@ -81,10 +186,11 @@ SKY_COLOR = (0, 0, 0)  # Black
 WIREFRAME_COLOR = (0, 255, 0)  # Green
 BULLET_COLOR = (255, 255, 255)  # White
 
-# World boundaries
-WORLD_SIZE = 2000
-BOUNDARY_MIN = -WORLD_SIZE // 2
-BOUNDARY_MAX = WORLD_SIZE // 2
+# Per-enemy-subtype colors
+TANK_COLOR = (0, 200, 0)        # standard tank - greenish
+SUPERTANK_COLOR = (255, 60, 60)  # supertank - reddish
+FIGHTER_COLOR = (200, 200, 0)    # fighter - yellowish
+SAUCER_COLOR = (100, 200, 255)   # saucer - cyan
 
 class Tank(NamedTuple):
     x: chex.Array
@@ -106,6 +212,7 @@ class Obstacle(NamedTuple):
     x: chex.Array
     y: chex.Array
     obstacle_type: chex.Array  # 0: enemy tank, 1: other obstacles
+    enemy_subtype: chex.Array  # Enemy subtype (ENEMY_TYPE_*) when obstacle_type==0, else -1
     angle: chex.Array  # Add tank facing direction
     alive: chex.Array  # Add alive status for enemy tanks
     fire_cooldown: chex.Array  # Cooldown timer for enemy firing
@@ -341,6 +448,7 @@ def check_bullet_obstacle_collisions(bullets: Bullet, obstacles: Obstacle) -> Tu
         x=obstacles.x,
         y=obstacles.y,
         obstacle_type=obstacles.obstacle_type,
+    enemy_subtype=getattr(obstacles, 'enemy_subtype', jnp.full_like(obstacles.x, -1)),
         angle=obstacles.angle,
         alive=new_obstacle_alive,
         fire_cooldown=obstacles.fire_cooldown,
@@ -484,9 +592,8 @@ def update_enemy_tanks(obstacles: Obstacle, player_tank: Tank, bullets: Bullet, 
         new_cooldown = jnp.maximum(0, enemy_cooldown - 1)
         should_fire = jnp.array(False)
 
-        # If player is within detection range, instantly face them
+        # If player is within detection range, allow AI to respond (steering/firing)
         in_detection = jnp.logical_and(should_process, distance_to_player < ENEMY_DETECTION_RANGE)
-        new_angle = jnp.where(in_detection, angle_to_player, new_angle)
 
         # Movement bands (advance if too far, retreat if too close)
         too_close = distance_to_player < ENEMY_MIN_DISTANCE
@@ -501,17 +608,100 @@ def update_enemy_tanks(obstacles: Obstacle, player_tank: Tank, bullets: Bullet, 
         new_x = jnp.where(move_backward, enemy_x - dir_x * ENEMY_MOVE_SPEED, new_x)
         new_y = jnp.where(move_backward, enemy_y - dir_y * ENEMY_MOVE_SPEED, new_y)
 
+        # --- Atari-style steering for TANK and SUPERTANK ---
+        # Apply limited turn rate toward the player and forward movement based on the
+        # per-type speed multiplier. We compute desired heading, clamp turn per-frame,
+        # then step forward along the new heading.
+        subtype = obstacles.enemy_subtype[i]
+        is_tank_subtype = jnp.logical_or(subtype == ENEMY_TYPE_TANK, subtype == ENEMY_TYPE_SUPERTANK)
+
+        # Select per-type turn rate and speed multiplier without indexing with possibly-negative values
+        turn_rate_tank = ENEMY_TURN_RATES[ENEMY_TYPE_TANK]
+        turn_rate_supertank = ENEMY_TURN_RATES[ENEMY_TYPE_SUPERTANK]
+        turn_rate = jnp.where(subtype == ENEMY_TYPE_SUPERTANK, turn_rate_supertank, turn_rate_tank)
+
+        speed_tank = ENEMY_SPEED_MULTIPLIERS[ENEMY_TYPE_TANK]
+        speed_supertank = ENEMY_SPEED_MULTIPLIERS[ENEMY_TYPE_SUPERTANK]
+        speed_multiplier = jnp.where(subtype == ENEMY_TYPE_SUPERTANK, speed_supertank, speed_tank)
+
+        # Desired heading towards player
+        desired_heading = angle_to_player
+        raw_delta = desired_heading - new_angle
+        # Normalize angle difference to [-π, π]
+        delta_angle = jnp.arctan2(jnp.sin(raw_delta), jnp.cos(raw_delta))
+
+        max_turn = turn_rate  # already in radians/frame
+        turn_amount = jnp.clip(delta_angle, -max_turn, max_turn)
+
+        apply_steer = jnp.logical_and(should_process, in_detection)
+        applied_turn = jnp.where(jnp.logical_and(apply_steer, is_tank_subtype), turn_amount, jnp.array(0.0))
+
+        # Update heading and position for tank-like enemies
+        steered_angle = new_angle + applied_turn
+        steered_speed = ENEMY_MOVE_SPEED * speed_multiplier
+        steered_x = new_x + jnp.cos(steered_angle) * steered_speed
+        steered_y = new_y + jnp.sin(steered_angle) * steered_speed
+
+        new_angle = jnp.where(jnp.logical_and(apply_steer, is_tank_subtype), steered_angle, new_angle)
+        new_x = jnp.where(jnp.logical_and(apply_steer, is_tank_subtype), steered_x, new_x)
+        new_y = jnp.where(jnp.logical_and(apply_steer, is_tank_subtype), steered_y, new_y)
+
+        if DEBUG_ENEMY_STEERING:
+            jax.debug.print('[STEER] idx={} type={} heading={:.2f} desired={:.2f} delta={:.2f} applied={:.2f}', i, subtype, new_angle, desired_heading, delta_angle, applied_turn)
+
+
         # Firing conditions: engagement band, roughly frontal, cooldown ready, within range, and not waiting
         angle_diff = angle_to_player - new_angle
         angle_diff = jnp.arctan2(jnp.sin(angle_diff), jnp.cos(angle_diff))
         is_frontal = jnp.abs(angle_diff) < 0.35
-        can_fire = enemy_cooldown <= 0
-        should_fire = jnp.logical_and(jnp.logical_and(in_engage_band, is_frontal),
-                                      jnp.logical_and(can_fire, distance_to_player < ENEMY_FIRE_RANGE))
-        should_fire = jnp.logical_and(should_fire, jnp.logical_not(waiting))
 
+        # --- Firing logic per enemy subtype ---
+        subtype_idx = subtype.astype(jnp.int32)
+
+        # Time since spawn (spawn sets state_timer to ENEMY_SPAWN_WAIT)
+        time_since_spawn = ENEMY_SPAWN_WAIT - enemy_state_timer
+        allowed_by_spawn_time = time_since_spawn > ENEMY_NO_FIRE_AFTER_SPAWN_FRAMES[subtype_idx]
+
+        # Angle check (normalize and compare to per-type threshold)
+        ang_diff = jnp.arctan2(jnp.sin(new_angle - angle_to_player), jnp.cos(new_angle - angle_to_player))
+        abs_ang_diff = jnp.abs(ang_diff)
+        angle_ok = abs_ang_diff <= ENEMY_FIRING_ANGLE_THRESH_RAD[subtype_idx]
+
+        # Range check
+        range_ok = distance_to_player <= ENEMY_FIRING_RANGE[subtype_idx]
+
+        # Cooldown & type permission
+        cooldown_ok = enemy_cooldown <= 0
+        type_can_fire = ENEMY_CAN_FIRE[subtype_idx] == 1
+
+        # Base firing condition (TANK / SUPERTANK / FIGHTER when not special-case)
+        base_can_fire = jnp.logical_and(jnp.logical_and(type_can_fire, cooldown_ok), allowed_by_spawn_time)
+        firing_condition = jnp.logical_and(jnp.logical_and(base_can_fire, angle_ok), range_ok)
+
+        # Fighter special: point-blank behavior
+        is_fighter = subtype == ENEMY_TYPE_FIGHTER
+        fighter_point_blank = jnp.logical_and(is_fighter, distance_to_player < FIGHTER_POINT_BLANK_DIST)
+
+        # Deterministic lateral veer sign based on step_counter and index
+        sin_val = jnp.sin(step_counter * 0.123 + i * 0.71)
+        veer_sign = jnp.where(sin_val >= 0.0, 1.0, -1.0)
+        veer_angle = veer_sign * FIGHTER_VEER_ANGLE_RAD
+
+        # If fighter point-blank and allowed to fire, veer and fire immediately
+        fighter_fire_now = jnp.logical_and(fighter_point_blank, base_can_fire)
+        # Apply veer for fighter immediate-fire case
+        new_angle = jnp.where(fighter_fire_now, new_angle + veer_angle, new_angle)
+
+        # Compose final should_fire flag: either normal firing_condition or fighter immediate fire
+        should_fire = jnp.logical_or(jnp.logical_and(firing_condition, jnp.logical_not(waiting)), fighter_fire_now)
+
+        # Update state and cooldown when firing
         new_state = jnp.where(in_engage_band, ENEMY_STATE_ENGAGE, new_state)
-        new_cooldown = jnp.where(should_fire, ENEMY_FIRE_COOLDOWN, new_cooldown)
+        new_cooldown = jnp.where(should_fire, ENEMY_FIRE_COOLDOWNS[subtype_idx], new_cooldown)
+
+        if DEBUG_ENEMY_FIRING:
+            jax.debug.print('[FIRE] idx={} type={} cooldown={} dist={:.2f} ang_diff={:.2f} allowed_by_spawn={} fired={}',
+                            i, subtype_idx, enemy_cooldown, distance_to_player, abs_ang_diff, allowed_by_spawn_time, should_fire)
 
         # Bullet spawn and aim
         bullet_offset = 15.0
@@ -541,7 +731,8 @@ def update_enemy_tanks(obstacles: Obstacle, player_tank: Tank, bullets: Bullet, 
     updated_obstacles = Obstacle(
         x=new_x,
         y=new_y,
-        obstacle_type=obstacles.obstacle_type,
+    obstacle_type=obstacles.obstacle_type,
+    enemy_subtype=getattr(obstacles, 'enemy_subtype', jnp.full_like(obstacles.x, -1)),
         angle=new_angle,
         alive=new_alive,
         fire_cooldown=new_cooldown,
@@ -580,60 +771,108 @@ def update_enemy_tanks(obstacles: Obstacle, player_tank: Tank, bullets: Bullet, 
 
 @jax.jit
 def spawn_new_enemy(obstacles: Obstacle, player_tank: Tank, step_counter: chex.Array) -> Obstacle:
-	"""Spawn a new enemy in front of the player (on the horizon) so it approaches the player."""
-	
-	# Count active enemies
-	active_enemies = jnp.sum(obstacles.alive)
-	
-	# Only spawn if we have room for more enemies
-	should_spawn = active_enemies < MAX_ACTIVE_ENEMIES
-	
-	# Find first dead enemy slot for respawning
-	dead_enemy_idx = jnp.argmax(jnp.logical_not(obstacles.alive))
-	has_dead_slot = jnp.logical_not(obstacles.alive[dead_enemy_idx])
-	
-	can_spawn = jnp.logical_and(should_spawn, has_dead_slot)
+    """Spawn a new enemy according to type-specific Atari BattleZone rules.
 
-	# Spawn in front of player (horizon): use player's facing direction plus small deterministic spread
-	# deterministic offset based on step_counter so spawns are varied but repeatable
-	spread = (jnp.sin(step_counter * 0.13) * 0.9)  # radians offset in [-0.9,0.9]
-	spawn_angle = player_tank.angle + spread
+    Rules implemented:
+    - TANK/SUPERTANK: spawn at random angle around player; choose NEAR or FAR radius 50/50
+    - FIGHTER: spawn directly in front of the player at a small offset
+    - SAUCER: spawn at a random angle and radius anywhere in the map; may spawn while hostiles are active
 
-	# spawn at the maximum spawn distance in front of the player (the horizon area)
-	spawn_distance = ENEMY_SPAWN_DISTANCE_MAX
+    Only one hostile (tank/supertank/fighter) will be active at once. If a hostile is active,
+    this function will only allow saucer spawns.
+    """
 
-	spawn_x = player_tank.x + jnp.cos(spawn_angle) * spawn_distance
-	spawn_y = player_tank.y + jnp.sin(spawn_angle) * spawn_distance
+    # Count total active entities
+    active_enemies = jnp.sum(obstacles.alive)
 
-	# Clamp spawn position to world bounds
-	spawn_x = jnp.clip(spawn_x, BOUNDARY_MIN, BOUNDARY_MAX)
-	spawn_y = jnp.clip(spawn_y, BOUNDARY_MIN, BOUNDARY_MAX)
+    # Determine whether any hostile (non-saucer) enemy is active
+    hostile_mask = jnp.logical_and(obstacles.obstacle_type == 0,
+                                   jnp.logical_and(obstacles.alive == 1, obstacles.enemy_subtype != ENEMY_TYPE_SAUCER))
+    hostile_active = jnp.any(hostile_mask)
 
-	# Initial enemy angle: roughly face towards the player so they move inward
-	initial_angle = jnp.arctan2(player_tank.y - spawn_y, player_tank.x - spawn_x)
+    # Only spawn if we have room and there is a dead slot
+    should_spawn = active_enemies < MAX_ACTIVE_ENEMIES
+    dead_enemy_idx = jnp.argmax(jnp.logical_not(obstacles.alive))
+    has_dead_slot = jnp.logical_not(obstacles.alive[dead_enemy_idx])
+    can_spawn = jnp.logical_and(should_spawn, has_dead_slot)
 
-	# Write into the dead slot and set to HUNT so it will approach the player; give short wait before shooting
-	new_x = jnp.where(can_spawn, obstacles.x.at[dead_enemy_idx].set(spawn_x), obstacles.x)
-	new_y = jnp.where(can_spawn, obstacles.y.at[dead_enemy_idx].set(spawn_y), obstacles.y)
-	new_angle = jnp.where(can_spawn, obstacles.angle.at[dead_enemy_idx].set(initial_angle), obstacles.angle)
-	new_alive = jnp.where(can_spawn, obstacles.alive.at[dead_enemy_idx].set(1), obstacles.alive)
-	new_fire_cooldown = jnp.where(can_spawn, obstacles.fire_cooldown.at[dead_enemy_idx].set(ENEMY_SPAWN_WAIT), obstacles.fire_cooldown)
-	# Immediately set AI to HUNT so it will approach the player (but it will wait to shoot until state_timer expires)
-	new_ai_state = jnp.where(can_spawn, obstacles.ai_state.at[dead_enemy_idx].set(ENEMY_STATE_HUNT), obstacles.ai_state)
-	new_target_angle = jnp.where(can_spawn, obstacles.target_angle.at[dead_enemy_idx].set(initial_angle), obstacles.target_angle)
-	new_state_timer = jnp.where(can_spawn, obstacles.state_timer.at[dead_enemy_idx].set(ENEMY_SPAWN_WAIT), obstacles.state_timer)
+    # Deterministic pseudo-random scalars based on step_counter and slot index
+    r1 = jnp.abs(jnp.sin(step_counter * 0.093 + dead_enemy_idx * 0.37))
+    r2 = jnp.abs(jnp.cos(step_counter * 0.127 + dead_enemy_idx * 0.19))
 
-	return Obstacle(
-		x=new_x,
-		y=new_y,
-		obstacle_type=obstacles.obstacle_type,
-		angle=new_angle,
-		alive=new_alive,
-		fire_cooldown=new_fire_cooldown,
-		ai_state=new_ai_state,
-		target_angle=new_target_angle,
-		state_timer=new_state_timer
-	)
+    # Choose subtype: if a hostile is already active, only allow SAUCER; otherwise pick from hostile types
+    def choose_hostile():
+        c = jnp.floor(r1 * 3.0).astype(jnp.int32)
+        return jnp.where(c == 0, ENEMY_TYPE_TANK, jnp.where(c == 1, ENEMY_TYPE_SUPERTANK, ENEMY_TYPE_FIGHTER))
+
+    chosen_subtype = jax.lax.cond(hostile_active, lambda: ENEMY_TYPE_SAUCER, choose_hostile)
+
+    # Compute spawn angle and distance per-subtype
+    angle_noise = (r1 * 2.0 * math.pi + r2 * 1.3) % (2.0 * math.pi)
+    near_choice = (jnp.floor(r2 * 2.0) % 2) == 0
+
+    # defaults
+    spawn_angle = angle_noise
+    spawn_distance = ENEMY_SPAWN_DISTANCE_MAX
+
+    # TANK / SUPERTANK: random angle, choose NEAR or FAR
+    is_tank_like = jnp.logical_or(chosen_subtype == ENEMY_TYPE_TANK, chosen_subtype == ENEMY_TYPE_SUPERTANK)
+    spawn_angle = jnp.where(is_tank_like, angle_noise, spawn_angle)
+    spawn_distance = jnp.where(is_tank_like, jnp.where(near_choice, SPAWN_NEAR_RADIUS, SPAWN_FAR_RADIUS), spawn_distance)
+
+    # FIGHTER: spawn directly in front of player's facing direction at small offset
+    fighter_offset = SPAWN_NEAR_RADIUS * 0.5
+    spawn_angle = jnp.where(chosen_subtype == ENEMY_TYPE_FIGHTER, player_tank.angle, spawn_angle)
+    spawn_distance = jnp.where(chosen_subtype == ENEMY_TYPE_FIGHTER, fighter_offset, spawn_distance)
+
+    # SAUCER: random radius anywhere in map
+    saucer_radius = jnp.abs(jnp.sin(step_counter * 0.19 + dead_enemy_idx * 0.11)) * MAP_RADIUS
+    spawn_angle = jnp.where(chosen_subtype == ENEMY_TYPE_SAUCER, angle_noise, spawn_angle)
+    spawn_distance = jnp.where(chosen_subtype == ENEMY_TYPE_SAUCER, saucer_radius, spawn_distance)
+
+    # Convert polar to Cartesian
+    # Ensure spawn distance is within configured min/max so enemies are visible on the ground
+    spawn_distance = jnp.clip(spawn_distance, ENEMY_SPAWN_DISTANCE_MIN, ENEMY_SPAWN_DISTANCE_MAX)
+
+    spawn_x = player_tank.x + jnp.cos(spawn_angle) * spawn_distance
+    spawn_y = player_tank.y + jnp.sin(spawn_angle) * spawn_distance
+
+    # Clamp spawn position
+    spawn_x = jnp.clip(spawn_x, BOUNDARY_MIN, BOUNDARY_MAX)
+    spawn_y = jnp.clip(spawn_y, BOUNDARY_MIN, BOUNDARY_MAX)
+
+    initial_angle = jnp.arctan2(player_tank.y - spawn_y, player_tank.x - spawn_x)
+
+    # Prepare updated arrays, set subtype for the new slot
+    new_x = jnp.where(can_spawn, obstacles.x.at[dead_enemy_idx].set(spawn_x), obstacles.x)
+    new_y = jnp.where(can_spawn, obstacles.y.at[dead_enemy_idx].set(spawn_y), obstacles.y)
+    new_angle = jnp.where(can_spawn, obstacles.angle.at[dead_enemy_idx].set(initial_angle), obstacles.angle)
+    new_alive = jnp.where(can_spawn, obstacles.alive.at[dead_enemy_idx].set(1), obstacles.alive)
+    new_fire_cooldown = jnp.where(can_spawn, obstacles.fire_cooldown.at[dead_enemy_idx].set(ENEMY_SPAWN_WAIT), obstacles.fire_cooldown)
+    new_ai_state = jnp.where(can_spawn, obstacles.ai_state.at[dead_enemy_idx].set(ENEMY_STATE_HUNT), obstacles.ai_state)
+    new_target_angle = jnp.where(can_spawn, obstacles.target_angle.at[dead_enemy_idx].set(initial_angle), obstacles.target_angle)
+    new_state_timer = jnp.where(can_spawn, obstacles.state_timer.at[dead_enemy_idx].set(ENEMY_SPAWN_WAIT), obstacles.state_timer)
+    new_obstacle_type = jnp.where(can_spawn, obstacles.obstacle_type.at[dead_enemy_idx].set(0), obstacles.obstacle_type)
+    new_enemy_subtype = jnp.where(can_spawn, obstacles.enemy_subtype.at[dead_enemy_idx].set(chosen_subtype), obstacles.enemy_subtype)
+
+    # Debug printing
+    if DEBUG_ENEMY_SPAWN:
+        jax.debug.print('[SPAWN] idx={} type={} angle={:.2f} dist={:.1f}', dead_enemy_idx, chosen_subtype, spawn_angle, spawn_distance)
+
+    # TODO: add overlap/obstacle checks to avoid spawning inside other objects
+
+    return Obstacle(
+        x=new_x,
+        y=new_y,
+        obstacle_type=new_obstacle_type,
+        enemy_subtype=new_enemy_subtype,
+        angle=new_angle,
+        alive=new_alive,
+        fire_cooldown=new_fire_cooldown,
+        ai_state=new_ai_state,
+        target_angle=new_target_angle,
+        state_timer=new_state_timer
+    )
 
 class JaxBattleZone(JaxEnvironment[BattleZoneState, BattleZoneObservation, chex.Array, BattleZoneInfo]):
     def __init__(self, reward_funcs: list[callable] = None):
@@ -677,6 +916,7 @@ class JaxBattleZone(JaxEnvironment[BattleZoneState, BattleZoneObservation, chex.
         enemy_positions_y = jnp.array([0.0, 0.0, 200.0, -200.0, 0.0, 0.0, 0.0, 0.0,
                                       0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0])
         enemy_types = jnp.zeros(16)  # All enemy tanks (type 0)
+        enemy_subtypes = jnp.array([0, 0, 0, 0] + [-1] * 12)
         # Initial angles for enemy tanks
         enemy_angles = jnp.array([jnp.pi, 0.0, -jnp.pi/2, jnp.pi/2, 0.0, 0.0, 0.0, 0.0,
                                  0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0])
@@ -691,6 +931,7 @@ class JaxBattleZone(JaxEnvironment[BattleZoneState, BattleZoneObservation, chex.
             x=enemy_positions_x,
             y=enemy_positions_y,
             obstacle_type=enemy_types,
+            enemy_subtype=enemy_subtypes,
             angle=enemy_angles,
             alive=enemy_alive,
             fire_cooldown=enemy_fire_cooldown,
@@ -813,6 +1054,7 @@ class JaxBattleZone(JaxEnvironment[BattleZoneState, BattleZoneObservation, chex.
                 x=enemy_positions_x,
                 y=enemy_positions_y,
                 obstacle_type=enemy_types,
+                enemy_subtype=jnp.array([0,0,0,0] + [-1]*12),
                 angle=enemy_angles,
                 alive=enemy_alive,
                 fire_cooldown=enemy_fire_cooldown,
@@ -928,6 +1170,7 @@ class JaxBattleZone(JaxEnvironment[BattleZoneState, BattleZoneObservation, chex.
             "x": spaces.Box(low=BOUNDARY_MIN, high=BOUNDARY_MAX, shape=(MAX_OBSTACLES,), dtype=np.float32),
             "y": spaces.Box(low=BOUNDARY_MIN, high=BOUNDARY_MAX, shape=(MAX_OBSTACLES,), dtype=np.float32),
             "obstacle_type": spaces.Box(low=0, high=10, shape=(MAX_OBSTACLES,), dtype=np.int32),
+            "enemy_subtype": spaces.Box(low=-1, high=10, shape=(MAX_OBSTACLES,), dtype=np.int32),
             "angle": spaces.Box(low=-math.pi, high=math.pi, shape=(MAX_OBSTACLES,), dtype=np.float32),
             "alive": spaces.Box(low=0, high=1, shape=(MAX_OBSTACLES,), dtype=np.int32),
             "fire_cooldown": spaces.Box(low=0, high=ENEMY_FIRE_COOLDOWN * 4, shape=(MAX_OBSTACLES,), dtype=np.int32),
@@ -975,6 +1218,7 @@ class JaxBattleZone(JaxEnvironment[BattleZoneState, BattleZoneObservation, chex.
             np.asarray(o.x, dtype=np.float32).reshape(-1),
             np.asarray(o.y, dtype=np.float32).reshape(-1),
             np.asarray(o.obstacle_type, dtype=np.float32).reshape(-1),
+            np.asarray(getattr(o, 'enemy_subtype', np.full_like(o.x, -1)), dtype=np.float32).reshape(-1),
             np.asarray(o.angle, dtype=np.float32).reshape(-1),
             np.asarray(o.alive, dtype=np.float32).reshape(-1),
             np.asarray(o.fire_cooldown, dtype=np.float32).reshape(-1),
@@ -1361,6 +1605,21 @@ class BattleZoneRenderer:
         for i, (ox, oy, alive) in enumerate(zip(state.obstacles.x, state.obstacles.y, state.obstacles.alive)):
             if alive:
                 ox_f = float(ox); oy_f = float(oy)
+                # Choose color by enemy subtype when available
+                try:
+                    subtype_val = int(state.obstacles.enemy_subtype[i])
+                except Exception:
+                    subtype_val = -1
+                if subtype_val == ENEMY_TYPE_SUPERTANK:
+                    enemy_color = SUPERTANK_COLOR
+                elif subtype_val == ENEMY_TYPE_TANK:
+                    enemy_color = TANK_COLOR
+                elif subtype_val == ENEMY_TYPE_FIGHTER:
+                    enemy_color = FIGHTER_COLOR
+                elif subtype_val == ENEMY_TYPE_SAUCER:
+                    enemy_color = SAUCER_COLOR
+                else:
+                    enemy_color = (255, 0, 0)
                 rel_x = ox_f - player_x
                 rel_y = oy_f - player_y
                 cos_a = math.cos(player_angle); sin_a = math.sin(player_angle)
@@ -1371,7 +1630,6 @@ class BattleZoneRenderer:
                 rx = int(radar_center_x + radar_dx * scale)
                 ry = int(radar_center_y + radar_dy * scale)
                 if (rx - radar_center_x) ** 2 + (ry - radar_center_y) ** 2 <= (radar_radius - 3) ** 2:
-                    enemy_color = (255, 0, 0)
                     pygame.draw.circle(screen, enemy_color, (rx, ry), 3)
                     enemy_angle = float(state.obstacles.angle[i])
                     rel_angle = enemy_angle - player_angle
@@ -1526,7 +1784,23 @@ class BattleZoneRenderer:
             
             if visible and 0 <= screen_x < WIDTH and 0 <= screen_y < HEIGHT:
                 if obstacle_type == 0:  # Enemy tank
-                    self.draw_enemy_tank(screen, screen_x, screen_y, distance, WIREFRAME_COLOR, 
+                    # Choose color by enemy subtype when available
+                    try:
+                        subtype_val = int(state.obstacles.enemy_subtype[i])
+                    except Exception:
+                        subtype_val = -1
+                    if subtype_val == ENEMY_TYPE_SUPERTANK:
+                        enemy_color = SUPERTANK_COLOR
+                    elif subtype_val == ENEMY_TYPE_TANK:
+                        enemy_color = TANK_COLOR
+                    elif subtype_val == ENEMY_TYPE_FIGHTER:
+                        enemy_color = FIGHTER_COLOR
+                    elif subtype_val == ENEMY_TYPE_SAUCER:
+                        enemy_color = SAUCER_COLOR
+                    else:
+                        enemy_color = WIREFRAME_COLOR
+
+                    self.draw_enemy_tank(screen, screen_x, screen_y, distance, enemy_color,
                                        obstacle_angle, state.player_tank.angle)
                 elif obstacle_type == 1:  # Cube obstacle
                     self.draw_wireframe_cube(screen, screen_x, screen_y, distance, WIREFRAME_COLOR)
