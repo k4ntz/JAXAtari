@@ -603,18 +603,20 @@ def update_enemy_tanks(obstacles: Obstacle, player_tank: Tank, bullets: Bullet, 
         move_forward = jnp.logical_and(in_detection, jnp.logical_or(too_far, jnp.logical_and(in_engage_band, distance_to_player > ENEMY_OPTIMAL_DISTANCE)))
         move_backward = jnp.logical_and(in_detection, too_close)
 
-        new_x = jnp.where(move_forward, enemy_x + dir_x * ENEMY_MOVE_SPEED, new_x)
-        new_y = jnp.where(move_forward, enemy_y + dir_y * ENEMY_MOVE_SPEED, new_y)
-        new_x = jnp.where(move_backward, enemy_x - dir_x * ENEMY_MOVE_SPEED, new_x)
-        new_y = jnp.where(move_backward, enemy_y - dir_y * ENEMY_MOVE_SPEED, new_y)
-
-        # --- Atari-style steering for TANK and SUPERTANK ---
-        # Apply limited turn rate toward the player and forward movement based on the
-        # per-type speed multiplier. We compute desired heading, clamp turn per-frame,
-        # then step forward along the new heading.
+        # Determine subtype early so we can treat tank-like enemies differently
         subtype = obstacles.enemy_subtype[i]
         is_tank_subtype = jnp.logical_or(subtype == ENEMY_TYPE_TANK, subtype == ENEMY_TYPE_SUPERTANK)
 
+        # For non-tank obstacles, use simple direct band movement; tank-like enemies use steering below
+        move_forward_non_tank = jnp.logical_and(move_forward, jnp.logical_not(is_tank_subtype))
+        move_backward_non_tank = jnp.logical_and(move_backward, jnp.logical_not(is_tank_subtype))
+
+        new_x = jnp.where(move_forward_non_tank, enemy_x + dir_x * ENEMY_MOVE_SPEED, new_x)
+        new_y = jnp.where(move_forward_non_tank, enemy_y + dir_y * ENEMY_MOVE_SPEED, new_y)
+        new_x = jnp.where(move_backward_non_tank, enemy_x - dir_x * ENEMY_MOVE_SPEED, new_x)
+        new_y = jnp.where(move_backward_non_tank, enemy_y - dir_y * ENEMY_MOVE_SPEED, new_y)
+
+        # --- Atari-style steering for TANK and SUPERTANK ---
         # integer index for arrays
         subtype_idx = subtype.astype(jnp.int32)
 
@@ -630,7 +632,7 @@ def update_enemy_tanks(obstacles: Obstacle, player_tank: Tank, bullets: Bullet, 
         # Desired heading towards player
         desired_heading = angle_to_player
 
-        # Lateral hunt offset applied per-subtype while in HUNT state
+        # Lateral hunt offset applied per-subtype while in HUNT state (blue tanks only)
         is_hunt = enemy_state == ENEMY_STATE_HUNT
         is_blue_tank = subtype == ENEMY_TYPE_TANK
         lateral_rad = ENEMY_HUNT_LATERAL_ANGLE_RAD[subtype_idx]
@@ -648,12 +650,24 @@ def update_enemy_tanks(obstacles: Obstacle, player_tank: Tank, bullets: Bullet, 
 
         steered_angle = new_angle + applied_turn
         steered_speed = ENEMY_MOVE_SPEED * speed_multiplier
-        steered_x = new_x + jnp.cos(steered_angle) * steered_speed
-        steered_y = new_y + jnp.sin(steered_angle) * steered_speed
 
+        # Update heading for tank-like enemies when steering applies
         new_angle = jnp.where(jnp.logical_and(apply_steer, is_tank_subtype), steered_angle, new_angle)
-        new_x = jnp.where(jnp.logical_and(apply_steer, is_tank_subtype), steered_x, new_x)
-        new_y = jnp.where(jnp.logical_and(apply_steer, is_tank_subtype), steered_y, new_y)
+
+        # Tanks move forward along heading but use a periodic move/stop phase (strafe then hold to fire)
+        base_move_speed = ENEMY_MOVE_SPEED * speed_multiplier
+        move_angle = jnp.where(jnp.logical_and(apply_steer, is_tank_subtype), steered_angle, new_angle)
+        tank_move_cond = jnp.logical_and(should_process, is_tank_subtype)
+
+        # Periodic phase controls whether the tank is in move/strafe mode or holding to fire
+        phase = jnp.sin(step_counter * 0.08 + i * 0.3)
+        move_phase = phase > 0.0
+        move_multiplier = jnp.where(move_phase, 1.0, 0.0)
+
+        tank_next_x = new_x + jnp.cos(move_angle) * base_move_speed * move_multiplier
+        tank_next_y = new_y + jnp.sin(move_angle) * base_move_speed * move_multiplier
+        new_x = jnp.where(tank_move_cond, tank_next_x, new_x)
+        new_y = jnp.where(tank_move_cond, tank_next_y, new_y)
 
         if DEBUG_ENEMY_STEERING:
             jax.debug.print('[STEER] idx={} type={} heading={:.2f} desired={:.2f} delta={:.2f} applied={:.2f}',
@@ -664,7 +678,6 @@ def update_enemy_tanks(obstacles: Obstacle, player_tank: Tank, bullets: Bullet, 
         angle_diff = jnp.arctan2(jnp.sin(angle_diff), jnp.cos(angle_diff))
         is_frontal = jnp.abs(angle_diff) < 0.35
 
-        subtype_idx = subtype.astype(jnp.int32)
         time_since_spawn = ENEMY_SPAWN_WAIT - enemy_state_timer
         allowed_by_spawn_time = time_since_spawn > ENEMY_NO_FIRE_AFTER_SPAWN_FRAMES[subtype_idx]
 
@@ -687,7 +700,13 @@ def update_enemy_tanks(obstacles: Obstacle, player_tank: Tank, bullets: Bullet, 
         fighter_fire_now = jnp.logical_and(fighter_point_blank, base_can_fire)
         new_angle = jnp.where(fighter_fire_now, new_angle + veer_angle, new_angle)
 
+        # Tanks are more likely to fire while in the hold phase (not moving)
+        in_hold_phase = jnp.logical_and(tank_move_cond, jnp.logical_not(move_phase))
+        hold_fire_boost = jnp.where(in_hold_phase, 1, 0)
+
         should_fire = jnp.logical_or(jnp.logical_and(firing_condition, jnp.logical_not(waiting)), fighter_fire_now)
+        should_fire = jnp.logical_or(should_fire, jnp.logical_and(in_hold_phase, base_can_fire))
+
         new_state = jnp.where(in_engage_band, ENEMY_STATE_ENGAGE, new_state)
         new_cooldown = jnp.where(should_fire, ENEMY_FIRE_COOLDOWNS[subtype_idx], new_cooldown)
 
