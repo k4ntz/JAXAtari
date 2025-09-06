@@ -114,14 +114,14 @@ class JaxBackgammonEnv(JaxEnvironment[BackgammonState, jnp.ndarray, dict, Backga
         )
 
         # Prepare initial dice values for that player
-        first_die = jax.lax.cond(current_player == self.consts.WHITE, lambda _: white_roll, lambda _: black_roll, operand=None)
-        second_die = jax.lax.cond(current_player == self.consts.WHITE, lambda _: black_roll, lambda _: white_roll, operand=None)
+        first_dice = jax.lax.cond(current_player == self.consts.WHITE, lambda _: white_roll, lambda _: black_roll, operand=None)
+        second_dice = jax.lax.cond(current_player == self.consts.WHITE, lambda _: black_roll, lambda _: white_roll, operand=None)
 
-        is_double = first_die == second_die
+        is_double = first_dice == second_dice
         dice = jax.lax.cond(
             is_double,
-            lambda _: jnp.array([first_die] * 4),
-            lambda _: jnp.array([first_die, second_die, 0, 0]),
+            lambda _: jnp.array([first_dice] * 4),
+            lambda _: jnp.array([first_dice, second_dice, 0, 0]),
             operand=None
         )
 
@@ -200,8 +200,8 @@ class JaxBackgammonEnv(JaxEnvironment[BackgammonState, jnp.ndarray, dict, Backga
 
         def continue_check(_):
             def bar_case(_):
-                def is_valid_entry(die_val: int) -> bool:
-                    expected_entry = jax.lax.select(player == self.consts.WHITE, die_val - 1, 24 - die_val)
+                def is_valid_entry(dice_val: int) -> bool:
+                    expected_entry = jax.lax.select(player == self.consts.WHITE, dice_val - 1, 24 - dice_val)
                     matches_entry = to_point == expected_entry
                     entry_open = board[opponent_idx, expected_entry] <= 1
                     return matches_entry & entry_open
@@ -250,13 +250,13 @@ class JaxBackgammonEnv(JaxEnvironment[BackgammonState, jnp.ndarray, dict, Backga
                     operand=None
                 )
 
-                # Larger die than needed is allowed only if no higher checkers
-                larger_die_available = jnp.any(state.dice > bearing_off_distance)
+                # Larger dice than needed is allowed only if no higher checkers
+                larger_dice_available = jnp.any(state.dice > bearing_off_distance)
 
                 # Checker must be present at the from_point
                 has_piece = board[player_idx, from_point] > 0
 
-                valid_bear = has_piece & (dice_match | ((~higher_checkers_exist) & larger_die_available))
+                valid_bear = has_piece & (dice_match | ((~higher_checkers_exist) & larger_dice_available))
 
                 return jax.lax.cond(
                     can_bear_off,
@@ -364,7 +364,7 @@ class JaxBackgammonEnv(JaxEnvironment[BackgammonState, jnp.ndarray, dict, Backga
     @staticmethod
     @jax.jit
     def update_dice(dice: jnp.ndarray, is_valid: bool, distance: int, allow_oversized: bool = False) -> jnp.ndarray:
-        """Consume one matching die (only the first match). Works with up to 4 dice."""
+        """Consume one matching dice (only the first match). Works with up to 4 dice."""
 
         def consume_one(dice):
             def scan_match_exact(carry, i):
@@ -397,8 +397,8 @@ class JaxBackgammonEnv(JaxEnvironment[BackgammonState, jnp.ndarray, dict, Backga
 
             def scan_match_fallback(carry, i):
                 dice, consumed_dice = carry
-                max_die_val = jnp.max(dice)
-                match_fallback = (dice[i] == max_die_val) & (max_die_val < distance)
+                max_dice_val = jnp.max(dice)
+                match_fallback = (dice[i] == max_dice_val) & (max_dice_val < distance)
                 should_consume = (~consumed_dice) & match_fallback
 
                 new_d = jax.lax.cond(
@@ -783,30 +783,30 @@ class BackgammonRenderer(JAXGameRenderer):
         dice_x_start = self.frame_width // 2 - 15
         dice_y = self.frame_height // 2 - dice_size // 2
 
-        def draw_single_die(i, fr):
-            die_value = dice[i]
-            die_x = dice_x_start + i * 15
+        def draw_single_dice(i, fr):
+            dice_value = dice[i]
+            dice_x = dice_x_start + i * 15
 
-            def draw_active_die(_):
-                # Draw die background (white square)
-                fr_with_bg = self._draw_rectangle(fr, die_x, dice_y, dice_size, dice_size,
+            def draw_active_dice(_):
+                # Draw dice background (white square)
+                fr_with_bg = self._draw_rectangle(fr, dice_x, dice_y, dice_size, dice_size,
                                                   jnp.array([240, 240, 240], dtype=jnp.uint8))
 
-                # Draw die border
+                # Draw dice border
                 border_width = 1
-                fr_with_border = self._draw_rectangle(fr_with_bg, die_x - border_width,
+                fr_with_border = self._draw_rectangle(fr_with_bg, dice_x - border_width,
                                                       dice_y - border_width,
                                                       dice_size + 2 * border_width,
                                                       dice_size + 2 * border_width,
                                                       self.color_border)
-                fr_with_border = self._draw_rectangle(fr_with_border, die_x, dice_y,
+                fr_with_border = self._draw_rectangle(fr_with_border, dice_x, dice_y,
                                                       dice_size, dice_size,
                                                       jnp.array([240, 240, 240], dtype=jnp.uint8))
 
-                # Draw pips based on die value
+                # Draw pips based on dice value
                 pip_color = jnp.array([0, 0, 0], dtype=jnp.uint8)  # Black pips
                 pip_radius = 1
-                center_x = die_x + dice_size // 2
+                center_x = dice_x + dice_size // 2
                 center_y = dice_y + dice_size // 2
 
                 def draw_pips_1(_):
@@ -845,18 +845,18 @@ class BackgammonRenderer(JAXGameRenderer):
                 def draw_nothing(_):
                     return fr_with_border
 
-                # Switch based on die value
-                return jax.lax.switch(die_value - 1,
+                # Switch based on dice value
+                return jax.lax.switch(dice_value - 1,
                                       [draw_pips_1, draw_pips_2, draw_pips_3,
                                        draw_pips_4, draw_pips_5, draw_pips_6],
                                       operand=None)
 
-            def skip_die(_):
+            def skip_dice(_):
                 return fr
 
-            return jax.lax.cond(die_value > 0, draw_active_die, skip_die, operand=None)
+            return jax.lax.cond(dice_value > 0, draw_active_dice, skip_dice, operand=None)
 
-        return jax.lax.fori_loop(0, 4, draw_single_die, frame)
+        return jax.lax.fori_loop(0, 4, draw_single_dice, frame)
 
     @partial(jax.jit, static_argnums=(0,))
     def render(self, state):
