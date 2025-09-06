@@ -615,28 +615,37 @@ def update_enemy_tanks(obstacles: Obstacle, player_tank: Tank, bullets: Bullet, 
         subtype = obstacles.enemy_subtype[i]
         is_tank_subtype = jnp.logical_or(subtype == ENEMY_TYPE_TANK, subtype == ENEMY_TYPE_SUPERTANK)
 
-        # Select per-type turn rate and speed multiplier without indexing with possibly-negative values
-        turn_rate_tank = ENEMY_TURN_RATES[ENEMY_TYPE_TANK]
-        turn_rate_supertank = ENEMY_TURN_RATES[ENEMY_TYPE_SUPERTANK]
-        turn_rate = jnp.where(subtype == ENEMY_TYPE_SUPERTANK, turn_rate_supertank, turn_rate_tank)
+        # integer index for arrays
+        subtype_idx = subtype.astype(jnp.int32)
 
-        speed_tank = ENEMY_SPEED_MULTIPLIERS[ENEMY_TYPE_TANK]
-        speed_supertank = ENEMY_SPEED_MULTIPLIERS[ENEMY_TYPE_SUPERTANK]
-        speed_multiplier = jnp.where(subtype == ENEMY_TYPE_SUPERTANK, speed_supertank, speed_tank)
+        # Select per-type turn rate and speed multiplier
+        turn_rate = jnp.where(subtype == ENEMY_TYPE_SUPERTANK,
+                              ENEMY_TURN_RATES[ENEMY_TYPE_SUPERTANK],
+                              ENEMY_TURN_RATES[ENEMY_TYPE_TANK])
+
+        speed_multiplier = jnp.where(subtype == ENEMY_TYPE_SUPERTANK,
+                                     ENEMY_SPEED_MULTIPLIERS[ENEMY_TYPE_SUPERTANK],
+                                     ENEMY_SPEED_MULTIPLIERS[ENEMY_TYPE_TANK])
 
         # Desired heading towards player
         desired_heading = angle_to_player
+
+        # Lateral hunt offset applied per-subtype while in HUNT state
+        is_hunt = enemy_state == ENEMY_STATE_HUNT
+        is_blue_tank = subtype == ENEMY_TYPE_TANK
+        lateral_rad = ENEMY_HUNT_LATERAL_ANGLE_RAD[subtype_idx]
+        sign = jnp.where(jnp.sin(step_counter * 0.13 + i * 0.41) > 0, 1.0, -1.0)
+        lateral_offset = lateral_rad * sign
+        desired_heading = jnp.where(jnp.logical_and(is_hunt, is_blue_tank), desired_heading + lateral_offset, desired_heading)
+
+        # Steering: limited turn toward desired heading
         raw_delta = desired_heading - new_angle
-        # Normalize angle difference to [-π, π]
         delta_angle = jnp.arctan2(jnp.sin(raw_delta), jnp.cos(raw_delta))
-
-        max_turn = turn_rate  # already in radians/frame
+        max_turn = turn_rate
         turn_amount = jnp.clip(delta_angle, -max_turn, max_turn)
-
         apply_steer = jnp.logical_and(should_process, in_detection)
         applied_turn = jnp.where(jnp.logical_and(apply_steer, is_tank_subtype), turn_amount, jnp.array(0.0))
 
-        # Update heading and position for tank-like enemies
         steered_angle = new_angle + applied_turn
         steered_speed = ENEMY_MOVE_SPEED * speed_multiplier
         steered_x = new_x + jnp.cos(steered_angle) * steered_speed
@@ -647,55 +656,38 @@ def update_enemy_tanks(obstacles: Obstacle, player_tank: Tank, bullets: Bullet, 
         new_y = jnp.where(jnp.logical_and(apply_steer, is_tank_subtype), steered_y, new_y)
 
         if DEBUG_ENEMY_STEERING:
-            jax.debug.print('[STEER] idx={} type={} heading={:.2f} desired={:.2f} delta={:.2f} applied={:.2f}', i, subtype, new_angle, desired_heading, delta_angle, applied_turn)
+            jax.debug.print('[STEER] idx={} type={} heading={:.2f} desired={:.2f} delta={:.2f} applied={:.2f}',
+                            i, subtype, new_angle, desired_heading, delta_angle, applied_turn)
 
-
-        # Firing conditions: engagement band, roughly frontal, cooldown ready, within range, and not waiting
+        # Firing conditions
         angle_diff = angle_to_player - new_angle
         angle_diff = jnp.arctan2(jnp.sin(angle_diff), jnp.cos(angle_diff))
         is_frontal = jnp.abs(angle_diff) < 0.35
 
-        # --- Firing logic per enemy subtype ---
         subtype_idx = subtype.astype(jnp.int32)
-
-        # Time since spawn (spawn sets state_timer to ENEMY_SPAWN_WAIT)
         time_since_spawn = ENEMY_SPAWN_WAIT - enemy_state_timer
         allowed_by_spawn_time = time_since_spawn > ENEMY_NO_FIRE_AFTER_SPAWN_FRAMES[subtype_idx]
 
-        # Angle check (normalize and compare to per-type threshold)
         ang_diff = jnp.arctan2(jnp.sin(new_angle - angle_to_player), jnp.cos(new_angle - angle_to_player))
         abs_ang_diff = jnp.abs(ang_diff)
         angle_ok = abs_ang_diff <= ENEMY_FIRING_ANGLE_THRESH_RAD[subtype_idx]
-
-        # Range check
         range_ok = distance_to_player <= ENEMY_FIRING_RANGE[subtype_idx]
 
-        # Cooldown & type permission
         cooldown_ok = enemy_cooldown <= 0
         type_can_fire = ENEMY_CAN_FIRE[subtype_idx] == 1
-
-        # Base firing condition (TANK / SUPERTANK / FIGHTER when not special-case)
         base_can_fire = jnp.logical_and(jnp.logical_and(type_can_fire, cooldown_ok), allowed_by_spawn_time)
         firing_condition = jnp.logical_and(jnp.logical_and(base_can_fire, angle_ok), range_ok)
 
-        # Fighter special: point-blank behavior
+        # Fighter special-case veer & immediate fire
         is_fighter = subtype == ENEMY_TYPE_FIGHTER
         fighter_point_blank = jnp.logical_and(is_fighter, distance_to_player < FIGHTER_POINT_BLANK_DIST)
-
-        # Deterministic lateral veer sign based on step_counter and index
         sin_val = jnp.sin(step_counter * 0.123 + i * 0.71)
         veer_sign = jnp.where(sin_val >= 0.0, 1.0, -1.0)
         veer_angle = veer_sign * FIGHTER_VEER_ANGLE_RAD
-
-        # If fighter point-blank and allowed to fire, veer and fire immediately
         fighter_fire_now = jnp.logical_and(fighter_point_blank, base_can_fire)
-        # Apply veer for fighter immediate-fire case
         new_angle = jnp.where(fighter_fire_now, new_angle + veer_angle, new_angle)
 
-        # Compose final should_fire flag: either normal firing_condition or fighter immediate fire
         should_fire = jnp.logical_or(jnp.logical_and(firing_condition, jnp.logical_not(waiting)), fighter_fire_now)
-
-        # Update state and cooldown when firing
         new_state = jnp.where(in_engage_band, ENEMY_STATE_ENGAGE, new_state)
         new_cooldown = jnp.where(should_fire, ENEMY_FIRE_COOLDOWNS[subtype_idx], new_cooldown)
 
