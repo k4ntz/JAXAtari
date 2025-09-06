@@ -1994,14 +1994,17 @@ class VideoPinballState(NamedTuple):
     ball_direction: (
         chex.Array
     )  # 0: left/up, 1:left/down , 2: right/up, 3: right/down (Shouldn't this be a function?)
+
     left_flipper_angle: chex.Array
     right_flipper_angle: chex.Array
+
     plunger_position: (
         chex.Array
     )  # Value between 0 and 20 where 20 means that the plunger is fully pulled
     plunger_power: (
         chex.Array
     )  # 2 * plunger_position, only set to non-zero value once fired, reset after hitting invisible block
+
     score: chex.Array
     lives: chex.Array
     bumper_multiplier: chex.Array
@@ -2011,6 +2014,7 @@ class VideoPinballState(NamedTuple):
     atari_symbols: chex.Array
     rollover_counter: chex.Array
     rollover_enabled: chex.Array
+
     step_counter: chex.Array
     ball_in_play: chex.Array
     respawn_timer: chex.Array
@@ -2020,30 +2024,41 @@ class VideoPinballState(NamedTuple):
     # obs_stack: chex.ArrayTree     What is this for? Pong doesnt have this right?
 
 
-class EntityPosition(NamedTuple):
-    x: jnp.ndarray
-    y: jnp.ndarray
-    width: jnp.ndarray
-    height: jnp.ndarray
+class Ball_State(NamedTuple):
+    pos_x: chex.Array
+    pos_y: chex.Array
+    vel_x: chex.Array
+    vel_y: chex.Array
+    direction: chex.Array
 
+class Flippers_State(NamedTuple):
+    left_flipper_state: chex.Array
+    right_flipper_state: chex.Array
 
 class VideoPinballObservation(NamedTuple):
-    ball: EntityPosition
-    left_flipper: EntityPosition
-    right_flipper: EntityPosition
-    plunger: EntityPosition
-    bumpers: jnp.ndarray  # bumper states array
-    targets: jnp.ndarray  # target states array
-    score: jnp.ndarray
-    lives: jnp.ndarray
-    bumper_multiplier: jnp.ndarray
+    ball: Ball_State
+    flipper_states: Flippers_State
+    spinner_states: chex.Array  # spinner states array
+    plunger_position: chex.Array  # plunger position
+    score: chex.Array
+    lives: chex.Array
+    bumper_multiplier: chex.Array
     active_targets: chex.Array
     atari_symbols: chex.Array
     rollover_counter: chex.Array
-
+    color_cycling: chex.Array
+    tilt_mode_active: chex.Array
 
 class VideoPinballInfo(NamedTuple):
-    time: jnp.ndarray
+    time: chex.Array
+    plunger_power: chex.Array
+    target_cooldown: chex.Array
+    special_target_cooldown: chex.Array
+    rollover_enabled: chex.Array
+    step_counter: chex.Array
+    ball_in_play: chex.Array
+    respawn_timer: chex.Array
+    tilt_counter: chex.Array
     all_rewards: chex.Array
 
 
@@ -3326,90 +3341,6 @@ def handle_target_cooldowns(
         color_cycling,
     )
 
-
-@jax.jit
-def color_cycler(color):
-
-    new_color = jax.lax.cond(
-        color > 0,  # Condition 1: is value > 0?
-        lambda x: color - 1,  # True branch for Condition 1
-        lambda x: jnp.where(  # False branch for Condition 1 (nested cond)
-            color < 0,  # Condition 2: is value < 0?
-            color + 1,  # True branch for Condition 2
-            color,  # False branch for Condition 2 (must be == 0)
-        ),
-        None,  # Operand for outer cond (not used by branch funcs)
-    )
-
-    new_color = jnp.where(new_color == -1, jnp.array(14).astype(jnp.int32), new_color)
-
-    return new_color
-
-
-@jax.jit
-def handle_color_cycling(raster, color):
-
-    bg_color_mask = jnp.all(raster == BACKGROUND_COLOR, axis=-1, keepdims=True)
-    wall_color_mask = jnp.all(raster == WALL_COLOR, axis=-1, keepdims=True)
-    group3_color_mask = jnp.all(raster == GROUP3_COLOR, axis=-1, keepdims=True)
-    group4_color_mask = jnp.all(raster == GROUP4_COLOR, axis=-1, keepdims=True)
-    group5_color_mask = jnp.all(raster == GROUP5_COLOR, axis=-1, keepdims=True)
-
-    raster = jnp.where(bg_color_mask, BACKGROUND_COLOR_CYCLING[color], raster)
-    raster = jnp.where(wall_color_mask, WALL_COLOR_CYCLING[color], raster)
-    raster = jnp.where(group3_color_mask, GROUP3_COLOR_CYCLING[color], raster)
-    raster = jnp.where(group4_color_mask, GROUP4_COLOR_CYCLING[color], raster)
-    raster = jnp.where(group5_color_mask, GROUP5_COLOR_CYCLING[color], raster)
-
-    raster = raster.at[0:8, 175:176, :].set(BG_COLOR)
-    raster = raster.at[:, 191:, :].set(BG_COLOR)
-
-    return raster
-
-
-@jax.jit
-def _split_integer(number: jnp.ndarray, max_digits: int = 6) -> jnp.ndarray:
-    """
-    Splits an integer into a JAX array of its individual digits.
-
-    The output array will have a fixed size determined by `max_digits`.
-    If the input number has fewer digits than `max_digits`, it will be
-    padded with leading zeros.
-
-    Args:
-        number: The integer to split. Should be a non-negative integer.
-                Can be a Python int or a JAX array.
-        max_digits: The maximum number of digits expected. The output array
-                    will have this many elements.
-
-    Returns:
-        A 1D JAX array where each element is a digit of the input number.
-
-    Example:
-        split_integer(247900, max_digits=6) == jnp.array([2, 4, 7, 9, 0, 0])
-        split_integer(123, max_digits=6)    == jnp.array([0, 0, 0, 1, 2, 3])
-        split_integer(0, max_digits=3)      == jnp.array([0, 0, 0])
-    """
-    # Ensure the input number is a JAX array.
-    # This handles both Python integers and existing JAX arrays.
-    number = jnp.asarray(number, dtype=jnp.int32)
-
-    # Create an array of powers of 10 to extract digits from left to right.
-    # For max_digits=6, this will be [10^5, 10^4, 10^3, 10^2, 10^1, 10^0]
-    powers_of_10 = 10 ** jnp.arange(max_digits - 1, -1, -1, dtype=jnp.int32)
-
-    # Perform integer division by powers of 10, then take modulo 10
-    # to isolate each digit.
-    # Example:
-    # (247900 // 100000) % 10 = 2
-    # (247900 // 10000) % 10 = 4
-    # ...
-    # (247900 // 1) % 10 = 0
-    digits = (number // powers_of_10) % 10
-
-    return digits
-
-
 class JaxVideoPinball(
     JaxEnvironment[VideoPinballState, VideoPinballObservation, VideoPinballInfo, VideoPinballConstants]
 ):
@@ -3432,7 +3363,7 @@ class JaxVideoPinball(
         }
         self.obs_size = 3 * 4 + 1 + 1
 
-    def reset(self, prng_key) -> Tuple[VideoPinballState, VideoPinballObservation]:
+    def reset(self, prng_key) -> Tuple[VideoPinballObservation, VideoPinballState]:
         """
         Resets the game state to the initial state.
         Returns the initial state and the reward (i.e. 0)
@@ -3465,13 +3396,31 @@ class JaxVideoPinball(
         )
 
         initial_obs = self._get_observation(state)
-        return initial_obs, state  # , initial_obs
+        return initial_obs, state
+
+    @partial(jax.jit, static_argnums=(0,))
+    def _color_cycler(self, color):
+
+        new_color = jax.lax.cond(
+            color > 0,  # Condition 1: is value > 0?
+            lambda x: color - 1,  # True branch for Condition 1
+            lambda x: jnp.where(  # False branch for Condition 1 (nested cond)
+                color < 0,  # Condition 2: is value < 0?
+                color + 1,  # True branch for Condition 2
+                color,  # False branch for Condition 2 (must be == 0)
+            ),
+            None,  # Operand for outer cond (not used by branch funcs)
+        )
+
+        new_color = jnp.where(new_color == -1, jnp.array(14).astype(jnp.int32), new_color)
+
+        return new_color
 
     @partial(jax.jit, static_argnums=(0,))
     def step(
         self, state: VideoPinballState, action: chex.Array
     ) -> Tuple[
-        VideoPinballState, VideoPinballObservation, float, bool, VideoPinballInfo
+        VideoPinballObservation, VideoPinballState, float, bool, VideoPinballInfo
     ]:
         # chex provides jax with additional debug/testing functionality.
         # Probably best to use it instead of simply jnp.array
@@ -3497,13 +3446,6 @@ class JaxVideoPinball(
             operand=new_plunger_power,
         )
         left_flipper_angle, right_flipper_angle = flipper_step(state, action)
-
-        # Print new_plunger_power and plunger_power
-        # jax.debug.print(
-        #    "Plunger Step, Plunger Power {plunger_power}, New Plunger Power {new_plunger_power}",
-        #    plunger_power=plunger_power,
-        #    new_plunger_power=new_plunger_power,
-        # )
 
         # Step 2: Update ball position and velocity
         (
@@ -3602,7 +3544,7 @@ class JaxVideoPinball(
         )
         # ball_in_play = jnp.where(ball_reset, jnp.array(False), ball_in_play)
 
-        color_cycling = color_cycler(color_cycling)
+        color_cycling = self._color_cycler(color_cycling)
 
 
         # Use this to test the flippers
@@ -3672,71 +3614,55 @@ class JaxVideoPinball(
     @partial(jax.jit, static_argnums=(0,))
     def _get_observation(self, state: VideoPinballState):
 
-        ball = EntityPosition(
-            x=state.ball_x,
-            y=state.ball_y,
-            width=jnp.array(BALL_SIZE[0]),
-            height=jnp.array(BALL_SIZE[1]),
+        ball = Ball_State(
+            pos_x=state.ball_x,
+            pos_y=state.ball_y,
+            vel_x=state.ball_vel_x,
+            vel_y=state.ball_vel_y,
+            direction=state.ball_direction,
         )
-
-        # TODO: Implement proper positions and sizes for flippers and plunger
-        left_flipper = EntityPosition(
-            x=state.ball_x,
-            y=state.ball_y,
-            width=jnp.array(BALL_SIZE[0]),
-            height=jnp.array(BALL_SIZE[1]),
+        
+        flipper_states = Flippers_State(
+            left_flipper_state=state.left_flipper_angle,
+            right_flipper_state=state.right_flipper_angle,
         )
-
-        right_flipper = EntityPosition(
-            x=state.ball_x,
-            y=state.ball_y,
-            width=jnp.array(BALL_SIZE[0]),
-            height=jnp.array(BALL_SIZE[1]),
-        )
-
-        plunger = EntityPosition(
-            x=state.ball_x,
-            y=state.ball_y,
-            width=jnp.array(BALL_SIZE[0]),
-            height=jnp.array(BALL_SIZE[1]),
-        )
-
+        
         return VideoPinballObservation(
             ball=ball,
-            left_flipper=left_flipper,
-            right_flipper=right_flipper,
-            plunger=plunger,
-            bumpers=state.bumper_multiplier,  # bumper states array
-            targets=state.active_targets,  # target states array
+            flipper_states=flipper_states,
+            spinner_states=jnp.remainder(state.step_counter, 8),
+            plunger_position=state.plunger_position,
             score=state.score,
             lives=state.lives,
             bumper_multiplier=state.bumper_multiplier,
             active_targets=state.active_targets,
             atari_symbols=state.atari_symbols,
             rollover_counter=state.rollover_counter,
+            color_cycling=state.color_cycling,
+            tilt_mode_active=state.tilt_mode_active
         )
 
     @partial(jax.jit, static_argnums=(0,))
     def obs_to_flat_array(self, obs: VideoPinballObservation) -> jnp.ndarray:
         return jnp.concatenate(
             [
-                obs.ball.x.flatten(),
-                obs.ball.y.flatten(),
-                obs.ball.height.flatten(),
-                obs.ball.width.flatten(),
-                obs.left_flipper.x.flatten(),
-                obs.left_flipper.y.flatten(),
-                obs.left_flipper.height.flatten(),
-                obs.left_flipper.width.flatten(),
-                obs.right_flipper.x.flatten(),
-                obs.right_flipper.y.flatten(),
-                obs.right_flipper.height.flatten(),
-                obs.right_flipper.width.flatten(),
-                obs.bumpers.flatten(),
-                obs.targets.flatten(),
+                obs.ball.pos_x.flatten(),
+                obs.ball.pos_y.flatten(),
+                obs.ball.vel_x.flatten(),
+                obs.ball.vel_y.flatten(),
+                obs.ball.direction.flatten(),
+                obs.flipper_states.left_flipper_state.flatten(),
+                obs.flipper_states.right_flipper_state.flatten(),
+                obs.spinner_states.flatten(),
+                obs.plunger_position.flatten(),
                 obs.score.flatten(),
                 obs.lives.flatten(),
                 obs.bumper_multiplier.flatten(),
+                obs.active_targets.flatten(),
+                obs.atari_symbols.flatten(),
+                obs.rollover_counter.flatten(),
+                obs.color_cycling.flatten(),
+                obs.tilt_mode_active.flatten()
             ]
         )
 
@@ -3752,25 +3678,66 @@ class JaxVideoPinball(
         """
         return spaces.Discrete(len(self.action_set))
 
-    def observation_space(self) -> spaces.Box:
+    def observation_space(self) -> spaces.Dict:
+        return spaces.Dict(
+            {
+                "ball": spaces.Dict(
+                    {
+                        "pos_x": spaces.Box(low=0, high=160, shape=(), dtype=jnp.int32),
+                        "pos_y": spaces.Box(low=0, high=210, shape=(), dtype=jnp.int32),
+                        "vel_x": spaces.Box(low=0, high=BALL_MAX_SPEED + 1, shape=(), dtype=jnp.int32),
+                        "vel_y": spaces.Box(low=0, high=BALL_MAX_SPEED + 1, shape=(), dtype=jnp.int32),
+                        "direction": spaces.Box(low=0, high=4, shape=(), dtype=jnp.int32)
+                    }
+                ),
+                "flipper_states": spaces.Dict(
+                    {
+                        "left_flipper_state": spaces.Box(low=0, high=4, shape=(), dtype=jnp.int32),
+                        "right_flipper_state": spaces.Box(low=0, high=4, shape=(), dtype=jnp.int32),
+                    }
+                ),
+                "spinner_states": spaces.Box(low=0, high=5, shape=(2,), dtype=jnp.int32),
+                "plunger_position": spaces.Box(low=0, high=PLUNGER_MAX_POSITION, shape=(), dtype=jnp.int32),
+                "score": spaces.Box(low=0, high=10000, shape=(), dtype=jnp.int32),
+                "lives": spaces.Box(low=0, high=5, shape=(), dtype=jnp.int32),
+                "bumper_multiplier": spaces.Box(low=1, high=9, shape=(), dtype=jnp.int32),
+                "active_targets": spaces.Box(low=0, high=2, shape=(4,), dtype=jnp.int32),
+                "atari_symbols": spaces.Box(low=0, high=5, shape=(), dtype=jnp.int32),
+                "rollover_counter": spaces.Box(low=1, high=10, shape=(), dtype=jnp.int32),
+                "color_cycling": spaces.Box(low=0, high=9, shape=(), dtype=jnp.int32),
+                "tilt_mode_active": spaces.Box(low=0, high=2, shape=(), dtype=jnp.int32)
+            }
+        )
+
+    def image_space(self) -> spaces.Box:
         return spaces.Box(
             low=0,
             high=255,
-            shape=None,
-            dtype=jnp.uint8,
+            shape=(210, 160, 3),
+            dtype=jnp.uint8
         )
 
     @partial(jax.jit, static_argnums=(0,))
     def _get_info(
         self, state: VideoPinballState, all_rewards: chex.Array
     ) -> VideoPinballInfo:
-        return VideoPinballInfo(time=state.step_counter, all_rewards=all_rewards)
+        return VideoPinballInfo(
+            time=state.step_counter,
+            plunger_power=state.plunger_power,
+            target_cooldown=state.target_cooldown,
+            special_target_cooldown=state.special_target_cooldown,
+            rollover_enabled=state.rollover_enabled,
+            step_counter=state.step_counter,
+            ball_in_play=state.ball_in_play,
+            respawn_timer=state.respawn_timer,
+            tilt_counter=state.tilt_counter,
+            all_rewards=all_rewards)
 
     @partial(jax.jit, static_argnums=(0,))
     def _get_env_reward(
         self, previous_state: VideoPinballState, state: VideoPinballState
     ):
-        return 0
+        return state.score - previous_state.score
 
     @partial(jax.jit, static_argnums=(0,))
     def _get_all_reward(
@@ -3785,369 +3752,431 @@ class JaxVideoPinball(
 
     @partial(jax.jit, static_argnums=(0,))
     def _get_done(self, state: VideoPinballState) -> bool:
-        return False
-
-
-@jax.jit
-def load_sprites():
-    MODULE_DIR = os.path.dirname(os.path.abspath(__file__))
-    # Define the base directory for sprites relative to the script
-    SPRITES_BASE_DIR = os.path.join(
-        MODULE_DIR, "sprites/videopinball"
-    )  # Assuming sprites are in a 'sprites/videopinball' subdirectory
-
-    # Load sprites
-    sprite_background = jr.loadFrame(
-        os.path.join(SPRITES_BASE_DIR, "Background.npy"))
-    sprite_ball = jr.loadFrame(
-        os.path.join(SPRITES_BASE_DIR, "Ball.npy"))
-
-    sprite_atari_logo = jr.loadFrame(
-        os.path.join(SPRITES_BASE_DIR, "AtariLogo.npy"))
-    sprite_x = jr.loadFrame(os.path.join(SPRITES_BASE_DIR, "X.npy"))
-    sprite_yellow_diamond_bottom = jr.loadFrame(
-        os.path.join(SPRITES_BASE_DIR, "YellowDiamondBottom.npy"))
-    sprite_yellow_diamond_top = jr.loadFrame(
-        os.path.join(SPRITES_BASE_DIR, "YellowDiamondTop.npy"))
-
-    # sprite_wall_bottom_left_square = jr.loadFrame(os.path.join(SPRITES_BASE_DIR, "WallBottomLeftSquare.npy"), transpose=True)
-    # sprite_wall_bumper = jr.loadFrame(os.path.join(SPRITES_BASE_DIR, "WallBumper.npy"), transpose=True)
-    # sprite_wall_rollover = jr.loadFrame(os.path.join(SPRITES_BASE_DIR, "Wallrollover.npy"), transpose=True)
-    # sprite_wall_left_l = jr.loadFrame(os.path.join(SPRITES_BASE_DIR, "WallLeftL.npy"), transpose=True)
-    # sprite_wall_outer = jr.loadFrame(os.path.join(SPRITES_BASE_DIR, "WallOuter.npy"), transpose=True)
-    # sprite_wall_right_l = jr.loadFrame(os.path.join(SPRITES_BASE_DIR, "WallRightL.npy"), transpose=True)
-    # sprite_wall_small_horizontal = jr.loadFrame(os.path.join(SPRITES_BASE_DIR, "WallSmallHorizontal.npy"), transpose=True)
-    sprite_walls = jr.loadFrame(
-        os.path.join(SPRITES_BASE_DIR, "Walls.npy"))
-
-    # Animated sprites
-    sprite_spinner0 = jr.loadFrame(
-        os.path.join(SPRITES_BASE_DIR, "SpinnerBottom.npy"))
-    sprite_spinner1 = jr.loadFrame(
-        os.path.join(SPRITES_BASE_DIR, "SpinnerRight.npy"))
-    sprite_spinner2 = jr.loadFrame(
-        os.path.join(SPRITES_BASE_DIR, "SpinnerTop.npy"))
-    sprite_spinner3 = jr.loadFrame(
-        os.path.join(SPRITES_BASE_DIR, "SpinnerLeft.npy"))
-
-    sprite_launcher0 = jr.loadFrame(
-        os.path.join(SPRITES_BASE_DIR, "Launcher0.npy"))
-    sprite_launcher1 = jr.loadFrame(
-        os.path.join(SPRITES_BASE_DIR, "Launcher1.npy"))
-    sprite_launcher2 = jr.loadFrame(
-        os.path.join(SPRITES_BASE_DIR, "Launcher2.npy"))
-    sprite_launcher3 = jr.loadFrame(
-        os.path.join(SPRITES_BASE_DIR, "Launcher3.npy"))
-    sprite_launcher4 = jr.loadFrame(
-        os.path.join(SPRITES_BASE_DIR, "Launcher4.npy"))
-    sprite_launcher5 = jr.loadFrame(
-        os.path.join(SPRITES_BASE_DIR, "Launcher4.npy"))
-    sprite_launcher6 = jr.loadFrame(
-        os.path.join(SPRITES_BASE_DIR, "Launcher6.npy"))
-    sprite_launcher7 = jr.loadFrame(
-        os.path.join(SPRITES_BASE_DIR, "Launcher7.npy"))
-    sprite_launcher8 = jr.loadFrame(
-        os.path.join(SPRITES_BASE_DIR, "Launcher8.npy"))
-    sprite_launcher9 = jr.loadFrame(
-        os.path.join(SPRITES_BASE_DIR, "Launcher9.npy"))
-    sprite_launcher10 = jr.loadFrame(
-        os.path.join(SPRITES_BASE_DIR, "Launcher10.npy"))
-    sprite_launcher11 = jr.loadFrame(
-        os.path.join(SPRITES_BASE_DIR, "Launcher11.npy"))
-    sprite_launcher12 = jr.loadFrame(
-        os.path.join(SPRITES_BASE_DIR, "Launcher12.npy"))
-    sprite_launcher13 = jr.loadFrame(
-        os.path.join(SPRITES_BASE_DIR, "Launcher13.npy"))
-    sprite_launcher14 = jr.loadFrame(
-        os.path.join(SPRITES_BASE_DIR, "Launcher14.npy"))
-    sprite_launcher15 = jr.loadFrame(
-        os.path.join(SPRITES_BASE_DIR, "Launcher15.npy"))
-    sprite_launcher16 = jr.loadFrame(
-        os.path.join(SPRITES_BASE_DIR, "Launcher16.npy"))
-    sprite_launcher17 = jr.loadFrame(
-        os.path.join(SPRITES_BASE_DIR, "Launcher17.npy"))
-    sprite_launcher18 = jr.loadFrame(
-        os.path.join(SPRITES_BASE_DIR, "Launcher18.npy"))
-
-    sprite_flipper_left0 = jr.loadFrame(
-        os.path.join(SPRITES_BASE_DIR, "FlipperLeft0.npy"))
-    sprite_flipper_left1 = jr.loadFrame(
-        os.path.join(SPRITES_BASE_DIR, "FlipperLeft1.npy"))
-    sprite_flipper_left2 = jr.loadFrame(
-        os.path.join(SPRITES_BASE_DIR, "FlipperLeft2.npy"))
-    sprite_flipper_left3 = jr.loadFrame(
-        os.path.join(SPRITES_BASE_DIR, "FlipperLeft3.npy"))
-    sprite_flipper_right0 = jr.loadFrame(
-        os.path.join(SPRITES_BASE_DIR, "FlipperRight0.npy"))
-    sprite_flipper_right1 = jr.loadFrame(
-        os.path.join(SPRITES_BASE_DIR, "FlipperRight1.npy"))
-    sprite_flipper_right2 = jr.loadFrame(
-        os.path.join(SPRITES_BASE_DIR, "FlipperRight2.npy"))
-    sprite_flipper_right3 = jr.loadFrame(
-        os.path.join(SPRITES_BASE_DIR, "FlipperRight3.npy"))
-
-    sprites_spinner, _ = jr.pad_to_match(
-        [sprite_spinner0, sprite_spinner1, sprite_spinner2, sprite_spinner3]
-    )
-    sprites_spinner = jnp.concatenate(
-        [
-            jnp.repeat(sprites_spinner[0][None], 2, axis=0),
-            jnp.repeat(sprites_spinner[1][None], 2, axis=0),
-            jnp.repeat(sprites_spinner[2][None], 2, axis=0),
-            jnp.repeat(sprites_spinner[3][None], 2, axis=0),
-        ]
-    )
-
-    @jax.jit
-    def pad_to_match_top(sprites):
-        max_height = max(sprite.shape[0] for sprite in sprites)
-        max_width = max(sprite.shape[1] for sprite in sprites)
-
-        def pad_sprite(sprite):
-            pad_height = max_height - sprite.shape[0]
-            pad_width = max_width - sprite.shape[1]
-            return jnp.pad(
-                sprite,
-                ((pad_height, 0), (pad_width, 0), (0, 0)),
-                mode="constant",
-                constant_values=0,
-            )
-
-        return [pad_sprite(sprite) for sprite in sprites]
-
-
-    sprites_plunger = pad_to_match_top(
-        [
-            sprite_launcher0,
-            sprite_launcher1,
-            sprite_launcher2,
-            sprite_launcher3,
-            sprite_launcher4,
-            sprite_launcher5,
-            sprite_launcher6,
-            sprite_launcher7,
-            sprite_launcher8,
-            sprite_launcher9,
-            sprite_launcher10,
-            sprite_launcher11,
-            sprite_launcher12,
-            sprite_launcher13,
-            sprite_launcher14,
-            sprite_launcher15,
-            sprite_launcher16,
-            sprite_launcher17,
-            sprite_launcher18,
-        ]
-    )
-
-    sprites_plunger = jnp.concatenate(
-        [
-            jnp.repeat(sprites_plunger[0][None], 3, axis=0),
-            jnp.repeat(sprites_plunger[1][None], 2, axis=0),
-            jnp.repeat(sprites_plunger[2][None], 1, axis=0),
-            jnp.repeat(sprites_plunger[3][None], 1, axis=0),
-            jnp.repeat(sprites_plunger[4][None], 1, axis=0),
-            jnp.repeat(sprites_plunger[5][None], 1, axis=0),
-            jnp.repeat(sprites_plunger[6][None], 1, axis=0),
-            jnp.repeat(sprites_plunger[7][None], 1, axis=0),
-            jnp.repeat(sprites_plunger[8][None], 1, axis=0),
-            jnp.repeat(sprites_plunger[9][None], 1, axis=0),
-            jnp.repeat(sprites_plunger[10][None], 1, axis=0),
-            jnp.repeat(sprites_plunger[11][None], 1, axis=0),
-            jnp.repeat(sprites_plunger[12][None], 1, axis=0),
-            jnp.repeat(sprites_plunger[13][None], 1, axis=0),
-            jnp.repeat(sprites_plunger[14][None], 1, axis=0),
-            jnp.repeat(sprites_plunger[15][None], 1, axis=0),
-            jnp.repeat(sprites_plunger[16][None], 1, axis=0),
-            jnp.repeat(sprites_plunger[17][None], 1, axis=0),
-            jnp.repeat(sprites_plunger[18][None], 1, axis=0),
-        ]
-    )
-
-    sprites_flipper_left, _ = jr.pad_to_match(
-        [
-            sprite_flipper_left0,
-            sprite_flipper_left1,
-            sprite_flipper_left2,
-            sprite_flipper_left3,
-        ]
-    )
-
-    # sprites_flipper_left = jnp.concatenate([
-    #     jnp.repeat(sprites_flipper_left[0][None], 2, axis=0),
-    #     jnp.repeat(sprites_flipper_left[1][None], 2, axis=0),
-    #     jnp.repeat(sprites_flipper_left[2][None], 2, axis=0),
-    #     jnp.repeat(sprites_flipper_left[3][None], 2, axis=0)
-    # ])
-
-    sprites_flipper_right, _ = jr.pad_to_match(
-        [
-            sprite_flipper_right0,
-            sprite_flipper_right1,
-            sprite_flipper_right2,
-            sprite_flipper_right3,
-        ]
-    )
-
-    # sprites_flipper_right = jnp.concatenate([
-    #     jnp.repeat(sprites_flipper_right[0][None], 2, axis=0),
-    #     jnp.repeat(sprites_flipper_right[1][None], 2, axis=0),
-    #     jnp.repeat(sprites_flipper_right[2][None], 2, axis=0),
-    #     jnp.repeat(sprites_flipper_right[3][None], 2, axis=0)
-    # ])
-
-    sprites_plunger = jnp.stack(sprites_plunger, axis=0)
-    sprites_flipper_left = jnp.stack(sprites_flipper_left, axis=0)
-    sprites_flipper_right = jnp.stack(sprites_flipper_right, axis=0)
-
-    # Load number sprites
-    sprites_score_numbers = jr.load_and_pad_digits(
-        os.path.join(SPRITES_BASE_DIR, "ScoreNumber{}.npy"),
-        num_chars=10,  # For digits 0 through 9
-    )
-
-    sprites_field_numbers = jr.load_and_pad_digits(
-        os.path.join(SPRITES_BASE_DIR, "FieldNumber{}.npy"),
-        num_chars=10,  # Load 0-9, even if you only use 1-9
-    )
-
-    sprite_background = jnp.expand_dims(sprite_background, axis=0)
-    sprite_ball = jnp.expand_dims(sprite_ball, axis=0)
-    sprite_walls = jnp.expand_dims(sprite_walls, axis=0)
-
-    sprite_atari_logo = jnp.expand_dims(sprite_atari_logo, axis=0)
-    sprite_x = jnp.expand_dims(sprite_x, axis=0)
-    sprite_yellow_diamond_bottom = jnp.expand_dims(sprite_yellow_diamond_bottom, axis=0)
-    sprite_yellow_diamond_top = jnp.expand_dims(sprite_yellow_diamond_top, axis=0)
-
-
-    return {
-        "atari_logo": sprite_atari_logo,
-        "background": sprite_background,
-        "ball": sprite_ball,
-        "spinner": sprites_spinner,
-        "x": sprite_x,
-        "yellow_diamond_bottom": sprite_yellow_diamond_bottom,
-        "yellow_diamond_top": sprite_yellow_diamond_top,
-        "walls": sprite_walls,
-        # Animated sprites
-        "flipper_left": sprites_flipper_left,
-        "flipper_right": sprites_flipper_right,
-        "plunger": sprites_plunger,
-        # Digit sprites
-        "score_number_digits": sprites_score_numbers,
-        "field_number_digits": sprites_field_numbers,
-    }
-
-
-@jax.jit
-def render_tilt_mode(r):
-    r = r.at[0:16, :, :].set(TILT_MODE_COLOR)
-    r = r.at[184:192, 36:40, :].set(BG_COLOR)
-    r = r.at[184:192, 120:124, :].set(BG_COLOR)
-
-    return r
-
-
-@jax.jit
-def render_scene_object_boundaries(raster: chex.Array) -> chex.Array:
-    """
-    Renders the one-pixel boundaries of all SceneObjects onto a raster using vmap.
-
-    Args:
-        raster: A JAX array of shape (height, width, 4) representing the game screen.
-
-    Returns:
-        A new JAX array with the scene object boundaries drawn onto it.
-    """
-
-    BOUNDARY_COLOR = 0, 255, 0
-    # Use vmap to apply the rendering function to all objects in the list.
-    # The `in_axes=(None, 0)` tells vmap to not vectorize the `raster` argument
-    # and to vectorize the `scene_object` argument.
-    def _draw_pixel(current_raster, y, x):
-        """Draws a single pixel on the raster."""
-        return jax.lax.cond(
-            (y >= 0) & (y < current_raster.shape[0]) & (x >= 0) & (x < current_raster.shape[1]),
-            lambda r: r.at[y, x].set(BOUNDARY_COLOR),
-            lambda r: r,
-            current_raster
-        )
-
-    def _draw_line(current_raster, start, end):
-        """
-        Draws a line between two points on the raster.
-        `start` and `end` are (y, x) tuples.
-        """
-        y1, x1 = start
-        y2, x2 = end
-
-        is_horizontal = jnp.abs(x2 - x1) > jnp.abs(y2 - y1)
-
-        def body_fun_h(i, r):
-            x = x1 + i
-            return _draw_pixel(r, y1, x)
-
-        def body_fun_v(i, r):
-            y = y1 + i
-            return _draw_pixel(r, y, x1)
-
-        raster = jax.lax.cond(
-            is_horizontal,
-            lambda r: jax.lax.fori_loop(0, jnp.abs(x2 - x1) + 1, body_fun_h, r),
-            lambda r: jax.lax.fori_loop(0, jnp.abs(y2 - y1) + 1, body_fun_v, r),
-            current_raster
-        )
-        return raster
-
-    def _render_single_object_boundaries(raster: chex.Array, scene_object: SceneObject) -> chex.Array:
-        """
-        Renders the one-pixel boundary of a single SceneObject onto a raster.
-
-        Args:
-            raster: A JAX array of shape (height, width, 4) representing the game screen.
-            scene_object: A single SceneObject chex.dataclass instance.
-
-        Returns:
-            A new JAX array with the scene object boundary drawn onto it.
-        """
-        x = scene_object.hit_box_x_offset
-        y = scene_object.hit_box_y_offset
-        width = scene_object.hit_box_width
-        height = scene_object.hit_box_height
-
-        # Calculate corner points
-        top_left = (y, x)
-        top_right = (y, x + width - 1)
-        bottom_left = (y + height - 1, x)
-        bottom_right = (y + height - 1, x + width - 1)
-
-        # Draw the four boundary lines
-        raster = _draw_line(raster, top_left, top_right)
-        raster = _draw_line(raster, top_left, bottom_left)
-        raster = _draw_line(raster, top_right, bottom_right)
-        raster = _draw_line(raster, bottom_left, bottom_right)
-
-        return raster
-
-    # First, convert the list of Python dataclasses into a single JAX dataclass
-    # where each field is a stacked array.
-    stacked_objects = jax.tree_util.tree_map(lambda *x: jnp.stack(x), *ALL_SCENE_OBJECTS_LIST)
-
-    # Use vmap to apply the rendering function to all objects.
-    # We pass the raster without vectorizing it (in_axes=None) and
-    # vectorize over the stacked scene_objects (in_axes=0).
-    return jax.vmap(
-        _render_single_object_boundaries,
-        in_axes=(None, 0))(raster, stacked_objects).sum(axis=0)
-
-
+        return jnp.logical_and(state.lives <= 0, state.ball_in_play == False)
 
 class VideoPinballRenderer(JAXGameRenderer):
     """JAX-based Video Pinball game renderer, optimized with JIT compilation."""
 
     def __init__(self):
-        self.sprites = load_sprites()
+        self.sprites = self._load_sprites()
+
+    @partial(jax.jit, static_argnums=(0,))
+    def _load_sprites(self):
+        MODULE_DIR = os.path.dirname(os.path.abspath(__file__))
+        # Define the base directory for sprites relative to the script
+        SPRITES_BASE_DIR = os.path.join(
+            MODULE_DIR, "sprites/videopinball"
+        )  # Assuming sprites are in a 'sprites/videopinball' subdirectory
+
+        # Load sprites
+        sprite_background = jr.loadFrame(
+            os.path.join(SPRITES_BASE_DIR, "Background.npy"))
+        sprite_ball = jr.loadFrame(
+            os.path.join(SPRITES_BASE_DIR, "Ball.npy"))
+
+        sprite_atari_logo = jr.loadFrame(
+            os.path.join(SPRITES_BASE_DIR, "AtariLogo.npy"))
+        sprite_x = jr.loadFrame(os.path.join(SPRITES_BASE_DIR, "X.npy"))
+        sprite_yellow_diamond_bottom = jr.loadFrame(
+            os.path.join(SPRITES_BASE_DIR, "YellowDiamondBottom.npy"))
+        sprite_yellow_diamond_top = jr.loadFrame(
+            os.path.join(SPRITES_BASE_DIR, "YellowDiamondTop.npy"))
+
+        # sprite_wall_bottom_left_square = jr.loadFrame(os.path.join(SPRITES_BASE_DIR, "WallBottomLeftSquare.npy"), transpose=True)
+        # sprite_wall_bumper = jr.loadFrame(os.path.join(SPRITES_BASE_DIR, "WallBumper.npy"), transpose=True)
+        # sprite_wall_rollover = jr.loadFrame(os.path.join(SPRITES_BASE_DIR, "Wallrollover.npy"), transpose=True)
+        # sprite_wall_left_l = jr.loadFrame(os.path.join(SPRITES_BASE_DIR, "WallLeftL.npy"), transpose=True)
+        # sprite_wall_outer = jr.loadFrame(os.path.join(SPRITES_BASE_DIR, "WallOuter.npy"), transpose=True)
+        # sprite_wall_right_l = jr.loadFrame(os.path.join(SPRITES_BASE_DIR, "WallRightL.npy"), transpose=True)
+        # sprite_wall_small_horizontal = jr.loadFrame(os.path.join(SPRITES_BASE_DIR, "WallSmallHorizontal.npy"), transpose=True)
+        sprite_walls = jr.loadFrame(
+            os.path.join(SPRITES_BASE_DIR, "Walls.npy"))
+
+        # Animated sprites
+        sprite_spinner0 = jr.loadFrame(
+            os.path.join(SPRITES_BASE_DIR, "SpinnerBottom.npy"))
+        sprite_spinner1 = jr.loadFrame(
+            os.path.join(SPRITES_BASE_DIR, "SpinnerRight.npy"))
+        sprite_spinner2 = jr.loadFrame(
+            os.path.join(SPRITES_BASE_DIR, "SpinnerTop.npy"))
+        sprite_spinner3 = jr.loadFrame(
+            os.path.join(SPRITES_BASE_DIR, "SpinnerLeft.npy"))
+
+        sprite_launcher0 = jr.loadFrame(
+            os.path.join(SPRITES_BASE_DIR, "Launcher0.npy"))
+        sprite_launcher1 = jr.loadFrame(
+            os.path.join(SPRITES_BASE_DIR, "Launcher1.npy"))
+        sprite_launcher2 = jr.loadFrame(
+            os.path.join(SPRITES_BASE_DIR, "Launcher2.npy"))
+        sprite_launcher3 = jr.loadFrame(
+            os.path.join(SPRITES_BASE_DIR, "Launcher3.npy"))
+        sprite_launcher4 = jr.loadFrame(
+            os.path.join(SPRITES_BASE_DIR, "Launcher4.npy"))
+        sprite_launcher5 = jr.loadFrame(
+            os.path.join(SPRITES_BASE_DIR, "Launcher4.npy"))
+        sprite_launcher6 = jr.loadFrame(
+            os.path.join(SPRITES_BASE_DIR, "Launcher6.npy"))
+        sprite_launcher7 = jr.loadFrame(
+            os.path.join(SPRITES_BASE_DIR, "Launcher7.npy"))
+        sprite_launcher8 = jr.loadFrame(
+            os.path.join(SPRITES_BASE_DIR, "Launcher8.npy"))
+        sprite_launcher9 = jr.loadFrame(
+            os.path.join(SPRITES_BASE_DIR, "Launcher9.npy"))
+        sprite_launcher10 = jr.loadFrame(
+            os.path.join(SPRITES_BASE_DIR, "Launcher10.npy"))
+        sprite_launcher11 = jr.loadFrame(
+            os.path.join(SPRITES_BASE_DIR, "Launcher11.npy"))
+        sprite_launcher12 = jr.loadFrame(
+            os.path.join(SPRITES_BASE_DIR, "Launcher12.npy"))
+        sprite_launcher13 = jr.loadFrame(
+            os.path.join(SPRITES_BASE_DIR, "Launcher13.npy"))
+        sprite_launcher14 = jr.loadFrame(
+            os.path.join(SPRITES_BASE_DIR, "Launcher14.npy"))
+        sprite_launcher15 = jr.loadFrame(
+            os.path.join(SPRITES_BASE_DIR, "Launcher15.npy"))
+        sprite_launcher16 = jr.loadFrame(
+            os.path.join(SPRITES_BASE_DIR, "Launcher16.npy"))
+        sprite_launcher17 = jr.loadFrame(
+            os.path.join(SPRITES_BASE_DIR, "Launcher17.npy"))
+        sprite_launcher18 = jr.loadFrame(
+            os.path.join(SPRITES_BASE_DIR, "Launcher18.npy"))
+
+        sprite_flipper_left0 = jr.loadFrame(
+            os.path.join(SPRITES_BASE_DIR, "FlipperLeft0.npy"))
+        sprite_flipper_left1 = jr.loadFrame(
+            os.path.join(SPRITES_BASE_DIR, "FlipperLeft1.npy"))
+        sprite_flipper_left2 = jr.loadFrame(
+            os.path.join(SPRITES_BASE_DIR, "FlipperLeft2.npy"))
+        sprite_flipper_left3 = jr.loadFrame(
+            os.path.join(SPRITES_BASE_DIR, "FlipperLeft3.npy"))
+        sprite_flipper_right0 = jr.loadFrame(
+            os.path.join(SPRITES_BASE_DIR, "FlipperRight0.npy"))
+        sprite_flipper_right1 = jr.loadFrame(
+            os.path.join(SPRITES_BASE_DIR, "FlipperRight1.npy"))
+        sprite_flipper_right2 = jr.loadFrame(
+            os.path.join(SPRITES_BASE_DIR, "FlipperRight2.npy"))
+        sprite_flipper_right3 = jr.loadFrame(
+            os.path.join(SPRITES_BASE_DIR, "FlipperRight3.npy"))
+
+        sprites_spinner, _ = jr.pad_to_match(
+            [sprite_spinner0, sprite_spinner1, sprite_spinner2, sprite_spinner3]
+        )
+        sprites_spinner = jnp.concatenate(
+            [
+                jnp.repeat(sprites_spinner[0][None], 2, axis=0),
+                jnp.repeat(sprites_spinner[1][None], 2, axis=0),
+                jnp.repeat(sprites_spinner[2][None], 2, axis=0),
+                jnp.repeat(sprites_spinner[3][None], 2, axis=0),
+            ]
+        )
+
+        @jax.jit
+        def pad_to_match_top(sprites):
+            max_height = max(sprite.shape[0] for sprite in sprites)
+            max_width = max(sprite.shape[1] for sprite in sprites)
+
+            def pad_sprite(sprite):
+                pad_height = max_height - sprite.shape[0]
+                pad_width = max_width - sprite.shape[1]
+                return jnp.pad(
+                    sprite,
+                    ((pad_height, 0), (pad_width, 0), (0, 0)),
+                    mode="constant",
+                    constant_values=0,
+                )
+
+            return [pad_sprite(sprite) for sprite in sprites]
+
+
+        sprites_plunger = pad_to_match_top(
+            [
+                sprite_launcher0,
+                sprite_launcher1,
+                sprite_launcher2,
+                sprite_launcher3,
+                sprite_launcher4,
+                sprite_launcher5,
+                sprite_launcher6,
+                sprite_launcher7,
+                sprite_launcher8,
+                sprite_launcher9,
+                sprite_launcher10,
+                sprite_launcher11,
+                sprite_launcher12,
+                sprite_launcher13,
+                sprite_launcher14,
+                sprite_launcher15,
+                sprite_launcher16,
+                sprite_launcher17,
+                sprite_launcher18,
+            ]
+        )
+
+        sprites_plunger = jnp.concatenate(
+            [
+                jnp.repeat(sprites_plunger[0][None], 3, axis=0),
+                jnp.repeat(sprites_plunger[1][None], 2, axis=0),
+                jnp.repeat(sprites_plunger[2][None], 1, axis=0),
+                jnp.repeat(sprites_plunger[3][None], 1, axis=0),
+                jnp.repeat(sprites_plunger[4][None], 1, axis=0),
+                jnp.repeat(sprites_plunger[5][None], 1, axis=0),
+                jnp.repeat(sprites_plunger[6][None], 1, axis=0),
+                jnp.repeat(sprites_plunger[7][None], 1, axis=0),
+                jnp.repeat(sprites_plunger[8][None], 1, axis=0),
+                jnp.repeat(sprites_plunger[9][None], 1, axis=0),
+                jnp.repeat(sprites_plunger[10][None], 1, axis=0),
+                jnp.repeat(sprites_plunger[11][None], 1, axis=0),
+                jnp.repeat(sprites_plunger[12][None], 1, axis=0),
+                jnp.repeat(sprites_plunger[13][None], 1, axis=0),
+                jnp.repeat(sprites_plunger[14][None], 1, axis=0),
+                jnp.repeat(sprites_plunger[15][None], 1, axis=0),
+                jnp.repeat(sprites_plunger[16][None], 1, axis=0),
+                jnp.repeat(sprites_plunger[17][None], 1, axis=0),
+                jnp.repeat(sprites_plunger[18][None], 1, axis=0),
+            ]
+        )
+
+        sprites_flipper_left, _ = jr.pad_to_match(
+            [
+                sprite_flipper_left0,
+                sprite_flipper_left1,
+                sprite_flipper_left2,
+                sprite_flipper_left3,
+            ]
+        )
+
+        # sprites_flipper_left = jnp.concatenate([
+        #     jnp.repeat(sprites_flipper_left[0][None], 2, axis=0),
+        #     jnp.repeat(sprites_flipper_left[1][None], 2, axis=0),
+        #     jnp.repeat(sprites_flipper_left[2][None], 2, axis=0),
+        #     jnp.repeat(sprites_flipper_left[3][None], 2, axis=0)
+        # ])
+
+        sprites_flipper_right, _ = jr.pad_to_match(
+            [
+                sprite_flipper_right0,
+                sprite_flipper_right1,
+                sprite_flipper_right2,
+                sprite_flipper_right3,
+            ]
+        )
+
+        # sprites_flipper_right = jnp.concatenate([
+        #     jnp.repeat(sprites_flipper_right[0][None], 2, axis=0),
+        #     jnp.repeat(sprites_flipper_right[1][None], 2, axis=0),
+        #     jnp.repeat(sprites_flipper_right[2][None], 2, axis=0),
+        #     jnp.repeat(sprites_flipper_right[3][None], 2, axis=0)
+        # ])
+
+        sprites_plunger = jnp.stack(sprites_plunger, axis=0)
+        sprites_flipper_left = jnp.stack(sprites_flipper_left, axis=0)
+        sprites_flipper_right = jnp.stack(sprites_flipper_right, axis=0)
+
+        # Load number sprites
+        sprites_score_numbers = jr.load_and_pad_digits(
+            os.path.join(SPRITES_BASE_DIR, "ScoreNumber{}.npy"),
+            num_chars=10,  # For digits 0 through 9
+        )
+
+        sprites_field_numbers = jr.load_and_pad_digits(
+            os.path.join(SPRITES_BASE_DIR, "FieldNumber{}.npy"),
+            num_chars=10,  # Load 0-9, even if you only use 1-9
+        )
+
+        sprite_background = jnp.expand_dims(sprite_background, axis=0)
+        sprite_ball = jnp.expand_dims(sprite_ball, axis=0)
+        sprite_walls = jnp.expand_dims(sprite_walls, axis=0)
+
+        sprite_atari_logo = jnp.expand_dims(sprite_atari_logo, axis=0)
+        sprite_x = jnp.expand_dims(sprite_x, axis=0)
+        sprite_yellow_diamond_bottom = jnp.expand_dims(sprite_yellow_diamond_bottom, axis=0)
+        sprite_yellow_diamond_top = jnp.expand_dims(sprite_yellow_diamond_top, axis=0)
+
+
+        return {
+            "atari_logo": sprite_atari_logo,
+            "background": sprite_background,
+            "ball": sprite_ball,
+            "spinner": sprites_spinner,
+            "x": sprite_x,
+            "yellow_diamond_bottom": sprite_yellow_diamond_bottom,
+            "yellow_diamond_top": sprite_yellow_diamond_top,
+            "walls": sprite_walls,
+            # Animated sprites
+            "flipper_left": sprites_flipper_left,
+            "flipper_right": sprites_flipper_right,
+            "plunger": sprites_plunger,
+            # Digit sprites
+            "score_number_digits": sprites_score_numbers,
+            "field_number_digits": sprites_field_numbers,
+        }
+
+
+    @partial(jax.jit, static_argnums=(0,))
+    def _render_tilt_mode(self, r):
+        r = r.at[0:16, :, :].set(TILT_MODE_COLOR)
+        r = r.at[184:192, 36:40, :].set(BG_COLOR)
+        r = r.at[184:192, 120:124, :].set(BG_COLOR)
+
+        return r
+
+
+    @partial(jax.jit, static_argnums=(0,))
+    def _render_scene_object_boundaries(self, raster: chex.Array) -> chex.Array:
+        """
+        Renders the one-pixel boundaries of all SceneObjects onto a raster using vmap.
+
+        Args:
+            raster: A JAX array of shape (height, width, 4) representing the game screen.
+
+        Returns:
+            A new JAX array with the scene object boundaries drawn onto it.
+        """
+
+        BOUNDARY_COLOR = 0, 255, 0
+        # Use vmap to apply the rendering function to all objects in the list.
+        # The `in_axes=(None, 0)` tells vmap to not vectorize the `raster` argument
+        # and to vectorize the `scene_object` argument.
+        def _draw_pixel(current_raster, y, x):
+            """Draws a single pixel on the raster."""
+            return jax.lax.cond(
+                (y >= 0) & (y < current_raster.shape[0]) & (x >= 0) & (x < current_raster.shape[1]),
+                lambda r: r.at[y, x].set(BOUNDARY_COLOR),
+                lambda r: r,
+                current_raster
+            )
+
+        def _draw_line(current_raster, start, end):
+            """
+            Draws a line between two points on the raster.
+            `start` and `end` are (y, x) tuples.
+            """
+            y1, x1 = start
+            y2, x2 = end
+
+            is_horizontal = jnp.abs(x2 - x1) > jnp.abs(y2 - y1)
+
+            def body_fun_h(i, r):
+                x = x1 + i
+                return _draw_pixel(r, y1, x)
+
+            def body_fun_v(i, r):
+                y = y1 + i
+                return _draw_pixel(r, y, x1)
+
+            raster = jax.lax.cond(
+                is_horizontal,
+                lambda r: jax.lax.fori_loop(0, jnp.abs(x2 - x1) + 1, body_fun_h, r),
+                lambda r: jax.lax.fori_loop(0, jnp.abs(y2 - y1) + 1, body_fun_v, r),
+                current_raster
+            )
+            return raster
+
+        def _render_single_object_boundaries(raster: chex.Array, scene_object: SceneObject) -> chex.Array:
+            """
+            Renders the one-pixel boundary of a single SceneObject onto a raster.
+
+            Args:
+                raster: A JAX array of shape (height, width, 4) representing the game screen.
+                scene_object: A single SceneObject chex.dataclass instance.
+
+            Returns:
+                A new JAX array with the scene object boundary drawn onto it.
+            """
+            x = scene_object.hit_box_x_offset
+            y = scene_object.hit_box_y_offset
+            width = scene_object.hit_box_width
+            height = scene_object.hit_box_height
+
+            # Calculate corner points
+            top_left = (y, x)
+            top_right = (y, x + width - 1)
+            bottom_left = (y + height - 1, x)
+            bottom_right = (y + height - 1, x + width - 1)
+
+            # Draw the four boundary lines
+            raster = _draw_line(raster, top_left, top_right)
+            raster = _draw_line(raster, top_left, bottom_left)
+            raster = _draw_line(raster, top_right, bottom_right)
+            raster = _draw_line(raster, bottom_left, bottom_right)
+
+            return raster
+
+        # First, convert the list of Python dataclasses into a single JAX dataclass
+        # where each field is a stacked array.
+        stacked_objects = jax.tree_util.tree_map(lambda *x: jnp.stack(x), *ALL_SCENE_OBJECTS_LIST)
+
+        # Use vmap to apply the rendering function to all objects.
+        # We pass the raster without vectorizing it (in_axes=None) and
+        # vectorize over the stacked scene_objects (in_axes=0).
+        return jax.vmap(
+            _render_single_object_boundaries,
+            in_axes=(None, 0))(raster, stacked_objects).sum(axis=0)
+
+    
+
+    @partial(jax.jit, static_argnums=(0,))
+    def _handle_color_cycling(self, raster, color):
+
+        bg_color_mask = jnp.all(raster == BACKGROUND_COLOR, axis=-1, keepdims=True)
+        wall_color_mask = jnp.all(raster == WALL_COLOR, axis=-1, keepdims=True)
+        group3_color_mask = jnp.all(raster == GROUP3_COLOR, axis=-1, keepdims=True)
+        group4_color_mask = jnp.all(raster == GROUP4_COLOR, axis=-1, keepdims=True)
+        group5_color_mask = jnp.all(raster == GROUP5_COLOR, axis=-1, keepdims=True)
+
+        raster = jnp.where(bg_color_mask, BACKGROUND_COLOR_CYCLING[color], raster)
+        raster = jnp.where(wall_color_mask, WALL_COLOR_CYCLING[color], raster)
+        raster = jnp.where(group3_color_mask, GROUP3_COLOR_CYCLING[color], raster)
+        raster = jnp.where(group4_color_mask, GROUP4_COLOR_CYCLING[color], raster)
+        raster = jnp.where(group5_color_mask, GROUP5_COLOR_CYCLING[color], raster)
+
+        raster = raster.at[0:8, 175:176, :].set(BG_COLOR)
+        raster = raster.at[:, 191:, :].set(BG_COLOR)
+
+        return raster
+
+
+    @partial(jax.jit, static_argnums=(0,))
+    def _split_integer(self, number: jnp.ndarray, max_digits: int = 6) -> jnp.ndarray:
+        """
+        Splits an integer into a JAX array of its individual digits.
+
+        The output array will have a fixed size determined by `max_digits`.
+        If the input number has fewer digits than `max_digits`, it will be
+        padded with leading zeros.
+
+        Args:
+            number: The integer to split. Should be a non-negative integer.
+                    Can be a Python int or a JAX array.
+            max_digits: The maximum number of digits expected. The output array
+                        will have this many elements.
+
+        Returns:
+            A 1D JAX array where each element is a digit of the input number.
+
+        Example:
+            split_integer(247900, max_digits=6) == jnp.array([2, 4, 7, 9, 0, 0])
+            split_integer(123, max_digits=6)    == jnp.array([0, 0, 0, 1, 2, 3])
+            split_integer(0, max_digits=3)      == jnp.array([0, 0, 0])
+        """
+        # Ensure the input number is a JAX array.
+        # This handles both Python integers and existing JAX arrays.
+        number = jnp.asarray(number, dtype=jnp.int32)
+
+        # Create an array of powers of 10 to extract digits from left to right.
+        # For max_digits=6, this will be [10^5, 10^4, 10^3, 10^2, 10^1, 10^0]
+        powers_of_10 = 10 ** jnp.arange(max_digits - 1, -1, -1, dtype=jnp.int32)
+
+        # Perform integer division by powers of 10, then take modulo 10
+        # to isolate each digit.
+        # Example:
+        # (247900 // 100000) % 10 = 2
+        # (247900 // 10000) % 10 = 4
+        # ...
+        # (247900 // 1) % 10 = 0
+        digits = (number // powers_of_10) % 10
+
+        return digits
 
     @partial(jax.jit, static_argnums=(0,))
     def render(self, state: VideoPinballState):
@@ -4172,7 +4201,7 @@ class VideoPinballRenderer(JAXGameRenderer):
         frame_walls = jr.get_sprite_frame(self.sprites["walls"], 0)
         raster = jr.render_at(raster, 0, 16, frame_walls)
 
-        raster = jnp.where(state.tilt_mode_active, render_tilt_mode(raster), raster)
+        raster = jnp.where(state.tilt_mode_active, self._render_tilt_mode(raster), raster)
 
         # Render animated objects
         frame_flipper_left = jr.get_sprite_frame(
@@ -4219,7 +4248,7 @@ class VideoPinballRenderer(JAXGameRenderer):
         )
         raster = jr.render_at(raster, 36, 3, frame_ball_count)
 
-        numbers = _split_integer(state.score)
+        numbers = self._split_integer(state.score)
         frame_score1 = jr.get_sprite_frame(
             self.sprites["score_number_digits"], numbers[0]
         )
@@ -4337,7 +4366,7 @@ class VideoPinballRenderer(JAXGameRenderer):
         color = jnp.clip(color, min=0)
 
         raster = jax.lax.cond(
-            color > 0, lambda r: handle_color_cycling(r, color), lambda r: r, raster
+            color > 0, lambda r: self._handle_color_cycling(r, color), lambda r: r, raster
         )
 
         # raster = render_scene_object_boundaries(raster)
