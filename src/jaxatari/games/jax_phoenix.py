@@ -209,7 +209,7 @@ class PhoenixState(NamedTuple):
     level_transition_timer: chex.Array = jnp.array(0)  # Timer for level transition
 
 
-class PhoenixOberservation(NamedTuple):
+class PhoenixObservation(NamedTuple):
     player_x: chex.Array
     player_y: chex.Array
     player_score: chex.Array
@@ -217,6 +217,7 @@ class PhoenixOberservation(NamedTuple):
 
 class PhoenixInfo(NamedTuple):
     step_counter: jnp.ndarray
+    all_rewards: jnp.ndarray
 
 class CarryState(NamedTuple):
     score: chex.Array
@@ -225,11 +226,11 @@ class EntityPosition(NamedTuple):## not sure
     x: chex.Array
     y: chex.Array
 
-class JaxPhoenix(JaxEnvironment[PhoenixState, PhoenixOberservation, PhoenixInfo, None]):
+class JaxPhoenix(JaxEnvironment[PhoenixState, PhoenixObservation, PhoenixInfo, None]):
     @partial(jax.jit, static_argnums=(0,))
-    def _get_observation(self, state: PhoenixState) -> PhoenixOberservation:
+    def _get_observation(self, state: PhoenixState) -> PhoenixObservation:
         player = EntityPosition(x=state.player_x, y=state.player_y)
-        return PhoenixOberservation(
+        return PhoenixObservation(
             player_x = player[0],
             player_y= player[1],
             player_score = state.score,
@@ -237,19 +238,51 @@ class JaxPhoenix(JaxEnvironment[PhoenixState, PhoenixOberservation, PhoenixInfo,
         )
 
     @partial(jax.jit, static_argnums=(0,))
+    def _get_all_rewards(self, previous_state: PhoenixState, state: PhoenixState):
+        if self.reward_funcs is None:
+            return jnp.zeros(1)
+        rewards = jnp.array(
+            [reward_func(previous_state, state) for reward_func in self.reward_funcs]
+        )
+        return rewards
+
+    @partial(jax.jit, static_argnums=(0,))
     def _get_info(self, state: PhoenixState, all_rewards: jnp.ndarray) -> PhoenixInfo:
         return PhoenixInfo(
             step_counter=0,
+            all_rewards=all_rewards
         )
-
-    def action_space(self) -> Space:
-        return self._get_observation(PhoenixState)
 
     @partial(jax.jit, static_argnums=(0,))
     def _get_done(self, state: PhoenixState) -> Tuple[bool, PhoenixState]:
         return jnp.less_equal(state.lives,0)
     def action_space(self) -> spaces.Discrete:
         return spaces.Discrete(len(self.action_set))
+    def observation_space(self) -> Space:
+        return spaces.Dict({
+            "player_x": spaces.Box(low=0, high=self.consts.WIDTH - 1, shape=(), dtype=jnp.float32),
+            "player_y": spaces.Box(low=0, high=self.consts.HEIGHT - 1, shape=(), dtype=jnp.float32),
+            "player_score": spaces.Box(low=0, high=99999, shape=(), dtype=jnp.int32),
+            "lives": spaces.Box(low=0, high=9, shape=(), dtype=jnp.int32),
+        })
+
+    def image_space(self) -> spaces.Box:
+        return spaces.Box(
+            low=0,
+            high=255,
+            shape=(210, 160, 3),
+            dtype=jnp.uint8
+        )
+
+    @partial(jax.jit, static_argnums=(0,))
+    def obs_to_flat_array(self, obs: PhoenixObservation) -> jnp.ndarray:
+        return jnp.concatenate([
+            obs.player_x.flatten(),
+            obs.player_y.flatten(),
+            obs.player_score.flatten(),
+            obs.lives.flatten()
+        ]
+        )
     def __init__(self, consts: PhoenixConstants = None, reward_funcs: list[callable]=None):
         consts = consts or PhoenixConstants()
         super().__init__(consts)
@@ -547,7 +580,6 @@ class JaxPhoenix(JaxEnvironment[PhoenixState, PhoenixOberservation, PhoenixInfo,
             return updated
 
         new_bat_wings = jax.vmap(update_wing_state)(state.bat_wings, left_wing_collision, right_wing_collision)
-        jax.debug.print("bat_wings: {}", new_bat_wings)
 
 
         state = state._replace(
@@ -662,7 +694,7 @@ class JaxPhoenix(JaxEnvironment[PhoenixState, PhoenixOberservation, PhoenixInfo,
         )
         return state
 
-    def reset(self, key: jax.random.PRNGKey = jax.random.PRNGKey(42)) -> Tuple[PhoenixOberservation, PhoenixState]:
+    def reset(self, key: jax.random.PRNGKey = jax.random.PRNGKey(42)) -> Tuple[PhoenixObservation, PhoenixState]:
 
         return_state = PhoenixState(
             player_x=jnp.array(self.consts.PLAYER_POSITION[0], dtype=jnp.float32),
@@ -710,8 +742,8 @@ class JaxPhoenix(JaxEnvironment[PhoenixState, PhoenixOberservation, PhoenixInfo,
         initial_obs = self._get_observation(return_state)
         return initial_obs, return_state
 
-
-    def step(self,state, action: Action) -> Tuple[PhoenixOberservation, PhoenixState, float, bool, PhoenixInfo]:
+    @partial(jax.jit, static_argnums=(0,))
+    def step(self,state, action: Action) -> Tuple[PhoenixObservation, PhoenixState, float, bool, PhoenixInfo]:
         new_respawn_timer = jnp.where(state.player_respawn_timer > 0, state.player_respawn_timer - 1, 0)
         respawn_ended = (state.player_respawn_timer > 0) & (new_respawn_timer == 0)
 
@@ -723,8 +755,6 @@ class JaxPhoenix(JaxEnvironment[PhoenixState, PhoenixOberservation, PhoenixInfo,
             lambda s: self.player_step(s, action),
             state
         ) # Player_step only if not dying
-        #jax.debug.print("invinsiblity:{}", state.invincibility)
-        #jax.debug.print("timer:{}", state.invincibility_timer)
 
         projectile_active = state.projectile_y >= 0
 
@@ -931,7 +961,6 @@ class JaxPhoenix(JaxEnvironment[PhoenixState, PhoenixOberservation, PhoenixInfo,
 
         is_vulnerable = (new_respawn_timer <= 0) & (~state.player_dying) & (~state.invincibility)
 
-        #jax.debug.print("Level: {}",level )
         def check_player_hit(projectile_xs, projectile_ys, player_x, player_y):
             def is_hit(px, py):
                 hit_x = (px + self.consts.PROJECTILE_WIDTH > player_x) & (px < player_x + 5) # TODO 5 durch Konstante ersetzen, die global geändert werden kann.
@@ -1041,7 +1070,8 @@ class JaxPhoenix(JaxEnvironment[PhoenixState, PhoenixOberservation, PhoenixInfo,
         observation = self._get_observation(return_state)
         env_reward = jnp.where(enemy_hit_detected, 1.0, 0.0)
         done = self._get_done(return_state)
-        info = self._get_info(return_state, env_reward)
+        all_rewards = self._get_all_rewards(state, return_state)
+        info = self._get_info(return_state, all_rewards)
         return observation, return_state, env_reward, done, info
 
     def render(self, state:PhoenixState) -> jnp.ndarray:
