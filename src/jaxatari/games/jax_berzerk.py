@@ -905,8 +905,37 @@ class JaxBerzerk(JaxEnvironment[BerzerkState, BerzerkObservation, BerzerkInfo, B
                 dy = jnp.where(aligned_y, 0.0, jnp.sign(new_pos[1] - pos[1]))
                 direction = jnp.array([dx, dy], dtype=jnp.float32)
 
+                # mögliche Richtungen
+                dirs = jnp.array([
+                    [0, -1],   # up
+                    [1, 0],    # right
+                    [0, 1],    # down
+                    [-1, 0],   # left
+                ], dtype=jnp.float32)
+
+                # passende Offsets relativ zur Gegnerposition
+                offsets = jnp.array([
+                    [self.consts.ENEMY_SIZE[0], self.consts.ENEMY_SIZE[1] // 2 - 7],# up (Mitte oben)
+                    [self.consts.ENEMY_SIZE[0], self.consts.ENEMY_SIZE[1] // 2],# right (rechts Mitte)
+                    [0.0, self.consts.ENEMY_SIZE[1] // 2 + 2],# down (Mitte unten)
+                    [0.0, self.consts.ENEMY_SIZE[1] // 2],                      # left (links Mitte)
+                ], dtype=jnp.float32)
+
+                # checke welche Richtung matched
+                conds = jnp.all(dirs == direction[None, :], axis=1)
+
+                # fallback Mitte, falls keine Richtung passt
+                default_offset = jnp.array([self.consts.ENEMY_SIZE[0] // 2,
+                                            self.consts.ENEMY_SIZE[1] // 2], dtype=jnp.float32)
+
+                # wähle Offset
+                offset = jnp.select(conds, offsets, default_offset)
+
+                # Startposition des Schusses = Gegnerposition + Offset
+                spawn_pos = pos + offset
+
                 return (
-                    pos,
+                    spawn_pos,
                     direction,
                     should_fire & can_shoot
                 )
