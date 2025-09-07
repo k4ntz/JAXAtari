@@ -601,11 +601,48 @@ def update_river_banks(state: RiverraidState) -> RiverraidState:
                                                 operand=state)
 
 @jax.jit
-def roll_static_objects(state: RiverraidState) -> RiverraidState:
+def handle_dam(state: RiverraidState) -> RiverraidState:
     new_dam_position = jnp.roll(state.dam_position, 1)
-    #last index to 0 to prevent rolling over
     new_dam_position = new_dam_position.at[-1].set(0)
-    return state._replace(dam_position=new_dam_position)
+
+    # Kollisionsprüfung Kugel <-> Damm
+    bullet_y = jnp.round(state.player_bullet_y).astype(jnp.int32)
+    bullet_x = jnp.round(state.player_bullet_x).astype(jnp.int32)
+
+    dam_mask = new_dam_position == 1
+    dam_exists = jnp.any(dam_mask)
+    dam_top_y = jnp.argmax(dam_mask)
+    bullet_above_dam = jnp.logical_and(
+        dam_exists,
+        jnp.logical_and(bullet_y < dam_top_y, bullet_x > 1)
+    )
+
+    river_left = state.river_left[bullet_y]
+    river_right = state.river_right[bullet_y]
+
+    new_bullet_x = jnp.where(bullet_above_dam, -1.0, state.player_bullet_x)
+    new_bullet_y = jnp.where(bullet_above_dam, -1.0, state.player_bullet_y)
+
+    player_above_dam = jnp.logical_and(dam_exists, state.player_y < dam_top_y)
+    new_player_state = jax.lax.cond(
+        player_above_dam,
+        lambda state: jnp.array(1),
+        lambda state: state.player_state,
+        operand=state
+    )
+
+    new_dam_position = jax.lax.cond(
+        bullet_above_dam,
+        lambda state: new_dam_position.at[dam_top_y].set(2),
+        lambda state: new_dam_position,
+        operand=state
+    )
+    jax.debug.print("dam position: {dam_position}", dam_position=new_dam_position)
+    return state._replace(
+        dam_position=new_dam_position,
+        player_bullet_x=new_bullet_x,
+        player_bullet_y=new_bullet_y,
+        player_state=new_player_state)
 
 def player_movement(state: RiverraidState, action: Action) -> RiverraidState:
     press_right = jnp.any(
@@ -662,6 +699,7 @@ def player_movement(state: RiverraidState, action: Action) -> RiverraidState:
         lambda state: player_state,
         operand=state
     )
+
 
     return state._replace(player_x=new_x,
                           player_velocity=new_velocity,
@@ -1195,7 +1233,7 @@ class JaxRiverraid(JaxEnvironment):
 
     def step(self, state: RiverraidState, action: Action) -> Tuple[RiverraidObservation, RiverraidState, RiverraidInfo]:
         def player_alive(state: RiverraidState) -> RiverraidState:
-            new_state = roll_static_objects(state)
+            new_state = handle_dam(state)
             new_state = update_river_banks(new_state)
             new_state = player_movement(new_state, action)
             new_state = player_shooting(new_state, action)
@@ -1352,6 +1390,9 @@ def load_sprites():
     fuel_display = aj.loadFrame(os.path.join(MODULE_DIR, "sprites/riverraid/fuel_display.npy"), transpose=False)
     fuel_indicator = aj.loadFrame(os.path.join(MODULE_DIR, "sprites/riverraid/fuel_indicator.npy"), transpose=False)
     house_tree = aj.loadFrame(os.path.join(MODULE_DIR, "sprites/riverraid/house_tree.npy"), transpose=False)
+    full_dam = aj.loadFrame(os.path.join(MODULE_DIR, "sprites/riverraid/full_dam.npy"), transpose=False)
+    outer_dam = aj.loadFrame(os.path.join(MODULE_DIR, "sprites/riverraid/outer_dam.npy"), transpose=False)
+    street = aj.loadFrame(os.path.join(MODULE_DIR, "sprites/riverraid/street.npy"), transpose=False)
 
     score_sprites = []
     for i in range(10):
@@ -1372,6 +1413,9 @@ def load_sprites():
     FUEL_INDICATOR = jnp.expand_dims(fuel_indicator, axis=0)
     SPRITE_DIGIT = jnp.stack(score_sprites)
     HOUSE_TREE = jnp.expand_dims(house_tree, axis=0)
+    FULL_DAM = jnp.expand_dims(full_dam, axis=0)
+    OUTER_DAM = jnp.expand_dims(outer_dam, axis=0)
+    STREET = jnp.expand_dims(street, axis=0)
 
     return(
         SPRITE_PLAYER,
@@ -1385,7 +1429,10 @@ def load_sprites():
         FUEL_DISPLAY,
         FUEL_INDICATOR,
         SPRITE_DIGIT,
-        HOUSE_TREE
+        HOUSE_TREE,
+        FULL_DAM,
+        OUTER_DAM,
+        STREET
     )
 
 class RiverraidRenderer(JAXGameRenderer):
@@ -1402,7 +1449,10 @@ class RiverraidRenderer(JAXGameRenderer):
             self.FUEL_DISPLAY,
             self.FUEL_INDICATOR,
             self.SPRITE_DIGIT,
-            self.HOUSE_TREE
+            self.HOUSE_TREE,
+            self.FULL_DAM,
+            self.OUTER_DAM,
+            self.STREET
         ) = load_sprites()
 
     @partial(jax.jit, static_argnums=(0,))
@@ -1424,8 +1474,34 @@ class RiverraidRenderer(JAXGameRenderer):
         # The raster is (HEIGHT, WIDTH, 3)
         raster = jnp.where(is_river[..., None], blue_river, green_banks)
 
-        is_dam = (state.dam_position[:, None] == 1) & (x_coords > left_banks) & (x_coords < right_banks)
-        raster = jnp.where(is_dam[..., None], dam_color, raster)
+        # Render the dam sprite
+        dam_y = jnp.argmax(state.dam_position >= 1).astype(jnp.int32)
+        has_dam = jnp.max(state.dam_position) >= 1
+
+        def render_dam(raster):
+            dam_x = SCREEN_WIDTH // 2 - self.FULL_DAM.shape[2] // 2 + 5  # Center the dam sprite
+            sprite_to_render = jax.lax.cond(
+                state.dam_position[dam_y] == 1,
+                lambda _: aj.get_sprite_frame(self.FULL_DAM, 0),
+                lambda _: aj.get_sprite_frame(self.OUTER_DAM, 0),
+                operand=None
+            )
+            raster = jax.lax.cond(
+                has_dam,
+                lambda raster: aj.render_at(raster, dam_x, dam_y, sprite_to_render),
+                lambda raster: raster,
+                operand=raster,
+            )
+            street = aj.get_sprite_frame(self.STREET, 0)
+            raster = jax.lax.cond(
+                has_dam,
+                lambda raster: aj.render_at(raster, 0, dam_y, street),
+                lambda raster: raster,
+                operand=raster,
+            )
+            return raster
+
+        raster = render_dam(raster)
 
         # Player
         player_frame = jax.lax.switch(
