@@ -3623,29 +3623,64 @@ class BeamRiderRenderer(JAXGameRenderer):
 
     @partial(jax.jit, static_argnums=(0,))
     def _draw_ship(self, screen: chex.Array, ship: Ship) -> chex.Array:
-        """Draw the player ship"""
+        """Draw the player ship with the actual sprite design"""
         x, y = ship.x.astype(int), ship.y.astype(int)
+
+        # Colors
+        yellow = jnp.array([255, 255, 0], dtype=jnp.uint8)
+        purple = jnp.array([160, 32, 240], dtype=jnp.uint8)
 
         # Create coordinate grids
         y_indices = jnp.arange(self.constants.SCREEN_HEIGHT)
         x_indices = jnp.arange(self.constants.SCREEN_WIDTH)
         y_grid, x_grid = jnp.meshgrid(y_indices, x_indices, indexing='ij')
 
-        # Create mask for ship pixels
-        ship_mask = (
-                (x_grid >= x) &
-                (x_grid < x + self.constants.SHIP_WIDTH) &
-                (y_grid >= y) &
-                (y_grid < y + self.constants.SHIP_HEIGHT)
+        # Scale factor
+        scale = 2
+
+        # Define ship shape regions (scaled)
+        # Purple tip (top rows)
+        purple_mask = (
+            # Row 0: Purple tip center
+                ((y_grid >= y) & (y_grid < y + scale) &
+                 (x_grid >= x + 3 * scale) & (x_grid < x + 5 * scale)) |
+                # Additional purple pixels can be added here
+                False  # Placeholder for OR operations
         )
 
-        # Apply ship color where mask is True
-        ship_color = jnp.array(self.constants.BLUE, dtype=jnp.uint8)
+        # Yellow body
+        yellow_mask = (
+            # Row 1: Upper body
+                ((y_grid >= y + scale) & (y_grid < y + 2 * scale) &
+                 (x_grid >= x + 2 * scale) & (x_grid < x + 6 * scale)) |
+                # Row 2: Middle body
+                ((y_grid >= y + 2 * scale) & (y_grid < y + 3 * scale) &
+                 (x_grid >= x + scale) & (x_grid < x + 7 * scale)) |
+                # Row 3: Full width
+                ((y_grid >= y + 3 * scale) & (y_grid < y + 4 * scale) &
+                 (x_grid >= x) & (x_grid < x + 8 * scale)) |
+                # Row 4: Lower body with gap
+                ((y_grid >= y + 4 * scale) & (y_grid < y + 5 * scale) &
+                 ((x_grid >= x) & (x_grid < x + 3 * scale) |
+                  (x_grid >= x + 5 * scale) & (x_grid < x + 8 * scale))) |
+                # Row 5: Bottom
+                ((y_grid >= y + 5 * scale) & (y_grid < y + 6 * scale) &
+                 ((x_grid >= x) & (x_grid < x + 2 * scale) |
+                  (x_grid >= x + 6 * scale) & (x_grid < x + 8 * scale)))
+        )
+
+        # Apply colors where masks are True
         screen = jnp.where(
-            ship_mask[..., None],  # Add dimension for RGB
-            ship_color,
+            purple_mask[..., None],
+            purple,
             screen
-        ).astype(jnp.uint8)
+        )
+
+        screen = jnp.where(
+            yellow_mask[..., None],
+            yellow,
+            screen
+        )
 
         return screen
 
