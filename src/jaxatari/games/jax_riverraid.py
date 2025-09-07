@@ -19,8 +19,8 @@ import jaxatari.rendering.jax_rendering_utils as aj
 SCREEN_WIDTH = 160
 SCREEN_HEIGHT = 200
 DEFAULT_RIVER_WIDTH = 80
-MIN_RIVER_WIDTH = 30
-MAX_RIVER_WIDTH = 130
+MIN_RIVER_WIDTH = 40
+MAX_RIVER_WIDTH = 120
 MAX_ENEMIES = 10
 MINIMUM_SPAWN_COOLDOWN = 20
 MAX_FUEL = 30
@@ -891,8 +891,13 @@ def spawn_entities(state: RiverraidState) -> RiverraidState:
             lambda state: spawn_enemies(state),
             operand=state
         )
+    # only spawn if no dam in the top 10 rows
+    dam_at_top = jnp.any(state.dam_position[:10] == 1)
+    spawn_new_entity = jnp.logical_and(
+        jax.random.bernoulli(subkey1, 0.07), # TODO balance
+        ~dam_at_top
+    )
 
-    spawn_new_entity = jax.random.bernoulli(subkey1, 0.07) #TODO balance
     new_state = jax.lax.cond(
         jnp.logical_and(state.spawn_cooldown <= 0, spawn_new_entity),
         lambda state: spawn_entity(state),
@@ -1388,12 +1393,14 @@ def load_sprites():
     enemy_airplane = aj.loadFrame(os.path.join(MODULE_DIR, "sprites/riverraid/enemy_plane.npy"), transpose=False)
     enemy_airplane = normalize_frame(enemy_airplane, (10, 16, 4))
     enemy_airplane = jnp.flip(enemy_airplane, axis=1)
+    fuel = aj.loadFrame(os.path.join(MODULE_DIR, "sprites/riverraid/fuel.npy"), transpose=False)
     fuel_display = aj.loadFrame(os.path.join(MODULE_DIR, "sprites/riverraid/fuel_display.npy"), transpose=False)
     fuel_indicator = aj.loadFrame(os.path.join(MODULE_DIR, "sprites/riverraid/fuel_indicator.npy"), transpose=False)
     house_tree = aj.loadFrame(os.path.join(MODULE_DIR, "sprites/riverraid/house_tree.npy"), transpose=False)
     full_dam = aj.loadFrame(os.path.join(MODULE_DIR, "sprites/riverraid/full_dam.npy"), transpose=False)
     outer_dam = aj.loadFrame(os.path.join(MODULE_DIR, "sprites/riverraid/outer_dam.npy"), transpose=False)
     street = aj.loadFrame(os.path.join(MODULE_DIR, "sprites/riverraid/street.npy"), transpose=False)
+    activision = aj.loadFrame(os.path.join(MODULE_DIR, "sprites/riverraid/activision.npy"), transpose=False)
 
     score_sprites = []
     for i in range(10):
@@ -1410,6 +1417,7 @@ def load_sprites():
     ENEMY_HELICOPTER = jnp.expand_dims(enemy_helicopter, axis=0)
     ENEMY_HELICOPTER_2 = jnp.expand_dims(enemy_helicopter_2, axis=0)
     ENEMY_AIRPLANE = jnp.expand_dims(enemy_airplane, axis=0)
+    FUEL = jnp.expand_dims(fuel, axis=0)
     FUEL_DISPLAY = jnp.expand_dims(fuel_display, axis=0)
     FUEL_INDICATOR = jnp.expand_dims(fuel_indicator, axis=0)
     SPRITE_DIGIT = jnp.stack(score_sprites)
@@ -1417,6 +1425,7 @@ def load_sprites():
     FULL_DAM = jnp.expand_dims(full_dam, axis=0)
     OUTER_DAM = jnp.expand_dims(outer_dam, axis=0)
     STREET = jnp.expand_dims(street, axis=0)
+    ACTIVISION = jnp.expand_dims(activision, axis=0)
 
     return(
         SPRITE_PLAYER,
@@ -1427,13 +1436,15 @@ def load_sprites():
         ENEMY_HELICOPTER,
         ENEMY_HELICOPTER_2,
         ENEMY_AIRPLANE,
+        FUEL,
         FUEL_DISPLAY,
         FUEL_INDICATOR,
         SPRITE_DIGIT,
         HOUSE_TREE,
         FULL_DAM,
         OUTER_DAM,
-        STREET
+        STREET,
+        ACTIVISION
     )
 
 class RiverraidRenderer(JAXGameRenderer):
@@ -1447,20 +1458,21 @@ class RiverraidRenderer(JAXGameRenderer):
             self.ENEMY_HELICOPTER,
             self.ENEMY_HELICOPTER_2,
             self.ENEMY_AIRPLANE,
+            self.FUEL,
             self.FUEL_DISPLAY,
             self.FUEL_INDICATOR,
             self.SPRITE_DIGIT,
             self.HOUSE_TREE,
             self.FULL_DAM,
             self.OUTER_DAM,
-            self.STREET
+            self.STREET,
+            self.ACTIVISION
         ) = load_sprites()
 
     @partial(jax.jit, static_argnums=(0,))
     def render(self, state: RiverraidState):
         green_banks = jnp.array([26, 132, 26], dtype=jnp.uint8)
         blue_river = jnp.array([42, 42, 189], dtype=jnp.uint8)
-        dam_color = jnp.array([139, 69, 19], dtype=jnp.uint8)
         ui_color = jnp.array([128, 128, 128], dtype=jnp.uint8)
 
         left_banks = state.river_left[:, None]
@@ -1564,7 +1576,7 @@ class RiverraidRenderer(JAXGameRenderer):
         def render_fuel_at_idx(raster, i):
             fx = jnp.round(state.fuel_x[i]).astype(jnp.int32)
             fy = jnp.round(state.fuel_y[i]).astype(jnp.int32)
-            return aj.render_at(raster, fx, fy, aj.get_sprite_frame(self.SPRITE_PLAYER, 0))
+            return aj.render_at(raster, fx, fy, aj.get_sprite_frame(self.FUEL, 0))
 
         def render_alive_fuel(i, raster):
             raster = jax.lax.cond(
@@ -1581,7 +1593,7 @@ class RiverraidRenderer(JAXGameRenderer):
             hy = i
             hx = jax.lax.cond(
                 state.housetree_side[i] == 1,
-                lambda _: 10,
+                lambda _: 5,
                 lambda _: SCREEN_WIDTH - 20,
                 operand=None
             )
@@ -1593,7 +1605,13 @@ class RiverraidRenderer(JAXGameRenderer):
                 lambda _: housetree_sprite,
                 operand=None
             )
-            return aj.render_at(raster, hx, hy, housetree_sprite)
+            raster = jax.lax.cond(
+                jnp.abs(hy - dam_y) > 20,
+                lambda raster: aj.render_at(raster, hx, hy, housetree_sprite),
+                lambda raster: raster,
+                operand=raster
+            )
+            return raster
 
         def render_alive_housetree(i, raster):
             raster = jax.lax.cond(
@@ -1610,6 +1628,13 @@ class RiverraidRenderer(JAXGameRenderer):
         y_coords = jnp.arange(SCREEN_HEIGHT)
         ui_mask = y_coords >= (SCREEN_HEIGHT - UI_HEIGHT)
         raster = jnp.where(ui_mask[:, None, None], ui_color, raster)
+        # black line between ui and fame
+        raster = jax.lax.cond(
+            SCREEN_HEIGHT - UI_HEIGHT > 0,
+            lambda raster: raster.at[SCREEN_HEIGHT - UI_HEIGHT - 1].set(0),
+            lambda raster: raster,
+            operand=raster
+        )
 
         fuel_frame = aj.get_sprite_frame(self.FUEL_DISPLAY, 0)
         fuel_display_x = SCREEN_WIDTH // 2 - fuel_frame.shape[1] // 2
@@ -1632,7 +1657,7 @@ class RiverraidRenderer(JAXGameRenderer):
             digit_place = num_digits - 1 - i
             digit_to_draw = get_digit(digit_place, state.player_score)
 
-            x0 = jnp.int32(fuel_display_x + (i * 12) + 5)
+            x0 = jnp.int32(fuel_display_x + (i * 12) + 30)
             y0 = jnp.int32(fuel_display_y - 10)
 
             sprite_frame = aj.get_sprite_frame(self.SPRITE_DIGIT, digit_to_draw)
@@ -1641,8 +1666,11 @@ class RiverraidRenderer(JAXGameRenderer):
 
         lives_frame = aj.get_sprite_frame(self.SPRITE_DIGIT, state.player_lives)
         lives_x = fuel_display_x - 8
-        lives_y = fuel_display_y + fuel_frame.shape[0] + 1
+        lives_y = fuel_display_y + fuel_frame.shape[0]
         raster = aj.render_at(raster, lives_x, lives_y, lives_frame)
+
+        activision_sprite = aj.get_sprite_frame(self.ACTIVISION, 0)
+        raster = aj.render_at(raster, SCREEN_WIDTH // 2 - activision_sprite.shape[1] // 2, SCREEN_HEIGHT - (activision_sprite.shape[0] + 1), activision_sprite)
         return raster
 
 
