@@ -227,68 +227,13 @@ class EntityPosition(NamedTuple):## not sure
     y: chex.Array
 
 class JaxPhoenix(JaxEnvironment[PhoenixState, PhoenixObservation, PhoenixInfo, None]):
-    @partial(jax.jit, static_argnums=(0,))
-    def _get_observation(self, state: PhoenixState) -> PhoenixObservation:
-        player = EntityPosition(x=state.player_x, y=state.player_y)
-        return PhoenixObservation(
-            player_x = player[0],
-            player_y= player[1],
-            player_score = state.score,
-            lives= state.lives
-        )
-
-    @partial(jax.jit, static_argnums=(0,))
-    def _get_all_rewards(self, previous_state: PhoenixState, state: PhoenixState):
-        if self.reward_funcs is None:
-            return jnp.zeros(1)
-        rewards = jnp.array(
-            [reward_func(previous_state, state) for reward_func in self.reward_funcs]
-        )
-        return rewards
-
-    @partial(jax.jit, static_argnums=(0,))
-    def _get_info(self, state: PhoenixState, all_rewards: jnp.ndarray) -> PhoenixInfo:
-        return PhoenixInfo(
-            step_counter=0,
-            all_rewards=all_rewards
-        )
-
-    @partial(jax.jit, static_argnums=(0,))
-    def _get_done(self, state: PhoenixState) -> Tuple[bool, PhoenixState]:
-        return jnp.less_equal(state.lives,0)
-    def action_space(self) -> spaces.Discrete:
-        return spaces.Discrete(len(self.action_set))
-    def observation_space(self) -> Space:
-        return spaces.Dict({
-            "player_x": spaces.Box(low=0, high=self.consts.WIDTH - 1, shape=(), dtype=jnp.float32),
-            "player_y": spaces.Box(low=0, high=self.consts.HEIGHT - 1, shape=(), dtype=jnp.float32),
-            "player_score": spaces.Box(low=0, high=99999, shape=(), dtype=jnp.int32),
-            "lives": spaces.Box(low=0, high=9, shape=(), dtype=jnp.int32),
-        })
-
-    def image_space(self) -> spaces.Box:
-        return spaces.Box(
-            low=0,
-            high=255,
-            shape=(210, 160, 3),
-            dtype=jnp.uint8
-        )
-
-    @partial(jax.jit, static_argnums=(0,))
-    def obs_to_flat_array(self, obs: PhoenixObservation) -> jnp.ndarray:
-        return jnp.concatenate([
-            obs.player_x.flatten(),
-            obs.player_y.flatten(),
-            obs.player_score.flatten(),
-            obs.lives.flatten()
-        ]
-        )
     def __init__(self, consts: PhoenixConstants = None, reward_funcs: list[callable]=None):
         consts = consts or PhoenixConstants()
         super().__init__(consts)
         self.renderer = PhoenixRenderer(self.consts)
         if reward_funcs is not None:
             reward_funcs = tuple(reward_funcs)
+        self.reward_funcs = reward_funcs
         self.step_counter = 0
         self.action_set = [
             Action.NOOP,
@@ -311,6 +256,64 @@ class JaxPhoenix(JaxEnvironment[PhoenixState, PhoenixObservation, PhoenixInfo, N
             Action.DOWNLEFTFIRE
         ]# Add step counter tracking
 
+    @partial(jax.jit, static_argnums=(0,))
+    def _get_observation(self, state: PhoenixState) -> PhoenixObservation:
+        player = EntityPosition(x=state.player_x, y=state.player_y)
+        return PhoenixObservation(
+            player_x=player[0],
+            player_y=player[1],
+            player_score=state.score,
+            lives=state.lives
+        )
+
+    @partial(jax.jit, static_argnums=(0,))
+    def _get_all_rewards(self, previous_state: PhoenixState, state: PhoenixState):
+        if self.reward_funcs is None:
+            return jnp.zeros(1)
+        rewards = jnp.array(
+            [reward_func(previous_state, state) for reward_func in self.reward_funcs]
+        )
+        return rewards
+
+    @partial(jax.jit, static_argnums=(0,))
+    def _get_info(self, state: PhoenixState, all_rewards: jnp.ndarray) -> PhoenixInfo:
+        return PhoenixInfo(
+            step_counter=0,
+            all_rewards=all_rewards
+        )
+
+    @partial(jax.jit, static_argnums=(0,))
+    def _get_done(self, state: PhoenixState) -> Tuple[bool, PhoenixState]:
+        return jnp.less_equal(state.lives, 0)
+
+    def action_space(self) -> spaces.Discrete:
+        return spaces.Discrete(len(self.action_set))
+
+    def observation_space(self) -> Space:
+        return spaces.Dict({
+            "player_x": spaces.Box(low=0, high=self.consts.WIDTH - 1, shape=(), dtype=jnp.int32),
+            "player_y": spaces.Box(low=0, high=self.consts.HEIGHT - 1, shape=(), dtype=jnp.int32),
+            "player_score": spaces.Box(low=0, high=99999, shape=(), dtype=jnp.int32),
+            "lives": spaces.Box(low=0, high=9, shape=(), dtype=jnp.int32),
+        })
+
+    def image_space(self) -> spaces.Box:
+        return spaces.Box(
+            low=0,
+            high=255,
+            shape=(210, 160, 3),
+            dtype=jnp.uint8
+        )
+
+    @partial(jax.jit, static_argnums=(0,))
+    def obs_to_flat_array(self, obs: PhoenixObservation) -> jnp.ndarray:
+        return jnp.concatenate([
+            obs.player_x.flatten(),
+            obs.player_y.flatten(),
+            obs.player_score.flatten(),
+            obs.lives.flatten()
+        ]
+        )
     @partial(jax.jit, static_argnums=(0,))
     def player_step(self, state: PhoenixState, action: chex.Array) -> tuple[chex.Array]:
         step_size = 2  # Größerer Wert = schnellerer Schritt
@@ -357,10 +360,10 @@ class JaxPhoenix(JaxEnvironment[PhoenixState, PhoenixObservation, PhoenixInfo, N
         )
 
         # Did the player move?
-        player_moved = jnp.not_equal(player_x.astype(jnp.float32), state.player_x.astype(jnp.float32))
+        player_moved = jnp.not_equal(player_x.astype(jnp.int32), state.player_x.astype(jnp.int32))
         new_player_moving = player_moved.astype(jnp.bool_)
 
-        state = state._replace(player_x= player_x.astype(jnp.float32),
+        state = state._replace(player_x= player_x.astype(jnp.int32),
                                invincibility=new_invinsibility,
                                invincibility_timer=new_timer,
                                  player_moving=new_player_moving,
@@ -697,8 +700,8 @@ class JaxPhoenix(JaxEnvironment[PhoenixState, PhoenixObservation, PhoenixInfo, N
     def reset(self, key: jax.random.PRNGKey = jax.random.PRNGKey(42)) -> Tuple[PhoenixObservation, PhoenixState]:
 
         return_state = PhoenixState(
-            player_x=jnp.array(self.consts.PLAYER_POSITION[0], dtype=jnp.float32),
-            player_y=jnp.array(self.consts.PLAYER_POSITION[1], dtype=jnp.float32),
+            player_x=jnp.array(self.consts.PLAYER_POSITION[0], dtype=jnp.int32),
+            player_y=jnp.array(self.consts.PLAYER_POSITION[1], dtype=jnp.int32),
             step_counter=jnp.array(0),
             enemies_x = self.consts.ENEMY_POSITIONS_X_LIST[0](),
             enemies_y = self.consts.ENEMY_POSITIONS_Y_LIST[0](),
@@ -710,7 +713,7 @@ class JaxPhoenix(JaxEnvironment[PhoenixState, PhoenixObservation, PhoenixInfo, N
             score = jnp.array(0), # Standardwert: Score=0
             lives=jnp.array(self.consts.PLAYER_LIVES), # Standardwert: 5 Leben
             player_respawn_timer=jnp.array(5),
-            level=jnp.array(1),
+            level=jnp.array(5),
             level_transition_timer=jnp.array(0),  # Timer for level transition, starts at 0
 
             invincibility=jnp.array(False),
@@ -734,9 +737,9 @@ class JaxPhoenix(JaxEnvironment[PhoenixState, PhoenixObservation, PhoenixInfo, N
             player_moving=jnp.array(False, dtype = jnp.bool), # Player moving status, bool
 
             # Initialierung der Blockpositionen
-            blue_blocks=self.consts.BLUE_BLOCK_POSITIONS.astype(jnp.float32),
-            red_blocks=self.consts.RED_BLOCK_POSITIONS.astype(jnp.float32),
-            green_blocks = self.consts.GREEN_BLOCK_POSITIONS.astype(jnp.float32),            
+            blue_blocks=self.consts.BLUE_BLOCK_POSITIONS.astype(jnp.int32),
+            red_blocks=self.consts.RED_BLOCK_POSITIONS.astype(jnp.int32),
+            green_blocks = self.consts.GREEN_BLOCK_POSITIONS.astype(jnp.int32),
         )
 
         initial_obs = self._get_observation(return_state)
