@@ -44,6 +44,7 @@ class PhoenixConstants(NamedTuple):
     PLAYER_DEATH_DURATION: int = 90 # ca. 1,5 Sekunden bei 60 FPS
     ENEMY_PROJECTILE_SPEED: int = 2
     PLAYER_RESPAWN_DURATION: int = 360 # ca. 6 Sekunden bei 60 FPS
+    ABILITY_COOLDOWN: int = 600
     FIRE_CHANCE: float = 0.001
     LEVEL_TRANSITION_DURATION: int = 240 # ca. 4 Sekunden bei 60 FPS
     ENEMY_ANIMATION_SPEED: int = 30  # ca. 0,5 Sekunden bei 60 FPS
@@ -179,6 +180,7 @@ class PhoenixState(NamedTuple):
     green_blocks: chex.Array
     invincibility: chex.Array
     invincibility_timer: chex.Array
+    ability_cooldown: chex.Array
 
     bat_wings: chex.Array
     bat_dying: chex.Array # Bat dying status, (8,), bool
@@ -206,8 +208,7 @@ class PhoenixState(NamedTuple):
     lives: chex.Array = jnp.array(5) # Lives
     player_respawn_timer: chex.Array = 0 # Invincibility timer
     level: chex.Array = jnp.array(1)  # Level, starts at 1
-    level_transition_timer: chex.Array = jnp.array(0)  # Timer for level transition
-
+    level_transition_timer: chex.Array = jnp.array(0) # Timer for level transition
 
 class PhoenixObservation(NamedTuple):
     player_x: chex.Array
@@ -343,12 +344,17 @@ class JaxPhoenix(JaxEnvironment[PhoenixState, PhoenixObservation, PhoenixInfo, N
                 ]
             )
         )
-        # Ability : it holds on for ... amount; it can only be reactivated when an enemy is hitted
-        invinsibility = jnp.any(jnp.array([action == Action.DOWN]))
-        new_invinsibility = jnp.where(invinsibility & (state.invincibility_timer == 0), True, state.invincibility)
+         #Ability : it holds on for ... amount
+        invinsibility = jnp.any(jnp.array([action == Action.DOWN])) & (state.ability_cooldown == 0) & (state.invincibility_timer == 0)
+
+        new_invinsibility = jnp.where(invinsibility, True, state.invincibility)
         new_timer = jnp.where(invinsibility & (state.invincibility_timer == 0), 200, state.invincibility_timer)
+
         new_timer = jnp.where(new_timer > 0, new_timer - 1, 0)
         new_invinsibility = jnp.where(new_timer == 0, False, new_invinsibility)
+
+        new_cooldown = jnp.where(new_timer == 2, self.consts.ABILITY_COOLDOWN, state.ability_cooldown)
+        new_cooldown = jnp.where(new_cooldown > 0, new_cooldown - 1, 0)
         # movement right
         player_x = jnp.where(
             right & jnp.logical_not(new_invinsibility), state.player_x + step_size, jnp.where(left & jnp.logical_not(new_invinsibility), state.player_x - step_size, state.player_x)
@@ -366,7 +372,8 @@ class JaxPhoenix(JaxEnvironment[PhoenixState, PhoenixObservation, PhoenixInfo, N
         state = state._replace(player_x= player_x.astype(jnp.int32),
                                invincibility=new_invinsibility,
                                invincibility_timer=new_timer,
-                                 player_moving=new_player_moving,
+                                player_moving=new_player_moving,
+                                 ability_cooldown=new_cooldown
         )
 
         return state
@@ -718,6 +725,7 @@ class JaxPhoenix(JaxEnvironment[PhoenixState, PhoenixObservation, PhoenixInfo, N
 
             invincibility=jnp.array(False),
             invincibility_timer=jnp.array(0),
+            ability_cooldown=jnp.array(0),
 
             bat_wings=jnp.full((8,), 2),
             bat_dying=jnp.full((8,), False, dtype=jnp.bool), # Bat dying status, (8,), bool
@@ -1068,6 +1076,7 @@ class JaxPhoenix(JaxEnvironment[PhoenixState, PhoenixObservation, PhoenixInfo, N
             player_death_timer=new_player_death_timer,
             player_moving=new_player_moving,
             level_transition_timer=new_level_transition_timer,
+            ability_cooldown=state.ability_cooldown,
 
         )
         observation = self._get_observation(return_state)
