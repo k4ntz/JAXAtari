@@ -892,7 +892,8 @@ def spawn_entities(state: RiverraidState) -> RiverraidState:
             operand=state
         )
     # only spawn if no dam in the top 10 rows
-    dam_at_top = jnp.any(state.dam_position[:10] == 1)
+    dam_at_top = jnp.any(state.dam_position[:50] >= 1)
+    jax.debug.print("dam at top: {dam_at_top}", dam_at_top=dam_at_top)
     spawn_new_entity = jnp.logical_and(
         jax.random.bernoulli(subkey1, 0.07), # TODO balance
         ~dam_at_top
