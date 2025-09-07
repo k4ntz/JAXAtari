@@ -1799,9 +1799,9 @@ def _default_triangle_collision_branch(
       [t_entry, hit_x, hit_y, new_ball_x, new_ball_y, <scene_object...>]
     If no collision, returns _dummy_calc_hit_point(scene_object)[-1] (keeps same behavior).
     """
-    _, _, hit_point_ab = _calc_segment_hit_point(ball_movement, scene_object, action, ax, ay, bx, by)
-    _, _, hit_point_bc = _calc_segment_hit_point(ball_movement, scene_object, action, bx, by, cx, cy)
-    _, _, hit_point_ca = _calc_segment_hit_point(ball_movement, scene_object, action, cx, cy, ax, ay)
+    hit_point_ab = _calc_segment_hit_point(ball_movement, scene_object, action, ax, ay, bx, by)
+    hit_point_bc = _calc_segment_hit_point(ball_movement, scene_object, action, bx, by, cx, cy)
+    hit_point_ca = _calc_segment_hit_point(ball_movement, scene_object, action, cx, cy, ax, ay)
 
     argmin = jnp.argmin(jnp.array([
         hit_point_ab[HitPointSelector.T_ENTRY],
@@ -1812,7 +1812,7 @@ def _default_triangle_collision_branch(
 
     hit_point = hit_points[argmin]
 
-    return 1., VELOCITY_ACCELERATION_VALUE, hit_point
+    return hit_point
 
 @jax.jit
 def _cross2(ax_, ay_, bx_, by_):
@@ -1879,16 +1879,16 @@ def _calc_segment_hit_point(ball_movement, scene_object, action, ax, ay, bx, by)
     surface_normal_x = surface_normal_x / norm_len
     surface_normal_y = surface_normal_y / norm_len
 
+    # Ensure normal points opposite to trajectory direction
+    dot_product = trajectory_x * surface_normal_x + trajectory_y * surface_normal_y
+    surface_normal_x = jnp.where(dot_product > 0, -surface_normal_x, surface_normal_x)
+    surface_normal_y = jnp.where(dot_product > 0, -surface_normal_y, surface_normal_y)
+
     # Fallback: if edge nearly degenerate, use perpendicular to trajectory
     d_traj = jnp.sqrt(trajectory_x * trajectory_x + trajectory_y * trajectory_y) + eps
     near_zero_normal = (norm_len < 1e-6)
     surface_normal_x = jnp.where(near_zero_normal, trajectory_x / d_traj, surface_normal_x)
     surface_normal_y = jnp.where(near_zero_normal, trajectory_y / d_traj, surface_normal_y)
-
-    # Ensure normal opposes incoming trajectory
-    dot_incoming = surface_normal_x * trajectory_x + surface_normal_y * trajectory_y
-    surface_normal_x = jnp.where(dot_incoming > 0, -surface_normal_x, surface_normal_x)
-    surface_normal_y = jnp.where(dot_incoming > 0, -surface_normal_y, surface_normal_y)
 
     # Reflect trajectory
     velocity_normal_prod = trajectory_x * surface_normal_x + trajectory_y * surface_normal_y
@@ -1903,8 +1903,10 @@ def _calc_segment_hit_point(ball_movement, scene_object, action, ax, ay, bx, by)
     reflected_x = r * reflected_x
     reflected_y = r * reflected_y
 
-    hit_x = hit_x + surface_normal_x
-    hit_y = hit_y + surface_normal_y
+    # correction to avoid re-detecting the hit_point
+    # needs to be large enough to account for flipper movement
+    hit_x = hit_x + surface_normal_x * 6
+    hit_y = hit_y + surface_normal_y * 6
     # New ball position after reflection
     new_ball_x = hit_x + reflected_x
     new_ball_y = hit_y + reflected_y
@@ -1922,7 +1924,7 @@ def _calc_segment_hit_point(ball_movement, scene_object, action, ax, ay, bx, by)
         lambda: hit_point,
     )
 
-    return 1 - VELOCITY_DAMPENING_VALUE, 0., hit_point
+    return hit_point
 
 @jax.jit
 def _inside_slab_collision_branch(
@@ -2252,11 +2254,17 @@ def _calc_flipper_hit_point(
     )
     new_endy = new_scene_object[3]
 
-    return jax.lax.cond(
+    hit_point = jax.lax.cond(
         jnp.logical_not(jnp.logical_or(flipper_up, flipper_down)),
         lambda: _calc_segment_hit_point(ball_movement, scene_object, action, px, py, endx, endy),
         lambda: _calc_triangle_hit_point(ball_movement, scene_object, action, px, py, endx, endy, new_endx, new_endy)
     )
+
+    velocity_factor = jnp.where(flipper_down, 1-VELOCITY_DAMPENING_VALUE, 1.)
+    velocity_addition = jnp.where(flipper_up, VELOCITY_ACCELERATION_VALUE, 0.)
+
+    return velocity_factor, velocity_addition, hit_point
+
 
 @jax.jit
 def _calc_spinner_hit_point(
