@@ -52,33 +52,33 @@ class PhoenixConstants(NamedTuple):
     ENEMY_POSITIONS_X_LIST = [
         lambda: jnp.array(
             [123 - 160 // 2, 123 - 160 // 2, 136 - 160 // 2, 136 - 160 // 2, 160 - 160 // 2, 160 - 160 // 2,
-             174 - 160 // 2, 174 - 160 // 2]).astype(jnp.int32),
+             174 - 160 // 2, 174 - 160 // 2]).astype(jnp.float32),
         lambda: jnp.array(
             [141 - 160 // 2, 155 - 160 // 2, 127 - 160 // 2, 169 - 160 // 2, 134 - 160 // 2, 162 - 160 // 2,
-             120 - 160 // 2, 176 - 160 // 2]).astype(jnp.int32),
+             120 - 160 // 2, 176 - 160 // 2]).astype(jnp.float32),
         lambda: jnp.array(
             [123 - 160 // 2, 170 - 160 // 2, 123 - 160 // 2, 180 - 160 // 2, 123 - 160 // 2, 170 - 160 // 2,
-             123 - 160 // 2, -1]).astype(jnp.int32),
+             123 - 160 // 2, -1]).astype(jnp.float32),
         lambda: jnp.array(
             [123 - 160 // 2, 180 - 160 // 2, 123 - 160 // 2, 170 - 160 // 2, 123 - 160 // 2, 180 - 160 // 2,
-             123 - 160 // 2, -1]).astype(jnp.int32),
-        lambda: jnp.array([78, -1, -1, -1, -1, -1, -1, -1]).astype(jnp.int32),
+             123 - 160 // 2, -1]).astype(jnp.float32),
+        lambda: jnp.array([78, -1, -1, -1, -1, -1, -1, -1]).astype(jnp.float32),
     ]
     ENEMY_POSITIONS_Y_LIST = [
         lambda: jnp.array(
             [210 - 135, 210 - 153, 210 - 117, 210 - 171, 210 - 117, 210 - 171, 210 - 135,
-             210 - 153]).astype(jnp.int32),
+             210 - 153]).astype(jnp.float32),
         lambda: jnp.array(
             [210 - 171, 210 - 171, 210 - 135, 210 - 135, 210 - 153, 210 - 153, 210 - 117,
-             210 - 117]).astype(jnp.int32),
+             210 - 117]).astype(jnp.float32),
         lambda: jnp.array(
             [210 - 99, 210 - 117, 210 - 135, 210 - 153, 210 - 171, 210 - 63, 210 - 81,
-             210 + 20]).astype(jnp.int32),
+             210 + 20]).astype(jnp.float32),
         lambda: jnp.array(
             [210 - 63, 210 - 81, 210 - 99, 210 - 117, 210 - 135, 210 - 153, 210 - 171,
-             210 + 20]).astype(jnp.int32),
+             210 + 20]).astype(jnp.float32),
         lambda: jnp.array([210 - 132, 210 + 20, 210 + 20, 210 + 20, 210 + 20, 210 + 20, 210 + 20,
-                           210 + 20]).astype(jnp.int32),
+                           210 + 20]).astype(jnp.float32),
     ]
     BLUE_BLOCK_X = jnp.linspace(PLAYER_BOUNDS[0] + 32, PLAYER_BOUNDS[1] - 32,
                                 24).astype(jnp.int32)
@@ -688,11 +688,11 @@ class JaxPhoenix(JaxEnvironment[PhoenixState, PhoenixObservation, PhoenixInfo, N
 
         state = state._replace(
             enemies_y=new_enemy_y.astype(jnp.float32),
-            blue_blocks=new_blue_blocks,
-            red_blocks=new_red_blocks,
-            green_blocks=new_green_blocks,
-            projectile_x=projectile_x,
-            projectile_y=projectile_y,
+            blue_blocks=new_blue_blocks.astype(jnp.int32),
+            red_blocks=new_red_blocks.astype(jnp.int32),
+            green_blocks=new_green_blocks.astype(jnp.int32),
+            projectile_x=projectile_x.astype(jnp.int32),
+            projectile_y=projectile_y.astype(jnp.int32),
             enemies_x = state.enemies_x.astype(jnp.float32),
         )
         return state
@@ -713,7 +713,7 @@ class JaxPhoenix(JaxEnvironment[PhoenixState, PhoenixObservation, PhoenixInfo, N
             score = jnp.array(0), # Standardwert: Score=0
             lives=jnp.array(self.consts.PLAYER_LIVES), # Standardwert: 5 Leben
             player_respawn_timer=jnp.array(5),
-            level=jnp.array(5),
+            level=jnp.array(1),
             level_transition_timer=jnp.array(0),  # Timer for level transition, starts at 0
 
             invincibility=jnp.array(False),
@@ -1042,15 +1042,15 @@ class JaxPhoenix(JaxEnvironment[PhoenixState, PhoenixObservation, PhoenixInfo, N
             enemies_y = enemies_y,
             horizontal_direction_enemies = new_horizontal_direction_enemies,
             score= score,
-            enemy_projectile_x=enemy_projectile_x,
-            enemy_projectile_y=enemy_projectile_y,
+            enemy_projectile_x=enemy_projectile_x.astype(jnp.int32),
+            enemy_projectile_y=enemy_projectile_y.astype(jnp.int32),
             lives=lives,
             player_respawn_timer = player_respawn_timer,
             level = level,
             vertical_direction_enemies=new_vertical_direction_enemies,
-            blue_blocks=blue_blocks,
-            red_blocks=red_blocks,
-            green_blocks=green_blocks,
+            blue_blocks=blue_blocks.astype(jnp.int32),
+            red_blocks=red_blocks.astype(jnp.int32),
+            green_blocks=green_blocks.astype(jnp.int32),
             invincibility=state.invincibility,
             invincibility_timer=state.invincibility_timer,
             bat_wings=new_bat_wings,
