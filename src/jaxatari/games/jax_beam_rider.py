@@ -358,7 +358,6 @@ class BeamRiderEnv(JaxEnvironment[BeamRiderState, BeamRiderObservation, BeamRide
         self.beam_positions = self.constants.get_beam_positions()
 
         # JIT-compile the step function for performance
-        self.step = jit(self._step_impl)
 
     def action_space(self) -> spaces.Discrete:
         """Returns the action space for BeamRider"""
@@ -494,7 +493,7 @@ class BeamRiderEnv(JaxEnvironment[BeamRiderState, BeamRiderObservation, BeamRide
         return obs, state
 
     @partial(jax.jit, static_argnums=(0,))
-    def _step_impl(self, state: BeamRiderState, action: int) -> Tuple[
+    def step(self, state: BeamRiderState, action: int) -> Tuple[
         BeamRiderObservation, BeamRiderState, jnp.ndarray, jnp.ndarray, BeamRiderInfo]:
         """Execute one game step - JIT-compiled implementation"""
         # Store previous state for reward calculation
@@ -520,7 +519,7 @@ class BeamRiderEnv(JaxEnvironment[BeamRiderState, BeamRiderObservation, BeamRide
         # Update sentinel ship projectiles
         state = self._update_sentinel_projectiles(state)
 
-        # In your _step_impl method, add these calls after enemy updates:
+        # In your _step method, add these calls after enemy updates:
         state = self._check_rejuvenator_interactions(state)
         state = self._check_debris_collision(state)
 
@@ -3446,6 +3445,8 @@ class BeamRiderRenderer(JAXGameRenderer):
 
         # Render projectiles (lasers)
         screen = self._draw_projectiles(screen, state.projectiles)
+
+        screen = self._draw_ship(screen, state.ship)
 
         # Render torpedo projectiles
         screen = self._draw_torpedo_projectiles(screen, state.torpedo_projectiles)
