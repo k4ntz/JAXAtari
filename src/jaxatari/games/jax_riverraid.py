@@ -26,6 +26,7 @@ MINIMUM_SPAWN_COOLDOWN = 20
 MAX_FUEL = 30
 UI_HEIGHT = 35
 SEGMENT_LENGTH = 400
+DAM_OFFSET = 25
 
 
 class RiverraidState(NamedTuple):
@@ -611,10 +612,10 @@ def handle_dam(state: RiverraidState) -> RiverraidState:
 
     dam_mask = new_dam_position == 1
     dam_exists = jnp.any(dam_mask)
-    dam_top_y = jnp.argmax(dam_mask)
+    dam_top_y = jnp.argmax(dam_mask) - DAM_OFFSET
     bullet_above_dam = jnp.logical_and(
         dam_exists,
-        jnp.logical_and(bullet_y < dam_top_y, bullet_x > 1)
+        jnp.logical_and(bullet_y < dam_top_y + DAM_OFFSET, bullet_x > 1)
     )
 
     river_left = state.river_left[bullet_y]
@@ -633,7 +634,7 @@ def handle_dam(state: RiverraidState) -> RiverraidState:
 
     new_dam_position = jax.lax.cond(
         bullet_above_dam,
-        lambda state: new_dam_position.at[dam_top_y].set(2),
+        lambda state: new_dam_position.at[dam_top_y + DAM_OFFSET].set(2),
         lambda state: new_dam_position,
         operand=state
     )
@@ -1475,13 +1476,13 @@ class RiverraidRenderer(JAXGameRenderer):
         raster = jnp.where(is_river[..., None], blue_river, green_banks)
 
         # Render the dam sprite
-        dam_y = jnp.argmax(state.dam_position >= 1).astype(jnp.int32)
+        dam_y = jnp.argmax(state.dam_position >= 1).astype(jnp.int32) - DAM_OFFSET
         has_dam = jnp.max(state.dam_position) >= 1
 
         def render_dam(raster):
-            dam_x = SCREEN_WIDTH // 2 - self.FULL_DAM.shape[2] // 2 + 5  # Center the dam sprite
+            dam_x = SCREEN_WIDTH // 2 - self.FULL_DAM.shape[2] // 2 + 5
             sprite_to_render = jax.lax.cond(
-                state.dam_position[dam_y] == 1,
+                state.dam_position[dam_y + DAM_OFFSET] == 1,
                 lambda _: aj.get_sprite_frame(self.FULL_DAM, 0),
                 lambda _: aj.get_sprite_frame(self.OUTER_DAM, 0),
                 operand=None
