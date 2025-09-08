@@ -103,7 +103,7 @@ jobs:
             test_report_b64: ${{ steps.pytest_output.outputs.report }}
             test_outcome: ${{ steps.run_tests.outcome }}
 
-  results:
+  collect-results:
     needs: run-tests
     if: always()
     runs-on: ubuntu-latest
