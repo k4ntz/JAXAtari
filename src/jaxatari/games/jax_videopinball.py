@@ -45,11 +45,11 @@ import jax.numpy as jnp
 import jax.random as jrandom
 import chex
 import pygame
-from gymnax.environments import spaces
 
 from jaxatari.renderers import JAXGameRenderer
 from jaxatari.rendering import jax_rendering_utils as jr
 from jaxatari.environment import JaxEnvironment, JAXAtariAction as Action
+from jaxatari import spaces
 
 
 @chex.dataclass
@@ -108,8 +108,8 @@ HEIGHT = 210
 # Physics constants
 # TODO: check if these are correct
 GRAVITY = 0.03  # 0.12
-VELOCITY_DAMPENING_VALUE = 0.1  # 24
-VELOCITY_ACCELERATION_VALUE = 0.2
+VELOCITY_DAMPENING_VALUE = 0.125  # 24
+VELOCITY_ACCELERATION_VALUE = 0.3
 BALL_MAX_SPEED = 3
 NUDGE_EFFECT_INTERVAL = 1  # Num steps in between nudge changing 
 NUDGE_EFFECT_AMOUNT = jnp.array(0.3).astype(jnp.float32)  # Amount of nudge effect applied to the ball's velocity
@@ -1673,7 +1673,10 @@ class VideoPinballObservation(NamedTuple):
     score: chex.Array
     lives: chex.Array
     bumper_multiplier: chex.Array
-    active_targets: chex.Array
+    left_target: chex.Array
+    middle_target: chex.Array
+    right_target: chex.Array
+    special_target: chex.Array
     atari_symbols: chex.Array
     rollover_counter: chex.Array
     color_cycling: chex.Array
@@ -2658,9 +2661,11 @@ def _check_obstacle_hits(
 
     return hit_point, scoring_list, velocity_factor, velocity_addition
 
+MAX_REFLECTIONS = 10  # max collisions to process per timestep
+
 @jax.jit
 def _calc_ball_collision_loop(state: VideoPinballState, ball_movement: BallMovement, action: chex.Array):
-    @jax.jit
+
     def _compute_ball_collision(
         old_ball_x, old_ball_y, new_ball_x, new_ball_y, velocity_factor, velocity_addition, scoring_list
     ):
@@ -2681,113 +2686,59 @@ def _calc_ball_collision_loop(state: VideoPinballState, ball_movement: BallMovem
         velocity_factor = jnp.where(collision, velocity_factor * vf, velocity_factor)
         velocity_addition = jnp.where(collision, velocity_addition + va, velocity_addition)
 
-        # if there was a collision, returned BallMovement is from hit point to reflected position
-        # if there was no collision, returned BallMovement will be the original BallMovement
         old_ball_x = jnp.where(collision, hit_data[HitPointSelector.X], _ball_movement.old_ball_x)
         old_ball_y = jnp.where(collision, hit_data[HitPointSelector.Y], _ball_movement.old_ball_y)
         new_ball_x = jnp.where(collision, hit_data[HitPointSelector.RX], _ball_movement.new_ball_x)
         new_ball_y = jnp.where(collision, hit_data[HitPointSelector.RY], _ball_movement.new_ball_y)
 
-        return (
-            old_ball_x,
-            old_ball_y,
-            new_ball_x,
-            new_ball_y,
-            velocity_factor,
-            velocity_addition,
-            scoring_list,
-            collision,
+        return old_ball_x, old_ball_y, new_ball_x, new_ball_y, velocity_factor, velocity_addition, scoring_list, collision
+
+    def _fori_body(i, carry):
+        (
+            old_ball_x, old_ball_y, new_ball_x, new_ball_y,
+            velocity_factor, velocity_addition, scoring_list,
+            any_collision, compute_flag
+        ) = carry
+
+        (old_ball_x, old_ball_y, new_ball_x, new_ball_y,
+         velocity_factor, velocity_addition, scoring_list, collision) = jax.lax.cond(
+            compute_flag,
+            _compute_ball_collision,
+            lambda old_ball_x, old_ball_y, new_ball_x, new_ball_y, vf, va, s: (
+                old_ball_x, old_ball_y, new_ball_x, new_ball_y, vf, va, s, False
+            ),
+            old_ball_x, old_ball_y, new_ball_x, new_ball_y, velocity_factor, velocity_addition, scoring_list
         )
 
-    @jax.jit
-    def _body_fun(
-        args: tuple[VideoPinballState, chex.Array, chex.Array, chex.Array, chex.Array, chex.Array, chex.Array],
-    ):
-        old_ball_x, old_ball_y, new_ball_x, new_ball_y, velocity_factor, velocity_addition, scoring_list, any_collision, compute_flag = (
-            args
-        )
-
-        # Where compute_flag is true, compute ball collisions along the trajectory of BallMovement
-        # The returned BallMovement is either the original BallMovement or a new BallMovement, from the
-        # obstacle hit to the new location of the ball after reflecting it from that obstacle
-        old_ball_x, old_ball_y, new_ball_x, new_ball_y, velocity_factor, velocity_addition, scoring_list, collision = (
-            jax.lax.cond(
-                compute_flag,
-                _compute_ball_collision,
-                lambda old_ball_x, old_ball_y, new_ball_x, new_ball_y, velocity_factor, velocity_addition, scoring_list: (
-                    old_ball_x,
-                    old_ball_y,
-                    new_ball_x,
-                    new_ball_y,
-                    velocity_factor,
-                    velocity_addition,
-                    scoring_list,
-                    compute_flag,
-                ),
-                old_ball_x,
-                old_ball_y,
-                new_ball_x,
-                new_ball_y,
-                velocity_factor,
-                velocity_addition,
-                scoring_list,
-            )
-        )
-        # For every ball movement within a timestep (i.e. hit_point -> new location), we add the distance traveled
-        # If there was no collision, set compute_flag to False
         compute_flag = jnp.logical_and(compute_flag, collision)
-        # If there was any collision, set any_collision to True
         any_collision = jnp.logical_or(any_collision, collision)
 
         return (
-            old_ball_x,
-            old_ball_y,
-            new_ball_x,
-            new_ball_y,
-            velocity_factor,
-            velocity_addition,
-            scoring_list,
-            any_collision,
-            compute_flag,
+            old_ball_x, old_ball_y, new_ball_x, new_ball_y,
+            velocity_factor, velocity_addition, scoring_list,
+            any_collision, compute_flag
         )
 
-    @jax.jit
-    def _cond_fun(
-        args: tuple[VideoPinballState, chex.Array, chex.Array, chex.Array, chex.Array, chex.Array, chex.Array],
-    ):
-        compute_flag = args[-1]
-        return jnp.any(compute_flag)
-
-    # Create initial arrays
-    scoring_list = jnp.array([False for i in range(12)])
-    compute_flag = True
-    velocity_factor = 1.
-    velocity_addition = 0.
-    any_collision = False
-
-    old_ball_x, old_ball_y, new_ball_x, new_ball_y, velocity_factor, velocity_addition, scoring_list, any_collision, _ = (
-        jax.lax.while_loop(
-            # while there are new BallMovements along whose trajectory there might be collisions (compute_flag set to True),
-            # compute whether there are collisions and if so, calculate a new BallMovement and keep
-            # corresponding compute_flag set to True, else set it to False to keep the BallMovement
-
-            # After 10 iterations (see _cond_fun) this loop will terminate to prevent locking the game.
-            # In such a case, the ball will likely pass through the object that it would hit next in the loop
-            _cond_fun,
-            _body_fun,
-            (
-                ball_movement.old_ball_x,
-                ball_movement.old_ball_y,
-                ball_movement.new_ball_x,
-                ball_movement.new_ball_y,
-                velocity_factor,
-                velocity_addition,
-                scoring_list,
-                any_collision,
-                compute_flag,
-            ),
-        )
+    # Initial carry values
+    carry = (
+        ball_movement.old_ball_x,
+        ball_movement.old_ball_y,
+        ball_movement.new_ball_x,
+        ball_movement.new_ball_y,
+        1.0,                                  # velocity_factor
+        0.0,                                  # velocity_addition
+        jnp.zeros((12,), dtype=bool),         # scoring_list
+        False,                                # any_collision
+        True,                                 # compute_flag
     )
+
+    carry = jax.lax.fori_loop(0, MAX_REFLECTIONS, _fori_body, carry)
+
+    (
+        old_ball_x, old_ball_y, new_ball_x, new_ball_y,
+        velocity_factor, velocity_addition, scoring_list,
+        any_collision, _
+    ) = carry
 
     return (
         BallMovement(
@@ -2801,7 +2752,6 @@ def _calc_ball_collision_loop(state: VideoPinballState, ball_movement: BallMovem
         velocity_addition,
         any_collision,
     )
-
 
 @jax.jit
 def _get_ball_direction_signs(ball_direction) -> tuple[chex.Array, chex.Array]:
@@ -3082,9 +3032,9 @@ def ball_step(
     ball_vel_y = jnp.where(any_collision, jnp.clip(ball_vel_y / original_ball_speed * new_ball_speed, 0, BALL_MAX_SPEED), ball_vel_y)
 
     # If ball velocity reaches a small threshold, accelerate it after hitting something
-    small_vel = jnp.logical_and(ball_vel_x < 5e-2, ball_vel_y < 5e-2)
-    ball_vel_x = jnp.where(jnp.logical_and(any_collision, small_vel), jnp.clip(ball_vel_x * 3 + 5e-2, 0, BALL_MAX_SPEED), ball_vel_x)
-    ball_vel_y = jnp.where(jnp.logical_and(any_collision, small_vel), jnp.clip(ball_vel_y * 3 + 5e-2, 0, BALL_MAX_SPEED), ball_vel_y)
+    small_vel = jnp.logical_and(ball_vel_x < 1e-1, ball_vel_y < 1e-1)
+    ball_vel_x = jnp.where(jnp.logical_and(any_collision, small_vel), jnp.clip(ball_vel_x * 5 + 1e-1, 0, BALL_MAX_SPEED), ball_vel_x)
+    ball_vel_y = jnp.where(jnp.logical_and(any_collision, small_vel), jnp.clip(ball_vel_y * 5 + 1e-1, 0, BALL_MAX_SPEED), ball_vel_y)
 
     return (
         ball_x,
@@ -3637,15 +3587,15 @@ class JaxVideoPinball(
         # jax.debug.print("------------------------------------------")
 
         # Check if all lives are lost and the game should reset
-        observation, new_state = jax.lax.cond(
-            jnp.logical_and(lives > 3, respawn_timer == 0),
-            lambda ob, ns: self.reset(
-                jax.random.PRNGKey(score + special_target_cooldown + env_reward)
-            ),
-            lambda ob, ns: (ob, ns),
-            observation,
-            new_state,
-        )
+        # observation, new_state = jax.lax.cond(
+        #     jnp.logical_and(lives > 3, respawn_timer == 0),
+        #     lambda ob, ns: self.reset(
+        #         jax.random.PRNGKey(score + special_target_cooldown + env_reward)
+        #     ),
+        #     lambda ob, ns: (ob, ns),
+        #     observation,
+        #     new_state,
+        # )
 
         return observation, new_state, env_reward, done, info
 
@@ -3673,7 +3623,10 @@ class JaxVideoPinball(
             score=state.score,
             lives=state.lives,
             bumper_multiplier=state.bumper_multiplier,
-            active_targets=state.active_targets,
+            left_target=state.active_targets[0],
+            middle_target=state.active_targets[1],
+            right_target=state.active_targets[2],
+            special_target=state.active_targets[3],
             atari_symbols=state.atari_symbols,
             rollover_counter=state.rollover_counter,
             color_cycling=state.color_cycling,
@@ -3696,7 +3649,10 @@ class JaxVideoPinball(
                 obs.score.flatten(),
                 obs.lives.flatten(),
                 obs.bumper_multiplier.flatten(),
-                obs.active_targets.flatten(),
+                obs.left_target.flatten(),
+                obs.middle_target.flatten(),
+                obs.right_target.flatten(),
+                obs.special_target.flatten(),
                 obs.atari_symbols.flatten(),
                 obs.rollover_counter.flatten(),
                 obs.color_cycling.flatten(),
@@ -3717,35 +3673,34 @@ class JaxVideoPinball(
         return spaces.Discrete(len(self.action_set))
 
     def observation_space(self) -> spaces.Dict:
-        return spaces.Dict(
-            {
-                "ball": spaces.Dict(
-                    {
-                        "pos_x": spaces.Box(low=0, high=160, shape=(), dtype=jnp.int32),
-                        "pos_y": spaces.Box(low=0, high=210, shape=(), dtype=jnp.int32),
-                        "vel_x": spaces.Box(low=0, high=BALL_MAX_SPEED + 1, shape=(), dtype=jnp.int32),
-                        "vel_y": spaces.Box(low=0, high=BALL_MAX_SPEED + 1, shape=(), dtype=jnp.int32),
-                        "direction": spaces.Box(low=0, high=4, shape=(), dtype=jnp.int32)
-                    }
-                ),
-                "flipper_states": spaces.Dict(
-                    {
-                        "left_flipper_state": spaces.Box(low=0, high=4, shape=(), dtype=jnp.int32),
-                        "right_flipper_state": spaces.Box(low=0, high=4, shape=(), dtype=jnp.int32),
-                    }
-                ),
-                "spinner_states": spaces.Box(low=0, high=5, shape=(2,), dtype=jnp.int32),
-                "plunger_position": spaces.Box(low=0, high=PLUNGER_MAX_POSITION, shape=(), dtype=jnp.int32),
-                "score": spaces.Box(low=0, high=10000, shape=(), dtype=jnp.int32),
-                "lives": spaces.Box(low=0, high=5, shape=(), dtype=jnp.int32),
-                "bumper_multiplier": spaces.Box(low=1, high=9, shape=(), dtype=jnp.int32),
-                "active_targets": spaces.Box(low=0, high=2, shape=(4,), dtype=jnp.int32),
-                "atari_symbols": spaces.Box(low=0, high=5, shape=(), dtype=jnp.int32),
-                "rollover_counter": spaces.Box(low=1, high=10, shape=(), dtype=jnp.int32),
-                "color_cycling": spaces.Box(low=0, high=9, shape=(), dtype=jnp.int32),
-                "tilt_mode_active": spaces.Box(low=0, high=2, shape=(), dtype=jnp.int32)
-            }
-        )
+        return spaces.Dict({
+            "ball": spaces.Dict({
+                "pos_x": spaces.Box(low=0, high=160, shape=(), dtype=jnp.float32),
+                "pos_y": spaces.Box(low=0, high=210, shape=(), dtype=jnp.float32),
+                "vel_x": spaces.Box(low=0, high=BALL_MAX_SPEED + 1, shape=(), dtype=jnp.float32),
+                "vel_y": spaces.Box(low=0, high=BALL_MAX_SPEED + 1, shape=(), dtype=jnp.float32),
+                "direction": spaces.Box(low=0, high=4, shape=(), dtype=jnp.int32)
+            }),
+            "flipper_states": spaces.Dict({
+                "left_flipper_state": spaces.Box(low=0, high=4, shape=(), dtype=jnp.int32),
+                "right_flipper_state": spaces.Box(low=0, high=4, shape=(), dtype=jnp.int32),
+            }),
+            "spinner_state": spaces.Box(low=0, high=5, shape=(), dtype=jnp.int32),
+            "plunger_position": spaces.Box(low=0, high=PLUNGER_MAX_POSITION, shape=(), dtype=jnp.int32),
+            "score": spaces.Box(low=0, high=10000, shape=(), dtype=jnp.int32),
+            "lives": spaces.Box(low=0, high=5, shape=(), dtype=jnp.int32),
+            "bumper_multiplier": spaces.Box(low=1, high=9, shape=(), dtype=jnp.int32),
+            "active_targets": spaces.Dict({
+                "left_target": spaces.Box(low=0, high=1, shape=(), dtype=jnp.bool_),
+                "middle_target": spaces.Box(low=0, high=1, shape=(), dtype=jnp.bool_),
+                "right_target": spaces.Box(low=0, high=1, shape=(), dtype=jnp.bool_),
+                "special_target": spaces.Box(low=0, high=1, shape=(), dtype=jnp.bool_),
+            }),
+            "atari_symbols": spaces.Box(low=0, high=5, shape=(), dtype=jnp.int32),
+            "rollover_counter": spaces.Box(low=1, high=10, shape=(), dtype=jnp.int32),
+            "color_cycling": spaces.Box(low=0, high=9, shape=(), dtype=jnp.int32),
+            "tilt_mode_active": spaces.Box(low=0, high=2, shape=(), dtype=jnp.int32)
+        })
 
     def image_space(self) -> spaces.Box:
         return spaces.Box(
@@ -3769,7 +3724,7 @@ class JaxVideoPinball(
             ball_in_play=state.ball_in_play,
             respawn_timer=state.respawn_timer,
             tilt_counter=state.tilt_counter,
-            all_rewards=all_rewards)
+            all_rewards=all_rewards)._asdict()
 
     @partial(jax.jit, static_argnums=(0,))
     def _get_env_reward(
