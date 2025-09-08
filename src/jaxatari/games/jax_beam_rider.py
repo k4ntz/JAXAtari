@@ -8,7 +8,7 @@ import chex
 from flax import struct
 import sys
 from functools import partial
-
+from jax import lax
 from jaxatari.environment import JaxEnvironment
 from jaxatari.renderers import JAXGameRenderer
 import jaxatari.spaces as spaces
@@ -358,7 +358,6 @@ class BeamRiderEnv(JaxEnvironment[BeamRiderState, BeamRiderObservation, BeamRide
         self.beam_positions = self.constants.get_beam_positions()
 
         # JIT-compile the step function for performance
-        self.step = jit(self._step_impl)
 
     def action_space(self) -> spaces.Discrete:
         """Returns the action space for BeamRider"""
@@ -494,7 +493,7 @@ class BeamRiderEnv(JaxEnvironment[BeamRiderState, BeamRiderObservation, BeamRide
         return obs, state
 
     @partial(jax.jit, static_argnums=(0,))
-    def _step_impl(self, state: BeamRiderState, action: int) -> Tuple[
+    def step(self, state: BeamRiderState, action: int) -> Tuple[
         BeamRiderObservation, BeamRiderState, jnp.ndarray, jnp.ndarray, BeamRiderInfo]:
         """Execute one game step - JIT-compiled implementation"""
         # Store previous state for reward calculation
@@ -520,7 +519,7 @@ class BeamRiderEnv(JaxEnvironment[BeamRiderState, BeamRiderObservation, BeamRide
         # Update sentinel ship projectiles
         state = self._update_sentinel_projectiles(state)
 
-        # In your _step_impl method, add these calls after enemy updates:
+        # In your _step method, add these calls after enemy updates:
         state = self._check_rejuvenator_interactions(state)
         state = self._check_debris_collision(state)
 
@@ -1258,7 +1257,7 @@ class BeamRiderEnv(JaxEnvironment[BeamRiderState, BeamRiderObservation, BeamRide
         """Handle both laser and torpedo firing"""
 
         # Torpedo firing - T key maps to action 10 (UPFIRE)
-        should_fire_torpedo = (action == 10)
+        should_fire_torpedo = (action == 2)
         state = self._fire_torpedo(state, should_fire_torpedo)
 
         # Laser firing - SPACE key maps to action 1 (FIRE)
@@ -3447,6 +3446,8 @@ class BeamRiderRenderer(JAXGameRenderer):
         # Render projectiles (lasers)
         screen = self._draw_projectiles(screen, state.projectiles)
 
+        screen = self._draw_ship(screen, state.ship)
+
         # Render torpedo projectiles
         screen = self._draw_torpedo_projectiles(screen, state.torpedo_projectiles)
 
@@ -3622,29 +3623,64 @@ class BeamRiderRenderer(JAXGameRenderer):
 
     @partial(jax.jit, static_argnums=(0,))
     def _draw_ship(self, screen: chex.Array, ship: Ship) -> chex.Array:
-        """Draw the player ship"""
+        """Draw the player ship with the actual sprite design"""
         x, y = ship.x.astype(int), ship.y.astype(int)
+
+        # Colors
+        yellow = jnp.array([255, 255, 0], dtype=jnp.uint8)
+        purple = jnp.array([160, 32, 240], dtype=jnp.uint8)
 
         # Create coordinate grids
         y_indices = jnp.arange(self.constants.SCREEN_HEIGHT)
         x_indices = jnp.arange(self.constants.SCREEN_WIDTH)
         y_grid, x_grid = jnp.meshgrid(y_indices, x_indices, indexing='ij')
 
-        # Create mask for ship pixels
-        ship_mask = (
-                (x_grid >= x) &
-                (x_grid < x + self.constants.SHIP_WIDTH) &
-                (y_grid >= y) &
-                (y_grid < y + self.constants.SHIP_HEIGHT)
+        # Scale factor
+        scale = 2
+
+        # Define ship shape regions (scaled)
+        # Purple tip (top rows)
+        purple_mask = (
+            # Row 0: Purple tip center
+                ((y_grid >= y) & (y_grid < y + scale) &
+                 (x_grid >= x + 3 * scale) & (x_grid < x + 5 * scale)) |
+                # Additional purple pixels can be added here
+                False  # Placeholder for OR operations
         )
 
-        # Apply ship color where mask is True
-        ship_color = jnp.array(self.constants.BLUE, dtype=jnp.uint8)
+        # Yellow body
+        yellow_mask = (
+            # Row 1: Upper body
+                ((y_grid >= y + scale) & (y_grid < y + 2 * scale) &
+                 (x_grid >= x + 2 * scale) & (x_grid < x + 6 * scale)) |
+                # Row 2: Middle body
+                ((y_grid >= y + 2 * scale) & (y_grid < y + 3 * scale) &
+                 (x_grid >= x + scale) & (x_grid < x + 7 * scale)) |
+                # Row 3: Full width
+                ((y_grid >= y + 3 * scale) & (y_grid < y + 4 * scale) &
+                 (x_grid >= x) & (x_grid < x + 8 * scale)) |
+                # Row 4: Lower body with gap
+                ((y_grid >= y + 4 * scale) & (y_grid < y + 5 * scale) &
+                 ((x_grid >= x) & (x_grid < x + 3 * scale) |
+                  (x_grid >= x + 5 * scale) & (x_grid < x + 8 * scale))) |
+                # Row 5: Bottom
+                ((y_grid >= y + 5 * scale) & (y_grid < y + 6 * scale) &
+                 ((x_grid >= x) & (x_grid < x + 2 * scale) |
+                  (x_grid >= x + 6 * scale) & (x_grid < x + 8 * scale)))
+        )
+
+        # Apply colors where masks are True
         screen = jnp.where(
-            ship_mask[..., None],  # Add dimension for RGB
-            ship_color,
+            purple_mask[..., None],
+            purple,
             screen
-        ).astype(jnp.uint8)
+        )
+
+        screen = jnp.where(
+            yellow_mask[..., None],
+            yellow,
+            screen
+        )
 
         return screen
 
@@ -3814,8 +3850,8 @@ class BeamRiderRenderer(JAXGameRenderer):
                 action = 0  # default no-op
 
                 # TORPEDO ACTIONS (actions 6, 7, 8) - CHECK FIRST!
-                if keys[pygame.K_t]:  # T for torpedo only
-                    action = 10
+                if keys[pygame.K_UP]:  # T for torpedo only
+                    action = 2
                 # LASER ACTIONS (actions 3, 4, 5)
                 elif keys[pygame.K_SPACE]:
                     action = 1  # fire laser only
