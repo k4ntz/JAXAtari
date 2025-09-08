@@ -11,7 +11,7 @@ from jaxatari.rendering import jax_rendering_utils as jr
 from jaxatari.environment import JaxEnvironment, JAXAtariAction as Action
 # NA HÖÖÖR MAAAAL
 # Kong # imaging whatever i cant believe it
-# choinges lellek
+# SOOOOOOO
 # jetztz könnte es oiserst wild werden :D
 class PongConstants(NamedTuple):
     MAX_SPEED: int = 12
