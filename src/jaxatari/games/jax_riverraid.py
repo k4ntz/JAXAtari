@@ -68,7 +68,7 @@ class RiverraidState(NamedTuple):
     enemy_x: chex.Array
     enemy_y: chex.Array
     enemy_type: chex.Array
-    enemy_state: chex.Array  # 0 empty/dead, 1 alive
+    enemy_state: chex.Array  # 0 empty/dead, 1 alive 2 dying first animation 3 dying second 4 dying final
     enemy_direction: chex.Array  # 0 left static, 1 right static, 2 left moving, 3 right moving
     fuel_x: chex.Array
     fuel_y: chex.Array
@@ -669,7 +669,7 @@ def player_movement(state: RiverraidState, action: Action) -> RiverraidState:
     new_velocity = jax.lax.cond(
         (press_left == 0) & (press_right == 0),
         lambda state: jnp.array(0, dtype=state.player_velocity.dtype),
-        lambda state: state.player_velocity + (press_right * 0.1) - (press_left * 0.1),
+        lambda state: state.player_velocity + (press_right * 0.01) - (press_left * 0.01),
         operand=state
     )
 
@@ -938,10 +938,17 @@ def scroll_entities(state: RiverraidState) -> RiverraidState:
 @jax.jit
 def enemy_collision(state: RiverraidState) -> RiverraidState:
     def handle_bullet_collision(state: RiverraidState) -> RiverraidState:
+        enemy_hitboxes = jnp.array([
+            12,  # boat
+            6,  # helicopter
+            6  # plane
+        ])
         active_enemy_mask = state.enemy_state == 1
 
-        x_collision_mask = (state.player_bullet_x < state.enemy_x + 8) & (state.player_bullet_x + 8 > state.enemy_x)
-        y_collision_mask = (state.player_bullet_y < state.enemy_y + 8) & (state.player_bullet_y + 8 > state.enemy_y)
+        hitboxes = enemy_hitboxes[state.enemy_type]
+
+        x_collision_mask = ((state.player_bullet_x < state.enemy_x + hitboxes) & (state.player_bullet_x + hitboxes > state.enemy_x))
+        y_collision_mask = ((state.player_bullet_y < state.enemy_y + 8) & (state.player_bullet_y + 1 > state.enemy_y))
 
         collision_mask = active_enemy_mask & x_collision_mask & y_collision_mask
         collision_present = jnp.any(collision_mask)
@@ -949,7 +956,7 @@ def enemy_collision(state: RiverraidState) -> RiverraidState:
 
         new_enemy_state = jnp.where(
             collision_present,
-            state.enemy_state.at[hit_index].set(0),
+            state.enemy_state.at[hit_index].set(1),
             state.enemy_state
         )
         new_score = jnp.where(
@@ -1008,7 +1015,7 @@ def handle_fuel(state: RiverraidState) -> RiverraidState:
 
     # bullet collision
     bullet_x_collision_mask = (state.player_bullet_x < state.fuel_x + 8) & (state.player_bullet_x + 8 > state.fuel_x)
-    bullet_y_collision_mask = (state.player_bullet_y < state.fuel_y + 8) & (state.player_bullet_y + 8 > state.fuel_y)
+    bullet_y_collision_mask = (state.player_bullet_y < state.fuel_y + 24) & (state.player_bullet_y > state.fuel_y)
     bullet_collision_mask = active_fuel_mask & bullet_x_collision_mask & bullet_y_collision_mask
     bullet_collision_present = jnp.any(bullet_collision_mask)
     bullet_hit_index = jnp.argmax(bullet_collision_mask)
@@ -1091,8 +1098,10 @@ def enemy_movement(state: RiverraidState) -> RiverraidState:
     new_enemy_x = state.enemy_x.copy()
     move_left_mask = (state.enemy_state == 1) & (state.enemy_direction == 2)
     move_right_mask = (state.enemy_state == 1) & (state.enemy_direction == 3)
-    new_enemy_x = jnp.where(move_left_mask, new_enemy_x - 1, new_enemy_x)
-    new_enemy_x = jnp.where(move_right_mask, new_enemy_x + 1, new_enemy_x)
+
+
+    new_enemy_x = jnp.where(move_left_mask, new_enemy_x - 0.5, new_enemy_x)
+    new_enemy_x = jnp.where(move_right_mask, new_enemy_x + 0.5, new_enemy_x)
 
     enemy_y = state.enemy_y.astype(jnp.int32)
 
