@@ -124,8 +124,3 @@ jobs:
           echo "test_reports=$test_reports" >> $GITHUB_OUTPUT
           echo "test_outcomes=$test_outcomes" >> $GITHUB_OUTPUT
         shell: bash
-
-      - run: |
-          echo "Test reports: ${{ steps.set_outputs.outputs.test_reports }}"
-          echo "Test outcomes: ${{ steps.set_outputs.outputs.test_outcomes }}"
-        shell: bash
