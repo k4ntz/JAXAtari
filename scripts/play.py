@@ -36,10 +36,6 @@ def main():
         required=False,
         help="Name of the mod class.",
     )
-    parser.add_argument("--difficulty", choices=["A","B"], default="B")
-    parser.add_argument("--timer-seconds", type=int, default=20)
-    parser.add_argument("--steps-per-second", type=int, default=60)
-
 
     mode_group = parser.add_mutually_exclusive_group(required=False)
     mode_group.add_argument(
@@ -91,14 +87,6 @@ def main():
         if renderer is None:
             execute_without_rendering = True
             print("No renderer found, running without rendering.")
-            
-        if type(env).__name__ == "JaxHangman":
-            GameClass = type(env)
-            env = GameClass(
-                difficulty_mode=args.difficulty,
-                timer_seconds=args.timer_seconds,
-                steps_per_second=args.steps_per_second,
-            )
 
     except (FileNotFoundError, ImportError) as e:
         print(f"Error loading game: {e}")
@@ -108,7 +96,7 @@ def main():
     key = jrandom.PRNGKey(args.seed)
     jitted_reset = jax.jit(env.reset)
     jitted_step = jax.jit(env.step)
-    jitted_render = jax.jit(env.render)
+    jitted_render = jax.jit(renderer.render)
 
     # initialize the environment
     obs, state = jitted_reset(key)
@@ -171,11 +159,6 @@ def main():
         pygame.quit()
         sys.exit(0)
 
-    # display the first frame (reset frame) -> purely for aesthetics
-    image = jitted_render(state)
-    update_pygame(window, image, UPSCALE_FACTOR, 160, 210)
-    clock.tick(frame_rate)
-
     # main game loop
     while running:
         # check for external actions
@@ -193,9 +176,6 @@ def main():
                 elif event.key == pygame.K_n:
                     next_frame_asked = True
         if pause or (frame_by_frame and not next_frame_asked):
-            image = jitted_render(state)
-            update_pygame(window, image, UPSCALE_FACTOR, 160, 210)
-            clock.tick(frame_rate)
             continue
         if args.random:
             # sample an action from the action space array
@@ -218,9 +198,9 @@ def main():
                 next_frame_asked = False
 
         if done:
-            # print(f"Done. Total return {total_return}")
+            print(f"Done. Total return {total_return}")
             total_return = 0
-            # obs, state = jitted_reset(key)
+            obs, state = jitted_reset(key)
 
         # Render the environment
         if not execute_without_rendering:

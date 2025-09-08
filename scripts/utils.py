@@ -10,8 +10,7 @@ from typing import Tuple
 
 from jaxatari.environment import JaxEnvironment, JAXAtariAction as Action
 from jaxatari.wrappers import JaxatariWrapper
-# from jaxatari.renderers import JAXGameRenderer
-from jaxatari.renderers import AtraJaxisRenderer as BaseRenderer
+from jaxatari.renderers import JAXGameRenderer
 
 
 def update_pygame(pygame_screen, raster, SCALING_FACTOR=3, WIDTH=400, HEIGHT=300):
@@ -20,6 +19,7 @@ def update_pygame(pygame_screen, raster, SCALING_FACTOR=3, WIDTH=400, HEIGHT=300
     Args:
         pygame_screen: The Pygame screen surface.
         raster: JAX array of shape (Height, Width, 3/4) containing the image data.
+        raster: JAX array of shape (Height, Width, 3/4) containing the image data.
         SCALING_FACTOR: Factor to scale the raster for display.
         WIDTH: Expected width of the input raster (used for scaling calculation).
         HEIGHT: Expected height of the input raster (used for scaling calculation).
@@ -27,14 +27,20 @@ def update_pygame(pygame_screen, raster, SCALING_FACTOR=3, WIDTH=400, HEIGHT=300
     pygame_screen.fill((0, 0, 0))
 
     # Convert JAX array (H, W, C) to NumPy (H, W, C)
+    # Convert JAX array (H, W, C) to NumPy (H, W, C)
     raster_np = np.array(raster)
     raster_np = raster_np.astype(np.uint8)
 
     # Pygame surface needs (W, H). make_surface expects (W, H, C) correctly.
     # Transpose from (H, W, C) to (W, H, C) for pygame
     frame_surface = pygame.surfarray.make_surface(raster_np.transpose(1, 0, 2))
+    # Transpose from (H, W, C) to (W, H, C) for pygame
+    frame_surface = pygame.surfarray.make_surface(raster_np.transpose(1, 0, 2))
 
     # Pygame scale expects target (width, height)
+    # Note: raster_np is (H, W, C), so shape[1] is width and shape[0] is height
+    target_width_px = int(raster_np.shape[1] * SCALING_FACTOR)
+    target_height_px = int(raster_np.shape[0] * SCALING_FACTOR)
     # Note: raster_np is (H, W, C), so shape[1] is width and shape[0] is height
     target_width_px = int(raster_np.shape[1] * SCALING_FACTOR)
     target_height_px = int(raster_np.shape[0] * SCALING_FACTOR)
@@ -125,7 +131,7 @@ def get_human_action() -> jax.numpy.ndarray: # Or chex.Array if you use chex
 
 
 
-def load_game_environment(game: str) -> Tuple[JaxEnvironment, BaseRenderer]:
+def load_game_environment(game: str) -> Tuple[JaxEnvironment, JAXGameRenderer]:
     """
     Dynamically loads a game environment and the renderer from a .py file.
     It looks for a class that inherits from JaxEnvironment.
@@ -173,7 +179,7 @@ def load_game_environment(game: str) -> Tuple[JaxEnvironment, BaseRenderer]:
             print(f"Found game environment: {name}")
             game = obj()  # Instantiate and return
 
-        if inspect.isclass(obj) and issubclass(obj, BaseRenderer) and obj is not BaseRenderer:
+        if inspect.isclass(obj) and issubclass(obj, JAXGameRenderer) and obj is not JAXGameRenderer:
             print(f"Found renderer: {name}")
             renderer = obj()
 
@@ -185,7 +191,7 @@ def load_game_environment(game: str) -> Tuple[JaxEnvironment, BaseRenderer]:
 def load_game_mod(game: str, mod: str) -> JaxEnvironment:
     """
     Dynamically loads a game mod from a .py file.
-    It looks for a class that inherits from JaxatariWrapper.
+    It looks for a class that inherits from JaxEnvironment.
     """
     # Get the project root directory (parent of scripts directory)
     script_dir = os.path.dirname(os.path.abspath(__file__))
@@ -226,5 +232,4 @@ def load_game_mod(game: str, mod: str) -> JaxEnvironment:
             return obj  # return the mod class
 
     raise ImportError(f"No class found in {mod_file_path} that inherits from JaxatariWrapper")
-
 
