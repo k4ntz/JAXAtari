@@ -12,6 +12,7 @@ from jaxatari.environment import JaxEnvironment, JAXAtariAction as Action
 # NA HÖÖÖR MAAAAL
 # Kong # imaging whatever i cant believe it
 # choinges
+# jetztz könnte es oiserst wild werden :D
 class PongConstants(NamedTuple):
     MAX_SPEED: int = 12
     BALL_SPEED: chex.Array = jnp.array([-1, 1])
