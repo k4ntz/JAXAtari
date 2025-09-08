@@ -9,7 +9,7 @@ import jaxatari.spaces as spaces
 from jaxatari.renderers import JAXGameRenderer
 from jaxatari.rendering import jax_rendering_utils as jr
 from jaxatari.environment import JaxEnvironment, JAXAtariAction as Action
-
+# NA HÖÖÖR MAAAAL
 # Kong # imaging whatever i cant believe it
 # choinges
 class PongConstants(NamedTuple):
