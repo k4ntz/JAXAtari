@@ -93,6 +93,9 @@ jobs:
       pr_head_sha: ${{ needs.prepare-matrix.outputs.pr_head_sha }}
 
   report:
+    permissions:
+      contents: read
+      pull-requests: write
     needs: [branch, changed-files, trigger]
     if: always()
     runs-on: ubuntu-latest
@@ -124,3 +127,47 @@ jobs:
             done
           fi
         shell: bash
+
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.base.ref }}
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: "3.10"
+
+      - name: Install Jinja2
+        run: pip install jinja2
+
+      - name: Generate markdown report
+        env:
+          TEST_OUTCOMES: ${{ needs.trigger.outputs.test_outcomes }}
+          TEST_REPORTS: ${{ needs.trigger.outputs.test_reports }}
+          GITHUB_ACTION_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          BRANCH_RESULT: ${{ needs.branch.outputs.result }}
+          BRANCH_ACTUAL: ${{ github.event.pull_request.base.ref }}
+          BRANCH_TARGET: "dev"
+          FILES_RESULT: "${{ needs.changed-files.outputs.result }}"
+          FORBIDDEN_CHANGES_B64: "${{ needs.changed-files.outputs.forbidden_changes }}"
+        run: |
+          python scripts/generate_test_report.py
+          cat ci-report.md >> ${GITHUB_STEP_SUMMARY}
+        shell: bash
+
+      # - name: Find existing comment (für Collapsible Previous Results)
+      #   uses: peter-evans/find-comment@v3
+      #   id: find-comment
+      #   with:
+      #     issue-number: ${{ github.event.pull_request.number }}
+      #     comment-author: 'github-actions[bot]'
+      #     body-includes: '<!-- CI-TEST-RESULTS -->'
+          
+      # - name: Update or create comment with previous results collapsed
+      #   uses: peter-evans/create-or-update-comment@v4
+      #   with:
+      #     comment-id: ${{ steps.find-comment.outputs.comment-id }}
+      #     issue-number: ${{ github.event.pull_request.number }}
+      #     body-path: ./ci-report.md
+      #     edit-mode: replace

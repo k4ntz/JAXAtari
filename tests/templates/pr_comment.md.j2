@@ -1,0 +1,48 @@
+# {{ result.title }}
+
+This comment was generated automatically by a GitHub Action. It summarizes the test results for this pull request. This is the link to the GitHub Action run:
+
+> {{ result.action_url }}
+
+## Base Branch {% if result.branch.success %}✅{% else %}❌{% endif %}
+
+The PR's base branch is `{{ result.branch.actual }}`.
+The expected base branch is `{{ result.branch.target }}`.
+
+## Changed Files {% if result.files.success %}✅{% else %}❌{% endif %}
+
+{% if result.files.success %}
+All changed files are allowed. Good work! 🎉
+{% else %}
+The PR changes files that should not be changed:
+
+{% for file in result.files.not_allowed %}
+- `{{ file }}`
+{% endfor %}
+
+Please ensure that only allowed files are modified.
+{% endif %}
+
+## Framework Tests {% if result.tests.success %}✅{% else %}❌{% endif %}
+
+{% if result.tests.success %}
+All framework tests passed. Good work! 🎉
+{% else %}
+Some framework tests failed. Please check the details below:
+
+{% for game, log in result.tests.logs.items() %}
+<details>
+<summary>{{ game }} {% if result.tests.results[game] %}✅{% else %}❌{% endif %}</summary>
+
+```
+{{ log }}
+```
+
+</details>
+{% endfor %}
+
+{% endif %}
+
+---
+
+This log was created automatically at {{ result.datetime }}.
