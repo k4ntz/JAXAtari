@@ -444,8 +444,8 @@ class JaxPong(JaxEnvironment[PongState, PongObservation, PongInfo, PongConstants
         return observation, new_state, env_reward, done, info
 
 
-    def render(self, state: PongState) -> jnp.ndarray:
-        return self.renderer.render(state)
+    # def render(self, state: PongState) -> jnp.ndarray:
+    #     return self.renderer.render(state)
 
     @partial(jax.jit, static_argnums=(0,))
     def _get_observation(self, state: PongState):
