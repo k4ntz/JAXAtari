@@ -16,7 +16,6 @@ import jaxatari.spaces as spaces
 """TODOS:
 Top Priorities:
 - Fix the renderer as some components are not being shown with Play.py(Player ship, Points, lives, torpedoes, enemies left) (Mahta)
-- While running play.py script the player is unable to shoot the torpedoes with the key T
 For later:
 - Check the sentinal ship constants/Optimize the code/remove unnecessary code
 - Documentation
@@ -255,7 +254,8 @@ class Ship:
     # Represents the player-controlled ship: position, beam lane, and active status.
     x: float
     y: float
-    beam_position: int  # Index of the current beam (0â€"4)
+    beam_position: int  # Index of the current beam (0–4)
+    target_beam: int  # Target beam the ship is moving toward
     active: bool = True  # Whether the ship is currently active (alive)
 
 
@@ -455,6 +455,7 @@ class BeamRiderEnv(JaxEnvironment[BeamRiderState, BeamRiderObservation, BeamRide
             x=self.beam_positions[initial_beam] - self.constants.SHIP_WIDTH // 2,
             y=self.constants.SCREEN_HEIGHT - self.constants.SHIP_BOTTOM_OFFSET,
             beam_position=initial_beam,
+            target_beam=initial_beam,  # Start with target same as current
             active=True
         )
 
@@ -545,34 +546,56 @@ class BeamRiderEnv(JaxEnvironment[BeamRiderState, BeamRiderObservation, BeamRide
 
     @partial(jax.jit, static_argnums=(0,))
     def _update_ship(self, state: BeamRiderState, action: int) -> BeamRiderState:
-        """Update ship position using discrete beam movement with cooldown"""
+        """Update ship position with smooth beam-to-beam movement - responsive to short taps"""
         ship = state.ship
         current_beam = ship.beam_position
-
-        # Add movement cooldown to prevent rapid beam jumping
-        movement_cooldown = 8  # Frames to wait between movements (adjust if needed)
-        frames_since_last_move = state.frame_count % movement_cooldown
-        can_move_this_frame = frames_since_last_move == 0
+        target_beam = ship.target_beam
 
         # Use standard JAXAtari action constants: LEFT=4, RIGHT=3
-        should_move_left = (action == 4) & (current_beam > 0) & can_move_this_frame
-        should_move_right = (action == 3) & (current_beam < self.constants.NUM_BEAMS - 1) & can_move_this_frame
+        should_move_left = (action == 4) & (current_beam > 0)
+        should_move_right = (action == 3) & (current_beam < self.constants.NUM_BEAMS - 1)
 
-        # Discrete beam movement with cooldown
-        new_beam_position = jnp.where(
-            should_move_left,  # Move left
+        # Allow changing target even while moving (removed can_accept_input condition)
+        new_target_beam = jnp.where(
+            should_move_left,
             current_beam - 1,
             jnp.where(
-                should_move_right,  # Move right
+                should_move_right,
                 current_beam + 1,
-                current_beam  # No movement
+                target_beam  # Keep current target if no input
             )
         )
 
-        # Set ship x position to exactly match the beam center
-        new_x = self.beam_positions[new_beam_position] - self.constants.SHIP_WIDTH // 2
+        # Calculate target X position
+        target_x = self.beam_positions[new_target_beam] - self.constants.SHIP_WIDTH // 2
+        current_x = ship.x
 
-        return state.replace(ship=ship.replace(x=new_x, beam_position=new_beam_position))
+        # Smooth movement parameters
+        movement_speed = 4.5  # Pixels per frame - adjust for desired speed
+
+        # Calculate movement toward target
+        x_diff = target_x - current_x
+        movement_needed = jnp.abs(x_diff) > 1.0  # Stop when very close
+
+        # Calculate new X position
+        new_x = jnp.where(
+            movement_needed,
+            current_x + jnp.sign(x_diff) * jnp.minimum(movement_speed, jnp.abs(x_diff)),
+            target_x  # Snap to exact position when close enough
+        )
+
+        # Update beam position when ship reaches target
+        new_beam_position = jnp.where(
+            movement_needed,
+            current_beam,  # Keep current beam while moving
+            new_target_beam  # Update to target beam when reached
+        )
+
+        return state.replace(ship=ship.replace(
+            x=new_x,
+            beam_position=new_beam_position,
+            target_beam=new_target_beam
+        ))
 
     @partial(jax.jit, static_argnums=(0,))
     def _select_white_saucer_movement_pattern(self, rng_key: chex.PRNGKey) -> int:
@@ -2895,8 +2918,11 @@ class BeamRiderEnv(JaxEnvironment[BeamRiderState, BeamRiderObservation, BeamRide
             state.ship.beam_position
         )
 
-        ship = state.ship.replace(x=new_ship_x, beam_position=new_ship_beam)
-
+        ship = state.ship.replace(
+            x=new_ship_x,
+            beam_position=new_ship_beam,
+            target_beam=new_ship_beam  # Add this line
+        )
         # Update projectile and enemy states
         projectiles = projectiles.at[:, 2].set(
             projectiles[:, 2] * (~laser_proj_hits))  # Lasers destroyed by ANY collision
@@ -3256,7 +3282,8 @@ class BeamRiderEnv(JaxEnvironment[BeamRiderState, BeamRiderObservation, BeamRide
         # Create updated ship struct
         ship = state.ship.replace(
             x=new_ship_x,
-            beam_position=new_ship_beam
+            beam_position=new_ship_beam,
+            target_beam=new_ship_beam  # Add this line
         )
 
         return state.replace(
