@@ -183,6 +183,10 @@ class Dict(Space):
 
     def contains(self, x: dict) -> jax.Array:
         """Check whether the given Pytree is contained in the space."""
+        # Handle named tuples by converting to dict
+        if hasattr(x, '_asdict'):
+            x = x._asdict()
+        
         if not isinstance(x, dict) or self.spaces.keys() != x.keys():
             return jnp.asarray(False)
 
@@ -220,6 +224,11 @@ class Tuple(Space):
         """
         Check whether the given Pytree is contained in the space.
         """
+        # Handle named tuples by converting to tuple
+        if hasattr(x, '_asdict'):
+            # Convert named tuple to regular tuple
+            x = tuple(x._asdict().values())
+        
         # 1. Initial validation: check if x is a tuple of the correct length.
         if not isinstance(x, (tuple, list)) or len(x) != len(self.spaces):
             return jnp.asarray(False)
@@ -245,12 +254,36 @@ register_pytree_node(
 
 
 def stack_space(space: Space, stack_size: int) -> Space:
-    """Recursively wraps a space to add a stacking dimension."""
-    
-    def stack_box(box: Box) -> Box:
-        new_shape = (stack_size,) + box.shape
-        return Box(low=box.low, high=box.high, shape=new_shape, dtype=box.dtype)
+    """
+    Recursively wraps a space or a Pytree of spaces to add a stacking dimension
+    to each leaf space. Handles Box and Discrete spaces as leaves.
+    """
 
-    # jax.tree.map can now handle Box, Dict, and Tuple correctly
-    # because they are all registered Pytrees (Box is a leaf by default).
-    return jax.tree.map(stack_box, space, is_leaf=lambda n: isinstance(n, Box))
+    def _stack_leaf(leaf_space: Space) -> Box:
+        """Applies stacking logic to a single leaf space."""
+        if isinstance(leaf_space, Box):
+            # Prepend the stack size to the shape of the Box.
+            new_shape = (stack_size,) + leaf_space.shape
+            return Box(
+                low=leaf_space.low,
+                high=leaf_space.high,
+                shape=new_shape,
+                dtype=leaf_space.dtype,
+            )
+        if isinstance(leaf_space, Discrete):
+            # A stack of Discrete values becomes a Box of integers.
+            return Box(
+                low=0,
+                high=leaf_space.n - 1,
+                shape=(stack_size,),
+                dtype=leaf_space.dtype,
+            )
+        # This part should not be reached if `is_leaf` is correctly defined.
+        raise TypeError(f"Unsupported leaf space type for stacking: {type(leaf_space)}")
+
+    # Use jax.tree.map to apply the stacking function to every leaf in the space Pytree.
+    # The `is_leaf` predicate tells tree_map to stop recursing when it hits a Box or Discrete space,
+    # treating them as the leaves to which `_stack_leaf` should be applied.
+    return jax.tree.map(
+        _stack_leaf, space, is_leaf=lambda n: isinstance(n, (Box, Discrete))
+    )

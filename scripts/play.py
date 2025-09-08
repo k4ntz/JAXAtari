@@ -108,7 +108,7 @@ def main():
     key = jrandom.PRNGKey(args.seed)
     jitted_reset = jax.jit(env.reset)
     jitted_step = jax.jit(env.step)
-    jitted_render = jax.jit(renderer.render)
+    jitted_render = jax.jit(env.render)
 
     # initialize the environment
     obs, state = jitted_reset(key)
@@ -171,6 +171,11 @@ def main():
         pygame.quit()
         sys.exit(0)
 
+    # display the first frame (reset frame) -> purely for aesthetics
+    image = jitted_render(state)
+    update_pygame(window, image, UPSCALE_FACTOR, 160, 210)
+    clock.tick(frame_rate)
+
     # main game loop
     while running:
         # check for external actions
@@ -188,6 +193,9 @@ def main():
                 elif event.key == pygame.K_n:
                     next_frame_asked = True
         if pause or (frame_by_frame and not next_frame_asked):
+            image = jitted_render(state)
+            update_pygame(window, image, UPSCALE_FACTOR, 160, 210)
+            clock.tick(frame_rate)
             continue
         if args.random:
             # sample an action from the action space array

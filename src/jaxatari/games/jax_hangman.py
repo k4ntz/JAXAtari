@@ -9,7 +9,7 @@ import chex
 import jaxatari.spaces as spaces
 
 from jaxatari.environment import JaxEnvironment, JAXAtariAction as Action
-from jaxatari.renderers import AtraJaxisRenderer
+from jaxatari.renderers import JAXGameRenderer
 
 
 #constants
@@ -356,11 +356,11 @@ def _draw_number_right(r, right_x, y, val, scale, color, max_digits=4):
     return lax.fori_loop(0, max_digits, body, r)
 
 # render
-class HangmanRenderer(AtraJaxisRenderer):
+class HangmanRenderer(JAXGameRenderer):
     def __init__(self):
         pass
 
-    @partial(jax.jit, static_argnums=(0,))
+    # @partial(jax.jit, static_argnums=(0,))
     def render(self, state) -> jnp.ndarray:
         
         raster = jnp.broadcast_to(BG_COLOR, (HEIGHT, WIDTH, 3))
@@ -502,16 +502,21 @@ class HangmanRenderer(AtraJaxisRenderer):
         raster = _draw_if(m >= 11, lambda rr: _draw_rect(rr, LEG_R_X, LEG_Y + LEG1_H, LEG_W, LEG2_H, BLUE_COLOR), raster)
 
 
-        raster = _draw_number_left(raster, SCORE_X, SCORE_Y, state.score, SCORE_SCALE, GOLD_COLOR)
+        raster = _draw_number_left(
+            raster, SCORE_X, SCORE_Y, jnp.asarray(state.score, jnp.int32), SCORE_SCALE, GOLD_COLOR
+        )
 
-        raster = _draw_number_right(raster, ROUND_RIGHT_X, ROUND_Y, state.cpu_score, SCORE_SCALE, GOLD_COLOR)
+        raster = _draw_number_right(
+            raster, ROUND_RIGHT_X, ROUND_Y, jnp.asarray(state.cpu_score, jnp.int32), SCORE_SCALE, GOLD_COLOR
+        )
+
         
         return raster
     
     
 #environment
 
-class JaxHangman(JaxEnvironment[HangmanState, HangmanObservation, HangmanInfo]):
+class JaxHangman(JaxEnvironment[HangmanState, HangmanObservation, HangmanInfo, Action]):
     def __init__(self, reward_funcs: Optional[list] = None, *,
                  max_misses: int = MAX_MISSES,
                  step_penalty: float = STEP_PENALTY,
@@ -791,9 +796,10 @@ class JaxHangman(JaxEnvironment[HangmanState, HangmanObservation, HangmanInfo]):
 
     @partial(jax.jit, static_argnums=(0,))
     def _get_done(self, state: HangmanState) -> bool:
-        return state.done
+        return jnp.array(False)
 
-    @partial(jax.jit, static_argnums=(0,))
+
+    # @partial(jax.jit, static_argnums=(0,))
     def render(self, state: HangmanState) -> jnp.ndarray:
         return self.renderer.render(state)
 

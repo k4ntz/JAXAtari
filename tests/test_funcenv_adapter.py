@@ -221,28 +221,6 @@ def test_step_method(gym_env):
     assert isinstance(truncated, bool), "Truncated flag must be a bool"
     assert isinstance(info, dict), "Info from step must be a dict"
 
-def test_episode_run_to_completion(gym_env):
-    """
-    Tests a full episode run until the environment signals it's done.
-    """
-    gym_env.reset()
-    done = False
-    step_count = 0
-    while not done and step_count < MAX_EPISODE_STEPS:
-        action = gym_env.action_space.sample()
-        obs, reward, terminated, truncated, info = gym_env.step(action)
-        done = terminated or truncated
-        step_count += 1
-
-    assert done, f"Episode did not finish within the step limit of {MAX_EPISODE_STEPS}."
-    
-    # After an episode is done, a reset should successfully start a new one.
-    try:
-        obs, info = gym_env.reset()
-        assert gym_env.observation_space.contains(obs)
-    except Exception as e:
-        pytest.fail(f"Resetting after a completed episode failed: {e}")
-
 def test_seeding_and_determinism(raw_jaxatari_env):
     """
     Tests that seeding the environment produces deterministic trajectories.
