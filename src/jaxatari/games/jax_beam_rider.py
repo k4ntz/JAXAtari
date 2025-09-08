@@ -8,7 +8,7 @@ import chex
 from flax import struct
 import sys
 from functools import partial
-
+from jax import lax
 from jaxatari.environment import JaxEnvironment
 from jaxatari.renderers import JAXGameRenderer
 import jaxatari.spaces as spaces
@@ -1257,7 +1257,7 @@ class BeamRiderEnv(JaxEnvironment[BeamRiderState, BeamRiderObservation, BeamRide
         """Handle both laser and torpedo firing"""
 
         # Torpedo firing - T key maps to action 10 (UPFIRE)
-        should_fire_torpedo = (action == 10)
+        should_fire_torpedo = (action == 2)
         state = self._fire_torpedo(state, should_fire_torpedo)
 
         # Laser firing - SPACE key maps to action 1 (FIRE)
@@ -3850,8 +3850,8 @@ class BeamRiderRenderer(JAXGameRenderer):
                 action = 0  # default no-op
 
                 # TORPEDO ACTIONS (actions 6, 7, 8) - CHECK FIRST!
-                if keys[pygame.K_t]:  # T for torpedo only
-                    action = 10
+                if keys[pygame.K_UP]:  # T for torpedo only
+                    action = 2
                 # LASER ACTIONS (actions 3, 4, 5)
                 elif keys[pygame.K_SPACE]:
                     action = 1  # fire laser only
