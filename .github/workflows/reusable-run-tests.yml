@@ -15,10 +15,10 @@ on:
     outputs:
       test_reports:
         description: "JSON object of test reports"
-        value: ${{ jobs.results.outputs.test_report_b64 }}
+        value: ${{ jobs.collect-results.outputs.test_report_b64 }}
       test_outcomes:
         description: "JSON object of test outcomes"
-        value: ${{ jobs.results.outputs.test_outcome }}
+        value: ${{ jobs.collect-results.outputs.test_outcome }}
 
 jobs:
   run-tests:
