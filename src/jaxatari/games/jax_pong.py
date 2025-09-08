@@ -10,7 +10,7 @@ from jaxatari.renderers import JAXGameRenderer
 from jaxatari.rendering import jax_rendering_utils as jr
 from jaxatari.environment import JaxEnvironment, JAXAtariAction as Action
 # NA HÖÖÖR MAAAAL
-# Kong # imaging whatever i cant believe it
+# Kong # imaging whatever  finali cant believe it
 # SOOOOOOO
 # jetztz könnte es oiserst wild werden :D
 # if thiu
