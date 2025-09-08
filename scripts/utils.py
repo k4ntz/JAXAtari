@@ -10,8 +10,7 @@ from typing import Tuple
 
 from jaxatari.environment import JaxEnvironment, JAXAtariAction as Action
 from jaxatari.wrappers import JaxatariWrapper
-# from jaxatari.renderers import JAXGameRenderer
-from jaxatari.renderers import AtraJaxisRenderer as BaseRenderer
+from jaxatari.renderers import JAXGameRenderer
 
 
 def update_pygame(pygame_screen, raster, SCALING_FACTOR=3, WIDTH=400, HEIGHT=300):
@@ -125,7 +124,7 @@ def get_human_action() -> jax.numpy.ndarray: # Or chex.Array if you use chex
 
 
 
-def load_game_environment(game: str) -> Tuple[JaxEnvironment, BaseRenderer]:
+def load_game_environment(game: str) -> Tuple[JaxEnvironment, JAXGameRenderer]:
     """
     Dynamically loads a game environment and the renderer from a .py file.
     It looks for a class that inherits from JaxEnvironment.
@@ -173,7 +172,7 @@ def load_game_environment(game: str) -> Tuple[JaxEnvironment, BaseRenderer]:
             print(f"Found game environment: {name}")
             game = obj()  # Instantiate and return
 
-        if inspect.isclass(obj) and issubclass(obj, BaseRenderer) and obj is not BaseRenderer:
+        if inspect.isclass(obj) and issubclass(obj, JAXGameRenderer) and obj is not JAXGameRenderer:
             print(f"Found renderer: {name}")
             renderer = obj()
 
