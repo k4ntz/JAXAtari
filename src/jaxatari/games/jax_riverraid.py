@@ -1457,11 +1457,6 @@ class JaxRiverraid(JaxEnvironment):
                                    )
             return new_state
 
-        jax.debug.print("new step \n")
-        new_state = state._replace(turn_step=state.turn_step + 1,
-                                   turn_step_linear=state.turn_step_linear + 1)
-
-
         def delay_respawn(state: RiverraidState) -> RiverraidState:
             new_death_cooldown = jnp.maximum(state.death_cooldown - 1, 0)
             return jax.lax.cond(
@@ -1471,11 +1466,28 @@ class JaxRiverraid(JaxEnvironment):
                 operand=state
             )
 
-        new_state = jax.lax.cond(state.player_state == 0,
-                                 lambda state: player_alive(state),
-                                 lambda state: delay_respawn(state),
-                                 operand=new_state)
+        jax.debug.print("new step \n")
+        new_state = state._replace(turn_step=state.turn_step + 1,
+                                   turn_step_linear=state.turn_step_linear + 1)
 
+        new_player_state = jax.lax.cond(state.player_lives <= 0,
+                                        lambda _: jnp.array(2),
+                                        lambda _: new_state.player_state,
+                                        operand=None
+                                        )
+        new_state = new_state._replace(player_state=new_player_state)  # game over
+
+        new_state = jax.lax.cond(
+            new_state.player_state == 0,
+            lambda new_state: player_alive(new_state),
+            lambda new_state: jax.lax.cond(
+                new_state.player_state == 1,
+                lambda new_state: delay_respawn(new_state),
+                lambda new_state: new_state,
+                operand=new_state
+            ),
+            operand = new_state
+        )
 
         observation = self._get_observation(new_state)
         reward = self._get_env_reward(state, new_state)
@@ -1972,5 +1984,7 @@ if __name__ == "__main__":
 
         pygame.display.flip()
         clock.tick(60)
+        if state.player_lives < 0:
+            running = False
 
     pygame.quit()
