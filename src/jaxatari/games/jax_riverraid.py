@@ -27,6 +27,8 @@ MAX_FUEL = 30
 UI_HEIGHT = 35
 SEGMENT_LENGTH = 400
 DAM_OFFSET = 25
+PLAYER_WIDTH = 7
+PLAYER_HEIGHT = 14
 
 
 class RiverraidState(NamedTuple):
@@ -75,6 +77,7 @@ class RiverraidState(NamedTuple):
     fuel_state: chex.Array  # 0 empty, 1 present
     spawn_cooldown: chex.Array
     enemy_animation_cooldowns: chex.Array
+    fuel_animation_cooldowns: chex.Array
 
 
 
@@ -625,7 +628,7 @@ def handle_dam(state: RiverraidState) -> RiverraidState:
     new_bullet_x = jnp.where(bullet_above_dam, -1.0, state.player_bullet_x)
     new_bullet_y = jnp.where(bullet_above_dam, -1.0, state.player_bullet_y)
 
-    player_above_dam = jnp.logical_and(dam_exists, state.player_y < dam_top_y)
+    player_above_dam = jnp.logical_and(dam_exists, state.player_y < dam_top_y + 25)
     new_player_state = jax.lax.cond(
         player_above_dam,
         lambda state: jnp.array(1),
@@ -682,24 +685,52 @@ def player_movement(state: RiverraidState, action: Action) -> RiverraidState:
 
     new_x = state.player_x + new_velocity
 
-    # check collision with river banks -> invoke death
-    player_state = jax.lax.cond(jnp.logical_or(new_x <= state.river_left[SCREEN_HEIGHT - 30] + 1, new_x >= state.river_right[SCREEN_HEIGHT - 30] - 8),
-                 lambda state: jnp.array(1),
-                 lambda state: state.player_state,
-                 operand=state)
+    # Define hitboxes
+    hitbox_left = new_x
+    hitbox_right = new_x + PLAYER_WIDTH
+    hitbox_top_y = jnp.round(state.player_y).astype(jnp.int32)
+    hitbox_bottom_y = jnp.round(state.player_y + PLAYER_HEIGHT).astype(jnp.int32)
 
-    # check collision with island -> invoke death
+    # Collision check with outer river banks
+    bank_left_top = state.river_left[hitbox_top_y]
+    bank_right_top = state.river_right[hitbox_top_y]
+    bank_left_bottom = state.river_left[hitbox_bottom_y]
+    bank_right_bottom = state.river_right[hitbox_bottom_y]
+
+    collision_top_banks = jnp.logical_or(hitbox_left <= bank_left_top, hitbox_right >= bank_right_top)
+    collision_bottom_banks = jnp.logical_or(hitbox_left <= bank_left_bottom, hitbox_right >= bank_right_bottom)
+    collision_with_banks = jnp.logical_or(collision_top_banks, collision_bottom_banks)
+
     player_state = jax.lax.cond(
-        jnp.logical_and(
-            state.river_inner_left[SCREEN_HEIGHT - 30] >= 0,
-            jnp.logical_and(
-                new_x >= state.river_inner_left[SCREEN_HEIGHT - 30] - 8,
-                new_x <= state.river_inner_right[SCREEN_HEIGHT - 30] + 1
-            )
-        ),
-        lambda state: jnp.array(1),
-        lambda state: player_state,
-        operand=state
+        collision_with_banks,
+        lambda: jnp.array(1),  # Player dies
+        lambda: state.player_state
+    )
+
+    # Collision check with island
+    island_left_top = state.river_inner_left[hitbox_top_y]
+    island_right_top = state.river_inner_right[hitbox_top_y]
+    island_present_top = island_left_top >= 0
+
+    island_left_bottom = state.river_inner_left[hitbox_bottom_y]
+    island_right_bottom = state.river_inner_right[hitbox_bottom_y]
+    island_present_bottom = island_left_bottom >= 0
+
+    collision_with_island_top = jnp.logical_and(
+        island_present_top,
+        jnp.logical_and(hitbox_right >= island_left_top, hitbox_left <= island_right_top)
+    )
+
+    collision_with_island_bottom = jnp.logical_and(
+        island_present_bottom,
+        jnp.logical_and(hitbox_right >= island_left_bottom, hitbox_left <= island_right_bottom)
+    )
+    collision_with_island = jnp.logical_or(collision_with_island_top, collision_with_island_bottom)
+
+    player_state = jax.lax.cond(
+        collision_with_island,
+        lambda: jnp.array(1),  # Player dies
+        lambda: player_state
     )
 
 
@@ -1004,22 +1035,21 @@ def enemy_collision(state: RiverraidState) -> RiverraidState:
     return new_state._replace(player_state=new_player_state)
 
 
-
+@jax.jit
 def handle_animations(state: RiverraidState) -> RiverraidState:
     def body_fun(i, state):
+        # Existing enemy animation handling logic
         current_enemy_state = state.enemy_state[i]
-        current_cooldown = state.enemy_animation_cooldowns[i]
+        current_enemy_cooldown = state.enemy_animation_cooldowns[i]
 
-        def update_state_and_cooldown(state):
+        def update_enemy_state_and_cooldown(state):
             new_cooldown = jax.lax.cond(
-                current_cooldown > 0,
-                lambda: current_cooldown - 1,
+                current_enemy_cooldown > 0,
+                lambda: current_enemy_cooldown - 1,
                 lambda: 0
             )
-
-            # Determine the next state based on the current state and cooldown
             new_enemy_state = jax.lax.cond(
-                current_cooldown <= 0,
+                current_enemy_cooldown <= 0,
                 lambda: jax.lax.switch(
                     current_enemy_state,
                     [
@@ -1033,14 +1063,11 @@ def handle_animations(state: RiverraidState) -> RiverraidState:
                 ),
                 lambda: current_enemy_state
             )
-
-
             new_cooldown = jax.lax.cond(
                 new_enemy_state != current_enemy_state,
                 lambda: 10,
                 lambda: new_cooldown
             )
-
             state = state._replace(
                 enemy_state=state.enemy_state.at[i].set(new_enemy_state),
                 enemy_animation_cooldowns=state.enemy_animation_cooldowns.at[i].set(new_cooldown)
@@ -1049,7 +1076,50 @@ def handle_animations(state: RiverraidState) -> RiverraidState:
 
         state = jax.lax.cond(
             current_enemy_state > 1,
-            update_state_and_cooldown,
+            update_enemy_state_and_cooldown,
+            lambda state: state,
+            operand=state
+        )
+
+        # New logic for handling fuel animations
+        current_fuel_state = state.fuel_state[i]
+        current_fuel_cooldown = state.fuel_animation_cooldowns[i]
+
+        def update_fuel_state_and_cooldown(state):
+            new_cooldown = jax.lax.cond(
+                current_fuel_cooldown > 0,
+                lambda: current_fuel_cooldown - 1,
+                lambda: 0
+            )
+            new_fuel_state = jax.lax.cond(
+                current_fuel_cooldown <= 0,
+                lambda: jax.lax.switch(
+                    current_fuel_state,
+                    [
+                        lambda _: current_fuel_state,  # Not used
+                        lambda _: current_fuel_state,  # Not used
+                        lambda _: jnp.array(3),  # Transition from 2 to 3
+                        lambda _: jnp.array(4),  # Transition from 3 to 4
+                        lambda _: jnp.array(0),  # Transition from 4 to 0 (dead)
+                    ],
+                    operand=None
+                ),
+                lambda: current_fuel_state
+            )
+            new_cooldown = jax.lax.cond(
+                new_fuel_state != current_fuel_state,
+                lambda: 10,
+                lambda: new_cooldown
+            )
+            state = state._replace(
+                fuel_state=state.fuel_state.at[i].set(new_fuel_state),
+                fuel_animation_cooldowns=state.fuel_animation_cooldowns.at[i].set(new_cooldown)
+            )
+            return state
+
+        state = jax.lax.cond(
+            current_fuel_state > 1,
+            update_fuel_state_and_cooldown,
             lambda state: state,
             operand=state
         )
@@ -1080,7 +1150,7 @@ def handle_fuel(state: RiverraidState) -> RiverraidState:
 
     new_fuel_state = jnp.where(
         bullet_collision_present,
-        state.fuel_state.at[bullet_hit_index].set(0),
+        state.fuel_state.at[bullet_hit_index].set(2),
         state.fuel_state
     )
     new_score = jnp.where(
@@ -1294,7 +1364,8 @@ class JaxRiverraid(JaxEnvironment):
                                housetree_side=jnp.full((SCREEN_HEIGHT,), -1, dtype=jnp.float32),
                                housetree_direction=jnp.full((SCREEN_HEIGHT,), 0, dtype=jnp.float32),
                                housetree_cooldown=jnp.array(20),
-                               enemy_animation_cooldowns=jnp.full(MAX_ENEMIES, 3)
+                               enemy_animation_cooldowns=jnp.full(MAX_ENEMIES, 3),
+                               fuel_animation_cooldowns=jnp.full(MAX_ENEMIES, 3)
                                )
         observation = self._get_observation(state)
         return observation, state
@@ -1368,7 +1439,8 @@ class JaxRiverraid(JaxEnvironment):
                                    housetree_side=jnp.full((SCREEN_HEIGHT,), -1, dtype=jnp.float32),
                                    housetree_direction=jnp.full((SCREEN_HEIGHT,), -1, dtype=jnp.float32),
                                    housetree_cooldown=jnp.array(20),
-                                   enemy_animation_cooldowns=jnp.full(MAX_ENEMIES, 3)
+                                   enemy_animation_cooldowns=jnp.full(MAX_ENEMIES, 3),
+                                   fuel_animation_cooldowns=jnp.full(MAX_ENEMIES, 3)
                                    )
             return new_state
 
@@ -1455,16 +1527,17 @@ def load_sprites():
     player_right = normalize_frame(player_right, (14, 7, 4))
     bullet = aj.loadFrame(os.path.join(MODULE_DIR, "sprites/riverraid/bullet.npy"), transpose=False)
     enemy_boat = aj.loadFrame(os.path.join(MODULE_DIR, "sprites/riverraid/boat.npy"), transpose=False)
-    enemy_boat = normalize_frame(enemy_boat, (12, 16, 4))
+    enemy_boat = normalize_frame(enemy_boat, (24, 16, 4))
     enemy_boat = jnp.flip(enemy_boat, axis=1)
     enemy_helicopter = aj.loadFrame(os.path.join(MODULE_DIR, "sprites/riverraid/helicopter_1.npy"), transpose=False)
-    enemy_helicopter = normalize_frame(enemy_helicopter, (12, 16, 4))
+    enemy_helicopter = normalize_frame(enemy_helicopter, (24, 16, 4))
     enemy_helicopter_2 = aj.loadFrame(os.path.join(MODULE_DIR, "sprites/riverraid/helicopter_2.npy"), transpose=False)
-    enemy_helicopter_2 = normalize_frame(enemy_helicopter_2, (12, 16, 4))
+    enemy_helicopter_2 = normalize_frame(enemy_helicopter_2, (24, 16, 4))
     enemy_airplane = aj.loadFrame(os.path.join(MODULE_DIR, "sprites/riverraid/enemy_plane.npy"), transpose=False)
-    enemy_airplane = normalize_frame(enemy_airplane, (12, 16, 4))
+    enemy_airplane = normalize_frame(enemy_airplane, (24, 16, 4))
     enemy_airplane = jnp.flip(enemy_airplane, axis=1)
     fuel = aj.loadFrame(os.path.join(MODULE_DIR, "sprites/riverraid/fuel.npy"), transpose=False)
+    fuel = normalize_frame(fuel, (24, 16, 4))
     fuel_display = aj.loadFrame(os.path.join(MODULE_DIR, "sprites/riverraid/fuel_display.npy"), transpose=False)
     fuel_indicator = aj.loadFrame(os.path.join(MODULE_DIR, "sprites/riverraid/fuel_indicator.npy"), transpose=False)
     house_tree = aj.loadFrame(os.path.join(MODULE_DIR, "sprites/riverraid/house_tree.npy"), transpose=False)
@@ -1473,9 +1546,9 @@ def load_sprites():
     street = aj.loadFrame(os.path.join(MODULE_DIR, "sprites/riverraid/street.npy"), transpose=False)
     activision = aj.loadFrame(os.path.join(MODULE_DIR, "sprites/riverraid/activision.npy"), transpose=False)
     explosion_1 = aj.loadFrame(os.path.join(MODULE_DIR, "sprites/riverraid/explosion_1.npy"), transpose=False)
-    explosion_1 = normalize_frame(explosion_1, (12, 16, 4))
+    explosion_1 = normalize_frame(explosion_1, (24, 16, 4))
     explosion_2 = aj.loadFrame(os.path.join(MODULE_DIR, "sprites/riverraid/explosion_2.npy"), transpose=False)
-    explosion_2 = normalize_frame(explosion_2, (12, 16, 4))
+    explosion_2 = normalize_frame(explosion_2, (24, 16, 4))
 
     score_sprites = []
     for i in range(10):
@@ -1555,6 +1628,8 @@ class RiverraidRenderer(JAXGameRenderer):
         green_banks = jnp.array([26, 132, 26], dtype=jnp.uint8)
         blue_river = jnp.array([42, 42, 189], dtype=jnp.uint8)
         ui_color = jnp.array([128, 128, 128], dtype=jnp.uint8)
+        explosion_1 = aj.get_sprite_frame(self.EXPLOSION_1, 0)
+        explosion_2 = aj.get_sprite_frame(self.EXPLOSION_2, 0)
 
         left_banks = state.river_left[:, None]
         right_banks = state.river_right[:, None]
@@ -1641,8 +1716,7 @@ class RiverraidRenderer(JAXGameRenderer):
                 lambda _: frame_to_render,
                 operand=None
             )
-            explosion_1 = aj.get_sprite_frame(self.EXPLOSION_1, 0)
-            explosion_2 = aj.get_sprite_frame(self.EXPLOSION_2, 0)
+
             frame_to_render = jax.lax.cond(
                 state.enemy_state[i] == 1,
                 lambda _: frame_to_render,
@@ -1675,7 +1749,27 @@ class RiverraidRenderer(JAXGameRenderer):
         def render_fuel_at_idx(raster, i):
             fx = jnp.round(state.fuel_x[i]).astype(jnp.int32)
             fy = jnp.round(state.fuel_y[i]).astype(jnp.int32)
-            return aj.render_at(raster, fx, fy, aj.get_sprite_frame(self.FUEL, 0))
+            fuel_frame = aj.get_sprite_frame(self.FUEL, 0)
+
+            # Determine which frame to render based on the fuel state
+            frame_to_render = jax.lax.cond(
+                state.fuel_state[i] == 1,
+                lambda _: fuel_frame,
+                lambda _: jax.lax.cond(
+                    state.fuel_state[i] == 2,
+                    lambda _: explosion_1,
+                    lambda _: jax.lax.cond(
+                        state.fuel_state[i] == 3,
+                        lambda _: explosion_2,
+                        lambda _: explosion_1,
+                        operand=None
+                    ),
+                    operand=None
+                ),
+                operand=None
+            )
+
+            return aj.render_at(raster, fx, fy, frame_to_render)
 
         def render_alive_fuel(i, raster):
             raster = jax.lax.cond(
