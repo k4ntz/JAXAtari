@@ -108,9 +108,10 @@ HEIGHT = 210
 # Physics constants
 # TODO: check if these are correct
 GRAVITY = 0.03  # 0.12
-VELOCITY_DAMPENING_VALUE = 0.125  # 24
-VELOCITY_ACCELERATION_VALUE = 0.3
+VELOCITY_DAMPENING_VALUE = 0.12  # 24
+VELOCITY_ACCELERATION_VALUE = 0.15
 BALL_MAX_SPEED = 3
+BALL_MIN_SPEED = 0.3
 NUDGE_EFFECT_INTERVAL = 1  # Num steps in between nudge changing 
 NUDGE_EFFECT_AMOUNT = jnp.array(0.3).astype(jnp.float32)  # Amount of nudge effect applied to the ball's velocity
 TILT_COUNT_INCREASE_INTERVAL = jnp.array(4).astype(jnp.int32)  # Number of steps after which the tilt counter increases
@@ -1906,10 +1907,9 @@ def _calc_segment_hit_point(ball_movement, scene_object, action, ax, ay, bx, by)
     reflected_x = r * reflected_x
     reflected_y = r * reflected_y
 
-    # correction to avoid re-detecting the hit_point
-    # needs to be large enough to account for flipper movement
-    hit_x = hit_x + surface_normal_x * 6
-    hit_y = hit_y + surface_normal_y * 6
+    # correction to avoid immediately re-detecting the hit_point
+    hit_x = hit_x + surface_normal_x * .1
+    hit_y = hit_y + surface_normal_y * .1
     # New ball position after reflection
     new_ball_x = hit_x + reflected_x
     new_ball_y = hit_y + reflected_y
@@ -1969,7 +1969,66 @@ def _inside_slab_collision_branch(
     return _default_slab_collision_branch(ball_movement, scene_object, action)
 
 @jax.jit
-def _inside_triangle_collision_branch(
+def _skip_ball_movement_collision_branch(
+    ball_movement: BallMovement,
+    scene_object: chex.Array,
+    action: chex.Array,
+    ax: chex.Array,
+    ay: chex.Array,
+    bx: chex.Array,
+    by: chex.Array,
+    cx: chex.Array,
+    cy: chex.Array,
+):
+    # calculate closest hit point on upper edge (a -> c)
+    eps = 1e-8
+    vx, vy = cx - ax, cy - ay
+    wx, wy = ball_movement.new_ball_x - ax, ball_movement.new_ball_y - ay
+    vv = vx * vx + vy * vy + eps
+    t = (vx * wx + vy * wy) / vv
+    t_clamped = jnp.clip(t, 0.0, 1.0)
+    hx = ax + t_clamped * vx
+    hy = ay + t_clamped * vy
+    
+    cvx, cvy = cx - ax, cy - ay
+    nx, ny = -cvy, cvx
+    nlen = jnp.sqrt(nx * nx + ny * ny) + eps
+    nx, ny = nx / nlen, ny / nlen
+
+    # orient normal away from triangle
+    centroid_x, centroid_y = (ax + bx + cx) / 3.0, (ay + by + cy) / 3.0
+    inward_dot = nx * (centroid_x - hx) + ny * (centroid_y - hy)
+    nx, ny = jnp.where(inward_dot > 0.0, -nx, nx), jnp.where(inward_dot > 0.0, -ny, ny)
+
+    # Do a small correction so that the new ball movement begins outside of the triangle
+    hx, hy = hx + nx * 0.1, hy + ny * 0.1
+    
+    traj_x = ball_movement.new_ball_x - ball_movement.old_ball_x
+    traj_y = ball_movement.new_ball_y - ball_movement.old_ball_y
+
+    traj_x = jnp.where(jnp.abs(traj_x) < 1e-8, 1e-8, traj_x)
+    traj_y = jnp.where(jnp.abs(traj_y) < 1e-8, 1e-8, traj_y)
+
+    vel_dot = traj_x * nx + traj_y * ny
+    reflected_x = traj_x - 2.0 * vel_dot * nx
+    reflected_y = traj_y - 2.0 * vel_dot * ny
+
+    d_traj = jnp.sqrt(traj_x * traj_x + traj_y * traj_y) + eps
+    rlen = jnp.sqrt(reflected_x * reflected_x + reflected_y * reflected_y) + eps
+
+    reflected_x = reflected_x / rlen * d_traj
+    reflected_y = reflected_y / rlen * d_traj
+    new_ball_x, new_ball_y = hx + reflected_x, hy + reflected_y
+
+    hit_point = jnp.concatenate([
+        jnp.stack([0.0, hx, hy, new_ball_x, new_ball_y], axis=0),
+        scene_object
+    ], axis=0)
+
+    return hit_point
+
+@jax.jit
+def _rewind_ball_movement_collision_branch(
     ball_movement: BallMovement,
     scene_object: chex.Array,
     action: chex.Array,
@@ -2021,6 +2080,40 @@ def _inside_triangle_collision_branch(
     )
 
     return _default_triangle_collision_branch(ball_movement, scene_object, action, ax, ay, bx, by, cx, cy)
+
+@jax.jit
+def _inside_triangle_collision_branch(
+    ball_movement: BallMovement,
+    scene_object: chex.Array,
+    action: chex.Array,
+    ax: chex.Array,
+    ay: chex.Array,
+    bx: chex.Array,
+    by: chex.Array,
+    cx: chex.Array,
+    cy: chex.Array,
+    flipper_up: chex.Array,
+    flipper_down: chex.Array,
+):  
+    trajectory_x = ball_movement.new_ball_x - ball_movement.old_ball_x
+    trajectory_y = ball_movement.new_ball_y - ball_movement.old_ball_y
+    ball_direction = _get_ball_direction(trajectory_x, trajectory_y)
+
+    movement_up = jnp.logical_or(ball_direction == 2, ball_direction == 0)
+
+    up_up = jnp.logical_and(movement_up, flipper_up)
+    down_down = jnp.logical_and(jnp.logical_not(movement_up), flipper_down)
+
+    # if the flipper moves in the same direction as the ball, we reflect the ball at the point closest
+    # to the upper edge of the triangle (in the direction of the flipper movement).
+    # if the flipper and ball move in opposite directions, we rewind the ball movement until it is outside
+    # of the triangle and reflect it in the default way
+    return jax.lax.cond(
+        jnp.logical_or(up_up, down_down),
+        lambda: _skip_ball_movement_collision_branch(ball_movement, scene_object, action, ax, ay, bx, by, cx, cy),
+        lambda: _rewind_ball_movement_collision_branch(ball_movement, scene_object, action, ax, ay, bx, by, cx, cy)
+    )
+
 
 @jax.jit
 def _default_slab_collision_branch(
@@ -2151,6 +2244,8 @@ def _calc_triangle_hit_point(
     by: chex.Array,
     cx: chex.Array,
     cy: chex.Array,
+    flipper_up: chex.Array,
+    flipper_down: chex.Array,
 ):
     eps = 1e-8
 
@@ -2173,7 +2268,7 @@ def _calc_triangle_hit_point(
 
     return jax.lax.cond(
         inside,
-        lambda: _inside_triangle_collision_branch(ball_movement, scene_object, action, ax, ay, bx, by, cx, cy),
+        lambda: _inside_triangle_collision_branch(ball_movement, scene_object, action, ax, ay, bx, by, cx, cy, flipper_up, flipper_down),
         lambda: _default_triangle_collision_branch(ball_movement, scene_object, action, ax, ay, bx, by, cx, cy)
     )
 
@@ -2257,14 +2352,25 @@ def _calc_flipper_hit_point(
     )
     new_endy = new_scene_object[3]
 
+    flipper_moves = jnp.logical_or(flipper_up, flipper_down)
+
     hit_point = jax.lax.cond(
-        jnp.logical_not(jnp.logical_or(flipper_up, flipper_down)),
-        lambda: _calc_segment_hit_point(ball_movement, scene_object, action, px, py, endx, endy),
-        lambda: _calc_triangle_hit_point(ball_movement, scene_object, action, px, py, endx, endy, new_endx, new_endy)
+        flipper_moves,
+        lambda: _calc_triangle_hit_point(ball_movement, scene_object, action, px, py, endx, endy, new_endx, new_endy, flipper_up, flipper_down),
+        lambda: _calc_segment_hit_point(ball_movement, scene_object, action, px, py, endx, endy)
     )
 
-    velocity_factor = jnp.where(flipper_down, 1-VELOCITY_DAMPENING_VALUE, 1.)
-    velocity_addition = jnp.where(flipper_up, VELOCITY_ACCELERATION_VALUE, 0.)
+    velocity_factor = jnp.where(flipper_moves, 1., 1-VELOCITY_DAMPENING_VALUE)
+
+    angular_velocity = jnp.sqrt(
+        (hit_point[HitPointSelector.X] - px)**2 + (hit_point[HitPointSelector.Y] - py)**2
+    ) / L
+    velocity_addition = jnp.where(
+        flipper_moves,
+        jnp.where(flipper_up, angular_velocity, -angular_velocity),
+        0.
+    )
+    
 
     return velocity_factor, velocity_addition, hit_point
 
@@ -3032,9 +3138,9 @@ def ball_step(
     ball_vel_y = jnp.where(any_collision, jnp.clip(ball_vel_y / original_ball_speed * new_ball_speed, 0, BALL_MAX_SPEED), ball_vel_y)
 
     # If ball velocity reaches a small threshold, accelerate it after hitting something
-    small_vel = jnp.logical_and(ball_vel_x < 1e-1, ball_vel_y < 1e-1)
-    ball_vel_x = jnp.where(jnp.logical_and(any_collision, small_vel), jnp.clip(ball_vel_x * 5 + 1e-1, 0, BALL_MAX_SPEED), ball_vel_x)
-    ball_vel_y = jnp.where(jnp.logical_and(any_collision, small_vel), jnp.clip(ball_vel_y * 5 + 1e-1, 0, BALL_MAX_SPEED), ball_vel_y)
+    small_vel = jnp.logical_and(ball_vel_x < BALL_MIN_SPEED, ball_vel_y < BALL_MIN_SPEED)
+    ball_vel_x = jnp.where(jnp.logical_and(any_collision, small_vel), jnp.clip(ball_vel_x * 3 + BALL_MIN_SPEED, 0, BALL_MAX_SPEED), ball_vel_x)
+    ball_vel_y = jnp.where(jnp.logical_and(any_collision, small_vel), jnp.clip(ball_vel_y * 3 + BALL_MIN_SPEED, 0, BALL_MAX_SPEED), ball_vel_y)
 
     return (
         ball_x,
@@ -3354,7 +3460,7 @@ class JaxVideoPinball(
         self.renderer = VideoPinballRenderer(consts=consts)
 
 
-    def reset(self, prng_key) -> Tuple[VideoPinballObservation, VideoPinballState]:
+    def reset(self, key) -> Tuple[VideoPinballObservation, VideoPinballState]:
         """
         Resets the game state to the initial state.
         Returns the initial state and the reward (i.e. 0)
@@ -3438,6 +3544,7 @@ class JaxVideoPinball(
         )
         left_flipper_angle, right_flipper_angle = flipper_step(state, action)
 
+        # test_flippers = jnp.logical_and(action == Action.FIRE, jnp.logical_and(state.ball_x == BALL_START_X, state.ball_y == BALL_START_Y))
         # Step 2: Update ball position and velocity
         (
             ball_x,
@@ -3454,6 +3561,12 @@ class JaxVideoPinball(
             new_plunger_power,
             action,
         )
+
+        # ball_x = jnp.where(test_flippers, 83, ball_x)
+        # ball_y = jnp.where(test_flippers, 170, ball_y)
+        # ball_direction = jnp.where(test_flippers, 1, ball_direction)
+        # ball_vel_x = jnp.where(test_flippers, 3., ball_vel_x)
+        # ball_vel_y = jnp.where(test_flippers, 3., ball_vel_y)
 
         # Step 3: Check if ball is in the gutter or in plunger hole
         ball_in_gutter = ball_y > 192
@@ -3533,16 +3646,8 @@ class JaxVideoPinball(
             jnp.array(False),
             ball_in_play,
         )
-        # ball_in_play = jnp.where(ball_reset, jnp.array(False), ball_in_play)
 
         color_cycling = self._color_cycler(color_cycling)
-
-
-        # Use this to test the flippers
-        # ball_x_final = jnp.where(state.step_counter == 400, jnp.array(72), ball_x_final)
-        # ball_y_final = jnp.where(state.step_counter == 400, jnp.array(174), ball_y_final)
-        # ball_vel_x_final = jnp.where(state.step_counter == 400, jnp.array(0), ball_vel_x_final)
-        # ball_vel_y_final = jnp.where(state.step_counter == 400, jnp.array(0), ball_vel_y_final)
 
         new_state = VideoPinballState(
             ball_x=ball_x_final,
@@ -3574,9 +3679,7 @@ class JaxVideoPinball(
 
         done = self._get_done(new_state)
         env_reward = self._get_reward(state, new_state)
-        all_rewards = self._get_all_reward(state, new_state)
-        info = self._get_info(new_state, all_rewards)
-
+        info = self._get_info(new_state)
         observation = self._get_observation(new_state)
         # stack the new observation, remove the oldest one
         # observation = jax.tree.map(
@@ -3589,7 +3692,7 @@ class JaxVideoPinball(
         # new_state = new_state._replace(obs_stack=observation)
         # jax.debug.print("------------------------------------------")
 
-        # Check if all lives are lost and the game should reset
+        # Check if all lives are lost and the game should reset (not fully)
         # observation, new_state = jax.lax.cond(
         #     jnp.logical_and(lives > 3, respawn_timer == 0),
         #     lambda ob, ns: self.reset(
@@ -3599,6 +3702,7 @@ class JaxVideoPinball(
         #     observation,
         #     new_state,
         # )
+        
 
         return observation, new_state, env_reward, done, info
 
@@ -3715,7 +3819,7 @@ class JaxVideoPinball(
 
     @partial(jax.jit, static_argnums=(0,))
     def _get_info(
-        self, state: VideoPinballState, all_rewards: chex.Array
+        self, state: VideoPinballState,
     ) -> VideoPinballInfo:
         return VideoPinballInfo(
             time=state.step_counter,
@@ -3727,7 +3831,7 @@ class JaxVideoPinball(
             ball_in_play=state.ball_in_play,
             respawn_timer=state.respawn_timer,
             tilt_counter=state.tilt_counter,
-            all_rewards=all_rewards)._asdict()
+        )._asdict()
 
     @partial(jax.jit, static_argnums=(0,))
     def _get_reward(
@@ -3748,7 +3852,7 @@ class JaxVideoPinball(
 
     @partial(jax.jit, static_argnums=(0,))
     def _get_done(self, state: VideoPinballState) -> bool:
-        return jnp.logical_and(state.lives <= 0, state.ball_in_play == False)
+        return jnp.logical_and(state.lives > 3, state.ball_in_play == False)
     
     def render(self, state) -> jnp.ndarray:
         return self.renderer.render(state)
