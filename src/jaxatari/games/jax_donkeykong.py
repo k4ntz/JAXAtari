@@ -1258,8 +1258,8 @@ class JaxDonkeyKong(JaxEnvironment[DonkeyKongState, DonkeyKongObservation, Donke
                 mario_stage = value[1]
                 current_ladder_climbable = (
                     (mario_stage == ladders.stage[i])
-                    & (state.mario_y-1 <= ladders.start_y[i])
-                    & ((state.mario_y + self.consts.MARIO_HIT_BOX_Y + 1) >= (ladders.start_y[i] + self.consts.LADDER_WIDTH))
+                    & (jnp.int32(jnp.round(state.mario_y) + 1) <= ladders.start_y[i]+1)
+                    & ((jnp.int32(jnp.round(state.mario_y)) + self.consts.MARIO_HIT_BOX_Y - 1) >= (ladders.start_y[i]+1 + self.consts.LADDER_WIDTH))
                     & (ladders.climbable[i])
                 )
 
