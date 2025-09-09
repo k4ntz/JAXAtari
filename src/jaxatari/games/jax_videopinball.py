@@ -3333,6 +3333,7 @@ class JaxVideoPinball(
     JaxEnvironment[VideoPinballState, VideoPinballObservation, VideoPinballInfo, VideoPinballConstants]
 ):
     def __init__(self, consts: VideoPinballConstants = None, frameskip: int = 0, reward_funcs: list[callable] = None):
+        consts = consts or VideoPinballConstants()
         super().__init__(consts)
         self.frameskip = frameskip + 1
         self.frame_stack_size = 4
@@ -3350,6 +3351,8 @@ class JaxVideoPinball(
             Action.RIGHTFIRE,
         }
         self.obs_size = 3 * 4 + 1 + 1
+        self.renderer = VideoPinballRenderer(consts=consts)
+
 
     def reset(self, prng_key) -> Tuple[VideoPinballObservation, VideoPinballState]:
         """
@@ -3570,7 +3573,7 @@ class JaxVideoPinball(
         )
 
         done = self._get_done(new_state)
-        env_reward = self._get_env_reward(state, new_state)
+        env_reward = self._get_reward(state, new_state)
         all_rewards = self._get_all_reward(state, new_state)
         info = self._get_info(new_state, all_rewards)
 
@@ -3727,7 +3730,7 @@ class JaxVideoPinball(
             all_rewards=all_rewards)._asdict()
 
     @partial(jax.jit, static_argnums=(0,))
-    def _get_env_reward(
+    def _get_reward(
         self, previous_state: VideoPinballState, state: VideoPinballState
     ):
         return state.score - previous_state.score
@@ -3746,11 +3749,16 @@ class JaxVideoPinball(
     @partial(jax.jit, static_argnums=(0,))
     def _get_done(self, state: VideoPinballState) -> bool:
         return jnp.logical_and(state.lives <= 0, state.ball_in_play == False)
+    
+    def render(self, state) -> jnp.ndarray:
+        return self.renderer.render(state)
 
 class VideoPinballRenderer(JAXGameRenderer):
     """JAX-based Video Pinball game renderer, optimized with JIT compilation."""
 
-    def __init__(self):
+    def __init__(self, consts: VideoPinballConstants = None):
+        super().__init__()
+        self.consts = consts or VideoPinballConstants()
         self.sprites = self._load_sprites()
 
     @partial(jax.jit, static_argnums=(0,))
@@ -4365,75 +4373,3 @@ class VideoPinballRenderer(JAXGameRenderer):
         # raster = render_scene_object_boundaries(raster)
 
         return raster
-
-
-if __name__ == "__main__":
-    # Initialize Pygame
-    pygame.init()
-    screen = pygame.display.set_mode((WINDOW_WIDTH, WINDOW_HEIGHT))
-    pygame.display.set_caption("VideoPinball Game")
-    clock = pygame.time.Clock()
-    seed = 42
-    prng_key = jrandom.PRNGKey(seed)
-
-    game = JaxVideoPinball(frameskip=1)
-
-    # Create the JAX renderer
-    renderer = VideoPinballRenderer()
-
-    # Get jitted functions
-    jitted_step = jax.jit(game.step)
-    jitted_reset = jax.jit(game.reset)
-
-    obs, curr_state = jitted_reset(prng_key=prng_key)
-
-    # Game loop
-    running = True
-    frame_by_frame = False
-    frameskip = game.frameskip
-    counter = 1
-    reset = False
-
-    while running:
-        reset = False
-        # Event loop that checks display settings (QUIT, frame-by-frame-mode toggled, next for frame-by-frame mode)
-        for event in pygame.event.get():
-            if event.type == pygame.QUIT:
-                running = False
-            elif event.type == pygame.KEYDOWN:
-                if event.key == pygame.K_f:
-                    frame_by_frame = not frame_by_frame
-                if event.key == pygame.K_r:
-                    counter = 1
-                    prng_key, key = jrandom.split(prng_key)
-                    obs, curr_state = jitted_reset(prng_key=key)
-                    reset = True
-            elif event.type == pygame.KEYDOWN or (
-                event.type == pygame.KEYUP and event.key == pygame.K_n
-            ):
-                if event.key == pygame.K_n and frame_by_frame:
-                    if counter % frameskip == 0:
-                        # If frame-by-frame mode activated and next frame is requested,
-                        # get human (game) action and perform step
-                        action = get_human_action()
-                        obs, curr_state, reward, done, info = jitted_step(
-                            curr_state, action
-                        )
-
-        if not frame_by_frame or reset:
-            # If not in frame-by-frame mode perform step at each clock-tick
-            # i.e. get human (game) action
-            if counter % frameskip == 0:
-                action = get_human_action()
-                # Update game step
-                obs, curr_state, reward, done, info = jitted_step(curr_state, action)
-
-        # Render and display
-        raster = renderer.render(curr_state)
-
-        jr.update_pygame(screen, raster, 3, WIDTH, HEIGHT)
-
-        counter += 1
-        clock.tick(60)
-
-    pygame.quit()
