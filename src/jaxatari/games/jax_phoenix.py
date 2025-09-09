@@ -49,7 +49,7 @@ class PhoenixConstants(NamedTuple):
     LEVEL_TRANSITION_DURATION: int = 240 # ca. 4 Sekunden bei 60 FPS
     ENEMY_ANIMATION_SPEED: int = 30  # ca. 0,5 Sekunden bei 60 FPS
     PLAYER_ANIMATION_SPEED: int = 6  # ca. 0,1 Sekunden bei 60 FPS
-    PLAYER_LIVES: int = 5 # Anzahl der Leben
+    PLAYER_LIVES: int = 4 # Anzahl der Leben
     ENEMY_POSITIONS_X_LIST = [
         lambda: jnp.array(
             [123 - 160 // 2, 123 - 160 // 2, 136 - 160 // 2, 136 - 160 // 2, 160 - 160 // 2, 160 - 160 // 2,
@@ -718,7 +718,7 @@ class JaxPhoenix(JaxEnvironment[PhoenixState, PhoenixObservation, PhoenixInfo, N
             enemy_projectile_y=jnp.full((8,), -1),
             projectile_x=jnp.array(-1),  # Standardwert: kein Projektil
             score = jnp.array(0), # Standardwert: Score=0
-            lives=jnp.array(self.consts.PLAYER_LIVES), # Standardwert: 5 Leben
+            lives=jnp.array(self.consts.PLAYER_LIVES), # Standardwert: 4 Leben
             player_respawn_timer=jnp.array(5),
             level=jnp.array(1),
             level_transition_timer=jnp.array(0),  # Timer for level transition, starts at 0
@@ -771,7 +771,18 @@ class JaxPhoenix(JaxEnvironment[PhoenixState, PhoenixObservation, PhoenixInfo, N
 
         # Can fire only if inactive
         can_fire = (~projectile_active) & (~state.player_dying) & (state.player_respawn_timer <= 0)
-        firing = (action == Action.FIRE) & can_fire
+        fire_actions = jnp.array([
+            action == Action.FIRE,
+            action == Action.LEFTFIRE,
+            action == Action.RIGHTFIRE,
+            action == Action.UPFIRE,
+            action == Action.DOWNFIRE,
+            action == Action.UPLEFTFIRE,
+            action == Action.UPRIGHTFIRE,
+            action == Action.DOWNLEFTFIRE,
+            action == Action.DOWNRIGHTFIRE,
+        ])
+        firing = jnp.any(fire_actions) & can_fire
 
         state = jax.lax.cond(
             jnp.logical_or((state.level % 5) == 1, (state.level % 5) == 2),
