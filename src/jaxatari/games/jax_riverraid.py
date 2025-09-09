@@ -80,6 +80,7 @@ class RiverraidState(NamedTuple):
     enemy_animation_cooldowns: chex.Array
     fuel_animation_cooldowns: chex.Array
     death_cooldown: chex.Array
+    dam_explosion_cooldown: chex.Array
 
 
 
@@ -577,9 +578,8 @@ def generate_segment_transition(state: RiverraidState) -> RiverraidState:
                               river_state=new_river_state,
                               river_alternation_length=new_alternation_length,
                               alternation_cooldown=new_alternation_cooldown,
-                              #river_left=scrolled_left.at[0].set(scrolled_left[1]),
-                              #river_right=scrolled_right.at[0].set(scrolled_right[1]))
-                                  )
+                              dam_explosion_cooldown=jnp.array(15)
+                              )
 
 
     #jax.debug.print("Riverraid: segment_transition_state: {segment_transition_state}", segment_transition_state=state.segment_transition_state)
@@ -1129,7 +1129,14 @@ def handle_animations(state: RiverraidState) -> RiverraidState:
         return state
 
     state = jax.lax.fori_loop(0, MAX_ENEMIES, body_fun, state)
-    return state
+
+    new_dam_explosion_cooldown = jax.lax.cond(
+        jnp.any(state.dam_position == 2) & (state.dam_explosion_cooldown > 0),
+        lambda: state.dam_explosion_cooldown - 1,
+        lambda: state.dam_explosion_cooldown
+    )
+    jax.debug.print("dam explosion cooldown: {dam_explosion_cooldown}", dam_explosion_cooldown=new_dam_explosion_cooldown)
+    return state._replace(dam_explosion_cooldown=new_dam_explosion_cooldown)
 
 
 
@@ -1368,7 +1375,8 @@ class JaxRiverraid(JaxEnvironment):
                                housetree_cooldown=jnp.array(20),
                                enemy_animation_cooldowns=jnp.full(MAX_ENEMIES, 3),
                                fuel_animation_cooldowns=jnp.full(MAX_ENEMIES, 3),
-                               death_cooldown=jnp.array(DEATH_COOLDOWN)
+                               death_cooldown=jnp.array(DEATH_COOLDOWN),
+                               dam_explosion_cooldown=jnp.array(15)
                                )
         observation = self._get_observation(state)
         return observation, state
@@ -1444,7 +1452,8 @@ class JaxRiverraid(JaxEnvironment):
                                    housetree_cooldown=jnp.array(20),
                                    enemy_animation_cooldowns=jnp.full(MAX_ENEMIES, 3),
                                    fuel_animation_cooldowns=jnp.full(MAX_ENEMIES, 3),
-                                   death_cooldown=jnp.array(DEATH_COOLDOWN)
+                                   death_cooldown=jnp.array(DEATH_COOLDOWN),
+                                   dam_explosion_cooldown=jnp.array(15)
                                    )
             return new_state
 
@@ -1564,6 +1573,10 @@ def load_sprites():
     explosion_2 = normalize_frame(explosion_2, (24, 16, 4))
     player_explosion = aj.loadFrame(os.path.join(MODULE_DIR, "sprites/riverraid/explosion_2.npy"), transpose=False)
     player_explosion = normalize_frame(player_explosion, (14, 7, 4))
+    dam_explosion_1 = aj.loadFrame(os.path.join(MODULE_DIR, "sprites/riverraid/dam_explosion_1.npy"), transpose=False)
+    dam_explosion_1 = normalize_frame(dam_explosion_1, (24, 16,4))
+    dam_explosion_2 = aj.loadFrame(os.path.join(MODULE_DIR, "sprites/riverraid/dam_explosion_2.npy"), transpose=False)
+    dam_explosion_2 = normalize_frame(dam_explosion_2, (24, 16,4))
 
     score_sprites = []
     for i in range(10):
@@ -1592,6 +1605,8 @@ def load_sprites():
     EXPLOSION_1 = jnp.expand_dims(explosion_1, axis=0)
     EXPLOSION_2 = jnp.expand_dims(explosion_2, axis=0)
     PLAYER_EXPLOSION = jnp.expand_dims(player_explosion, axis=0)
+    DAM_EXPLOSION_1 = jnp.expand_dims(dam_explosion_1, axis=0)
+    DAM_EXPLOSION_2 = jnp.expand_dims(dam_explosion_2, axis=0)
 
     return(
         SPRITE_PLAYER,
@@ -1613,7 +1628,9 @@ def load_sprites():
         ACTIVISION,
         EXPLOSION_1,
         EXPLOSION_2,
-        PLAYER_EXPLOSION
+        PLAYER_EXPLOSION,
+        DAM_EXPLOSION_1,
+        DAM_EXPLOSION_2
     )
 
 class RiverraidRenderer(JAXGameRenderer):
@@ -1638,13 +1655,16 @@ class RiverraidRenderer(JAXGameRenderer):
             self.ACTIVISION,
             self.EXPLOSION_1,
             self.EXPLOSION_2,
-            self.PLAYER_EXPLOSION
+            self.PLAYER_EXPLOSION,
+            self.DAM_EXPLOSION_1,
+            self.DAM_EXPLOSION_2
         ) = load_sprites()
 
     @partial(jax.jit, static_argnums=(0,))
     def render(self, state: RiverraidState):
         green_banks = jnp.array([26, 132, 26], dtype=jnp.uint8)
         blue_river = jnp.array([42, 42, 189], dtype=jnp.uint8)
+        red_river = jnp.array([189, 42, 42], dtype=jnp.uint8)
         ui_color = jnp.array([128, 128, 128], dtype=jnp.uint8)
         explosion_1 = aj.get_sprite_frame(self.EXPLOSION_1, 0)
         explosion_2 = aj.get_sprite_frame(self.EXPLOSION_2, 0)
@@ -1659,7 +1679,19 @@ class RiverraidRenderer(JAXGameRenderer):
             x_coords < inner_left_banks, x_coords > inner_right_banks)
 
         # The raster is (HEIGHT, WIDTH, 3)
-        raster = jnp.where(is_river[..., None], blue_river, green_banks)
+        river_color = jax.lax.cond(
+            jnp.logical_and(
+                state.dam_explosion_cooldown > 0,
+                jnp.logical_and(
+                    state.dam_explosion_cooldown < 15,
+                    state.dam_explosion_cooldown % 2 == 0
+                )
+            ),
+            lambda _: red_river,
+            lambda _: blue_river,
+            operand=None
+        )
+        raster = jnp.where(is_river[..., None], river_color, green_banks)
 
         # Render the dam sprite
         dam_y = jnp.argmax(state.dam_position >= 1).astype(jnp.int32) - DAM_OFFSET
@@ -1679,12 +1711,27 @@ class RiverraidRenderer(JAXGameRenderer):
                 lambda raster: raster,
                 operand=raster,
             )
+
             street = aj.get_sprite_frame(self.STREET, 0)
             raster = jax.lax.cond(
                 has_dam,
-                lambda raster: aj.render_at(raster, 0, dam_y, street),
+                lambda raster: aj.render_at(raster, 0, dam_y, street), # fill in missing pixels
                 lambda raster: raster,
                 operand=raster,
+            )
+
+            explosion_to_render = jax.lax.cond(
+                (state.dam_explosion_cooldown >= 5) & (state.dam_explosion_cooldown <= 10),
+                lambda _: aj.get_sprite_frame(self.DAM_EXPLOSION_2, 0),
+                lambda _: aj.get_sprite_frame(self.DAM_EXPLOSION_1, 0),
+                operand=None
+            )
+            raster = jax.lax.cond(
+                jnp.logical_and(state.dam_position[dam_y + DAM_OFFSET] == 2,
+                                state.dam_explosion_cooldown > 0),
+                lambda raster: aj.render_at(raster, SCREEN_WIDTH // 2 - 8, dam_y, explosion_to_render),
+                lambda raster: raster,
+                operand=raster
             )
             return raster
 
