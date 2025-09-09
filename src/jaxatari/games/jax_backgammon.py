@@ -43,6 +43,8 @@ class BackgammonState(NamedTuple):
     current_player: int
     is_game_over: bool
     key: jax.random.PRNGKey
+    last_move: Tuple[int, int] = (-1, -1)   # NEW
+    last_dice: int = -1                      # NEW
 
 
 class BackgammonInfo(NamedTuple):
@@ -419,61 +421,60 @@ class JaxBackgammonEnv(JaxEnvironment[BackgammonState, jnp.ndarray, dict, Backga
         return jax.lax.cond(is_valid, consume_one, lambda d: d, dice)
 
     @partial(jax.jit, static_argnums=(0,))
-    def step_impl(self, state: BackgammonState, action: Tuple[int, int], key: jax.Array) -> Tuple[jnp.ndarray, BackgammonState, float, bool, dict, jax.Array]:
-        """Perform a step in the environment, applying the action and returning the new state."""
+    def step_impl(self, state: BackgammonState, action: Tuple[int, int], key: jax.Array):
         from_point, to_point = action
         board = state.board
         player = state.current_player
         player_idx = self.get_player_index(player)
         opponent_idx = 1 - player_idx
 
-        # use the vectorized is_valid_move function with a single move
         is_valid = self.is_valid_move(state, jnp.array([from_point, to_point]))
 
-        # execute the move if valid
         new_board = jax.lax.cond(
             is_valid,
             lambda _: self.execute_move(board, player_idx, opponent_idx, from_point, to_point),
             lambda _: board,
-            operand=None
+            operand=None,
         )
 
-        # calculate move distance
         distance = self.compute_distance(player, from_point, to_point)
         allow_oversized = (to_point == self.consts.HOME_INDEX)
+
+        # Figure out which dice was used (first matching index, or -1)
+        def find_dice(dice, distance):
+            matches = jnp.where(dice == distance, 1, 0)
+            idx = jnp.argmax(matches)  # gives first match
+            return jnp.where(jnp.any(matches), idx, -1)
+
+        used_dice = find_dice(state.dice, distance)
+
         new_dice = JaxBackgammonEnv.update_dice(state.dice, is_valid, distance, allow_oversized)
 
-
-        # check if all dice are used
         all_dice_used = jnp.all(new_dice == 0)
 
-        # prepare for next turn based on the outcome
         def next_turn(k):
-            """ Switch to the next player and roll new dice."""
             next_dice, new_key = JaxBackgammonEnv.roll_dice(k)
             return next_dice, -state.current_player, new_key
 
         def same_turn(k):
-            """ Continue with the same player."""
             return new_dice, state.current_player, k
 
         next_dice, next_player, new_key = jax.lax.cond(all_dice_used, next_turn, same_turn, key)
 
-        # check winner conditions
         white_won = new_board[0, self.consts.HOME_INDEX] == self.consts.NUM_CHECKERS
         black_won = new_board[1, self.consts.HOME_INDEX] == self.consts.NUM_CHECKERS
         game_over = white_won | black_won
 
-        # update game state
         new_state = BackgammonState(
             board=new_board,
             dice=next_dice,
             current_player=next_player,
             is_game_over=game_over,
-            key = new_key
+            key=new_key,
+            last_move=(from_point, to_point),
+            last_dice=used_dice
         )
 
-        # Prepare return values
         obs = self._get_observation(new_state)
         reward = self._get_reward(state, new_state)
         done = self._get_done(new_state)
@@ -532,17 +533,15 @@ class JaxBackgammonEnv(JaxEnvironment[BackgammonState, jnp.ndarray, dict, Backga
         """Check if the game is over."""
         return state.is_game_over
 
-
     def get_valid_moves(self, state: BackgammonState) -> List[Tuple[int, int]]:
         player = state.current_player
 
-
         @jax.jit
         def _check_all_moves(state):
-            return jax.vmap(lambda move: self.is_valid_move(state, move))(self.action_space)
+            return jax.vmap(lambda move: self.is_valid_move(state, move))(self._action_pairs)
 
         valid_mask = _check_all_moves(state)
-        valid_moves_array = self.action_space[jnp.array(valid_mask)]
+        valid_moves_array = self._action_pairs[valid_mask]
         return [tuple(map(int, move)) for move in valid_moves_array]
 
     def render(self, state: BackgammonState) -> Tuple[jnp.ndarray]:
@@ -859,16 +858,93 @@ class BackgammonRenderer(JAXGameRenderer):
         return jax.lax.fori_loop(0, 4, draw_single_dice, frame)
 
     @partial(jax.jit, static_argnums=(0,))
-    def render(self, state):
-        """Main render function"""
-        # Create initial frame
+    def _highlight_checker(self, frame, point_idx, state, color=jnp.array([255, 0, 0], dtype=jnp.uint8)):
+        """Highlight the *visible* checker at a given point (topmost one)."""
+        pos = self.triangle_positions[point_idx]
+        base_x = pos[0] + self.triangle_width // 2
+        base_y = pos[1]
+
+        white_count = state.board[0, point_idx]
+        black_count = state.board[1, point_idx]
+
+        # Which color occupies the point?
+        is_white = white_count > 0
+        checker_color = jax.lax.cond(is_white, lambda _: self.color_white_checker, lambda _: self.color_black_checker, operand=None)
+        count = jax.lax.cond(is_white, lambda _: white_count, lambda _: black_count, operand=None)
+
+        # Top vs bottom orientation
+        is_bottom = point_idx >= 12
+        stack_direction = jax.lax.select(is_bottom, -1, 1)
+
+        base_y = jax.lax.select(is_bottom, base_y + self.triangle_height - self.checker_radius, base_y + self.checker_radius,)
+
+        # Position of topmost checker in the stack
+        y_offset = (count - 1) * self.checker_stack_offset * stack_direction
+        checker_y = base_y + y_offset
+
+        # Draw the checker normally, then outline it
+        frame = self._draw_circle(frame, base_x, checker_y, self.checker_radius, checker_color)
+
+        # Outline ring
+        outer_r = self.checker_radius + 2
+        inner_r = self.checker_radius
+        frame = self._draw_circle(frame, base_x, checker_y, outer_r, color)
+        frame = self._draw_circle(frame, base_x, checker_y, inner_r, checker_color)
+        return frame
+
+    @partial(jax.jit, static_argnums=(0,))
+    def _highlight_dice(self, frame, dice_index, color=jnp.array([255, 0, 0], dtype=jnp.uint8)):
+        """Draw only an outline border around a dice."""
+        dice_size = 12
+        dice_x_start = self.frame_width // 2 - 15
+        dice_y = self.frame_height // 2 - dice_size // 2
+        dice_x = dice_x_start + dice_index * 15
+
+        border_width = 2
+
+        # Outline only — outer rect in highlight color, then redraw inner in transparent way
+        frame = self._draw_rectangle(
+            frame,
+            dice_x - border_width,
+            dice_y - border_width,
+            dice_size + 2 * border_width,
+            border_width,  # top
+            color,
+        )
+        frame = self._draw_rectangle(
+            frame,
+            dice_x - border_width,
+            dice_y + dice_size,
+            dice_size + 2 * border_width,
+            border_width,  # bottom
+            color,
+        )
+        frame = self._draw_rectangle(
+            frame,
+            dice_x - border_width,
+            dice_y,
+            border_width,
+            dice_size,
+            color,
+        )
+        frame = self._draw_rectangle(
+            frame,
+            dice_x + dice_size,
+            dice_y,
+            border_width,
+            dice_size,
+            color,
+        )
+
+        return frame
+
+    @partial(jax.jit, static_argnums=(0,))
+    def render(self, state: BackgammonState):
         frame = jnp.zeros((self.frame_height, self.frame_width, 3), dtype=jnp.uint8)
 
-        # Draw board elements
         frame = self._draw_board_outline(frame)
         frame = self._draw_triangles(frame)
 
-        # Draw checkers on all points
         def draw_point_checkers(point_idx, fr):
             white_count = jnp.maximum(state.board[0, point_idx], 0)
             black_count = jnp.maximum(state.board[1, point_idx], 0)
@@ -876,211 +952,35 @@ class BackgammonRenderer(JAXGameRenderer):
 
         frame = jax.lax.fori_loop(0, 24, draw_point_checkers, frame)
 
-        # Draw bar checkers
-        white_bar = jnp.maximum(state.board[0, 24], 0)
-        black_bar = jnp.maximum(state.board[1, 24], 0)
-        frame = self._draw_bar_checkers(frame, white_bar, black_bar)
+        frame = self._draw_bar_checkers(frame,
+                                        jnp.maximum(state.board[0, 24], 0),
+                                        jnp.maximum(state.board[1, 24], 0))
+        frame = self._draw_home_checkers(frame,
+                                         jnp.maximum(state.board[0, 25], 0),
+                                         jnp.maximum(state.board[1, 25], 0))
 
-        # Draw home checkers
-        white_home = jnp.maximum(state.board[0, 25], 0)
-        black_home = jnp.maximum(state.board[1, 25], 0)
-        frame = self._draw_home_checkers(frame, white_home, black_home)
-
-        # Draw dice
         frame = self._draw_dice(frame, state.dice)
 
+        # Always highlight last move & dice if available
+        from_point, to_point = state.last_move
+
+        frame = jax.lax.cond(
+            from_point >= 0,
+            lambda fr: self._highlight_checker(fr, from_point, state, jnp.array([255, 0, 0], dtype=jnp.uint8)),
+            lambda fr: fr,
+            frame,
+        )
+        frame = jax.lax.cond(
+            to_point >= 0,
+            lambda fr: self._highlight_checker(fr, to_point, state, jnp.array([0, 255, 0], dtype=jnp.uint8)),
+            lambda fr: fr,
+            frame,
+        )
+        frame = jax.lax.cond(
+            state.last_dice >= 0,
+            lambda fr: self._highlight_dice(fr, state.last_dice),
+            lambda fr: fr,
+            frame,
+        )
+
         return frame
-
-    def display(self, state):
-        """Display function for interactive play"""
-        # Print text representation
-        print("\n" + "=" * 50)
-        print(f"Current player: {'White' if state.current_player == 1 else 'Black'}")
-        print(f"Dice: {state.dice}")
-        print(f"Game over: {state.is_game_over}")
-
-        # Print board state
-        print("\nBoard state:")
-        print("Point | White | Black")
-        print("-" * 20)
-        for i in range(24):
-            white_count = state.board[0, i]
-            black_count = state.board[1, i]
-            if white_count > 0 or black_count > 0:
-                print(f"{i + 1:4d} | {white_count:5d} | {black_count:5d}")
-
-        print(f"Bar  | {state.board[0, 24]:5d} | {state.board[1, 24]:5d}")
-        print(f"Home | {state.board[0, 25]:5d} | {state.board[1, 25]:5d}")
-        print("=" * 50)
-
-    def close(self):
-        """Clean up resources"""
-        pass
-
-def get_user_move(state: BackgammonState, env: JaxBackgammonEnv) -> Tuple[int, int]:
-    """Get a move from the user via keyboard input."""
-    valid_moves = env.get_valid_moves(state)
-
-    if not valid_moves:
-        print("No valid moves available. Press Enter to continue to next player's turn.")
-        input()
-        return None
-
-    print("\nValid moves:")
-    for i, move in enumerate(valid_moves):
-        from_point, to_point = move
-        from_display = "BAR" if from_point == env.consts.BAR_INDEX else str(from_point + 1)
-        to_display = "HOME" if to_point == env.consts.HOME_INDEX else str(to_point + 1)
-        print(f"{i + 1}: {from_display} → {to_display}")
-
-    while True:
-        try:
-            choice = input("\nEnter move number (or 'q' to quit): ")
-            if choice.lower() == 'q':
-                return 'quit'
-
-            choice_idx = int(choice) - 1
-            if 0 <= choice_idx < len(valid_moves):
-                return valid_moves[choice_idx]
-            else:
-                print(f"Please enter a number between 1 and {len(valid_moves)}")
-        except ValueError:
-            print("Please enter a valid number")
-
-
-def run_game_with_input(key: jax.Array, max_steps=200):
-    """Run the backgammon game with keyboard input for moves."""
-    env = JaxBackgammonEnv()
-    # Create and attach the renderer
-    renderer = BackgammonRenderer(env)
-    env.renderer = renderer
-
-    obs, state = env.reset(key)
-
-    print("\n==== Welcome to JAX Backgammon ====")
-    print("Points are numbered 1-24, with 1-6 on the white home board.")
-    print("BAR refers to the bar, and HOME refers to moving pieces off the board.")
-
-    print(f"Initial roll: White {state.dice[0]}, Black {state.dice[1]}")
-    print(f"{'White' if state.current_player == env.consts.WHITE else 'Black'} will start the game!")
-
-    step_count = 0
-    while step_count < max_steps and not state.is_game_over:
-        # Use the renderer to display the board
-        renderer.display(state)
-
-        # Get move from the user
-        action = get_user_move(state, env)
-
-        if action == 'quit':
-            print("\nGame ended by user.")
-            break
-
-        if action is None:
-            # No valid moves, roll new dice and switch players
-            new_dice, new_key = env.roll_dice(state.key)
-            state = state._replace(
-                dice=new_dice,
-                current_player=-state.current_player,
-                key=new_key
-            )
-            continue
-
-        # Execute the move - convert to action index
-        action_idx = None
-        for i, move_pair in enumerate(env._action_pairs):
-            if tuple(move_pair) == action:
-                action_idx = i
-                break
-
-        if action_idx is None:
-            print("Error: Invalid move")
-            continue
-
-        # Execute the move
-        from_display = "BAR" if action[0] == env.consts.BAR_INDEX else str(action[0] + 1)
-        to_display = "HOME" if action[1] == env.consts.HOME_INDEX else str(action[1] + 1)
-        print(f"\nExecuting move: {from_display} → {to_display}")
-        obs, state, reward, done, info = env.step(state, action_idx)
-
-        step_count += 1
-
-        if done:
-            renderer.display(state)
-            winner = "White" if state.board[0, env.consts.HOME_INDEX] == env.consts.NUM_CHECKERS else "Black"
-            print(f"\n==== Game Over! {winner} wins! ====")
-
-    if step_count >= max_steps:
-        print("\nMaximum steps reached. Game ended.")
-
-    renderer.close()
-    return state
-
-
-def run_game_without_input(key: jax.Array, max_steps=400):
-    """Run the backgammon game without user input, using random moves."""
-    env = JaxBackgammonEnv()
-    obs, state = env.reset(key)
-    renderer = BackgammonRenderer(env)
-    env.renderer = renderer
-
-    print(f"Initial roll: White {state.dice[0]}, Black {state.dice[1]}")
-    print(f"{'White' if state.current_player == env.consts.WHITE else 'Black'} will start the game!")
-
-    for i in range(max_steps):
-        if state.is_game_over:
-            print("\nGame Over!")
-            break
-
-        valid_moves = env.get_valid_moves(state)
-
-        if len(valid_moves) == 0:
-            # No valid moves, switch player and roll new dice
-            new_dice, new_key = env.roll_dice(state.key)
-            state = state._replace(
-                dice=new_dice,
-                current_player=-state.current_player,
-                key=new_key
-            )
-            continue
-
-        # Choose random move
-        new_key, move_key = jax.random.split(state.key)
-        state = state._replace(key=new_key)
-        idx = jax.random.randint(move_key, (), 0, len(valid_moves))
-        selected_move = valid_moves[idx]
-
-        # Convert move to action index
-        action_idx = None
-        for j, move_pair in enumerate(env._action_pairs):
-            if tuple(move_pair) == selected_move:
-                action_idx = j
-                break
-
-        if action_idx is None:
-            continue
-
-        print(f"\nMove: {selected_move[0] + 1} → {selected_move[1] + 1}")
-        obs, state, reward, done, info = env.step(state, action_idx)
-
-        # Display every 10 moves or when game ends
-        if i % 10 == 0 or done:
-            renderer.display(state)
-
-        if done:
-            white_home = state.board[0, env.consts.HOME_INDEX]
-            black_home = state.board[1, env.consts.HOME_INDEX]
-            winner = "White" if white_home == env.consts.NUM_CHECKERS else "Black"
-            print(f"\n==== Game Over! {winner} wins! ====")
-            print(f"White home: {white_home}, Black home: {black_home}")
-            break
-
-    return state
-
-
-def main():
-    key = jax.random.PRNGKey(0)
-    # Test with input
-    # run_game_with_input(key)
-    # Or test without input
-    run_game_without_input(key)
