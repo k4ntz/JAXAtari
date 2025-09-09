@@ -768,9 +768,7 @@ def get_action_from_keyboard(state: RiverraidState) -> Action:
 
 
 def player_shooting(state, action):
-    shooting = jnp.any(
-        jnp.array([action == Action.LEFTFIRE, action == Action.RIGHTFIRE, action == Action.FIRE])
-    )
+    shooting = action == Action.FIRE
     new_bullet_x, new_bullet_y = jax.lax.cond(
         jnp.logical_and(
             shooting,
@@ -918,7 +916,7 @@ def spawn_entities(state: RiverraidState) -> RiverraidState:
     key, subkey1, subkey2 = jax.random.split(state.master_key, 3)
 
     def spawn_entity(state: RiverraidState) -> RiverraidState:
-        spawn_fuel_flag = jax.random.bernoulli(subkey2, 0.2) # TODO balance
+        spawn_fuel_flag = jax.random.bernoulli(subkey2, 0.15) # TODO balance
         return jax.lax.cond(
             spawn_fuel_flag,
             lambda state: spawn_fuel(state),
@@ -929,7 +927,7 @@ def spawn_entities(state: RiverraidState) -> RiverraidState:
     dam_at_top = jnp.any(state.dam_position[:50] >= 1)
     jax.debug.print("dam at top: {dam_at_top}", dam_at_top=dam_at_top)
     spawn_new_entity = jnp.logical_and(
-        jax.random.bernoulli(subkey1, 0.07), # TODO balance
+        jax.random.bernoulli(subkey1, 0.09), # TODO balance
         ~dam_at_top
     )
 
@@ -1206,7 +1204,7 @@ def update_enemy_movement_status(state: RiverraidState) -> RiverraidState:
     def change_direction(i, enemy_direction):
         should_change = jax.lax.cond(
             active_static_mask[i],
-            lambda _: jax.random.bernoulli(subkeys[i], 0.05),
+            lambda _: jax.random.bernoulli(subkeys[i], 0.01),   # start moving
             lambda _: False,
             operand=None
         )
