@@ -29,6 +29,7 @@ SEGMENT_LENGTH = 400
 DAM_OFFSET = 25
 PLAYER_WIDTH = 7
 PLAYER_HEIGHT = 14
+DEATH_COOLDOWN = 50 # longer in real game
 
 
 class RiverraidState(NamedTuple):
@@ -78,6 +79,7 @@ class RiverraidState(NamedTuple):
     spawn_cooldown: chex.Array
     enemy_animation_cooldowns: chex.Array
     fuel_animation_cooldowns: chex.Array
+    death_cooldown: chex.Array
 
 
 
@@ -773,7 +775,7 @@ def player_shooting(state, action):
         jnp.logical_and(
             shooting,
             state.player_bullet_y < 0),
-        lambda state: ((state.player_x + 2).astype(jnp.float32), (state.player_y - 0).astype(jnp.float32)),
+        lambda state: ((state.player_x + 3).astype(jnp.float32), (state.player_y - 0).astype(jnp.float32)),
         lambda state: (state.player_bullet_x.astype(jnp.float32), (state.player_bullet_y - 5).astype(jnp.float32)),
         operand=state
     )
@@ -1365,7 +1367,8 @@ class JaxRiverraid(JaxEnvironment):
                                housetree_direction=jnp.full((SCREEN_HEIGHT,), 0, dtype=jnp.float32),
                                housetree_cooldown=jnp.array(20),
                                enemy_animation_cooldowns=jnp.full(MAX_ENEMIES, 3),
-                               fuel_animation_cooldowns=jnp.full(MAX_ENEMIES, 3)
+                               fuel_animation_cooldowns=jnp.full(MAX_ENEMIES, 3),
+                               death_cooldown=jnp.array(DEATH_COOLDOWN)
                                )
         observation = self._get_observation(state)
         return observation, state
@@ -1440,19 +1443,29 @@ class JaxRiverraid(JaxEnvironment):
                                    housetree_direction=jnp.full((SCREEN_HEIGHT,), -1, dtype=jnp.float32),
                                    housetree_cooldown=jnp.array(20),
                                    enemy_animation_cooldowns=jnp.full(MAX_ENEMIES, 3),
-                                   fuel_animation_cooldowns=jnp.full(MAX_ENEMIES, 3)
+                                   fuel_animation_cooldowns=jnp.full(MAX_ENEMIES, 3),
+                                   death_cooldown=jnp.array(DEATH_COOLDOWN)
                                    )
             return new_state
 
         jax.debug.print("new step \n")
         new_state = state._replace(turn_step=state.turn_step + 1,
                                    turn_step_linear=state.turn_step_linear + 1)
-        #state = state._replace(player_state=jnp.array(0, dtype=state.player_state.dtype)) # immortal for testing
+
+
+        def delay_respawn(state: RiverraidState) -> RiverraidState:
+            new_death_cooldown = jnp.maximum(state.death_cooldown - 1, 0)
+            return jax.lax.cond(
+                new_death_cooldown <= 0,
+                lambda state: respawn(state),
+                lambda state: state._replace(death_cooldown=new_death_cooldown),
+                operand=state
+            )
+
         new_state = jax.lax.cond(state.player_state == 0,
                                  lambda state: player_alive(state),
-                                 lambda state: respawn(state),
+                                 lambda state: delay_respawn(state),
                                  operand=new_state)
-
 
 
         observation = self._get_observation(new_state)
@@ -1549,6 +1562,8 @@ def load_sprites():
     explosion_1 = normalize_frame(explosion_1, (24, 16, 4))
     explosion_2 = aj.loadFrame(os.path.join(MODULE_DIR, "sprites/riverraid/explosion_2.npy"), transpose=False)
     explosion_2 = normalize_frame(explosion_2, (24, 16, 4))
+    player_explosion = aj.loadFrame(os.path.join(MODULE_DIR, "sprites/riverraid/explosion_2.npy"), transpose=False)
+    player_explosion = normalize_frame(player_explosion, (14, 7, 4))
 
     score_sprites = []
     for i in range(10):
@@ -1576,6 +1591,7 @@ def load_sprites():
     ACTIVISION = jnp.expand_dims(activision, axis=0)
     EXPLOSION_1 = jnp.expand_dims(explosion_1, axis=0)
     EXPLOSION_2 = jnp.expand_dims(explosion_2, axis=0)
+    PLAYER_EXPLOSION = jnp.expand_dims(player_explosion, axis=0)
 
     return(
         SPRITE_PLAYER,
@@ -1596,7 +1612,8 @@ def load_sprites():
         STREET,
         ACTIVISION,
         EXPLOSION_1,
-        EXPLOSION_2
+        EXPLOSION_2,
+        PLAYER_EXPLOSION
     )
 
 class RiverraidRenderer(JAXGameRenderer):
@@ -1620,7 +1637,8 @@ class RiverraidRenderer(JAXGameRenderer):
             self.STREET,
             self.ACTIVISION,
             self.EXPLOSION_1,
-            self.EXPLOSION_2
+            self.EXPLOSION_2,
+            self.PLAYER_EXPLOSION
         ) = load_sprites()
 
     @partial(jax.jit, static_argnums=(0,))
@@ -1684,6 +1702,12 @@ class RiverraidRenderer(JAXGameRenderer):
         )
         px = jnp.round(state.player_x).astype(jnp.int32)
         py = jnp.round(state.player_y).astype(jnp.int32)
+        player_frame = jax.lax.cond(
+            state.player_state == 0, # alive
+            lambda _: player_frame,
+            lambda _: aj.get_sprite_frame(self.PLAYER_EXPLOSION, 0),
+            operand=None
+        )
         raster = aj.render_at(raster, px, py, player_frame)
 
         bullet_frame = aj.get_sprite_frame(self.BULLET, 0)
