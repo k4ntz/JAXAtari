@@ -18,18 +18,16 @@ Top Priorities:
 - Fix the renderer as some components are not being shown with Play.py(Player ship, Points, lives, torpedoes, enemies left) --> done
 - White Saucers shouldn't be hittable on the top of horizon --> done
 - fix beam_jump --> done
+- Enemies get smaller/bigger according to the 3d rendering --> done
+- make game more 3D --> might be done(ask supervisor)
 - Fix ship movement
 - fix point 4 and the init from the email
-- make game more 3D
 - add white saucer ram movement
 - adjust rejuvinator debris movement 
 - ask regarding the missing init from line 436 in the email
 For later:
 - Check the sentinal ship constants/Optimize the code/remove unnecessary code
-- Documentation
-
-Nice to have:
-- Enemies get smaller/bigger according to the 3d rendering"""
+- Documentation"""
 
 
 class BeamRiderConstants(NamedTuple):
@@ -365,7 +363,7 @@ class BeamRiderEnv(JaxEnvironment[BeamRiderState, BeamRiderObservation, BeamRide
         self.constants = BeamRiderConstants()
         self.screen_width = self.constants.SCREEN_WIDTH
         self.screen_height = self.constants.SCREEN_HEIGHT
-        self.action_space_size = 18  # Updated from 6 to 9 for torpedo actions
+        self.action_space_size = 18
         self.beam_positions = self.constants.get_beam_positions()
         self.renderer = BeamRiderRenderer()
 
@@ -1288,7 +1286,7 @@ class BeamRiderEnv(JaxEnvironment[BeamRiderState, BeamRiderObservation, BeamRide
     def _handle_firing(self, state: BeamRiderState, action: int) -> BeamRiderState:
         """Handle both laser and torpedo firing"""
 
-        # Torpedo firing - T key maps to action 10 (UPFIRE)
+        # Torpedo firing - T key maps to action 2 (UP)
         should_fire_torpedo = (action == 2)
         state = self._fire_torpedo(state, should_fire_torpedo)
 
@@ -3541,7 +3539,7 @@ class BeamRiderRenderer(JAXGameRenderer):
         num_hlines = 7  # Number of animated lines
         speed = 1  # Pixels per frame (for timing)
         spacing = grid_height // (num_hlines + 1)
-        phase = (frame_count * 0.003) % 1.0  # Smooth looping animation phase
+        phase = (frame_count * 0.006) % 1.0  # Smooth looping animation phase
 
         def draw_hline(i, scr):
             # Animate line position using easing (t^3 curve)
@@ -3782,43 +3780,79 @@ class BeamRiderRenderer(JAXGameRenderer):
 
     @partial(jax.jit, static_argnums=(0,))
     def _draw_enemies(self, screen: chex.Array, enemies: chex.Array) -> chex.Array:
-        """Draw all active enemies"""
+        """Draw all active enemies with perspective scaling (except sentinels)"""
 
-        # Vectorized drawing function
         def draw_single_enemy(i, screen):
-            x, y = enemies[i, 0].astype(int), enemies[i, 1].astype(int)
+            x, y = enemies[i, 0], enemies[i, 1]  # Keep as float for scaling calculations
             active = enemies[i, 3] == 1
             enemy_type = enemies[i, 5].astype(int)
+
+            # Calculate perspective scale based on Y position
+            height = self.constants.SCREEN_HEIGHT
+            top_margin = int(height * 0.12)
+            bottom_margin = int(height * 0.14)
+            y0 = height - bottom_margin  # Near position (player)
+            y1 = -height * 0.7  # Far position (horizon)
+
+            # Calculate t parameter (0 at bottom, 1 at horizon)
+            t = jnp.clip((y - y0) / (y1 - y0), 0.0, 1.0)
+
+            # Scale factor: 1.5 at bottom, 0.5 at horizon - larger enemies
+            scale_factor = 1.5 - (t * 1.0)  # Goes from 1.5 to 0.5
+
+            # Get base enemy dimensions
+            base_width = jnp.where(
+                enemy_type == self.constants.ENEMY_TYPE_SENTINEL_SHIP,
+                self.constants.SENTINEL_SHIP_WIDTH,
+                self.constants.ENEMY_WIDTH
+            )
+            base_height = jnp.where(
+                enemy_type == self.constants.ENEMY_TYPE_SENTINEL_SHIP,
+                self.constants.SENTINEL_SHIP_HEIGHT,
+                self.constants.ENEMY_HEIGHT
+            )
+
+            # Apply perspective scaling (except for sentinel ships)
+            sentinel_ship = enemy_type == self.constants.ENEMY_TYPE_SENTINEL_SHIP
+            scaled_width = jnp.where(
+                sentinel_ship,
+                base_width.astype(int),  # Keep original size for sentinels
+                (base_width * scale_factor).astype(int)  # Scale others
+            )
+            scaled_height = jnp.where(
+                sentinel_ship,
+                base_height.astype(int),  # Keep original size for sentinels
+                (base_height * scale_factor).astype(int)  # Scale others
+            )
+
+            # Ensure minimum size of 2x2 pixels
+            scaled_width = jnp.maximum(scaled_width, 2)
+            scaled_height = jnp.maximum(scaled_height, 2)
+
+            # Center the scaled enemy at its position
+            x_offset = ((base_width - scaled_width) / 2).astype(int)
+            y_offset = ((base_height - scaled_height) / 2).astype(int)
+
+            draw_x = (x + x_offset).astype(int)
+            draw_y = (y + y_offset).astype(int)
 
             # Create coordinate grids
             y_indices = jnp.arange(self.constants.SCREEN_HEIGHT)
             x_indices = jnp.arange(self.constants.SCREEN_WIDTH)
             y_grid, x_grid = jnp.meshgrid(y_indices, x_indices, indexing='ij')
 
-            # Get enemy dimensions (sentinel ships are larger)
-            enemy_width = jnp.where(
-                enemy_type == self.constants.ENEMY_TYPE_SENTINEL_SHIP,
-                self.constants.SENTINEL_SHIP_WIDTH,
-                self.constants.ENEMY_WIDTH
-            )
-            enemy_height = jnp.where(
-                enemy_type == self.constants.ENEMY_TYPE_SENTINEL_SHIP,
-                self.constants.SENTINEL_SHIP_HEIGHT,
-                self.constants.ENEMY_HEIGHT
-            )
-
-            # Create mask for enemy pixels
+            # Create mask for scaled enemy pixels
             enemy_mask = (
-                    (x_grid >= x) &
-                    (x_grid < x + enemy_width) &
-                    (y_grid >= y) &
-                    (y_grid < y + enemy_height) &
+                    (x_grid >= draw_x) &
+                    (x_grid < draw_x + scaled_width) &
+                    (y_grid >= draw_y) &
+                    (y_grid < draw_y + scaled_height) &
                     active &
-                    (x >= 0) & (x < self.constants.SCREEN_WIDTH) &
-                    (y >= 0) & (y < self.constants.SCREEN_HEIGHT)
+                    (draw_x >= 0) & (draw_x < self.constants.SCREEN_WIDTH) &
+                    (draw_y >= 0) & (draw_y < self.constants.SCREEN_HEIGHT)
             )
 
-            # FIXED: Select enemy color based on type - Added yellow rejuvenator case
+            # Select enemy color based on type (same as before)
             enemy_color = jnp.where(
                 enemy_type == self.constants.ENEMY_TYPE_BROWN_DEBRIS,
                 jnp.array(self.constants.BROWN_DEBRIS_COLOR, dtype=jnp.uint8),
@@ -3839,15 +3873,14 @@ class BeamRiderRenderer(JAXGameRenderer):
                                     jnp.array(self.constants.ORANGE_TRACKER_COLOR, dtype=jnp.uint8),
                                     jnp.where(
                                         enemy_type == self.constants.ENEMY_TYPE_YELLOW_REJUVENATOR,
-                                        jnp.array(self.constants.YELLOW_REJUVENATOR_COLOR, dtype=jnp.uint8),  # ADDED
+                                        jnp.array(self.constants.YELLOW_REJUVENATOR_COLOR, dtype=jnp.uint8),
                                         jnp.where(
                                             enemy_type == self.constants.ENEMY_TYPE_REJUVENATOR_DEBRIS,
                                             jnp.array(self.constants.REJUVENATOR_DEBRIS_COLOR, dtype=jnp.uint8),
-                                            # ADDED
                                             jnp.where(
                                                 enemy_type == self.constants.ENEMY_TYPE_SENTINEL_SHIP,
                                                 jnp.array(self.constants.RED, dtype=jnp.uint8),
-                                                jnp.array(self.constants.WHITE, dtype=jnp.uint8)  # Default white saucer
+                                                jnp.array(self.constants.WHITE, dtype=jnp.uint8)
                                             )
                                         )
                                     )
@@ -3860,15 +3893,17 @@ class BeamRiderRenderer(JAXGameRenderer):
 
             # Apply enemy color where mask is True
             screen = jnp.where(
-                enemy_mask[..., None],  # Add dimension for RGB
+                enemy_mask[..., None],
                 enemy_color,
                 screen
             ).astype(jnp.uint8)
 
             return screen
+
         # Apply to all enemies
         screen = jax.lax.fori_loop(0, self.constants.MAX_ENEMIES, draw_single_enemy, screen)
         return screen
+
 
     @partial(jax.jit, static_argnums=(0,))
     def _draw_ui(self, screen: chex.Array, state) -> chex.Array:
