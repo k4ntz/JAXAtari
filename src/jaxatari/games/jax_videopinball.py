@@ -1693,7 +1693,6 @@ class VideoPinballInfo(NamedTuple):
     ball_in_play: chex.Array
     respawn_timer: chex.Array
     tilt_counter: chex.Array
-    all_rewards: chex.Array
 
 @jax.jit
 def plunger_step(state: VideoPinballState, action: chex.Array) -> chex.Array:
@@ -3831,7 +3830,7 @@ class JaxVideoPinball(
             ball_in_play=state.ball_in_play,
             respawn_timer=state.respawn_timer,
             tilt_counter=state.tilt_counter,
-        )._asdict()
+        )
 
     @partial(jax.jit, static_argnums=(0,))
     def _get_reward(
