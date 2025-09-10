@@ -1625,6 +1625,31 @@ class BattleZoneRenderer:
         sweep_y = int(radar_center_y + sweep_length * math.sin(angle - math.pi/2))
         pygame.draw.line(screen, (255, 255, 255), (radar_center_x, radar_center_y), (sweep_x, sweep_y), 2)
 
+        # Add iconic short diagonal ticks at top-left and top-right of the radar (as in original)
+        try:
+            # angles slightly left/right of the top (-pi/2)
+            left_ang = -math.pi/2 - 0.6
+            right_ang = -math.pi/2 + 0.6
+            # start just inside the circle edge and draw inward toward center
+            edge_r = radar_radius - 2
+            # original outward length was roughly 12; use 60% of that (~7 pixels)
+            tick_len = max(4, int(12 * 0.6))
+
+            lx_start = int(radar_center_x + edge_r * math.cos(left_ang))
+            ly_start = int(radar_center_y + edge_r * math.sin(left_ang))
+            lx_end = int(radar_center_x + (edge_r - tick_len) * math.cos(left_ang))
+            ly_end = int(radar_center_y + (edge_r - tick_len) * math.sin(left_ang))
+
+            rx_start = int(radar_center_x + edge_r * math.cos(right_ang))
+            ry_start = int(radar_center_y + edge_r * math.sin(right_ang))
+            rx_end = int(radar_center_x + (edge_r - tick_len) * math.cos(right_ang))
+            ry_end = int(radar_center_y + (edge_r - tick_len) * math.sin(right_ang))
+
+            pygame.draw.line(screen, WIREFRAME_COLOR, (lx_start, ly_start), (lx_end, ly_end), 2)
+            pygame.draw.line(screen, WIREFRAME_COLOR, (rx_start, ry_start), (rx_end, ry_end), 2)
+        except Exception:
+            pass
+
         # Radar scale as before
         scale = (radar_radius - 4) / (WORLD_SIZE / 2)
 
