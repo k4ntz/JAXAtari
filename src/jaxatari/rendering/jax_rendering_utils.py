@@ -56,6 +56,62 @@ def add_border(frame):
     return frame
 
 
+def change_sprite_color(sprite, rgb_color):
+    """
+    Change the color of an RGBA sprite.
+
+    Args:
+        sprite: 3D array with shape (W, H, C) representing an RGBA sprite
+        rgb_color: RGB color array [R, G, B]
+
+    Returns:
+        3D RGBA array with the sprite recolored
+    """
+    # Create a mask for non-transparent pixels (assuming alpha channel is index 3)
+    mask = sprite[..., 3] > 0  # Shape (W, H) - check alpha channel
+
+    # Create output sprite, keeping original alpha
+    colored_sprite = sprite.copy()
+
+    # Apply new RGB colors where mask is True, preserve alpha channel
+    colored_sprite = colored_sprite.at[..., 0].set(jnp.where(mask, rgb_color[0], sprite[..., 0]))
+    colored_sprite = colored_sprite.at[..., 1].set(jnp.where(mask, rgb_color[1], sprite[..., 1]))
+    colored_sprite = colored_sprite.at[..., 2].set(jnp.where(mask, rgb_color[2], sprite[..., 2]))
+    # Keep original alpha: colored_sprite[..., 3] stays the same
+
+    return colored_sprite.astype(jnp.uint8)
+
+
+def load_frame_with_animation(path: str, transpose: bool = True) -> jnp.ndarray:
+    """
+    Loads a sprite from .npy file.
+    - If it's a static frame (shape: H, W, 4), wraps it to shape (1, W, H, 4)
+    - If it's an animation (shape: N, H, W, 4), transposes each frame to (W, H, 4)
+
+    Returns:
+        JAX array of shape (NumFrames, W, H, 4)
+    """
+    arr = np.load(path)  # Use NumPy to inspect shape first
+
+    if arr.ndim == 3:
+        if arr.shape[2] != 4:
+            raise ValueError(f"Static sprite must have 4 channels (RGBA), got shape {arr.shape}")
+        if transpose:
+            arr = np.transpose(arr, (1, 0, 2))  # HWC -> WHC
+        arr = arr[None, ...]  # Add frame axis → (1, W, H, 4)
+
+    elif arr.ndim == 4:
+        if arr.shape[3] != 4:
+            raise ValueError(f"Animated sprite must have 4 channels (RGBA), got shape {arr.shape}")
+        if transpose:
+            arr = np.transpose(arr, (0, 2, 1, 3))  # NHWC -> NWHC
+
+    else:
+        raise ValueError(f"Unsupported array shape: {arr.shape}")
+
+    return jnp.array(arr).astype(jnp.uint8)
+
+
 def loadFrame(fileName, transpose=False):
     """Loads a frame from .npy, ensuring output is (Height, Width, Channels).
 
