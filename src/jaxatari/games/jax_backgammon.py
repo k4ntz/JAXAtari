@@ -44,7 +44,7 @@ class BackgammonState(NamedTuple):
     is_game_over: bool
     key: jax.random.PRNGKey
     last_move: Tuple[int, int] = (-1, -1)   # NEW
-    last_dice: int = -1                      # NEW
+    last_dice: int = -1                     # NEW
 
 
 class BackgammonInfo(NamedTuple):
