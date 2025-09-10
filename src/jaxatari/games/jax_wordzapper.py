@@ -13,13 +13,14 @@ from jaxatari.environment import JaxEnvironment, JAXAtariAction as Action
 
 
 class WordZapperConstants(NamedTuple) :
+    START_PHASE_FRAMES = 250  # Number of frames for start phase (2 seconds at 60 FPS)
     # define object orientations
     FACE_LEFT = -1
     FACE_RIGHT = 1
 
     # Player 
-    PLAYER_START_X = 80
-    PLAYER_START_Y = 110
+    PLAYER_START_X = 36
+    PLAYER_START_Y = 135
 
     # Object sizes (width, height)
     PLAYER_SIZE = (16, 12)
@@ -44,6 +45,7 @@ class WordZapperConstants(NamedTuple) :
     LETTERS_DISTANCE = 14 # spacing between letters
     LETTERS_END = LETTER_VISIBLE_MIN_X + 26 * LETTERS_DISTANCE # 27 symbols (letters + special) but 26 gaps
     LETTER_COOLDOWN = 200 # cooldown after letters zapperd till they reappear
+    LETTER_SCROLLING_SPEED = 1 # speed at which letters move left
 
     # Enemies
     MAX_ENEMIES = 6
@@ -67,7 +69,7 @@ class WordZapperConstants(NamedTuple) :
     
     ZAPPING_BOUNDS = (LETTER_VISIBLE_MIN_X, LETTER_VISIBLE_MAX_X - ZAPPER_SPR_WIDTH) # min x, max x
     
-    PLAYER_ZAPPER_COOLDOWN_TIME = 15 # amount letters stop moving and zapper is active TODO find exact values
+    PLAYER_ZAPPER_COOLDOWN_TIME = 32 # amount letters stop moving and zapper is active
     ZAPPER_BLOCK_TIME = 50 # dont allow zapper action during this time
     
     TIME = 99
@@ -76,6 +78,9 @@ class WordZapperConstants(NamedTuple) :
 
     ENEMY_EXPLOSION_FRAME_DURATION = 8  # Number of ticks per explosion frame
     ENEMY_EXPLOSION_FRAMES = 4          # NEW: number of explosion frames/sprites
+    # Letter explosion animation
+    LETTER_EXPLOSION_FRAME_DURATION = 8
+    LETTER_EXPLOSION_FRAMES = 4
 
 
 
@@ -152,6 +157,12 @@ class WordZapperState(NamedTuple):
     rng_key: chex.PRNGKey
     score: chex.Array
 
+    # Letter explosion animation state
+    letter_explosion_frame: chex.Array  # shape (27,)
+    letter_explosion_timer: chex.Array  # shape (27,)
+    letter_explosion_frame_timer: chex.Array  # shape (27,)
+    letter_explosion_pos: chex.Array  # shape (27, 2)
+
 class EntityPosition(NamedTuple):
     x: jnp.ndarray
     y: jnp.ndarray
@@ -224,6 +235,13 @@ def load_sprites():
     exp3 = jr.loadFrame(os.path.join(MODULE_DIR, "sprites/wordzapper/explosions/enemy_explosions/exp3.npy"))
     exp4 = jr.loadFrame(os.path.join(MODULE_DIR, "sprites/wordzapper/explosions/enemy_explosions/exp4.npy"))
 
+    # Letter explosion sprites
+    lexp_frames = [
+        jr.loadFrame(os.path.join(MODULE_DIR, f"sprites/wordzapper/explosions/normal_explosions/{i}.npy"))
+        for i in range(1, 5)
+    ]
+    lexp_frames_padded, _ = jr.pad_to_match(lexp_frames)
+
     # Pad player sprites to match
     pl_sub_sprites, pl_sub_offsets = jr.pad_to_match([pl_1, pl_2])
     pl_sub_offsets = jnp.array(pl_sub_offsets)
@@ -281,7 +299,8 @@ def load_sprites():
 
     LETTERS = jnp.stack(letters, axis=0)  
     
-    ENEMY_EXPLOSION_SPRITES = jnp.stack([exp1, exp2, exp3, exp4], axis=0)  # Now 4 sprites
+    ENEMY_EXPLOSION_SPRITES = jnp.stack([exp1, exp2, exp3, exp4], axis=0)
+    LETTER_EXPLOSION_SPRITES = jnp.stack(lexp_frames_padded, axis=0)
 
     return (
         SPRITE_BG,
@@ -293,7 +312,8 @@ def load_sprites():
         YELLOW_LETTERS,
         QMARK_SPRITE,
         LETTERS,
-        ENEMY_EXPLOSION_SPRITES,  
+        ENEMY_EXPLOSION_SPRITES,
+        LETTER_EXPLOSION_SPRITES,
         pl_sub_offsets,
         bonker_offsets,
         zonker_offsets,
@@ -311,13 +331,14 @@ def load_sprites():
     YELLOW_LETTERS,
     QMARK_SPRITE,
     LETTERS,
-    ENEMY_EXPLOSION_SPRITES, 
+    ENEMY_EXPLOSION_SPRITES,
+    LETTER_EXPLOSION_SPRITES,
     PL_OFFSETS,
     BONKER_OFFSETS,
     ZONKER_OFFSETS,
     YELLOW_LETTERS_OFFSETS,
     LETTERS_OFFSETS,
-) = load_sprites()
+    ) = load_sprites()
 
 
 @jax.jit
@@ -427,9 +448,7 @@ def player_step(
 
 
 @jax.jit
-def scrolling_letters(
-        state: WordZapperState, consts: WordZapperConstants
-    ) -> chex.Array :
+def scrolling_letters(state: WordZapperState, consts: WordZapperConstants) -> chex.Array:
 
     new_letters_x = state.letters_x - state.letters_speed
 
@@ -463,24 +482,106 @@ def scrolling_letters(
         )
     )
     
-    # zapping letters TODO this is temp soultion, it could be more accurate
+    # TODO this is temp solution it could be more accurate 
+    # zapping letters and triggering explosion
     closest_letter_id = jnp.argmin(jnp.abs(state.letters_x - state.player_zapper_position[5]))
 
-    within_zapping_bounds = jnp.logical_and(
+    # Only allow zapping if zapper is within bounds AND the closest letter is visible
+    zapper_in_bounds = jnp.logical_and(
         state.player_zapper_position[0] >= consts.ZAPPING_BOUNDS[0],
         state.player_zapper_position[0] <= consts.ZAPPING_BOUNDS[1],
     )
 
-    new_letters_alive = jax.lax.cond(
-        jnp.logical_and(state.player_zapper_position[2], within_zapping_bounds),
-        lambda l: l.at[closest_letter_id].set(
-                jnp.array([0, consts.LETTER_COOLDOWN], dtype=jnp.int32),
-        ),
-        lambda l: l,
-        new_letters_alive
+    letter_in_bounds = jnp.logical_and(
+        state.letters_x[closest_letter_id] >= consts.LETTER_VISIBLE_MIN_X,
+        state.letters_x[closest_letter_id] < consts.LETTER_VISIBLE_MAX_X,
     )
 
-    return new_letters_x, new_letters_alive
+    within_zapping_bounds = jnp.logical_and(zapper_in_bounds, letter_in_bounds)
+
+
+
+    def zap_letter(args):
+        l, frame, timer, frame_timer, pos = args
+        # Set letter as not alive and start explosion
+        l = l.at[closest_letter_id].set(jnp.array([0, consts.LETTER_COOLDOWN], dtype=jnp.int32))
+        frame = frame.at[closest_letter_id].set(1)
+        timer = timer.at[closest_letter_id].set(consts.LETTER_EXPLOSION_FRAMES)
+        frame_timer = frame_timer.at[closest_letter_id].set(consts.LETTER_EXPLOSION_FRAME_DURATION)
+        pos = pos.at[closest_letter_id].set(jnp.array([state.letters_x[closest_letter_id], state.letters_y[closest_letter_id]]))
+        return l, frame, timer, frame_timer, pos
+
+    def no_zap(args):
+        l, frame, timer, frame_timer, pos = args
+        return l, frame, timer, frame_timer, pos
+
+    # zap if zapper active and within bounds
+    zap_condition = jnp.logical_and(state.player_zapper_position[2], within_zapping_bounds)
+
+
+    # Only trigger explosion on rising edge, but do NOT reset animation if zapper stays active
+    def safe_zap_letter(args):
+        l, frame, timer, frame_timer, pos = args
+        # Only start explosion if not already active for this letter
+        already_exploding = frame[closest_letter_id] > 0
+        
+        return jax.lax.cond(already_exploding, no_zap, zap_letter, (l, frame, timer, frame_timer, pos))
+    
+    (
+        new_letters_alive,
+        letter_explosion_frame,
+        letter_explosion_timer,
+        letter_explosion_frame_timer,
+        letter_explosion_pos
+    ) = jax.lax.cond(
+        zap_condition,
+        safe_zap_letter,
+        lambda args: args,
+        (
+            new_letters_alive,
+            state.letter_explosion_frame,
+            state.letter_explosion_timer,
+            state.letter_explosion_frame_timer,
+            state.letter_explosion_pos
+        )
+    )
+
+    # Custom explosion animation sequence (independent of PLAYER_ZAPPER_COOLDOWN_TIME)
+    explosion_sequence = jnp.array([
+        [0, 1],  # 1.npy - 1 frame
+        [1, 2],  # 2.npy - 2 frames
+        [0, 2],  # 1.npy - 2 frames
+        [1, 1],  # 2.npy - 1 frame
+        [2, 1],  # 3.npy - 1 frame
+        [1, 2],  # 2.npy - 2 frames
+        [2, 4],  # 3.npy - 4 frames
+        [3, 2],  # 4.npy - 2 frames
+        [2, 1],  # 3.npy - 1 frame
+    ])
+    max_seq_len = explosion_sequence.shape[0]
+
+    # Advance explosion frames
+    frame_should_advance = (letter_explosion_frame_timer == 0) & (letter_explosion_frame > 0)
+    next_frame = letter_explosion_frame + jnp.where(frame_should_advance, 1, 0)
+    next_frame = jnp.where(next_frame > max_seq_len, 0, next_frame)
+
+    def get_frame_timer(frame, should_advance, prev_timer):
+        idx = jnp.clip(frame - 1, 0, max_seq_len - 1)
+        duration = explosion_sequence[idx, 1]
+        return jnp.where(should_advance, duration, prev_timer - 1)
+
+    new_timer = jnp.where(
+        next_frame > 0,
+        jax.vmap(get_frame_timer)(next_frame, frame_should_advance, letter_explosion_frame_timer),
+        0
+    )
+    new_timer = jnp.where(next_frame == 0, 0, new_timer)
+
+    letter_explosion_frame = next_frame
+    letter_explosion_frame_timer = new_timer
+    letter_explosion_timer = jnp.where(letter_explosion_frame == 0, 0, letter_explosion_timer)
+
+    return new_letters_x, new_letters_alive, letter_explosion_frame, letter_explosion_timer, letter_explosion_frame_timer, letter_explosion_pos
 
 
 @jax.jit
@@ -490,15 +591,12 @@ def player_missile_step(
     fire = jnp.any(
         jnp.array(
             [
-                action == Action.FIRE,
                 action == Action.UPRIGHTFIRE,
                 action == Action.UPLEFTFIRE,
-                action == Action.DOWNFIRE,
                 action == Action.DOWNRIGHTFIRE,
                 action == Action.DOWNLEFTFIRE,
                 action == Action.RIGHTFIRE,
                 action == Action.LEFTFIRE,
-                action == Action.UPFIRE, ## TODO downfire upfire are not missile step? right? right? look at frate extractor, when running it in terminal you can see key mappings 
             ]
         )
     )
@@ -777,34 +875,15 @@ class JaxWordZapper(JaxEnvironment[WordZapperState, WordZapperObservation, WordZ
 
     @partial(jax.jit, static_argnums=(0,))
     def reset(self, key: jax.random.PRNGKey = jax.random.PRNGKey(42)) -> Tuple[WordZapperObservation, WordZapperState]:
-        key, sub_word, next_key = jax.random.split(key, 3) # TODO: ask what does this do? why do we need this?
-
+        key, sub_word, next_key = jax.random.split(key, 3)
         word_idx = jax.random.randint(sub_word, (), 0, WORD_COUNT, dtype=jnp.int32)
         encoded = ENCODED_WORD_LIST[word_idx]
 
-        intro_y = jnp.linspace(self.consts.ENEMY_Y_MIN, self.consts.ENEMY_Y_MAX, 4)
-        intro_vx = jnp.ones((4,)) * self.consts.INTRO_SWEEP_SPEED
-        intro_x = jnp.full((4,), self.consts.ENEMY_MIN_X)
-        intro_typ = jnp.array([0, 1, 0, 1])
-        intro_on = jnp.ones((4,))
+        enemy_positions_init = jnp.zeros((self.consts.MAX_ENEMIES, 5), dtype=jnp.float32)
+        enemy_active_init = jnp.zeros((self.consts.MAX_ENEMIES,), jnp.int32)
 
-        intro_enemies = jnp.stack(
-            [intro_x, intro_y, intro_typ, intro_vx, intro_on], axis=1
-        )
-        enemy_positions_init = jnp.concatenate(
-            [intro_enemies,
-            jnp.zeros((self.consts.MAX_ENEMIES - 4, 5), dtype=jnp.float32)],
-            axis=0,
-        )
-        enemy_active_init = jnp.concatenate(
-            [jnp.ones((4,), jnp.int32),
-            jnp.zeros((self.consts.MAX_ENEMIES - 4,), jnp.int32)],
-            axis=0,
-        )
-
-        # TODO get rid of these for more elegant solution, these are reused in reset below
-        letters_x = jnp.linspace(self.consts.WIDTH, self.consts.WIDTH + 25 * 14, 27) # 12px apart, offscreen right
-        letters_y = jnp.full((27,), 30)  # All at y=30
+        letters_x = jnp.linspace(self.consts.LETTER_VISIBLE_MIN_X, self.consts.LETTERS_END, 27)
+        letters_y = jnp.full((27,), 30)
 
         reset_state = WordZapperState(
             player_x=jnp.array(self.consts.PLAYER_START_X),
@@ -819,27 +898,31 @@ class JaxWordZapper(JaxEnvironment[WordZapperState, WordZapperObservation, WordZ
             player_missile_position=jnp.zeros(4),
             player_zapper_position=jnp.zeros(7),
 
-            letters_x = jnp.linspace(self.consts.LETTER_VISIBLE_MIN_X, self.consts.LETTERS_END, 27), # 12px apart, offscreen right
-            letters_y = jnp.full((27,), 30),  # All at y=30
-            letters_char = jnp.arange(27),  # A-Z and special
-            letters_alive = jnp.stack([jnp.ones((27,), dtype=jnp.int32), jnp.zeros((27,), dtype=jnp.int32)], axis=1),
-            letters_speed = jnp.ones((27,)) * 1,  # All move at 1px/frame
-            letters_positions = jnp.stack([letters_x, letters_y], axis=1),  # shape (27,2)
-            current_word = jnp.array([0, 1, 2, 3, 4]),  # Example: word "ABCDE"
-            current_letter_index = jnp.array(0),
+            letters_x=letters_x,
+            letters_y=letters_y,
+            letters_char=jnp.arange(27),
+            letters_alive=jnp.stack([jnp.ones((27,), dtype=jnp.int32), jnp.zeros((27,), dtype=jnp.int32)], axis=1),
+            letters_speed=jnp.ones((27,)) * self.consts.LETTER_SCROLLING_SPEED,
+            letters_positions=jnp.stack([letters_x, letters_y], axis=1),
+            current_word=jnp.array([0, 1, 2, 3, 4]),
+            current_letter_index=jnp.array(0),
 
             timer=jnp.array(self.consts.TIME),
-          
             target_word=encoded,
             step_counter=jnp.array(0),
 
-            game_phase=jnp.array(0),
+            game_phase=jnp.array(0),  # Start in start phase
             phase_timer=jnp.array(0),
 
             enemy_explosion_frame=jnp.zeros((self.consts.MAX_ENEMIES,), dtype=jnp.int32),
             enemy_explosion_timer=jnp.zeros((self.consts.MAX_ENEMIES,), dtype=jnp.int32),
             enemy_explosion_frame_timer=jnp.zeros((self.consts.MAX_ENEMIES,), dtype=jnp.int32),
             enemy_explosion_pos=jnp.zeros((self.consts.MAX_ENEMIES, 2)),
+
+            letter_explosion_frame=jnp.zeros((27,), dtype=jnp.int32),
+            letter_explosion_timer=jnp.zeros((27,), dtype=jnp.int32),
+            letter_explosion_frame_timer=jnp.zeros((27,), dtype=jnp.int32),
+            letter_explosion_pos=jnp.zeros((27, 2)),
 
             rng_key=next_key,
             score=jnp.array(0),
@@ -978,22 +1061,15 @@ class JaxWordZapper(JaxEnvironment[WordZapperState, WordZapperObservation, WordZ
             game_over=self._get_done(state),
         )
     
-    def _advance_phase(self, s: WordZapperState): # I think this is the one where stuff move on the screen when game starts
+    def _advance_phase(self, s: WordZapperState):
+        # Start phase: player immobile, letters do not scroll
+        phase = s.game_phase
         timer = s.phase_timer + 1
-        phase = s.game_phase           # 0=intro, 1=word, 2=gameplay
-
         phase = jax.lax.cond(
-            (phase == 0) & (timer >= self.consts.INTRO_PHASE_FRAMES),
-            lambda: jnp.array(1), lambda: phase
-        )
-        phase = jax.lax.cond(
-            (phase == 1) & (timer >= self.consts.WORD_DISPLAY_FRAMES),
+            (phase == 0) & (timer >= self.consts.START_PHASE_FRAMES),
             lambda: jnp.array(2), lambda: phase
         )
-
-        timer = jax.lax.cond(phase != s.game_phase,
-                            lambda: jnp.array(0),
-                            lambda: timer)
+        timer = jax.lax.cond(phase != s.game_phase, lambda: jnp.array(0), lambda: timer)
         return phase, timer
 
     @partial(jax.jit, static_argnums=(0,))
@@ -1063,8 +1139,15 @@ class JaxWordZapper(JaxEnvironment[WordZapperState, WordZapperObservation, WordZ
             state.enemy_active,
         )
         
-        # Scroll letters
-        new_letters_x, new_letters_alive = scrolling_letters(
+        # Scroll letters and handle explosions
+        (
+            new_letters_x,
+            new_letters_alive,
+            new_letter_explosion_frame,
+            new_letter_explosion_timer,
+            new_letter_explosion_frame_timer,
+            new_letter_explosion_pos,
+        ) = scrolling_letters(
             state,
             self.consts
         )
@@ -1159,6 +1242,10 @@ class JaxWordZapper(JaxEnvironment[WordZapperState, WordZapperObservation, WordZ
             enemy_explosion_timer=new_enemy_explosion_timer,
             enemy_explosion_frame_timer=new_enemy_explosion_frame_timer,
             enemy_explosion_pos=enemy_explosion_pos,
+            letter_explosion_frame=new_letter_explosion_frame,
+            letter_explosion_timer=new_letter_explosion_timer,
+            letter_explosion_frame_timer=new_letter_explosion_frame_timer,
+            letter_explosion_pos=new_letter_explosion_pos,
         )
 
     @partial(jax.jit, static_argnums=(0,))
@@ -1176,12 +1263,16 @@ class JaxWordZapper(JaxEnvironment[WordZapperState, WordZapperObservation, WordZ
         previous_state = state
         phase, p_timer = self._advance_phase(state)
         state = state._replace(game_phase=phase, phase_timer=p_timer)
+        def start_phase_step(s, a):
+            # Player does not move, letters do not scroll, but animations can update (e.g. step_counter)
+            return s._replace(
+                step_counter=s.step_counter + 1
+            )
         state = jax.lax.switch(
             phase,
             [
-                lambda s: self._intro_step(s),                # phase 0
-                lambda s: self._word_step(s),                 # phase 1
-                lambda s: self._normal_game_step(s, action),  # phase 2
+                lambda s: start_phase_step(s, action),         # phase 0: start phase
+                lambda s: self._normal_game_step(s, action),   # phase 2: gameplay
             ],
             state,
         )
@@ -1284,7 +1375,7 @@ class WordZapperRenderer(JAXGameRenderer):
             return raster
 
         raster = jax.lax.cond(
-            state.game_phase == 2,
+            jnp.logical_or(state.game_phase == 0, state.game_phase == 2),
             _draw_player_bundle,
             lambda r: r,
             raster,
@@ -1330,37 +1421,53 @@ class WordZapperRenderer(JAXGameRenderer):
 
         raster = jax.lax.fori_loop(0, self.consts.MAX_ENEMIES, body_fn, raster)
 
-        # Render normal letters
+        # Render normal letters and their explosions
         def _render_letter(i, raster):
             is_alive = state.letters_alive[i, 0]
             x = state.letters_x[i]
             y = state.letters_y[i]
             char_idx = state.letters_char[i]
             sprite = jr.get_sprite_frame(LETTERS, char_idx)  # (H, W, C)
-        
+            explosion_frame = state.letter_explosion_frame[i]
+            explosion_pos = state.letter_explosion_pos[i]
+
             def render_visible(r):
                 sprite_h, sprite_w = sprite.shape[:2]
-        
-                # x positions of each column of the sprite
                 sprite_xs = x + jnp.arange(sprite_w)
-        
-                # create mask where x is within bounds
                 x_mask = jnp.logical_and((sprite_xs >= self.consts.LETTER_VISIBLE_MIN_X), (sprite_xs < self.consts.LETTER_VISIBLE_MAX_X)).astype(sprite.dtype)
-                
-                # expand the mask
                 x_mask = x_mask[None, :, None]  # (1, W, 1)
-
-                # apply mask to zero out offscreen pixels
                 masked_sprite = sprite * x_mask
-        
                 return jr.render_at(r, x, y, masked_sprite)
-            
-            
-            return jax.lax.cond(is_alive == 1, render_visible, lambda r: r, raster)
-        
- 
+
+            def render_explosion(r):
+                # Use custom sequence for sprite index
+                explosion_sequence = jnp.array([
+                    0, # 1.npy
+                    1, # 2.npy
+                    0, # 1.npy
+                    1, # 2.npy
+                    2, # 3.npy
+                    1, # 2.npy
+                    2, # 3.npy
+                    3, # 4.npy
+                    2, # 3.npy
+                ])
+                seq_len = explosion_sequence.shape[0]
+                idx = jnp.where(
+                    (explosion_frame > 0) & (explosion_frame <= seq_len),
+                    explosion_sequence[explosion_frame - 1],
+                    0
+                )
+                return jr.render_at(r, explosion_pos[0], explosion_pos[1], LETTER_EXPLOSION_SPRITES[idx])
+
+            # If explosion is active, render explosion
+            raster = jax.lax.cond(explosion_frame > 0, render_explosion, lambda r: r, raster)
+            # If letter is alive, render letter
+            raster = jax.lax.cond(is_alive == 1, render_visible, lambda r: r, raster)
+            return raster
+
         raster = jax.lax.cond(
-            state.game_phase == 2,
+            jnp.logical_or(state.game_phase == 0, state.game_phase == 2),
             lambda r: jax.lax.fori_loop(0, state.letters_x.shape[0], _render_letter, r),
             lambda r: r,
             raster,
@@ -1444,9 +1551,9 @@ class WordZapperRenderer(JAXGameRenderer):
         raster = jax.lax.switch(
             state.game_phase,
             [
-                lambda ras: ras,                                   # phase 0
-                lambda ras: _draw_word(ras,   state.target_word),  # phase 1
-                lambda ras: _draw_qmarks(ras, state.target_word),  # phase 2
+                lambda ras: _draw_word(ras, state.target_word),    # phase 0: show word
+                lambda ras: _draw_word(ras, state.target_word),    # phase 1: show word (if used)
+                lambda ras: _draw_qmarks(ras, state.target_word),  # phase 2: show question marks
             ],
             raster,
         )
