@@ -191,6 +191,7 @@ TANK_COLOR = (0, 200, 0)        # standard tank - greenish
 SUPERTANK_COLOR = (255, 60, 60)  # supertank - reddish
 FIGHTER_COLOR = (200, 200, 0)    # fighter - yellowish
 SAUCER_COLOR = (100, 200, 255)   # saucer - cyan
+HUD_ACCENT_COLOR = (47, 151, 119)  # #2f9777
 
 class Tank(NamedTuple):
     x: chex.Array
@@ -960,7 +961,7 @@ class JaxBattleZone(JaxEnvironment[BattleZoneState, BattleZoneObservation, chex.
             prev_player_x=player_tank.x,
             prev_player_y=player_tank.y,
             player_score=jnp.array(0),   # initialize score
-            player_lives=jnp.array(3)    # initialize lives (3 as example)
+            player_lives=jnp.array(5)    # initialize lives (5 as requested)
         )
         
         observation = self._get_observation(state)
@@ -1293,6 +1294,26 @@ class BattleZoneRenderer:
                 self.sprite_loaded = False
         except Exception:
             self.sprite_loaded = False
+
+        # Load life icon sprite (scaled down in HUD). Try a couple of likely paths.
+        try:
+            life_paths = [
+                os.path.join(os.path.dirname(__file__), "../sprites/battlezone/tank_life.npy"),
+                os.path.join(os.path.dirname(__file__), "sprites/battlezone/tank_life.npy"),
+            ]
+            self.life_sprite = None
+            self.life_sprite_loaded = False
+            for lp in life_paths:
+                if os.path.exists(lp):
+                    try:
+                        self.life_sprite = np.load(lp)
+                        self.life_sprite_loaded = True
+                        break
+                    except Exception:
+                        continue
+        except Exception:
+            self.life_sprite = None
+            self.life_sprite_loaded = False
 
     def draw_player_bullet(self, screen, state: BattleZoneState):
         """Draw all bullets (player and enemy) as moving lines."""
@@ -1678,20 +1699,50 @@ class BattleZoneRenderer:
         except Exception:
             lives_val = 0
 
-        # Draw score centered
+        # Draw score centered (accent color)
         if self.hud_font is not None:
-            score_surf = self.hud_font.render(f"{score_val:03d}", True, WIREFRAME_COLOR)
-            score_rect = score_surf.get_rect(center=(WIDTH // 2, HEIGHT - bottom_bar_height // 2))
+            score_surf = self.hud_font.render(f"{score_val:03d}", True, HUD_ACCENT_COLOR)
+            score_rect = score_surf.get_rect(center=(WIDTH // 2, HEIGHT - bottom_bar_height // 2 - 6))
             screen.blit(score_surf, score_rect)
 
-        # Draw simple life icons (small green rectangles) left of the score
-        life_start_x = WIDTH // 2 - 60
-        life_y = HEIGHT - bottom_bar_height // 2
-        life_spacing = 14
-        for i in range(max(0, lives_val)):
-            lx = int(life_start_x + i * life_spacing)
-            ly = int(life_y - 6)
-            pygame.draw.rect(screen, WIREFRAME_COLOR, (lx, ly, 10, 12), 1)  # outline tank icon
+        # Draw life icons centered below the score (max 5)
+        max_lives_to_show = 5
+        lives_to_draw = min(max_lives_to_show, max(0, lives_val))
+        life_spacing = 16
+        # Compute start x so icons are centered horizontally
+        total_width = (lives_to_draw - 1) * life_spacing + 10 if lives_to_draw > 0 else 0
+        life_start_x = (WIDTH // 2) - (total_width // 2)
+        # Position icons below the score slightly
+        life_y = HEIGHT - bottom_bar_height // 2 + 6
+
+        # If life sprite loaded, scale it down to the size of the previous rectangles and tint
+        if getattr(self, 'life_sprite_loaded', False) and self.life_sprite is not None:
+            try:
+                life_surf_orig = self.numpy_to_pygame_surface(self.life_sprite)
+                # Target size similar to previous rectangles (10x12)
+                target_w, target_h = (12, 12)
+                life_surf = pygame.transform.scale(life_surf_orig, (target_w, target_h)).convert_alpha()
+
+                # Tint life surf to HUD_ACCENT_COLOR
+                tint = pygame.Surface((target_w, target_h), pygame.SRCALPHA)
+                tint.fill(HUD_ACCENT_COLOR + (0,))
+                life_surf.blit(tint, (0, 0), special_flags=pygame.BLEND_RGB_MULT)
+
+                for i in range(lives_to_draw):
+                    lx = int(life_start_x + i * life_spacing)
+                    ly = int(life_y - target_h//2)
+                    screen.blit(life_surf, (lx, ly))
+            except Exception:
+                # Fallback to rectangles on any error
+                for i in range(lives_to_draw):
+                    lx = int(life_start_x + i * life_spacing)
+                    ly = int(life_y - 6)
+                    pygame.draw.rect(screen, HUD_ACCENT_COLOR, (lx, ly, 10, 12), 0)
+        else:
+            for i in range(lives_to_draw):
+                lx = int(life_start_x + i * life_spacing)
+                ly = int(life_y - 6)
+                pygame.draw.rect(screen, HUD_ACCENT_COLOR, (lx, ly, 10, 12), 0)
 
     def render(self, state: BattleZoneState, screen):
         """Render the 3D wireframe view with dynamic ground and moving sky/mountains."""
