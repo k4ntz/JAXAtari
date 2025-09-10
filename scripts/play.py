@@ -1,5 +1,7 @@
 import argparse
 import sys
+import traceback
+
 import pygame
 
 import jax
@@ -225,5 +227,25 @@ def main():
     pygame.quit()
 
 
+def _bootstrap() -> int:
+    """
+    Dev-friendly launcher that supplies default CLI args when none are given,
+    without modifying the upstream `main()` signature or implementation.
+    """
+    if len(sys.argv) == 1:
+        sys.argv.extend(["--game", "Enduro"])
+    try:
+        return main()  # type: ignore[name-defined]
+    except SystemExit:
+        # let argparse/sys.exit() behave normally
+        raise
+    except KeyboardInterrupt:
+        print("Interrupted by user (Ctrl+C)", file=sys.stderr)
+        return 130
+    except Exception:
+        print("Unhandled error in bootstrap:", file=sys.stderr)
+        traceback.print_exc()  # prints full traceback to stderr
+        return 1
+
 if __name__ == "__main__":
-    main()
+    raise SystemExit(_bootstrap())
