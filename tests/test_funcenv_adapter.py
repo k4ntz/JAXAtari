@@ -19,10 +19,16 @@ from jaxatari.gym_wrapper import GymnasiumJaxAtariWrapper, JaxAtariFuncEnv, to_g
 # 2. TEST FIXTURES
 # ==============================================================================
 
-@pytest.fixture(scope="module")
-def raw_jaxatari_env():
-    """Provides a raw, unwrapped jaxatari environment instance."""
-    return jaxatari.make("pong")
+@pytest.fixture
+def raw_jaxatari_env(request):
+    """
+    Provides a raw, unwrapped jaxatari environment instance.
+    Uses the game specified by the --game option, or defaults to 'pong'.
+    """
+    game_name = request.config.getoption("--game")
+    if game_name is None:
+        game_name = "pong"
+    return jaxatari.make(game_name)
 
 @pytest.fixture
 def gym_env(raw_jaxatari_env):
@@ -183,7 +189,7 @@ MAX_EPISODE_STEPS = 5000
 
 # ---- TEST CASES ----
 
-def test_env_creation_and_spaces(gym_env):
+def test_env_creation_and_spaces(gym_env, raw_jaxatari_env):
     """
     Tests if the environment is created successfully and has valid Gymnasium spaces.
     """
@@ -191,8 +197,8 @@ def test_env_creation_and_spaces(gym_env):
     assert hasattr(gym_env, 'action_space'), "Environment must have 'action_space'"
     assert isinstance(gym_env.observation_space, gymnasium.spaces.Space), "observation_space must be a gymnasium.spaces.Space"
     assert isinstance(gym_env.action_space, gymnasium.spaces.Space), "action_space must be a gymnasium.spaces.Space"
-    # For Pong, we can be more specific
-    assert gym_env.action_space.n == 6, "Pong action space should have 6 actions"
+    # Check that the action space size is correct
+    assert gym_env.action_space.n == raw_jaxatari_env.num_actions, "Action space size should match the raw environment"
 
 def test_reset_method(gym_env):
     """
