@@ -241,7 +241,6 @@ def load_sprites():
         for i in range(1, 5)
     ]
     lexp_frames_padded, _ = jr.pad_to_match(lexp_frames)
-    LETTER_EXPLOSION_SPRITES = jnp.stack(lexp_frames_padded, axis=0)
 
     # Pad player sprites to match
     pl_sub_sprites, pl_sub_offsets = jr.pad_to_match([pl_1, pl_2])
@@ -300,7 +299,8 @@ def load_sprites():
 
     LETTERS = jnp.stack(letters, axis=0)  
     
-    ENEMY_EXPLOSION_SPRITES = jnp.stack([exp1, exp2, exp3, exp4], axis=0)  # Now 4 sprites
+    ENEMY_EXPLOSION_SPRITES = jnp.stack([exp1, exp2, exp3, exp4], axis=0)
+    LETTER_EXPLOSION_SPRITES = jnp.stack(lexp_frames_padded, axis=0)
 
     return (
         SPRITE_BG,
@@ -491,13 +491,18 @@ def scrolling_letters(state: WordZapperState, consts: WordZapperConstants) -> ch
         state.player_zapper_position[0] >= consts.ZAPPING_BOUNDS[0],
         state.player_zapper_position[0] <= consts.ZAPPING_BOUNDS[1],
     )
+
     letter_in_bounds = jnp.logical_and(
         state.letters_x[closest_letter_id] >= consts.LETTER_VISIBLE_MIN_X,
         state.letters_x[closest_letter_id] < consts.LETTER_VISIBLE_MAX_X,
     )
+
     within_zapping_bounds = jnp.logical_and(zapper_in_bounds, letter_in_bounds)
 
-    def zap_letter(l, frame, timer, frame_timer, pos):
+
+
+    def zap_letter(args):
+        l, frame, timer, frame_timer, pos = args
         # Set letter as not alive and start explosion
         l = l.at[closest_letter_id].set(jnp.array([0, consts.LETTER_COOLDOWN], dtype=jnp.int32))
         frame = frame.at[closest_letter_id].set(1)
@@ -506,35 +511,39 @@ def scrolling_letters(state: WordZapperState, consts: WordZapperConstants) -> ch
         pos = pos.at[closest_letter_id].set(jnp.array([state.letters_x[closest_letter_id], state.letters_y[closest_letter_id]]))
         return l, frame, timer, frame_timer, pos
 
-    def no_zap(l, frame, timer, frame_timer, pos):
+    def no_zap(args):
+        l, frame, timer, frame_timer, pos = args
         return l, frame, timer, frame_timer, pos
 
-    # Explosion state arrays
-    letter_explosion_frame = getattr(state, 'letter_explosion_frame', jnp.zeros_like(state.letters_x, dtype=jnp.int32))
-    letter_explosion_timer = getattr(state, 'letter_explosion_timer', jnp.zeros_like(state.letters_x, dtype=jnp.int32))
-    letter_explosion_frame_timer = getattr(state, 'letter_explosion_frame_timer', jnp.zeros_like(state.letters_x, dtype=jnp.int32))
-    letter_explosion_pos = getattr(state, 'letter_explosion_pos', jnp.zeros((state.letters_x.shape[0], 2), dtype=jnp.float32))
+    # zap if zapper active and within bounds
+    zap_condition = jnp.logical_and(state.player_zapper_position[2], within_zapping_bounds)
 
-    # Only trigger zap when zapper is newly activated (rising edge)
-    zapper_prev_active = getattr(state, 'player_zapper_position_prev', jnp.array(0))
-    zapper_rising_edge = jnp.logical_and(state.player_zapper_position[2], jnp.logical_not(zapper_prev_active))
-    zap_condition = jnp.logical_and(zapper_rising_edge, within_zapping_bounds)
+
     # Only trigger explosion on rising edge, but do NOT reset animation if zapper stays active
     def safe_zap_letter(args):
         l, frame, timer, frame_timer, pos = args
         # Only start explosion if not already active for this letter
         already_exploding = frame[closest_letter_id] > 0
-        def do_zap():
-            l2, f2, t2, ft2, p2 = zap_letter(l, frame, timer, frame_timer, pos)
-            return l2, f2, t2, ft2, p2
-        def skip_zap():
-            return l, frame, timer, frame_timer, pos
-        return jax.lax.cond(already_exploding, skip_zap, do_zap)
-    new_letters_alive, letter_explosion_frame, letter_explosion_timer, letter_explosion_frame_timer, letter_explosion_pos = jax.lax.cond(
+        
+        return jax.lax.cond(already_exploding, no_zap, zap_letter, (l, frame, timer, frame_timer, pos))
+    
+    (
+        new_letters_alive,
+        letter_explosion_frame,
+        letter_explosion_timer,
+        letter_explosion_frame_timer,
+        letter_explosion_pos
+    ) = jax.lax.cond(
         zap_condition,
         safe_zap_letter,
         lambda args: args,
-        (new_letters_alive, letter_explosion_frame, letter_explosion_timer, letter_explosion_frame_timer, letter_explosion_pos)
+        (
+            new_letters_alive,
+            state.letter_explosion_frame,
+            state.letter_explosion_timer,
+            state.letter_explosion_frame_timer,
+            state.letter_explosion_pos
+        )
     )
 
     # Custom explosion animation sequence (independent of PLAYER_ZAPPER_COOLDOWN_TIME)
