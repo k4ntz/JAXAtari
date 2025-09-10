@@ -3,7 +3,7 @@ import jax.numpy as jnp
 import pygame
 
 from jaxatari.games.jax_enduro import EnduroRenderer
-import jaxatari.rendering.jax_rendering_utils as aj
+import numpy as np
 
 from jax_enduro import JaxEnduro, EnduroGameState
 
@@ -14,6 +14,41 @@ DIRECTION_LABELS = {
     0: "Straight",
     1: "Right"
 }
+
+def update_pygame(pygame_screen, raster, SCALING_FACTOR=3, WIDTH=400, HEIGHT=300):
+    """Updates the Pygame display with the rendered raster.
+
+    Args:
+        pygame_screen: The Pygame screen surface.
+        raster: JAX array of shape (Width, Height, 3/4) containing the image data.
+        SCALING_FACTOR: Factor to scale the raster for display.
+        WIDTH: Expected width of the input raster (used for scaling calculation).
+        HEIGHT: Expected height of the input raster (used for scaling calculation).
+    """
+    pygame_screen.fill((0, 0, 0))
+
+    # Convert JAX array (W, H, C) to NumPy (W, H, C)
+    raster_np = np.array(raster)
+    raster_np = raster_np.astype(np.uint8)
+
+    # Pygame surface needs (W, H). make_surface expects (W, H, C) correctly.
+    frame_surface = pygame.surfarray.make_surface(raster_np)
+
+    # Pygame scale expects target (width, height)
+    target_width_px = int(WIDTH * SCALING_FACTOR)
+    target_height_px = int(HEIGHT * SCALING_FACTOR)
+    # Optional: Adjust scaling if raster size differs from constants
+    if raster_np.shape[0] != WIDTH or raster_np.shape[1] != HEIGHT:
+        target_width_px = int(raster_np.shape[0] * SCALING_FACTOR)
+        target_height_px = int(raster_np.shape[1] * SCALING_FACTOR)
+
+
+    frame_surface_scaled = pygame.transform.scale(
+        frame_surface, (target_width_px, target_height_px)
+    )
+
+    pygame_screen.blit(frame_surface_scaled, (0, 0))
+    pygame.display.flip()
 
 
 def render_debug_overlay(screen, state: EnduroGameState, font, game_config):
@@ -127,7 +162,7 @@ def play_enduro(debug_mode=True):
 
         # Render game frame
         frame = render_fn(state)
-        aj.update_pygame(screen, frame, scaling, 160, 210)
+        update_pygame(screen, frame, scaling, 160, 210)
 
         # Add debug overlay if enabled
         if debug_mode and show_debug:

@@ -5,13 +5,12 @@ I implemented the Enduro game.
 https://www.free80sarcade.com/atari2600_Enduro.php
 
 I recommend to add a function like change_sprite_color to aj or to allow get_sprite_frame to take an custom rgb array.
-
 """
+
 import os
 from functools import partial
 import chex
 import jax
-import jax.numpy as jnp
 import jax.random as jrandom
 from dataclasses import dataclass
 from typing import Tuple, NamedTuple, Any
