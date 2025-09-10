@@ -15,7 +15,16 @@ import jaxatari.spaces as spaces
 
 """TODOS:
 Top Priorities:
-- Fix the renderer as some components are not being shown with Play.py(Player ship, Points, lives, torpedoes, enemies left) (Mahta)
+- Fix the renderer as some components are not being shown with Play.py(Player ship, Points, lives, torpedoes, enemies left) (Mahta) --> done
+- White Saucers shouldn't be hittable on the top of horizon
+- Fix ship movement
+- Render UI --> might be done
+- fix point 4 and the init from the email
+- make game more 3D
+- add white saucer ram movement
+- adjust rejuvinator debris movement 
+- fix beam_jump --> might be done --> need to check if multiple jumps are allowed
+- ask regarding the missing init from line 436 in the email
 For later:
 - Check the sentinal ship constants/Optimize the code/remove unnecessary code
 - Documentation
@@ -233,22 +242,25 @@ class BeamRiderConstants(NamedTuple):
 
     @classmethod
     def get_beam_positions(cls) -> jnp.ndarray:
-        """Calculate 5 beam positions evenly spaced across the screen width"""
-        # Simple, direct calculation for 5 evenly spaced beams
-        # Beam 0: leftmost, Beam 2: center, Beam 4: rightmost
+        """Calculate 5 beam positions to match classic BeamRider layout with bounds checking"""
+        center_x = cls.SCREEN_WIDTH // 2
+        beam_spacing = 24
 
-        # Leave some margin from screen edges
-        margin = 20
-        usable_width = cls.SCREEN_WIDTH - (2 * margin)
-
-        # Create 5 evenly spaced positions
-        beam_spacing = usable_width / (cls.NUM_BEAMS - 1)
         positions = jnp.array([
-            margin + i * beam_spacing for i in range(cls.NUM_BEAMS)
-        ])
+            center_x - 2 * beam_spacing,
+            center_x - beam_spacing,
+            center_x,
+            center_x + beam_spacing,
+            center_x + 2 * beam_spacing
+        ], dtype=jnp.float32)
+
+        # Ensure beams stay within reasonable screen bounds
+        min_x = 16  # Minimum distance from left edge
+        max_x = cls.SCREEN_WIDTH - 16  # Maximum distance from right edge
+
+        positions = jnp.clip(positions, min_x, max_x)
 
         return positions
-
 @struct.dataclass
 class Ship:
     # Represents the player-controlled ship: position, beam lane, and active status.
@@ -356,8 +368,7 @@ class BeamRiderEnv(JaxEnvironment[BeamRiderState, BeamRiderObservation, BeamRide
         self.screen_height = self.constants.SCREEN_HEIGHT
         self.action_space_size = 18  # Updated from 6 to 9 for torpedo actions
         self.beam_positions = self.constants.get_beam_positions()
-
-        # JIT-compile the step function for performance
+        self.renderer = BeamRiderRenderer()
 
     def action_space(self) -> spaces.Discrete:
         """Returns the action space for BeamRider"""
@@ -443,11 +454,9 @@ class BeamRiderEnv(JaxEnvironment[BeamRiderState, BeamRiderObservation, BeamRide
 
     def render(self, state: BeamRiderState) -> jnp.ndarray:
         """Render the current game state"""
-        if not hasattr(self, 'renderer'):
-            self.renderer = BeamRiderRenderer()
         return self.renderer.render(state)
 
-    def reset(self, rng_key: chex.PRNGKey) -> Tuple[BeamRiderObservation, BeamRiderState]:
+    def reset(self, rng_key: chex.PRNGKey = None) -> Tuple[BeamRiderObservation, BeamRiderState]:
         """Reset the game to initial state"""
         # Initialize ship at bottom center beam
         initial_beam = self.constants.INITIAL_BEAM
@@ -622,7 +631,8 @@ class BeamRiderEnv(JaxEnvironment[BeamRiderState, BeamRiderObservation, BeamRide
             )
         )
 
-        return pattern
+        return                     self.constants.WHITE_SAUCER_BEAM_JUMP
+
     @partial(jax.jit, static_argnums=(0,))
     def _handle_white_saucer_shooting(self, state: BeamRiderState) -> BeamRiderState:
         """Handle white saucer projectile firing with beam change and pattern switching"""
@@ -1824,7 +1834,7 @@ class BeamRiderEnv(JaxEnvironment[BeamRiderState, BeamRiderObservation, BeamRide
             )
         )
 
-        # Modify existing target_x assignment to include horizon patrol
+        # Modify existing target_x assignment to include horizon patrol AND beam jump
         target_x = jnp.where(
             is_green_blocker,
             player_beam_x,  # Blocker targets player's current position
@@ -1834,11 +1844,25 @@ class BeamRiderEnv(JaxEnvironment[BeamRiderState, BeamRiderObservation, BeamRide
                 jnp.where(
                     is_white_saucer & is_horizon_patrol,
                     horizon_target_beam,  # Store target beam in target_x field for horizon patrol
-                    0.0  # Default for others
+                    jnp.where(
+                        is_white_saucer & can_jump,
+                        regular_spawn_beam,  # ADDED: Initialize beam jumpers with their spawn beam
+                        0.0  # Default for others
+                    )
                 )
             )
         )
+        # For beam jumping white saucers, set an initial target beam different from spawn beam
+        rng_key, jump_target_key = random.split(rng_key)
+        jump_target_offset = random.randint(jump_target_key, (), minval=1, maxval=self.constants.NUM_BEAMS)
+        initial_jump_target = (regular_spawn_beam + jump_target_offset) % self.constants.NUM_BEAMS
 
+        # Update target_x for beam jumping saucers to have a different initial target
+        target_x = jnp.where(
+            is_white_saucer & can_jump,
+            initial_jump_target,  # Set to a different beam than spawn beam
+            target_x
+        )
         # Create new enemy array
         new_enemy = jnp.zeros(17)  # 17 columns for all enemy data
         new_enemy = new_enemy.at[0].set(spawn_x)  # x
@@ -1870,7 +1894,6 @@ class BeamRiderEnv(JaxEnvironment[BeamRiderState, BeamRiderObservation, BeamRide
         )
 
         return state.replace(enemies=enemies, rng_key=rng_key)
-    # Helper methods that need to be added to the class:
 
     @partial(jax.jit, static_argnums=(0,))
     def _handle_white_saucer_limit(self, enemy_type: int, sector: int, can_spawn_white_saucer: bool,
@@ -2174,7 +2197,7 @@ class BeamRiderEnv(JaxEnvironment[BeamRiderState, BeamRiderObservation, BeamRide
 
         # Interpolate X the same way as renderer's draw_vline()
         x0 = self.beam_positions[beam_idx]
-        x1 = center_x + (x0 - center_x) * 0.3  # converge toward center
+        x1 = center_x + (x0 - center_x) * 0.05  # converge toward center
         x = x0 + (x1 - x0) * t
 
         # Center entity on beam center - use provided width or default to enemy width
@@ -3536,7 +3559,7 @@ class BeamRiderRenderer(JAXGameRenderer):
             # Starting x position at bottom
             x0 = beam_positions[i]
             # Ending x position at top (converge toward center for 3D effect)
-            x1 = center_x + (x0 - center_x) * 0.3  # Converge partially toward center
+            x1 = center_x + (x0 - center_x) * 0.05  # Converge partially toward center
 
             # Scale y range so lines fade before reaching top_margin
             t_top = (top_margin - y0) / (y1 - y0)
@@ -3841,11 +3864,244 @@ class BeamRiderRenderer(JAXGameRenderer):
         return screen
 
     @partial(jax.jit, static_argnums=(0,))
-    def _draw_ui(self, screen: chex.Array, state: BeamRiderState) -> chex.Array:
-        """Draw UI elements - placeholder for now"""
+    def _draw_ui(self, screen: chex.Array, state) -> chex.Array:
+        """
+        HUD with per-component scales and margins:
+          - enemies-left (top-left)
+          - SCORE / SECTOR (centered)
+          - torpedo boxes (top-right)
+          - lives as mini ship icons (bottom-left)
+
+        All math is JIT-safe (no Python int(...) on tracers).
+        """
+
+        # =========================
+        # ===== CONFIG / SIZES ====
+        # =========================
+        # Individual scales (integers ≥ 1)
+        SCALE_SCORE = 1
+        SCALE_ENEMIES = 1
+        SCALE_TORPS = 1
+        SCALE_LIVES = 1
+
+        # Per-component margins / spacing (pixels)
+        spacing = 1  # glyph horizontal spacing (pre-scale)
+        # Enemies (top-left)
+        MARGIN_ENEMIES_X = 6
+        MARGIN_ENEMIES_Y = 6
+        # Score & Sector (center top)
+        MARGIN_SCORE_Y = 4  # y of SCORE line (smaller => higher)
+        LINE_GAP_SCORE = 2  # vertical gap between SCORE and SECTOR (pixels)
+        # Torpedoes (top-right)
+        MARGIN_TORPS_X = 0  # right margin
+        MARGIN_TORPS_Y = 8  # top margin
+        # Lives (bottom-left)
+        MARGIN_LIVES_X = 10  # left margin
+        MARGIN_LIVES_Y = 6  # bottom margin
+
+        # Screen size
+        H = self.constants.SCREEN_HEIGHT
+        W = self.constants.SCREEN_WIDTH
+
+        # Colors
+        RED = (255, 0, 0)
+        GOLD = (255, 220, 100)
+        PURP = (160, 32, 240)
+        PURP_RGB = (160, 32, 240)
+        YELL_RGB = (255, 255, 0)
+
+        # =========================
+        # ===== BITMAP FONTS  =====
+        # =========================
+        DIGITS = jnp.stack([
+            jnp.array([[1, 1, 1], [1, 0, 1], [1, 0, 1], [1, 0, 1], [1, 1, 1]], dtype=jnp.uint8),  # 0
+            jnp.array([[0, 1, 0], [1, 1, 0], [0, 1, 0], [0, 1, 0], [1, 1, 1]], dtype=jnp.uint8),  # 1
+            jnp.array([[1, 1, 1], [0, 0, 1], [1, 1, 1], [1, 0, 0], [1, 1, 1]], dtype=jnp.uint8),  # 2
+            jnp.array([[1, 1, 1], [0, 0, 1], [0, 1, 1], [0, 0, 1], [1, 1, 1]], dtype=jnp.uint8),  # 3
+            jnp.array([[1, 0, 1], [1, 0, 1], [1, 1, 1], [0, 0, 1], [0, 0, 1]], dtype=jnp.uint8),  # 4
+            jnp.array([[1, 1, 1], [1, 0, 0], [1, 1, 1], [0, 0, 1], [1, 1, 1]], dtype=jnp.uint8),  # 5
+            jnp.array([[1, 1, 1], [1, 0, 0], [1, 1, 1], [1, 0, 1], [1, 1, 1]], dtype=jnp.uint8),  # 6
+            jnp.array([[1, 1, 1], [0, 0, 1], [0, 1, 0], [0, 1, 0], [0, 1, 0]], dtype=jnp.uint8),  # 7
+            jnp.array([[1, 1, 1], [1, 0, 1], [1, 1, 1], [1, 0, 1], [1, 1, 1]], dtype=jnp.uint8),  # 8
+            jnp.array([[1, 1, 1], [1, 0, 1], [1, 1, 1], [0, 0, 1], [1, 1, 1]], dtype=jnp.uint8),  # 9
+        ], axis=0)
+
+        FONT = {
+            'S': jnp.array([[1, 1, 1], [1, 0, 0], [1, 1, 1], [0, 0, 1], [1, 1, 1]], dtype=jnp.uint8),
+            'C': jnp.array([[1, 1, 1], [1, 0, 0], [1, 0, 0], [1, 0, 0], [1, 1, 1]], dtype=jnp.uint8),
+            'O': jnp.array([[1, 1, 1], [1, 0, 1], [1, 0, 1], [1, 0, 1], [1, 1, 1]], dtype=jnp.uint8),
+            'R': jnp.array([[1, 1, 0], [1, 0, 1], [1, 1, 0], [1, 0, 1], [1, 0, 1]], dtype=jnp.uint8),
+            'E': jnp.array([[1, 1, 1], [1, 0, 0], [1, 1, 1], [1, 0, 0], [1, 1, 1]], dtype=jnp.uint8),
+            'T': jnp.array([[1, 1, 1], [0, 1, 0], [0, 1, 0], [0, 1, 0], [0, 1, 0]], dtype=jnp.uint8),
+        }
+
+        # =========================
+        # ======= HELPERS =========
+        # =========================
+        def draw_rect(scr, x0, y0, w, h, color_rgb):
+            x0 = jnp.clip(x0, 0, W - 1);
+            y0 = jnp.clip(y0, 0, H - 1)
+            x1 = jnp.clip(x0 + w, 0, W);
+            y1 = jnp.clip(y0 + h, 0, H)
+            ys = jnp.arange(H)[:, None];
+            xs = jnp.arange(W)[None, :]
+            mask = (ys >= y0) & (ys < y1) & (xs >= x0) & (xs < x1)
+            color = jnp.array(color_rgb, dtype=jnp.uint8)
+            return jnp.where(mask[..., None], color, scr)
+
+        def draw_bitmap(scr, x, y, bitmap, color_rgb, scale):
+            # integer nearest-neighbor scaling
+            bmp = jnp.kron(bitmap, jnp.ones((scale, scale), dtype=jnp.uint8))
+            h, w = bmp.shape
+            x = jnp.clip(x, 0, W - w);
+            y = jnp.clip(y, 0, H - h)
+            pad = ((0, H - h), (0, W - w))
+            bmp_padded = jnp.pad(bmp, pad)
+            bmp_shifted = jnp.roll(jnp.roll(bmp_padded, y, axis=0), x, axis=1).astype(bool)
+            color = jnp.array(color_rgb, dtype=jnp.uint8)
+            return jnp.where(bmp_shifted[..., None], color, scr)
+
+        def draw_digit(scr, x, y, d, color_rgb, scale):
+            bmp = DIGITS[jnp.clip(d, 0, 9)]
+            return draw_bitmap(scr, x, y, bmp, color_rgb, scale)
+
+        def draw_label(scr, x, y, text, color_rgb, scale, spacing_):
+            cur_x = x
+            for ch in text:  # static Python literal
+                if ch == ' ':
+                    cur_x += (3 * scale + spacing_)
+                else:
+                    scr = draw_bitmap(scr, cur_x, y, FONT[ch], color_rgb, scale)
+                    cur_x += (3 * scale + spacing_)
+            return scr
+
+        def draw_number(scr, x, y, value, width, color_rgb, scale, spacing_):
+            """Draw non-negative integer `value` as zero-padded number of length `width`."""
+            value = jnp.maximum(jnp.asarray(value, jnp.int32), 0)
+
+            def body(i, carry):
+                n, out = carry
+                d = n % 10
+                out = out.at[width - 1 - i].set(d)
+                n = n // 10
+                return (n, out)
+
+            out_init = jnp.zeros((width,), dtype=jnp.int32)
+            _, digits = lax.fori_loop(0, width, body, (value, out_init))
+
+            def draw_i(i, scr_):
+                return draw_digit(scr_, x + i * (3 * scale + spacing_), y, digits[i], color_rgb, scale)
+
+            return lax.fori_loop(0, width, lambda i, scr_: draw_i(i, scr_), scr)
+
+        # Mini ship icon (6x8) — purple tip + yellow body
+        PURPLE_TIP = jnp.array([
+            [0, 0, 0, 1, 1, 0, 0, 0],
+            [0, 0, 0, 0, 0, 0, 0, 0],
+            [0, 0, 0, 0, 0, 0, 0, 0],
+            [0, 0, 0, 0, 0, 0, 0, 0],
+            [0, 0, 0, 0, 0, 0, 0, 0],
+            [0, 0, 0, 0, 0, 0, 0, 0],
+        ], dtype=jnp.uint8)
+
+        YELLOW_BODY = jnp.array([
+            [0, 0, 0, 0, 0, 0, 0, 0],
+            [0, 0, 1, 1, 1, 1, 0, 0],  # row 1: 2..5
+            [0, 1, 1, 1, 1, 1, 1, 0],  # row 2: 1..6
+            [1, 1, 1, 1, 1, 1, 1, 1],  # row 3: 0..7
+            [1, 1, 1, 0, 0, 1, 1, 1],  # row 4: 0..2 & 5..7
+            [1, 1, 0, 0, 0, 0, 1, 1],  # row 5: 0..1 & 6..7
+        ], dtype=jnp.uint8)
+
+        def draw_ship_icon(scr, x, y, scale):
+            scr = draw_bitmap(scr, x, y, PURPLE_TIP, PURP_RGB, scale)
+            scr = draw_bitmap(scr, x, y, YELLOW_BODY, YELL_RGB, scale)
+            return scr
+
+        # =========================
+        # ======== CONTENT ========
+        # =========================
+
+        # Enemies left
+        ENEMIES_PER_SECTOR = getattr(self.constants, "ENEMIES_PER_SECTOR", 15)
+        enemies_left = jnp.maximum(0, ENEMIES_PER_SECTOR - jnp.asarray(state.enemies_killed_this_sector, jnp.int32))
+        screen = draw_number(
+            screen, MARGIN_ENEMIES_X, MARGIN_ENEMIES_Y,
+            enemies_left, width=2, color_rgb=RED, scale=SCALE_ENEMIES, spacing_=spacing
+        )
+
+        # SCORE (centered)
+        label_score = "SCORE "
+        char_px = 3 * SCALE_SCORE + spacing
+        score_label_px = len(label_score) * char_px
+        score_digits = 6
+        score_total_px = score_label_px + score_digits * char_px
+        score_x = (W - score_total_px) // 2
+        score_y = MARGIN_SCORE_Y
+
+        screen = draw_label(
+            screen, score_x, score_y, label_score, GOLD,
+            scale=SCALE_SCORE, spacing_=spacing
+        )
+        screen = draw_number(
+            screen, score_x + score_label_px, score_y,
+            jnp.asarray(state.score, jnp.int32), width=6,
+            color_rgb=GOLD, scale=SCALE_SCORE, spacing_=spacing
+        )
+
+        # SECTOR (centered below SCORE)
+        label_sector = "SECTOR "
+        sector_label_px = len(label_sector) * char_px
+        sector_digits = 2
+        sector_total_px = sector_label_px + sector_digits * char_px
+        sector_x = (W - sector_total_px) // 2
+        sector_y = score_y + (5 * SCALE_SCORE) + LINE_GAP_SCORE
+
+        screen = draw_label(
+            screen, sector_x, sector_y, label_sector, GOLD,
+            scale=SCALE_SCORE, spacing_=spacing
+        )
+        screen = draw_number(
+            screen, sector_x + sector_label_px, sector_y,
+            jnp.asarray(state.level, jnp.int32), width=2,
+            color_rgb=GOLD, scale=SCALE_SCORE, spacing_=spacing
+        )
+
+        # Torpedoes (top-right) — static loop masked by count
+        torps = jnp.asarray(state.torpedoes_remaining, jnp.int32)
+        TORP_MAX = 8
+        TORP_SIZE = 5 * SCALE_TORPS
+        TORP_STEP = int(7 * SCALE_TORPS)
+
+        def torp_body(i, scr_):
+            draw_it = i < jnp.clip(torps, 0, TORP_MAX)
+            x = W - MARGIN_TORPS_X - (i + 1) * TORP_STEP
+            y = MARGIN_TORPS_Y
+            scr2 = draw_rect(scr_, x, y, TORP_SIZE, TORP_SIZE, PURP)
+            return jnp.where(draw_it, scr2, scr_)
+
+        screen = lax.fori_loop(0, TORP_MAX, torp_body, screen)
+
+        # Lives (bottom-left) — mini ships
+        lives = jnp.asarray(state.lives, jnp.int32)
+        LIVES_MAX = 6
+        ICON_W = 8 * SCALE_LIVES
+        ICON_H = 6 * SCALE_LIVES
+        ICON_GAP = int(6 * SCALE_LIVES)
+        BASE_X = MARGIN_LIVES_X
+        BASE_Y = H - ICON_H - MARGIN_LIVES_Y
+
+        def lives_body(i, scr_):
+            draw_it = i < jnp.clip(lives, 0, LIVES_MAX)
+            x = BASE_X + i * (ICON_W + ICON_GAP)
+            y = BASE_Y
+            scr2 = draw_ship_icon(scr_, x, y, SCALE_LIVES)
+            return jnp.where(draw_it, scr2, scr_)
+
+        screen = lax.fori_loop(0, LIVES_MAX, lives_body, screen)
+
         return screen
 
-    # ============================================================================
     # PYGAME DISPLAY METHODS (moved from BeamRiderPygameRenderer)
     # ============================================================================
 
@@ -3896,7 +4152,7 @@ class BeamRiderRenderer(JAXGameRenderer):
                 self._show_sector_complete(state)
                 screen_buffer = self.render(state)
                 self._draw_screen(screen_buffer, state)
-                self._draw_ui_overlay(state)
+                self._draw_ui(screen_buffer,state)
 
                 pygame.display.flip()
                 self.clock.tick(60)
