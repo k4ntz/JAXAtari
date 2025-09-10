@@ -15,15 +15,14 @@ import jaxatari.spaces as spaces
 
 """TODOS:
 Top Priorities:
-- Fix the renderer as some components are not being shown with Play.py(Player ship, Points, lives, torpedoes, enemies left) (Mahta) --> done
-- White Saucers shouldn't be hittable on the top of horizon
+- Fix the renderer as some components are not being shown with Play.py(Player ship, Points, lives, torpedoes, enemies left) --> done
+- White Saucers shouldn't be hittable on the top of horizon --> done
+- fix beam_jump --> done
 - Fix ship movement
-- Render UI --> might be done
 - fix point 4 and the init from the email
 - make game more 3D
 - add white saucer ram movement
 - adjust rejuvinator debris movement 
-- fix beam_jump --> might be done --> need to check if multiple jumps are allowed
 - ask regarding the missing init from line 436 in the email
 For later:
 - Check the sentinal ship constants/Optimize the code/remove unnecessary code
@@ -631,7 +630,7 @@ class BeamRiderEnv(JaxEnvironment[BeamRiderState, BeamRiderObservation, BeamRide
             )
         )
 
-        return                     self.constants.WHITE_SAUCER_BEAM_JUMP
+        return pattern
 
     @partial(jax.jit, static_argnums=(0,))
     def _handle_white_saucer_shooting(self, state: BeamRiderState) -> BeamRiderState:
@@ -2741,9 +2740,15 @@ class BeamRiderEnv(JaxEnvironment[BeamRiderState, BeamRiderObservation, BeamRide
         proj_active = projectiles[:, 2] == 1
         enemy_active = enemies[:, 3] == 1
 
-        # Enemies that take damage from lasers (can be destroyed)
+        white_saucer_mask = enemies[:, 5] == self.constants.ENEMY_TYPE_WHITE_SAUCER
+        enemy_y = enemies[:, 1]
+        horizon_buffer = 15  # Pixels above/below horizon where saucers are protected
+        at_horizon = jnp.abs(enemy_y - self.constants.HORIZON_LINE_Y) <= horizon_buffer
+        white_saucer_protected = white_saucer_mask & at_horizon
+
+        # Enemies that take damage from lasers
         enemy_vulnerable_to_lasers = (
-                (enemies[:, 5] == self.constants.ENEMY_TYPE_WHITE_SAUCER) |
+                (white_saucer_mask & ~white_saucer_protected) |  # White saucers only when not at horizon
                 (enemies[:, 5] == self.constants.ENEMY_TYPE_YELLOW_CHIRPER) |
                 (enemies[:, 5] == self.constants.ENEMY_TYPE_BLUE_CHARGER)
         )
@@ -2754,7 +2759,8 @@ class BeamRiderEnv(JaxEnvironment[BeamRiderState, BeamRiderObservation, BeamRide
                 (enemies[:, 5] == self.constants.ENEMY_TYPE_GREEN_BLOCKER) |
                 (enemies[:, 5] == self.constants.ENEMY_TYPE_SENTINEL_SHIP) |
                 (enemies[:, 5] == self.constants.ENEMY_TYPE_ORANGE_TRACKER) |
-                (enemies[:, 5] == self.constants.ENEMY_TYPE_GREEN_BOUNCE)
+                (enemies[:, 5] == self.constants.ENEMY_TYPE_GREEN_BOUNCE) |
+                white_saucer_protected  # ADDED: Protected white saucers block lasers
         )
 
         # Enemies that lasers can interact with (either damage or block)
@@ -2813,17 +2819,18 @@ class BeamRiderEnv(JaxEnvironment[BeamRiderState, BeamRiderObservation, BeamRide
         torpedo_active = torpedo_projectiles[:, 2] == 1
         torpedo_x = torpedo_projectiles[:, 0:1]
         torpedo_y = torpedo_projectiles[:, 1:2]
+        enemy_vulnerable_to_torpedoes = ~white_saucer_protected
 
-        # Torpedoes can hit all enemy types
+        # Torpedoes can hit all enemy types EXCEPT protected white saucers at horizon
         torpedo_collisions = (
                 (torpedo_x < enemy_x + enemy_width[None, :]) &
                 (torpedo_x + self.constants.TORPEDO_WIDTH > enemy_x) &
                 (torpedo_y < enemy_y + enemy_height[None, :]) &
                 (torpedo_y + self.constants.TORPEDO_HEIGHT > enemy_y) &
                 torpedo_active[:, None] &
-                enemy_active[None, :]
+                enemy_active[None, :] &
+                enemy_vulnerable_to_torpedoes[None, :]  # ADDED: Check if enemy can be hit by torpedoes
         )
-
         # Find collisions for torpedo projectiles
         torpedo_proj_hits = jnp.any(torpedo_collisions, axis=1)
         torpedo_enemy_hits = jnp.any(torpedo_collisions, axis=0)
