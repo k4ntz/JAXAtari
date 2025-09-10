@@ -198,7 +198,7 @@ def test_env_creation_and_spaces(gym_env, raw_jaxatari_env):
     assert isinstance(gym_env.observation_space, gymnasium.spaces.Space), "observation_space must be a gymnasium.spaces.Space"
     assert isinstance(gym_env.action_space, gymnasium.spaces.Space), "action_space must be a gymnasium.spaces.Space"
     # Check that the action space size is correct
-    assert gym_env.action_space.n == raw_jaxatari_env.num_actions, "Action space size should match the raw environment"
+    assert gym_env.action_space.n == raw_jaxatari_env.action_space().n, "Action space size should match the raw environment"
 
 def test_reset_method(gym_env):
     """
