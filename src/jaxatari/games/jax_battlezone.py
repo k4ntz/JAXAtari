@@ -1771,6 +1771,76 @@ class BattleZoneRenderer:
         # --- Draw horizon line ---
         pygame.draw.line(screen, WIREFRAME_COLOR, (0, HORIZON_Y), (WIDTH, HORIZON_Y), 1)
 
+        # --- Draw player crosshair (vertical bar) ---
+        # Centered horizontally in the viewport, a few pixels above the horizon
+        try:
+            center_x = WIDTH // 2
+            # place the bar a few pixels higher above the horizon
+            cross_bottom = HORIZON_Y - 6
+            # Reduce thickness to half of previous default (previously 3 -> now floor(3/2)=1)
+            original_thickness = 3
+            cross_thickness = max(1, original_thickness // 2)
+            # height is twice the width (thickness), ensures proportional shape
+            cross_height = cross_thickness * 4
+            cross_top = cross_bottom - cross_height
+
+            # Default fill color: black; if any visible enemy is horizontally aligned, fill white
+            fill_color = (0, 0, 0)
+            outline_color = WIREFRAME_COLOR
+            tolerance_pixels = 2  # how close to center counts as 'aligned'
+
+            # Check obstacles for horizontal alignment with center of screen
+            obs = state.obstacles
+            for i in range(len(obs.x)):
+                try:
+                    alive_val = int(obs.alive[i])
+                except Exception:
+                    try:
+                        alive_val = int(float(obs.alive[i]))
+                    except Exception:
+                        alive_val = 0
+                if alive_val == 0:
+                    continue
+
+                sx, sy, dist, vis = self.world_to_screen_3d(
+                    obs.x[i], obs.y[i],
+                    state.player_tank.x, state.player_tank.y, state.player_tank.angle
+                )
+
+                # Convert visibility to bool safely
+                try:
+                    vis_bool = bool(vis)
+                except Exception:
+                    try:
+                        vis_bool = bool(int(vis))
+                    except Exception:
+                        vis_bool = False
+
+                if not vis_bool:
+                    continue
+
+                try:
+                    sx_int = int(sx)
+                except Exception:
+                    try:
+                        sx_int = int(float(sx))
+                    except Exception:
+                        continue
+
+                if abs(sx_int - center_x) <= tolerance_pixels:
+                    fill_color = (255, 255, 255)
+                    outline_color = (255, 255, 255)
+                    break
+
+            # Draw the vertical bar with outline so it's visible on dark backgrounds
+            outer_rect = (center_x - (cross_thickness // 2) - 1, cross_top - 1, cross_thickness + 2, cross_height + 2)
+            inner_rect = (center_x - cross_thickness // 2, cross_top, cross_thickness, cross_height)
+            pygame.draw.rect(screen, outline_color, outer_rect, 1)
+            pygame.draw.rect(screen, fill_color, inner_rect)
+        except Exception:
+            # Fail silently to avoid breaking rendering
+            pass
+
         # --- Draw game objects ---
         # Draw obstacles (now enemy tanks and other objects)
         obstacles = state.obstacles
