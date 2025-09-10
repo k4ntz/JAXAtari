@@ -36,6 +36,7 @@ class PhoenixConstants(NamedTuple):
     ENEMY_WIDTH: int = 6
     ENEMY_HEIGHT:int = 5
     WING_WIDTH: int = 5
+    BAT_REGEN: int = 250
     BLOCK_WIDTH:int = 4
     BLOCK_HEIGHT:int = 4
     SCORE_COLOR: Tuple[int, int, int] = (210, 210, 64)
@@ -44,8 +45,8 @@ class PhoenixConstants(NamedTuple):
     PLAYER_DEATH_DURATION: int = 90 # ca. 1,5 Sekunden bei 60 FPS
     ENEMY_PROJECTILE_SPEED: int = 2
     PLAYER_RESPAWN_DURATION: int = 360 # ca. 6 Sekunden bei 60 FPS
-    ABILITY_COOLDOWN: int = 600
-    FIRE_CHANCE: float = 0.001
+    ABILITY_COOLDOWN: int = 600 # ca. 10 sekunden bei 60FPS
+    FIRE_CHANCE: float = 0.005
     LEVEL_TRANSITION_DURATION: int = 240 # ca. 4 Sekunden bei 60 FPS
     ENEMY_ANIMATION_SPEED: int = 30  # ca. 0,5 Sekunden bei 60 FPS
     PLAYER_ANIMATION_SPEED: int = 6  # ca. 0,1 Sekunden bei 60 FPS
@@ -185,6 +186,7 @@ class PhoenixState(NamedTuple):
     bat_wings: chex.Array
     bat_dying: chex.Array # Bat dying status, (8,), bool
     bat_death_timer: chex.Array # Timer for Bat death animation, (8,), int
+    bat_wing_regen_timer: chex.Array
 
     phoenix_do_attack: chex.Array  # Phoenix attack state
     phoenix_attack_target_y: chex.Array  # Target Y position for Phoenix attack
@@ -507,6 +509,7 @@ class JaxPhoenix(JaxEnvironment[PhoenixState, PhoenixObservation, PhoenixInfo, N
         # Cooldown am Ende einmal dekrementieren
         new_phoenix_cooldown = jnp.where(new_phoenix_cooldown > 0, new_phoenix_cooldown - 1, 0)
 
+
         state = state._replace(
             enemies_x=new_enemies_x.astype(jnp.float32),
             horizontal_direction_enemies=new_direction.astype(jnp.float32),
@@ -591,6 +594,11 @@ class JaxPhoenix(JaxEnvironment[PhoenixState, PhoenixObservation, PhoenixInfo, N
 
         new_bat_wings = jax.vmap(update_wing_state)(state.bat_wings, left_wing_collision, right_wing_collision)
 
+        no_wings = (new_bat_wings == 0) & active_bats
+        new_regen_timer = jnp.where(no_wings, state.bat_wing_regen_timer + 1, 0)
+        regenerated = (new_regen_timer >= self.consts.BAT_REGEN)
+        new_bat_wings = jnp.where(regenerated, 2, new_bat_wings)
+        new_regen_timer = jnp.where(regenerated, 0, new_regen_timer)
 
         state = state._replace(
             enemies_x=new_enemies_x.astype(jnp.float32),
@@ -598,6 +606,7 @@ class JaxPhoenix(JaxEnvironment[PhoenixState, PhoenixObservation, PhoenixInfo, N
             horizontal_direction_enemies=new_directions.astype(jnp.float32),
             projectile_y=new_proj_y,
             bat_wings= new_bat_wings,
+            bat_wing_regen_timer=new_regen_timer,
         )
 
         return state
@@ -730,7 +739,7 @@ class JaxPhoenix(JaxEnvironment[PhoenixState, PhoenixObservation, PhoenixInfo, N
             bat_wings=jnp.full((8,), 2),
             bat_dying=jnp.full((8,), False, dtype=jnp.bool), # Bat dying status, (8,), bool
             bat_death_timer=jnp.full((8,), 0, dtype=jnp.int32), # Timer for Bat death animation, (8,), int
-
+            bat_wing_regen_timer=jnp.full((8,), 0, dtype=jnp.int32),
             phoenix_do_attack = jnp.full((8,), 0, dtype=jnp.bool),  # Phoenix attack state
             phoenix_attack_target_y = jnp.full((8,), -1, dtype=jnp.float32),  # Target Y position for Phoenix attack
             phoenix_original_y = jnp.full((8,), -1, dtype=jnp.float32),  # Original Y position of the Phoenix
@@ -1088,6 +1097,7 @@ class JaxPhoenix(JaxEnvironment[PhoenixState, PhoenixObservation, PhoenixInfo, N
             player_moving=new_player_moving,
             level_transition_timer=new_level_transition_timer,
             ability_cooldown=state.ability_cooldown,
+            bat_wing_regen_timer=state.bat_wing_regen_timer,
 
         )
         observation = self._get_observation(return_state)
