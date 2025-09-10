@@ -552,390 +552,281 @@ class BackgammonRenderer(JAXGameRenderer):
     def __init__(self, env=None):
         super().__init__(env)
 
-        # Frame geometry - smaller to account for 4x upscale in play.py
-        self.frame_height = 210  # Standard Atari height
-        self.frame_width = 180  # Standard Atari width
+        self.frame_height = 210
+        self.frame_width = 180
+        self.color_background = jnp.array([34, 139, 34], dtype=jnp.uint8)  # green
+        self.color_board = jnp.array([139, 69, 19], dtype=jnp.uint8)  # brown
+        self.color_triangle_light = jnp.array([222, 184, 135], dtype=jnp.uint8)
+        self.color_triangle_dark = jnp.array([160, 82, 45], dtype=jnp.uint8)
+        self.color_white_checker = jnp.array([255, 255, 255], dtype=jnp.uint8)
+        self.color_black_checker = jnp.array([50, 50, 50], dtype=jnp.uint8)
+        self.color_border = jnp.array([101, 67, 33], dtype=jnp.uint8)
 
-        # Colors (RGB)
-        self.color_background = jnp.array([34, 139, 34], dtype=jnp.uint8)  # Forest green
-        self.color_board = jnp.array([139, 69, 19], dtype=jnp.uint8)  # Saddle brown
-        self.color_triangle_light = jnp.array([222, 184, 135], dtype=jnp.uint8)  # Burlywood
-        self.color_triangle_dark = jnp.array([160, 82, 45], dtype=jnp.uint8)  # Saddle brown
-        self.color_white_checker = jnp.array([255, 255, 255], dtype=jnp.uint8)  # White
-        self.color_black_checker = jnp.array([50, 50, 50], dtype=jnp.uint8)  # Dark gray
-        self.color_border = jnp.array([101, 67, 33], dtype=jnp.uint8)  # Dark brown
-
-        # Game geometry - scaled for 160x210 canvas
+        # Geometry
         self.board_margin = 8
-        self.triangle_height = 60
-        self.triangle_width = 12
-        self.bar_width = 16
+        self.triangle_length = 60
+        self.triangle_thickness = 12
+        self.bar_thickness = 16
         self.checker_radius = 5
         self.checker_stack_offset = 8
-
-        # Precompute positions
         self.triangle_positions = self._compute_triangle_positions()
-        self.bar_position = (self.frame_width // 2 - self.bar_width // 2, self.board_margin)
-        self.home_position = (self.frame_width - 80, self.frame_height // 2)
+        self.bar_y = self.frame_height // 2 - self.bar_thickness // 2
+        self.bar_x = self.board_margin
+        self.bar_width = self.frame_width - 2 * self.board_margin
 
     def _compute_triangle_positions(self):
-        """Compute the base positions for all 24 triangles"""
-        positions = []
+        """Return an (24,2) int32 array of (x,y) top-left coords for each triangle.
+        We lay out:
+          - left column top (6) (pointing right)
+          - right column top (6) (pointing left)
+          - right column bottom (6) (pointing left)
+          - left column bottom (6) (pointing right)
+        """
+        positions: List[Tuple[int, int]] = []
 
-        # Left side triangles (points 12-7 top, 13-18 bottom)
-        left_start = self.board_margin
-        for i in range(6):
-            x = left_start + i * self.triangle_width
-            # Top triangles (points 12-7, displayed right to left)
-            positions.append((x, self.board_margin))
+        left_x = self.board_margin
+        right_x = self.frame_width - self.board_margin - self.triangle_length
 
-        # Right side triangles (points 6-1 top, 19-24 bottom)
-        right_start = self.board_margin + 6 * self.triangle_width + self.bar_width
+        # top-left (6)
         for i in range(6):
-            x = right_start + i * self.triangle_width
-            # Top triangles (points 6-1, displayed right to left)
-            positions.append((x, self.board_margin))
+            y = self.board_margin + i * self.triangle_thickness
+            positions.append((left_x, y))
 
-        # Bottom triangles - reverse order
+        # top-right (6)
         for i in range(6):
-            x = right_start + (5 - i) * self.triangle_width
-            # Bottom triangles (points 19-24)
-            positions.append((x, self.frame_height - self.board_margin - self.triangle_height))
+            y = self.board_margin + i * self.triangle_thickness
+            positions.append((right_x, y))
 
+        # bottom-right (6)
         for i in range(6):
-            x = left_start + (5 - i) * self.triangle_width
-            # Bottom triangles (points 13-18)
-            positions.append((x, self.frame_height - self.board_margin - self.triangle_height))
+            y = self.frame_height - self.board_margin - (i + 1) * self.triangle_thickness
+            positions.append((right_x, y))
+
+        # bottom-left (6)
+        for i in range(6):
+            y = self.frame_height - self.board_margin - (i + 1) * self.triangle_thickness
+            positions.append((left_x, y))
 
         return jnp.array(positions, dtype=jnp.int32)
 
     @partial(jax.jit, static_argnums=(0,))
     def _draw_rectangle(self, frame, x, y, width, height, color):
-        """Draw a filled rectangle"""
-        x, y = jnp.clip(x, 0, self.frame_width), jnp.clip(y, 0, self.frame_height)
-        x2 = jnp.clip(x + width, 0, self.frame_width)
-        y2 = jnp.clip(y + height, 0, self.frame_height)
-
-        # Create coordinate grids
         yy, xx = jnp.mgrid[0:self.frame_height, 0:self.frame_width]
-        mask = (xx >= x) & (xx < x2) & (yy >= y) & (yy < y2)
-
-        # Apply color where mask is True
-        frame = jnp.where(mask[..., None], color, frame)
-        return frame
+        mask = (xx >= x) & (xx < (x + width)) & (yy >= y) & (yy < (y + height))
+        return jnp.where(mask[..., None], color, frame)
 
     @partial(jax.jit, static_argnums=(0,))
-    def _draw_triangle(self, frame, x, y, width, height, color, point_up=True):
-        """Draw a triangle"""
+    def _draw_triangle(self, frame, x, y, length, thickness, color, point_right=True):
+        """
+        Draw an isosceles triangle whose rectangular bounding box is:
+           x <= xx < x+length,   y <= yy < y+thickness
+        If point_right==True, the triangle's tip is at (x+length, center_y) (points right).
+        If point_right==False, the tip is at (x, center_y) (points left).
+        We use a simple linear interpolation so cross-sections shrink toward the tip.
+        """
         yy, xx = jnp.mgrid[0:self.frame_height, 0:self.frame_width]
+        xx_f = xx.astype(jnp.float32)
+        yy_f = yy.astype(jnp.float32)
+        x_f = jnp.asarray(x, dtype=jnp.float32)
+        y_f = jnp.asarray(y, dtype=jnp.float32)
+        length_f = jnp.asarray(length, dtype=jnp.float32)
+        thickness_f = jnp.asarray(thickness, dtype=jnp.float32)
 
-        def triangle_pointing_up():
-            # Triangle pointing up (for bottom row)
-            left_edge = yy >= (y + height) - ((xx - x) * height / width)
-            right_edge = yy >= (y + height) - ((x + width - xx) * height / width)
-            bottom_edge = yy <= y + height
-            top_edge = yy >= y
-            return left_edge & right_edge & bottom_edge & top_edge & (xx >= x) & (xx < x + width)
+        center_y = y_f + thickness_f / 2.0
 
-        def triangle_pointing_down():
-            # Triangle pointing down (for top row)
-            left_edge = yy <= y + ((xx - x) * height / width)
-            right_edge = yy <= y + ((x + width - xx) * height / width)
-            bottom_edge = yy <= y + height
-            top_edge = yy >= y
-            return left_edge & right_edge & bottom_edge & top_edge & (xx >= x) & (xx < x + width)
+        t = jax.lax.select(point_right,(xx_f - x_f) / length_f,(x_f + length_f - xx_f) / length_f)
+        half_width = (1.0 - t) * (thickness_f / 2.0)
+        in_bbox = (xx >= x) & (xx < (x + length)) & (yy >= y) & (yy < (y + thickness))
+        valid_t = (t >= 0.0) & (t <= 1.0)
+        within_profile = jnp.abs(yy_f - center_y) <= half_width
+        mask = in_bbox & valid_t & within_profile
 
-        mask = jax.lax.cond(point_up, triangle_pointing_up, triangle_pointing_down)
-        frame = jnp.where(mask[..., None], color, frame)
-        return frame
+        return jnp.where(mask[..., None], color, frame)
 
     @partial(jax.jit, static_argnums=(0,))
-    def _draw_circle(self, frame, center_x, center_y, radius, color):
-        """Draw a filled circle"""
+    def _draw_circle(self, frame, cx, cy, radius, color):
         yy, xx = jnp.mgrid[0:self.frame_height, 0:self.frame_width]
-        distance_sq = (xx - center_x) ** 2 + (yy - center_y) ** 2
-        mask = distance_sq <= radius ** 2
-        frame = jnp.where(mask[..., None], color, frame)
-        return frame
+        cx_f = jnp.asarray(cx, dtype=jnp.float32)
+        cy_f = jnp.asarray(cy, dtype=jnp.float32)
+        xx_f = xx.astype(jnp.float32)
+        yy_f = yy.astype(jnp.float32)
+        mask = (xx_f - cx_f) ** 2 + (yy_f - cy_f) ** 2 <= (radius ** 2)
+        return jnp.where(mask[..., None], color, frame)
 
     @partial(jax.jit, static_argnums=(0,))
     def _draw_board_outline(self, frame):
-        """Draw the board background and outline"""
-        # Background
-        frame = self._draw_rectangle(frame, 0, 0, self.frame_width, self.frame_height,
-                                     self.color_background)
+        frame = self._draw_rectangle(frame, 0, 0, self.frame_width, self.frame_height, self.color_background)
+        board_x = self.board_margin - 6
+        board_y = self.board_margin - 6
+        board_w = self.frame_width - 2 * (self.board_margin - 6)
+        board_h = self.frame_height - 2 * (self.board_margin - 6)
 
-        # Board area
-        board_x = self.board_margin - 10
-        board_y = self.board_margin - 10
-        board_w = self.frame_width - 2 * (self.board_margin - 10)
-        board_h = self.frame_height - 2 * (self.board_margin - 10)
-
-        frame = self._draw_rectangle(frame, board_x, board_y, board_w, board_h,
-                                     self.color_board)
-
-        # Bar
-        bar_x = self.frame_width // 2 - self.bar_width // 2
-        bar_y = self.board_margin
-        bar_h = self.frame_height - 2 * self.board_margin
-
-        frame = self._draw_rectangle(frame, bar_x, bar_y, self.bar_width, bar_h,
-                                     self.color_border)
-
+        frame = self._draw_rectangle(frame, board_x, board_y, board_w, board_h, self.color_board)
+        frame = self._draw_rectangle(frame, self.bar_x, self.bar_y, self.bar_width, self.bar_thickness, self.color_border)
         return frame
 
     @partial(jax.jit, static_argnums=(0,))
     def _draw_triangles(self, frame):
-        """Draw all 24 triangles"""
+        left_x = self.board_margin
 
         def draw_triangle_at_index(i, fr):
             pos = self.triangle_positions[i]
-            x, y = pos[0], pos[1]
-
-            # Alternate colors
-            color = jax.lax.select(i % 2 == 0,
-                                   self.color_triangle_light,
-                                   self.color_triangle_dark)
-
-            # Top triangles point down, bottom triangles point up
-            point_up = i >= 12
-
-            return self._draw_triangle(fr, x, y, self.triangle_width,
-                                       self.triangle_height, color, point_up)
+            x = pos[0]
+            y = pos[1]
+            color = jax.lax.select((i % 2) == 0, self.color_triangle_light, self.color_triangle_dark)
+            point_right = x == left_x
+            return self._draw_triangle(fr, x, y, self.triangle_length, self.triangle_thickness, color, point_right)
 
         return jax.lax.fori_loop(0, 24, draw_triangle_at_index, frame)
 
     @partial(jax.jit, static_argnums=(0,))
     def _draw_checkers_on_point(self, frame, point_idx, white_count, black_count):
-        """Draw checkers on a specific point"""
+        """Stack checkers horizontally toward center along the triangle axis."""
         pos = self.triangle_positions[point_idx]
-        base_x = pos[0] + self.triangle_width // 2
-        base_y = pos[1]
+        x = pos[0]
+        y = pos[1]
 
-        # Adjust base_y for bottom triangles
-        base_y = jax.lax.select(point_idx >= 12,
-                                base_y + self.triangle_height - self.checker_radius,
-                                base_y + self.checker_radius)
+        center_y = y + (self.triangle_thickness / 2.0)
+        left_x = self.board_margin
+        is_left_column = x == left_x
 
-        # Direction of stacking
-        stack_direction = jax.lax.select(point_idx >= 12, -1, 1)
+        base_x = jax.lax.select(is_left_column,(x + self.checker_radius),(x + self.triangle_length - self.checker_radius))
+        stack_dir = jax.lax.select(is_left_column, 1, -1)
 
+        # draw a stack of count checkers horizontally
         def draw_checker_stack(fr, count, color, start_offset):
-            def draw_single_checker(i, frame_inner):
-                y_offset = start_offset + i * self.checker_stack_offset * stack_direction
-                checker_y = base_y + y_offset
-                return self._draw_circle(frame_inner, base_x, checker_y,
-                                         self.checker_radius, color)
+            def draw_single(i, f):
+                dx = start_offset + (i * self.checker_stack_offset * stack_dir)
+                cx = base_x + dx
+                cy = center_y
+                return self._draw_circle(f, cx, cy, self.checker_radius, color)
+            return jax.lax.fori_loop(0, count, draw_single, fr)
 
-            return jax.lax.fori_loop(0, count, draw_single_checker, fr)
-
-        # Draw white checkers first, then black checkers on top
+        # Draw white then black so black appears on top visually for overlapping stacks
         frame = draw_checker_stack(frame, white_count, self.color_white_checker, 0)
-        white_offset = white_count * self.checker_stack_offset * stack_direction
+        white_offset = white_count * self.checker_stack_offset * stack_dir
         frame = draw_checker_stack(frame, black_count, self.color_black_checker, white_offset)
 
         return frame
 
     @partial(jax.jit, static_argnums=(0,))
     def _draw_bar_checkers(self, frame, white_count, black_count):
-        """Draw checkers on the bar"""
-        bar_center_x = self.frame_width // 2
-        bar_center_y = self.frame_height // 2
+        """Draw checkers on the horizontal bar (white left-of-center, black right-of-center)."""
+        cx = self.frame_width // 2
+        cy = self.frame_height // 2
 
-        def draw_bar_stack(fr, count, color, y_offset):
-            def draw_single_checker(i, frame_inner):
-                checker_y = bar_center_y + y_offset + i * self.checker_stack_offset
-                return self._draw_circle(frame_inner, bar_center_x, checker_y,
-                                         self.checker_radius, color)
+        def draw_stack(fr, count, color, dx_start, step):
+            def draw_single(i, f):
+                cx_i = cx + dx_start + (i * step)
+                return self._draw_circle(f, cx_i, cy, self.checker_radius, color)
+            return jax.lax.fori_loop(0, count, draw_single, fr)
 
-            return jax.lax.fori_loop(0, count, draw_single_checker, fr)
-
-        # White checkers above center, black checkers below
-        frame = draw_bar_stack(frame, white_count, self.color_white_checker, -25)
-        frame = draw_bar_stack(frame, black_count, self.color_black_checker, 10)
-
+        # white to the left, black to the right
+        frame = draw_stack(frame, white_count, self.color_white_checker, -25, -self.checker_stack_offset)
+        frame = draw_stack(frame, black_count, self.color_black_checker, 10, self.checker_stack_offset)
         return frame
 
     @partial(jax.jit, static_argnums=(0,))
     def _draw_home_checkers(self, frame, white_count, black_count):
-        """Draw checkers in the home area"""
-        home_x = self.frame_width - 20
+        """Draw home stacks near bottom-center (kept simple)."""
+        cy = self.frame_height - 18
+        cx_center = self.frame_width // 2
 
-        def draw_home_stack(fr, count, color, y_start):
-            def draw_single_checker(i, frame_inner):
-                checker_y = y_start + i * self.checker_stack_offset
-                return self._draw_circle(frame_inner, home_x, checker_y,
-                                         self.checker_radius, color)
+        def draw_stack(fr, count, color, dx_start):
+            def draw_single(i, f):
+                cx_i = cx_center + dx_start + i * self.checker_stack_offset
+                return self._draw_circle(f, cx_i, cy, self.checker_radius, color)
+            return jax.lax.fori_loop(0, count, draw_single, fr)
 
-            return jax.lax.fori_loop(0, count, draw_single_checker, fr)
-
-        # White checkers at bottom, black checkers at top
-        frame = draw_home_stack(frame, white_count, self.color_white_checker, 150)
-        frame = draw_home_stack(frame, black_count, self.color_black_checker, 40)
-
+        frame = draw_stack(frame, white_count, self.color_white_checker, -30)
+        frame = draw_stack(frame, black_count, self.color_black_checker, 10)
         return frame
 
     @partial(jax.jit, static_argnums=(0,))
     def _draw_dice(self, frame, dice):
-        """Draw the current dice"""
+        """Averages dice draw: center them above the bar for readability."""
         dice_size = 12
-        dice_x_start = self.frame_width // 2 - 15
-        dice_y = self.frame_height // 2 - dice_size // 2
+        total_width = 4 * (dice_size + 3)
+        start_x = self.frame_width // 2 - total_width // 2
+        dice_y = self.bar_y - dice_size - 6
 
-        def draw_single_dice(i, fr):
-            dice_value = dice[i]
-            dice_x = dice_x_start + i * 15
-
-            def draw_active_dice(_):
-                # Draw dice background (white square)
-                fr_with_bg = self._draw_rectangle(fr, dice_x, dice_y, dice_size, dice_size,
-                                                  jnp.array([240, 240, 240], dtype=jnp.uint8))
-
-                # Draw dice border
-                border_width = 1
-                fr_with_border = self._draw_rectangle(fr_with_bg, dice_x - border_width,
-                                                      dice_y - border_width,
-                                                      dice_size + 2 * border_width,
-                                                      dice_size + 2 * border_width,
-                                                      self.color_border)
-                fr_with_border = self._draw_rectangle(fr_with_border, dice_x, dice_y,
-                                                      dice_size, dice_size,
-                                                      jnp.array([240, 240, 240], dtype=jnp.uint8))
-
-                # Draw pips based on dice value
-                pip_color = jnp.array([0, 0, 0], dtype=jnp.uint8)  # Black pips
-                pip_radius = 1
-                center_x = dice_x + dice_size // 2
+        def draw_single(i, fr):
+            val = dice[i]
+            dx = start_x + i * (dice_size + 3)
+            # only draw active dice
+            def draw_val(_):
+                fr2 = self._draw_rectangle(fr, dx, dice_y, dice_size, dice_size, jnp.array([240, 240, 240], dtype=jnp.uint8))
+                center_x = dx + dice_size // 2
                 center_y = dice_y + dice_size // 2
-
-                def draw_pips_1(_):
-                    return self._draw_circle(fr_with_border, center_x, center_y, pip_radius, pip_color)
-
-                def draw_pips_2(_):
-                    fr2 = self._draw_circle(fr_with_border, center_x - 3, center_y - 3, pip_radius, pip_color)
-                    return self._draw_circle(fr2, center_x + 3, center_y + 3, pip_radius, pip_color)
-
-                def draw_pips_3(_):
-                    fr3 = self._draw_circle(fr_with_border, center_x - 3, center_y - 3, pip_radius, pip_color)
-                    fr3 = self._draw_circle(fr3, center_x, center_y, pip_radius, pip_color)
-                    return self._draw_circle(fr3, center_x + 3, center_y + 3, pip_radius, pip_color)
-
-                def draw_pips_4(_):
-                    fr4 = self._draw_circle(fr_with_border, center_x - 3, center_y - 3, pip_radius, pip_color)
-                    fr4 = self._draw_circle(fr4, center_x + 3, center_y - 3, pip_radius, pip_color)
-                    fr4 = self._draw_circle(fr4, center_x - 3, center_y + 3, pip_radius, pip_color)
-                    return self._draw_circle(fr4, center_x + 3, center_y + 3, pip_radius, pip_color)
-
-                def draw_pips_5(_):
-                    fr5 = self._draw_circle(fr_with_border, center_x - 3, center_y - 3, pip_radius, pip_color)
-                    fr5 = self._draw_circle(fr5, center_x + 3, center_y - 3, pip_radius, pip_color)
-                    fr5 = self._draw_circle(fr5, center_x, center_y, pip_radius, pip_color)
-                    fr5 = self._draw_circle(fr5, center_x - 3, center_y + 3, pip_radius, pip_color)
-                    return self._draw_circle(fr5, center_x + 3, center_y + 3, pip_radius, pip_color)
-
-                def draw_pips_6(_):
-                    fr6 = self._draw_circle(fr_with_border, center_x - 3, center_y - 3, pip_radius, pip_color)
-                    fr6 = self._draw_circle(fr6, center_x + 3, center_y - 3, pip_radius, pip_color)
-                    fr6 = self._draw_circle(fr6, center_x - 3, center_y, pip_radius, pip_color)
-                    fr6 = self._draw_circle(fr6, center_x + 3, center_y, pip_radius, pip_color)
-                    fr6 = self._draw_circle(fr6, center_x - 3, center_y + 3, pip_radius, pip_color)
-                    return self._draw_circle(fr6, center_x + 3, center_y + 3, pip_radius, pip_color)
-
-                def draw_nothing(_):
-                    return fr_with_border
-
-                # Switch based on dice value
-                return jax.lax.switch(dice_value - 1,
-                                      [draw_pips_1, draw_pips_2, draw_pips_3,
-                                       draw_pips_4, draw_pips_5, draw_pips_6],
-                                      operand=None)
-
-            def skip_dice(_):
-                return fr
-
-            return jax.lax.cond(dice_value > 0, draw_active_dice, skip_dice, operand=None)
-
-        return jax.lax.fori_loop(0, 4, draw_single_dice, frame)
+                pip = jnp.array([0, 0, 0], dtype=jnp.uint8)
+                r = 1
+                def p1(_): return self._draw_circle(fr2, center_x, center_y, r, pip)
+                def p2(_):
+                    fr3 = self._draw_circle(fr2, center_x - 3, center_y - 3, r, pip)
+                    return self._draw_circle(fr3, center_x + 3, center_y + 3, r, pip)
+                def p3(_):
+                    fr3 = self._draw_circle(fr2, center_x - 3, center_y - 3, r, pip)
+                    fr3 = self._draw_circle(fr3, center_x, center_y, r, pip)
+                    return self._draw_circle(fr3, center_x + 3, center_y + 3, r, pip)
+                def p4(_):
+                    fr4 = self._draw_circle(fr2, center_x - 3, center_y - 3, r, pip)
+                    fr4 = self._draw_circle(fr4, center_x + 3, center_y - 3, r, pip)
+                    fr4 = self._draw_circle(fr4, center_x - 3, center_y + 3, r, pip)
+                    return self._draw_circle(fr4, center_x + 3, center_y + 3, r, pip)
+                def p5(_):
+                    fr5 = p4(None)
+                    return self._draw_circle(fr5, center_x, center_y, r, pip)
+                def p6(_):
+                    fr6 = self._draw_circle(fr2, center_x - 4, center_y - 3, r, pip)
+                    fr6 = self._draw_circle(fr6, center_x + 4, center_y - 3, r, pip)
+                    fr6 = self._draw_circle(fr6, center_x - 4, center_y + 3, r, pip)
+                    fr6 = self._draw_circle(fr6, center_x + 4, center_y + 3, r, pip)
+                    return fr6
+                funcs = [p1, p2, p3, p4, p5, p6]
+                return jax.lax.switch(jnp.clip(val - 1, 0, 5), funcs, operand=None)
+            return jax.lax.cond(val > 0, draw_val, lambda _: fr, operand=None)
+        return jax.lax.fori_loop(0, 4, draw_single, frame)
 
     @partial(jax.jit, static_argnums=(0,))
     def _highlight_checker(self, frame, point_idx, state, color=jnp.array([255, 0, 0], dtype=jnp.uint8)):
-        """Highlight the *visible* checker at a given point (topmost one)."""
+        """Outline the visible top checker of a point (horizontal stacking)."""
         pos = self.triangle_positions[point_idx]
-        base_x = pos[0] + self.triangle_width // 2
-        base_y = pos[1]
+        x = pos[0]
+        y = pos[1]
+        center_y = y + (self.triangle_thickness / 2.0)
+        left_x = self.board_margin
+        is_left_column = x == left_x
 
         white_count = state.board[0, point_idx]
         black_count = state.board[1, point_idx]
-
-        # Which color occupies the point?
         is_white = white_count > 0
-        checker_color = jax.lax.cond(is_white, lambda _: self.color_white_checker, lambda _: self.color_black_checker, operand=None)
-        count = jax.lax.cond(is_white, lambda _: white_count, lambda _: black_count, operand=None)
+        count = jax.lax.select(is_white, white_count, black_count)
 
-        # Top vs bottom orientation
-        is_bottom = point_idx >= 12
-        stack_direction = jax.lax.select(is_bottom, -1, 1)
+        base_x = jax.lax.select(is_left_column,(x + self.checker_radius),(x + self.triangle_length - self.checker_radius))
+        stack_dir = jax.lax.select(is_left_column, 1, -1)
+        topmost_dx = (count - 1) * self.checker_stack_offset * stack_dir
+        checker_x = base_x + topmost_dx
 
-        base_y = jax.lax.select(is_bottom, base_y + self.triangle_height - self.checker_radius, base_y + self.checker_radius,)
-
-        # Position of topmost checker in the stack
-        y_offset = (count - 1) * self.checker_stack_offset * stack_direction
-        checker_y = base_y + y_offset
-
-        # Draw the checker normally, then outline it
-        frame = self._draw_circle(frame, base_x, checker_y, self.checker_radius, checker_color)
-
-        # Outline ring
+        checker_color = jax.lax.select(is_white, self.color_white_checker, self.color_black_checker)
+        frame = self._draw_circle(frame, checker_x, center_y, self.checker_radius, checker_color)
         outer_r = self.checker_radius + 2
-        inner_r = self.checker_radius
-        frame = self._draw_circle(frame, base_x, checker_y, outer_r, color)
-        frame = self._draw_circle(frame, base_x, checker_y, inner_r, checker_color)
+        # outline ring
+        frame = self._draw_circle(frame, checker_x, center_y, outer_r, color)
+        frame = self._draw_circle(frame, checker_x, center_y, self.checker_radius, checker_color)
         return frame
 
     @partial(jax.jit, static_argnums=(0,))
     def _highlight_dice(self, frame, dice_index, color=jnp.array([255, 0, 0], dtype=jnp.uint8)):
-        """Draw only an outline border around a dice."""
         dice_size = 12
-        dice_x_start = self.frame_width // 2 - 15
-        dice_y = self.frame_height // 2 - dice_size // 2
-        dice_x = dice_x_start + dice_index * 15
-
-        border_width = 2
-
-        # Outline only — outer rect in highlight color, then redraw inner in transparent way
-        frame = self._draw_rectangle(
-            frame,
-            dice_x - border_width,
-            dice_y - border_width,
-            dice_size + 2 * border_width,
-            border_width,  # top
-            color,
-        )
-        frame = self._draw_rectangle(
-            frame,
-            dice_x - border_width,
-            dice_y + dice_size,
-            dice_size + 2 * border_width,
-            border_width,  # bottom
-            color,
-        )
-        frame = self._draw_rectangle(
-            frame,
-            dice_x - border_width,
-            dice_y,
-            border_width,
-            dice_size,
-            color,
-        )
-        frame = self._draw_rectangle(
-            frame,
-            dice_x + dice_size,
-            dice_y,
-            border_width,
-            dice_size,
-            color,
-        )
-
+        total_width = 4 * (dice_size + 3)
+        start_x = self.frame_width // 2 - total_width // 2
+        dice_y = self.bar_y - dice_size - 6
+        dx = start_x + dice_index * (dice_size + 3)
+        bw = 2
+        frame = self._draw_rectangle(frame, dx - bw, dice_y - bw, dice_size + 2*bw, bw, color)
+        frame = self._draw_rectangle(frame, dx - bw, dice_y + dice_size, dice_size + 2*bw, bw, color)
+        frame = self._draw_rectangle(frame, dx - bw, dice_y - bw, bw, dice_size + 2*bw, color)
+        frame = self._draw_rectangle(frame, dx + dice_size, dice_y - bw, bw, dice_size + 2*bw, color)
         return frame
 
     @partial(jax.jit, static_argnums=(0,))
@@ -952,35 +843,27 @@ class BackgammonRenderer(JAXGameRenderer):
 
         frame = jax.lax.fori_loop(0, 24, draw_point_checkers, frame)
 
-        frame = self._draw_bar_checkers(frame,
-                                        jnp.maximum(state.board[0, 24], 0),
-                                        jnp.maximum(state.board[1, 24], 0))
-        frame = self._draw_home_checkers(frame,
-                                         jnp.maximum(state.board[0, 25], 0),
-                                         jnp.maximum(state.board[1, 25], 0))
+        # Bar and home stacks
+        frame = self._draw_bar_checkers(frame,jnp.maximum(state.board[0, 24], 0),jnp.maximum(state.board[1, 24], 0))
 
+        frame = self._draw_home_checkers(frame,jnp.maximum(state.board[0, 25], 0),jnp.maximum(state.board[1, 25], 0))
+
+        # Dice
         frame = self._draw_dice(frame, state.dice)
 
-        # Always highlight last move & dice if available
+        # Highlights (last move/dice) — use stored last_move/last_dice if present
         from_point, to_point = state.last_move
-
-        frame = jax.lax.cond(
-            from_point >= 0,
-            lambda fr: self._highlight_checker(fr, from_point, state, jnp.array([255, 0, 0], dtype=jnp.uint8)),
-            lambda fr: fr,
-            frame,
-        )
-        frame = jax.lax.cond(
-            to_point >= 0,
-            lambda fr: self._highlight_checker(fr, to_point, state, jnp.array([0, 255, 0], dtype=jnp.uint8)),
-            lambda fr: fr,
-            frame,
-        )
-        frame = jax.lax.cond(
-            state.last_dice >= 0,
-            lambda fr: self._highlight_dice(fr, state.last_dice),
-            lambda fr: fr,
-            frame,
-        )
+        frame = jax.lax.cond(from_point >= 0,
+                             lambda fr: self._highlight_checker(fr, from_point, state, jnp.array([255, 0, 0], dtype=jnp.uint8)),
+                             lambda fr: fr,
+                             frame)
+        frame = jax.lax.cond(to_point >= 0,
+                             lambda fr: self._highlight_checker(fr, to_point, state, jnp.array([0, 255, 0], dtype=jnp.uint8)),
+                             lambda fr: fr,
+                             frame)
+        frame = jax.lax.cond(state.last_dice >= 0,
+                             lambda fr: self._highlight_dice(fr, state.last_dice),
+                             lambda fr: fr,
+                             frame)
 
         return frame
