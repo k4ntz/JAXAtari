@@ -1223,15 +1223,22 @@ class JaxWordZapper(JaxEnvironment[WordZapperState, WordZapperObservation, WordZ
             player_missile_position,
             self.consts
         )
-        # --- WORD FORMATION LOGIC ---
+
         # Reveal letters as they are shot in order
         current_letter_index = state.current_letter_index
         target_word = state.target_word
         zapped_letters = (new_letter_explosion_frame == 1)
+
         def update_letter_index(idx, zapped, chars, current_idx, word):
             is_correct = (chars[idx] == word[current_idx])
-            return jnp.where(zapped & is_correct & (current_idx < 6), current_idx + 1, current_idx)
+            return jnp.where(
+                zapped & is_correct & (current_idx < 6),
+                current_idx + 1,
+                current_idx
+            )
+        
         new_current_letter_index = current_letter_index
+
         for i in range(27):
             new_current_letter_index = update_letter_index(i, zapped_letters[i], state.letters_char, new_current_letter_index, target_word)
 
