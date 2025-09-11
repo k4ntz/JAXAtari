@@ -9,7 +9,7 @@ import numpy as np
 from jaxatari.environment import JAXAtariAction
 from utils import get_human_action, load_game_environment, load_game_mod, update_pygame
 
-UPSCALE_FACTOR = 5
+UPSCALE_FACTOR = 4
 
 # Map action names to their integer values
 ACTION_NAMES = {
