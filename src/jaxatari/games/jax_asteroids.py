@@ -1083,7 +1083,14 @@ class JaxAsteroids(JaxEnvironment[AsteroidsState, AsteroidsObservation, Asteroid
     def obs_to_flat_array(self, obs: AsteroidsObservation) -> jnp.ndarray:
         """Converts the observation to a flat array."""
         return jnp.concatenate([
-            jnp.concatenate([obs.player.x, obs.player.y, obs.player.width, obs.player.height, obs.player.rotation, obs.player.active]),
+            jnp.concatenate([
+                jnp.atleast_1d(obs.player.x),
+                jnp.atleast_1d(obs.player.y),
+                jnp.atleast_1d(obs.player.width),
+                jnp.atleast_1d(obs.player.height),
+                jnp.atleast_1d(obs.player.rotation),
+                jnp.atleast_1d(obs.player.active)
+            ]),
             obs.missiles.flatten(),
             obs.asteroids.flatten(),
 
