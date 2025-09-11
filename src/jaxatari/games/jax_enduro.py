@@ -2209,7 +2209,7 @@ class EnduroRenderer(JAXGameRenderer):
         The background only needs to be rendered or loaded once. For all future frames the array can just be copied,
         which saves some performance. So, only load static sprites here that do not change throughout the game.
         """
-        raster = jnp.zeros((self.config.screen_width, self.config.screen_height, 3), dtype=jnp.uint8)
+        raster = jnp.zeros((self.config.screen_height, self.config.screen_width, 3), dtype=jnp.uint8)
 
         # black background
         background = aj.get_sprite_frame(self.sprites['background.npy'], 0)

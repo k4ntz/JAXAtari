@@ -227,13 +227,13 @@ def main():
     pygame.quit()
 
 
-def _bootstrap() -> int:
+def _bootstrap(game_name: str = "Enduro") -> int:
     """
     Dev-friendly launcher that supplies default CLI args when none are given,
     without modifying the upstream `main()` signature or implementation.
     """
     if len(sys.argv) == 1:
-        sys.argv.extend(["--game", "Enduro"])
+        sys.argv.extend(["--game", game_name])
     try:
         return main()  # type: ignore[name-defined]
     except SystemExit:
@@ -248,4 +248,4 @@ def _bootstrap() -> int:
         return 1
 
 if __name__ == "__main__":
-    raise SystemExit(_bootstrap())
+    raise SystemExit(_bootstrap("Enduro"))

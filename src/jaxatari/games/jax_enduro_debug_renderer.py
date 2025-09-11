@@ -20,16 +20,17 @@ def update_pygame(pygame_screen, raster, SCALING_FACTOR=3, WIDTH=400, HEIGHT=300
 
     Args:
         pygame_screen: The Pygame screen surface.
-        raster: JAX array of shape (Width, Height, 3/4) containing the image data.
+        raster: JAX array of shape (Height, Width, 3/4) containing the image data.
         SCALING_FACTOR: Factor to scale the raster for display.
         WIDTH: Expected width of the input raster (used for scaling calculation).
         HEIGHT: Expected height of the input raster (used for scaling calculation).
     """
     pygame_screen.fill((0, 0, 0))
 
-    # Convert JAX array (W, H, C) to NumPy (W, H, C)
+    # Convert JAX array (H, W, C) to NumPy (H, W, C), then transpose to (W, H, C) for pygame
     raster_np = np.array(raster)
     raster_np = raster_np.astype(np.uint8)
+    raster_np = np.transpose(raster_np, (1, 0, 2))  # (H, W, C) -> (W, H, C)
 
     # Pygame surface needs (W, H). make_surface expects (W, H, C) correctly.
     frame_surface = pygame.surfarray.make_surface(raster_np)
