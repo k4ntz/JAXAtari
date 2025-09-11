@@ -70,7 +70,9 @@ Environment:
 Track:
 - steering causes the track to move in the opposite direction, the car moves in the steering direction
 - every 400 m the Track has a "bumper"
-
+Level:
+- 200 cars to overtake. Number increases by 100 per level
+- max level = 5
 
 """
 
@@ -933,10 +935,12 @@ class JaxEnduro(JaxEnvironment[EnduroGameState, EnduroObservation, EnduroInfo, E
         # ===== Level =====
         # a level is a full day cycle
         new_level = jnp.where(
-            state.level * self.config.day_night_cycle_seconds * self.config.frame_rate > state.step_count,
+            state.level * self.config.day_night_cycle_seconds * self.config.frame_rate < state.step_count,
             state.level + 1,
             state.level
         )
+        # do not allow level to go beyond the max level
+        new_level = jnp.clip(new_level, 1, self.config.max_increase_level)
 
         level_goal_reached = jnp.where(
             new_cars_overtaken >= self.config.cars_to_pass_per_level + self.config.cars_increase_per_level * state.level,
