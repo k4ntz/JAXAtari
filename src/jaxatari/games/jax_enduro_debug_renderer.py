@@ -1,13 +1,12 @@
 import jax
 import jax.numpy as jnp
+import numpy as np
 import pygame
 
+from jaxatari.environment import JAXAtariAction as Action
 from jaxatari.games.jax_enduro import EnduroRenderer
-import numpy as np
 
 from jax_enduro import JaxEnduro, EnduroGameState
-
-from jaxatari.environment import JAXAtariAction as Action
 
 DIRECTION_LABELS = {
     -1: "Left",

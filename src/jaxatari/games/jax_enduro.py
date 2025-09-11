@@ -7,73 +7,25 @@ https://www.free80sarcade.com/atari2600_Enduro.php
 I recommend to add a function like change_sprite_color to aj or to allow get_sprite_frame to take an custom rgb array.
 """
 
-import os
-from functools import partial
 import chex
+from functools import partial
 import jax
-import jax.random as jrandom
-from dataclasses import dataclass
-from typing import Tuple, NamedTuple, Any
-import numpy as np
 from jax import numpy as jnp, lax
-
+import jax.random as jrandom
+import numpy as np
+import os
 from pathlib import Path
+from typing import Tuple, NamedTuple, Any
 
-# from jax import Array
-# from jax import debug
+# jaxatari
 from jaxatari.environment import JaxEnvironment, JAXAtariAction as Action
-import jax.lax as lax
-
 from jaxatari.renderers import JAXGameRenderer
 from jaxatari.rendering import jax_rendering_utils as aj
 
-"""
-Observations from playing the game
-
-Driving:
-- Car speed is maintained, the gas doe not need to be pressed like a pedal
-    - once accelerated the car can never stop again, it always maintains a minimum speed
-    - slowest is 0,1 km per second
-    - fastest is 0,5 km per second
-    - It takes 5 second to get to full speed
-    - The tire animation speed increases wit increasing speed
-- With increasing speed the car moves forward, 1 pixel at a time
-    - 5 presses of the trigger equals one pixel
-    - opponent speed equals 10 presses of the action button
-    - animation becomes faster when speed is higher
-- Breaking reduces your speed by ~3
-- Drift is about 2-3 pixels per second
-- Hitting the side of the road reduces you speed a bit
-
-opponent Cars:
-- Enemies do not change lane position
-    - they do have the same speed (around 10) that does not change
-    - they spawn in a way that is non-blocking
-    - if you slow down they overtake you again
-    - they do not crash into you when overtaking, they spawn at the other side to avoid collision
-- Cars overtaking you makes the counter go backwards
-- Hitting an opponent reduces speed to 6 (not zero) and creates a cooldown
-    - during cooldown there is no steering and accelerating
-    - 
-- No red cars
-
-Environment:
-- Weather cycles:
-    - Day
-    - Fog 0:52
-    - Evening: 1:25
-    - Night: 2:00
-    - Fog 2:35
-    - Dawn 3:08
-    - Over 3:42
-- Curves are 1-15 km long
-Track:
-- steering causes the track to move in the opposite direction, the car moves in the steering direction
-- every 400 m the Track has a "bumper"
-Level:
-- 200 cars to overtake. Number increases by 100 per level
-- max level = 5
-
+TODOS = """
+Observation:
+- get observation function
+- reduce observation when fog
 """
 
 
@@ -144,6 +96,7 @@ class EnduroConstants(NamedTuple):
     breaking_per_frame: float = breaking_per_second / frame_rate
 
     # === Steering ===
+    # how many pixels the car can move from one edge of the track to the other one
     steering_range_in_pixels: int = 28
     # How much the car moves per steering input (absolute units)
     steering_sensitivity: float = steering_range_in_pixels / (3.0 * frame_rate)  # ~3 seconds from edge to edge
@@ -266,7 +219,6 @@ class EnduroConstants(NamedTuple):
     day_length_frames = day_night_cycle_seconds * frame_rate
 
 
-@dataclass
 class GameConfig:
     """Game configuration parameters"""
     # Game runs at 60 frames per second
@@ -611,20 +563,20 @@ class JaxEnduro(JaxEnvironment[EnduroGameState, EnduroObservation, EnduroInfo, E
 
     @partial(jax.jit, static_argnums=(0,))
     def reset(self, key: jrandom.PRNGKey = None) -> Tuple[EnduroObservation, EnduroGameState]:
-        whole_track = self.build_whole_track(seed=self.config.track_seed)
+        whole_track = self._build_whole_track(seed=self.config.track_seed)
         # use same position as the player
         top_x = jnp.round(self.config.player_x_start).astype(jnp.int32)
-        left_xs, right_xs = self.generate_viewable_track(top_x, 0.0)
+        left_xs, right_xs = self._generate_viewable_track(top_x, 0.0)
 
         # opponents
-        opponent_spawns = self.generate_opponent_spawns(
+        opponent_spawns = self._generate_opponent_spawns(
             seed=self.config.track_seed,
             number_of_opponents=self.config.number_of_opponents,
             opponent_density=self.config.opponent_density,
             opponent_delay_slots=self.config.opponent_delay_slots
         )
-        visible_opponent_positions = self.get_visible_opponent_positions(jnp.array(0.0), opponent_spawns, left_xs,
-                                                                         right_xs)
+        visible_opponent_positions = self._get_visible_opponent_positions(jnp.array(0.0), opponent_spawns, left_xs,
+                                                                          right_xs)
 
         state = EnduroGameState(
             # visible
@@ -739,6 +691,10 @@ class JaxEnduro(JaxEnvironment[EnduroGameState, EnduroObservation, EnduroInfo, E
             obs.curvature.flatten(),
         ]
         )
+
+    @partial(jax.jit, static_argnums=(0,))
+    def action_space(self):
+        return jnp.array(self.action_set)
 
     @partial(jax.jit, static_argnums=(0,))
     def _step_single(self, state: EnduroGameState, action: int) -> StepResult:
@@ -866,7 +822,7 @@ class JaxEnduro(JaxEnvironment[EnduroGameState, EnduroObservation, EnduroInfo, E
         new_top_x_curve_offset = state.track_top_x_curve_offset + offset_change
 
         # 6. Generate the new track with the top_x of the track and its offset
-        new_left_xs, new_right_xs = self.generate_viewable_track(new_track_top_x, new_top_x_curve_offset)
+        new_left_xs, new_right_xs = self._generate_viewable_track(new_track_top_x, new_top_x_curve_offset)
 
         # ====== TRACK COLLISION ======
         # 1. Check whether the player car collided with the track
@@ -915,7 +871,7 @@ class JaxEnduro(JaxEnvironment[EnduroGameState, EnduroObservation, EnduroInfo, E
         new_opponent_index = state.opponent_index + relative_speed
 
         # calculate the absolute positions of all opponents
-        new_visible_opponent_positions = self.get_visible_opponent_positions(
+        new_visible_opponent_positions = self._get_visible_opponent_positions(
             new_opponent_index,
             state.opponent_pos_and_color,
             new_left_xs, new_right_xs)
@@ -1096,11 +1052,7 @@ class JaxEnduro(JaxEnvironment[EnduroGameState, EnduroObservation, EnduroInfo, E
         return state.game_over
 
     @partial(jax.jit, static_argnums=(0,))
-    def action_space(self):
-        return jnp.array(self.action_set)
-
-    @partial(jax.jit, static_argnums=(0,))
-    def generate_viewable_track(
+    def _generate_viewable_track(
             self,
             top_x: jnp.int32,
             top_x_curve_offset: jnp.float32  # Your signed offset, e.g., -50 to +50
@@ -1185,7 +1137,7 @@ class JaxEnduro(JaxEnvironment[EnduroGameState, EnduroObservation, EnduroInfo, E
         return spaces
 
     @partial(jax.jit, static_argnums=(0, 2, 3, 4))
-    def generate_opponent_spawns(
+    def _generate_opponent_spawns(
             self,
             seed: int,
             number_of_opponents: int,
@@ -1308,10 +1260,10 @@ class JaxEnduro(JaxEnvironment[EnduroGameState, EnduroObservation, EnduroInfo, E
         return result
 
     @partial(jax.jit, static_argnums=(0,))
-    def get_visible_opponent_positions(self, opponent_index: jnp.ndarray,
-                                       opponent_pos_and_color: jnp.ndarray,
-                                       visible_track_left: jnp.ndarray,
-                                       visible_track_right: jnp.ndarray) -> jnp.ndarray:
+    def _get_visible_opponent_positions(self, opponent_index: jnp.ndarray,
+                                        opponent_pos_and_color: jnp.ndarray,
+                                        visible_track_left: jnp.ndarray,
+                                        visible_track_right: jnp.ndarray) -> jnp.ndarray:
         """
         Calculate the x,y positions and colors of all 7 opponent slots based on the current opponent_index.
 
@@ -1460,7 +1412,7 @@ class JaxEnduro(JaxEnvironment[EnduroGameState, EnduroObservation, EnduroInfo, E
                          state.opponent_pos_and_color)
 
     @partial(jax.jit, static_argnums=(0,))
-    def build_whole_track(self, seed: int) -> jnp.ndarray:
+    def _build_whole_track(self, seed: int) -> jnp.ndarray:
         """
         Generate a precomputed Enduro track up to (and beyond) `self.config.max_track_length`.
 
