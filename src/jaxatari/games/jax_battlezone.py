@@ -169,6 +169,9 @@ WORLD_SIZE = 2000
 BOUNDARY_MIN = -WORLD_SIZE // 2
 BOUNDARY_MAX = WORLD_SIZE // 2
 
+# Integer limits (avoid calling np.iinfo on traced values)
+INT32_MAX = 2**31 - 1
+
 # Map-based spawn radii (computed from boundaries)
 MAP_RADIUS = float(BOUNDARY_MAX - BOUNDARY_MIN) / 2.0
 SPAWN_NEAR_RADIUS = MAP_RADIUS * 0.375
@@ -1206,9 +1209,9 @@ class JaxBattleZone(JaxEnvironment[BattleZoneState, BattleZoneObservation, chex.
             "player_tank": player_space,
             "bullets": bullets_space,
             "obstacles": obstacles_space,
-            "step_counter": spaces.Box(low=0, high=np.iinfo(np.int32).max, shape=(), dtype=np.int32),
+            "step_counter": spaces.Box(low=0, high=INT32_MAX, shape=(), dtype=np.int32),
             "spawn_timer": spaces.Box(low=0, high=ENEMY_SPAWN_COOLDOWN * 4, shape=(), dtype=np.int32),
-            "player_score": spaces.Box(low=0, high=np.iinfo(np.int32).max, shape=(), dtype=np.int32),
+            "player_score": spaces.Box(low=0, high=INT32_MAX, shape=(), dtype=np.int32),
             "player_lives": spaces.Box(low=0, high=99, shape=(), dtype=np.int32),
         })
 
