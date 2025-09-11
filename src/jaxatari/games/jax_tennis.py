@@ -1479,7 +1479,7 @@ class TennisObs(NamedTuple):
 
 
 class TennisInfo(NamedTuple):
-    pass
+    all_rewards: jnp.ndarray
 
 
 class AtraJaxisTennisRenderer(JAXGameRenderer):
@@ -1494,6 +1494,20 @@ class TennisConstants(NamedTuple):
 
 class TennisJaxEnv(JaxEnvironment[TennisState, TennisObs, TennisInfo, TennisConstants]):
 
+    def __init__(self, consts: TennisConstants = None, reward_funcs: list[callable] = None):
+        if consts is None:
+            consts = TennisConstants()
+        self.consts = consts
+        self.reward_funcs = reward_funcs
+
+    def _get_all_reward(self, previous_state: TennisState, state: TennisState):
+        if self.reward_funcs is None:
+            return jnp.zeros(1)
+        rewards = jnp.array(
+            [reward_func(previous_state, state) for reward_func in self.reward_funcs]
+        )
+        return rewards
+
     def reset(self, key) -> Tuple[TennisObs, TennisState]:
         reset_state = tennis_reset()
         reset_obs = self._get_observation(reset_state)
@@ -1504,8 +1518,9 @@ class TennisJaxEnv(JaxEnvironment[TennisState, TennisObs, TennisInfo, TennisCons
         new_state = tennis_step(state, action)
         new_obs = self._get_observation(new_state)
         reward = self._get_reward(state, new_state)
+        all_rewards = self._get_all_reward(state, new_state)
         done = self._get_done(new_state)
-        info = self._get_info(new_state)
+        info = self._get_info(new_state, all_rewards=all_rewards)
 
         return new_obs, new_state, reward, done, info
 
@@ -1560,8 +1575,8 @@ class TennisJaxEnv(JaxEnvironment[TennisState, TennisObs, TennisInfo, TennisCons
     def _get_observation(self, state: TennisState) -> TennisObs:
         return TennisObs()
 
-    def _get_info(self, state: TennisState) -> TennisInfo:
-        return TennisInfo()
+    def _get_info(self, state: TennisState, all_rewards: jnp.ndarray) -> TennisInfo:
+        return TennisInfo(all_rewards=all_rewards)
 
     def _get_reward(self, previous_state: TennisState, state: TennisState) -> float:
         return 0.0
