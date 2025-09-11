@@ -492,7 +492,7 @@ class EnduroGameState(NamedTuple):
     # invisible
     whole_track: chex.Array  # shape (N, 2), where track[i] = [direction, start_km]
     player_speed: chex.Array
-    cooldown: chex.Array  # cooldown after collision
+    cooldown: chex.Array  # cooldown after collision with another car
     game_over: chex.Array  # game over if you fail to pass enough cars before the day ends
     time_remaining: chex.Array
     total_cars_overtaken: chex.Array
@@ -556,12 +556,6 @@ class VehicleSpec:
         self.width = width
 
 
-class OpponentCar(NamedTuple):
-    x: jnp.ndarray
-    y: jnp.ndarray
-    scale_level: jnp.ndarray
-
-
 class EntityPosition(NamedTuple):
     x: jnp.ndarray
     y: jnp.ndarray
@@ -570,11 +564,19 @@ class EntityPosition(NamedTuple):
 
 
 class EnduroObservation(NamedTuple):
+    # cars
     car: EntityPosition  # player car position
+    visible_opponents: chex.Array
+
+    # score box
     cars_to_overtake: jnp.ndarray  # goal for current level
     distance: jnp.ndarray
     level: jnp.ndarray
-    visible_opponents: chex.Array
+
+    # track
+    track_top_x: chex.Array
+    track_left_xs: chex.Array
+    track_right_xs: chex.Array
     curvature: jnp.ndarray  # one of -1, 0, or 1
 
 
@@ -714,11 +716,27 @@ class JaxEnduro(JaxEnvironment[EnduroGameState, EnduroObservation, EnduroInfo, E
         info = self._get_info(final_state)
         return obs, final_state, total_reward, done, info
 
-    # TODO: finish
     @partial(jax.jit, static_argnums=(0,))
     def obs_to_flat_array(self, obs: EnduroObservation) -> jnp.ndarray:
         return jnp.concatenate([
+            # cars
+            obs.car.x.flatten(),
+            obs.car.y.flatten(),
+            obs.car.height.flatten(),
+            obs.car.width.flatten(),
+
+            obs.visible_opponents.flatten(),
+
+            # score box
+            obs.cars_to_overtake.flatten(),
+            obs.distance.flatten(),
             obs.level.flatten(),
+
+            # track
+            obs.track_top_x.flatten(),
+            obs.track_left_xs.flatten(),
+            obs.track_right_xs.flatten(),
+            obs.curvature.flatten(),
         ]
         )
 
@@ -942,12 +960,6 @@ class JaxEnduro(JaxEnvironment[EnduroGameState, EnduroObservation, EnduroInfo, E
         # do not allow level to go beyond the max level
         new_level = jnp.clip(new_level, 1, self.config.max_increase_level)
 
-        level_goal_reached = jnp.where(
-            new_cars_overtaken >= self.config.cars_to_pass_per_level + self.config.cars_increase_per_level * state.level,
-            1,
-            0
-        )
-
         # ===== Opponent Collision =====
         collided_car = self._check_car_opponent_collision(
             new_x_abs.astype(jnp.int32),
@@ -973,11 +985,7 @@ class JaxEnduro(JaxEnvironment[EnduroGameState, EnduroObservation, EnduroInfo, E
         distance_delta = new_speed.astype(jnp.float32) * jnp.float32(self.config.km_per_speed_unit_per_frame)
         new_distance = state.distance + distance_delta
 
-        # ====== OTHER ======
-        # Compute game over condition based on elapsed frames
-        # day_length_frames = self.config.day_night_cycle_seconds * self.config.frame_rate
-        # game_over = state.total_frames_elapsed >= self.config.day_length_frames
-
+        # ====== MOUNTAINS ======
         # mountains move opposing to the curve and the move faster with higher speed
         mountain_movement = -curvature * self.config.mountain_pixel_movement_per_frame_per_speed_unit * new_speed
 
@@ -989,6 +997,17 @@ class JaxEnduro(JaxEnvironment[EnduroGameState, EnduroObservation, EnduroInfo, E
         new_mountain_right_x = self.config.window_offset_left + jnp.mod(
             state.mountain_right_x + mountain_movement - self.config.window_offset_left,
             self.config.screen_width - self.config.window_offset_left + 1,
+        )
+
+        # ====== Game Over ======
+        # Compute game over condition based on elapsed frames
+        # day_length_frames = self.config.day_night_cycle_seconds * self.config.frame_rate
+        # game_over = state.total_frames_elapsed >= self.config.day_length_frames
+        game_over = jnp.where(
+            new_cars_overtaken >=
+            self.config.cars_to_pass_per_level + self.config.cars_increase_per_level * (state.level - 1),
+            1,
+            0
         )
 
         # Build new state with updated positions
@@ -1017,6 +1036,8 @@ class JaxEnduro(JaxEnvironment[EnduroGameState, EnduroObservation, EnduroInfo, E
             visible_track_left=new_left_xs.astype(jnp.int32),
             visible_track_right=new_right_xs.astype(jnp.int32),
             cooldown=new_cooldown,
+
+            #game_over=game_over,
         )
 
         # Return updated observation and state
@@ -1046,10 +1067,17 @@ class JaxEnduro(JaxEnvironment[EnduroGameState, EnduroObservation, EnduroInfo, E
 
         return EnduroObservation(
             car=car,
+            visible_opponents=state.visible_opponent_positions,
+
+            # score box
             cars_to_overtake=state.cars_to_overtake,
             distance=state.distance,
             level=state.level,
-            visible_opponents=state.visible_opponent_positions,
+
+            # track
+            track_top_x=state.track_top_x,
+            track_left_xs=state.visible_track_left,
+            track_right_xs=state.visible_track_right,
             curvature=curvature
         )
 
@@ -1112,6 +1140,9 @@ class JaxEnduro(JaxEnvironment[EnduroGameState, EnduroObservation, EnduroInfo, E
         # We simply ADD the curve shift to the base track coordinates. No more `jnp.where`!
         # Remember to SUBTRACT to match the visual direction from your last fix.
         final_left_xs = straight_left_xs + curve_shifts
+
+        # We add one more pixel to the left track because the right track starts a pixel lower.
+        # final_left_xs = jnp.concatenate([final_left_xs, final_left_xs[-1:]], axis=0)
 
         # --- Step 4: Generate the right track based on the final left track ---
         final_right_xs = self._generate_other_track_side_coords(final_left_xs)
@@ -1962,7 +1993,7 @@ class EnduroRenderer(JAXGameRenderer):
         hundreds_window = jax.lax.dynamic_slice(
             digit_sprite_black,
             (hundreds_y, 0, 0),
-                (window_height, digit_width, digit_sprite_black.shape[2])
+            (window_height, digit_width, digit_sprite_black.shape[2])
         )
 
         # Thousands digit - moves when hundreds digit is rolling
