@@ -1662,11 +1662,11 @@ class EnduroRenderer(JAXGameRenderer):
         super().__init__()
         self.config = GameConfig()
 
-        # sprite sizes to easily and dynamically  adjust renderings
+        # sprite sizes to easily and dynamically adjust renderings
         self.background_sizes: dict[str, tuple[int, int]] = {}
         self.sprites = self._load_sprites()
 
-        self.track_height = self.background_sizes['background_gras.npy'][1]
+        self.track_height = self.background_sizes['background_gras.npy'][0]
 
         # render all background that do not change only once
         self.static_background = self._render_static_background()
@@ -1696,7 +1696,7 @@ class EnduroRenderer(JAXGameRenderer):
                     if folder == 'backgrounds':
                         height = frame.shape[1]  # (N, H, W, C)
                         width = frame.shape[2]
-                        self.background_sizes[filename] = (width, height)
+                        self.background_sizes[filename] = (height, width)
 
         return sprites
 
@@ -1776,7 +1776,7 @@ class EnduroRenderer(JAXGameRenderer):
         track_color = track_pixel[0, 0]  # (4,)
 
         # build the y array
-        sky_height = self.background_sizes['background_sky.npy'][1]
+        sky_height = self.background_sizes['background_sky.npy'][0]
         y = jnp.add(
             jnp.arange(self.track_height),
             sky_height
@@ -2090,7 +2090,7 @@ class EnduroRenderer(JAXGameRenderer):
         mountain_right_sprite = aj.change_sprite_color(mountain_right_sprite, weather_index[2])
 
         # Geometry / sizes
-        sky_height = self.background_sizes['background_sky.npy'][1]
+        sky_height = self.background_sizes['background_sky.npy'][0]
         mountain_left_height = self.sprites['mountain_left.npy'].shape[1]
         mountain_right_height = self.sprites['mountain_right.npy'].shape[1]
         mountain_left_width = self.sprites['mountain_left.npy'].shape[2]
@@ -2131,11 +2131,11 @@ class EnduroRenderer(JAXGameRenderer):
 
         # 3) Mask out all pixels at or to the left of window_offset_left
         # Create a mask for valid x coordinates
-        x_coords = jnp.arange(raster.shape[0])
+        x_coords = jnp.arange(raster.shape[1])
         valid_x_mask = x_coords > self.config.window_offset_left
 
         # Expand mask to match raster dimensions
-        valid_x_mask = jnp.expand_dims(valid_x_mask, axis=(1, 2))  # (width, 1, 1)
+        valid_x_mask = jnp.expand_dims(valid_x_mask, axis=(0, 2))  # (1, width, 1)
         valid_x_mask = jnp.broadcast_to(valid_x_mask, raster.shape)  # (width, height, channels)
 
         # Apply mask - set invalid pixels to black (0)
