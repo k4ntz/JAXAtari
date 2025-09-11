@@ -290,6 +290,11 @@ class JaxPhoenix(JaxEnvironment[PhoenixState, PhoenixObservation, PhoenixInfo, N
     def _get_done(self, state: PhoenixState) -> Tuple[bool, PhoenixState]:
         return jnp.less_equal(state.lives, 0)
 
+    @partial(jax.jit, static_argnums=(0,))
+    def _get_reward(self, previous_state: PhoenixState, state: PhoenixState):
+        return state.score - previous_state.score
+
+
     def action_space(self) -> spaces.Discrete:
         return spaces.Discrete(len(self.action_set))
 
