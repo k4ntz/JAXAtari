@@ -10,12 +10,13 @@ import chex
 from jaxatari.environment import JaxEnvironment, EnvState, EnvObs, EnvInfo
 from typing import NamedTuple, Tuple
 import jax.numpy as jnp
+import jaxatari.spaces as spaces
 
 from jaxatari.renderers import JAXGameRenderer
 
 # frame (window) constants
-FRAME_WIDTH = 152
-FRAME_HEIGHT = 206
+FRAME_WIDTH = 160#152
+FRAME_HEIGHT = 210#206
 
 # field constants (the actual tennis court)
 # top: (left_x = 32, right_x = 111, width = right_x - left_x = 79)
@@ -1474,7 +1475,7 @@ renderer = TennisRenderer()
 
 
 class TennisObs(NamedTuple):
-    pass
+    ball_y: jnp.ndarray = jnp.array(0)
 
 
 class TennisInfo(NamedTuple):
@@ -1512,10 +1513,49 @@ class TennisJaxEnv(JaxEnvironment[TennisState, TennisObs, TennisInfo, TennisCons
         return renderer.render(state)
 
     def action_space(self) -> jnp.ndarray:
-        return jnp.array([0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17])
+        """self.action_set = [
+            Action.NOOP,
+            Action.FIRE,
+            Action.UP,
+            Action.RIGHT,
+            Action.LEFT,
+            Action.DOWN,
+            Action.UPRIGHT,
+            Action.UPLEFT,
+            Action.DOWNRIGHT,
+            Action.DOWNLEFT,
+            Action.UPFIRE,
+            Action.RIGHTFIRE,
+            Action.LEFTFIRE,
+            Action.DOWNFIRE,
+            Action.UPRIGHTFIRE,
+            Action.UPLEFTFIRE,
+            Action.DOWNRIGHTFIRE,
+            Action.DOWNLEFTFIRE
+        ]"""
 
-    def get_observation_space(self) -> Tuple:
-        pass
+        return spaces.Discrete(18)
+
+    def observation_space(self) -> Tuple:
+        return spaces.Dict({
+            "ball_y": spaces.Box(low=0, high=255, shape=(), dtype=jnp.uint8),
+            # this should clearly define the shapes and values that *all* the observations can have
+        })
+
+    def image_space(self) -> spaces.Box:
+        return spaces.Box(low=0, high=255, shape=(FRAME_HEIGHT, FRAME_WIDTH, 3), dtype=jnp.uint8)
+
+    def obs_to_flat_array(self, obs):
+        print(obs.ball_y)
+
+        return jnp.concatenate([
+            obs.ball_y.flatten(),
+            # obs.ball_shadow_y.flatten(),
+            # obs.player_x.flatten(),
+            # obs.player_y.flatten(),
+            # obs.enemy_x.flatten(),
+            # obs.enemy_y.flatten(),
+        ])
 
     def _get_observation(self, state: TennisState) -> TennisObs:
         return TennisObs()
