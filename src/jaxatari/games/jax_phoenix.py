@@ -745,7 +745,7 @@ class JaxPhoenix(JaxEnvironment[PhoenixState, PhoenixObservation, PhoenixInfo, N
             score = jnp.array(0), # Standardwert: Score=0
             lives=jnp.array(self.consts.PLAYER_LIVES), # Standardwert: 4 Leben
             player_respawn_timer=jnp.array(5),
-            level=jnp.array(3),
+            level=jnp.array(1),
             level_transition_timer=jnp.array(0),  # Timer for level transition, starts at 0
 
             invincibility=jnp.array(False),
