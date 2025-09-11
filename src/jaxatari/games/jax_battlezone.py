@@ -12,7 +12,7 @@ from sys import maxsize
 import math
 import numpy as np
 
-from jaxatari.environment import JaxEnvironment
+from jaxatari.environment import JaxEnvironment, EnvState
 from jaxatari.renderers import JAXGameRenderer
 from jaxatari.rendering import jax_rendering_utils as aj
 from jaxatari.spaces import Space
@@ -1261,12 +1261,14 @@ class JaxBattleZone(JaxEnvironment[BattleZoneState, BattleZoneObservation, chex.
         return jnp.concatenate([player_flat, bullets_flat, obstacles_flat]).astype(jnp.float32)
 
     @partial(jax.jit, static_argnums=(0,))
-    def render(self, state: BattleZoneState) -> jnp.ndarray:
-        """Return a placeholder image for JIT-ed wrappers and tests.
+    def render(self, state: EnvState) -> Tuple[jnp.ndarray]:
+        """
+        Renders the environment state to a single image.
+        Args:
+            state: The environment state.
 
-        For the unit tests we return a zero RGB image with the expected shape and dtype.
-        The non-jitted, human renderer (BattleZoneRenderer) is still available as
-        self.renderer for interactive use.
+        Returns: A single image of the environment state.
+
         """
         # Avoid calling `self.image_space()` inside a jitted function.
         # Constructing a Box can create JAX arrays as attributes which
