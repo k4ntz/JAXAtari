@@ -19,12 +19,10 @@ Top Priorities:
 - White Saucers shouldn't be hittable on the top of horizon --> done
 - fix beam_jump --> done
 - Enemies get smaller/bigger according to the 3d rendering --> done
+- add white saucer ram movement --> done
 - make game more 3D --> might be done(ask supervisor)
 - Fix ship movement
-- fix point 4 and the init from the email
-- add white saucer ram movement
 - adjust rejuvinator debris movement 
-- ask regarding the missing init from line 436 in the email
 For later:
 - Check the sentinal ship constants/Optimize the code/remove unnecessary code
 - Documentation"""
@@ -762,7 +760,7 @@ class BeamRiderEnv(JaxEnvironment[BeamRiderState, BeamRiderObservation, BeamRide
 
     @partial(jax.jit, static_argnums=(0,))
     def _update_white_saucer_movement(self, state: BeamRiderState) -> BeamRiderState:
-        """Enhanced white saucer movement patterns with horizon patrol system and simplified retreat logic"""
+        """Enhanced white saucer movement patterns with horizon patrol system and player beam check for kamikaze"""
         enemies = state.enemies
 
         # Get white saucer mask
@@ -793,28 +791,44 @@ class BeamRiderEnv(JaxEnvironment[BeamRiderState, BeamRiderObservation, BeamRide
         new_firing_timer = jnp.maximum(0, firing_timer - 1)
         new_jump_timer = jnp.maximum(0, jump_timer - 1)
 
-        # UNIVERSAL REVERSE CONDITION
+        # UNIVERSAL REVERSE CONDITION WITH PLAYER BEAM CHECK
         reached_reverse_point = current_y >= self.constants.WHITE_SAUCER_REVERSE_TRIGGER_Y
         retreat_flag = enemies[:, 13].astype(int)
+
+        # NEW: Check if player is on the same beam as the white saucer
+        player_beam = state.ship.beam_position
+        on_same_beam_as_player = current_beam == player_beam
+
+        # NEW: If on same beam as player when reaching reverse point, continue downward (kamikaze)
+        should_kamikaze = white_saucer_active & reached_reverse_point & on_same_beam_as_player & (retreat_flag == 0)
+
+        # MODIFIED: Only reverse if NOT on same beam as player
+        should_start_retreat = white_saucer_active & reached_reverse_point & ~on_same_beam_as_player & (
+                    retreat_flag == 0)
 
         # SHOOTING SAUCERS: Also reverse immediately when switched to REVERSE_UP pattern
         switched_to_reverse = white_saucer_active & (movement_pattern == self.constants.WHITE_SAUCER_REVERSE_UP) & (
                 retreat_flag == self.constants.WHITE_SAUCER_RETREAT_AFTER_SHOT
         )
 
+        # MODIFIED: Only move up if retreating and NOT kamikazing
         should_be_moving_up = white_saucer_active & (
                 (retreat_flag == self.constants.WHITE_SAUCER_RETREAT_AFTER_SHOT) |
-                reached_reverse_point |
+                (should_start_retreat) |  # Changed from reached_reverse_point
                 switched_to_reverse
-        )
+        ) & ~should_kamikaze  # Don't move up if kamikazing
 
-        # Start retreat when we cross the reverse depth
-        start_retreat_now = white_saucer_active & reached_reverse_point
+        # Start retreat when we cross the reverse depth AND not on player's beam
+        start_retreat_now = should_start_retreat  # Use the modified condition
         new_retreat_flag = jnp.where(start_retreat_now, self.constants.WHITE_SAUCER_RETREAT_AFTER_SHOT,
                                      enemies[:, 13].astype(int))
 
         clear_retreat = should_be_moving_up & (current_y <= self.constants.HORIZON_LINE_Y)
         final_retreat_flag = jnp.where(clear_retreat, 0, new_retreat_flag)
+
+        # NEW: Mark kamikazing saucers with a special flag (use a high value in retreat_flag)
+        KAMIKAZE_FLAG = 99
+        final_retreat_flag = jnp.where(should_kamikaze, KAMIKAZE_FLAG, final_retreat_flag)
 
         # === PATTERN 1: BEAM_JUMP WITH HORIZONTAL MOVEMENT ===
         jump_mask = white_saucer_active & (movement_pattern == self.constants.WHITE_SAUCER_BEAM_JUMP)
@@ -860,10 +874,17 @@ class BeamRiderEnv(JaxEnvironment[BeamRiderState, BeamRiderObservation, BeamRide
             current_x
         )
 
+        # MODIFIED: Check for kamikaze mode
+        is_kamikazing = final_retreat_flag == KAMIKAZE_FLAG
+
         jump_new_y = jnp.where(
-            should_be_moving_up,
-            current_y + self.constants.WHITE_SAUCER_REVERSE_SPEED_FAST,
-            current_y + current_speed
+            is_kamikazing,
+            current_y + self.constants.WHITE_SAUCER_RAMMING_SPEED,  # Continue downward fast
+            jnp.where(
+                should_be_moving_up,
+                current_y + self.constants.WHITE_SAUCER_REVERSE_SPEED_FAST,
+                current_y + current_speed
+            )
         )
 
         # Update beam position when close to target
@@ -874,12 +895,15 @@ class BeamRiderEnv(JaxEnvironment[BeamRiderState, BeamRiderObservation, BeamRide
         )
 
         jump_new_speed = jnp.where(
-            should_be_moving_up,
-            self.constants.WHITE_SAUCER_REVERSE_SPEED_FAST,
-            current_speed
+            is_kamikazing,
+            self.constants.WHITE_SAUCER_RAMMING_SPEED,
+            jnp.where(
+                should_be_moving_up,
+                self.constants.WHITE_SAUCER_REVERSE_SPEED_FAST,
+                current_speed
+            )
         )
 
-        # [Keep all the other pattern implementations as they were...]
         # === SHOOTING PATTERN WITH BEAM CHANGE LOGIC ONLY ===
         shooting_mask = white_saucer_active & (movement_pattern == self.constants.WHITE_SAUCER_SHOOTING)
         retreat_state = enemies[:, 13].astype(int)
@@ -919,13 +943,18 @@ class BeamRiderEnv(JaxEnvironment[BeamRiderState, BeamRiderObservation, BeamRide
 
         shooting_new_x = jnp.clip(shooting_new_x, dotted_min_x, dotted_max_x)
 
+        # MODIFIED: Check for kamikaze mode
         shooting_new_y = jnp.where(
-            should_be_moving_up,
-            current_y + self.constants.WHITE_SAUCER_REVERSE_SPEED_FAST,
+            is_kamikazing,
+            current_y + self.constants.WHITE_SAUCER_RAMMING_SPEED,  # Continue downward fast
             jnp.where(
-                should_move_down_before_shooting,
-                current_y + 1.5,
-                current_y + current_speed
+                should_be_moving_up,
+                current_y + self.constants.WHITE_SAUCER_REVERSE_SPEED_FAST,
+                jnp.where(
+                    should_move_down_before_shooting,
+                    current_y + 1.5,
+                    current_y + current_speed
+                )
             )
         )
 
@@ -936,12 +965,16 @@ class BeamRiderEnv(JaxEnvironment[BeamRiderState, BeamRiderObservation, BeamRide
         )
 
         shooting_new_speed = jnp.where(
-            should_be_moving_up,
-            self.constants.WHITE_SAUCER_REVERSE_SPEED_FAST,
-            current_speed
+            is_kamikazing,
+            self.constants.WHITE_SAUCER_RAMMING_SPEED,
+            jnp.where(
+                should_be_moving_up,
+                self.constants.WHITE_SAUCER_REVERSE_SPEED_FAST,
+                current_speed
+            )
         )
 
-        # === HORIZON PATROL PATTERN ===
+        # === HORIZON PATROL PATTERN (unchanged) ===
         horizon_patrol_mask = white_saucer_active & (movement_pattern == self.constants.WHITE_SAUCER_HORIZON_PATROL)
         at_horizon = jnp.abs(current_y - self.constants.HORIZON_LINE_Y) <= 5
         moving_to_horizon = horizon_patrol_mask & ~at_horizon & (current_y < self.constants.HORIZON_LINE_Y)
@@ -1108,14 +1141,19 @@ class BeamRiderEnv(JaxEnvironment[BeamRiderState, BeamRiderObservation, BeamRide
             )
         )
 
+        # MODIFIED: Check for kamikaze mode
         horizon_new_y = jnp.where(
-            moving_to_horizon,
-            horizon_new_y_moving,
+            is_kamikazing,
+            current_y + self.constants.WHITE_SAUCER_RAMMING_SPEED,  # Continue downward fast
             jnp.where(
-                diving | start_diving, current_y + 2.0,
+                moving_to_horizon,
+                horizon_new_y_moving,
                 jnp.where(
-                    should_be_moving_up, current_y + self.constants.WHITE_SAUCER_REVERSE_SPEED_FAST,
-                    self.constants.HORIZON_LINE_Y
+                    diving | start_diving, current_y + 2.0,
+                    jnp.where(
+                        should_be_moving_up, current_y + self.constants.WHITE_SAUCER_REVERSE_SPEED_FAST,
+                        self.constants.HORIZON_LINE_Y
+                    )
                 )
             )
         )
@@ -1139,31 +1177,49 @@ class BeamRiderEnv(JaxEnvironment[BeamRiderState, BeamRiderObservation, BeamRide
         # === PATTERN 0: STRAIGHT_DOWN ===
         straight_mask = white_saucer_active & (movement_pattern == self.constants.WHITE_SAUCER_STRAIGHT_DOWN)
         straight_new_x = current_x
+
+        # MODIFIED: Check for kamikaze mode
         straight_new_y = jnp.where(
-            should_be_moving_up,
-            current_y + self.constants.WHITE_SAUCER_REVERSE_SPEED_FAST,
-            current_y + current_speed
+            is_kamikazing,
+            current_y + self.constants.WHITE_SAUCER_RAMMING_SPEED,  # Continue downward fast
+            jnp.where(
+                should_be_moving_up,
+                current_y + self.constants.WHITE_SAUCER_REVERSE_SPEED_FAST,
+                current_y + current_speed
+            )
         )
         straight_new_beam = current_beam
         straight_new_speed = jnp.where(
-            should_be_moving_up,
-            self.constants.WHITE_SAUCER_REVERSE_SPEED_FAST,
-            current_speed
+            is_kamikazing,
+            self.constants.WHITE_SAUCER_RAMMING_SPEED,
+            jnp.where(
+                should_be_moving_up,
+                self.constants.WHITE_SAUCER_REVERSE_SPEED_FAST,
+                current_speed
+            )
         )
         straight_new_target_beam = target_beam
 
         # === PATTERN 2: REVERSE_UP ===
         reverse_mask = white_saucer_active & (movement_pattern == self.constants.WHITE_SAUCER_REVERSE_UP)
         reverse_new_speed = jnp.where(
-            should_be_moving_up,
-            self.constants.WHITE_SAUCER_REVERSE_SPEED_FAST,
-            current_speed
+            is_kamikazing,
+            self.constants.WHITE_SAUCER_RAMMING_SPEED,
+            jnp.where(
+                should_be_moving_up,
+                self.constants.WHITE_SAUCER_REVERSE_SPEED_FAST,
+                current_speed
+            )
         )
         reverse_new_x = current_x
         reverse_new_y = jnp.where(
-            should_be_moving_up,
-            current_y + self.constants.WHITE_SAUCER_REVERSE_SPEED_FAST,
-            current_y + current_speed
+            is_kamikazing,
+            current_y + self.constants.WHITE_SAUCER_RAMMING_SPEED,  # Continue downward fast
+            jnp.where(
+                should_be_moving_up,
+                current_y + self.constants.WHITE_SAUCER_REVERSE_SPEED_FAST,
+                current_y + current_speed
+            )
         )
         reverse_new_beam = current_beam
         reverse_new_target_beam = target_beam
@@ -1248,19 +1304,22 @@ class BeamRiderEnv(JaxEnvironment[BeamRiderState, BeamRiderObservation, BeamRide
         new_x = jnp.where(vertical_phase, curved_ws_x, new_x)
 
         will_be_off_top_next = (
-                                           current_y + self.constants.WHITE_SAUCER_REVERSE_SPEED_FAST) <= -self.constants.ENEMY_HEIGHT
-        start_universal_retreat = white_saucer_active & reached_reverse_point
+                                       current_y + self.constants.WHITE_SAUCER_REVERSE_SPEED_FAST) <= -self.constants.ENEMY_HEIGHT
+        start_universal_retreat = white_saucer_active & should_start_retreat  # Use modified condition
 
         retreat_flag_next = jnp.where(
             start_universal_retreat, self.constants.WHITE_SAUCER_RETREAT_AFTER_SHOT,
-            jnp.where(will_be_off_top_next, 0, retreat_flag)
+            jnp.where(will_be_off_top_next, 0,
+                      jnp.where(should_kamikaze, KAMIKAZE_FLAG, final_retreat_flag))  # Preserve kamikaze flag
         )
 
         is_horizon_patrol = movement_pattern == self.constants.WHITE_SAUCER_HORIZON_PATROL
 
+        # MODIFIED: Deactivate kamikazing saucers when they go off bottom of screen
         new_active = white_saucer_active & (
                 (is_horizon_patrol & (new_y >= self.constants.HORIZON_LINE_Y)) |
-                (~is_horizon_patrol & (new_y > self.constants.HORIZON_LINE_Y))
+                (~is_horizon_patrol & (new_y > self.constants.HORIZON_LINE_Y)) |
+                (is_kamikazing & (new_y < self.constants.SCREEN_HEIGHT))  # Keep kamikaze active until bottom
         )
 
         # Update enemy array with new positions and timers
