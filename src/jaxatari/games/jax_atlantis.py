@@ -1649,8 +1649,8 @@ class JaxAtlantis(
 
     def _get_reward(
         self, previous_state: AtlantisState, state: AtlantisState
-    ) -> float:
-        return float(state.score.item() - previous_state.score.item())
+    ):
+        return (state.score - previous_state.score).astype(jnp.float32)
 
     @partial(jax.jit, static_argnums=(0,))
     def _get_done(self, state: AtlantisState) -> jnp.bool_:
