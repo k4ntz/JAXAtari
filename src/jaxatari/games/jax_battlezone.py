@@ -3,6 +3,7 @@ import pygame
 import chex
 import jax
 import jax.numpy as jnp
+import jax.random as jrandom
 from dataclasses import dataclass
 from typing import Tuple, NamedTuple
 import random
@@ -14,6 +15,7 @@ import numpy as np
 from jaxatari.environment import JaxEnvironment
 from jaxatari.renderers import JAXGameRenderer
 from jaxatari.rendering import jax_rendering_utils as aj
+from jaxatari.spaces import Space
 import jaxatari.spaces as spaces
 
 # Action constants for BattleZone
@@ -904,7 +906,7 @@ class JaxBattleZone(JaxEnvironment[BattleZoneState, BattleZoneObservation, chex.
             self.renderer = BattleZoneRenderer()
         except Exception:
             self.renderer = None
-    def image_space(self) -> spaces.Box:
+    def image_space(self) -> Space:
         """Returns the image space for BattleZone (RGB 210x160)."""
         return spaces.Box(
             low=0,
@@ -913,7 +915,7 @@ class JaxBattleZone(JaxEnvironment[BattleZoneState, BattleZoneObservation, chex.
             dtype=jnp.uint8,
         )
 
-    def reset(self, key=None) -> Tuple[BattleZoneObservation, BattleZoneState]:
+    def reset(self, key: jrandom.PRNGKey = None) -> Tuple[BattleZoneObservation, BattleZoneState]:
         """Reset the game to initial state."""
         # Initialize player tank at center
         player_tank = Tank(
@@ -980,7 +982,7 @@ class JaxBattleZone(JaxEnvironment[BattleZoneState, BattleZoneObservation, chex.
         return observation, state
 
     @partial(jax.jit, static_argnums=(0,))
-    def step(self, state: BattleZoneState, action: chex.Array) -> Tuple[BattleZoneObservation, BattleZoneState, float, bool, BattleZoneInfo]:
+    def step(self, state: BattleZoneState, action) -> Tuple[BattleZoneObservation, BattleZoneState, float, bool, BattleZoneInfo]:
         """Perform a step in the BattleZone environment. 
         This updates the game state based on the action taken.
         It is the main update LOOP for the game.
@@ -1135,7 +1137,7 @@ class JaxBattleZone(JaxEnvironment[BattleZoneState, BattleZoneObservation, chex.
         reward = self._get_env_reward(state, final_state)
         done = self._get_done(final_state)
         all_rewards = self._get_all_reward(state, final_state)
-        info = self._get_info(final_state, all_rewards, player_was_shot)
+        info = self._get_info_full(final_state, all_rewards, player_was_shot)
 
         return observation, final_state, reward, done, info
 
@@ -1151,11 +1153,11 @@ class JaxBattleZone(JaxEnvironment[BattleZoneState, BattleZoneObservation, chex.
             player_lives=state.player_lives,
         )
 
-    def action_space(self) -> spaces.Discrete:
+    def action_space(self) -> Space:
         """Discrete action space (callable) to match JaxEnvironment API and tests."""
         return spaces.Discrete(len(self.action_set))
 
-    def observation_space(self) -> spaces.Dict:
+    def observation_space(self) -> Space:
         """Observation space (callable) using numpy dtypes.
 
         Tests and wrappers expect numpy dtypes (np.float32 / np.int32).
@@ -1211,7 +1213,7 @@ class JaxBattleZone(JaxEnvironment[BattleZoneState, BattleZoneObservation, chex.
         })
 
     @partial(jax.jit, static_argnums=(0,))
-    def obs_to_flat_array(self, obs) -> chex.Array:
+    def obs_to_flat_array(self, obs) -> jnp.ndarray:
         """Convert a single-frame observation (pytree of jax arrays) to a flat jax array.
 
         This implementation is JAX-friendly (no Python float/int conversions) so it can be
@@ -1256,7 +1258,7 @@ class JaxBattleZone(JaxEnvironment[BattleZoneState, BattleZoneObservation, chex.
         return jnp.concatenate([player_flat, bullets_flat, obstacles_flat]).astype(jnp.float32)
 
     @partial(jax.jit, static_argnums=(0,))
-    def render(self, state: BattleZoneState) -> chex.Array:
+    def render(self, state: BattleZoneState) -> jnp.ndarray:
         """Return a placeholder image for JIT-ed wrappers and tests.
 
         For the unit tests we return a zero RGB image with the expected shape and dtype.
@@ -1283,15 +1285,13 @@ class JaxBattleZone(JaxEnvironment[BattleZoneState, BattleZoneObservation, chex.
         return state.player_tank.alive == 0
 
     @partial(jax.jit, static_argnums=(0,))
-    def _get_info(self, state: BattleZoneState, all_rewards: chex.Array = None, player_shot: chex.Array = None) -> BattleZoneInfo:
-        """
-        Return environment info.  This implementation accepts either the single-argument
-        form expected by the abstract base (`_get_info(state)`) or the extended
-        form used internally (`_get_info(state, all_rewards, player_shot)`).
+    def _get_info(self, state: BattleZoneState) -> BattleZoneInfo:
+        """Single-argument form required by JaxEnvironment: return defaults."""
+        return BattleZoneInfo(time=state.step_counter, all_rewards=jnp.zeros(1), player_shot=jnp.array(0, dtype=jnp.int32))
 
-        When called with only `state`, reasonable defaults are supplied so callers
-        that only need basic info (e.g. wrappers) will continue to work.
-        """
+    @partial(jax.jit, static_argnums=(0,))
+    def _get_info_full(self, state: BattleZoneState, all_rewards: chex.Array = None, player_shot: chex.Array = None) -> BattleZoneInfo:
+        """Extended internal helper used by this module when extra args are available."""
         if all_rewards is None:
             all_rewards = jnp.zeros(1)
         if player_shot is None:
