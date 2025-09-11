@@ -900,6 +900,14 @@ class JaxBattleZone(JaxEnvironment[BattleZoneState, BattleZoneObservation, chex.
             self.renderer = BattleZoneRenderer()
         except Exception:
             self.renderer = None
+    def image_space(self) -> spaces.Box:
+        """Returns the image space for BattleZone (RGB 210x160)."""
+        return spaces.Box(
+            low=0,
+            high=255,
+            shape=(210, 160, 3),
+            dtype=jnp.uint8,
+        )
 
     def reset(self, key=None) -> Tuple[BattleZoneObservation, BattleZoneState]:
         """Reset the game to initial state."""
@@ -1135,19 +1143,12 @@ class JaxBattleZone(JaxEnvironment[BattleZoneState, BattleZoneObservation, chex.
             obstacles=state.obstacles
         )
 
-    @property
     def action_space(self) -> spaces.Discrete:
-        """Discrete action space as an attribute (gym-style).
-
-        Returning a property ensures wrappers that expect `env.action_space`
-        (attribute access) get a Space instance rather than a bound method.
-        """
-        # action_set is defined elsewhere on this class; keep the same size
+        """Discrete action space (callable) to match JaxEnvironment API and tests."""
         return spaces.Discrete(len(self.action_set))
 
-    @property
     def observation_space(self) -> spaces.Dict:
-        """Observation space as an attribute (gym-style) using numpy dtypes.
+        """Observation space (callable) using numpy dtypes.
 
         Tests and wrappers expect numpy dtypes (np.float32 / np.int32).
         """
