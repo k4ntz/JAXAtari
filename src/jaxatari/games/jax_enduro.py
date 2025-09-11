@@ -1,12 +1,3 @@
-"""
-Dear Quentin, Raban, Jannis, Paul, Sebastian,
-
-I implemented the Enduro game.
-https://www.free80sarcade.com/atari2600_Enduro.php
-
-I recommend to add a function like change_sprite_color to aj or to allow get_sprite_frame to take an custom rgb array.
-"""
-
 import chex
 from functools import partial
 import jax
@@ -21,6 +12,7 @@ from typing import Tuple, NamedTuple, Any
 from jaxatari.environment import JaxEnvironment, JAXAtariAction as Action
 from jaxatari.renderers import JAXGameRenderer
 from jaxatari.rendering import jax_rendering_utils as aj
+import jaxatari.spaces as spaces
 
 TODOS = """
 Observation:
@@ -547,7 +539,7 @@ class JaxEnduro(JaxEnvironment[EnduroGameState, EnduroObservation, EnduroInfo, E
         self.frame_stack_size = 4
         self.config = GameConfig()
         self.state = self.reset()
-        self.car_0_spec = VehicleSpec("sprites/enduro/cars/car_1.npy")
+        self.car_0_spec = VehicleSpec("sprites/enduro/cars/car_0.npy")
         self.car_1_spec = VehicleSpec("sprites/enduro/cars/car_1.npy")
 
         self.action_set = [
@@ -558,8 +550,82 @@ class JaxEnduro(JaxEnvironment[EnduroGameState, EnduroObservation, EnduroInfo, E
             Action.DOWN,  # brake
             Action.LEFTFIRE,  # steer left + gas
             Action.RIGHTFIRE,  # steer right + gas
-            Action.DOWNFIRE  # brake + gas (not common but valid)
+            Action.DOWNFIRE  # brake + gas (will just override to gas)
         ]
+
+        self.renderer = EnduroRenderer()
+
+    def action_space(self) -> spaces.Discrete:
+      return spaces.Discrete(len(self.action_set))
+
+    def image_space(self) -> spaces.Box:
+        return spaces.Box(
+            low=0,
+            high=255,
+            shape=(210, 160, 3),
+            dtype=jnp.uint8
+        )
+
+    def observation_space(self) -> spaces.Dict:
+        return spaces.Dict({
+            "car": spaces.Dict({
+                "x": spaces.Box(low=0, high=self.config.screen_width, shape=(1, 1), dtype=jnp.int32),
+                "y": spaces.Box(low=0, high=self.config.screen_height, shape=(1, 1), dtype=jnp.int32),
+                "width": spaces.Box(low=0, high=self.config.screen_width, shape=(1, 1), dtype=jnp.int32),
+                "height": spaces.Box(low=0, high=self.config.screen_height, shape=(1, 1), dtype=jnp.int32),
+            }),
+            "visible_opponents": spaces.Box(
+                low=0,
+                high=1,
+                shape=(self.config.number_of_opponents,),
+                dtype=jnp.int32
+            ),
+            "cars_to_overtake": spaces.Box(low=0, high=1000, shape=(1,), dtype=jnp.int32),
+            "distance": spaces.Box(low=0.0, high=self.config.max_track_length, shape=(1,), dtype=jnp.float32),
+            "level": spaces.Box(low=1, high=10, shape=(1,), dtype=jnp.int32),
+            "track_top_x": spaces.Box(low=0, high=self.config.screen_width, shape=(1,), dtype=jnp.int32),
+            "track_left_xs": spaces.Box(
+                low=0,
+                high=self.config.screen_width,
+                shape=(self.config.track_height,),
+                dtype=jnp.int32
+            ),
+            "track_right_xs": spaces.Box(
+                low=0,
+                high=self.config.screen_width,
+                shape=(self.config.track_height,),
+                dtype=jnp.int32
+            ),
+            "curvature": spaces.Box(low=-1, high=1, shape=(1,), dtype=jnp.int32),
+        })
+
+    @partial(jax.jit, static_argnums=(0,))
+    def obs_to_flat_array(self, obs: EnduroObservation) -> jnp.ndarray:
+        return jnp.concatenate([
+            # cars
+            obs.car.x.flatten(),
+            obs.car.y.flatten(),
+            obs.car.height.flatten(),
+            obs.car.width.flatten(),
+
+            obs.visible_opponents.flatten(),
+
+            # score box
+            obs.cars_to_overtake.flatten(),
+            obs.distance.flatten(),
+            obs.level.flatten(),
+
+            # track
+            obs.track_top_x.flatten(),
+            obs.track_left_xs.flatten(),
+            obs.track_right_xs.flatten(),
+            obs.curvature.flatten(),
+        ]
+        )
+
+    @partial(jax.jit, static_argnums=(0,))
+    def render(self, state: EnduroGameState) -> jnp.ndarray:
+        return self.renderer.render(state)
 
     @partial(jax.jit, static_argnums=(0,))
     def reset(self, key: jrandom.PRNGKey = None) -> Tuple[EnduroObservation, EnduroGameState]:
@@ -667,34 +733,6 @@ class JaxEnduro(JaxEnvironment[EnduroGameState, EnduroObservation, EnduroInfo, E
 
         info = self._get_info(final_state)
         return obs, final_state, total_reward, done, info
-
-    @partial(jax.jit, static_argnums=(0,))
-    def obs_to_flat_array(self, obs: EnduroObservation) -> jnp.ndarray:
-        return jnp.concatenate([
-            # cars
-            obs.car.x.flatten(),
-            obs.car.y.flatten(),
-            obs.car.height.flatten(),
-            obs.car.width.flatten(),
-
-            obs.visible_opponents.flatten(),
-
-            # score box
-            obs.cars_to_overtake.flatten(),
-            obs.distance.flatten(),
-            obs.level.flatten(),
-
-            # track
-            obs.track_top_x.flatten(),
-            obs.track_left_xs.flatten(),
-            obs.track_right_xs.flatten(),
-            obs.curvature.flatten(),
-        ]
-        )
-
-    @partial(jax.jit, static_argnums=(0,))
-    def action_space(self):
-        return jnp.array(self.action_set)
 
     @partial(jax.jit, static_argnums=(0,))
     def _step_single(self, state: EnduroGameState, action: int) -> StepResult:
@@ -1688,7 +1726,7 @@ class EnduroRenderer(JAXGameRenderer):
         return sprites
 
     @partial(jax.jit, static_argnums=(0,))
-    def render(self, state: EnduroGameState):
+    def render(self, state: EnduroGameState) -> jnp.ndarray:
         """Render the game state to a raster image."""
         raster = self.static_background.copy()
 
@@ -1720,7 +1758,7 @@ class EnduroRenderer(JAXGameRenderer):
         return raster
 
     @partial(jax.jit, static_argnums=(0,))
-    def _render_player_car(self, raster, state: EnduroGameState):
+    def _render_player_car(self, raster: jnp.ndarray, state: EnduroGameState):
         """
         Renders the player car. The animation speed depends on the player speed
         Args:
@@ -1748,7 +1786,7 @@ class EnduroRenderer(JAXGameRenderer):
         return raster
 
     @partial(jax.jit, static_argnums=(0,))
-    def _render_track_from_state(self, raster, state: EnduroGameState):
+    def _render_track_from_state(self, raster: jnp.ndarray, state: EnduroGameState):
         """
         Renders the track pixels from the Enduro Game State.
         Args:
@@ -1798,7 +1836,7 @@ class EnduroRenderer(JAXGameRenderer):
         return sprite
 
     @partial(jax.jit, static_argnums=(0,))
-    def _render_opponent_cars(self, raster, state: EnduroGameState) -> jnp.ndarray:
+    def _render_opponent_cars(self, raster: jnp.ndarray, state: EnduroGameState) -> jnp.ndarray:
         """
         Renders all opponent cars into the game with custom colors
         Args:
@@ -1866,7 +1904,7 @@ class EnduroRenderer(JAXGameRenderer):
         return raster
 
     @partial(jax.jit, static_argnums=(0,))
-    def _render_distance_odometer(self, raster, state: EnduroGameState) -> jnp.ndarray:
+    def _render_distance_odometer(self, raster: jnp.ndarray, state: EnduroGameState) -> jnp.ndarray:
         """
         Renders the odometer that shows the distance that we've covered.
         first 4 digits are in black font and the decimal digit is in brown font.
@@ -1981,7 +2019,7 @@ class EnduroRenderer(JAXGameRenderer):
         return raster
 
     @partial(jax.jit, static_argnums=(0,))
-    def _render_level_score(self, raster, state: EnduroGameState) -> jnp.ndarray:
+    def _render_level_score(self, raster: jnp.ndarray, state: EnduroGameState) -> jnp.ndarray:
         """
         Renders the current level digit.
         Args:
@@ -2008,7 +2046,7 @@ class EnduroRenderer(JAXGameRenderer):
         return raster
 
     @partial(jax.jit, static_argnums=(0,))
-    def _render_cars_to_overtake_score(self, raster, state: EnduroGameState) -> jnp.ndarray:
+    def _render_cars_to_overtake_score(self, raster: jnp.ndarray, state: EnduroGameState) -> jnp.ndarray:
         """
         Renders the score that shows how many cars still have to be overtaken.
 
@@ -2061,7 +2099,7 @@ class EnduroRenderer(JAXGameRenderer):
         return raster
 
     @partial(jax.jit, static_argnums=(0,))
-    def _render_mountains(self, raster, state: EnduroGameState) -> jnp.ndarray:
+    def _render_mountains(self, raster: jnp.ndarray, state: EnduroGameState) -> jnp.ndarray:
         """
         Renders mountains. If a mountain sprite would extend beyond the right edge (hi),
         draw an additional wrapped copy at x - period so it appears on the left.
@@ -2131,7 +2169,7 @@ class EnduroRenderer(JAXGameRenderer):
         return raster
 
     @partial(jax.jit, static_argnums=(0,))
-    def _render_weather(self, raster, state: EnduroGameState) -> jnp.ndarray:
+    def _render_weather(self, raster: jnp.ndarray, state: EnduroGameState) -> jnp.ndarray:
         """
         Renders the skybox and the track background in the color of the current weather.
         Args:
@@ -2170,7 +2208,7 @@ class EnduroRenderer(JAXGameRenderer):
         return raster
 
     @partial(jax.jit, static_argnums=(0,))
-    def _render_lower_background(self, raster, state: EnduroGameState) -> jnp.ndarray:
+    def _render_lower_background(self, raster: jnp.ndarray, state: EnduroGameState) -> jnp.ndarray:
         """
         Renders the background and score box under the player screen to avoid that opponent cars are visible there.
         Args:
@@ -2209,7 +2247,7 @@ class EnduroRenderer(JAXGameRenderer):
         return raster
 
     @partial(jax.jit, static_argnums=(0,))
-    def _render_fog(self, raster, state: EnduroGameState) -> jnp.ndarray:
+    def _render_fog(self, raster: jnp.ndarray, state: EnduroGameState) -> jnp.ndarray:
         """
         Renders the fog if applicable. Needs to be done as the last thing, so we don't draw anything on top.
         Args:
