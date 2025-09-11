@@ -213,7 +213,8 @@ class EnduroConstants(NamedTuple):
 
 class GameConfig:
     """Game configuration parameters"""
-    # Game runs at 60 frames per second
+    # Game runs at 60 frames per second. This is used to approximate the configs with values from play-testing the game.
+    # Only change this variable if you are sure the original Enduro implementation ran at a lower rate!
     frame_rate: int = 60
     # Game logic steps every Nth frame (standard is 4)
     frame_skip: int = 4
@@ -403,7 +404,7 @@ class GameConfig:
 class EnduroGameState(NamedTuple):
     """Represents the current state of the game"""
 
-    step_count: jnp.int32  # incremented every step (so every n-th frame depending on frame skip)
+    step_count: jnp.int32  # incremented every step
 
     # visible (mirror in Observation)
     player_y_abs_position: chex.Array
@@ -689,54 +690,6 @@ class JaxEnduro(JaxEnvironment[EnduroGameState, EnduroObservation, EnduroInfo, E
     @partial(jax.jit, static_argnums=(0,))
     def step(self, state: EnduroGameState, action: int) -> StepResult:
         """
-        Performs a frame-skipped step in the Enduro environment.
-
-        Executes the environment step logic multiple times (as configured by
-        `frame_skip`) to simulate time progression, returning only the final
-        observation and total accumulated reward. Skipping stops early if the
-        game ends.
-
-        Args:
-            state (EnduroGameState): The current game state.
-            action (int): The discrete action to apply repeatedly.
-
-        Returns:
-            Tuple[EnduroObservation, EnduroGameState, float, bool, EnduroInfo]:
-                - The final observation after frame skipping.
-                - The updated game state.
-                - The total accumulated reward over skipped frames.
-                - A boolean indicating if the episode has ended.
-                - Additional info such as level and distance.
-        """
-
-        def skip_step(i, carry):
-            """
-            Applies a single frame update during frame skipping.
-            Carries forward the observation, state, and accumulated reward,
-            and stops early if the game ends.
-            """
-            obs_i, state_i, reward_acc, done_flag = carry
-            obs_next, state_next, reward_i, done_i, _ = self._step_single(state_i, action)
-            reward_acc += reward_i
-            return obs_next, state_next, reward_acc, jnp.logical_or(done_flag, done_i)
-
-        initial_obs, initial_state, initial_reward, initial_done, _ = self._step_single(state, action)
-
-        obs, final_state, total_reward, done = jax.lax.fori_loop(
-            1,  # start at 1 because we already did the first frame
-            self.config.frame_skip,
-            skip_step,
-            (initial_obs, initial_state, initial_reward, initial_done)
-        )
-        # add one logical step
-        final_state: EnduroGameState = final_state._replace(step_count=state.step_count + 1)
-
-        info = self._get_info(final_state)
-        return obs, final_state, total_reward, done, info
-
-    @partial(jax.jit, static_argnums=(0,))
-    def _step_single(self, state: EnduroGameState, action: int) -> StepResult:
-        """
         Performs a single frame update of the Enduro environment.
 
         Applies the action to update the player's position and increments the
@@ -1006,6 +959,8 @@ class JaxEnduro(JaxEnvironment[EnduroGameState, EnduroObservation, EnduroInfo, E
 
         # Build new state with updated positions
         new_state: EnduroGameState = state._replace(
+            step_count=state.step_count + 1,
+
             player_x_abs_position=new_x_abs,
             player_y_abs_position=new_y_abs,
             total_time_elapsed=state.step_count / self.config.frame_rate,
