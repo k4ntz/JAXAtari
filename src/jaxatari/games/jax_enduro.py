@@ -74,6 +74,7 @@ Track:
 
 """
 
+
 class EnduroConstants(NamedTuple):
     """Game configuration parameters"""
     # Game runs at 60 frames per second
@@ -261,6 +262,7 @@ class EnduroConstants(NamedTuple):
     opponent_animation_steps: int = 2
 
     day_length_frames = day_night_cycle_seconds * frame_rate
+
 
 @dataclass
 class GameConfig:
@@ -709,6 +711,14 @@ class JaxEnduro(JaxEnvironment[EnduroGameState, EnduroObservation, EnduroInfo, E
 
         info = self._get_info(final_state)
         return obs, final_state, total_reward, done, info
+
+    # TODO: finish
+    @partial(jax.jit, static_argnums=(0,))
+    def obs_to_flat_array(self, obs: EnduroObservation) -> jnp.ndarray:
+        return jnp.concatenate([
+            obs.level.flatten(),
+        ]
+        )
 
     @partial(jax.jit, static_argnums=(0,))
     def _step_single(self, state: EnduroGameState, action: int) -> StepResult:
@@ -1678,14 +1688,14 @@ class EnduroRenderer(JAXGameRenderer):
                 # load npy files
                 if filename.endswith(".npy"):
                     full_path = os.path.join(folder_path, filename)
-                    frame = aj.load_frame_with_animation(full_path)
+                    frame = aj.load_frame_with_animation(full_path, transpose=False)
                     # save with the full extension, so remember to also load them with .npy
                     sprites[filename] = frame.astype(jnp.uint8)
 
                     # Store size info for backgrounds
                     if folder == 'backgrounds':
-                        width = frame.shape[1]  # (N, W, H, C)
-                        height = frame.shape[2]
+                        height = frame.shape[1]  # (N, H, W, C)
+                        width = frame.shape[2]
                         self.background_sizes[filename] = (width, height)
 
         return sprites
@@ -1795,7 +1805,7 @@ class EnduroRenderer(JAXGameRenderer):
         def draw_pixel(i, s):
             x = x_coords[i]
             y = y_coords[i]
-            return s.at[x, y].set(color)
+            return s.at[y, x].set(color)
 
         sprite = jax.lax.fori_loop(0, x_coords.shape[0], draw_pixel, sprite)
         return sprite
@@ -1882,15 +1892,15 @@ class EnduroRenderer(JAXGameRenderer):
         """
         # Get digit dimensions from a sample sprite
         digit_0_black = aj.get_sprite_frame(self.sprites['0_black.npy'], 0)
-        window_height = digit_0_black.shape[1] + 2
-        digit_width = digit_0_black.shape[0]
+        window_height = digit_0_black.shape[0] + 2
+        digit_width = digit_0_black.shape[1]
 
         # get the black and brown digit sprites that have all digits
         digit_sprite_black = aj.get_sprite_frame(self.sprites['black_digit_array.npy'], 0)
         digit_sprite_brown = aj.get_sprite_frame(self.sprites['brown_digit_array.npy'], 0)
 
         # determine the base position in the sprite that represents the lowest y for the window
-        base_y = digit_sprite_brown.shape[1] - window_height + 1
+        base_y = digit_sprite_brown.shape[0] - window_height + 1
 
         # Calculate how many 0.0125 increments have passed for decimal animation
         increments_passed = jnp.floor(state.distance / 0.0125)
@@ -1925,37 +1935,37 @@ class EnduroRenderer(JAXGameRenderer):
         # Extract decimal digit window
         digit_window = jax.lax.dynamic_slice(
             digit_sprite_brown,
-            (0, decimal_y, 0),  # start indices (y position in sprite, x=0, channel=0)
-            (digit_width, window_height, digit_sprite_brown.shape[2])
+            (decimal_y, 0, 0),  # start indices (y position in sprite, x=0, channel=0)
+            (window_height, digit_width, digit_sprite_brown.shape[2])
         )
 
         # Add rolling animation offsets when appropriate
         # Ones digit - moves when decimal digit is rolling
         ones_window = jax.lax.dynamic_slice(
             digit_sprite_black,
-            (0, ones_y, 0),
-            (digit_width, window_height, digit_sprite_black.shape[2])
+            (ones_y, 0, 0),
+            (window_height, digit_width, digit_sprite_black.shape[2])
         )
 
         # Tens digit - moves when ones digit is rolling
         tens_window = jax.lax.dynamic_slice(
             digit_sprite_black,
-            (0, tens_y, 0),
-            (digit_width, window_height, digit_sprite_black.shape[2])
+            (tens_y, 0, 0),
+            (window_height, digit_width, digit_sprite_black.shape[2])
         )
 
         # Hundreds digit - moves when hundreds digit is rolling
         hundreds_window = jax.lax.dynamic_slice(
             digit_sprite_black,
-            (0, hundreds_y, 0),
-            (digit_width, window_height, digit_sprite_black.shape[2])
+            (hundreds_y, 0, 0),
+                (window_height, digit_width, digit_sprite_black.shape[2])
         )
 
         # Thousands digit - moves when hundreds digit is rolling
         thousands_window = jax.lax.dynamic_slice(
             digit_sprite_black,
-            (0, thousands_y, 0),
-            (digit_width, window_height, digit_sprite_black.shape[2])
+            (thousands_y, 0, 0),
+            (window_height, digit_width, digit_sprite_black.shape[2])
         )
 
         # === Render all numbers ===
@@ -2038,7 +2048,7 @@ class EnduroRenderer(JAXGameRenderer):
             aj.get_sprite_frame(self.sprites['9_black.npy'], 0),
         ])
 
-        digit_width = digit_sprites[0].shape[0]
+        digit_width = digit_sprites[0].shape[1]
 
         ones_digit = cars_to_overtake % 10
         tens_digit = (cars_to_overtake // 10) % 10
@@ -2081,10 +2091,10 @@ class EnduroRenderer(JAXGameRenderer):
 
         # Geometry / sizes
         sky_height = self.background_sizes['background_sky.npy'][1]
-        mountain_left_height = self.sprites['mountain_left.npy'].shape[2]
-        mountain_right_height = self.sprites['mountain_right.npy'].shape[2]
-        mountain_left_width = self.sprites['mountain_left.npy'].shape[1]
-        mountain_right_width = self.sprites['mountain_right.npy'].shape[1]
+        mountain_left_height = self.sprites['mountain_left.npy'].shape[1]
+        mountain_right_height = self.sprites['mountain_right.npy'].shape[1]
+        mountain_left_width = self.sprites['mountain_left.npy'].shape[2]
+        mountain_right_width = self.sprites['mountain_right.npy'].shape[2]
 
         # Visible interval and period (inclusive interval -> +1)
         lo = self.config.window_offset_left
@@ -2155,20 +2165,20 @@ class EnduroRenderer(JAXGameRenderer):
         # green background
         gras = aj.get_sprite_frame(self.sprites['background_gras.npy'], 0)
         colored_gras = aj.change_sprite_color(gras, weather_colors[1])
-        raster = aj.render_at(raster, self.config.window_offset_left, sky.shape[1], colored_gras)
+        raster = aj.render_at(raster, self.config.window_offset_left, sky.shape[0], colored_gras)
 
         # render the horizon stripes
         stripe_1 = aj.get_sprite_frame(self.sprites['background_horizon.npy'], 0)
         colored_stripe_1 = aj.change_sprite_color(stripe_1, weather_colors[3])
-        raster = aj.render_at(raster, self.config.window_offset_left, sky.shape[1] - 2, colored_stripe_1)
+        raster = aj.render_at(raster, self.config.window_offset_left, sky.shape[0] - 2, colored_stripe_1)
 
         stripe_2 = aj.get_sprite_frame(self.sprites['background_horizon.npy'], 0)
         colored_stripe_2 = aj.change_sprite_color(stripe_2, weather_colors[4])
-        raster = aj.render_at(raster, self.config.window_offset_left, sky.shape[1] - 4, colored_stripe_2)
+        raster = aj.render_at(raster, self.config.window_offset_left, sky.shape[0] - 4, colored_stripe_2)
 
         stripe_3 = aj.get_sprite_frame(self.sprites['background_horizon.npy'], 0)
         colored_stripe_3 = aj.change_sprite_color(stripe_3, weather_colors[5])
-        raster = aj.render_at(raster, self.config.window_offset_left, sky.shape[1] - 6, colored_stripe_3)
+        raster = aj.render_at(raster, self.config.window_offset_left, sky.shape[0] - 6, colored_stripe_3)
 
         return raster
 
@@ -2230,6 +2240,7 @@ class EnduroRenderer(JAXGameRenderer):
             raster
         )
         return raster
+
 
 """
 ACTIVISION (R)
@@ -2405,5 +2416,3 @@ list.
 
 YOUR BEST GAME SCORES
 """
-
-
