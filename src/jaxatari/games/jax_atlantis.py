@@ -1616,7 +1616,7 @@ class JaxAtlantis(
 
     @partial(jax.jit, static_argnums=(0,))
     def _get_info(
-        self, state: AtlantisState, all_rewards: chex.Array
+        self, state: AtlantisState, all_rewards: chex.Array = None
     ) -> AtlantisInfo:
         enemies_alive = jnp.sum((state.enemies[:, 5] == 1).astype(jnp.int32))
         bullets_alive = jnp.sum(state.bullets_alive.astype(jnp.int32))
