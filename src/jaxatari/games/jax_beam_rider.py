@@ -3503,9 +3503,6 @@ class BeamRiderRenderer(JAXGameRenderer):
             self.pygame_screen = pygame.display.set_mode((self.pygame_screen_width, self.pygame_screen_height))
             pygame.display.set_caption("BeamRider - JAX Implementation")
             self.clock = pygame.time.Clock()
-            import os  # at the top of the file if not already there
-            font_path = os.path.join(os.path.dirname(__file__), "../../../assets/PressStart2P.ttf")
-            self.font = pygame.font.Font(font_path, 16)
             self.env = BeamRiderEnv()
 
     def _create_ship_surface(self):
