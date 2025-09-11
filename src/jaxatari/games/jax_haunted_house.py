@@ -392,9 +392,23 @@ class JaxHauntedHouse(JaxEnvironment[HauntedHouseState, HauntedHouseObservation,
 
         return ghost, spider, bat, current_nodes, previous_nodes
 
+    @partial(jax.jit, static_argnums=(0,))
+    def random_item_spawns(self, key):
+        random_room_scepter = jax.random.choice(key, self.consts.ROOMS)
+        scepter = self.consts.LOCATIONS[random_room_scepter]
+        key, _ = jax.random.split(key, 2)
+        random_room_urn_left = jax.random.choice(key, self.consts.ROOMS)
+        urn_left = self.consts.LOCATIONS[random_room_urn_left]
+        key, _ = jax.random.split(key, 2)
+        random_room_urn_middle = jax.random.choice(key, self.consts.ROOMS)
+        urn_middle = self.consts.LOCATIONS[random_room_urn_middle]
+        key, _ = jax.random.split(key, 2)
+        random_room_urn_right = jax.random.choice(key, self.consts.ROOMS)
+        urn_right = self.consts.LOCATIONS[random_room_urn_right]
 
 
 
+        return scepter, urn_left, urn_middle, urn_right
 
 
 
@@ -421,10 +435,20 @@ class JaxHauntedHouse(JaxEnvironment[HauntedHouseState, HauntedHouseObservation,
                                  jnp.logical_or(player_direction[0] == 6, player_direction[0] == 8))
 
         move_up = jax.lax.cond(jnp.logical_and(try_move_up, stun_duration == 0),
-                               lambda p: jnp.logical_not(self.check_wall_collision(jnp.array([p[0], p[1] - 1, p[2]]), self.consts.PLAYER_SIZE)),
+                               lambda p: jnp.logical_not(self.check_wall_collision(jnp.array([p[0], p[1] - self.consts.Y_WALKING_DISTANCE, p[2]]),
+                                                                                   self.consts.PLAYER_SIZE)),
                                lambda p: False,
                                operand=player)
         move_down = jax.lax.cond(jnp.logical_and(try_move_down, stun_duration == 0),
+                                 lambda p: jnp.logical_not(self.check_wall_collision(jnp.array([p[0], p[1] + self.consts.Y_WALKING_DISTANCE, p[2]]),
+                                                                                     self.consts.PLAYER_SIZE)),
+                                 lambda p: False,
+                                 operand=player)
+        move_up_half = jax.lax.cond(jnp.logical_and(jnp.logical_not(move_up), jnp.logical_and(try_move_up, stun_duration == 0)),
+                               lambda p: jnp.logical_not(self.check_wall_collision(jnp.array([p[0], p[1] - 1, p[2]]), self.consts.PLAYER_SIZE)),
+                               lambda p: False,
+                               operand=player)
+        move_down_half = jax.lax.cond(jnp.logical_and(jnp.logical_not(move_down), jnp.logical_and(try_move_down, stun_duration == 0)),
                                lambda p: jnp.logical_not(self.check_wall_collision(jnp.array([p[0], p[1] + 1, p[2]]), self.consts.PLAYER_SIZE)),
                                lambda p: False,
                                operand=player)
@@ -440,6 +464,8 @@ class JaxHauntedHouse(JaxEnvironment[HauntedHouseState, HauntedHouseObservation,
 
         player = player.at[1].set(jnp.where(move_up, jnp.clip(player[1] - self.consts.Y_WALKING_DISTANCE, min=6, max=506), player[1]))
         player = player.at[1].set(jnp.where(move_down, jnp.clip(player[1] + self.consts.Y_WALKING_DISTANCE, min=6, max=506), player[1]))
+        player = player.at[1].set(jnp.where(move_up_half, jnp.clip(player[1] - 1, min=6, max=506), player[1]))
+        player = player.at[1].set(jnp.where(move_down_half, jnp.clip(player[1] + 1, min=6, max=506), player[1]))
         player = player.at[0].set(jnp.where(move_left, jnp.clip(player[0] - 1, min=4, max=156), player[0]))
         player = player.at[0].set(jnp.where(move_right, jnp.clip(player[0] + 1, min=4, max=156), player[0]))
 
@@ -710,6 +736,7 @@ class JaxHauntedHouse(JaxEnvironment[HauntedHouseState, HauntedHouseObservation,
         collision_bottom_right = self.consts.WALL[pos[1] + size[1] - 1][pos[0] + size[0] - 1]
 
         return jnp.any(jnp.array([collision_top_left, collision_top_right, collision_bottom_right, collision_bottom_left]))
+        # return False
 
     @partial(jax.jit, static_argnums=(0,))
     def check_stairs_collision(self, entity, size, stairs_active):
@@ -808,25 +835,29 @@ class JaxHauntedHouse(JaxEnvironment[HauntedHouseState, HauntedHouseObservation,
 
     def reset(self, key=None) -> Tuple[HauntedHouseObservation, HauntedHouseState]:
 
+        ghost, spider, bat, current_nodes, previous_nodes = self.random_spawns(key)
+        key, _ = jax.random.split(key, 2)
+        scepter, urn_left, urn_middle, urn_right = self.random_item_spawns(key)
+
         state = HauntedHouseState(
             step_counter=jnp.array(0).astype(jnp.int32),
             player=jnp.array([128, 240, 1]).astype(jnp.int32),
-            player_direction=jnp.array([0, 0]), #0: no direction, 1: up-right, then clockwise
-            ghost=jnp.array([116, 106, 4]).astype(jnp.int32),
-            spider=jnp.array([116, 428, 1]).astype(jnp.int32),
-            bat=jnp.array([36, 106, 3]).astype(jnp.int32),
-            current_nodes=jnp.array([32, 4, 11]), #32, 4, 11
-            previous_nodes = jnp.array([33, 6, 10]), #33, 6, 10
+            player_direction=jnp.array([0, 0]), # 0: no direction, 1: up, then clockwise
+            ghost=ghost,
+            spider=spider,
+            bat=bat,
+            current_nodes=current_nodes,
+            previous_nodes = previous_nodes,
             chasing = jnp.array(0),
             stun_duration=jnp.array(0).astype(jnp.int32),
             match_duration=jnp.array(0).astype(jnp.int32),
             matches_used=jnp.array(0).astype(jnp.int32),
             lives=jnp.array(9).astype(jnp.int32),
             item_held=jnp.array(0).astype(jnp.int32),
-            scepter=jnp.array([36, 106, 2]).astype(jnp.int32),
-            urn_left=jnp.array([118, 432, 1]).astype(jnp.int32),
-            urn_middle=jnp.array([40, 428, 1]).astype(jnp.int32),
-            urn_right=jnp.array([40, 240, 1]).astype(jnp.int32),
+            scepter=scepter,
+            urn_left=urn_left,
+            urn_middle=urn_middle,
+            urn_right=urn_right,
             urn_left_middle=jnp.array([-1, -1, -1]).astype(jnp.int32),
             urn_middle_right=jnp.array([-1, -1, -1]).astype(jnp.int32),
             urn_left_right=jnp.array([-1, -1, -1]).astype(jnp.int32),
@@ -834,6 +865,7 @@ class JaxHauntedHouse(JaxEnvironment[HauntedHouseState, HauntedHouseObservation,
             stairs_active=jnp.array(True).astype(jnp.bool),
             fire_button_active=jnp.array(True).astype(jnp.bool)
         )
+
         initial_obs = self._get_observation(state)
 
         return initial_obs, state
@@ -847,32 +879,12 @@ class JaxHauntedHouse(JaxEnvironment[HauntedHouseState, HauntedHouseObservation,
         (player, player_direction, stun_duration, match_duration, matches_used,
          item_dropped, stairs_active, fire_button_active, lives, game_ends) = self.player_step(state, action)
 
+        # Step 2: Item Mechanics
         (item_held, scepter, urn_left, urn_middle, urn_right,
          urn_left_middle, urn_middle_right, urn_left_right, urn) = self.item_step(state, item_dropped)
 
-        jax.lax.cond(
-            state.step_counter % 40 == 0,
-            lambda s: jax.debug.print("Player: {}", player),
-            lambda s: s,
-            operand=None,
-        )
-
-        jax.lax.cond(
-            state.step_counter % 40 == 0,
-            lambda s: jax.debug.print("Scepter: {} \n", scepter),
-            lambda s: s,
-            operand=None,
-        )
-
-
-
-
-        # Step 2: Enemy Mechanics
+        # Step 3: Enemy Mechanics
         ghost, spider, bat, current_nodes, previous_nodes, chasing = self.enemy_step(state)
-
-
-
-        # Step 3: Object and Lighting Mechanics
 
 
         # Step 4: Increase Step Counter
@@ -883,7 +895,6 @@ class JaxHauntedHouse(JaxEnvironment[HauntedHouseState, HauntedHouseObservation,
             lambda s: s + 1,
             operand=state.step_counter,
         )
-
 
 
         new_state = HauntedHouseState(
@@ -918,13 +929,6 @@ class JaxHauntedHouse(JaxEnvironment[HauntedHouseState, HauntedHouseObservation,
         all_rewards = self._get_all_reward(state, new_state)
         info = self._get_info(new_state, all_rewards)
         observation = self._get_observation(new_state)
-
-        observation, new_state = jax.lax.cond(
-            game_ends,
-            lambda s: self.reset(jax.random.PRNGKey(s)),
-            lambda s: (observation, new_state),
-            operand=step_counter,
-        )
 
         return observation, new_state, env_reward, done, info
 
@@ -1195,97 +1199,41 @@ class JaxHauntedHouse(JaxEnvironment[HauntedHouseState, HauntedHouseObservation,
         return spaces.Discrete(18)
 
     def observation_space(self) -> spaces:
+        # Define a reusable space for entities that can be invisible
+        entity_space = spaces.Dict({
+            "x": spaces.Box(low=-1, high=160, shape=(), dtype=jnp.int32),
+            "y": spaces.Box(low=-1, high=506, shape=(), dtype=jnp.int32),  # Max y is 506
+            "floor": spaces.Box(low=-1, high=4, shape=(), dtype=jnp.int32),
+            "width": spaces.Box(low=-1, high=16, shape=(), dtype=jnp.int32),
+            "height": spaces.Box(low=-1, high=20, shape=(), dtype=jnp.int32),  # Bat height is 20
+        })
+
         return spaces.Dict({
             "player": spaces.Dict({
                 "x": spaces.Box(low=0, high=160, shape=(), dtype=jnp.int32),
-                "y": spaces.Box(low=0, high=210, shape=(), dtype=jnp.int32),
-                "floor": spaces.Box(low=-1, high=4, shape=(), dtype=jnp.int32),
+                "y": spaces.Box(low=0, high=506, shape=(), dtype=jnp.int32),  # Max y is 506
+                "floor": spaces.Box(low=1, high=4, shape=(), dtype=jnp.int32),  # Player is always on floor 1-4
                 "width": spaces.Box(low=0, high=16, shape=(), dtype=jnp.int32),
                 "height": spaces.Box(low=0, high=16, shape=(), dtype=jnp.int32),
             }),
-            "ghost": spaces.Dict({
-                "x": spaces.Box(low=0, high=160, shape=(), dtype=jnp.int32),
-                "y": spaces.Box(low=0, high=210, shape=(), dtype=jnp.int32),
-                "floor": spaces.Box(low=-1, high=4, shape=(), dtype=jnp.int32),
-                "width": spaces.Box(low=0, high=16, shape=(), dtype=jnp.int32),
-                "height": spaces.Box(low=0, high=16, shape=(), dtype=jnp.int32),
-            }),
-            "spider": spaces.Dict({
-                "x": spaces.Box(low=0, high=160, shape=(), dtype=jnp.int32),
-                "y": spaces.Box(low=0, high=210, shape=(), dtype=jnp.int32),
-                "floor": spaces.Box(low=-1, high=4, shape=(), dtype=jnp.int32),
-                "width": spaces.Box(low=0, high=16, shape=(), dtype=jnp.int32),
-                "height": spaces.Box(low=0, high=16, shape=(), dtype=jnp.int32),
-            }),
-            "bat": spaces.Dict({
-                "x": spaces.Box(low=0, high=160, shape=(), dtype=jnp.int32),
-                "y": spaces.Box(low=0, high=210, shape=(), dtype=jnp.int32),
-                "floor": spaces.Box(low=-1, high=4, shape=(), dtype=jnp.int32),
-                "width": spaces.Box(low=0, high=16, shape=(), dtype=jnp.int32),
-                "height": spaces.Box(low=0, high=16, shape=(), dtype=jnp.int32),
-            }),
+            "ghost": entity_space,
+            "spider": entity_space,
+            "bat": entity_space,
             "item_held": spaces.Discrete(9),
-            "scepter": spaces.Dict({
-                "x": spaces.Box(low=-1, high=160, shape=(), dtype=jnp.int32),
-                "y": spaces.Box(low=-1, high=210, shape=(), dtype=jnp.int32),
-                "floor": spaces.Box(low=-1, high=4, shape=(), dtype=jnp.int32),
-                "width": spaces.Box(low=-1, high=16, shape=(), dtype=jnp.int32),
-                "height": spaces.Box(low=-1, high=16, shape=(), dtype=jnp.int32),
-            }),
-            "urnleft": spaces.Dict({
-                "x": spaces.Box(low=-1, high=160, shape=(), dtype=jnp.int32),
-                "y": spaces.Box(low=-1, high=210, shape=(), dtype=jnp.int32),
-                "floor": spaces.Box(low=-1, high=4, shape=(), dtype=jnp.int32),
-                "width": spaces.Box(low=-1, high=16, shape=(), dtype=jnp.int32),
-                "height": spaces.Box(low=-1, high=16, shape=(), dtype=jnp.int32),
-            }),
-            "urnmiddle": spaces.Dict({
-                "x": spaces.Box(low=-1, high=160, shape=(), dtype=jnp.int32),
-                "y": spaces.Box(low=-1, high=210, shape=(), dtype=jnp.int32),
-                "floor": spaces.Box(low=-1, high=4, shape=(), dtype=jnp.int32),
-                "width": spaces.Box(low=-1, high=16, shape=(), dtype=jnp.int32),
-                "height": spaces.Box(low=-1, high=16, shape=(), dtype=jnp.int32),
-            }),
-            "urnright": spaces.Dict({
-                "x": spaces.Box(low=-1, high=160, shape=(), dtype=jnp.int32),
-                "y": spaces.Box(low=-1, high=210, shape=(), dtype=jnp.int32),
-                "floor": spaces.Box(low=-1, high=4, shape=(), dtype=jnp.int32),
-                "width": spaces.Box(low=-1, high=16, shape=(), dtype=jnp.int32),
-                "height": spaces.Box(low=-1, high=16, shape=(), dtype=jnp.int32),
-            }),
-            "urnleftmiddle": spaces.Dict({
-                "x": spaces.Box(low=-1, high=160, shape=(), dtype=jnp.int32),
-                "y": spaces.Box(low=-1, high=210, shape=(), dtype=jnp.int32),
-                "floor": spaces.Box(low=-1, high=4, shape=(), dtype=jnp.int32),
-                "width": spaces.Box(low=-1, high=16, shape=(), dtype=jnp.int32),
-                "height": spaces.Box(low=-1, high=16, shape=(), dtype=jnp.int32),
-            }),
-            "urnmiddleright": spaces.Dict({
-                "x": spaces.Box(low=-1, high=160, shape=(), dtype=jnp.int32),
-                "y": spaces.Box(low=-1, high=210, shape=(), dtype=jnp.int32),
-                "floor": spaces.Box(low=-1, high=4, shape=(), dtype=jnp.int32),
-                "width": spaces.Box(low=-1, high=16, shape=(), dtype=jnp.int32),
-                "height": spaces.Box(low=-1, high=16, shape=(), dtype=jnp.int32),
-            }),
-            "urnleftright": spaces.Dict({
-                "x": spaces.Box(low=-1, high=160, shape=(), dtype=jnp.int32),
-                "y": spaces.Box(low=-1, high=210, shape=(), dtype=jnp.int32),
-                "floor": spaces.Box(low=-1, high=4, shape=(), dtype=jnp.int32),
-                "width": spaces.Box(low=-1, high=16, shape=(), dtype=jnp.int32),
-                "height": spaces.Box(low=-1, high=16, shape=(), dtype=jnp.int32),
-            }),
-            "urn": spaces.Dict({
-                "x": spaces.Box(low=-1, high=160, shape=(), dtype=jnp.int32),
-                "y": spaces.Box(low=-1, high=210, shape=(), dtype=jnp.int32),
-                "floor": spaces.Box(low=-1, high=4, shape=(), dtype=jnp.int32),
-                "width": spaces.Box(low=-1, high=16, shape=(), dtype=jnp.int32),
-                "height": spaces.Box(low=-1, high=16, shape=(), dtype=jnp.int32),
-            }),
+            "scepter": entity_space,
+            "urnleft": entity_space,
+            "urnmiddle": entity_space,
+            "urnright": entity_space,
+            "urnleftmiddle": entity_space,
+            "urnmiddleright": entity_space,
+            "urnleftright": entity_space,
+            "urn": entity_space,
             "match_duration": spaces.Discrete(2),
             "matches_used": spaces.Box(low=0, high=99, shape=(), dtype=jnp.int32),
             "chasing": spaces.Discrete(2),
             "lives": spaces.Box(low=0, high=9, shape=(), dtype=jnp.int32),
         })
+
 
     def image_space(self) -> spaces.Box:
         return spaces.Box(
