@@ -1268,7 +1268,12 @@ class JaxBattleZone(JaxEnvironment[BattleZoneState, BattleZoneObservation, chex.
         The non-jitted, human renderer (BattleZoneRenderer) is still available as
         self.renderer for interactive use.
         """
-        img_shape = self.image_space().shape
+        # Avoid calling `self.image_space()` inside a jitted function.
+        # Constructing a Box can create JAX arrays as attributes which
+        # leak Tracer objects into Python-land and cause TracerArrayConversionError
+        # when the JIT tracer tries to convert them. Use a static shape tuple
+        # instead to keep this function JAX-friendly.
+        img_shape = (HEIGHT, WIDTH, 3)
         return jnp.zeros(img_shape, dtype=jnp.uint8)
 
     @partial(jax.jit, static_argnums=(0,))
