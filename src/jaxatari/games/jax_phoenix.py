@@ -282,7 +282,7 @@ class JaxPhoenix(JaxEnvironment[PhoenixState, PhoenixObservation, PhoenixInfo, N
     @partial(jax.jit, static_argnums=(0,))
     def _get_info(self, state: PhoenixState, all_rewards: jnp.ndarray) -> PhoenixInfo:
         return PhoenixInfo(
-            step_counter=0,
+            step_counter=state.step_counter,
             all_rewards=all_rewards
         )
 
