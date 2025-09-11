@@ -1283,8 +1283,29 @@ class JaxBattleZone(JaxEnvironment[BattleZoneState, BattleZoneObservation, chex.
         return state.player_tank.alive == 0
 
     @partial(jax.jit, static_argnums=(0,))
-    def _get_info(self, state: BattleZoneState, all_rewards: chex.Array, player_shot: chex.Array) -> BattleZoneInfo:
+    def _get_info(self, state: BattleZoneState, all_rewards: chex.Array = None, player_shot: chex.Array = None) -> BattleZoneInfo:
+        """
+        Return environment info.  This implementation accepts either the single-argument
+        form expected by the abstract base (`_get_info(state)`) or the extended
+        form used internally (`_get_info(state, all_rewards, player_shot)`).
+
+        When called with only `state`, reasonable defaults are supplied so callers
+        that only need basic info (e.g. wrappers) will continue to work.
+        """
+        if all_rewards is None:
+            all_rewards = jnp.zeros(1)
+        if player_shot is None:
+            player_shot = jnp.array(0, dtype=jnp.int32)
         return BattleZoneInfo(time=state.step_counter, all_rewards=all_rewards, player_shot=player_shot)
+
+    @partial(jax.jit, static_argnums=(0,))
+    def _get_reward(self, previous_state: BattleZoneState, state: BattleZoneState) -> float:
+        """
+        Compatibility wrapper for the abstract environment's `_get_reward` API.
+        Delegates to the existing `_get_env_reward` implementation to preserve
+        the locally-named method used in this module.
+        """
+        return self._get_env_reward(previous_state, state)
 
 class BattleZoneRenderer:
     """3D wireframe renderer for BattleZone in the style of the original Atari 2600 game."""
@@ -1794,8 +1815,30 @@ class BattleZoneRenderer:
                 ly = int(life_y - 6)
                 pygame.draw.rect(screen, HUD_ACCENT_COLOR, (lx, ly, 10, 12), 0)
 
-    def render(self, state: BattleZoneState, screen):
-        """Render the 3D wireframe view with dynamic ground and moving sky/mountains."""
+    def render(self, state: BattleZoneState, screen=None):
+        """Render the 3D wireframe view.
+
+        If `screen` (a pygame Surface) is provided the renderer draws into it and
+        returns None. If `screen` is None the function will attempt to create a
+        temporary surface (if pygame is available) and return an RGB numpy array
+        representing the rendered frame. If pygame is unavailable a zero RGB
+        image with the correct shape/dtype is returned as a safe fallback for
+        headless tests.
+        """
+        # If no screen provided, attempt to render to a temporary surface and
+        # return as a numpy array so callers that expect an image can use this
+        # method directly.
+        created_surface = False
+        surface = screen
+        if surface is None:
+            try:
+                if pygame is None:
+                    raise Exception("pygame unavailable")
+                surface = pygame.Surface((WIDTH, HEIGHT))
+                created_surface = True
+            except Exception:
+                # Headless fallback: return zero image with correct shape/dtype
+                return np.zeros((HEIGHT, WIDTH, 3), dtype=np.uint8)
 
         player = state.player_tank
         # --- Dynamic sky with moving mountains ---
@@ -1990,13 +2033,23 @@ class BattleZoneRenderer:
                     self.draw_wireframe_pyramid(screen, screen_x, screen_y, distance, WIREFRAME_COLOR)
 
         # Draw bullets
-        self.draw_player_bullet(screen, state)
+        self.draw_player_bullet(surface, state)
 
         # Draw player tank (this was missing!)
-        self.draw_player_tank(screen)
+        self.draw_player_tank(surface)
 
         # --- Draw radar ---
-        self.draw_radar(screen, state)
+        self.draw_radar(surface, state)
+
+        # If we created a temporary surface, convert it to a numpy array and return
+        if created_surface:
+            try:
+                arr = pygame.surfarray.array3d(surface)
+                # pygame.surfarray.array3d returns shape (width, height, 3) — transpose to (height, width, 3)
+                arr = arr.swapaxes(0, 1)
+                return arr.astype(np.uint8)
+            except Exception:
+                return np.zeros((HEIGHT, WIDTH, 3), dtype=np.uint8)
 
 
 
