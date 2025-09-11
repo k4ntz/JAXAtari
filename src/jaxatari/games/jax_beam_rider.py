@@ -22,6 +22,7 @@ Top Priorities:
 - add white saucer ram movement --> done
 - make game more 3D --> might be done(ask supervisor)
 - Fix ship movement
+- add pause functionality again
 - adjust rejuvinator debris movement 
 For later:
 - Check the sentinal ship constants/Optimize the code/remove unnecessary code
@@ -264,6 +265,8 @@ class Ship:
     beam_position: int  # Index of the current beam (0–4)
     target_beam: int  # Target beam the ship is moving toward
     active: bool = True  # Whether the ship is currently active (alive)
+    last_action: int = 0  # Add this to track previous input
+    movement_cooldown: int = 0  # Add this to prevent rapid direction changes
 
 
 @struct.dataclass
@@ -550,49 +553,81 @@ class BeamRiderEnv(JaxEnvironment[BeamRiderState, BeamRiderObservation, BeamRide
 
     @partial(jax.jit, static_argnums=(0,))
     def _update_ship(self, state: BeamRiderState, action: int) -> BeamRiderState:
-        """Update ship position with smooth beam-to-beam movement - responsive to short taps"""
+        """Update ship position with smooth beam-to-beam movement - prevents beam skipping"""
         ship = state.ship
         current_beam = ship.beam_position
         target_beam = ship.target_beam
 
-        # Use standard JAXAtari action constants: LEFT=4, RIGHT=3
-        should_move_left = (action == 4) & (current_beam > 0)
-        should_move_right = (action == 3) & (current_beam < self.constants.NUM_BEAMS - 1)
+        # Calculate current target X position
+        current_target_x = self.beam_positions[target_beam] - self.constants.SHIP_WIDTH // 2
+        current_x = ship.x
 
-        # Allow changing target even while moving (removed can_accept_input condition)
-        new_target_beam = jnp.where(
-            should_move_left,
-            current_beam - 1,
+        # Determine which direction we're currently moving (if any)
+        currently_moving_left = current_x > current_target_x + 1.0
+        currently_moving_right = current_x < current_target_x - 1.0
+        at_target = ~currently_moving_left & ~currently_moving_right
+
+        # Handle input
+        wants_to_move_left = (action == 4)
+        wants_to_move_right = (action == 3)
+
+        # Only allow target change if:
+        # 1. We're at the target position, OR
+        # 2. We want to move in the SAME direction we're already moving, OR
+        # 3. We want to REVERSE direction (this allows immediate response to opposite input)
+        can_change_target = (
+                at_target |
+                (wants_to_move_left & currently_moving_left) |
+                (wants_to_move_right & currently_moving_right) |
+                (wants_to_move_left & currently_moving_right) |  # Reversal
+                (wants_to_move_right & currently_moving_left)  # Reversal
+        )
+
+        # Calculate potential new target
+        desired_target = jnp.where(
+            wants_to_move_left,
+            target_beam - 1,
             jnp.where(
-                should_move_right,
-                current_beam + 1,
-                target_beam  # Keep current target if no input
+                wants_to_move_right,
+                target_beam + 1,
+                target_beam
             )
         )
 
-        # Calculate target X position
-        target_x = self.beam_positions[new_target_beam] - self.constants.SHIP_WIDTH // 2
-        current_x = ship.x
+        # Clamp to valid beam range
+        desired_target = jnp.clip(desired_target, 0, self.constants.NUM_BEAMS - 1)
 
-        # Smooth movement parameters
-        movement_speed = 4.5  # Pixels per frame - adjust for desired speed
+        # Only update target if we can
+        new_target_beam = jnp.where(
+            can_change_target,
+            desired_target,
+            target_beam  # Keep current target if we can't change
+        )
 
         # Calculate movement toward target
+        target_x = self.beam_positions[new_target_beam] - self.constants.SHIP_WIDTH // 2
         x_diff = target_x - current_x
-        movement_needed = jnp.abs(x_diff) > 1.0  # Stop when very close
+        movement_needed = jnp.abs(x_diff) > 1.0
 
-        # Calculate new X position
+        # Smooth movement
+        movement_speed = 4.5
         new_x = jnp.where(
             movement_needed,
             current_x + jnp.sign(x_diff) * jnp.minimum(movement_speed, jnp.abs(x_diff)),
-            target_x  # Snap to exact position when close enough
+            target_x  # Snap to exact position when close
         )
 
-        # Update beam position when ship reaches target
+        # Update beam position when ship reaches a beam center
+        # Find closest beam to current position
+        ship_center_x = new_x + self.constants.SHIP_WIDTH // 2
+        beam_distances = jnp.abs(self.beam_positions - ship_center_x)
+        closest_beam = jnp.argmin(beam_distances)
+        at_beam_center = beam_distances[closest_beam] < 2.0  # Within 2 pixels of beam center
+
         new_beam_position = jnp.where(
-            movement_needed,
-            current_beam,  # Keep current beam while moving
-            new_target_beam  # Update to target beam when reached
+            at_beam_center,
+            closest_beam,
+            current_beam  # Keep current beam if between beams
         )
 
         return state.replace(ship=ship.replace(
@@ -600,7 +635,6 @@ class BeamRiderEnv(JaxEnvironment[BeamRiderState, BeamRiderObservation, BeamRide
             beam_position=new_beam_position,
             target_beam=new_target_beam
         ))
-
     @partial(jax.jit, static_argnums=(0,))
     def _select_white_saucer_movement_pattern(self, rng_key: chex.PRNGKey) -> int:
         """Select movement pattern for a new white saucer - UPDATED: includes horizon patrol"""
@@ -4303,7 +4337,7 @@ class BeamRiderRenderer(JAXGameRenderer):
         self._last_sector = state.current_sector
 
     def _draw_pause_overlay(self):
-        pause_text = self.font.render("PAUSED", True, (255, 220, 100))
+        pause_text = self.render("PAUSED", True, (255, 220, 100))
         rect = pause_text.get_rect(center=(self.pygame_screen_width // 2, self.pygame_screen_height // 2))
         self.pygame_screen.blit(pause_text, rect)
 
