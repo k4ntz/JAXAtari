@@ -1600,9 +1600,9 @@ class TennisJaxEnv(JaxEnvironment[TennisState, TennisObs, TennisInfo, TennisCons
                 "enemy_direction": spaces.Box(low=-1, high=1, shape=(), dtype=jnp.int32),
             }),
             "ball": spaces.Dict({
-                "ball_x": spaces.Box(low=0, high=160, shape=(), dtype=jnp.float32),
-                "ball_y": spaces.Box(low=0, high=210, shape=(), dtype=jnp.float32),
-                "ball_z": spaces.Box(low=0, high=999, shape=(), dtype=jnp.float32), # no theoretical upper limit, but usually won't go above 50
+                "ball_x": spaces.Box(low=0, high=160, shape=(), dtype=jnp.float64),
+                "ball_y": spaces.Box(low=0, high=210, shape=(), dtype=jnp.float64),
+                "ball_z": spaces.Box(low=0, high=999, shape=(), dtype=jnp.float64), # no theoretical upper limit, but usually won't go above 50
                 "bounces": spaces.Box(low=0, high=999, shape=(), dtype=jnp.int32), # no theoretical upper limit, but usually won't go above 2 since game is restarted at that point
                 "last_hit": spaces.Box(low=0, high=1, shape=(), dtype=jnp.int32),
             }),
