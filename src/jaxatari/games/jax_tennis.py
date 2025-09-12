@@ -1473,10 +1473,34 @@ class TennisRenderer:
 
 renderer = TennisRenderer()
 
+class PlayerObs(NamedTuple):
+    player_x: chex.Array
+    player_y: chex.Array
+    player_direction: chex.Array
+    player_field: chex.Array  # top (1) or bottom (-1) field
+    player_serving: chex.Array  # true: Player is serving, false: Enemy is serving
+
+class EnemyObs(NamedTuple):
+    enemy_x: chex.Array
+    enemy_y: chex.Array
+    enemy_direction: chex.Array
+
+class BallObs(NamedTuple):
+    ball_x: chex.Array  # x-coordinate of the ball
+    ball_y: chex.Array  # y-coordinate of the ball
+    ball_z: chex.Array  # z-coordinate of the ball
+    bounces: chex.Array  # how many times the ball has hit the ground since it was last hit by an entity
+    last_hit: chex.Array  # 0 if last hit was performed by player, 1 if last hit was by enemy
 
 class TennisObs(NamedTuple):
-    ball_y: jnp.ndarray = jnp.array(0)
-
+    player: PlayerObs
+    enemy: EnemyObs
+    ball: BallObs
+    is_serving_state: chex.Array  # whether the game is currently in serving state (ball bouncing on one side until player hits)
+    player_points: chex.Array  # The score line within the current set (goes up in increments of 1, instead of traditional tennis counting)
+    enemy_points: chex.Array
+    player_sets: chex.Array  # Number of won sets
+    enemy_sets: chex.Array
 
 class TennisInfo(NamedTuple):
     all_rewards: jnp.ndarray
@@ -1551,29 +1575,68 @@ class TennisJaxEnv(JaxEnvironment[TennisState, TennisObs, TennisInfo, TennisCons
 
         return spaces.Discrete(18)
 
+    def flatten_player_obs(self, player_obs: PlayerObs):
+        return jnp.concatenate([jnp.array([player_obs.player_x]), jnp.array([player_obs.player_y]), jnp.array([player_obs.player_direction]), jnp.array([player_obs.player_field]), jnp.array([player_obs.player_serving])])
+
+    def flatten_enemy_obs(self, enemy_obs: EnemyObs):
+        return jnp.concatenate([jnp.array([enemy_obs.enemy_x]), jnp.array([enemy_obs.enemy_y]), jnp.array([enemy_obs.enemy_direction])])
+
+    def flatten_ball_obs(self, ball_obs: BallObs):
+        return jnp.concatenate(
+            [jnp.array([ball_obs.ball_x]), jnp.array([ball_obs.ball_y]), jnp.array([ball_obs.ball_z]), jnp.array([ball_obs.bounces]), jnp.array([ball_obs.last_hit])])
+
     def observation_space(self) -> Tuple:
         return spaces.Dict({
-            "ball_y": spaces.Box(low=0, high=255, shape=(), dtype=jnp.uint8),
-            # this should clearly define the shapes and values that *all* the observations can have
+            "player": spaces.Dict({
+                "player_x": spaces.Box(low=0, high=160, shape=(), dtype=jnp.int32),
+                "player_y": spaces.Box(low=0, high=210, shape=(), dtype=jnp.int32),
+                "player_direction": spaces.Box(low=-1, high=1, shape=(), dtype=jnp.int32),
+                "player_field": spaces.Box(low=-1, high=1, shape=(), dtype=jnp.int32),
+                "player_serving": spaces.Box(low=0, high=1, shape=(), dtype=jnp.uint8),
+            }),
+            "enemy": spaces.Dict({
+                "enemy_x": spaces.Box(low=0, high=160, shape=(), dtype=jnp.int32),
+                "enemy_y": spaces.Box(low=0, high=210, shape=(), dtype=jnp.int32),
+                "enemy_direction": spaces.Box(low=-1, high=1, shape=(), dtype=jnp.int32),
+            }),
+            "ball": spaces.Dict({
+                "ball_x": spaces.Box(low=0, high=160, shape=(), dtype=jnp.int32),
+                "ball_y": spaces.Box(low=0, high=210, shape=(), dtype=jnp.int32),
+                "ball_z": spaces.Box(low=0, high=999, shape=(), dtype=jnp.int32), # no theoretical upper limit, but usually won't go above 50
+                "bounces": spaces.Box(low=0, high=999, shape=(), dtype=jnp.int32), # no theoretical upper limit, but usually won't go above 2 since game is restarted at that point
+                "last_hit": spaces.Box(low=0, high=1, shape=(), dtype=jnp.int32),
+            }),
+            "is_serving_state": spaces.Box(low=0, high=1, shape=(), dtype=jnp.uint8),
+            "player_points": spaces.Box(low=0, high=45, shape=(), dtype=jnp.int32),
+            "player_sets": spaces.Box(low=0, high=999, shape=(), dtype=jnp.int32), # no theoretical upper limit
+            "enemy_points": spaces.Box(low=0, high=45, shape=(), dtype=jnp.int32),
+            "enemy_sets": spaces.Box(low=0, high=999, shape=(), dtype=jnp.int32),  # no theoretical upper limit
         })
 
     def image_space(self) -> spaces.Box:
         return spaces.Box(low=0, high=255, shape=(FRAME_HEIGHT, FRAME_WIDTH, 3), dtype=jnp.uint8)
 
     def obs_to_flat_array(self, obs):
-        print(obs.ball_y)
-
         return jnp.concatenate([
-            obs.ball_y.flatten(),
-            # obs.ball_shadow_y.flatten(),
-            # obs.player_x.flatten(),
-            # obs.player_y.flatten(),
-            # obs.enemy_x.flatten(),
-            # obs.enemy_y.flatten(),
+            self.flatten_player_obs(obs.player),
+            self.flatten_enemy_obs(obs.enemy),
+            self.flatten_ball_obs(obs.ball),
+            obs.is_serving_state.flatten(),
+            obs.player_points.flatten(),
+            obs.player_sets.flatten(),
+            obs.enemy_points.flatten(),
+            obs.enemy_sets.flatten()
         ])
 
     def _get_observation(self, state: TennisState) -> TennisObs:
-        return TennisObs()
+        return TennisObs(player=PlayerObs(state.player_state.player_x, state.player_state.player_y, state.player_state.player_direction, jnp.where(state.player_state.player_serving, 1, 0), state.player_state.player_serving),
+                         enemy=EnemyObs(state.enemy_state.enemy_x, state.enemy_state.enemy_y, state.enemy_state.enemy_direction),
+                         ball=BallObs(state.ball_state.ball_x, state.ball_state.ball_y, state.ball_state.ball_z, state.ball_state.bounces, state.ball_state.last_hit),
+                         is_serving_state=jnp.where(state.game_state.is_serving, 1, 0),
+                         player_points=state.game_state.player_score,
+                         player_sets=state.game_state.player_game_score,
+                         enemy_points=state.game_state.enemy_score,
+                         enemy_sets=state.game_state.enemy_game_score)
 
     def _get_info(self, state: TennisState, all_rewards: jnp.ndarray=None) -> TennisInfo:
         return TennisInfo(all_rewards=all_rewards)
@@ -1582,4 +1645,4 @@ class TennisJaxEnv(JaxEnvironment[TennisState, TennisObs, TennisInfo, TennisCons
         return 0.0
 
     def _get_done(self, state: TennisState) -> bool:
-        return False
+        return state.game_state.is_finished
