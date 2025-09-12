@@ -1615,7 +1615,7 @@ class TennisJaxEnv(JaxEnvironment[TennisState, TennisObs, TennisInfo, TennisCons
                 # no theoretical upper limit, but usually won't go above 50
                 "bounces": spaces.Box(low=0, high=999, shape=(), dtype=jnp.int32),
                 # no theoretical upper limit, but usually won't go above 2 since game is restarted at that point
-                "last_hit": spaces.Box(low=0, high=1, shape=(), dtype=jnp.int32),
+                "last_hit": spaces.Box(low=-1, high=1, shape=(), dtype=jnp.int32),
             }),
             "is_serving_state": spaces.Box(low=0, high=1, shape=(), dtype=jnp.uint8),
             "player_points": spaces.Box(low=0, high=45, shape=(), dtype=jnp.int32),
@@ -1627,7 +1627,7 @@ class TennisJaxEnv(JaxEnvironment[TennisState, TennisObs, TennisInfo, TennisCons
     def image_space(self) -> spaces.Box:
         return spaces.Box(low=0, high=255, shape=(FRAME_HEIGHT, FRAME_WIDTH, 3), dtype=jnp.uint8)
 
-    def obs_to_flat_array(self, obs):
+    def obs_to_flat_array(self, obs) -> jnp.ndarray:
         return jnp.concatenate([
             self.flatten_player_obs(obs.player),
             self.flatten_enemy_obs(obs.enemy),
@@ -1637,7 +1637,7 @@ class TennisJaxEnv(JaxEnvironment[TennisState, TennisObs, TennisInfo, TennisCons
             obs.player_sets.flatten(),
             obs.enemy_points.flatten(),
             obs.enemy_sets.flatten()
-        ]).astype(jnp.float64)
+        ])#.astype(jnp.float64)
 
 #jnp.array(x, dtype=jnp.float32)
 
