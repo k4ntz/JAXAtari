@@ -53,7 +53,7 @@ class OthelloConstants(NamedTuple):
     F7EC = jnp.array([
         0x20, 0x20, 0x20, 0x20, 0x20, 0x10, 0x40, 0xe0, 0x20, 0x40, 0x15, 0xe0, 0x20, 0xe0, 0xe0,
         0x50, 0x00, 0xf0, 0xb0
-    ], dtype=jnp.uint8) #TODO difference to np.int8
+    ], dtype=jnp.uint8) 
 
     # Constants to decide in which side the discs will be flipped
     FLIP_UP_SIDE = 0
@@ -745,8 +745,8 @@ class JaxOthello(JaxEnvironment[OthelloState, OthelloObservation, OthelloInfo, O
             args_handle_secondary_calculation_of_strategic_score = (secondary_tile[0] + secondary_tile[1]*8, game_field, default_pos, difficulty, score)
             score = jax.lax.cond(
                 skip_secondary_eval,
-                #lambda args_handle_secondary_calculation_of_strategic_score: handle_secondary_calculation_of_strategic_score(args_handle_secondary_calculation_of_strategic_score), #TODO fix outer corners- take a look at index changes by check neighbor conflict with loop borders
-                lambda args_handle_secondary_calculation_of_strategic_score: score,
+                lambda args_handle_secondary_calculation_of_strategic_score: self.handle_secondary_calculation_of_strategic_score(args_handle_secondary_calculation_of_strategic_score), 
+                #lambda args_handle_secondary_calculation_of_strategic_score: score,
                 lambda args_handle_secondary_calculation_of_strategic_score: score,
                 args_handle_secondary_calculation_of_strategic_score
             )
@@ -1762,7 +1762,7 @@ class JaxOthello(JaxEnvironment[OthelloState, OthelloObservation, OthelloInfo, O
 
         def compute_strategic_score_top_left(args):
             _, _, game_field_flipped, default_pos_combined, difficulty = args
-            return ((self.css_calculate_top_left_score(game_field_flipped, default_pos_combined, difficulty)), True)
+            return ((self.css_calculate_top_left_score(game_field_flipped, default_pos_combined, difficulty)), False) #Secondary position eval is skipped here, to prevent a bug. Was true in original code.
 
         def compute_strategic_score_top(args):
             tile_y, tile_x, game_field_flipped, default_pos_combined, difficulty = args
@@ -1772,7 +1772,7 @@ class JaxOthello(JaxEnvironment[OthelloState, OthelloObservation, OthelloInfo, O
         def compute_strategic_score_top_right(args):
             _, _, game_field_flipped, default_pos_combined, difficulty = args
 
-            return ((self.css_calculate_top_right_score(game_field_flipped, default_pos_combined, difficulty)), True)
+            return ((self.css_calculate_top_right_score(game_field_flipped, default_pos_combined, difficulty)), False) #Secondary position eval is skipped here, to prevent a bug. Was true in original code.
 
         def compute_strategic_score_top_left_inner(args):
             _, _, game_field_flipped, _, _ = args
@@ -1832,7 +1832,7 @@ class JaxOthello(JaxEnvironment[OthelloState, OthelloObservation, OthelloInfo, O
         def compute_strategic_score_bottom_left(args):
             _, _, game_field_flipped, default_pos_combined, difficulty = args
 
-            return ((self.css_calculate_bottom_left_score(game_field_flipped, default_pos_combined, difficulty)), True)
+            return ((self.css_calculate_bottom_left_score(game_field_flipped, default_pos_combined, difficulty)), False) #Secondary position eval is skipped here, to prevent a bug. Was true in original code.
 
         def compute_strategic_score_bottom(args):
             tile_y, tile_x, game_field_flipped, default_pos_combined, difficulty = args
@@ -1842,7 +1842,7 @@ class JaxOthello(JaxEnvironment[OthelloState, OthelloObservation, OthelloInfo, O
         def compute_strategic_score_bottom_right(args):
             _, _, game_field_flipped, default_pos_combined, difficulty = args
 
-            return ((self.css_calculate_bottom_right_score(game_field_flipped, default_pos_combined, difficulty)), True)
+            return ((self.css_calculate_bottom_right_score(game_field_flipped, default_pos_combined, difficulty)), False) #Secondary position eval is skipped here, to prevent a bug. Was true in original code.
 
         return jax.lax.switch(self.consts.STRATEGIC_TILE_SCORE_CASES[tile_index], branches, args)
 
@@ -1971,14 +1971,14 @@ class JaxOthello(JaxEnvironment[OthelloState, OthelloObservation, OthelloInfo, O
         """
         #alt singature: game_field: Field, ai_think_timer: int, default_pos: int, difficulty: int, y_pos: int, x_pos: int
         return_value = ((56,default_pos_combined), False) # (Touple to be returned, Aborted)
-        (horizontal_score, alternate_pos_horz) = self.css__f2d3_count_tiles_horizontally(game_field, 0, 7, default_pos_combined, difficulty) #TODO check for correctness of 0,7
+        (horizontal_score, alternate_pos_horz) = self.css__f2d3_count_tiles_horizontally(game_field, 0, 7, default_pos_combined, difficulty) 
 
         jax.lax.cond(horizontal_score < 0,
             lambda _: ((horizontal_score, alternate_pos_horz), True),
             lambda _: return_value,
             None)
 
-        (vertical_score, alternate_pos_vert) = self.css__f2d3_count_tiles_vertically(game_field, 7, 0, default_pos_combined, difficulty) #TODO check for correctness of 7,0
+        (vertical_score, alternate_pos_vert) = self.css__f2d3_count_tiles_vertically(game_field, 7, 0, default_pos_combined, difficulty) 
 
         jax.lax.cond(jnp.logical_and(vertical_score < 0, return_value[1] == False),
             lambda _: ((vertical_score, alternate_pos_vert), True),
@@ -2007,14 +2007,14 @@ class JaxOthello(JaxEnvironment[OthelloState, OthelloObservation, OthelloInfo, O
                 - Possible secondary position for further evaluation.
         """
         return_value = ((56,default_pos_combined), False) # (Touple to be returned, Aborted)
-        (horizontal_score, alternate_pos_horz) = self.css__f2d3_count_tiles_horizontally(game_field, 7, 0, default_pos_combined, difficulty) #TODO check for correctness of 7,0
+        (horizontal_score, alternate_pos_horz) = self.css__f2d3_count_tiles_horizontally(game_field, 7, 0, default_pos_combined, difficulty) 
 
         jax.lax.cond(horizontal_score < 0,
             lambda _: ((horizontal_score, alternate_pos_horz), True),
             lambda _: return_value,
             None)
 
-        (vertical_score, alternate_pos_vert) = self.css__f2d3_count_tiles_vertically(game_field, 0, 7, default_pos_combined, difficulty) #TODO check for correctness of 0,7
+        (vertical_score, alternate_pos_vert) = self.css__f2d3_count_tiles_vertically(game_field, 0, 7, default_pos_combined, difficulty) 
 
         jax.lax.cond(jnp.logical_and(vertical_score < 0, return_value[1] == False),
             lambda _: ((vertical_score, alternate_pos_vert), True),
@@ -2043,14 +2043,14 @@ class JaxOthello(JaxEnvironment[OthelloState, OthelloObservation, OthelloInfo, O
                 - Possible secondary position for further evaluation.
         """
         return_value = ((56,default_pos_combined), False) # (Touple to be returned, Aborted)
-        (horizontal_score, alternate_pos_horz) = self.css__f2d3_count_tiles_horizontally(game_field, 0, 0, default_pos_combined, difficulty) #TODO check for correctness of 0,0
+        (horizontal_score, alternate_pos_horz) = self.css__f2d3_count_tiles_horizontally(game_field, 0, 0, default_pos_combined, difficulty) 
 
         jax.lax.cond(horizontal_score < 0,
             lambda _: ((horizontal_score, alternate_pos_horz), True),
             lambda _: return_value,
             None)
 
-        (vertical_score, alternate_pos_vert) = self.css__f2d3_count_tiles_vertically(game_field, 7, 7, default_pos_combined, difficulty) #TODO check for correctness of 7,7
+        (vertical_score, alternate_pos_vert) = self.css__f2d3_count_tiles_vertically(game_field, 7, 7, default_pos_combined, difficulty) 
 
         jax.lax.cond(jnp.logical_and(vertical_score < 0, return_value[1] == False),
             lambda _: ((vertical_score, alternate_pos_vert), True),
@@ -2079,14 +2079,14 @@ class JaxOthello(JaxEnvironment[OthelloState, OthelloObservation, OthelloInfo, O
                 - Possible secondary position for further evaluation.
         """
         return_value = ((56,default_pos_combined), False) # (Touple to be returned, Aborted)
-        (horizontal_score, alternate_pos_horz) = self.css__f2d3_count_tiles_horizontally(game_field, 7, 7, default_pos_combined, difficulty) #TODO check for correctness of 7,7
+        (horizontal_score, alternate_pos_horz) = self.css__f2d3_count_tiles_horizontally(game_field, 7, 7, default_pos_combined, difficulty) 
 
         jax.lax.cond(horizontal_score < 0,
             lambda _: ((horizontal_score, alternate_pos_horz), True),
             lambda _: return_value,
             None)
 
-        (vertical_score, alternate_pos_vert) = self.css__f2d3_count_tiles_vertically(game_field, 0, 0, default_pos_combined, difficulty) #TODO check for correctness of 0,0
+        (vertical_score, alternate_pos_vert) = self.css__f2d3_count_tiles_vertically(game_field, 0, 0, default_pos_combined, difficulty) 
 
         jax.lax.cond(jnp.logical_and(vertical_score < 0, return_value[1] == False),
             lambda _: ((vertical_score, alternate_pos_vert), True),
@@ -2140,7 +2140,7 @@ class JaxOthello(JaxEnvironment[OthelloState, OthelloObservation, OthelloInfo, O
         """
         array_of_tiles = Field(
             field_id=jnp.arange(8),
-            field_color=game_field.field_color[y_pos] #TODO check if flip is needed
+            field_color=game_field.field_color[y_pos] 
         )
 
 
@@ -2209,14 +2209,12 @@ class JaxOthello(JaxEnvironment[OthelloState, OthelloObservation, OthelloInfo, O
             lambda _: default_pos_combined, 
             None)
         right_pos = jax.lax.cond(right_pos_opt != -1, 
-            lambda _: 7-right_pos_opt, #TODO check for correctnes in assembly (reconverts right pos from flipped array to normal array)
+            lambda _: 7-right_pos_opt, 
             lambda _: left_pos,
-            None) #TODO check in assembly if left_pos is the correct value
+            None) 
 
         #combine the left and right configuration states, by shifting the left configuration two bits higher and appending the right configuration
         combined_state = (left_state << 2) | right_state
-
-        #TODO add more comments
 
         #Step 3
         return_value = jax.lax.cond(jnp.logical_and(
@@ -2226,7 +2224,7 @@ class JaxOthello(JaxEnvironment[OthelloState, OthelloObservation, OthelloInfo, O
                 jnp.logical_or(
                     reversed_array_of_tiles.field_color[0] != FieldColor.EMPTY, 
                     reversed_array_of_tiles.field_color[7] != FieldColor.EMPTY))),
-            lambda _: ((-40, right_pos), True), #TODO check why right_pos is used and if correct
+            lambda _: ((-40, right_pos), True), 
             lambda _: return_value,
             None)
 
@@ -2235,7 +2233,7 @@ class JaxOthello(JaxEnvironment[OthelloState, OthelloObservation, OthelloInfo, O
             jnp.logical_and(
                 jnp.logical_or(combined_state == 0b0111, combined_state == 0b1101),
                 jnp.logical_or(right_pos == 7, right_pos == 0))),
-            lambda _: ((-96, right_pos), True), #TODO check why right_pos is used and if correct (randomness?)
+            lambda _: ((-96, right_pos), True), 
             lambda _: return_value,
             None)
 
@@ -2252,7 +2250,7 @@ class JaxOthello(JaxEnvironment[OthelloState, OthelloObservation, OthelloInfo, O
             lambda _: (flag, False),
             None)
 
-        flag, condition_break = jax.lax.cond(jnp.logical_and(condition_break == False, reverse_pos < 2), #TODO check if <> is correct
+        flag, condition_break = jax.lax.cond(jnp.logical_and(condition_break == False, reverse_pos < 2), 
             lambda _: (True, True),
             lambda _: (flag, False),
             None)
@@ -2335,7 +2333,6 @@ class JaxOthello(JaxEnvironment[OthelloState, OthelloObservation, OthelloInfo, O
             Checks the bit masks created in css_sub_f5c1_count_tiles_in_line_loop_mask_tiles, against a set of predefined masks stored in F3BA for black masks and F3DC for black masks. 
             F3FE stores the value for the masks. F3FE is coupled with F3BA and F3DC using the index the masks are stored at. Therefore if we find a match, we can use the value from F3FE for the respective index.
             """
-            #TODO can be vectorised
             return_value, black_mask_low, black_mask_high, white_mask_low, white_mask_high = loop_vals
             return_value = jax.lax.cond(
                 jnp.logical_and(self.consts.F3BA[33-i] == white_mask_low, self.consts.F3DC[33-i] == black_mask_low),
@@ -2346,7 +2343,7 @@ class JaxOthello(JaxEnvironment[OthelloState, OthelloObservation, OthelloInfo, O
             return_value = jax.lax.cond(
                 jnp.logical_and(return_value[1] == False, 
                     jnp.logical_and(self.consts.F3BA[33-i] == white_mask_high, self.consts.F3DC[33-i] == black_mask_high)),
-                lambda _: ((jnp.int32(self.consts.F3FE[33-i]), white_mask_high),True), #TODO check in Assembly for correctnes!
+                lambda _: ((jnp.int32(self.consts.F3FE[33-i]), white_mask_high),True), 
                 lambda _: return_value,
                 None)
             
@@ -2709,9 +2706,8 @@ class JaxOthello(JaxEnvironment[OthelloState, OthelloObservation, OthelloInfo, O
                 field_color = field_color_init
             ),
             field_choice_player = jnp.array([7, 7], dtype=jnp.int32),
-            difficulty = jnp.array(1).astype(jnp.int32),
+            difficulty = jnp.array(1).astype(jnp.int32), #set to 1, since jaxAtari doesnt support different difficulties yet
             end_of_game_reached = False,
-            # TODO Figure out why key has shape (2,)
             random_key = jax.random.PRNGKey(key[0])
         )
         initial_obs = self._get_observation(state)
@@ -2775,18 +2771,6 @@ class JaxOthello(JaxEnvironment[OthelloState, OthelloObservation, OthelloInfo, O
             operand=None
         )
 
-        # check if game is ended
-        # def outer_loop(i, ended):
-        #     def inner_loop(j, ended):
-        #         ended = jax.lax.cond(
-        #             final__step_state.field.field_color[i,j] == FieldColor.EMPTY,
-        #             lambda _: False,
-        #             lambda x: x,
-        #             ended
-        #         )
-        #         return ended
-        #     return jax.lax.fori_loop(0, self.consts.FIELD_WIDTH, inner_loop, ended)
-        #has_game_ended = jax.lax.fori_loop(0, self.consts.FIELD_HEIGHT, outer_loop, True)
         has_game_ended = jax.lax.cond(has_game_ended,
             lambda _: True,
             lambda x: jnp.logical_not(self.check_if_there_is_a_valid_choice(final__step_state, white_player=True)[1]),
@@ -2863,9 +2847,6 @@ def load_sprites():
     enemy = jr.loadFrame(os.path.join(MODULE_DIR, "sprites/othello/enemy_black_disc.npy"), transpose=False)
 
     bg = jr.loadFrame(os.path.join(MODULE_DIR, "sprites/othello/othello_background.npy"), transpose=False)
-
-    # TODO: get a correctly sized background image / resize the saved image..
-    #bg = jax.image.resize(bg, (WIDTH, HEIGHT, 4), method='bicubic')
 
     # Convert all sprites to the expected format (add frame dimension)
     SPRITE_BG = jnp.expand_dims(bg, axis=0)
