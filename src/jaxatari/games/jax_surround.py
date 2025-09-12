@@ -102,7 +102,7 @@ class SurroundObservation(NamedTuple):
 class SurroundInfo(NamedTuple):
     """Additional environment information."""
 
-    time: jnp.ndarray
+    step_counter: jnp.ndarray
     all_rewards: jnp.ndarray
 
 
@@ -634,7 +634,7 @@ class JaxSurround(
 
     @partial(jax.jit, static_argnums=(0,))
     def _get_info(self, state: SurroundState, all_rewards: jnp.ndarray) -> SurroundInfo:
-        return SurroundInfo(time=state.time, all_rewards=all_rewards)   
+        return SurroundInfo(step_counter=state.time, all_rewards=all_rewards)  
 
     @partial(jax.jit, static_argnums=(0,))
     def _get_reward(self, previous_state: SurroundState, state: SurroundState) -> jnp.ndarray:
