@@ -15,18 +15,27 @@ from jaxatari.rendering import jax_rendering_utils as aj
 import jaxatari.spaces as spaces
 
 TODOS = """
+Steering:
+- Increased moving speed with higher speeds?
+
+Track:
+- Better curve
+- lost x pixel of right track
+
 Observation:
 - get observation function
 - reduce observation when fog
+
+Fine tuning:
+- wheel animation speed
 """
 
 
 class EnduroConstants(NamedTuple):
     """Game configuration parameters"""
-    # Game runs at 60 frames per second
+    # Game runs at 60 frames per second. This is used to approximate the configs with values from play-testing the game.
+    # Only change this variable if you are sure the original Enduro implementation ran at a lower rate!
     frame_rate: int = 60
-    # Game logic steps every Nth frame (standard is 4)
-    frame_skip: int = 4
 
     screen_width: int = 160
     screen_height: int = 210
@@ -64,7 +73,8 @@ class EnduroConstants(NamedTuple):
     track_x_start: int = player_x_start
     track_max_curvature_width: int = 17
     track_max_top_x_offset: float = 50.0
-    curve_rate: float = 1.0 / frame_skip  # how fast the track curve turns in the game
+    # how fast the track curve starts to build in the game when going from a straight track into a curve
+    curve_rate: float = 0.25
 
     cars_to_pass_per_level: int = 200
     cars_increase_per_level: int = 100
@@ -89,196 +99,6 @@ class EnduroConstants(NamedTuple):
 
     # === Steering ===
     # how many pixels the car can move from one edge of the track to the other one
-    steering_range_in_pixels: int = 28
-    # How much the car moves per steering input (absolute units)
-    steering_sensitivity: float = steering_range_in_pixels / (3.0 * frame_rate)  # ~3 seconds from edge to edge
-
-    # drift_per_second_relative: float = 0.2
-    # drift_per_frame: float = drift_per_second_relative / frame_rate
-    drift_per_second_pixels: float = 2.5  # controls how much the car drifts in a curve
-    drift_per_frame: float = drift_per_second_pixels / frame_rate
-
-    # === Track collision ===
-    track_collision_kickback_pixels: float = 3.0
-    track_collision_speed_reduction: float = 15.0  # from RAM extraction (15)
-
-    # === Weather ===
-    night_fog_index: int = 12
-    # Start times in seconds for each phase. Written in a way to allow easy replacements.
-    weather_starts_s: jnp.ndarray = jnp.array([
-        0,  # day 1
-        34,  # day 2 (lighter)
-        34 + 34,  # day 3 (white mountains)
-        34 + 34 + 69,  # fog day
-        34 + 34 + 69 + 8 * 1,  # Sunset 1
-        34 + 34 + 69 + 8 * 2,  # Sunset 2
-        34 + 34 + 69 + 8 * 3,  # Sunset 3
-        34 + 34 + 69 + 8 * 4,  # Sunset 4
-        34 + 34 + 69 + 8 * 5,  # Sunset 5
-        34 + 34 + 69 + 8 * 6,  # Sunset 6
-        34 + 34 + 69 + 8 * 7,  # Sunset 7
-        34 + 34 + 69 + 8 * 8,  # Sunset 8
-        34 + 34 + 69 + 8 * 8 + 69,  # night
-        34 + 34 + 69 + 8 * 8 + 69 + 69,  # fog night
-        34 + 34 + 69 + 8 * 8 + 69 + 69 + 34,  # night 2
-        34 + 34 + 69 + 8 * 8 + 69 + 69 + 34 + 34,  # dawn
-    ], dtype=jnp.int32)
-    day_night_cycle_seconds: int = weather_starts_s[15]
-
-    # The rgb color codes for each weather and each sprite scraped from the game
-    weather_color_codes: jnp.ndarray = jnp.array([
-        # sky,          gras,       mountains,      horizon 1,      horizon 2,  horizon 3 (highest)
-
-        # day
-        [[24, 26, 167], [0, 68, 0], [134, 134, 29], [24, 26, 167], [24, 26, 167], [24, 26, 167], ],  # day 1
-        [[45, 50, 184], [0, 68, 0], [136, 146, 62], [45, 50, 184], [45, 50, 184], [45, 50, 184]],  # day 2
-        [[45, 50, 184], [0, 68, 0], [192, 192, 192], [45, 50, 184], [45, 50, 184], [45, 50, 184]],  # day white mountain
-        [[45, 50, 184], [236, 236, 236], [214, 214, 214], [45, 50, 184], [45, 50, 184], [45, 50, 184]],  # fog day
-
-        # Sunsets
-        [[24, 26, 167], [20, 60, 0], [0, 68, 0], [24, 26, 167], [24, 26, 167], [24, 26, 167]],  # 1
-        [[24, 26, 167], [20, 60, 0], [0, 68, 0], [104, 25, 154], [51, 26, 163], [24, 26, 167]],  # 2
-        [[51, 26, 163], [20, 60, 0], [0, 68, 0], [151, 25, 122], [104, 25, 154], [51, 26, 163]],  # 3
-        [[51, 26, 163], [20, 60, 0], [0, 68, 0], [167, 26, 26], [151, 25, 122], [104, 25, 154]],  # 4
-        [[104, 25, 154], [48, 56, 0], [0, 0, 0], [163, 57, 21], [167, 26, 26], [151, 25, 122]],  # 5
-        [[151, 25, 122], [48, 56, 0], [0, 0, 0], [181, 83, 40], [163, 57, 21], [167, 26, 26]],  # 6
-        [[167, 26, 26], [48, 56, 0], [0, 0, 0], [162, 98, 33], [181, 83, 40], [163, 57, 21]],  # 7
-        [[163, 57, 21], [48, 56, 0], [0, 0, 0], [134, 134, 29], [162, 98, 33], [181, 83, 40]],  # 8
-
-        # night
-        [[74, 74, 74], [0, 0, 0], [142, 142, 142], [74, 74, 74], [74, 74, 74], [74, 74, 74]],
-        [[74, 74, 74], [0, 0, 0], [142, 142, 142], [74, 74, 74], [74, 74, 74], [74, 74, 74]],
-        [[74, 74, 74], [0, 0, 0], [142, 142, 142], [74, 74, 74], [74, 74, 74], [74, 74, 74]],
-
-        # dawn
-        [[111, 111, 111], [0, 0, 0], [181, 83, 40], [111, 111, 111], [111, 111, 111], [111, 111, 111]],
-
-    ], dtype=jnp.int32)
-
-    # === Opponents ===
-    opponent_speed: int = 24  # measured from RAM state
-    # a factor of 1 translates into overtake time of 1 second when speed is twice as high as the opponent's
-    opponent_relative_speed_factor: float = 1.0
-
-    number_of_opponents = 5000
-    opponent_density = 0.2
-    opponent_delay_slots = 10
-
-    # defines how many y pixels the car size will have size 0
-    car_zero_y_pixel_range = 20
-
-    # slots where the equivalent car size is rendered.
-    # It is written this way to easily see how many pixels each slot has and replacements are easier
-    opponent_slot_ys = jnp.array([
-        game_window_height - car_zero_y_pixel_range,
-        game_window_height - car_zero_y_pixel_range - 20,
-        game_window_height - car_zero_y_pixel_range - 20 - 20,
-        game_window_height - car_zero_y_pixel_range - 20 - 20 - 10,
-        game_window_height - car_zero_y_pixel_range - 20 - 20 - 10 - 10,
-        game_window_height - car_zero_y_pixel_range - 20 - 20 - 10 - 10 - 6,
-        game_window_height - car_zero_y_pixel_range - 20 - 20 - 10 - 10 - 6 - 5,
-    ], dtype=jnp.int32)
-
-    # === Other ===
-
-    car_crash_cooldown_seconds: float = 3.0
-    car_crash_cooldown_frames: int = jnp.array(car_crash_cooldown_seconds * frame_rate)
-    crash_kickback_speed_per_frame: float = track_width / car_crash_cooldown_seconds / frame_rate / 3
-
-    # === Cosmetics ===
-    logo_x_position: int = 20
-    logo_y_position: int = 196
-
-    info_box_x_pos: int = 48
-    info_box_y_pos: int = 161
-
-    distance_odometer_start_x: int = 65
-    distance_odometer_start_y: int = game_window_height + 9
-
-    score_start_x: int = 80
-    score_start_y: int = game_window_height + 25
-
-    level_x: int = 57
-    level_y: int = score_start_y
-
-    mountain_left_x_pos: float = 40.0
-    mountain_right_x_pos: float = 120.0
-    mountain_pixel_movement_per_frame_per_speed_unit: float = 0.01
-
-    # how many steps per animation
-    opponent_animation_steps: int = 2
-
-    day_length_frames = day_night_cycle_seconds * frame_rate
-
-
-class GameConfig:
-    """Game configuration parameters"""
-    # Game runs at 60 frames per second. This is used to approximate the configs with values from play-testing the game.
-    # Only change this variable if you are sure the original Enduro implementation ran at a lower rate!
-    frame_rate: int = 60
-    # Game logic steps every Nth frame (standard is 4)
-    frame_skip: int = 4
-
-    screen_width: int = 160
-    screen_height: int = 210
-
-    # Enduro has a window that is smaller
-    window_offset_left: int = 8
-    window_offset_bottom: int = 55
-    game_window_width: int = screen_width - window_offset_left
-    game_window_height: int = screen_height - window_offset_bottom
-    game_screen_middle: int = (screen_width + window_offset_left) // 2
-
-    # the track is in the game window below the sky
-    sky_height = 50
-
-    # car sizes from close to far
-    car_width_0: int = 16
-    car_height_0: int = 11
-
-    # for all different car sizes the widths and heights
-    car_widths = jnp.array([16, 12, 8, 6, 4, 4, 2], dtype=jnp.int32)
-    car_heights = jnp.array([11, 8, 6, 4, 3, 2, 1], dtype=jnp.int32)
-
-    score_box_y: int = 10
-    score_box_height: int = 27
-
-    # player car position
-    player_x_start: float = (screen_width + window_offset_left) / 2
-    player_y_start: float = game_window_height - car_height_0 - 1
-
-    # === Track ===
-    track_width: int = 97
-    track_height: int = game_window_height - sky_height - 2
-    max_track_length: float = 9999.9  # in km
-    track_seed: int = 42
-    track_x_start: int = player_x_start
-    track_max_curvature_width: int = 17
-    track_max_top_x_offset: float = 50.0
-    curve_rate: float = 1.0 / frame_skip  # how fast the track curve turns in the game
-
-    cars_to_pass_per_level: int = 200
-    cars_increase_per_level: int = 100
-    max_increase_level: int = 5
-
-    # === Speed controls ===
-    min_speed: int = 6  # from RAM state 22
-    max_speed: int = 120  # from RAM state 22
-    km_per_speed_unit_per_second: int = 0.0028  # from playtesting
-    km_per_speed_unit_per_frame: int = km_per_speed_unit_per_second / frame_rate
-
-    # from measuring the RAM states the car accelerates with this function, where t = number of seconds:
-    # f(t) = 10.5t where f <= 46
-    # f(t) = 3.75t where f > 46
-    acceleration_per_second: float = 10.5
-    acceleration_per_frame: float = acceleration_per_second / frame_rate
-    acceleration_slow_down_factor: float = 0.5
-    acceleration_slow_down_threshold: float = 46.0
-
-    breaking_per_second: float = 30.0  # controls how fast the car break
-    breaking_per_frame: float = breaking_per_second / frame_rate
-
-    # === Steering ===
     steering_range_in_pixels: int = 28
     # How much the car moves per steering input (absolute units)
     steering_sensitivity: float = steering_range_in_pixels / (3.0 * frame_rate)  # ~3 seconds from edge to edge
@@ -538,7 +358,7 @@ class JaxEnduro(JaxEnvironment[EnduroGameState, EnduroObservation, EnduroInfo, E
     def __init__(self):
         super().__init__()
         self.frame_stack_size = 4
-        self.config = GameConfig()
+        self.config = EnduroConstants()
         self.state = self.reset()
         self.car_0_spec = VehicleSpec("sprites/enduro/cars/car_0.npy")
         self.car_1_spec = VehicleSpec("sprites/enduro/cars/car_1.npy")
@@ -799,15 +619,15 @@ class JaxEnduro(JaxEnvironment[EnduroGameState, EnduroObservation, EnduroInfo, E
         # max_offset_allowed = jnp.max(state.visible_track_right) - new_track_top_x
 
         # 2. Define the target offset based on the curvature.
-        #    This is the value we want to eventually reach.
+        #    This is the value we want to eventually reach when the curve is fully curved.
         target_offset = curvature * self.config.track_max_top_x_offset  # e.g., -1 * 50 = -50, or 0 * 50 = 0
 
-        # 3. Calculate the difference (the "error") between where we are and where we want to be.
-        offset_error = target_offset - state.track_top_x_curve_offset
+        # 3. Calculate the difference (the "offset") between where we are and where we want to be in terms of curvature
+        current_offset = target_offset - state.track_top_x_curve_offset
 
         # 4. Limit the change per step. The change cannot be faster than curve_rate.
-        #    jnp.clip is perfect here. This moves us towards the target without overshooting.
-        offset_change = jnp.clip(offset_error, -self.config.curve_rate, self.config.curve_rate)
+        #    jnp.clip is perfect here. This lets the offset move towards the target without overshooting.
+        offset_change = jnp.clip(current_offset, -self.config.curve_rate, self.config.curve_rate)
 
         # 5. Apply the calculated change to the current offset.
         new_top_x_curve_offset = state.track_top_x_curve_offset + offset_change
@@ -1640,7 +1460,7 @@ class EnduroRenderer(JAXGameRenderer):
 
     def __init__(self):
         super().__init__()
-        self.config = GameConfig()
+        self.config = EnduroConstants()
 
         # sprite sizes to easily and dynamically adjust renderings
         self.background_sizes: dict[str, tuple[int, int]] = {}
