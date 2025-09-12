@@ -20,7 +20,8 @@ import jaxatari.rendering.jax_rendering_utils as jr
 class BerzerkConstants(NamedTuple):
     
     """Mod Section: Activate / Deactivate different Mods"""
-    ENABLE_EVIL_OTTO = True
+    ENABLE_EVIL_OTTO = True # Add Immortal Evil Otto
+    MORTAL_EVIL_OTTO = True # Evil Otto shootable (Set ENABLE_EVIL_OTTO to true)
 
     WIDTH = 160
     HEIGHT = 210
@@ -102,9 +103,10 @@ class BerzerkState(NamedTuple):
     game_over_timer: chex.Array
     num_enemies: chex.Array
     otto_pos: chex.Array        # (2,)
-    otto_active: bool
-    otto_timer: int
-    otto_anim_counter: int
+    otto_active: chex.Array
+    otto_timer: chex.Array
+    otto_anim_counter: chex.Array
+    otto_alive: chex.Array
 
 
 class BerzerkObservation(NamedTuple):
@@ -646,6 +648,7 @@ class JaxBerzerk(JaxEnvironment[BerzerkState, BerzerkObservation, BerzerkInfo, B
         otto_active = jnp.array(False)
         otto_timer = self.consts.EVIL_OTTO_DELAY
         otto_anim_counter = jnp.array(0, dtype=jnp.int32)
+        otto_alive = jnp.array(True)
 
 
         state = BerzerkState(player_pos=pos, 
@@ -680,6 +683,7 @@ class JaxBerzerk(JaxEnvironment[BerzerkState, BerzerkObservation, BerzerkInfo, B
                              otto_active=otto_active,
                              otto_timer=otto_timer,
                              otto_anim_counter=otto_anim_counter,
+                             otto_alive=otto_alive
                             )
         
         state = self.spawn_enemies(state, jax.random.split(rng)[0])
@@ -1284,6 +1288,31 @@ class JaxBerzerk(JaxEnvironment[BerzerkState, BerzerkObservation, BerzerkInfo, B
             # 4. Animation Counter
             otto_anim_counter = jnp.where(otto_active, state.otto_anim_counter + 1, 0)
 
+            otto_hit_by_bullet = jnp.any(
+                jax.vmap(lambda b_pos, b_size, b_active:
+                    rects_overlap(b_pos, b_size, otto_pos, self.consts.EVIL_OTTO_SIZE) & b_active
+                )(bullets, bullet_sizes, bullet_active)
+            )
+
+            otto_alive = jax.lax.cond(
+                self.consts.MORTAL_EVIL_OTTO,
+                lambda _: state.otto_alive & (~otto_hit_by_bullet),
+                lambda _: True,
+                operand=None
+            )
+
+            otto_removed = otto_active & (~otto_alive)
+
+            otto_pos = jax.lax.cond(
+                otto_removed,
+                lambda _: jnp.array([-100.0, -100.0], dtype=jnp.float32),
+                lambda _: otto_pos,
+                operand=None
+            )
+
+            bullet_active = jnp.where(self.consts.MORTAL_EVIL_OTTO, ~otto_hit_by_bullet & bullet_active, bullet_active)
+
+
             # 9. New state
             new_state = BerzerkState(
                 player_pos=new_pos,
@@ -1319,6 +1348,7 @@ class JaxBerzerk(JaxEnvironment[BerzerkState, BerzerkObservation, BerzerkInfo, B
                 otto_active=otto_active,
                 otto_timer=new_otto_timer,
                 otto_anim_counter=otto_anim_counter,
+                otto_alive=otto_alive
             )
 
             # 10. Observation + Info + Reward/Done
