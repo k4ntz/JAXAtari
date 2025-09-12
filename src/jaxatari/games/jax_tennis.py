@@ -1637,24 +1637,24 @@ class TennisJaxEnv(JaxEnvironment[TennisState, TennisObs, TennisInfo, TennisCons
             obs.player_sets.flatten(),
             obs.enemy_points.flatten(),
             obs.enemy_sets.flatten()
-        ])
+        ]).astype(jnp.float64)
 
 #jnp.array(x, dtype=jnp.float32)
 
     def _get_observation(self, state: TennisState) -> TennisObs:
         return TennisObs(player=PlayerObs(state.player_state.player_x.astype(jnp.float32), state.player_state.player_y.astype(jnp.float32),
-                                          state.player_state.player_direction,
-                                          jnp.where(state.player_state.player_serving, 1, 0),
-                                          state.player_state.player_serving),
+                                          state.player_state.player_direction.astype(jnp.int32),
+                                          state.player_state.player_field.astype(jnp.int32),
+                                          jnp.where(state.player_state.player_serving, 1, 0).astype(jnp.uint8)),
                          enemy=EnemyObs(state.enemy_state.enemy_x.astype(jnp.float32), state.enemy_state.enemy_y.astype(jnp.float32),
-                                        state.enemy_state.enemy_direction),
+                                        state.enemy_state.enemy_direction.astype(jnp.int32)),
                          ball=BallObs(state.ball_state.ball_x.astype(jnp.float32), state.ball_state.ball_y.astype(jnp.float32), state.ball_state.ball_z.astype(jnp.float32),
-                                      state.ball_state.bounces, state.ball_state.last_hit),
-                         is_serving_state=jnp.where(state.game_state.is_serving, 1, 0),
-                         player_points=state.game_state.player_score,
-                         player_sets=state.game_state.player_game_score,
-                         enemy_points=state.game_state.enemy_score,
-                         enemy_sets=state.game_state.enemy_game_score)
+                                      state.ball_state.bounces.astype(jnp.int32), state.ball_state.last_hit.astype(jnp.int32)),
+                         is_serving_state=jnp.where(state.game_state.is_serving, 1, 0).astype(jnp.uint8),
+                         player_points=state.game_state.player_score.astype(jnp.int32),
+                         player_sets=state.game_state.player_game_score.astype(jnp.int32),
+                         enemy_points=state.game_state.enemy_score.astype(jnp.int32),
+                         enemy_sets=state.game_state.enemy_game_score.astype(jnp.int32))
 
     def _get_info(self, state: TennisState, all_rewards: jnp.ndarray = None) -> TennisInfo:
         return TennisInfo(all_rewards=all_rewards)
