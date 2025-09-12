@@ -18,6 +18,10 @@ import jaxatari.rendering.jax_rendering_utils as jr
 # Tested on Ubuntu Virtual Machine
 
 class BerzerkConstants(NamedTuple):
+    
+    """Mod Section: Activate / Deactivate different Mods"""
+    ENABLE_EVIL_OTTO = True
+
     WIDTH = 160
     HEIGHT = 210
     SCALING_FACTOR = 3
@@ -1220,7 +1224,7 @@ class JaxBerzerk(JaxEnvironment[BerzerkState, BerzerkObservation, BerzerkInfo, B
             new_otto_timer = jnp.maximum(state.otto_timer - 1, 0)
 
             # 2. Spawn wenn Timer abgelaufen und noch nicht aktiv
-            spawn_otto = jnp.logical_not(new_otto_timer) & jnp.logical_not(state.otto_active)
+            spawn_otto = self.consts.ENABLE_EVIL_OTTO & jnp.logical_not(new_otto_timer) & jnp.logical_not(state.otto_active)
 
             otto_spawn_pos = jax.lax.switch(
                     state.entry_direction,
