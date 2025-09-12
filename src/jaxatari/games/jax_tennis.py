@@ -1575,7 +1575,7 @@ class TennisJaxEnv(JaxEnvironment[TennisState, TennisObs, TennisInfo, TennisCons
     def _get_observation(self, state: TennisState) -> TennisObs:
         return TennisObs()
 
-    def _get_info(self, state: TennisState, all_rewards: jnp.ndarray) -> TennisInfo:
+    def _get_info(self, state: TennisState, all_rewards: jnp.ndarray=None) -> TennisInfo:
         return TennisInfo(all_rewards=all_rewards)
 
     def _get_reward(self, previous_state: TennisState, state: TennisState) -> float:
