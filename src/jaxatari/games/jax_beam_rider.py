@@ -15,15 +15,10 @@ import jaxatari.spaces as spaces
 
 """TODOS:
 Top Priorities:
-- Fix the renderer as some components are not being shown with Play.py(Player ship, Points, lives, torpedoes, enemies left) --> done
-- White Saucers shouldn't be hittable on the top of horizon --> done
-- fix beam_jump --> done
-- Enemies get smaller/bigger according to the 3d rendering --> done
-- add white saucer ram movement --> done
 - make game more 3D --> might be done(ask supervisor)
-- Fix ship movement
 - add pause functionality again
-- adjust rejuvinator debris movement 
+- add enemy sprites
+- adjust code so that it passes the tests
 For later:
 - Check the sentinal ship constants/Optimize the code/remove unnecessary code
 - Documentation"""
@@ -229,7 +224,7 @@ class BeamRiderConstants(NamedTuple):
     # Rejuvenator debris constants (when shot)
     REJUVENATOR_DEBRIS_SPEED = 1.5  # Fast moving debris
     REJUVENATOR_DEBRIS_COLOR = (255, 0, 0)  # Red explosive debris
-    REJUVENATOR_DEBRIS_COUNT = 4  # Number of debris pieces created
+    REJUVENATOR_DEBRIS_COUNT = 2  # Number of debris pieces created
     REJUVENATOR_DEBRIS_SPREAD = 30  # Spread angle for debris
     REJUVENATOR_DEBRIS_LIFETIME = 180  # Frames before debris disappears
 
@@ -3220,10 +3215,8 @@ class BeamRiderEnv(JaxEnvironment[BeamRiderState, BeamRiderObservation, BeamRide
             rejuv_x = enemies[i, 0]
             rejuv_y = enemies[i, 1]
 
-            # Spawn 4 debris pieces in different directions
+            # Spawn 2 debris pieces moving downwards only
             directions = jnp.array([
-                [-1.5, -0.8],  # Up-left
-                [1.5, -0.8],  # Up-right
                 [-1.0, 1.2],  # Down-left
                 [1.0, 1.2]  # Down-right
             ])
@@ -3231,14 +3224,14 @@ class BeamRiderEnv(JaxEnvironment[BeamRiderState, BeamRiderObservation, BeamRide
             def spawn_single_debris(debris_idx, enemies_state):
                 # Find first available slot
                 first_inactive = jnp.argmax(enemies_state[:, 3] == 0)
-                can_spawn = (enemies_state[first_inactive, 3] == 0) & rejuvenator_hit & (debris_idx < 4)
+                can_spawn = (enemies_state[first_inactive, 3] == 0) & rejuvenator_hit & (debris_idx < 2)
 
                 # Create debris enemy
                 direction_x = directions[debris_idx, 0]
                 direction_y = directions[debris_idx, 1]
 
                 # Add some spread to debris position
-                debris_x = rejuv_x + (debris_idx - 1.5) * 6  # Spread debris out
+                debris_x = rejuv_x + (debris_idx - 0.5) * 8  # Spread debris out (adjusted for 2 pieces)
                 debris_y = rejuv_y
 
                 new_debris = jnp.array([
@@ -3269,8 +3262,8 @@ class BeamRiderEnv(JaxEnvironment[BeamRiderState, BeamRiderObservation, BeamRide
 
                 return enemies_state
 
-            # Spawn all 4 debris pieces
-            enemies_inner = jax.lax.fori_loop(0, 4, spawn_single_debris, enemies_inner)
+            # Spawn both debris pieces (changed from 4 to 2)
+            enemies_inner = jax.lax.fori_loop(0, 2, spawn_single_debris, enemies_inner)
 
             return (state_inner, enemies_inner)
 
@@ -3279,6 +3272,7 @@ class BeamRiderEnv(JaxEnvironment[BeamRiderState, BeamRiderObservation, BeamRide
                                            (state, enemies))
 
         return state.replace(enemies=enemies)
+
     @partial(jax.jit, static_argnums=(0,))
     def _check_sector_progression(self, state: BeamRiderState) -> BeamRiderState:
         """Check if sector is complete and advance to next sector - Updated with smooth 99-sector scaling"""
