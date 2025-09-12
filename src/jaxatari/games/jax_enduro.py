@@ -1666,49 +1666,41 @@ class EnduroRenderer(JAXGameRenderer):
         frame_index = (animation_step % 2).astype(jnp.int32)
 
         # Load all car sprites as separate variables (they have different shapes) depending on the current weather
-        # car_0 = lax.cond(
-        #     ~jnp.isin(state.weather_index, self.config.weather_with_night_car_sprite),
-        #     lambda: aj.get_sprite_frame(self.sprites['car_0.npy'], frame_index),
-        #     lambda: aj.get_sprite_frame(self.sprites['car_0_night.npy'], 0)
-        # )
-        # car_1 = lax.cond(
-        #     ~jnp.isin(state.weather_index, self.config.weather_with_night_car_sprite),
-        #     lambda: aj.get_sprite_frame(self.sprites['car_1.npy'], frame_index),
-        #     lambda: aj.get_sprite_frame(self.sprites['car_1_night.npy'], 0)
-        # )
-        # car_2 = lax.cond(
-        #     ~jnp.isin(state.weather_index, self.config.weather_with_night_car_sprite),
-        #     lambda: aj.get_sprite_frame(self.sprites['car_2.npy'], frame_index),
-        #     lambda: aj.get_sprite_frame(self.sprites['car_2_night.npy'], 0)
-        # )
-        # car_3 = lax.cond(
-        #     ~jnp.isin(state.weather_index, self.config.weather_with_night_car_sprite),
-        #     lambda: aj.get_sprite_frame(self.sprites['car_3.npy'], frame_index),
-        #     lambda: aj.get_sprite_frame(self.sprites['car_3_night.npy'], 0)
-        # )
-        # car_4 = lax.cond(
-        #     ~jnp.isin(state.weather_index, self.config.weather_with_night_car_sprite),
-        #     lambda: aj.get_sprite_frame(self.sprites['car_4.npy'], frame_index),
-        #     lambda: aj.get_sprite_frame(self.sprites['car_4_night.npy'], 0)
-        # )
-        # car_5 = lax.cond(
-        #     ~jnp.isin(state.weather_index, self.config.weather_with_night_car_sprite),
-        #     lambda: aj.get_sprite_frame(self.sprites['car_5.npy'], frame_index),
-        #     lambda: aj.get_sprite_frame(self.sprites['car_5_night.npy'], 0)
-        # )
-        # car_6 = lax.cond(
-        #     ~jnp.isin(state.weather_index, self.config.weather_with_night_car_sprite),
-        #     lambda: aj.get_sprite_frame(self.sprites['car_6.npy'], frame_index),
-        #     lambda: aj.get_sprite_frame(self.sprites['car_6_night.npy'], 0)
-        # )
-
-        car_0 = aj.get_sprite_frame(self.sprites['car_0.npy'], frame_index)
-        car_1 = aj.get_sprite_frame(self.sprites['car_1.npy'], frame_index)
-        car_2 = aj.get_sprite_frame(self.sprites['car_2.npy'], frame_index)
-        car_3 = aj.get_sprite_frame(self.sprites['car_3.npy'], frame_index)
-        car_4 = aj.get_sprite_frame(self.sprites['car_4.npy'], frame_index)
-        car_5 = aj.get_sprite_frame(self.sprites['car_5.npy'], frame_index)
-        car_6 = aj.get_sprite_frame(self.sprites['car_6.npy'], frame_index)
+        car_0 = lax.cond(
+            ~jnp.isin(state.weather_index, self.config.weather_with_night_car_sprite),
+            lambda: aj.get_sprite_frame(self.sprites['car_0.npy'], frame_index),
+            lambda: aj.get_sprite_frame(self.sprites['car_0_night.npy'], 0)
+        )
+        car_1 = lax.cond(
+            ~jnp.isin(state.weather_index, self.config.weather_with_night_car_sprite),
+            lambda: aj.get_sprite_frame(self.sprites['car_1.npy'], frame_index),
+            lambda: aj.get_sprite_frame(self.sprites['car_1_night.npy'], 0)
+        )
+        car_2 = lax.cond(
+            ~jnp.isin(state.weather_index, self.config.weather_with_night_car_sprite),
+            lambda: aj.get_sprite_frame(self.sprites['car_2.npy'], frame_index),
+            lambda: aj.get_sprite_frame(self.sprites['car_2_night.npy'], 0)
+        )
+        car_3 = lax.cond(
+            ~jnp.isin(state.weather_index, self.config.weather_with_night_car_sprite),
+            lambda: aj.get_sprite_frame(self.sprites['car_3.npy'], frame_index),
+            lambda: aj.get_sprite_frame(self.sprites['car_3_night.npy'], 0)
+        )
+        car_4 = lax.cond(
+            ~jnp.isin(state.weather_index, self.config.weather_with_night_car_sprite),
+            lambda: aj.get_sprite_frame(self.sprites['car_4.npy'], frame_index),
+            lambda: aj.get_sprite_frame(self.sprites['car_4_night.npy'], 0)
+        )
+        car_5 = lax.cond(
+            ~jnp.isin(state.weather_index, self.config.weather_with_night_car_sprite),
+            lambda: aj.get_sprite_frame(self.sprites['car_5.npy'], frame_index),
+            lambda: aj.get_sprite_frame(self.sprites['car_5_night.npy'], 0)
+        )
+        car_6 = lax.cond(
+            ~jnp.isin(state.weather_index, self.config.weather_with_night_car_sprite),
+            lambda: aj.get_sprite_frame(self.sprites['car_6.npy'], frame_index),
+            lambda: aj.get_sprite_frame(self.sprites['car_6_night.npy'], 0)
+        )
 
         # Get opponent positions from precomputed state
         opponent_positions = state.visible_opponent_positions
