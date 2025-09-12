@@ -33,9 +33,14 @@
     - Kickback: `track_collision_kickback_pixels`
     - Speed reduction: `track_collision_speed_reduction`
 - Steering
-  - It takes ~3 seconds to steer from one edge of the track to the one on a straight section
-    - Config: `steering_range_in_pixels`
-    - Config: `steering_sensitivity`
+  - Steering sensitivity depends on player speed.
+  - By measuring the time it takes from one end to the other of a track the following function emerges:
+    
+    *time(speed) = 8 - 0.15s where s <= 32*
+  
+    *time(speed) = 4.86 - 0.567s where s > 32*
+      - Config: `steering_range_in_pixels`
+      - Config: `steering_sensitivity`
 
 ### Opponent Cars
 - Behavior
@@ -95,6 +100,11 @@
     - Config: ``mountain_pixel_movement_per_frame_per_speed_unit``
   - Clouds stop once the track is straight again
   - Clouds appear at the opposite side once they leave the screen on one side
+
+## Limitations
+### Integer vs. floats
+The original game uses integer for speed, but since we need a frame based acceleration logic for the JAX implementation, this is not feasible. This has thw downside, that the player cannot really match the opponent speed (the float is always slightly above or below).
+If this really represents an issue the speed could be encoded as an integer and the sub-speed could be implemented as a cooldown (wait n-steps before the next speed increase).
 
 ## Debug renderer
 The file contains a [debug-renderer](./jax_enduro_debug_renderer.py) with an overlay to display state variables for 

@@ -17,6 +17,7 @@ import jaxatari.spaces as spaces
 TODOS = """
 Steering:
 - Increased moving speed with higher speeds?
+- fog/snow worse steering
 
 Rendering:
 - Different cars at night
@@ -24,8 +25,12 @@ Rendering:
 Track:
 - Better curve
 - lost x pixel of right track
+- gey scale
+- bumpers
+- Speed based track collision
 
 Game Logic:
+- level passed flag
 - game over
 
 Observation:
@@ -103,7 +108,17 @@ class EnduroConstants(NamedTuple):
     # how many pixels the car can move from one edge of the track to the other one
     steering_range_in_pixels: int = 28
     # How much the car moves per steering input (absolute units)
-    steering_sensitivity: float = steering_range_in_pixels / (3.0 * frame_rate)  # ~3 seconds from edge to edge
+    steering_sensitivity: float = steering_range_in_pixels / 3.0 / frame_rate
+
+    # with increasing speed the car moves faster on the x-axis.
+    # When moving faster than sensitivity_change_speed the sensitivity rate becomes lower
+    # sensitivity(speed) = steering_range_in_pixels / (base_sensitivity + sensitivity_per_speed * speed) / frame_rate
+    slow_base_sensitivity: float = 8.0
+    fast_base_sensitivity: float = 4.86
+    slow_steering_sensitivity_per_speed_unit: float = -0.15  # speed <= 32
+    fast_steering_sensitivity_per_speed_unit: float = -0.056  # speed > 32
+    sensitivity_change_speed: int = 32
+    minimum_steering_sensitivity: float = 1.0  # from playtesting
 
     # drift_per_second_relative: float = 0.2
     # drift_per_frame: float = drift_per_second_relative / frame_rate
@@ -385,7 +400,7 @@ class JaxEnduro(JaxEnvironment[EnduroGameState, EnduroObservation, EnduroInfo, E
         self.renderer = EnduroRenderer()
 
     def action_space(self) -> spaces.Discrete:
-      return spaces.Discrete(len(self.action_set))
+        return spaces.Discrete(len(self.action_set))
 
     def image_space(self) -> spaces.Box:
         return spaces.Box(
@@ -586,8 +601,21 @@ class JaxEnduro(JaxEnvironment[EnduroGameState, EnduroObservation, EnduroInfo, E
             # Determine if action is a right-turn
             is_right = jnp.logical_or(action == Action.RIGHT, action == Action.RIGHTFIRE)
 
-            steering_delta = jnp.where(is_left, -self.config.steering_sensitivity,
-                                       jnp.where(is_right, self.config.steering_sensitivity, 0.0))
+            # calculate the time it should take to steer from left to right (seconds) based on the current speed
+            time_from_left_to_right = jnp.clip(
+                jnp.where(
+                    speed > self.config.sensitivity_change_speed,
+                    self.config.slow_base_sensitivity + self.config.slow_steering_sensitivity_per_speed_unit * speed,
+                    self.config.fast_base_sensitivity + self.config.fast_steering_sensitivity_per_speed_unit * speed,
+                ),
+                self.config.minimum_steering_sensitivity  # never below a theshold
+            )
+
+            current_steering_sensitivity = (self.config.steering_range_in_pixels /
+                                            time_from_left_to_right / self.config.frame_rate)
+
+            steering_delta = jnp.where(is_left, -1 * current_steering_sensitivity,
+                                       jnp.where(is_right, current_steering_sensitivity, 0.0))
 
             # ====== DRIFT ======
             drift_delta = -curvature * self.config.drift_per_frame  # drift opposes curve
@@ -814,7 +842,7 @@ class JaxEnduro(JaxEnvironment[EnduroGameState, EnduroObservation, EnduroInfo, E
             visible_track_right=new_right_xs.astype(jnp.int32),
             cooldown=new_cooldown,
 
-            #game_over=game_over,
+            # game_over=game_over,
         )
 
         # Return updated observation and state
