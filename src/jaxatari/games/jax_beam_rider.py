@@ -296,7 +296,7 @@ class Enemy:
 
 
 @struct.dataclass
-class BeamRiderState(NamedTuple):
+class BeamRiderState:
     """Complete game state"""
     # Game entities
     ship: Ship
