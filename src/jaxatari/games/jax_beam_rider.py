@@ -296,7 +296,7 @@ class Enemy:
 
 
 @struct.dataclass
-class BeamRiderState:
+class BeamRiderState(NamedTuple):
     """Complete game state"""
     # Game entities
     ship: Ship
@@ -370,26 +370,22 @@ class BeamRiderEnv(JaxEnvironment[BeamRiderState, BeamRiderObservation, BeamRide
     def observation_space(self) -> spaces.Dict:
         """Returns the observation space for BeamRider"""
         return spaces.Dict({
-            "ship_x": spaces.Box(low=0.0, high=float(self.constants.SCREEN_WIDTH), shape=(), dtype=np.float64),
-            "ship_y": spaces.Box(low=0.0, high=float(self.constants.SCREEN_HEIGHT), shape=(), dtype=np.float64),
-            "ship_beam": spaces.Box(low=0, high=self.constants.NUM_BEAMS - 1, shape=(), dtype=np.int32),
-            "projectiles": spaces.Box(low=0.0,
-                                      high=float(max(self.constants.SCREEN_WIDTH, self.constants.SCREEN_HEIGHT)),
-                                      shape=(self.constants.MAX_PROJECTILES, 5), dtype=np.float64),
-            "torpedo_projectiles": spaces.Box(low=0.0,
-                                              high=float(
-                                                  max(self.constants.SCREEN_WIDTH, self.constants.SCREEN_HEIGHT)),
-                                              shape=(self.constants.MAX_PROJECTILES, 5), dtype=np.float64),
-            "enemies": spaces.Box(low=-100.0,
-                                  high=float(max(self.constants.SCREEN_WIDTH, self.constants.SCREEN_HEIGHT)),
-                                  shape=(self.constants.MAX_ENEMIES, 17), dtype=np.float64),
-            "score": spaces.Box(low=0, high=999999, shape=(), dtype=np.int32),
-            "lives": spaces.Box(low=0, high=10, shape=(), dtype=np.int32),
-            "current_sector": spaces.Box(low=1, high=99, shape=(), dtype=np.int32),
+            "ship_x": spaces.Box(low=0, high=self.constants.SCREEN_WIDTH, shape=(), dtype=jnp.float32),
+            "ship_y": spaces.Box(low=0, high=self.constants.SCREEN_HEIGHT, shape=(), dtype=jnp.float32),
+            "ship_beam": spaces.Box(low=0, high=self.constants.NUM_BEAMS - 1, shape=(), dtype=jnp.int32),
+            "projectiles": spaces.Box(low=0, high=max(self.constants.SCREEN_WIDTH, self.constants.SCREEN_HEIGHT),
+                                      shape=(self.constants.MAX_PROJECTILES, 5), dtype=jnp.float32),
+            "torpedo_projectiles": spaces.Box(low=0,
+                                              high=max(self.constants.SCREEN_WIDTH, self.constants.SCREEN_HEIGHT),
+                                              shape=(self.constants.MAX_PROJECTILES, 5), dtype=jnp.float32),
+            "enemies": spaces.Box(low=-100, high=max(self.constants.SCREEN_WIDTH, self.constants.SCREEN_HEIGHT),
+                                  shape=(self.constants.MAX_ENEMIES, 17), dtype=jnp.float32),
+            "score": spaces.Box(low=0, high=999999, shape=(), dtype=jnp.int32),
+            "lives": spaces.Box(low=0, high=10, shape=(), dtype=jnp.int32),
+            "current_sector": spaces.Box(low=1, high=99, shape=(), dtype=jnp.int32),
             "torpedoes_remaining": spaces.Box(low=0, high=self.constants.TORPEDOES_PER_SECTOR, shape=(),
-                                              dtype=np.int32),
+                                              dtype=jnp.int32),
         })
-
     def image_space(self) -> spaces.Box:
         """Returns the image space for BeamRider"""
         return spaces.Box(
