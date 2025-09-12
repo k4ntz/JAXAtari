@@ -633,8 +633,11 @@ class JaxSurround(
         )
 
     @partial(jax.jit, static_argnums=(0,))
-    def _get_info(self, state: SurroundState, all_rewards: jnp.ndarray) -> SurroundInfo:
-        return SurroundInfo(step_counter=state.time, all_rewards=all_rewards)  
+    def _get_info(self, state: SurroundState, all_rewards: Optional[jnp.ndarray] = None) -> SurroundInfo:
+        if all_rewards is None:
+            all_rewards = self._get_all_rewards(state, state)
+        return SurroundInfo(step_counter=state.time, all_rewards=all_rewards)
+
 
     @partial(jax.jit, static_argnums=(0,))
     def _get_reward(self, previous_state: SurroundState, state: SurroundState) -> jnp.ndarray:
