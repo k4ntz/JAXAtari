@@ -18,12 +18,18 @@ TODOS = """
 Steering:
 - Increased moving speed with higher speeds?
 
+Rendering:
+- Different cars at night
+
 Track:
 - Better curve
 - lost x pixel of right track
 
+Game Logic:
+- game over
+
 Observation:
-- get observation function
+- improve observation function 
 - reduce observation when fog
 
 Fine tuning:
@@ -37,19 +43,21 @@ class EnduroConstants(NamedTuple):
     # Only change this variable if you are sure the original Enduro implementation ran at a lower rate!
     frame_rate: int = 60
 
+    # === Window Sizes ===
     screen_width: int = 160
     screen_height: int = 210
 
-    # Enduro has a window that is smaller
+    # Enduro has a game window that is smaller
     window_offset_left: int = 8
     window_offset_bottom: int = 55
-    game_window_width: int = screen_width - window_offset_left
     game_window_height: int = screen_height - window_offset_bottom
-    game_screen_middle: int = (screen_width + window_offset_left) // 2
+    game_window_width: int = screen_width - window_offset_left
+    game_screen_middle: int = game_window_width // 2
 
     # the track is in the game window below the sky
     sky_height = 50
 
+    # === Cars ===
     # car sizes from close to far
     car_width_0: int = 16
     car_height_0: int = 11
@@ -58,11 +66,8 @@ class EnduroConstants(NamedTuple):
     car_widths = jnp.array([16, 12, 8, 6, 4, 4, 2], dtype=jnp.int32)
     car_heights = jnp.array([11, 8, 6, 4, 3, 2, 1], dtype=jnp.int32)
 
-    score_box_y: int = 10
-    score_box_height: int = 27
-
-    # player car position
-    player_x_start: float = (screen_width + window_offset_left) / 2
+    # player car start position
+    player_x_start: float = game_screen_middle
     player_y_start: float = game_window_height - car_height_0 - 1
 
     # === Track ===
@@ -72,26 +77,23 @@ class EnduroConstants(NamedTuple):
     track_seed: int = 42
     track_x_start: int = player_x_start
     track_max_curvature_width: int = 17
+    # How many pixels the top-x of the track moves in a curve into the curve direction for the full curve
     track_max_top_x_offset: float = 50.0
     # how fast the track curve starts to build in the game when going from a straight track into a curve
     curve_rate: float = 0.25
 
-    cars_to_pass_per_level: int = 200
-    cars_increase_per_level: int = 100
-    max_increase_level: int = 5
-
     # === Speed controls ===
     min_speed: int = 6  # from RAM state 22
     max_speed: int = 120  # from RAM state 22
-    km_per_speed_unit_per_second: int = 0.0028  # from playtesting
-    km_per_speed_unit_per_frame: int = km_per_speed_unit_per_second / frame_rate
+    # measured by starting the original game and letting the car progress with min speed for 5 km --> 2:23 min
+    # 1/ 143 seconds / 5 km =~ 0.035
+    km_per_second_per_speed_unit: float = 0.035 / min_speed
+    km_per_speed_unit_per_frame: float = km_per_second_per_speed_unit / frame_rate
 
-    # from measuring the RAM states the car accelerates with this function, where t = number of seconds:
-    # f(t) = 10.5t where f <= 46
-    # f(t) = 3.75t where f > 46
-    acceleration_per_second: float = 10.5
-    acceleration_per_frame: float = acceleration_per_second / frame_rate
-    acceleration_slow_down_factor: float = 0.5
+    # The acceleration per second (as frame rate)
+    acceleration_per_frame: float = 10.5 / frame_rate
+    slower_acceleration_per_frame: float = 3.75 / frame_rate
+    # at which speed the slower_acceleration is applied
     acceleration_slow_down_threshold: float = 46.0
 
     breaking_per_second: float = 30.0  # controls how fast the car break
@@ -110,10 +112,10 @@ class EnduroConstants(NamedTuple):
 
     # === Track collision ===
     track_collision_kickback_pixels: float = 3.0
-    track_collision_speed_reduction: float = 15.0  # from RAM extraction (15)
+    track_collision_speed_reduction: float = 15.0  # from RAM extraction
 
     # === Weather ===
-    night_fog_index: int = 12
+    night_fog_index: int = 12  # which part of the weather array has the reduced visibility (fog)
     # Start times in seconds for each phase. Written in a way to allow easy replacements.
     weather_starts_s: jnp.ndarray = jnp.array([
         0,  # day 1
@@ -170,9 +172,16 @@ class EnduroConstants(NamedTuple):
     # a factor of 1 translates into overtake time of 1 second when speed is twice as high as the opponent's
     opponent_relative_speed_factor: float = 1.0
 
+    opponent_spawn_seed: int = 42
+
     number_of_opponents = 5000
     opponent_density = 0.2
     opponent_delay_slots = 10
+
+    # How many opponents to overtake to progress into the next level
+    cars_to_pass_per_level: int = 200
+    cars_increase_per_level: int = 100
+    max_increase_level: int = 5
 
     # defines how many y pixels the car size will have size 0
     car_zero_y_pixel_range = 20
@@ -189,8 +198,7 @@ class EnduroConstants(NamedTuple):
         game_window_height - car_zero_y_pixel_range - 20 - 20 - 10 - 10 - 6 - 5,
     ], dtype=jnp.int32)
 
-    # === Other ===
-
+    # === Opponents Collision ===
     car_crash_cooldown_seconds: float = 3.0
     car_crash_cooldown_frames: int = jnp.array(car_crash_cooldown_seconds * frame_rate)
     crash_kickback_speed_per_frame: float = track_width / car_crash_cooldown_seconds / frame_rate / 3
@@ -216,7 +224,7 @@ class EnduroConstants(NamedTuple):
     mountain_pixel_movement_per_frame_per_speed_unit: float = 0.01
 
     # how many steps per animation
-    opponent_animation_steps: int = 2
+    opponent_animation_steps: int = 8
 
     day_length_frames = day_night_cycle_seconds * frame_rate
 
@@ -457,7 +465,7 @@ class JaxEnduro(JaxEnvironment[EnduroGameState, EnduroObservation, EnduroInfo, E
 
         # opponents
         opponent_spawns = self._generate_opponent_spawns(
-            seed=self.config.track_seed,
+            seed=self.config.opponent_spawn_seed,
             number_of_opponents=self.config.number_of_opponents,
             opponent_density=self.config.opponent_density,
             opponent_delay_slots=self.config.opponent_delay_slots
@@ -564,7 +572,7 @@ class JaxEnduro(JaxEnvironment[EnduroGameState, EnduroObservation, EnduroInfo, E
                 jnp.where(
                     state.player_speed < self.config.acceleration_slow_down_threshold,
                     self.config.acceleration_per_frame,
-                    self.config.acceleration_per_frame * self.config.acceleration_slow_down_factor
+                    self.config.slower_acceleration_per_frame
                 )
                 ,
                 jnp.where(is_brake, -self.config.breaking_per_frame, 0.0)
