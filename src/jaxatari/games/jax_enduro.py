@@ -16,18 +16,18 @@ import jaxatari.spaces as spaces
 
 TODOS = """
 Steering:
-- Increased moving speed with higher speeds?
-- fog/snow worse steering
+- Drift speed based?
 
 Rendering:
 - Different cars at night
+- no 0 on overtake score
+- level flags
 
 Track:
 - Better curve
 - lost x pixel of right track
 - gey scale
 - bumpers
-- Speed based track collision
 
 Game Logic:
 - level passed flag
@@ -118,7 +118,8 @@ class EnduroConstants(NamedTuple):
     slow_steering_sensitivity_per_speed_unit: float = -0.15  # speed <= 32
     fast_steering_sensitivity_per_speed_unit: float = -0.056  # speed > 32
     sensitivity_change_speed: int = 32
-    minimum_steering_sensitivity: float = 1.0  # from playtesting
+    minimum_steering_sensitivity: float = 1.0  # from play-testing
+    steering_snow_factor: float = 2.0  # during snow the steering becomes much worse
 
     # drift_per_second_relative: float = 0.2
     # drift_per_frame: float = drift_per_second_relative / frame_rate
@@ -127,7 +128,7 @@ class EnduroConstants(NamedTuple):
 
     # === Track collision ===
     track_collision_kickback_pixels: float = 3.0
-    track_collision_speed_reduction: float = 15.0  # from RAM extraction
+    track_collision_speed_reduction_per_speed_unit: float = 0.25  # from RAM extraction
 
     # === Weather ===
     night_fog_index: int = 12  # which part of the weather array has the reduced visibility (fog)
@@ -151,6 +152,7 @@ class EnduroConstants(NamedTuple):
         34 + 34 + 69 + 8 * 8 + 69 + 69 + 34 + 34,  # dawn
     ], dtype=jnp.int32)
     day_night_cycle_seconds: int = weather_starts_s[15]
+    weather_with_night_car_sprite = jnp.array([12, 13, 14], dtype=jnp.int32)
 
     # The rgb color codes for each weather and each sprite scraped from the game
     weather_color_codes: jnp.ndarray = jnp.array([
@@ -608,8 +610,8 @@ class JaxEnduro(JaxEnvironment[EnduroGameState, EnduroObservation, EnduroInfo, E
                     self.config.slow_base_sensitivity + self.config.slow_steering_sensitivity_per_speed_unit * speed,
                     self.config.fast_base_sensitivity + self.config.fast_steering_sensitivity_per_speed_unit * speed,
                 ),
-                self.config.minimum_steering_sensitivity  # never below a theshold
-            )
+                self.config.minimum_steering_sensitivity  # never below a threshold
+            ) * self.config.steering_snow_factor
 
             current_steering_sensitivity = (self.config.steering_range_in_pixels /
                                             time_from_left_to_right / self.config.frame_rate)
@@ -684,7 +686,8 @@ class JaxEnduro(JaxEnvironment[EnduroGameState, EnduroObservation, EnduroInfo, E
         # 2. Calculate the speed with collision penalty.
         new_speed = jnp.where(
             collided_track,
-            new_speed - self.config.track_collision_speed_reduction,  # If collided, reduce speed.
+            # If collided, reduce speed.
+            new_speed - self.config.track_collision_speed_reduction_per_speed_unit * new_speed,
             new_speed  # If not, keep the new speed.
         )
         # Ensure speed does not drop below the minimum value
@@ -1662,7 +1665,43 @@ class EnduroRenderer(JAXGameRenderer):
         # Alternate between frame 0 and 1 based on step count
         frame_index = (animation_step % 2).astype(jnp.int32)
 
-        # Load all car sprites as separate variables (they have different shapes)
+        # Load all car sprites as separate variables (they have different shapes) depending on the current weather
+        # car_0 = lax.cond(
+        #     ~jnp.isin(state.weather_index, self.config.weather_with_night_car_sprite),
+        #     lambda: aj.get_sprite_frame(self.sprites['car_0.npy'], frame_index),
+        #     lambda: aj.get_sprite_frame(self.sprites['car_0_night.npy'], 0)
+        # )
+        # car_1 = lax.cond(
+        #     ~jnp.isin(state.weather_index, self.config.weather_with_night_car_sprite),
+        #     lambda: aj.get_sprite_frame(self.sprites['car_1.npy'], frame_index),
+        #     lambda: aj.get_sprite_frame(self.sprites['car_1_night.npy'], 0)
+        # )
+        # car_2 = lax.cond(
+        #     ~jnp.isin(state.weather_index, self.config.weather_with_night_car_sprite),
+        #     lambda: aj.get_sprite_frame(self.sprites['car_2.npy'], frame_index),
+        #     lambda: aj.get_sprite_frame(self.sprites['car_2_night.npy'], 0)
+        # )
+        # car_3 = lax.cond(
+        #     ~jnp.isin(state.weather_index, self.config.weather_with_night_car_sprite),
+        #     lambda: aj.get_sprite_frame(self.sprites['car_3.npy'], frame_index),
+        #     lambda: aj.get_sprite_frame(self.sprites['car_3_night.npy'], 0)
+        # )
+        # car_4 = lax.cond(
+        #     ~jnp.isin(state.weather_index, self.config.weather_with_night_car_sprite),
+        #     lambda: aj.get_sprite_frame(self.sprites['car_4.npy'], frame_index),
+        #     lambda: aj.get_sprite_frame(self.sprites['car_4_night.npy'], 0)
+        # )
+        # car_5 = lax.cond(
+        #     ~jnp.isin(state.weather_index, self.config.weather_with_night_car_sprite),
+        #     lambda: aj.get_sprite_frame(self.sprites['car_5.npy'], frame_index),
+        #     lambda: aj.get_sprite_frame(self.sprites['car_5_night.npy'], 0)
+        # )
+        # car_6 = lax.cond(
+        #     ~jnp.isin(state.weather_index, self.config.weather_with_night_car_sprite),
+        #     lambda: aj.get_sprite_frame(self.sprites['car_6.npy'], frame_index),
+        #     lambda: aj.get_sprite_frame(self.sprites['car_6_night.npy'], 0)
+        # )
+
         car_0 = aj.get_sprite_frame(self.sprites['car_0.npy'], frame_index)
         car_1 = aj.get_sprite_frame(self.sprites['car_1.npy'], frame_index)
         car_2 = aj.get_sprite_frame(self.sprites['car_2.npy'], frame_index)

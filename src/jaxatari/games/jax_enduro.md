@@ -30,8 +30,9 @@
     - Config: `drift_per_second_pixels`
 - Track collision
   - Hitting the side of the road gives a small kickback and reduces you speed by 15 (RAM state measured)
+  - Speed reduction depends on speed (25%)
     - Kickback: `track_collision_kickback_pixels`
-    - Speed reduction: `track_collision_speed_reduction`
+    - Speed reduction: `track_collision_speed_reduction_per_speed_unit`
 - Steering
   - Steering sensitivity depends on player speed.
   - By measuring the time it takes from one end to the other of a track the following function emerges:
@@ -41,6 +42,8 @@
     *time(speed) = 4.86 - 0.567s where s > 32*
       - Config: `steering_range_in_pixels`
       - Config: `steering_sensitivity`
+  - Steering sensitivity is halved during snowy weather (all white)
+    - Config: ``steering_snow_factor``
 
 ### Opponent Cars
 - Behavior
@@ -62,6 +65,9 @@
     - Config: ``opponent_slot_ys``
   - This implementation pre-calculates an opponent array and moves over it depending on player speed. The player can 
   "see" a 7 slot window of that array.
+- Collision
+  - The original implementation has a pixel perfect collision
+  - The cars at night are smaller than during day, only the car lights collide
   
 - Overtaking
   - If the player slows down they overtake the player again 
