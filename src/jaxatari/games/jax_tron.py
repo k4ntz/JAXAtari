@@ -1,12 +1,17 @@
 from dataclasses import dataclass
+
+from keyboard import press
+from numpy.ma.core import floor_divide
+
 from jaxatari.renderers import JAXGameRenderer
-from typing import NamedTuple, Tuple
+from typing import NamedTuple, Tuple, TypeVar
 from jax import Array, jit, random, numpy as jnp, debug
 from functools import partial
 from jaxatari.rendering import jax_rendering_utils as jr
 from jaxatari.environment import JaxEnvironment, JAXAtariAction as Action
 import jaxatari.spaces as spaces
 import jax.lax
+from treescope import active_renderer
 
 
 class TronConstants(NamedTuple):
@@ -16,40 +21,54 @@ class TronConstants(NamedTuple):
     player_height: int = 10
     player_width: int = 10
     player_speed: int = 1
+    player_lives: int = 3
 
     # discs
     max_discs: int = 4
     disc_size: int = 4
     disc_speed: int = 2
+    inbound_disc_speed: int = 4
 
 
-class Actors(NamedTuple):
+class Player(NamedTuple):
     x: Array  # (N,) int32: X-Position
     y: Array  # (N,) int32: Y-Position
     vx: Array  # (N,) int32: velocity in x-direction
     vy: Array  # (N,) int32: velocity in y-direction
+    # width and height could also be be stored in TronConstants
+    # it however is easier to just keep them here for collision-checking/rendering
     w: Array  # (N,) int32: Width
     h: Array  # (N,) int32: Height
+    lives: Array  # (N, ) number of lives
 
 
-class Enemies(Actors):
-    alive: Array  # (N,) int32: Boolean mask
+# class Enemies(Actors):
+#    alive: Array  # (N,) int32: Boolean mask
 
 
-class Discs(Actors):
+class Discs(NamedTuple):
+    x: Array  # (N,) int32: X-Position
+    y: Array  # (N,) int32: Y-Position
+    vx: Array  # (N,) int32: velocity in x-direction
+    vy: Array  # (N,) int32: velocity in y-direction
+    # width and height could also be be stored in TronConstants
+    # it however is easier to just keep them here for collision-checking/rendering
+    w: Array  # (N,) int32: Width
+    h: Array  # (N,) int32: Height
     owner: Array  # (D,) int32, 0 = player, 1 = enemy
     phase: Array  # (D,) int32, 0=idle/unused, 1=outbound, 2=returning (player only)
 
 
 class TronState(NamedTuple):
     score: Array
-    player: Actors  # N = 1
+    player: Player  # N = 1
     # enemies: Actors # N = MAX_ENEMIES
     # short cooldown after each wave/color
     wave_end_cooldown_remaining: Array
     aim_dx: Array  # remember last movement direction in X-dir
     aim_dy: Array  # remember last movement direction in Y-dir
-    # discs: Discs
+    discs: Discs
+    fire_down_prev: Array  # shape (), bool
 
 
 class EntityPosition(NamedTuple):
@@ -65,6 +84,162 @@ class TronObservation(NamedTuple):
 
 class TronInfo(NamedTuple):
     pass
+
+
+# Organize all helper functions concerning the disc-movement in this class
+class _DiscOps:
+
+    @staticmethod
+    @jit
+    def check_wall_hit(discs: Discs, max_x: Array, max_y: Array) -> Array:
+        """
+        Boolean mask that checks, if the next (x,y) step would leave the visible area
+        """
+        next_x = discs.x + discs.vx
+        next_y = discs.y + discs.vy
+        return (
+            (next_x <= 0)
+            | (next_x >= max_x)
+            | (next_y <= 0)
+            | (next_y >= max_y)
+        )
+
+    @staticmethod
+    @jit
+    def compute_next_phase(
+        discs: Discs, fire_pressed: Array, next_step_wall: Array
+    ) -> Array:
+        """
+        Decide the next phase from current phase/owner and inputs.
+        0=inactive, 1=outbound, 2=returning (player only)
+        """
+        current_phase = discs.phase
+        is_outbound = current_phase == jnp.int32(1)
+        is_owner_player = discs.owner == jnp.int32(0)
+        is_owner_enemy = discs.owner == jnp.int32(1)
+
+        # return disc back to player, if the player pressed fire again
+        # or would hit a wall next
+        # IMPORANT: Only the playerr can recall the disc. Enemies can only shoot them
+        return_disc = (
+            is_outbound & is_owner_player & (fire_pressed | next_step_wall)
+        )
+        next_phase = jnp.where(
+            return_disc,
+            jnp.int32(2),  # returning
+            current_phase,  # keep the same phase if the disc shouldn't return
+        )
+        # Check if the discs of the enemies will hit a wall next step
+        enemy_despawn_wall = is_outbound & is_owner_enemy & next_step_wall
+        next_phase = jnp.where(
+            enemy_despawn_wall,
+            jnp.int32(0),  # Set to inactive
+            next_phase,  # keep the same phase if the disc shouldn't return
+        )
+
+        # TODO: Handle returning disc. SHould then also be 0. Will i do later
+
+        return next_phase
+
+    @staticmethod
+    @jit
+    def compute_velocity(
+        discs: Discs,
+        next_phase: Array,
+        player_center_x: Array,
+        player_center_y: Array,
+        inbound_speed: Array,
+    ) -> Tuple[Array, Array]:
+        """
+        Calculate per-disc (vx, vy):
+        - Returning player discs (phase==2, owner==player) re-aim towards player-center with magnitude inbound_speed
+        - Outbound (phase==1) or inactive (phase==0)keep their stored (vx, vy), except inactive get a zero-velocity
+        """
+        is_returning_player = (next_phase == jnp.int32(2)) & (
+            discs.owner == jnp.int32(0)
+        )
+        is_inactive = next_phase == jnp.int32(0)
+
+        # Compute the direction from the disc to the player
+        dir_player_x = jnp.sign(player_center_x - discs.x).astype(jnp.int32)
+        dir_player_y = jnp.sign(player_center_y - discs.y).astype(jnp.int32)
+
+        # multiply the direction (-1, 0, 1) by the return-speed
+        vel_return_x = dir_player_x * jnp.int32(inbound_speed)
+        vel_return_y = dir_player_y * jnp.int32(inbound_speed)
+
+        # when the disc is in the inbound phase (2), it gets the return velocity
+        # otherwise it keeps it previous velocity
+        velocity_x = jnp.where(is_returning_player, vel_return_x, discs.vx)
+        velocity_y = jnp.where(is_returning_player, vel_return_y, discs.vy)
+
+        # Ensure inactive discs don't have a velocity
+        velocity_x = jnp.where(is_inactive, jnp.int32(0), velocity_x)
+        velocity_y = jnp.where(is_inactive, jnp.int32(0), velocity_y)
+
+        return velocity_x, velocity_y
+
+    @staticmethod
+    @jit
+    def add_and_clamp(
+        discs: Discs,
+        next_phase: Array,
+        velocity_x: Array,
+        velocity_y: Array,
+        max_x: Array,
+        max_y: Array,
+    ) -> Tuple[Array, Array]:
+        """
+        Apply velocity to update position for active discs and clamp to screen size
+        """
+        is_active = next_phase > jnp.int32(0)
+
+        # only update position if the disc is active
+        x_next = jnp.where(is_active, discs.x + velocity_x, discs.x)
+        y_next = jnp.where(is_active, discs.y + velocity_y, discs.y)
+
+        # clamp position to stay within the screen boundaries
+        x_next = jnp.clip(x_next, 0, max_x)
+        y_next = jnp.clip(y_next, 0, max_y)
+        return x_next, y_next
+
+    @staticmethod
+    @jit
+    def player_pickup_returning_discs(
+        discs: Discs,
+        next_phase: Array,
+        next_x: Array,
+        next_y: Array,
+        player_x0: Array,
+        player_y0: Array,
+        player_w: Array,
+        player_h: Array,
+        vx: Array,
+        vy: Array,
+    ) -> Tuple[Array, Array, Array]:
+        """
+        If a returning player disc overlaps the player after integration:
+        - set phase to 0 (inactive)
+        - zero its velocity
+        """
+        is_returning_player = (discs.owner == jnp.int32(0)) & (
+            next_phase == jnp.int32(2)
+        )
+        overlaps_player = (
+            (next_x < player_x0 + player_w)
+            & ((next_x + discs.w) > player_x0)
+            & (next_y < player_y0 + player_h)
+            & ((next_y + discs.h) > player_y0)
+        )
+        picked_up = is_returning_player & overlaps_player
+
+        final_phase = jnp.where(picked_up, jnp.int32(0), next_phase)
+        final_vx = jnp.where(picked_up, jnp.int32(0), vx)
+        final_vy = jnp.where(picked_up, jnp.int32(0), vy)
+        return final_phase, final_vx, final_vy
+
+
+Actor = TypeVar("Actor", Player, Discs)
 
 
 class UserAction(NamedTuple):
@@ -126,6 +301,7 @@ def parse_action(action: Array) -> UserAction:
         | (action == Action.UPRIGHTFIRE)
         | (action == Action.UPLEFTFIRE)
         | (action == Action.DOWNRIGHTFIRE)
+        | (action == Action.DOWNLEFTFIRE)
     )
 
     # The moved flag is just an OR of the directions
@@ -151,14 +327,40 @@ class TronRenderer(JAXGameRenderer):
         raster = jr.create_initial_frame(
             width=self.consts.screen_width, height=self.consts.screen_height
         )
-        blue_color = jnp.array([0, 0, 255, 255], dtype=jnp.uint8)
-        blue_box_sprite = jnp.broadcast_to(blue_color, (10, 10, 4))
+        # render player
+        player_color = jnp.array([0, 0, 255, 255], dtype=jnp.uint8)
+        player_box_sprite = jnp.broadcast_to(
+            player_color,
+            (self.consts.player_width, self.consts.player_height, 4),
+        )
         player_x, player_y = state.player.x[0], state.player.y[0]
         raster = jr.render_at(
             raster,
             player_x,
             player_y,
-            blue_box_sprite,
+            player_box_sprite,
+        )
+
+        # render discs
+        disc_color = jnp.array([0, 255, 0, 255], dtype=jnp.uint8)
+        disc_size = self.consts.disc_size
+        disc_box_sprite = jnp.broadcast_to(
+            disc_color, (disc_size, disc_size, 4)
+        )
+
+        def render_disc(i, ras):
+            active = state.discs.phase[i] > jnp.int32(0)
+            x_i = state.discs.x[i]
+            y_i = state.discs.y[i]
+            return jax.lax.cond(
+                active,
+                lambda r: jr.render_at(r, x_i, y_i, disc_box_sprite),
+                lambda r: r,
+                ras,
+            )
+
+        raster = jax.lax.fori_loop(
+            0, self.consts.max_discs, render_disc, raster
         )
         return raster
 
@@ -167,24 +369,46 @@ class TronRenderer(JAXGameRenderer):
 # Helper functions
 ####
 @jit
-def set_velocity(actors: Actors, vx: Array, vy: Array) -> Actors:
+def set_velocity(actors: Actor, vx: Array, vy: Array) -> Actor:
     """Returns a new Actors instanc ce with updated velocity"""
     return actors._replace(vx=vx, vy=vy)
 
 
 @jit
-def move(actors: Actors) -> Actors:
+def move(actors: Actor) -> Actor:
     """Returns a new Actors instance with positions updated by velocity"""
     return actors._replace(x=actors.x + actors.vx, y=actors.y + actors.vy)
 
 
 @jit
-def clamp_position(actors: Actors, max_x: int, max_y: int) -> Actors:
+def clamp_position(actors: Actor, max_x: int, max_y: int) -> Actor:
     """Clamps positions according to the given max_x and max_y"""
     # TODO: Change later to inner boundary
     new_x = jnp.clip(actors.x, 0, max_x - actors.w)
     new_y = jnp.clip(actors.y, 0, max_y - actors.h)
     return actors._replace(x=new_x, y=new_y)
+
+
+@jit
+def rect_center(x, y, w, h) -> Tuple[Array, Array]:
+    """Calculates the center of a rectangle"""
+    return x + jnp.floor_divide(w, 2), y + jnp.floor_divide(h, 2)
+
+
+@jit
+def get_user_disc_center(state: Actor) -> Tuple[Array, Array]:
+    """
+    Per-disc top-left (px, py) that would place each disc centered inside the player
+    Returns:
+        px, py: Arrays of shape (D,), D == number of disc slots.
+        For slot i, setting discs.x[i]=px[i] and discs.y[i]=py[i]
+        places that disc visually centered within the player's rectangle
+    """
+    p: Player = state.player
+    d: Discs = state.discs
+    px = p.x[0] + jnp.floor_divide(p.w[0] - d.w, 2)
+    py = p.y[0] + jnp.floor_divide(p.h[0] - d.h, 2)
+    return px.astype(jnp.int32), py.astype(jnp.int32)
 
 
 class JaxTron(
@@ -220,28 +444,47 @@ class JaxTron(
     def reset(
         self, key: random.PRNGKey = None
     ) -> Tuple[TronObservation, TronState]:
-        def _get_centered_player_pos(consts: TronConstants) -> Actors:
+        def _get_centered_player(consts: TronConstants) -> Player:
             screen_w, screen_h = consts.screen_width, consts.screen_height
             player_w, player_h = consts.player_width, consts.player_height
             x0 = (screen_w - player_w) // 2
             y0 = (screen_h - player_h) // 2
-            return Actors(
+            return Player(
                 x=jnp.array([x0], dtype=jnp.int32),
                 y=jnp.array([y0], dtype=jnp.int32),
                 vx=jnp.zeros(1, dtype=jnp.int32),
                 vy=jnp.zeros(1, dtype=jnp.int32),
                 w=jnp.full((1,), player_w, dtype=jnp.int32),
                 h=jnp.full((1,), player_h, dtype=jnp.int32),
+                lives=jnp.array([consts.player_lives], dtype=jnp.int32),
             )
 
-        debug.print("{X}", X=_get_centered_player_pos(self.consts).y)
+        def _get_empty_discs(consts: TronConstants) -> Discs:
+            D = consts.max_discs
+            w = jnp.full((D,), consts.disc_size, dtype=jnp.int32)
+            h = jnp.full((D,), consts.disc_size, dtype=jnp.int32)
+
+            zeros = jnp.zeros((D,), dtype=jnp.int32)
+
+            return Discs(
+                x=zeros,
+                y=zeros,
+                vx=zeros,
+                vy=zeros,
+                w=w,
+                h=h,
+                owner=zeros,
+                phase=zeros,
+            )
 
         new_state: TronState = TronState(
             score=jnp.zeros((), dtype=jnp.int32),
-            player=_get_centered_player_pos(self.consts),
+            player=_get_centered_player(self.consts),
             wave_end_cooldown_remaining=jnp.zeros((), dtype=jnp.int32),
             aim_dx=jnp.zeros((), dtype=jnp.int32),
             aim_dy=jnp.zeros((), dtype=jnp.int32),
+            discs=_get_empty_discs(self.consts),
+            fire_down_prev=jnp.array(False),
         )
         obs = self._get_observation(new_state)
         return obs, new_state
@@ -252,26 +495,20 @@ class JaxTron(
         return state.wave_end_cooldown_remaining != 0
 
     @partial(jit, static_argnums=(0,))
-    def _player_step(self, state: TronState, action: Array) -> TronState:
+    def _player_step(self, state: TronState, action: UserAction) -> TronState:
         player = state.player
         speed = self.consts.player_speed
-
-        # parse the raw action to a structured object with boolean flags
-        # e.g. down=True, right=True
-        parsed_action = parse_action(action)
 
         # Calculate horizontal velocity
         # the boolean subtraction (right - left) results in +1, -1 or 0
         dx = speed * (
-            parsed_action.right.astype(jnp.int32)
-            - parsed_action.left.astype(jnp.int32)
+            action.right.astype(jnp.int32) - action.left.astype(jnp.int32)
         )
 
         # Calculate vertical velocity
         # the boolean subtraction (down - up) results in +1, -1 or 0
         dy = speed * (
-            parsed_action.down.astype(jnp.int32)
-            - parsed_action.up.astype(jnp.int32)
+            action.down.astype(jnp.int32) - action.up.astype(jnp.int32)
         )
 
         # Set the new velocity on the player actor
@@ -284,38 +521,155 @@ class JaxTron(
         )
 
         # only update the aiming direction, if movement key was pressed
-        aim_dx = jnp.where(parsed_action.moved, dx, state.aim_dx)
-        aim_dy = jnp.where(parsed_action.moved, dy, state.aim_dy)
+        aim_dx = jnp.where(action.moved, dx, state.aim_dx)
+        aim_dy = jnp.where(action.moved, dy, state.aim_dy)
 
         return state._replace(player=player, aim_dx=aim_dx, aim_dy=aim_dy)
 
     @partial(jit, static_argnums=(0,))
-    def _check_action_fire(self, action: Array) -> Array:
-        return (
-            (action == Action.FIRE)
-            | (action == Action.UPFIRE)
-            | (action == Action.RIGHTFIRE)
-            | (action == Action.LEFTFIRE)
-            | (action == Action.DOWNFIRE)
-            | (action == Action.UPRIGHTFIRE)
-            | (action == Action.UPLEFTFIRE)
-            | (action == Action.DOWNRIGHTFIRE)
-            | (action == Action.DOWNLEFTFIRE)
+    def _spawn_disc(self, state: TronState, fire: Array) -> TronState:
+        discs: Discs = state.discs
+
+        # Check if the player already has any active discs
+        # he has to be the owner and active means phase != 0
+        has_player_disc: Array = jnp.any(
+            (discs.owner == jnp.int32(0)) & (discs.phase > jnp.int32(0))
         )
 
-    @partial(jit, static_argnums=(0,))
-    def _spawn_disc(self, state: TronState, action: Array) -> TronState:
-        # check if the user pressed fire
-        pressed_fire = self._check_action_fire(action)
+        # any free slots to place a new disc?
+        free_mask: Array = discs.phase == jnp.int32(0)
+        any_free: Array = jnp.any(free_mask)
 
-        return state
-        # check if the user
+        # can spawn, if in the previous frame fire wasn't pressed, the player hasn't any active discs
+        # and the discs array still has empty slots
+        can_spawn: Array = fire & jnp.logical_not(has_player_disc) & any_free
+
+        def do_spawn(s: TronState) -> TronState:
+            # get the index of a free slot
+            free_indices: Array = jnp.nonzero(s.discs.phase == 0, size=1)[0][0]
+            # TODO: Should never happen, but what if there is no free slot? Then this will fail
+
+            # Center the discs in the player-box
+            px_all, py_all = get_user_disc_center(s)
+            px, py = px_all[free_indices], py_all[free_indices]
+
+            disc_speed: jnp.int32 = jnp.int32(self.consts.disc_speed)
+            # Get the last direction (aim_d) in which the player walked
+            # jnp.sign returns the values -1, 0, 1. Makes it independent of the player_speed
+            disc_vel_x: jnp.int32 = (
+                jnp.sign(s.aim_dx).astype(jnp.int32) * disc_speed
+            )
+            disc_vel_y: jnp.int32 = (
+                jnp.sign(s.aim_dy).astype(jnp.int32) * disc_speed
+            )
+
+            # writes in the free slot
+            new_discs: Discs = s.discs._replace(
+                x=s.discs.x.at[free_indices].set(px),
+                y=s.discs.y.at[free_indices].set(py),
+                vx=s.discs.vx.at[free_indices].set(disc_vel_x),
+                vy=s.discs.vy.at[free_indices].set(disc_vel_y),
+                owner=s.discs.owner.at[free_indices].set(
+                    jnp.int32(0)
+                ),  # 0 = player # TODO: Change later when also enemies can spawn discs
+                phase=s.discs.phase.at[free_indices].set(
+                    jnp.int32(1)
+                ),  # 1 = outbound
+            )
+            return s._replace(discs=new_discs)
+
+        def no_spawn(s: TronState) -> TronState:
+            return s
+
+        return jax.lax.cond(can_spawn, do_spawn, no_spawn, state)
+
+    @partial(jit, static_argnums=(0,))
+    def _move_discs(self, state: TronState, fire_pressed: Array) -> TronState:
+        discs = state.discs
+
+        # Calculate the max value for both x and y
+        # Subtract the discs width/height from the width/height
+        # the discs should remain fully in the visible area
+        max_x = jnp.int32(self.consts.screen_width) - discs.w
+        max_y = jnp.int32(self.consts.screen_height) - discs.h
+
+        will_hit_wall_next = _DiscOps.check_wall_hit(discs, max_x, max_y)
+        next_phase = _DiscOps.compute_next_phase(
+            discs, fire_pressed, will_hit_wall_next
+        )
+
+        # # Compute the player center for x and y coordinates
+        player_center_x, player_center_y = rect_center(
+            state.player.x[0],
+            state.player.y[0],
+            state.player.w[0],
+            state.player.h[0],
+        )
+
+        # compute the velocity depending on the phase
+        velocity_x, velocity_y = _DiscOps.compute_velocity(
+            discs,
+            next_phase,
+            player_center_x,
+            player_center_y,
+            self.consts.inbound_disc_speed,
+        )
+
+        # add the velocity to the position and clamp to the screen size
+        x_next, y_next = _DiscOps.add_and_clamp(
+            discs, next_phase, velocity_x, velocity_y, max_x, max_y
+        )
+
+        # despawn returning player discs on pickup (after integration)
+        final_phase, final_velocity_x, final_velocity_y = (
+            _DiscOps.player_pickup_returning_discs(
+                discs,
+                next_phase,
+                x_next,
+                y_next,
+                state.player.x[0],
+                state.player.y[0],
+                state.player.w[0],
+                state.player.h[0],
+                velocity_x,
+                velocity_y,
+            )
+        )
+
+        # Ensure any disc that is now inactive has zero velocity
+        final_velocity_x = jnp.where(
+            final_phase == jnp.int32(0), jnp.int32(0), final_velocity_x
+        )
+        final_velocity_y = jnp.where(
+            final_phase == jnp.int32(0), jnp.int32(0), final_velocity_y
+        )
+        new_discs = discs._replace(
+            x=x_next,
+            y=y_next,
+            vx=final_velocity_x,
+            vy=final_velocity_y,
+            phase=final_phase,
+        )
+
+        return state._replace(discs=new_discs)
 
     @partial(jit, static_argnums=(0,))
     def step(
         self, state: TronState, action: Array
     ) -> Tuple[TronObservation, TronState, float, bool, TronInfo]:
         previous_state = state
+        user_action: UserAction = parse_action(action)
+        # pressed_fire should only be true, if in the previous frame it wasn't pressed
+
+        # track whether fire was already pressed in the frame before
+        # pressed_fire is checked 60 times per second (60 fps)
+        # if not tracking the previous action, pressing space (fire)
+        # for one second would spawn 60 discs
+        # pressed_fire should only be true, if in the previous frame it wasn't pressed
+        # and we have a change in state
+        pressed_fire_changed: Array = user_action.fire & jnp.logical_not(
+            state.fire_down_prev
+        )
 
         def _pause_step(s: TronState) -> TronState:
             # TODO: Activate later
@@ -325,18 +679,40 @@ class JaxTron(
             #    )
             # )
             # s = self.move_discs(s)
-            s: TronState = self._player_step(s, action)
-            s: TronState = self._spawn_disc(s, action)
+
+            # Was there a player-owned active disc BEFORE changing s?
+            # we cannot pass the same pressed_fire_change to both spawn and move disc
+            # because it would immediately recall the just spawned disc
+            had_player_disc_before = jnp.any(
+                (s.discs.owner == jnp.int32(0)) & (s.discs.phase > jnp.int32(0))
+            )
+            # move the player
+            s: TronState = self._player_step(s, user_action)
+            s: TronState = self._spawn_disc(s, pressed_fire_changed)
+
+            # Only recall if a player-owned disc existed before this step
+            recall_edge = pressed_fire_changed & had_player_disc_before
+            s: TronState = self._move_discs(s, recall_edge)
             return s
 
         def _wave_step(s: TronState) -> TronState:
-            s: TronState = self._player_step(s, action)
-            s: TronState = self._spawn_disc(s, action)
+            # Was there a player-owned active disc BEFORE changing s?
+            # we cannot pass the same pressed_fire_change to both spawn and move disc
+            # because it would immediately recall the just spawned disc
+            had_player_disc_before = jnp.any(
+                (s.discs.owner == jnp.int32(0)) & (s.discs.phase > jnp.int32(0))
+            )
+            s: TronState = self._player_step(s, user_action)
+            s: TronState = self._spawn_disc(s, pressed_fire_changed)
+            # Only recall if a player-owned disc existed before this step
+            recall_edge = pressed_fire_changed & had_player_disc_before
+            s: TronState = self._move_discs(s, recall_edge)
             return s
 
         state = jax.lax.cond(
             self._cooldown_finished(state), _wave_step, _pause_step, state
         )
+        state = state._replace(fire_down_prev=user_action.fire)
 
         obs: TronObservation = self._get_observation(state)
         env_reward: float = self._get_reward(state, state)
