@@ -2,7 +2,6 @@ import os
 from functools import partial
 from typing import NamedTuple, Tuple, List, Dict
 
-import aj
 import jax
 import jax.numpy as jnp
 import chex
@@ -196,6 +195,13 @@ class FishingDerby(JaxEnvironment):
             _, new_state = self.reset(state.key)
             return new_state
 
+        def safe_set_at(arr, idx, value, pred):
+            # Only update arr[idx] if pred is True; otherwise return arr unchanged.
+            def do_set(a):
+                return a.at[idx].set(value)
+
+            return jax.lax.cond(pred, do_set, lambda a: a, arr)
+
         def game_branch(_):
             # Fish movement
             new_fish_x = state.fish_positions[:, 0] + state.fish_directions * cfg.FISH_SPEED
@@ -218,18 +224,40 @@ class FishingDerby(JaxEnvironment):
 
 
             # Player 1 Hook Logic
+            # --- Player 1 Hook Logic (fixed physics) ---
             p1 = state.p1
-            dx = jnp.where(p1_action == Action.RIGHT, +GameConfig.Acceleration,
-                           jnp.where(p1_action == Action.LEFT, -GameConfig.Acceleration, 0.0))
+            min_x = cfg.SCREEN_WIDTH / 4
+            max_x = cfg.SCREEN_WIDTH / 2 - cfg.HOOK_WIDTH
+            min_y = cfg.LINE_Y_START - 8.0
+            max_y = cfg.LINE_Y_END
 
-            p1_hook_x = jnp.clip(p1.hook_x + dx, cfg.SCREEN_WIDTH / 4, cfg.SCREEN_WIDTH / 2 - cfg.HOOK_WIDTH)
-            new_velocity_x = p1.hook_x * GameConfig.Damping + dx
-            new_velocity_y = p1.hook_y * GameConfig.Damping
-            dy = jnp.where(p1_action == Action.DOWN, cfg.HOOK_SPEED_V,
-                           jnp.where(p1_action == Action.UP, -cfg.HOOK_SPEED_V, 0.0))
-            p1_hook_y = jnp.where(p1.hook_state == 0,
-                                  jnp.clip(p1.hook_y + dy, cfg.LINE_Y_START - 8.0, cfg.LINE_Y_END),
-                                  p1.hook_y)
+            # Inputs -> accelerations
+            ax = jnp.where(p1_action == Action.RIGHT, +cfg.Acceleration,
+                           jnp.where(p1_action == Action.LEFT, -cfg.Acceleration, 0.0))
+
+            # When not hooked, vertical is free; when hooked, vertical is governed by reel speed (ay=0, vy set by reel)
+            ay_free = jnp.where(p1_action == Action.DOWN, +cfg.Acceleration,
+                                jnp.where(p1_action == Action.UP, -cfg.Acceleration, 0.0))
+
+            # Integrate velocity with damping
+            vx = p1.hook_velocity_x * cfg.Damping + ax
+
+            # If free (state 0), integrate vy; if hooked (1/2), vy is controlled below
+            vy_free = p1.hook_velocity_y * cfg.Damping + ay_free
+
+            # Tentative position update (free)
+            x_free = jnp.clip(p1.hook_x + vx, min_x, max_x)
+            y_free = jnp.clip(p1.hook_y + vy_free, min_y, max_y)
+
+            # If we hit bounds, kill velocity in that axis (prevents jitter on edges)
+            vx = jnp.where((x_free == min_x) | (x_free == max_x), 0.0, vx)
+            vy_free = jnp.where((y_free == min_y) | (y_free == max_y), 0.0, vy_free)
+
+            # Start from free-move as default
+            p1_hook_x = x_free
+            p1_hook_y = jnp.where(p1.hook_state == 0, y_free, p1.hook_y)
+            new_velocity_x = vx
+            new_velocity_y = jnp.where(p1.hook_state == 0, vy_free, p1.hook_velocity_y)
 
             # Collision and Game Logic
             fish_active, reeling_priority = state.fish_active, state.reeling_priority
@@ -253,12 +281,15 @@ class FishingDerby(JaxEnvironment):
             reeling_priority = jnp.where(can_reel_fast, 0, reeling_priority)
 
             reel_speed = jnp.where(p1_hook_state == 2, cfg.REEL_FAST_SPEED, cfg.REEL_SLOW_SPEED)
-            p1_hook_y = jnp.where(p1_hook_state > 0, p1_hook_y - reel_speed, p1_hook_y)
+            p1_hook_y = jnp.where(p1_hook_state > 0,
+                                  jnp.clip(p1_hook_y - reel_speed, min_y, max_y),
+                                  p1_hook_y)
+            new_velocity_y = jnp.where(p1_hook_state > 0, 0.0, new_velocity_y)
 
+            # Hooked fish follows the hook (only if we truly have one)
             hooked_fish_pos = jnp.array([p1_hook_x, p1_hook_y])
-            new_fish_pos = new_fish_pos.at[p1_hooked_fish_idx].set(
-                jnp.where(p1_hook_state > 0, hooked_fish_pos, new_fish_pos[p1_hooked_fish_idx])
-            )
+            has_hook = (p1_hook_state > 0) & (p1_hooked_fish_idx >= 0)
+            new_fish_pos = safe_set_at(new_fish_pos, p1_hooked_fish_idx, hooked_fish_pos, has_hook)
 
             p1_score, key = p1.score, state.key
             shark_collides = (p1_hook_state > 0) & (jnp.abs(p1_hook_x - new_shark_x) < cfg.SHARK_WIDTH) & (
@@ -266,19 +297,35 @@ class FishingDerby(JaxEnvironment):
             scored_fish = (p1_hook_state > 0) & (p1_hook_y <= cfg.LINE_Y_START)
             reset_hook = shark_collides | scored_fish
 
+            prev_idx = p1_hooked_fish_idx  # cache before we overwrite it anywhere
+
             fish_scores = jnp.array(cfg.FISH_ROW_SCORES)
             p1_score += jnp.where(scored_fish, fish_scores[p1_hooked_fish_idx], 0)
 
-            def respawn_fish_fn(all_fish_pos, idx_to_respawn, respawn_key):
-                new_x = jax.random.uniform(respawn_key, minval=10.0, maxval=cfg.SCREEN_WIDTH - 20.0)
-                return all_fish_pos.at[idx_to_respawn, 0].set(new_x)
+            # --- Fish respawn (Atari-style) ---
+            def respawn_fish(all_pos, all_dirs, all_active, idx, key):
+                kx, kdir = jax.random.split(key)
+                new_x = jax.random.uniform(kx, minval=10.0, maxval=cfg.SCREEN_WIDTH - cfg.FISH_WIDTH)
+                new_y = jnp.array(cfg.FISH_ROW_YS, dtype=jnp.float32)[idx]
+                new_pos = all_pos.at[idx].set(jnp.array([new_x, new_y]))
+                new_dir = all_dirs.at[idx].set(jax.random.choice(kdir, jnp.array([-1.0, 1.0])))
+                new_act = all_active.at[idx].set(True)
+                return new_pos, new_dir, new_act
 
             key, respawn_key = jax.random.split(key)
-            new_fish_pos = jax.lax.cond(
-                reset_hook,
-                lambda: respawn_fish_fn(new_fish_pos, p1_hooked_fish_idx, respawn_key),
-                lambda: new_fish_pos
+
+            # Only respawn if a fish was actually hooked AND the hook just reset
+            do_respawn = reset_hook & (prev_idx >= 0)
+
+            new_fish_pos, new_fish_dirs, fish_active = jax.lax.cond(
+                do_respawn,
+                lambda _: respawn_fish(new_fish_pos, new_fish_dirs, fish_active, prev_idx, respawn_key),
+                lambda _: (new_fish_pos, new_fish_dirs, fish_active),
+                operand=None
             )
+
+            # Clear reeling priority after a completed reel by P1
+            reeling_priority = jnp.where(do_respawn & (reeling_priority == 0), -1, reeling_priority)
 
             fish_active = jnp.where(
                 reset_hook,
@@ -290,13 +337,26 @@ class FishingDerby(JaxEnvironment):
                 -1,
                 reeling_priority
             )
+            # Reset hook & velocities after scoring/shark (post-respawn)
             p1_hook_state = jnp.where(reset_hook, 0, p1_hook_state)
             p1_hooked_fish_idx = jnp.where(reset_hook, -1, p1_hooked_fish_idx)
+            p1_hook_x = jnp.where(reset_hook, jnp.array(cfg.P1_START_X + 20.0), p1_hook_x)
+            p1_hook_y = jnp.where(reset_hook, jnp.array(float(cfg.LINE_Y_START - 8.0)), p1_hook_y)
+            new_velocity_x = jnp.where(reset_hook, 0.0, new_velocity_x)
+            new_velocity_y = jnp.where(reset_hook, 0.0, new_velocity_y)
 
             game_over = (p1_score >= 99) | (state.p2.score >= 99)
 
             return GameState(
-                p1=PlayerState(p1_hook_x, p1_hook_y, p1_score, p1_hook_state, p1_hooked_fish_idx, hook_velocity_x = new_velocity_x, hook_velocity_y = new_velocity_y),
+                p1=PlayerState(
+                    hook_x=p1_hook_x,
+                    hook_y=p1_hook_y,
+                    score=p1_score,
+                    hook_state=p1_hook_state,
+                    hooked_fish_idx=p1_hooked_fish_idx,
+                    hook_velocity_x=new_velocity_x,
+                    hook_velocity_y=new_velocity_y
+                ),
                 p2=state.p2,
                 fish_positions=new_fish_pos,
                 fish_directions=new_fish_dirs,
@@ -480,11 +540,6 @@ class FishingDerbyRenderer(AtraJaxisRenderer):
         _, _, raster, _ = jax.lax.while_loop(loop_cond, loop_body, (x0, y0, raster, err))
         return raster
 
-        def loop_cond(carry):
-            return ~((carry[0] == x1) & (carry[1] == y1))
-
-        _, _, raster, _ = jax.lax.while_loop(loop_cond, loop_body, (x0, y0, raster, err))
-        return raster
 
 def get_human_action() -> chex.Array:
     keys = pygame.key.get_pressed()
