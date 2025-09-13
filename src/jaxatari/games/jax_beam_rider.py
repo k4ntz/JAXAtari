@@ -20,6 +20,7 @@ Top Priorities:
 - adjust code so that it passes the tests
 - adjust code so that everything is adjusted to the new dotted beams
 - white saucers from horizon are shooting way to early
+- adjust scaling
 For later:
 - Check the sentinal ship constants/Optimize the code/remove unnecessary code
 - Documentation"""
@@ -3400,8 +3401,8 @@ class BeamRiderEnv(JaxEnvironment[BeamRiderState, BeamRiderObservation, BeamRide
         # Spawn sentinel if needed (and despawn any lingering white saucers)
         state = jax.lax.cond(
             should_spawn_sentinel,
-            lambda s: self._despawn_white_saucers(
-                self._spawn_sentinel(s)
+            lambda s: self._spawn_sentinel(
+                self._despawn_white_saucers(s)
             ).replace(sentinel_spawned_this_sector=True),
             lambda s: s,
             state
@@ -4136,40 +4137,135 @@ class BeamRiderRenderer(JAXGameRenderer):
 
     @partial(jax.jit, static_argnums=(0,))
     def _draw_enemies(self, screen: chex.Array, enemies: chex.Array) -> chex.Array:
-        """Draw all active enemies with proper scaling"""
+        """Draw all active enemies with perspective scaling (except sentinels)"""
 
-        def draw_single_enemy(i, current_screen):
-            x, y = enemies[i, 0].astype(int), enemies[i, 1].astype(int)
+        def draw_single_enemy(i, screen):
+            x, y = enemies[i, 0], enemies[i, 1]  # Keep as float for scaling calculations
             active = enemies[i, 3] == 1
             enemy_type = enemies[i, 5].astype(int)
 
-            # Calculate scale based on Y position
-            scale = self._get_enemy_scale(y)
+            # Calculate perspective scale based on Y position
+            height = self.constants.SCREEN_HEIGHT
+            top_margin = int(height * 0.12)
+            bottom_margin = int(height * 0.14)
+            y0 = height - bottom_margin  # Near position (player)
+            y1 = -height * 0.7  # Far position (horizon)
 
-            # Choose sprite and color based on enemy type
-            def draw_white_saucer():
-                white_color = jnp.array([255, 255, 255], dtype=jnp.uint8)  # White
-                return self._draw_scaled_enemy_sprite(current_screen, x, y, self.white_saucer_sprite, scale,
-                                                      white_color)
+            # Calculate t parameter (0 at bottom, 1 at horizon)
+            t = jnp.clip((y - y0) / (y1 - y0), 0.0, 1.0)
 
-            def draw_other_enemy():
-                # For other enemy types, you can add different sprites/colors
-                enemy_color = jnp.array([255, 0, 0], dtype=jnp.uint8)  # Red for other enemies
-                return self._draw_scaled_enemy_sprite(current_screen, x, y, self.white_saucer_sprite, scale,
-                                                      enemy_color)
+            # Scale factor: 1.5 at bottom, 0.5 at horizon - larger enemies
+            scale_factor = 1.5 - (t * 1.0)  # Goes from 1.5 to 0.5
 
-            # Only draw if active
-            current_screen = jax.lax.cond(
-                active,
-                lambda: jax.lax.cond(
-                    enemy_type == self.constants.ENEMY_TYPE_WHITE_SAUCER,
-                    draw_white_saucer,
-                    draw_other_enemy
-                ),
-                lambda: current_screen
+            # Get base enemy dimensions
+            base_width = jnp.where(
+                enemy_type == self.constants.ENEMY_TYPE_SENTINEL_SHIP,
+                self.constants.SENTINEL_SHIP_WIDTH,
+                self.constants.ENEMY_WIDTH
+            )
+            base_height = jnp.where(
+                enemy_type == self.constants.ENEMY_TYPE_SENTINEL_SHIP,
+                self.constants.SENTINEL_SHIP_HEIGHT,
+                self.constants.ENEMY_HEIGHT
             )
 
-            return current_screen
+            # Apply perspective scaling (except for sentinel ships)
+            sentinel_ship = enemy_type == self.constants.ENEMY_TYPE_SENTINEL_SHIP
+            scaled_width = jnp.where(
+                sentinel_ship,
+                base_width.astype(int),  # Keep original size for sentinels
+                (base_width * scale_factor).astype(int)  # Scale others
+            )
+            scaled_height = jnp.where(
+                sentinel_ship,
+                base_height.astype(int),  # Keep original size for sentinels
+                (base_height * scale_factor).astype(int)  # Scale others
+            )
+
+            # Ensure minimum size of 2x2 pixels
+            scaled_width = jnp.maximum(scaled_width, 2)
+            scaled_height = jnp.maximum(scaled_height, 2)
+
+            # Center the scaled enemy at its position
+            x_offset = ((base_width - scaled_width) / 2).astype(int)
+            y_offset = ((base_height - scaled_height) / 2).astype(int)
+
+            draw_x = (x + x_offset).astype(int)
+            draw_y = (y + y_offset).astype(int)
+
+            # Create coordinate grids
+            y_indices = jnp.arange(self.constants.SCREEN_HEIGHT)
+            x_indices = jnp.arange(self.constants.SCREEN_WIDTH)
+            y_grid, x_grid = jnp.meshgrid(y_indices, x_indices, indexing='ij')
+
+            # FIXED: Allow partially visible enemies (remove the strict bounds check)
+            # Check if enemy is at least partially visible
+            partially_visible = (
+                    (draw_x < self.constants.SCREEN_WIDTH) &  # Left edge is before right screen edge
+                    (draw_x + scaled_width > 0) &  # Right edge is after left screen edge
+                    (draw_y < self.constants.SCREEN_HEIGHT) &  # Top edge is before bottom screen edge
+                    (draw_y + scaled_height > 0)  # Bottom edge is after top screen edge
+            )
+
+            # Create mask for enemy pixels (only draw pixels that are on screen)
+            enemy_mask = (
+                    (x_grid >= draw_x) &
+                    (x_grid < draw_x + scaled_width) &
+                    (y_grid >= draw_y) &
+                    (y_grid < draw_y + scaled_height) &
+                    (x_grid >= 0) & (x_grid < self.constants.SCREEN_WIDTH) &  # Pixel must be on screen
+                    (y_grid >= 0) & (y_grid < self.constants.SCREEN_HEIGHT) &  # Pixel must be on screen
+                    active &
+                    partially_visible  # Enemy must be at least partially visible
+            )
+
+            # Select enemy color based on type (same as before)
+            enemy_color = jnp.where(
+                enemy_type == self.constants.ENEMY_TYPE_BROWN_DEBRIS,
+                jnp.array(self.constants.BROWN_DEBRIS_COLOR, dtype=jnp.uint8),
+                jnp.where(
+                    enemy_type == self.constants.ENEMY_TYPE_YELLOW_CHIRPER,
+                    jnp.array(self.constants.YELLOW_CHIRPER_COLOR, dtype=jnp.uint8),
+                    jnp.where(
+                        enemy_type == self.constants.ENEMY_TYPE_GREEN_BLOCKER,
+                        jnp.array(self.constants.GREEN_BLOCKER_COLOR, dtype=jnp.uint8),
+                        jnp.where(
+                            enemy_type == self.constants.ENEMY_TYPE_GREEN_BOUNCE,
+                            jnp.array(self.constants.GREEN_BOUNCE_COLOR, dtype=jnp.uint8),
+                            jnp.where(
+                                enemy_type == self.constants.ENEMY_TYPE_BLUE_CHARGER,
+                                jnp.array(self.constants.BLUE_CHARGER_COLOR, dtype=jnp.uint8),
+                                jnp.where(
+                                    enemy_type == self.constants.ENEMY_TYPE_ORANGE_TRACKER,
+                                    jnp.array(self.constants.ORANGE_TRACKER_COLOR, dtype=jnp.uint8),
+                                    jnp.where(
+                                        enemy_type == self.constants.ENEMY_TYPE_YELLOW_REJUVENATOR,
+                                        jnp.array(self.constants.YELLOW_REJUVENATOR_COLOR, dtype=jnp.uint8),
+                                        jnp.where(
+                                            enemy_type == self.constants.ENEMY_TYPE_REJUVENATOR_DEBRIS,
+                                            jnp.array(self.constants.REJUVENATOR_DEBRIS_COLOR, dtype=jnp.uint8),
+                                            jnp.where(
+                                                enemy_type == self.constants.ENEMY_TYPE_SENTINEL_SHIP,
+                                                jnp.array(self.constants.RED, dtype=jnp.uint8),
+                                                jnp.array(self.constants.WHITE, dtype=jnp.uint8)
+                                            )
+                                        )
+                                    )
+                                )
+                            )
+                        )
+                    )
+                )
+            )
+
+            # Apply enemy color where mask is True
+            screen = jnp.where(
+                enemy_mask[..., None],
+                enemy_color,
+                screen
+            ).astype(jnp.uint8)
+
+            return screen
 
         # Apply to all enemies
         screen = jax.lax.fori_loop(0, self.constants.MAX_ENEMIES, draw_single_enemy, screen)
