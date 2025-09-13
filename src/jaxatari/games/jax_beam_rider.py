@@ -20,7 +20,7 @@ Top Priorities:
 - adjust code so that it passes the tests
 - adjust code so that everything is adjusted to the new dotted beams
 - white saucers from horizon are shooting way to early
-- adjust scaling
+- adjust scaling --> done
 For later:
 - Check the sentinal ship constants/Optimize the code/remove unnecessary code
 - Documentation"""
@@ -155,8 +155,8 @@ class BeamRiderConstants(NamedTuple):
     ORANGE_TRACKER_SPEED = 0.9  # Slower base tracking speed
     ORANGE_TRACKER_POINTS = 50  # Points when destroyed with torpedo
     ORANGE_TRACKER_COLOR = (255, 165, 0)  # Orange color RGB
-    ORANGE_TRACKER_SPAWN_SECTOR = 12  # Starts appearing from sector 12
-    ORANGE_TRACKER_SPAWN_CHANCE = 0.08  # 8% chance to spawn orange tracker
+    ORANGE_TRACKER_SPAWN_SECTOR = 1  # Starts appearing from sector 12
+    ORANGE_TRACKER_SPAWN_CHANCE = 0.5  # 8% chance to spawn orange tracker
     ORANGE_TRACKER_CHANGE_DIRECTION_INTERVAL = 90  # Frames between direction changes
 
     # Tracker course change limits based on sector
@@ -4047,22 +4047,48 @@ class BeamRiderRenderer(JAXGameRenderer):
 
     @partial(jax.jit, static_argnums=(0,))
     def _get_enemy_scale(self, enemy_y: float) -> float:
-        """Calculate enemy scale based on Y position (depth/distance)"""
-        # At horizon (top), scale = 0.1 (tiny dot)
-        # At bottom, scale = 3.0 (maximum size like in screenshot)
-        horizon_y = self.constants.TOP_MARGIN
-        bottom_y = self.constants.SCREEN_HEIGHT - 50
+        """Calculate enemy scale based on Y position with grid-based boundaries"""
+        # Calculate grid-based scaling positions
+        height = self.constants.SCREEN_HEIGHT
+        top_margin = int(height * 0.12)
+        bottom_margin = int(height * 0.14)
+        grid_height = height - top_margin - bottom_margin
 
-        # Normalize Y position to 0-1 range
-        y_normalized = jnp.clip((enemy_y - horizon_y) / (bottom_y - horizon_y), 0.0, 1.0)
+        # Calculate row positions (7 horizontal lines total)
+        num_grid_rows = 7
+        row_spacing = grid_height / (num_grid_rows + 1)
 
-        # Scale from 0.1 (tiny dot) to 3.0 (full size)
-        min_scale = 0.1
-        max_scale = 3.0
-        scale = min_scale + (max_scale - min_scale) * y_normalized
+        # Define scaling boundaries based on grid rows
+        horizon_y = top_margin  # Top of screen
+        third_row_y = top_margin + (3 * row_spacing)  # 3rd row from top
+        stop_scaling_y = height - bottom_margin - (3 * row_spacing)  # 3rd row from bottom
 
-        return scale
+        # Scale parameters
+        min_scale = 0.1  # Tiny dots at horizon
+        mid_scale = 0.5  # Half size at 3rd row
+        max_scale = 1.0  # Full size at 3rd last row
 
+        # Three-phase scaling
+        scale_factor = jnp.where(
+            enemy_y <= horizon_y,
+            min_scale,  # Stay tiny at horizon
+            jnp.where(
+                enemy_y <= third_row_y,
+                # Phase 1: Scale from 0.1 to 0.5 (horizon to 3rd row)
+                min_scale + (mid_scale - min_scale) * jnp.clip((enemy_y - horizon_y) / (third_row_y - horizon_y), 0.0,
+                                                               1.0),
+                jnp.where(
+                    enemy_y <= stop_scaling_y,
+                    # Phase 2: Scale from 0.5 to 1.5 (3rd row to 3rd last row)
+                    mid_scale + (max_scale - mid_scale) * jnp.clip(
+                        (enemy_y - third_row_y) / (stop_scaling_y - third_row_y), 0.0, 1.0),
+                    # Phase 3: Stop growing (stay at 1.5)
+                    max_scale
+                )
+            )
+        )
+
+        return scale_factor
     @partial(jax.jit, static_argnums=(0,))
     def _draw_scaled_enemy_sprite(self, screen: chex.Array, x: int, y: int, sprite: chex.Array,
                                   scale: float, color: chex.Array) -> chex.Array:
@@ -4137,54 +4163,49 @@ class BeamRiderRenderer(JAXGameRenderer):
 
     @partial(jax.jit, static_argnums=(0,))
     def _draw_enemies(self, screen: chex.Array, enemies: chex.Array) -> chex.Array:
-        """Draw all active enemies with perspective scaling (except sentinels)"""
+        """Draw all active enemies with perspective scaling (except sentinels and side-spawners)"""
 
         def draw_single_enemy(i, screen):
             x, y = enemies[i, 0], enemies[i, 1]  # Keep as float for scaling calculations
             active = enemies[i, 3] == 1
             enemy_type = enemies[i, 5].astype(int)
 
-            # Calculate perspective scale based on Y position
-            height = self.constants.SCREEN_HEIGHT
-            top_margin = int(height * 0.12)
-            bottom_margin = int(height * 0.14)
-            y0 = height - bottom_margin  # Near position (player)
-            y1 = -height * 0.7  # Far position (horizon)
-
-            # Calculate t parameter (0 at bottom, 1 at horizon)
-            t = jnp.clip((y - y0) / (y1 - y0), 0.0, 1.0)
-
-            # Scale factor: 1.5 at bottom, 0.5 at horizon - larger enemies
-            scale_factor = 1.5 - (t * 1.0)  # Goes from 1.5 to 0.5
+            # Check if this enemy should not scale
+            sentinel_ship = enemy_type == self.constants.ENEMY_TYPE_SENTINEL_SHIP
+            side_spawner = (
+                    (enemy_type == self.constants.ENEMY_TYPE_YELLOW_CHIRPER) |
+                    (enemy_type == self.constants.ENEMY_TYPE_GREEN_BLOCKER) |
+                    (enemy_type == self.constants.ENEMY_TYPE_GREEN_BOUNCE)
+            )
+            no_scaling = sentinel_ship | side_spawner
 
             # Get base enemy dimensions
             base_width = jnp.where(
-                enemy_type == self.constants.ENEMY_TYPE_SENTINEL_SHIP,
+                sentinel_ship,
                 self.constants.SENTINEL_SHIP_WIDTH,
                 self.constants.ENEMY_WIDTH
             )
             base_height = jnp.where(
-                enemy_type == self.constants.ENEMY_TYPE_SENTINEL_SHIP,
+                sentinel_ship,
                 self.constants.SENTINEL_SHIP_HEIGHT,
                 self.constants.ENEMY_HEIGHT
             )
 
-            # Apply perspective scaling (except for sentinel ships)
-            sentinel_ship = enemy_type == self.constants.ENEMY_TYPE_SENTINEL_SHIP
+            # Apply scaling: no scaling for sentinels and side-spawners, others use perspective scaling
             scaled_width = jnp.where(
-                sentinel_ship,
-                base_width.astype(int),  # Keep original size for sentinels
-                (base_width * scale_factor).astype(int)  # Scale others
+                no_scaling,
+                base_width.astype(int),  # No scaling: keep original size
+                jnp.maximum(1, (base_width * self._get_enemy_scale(y)).astype(int))  # Others: apply scaling
             )
             scaled_height = jnp.where(
-                sentinel_ship,
-                base_height.astype(int),  # Keep original size for sentinels
-                (base_height * scale_factor).astype(int)  # Scale others
+                no_scaling,
+                base_height.astype(int),  # No scaling: keep original size
+                jnp.maximum(1, (base_height * self._get_enemy_scale(y)).astype(int))  # Others: apply scaling
             )
 
-            # Ensure minimum size of 2x2 pixels
-            scaled_width = jnp.maximum(scaled_width, 2)
-            scaled_height = jnp.maximum(scaled_height, 2)
+            # Determine if should render as dot (only for scaling enemies)
+            scale_factor = jnp.where(no_scaling, 1.0, self._get_enemy_scale(y))
+            is_dot = (~no_scaling) & (scale_factor < 0.25)  # No dots for non-scaling enemies
 
             # Center the scaled enemy at its position
             x_offset = ((base_width - scaled_width) / 2).astype(int)
@@ -4198,7 +4219,6 @@ class BeamRiderRenderer(JAXGameRenderer):
             x_indices = jnp.arange(self.constants.SCREEN_WIDTH)
             y_grid, x_grid = jnp.meshgrid(y_indices, x_indices, indexing='ij')
 
-            # FIXED: Allow partially visible enemies (remove the strict bounds check)
             # Check if enemy is at least partially visible
             partially_visible = (
                     (draw_x < self.constants.SCREEN_WIDTH) &  # Left edge is before right screen edge
@@ -4207,19 +4227,32 @@ class BeamRiderRenderer(JAXGameRenderer):
                     (draw_y + scaled_height > 0)  # Bottom edge is after top screen edge
             )
 
-            # Create mask for enemy pixels (only draw pixels that are on screen)
-            enemy_mask = (
+            # For very small enemies (dots), use a single pixel instead of trying to draw tiny rectangles
+            dot_mask = (
+                    is_dot &
+                    (x_grid == jnp.clip(draw_x + scaled_width // 2, 0, self.constants.SCREEN_WIDTH - 1)) &
+                    (y_grid == jnp.clip(draw_y + scaled_height // 2, 0, self.constants.SCREEN_HEIGHT - 1)) &
+                    active &
+                    partially_visible
+            )
+
+            # Regular enemy mask for larger enemies (including all non-scaling enemies)
+            regular_mask = (
+                    ~is_dot &
                     (x_grid >= draw_x) &
                     (x_grid < draw_x + scaled_width) &
                     (y_grid >= draw_y) &
                     (y_grid < draw_y + scaled_height) &
-                    (x_grid >= 0) & (x_grid < self.constants.SCREEN_WIDTH) &  # Pixel must be on screen
-                    (y_grid >= 0) & (y_grid < self.constants.SCREEN_HEIGHT) &  # Pixel must be on screen
+                    (x_grid >= 0) & (x_grid < self.constants.SCREEN_WIDTH) &
+                    (y_grid >= 0) & (y_grid < self.constants.SCREEN_HEIGHT) &
                     active &
-                    partially_visible  # Enemy must be at least partially visible
+                    partially_visible
             )
 
-            # Select enemy color based on type (same as before)
+            # Combine both masks
+            enemy_mask = dot_mask | regular_mask
+
+            # Select enemy color based on type
             enemy_color = jnp.where(
                 enemy_type == self.constants.ENEMY_TYPE_BROWN_DEBRIS,
                 jnp.array(self.constants.BROWN_DEBRIS_COLOR, dtype=jnp.uint8),
