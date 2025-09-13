@@ -461,12 +461,12 @@ class BeamRiderEnv(JaxEnvironment[BeamRiderState, BeamRiderObservation, BeamRide
         )
 
         # Initialize empty projectiles arrays (4 columns each)
-        projectiles = jnp.zeros((self.constants.MAX_PROJECTILES, 5))  # x, y, active, speed
-        torpedo_projectiles = jnp.zeros((self.constants.MAX_PROJECTILES, 5))  # x, y, active, speed
-        sentinel_projectiles = jnp.zeros((self.constants.MAX_PROJECTILES, 5))  # x, y, active, speed
+        projectiles = jnp.zeros((self.constants.MAX_PROJECTILES, 5), dtype=jnp.float32)  # x, y, active, speed
+        torpedo_projectiles = jnp.zeros((self.constants.MAX_PROJECTILES, 5), dtype=jnp.float32)  # x, y, active, speed
+        sentinel_projectiles = jnp.zeros((self.constants.MAX_PROJECTILES, 5), dtype=jnp.float32)  # x, y, active, speed
 
         # Initialize empty enemies array - UPDATED: now 18 columns for white saucer enhancements
-        enemies = jnp.zeros((self.constants.MAX_ENEMIES, 17))
+        enemies = jnp.zeros((self.constants.MAX_ENEMIES, 17), dtype=jnp.float32)
         # x, y, beam_position, active, speed, type, direction_x, direction_y,
         # bounce_count, linger_timer, target_x, health, firing_timer, maneuver_timer,
         # movement_pattern, white_saucer_firing_timer, jump_timer
@@ -1948,7 +1948,7 @@ class BeamRiderEnv(JaxEnvironment[BeamRiderState, BeamRiderObservation, BeamRide
             target_x
         )
         # Create new enemy array
-        new_enemy = jnp.zeros(17)  # 17 columns for all enemy data
+        new_enemy = jnp.zeros(17, dtype=jnp.float32)  # 17 columns for all enemy data
         new_enemy = new_enemy.at[0].set(spawn_x)  # x
         new_enemy = new_enemy.at[1].set(spawn_y)  # y
         new_enemy = new_enemy.at[2].set(final_spawn_beam)  # beam_position (or target beam for trackers)
