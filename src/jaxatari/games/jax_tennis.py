@@ -1581,17 +1581,17 @@ class TennisJaxEnv(JaxEnvironment[TennisState, TennisObs, TennisInfo, TennisCons
         return spaces.Discrete(18)
 
     def flatten_player_obs(self, player_obs: PlayerObs):
-        return jnp.concatenate([jnp.array([player_obs.player_x]), jnp.array([player_obs.player_y]),
+        return jnp.concatenate([jnp.array([player_obs.player_x.astype(jnp.float32)]), jnp.array([player_obs.player_y.astype(jnp.float32)]),
                                 jnp.array([player_obs.player_direction]), jnp.array([player_obs.player_field]),
                                 jnp.array([player_obs.player_serving])])
 
     def flatten_enemy_obs(self, enemy_obs: EnemyObs):
         return jnp.concatenate(
-            [jnp.array([enemy_obs.enemy_x]), jnp.array([enemy_obs.enemy_y]), jnp.array([enemy_obs.enemy_direction])])
+            [jnp.array([enemy_obs.enemy_x.astype(jnp.float32)]), jnp.array([enemy_obs.enemy_y.astype(jnp.float32)]), jnp.array([enemy_obs.enemy_direction])])
 
     def flatten_ball_obs(self, ball_obs: BallObs):
         return jnp.concatenate(
-            [jnp.array([ball_obs.ball_x]), jnp.array([ball_obs.ball_y]), jnp.array([ball_obs.ball_z]),
+            [jnp.array([ball_obs.ball_x.astype(jnp.float32)]), jnp.array([ball_obs.ball_y.astype(jnp.float32)]), jnp.array([ball_obs.ball_z.astype(jnp.float32)]),
              jnp.array([ball_obs.bounces]), jnp.array([ball_obs.last_hit])])
 
     def observation_space(self) -> spaces:
