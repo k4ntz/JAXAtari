@@ -48,7 +48,7 @@ class GameConfig:
     # Fish
     FISH_WIDTH: int = 8
     FISH_HEIGHT: int = 7
-    FISH_SPEED: float = 0.6
+    FISH_SPEED: float = 0.8
     NUM_FISH: int = 6
     FISH_ROW_YS: Tuple[int] = (85, 101, 117, 133, 149, 165)
     FISH_ROW_SCORES: Tuple[int] = (2, 2, 4, 4, 6, 6)
@@ -371,6 +371,28 @@ class FishingDerby(JaxEnvironment):
 
         return jax.lax.cond(p1_action == cfg.RESET, reset_branch, game_branch, state)
 
+
+def normalize_frame(frame: chex.Array, target_shape: Tuple[int, int, int]) -> chex.Array:
+    """Crop or pad a sprite to the target shape with transparent (255) background."""
+    h, w, c = frame.shape
+    th, tw, tc = target_shape
+    assert c == tc
+
+    # Crop if larger
+    frame = frame[:min(h, th), :min(w, tw), :]
+
+    # Pad if smaller (with 255 = white = transparent)
+    pad_h = th - frame.shape[0]
+    pad_w = tw - frame.shape[1]
+
+    frame = jnp.pad(
+        frame,
+        ((0, pad_h), (0, pad_w), (0, 0)),
+        mode="constant",
+        constant_values=255
+    )
+    return frame
+
 def load_sprites():
     MODULE_DIR = os.path.dirname(os.path.abspath(__file__))
 
@@ -378,21 +400,12 @@ def load_sprites():
         'background': os.path.join(MODULE_DIR, "sprites/fishingderby/background.npy"),
         'player1': os.path.join(MODULE_DIR, "sprites/fishingderby/player1.npy"),
         'player2': os.path.join(MODULE_DIR, "sprites/fishingderby/player2.npy"),
-        'shark1': os.path.join(MODULE_DIR, "sprites/fishingderby/shark1.npy"),
-        'shark2': os.path.join(MODULE_DIR, "sprites/fishingderby/shark2.npy"),
+        'shark1': os.path.join(MODULE_DIR, "sprites/fishingderby/shark_new_1.npy"),
+        'shark2': os.path.join(MODULE_DIR, "sprites/fishingderby/shark_new_2.npy"),
         'fish1': os.path.join(MODULE_DIR, "sprites/fishingderby/fish1.npy"),
         'fish2': os.path.join(MODULE_DIR, "sprites/fishingderby/fish2.npy"),
         'sky': os.path.join(MODULE_DIR, "sprites/fishingderby/sky.npy"),
-        'score_0': os.path.join(MODULE_DIR, "sprites/fishingderby/score_0.npy"),
-        'score_1': os.path.join(MODULE_DIR, "sprites/fishingderby/score_1.npy"),
-        'score_2': os.path.join(MODULE_DIR, "sprites/fishingderby/score_2.npy"),
-        'score_3': os.path.join(MODULE_DIR, "sprites/fishingderby/score_3.npy"),
-        'score_4': os.path.join(MODULE_DIR, "sprites/fishingderby/score_4.npy"),
-        'score_5': os.path.join(MODULE_DIR, "sprites/fishingderby/score_5.npy"),
-        'score_6': os.path.join(MODULE_DIR, "sprites/fishingderby/score_6.npy"),
-        'score_7': os.path.join(MODULE_DIR, "sprites/fishingderby/score_7.npy"),
-        'score_8': os.path.join(MODULE_DIR, "sprites/fishingderby/score_8.npy"),
-        'score_9': os.path.join(MODULE_DIR, "sprites/fishingderby/score_9.npy"),
+        **{f"score_{i}": os.path.join(MODULE_DIR, f"sprites/fishingderby/score_{i}.npy") for i in range(10)}
     }
 
     sprites = {}
@@ -402,39 +415,29 @@ def load_sprites():
         sprite = aj.loadFrame(path, transpose=False)
         if sprite is None:
             raise ValueError(f"Failed to load sprite: {path}")
-        sprites[name] =	sprite
+        sprites[name] = sprite
 
-    # Pad shark sprites to the same size
+    # --- normalize shark frames ---
     shark_sprites = [sprites['shark1'], sprites['shark2']]
-    max_shark_height = max(s.shape[0] for s in shark_sprites)
-    max_shark_width = max(s.shape[1] for s in shark_sprites)
-    padded_shark_sprites = [
-        jnp.pad(
-            s,
-            ((0, max_shark_height - s.shape[0]), (0, max_shark_width - s.shape[1]), (0, 0)),
-            mode='constant',
-            constant_values=0
-        )
-        for s in shark_sprites
-    ]
-    sprites['shark1'], sprites['shark2'] = padded_shark_sprites
+    max_shape = (
+        max(s.shape[0] for s in shark_sprites),
+        max(s.shape[1] for s in shark_sprites),
+        shark_sprites[0].shape[2]
+    )
+    sprites['shark1'] = normalize_frame(sprites['shark1'], max_shape)
+    sprites['shark2'] = normalize_frame(sprites['shark2'], max_shape)
 
-    # Pad fish sprites to the same size
+    # --- normalize fish frames ---
     fish_sprites = [sprites['fish1'], sprites['fish2']]
-    max_fish_height = max(s.shape[0] for s in fish_sprites)
-    max_fish_width = max(s.shape[1] for s in fish_sprites)
-    padded_fish_sprites = [
-        jnp.pad(
-            s,
-            ((0, max_fish_height - s.shape[0]), (0, max_fish_width - s.shape[1]), (0, 0)),
-            mode='constant',
-            constant_values=0
-        )
-        for s in fish_sprites
-    ]
-    sprites['fish1'], sprites['fish2'] = padded_fish_sprites
+    max_shape = (
+        max(s.shape[0] for s in fish_sprites),
+        max(s.shape[1] for s in fish_sprites),
+        fish_sprites[0].shape[2]
+    )
+    sprites['fish1'] = normalize_frame(sprites['fish1'], max_shape)
+    sprites['fish2'] = normalize_frame(sprites['fish2'], max_shape)
 
-    # Create score digits array
+    # Score digits
     score_digits = jnp.stack([sprites[f'score_{i}'] for i in range(10)])
 
     return (
@@ -442,6 +445,7 @@ def load_sprites():
         sprites['shark1'], sprites['shark2'], sprites['fish1'], sprites['fish2'],
         sprites['sky'], score_digits
     )
+
 
 class FishingDerbyRenderer(AtraJaxisRenderer):
     def __init__(self):
@@ -472,7 +476,7 @@ class FishingDerbyRenderer(AtraJaxisRenderer):
 
         # Draw shark
         shark_frame = jax.lax.cond((state.time // 8) % 2 == 0, lambda: self.SPRITE_SHARK1, lambda: self.SPRITE_SHARK2)
-        raster = self._render_at(raster, state.shark_x, cfg.SHARK_Y, shark_frame, flip_h=state.shark_dir > 0)
+        raster = self._render_at(raster, state.shark_x, cfg.SHARK_Y, shark_frame, flip_h=state.shark_dir < 0)
 
         # Draw fish
         fish_frame = jax.lax.cond((state.time // 10) % 2 == 0, lambda: self.SPRITE_FISH1, lambda: self.SPRITE_FISH2)
@@ -511,9 +515,30 @@ class FishingDerbyRenderer(AtraJaxisRenderer):
     @jax.jit
     def _render_at(raster, x, y, sprite, flip_h=False):
         sprite_rgb = sprite[:, :, :3]
+        h, w = sprite.shape[0], sprite.shape[1]
         x, y = jnp.round(x).astype(jnp.int32), jnp.round(y).astype(jnp.int32)
         sprite_to_draw = jnp.where(flip_h, jnp.fliplr(sprite_rgb), sprite_rgb)
-        return jax.lax.dynamic_update_slice(raster, sprite_to_draw, (y, x, 0))
+
+        # Check if sprite has an alpha channel (4th channel)
+        has_alpha = sprite.shape[2] > 3
+
+        if has_alpha:
+            # Use the alpha channel for transparency
+            alpha = sprite[:, :, 3:4]
+            alpha = jnp.where(flip_h, jnp.fliplr(alpha), alpha)
+            # Create mask where alpha > 0 (non-transparent pixels)
+            mask = alpha > 0
+        else:
+            # Fallback: treat both pure black (0,0,0) and pure white (255,255,255) as transparent
+            is_black = jnp.all(sprite_to_draw == 0, axis=-1, keepdims=True)
+            is_white = jnp.all(sprite_to_draw == 255, axis=-1, keepdims=True)
+            # Mask is True where pixel is NOT black and NOT white
+            mask = ~(is_black | is_white)
+
+        region = jax.lax.dynamic_slice(raster, (y, x, 0), (h, w, 3))
+        patch = jnp.where(mask, sprite_to_draw, region)
+
+        return jax.lax.dynamic_update_slice(raster, patch, (y, x, 0))
 
     @staticmethod
     @jax.jit
