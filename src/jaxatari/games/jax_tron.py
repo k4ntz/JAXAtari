@@ -211,45 +211,6 @@ class _DiscOps:
     
         return velocity_x, velocity_y
     
-    
-
-    @staticmethod
-    @jit
-    def compute_velocity_old(
-        discs: Discs,
-        next_phase: Array,
-        player_center_x: Array,
-        player_center_y: Array,
-        inbound_speed: Array,
-    ) -> Tuple[Array, Array]:
-        """
-        Calculate per-disc (vx, vy):
-        - Returning player discs (phase==2, owner==player) re-aim towards player-center with magnitude inbound_speed
-        - Outbound (phase==1) or inactive (phase==0)keep their stored (vx, vy), except inactive get a zero-velocity
-        """
-        is_returning_player = (next_phase == jnp.int32(2)) & (
-            discs.owner == jnp.int32(0)
-        )
-        is_inactive = next_phase == jnp.int32(0)
-
-        # Compute the direction from the disc to the player
-        dir_player_x = jnp.sign(player_center_x - discs.x).astype(jnp.int32)
-        dir_player_y = jnp.sign(player_center_y - discs.y).astype(jnp.int32)
-
-        # multiply the direction (-1, 0, 1) by the return-speed
-        vel_return_x = dir_player_x * jnp.int32(inbound_speed)
-        vel_return_y = dir_player_y * jnp.int32(inbound_speed)
-
-        # when the disc is in the inbound phase (2), it gets the return velocity
-        # otherwise it keeps it previous velocity
-        velocity_x = jnp.where(is_returning_player, vel_return_x, discs.vx)
-        velocity_y = jnp.where(is_returning_player, vel_return_y, discs.vy)
-
-        # Ensure inactive discs don't have a velocity
-        velocity_x = jnp.where(is_inactive, jnp.int32(0), velocity_x)
-        velocity_y = jnp.where(is_inactive, jnp.int32(0), velocity_y)
-
-        return velocity_x, velocity_y
 
     @staticmethod
     @jit
