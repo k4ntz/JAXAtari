@@ -16,9 +16,10 @@ import jaxatari.spaces as spaces
 """TODOS:
 Top Priorities:
 - make game more 3D --> might be done(ask supervisor)
-- add pause functionality again
 - add enemy sprites
 - adjust code so that it passes the tests
+- adjust code so that everything is adjusted to the new dotted beams
+- white saucers from horizon are shooting way to early
 For later:
 - Check the sentinal ship constants/Optimize the code/remove unnecessary code
 - Documentation"""
@@ -289,10 +290,6 @@ class Enemy:
     bounce_count: int = 0  # Number of bounces remaining for bounce craft
     linger_timer: int = 0  # Timer for blue chargers lingering at bottom
     tracker_timer: int = 0  # Timer for orange tracker direction changes
-    # NEW: Sentinel ship specific fields
-    health: int = 1  # Health for sentinel ships (default 1 for other enemies)
-    firing_timer: int = 0  # Timer for sentinel ship firing
-    maneuver_timer: int = 0  # Timer for evasive maneuvers
 
 
 @struct.dataclass
@@ -394,6 +391,21 @@ class BeamRiderEnv(JaxEnvironment[BeamRiderState, BeamRiderObservation, BeamRide
             shape=(self.constants.SCREEN_HEIGHT, self.constants.SCREEN_WIDTH, 3),
             dtype=jnp.uint8
         )
+
+    def get_all_rewards(self, previous_state: BeamRiderState, state: BeamRiderState) -> dict:
+        """Get all reward components for multi-reward logging"""
+        score_diff = state.score - previous_state.score
+        enemies_killed = state.enemies_killed_this_sector - previous_state.enemies_killed_this_sector
+        sector_complete = (state.current_sector > previous_state.current_sector).astype(jnp.float32)
+        lives_lost = (previous_state.lives - state.lives).astype(jnp.float32)
+
+        return {
+            'score': jnp.array(score_diff, dtype=jnp.float32),
+            'enemies_killed': jnp.array(enemies_killed, dtype=jnp.float32),
+            'sector_complete': jnp.array(sector_complete * 100, dtype=jnp.float32),  # Bonus for sector completion
+            'lives_lost': jnp.array(-lives_lost * 50, dtype=jnp.float32),  # Penalty for losing lives
+            'total': jnp.array(score_diff, dtype=jnp.float32)  # Total reward (same as score)
+        }
 
     def _get_observation(self, state: BeamRiderState) -> BeamRiderObservation:
         """Convert state to observation"""
@@ -540,6 +552,7 @@ class BeamRiderEnv(JaxEnvironment[BeamRiderState, BeamRiderObservation, BeamRide
         # Create return values
         obs = self._get_observation(state)
         reward = self._get_reward(previous_state, state)
+        all_rewards = self.get_all_rewards(state, state)
         done = self._get_done(state)
         info = self._get_info(state)
 
@@ -3638,7 +3651,6 @@ class BeamRiderRenderer(JAXGameRenderer):
         # === Vertical Lines (5 beams) ===
         # Use the actual beam positions for drawing the grid
         beam_positions = self.beam_positions
-
         center_x = width / 2
         y0 = height - bottom_margin  # Line starts here (bottom)
         y1 = -height * 0.7  # Line vanishes toward horizon (off-screen)
@@ -3681,6 +3693,84 @@ class BeamRiderRenderer(JAXGameRenderer):
 
         return screen
 
+    """More 3d version
+        @partial(jax.jit, static_argnums=(0,))
+        def _draw_3d_grid(self, screen: chex.Array, frame_count: int) -> chex.Array:
+            #Draw 3D grid with animated horizontal lines and 5 vertical dotted beam positions
+
+            height = self.constants.SCREEN_HEIGHT
+            width = self.constants.SCREEN_WIDTH
+            line_color = jnp.array([64, 64, 255], dtype=jnp.uint8)  # Blueish grid color
+
+            # === Margins ===
+            top_margin = int(height * 0.12)  # Reserved space for HUD
+            bottom_margin = int(height * 0.14)  # Reserved space below ship
+            grid_height = height - top_margin - bottom_margin
+
+            # Generate mesh grid for pixel coordinates
+            y_indices = jnp.arange(height)
+            x_indices = jnp.arange(width)
+            y_grid, x_grid = jnp.meshgrid(y_indices, x_indices, indexing="ij")
+
+            # === Horizontal Lines ===
+            num_hlines = 7  # Number of animated lines
+            phase = (frame_count * 0.003) % 1.0  # Smooth looping animation phase
+
+            def draw_hline(i, scr):
+                # Animate line position using easing (t^3 curve)
+                t = (phase + i / num_hlines) % 1.0
+                y = jnp.round((t ** 3.0) * grid_height).astype(int) + top_margin
+                y = jnp.clip(y, 0, height - 1)
+                mask = y_grid == y
+                return jnp.where(mask[..., None], line_color, scr)
+
+            # Draw each horizontal line
+            screen = jax.lax.fori_loop(0, num_hlines, draw_hline, screen)
+
+            # === Vertical Dotted Lines (5 beams with 3D perspective) ===
+            beam_positions = self.beam_positions
+            center_x = width / 2
+            y0 = height - bottom_margin  # Line starts here (bottom)
+            y1 = top_margin  # Line converges toward horizon
+
+            def draw_vline(i, scr):
+                # Starting x position at bottom (beam position)
+                x0 = beam_positions[i]
+                # Ending x position at top (converge toward center for 3D effect)
+                x1 = center_x + (x0 - center_x) * 0.3  # Converge partially toward center
+
+                # Number of dots along the line
+                num_steps = 120
+                dot_spacing = 8  # Draw dots every N steps for dotted effect
+
+                def body_fn(j, scr_inner):
+                    # Parametric interpolation along line (0.0 to 1.0)
+                    t = j / (num_steps - 1)
+
+                    # Interpolate position along the 3D perspective line
+                    y = y0 + (y1 - y0) * t
+                    x = x0 + (x1 - x0) * t
+
+                    # Convert to integer pixel coordinates
+                    xi = jnp.clip(jnp.round(x).astype(int), 0, width - 1)
+                    yi = jnp.clip(jnp.round(y).astype(int), 0, height - 1)
+
+                    # Only draw dots at specified intervals to create dotted effect
+                    should_draw_dot = (j % dot_spacing == 0) & (yi >= top_margin) & (yi <= y0)
+
+                    return jax.lax.cond(
+                        should_draw_dot,
+                        lambda s: s.at[yi, xi].set(line_color),  # Set pixel color
+                        lambda s: s,  # Else do nothing
+                        scr_inner
+                    )
+
+                return jax.lax.fori_loop(0, num_steps, body_fn, scr)
+
+            # Draw all 5 vertical dotted beam lines
+            screen = jax.lax.fori_loop(0, self.constants.NUM_BEAMS, draw_vline, screen)
+
+            return screen """
     @partial(jax.jit, static_argnums=(0,))
     def _draw_torpedo_projectiles(self, screen: chex.Array, torpedo_projectiles: chex.Array) -> chex.Array:
         """Draw all active torpedo projectiles - vectorized for JIT"""
@@ -3862,131 +3952,135 @@ class BeamRiderRenderer(JAXGameRenderer):
         return screen
 
     @partial(jax.jit, static_argnums=(0,))
-    def _draw_enemies(self, screen: chex.Array, enemies: chex.Array) -> chex.Array:
-        """Draw all active enemies with perspective scaling (except sentinels)"""
+    def _get_enemy_scale(self, enemy_y: float) -> float:
+        """Calculate enemy scale based on Y position (depth/distance)"""
+        # At horizon (top), scale = 0.1 (tiny dot)
+        # At bottom, scale = 3.0 (maximum size like in screenshot)
+        horizon_y = self.constants.TOP_MARGIN
+        bottom_y = self.constants.SCREEN_HEIGHT - 50
 
-        def draw_single_enemy(i, screen):
-            x, y = enemies[i, 0], enemies[i, 1]  # Keep as float for scaling calculations
-            active = enemies[i, 3] == 1
-            enemy_type = enemies[i, 5].astype(int)
+        # Normalize Y position to 0-1 range
+        y_normalized = jnp.clip((enemy_y - horizon_y) / (bottom_y - horizon_y), 0.0, 1.0)
 
-            # Calculate perspective scale based on Y position
-            height = self.constants.SCREEN_HEIGHT
-            top_margin = int(height * 0.12)
-            bottom_margin = int(height * 0.14)
-            y0 = height - bottom_margin  # Near position (player)
-            y1 = -height * 0.7  # Far position (horizon)
+        # Scale from 0.1 (tiny dot) to 3.0 (full size)
+        min_scale = 0.1
+        max_scale = 3.0
+        scale = min_scale + (max_scale - min_scale) * y_normalized
 
-            # Calculate t parameter (0 at bottom, 1 at horizon)
-            t = jnp.clip((y - y0) / (y1 - y0), 0.0, 1.0)
+        return scale
 
-            # Scale factor: 1.5 at bottom, 0.5 at horizon - larger enemies
-            scale_factor = 1.5 - (t * 1.0)  # Goes from 1.5 to 0.5
+    @partial(jax.jit, static_argnums=(0,))
+    def _draw_scaled_enemy_sprite(self, screen: chex.Array, x: int, y: int, sprite: chex.Array,
+                                  scale: float, color: chex.Array) -> chex.Array:
+        """Draw an enemy sprite with scaling"""
+        sprite_height, sprite_width = sprite.shape
 
-            # Get base enemy dimensions
-            base_width = jnp.where(
-                enemy_type == self.constants.ENEMY_TYPE_SENTINEL_SHIP,
-                self.constants.SENTINEL_SHIP_WIDTH,
-                self.constants.ENEMY_WIDTH
-            )
-            base_height = jnp.where(
-                enemy_type == self.constants.ENEMY_TYPE_SENTINEL_SHIP,
-                self.constants.SENTINEL_SHIP_HEIGHT,
-                self.constants.ENEMY_HEIGHT
-            )
+        # Calculate scaled dimensions
+        scaled_width = jnp.maximum(1, (sprite_width * scale).astype(jnp.int32))
+        scaled_height = jnp.maximum(1, (sprite_height * scale).astype(jnp.int32))
 
-            # Apply perspective scaling (except for sentinel ships)
-            sentinel_ship = enemy_type == self.constants.ENEMY_TYPE_SENTINEL_SHIP
-            scaled_width = jnp.where(
-                sentinel_ship,
-                base_width.astype(int),  # Keep original size for sentinels
-                (base_width * scale_factor).astype(int)  # Scale others
-            )
-            scaled_height = jnp.where(
-                sentinel_ship,
-                base_height.astype(int),  # Keep original size for sentinels
-                (base_height * scale_factor).astype(int)  # Scale others
-            )
+        # For very small scales (dots at horizon), just draw a single pixel
+        is_dot = scale < 0.3
 
-            # Ensure minimum size of 2x2 pixels
-            scaled_width = jnp.maximum(scaled_width, 2)
-            scaled_height = jnp.maximum(scaled_height, 2)
-
-            # Center the scaled enemy at its position
-            x_offset = ((base_width - scaled_width) / 2).astype(int)
-            y_offset = ((base_height - scaled_height) / 2).astype(int)
-
-            draw_x = (x + x_offset).astype(int)
-            draw_y = (y + y_offset).astype(int)
-
+        def draw_dot():
             # Create coordinate grids
             y_indices = jnp.arange(self.constants.SCREEN_HEIGHT)
             x_indices = jnp.arange(self.constants.SCREEN_WIDTH)
             y_grid, x_grid = jnp.meshgrid(y_indices, x_indices, indexing='ij')
 
-            # Create mask for scaled enemy pixels
-            enemy_mask = (
-                    (x_grid >= draw_x) &
-                    (x_grid < draw_x + scaled_width) &
-                    (y_grid >= draw_y) &
-                    (y_grid < draw_y + scaled_height) &
-                    active &
-                    (draw_x >= 0) & (draw_x < self.constants.SCREEN_WIDTH) &
-                    (draw_y >= 0) & (draw_y < self.constants.SCREEN_HEIGHT)
-            )
+            # Single pixel mask
+            dot_mask = (x_grid == x) & (y_grid == y) & (x >= 0) & (x < self.constants.SCREEN_WIDTH) & (y >= 0) & (
+                        y < self.constants.SCREEN_HEIGHT)
 
-            # Select enemy color based on type (same as before)
-            enemy_color = jnp.where(
-                enemy_type == self.constants.ENEMY_TYPE_BROWN_DEBRIS,
-                jnp.array(self.constants.BROWN_DEBRIS_COLOR, dtype=jnp.uint8),
-                jnp.where(
-                    enemy_type == self.constants.ENEMY_TYPE_YELLOW_CHIRPER,
-                    jnp.array(self.constants.YELLOW_CHIRPER_COLOR, dtype=jnp.uint8),
-                    jnp.where(
-                        enemy_type == self.constants.ENEMY_TYPE_GREEN_BLOCKER,
-                        jnp.array(self.constants.GREEN_BLOCKER_COLOR, dtype=jnp.uint8),
-                        jnp.where(
-                            enemy_type == self.constants.ENEMY_TYPE_GREEN_BOUNCE,
-                            jnp.array(self.constants.GREEN_BOUNCE_COLOR, dtype=jnp.uint8),
-                            jnp.where(
-                                enemy_type == self.constants.ENEMY_TYPE_BLUE_CHARGER,
-                                jnp.array(self.constants.BLUE_CHARGER_COLOR, dtype=jnp.uint8),
-                                jnp.where(
-                                    enemy_type == self.constants.ENEMY_TYPE_ORANGE_TRACKER,
-                                    jnp.array(self.constants.ORANGE_TRACKER_COLOR, dtype=jnp.uint8),
-                                    jnp.where(
-                                        enemy_type == self.constants.ENEMY_TYPE_YELLOW_REJUVENATOR,
-                                        jnp.array(self.constants.YELLOW_REJUVENATOR_COLOR, dtype=jnp.uint8),
-                                        jnp.where(
-                                            enemy_type == self.constants.ENEMY_TYPE_REJUVENATOR_DEBRIS,
-                                            jnp.array(self.constants.REJUVENATOR_DEBRIS_COLOR, dtype=jnp.uint8),
-                                            jnp.where(
-                                                enemy_type == self.constants.ENEMY_TYPE_SENTINEL_SHIP,
-                                                jnp.array(self.constants.RED, dtype=jnp.uint8),
-                                                jnp.array(self.constants.WHITE, dtype=jnp.uint8)
-                                            )
-                                        )
-                                    )
-                                )
-                            )
-                        )
-                    )
-                )
-            )
-
-            # Apply enemy color where mask is True
-            screen = jnp.where(
-                enemy_mask[..., None],
-                enemy_color,
+            return jnp.where(
+                dot_mask[..., None],
+                color,
                 screen
             ).astype(jnp.uint8)
 
-            return screen
+        def draw_scaled_sprite():
+            # Create coordinate grids
+            y_indices = jnp.arange(self.constants.SCREEN_HEIGHT)
+            x_indices = jnp.arange(self.constants.SCREEN_WIDTH)
+            y_grid, x_grid = jnp.meshgrid(y_indices, x_indices, indexing='ij')
+
+            # Center the scaled sprite
+            start_x = x - scaled_width // 2
+            start_y = y - scaled_height // 2
+
+            # Create mask for scaled sprite area
+            sprite_mask = (
+                    (x_grid >= start_x) &
+                    (x_grid < start_x + scaled_width) &
+                    (y_grid >= start_y) &
+                    (y_grid < start_y + scaled_height) &
+                    (start_x >= 0) & (start_x + scaled_width <= self.constants.SCREEN_WIDTH) &
+                    (start_y >= 0) & (start_y + scaled_height <= self.constants.SCREEN_HEIGHT)
+            )
+
+            # Map screen coordinates to original sprite coordinates
+            sprite_x_coords = ((x_grid - start_x) * sprite_width / scaled_width).astype(jnp.int32)
+            sprite_y_coords = ((y_grid - start_y) * sprite_height / scaled_height).astype(jnp.int32)
+
+            # Clamp coordinates to sprite bounds
+            sprite_x_coords = jnp.clip(sprite_x_coords, 0, sprite_width - 1)
+            sprite_y_coords = jnp.clip(sprite_y_coords, 0, sprite_height - 1)
+
+            # Get sprite pixel values
+            sprite_values = sprite[sprite_y_coords, sprite_x_coords]
+
+            # Apply color where sprite has value 1 and mask is True
+            draw_mask = sprite_mask & (sprite_values == 1)
+
+            return jnp.where(
+                draw_mask[..., None],
+                color,
+                screen
+            ).astype(jnp.uint8)
+
+        # Choose between dot or scaled sprite based on scale
+        return jax.lax.cond(is_dot, draw_dot, draw_scaled_sprite)
+
+    @partial(jax.jit, static_argnums=(0,))
+    def _draw_enemies(self, screen: chex.Array, enemies: chex.Array) -> chex.Array:
+        """Draw all active enemies with proper scaling"""
+
+        def draw_single_enemy(i, current_screen):
+            x, y = enemies[i, 0].astype(int), enemies[i, 1].astype(int)
+            active = enemies[i, 3] == 1
+            enemy_type = enemies[i, 5].astype(int)
+
+            # Calculate scale based on Y position
+            scale = self._get_enemy_scale(y)
+
+            # Choose sprite and color based on enemy type
+            def draw_white_saucer():
+                white_color = jnp.array([255, 255, 255], dtype=jnp.uint8)  # White
+                return self._draw_scaled_enemy_sprite(current_screen, x, y, self.white_saucer_sprite, scale,
+                                                      white_color)
+
+            def draw_other_enemy():
+                # For other enemy types, you can add different sprites/colors
+                enemy_color = jnp.array([255, 0, 0], dtype=jnp.uint8)  # Red for other enemies
+                return self._draw_scaled_enemy_sprite(current_screen, x, y, self.white_saucer_sprite, scale,
+                                                      enemy_color)
+
+            # Only draw if active
+            current_screen = jax.lax.cond(
+                active,
+                lambda: jax.lax.cond(
+                    enemy_type == self.constants.ENEMY_TYPE_WHITE_SAUCER,
+                    draw_white_saucer,
+                    draw_other_enemy
+                ),
+                lambda: current_screen
+            )
+
+            return current_screen
 
         # Apply to all enemies
         screen = jax.lax.fori_loop(0, self.constants.MAX_ENEMIES, draw_single_enemy, screen)
         return screen
-
 
     @partial(jax.jit, static_argnums=(0,))
     def _draw_ui(self, screen: chex.Array, state) -> chex.Array:
