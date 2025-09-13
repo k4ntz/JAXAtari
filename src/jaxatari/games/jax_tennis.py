@@ -1597,21 +1597,21 @@ class TennisJaxEnv(JaxEnvironment[TennisState, TennisObs, TennisInfo, TennisCons
     def observation_space(self) -> spaces:
         return spaces.Dict({
             "player": spaces.Dict({
-                "player_x": spaces.Box(low=0, high=160, shape=(), dtype=jnp.float32),
-                "player_y": spaces.Box(low=0, high=210, shape=(), dtype=jnp.float32),
+                "player_x": spaces.Box(low=0, high=160, shape=(), dtype=jnp.float64),
+                "player_y": spaces.Box(low=0, high=210, shape=(), dtype=jnp.float64),
                 "player_direction": spaces.Box(low=-1, high=1, shape=(), dtype=jnp.int32),
                 "player_field": spaces.Box(low=-1, high=1, shape=(), dtype=jnp.int32),
                 "player_serving": spaces.Box(low=0, high=1, shape=(), dtype=jnp.int32),
             }),
             "enemy": spaces.Dict({
-                "enemy_x": spaces.Box(low=0, high=160, shape=(), dtype=jnp.float32),
-                "enemy_y": spaces.Box(low=0, high=210, shape=(), dtype=jnp.float32),
+                "enemy_x": spaces.Box(low=0, high=160, shape=(), dtype=jnp.float64),
+                "enemy_y": spaces.Box(low=0, high=210, shape=(), dtype=jnp.float64),
                 "enemy_direction": spaces.Box(low=-1, high=1, shape=(), dtype=jnp.int32),
             }),
             "ball": spaces.Dict({
-                "ball_x": spaces.Box(low=0, high=160, shape=(), dtype=jnp.float32),
-                "ball_y": spaces.Box(low=0, high=210, shape=(), dtype=jnp.float32),
-                "ball_z": spaces.Box(low=0, high=999, shape=(), dtype=jnp.float32),
+                "ball_x": spaces.Box(low=0, high=160, shape=(), dtype=jnp.float64),
+                "ball_y": spaces.Box(low=0, high=210, shape=(), dtype=jnp.float64),
+                "ball_z": spaces.Box(low=0, high=999, shape=(), dtype=jnp.float64),
                 # no theoretical upper limit, but usually won't go above 50
                 "bounces": spaces.Box(low=0, high=999, shape=(), dtype=jnp.int32),
                 # no theoretical upper limit, but usually won't go above 2 since game is restarted at that point
