@@ -1611,7 +1611,7 @@ class BeamRiderEnv(JaxEnvironment[BeamRiderState, BeamRiderObservation, BeamRide
         # OPTION 2: Check if selected enemy is white saucer when we can't spawn them
         # If so, skip this spawn frame entirely (maintaining normal spawn rates for other enemies)
         selected_white_saucer_when_cant = (
-                                                      enemy_type == self.constants.ENEMY_TYPE_WHITE_SAUCER) & ~can_spawn_white_saucer
+                                                  enemy_type == self.constants.ENEMY_TYPE_WHITE_SAUCER) & ~can_spawn_white_saucer
 
         # Can actually spawn if: we should spawn AND we didn't select a white saucer when we can't spawn one
         can_actually_spawn = should_spawn & ~selected_white_saucer_when_cant
@@ -1676,35 +1676,38 @@ class BeamRiderEnv(JaxEnvironment[BeamRiderState, BeamRiderObservation, BeamRide
         # Green blockers spawn at upper third of screen (higher up)
         blocker_spawn_y = self.constants.SCREEN_HEIGHT // 3
 
-        # GREEN BOUNCE CRAFT: Spawn from sides, not top
+        # GREEN BOUNCE CRAFT: NEW SPAWN LOGIC
         is_green_bounce = enemy_type == self.constants.ENEMY_TYPE_GREEN_BOUNCE
 
         # Choose spawn side randomly (0 = left, 1 = right)
         rng_key, bounce_side_key = random.split(rng_key)
         bounce_spawn_from_right = random.randint(bounce_side_key, (), 0, 2)  # 0 or 1
 
-        # Choose random Y position in middle area of screen
+        # Choose random Y position in upper area of screen
         rng_key, bounce_y_key = random.split(rng_key)
         bounce_spawn_y = random.uniform(
             bounce_y_key, (),
-            minval=self.constants.SCREEN_HEIGHT * 0.15,  # UPDATED: Start higher (was 0.3)
-            maxval=self.constants.SCREEN_HEIGHT * 0.45,  # UPDATED: End higher (was 0.7)
+            minval=self.constants.SCREEN_HEIGHT * 0.15,  # Upper area
+            maxval=self.constants.SCREEN_HEIGHT * 0.25,  # Keep them high
             dtype=jnp.float32
         )
 
         # Green bounce craft spawn positions (from sides, off-screen)
         bounce_spawn_x = jnp.where(
             bounce_spawn_from_right,
-            self.constants.SCREEN_WIDTH - self.constants.ENEMY_WIDTH,  # rechte Innenkante
-            0.0  # linke Innenkante
+            self.constants.SCREEN_WIDTH + self.constants.ENEMY_WIDTH,  # Spawn off right edge
+            -self.constants.ENEMY_WIDTH  # Spawn off left edge
         )
 
-        # Set bounce count properly for green bounce craft
-        initial_bounce_count = jnp.where(
-            enemy_type == self.constants.ENEMY_TYPE_GREEN_BOUNCE,
-            self.constants.GREEN_BOUNCE_MAX_BOUNCES,  # bounces for bounce craft
-            0  # 0 bounces for all other enemies
+        # Determine initial target beam (first or last depending on spawn side)
+        initial_bounce_target_beam = jnp.where(
+            bounce_spawn_from_right,
+            self.constants.NUM_BEAMS - 1,  # Start from rightmost beam if spawning from right
+            0  # Start from leftmost beam if spawning from left
         )
+
+        # Set movement direction (0=left-to-right, 1=right-to-left)
+        bounce_movement_direction = bounce_spawn_from_right.astype(jnp.float32)
 
         # YELLOW REJUVENATORS: Spawn from top on random beam
         is_yellow_rejuvenator = enemy_type == self.constants.ENEMY_TYPE_YELLOW_REJUVENATOR
@@ -1747,7 +1750,7 @@ class BeamRiderEnv(JaxEnvironment[BeamRiderState, BeamRiderObservation, BeamRide
                 blocker_spawn_y,  # Blockers spawn high
                 jnp.where(
                     is_green_bounce,
-                    bounce_spawn_y,  # Bounce craft spawn in middle area
+                    bounce_spawn_y,  # Bounce craft spawn in upper area
                     jnp.where(
                         is_yellow_rejuvenator,
                         rejuv_spawn_y,  # Rejuvenators spawn from top
@@ -1799,17 +1802,21 @@ class BeamRiderEnv(JaxEnvironment[BeamRiderState, BeamRiderObservation, BeamRide
 
         direction_y = 1.0  # All enemies move down by default
 
-        # Calculate final spawn beam position for tracking - FIXED: Green blockers need player beam
+        # Calculate final spawn beam position for tracking
         final_spawn_beam = jnp.where(
-            is_yellow_chirper | is_green_bounce,
+            is_yellow_chirper,
             0,  # Side spawners that don't use beam positions
             jnp.where(
                 is_green_blocker,
                 state.ship.beam_position,  # FIXED: Store player's beam index for blockers
                 jnp.where(
-                    enemy_type == self.constants.ENEMY_TYPE_ORANGE_TRACKER,
-                    state.ship.beam_position,  # Track player's current beam
-                    regular_spawn_beam  # Use calculated spawn beam
+                    is_green_bounce,
+                    initial_bounce_target_beam,  # Bounce craft uses target beam
+                    jnp.where(
+                        enemy_type == self.constants.ENEMY_TYPE_ORANGE_TRACKER,
+                        state.ship.beam_position,  # Track player's current beam
+                        regular_spawn_beam  # Use calculated spawn beam
+                    )
                 )
             )
         )
@@ -1827,7 +1834,11 @@ class BeamRiderEnv(JaxEnvironment[BeamRiderState, BeamRiderObservation, BeamRide
         course_changes_remaining = jnp.where(
             enemy_type == self.constants.ENEMY_TYPE_ORANGE_TRACKER,
             base_changes + bonus_changes,
-            0  # Not applicable for other enemies
+            jnp.where(
+                is_green_bounce,
+                bounce_movement_direction,  # Store movement direction for bounce craft
+                0  # Not applicable for other enemies
+            )
         )
 
         # WHITE SAUCER MOVEMENT PATTERNS
@@ -1837,7 +1848,11 @@ class BeamRiderEnv(JaxEnvironment[BeamRiderState, BeamRiderObservation, BeamRide
         movement_pattern = jnp.where(
             is_white_saucer,
             self._select_white_saucer_movement_pattern(subkey2),
-            0  # Default pattern for non-white saucers
+            jnp.where(
+                is_green_bounce,
+                0,  # Start bounce craft in state 0 (moving to beam)
+                0  # Default pattern for non-white saucers
+            )
         )
 
         # WHITE SAUCER RAMMING: Override pattern for higher sectors
@@ -1921,7 +1936,7 @@ class BeamRiderEnv(JaxEnvironment[BeamRiderState, BeamRiderObservation, BeamRide
                 jnp.where(blocker_spawn_from_right, -1.0, 1.0),  # Blockers move toward player
                 jnp.where(
                     is_green_bounce,
-                    jnp.where(bounce_spawn_from_right, -1.0, 1.0),  # Bounce craft move toward screen
+                    1.0,  # Bounce craft will use state machine for direction
                     jnp.where(
                         is_white_saucer & is_horizon_patrol,
                         random_direction,  # Horizon patrol gets random direction
@@ -1939,16 +1954,21 @@ class BeamRiderEnv(JaxEnvironment[BeamRiderState, BeamRiderObservation, BeamRide
                 enemy_type == self.constants.ENEMY_TYPE_ORANGE_TRACKER,
                 self.beam_positions[state.ship.beam_position],  # Tracker targets current player beam
                 jnp.where(
-                    is_white_saucer & is_horizon_patrol,
-                    horizon_target_beam,  # Store target beam in target_x field for horizon patrol
+                    is_green_bounce,
+                    bounce_spawn_y,  # Store spawn height for bounce craft
                     jnp.where(
-                        is_white_saucer & can_jump,
-                        regular_spawn_beam,  # ADDED: Initialize beam jumpers with their spawn beam
-                        0.0  # Default for others
+                        is_white_saucer & is_horizon_patrol,
+                        horizon_target_beam,  # Store target beam in target_x field for horizon patrol
+                        jnp.where(
+                            is_white_saucer & can_jump,
+                            regular_spawn_beam,  # ADDED: Initialize beam jumpers with their spawn beam
+                            0.0  # Default for others
+                        )
                     )
                 )
             )
         )
+
         # For beam jumping white saucers, set an initial target beam different from spawn beam
         rng_key, jump_target_key = random.split(rng_key)
         jump_target_offset = random.randint(jump_target_key, (), minval=1, maxval=self.constants.NUM_BEAMS)
@@ -1960,23 +1980,24 @@ class BeamRiderEnv(JaxEnvironment[BeamRiderState, BeamRiderObservation, BeamRide
             initial_jump_target,  # Set to a different beam than spawn beam
             target_x
         )
+
         # Create new enemy array
         new_enemy = jnp.zeros(17)  # 17 columns for all enemy data
         new_enemy = new_enemy.at[0].set(spawn_x)  # x
         new_enemy = new_enemy.at[1].set(spawn_y)  # y
-        new_enemy = new_enemy.at[2].set(final_spawn_beam)  # beam_position (or target beam for trackers)
+        new_enemy = new_enemy.at[2].set(final_spawn_beam)  # beam_position (or target beam for trackers/bounce)
         new_enemy = new_enemy.at[3].set(1)  # active
         new_enemy = new_enemy.at[4].set(final_enemy_speed)  # speed
         new_enemy = new_enemy.at[5].set(enemy_type)  # type
         new_enemy = new_enemy.at[6].set(direction_x)  # direction_x
         new_enemy = new_enemy.at[7].set(initial_direction_y)  # direction_y (or dive depth for shooting white saucers)
-        new_enemy = new_enemy.at[8].set(initial_bounce_count)  # bounce_count
+        new_enemy = new_enemy.at[8].set(0)  # bounce_count/lock status (0 for most enemies)
         new_enemy = new_enemy.at[9].set(0)  # linger_timer
-        new_enemy = new_enemy.at[10].set(target_x)  # target_x
+        new_enemy = new_enemy.at[10].set(target_x)  # target_x (or spawn height for bounce craft)
         new_enemy = new_enemy.at[11].set(enemy_health)  # health
-        new_enemy = new_enemy.at[12].set(0)  # firing_timer
-        new_enemy = new_enemy.at[13].set(course_changes_remaining)  # maneuver_timer (course changes for trackers)
-        new_enemy = new_enemy.at[14].set(movement_pattern)  # movement_pattern
+        new_enemy = new_enemy.at[12].set(0)  # firing_timer/debris lifetime
+        new_enemy = new_enemy.at[13].set(course_changes_remaining)  # course changes (or movement direction for bounce)
+        new_enemy = new_enemy.at[14].set(movement_pattern)  # movement_pattern (or state machine for bounce craft)
         new_enemy = new_enemy.at[15].set(initial_firing_timer)  # white_saucer_firing_timer
         new_enemy = new_enemy.at[16].set(initial_jump_timer)  # jump_timer
 
@@ -1991,7 +2012,6 @@ class BeamRiderEnv(JaxEnvironment[BeamRiderState, BeamRiderObservation, BeamRide
         )
 
         return state.replace(enemies=enemies, rng_key=rng_key)
-
     @partial(jax.jit, static_argnums=(0,))
     def _handle_white_saucer_limit(self, enemy_type: int, sector: int, can_spawn_white_saucer: bool,
                                    rng_key: chex.PRNGKey) -> tuple:
@@ -2388,6 +2408,167 @@ class BeamRiderEnv(JaxEnvironment[BeamRiderState, BeamRiderObservation, BeamRide
 
         blocker_new_y = blocker_new_y_vertical  # Always update Y (will be unchanged if not moving vertically)
 
+        # GREEN BOUNCE CRAFT: NEW MOVEMENT PATTERN
+        bounce_mask = enemy_types == self.constants.ENEMY_TYPE_GREEN_BOUNCE
+        bounce_x = enemies[:, 0]
+        bounce_y = enemies[:, 1]
+
+        # Use column 2 to track current target beam index
+        current_target_beam = enemies[:, 2].astype(int)
+
+        # Use column 14 to track movement state (0=moving to beam, 1=checking, 2=descending, 3=ascending)
+        bounce_state = enemies[:, 14].astype(int)
+
+        # Use column 10 to store initial spawn height
+        spawn_height = enemies[:, 10]
+
+        # Use column 13 to track if moving left-to-right (0) or right-to-left (1)
+        movement_direction = enemies[:, 13].astype(int)
+
+        # Constants for movement
+        BEAM_THRESHOLD = 8.0
+        HORIZONTAL_SPEED = 2.0
+        VERTICAL_SPEED = 1.5
+        CHECK_DEPTH = self.constants.WHITE_SAUCER_REVERSE_TRIGGER_Y  # Use same depth as white saucer retreat
+
+        # Get target beam position
+        target_beam_x = self.beam_positions[jnp.clip(current_target_beam, 0, self.constants.NUM_BEAMS - 1)]
+
+        # Check if we're at the target beam
+        at_target_beam = jnp.abs(bounce_x - target_beam_x) < BEAM_THRESHOLD
+
+        # Check if player is on current beam
+        player_beam = state.ship.beam_position
+        player_on_current_beam = (current_target_beam == player_beam)
+
+        # State 0: Moving horizontally to target beam
+        moving_to_beam = bounce_state == 0
+        new_x_moving = bounce_x + jnp.sign(target_beam_x - bounce_x) * HORIZONTAL_SPEED
+
+        # Transition from state 0 to state 1 when reaching beam
+        new_state_from_0 = jnp.where(at_target_beam, 1, 0)
+
+        # State 1: At beam, checking (move down to check depth)
+        checking = bounce_state == 1
+        new_y_checking = bounce_y + VERTICAL_SPEED
+        at_check_depth = bounce_y >= CHECK_DEPTH
+
+        # Decide next state from checking
+        new_state_from_1 = jnp.where(
+            at_check_depth,
+            jnp.where(player_on_current_beam, 2, 3),  # 2=descend if player on beam, 3=ascend if not
+            1  # Keep checking if not at depth yet
+        )
+
+        # State 2: Descending (player was on beam)
+        descending = bounce_state == 2
+        new_y_descending = bounce_y + VERTICAL_SPEED
+
+        # Follow beam curve when descending
+        curved_x_descending = self._beam_curve_x(new_y_descending, current_target_beam, self.constants.ENEMY_WIDTH)
+
+        # Deactivate if reached bottom
+        reached_bottom = new_y_descending >= self.constants.SCREEN_HEIGHT
+
+        # State 3: Ascending back to spawn height
+        ascending = bounce_state == 3
+        new_y_ascending = bounce_y - VERTICAL_SPEED
+        at_spawn_height = bounce_y <= spawn_height
+
+        # Determine next beam
+        next_beam = jnp.where(
+            movement_direction == 0,  # Moving left to right
+            jnp.where(
+                current_target_beam >= self.constants.NUM_BEAMS - 1,
+                -1,  # Signal to deactivate (reached right edge)
+                current_target_beam + 1
+            ),
+            jnp.where(  # Moving right to left
+                current_target_beam <= 0,
+                -1,  # Signal to deactivate (reached left edge)
+                current_target_beam - 1
+            )
+        )
+
+        # Transition from state 3 when back at spawn height
+        new_state_from_3 = jnp.where(
+            at_spawn_height,
+            jnp.where(next_beam >= 0, 0, -1),  # Back to moving state or deactivate
+            3  # Keep ascending
+        )
+
+        # Update target beam when transitioning to next
+        new_target_beam = jnp.where(
+            (bounce_state == 3) & at_spawn_height & (next_beam >= 0),
+            next_beam,
+            current_target_beam
+        )
+
+        # Calculate final positions based on state
+        final_bounce_x = jnp.where(
+            moving_to_beam,
+            new_x_moving,
+            jnp.where(
+                checking,
+                bounce_x,  # Stay at same X while checking
+                jnp.where(
+                    descending,
+                    curved_x_descending,  # Follow beam curve
+                    jnp.where(
+                        ascending,
+                        bounce_x,  # Stay at same X while ascending
+                        bounce_x
+                    )
+                )
+            )
+        )
+
+        final_bounce_y = jnp.where(
+            moving_to_beam,
+            bounce_y,  # Stay at same Y while moving horizontally
+            jnp.where(
+                checking,
+                new_y_checking,
+                jnp.where(
+                    descending,
+                    new_y_descending,
+                    jnp.where(
+                        ascending,
+                        new_y_ascending,
+                        bounce_y
+                    )
+                )
+            )
+        )
+
+        # Update state machine
+        new_bounce_state = jnp.where(
+            moving_to_beam,
+            new_state_from_0,
+            jnp.where(
+                checking,
+                new_state_from_1,
+                jnp.where(
+                    descending,
+                    2,  # Stay in descending state
+                    jnp.where(
+                        ascending,
+                        new_state_from_3,
+                        bounce_state
+                    )
+                )
+            )
+        )
+
+        # Deactivate conditions for bounce craft
+        bounce_should_deactivate = bounce_mask & (
+                reached_bottom |  # Hit bottom while descending
+                (new_bounce_state == -1) |  # Reached edge of screen
+                ((bounce_state == 3) & at_spawn_height & (next_beam < 0))  # No more beams
+        )
+
+        bounce_craft_active = (enemies[:, 3] == 1) & ~bounce_should_deactivate
+
         # ORANGE TRACKERS: beam following with limited course changes
         tracker_mask = enemy_types == self.constants.ENEMY_TYPE_ORANGE_TRACKER
 
@@ -2407,7 +2588,7 @@ class BeamRiderEnv(JaxEnvironment[BeamRiderState, BeamRiderObservation, BeamRide
         should_change_course = tracker_mask & player_changed_beam & can_change_course
 
         # Update target beam and target X when changing course
-        new_target_beam = jnp.where(
+        new_target_beam_tracker = jnp.where(
             should_change_course,
             current_player_beam,  # Follow player to new beam
             tracker_current_target_beam  # Keep current target
@@ -2476,94 +2657,6 @@ class BeamRiderEnv(JaxEnvironment[BeamRiderState, BeamRiderObservation, BeamRide
             enemies[:, 1] + enemies[:, 4]  # Normal movement: current Y + speed (can be + or -)
         )
 
-        # GREEN BOUNCE CRAFT: EDGE-FIRST APPROACH - Handle edges before movement behavior
-        bounce_mask = enemy_types == self.constants.ENEMY_TYPE_GREEN_BOUNCE
-        bounce_x = enemies[:, 0]
-        bounce_y = enemies[:, 1]
-        bounce_direction_x = enemies[:, 6]  # Current horizontal direction (-1 or +1)
-        bounce_count = enemies[:, 8]  # Remaining bounces
-
-        # Player beam detection (only for deciding to move down, not for course changes)
-        player_beam = state.ship.beam_position
-        player_beam_x = self.beam_positions[player_beam]
-        BEAM_THRESHOLD = 12.0
-        is_on_player_beam = jnp.abs(bounce_x - player_beam_x) < BEAM_THRESHOLD
-
-        # Calculate potential horizontal movement
-        bounce_speed = self.constants.GREEN_BOUNCE_SPEED
-        potential_new_x = bounce_x + bounce_direction_x * bounce_speed
-
-        # --- EDGE COLLISION HAS PRIORITY ---
-        screen_right_edge = self.constants.SCREEN_WIDTH - self.constants.ENEMY_WIDTH
-        EDGE_BUFFER = 1.0  # Small buffer to prevent getting stuck at edges
-
-        hit_left_edge = potential_new_x < 0.0
-        hit_right_edge = potential_new_x > screen_right_edge
-        hit_any_edge = hit_left_edge | hit_right_edge
-
-        # Bounce: reverse direction and push back into screen bounds
-        direction_after_bounce = jnp.where(hit_any_edge, -bounce_direction_x, bounce_direction_x)
-        x_after_edge_handling = jnp.where(
-            hit_left_edge, EDGE_BUFFER,  # Push away from left edge
-            jnp.where(
-                hit_right_edge, screen_right_edge - EDGE_BUFFER,  # Push away from right edge
-                potential_new_x  # No edge hit, use calculated position
-            )
-        )
-
-        # Decrement bounce count only on actual edge collision
-        bounce_count_after_collision = jnp.where(
-            hit_any_edge & (bounce_count > 0),
-            bounce_count - 1,
-            bounce_count
-        )
-
-        # --- CHOOSE BEHAVIOR AFTER EDGE HANDLING ---
-        # If on player beam -> move down vertically; otherwise move horizontally
-        should_move_down = bounce_mask & is_on_player_beam
-        should_move_horizontally = bounce_mask & ~is_on_player_beam
-
-        # When moving down, determine which beam they should follow
-        # Find the nearest beam to current position for beam curve calculation
-        bounce_beam_distances = jnp.abs(bounce_x[..., None] - self.beam_positions[None, :])
-        nearest_bounce_beam_idx = jnp.argmin(bounce_beam_distances, axis=1)
-
-
-        final_bounce_y = jnp.where(
-            should_move_down,
-            bounce_y + bounce_speed,  # Move down toward player
-            jnp.where(
-                should_move_horizontally,
-                bounce_y,  # Stay at same Y during horizontal movement
-                bounce_y  # Default: no change
-            )
-        )
-
-        curved_bounce_x = self._beam_curve_x(final_bounce_y, nearest_bounce_beam_idx, self.constants.ENEMY_WIDTH)
-
-        final_bounce_x = jnp.where(
-            should_move_down,
-            curved_bounce_x,  # UPDATED: Follow beam curve when moving down
-            jnp.where(
-                should_move_horizontally,
-                jnp.clip(x_after_edge_handling, 0.0, screen_right_edge),  # Horizontal movement
-                bounce_x  # Default: no change
-            )
-        )
-
-
-
-        # Active logic: stay active as long as bounce count > 0
-        bounce_craft_active = (enemies[:, 3] == 1) & (bounce_count_after_collision > 0)
-
-        # Update only the bounce craft entries (using masks)
-        new_bounce_count = bounce_count_after_collision
-        final_direction_x = direction_after_bounce
-
-        # Store final values for use in the main update logic below
-        bounce_new_x = final_bounce_x
-        bounce_new_y = final_bounce_y
-
         # SENTINEL SHIP: horizontal cruise using direction
         sentinel_mask = enemy_types == self.constants.ENEMY_TYPE_SENTINEL_SHIP
         sentinel_direction_x = enemies[:, 6]  # Get direction from direction_x field
@@ -2620,7 +2713,7 @@ class BeamRiderEnv(JaxEnvironment[BeamRiderState, BeamRiderObservation, BeamRide
                 blocker_new_x,  # Blockers use fixed X-coordinate targeting
                 jnp.where(
                     bounce_mask,
-                    bounce_new_x,  # Bounce craft - edge-first approach
+                    final_bounce_x,  # Bounce craft - NEW movement pattern
                     jnp.where(
                         charger_mask,
                         enemies[:, 0],  # Blue chargers don't change X position
@@ -2651,7 +2744,7 @@ class BeamRiderEnv(JaxEnvironment[BeamRiderState, BeamRiderObservation, BeamRide
                 blocker_new_y,  # Blockers use fixed X-coordinate targeting Y movement
                 jnp.where(
                     bounce_mask,
-                    bounce_new_y,  # Bounce craft - edge-first approach
+                    final_bounce_y,  # Bounce craft - NEW movement pattern
                     jnp.where(
                         charger_mask,
                         charger_new_y,  # Blue chargers use WORKING simple logic
@@ -2672,7 +2765,7 @@ class BeamRiderEnv(JaxEnvironment[BeamRiderState, BeamRiderObservation, BeamRide
                 )
             )
         )
-        # ===== Make vertical movers follow dotted beams (perspective curve) =====
+
         # ===== Make vertical movers follow dotted beams (perspective curve) =====
         beam_idx_now = enemies[:, 2].astype(int)
 
@@ -2680,7 +2773,7 @@ class BeamRiderEnv(JaxEnvironment[BeamRiderState, BeamRiderObservation, BeamRide
         vertical_mask = (
                 (regular_enemy_mask | charger_mask | tracker_mask)  # REMOVED: blocker_mask from here
                 & ~chirper_mask & ~bounce_mask & ~sentinel_mask & ~debris_mask & ~blocker_mask
-        # ADDED: exclude blockers
+            # ADDED: exclude blockers
         )
 
         curved_x = self._beam_curve_x(new_y, beam_idx_now, self.constants.ENEMY_WIDTH)
@@ -2707,7 +2800,7 @@ class BeamRiderEnv(JaxEnvironment[BeamRiderState, BeamRiderObservation, BeamRide
                          (blocker_new_y > -self.constants.ENEMY_HEIGHT) & \
                          (blocker_new_y < self.constants.SCREEN_HEIGHT)
 
-        # CORRECTED: Bounce craft stay active as long as they have bounces remaining
+        # Bounce craft stay active unless deactivation conditions met
         bounce_active = bounce_craft_active
 
         # WORKING VERSION: Blue chargers - simple active logic
@@ -2741,7 +2834,7 @@ class BeamRiderEnv(JaxEnvironment[BeamRiderState, BeamRiderObservation, BeamRide
                         blocker_active,  # Blockers: deactivate when below screen
                         jnp.where(
                             bounce_mask,
-                            bounce_active,  # Bounce craft: deactivate after bounces or off screen
+                            bounce_active,  # Bounce craft: deactivate based on state machine
                             jnp.where(
                                 charger_mask,
                                 charger_active,  # Blue chargers: deactivate when below screen
@@ -2772,59 +2865,59 @@ class BeamRiderEnv(JaxEnvironment[BeamRiderState, BeamRiderObservation, BeamRide
         # Update enemy array
         enemies = enemies.at[:, 0].set(new_x)  # Update x positions
         enemies = enemies.at[:, 1].set(new_y)  # Update y positions
-        enemies = enemies.at[:, 2].set(  # Update target beam for trackers
-            jnp.where(tracker_mask, new_target_beam, enemies[:, 2])
-        )
-        enemies = enemies.at[:, 3].set(active.astype(jnp.float32))  # Update active states
-
-        # Update direction arrays - CORRECTED: Update bounce direction properly
-        enemies = enemies.at[:, 6].set(
+        enemies = enemies.at[:, 2].set(  # Update target beam for trackers and bounce craft
             jnp.where(
-                bounce_mask,
-                final_direction_x,  # CORRECTED: Use the properly calculated direction
-                enemies[:, 6]  # Keep existing direction_x for others
-            )
-        )
-        enemies = enemies.at[:, 7].set(
-            jnp.where(
-                bounce_mask,
-                enemies[:, 7],  # Keep existing direction_y for bounce craft
-                enemies[:, 7]  # Keep existing direction_y for others
-            )
-        )
-
-        enemies = enemies.at[:, 8].set(  # Update bounce count (used as lock flag for green blockers)
-            jnp.where(
-                blocker_mask,
-                new_blocker_locked,  # Update lock status for green blockers
+                tracker_mask,
+                new_target_beam_tracker,
                 jnp.where(
                     bounce_mask,
-                    new_bounce_count,  # Update bounce count for bounce craft
-                    enemies[:, 8]  # Keep existing values for others
+                    new_target_beam,
+                    enemies[:, 2]
                 )
             )
         )
+        enemies = enemies.at[:, 3].set(active.astype(jnp.float32))  # Update active states
+
+        # Update blocker lock status (stored in column 8)
+        enemies = enemies.at[:, 8].set(
+            jnp.where(
+                blocker_mask,
+                new_blocker_locked,  # Update lock status for green blockers
+                enemies[:, 8]  # Keep existing values for others
+            )
+        )
+
         enemies = enemies.at[:, 9].set(new_linger_timer)  # Update linger timer (WORKING VERSION)
 
-        # Update target X for trackers and blockers
+        # Update target X for trackers (stored in column 10)
         enemies = enemies.at[:, 10].set(
             jnp.where(
                 tracker_mask,
                 new_target_x,  # Update target X for trackers
-                enemies[:, 10]  # Keep target_x for blockers, existing values for others
+                enemies[:, 10]  # Keep existing values for others (including bounce craft spawn height)
             )
         )
 
-        # Update course changes remaining for trackers
+        # Update course changes remaining for trackers (column 13)
         enemies = enemies.at[:, 13].set(
             jnp.where(
                 tracker_mask,
                 new_course_changes_remaining,  # Update course changes for trackers
-                enemies[:, 13]  # Keep existing values for others
+                enemies[:, 13]  # Keep existing values for others (including bounce craft movement direction)
+            )
+        )
+
+        # Update bounce craft state machine (column 14)
+        enemies = enemies.at[:, 14].set(
+            jnp.where(
+                bounce_mask,
+                new_bounce_state,
+                enemies[:, 14]
             )
         )
 
         return state.replace(enemies=enemies)
+
     @partial(jax.jit, static_argnums=(0,))
     def _check_collisions(self, state: BeamRiderState) -> BeamRiderState:
         """Check for collisions between projectiles and enemies"""
