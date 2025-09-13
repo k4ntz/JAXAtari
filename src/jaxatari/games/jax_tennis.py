@@ -1594,7 +1594,7 @@ class TennisJaxEnv(JaxEnvironment[TennisState, TennisObs, TennisInfo, TennisCons
             [jnp.array([ball_obs.ball_x]), jnp.array([ball_obs.ball_y]), jnp.array([ball_obs.ball_z]),
              jnp.array([ball_obs.bounces]), jnp.array([ball_obs.last_hit])])
 
-    def observation_space(self) -> spaces.Dict:
+    def observation_space(self) -> spaces:
         return spaces.Dict({
             "player": spaces.Dict({
                 "player_x": spaces.Box(low=0, high=160, shape=(), dtype=jnp.float32),
