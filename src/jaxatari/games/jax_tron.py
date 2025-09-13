@@ -141,9 +141,81 @@ class _DiscOps:
 
         return next_phase
 
+
     @staticmethod
     @jit
     def compute_velocity(
+        discs: Discs,
+        next_phase: Array,
+        player_center_x: Array,
+        player_center_y: Array,
+        inbound_speed: Array,
+    ) -> Tuple[Array, Array]:
+        """
+        Recomputes a homing velocity every step for player-returning discs (phase==2)
+        - Uses the normalized vector from the discs center to the players current center.
+        - If the disc is within one step of the player, step exactly onto the player
+          to avoid overshoot/orbit.
+        - Inactive discs (phase==0) have zero velocity.
+        """
+        is_returning_player = (next_phase == jnp.int32(2)) & (discs.owner == jnp.int32(0))
+        is_inactive = next_phase == jnp.int32(0)
+    
+        # Use centers to compute a direction towards the players body
+        disc_cx, disc_cy = rect_center(discs.x, discs.y, discs.w, discs.h)
+    
+        # Vector from disc -> player center
+        # convert to float for normalization
+        dx_f = (player_center_x - disc_cx).astype(jnp.float32)
+        dy_f = (player_center_y - disc_cy).astype(jnp.float32)
+        dist = jnp.sqrt(dx_f * dx_f + dy_f * dy_f) # euclidean distance
+    
+        # Unit direction (float), scaled by inbound speed
+        denom = jnp.maximum(dist, jnp.float32(1.0))  # avoid div-by-zero
+        ux = dx_f / denom
+        uy = dy_f / denom
+    
+        speed_f = jnp.asarray(inbound_speed, dtype=jnp.float32)
+
+        # round to the nearest integer pixel velocity. THis preserves average grid while
+        # keeping movement constraint to the integer grid
+        vx_homing = jnp.round(ux * speed_f).astype(jnp.int32)
+        vy_homing = jnp.round(uy * speed_f).astype(jnp.int32)
+    
+        # If the disc is within one step (<= speed) to the player, move exactly to the remaining
+        # integer delte so the disc lands on the players center this frame
+        dx_i = (player_center_x - disc_cx).astype(jnp.int32)
+        dy_i = (player_center_y - disc_cy).astype(jnp.int32)
+        close = dist <= speed_f
+        vx_close = dx_i
+        vy_close = dy_i
+    
+        vx_new = jnp.where(close, vx_close, vx_homing)
+        vy_new = jnp.where(close, vy_close, vy_homing)
+    
+        # ensure progress when rounding yields (0,0)
+        # this can happen when |ux|and |uy| are both < 0.5 with speed==1, producing
+        # rounded zeros. If the distance is still nonzero, nudge one pixel in the
+        # correct signed direction to guarantee forward progress.
+        zero_pair = (vx_new == jnp.int32(0)) & (vy_new == jnp.int32(0)) & (dist > jnp.float32(0))
+        vx_new = jnp.where(zero_pair, jnp.sign(dx_f).astype(jnp.int32), vx_new)
+        vy_new = jnp.where(zero_pair, jnp.sign(dy_f).astype(jnp.int32), vy_new)
+    
+        # Apply homing velocity only for returning player discs; keep stored velocity otherwise
+        velocity_x = jnp.where(is_returning_player, vx_new, discs.vx)
+        velocity_y = jnp.where(is_returning_player, vy_new, discs.vy)
+    
+        # Inactive discs don't move
+        velocity_x = jnp.where(is_inactive, jnp.int32(0), velocity_x)
+        velocity_y = jnp.where(is_inactive, jnp.int32(0), velocity_y)
+    
+        return velocity_x, velocity_y
+    
+    
+
+    @staticmethod
+    @jit
+    def compute_velocity_old(
         discs: Discs,
         next_phase: Array,
         player_center_x: Array,
