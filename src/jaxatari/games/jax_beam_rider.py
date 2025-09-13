@@ -293,9 +293,10 @@ class Enemy:
     tracker_timer: int = 0  # Timer for orange tracker direction changes
 
 
-class BeamRiderState(NamedTuple):
+@struct.dataclass
+class BeamRiderState:
     """Complete game state"""
-    # Game entities
+    #Game entities
     ship: Ship
     projectiles: chex.Array
     enemies: chex.Array
@@ -484,23 +485,23 @@ class BeamRiderEnv(JaxEnvironment[BeamRiderState, BeamRiderObservation, BeamRide
         # movement_pattern, white_saucer_firing_timer, jump_timer
 
         state = BeamRiderState(
-            ship,  # ship: Ship
-            projectiles,  # projectiles: chex.Array
-            enemies,  # enemies: chex.Array
-            0,  # score: int
-            self.consts.INITIAL_LIVES,  # lives: int
-            1,  # level: int
-            False,  # game_over: bool
-            rng_key,  # rng_key: chex.PRNGKey
-            0,  # frame_count: int
-            0,  # enemy_spawn_timer: int
-            self.consts.TORPEDOES_PER_SECTOR,  # torpedoes_remaining: int
-            torpedo_projectiles,  # torpedo_projectiles: chex.Array
-            1,  # current_sector: int
-            0,  # enemies_killed_this_sector: int
-            sentinel_projectiles,  # sentinel_projectiles: chex.Array
-            False,  # sentinel_spawned_this_sector: bool
-            # enemy_spawn_interval has default, so it's optional
+            ship=ship,
+            projectiles=projectiles,
+            enemies=enemies,
+            torpedo_projectiles=torpedo_projectiles,
+            sentinel_projectiles=sentinel_projectiles,
+            score=0,
+            lives=self.constants.INITIAL_LIVES,
+            level=1,
+            game_over=False,
+            frame_count=0,
+            enemy_spawn_timer=0,
+            current_sector=1,
+            enemies_killed_this_sector=0,
+            torpedoes_remaining=self.constants.TORPEDOES_PER_SECTOR,
+            sentinel_spawned_this_sector=False,
+            enemy_spawn_interval=self.constants.BASE_ENEMY_SPAWN_INTERVAL,
+            rng_key=rng_key
         )
 
         obs = self._get_observation(state)
