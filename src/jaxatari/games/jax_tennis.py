@@ -94,6 +94,7 @@ class PlayerState(NamedTuple):
     player_direction: chex.Array  # direction the player is currently facing in (-1: look towards left, 1: look towards right)
     player_field: chex.Array  # top (1) or bottom (-1) field
     player_serving: chex.Array  # true: Player is serving, false: Enemy is serving
+    player_walk_speed: chex.Array
 
 
 class EnemyState(NamedTuple):
@@ -129,7 +130,8 @@ class TennisState(NamedTuple):
         jnp.array(PLAYER_START_Y),
         jnp.array(PLAYER_START_DIRECTION),
         jnp.array(PLAYER_START_FIELD),
-        jnp.array(True)
+        jnp.array(True),
+        jnp.array(1.0),
     )
     enemy_state: EnemyState = EnemyState(  # all enemy-related data
         jnp.array(START_X),
@@ -165,6 +167,7 @@ class TennisState(NamedTuple):
     counter: chex.Array = jnp.array(
         0)
     animator_state: AnimatorState = AnimatorState()
+    random_key: jax.random.PRNGKey = jax.random.PRNGKey(0)
 
 
 @jax.jit
@@ -194,7 +197,7 @@ def tennis_step(state: TennisState, action) -> TennisState:
                                                                          state.game_state.enemy_game_score,
                                                                          state.game_state.is_finished,
                                                                      ),
-                                                                     state.counter + 1),
+                                                                     state.counter + 1, random_key=state.random_key),
                                                lambda _: normal_step(state, action),
                                                None
                                                ),
@@ -222,7 +225,7 @@ def normal_step(state: TennisState, action) -> TennisState:
     new_animator_state = animator_step(state, new_player_state, new_enemy_state)
 
     return TennisState(new_player_state, new_enemy_state, new_state_after_ball_step.ball_state,
-                       new_state_after_ball_step.game_state, state.counter + 1, new_animator_state)
+                       new_state_after_ball_step.game_state, state.counter + 1, new_animator_state, state.random_key)
 
 
 @jax.jit
@@ -445,7 +448,8 @@ def check_score(state: TennisState) -> TennisState:
                           jnp.array(ENEMY_START_Y)),
                 jnp.array(PLAYER_START_DIRECTION),
                 new_player_field,
-                new_player_serving
+                new_player_serving,
+                state.player_state.player_walk_speed
             ),
             EnemyState(
                 jnp.array(START_X),
@@ -471,7 +475,8 @@ def check_score(state: TennisState) -> TennisState:
                 jnp.array(-1)
             ),
             after_set_check_game_state,
-            state.counter
+            state.counter,
+            random_key=state.random_key,
         ),
         lambda _: TennisState(state.player_state, state.enemy_state, BallState(  # no one has scored yet
             state.ball_state.ball_x,
@@ -487,7 +492,7 @@ def check_score(state: TennisState) -> TennisState:
             state.ball_state.move_y,
             new_bounces,
             state.ball_state.last_hit
-        ), state.game_state, state.counter),
+        ), state.game_state, state.counter, random_key=state.random_key),
         None
     )
 
@@ -596,13 +601,13 @@ def player_step(state: TennisState, action: chex.Array) -> PlayerState:
     # move left if the player is trying to move left
     player_x = jnp.where(
         left,
-        player_state.player_x - 1,
+        player_state.player_x - player_state.player_walk_speed,
         player_state.player_x,
     )
     # move right if the player is trying to move right
     player_x = jnp.where(
         right,
-        player_state.player_x + 1,
+        player_state.player_x + player_state.player_walk_speed,
         player_x,
     )
     # apply X bounding box
@@ -614,7 +619,7 @@ def player_step(state: TennisState, action: chex.Array) -> PlayerState:
             up,
             jnp.logical_not(state.game_state.is_serving)  # not allowed to change y position while someone is serving
         ),
-        player_state.player_y - 1,
+        player_state.player_y - player_state.player_walk_speed,
         player_state.player_y,
     )
 
@@ -624,7 +629,7 @@ def player_step(state: TennisState, action: chex.Array) -> PlayerState:
             down,
             jnp.logical_not(state.game_state.is_serving)  # not allowed to change y position while someone is serving
         ),
-        player_state.player_y + 1,
+        player_state.player_y + player_state.player_walk_speed,
         player_y,
     )
     # apply Y bounding box
@@ -651,7 +656,8 @@ def player_step(state: TennisState, action: chex.Array) -> PlayerState:
         player_y,
         new_player_direction,
         player_state.player_field,
-        player_state.player_serving
+        player_state.player_serving,
+        player_state.player_walk_speed,
     )
 
 
@@ -1047,7 +1053,8 @@ def ball_step(state: TennisState, action) -> TennisState:
             state.game_state.enemy_game_score,
             state.game_state.is_finished
         ),
-        state.counter
+        state.counter,
+        random_key=state.random_key
     )
 
 
