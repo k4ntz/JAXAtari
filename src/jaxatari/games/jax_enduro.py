@@ -1665,39 +1665,41 @@ class EnduroRenderer(JAXGameRenderer):
         # Alternate between frame 0 and 1 based on step count
         frame_index = (animation_step % 2).astype(jnp.int32)
 
+        is_day = ~jnp.isin(state.weather_index, self.config.weather_with_night_car_sprite)
+
         # Load all car sprites as separate variables (they have different shapes) depending on the current weather
         car_0 = lax.cond(
-            ~jnp.isin(state.weather_index, self.config.weather_with_night_car_sprite),
+            is_day,
             lambda: aj.get_sprite_frame(self.sprites['car_0.npy'], frame_index),
             lambda: aj.get_sprite_frame(self.sprites['car_0_night.npy'], 0)
         )
         car_1 = lax.cond(
-            ~jnp.isin(state.weather_index, self.config.weather_with_night_car_sprite),
+            is_day,
             lambda: aj.get_sprite_frame(self.sprites['car_1.npy'], frame_index),
             lambda: aj.get_sprite_frame(self.sprites['car_1_night.npy'], 0)
         )
         car_2 = lax.cond(
-            ~jnp.isin(state.weather_index, self.config.weather_with_night_car_sprite),
+            is_day,
             lambda: aj.get_sprite_frame(self.sprites['car_2.npy'], frame_index),
             lambda: aj.get_sprite_frame(self.sprites['car_2_night.npy'], 0)
         )
         car_3 = lax.cond(
-            ~jnp.isin(state.weather_index, self.config.weather_with_night_car_sprite),
+            is_day,
             lambda: aj.get_sprite_frame(self.sprites['car_3.npy'], frame_index),
             lambda: aj.get_sprite_frame(self.sprites['car_3_night.npy'], 0)
         )
         car_4 = lax.cond(
-            ~jnp.isin(state.weather_index, self.config.weather_with_night_car_sprite),
+            is_day,
             lambda: aj.get_sprite_frame(self.sprites['car_4.npy'], frame_index),
             lambda: aj.get_sprite_frame(self.sprites['car_4_night.npy'], 0)
         )
         car_5 = lax.cond(
-            ~jnp.isin(state.weather_index, self.config.weather_with_night_car_sprite),
+            is_day,
             lambda: aj.get_sprite_frame(self.sprites['car_5.npy'], frame_index),
             lambda: aj.get_sprite_frame(self.sprites['car_5_night.npy'], 0)
         )
         car_6 = lax.cond(
-            ~jnp.isin(state.weather_index, self.config.weather_with_night_car_sprite),
+            is_day,
             lambda: aj.get_sprite_frame(self.sprites['car_6.npy'], frame_index),
             lambda: aj.get_sprite_frame(self.sprites['car_6_night.npy'], 0)
         )
@@ -1710,6 +1712,7 @@ class EnduroRenderer(JAXGameRenderer):
         ys = opponent_positions[:, 1]  # y positions
         colors = opponent_positions[:, 2]  # packed RGB colors
 
+        # TODO: except night cars
         def apply_color_to_sprite(sprite, packed_color):
             """Apply custom color to sprite, replacing non-black pixels"""
             # Unpack RGB from integer
@@ -1718,14 +1721,14 @@ class EnduroRenderer(JAXGameRenderer):
             b = packed_color & 0xFF
             return aj.change_sprite_color(sprite, jnp.stack([r, g, b], dtype=jnp.int32))
 
-        # Apply colors to each sprite
-        colored_car_0 = apply_color_to_sprite(car_0, colors[0])
-        colored_car_1 = apply_color_to_sprite(car_1, colors[1])
-        colored_car_2 = apply_color_to_sprite(car_2, colors[2])
-        colored_car_3 = apply_color_to_sprite(car_3, colors[3])
-        colored_car_4 = apply_color_to_sprite(car_4, colors[4])
-        colored_car_5 = apply_color_to_sprite(car_5, colors[5])
-        colored_car_6 = apply_color_to_sprite(car_6, colors[6])
+        # Apply colors to each sprite when it is day. At night just keep the sprite (rear lights)
+        colored_car_0 = lax.cond(is_day, lambda: apply_color_to_sprite(car_0, colors[0]), lambda: car_0)
+        colored_car_1 = lax.cond(is_day, lambda: apply_color_to_sprite(car_1, colors[1]), lambda: car_1)
+        colored_car_2 = lax.cond(is_day, lambda: apply_color_to_sprite(car_2, colors[2]), lambda: car_2)
+        colored_car_3 = lax.cond(is_day, lambda: apply_color_to_sprite(car_3, colors[3]), lambda: car_3)
+        colored_car_4 = lax.cond(is_day, lambda: apply_color_to_sprite(car_4, colors[4]), lambda: car_4)
+        colored_car_5 = lax.cond(is_day, lambda: apply_color_to_sprite(car_5, colors[5]), lambda: car_5)
+        colored_car_6 = lax.cond(is_day, lambda: apply_color_to_sprite(car_6, colors[6]), lambda: car_6)
 
         # Render each car individually with explicit conditionals
         # Car 0 (closest)
