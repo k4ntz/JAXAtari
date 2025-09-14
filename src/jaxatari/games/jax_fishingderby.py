@@ -30,21 +30,31 @@ class GameConfig:
     SKY_COLOR: Tuple[int, int, int] = (100, 149, 237)
     WATER_COLOR: Tuple[int, int, int] = (60, 60, 160)
     WATER_Y_START: int = 64
-    RESET:int  = 18
-    # Player and Hook
+    RESET: int = 18
+
+    # Player and Rod/Hook
     P1_START_X: int = 20
     P2_START_X: int = 124
     PLAYER_Y: int = 34
+    ROD_Y: int = 44  # Y position where rod extends horizontally
+
+    # Rod mechanics
+    MIN_ROD_LENGTH: int = 10  # Minimum rod extension
+    MAX_ROD_LENGTH: int = 50  # Maximum rod extension
+    ROD_SPEED: float = 1.5  # Speed of rod extension/retraction
+
     HOOK_WIDTH: int = 3
     HOOK_HEIGHT: int = 5
-    HOOK_SPEED_H: float = 1.2
     HOOK_SPEED_V: float = 1.0
     REEL_SLOW_SPEED: float = 0.5
     REEL_FAST_SPEED: float = 1.5
     LINE_Y_START: int = 48
     LINE_Y_END: int = 160
+
+    # Physics
     Acceleration: float = 0.2
     Damping: float = 0.85
+
     # Fish
     FISH_WIDTH: int = 8
     FISH_HEIGHT: int = 7
@@ -60,15 +70,13 @@ class GameConfig:
     SHARK_Y: int = 68
 
 
-
 class PlayerState(NamedTuple):
-    hook_x: chex.Array
-    hook_y: chex.Array
+    rod_length: chex.Array  # Length of horizontal rod extension
+    hook_y: chex.Array  # Vertical position of hook (relative to rod end)
     score: chex.Array
-    hook_state: chex.Array
+    hook_state: chex.Array  # 0=free, 1=hooked/reeling slow, 2=reeling fast
     hooked_fish_idx: chex.Array
-    hook_velocity_x: chex.Array
-    hook_velocity_y: chex.Array
+    hook_velocity_y: chex.Array  # Only vertical velocity now
 
 
 class GameState(NamedTuple):
@@ -83,7 +91,6 @@ class GameState(NamedTuple):
     time: chex.Array
     game_over: chex.Array
     key: jax.random.PRNGKey
-
 
 
 class FishingDerbyObservation(NamedTuple):
@@ -124,16 +131,35 @@ class FishingDerby(JaxEnvironment):
             Action.DOWNRIGHTFIRE,
             Action.DOWNLEFTFIRE
         ]
+
+    def _get_hook_position(self, player_x: float, player_state: PlayerState) -> Tuple[float, float]:
+        """Calculate the actual hook position based on rod length and hook depth."""
+        cfg = self.config
+        rod_end_x = player_x + player_state.rod_length
+        hook_x = rod_end_x
+        hook_y = cfg.ROD_Y + player_state.hook_y
+        return hook_x, hook_y
+
     @partial(jax.jit, static_argnums=(0,))
-    def reset(self, key: jax.random.PRNGKey = jax.random.PRNGKey(10)) -> Tuple[FishingDerbyObservation, GameState, ]:
+    def reset(self, key: jax.random.PRNGKey = jax.random.PRNGKey(10)) -> Tuple[FishingDerbyObservation, GameState]:
         key, fish_key = jax.random.split(key)
 
         p1_state = PlayerState(
-            hook_x=jnp.array(self.config.P1_START_X + 20.0), hook_y=jnp.array(float(self.config.LINE_Y_START - 8.0)),
-            score=jnp.array(0), hook_state=jnp.array(0), hooked_fish_idx=jnp.array(-1, dtype=jnp.int32), hook_velocity_x= jnp.array(0.0), hook_velocity_y=jnp.array(0.0))
+            rod_length=jnp.array(float(self.config.MIN_ROD_LENGTH)),
+            hook_y=jnp.array(0.0),  # Hook starts at rod level
+            score=jnp.array(0),
+            hook_state=jnp.array(0),
+            hooked_fish_idx=jnp.array(-1, dtype=jnp.int32),
+            hook_velocity_y=jnp.array(0.0)
+        )
+
         p2_state = PlayerState(
-            hook_x=jnp.array(self.config.P2_START_X + 8.0), hook_y=jnp.array(float(self.config.LINE_Y_START)),
-            score=jnp.array(0), hook_state=jnp.array(0), hooked_fish_idx=jnp.array(-1, dtype=jnp.int32), hook_velocity_x= jnp.array(0.0), hook_velocity_y=jnp.array(0.0)
+            rod_length=jnp.array(float(self.config.MIN_ROD_LENGTH)),
+            hook_y=jnp.array(0.0),
+            score=jnp.array(0),
+            hook_state=jnp.array(0),
+            hooked_fish_idx=jnp.array(-1, dtype=jnp.int32),
+            hook_velocity_y=jnp.array(0.0)
         )
 
         fish_x = jax.random.uniform(fish_key, (self.config.NUM_FISH,), minval=10.0,
@@ -141,18 +167,23 @@ class FishingDerby(JaxEnvironment):
         fish_y = jnp.array(self.config.FISH_ROW_YS, dtype=jnp.float32)
 
         state = GameState(
-            p1=p1_state, p2=p2_state, fish_positions=jnp.stack([fish_x, fish_y], axis=1),
+            p1=p1_state, p2=p2_state,
+            fish_positions=jnp.stack([fish_x, fish_y], axis=1),
             fish_directions=jax.random.choice(key, jnp.array([-1.0, 1.0]), (self.config.NUM_FISH,)),
             fish_active=jnp.ones(self.config.NUM_FISH, dtype=jnp.bool_),
-            shark_x=jnp.array(self.config.SCREEN_WIDTH / 2.0), shark_dir=jnp.array(1.0),
-            reeling_priority=jnp.array(-1), time=jnp.array(0), game_over=jnp.array(False), key=key
+            shark_x=jnp.array(self.config.SCREEN_WIDTH / 2.0),
+            shark_dir=jnp.array(1.0),
+            reeling_priority=jnp.array(-1),
+            time=jnp.array(0),
+            game_over=jnp.array(False),
+            key=key
         )
         return self._get_observation(state), state
 
-
     def _get_observation(self, state: GameState) -> FishingDerbyObservation:
+        hook_x, hook_y = self._get_hook_position(self.config.P1_START_X, state.p1)
         return FishingDerbyObservation(
-            player1_hook_xy=jnp.array([state.p1.hook_x, state.p1.hook_y]),
+            player1_hook_xy=jnp.array([hook_x, hook_y]),
             fish_xy=state.fish_positions,
             shark_x=state.shark_x,
             score=state.p1.score
@@ -171,15 +202,11 @@ class FishingDerby(JaxEnvironment):
     def step(self, state: GameState, action: int) -> Tuple[
         FishingDerbyObservation, GameState, float, bool, FishingDerbyInfo]:
         """Processes one frame of the game and returns the full tuple."""
-
         new_state = self._step_logic(state, action)
-
-
         observation = self._get_observation(new_state)
         reward = self._get_reward(state, new_state)
         done = self._get_done(new_state)
         info = self._get_info(new_state)
-
         return observation, new_state, reward, done, info
 
     def action_space(self) -> spaces.Discrete:
@@ -187,6 +214,7 @@ class FishingDerby(JaxEnvironment):
 
     def get_action_space(self) -> jnp.ndarray:
         return jnp.array(self.action_set)
+
     def _step_logic(self, state: GameState, p1_action: int) -> GameState:
         """The core logic for a single game step, returning only the new state."""
         cfg = self.config
@@ -196,7 +224,6 @@ class FishingDerby(JaxEnvironment):
             return new_state
 
         def safe_set_at(arr, idx, value, pred):
-            # Only update arr[idx] if pred is True; otherwise return arr unchanged.
             def do_set(a):
                 return a.at[idx].set(value)
 
@@ -222,48 +249,63 @@ class FishingDerby(JaxEnvironment):
             )
             new_shark_x = jnp.clip(new_shark_x, 0, cfg.SCREEN_WIDTH - cfg.SHARK_WIDTH)
 
-
-            # Player 1 Hook Logic
-            # --- Player 1 Hook Logic (fixed physics) ---
+            # Player 1 Rod and Hook Logic
             p1 = state.p1
-            min_x = cfg.SCREEN_WIDTH / 4
-            max_x = cfg.SCREEN_WIDTH / 2 - cfg.HOOK_WIDTH
-            min_y = cfg.LINE_Y_START - 8.0
-            max_y = cfg.LINE_Y_END
 
-            # Inputs -> accelerations
-            ax = jnp.where(p1_action == Action.RIGHT, +cfg.Acceleration,
-                           jnp.where(p1_action == Action.LEFT, -cfg.Acceleration, 0.0))
+            # Rod length control (horizontal extension)
+            rod_change = 0.0
+            rod_change = jnp.where(p1_action == Action.RIGHT, +cfg.ROD_SPEED, rod_change)
+            rod_change = jnp.where(p1_action == Action.LEFT, -cfg.ROD_SPEED, rod_change)
 
-            # When not hooked, vertical is free; when hooked, vertical is governed by reel speed (ay=0, vy set by reel)
-            ay_free = jnp.where(p1_action == Action.DOWN, +cfg.Acceleration,
-                                jnp.where(p1_action == Action.UP, -cfg.Acceleration, 0.0))
+            new_rod_length = jnp.clip(
+                p1.rod_length + rod_change,
+                cfg.MIN_ROD_LENGTH,
+                cfg.MAX_ROD_LENGTH
+            )
 
-            # Integrate velocity with damping
-            vx = p1.hook_velocity_x * cfg.Damping + ax
+            # Hook vertical movement (only when not hooked to fish)
+            hook_change = 0.0
+            # Only allow vertical movement when free (hook_state == 0)
+            can_move_vertically = (p1.hook_state == 0)
+            hook_change = jnp.where(can_move_vertically & (p1_action == Action.DOWN), +cfg.Acceleration, hook_change)
+            hook_change = jnp.where(can_move_vertically & (p1_action == Action.UP), -cfg.Acceleration, hook_change)
 
-            # If free (state 0), integrate vy; if hooked (1/2), vy is controlled below
-            vy_free = p1.hook_velocity_y * cfg.Damping + ay_free
+            # Update hook velocity with damping
+            new_hook_velocity_y = p1.hook_velocity_y * cfg.Damping + hook_change
 
-            # Tentative position update (free)
-            x_free = jnp.clip(p1.hook_x + vx, min_x, max_x)
-            y_free = jnp.clip(p1.hook_y + vy_free, min_y, max_y)
+            # Calculate hook position limits
+            min_hook_y = 0.0  # At rod level
+            max_hook_y = cfg.LINE_Y_END - cfg.ROD_Y  # Maximum depth
 
-            # If we hit bounds, kill velocity in that axis (prevents jitter on edges)
-            vx = jnp.where((x_free == min_x) | (x_free == max_x), 0.0, vx)
-            vy_free = jnp.where((y_free == min_y) | (y_free == max_y), 0.0, vy_free)
+            # Update hook position
+            new_hook_y = jnp.clip(
+                p1.hook_y + new_hook_velocity_y,
+                min_hook_y,
+                max_hook_y
+            )
 
-            # Start from free-move as default
-            p1_hook_x = x_free
-            p1_hook_y = jnp.where(p1.hook_state == 0, y_free, p1.hook_y)
-            new_velocity_x = vx
-            new_velocity_y = jnp.where(p1.hook_state == 0, vy_free, p1.hook_velocity_y)
+            # Kill velocity if hitting bounds
+            new_hook_velocity_y = jnp.where(
+                (new_hook_y == min_hook_y) | (new_hook_y == max_hook_y),
+                0.0,
+                new_hook_velocity_y
+            )
+
+            # Get actual hook position in world coordinates
+            hook_x, hook_y = self._get_hook_position(cfg.P1_START_X, PlayerState(
+                rod_length=new_rod_length,
+                hook_y=new_hook_y,
+                score=p1.score,
+                hook_state=p1.hook_state,
+                hooked_fish_idx=p1.hooked_fish_idx,
+                hook_velocity_y=new_hook_velocity_y
+            ))
 
             # Collision and Game Logic
             fish_active, reeling_priority = state.fish_active, state.reeling_priority
             can_hook = (p1.hook_state == 0)
-            hook_collides_fish = (jnp.abs(new_fish_pos[:, 0] - p1_hook_x) < cfg.FISH_WIDTH) & (
-                jnp.abs(new_fish_pos[:, 1] - p1_hook_y) < cfg.FISH_HEIGHT)
+            hook_collides_fish = (jnp.abs(new_fish_pos[:, 0] - hook_x) < cfg.FISH_WIDTH) & (
+                    jnp.abs(new_fish_pos[:, 1] - hook_y) < cfg.FISH_HEIGHT)
             valid_hook_targets = can_hook & fish_active & hook_collides_fish
 
             hooked_fish_idx, did_hook_fish = jnp.argmax(valid_hook_targets), jnp.any(valid_hook_targets)
@@ -275,34 +317,47 @@ class FishingDerby(JaxEnvironment):
             )
             reeling_priority = jnp.where(did_hook_fish & (reeling_priority == -1), 0, reeling_priority)
 
+            # Fast reel with FIRE button
             can_reel_fast = (p1_action == Action.FIRE) & (p1_hook_state == 1) & (
-                (reeling_priority == -1) | (reeling_priority == 0))
+                    (reeling_priority == -1) | (reeling_priority == 0))
             p1_hook_state = jnp.where(can_reel_fast, 2, p1_hook_state)
             reeling_priority = jnp.where(can_reel_fast, 0, reeling_priority)
 
+            # Reeling mechanics (moves hook upward toward rod)
             reel_speed = jnp.where(p1_hook_state == 2, cfg.REEL_FAST_SPEED, cfg.REEL_SLOW_SPEED)
-            p1_hook_y = jnp.where(p1_hook_state > 0,
-                                  jnp.clip(p1_hook_y - reel_speed, min_y, max_y),
-                                  p1_hook_y)
-            new_velocity_y = jnp.where(p1_hook_state > 0, 0.0, new_velocity_y)
+            new_hook_y = jnp.where(p1_hook_state > 0,
+                                   jnp.clip(new_hook_y - reel_speed, min_hook_y, max_hook_y),
+                                   new_hook_y)
+            new_hook_velocity_y = jnp.where(p1_hook_state > 0, 0.0, new_hook_velocity_y)
 
-            # Hooked fish follows the hook (only if we truly have one)
-            hooked_fish_pos = jnp.array([p1_hook_x, p1_hook_y])
+            # Update hook position after reeling
+            hook_x, hook_y = self._get_hook_position(cfg.P1_START_X, PlayerState(
+                rod_length=new_rod_length,
+                hook_y=new_hook_y,
+                score=p1.score,
+                hook_state=p1_hook_state,
+                hooked_fish_idx=p1_hooked_fish_idx,
+                hook_velocity_y=new_hook_velocity_y
+            ))
+
+            # Hooked fish follows the hook
+            hooked_fish_pos = jnp.array([hook_x, hook_y])
             has_hook = (p1_hook_state > 0) & (p1_hooked_fish_idx >= 0)
             new_fish_pos = safe_set_at(new_fish_pos, p1_hooked_fish_idx, hooked_fish_pos, has_hook)
 
+            # Scoring and collision detection
             p1_score, key = p1.score, state.key
-            shark_collides = (p1_hook_state > 0) & (jnp.abs(p1_hook_x - new_shark_x) < cfg.SHARK_WIDTH) & (
-                jnp.abs(p1_hook_y - cfg.SHARK_Y) < cfg.SHARK_HEIGHT)
-            scored_fish = (p1_hook_state > 0) & (p1_hook_y <= cfg.LINE_Y_START)
+            shark_collides = (p1_hook_state > 0) & (jnp.abs(hook_x - new_shark_x) < cfg.SHARK_WIDTH) & (
+                    jnp.abs(hook_y - cfg.SHARK_Y) < cfg.SHARK_HEIGHT)
+            scored_fish = (p1_hook_state > 0) & (hook_y <= cfg.ROD_Y + 5)  # Fish reaches near the rod
             reset_hook = shark_collides | scored_fish
 
-            prev_idx = p1_hooked_fish_idx  # cache before we overwrite it anywhere
+            prev_idx = p1_hooked_fish_idx
 
             fish_scores = jnp.array(cfg.FISH_ROW_SCORES)
             p1_score += jnp.where(scored_fish, fish_scores[p1_hooked_fish_idx], 0)
 
-            # --- Fish respawn (Atari-style) ---
+            # Fish respawn
             def respawn_fish(all_pos, all_dirs, all_active, idx, key):
                 kx, kdir = jax.random.split(key)
                 new_x = jax.random.uniform(kx, minval=10.0, maxval=cfg.SCREEN_WIDTH - cfg.FISH_WIDTH)
@@ -313,8 +368,6 @@ class FishingDerby(JaxEnvironment):
                 return new_pos, new_dir, new_act
 
             key, respawn_key = jax.random.split(key)
-
-            # Only respawn if a fish was actually hooked AND the hook just reset
             do_respawn = reset_hook & (prev_idx >= 0)
 
             new_fish_pos, new_fish_dirs, fish_active = jax.lax.cond(
@@ -324,38 +377,31 @@ class FishingDerby(JaxEnvironment):
                 operand=None
             )
 
-            # Clear reeling priority after a completed reel by P1
+            # Clear reeling priority and reset hook state
             reeling_priority = jnp.where(do_respawn & (reeling_priority == 0), -1, reeling_priority)
-
             fish_active = jnp.where(
                 reset_hook,
                 fish_active.at[p1_hooked_fish_idx].set(True),
                 fish_active
             )
-            reeling_priority = jnp.where(
-                reset_hook & (reeling_priority == 0),
-                -1,
-                reeling_priority
-            )
-            # Reset hook & velocities after scoring/shark (post-respawn)
+
+            # Reset hook after scoring/shark collision
             p1_hook_state = jnp.where(reset_hook, 0, p1_hook_state)
             p1_hooked_fish_idx = jnp.where(reset_hook, -1, p1_hooked_fish_idx)
-            p1_hook_x = jnp.where(reset_hook, jnp.array(cfg.P1_START_X + 20.0), p1_hook_x)
-            p1_hook_y = jnp.where(reset_hook, jnp.array(float(cfg.LINE_Y_START - 8.0)), p1_hook_y)
-            new_velocity_x = jnp.where(reset_hook, 0.0, new_velocity_x)
-            new_velocity_y = jnp.where(reset_hook, 0.0, new_velocity_y)
+            new_rod_length = jnp.where(reset_hook, float(cfg.MIN_ROD_LENGTH), new_rod_length)
+            new_hook_y = jnp.where(reset_hook, 0.0, new_hook_y)
+            new_hook_velocity_y = jnp.where(reset_hook, 0.0, new_hook_velocity_y)
 
             game_over = (p1_score >= 99) | (state.p2.score >= 99)
 
             return GameState(
                 p1=PlayerState(
-                    hook_x=p1_hook_x,
-                    hook_y=p1_hook_y,
+                    rod_length=new_rod_length,
+                    hook_y=new_hook_y,
                     score=p1_score,
                     hook_state=p1_hook_state,
                     hooked_fish_idx=p1_hooked_fish_idx,
-                    hook_velocity_x=new_velocity_x,
-                    hook_velocity_y=new_velocity_y
+                    hook_velocity_y=new_hook_velocity_y
                 ),
                 p2=state.p2,
                 fish_positions=new_fish_pos,
@@ -393,6 +439,7 @@ def normalize_frame(frame: chex.Array, target_shape: Tuple[int, int, int]) -> ch
     )
     return frame
 
+
 def load_sprites():
     MODULE_DIR = os.path.dirname(os.path.abspath(__file__))
 
@@ -417,7 +464,7 @@ def load_sprites():
             raise ValueError(f"Failed to load sprite: {path}")
         sprites[name] = sprite
 
-    # --- normalize shark frames ---
+    # Normalize shark frames
     shark_sprites = [sprites['shark1'], sprites['shark2']]
     max_shape = (
         max(s.shape[0] for s in shark_sprites),
@@ -427,7 +474,7 @@ def load_sprites():
     sprites['shark1'] = normalize_frame(sprites['shark1'], max_shape)
     sprites['shark2'] = normalize_frame(sprites['shark2'], max_shape)
 
-    # --- normalize fish frames ---
+    # Normalize fish frames
     fish_sprites = [sprites['fish1'], sprites['fish2']]
     max_shape = (
         max(s.shape[0] for s in fish_sprites),
@@ -470,9 +517,21 @@ class FishingDerbyRenderer(AtraJaxisRenderer):
         raster = self._render_at(raster, cfg.P1_START_X, cfg.PLAYER_Y, self.SPRITE_PLAYER1)
         raster = self._render_at(raster, cfg.P2_START_X, cfg.PLAYER_Y, self.SPRITE_PLAYER2)
 
-        # Draw fishing lines
-        raster = self._render_line(raster, cfg.P1_START_X + 10, cfg.PLAYER_Y + 10, state.p1.hook_x, state.p1.hook_y)
-        raster = self._render_line(raster, cfg.P2_START_X + 2, cfg.PLAYER_Y + 10, state.p2.hook_x, state.p2.hook_y)
+        # Draw fishing rods and lines (proper Atari-style)
+        # Player 1 rod and line
+        p1_rod_end_x = cfg.P1_START_X + state.p1.rod_length
+        p1_hook_x, p1_hook_y = cfg.P1_START_X + state.p1.rod_length, cfg.ROD_Y + state.p1.hook_y
+
+        # Draw horizontal rod
+        raster = self._render_line(raster, cfg.P1_START_X + 10, cfg.ROD_Y, p1_rod_end_x, cfg.ROD_Y,
+                                   color=(139, 69, 19))  # Brown rod
+        # Draw vertical line from rod end to hook
+        raster = self._render_line(raster, p1_rod_end_x, cfg.ROD_Y, p1_hook_x, p1_hook_y,
+                                   color=(200, 200, 200))  # Gray line
+
+        # Player 2 rod and line (simplified for now, same as before)
+        raster = self._render_line(raster, cfg.P2_START_X + 2, cfg.PLAYER_Y + 10, state.p2.rod_length + cfg.P2_START_X,
+                                   cfg.ROD_Y + state.p2.hook_y)
 
         # Draw shark
         shark_frame = jax.lax.cond((state.time // 8) % 2 == 0, lambda: self.SPRITE_SHARK1, lambda: self.SPRITE_SHARK2)
@@ -490,13 +549,16 @@ class FishingDerbyRenderer(AtraJaxisRenderer):
         raster = jax.lax.fori_loop(0, cfg.NUM_FISH, draw_one_fish, raster)
 
         # Draw hooked fish
-        def draw_hooked(p_state, r):
-            return jax.lax.cond(p_state.hook_state > 0,
-                                lambda r_in: self._render_at(r_in, p_state.hook_x, p_state.hook_y, fish_frame),
-                                lambda r_in: r_in, r)
+        def draw_hooked_p1(r):
+            hook_x, hook_y = cfg.P1_START_X + state.p1.rod_length, cfg.ROD_Y + state.p1.hook_y
+            return self._render_at(r, hook_x, hook_y, fish_frame)
 
-        raster = draw_hooked(state.p1, raster)
-        raster = draw_hooked(state.p2, raster)
+        def draw_hooked_p2(r):
+            hook_x, hook_y = cfg.P2_START_X + state.p2.rod_length, cfg.ROD_Y + state.p2.hook_y
+            return self._render_at(r, hook_x, hook_y, fish_frame)
+
+        raster = jax.lax.cond(state.p1.hook_state > 0, draw_hooked_p1, lambda r: r, raster)
+        raster = jax.lax.cond(state.p2.hook_state > 0, draw_hooked_p2, lambda r: r, raster)
 
         # Draw scores
         raster = self._render_score(raster, state.p1.score, 50, 20)
@@ -624,42 +686,42 @@ def get_human_action() -> chex.Array:
 
 
 if __name__ == "__main__":
-        pygame.init()
-        game = FishingDerby()
-        renderer = FishingDerbyRenderer()
-        jitted_step = jax.jit(game.step)
-        jitted_reset = jax.jit(game.reset)
-        scaling = 4
-        screen = pygame.display.set_mode((GameConfig.SCREEN_WIDTH * scaling, GameConfig.SCREEN_HEIGHT * scaling))
-        (_, curr_state) = jitted_reset()
-        running = True
-        frame_by_frame = False
-        frameskip = 1
-        counter = 0
+    pygame.init()
+    game = FishingDerby()
+    renderer = FishingDerbyRenderer()
+    jitted_step = jax.jit(game.step)
+    jitted_reset = jax.jit(game.reset)
+    scaling = 4
+    screen = pygame.display.set_mode((GameConfig.SCREEN_WIDTH * scaling, GameConfig.SCREEN_HEIGHT * scaling))
+    (_, curr_state) = jitted_reset()
+    running = True
+    frame_by_frame = False
+    frameskip = 1
+    counter = 0
 
-        while running:
-            for event in pygame.event.get():
-                if event.type == pygame.QUIT:
-                    running = False
-                elif event.type == pygame.KEYDOWN:
-                    if event.key == pygame.K_f:
-                        frame_by_frame = not frame_by_frame
-                    elif event.key == pygame.K_n and frame_by_frame:
-                        action = get_human_action()
-                        (_, curr_state, _, _, _) = jitted_step(curr_state, action)
-
-            if not frame_by_frame:
-                action = get_human_action()
-                if counter % frameskip == 0:
+    while running:
+        for event in pygame.event.get():
+            if event.type == pygame.QUIT:
+                running = False
+            elif event.type == pygame.KEYDOWN:
+                if event.key == pygame.K_f:
+                    frame_by_frame = not frame_by_frame
+                elif event.key == pygame.K_n and frame_by_frame:
+                    action = get_human_action()
                     (_, curr_state, _, _, _) = jitted_step(curr_state, action)
 
-            # Render and display
-            raster = renderer.render(curr_state)
-            raster_np = jnp.array(raster).transpose((1, 0, 2))
-            aj.update_pygame(screen, raster, scaling, GameConfig.SCREEN_WIDTH,  GameConfig.SCREEN_HEIGHT)
+        if not frame_by_frame:
+            action = get_human_action()
+            if counter % frameskip == 0:
+                (_, curr_state, _, _, _) = jitted_step(curr_state, action)
 
-            counter += 1
-            pygame.time.Clock().tick(60)
-        pygame.quit()
+        # Render and display
+        raster = renderer.render(curr_state)
+        raster_np = jnp.array(raster).transpose((1, 0, 2))
+        aj.update_pygame(screen, raster, scaling, GameConfig.SCREEN_WIDTH, GameConfig.SCREEN_HEIGHT)
+
+        counter += 1
+        pygame.time.Clock().tick(60)
+    pygame.quit()
 
 # run with: python scripts/play.py --game src/jaxatari/games/jax_fishingderby.py --record my_record_file.npz
