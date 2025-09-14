@@ -1632,7 +1632,7 @@ class TennisJaxEnv(JaxEnvironment[TennisState, TennisObs, TennisInfo, TennisCons
             obs.player_sets.flatten(),
             obs.enemy_points.flatten(),
             obs.enemy_sets.flatten()
-        ]).astype(jnp.float64)
+        ])
 
 #jnp.array(x, dtype=jnp.float32)
 
