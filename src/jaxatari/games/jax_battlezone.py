@@ -48,7 +48,7 @@ MAX_OBSTACLES = 16
 
 # Enemy AI constants
 ENEMY_DETECTION_RANGE = 500.0
-ENEMY_MOVE_SPEED = 0.15
+ENEMY_MOVE_SPEED = 0.35
 ENEMY_TURN_SPEED = 0.008
 ENEMY_FIRE_COOLDOWN = 180  # frames between shots (3 seconds at 60fps)
 ENEMY_FIRE_RANGE = 400.0
@@ -70,8 +70,8 @@ BULLET_SPEED = 1.0 # 4.0
 BULLET_LIFETIME = 120  # frames
 
 # Enemy spawning constants
-ENEMY_SPAWN_DISTANCE_MIN = 150.0  # Minimum spawn distance from player
-ENEMY_SPAWN_DISTANCE_MAX = 300.0  # Maximum spawn distance from player
+ENEMY_SPAWN_DISTANCE_MIN = 80.0  # Minimum spawn distance from player (closer)
+ENEMY_SPAWN_DISTANCE_MAX = 200.0  # Maximum spawn distance from player (closer)
 MAX_ACTIVE_ENEMIES = 4  # Maximum enemies active at once
 ENEMY_SPAWN_COOLDOWN = 300  # frames between spawns (5 seconds at 60fps)
 ENEMY_SPAWN_WAIT = 120  # frames enemies wait after spawn before aiming/shooting
@@ -954,10 +954,14 @@ class JaxBattleZone(JaxEnvironment[BattleZoneState, BattleZoneObservation, chex.
         )
         
         # Start with fewer enemies, closer to player like original game
-        enemy_positions_x = jnp.array([200.0, -200.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
-                                      0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0])
-        enemy_positions_y = jnp.array([0.0, 0.0, 200.0, -200.0, 0.0, 0.0, 0.0, 0.0,
-                                      0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0])
+        enemy_positions_x = jnp.array([
+            120.0, -120.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
+            0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0
+        ])
+        enemy_positions_y = jnp.array([
+            0.0, 0.0, 120.0, -120.0, 0.0, 0.0, 0.0, 0.0,
+            0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0
+        ])
         enemy_types = jnp.zeros(16)  # All enemy obstacles default to type 0 slot (enemy when alive)
         # Start with a single primary hostile (tank) alive; other slots are empty (-1 subtype)
         enemy_subtypes = jnp.array([0] + [-1] * 15)
@@ -1081,9 +1085,9 @@ class JaxBattleZone(JaxEnvironment[BattleZoneState, BattleZoneObservation, chex.
                 owner=jnp.zeros(MAX_BULLETS)
             )
             # initial enemy positions/angles (same as reset)
-            enemy_positions_x = jnp.array([200.0, -200.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
+            enemy_positions_x = jnp.array([120.0, -120.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
                                           0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0])
-            enemy_positions_y = jnp.array([0.0, 0.0, 200.0, -200.0, 0.0, 0.0, 0.0, 0.0,
+            enemy_positions_y = jnp.array([0.0, 0.0, 120.0, -120.0, 0.0, 0.0, 0.0, 0.0,
                                           0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0])
             enemy_types = jnp.zeros(16)
             # Primary reset: single primary hostile alive; others empty
