@@ -16,13 +16,14 @@ import jaxatari.spaces as spaces
 
 TODOS = """
 Config:
-- Track section length
+
+Opponents:
+- relative speed fine tuning
 
 Steering:
 - Drift speed based?
 
 Rendering:
-- no 0 on overtake score
 - level flags
 
 Track:
@@ -31,7 +32,7 @@ Track:
 - gey scale
 - bumpers
 - cooldown kickback too hard on track edge
-- schnee zu kurz
+- curve move speed based on speed
 
 Game Logic:
 - level passed flag
@@ -137,7 +138,6 @@ class EnduroConstants(NamedTuple):
     track_collision_speed_reduction_per_speed_unit: float = 0.25  # from RAM extraction
 
     # === Weather ===
-    night_fog_index: int = 12  # which part of the weather array has the reduced visibility (fog)
     # Start times in seconds for each phase. Written in a way to allow easy replacements.
     weather_starts_s: jnp.ndarray = jnp.array([
         34,  # day 1
@@ -157,8 +157,11 @@ class EnduroConstants(NamedTuple):
         34 + 34 + 34 + 69 + 8 * 8 + 69 + 69 + 34,  # night 2
         34 + 34 + 34 + 69 + 8 * 8 + 69 + 69 + 34 + 34,  # dawn
     ], dtype=jnp.int32)
+    # special events in the weather:
+    snow_weather_index: int = 3  # which part of the weather array is snow (reduced steering)
+    night_fog_index: int = 13  # which part of the weather array has the reduced visibility (fog)
+    weather_with_night_car_sprite = jnp.array([12, 13, 14], dtype=jnp.int32)  # renders only the back lights
     day_night_cycle_seconds: int = weather_starts_s[15]
-    weather_with_night_car_sprite = jnp.array([12, 13, 14], dtype=jnp.int32)
 
     # The rgb color codes for each weather and each sprite scraped from the game
     weather_color_codes: jnp.ndarray = jnp.array([
@@ -574,7 +577,7 @@ class JaxEnduro(JaxEnvironment[EnduroGameState, EnduroObservation, EnduroInfo, E
         new_weather_index = jnp.searchsorted(
             self.config.weather_starts_s,
             state.step_count / self.config.frame_rate,
-            side='right') - 1
+            side='right')
 
         def regular_handling() -> Tuple[jnp.ndarray, jnp.ndarray, jnp.ndarray]:
             # ====== GAS ======
@@ -616,12 +619,18 @@ class JaxEnduro(JaxEnvironment[EnduroGameState, EnduroObservation, EnduroInfo, E
                     self.config.slow_base_sensitivity + self.config.slow_steering_sensitivity_per_speed_unit * speed,
                     self.config.fast_base_sensitivity + self.config.fast_steering_sensitivity_per_speed_unit * speed,
                 ),
-                self.config.minimum_steering_sensitivity  # never below a threshold
-            ) * self.config.steering_snow_factor
+                self.config.minimum_steering_sensitivity  # never let the sensitivity go below a threshold
+            )
+            # add the snow effects when applicable
+            time_from_left_to_right = time_from_left_to_right * jnp.where(
+                new_weather_index == self.config.snow_weather_index,
+                self.config.steering_snow_factor,
+                1)
 
+            # calculate the final steering sensitivity
             current_steering_sensitivity = (self.config.steering_range_in_pixels /
                                             time_from_left_to_right / self.config.frame_rate)
-
+            # calculate the steering delta based on sensitivity and player input
             steering_delta = jnp.where(is_left, -1 * current_steering_sensitivity,
                                        jnp.where(is_right, current_steering_sensitivity, 0.0))
 
