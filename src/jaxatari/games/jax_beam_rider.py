@@ -17,7 +17,6 @@ import jaxatari.spaces as spaces
 Top Priorities:
 - make game more 3D --> might be done(ask supervisor)
 - white saucers from horizon are shooting way to early --> done
-- adjust scaling --> done
 - add enemy sprites
 - adjust code so that it passes the tests
 - adjust code so that everything is moves along the new dotted beams
@@ -458,20 +457,22 @@ class BeamRiderEnv(JaxEnvironment[BeamRiderState, BeamRiderObservation, BeamRide
         return jnp.array(state.game_over, dtype=jnp.bool_)
 
     def obs_to_flat_array(self, obs: BeamRiderObservation) -> jnp.ndarray:
-        """Convert observation to flat array"""
+        """Convert observation to flat array with consistent float32 dtype"""
         flat_components = [
-            obs.ship_x.reshape(-1),
-            obs.ship_y.reshape(-1),
+            obs.ship_x.reshape(-1).astype(jnp.float32),
+            obs.ship_y.reshape(-1).astype(jnp.float32),
             obs.ship_beam.reshape(-1).astype(jnp.float32),
-            obs.projectiles.reshape(-1),
-            obs.torpedo_projectiles.reshape(-1),
-            obs.enemies.reshape(-1),
+            obs.projectiles.reshape(-1).astype(jnp.float32),
+            obs.torpedo_projectiles.reshape(-1).astype(jnp.float32),
+            obs.enemies.reshape(-1).astype(jnp.float32),
             obs.score.reshape(-1).astype(jnp.float32),
             obs.lives.reshape(-1).astype(jnp.float32),
             obs.current_sector.reshape(-1).astype(jnp.float32),
             obs.torpedoes_remaining.reshape(-1).astype(jnp.float32),
         ]
-        return jnp.concatenate(flat_components)
+        result = jnp.concatenate(flat_components)
+        # Ensure final result is float32
+        return result.astype(jnp.float32)
 
     def render(self, state: BeamRiderState) -> jnp.ndarray:
         """Render the current game state"""
