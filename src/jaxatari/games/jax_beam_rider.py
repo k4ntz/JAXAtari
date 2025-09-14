@@ -413,28 +413,6 @@ class BeamRiderEnv(JaxEnvironment[BeamRiderState, BeamRiderObservation, BeamRide
             dtype=jnp.uint8
         )
 
-    def object_space(self) -> spaces.Box:
-        """Flat Box for object-centric wrappers; keep dtype float32 to match observations."""
-        obs_size = (
-                1 +  # ship_x
-                1 +  # ship_y
-                1 +  # ship_beam
-                self.constants.MAX_PROJECTILES * 5 +  # projectiles
-                self.constants.MAX_PROJECTILES * 5 +  # torpedoes
-                self.constants.MAX_ENEMIES * 17 +  # enemies
-                1 +  # score
-                1 +  # lives
-                1 +  # current_sector
-                1  # torpedoes_remaining
-        )
-
-        return spaces.Box(
-            low=-1000.0,
-            high=1000.0,
-            shape=(obs_size,),
-            dtype=jnp.float32,  # ← was float64
-        )
-
     @partial(jax.jit, static_argnums=(0,))
     def _get_all_reward(self, previous_state: BeamRiderState, state: BeamRiderState):
         if self.reward_funcs is None:
