@@ -120,6 +120,8 @@ class EnduroConstants(NamedTuple):
     # === Track collision ===
     track_collision_kickback_pixels: float = 3.0
     track_collision_speed_reduction_per_speed_unit: float = 0.25  # from RAM extraction
+    min_left_x: float = 58.0  # the minimum x value before a left side collision will be checked
+    max_right_x: float = 84.0  # the maximum x value before a right side collision will be checked
 
     # ======================
     # === Speed controls ===
@@ -231,7 +233,7 @@ class EnduroConstants(NamedTuple):
     opponent_spawn_seed: int = 42
 
     length_of_opponent_array = 5000
-    opponent_density = 0.3
+    opponent_density = 0.0
     opponent_delay_slots = 10
 
     # How many opponents to overtake to progress into the next level
@@ -1457,6 +1459,34 @@ class JaxEnduro(JaxEnvironment[EnduroGameState, EnduroObservation, EnduroInfo, E
 
     @partial(jax.jit, static_argnums=(0,))
     def _check_car_track_collision(
+            self,
+            car_x_abs: jnp.int32,
+            car_y_abs: jnp.int32,
+            left_track_xs: jnp.ndarray,
+            right_track_xs: jnp.ndarray
+    ) -> jnp.int32:  # Note: Changed from jnp.bool_ to jnp.int32
+        """
+        Checks the track collision. First the function checks whether the player car is close to the edge before
+        checking the collision to improve performance.
+
+        Returns:
+            An integer: 0 for no collision, -1 for a left-side collision, 1 for a right-side collision.
+        """
+        # Performance optimization: only check collision if car is near track edges
+        near_left_edge = car_x_abs < self.config.min_left_x
+        near_right_edge = car_x_abs > self.config.max_right_x
+
+        # If car is not near either edge, no collision possible
+        collision_side = jnp.where(
+            near_left_edge | near_right_edge,
+            self._pixel_perfect_car_track_collision(car_x_abs, car_y_abs, left_track_xs, right_track_xs),
+            0  # No collision
+        )
+
+        return collision_side
+
+    @partial(jax.jit, static_argnums=(0,))
+    def _pixel_perfect_car_track_collision(
             self,
             car_x_abs: jnp.int32,
             car_y_abs: jnp.int32,
