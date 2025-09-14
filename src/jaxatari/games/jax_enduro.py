@@ -29,11 +29,9 @@ Track:
 - Better curve
 - lost x pixel of right track
 - bumpers
-- cooldown kickback too hard on track edge
 - curve move speed based on speed
 
 Game Logic:
-- game over
 
 Observation:
 - improve observation function 
@@ -178,7 +176,7 @@ class EnduroConstants(NamedTuple):
         34 + 34 + 34 + 69 + 8 * 8 + 69 + 69 + 34,  # night 2
         34 + 34 + 34 + 69 + 8 * 8 + 69 + 69 + 34 + 34,  # dawn
     ], dtype=jnp.int32)
-    weather_starts_s: jnp.ndarray = jnp.arange(0, 32, 2, dtype=jnp.int32)  # for debugging
+    # weather_starts_s: jnp.ndarray = jnp.arange(0, 32, 2, dtype=jnp.int32)  # for debugging
     # special events in the weather:
     snow_weather_index: int = 3  # which part of the weather array is snow (reduced steering)
     night_fog_index: int = 13  # which part of the weather array has the reduced visibility (fog)
@@ -229,7 +227,7 @@ class EnduroConstants(NamedTuple):
     opponent_delay_slots = 10
 
     # How many opponents to overtake to progress into the next level
-    cars_to_pass_per_level: int = 2
+    cars_to_pass_per_level: int = 200
     cars_increase_per_level: int = 100
     max_increase_level: int = 5
 
@@ -866,17 +864,19 @@ class JaxEnduro(JaxEnvironment[EnduroGameState, EnduroObservation, EnduroInfo, E
         def reset_day():
             # do not allow level to go beyond the max level
             level = jnp.clip(state.level + 1, 1, self.config.max_increase_level)
-            # cars_overtaken, level increase, level passed
-            return 0, level, False
+            # cars_overtaken, level increase, level passed, game_over
+            # if a new day starts and the level is not passed it is game over
+            return 0, level, False, jnp.logical_not(new_level_passed)
 
         def do_nothing():
-            return new_cars_overtaken, state.level, new_level_passed
+            # cars_overtaken, level increase, level passed, game_over
+            return new_cars_overtaken, state.level, new_level_passed, state.game_over
 
         # Calculate current and previous day numbers
         new_day_count = jnp.floor(state.step_count / self.config.frame_rate / self.config.day_cycle_time).astype(
             jnp.int32)
 
-        new_cars_overtaken, new_level, new_level_passed = lax.cond(
+        new_cars_overtaken, new_level, new_level_passed, new_game_over = lax.cond(
             new_day_count > state.day_count,  # New day started
             lambda: reset_day(),
             lambda: do_nothing(),
@@ -914,7 +914,7 @@ class JaxEnduro(JaxEnvironment[EnduroGameState, EnduroObservation, EnduroInfo, E
             visible_track_right=new_right_xs.astype(jnp.int32),
             cooldown=new_cooldown,
 
-            # game_over=game_over,
+            game_over=new_game_over,
         )
 
         # Return updated observation and state
