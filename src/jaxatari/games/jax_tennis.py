@@ -1529,9 +1529,9 @@ class TennisConstants(NamedTuple):
 
 class AtraJaxisTennisRenderer(JAXGameRenderer):
 
-    def __init__(self):
+    def __init__(self, consts: TennisConstants = None):
         super().__init__()
-        self.renderer = TennisRenderer(TennisConstants())
+        self.renderer = TennisRenderer(TennisConstants() if consts is None else consts)
 
     def render(self, state: TennisState):
         return self.renderer.render(state)
