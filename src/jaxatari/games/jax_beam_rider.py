@@ -730,7 +730,7 @@ class BeamRiderEnv(JaxEnvironment[BeamRiderState, BeamRiderObservation, BeamRide
             projectile_y,
             1,  # active
             self.constants.WHITE_SAUCER_PROJECTILE_SPEED,  # speed (positive = downward)
-            shooter_beam  # beam_idx - store the beam the saucer is firing from
+            shooter_beam  # store the beam the saucer is firing from
         ])
 
         # Find first inactive slot in sentinel projectiles array
@@ -761,7 +761,7 @@ class BeamRiderEnv(JaxEnvironment[BeamRiderState, BeamRiderObservation, BeamRide
         # Choose new beam for retreat (different from current)
         beam_rng = random.fold_in(retreat_rng, 1)
         random_beam = random.randint(beam_rng, (), 0, self.constants.NUM_BEAMS)
-        # If it's the same as shooter beam, use next beam (with wrap-around)
+        # If it's the same as shooter beam, use the next beam
         new_retreat_beam = jnp.where(
             random_beam == shooter_beam,
             (shooter_beam + 1) % self.constants.NUM_BEAMS,
@@ -775,14 +775,14 @@ class BeamRiderEnv(JaxEnvironment[BeamRiderState, BeamRiderObservation, BeamRide
             enemies
         )
 
-        # Set new target beam if changing beam before retreat (first shot only)
+        # Set new target beam if changing beam before retreat
         enemies = jnp.where(
             is_first_shot & should_change_beam,
             enemies.at[shooter_idx, 10].set(new_retreat_beam),  # Store target beam in target_x field
             enemies
         )
 
-        # Set beam change timer if changing beam (first shot only)
+        # Set beam change timer if changing beam
         enemies = jnp.where(
             is_first_shot & should_change_beam,
             enemies.at[shooter_idx, 16].set(self.constants.WHITE_SAUCER_RETREAT_BEAM_CHANGE_TIME),
@@ -797,7 +797,7 @@ class BeamRiderEnv(JaxEnvironment[BeamRiderState, BeamRiderObservation, BeamRide
         )
 
         # === RESET FIRING TIMER ===
-        # Reset firing timer for any shooter (first or second shot)
+        # Reset firing timer for any shooter
         enemies = jnp.where(
             should_fire,
             enemies.at[shooter_idx, 15].set(self.constants.WHITE_SAUCER_FIRING_INTERVAL),
@@ -843,18 +843,18 @@ class BeamRiderEnv(JaxEnvironment[BeamRiderState, BeamRiderObservation, BeamRide
         new_firing_timer = jnp.maximum(0, firing_timer - 1)
         new_jump_timer = jnp.maximum(0, jump_timer - 1)
 
-        # UNIVERSAL REVERSE CONDITION WITH PLAYER BEAM CHECK
+        # Universal reverse condition with player beam check
         reached_reverse_point = current_y >= self.constants.WHITE_SAUCER_REVERSE_TRIGGER_Y
         retreat_flag = enemies[:, 13].astype(int)
 
-        # NEW: Check if player is on the same beam as the white saucer
+        # Check if player is on the same beam as the white saucer
         player_beam = state.ship.beam_position
         on_same_beam_as_player = current_beam == player_beam
 
-        # NEW: If on same beam as player when reaching reverse point, continue downward (kamikaze)
+        # If on same beam as player when reaching reverse point, continue downward (kamikaze)
         should_kamikaze = white_saucer_active & reached_reverse_point & on_same_beam_as_player & (retreat_flag == 0)
 
-        # MODIFIED: Only reverse if NOT on same beam as player
+        #Only reverse if NOT on same beam as player
         should_start_retreat = white_saucer_active & reached_reverse_point & ~on_same_beam_as_player & (
                     retreat_flag == 0)
 
@@ -863,14 +863,14 @@ class BeamRiderEnv(JaxEnvironment[BeamRiderState, BeamRiderObservation, BeamRide
                 retreat_flag == self.constants.WHITE_SAUCER_RETREAT_AFTER_SHOT
         )
 
-        # MODIFIED: Only move up if retreating and NOT kamikazing
+        # Only move up if retreating and not kamikazing
         should_be_moving_up = white_saucer_active & (
                 (retreat_flag == self.constants.WHITE_SAUCER_RETREAT_AFTER_SHOT) |
                 (should_start_retreat) |  # Changed from reached_reverse_point
                 switched_to_reverse
         ) & ~should_kamikaze  # Don't move up if kamikazing
 
-        # Start retreat when we cross the reverse depth AND not on player's beam
+        # Start retreat when we cross the reverse depth and not on player's beam
         start_retreat_now = should_start_retreat  # Use the modified condition
         new_retreat_flag = jnp.where(start_retreat_now, self.constants.WHITE_SAUCER_RETREAT_AFTER_SHOT,
                                      enemies[:, 13].astype(int))
@@ -878,7 +878,7 @@ class BeamRiderEnv(JaxEnvironment[BeamRiderState, BeamRiderObservation, BeamRide
         clear_retreat = should_be_moving_up & (current_y <= self.constants.HORIZON_LINE_Y)
         final_retreat_flag = jnp.where(clear_retreat, 0, new_retreat_flag)
 
-        # NEW: Mark kamikazing saucers with a special flag (use a high value in retreat_flag)
+        # Mark kamikazing saucers with a special flag (use a high value in retreat_flag)
         KAMIKAZE_FLAG = 99
         final_retreat_flag = jnp.where(should_kamikaze, KAMIKAZE_FLAG, final_retreat_flag)
 
@@ -902,7 +902,7 @@ class BeamRiderEnv(JaxEnvironment[BeamRiderState, BeamRiderObservation, BeamRide
         # Reset timer when new target selected
         jump_new_jump_timer = jnp.where(need_new_target, self.constants.WHITE_SAUCER_JUMP_INTERVAL, new_jump_timer)
 
-        # IMPORTANT: Check if actively jumping to a different beam
+        # Check if actively jumping to a different beam
         actively_jumping = jump_mask & (jump_current_target_beam != current_beam) & ~should_be_moving_up
 
         # Calculate target X for the target beam at current Y
@@ -926,7 +926,7 @@ class BeamRiderEnv(JaxEnvironment[BeamRiderState, BeamRiderObservation, BeamRide
             current_x
         )
 
-        # MODIFIED: Check for kamikaze mode
+        # Check for kamikaze mode
         is_kamikazing = final_retreat_flag == KAMIKAZE_FLAG
 
         jump_new_y = jnp.where(
@@ -3628,13 +3628,34 @@ class BeamRiderRenderer(JAXGameRenderer):
         self.screen_height = self.constants.SCREEN_HEIGHT
         self.beam_positions = self.constants.get_beam_positions()
 
+        # White saucer sprite
         self.white_saucer_sprite = jnp.array([
-            [0, 0, 1, 0, 0],
-            [0, 1, 1, 1, 0],
-            [1, 0, 1, 0, 1],
-            [1, 1, 1, 1, 1]
+            [0, 0, 0, 1, 1, 0, 0, 0],  # Dome top
+            [0, 0, 1, 1, 1, 1, 0, 0],  # Dome middle
+            [0, 1, 0, 1, 1, 0, 1, 0],  # Upper disk
+            [1, 1, 1, 1, 1, 1, 1, 1],  # Middle with windows/lights
+            [0, 0, 1, 0, 0, 1, 0, 0],  # Full width disk
+            [0, 0, 0, 1, 1, 0, 0, 0],  # Bottom rim
         ], dtype=jnp.uint8)
-
+        # Brown debris sprite
+        self.brown_debris_sprite = jnp.array([
+            [0, 0, 0, 1, 1, 0, 0, 0],
+            [0, 1, 1, 0, 1, 1, 0, 0],
+            [1, 0, 1, 1, 1, 1, 1, 0],
+            [0, 1, 1, 1, 1, 1, 0, 1],
+            [1, 0, 1, 1, 0, 1, 1, 1],
+            [0, 0, 0, 1, 1, 1, 0, 0],
+        ], dtype=jnp.uint8)
+        # Green blocker sprite
+        self.green_blocker_sprite = jnp.array([
+            [0, 0, 0, 0, 0, 0, 0, 0],
+            [0, 0, 0, 1, 0, 0, 0, 0],
+            [0, 0, 1, 0, 1, 0, 0, 0],
+            [1, 1, 1, 1, 1, 1, 1, 0],
+            [0, 0, 1, 0, 1, 0, 0, 0],
+            [0, 0, 0, 1, 0, 0, 0, 0],
+            [0, 0, 0, 0, 0, 0, 0, 0],
+        ], dtype=jnp.uint8)
         # JAX rendering components
         self.ship_sprite_surface = self._create_ship_surface()
         self.small_ship_surface = self._create_small_ship_surface()
@@ -4178,14 +4199,14 @@ class BeamRiderRenderer(JAXGameRenderer):
 
     @partial(jax.jit, static_argnums=(0,))
     def _draw_enemies(self, screen: chex.Array, enemies: chex.Array) -> chex.Array:
-        """Draw all active enemies with perspective scaling (except sentinels and side-spawners)"""
+        """Draw all active enemies with perspective scaling and sprites for white saucers and brown debris"""
 
         def draw_single_enemy(i, screen):
-            x, y = enemies[i, 0], enemies[i, 1]  # Keep as float for scaling calculations
+            x, y = enemies[i, 0], enemies[i, 1]
             active = enemies[i, 3] == 1
             enemy_type = enemies[i, 5].astype(int)
 
-            # Check if this enemy should not scale
+            # Check enemy types
             sentinel_ship = enemy_type == self.constants.ENEMY_TYPE_SENTINEL_SHIP
             side_spawner = (
                     (enemy_type == self.constants.ENEMY_TYPE_YELLOW_CHIRPER) |
@@ -4193,6 +4214,9 @@ class BeamRiderRenderer(JAXGameRenderer):
                     (enemy_type == self.constants.ENEMY_TYPE_GREEN_BOUNCE)
             )
             no_scaling = sentinel_ship | side_spawner
+            is_white_saucer = enemy_type == self.constants.ENEMY_TYPE_WHITE_SAUCER
+            is_brown_debris = enemy_type == self.constants.ENEMY_TYPE_BROWN_DEBRIS
+            is_green_blocker = enemy_type == self.constants.ENEMY_TYPE_GREEN_BLOCKER
 
             # Get base enemy dimensions
             base_width = jnp.where(
@@ -4206,21 +4230,28 @@ class BeamRiderRenderer(JAXGameRenderer):
                 self.constants.ENEMY_HEIGHT
             )
 
-            # Apply scaling: no scaling for sentinels and side-spawners, others use perspective scaling
+            # Apply scaling
+            scale_factor = jnp.where(no_scaling, 1.0, self._get_enemy_scale(y))
+
             scaled_width = jnp.where(
                 no_scaling,
-                base_width.astype(int),  # No scaling: keep original size
-                jnp.maximum(1, (base_width * self._get_enemy_scale(y)).astype(int))  # Others: apply scaling
+                base_width.astype(int),
+                jnp.maximum(1, (base_width * scale_factor).astype(int))
             )
             scaled_height = jnp.where(
                 no_scaling,
-                base_height.astype(int),  # No scaling: keep original size
-                jnp.maximum(1, (base_height * self._get_enemy_scale(y)).astype(int))  # Others: apply scaling
+                base_height.astype(int),
+                jnp.maximum(1, (base_height * scale_factor).astype(int))
             )
 
-            # Determine if should render as dot (only for scaling enemies)
-            scale_factor = jnp.where(no_scaling, 1.0, self._get_enemy_scale(y))
-            is_dot = (~no_scaling) & (scale_factor < 0.25)  # No dots for non-scaling enemies
+            # Determine if should render as dot
+            is_dot = (~no_scaling) & (scale_factor < 0.25)
+
+            # Use sprites for white saucers and brown debris with sufficient scale
+            use_white_saucer_sprite = is_white_saucer & (scale_factor >= 0.4) & active & ~is_dot
+            use_brown_debris_sprite = is_brown_debris & (scale_factor >= 0.4) & active & ~is_dot
+            use_green_blocker_sprite = is_green_blocker & active  # Green blockers don't scale, always use sprite
+            use_any_sprite = use_white_saucer_sprite | use_brown_debris_sprite | use_green_blocker_sprite
 
             # Center the scaled enemy at its position
             x_offset = ((base_width - scaled_width) / 2).astype(int)
@@ -4236,13 +4267,91 @@ class BeamRiderRenderer(JAXGameRenderer):
 
             # Check if enemy is at least partially visible
             partially_visible = (
-                    (draw_x < self.constants.SCREEN_WIDTH) &  # Left edge is before right screen edge
-                    (draw_x + scaled_width > 0) &  # Right edge is after left screen edge
-                    (draw_y < self.constants.SCREEN_HEIGHT) &  # Top edge is before bottom screen edge
-                    (draw_y + scaled_height > 0)  # Bottom edge is after top screen edge
+                    (draw_x < self.constants.SCREEN_WIDTH) &
+                    (draw_x + scaled_width > 0) &
+                    (draw_y < self.constants.SCREEN_HEIGHT) &
+                    (draw_y + scaled_height > 0)
             )
 
-            # For very small enemies (dots), use a single pixel instead of trying to draw tiny rectangles
+            # Generic sprite drawing function
+            def draw_enemy_sprite(sprite, color):
+                sprite_h, sprite_w = sprite.shape
+
+                # Calculate scaled sprite dimensions
+                sprite_scaled_w = jnp.maximum(1, (sprite_w * scale_factor).astype(int))
+                sprite_scaled_h = jnp.maximum(1, (sprite_h * scale_factor).astype(int))
+
+                # Center sprite at enemy position
+                sprite_x = (x - sprite_scaled_w // 2).astype(int)
+                sprite_y = (y - sprite_scaled_h // 2).astype(int)
+
+                # Create sprite mask using nearest-neighbor scaling
+                sprite_mask = jnp.zeros((self.constants.SCREEN_HEIGHT, self.constants.SCREEN_WIDTH), dtype=bool)
+
+                def set_pixel(py, sprite_mask_inner):
+                    def set_pixel_x(px, sprite_mask_inner2):
+                        # Map screen pixel to sprite pixel
+                        sprite_px = ((px - sprite_x) * sprite_w / sprite_scaled_w).astype(int)
+                        sprite_py = ((py - sprite_y) * sprite_h / sprite_scaled_h).astype(int)
+
+                        # Check if within sprite bounds
+                        in_sprite = (
+                                (px >= sprite_x) & (px < sprite_x + sprite_scaled_w) &
+                                (py >= sprite_y) & (py < sprite_y + sprite_scaled_h) &
+                                (sprite_px >= 0) & (sprite_px < sprite_w) &
+                                (sprite_py >= 0) & (sprite_py < sprite_h) &
+                                (px >= 0) & (px < self.constants.SCREEN_WIDTH) &
+                                (py >= 0) & (py < self.constants.SCREEN_HEIGHT)
+                        )
+
+                        # Get sprite value
+                        sprite_val = jnp.where(
+                            in_sprite,
+                            sprite[sprite_py, sprite_px],
+                            0
+                        )
+
+                        # Set pixel if sprite has value 1
+                        sprite_mask_inner2 = sprite_mask_inner2.at[py, px].set(
+                            sprite_mask_inner2[py, px] | ((sprite_val == 1) & in_sprite)
+                        )
+                        return sprite_mask_inner2
+
+                    return jax.lax.fori_loop(0, self.constants.SCREEN_WIDTH, set_pixel_x, sprite_mask_inner)
+
+                sprite_mask = jax.lax.fori_loop(0, self.constants.SCREEN_HEIGHT, set_pixel, sprite_mask)
+
+                # Apply color for sprite
+                return jnp.where(
+                    sprite_mask[..., None] & active & partially_visible,
+                    color,
+                    screen
+                )
+
+            # Draw white saucer sprite
+            screen = jax.lax.cond(
+                use_white_saucer_sprite,
+                lambda s: draw_enemy_sprite(self.white_saucer_sprite, jnp.array(self.constants.WHITE, dtype=jnp.uint8)),
+                lambda s: s,
+                screen
+            )
+
+            # Draw brown debris sprite
+            screen = jax.lax.cond(
+                use_brown_debris_sprite,
+                lambda s: draw_enemy_sprite(self.brown_debris_sprite,
+                                            jnp.array(self.constants.BROWN_DEBRIS_COLOR, dtype=jnp.uint8)),
+                lambda s: s,
+                screen
+            )
+            screen = jax.lax.cond(
+                use_green_blocker_sprite,
+                lambda s: draw_enemy_sprite(self.green_blocker_sprite,
+                                            jnp.array(self.constants.GREEN_BLOCKER_COLOR, dtype=jnp.uint8)),
+                lambda s: s,
+                screen
+            )
+            # For very small enemies (dots)
             dot_mask = (
                     is_dot &
                     (x_grid == jnp.clip(draw_x + scaled_width // 2, 0, self.constants.SCREEN_WIDTH - 1)) &
@@ -4251,9 +4360,10 @@ class BeamRiderRenderer(JAXGameRenderer):
                     partially_visible
             )
 
-            # Regular enemy mask for larger enemies (including all non-scaling enemies)
+            # Regular enemy mask for larger enemies (excluding enemies with sprites)
             regular_mask = (
                     ~is_dot &
+                    ~use_any_sprite &  # Don't draw rectangle if using any sprite
                     (x_grid >= draw_x) &
                     (x_grid < draw_x + scaled_width) &
                     (y_grid >= draw_y) &
@@ -4267,7 +4377,7 @@ class BeamRiderRenderer(JAXGameRenderer):
             # Combine both masks
             enemy_mask = dot_mask | regular_mask
 
-            # Select enemy color based on type
+            # Select enemy color based on type (for non-sprite enemies)
             enemy_color = jnp.where(
                 enemy_type == self.constants.ENEMY_TYPE_BROWN_DEBRIS,
                 jnp.array(self.constants.BROWN_DEBRIS_COLOR, dtype=jnp.uint8),
@@ -4306,7 +4416,7 @@ class BeamRiderRenderer(JAXGameRenderer):
                 )
             )
 
-            # Apply enemy color where mask is True
+            # Apply enemy color where mask is True (for non-sprite enemies)
             screen = jnp.where(
                 enemy_mask[..., None],
                 enemy_color,
@@ -4328,7 +4438,6 @@ class BeamRiderRenderer(JAXGameRenderer):
           - torpedo boxes (top-right)
           - lives as mini ship icons (bottom-left)
 
-        All math is JIT-safe (no Python int(...) on tracers).
         """
 
         # =========================
