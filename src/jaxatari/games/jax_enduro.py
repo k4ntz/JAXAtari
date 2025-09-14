@@ -18,7 +18,6 @@ TODOS = """
 Config:
 
 Opponents:
-- relative speed fine tuning
 
 Steering:
 - Drift speed based?
@@ -29,7 +28,6 @@ Rendering:
 Track:
 - Better curve
 - lost x pixel of right track
-- gey scale
 - bumpers
 - cooldown kickback too hard on track edge
 - curve move speed based on speed
@@ -105,7 +103,7 @@ class EnduroConstants(NamedTuple):
         [170, 170, 170],  # moving bottom - spawns after track_moving_bottom_spawn_step
         [192, 192, 192],  # bottom - rest
     ], dtype=jnp.int32)
-    track_top_min_length: int = 33 # or 32
+    track_top_min_length: int = 33  # or 32
     track_moving_top_length: int = 13
     track_moving_bottom_length: int = 18
     track_move_range: int = 12
@@ -180,11 +178,12 @@ class EnduroConstants(NamedTuple):
         34 + 34 + 34 + 69 + 8 * 8 + 69 + 69 + 34,  # night 2
         34 + 34 + 34 + 69 + 8 * 8 + 69 + 69 + 34 + 34,  # dawn
     ], dtype=jnp.int32)
+    weather_starts_s: jnp.ndarray = jnp.arange(0, 32, 2, dtype=jnp.int32)  # for debugging
     # special events in the weather:
     snow_weather_index: int = 3  # which part of the weather array is snow (reduced steering)
     night_fog_index: int = 13  # which part of the weather array has the reduced visibility (fog)
     weather_with_night_car_sprite = jnp.array([12, 13, 14], dtype=jnp.int32)  # renders only the back lights
-    day_night_cycle_seconds: int = weather_starts_s[15]
+    day_cycle_time: int = weather_starts_s[15]
 
     # The rgb color codes for each weather and each sprite scraped from the game
     weather_color_codes: jnp.ndarray = jnp.array([
@@ -221,7 +220,7 @@ class EnduroConstants(NamedTuple):
     # =================
     opponent_speed: int = 24  # measured from RAM state
     # a factor of 1 translates into overtake time of 1 second when speed is twice as high as the opponent's
-    opponent_relative_speed_factor: float = 1.0
+    opponent_relative_speed_factor: float = 2.5
 
     opponent_spawn_seed: int = 42
 
@@ -290,6 +289,7 @@ class EnduroGameState(NamedTuple):
     """Represents the current state of the game"""
 
     step_count: jnp.int32  # incremented every step
+    day_count: jnp.int32  # incremented every day-night cycle, starts by 0
 
     # visible (mirror in Observation)
     player_y_abs_position: chex.Array
@@ -534,6 +534,7 @@ class JaxEnduro(JaxEnvironment[EnduroGameState, EnduroObservation, EnduroInfo, E
         state = EnduroGameState(
             # visible
             step_count=jnp.array(0),
+            day_count=jnp.array(0),
             player_x_abs_position=jnp.array(self.config.player_x_start),
             player_y_abs_position=jnp.array(self.config.player_y_start),
             cars_to_overtake=jnp.array(self.config.cars_to_pass_per_level),
@@ -566,7 +567,7 @@ class JaxEnduro(JaxEnvironment[EnduroGameState, EnduroObservation, EnduroInfo, E
             player_speed=jnp.array(0.0, dtype=jnp.float32),
             cooldown=jnp.array(0.0, dtype=jnp.float32),
             game_over=jnp.array(False),
-            time_remaining=jnp.array(self.config.day_night_cycle_seconds),
+            time_remaining=jnp.array(self.config.day_cycle_time),
             total_cars_overtaken=jnp.array(0),
             total_time_elapsed=jnp.array(0.0, dtype=jnp.float32),
             total_frames_elapsed=jnp.array(0),
@@ -607,9 +608,10 @@ class JaxEnduro(JaxEnvironment[EnduroGameState, EnduroObservation, EnduroInfo, E
 
         # ===== Weather position =====
         # determine the position in the weather array
+        cycled_time = (state.step_count / self.config.frame_rate) % self.config.day_cycle_time
         new_weather_index = jnp.searchsorted(
             self.config.weather_starts_s,
-            state.step_count / self.config.frame_rate,
+            cycled_time,
             side='right')
 
         def regular_handling() -> Tuple[jnp.ndarray, jnp.ndarray, jnp.ndarray]:
@@ -744,11 +746,13 @@ class JaxEnduro(JaxEnvironment[EnduroGameState, EnduroObservation, EnduroInfo, E
         # 3. Kickback
         # The kickback direction is simply the inverse of `collision_side`.
         track_kickback_direction = -collision_side
+        # add a special treatment for cooldown where kickback is minimal
+        kickback_pixels = jnp.where(is_cooldown_active, 1, self.config.track_collision_kickback_pixels)
 
         new_x_abs = jnp.where(
             collided_track,
             # Apply the kickback based on the actual collision side.
-            new_x_abs + (self.config.track_collision_kickback_pixels * track_kickback_direction),
+            new_x_abs + (kickback_pixels * track_kickback_direction),
             new_x_abs  # If not collided, do nothing.
         )
 
@@ -803,16 +807,8 @@ class JaxEnduro(JaxEnvironment[EnduroGameState, EnduroObservation, EnduroInfo, E
         )
         # don't allow negative numbers here
         new_cars_overtaken = jnp.clip(state.cars_overtaken + cars_overtaken_change, 0)[0]
-
-        # ===== Level =====
-        # a level is a full day cycle
-        new_level = jnp.where(
-            state.level * self.config.day_night_cycle_seconds * self.config.frame_rate < state.step_count,
-            state.level + 1,
-            state.level
-        )
-        # do not allow level to go beyond the max level
-        new_level = jnp.clip(new_level, 1, self.config.max_increase_level)
+        new_cars_to_overtake = self.config.cars_to_pass_per_level + self.config.cars_increase_per_level * (
+                    state.level - 1)
 
         # ===== Opponent Collision =====
         collided_car = self._check_car_opponent_collision(
@@ -866,9 +862,30 @@ class JaxEnduro(JaxEnvironment[EnduroGameState, EnduroObservation, EnduroInfo, E
             self.config.cars_to_pass_per_level + self.config.cars_increase_per_level * (state.level - 1)
         )
 
+        # ===== New Day handling =====
+        def reset_day():
+            # do not allow level to go beyond the max level
+            level = jnp.clip(state.level + 1, 1, self.config.max_increase_level)
+            # cars_overtaken, level increase, level passed
+            return 0, level, False
+
+        def do_nothing():
+            return new_cars_overtaken, state.level, new_level_passed
+
+        # Calculate current and previous day numbers
+        new_day_count = jnp.floor(state.step_count / self.config.frame_rate / self.config.day_cycle_time).astype(
+            jnp.int32)
+
+        new_cars_overtaken, new_level, new_level_passed = lax.cond(
+            new_day_count > state.day_count,  # New day started
+            lambda: reset_day(),
+            lambda: do_nothing(),
+        )
+
         # Build new state with updated positions
         new_state: EnduroGameState = state._replace(
             step_count=state.step_count + 1,
+            day_count=new_day_count,
 
             player_x_abs_position=new_x_abs,
             player_y_abs_position=new_y_abs,
@@ -883,6 +900,7 @@ class JaxEnduro(JaxEnvironment[EnduroGameState, EnduroObservation, EnduroInfo, E
             visible_opponent_positions=new_visible_opponent_positions,
             opponent_window=new_opponent_window,
             cars_overtaken=new_cars_overtaken,
+            cars_to_overtake=new_cars_to_overtake,
             is_collision=collided_car,
 
             weather_index=new_weather_index,

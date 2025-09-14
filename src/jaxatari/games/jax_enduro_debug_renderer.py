@@ -60,15 +60,17 @@ def render_debug_overlay(screen, state: EnduroGameState, font, game_config):
         f"Speed: {float(state.player_speed):.2f}",  # Convert JAX arrays to Python floats
         f"Player X (abs): {state.player_x_abs_position}",
         f"Player Y (abs): {state.player_y_abs_position}",
+        f"Time: {state.total_time_elapsed}",
         # f"Distance: {state.distance}",
         f"Level: {state.level}",
-        f"Level passed: {state.level_passed},"
-        f"Time: {state.total_time_elapsed}",
+        f"Level passed: {state.level_passed}",
+        f"Day count: {state.day_count}",
         # f"Steering sensitivity: {}",
         # f"Left Mountain x: {state.mountain_left_x}",
         # f"Opponent Index: {state.opponent_index}",
         # f"Opponent window: {state.opponent_window}",
         # f"Opponents: {state.visible_opponent_positions}",
+        f"Cars To overtake: {state.cars_to_overtake}",
         f"Cars overtaken: {state.cars_overtaken}",
         # f"Opponent Collision: {state.is_collision}",
         # f"Cooldown Drift direction: {state.cooldown_drift_direction}"
