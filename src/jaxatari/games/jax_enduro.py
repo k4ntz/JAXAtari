@@ -15,10 +15,6 @@ from jaxatari.rendering import jax_rendering_utils as aj
 import jaxatari.spaces as spaces
 
 TODOS = """
-Config:
-
-Opponents:
-
 Steering:
 - Drift speed based?
 
@@ -27,11 +23,7 @@ Rendering:
 
 Track:
 - Better curve
-- lost x pixel of right track
-- bumpers
 - curve move speed based on speed
-
-Game Logic:
 
 Observation:
 - improve observation function 
@@ -81,10 +73,11 @@ class EnduroConstants(NamedTuple):
     # =============
     # === Track ===
     # =============
-    track_width: int = 97
-    track_height: int = game_window_height - sky_height - 2
+    track_width: int = 98
+    track_height: int = game_window_height - sky_height - 1
     max_track_length: float = 9999.9  # in km
     track_seed: int = 42
+    straight_km_start: float = 5.0  # how many km the track goes straight at the start of the game
     min_track_section_length = 1.0  # how long a curve or straight passage is at least
     max_track_section_length = 15.0
     track_x_start: int = player_x_start
@@ -93,6 +86,15 @@ class EnduroConstants(NamedTuple):
     track_max_top_x_offset: float = 50.0
     # how fast the track curve starts to build in the game when going from a straight track into a curve
     curve_rate: float = 0.25
+
+    # Bumpers
+    track_bumper_max_length: int = 30  # the maximum bumper length at the bottom of the screen
+    track_bumper_min_length: int = 5  # the minimum bumper length at the top of the screen
+    track_bumper_max_width: float = 4.0  # the maximum bumper width pixels at bottom
+    track_bumper_min_width: float = 1.0  # the maximum bumper width pixels at top
+    track_bumper_smoothening_pixels: int = 4  # How many pixels are used to smoothen the bumper edges
+    bumper_perspective_speed: float = 2.0  # A factor for how much slower bumpers move at the top of the track
+    first_n_pixels_without_bumper: int = 3
 
     # track colors
     track_colors = jnp.array([
@@ -180,7 +182,7 @@ class EnduroConstants(NamedTuple):
     # special events in the weather:
     snow_weather_index: int = 3  # which part of the weather array is snow (reduced steering)
     night_fog_index: int = 13  # which part of the weather array has the reduced visibility (fog)
-    weather_with_night_car_sprite = jnp.array([12, 13, 14], dtype=jnp.int32)  # renders only the back lights
+    weather_with_night_car_sprite = jnp.array([12, 13, 14], dtype=jnp.int32)  # renders only the rear lights
     day_cycle_time: int = weather_starts_s[15]
 
     # The rgb color codes for each weather and each sprite scraped from the game
@@ -719,7 +721,12 @@ class JaxEnduro(JaxEnvironment[EnduroGameState, EnduroObservation, EnduroInfo, E
         new_top_x_curve_offset = state.track_top_x_curve_offset + offset_change
 
         # 6. Generate the new track with the top_x of the track and its offset
-        new_left_xs, new_right_xs = self._generate_viewable_track(new_track_top_x, new_top_x_curve_offset)
+        # They do not have the bumpers yet, but we also need the logical track boundaries for opponent spawning later
+        logical_left_xs, logical_right_xs = self._generate_viewable_track(new_track_top_x, new_top_x_curve_offset)
+
+        # 7. Add bumpers to the track
+        new_left_xs = self._add_track_bumpers(logical_left_xs, state, is_left_side=True)
+        new_right_xs = self._add_track_bumpers(logical_right_xs, state, is_left_side=False)
 
         # ====== TRACK COLLISION ======
         # 1. Check whether the player car collided with the track
@@ -774,7 +781,7 @@ class JaxEnduro(JaxEnvironment[EnduroGameState, EnduroObservation, EnduroInfo, E
         new_visible_opponent_positions = self._get_visible_opponent_positions(
             new_opponent_index,
             state.opponent_pos_and_color,
-            new_left_xs, new_right_xs)
+            logical_left_xs, logical_right_xs)  # use the track without bumpers, else cars wiggle around bumpers
 
         # adjust the opponents lane if necessary
         adjusted_opponents_pos = self._adjust_opponent_positions_when_overtaking(state, new_opponent_index)
@@ -806,7 +813,7 @@ class JaxEnduro(JaxEnvironment[EnduroGameState, EnduroObservation, EnduroInfo, E
         # don't allow negative numbers here
         new_cars_overtaken = jnp.clip(state.cars_overtaken + cars_overtaken_change, 0)[0]
         new_cars_to_overtake = self.config.cars_to_pass_per_level + self.config.cars_increase_per_level * (
-                    state.level - 1)
+                state.level - 1)
 
         # ===== Opponent Collision =====
         collided_car = self._check_car_opponent_collision(
@@ -846,11 +853,6 @@ class JaxEnduro(JaxEnvironment[EnduroGameState, EnduroObservation, EnduroInfo, E
             state.mountain_right_x + mountain_movement - self.config.window_offset_left,
             self.config.screen_width - self.config.window_offset_left + 1,
         )
-
-        # ====== Game Over ======
-        # Compute game over condition based on elapsed frames
-        # day_length_frames = self.config.day_night_cycle_seconds * self.config.frame_rate
-        # game_over = state.total_frames_elapsed >= self.config.day_length_frames
 
         # Check whether the current level is passed.
         # Once a level is passed it does not matter whether opponents will overtake the player again.
@@ -1013,6 +1015,7 @@ class JaxEnduro(JaxEnvironment[EnduroGameState, EnduroObservation, EnduroInfo, E
         # We simply ADD the curve shift to the base track coordinates. No more `jnp.where`!
         # Remember to SUBTRACT to match the visual direction from your last fix.
         final_left_xs = straight_left_xs + curve_shifts
+        final_left_xs = final_left_xs.at[-1].set(final_left_xs[-2])  # straighten the end of the track
 
         # We add one more pixel to the left track because the right track starts a pixel lower.
         # final_left_xs = jnp.concatenate([final_left_xs, final_left_xs[-1:]], axis=0)
@@ -1031,6 +1034,7 @@ class JaxEnduro(JaxEnvironment[EnduroGameState, EnduroObservation, EnduroInfo, E
 
         track_spaces = self._generate_track_spaces()
         x = jnp.where(spaces == -1, left_xs, left_xs + track_spaces + 1)  # +1 to include gap
+        x = x.at[-1].set(x[-2])  # Set last value equal to second last because the right side is 1 lower than the left
         return x  # use same Y as left
 
     @partial(jax.jit, static_argnums=(0,))
@@ -1056,6 +1060,80 @@ class JaxEnduro(JaxEnvironment[EnduroGameState, EnduroObservation, EnduroInfo, E
         track_spaces = lax.fori_loop(0, 103, body_fn, track_spaces)
 
         return track_spaces
+
+    @partial(jax.jit, static_argnums=(0, 3))
+    def _add_track_bumpers(self, track_xs: jnp.ndarray, state: EnduroGameState, is_left_side: bool) -> jnp.ndarray:
+        """
+        Adds bumpers to the track that appear every 400m and move down with perspective.
+        """
+        # Calculate bumper cycle (every 0.4 km = 400m)
+        bumper_cycle = 0.4
+        cycle_position = (state.distance % bumper_cycle) / bumper_cycle  # 0.0 to 1.0
+
+        # Apply perspective - slower at top, faster at bottom
+        perspective_position = jnp.power(cycle_position, self.config.bumper_perspective_speed)
+        bumper_row = jnp.floor(perspective_position * self.config.track_height).astype(jnp.int32)
+        bumper_row = jnp.clip(bumper_row, 0, self.config.track_height - 1)
+
+        # Calculate bumper parameters based on row (perspective scaling)
+        row_ratio = jnp.arange(self.config.track_height) / (self.config.track_height - 1)
+
+        # Bumper height: 10 pixels at top, 25 pixels at bottom
+        bumper_heights = self.config.track_bumper_min_length + (
+                self.config.track_bumper_max_length - self.config.track_bumper_min_length) * row_ratio
+
+        # Bumper width: min to max pixels (linear over whole track)
+        bumper_widths = self.config.track_bumper_min_width + (
+                self.config.track_bumper_max_width - self.config.track_bumper_min_width) * row_ratio
+
+        def apply_bumper_to_row(row_idx: jnp.int32, original_x: jnp.int32) -> jnp.int32:
+            """Apply bumper to a specific row with edge smoothing."""
+
+            # Skip bumpers for the first n pixels
+            skip_bumper = row_idx < self.config.first_n_pixels_without_bumper
+
+            bumper_height = bumper_heights[row_idx].astype(jnp.int32)
+            bumper_width = bumper_widths[row_idx]
+
+            # Check if we're in the main bumper area
+            bumper_start = bumper_row
+            bumper_end = bumper_row + bumper_height
+
+            # Edge smoothing: 5 pixels on each side
+            edge_smooth_pixels = self.config.track_bumper_smoothening_pixels
+
+            # Calculate bumper presence with edge smoothing
+            distance_from_start = row_idx - bumper_start
+            distance_from_end = bumper_end - row_idx
+
+            # Linear smoothing factor for edges
+            start_smooth = jnp.clip(distance_from_start / edge_smooth_pixels, 0.0, 1.0)
+            end_smooth = jnp.clip(distance_from_end / edge_smooth_pixels, 0.0, 1.0)
+            smooth_factor = jnp.minimum(start_smooth, end_smooth)
+
+            # Only apply smoothing if we're within the bumper area
+            in_bumper_area = (row_idx >= bumper_start) & (row_idx <= bumper_end)
+            final_smooth_factor = jnp.where(in_bumper_area, smooth_factor, 0.0)
+
+            # Skip bumper if in the no-bumper zone
+            final_smooth_factor = jnp.where(skip_bumper, 0.0, final_smooth_factor)
+
+            # Apply bumper width with smoothing
+            effective_width = bumper_width * final_smooth_factor
+
+            # Apply inward movement
+            left_side_x = original_x + effective_width
+            right_side_x = original_x - effective_width
+
+            modified_x = jnp.where(is_left_side, left_side_x, right_side_x)
+
+            return jnp.where(final_smooth_factor > 0.0, modified_x, original_x)
+
+        # Apply bumper to each row
+        row_indices = jnp.arange(self.config.track_height)
+        modified_track = jax.vmap(apply_bumper_to_row)(row_indices, track_xs)
+
+        return modified_track
 
     @partial(jax.jit, static_argnums=(0, 2, 3, 4))
     def _generate_opponent_spawns(
@@ -1367,7 +1445,7 @@ class JaxEnduro(JaxEnvironment[EnduroGameState, EnduroObservation, EnduroInfo, E
                                              minval=self.config.min_track_section_length,
                                              maxval=self.config.max_track_section_length)
 
-        track_starts = jnp.cumsum(jnp.concatenate([jnp.array([0.1]), segment_lengths[:-1]]))
+        track_starts = jnp.cumsum(jnp.concatenate([jnp.array([self.config.straight_km_start]), segment_lengths[:-1]]))
 
         # Combine fixed start + rest (no masking)
         first_segment = jnp.array([[0.0, 0.0]])  # straight start

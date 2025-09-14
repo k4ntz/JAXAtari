@@ -44,6 +44,7 @@
     - Config: `drift_per_second_pixels`
 - Track collision
   - Hitting the side of the road gives a small kickback and reduces you speed by 15 (RAM state measured)
+  - Hitting the track-bumpers is also a collision (so they narrow the track a bit)
   - Speed reduction depends on speed (25%)
     - Kickback: `track_collision_kickback_pixels`
     - Speed reduction: `track_collision_speed_reduction_per_speed_unit`
