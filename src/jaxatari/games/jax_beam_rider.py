@@ -3637,7 +3637,15 @@ class BeamRiderRenderer(JAXGameRenderer):
             [0, 0, 1, 0, 0, 1, 0, 0],  # Full width disk
             [0, 0, 0, 1, 1, 0, 0, 0],  # Bottom rim
         ], dtype=jnp.uint8)
-
+        # Brown debris sprite
+        self.brown_debris_sprite = jnp.array([
+            [0, 0, 0, 1, 1, 0, 0, 0],
+            [0, 1, 1, 0, 1, 1, 0, 0],
+            [1, 0, 1, 1, 1, 1, 1, 0],
+            [0, 1, 1, 1, 1, 1, 0, 1],
+            [1, 0, 1, 1, 0, 1, 1, 1],
+            [0, 0, 0, 1, 1, 1, 0, 0],
+        ], dtype=jnp.uint8)
         # JAX rendering components
         self.ship_sprite_surface = self._create_ship_surface()
         self.small_ship_surface = self._create_small_ship_surface()
@@ -4181,14 +4189,14 @@ class BeamRiderRenderer(JAXGameRenderer):
 
     @partial(jax.jit, static_argnums=(0,))
     def _draw_enemies(self, screen: chex.Array, enemies: chex.Array) -> chex.Array:
-        """Draw all active enemies with perspective scaling and sprites for white saucers"""
+        """Draw all active enemies with perspective scaling and sprites for white saucers and brown debris"""
 
         def draw_single_enemy(i, screen):
-            x, y = enemies[i, 0], enemies[i, 1]  # Keep as float for scaling calculations
+            x, y = enemies[i, 0], enemies[i, 1]
             active = enemies[i, 3] == 1
             enemy_type = enemies[i, 5].astype(int)
 
-            # Check if this enemy should not scale
+            # Check enemy types
             sentinel_ship = enemy_type == self.constants.ENEMY_TYPE_SENTINEL_SHIP
             side_spawner = (
                     (enemy_type == self.constants.ENEMY_TYPE_YELLOW_CHIRPER) |
@@ -4197,6 +4205,7 @@ class BeamRiderRenderer(JAXGameRenderer):
             )
             no_scaling = sentinel_ship | side_spawner
             is_white_saucer = enemy_type == self.constants.ENEMY_TYPE_WHITE_SAUCER
+            is_brown_debris = enemy_type == self.constants.ENEMY_TYPE_BROWN_DEBRIS
 
             # Get base enemy dimensions
             base_width = jnp.where(
@@ -4210,25 +4219,27 @@ class BeamRiderRenderer(JAXGameRenderer):
                 self.constants.ENEMY_HEIGHT
             )
 
-            # Apply scaling: no scaling for sentinels and side-spawners, others use perspective scaling
+            # Apply scaling
             scale_factor = jnp.where(no_scaling, 1.0, self._get_enemy_scale(y))
 
             scaled_width = jnp.where(
                 no_scaling,
-                base_width.astype(int),  # No scaling: keep original size
-                jnp.maximum(1, (base_width * scale_factor).astype(int))  # Others: apply scaling
+                base_width.astype(int),
+                jnp.maximum(1, (base_width * scale_factor).astype(int))
             )
             scaled_height = jnp.where(
                 no_scaling,
-                base_height.astype(int),  # No scaling: keep original size
-                jnp.maximum(1, (base_height * scale_factor).astype(int))  # Others: apply scaling
+                base_height.astype(int),
+                jnp.maximum(1, (base_height * scale_factor).astype(int))
             )
 
-            # Determine if should render as dot (only for scaling enemies)
-            is_dot = (~no_scaling) & (scale_factor < 0.25)  # No dots for non-scaling enemies
+            # Determine if should render as dot
+            is_dot = (~no_scaling) & (scale_factor < 0.25)
 
-            # For white saucers with sufficient scale, use sprite instead of rectangle
-            use_sprite = is_white_saucer & (scale_factor >= 0.4) & active & ~is_dot
+            # Use sprites for white saucers and brown debris with sufficient scale
+            use_white_saucer_sprite = is_white_saucer & (scale_factor >= 0.4) & active & ~is_dot
+            use_brown_debris_sprite = is_brown_debris & (scale_factor >= 0.4) & active & ~is_dot
+            use_any_sprite = use_white_saucer_sprite | use_brown_debris_sprite
 
             # Center the scaled enemy at its position
             x_offset = ((base_width - scaled_width) / 2).astype(int)
@@ -4250,9 +4261,9 @@ class BeamRiderRenderer(JAXGameRenderer):
                     (draw_y + scaled_height > 0)
             )
 
-            # Draw white saucer sprite when appropriate
-            def draw_white_saucer_sprite():
-                sprite_h, sprite_w = self.white_saucer_sprite.shape
+            # Generic sprite drawing function
+            def draw_enemy_sprite(sprite, color):
+                sprite_h, sprite_w = sprite.shape
 
                 # Calculate scaled sprite dimensions
                 sprite_scaled_w = jnp.maximum(1, (sprite_w * scale_factor).astype(int))
@@ -4284,7 +4295,7 @@ class BeamRiderRenderer(JAXGameRenderer):
                         # Get sprite value
                         sprite_val = jnp.where(
                             in_sprite,
-                            self.white_saucer_sprite[sprite_py, sprite_px],
+                            sprite[sprite_py, sprite_px],
                             0
                         )
 
@@ -4298,23 +4309,31 @@ class BeamRiderRenderer(JAXGameRenderer):
 
                 sprite_mask = jax.lax.fori_loop(0, self.constants.SCREEN_HEIGHT, set_pixel, sprite_mask)
 
-                # Apply white color for saucer sprite
-                white_color = jnp.array(self.constants.WHITE, dtype=jnp.uint8)
+                # Apply color for sprite
                 return jnp.where(
                     sprite_mask[..., None] & active & partially_visible,
-                    white_color,
+                    color,
                     screen
                 )
 
-            # Apply sprite drawing for white saucers when conditions are met
+            # Draw white saucer sprite
             screen = jax.lax.cond(
-                use_sprite,
-                lambda s: draw_white_saucer_sprite(),
-                lambda s: s,  # Don't draw sprite
+                use_white_saucer_sprite,
+                lambda s: draw_enemy_sprite(self.white_saucer_sprite, jnp.array(self.constants.WHITE, dtype=jnp.uint8)),
+                lambda s: s,
                 screen
             )
 
-            # For very small enemies (dots), use a single pixel instead of trying to draw tiny rectangles
+            # Draw brown debris sprite
+            screen = jax.lax.cond(
+                use_brown_debris_sprite,
+                lambda s: draw_enemy_sprite(self.brown_debris_sprite,
+                                            jnp.array(self.constants.BROWN_DEBRIS_COLOR, dtype=jnp.uint8)),
+                lambda s: s,
+                screen
+            )
+
+            # For very small enemies (dots)
             dot_mask = (
                     is_dot &
                     (x_grid == jnp.clip(draw_x + scaled_width // 2, 0, self.constants.SCREEN_WIDTH - 1)) &
@@ -4323,10 +4342,10 @@ class BeamRiderRenderer(JAXGameRenderer):
                     partially_visible
             )
 
-            # Regular enemy mask for larger enemies (excluding white saucers with sprites)
+            # Regular enemy mask for larger enemies (excluding enemies with sprites)
             regular_mask = (
                     ~is_dot &
-                    ~use_sprite &  # Don't draw rectangle if using sprite
+                    ~use_any_sprite &  # Don't draw rectangle if using any sprite
                     (x_grid >= draw_x) &
                     (x_grid < draw_x + scaled_width) &
                     (y_grid >= draw_y) &
@@ -4337,10 +4356,10 @@ class BeamRiderRenderer(JAXGameRenderer):
                     partially_visible
             )
 
-            # Combine both masks (dots and regular rectangles, but not sprites)
+            # Combine both masks
             enemy_mask = dot_mask | regular_mask
 
-            # Select enemy color based on type
+            # Select enemy color based on type (for non-sprite enemies)
             enemy_color = jnp.where(
                 enemy_type == self.constants.ENEMY_TYPE_BROWN_DEBRIS,
                 jnp.array(self.constants.BROWN_DEBRIS_COLOR, dtype=jnp.uint8),
@@ -4391,6 +4410,7 @@ class BeamRiderRenderer(JAXGameRenderer):
         # Apply to all enemies
         screen = jax.lax.fori_loop(0, self.constants.MAX_ENEMIES, draw_single_enemy, screen)
         return screen
+
     @partial(jax.jit, static_argnums=(0,))
     def _draw_ui(self, screen: chex.Array, state) -> chex.Array:
         """
