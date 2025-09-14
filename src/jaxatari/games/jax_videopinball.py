@@ -1679,10 +1679,7 @@ class VideoPinballObservation(NamedTuple):
     score: chex.Array
     lives: chex.Array
     bumper_multiplier: chex.Array
-    left_target: chex.Array
-    middle_target: chex.Array
-    right_target: chex.Array
-    special_target: chex.Array
+    active_targets: chex.Array
     atari_symbols: chex.Array
     rollover_counter: chex.Array
     color_cycling: chex.Array
@@ -1698,6 +1695,7 @@ class VideoPinballInfo(NamedTuple):
     ball_in_play: chex.Array
     respawn_timer: chex.Array
     tilt_counter: chex.Array
+    all_rewards: chex.Array
 
 @jax.jit
 def plunger_step(state: VideoPinballState, action: chex.Array) -> chex.Array:
@@ -3805,7 +3803,8 @@ class JaxVideoPinball(
 
         done = self._get_done(new_state)
         env_reward = self._get_reward(state, new_state)
-        info = self._get_info(new_state)
+        all_rewards = self._get_all_reward(state, new_state)
+        info = self._get_info(new_state, all_rewards)
         observation = self._get_observation(new_state)
         # stack the new observation, remove the oldest one
         # observation = jax.tree.map(
@@ -3856,10 +3855,7 @@ class JaxVideoPinball(
             score=state.score,
             lives=state.lives,
             bumper_multiplier=state.bumper_multiplier,
-            left_target=state.active_targets[0],
-            middle_target=state.active_targets[1],
-            right_target=state.active_targets[2],
-            special_target=state.active_targets[3],
+            active_targets=state.active_targets,
             atari_symbols=state.atari_symbols,
             rollover_counter=state.rollover_counter,
             color_cycling=state.color_cycling,
@@ -3923,12 +3919,7 @@ class JaxVideoPinball(
             "score": spaces.Box(low=0, high=10000, shape=(), dtype=jnp.int32),
             "lives": spaces.Box(low=0, high=5, shape=(), dtype=jnp.int32),
             "bumper_multiplier": spaces.Box(low=1, high=9, shape=(), dtype=jnp.int32),
-            "active_targets": spaces.Dict({
-                "left_target": spaces.Box(low=0, high=1, shape=(), dtype=jnp.bool_),
-                "middle_target": spaces.Box(low=0, high=1, shape=(), dtype=jnp.bool_),
-                "right_target": spaces.Box(low=0, high=1, shape=(), dtype=jnp.bool_),
-                "special_target": spaces.Box(low=0, high=1, shape=(), dtype=jnp.bool_),
-            }),
+            "active_targets": spaces.Box(low=0, high=1, shape=(4,), dtype=jnp.int32),
             "atari_symbols": spaces.Box(low=0, high=5, shape=(), dtype=jnp.int32),
             "rollover_counter": spaces.Box(low=1, high=10, shape=(), dtype=jnp.int32),
             "color_cycling": spaces.Box(low=0, high=9, shape=(), dtype=jnp.int32),
@@ -3945,7 +3936,7 @@ class JaxVideoPinball(
 
     @partial(jax.jit, static_argnums=(0,))
     def _get_info(
-        self, state: VideoPinballState,
+        self, state: VideoPinballState, all_rewards: chex.Array = None
     ) -> VideoPinballInfo:
         return VideoPinballInfo(
             time=state.step_counter,
@@ -3957,6 +3948,7 @@ class JaxVideoPinball(
             ball_in_play=state.ball_in_play,
             respawn_timer=state.respawn_timer,
             tilt_counter=state.tilt_counter,
+            all_rewards=all_rewards,
         )
 
     @partial(jax.jit, static_argnums=(0,))
