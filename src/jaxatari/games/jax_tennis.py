@@ -1592,7 +1592,7 @@ class TennisJaxEnv(JaxEnvironment[TennisState, TennisObs, TennisInfo, TennisCons
     def observation_space(self) -> spaces:
         return spaces.Dict({
             "player": spaces.Dict({
-                "player_x": spaces.Box(low=0, high=160, shape=(), dtype=jnp.float32),
+                "player_x": spaces.Box(low=0, high=160, shape=(), dtype=jnp.int32),
                 "player_y": spaces.Box(low=0, high=210, shape=(), dtype=jnp.float32),
                 "player_direction": spaces.Box(low=-1, high=1, shape=(), dtype=jnp.int32),
                 "player_field": spaces.Box(low=-1, high=1, shape=(), dtype=jnp.int32),
@@ -1652,7 +1652,8 @@ class TennisJaxEnv(JaxEnvironment[TennisState, TennisObs, TennisInfo, TennisCons
                          enemy_sets=state.game_state.enemy_game_score.astype(jnp.int32))
 
         #print(obs)
-
+        # 140564625680144, 140564617071968
+        # 140211275917888, 140211243107184
         #return obs
 
     def _get_info(self, state: TennisState, all_rewards: jnp.ndarray = None) -> TennisInfo:
