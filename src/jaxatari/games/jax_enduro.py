@@ -101,12 +101,16 @@ class EnduroConstants(NamedTuple):
     # track colors
     track_colors = jnp.array([
         [74, 74, 74],  # top
-        [111, 111, 111],  # moving top
-        [170, 170, 170],  # moving bottom
-        [192, 192, 192],  # bottom
+        [111, 111, 111],  # moving top - movement range: 0-11
+        [170, 170, 170],  # moving bottom - spawns after 6th
+        [192, 192, 192],  # bottom - rest
     ], dtype=jnp.int32)
-    track_moving_top_length: int = 16
-    track_moving_bottom_length: int = 20
+    track_top_min_length: int = 33 # or 32
+    track_moving_top_length: int = 13
+    track_moving_bottom_length: int = 18
+    track_move_range: int = 12
+    track_moving_bottom_spawn_step: int = 6
+    track_color_move_speed_per_speed: float = 0.3 / 6
 
     # === Track collision ===
     track_collision_kickback_pixels: float = 3.0
@@ -1654,6 +1658,88 @@ class EnduroRenderer(JAXGameRenderer):
     @partial(jax.jit, static_argnums=(0,))
     def _render_track_from_state(self, raster: jnp.ndarray, state: EnduroGameState):
         """
+        Renders the track pixels from the Enduro Game State with animated colors.
+        """
+        # Calculate animation step
+        animation_step = jnp.floor(
+            state.player_speed * state.step_count * self.config.track_color_move_speed_per_speed
+        ) % self.config.track_move_range
+        animation_step = animation_step.astype(jnp.int32)
+
+        # build the y array
+        sky_height = self.background_sizes['background_sky.npy'][0]
+        y = jnp.add(jnp.arange(self.track_height), sky_height)
+
+        # Concatenate both sides and create a grid of x & y coordinates
+        x_coords = jnp.concatenate([state.visible_track_left, state.visible_track_right])
+        y_coords = jnp.concatenate([y, y])
+
+        # Create track sprite with animated colors
+        track_sprite = self._draw_animated_track_sprite(x_coords, y_coords, animation_step)
+        # Render to raster
+        raster = aj.render_at(raster, 0, 0, track_sprite)
+
+        return raster
+
+    @partial(jax.jit, static_argnums=(0,))
+    def _draw_animated_track_sprite(self, x_coords: jnp.ndarray, y_coords: jnp.ndarray,
+                                    animation_step: jnp.int32) -> jnp.ndarray:
+        """
+        Creates a sprite for the track with animated colors based on animation step.
+        """
+        # Create full-screen-sized sprite
+        sprite = jnp.zeros((self.config.screen_height, self.config.screen_width, 4), dtype=jnp.uint8)
+
+        # Calculate color regions based on animation step
+        sky_height = self.background_sizes['background_sky.npy'][0]
+
+        def get_track_color(track_row_index: jnp.int32) -> jnp.ndarray:
+            """Determine color for a given track row based on animation step."""
+
+            # Calculate boundaries (these shift with animation_step)
+            top_region_end = self.config.track_top_min_length + animation_step
+            moving_top_end = top_region_end + self.config.track_moving_top_length
+
+            # Check if we should spawn moving bottom (step >= 6)
+            spawn_moving_bottom = animation_step >= self.config.track_moving_bottom_spawn_step
+            moving_bottom_end = jnp.where(
+                spawn_moving_bottom,
+                moving_top_end + self.config.track_moving_bottom_length,
+                moving_top_end
+            )
+
+            # Determine color based on position
+            color = jnp.where(
+                track_row_index < top_region_end,
+                self.config.track_colors[0],  # top color
+                jnp.where(
+                    track_row_index < moving_top_end,
+                    self.config.track_colors[1],  # moving top color
+                    jnp.where(
+                        (track_row_index < moving_bottom_end) & spawn_moving_bottom,
+                        self.config.track_colors[2],  # moving bottom color
+                        self.config.track_colors[3]  # bottom/rest color
+                    )
+                )
+            )
+
+            return color
+
+        def draw_pixel(i, s):
+            x = x_coords[i]
+            y = y_coords[i]
+            track_row_index = y - sky_height
+            color = get_track_color(track_row_index)
+            # Add alpha channel (assuming track should be opaque)
+            color_with_alpha = jnp.append(color, 255)
+            return s.at[y, x].set(color_with_alpha)
+
+        sprite = jax.lax.fori_loop(0, x_coords.shape[0], draw_pixel, sprite)
+        return sprite
+
+    @partial(jax.jit, static_argnums=(0,))
+    def _render_track_from_state2(self, raster: jnp.ndarray, state: EnduroGameState):
+        """
         Renders the track pixels from the Enduro Game State.
         Args:
             raster: the raster to draw in
@@ -1685,7 +1771,7 @@ class EnduroRenderer(JAXGameRenderer):
         return raster
 
     @partial(jax.jit, static_argnums=(0,))
-    def _draw_track_sprite(self, x_coords: jnp.ndarray, y_coords: jnp.ndarray, color: jnp.ndarray) -> jnp.ndarray:
+    def _draw_track_sprite2(self, x_coords: jnp.ndarray, y_coords: jnp.ndarray, color: jnp.ndarray) -> jnp.ndarray:
         """
         Creates a sprite for the track that covers the whole screen, which makes it a little easier to draw,
         because you can use absolute x,y positions for drawing the pixels.
