@@ -19,7 +19,7 @@ def load_sprite_frame(path: str) -> chex.Array:
     import numpy as np
     if os.path.exists(path):
         return jnp.array(np.load(path))
-    return None
+    return jnp.array([])  # Return empty array instead of None
 
 
 @dataclass
@@ -40,6 +40,7 @@ class GameConfig:
 
     # Rod mechanics
     MIN_ROD_LENGTH: int = 10  # Minimum rod extension
+    START_ROD_LENGTH: int = 20  # Starting rod length for natural default position
     MAX_ROD_LENGTH: int = 50  # Maximum rod extension
     ROD_SPEED: float = 1.5  # Speed of rod extension/retraction
 
@@ -76,7 +77,8 @@ class PlayerState(NamedTuple):
     score: chex.Array
     hook_state: chex.Array  # 0=free, 1=hooked/reeling slow, 2=reeling fast
     hooked_fish_idx: chex.Array
-    hook_velocity_y: chex.Array  # Only vertical velocity now
+    hook_velocity_y: chex.Array  # Vertical velocity
+    hook_x_offset: chex.Array  # Horizontal offset from rod end due to water resistance
 
 
 class GameState(NamedTuple):
@@ -136,7 +138,8 @@ class FishingDerby(JaxEnvironment):
         """Calculate the actual hook position based on rod length and hook depth."""
         cfg = self.config
         rod_end_x = player_x + player_state.rod_length
-        hook_x = rod_end_x
+        # Apply horizontal offset for water resistance effect
+        hook_x = rod_end_x + player_state.hook_x_offset
         hook_y = cfg.ROD_Y + player_state.hook_y
         return hook_x, hook_y
 
@@ -145,21 +148,24 @@ class FishingDerby(JaxEnvironment):
         key, fish_key = jax.random.split(key)
 
         p1_state = PlayerState(
-            rod_length=jnp.array(float(self.config.MIN_ROD_LENGTH)),
-            hook_y=jnp.array(0.0),  # Hook starts at rod level
+            rod_length=jnp.array(float(self.config.START_ROD_LENGTH)),
+            # Start hook in the water: at water surface relative to rod
+            hook_y=jnp.array(float(self.config.WATER_Y_START - self.config.ROD_Y)),
             score=jnp.array(0),
             hook_state=jnp.array(0),
             hooked_fish_idx=jnp.array(-1, dtype=jnp.int32),
-            hook_velocity_y=jnp.array(0.0)
+            hook_velocity_y=jnp.array(0.0),
+            hook_x_offset=jnp.array(0.0)
         )
 
         p2_state = PlayerState(
-            rod_length=jnp.array(float(self.config.MIN_ROD_LENGTH)),
-            hook_y=jnp.array(0.0),
+            rod_length=jnp.array(float(self.config.START_ROD_LENGTH)),
+            hook_y=jnp.array(float(self.config.WATER_Y_START - self.config.ROD_Y)),
             score=jnp.array(0),
             hook_state=jnp.array(0),
             hooked_fish_idx=jnp.array(-1, dtype=jnp.int32),
-            hook_velocity_y=jnp.array(0.0)
+            hook_velocity_y=jnp.array(0.0),
+            hook_x_offset=jnp.array(0.0)
         )
 
         fish_x = jax.random.uniform(fish_key, (self.config.NUM_FISH,), minval=10.0,
@@ -252,6 +258,9 @@ class FishingDerby(JaxEnvironment):
             # Player 1 Rod and Hook Logic
             p1 = state.p1
 
+            # Track previous rod length to detect horizontal movement
+            prev_rod_length = p1.rod_length
+
             # Rod length control (horizontal extension)
             rod_change = 0.0
             rod_change = jnp.where(p1_action == Action.RIGHT, +cfg.ROD_SPEED, rod_change)
@@ -262,6 +271,30 @@ class FishingDerby(JaxEnvironment):
                 cfg.MIN_ROD_LENGTH,
                 cfg.MAX_ROD_LENGTH
             )
+
+            # Calculate horizontal rod movement for water resistance
+            rod_velocity_x = new_rod_length - prev_rod_length
+
+            # Water resistance physics for hook horizontal offset
+            # When hook is in water (hook_y > 0), apply water resistance
+            in_water = p1.hook_y > 0.0
+            # Stronger resistance produces more noticeable trailing/bend
+            water_resistance_factor = jnp.where(in_water, 1.6, 0.0)
+
+            # Hook follows rod movement with delay due to water resistance
+            # The deeper the hook, the more resistance
+            depth_factor = jnp.clip(p1.hook_y / (cfg.LINE_Y_END - cfg.ROD_Y), 0.0, 1.0)
+            resistance_multiplier = 1.0 + depth_factor * 4.0
+
+            # Calculate target horizontal offset based on rod movement
+            target_offset = -rod_velocity_x * water_resistance_factor * resistance_multiplier
+
+            # Hook offset follows target with damping (creates lag effect)
+            offset_damping = 0.75  # less damping -> larger, quicker offsets
+            new_hook_x_offset = p1.hook_x_offset * offset_damping + target_offset * (1.0 - offset_damping)
+
+            # When not in water, offset decays back to 0 faster
+            new_hook_x_offset = jnp.where(in_water, new_hook_x_offset, p1.hook_x_offset * 0.6)
 
             # Hook vertical movement (only when not hooked to fish)
             hook_change = 0.0
@@ -298,7 +331,8 @@ class FishingDerby(JaxEnvironment):
                 score=p1.score,
                 hook_state=p1.hook_state,
                 hooked_fish_idx=p1.hooked_fish_idx,
-                hook_velocity_y=new_hook_velocity_y
+                hook_velocity_y=new_hook_velocity_y,
+                hook_x_offset=new_hook_x_offset
             ))
 
             # Collision and Game Logic
@@ -337,7 +371,8 @@ class FishingDerby(JaxEnvironment):
                 score=p1.score,
                 hook_state=p1_hook_state,
                 hooked_fish_idx=p1_hooked_fish_idx,
-                hook_velocity_y=new_hook_velocity_y
+                hook_velocity_y=new_hook_velocity_y,
+                hook_x_offset=new_hook_x_offset
             ))
 
             # Hooked fish follows the hook
@@ -388,7 +423,7 @@ class FishingDerby(JaxEnvironment):
             # Reset hook after scoring/shark collision
             p1_hook_state = jnp.where(reset_hook, 0, p1_hook_state)
             p1_hooked_fish_idx = jnp.where(reset_hook, -1, p1_hooked_fish_idx)
-            new_rod_length = jnp.where(reset_hook, float(cfg.MIN_ROD_LENGTH), new_rod_length)
+            new_rod_length = jnp.where(reset_hook, float(cfg.START_ROD_LENGTH), new_rod_length)
             new_hook_y = jnp.where(reset_hook, 0.0, new_hook_y)
             new_hook_velocity_y = jnp.where(reset_hook, 0.0, new_hook_velocity_y)
 
@@ -401,7 +436,8 @@ class FishingDerby(JaxEnvironment):
                     score=p1_score,
                     hook_state=p1_hook_state,
                     hooked_fish_idx=p1_hooked_fish_idx,
-                    hook_velocity_y=new_hook_velocity_y
+                    hook_velocity_y=new_hook_velocity_y,
+                    hook_x_offset=new_hook_x_offset
                 ),
                 p2=state.p2,
                 fish_positions=new_fish_pos,
@@ -496,6 +532,7 @@ def load_sprites():
 
 class FishingDerbyRenderer(AtraJaxisRenderer):
     def __init__(self):
+        super().__init__()
         self.config = GameConfig()
         (
             self.SPRITE_BG, self.SPRITE_PLAYER1, self.SPRITE_PLAYER2,
@@ -503,33 +540,75 @@ class FishingDerbyRenderer(AtraJaxisRenderer):
             self.SPRITE_FISH2, self.SPRITE_SKY, self.SPRITE_SCORE_DIGITS
         ) = load_sprites()
 
+    def _get_hook_position(self, player_x: float, player_state: PlayerState) -> Tuple[float, float]:
+        """Calculate the actual hook position based on rod length and hook depth."""
+        cfg = self.config
+        rod_end_x = player_x + player_state.rod_length
+        # Apply horizontal offset for water resistance effect
+        hook_x = rod_end_x + player_state.hook_x_offset
+        hook_y = cfg.ROD_Y + player_state.hook_y
+        return hook_x, hook_y
+
     @partial(jax.jit, static_argnums=(0,))
     def render(self, state: GameState) -> chex.Array:
         cfg = self.config
         raster = jnp.zeros((cfg.SCREEN_HEIGHT, cfg.SCREEN_WIDTH, 3), dtype=jnp.uint8)
 
-        # Draw sky
+        # Draw sky and water
         raster = raster.at[:cfg.WATER_Y_START, :, :].set(jnp.array(cfg.SKY_COLOR, dtype=jnp.uint8))
-        # Draw water
         raster = raster.at[cfg.WATER_Y_START:, :, :].set(jnp.array(cfg.WATER_COLOR, dtype=jnp.uint8))
 
         # Draw players
         raster = self._render_at(raster, cfg.P1_START_X, cfg.PLAYER_Y, self.SPRITE_PLAYER1)
         raster = self._render_at(raster, cfg.P2_START_X, cfg.PLAYER_Y, self.SPRITE_PLAYER2)
 
-        # Draw fishing rods and lines (proper Atari-style)
-        # Player 1 rod and line
+        # Draw fishing line with water resistance physics
         p1_rod_end_x = cfg.P1_START_X + state.p1.rod_length
-        p1_hook_x, p1_hook_y = cfg.P1_START_X + state.p1.rod_length, cfg.ROD_Y + state.p1.hook_y
 
-        # Draw horizontal rod
+        # Get actual hook position including water resistance offset
+        hook_x, hook_y = self._get_hook_position(cfg.P1_START_X, state.p1)
+
+        # Draw horizontal part of the rod
         raster = self._render_line(raster, cfg.P1_START_X + 10, cfg.ROD_Y, p1_rod_end_x, cfg.ROD_Y,
                                    color=(139, 69, 19))  # Brown rod
-        # Draw vertical line from rod end to hook
-        raster = self._render_line(raster, p1_rod_end_x, cfg.ROD_Y, p1_hook_x, p1_hook_y,
-                                   color=(200, 200, 200))  # Gray line
 
-        # Player 2 rod and line (simplified for now, same as before)
+        # Water resistance sag - based on horizontal offset and vertical movement
+        # When moving rod horizontally in water, line should sag/lag behind
+
+        # Only apply horizontal movement sag when there's recent horizontal movement
+        # Check if there's significant horizontal offset indicating recent movement
+        has_horizontal_movement = jnp.abs(state.p1.hook_x_offset) > 0.1
+        offset_sag = jnp.where(has_horizontal_movement,
+                              jnp.abs(state.p1.hook_x_offset) * 1.0,
+                              0.0)  # No sag when moving straight down
+
+        # Vertical movement sag (normal gravity sag) - reduced when moving straight down
+        max_hook_y = cfg.LINE_Y_END - cfg.ROD_Y
+        line_depth_ratio = jnp.clip(state.p1.hook_y / max_hook_y, 0.0, 1.0)
+
+        # Reduce gravity sag when moving straight down (no horizontal movement)
+        gravity_sag_base = 6.0 * jnp.exp(-2.0 * line_depth_ratio)
+        gravity_sag = jnp.where(has_horizontal_movement,
+                               gravity_sag_base,
+                               gravity_sag_base * 0.2)  # Much less sag when straight down
+
+        # Combine both types of sag
+        total_sag = gravity_sag + offset_sag
+
+        # Reduce sag when reeling (line is under tension)
+        is_reeling = state.p1.hook_state > 0
+        tension_multiplier = jnp.where(is_reeling, 0.2, 1.0)
+        final_sag = total_sag * tension_multiplier
+
+        # Define start and end points for the saggy line
+        line_start = jnp.array([p1_rod_end_x, cfg.ROD_Y])
+        line_end = jnp.array([hook_x, hook_y])  # Use actual hook position with offset
+
+        # Draw the saggy line
+        raster = self._render_saggy_line(raster, line_start, line_end, final_sag, color=(200, 200, 200),
+                                         num_segments=12)
+
+        # Player 2 rod and line (simplified for now)
         raster = self._render_line(raster, cfg.P2_START_X + 2, cfg.PLAYER_Y + 10, state.p2.rod_length + cfg.P2_START_X,
                                    cfg.ROD_Y + state.p2.hook_y)
 
@@ -551,14 +630,10 @@ class FishingDerbyRenderer(AtraJaxisRenderer):
         # Draw hooked fish
         def draw_hooked_p1(r):
             hook_x, hook_y = cfg.P1_START_X + state.p1.rod_length, cfg.ROD_Y + state.p1.hook_y
-            return self._render_at(r, hook_x, hook_y, fish_frame)
-
-        def draw_hooked_p2(r):
-            hook_x, hook_y = cfg.P2_START_X + state.p2.rod_length, cfg.ROD_Y + state.p2.hook_y
+            hook_x, hook_y = cfg.P1_START_X + state.p1.rod_length, cfg.ROD_Y + state.p1.hook_y
             return self._render_at(r, hook_x, hook_y, fish_frame)
 
         raster = jax.lax.cond(state.p1.hook_state > 0, draw_hooked_p1, lambda r: r, raster)
-        raster = jax.lax.cond(state.p2.hook_state > 0, draw_hooked_p2, lambda r: r, raster)
 
         # Draw scores
         raster = self._render_score(raster, state.p1.score, 50, 20)
@@ -581,20 +656,14 @@ class FishingDerbyRenderer(AtraJaxisRenderer):
         x, y = jnp.round(x).astype(jnp.int32), jnp.round(y).astype(jnp.int32)
         sprite_to_draw = jnp.where(flip_h, jnp.fliplr(sprite_rgb), sprite_rgb)
 
-        # Check if sprite has an alpha channel (4th channel)
         has_alpha = sprite.shape[2] > 3
-
         if has_alpha:
-            # Use the alpha channel for transparency
             alpha = sprite[:, :, 3:4]
             alpha = jnp.where(flip_h, jnp.fliplr(alpha), alpha)
-            # Create mask where alpha > 0 (non-transparent pixels)
             mask = alpha > 0
         else:
-            # Fallback: treat both pure black (0,0,0) and pure white (255,255,255) as transparent
             is_black = jnp.all(sprite_to_draw == 0, axis=-1, keepdims=True)
             is_white = jnp.all(sprite_to_draw == 255, axis=-1, keepdims=True)
-            # Mask is True where pixel is NOT black and NOT white
             mask = ~(is_black | is_white)
 
         region = jax.lax.dynamic_slice(raster, (y, x, 0), (h, w, 3))
@@ -625,6 +694,65 @@ class FishingDerbyRenderer(AtraJaxisRenderer):
             return ~((carry[0] == x1) & (carry[1] == y1))
 
         _, _, raster, _ = jax.lax.while_loop(loop_cond, loop_body, (x0, y0, raster, err))
+        # Ensure the last pixel is drawn
+        safe_y1, safe_x1 = jnp.clip(y1, 0, raster.shape[0] - 1), jnp.clip(x1, 0, raster.shape[1] - 1)
+        raster = raster.at[safe_y1, safe_x1, :].set(color_uint8)
+        return raster
+
+    @staticmethod
+    @partial(jax.jit, static_argnums=(5,))
+    def _render_saggy_line(raster, p_start, p_end, sag_amount, color, num_segments=10):
+        """Renders a fishing line with realistic catenary-like sag."""
+
+        # Create 't' values from 0.0 to 1.0 to parameterize the curve
+        t = jnp.linspace(0.0, 1.0, num_segments + 1)
+
+        # Linearly interpolate between start and end points
+        points = jax.vmap(lambda i: p_start + i * (p_end - p_start))(t)
+
+        # Calculate line properties
+        line_vector = p_end - p_start
+        line_length = jnp.linalg.norm(line_vector) + 1e-8  # Add small epsilon to avoid division by zero
+
+        # More realistic sag calculation combining parabolic and catenary effects
+        # Parabolic component (primary gravity effect)
+        parabolic_sag = 4.0 * t * (1.0 - t)  # Maximum at t=0.5, zero at endpoints
+
+        # Catenary-like component for more realistic physics
+        # Uses hyperbolic cosine shape but simplified for performance
+        catenary_factor = jnp.cosh(3.0 * (t - 0.5)) - 1.0
+        normalized_catenary = catenary_factor / (jnp.max(catenary_factor) + 1e-8)
+
+        # Combine both components with line length influence
+        # Shorter lines sag more relative to their length
+        length_factor = jnp.clip(line_length / 50.0, 0.5, 2.0)  # Scale based on line length
+        total_sag = sag_amount * (0.8 * parabolic_sag + 0.2 * normalized_catenary) / length_factor
+
+        # Use JAX-compatible conditional for sag direction
+        # For nearly vertical lines (fishing lines), apply horizontal sag
+        is_nearly_vertical = jnp.abs(line_vector[0]) < 0.1
+
+        # Calculate perpendicular direction for non-vertical lines
+        line_direction_norm = line_vector / line_length
+        perpendicular = jnp.array([-line_direction_norm[1], line_direction_norm[0]])
+
+        # Use jnp.where for JAX-compatible conditional logic
+        sag_offsets_x = jnp.where(is_nearly_vertical, total_sag, total_sag * perpendicular[0])
+        sag_offsets_y = jnp.where(is_nearly_vertical, jnp.zeros_like(total_sag), total_sag * perpendicular[1])
+
+        # Apply sag offsets to points
+        points = points.at[:, 0].add(sag_offsets_x)
+        points = points.at[:, 1].add(sag_offsets_y)
+
+        # Draw segments
+        def draw_segment(i, current_raster):
+            p1 = points[i]
+            p2 = points[i + 1]
+            return FishingDerbyRenderer._render_line(
+                current_raster, p1[0], p1[1], p2[0], p2[1], color
+            )
+
+        raster = jax.lax.fori_loop(0, num_segments, draw_segment, raster)
         return raster
 
 
@@ -640,47 +768,31 @@ def get_human_action() -> chex.Array:
     if reset:
         return jnp.array(GameConfig.RESET)
 
-    x, y = 0, 0
-    if up and not down:
-        y = 1
-    elif not up and down:
-        y = -1
-
-    if left and not right:
-        x = -1
-    elif not left and right:
-        x = 1
+    # Map keyboard inputs to Atari actions
+    is_up = up and not down
+    is_down = down and not up
+    is_left = left and not right
+    is_right = right and not left
 
     if fire:
-        if x == -1 and y == -1:
-            return jnp.array(Action.DOWNLEFTFIRE)
-        elif x == -1 and y == 1:
-            return jnp.array(Action.UPLEFTFIRE)
-        elif x == 1 and y == -1:
-            return jnp.array(Action.DOWNRIGHTFIRE)
-        elif x == 1 and y == 1:
-            return jnp.array(Action.UPRIGHTFIRE)
-        elif x == 0 and y == -1:
-            return jnp.array(Action.DOWNFIRE)
-        else:
-            return jnp.array(Action.FIRE)
+        if is_up and is_left: return jnp.array(Action.UPLEFTFIRE)
+        if is_up and is_right: return jnp.array(Action.UPRIGHTFIRE)
+        if is_down and is_left: return jnp.array(Action.DOWNLEFTFIRE)
+        if is_down and is_right: return jnp.array(Action.DOWNRIGHTFIRE)
+        if is_up: return jnp.array(Action.UPFIRE)
+        if is_down: return jnp.array(Action.DOWNFIRE)
+        if is_left: return jnp.array(Action.LEFTFIRE)
+        if is_right: return jnp.array(Action.RIGHTFIRE)
+        return jnp.array(Action.FIRE)
     else:
-        if x == -1 and y == -1:
-            return jnp.array(Action.DOWNLEFT)
-        elif x == -1 and y == 1:
-            return jnp.array(Action.UPLEFT)
-        elif x == 1 and y == -1:
-            return jnp.array(Action.DOWNRIGHT)
-        elif x == 1 and y == 1:
-            return jnp.array(Action.UPRIGHT)
-        elif x == -1:
-            return jnp.array(Action.LEFT)
-        elif x == 1:
-            return jnp.array(Action.RIGHT)
-        elif y == -1:
-            return jnp.array(Action.DOWN)
-        elif y == 1:
-            return jnp.array(Action.UP)
+        if is_up and is_left: return jnp.array(Action.UPLEFT)
+        if is_up and is_right: return jnp.array(Action.UPRIGHT)
+        if is_down and is_left: return jnp.array(Action.DOWNLEFT)
+        if is_down and is_right: return jnp.array(Action.DOWNRIGHT)
+        if is_up: return jnp.array(Action.UP)
+        if is_down: return jnp.array(Action.DOWN)
+        if is_left: return jnp.array(Action.LEFT)
+        if is_right: return jnp.array(Action.RIGHT)
 
     return jnp.array(Action.NOOP)
 
@@ -690,14 +802,25 @@ if __name__ == "__main__":
     game = FishingDerby()
     renderer = FishingDerbyRenderer()
     jitted_step = jax.jit(game.step)
-    jitted_reset = jax.jit(game.reset)
+    key = jax.random.PRNGKey(0)
+    key, reset_key = jax.random.split(key)
+    (_, curr_state) = game.reset(reset_key)
+
     scaling = 4
     screen = pygame.display.set_mode((GameConfig.SCREEN_WIDTH * scaling, GameConfig.SCREEN_HEIGHT * scaling))
-    (_, curr_state) = jitted_reset()
+    pygame.display.set_caption("JAX Fishing Derby")
+
     running = True
     frame_by_frame = False
-    frameskip = 1
-    counter = 0
+
+    clock = pygame.time.Clock()
+
+    print("Controls:")
+    print("WASD or Arrow Keys - Move hook/rod")
+    print("SPACE - Fast reel (when fish is hooked)")
+    print("R - Reset game")
+    print("F - Toggle frame-by-frame mode")
+    print("N - Next frame (in frame-by-frame mode)")
 
     while running:
         for event in pygame.event.get():
@@ -706,22 +829,26 @@ if __name__ == "__main__":
             elif event.type == pygame.KEYDOWN:
                 if event.key == pygame.K_f:
                     frame_by_frame = not frame_by_frame
+                    print(f"Frame-by-frame mode: {'ON' if frame_by_frame else 'OFF'}")
                 elif event.key == pygame.K_n and frame_by_frame:
                     action = get_human_action()
+                    key, step_key = jax.random.split(curr_state.key)
                     (_, curr_state, _, _, _) = jitted_step(curr_state, action)
 
         if not frame_by_frame:
             action = get_human_action()
-            if counter % frameskip == 0:
-                (_, curr_state, _, _, _) = jitted_step(curr_state, action)
+            key, step_key = jax.random.split(curr_state.key)
+            (_, curr_state, _, _, _) = jitted_step(curr_state, action)
 
         # Render and display
         raster = renderer.render(curr_state)
-        raster_np = jnp.array(raster).transpose((1, 0, 2))
         aj.update_pygame(screen, raster, scaling, GameConfig.SCREEN_WIDTH, GameConfig.SCREEN_HEIGHT)
 
-        counter += 1
-        pygame.time.Clock().tick(60)
-    pygame.quit()
+        # Display game info
+        if curr_state.time % 60 == 0:  # Update every second
+            print(
+                f"Player 1 Score: {curr_state.p1.score}, Player 2 Score: {curr_state.p2.score}, Time: {curr_state.time}")
 
-# run with: python scripts/play.py --game src/jaxatari/games/jax_fishingderby.py --record my_record_file.npz
+        clock.tick(60)
+
+    pygame.quit()
