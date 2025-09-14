@@ -206,7 +206,7 @@ class BeamRiderConstants(NamedTuple):
     GREEN_BOUNCE_POINTS = 100  # Very high points when destroyed with torpedo
     GREEN_BOUNCE_COLOR = (0, 200, 0)  # Slightly different green than blockers
     GREEN_BOUNCE_SPAWN_SECTOR = 7  # Starts appearing from sector 7
-    GREEN_BOUNCE_SPAWN_CHANCE = 0.8  # 8% chance to spawn green bounce craft
+    GREEN_BOUNCE_SPAWN_CHANCE = 0.08  # 8% chance to spawn green bounce craft
     GREEN_BOUNCE_MAX_BOUNCES = 2  # Maximum number of bounces before disappearing
     # Enemy types (add this new type after ENEMY_TYPE_SENTINEL_SHIP = 7)
     ENEMY_TYPE_YELLOW_REJUVENATOR = 8  # NEW: Yellow rejuvenator
@@ -3656,6 +3656,16 @@ class BeamRiderRenderer(JAXGameRenderer):
             [0, 0, 0, 1, 0, 0, 0, 0],
             [0, 0, 0, 0, 0, 0, 0, 0],
         ], dtype=jnp.uint8)
+        # Green bounce craft sprite
+        self.green_bounce_sprite = jnp.array([
+            [0, 0, 1, 1, 1, 1, 1, 0, 0],
+            [0, 1, 1, 1, 1, 1, 1, 1, 0],
+            [1, 0, 1, 1, 1, 1, 1, 0, 1],
+            [1, 0, 1, 0, 0, 0, 1, 0, 1],
+            [1, 0, 1, 1, 1, 1, 1, 0, 1],
+            [0, 1, 0, 1, 1, 1, 0, 1, 0],
+            [0, 0, 1, 1, 1, 1, 1, 0, 0],
+        ], dtype=jnp.uint8)
         # JAX rendering components
         self.ship_sprite_surface = self._create_ship_surface()
         self.small_ship_surface = self._create_small_ship_surface()
@@ -4217,6 +4227,7 @@ class BeamRiderRenderer(JAXGameRenderer):
             is_white_saucer = enemy_type == self.constants.ENEMY_TYPE_WHITE_SAUCER
             is_brown_debris = enemy_type == self.constants.ENEMY_TYPE_BROWN_DEBRIS
             is_green_blocker = enemy_type == self.constants.ENEMY_TYPE_GREEN_BLOCKER
+            is_green_bounce = enemy_type == self.constants.ENEMY_TYPE_GREEN_BOUNCE
 
             # Get base enemy dimensions
             base_width = jnp.where(
@@ -4251,7 +4262,8 @@ class BeamRiderRenderer(JAXGameRenderer):
             use_white_saucer_sprite = is_white_saucer & (scale_factor >= 0.4) & active & ~is_dot
             use_brown_debris_sprite = is_brown_debris & (scale_factor >= 0.4) & active & ~is_dot
             use_green_blocker_sprite = is_green_blocker & active  # Green blockers don't scale, always use sprite
-            use_any_sprite = use_white_saucer_sprite | use_brown_debris_sprite | use_green_blocker_sprite
+            use_green_bounce_sprite = is_green_bounce & active
+            use_any_sprite = use_white_saucer_sprite | use_brown_debris_sprite | use_green_blocker_sprite | use_green_bounce_sprite
 
             # Center the scaled enemy at its position
             x_offset = ((base_width - scaled_width) / 2).astype(int)
@@ -4348,6 +4360,13 @@ class BeamRiderRenderer(JAXGameRenderer):
                 use_green_blocker_sprite,
                 lambda s: draw_enemy_sprite(self.green_blocker_sprite,
                                             jnp.array(self.constants.GREEN_BLOCKER_COLOR, dtype=jnp.uint8)),
+                lambda s: s,
+                screen
+            )
+            screen = jax.lax.cond(
+                use_green_bounce_sprite,
+                lambda s: draw_enemy_sprite(self.green_bounce_sprite,
+                                            jnp.array(self.constants.GREEN_BOUNCE_COLOR, dtype=jnp.uint8)),
                 lambda s: s,
                 screen
             )
