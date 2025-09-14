@@ -16,9 +16,9 @@ import jaxatari.spaces as spaces
 """TODOS:
 Top Priorities:
 - make game more 3D --> might be done(ask supervisor)
-- white saucers from horizon are shooting way to early --> done
+- Green blockers are scaling
+- adjust code so that it passes the tests --> done
 - add enemy sprites
-- adjust code so that it passes the tests
 - adjust code so that everything is moves along the new dotted beams
 For later:
 - Check the sentinal ship constants/Optimize the code/remove unnecessary code
@@ -321,7 +321,6 @@ class BeamRiderState:
     sentinel_projectiles: chex.Array
     # Track sentinel status for current sector
     sentinel_spawned_this_sector: bool
-    # Fields WITH defaults (must come last)
     enemy_spawn_interval: int = BeamRiderConstants.ENEMY_SPAWN_INTERVAL
 
 
@@ -493,11 +492,8 @@ class BeamRiderEnv(JaxEnvironment[BeamRiderState, BeamRiderObservation, BeamRide
         torpedo_projectiles = jnp.zeros((self.constants.MAX_PROJECTILES, 5), dtype=jnp.float32)  # x, y, active, speed
         sentinel_projectiles = jnp.zeros((self.constants.MAX_PROJECTILES, 5), dtype=jnp.float32)  # x, y, active, speed
 
-        # Initialize empty enemies array - UPDATED: now 18 columns for white saucer enhancements
+        # Initialize empty enemies array
         enemies = jnp.zeros((self.constants.MAX_ENEMIES, 17), dtype=jnp.float32)
-        # x, y, beam_position, active, speed, type, direction_x, direction_y,
-        # bounce_count, linger_timer, target_x, health, firing_timer, maneuver_timer,
-        # movement_pattern, white_saucer_firing_timer, jump_timer
 
         state = BeamRiderState(
             ship=ship,
@@ -549,7 +545,6 @@ class BeamRiderEnv(JaxEnvironment[BeamRiderState, BeamRiderObservation, BeamRide
         # Update sentinel ship projectiles
         state = self._update_sentinel_projectiles(state)
 
-        # In your _step method, add these calls after enemy updates:
         state = self._check_rejuvenator_interactions(state)
         state = self._check_debris_collision(state)
 
@@ -576,7 +571,7 @@ class BeamRiderEnv(JaxEnvironment[BeamRiderState, BeamRiderObservation, BeamRide
 
     @partial(jax.jit, static_argnums=(0,))
     def _update_ship(self, state: BeamRiderState, action: int) -> BeamRiderState:
-        """Update ship position with smooth beam-to-beam movement - prevents beam skipping"""
+        """Update ship position with smooth beam-to-beam movement"""
         ship = state.ship
         current_beam = ship.beam_position
         target_beam = ship.target_beam
@@ -698,11 +693,11 @@ class BeamRiderEnv(JaxEnvironment[BeamRiderState, BeamRiderObservation, BeamRide
         ready_to_fire_mask = enemies[:, 15] == 0  # white_saucer_firing_timer is 0
         not_in_retreat_mask = enemies[:, 13] == 0  # maneuver_timer = 0 (not in retreat state)
 
-        # NEW: Prevent shooting while still at or near horizon line
+        # Prevent shooting while still at or near horizon line
         away_from_horizon_mask = enemies[:, 1] > (
                     self.constants.HORIZON_LINE_Y + 15)  # Must be at least 15 pixels below horizon
 
-        can_shoot_first = white_saucer_mask & active_mask & shooting_pattern_mask & ready_to_fire_mask & not_in_retreat_mask & away_from_horizon_mask  # UPDATED: Added horizon check
+        can_shoot_first = white_saucer_mask & active_mask & shooting_pattern_mask & ready_to_fire_mask & not_in_retreat_mask & away_from_horizon_mask  # Added horizon check
 
         # === SECOND SHOT LOGIC ===
         # Find shooting white saucers that just finished changing beam and should shoot again
@@ -710,7 +705,7 @@ class BeamRiderEnv(JaxEnvironment[BeamRiderState, BeamRiderObservation, BeamRide
         beam_change_timer = enemies[:, 16].astype(int)  # Using jump_timer as beam change timer
         finished_beam_change_mask = beam_change_timer == 1  # Will become 0 this frame
 
-        can_shoot_second = white_saucer_mask & active_mask & shooting_pattern_mask & in_retreat_state_mask & finished_beam_change_mask & away_from_horizon_mask  # UPDATED: Added horizon check
+        can_shoot_second = white_saucer_mask & active_mask & shooting_pattern_mask & in_retreat_state_mask & finished_beam_change_mask & away_from_horizon_mask  #Added horizon check
 
         # Combine both shooting conditions
         can_shoot = can_shoot_first | can_shoot_second
@@ -735,7 +730,7 @@ class BeamRiderEnv(JaxEnvironment[BeamRiderState, BeamRiderObservation, BeamRide
             projectile_y,
             1,  # active
             self.constants.WHITE_SAUCER_PROJECTILE_SPEED,  # speed (positive = downward)
-            shooter_beam  # beam_idx - NEW COLUMN: store the beam the saucer is firing from
+            shooter_beam  # beam_idx - store the beam the saucer is firing from
         ])
 
         # Find first inactive slot in sentinel projectiles array
@@ -1730,12 +1725,12 @@ class BeamRiderEnv(JaxEnvironment[BeamRiderState, BeamRiderObservation, BeamRide
         # Choose random beam for rejuvenator spawning
         rng_key, rejuv_beam_key = random.split(rng_key)
         rejuv_spawn_beam = random.randint(rejuv_beam_key, (), 0, self.constants.NUM_BEAMS)
-        rejuv_spawn_x = self.beam_positions[rejuv_spawn_beam] - self.constants.ENEMY_WIDTH // 2
+        rejuv_spawn_x = self.beam_positions[rejuv_spawn_beam]
         rejuv_spawn_y = self.constants.HORIZON_LINE_Y
 
         # Regular enemy spawn (from top, random beam)
         regular_spawn_beam = random.randint(subkey3, (), 0, self.constants.NUM_BEAMS)
-        regular_spawn_x = self.beam_positions[regular_spawn_beam] - self.constants.ENEMY_WIDTH // 2
+        regular_spawn_x = self.beam_positions[regular_spawn_beam]
         regular_spawn_y = self.constants.HORIZON_LINE_Y
 
         # Choose final spawn position based on enemy type
@@ -2312,31 +2307,23 @@ class BeamRiderEnv(JaxEnvironment[BeamRiderState, BeamRiderObservation, BeamRide
 
     @partial(jax.jit, static_argnums=(0,))
     def _beam_curve_x(self, y: chex.Array, beam_idx: chex.Array, entity_width: int = None) -> chex.Array:
-        """X on dotted beam at vertical position y (matches renderer's perspective)."""
+        """Beam CENTER x at vertical position y (matches renderer's perspective)."""
         width = self.constants.SCREEN_WIDTH
         height = self.constants.SCREEN_HEIGHT
         center_x = width / 2.0
 
-        # Same margins/parameters the renderer uses
+        # same margins as renderer
         top_margin = int(height * 0.12)
         bottom_margin = int(height * 0.14)
-        y0 = height - bottom_margin  # bottom of beams (near player)
-        y1 = -height * 0.7  # vanish toward horizon (off-screen)
+        y0 = height - bottom_margin
+        y1 = -height * 0.7
         t_top = jnp.clip((top_margin - y0) / (y1 - y0), 0.0, 1.0)
 
-        # Normalize current y along the dotted beam segment
         t = jnp.clip((y - y0) / (y1 - y0), 0.0, t_top)
-
-        # Interpolate X the same way as renderer's draw_vline()
         x0 = self.beam_positions[beam_idx]
-        x1 = center_x + (x0 - center_x) * 0.05  # converge toward center
+        x1 = center_x + (x0 - center_x) * 0.05
         x = x0 + (x1 - x0) * t
-
-        # Center entity on beam center - use provided width or default to enemy width
-        if entity_width is None:
-            entity_width = self.constants.ENEMY_WIDTH
-
-        return x - (entity_width // 2)
+        return x
 
     @partial(jax.jit, static_argnums=(0,))
     def _update_enemies(self, state: BeamRiderState) -> BeamRiderState:
