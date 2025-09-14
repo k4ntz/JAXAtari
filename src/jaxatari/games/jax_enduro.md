@@ -1,5 +1,18 @@
 # JAX Enduro
 
+## Fine-tuning:
+
+### Opponent Spawning
+- ``opponent_spawn_seed`` The seed for the opponent spawning
+- ``length_of_opponent_array`` The total length of the opponent array. If the end of the array is reached the player progresses through the same pattern.
+- ``opponent_density`` How many oppoents should be in the array. Must be >= 0.0 and < 1.0
+- ``opponent_delay_slots`` How many slots should be left empty at the beginning of the array for the start of the game.
+
+### Track generation
+- ``track_seed`` The sees for the track
+- ``min_track_section_length`` The minimum length of a curve or straight section
+- ``max_track_section_length`` The maximum length of a curve or straight section
+
 ## Gameplay Observations from playing the original ROM
 ### Driving
 - Speed

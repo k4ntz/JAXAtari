@@ -15,11 +15,13 @@ from jaxatari.rendering import jax_rendering_utils as aj
 import jaxatari.spaces as spaces
 
 TODOS = """
+Config:
+- Track section length
+
 Steering:
 - Drift speed based?
 
 Rendering:
-- Different cars at night
 - no 0 on overtake score
 - level flags
 
@@ -28,6 +30,8 @@ Track:
 - lost x pixel of right track
 - gey scale
 - bumpers
+- cooldown kickback too hard on track edge
+- schnee zu kurz
 
 Game Logic:
 - level passed flag
@@ -80,6 +84,8 @@ class EnduroConstants(NamedTuple):
     track_height: int = game_window_height - sky_height - 2
     max_track_length: float = 9999.9  # in km
     track_seed: int = 42
+    min_track_section_length = 1.0  # how long a curve or straight passage is at least
+    max_track_section_length = 15.0
     track_x_start: int = player_x_start
     track_max_curvature_width: int = 17
     # How many pixels the top-x of the track moves in a curve into the curve direction for the full curve
@@ -134,22 +140,22 @@ class EnduroConstants(NamedTuple):
     night_fog_index: int = 12  # which part of the weather array has the reduced visibility (fog)
     # Start times in seconds for each phase. Written in a way to allow easy replacements.
     weather_starts_s: jnp.ndarray = jnp.array([
-        0,  # day 1
-        34,  # day 2 (lighter)
-        34 + 34,  # day 3 (white mountains)
-        34 + 34 + 69,  # fog day
-        34 + 34 + 69 + 8 * 1,  # Sunset 1
-        34 + 34 + 69 + 8 * 2,  # Sunset 2
-        34 + 34 + 69 + 8 * 3,  # Sunset 3
-        34 + 34 + 69 + 8 * 4,  # Sunset 4
-        34 + 34 + 69 + 8 * 5,  # Sunset 5
-        34 + 34 + 69 + 8 * 6,  # Sunset 6
-        34 + 34 + 69 + 8 * 7,  # Sunset 7
-        34 + 34 + 69 + 8 * 8,  # Sunset 8
-        34 + 34 + 69 + 8 * 8 + 69,  # night
-        34 + 34 + 69 + 8 * 8 + 69 + 69,  # fog night
-        34 + 34 + 69 + 8 * 8 + 69 + 69 + 34,  # night 2
-        34 + 34 + 69 + 8 * 8 + 69 + 69 + 34 + 34,  # dawn
+        34,  # day 1
+        34 + 34,  # day 2 (lighter)
+        34 + 34 + 34,  # day 3 (white mountains)
+        34 + 34 + 34 + 69,  # snow (steering is more difficult)
+        34 + 34 + 34 + 69 + 8 * 1,  # Sunset 1
+        34 + 34 + 34 + 69 + 8 * 2,  # Sunset 2
+        34 + 34 + 34 + 69 + 8 * 3,  # Sunset 3
+        34 + 34 + 34 + 69 + 8 * 4,  # Sunset 4
+        34 + 34 + 34 + 69 + 8 * 5,  # Sunset 5
+        34 + 34 + 34 + 69 + 8 * 6,  # Sunset 6
+        34 + 34 + 34 + 69 + 8 * 7,  # Sunset 7
+        34 + 34 + 34 + 69 + 8 * 8,  # Sunset 8
+        34 + 34 + 34 + 69 + 8 * 8 + 69,  # night 1
+        34 + 34 + 34 + 69 + 8 * 8 + 69 + 69,  # fog night
+        34 + 34 + 34 + 69 + 8 * 8 + 69 + 69 + 34,  # night 2
+        34 + 34 + 34 + 69 + 8 * 8 + 69 + 69 + 34 + 34,  # dawn
     ], dtype=jnp.int32)
     day_night_cycle_seconds: int = weather_starts_s[15]
     weather_with_night_car_sprite = jnp.array([12, 13, 14], dtype=jnp.int32)
@@ -162,7 +168,7 @@ class EnduroConstants(NamedTuple):
         [[24, 26, 167], [0, 68, 0], [134, 134, 29], [24, 26, 167], [24, 26, 167], [24, 26, 167], ],  # day 1
         [[45, 50, 184], [0, 68, 0], [136, 146, 62], [45, 50, 184], [45, 50, 184], [45, 50, 184]],  # day 2
         [[45, 50, 184], [0, 68, 0], [192, 192, 192], [45, 50, 184], [45, 50, 184], [45, 50, 184]],  # day white mountain
-        [[45, 50, 184], [236, 236, 236], [214, 214, 214], [45, 50, 184], [45, 50, 184], [45, 50, 184]],  # fog day
+        [[45, 50, 184], [236, 236, 236], [214, 214, 214], [45, 50, 184], [45, 50, 184], [45, 50, 184]],  # snow
 
         # Sunsets
         [[24, 26, 167], [20, 60, 0], [0, 68, 0], [24, 26, 167], [24, 26, 167], [24, 26, 167]],  # 1
@@ -175,12 +181,12 @@ class EnduroConstants(NamedTuple):
         [[163, 57, 21], [48, 56, 0], [0, 0, 0], [134, 134, 29], [162, 98, 33], [181, 83, 40]],  # 8
 
         # night
-        [[74, 74, 74], [0, 0, 0], [142, 142, 142], [74, 74, 74], [74, 74, 74], [74, 74, 74]],
-        [[74, 74, 74], [0, 0, 0], [142, 142, 142], [74, 74, 74], [74, 74, 74], [74, 74, 74]],
-        [[74, 74, 74], [0, 0, 0], [142, 142, 142], [74, 74, 74], [74, 74, 74], [74, 74, 74]],
+        [[74, 74, 74], [0, 0, 0], [142, 142, 142], [74, 74, 74], [74, 74, 74], [74, 74, 74]],  # night 1
+        [[74, 74, 74], [0, 0, 0], [142, 142, 142], [74, 74, 74], [74, 74, 74], [74, 74, 74]],  # fog night
+        [[74, 74, 74], [0, 0, 0], [142, 142, 142], [74, 74, 74], [74, 74, 74], [74, 74, 74]],  # night 2
 
         # dawn
-        [[111, 111, 111], [0, 0, 0], [181, 83, 40], [111, 111, 111], [111, 111, 111], [111, 111, 111]],
+        [[111, 111, 111], [0, 0, 0], [181, 83, 40], [111, 111, 111], [111, 111, 111], [111, 111, 111]],  # dawn
 
     ], dtype=jnp.int32)
 
@@ -191,8 +197,8 @@ class EnduroConstants(NamedTuple):
 
     opponent_spawn_seed: int = 42
 
-    number_of_opponents = 5000
-    opponent_density = 0.2
+    length_of_opponent_array = 5000
+    opponent_density = 0.3
     opponent_delay_slots = 10
 
     # How many opponents to overtake to progress into the next level
@@ -230,7 +236,7 @@ class EnduroConstants(NamedTuple):
     distance_odometer_start_x: int = 65
     distance_odometer_start_y: int = game_window_height + 9
 
-    score_start_x: int = 80
+    score_start_x: int = 81
     score_start_y: int = game_window_height + 25
 
     level_x: int = 57
@@ -423,7 +429,7 @@ class JaxEnduro(JaxEnvironment[EnduroGameState, EnduroObservation, EnduroInfo, E
             "visible_opponents": spaces.Box(
                 low=0,
                 high=1,
-                shape=(self.config.number_of_opponents,),
+                shape=(self.config.length_of_opponent_array,),
                 dtype=jnp.int32
             ),
             "cars_to_overtake": spaces.Box(low=0, high=1000, shape=(1,), dtype=jnp.int32),
@@ -483,7 +489,7 @@ class JaxEnduro(JaxEnvironment[EnduroGameState, EnduroObservation, EnduroInfo, E
         # opponents
         opponent_spawns = self._generate_opponent_spawns(
             seed=self.config.opponent_spawn_seed,
-            number_of_opponents=self.config.number_of_opponents,
+            length_of_opponent_array=self.config.length_of_opponent_array,
             opponent_density=self.config.opponent_density,
             opponent_delay_slots=self.config.opponent_delay_slots
         )
@@ -992,7 +998,7 @@ class JaxEnduro(JaxEnvironment[EnduroGameState, EnduroObservation, EnduroInfo, E
     def _generate_opponent_spawns(
             self,
             seed: int,
-            number_of_opponents: int,
+            length_of_opponent_array: int,
             opponent_density: float,
             opponent_delay_slots: int
     ) -> jnp.ndarray:
@@ -1000,6 +1006,12 @@ class JaxEnduro(JaxEnvironment[EnduroGameState, EnduroObservation, EnduroInfo, E
         Generate a precomputed spawn sequence with an *exact* occupancy equal to
         round(opponent_density * number_of_enemies) while forbidding any contiguous
         triple of non-gaps that covers all three lanes {0,1,2} in any order.
+
+        Args:
+            seed: Random seed for deterministic generation
+            length_of_opponent_array: Total length of the main opponent processing array (including empty slots)
+            opponent_density: Fraction (0.0-1.0) of slots that will contain actual opponents (lane 0,1,2 vs -1)
+            opponent_delay_slots: Number of guaranteed empty slots (-1) added at the beginning of the final array
 
         Returns:
             2D array of shape (2, total_length) where:
@@ -1013,21 +1025,21 @@ class JaxEnduro(JaxEnvironment[EnduroGameState, EnduroObservation, EnduroInfo, E
         key, key_colors = jax.random.split(key)  # Split key for color generation
 
         # Calculate exact number of occupied slots
-        num_occupied = int(round(opponent_density * number_of_opponents))
+        num_occupied = int(round(opponent_density * length_of_opponent_array))
 
         # Generate random positions for occupied slots
         key, key_positions = jax.random.split(key)
-        all_indices = jnp.arange(number_of_opponents)
+        all_indices = jnp.arange(length_of_opponent_array)
         shuffled_indices = jax.random.permutation(key_positions, all_indices)
         occupied_positions = shuffled_indices[:num_occupied]
 
         # Create occupancy mask
-        occupancy_mask = jnp.zeros(number_of_opponents, dtype=jnp.bool_)
+        occupancy_mask = jnp.zeros(length_of_opponent_array, dtype=jnp.bool_)
         occupancy_mask = occupancy_mask.at[occupied_positions].set(True)
 
         # Generate lane assignments for occupied slots
         key, key_lanes = jax.random.split(key)
-        lane_choices = jax.random.randint(key_lanes, (number_of_opponents,), 0, 3, dtype=jnp.int8)
+        lane_choices = jax.random.randint(key_lanes, (length_of_opponent_array,), 0, 3, dtype=jnp.int8)
 
         # Generate colors for all positions (we'll mask out non-opponents later)
         def generate_non_red_color(color_key):
@@ -1050,7 +1062,7 @@ class JaxEnduro(JaxEnvironment[EnduroGameState, EnduroObservation, EnduroInfo, E
             return color.astype(jnp.int32)
 
         # Generate colors for each position
-        color_keys = jax.random.split(key_colors, number_of_opponents)
+        color_keys = jax.random.split(key_colors, length_of_opponent_array)
         colors = jax.vmap(generate_non_red_color)(color_keys)
 
         def process_slot(carry, inputs):
@@ -1290,7 +1302,10 @@ class JaxEnduro(JaxEnvironment[EnduroGameState, EnduroObservation, EnduroInfo, E
         directions = jax.random.choice(subkey, jnp.array([-1, 0, 1]), shape=(max_segments,), replace=True)
 
         key, subkey = jax.random.split(key)
-        segment_lengths = jax.random.uniform(subkey, shape=(max_segments,), minval=1.0, maxval=15.0)
+        segment_lengths = jax.random.uniform(subkey,
+                                             shape=(max_segments,),
+                                             minval=self.config.min_track_section_length,
+                                             maxval=self.config.max_track_section_length)
 
         track_starts = jnp.cumsum(jnp.concatenate([jnp.array([0.1]), segment_lengths[:-1]]))
 
@@ -1932,13 +1947,21 @@ class EnduroRenderer(JAXGameRenderer):
         ones_x = self.config.score_start_x + 2 * (digit_width + 2)
         raster = aj.render_at(raster, ones_x, self.config.score_start_y, ones_sprite)
 
-        # Render the tens digit window at the specified position
+        # Only render tens digit if number >= 10
         tens_x = self.config.score_start_x + (digit_width + 2)
-        raster = aj.render_at(raster, tens_x, self.config.score_start_y, tens_sprite)
+        raster = jnp.where(
+            cars_to_overtake >= 10,
+            aj.render_at(raster, tens_x, self.config.score_start_y, tens_sprite),
+            raster
+        )
 
-        # Render the hundreds digit window at the specified position
+        # Only render hundreds digit if number >= 100
         hundreds_x = self.config.score_start_x
-        raster = aj.render_at(raster, hundreds_x, self.config.score_start_y, hundreds_sprite)
+        raster = jnp.where(
+            cars_to_overtake >= 100,
+            aj.render_at(raster, hundreds_x, self.config.score_start_y, hundreds_sprite),
+            raster
+        )
 
         return raster
 
