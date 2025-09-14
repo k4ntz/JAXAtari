@@ -1712,7 +1712,6 @@ class EnduroRenderer(JAXGameRenderer):
         ys = opponent_positions[:, 1]  # y positions
         colors = opponent_positions[:, 2]  # packed RGB colors
 
-        # TODO: except night cars
         def apply_color_to_sprite(sprite, packed_color):
             """Apply custom color to sprite, replacing non-black pixels"""
             # Unpack RGB from integer
