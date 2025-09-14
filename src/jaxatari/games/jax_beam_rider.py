@@ -374,7 +374,7 @@ class BeamRiderEnv(JaxEnvironment[BeamRiderState, BeamRiderObservation, BeamRide
         return spaces.Dict({
             "ship_x": spaces.Box(low=0, high=self.constants.SCREEN_WIDTH, shape=(), dtype=jnp.float32),
             "ship_y": spaces.Box(low=0, high=self.constants.SCREEN_HEIGHT, shape=(), dtype=jnp.float32),
-            "ship_beam": spaces.Box(low=0, high=self.constants.NUM_BEAMS - 1, shape=(), dtype=jnp.int32),
+            "ship_beam": spaces.Box(low=0, high=self.constants.NUM_BEAMS - 1, shape=(), dtype=jnp.int8),
 
             # FIXED: Projectiles have 5 columns [x, y, active, speed, beam_idx]
             # Speed can be negative (-4.0 for player projectiles) to positive (~6.25 for fast enemies)
@@ -398,11 +398,11 @@ class BeamRiderEnv(JaxEnvironment[BeamRiderState, BeamRiderObservation, BeamRide
             # Enemies bounds are mostly correct but need slight adjustment
             "enemies": spaces.Box(low=-100, high=max(self.constants.SCREEN_WIDTH, self.constants.SCREEN_HEIGHT) + 100,
                                   shape=(self.constants.MAX_ENEMIES, 17), dtype=jnp.float32),
-            "score": spaces.Box(low=0, high=999999, shape=(), dtype=jnp.int32),
-            "lives": spaces.Box(low=0, high=10, shape=(), dtype=jnp.int32),
-            "current_sector": spaces.Box(low=1, high=99, shape=(), dtype=jnp.int32),
+            "score": spaces.Box(low=0, high=999999, shape=(), dtype=jnp.int16),
+            "lives": spaces.Box(low=0, high=10, shape=(), dtype=jnp.int8),
+            "current_sector": spaces.Box(low=1, high=99, shape=(), dtype=jnp.int8),
             "torpedoes_remaining": spaces.Box(low=0, high=self.constants.TORPEDOES_PER_SECTOR, shape=(),
-                                              dtype=jnp.int32),
+                                              dtype=jnp.int8),
         })
     def image_space(self) -> spaces.Box:
         """Returns the image space for BeamRider"""
