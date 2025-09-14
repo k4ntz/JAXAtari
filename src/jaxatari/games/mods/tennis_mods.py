@@ -15,7 +15,7 @@ class RandomBallSpeedWrapper(JaxatariWrapper):
     def __init__(self, env):
         super().__init__(env)
 
-    """Ball has random speed after every hiy."""
+    """Ball has random speed after every hit."""
     @functools.partial(jax.jit, static_argnums=(0,))
     def make_random(self, prev_state: TennisState, state: TennisState) -> TennisState:
         was_ball_hit = jnp.logical_and(
