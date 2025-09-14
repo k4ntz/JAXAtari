@@ -371,17 +371,33 @@ class BeamRiderEnv(JaxEnvironment[BeamRiderState, BeamRiderObservation, BeamRide
         return spaces.Discrete(self.action_space_size)
 
     def observation_space(self) -> spaces.Dict:
-        """Returns the observation space for BeamRider"""
+        """Returns the observation space for BeamRider - FIXED: Correct bounds and dtypes"""
         return spaces.Dict({
             "ship_x": spaces.Box(low=0, high=self.constants.SCREEN_WIDTH, shape=(), dtype=jnp.float32),
             "ship_y": spaces.Box(low=0, high=self.constants.SCREEN_HEIGHT, shape=(), dtype=jnp.float32),
             "ship_beam": spaces.Box(low=0, high=self.constants.NUM_BEAMS - 1, shape=(), dtype=jnp.int32),
-            "projectiles": spaces.Box(low=0, high=max(self.constants.SCREEN_WIDTH, self.constants.SCREEN_HEIGHT),
-                                      shape=(self.constants.MAX_PROJECTILES, 5), dtype=jnp.float32),
-            "torpedo_projectiles": spaces.Box(low=0,
-                                              high=max(self.constants.SCREEN_WIDTH, self.constants.SCREEN_HEIGHT),
-                                              shape=(self.constants.MAX_PROJECTILES, 5), dtype=jnp.float32),
-            "enemies": spaces.Box(low=-100, high=max(self.constants.SCREEN_WIDTH, self.constants.SCREEN_HEIGHT),
+
+            # FIXED: Projectiles have 5 columns [x, y, active, speed, beam_idx]
+            # Speed can be negative (-4.0 for player projectiles) to positive (~6.25 for fast enemies)
+            "projectiles": spaces.Box(
+                low=jnp.array([-50, -50, 0, -10.0, 0]),  # [x, y, active, speed, beam_idx]
+                high=jnp.array([self.constants.SCREEN_WIDTH + 50, self.constants.SCREEN_HEIGHT + 50, 1, 10.0,
+                                self.constants.NUM_BEAMS - 1]),
+                shape=(self.constants.MAX_PROJECTILES, 5),
+                dtype=jnp.float32
+            ),
+
+            # FIXED: Same structure as projectiles
+            "torpedo_projectiles": spaces.Box(
+                low=jnp.array([-50, -50, 0, -10.0, 0]),  # [x, y, active, speed, beam_idx]
+                high=jnp.array([self.constants.SCREEN_WIDTH + 50, self.constants.SCREEN_HEIGHT + 50, 1, 10.0,
+                                self.constants.NUM_BEAMS - 1]),
+                shape=(self.constants.MAX_PROJECTILES, 5),
+                dtype=jnp.float32
+            ),
+
+            # Enemies bounds are mostly correct but need slight adjustment
+            "enemies": spaces.Box(low=-100, high=max(self.constants.SCREEN_WIDTH, self.constants.SCREEN_HEIGHT) + 100,
                                   shape=(self.constants.MAX_ENEMIES, 17), dtype=jnp.float32),
             "score": spaces.Box(low=0, high=999999, shape=(), dtype=jnp.int32),
             "lives": spaces.Box(low=0, high=10, shape=(), dtype=jnp.int32),
