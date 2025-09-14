@@ -44,6 +44,9 @@ class GameConfig:
     MAX_ROD_LENGTH: int = 50  # Maximum rod extension
     ROD_SPEED: float = 1.5  # Speed of rod extension/retraction
 
+    # Fish death line - how far below the rod the fish must be brought to score
+    FISH_DEATH_LINE_OFFSET: int = 15  # Increase this to lower the death line
+
     HOOK_WIDTH: int = 3
     HOOK_HEIGHT: int = 5
     HOOK_SPEED_V: float = 1.0
@@ -51,7 +54,7 @@ class GameConfig:
     REEL_FAST_SPEED: float = 1.5
     LINE_Y_START: int = 48
     LINE_Y_END: int = 160
-
+    AUTO_LOWER_SPEED: float = 2.0
     # Physics
     Acceleration: float = 0.2
     Damping: float = 0.85
@@ -75,7 +78,7 @@ class PlayerState(NamedTuple):
     rod_length: chex.Array  # Length of horizontal rod extension
     hook_y: chex.Array  # Vertical position of hook (relative to rod end)
     score: chex.Array
-    hook_state: chex.Array  # 0=free, 1=hooked/reeling slow, 2=reeling fast
+    hook_state: chex.Array  # 0=free, 1=hooked/reeling slow, 2=reeling fast, 3=auto-lowering
     hooked_fish_idx: chex.Array
     hook_velocity_y: chex.Array  # Vertical velocity
     hook_x_offset: chex.Array  # Horizontal offset from rod end due to water resistance
@@ -261,6 +264,11 @@ class FishingDerby(JaxEnvironment):
             # Track previous rod length to detect horizontal movement
             prev_rod_length = p1.rod_length
 
+            # Define hook position limits that will be used throughout
+            min_hook_y = 0.0  # At rod level
+            max_hook_y = cfg.LINE_Y_END - cfg.ROD_Y  # Maximum depth
+            water_surface_hook_y = float(cfg.WATER_Y_START - cfg.ROD_Y)  # Water surface level
+
             # Rod length control (horizontal extension)
             rod_change = 0.0
             rod_change = jnp.where(p1_action == Action.RIGHT, +cfg.ROD_SPEED, rod_change)
@@ -296,32 +304,54 @@ class FishingDerby(JaxEnvironment):
             # When not in water, offset decays back to 0 faster
             new_hook_x_offset = jnp.where(in_water, new_hook_x_offset, p1.hook_x_offset * 0.6)
 
-            # Hook vertical movement (only when not hooked to fish)
-            hook_change = 0.0
-            # Only allow vertical movement when free (hook_state == 0)
-            can_move_vertically = (p1.hook_state == 0)
-            hook_change = jnp.where(can_move_vertically & (p1_action == Action.DOWN), +cfg.Acceleration, hook_change)
-            hook_change = jnp.where(can_move_vertically & (p1_action == Action.UP), -cfg.Acceleration, hook_change)
+            # Hook vertical movement and auto-lowering logic
+            def auto_lower_hook(_):
+                # Move hook down towards water surface
+                new_y = p1.hook_y + cfg.AUTO_LOWER_SPEED
+                new_vel_y = 0.0  # Override velocity during auto-lowering
 
-            # Update hook velocity with damping
-            new_hook_velocity_y = p1.hook_velocity_y * cfg.Damping + hook_change
+                # Check if hook reached water surface
+                hook_reached_water = new_y >= water_surface_hook_y
+                final_state = jnp.where(hook_reached_water, 0, p1.hook_state)  # Return to free state
+                final_y = jnp.where(hook_reached_water, water_surface_hook_y, new_y)
 
-            # Calculate hook position limits
-            min_hook_y = 0.0  # At rod level
-            max_hook_y = cfg.LINE_Y_END - cfg.ROD_Y  # Maximum depth
+                return final_y, new_vel_y, final_state
 
-            # Update hook position
-            new_hook_y = jnp.clip(
-                p1.hook_y + new_hook_velocity_y,
-                min_hook_y,
-                max_hook_y
-            )
+            def normal_hook_movement(_):
+                # Normal hook movement (only when free - hook_state == 0)
+                can_move_vertically = (p1.hook_state == 0)
+                change = jnp.where(can_move_vertically & (p1_action == Action.DOWN), +cfg.Acceleration, 0.0)
+                change = jnp.where(can_move_vertically & (p1_action == Action.UP), -cfg.Acceleration, change)
 
-            # Kill velocity if hitting bounds
-            new_hook_velocity_y = jnp.where(
-                (new_hook_y == min_hook_y) | (new_hook_y == max_hook_y),
-                0.0,
-                new_hook_velocity_y
+                # Update hook velocity with damping
+                new_vel_y = p1.hook_velocity_y * cfg.Damping + change
+
+                # Calculate hook position limits
+                min_y = 0.0  # At rod level
+                max_y = cfg.LINE_Y_END - cfg.ROD_Y  # Maximum depth
+
+                # Update hook position
+                new_y = jnp.clip(
+                    p1.hook_y + new_vel_y,
+                    min_y,
+                    max_y
+                )
+
+                # Kill velocity if hitting bounds
+                final_vel_y = jnp.where(
+                    (new_y == min_y) | (new_y == max_y),
+                    0.0,
+                    new_vel_y
+                )
+
+                return new_y, final_vel_y, p1.hook_state
+
+            # Choose between auto-lowering and normal movement
+            new_hook_y, new_hook_velocity_y, p1_hook_state = jax.lax.cond(
+                p1.hook_state == 3,
+                auto_lower_hook,
+                normal_hook_movement,
+                operand=None
             )
 
             # Get actual hook position in world coordinates
@@ -329,7 +359,7 @@ class FishingDerby(JaxEnvironment):
                 rod_length=new_rod_length,
                 hook_y=new_hook_y,
                 score=p1.score,
-                hook_state=p1.hook_state,
+                hook_state=p1_hook_state,
                 hooked_fish_idx=p1.hooked_fish_idx,
                 hook_velocity_y=new_hook_velocity_y,
                 hook_x_offset=new_hook_x_offset
@@ -337,14 +367,14 @@ class FishingDerby(JaxEnvironment):
 
             # Collision and Game Logic
             fish_active, reeling_priority = state.fish_active, state.reeling_priority
-            can_hook = (p1.hook_state == 0)
+            can_hook = (p1_hook_state == 0)  # Use updated hook state
             hook_collides_fish = (jnp.abs(new_fish_pos[:, 0] - hook_x) < cfg.FISH_WIDTH) & (
                     jnp.abs(new_fish_pos[:, 1] - hook_y) < cfg.FISH_HEIGHT)
             valid_hook_targets = can_hook & fish_active & hook_collides_fish
 
             hooked_fish_idx, did_hook_fish = jnp.argmax(valid_hook_targets), jnp.any(valid_hook_targets)
 
-            p1_hook_state = jnp.where(did_hook_fish, 1, p1.hook_state)
+            p1_hook_state = jnp.where(did_hook_fish, 1, p1_hook_state)
             p1_hooked_fish_idx = jnp.where(did_hook_fish, hooked_fish_idx, p1.hooked_fish_idx)
             fish_active = fish_active.at[hooked_fish_idx].set(
                 jnp.where(did_hook_fish, False, fish_active[hooked_fish_idx])
@@ -387,45 +417,40 @@ class FishingDerby(JaxEnvironment):
             scored_fish = (p1_hook_state > 0) & (hook_y <= cfg.ROD_Y + 5)  # Fish reaches near the rod
             reset_hook = shark_collides | scored_fish
 
+            # Handle scoring and update fish state
             prev_idx = p1_hooked_fish_idx
-
             fish_scores = jnp.array(cfg.FISH_ROW_SCORES)
             p1_score += jnp.where(scored_fish, fish_scores[p1_hooked_fish_idx], 0)
 
-            # Fish respawn
-            def respawn_fish(all_pos, all_dirs, all_active, idx, key):
+            # Fish respawn logic - simpler version
+            def respawn_fish(all_pos, all_dirs, idx, key):
                 kx, kdir = jax.random.split(key)
                 new_x = jax.random.uniform(kx, minval=10.0, maxval=cfg.SCREEN_WIDTH - cfg.FISH_WIDTH)
                 new_y = jnp.array(cfg.FISH_ROW_YS, dtype=jnp.float32)[idx]
                 new_pos = all_pos.at[idx].set(jnp.array([new_x, new_y]))
                 new_dir = all_dirs.at[idx].set(jax.random.choice(kdir, jnp.array([-1.0, 1.0])))
-                new_act = all_active.at[idx].set(True)
-                return new_pos, new_dir, new_act
+                return new_pos, new_dir
 
             key, respawn_key = jax.random.split(key)
             do_respawn = reset_hook & (prev_idx >= 0)
-
-            new_fish_pos, new_fish_dirs, fish_active = jax.lax.cond(
+            new_fish_pos, new_fish_dirs = jax.lax.cond(
                 do_respawn,
-                lambda _: respawn_fish(new_fish_pos, new_fish_dirs, fish_active, prev_idx, respawn_key),
-                lambda _: (new_fish_pos, new_fish_dirs, fish_active),
+                lambda _: respawn_fish(new_fish_pos, new_fish_dirs, prev_idx, respawn_key),
+                lambda _: (new_fish_pos, new_fish_dirs),
                 operand=None
             )
 
-            # Clear reeling priority and reset hook state
-            reeling_priority = jnp.where(do_respawn & (reeling_priority == 0), -1, reeling_priority)
+            # Reset hook state and fish activity when hook is reset
+            p1_hook_state = jnp.where(reset_hook, 3, p1_hook_state)  # Set to auto-lowering state
+            p1_hooked_fish_idx = jnp.where(reset_hook, -1, p1_hooked_fish_idx)  # Clear hooked fish
+            new_hook_x_offset = jnp.where(reset_hook, 0.0, new_hook_x_offset)
+
+            # CRITICAL FIX: Reactivate the fish when it's scored/eaten by shark
             fish_active = jnp.where(
-                reset_hook,
-                fish_active.at[p1_hooked_fish_idx].set(True),
+                reset_hook & (prev_idx >= 0),
+                fish_active.at[prev_idx].set(True),  # Reactivate the fish
                 fish_active
             )
-
-            # Reset hook after scoring/shark collision
-            p1_hook_state = jnp.where(reset_hook, 0, p1_hook_state)
-            p1_hooked_fish_idx = jnp.where(reset_hook, -1, p1_hooked_fish_idx)
-            new_rod_length = jnp.where(reset_hook, float(cfg.START_ROD_LENGTH), new_rod_length)
-            new_hook_y = jnp.where(reset_hook, 0.0, new_hook_y)
-            new_hook_velocity_y = jnp.where(reset_hook, 0.0, new_hook_velocity_y)
 
             game_over = (p1_score >= 99) | (state.p2.score >= 99)
 
@@ -579,8 +604,8 @@ class FishingDerbyRenderer(AtraJaxisRenderer):
         # Check if there's significant horizontal offset indicating recent movement
         has_horizontal_movement = jnp.abs(state.p1.hook_x_offset) > 0.1
         offset_sag = jnp.where(has_horizontal_movement,
-                              jnp.abs(state.p1.hook_x_offset) * 1.0,
-                              0.0)  # No sag when moving straight down
+                               jnp.abs(state.p1.hook_x_offset) * 1.0,
+                               0.0)  # No sag when moving straight down
 
         # Vertical movement sag (normal gravity sag) - reduced when moving straight down
         max_hook_y = cfg.LINE_Y_END - cfg.ROD_Y
@@ -589,8 +614,8 @@ class FishingDerbyRenderer(AtraJaxisRenderer):
         # Reduce gravity sag when moving straight down (no horizontal movement)
         gravity_sag_base = 6.0 * jnp.exp(-2.0 * line_depth_ratio)
         gravity_sag = jnp.where(has_horizontal_movement,
-                               gravity_sag_base,
-                               gravity_sag_base * 0.2)  # Much less sag when straight down
+                                gravity_sag_base,
+                                gravity_sag_base * 0.2)  # Much less sag when straight down
 
         # Combine both types of sag
         total_sag = gravity_sag + offset_sag
@@ -627,15 +652,14 @@ class FishingDerbyRenderer(AtraJaxisRenderer):
 
         raster = jax.lax.fori_loop(0, cfg.NUM_FISH, draw_one_fish, raster)
 
-        # Draw hooked fish
+        # Draw hooked fish - FIXED: Only draw when fish is actually hooked and active
         def draw_hooked_p1(r):
-            hook_x, hook_y = cfg.P1_START_X + state.p1.rod_length, cfg.ROD_Y + state.p1.hook_y
-            hook_x, hook_y = cfg.P1_START_X + state.p1.rod_length, cfg.ROD_Y + state.p1.hook_y
-            return self._render_at(r, hook_x, hook_y, fish_frame)
+            hook_x_pos, hook_y_pos = self._get_hook_position(cfg.P1_START_X, state.p1)
+            return self._render_at(r, hook_x_pos, hook_y_pos, fish_frame)
 
-        raster = jax.lax.cond(state.p1.hook_state > 0, draw_hooked_p1, lambda r: r, raster)
+        should_draw_hooked = (state.p1.hook_state > 0) & (state.p1.hooked_fish_idx >= 0) & (state.p1.hook_state != 3)
+        raster = jax.lax.cond(should_draw_hooked, draw_hooked_p1, lambda r: r, raster)
 
-        # Draw scores
         raster = self._render_score(raster, state.p1.score, 50, 20)
         raster = self._render_score(raster, state.p2.score, 100, 20)
 
