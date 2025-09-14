@@ -95,7 +95,7 @@ class JaxSkiing(JaxEnvironment[GameState, SkiingObservation, SkiingInfo, SkiingC
 
     def action_space(self) -> spaces.Discrete:
         # Aktionen sind bei dir: NOOP=0, LEFT=1, RIGHT=2
-        return spaces.Discrete(4)
+        return spaces.Discrete(8)
 
     def observation_space(self):
         c = self.config
@@ -307,11 +307,19 @@ class JaxSkiing(JaxEnvironment[GameState, SkiingObservation, SkiingInfo, SkiingC
         Y_HIT_DIST  = jnp.float64(1.0)
 
         # 1) Eingabe -> Zielpose
-        new_skier_pos = jax.lax.cond(jnp.equal(action, self.consts.LEFT),
+
+        # Normalize external action ids (e.g., JAXAtariAction) to internal {NOOP, LEFT=1, RIGHT=2}
+        # Treat common JAXAtariAction codes: RIGHT=3, LEFT=4. Everything else -> NOOP.
+        is_left  = jnp.logical_or(jnp.equal(action, self.consts.LEFT),  jnp.equal(action, 4))
+        is_right = jnp.logical_or(jnp.equal(action, self.consts.RIGHT), jnp.equal(action, 3))
+        norm_action = jax.lax.select(is_left,  self.consts.LEFT,
+                        jax.lax.select(is_right, self.consts.RIGHT, self.consts.NOOP))
+
+        new_skier_pos = jax.lax.cond(jnp.equal(norm_action, self.consts.LEFT),
                                      lambda _: state.skier_pos - 1,
                                      lambda _: state.skier_pos,
                                      operand=None)
-        new_skier_pos = jax.lax.cond(jnp.equal(action, self.consts.RIGHT),
+        new_skier_pos = jax.lax.cond(jnp.equal(norm_action, self.consts.RIGHT),
                                      lambda _: state.skier_pos + 1,
                                      lambda _: new_skier_pos,
                                      operand=None)
@@ -726,6 +734,91 @@ def _scan_blit(dst: jnp.ndarray, sprites: jnp.ndarray, centers_xy: jnp.ndarray) 
 
 # ---- Pure JAX Renderer -----------------------------------------------------------
 
+# ---- Minimal JAX bitmap font (3x5) for digits/time UI -----------------------
+# Glyph order: '0'-'9' -> 0..9, ':' -> 10, '.' -> 11, ' ' (blank) -> 12
+_GLYPHS_BITS = jnp.array([
+    # 0
+    [[1,1,1],[1,0,1],[1,0,1],[1,0,1],[1,1,1]],
+    # 1
+    [[0,1,0],[1,1,0],[0,1,0],[0,1,0],[1,1,1]],
+    # 2
+    [[1,1,1],[0,0,1],[1,1,1],[1,0,0],[1,1,1]],
+    # 3
+    [[1,1,1],[0,0,1],[0,1,1],[0,0,1],[1,1,1]],
+    # 4
+    [[1,0,1],[1,0,1],[1,1,1],[0,0,1],[0,0,1]],
+    # 5
+    [[1,1,1],[1,0,0],[1,1,1],[0,0,1],[1,1,1]],
+    # 6
+    [[1,1,1],[1,0,0],[1,1,1],[1,0,1],[1,1,1]],
+    # 7
+    [[1,1,1],[0,0,1],[0,1,0],[1,0,0],[1,0,0]],
+    # 8
+    [[1,1,1],[1,0,1],[1,1,1],[1,0,1],[1,1,1]],
+    # 9
+    [[1,1,1],[1,0,1],[1,1,1],[0,0,1],[1,1,1]],
+    # :
+    [[0,0,0],[0,1,0],[0,0,0],[0,1,0],[0,0,0]],
+    # .
+    [[0,0,0],[0,0,0],[0,0,0],[0,1,0],[0,1,0]],
+], dtype=jnp.uint8)
+
+def _glyph_rgba(scale: int = 2) -> jnp.ndarray:
+    """Return RGBA sprites for 12 glyphs, scaled with nearest-neighbor."""
+    H, W = _GLYPHS_BITS.shape[1], _GLYPHS_BITS.shape[2]
+    def upsample(bits):
+        b = bits.astype(jnp.uint8)
+        one = jnp.ones((scale, scale), dtype=jnp.uint8)
+        up = jnp.kron(b, one)  # (H*scale, W*scale)
+        rgb = jnp.zeros((up.shape[0], up.shape[1], 3), dtype=jnp.uint8)
+        a = (up * 255).astype(jnp.uint8)
+        return jnp.concatenate([rgb, a[..., None]], axis=-1)  # RGBA
+    sprites = jax.vmap(upsample)(_GLYPHS_BITS)  # (12, hs, ws, 4)
+    return sprites
+
+def _center_positions(num_glyphs: int, glyph_w: int, y_top: int, screen_w: int, spacing: int=1):
+    total_w = num_glyphs * glyph_w + (num_glyphs - 1) * spacing
+    left = (screen_w - total_w) // 2
+    xs = jnp.arange(num_glyphs) * (glyph_w + spacing) + left + glyph_w // 2
+    ys = jnp.full((num_glyphs,), y_top + (glyph_w // 2), dtype=jnp.int32)
+    centers = jnp.stack([xs.astype(jnp.int32), ys], axis=1)
+    return centers
+
+def _draw_digits_line(frame: jnp.ndarray, digit_codes: jnp.ndarray, y_top: int, scale: int = 2) -> jnp.ndarray:
+    sprites = _glyph_rgba(scale)
+    gh = sprites.shape[1]
+    gw = sprites.shape[2]
+    centers = _center_positions(digit_codes.shape[0], gw, y_top, frame.shape[1], spacing=1)
+    chosen = sprites[digit_codes]
+    return _scan_blit(frame, chosen, centers)
+
+def _format_score_digits(score: jnp.ndarray) -> jnp.ndarray:
+    # Two digits (00..99), clipped
+    s_val = jnp.clip(score.astype(jnp.int32), 0, 99)
+    tens = (s_val // 10) % 10
+    ones = s_val % 10
+    return jnp.stack([tens, ones], axis=0)
+    val_out, arr_out = jax.lax.fori_loop(0, MAXD, body, (v, out))
+    return arr_out
+
+def _format_time_digits(t: jnp.ndarray) -> jnp.ndarray:
+    # Zeit aus Frames berechnen: 60 FPS -> Sekunden (bei anderem Takt FPS anpassen)
+    t = jnp.maximum(t.astype(jnp.float64), 0.0)
+    FPS = jnp.float64(60.0)
+    seconds_total = t / FPS
+
+    # M:SS:MS  (M = Minuten einstellig, SS = Sekunden zweistellig, MS = Millisekunden zweistellig)
+    minutes_digit = (jnp.floor(seconds_total / 60.0).astype(jnp.int32)) % 10
+    seconds_int   = jnp.floor(jnp.mod(seconds_total, 60.0)).astype(jnp.int32)
+    ms_int        = jnp.floor((seconds_total - jnp.floor(seconds_total)) * 1000.0).astype(jnp.int32)  # 0..999
+
+    s_t  = (seconds_int // 10) % 10
+    s_o  = seconds_int % 10
+    ms_t = (ms_int // 10) % 10      # Zehner der Millisekunden (letzte zwei Stellen)
+    ms_o = ms_int % 10
+
+    colon = jnp.int32(10)  # ':'-Glyph
+    return jnp.stack([minutes_digit, colon, s_t, s_o, colon, ms_t, ms_o], axis=0)
 @partial(jax.jit,
          static_argnames=("screen_width","screen_height","scale_factor","skier_y","flag_distance","draw_ui_jax"))
 def render_frame(
@@ -827,8 +920,15 @@ def render_frame(
     frame = _scan_blit(frame, jnp.repeat(rock_draw[None, ...], rock_px.shape[0], axis=0), rock_px)
 
     # 8) UI/Text direkt in JAX – hier deaktiviert um identische Optik
-    return frame
 
+    # 9) Optional UI: score (top line) and time (second line), centered
+    if draw_ui_jax:
+        score_digits = _format_score_digits(state.score)
+        time_digits  = _format_time_digits(state.time)
+        frame = _draw_digits_line(frame, score_digits, y_top=2, scale=2)
+        frame = _draw_digits_line(frame, time_digits,  y_top=2 + 5*2 + 2, scale=2)  # place below first line
+
+    return frame
 class SkiingRenderer(JAXGameRenderer):
     def __init__(self, consts=None):
         super().__init__()
@@ -859,11 +959,10 @@ class SkiingRenderer(JAXGameRenderer):
             scale_factor   = 1,         # play.py skaliert selbst
             skier_y        = self.consts.skier_y,
             flag_distance  = self.consts.flag_distance,
-            draw_ui_jax    = False,
+            draw_ui_jax    = True,
         )
 
     @partial(jax.jit, static_argnums=(0,))
     def render(self, state) -> jnp.ndarray:
         rgba = self._render_fn(state, self.assets)   # (210,160,4) uint8
         return rgba[..., :3]                         # -> (210,160,3) RGB
-
