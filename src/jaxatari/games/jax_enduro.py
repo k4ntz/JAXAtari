@@ -30,12 +30,11 @@ Observation:
 - reduce observation when fog
 
 Performance:
-- Improve collision handling
+- Improve collision handling cars
 
 
 Cleanup:
 - debug renderer in main file
-- new docu folder
 """
 
 
