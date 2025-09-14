@@ -1387,6 +1387,15 @@ class BattleZoneRenderer:
             self.life_sprite = None
             self.life_sprite_loaded = False
 
+        # Death-effect state: remembers previous obstacle alive/positions so we can
+        # create a short-lived pixel-blur when an enemy is killed (visual feedback).
+        # Initialized on first render when obstacle arrays are available.
+        self._prev_obstacles_alive = None
+        self._prev_obstacles_x = None
+        self._prev_obstacles_y = None
+        # Each effect: dict with keys: x, y, color, lifetime, age, size
+        self._death_effects = []
+
     def draw_player_bullet(self, screen, state: BattleZoneState):
         """Draw all bullets (player and enemy) as moving lines."""
         bullets = state.bullets
@@ -1647,16 +1656,96 @@ class BattleZoneRenderer:
         try:
             if distance > self.view_distance:
                 return
-            size = max(6, int(14 / max(distance / 50, 1)))
-            # body - narrow fuselage
-            pygame.draw.polygon(screen, color, [(x - size, y), (x + size, y - size//3), (x + size, y + size//3)], 1)
-            # tail
-            pygame.draw.line(screen, color, (x - size, y), (x - size - 4, y - 3), 1)
-            # propeller as small cross in front
-            pygame.draw.line(screen, color, (x + size + 2, y - 2), (x + size + 6, y + 2), 1)
-            pygame.draw.line(screen, color, (x + size + 2, y + 2), (x + size + 6, y - 2), 1)
+            # Use beige paint with black stripes to match provided sprite
+            body_color = (222, 196, 130)  # beige
+            stripe_color = (0, 0, 0)
+            size = max(8, int(20 / max(distance / 60, 1)))
+
+            # Central square body
+            body_w = int(size * 1.0)
+            body_h = int(size * 0.7)
+            pygame.draw.rect(screen, body_color, (x - body_w//2, y - body_h//2, body_w, body_h), 0)
+            pygame.draw.rect(screen, stripe_color, (x - body_w//2, y - body_h//2, body_w, body_h), 1)
+
+            # Left and right wing blocks (with horizontal black stripes)
+            wing_w = int(size * 0.9)
+            wing_h = int(size * 0.5)
+            left_x = x - body_w//2 - wing_w
+            right_x = x + body_w//2
+            wing_y = y - wing_h//2
+            # Draw wings filled
+            pygame.draw.rect(screen, body_color, (left_x, wing_y, wing_w, wing_h), 0)
+            pygame.draw.rect(screen, body_color, (right_x, wing_y, wing_w, wing_h), 0)
+            # Outline wings
+            pygame.draw.rect(screen, stripe_color, (left_x, wing_y, wing_w, wing_h), 1)
+            pygame.draw.rect(screen, stripe_color, (right_x, wing_y, wing_w, wing_h), 1)
+
+            # Add horizontal black stripes on wings (two stripes each)
+            stripe_h = max(2, wing_h // 5)
+            for i in range(2):
+                sy = wing_y + int((i + 1) * wing_h / 3) - stripe_h//2
+                pygame.draw.rect(screen, stripe_color, (left_x + 2, sy, wing_w - 4, stripe_h), 0)
+                pygame.draw.rect(screen, stripe_color, (right_x + 2, sy, wing_w - 4, stripe_h), 0)
+
+            # Small front nose block
+            nose_w = int(body_w * 0.4)
+            nose_h = int(body_h * 0.5)
+            pygame.draw.rect(screen, stripe_color, (x + body_w//2 - 2, y - nose_h//2, nose_w, nose_h), 0)
         except Exception:
             pass
+
+    def _add_death_effect(self, screen_x: int, screen_y: int, color: Tuple[int, int, int], distance: float, lifetime: int = 8):
+        """Enqueue a short-lived pixel blur effect at screen coordinates.
+
+        The effect will be drawn for `lifetime` frames and will fade out.
+        """
+        size = max(4, int(14 / max(distance / 60.0, 1.0)))
+        eff = {
+            'x': int(screen_x),
+            'y': int(screen_y),
+            'color': tuple(int(c) for c in color),
+            'lifetime': int(lifetime),
+            'age': 0,
+            'size': size
+        }
+        self._death_effects.append(eff)
+
+    def _draw_death_effects(self, screen, step_counter: int):
+        """Draw and age all active death effects; remove expired ones."""
+        if not self._death_effects:
+            return
+
+        new_effects = []
+        for idx, e in enumerate(self._death_effects):
+            remaining = e['lifetime'] - e['age']
+            if remaining <= 0:
+                continue
+
+            # Fade factor (1.0 -> 0.0)
+            f = max(0.0, float(remaining) / float(e['lifetime']))
+            base_r, base_g, base_b = e['color']
+            draw_color = (int(base_r * f), int(base_g * f), int(base_b * f))
+
+            # Draw several small rectangles to simulate a pixel blur/smear
+            parts = max(4, e['size'] // 3)
+            for p in range(parts):
+                # deterministic offsets for visual consistency using step_counter
+                dx = int((p - parts // 2) * (1 + (idx % 3)))
+                dy = int(((p * 2) - parts) * (1 + ((step_counter + idx) % 2)))
+                w = max(1, e['size'] // (2 + (p % 3)))
+                h = max(1, e['size'] // (3 + (p % 2)))
+                try:
+                    pygame.draw.rect(screen, draw_color, (e['x'] + dx, e['y'] + dy, w, h), 0)
+                except Exception:
+                    # ignore drawing errors and continue
+                    pass
+
+            # age and keep if still alive
+            e['age'] += 1
+            if e['age'] < e['lifetime']:
+                new_effects.append(e)
+
+        self._death_effects = new_effects
 
     def draw_enemy_tank(self, screen, x, y, distance, color, tank_angle, player_angle):
         """Draw enemy tank with directional appearance based on relative orientation."""
@@ -1903,6 +1992,77 @@ class BattleZoneRenderer:
                 return np.zeros((HEIGHT, WIDTH, 3), dtype=np.uint8)
 
         player = state.player_tank
+        # --- Death-effect detection -------------------------------------------------
+        # Initialize previous-obstacle caches on first render and detect newly-dead
+        # obstacles by comparing previous alive flags to current ones. When an
+        # obstacle transitions from alive->dead we enqueue a short-lived pixel blur
+        # effect at the last known world position of the obstacle.
+        obs = state.obstacles
+        try:
+            if self._prev_obstacles_alive is None:
+                # First render: cache alive flags and positions
+                self._prev_obstacles_alive = [int(a) for a in obs.alive]
+                self._prev_obstacles_x = [float(x) for x in obs.x]
+                self._prev_obstacles_y = [float(y) for y in obs.y]
+            else:
+                # Detect newly dead obstacles
+                for i in range(len(obs.x)):
+                    try:
+                        prev_alive = int(self._prev_obstacles_alive[i])
+                    except Exception:
+                        prev_alive = 0
+                    try:
+                        cur_alive = int(obs.alive[i])
+                    except Exception:
+                        try:
+                            cur_alive = int(float(obs.alive[i]))
+                        except Exception:
+                            cur_alive = 0
+
+                    # Alive->dead transition
+                    if prev_alive == 1 and cur_alive == 0:
+                        # Use previous world coordinates to compute screen position
+                        px = self._prev_obstacles_x[i]
+                        py = self._prev_obstacles_y[i]
+                        sx, sy, dist, vis = self.world_to_screen_3d(
+                            px, py,
+                            state.player_tank.x, state.player_tank.y, state.player_tank.angle
+                        )
+                        try:
+                            vis_bool = bool(vis)
+                        except Exception:
+                            try:
+                                vis_bool = bool(int(vis))
+                            except Exception:
+                                vis_bool = False
+
+                        if vis_bool and 0 <= sx < WIDTH and 0 <= sy < HEIGHT:
+                            # Choose color based on subtype when available
+                            try:
+                                subtype_val = int(state.obstacles.enemy_subtype[i])
+                            except Exception:
+                                subtype_val = -1
+                            if subtype_val == ENEMY_TYPE_SUPERTANK:
+                                color = SUPERTANK_COLOR
+                            elif subtype_val == ENEMY_TYPE_TANK:
+                                color = TANK_COLOR
+                            elif subtype_val == ENEMY_TYPE_FIGHTER:
+                                color = FIGHTER_COLOR
+                            elif subtype_val == ENEMY_TYPE_SAUCER:
+                                color = SAUCER_COLOR
+                            else:
+                                color = WIREFRAME_COLOR
+
+                            # Enqueue effect using previous screen coords and distance
+                            self._add_death_effect(sx, sy, color, dist, lifetime=10)
+
+                # Update caches
+                self._prev_obstacles_alive = [int(a) for a in obs.alive]
+                self._prev_obstacles_x = [float(x) for x in obs.x]
+                self._prev_obstacles_y = [float(y) for y in obs.y]
+        except Exception:
+            # Any error in detection should not break rendering
+            pass
         # --- Dynamic sky with moving mountains ---
         sky_height = HORIZON_Y
         sky_bands = 24
@@ -2101,6 +2261,13 @@ class BattleZoneRenderer:
                     self.draw_wireframe_cube(screen, screen_x, screen_y, distance, WIREFRAME_COLOR)
                 else:  # Pyramid obstacle
                     self.draw_wireframe_pyramid(screen, screen_x, screen_y, distance, WIREFRAME_COLOR)
+
+        # Draw death effects on top of object geometry (so they replace the
+        # disappeared enemy visually). Then draw bullets and player afterwards.
+        try:
+            self._draw_death_effects(surface, int(state.step_counter))
+        except Exception:
+            pass
 
         # Draw bullets
         self.draw_player_bullet(surface, state)
