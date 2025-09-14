@@ -562,13 +562,29 @@ class JaxPhoenix(JaxEnvironment[PhoenixState, PhoenixObservation, PhoenixInfo, N
         )
 
         # Bewege Fledermäuse basierend auf ihrer individuellen Richtung
-        new_enemies_x = jnp.where(active_bats, state.enemies_x + (new_directions * bat_step_size), state.enemies_x)
-        enemy_pos = jnp.stack([new_enemies_x, state.enemies_y], axis=1)
-        new_enemies_x = jnp.clip(new_enemies_x, self.consts.PLAYER_BOUNDS[0], self.consts.PLAYER_BOUNDS[1])
+        #new_enemies_x = jnp.where(active_bats, state.enemies_x + (new_directions * bat_step_size), state.enemies_x)
+        #enemy_pos = jnp.stack([new_enemies_x, state.enemies_y], axis=1)
+        #new_enemies_x = jnp.clip(new_enemies_x, self.consts.PLAYER_BOUNDS[0], self.consts.PLAYER_BOUNDS[1])
 
-        new_enemies_y = jnp.where(active_bats, state.enemies_y + y_move, state.enemies_y)
-        new_enemies_y = jnp.clip(new_enemies_y, 0, self.consts.HEIGHT - self.consts.ENEMY_HEIGHT)
-        new_y_cooldown = jnp.where(cooldown_ready & y_move_chance, 50, jnp.maximum(state.bat_y_cooldown-1,0))
+        #new_enemies_y = jnp.where(active_bats, state.enemies_y + y_move, state.enemies_y)
+        #new_enemies_y = jnp.clip(new_enemies_y, 0, self.consts.HEIGHT - self.consts.ENEMY_HEIGHT)
+        #new_y_cooldown = jnp.where(cooldown_ready & y_move_chance, 50, jnp.maximum(state.bat_y_cooldown-1,0))
+
+        # Horizontal: nur aktive Bats bewegen und clippen
+        proposed_x = jnp.where(active_bats, state.enemies_x + (new_directions * bat_step_size), state.enemies_x)
+        clipped_x = jnp.clip(proposed_x, self.consts.PLAYER_BOUNDS[0], self.consts.PLAYER_BOUNDS[1])
+        new_enemies_x = jnp.where(active_bats, clipped_x, state.enemies_x)
+
+        # Vertikal: nur aktive Bats bewegen und clippen
+        proposed_y = jnp.where(active_bats, state.enemies_y + y_move, state.enemies_y)
+        clipped_y = jnp.clip(proposed_y, 0, self.consts.HEIGHT - self.consts.ENEMY_HEIGHT)
+        new_enemies_y = jnp.where(active_bats, clipped_y, state.enemies_y)
+
+        # Für Kollisionen die neuen Y-Werte verwenden
+        enemy_pos = jnp.stack([new_enemies_x, new_enemies_y], axis=1)
+
+        new_y_cooldown = jnp.where(cooldown_ready & y_move_chance, 50, jnp.maximum(state.bat_y_cooldown - 1, 0))
+
         def check_collision(entity_pos, projectile_pos):
             enemy_x, enemy_y = entity_pos
             proj_x, proj_y = projectile_pos
