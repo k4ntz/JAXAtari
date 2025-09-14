@@ -24,7 +24,7 @@ Steering:
 - Drift speed based?
 
 Rendering:
-- level flags
+- wheel animation speed
 
 Track:
 - Better curve
@@ -35,15 +35,13 @@ Track:
 - curve move speed based on speed
 
 Game Logic:
-- level passed flag
 - game over
 
 Observation:
 - improve observation function 
 - reduce observation when fog
 
-Fine tuning:
-- wheel animation speed
+
 """
 
 
@@ -53,7 +51,9 @@ class EnduroConstants(NamedTuple):
     # Only change this variable if you are sure the original Enduro implementation ran at a lower rate!
     frame_rate: int = 60
 
+    # ====================
     # === Window Sizes ===
+    # ====================
     screen_width: int = 160
     screen_height: int = 210
 
@@ -67,7 +67,9 @@ class EnduroConstants(NamedTuple):
     # the track is in the game window below the sky
     sky_height = 50
 
+    # ============
     # === Cars ===
+    # ============
     # car sizes from close to far
     car_width_0: int = 16
     car_height_0: int = 11
@@ -80,7 +82,9 @@ class EnduroConstants(NamedTuple):
     player_x_start: float = game_screen_middle
     player_y_start: float = game_window_height - car_height_0 - 1
 
+    # =============
     # === Track ===
+    # =============
     track_width: int = 97
     track_height: int = game_window_height - sky_height - 2
     max_track_length: float = 9999.9  # in km
@@ -94,7 +98,23 @@ class EnduroConstants(NamedTuple):
     # how fast the track curve starts to build in the game when going from a straight track into a curve
     curve_rate: float = 0.25
 
+    # track colors
+    track_colors = jnp.array([
+        [74, 74, 74],  # top
+        [111, 111, 111],  # moving top
+        [170, 170, 170],  # moving bottom
+        [192, 192, 192],  # bottom
+    ], dtype=jnp.int32)
+    track_moving_top_length: int = 16
+    track_moving_bottom_length: int = 20
+
+    # === Track collision ===
+    track_collision_kickback_pixels: float = 3.0
+    track_collision_speed_reduction_per_speed_unit: float = 0.25  # from RAM extraction
+
+    # ======================
     # === Speed controls ===
+    # ======================
     min_speed: int = 6  # from RAM state 22
     max_speed: int = 120  # from RAM state 22
     # measured by starting the original game and letting the car progress with min speed for 5 km --> 2:23 min
@@ -111,7 +131,9 @@ class EnduroConstants(NamedTuple):
     breaking_per_second: float = 30.0  # controls how fast the car break
     breaking_per_frame: float = breaking_per_second / frame_rate
 
+    # ================
     # === Steering ===
+    # ================
     # how many pixels the car can move from one edge of the track to the other one
     steering_range_in_pixels: int = 28
     # How much the car moves per steering input (absolute units)
@@ -128,16 +150,12 @@ class EnduroConstants(NamedTuple):
     minimum_steering_sensitivity: float = 1.0  # from play-testing
     steering_snow_factor: float = 2.0  # during snow the steering becomes much worse
 
-    # drift_per_second_relative: float = 0.2
-    # drift_per_frame: float = drift_per_second_relative / frame_rate
     drift_per_second_pixels: float = 2.5  # controls how much the car drifts in a curve
     drift_per_frame: float = drift_per_second_pixels / frame_rate
 
-    # === Track collision ===
-    track_collision_kickback_pixels: float = 3.0
-    track_collision_speed_reduction_per_speed_unit: float = 0.25  # from RAM extraction
-
+    # ===============
     # === Weather ===
+    # ===============
     # Start times in seconds for each phase. Written in a way to allow easy replacements.
     weather_starts_s: jnp.ndarray = jnp.array([
         34,  # day 1
@@ -193,7 +211,9 @@ class EnduroConstants(NamedTuple):
 
     ], dtype=jnp.int32)
 
+    # =================
     # === Opponents ===
+    # =================
     opponent_speed: int = 24  # measured from RAM state
     # a factor of 1 translates into overtake time of 1 second when speed is twice as high as the opponent's
     opponent_relative_speed_factor: float = 1.0
@@ -224,12 +244,20 @@ class EnduroConstants(NamedTuple):
         game_window_height - car_zero_y_pixel_range - 20 - 20 - 10 - 10 - 6 - 5,
     ], dtype=jnp.int32)
 
+    # Opponent lane position
+    # The ratio of where in the track the opponents are rendered. From left, middle to right
+    lane_ratios = jnp.array([0.25, 0.5, 0.75], dtype=jnp.float32)
+
+    # ===========================
     # === Opponents Collision ===
+    # ===========================
     car_crash_cooldown_seconds: float = 3.0
     car_crash_cooldown_frames: int = jnp.array(car_crash_cooldown_seconds * frame_rate)
     crash_kickback_speed_per_frame: float = track_width / car_crash_cooldown_seconds / frame_rate / 3
 
+    # =================
     # === Cosmetics ===
+    # =================
     logo_x_position: int = 20
     logo_y_position: int = 196
 
@@ -251,8 +279,6 @@ class EnduroConstants(NamedTuple):
 
     # how many steps per animation
     opponent_animation_steps: int = 8
-
-    day_length_frames = day_night_cycle_seconds * frame_rate
 
 
 class EnduroGameState(NamedTuple):
@@ -980,8 +1006,8 @@ class JaxEnduro(JaxEnvironment[EnduroGameState, EnduroObservation, EnduroInfo, E
         Skips rows where space == -1 by collapsing to left_x.
         """
 
-        spaces = self._generate_track_spaces()
-        x = jnp.where(spaces == -1, left_xs, left_xs + spaces + 1)  # +1 to include gap
+        track_spaces = self._generate_track_spaces()
+        x = jnp.where(spaces == -1, left_xs, left_xs + track_spaces + 1)  # +1 to include gap
         return x  # use same Y as left
 
     @partial(jax.jit, static_argnums=(0,))
@@ -1003,10 +1029,10 @@ class JaxEnduro(JaxEnvironment[EnduroGameState, EnduroObservation, EnduroInfo, E
             width = lax.select(i < 2, -1, jnp.minimum(i - 2, max_width))
             return widths.at[i].set(width)
 
-        spaces = jnp.zeros(self.config.track_height, dtype=jnp.int32)
-        spaces = lax.fori_loop(0, 103, body_fn, spaces)
+        track_spaces = jnp.zeros(self.config.track_height, dtype=jnp.int32)
+        track_spaces = lax.fori_loop(0, 103, body_fn, track_spaces)
 
-        return spaces
+        return track_spaces
 
     @partial(jax.jit, static_argnums=(0, 2, 3, 4))
     def _generate_opponent_spawns(
@@ -1192,16 +1218,13 @@ class JaxEnduro(JaxEnvironment[EnduroGameState, EnduroObservation, EnduroInfo, E
         track_widths = right_boundaries - left_boundaries
 
         # Calculate x-positions based on lane assignments using track-relative positions
-        # Lane ratios: left = 0.25, middle = 0.5, right = 0.75 of track width
-        lane_ratios = jnp.array([0.25, 0.5, 0.75], dtype=jnp.float32)
-
         # Get car widths for each opponent slot (0=closest/largest, 6=farthest/smallest)
         car_widths = self.config.car_widths  # Shape: (7,)
 
         def calculate_x_for_lane(slot_idx, lane_code, left_bound, track_width):
             # For empty slots (-1), return -1 as "not visible" marker
             valid_lane = jnp.clip(lane_code, 0, 2)  # Clamp to valid range
-            ratio = lane_ratios[valid_lane]
+            ratio = self.config.lane_ratios[valid_lane]
 
             # Calculate center position of the car
             center_x = left_bound + (track_width * ratio)
@@ -1582,14 +1605,14 @@ class EnduroRenderer(JAXGameRenderer):
         raster = self._render_opponent_cars(raster, state)
 
         # render the lower background again to make opponents below the screen disappear
-        raster = self._render_lower_background(raster, state)
+        raster = self._render_lower_background(raster)
 
         # render the track
         raster = self._render_track_from_state(raster, state)
 
         # render the distance odometer, level score and cars to overtake
         raster = self._render_distance_odometer(raster, state)
-        raster = self._render_cars_to_overtake_score(raster, state) # must be rendered before level, due to background
+        raster = self._render_cars_to_overtake_score(raster, state)  # must be rendered before level, due to background
         raster = self._render_level_score(raster, state)
 
         # render the mountains
@@ -1934,8 +1957,8 @@ class EnduroRenderer(JAXGameRenderer):
         def render_level_passed(flag_raster) -> jnp.ndarray:
             # change the flag animation every second
             frame_index = (state.step_count // 60) % 2
-            flag_sprite = aj.get_sprite_frame(self.sprites['flags.npy'],frame_index)
-            
+            flag_sprite = aj.get_sprite_frame(self.sprites['flags.npy'], frame_index)
+
             # render the flags at the hundreds position - the car symbol
             x_pos = self.config.score_start_x - 9
             flag_raster = aj.render_at(flag_raster, x_pos, self.config.score_start_y - 1, flag_sprite)
@@ -1995,7 +2018,7 @@ class EnduroRenderer(JAXGameRenderer):
             )
 
             return digit_raster
-        
+
         # check whether to render the digits or the flags
         raster = lax.cond(
             state.level_passed,
@@ -2116,7 +2139,7 @@ class EnduroRenderer(JAXGameRenderer):
         return raster
 
     @partial(jax.jit, static_argnums=(0,))
-    def _render_lower_background(self, raster: jnp.ndarray, state: EnduroGameState) -> jnp.ndarray:
+    def _render_lower_background(self, raster: jnp.ndarray) -> jnp.ndarray:
         """
         Renders the background and score box under the player screen to avoid that opponent cars are visible there.
         Args:

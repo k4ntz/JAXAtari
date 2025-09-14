@@ -7,6 +7,7 @@
 - ``length_of_opponent_array`` The total length of the opponent array. If the end of the array is reached the player progresses through the same pattern.
 - ``opponent_density`` How many oppoents should be in the array. Must be >= 0.0 and < 1.0
 - ``opponent_delay_slots`` How many slots should be left empty at the beginning of the array for the start of the game.
+- ``lane_ratios`` Determines the x position of a lane that an opponent is on. First position is the left lane, 2nd the middle lane and 3rd position the right lane.
 
 ### Track generation
 - ``track_seed`` The sees for the track
