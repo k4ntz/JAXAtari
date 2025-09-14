@@ -1959,7 +1959,7 @@ class EnduroRenderer(JAXGameRenderer):
             r = (packed_color >> 16) & 0xFF
             g = (packed_color >> 8) & 0xFF
             b = packed_color & 0xFF
-            return aj.change_sprite_color(sprite, jnp.stack([r, g, b], dtype=jnp.int32))
+            return change_sprite_color(sprite, jnp.stack([r, g, b], dtype=jnp.int32))
 
         # Apply colors to each sprite when it is day. At night just keep the sprite (rear lights)
         colored_car_0 = lax.cond(is_day, lambda: apply_color_to_sprite(car_0, colors[0]), lambda: car_0)
@@ -2231,8 +2231,8 @@ class EnduroRenderer(JAXGameRenderer):
 
         # color them according to the weather
         weather_index = self.config.weather_color_codes[state.weather_index]
-        mountain_left_sprite = aj.change_sprite_color(mountain_left_sprite, weather_index[2])
-        mountain_right_sprite = aj.change_sprite_color(mountain_right_sprite, weather_index[2])
+        mountain_left_sprite = change_sprite_color(mountain_left_sprite, weather_index[2])
+        mountain_right_sprite = change_sprite_color(mountain_right_sprite, weather_index[2])
 
         # Geometry / sizes
         sky_height = self.background_sizes['background_sky.npy'][0]
@@ -2304,25 +2304,25 @@ class EnduroRenderer(JAXGameRenderer):
 
         # sky background
         sky = aj.get_sprite_frame(self.sprites['background_sky.npy'], 0)
-        colored_sky = aj.change_sprite_color(sky, weather_colors[0])
+        colored_sky = change_sprite_color(sky, weather_colors[0])
         raster = aj.render_at(raster, self.config.window_offset_left, 0, colored_sky)
 
         # green background
         gras = aj.get_sprite_frame(self.sprites['background_gras.npy'], 0)
-        colored_gras = aj.change_sprite_color(gras, weather_colors[1])
+        colored_gras = change_sprite_color(gras, weather_colors[1])
         raster = aj.render_at(raster, self.config.window_offset_left, sky.shape[0], colored_gras)
 
         # render the horizon stripes
         stripe_1 = aj.get_sprite_frame(self.sprites['background_horizon.npy'], 0)
-        colored_stripe_1 = aj.change_sprite_color(stripe_1, weather_colors[3])
+        colored_stripe_1 = change_sprite_color(stripe_1, weather_colors[3])
         raster = aj.render_at(raster, self.config.window_offset_left, sky.shape[0] - 2, colored_stripe_1)
 
         stripe_2 = aj.get_sprite_frame(self.sprites['background_horizon.npy'], 0)
-        colored_stripe_2 = aj.change_sprite_color(stripe_2, weather_colors[4])
+        colored_stripe_2 = change_sprite_color(stripe_2, weather_colors[4])
         raster = aj.render_at(raster, self.config.window_offset_left, sky.shape[0] - 4, colored_stripe_2)
 
         stripe_3 = aj.get_sprite_frame(self.sprites['background_horizon.npy'], 0)
-        colored_stripe_3 = aj.change_sprite_color(stripe_3, weather_colors[5])
+        colored_stripe_3 = change_sprite_color(stripe_3, weather_colors[5])
         raster = aj.render_at(raster, self.config.window_offset_left, sky.shape[0] - 6, colored_stripe_3)
 
         return raster
