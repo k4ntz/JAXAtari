@@ -101,8 +101,8 @@ class EnduroConstants(NamedTuple):
     # track colors
     track_colors = jnp.array([
         [74, 74, 74],  # top
-        [111, 111, 111],  # moving top - movement range: 0-11
-        [170, 170, 170],  # moving bottom - spawns after 6th
+        [111, 111, 111],  # moving top - movement range: track_move_range
+        [170, 170, 170],  # moving bottom - spawns after track_moving_bottom_spawn_step
         [192, 192, 192],  # bottom - rest
     ], dtype=jnp.int32)
     track_top_min_length: int = 33 # or 32
@@ -110,7 +110,8 @@ class EnduroConstants(NamedTuple):
     track_moving_bottom_length: int = 18
     track_move_range: int = 12
     track_moving_bottom_spawn_step: int = 6
-    track_color_move_speed_per_speed: float = 0.3 / 6
+    track_color_move_speed_per_speed: float = 0.05
+    track_speed_animation_factor: float = 0.085  # determines how fast the animation speed increases
 
     # === Track collision ===
     track_collision_kickback_pixels: float = 3.0
@@ -1660,9 +1661,12 @@ class EnduroRenderer(JAXGameRenderer):
         """
         Renders the track pixels from the Enduro Game State with animated colors.
         """
+        # get a less steep slope for the acceleration of the animation
+        effective_speed = (self.config.min_speed +
+                           (state.player_speed - self.config.min_speed) * self.config.track_speed_animation_factor)
         # Calculate animation step
         animation_step = jnp.floor(
-            state.player_speed * state.step_count * self.config.track_color_move_speed_per_speed
+            effective_speed * state.step_count * self.config.track_color_move_speed_per_speed
         ) % self.config.track_move_range
         animation_step = animation_step.astype(jnp.int32)
 
