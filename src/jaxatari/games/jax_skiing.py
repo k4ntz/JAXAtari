@@ -1,5 +1,4 @@
 from functools import partial
-import pygame
 import chex
 import jax
 import jax.numpy as jnp
@@ -137,11 +136,11 @@ class JaxSkiing(JaxEnvironment[GameState, SkiingObservation, SkiingInfo, SkiingC
             dtype=jnp.float64
         ).reshape(-1)
     
-        flags_flat = jnp.asarray(obs.flags, dtype=jnp.float64).reshape(-1)
-        trees_flat = jnp.asarray(obs.trees, dtype=jnp.float64).reshape(-1)
-        rocks_flat = jnp.asarray(obs.rocks, dtype=jnp.float64).reshape(-1)
+        flags_flat = jnp.array(obs.flags, dtype=jnp.float64).reshape(-1)
+        trees_flat = jnp.array(obs.trees, dtype=jnp.float64).reshape(-1)
+        rocks_flat = jnp.array(obs.rocks, dtype=jnp.float64).reshape(-1)
         # Score is int32; keep as float64 in flat vector for consistency
-        score_flat = jnp.asarray(obs.score, dtype=jnp.float64).reshape(-1)
+        score_flat = jnp.array(obs.score, dtype=jnp.float64).reshape(-1)
     
         return jnp.concatenate([skier_vec, flags_flat, trees_flat, rocks_flat, score_flat], axis=0)
 
@@ -516,7 +515,7 @@ class JaxSkiing(JaxEnvironment[GameState, SkiingObservation, SkiingInfo, SkiingC
 
         done = self._get_done(new_state)
         reward = self._get_reward(state, new_state)
-        reward = jnp.asarray(reward, dtype=jnp.float64)
+        reward = jnp.array(reward, dtype=jnp.float64)
         obs = self._get_observation(new_state)
         all_rewards = self._get_all_rewards(state, new_state)
         info = self._get_info(new_state, all_rewards)
@@ -528,16 +527,16 @@ class JaxSkiing(JaxEnvironment[GameState, SkiingObservation, SkiingInfo, SkiingC
 
         # Skier (float64 now)
         skier = EntityPosition(
-            x=jnp.asarray(state.skier_x, dtype=jnp.float64),           # CHANGED
-            y=jnp.asarray(self.config.skier_y, dtype=jnp.float64),     # CHANGED
-            width=jnp.asarray(self.config.skier_width, dtype=jnp.float64),   # CHANGED
-            height=jnp.asarray(self.config.skier_height, dtype=jnp.float64), # CHANGED
+            x=jnp.array(state.skier_x, dtype=jnp.float64),           # CHANGED
+            y=jnp.array(self.config.skier_y, dtype=jnp.float64),     # CHANGED
+            width=jnp.array(self.config.skier_width, dtype=jnp.float64),   # CHANGED
+            height=jnp.array(self.config.skier_height, dtype=jnp.float64), # CHANGED
         )
 
         # Positionsspalten aus dem State holen
-        flags_xy_f32 = jnp.asarray(state.flags, dtype=jnp.float64)[..., :2]
-        trees_xy_f32 = jnp.asarray(state.trees, dtype=jnp.float64)[..., :2]
-        rocks_xy_f32 = jnp.asarray(state.rocks, dtype=jnp.float64)[..., :2]
+        flags_xy_f32 = jnp.array(state.flags, dtype=jnp.float64)[..., :2]
+        trees_xy_f32 = jnp.array(state.trees, dtype=jnp.float64)[..., :2]
+        rocks_xy_f32 = jnp.array(state.rocks, dtype=jnp.float64)[..., :2]
 
         # In-Space clippen (gegen Ausreißer wie y=240)
         W = jnp.float64(self.config.screen_width  - 1)
@@ -558,16 +557,16 @@ class JaxSkiing(JaxEnvironment[GameState, SkiingObservation, SkiingInfo, SkiingC
         )
 
         # --- CHANGED: upcast clipped positions to float64 for the observation
-        flags_xy = jnp.asarray(flags_xy_f32, dtype=jnp.float64)  # CHANGED
-        trees_xy = jnp.asarray(trees_xy_f32, dtype=jnp.float64)  # CHANGED
-        rocks_xy = jnp.asarray(rocks_xy_f32, dtype=jnp.float64)  # CHANGED
+        flags_xy = jnp.array(flags_xy_f32, dtype=jnp.float64)  # CHANGED
+        trees_xy = jnp.array(trees_xy_f32, dtype=jnp.float64)  # CHANGED
+        rocks_xy = jnp.array(rocks_xy_f32, dtype=jnp.float64)  # CHANGED
 
         return SkiingObservation(
             skier=skier,
             flags=flags_xy,
             trees=trees_xy,
             rocks=rocks_xy,
-            score=jnp.asarray(state.score, dtype=jnp.int32),
+            score=jnp.array(state.score, dtype=jnp.int32),
         )
 
 
@@ -628,7 +627,7 @@ class RenderConfig:
     
     # Text-Overlay-Option: True = UI-Text via Pygame auf fertiges JAX-Frame
     # False = JAX-Bitmap-Font
-    use_pygame_text: bool = True
+    use_pygame_text: bool = False
 
 # ---- Sprite-Assets als JAX-Arrays ------------------------------------------------
 
@@ -643,7 +642,7 @@ class RenderAssets(NamedTuple):
     rock: jnp.ndarray
 
 def _device_put_u8(arr: np.ndarray) -> jnp.ndarray:
-    return jax.device_put(jnp.asarray(arr, dtype=jnp.uint8))
+    return jax.device_put(jnp.array(arr, dtype=jnp.uint8))
 
 def _load_sprite_npy(base_dir: str, name: str) -> jnp.ndarray:
     path = os.path.join(base_dir, name)
@@ -656,7 +655,7 @@ def _load_sprite_npy(base_dir: str, name: str) -> jnp.ndarray:
 def _recolor_rgba(sprite_rgba: jnp.ndarray, rgb: Tuple[int,int,int]) -> jnp.ndarray:
     """Ersetzt RGB an allen Pixeln mit Alpha>0 (gerade, einfache Variante)."""
     mask = (sprite_rgba[..., 3:4] > 0).astype(jnp.uint8)  # (H,W,1)
-    rgb_arr = jnp.asarray(jnp.array(rgb, dtype=jnp.uint8))[None, None, :].astype(jnp.uint8)
+    rgb_arr = jnp.array(jnp.array(rgb, dtype=jnp.uint8))[None, None, :].astype(jnp.uint8)
     new_rgb = (sprite_rgba[..., :3] * (1 - mask)) + (rgb_arr * mask)
     return jnp.concatenate([new_rgb, sprite_rgba[..., 3:4]], axis=-1)
 
@@ -674,8 +673,8 @@ def _alpha_over(dst: jnp.ndarray, src: jnp.ndarray, top: jnp.ndarray, left: jnp.
     H, W, _ = dst.shape
     h, w, _ = src.shape
 
-    top  = jnp.asarray(top,  jnp.int32)
-    left = jnp.asarray(left, jnp.int32)
+    top  = jnp.array(top,  jnp.int32)
+    left = jnp.array(left, jnp.int32)
 
     # Puffer-Padding: groß genug, dass wir immer (h,w) aus der gepaddeten Fläche schneiden können
     ph = h
@@ -868,149 +867,3 @@ class SkiingRenderer(JAXGameRenderer):
         rgba = self._render_fn(state, self.assets)   # (210,160,4) uint8
         return rgba[..., :3]                         # -> (210,160,3) RGB
 
-class GameRenderer:
-    def __init__(self, game_config: GameConfig, render_config: RenderConfig):
-        self.game_config = game_config
-        self.render_config = render_config
-
-        pygame.init()
-        self.screen = pygame.display.set_mode(
-            (
-                self.game_config.screen_width * self.render_config.scale_factor,
-                self.game_config.screen_height * self.render_config.scale_factor,
-            )
-        )
-        pygame.display.set_caption("JAX Skiing Game")
-
-        # ---- Sprite-Assets als JAX Arrays laden (einmalig) ----
-        base_path = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
-        sprite_dir = os.path.join(base_path, "jaxatari", "games", "sprites", "skiing")
-
-        skier_left   = _load_sprite_npy(sprite_dir, "skiier_right.npy")  # (ALE links/rechts sind invertiert in deinem Bestand)
-        skier_front  = _load_sprite_npy(sprite_dir, "skiier_front.npy")
-        skier_right  = _load_sprite_npy(sprite_dir, "skiier_left.npy")
-        skier_fallen = _load_sprite_npy(sprite_dir, "skier_fallen.npy")
-
-        flag_red = _load_sprite_npy(sprite_dir, "checkered_flag.npy")
-        flag_blue = _recolor_rgba(flag_red, (0, 96, 255))
-        tree = _load_sprite_npy(sprite_dir, "tree.npy")
-        rock = _load_sprite_npy(sprite_dir, "stone.npy")
-
-        self.assets = RenderAssets(
-            skier_left=skier_left,
-            skier_front=skier_front,
-            skier_right=skier_right,
-            skier_fallen=skier_fallen,
-            flag_red=flag_red,
-            flag_blue=flag_blue,
-            tree=tree,
-            rock=rock,
-        )
-
-        # JIT-Compile die Renderfunktion mit statischen Parametern (Ints/Bools)
-        self._render_jit = partial(
-            render_frame,
-            screen_width=self.game_config.screen_width,
-            screen_height=self.game_config.screen_height,
-            scale_factor=self.render_config.scale_factor,
-            skier_y=self.game_config.skier_y,
-            flag_distance=self.game_config.flag_distance,
-            draw_ui_jax=False,
-        )
-        # Warmup
-        # _ = self._render_jit(self._fake_state(), self.assets)
-
-        # Font nur noch für UI-Fallback:
-        self.font = pygame.font.Font(None, 36)
-
-    # --- Mini-Helfer: RGBA-ndarray auf den Screen bringen (ohne Layout-Logik) ---
-    def _blit_rgba_to_screen(self, rgba: np.ndarray):
-        # rgba: (H, W, 4) uint8
-        H, W, _ = rgba.shape
-        surf = pygame.Surface((W, H), pygame.SRCALPHA)
-        # Pygame erwartet (W,H,3) und (W,H) für alpha
-        rgb = rgba[..., :3].transpose(1, 0, 2).copy()
-        a   = rgba[..., 3].T.copy()
-        pygame.surfarray.pixels3d(surf)[:] = rgb
-        pygame.surfarray.pixels_alpha(surf)[:] = a
-        self.screen.blit(surf, (0, 0))
-
-    def render(self, state: GameState):
-        # 1) Pure JAX Frame rendern
-        frame = self._render_jit(state, self.assets)  # jnp.uint8[H,W,4]
-        frame_np = np.asarray(frame)
-        # 2) UI-Text via Pygame oben drauf (identische Optik)
-        if self.render_config.use_pygame_text:
-            self._blit_rgba_to_screen(frame_np)
-            # Score mittig oben, Zeit darunter (wie vorher)
-            score_text = self.font.render(f"Score: {int(state.score)}", True, self.render_config.text_color)
-            total_time = int(state.time)
-            minutes = total_time // (60 * 60)
-            seconds = (total_time // 60) % 60
-            hundredths = total_time % 60
-            time_str = f"{minutes:02}:{seconds:02}.{hundredths:02}"
-            time_text = self.font.render(time_str, True, self.render_config.text_color)
-
-            screen_width_px = self.game_config.screen_width * self.render_config.scale_factor
-            score_rect = score_text.get_rect(center=(screen_width_px // 2, 10 + score_text.get_height() // 2))
-            time_rect = time_text.get_rect(center=(screen_width_px // 2, 10 + score_text.get_height() + time_text.get_height() // 2))
-            self.screen.blit(score_text, score_rect)
-            self.screen.blit(time_text, time_rect)
-
-            if state.game_over:
-                game_over_text = self.font.render("You Won!", True, self.render_config.game_over_color)
-                text_rect = game_over_text.get_rect(
-                    center=(self.game_config.screen_width * self.render_config.scale_factor // 2,
-                            self.game_config.screen_height * self.render_config.scale_factor // 2)
-                )
-                self.screen.blit(game_over_text, text_rect)
-        else:
-            self._blit_rgba_to_screen(frame_np)
-
-        pygame.display.flip()
-
-    def close(self):
-        """Clean up pygame resources"""
-        pygame.quit()
-
-
-def main():
-    # Create configurations
-    game_config = GameConfig()
-    render_config = RenderConfig()
-    consts = SkiingConstants()
-
-    while True:
-        # Initialize game and renderer
-        game = JaxSkiing()
-        _, state = game.reset()
-        renderer = GameRenderer(game_config, render_config)
-
-        clock = pygame.time.Clock()
-        running = True
-        while running and not state.game_over:
-            for event in pygame.event.get():
-                if event.type == pygame.QUIT:
-                    running = False  # Fenster-X: Spiel beenden
-                    pygame.quit()
-                    return
-            keys = pygame.key.get_pressed()
-            action = consts.NOOP
-            VALID_ACTIONS = {consts.NOOP, consts.LEFT, consts.RIGHT}
-            if keys[pygame.K_a]:
-                action = consts.LEFT
-            elif keys[pygame.K_d]:
-                action = consts.RIGHT
-            if action not in VALID_ACTIONS:
-                action = consts.NOOP
-
-            obs, state, reward, done, info = game.step(state, action)
-            renderer.render(state)
-
-            clock.tick(60)
-
-        renderer.close()
-
-
-if __name__ == "__main__":
-    main()
