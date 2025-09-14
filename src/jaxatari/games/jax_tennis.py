@@ -739,7 +739,8 @@ def ball_step(state: TennisState, action, consts) -> TennisState:
         Returns:
             int: The calculated bounce velocity
         """
-        return consts.BALL_SERVING_BOUNCE_VELOCITY_BASE + random.uniform(rand_key) * consts.BALL_SERVING_BOUNCE_VELOCITY_RANDOM_OFFSET
+
+        return consts.BALL_SERVING_BOUNCE_VELOCITY_BASE + random.uniform(state.random_key) * consts.BALL_SERVING_BOUNCE_VELOCITY_RANDOM_OFFSET
 
     ball_state = state.ball_state
 
@@ -936,6 +937,8 @@ def ball_step(state: TennisState, action, consts) -> TennisState:
         None
     )
 
+    new_random_key, _ = jax.random.split(state.random_key)
+
     return TennisState(
         player_state,
         enemy_state,
@@ -965,7 +968,7 @@ def ball_step(state: TennisState, action, consts) -> TennisState:
         ),
         state.counter,
         animator_state=state.animator_state,
-        random_key=state.random_key
+        random_key=new_random_key
     )
 
 
@@ -1512,7 +1515,7 @@ class TennisConstants(NamedTuple):
     # ball constants
     BALL_GRAVITY_PER_FRAME: chex.Array = jnp.array(1.1)
     BALL_SERVING_BOUNCE_VELOCITY_BASE: chex.Array = jnp.array(21)
-    BALL_SERVING_BOUNCE_VELOCITY_RANDOM_OFFSET: chex.Array = jnp.array(2)
+    BALL_SERVING_BOUNCE_VELOCITY_RANDOM_OFFSET: chex.Array = jnp.array(1)
     BALL_WIDTH: chex.Array = jnp.array(2.0)
     LONG_HIT_THRESHOLD_TOP: chex.Array = jnp.array(52)
     LONG_HIT_THRESHOLD_BOTTOM: chex.Array = jnp.array(121)
