@@ -413,6 +413,32 @@ class BeamRiderEnv(JaxEnvironment[BeamRiderState, BeamRiderObservation, BeamRide
             dtype=jnp.uint8
         )
 
+    def object_space(self) -> spaces.Box:
+        """Returns the observation space for object-centric wrappers with correct dtype"""
+        # Calculate the total size of the flattened observation
+        obs_size = (
+                1 +  # ship_x
+                1 +  # ship_y
+                1 +  # ship_beam (will be cast to float32)
+                self.constants.MAX_PROJECTILES * 5 +  # projectiles
+                self.constants.MAX_PROJECTILES * 5 +  # torpedo_projectiles
+                self.constants.MAX_ENEMIES * 17 +  # enemies
+                1 +  # score (will be cast to float32)
+                1 +  # lives (will be cast to float32)
+                1 +  # current_sector (will be cast to float32)
+                1  # torpedoes_remaining (will be cast to float32)
+        )
+
+        # Create bounds that accommodate all possible values
+        # Use float32 to match the actual observation dtype
+        return spaces.Box(
+            low=-1000.0,  # Large negative bound to handle all possible values
+            high=1000.0,  # Large positive bound to handle all possible values
+            shape=(obs_size,),
+            dtype=jnp.float32  # CRITICAL: This must match obs_to_flat_array output
+        )
+
+
     @partial(jax.jit, static_argnums=(0,))
     def _get_all_reward(self, previous_state: BeamRiderState, state: BeamRiderState):
         if self.reward_funcs is None:
@@ -459,16 +485,16 @@ class BeamRiderEnv(JaxEnvironment[BeamRiderState, BeamRiderObservation, BeamRide
     def obs_to_flat_array(self, obs: BeamRiderObservation) -> jnp.ndarray:
         """Convert observation to flat array with consistent float32 dtype"""
         flat_components = [
-            obs.ship_x.reshape(-1).astype(jnp.float32),
-            obs.ship_y.reshape(-1).astype(jnp.float32),
-            obs.ship_beam.reshape(-1).astype(jnp.float32),
-            obs.projectiles.reshape(-1).astype(jnp.float32),
-            obs.torpedo_projectiles.reshape(-1).astype(jnp.float32),
-            obs.enemies.reshape(-1).astype(jnp.float32),
-            obs.score.reshape(-1).astype(jnp.float32),
-            obs.lives.reshape(-1).astype(jnp.float32),
-            obs.current_sector.reshape(-1).astype(jnp.float32),
-            obs.torpedoes_remaining.reshape(-1).astype(jnp.float32),
+            obs.ship_x.flatten().astype(jnp.float32),
+            obs.ship_y.flatten().astype(jnp.float32),
+            obs.ship_beam.flatten().astype(jnp.float32),
+            obs.projectiles.flatten().astype(jnp.float32),
+            obs.torpedo_projectiles.flatten().astype(jnp.float32),
+            obs.enemies.flatten().astype(jnp.float32),
+            obs.score.flatten().astype(jnp.float32),
+            obs.lives.flatten().astype(jnp.float32),
+            obs.current_sector.flatten().astype(jnp.float32),
+            obs.torpedoes_remaining.flatten().astype(jnp.float32),
         ]
         result = jnp.concatenate(flat_components)
         # Ensure final result is float32
