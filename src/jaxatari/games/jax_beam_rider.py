@@ -3646,6 +3646,16 @@ class BeamRiderRenderer(JAXGameRenderer):
             [1, 0, 1, 1, 0, 1, 1, 1],
             [0, 0, 0, 1, 1, 1, 0, 0],
         ], dtype=jnp.uint8)
+        # Green blocker sprite
+        self.green_blocker_sprite = jnp.array([
+            [0, 0, 0, 0, 0, 0, 0, 0],
+            [0, 0, 0, 1, 0, 0, 0, 0],
+            [0, 0, 1, 0, 1, 0, 0, 0],
+            [1, 1, 1, 1, 1, 1, 1, 0],
+            [0, 0, 1, 0, 1, 0, 0, 0],
+            [0, 0, 0, 1, 0, 0, 0, 0],
+            [0, 0, 0, 0, 0, 0, 0, 0],
+        ], dtype=jnp.uint8)
         # JAX rendering components
         self.ship_sprite_surface = self._create_ship_surface()
         self.small_ship_surface = self._create_small_ship_surface()
@@ -4206,6 +4216,7 @@ class BeamRiderRenderer(JAXGameRenderer):
             no_scaling = sentinel_ship | side_spawner
             is_white_saucer = enemy_type == self.constants.ENEMY_TYPE_WHITE_SAUCER
             is_brown_debris = enemy_type == self.constants.ENEMY_TYPE_BROWN_DEBRIS
+            is_green_blocker = enemy_type == self.constants.ENEMY_TYPE_GREEN_BLOCKER
 
             # Get base enemy dimensions
             base_width = jnp.where(
@@ -4239,7 +4250,8 @@ class BeamRiderRenderer(JAXGameRenderer):
             # Use sprites for white saucers and brown debris with sufficient scale
             use_white_saucer_sprite = is_white_saucer & (scale_factor >= 0.4) & active & ~is_dot
             use_brown_debris_sprite = is_brown_debris & (scale_factor >= 0.4) & active & ~is_dot
-            use_any_sprite = use_white_saucer_sprite | use_brown_debris_sprite
+            use_green_blocker_sprite = is_green_blocker & active  # Green blockers don't scale, always use sprite
+            use_any_sprite = use_white_saucer_sprite | use_brown_debris_sprite | use_green_blocker_sprite
 
             # Center the scaled enemy at its position
             x_offset = ((base_width - scaled_width) / 2).astype(int)
@@ -4332,7 +4344,13 @@ class BeamRiderRenderer(JAXGameRenderer):
                 lambda s: s,
                 screen
             )
-
+            screen = jax.lax.cond(
+                use_green_blocker_sprite,
+                lambda s: draw_enemy_sprite(self.green_blocker_sprite,
+                                            jnp.array(self.constants.GREEN_BLOCKER_COLOR, dtype=jnp.uint8)),
+                lambda s: s,
+                screen
+            )
             # For very small enemies (dots)
             dot_mask = (
                     is_dot &
