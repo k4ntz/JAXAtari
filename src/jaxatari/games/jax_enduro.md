@@ -65,6 +65,8 @@
   - Enemies do not change lane position
   - They do have the same speed (24) that does not change
     - Config: ``opponent_speed``
+  - Their relative speed to the player can be configured with:
+    - ``opponent_relative_speed_factor``
 - Opponent Generation
   - All opponents are generated upfront with a random seed
     - Stored in: ``state.opponent_pos_and_color``

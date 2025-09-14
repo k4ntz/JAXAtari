@@ -29,7 +29,13 @@ Observation:
 - improve observation function 
 - reduce observation when fog
 
+Performance:
+- Improve collision handling
 
+
+Cleanup:
+- debug renderer in main file
+- new docu folder
 """
 
 
@@ -304,7 +310,6 @@ class EnduroGameState(NamedTuple):
     opponent_pos_and_color: chex.Array  # shape (N, 2) where [:, 0] is x, [:, 1] is y
     visible_opponent_positions: chex.Array
     opponent_index: chex.Array
-    opponent_window: chex.Array
     is_collision: chex.Array
 
     # visible but implicit
@@ -547,7 +552,6 @@ class JaxEnduro(JaxEnvironment[EnduroGameState, EnduroObservation, EnduroInfo, E
             opponent_pos_and_color=opponent_spawns,
             visible_opponent_positions=visible_opponent_positions,
             opponent_index=jnp.array(0.0),
-            opponent_window=jnp.array(0.0),
             is_collision=jnp.bool_(False),
 
             # visible but implicit
@@ -557,8 +561,8 @@ class JaxEnduro(JaxEnvironment[EnduroGameState, EnduroObservation, EnduroInfo, E
             cooldown_drift_direction=jnp.array(0),
 
             # track
-            track_top_x=jnp.array(0),
-            track_top_x_curve_offset=jnp.array(0),
+            track_top_x=jnp.array(0.0),
+            track_top_x_curve_offset=jnp.array(0.0),
             visible_track_left=left_xs,
             visible_track_right=right_xs,
             visible_track_spaces=self._generate_track_spaces(),
@@ -702,10 +706,6 @@ class JaxEnduro(JaxEnvironment[EnduroGameState, EnduroObservation, EnduroInfo, E
         #    The track moves in the opposite position of the car.
         new_track_top_x = (self.config.track_x_start + self.config.player_x_start - new_x_abs).astype(jnp.int32)
 
-        # make sure the curve is not turning further than the bottom of the track
-        # min_offset_allowed = jnp.min(state.visible_track_left) - new_track_top_x
-        # max_offset_allowed = jnp.max(state.visible_track_right) - new_track_top_x
-
         # 2. Define the target offset based on the curvature.
         #    This is the value we want to eventually reach when the curve is fully curved.
         target_offset = curvature * self.config.track_max_top_x_offset  # e.g., -1 * 50 = -50, or 0 * 50 = 0
@@ -787,11 +787,12 @@ class JaxEnduro(JaxEnvironment[EnduroGameState, EnduroObservation, EnduroInfo, E
         adjusted_opponents_pos = self._adjust_opponent_positions_when_overtaking(state, new_opponent_index)
         state = state._replace(opponent_pos_and_color=adjusted_opponents_pos)
 
+        # REMOVED
         # calculate which opponents are in the 7 visible opponent slots (for debugging only)
-        new_opponent_window = state.opponent_pos_and_color[0][
-            (jnp.floor(state.opponent_index).astype(jnp.int32)
-             + jnp.arange(7)) % state.opponent_pos_and_color[0].shape[0]
-            ]
+        # new_opponent_window = state.opponent_pos_and_color[0][
+        #     (jnp.floor(state.opponent_index).astype(jnp.int32)
+        #      + jnp.arange(7)) % state.opponent_pos_and_color[0].shape[0]
+        #     ]
 
         # ====== Overtaking ======
         # Simple overtaking logic
@@ -816,21 +817,21 @@ class JaxEnduro(JaxEnvironment[EnduroGameState, EnduroObservation, EnduroInfo, E
                 state.level - 1)
 
         # ===== Opponent Collision =====
-        collided_car = self._check_car_opponent_collision(
+        is_collision = self._check_car_opponent_collision(
             new_x_abs.astype(jnp.int32),
             new_y_abs.astype(jnp.int32),
             new_visible_opponent_positions)
 
         # apply a cooldown if there was a collision
         new_cooldown = jnp.where(
-            collided_car,
+            is_collision,
             self.config.car_crash_cooldown_frames,  # Set cooldown if collision
             new_cooldown  # Keep decremented cooldown if no collision from the beginning of the function
         )
 
         # Determine which direction the car drifts when there is a collision with a car
         new_cooldown_drift_direction = jnp.where(
-            collided_car,
+            is_collision,
             self._determine_kickback_direction(state),
             new_cooldown_drift_direction
         )
@@ -900,10 +901,9 @@ class JaxEnduro(JaxEnvironment[EnduroGameState, EnduroObservation, EnduroInfo, E
 
             opponent_index=new_opponent_index,
             visible_opponent_positions=new_visible_opponent_positions,
-            opponent_window=new_opponent_window,
             cars_overtaken=new_cars_overtaken,
             cars_to_overtake=new_cars_to_overtake,
-            is_collision=collided_car,
+            is_collision=is_collision,
 
             weather_index=new_weather_index,
             mountain_left_x=new_mountain_left_x,
@@ -978,7 +978,7 @@ class JaxEnduro(JaxEnvironment[EnduroGameState, EnduroObservation, EnduroInfo, E
     def _generate_viewable_track(
             self,
             top_x: jnp.int32,
-            top_x_curve_offset: jnp.float32  # Your signed offset, e.g., -50 to +50
+            top_x_curve_offset: jnp.float32
     ) -> tuple[jnp.ndarray, jnp.ndarray]:
         """
         Generates the viewable track by applying a progressive horizontal shift.
@@ -1608,7 +1608,7 @@ class JaxEnduro(JaxEnvironment[EnduroGameState, EnduroObservation, EnduroInfo, E
         final_collision_1 = car_1_valid & collision_with_car_1
 
         # --- Final result is true if there is a collision with either car ---
-        return jnp.where(final_collision_0 | final_collision_1, 1, 0)
+        return jnp.where(final_collision_0 | final_collision_1, True, False)
 
     def _determine_kickback_direction(self, state: EnduroGameState):
         """
@@ -1680,7 +1680,7 @@ class EnduroRenderer(JAXGameRenderer):
                 # load npy files
                 if filename.endswith(".npy"):
                     full_path = os.path.join(folder_path, filename)
-                    frame = aj.load_frame_with_animation(full_path, transpose=False)
+                    frame = load_frame_with_animation(full_path, transpose=False)
                     # save with the full extension, so remember to also load them with .npy
                     sprites[filename] = frame.astype(jnp.uint8)
 
@@ -1748,7 +1748,10 @@ class EnduroRenderer(JAXGameRenderer):
         player_car = aj.get_sprite_frame(self.sprites['car_0.npy'], frame_index)
 
         # get the car position in an absolute coordinate
-        raster = aj.render_at(raster, state.player_x_abs_position, state.player_y_abs_position, player_car)
+        raster = aj.render_at(raster,
+                              state.player_x_abs_position,
+                              state.player_y_abs_position.astype(jnp.int32),
+                              player_car)
 
         return raster
 
@@ -2330,7 +2333,6 @@ class EnduroRenderer(JAXGameRenderer):
         Renders the background and score box under the player screen to avoid that opponent cars are visible there.
         Args:
             raster: the current raster
-            state: the current game state
 
         Returns:
             a raster with the background overlay
@@ -2382,6 +2384,62 @@ class EnduroRenderer(JAXGameRenderer):
             raster
         )
         return raster
+
+
+def load_frame_with_animation(path: str, transpose: bool = True) -> jnp.ndarray:
+    """
+    Loads a sprite from .npy file.
+    - If it's a static frame (shape: H, W, 4), wraps it to shape (1, W, H, 4)
+    - If it's an animation (shape: N, H, W, 4), transposes each frame to (W, H, 4)
+
+    Returns:
+        JAX array of shape (NumFrames, W, H, 4)
+    """
+    arr = np.load(path)  # Use NumPy to inspect shape first
+
+    if arr.ndim == 3:
+        if arr.shape[2] != 4:
+            raise ValueError(f"Static sprite must have 4 channels (RGBA), got shape {arr.shape}")
+        if transpose:
+            arr = np.transpose(arr, (1, 0, 2))  # HWC -> WHC
+        arr = arr[None, ...]  # Add frame axis → (1, W, H, 4)
+
+    elif arr.ndim == 4:
+        if arr.shape[3] != 4:
+            raise ValueError(f"Animated sprite must have 4 channels (RGBA), got shape {arr.shape}")
+        if transpose:
+            arr = np.transpose(arr, (0, 2, 1, 3))  # NHWC -> NWHC
+
+    else:
+        raise ValueError(f"Unsupported array shape: {arr.shape}")
+
+    return jnp.array(arr).astype(jnp.uint8)
+
+
+def change_sprite_color(sprite, rgb_color):
+    """
+    Change the color of an RGBA sprite.
+
+    Args:
+        sprite: 3D array with shape (W, H, C) representing an RGBA sprite
+        rgb_color: RGB color array [R, G, B]
+
+    Returns:
+        3D RGBA array with the sprite recolored
+    """
+    # Create a mask for non-transparent pixels (assuming alpha channel is index 3)
+    mask = sprite[..., 3] > 0  # Shape (W, H) - check alpha channel
+
+    # Create output sprite, keeping original alpha
+    colored_sprite = sprite.copy()
+
+    # Apply new RGB colors where mask is True, preserve alpha channel
+    colored_sprite = colored_sprite.at[..., 0].set(jnp.where(mask, rgb_color[0], sprite[..., 0]))
+    colored_sprite = colored_sprite.at[..., 1].set(jnp.where(mask, rgb_color[1], sprite[..., 1]))
+    colored_sprite = colored_sprite.at[..., 2].set(jnp.where(mask, rgb_color[2], sprite[..., 2]))
+    # Keep original alpha: colored_sprite[..., 3] stays the same
+
+    return colored_sprite.astype(jnp.uint8)
 
 
 """
@@ -2558,3 +2616,4 @@ list.
 
 YOUR BEST GAME SCORES
 """
+
