@@ -398,7 +398,7 @@ class BeamRiderEnv(JaxEnvironment[BeamRiderState, BeamRiderObservation, BeamRide
             # Enemies bounds are mostly correct but need slight adjustment
             "enemies": spaces.Box(low=-100, high=max(self.constants.SCREEN_WIDTH, self.constants.SCREEN_HEIGHT) + 100,
                                   shape=(self.constants.MAX_ENEMIES, 17), dtype=jnp.float32),
-            "score": spaces.Box(low=0, high=999999, shape=(), dtype=jnp.int16),
+            "score": spaces.Box(low=0, high=999999, shape=(), dtype=jnp.float32),
             "lives": spaces.Box(low=0, high=10, shape=(), dtype=jnp.int8),
             "current_sector": spaces.Box(low=1, high=99, shape=(), dtype=jnp.int8),
             "torpedoes_remaining": spaces.Box(low=0, high=self.constants.TORPEDOES_PER_SECTOR, shape=(),
