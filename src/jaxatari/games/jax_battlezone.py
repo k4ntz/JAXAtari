@@ -944,18 +944,18 @@ class JaxBattleZone(JaxEnvironment[BattleZoneState, BattleZoneObservation, chex.
                                       0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0])
         enemy_positions_y = jnp.array([0.0, 0.0, 200.0, -200.0, 0.0, 0.0, 0.0, 0.0,
                                       0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0])
-        enemy_types = jnp.zeros(16)  # All enemy tanks (type 0)
-        enemy_subtypes = jnp.array([0, 0, 0, 0] + [-1] * 12)
-        # Initial angles for enemy tanks
-        enemy_angles = jnp.array([jnp.pi, 0.0, -jnp.pi/2, jnp.pi/2, 0.0, 0.0, 0.0, 0.0,
-                                 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0])
-        # Only first 4 enemies alive initially
-        enemy_alive = jnp.array([1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0], dtype=jnp.int32)
+        enemy_types = jnp.zeros(16)  # All enemy obstacles default to type 0 slot (enemy when alive)
+        # Start with a single primary hostile (tank) alive; other slots are empty (-1 subtype)
+        enemy_subtypes = jnp.array([0] + [-1] * 15)
+        # Initial angles for enemy tanks (primary at slot 0)
+        enemy_angles = jnp.array([jnp.pi] + [0.0] * 15)
+        # Only first primary enemy alive initially (sequential hostiles); saucers may spawn later
+        enemy_alive = jnp.array([1] + [0] * 15, dtype=jnp.int32)
         enemy_fire_cooldown = jnp.zeros(16)
         enemy_ai_state = jnp.zeros(16, dtype=jnp.int32)
         enemy_target_angle = enemy_angles.copy()
         enemy_state_timer = jnp.zeros(16)
-        
+
         obstacles = Obstacle(
             x=enemy_positions_x,
             y=enemy_positions_y,
@@ -1072,8 +1072,9 @@ class JaxBattleZone(JaxEnvironment[BattleZoneState, BattleZoneObservation, chex.
             enemy_positions_y = jnp.array([0.0, 0.0, 200.0, -200.0, 0.0, 0.0, 0.0, 0.0,
                                           0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0])
             enemy_types = jnp.zeros(16)
-            enemy_angles = jnp.array([jnp.pi, 0.0, -jnp.pi/2, jnp.pi/2] + [0.0]*12)
-            enemy_alive = jnp.array([1,1,1,1] + [0]*12, dtype=jnp.int32)
+            # Primary reset: single primary hostile alive; others empty
+            enemy_angles = jnp.array([jnp.pi] + [0.0] * 15)
+            enemy_alive = jnp.array([1] + [0] * 15, dtype=jnp.int32)
             enemy_fire_cooldown = jnp.zeros(16)
             enemy_ai_state = jnp.zeros(16, dtype=jnp.int32)
             enemy_target_angle = enemy_angles.copy()
@@ -1083,7 +1084,8 @@ class JaxBattleZone(JaxEnvironment[BattleZoneState, BattleZoneObservation, chex.
                 x=enemy_positions_x,
                 y=enemy_positions_y,
                 obstacle_type=enemy_types,
-                enemy_subtype=jnp.array([0,0,0,0] + [-1]*12),
+                # Single primary hostile at slot 0, other slots empty (-1)
+                enemy_subtype=jnp.array([0] + [-1] * 15),
                 angle=enemy_angles,
                 alive=enemy_alive,
                 fire_cooldown=enemy_fire_cooldown,
