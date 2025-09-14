@@ -1861,11 +1861,60 @@ class PhoenixRenderer(JAXGameRenderer):
         raster, _ = jax.lax.scan(render_boss_block_green, raster, green_block_positions)
         enemy_proj_positions = jnp.stack((state.enemy_projectile_x, state.enemy_projectile_y), axis=1)
         raster, _ = jax.lax.scan(render_enemy_projectile, raster, enemy_proj_positions)
+
         # render score
-        score_array = jr.int_to_digits(state.score, max_digits=5)  # 5 for now
-        raster = jr.render_label(raster, 60, 10, score_array, self.DIGITS, spacing=8)
+        #score_array = jr.int_to_digits(state.score, max_digits=5)  # 5 for now
+        #raster = jr.render_label(raster, 60, 10, score_array, self.DIGITS, spacing=8)
         # render lives
-        lives_value = jnp.sum(jr.int_to_digits(state.lives, max_digits=2))
-        raster = jr.render_indicator(raster, 70, 20, lives_value, self.LIFE_INDICATOR, spacing=4)
+        #lives_value = jnp.sum(jr.int_to_digits(state.lives, max_digits=2))
+        #raster = jr.render_indicator(raster, 70, 20, lives_value, self.LIFE_INDICATOR, spacing=4)
+
+        # --- Score: wächst nach links, rechte Kante konstant ---
+        max_digits = jnp.int32(5)
+        spacing = jnp.int32(8)
+        digit_w = jnp.int32(self.DIGITS[0].shape[1])
+
+        # Fixes 5er-Feld horizontal zentrieren (Score selbst NICHT neu zentrieren)
+        field_total_w = max_digits * spacing
+        base_left = (self.consts.WIDTH - field_total_w) // 2
+        y = jnp.int32(10)
+
+        score = jnp.clip(state.score.astype(jnp.int32), 0, 99999)
+        places = jnp.array([10000, 1000, 100, 10, 1], dtype=jnp.int32)
+        digits = (score // places) % 10
+
+        has_nonzero = jnp.any(digits != 0)
+        first_idx = jnp.where(has_nonzero, jnp.argmax(digits != 0), 4)  # bei 0: nur letzte Stelle sichtbar
+        count = jnp.where(has_nonzero, 5 - first_idx, 1)
+
+        # Feste rechte Kante des Score-Feldes
+        score_right = base_left + (max_digits - 1) * spacing + digit_w
+
+        def body(i, rr):
+            d = digits[i].astype(jnp.int32)
+            visible = i >= first_idx
+            x = base_left + i * spacing
+
+            def draw(r):
+                sprite = self.DIGITS[d]
+                return jr.render_at(r, x, y, sprite)
+
+            return jax.lax.cond(visible, draw, lambda r: r, rr)
+
+        raster = jax.lax.fori_loop(0, 5, body, raster)
+
+        # --- Leben: rechts am festen Score-Ende ausrichten ---
+        life_w = jnp.int32(self.LIFE_INDICATOR.shape[1])
+        life_spacing = jnp.int32(4)
+        lives_count = jnp.clip(state.lives.astype(jnp.int32), 0, 99)
+
+        total_lives_w = jnp.where(lives_count > 0, (lives_count - 1) * life_spacing + life_w, 0)
+        lives_x = score_right - total_lives_w
+        lives_y = jnp.int32(20)
+
+        def draw_lives(r):
+            return jr.render_indicator(r, lives_x, lives_y, lives_count, self.LIFE_INDICATOR, spacing=life_spacing)
+
+        raster = jax.lax.cond(lives_count > 0, draw_lives, lambda r: r, raster)
 
         return raster
