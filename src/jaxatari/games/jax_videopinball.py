@@ -108,10 +108,10 @@ HEIGHT = 210
 # Physics constants
 # TODO: check if these are correct
 GRAVITY = 0.03  # 0.12
-VELOCITY_DAMPENING_VALUE = 0.12  # 24
-VELOCITY_ACCELERATION_VALUE = 0.15
-BALL_MAX_SPEED = 3
-BALL_MIN_SPEED = 0.3
+VELOCITY_DAMPENING_VALUE = 0.075  # 24
+VELOCITY_ACCELERATION_VALUE = 0.125
+BALL_MAX_SPEED = 3.5
+BALL_MIN_SPEED = 0.35
 NUDGE_EFFECT_INTERVAL = 1  # Num steps in between nudge changing 
 NUDGE_EFFECT_AMOUNT = jnp.array(0.3).astype(jnp.float32)  # Amount of nudge effect applied to the ball's velocity
 TILT_COUNT_INCREASE_INTERVAL = jnp.array(4).astype(jnp.int32)  # Number of steps after which the tilt counter increases
@@ -412,13 +412,13 @@ FLIPPER_PIVOT_Y_TOP = jnp.array(184)
 FLIPPER_PIVOT_Y_BOT = jnp.array(190)  # pixel + 1 
 
 FLIPPER_00_TOP_END_Y = jnp.array(190)
-FLIPPER_00_BOT_END_Y = jnp.array(191)
+FLIPPER_00_BOT_END_Y = jnp.array(192)  # pixel + 1
 FLIPPER_16_TOP_END_Y = jnp.array(186)
-FLIPPER_16_BOT_END_Y = jnp.array(187)
+FLIPPER_16_BOT_END_Y = jnp.array(188)  # pixel + 1
 FLIPPER_32_TOP_END_Y = jnp.array(181)
-FLIPPER_32_BOT_END_Y = jnp.array(182)
+FLIPPER_32_BOT_END_Y = jnp.array(183)  # pixel + 1
 FLIPPER_48_TOP_END_Y = jnp.array(177)
-FLIPPER_48_BOT_END_Y = jnp.array(178)
+FLIPPER_48_BOT_END_Y = jnp.array(179)  # pixel + 1
 
 FLIPPER_LEFT_00_END_X = FLIPPER_LEFT_16_END_X = FLIPPER_LEFT_32_END_X = jnp.array(77)  # pixel + 1
 FLIPPER_LEFT_48_END_X = jnp.array(76)  # pixel + 1
@@ -1628,6 +1628,10 @@ class VideoPinballState(NamedTuple):
 
     left_flipper_angle: chex.Array
     right_flipper_angle: chex.Array
+    left_flipper_counter: chex.Array
+    right_flipper_counter: chex.Array
+    left_flipper_active: chex.Array
+    right_flipper_active: chex.Array
 
     plunger_position: (
         chex.Array
@@ -1652,6 +1656,7 @@ class VideoPinballState(NamedTuple):
     color_cycling: chex.Array
     tilt_mode_active: chex.Array
     tilt_counter: chex.Array
+    rng_key: chex.Array
     # obs_stack: chex.ArrayTree     What is this for? Pong doesnt have this right?
 
 
@@ -1759,30 +1764,55 @@ def flipper_step(state: VideoPinballState, action: chex.Array):
         operand=state.right_flipper_angle,
     )
 
+    move_left_flipper_down = jnp.logical_and(
+        jnp.logical_not(jnp.logical_or(action == Action.LEFT, action == Action.UP)),
+        jnp.logical_and(state.left_flipper_angle > 0, state.left_flipper_counter == 0)
+    )
     left_flipper_angle = jax.lax.cond(
-        jnp.logical_and(
-            jnp.logical_not(jnp.logical_or(action == Action.LEFT, action == Action.UP)), state.left_flipper_angle > 0
-        ),
+        move_left_flipper_down,
         lambda a: a - 1,
         lambda a: a,
         operand=left_flipper_angle,
     )
+    countdown_left = jnp.logical_and(
+        jnp.logical_not(jnp.logical_or(action == Action.LEFT, action == Action.UP)),
+        state.left_flipper_counter > 0,
+    )
+    left_flipper_counter = jnp.where(
+        countdown_left,
+        state.left_flipper_counter - 1,
+        jnp.where(
+            left_flipper_angle > 0,
+            jnp.where(left_flipper_angle == FLIPPER_MAX_ANGLE, 2, 5),
+            0
+        )
+    )
 
+    move_right_flipper_down = jnp.logical_and(
+        jnp.logical_not(jnp.logical_or(action == Action.RIGHT, action == Action.UP)),
+        jnp.logical_and(state.right_flipper_angle > 0, state.right_flipper_counter == 0)
+    )
     right_flipper_angle = jax.lax.cond(
-        jnp.logical_and(
-            jnp.logical_not(jnp.logical_or(action == Action.RIGHT, action == Action.UP)), state.right_flipper_angle > 0
-        ),
+        move_right_flipper_down,
         lambda a: a - 1,
         lambda a: a,
         operand=right_flipper_angle,
     )
+    countdown_right = jnp.logical_and(
+        jnp.logical_not(jnp.logical_or(action == Action.RIGHT, action == Action.UP)),
+        state.right_flipper_counter > 0,
+    )
+    right_flipper_counter = jnp.where(
+        countdown_right,
+        state.right_flipper_counter - 1,
+        jnp.where(
+            right_flipper_angle > 0,
+            jnp.where(right_flipper_angle == FLIPPER_MAX_ANGLE, 2, 5),
+            0
+        )
+    )
 
-    # TODO update angles based on step phase?
-
-    # TODO ball acceleration should be computed from current and new plunger/flipper states or some other way
-    # _ball_property_ = ...
-
-    return left_flipper_angle, right_flipper_angle
+    return left_flipper_angle, right_flipper_angle, left_flipper_counter, right_flipper_counter
 
 @jax.jit
 def _default_triangle_collision_branch(
@@ -2189,7 +2219,7 @@ def _default_slab_collision_branch(
         jnp.square(trajectory_to_hit_point_x) + jnp.square(trajectory_to_hit_point_y)
     )
 
-    r = d_hit_point / d_trajectory
+    r = 1 - d_hit_point / d_trajectory
 
     reflected_velocity_x = r * reflected_velocity_x
     reflected_velocity_y = r * reflected_velocity_y
@@ -2231,20 +2261,16 @@ def _calc_slab_hit_point(
         _default_slab_collision_branch,
         ball_movement, scene_object, action
     )
-    
+
 @jax.jit
-def _calc_triangle_hit_point(
+def _is_inside_triangle(
     ball_movement: BallMovement,
-    scene_object: chex.Array,
-    action: chex.Array,
     ax: chex.Array,
     ay: chex.Array,
     bx: chex.Array,
     by: chex.Array,
     cx: chex.Array,
     cy: chex.Array,
-    flipper_up: chex.Array,
-    flipper_down: chex.Array,
 ):
     eps = 1e-8
 
@@ -2265,8 +2291,24 @@ def _calc_triangle_hit_point(
 
     inside = (all_non_neg | all_non_pos) & non_degenerate
 
+    return inside
+    
+@jax.jit
+def _calc_triangle_hit_point(
+    ball_movement: BallMovement,
+    scene_object: chex.Array,
+    action: chex.Array,
+    ax: chex.Array,
+    ay: chex.Array,
+    bx: chex.Array,
+    by: chex.Array,
+    cx: chex.Array,
+    cy: chex.Array,
+    flipper_up: chex.Array,
+    flipper_down: chex.Array,
+):
     return jax.lax.cond(
-        inside,
+        _is_inside_triangle(ball_movement, ax, ay, bx, by, cx, cy),
         lambda: _inside_triangle_collision_branch(ball_movement, scene_object, action, ax, ay, bx, by, cx, cy, flipper_up, flipper_down),
         lambda: _default_triangle_collision_branch(ball_movement, scene_object, action, ax, ay, bx, by, cx, cy)
     )
@@ -2334,7 +2376,7 @@ def _calc_flipper_hit_point(
     L = jnp.sqrt(scene_object[0] ** 2 + scene_object[1] ** 2)  # length of the line segment
 
     # next flipper position:
-    new_scene_object = jax.lax.cond(  # new angle of the line segment
+    next_pos_scene_object = jax.lax.cond(  # new angle of the line segment
         flipper_down,
         lambda: FLIPPERS[scene_object[6] - 1],
         lambda: jax.lax.cond(
@@ -2344,26 +2386,42 @@ def _calc_flipper_hit_point(
         )
     )
 
-    new_endx = jnp.where(
+    next_pos_endx = jnp.where(
         is_left_flipper,
-        new_scene_object[2] + new_scene_object[0],
-        new_scene_object[2]
+        next_pos_scene_object[2] + next_pos_scene_object[0],
+        next_pos_scene_object[2]
     )
-    new_endy = new_scene_object[3]
+    next_pos_endy = next_pos_scene_object[3]
+
+    other_side_scene_object = jax.lax.cond(
+        scene_object[6] % 8 < 4,
+        lambda: FLIPPERS[scene_object[6] + 4],
+        lambda: FLIPPERS[scene_object[6] - 4],
+    )
+    other_px = jnp.where(
+        is_left_flipper,
+        other_side_scene_object[2],
+        other_side_scene_object[2] + scene_object[0]
+    )
+    other_py = other_side_scene_object[3] + other_side_scene_object[1]
 
     flipper_moves = jnp.logical_or(flipper_up, flipper_down)
 
     hit_point = jax.lax.cond(
         flipper_moves,
-        lambda: _calc_triangle_hit_point(ball_movement, scene_object, action, px, py, endx, endy, new_endx, new_endy, flipper_up, flipper_down),
-        lambda: _calc_segment_hit_point(ball_movement, scene_object, action, px, py, endx, endy)
+        lambda: _calc_triangle_hit_point(ball_movement, scene_object, action, px, py, endx, endy, next_pos_endx, next_pos_endy, flipper_up, flipper_down),
+        lambda: jax.lax.cond(
+            _is_inside_triangle(ball_movement, px, py, endx, endy, other_px, other_py),
+            lambda: _calc_triangle_hit_point(ball_movement, scene_object, action, px, py, endx, endy, next_pos_endx, next_pos_endy, flipper_up, flipper_down),
+            lambda: _calc_segment_hit_point(ball_movement, scene_object, action, px, py, endx, endy)
+        )
     )
 
     velocity_factor = jnp.where(flipper_moves, 1., 1-VELOCITY_DAMPENING_VALUE)
 
     angular_velocity = jnp.sqrt(
         (hit_point[HitPointSelector.X] - px)**2 + (hit_point[HitPointSelector.Y] - py)**2
-    ) / L
+    ) / L * 0.5 + 0.5
     velocity_addition = jnp.where(
         flipper_moves,
         jnp.where(flipper_up, angular_velocity, -angular_velocity),
@@ -2451,49 +2509,6 @@ def _calc_spinner_hit_point(
         hit_point[HitPointSelector.RY+1:]
     ], axis=0)
 
-@jax.jit
-def _calc_bumper_hit_point(
-    ball_movement: BallMovement,
-    scene_object: chex.Array,
-    action: chex.Array,
-):
-    hit_point = _calc_slab_hit_point(ball_movement, scene_object, action)
-
-    scene_object_half_height = hit_point[HitPointSelector.OBJECT_HEIGHT] / 2.0
-    scene_object_half_width = hit_point[HitPointSelector.OBJECT_WIDTH] / 2.0
-    scene_object_middle_point_y = hit_point[HitPointSelector.OBJECT_Y] + scene_object_half_height
-    scene_object_middle_point_x = hit_point[HitPointSelector.OBJECT_X] + scene_object_half_width
-    
-    # Vector from bumper center to hit point
-    bumper_to_hit_x = hit_point[HitPointSelector.X] - scene_object_middle_point_x
-    bumper_to_hit_y = hit_point[HitPointSelector.Y] - scene_object_middle_point_y
-
-    # Normalize this direction
-    norm = jnp.sqrt(bumper_to_hit_x**2 + bumper_to_hit_y**2) + 1e-8
-    bumper_velocity_x = bumper_to_hit_x / norm * VELOCITY_ACCELERATION_VALUE
-    bumper_velocity_y = bumper_to_hit_y / norm * VELOCITY_ACCELERATION_VALUE
-
-    reflected_velocity_x = hit_point[HitPointSelector.RX] - hit_point[HitPointSelector.X]
-    reflected_velocity_y = hit_point[HitPointSelector.RY] - hit_point[HitPointSelector.Y]
-    
-    final_velocity_x = reflected_velocity_x + bumper_velocity_x
-    final_velocity_y = reflected_velocity_y + bumper_velocity_y
-    final_velocity_x = jnp.clip(final_velocity_x, -BALL_MAX_SPEED, BALL_MAX_SPEED)
-    final_velocity_y = jnp.clip(final_velocity_y, -BALL_MAX_SPEED, BALL_MAX_SPEED)
-
-    # velocity addition: return vector delta or magnitude delta — here: scalar magnitude delta
-    reflected_speed = jnp.sqrt(reflected_velocity_x**2 + reflected_velocity_y**2)
-    final_speed = jnp.sqrt(final_velocity_x**2 + final_velocity_y**2)
-    velocity_addition = final_speed - reflected_speed
-
-    return 1., velocity_addition, jnp.concatenate([
-        hit_point[:HitPointSelector.RX],
-        jnp.stack([
-            hit_point[HitPointSelector.RX] + bumper_velocity_x,
-            hit_point[HitPointSelector.RY] + bumper_velocity_y,
-        ], axis=0),
-        hit_point[HitPointSelector.RY+1:]
-    ], axis=0)
 
 @jax.jit
 def _dummy_calc_hit_point(
@@ -2557,11 +2572,13 @@ def _calc_hit_point(
     # 6: Left Lit Up Target, 7:Middle Lit Up Target, 8: Right Lit Up Target, 9: Left Flipper, 10: Right Flipper, 11: Tilt Mode Hole Plug
     dampening_value = 1-VELOCITY_DAMPENING_VALUE
     no_addition = 0.
+    acceleration_value = VELOCITY_ACCELERATION_VALUE
+    no_factor = 1.
     return jax.lax.switch(
         scene_object[5],
         [
             lambda: (dampening_value, no_addition, _calc_slab_hit_point(ball_movement, scene_object, action)),     # 0
-            lambda: _calc_bumper_hit_point(ball_movement, scene_object, action),                                   # 1
+            lambda: (no_factor, acceleration_value, _calc_slab_hit_point(ball_movement, scene_object, action)),    # 1
             lambda: _calc_spinner_hit_point(ball_movement, scene_object, action),                                  # 2
             lambda: (dampening_value, no_addition, _calc_slab_hit_point(ball_movement, scene_object, action)),     # 3
             lambda: (dampening_value, no_addition, _calc_slab_hit_point(ball_movement, scene_object, action)),     # 4
@@ -2577,7 +2594,12 @@ def _calc_hit_point(
 
 @jax.jit
 def _check_obstacle_hits(
-    state: VideoPinballState, ball_movement: BallMovement, scoring_list: chex.Array, action: chex.Array,
+    state: VideoPinballState,
+    ball_movement: BallMovement,
+    scoring_list: chex.Array,
+    action: chex.Array,
+    left_flipper_active: chex.Array,
+    right_flipper_active: chex.Array,
 ) -> tuple[chex.Array, SceneObject]:
     
     # DISABLE NON-REFLECTING SCENCE OBJECTS THAT ARE NOT IN THE CURRENT GAME STATE
@@ -2653,7 +2675,7 @@ def _check_obstacle_hits(
     reflecting_active = jnp.where(
         jnp.logical_and(
             is_left_flipper,
-            jnp.logical_not(_object_variant % 4 == left_flipper_angle)
+            jnp.logical_or(jnp.logical_not(_object_variant % 4 == left_flipper_angle), jnp.logical_not(left_flipper_active))
         ),
         False,
         reflecting_active,
@@ -2662,7 +2684,7 @@ def _check_obstacle_hits(
     reflecting_active = jnp.where(
         jnp.logical_and(
             is_right_flipper,
-            jnp.logical_not(_object_variant % 4 == right_flipper_angle)  # scene_object.state == right flipper angle
+            jnp.logical_or(jnp.logical_not(_object_variant % 4 == right_flipper_angle), jnp.logical_not(right_flipper_active))
         ),
         False,
         reflecting_active,
@@ -2676,6 +2698,7 @@ def _check_obstacle_hits(
         False,
         reflecting_active,
     )
+
 
     # GET "FIRST" REFLECTING HIT POINT
     ###############################################################################################
@@ -2772,7 +2795,15 @@ MAX_REFLECTIONS = 10  # max collisions to process per timestep
 def _calc_ball_collision_loop(state: VideoPinballState, ball_movement: BallMovement, action: chex.Array):
 
     def _compute_ball_collision(
-        old_ball_x, old_ball_y, new_ball_x, new_ball_y, velocity_factor, velocity_addition, scoring_list
+        old_ball_x,
+        old_ball_y,
+        new_ball_x,
+        new_ball_y,
+        velocity_factor,
+        velocity_addition,
+        left_flipper_active,
+        right_flipper_active,
+        scoring_list,
     ):
         _ball_movement = BallMovement(
             old_ball_x=old_ball_x,
@@ -2782,7 +2813,7 @@ def _calc_ball_collision_loop(state: VideoPinballState, ball_movement: BallMovem
         )
 
         hit_data, scoring_list, vf, va = _check_obstacle_hits(
-            state, _ball_movement, scoring_list, action
+            state, _ball_movement, scoring_list, action, left_flipper_active, right_flipper_active
         )
 
         no_collision = hit_data[HitPointSelector.T_ENTRY] == T_ENTRY_NO_COLLISION
@@ -2796,32 +2827,102 @@ def _calc_ball_collision_loop(state: VideoPinballState, ball_movement: BallMovem
         new_ball_x = jnp.where(collision, hit_data[HitPointSelector.RX], _ball_movement.new_ball_x)
         new_ball_y = jnp.where(collision, hit_data[HitPointSelector.RY], _ball_movement.new_ball_y)
 
-        return old_ball_x, old_ball_y, new_ball_x, new_ball_y, velocity_factor, velocity_addition, scoring_list, collision
+        # definitive fix for flipper collisions:
+        # if a flipper is hit, deactivate it. If something other than a flipper was hit, activate it
+        hit_is_left_flipper = hit_data[HitPointSelector.OBJECT_SCORE_TYPE] == 9
+        hit_is_right_flipper = hit_data[HitPointSelector.OBJECT_SCORE_TYPE] == 10
+        left_flipper_active = jnp.where(
+            jnp.logical_and(collision, hit_is_left_flipper),
+            False,
+            left_flipper_active
+        )
+        right_flipper_active = jnp.where(
+            jnp.logical_and(collision, hit_is_right_flipper),
+            False,
+            right_flipper_active
+        )
+        left_flipper_active = jnp.where(
+            jnp.logical_and(collision, jnp.logical_not(hit_is_left_flipper)),
+            True,
+            left_flipper_active
+        )
+        right_flipper_active = jnp.where(
+            jnp.logical_and(collision, jnp.logical_not(hit_is_right_flipper)),
+            True,
+            right_flipper_active
+        )
+
+        return (
+            old_ball_x,
+            old_ball_y,
+            new_ball_x,
+            new_ball_y,
+            velocity_factor,
+            velocity_addition,
+            left_flipper_active,
+            right_flipper_active,
+            scoring_list,
+            collision,
+        )
 
     def _fori_body(i, carry):
         (
-            old_ball_x, old_ball_y, new_ball_x, new_ball_y,
-            velocity_factor, velocity_addition, scoring_list,
-            any_collision, compute_flag
+            old_ball_x,
+            old_ball_y,
+            new_ball_x,
+            new_ball_y,
+            velocity_factor,
+            velocity_addition,
+            left_flipper_active,
+            right_flipper_active,
+            scoring_list,
+            any_collision,
+            compute_flag
         ) = carry
 
-        (old_ball_x, old_ball_y, new_ball_x, new_ball_y,
-         velocity_factor, velocity_addition, scoring_list, collision) = jax.lax.cond(
+        (   
+            old_ball_x,
+            old_ball_y,
+            new_ball_x,
+            new_ball_y,
+            velocity_factor,
+            velocity_addition,
+            left_flipper_active,
+            right_flipper_active,
+            scoring_list,
+            collision
+        ) = jax.lax.cond(
             compute_flag,
             _compute_ball_collision,
-            lambda old_ball_x, old_ball_y, new_ball_x, new_ball_y, vf, va, s: (
-                old_ball_x, old_ball_y, new_ball_x, new_ball_y, vf, va, s, False
+            lambda old_ball_x, old_ball_y, new_ball_x, new_ball_y, vf, va, lfa, rfa, s: (
+                old_ball_x, old_ball_y, new_ball_x, new_ball_y, vf, va, lfa, rfa, s, False
             ),
-            old_ball_x, old_ball_y, new_ball_x, new_ball_y, velocity_factor, velocity_addition, scoring_list
+            old_ball_x,
+            old_ball_y,
+            new_ball_x,
+            new_ball_y,
+            velocity_factor,
+            velocity_addition,
+            left_flipper_active,
+            right_flipper_active,
+            scoring_list,
         )
 
         compute_flag = jnp.logical_and(compute_flag, collision)
         any_collision = jnp.logical_or(any_collision, collision)
 
         return (
-            old_ball_x, old_ball_y, new_ball_x, new_ball_y,
-            velocity_factor, velocity_addition, scoring_list,
-            any_collision, compute_flag
+            old_ball_x,
+            old_ball_y,
+            new_ball_x,
+            new_ball_y,
+            velocity_factor,
+            velocity_addition,
+            left_flipper_active,
+            right_flipper_active,
+            scoring_list,
+            any_collision,
+            compute_flag
         )
 
     # Initial carry values
@@ -2832,6 +2933,8 @@ def _calc_ball_collision_loop(state: VideoPinballState, ball_movement: BallMovem
         ball_movement.new_ball_y,
         1.0,                                  # velocity_factor
         0.0,                                  # velocity_addition
+        state.left_flipper_active,
+        state.right_flipper_active,
         jnp.zeros((12,), dtype=bool),         # scoring_list
         False,                                # any_collision
         True,                                 # compute_flag
@@ -2840,9 +2943,17 @@ def _calc_ball_collision_loop(state: VideoPinballState, ball_movement: BallMovem
     carry = jax.lax.fori_loop(0, MAX_REFLECTIONS, _fori_body, carry)
 
     (
-        old_ball_x, old_ball_y, new_ball_x, new_ball_y,
-        velocity_factor, velocity_addition, scoring_list,
-        any_collision, _
+        old_ball_x,
+        old_ball_y,
+        new_ball_x,
+        new_ball_y,
+        velocity_factor,
+        velocity_addition,
+        left_flipper_active,
+        right_flipper_active,
+        scoring_list,
+        any_collision,
+        _
     ) = carry
 
     return (
@@ -2855,6 +2966,8 @@ def _calc_ball_collision_loop(state: VideoPinballState, ball_movement: BallMovem
         scoring_list,
         velocity_factor,
         velocity_addition,
+        left_flipper_active,
+        right_flipper_active,
         any_collision,
     )
 
@@ -2982,10 +3095,61 @@ def _apply_gravity(
     return ball_vel_x, ball_vel_y, ball_direction
 
 @jax.jit
+def _calc_invisible_block_hit(
+    ball_movement: BallMovement,
+    ball_in_play: chex.Array,
+    action: chex.Array,
+    key: chex.Array,
+):
+    ball_vel_x = jnp.abs(ball_movement.new_ball_x - ball_movement.old_ball_x)
+    ball_vel_y = jnp.abs(ball_movement.new_ball_y - ball_movement.old_ball_y)
+    _, _, invisible_block_hit_data = _calc_hit_point(
+        ball_movement,
+        jnp.array(
+            [
+                INVISIBLE_BLOCK_SCENE_OBJECT.hit_box_width,
+                INVISIBLE_BLOCK_SCENE_OBJECT.hit_box_height,
+                INVISIBLE_BLOCK_SCENE_OBJECT.hit_box_x_offset,
+                INVISIBLE_BLOCK_SCENE_OBJECT.hit_box_y_offset,
+                INVISIBLE_BLOCK_SCENE_OBJECT.reflecting,
+                INVISIBLE_BLOCK_SCENE_OBJECT.score_type,
+                INVISIBLE_BLOCK_SCENE_OBJECT.variant,
+            ]
+        ),
+        action,
+    )
+    is_invisible_block_hit = jnp.logical_and(
+        jnp.logical_not(ball_in_play),
+        invisible_block_hit_data[HitPointSelector.T_ENTRY] != T_ENTRY_NO_COLLISION,
+    )
+    d_traj = jnp.sqrt(ball_vel_x ** 2 + ball_vel_y**2)
+    to_invis_block_hit_x = invisible_block_hit_data[HitPointSelector.X] - ball_movement.old_ball_x
+    to_invis_block_hit_y = invisible_block_hit_data[HitPointSelector.Y] - ball_movement.old_ball_y
+    d_hit = jnp.sqrt(to_invis_block_hit_x**2 + to_invis_block_hit_y**2)
+    r = 1 - d_hit / d_traj
+    ball_vel_x, ball_vel_y = jax.lax.cond(
+        is_invisible_block_hit,
+        lambda: (-ball_vel_y * 0.75, jax.random.uniform(key, minval=-0.1, maxval=0.1) * ball_vel_y),
+        lambda: (ball_vel_x, ball_vel_y),
+    )
+    ball_movement = jax.lax.cond(
+        is_invisible_block_hit,
+        lambda: BallMovement(
+            old_ball_x=invisible_block_hit_data[HitPointSelector.X],
+            old_ball_y=invisible_block_hit_data[HitPointSelector.Y],
+            new_ball_x=invisible_block_hit_data[HitPointSelector.X] + r * ball_vel_x,
+            new_ball_y=invisible_block_hit_data[HitPointSelector.Y] + r * ball_vel_y
+        ),
+        lambda: ball_movement
+    )
+    return ball_movement, ball_vel_x, ball_vel_y, is_invisible_block_hit
+
+@jax.jit
 def ball_step(
     state: VideoPinballState,
     plunger_power,
     action,
+    key,
 ):
     """
     Update the pinballs position and velocity based on the current state and action.
@@ -3029,69 +3193,22 @@ def ball_step(
             ball_x, state.ball_y, ball_vel_x, ball_vel_y, ball_direction
         )
     )
-
-    """
-    Check if the ball is hitting the invisible block at the plunger hole
-    """
     ball_movement = BallMovement(
         old_ball_x=state.ball_x,  # type: ignore
         old_ball_y=state.ball_y,  # type: ignore
         new_ball_x=ball_x,  # type: ignore
         new_ball_y=ball_y,  # type: ignore
     )
-    _, _, invisible_block_hit_data = _calc_hit_point(
+    """
+    Check if the ball is hitting the invisible block at the plunger hole
+    """
+    ball_movement, ball_vel_x, ball_vel_y, is_invisible_block_hit = _calc_invisible_block_hit(
         ball_movement,
-        jnp.array(
-            [
-                INVISIBLE_BLOCK_SCENE_OBJECT.hit_box_width,
-                INVISIBLE_BLOCK_SCENE_OBJECT.hit_box_height,
-                INVISIBLE_BLOCK_SCENE_OBJECT.hit_box_x_offset,
-                INVISIBLE_BLOCK_SCENE_OBJECT.hit_box_y_offset,
-                INVISIBLE_BLOCK_SCENE_OBJECT.reflecting,
-                INVISIBLE_BLOCK_SCENE_OBJECT.score_type,
-                INVISIBLE_BLOCK_SCENE_OBJECT.variant,
-            ]
-        ),
+        ball_in_play,
         action,
-    )
-    is_invisible_block_hit = jnp.logical_and(
-        jnp.logical_not(ball_in_play),
-        invisible_block_hit_data[HitPointSelector.T_ENTRY] != T_ENTRY_NO_COLLISION,
+        key
     )
 
-    invisible_block_velocity_modifier = jnp.where(
-        False,
-        INVISIBLE_BLOCK_MEAN_REFLECTION_FACTOR * jnp.remainder(state.step_counter, 64) - 32,
-        0.0
-    )
-
-    ball_vel_x = jnp.where(
-        is_invisible_block_hit,
-        ball_vel_y + invisible_block_velocity_modifier,
-        ball_vel_x,
-    )
-    ball_vel_y = jnp.where(is_invisible_block_hit, ball_vel_y / 5, ball_vel_y)
-    # set ball_x, ball_y to below invisible element and proceed with new ball_movement
-    ball_x = jnp.where(
-        is_invisible_block_hit,
-        invisible_block_hit_data[HitPointSelector.X],
-        ball_x,
-    )
-    ball_y = jnp.where(
-        is_invisible_block_hit,
-        invisible_block_hit_data[HitPointSelector.Y],
-        ball_y,
-    )
-    new_ball_direction = jnp.where(
-        state.step_counter % 2 == 0, 0, 1  # semi random y direction
-    )
-    ball_direction = jnp.where(
-        is_invisible_block_hit, new_ball_direction, ball_direction
-    )
-
-    sign_x, sign_y = _get_ball_direction_signs(ball_direction)
-    signed_ball_vel_x = sign_x * ball_vel_x
-    signed_ball_vel_y = sign_y * ball_vel_y
     ball_in_play = jnp.logical_or(ball_in_play, is_invisible_block_hit)
 
     """
@@ -3101,22 +3218,15 @@ def ball_step(
     # If a reflecting obstacle is hit, reflect the ball
     # If a non-reflecting obstacle is hit, proceed with usual ball position calculation
     # new_ball_direction, _ball_vel_x, _ball_vel_y = _get_obstacle_hit_direction()
-    ball_movement = BallMovement(
-        old_ball_x=state.ball_x,  # type: ignore
-        old_ball_y=state.ball_y,  # type: ignore
-        new_ball_x=ball_x,  # type: ignore
-        new_ball_y=ball_y,  # type: ignore
-    )
-    scoring_list = jnp.array([False for i in range(12)])
-    velocity_factor = 1.
-    velocity_addition = 0.
-    any_collision = False
-
-    collision_ball_movement, scoring_list, velocity_factor, velocity_addition, any_collision = jax.lax.cond(
-        is_invisible_block_hit,
-        lambda: (ball_movement, scoring_list, velocity_factor, velocity_addition, any_collision),
-        lambda: _calc_ball_collision_loop(state, ball_movement, action),
-    )
+    (
+        collision_ball_movement,
+        scoring_list,
+        velocity_factor,
+        velocity_addition,
+        left_flipper_active,
+        right_flipper_active,
+        any_collision,
+    ) = _calc_ball_collision_loop(state, ball_movement, action)
 
     ball_trajectory_x = collision_ball_movement.new_ball_x - collision_ball_movement.old_ball_x
     ball_trajectory_y = collision_ball_movement.new_ball_y - collision_ball_movement.old_ball_y
@@ -3128,8 +3238,8 @@ def ball_step(
     Some final calculations
     """
     ball_direction = _get_ball_direction(ball_trajectory_x, ball_trajectory_y)
-    ball_vel_x = jnp.abs(signed_ball_vel_x)
-    ball_vel_y = jnp.abs(signed_ball_vel_y)
+    ball_vel_x = jnp.abs(ball_vel_x)
+    ball_vel_y = jnp.abs(ball_vel_y)
     original_ball_speed = jnp.sqrt(ball_vel_x**2 + ball_vel_y**2)
     new_ball_speed = (1 + jnp.clip(velocity_addition, -1, 1)) * original_ball_speed * velocity_factor
 
@@ -3138,8 +3248,8 @@ def ball_step(
 
     # If ball velocity reaches a small threshold, accelerate it after hitting something
     small_vel = jnp.logical_and(ball_vel_x < BALL_MIN_SPEED, ball_vel_y < BALL_MIN_SPEED)
-    ball_vel_x = jnp.where(jnp.logical_and(any_collision, small_vel), jnp.clip(ball_vel_x * 3 + BALL_MIN_SPEED, 0, BALL_MAX_SPEED), ball_vel_x)
-    ball_vel_y = jnp.where(jnp.logical_and(any_collision, small_vel), jnp.clip(ball_vel_y * 3 + BALL_MIN_SPEED, 0, BALL_MAX_SPEED), ball_vel_y)
+    ball_vel_x = jnp.where(jnp.logical_and(any_collision, small_vel), jnp.clip(ball_vel_x * 2 + BALL_MIN_SPEED, 0, BALL_MAX_SPEED), ball_vel_x)
+    ball_vel_y = jnp.where(jnp.logical_and(any_collision, small_vel), jnp.clip(ball_vel_y * 2 + BALL_MIN_SPEED, 0, BALL_MAX_SPEED), ball_vel_y)
 
     return (
         ball_x,
@@ -3151,6 +3261,8 @@ def ball_step(
         scoring_list,
         tilt_mode,
         tilt_counter,
+        left_flipper_active,
+        right_flipper_active,
     )
 
 
@@ -3465,30 +3577,35 @@ class JaxVideoPinball(
         Returns the initial state and the reward (i.e. 0)
         """
         state = VideoPinballState(
-            ball_x=jnp.array(BALL_START_X).astype(jnp.float32),
-            ball_y=jnp.array(BALL_START_Y).astype(jnp.float32),
-            ball_vel_x=jnp.array(0.0),
-            ball_vel_y=jnp.array(0.0),
-            ball_direction=jnp.array(0).astype(jnp.int32),
-            left_flipper_angle=jnp.array(0).astype(jnp.int32),
-            right_flipper_angle=jnp.array(0).astype(jnp.int32),
-            plunger_position=jnp.array(0).astype(jnp.int32),
-            plunger_power=jnp.array(0).astype(jnp.float32),
-            score=jnp.array(0).astype(jnp.int32),
-            lives=jnp.array(1).astype(jnp.int32),
-            bumper_multiplier=jnp.array(1).astype(jnp.int32),
-            active_targets=jnp.array([True, True, True, False]).astype(jnp.bool_),
-            target_cooldown=jnp.array(-1).astype(jnp.int32),
-            special_target_cooldown=jnp.array(-120).astype(jnp.int32),
-            atari_symbols=jnp.array(0).astype(jnp.int32),
-            rollover_counter=jnp.array(1).astype(jnp.int32),
-            rollover_enabled=jnp.array(False).astype(jnp.bool_),
-            step_counter=jnp.array(0).astype(jnp.int32),
-            ball_in_play=jnp.array(False).astype(jnp.bool_),
-            respawn_timer=jnp.array(0).astype(jnp.int32),
-            color_cycling=jnp.array(0).astype(jnp.int32),
-            tilt_mode_active=jnp.array(False).astype(jnp.bool_),
-            tilt_counter=jnp.array(0).astype(jnp.int32)
+            ball_x=jnp.array(BALL_START_X, dtype=jnp.float32),
+            ball_y=jnp.array(BALL_START_Y, dtype=jnp.float32),
+            ball_vel_x=jnp.array(0.0, dtype=jnp.float32),
+            ball_vel_y=jnp.array(0.0, dtype=jnp.float32),
+            ball_direction=jnp.array(0, dtype=jnp.int32),
+            left_flipper_angle=jnp.array(0, dtype=jnp.int32),
+            right_flipper_angle=jnp.array(0, dtype=jnp.int32),
+            left_flipper_counter=jnp.array(0, dtype=jnp.int32),
+            right_flipper_counter=jnp.array(0, dtype=jnp.int32),
+            left_flipper_active=jnp.array(True, dtype=jnp.bool_),
+            right_flipper_active=jnp.array(True, dtype=jnp.bool_),
+            plunger_position=jnp.array(0, dtype=jnp.int32),
+            plunger_power=jnp.array(0, dtype=jnp.float32),
+            score=jnp.array(0, dtype=jnp.int32),
+            lives=jnp.array(1, dtype=jnp.int32),
+            bumper_multiplier=jnp.array(1, dtype=jnp.int32),
+            active_targets=jnp.array([True, True, True, False], dtype=jnp.bool_),
+            target_cooldown=jnp.array(-1, dtype=jnp.int32),
+            special_target_cooldown=jnp.array(-120, dtype=jnp.int32),
+            atari_symbols=jnp.array(0, dtype=jnp.int32),
+            rollover_counter=jnp.array(1, dtype=jnp.int32),
+            rollover_enabled=jnp.array(False, dtype=jnp.bool_),
+            step_counter=jnp.array(0, dtype=jnp.int32),
+            ball_in_play=jnp.array(False, dtype=jnp.bool_),
+            respawn_timer=jnp.array(0, dtype=jnp.int32),
+            color_cycling=jnp.array(0, dtype=jnp.int32),
+            tilt_mode_active=jnp.array(False, dtype=jnp.bool_),
+            tilt_counter=jnp.array(0, dtype=jnp.int32),
+            rng_key=key
         )
 
         initial_obs = self._get_observation(state)
@@ -3520,6 +3637,8 @@ class JaxVideoPinball(
     ]:
         # chex provides jax with additional debug/testing functionality.
         # Probably best to use it instead of simply jnp.array
+
+        rng_key, ball_step_key = jax.random.split(state.rng_key)
         
         # Check if action is LEFT_FIRE or RIGHT_FIRE
         action_is_left_fire = action == Action.LEFTFIRE
@@ -3541,7 +3660,7 @@ class JaxVideoPinball(
             lambda _: state.plunger_power,
             operand=new_plunger_power,
         )
-        left_flipper_angle, right_flipper_angle = flipper_step(state, action)
+        left_flipper_angle, right_flipper_angle, left_flipper_counter, right_flipper_counter = flipper_step(state, action)
 
         # test_flippers = jnp.logical_and(action == Action.FIRE, jnp.logical_and(state.ball_x == BALL_START_X, state.ball_y == BALL_START_Y))
         # Step 2: Update ball position and velocity
@@ -3554,11 +3673,14 @@ class JaxVideoPinball(
             ball_in_play,
             scoring_list,
             tilt_mode_active,
-            tilt_counter
+            tilt_counter,
+            left_flipper_active,
+            right_flipper_active,
         ) = ball_step(
             state,
             new_plunger_power,
             action,
+            ball_step_key,
         )
 
         # ball_x = jnp.where(test_flippers, 83, ball_x)
@@ -3656,6 +3778,10 @@ class JaxVideoPinball(
             ball_direction=ball_direction,
             left_flipper_angle=left_flipper_angle,
             right_flipper_angle=right_flipper_angle,
+            left_flipper_counter=left_flipper_counter,
+            right_flipper_counter=right_flipper_counter,
+            left_flipper_active=left_flipper_active,
+            right_flipper_active=right_flipper_active,
             plunger_position=plunger_position,
             plunger_power=plunger_power,
             score=score,
@@ -3673,6 +3799,7 @@ class JaxVideoPinball(
             color_cycling=color_cycling,
             tilt_mode_active=tilt_mode_active,
             tilt_counter=tilt_counter,
+            rng_key=rng_key,
             # obs_stack=None,
         )
 
