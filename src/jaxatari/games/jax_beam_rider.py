@@ -413,31 +413,31 @@ class BeamRiderEnv(JaxEnvironment[BeamRiderState, BeamRiderObservation, BeamRide
             dtype=jnp.uint8
         )
 
+    @partial(jax.jit, static_argnums=(0,))
     def object_space(self) -> spaces.Box:
         """Returns the observation space for object-centric wrappers with correct dtype"""
         # Calculate the total size of the flattened observation
         obs_size = (
                 1 +  # ship_x
                 1 +  # ship_y
-                1 +  # ship_beam (will be cast to float32)
+                1 +  # ship_beam (will be cast to float64)
                 self.constants.MAX_PROJECTILES * 5 +  # projectiles
                 self.constants.MAX_PROJECTILES * 5 +  # torpedo_projectiles
                 self.constants.MAX_ENEMIES * 17 +  # enemies
-                1 +  # score (will be cast to float32)
-                1 +  # lives (will be cast to float32)
-                1 +  # current_sector (will be cast to float32)
-                1  # torpedoes_remaining (will be cast to float32)
+                1 +  # score (will be cast to float64)
+                1 +  # lives (will be cast to float64)
+                1 +  # current_sector (will be cast to float64)
+                1  # torpedoes_remaining (will be cast to float64)
         )
 
         # Create bounds that accommodate all possible values
-        # Use float32 to match the actual observation dtype
+        # Use float64 to match the expected dtype
         return spaces.Box(
             low=-1000.0,  # Large negative bound to handle all possible values
             high=1000.0,  # Large positive bound to handle all possible values
             shape=(obs_size,),
-            dtype=jnp.float32  # CRITICAL: This must match obs_to_flat_array output
+            dtype=jnp.float64  # CHANGED: float32 -> float64 to match test expectations
         )
-
 
     @partial(jax.jit, static_argnums=(0,))
     def _get_all_reward(self, previous_state: BeamRiderState, state: BeamRiderState):
@@ -483,23 +483,22 @@ class BeamRiderEnv(JaxEnvironment[BeamRiderState, BeamRiderObservation, BeamRide
         return jnp.array(state.game_over, dtype=jnp.bool_)
 
     def obs_to_flat_array(self, obs: BeamRiderObservation) -> jnp.ndarray:
-        """Convert observation to flat array with consistent float32 dtype"""
+        """Convert observation to flat array with consistent float64 dtype"""
         flat_components = [
-            obs.ship_x.flatten().astype(jnp.float32),
-            obs.ship_y.flatten().astype(jnp.float32),
-            obs.ship_beam.flatten().astype(jnp.float32),
-            obs.projectiles.flatten().astype(jnp.float32),
-            obs.torpedo_projectiles.flatten().astype(jnp.float32),
-            obs.enemies.flatten().astype(jnp.float32),
-            obs.score.flatten().astype(jnp.float32),
-            obs.lives.flatten().astype(jnp.float32),
-            obs.current_sector.flatten().astype(jnp.float32),
-            obs.torpedoes_remaining.flatten().astype(jnp.float32),
+            obs.ship_x.flatten().astype(jnp.float64),  # Changed to float64
+            obs.ship_y.flatten().astype(jnp.float64),  # Changed to float64
+            obs.ship_beam.flatten().astype(jnp.float64),  # Changed to float64
+            obs.projectiles.flatten().astype(jnp.float64),  # Changed to float64
+            obs.torpedo_projectiles.flatten().astype(jnp.float64),  # Changed to float64
+            obs.enemies.flatten().astype(jnp.float64),  # Changed to float64
+            obs.score.flatten().astype(jnp.float64),  # Changed to float64
+            obs.lives.flatten().astype(jnp.float64),  # Changed to float64
+            obs.current_sector.flatten().astype(jnp.float64),  # Changed to float64
+            obs.torpedoes_remaining.flatten().astype(jnp.float64),  # Changed to float64
         ]
         result = jnp.concatenate(flat_components)
-        # Ensure final result is float32
-        return result.astype(jnp.float32)
-
+        # Ensure final result is float64
+        return result.astype(jnp.float64)  # Changed to float64
     def render(self, state: BeamRiderState) -> jnp.ndarray:
         """Render the current game state"""
         return self.renderer.render(state)
