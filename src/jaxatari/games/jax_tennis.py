@@ -1588,17 +1588,17 @@ class TennisJaxEnv(JaxEnvironment[TennisState, TennisObs, TennisInfo, TennisCons
         return spaces.Discrete(18)
 
     def flatten_player_obs(self, player_obs: PlayerObs):
-        return jnp.concatenate([jnp.array([player_obs.player_x.astype(jnp.float32)]), jnp.array([player_obs.player_y.astype(jnp.float32)]),
+        return jnp.concatenate([jnp.array([player_obs.player_x.astype(jnp.float64)]), jnp.array([player_obs.player_y.astype(jnp.float64)]),
                                 jnp.array([player_obs.player_direction]), jnp.array([player_obs.player_field]),
                                 jnp.array([player_obs.player_serving])])
 
     def flatten_enemy_obs(self, enemy_obs: EnemyObs):
         return jnp.concatenate(
-            [jnp.array([enemy_obs.enemy_x.astype(jnp.float32)]), jnp.array([enemy_obs.enemy_y.astype(jnp.float32)]), jnp.array([enemy_obs.enemy_direction])])
+            [jnp.array([enemy_obs.enemy_x.astype(jnp.float64)]), jnp.array([enemy_obs.enemy_y.astype(jnp.float64)]), jnp.array([enemy_obs.enemy_direction])])
 
     def flatten_ball_obs(self, ball_obs: BallObs):
         return jnp.concatenate(
-            [jnp.array([ball_obs.ball_x.astype(jnp.float32)]), jnp.array([ball_obs.ball_y.astype(jnp.float32)]), jnp.array([ball_obs.ball_z.astype(jnp.float32)]),
+            [jnp.array([ball_obs.ball_x.astype(jnp.float64)]), jnp.array([ball_obs.ball_y.astype(jnp.float64)]), jnp.array([ball_obs.ball_z.astype(jnp.float64)]),
              jnp.array([ball_obs.bounces]), jnp.array([ball_obs.last_hit])])
 
     def observation_space(self) -> spaces:
@@ -1649,13 +1649,13 @@ class TennisJaxEnv(JaxEnvironment[TennisState, TennisObs, TennisInfo, TennisCons
 #jnp.array(x, dtype=jnp.float32)
 
     def _get_observation(self, state: TennisState) -> TennisObs:
-        return TennisObs(player=PlayerObs(state.player_state.player_x.astype(jnp.float32), state.player_state.player_y.astype(jnp.float32),
+        return TennisObs(player=PlayerObs(state.player_state.player_x.astype(jnp.float64), state.player_state.player_y.astype(jnp.float64),
                                           state.player_state.player_direction.astype(jnp.int32),
                                           state.player_state.player_field.astype(jnp.int32),
                                           jnp.where(state.player_state.player_serving, 1, 0).astype(jnp.int32)),
-                         enemy=EnemyObs(state.enemy_state.enemy_x.astype(jnp.float32), state.enemy_state.enemy_y.astype(jnp.float32),
+                         enemy=EnemyObs(state.enemy_state.enemy_x.astype(jnp.float64), state.enemy_state.enemy_y.astype(jnp.float64),
                                         state.enemy_state.enemy_direction.astype(jnp.int32)),
-                         ball=BallObs(state.ball_state.ball_x.astype(jnp.float32), state.ball_state.ball_y.astype(jnp.float32), state.ball_state.ball_z.astype(jnp.float32),
+                         ball=BallObs(state.ball_state.ball_x.astype(jnp.float64), state.ball_state.ball_y.astype(jnp.float64), state.ball_state.ball_z.astype(jnp.flofloat64at32),
                                       state.ball_state.bounces.astype(jnp.int32), state.ball_state.last_hit.astype(jnp.int32)),
                          is_serving_state=jnp.where(state.game_state.is_serving, 1, 0).astype(jnp.int32),
                          player_points=state.game_state.player_score.astype(jnp.int32),
