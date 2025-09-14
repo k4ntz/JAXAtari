@@ -239,13 +239,22 @@ class FishingDerby(JaxEnvironment):
             return jax.lax.cond(pred, do_set, lambda a: a, arr)
 
         def game_branch(_):
+            # Fish movement with random direction changes
+            key = state.key
+            key, fish_key = jax.random.split(key)
+            change_direction_prob = 0.01  # 1% chance per frame to change direction
+
+            # Check for random direction changes
+            should_change_dir = jax.random.uniform(fish_key, (cfg.NUM_FISH,)) < change_direction_prob
+
             # Fish movement
             new_fish_x = state.fish_positions[:, 0] + state.fish_directions * cfg.FISH_SPEED
-            new_fish_dirs = jnp.where(
-                (new_fish_x < 0) | (new_fish_x > cfg.SCREEN_WIDTH - cfg.FISH_WIDTH),
-                -state.fish_directions,
-                state.fish_directions
-            )
+
+            # Direction changes: either from hitting boundaries OR random changes
+            hit_boundary = (new_fish_x < 0) | (new_fish_x > cfg.SCREEN_WIDTH - cfg.FISH_WIDTH)
+            change_dir = hit_boundary | should_change_dir
+
+            new_fish_dirs = jnp.where(change_dir, -state.fish_directions, state.fish_directions)
             new_fish_x = jnp.clip(new_fish_x, 0, cfg.SCREEN_WIDTH - cfg.FISH_WIDTH)
             new_fish_pos = state.fish_positions.at[:, 0].set(new_fish_x)
 
@@ -597,41 +606,46 @@ class FishingDerbyRenderer(AtraJaxisRenderer):
         raster = self._render_line(raster, cfg.P1_START_X + 10, cfg.ROD_Y, p1_rod_end_x, cfg.ROD_Y,
                                    color=(139, 69, 19))  # Brown rod
 
-        # Water resistance sag - based on horizontal offset and vertical movement
-        # When moving rod horizontally in water, line should sag/lag behind
+        # Water resistance sag - only applies when hook is in water and below surface
+        in_water = state.p1.hook_y > (cfg.WATER_Y_START - cfg.ROD_Y)
 
-        # Only apply horizontal movement sag when there's recent horizontal movement
-        # Check if there's significant horizontal offset indicating recent movement
+        # Only apply horizontal movement sag when there's recent horizontal movement AND in water
         has_horizontal_movement = jnp.abs(state.p1.hook_x_offset) > 0.1
-        offset_sag = jnp.where(has_horizontal_movement,
+        offset_sag = jnp.where(in_water & has_horizontal_movement,
                                jnp.abs(state.p1.hook_x_offset) * 1.0,
-                               0.0)  # No sag when moving straight down
+                               0.0)
 
-        # Vertical movement sag (normal gravity sag) - reduced when moving straight down
+        # Vertical movement sag (normal gravity sag) - only when in water
         max_hook_y = cfg.LINE_Y_END - cfg.ROD_Y
-        line_depth_ratio = jnp.clip(state.p1.hook_y / max_hook_y, 0.0, 1.0)
+        water_depth_ratio = jnp.clip((state.p1.hook_y - (cfg.WATER_Y_START - cfg.ROD_Y)) / max_hook_y, 0.0, 1.0)
 
-        # Reduce gravity sag when moving straight down (no horizontal movement)
-        gravity_sag_base = 6.0 * jnp.exp(-2.0 * line_depth_ratio)
-        gravity_sag = jnp.where(has_horizontal_movement,
+        # Apply gravity sag only to underwater portion
+        gravity_sag_base = 6.0 * jnp.exp(-2.0 * water_depth_ratio)
+        gravity_sag = jnp.where(in_water & has_horizontal_movement,
                                 gravity_sag_base,
-                                gravity_sag_base * 0.2)  # Much less sag when straight down
+                                jnp.where(in_water, gravity_sag_base * 0.2, 0.0))
 
-        # Combine both types of sag
-        total_sag = gravity_sag + offset_sag
+        # Combine both types of sag - only when in water
+        total_sag = jnp.where(in_water, gravity_sag + offset_sag, 0.0)
 
         # Reduce sag when reeling (line is under tension)
         is_reeling = state.p1.hook_state > 0
         tension_multiplier = jnp.where(is_reeling, 0.2, 1.0)
         final_sag = total_sag * tension_multiplier
 
-        # Define start and end points for the saggy line
+        # Define start and end points for the line
         line_start = jnp.array([p1_rod_end_x, cfg.ROD_Y])
-        line_end = jnp.array([hook_x, hook_y])  # Use actual hook position with offset
+        line_end = jnp.array([hook_x, hook_y])
 
-        # Draw the saggy line
-        raster = self._render_saggy_line(raster, line_start, line_end, final_sag, color=(200, 200, 200),
-                                         num_segments=12)
+        # Draw straight line if above water, saggy line if in water
+        raster = jax.lax.cond(
+            in_water,
+            lambda r: self._render_saggy_line(r, line_start, line_end, final_sag, color=(200, 200, 200),
+                                              num_segments=12),
+            lambda r: self._render_line(r, line_start[0], line_start[1], line_end[0], line_end[1],
+                                        color=(200, 200, 200)),
+            raster
+        )
 
         # Player 2 rod and line (simplified for now)
         raster = self._render_line(raster, cfg.P2_START_X + 2, cfg.PLAYER_Y + 10, state.p2.rod_length + cfg.P2_START_X,
