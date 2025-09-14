@@ -62,13 +62,14 @@ def render_debug_overlay(screen, state: EnduroGameState, font, game_config):
         f"Player Y (abs): {state.player_y_abs_position}",
         # f"Distance: {state.distance}",
         f"Level: {state.level}",
+        f"Level passed: {state.level_passed},"
         f"Time: {state.total_time_elapsed}",
         # f"Steering sensitivity: {}",
         # f"Left Mountain x: {state.mountain_left_x}",
         # f"Opponent Index: {state.opponent_index}",
         # f"Opponent window: {state.opponent_window}",
         # f"Opponents: {state.visible_opponent_positions}",
-        # f"Cars overtaken: {state.cars_overtaken}",
+        f"Cars overtaken: {state.cars_overtaken}",
         # f"Opponent Collision: {state.is_collision}",
         # f"Cooldown Drift direction: {state.cooldown_drift_direction}"
         # f"Weather: {state.weather_index}",

@@ -205,7 +205,7 @@ class EnduroConstants(NamedTuple):
     opponent_delay_slots = 10
 
     # How many opponents to overtake to progress into the next level
-    cars_to_pass_per_level: int = 200
+    cars_to_pass_per_level: int = 2
     cars_increase_per_level: int = 100
     max_increase_level: int = 5
 
@@ -267,6 +267,7 @@ class EnduroGameState(NamedTuple):
     cars_to_overtake: chex.Array  # goal for current level
     distance: chex.Array
     level: chex.Array
+    level_passed: chex.Array
 
     # opponents
     opponent_pos_and_color: chex.Array  # shape (N, 2) where [:, 0] is x, [:, 1] is y
@@ -508,6 +509,7 @@ class JaxEnduro(JaxEnvironment[EnduroGameState, EnduroObservation, EnduroInfo, E
             cars_overtaken=jnp.array(0),
             distance=jnp.array(0.0, dtype=jnp.float32),
             level=jnp.array(1),
+            level_passed=jnp.array(False),
 
             # opponents
             opponent_pos_and_color=opponent_spawns,
@@ -824,11 +826,13 @@ class JaxEnduro(JaxEnvironment[EnduroGameState, EnduroObservation, EnduroInfo, E
         # Compute game over condition based on elapsed frames
         # day_length_frames = self.config.day_night_cycle_seconds * self.config.frame_rate
         # game_over = state.total_frames_elapsed >= self.config.day_length_frames
-        game_over = jnp.where(
+
+        # Check whether the current level is passed.
+        # Once a level is passed it does not matter whether opponents will overtake the player again.
+        new_level_passed = jnp.logical_or(
+            state.level_passed,
             new_cars_overtaken >=
-            self.config.cars_to_pass_per_level + self.config.cars_increase_per_level * (state.level - 1),
-            1,
-            0
+            self.config.cars_to_pass_per_level + self.config.cars_increase_per_level * (state.level - 1)
         )
 
         # Build new state with updated positions
@@ -842,6 +846,7 @@ class JaxEnduro(JaxEnvironment[EnduroGameState, EnduroObservation, EnduroInfo, E
             distance=new_distance,
             player_speed=new_speed,
             level=new_level,
+            level_passed=new_level_passed,
 
             opponent_index=new_opponent_index,
             visible_opponent_positions=new_visible_opponent_positions,
@@ -1584,8 +1589,8 @@ class EnduroRenderer(JAXGameRenderer):
 
         # render the distance odometer, level score and cars to overtake
         raster = self._render_distance_odometer(raster, state)
+        raster = self._render_cars_to_overtake_score(raster, state) # must be rendered before level, due to background
         raster = self._render_level_score(raster, state)
-        raster = self._render_cars_to_overtake_score(raster, state)
 
         # render the mountains
         raster = self._render_mountains(raster, state)
@@ -1917,6 +1922,7 @@ class EnduroRenderer(JAXGameRenderer):
     def _render_cars_to_overtake_score(self, raster: jnp.ndarray, state: EnduroGameState) -> jnp.ndarray:
         """
         Renders the score that shows how many cars still have to be overtaken.
+        Renders flags instead if the level goal has been reached.
 
         Args:
             raster: the raster for rendering
@@ -1924,51 +1930,77 @@ class EnduroRenderer(JAXGameRenderer):
 
         Returns: the new raster with the score
         """
-        # Get digit dimensions from a sample sprite
-        cars_to_overtake = state.cars_to_overtake - state.cars_overtaken
 
-        # create an array with all sprites to access them based on the current score digit
-        digit_sprites = jnp.stack([
-            aj.get_sprite_frame(self.sprites['0_black.npy'], 0),
-            aj.get_sprite_frame(self.sprites['1_black.npy'], 0),
-            aj.get_sprite_frame(self.sprites['2_black.npy'], 0),
-            aj.get_sprite_frame(self.sprites['3_black.npy'], 0),
-            aj.get_sprite_frame(self.sprites['4_black.npy'], 0),
-            aj.get_sprite_frame(self.sprites['5_black.npy'], 0),
-            aj.get_sprite_frame(self.sprites['6_black.npy'], 0),
-            aj.get_sprite_frame(self.sprites['7_black.npy'], 0),
-            aj.get_sprite_frame(self.sprites['8_black.npy'], 0),
-            aj.get_sprite_frame(self.sprites['9_black.npy'], 0),
-        ])
+        def render_level_passed(flag_raster) -> jnp.ndarray:
+            # change the flag animation every second
+            frame_index = (state.step_count // 60) % 2
+            flag_sprite = aj.get_sprite_frame(self.sprites['flags.npy'],frame_index)
+            
+            # render the flags at the hundreds position - the car symbol
+            x_pos = self.config.score_start_x - 9
+            flag_raster = aj.render_at(flag_raster, x_pos, self.config.score_start_y - 1, flag_sprite)
 
-        digit_width = digit_sprites[0].shape[1]
+            # render the background color of the level score differently (in green)
+            background_sprite = aj.get_sprite_frame(self.sprites['green_level_background.npy'], 0)
+            flag_raster = aj.render_at(flag_raster, self.config.level_x - 1, self.config.level_y - 1, background_sprite)
 
-        ones_digit = cars_to_overtake % 10
-        tens_digit = (cars_to_overtake // 10) % 10
-        hundreds_digit = (cars_to_overtake // 100) % 10
+            return flag_raster
 
-        # load the sprite depending on the digit
-        ones_sprite = digit_sprites[ones_digit]
-        tens_sprite = digit_sprites[tens_digit]
-        hundreds_sprite = digit_sprites[hundreds_digit]
+        def render_digits(digit_raster) -> jnp.ndarray:
+            # Get digit dimensions from a sample sprite
+            cars_to_overtake = state.cars_to_overtake - state.cars_overtaken
+            # create an array with all sprites to access them based on the current score digit
+            digit_sprites = jnp.stack([
+                aj.get_sprite_frame(self.sprites['0_black.npy'], 0),
+                aj.get_sprite_frame(self.sprites['1_black.npy'], 0),
+                aj.get_sprite_frame(self.sprites['2_black.npy'], 0),
+                aj.get_sprite_frame(self.sprites['3_black.npy'], 0),
+                aj.get_sprite_frame(self.sprites['4_black.npy'], 0),
+                aj.get_sprite_frame(self.sprites['5_black.npy'], 0),
+                aj.get_sprite_frame(self.sprites['6_black.npy'], 0),
+                aj.get_sprite_frame(self.sprites['7_black.npy'], 0),
+                aj.get_sprite_frame(self.sprites['8_black.npy'], 0),
+                aj.get_sprite_frame(self.sprites['9_black.npy'], 0),
+            ])
 
-        # Render the ones digit window at the specified position
-        ones_x = self.config.score_start_x + 2 * (digit_width + 2)
-        raster = aj.render_at(raster, ones_x, self.config.score_start_y, ones_sprite)
+            digit_width = digit_sprites[0].shape[1]
 
-        # Only render tens digit if number >= 10
-        tens_x = self.config.score_start_x + (digit_width + 2)
-        raster = jnp.where(
-            cars_to_overtake >= 10,
-            aj.render_at(raster, tens_x, self.config.score_start_y, tens_sprite),
-            raster
-        )
+            ones_digit = cars_to_overtake % 10
+            tens_digit = (cars_to_overtake // 10) % 10
+            hundreds_digit = (cars_to_overtake // 100) % 10
 
-        # Only render hundreds digit if number >= 100
-        hundreds_x = self.config.score_start_x
-        raster = jnp.where(
-            cars_to_overtake >= 100,
-            aj.render_at(raster, hundreds_x, self.config.score_start_y, hundreds_sprite),
+            # load the sprite depending on the digit
+            ones_sprite = digit_sprites[ones_digit]
+            tens_sprite = digit_sprites[tens_digit]
+            hundreds_sprite = digit_sprites[hundreds_digit]
+
+            # Render the ones digit window at the specified position
+            ones_x = self.config.score_start_x + 2 * (digit_width + 2)
+            digit_raster = aj.render_at(digit_raster, ones_x, self.config.score_start_y, ones_sprite)
+
+            # Only render tens digit if number >= 10
+            tens_x = self.config.score_start_x + (digit_width + 2)
+            digit_raster = jnp.where(
+                cars_to_overtake >= 10,
+                aj.render_at(digit_raster, tens_x, self.config.score_start_y, tens_sprite),
+                digit_raster
+            )
+
+            # Only render hundreds digit if number >= 100
+            hundreds_x = self.config.score_start_x
+            digit_raster = jnp.where(
+                cars_to_overtake >= 100,
+                aj.render_at(digit_raster, hundreds_x, self.config.score_start_y, hundreds_sprite),
+                digit_raster
+            )
+
+            return digit_raster
+        
+        # check whether to render the digits or the flags
+        raster = lax.cond(
+            state.level_passed,
+            lambda x: render_level_passed(x),
+            lambda x: render_digits(x),
             raster
         )
 
