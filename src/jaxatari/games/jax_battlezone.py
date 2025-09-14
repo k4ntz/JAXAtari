@@ -191,11 +191,15 @@ SKY_COLOR = (0, 0, 0)  # Black
 WIREFRAME_COLOR = (0, 255, 0)  # Green
 BULLET_COLOR = (255, 255, 255)  # White
 
-# Per-enemy-subtype colors
-TANK_COLOR = (0, 200, 0)        # standard tank - greenish
-SUPERTANK_COLOR = (255, 60, 60)  # supertank - reddish
-FIGHTER_COLOR = (200, 200, 0)    # fighter - yellowish
-SAUCER_COLOR = (100, 200, 255)   # saucer - cyan
+# Per-enemy-subtype colors (mapped to requested appearance)
+# Tank: blue turret (standard enemy, slow)
+TANK_COLOR = (20, 110, 220)      # blue
+# Supertank: yellow turret (faster and more aggressive)
+SUPERTANK_COLOR = (220, 200, 30)  # yellow
+# Fighter / Missile: red (zig-zagging aerial enemy)
+FIGHTER_COLOR = (220, 40, 40)     # red
+# Flying Saucer: white (UFO shape). Note: saucer will be hidden from radar below.
+SAUCER_COLOR = (240, 240, 240)    # white
 HUD_ACCENT_COLOR = (47, 151, 119)  # #2f9777
 
 class Tank(NamedTuple):
@@ -425,12 +429,20 @@ def check_bullet_obstacle_collisions(bullets: Bullet, obstacles: Obstacle) -> Tu
     # Mark obstacles for removal (any obstacle that collides with any bullet)
     obstacles_to_remove = jnp.any(collisions, axis=0)  # Shape: (num_obstacles,)
     
-    # Compute score delta: count obstacles killed by player bullets (owner == 0) and multiply by 1000
+    # Compute score delta: account for per-subtype point values when player bullets kill obstacles
     # collisions_by_player: True where a player bullet hits an obstacle
     player_bullet_mask = (bullets.owner[:, None] == 0)
     collisions_by_player = jnp.logical_and(collisions, player_bullet_mask)
     obstacles_killed_by_player = jnp.any(collisions_by_player, axis=0)  # per-obstacle
-    score_delta = jnp.sum(obstacles_killed_by_player).astype(jnp.int32) * jnp.array(1000, dtype=jnp.int32)
+
+    # Points per subtype: TANK=1000, SUPERTANK=3000, FIGHTER=2000, SAUCER=5000
+    points_map = jnp.array([1000, 3000, 2000, 5000], dtype=jnp.int32)
+    enemy_sub = getattr(obstacles, 'enemy_subtype', jnp.full_like(obstacles.x, -1))
+    # Clip negative/invalid subtype to 0 but mask with killed flag so invalids contribute 0
+    subtype_idx = jnp.clip(enemy_sub, 0, points_map.shape[0]-1).astype(jnp.int32)
+    # Multiply per-obstacle killed mask by corresponding points and sum
+    points_per_obstacle = points_map[subtype_idx] * obstacles_killed_by_player.astype(jnp.int32)
+    score_delta = jnp.sum(points_per_obstacle).astype(jnp.int32)
     
     # Update bullets - set collided bullets to inactive
     new_bullet_active = jnp.where(
@@ -823,8 +835,10 @@ def spawn_new_enemy(obstacles: Obstacle, player_tank: Tank, step_counter: chex.A
 
     # Choose subtype: if a hostile is already active, only allow SAUCER; otherwise pick from hostile types
     def choose_hostile():
-        c = jnp.floor(r1 * 3.0).astype(jnp.int32)
-        return jnp.where(c == 0, ENEMY_TYPE_TANK, jnp.where(c == 1, ENEMY_TYPE_SUPERTANK, ENEMY_TYPE_FIGHTER))
+        # Weighted choice: Tank (45%), Supertank (45%), Fighter (10%)
+        v = r1
+        return jnp.where(v < 0.45, ENEMY_TYPE_TANK,
+                         jnp.where(v < 0.90, ENEMY_TYPE_SUPERTANK, ENEMY_TYPE_FIGHTER))
 
     chosen_subtype = jax.lax.cond(hostile_active, lambda: ENEMY_TYPE_SAUCER, choose_hostile)
 
@@ -1611,6 +1625,39 @@ class BattleZoneRenderer:
         except:
             pass
 
+    def draw_saucer(self, screen, x, y, distance, color):
+        """Draw a simple flying saucer (UFO) shape."""
+        try:
+            if distance > self.view_distance:
+                return
+            # scale size inversely with distance
+            size = max(6, int(18 / max(distance / 50, 1)))
+            # body
+            pygame.draw.ellipse(screen, color, (x - size, y - size//3, size*2, size//1.5), 1)
+            # dome
+            pygame.draw.ellipse(screen, color, (x - size//2, y - size//2, size, size//2), 1)
+            # small glow dots
+            for dx in (-size//3, 0, size//3):
+                pygame.draw.circle(screen, color, (x + dx, y + size//6), 1)
+        except Exception:
+            pass
+
+    def draw_fighter(self, screen, x, y, distance, color):
+        """Draw a simple aerial fighter/missile with propeller-like shape."""
+        try:
+            if distance > self.view_distance:
+                return
+            size = max(6, int(14 / max(distance / 50, 1)))
+            # body - narrow fuselage
+            pygame.draw.polygon(screen, color, [(x - size, y), (x + size, y - size//3), (x + size, y + size//3)], 1)
+            # tail
+            pygame.draw.line(screen, color, (x - size, y), (x - size - 4, y - 3), 1)
+            # propeller as small cross in front
+            pygame.draw.line(screen, color, (x + size + 2, y - 2), (x + size + 6, y + 2), 1)
+            pygame.draw.line(screen, color, (x + size + 2, y + 2), (x + size + 6, y - 2), 1)
+        except Exception:
+            pass
+
     def draw_enemy_tank(self, screen, x, y, distance, color, tank_angle, player_angle):
         """Draw enemy tank with directional appearance based on relative orientation."""
         if distance > self.view_distance:
@@ -1725,6 +1772,9 @@ class BattleZoneRenderer:
                     subtype_val = int(state.obstacles.enemy_subtype[i])
                 except Exception:
                     subtype_val = -1
+                # Do not show saucers on radar
+                if subtype_val == ENEMY_TYPE_SAUCER:
+                    continue
                 if subtype_val == ENEMY_TYPE_SUPERTANK:
                     enemy_color = SUPERTANK_COLOR
                 elif subtype_val == ENEMY_TYPE_TANK:
@@ -2028,17 +2078,25 @@ class BattleZoneRenderer:
                         subtype_val = -1
                     if subtype_val == ENEMY_TYPE_SUPERTANK:
                         enemy_color = SUPERTANK_COLOR
+                        self.draw_enemy_tank(screen, screen_x, screen_y, distance, enemy_color,
+                                           obstacle_angle, state.player_tank.angle)
                     elif subtype_val == ENEMY_TYPE_TANK:
                         enemy_color = TANK_COLOR
+                        self.draw_enemy_tank(screen, screen_x, screen_y, distance, enemy_color,
+                                           obstacle_angle, state.player_tank.angle)
                     elif subtype_val == ENEMY_TYPE_FIGHTER:
                         enemy_color = FIGHTER_COLOR
+                        # Draw as aerial fighter shape
+                        self.draw_fighter(screen, screen_x, screen_y, distance, enemy_color)
+                        continue
                     elif subtype_val == ENEMY_TYPE_SAUCER:
-                        enemy_color = SAUCER_COLOR
+                        # Draw saucer with dedicated renderer and skip tank drawing
+                        self.draw_saucer(screen, screen_x, screen_y, distance, SAUCER_COLOR)
+                        continue
                     else:
                         enemy_color = WIREFRAME_COLOR
-
-                    self.draw_enemy_tank(screen, screen_x, screen_y, distance, enemy_color,
-                                       obstacle_angle, state.player_tank.angle)
+                        self.draw_enemy_tank(screen, screen_x, screen_y, distance, enemy_color,
+                                           obstacle_angle, state.player_tank.angle)
                 elif obstacle_type == 1:  # Cube obstacle
                     self.draw_wireframe_cube(screen, screen_x, screen_y, distance, WIREFRAME_COLOR)
                 else:  # Pyramid obstacle
