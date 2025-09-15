@@ -32,7 +32,6 @@ Observation:
 Performance:
 - Improve collision handling cars
 
-
 Cleanup:
 - debug renderer in main file
 """
@@ -73,7 +72,7 @@ class EnduroConstants(NamedTuple):
 
     # player car start position
     player_x_start: float = game_screen_middle
-    player_y_start: float = game_window_height - car_height_0 - 1
+    player_y_start: int = game_window_height - car_height_0 - 1
 
     # =============
     # === Track ===
@@ -299,7 +298,7 @@ class EnduroGameState(NamedTuple):
     day_count: jnp.int32  # incremented every day-night cycle, starts by 0
 
     # visible (mirror in Observation)
-    player_y_abs_position: chex.Array
+    player_y_abs_position: chex.Array  # jnp.int32
     player_x_abs_position: chex.Array
     cars_overtaken: chex.Array
     cars_to_overtake: chex.Array  # goal for current level
@@ -685,14 +684,14 @@ class JaxEnduro(JaxEnvironment[EnduroGameState, EnduroObservation, EnduroInfo, E
             # move one pixel forward for every 5th speed increase
             y_abs = jnp.subtract(self.config.player_y_start, jnp.floor_divide(speed, self.config.max_speed / 10))
 
-            return speed, x_abs, y_abs
+            return speed, x_abs, y_abs.astype(jnp.int32)
 
         def cooldown_handling() -> Tuple[jnp.ndarray, jnp.ndarray, jnp.ndarray]:
             new_x = state.player_x_abs_position + state.cooldown_drift_direction * self.config.crash_kickback_speed_per_frame
             return (
                 jnp.array(self.config.min_speed, dtype=jnp.float32),
                 jnp.array(new_x, dtype=jnp.float32),
-                jnp.array(self.config.player_y_start, dtype=jnp.float32)
+                jnp.array(self.config.player_y_start, dtype=jnp.int32)
             )
 
         new_speed, new_x_abs, new_y_abs = lax.cond(
@@ -1373,8 +1372,6 @@ class JaxEnduro(JaxEnvironment[EnduroGameState, EnduroObservation, EnduroInfo, E
         def adjust_opponents():
             # Calculate which lane(s) the player occupies
             # Get track boundaries at player's y position
-            # track_row_index = jnp.clip(state.player_y_abs_position - self.config.sky_height,
-            #                            0, self.config.track_height - 1).astype(jnp.int32)  # Convert to int!
             left_boundary = state.visible_track_left[self.config.player_y_start]
             right_boundary = state.visible_track_right[self.config.player_y_start]
             track_width = right_boundary - left_boundary
