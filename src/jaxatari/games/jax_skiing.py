@@ -476,9 +476,9 @@ class JaxSkiing(JaxEnvironment[GameState, SkiingObservation, SkiingInfo, SkiingC
 
         # Despawn/Strafe nur anhand der "gefreezten" (finalen) Flags berechnen
         despawn_mask = new_flags[:, 1] < self.consts.TOP_BORDER
-        missed_penalty_mask = jnp.logical_and(despawn_mask, jnp.logical_not(flags_passed))
-        missed_penalty_count = jnp.sum(missed_penalty_mask)
-        missed_penalty = missed_penalty_count * 300
+        # missed_penalty_mask = jnp.logical_and(despawn_mask, jnp.logical_not(flags_passed))
+        # missed_penalty_count = jnp.sum(missed_penalty_mask)
+        # missed_penalty = missed_penalty_count * 300
         flags_passed = jnp.where(despawn_mask, False, flags_passed)
 
 
@@ -500,7 +500,8 @@ class JaxSkiing(JaxEnvironment[GameState, SkiingObservation, SkiingInfo, SkiingC
         new_time = jax.lax.cond(
             jnp.greater(state.time, 9223372036854775807 / 2),
             lambda _: jnp.array(0, dtype=jnp.int32),
-            lambda _: state.time + 1 + missed_penalty,
+            # lambda _: state.time + 1 + missed_penalty,
+            lambda _: state.time + 1,
             operand=None,
         )
 
