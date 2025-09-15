@@ -163,10 +163,11 @@ class EnduroConstants(NamedTuple):
         34 + 34 + 34 + 69 + 8 * 8 + 69 + 69 + 34,  # night 2
         34 + 34 + 34 + 69 + 8 * 8 + 69 + 69 + 34 + 34,  # dawn
     ], dtype=jnp.int32)
-    # weather_starts_s: jnp.ndarray = jnp.arange(0, 32, 2, dtype=jnp.int32)  # for debugging
+    weather_starts_s: jnp.ndarray = jnp.arange(0, 64, 4, dtype=jnp.int32)  # for debugging
     # special events in the weather:
     snow_weather_index: int = 3  # which part of the weather array is snow (reduced steering)
     night_fog_index: int = 13  # which part of the weather array has the reduced visibility (fog)
+    fog_height: int = 103  # the height of the fog sprite
     weather_with_night_car_sprite = jnp.array([12, 13, 14], dtype=jnp.int32)  # renders only the rear lights
     day_cycle_time: int = weather_starts_s[15]
 
@@ -210,7 +211,7 @@ class EnduroConstants(NamedTuple):
     opponent_spawn_seed: int = 42
 
     length_of_opponent_array = 5000
-    opponent_density = 0.0
+    opponent_density = 0.3
     opponent_delay_slots = 10
 
     # How many opponents to overtake to progress into the next level
@@ -276,10 +277,9 @@ class EnduroGameState(NamedTuple):
     step_count: jnp.int32  # incremented every step
     day_count: jnp.int32  # incremented every day-night cycle, starts by 0
 
-    # visible (mirror in Observation)
+    # visible
     player_x_abs_position: chex.Array  # jnp.float32 -> to have sub-step movement per frame
     player_y_abs_position: chex.Array  # jnp.int32
-    cars_overtaken: chex.Array
     cars_to_overtake: chex.Array  # goal for current level
     distance: chex.Array
     level: chex.Array
@@ -296,6 +296,7 @@ class EnduroGameState(NamedTuple):
     mountain_left_x: chex.Array
     mountain_right_x: chex.Array
     cooldown_drift_direction: chex.Array
+    cars_overtaken: chex.Array
 
     # track
     track_top_x: chex.Array  # jnp.int32
@@ -309,10 +310,8 @@ class EnduroGameState(NamedTuple):
     player_speed: chex.Array
     cooldown: chex.Array  # cooldown after collision with another car
     game_over: chex.Array  # game over if you fail to pass enough cars before the day ends
-    time_remaining: chex.Array
     total_cars_overtaken: chex.Array
     total_time_elapsed: chex.Array
-    total_frames_elapsed: chex.Array
 
 
 class VehicleSpec:
@@ -371,28 +370,26 @@ class VehicleSpec:
         self.width = width
 
 
-class EntityPosition(NamedTuple):
-    x: jnp.ndarray
-    y: jnp.ndarray
-    width: jnp.ndarray
-    height: jnp.ndarray
-
-
 class EnduroObservation(NamedTuple):
     # cars
-    car: EntityPosition  # player car position
+    player_x: jnp.ndarray
+    player_y: jnp.ndarray
     visible_opponents: chex.Array
 
     # score box
     cars_to_overtake: jnp.ndarray  # goal for current level
     distance: jnp.ndarray
     level: jnp.ndarray
+    level_passed: jnp.ndarray  # the flags when all required opponents have been overtaken
 
     # track
-    track_top_x: chex.Array
     track_left_xs: chex.Array
     track_right_xs: chex.Array
     curvature: jnp.ndarray  # one of -1, 0, or 1
+
+    # environment
+    cooldown: chex.Array
+    weather_index: chex.Array
 
 
 class EnduroInfo(NamedTuple):
@@ -516,13 +513,14 @@ class JaxEnduro(JaxEnvironment[EnduroGameState, EnduroObservation, EnduroInfo, E
                                                                           right_xs)
 
         state = EnduroGameState(
-            # visible
+            # counts
             step_count=jnp.array(0),
             day_count=jnp.array(0),
+
+            # observation
             player_x_abs_position=jnp.array(self.config.player_x_start).astype(jnp.float32),
             player_y_abs_position=jnp.array(self.config.player_y_start),
             cars_to_overtake=jnp.array(self.config.cars_to_pass_per_level),
-            cars_overtaken=jnp.array(0),
             distance=jnp.array(0.0, dtype=jnp.float32),
             level=jnp.array(1),
             level_passed=jnp.array(False),
@@ -534,6 +532,7 @@ class JaxEnduro(JaxEnvironment[EnduroGameState, EnduroObservation, EnduroInfo, E
             is_collision=jnp.bool_(False),
 
             # visible but implicit
+            cars_overtaken=jnp.array(0),
             weather_index=jnp.array(0),
             mountain_left_x=jnp.array(self.config.mountain_left_x_pos),
             mountain_right_x=jnp.array(self.config.mountain_right_x_pos),
@@ -550,10 +549,8 @@ class JaxEnduro(JaxEnvironment[EnduroGameState, EnduroObservation, EnduroInfo, E
             player_speed=jnp.array(0.0, dtype=jnp.float32),
             cooldown=jnp.array(0.0, dtype=jnp.float32),
             game_over=jnp.array(False),
-            time_remaining=jnp.array(self.config.day_cycle_time),
             total_cars_overtaken=jnp.array(0),
             total_time_elapsed=jnp.array(0.0, dtype=jnp.float32),
-            total_frames_elapsed=jnp.array(0),
         )
 
         return self._get_observation(state), state
@@ -865,7 +862,6 @@ class JaxEnduro(JaxEnvironment[EnduroGameState, EnduroObservation, EnduroInfo, E
             player_x_abs_position=new_x_abs,
             player_y_abs_position=new_y_abs,
             total_time_elapsed=state.step_count / self.config.frame_rate,
-            total_frames_elapsed=state.total_frames_elapsed + 1,
             distance=new_distance,
             player_speed=new_speed,
             level=new_level,
@@ -901,6 +897,33 @@ class JaxEnduro(JaxEnvironment[EnduroGameState, EnduroObservation, EnduroInfo, E
 
     @partial(jax.jit, static_argnums=(0,))
     def _get_observation(self, state: EnduroGameState):
+        """
+        Extract game state information that's directly relevant for RL decision-making.
+
+        This observation focuses on information that affects optimal actions (steering, acceleration, braking)
+        while excluding cosmetic elements that don't impact gameplay decisions. The design philosophy mirrors
+        what a human player would consciously use: track position, nearby obstacles, and objectives.
+
+        Key design decisions:
+        - Player position: Essential for collision avoidance and lane positioning
+        - Opponents: Only x,y coordinates (colors are cosmetic and irrelevant for decisions)
+        - Track boundaries: Full arrays preserved as they're critical for steering decisions
+        - Game objectives: Distance, level, cars_to_overtake directly affect strategy
+        - Environmental state: Weather affects steering mechanics, cooldown affects control responsiveness
+        - Consistent encoding: Empty opponent slots use (-1, -1) to avoid mixed signals to neural networks
+
+        Fog simulation:
+        When weather_index indicates fog conditions, the observation mimics reduced visibility by:
+        - Hiding opponents completely obscured by fog (bottom of car above fog line)
+        - Masking track boundaries in the fog zone (top 53 pixels of track)
+        - Ensuring agents experience the same visibility constraints as human players
+
+        This creates a challenging but fair learning environment where agents must handle uncertainty
+        and partial observability, just like the original game experience.
+
+        Returns:
+            EnduroObservation with cleaned, game-relevant state information
+        """
         track = state.whole_track
         directions = track[:, 0]
         track_starts = track[:, 1]
@@ -908,28 +931,83 @@ class JaxEnduro(JaxEnvironment[EnduroGameState, EnduroObservation, EnduroInfo, E
         segment_index = jnp.searchsorted(track_starts, state.distance, side='right') - 1
         curvature = directions[segment_index]
 
-        # take the position of the car and the size of the config
-        car = EntityPosition(
-            x=state.player_x_abs_position,
-            y=state.player_y_abs_position,
-            width=jnp.array(self.config.car_width_0),
-            height=jnp.array(self.config.car_height_0),
+        # Check if we're in fog conditions
+        is_fog = state.weather_index == self.config.night_fog_index
+        fog_height = self.config.fog_height  # 103 pixels
+
+        # === Handle opponents with fog visibility ===
+        visible_opponents_base = state.visible_opponent_positions[:, :2]  # Remove colors
+
+        # In fog, hide opponents that are completely within the fog zone
+        def apply_fog_to_opponents(opponents):
+            # Only check fog for opponents that actually exist (x != -1)
+            opponent_exists = opponents[:, 0] != -1
+
+            # Check if bottom of car (y + car_height) is still in fog zone
+            car_bottom_ys = opponents[:, 1] + self.config.car_heights
+            completely_in_fog = car_bottom_ys < fog_height
+
+            # Hide opponents that exist AND are completely in fog
+            should_hide = opponent_exists & completely_in_fog
+
+            # Set both x and y to -1 for hidden opponents
+            fogged_opponents = opponents.at[:, 0].set(
+                jnp.where(should_hide, -1, opponents[:, 0])
+            )
+            fogged_opponents = fogged_opponents.at[:, 1].set(
+                jnp.where(should_hide, -1, fogged_opponents[:, 1])
+            )
+            return fogged_opponents
+
+        visible_opponents = jnp.where(
+            is_fog,
+            apply_fog_to_opponents(visible_opponents_base),
+            visible_opponents_base
+        )
+
+        # === Handle track with fog visibility ===
+        # Fog covers sky (50px) + top 53 pixels of track
+        # Track arrays start at sky boundary, so fog affects first 53 elements
+        fog_track_rows = fog_height - self.config.sky_height  # 103 - 50 = 53 rows
+
+        def apply_fog_to_track(track_xs):
+            # Set fogged track positions to -1 or some "invisible" value
+            # Alternative: you could set them to the screen edge to make them "invisible"
+            fog_mask = jnp.arange(len(track_xs)) < fog_track_rows
+            return jnp.where(fog_mask, -1, track_xs)
+
+        track_left_xs = jnp.where(
+            is_fog,
+            apply_fog_to_track(state.visible_track_left),
+            state.visible_track_left
+        )
+
+        track_right_xs = jnp.where(
+            is_fog,
+            apply_fog_to_track(state.visible_track_right),
+            state.visible_track_right
         )
 
         return EnduroObservation(
-            car=car,
-            visible_opponents=state.visible_opponent_positions,
+            # cars
+            player_x=state.player_x_abs_position,
+            player_y=state.player_y_abs_position,
+            visible_opponents=visible_opponents,
 
             # score box
             cars_to_overtake=state.cars_to_overtake,
             distance=state.distance,
             level=state.level,
+            level_passed=state.level_passed,
 
-            # track
-            track_top_x=state.track_top_x,
-            track_left_xs=state.visible_track_left,
-            track_right_xs=state.visible_track_right,
-            curvature=curvature
+            # track (now with fog effects)
+            track_left_xs=track_left_xs,
+            track_right_xs=track_right_xs,
+            curvature=curvature,
+
+            # environment
+            cooldown=state.cooldown,
+            weather_index=state.weather_index,
         )
 
     @partial(jax.jit, static_argnums=(0,))
@@ -1256,7 +1334,7 @@ class JaxEnduro(JaxEnvironment[EnduroGameState, EnduroObservation, EnduroInfo, E
 
         Returns:
             jnp.ndarray of shape (7, 3) where each row is [x_position, y_position, color]
-            For empty slots: x_position = -1, y_position = slot_y, color = 0
+            For empty slots: x_position = -1, y_position = -1, color = 0
         """
         # Base y positions for each slot (top of each slot)
         base_y_positions = self.config.opponent_slot_ys
@@ -1314,8 +1392,12 @@ class JaxEnduro(JaxEnvironment[EnduroGameState, EnduroObservation, EnduroInfo, E
             slot_indices, current_slots, left_boundaries, track_widths
         ).astype(jnp.int32)
 
+        # Set y_positions to -1 when there's no opponent (x_positions == -1)
+        no_opponent_mask = x_positions == -1
+        y_positions_final = jnp.where(no_opponent_mask, -1, y_positions)
+
         # Combine into final result: [x, y, color] for each slot
-        result = jnp.stack([x_positions, y_positions, current_colors], axis=1)
+        result = jnp.stack([x_positions, y_positions_final, current_colors], axis=1)
 
         return result
 
@@ -2403,7 +2485,6 @@ Track:
 - curve move speed based on speed
 
 Observation:
-- improve observation function
 - reduce observation when fog
 
 Performance:
@@ -2634,7 +2715,7 @@ class EnduroDebugRenderer:
         pygame.display.flip()
 
     @staticmethod
-    def render_debug_overlay(screen, state: EnduroGameState, font, game_config):
+    def render_debug_overlay(screen, state: EnduroGameState, font, game_config, obs: EnduroObservation):
         """Render debug information as pygame text overlay"""
         track_direction_starts_at = state.whole_track[:, 1]
         track_segment_index = int(jnp.searchsorted(track_direction_starts_at, state.distance, side='right') - 1)
@@ -2651,15 +2732,20 @@ class EnduroDebugRenderer:
             # f"Steering sensitivity: {}",
             # f"Left Mountain x: {state.mountain_left_x}",
             # f"Opponent Index: {state.opponent_index}",
-            # f"Opponents: {state.visible_opponent_positions}",
-            f"Cars To overtake: {state.cars_to_overtake}",
-            f"Cars overtaken: {state.cars_overtaken}",
+            f"Opponents: {state.visible_opponent_positions}",
+            # f"Cars To overtake: {state.cars_to_overtake}",
+            # f"Cars overtaken: {state.cars_overtaken}",
             # f"Opponent Collision: {state.is_collision}",
             # f"Cooldown Drift direction: {state.cooldown_drift_direction}"
             # f"Weather: {state.weather_index}",
             # f"Track direction: {self.DIRECTION_LABELS.get(int(track_direction))} ({track_direction})",
             # f"Track top X: {state.track_top_x}",
+            # f"Track left X: {state.visible_track_left}",
+            # f"Track right X: {state.visible_track_right}",
             # f"Top X Offset: {state.track_top_x_curve_offset}",
+            f"Obs right track: {obs.track_right_xs}",
+            f"Obs Opponents: {obs.visible_opponents}",
+            f"Obs Cooldown {obs.cooldown}",
         ]
 
         # Semi-transparent background for better readability
@@ -2751,7 +2837,7 @@ class EnduroDebugRenderer:
 
             # Add debug overlay if enabled
             if debug_mode and show_debug:
-                self.render_debug_overlay(screen, state, font, renderer.config)
+                self.render_debug_overlay(screen, state, font, renderer.config, obs)
 
                 # Add controls help in corner
                 help_text = small_font.render("Press 'D' to toggle debug", True, (200, 200, 200))
