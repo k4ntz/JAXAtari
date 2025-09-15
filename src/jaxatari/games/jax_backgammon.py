@@ -1,4 +1,5 @@
 # Third party imports
+import chex
 import jax
 import jax.numpy as jnp
 from functools import partial
@@ -50,6 +51,7 @@ class BackgammonState(NamedTuple):
 class BackgammonInfo(NamedTuple):
     """Contains auxiliary information about the environment (e.g., timing or metadata)."""
     time: jnp.ndarray
+    all_rewards: chex.Array
 
 
 class BackgammonObservation(NamedTuple):
@@ -66,13 +68,16 @@ class JaxBackgammonEnv(JaxEnvironment[BackgammonState, jnp.ndarray, dict, Backga
     JAX-based backgammon environment supporting JIT compilation and vectorized operations.
     Provides functionality for state initialization, step transitions, valid move evaluation, and observation generation.
     """
-    def __init__(self,consts: BackgammonConstants = None):
+    def __init__(self,consts: BackgammonConstants = None, reward_funcs: list[callable] = None):
         consts = consts or BackgammonConstants()
         super().__init__(consts)
 
         # Pre-compute all possible moves (indexed as a scalar in the framework)
         self._action_pairs = jnp.array([(i, j) for i in range(26) for j in range(26)], dtype=jnp.int32)
         self.renderer = BackgammonRenderer(self)
+        if reward_funcs is not None:
+            reward_funcs = tuple(reward_funcs)
+        self.reward_funcs = reward_funcs
 
     @partial(jax.jit, static_argnums=(0,))
     def init_state(self,key) -> BackgammonState:
@@ -481,8 +486,9 @@ class JaxBackgammonEnv(JaxEnvironment[BackgammonState, jnp.ndarray, dict, Backga
 
         obs = self._get_observation(new_state)
         reward = self._get_reward(state, new_state)
+        all_rewards = self._get_all_reward(state, new_state)
         done = self._get_done(new_state)
-        info = self._get_info(new_state)
+        info = self._get_info(new_state, all_rewards)
 
         return obs, new_state, reward, done, info, new_key
 
@@ -504,7 +510,16 @@ class JaxBackgammonEnv(JaxEnvironment[BackgammonState, jnp.ndarray, dict, Backga
             obs.is_game_over.flatten(),
             obs.bar_counts.flatten(),  # 2 elements
             obs.home_counts.flatten()
-        ]).astype(jnp.float32)
+        ]).astype(jnp.int32)
+
+    @partial(jax.jit, static_argnums=(0,))
+    def _get_all_reward(self, previous_state: BackgammonState, state: BackgammonState):
+        if self.reward_funcs is None:
+            return jnp.zeros(1)
+        rewards = jnp.array(
+            [reward_func(previous_state, state) for reward_func in self.reward_funcs]
+        )
+        return rewards
 
     def image_space(self) -> spaces.Box:
         """Returns the image space for rendered frames."""
@@ -574,7 +589,7 @@ class JaxBackgammonEnv(JaxEnvironment[BackgammonState, jnp.ndarray, dict, Backga
 
     @staticmethod
     @jax.jit
-    def _get_info(state: BackgammonState) -> dict:
+    def _get_info(state: BackgammonState, all_rewards: chex.Array = None) -> dict:
         """Return auxiliary information about the environment."""
         return {"player": state.current_player, "dice": state.dice}
 
