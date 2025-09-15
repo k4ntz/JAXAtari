@@ -2425,7 +2425,6 @@ class BeamRiderEnv(JaxEnvironment[BeamRiderState, BeamRiderObservation, BeamRide
         x1 = center_x + (x0 - center_x) * 0.05
         x = x0 + (x1 - x0) * t
         return x
-
     @partial(jax.jit, static_argnums=(0,))
     def _update_enemies(self, state: BeamRiderState) -> BeamRiderState:
         """Update enemy positions - CORRECTED GREEN BOUNCE CRAFT MOVEMENT"""
@@ -2876,11 +2875,9 @@ class BeamRiderEnv(JaxEnvironment[BeamRiderState, BeamRiderObservation, BeamRide
         # ===== Make vertical movers follow dotted beams (perspective curve) =====
         beam_idx_now = enemies[:, 2].astype(int)
 
-        # Which enemies are in a vertical segment controlled here (white saucers and blockers handled elsewhere)?
         vertical_mask = (
-                (regular_enemy_mask | charger_mask | tracker_mask)  # REMOVED: blocker_mask from here
-                & ~chirper_mask & ~bounce_mask & ~sentinel_mask & ~debris_mask & ~blocker_mask
-            # ADDED: exclude blockers
+                (regular_enemy_mask | charger_mask | tracker_mask | debris_mask)
+                & ~chirper_mask & ~bounce_mask & ~sentinel_mask & ~blocker_mask
         )
 
         curved_x = self._beam_curve_x(new_y, beam_idx_now, self.constants.ENEMY_WIDTH)
@@ -3464,14 +3461,14 @@ class BeamRiderEnv(JaxEnvironment[BeamRiderState, BeamRiderObservation, BeamRide
                 new_debris = jnp.array([
                     rejuv_x,  # x - start at rejuvenator position
                     rejuv_y,  # y - start at rejuvenator position
-                    rejuv_beam,  # beam_position - inherit rejuvenator's beam
+                    rejuv_beam,  # beam_position - inherit rejuvenator's beam (IMPORTANT: this enables curve following)
                     1,  # active
                     self.constants.REJUVENATOR_DEBRIS_SPEED,  # speed
                     self.constants.ENEMY_TYPE_REJUVENATOR_DEBRIS,  # type
-                    0.0,  # direction_x - no horizontal movement
+                    0.0,  # direction_x - no horizontal movement needed (curve will handle this)
                     1.0,  # direction_y - move down
                     0,  # bounce_count
-                    0,  # linger_timer - not used for lifetime anymore
+                    0,  # linger_timer
                     0,  # target_x
                     1,  # health
                     0,  # firing_timer
@@ -3807,6 +3804,29 @@ class BeamRiderRenderer(JAXGameRenderer):
             [0, 1, 0, 0, 0, 1, 0],
             [1, 0, 0, 0, 0, 0, 1],
         ])
+
+        # Yellow chirper sprite - closed mouth frame
+        self.yellow_chirper_closed = jnp.array([
+            [0, 0, 0, 1, 1, 1, 0, 0, 0],
+            [0, 0, 1, 1, 1, 1, 1, 0, 0],
+            [0, 1, 1, 1, 1, 1, 1, 1, 0],
+            [1, 1, 1, 1, 1, 1, 1, 1, 1],
+            [0, 1, 1, 1, 1, 1, 1, 1, 0],
+            [0, 0, 1, 1, 1, 1, 1, 0, 0],
+            [0, 0, 0, 1, 1, 1, 0, 0, 0],
+        ], dtype=jnp.uint8)
+
+        # Yellow chirper sprite - open mouth frame
+        self.yellow_chirper_open = jnp.array([
+            [0, 0, 0, 1, 1, 1, 0, 0, 0],
+            [0, 0, 1, 1, 1, 1, 1, 0, 0],
+            [0, 1, 1, 1, 0, 1, 1, 1, 0],
+            [1, 1, 1, 0, 0, 0, 1, 1, 1],
+            [0, 1, 1, 1, 0, 1, 1, 1, 0],
+            [0, 0, 1, 1, 1, 1, 1, 0, 0],
+            [0, 0, 0, 1, 1, 1, 0, 0, 0],
+        ], dtype=jnp.uint8)
+
         # JAX rendering components
         self.ship_sprite_surface = self._create_ship_surface()
         self.small_ship_surface = self._create_small_ship_surface()
@@ -3825,6 +3845,94 @@ class BeamRiderRenderer(JAXGameRenderer):
             pygame.display.set_caption("BeamRider - JAX Implementation")
             self.clock = pygame.time.Clock()
             self.env = BeamRiderEnv()
+
+    @partial(jax.jit, static_argnums=(0,))
+    def _get_chirper_animation_frame(self, frame_count: int) -> int:
+        """Get current animation frame for yellow chirper (0=closed, 1=open)"""
+        # Change animation every 20 frames (about 3 times per second at 60fps)
+        animation_speed = 20
+        return (frame_count // animation_speed) % 2
+
+    @partial(jax.jit, static_argnums=(0,))
+    def _draw_animated_chirper_sprite(self, screen: chex.Array, x: int, y: int,
+                                      scale: float, color: chex.Array, frame_count: int) -> chex.Array:
+        """Draw animated yellow chirper sprite with opening/closing mouth"""
+
+        # Get current animation frame
+        anim_frame = self._get_chirper_animation_frame(frame_count)
+
+        # Select sprite based on animation frame
+        sprite = jnp.where(
+            anim_frame == 0,
+            self.yellow_chirper_closed,
+            self.yellow_chirper_open
+        )
+
+        sprite_height, sprite_width = sprite.shape
+
+        # Calculate scaled dimensions
+        scaled_width = jnp.maximum(1, (sprite_width * scale).astype(jnp.int32))
+        scaled_height = jnp.maximum(1, (sprite_height * scale).astype(jnp.int32))
+
+        # For very small scales, just draw a dot
+        is_dot = scale < 0.25
+
+        def draw_dot():
+            y_indices = jnp.arange(self.constants.SCREEN_HEIGHT)
+            x_indices = jnp.arange(self.constants.SCREEN_WIDTH)
+            y_grid, x_grid = jnp.meshgrid(y_indices, x_indices, indexing='ij')
+
+            dot_mask = (x_grid == x) & (y_grid == y) & (x >= 0) & (x < self.constants.SCREEN_WIDTH) & (y >= 0) & (
+                        y < self.constants.SCREEN_HEIGHT)
+
+            return jnp.where(
+                dot_mask[..., None],
+                color,
+                screen
+            ).astype(jnp.uint8)
+
+        def draw_scaled_sprite():
+            y_indices = jnp.arange(self.constants.SCREEN_HEIGHT)
+            x_indices = jnp.arange(self.constants.SCREEN_WIDTH)
+            y_grid, x_grid = jnp.meshgrid(y_indices, x_indices, indexing='ij')
+
+            # Center the scaled sprite
+            start_x = x - scaled_width // 2
+            start_y = y - scaled_height // 2
+
+            # Create mask for scaled sprite area
+            sprite_mask = (
+                    (x_grid >= start_x) &
+                    (x_grid < start_x + scaled_width) &
+                    (y_grid >= start_y) &
+                    (y_grid < start_y + scaled_height) &
+                    (start_x >= 0) & (start_x + scaled_width <= self.constants.SCREEN_WIDTH) &
+                    (start_y >= 0) & (start_y + scaled_height <= self.constants.SCREEN_HEIGHT)
+            )
+
+            # Map screen coordinates to original sprite coordinates
+            sprite_x_coords = ((x_grid - start_x) * sprite_width / scaled_width).astype(jnp.int32)
+            sprite_y_coords = ((y_grid - start_y) * sprite_height / scaled_height).astype(jnp.int32)
+
+            # Clamp coordinates to sprite bounds
+            sprite_x_coords = jnp.clip(sprite_x_coords, 0, sprite_width - 1)
+            sprite_y_coords = jnp.clip(sprite_y_coords, 0, sprite_height - 1)
+
+            # Get sprite pixel values
+            sprite_values = sprite[sprite_y_coords, sprite_x_coords]
+
+            # Apply color where sprite has value 1 and mask is True
+            draw_mask = sprite_mask & (sprite_values == 1)
+
+            return jnp.where(
+                draw_mask[..., None],
+                color,
+                screen
+            ).astype(jnp.uint8)
+
+        # Choose between dot or scaled sprite based on scale
+        return jax.lax.cond(is_dot, draw_dot, draw_scaled_sprite)
+
 
     def _create_ship_surface(self):
         # Create the main ship sprite surface using a pixel array and color map.
@@ -3887,7 +3995,7 @@ class BeamRiderRenderer(JAXGameRenderer):
         screen = self._draw_sentinel_projectiles(screen, state.sentinel_projectiles)
 
         # Render enemies
-        screen = self._draw_enemies(screen, state.enemies)
+        screen = self._draw_enemies(screen, state.enemies, state)
 
         # Render UI (score, lives, torpedoes, sector progress)
         screen = self._draw_ui(screen, state)
@@ -4416,7 +4524,7 @@ class BeamRiderRenderer(JAXGameRenderer):
         return jax.lax.cond(is_dot, draw_dot, draw_scaled_sprite)
 
     @partial(jax.jit, static_argnums=(0,))
-    def _draw_enemies(self, screen: chex.Array, enemies: chex.Array) -> chex.Array:
+    def _draw_enemies(self, screen: chex.Array, enemies: chex.Array, state: BeamRiderState) -> chex.Array:
         """Draw all active enemies with perspective scaling and sprites for white saucers and brown debris"""
 
         def draw_single_enemy(i, screen):
@@ -4441,6 +4549,7 @@ class BeamRiderRenderer(JAXGameRenderer):
             is_yellow_rejuv = enemy_type == self.constants.ENEMY_TYPE_YELLOW_REJUVENATOR
             is_sentinel = enemy_type == self.constants.ENEMY_TYPE_SENTINEL_SHIP
             is_yellow_debris = enemy_type == self.constants.ENEMY_TYPE_REJUVENATOR_DEBRIS
+            is_yellow_chirper = enemy_type == self.constants.ENEMY_TYPE_YELLOW_CHIRPER
             # Get base enemy dimensions
             base_width = jnp.where(
                 sentinel_ship,
@@ -4480,8 +4589,12 @@ class BeamRiderRenderer(JAXGameRenderer):
             use_yellow_rejuv_sprite = is_yellow_rejuv & active
             use_sentinel_sprite = is_sentinel & active
             use_yellow_debris_sprite = is_yellow_debris & active
-            use_any_sprite = use_white_saucer_sprite | use_brown_debris_sprite | use_green_blocker_sprite | use_green_bounce_sprite | use_blue_charger_sprite | use_orange_tracker_sprite | use_yellow_rejuv_sprite | use_sentinel_sprite | use_yellow_debris_sprite
+            use_yellow_chirper_sprite = is_yellow_chirper & active
 
+            use_any_sprite = (use_white_saucer_sprite | use_brown_debris_sprite | use_green_blocker_sprite |
+                              use_green_bounce_sprite | use_blue_charger_sprite | use_orange_tracker_sprite |
+                              use_yellow_rejuv_sprite | use_sentinel_sprite | use_yellow_debris_sprite |
+                              use_yellow_chirper_sprite)
             # Center the scaled enemy at its position
             x_offset = ((base_width - scaled_width) / 2).astype(int)
             y_offset = ((base_height - scaled_height) / 2).astype(int)
@@ -4627,6 +4740,15 @@ class BeamRiderRenderer(JAXGameRenderer):
                 lambda s: s,
                 screen
             )
+            screen = jax.lax.cond(
+                use_yellow_chirper_sprite,
+                lambda s: self._draw_animated_chirper_sprite(s, x.astype(int), y.astype(int), 1.0,
+                                                             jnp.array(self.constants.YELLOW_CHIRPER_COLOR,
+                                                                       dtype=jnp.uint8),
+                                                             state.frame_count),  # Pass frame_count for animation
+                lambda s: s,
+                screen
+            )
             # For very small enemies (dots)
             dot_mask = (
                     is_dot &
@@ -4737,8 +4859,8 @@ class BeamRiderRenderer(JAXGameRenderer):
         MARGIN_TORPS_X = 0  # right margin
         MARGIN_TORPS_Y = 8  # top margin
         # Lives (bottom-left)
-        MARGIN_LIVES_X = 10  # left margin
-        MARGIN_LIVES_Y = 6  # bottom margin
+        MARGIN_LIVES_X = 5  # left margin
+        MARGIN_LIVES_Y = 1  # bottom margin
 
         # Screen size
         H = self.constants.SCREEN_HEIGHT
