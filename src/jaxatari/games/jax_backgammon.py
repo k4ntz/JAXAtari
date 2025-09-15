@@ -612,7 +612,7 @@ class BackgammonRenderer(JAXGameRenderer):
         super().__init__(env)
 
         self.frame_height = 210
-        self.frame_width = 180
+        self.frame_width = 160
         self.color_background = jnp.array([34, 139, 34], dtype=jnp.uint8)  # green
         self.color_board = jnp.array([139, 69, 19], dtype=jnp.uint8)  # brown
         self.color_triangle_light = jnp.array([222, 184, 135], dtype=jnp.uint8)
