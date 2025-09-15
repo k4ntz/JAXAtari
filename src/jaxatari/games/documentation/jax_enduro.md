@@ -126,7 +126,7 @@
 
 ## Limitations
 ### Integer vs. floats
-The original game uses integer for speed, but since we need a frame based acceleration logic for the JAX implementation, this is not feasible. This has thw downside, that the player cannot really match the opponent speed (the float is always slightly above or below).
+The original game uses integer for speed, but since we need a frame based acceleration logic for the JAX implementation, this is not feasible. This has the downside, that the player cannot really match the opponent speed (the float is always slightly above or below).
 If this really represents an issue the speed could be encoded as an integer and the sub-speed could be implemented as a cooldown (wait n-steps before the next speed increase).
 
 ## Debug renderer

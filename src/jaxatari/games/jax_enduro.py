@@ -787,17 +787,17 @@ class JaxEnduro(JaxEnvironment[EnduroGameState, EnduroObservation, EnduroInfo, E
         cars_overtaken_change = 0
         # If we moved forward, check if we overtook a car (old slot 0 had a car)
         cars_overtaken_change += jnp.where(
-            (window_moved > 0) & (state.visible_opponent_positions[0] > -1),
+            (window_moved > 0) & (state.visible_opponent_positions[0, 0] > -1),
             1, 0
         )
         # If we moved backward, check if a car overtook us (new slot 0 has a car)
         cars_overtaken_change -= jnp.where(
-            (window_moved < 0) & (new_visible_opponent_positions[0] > -1),
+            (window_moved < 0) & (new_visible_opponent_positions[0, 0] > -1),
             1, 0
         )
         # don't allow negative numbers here
-        new_cars_overtaken = jnp.clip(state.cars_overtaken + cars_overtaken_change, 0)[0]
-        new_total_cars_overtaken = (state.total_cars_overtaken + cars_overtaken_change[0]).astype(jnp.int32)
+        new_cars_overtaken = jnp.clip(state.cars_overtaken + cars_overtaken_change, 0)
+        new_total_cars_overtaken = (state.total_cars_overtaken + cars_overtaken_change).astype(jnp.int32)
         new_cars_to_overtake = self.config.cars_to_pass_per_level + self.config.cars_increase_per_level * (
                 state.level - 1)
 
