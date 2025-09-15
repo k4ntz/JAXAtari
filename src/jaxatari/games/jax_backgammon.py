@@ -503,11 +503,34 @@ class JaxBackgammonEnv(JaxEnvironment[BackgammonState, jnp.ndarray, dict, Backga
         """Return the discrete action space (scalar index into move list)."""
         return spaces.Discrete(self._action_pairs.shape[0])
 
-    def observation_space(self) -> spaces.Box:
+    def observation_space(self) -> spaces.Dict:
         """Return the observation space for the environment."""
-        shape = (2 * 26 + 4 + 1 + 1,)  # = (58,)
-        # current_player can be -1 or 1 → low must include -1
-        return spaces.Box(low=-1, high=self.consts.NUM_CHECKERS, shape=shape, dtype=jnp.int32)
+        return spaces.Dict({
+            "board": spaces.Box(
+                low=0,
+                high=self.consts.NUM_CHECKERS,
+                shape=(2, 26),
+                dtype=jnp.int32
+            ),
+            "dice": spaces.Box(
+                low=0,
+                high=6,
+                shape=(4,),
+                dtype=jnp.int32
+            ),
+            "current_player": spaces.Box(
+                low=-1,
+                high=1,
+                shape=(1,),
+                dtype=jnp.int32
+            ),
+            "is_game_over": spaces.Box(
+                low=0,
+                high=1,
+                shape=(1,),
+                dtype=jnp.int32
+            ),
+        })
 
     @staticmethod
     @jax.jit
