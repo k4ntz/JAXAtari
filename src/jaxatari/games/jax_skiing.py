@@ -891,11 +891,15 @@ def render_frame(
     right_px = jnp.round((flags_xy + jnp.array([float(flag_distance), 0.0], dtype=jnp.float32))
                          * scale_factor).astype(jnp.int32)
     
-    # Farbe wählen: 1..N, idx%20==0 => red
+    # The 20th gate should be red. Identify the visible gate closest to the skier
+    # and color it red only when 19 gates have already been seen.
     n_flags = flags.shape[0]
-    idxs = jnp.arange(1, n_flags+1, dtype=jnp.int32)
-    is_red = (idxs % 20) == 0
-    # je Gate zwei Sprites (links & rechts)
+    dy_to_skier = jnp.abs(flags_xy[:, 1] - jnp.float32(skier_y))
+    closest_idx = jnp.argmin(dy_to_skier)
+    is_twentieth = jnp.greater_equal(state.gates_seen, jnp.int32(19))
+    is_red = jnp.zeros((n_flags,), dtype=bool).at[closest_idx].set(is_twentieth)
+
+    # For each gate we draw two flags (left & right) with the same color.
     flag_sprites_gate = jax.vmap(lambda r: jax.lax.cond(r, lambda _: assets.flag_red, lambda _: assets.flag_blue, operand=None))(is_red)
     # tiles: (N*2, ...)
     flag_sprites = jnp.concatenate([flag_sprites_gate, flag_sprites_gate], axis=0)
