@@ -27,14 +27,13 @@ Track:
 - curve move speed based on speed
 
 Observation:
-- improve observation function 
+- improve observation function
 - reduce observation when fog
 
 Performance:
-- Improve collision handling cars
+- Improve performance of collision handling cars
 
 Cleanup:
-- debug renderer in main file
 """
 
 
@@ -787,13 +786,6 @@ class JaxEnduro(JaxEnvironment[EnduroGameState, EnduroObservation, EnduroInfo, E
         # adjust the opponents lane if necessary
         adjusted_opponents_pos = self._adjust_opponent_positions_when_overtaking(state, new_opponent_index)
         state = state._replace(opponent_pos_and_color=adjusted_opponents_pos)
-
-        # REMOVED
-        # calculate which opponents are in the 7 visible opponent slots (for debugging only)
-        # new_opponent_window = state.opponent_pos_and_color[0][
-        #     (jnp.floor(state.opponent_index).astype(jnp.int32)
-        #      + jnp.arange(7)) % state.opponent_pos_and_color[0].shape[0]
-        #     ]
 
         # ====== Overtaking ======
         # Simple overtaking logic
@@ -1724,6 +1716,7 @@ class EnduroRenderer(JAXGameRenderer):
         """Render the game state to a raster image."""
         raster = self.static_background.copy()
 
+        # render weather first because it changes the backgrounds
         raster = self._render_weather(raster, state)
 
         # render the player car
@@ -1863,56 +1856,6 @@ class EnduroRenderer(JAXGameRenderer):
             # Add alpha channel (assuming track should be opaque)
             color_with_alpha = jnp.append(color, 255)
             return s.at[y, x].set(color_with_alpha)
-
-        sprite = jax.lax.fori_loop(0, x_coords.shape[0], draw_pixel, sprite)
-        return sprite
-
-    @partial(jax.jit, static_argnums=(0,))
-    def _render_track_from_state2(self, raster: jnp.ndarray, state: EnduroGameState):
-        """
-        Renders the track pixels from the Enduro Game State.
-        Args:
-            raster: the raster to draw in
-            state: the enduro Game State
-
-        Returns: the final raster with the rendered track
-
-        """
-        track_pixel = aj.get_sprite_frame(self.sprites['track_boundary.npy'], 0)
-
-        track_color = track_pixel[0, 0]  # (4,)
-
-        # build the y array
-        sky_height = self.background_sizes['background_sky.npy'][0]
-        y = jnp.add(
-            jnp.arange(self.track_height),
-            sky_height
-        )
-
-        # Concatenate both sides and create a grid of x & y coordinates
-        x_coords = jnp.concatenate([state.visible_track_left, state.visible_track_right])
-        y_coords = jnp.concatenate([y, y])
-
-        # Create track sprite
-        track_sprite = self._draw_track_sprite(x_coords, y_coords, track_color)
-        # Render to raster
-        raster = aj.render_at(raster, 0, 0, track_sprite)
-
-        return raster
-
-    @partial(jax.jit, static_argnums=(0,))
-    def _draw_track_sprite2(self, x_coords: jnp.ndarray, y_coords: jnp.ndarray, color: jnp.ndarray) -> jnp.ndarray:
-        """
-        Creates a sprite for the track that covers the whole screen, which makes it a little easier to draw,
-        because you can use absolute x,y positions for drawing the pixels.
-        """
-        # Create full-screen-sized sprite
-        sprite = jnp.zeros((self.config.screen_width, self.config.screen_height, 4), dtype=jnp.uint8)
-
-        def draw_pixel(i, s):
-            x = x_coords[i]
-            y = y_coords[i]
-            return s.at[y, x].set(color)
 
         sprite = jax.lax.fori_loop(0, x_coords.shape[0], draw_pixel, sprite)
         return sprite
@@ -2644,15 +2587,14 @@ list.
 YOUR BEST GAME SCORES
 """
 
-DIRECTION_LABELS = {
-    -1: "Left",
-    0: "Straight",
-    1: "Right"
-}
-
 
 class EnduroDebugRenderer:
     """ Custom renderer for debugging. Wrapped into a class to make it easy to collapse """
+    DIRECTION_LABELS = {
+        -1: "Left",
+        0: "Straight",
+        1: "Right"
+    }
 
     @staticmethod
     def update_pygame(pygame_screen, raster, SCALING_FACTOR=3, WIDTH=400, HEIGHT=300):
@@ -2714,7 +2656,7 @@ class EnduroDebugRenderer:
             # f"Opponent Collision: {state.is_collision}",
             # f"Cooldown Drift direction: {state.cooldown_drift_direction}"
             # f"Weather: {state.weather_index}",
-            # f"Track direction: {DIRECTION_LABELS.get(int(track_direction))} ({track_direction})",
+            # f"Track direction: {self.DIRECTION_LABELS.get(int(track_direction))} ({track_direction})",
             # f"Track top X: {state.track_top_x}",
             # f"Top X Offset: {state.track_top_x_curve_offset}",
         ]
