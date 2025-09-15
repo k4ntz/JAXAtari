@@ -15,27 +15,6 @@ from jaxatari.renderers import JAXGameRenderer
 from jaxatari.rendering import jax_rendering_utils as aj
 import jaxatari.spaces as spaces
 
-TODOS = """
-Steering:
-- Drift speed based?
-
-Rendering:
-- wheel animation speed
-
-Track:
-- Better curve
-- curve move speed based on speed
-
-Observation:
-- improve observation function
-- reduce observation when fog
-
-Performance:
-- Improve performance of collision handling cars
-
-Cleanup:
-"""
-
 
 class EnduroConstants(NamedTuple):
     """Game configuration parameters"""
@@ -540,7 +519,7 @@ class JaxEnduro(JaxEnvironment[EnduroGameState, EnduroObservation, EnduroInfo, E
             # visible
             step_count=jnp.array(0),
             day_count=jnp.array(0),
-            player_x_abs_position=jnp.array(self.config.player_x_start),
+            player_x_abs_position=jnp.array(self.config.player_x_start).astype(jnp.float32),
             player_y_abs_position=jnp.array(self.config.player_y_start),
             cars_to_overtake=jnp.array(self.config.cars_to_pass_per_level),
             cars_overtaken=jnp.array(0),
@@ -2410,6 +2389,28 @@ def change_sprite_color(sprite, rgb_color):
     # Keep original alpha: colored_sprite[..., 3] stays the same
 
     return colored_sprite.astype(jnp.uint8)
+
+
+TODOS = """
+Steering:
+- Drift speed based?
+
+Rendering:
+- wheel animation speed
+
+Track:
+- Better curve
+- curve move speed based on speed
+
+Observation:
+- improve observation function
+- reduce observation when fog
+
+Performance:
+- Improve performance of collision handling cars
+
+Cleanup:
+"""
 
 
 """
