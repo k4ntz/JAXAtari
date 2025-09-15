@@ -8,6 +8,10 @@ from jaxatari.rendering import jax_rendering_utils as jr
 from jaxatari.renderers import JAXGameRenderer
 import jaxatari.spaces as spaces
 
+# ToDos
+# - Implement the enemy logic
+# - Implement correct hit -> fist nearest to enemy head
+
 class BoxingConstants(NamedTuple):
     WIDTH: int = 160
     HEIGHT: int = 210
@@ -28,6 +32,11 @@ class BoxingState(NamedTuple):
     time: chex.Array
     punch_timer: chex.Array
     hit_left: chex.Array
+    enemy_target_x: chex.Array
+    enemy_target_y: chex.Array
+    enemy_target_timer: chex.Array
+    step_counter: chex.Array
+    enemy_dir: chex.Array
 
 
 class EntityPositions(NamedTuple):
@@ -38,6 +47,7 @@ class BoxingObservation(NamedTuple):
     player: EntityPositions
 class BoxingInfo(NamedTuple):
     time: jnp.ndarray
+    step_counter: jnp.ndarray
 
 class JaxBoxing(JaxEnvironment[BoxingState, BoxingObservation, BoxingInfo, BoxingConstants]):
     def __init__(self, consts: BoxingConstants = None, reward_funcs: list[callable] = None):
@@ -46,6 +56,7 @@ class JaxBoxing(JaxEnvironment[BoxingState, BoxingObservation, BoxingInfo, Boxin
         self.renderer = BoxingRenderer(consts)
         if reward_funcs is not None:
             self.reward_funcs = reward_funcs
+        self.step_counter = 0
         self.action_set = [
             Action.FIRE,
             Action.RIGHT,
@@ -62,13 +73,18 @@ class JaxBoxing(JaxEnvironment[BoxingState, BoxingObservation, BoxingInfo, Boxin
         state = BoxingState(
             player_score=jnp.array(0),
             enemy_score=jnp.array(0),
-            player_x=self.consts.initial_x_white,
-            player_y=self.consts.initial_y_white,
-            enemy_x=self.consts.initial_x_black,
-            enemy_y=self.consts.initial_y_black,
+            player_x=jnp.array(self.consts.initial_x_white),
+            player_y=jnp.array(self.consts.initial_y_white),
+            enemy_x=jnp.array(self.consts.initial_x_black),
+            enemy_y=jnp.array(self.consts.initial_y_black),
             time= jnp.array(7200),
             punch_timer=jnp.array(0),
             hit_left = jnp.array(False),
+            enemy_target_x = jnp.array(0),
+            enemy_target_y = jnp.array(0),
+            enemy_target_timer = jnp.array(0),
+            step_counter=jnp.array(0),
+            enemy_dir=jnp.array(1),
 
         )
 
@@ -76,7 +92,6 @@ class JaxBoxing(JaxEnvironment[BoxingState, BoxingObservation, BoxingInfo, Boxin
         return initial_obs, state
 
     def player_step(self, state, action: chex.Array):
-        # Movement flags
         left = (action == Action.LEFT) | (action == Action.UPLEFT) | (action == Action.DOWNLEFT)
         right = (action == Action.RIGHT) | (action == Action.UPRIGHT) | (action == Action.DOWNRIGHT)
         up = (action == Action.UP) | (action == Action.UPLEFT) | (action == Action.UPRIGHT)
@@ -84,7 +99,12 @@ class JaxBoxing(JaxEnvironment[BoxingState, BoxingObservation, BoxingInfo, Boxin
         fire = (action == Action.FIRE)
         punch_time = jnp.maximum(state.punch_timer - 1, 0)
         punch_time = jnp.where(fire & (punch_time == 0), 20, punch_time)
-        hit_left = jnp.where(punch_time == 20, jnp.logical_not(state.hit_left), state.hit_left)
+        left_hit_y = state.player_y - 15
+        right_hit_y = state.player_y + 15
+        dist_left = jnp.abs(left_hit_y - state.enemy_y)
+        dist_right = jnp.abs(right_hit_y - state.enemy_y)
+        chosen_hit_left = dist_left < dist_right
+        hit_left = jnp.where(punch_time == 20, chosen_hit_left, state.hit_left)
 
         # Apply movement
         delta_x = jnp.where(right, 2, 0) - jnp.where(left, 2, 0)
@@ -97,26 +117,49 @@ class JaxBoxing(JaxEnvironment[BoxingState, BoxingObservation, BoxingInfo, Boxin
         # check if punch hits enemy
         def check_collision(hit_direction):
             def hit_collision_left_swing():
-                hit_x = player_x + 35
+                hit_x = player_x + 18
                 hit_y = player_y - 15
-                hit = (jnp.abs(hit_x - state.enemy_x) < 20) & (jnp.abs(hit_y - state.enemy_y) < 8)
+                hit = (jnp.abs(hit_x - state.enemy_x) < 10) & (jnp.abs(hit_y - state.enemy_y) < 8)
                 return hit
             def hit_collision_right_swing():
-                hit_x = player_x + 35
+                hit_x = player_x + 18
                 hit_y = player_y + 15
-                hit = (jnp.abs(hit_x - state.enemy_x) < 16) & (jnp.abs(hit_y - state.enemy_y) < 8)
+                hit = (jnp.abs(hit_x - state.enemy_x) < 10) & (jnp.abs(hit_y - state.enemy_y) < 8)
                 return hit
 
             return jax.lax.cond(hit_direction, hit_collision_left_swing, hit_collision_right_swing)
 
         hit = jnp.where(check_at_correct_punch_point,check_collision(hit_left), False)
+        def apply_knockback(enemy_x, enemy_y, hit_direction):
+            delta = jnp.where(hit_direction, 10, -10)
+            new_enemy_x = jnp.clip(enemy_x + delta, self.consts.x_boundaries[0], self.consts.x_boundaries[1])
+            return new_enemy_x, enemy_y
+
+        new_enemy_x, new_enemy_y = jax.lax.cond(hit, lambda: apply_knockback(state.enemy_x, state.enemy_y, hit_left), lambda: (state.enemy_x, state.enemy_y))
 
         player_score = jnp.where(hit, state.player_score + 1, state.player_score)
 
-        return state._replace(player_x=player_x, player_y=player_y, punch_timer=punch_time, hit_left=hit_left, player_score=player_score)
+        return state._replace(player_x=player_x, player_y=player_y, punch_timer=punch_time, hit_left=hit_left, player_score=player_score, enemy_x = new_enemy_x, enemy_y = new_enemy_y)
 
+    def enemy_step(self, state, rng_key=None):
+        step_size = 1
+        # y-movement
+        dy = state.player_y - state.enemy_y
+        step_y = jnp.clip(jnp.sign(dy) * step_size, -step_size, step_size)
+        new_enemy_y = jnp.clip(state.enemy_y + step_y,
+                               self.consts.y_boundaries[0],
+                               self.consts.y_boundaries[1])
+
+        # x- movement
+        dx = state.player_x + 20 - state.enemy_x
+        step_x = jnp.clip(jnp.sign(dx) * step_size * state.enemy_dir, -step_size, step_size)
+        new_enemy_x = jnp.clip(state.enemy_x + step_x,self.consts.x_boundaries[0], self.consts.x_boundaries[1])
+
+
+        return state._replace(enemy_y=new_enemy_y,enemy_x=new_enemy_x)
     def step(self, state: BoxingState, action: chex.Array) -> Tuple[BoxingObservation, BoxingState, float, bool, BoxingInfo]:
         state = self.player_step(state, action)
+        state = self.enemy_step(state)
         new_time = jnp.maximum(0, state.time - 1)
         new_state = BoxingState(player_score=state.player_score,
                                 enemy_score=state.enemy_score,
@@ -126,7 +169,13 @@ class JaxBoxing(JaxEnvironment[BoxingState, BoxingObservation, BoxingInfo, Boxin
                                 enemy_y=state.enemy_y,
                                 time = new_time,
                                 punch_timer=state.punch_timer,
-                                hit_left=state.hit_left
+                                hit_left=state.hit_left,
+                                enemy_target_x=state.enemy_target_x,
+                                enemy_target_y=state.enemy_target_y,
+                                enemy_target_timer=state.enemy_target_timer,
+                                step_counter=state.step_counter + 1,
+                                enemy_dir = state.enemy_dir
+
                                 )
         done = self._get_done(new_state)
         env_reward = self._get_reward(state, new_state)
@@ -151,7 +200,8 @@ class JaxBoxing(JaxEnvironment[BoxingState, BoxingObservation, BoxingInfo, Boxin
         )
     def _get_info(self, state: BoxingState, all_rewards: jnp.ndarray) -> BoxingInfo:
         return BoxingInfo(
-            time=state.time
+            time=state.time,
+            step_counter=state.step_counter,
         )
     def _get_all_rewards(self, state: BoxingState, action: chex.Array) -> jnp.ndarray:
         return jnp.array([0.0])
@@ -259,13 +309,14 @@ class BoxingRenderer(JAXGameRenderer):
                 operand=None,
             )
             return raster_out
-
+        def render_enemy(self,raster, state):
+            return jr.render_at(raster, state.enemy_x, state.enemy_y, self.SPRITE_ENEMY)
         raster = jr.create_initial_frame(width=160, height=210)
         frame_bg = jr.get_sprite_frame(self.SPRITE_BG, 0)
         raster = jr.render_at(raster, 0,0, frame_bg)
         raster = jr.render_at(raster, 80, 15, self.TIME_SEPERATION)
         raster = render_player(self,raster, state)
-        raster = jr.render_at(raster, self.consts.initial_x_black, self.consts.initial_y_black, self.SPRITE_ENEMY)
+        raster = render_enemy(self,raster, state)
         raster = render_time(self, raster, state.time)
         raster = render_score(self,raster, state.player_score, 45, 7, self.PLAYER_SCORE_DIGITS)
         raster = render_score(self, raster, state.enemy_score, 104, 7, self.ENEMY_SCORE_DIGITS)
