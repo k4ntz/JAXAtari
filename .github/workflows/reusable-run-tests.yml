@@ -1,0 +1,124 @@
+# .github/workflows/reusable-run-tests.yml
+name: Reusable Test Runner
+
+on:
+  workflow_call:
+    inputs:
+      game_matrix:
+        description: "A JSON string of the game matrix to test"
+        required: true
+        type: string
+      pr_head_sha:
+        description: "The SHA of the PR head"
+        required: false
+        type: string
+    outputs:
+      test_outcomes:
+        description: "JSON object of test outcomes"
+        value: ${{ jobs.collect-results.outputs.test_outcome }}
+
+jobs:
+  run-tests:
+    if: ${{ inputs.game_matrix != '[]' && inputs.game_matrix != '' }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        game: ${{ fromJSON(inputs.game_matrix) }}
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        if: ${{ inputs.pr_head_sha == '' }}
+
+      - name: Check out base branch
+        uses: actions/checkout@v4
+        if: ${{ inputs.pr_head_sha != '' }}
+        with:
+          ref: ${{ github.event.pull_request.base.ref }}
+
+      - name: Check out PR head
+        if: ${{ inputs.pr_head_sha != '' }}
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.pr_head_sha }}
+          path: pr_head
+
+      - name: Override src with PR changes
+        if: ${{ inputs.pr_head_sha != '' }}
+        run: |
+          rsync -av pr_head/src/jaxatari/games/ src/jaxatari/games/
+        shell: bash
+
+      - name: Remove PR head sources
+        if: ${{ inputs.pr_head_sha != '' }}
+        run: |
+          rm -rf pr_head
+        shell: bash
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+          cache: "pip"
+
+      - name: Create venv & install package
+        run: |
+          python -m venv .venv
+          . .venv/bin/activate
+          python -m pip install --upgrade pip
+          pip install -e ".[gh_ci]"
+        shell: bash
+
+      - name: Run tests
+        id: run_tests
+        run: |
+          set -o pipefail
+          echo "Running tests for game: ${{ matrix.game }}"
+
+          . .venv/bin/activate
+          pytest --game ${{ matrix.game }} --snapshot-warn-unused --tb=line -ra --color=yes 2>&1 | tee pytest_output_with_color.txt
+        shell: bash
+
+      - name: Get pytest output
+        if: always() && (github.event.pull_request.head.repo.full_name != github.repository)
+        run: |
+          # Strip ANSI color codes for the report
+          sed -r "s/\x1B\[[0-9;]*[mK]//g" pytest_output_with_color.txt > pytest_output_${{ matrix.game }}.txt
+        shell: bash
+
+      - uses: cloudposse/github-action-matrix-outputs-write@v1
+        id: out
+        if: always() && (github.event.pull_request.head.repo.full_name != github.repository)
+        with:
+          matrix-step-name: ${{ github.job }}
+          matrix-key: ${{ matrix.game }}
+          outputs: |-
+            test_outcome: ${{ steps.run_tests.outcome }}
+      
+      - name: Upload report artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: pytest-report-${{ matrix.game }}
+          path: pytest_output_${{ matrix.game }}.txt
+          retention-days: 1
+
+  collect-results:
+    needs: run-tests
+    if: always() && (github.event.pull_request.head.repo.full_name != github.repository)
+    runs-on: ubuntu-latest
+    outputs:
+      test_outcome: ${{ steps.set_outputs.outputs.test_outcomes }}
+    steps:
+      - uses: cloudposse/github-action-matrix-outputs-read@v1
+        id: read
+        with:
+          matrix-step-name: run-tests
+
+      - id: set_outputs
+        run: |
+          result='${{ steps.read.outputs.result }}'
+          test_outcomes=$(echo "$result" | jq -c .test_outcome)
+          echo "test_outcomes=$test_outcomes" >> $GITHUB_OUTPUT
+        shell: bash
