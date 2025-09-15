@@ -168,34 +168,12 @@ def load_sprites():
 
     # Cannon sprites
     SPRITE_CANNON = jnp.stack(cannon_sprites, axis=0)
-    #SPRITE_CANNON = jnp.concatenate(
-    #    [
-    #        cannon_sprites[0][None],
-    #        cannon_sprites[1][None],
-    #        cannon_sprites[2][None]
-    #    ]
-    #)
 
     # Human sprites
     SPRITE_HUMAN = jnp.stack(human_sprites, axis=0)
-    #SPRITE_HUMAN = jnp.concatenate(
-    #    [
-    #        human_sprites[0][None],
-    #        human_sprites[1][None],
-    #        human_sprites[2][None],
-    #        human_sprites[4][None]
-    #    ]
-    #)
 
     # Water tower sprites
     SPRITE_WATER_TOWER = jnp.stack(water_tower_sprites, axis=0)
-    #SPRITE_WATER_TOWER = jnp.concatenate(
-    #    [
-    #        water_tower_sprites[0][None],
-    #        water_tower_sprites[1][None],
-    #        water_tower_sprites[2][None]
-    #    ]
-    #)
 
     # Digits sprites
     DIGITS = jr.load_and_pad_digits(os.path.join(MODULE_DIR, "./sprites/human_cannonball/digits/score_{}.npy"))
@@ -754,7 +732,6 @@ class JaxHumanCannonball(JaxEnvironment[HumanCannonballState, HumanCannonballObs
 
 class HumanCannonballRenderer(JAXGameRenderer):
     """JAX-based HumanCannonball game renderer, optimized with JIT compilation."""
-
     def __init__(self, consts: HumanCannonballConstants = None):
         super().__init__()
         self.cannon_offset_length = len(CANNON_OFFSETS)
@@ -773,7 +750,7 @@ class HumanCannonballRenderer(JAXGameRenderer):
         Returns:
             A JAX array representing the rendered frame.
         """
-        raster = jnp.zeros((self.consts.WIDTH, self.consts.HEIGHT, 3))
+        raster = jr.create_initial_frame(self.consts.WIDTH, self.consts.HEIGHT)
 
         # Render the background
         frame_bg = jr.get_sprite_frame(SPRITE_BG, 0)
