@@ -130,7 +130,7 @@ The original game uses integer for speed, but since we need a frame based accele
 If this really represents an issue the speed could be encoded as an integer and the sub-speed could be implemented as a cooldown (wait n-steps before the next speed increase).
 
 ## Debug renderer
-The file contains a [debug-renderer](../jax_enduro_debug_renderer.py) with an overlay to display state variables for 
+The file contains a debug render class with an overlay to display state variables for 
 debugging and analysis.
 
 ## RAM States
