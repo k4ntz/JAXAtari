@@ -810,49 +810,79 @@ class BeamRiderEnv(JaxEnvironment[BeamRiderState, BeamRiderObservation, BeamRide
 
     @partial(jax.jit, static_argnums=(0,))
     def _update_white_saucer_movement(self, state: BeamRiderState) -> BeamRiderState:
-        """Enhanced white saucer movement patterns with horizon patrol system and player beam check for kamikaze"""
+        """
+        Enhanced white saucer movement patterns with horizon patrol system and player beam check for kamikaze.
+
+        This method handles complex movement for white saucer enemies, implementing multiple behavioral patterns
+        including horizon patrol, beam jumping, shooting, ramming, and intelligent retreat/kamikaze logic.
+
+        Key Features:
+        - 5 distinct movement patterns with unique behaviors
+        - Dynamic retreat system that triggers kamikaze mode when player is on same beam
+        - Horizon patrol system with randomized diving patterns
+        - Beam curve adherence for realistic movement along the game's perspective
+        - Timer-based state management for complex behaviors
+
+        Movement Patterns:
+        - STRAIGHT_DOWN (0): Basic downward movement
+        - BEAM_JUMP (1): Horizontal movement between beams with targeting
+        - REVERSE_UP (2): Upward retreat movement
+        - HORIZON_PATROL (3): Patrol behavior at horizon line
+        - SHOOTING (4): Stationary shooting with beam repositioning
+        - RAMMING (5): High-speed kamikaze attack
+
+        Args:
+            state: Current game state containing enemy positions, timers, and game properties
+
+        Returns:
+            Updated BeamRiderState with modified enemy positions and properties
+        """
         enemies = state.enemies
 
-        # Get white saucer mask
+        # === ENEMY IDENTIFICATION AND MASKING ===
+        # Identify active white saucers for processing
         white_saucer_mask = enemies[:, 5] == self.constants.ENEMY_TYPE_WHITE_SAUCER
         active_mask = enemies[:, 3] == 1
         white_saucer_active = white_saucer_mask & active_mask
 
-        # Get current positions and properties
-        current_x = enemies[:, 0]
-        current_y = enemies[:, 1]
+        # === POSITION AND PROPERTY EXTRACTION ===
+        # Extract current state from enemy array
+        current_x = enemies[:, 0]  # X position
+        current_y = enemies[:, 1]  # Y position
+        current_beam = enemies[:, 2].astype(int)  # Current beam (0-15)
+        current_speed = enemies[:, 4]  # Movement speed
+        movement_pattern = enemies[:, 14].astype(int)  # Current movement pattern
+        firing_timer = enemies[:, 15].astype(int)  # Multi-purpose timer
+        jump_timer = enemies[:, 16].astype(int)  # Beam jump/pause timer
+        target_beam = enemies[:, 10].astype(int)  # Target beam for movement
+        direction_x = enemies[:, 6]  # Horizontal movement direction (-1 or 1)
 
-        # Dynamic dotted-line bounds at each saucer's current Y
+        # === DYNAMIC BOUNDARY CALCULATION ===
+        # Calculate dotted-line boundaries at current Y position for each saucer
+        # This ensures saucers stay within the playable beam area
         left_dotted_x = self._beam_curve_x(current_y, 0, self.constants.ENEMY_WIDTH)
         right_dotted_x = self._beam_curve_x(current_y, self.constants.NUM_BEAMS - 1, self.constants.ENEMY_WIDTH)
-
         dotted_min_x = jnp.minimum(left_dotted_x, right_dotted_x)
         dotted_max_x = jnp.maximum(left_dotted_x, right_dotted_x)
 
-        current_beam = enemies[:, 2].astype(int)
-        current_speed = enemies[:, 4]
-        movement_pattern = enemies[:, 14].astype(int)
-        firing_timer = enemies[:, 15].astype(int)
-        jump_timer = enemies[:, 16].astype(int)
-        target_beam = enemies[:, 10].astype(int)
-        direction_x = enemies[:, 6]
-
-        # Update timers
+        # === TIMER UPDATES ===
+        # Decrement active timers (clamped to 0)
         new_firing_timer = jnp.maximum(0, firing_timer - 1)
         new_jump_timer = jnp.maximum(0, jump_timer - 1)
 
-        # Universal reverse condition with player beam check
+        # === RETREAT AND KAMIKAZE LOGIC ===
+        # Core decision system for when saucers should retreat vs. kamikaze
         reached_reverse_point = current_y >= self.constants.WHITE_SAUCER_REVERSE_TRIGGER_Y
         retreat_flag = enemies[:, 13].astype(int)
 
-        # Check if player is on the same beam as the white saucer
+        # Critical kamikaze decision: if player is on same beam when reaching reverse point, continue attacking
         player_beam = state.ship.beam_position
         on_same_beam_as_player = current_beam == player_beam
 
-        # If on same beam as player when reaching reverse point, continue downward (kamikaze)
+        # Kamikaze mode: saucer continues downward at high speed when player is on same beam
         should_kamikaze = white_saucer_active & reached_reverse_point & on_same_beam_as_player & (retreat_flag == 0)
 
-        #Only reverse if NOT on same beam as player
+        # Normal retreat: only reverse if NOT on same beam as player
         should_start_retreat = white_saucer_active & reached_reverse_point & ~on_same_beam_as_player & (
                     retreat_flag == 0)
 
@@ -861,89 +891,91 @@ class BeamRiderEnv(JaxEnvironment[BeamRiderState, BeamRiderObservation, BeamRide
                 retreat_flag == self.constants.WHITE_SAUCER_RETREAT_AFTER_SHOT
         )
 
-        # Only move up if retreating and not kamikazing
+        # Determine movement direction (up vs down)
         should_be_moving_up = white_saucer_active & (
                 (retreat_flag == self.constants.WHITE_SAUCER_RETREAT_AFTER_SHOT) |
-                (should_start_retreat) |  # Changed from reached_reverse_point
+                (should_start_retreat) |
                 switched_to_reverse
         ) & ~should_kamikaze  # Don't move up if kamikazing
 
-        # Start retreat when we cross the reverse depth and not on player's beam
-        start_retreat_now = should_start_retreat  # Use the modified condition
+        # === RETREAT FLAG MANAGEMENT ===
+        # Update retreat status with kamikaze flag handling
+        start_retreat_now = should_start_retreat
         new_retreat_flag = jnp.where(start_retreat_now, self.constants.WHITE_SAUCER_RETREAT_AFTER_SHOT,
                                      enemies[:, 13].astype(int))
 
+        # Clear retreat flag when reaching top of screen
         clear_retreat = should_be_moving_up & (current_y <= self.constants.HORIZON_LINE_Y)
         final_retreat_flag = jnp.where(clear_retreat, 0, new_retreat_flag)
 
-        # Mark kamikazing saucers with a special flag (use a high value in retreat_flag)
+        # Mark kamikazing saucers with special flag (99) for tracking
         KAMIKAZE_FLAG = 99
         final_retreat_flag = jnp.where(should_kamikaze, KAMIKAZE_FLAG, final_retreat_flag)
 
-        # === PATTERN 1: BEAM_JUMP WITH HORIZONTAL MOVEMENT ===
+        # === MOVEMENT PATTERN 1: BEAM_JUMP WITH HORIZONTAL MOVEMENT ===
+        """
+        Beam Jump Pattern: Saucers move horizontally between beams in upper third of screen.
+        - Generate random target beams when timer expires
+        - Move horizontally toward target beam at increased speed
+        - Snap to beam when close enough
+        - Supports both normal descent and kamikaze mode
+        """
         jump_mask = white_saucer_active & (movement_pattern == self.constants.WHITE_SAUCER_BEAM_JUMP)
-
         jump_current_target_beam = target_beam.astype(int)
 
-        # Check if need new target (timer expired and in upper area)
+        # Target selection logic: only in upper third and when timer expires
         in_upper_third = current_y <= self.constants.UPPER_THIRD_Y
         need_new_target = jump_mask & (new_jump_timer == 0) & in_upper_third & ~should_be_moving_up
 
-        # Generate new random target beam when needed
+        # Generate new random target beams using frame-based RNG
         jump_indices = jnp.arange(self.constants.MAX_ENEMIES)
         jump_rng_keys = jax.vmap(lambda i: random.fold_in(state.rng_key, state.frame_count + i + 4000))(jump_indices)
         new_random_beams = jax.vmap(lambda key: random.randint(key, (), 0, self.constants.NUM_BEAMS))(jump_rng_keys)
 
-        # Update target beam
+        # Update target beam and reset timer
         jump_new_target_beam = jnp.where(need_new_target, new_random_beams, jump_current_target_beam)
-
-        # Reset timer when new target selected
         jump_new_jump_timer = jnp.where(need_new_target, self.constants.WHITE_SAUCER_JUMP_INTERVAL, new_jump_timer)
 
-        # Check if actively jumping to a different beam
+        # Horizontal movement calculation
         actively_jumping = jump_mask & (jump_current_target_beam != current_beam) & ~should_be_moving_up
-
-        # Calculate target X for the target beam at current Y
         jump_target_x = self._beam_curve_x(current_y, jump_new_target_beam, self.constants.ENEMY_WIDTH)
-
-        # Calculate movement toward target
         jump_x_diff = jump_target_x - current_x
         close_enough = jnp.abs(jump_x_diff) <= self.constants.WHITE_SAUCER_BEAM_SNAP_DISTANCE
 
-        # Horizontal movement when actively jumping
+        # Fast horizontal movement when actively jumping
         jump_horizontal_movement = jnp.where(
             actively_jumping & ~close_enough,
-            jnp.sign(jump_x_diff) * self.constants.WHITE_SAUCER_HORIZONTAL_SPEED * 2.0,  # Faster horizontal movement
+            jnp.sign(jump_x_diff) * self.constants.WHITE_SAUCER_HORIZONTAL_SPEED * 2.0,
             0.0
         )
 
-        # Update positions
+        # Position updates with boundary clamping
         jump_new_x = jnp.where(
             actively_jumping,
             jnp.clip(current_x + jump_horizontal_movement, dotted_min_x, dotted_max_x),
             current_x
         )
 
-        # Check for kamikaze mode
+        # Vertical movement with kamikaze check
         is_kamikazing = final_retreat_flag == KAMIKAZE_FLAG
-
         jump_new_y = jnp.where(
             is_kamikazing,
-            current_y + self.constants.WHITE_SAUCER_RAMMING_SPEED,  # Continue downward fast
+            current_y + self.constants.WHITE_SAUCER_RAMMING_SPEED,  # High-speed kamikaze descent
             jnp.where(
                 should_be_moving_up,
-                current_y + self.constants.WHITE_SAUCER_REVERSE_SPEED_FAST,
-                current_y + current_speed
+                current_y + self.constants.WHITE_SAUCER_REVERSE_SPEED_FAST,  # Fast retreat
+                current_y + current_speed  # Normal descent
             )
         )
 
-        # Update beam position when close to target
+        # Beam position snapping when close to target
         jump_new_beam = jnp.where(
             jump_mask & close_enough,
             jump_new_target_beam,
             current_beam
         )
 
+        # Speed updates based on current mode
         jump_new_speed = jnp.where(
             is_kamikazing,
             self.constants.WHITE_SAUCER_RAMMING_SPEED,
@@ -954,65 +986,79 @@ class BeamRiderEnv(JaxEnvironment[BeamRiderState, BeamRiderObservation, BeamRide
             )
         )
 
-        # === SHOOTING PATTERN WITH BEAM CHANGE LOGIC ONLY ===
+        # === MOVEMENT PATTERN 4: SHOOTING WITH BEAM REPOSITIONING ===
+        """
+        Shooting Pattern: Saucers can fire projectiles and reposition between beams during retreat.
+        - Handles beam changes during retreat phase
+        - Manages pre-shooting positioning near horizon
+        - Supports transition to REVERSE_UP pattern after shooting
+        """
         shooting_mask = white_saucer_active & (movement_pattern == self.constants.WHITE_SAUCER_SHOOTING)
         retreat_state = enemies[:, 13].astype(int)
         is_retreating = retreat_state == self.constants.WHITE_SAUCER_RETREAT_AFTER_SHOT
         beam_change_timer = jump_timer
         has_beam_change_timer = beam_change_timer > 0
 
+        # Beam repositioning during retreat
         changing_beam_before_retreat = shooting_mask & is_retreating & has_beam_change_timer
         retreat_target_x = self._beam_curve_x(current_y, target_beam, self.constants.ENEMY_WIDTH)
         retreat_x_diff = retreat_target_x - current_x
         retreat_close_to_target = jnp.abs(retreat_x_diff) <= 3
 
+        # Horizontal movement toward retreat target beam
         retreat_horizontal_movement = jnp.where(
             changing_beam_before_retreat & ~retreat_close_to_target,
             jnp.sign(retreat_x_diff) * self.constants.WHITE_SAUCER_HORIZONTAL_SPEED,
             0.0
         )
 
+        # Timer management for beam changes
         new_beam_change_timer = jnp.where(
             changing_beam_before_retreat,
             jnp.maximum(0, beam_change_timer - 1),
             beam_change_timer
         )
 
+        # Detection of beam change completion
         beam_change_complete = shooting_mask & is_retreating & (beam_change_timer == 1)
 
+        # Pre-shooting positioning logic
         normal_shooting = shooting_mask & ~is_retreating
         stored_dive_depth = enemies[:, 7]
         shooting_near_horizon = current_y <= (self.constants.HORIZON_LINE_Y + stored_dive_depth)
         should_move_down_before_shooting = normal_shooting & shooting_near_horizon
 
+        # Position updates for shooting pattern
         shooting_new_x = jnp.where(
             changing_beam_before_retreat,
             current_x + retreat_horizontal_movement,
             current_x
         )
-
         shooting_new_x = jnp.clip(shooting_new_x, dotted_min_x, dotted_max_x)
 
+        # Vertical movement with multiple speed modes
         shooting_new_y = jnp.where(
             is_kamikazing,
-            current_y + self.constants.WHITE_SAUCER_RAMMING_SPEED,  # Continue downward fast
+            current_y + self.constants.WHITE_SAUCER_RAMMING_SPEED,
             jnp.where(
                 should_be_moving_up,
                 current_y + self.constants.WHITE_SAUCER_REVERSE_SPEED_FAST,
                 jnp.where(
                     should_move_down_before_shooting,
-                    current_y + 2.0,  # Move down faster before shooting
+                    current_y + 2.0,  # Faster descent for positioning
                     current_y + current_speed
                 )
             )
         )
 
+        # Beam updates when reaching target position
         shooting_new_beam = jnp.where(
             changing_beam_before_retreat & retreat_close_to_target,
             target_beam,
             current_beam
         )
 
+        # Speed management for shooting pattern
         shooting_new_speed = jnp.where(
             is_kamikazing,
             self.constants.WHITE_SAUCER_RAMMING_SPEED,
@@ -1023,16 +1069,28 @@ class BeamRiderEnv(JaxEnvironment[BeamRiderState, BeamRiderObservation, BeamRide
             )
         )
 
-        # === HORIZON PATROL PATTERN (unchanged) ===
+        # === MOVEMENT PATTERN 3: HORIZON PATROL ===
+        """
+        Horizon Patrol Pattern: Sophisticated AI behavior at the horizon line.
+        - Moves to horizon line and patrols horizontally
+        - Randomly selects diving patterns based on sector and probability
+        - Includes beam alignment logic and direction changes
+        - Manages patrol timing and pause intervals
+        """
         horizon_patrol_mask = white_saucer_active & (movement_pattern == self.constants.WHITE_SAUCER_HORIZON_PATROL)
         at_horizon = jnp.abs(current_y - self.constants.HORIZON_LINE_Y) <= 5
+
+        # Initial movement to horizon
         moving_to_horizon = horizon_patrol_mask & ~at_horizon & (current_y < self.constants.HORIZON_LINE_Y)
         horizon_new_y_moving = current_y + 2.0
+
+        # Patrol state management
         patrolling_horizon = horizon_patrol_mask & at_horizon
         is_paused = new_jump_timer > 0
         patrol_time = firing_timer
         patrol_time_expired = patrol_time >= self.constants.HORIZON_PATROL_TIME
 
+        # Beam alignment system
         beam_distances = jnp.abs(current_x[..., None] - self.beam_positions[None, :])
         nearest_beam_distance = jnp.min(beam_distances, axis=1)
         nearest_beam_idx = jnp.argmin(beam_distances, axis=1)
@@ -1040,25 +1098,36 @@ class BeamRiderEnv(JaxEnvironment[BeamRiderState, BeamRiderObservation, BeamRide
         BEAM_ALIGNMENT_THRESHOLD = 4.0
         aligned_with_beam = nearest_beam_distance <= BEAM_ALIGNMENT_THRESHOLD
 
+        # RNG setup for patrol decisions
         patrol_indices = jnp.arange(self.constants.MAX_ENEMIES)
         patrol_rng_keys = jax.vmap(lambda i: random.fold_in(state.rng_key, state.frame_count + i + 1000))(
             patrol_indices)
 
+        # Diving decision logic
         dive_rng_keys = jax.vmap(lambda i: random.fold_in(state.rng_key, state.frame_count + i + 2000))(patrol_indices)
         should_dive_rng = jax.vmap(lambda key: random.uniform(key, (), minval=0.0, maxval=1.0, dtype=jnp.float32))(
             dive_rng_keys)
         should_dive = should_dive_rng < self.constants.HORIZON_DIVE_CHANCE
 
+        # Extended patrol time forces diving
         extended_patrol_time = patrol_time >= (self.constants.HORIZON_PATROL_TIME * 2)
 
+        # Diving trigger conditions
         start_diving = patrolling_horizon & (
                 (patrol_time_expired & should_dive & aligned_with_beam) |
                 extended_patrol_time
         )
 
+        # Continue patrol condition
         continue_patrolling = patrolling_horizon & patrol_time_expired & (
                 ~should_dive | ~aligned_with_beam) & ~extended_patrol_time
 
+        # === DIVING PATTERN SELECTION ===
+        """
+        Sector-based probability system for selecting diving patterns:
+        - Higher sectors increase ramming probability
+        - Weighted random selection between ramming, shooting, beam jumping, and straight down
+        """
         sector = state.current_sector
         ram_p = jnp.where(
             sector >= self.constants.WHITE_SAUCER_RAMMING_MIN_SECTOR,
@@ -1068,13 +1137,16 @@ class BeamRiderEnv(JaxEnvironment[BeamRiderState, BeamRiderObservation, BeamRide
             0.0
         )
 
+        # Weighted pattern selection
         pat_rng_keys = jax.vmap(lambda i: random.fold_in(state.rng_key, state.frame_count + i + 3001))(patrol_indices)
         u_pat = jax.vmap(lambda key: random.uniform(key, (), minval=0.0, maxval=1.0, dtype=jnp.float32))(pat_rng_keys)
 
+        # Probability thresholds
         t0 = ram_p
         t1 = t0 + self.constants.WHITE_SAUCER_SHOOT_CHANCE
         t2 = t1 + self.constants.WHITE_SAUCER_JUMP_CHANCE
 
+        # Pattern selection based on probability ranges
         selected_dive_pattern = jnp.where(
             u_pat < t0, self.constants.WHITE_SAUCER_RAMMING,
             jnp.where(
@@ -1084,6 +1156,7 @@ class BeamRiderEnv(JaxEnvironment[BeamRiderState, BeamRiderObservation, BeamRide
             )
         )
 
+        # Movement pattern updates
         new_movement_pattern = jnp.where(
             start_diving,
             selected_dive_pattern,
@@ -1094,64 +1167,64 @@ class BeamRiderEnv(JaxEnvironment[BeamRiderState, BeamRiderObservation, BeamRide
             )
         )
 
-        diving = horizon_patrol_mask \
-                 & ~should_be_moving_up \
-                 & (current_y > self.constants.HORIZON_LINE_Y) \
-                 & (current_y < self.constants.WHITE_SAUCER_REVERSE_TRIGGER_Y)
-
+        # === HORIZONTAL PATROL MOVEMENT ===
+        """
+        Complex horizontal movement system with lane jumping and direction changes:
+        - Manages multi-lane jumps with random distances
+        - Handles direction changes and boundary conditions
+        - Includes pause intervals and beam alignment
+        """
+        diving = horizon_patrol_mask & ~should_be_moving_up & (current_y > self.constants.HORIZON_LINE_Y) & (
+                    current_y < self.constants.WHITE_SAUCER_REVERSE_TRIGGER_Y)
         doing_horizontal_patrol = patrolling_horizon & ~start_diving
         pause_ending = doing_horizontal_patrol & (jump_timer == 1) & (new_jump_timer == 0)
 
+        # Lane jump distance calculation
         lane_jump_rng = jax.vmap(lambda key: random.randint(key, (),
                                                             minval=self.constants.HORIZON_JUMP_MIN_LANES,
                                                             maxval=self.constants.HORIZON_JUMP_MAX_LANES + 1))(
             patrol_rng_keys)
+
+        # Direction change logic
         direction_rng = jax.vmap(lambda key: random.uniform(key, (), minval=0.0, maxval=1.0, dtype=jnp.float32))(
             patrol_rng_keys)
         should_change_direction = direction_rng < self.constants.HORIZON_DIRECTION_CHANGE_CHANCE
 
+        # Boundary condition handling
         current_direction = direction_x
         at_leftmost_beam = current_beam == 0
         at_rightmost_beam = current_beam == (self.constants.NUM_BEAMS - 1)
 
+        # Force direction change at boundaries
         forced_direction = jnp.where(
             at_leftmost_beam, 1.0,
-            jnp.where(at_rightmost_beam, -1.0,
-                      current_direction)
+            jnp.where(at_rightmost_beam, -1.0, current_direction)
         )
 
+        # New direction calculation
         new_direction = jnp.where(
             at_leftmost_beam | at_rightmost_beam,
             forced_direction,
-            jnp.where(
-                should_change_direction,
-                -current_direction,
-                current_direction
-            )
+            jnp.where(should_change_direction, -current_direction, current_direction)
         )
 
+        # Target beam calculation with lane jumping
         direction_for_jump = jnp.where(pause_ending, new_direction, direction_x)
         new_target_beam_calc = current_beam + (direction_for_jump * lane_jump_rng).astype(int)
         new_target_beam_clamped = jnp.clip(new_target_beam_calc, 0, self.constants.NUM_BEAMS - 1)
 
+        # Beam alignment handling
         needs_beam_alignment = doing_horizontal_patrol & ~aligned_with_beam & patrol_time_expired
 
         horizon_new_target_beam = jnp.where(
             needs_beam_alignment,
             nearest_beam_idx,
-            jnp.where(
-                pause_ending,
-                new_target_beam_clamped,
-                target_beam
-            )
+            jnp.where(pause_ending, new_target_beam_clamped, target_beam)
         )
 
-        horizon_new_direction = jnp.where(
-            pause_ending,
-            new_direction,
-            direction_x
-        )
+        horizon_new_direction = jnp.where(pause_ending, new_direction, direction_x)
 
+        # Horizontal movement calculation
         target_x_pos = self._beam_curve_x(current_y, horizon_new_target_beam, self.constants.ENEMY_WIDTH)
         x_diff = target_x_pos - current_x
         close_to_target = jnp.abs(x_diff) <= 3
@@ -1163,6 +1236,7 @@ class BeamRiderEnv(JaxEnvironment[BeamRiderState, BeamRiderObservation, BeamRide
             0.0
         )
 
+        # Pause timer management
         reached_target = doing_horizontal_patrol & close_to_target & (new_jump_timer == 0)
         horizon_new_pause_timer = jnp.where(
             reached_target,
@@ -1170,6 +1244,7 @@ class BeamRiderEnv(JaxEnvironment[BeamRiderState, BeamRiderObservation, BeamRide
             new_jump_timer
         )
 
+        # Position updates for horizon patrol
         horizon_new_beam = jnp.where(
             start_diving,
             nearest_beam_idx,
@@ -1190,10 +1265,10 @@ class BeamRiderEnv(JaxEnvironment[BeamRiderState, BeamRiderObservation, BeamRide
             )
         )
 
-        # MODIFIED: Check for kamikaze mode
+        # Vertical position updates with kamikaze support
         horizon_new_y = jnp.where(
             is_kamikazing,
-            current_y + self.constants.WHITE_SAUCER_RAMMING_SPEED,  # Continue downward fast
+            current_y + self.constants.WHITE_SAUCER_RAMMING_SPEED,
             jnp.where(
                 moving_to_horizon,
                 horizon_new_y_moving,
@@ -1207,30 +1282,32 @@ class BeamRiderEnv(JaxEnvironment[BeamRiderState, BeamRiderObservation, BeamRide
             )
         )
 
+        # Patrol timer updates
         horizon_new_patrol_timer = jnp.where(
             doing_horizontal_patrol & ~start_diving,
             patrol_time + 1,
             jnp.where(
                 start_diving,
                 0,
-                jnp.where(
-                    continue_patrolling,
-                    patrol_time + 1,
-                    patrol_time
-                )
+                jnp.where(continue_patrolling, patrol_time + 1, patrol_time)
             )
         )
 
         horizon_new_speed = self.constants.HORIZON_PATROL_SPEED
 
-        # === PATTERN 0: STRAIGHT_DOWN ===
+        # === MOVEMENT PATTERN 0: STRAIGHT_DOWN ===
+        """
+        Straight Down Pattern: Simple vertical descent with speed variations.
+        - Basic downward movement with kamikaze support
+        - Maintains current beam position
+        - Speed varies based on retreat/kamikaze state
+        """
         straight_mask = white_saucer_active & (movement_pattern == self.constants.WHITE_SAUCER_STRAIGHT_DOWN)
         straight_new_x = current_x
 
-        # MODIFIED: Check for kamikaze mode
         straight_new_y = jnp.where(
             is_kamikazing,
-            current_y + self.constants.WHITE_SAUCER_RAMMING_SPEED,  # Continue downward fast
+            current_y + self.constants.WHITE_SAUCER_RAMMING_SPEED,
             jnp.where(
                 should_be_moving_up,
                 current_y + self.constants.WHITE_SAUCER_REVERSE_SPEED_FAST,
@@ -1249,7 +1326,13 @@ class BeamRiderEnv(JaxEnvironment[BeamRiderState, BeamRiderObservation, BeamRide
         )
         straight_new_target_beam = target_beam
 
-        # === PATTERN 2: REVERSE_UP ===
+        # === MOVEMENT PATTERN 2: REVERSE_UP ===
+        """
+        Reverse Up Pattern: Upward retreat movement.
+        - Used during retreat phases
+        - Fast upward movement with kamikaze override
+        - Maintains current beam and target
+        """
         reverse_mask = white_saucer_active & (movement_pattern == self.constants.WHITE_SAUCER_REVERSE_UP)
         reverse_new_speed = jnp.where(
             is_kamikazing,
@@ -1263,7 +1346,7 @@ class BeamRiderEnv(JaxEnvironment[BeamRiderState, BeamRiderObservation, BeamRide
         reverse_new_x = current_x
         reverse_new_y = jnp.where(
             is_kamikazing,
-            current_y + self.constants.WHITE_SAUCER_RAMMING_SPEED,  # Continue downward fast
+            current_y + self.constants.WHITE_SAUCER_RAMMING_SPEED,
             jnp.where(
                 should_be_moving_up,
                 current_y + self.constants.WHITE_SAUCER_REVERSE_SPEED_FAST,
@@ -1273,7 +1356,13 @@ class BeamRiderEnv(JaxEnvironment[BeamRiderState, BeamRiderObservation, BeamRide
         reverse_new_beam = current_beam
         reverse_new_target_beam = target_beam
 
-        # PATTERN 6: RAMMING
+        # === MOVEMENT PATTERN 5: RAMMING ===
+        """
+        Ramming Pattern: High-speed kamikaze attack.
+        - Maximum speed downward movement
+        - No horizontal deviation
+        - Used for aggressive attacks in higher sectors
+        """
         ramming_mask = white_saucer_active & (movement_pattern == self.constants.WHITE_SAUCER_RAMMING)
         ramming_new_speed = self.constants.WHITE_SAUCER_RAMMING_SPEED
         ramming_new_x = current_x
@@ -1283,6 +1372,11 @@ class BeamRiderEnv(JaxEnvironment[BeamRiderState, BeamRiderObservation, BeamRide
         ramming_new_direction_x = direction_x
 
         # === APPLY MOVEMENT PATTERNS ===
+        """
+        Unified position and property updates using pattern-based selection.
+        Each movement pattern contributes its calculated values, with the final
+        state determined by the current movement pattern.
+        """
         new_x = jnp.where(horizon_patrol_mask, horizon_new_x,
                           jnp.where(ramming_mask, ramming_new_x,
                                     jnp.where(straight_mask, straight_new_x,
@@ -1339,57 +1433,66 @@ class BeamRiderEnv(JaxEnvironment[BeamRiderState, BeamRiderObservation, BeamRide
 
         updated_firing_timer = jnp.where(horizon_patrol_mask, horizon_new_patrol_timer, new_firing_timer)
 
-        # ===== CRITICAL FIX: Only apply beam curve to vertically-moving saucers =====
-        # EXCLUDE beam-jumping saucers that are actively jumping horizontally
+        # === BEAM CURVE ADHERENCE ===
+        """
+        Critical positioning system that ensures saucers follow the beam curves.
+        Only applies to vertically-moving saucers; excludes beam-jumping saucers
+        that are actively moving horizontally to maintain realistic movement.
+        """
         vertical_phase = white_saucer_active & (
                 (straight_mask | reverse_mask | ramming_mask | shooting_mask) |
-                (jump_mask & ~actively_jumping)  # Only apply curve to jump saucers when NOT actively jumping
+                (jump_mask & ~actively_jumping)  # Apply curve only when NOT actively jumping
         )
 
         beam_for_curve = new_beam
         curved_ws_x = self._beam_curve_x(new_y, beam_for_curve, self.constants.ENEMY_WIDTH)
         curved_ws_x = jnp.clip(curved_ws_x, dotted_min_x, dotted_max_x)
 
+        # Apply beam curve positioning to appropriate saucers
         new_x = jnp.where(vertical_phase, curved_ws_x, new_x)
 
+        # === FINAL STATE MANAGEMENT ===
+        """
+        Final retreat flag updates and enemy deactivation logic.
+        Handles the transition between retreat states and manages enemy cleanup.
+        """
         will_be_off_top_next = (
-                                       current_y + self.constants.WHITE_SAUCER_REVERSE_SPEED_FAST) <= -self.constants.ENEMY_HEIGHT
-        start_universal_retreat = white_saucer_active & should_start_retreat  # Use modified condition
+                                           current_y + self.constants.WHITE_SAUCER_REVERSE_SPEED_FAST) <= -self.constants.ENEMY_HEIGHT
+        start_universal_retreat = white_saucer_active & should_start_retreat
 
         retreat_flag_next = jnp.where(
             start_universal_retreat, self.constants.WHITE_SAUCER_RETREAT_AFTER_SHOT,
             jnp.where(will_be_off_top_next, 0,
-                      jnp.where(should_kamikaze, KAMIKAZE_FLAG, final_retreat_flag))  # Preserve kamikaze flag
+                      jnp.where(should_kamikaze, KAMIKAZE_FLAG, final_retreat_flag))
         )
 
         is_horizon_patrol = movement_pattern == self.constants.WHITE_SAUCER_HORIZON_PATROL
 
-        # MODIFIED: Deactivate kamikazing saucers when they go off bottom of screen
+        # Enemy deactivation logic with kamikaze support
         new_active = white_saucer_active & (
                 (is_horizon_patrol & (new_y >= self.constants.HORIZON_LINE_Y)) |
                 (~is_horizon_patrol & (new_y > self.constants.HORIZON_LINE_Y)) |
                 (is_kamikazing & (new_y < self.constants.SCREEN_HEIGHT))  # Keep kamikaze active until bottom
         )
 
-        # Update enemy array with new positions and timers
+        # === ENEMY ARRAY UPDATES ===
+        """
+        Apply all calculated updates to the enemy array.
+        Updates positions, speeds, timers, and state flags for all white saucers.
+        """
         enemies = enemies.at[:, 0].set(jnp.where(white_saucer_active, new_x, enemies[:, 0]))
         enemies = enemies.at[:, 1].set(jnp.where(white_saucer_active, new_y, enemies[:, 1]))
         enemies = enemies.at[:, 2].set(jnp.where(white_saucer_active, new_beam, enemies[:, 2]))
-        enemies = enemies.at[:, 3].set(
-            jnp.where(white_saucer_active, new_active.astype(jnp.float32), enemies[:, 3]))
+        enemies = enemies.at[:, 3].set(jnp.where(white_saucer_active, new_active.astype(jnp.float32), enemies[:, 3]))
         enemies = enemies.at[:, 4].set(jnp.where(white_saucer_active, new_speed, enemies[:, 4]))
         enemies = enemies.at[:, 6].set(jnp.where(white_saucer_active, new_direction_x, enemies[:, 6]))
         enemies = enemies.at[:, 10].set(jnp.where(white_saucer_active, new_target_beam, enemies[:, 10]))
-        enemies = enemies.at[:, 13].set(
-            jnp.where(white_saucer_active, retreat_flag_next, enemies[:, 13]))
-        enemies = enemies.at[:, 14].set(
-            jnp.where(white_saucer_active, new_movement_pattern, enemies[:, 14]))
-        enemies = enemies.at[:, 15].set(
-            jnp.where(white_saucer_active, updated_firing_timer, enemies[:, 15]))
+        enemies = enemies.at[:, 13].set(jnp.where(white_saucer_active, retreat_flag_next, enemies[:, 13]))
+        enemies = enemies.at[:, 14].set(jnp.where(white_saucer_active, new_movement_pattern, enemies[:, 14]))
+        enemies = enemies.at[:, 15].set(jnp.where(white_saucer_active, updated_firing_timer, enemies[:, 15]))
         enemies = enemies.at[:, 16].set(jnp.where(white_saucer_active, new_pause_timer, enemies[:, 16]))
 
         return state.replace(enemies=enemies)
-
     @partial(jax.jit, static_argnums=(0,))
     def _handle_firing(self, state: BeamRiderState, action: int) -> BeamRiderState:
         """Handle both laser and torpedo firing"""
@@ -1411,16 +1514,16 @@ class BeamRiderEnv(JaxEnvironment[BeamRiderState, BeamRiderObservation, BeamRide
         any_active = jnp.any(projectiles[:, 2] == 1)
         can_fire = ~any_active & should_fire  # only fire if none are active
 
-        # New projectile to be fired - UPDATED: 5 columns
+        # New projectile to be fired
         new_projectile = jnp.array([
             state.ship.x + self.constants.SHIP_WIDTH // 2,  # x
             state.ship.y,  # y
             1,  # active
-            -self.constants.PROJECTILE_SPEED,  # speed
-            state.ship.beam_position  # beam_idx - NEW COLUMN
+            -self.constants.PROJECTILE_SPEED,
+            state.ship.beam_position
         ])
 
-        # Find first available (inactive) slot
+        # Find first available slot
         active_mask = projectiles[:, 2] == 0
         first_inactive = jnp.argmax(active_mask)
 
@@ -1438,24 +1541,24 @@ class BeamRiderEnv(JaxEnvironment[BeamRiderState, BeamRiderObservation, BeamRide
         """Fire torpedo projectile (if any remaining)"""
         torpedo_projectiles = state.torpedo_projectiles
 
-        # Check if ANY torpedo slot is available
+        # Check if any torpedo slot is available
         any_torpedo_active = jnp.any(torpedo_projectiles[:, 2] == 1)
         has_torpedoes = state.torpedoes_remaining > 0
 
-        # Allow firing if no torpedoes are active AND we have torpedoes remaining
+        # Allow firing if no torpedoes are active and we have torpedoes remaining
         can_fire = ~any_torpedo_active & should_fire & has_torpedoes
 
-        # Find first available (inactive) slot
+        # Find first available slot
         active_mask = torpedo_projectiles[:, 2] == 0  # inactive torpedoes
         first_inactive = jnp.argmax(active_mask)
 
-        # Define the new torpedo - UPDATED: 5 columns
+        # Define the new torpedo
         new_torpedo = jnp.array([
             state.ship.x + self.constants.SHIP_WIDTH // 2,  # Center of ship
             state.ship.y,  # Launch from ship's current y
             1,  # Active
             -self.constants.TORPEDO_SPEED,  # Upward speed
-            state.ship.beam_position  # beam_idx - NEW COLUMN
+            state.ship.beam_position
         ])
 
         # Insert new torpedo into first inactive slot, if allowed
@@ -1480,7 +1583,7 @@ class BeamRiderEnv(JaxEnvironment[BeamRiderState, BeamRiderObservation, BeamRide
 
     @partial(jax.jit, static_argnums=(0,))
     def _update_projectiles(self, state: BeamRiderState) -> BeamRiderState:
-        """Update all projectiles (lasers and torpedoes) - UPDATED: follow beam curves with proper centering"""
+        """Update all projectiles (lasers and torpedoes)"""
         # Update regular projectiles
         projectiles = state.projectiles
         new_y = projectiles[:, 1] + projectiles[:, 3]  # y + speed
@@ -1489,7 +1592,7 @@ class BeamRiderEnv(JaxEnvironment[BeamRiderState, BeamRiderObservation, BeamRide
         # Calculate curved X positions using beam curve with projectile width
         new_x = self._beam_curve_x(new_y, beam_indices, self.constants.PROJECTILE_WIDTH)
 
-        # Deactivate projectiles that go off screen
+        # Deactivate projectiles that go off the screen
         active = (
                 (projectiles[:, 2] == 1) &
                 (new_y > self.constants.TOP_MARGIN) &
@@ -2304,7 +2407,7 @@ class BeamRiderEnv(JaxEnvironment[BeamRiderState, BeamRiderObservation, BeamRide
         return enemy_type
 
     @partial(jax.jit, static_argnums=(0,))
-    def _beam_curve_x(self, y: chex.Array, beam_idx: chex.Array, entity_width: int = None) -> chex.Array:
+    def _beam_curve_x(self, y: chex.Array, beam_idx: chex.Array) -> chex.Array:
         """Beam CENTER x at vertical position y (matches renderer's perspective)."""
         width = self.constants.SCREEN_WIDTH
         height = self.constants.SCREEN_HEIGHT
@@ -2322,7 +2425,6 @@ class BeamRiderEnv(JaxEnvironment[BeamRiderState, BeamRiderObservation, BeamRide
         x1 = center_x + (x0 - center_x) * 0.05
         x = x0 + (x1 - x0) * t
         return x
-
     @partial(jax.jit, static_argnums=(0,))
     def _update_enemies(self, state: BeamRiderState) -> BeamRiderState:
         """Update enemy positions - CORRECTED GREEN BOUNCE CRAFT MOVEMENT"""
@@ -2773,11 +2875,9 @@ class BeamRiderEnv(JaxEnvironment[BeamRiderState, BeamRiderObservation, BeamRide
         # ===== Make vertical movers follow dotted beams (perspective curve) =====
         beam_idx_now = enemies[:, 2].astype(int)
 
-        # Which enemies are in a vertical segment controlled here (white saucers and blockers handled elsewhere)?
         vertical_mask = (
-                (regular_enemy_mask | charger_mask | tracker_mask)  # REMOVED: blocker_mask from here
-                & ~chirper_mask & ~bounce_mask & ~sentinel_mask & ~debris_mask & ~blocker_mask
-            # ADDED: exclude blockers
+                (regular_enemy_mask | charger_mask | tracker_mask | debris_mask)
+                & ~chirper_mask & ~bounce_mask & ~sentinel_mask & ~blocker_mask
         )
 
         curved_x = self._beam_curve_x(new_y, beam_idx_now, self.constants.ENEMY_WIDTH)
@@ -3361,14 +3461,14 @@ class BeamRiderEnv(JaxEnvironment[BeamRiderState, BeamRiderObservation, BeamRide
                 new_debris = jnp.array([
                     rejuv_x,  # x - start at rejuvenator position
                     rejuv_y,  # y - start at rejuvenator position
-                    rejuv_beam,  # beam_position - inherit rejuvenator's beam
+                    rejuv_beam,  # beam_position - inherit rejuvenator's beam (IMPORTANT: this enables curve following)
                     1,  # active
                     self.constants.REJUVENATOR_DEBRIS_SPEED,  # speed
                     self.constants.ENEMY_TYPE_REJUVENATOR_DEBRIS,  # type
-                    0.0,  # direction_x - no horizontal movement
+                    0.0,  # direction_x - no horizontal movement needed (curve will handle this)
                     1.0,  # direction_y - move down
                     0,  # bounce_count
-                    0,  # linger_timer - not used for lifetime anymore
+                    0,  # linger_timer
                     0,  # target_x
                     1,  # health
                     0,  # firing_timer
@@ -3632,12 +3732,12 @@ class BeamRiderRenderer(JAXGameRenderer):
 
         # White saucer sprite
         self.white_saucer_sprite = jnp.array([
-            [0, 0, 0, 1, 1, 0, 0, 0],  # Dome top
-            [0, 0, 1, 1, 1, 1, 0, 0],  # Dome middle
-            [0, 1, 0, 1, 1, 0, 1, 0],  # Upper disk
-            [1, 1, 1, 1, 1, 1, 1, 1],  # Middle with windows/lights
-            [0, 0, 1, 0, 0, 1, 0, 0],  # Full width disk
-            [0, 0, 0, 1, 1, 0, 0, 0],  # Bottom rim
+            [0, 0, 0, 1, 1, 0, 0, 0],
+            [0, 0, 1, 1, 1, 1, 0, 0],
+            [0, 1, 0, 1, 1, 0, 1, 0],
+            [1, 1, 1, 1, 1, 1, 1, 1],
+            [0, 0, 1, 0, 0, 1, 0, 0],
+            [0, 0, 0, 1, 1, 0, 0, 0],
         ], dtype=jnp.uint8)
         # Brown debris sprite
         self.brown_debris_sprite = jnp.array([
@@ -3704,6 +3804,29 @@ class BeamRiderRenderer(JAXGameRenderer):
             [0, 1, 0, 0, 0, 1, 0],
             [1, 0, 0, 0, 0, 0, 1],
         ])
+
+        # Yellow chirper sprite - closed mouth frame
+        self.yellow_chirper_closed = jnp.array([
+            [0, 0, 0, 1, 1, 1, 0, 0, 0],
+            [0, 0, 1, 1, 1, 1, 1, 0, 0],
+            [0, 1, 1, 1, 1, 1, 1, 1, 0],
+            [1, 1, 1, 1, 1, 1, 1, 1, 1],
+            [0, 1, 1, 1, 1, 1, 1, 1, 0],
+            [0, 0, 1, 1, 1, 1, 1, 0, 0],
+            [0, 0, 0, 1, 1, 1, 0, 0, 0],
+        ], dtype=jnp.uint8)
+
+        # Yellow chirper sprite - open mouth frame
+        self.yellow_chirper_open = jnp.array([
+            [0, 0, 0, 1, 1, 1, 0, 0, 0],
+            [0, 0, 1, 1, 1, 1, 1, 0, 0],
+            [0, 1, 1, 1, 0, 1, 1, 1, 0],
+            [1, 1, 1, 0, 0, 0, 1, 1, 1],
+            [0, 1, 1, 1, 0, 1, 1, 1, 0],
+            [0, 0, 1, 1, 1, 1, 1, 0, 0],
+            [0, 0, 0, 1, 1, 1, 0, 0, 0],
+        ], dtype=jnp.uint8)
+
         # JAX rendering components
         self.ship_sprite_surface = self._create_ship_surface()
         self.small_ship_surface = self._create_small_ship_surface()
@@ -3722,6 +3845,94 @@ class BeamRiderRenderer(JAXGameRenderer):
             pygame.display.set_caption("BeamRider - JAX Implementation")
             self.clock = pygame.time.Clock()
             self.env = BeamRiderEnv()
+
+    @partial(jax.jit, static_argnums=(0,))
+    def _get_chirper_animation_frame(self, frame_count: int) -> int:
+        """Get current animation frame for yellow chirper (0=closed, 1=open)"""
+        # Change animation every 20 frames (about 3 times per second at 60fps)
+        animation_speed = 20
+        return (frame_count // animation_speed) % 2
+
+    @partial(jax.jit, static_argnums=(0,))
+    def _draw_animated_chirper_sprite(self, screen: chex.Array, x: int, y: int,
+                                      scale: float, color: chex.Array, frame_count: int) -> chex.Array:
+        """Draw animated yellow chirper sprite with opening/closing mouth"""
+
+        # Get current animation frame
+        anim_frame = self._get_chirper_animation_frame(frame_count)
+
+        # Select sprite based on animation frame
+        sprite = jnp.where(
+            anim_frame == 0,
+            self.yellow_chirper_closed,
+            self.yellow_chirper_open
+        )
+
+        sprite_height, sprite_width = sprite.shape
+
+        # Calculate scaled dimensions
+        scaled_width = jnp.maximum(1, (sprite_width * scale).astype(jnp.int32))
+        scaled_height = jnp.maximum(1, (sprite_height * scale).astype(jnp.int32))
+
+        # For very small scales, just draw a dot
+        is_dot = scale < 0.25
+
+        def draw_dot():
+            y_indices = jnp.arange(self.constants.SCREEN_HEIGHT)
+            x_indices = jnp.arange(self.constants.SCREEN_WIDTH)
+            y_grid, x_grid = jnp.meshgrid(y_indices, x_indices, indexing='ij')
+
+            dot_mask = (x_grid == x) & (y_grid == y) & (x >= 0) & (x < self.constants.SCREEN_WIDTH) & (y >= 0) & (
+                        y < self.constants.SCREEN_HEIGHT)
+
+            return jnp.where(
+                dot_mask[..., None],
+                color,
+                screen
+            ).astype(jnp.uint8)
+
+        def draw_scaled_sprite():
+            y_indices = jnp.arange(self.constants.SCREEN_HEIGHT)
+            x_indices = jnp.arange(self.constants.SCREEN_WIDTH)
+            y_grid, x_grid = jnp.meshgrid(y_indices, x_indices, indexing='ij')
+
+            # Center the scaled sprite
+            start_x = x - scaled_width // 2
+            start_y = y - scaled_height // 2
+
+            # Create mask for scaled sprite area
+            sprite_mask = (
+                    (x_grid >= start_x) &
+                    (x_grid < start_x + scaled_width) &
+                    (y_grid >= start_y) &
+                    (y_grid < start_y + scaled_height) &
+                    (start_x >= 0) & (start_x + scaled_width <= self.constants.SCREEN_WIDTH) &
+                    (start_y >= 0) & (start_y + scaled_height <= self.constants.SCREEN_HEIGHT)
+            )
+
+            # Map screen coordinates to original sprite coordinates
+            sprite_x_coords = ((x_grid - start_x) * sprite_width / scaled_width).astype(jnp.int32)
+            sprite_y_coords = ((y_grid - start_y) * sprite_height / scaled_height).astype(jnp.int32)
+
+            # Clamp coordinates to sprite bounds
+            sprite_x_coords = jnp.clip(sprite_x_coords, 0, sprite_width - 1)
+            sprite_y_coords = jnp.clip(sprite_y_coords, 0, sprite_height - 1)
+
+            # Get sprite pixel values
+            sprite_values = sprite[sprite_y_coords, sprite_x_coords]
+
+            # Apply color where sprite has value 1 and mask is True
+            draw_mask = sprite_mask & (sprite_values == 1)
+
+            return jnp.where(
+                draw_mask[..., None],
+                color,
+                screen
+            ).astype(jnp.uint8)
+
+        # Choose between dot or scaled sprite based on scale
+        return jax.lax.cond(is_dot, draw_dot, draw_scaled_sprite)
+
 
     def _create_ship_surface(self):
         # Create the main ship sprite surface using a pixel array and color map.
@@ -3784,7 +3995,7 @@ class BeamRiderRenderer(JAXGameRenderer):
         screen = self._draw_sentinel_projectiles(screen, state.sentinel_projectiles)
 
         # Render enemies
-        screen = self._draw_enemies(screen, state.enemies)
+        screen = self._draw_enemies(screen, state.enemies, state)
 
         # Render UI (score, lives, torpedoes, sector progress)
         screen = self._draw_ui(screen, state)
@@ -4313,7 +4524,7 @@ class BeamRiderRenderer(JAXGameRenderer):
         return jax.lax.cond(is_dot, draw_dot, draw_scaled_sprite)
 
     @partial(jax.jit, static_argnums=(0,))
-    def _draw_enemies(self, screen: chex.Array, enemies: chex.Array) -> chex.Array:
+    def _draw_enemies(self, screen: chex.Array, enemies: chex.Array, state: BeamRiderState) -> chex.Array:
         """Draw all active enemies with perspective scaling and sprites for white saucers and brown debris"""
 
         def draw_single_enemy(i, screen):
@@ -4338,6 +4549,7 @@ class BeamRiderRenderer(JAXGameRenderer):
             is_yellow_rejuv = enemy_type == self.constants.ENEMY_TYPE_YELLOW_REJUVENATOR
             is_sentinel = enemy_type == self.constants.ENEMY_TYPE_SENTINEL_SHIP
             is_yellow_debris = enemy_type == self.constants.ENEMY_TYPE_REJUVENATOR_DEBRIS
+            is_yellow_chirper = enemy_type == self.constants.ENEMY_TYPE_YELLOW_CHIRPER
             # Get base enemy dimensions
             base_width = jnp.where(
                 sentinel_ship,
@@ -4377,8 +4589,12 @@ class BeamRiderRenderer(JAXGameRenderer):
             use_yellow_rejuv_sprite = is_yellow_rejuv & active
             use_sentinel_sprite = is_sentinel & active
             use_yellow_debris_sprite = is_yellow_debris & active
-            use_any_sprite = use_white_saucer_sprite | use_brown_debris_sprite | use_green_blocker_sprite | use_green_bounce_sprite | use_blue_charger_sprite | use_orange_tracker_sprite | use_yellow_rejuv_sprite | use_sentinel_sprite | use_yellow_debris_sprite
+            use_yellow_chirper_sprite = is_yellow_chirper & active
 
+            use_any_sprite = (use_white_saucer_sprite | use_brown_debris_sprite | use_green_blocker_sprite |
+                              use_green_bounce_sprite | use_blue_charger_sprite | use_orange_tracker_sprite |
+                              use_yellow_rejuv_sprite | use_sentinel_sprite | use_yellow_debris_sprite |
+                              use_yellow_chirper_sprite)
             # Center the scaled enemy at its position
             x_offset = ((base_width - scaled_width) / 2).astype(int)
             y_offset = ((base_height - scaled_height) / 2).astype(int)
@@ -4524,6 +4740,15 @@ class BeamRiderRenderer(JAXGameRenderer):
                 lambda s: s,
                 screen
             )
+            screen = jax.lax.cond(
+                use_yellow_chirper_sprite,
+                lambda s: self._draw_animated_chirper_sprite(s, x.astype(int), y.astype(int), 1.0,
+                                                             jnp.array(self.constants.YELLOW_CHIRPER_COLOR,
+                                                                       dtype=jnp.uint8),
+                                                             state.frame_count),  # Pass frame_count for animation
+                lambda s: s,
+                screen
+            )
             # For very small enemies (dots)
             dot_mask = (
                     is_dot &
@@ -4634,8 +4859,8 @@ class BeamRiderRenderer(JAXGameRenderer):
         MARGIN_TORPS_X = 0  # right margin
         MARGIN_TORPS_Y = 8  # top margin
         # Lives (bottom-left)
-        MARGIN_LIVES_X = 10  # left margin
-        MARGIN_LIVES_Y = 6  # bottom margin
+        MARGIN_LIVES_X = 5  # left margin
+        MARGIN_LIVES_Y = 1  # bottom margin
 
         # Screen size
         H = self.constants.SCREEN_HEIGHT
