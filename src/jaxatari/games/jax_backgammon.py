@@ -490,6 +490,15 @@ class JaxBackgammonEnv(JaxEnvironment[BackgammonState, jnp.ndarray, dict, Backga
         new_state = new_state._replace(key=new_key)
         return obs, new_state, reward, done, info
 
+    def image_space(self) -> spaces.Box:
+        """Returns the image space for rendered frames."""
+        return spaces.Box(
+            low=0,
+            high=255,
+            shape=(self.renderer.frame_height, self.renderer.frame_width, 3),
+            dtype=jnp.uint8
+        )
+
     def action_space(self) -> spaces.Discrete:
         """Return the discrete action space (scalar index into move list)."""
         return spaces.Discrete(self._action_pairs.shape[0])
