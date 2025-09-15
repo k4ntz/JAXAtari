@@ -309,13 +309,12 @@ class JaxSkiing(JaxEnvironment[GameState, SkiingObservation, SkiingInfo, SkiingC
 
         # 1) Eingabe -> Zielpose
 
-        # Normalize external action ids (e.g., JAXAtariAction) to internal {NOOP, LEFT=1, RIGHT=2}
-        # Treat common JAXAtariAction codes: RIGHT=3, LEFT=4. Everything else -> NOOP.
-        is_left  = jnp.logical_or(jnp.equal(action, self.consts.LEFT),  jnp.equal(action, 4))
-        is_right = jnp.logical_or(jnp.equal(action, self.consts.RIGHT), jnp.equal(action, 3))
+        # Normalize action from get_human_action(): accept only A/D (JAXAtariAction LEFT=4, RIGHT=3).
+        # Any other input (including SPACE/FIRE) becomes NOOP.
+        is_left  = jnp.equal(action, jnp.int32(4))  # external LEFT (A)
+        is_right = jnp.equal(action, jnp.int32(3)) # external RIGHT (D)
         norm_action = jax.lax.select(is_left,  self.consts.LEFT,
-                        jax.lax.select(is_right, self.consts.RIGHT, self.consts.NOOP))
-
+                    jax.lax.select(is_right, self.consts.RIGHT, self.consts.NOOP))
         new_skier_pos = jax.lax.cond(jnp.equal(norm_action, self.consts.LEFT),
                                      lambda _: state.skier_pos - 1,
                                      lambda _: state.skier_pos,
