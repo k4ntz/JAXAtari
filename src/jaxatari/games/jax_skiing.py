@@ -229,17 +229,22 @@ class JaxSkiing(JaxEnvironment[GameState, SkiingObservation, SkiingInfo, SkiingC
         k1 = jnp.array([k1, k2, k3, k4])
 
         def check_flags(i, flags):
-            # neue x/y
+            # neue x-Position innerhalb des gültigen Bereichs
             x_flag = jax.random.randint(
-                k1.at[i].get(), [], 
+                k1.at[i].get(), [],
                 self.config.flag_width,
                 self.config.screen_width - self.config.flag_width - self.config.flag_distance
             ).astype(jnp.float32)
-            y = (self.consts.BOTTOM_BORDER + jnp.float32(self.config.gate_vertical_spacing))
 
-            row_old = flags.at[i].get()                      # Shape (2,) oder (4,)
-            row_new = row_old.at[0].set(x_flag).at[1].set(y) # gleiche Shape wie row_old
+            # Konstanter Vertikalabstand: immer hinter die aktuell tiefste Flagge spawnen
+            # Berücksichtigt sowohl bereits neu gesetzte Flags (new_flags) als auch bestehende (flags)
+            base_existing = jnp.maximum(jnp.max(new_flags[:, 1]), jnp.max(flags[:, 1]))
+            y = base_existing + jnp.float32(self.config.gate_vertical_spacing)
 
+            row_old = flags.at[i].get()  # Shape (2,) oder (4,)
+            row_new = row_old.at[0].set(x_flag).at[1].set(y)
+
+            # Nur respawnen, wenn Flagge oberhalb TOP_BORDER despawned ist
             cond = jnp.less(flags.at[i, 1].get(), self.consts.TOP_BORDER)
             out_row = jax.lax.cond(cond, lambda _: row_new, lambda _: row_old, operand=None)
             return flags.at[i].set(out_row)
