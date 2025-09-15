@@ -415,6 +415,18 @@ class JaxSkiing(JaxEnvironment[GameState, SkiingObservation, SkiingInfo, SkiingC
             jnp.logical_or(jnp.logical_or(collided_tree, collided_rock), collided_flag),
         )
         freeze = jnp.logical_or(in_recovery, start_recovery)
+
+        # Zusätzlich: Im Startframe der Recovery Kollisionen ignorieren,
+        # um Doppel-Treffer ohne visuelle Separation zu vermeiden.
+        mask_now = jnp.logical_or(ignore_collisions, start_recovery)
+        collisions_tree = jnp.where(mask_now, jnp.zeros_like(collisions_tree), collisions_tree)
+        collisions_rock = jnp.where(mask_now, jnp.zeros_like(collisions_rock), collisions_rock)
+        collisions_flag = jnp.where(mask_now, jnp.zeros_like(collisions_flag), collisions_flag)
+        # Freeze ohne Repositionierung: Hindernisse bleiben an Ort und Stelle
+        freeze_flags = state.flags
+        freeze_trees = state.trees
+        freeze_rocks = state.rocks
+
         # (removed) 6) Minimum-Separation block disabled to avoid pushback.
 
 
@@ -429,7 +441,7 @@ class JaxSkiing(JaxEnvironment[GameState, SkiingObservation, SkiingInfo, SkiingC
             operand=None,
         )
         # Kollisions-Entprellung: Nach Recovery-Ende noch kurz Kollisionen ignorieren
-        COOLDOWN_FRAMES = jnp.int32(6)
+        COOLDOWN_FRAMES = jnp.int32(10)
         new_collision_cooldown = jax.lax.cond(
             # Wenn gerade Recovery endet (vorher >0, jetzt ==0) → Cooldown setzen
             jnp.logical_and(in_recovery, jnp.equal(new_skier_fell, 0)),
@@ -456,9 +468,9 @@ class JaxSkiing(JaxEnvironment[GameState, SkiingObservation, SkiingInfo, SkiingC
         # Apply freeze to speeds and world positions
         new_skier_x_speed = jax.lax.select(freeze, jnp.array(0.0, jnp.float32), new_skier_x_speed_nom)
         new_skier_y_speed = jax.lax.select(freeze, jnp.array(0.0, jnp.float32), new_skier_y_speed_nom)
-        new_flags = jax.lax.select(freeze, state.flags, new_flags_nom)
-        new_trees = jax.lax.select(freeze, state.trees, new_trees_nom)
-        new_rocks = jax.lax.select(freeze, state.rocks, new_rocks_nom)
+        new_flags = jax.lax.select(freeze, freeze_flags, new_flags_nom)
+        new_trees = jax.lax.select(freeze, freeze_trees, new_trees_nom)
+        new_rocks = jax.lax.select(freeze, freeze_rocks, new_rocks_nom)
         # Freeze-aware skier X position (no pushback or lateral offset during recovery)
         new_x = jax.lax.select(freeze, state.skier_x, new_x_nom)
 
