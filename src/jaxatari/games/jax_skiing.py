@@ -587,7 +587,10 @@ class JaxSkiing(JaxEnvironment[GameState, SkiingObservation, SkiingInfo, SkiingC
 
 
     @partial(jax.jit, static_argnums=(0,))
-    def _get_info(self, state: GameState, all_rewards: jnp.ndarray) -> SkiingInfo:
+    def _get_info(self, state: GameState, all_rewards: jnp.ndarray | None = None) -> SkiingInfo:
+        # Accept optional all_rewards so wrappers that call _get_info(state) still work.
+        if all_rewards is None:
+            all_rewards = jnp.zeros((1,), dtype=jnp.float32)
         return SkiingInfo(
             time=state.time,
             all_rewards=all_rewards,
