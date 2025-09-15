@@ -564,7 +564,7 @@ class JaxEnduro(JaxEnvironment[EnduroGameState, EnduroObservation, EnduroInfo, E
             player_speed=jnp.array(0.0, dtype=jnp.float32),
             cooldown=jnp.array(0.0, dtype=jnp.float32),
             game_over=jnp.array(False),
-            total_cars_overtaken=jnp.array(0),
+            total_cars_overtaken=jnp.array(0, dtype=jnp.int32),
             total_time_elapsed=jnp.array(0.0, dtype=jnp.float32),
         )
 
@@ -797,7 +797,7 @@ class JaxEnduro(JaxEnvironment[EnduroGameState, EnduroObservation, EnduroInfo, E
         )
         # don't allow negative numbers here
         new_cars_overtaken = jnp.clip(state.cars_overtaken + cars_overtaken_change, 0)[0]
-        new_total_cars_overtaken = state.cars_overtaken + cars_overtaken_change
+        new_total_cars_overtaken = (state.cars_overtaken + cars_overtaken_change).astype(jnp.int32)
         new_cars_to_overtake = self.config.cars_to_pass_per_level + self.config.cars_increase_per_level * (
                 state.level - 1)
 
@@ -1041,8 +1041,7 @@ class JaxEnduro(JaxEnvironment[EnduroGameState, EnduroObservation, EnduroInfo, E
     @partial(jax.jit, static_argnums=(0,))
     def _get_reward(self, previous_state: EnduroGameState, state: EnduroGameState) -> jnp.ndarray:
         return (state.total_cars_overtaken - previous_state.total_cars_overtaken) \
-            + (state.distance - previous_state.distance) \
-            - (state.total_time_elapsed - previous_state.total_time_elapsed)
+            + (state.distance - previous_state.distance)
 
     @partial(jax.jit, static_argnums=(0,))
     def _get_all_reward(self, previous_state: EnduroGameState, state: EnduroGameState):
