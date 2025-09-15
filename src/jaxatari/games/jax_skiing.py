@@ -134,13 +134,13 @@ class JaxSkiing(JaxEnvironment[GameState, SkiingObservation, SkiingInfo, SkiingC
     def obs_to_flat_array(self, obs: SkiingObservation) -> jnp.ndarray:
         skier_vec  = jnp.array(
             [obs.skier.x, obs.skier.y, obs.skier.width, obs.skier.height],
-            dtype=jnp.int32
+            dtype=jnp.float64
         ).reshape(-1)
     
-        flags_flat = jnp.array(obs.flags, dtype=jnp.int32).reshape(-1)
-        trees_flat = jnp.array(obs.trees, dtype=jnp.int32).reshape(-1)
-        rocks_flat = jnp.array(obs.rocks, dtype=jnp.int32).reshape(-1)
-        score_flat = jnp.array(obs.score, dtype=jnp.int32).reshape(-1)
+        flags_flat = jnp.array(obs.flags, dtype=jnp.float64).reshape(-1)
+        trees_flat = jnp.array(obs.trees, dtype=jnp.float64).reshape(-1)
+        rocks_flat = jnp.array(obs.rocks, dtype=jnp.float64).reshape(-1)
+        score_flat = jnp.array(obs.score, dtype=jnp.float64).reshape(-1)
     
         return jnp.concatenate([skier_vec, flags_flat, trees_flat, rocks_flat, score_flat], axis=0)
 
