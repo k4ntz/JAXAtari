@@ -310,7 +310,7 @@ class EnduroGameState(NamedTuple):
     player_speed: chex.Array
     cooldown: chex.Array  # cooldown after collision with another car
     game_over: chex.Array  # game over if you fail to pass enough cars before the day ends
-    total_cars_overtaken: chex.Array
+    total_cars_overtaken: chex.Array  # the all time overtaken cars - for the reward function
     total_time_elapsed: chex.Array
 
 
@@ -395,6 +395,7 @@ class EnduroObservation(NamedTuple):
 class EnduroInfo(NamedTuple):
     distance: jnp.ndarray
     level: jnp.ndarray
+    all_rewards: jnp.ndarray
 
 
 StepResult = Tuple[EnduroObservation, EnduroGameState, jnp.ndarray, bool, EnduroInfo]
@@ -402,13 +403,18 @@ StepResult = Tuple[EnduroObservation, EnduroGameState, jnp.ndarray, bool, Enduro
 
 # https://www.free80sarcade.com/atari2600_Enduro.php
 class JaxEnduro(JaxEnvironment[EnduroGameState, EnduroObservation, EnduroInfo, EnduroConstants]):
-    def __init__(self):
-        super().__init__()
+    def __init__(self, consts: EnduroConstants = None, reward_funcs: list[callable]=None):
+        self.config = consts or EnduroConstants()
+        super().__init__(self.config)
+        if reward_funcs is not None:
+            reward_funcs = tuple(reward_funcs)
+        self.reward_funcs = reward_funcs
+
         self.frame_stack_size = 4
-        self.config = EnduroConstants()
         self.state = self.reset()
         self.car_0_spec = VehicleSpec("sprites/enduro/cars/car_0.npy")
         self.car_1_spec = VehicleSpec("sprites/enduro/cars/car_1.npy")
+        self.reward_funcs = None
 
         self.action_set = [
             Action.NOOP,
@@ -791,6 +797,7 @@ class JaxEnduro(JaxEnvironment[EnduroGameState, EnduroObservation, EnduroInfo, E
         )
         # don't allow negative numbers here
         new_cars_overtaken = jnp.clip(state.cars_overtaken + cars_overtaken_change, 0)[0]
+        new_total_cars_overtaken = state.cars_overtaken + cars_overtaken_change
         new_cars_to_overtake = self.config.cars_to_pass_per_level + self.config.cars_increase_per_level * (
                 state.level - 1)
 
@@ -892,6 +899,7 @@ class JaxEnduro(JaxEnvironment[EnduroGameState, EnduroObservation, EnduroInfo, E
             visible_track_left=new_left_xs.astype(jnp.int32),
             visible_track_right=new_right_xs.astype(jnp.int32),
             cooldown=new_cooldown,
+            total_cars_overtaken=new_total_cars_overtaken,
 
             game_over=new_game_over,
         )
@@ -899,8 +907,9 @@ class JaxEnduro(JaxEnvironment[EnduroGameState, EnduroObservation, EnduroInfo, E
         # Return updated observation and state
         obs = self._get_observation(new_state)
         reward = self._get_reward(state, new_state)
+        all_rewards = self._get_all_reward(state, new_state)
         done = self._get_done(new_state)
-        info = self._get_info(new_state)
+        info = self._get_info(new_state, all_rewards)
 
         return obs, new_state, reward, done, info
 
@@ -1020,14 +1029,23 @@ class JaxEnduro(JaxEnvironment[EnduroGameState, EnduroObservation, EnduroInfo, E
         )
 
     @partial(jax.jit, static_argnums=(0,))
-    def _get_info(self, state: EnduroGameState) -> EnduroInfo:
-        return EnduroInfo(distance=state.distance, level=state.level)
+    def _get_info(self, state: EnduroGameState, all_rewards: chex.Array = None) -> EnduroInfo:
+        return EnduroInfo(distance=state.distance, level=state.level, all_rewards=all_rewards)
 
     @partial(jax.jit, static_argnums=(0,))
     def _get_reward(self, previous_state: EnduroGameState, state: EnduroGameState) -> jnp.ndarray:
         return (state.total_cars_overtaken - previous_state.total_cars_overtaken) \
             + (state.distance - previous_state.distance) \
             - (state.total_time_elapsed - previous_state.total_time_elapsed)
+
+    @partial(jax.jit, static_argnums=(0,))
+    def _get_all_reward(self, previous_state: EnduroGameState, state: EnduroGameState):
+        if self.reward_funcs is None:
+            return jnp.zeros(1)
+        rewards = jnp.array(
+            [reward_func(previous_state, state) for reward_func in self.reward_funcs]
+        )
+        return rewards
 
     @partial(jax.jit, static_argnums=(0,))
     def _get_done(self, state: EnduroGameState) -> jnp.array(bool):
@@ -1789,9 +1807,9 @@ class EnduroRenderer(JAXGameRenderer):
     Renders the jax_enduro game
     """
 
-    def __init__(self):
+    def __init__(self, consts: EnduroConstants = None):
         super().__init__()
-        self.config = EnduroConstants()
+        self.config = consts or EnduroConstants()
 
         # sprite sizes to easily and dynamically adjust renderings
         self.background_sizes: dict[str, tuple[int, int]] = {}
@@ -2753,7 +2771,7 @@ class EnduroDebugRenderer:
         pygame.display.flip()
 
     @staticmethod
-    def render_debug_overlay(screen, state: EnduroGameState, font, game_config, obs: EnduroObservation):
+    def render_debug_overlay(screen, state: EnduroGameState, font, game_config, obs: EnduroObservation, reward):
         """Render debug information as pygame text overlay"""
         track_direction_starts_at = state.whole_track[:, 1]
         track_segment_index = int(jnp.searchsorted(track_direction_starts_at, state.distance, side='right') - 1)
@@ -2783,7 +2801,8 @@ class EnduroDebugRenderer:
             # f"Top X Offset: {state.track_top_x_curve_offset}",
             f"Obs right track: {obs.track_right_xs}",
             f"Obs Opponents: {obs.visible_opponents}",
-            f"Obs Cooldown {obs.cooldown}",
+            f"Obs Cooldown: {obs.cooldown}",
+            f"Reward: {reward}",
         ]
 
         # Semi-transparent background for better readability
@@ -2875,7 +2894,7 @@ class EnduroDebugRenderer:
 
             # Add debug overlay if enabled
             if debug_mode and show_debug:
-                self.render_debug_overlay(screen, state, font, renderer.config, obs)
+                self.render_debug_overlay(screen, state, font, renderer.config, obs, reward)
 
                 # Add controls help in corner
                 help_text = small_font.render("Press 'D' to toggle debug", True, (200, 200, 200))
@@ -2906,5 +2925,4 @@ Track:
 - Better curve
 - curve move speed based on speed
 
-Cleanup:
 """
