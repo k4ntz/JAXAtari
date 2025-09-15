@@ -217,7 +217,7 @@ class EnduroConstants(NamedTuple):
     # How many opponents to overtake to progress into the next level
     cars_to_pass_per_level: int = 200
     cars_increase_per_level: int = 100
-    max_increase_level: int = 5
+    max_level: int = 5
 
     # defines how many y pixels the car size will have size 0
     car_zero_y_pixel_range = 20
@@ -436,35 +436,42 @@ class JaxEnduro(JaxEnvironment[EnduroGameState, EnduroObservation, EnduroInfo, E
 
     def observation_space(self) -> spaces.Dict:
         return spaces.Dict({
-            "car": spaces.Dict({
-                "x": spaces.Box(low=0, high=self.config.screen_width, shape=(1, 1), dtype=jnp.float32),
-                "y": spaces.Box(low=0, high=self.config.screen_height, shape=(1, 1), dtype=jnp.int32),
-                "width": spaces.Box(low=0, high=self.config.screen_width, shape=(1, 1), dtype=jnp.int32),
-                "height": spaces.Box(low=0, high=self.config.screen_height, shape=(1, 1), dtype=jnp.int32),
-            }),
+            # Player position
+            "player_x": spaces.Box(low=0, high=self.config.screen_width, shape=(1,), dtype=jnp.float32),
+            "player_y": spaces.Box(low=0, high=self.config.screen_height, shape=(1,), dtype=jnp.int32),
+
+            # Opponents (7 slots, each with x,y coordinates, -1 for empty/fogged slots)
             "visible_opponents": spaces.Box(
-                low=0,
-                high=1,
-                shape=(self.config.length_of_opponent_array,),
+                low=-1,
+                high=self.config.screen_width,
+                shape=(7, 2),
                 dtype=jnp.int32
             ),
-            "cars_to_overtake": spaces.Box(low=0, high=1000, shape=(1,), dtype=jnp.int32),
+
+            # Game objectives
+            "cars_to_overtake": spaces.Box(low=0, high=500, shape=(1,), dtype=jnp.int32),
             "distance": spaces.Box(low=0.0, high=self.config.max_track_length, shape=(1,), dtype=jnp.float32),
-            "level": spaces.Box(low=1, high=10, shape=(1,), dtype=jnp.int32),
-            "track_top_x": spaces.Box(low=0, high=self.config.screen_width, shape=(1,), dtype=jnp.int32),
+            "level": spaces.Box(low=1, high=self.config.max_level, shape=(1,), dtype=jnp.int32),
+            "level_passed": spaces.Box(low=0, high=1, shape=(1,), dtype=jnp.bool_),
+
+            # Track boundaries (can be -1 for fogged areas)
             "track_left_xs": spaces.Box(
-                low=0,
+                low=-1,
                 high=self.config.screen_width,
                 shape=(self.config.track_height,),
                 dtype=jnp.int32
             ),
             "track_right_xs": spaces.Box(
-                low=0,
+                low=-1,
                 high=self.config.screen_width,
                 shape=(self.config.track_height,),
                 dtype=jnp.int32
             ),
             "curvature": spaces.Box(low=-1, high=1, shape=(1,), dtype=jnp.int32),
+
+            # Environmental state
+            "cooldown": spaces.Box(low=0, high=self.config.car_crash_cooldown_frames, shape=(1,), dtype=jnp.float32),
+            "weather_index": spaces.Box(low=0, high=len(self.config.weather_starts_s) - 1, shape=(1,), dtype=jnp.int32),
         })
 
     @partial(jax.jit, static_argnums=(0,))
@@ -835,7 +842,7 @@ class JaxEnduro(JaxEnvironment[EnduroGameState, EnduroObservation, EnduroInfo, E
         # ===== New Day handling =====
         def reset_day():
             # do not allow level to go beyond the max level
-            level = jnp.clip(state.level + 1, 1, self.config.max_increase_level)
+            level = jnp.clip(state.level + 1, 1, self.config.max_level)
             # cars_overtaken, level increase, level passed, game_over
             # if a new day starts and the level is not passed it is game over
             return 0, level, False, jnp.logical_not(new_level_passed)
@@ -2473,27 +2480,6 @@ def change_sprite_color(sprite, rgb_color):
     return colored_sprite.astype(jnp.uint8)
 
 
-TODOS = """
-Steering:
-- Drift speed based?
-
-Rendering:
-- wheel animation speed
-
-Track:
-- Better curve
-- curve move speed based on speed
-
-Observation:
-- reduce observation when fog
-
-Performance:
-- Improve performance of collision handling cars
-
-Cleanup:
-"""
-
-
 """
 ACTIVISION (R)
 
@@ -2856,3 +2842,24 @@ class EnduroDebugRenderer:
 if __name__ == '__main__':
     # For debugging and development
     EnduroDebugRenderer().play_enduro(debug_mode=True)
+
+
+
+TODOS = """
+Steering:
+- Drift speed based?
+
+Rendering:
+- wheel animation speed
+
+Track:
+- Better curve
+- curve move speed based on speed
+
+Observation:
+
+Performance:
+- Improve performance of collision handling cars
+
+Cleanup:
+"""
