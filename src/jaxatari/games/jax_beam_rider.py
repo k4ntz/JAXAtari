@@ -2407,7 +2407,7 @@ class BeamRiderEnv(JaxEnvironment[BeamRiderState, BeamRiderObservation, BeamRide
         return enemy_type
 
     @partial(jax.jit, static_argnums=(0,))
-    def _beam_curve_x(self, y: chex.Array, beam_idx: chex.Array) -> chex.Array:
+    def _beam_curve_x(self, y: chex.Array, beam_idx: chex.Array, entity_width: int = None) -> chex.Array:
         """Beam CENTER x at vertical position y (matches renderer's perspective)."""
         width = self.constants.SCREEN_WIDTH
         height = self.constants.SCREEN_HEIGHT
