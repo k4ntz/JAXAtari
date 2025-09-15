@@ -554,7 +554,7 @@ class JaxBackgammonEnv(JaxEnvironment[BackgammonState, jnp.ndarray, dict, Backga
         return [tuple(map(int, move)) for move in valid_moves_array]
 
     def render(self, state: BackgammonState) -> Tuple[jnp.ndarray]:
-        self.renderer.render(state)
+        return self.renderer.render(state)
 
 
 class BackgammonRenderer(JAXGameRenderer):
