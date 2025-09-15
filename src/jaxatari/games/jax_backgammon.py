@@ -53,9 +53,13 @@ class BackgammonInfo(NamedTuple):
 
 
 class BackgammonObservation(NamedTuple):
-    """Simplified observation structure containing counts on bar and home."""
-    bar_counts: jnp.ndarray
-    home_counts: jnp.ndarray
+    """Complete backgammon observation structure for object-centric observations."""
+    board: jnp.ndarray  # (2, 26) - full board state [white_checkers, black_checkers]
+    dice: jnp.ndarray   # (4,) - available dice values
+    current_player: jnp.ndarray  # (1,) - current player (-1 for black, 1 for white)
+    is_game_over: jnp.ndarray    # (1,) - game over flag
+    bar_counts: jnp.ndarray      # (2,) - checkers on bar [white, black]
+    home_counts: jnp.ndarray     # (2,) - checkers borne off [white, black]
 
 class JaxBackgammonEnv(JaxEnvironment[BackgammonState, jnp.ndarray, dict, BackgammonConstants]):
     """
@@ -490,6 +494,16 @@ class JaxBackgammonEnv(JaxEnvironment[BackgammonState, jnp.ndarray, dict, Backga
         new_state = new_state._replace(key=new_key)
         return obs, new_state, reward, done, info
 
+    @partial(jax.jit, static_argnums=(0,))
+    def obs_to_flat_array(self, obs: BackgammonObservation) -> jnp.ndarray:
+        """Convert object-centric observation to flat array."""
+        return jnp.concatenate([
+            obs.board.flatten(),
+            obs.dice.flatten(),
+            obs.current_player.flatten(),
+            obs.is_game_over.flatten()
+        ]).astype(jnp.float32)
+
     def image_space(self) -> spaces.Box:
         """Returns the image space for rendered frames."""
         return spaces.Box(
@@ -519,8 +533,8 @@ class JaxBackgammonEnv(JaxEnvironment[BackgammonState, jnp.ndarray, dict, Backga
                 dtype=jnp.int32
             ),
             "current_player": spaces.Box(
-                low=-1,
-                high=1,
+                low=-1,  # BLACK = -1
+                high=1,  # WHITE = 1
                 shape=(1,),
                 dtype=jnp.int32
             ),
@@ -530,18 +544,31 @@ class JaxBackgammonEnv(JaxEnvironment[BackgammonState, jnp.ndarray, dict, Backga
                 shape=(1,),
                 dtype=jnp.int32
             ),
+            "bar_counts": spaces.Box(
+                low=0,
+                high=self.consts.NUM_CHECKERS,
+                shape=(2,),
+                dtype=jnp.int32
+            ),
+            "home_counts": spaces.Box(
+                low=0,
+                high=self.consts.NUM_CHECKERS,
+                shape=(2,),
+                dtype=jnp.int32
+            ),
         })
 
-    @staticmethod
-    @jax.jit
-    def _get_observation(state: BackgammonState) -> jnp.ndarray:
-        """Convert state to observation vector."""
-        return jnp.concatenate([
-            state.board.flatten(),
-            state.dice,
-            jnp.array([state.current_player], dtype=jnp.int32),
-            jnp.array([jnp.where(state.is_game_over, 1, 0)], dtype=jnp.int32)
-        ])
+    @partial(jax.jit, static_argnums=(0,))
+    def _get_observation(self, state: BackgammonState) -> BackgammonObservation:
+        """Convert state to object-centric observation."""
+        return BackgammonObservation(
+            board=state.board,
+            dice=state.dice,
+            current_player=jnp.array([state.current_player], dtype=jnp.int32),
+            is_game_over=jnp.array([jnp.where(state.is_game_over, 1, 0)], dtype=jnp.int32),
+            bar_counts=jnp.array([state.board[0, 24], state.board[1, 24]], dtype=jnp.int32),  # bar counts
+            home_counts=jnp.array([state.board[0, 25], state.board[1, 25]], dtype=jnp.int32)  # home counts
+        )
 
     @staticmethod
     @jax.jit
