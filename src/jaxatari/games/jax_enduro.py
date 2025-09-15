@@ -797,7 +797,7 @@ class JaxEnduro(JaxEnvironment[EnduroGameState, EnduroObservation, EnduroInfo, E
         )
         # don't allow negative numbers here
         new_cars_overtaken = jnp.clip(state.cars_overtaken + cars_overtaken_change, 0)[0]
-        new_total_cars_overtaken = (state.cars_overtaken + cars_overtaken_change).astype(jnp.int32)
+        new_total_cars_overtaken = (state.total_cars_overtaken + cars_overtaken_change).astype(jnp.int32)
         new_cars_to_overtake = self.config.cars_to_pass_per_level + self.config.cars_increase_per_level * (
                 state.level - 1)
 
