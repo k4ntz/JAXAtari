@@ -398,6 +398,9 @@ class JaxSkiing(JaxEnvironment[GameState, SkiingObservation, SkiingInfo, SkiingC
         collisions_tree = jax.vmap(coll_tree)(jnp.array(new_trees_nom))
         collisions_rock = jax.vmap(coll_rock)(jnp.array(new_rocks_nom))
         collisions_flag = jax.vmap(coll_flag)(jnp.array(new_flags_nom))
+        # --- PATCH: make rocks non-collidable (requested)
+        # We keep spawning/rendering rocks, but they never register a hit.
+        collisions_rock = jnp.zeros_like(collisions_rock, dtype=collisions_rock.dtype)
         
         # Während Recovery ODER Cooldown keine neuen Kollisionen auslösen
         ignore_collisions = jnp.logical_or(in_recovery, jnp.greater(state.collision_cooldown, 0))
