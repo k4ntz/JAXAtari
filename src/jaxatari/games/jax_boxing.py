@@ -31,7 +31,9 @@ class BoxingState(NamedTuple):
     enemy_y: chex.Array
     time: chex.Array
     punch_timer: chex.Array
+    enemy_punch_timer: chex.Array
     hit_left: chex.Array
+    enemy_hit_left: chex.Array
     enemy_target_x: chex.Array
     enemy_target_y: chex.Array
     enemy_target_timer: chex.Array
@@ -79,7 +81,9 @@ class JaxBoxing(JaxEnvironment[BoxingState, BoxingObservation, BoxingInfo, Boxin
             enemy_y=jnp.array(self.consts.initial_y_black),
             time= jnp.array(7200),
             punch_timer=jnp.array(0),
+            enemy_punch_timer=jnp.array(0),
             hit_left = jnp.array(False),
+            enemy_hit_left=jnp.array(True),
             enemy_target_x = jnp.array(0),
             enemy_target_y = jnp.array(0),
             enemy_target_timer = jnp.array(0),
@@ -155,8 +159,11 @@ class JaxBoxing(JaxEnvironment[BoxingState, BoxingObservation, BoxingInfo, Boxin
         step_x = jnp.clip(jnp.sign(dx) * step_size * state.enemy_dir, -step_size, step_size)
         new_enemy_x = jnp.clip(state.enemy_x + step_x,self.consts.x_boundaries[0], self.consts.x_boundaries[1])
 
+        enemy_punch_timer = jnp.maximum(state.enemy_punch_timer - 1, 0)
+        enemy_punch_timer = jnp.where((state.step_counter % 50 == 0) & (enemy_punch_timer == 0), 20, enemy_punch_timer)
 
-        return state._replace(enemy_y=new_enemy_y,enemy_x=new_enemy_x)
+
+        return state._replace(enemy_y=new_enemy_y,enemy_x=new_enemy_x, enemy_punch_timer=enemy_punch_timer)
     def step(self, state: BoxingState, action: chex.Array) -> Tuple[BoxingObservation, BoxingState, float, bool, BoxingInfo]:
         state = self.player_step(state, action)
         state = self.enemy_step(state)
@@ -169,13 +176,14 @@ class JaxBoxing(JaxEnvironment[BoxingState, BoxingObservation, BoxingInfo, Boxin
                                 enemy_y=state.enemy_y,
                                 time = new_time,
                                 punch_timer=state.punch_timer,
+                                enemy_punch_timer=state.enemy_punch_timer,
                                 hit_left=state.hit_left,
+                                enemy_hit_left=state.enemy_hit_left,
                                 enemy_target_x=state.enemy_target_x,
                                 enemy_target_y=state.enemy_target_y,
                                 enemy_target_timer=state.enemy_target_timer,
                                 step_counter=state.step_counter + 1,
-                                enemy_dir = state.enemy_dir
-
+                                enemy_dir = state.enemy_dir,
                                 )
         done = self._get_done(new_state)
         env_reward = self._get_reward(state, new_state)
@@ -219,8 +227,9 @@ class BoxingRenderer(JAXGameRenderer):
             self.TIME_SEPERATION,
             self.ENEMY_SCORE_DIGITS,
             self.PLAYER_SCORE_DIGITS,
-            self.PUNCH_ANIMATION,
-            self.PUNCH_ANIMATION_LEFT,
+            self.PLAYER_PUNCH_ANIMATION,
+            self.PLAYER_PUNCH_ANIMATION_LEFT,
+            self.ENEMY_PUNCH_RIGHT,
         ) = self.load_sprites()
     def load_sprites(self):
         MODULE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -250,10 +259,17 @@ class BoxingRenderer(JAXGameRenderer):
         punch_frames_left = [jr.loadFrame(p) for p in punch_paths_left]
         padded_punch_frames_left, punch_offsets_left = jr.pad_to_match(punch_frames_left)
 
+        enemy_punch_paths_right = [
+            os.path.join(MODULE_DIR, f"sprites/boxing/enemy_boxing_animation_right/{i}.npy")
+            for i in range(4)
+        ]
+        enemy_punch_frames_right = [jr.loadFrame(p) for p in enemy_punch_paths_right]
+        padded_punch_frames_enemy_right , enemy_punch_offsets_right = jr.pad_to_match(enemy_punch_frames_right)
+
 
         SPRITE_BG = jnp.expand_dims(background, axis=0)
 
-        return (SPRITE_BG, player, enemy, DIGITS, TIME_SEPERATION, ENEMY_SCORE_DIGITS, PLAYER_SCORE_DIGITS, padded_punch_frames, padded_punch_frames_left)
+        return (SPRITE_BG, player, enemy, DIGITS, TIME_SEPERATION, ENEMY_SCORE_DIGITS, PLAYER_SCORE_DIGITS, padded_punch_frames, padded_punch_frames_left, padded_punch_frames_enemy_right)
     def render(self, state):
         def render_time(self, raster, time):
             total_seconds = time // 60
@@ -284,8 +300,8 @@ class BoxingRenderer(JAXGameRenderer):
             def render_punch(frame_index):
                 punch_animation = jax.lax.cond(
                     state.hit_left,
-                    lambda: self.PUNCH_ANIMATION_LEFT,
-                    lambda: self.PUNCH_ANIMATION
+                    lambda: self.PLAYER_PUNCH_ANIMATION_LEFT,
+                    lambda: self.PLAYER_PUNCH_ANIMATION
                 )
                 sprite = jax.lax.switch(
                     frame_index,
@@ -310,7 +326,36 @@ class BoxingRenderer(JAXGameRenderer):
             )
             return raster_out
         def render_enemy(self,raster, state):
-            return jr.render_at(raster, state.enemy_x, state.enemy_y, self.SPRITE_ENEMY)
+            def render_punch_enemy(frame_index):
+                punch_animation_enemy = jax.lax.cond(
+                    #state.hit_left,
+                    state.enemy_hit_left,
+                    lambda: self.ENEMY_PUNCH_RIGHT,
+                    lambda: self.ENEMY_PUNCH_RIGHT
+                )
+                offset = jnp.array([0, 7, 16, 6])
+                sprite = jax.lax.switch(
+                    frame_index,
+                    [
+                        lambda: punch_animation_enemy[0],
+                        lambda: punch_animation_enemy[1],
+                        lambda: punch_animation_enemy[2],
+                        lambda: punch_animation_enemy[3],
+                    ]
+                )
+                return jr.render_at(raster, state.enemy_x - offset[frame_index], state.enemy_y, sprite)
+
+            def render_idle_enemy():
+                return jr.render_at(raster, state.enemy_x, state.enemy_y, self.SPRITE_ENEMY)
+
+            frame_index = (state.enemy_punch_timer // 5) % 4
+            raster_out = jax.lax.cond(
+                state.enemy_punch_timer > 0,
+                lambda _: render_punch_enemy(frame_index),
+                lambda _: render_idle_enemy(),
+                operand=None,
+            )
+            return raster_out
         raster = jr.create_initial_frame(width=160, height=210)
         frame_bg = jr.get_sprite_frame(self.SPRITE_BG, 0)
         raster = jr.render_at(raster, 0,0, frame_bg)
