@@ -25,6 +25,7 @@ class TurmoilConstants(NamedTuple):
     # sizes
     PLAYER_SIZE = (8, 11) # (width, height)
     BULLET_SIZE = (8, 3)
+    ENEMY_SIZE = (8, 8)
 
     # directions
     FACE_LEFT = -1
@@ -715,6 +716,42 @@ class JaxTurmoil(JaxEnvironment[TurmoilState, TurmoilObservation, TurmoilInfo, T
 
         return new_enemy
 
+
+
+    def bullet_enemy_collision_step(self, state: TurmoilState):
+        """
+        Find collision of bullets with enemies and deactivate both
+        in case of collision
+        """
+        bx, by = state.bullet[0], state.bullet[1]
+        ex = state.enemy[:, 1]
+        ey = state.enemy[:, 2]
+        active = state.enemy[:, 3]
+
+        w, h = self.consts.ENEMY_SIZE
+
+        hit = (
+            (active == 1) &
+            (bx >= ex) & (bx <= ex + w) &
+            (by >= ey) & (by <= ey + h)
+        )
+
+        # deactivate  collided enemy
+        new_enemy = jnp.where(
+            state.bullet[2] == 1,
+            state.enemy.at[:, 3].set(jnp.where(hit, 0, active)),
+            state.enemy
+        )
+
+        # deactivate bullet if collision
+        new_bullet = jnp.where(
+            state.bullet[2] == 1,
+            state.bullet.at[2].set(jnp.where(jnp.any(hit), 0, state.bullet[2])),
+            state.bullet
+        )
+
+        return new_bullet, new_enemy
+
     @partial(jax.jit, static_argnums=(0, ))
     def step(
         self, state: TurmoilState, action: chex.Array
@@ -745,6 +782,16 @@ class JaxTurmoil(JaxEnvironment[TurmoilState, TurmoilObservation, TurmoilInfo, T
 
             new_state = new_state._replace(
                 bullet=new_bullet
+            )
+
+            # bullet enemy collision
+            new_bullet, new_enemy = self.bullet_enemy_collision_step(
+                new_state
+            )
+            
+            new_state = new_state._replace(
+                bullet=new_bullet,
+                enemy=new_enemy
             )
 
             # enemy
