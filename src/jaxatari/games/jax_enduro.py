@@ -298,8 +298,8 @@ class EnduroGameState(NamedTuple):
     day_count: jnp.int32  # incremented every day-night cycle, starts by 0
 
     # visible (mirror in Observation)
+    player_x_abs_position: chex.Array  # jnp.float32 -> to have sub-step movement per frame
     player_y_abs_position: chex.Array  # jnp.int32
-    player_x_abs_position: chex.Array
     cars_overtaken: chex.Array
     cars_to_overtake: chex.Array  # goal for current level
     distance: chex.Array
@@ -319,7 +319,7 @@ class EnduroGameState(NamedTuple):
     cooldown_drift_direction: chex.Array
 
     # track
-    track_top_x: chex.Array
+    track_top_x: chex.Array  # jnp.int32
     track_top_x_curve_offset: chex.Array  # The amount that the top_x moves further into the curve direction
     visible_track_left: chex.Array  # shape: (track_height,), dtype=int32 the absolute x position of the left track
     visible_track_right: chex.Array  # shape: (track_height,), dtype=int32 the absolute x position of the right track
@@ -461,7 +461,7 @@ class JaxEnduro(JaxEnvironment[EnduroGameState, EnduroObservation, EnduroInfo, E
     def observation_space(self) -> spaces.Dict:
         return spaces.Dict({
             "car": spaces.Dict({
-                "x": spaces.Box(low=0, high=self.config.screen_width, shape=(1, 1), dtype=jnp.int32),
+                "x": spaces.Box(low=0, high=self.config.screen_width, shape=(1, 1), dtype=jnp.float32),
                 "y": spaces.Box(low=0, high=self.config.screen_height, shape=(1, 1), dtype=jnp.int32),
                 "width": spaces.Box(low=0, high=self.config.screen_width, shape=(1, 1), dtype=jnp.int32),
                 "height": spaces.Box(low=0, high=self.config.screen_height, shape=(1, 1), dtype=jnp.int32),
@@ -561,7 +561,7 @@ class JaxEnduro(JaxEnvironment[EnduroGameState, EnduroObservation, EnduroInfo, E
             cooldown_drift_direction=jnp.array(0),
 
             # track
-            track_top_x=jnp.array(0.0),
+            track_top_x=jnp.array(self.config.track_x_start),
             track_top_x_curve_offset=jnp.array(0.0),
             visible_track_left=left_xs,
             visible_track_right=right_xs,
