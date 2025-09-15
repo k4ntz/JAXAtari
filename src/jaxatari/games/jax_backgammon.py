@@ -44,7 +44,7 @@ class BackgammonState(NamedTuple):
     is_game_over: bool
     key: jax.random.PRNGKey
     last_move: Tuple[int, int] = (-1, -1)   # NEW
-    last_dice: int = -1                      # NEW
+    last_dice: int = -1                     # NEW
 
 
 class BackgammonInfo(NamedTuple):
@@ -489,6 +489,15 @@ class JaxBackgammonEnv(JaxEnvironment[BackgammonState, jnp.ndarray, dict, Backga
         obs, new_state, reward, done, info, new_key = self.step_impl(state, move, state.key)
         new_state = new_state._replace(key=new_key)
         return obs, new_state, reward, done, info
+
+    def image_space(self) -> spaces.Box:
+        """Returns the image space for rendered frames."""
+        return spaces.Box(
+            low=0,
+            high=255,
+            shape=(self.renderer.frame_height, self.renderer.frame_width, 3),
+            dtype=jnp.uint8
+        )
 
     def action_space(self) -> spaces.Discrete:
         """Return the discrete action space (scalar index into move list)."""
