@@ -163,7 +163,7 @@ class EnduroConstants(NamedTuple):
         34 + 34 + 34 + 69 + 8 * 8 + 69 + 69 + 34,  # night 2
         34 + 34 + 34 + 69 + 8 * 8 + 69 + 69 + 34 + 34,  # dawn
     ], dtype=jnp.int32)
-    weather_starts_s: jnp.ndarray = jnp.arange(0, 64, 4, dtype=jnp.int32)  # for debugging
+    # weather_starts_s: jnp.ndarray = jnp.arange(0, 64, 4, dtype=jnp.int32)  # for debugging
     # special events in the weather:
     snow_weather_index: int = 3  # which part of the weather array is snow (reduced steering)
     night_fog_index: int = 13  # which part of the weather array has the reduced visibility (fog)
@@ -403,7 +403,7 @@ StepResult = Tuple[EnduroObservation, EnduroGameState, jnp.ndarray, bool, Enduro
 
 # https://www.free80sarcade.com/atari2600_Enduro.php
 class JaxEnduro(JaxEnvironment[EnduroGameState, EnduroObservation, EnduroInfo, EnduroConstants]):
-    def __init__(self, consts: EnduroConstants = None, reward_funcs: list[callable]=None):
+    def __init__(self, consts: EnduroConstants = None, reward_funcs: list[callable] = None):
         self.config = consts or EnduroConstants()
         super().__init__(self.config)
         if reward_funcs is not None:
@@ -458,7 +458,7 @@ class JaxEnduro(JaxEnvironment[EnduroGameState, EnduroObservation, EnduroInfo, E
             "cars_to_overtake": spaces.Box(low=0, high=500, shape=(1,), dtype=jnp.int32),
             "distance": spaces.Box(low=0.0, high=self.config.max_track_length, shape=(1,), dtype=jnp.float32),
             "level": spaces.Box(low=1, high=self.config.max_level, shape=(1,), dtype=jnp.int32),
-            "level_passed": spaces.Box(low=0, high=1, shape=(1,), dtype=jnp.bool_),
+            "level_passed": spaces.Box(low=0, high=1, shape=(1,), dtype=jnp.int32),
 
             # Track boundaries (can be -1 for fogged areas)
             "track_left_xs": spaces.Box(
@@ -538,7 +538,7 @@ class JaxEnduro(JaxEnvironment[EnduroGameState, EnduroObservation, EnduroInfo, E
             cars_to_overtake=jnp.array(self.config.cars_to_pass_per_level),
             distance=jnp.array(0.0, dtype=jnp.float32),
             level=jnp.array(1),
-            level_passed=jnp.array(False),
+            level_passed=jnp.array(0, dtype=jnp.int32),
 
             # opponents
             opponent_pos_and_color=opponent_spawns,
@@ -846,7 +846,7 @@ class JaxEnduro(JaxEnvironment[EnduroGameState, EnduroObservation, EnduroInfo, E
             state.level_passed,
             new_cars_overtaken >=
             self.config.cars_to_pass_per_level + self.config.cars_increase_per_level * (state.level - 1)
-        )
+        ).astype(jnp.int32)
 
         # ===== New Day handling =====
         def reset_day():
@@ -854,7 +854,12 @@ class JaxEnduro(JaxEnvironment[EnduroGameState, EnduroObservation, EnduroInfo, E
             level = jnp.clip(state.level + 1, 1, self.config.max_level)
             # cars_overtaken, level increase, level passed, game_over
             # if a new day starts and the level is not passed it is game over
-            return 0, level, False, jnp.logical_not(new_level_passed)
+            return (
+                jnp.array(0, dtype=jnp.int32),
+                level,
+                jnp.array(0, dtype=jnp.int32),
+                jnp.logical_not(new_level_passed).astype(np.bool_)
+            )
 
         def do_nothing():
             # cars_overtaken, level increase, level passed, game_over
@@ -1007,25 +1012,26 @@ class JaxEnduro(JaxEnvironment[EnduroGameState, EnduroObservation, EnduroInfo, E
         )
 
         return EnduroObservation(
-            # cars
-            player_x=state.player_x_abs_position,
-            player_y=state.player_y_abs_position,
-            visible_opponents=visible_opponents,
+            # cars - ensure these are properly shaped
+            player_x=jnp.array([state.player_x_abs_position], dtype=jnp.float32),  # Shape (1,)
+            player_y=jnp.array([state.player_y_abs_position], dtype=jnp.int32),  # Shape (1,)
+            visible_opponents=visible_opponents.astype(jnp.int32),  # Ensure int32 dtype
 
-            # score box
-            cars_to_overtake=state.cars_to_overtake,
-            distance=state.distance,
-            level=state.level,
-            level_passed=state.level_passed,
+            # score box - ensure these are properly shaped
+            cars_to_overtake=jnp.array([state.cars_to_overtake], dtype=jnp.int32),  # Shape (1,)
+            distance=jnp.array([state.distance], dtype=jnp.float32),  # Shape (1,)
+            level=jnp.array([state.level], dtype=jnp.int32),  # Shape (1,)
+            level_passed=jnp.array([state.level_passed.astype(jnp.int32)], dtype=jnp.int32),
+            # Convert bool to int, shape (1,)
 
             # track (now with fog effects)
-            track_left_xs=track_left_xs,
-            track_right_xs=track_right_xs,
-            curvature=curvature,
+            track_left_xs=track_left_xs.astype(jnp.int32),
+            track_right_xs=track_right_xs.astype(jnp.int32),
+            curvature=jnp.array([curvature], dtype=jnp.int32),  # Shape (1,)
 
             # environment
-            cooldown=state.cooldown,
-            weather_index=state.weather_index,
+            cooldown=jnp.array([state.cooldown], dtype=jnp.float32),  # Shape (1,)
+            weather_index=jnp.array([state.weather_index], dtype=jnp.int32),  # Shape (1,)
         )
 
     @partial(jax.jit, static_argnums=(0,))
