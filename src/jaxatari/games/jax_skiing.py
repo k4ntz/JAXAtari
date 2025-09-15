@@ -119,9 +119,10 @@ class JaxSkiing(JaxEnvironment[GameState, SkiingObservation, SkiingInfo, SkiingC
                                  high=[float(c.screen_width), float(c.screen_height)],
                                  shape=(c.max_num_rocks, 2), dtype=jnp.float32)
 
-        score_space = spaces.Box(low=jnp.array(0, dtype=jnp.int32),
-                                 high=jnp.array(1_000_000, dtype=jnp.int32),
-                                 shape=(), dtype=jnp.int32)
+        # nachher (alles float32):
+        score_space = spaces.Box(low=jnp.array(0.0, dtype=jnp.float32),
+                                 high=jnp.array(1_000_000.0, dtype=jnp.float32),
+                                 shape=(), dtype=jnp.float32)
 
         return spaces.Dict(collections.OrderedDict({
             "skier": skier_space, "flags": flags_space, "trees": trees_space, "rocks": rocks_space, "score": score_space,
@@ -132,16 +133,12 @@ class JaxSkiing(JaxEnvironment[GameState, SkiingObservation, SkiingInfo, SkiingC
         return spaces.Box(low=0, high=255, shape=(c.screen_height, c.screen_width, 3), dtype=jnp.uint8)
 
     def obs_to_flat_array(self, obs: SkiingObservation) -> jnp.ndarray:
-        skier_vec  = jnp.array(
-            [obs.skier.x, obs.skier.y, obs.skier.width, obs.skier.height],
-            dtype=jnp.float64
-        ).reshape(-1)
-    
-        flags_flat = jnp.array(obs.flags, dtype=jnp.float64).reshape(-1)
-        trees_flat = jnp.array(obs.trees, dtype=jnp.float64).reshape(-1)
-        rocks_flat = jnp.array(obs.rocks, dtype=jnp.float64).reshape(-1)
-        score_flat = jnp.array(obs.score, dtype=jnp.float64).reshape(-1)
-    
+        skier_vec  = jnp.array([obs.skier.x, obs.skier.y, obs.skier.width, obs.skier.height],
+                               dtype=jnp.float32).reshape(-1)
+        flags_flat = jnp.array(obs.flags, dtype=jnp.float32).reshape(-1)
+        trees_flat = jnp.array(obs.trees, dtype=jnp.float32).reshape(-1)
+        rocks_flat = jnp.array(obs.rocks, dtype=jnp.float32).reshape(-1)
+        score_flat = jnp.array(obs.score, dtype=jnp.float32).reshape(-1)
         return jnp.concatenate([skier_vec, flags_flat, trees_flat, rocks_flat, score_flat], axis=0)
 
     def reset(self, key: jax.random.PRNGKey = jax.random.key(1701)) -> Tuple[SkiingObservation, GameState]:
@@ -570,17 +567,16 @@ class JaxSkiing(JaxEnvironment[GameState, SkiingObservation, SkiingInfo, SkiingC
             axis=1
         )
 
-        # --- CHANGED: upcast clipped positions to float64 for the observation
-        flags_xy = jnp.array(flags_xy_f32, dtype=jnp.float32)  # CHANGED
-        trees_xy = jnp.array(trees_xy_f32, dtype=jnp.float32)  # CHANGED
-        rocks_xy = jnp.array(rocks_xy_f32, dtype=jnp.float32)  # CHANGED
+        flags_xy = jnp.array(flags_xy_f32, dtype=jnp.float32)
+        trees_xy = jnp.array(trees_xy_f32, dtype=jnp.float32)
+        rocks_xy = jnp.array(rocks_xy_f32, dtype=jnp.float32) 
 
         return SkiingObservation(
             skier=skier,
             flags=flags_xy,
             trees=trees_xy,
             rocks=rocks_xy,
-            score=jnp.array(state.score, dtype=jnp.int32),
+            score=jnp.array(state.score, dtype=jnp.float32),
         )
 
 
