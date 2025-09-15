@@ -501,7 +501,9 @@ class JaxBackgammonEnv(JaxEnvironment[BackgammonState, jnp.ndarray, dict, Backga
             obs.board.flatten(),
             obs.dice.flatten(),
             obs.current_player.flatten(),
-            obs.is_game_over.flatten()
+            obs.is_game_over.flatten(),
+            obs.bar_counts.flatten(),  # 2 elements
+            obs.home_counts.flatten()
         ]).astype(jnp.float32)
 
     def image_space(self) -> spaces.Box:
