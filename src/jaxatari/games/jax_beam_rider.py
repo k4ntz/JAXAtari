@@ -87,10 +87,10 @@ class BeamRiderConstants(NamedTuple):
     ENEMY_TYPE_BROWN_DEBRIS = 1
     ENEMY_TYPE_YELLOW_CHIRPER = 2
     ENEMY_TYPE_GREEN_BLOCKER = 3
-    ENEMY_TYPE_GREEN_BOUNCE = 4  # Green bounce craft
-    ENEMY_TYPE_BLUE_CHARGER = 5  # Blue charger
-    ENEMY_TYPE_ORANGE_TRACKER = 6  # Orange tracker
-    ENEMY_TYPE_SENTINEL_SHIP = 7  # NEW: Sentinel ship
+    ENEMY_TYPE_GREEN_BOUNCE = 4
+    ENEMY_TYPE_BLUE_CHARGER = 5
+    ENEMY_TYPE_ORANGE_TRACKER = 6
+    ENEMY_TYPE_SENTINEL_SHIP = 7
 
     # White saucer behavior constants
     WHITE_SAUCER_SHOOT_CHANCE = 0.2  # 20% of white saucers can shoot
@@ -217,17 +217,15 @@ class BeamRiderConstants(NamedTuple):
     YELLOW_REJUVENATOR_POINTS = 0  # No points for shooting (discourage shooting)
     YELLOW_REJUVENATOR_LIFE_BONUS = 1  # Adds 1 life when collected
     YELLOW_REJUVENATOR_COLOR = (255, 255, 100)  # Bright yellow color RGB
-    YELLOW_REJUVENATOR_SPAWN_SECTOR = 5  # Starts appearing from sector 5
-    YELLOW_REJUVENATOR_SPAWN_CHANCE = 0.04  # 4% chance to spawn (rare)
+    YELLOW_REJUVENATOR_SPAWN_SECTOR = 1  # Starts appearing from sector 1
+    YELLOW_REJUVENATOR_SPAWN_CHANCE = 0.04  # 4% chance to spawn
     YELLOW_REJUVENATOR_OSCILLATION_AMPLITUDE = 15  # Horizontal oscillation range
     YELLOW_REJUVENATOR_OSCILLATION_FREQUENCY = 0.06  # Oscillation frequency
 
     # Rejuvenator debris constants (when shot)
     REJUVENATOR_DEBRIS_SPEED = 1.5  # Fast moving debris
     REJUVENATOR_DEBRIS_COLOR = (255, 0, 0)  # Red explosive debris
-    REJUVENATOR_DEBRIS_COUNT = 2  # Number of debris pieces created
-    REJUVENATOR_DEBRIS_SPREAD = 30  # Spread angle for debris
-    REJUVENATOR_DEBRIS_LIFETIME = 180  # Frames before debris disappears
+    REJUVENATOR_DEBRIS_COUNT = 1  # Number of debris pieces created
 
     # HUD margins
     TOP_MARGIN = int(210 * 0.12)
@@ -2680,22 +2678,16 @@ class BeamRiderEnv(JaxEnvironment[BeamRiderState, BeamRiderObservation, BeamRide
         sentinel_new_y = enemies[:, 1]  # Stay at same Y level
 
         # =================================================================
-        # REJUVENATOR DEBRIS: Move in explosion directions
+        # REJUVENATOR DEBRIS: Move straight down
         # =================================================================
         debris_mask = active_mask & (enemy_types == self.constants.ENEMY_TYPE_REJUVENATOR_DEBRIS)
 
-        # Move debris based on their direction vectors
-        debris_new_x = current_x + (direction_x * current_speed)
-        debris_new_y = current_y + (direction_y * current_speed)
+        # Debris moves straight down at constant speed (follows beam curve)
+        debris_new_x = current_x  # Will be updated by beam curve below
+        debris_new_y = current_y + current_speed  # Move down at debris speed
 
-        # Update debris lifetime (using linger_timer as lifetime counter)
-        debris_lifetime_remaining = linger_timer - 1
-        debris_still_alive = debris_lifetime_remaining > 0
-
-        # Debris active state: survive until lifetime expires or goes way off screen
-        debris_active = (enemies[:, 3] == 1) & debris_still_alive & (debris_new_y > -50) & (
-                debris_new_y < self.constants.SCREEN_HEIGHT + 50) & (debris_new_x > -50) & (
-                                debris_new_x < self.constants.SCREEN_WIDTH + 50)
+        # Debris active state: only deactivate when reaching bottom of screen
+        debris_active = (enemies[:, 3] == 1) & (debris_new_y < self.constants.SCREEN_HEIGHT)
 
         # =================================================================
         # LINGER TIMER UPDATES
@@ -2708,11 +2700,7 @@ class BeamRiderEnv(JaxEnvironment[BeamRiderState, BeamRiderObservation, BeamRide
             jnp.where(
                 charger_mask & charger_reached_bottom & (charger_linger_timer > 0),
                 charger_linger_timer - 1,  # Count down while at bottom
-                jnp.where(
-                    debris_mask,
-                    debris_lifetime_remaining,  # ADDED: Countdown lifetime for debris
-                    linger_timer  # Keep current value for others
-                )
+                linger_timer  # Keep current value for others (debris keeps 0)
             )
         )
 
@@ -3224,14 +3212,14 @@ class BeamRiderEnv(JaxEnvironment[BeamRiderState, BeamRiderObservation, BeamRide
             proj_x = projectiles[i, 0]
             proj_y = projectiles[i, 1]
 
-            # Check collision with each rejuvenator
+            # FIXED: Use proper overlapping bounding box collision detection
             hit_mask = (
                     rejuvenator_mask &
                     proj_active &
-                    (proj_x >= rejuvenator_x) &
-                    (proj_x < rejuvenator_x + self.constants.ENEMY_WIDTH) &
-                    (proj_y >= rejuvenator_y) &
-                    (proj_y < rejuvenator_y + self.constants.ENEMY_HEIGHT)
+                    (proj_x + self.constants.PROJECTILE_WIDTH > rejuvenator_x) &  # Projectile right > rejuv left
+                    (proj_x < rejuvenator_x + self.constants.ENEMY_WIDTH) &  # Projectile left < rejuv right
+                    (proj_y + self.constants.PROJECTILE_HEIGHT > rejuvenator_y) &  # Projectile bottom > rejuv top
+                    (proj_y < rejuvenator_y + self.constants.ENEMY_HEIGHT)  # Projectile top < rejuv bottom
             )
 
             rejuvenator_hit_by_projectile = rejuvenator_hit_by_projectile | hit_mask
@@ -3239,6 +3227,33 @@ class BeamRiderEnv(JaxEnvironment[BeamRiderState, BeamRiderObservation, BeamRide
             # Deactivate projectiles that hit rejuvenators
             projectiles = projectiles.at[i, 2].set(
                 jnp.where(jnp.any(hit_mask), 0, projectiles[i, 2])
+            )
+
+        # Check torpedo hits on rejuvenators
+        torpedo_active = torpedo_projectiles[:, 2] == 1
+        rejuvenator_hit_by_torpedo = jnp.zeros(self.constants.MAX_ENEMIES, dtype=bool)
+
+        # Check each torpedo against each rejuvenator
+        for i in range(self.constants.MAX_PROJECTILES):
+            torp_active = torpedo_active[i]
+            torp_x = torpedo_projectiles[i, 0]
+            torp_y = torpedo_projectiles[i, 1]
+
+            # FIXED: This was already correct (overlapping bounding boxes)
+            hit_mask = (
+                    rejuvenator_mask &
+                    torp_active &
+                    (torp_x + self.constants.TORPEDO_WIDTH > rejuvenator_x) &  # Torpedo right edge > rejuv left
+                    (torp_x < rejuvenator_x + self.constants.ENEMY_WIDTH) &  # Torpedo left edge < rejuv right
+                    (torp_y + self.constants.TORPEDO_HEIGHT > rejuvenator_y) &  # Torpedo bottom > rejuv top
+                    (torp_y < rejuvenator_y + self.constants.ENEMY_HEIGHT)  # Torpedo top < rejuv bottom
+            )
+
+            rejuvenator_hit_by_torpedo = rejuvenator_hit_by_torpedo | hit_mask
+
+            # Deactivate torpedoes that hit rejuvenators
+            torpedo_projectiles = torpedo_projectiles.at[i, 2].set(
+                jnp.where(jnp.any(hit_mask), 0, torpedo_projectiles[i, 2])
             )
 
         # Check torpedo hits on rejuvenators
@@ -3332,40 +3347,28 @@ class BeamRiderEnv(JaxEnvironment[BeamRiderState, BeamRiderObservation, BeamRide
             # Check if this rejuvenator was hit
             rejuvenator_hit = rejuvenator_hit_mask[i]
 
-            # Get rejuvenator position
+            # Get rejuvenator position and beam
             rejuv_x = enemies[i, 0]
             rejuv_y = enemies[i, 1]
-
-            # Spawn 2 debris pieces moving downwards only
-            directions = jnp.array([
-                [-1.0, 1.2],  # Down-left
-                [1.0, 1.2]  # Down-right
-            ])
+            rejuv_beam = enemies[i, 2].astype(int)  # Get the beam the rejuvenator was on
 
             def spawn_single_debris(debris_idx, enemies_state):
                 # Find first available slot
                 first_inactive = jnp.argmax(enemies_state[:, 3] == 0)
-                can_spawn = (enemies_state[first_inactive, 3] == 0) & rejuvenator_hit & (debris_idx < 2)
+                can_spawn = (enemies_state[first_inactive, 3] == 0) & rejuvenator_hit & (debris_idx < 1)
 
-                # Create debris enemy
-                direction_x = directions[debris_idx, 0]
-                direction_y = directions[debris_idx, 1]
-
-                # Add some spread to debris position
-                debris_x = rejuv_x + (debris_idx - 0.5) * 8  # Spread debris out (adjusted for 2 pieces)
-                debris_y = rejuv_y
-
+                # Create debris enemy - moves straight down, no horizontal component
                 new_debris = jnp.array([
-                    debris_x,  # x
-                    debris_y,  # y
-                    0,  # beam_position (not used)
+                    rejuv_x,  # x - start at rejuvenator position
+                    rejuv_y,  # y - start at rejuvenator position
+                    rejuv_beam,  # beam_position - inherit rejuvenator's beam
                     1,  # active
                     self.constants.REJUVENATOR_DEBRIS_SPEED,  # speed
                     self.constants.ENEMY_TYPE_REJUVENATOR_DEBRIS,  # type
-                    direction_x,  # direction_x
-                    direction_y,  # direction_y
+                    0.0,  # direction_x - no horizontal movement
+                    1.0,  # direction_y - move down
                     0,  # bounce_count
-                    self.constants.REJUVENATOR_DEBRIS_LIFETIME,  # linger_timer (used as lifetime)
+                    0,  # linger_timer - not used for lifetime anymore
                     0,  # target_x
                     1,  # health
                     0,  # firing_timer
@@ -3383,8 +3386,8 @@ class BeamRiderEnv(JaxEnvironment[BeamRiderState, BeamRiderObservation, BeamRide
 
                 return enemies_state
 
-            # Spawn both debris pieces (changed from 4 to 2)
-            enemies_inner = jax.lax.fori_loop(0, 2, spawn_single_debris, enemies_inner)
+            # Spawn single debris piece
+            enemies_inner = jax.lax.fori_loop(0, 1, spawn_single_debris, enemies_inner)
 
             return (state_inner, enemies_inner)
 
@@ -3393,7 +3396,6 @@ class BeamRiderEnv(JaxEnvironment[BeamRiderState, BeamRiderObservation, BeamRide
                                            (state, enemies))
 
         return state.replace(enemies=enemies)
-
     @partial(jax.jit, static_argnums=(0,))
     def _check_sector_progression(self, state: BeamRiderState) -> BeamRiderState:
         """Check if sector is complete and advance to next sector - Updated with smooth 99-sector scaling"""
@@ -3666,6 +3668,42 @@ class BeamRiderRenderer(JAXGameRenderer):
             [0, 1, 0, 1, 1, 1, 0, 1, 0],
             [0, 0, 1, 1, 1, 1, 1, 0, 0],
         ], dtype=jnp.uint8)
+        self.blue_charger_sprite = jnp.array([
+            [0, 0, 1, 1, 1, 1, 1, 0, 0],
+            [0, 1, 1, 0, 0, 0, 1, 1, 0],
+            [1, 1, 0, 0, 0, 0, 0, 1, 1],
+            [1, 1, 1, 1, 1, 1, 1, 1, 1],
+            [1, 0, 1, 1, 1, 1, 1, 0, 1],
+            [1, 0, 0, 1, 1, 1, 0, 0, 1],
+            [1, 0, 0, 0, 0, 0, 0, 0, 1],
+        ], dtype=jnp.uint8)
+        self.orange_tracker_sprite = jnp.array([
+            [0, 1, 0, 0, 0, 0, 0, 1, 0],
+            [1, 0, 0, 0, 0, 0, 0, 0, 1],
+            [1, 1, 0, 0, 0, 0, 0, 1, 1],
+            [0, 1, 1, 1, 1, 1, 1, 1, 0],
+            [0, 0, 1, 1, 1, 1, 1, 0, 0],
+            [0, 0, 1, 0, 0, 0, 1, 0, 0],
+            [0, 0, 0, 1, 1, 1, 0, 0, 0],
+        ], dtype=jnp.uint8)
+        self.yellow_rejuv = jnp.array([
+            [0, 0, 0, 0, 0, 0, 0, 0, 0],
+            [0, 0, 0, 0, 1, 0, 1, 0, 0],
+            [0, 0, 0, 0, 1, 1, 1, 0, 0],
+            [0, 0, 0, 0, 1, 1, 1, 0, 0],
+            [0, 0, 0, 1, 1, 1, 1, 1, 0],
+            [0, 0, 0, 1, 0, 0, 0, 1, 0],
+            [0, 0, 0, 0, 0, 0, 0, 0, 0],
+        ], dtype=jnp.uint8)
+        self.debris_sprite = jnp.array([
+            [0, 1, 0, 0, 0, 0, 0],
+            [0, 0, 1, 0, 1, 0, 0],
+            [0, 0, 1, 1, 1, 0, 0],
+            [0, 0, 1, 1, 1, 0, 0],
+            [0, 1, 1, 0, 1, 1, 0],
+            [0, 1, 0, 0, 0, 1, 0],
+            [1, 0, 0, 0, 0, 0, 1],
+        ])
         # JAX rendering components
         self.ship_sprite_surface = self._create_ship_surface()
         self.small_ship_surface = self._create_small_ship_surface()
@@ -3911,6 +3949,73 @@ class BeamRiderRenderer(JAXGameRenderer):
             screen = jax.lax.fori_loop(0, self.constants.NUM_BEAMS, draw_vline, screen)
 
             return screen """
+
+    @partial(jax.jit, static_argnums=(0,))
+    def _draw_sentinel_sprite(self, screen: chex.Array, x: int, y: int, scale: float) -> chex.Array:
+        """Draw sentinel ship sprite with multiple colors - simplified for scale=1.0"""
+
+        # Define the 16x7 sentinel sprite
+        sentinel_sprite = jnp.array([
+            [0, 0, 0, 0, 0, 0, 0, 3, 3, 0, 0, 0, 0, 0, 0, 0],
+            [1, 0, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 0, 0, 0, 1],
+            [0, 1, 0, 1, 1, 0, 1, 0, 0, 1, 0, 1, 1, 0, 1, 0],
+            [0, 1, 0, 1, 0, 1, 0, 1, 1, 0, 1, 0, 1, 0, 1, 0],
+            [0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 0],
+            [0, 1, 0, 0, 0, 0, 1, 1, 1, 1, 0, 0, 0, 0, 1, 0],
+            [2, 0, 0, 0, 0, 0, 0, 2, 2, 0, 0, 0, 0, 0, 0, 2],
+        ], dtype=jnp.uint8)
+
+        # Define colors
+        main_red = jnp.array([255, 69, 0], dtype=jnp.uint8)
+        orange_highlight = jnp.array([255, 165, 0], dtype=jnp.uint8)
+        dark_red = jnp.array([160, 32, 240], dtype=jnp.uint8)
+
+        sprite_h, sprite_w = sentinel_sprite.shape
+        start_x = (x - sprite_w // 2).astype(int)
+        start_y = (y - sprite_h // 2).astype(int)
+
+        # Create coordinate grids (simplified since no scaling)
+        y_indices = jnp.arange(self.constants.SCREEN_HEIGHT)
+        x_indices = jnp.arange(self.constants.SCREEN_WIDTH)
+        y_grid, x_grid = jnp.meshgrid(y_indices, x_indices, indexing='ij')
+
+        # JAX-compatible bounds checking
+        in_bounds = (
+                (start_x >= 0) & (start_x + sprite_w <= self.constants.SCREEN_WIDTH) &
+                (start_y >= 0) & (start_y + sprite_h <= self.constants.SCREEN_HEIGHT)
+        )
+
+        # Create sprite area mask
+        sprite_area_mask = (
+                (x_grid >= start_x) &
+                (x_grid < start_x + sprite_w) &
+                (y_grid >= start_y) &
+                (y_grid < start_y + sprite_h) &
+                in_bounds
+        )
+
+        # Map screen coordinates to sprite coordinates (no scaling)
+        sprite_x_coords = (x_grid - start_x).astype(int)
+        sprite_y_coords = (y_grid - start_y).astype(int)
+
+        # Clamp to sprite bounds
+        sprite_x_coords = jnp.clip(sprite_x_coords, 0, sprite_w - 1)
+        sprite_y_coords = jnp.clip(sprite_y_coords, 0, sprite_h - 1)
+
+        # Get sprite pixel values
+        sprite_values = sentinel_sprite[sprite_y_coords, sprite_x_coords]
+
+        # Create color masks and apply colors
+        main_hull_mask = sprite_area_mask & (sprite_values == 1)
+        highlight_mask = sprite_area_mask & (sprite_values == 2)
+        detail_mask = sprite_area_mask & (sprite_values == 3)
+
+        screen = jnp.where(main_hull_mask[..., None], main_red, screen)
+        screen = jnp.where(highlight_mask[..., None], orange_highlight, screen)
+        screen = jnp.where(detail_mask[..., None], dark_red, screen)
+
+        return screen.astype(jnp.uint8)
+
     @partial(jax.jit, static_argnums=(0,))
     def _draw_torpedo_projectiles(self, screen: chex.Array, torpedo_projectiles: chex.Array) -> chex.Array:
         """Draw all active torpedo projectiles - vectorized for JIT"""
@@ -4228,7 +4333,11 @@ class BeamRiderRenderer(JAXGameRenderer):
             is_brown_debris = enemy_type == self.constants.ENEMY_TYPE_BROWN_DEBRIS
             is_green_blocker = enemy_type == self.constants.ENEMY_TYPE_GREEN_BLOCKER
             is_green_bounce = enemy_type == self.constants.ENEMY_TYPE_GREEN_BOUNCE
-
+            is_blue_charger = enemy_type == self.constants.ENEMY_TYPE_BLUE_CHARGER
+            is_orange_tracker = enemy_type == self.constants.ENEMY_TYPE_ORANGE_TRACKER
+            is_yellow_rejuv = enemy_type == self.constants.ENEMY_TYPE_YELLOW_REJUVENATOR
+            is_sentinel = enemy_type == self.constants.ENEMY_TYPE_SENTINEL_SHIP
+            is_yellow_debris = enemy_type == self.constants.ENEMY_TYPE_REJUVENATOR_DEBRIS
             # Get base enemy dimensions
             base_width = jnp.where(
                 sentinel_ship,
@@ -4263,7 +4372,12 @@ class BeamRiderRenderer(JAXGameRenderer):
             use_brown_debris_sprite = is_brown_debris & (scale_factor >= 0.4) & active & ~is_dot
             use_green_blocker_sprite = is_green_blocker & active  # Green blockers don't scale, always use sprite
             use_green_bounce_sprite = is_green_bounce & active
-            use_any_sprite = use_white_saucer_sprite | use_brown_debris_sprite | use_green_blocker_sprite | use_green_bounce_sprite
+            use_blue_charger_sprite = is_blue_charger & active
+            use_orange_tracker_sprite = is_orange_tracker & active
+            use_yellow_rejuv_sprite = is_yellow_rejuv & active
+            use_sentinel_sprite = is_sentinel & active
+            use_yellow_debris_sprite = is_yellow_debris & active
+            use_any_sprite = use_white_saucer_sprite | use_brown_debris_sprite | use_green_blocker_sprite | use_green_bounce_sprite | use_blue_charger_sprite | use_orange_tracker_sprite | use_yellow_rejuv_sprite | use_sentinel_sprite | use_yellow_debris_sprite
 
             # Center the scaled enemy at its position
             x_offset = ((base_width - scaled_width) / 2).astype(int)
@@ -4356,6 +4470,7 @@ class BeamRiderRenderer(JAXGameRenderer):
                 lambda s: s,
                 screen
             )
+            #Draw green blocker sprite
             screen = jax.lax.cond(
                 use_green_blocker_sprite,
                 lambda s: draw_enemy_sprite(self.green_blocker_sprite,
@@ -4363,10 +4478,49 @@ class BeamRiderRenderer(JAXGameRenderer):
                 lambda s: s,
                 screen
             )
+            #Draw green bounce sprite
             screen = jax.lax.cond(
                 use_green_bounce_sprite,
                 lambda s: draw_enemy_sprite(self.green_bounce_sprite,
                                             jnp.array(self.constants.GREEN_BOUNCE_COLOR, dtype=jnp.uint8)),
+                lambda s: s,
+                screen
+            )
+            #Draw blue charger sprite
+            screen = jax.lax.cond(
+                use_blue_charger_sprite,
+                lambda s: draw_enemy_sprite(self.blue_charger_sprite,
+                                            jnp.array(self.constants.BLUE_CHARGER_COLOR, dtype=jnp.uint8)),
+                lambda s: s,
+                screen
+            )
+            #Draw orange tracker sprite
+            screen = jax.lax.cond(
+                use_orange_tracker_sprite,
+                lambda s: draw_enemy_sprite(self.orange_tracker_sprite,
+                                            jnp.array(self.constants.ORANGE_TRACKER_COLOR, dtype=jnp.uint8)),
+                lambda s: s,
+                screen
+            )
+            # Draw yellow rejuvenator sprite
+            screen = jax.lax.cond(
+                use_yellow_rejuv_sprite,
+                lambda s: draw_enemy_sprite(self.yellow_rejuv,
+                                            jnp.array(self.constants.YELLOW_REJUVENATOR_COLOR, dtype=jnp.uint8)),
+                lambda s: s,
+                screen
+            )
+            # Draw sentinel sprite
+            screen = jax.lax.cond(
+                use_sentinel_sprite,
+                lambda s: self._draw_sentinel_sprite(s, x.astype(int), y.astype(int), 1.0),
+                lambda s: s,
+                screen
+            )
+            screen = jax.lax.cond(
+                use_yellow_debris_sprite,
+                lambda s: draw_enemy_sprite(self.debris_sprite,
+                                            jnp.array(self.constants.REJUVENATOR_DEBRIS_COLOR, dtype=jnp.uint8)),
                 lambda s: s,
                 screen
             )
