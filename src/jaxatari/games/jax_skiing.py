@@ -63,6 +63,7 @@ class GameState(NamedTuple):
     collision_type: chex.Array  # 0 = keine, 1 = Baum, 2 = Stein, 3 = Flagge
     flags_passed: chex.Array
     collision_cooldown: chex.Array  # Frames, in denen Kollisionen ignoriert werden (Debounce nach Recovery)
+    gates_seen: chex.Array  # Anzahl der bereits verarbeiteten Gates (despawned)
 
 
 class EntityPosition(NamedTuple):
@@ -216,6 +217,8 @@ class JaxSkiing(JaxEnvironment[GameState, SkiingObservation, SkiingInfo, SkiingC
             collision_type=jnp.array(0, dtype=jnp.int32),
             flags_passed=jnp.zeros(c.max_num_flags, dtype=bool),
             collision_cooldown=jnp.array(0, dtype=jnp.int32),
+        
+            gates_seen=jnp.array(0, dtype=jnp.int32),
         )
         obs = self._get_observation(state)
         return obs, state
@@ -483,6 +486,10 @@ class JaxSkiing(JaxEnvironment[GameState, SkiingObservation, SkiingInfo, SkiingC
         missed_penalty = missed_penalty_count * 300
         flags_passed = jnp.where(despawn_mask, False, flags_passed)
 
+
+        # Gates-Zähler inkrementieren: jedes despawnte Gate zählt als gesehen
+        gates_increment = jnp.sum(despawn_mask).astype(jnp.int32)
+        new_gates_seen = state.gates_seen + gates_increment
         # Respawns/Despawns nur, wenn NICHT gefreezt
         new_flags, new_trees, new_rocks, new_key = jax.lax.cond(
             freeze,
@@ -494,10 +501,7 @@ class JaxSkiing(JaxEnvironment[GameState, SkiingObservation, SkiingInfo, SkiingC
         # Score/Time aktualisieren (nur Gates zählen)
         gates_scored = jnp.sum(gate_pass)
         new_score = state.score - gates_scored
-        game_over = jax.lax.cond(jnp.equal(new_score, 0),
-                                 lambda _: jnp.array(True),
-                                 lambda _: jnp.array(False),
-                                 operand=None)
+        game_over = jnp.greater_equal(new_gates_seen, 20)
         new_time = jax.lax.cond(
             jnp.greater(state.time, 9223372036854775807 / 2),
             lambda _: jnp.array(0, dtype=jnp.int32),
@@ -522,6 +526,7 @@ class JaxSkiing(JaxEnvironment[GameState, SkiingObservation, SkiingInfo, SkiingC
             collision_type=new_collision_type,
             flags_passed=flags_passed,
             collision_cooldown=new_collision_cooldown,
+            gates_seen=new_gates_seen,
         )
 
         done = self._get_done(new_state)
@@ -594,7 +599,7 @@ class JaxSkiing(JaxEnvironment[GameState, SkiingObservation, SkiingInfo, SkiingC
 
     @partial(jax.jit, static_argnums=(0,))
     def _get_done(self, state: GameState) -> bool:
-        return jnp.equal(state.score, 0)
+        return jnp.greater_equal(state.gates_seen, 20)
     
     @partial(jax.jit, static_argnums=(0,))
     def _get_all_rewards(self, previous_state: GameState, state: GameState) -> jnp.ndarray:
