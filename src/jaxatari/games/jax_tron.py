@@ -18,16 +18,74 @@ class TronConstants(NamedTuple):
     screen_width: int = 160
     screen_height: int = 210
     scaling_factor: int = 3
+
+    # Player
     player_height: int = 10
     player_width: int = 10
-    player_speed: int = 1
-    player_lives: int = 3
+    player_speed: int = 1  # Player speed in pixels per frame
+    player_lives: int = 3  # starting number of lives
 
     # discs
-    max_discs: int = 4
-    disc_size: int = 4
-    disc_speed: int = 2
+    max_discs: int = 4  # Number of disc slots
+    disc_size: int = 4  # Disc sprite is square, this is both width/height in pixels
+    disc_speed: int = 2  # outbound (thrown) speed
     inbound_disc_speed: int = 4
+
+    """
+    Origin (0,0) is the top-left of the full screen.
+    -------
+    gamefield_rect = (game_x, game_y, game_w, game_h)
+        The gray background area that contains everything else (scorebar + border + play area
+        
+    scorebar_rect = (game_x, game_y, game_w, score_h)
+        A green strip at the top of the gamefield used for displaying the score
+        
+    Puple border (thickness per side)
+        top: y = game_y + score_h + score_gap, height = bord_top,   width = game_w - bord_right
+        bottom: y = game_y + game_h - bord_bot,   height = bord_bot,   width = game_w - bord_right
+        left: x = game_x, width  = bord_left,  spans vertically between top/bottom bars
+        right: x = game_x + game_w - bord_right, width  = bord_right, same vertical span as left
+
+    Inner play area (actors must stay inside this)
+        inner_play_rect = (
+            game_x + bord_left,
+            game_y + score_h + score_gap + bord_top,
+            game_w - (bord_left + bord_right),
+            game_h - (score_h + score_gap + bord_top + bord_bot),
+    """
+    game_x: int = 8  # Gamefield top-left X (creates a black left margin)
+    game_y: int = 18  # Gamefield top-left Y (creates a black top margin)
+    game_w: int = (
+        160 - 8
+    )  # Gamefield width; aligns right edge with the screens right edge
+    game_h: int = 164  # Gamefield height in pixels
+
+    # Scorebar
+    score_h: int = 10  # Scorebar height in pixels
+    score_gap: int = 1  # Vertical gap between scorebar bottom and the top purple border
+
+    # purple border (thickness per side in pixels)
+    bord_top: int = 16  # Height of the top purple band
+    bord_bot: int = 16  # height of the bottom purple band
+    bord_left: int = 8  # Width of the left purple band
+    bord_right: int = 8  # Width of the right purple band
+
+    # Colors (RGBA, 0–255 each)
+    rgba_purple: Tuple[int, int, int, int] = (93, 61, 191, 255)  # Border color
+    rgba_green: Tuple[int, int, int, int] = (82, 121, 42, 255)  # Scorebar color
+    rgba_gray: Tuple[int, int, int, int] = (
+        132,
+        132,
+        131,
+        255,
+    )  # Gamefield background color
+
+
+class Rect(NamedTuple):
+    x: int
+    y: int
+    w: int
+    h: int
 
 
 class Player(NamedTuple):
@@ -91,17 +149,18 @@ class _DiscOps:
 
     @staticmethod
     @jit
-    def check_wall_hit(discs: Discs, max_x: Array, max_y: Array) -> Array:
+    def check_wall_hit(
+        discs: Discs, min_x: Array, min_y: Array, max_x: Array, max_y: Array
+    ) -> Array:
         """
         Boolean mask that checks, if the next (x,y) step would leave the visible area
         """
-        next_x = discs.x + discs.vx
-        next_y = discs.y + discs.vy
+        nx, ny = discs.x + discs.vx, discs.y + discs.vy
         return (
-            (next_x <= 0)
-            | (next_x >= max_x)
-            | (next_y <= 0)
-            | (next_y >= max_y)
+            (nx < min_x)
+            | (ny < min_y)
+            | ((nx + discs.w) > max_x)
+            | ((ny + discs.h) > max_y)
         )
 
     @staticmethod
@@ -121,9 +180,7 @@ class _DiscOps:
         # return disc back to player, if the player pressed fire again
         # or would hit a wall next
         # IMPORANT: Only the playerr can recall the disc. Enemies can only shoot them
-        return_disc = (
-            is_outbound & is_owner_player & (fire_pressed | next_step_wall)
-        )
+        return_disc = is_outbound & is_owner_player & (fire_pressed | next_step_wall)
         next_phase = jnp.where(
             return_disc,
             jnp.int32(2),  # returning
@@ -141,7 +198,6 @@ class _DiscOps:
 
         return next_phase
 
-
     @staticmethod
     @jit
     def compute_velocity(
@@ -158,30 +214,32 @@ class _DiscOps:
           to avoid overshoot/orbit.
         - Inactive discs (phase==0) have zero velocity.
         """
-        is_returning_player = (next_phase == jnp.int32(2)) & (discs.owner == jnp.int32(0))
+        is_returning_player = (next_phase == jnp.int32(2)) & (
+            discs.owner == jnp.int32(0)
+        )
         is_inactive = next_phase == jnp.int32(0)
-    
+
         # Use centers to compute a direction towards the players body
         disc_cx, disc_cy = rect_center(discs.x, discs.y, discs.w, discs.h)
-    
+
         # Vector from disc -> player center
         # convert to float for normalization
         dx_f = (player_center_x - disc_cx).astype(jnp.float32)
         dy_f = (player_center_y - disc_cy).astype(jnp.float32)
-        dist = jnp.sqrt(dx_f * dx_f + dy_f * dy_f) # euclidean distance
-    
+        dist = jnp.sqrt(dx_f * dx_f + dy_f * dy_f)  # euclidean distance
+
         # Unit direction (float), scaled by inbound speed
         denom = jnp.maximum(dist, jnp.float32(1.0))  # avoid div-by-zero
         ux = dx_f / denom
         uy = dy_f / denom
-    
+
         speed_f = jnp.asarray(inbound_speed, dtype=jnp.float32)
 
         # round to the nearest integer pixel velocity. THis preserves average grid while
         # keeping movement constraint to the integer grid
         vx_homing = jnp.round(ux * speed_f).astype(jnp.int32)
         vy_homing = jnp.round(uy * speed_f).astype(jnp.int32)
-    
+
         # If the disc is within one step (<= speed) to the player, move exactly to the remaining
         # integer delte so the disc lands on the players center this frame
         dx_i = (player_center_x - disc_cx).astype(jnp.int32)
@@ -189,28 +247,31 @@ class _DiscOps:
         close = dist <= speed_f
         vx_close = dx_i
         vy_close = dy_i
-    
+
         vx_new = jnp.where(close, vx_close, vx_homing)
         vy_new = jnp.where(close, vy_close, vy_homing)
-    
+
         # ensure progress when rounding yields (0,0)
         # this can happen when |ux|and |uy| are both < 0.5 with speed==1, producing
         # rounded zeros. If the distance is still nonzero, nudge one pixel in the
         # correct signed direction to guarantee forward progress.
-        zero_pair = (vx_new == jnp.int32(0)) & (vy_new == jnp.int32(0)) & (dist > jnp.float32(0))
+        zero_pair = (
+            (vx_new == jnp.int32(0))
+            & (vy_new == jnp.int32(0))
+            & (dist > jnp.float32(0))
+        )
         vx_new = jnp.where(zero_pair, jnp.sign(dx_f).astype(jnp.int32), vx_new)
         vy_new = jnp.where(zero_pair, jnp.sign(dy_f).astype(jnp.int32), vy_new)
-    
+
         # Apply homing velocity only for returning player discs; keep stored velocity otherwise
         velocity_x = jnp.where(is_returning_player, vx_new, discs.vx)
         velocity_y = jnp.where(is_returning_player, vy_new, discs.vy)
-    
+
         # Inactive discs don't move
         velocity_x = jnp.where(is_inactive, jnp.int32(0), velocity_x)
         velocity_y = jnp.where(is_inactive, jnp.int32(0), velocity_y)
-    
+
         return velocity_x, velocity_y
-    
 
     @staticmethod
     @jit
@@ -219,6 +280,8 @@ class _DiscOps:
         next_phase: Array,
         velocity_x: Array,
         velocity_y: Array,
+        min_x: Array,
+        min_y: Array,
         max_x: Array,
         max_y: Array,
     ) -> Tuple[Array, Array]:
@@ -232,8 +295,8 @@ class _DiscOps:
         y_next = jnp.where(is_active, discs.y + velocity_y, discs.y)
 
         # clamp position to stay within the screen boundaries
-        x_next = jnp.clip(x_next, 0, max_x)
-        y_next = jnp.clip(y_next, 0, max_y)
+        x_next = jnp.clip(x_next, min_x, max_x)
+        y_next = jnp.clip(y_next, min_y, max_y)
         return x_next, y_next
 
     @staticmethod
@@ -270,6 +333,38 @@ class _DiscOps:
         final_vx = jnp.where(picked_up, jnp.int32(0), vx)
         final_vy = jnp.where(picked_up, jnp.int32(0), vy)
         return final_phase, final_vx, final_vy
+
+
+class _ArenaOps:
+    @staticmethod
+    def compute_arena(
+        c: TronConstants,
+    ) -> Tuple[Rect, Rect, Tuple[Rect, Rect, Rect, Rect], Rect]:
+        """
+        Returns: (gamefield_rect, scorebar_rect, (top,bottom,left,right) border rects, inner_play_rect)
+        All rects are in screen coordinates.
+        """
+        game = Rect(c.game_x, c.game_y, c.game_w, c.game_h)
+        score = Rect(game.x, game.y, game.w, c.score_h)
+
+        # y positions for purple border bands
+        top_y = game.y + c.score_h + c.score_gap
+        bottom_y = game.y + game.h - c.bord_bot
+
+        # horizontal bars (top/bottom)
+        # note: width ends before the right 8px margin to match the original layout
+        horizontal_w = game.w - c.bord_right
+        top = Rect(game.x, top_y, horizontal_w, c.bord_top)
+        bottom = Rect(game.x, bottom_y, horizontal_w, c.bord_bot)
+
+        # vertical bars (left/right)
+        inner_h = bottom.y - (top.y + c.bord_top)  # space between top/bottom bars
+        left = Rect(game.x, top.y + c.bord_top, c.bord_left, inner_h)
+        right = Rect(game.x + game.w - 2 * c.bord_right, left.y, c.bord_right, inner_h)
+
+        # inner play rectangle = area inside the purple bars
+        inner = Rect(left.x + left.w, left.y, right.x - (left.x + left.w), inner_h)
+        return game, score, (top, bottom, left, right), inner
 
 
 Actor = TypeVar("Actor", Player, Discs)
@@ -350,16 +445,56 @@ def parse_action(action: Array) -> UserAction:
     )
 
 
+@jit
+def _color_rgba(rgba: Tuple[int, int, int, int]) -> Array:
+    return jnp.asarray(rgba, dtype=jnp.uint8)
+
+
+def _solid_sprite(h: int, w: int, rgba: Tuple[int, int, int, int]) -> Array:
+    return jnp.broadcast_to(_color_rgba(rgba), (h, w, 4))
+
+
 class TronRenderer(JAXGameRenderer):
     def __init__(self, consts: TronConstants = None) -> None:
         super().__init__()
         self.consts = consts or TronConstants()
+        (self.game_rect, self.score_rect, self.border_rects, self.inner_rect) = (
+            _ArenaOps.compute_arena(self.consts)
+        )
 
     @partial(jit, static_argnums=(0,))
     def render(self, state) -> Array:
-        raster = jr.create_initial_frame(
-            width=self.consts.screen_width, height=self.consts.screen_height
+        c = self.consts
+
+        raster = jr.create_initial_frame(width=c.screen_width, height=c.screen_height)
+
+        game, score = self.game_rect, self.score_rect
+        top, bottom, left, right = self.border_rects
+
+        # gray gamefield
+        raster = jr.render_at(
+            raster, game.x, game.y, _solid_sprite(game.h, game.w, c.rgba_gray)
         )
+
+        # green scorebar
+        raster = jr.render_at(
+            raster, score.x, score.y, _solid_sprite(score.h, score.w, c.rgba_green)
+        )
+
+        # purple border (2 sprites: one horizontal band, one vertical band)
+        raster = jr.render_at(
+            raster, top.x, top.y, _solid_sprite(top.h, top.w, c.rgba_purple)
+        )
+        raster = jr.render_at(
+            raster, bottom.x, bottom.y, _solid_sprite(bottom.h, bottom.w, c.rgba_purple)
+        )
+        raster = jr.render_at(
+            raster, left.x, left.y, _solid_sprite(left.h, left.w, c.rgba_purple)
+        )
+        raster = jr.render_at(
+            raster, right.x, right.y, _solid_sprite(right.h, right.w, c.rgba_purple)
+        )
+
         # render player
         player_color = jnp.array([0, 0, 255, 255], dtype=jnp.uint8)
         player_box_sprite = jnp.broadcast_to(
@@ -377,9 +512,7 @@ class TronRenderer(JAXGameRenderer):
         # render discs
         disc_color = jnp.array([0, 255, 0, 255], dtype=jnp.uint8)
         disc_size = self.consts.disc_size
-        disc_box_sprite = jnp.broadcast_to(
-            disc_color, (disc_size, disc_size, 4)
-        )
+        disc_box_sprite = jnp.broadcast_to(disc_color, (disc_size, disc_size, 4))
 
         def render_disc(i, ras):
             active = state.discs.phase[i] > jnp.int32(0)
@@ -392,9 +525,7 @@ class TronRenderer(JAXGameRenderer):
                 ras,
             )
 
-        raster = jax.lax.fori_loop(
-            0, self.consts.max_discs, render_disc, raster
-        )
+        raster = jax.lax.fori_loop(0, self.consts.max_discs, render_disc, raster)
         return raster
 
 
@@ -414,11 +545,12 @@ def move(actors: Actor) -> Actor:
 
 
 @jit
-def clamp_position(actors: Actor, max_x: int, max_y: int) -> Actor:
+def clamp_actor_to_bounds(
+    actors: Actor, min_x: int, min_y: int, max_x: int, max_y: int
+) -> Actor:
     """Clamps positions according to the given max_x and max_y"""
-    # TODO: Change later to inner boundary
-    new_x = jnp.clip(actors.x, 0, max_x - actors.w)
-    new_y = jnp.clip(actors.y, 0, max_y - actors.h)
+    new_x = jnp.clip(actors.x, min_x, max_x - actors.w)
+    new_y = jnp.clip(actors.y, min_y, max_y - actors.h)
     return actors._replace(x=new_x, y=new_y)
 
 
@@ -444,9 +576,7 @@ def get_user_disc_center(state: Actor) -> Tuple[Array, Array]:
     return px.astype(jnp.int32), py.astype(jnp.int32)
 
 
-class JaxTron(
-    JaxEnvironment[TronState, TronObservation, TronInfo, TronConstants]
-):
+class JaxTron(JaxEnvironment[TronState, TronObservation, TronInfo, TronConstants]):
     def __init__(
         self, consts: TronConstants = None, reward_funcs: list[callable] = None
     ) -> None:
@@ -474,9 +604,18 @@ class JaxTron(
             Action.DOWNLEFTFIRE,
         ]
 
-    def reset(
-        self, key: random.PRNGKey = None
-    ) -> Tuple[TronObservation, TronState]:
+        # Precompute static rects
+        (self.game_rect, self.score_rect, self.border_rects, self.inner_rect) = (
+            _ArenaOps.compute_arena(self.consts)
+        )
+
+        # Precompute JAX scalars
+        self.inner_min_x = jnp.int32(self.inner_rect.x)
+        self.inner_min_y = jnp.int32(self.inner_rect.y)
+        self.inner_max_x = jnp.int32(self.inner_rect.x + self.inner_rect.w)
+        self.inner_max_y = jnp.int32(self.inner_rect.y + self.inner_rect.h)
+
+    def reset(self, key: random.PRNGKey = None) -> Tuple[TronObservation, TronState]:
         def _get_centered_player(consts: TronConstants) -> Player:
             screen_w, screen_h = consts.screen_width, consts.screen_height
             player_w, player_h = consts.player_width, consts.player_height
@@ -534,23 +673,23 @@ class JaxTron(
 
         # Calculate horizontal velocity
         # the boolean subtraction (right - left) results in +1, -1 or 0
-        dx = speed * (
-            action.right.astype(jnp.int32) - action.left.astype(jnp.int32)
-        )
+        dx = speed * (action.right.astype(jnp.int32) - action.left.astype(jnp.int32))
 
         # Calculate vertical velocity
         # the boolean subtraction (down - up) results in +1, -1 or 0
-        dy = speed * (
-            action.down.astype(jnp.int32) - action.up.astype(jnp.int32)
-        )
+        dy = speed * (action.down.astype(jnp.int32) - action.up.astype(jnp.int32))
 
         # Set the new velocity on the player actor
         player = set_velocity(player, dx, dy)
         # apply the velocity to the players position
         player = move(player)
-        # Ensure the new position is without screen boundaries
-        player = clamp_position(
-            player, self.consts.screen_width, self.consts.screen_height
+        # Ensure the new position is within boundaries
+        player = clamp_actor_to_bounds(
+            player,
+            self.inner_min_x,
+            self.inner_min_y,
+            self.inner_max_x,
+            self.inner_max_y,
         )
 
         # only update the aiming direction, if movement key was pressed
@@ -589,12 +728,8 @@ class JaxTron(
             disc_speed: jnp.int32 = jnp.int32(self.consts.disc_speed)
             # Get the last direction (aim_d) in which the player walked
             # jnp.sign returns the values -1, 0, 1. Makes it independent of the player_speed
-            disc_vel_x: jnp.int32 = (
-                jnp.sign(s.aim_dx).astype(jnp.int32) * disc_speed
-            )
-            disc_vel_y: jnp.int32 = (
-                jnp.sign(s.aim_dy).astype(jnp.int32) * disc_speed
-            )
+            disc_vel_x: jnp.int32 = jnp.sign(s.aim_dx).astype(jnp.int32) * disc_speed
+            disc_vel_y: jnp.int32 = jnp.sign(s.aim_dy).astype(jnp.int32) * disc_speed
 
             # writes in the free slot
             new_discs: Discs = s.discs._replace(
@@ -605,9 +740,7 @@ class JaxTron(
                 owner=s.discs.owner.at[free_indices].set(
                     jnp.int32(0)
                 ),  # 0 = player # TODO: Change later when also enemies can spawn discs
-                phase=s.discs.phase.at[free_indices].set(
-                    jnp.int32(1)
-                ),  # 1 = outbound
+                phase=s.discs.phase.at[free_indices].set(jnp.int32(1)),  # 1 = outbound
             )
             return s._replace(discs=new_discs)
 
@@ -626,7 +759,13 @@ class JaxTron(
         max_x = jnp.int32(self.consts.screen_width) - discs.w
         max_y = jnp.int32(self.consts.screen_height) - discs.h
 
-        will_hit_wall_next = _DiscOps.check_wall_hit(discs, max_x, max_y)
+        will_hit_wall_next = _DiscOps.check_wall_hit(
+            discs,
+            self.inner_min_x,
+            self.inner_min_y,
+            self.inner_max_x,
+            self.inner_max_y,
+        )
         next_phase = _DiscOps.compute_next_phase(
             discs, fire_pressed, will_hit_wall_next
         )
@@ -650,7 +789,14 @@ class JaxTron(
 
         # add the velocity to the position and clamp to the screen size
         x_next, y_next = _DiscOps.add_and_clamp(
-            discs, next_phase, velocity_x, velocity_y, max_x, max_y
+            discs,
+            next_phase,
+            velocity_x,
+            velocity_y,
+            self.inner_min_x,
+            self.inner_min_y,
+            self.inner_max_x,
+            self.inner_max_y,
         )
 
         # despawn returning player discs on pickup (after integration)
