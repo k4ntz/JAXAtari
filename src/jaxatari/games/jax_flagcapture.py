@@ -551,7 +551,7 @@ class JaxFlagCapture(JaxEnvironment[FlagCaptureState, FlagCaptureObservation, Fl
         return rewards
 
     @partial(jax.jit, static_argnums=(0,))
-    def _get_info(self, state: FlagCaptureState, all_rewards: chex.Array) -> FlagCaptureInfo:
+    def _get_info(self, state: FlagCaptureState) -> FlagCaptureInfo:
         """
         Returns additional information about the game state.
         Args:
@@ -560,7 +560,7 @@ class JaxFlagCapture(JaxEnvironment[FlagCaptureState, FlagCaptureObservation, Fl
         Returns:
             FlagCaptureInfo: Additional information about the game state.
         """
-        return FlagCaptureInfo(time=state.time, all_rewards=all_rewards, score=state.score)
+        return FlagCaptureInfo(time=state.time, score=state.score)
 
     @partial(jax.jit, static_argnums=(0,))
     def _get_done(self, state: FlagCaptureState) -> bool:
