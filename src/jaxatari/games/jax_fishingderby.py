@@ -8,7 +8,7 @@ import chex
 import pygame
 from dataclasses import dataclass
 
-from gymnax.environments import spaces
+import jaxatari.spaces as spaces
 
 from jaxatari.environment import JaxEnvironment, JAXAtariAction as Action
 import jaxatari.rendering.jax_rendering_utils as aj
@@ -109,6 +109,7 @@ class FishingDerbyInfo(NamedTuple):
     p1_score: int
     p2_score: int
     time: int
+    all_rewards: chex.Array
 
 
 # Game Logic
@@ -198,18 +199,24 @@ class FishingDerby(JaxEnvironment):
             score=state.p1.score
         )
 
-    def _get_reward(self, old_state: GameState, new_state: GameState) -> float:
-        return new_state.p1.score - old_state.p1.score
+    def _get_reward(self, old_state: GameState, new_state: GameState) -> chex.Array:
+        p1_delta = new_state.p1.score - old_state.p1.score
+        p2_delta = new_state.p2.score - old_state.p2.score  # Always 0, but enables multi-reward
+        return jnp.array([p1_delta, p2_delta])
 
     def _get_done(self, state: GameState) -> bool:
         return state.game_over
 
     def _get_info(self, state: GameState) -> FishingDerbyInfo:
-        return FishingDerbyInfo(p1_score=state.p1.score, p2_score=state.p2.score, time=state.time)
-
+        return FishingDerbyInfo(
+            p1_score=state.p1.score,
+            p2_score=state.p2.score,
+            time=state.time,
+            all_rewards=self._get_reward(state, state)  # Add all_rewards to info
+        )
     @partial(jax.jit, static_argnums=(0,))
     def step(self, state: GameState, action: int) -> Tuple[
-        FishingDerbyObservation, GameState, float, bool, FishingDerbyInfo]:
+        FishingDerbyObservation, GameState, chex.Array, bool, FishingDerbyInfo]:
         """Processes one frame of the game and returns the full tuple."""
         new_state = self._step_logic(state, action)
         observation = self._get_observation(new_state)
@@ -229,6 +236,53 @@ class FishingDerby(JaxEnvironment):
 
     def get_action_space(self) -> jnp.ndarray:
         return jnp.array(self.action_set)
+
+    def observation_space(self) -> spaces.Dict:
+        """Returns the observation space of the environment."""
+        return spaces.Dict({
+            "player1_hook_xy": spaces.Box(
+                low=jnp.array([0.0, 0.0], dtype=jnp.float32),
+                high=jnp.array([self.config.SCREEN_WIDTH, self.config.SCREEN_HEIGHT], dtype=jnp.float32),
+                shape=(2,),
+                dtype=jnp.float32
+            ),
+            "fish_xy": spaces.Box(
+                low=jnp.array([[0.0, 0.0]] * self.config.NUM_FISH, dtype=jnp.float32),
+                high=jnp.array([[self.config.SCREEN_WIDTH, self.config.SCREEN_HEIGHT]] * self.config.NUM_FISH,
+                               dtype=jnp.float32),
+                shape=(self.config.NUM_FISH, 2),
+                dtype=jnp.float32
+            ),
+            "shark_x": spaces.Box(
+                low=jnp.array(0.0, dtype=jnp.float32),
+                high=jnp.array(self.config.SCREEN_WIDTH, dtype=jnp.float32),
+                shape=(),
+                dtype=jnp.float32
+            ),
+            "score": spaces.Box(
+                low=jnp.array(0.0, dtype=jnp.float32),
+                high=jnp.array(99.0, dtype=jnp.float32),
+                shape=(),
+                dtype=jnp.float32
+            )
+        })
+
+    def image_space(self) -> spaces.Space:
+        """Returns the image space of the environment."""
+        return spaces.Box(
+            low=0,
+            high=255,
+            shape=(self.config.SCREEN_HEIGHT, self.config.SCREEN_WIDTH, 3),
+            dtype=jnp.uint8
+        )
+
+    def obs_to_flat_array(self, obs: FishingDerbyObservation) -> jnp.ndarray:
+        """Converts the observation to a flat array."""
+        return jnp.concatenate([
+            obs.player1_hook_xy,  # 2 values: hook x, y
+            obs.fish_xy.flatten(),  # 12 values: 6 fish * 2 coordinates each
+            jnp.array([obs.shark_x, obs.score])  # 2 values: shark x, score
+        ])
 
     def _step_logic(self, state: GameState, p1_action: int) -> GameState:
         """The core logic for a single game step, returning only the new state."""
@@ -896,3 +950,5 @@ if __name__ == "__main__":
         clock.tick(60)
 
     pygame.quit()
+
+    # run with: python scripts/play.py --game fishingderby --record my_record_file.npz
