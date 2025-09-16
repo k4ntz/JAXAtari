@@ -1902,9 +1902,11 @@ class EnduroRenderer(JAXGameRenderer):
 
         Returns: the final raster with the rendered track
         """
-        # speed 24 → period like opponents, speed 120 → period 1.0
+        # Calculate animation period based on player speed
+        # At opponent_speed (24): period = 8 (same as opponents)
+        # At max_speed (120): period = 1 (change every step)
         animation_period = self.config.opponent_animation_steps - (state.player_speed - self.config.opponent_speed) / (
-                self.config.max_speed - self.config.opponent_speed)
+                self.config.max_speed - self.config.opponent_speed) * (self.config.opponent_animation_steps - 1)
 
         # Calculate animation step (slower at low speeds, faster at high speeds)
         animation_step = jnp.floor(state.step_count / animation_period)
