@@ -226,16 +226,27 @@ class ObjectCentricWrapper(JaxatariWrapper):
         # First, get the space for a SINGLE, UNSTACKED frame from the base env.
         single_frame_space = self._env._env.observation_space()
 
-        # Calculate the bounds and size for a single flattened frame.
+        # Calculate the bounds and size for a single flattened frame for all leaf spaces.
         lows, highs = [], []
         single_frame_flat_size = 0
         for leaf_space in jax.tree.leaves(single_frame_space):
             if isinstance(leaf_space, spaces.Box):
-                low_arr = np.broadcast_to(leaf_space.low, leaf_space.shape)
-                high_arr = np.broadcast_to(leaf_space.high, leaf_space.shape)
-                lows.append(low_arr.flatten())
-                highs.append(high_arr.flatten())
-                single_frame_flat_size += np.prod(leaf_space.shape)
+                # Flatten the bounds arrays for Box spaces
+                low_arr = np.broadcast_to(leaf_space.low, leaf_space.shape).flatten()
+                high_arr = np.broadcast_to(leaf_space.high, leaf_space.shape).flatten()
+                lows.append(low_arr)
+                highs.append(high_arr)
+                single_frame_flat_size += low_arr.size
+            elif isinstance(leaf_space, spaces.Discrete):
+                # A Discrete space flattens to a single value
+                lows.append(np.array([0], dtype=leaf_space.dtype))
+                highs.append(np.array([leaf_space.n - 1], dtype=leaf_space.dtype))
+                single_frame_flat_size += 1
+            else:
+                raise TypeError(f"Unsupported space type for flattening: {type(leaf_space)}")
+        
+        if not lows:
+            raise ValueError("The observation space appears to be empty or contain unsupported types.")
 
         single_frame_lows = np.concatenate(lows)
         single_frame_highs = np.concatenate(highs)
@@ -380,7 +391,6 @@ class PixelAndObjectCentricWrapper(JaxatariWrapper):
         self.pixel_resize_shape = pixel_resize_shape
         self.grayscale = grayscale
 
-        # --- Define the preprocessed image space ---
         base_shape = self._env.image_space().shape
         height, width, channels = base_shape
         if self.do_pixel_resize:
@@ -391,24 +401,30 @@ class PixelAndObjectCentricWrapper(JaxatariWrapper):
         image_space = spaces.Box(low=0, high=255, shape=final_shape, dtype=jnp.uint8)
         stacked_image_space = spaces.stack_space(image_space, self._env.frame_stack_size)
 
-
-        # Part 2: Define the FLATTENED object space.
-        # We borrow the exact same logic from ObjectCentricWrapper to ensure consistency.
+        # Part 2: Define the FLATTENED object space (with the bug fix).
         single_frame_space = self._env._env.observation_space()
         lows, highs = [], []
         single_frame_flat_size = 0
         for leaf_space in jax.tree.leaves(single_frame_space):
             if isinstance(leaf_space, spaces.Box):
-                low_arr = np.broadcast_to(leaf_space.low, leaf_space.shape)
-                high_arr = np.broadcast_to(leaf_space.high, leaf_space.shape)
-                lows.append(low_arr.flatten())
-                highs.append(high_arr.flatten())
-                single_frame_flat_size += np.prod(leaf_space.shape)
+                low_arr = np.broadcast_to(leaf_space.low, leaf_space.shape).flatten()
+                high_arr = np.broadcast_to(leaf_space.high, leaf_space.shape).flatten()
+                lows.append(low_arr)
+                highs.append(high_arr)
+                single_frame_flat_size += low_arr.size
+            elif isinstance(leaf_space, spaces.Discrete):
+                lows.append(np.array([0], dtype=leaf_space.dtype))
+                highs.append(np.array([leaf_space.n - 1], dtype=leaf_space.dtype))
+                single_frame_flat_size += 1
+            else:
+                raise TypeError(f"Unsupported space type for flattening: {type(leaf_space)}")
+        
+        if not lows:
+            raise ValueError("The observation space appears to be empty or contain unsupported types.")
 
         single_frame_lows = np.concatenate(lows)
         single_frame_highs = np.concatenate(highs)
 
-        # Create the 2D Box space for the flattened object data.
         stacked_object_space_flat = spaces.Box(
             low=single_frame_lows,
             high=single_frame_highs,
@@ -565,14 +581,13 @@ class NormalizeObservationWrapper(JaxatariWrapper):
         )
 
         # The new observation space will have the same structure, but all leaves
-        # will be float32 arrays with bounds [0, 1].
         def _normalize_space(space: spaces.Box) -> spaces.Box:
             low_val = -1.0 if self._to_neg_one else 0.0
             return spaces.Box(
                 low=low_val,
                 high=1.0,
                 shape=space.shape,
-                dtype=jnp.float32
+                dtype=jnp.float16
             )
 
         self._observation_space = jax.tree.map(
@@ -587,16 +602,24 @@ class NormalizeObservationWrapper(JaxatariWrapper):
 
     def _normalize_leaf(self, obs_leaf, low_leaf, high_leaf):
         """Helper function to normalize a single leaf array."""
-        obs_leaf = obs_leaf.astype(jnp.float32)
-        range_leaf = high_leaf - low_leaf
+        obs_leaf = obs_leaf.astype(jnp.float16)
+        
+        # Calculate the range and scale for normalization
+        range_leaf = high_leaf.astype(jnp.float16) - low_leaf.astype(jnp.float16)
         scale = 1.0 / jnp.where(range_leaf > 1e-8, range_leaf, 1.0)
-        normalized_0_1 = (obs_leaf - low_leaf) * scale
+        
+        # Normalize to [0, 1]
+        normalized_0_1 = (obs_leaf - low_leaf.astype(jnp.float16)) * scale
+        
+        # Conditionally shift to [-1, 1]
         final_normalized = jax.lax.cond(
             self._to_neg_one,
             lambda x: 2.0 * x - 1.0,
             lambda x: x,
             normalized_0_1
         )
+        
+        # Clip to ensure values are within the target range
         clip_low = -1.0 if self._to_neg_one else 0.0
         return jnp.clip(final_normalized, clip_low, 1.0)
 
@@ -700,7 +723,8 @@ class MultiRewardLogWrapper(JaxatariWrapper):
         obs, atari_state = self._env.reset(key)
         # Dummy step to get info structure
         _, _, _, _, dummy_info = self._env.step(atari_state, 0)
-        episode_returns_init = jnp.zeros_like(dummy_info["all_rewards"])
+        rewards_shape_provider = dummy_info.get("all_rewards", jnp.zeros(1))
+        episode_returns_init = jnp.zeros_like(rewards_shape_provider)
         state = MultiRewardLogState(atari_state, 0.0, episode_returns_init, 0, 0.0, episode_returns_init, 0)
         return obs, state
 
@@ -712,7 +736,9 @@ class MultiRewardLogWrapper(JaxatariWrapper):
     ) -> Tuple[chex.Array, MultiRewardLogState, float, bool, Dict[Any, Any]]:
         obs, atari_state, reward, done, info = self._env.step(state.atari_state, action)
         new_episode_return_env = state.episode_returns_env + reward
-        new_episode_return = state.episode_returns + info["all_rewards"]
+        # Safely get all_rewards, defaulting to a zero array that matches the shape of our tracker.
+        all_rewards_step = info.get("all_rewards", jnp.zeros_like(state.episode_returns))
+        new_episode_return = state.episode_returns + all_rewards_step
         new_episode_length = state.episode_lengths + 1
         state = MultiRewardLogState(
             atari_state=atari_state,

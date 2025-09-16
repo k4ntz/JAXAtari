@@ -33,12 +33,12 @@ class Space:
     def contains(self, x: jax.Array) -> Any:
         raise NotImplementedError
     
-    '''
-    Returns the range of the space with the first value being the minimum and the second value being the maximum.
-    Only implemented for numerically bounded spaces.
-    '''
     def range(self):
         raise NotImplementedError
+    
+    def __eq__(self, other: object) -> bool:
+        """Check for equality between two Space objects."""
+        return isinstance(other, self.__class__)
 
 
 class Discrete(Space):
@@ -64,6 +64,14 @@ class Discrete(Space):
     
     def range(self) -> tuple[float, float]:
         return 0, self.n - 1
+    
+    def __eq__(self, other):
+        # Make sure this uses 'and', not 'or'
+        return super().__eq__(other) and self.n == other.n
+    
+    def __hash__(self):
+        """Returns the hash of the discrete space."""
+        return hash(self.n)
 
 
 class Box(Space):
@@ -166,6 +174,20 @@ class Box(Space):
     def range(self) -> tuple[jnp.ndarray, jnp.ndarray]:
         """Returns the lower and upper bounds of the space."""
         return self.low, self.high
+    
+    def __eq__(self, other):
+        return (
+            super().__eq__(other)
+            and self.shape == other.shape
+            and self.dtype == other.dtype
+            and jnp.all(self.low == other.low)
+            and jnp.all(self.high == other.high)
+        )
+    
+    def __hash__(self):
+        """Returns the hash of the box space."""
+        # We hash a tuple of immutable properties, converting arrays to bytes
+        return hash((self.shape, self.dtype, self.low.tobytes(), self.high.tobytes()))
 
 
 class Dict(Space):
@@ -199,6 +221,17 @@ class Dict(Space):
     def __repr__(self) -> str:
         return "Dict(" + ", ".join([f"{k}: {s}" for k, s in self.spaces.items()]) + ")"
 
+    def __iter__(self):
+        """Iterate over the keys of the contained spaces."""
+        yield from self.spaces
+
+    def __eq__(self, other):
+        return super().__eq__(other) and self.spaces == other.spaces
+
+    def __hash__(self):
+        """Returns the hash of the dict space."""
+        # Hash a tuple of items since dicts are not hashable
+        return hash(tuple(self.spaces.items()))
 
 # Register Dict as a Pytree node for JAX utilities
 register_pytree_node(
@@ -244,6 +277,28 @@ class Tuple(Space):
 
     def __repr__(self) -> str:
         return "Tuple(" + ", ".join([str(s) for s in self.spaces]) + ")"
+    
+    def __getitem__(self, index):
+        """Allows accessing subspaces by index or slice."""
+        if isinstance(index, slice):
+            return Tuple(self.spaces[index])
+        return self.spaces[index]
+    
+    def __len__(self):
+        return self.num_spaces
+
+    def __iter__(self):
+        """Iterate over the contained spaces."""
+        yield from self.spaces
+        
+    def __eq__(self, other):
+        return super().__eq__(other) and self.spaces == other.spaces
+    
+    def __hash__(self):
+        """Returns the hash of the tuple space."""
+        # Tuples of hashable objects are hashable
+        return hash(self.spaces)
+
 
 # Register Tuple as a Pytree node for JAX utilities
 register_pytree_node(
@@ -254,12 +309,36 @@ register_pytree_node(
 
 
 def stack_space(space: Space, stack_size: int) -> Space:
-    """Recursively wraps a space to add a stacking dimension."""
-    
-    def stack_box(box: Box) -> Box:
-        new_shape = (stack_size,) + box.shape
-        return Box(low=box.low, high=box.high, shape=new_shape, dtype=box.dtype)
+    """
+    Recursively wraps a space or a Pytree of spaces to add a stacking dimension
+    to each leaf space. Handles Box and Discrete spaces as leaves.
+    """
 
-    # jax.tree.map can now handle Box, Dict, and Tuple correctly
-    # because they are all registered Pytrees (Box is a leaf by default).
-    return jax.tree.map(stack_box, space, is_leaf=lambda n: isinstance(n, Box))
+    def _stack_leaf(leaf_space: Space) -> Box:
+        """Applies stacking logic to a single leaf space."""
+        if isinstance(leaf_space, Box):
+            # Prepend the stack size to the shape of the Box.
+            new_shape = (stack_size,) + leaf_space.shape
+            return Box(
+                low=leaf_space.low,
+                high=leaf_space.high,
+                shape=new_shape,
+                dtype=leaf_space.dtype,
+            )
+        if isinstance(leaf_space, Discrete):
+            # A stack of Discrete values becomes a Box of integers.
+            return Box(
+                low=0,
+                high=leaf_space.n - 1,
+                shape=(stack_size,),
+                dtype=leaf_space.dtype,
+            )
+        # This part should not be reached if `is_leaf` is correctly defined.
+        raise TypeError(f"Unsupported leaf space type for stacking: {type(leaf_space)}")
+
+    # Use jax.tree.map to apply the stacking function to every leaf in the space Pytree.
+    # The `is_leaf` predicate tells tree_map to stop recursing when it hits a Box or Discrete space,
+    # treating them as the leaves to which `_stack_leaf` should be applied.
+    return jax.tree.map(
+        _stack_leaf, space, is_leaf=lambda n: isinstance(n, (Box, Discrete))
+    )
