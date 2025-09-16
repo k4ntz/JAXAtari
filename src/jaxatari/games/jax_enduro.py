@@ -444,65 +444,66 @@ class JaxEnduro(JaxEnvironment[EnduroGameState, EnduroObservation, EnduroInfo, E
         return spaces.Dict({
             # Player position
             "player_x": spaces.Box(low=0, high=self.config.screen_width, shape=(1,), dtype=jnp.float32),
-            "player_y": spaces.Box(low=0, high=self.config.screen_height, shape=(1,), dtype=jnp.int32),
+            "player_y": spaces.Box(low=0, high=self.config.screen_height, shape=(1,), dtype=jnp.float32),
 
             # Opponents (7 slots, each with x,y coordinates, -1 for empty/fogged slots)
             "visible_opponents": spaces.Box(
                 low=-1,
                 high=self.config.screen_width,
                 shape=(7, 2),
-                dtype=jnp.int32
+                dtype=jnp.float32  
             ),
 
             # Game objectives
-            "cars_to_overtake": spaces.Box(low=0, high=500, shape=(1,), dtype=jnp.int32),
+            "cars_to_overtake": spaces.Box(low=0, high=500, shape=(1,), dtype=jnp.float32),  
             "distance": spaces.Box(low=0.0, high=self.config.max_track_length, shape=(1,), dtype=jnp.float32),
-            "level": spaces.Box(low=1, high=self.config.max_level, shape=(1,), dtype=jnp.int32),
-            "level_passed": spaces.Box(low=0, high=1, shape=(1,), dtype=jnp.int32),
+            "level": spaces.Box(low=1, high=self.config.max_level, shape=(1,), dtype=jnp.float32),  
+            "level_passed": spaces.Box(low=0, high=1, shape=(1,), dtype=jnp.float32),  
 
             # Track boundaries (can be -1 for fogged areas)
             "track_left_xs": spaces.Box(
                 low=-1,
                 high=self.config.screen_width,
                 shape=(self.config.track_height,),
-                dtype=jnp.int32
+                dtype=jnp.float32  
             ),
             "track_right_xs": spaces.Box(
                 low=-1,
                 high=self.config.screen_width,
                 shape=(self.config.track_height,),
-                dtype=jnp.int32
+                dtype=jnp.float32  
             ),
-            "curvature": spaces.Box(low=-1, high=1, shape=(1,), dtype=jnp.int32),
+            "curvature": spaces.Box(low=-1, high=1, shape=(1,), dtype=jnp.float32),  
 
             # Environmental state
             "cooldown": spaces.Box(low=0, high=self.config.car_crash_cooldown_frames, shape=(1,), dtype=jnp.float32),
-            "weather_index": spaces.Box(low=0, high=len(self.config.weather_starts_s) - 1, shape=(1,), dtype=jnp.int32),
+            "weather_index": spaces.Box(low=0, high=len(self.config.weather_starts_s) - 1, shape=(1,),
+                                        dtype=jnp.float32),  
         })
 
     def obs_to_flat_array(self, obs: EnduroObservation) -> jnp.ndarray:
         return jnp.concatenate([
             # player position
-            obs.player_x.flatten().astype(jnp.float64),
-            obs.player_y.flatten().astype(jnp.float64),
+            obs.player_x.flatten(),
+            obs.player_y.flatten(),
 
             # opponents (7x2 array)
-            obs.visible_opponents.flatten().astype(jnp.float64),
+            obs.visible_opponents.flatten(),
 
             # game objectives
-            obs.cars_to_overtake.flatten().astype(jnp.float64),
-            obs.distance.flatten().astype(jnp.float64),
-            obs.level.flatten().astype(jnp.float64),
-            obs.level_passed.flatten().astype(jnp.float64),
+            obs.cars_to_overtake.flatten(),
+            obs.distance.flatten(),
+            obs.level.flatten(),
+            obs.level_passed.flatten(),
 
             # track
-            obs.track_left_xs.flatten().astype(jnp.float64),
-            obs.track_right_xs.flatten().astype(jnp.float64),
-            obs.curvature.flatten().astype(jnp.float64),
+            obs.track_left_xs.flatten(),
+            obs.track_right_xs.flatten(),
+            obs.curvature.flatten(),
 
             # environment
-            obs.cooldown.flatten().astype(jnp.float64),
-            obs.weather_index.flatten().astype(jnp.float64),
+            obs.cooldown.flatten(),
+            obs.weather_index.flatten(),
         ])
 
     @partial(jax.jit, static_argnums=(0,))
@@ -1017,25 +1018,25 @@ class JaxEnduro(JaxEnvironment[EnduroGameState, EnduroObservation, EnduroInfo, E
         )
 
         return EnduroObservation(
-            # cars - use float64
-            player_x=jnp.array([state.player_x_abs_position], dtype=jnp.float64),
-            player_y=jnp.array([state.player_y_abs_position], dtype=jnp.float64),
-            visible_opponents=visible_opponents.astype(jnp.float64),
+            # cars - use float32
+            player_x=jnp.array([state.player_x_abs_position], dtype=jnp.float32),
+            player_y=jnp.array([state.player_y_abs_position], dtype=jnp.float32),  # Changed to float32
+            visible_opponents=visible_opponents.astype(jnp.float32),  # Changed to float32
 
-            # score box - use float64
-            cars_to_overtake=jnp.array([state.cars_to_overtake], dtype=jnp.float64),
-            distance=jnp.array([state.distance], dtype=jnp.float64),
-            level=jnp.array([state.level], dtype=jnp.float64),
-            level_passed=jnp.array([state.level_passed], dtype=jnp.float64),
+            # score box - use float32
+            cars_to_overtake=jnp.array([state.cars_to_overtake], dtype=jnp.float32),  # Changed to float32
+            distance=jnp.array([state.distance], dtype=jnp.float32),
+            level=jnp.array([state.level], dtype=jnp.float32),  # Changed to float32
+            level_passed=jnp.array([state.level_passed], dtype=jnp.float32),  # Changed to float32
 
-            # track - use float64
-            track_left_xs=track_left_xs.astype(jnp.float64),
-            track_right_xs=track_right_xs.astype(jnp.float64),
-            curvature=jnp.array([curvature], dtype=jnp.float64),
+            # track - use float32
+            track_left_xs=track_left_xs.astype(jnp.float32),  # Changed to float32
+            track_right_xs=track_right_xs.astype(jnp.float32),  # Changed to float32
+            curvature=jnp.array([curvature], dtype=jnp.float32),  # Changed to float32
 
-            # environment - use float64
-            cooldown=jnp.array([state.cooldown], dtype=jnp.float64),
-            weather_index=jnp.array([state.weather_index], dtype=jnp.float64),
+            # environment - use float32
+            cooldown=jnp.array([state.cooldown], dtype=jnp.float32),
+            weather_index=jnp.array([state.weather_index], dtype=jnp.float32),  # Changed to float32
         )
 
     @partial(jax.jit, static_argnums=(0,))
