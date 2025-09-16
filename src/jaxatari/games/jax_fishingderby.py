@@ -11,8 +11,8 @@ from dataclasses import dataclass
 from gymnax.environments import spaces
 
 from jaxatari.environment import JaxEnvironment, JAXAtariAction as Action
-import jaxatari.rendering.atraJaxis as aj
-from jaxatari.renderers import AtraJaxisRenderer
+import jaxatari.rendering.jax_rendering_utils as aj
+from jaxatari.renderers import JAXGameRenderer
 
 
 def load_sprite_frame(path: str) -> chex.Array:
@@ -217,6 +217,12 @@ class FishingDerby(JaxEnvironment):
         done = self._get_done(new_state)
         info = self._get_info(new_state)
         return observation, new_state, reward, done, info
+
+    @partial(jax.jit, static_argnums=(0,))
+    def render(self, state: GameState) -> chex.Array:
+        """Render the current game state."""
+        renderer = FishingDerbyRenderer()
+        return renderer.render(state)
 
     def action_space(self) -> spaces.Discrete:
         return spaces.Discrete(len(self.action_set))
@@ -564,7 +570,7 @@ def load_sprites():
     )
 
 
-class FishingDerbyRenderer(AtraJaxisRenderer):
+class FishingDerbyRenderer(JAXGameRenderer):
     def __init__(self):
         super().__init__()
         self.config = GameConfig()
@@ -677,7 +683,7 @@ class FishingDerbyRenderer(AtraJaxisRenderer):
         raster = self._render_score(raster, state.p1.score, 50, 20)
         raster = self._render_score(raster, state.p2.score, 100, 20)
 
-        return jnp.transpose(raster, (1, 0, 2))
+        return raster
 
     def _render_score(self, raster, score, x, y):
         s1, s0 = score // 10, score % 10
