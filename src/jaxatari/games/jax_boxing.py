@@ -218,7 +218,7 @@ class JaxBoxing(JaxEnvironment[BoxingState, BoxingObservation, BoxingInfo, Boxin
                 y=jnp.array([0.0])   # Placeholder for player y position
             )
         )
-    def _get_info(self, state: BoxingState, all_rewards: jnp.ndarray) -> BoxingInfo:
+    def _get_info(self, state: BoxingState, all_rewards: chex.Array = None) -> BoxingInfo:
         return BoxingInfo(
             time=state.time,
             step_counter=state.step_counter,
