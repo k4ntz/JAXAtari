@@ -43,11 +43,15 @@ class EntityPositions(NamedTuple):
     y: jnp.ndarray
 
 class BoxingObservation(NamedTuple):
-    player: EntityPositions
+    player_x: chex.Array
+    player_y: chex.Array
+    player_score: chex.Array
 class BoxingInfo(NamedTuple):
     time: jnp.ndarray
     step_counter: jnp.ndarray
 
+class carryState(NamedTuple):
+    player_score:chex.Array
 class JaxBoxing(JaxEnvironment[BoxingState, BoxingObservation, BoxingInfo, BoxingConstants]):
     def __init__(self, consts: BoxingConstants = None, reward_funcs: list[callable] = None):
         consts = consts or BoxingConstants()
@@ -212,12 +216,7 @@ class JaxBoxing(JaxEnvironment[BoxingState, BoxingObservation, BoxingInfo, Boxin
     def _get_reward(self, previous_state: EnvState, state: EnvState) -> float:
         return (state.player_score - previous_state.player_score) - (state.enemy_score - previous_state.enemy_score)
     def _get_observation(self, state: BoxingState):
-        return BoxingObservation(
-            player=EntityPositions(
-                x=jnp.array([0.0]),  # Placeholder for player x position
-                y=jnp.array([0.0])   # Placeholder for player y position
-            )
-        )
+        return BoxingObservation(player_x=state.player_x, player_y=state.player_y, player_score=state.player_score)
     def _get_info(self, state: BoxingState, all_rewards: chex.Array = None) -> BoxingInfo:
         return BoxingInfo(
             time=state.time,
@@ -240,6 +239,20 @@ class JaxBoxing(JaxEnvironment[BoxingState, BoxingObservation, BoxingInfo, Boxin
             high=255,
             shape=(210,160,3),
             dtype=jnp.uint8
+        )
+    def observation_space(self) -> spaces:
+        return spaces.Dict({
+            "player_x": spaces.Box(low=0, high=self.consts.WIDTH - 1, shape=(), dtype=jnp.int32),
+            "player_y": spaces.Box(low=0, high=self.consts.HEIGHT - 1, shape=(), dtype=jnp.int32),
+            "player_score": spaces.Box(low=0, high=99999, shape=(), dtype=jnp.int32),
+        })
+
+    def obs_to_flat_array(self, obs: BoxingObservation) -> jnp.ndarray:
+        return jnp.concatenate([
+            obs.player_x.flatten(),
+            obs.player_y.flatten(),
+            obs.player_score.flatten(),
+        ]
         )
 
 class BoxingRenderer(JAXGameRenderer):
