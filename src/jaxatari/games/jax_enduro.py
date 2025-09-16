@@ -480,30 +480,29 @@ class JaxEnduro(JaxEnvironment[EnduroGameState, EnduroObservation, EnduroInfo, E
             "weather_index": spaces.Box(low=0, high=len(self.config.weather_starts_s) - 1, shape=(1,), dtype=jnp.int32),
         })
 
-    @partial(jax.jit, static_argnums=(0,))
     def obs_to_flat_array(self, obs: EnduroObservation) -> jnp.ndarray:
         return jnp.concatenate([
             # player position
-            obs.player_x.flatten(),
-            obs.player_y.flatten(),
+            obs.player_x.flatten().astype(jnp.float64),
+            obs.player_y.flatten().astype(jnp.float64),
 
             # opponents (7x2 array)
-            obs.visible_opponents.flatten(),
+            obs.visible_opponents.flatten().astype(jnp.float64),
 
             # game objectives
-            obs.cars_to_overtake.flatten(),
-            obs.distance.flatten(),
-            obs.level.flatten(),
-            obs.level_passed.flatten(),
+            obs.cars_to_overtake.flatten().astype(jnp.float64),
+            obs.distance.flatten().astype(jnp.float64),
+            obs.level.flatten().astype(jnp.float64),
+            obs.level_passed.flatten().astype(jnp.float64),
 
             # track
-            obs.track_left_xs.flatten(),
-            obs.track_right_xs.flatten(),
-            obs.curvature.flatten(),
+            obs.track_left_xs.flatten().astype(jnp.float64),
+            obs.track_right_xs.flatten().astype(jnp.float64),
+            obs.curvature.flatten().astype(jnp.float64),
 
             # environment
-            obs.cooldown.flatten(),
-            obs.weather_index.flatten(),
+            obs.cooldown.flatten().astype(jnp.float64),
+            obs.weather_index.flatten().astype(jnp.float64),
         ])
 
     @partial(jax.jit, static_argnums=(0,))
