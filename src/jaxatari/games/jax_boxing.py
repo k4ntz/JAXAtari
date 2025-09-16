@@ -49,6 +49,7 @@ class BoxingObservation(NamedTuple):
 class BoxingInfo(NamedTuple):
     time: jnp.ndarray
     step_counter: jnp.ndarray
+    all_rewards: chex.Array
 
 class carryState(NamedTuple):
     player_score:chex.Array
@@ -221,6 +222,7 @@ class JaxBoxing(JaxEnvironment[BoxingState, BoxingObservation, BoxingInfo, Boxin
         return BoxingInfo(
             time=state.time,
             step_counter=state.step_counter,
+            all_rewards=all_rewards,
         )
     def _get_all_rewards(self, state: BoxingState, previous_state: BoxingState) -> jnp.ndarray:
         if self.reward_funcs is None:
