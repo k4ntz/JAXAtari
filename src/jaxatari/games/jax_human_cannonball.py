@@ -26,8 +26,9 @@ class HumanCannonballConstants(NamedTuple):
     GRAVITY: float = 9.8
     WALL_RESTITUTION: float = 0.3  # Coefficient of restitution for the wall collision
 
-    # MPH values (Max number of rounds per game is 13 (either score or miss pass the limit))
-    MPH: chex.Array = jnp.array([43, 28, 38, 45, 25, 30, 40, 20, 34, 41, 36, 35, 90])  # TODO: Figure out how its handled in game logic
+    # MPH constraints
+    MPH_MIN: int = 28
+    MPH_MAX: int = 45
 
     # Angle constants
     ANGLE_START: int = 30
@@ -83,14 +84,14 @@ STATE_TRANSLATOR: dict = {
     3: "human_y_vel",
     4: "human_launched",
     5: "water_tower_x",
-    6: "water_tower_y", # TODO: This is a constant, do i pass it for the agent or can it be removed?
+    6: "mph_values",
     7: "tower_wall_hit",
     8: "angle",
     9: "angle_counter",
-    10: "mph_counter",
-    11: "score",
-    12: "misses",
-    13: "step_counter",
+    10: "score",
+    11: "misses",
+    12: "step_counter",
+    13: "rng_key"
 }
 
 
@@ -102,14 +103,14 @@ class HumanCannonballState(NamedTuple):
     human_y_vel: chex.Array
     human_launched: chex.Array
     water_tower_x: chex.Array
-    water_tower_y: chex.Array
+    mph_values: chex.Array
     tower_wall_hit: chex.Array
     angle: chex.Array
     angle_counter: chex.Array
-    mph_counter: chex.Array
     score: chex.Array
     misses: chex.Array
     step_counter: chex.Array
+    rng_key: chex.PRNGKey
 
 
 # Position of the human and the water tower
@@ -206,10 +207,10 @@ class JaxHumanCannonball(JaxEnvironment[HumanCannonballState, HumanCannonballObs
         consts = consts or HumanCannonballConstants()
         super().__init__(consts)
         self.renderer = HumanCannonballRenderer(self.consts)
-        #self.frame_stack_size = 4
         if reward_funcs is not None:
             reward_funcs = tuple(reward_funcs)
         self.reward_funcs = reward_funcs
+        self.frame_stack_size = 4
         self.action_set = [
             Action.NOOP,
             Action.FIRE,
@@ -247,9 +248,9 @@ class JaxHumanCannonball(JaxEnvironment[HumanCannonballState, HumanCannonballObs
     @partial(jax.jit, static_argnums=(0,))
     def human_step(
             self, state_human_x, state_human_y, state_human_x_vel, state_human_y_vel, state_human_launched,
-            state_water_tower_x, state_water_tower_y, state_mph_counter, state_angle
+            state_water_tower_x, state_angle, state_mph_values
     ):
-        mph_speed = self.consts.MPH[state_mph_counter]
+        mph_speed = state_mph_values
         rad_angle = jnp.deg2rad(state_angle)
         t = self.consts.DT
         HORIZONTAL_SPEED_SCALE = 0.7  # Scale to compress the flying arc
@@ -324,11 +325,11 @@ class JaxHumanCannonball(JaxEnvironment[HumanCannonballState, HumanCannonballObs
     # Check if the player has scored
     @partial(jax.jit, static_argnums=(0,))
     def check_water_collision(
-            self, state_human_x, state_human_y, state_water_tower_x, state_water_tower_y
+            self, state_human_x, state_human_y, state_water_tower_x
     ):
         # Define bounding boxes for the human and water tower
         water_surface_x1 = state_water_tower_x + 1
-        water_surface_y1 = state_water_tower_y - self.consts.WATER_TOWER_WALL_HEIGHT
+        water_surface_y1 = self.consts.WATER_TOWER_Y - self.consts.WATER_TOWER_WALL_HEIGHT
         water_surface_x2 = water_surface_x1 + self.consts.WATER_SIZE[0]
         water_surface_y2 = water_surface_y1 + self.consts.WATER_SIZE[1]
 
@@ -455,24 +456,6 @@ class JaxHumanCannonball(JaxEnvironment[HumanCannonballState, HumanCannonballObs
 
         return new_x
 
-    # Reset the round after a score or a miss
-    @partial(jax.jit, static_argnums=(0,))
-    def reset_round(
-            self, state_mph_counter
-    ):
-        human_x = 0.0
-        human_y = 0.0
-        human_x_vel = 0.0
-        human_y_vel = 0.0
-        human_launched = False
-        water_tower_x = self.consts.WATER_TOWER_X
-        water_tower_y = self.consts.WATER_TOWER_Y
-        tower_wall_hit = False
-        mph_counter = jnp.mod(state_mph_counter + 1,
-                              8)  # TODO: This is temporary, need to figure out how mph is handled in the game logic
-
-        return human_x, human_y, human_x_vel, human_y_vel, human_launched, water_tower_x, water_tower_y, tower_wall_hit, mph_counter
-
     @partial(jax.jit, static_argnums=(0,))
     def step(
         self, state: HumanCannonballState, action: chex.Array
@@ -509,9 +492,8 @@ class JaxHumanCannonball(JaxEnvironment[HumanCannonballState, HumanCannonballObs
                 state.human_y_vel,
                 state.human_launched,
                 state.water_tower_x,
-                state.water_tower_y,
-                state.mph_counter,
                 state.angle,
+                state.mph_values
             ),
             lambda _: (             # Else, leave it unchanged
                 state.human_x,
@@ -528,7 +510,6 @@ class JaxHumanCannonball(JaxEnvironment[HumanCannonballState, HumanCannonballObs
         new_water_tower_x = jax.lax.cond(
             jnp.logical_and(    # Only execute if the human has not hit the tower wall
                 jnp.logical_not(tower_wall_hit),
-                #TODO: The game handles this with a separate counter (like for the angle), is this okay or should i change it (very minor difference)?
                 jnp.mod(state.step_counter, 8) == 0 # Only execute water_step every 8 steps (base implementation only moves the projectile every eighth tick)
             ),
             lambda _: self.water_tower_step(  # Calculate the new position of the water tower
@@ -546,8 +527,7 @@ class JaxHumanCannonball(JaxEnvironment[HumanCannonballState, HumanCannonballObs
             self.check_water_collision(
                 new_human_x,
                 new_human_y,
-                state.water_tower_x,
-                state.water_tower_y
+                state.water_tower_x
             ),
             lambda _: state.score + 1,
             lambda _: state.score,
@@ -577,15 +557,15 @@ class JaxHumanCannonball(JaxEnvironment[HumanCannonballState, HumanCannonballObs
             new_human_y_vel,
             human_launched,
             new_water_tower_x,
-            self.consts.WATER_TOWER_Y,
             tower_wall_hit,
-            state.mph_counter,
+            state.mph_values,
+            state.rng_key
         )
 
         (new_human_x, new_human_y, new_human_x_vel, new_human_y_vel, human_launched, new_water_tower_x,
-         new_water_tower_y, tower_wall_hit, new_mph_counter) = jax.lax.cond(
+         tower_wall_hit, new_mph_values, new_rng_key) = jax.lax.cond(
             round_reset,
-            lambda _: self.reset_round(state.mph_counter),
+            lambda _: self.reset_round(state.rng_key, state.human_x, state.angle),
             lambda x: x,
             operand=current_values
         )
@@ -598,14 +578,14 @@ class JaxHumanCannonball(JaxEnvironment[HumanCannonballState, HumanCannonballObs
             human_y_vel=new_human_y_vel,
             human_launched=human_launched,
             water_tower_x=new_water_tower_x,
-            water_tower_y=new_water_tower_y,
+            mph_values=new_mph_values,
             tower_wall_hit=tower_wall_hit,
             angle=new_angle,
             angle_counter=new_angle_counter,
-            mph_counter=new_mph_counter,
             score=new_score,
             misses=new_misses,
             step_counter=state.step_counter + 1,
+            rng_key=new_rng_key
         )
 
         done = self._get_done(new_state)
@@ -616,13 +596,35 @@ class JaxHumanCannonball(JaxEnvironment[HumanCannonballState, HumanCannonballObs
 
         return observation, new_state, env_reward, done, info
 
+    # Reset the round after a score or a miss
+    @partial(jax.jit, static_argnums=(0,))
+    def reset_round(
+            self, key, current_human_x, current_angle
+    ):
+        human_x = 0.0
+        human_y = 0.0
+        human_x_vel = 0.0
+        human_y_vel = 0.0
+        human_launched = False
+        water_tower_x = self.consts.WATER_TOWER_X
+        tower_wall_hit = False
+        # Change the rng_key and generate a new mph_value
+        rng_key, subkey = jax.random.split(key)
+        # Add pseudorandomness to mph generation by integrating human x pos and angle
+        subkey = jax.random.fold_in(subkey, current_human_x)
+        subkey = jax.random.fold_in(subkey, current_angle)
+        mph_values = jax.random.randint(subkey, (), self.consts.MPH_MIN, self.consts.MPH_MAX + 1)
+
+        return human_x, human_y, human_x_vel, human_y_vel, human_launched, water_tower_x, tower_wall_hit, mph_values, rng_key
+
     def reset(
-            self, key=None
+            self, key: jax.random.PRNGKey = jax.random.PRNGKey(42)
     ) -> Tuple[HumanCannonballObservation, HumanCannonballState]:
         """
         Resets the game state to the initial state.
         Returns the initial state and the reward (i.e. 0)
         """
+
         state = HumanCannonballState(
             human_x = jnp.array(0).astype(jnp.float32),
             human_y = jnp.array(0).astype(jnp.float32),
@@ -630,14 +632,14 @@ class JaxHumanCannonball(JaxEnvironment[HumanCannonballState, HumanCannonballObs
             human_y_vel = jnp.array(0).astype(jnp.float32),
             human_launched = jnp.array(False),
             water_tower_x = jnp.array(self.consts.WATER_TOWER_X).astype(jnp.int32),
-            water_tower_y = jnp.array(self.consts.WATER_TOWER_Y).astype(jnp.int32),
+            mph_values = jnp.array(43).astype(jnp.int32),
             tower_wall_hit = jnp.array(False),
             angle = jnp.array(self.consts.ANGLE_START).astype(jnp.int32),
             angle_counter = jnp.array(0).astype(jnp.int32),
-            mph_counter = jnp.array(0).astype(jnp.int32),
             score = jnp.array(0).astype(jnp.int32),
             misses = jnp.array(0).astype(jnp.int32),
             step_counter = jnp.array(0).astype(jnp.int32),
+            rng_key=key
         )
         initial_obs = self._get_observation(state)
 
@@ -657,7 +659,7 @@ class JaxHumanCannonball(JaxEnvironment[HumanCannonballState, HumanCannonballObs
         # Create water tower
         human_cannonball = EntityPosition(
             x=state.water_tower_x,
-            y=state.water_tower_y,
+            y=self.consts.WATER_TOWER_Y,
             width=jnp.array(self.consts.WATER_TOWER_WIDTH),
             height=jnp.array(self.consts.WATER_TOWER_WALL_HEIGHT - 1),
         )
@@ -666,7 +668,7 @@ class JaxHumanCannonball(JaxEnvironment[HumanCannonballState, HumanCannonballObs
             human=human_cannonball,
             water_tower=human_cannonball,
             angle=state.angle,
-            mph=self.consts.MPH[state.mph_counter],
+            mph=state.mph_values,
             score=state.score,
             misses=state.misses
         )
@@ -811,14 +813,14 @@ class HumanCannonballRenderer(JAXGameRenderer):
 
         # Render the water tower
         frame_water_tower = jr.get_sprite_frame(SPRITE_WATER_TOWER, 0)     #TODO: For now, no score animation
-        raster = jr.render_at(raster, state.water_tower_x, state.water_tower_y - self.consts.WATER_TOWER_WALL_HEIGHT + 1, frame_water_tower)
+        raster = jr.render_at(raster, state.water_tower_x, self.consts.WATER_TOWER_Y - self.consts.WATER_TOWER_WALL_HEIGHT + 1, frame_water_tower)
 
         # Get the score and misses
         score_digits = jr.int_to_digits(state.score, max_digits=1)
         misses_digits = jr.int_to_digits(state.misses, max_digits=1)
 
         # Get the mph and angle
-        mph_digits = jr.int_to_digits(self.consts.MPH[state.mph_counter], max_digits=2)
+        mph_digits = jr.int_to_digits(state.mph_values, max_digits=2)
         angle_digits = jr.int_to_digits(state.angle, max_digits=2)
 
         # Render the score
