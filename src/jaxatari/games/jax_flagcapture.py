@@ -411,7 +411,7 @@ class JaxFlagCapture(JaxEnvironment[FlagCaptureState, FlagCaptureObservation, Fl
         done = self._get_done(new_state)
         env_reward = self._get_reward(state, new_state)
         all_rewards = self._get_all_reward(state, new_state)
-        info = self._get_info(new_state, all_rewards)
+        info = self._get_info(new_state)
 
         observation = self._get_observation(new_state)
 
