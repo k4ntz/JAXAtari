@@ -419,6 +419,7 @@ class BeamRiderEnv(JaxEnvironment[BeamRiderState, BeamRiderObservation, BeamRide
         )
         return rewards
 
+    @partial(jax.jit, static_argnums=(0,))
     def _get_observation(self, state: BeamRiderState) -> BeamRiderObservation:
         """Convert state to observation"""
         return BeamRiderObservation(
@@ -434,6 +435,7 @@ class BeamRiderEnv(JaxEnvironment[BeamRiderState, BeamRiderObservation, BeamRide
             torpedoes_remaining=jnp.array(state.torpedoes_remaining, dtype=jnp.int32),
         )
 
+    @partial(jax.jit, static_argnums=(0,))
     def _get_info(self, state: BeamRiderState, all_rewards: chex.Array = None) -> BeamRiderInfo:
         """Extract info from state"""
         return BeamRiderInfo(
@@ -444,15 +446,18 @@ class BeamRiderEnv(JaxEnvironment[BeamRiderState, BeamRiderObservation, BeamRide
             all_rewards=all_rewards
         )
 
+    @partial(jax.jit, static_argnums=(0,))
     def _get_reward(self, previous_state: BeamRiderState, state: BeamRiderState) -> jnp.ndarray:
         """Calculate reward from state difference"""
         score_diff = state.score - previous_state.score
         return jnp.array(score_diff, dtype=jnp.float32)
 
+    @partial(jax.jit, static_argnums=(0,))
     def _get_done(self, state: BeamRiderState) -> jnp.ndarray:
         """Determine if episode is done"""
         return jnp.array(state.game_over, dtype=jnp.bool_)
 
+    @partial(jax.jit, static_argnums=(0,))
     def obs_to_flat_array(self, obs: BeamRiderObservation) -> jnp.ndarray:
         """Convert observation to flat array with consistent float32 dtype."""
         flat_components = [
@@ -3166,6 +3171,9 @@ class BeamRiderEnv(JaxEnvironment[BeamRiderState, BeamRiderObservation, BeamRide
                                             5] == self.constants.ENEMY_TYPE_YELLOW_CHIRPER)) * self.constants.YELLOW_CHIRPER_POINTS
         )
 
+        sentinels_destroyed_count = jnp.sum(torpedo_enemy_hits & (enemies[:, 5] == self.constants.ENEMY_TYPE_SENTINEL_SHIP))
+        sentinel_life_bonus = sentinels_destroyed_count * (state.lives * 100)
+
         torpedo_score = (
                 jnp.sum(torpedo_enemy_hits & (enemies[:,
                                               5] == self.constants.ENEMY_TYPE_WHITE_SAUCER)) * self.constants.POINTS_PER_ENEMY * 2 +
@@ -3182,7 +3190,8 @@ class BeamRiderEnv(JaxEnvironment[BeamRiderState, BeamRiderObservation, BeamRide
                 jnp.sum(torpedo_enemy_hits & (enemies[:,
                                               5] == self.constants.ENEMY_TYPE_ORANGE_TRACKER)) * self.constants.ORANGE_TRACKER_POINTS +
                 jnp.sum(torpedo_enemy_hits & (enemies[:,
-                                              5] == self.constants.ENEMY_TYPE_SENTINEL_SHIP)) * self.constants.SENTINEL_SHIP_POINTS
+                                              5] == self.constants.ENEMY_TYPE_SENTINEL_SHIP)) * self.constants.SENTINEL_SHIP_POINTS +
+                sentinel_life_bonus
         )
 
         score += laser_score + torpedo_score
