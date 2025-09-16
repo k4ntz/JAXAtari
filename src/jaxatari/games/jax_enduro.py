@@ -68,7 +68,7 @@ class EnduroConstants(NamedTuple):
     # How many pixels the top-x of the track moves in a curve into the curve direction for the full curve
     track_max_top_x_offset: float = 50.0
     # how fast the track curve starts to build in the game when going from a straight track into a curve
-    curve_rate: float = 0.25
+    curve_rate: float = 0.05
 
     # Bumpers
     track_bumper_max_length: int = 30  # the maximum bumper length at the bottom of the screen
@@ -77,7 +77,7 @@ class EnduroConstants(NamedTuple):
     track_bumper_min_width: float = 1.0  # the maximum bumper width pixels at top
     track_bumper_smoothening_pixels: int = 4  # How many pixels are used to smoothen the bumper edges
     bumper_perspective_speed: float = 2.0  # A factor for how much slower bumpers move at the top of the track
-    first_n_pixels_without_bumper: int = 3
+    first_n_pixels_without_bumper: int = 5
 
     # track colors
     track_colors = jnp.array([
@@ -211,7 +211,7 @@ class EnduroConstants(NamedTuple):
     opponent_spawn_seed: int = 42
 
     length_of_opponent_array = 5000
-    opponent_density = 0.3
+    opponent_density = 0.28
     opponent_delay_slots = 10
 
     # How many opponents to overtake to progress into the next level
@@ -310,7 +310,7 @@ class EnduroGameState(NamedTuple):
     player_speed: chex.Array
     cooldown: chex.Array  # cooldown after collision with another car
     game_over: chex.Array  # game over if you fail to pass enough cars before the day ends
-    total_cars_overtaken: chex.Array  # the all time overtaken cars - for the reward function
+    total_cars_overtaken: chex.Array  # the all-time counter of overtaken cars - for the reward function
     total_time_elapsed: chex.Array
 
 
@@ -705,7 +705,13 @@ class JaxEnduro(JaxEnvironment[EnduroGameState, EnduroObservation, EnduroInfo, E
 
         # 4. Limit the change per step. The change cannot be faster than curve_rate.
         #    jnp.clip is perfect here. This lets the offset move towards the target without overshooting.
-        offset_change = jnp.clip(current_offset, -self.config.curve_rate, self.config.curve_rate)
+        # Calculate speed-dependent curve rate multiplier
+        # At min_speed (6): multiplier = 1 (current rate)
+        # At max_speed (120): multiplier = 30 (30x faster)
+        speed_multiplier = 1 + (new_speed - self.config.min_speed) / (
+                    self.config.max_speed - self.config.min_speed) * 29
+        speed_adjusted_curve_rate = self.config.curve_rate * speed_multiplier
+        offset_change = jnp.clip(current_offset, -speed_adjusted_curve_rate, speed_adjusted_curve_rate)
 
         # 5. Apply the calculated change to the current offset.
         new_top_x_curve_offset = state.track_top_x_curve_offset + offset_change
@@ -1011,26 +1017,25 @@ class JaxEnduro(JaxEnvironment[EnduroGameState, EnduroObservation, EnduroInfo, E
         )
 
         return EnduroObservation(
-            # cars - ensure these are properly shaped
-            player_x=jnp.array([state.player_x_abs_position], dtype=jnp.float32),  # Shape (1,)
-            player_y=jnp.array([state.player_y_abs_position], dtype=jnp.int32),  # Shape (1,)
-            visible_opponents=visible_opponents.astype(jnp.int32),  # Ensure int32 dtype
+            # cars - use float64
+            player_x=jnp.array([state.player_x_abs_position], dtype=jnp.float64),
+            player_y=jnp.array([state.player_y_abs_position], dtype=jnp.float64),
+            visible_opponents=visible_opponents.astype(jnp.float64),
 
-            # score box - ensure these are properly shaped
-            cars_to_overtake=jnp.array([state.cars_to_overtake], dtype=jnp.int32),  # Shape (1,)
-            distance=jnp.array([state.distance], dtype=jnp.float32),  # Shape (1,)
-            level=jnp.array([state.level], dtype=jnp.int32),  # Shape (1,)
-            level_passed=jnp.array([state.level_passed.astype(jnp.int32)], dtype=jnp.int32),
-            # Convert bool to int, shape (1,)
+            # score box - use float64
+            cars_to_overtake=jnp.array([state.cars_to_overtake], dtype=jnp.float64),
+            distance=jnp.array([state.distance], dtype=jnp.float64),
+            level=jnp.array([state.level], dtype=jnp.float64),
+            level_passed=jnp.array([state.level_passed], dtype=jnp.float64),
 
-            # track (now with fog effects)
-            track_left_xs=track_left_xs.astype(jnp.int32),
-            track_right_xs=track_right_xs.astype(jnp.int32),
-            curvature=jnp.array([curvature], dtype=jnp.int32),  # Shape (1,)
+            # track - use float64
+            track_left_xs=track_left_xs.astype(jnp.float64),
+            track_right_xs=track_right_xs.astype(jnp.float64),
+            curvature=jnp.array([curvature], dtype=jnp.float64),
 
-            # environment
-            cooldown=jnp.array([state.cooldown], dtype=jnp.float32),  # Shape (1,)
-            weather_index=jnp.array([state.weather_index], dtype=jnp.int32),  # Shape (1,)
+            # environment - use float64
+            cooldown=jnp.array([state.cooldown], dtype=jnp.float64),
+            weather_index=jnp.array([state.weather_index], dtype=jnp.float64),
         )
 
     @partial(jax.jit, static_argnums=(0,))
@@ -1041,7 +1046,7 @@ class JaxEnduro(JaxEnvironment[EnduroGameState, EnduroObservation, EnduroInfo, E
     def _get_reward(self, previous_state: EnduroGameState, state: EnduroGameState) -> jnp.ndarray:
         return (state.total_cars_overtaken - previous_state.total_cars_overtaken) \
             + (state.distance - previous_state.distance
-               - self.config.km_per_speed_unit_per_frame) # no reward at minimum speed
+               - self.config.km_per_speed_unit_per_frame)  # no reward at minimum speed
 
     @partial(jax.jit, static_argnums=(0,))
     def _get_all_reward(self, previous_state: EnduroGameState, state: EnduroGameState):
@@ -1897,8 +1902,8 @@ class EnduroRenderer(JAXGameRenderer):
 
         Returns: the final raster with the rendered track
         """
-        # speed 24 → period 2.0 (like opponents), speed 120 → period 1.0
-        animation_period = 2.0 - (state.player_speed - self.config.opponent_speed) / (
+        # speed 24 → period like opponents, speed 120 → period 1.0
+        animation_period = self.config.opponent_animation_steps - (state.player_speed - self.config.opponent_speed) / (
                 self.config.max_speed - self.config.opponent_speed)
 
         # Calculate animation step (slower at low speeds, faster at high speeds)
@@ -2793,7 +2798,7 @@ class EnduroDebugRenderer:
             # f"Steering sensitivity: {}",
             # f"Left Mountain x: {state.mountain_left_x}",
             # f"Opponent Index: {state.opponent_index}",
-            f"Opponents: {state.visible_opponent_positions}",
+            # f"Opponents: {state.visible_opponent_positions}",
             # f"Cars To overtake: {state.cars_to_overtake}",
             # f"Cars overtaken: {state.cars_overtaken}",
             # f"Opponent Collision: {state.is_collision}",
@@ -2804,9 +2809,9 @@ class EnduroDebugRenderer:
             # f"Track left X: {state.visible_track_left}",
             # f"Track right X: {state.visible_track_right}",
             # f"Top X Offset: {state.track_top_x_curve_offset}",
-            f"Obs right track: {obs.track_right_xs}",
-            f"Obs Opponents: {obs.visible_opponents}",
-            f"Obs Cooldown: {obs.cooldown}",
+            # f"Obs right track: {obs.track_right_xs}",
+            # f"Obs Opponents: {obs.visible_opponents}",
+            # f"Obs Cooldown: {obs.cooldown}",
             f"Reward: {reward}",
         ]
 
@@ -2926,8 +2931,5 @@ Steering:
 Rendering:
 - wheel animation speed
 
-Track:
-- Better curve
-- curve move speed based on speed
 
 """
