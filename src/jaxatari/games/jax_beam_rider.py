@@ -14,14 +14,10 @@ from jaxatari.renderers import JAXGameRenderer
 import jaxatari.spaces as spaces
 
 """TODOS:
-Top Priorities:
 - make game more 3D --> might be done(ask supervisor)
-- Green blockers are scaling
-- adjust code so that it passes the tests --> done
-- add enemy sprites
-- adjust code so that everything is moves along the new dotted beams
+- remove scaling for orange Tracker
+- final test
 For later:
-- Check the sentinal ship constants/Optimize the code/remove unnecessary code
 - Documentation"""
 
 
@@ -154,8 +150,8 @@ class BeamRiderConstants(NamedTuple):
     ORANGE_TRACKER_SPEED = 0.9  # Slower base tracking speed
     ORANGE_TRACKER_POINTS = 50  # Points when destroyed with torpedo
     ORANGE_TRACKER_COLOR = (255, 165, 0)  # Orange color RGB
-    ORANGE_TRACKER_SPAWN_SECTOR = 12  # Starts appearing from sector 12
-    ORANGE_TRACKER_SPAWN_CHANCE = 0.08  # 8% chance to spawn orange tracker
+    ORANGE_TRACKER_SPAWN_SECTOR = 1  # Starts appearing from sector 12
+    ORANGE_TRACKER_SPAWN_CHANCE = 0.8  # 8% chance to spawn orange tracker
     ORANGE_TRACKER_CHANGE_DIRECTION_INTERVAL = 90  # Frames between direction changes
 
     # Tracker course change limits based on sector
@@ -1727,7 +1723,7 @@ class BeamRiderEnv(JaxEnvironment[BeamRiderState, BeamRiderObservation, BeamRide
         # Check if selected enemy is white saucer when we can't spawn them
         # If so, skip this spawn frame entirely (maintaining normal spawn rates for other enemies)
         selected_white_saucer_when_cant = (
-                                                  enemy_type == self.constants.ENEMY_TYPE_WHITE_SAUCER) & ~can_spawn_white_saucer
+                                                      enemy_type == self.constants.ENEMY_TYPE_WHITE_SAUCER) & ~can_spawn_white_saucer
 
         # Can actually spawn if: we should spawn AND we didn't select a white saucer when we can't spawn one
         can_actually_spawn = should_spawn & ~selected_white_saucer_when_cant
@@ -1825,6 +1821,29 @@ class BeamRiderEnv(JaxEnvironment[BeamRiderState, BeamRiderObservation, BeamRide
         # Set movement direction (0=left-to-right, 1=right-to-left)
         bounce_movement_direction = bounce_spawn_from_right.astype(jnp.float32)
 
+        # ORANGE TRACKERS: Spawn from sides, move horizontally first
+        is_orange_tracker = enemy_type == self.constants.ENEMY_TYPE_ORANGE_TRACKER
+
+        # Choose spawn side randomly (0 = left, 1 = right)
+        rng_key, tracker_side_key = random.split(rng_key)
+        tracker_spawn_from_right = random.randint(tracker_side_key, (), 0, 2)  # 0 or 1
+
+        # Orange tracker spawn positions (from sides, off-screen)
+        tracker_spawn_x = jnp.where(
+            tracker_spawn_from_right,
+            self.constants.SCREEN_WIDTH + self.constants.ENEMY_WIDTH,  # Spawn from right side (off-screen)
+            -self.constants.ENEMY_WIDTH  # Spawn from left side (off-screen)
+        )
+
+        # Spawn at a reasonable height (upper third of screen)
+        rng_key, tracker_y_key = random.split(rng_key)
+        tracker_spawn_y = random.uniform(
+            tracker_y_key, (),
+            minval=self.constants.SCREEN_HEIGHT * 0.2,  # Upper area
+            maxval=self.constants.SCREEN_HEIGHT * 0.35,  # But not too high
+            dtype=jnp.float32
+        )
+
         # YELLOW REJUVENATORS: Spawn from top on random beam
         is_yellow_rejuvenator = enemy_type == self.constants.ENEMY_TYPE_YELLOW_REJUVENATOR
 
@@ -1850,9 +1869,13 @@ class BeamRiderEnv(JaxEnvironment[BeamRiderState, BeamRiderObservation, BeamRide
                     is_green_bounce,
                     bounce_spawn_x,  # Bounce craft spawn from sides
                     jnp.where(
-                        is_yellow_rejuvenator,
-                        rejuv_spawn_x,  # Rejuvenators spawn from top
-                        regular_spawn_x  # Regular enemies spawn from top
+                        is_orange_tracker,
+                        tracker_spawn_x,  # Orange trackers spawn from sides
+                        jnp.where(
+                            is_yellow_rejuvenator,
+                            rejuv_spawn_x,  # Rejuvenators spawn from top
+                            regular_spawn_x  # Regular enemies spawn from top
+                        )
                     )
                 )
             )
@@ -1868,9 +1891,13 @@ class BeamRiderEnv(JaxEnvironment[BeamRiderState, BeamRiderObservation, BeamRide
                     is_green_bounce,
                     bounce_spawn_y,  # Bounce craft spawn in upper area
                     jnp.where(
-                        is_yellow_rejuvenator,
-                        rejuv_spawn_y,  # Rejuvenators spawn from top
-                        regular_spawn_y  # Regular enemies spawn from top
+                        is_orange_tracker,
+                        tracker_spawn_y,  # Orange trackers use their spawn Y
+                        jnp.where(
+                            is_yellow_rejuvenator,
+                            rejuv_spawn_y,  # Rejuvenators spawn from top
+                            regular_spawn_y  # Regular enemies spawn from top
+                        )
                     )
                 )
             )
@@ -1929,8 +1956,8 @@ class BeamRiderEnv(JaxEnvironment[BeamRiderState, BeamRiderObservation, BeamRide
                     is_green_bounce,
                     initial_bounce_target_beam,  # Bounce craft uses target beam
                     jnp.where(
-                        enemy_type == self.constants.ENEMY_TYPE_ORANGE_TRACKER,
-                        state.ship.beam_position,  # Track player's current beam
+                        is_orange_tracker,
+                        0,  # Orange trackers don't track beam initially (use state machine)
                         regular_spawn_beam  # Use calculated spawn beam
                     )
                 )
@@ -2043,7 +2070,7 @@ class BeamRiderEnv(JaxEnvironment[BeamRiderState, BeamRiderObservation, BeamRide
             0, self.constants.NUM_BEAMS - 1
         )
 
-        # Modify existing direction_x assignment to include horizon patrol
+        # Modify existing direction_x assignment to include horizon patrol and orange trackers
         direction_x = jnp.where(
             is_yellow_chirper,
             jnp.where(spawn_from_right, -1.0, 1.0),  # Chirpers move toward center
@@ -2054,21 +2081,24 @@ class BeamRiderEnv(JaxEnvironment[BeamRiderState, BeamRiderObservation, BeamRide
                     is_green_bounce,
                     1.0,  # Bounce craft will use state machine for direction
                     jnp.where(
-                        is_white_saucer & is_horizon_patrol,
-                        random_direction,  # Horizon patrol gets random direction
-                        1.0  # Default right movement for others
+                        is_orange_tracker,
+                        jnp.where(tracker_spawn_from_right, -1.0, 1.0),  # Move toward center
+                        jnp.where(
+                            is_white_saucer & is_horizon_patrol,
+                            random_direction,  # Horizon patrol gets random direction
+                            1.0  # Default right movement for others
+                        )
                     )
                 )
             )
         )
 
-        # Modify existing target_x assignment to include horizon patrol and beam jump
         target_x = jnp.where(
             is_green_blocker,
             player_beam_x,  # Blocker targets player's current position
             jnp.where(
-                enemy_type == self.constants.ENEMY_TYPE_ORANGE_TRACKER,
-                self.beam_positions[state.ship.beam_position],  # Tracker targets current player beam
+                is_orange_tracker,
+                -1,  # No initial target beam - will be set when switching to vertical
                 jnp.where(
                     is_green_bounce,
                     bounce_spawn_y,  # Store spawn height for bounce craft
@@ -2097,6 +2127,13 @@ class BeamRiderEnv(JaxEnvironment[BeamRiderState, BeamRiderObservation, BeamRide
             target_x
         )
 
+        # Use column 12 to indicate orange tracker hasn't started vertical movement yet (0 = horizontal, 1 = vertical)
+        tracker_movement_phase = jnp.where(
+            is_orange_tracker,
+            0,  # Start in horizontal movement phase
+            0  # Default for others
+        )
+
         # Create new enemy array
         new_enemy = jnp.zeros(17, dtype=jnp.float32)  # 17 columns for all enemy data
         new_enemy = new_enemy.at[0].set(spawn_x)  # x
@@ -2111,7 +2148,8 @@ class BeamRiderEnv(JaxEnvironment[BeamRiderState, BeamRiderObservation, BeamRide
         new_enemy = new_enemy.at[9].set(0)  # linger_timer
         new_enemy = new_enemy.at[10].set(target_x)  # target_x (or spawn height for bounce craft)
         new_enemy = new_enemy.at[11].set(enemy_health)  # health
-        new_enemy = new_enemy.at[12].set(0)  # firing_timer/debris lifetime
+        new_enemy = new_enemy.at[12].set(
+            tracker_movement_phase)  # firing_timer/debris lifetime/movement phase for trackers
         new_enemy = new_enemy.at[13].set(course_changes_remaining)  # course changes (or movement direction for bounce)
         new_enemy = new_enemy.at[14].set(movement_pattern)  # movement_pattern (or state machine for bounce craft)
         new_enemy = new_enemy.at[15].set(initial_firing_timer)  # white_saucer_firing_timer
@@ -2128,6 +2166,7 @@ class BeamRiderEnv(JaxEnvironment[BeamRiderState, BeamRiderObservation, BeamRide
         )
 
         return state.replace(enemies=enemies, rng_key=rng_key)
+
     @partial(jax.jit, static_argnums=(0,))
     def _handle_white_saucer_limit(self, enemy_type: int, sector: int, can_spawn_white_saucer: bool,
                                    rng_key: chex.PRNGKey) -> tuple:
@@ -2430,6 +2469,7 @@ class BeamRiderEnv(JaxEnvironment[BeamRiderState, BeamRiderObservation, BeamRide
         x1 = center_x + (x0 - center_x) * 0.05
         x = x0 + (x1 - x0) * t
         return x
+
     @partial(jax.jit, static_argnums=(0,))
     def _update_enemies(self, state: BeamRiderState) -> BeamRiderState:
         """Update enemy positions"""
@@ -2680,36 +2720,67 @@ class BeamRiderEnv(JaxEnvironment[BeamRiderState, BeamRiderObservation, BeamRide
 
         bounce_craft_active = (enemies[:, 3] == 1) & ~bounce_should_deactivate
 
-        # Orange Trackers: smooth beam following with limited course changes
+        # Orange Trackers: horizontal movement then vertical tracking
+        # Orange Trackers: horizontal movement across screen, then vertical tracking
         tracker_mask = enemy_types == self.constants.ENEMY_TYPE_ORANGE_TRACKER
 
         # Get tracker data
         tracker_x = enemies[:, 0]
         tracker_y = enemies[:, 1]
-        tracker_current_target_beam = enemies[:, 2].astype(int)  # Current target beam
-        tracker_target_x = enemies[:, 10]  # Target X coordinate for current beam
+        tracker_movement_phase = enemies[:, 12].astype(int)  # 0 = horizontal, 1 = vertical
+        tracker_direction_x = enemies[:, 6]  # Horizontal movement direction (-1 or 1)
         tracker_course_changes_remaining = enemies[:, 13].astype(int)  # Course changes left
+        tracker_current_beam = enemies[:, 10].astype(int)  # Current beam being tracked (only valid in vertical phase)
 
         # Get current player beam position
         current_player_beam = state.ship.beam_position
+        current_player_beam_x = self.beam_positions[current_player_beam]
+
+        # Phase 1: Horizontal movement across screen
+        in_horizontal_phase = tracker_mask & (tracker_movement_phase == 0)
+
+        # Check if tracker is currently over the player's beam (within threshold)
+        tracker_over_player_beam = jnp.abs(tracker_x - current_player_beam_x) < 8.0
+
+        # Switch to vertical phase when passing over player's beam
+        should_switch_to_vertical = in_horizontal_phase & tracker_over_player_beam
+        new_movement_phase = jnp.where(
+            should_switch_to_vertical,
+            1,  # Switch to vertical tracking phase
+            tracker_movement_phase
+        )
+
+        # Horizontal movement (Phase 0) - just move straight across
+        tracker_new_x_horizontal = jnp.where(
+            in_horizontal_phase,
+            tracker_x + (tracker_direction_x * self.constants.ORANGE_TRACKER_SPEED * 2.0),  # Faster horizontal movement
+            tracker_x
+        )
+
+        # Phase 2: Vertical movement with tracking
+        in_vertical_phase = tracker_mask & (new_movement_phase == 1)
+
+        # When switching to vertical, lock onto current player beam
+        new_tracker_current_beam = jnp.where(
+            should_switch_to_vertical,
+            current_player_beam,  # Lock onto player's beam when starting vertical
+            jnp.where(
+                in_vertical_phase,
+                tracker_current_beam,  # Keep tracking during vertical phase
+                -1  # Invalid beam during horizontal phase
+            )
+        )
 
         # Check if player changed beams and tracker can still change course
-        player_changed_beam = current_player_beam != tracker_current_target_beam
+        player_changed_beam = (new_tracker_current_beam != current_player_beam) & (new_tracker_current_beam >= 0)
         can_change_course = tracker_course_changes_remaining > 0
-        should_change_course = tracker_mask & player_changed_beam & can_change_course
+        should_change_course = in_vertical_phase & player_changed_beam & can_change_course
 
-        # Update target beam and target X when changing course
+        # Update tracked beam when changing course
         new_target_beam_tracker = jnp.where(
             should_change_course,
             current_player_beam,  # Follow player to new beam
-            tracker_current_target_beam  # Keep current target
-        )
-
-        # Calculate new target X position using beam curve at current Y
-        new_target_x = jnp.where(
-            should_change_course,
-            self._beam_curve_x(tracker_y, current_player_beam, self.constants.ENEMY_WIDTH),  # New beam curve position
-            tracker_target_x  # Keep current target X
+            new_tracker_current_beam  # Keep current tracked beam
         )
 
         # Decrease course changes remaining when used
@@ -2719,46 +2790,66 @@ class BeamRiderEnv(JaxEnvironment[BeamRiderState, BeamRiderObservation, BeamRide
             tracker_course_changes_remaining
         )
 
-        # Smooth horizontal movement toward target beam
-        distance_to_target_x = jnp.abs(tracker_x - new_target_x)
-        reached_target_beam = distance_to_target_x < 3.0  # Closer threshold for smoother movement
+        # Vertical phase movement (with horizontal adjustment to track beam)
+        target_beam_x_for_vertical = self.beam_positions[
+            jnp.clip(new_target_beam_tracker, 0, self.constants.NUM_BEAMS - 1)]
 
-        # Horizontal movement toward target beam
-        horizontal_direction = jnp.sign(new_target_x - tracker_x)
-        horizontal_speed = jnp.minimum(
-            self.constants.ORANGE_TRACKER_SPEED * 1.5,  # Max horizontal speed
-            distance_to_target_x * 0.3  # Slow down when getting close
+        # Calculate movement for vertical phase
+        distance_to_beam = jnp.abs(tracker_x - target_beam_x_for_vertical)
+        at_target_beam = distance_to_beam < 3.0
+
+        # Horizontal adjustment while moving down (only in vertical phase)
+        horizontal_adjustment = jnp.where(
+            in_vertical_phase & ~at_target_beam,
+            jnp.sign(target_beam_x_for_vertical - tracker_x) * jnp.minimum(
+                self.constants.ORANGE_TRACKER_SPEED * 1.2,  # Horizontal speed while tracking
+                distance_to_beam * 0.3
+            ),
+            0.0
         )
 
+        tracker_new_x_vertical = jnp.where(
+            in_vertical_phase,
+            tracker_x + horizontal_adjustment,
+            tracker_x
+        )
+
+        # Final X position
         tracker_new_x = jnp.where(
-            tracker_mask & ~reached_target_beam,
-            tracker_x + (horizontal_direction * horizontal_speed),
+            in_horizontal_phase,
+            tracker_new_x_horizontal,  # Just move straight across
             jnp.where(
-                tracker_mask & reached_target_beam,
-                new_target_x,  # Snap to exact position when very close
-                tracker_x  # No change for non-trackers
+                in_vertical_phase,
+                tracker_new_x_vertical,  # Track player beam while descending
+                tracker_x
             )
         )
 
-        # Vertical movement (always moving down, but faster when aligned)
-        vertical_speed = jnp.where(
-            tracker_mask & reached_target_beam,
-            self.constants.ORANGE_TRACKER_SPEED * 1.5,  # Faster when aligned with beam
-            self.constants.ORANGE_TRACKER_SPEED * 0.7  # Slower when moving to beam
-        )
-
+        # Y movement (only in vertical phase)
         tracker_new_y = jnp.where(
-            tracker_mask,
-            tracker_y + vertical_speed,
-            tracker_y
+            in_vertical_phase,
+            tracker_y + self.constants.ORANGE_TRACKER_SPEED,  # Move down at normal speed
+            tracker_y  # Stay at same Y during horizontal phase
         )
 
-        # Check if tracker has reached bottom
-        tracker_at_bottom = tracker_new_y >= (self.constants.SCREEN_HEIGHT - self.constants.ENEMY_HEIGHT)
+        # Apply beam curve when moving vertically and aligned with beam
+        tracker_beam_idx = jnp.clip(new_target_beam_tracker, 0, self.constants.NUM_BEAMS - 1)
+        tracker_curved_x = self._beam_curve_x(tracker_new_y, tracker_beam_idx, self.constants.ENEMY_WIDTH)
 
-        # Don't move if at bottom
-        tracker_new_x = jnp.where(tracker_mask & tracker_at_bottom, tracker_x, tracker_new_x)
-        tracker_new_y = jnp.where(tracker_mask & tracker_at_bottom, tracker_y, tracker_new_y)
+        # Use curved position only when in vertical phase and at target beam
+        tracker_new_x = jnp.where(
+            in_vertical_phase & at_target_beam & (new_target_beam_tracker >= 0),
+            tracker_curved_x,
+            tracker_new_x
+        )
+
+        # Check if tracker has reached bottom (they should disappear here)
+        tracker_at_bottom = tracker_new_y >= self.constants.SCREEN_HEIGHT
+
+        # Deactivation conditions - include bottom and off-screen
+        tracker_off_screen = (tracker_new_x < -self.constants.ENEMY_WIDTH) | (
+                    tracker_new_x > self.constants.SCREEN_WIDTH)
+        tracker_active = (enemies[:, 3] == 1) & ~tracker_at_bottom & ~tracker_off_screen
 
         # Blue Chargers:
         charger_mask = enemy_types == self.constants.ENEMY_TYPE_BLUE_CHARGER
@@ -2769,7 +2860,6 @@ class BeamRiderEnv(JaxEnvironment[BeamRiderState, BeamRiderObservation, BeamRide
 
         # Check if charger has reached or passed bottom position
         charger_reached_bottom = enemies[:, 1] >= bottom_position
-
 
         # If speed is positive, move down. If speed is negative (deflected), move up.
         charger_new_y = jnp.where(
@@ -2880,16 +2970,16 @@ class BeamRiderEnv(JaxEnvironment[BeamRiderState, BeamRiderObservation, BeamRide
         # Make vertical movers follow dotted beams (perspective curve)
         beam_idx_now = enemies[:, 2].astype(int)
 
+        # FIXED: Only apply beam curve to trackers when they're in vertical phase
+        tracker_in_vertical_phase = tracker_mask & (new_movement_phase == 1)
 
         vertical_mask = (
-                (regular_enemy_mask | charger_mask | tracker_mask | debris_mask)
-                & ~chirper_mask & ~bounce_mask & ~sentinel_mask & ~blocker_mask
-
-        )
+                                (regular_enemy_mask | charger_mask | debris_mask)  # Removed tracker_mask from here
+                                & ~chirper_mask & ~bounce_mask & ~sentinel_mask & ~blocker_mask
+                        ) | tracker_in_vertical_phase  # Add only vertical-phase trackers
 
         curved_x = self._beam_curve_x(new_y, beam_idx_now, self.constants.ENEMY_WIDTH)
         new_x = jnp.where(vertical_mask, curved_x, new_x)
-
         # =================================================================
         # Active State Calculations
         # =================================================================
@@ -2897,8 +2987,8 @@ class BeamRiderEnv(JaxEnvironment[BeamRiderState, BeamRiderObservation, BeamRide
         # Regular enemies: deactivate when they go below screen (brown debris + yellow rejuvenators)
         regular_active = (enemies[:, 3] == 1) & (regular_new_y < self.constants.SCREEN_HEIGHT)
 
-        # Orange trackers: deactivate when they reach bottom of screen
-        tracker_active = (enemies[:, 3] == 1) & ~tracker_at_bottom
+        # Orange trackers: deactivate when they reach bottom of screen or go off sides
+        tracker_active = (enemies[:, 3] == 1) & ~tracker_at_bottom & ~tracker_off_screen
 
         # Chirpers: deactivate when they go off either side
         chirper_active = (enemies[:, 3] == 1) & (chirper_new_x > -self.constants.ENEMY_WIDTH) & (
@@ -2968,8 +3058,6 @@ class BeamRiderEnv(JaxEnvironment[BeamRiderState, BeamRiderObservation, BeamRide
             )
         )
 
-
-
         # Update enemy array
         enemies = enemies.at[:, 0].set(new_x)  # Update x positions
         enemies = enemies.at[:, 1].set(new_y)  # Update y positions
@@ -2997,12 +3085,21 @@ class BeamRiderEnv(JaxEnvironment[BeamRiderState, BeamRiderObservation, BeamRide
 
         enemies = enemies.at[:, 9].set(new_linger_timer)  # Update linger timer
 
-        # Update target X for trackers (stored in column 10)
+        # Update target X for trackers (stored in column 10) - NOW STORING BEAM INDEX
         enemies = enemies.at[:, 10].set(
             jnp.where(
                 tracker_mask,
-                new_target_x,  # Update target X for trackers
+                new_target_beam_tracker,  # Store target beam index for trackers
                 enemies[:, 10]  # Keep existing values for others (including bounce craft spawn height)
+            )
+        )
+
+        # Update movement phase for trackers (column 12)
+        enemies = enemies.at[:, 12].set(
+            jnp.where(
+                tracker_mask,
+                new_movement_phase,  # Update movement phase for trackers
+                enemies[:, 12]
             )
         )
 
@@ -3025,7 +3122,6 @@ class BeamRiderEnv(JaxEnvironment[BeamRiderState, BeamRiderObservation, BeamRide
         )
 
         return state.replace(enemies=enemies)
-
     @partial(jax.jit, static_argnums=(0,))
     def _check_collisions(self, state: BeamRiderState) -> BeamRiderState:
         """Check for collisions between projectiles and enemies"""
