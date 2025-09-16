@@ -645,6 +645,8 @@ class JaxHumanCannonball(JaxEnvironment[HumanCannonballState, HumanCannonballObs
 
         return initial_obs, state
 
+    def render(self, state: HumanCannonballState) -> jnp.ndarray:
+        return self.renderer.render(state)
 
     @partial(jax.jit, static_argnums=(0,))
     def _get_observation(self, state: HumanCannonballState):
