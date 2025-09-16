@@ -649,7 +649,9 @@ def update_enemy_tanks(obstacles: Obstacle, player_tank: Tank, bullets: Bullet, 
         lateral_dx = perp_x * zig * zig_amp
         lateral_dy = perp_y * zig * zig_amp
 
-        fighter_advancing = jnp.logical_and(move_forward, is_fighter)
+        # Fighters should relentlessly advance toward the player until point-blank
+        # (don't use the generic move_forward/optimal-distance gating used by tanks)
+        fighter_advancing = jnp.logical_and(is_fighter, distance_to_player > FIGHTER_POINT_BLANK_DIST)
         fighter_next_x = enemy_x + dir_x * fighter_base_speed + lateral_dx
         fighter_next_y = enemy_y + dir_y * fighter_base_speed + lateral_dy
         new_x = jnp.where(fighter_advancing, fighter_next_x, new_x)
@@ -758,6 +760,10 @@ def update_enemy_tanks(obstacles: Obstacle, player_tank: Tank, bullets: Bullet, 
         fighter_fire_now = jnp.logical_and(fighter_point_blank, base_can_fire)
         new_angle = jnp.where(fighter_fire_now, new_angle + veer_angle, new_angle)
 
+        # If a fighter fires at point-blank, it instantly disappears (suicide attack).
+        # Mark the enemy slot as dead so it is removed next frame.
+        new_alive = jnp.where(fighter_fire_now, jnp.array(0, dtype=enemy_alive.dtype), enemy_alive)
+
         in_hold_phase = jnp.logical_and(tank_move_cond, jnp.logical_not(move_phase))
         should_fire = jnp.logical_or(jnp.logical_and(firing_condition, jnp.logical_not(waiting)), fighter_fire_now)
         should_fire = jnp.logical_or(should_fire, jnp.logical_and(in_hold_phase, base_can_fire))
@@ -769,6 +775,9 @@ def update_enemy_tanks(obstacles: Obstacle, player_tank: Tank, bullets: Bullet, 
         bullet_offset = 15.0
         spawn_bx = new_x + jnp.cos(new_angle) * bullet_offset
         spawn_by = new_y + jnp.sin(new_angle) * bullet_offset
+        # Guarantee fatal fighter shot: if fighter fired point-blank, place bullet at player's position
+        spawn_bx = jnp.where(fighter_fire_now, player_tank.x, spawn_bx)
+        spawn_by = jnp.where(fighter_fire_now, player_tank.y, spawn_by)
         aim_dx = player_tank.x - new_x
         aim_dy = player_tank.y - new_y
         aim_dist = jnp.sqrt(aim_dx * aim_dx + aim_dy * aim_dy) + 1e-6
@@ -780,8 +789,8 @@ def update_enemy_tanks(obstacles: Obstacle, player_tank: Tank, bullets: Bullet, 
         new_y = jnp.clip(new_y, BOUNDARY_MIN, BOUNDARY_MAX)
         new_angle = jnp.arctan2(jnp.sin(new_angle), jnp.cos(new_angle))
 
-        return (new_x, new_y, new_angle, enemy_alive, new_cooldown, new_state,
-                new_target_angle, new_state_timer, should_fire, spawn_bx, spawn_by, aim_vx, aim_vy)
+        return (new_x, new_y, new_angle, new_alive, new_cooldown, new_state,
+            new_target_angle, new_state_timer, should_fire, spawn_bx, spawn_by, aim_vx, aim_vy)
 
     obstacles_count = obstacles.x.shape[0]
     idxs = jnp.arange(obstacles_count)
