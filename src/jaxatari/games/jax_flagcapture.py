@@ -96,7 +96,6 @@ class FlagCaptureObservation(NamedTuple):
 class FlagCaptureInfo(NamedTuple):
     time: chex.Array
     score: chex.Array
-    all_rewards: chex.Array
 
 
 class JaxFlagCapture(JaxEnvironment[FlagCaptureState, FlagCaptureObservation, FlagCaptureInfo,FlagCaptureConstants]):
@@ -556,7 +555,6 @@ class JaxFlagCapture(JaxEnvironment[FlagCaptureState, FlagCaptureObservation, Fl
         Returns additional information about the game state.
         Args:
             state: The current game state.
-            all_rewards: The rewards received after taking the action.
         Returns:
             FlagCaptureInfo: Additional information about the game state.
         """
