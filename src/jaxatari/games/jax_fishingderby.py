@@ -199,9 +199,17 @@ class FishingDerby(JaxEnvironment):
             score=state.p1.score
         )
 
+    @partial(jax.jit, static_argnums=(0,))
     def _get_reward(self, old_state: GameState, new_state: GameState) -> chex.Array:
+        """Return scalar reward for player 1 (the main player)."""
         p1_delta = new_state.p1.score - old_state.p1.score
-        p2_delta = new_state.p2.score - old_state.p2.score  # Always 0, but enables multi-reward
+        return p1_delta
+
+    @partial(jax.jit, static_argnums=(0,))
+    def _get_all_rewards(self, old_state: GameState, new_state: GameState) -> chex.Array:
+        """Return all rewards as an array (for multi-reward scenarios)."""
+        p1_delta = new_state.p1.score - old_state.p1.score
+        p2_delta = new_state.p2.score - old_state.p2.score
         return jnp.array([p1_delta, p2_delta])
 
     def _get_done(self, state: GameState) -> bool:
@@ -212,8 +220,10 @@ class FishingDerby(JaxEnvironment):
             p1_score=state.p1.score,
             p2_score=state.p2.score,
             time=state.time,
-            all_rewards=self._get_reward(state, state)  # Add all_rewards to info
+            all_rewards=self._get_all_rewards(state, state)  # Use _get_all_rewards for info
         )
+
+
     @partial(jax.jit, static_argnums=(0,))
     def step(self, state: GameState, action: int) -> Tuple[
         FishingDerbyObservation, GameState, chex.Array, bool, FishingDerbyInfo]:
