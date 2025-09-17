@@ -34,10 +34,12 @@ class BoxingState(NamedTuple):
     enemy_target_y: chex.Array
     enemy_target_timer: chex.Array
     step_counter: chex.Array
-    enemy_dir: chex.Array
     enemy_dir_x: chex.Array
     enemy_dir_y: chex.Array
     enemy_knockback_timer: chex.Array
+    player_knockback_timer: chex.Array
+    player_knockback_tick: chex.Array
+    enemy_knockback_tick: chex.Array
     enemy_mode: chex.Array
     enemy_direction_timer: chex.Array
     enemy_punch_cooldown: chex.Array
@@ -96,13 +98,15 @@ class JaxBoxing(JaxEnvironment[BoxingState, BoxingObservation, BoxingInfo, Boxin
             enemy_target_y = jnp.array(0),
             enemy_target_timer = jnp.array(0),
             step_counter=jnp.array(0),
-            enemy_dir=jnp.array(1),
             enemy_knockback_timer=jnp.array(0),
             enemy_mode=jnp.array(0),
             enemy_direction_timer=jnp.array(0),
             enemy_dir_x=jnp.array(0),
             enemy_dir_y=jnp.array(0),
             enemy_punch_cooldown=jnp.array(0),
+            enemy_knockback_tick=jnp.array(0),
+            player_knockback_timer=jnp.array(0),
+            player_knockback_tick=jnp.array(0),
         )
 
         initial_obs = self._get_observation(state)
@@ -114,6 +118,28 @@ class JaxBoxing(JaxEnvironment[BoxingState, BoxingObservation, BoxingInfo, Boxin
         up = (action == Action.UP) | (action == Action.UPLEFT) | (action == Action.UPRIGHT)
         down = (action == Action.DOWN) | (action == Action.DOWNLEFT) | (action == Action.DOWNRIGHT)
         fire = (action == Action.FIRE)
+        def apply_knockback(state):
+            knockback_active = jnp.where(state.player_knockback_timer > 0, True, False)
+            new_knockback_tick = (state.player_knockback_tick + 1) % 2
+            jax.debug.print("tick:{}", new_knockback_tick)
+            knockback_dx = jnp.where(knockback_active & (new_knockback_tick == 0),
+                                 -1, 0)
+            new_player_x = jnp.clip(state.player_x + knockback_dx,
+                               self.consts.x_boundaries[0],
+                               self.consts.x_boundaries[1])
+            new_knockback_timer = jnp.maximum(state.player_knockback_timer - 1, 0)
+            return state._replace(player_x=new_player_x,player_knockback_timer=new_knockback_timer,player_knockback_tick=new_knockback_tick)
+
+        state = jax.lax.cond(
+            state.player_knockback_timer > 0,
+            apply_knockback,
+            lambda s: s,
+            operand=state
+        )
+        jax.debug.print("knockback_timer:{}", state.player_knockback_timer)
+
+
+
         punch_time = jnp.maximum(state.punch_timer - 1, 0)
         punch_time = jnp.where(fire & (punch_time == 0), 20, punch_time)
         left_hit_y = state.player_y - 15
@@ -147,25 +173,37 @@ class JaxBoxing(JaxEnvironment[BoxingState, BoxingObservation, BoxingInfo, Boxin
             return jax.lax.cond(hit_direction, hit_collision_left_swing, hit_collision_right_swing)
 
         hit = jnp.where(check_at_correct_punch_point,check_collision(hit_left), False)
-        def apply_knockback():
-           return 10,2
-        new_knockback_timer, new_knockback_dir = jax.lax.cond(
-            hit,
-            apply_knockback,
-            lambda: (state.enemy_knockback_timer, state.enemy_dir),
-        )
-        knockback_active = new_knockback_timer > 0
-        knockback_dx = jnp.where(knockback_active, new_knockback_dir * 2, 0)
-        new_enemy_x = jnp.clip(state.enemy_x + knockback_dx, self.consts.x_boundaries[0], self.consts.x_boundaries[1])
-        new_knockback_timer = jnp.maximum(new_knockback_timer - 1, 0)
+        new_enemy_knockback_timer = jnp.where(hit, 32, state.enemy_knockback_timer)
+
 
         player_score = jnp.where(hit, state.player_score + 1, state.player_score)
 
-        return state._replace(player_x=player_x, player_y=player_y, punch_timer=punch_time, hit_left=hit_left, player_score=player_score, enemy_x = new_enemy_x, enemy_knockback_timer=new_knockback_timer, enemy_dir=new_knockback_dir)
+        return state._replace(
+            player_x=player_x,
+            player_y=player_y,
+            punch_timer=punch_time,
+            hit_left=hit_left,
+            player_score=player_score,
+            enemy_knockback_timer=new_enemy_knockback_timer,
+        )
 
     def enemy_step(self, state, rng_key=None):
         step_size = 1
-
+        def knockback_mode(state):
+            knockback_active = state.enemy_knockback_timer > 0
+            new_knockback_tick = (state.enemy_knockback_tick + 1) % 2
+            knockback_dx = jnp.where(knockback_active & (new_knockback_tick == 0),
+                                     1, 0)
+            new_enemy_x = jnp.clip(state.enemy_x + knockback_dx,
+                               self.consts.x_boundaries[0],
+                               self.consts.x_boundaries[1])
+            new_knockback_timer = jnp.maximum(state.enemy_knockback_timer - 1, 0)
+            return state._replace(
+                enemy_x=new_enemy_x,
+                enemy_knockback_timer=new_knockback_timer,
+                enemy_knockback_tick=new_knockback_tick,
+                enemy_mode=0,
+            )
         def chase_mode(state):
             # Move toward player to align
             dy = state.player_y - state.enemy_y
@@ -224,8 +262,6 @@ class JaxBoxing(JaxEnvironment[BoxingState, BoxingObservation, BoxingInfo, Boxin
                 def hit_collision_left_swing():
                     hit_x = state.enemy_x - 18
                     hit_y = state.enemy_y + 15
-                    jax.debug.print("hit_x - player_x:{}", hit_x - state.player_x)
-                    jax.debug.print("hit_y - player_y:{}", hit_y - state.player_y)
                     hit = (jnp.abs(hit_x - state.player_x) < 10) & (jnp.abs(hit_y - state.player_y) < 8)
                     return hit
 
@@ -239,6 +275,8 @@ class JaxBoxing(JaxEnvironment[BoxingState, BoxingObservation, BoxingInfo, Boxin
 
             check_at_correct_punch_point = enemy_punch_timer == 10
             hit = jnp.where(check_at_correct_punch_point, check_collision(enemy_hit_left), False)
+
+            new_player_knockback_timer = jnp.where(hit, 32, state.player_knockback_timer)
 
             new_enemy_score = jnp.where(hit, state.enemy_score + 1, state.enemy_score)
 
@@ -256,9 +294,21 @@ class JaxBoxing(JaxEnvironment[BoxingState, BoxingObservation, BoxingInfo, Boxin
                                   enemy_hit_left=enemy_hit_left,
                                   enemy_punch_timer=enemy_punch_timer,
                                   enemy_punch_cooldown=cooldown_timer,
-                                  enemy_score=new_enemy_score)
+                                  enemy_score=new_enemy_score,
+                                  player_knockback_timer=new_player_knockback_timer,
+                                  )
         rng_key = rng_key or jax.random.PRNGKey(state.step_counter)
-        state = jax.lax.cond(state.enemy_mode == 0,lambda _: chase_mode(state), lambda _: attack_mode(state, rng_key),operand=None)
+        state = jax.lax.cond(
+            state.enemy_knockback_timer > 0,
+            lambda _: knockback_mode(state),
+            lambda _: jax.lax.cond(
+                state.enemy_mode == 0,
+                lambda _: chase_mode(state),
+                lambda _: attack_mode(state, rng_key),
+                operand=None
+            ),
+            operand=None
+        )
         return state
 
 
@@ -282,13 +332,15 @@ class JaxBoxing(JaxEnvironment[BoxingState, BoxingObservation, BoxingInfo, Boxin
                                 enemy_target_y=state.enemy_target_y,
                                 enemy_target_timer=state.enemy_target_timer,
                                 step_counter=state.step_counter + 1,
-                                enemy_dir = state.enemy_dir,
                                 enemy_knockback_timer=state.enemy_knockback_timer,
                                 enemy_mode=state.enemy_mode,
                                 enemy_direction_timer=state.enemy_direction_timer,
                                 enemy_dir_y=state.enemy_dir_y,
                                 enemy_dir_x=state.enemy_dir_x,
                                 enemy_punch_cooldown=state.enemy_punch_cooldown,
+                                enemy_knockback_tick=state.enemy_knockback_tick,
+                                player_knockback_timer=state.player_knockback_timer,
+                                player_knockback_tick=state.player_knockback_tick,
                                 )
         done = self._get_done(new_state)
         env_reward = self._get_reward(state, new_state)
