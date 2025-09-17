@@ -52,8 +52,7 @@ from jaxatari.environment import JaxEnvironment, JAXAtariAction as Action
 from jaxatari import spaces
 from jaxatari.games.videopinball_constants import (
     BallMovement,
-    Ball_State,
-    Flippers_State,
+    EntityState,
     HitPointSelector,
     SceneObject,
     VideoPinballInfo,
@@ -416,29 +415,76 @@ class JaxVideoPinball(
     @partial(jax.jit, static_argnums=(0,))
     def _get_observation(self, state: VideoPinballState):
 
-        ball = Ball_State(
-            pos_x=state.ball_x,
-            pos_y=state.ball_y,
-            vel_x=state.ball_vel_x,
-            vel_y=state.ball_vel_y,
-            direction=state.ball_direction,
+        ball = EntityState(
+            x=state.ball_x.astype(jnp.int32),
+            y=state.ball_y.astype(jnp.int32),
+            w=jnp.array(2),
+            h=jnp.array(4),
+            active=jnp.array(1),
         )
 
-        flipper_states = Flippers_State(
-            left_flipper_state=state.left_flipper_angle,
-            right_flipper_state=state.right_flipper_angle,
+        # There are two scene objects for every flipper angle
+        left_flipper_bounding_boxes = (
+            FLIPPERS[state.left_flipper_angle], FLIPPERS[state.left_flipper_angle + 4]
         )
+        right_flipper_bounding_boxes = (
+            FLIPPERS[state.right_flipper_angle + 8], FLIPPERS[state.right_flipper_angle + 12]
+        )
+        left_flipper_x = jnp.min(jnp.array([left_flipper_bounding_boxes[0][2], left_flipper_bounding_boxes[1][2]]))
+        left_flipper_w = jnp.max(jnp.array([
+            left_flipper_bounding_boxes[0][2] + left_flipper_bounding_boxes[0][0],
+            left_flipper_bounding_boxes[1][2] + left_flipper_bounding_boxes[1][0],
+        ])) - left_flipper_x
+        left_flipper_y = jnp.min(jnp.array([left_flipper_bounding_boxes[0][3], left_flipper_bounding_boxes[1][3]]))
+        left_flipper_h = jnp.max(jnp.array([
+            left_flipper_bounding_boxes[0][3] + left_flipper_bounding_boxes[0][1],
+            left_flipper_bounding_boxes[1][3] + left_flipper_bounding_boxes[1][1],
+        ])) - left_flipper_y
+
+        right_flipper_x = jnp.min(jnp.array([right_flipper_bounding_boxes[0][2], right_flipper_bounding_boxes[1][2]]))
+        right_flipper_w = jnp.max(jnp.array([
+            right_flipper_bounding_boxes[0][2] + right_flipper_bounding_boxes[0][0],
+            right_flipper_bounding_boxes[1][2] + right_flipper_bounding_boxes[1][0],
+        ])) - right_flipper_x
+        right_flipper_y = jnp.min(jnp.array([right_flipper_bounding_boxes[0][3], right_flipper_bounding_boxes[1][3]]))
+        right_flipper_h = jnp.max(jnp.array([
+            right_flipper_bounding_boxes[0][3] + right_flipper_bounding_boxes[0][1],
+            right_flipper_bounding_boxes[1][3] + right_flipper_bounding_boxes[1][1],
+        ])) - right_flipper_y
+
+        left_flipper = EntityState(
+            x=left_flipper_x,
+            y=left_flipper_y,
+            w=left_flipper_w,
+            h=left_flipper_h,
+            active=jnp.array(1),
+        )
+        right_flipper = EntityState(
+            x=right_flipper_x,
+            y=right_flipper_y,
+            w=right_flipper_w,
+            h=right_flipper_h,
+            active=jnp.array(1),
+        )
+
+        plunger = ...
+        special_lit_up_target = ...
+        left_lit_up_target = ...
+        middle_lit_up_target = ...
+        right_lit_up_target = ...
+        left_tilt_mode_hole_plug = ...
+        right_tilt_mode_hole_plug = ...
 
         return VideoPinballObservation(
             ball=ball,
-            flipper_states=flipper_states,
-            spinner_states=jnp.remainder(state.step_counter, 8),
-            plunger_position=state.plunger_position,
+            flippers=(left_flipper, right_flipper),
+            plunger=plunger,
+            targets=(special_lit_up_target, left_lit_up_target, middle_lit_up_target, right_lit_up_target),
+            tilt_mode_hold_plugs=(left_tilt_mode_hole_plug, right_tilt_mode_hole_plug),
             score=state.score,
             lives=state.lives,
-            bumper_multiplier=state.bumper_multiplier,
-            active_targets=state.active_targets,
             atari_symbols=state.atari_symbols,
+            bumper_multiplier=state.bumper_multiplier,
             rollover_counter=state.rollover_counter,
             color_cycling=state.color_cycling,
             tilt_mode_active=state.tilt_mode_active,
@@ -485,64 +531,68 @@ class JaxVideoPinball(
             {
                 "ball": spaces.Dict(
                     {
-                        "pos_x": spaces.Box(
-                            low=0, high=160, shape=(), dtype=jnp.float32
+                        "x": spaces.Box(
+                            low=0, high=160, shape=(), dtype=jnp.int32
                         ),
-                        "pos_y": spaces.Box(
-                            low=0, high=210, shape=(), dtype=jnp.float32
+                        "y": spaces.Box(
+                            low=0, high=210, shape=(), dtype=jnp.int32
                         ),
-                        "vel_x": spaces.Box(
-                            low=0,
-                            high=self.consts.BALL_MAX_SPEED + 1,
-                            shape=(),
-                            dtype=jnp.float32,
+                        "w": spaces.Box(
+                            low=0, high=160, shape=(), dtype=jnp.int32
                         ),
-                        "vel_y": spaces.Box(
-                            low=0,
-                            high=self.consts.BALL_MAX_SPEED + 1,
-                            shape=(),
-                            dtype=jnp.float32,
+                        "h": spaces.Box(
+                            low=0, high=210, shape=(), dtype=jnp.int32
                         ),
-                        "direction": spaces.Box(
-                            low=0, high=4, shape=(), dtype=jnp.int32
+                        "active": spaces.Box(
+                            low=0, high=1, shape=(), dtype=jnp.int32
                         ),
                     }
                 ),
-                "flipper_states": spaces.Dict(
+                "flippers": spaces.Box(low=0, high=210, shape=(2, 5), dtype=jnp.int32),
+                "plunger": spaces.Dict(
                     {
-                        "left_flipper_state": spaces.Box(
-                            low=0, high=4, shape=(), dtype=jnp.int32
+                        "x": spaces.Box(
+                            low=0, high=160, shape=(), dtype=jnp.int32
                         ),
-                        "right_flipper_state": spaces.Box(
-                            low=0, high=4, shape=(), dtype=jnp.int32
+                        "y": spaces.Box(
+                            low=0, high=210, shape=(), dtype=jnp.int32
+                        ),
+                        "w": spaces.Box(
+                            low=0, high=160, shape=(), dtype=jnp.int32
+                        ),
+                        "h": spaces.Box(
+                            low=0, high=210, shape=(), dtype=jnp.int32
+                        ),
+                        "active": spaces.Box(
+                            low=0, high=1, shape=(), dtype=jnp.int32
                         ),
                     }
                 ),
-                "spinner_state": spaces.Box(low=0, high=5, shape=(), dtype=jnp.int32),
-                "plunger_position": spaces.Box(
-                    low=0,
-                    high=self.consts.PLUNGER_MAX_POSITION,
-                    shape=(),
-                    dtype=jnp.int32,
+                "targets": spaces.Box(low=0, high=210, shape=(4, 5), dtype=jnp.int32),
+                "title_mode_hole_plugs": spaces.Box(low=0, high=210, shape=(2, 5), dtype=jnp.int32),
+                "score": spaces.Box(
+                    low=0, high=999999, shape=(), dtype=jnp.int32
                 ),
-                "score": spaces.Box(low=0, high=10000, shape=(), dtype=jnp.int32),
-                "lives": spaces.Box(low=0, high=5, shape=(), dtype=jnp.int32),
+                "lives": spaces.Box(
+                    low=0, high=4, shape=(), dtype=jnp.int32
+                ),
+                "atari_symbols": spaces.Box(
+                    low=0, high=4, shape=(), dtype=jnp.int32
+                ),
                 "bumper_multiplier": spaces.Box(
-                    low=1, high=9, shape=(), dtype=jnp.int32
+                    low=0, high=9, shape=(), dtype=jnp.int32
                 ),
-                "active_targets": spaces.Box(
-                    low=0, high=1, shape=(4,), dtype=jnp.int32
-                ),
-                "atari_symbols": spaces.Box(low=0, high=5, shape=(), dtype=jnp.int32),
                 "rollover_counter": spaces.Box(
-                    low=1, high=10, shape=(), dtype=jnp.int32
+                    low=0, high=9, shape=(), dtype=jnp.int32
                 ),
-                "color_cycling": spaces.Box(low=0, high=9, shape=(), dtype=jnp.int32),
+                "color_cycling": spaces.Box(
+                    low=0, high=30, shape=(), dtype=jnp.int32
+                ),
                 "tilt_mode_active": spaces.Box(
-                    low=0, high=2, shape=(), dtype=jnp.int32
+                    low=0, high=1, shape=(), dtype=jnp.int32
                 ),
             }
-        )
+        )    
 
     def image_space(self) -> spaces.Box:
         return spaces.Box(low=0, high=255, shape=(210, 160, 3), dtype=jnp.uint8)

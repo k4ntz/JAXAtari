@@ -92,30 +92,28 @@ class VideoPinballState(NamedTuple):
     # obs_stack: chex.ArrayTree     What is this for? Pong doesnt have this right?
 
 
-class Ball_State(NamedTuple):
-    pos_x: chex.Array
-    pos_y: chex.Array
-    vel_x: chex.Array
-    vel_y: chex.Array
-    direction: chex.Array
+class EntityState(NamedTuple):
+    x: chex.Array  # x position of the entity (upper left)
+    y: chex.Array  # y position of the entity (upper left)
+    w: chex.Array  # width of the entity
+    h: chex.Array  # height of the entity
+    active: chex.Array  # whether this entity is currently active
 
-class Flippers_State(NamedTuple):
-    left_flipper_state: chex.Array
-    right_flipper_state: chex.Array
 
 class VideoPinballObservation(NamedTuple):
-    ball: Ball_State
-    flipper_states: Flippers_State
-    spinner_states: chex.Array  # spinner states array
-    plunger_position: chex.Array  # plunger position
+    ball: EntityState
+    flippers: tuple[EntityState, EntityState]
+    plunger: EntityState
+    targets: tuple[EntityState, EntityState, EntityState, EntityState]
+    tilt_mode_hole_plugs: tuple[EntityState, EntityState]
     score: chex.Array
     lives: chex.Array
-    bumper_multiplier: chex.Array
-    active_targets: chex.Array
     atari_symbols: chex.Array
+    bumper_multiplier: chex.Array
     rollover_counter: chex.Array
     color_cycling: chex.Array
     tilt_mode_active: chex.Array
+
 
 class VideoPinballInfo(NamedTuple):
     time: chex.Array
@@ -128,6 +126,7 @@ class VideoPinballInfo(NamedTuple):
     respawn_timer: chex.Array
     tilt_counter: chex.Array
     all_rewards: chex.Array
+
 
 # TODO: This Constants class is required for the game to run with the new environment
 # TODO: We should add all of our constants into this class and to do that we must add type hints...
