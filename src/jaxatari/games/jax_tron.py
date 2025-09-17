@@ -70,6 +70,12 @@ class TronConstants(NamedTuple):
     bord_left: int = 8  # Width of the left purple band
     bord_right: int = 8  # Width of the right purple band
 
+    # doors
+    max_doors: int = 12  # 4 top, 4 bottom, 2 left, 2 right
+    door_w: int = 8  # door width (matche sidebar width)
+    door_h: int = 16  # door height (matches top/bottom bar height)
+    door_respawn_cooldown: int = 120  # frames until a closed door may spawn again
+
     # Colors (RGBA, 0–255 each)
     rgba_purple: Tuple[int, int, int, int] = (93, 61, 191, 255)  # Border color
     rgba_green: Tuple[int, int, int, int] = (82, 121, 42, 255)  # Scorebar color
@@ -79,6 +85,13 @@ class TronConstants(NamedTuple):
         131,
         255,
     )  # Gamefield background color
+    rgba_door_spawn: Tuple[int, int, int, int] = (210, 81, 80, 255)  # visible door
+    rgba_door_locked: Tuple[int, int, int, int] = (
+        151,
+        163,
+        67,
+        255,
+    )  # locked open (teleportable)
 
 
 class Rect(NamedTuple):
@@ -117,6 +130,20 @@ class Discs(NamedTuple):
     phase: Array  # (D,) int32, 0=idle/unused, 1=outbound, 2=returning (player only)
 
 
+class Doors(NamedTuple):
+    x: Array  # int 32
+    y: Array  # int32
+    w: Array  # int32
+    h: Array  # int32
+
+    is_spawned: Array  # bool: visible entrance
+    is_locked_open: Array  # bool: color change / teleportable
+    spawn_lockdown: Array  # int32 frames until this slot can spawn again
+
+    side: Array  # int32: 0=top, 1=bottom, 2=left, 3=right
+    pair: Array  # int32: index of the opposite door for teleporting
+
+
 class TronState(NamedTuple):
     score: Array
     player: Player  # N = 1
@@ -127,6 +154,7 @@ class TronState(NamedTuple):
     aim_dy: Array  # remember last movement direction in Y-dir
     discs: Discs
     fire_down_prev: Array  # shape (), bool
+    doors: Doors
 
 
 class EntityPosition(NamedTuple):
@@ -295,8 +323,8 @@ class _DiscOps:
         y_next = jnp.where(is_active, discs.y + velocity_y, discs.y)
 
         # clamp position to stay within the screen boundaries
-        x_next = jnp.clip(x_next, min_x, max_x)
-        y_next = jnp.clip(y_next, min_y, max_y)
+        x_next = jnp.clip(x_next, min_x, max_x - discs.w)
+        y_next = jnp.clip(y_next, min_y, max_y - discs.h)
         return x_next, y_next
 
     @staticmethod
@@ -365,6 +393,69 @@ class _ArenaOps:
         # inner play rectangle = area inside the purple bars
         inner = Rect(left.x + left.w, left.y, right.x - (left.x + left.w), inner_h)
         return game, score, (top, bottom, left, right), inner
+
+    @staticmethod
+    def _place_doors_evenly(start: int, length: int, n: int, size: int) -> list[int]:
+        """
+        Place n doors of `size` evenly within [start, start+length)
+        Returns the list of left/top coordinates for door
+        """
+        # split free space into (n+1) gaps. one on the left, (n-1) between the slots and
+        # one on the right
+        gap = (length - n * size) // (n + 1)
+        return [start + gap + i * (size + gap) for i in range(n)]
+
+    @staticmethod
+    def make_initial_doors(c: TronConstants) -> Doors:
+        # Use arena rects (ints)
+        game, score, (top, bottom, left, right), inner = _ArenaOps.compute_arena(c)
+
+        door_w, door_h = c.door_w, c.door_h
+
+        # Top/bottom: 4 each, doors sit ON the purple border
+        top_xs = _ArenaOps._place_doors_evenly(top.x, top.w, 4, door_w)
+        bottom_xs = _ArenaOps._place_doors_evenly(bottom.x, bottom.w, 4, door_w)
+        top_ys, bottom_ys = [top.y] * 4, [bottom.y] * 4
+
+        # Left/right: 2 each, vary along vertical span; x fixed at bars x
+        left_ys = _ArenaOps._place_doors_evenly(left.y, left.h, 2, door_h)
+        right_ys = _ArenaOps._place_doors_evenly(right.y, right.h, 2, door_h)
+        left_xs, right_xs = [left.x] * 2, [right.x] * 2
+
+        # Concatenate in order: top(4), bottom(4), left(2), right(2)
+        xs = top_xs + bottom_xs + left_xs + right_xs
+        ys = top_ys + bottom_ys + left_ys + right_ys
+        ws = [door_w] * c.max_doors
+        hs = [door_h] * c.max_doors
+
+        # Sides
+        # ids 0 - 3 for the sides
+        sides = [0] * 4 + [1] * 4 + [2] * 2 + [3] * 2
+
+        # Pair mapping (teleport targets): Top i <-> Bottom i, Left i <-> Right i
+        # Indices: 0..3 top, 4..7 bottom, 8..9 left, 10..11 right
+        pairs = [4 + i for i in range(4)] + [i for i in range(4)] + [10, 11] + [8, 9]
+
+        # Initial state: show doors; not locked; no cooldown
+        is_spawned = [True] * c.max_doors
+        is_locked_open = [False] * c.max_doors
+        lockdown = [0] * c.max_doors
+
+        # Convert to JAX arrays
+        to_i32 = lambda L: jnp.asarray(L, dtype=jnp.int32)
+        to_b = lambda L: jnp.asarray(L, dtype=jnp.bool_)
+
+        return Doors(
+            x=to_i32(xs),
+            y=to_i32(ys),
+            w=to_i32(ws),
+            h=to_i32(hs),
+            is_spawned=to_b(is_spawned),
+            is_locked_open=to_b(is_locked_open),
+            spawn_lockdown=to_i32(lockdown),
+            side=to_i32(sides),
+            pair=to_i32(pairs),
+        )
 
 
 Actor = TypeVar("Actor", Player, Discs)
@@ -495,6 +586,23 @@ class TronRenderer(JAXGameRenderer):
             raster, right.x, right.y, _solid_sprite(right.h, right.w, c.rgba_purple)
         )
 
+        # door sprites (same shape for all sides: 16x8)
+        door_spawn_sprite = _solid_sprite(c.door_h, c.door_w, c.rgba_door_spawn)
+        door_locked_sprite = _solid_sprite(c.door_h, c.door_w, c.rgba_door_locked)
+
+        def render_door(i, ras):
+            doors = state.doors
+            active = doors.is_spawned[i]
+            locked = doors.is_locked_open[i]
+
+            def draw(r):
+                spr = jax.lax.select(locked, door_locked_sprite, door_spawn_sprite)
+                return jr.render_at(r, doors.x[i], doors.y[i], spr)
+
+            return jax.lax.cond(active, draw, lambda r: r, ras)
+
+        raster = jax.lax.fori_loop(0, c.max_doors, render_door, raster)
+
         # render player
         player_color = jnp.array([0, 0, 255, 255], dtype=jnp.uint8)
         player_box_sprite = jnp.broadcast_to(
@@ -615,6 +723,9 @@ class JaxTron(JaxEnvironment[TronState, TronObservation, TronInfo, TronConstants
         self.inner_max_x = jnp.int32(self.inner_rect.x + self.inner_rect.w)
         self.inner_max_y = jnp.int32(self.inner_rect.y + self.inner_rect.h)
 
+        # Prebuild initial doors (geometry + default state)
+        self.initial_doors = _ArenaOps.make_initial_doors(self.consts)
+
     def reset(self, key: random.PRNGKey = None) -> Tuple[TronObservation, TronState]:
         def _get_centered_player(consts: TronConstants) -> Player:
             screen_w, screen_h = consts.screen_width, consts.screen_height
@@ -657,6 +768,7 @@ class JaxTron(JaxEnvironment[TronState, TronObservation, TronInfo, TronConstants
             aim_dy=jnp.zeros((), dtype=jnp.int32),
             discs=_get_empty_discs(self.consts),
             fire_down_prev=jnp.array(False),
+            doors=self.initial_doors,
         )
         obs = self._get_observation(new_state)
         return obs, new_state
