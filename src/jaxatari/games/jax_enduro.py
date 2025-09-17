@@ -595,19 +595,8 @@ class JaxEnduro(JaxEnvironment[EnduroGameState, EnduroObservation, EnduroInfo, E
         new_cooldown = jnp.maximum(0, state.cooldown - 1)
         is_cooldown_active = state.cooldown > 0
 
-        # ===== Track position =====
-        directions = state.whole_track[:, 0]
-        track_starts = state.whole_track[:, 1]
-        segment_index = jnp.searchsorted(track_starts, state.distance, side='right') - 1
-        curvature = directions[segment_index]
-
-        # ===== Weather position =====
-        # determine the position in the weather array
-        cycled_time = (state.step_count / self.config.frame_rate) % self.config.day_cycle_time
-        new_weather_index = jnp.searchsorted(
-            self.config.weather_starts_s,
-            cycled_time,
-            side='right')
+        # ===== TRACK AND WEATHER POSITION =====
+        curvature, new_weather_index = self._step_get_curvature_and_weather(state)
 
         # ===== CAR HANDLING =====
         new_speed, new_x_abs, new_y_abs = self._step_car_handling(
@@ -617,139 +606,37 @@ class JaxEnduro(JaxEnvironment[EnduroGameState, EnduroObservation, EnduroInfo, E
             curvature=curvature
         )
 
-        # ====== TRACK ======
-        # 1. Draw the top of the track based on the car position.
-        #    The track moves in the opposite position of the car.
-        new_track_top_x = (self.config.track_x_start + self.config.player_x_start - new_x_abs).astype(jnp.int32)
-
-        # 2. Define the target offset based on the curvature.
-        #    This is the value we want to eventually reach when the curve is fully curved.
-        target_offset = curvature * self.config.track_max_top_x_offset  # e.g., -1 * 50 = -50, or 0 * 50 = 0
-
-        # 3. Calculate the difference (the "offset") between where we are and where we want to be in terms of curvature
-        current_offset = target_offset - state.track_top_x_curve_offset
-
-        # 4. Limit the change per step. The change cannot be faster than curve_rate.
-        #    jnp.clip is perfect here. This lets the offset move towards the target without overshooting.
-        # Calculate speed-dependent curve rate multiplier
-        # At min_speed (6): multiplier = 1 (current rate)
-        # At max_speed (120): multiplier = 30 (30x faster)
-        speed_multiplier = 1 + (new_speed - self.config.min_speed) / (
-                self.config.max_speed - self.config.min_speed) * 29
-        speed_adjusted_curve_rate = self.config.curve_rate * speed_multiplier
-        offset_change = jnp.clip(current_offset, -speed_adjusted_curve_rate, speed_adjusted_curve_rate)
-
-        # 5. Apply the calculated change to the current offset.
-        new_top_x_curve_offset = state.track_top_x_curve_offset + offset_change
-
-        # 6. Generate the new track with the top_x of the track and its offset
-        # They do not have the bumpers yet, but we also need the logical track boundaries for opponent spawning later
-        logical_left_xs, logical_right_xs = self._generate_viewable_track(new_track_top_x, new_top_x_curve_offset)
-
-        # 7. Add bumpers to the track
-        new_left_xs = self._add_track_bumpers(logical_left_xs, state, is_left_side=True)
-        new_right_xs = self._add_track_bumpers(logical_right_xs, state, is_left_side=False)
-
-        # ====== TRACK COLLISION ======
-        # 1. Check whether the player car collided with the track
-        collision_side = self._check_car_track_collision(
-            car_x_abs=new_x_abs.astype(jnp.int32),
-            car_y_abs=new_y_abs.astype(jnp.int32),
-            left_track_xs=new_left_xs,
-            right_track_xs=new_right_xs
-        )
-        collided_track = (collision_side != 0)
-
-        # 2. Calculate the speed with collision penalty.
-        new_speed = jnp.where(
-            collided_track,
-            # If collided, reduce speed.
-            new_speed - self.config.track_collision_speed_reduction_per_speed_unit * new_speed,
-            new_speed  # If not, keep the new speed.
-        )
-        # Ensure speed does not drop below the minimum value
-        new_speed = jnp.maximum(1.0, new_speed)  # Use maximum() to enforce a floor.
-
-        # 3. Kickback
-        # The kickback direction is simply the inverse of `collision_side`.
-        track_kickback_direction = -collision_side
-        # add a special treatment for cooldown where kickback is minimal
-        kickback_pixels = jnp.where(is_cooldown_active, 1, self.config.track_collision_kickback_pixels)
-
-        new_x_abs = jnp.where(
-            collided_track,
-            # Apply the kickback based on the actual collision side.
-            new_x_abs + (kickback_pixels * track_kickback_direction),
-            new_x_abs  # If not collided, do nothing.
+        # ===== TRACK HANDLING =====
+        (new_speed, new_x_abs, new_cooldown_drift_direction,
+         new_left_xs, new_right_xs, logical_left_xs, logical_right_xs,
+         new_track_top_x, new_top_x_curve_offset) = self._step_track_handling(
+            state=state,
+            new_speed=new_speed,
+            new_x_abs=new_x_abs,
+            new_y_abs=new_y_abs,
+            curvature=curvature,
+            is_cooldown_active=is_cooldown_active
         )
 
-        # 4. Handle cooldowns
-        new_cooldown_drift_direction = jnp.where(
-            collided_track,
-            # Change the cooldown drift direction if the car crashes into the track while in cooldown
-            state.cooldown_drift_direction * -1,
-            state.cooldown_drift_direction
+        # ===== OPPONENT MOVEMENT AND OVERTAKING =====
+        (new_opponent_index, new_visible_opponent_positions, adjusted_opponents_pos,
+         new_cars_overtaken, new_total_cars_overtaken, new_cars_to_overtake) = self._step_opponents_and_overtaking(
+            state=state,
+            new_speed=new_speed,
+            logical_left_xs=logical_left_xs,
+            logical_right_xs=logical_right_xs
         )
-
-        # ====== Opponents ======
-        # This should be calibrated so that at opponent_speed, we move at "normal" rate
-        base_progression_rate = self.config.opponent_relative_speed_factor / self.config.frame_rate
-        # Relative speed: how much faster/slower we are compared to opponents
-        relative_speed = (new_speed - self.config.opponent_speed) / self.config.opponent_speed * base_progression_rate
-        # calculate new the index where we are at the opponent array
-        new_opponent_index = state.opponent_index + relative_speed
-
-        # calculate the absolute positions of all opponents
-        new_visible_opponent_positions = self._get_visible_opponent_positions(
-            new_opponent_index,
-            state.opponent_pos_and_color,
-            logical_left_xs, logical_right_xs)  # use the track without bumpers, else cars wiggle around bumpers
-
-        # adjust the opponents lane if necessary
-        adjusted_opponents_pos = self._adjust_opponent_positions_when_overtaking(state, new_opponent_index)
+        # update the opponent array if the opponents would crash into the player
         state = state._replace(opponent_pos_and_color=adjusted_opponents_pos)
 
-        # ====== Overtaking ======
-        # Simple overtaking logic
-        old_window_start = jnp.floor(state.opponent_index).astype(jnp.int32)
-        new_window_start = jnp.floor(new_opponent_index).astype(jnp.int32)
-        window_moved = new_window_start - old_window_start
-
-        cars_overtaken_change = 0
-        # If we moved forward, check if we overtook a car (old slot 0 had a car)
-        cars_overtaken_change += jnp.where(
-            (window_moved > 0) & (state.visible_opponent_positions[0, 0] > -1),
-            1, 0
-        )
-        # If we moved backward, check if a car overtook us (new slot 0 has a car)
-        cars_overtaken_change -= jnp.where(
-            (window_moved < 0) & (new_visible_opponent_positions[0, 0] > -1),
-            1, 0
-        )
-        # don't allow negative numbers here
-        new_cars_overtaken = jnp.clip(state.cars_overtaken + cars_overtaken_change, 0)
-        new_total_cars_overtaken = (state.total_cars_overtaken + cars_overtaken_change).astype(jnp.int32)
-        new_cars_to_overtake = self.config.cars_to_pass_per_level + self.config.cars_increase_per_level * (
-                state.level - 1)
-
-        # ===== Opponent Collision =====
-        is_collision = self._check_car_opponent_collision(
-            new_x_abs.astype(jnp.int32),
-            new_y_abs.astype(jnp.int32),
-            new_visible_opponent_positions)
-
-        # apply a cooldown if there was a collision
-        new_cooldown = jnp.where(
-            is_collision,
-            self.config.car_crash_cooldown_frames,  # Set cooldown if collision
-            new_cooldown  # Keep decremented cooldown if no collision from the beginning of the function
-        )
-
-        # Determine which direction the car drifts when there is a collision with a car
-        new_cooldown_drift_direction = jnp.where(
-            is_collision,
-            self._determine_kickback_direction(state),
-            new_cooldown_drift_direction
+        # ===== OPPONENT COLLISION =====
+        new_cooldown, new_cooldown_drift_direction, is_collision = self._step_opponent_collision(
+            state=state,
+            new_x_abs=new_x_abs,
+            new_y_abs=new_y_abs,
+            new_visible_opponent_positions=new_visible_opponent_positions,
+            current_cooldown=new_cooldown,
+            current_cooldown_drift_direction=new_cooldown_drift_direction
         )
 
         # ====== DISTANCE ======
@@ -759,51 +646,13 @@ class JaxEnduro(JaxEnvironment[EnduroGameState, EnduroObservation, EnduroInfo, E
 
         # ====== MOUNTAINS ======
         # mountains move opposing to the curve and the move faster with higher speed
-        mountain_movement = -curvature * self.config.mountain_pixel_movement_per_frame_per_speed_unit * new_speed
+        new_mountain_left_x, new_mountain_right_x = self._step_mountain_positions(state, curvature, new_speed)
 
-        # make sure the mountain x is always within the game screen
-        new_mountain_left_x = self.config.window_offset_left + jnp.mod(
-            state.mountain_left_x + mountain_movement - self.config.window_offset_left,
-            self.config.screen_width - self.config.window_offset_left + 1,
-        )
-        new_mountain_right_x = self.config.window_offset_left + jnp.mod(
-            state.mountain_right_x + mountain_movement - self.config.window_offset_left,
-            self.config.screen_width - self.config.window_offset_left + 1,
-        )
-
-        # Check whether the current level is passed.
-        # Once a level is passed it does not matter whether opponents will overtake the player again.
-        new_level_passed = jnp.logical_or(
-            state.level_passed,
-            new_cars_overtaken >=
-            self.config.cars_to_pass_per_level + self.config.cars_increase_per_level * (state.level - 1)
-        ).astype(jnp.int32)
-
-        # ===== New Day handling =====
-        def reset_day():
-            # do not allow level to go beyond the max level
-            level = jnp.clip(state.level + 1, 1, self.config.max_level)
-            # cars_overtaken, level increase, level passed, game_over
-            # if a new day starts and the level is not passed it is game over
-            return (
-                jnp.array(0, dtype=jnp.int32),
-                level,
-                jnp.array(0, dtype=jnp.int32),
-                jnp.logical_not(new_level_passed).astype(np.bool_)
-            )
-
-        def do_nothing():
-            # cars_overtaken, level increase, level passed, game_over
-            return new_cars_overtaken, state.level, new_level_passed, state.game_over
-
-        # Calculate current and previous day numbers
-        new_day_count = jnp.floor(state.step_count / self.config.frame_rate / self.config.day_cycle_time).astype(
-            jnp.int32)
-
-        new_cars_overtaken, new_level, new_level_passed, new_game_over = lax.cond(
-            new_day_count > state.day_count,  # New day started
-            lambda: reset_day(),
-            lambda: do_nothing(),
+        # ===== NEW DAY HANDLING =====
+        (final_cars_overtaken, new_level, new_level_passed,
+         new_game_over, new_day_count) = self._step_new_day_handling(
+            state=state,
+            new_cars_overtaken=new_cars_overtaken
         )
 
         # Build new state with updated positions
@@ -848,6 +697,39 @@ class JaxEnduro(JaxEnvironment[EnduroGameState, EnduroObservation, EnduroInfo, E
         info = self._get_info(new_state, all_rewards)
 
         return obs, new_state, reward, done, info
+
+    @partial(jax.jit, static_argnums=(0,))
+    def _step_get_curvature_and_weather(self, state: EnduroGameState) -> Tuple[jnp.ndarray, jnp.ndarray]:
+        """
+        Calculates current track curvature and weather conditions based on game state.
+
+        This function manages:
+        - Track segment identification based on player's current distance traveled
+        - Extraction of track curvature from the current track segment
+        - Weather condition determination based on time of day cycle
+        - Cyclic weather progression throughout the game day
+
+        Args:
+            state: Current game state containing distance, step count, and track data
+
+        Returns:
+            Tuple containing:
+            - curvature: Current track curvature value affecting car drift and steering
+            - new_weather_index: Index of current weather condition (affects visibility, steering sensitivity, etc.)
+        """
+
+        # ===== Track position =====
+        directions = state.whole_track[:, 0]
+        track_starts = state.whole_track[:, 1]
+        segment_index = jnp.searchsorted(track_starts, state.distance, side='right') - 1
+        curvature = directions[segment_index]
+
+        # ===== Weather position =====
+        # determine the position in the weather array
+        cycled_time = (state.step_count / self.config.frame_rate) % self.config.day_cycle_time
+        new_weather_index = jnp.searchsorted(self.config.weather_starts_s, cycled_time, side='right')
+
+        return curvature, new_weather_index
 
     @partial(jax.jit, static_argnums=(0,))
     def _step_car_handling(self, state: EnduroGameState, action: int, new_weather_index: jnp.ndarray,
@@ -952,7 +834,7 @@ class JaxEnduro(JaxEnvironment[EnduroGameState, EnduroObservation, EnduroInfo, E
 
     @partial(jax.jit, static_argnums=(0,))
     def _step_track_handling(self, state: EnduroGameState, new_speed: jnp.ndarray, new_x_abs: jnp.ndarray,
-                             new_y_abs: jnp.ndarray, curvature: float, is_cooldown_active: bool) -> Tuple[
+                             new_y_abs: jnp.ndarray, curvature: jnp.ndarray, is_cooldown_active: bool) -> Tuple[
         jnp.ndarray,  # updated_speed
         jnp.ndarray,  # updated_x_abs
         jnp.ndarray,  # new_cooldown_drift_direction
@@ -1080,6 +962,257 @@ class JaxEnduro(JaxEnvironment[EnduroGameState, EnduroObservation, EnduroInfo, E
             new_track_top_x,
             new_top_x_curve_offset
         )
+
+    @partial(jax.jit, static_argnums=(0,))
+    def _step_opponents_and_overtaking(self, state: EnduroGameState, new_speed: jnp.ndarray,
+                                       logical_left_xs: jnp.ndarray, logical_right_xs: jnp.ndarray) -> Tuple[
+        jnp.ndarray,  # new_opponent_index
+        jnp.ndarray,  # new_visible_opponent_positions
+        jnp.ndarray,  # updated_opponent_pos_and_color
+        jnp.ndarray,  # new_cars_overtaken
+        jnp.ndarray,  # new_total_cars_overtaken
+        jnp.ndarray  # new_cars_to_overtake
+    ]:
+        """
+        Handles opponent positioning, movement, and overtaking mechanics.
+
+        This function manages:
+        - Opponent movement relative to player speed progression
+        - Calculation of visible opponent positions on the track
+        - Lane adjustment for opponents during overtaking maneuvers
+        - Detection of overtaking events (player passing opponents or vice versa)
+        - Tracking of cars overtaken for level progression requirements
+
+        Args:
+            state: Current game state
+            new_speed: Player car's current speed
+            logical_left_xs: Left track boundaries without bumpers
+            logical_right_xs: Right track boundaries without bumpers
+
+        Returns:
+            Tuple containing:
+            - new_opponent_index: Updated position in opponent array
+            - new_visible_opponent_positions: Positions of opponents currently visible
+            - updated_opponent_pos_and_color: Updated opponent data with lane adjustments
+            - new_cars_overtaken: Updated count of cars overtaken in current level
+            - new_total_cars_overtaken: Updated total count of all cars overtaken
+            - new_cars_to_overtake: Target number of cars to overtake for current level
+        """
+
+        # ====== Opponent Movement ======
+        # This should be calibrated so that at opponent_speed, we move at "normal" rate
+        base_progression_rate = self.config.opponent_relative_speed_factor / self.config.frame_rate
+        # Relative speed: how much faster/slower we are compared to opponents
+        relative_speed = (new_speed - self.config.opponent_speed) / self.config.opponent_speed * base_progression_rate
+        # calculate new the index where we are at the opponent array
+        new_opponent_index = state.opponent_index + relative_speed
+
+        # calculate the absolute positions of all opponents
+        new_visible_opponent_positions = self._get_visible_opponent_positions(
+            new_opponent_index,
+            state.opponent_pos_and_color,
+            logical_left_xs, logical_right_xs)  # use the track without bumpers, else cars wiggle around bumpers
+
+        # adjust the opponents lane if necessary
+        updated_opponent_pos_and_color = self._adjust_opponent_positions_when_overtaking(state, new_opponent_index)
+
+        # ====== Overtaking Detection ======
+        # Simple overtaking logic
+        old_window_start = jnp.floor(state.opponent_index).astype(jnp.int32)
+        new_window_start = jnp.floor(new_opponent_index).astype(jnp.int32)
+        window_moved = new_window_start - old_window_start
+
+        cars_overtaken_change = 0
+        # If we moved forward, check if we overtook a car (old slot 0 had a car)
+        cars_overtaken_change += jnp.where(
+            (window_moved > 0) & (state.visible_opponent_positions[0, 0] > -1),
+            1, 0
+        )
+        # If we moved backward, check if a car overtook us (new slot 0 has a car)
+        cars_overtaken_change -= jnp.where(
+            (window_moved < 0) & (new_visible_opponent_positions[0, 0] > -1),
+            1, 0
+        )
+
+        # ====== Overtaking Scoring ======
+        # don't allow negative numbers here
+        new_cars_overtaken = jnp.clip(state.cars_overtaken + cars_overtaken_change, 0)
+        new_total_cars_overtaken = (state.total_cars_overtaken + cars_overtaken_change).astype(jnp.int32)
+        new_cars_to_overtake = self.config.cars_to_pass_per_level + self.config.cars_increase_per_level * (
+                state.level - 1)
+
+        return (
+            new_opponent_index,
+            new_visible_opponent_positions,
+            updated_opponent_pos_and_color,
+            new_cars_overtaken,
+            new_total_cars_overtaken,
+            new_cars_to_overtake
+        )
+
+    @partial(jax.jit, static_argnums=(0,))
+    def _step_opponent_collision(self, state: EnduroGameState, new_x_abs: jnp.ndarray,
+                                 new_y_abs: jnp.ndarray, new_visible_opponent_positions: jnp.ndarray,
+                                 current_cooldown: jnp.ndarray, current_cooldown_drift_direction: jnp.ndarray) -> Tuple[
+        jnp.ndarray,  # updated_cooldown
+        jnp.ndarray,  # updated_cooldown_drift_direction
+        jnp.ndarray  # is_collision
+    ]:
+        """
+        Handles collision detection and response between player car and opponent vehicles.
+
+        This function manages:
+        - Detection of collisions between player car and visible opponent cars
+        - Activation of collision cooldown period when crashes occur
+        - Determination of kickback drift direction based on collision circumstances
+        - Collision response mechanics that affect player control
+
+        Args:
+            state: Current game state
+            new_x_abs: Player car's current absolute X position
+            new_y_abs: Player car's current absolute Y position
+            new_visible_opponent_positions: Current positions of visible opponent cars
+            current_cooldown: Current cooldown value (may be from track collision)
+            current_cooldown_drift_direction: Current drift direction during cooldown
+
+        Returns:
+            Tuple containing:
+            - updated_cooldown: Cooldown value after potential opponent collision
+            - updated_cooldown_drift_direction: Updated drift direction after collision
+            - is_collision: Boolean indicating if collision with opponent occurred
+        """
+
+        # ===== Opponent Collision Detection =====
+        is_collision = self._check_car_opponent_collision(
+            new_x_abs.astype(jnp.int32),
+            new_y_abs.astype(jnp.int32),
+            new_visible_opponent_positions)
+
+        # ===== Collision Response =====
+        # Apply cooldown if there was a collision
+        updated_cooldown = jnp.where(
+            is_collision,
+            self.config.car_crash_cooldown_frames,  # Set cooldown if collision
+            current_cooldown  # Keep current cooldown if no collision
+        )
+
+        # Determine drift direction for collision kickback
+        updated_cooldown_drift_direction = jnp.where(
+            is_collision,
+            self._determine_kickback_direction(state),
+            current_cooldown_drift_direction
+        )
+
+        return updated_cooldown, updated_cooldown_drift_direction, is_collision
+
+    @partial(jax.jit, static_argnums=(0,))
+    def _step_mountain_positions(self, state: EnduroGameState, curvature: jnp.ndarray, new_speed: jnp.ndarray) -> Tuple[
+        jnp.ndarray, jnp.ndarray]:
+        """
+        Updates mountain background positions based on track curvature and player speed.
+
+        This function manages:
+        - Mountain parallax movement opposing track curvature for visual depth effect
+        - Speed-dependent mountain movement to create realistic motion blur/parallax
+        - Wrapping mountain positions within screen boundaries for seamless scrolling
+
+        Args:
+            state: Current game state containing current mountain positions
+            curvature: Current track curvature value affecting movement direction
+            new_speed: Player car's current speed affecting movement intensity
+
+        Returns:
+            Tuple containing:
+            - new_mountain_left_x: Updated X position of left mountain background
+            - new_mountain_right_x: Updated X position of right mountain background
+        """
+
+        # ====== MOUNTAINS ======
+        # mountains move opposing to the curve and the move faster with higher speed
+        mountain_movement = -curvature * self.config.mountain_pixel_movement_per_frame_per_speed_unit * new_speed
+
+        # make sure the mountain x is always within the game screen
+        new_mountain_left_x = self.config.window_offset_left + jnp.mod(
+            state.mountain_left_x + mountain_movement - self.config.window_offset_left,
+            self.config.screen_width - self.config.window_offset_left + 1,
+        )
+        new_mountain_right_x = self.config.window_offset_left + jnp.mod(
+            state.mountain_right_x + mountain_movement - self.config.window_offset_left,
+            self.config.screen_width - self.config.window_offset_left + 1,
+        )
+
+        return new_mountain_left_x, new_mountain_right_x
+
+    @partial(jax.jit, static_argnums=(0,))
+    def _step_new_day_handling(self, state: EnduroGameState, new_cars_overtaken: jnp.ndarray) -> Tuple[
+        jnp.ndarray,  # final_cars_overtaken
+        jnp.ndarray,  # new_level
+        jnp.ndarray,  # new_level_passed
+        jnp.ndarray,  # new_game_over
+        jnp.ndarray  # new_day_count
+    ]:
+        """
+        Handles day transitions, level progression, and game over conditions.
+
+        This function manages:
+        - Level completion detection based on cars overtaken vs target
+        - Day cycle progression and detection of new day starts
+        - Level advancement when days transition and level requirements are met
+        - Game over conditions when day ends without completing level requirements
+        - Resetting of daily progress counters for new levels
+
+        Args:
+            state: Current game state
+            new_cars_overtaken: Updated count of cars overtaken in current level
+
+        Returns:
+            Tuple containing:
+            - final_cars_overtaken: Cars overtaken count (reset to 0 on new day)
+            - new_level: Current level (advanced on successful day completion)
+            - final_level_passed: Whether current level requirements are satisfied
+            - new_game_over: Whether game over condition has been triggered
+            - new_day_count: Updated day counter
+        """
+
+        # ===== Level Completion Check =====
+        # Check whether the current level is passed.
+        # Once a level is passed it does not matter whether opponents will overtake the player again.
+        new_level_passed = jnp.logical_or(
+            state.level_passed,
+            new_cars_overtaken >=
+            self.config.cars_to_pass_per_level + self.config.cars_increase_per_level * (state.level - 1)
+        ).astype(jnp.int32)
+
+        # ===== Day Transition Logic =====
+        def reset_day():
+            # do not allow level to go beyond the max level
+            level = jnp.clip(state.level + 1, 1, self.config.max_level)
+            # cars_overtaken, level increase, level passed, game_over
+            # if a new day starts and the level is not passed it is game over
+            return (
+                jnp.array(0, dtype=jnp.int32),
+                level,
+                jnp.array(0, dtype=jnp.int32),
+                jnp.logical_not(new_level_passed).astype(jnp.bool_)
+            )
+
+        def do_nothing():
+            # cars_overtaken, level increase, level passed, game_over
+            return new_cars_overtaken, state.level, new_level_passed, state.game_over
+
+        # ===== Day Count Calculation =====
+        # Calculate current and previous day numbers
+        new_day_count = jnp.floor(state.step_count / self.config.frame_rate / self.config.day_cycle_time).astype(
+            jnp.int32)
+
+        # ===== Apply Day Transition =====
+        final_cars_overtaken, new_level, new_level_passed, new_game_over = lax.cond(
+            new_day_count > state.day_count,  # New day started
+            lambda: reset_day(),
+            lambda: do_nothing(),
+        )
+
+        return final_cars_overtaken, new_level, new_level_passed, new_game_over, new_day_count
 
     @partial(jax.jit, static_argnums=(0,))
     def _get_observation(self, state: EnduroGameState):
