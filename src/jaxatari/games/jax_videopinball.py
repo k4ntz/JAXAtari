@@ -425,10 +425,10 @@ class JaxVideoPinball(
 
         # There are two scene objects for every flipper angle
         left_flipper_bounding_boxes = (
-            FLIPPERS[state.left_flipper_angle], FLIPPERS[state.left_flipper_angle + 4]
+            self.consts.FLIPPERS[state.left_flipper_angle], self.consts.FLIPPERS[state.left_flipper_angle + 4]
         )
         right_flipper_bounding_boxes = (
-            FLIPPERS[state.right_flipper_angle + 8], FLIPPERS[state.right_flipper_angle + 12]
+            self.consts.FLIPPERS[state.right_flipper_angle + 8], self.consts.FLIPPERS[state.right_flipper_angle + 12]
         )
         left_flipper_x = jnp.min(jnp.array([left_flipper_bounding_boxes[0][2], left_flipper_bounding_boxes[1][2]]))
         left_flipper_w = jnp.max(jnp.array([
@@ -477,14 +477,60 @@ class JaxVideoPinball(
             ]) for entity in [left_flipper, right_flipper]
         ])
 
-        plunger = EntityState(
-        )
+        # Left, Middle, Right Diamonds / Lit up Targets
         
+        # Left Target
         left_target = EntityState(
+            x=self.consts.LEFT_LIT_UP_TARGET_LARGE_HORIZONTAL_SCENE_OBJECT.hit_box_x_offset,
+            y=self.consts.LEFT_LIT_UP_TARGET_LARGE_VERTICAL_SCENE_OBJECT.hit_box_y_offset,
+            w=self.consts.LEFT_LIT_UP_TARGET_LARGE_HORIZONTAL_SCENE_OBJECT.hit_box_width,
+            h=self.consts.LEFT_LIT_UP_TARGET_LARGE_VERTICAL_SCENE_OBJECT.hit_box_height,
+            active=state.active_targets[0].astype(jnp.int32),
         )
+        # Middle Target
+        middle_target = EntityState(
+            x=self.consts.MIDDLE_LIT_UP_TARGET_LARGE_HORIZONTAL_SCENE_OBJECT.hit_box_x_offset,
+            y=self.consts.MIDDLE_LIT_UP_TARGET_LARGE_VERTICAL_SCENE_OBJECT.hit_box_y_offset,
+            w=self.consts.MIDDLE_LIT_UP_TARGET_LARGE_HORIZONTAL_SCENE_OBJECT.hit_box_width,
+            h=self.consts.MIDDLE_LIT_UP_TARGET_LARGE_VERTICAL_SCENE_OBJECT.hit_box_height,
+            active=state.active_targets[1].astype(jnp.int32),
+        )
+
+        # Right Target
+        right_target = EntityState(
+            x=self.consts.RIGHT_LIT_UP_TARGET_LARGE_HORIZONTAL_SCENE_OBJECT.hit_box_x_offset,
+            y=self.consts.RIGHT_LIT_UP_TARGET_LARGE_VERTICAL_SCENE_OBJECT.hit_box_y_offset,
+            w=self.consts.RIGHT_LIT_UP_TARGET_LARGE_HORIZONTAL_SCENE_OBJECT.hit_box_width,
+            h=self.consts.RIGHT_LIT_UP_TARGET_LARGE_VERTICAL_SCENE_OBJECT.hit_box_height,
+            active=state.active_targets[2].astype(jnp.int32),
+        )
+
+        # Special Target
+        special_target = EntityState(
+            x=self.consts.SPECIAL_LIT_UP_TARGET_LARGE_HORIZONTAL_SCENE_OBJECT.hit_box_x_offset,
+            y=self.consts.SPECIAL_LIT_UP_TARGET_LARGE_VERTICAL_SCENE_OBJECT.hit_box_y_offset,
+            w=self.consts.SPECIAL_LIT_UP_TARGET_LARGE_HORIZONTAL_SCENE_OBJECT.hit_box_width,
+            h=self.consts.SPECIAL_LIT_UP_TARGET_LARGE_VERTICAL_SCENE_OBJECT.hit_box_height,
+            active=state.active_targets[3].astype(jnp.int32),
+        )
+
+        targets = jnp.array([
+            jnp.array([
+                entity.x,
+                entity.y,
+                entity.w,
+                entity.h,
+                entity.active,
+            ]) for entity in [left_target, middle_target, right_target, special_target]
+        ])
+        
+        # Spinners
+        # Left Spinner
+        left_spinner = EntityState(
+            x=self.consts.LEFT_SPINNER_SCENE_OBJECT.hit_box_x_offset,
+
             
         spinners = ...
-        targets = ...
         bumpers = 
         special_lit_up_target = ...
         left_lit_up_target = ...
@@ -492,6 +538,9 @@ class JaxVideoPinball(
         right_lit_up_target = ...
         left_tilt_mode_hole_plug = ...
         right_tilt_mode_hole_plug = ...
+        plunger = EntityState(
+        )
+        
 
         return VideoPinballObservation(
             ball=ball,
