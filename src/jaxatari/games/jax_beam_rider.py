@@ -677,33 +677,81 @@ class BeamRiderEnv(JaxEnvironment[BeamRiderState, BeamRiderObservation, BeamRide
 
     @partial(jax.jit, static_argnums=(0,))
     def _handle_white_saucer_shooting(self, state: BeamRiderState) -> BeamRiderState:
-        """Handle white saucer projectile firing with beam change and pattern switching"""
+        """Handle white saucer projectile firing with random shooting while moving down"""
         enemies = state.enemies
 
-        # === FIRST SHOT LOGIC ===
-        # Find shooting white saucers that are ready to fire their first shot
+        # Find white saucers that could potentially shoot
         white_saucer_mask = enemies[:, 5] == self.constants.ENEMY_TYPE_WHITE_SAUCER
         active_mask = enemies[:, 3] == 1
-        shooting_pattern_mask = enemies[:, 14] == self.constants.WHITE_SAUCER_SHOOTING
-        ready_to_fire_mask = enemies[:, 15] == 0  # white_saucer_firing_timer is 0
-        not_in_retreat_mask = enemies[:, 13] == 0  # maneuver_timer = 0 (not in retreat state)
 
         # Prevent shooting while still at or near horizon line
-        away_from_horizon_mask = enemies[:, 1] > (
-                    self.constants.HORIZON_LINE_Y + 15)  # Must be at least 15 pixels below horizon
+        away_from_horizon_mask = enemies[:, 1] > (self.constants.HORIZON_LINE_Y + 15)
 
-        can_shoot_first = white_saucer_mask & active_mask & shooting_pattern_mask & ready_to_fire_mask & not_in_retreat_mask & away_from_horizon_mask  # Added horizon check
+        # Check if saucer is moving downward (not retreating)
+        not_retreating = enemies[:, 13] == 0  # Not in any retreat state
+        moving_downward = enemies[:, 4] > 0  # Positive speed means moving down
+
+        # Exclude horizon patrol saucers from random shooting
+        not_horizon_patrol = enemies[:, 14] != self.constants.WHITE_SAUCER_HORIZON_PATROL
+
+        # Any white saucer can potentially shoot if it's active, away from horizon, and moving down
+        can_potentially_shoot_random = (
+                white_saucer_mask &
+                active_mask &
+                away_from_horizon_mask &
+                not_retreating &
+                moving_downward &
+                not_horizon_patrol
+        )
+
+        # Generate random values for shooting decision
+        rng_key, shoot_rng = random.split(state.rng_key)
+        shoot_random_values = random.uniform(
+            shoot_rng,
+            shape=(self.constants.MAX_ENEMIES,),
+            minval=0.0,
+            maxval=1.0
+        )
+
+        # Random shooting chance per frame
+        RANDOM_SHOOT_CHANCE = 0.004  # ~0.8% chance per frame
+
+        # Check if firing timer has cooled down
+        firing_timer_ready = enemies[:, 15] <= 0
+
+        # Determine which saucers will shoot randomly this frame
+        will_shoot_random = shoot_random_values < RANDOM_SHOOT_CHANCE
+        can_shoot_random = can_potentially_shoot_random & firing_timer_ready & will_shoot_random
+
+        # === ORIGINAL SHOOTING PATTERN LOGIC ===
+        shooting_pattern_mask = enemies[:, 14] == self.constants.WHITE_SAUCER_SHOOTING
+        ready_to_fire_pattern = enemies[:, 15] == 0
+
+        can_shoot_pattern = (
+                white_saucer_mask &
+                active_mask &
+                shooting_pattern_mask &
+                ready_to_fire_pattern &
+                not_retreating &
+                away_from_horizon_mask
+        )
 
         # === SECOND SHOT LOGIC ===
-        # Find shooting white saucers that just finished changing beam and should shoot again
         in_retreat_state_mask = enemies[:, 13] == self.constants.WHITE_SAUCER_RETREAT_AFTER_SHOT
-        beam_change_timer = enemies[:, 16].astype(int)  # Using jump_timer as beam change timer
-        finished_beam_change_mask = beam_change_timer == 1  # Will become 0 this frame
+        beam_change_timer = enemies[:, 16].astype(int)
+        finished_beam_change_mask = beam_change_timer == 1
 
-        can_shoot_second = white_saucer_mask & active_mask & shooting_pattern_mask & in_retreat_state_mask & finished_beam_change_mask & away_from_horizon_mask  #Added horizon check
+        can_shoot_second = (
+                white_saucer_mask &
+                active_mask &
+                shooting_pattern_mask &
+                in_retreat_state_mask &
+                finished_beam_change_mask &
+                away_from_horizon_mask
+        )
 
-        # Combine both shooting conditions
-        can_shoot = can_shoot_first | can_shoot_second
+        # Combine all shooting conditions
+        can_shoot = can_shoot_random | can_shoot_pattern | can_shoot_second
 
         # Find any white saucer that can shoot
         any_can_shoot = jnp.any(can_shoot)
@@ -711,12 +759,12 @@ class BeamRiderEnv(JaxEnvironment[BeamRiderState, BeamRiderObservation, BeamRide
         # Find first shooting white saucer
         shooter_idx = jnp.argmax(can_shoot)
 
-        # Get shooter position (only valid if any_can_shoot is True)
+        # Get shooter position
         shooter_x = enemies[shooter_idx, 0]
         shooter_y = enemies[shooter_idx, 1]
         shooter_beam = enemies[shooter_idx, 2].astype(int)
 
-        # Create projectile at saucer position, moving downward
+        # Create projectile
         projectile_x = shooter_x + self.constants.ENEMY_WIDTH // 2 - self.constants.PROJECTILE_WIDTH // 2
         projectile_y = shooter_y + self.constants.ENEMY_HEIGHT
 
@@ -724,8 +772,8 @@ class BeamRiderEnv(JaxEnvironment[BeamRiderState, BeamRiderObservation, BeamRide
             projectile_x,
             projectile_y,
             1,  # active
-            self.constants.WHITE_SAUCER_PROJECTILE_SPEED,  # speed (positive = downward)
-            shooter_beam  # store the beam the saucer is firing from
+            self.constants.WHITE_SAUCER_PROJECTILE_SPEED,
+            shooter_beam
         ])
 
         # Find first inactive slot in sentinel projectiles array
@@ -744,67 +792,99 @@ class BeamRiderEnv(JaxEnvironment[BeamRiderState, BeamRiderObservation, BeamRide
             sentinel_projectiles
         )
 
-        # === FIRST SHOT LOGIC ===
-        # Check if this is a first shot
-        is_first_shot = can_shoot_first[shooter_idx] & should_fire
+        # === RETREAT LOGIC FOR ALL SHOTS ===
+        # Check what type of shot this was
+        is_random_shot = can_shoot_random[shooter_idx] & should_fire
+        is_pattern_first_shot = can_shoot_pattern[shooter_idx] & should_fire
 
-        # Generate random values for beam change decision (only for first shots)
-        retreat_rng = random.fold_in(state.rng_key, state.frame_count + 5000)
+        # For random shots, immediately set to retreat (no beam change)
+        enemies = jnp.where(
+            is_random_shot,
+            enemies.at[shooter_idx, 13].set(self.constants.WHITE_SAUCER_RETREAT_AFTER_SHOT),
+            enemies
+        )
+
+        # Immediately switch to REVERSE_UP for random shots
+        enemies = jnp.where(
+            is_random_shot,
+            enemies.at[shooter_idx, 14].set(self.constants.WHITE_SAUCER_REVERSE_UP),
+            enemies
+        )
+
+        # For pattern shots, handle beam change logic
+        retreat_rng = random.fold_in(shoot_rng, state.frame_count + 5000)
         should_change_beam_rng = random.uniform(retreat_rng, (), minval=0.0, maxval=1.0, dtype=jnp.float32)
         should_change_beam = should_change_beam_rng < self.constants.WHITE_SAUCER_BEAM_CHANGE_CHANCE
 
-        # Choose new beam for retreat (different from current)
         beam_rng = random.fold_in(retreat_rng, 1)
         random_beam = random.randint(beam_rng, (), 0, self.constants.NUM_BEAMS)
-        # If it's the same as shooter beam, use the next beam
         new_retreat_beam = jnp.where(
             random_beam == shooter_beam,
             (shooter_beam + 1) % self.constants.NUM_BEAMS,
             random_beam
         )
 
-        # Set retreat state when firing first shot
+        # Set retreat state for pattern shots
         enemies = jnp.where(
-            is_first_shot,
+            is_pattern_first_shot,
             enemies.at[shooter_idx, 13].set(self.constants.WHITE_SAUCER_RETREAT_AFTER_SHOT),
             enemies
         )
 
-        # Set new target beam if changing beam before retreat
+        # Handle beam change for pattern shots
         enemies = jnp.where(
-            is_first_shot & should_change_beam,
-            enemies.at[shooter_idx, 10].set(new_retreat_beam),  # Store target beam in target_x field
+            is_pattern_first_shot & should_change_beam,
+            enemies.at[shooter_idx, 10].set(new_retreat_beam),
             enemies
         )
 
-        # Set beam change timer if changing beam
         enemies = jnp.where(
-            is_first_shot & should_change_beam,
+            is_pattern_first_shot & should_change_beam,
             enemies.at[shooter_idx, 16].set(self.constants.WHITE_SAUCER_RETREAT_BEAM_CHANGE_TIME),
             enemies
         )
 
-        # If NOT changing beam, switch directly to REVERSE_UP pattern after first shot
         enemies = jnp.where(
-            is_first_shot & ~should_change_beam,
-            enemies.at[shooter_idx, 14].set(self.constants.WHITE_SAUCER_REVERSE_UP),  # Switch to reverse pattern
+            is_pattern_first_shot & ~should_change_beam,
+            enemies.at[shooter_idx, 14].set(self.constants.WHITE_SAUCER_REVERSE_UP),
             enemies
         )
 
         # === RESET FIRING TIMER ===
-        # Reset firing timer for any shooter
+        cooldown_time = jnp.where(
+            is_random_shot,
+            45,  # Shorter cooldown for random shots
+            self.constants.WHITE_SAUCER_FIRING_INTERVAL
+        )
+
         enemies = jnp.where(
             should_fire,
-            enemies.at[shooter_idx, 15].set(self.constants.WHITE_SAUCER_FIRING_INTERVAL),
+            enemies.at[shooter_idx, 15].set(cooldown_time),
             enemies
+        )
+
+        # Decrement firing timers ONLY for non-horizon-patrol saucers
+        # (Horizon patrol uses timer for different purpose)
+        should_decrement_timer = (
+                white_saucer_mask &
+                active_mask &
+                (enemies[:, 14] != self.constants.WHITE_SAUCER_HORIZON_PATROL) &
+                (enemies[:, 15] > 0)
+        )
+
+        enemies = enemies.at[:, 15].set(
+            jnp.where(
+                should_decrement_timer,
+                enemies[:, 15] - 1,
+                enemies[:, 15]
+            )
         )
 
         return state.replace(
             enemies=enemies,
             sentinel_projectiles=sentinel_projectiles,
-            rng_key=retreat_rng
+            rng_key=shoot_rng
         )
-
     @partial(jax.jit, static_argnums=(0,))
     def _update_white_saucer_movement(self, state: BeamRiderState) -> BeamRiderState:
         """
