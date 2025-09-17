@@ -68,6 +68,7 @@ class FreewayState(NamedTuple):
     time: chex.Array
     cooldown: chex.Array  # Cooldown after collision
     walking_frames: chex.Array
+    lives_lost: chex.Array
     game_over: chex.Array
 
 
@@ -80,8 +81,7 @@ class EntityPosition(NamedTuple):
 
 class FreewayObservation(NamedTuple):
     chicken: EntityPosition
-    car: EntityPosition
-    score: jnp.ndarray
+    car: jnp.ndarray  # Shape: (10, 4) with x,y,width,height for each car
 
 
 class FreewayInfo(NamedTuple):
@@ -128,6 +128,7 @@ class JaxFreeway(JaxEnvironment[FreewayState, FreewayObservation, FreewayInfo, F
             time=jnp.array(0, dtype=jnp.int32),
             cooldown=jnp.array(0, dtype=jnp.int32),
             walking_frames=jnp.array(0, dtype=jnp.int32),
+            lives_lost=jnp.array(0, dtype=jnp.int32),
             game_over=jnp.array(False, dtype=jnp.bool_),
         )
 
@@ -237,6 +238,12 @@ class JaxFreeway(JaxEnvironment[FreewayState, FreewayObservation, FreewayInfo, F
             state.game_over,
         )
 
+        new_live_lost = jnp.where(
+            any_collision,
+            state.lives_lost + 1,
+            state.lives_lost,
+        )
+
         new_state = FreewayState(
             chicken_y=new_y,
             cars=new_cars,
@@ -244,6 +251,7 @@ class JaxFreeway(JaxEnvironment[FreewayState, FreewayObservation, FreewayInfo, F
             time=new_time,
             cooldown=new_cooldown,
             walking_frames=new_walking_frames.astype(jnp.int32),
+            lives_lost=new_live_lost,
             game_over=game_over,
         )
         done = self._get_done(new_state)
@@ -279,7 +287,7 @@ class JaxFreeway(JaxEnvironment[FreewayState, FreewayObservation, FreewayInfo, F
                     dtype=jnp.int32
                 )
             )
-        return FreewayObservation(chicken=chicken, car=cars, score=state.score)
+        return FreewayObservation(chicken=chicken, car=cars)
 
     @partial(jax.jit, static_argnums=(0,))
     def _get_info(self, state: FreewayState, all_rewards: chex.Array = None) -> FreewayInfo:
@@ -316,7 +324,6 @@ class JaxFreeway(JaxEnvironment[FreewayState, FreewayObservation, FreewayInfo, F
         The observation contains:
         - chicken: EntityPosition (x, y, width, height)
         - car: array of shape (10, 4) with x,y,width,height for each car
-        - score: int (0-99)
         """
         return spaces.Dict({
             "chicken": spaces.Dict({
@@ -325,8 +332,7 @@ class JaxFreeway(JaxEnvironment[FreewayState, FreewayObservation, FreewayInfo, F
                 "width": spaces.Box(low=0, high=160, shape=(), dtype=jnp.int32),
                 "height": spaces.Box(low=0, high=210, shape=(), dtype=jnp.int32),
             }),
-            "car": spaces.Box(low=0, high=160, shape=(10, 4), dtype=jnp.int32),
-            "score": spaces.Box(low=0, high=99, shape=(), dtype=jnp.int32),
+            "car": spaces.Box(low=0, high=210, shape=(10, 4), dtype=jnp.int32),
         })
 
     def image_space(self) -> spaces.Box:
@@ -357,11 +363,8 @@ class JaxFreeway(JaxEnvironment[FreewayState, FreewayObservation, FreewayInfo, F
         # Flatten car positions and dimensions
         cars_flat = obs.car.reshape(-1)
         
-        # Flatten score
-        score_flat = obs.score.reshape(-1)
-        
         # Concatenate all components
-        return jnp.concatenate([chicken_flat, cars_flat, score_flat]).astype(jnp.int32)
+        return jnp.concatenate([chicken_flat, cars_flat]).astype(jnp.int32)
 
 
 class FreewayRenderer(JAXGameRenderer):
