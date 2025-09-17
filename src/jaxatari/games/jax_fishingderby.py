@@ -37,6 +37,7 @@ class GameConfig:
     P2_START_X: int = 135
     PLAYER_Y: int = 23
     ROD_Y: int = 38  # Y position where rod extends horizontally
+    FISH_SCORING_Y: int = 70
 
     # Rod mechanics
     MIN_ROD_LENGTH_X: int = 20  # Minimum horizontal rod extension
@@ -44,7 +45,7 @@ class GameConfig:
     MAX_ROD_LENGTH_X: int = 65  # Maximum horizontal extension
 
     MIN_HOOK_DEPTH_Y: int = 0  # Minimum vertical hook depth
-    START_HOOK_DEPTH_Y: int = 20  # Starting vertical hook depth
+    START_HOOK_DEPTH_Y: int = 30  # Starting vertical hook depth
     MAX_HOOK_DEPTH_Y: int = 140  # Maximum vertical extension to reach bottom fish
 
     ROD_SPEED: float = 1.8
@@ -454,8 +455,8 @@ class FishingDerby(JaxEnvironment):
                 # Update hook velocity with damping
                 new_vel_y = p1.hook_velocity_y * cfg.Damping + change
 
-                # Calculate hook position limits using separate Y max
-                min_y = float(cfg.MIN_HOOK_DEPTH_Y)  # At rod level
+                # Calculate hook position limits - prevent going above water surface
+                min_y = float(cfg.START_HOOK_DEPTH_Y)  # Water surface level, not rod level
                 max_y = float(cfg.MAX_HOOK_DEPTH_Y)  # Maximum depth to reach bottom fish
 
                 # Update hook position
@@ -519,10 +520,18 @@ class FishingDerby(JaxEnvironment):
 
             # Reeling mechanics (moves hook upward toward rod)
             reel_speed = jnp.where(p1_hook_state == 2, cfg.REEL_FAST_SPEED, cfg.REEL_SLOW_SPEED)
+
+            # Calculate the minimum Y position for reeling (scoring line relative to rod)
+            scoring_hook_y = cfg.FISH_SCORING_Y - cfg.ROD_Y  # Convert scoring Y to hook coordinate system
+
+            # Only allow reeling if a fish is hooked (hooked_fish_idx >= 0)
+            can_reel = p1.hooked_fish_idx >= 0
+
             new_hook_y = jnp.where(p1_hook_state > 0,
-                                   jnp.clip(new_hook_y - reel_speed, min_hook_y, max_hook_y),
+                                   jnp.where(can_reel,
+                                             jnp.clip(new_hook_y - reel_speed, scoring_hook_y, max_hook_y),
+                                             new_hook_y),  # Don't move hook if no fish hooked
                                    new_hook_y)
-            new_hook_velocity_y = jnp.where(p1_hook_state > 0, 0.0, new_hook_velocity_y)
 
             # Update hook position after reeling
             hook_x, hook_y = self._get_hook_position(cfg.P1_START_X, PlayerState(
@@ -546,7 +555,7 @@ class FishingDerby(JaxEnvironment):
             p1_score, key = p1.score, state.key
             shark_collides = (p1_hook_state > 0) & (jnp.abs(hook_x - new_shark_x) < cfg.SHARK_WIDTH) & (
                     jnp.abs(hook_y - cfg.SHARK_Y) < cfg.SHARK_HEIGHT)
-            scored_fish = (p1_hook_state > 0) & (hook_y <= cfg.ROD_Y + 5)  # Fish reaches near the rod
+            scored_fish = (p1_hook_state > 0) & (hook_y <= cfg.FISH_SCORING_Y)  # Fish reaches near the rod
             reset_hook = shark_collides | scored_fish
 
             # Handle scoring and update fish state
