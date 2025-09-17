@@ -3189,50 +3189,51 @@ class BeamRiderEnv(JaxEnvironment[BeamRiderState, BeamRiderObservation, BeamRide
 
     @partial(jax.jit, static_argnums=(0,))
     def _check_collisions(self, state: BeamRiderState) -> BeamRiderState:
-        """Check for collisions between projectiles and enemies"""
+        """Check for collisions - FIXED coordinate system for proper collision detection"""
         projectiles = state.projectiles
         torpedo_projectiles = state.torpedo_projectiles
         sentinel_projectiles = state.sentinel_projectiles
         enemies = state.enemies
         score = state.score
 
-        # Vectorized collision detection for LASER projectiles vs enemies
+        # Vectorized collision detection setup
         proj_active = projectiles[:, 2] == 1
         enemy_active = enemies[:, 3] == 1
 
+        # Enemy properties
         white_saucer_mask = enemies[:, 5] == self.constants.ENEMY_TYPE_WHITE_SAUCER
         enemy_y = enemies[:, 1]
-        horizon_buffer = 15  # Pixels above/below horizon where saucers are protected
+        horizon_buffer = 15
         at_horizon = jnp.abs(enemy_y - self.constants.HORIZON_LINE_Y) <= horizon_buffer
         white_saucer_protected = white_saucer_mask & at_horizon
 
-        # Enemies that take damage from lasers
+        # Enemy vulnerability masks
         enemy_vulnerable_to_lasers = (
-                (white_saucer_mask & ~white_saucer_protected) |  # White saucers only when not at horizon
+                (white_saucer_mask & ~white_saucer_protected) |
                 (enemies[:, 5] == self.constants.ENEMY_TYPE_YELLOW_CHIRPER) |
                 (enemies[:, 5] == self.constants.ENEMY_TYPE_BLUE_CHARGER)
         )
 
-        # Enemies that BLOCK lasers (destroy the laser but don't take damage)
         enemy_blocks_lasers = (
                 (enemies[:, 5] == self.constants.ENEMY_TYPE_BROWN_DEBRIS) |
                 (enemies[:, 5] == self.constants.ENEMY_TYPE_GREEN_BLOCKER) |
                 (enemies[:, 5] == self.constants.ENEMY_TYPE_SENTINEL_SHIP) |
                 (enemies[:, 5] == self.constants.ENEMY_TYPE_ORANGE_TRACKER) |
                 (enemies[:, 5] == self.constants.ENEMY_TYPE_GREEN_BOUNCE) |
-                white_saucer_protected  # ADDED: Protected white saucers block lasers
+                white_saucer_protected
         )
 
-        # Enemies that lasers can interact with (either damage or block)
         enemy_interacts_with_lasers = enemy_vulnerable_to_lasers | enemy_blocks_lasers
 
-        # Broadcast projectile and enemy positions for vectorized collision check
-        proj_x = projectiles[:, 0:1]
-        proj_y = projectiles[:, 1:2]
-        enemy_x = enemies[:, 0:1].T
-        enemy_y = enemies[:, 1:2].T
+        # FIX: Correct coordinate broadcasting
+        # Keep projectiles as rows, enemies as columns for proper broadcasting
+        proj_x = projectiles[:, 0:1]  # Shape: (MAX_PROJECTILES, 1)
+        proj_y = projectiles[:, 1:2]  # Shape: (MAX_PROJECTILES, 1)
 
-        # Get enemy dimensions (sentinel ships are larger)
+        # Enemy positions should NOT be transposed - just reshape for broadcasting
+        enemy_x = enemies[:, 0].reshape(1, -1)  # Shape: (1, MAX_ENEMIES)
+        enemy_y_bc = enemies[:, 1].reshape(1, -1)  # Shape: (1, MAX_ENEMIES)
+
         enemy_width = jnp.where(
             enemies[:, 5] == self.constants.ENEMY_TYPE_SENTINEL_SHIP,
             self.constants.SENTINEL_SHIP_WIDTH,
@@ -3244,130 +3245,116 @@ class BeamRiderEnv(JaxEnvironment[BeamRiderState, BeamRiderObservation, BeamRide
             self.constants.ENEMY_HEIGHT
         )
 
-        # Vectorized bounding box collision check for lasers (ANY interaction)
+        # FIX: Proper bounding box collision check
+        # Projectile box vs Enemy box
         laser_collisions = (
-                (proj_x < enemy_x + enemy_width[None, :]) &
-                (proj_x + self.constants.PROJECTILE_WIDTH > enemy_x) &
-                (proj_y < enemy_y + enemy_height[None, :]) &
-                (proj_y + self.constants.PROJECTILE_HEIGHT > enemy_y) &
+                (proj_x < enemy_x + enemy_width.reshape(1, -1)) &  # proj right edge > enemy left
+                (proj_x + self.constants.PROJECTILE_WIDTH > enemy_x) &  # proj left edge < enemy right
+                (proj_y < enemy_y_bc + enemy_height.reshape(1, -1)) &  # proj bottom > enemy top
+                (proj_y + self.constants.PROJECTILE_HEIGHT > enemy_y_bc) &  # proj top < enemy bottom
                 proj_active[:, None] &
                 enemy_active[None, :] &
                 enemy_interacts_with_lasers[None, :]
         )
 
-        # Lasers get destroyed when hitting ANY enemy they interact with
         laser_proj_hits = jnp.any(laser_collisions, axis=1)
-
-        # Only vulnerable enemies take damage from lasers
         laser_damage_collisions = laser_collisions & enemy_vulnerable_to_lasers[None, :]
         laser_enemy_hits = jnp.any(laser_damage_collisions, axis=0)
 
-        # WORKING VERSION: Simple blue charger deflection - ONLY set speed
+        # Handle blue charger deflection
         charger_laser_hits = laser_enemy_hits & (enemies[:, 5] == self.constants.ENEMY_TYPE_BLUE_CHARGER)
         enemies = enemies.at[:, 4].set(
-            jnp.where(
-                charger_laser_hits,
-                self.constants.BLUE_CHARGER_DEFLECT_SPEED,  # -2.0
-                enemies[:, 4]
-            )
+            jnp.where(charger_laser_hits, self.constants.BLUE_CHARGER_DEFLECT_SPEED, enemies[:, 4])
         )
-
-        # Don't deactivate blue chargers when hit by lasers (they just get deflected)
         laser_enemy_hits = laser_enemy_hits & (enemies[:, 5] != self.constants.ENEMY_TYPE_BLUE_CHARGER)
 
-        # Vectorized collision detection for TORPEDO projectiles vs enemies
+        # FIX: Torpedo collision detection with correct coordinates
         torpedo_active = torpedo_projectiles[:, 2] == 1
-        torpedo_x = torpedo_projectiles[:, 0:1]
-        torpedo_y = torpedo_projectiles[:, 1:2]
+        torpedo_x = torpedo_projectiles[:, 0:1]  # Shape: (MAX_PROJECTILES, 1)
+        torpedo_y = torpedo_projectiles[:, 1:2]  # Shape: (MAX_PROJECTILES, 1)
         enemy_vulnerable_to_torpedoes = ~white_saucer_protected
 
-        enemy_left = enemy_x - enemy_width[None, :] / 2
-        enemy_top = enemy_y - enemy_height[None, :] / 2
-
-        # Torpedoes can hit all enemy types EXCEPT protected white saucers at horizon
+        # FIX: Remove the enemy_left/enemy_top centering - enemies are drawn from top-left
         torpedo_collisions = (
-                (torpedo_x < enemy_left + enemy_width[None, :]) &
-                (torpedo_x + self.constants.TORPEDO_WIDTH > enemy_left) &
-                (torpedo_y < enemy_top + enemy_height[None, :]) &
-                (torpedo_y + self.constants.TORPEDO_HEIGHT > enemy_top) &
+                (torpedo_x < enemy_x + enemy_width.reshape(1, -1)) &
+                (torpedo_x + self.constants.TORPEDO_WIDTH > enemy_x) &
+                (torpedo_y < enemy_y_bc + enemy_height.reshape(1, -1)) &
+                (torpedo_y + self.constants.TORPEDO_HEIGHT > enemy_y_bc) &
                 torpedo_active[:, None] &
                 enemy_active[None, :] &
                 enemy_vulnerable_to_torpedoes[None, :]
         )
-        # Find collisions for torpedo projectiles
+
         torpedo_proj_hits = jnp.any(torpedo_collisions, axis=1)
         torpedo_enemy_hits = jnp.any(torpedo_collisions, axis=0)
 
-        # Handle sentinel ship health reduction - FIXED LOGIC
+        # Handle sentinel health
         sentinel_torpedo_hits = torpedo_enemy_hits & (enemies[:, 5] == self.constants.ENEMY_TYPE_SENTINEL_SHIP)
-
-        # Store original health before reduction for proper destruction check
-        original_sentinel_health = enemies[:, 11]
-
-        # Reduce sentinel health when hit by torpedo
-        enemies = enemies.at[:, 11].set(  # health column
-            jnp.where(
-                sentinel_torpedo_hits,
-                jnp.maximum(0, enemies[:, 11] - 1),  # Reduce health by 1, minimum 0
-                enemies[:, 11]
-            )
+        enemies = enemies.at[:, 11].set(
+            jnp.where(sentinel_torpedo_hits, jnp.maximum(0, enemies[:, 11] - 1), enemies[:, 11])
         )
-
-        # Only destroy sentinels when health reaches 0 after reduction
         sentinel_destroyed = sentinel_torpedo_hits & (enemies[:, 11] == 0)
-
-        # Update torpedo hits to only include destroyed sentinels
         torpedo_enemy_hits = jnp.where(
             enemies[:, 5] == self.constants.ENEMY_TYPE_SENTINEL_SHIP,
-            sentinel_destroyed,  # Only destroy if health reached 0
-            torpedo_enemy_hits  # Normal destruction for other enemies
+            sentinel_destroyed,
+            torpedo_enemy_hits
         )
 
-        # Combine enemy hits from laser and torpedo
+        # Combine hits and calculate score
         total_enemy_hits = laser_enemy_hits | torpedo_enemy_hits
-
-        # Count only WHITE SAUCER kills for sector progression
         white_saucer_hits = total_enemy_hits & (enemies[:, 5] == self.constants.ENEMY_TYPE_WHITE_SAUCER)
         enemies_killed_this_frame = jnp.sum(white_saucer_hits)
 
-        # Calculate score with different point values
-        laser_score = (
-                jnp.sum(laser_enemy_hits & (enemies[:,
-                                            5] == self.constants.ENEMY_TYPE_WHITE_SAUCER)) * self.constants.POINTS_PER_ENEMY +
-                jnp.sum(laser_enemy_hits & (enemies[:,
-                                            5] == self.constants.ENEMY_TYPE_YELLOW_CHIRPER)) * self.constants.YELLOW_CHIRPER_POINTS
-        )
+        # Vectorized score calculation
+        enemy_types = enemies[:, 5]
+        laser_scores = jnp.where(laser_enemy_hits,
+                                 jnp.where(enemy_types == self.constants.ENEMY_TYPE_WHITE_SAUCER,
+                                           self.constants.POINTS_PER_ENEMY,
+                                           jnp.where(enemy_types == self.constants.ENEMY_TYPE_YELLOW_CHIRPER,
+                                                     self.constants.YELLOW_CHIRPER_POINTS, 0)),
+                                 0
+                                 )
+        laser_score = jnp.sum(laser_scores)
 
-        # FIXED: Award points for sentinel hits even if not destroyed
+        # Calculate torpedo scores
+        torpedo_scores = jnp.where(torpedo_enemy_hits,
+                                   jnp.where(enemy_types == self.constants.ENEMY_TYPE_WHITE_SAUCER,
+                                             self.constants.POINTS_PER_ENEMY * 2,
+                                             jnp.where(enemy_types == self.constants.ENEMY_TYPE_BROWN_DEBRIS,
+                                                       self.constants.BROWN_DEBRIS_POINTS,
+                                                       jnp.where(
+                                                           enemy_types == self.constants.ENEMY_TYPE_YELLOW_CHIRPER,
+                                                           self.constants.YELLOW_CHIRPER_POINTS,
+                                                           jnp.where(
+                                                               enemy_types == self.constants.ENEMY_TYPE_GREEN_BLOCKER,
+                                                               self.constants.GREEN_BLOCKER_POINTS,
+                                                               jnp.where(
+                                                                   enemy_types == self.constants.ENEMY_TYPE_GREEN_BOUNCE,
+                                                                   self.constants.GREEN_BOUNCE_POINTS,
+                                                                   jnp.where(
+                                                                       enemy_types == self.constants.ENEMY_TYPE_BLUE_CHARGER,
+                                                                       self.constants.BLUE_CHARGER_POINTS,
+                                                                       jnp.where(
+                                                                           enemy_types == self.constants.ENEMY_TYPE_ORANGE_TRACKER,
+                                                                           self.constants.ORANGE_TRACKER_POINTS,
+                                                                           jnp.where(
+                                                                               enemy_types == self.constants.ENEMY_TYPE_SENTINEL_SHIP,
+                                                                               self.constants.SENTINEL_SHIP_POINTS,
+                                                                               0)))))))),
+                                   0
+                                   )
+
         sentinels_hit_count = jnp.sum(sentinel_torpedo_hits)
         sentinel_life_bonus = sentinels_hit_count * (state.lives * 100)
-
-        torpedo_score = (
-                jnp.sum(torpedo_enemy_hits & (enemies[:,
-                                              5] == self.constants.ENEMY_TYPE_WHITE_SAUCER)) * self.constants.POINTS_PER_ENEMY * 2 +
-                jnp.sum(torpedo_enemy_hits & (enemies[:,
-                                              5] == self.constants.ENEMY_TYPE_BROWN_DEBRIS)) * self.constants.BROWN_DEBRIS_POINTS +
-                jnp.sum(torpedo_enemy_hits & (enemies[:,
-                                              5] == self.constants.ENEMY_TYPE_YELLOW_CHIRPER)) * self.constants.YELLOW_CHIRPER_POINTS +
-                jnp.sum(torpedo_enemy_hits & (enemies[:,
-                                              5] == self.constants.ENEMY_TYPE_GREEN_BLOCKER)) * self.constants.GREEN_BLOCKER_POINTS +
-                jnp.sum(torpedo_enemy_hits & (enemies[:,
-                                              5] == self.constants.ENEMY_TYPE_GREEN_BOUNCE)) * self.constants.GREEN_BOUNCE_POINTS +
-                jnp.sum(torpedo_enemy_hits & (enemies[:,
-                                              5] == self.constants.ENEMY_TYPE_BLUE_CHARGER)) * self.constants.BLUE_CHARGER_POINTS +
-                jnp.sum(torpedo_enemy_hits & (enemies[:,
-                                              5] == self.constants.ENEMY_TYPE_ORANGE_TRACKER)) * self.constants.ORANGE_TRACKER_POINTS +
-                jnp.sum(torpedo_enemy_hits & (enemies[:,
-                                              5] == self.constants.ENEMY_TYPE_SENTINEL_SHIP)) * self.constants.SENTINEL_SHIP_POINTS +
-                sentinel_life_bonus
-        )
+        torpedo_score = jnp.sum(torpedo_scores) + sentinel_life_bonus
 
         score += laser_score + torpedo_score
 
-        # Check sentinel projectile vs player collisions
+        # Check ship collisions
         ship_x, ship_y = state.ship.x, state.ship.y
-        sentinel_proj_active = sentinel_projectiles[:, 2] == 1
 
+        # Vectorized sentinel projectile collision check
+        sentinel_proj_active = sentinel_projectiles[:, 2] == 1
         sentinel_proj_ship_collisions = (
                 (ship_x < sentinel_projectiles[:, 0] + self.constants.PROJECTILE_WIDTH) &
                 (ship_x + self.constants.SHIP_WIDTH > sentinel_projectiles[:, 0]) &
@@ -3377,16 +3364,14 @@ class BeamRiderEnv(JaxEnvironment[BeamRiderState, BeamRiderObservation, BeamRide
         )
 
         sentinel_hit_ship = jnp.any(sentinel_proj_ship_collisions)
-
-        # Deactivate sentinel projectiles that hit ship
         sentinel_projectiles = sentinel_projectiles.at[:, 2].set(
             sentinel_projectiles[:, 2] * (~sentinel_proj_ship_collisions)
         )
 
-        # Check regular enemy-ship collisions (exclude chirpers and sentinels)
+        # Check enemy-ship collisions - enemies are at (x,y) not centered
         can_collide_with_ship = (
                 (enemies[:, 5] != self.constants.ENEMY_TYPE_YELLOW_CHIRPER) &
-                (enemies[:, 5] != self.constants.ENEMY_TYPE_SENTINEL_SHIP)  # Sentinels don't collide directly
+                (enemies[:, 5] != self.constants.ENEMY_TYPE_SENTINEL_SHIP)
         )
 
         ship_collisions = (
@@ -3399,37 +3384,28 @@ class BeamRiderEnv(JaxEnvironment[BeamRiderState, BeamRiderObservation, BeamRide
         )
 
         regular_ship_collision = jnp.any(ship_collisions)
-
-        # Combine all ship collisions
         any_ship_collision = regular_ship_collision | sentinel_hit_ship
 
-        # Handle ship collision
+        # Update ship and lives
         lives = jnp.where(any_ship_collision, state.lives - 1, state.lives)
-
-        # Reset ship position on collision
         center_beam = self.constants.INITIAL_BEAM
         new_ship_x = jnp.where(
             any_ship_collision,
             self.beam_positions[center_beam] - self.constants.SHIP_WIDTH // 2,
             state.ship.x
         )
-        new_ship_beam = jnp.where(
-            any_ship_collision,
-            center_beam,
-            state.ship.beam_position
-        )
+        new_ship_beam = jnp.where(any_ship_collision, center_beam, state.ship.beam_position)
 
         ship = state.ship.replace(
             x=new_ship_x,
             beam_position=new_ship_beam,
-            target_beam=new_ship_beam  # Add this line
+            target_beam=new_ship_beam
         )
-        # Update projectile and enemy states
-        projectiles = projectiles.at[:, 2].set(
-            projectiles[:, 2] * (~laser_proj_hits))  # Lasers destroyed by ANY collision
+
+        # Update states
+        projectiles = projectiles.at[:, 2].set(projectiles[:, 2] * (~laser_proj_hits))
         torpedo_projectiles = torpedo_projectiles.at[:, 2].set(torpedo_projectiles[:, 2] * (~torpedo_proj_hits))
-        enemies = enemies.at[:, 3].set(enemies[:, 3] * (~total_enemy_hits))  # Only enemies that should be destroyed
-        enemies = enemies.at[:, 3].set(enemies[:, 3] * (~ship_collisions))  # Deactivate enemies that hit ship
+        enemies = enemies.at[:, 3].set(enemies[:, 3] * (~total_enemy_hits) * (~ship_collisions))
 
         return state.replace(
             projectiles=projectiles,
@@ -3443,130 +3419,82 @@ class BeamRiderEnv(JaxEnvironment[BeamRiderState, BeamRiderObservation, BeamRide
         )
     @partial(jax.jit, static_argnums=(0,))
     def _check_rejuvenator_interactions(self, state: BeamRiderState) -> BeamRiderState:
-        """Handle yellow rejuvenator collection and shooting interactions"""
+        """Handle rejuvenator interactions - OPTIMIZED with vectorized collision detection"""
         enemies = state.enemies
         ship = state.ship
-
-        # Find active yellow rejuvenators
-        rejuvenator_mask = (enemies[:, 3] == 1) & (enemies[:, 5] == self.constants.ENEMY_TYPE_YELLOW_REJUVENATOR)
-
-        # Check for rejuvenator collection (landing on deck)
-        rejuvenator_x = enemies[:, 0]
-        rejuvenator_y = enemies[:, 1]
-
-        # Collection occurs when rejuvenator reaches ship level and overlaps horizontally
-        collection_mask = (
-                rejuvenator_mask &
-                (rejuvenator_y >= ship.y - self.constants.ENEMY_HEIGHT) &  # At ship level
-                (rejuvenator_x + self.constants.ENEMY_WIDTH > ship.x) &  # Horizontal overlap
-                (rejuvenator_x < ship.x + self.constants.SHIP_WIDTH)
-        )
-
-        # Count collected rejuvenators
-        collected_count = jnp.sum(collection_mask)
-
-        # Add bonus lives for collected rejuvenators
-        new_lives = state.lives + (collected_count * self.constants.YELLOW_REJUVENATOR_LIFE_BONUS)
-
-        # Deactivate collected rejuvenators
-        enemies = enemies.at[:, 3].set(
-            jnp.where(collection_mask, 0, enemies[:, 3])  # Set active to 0 for collected ones
-        )
-
-        # Check for rejuvenator hits by projectiles (spawn debris)
         projectiles = state.projectiles
         torpedo_projectiles = state.torpedo_projectiles
 
-        # Check regular projectile hits on rejuvenators
-        projectile_active = projectiles[:, 2] == 1
-        rejuvenator_hit_by_projectile = jnp.zeros(self.constants.MAX_ENEMIES, dtype=bool)
+        # Find active rejuvenators
+        rejuvenator_mask = (enemies[:, 3] == 1) & (enemies[:, 5] == self.constants.ENEMY_TYPE_YELLOW_REJUVENATOR)
+        rejuvenator_x = enemies[:, 0]
+        rejuvenator_y = enemies[:, 1]
 
-        # Check each projectile against each rejuvenator
-        for i in range(self.constants.MAX_PROJECTILES):
-            proj_active = projectile_active[i]
-            proj_x = projectiles[i, 0]
-            proj_y = projectiles[i, 1]
-
-            # FIXED: Use proper overlapping bounding box collision detection
-            hit_mask = (
-                    rejuvenator_mask &
-                    proj_active &
-                    (proj_x + self.constants.PROJECTILE_WIDTH > rejuvenator_x) &  # Projectile right > rejuv left
-                    (proj_x < rejuvenator_x + self.constants.ENEMY_WIDTH) &  # Projectile left < rejuv right
-                    (proj_y + self.constants.PROJECTILE_HEIGHT > rejuvenator_y) &  # Projectile bottom > rejuv top
-                    (proj_y < rejuvenator_y + self.constants.ENEMY_HEIGHT)  # Projectile top < rejuv bottom
-            )
-
-            rejuvenator_hit_by_projectile = rejuvenator_hit_by_projectile | hit_mask
-
-            # Deactivate projectiles that hit rejuvenators
-            projectiles = projectiles.at[i, 2].set(
-                jnp.where(jnp.any(hit_mask), 0, projectiles[i, 2])
-            )
-
-        # Check torpedo hits on rejuvenators
-        torpedo_active = torpedo_projectiles[:, 2] == 1
-        rejuvenator_hit_by_torpedo = jnp.zeros(self.constants.MAX_ENEMIES, dtype=bool)
-
-        # Check each torpedo against each rejuvenator
-        for i in range(self.constants.MAX_PROJECTILES):
-            torp_active = torpedo_active[i]
-            torp_x = torpedo_projectiles[i, 0]
-            torp_y = torpedo_projectiles[i, 1]
-
-            # FIXED: This was already correct (overlapping bounding boxes)
-            hit_mask = (
-                    rejuvenator_mask &
-                    torp_active &
-                    (torp_x + self.constants.TORPEDO_WIDTH > rejuvenator_x) &  # Torpedo right edge > rejuv left
-                    (torp_x < rejuvenator_x + self.constants.ENEMY_WIDTH) &  # Torpedo left edge < rejuv right
-                    (torp_y + self.constants.TORPEDO_HEIGHT > rejuvenator_y) &  # Torpedo bottom > rejuv top
-                    (torp_y < rejuvenator_y + self.constants.ENEMY_HEIGHT)  # Torpedo top < rejuv bottom
-            )
-
-            rejuvenator_hit_by_torpedo = rejuvenator_hit_by_torpedo | hit_mask
-
-            # Deactivate torpedoes that hit rejuvenators
-            torpedo_projectiles = torpedo_projectiles.at[i, 2].set(
-                jnp.where(jnp.any(hit_mask), 0, torpedo_projectiles[i, 2])
-            )
-
-        # Check torpedo hits on rejuvenators
-        torpedo_active = torpedo_projectiles[:, 2] == 1
-        rejuvenator_hit_by_torpedo = jnp.zeros(self.constants.MAX_ENEMIES, dtype=bool)
-
-        # Check each torpedo against each rejuvenator
-        for i in range(self.constants.MAX_PROJECTILES):
-            torp_active = torpedo_active[i]
-            torp_x = torpedo_projectiles[i, 0]
-            torp_y = torpedo_projectiles[i, 1]
-
-            # Check collision with each rejuvenator (torpedoes are larger than regular projectiles)
-            hit_mask = (
-                    rejuvenator_mask &
-                    torp_active &
-                    (torp_x + self.constants.TORPEDO_WIDTH > rejuvenator_x) &  # Torpedo right edge > rejuv left
-                    (torp_x < rejuvenator_x + self.constants.ENEMY_WIDTH) &  # Torpedo left edge < rejuv right
-                    (torp_y + self.constants.TORPEDO_HEIGHT > rejuvenator_y) &  # Torpedo bottom > rejuv top
-                    (torp_y < rejuvenator_y + self.constants.ENEMY_HEIGHT)  # Torpedo top < rejuv bottom
-            )
-
-            rejuvenator_hit_by_torpedo = rejuvenator_hit_by_torpedo | hit_mask
-
-            # Deactivate torpedoes that hit rejuvenators
-            torpedo_projectiles = torpedo_projectiles.at[i, 2].set(
-                jnp.where(jnp.any(hit_mask), 0, torpedo_projectiles[i, 2])
-            )
-
-        # Combine all hits (both regular projectiles AND torpedoes)
-        rejuvenator_hit_mask = rejuvenator_hit_by_projectile | rejuvenator_hit_by_torpedo
-
-        # Deactivate hit rejuvenators
-        enemies = enemies.at[:, 3].set(
-            jnp.where(rejuvenator_hit_mask, 0, enemies[:, 3])
+        # Check collection (landing on deck)
+        collection_mask = (
+                rejuvenator_mask &
+                (rejuvenator_y >= ship.y - self.constants.ENEMY_HEIGHT) &
+                (rejuvenator_x + self.constants.ENEMY_WIDTH > ship.x) &
+                (rejuvenator_x < ship.x + self.constants.SHIP_WIDTH)
         )
 
-        # Spawn debris for hit rejuvenators
+        collected_count = jnp.sum(collection_mask)
+        new_lives = state.lives + (collected_count * self.constants.YELLOW_REJUVENATOR_LIFE_BONUS)
+        enemies = enemies.at[:, 3].set(jnp.where(collection_mask, 0, enemies[:, 3]))
+
+        # OPTIMIZED: Vectorized projectile collision detection
+        projectile_active = projectiles[:, 2] == 1
+
+        # Create collision matrix for regular projectiles
+        proj_x_expanded = projectiles[:, 0:1]
+        proj_y_expanded = projectiles[:, 1:2]
+        rejuv_x_expanded = rejuvenator_x[None, :]
+        rejuv_y_expanded = rejuvenator_y[None, :]
+
+        projectile_hits_matrix = (
+                projectile_active[:, None] &
+                rejuvenator_mask[None, :] &
+                (proj_x_expanded + self.constants.PROJECTILE_WIDTH > rejuv_x_expanded) &
+                (proj_x_expanded < rejuv_x_expanded + self.constants.ENEMY_WIDTH) &
+                (proj_y_expanded + self.constants.PROJECTILE_HEIGHT > rejuv_y_expanded) &
+                (proj_y_expanded < rejuv_y_expanded + self.constants.ENEMY_HEIGHT)
+        )
+
+        projectile_hit_any = jnp.any(projectile_hits_matrix, axis=1)
+        rejuvenator_hit_by_projectile = jnp.any(projectile_hits_matrix, axis=0)
+
+        # Update projectiles
+        projectiles = projectiles.at[:, 2].set(
+            jnp.where(projectile_hit_any, 0, projectiles[:, 2])
+        )
+
+        # OPTIMIZED: Vectorized torpedo collision detection
+        torpedo_active = torpedo_projectiles[:, 2] == 1
+
+        torp_x_expanded = torpedo_projectiles[:, 0:1]
+        torp_y_expanded = torpedo_projectiles[:, 1:2]
+
+        torpedo_hits_matrix = (
+                torpedo_active[:, None] &
+                rejuvenator_mask[None, :] &
+                (torp_x_expanded + self.constants.TORPEDO_WIDTH > rejuv_x_expanded) &
+                (torp_x_expanded < rejuv_x_expanded + self.constants.ENEMY_WIDTH) &
+                (torp_y_expanded + self.constants.TORPEDO_HEIGHT > rejuv_y_expanded) &
+                (torp_y_expanded < rejuv_y_expanded + self.constants.ENEMY_HEIGHT)
+        )
+
+        torpedo_hit_any = jnp.any(torpedo_hits_matrix, axis=1)
+        rejuvenator_hit_by_torpedo = jnp.any(torpedo_hits_matrix, axis=0)
+
+        torpedo_projectiles = torpedo_projectiles.at[:, 2].set(
+            jnp.where(torpedo_hit_any, 0, torpedo_projectiles[:, 2])
+        )
+
+        # Combine hits and deactivate
+        rejuvenator_hit_mask = rejuvenator_hit_by_projectile | rejuvenator_hit_by_torpedo
+        enemies = enemies.at[:, 3].set(jnp.where(rejuvenator_hit_mask, 0, enemies[:, 3]))
+
+        # Update state
         state = state.replace(
             enemies=enemies,
             lives=new_lives,
@@ -5244,8 +5172,8 @@ class BeamRiderRenderer(JAXGameRenderer):
     # PYGAME DISPLAY METHODS (moved from BeamRiderPygameRenderer)
     # ============================================================================
 
-    """def run_game(self):
-        Main game loop with torpedo support - requires pygame to be enabled
+    def run_game(self):
+        #Main game loop with torpedo support - requires pygame to be enabled
         if not self.enable_pygame:
             raise RuntimeError("pygame must be enabled to run the game. Initialize with enable_pygame=True")
 
@@ -5308,7 +5236,7 @@ class BeamRiderRenderer(JAXGameRenderer):
         sys.exit()
 
     def _show_sector_complete(self, state):
-        Show sector completion message (called when sector advances)
+        #Show sector completion message (called when sector advances)
         if hasattr(self, '_last_sector') and state.current_sector > self._last_sector:
             # Sector just advanced - show visual feedback
 
@@ -5349,7 +5277,7 @@ class BeamRiderRenderer(JAXGameRenderer):
         self.pygame_screen.blit(pause_text, rect)
 
     def _draw_screen(self, screen_buffer, state):
-       Draws the game screen buffer and overlays the ship sprite
+       #Draws the game screen buffer and overlays the ship sprite
         screen_np = np.array(screen_buffer)
         scaled_screen = np.repeat(np.repeat(screen_np, self.scale, axis=0), self.scale, axis=1)
 
@@ -5362,7 +5290,7 @@ class BeamRiderRenderer(JAXGameRenderer):
         self.pygame_screen.blit(self.ship_sprite_surface, (ship_x, ship_y))
 
     def _draw_ui_overlay(self, state):
-       Draw centered Score and Level UI - UPDATED: shows sentinel ship info
+       #Draw centered Score and Level UI - UPDATED: shows sentinel ship info
         # Enemies left number (top-left)
         enemies_left = 15 - state.enemies_killed_this_sector
         enemies_text = self.font.render(str(enemies_left), True, (255, 0, 0))  # red number
@@ -5399,7 +5327,7 @@ class BeamRiderRenderer(JAXGameRenderer):
             self.pygame_screen.blit(scaled_ship, (x, y))
 
     def _show_game_over(self, state):
-        Show Game Over screen
+        # Show Game Over screen
         overlay = pygame.Surface((self.pygame_screen_width, self.pygame_screen_height))
         overlay.set_alpha(128)
         overlay.fill((0, 0, 0))
@@ -5422,4 +5350,4 @@ class BeamRiderRenderer(JAXGameRenderer):
 
 if __name__ == "__main__":
     game = BeamRiderRenderer(enable_pygame=True)
-    game.run_game()"""
+    game.run_game()
