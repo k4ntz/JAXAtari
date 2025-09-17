@@ -15,8 +15,7 @@ import jaxatari.spaces as spaces
 
 """TODOS:
 - make game more 3D --> might be done(ask supervisor)
-- remove scaling for orange Tracker
-- final test
+- sentinel hit not always registering
 For later:
 - Documentation"""
 
@@ -87,7 +86,8 @@ class BeamRiderConstants(NamedTuple):
     ENEMY_TYPE_BLUE_CHARGER = 5
     ENEMY_TYPE_ORANGE_TRACKER = 6
     ENEMY_TYPE_SENTINEL_SHIP = 7
-
+    ENEMY_TYPE_YELLOW_REJUVENATOR = 8
+    ENEMY_TYPE_REJUVENATOR_DEBRIS = 9
     # White saucer behavior constants
     WHITE_SAUCER_SHOOT_CHANCE = 0.2  # 20% of white saucers can shoot
     WHITE_SAUCER_JUMP_CHANCE = 0.15  # 15% chance for beam jumping
@@ -134,7 +134,7 @@ class BeamRiderConstants(NamedTuple):
     WHITE_SAUCER_HORIZONTAL_SPEED = 1.5  # Pixels per frame horizontal movement
     WHITE_SAUCER_BEAM_SNAP_DISTANCE = 3
 
-    # Sentinel ship specific constants - UPDATED speeds
+    # Sentinel ship specific constants
     SENTINEL_SHIP_SPEED = 0.3  # Moderate base speed, will scale
     SENTINEL_SHIP_POINTS = 200  # High points when destroyed with torpedo
     SENTINEL_SHIP_COLOR = (192, 192, 192)  # Silver/grey color RGB
@@ -146,19 +146,19 @@ class BeamRiderConstants(NamedTuple):
     SENTINEL_SHIP_PROJECTILE_SPEED = 3.0  # Speed of sentinel projectiles
     SENTINEL_SHIP_HEALTH = 1  # Takes 1 torpedo hit to destroy
 
-    # Orange tracker specific constants - UPDATED speeds
+    # Orange tracker specific constants
     ORANGE_TRACKER_SPEED = 0.9  # Slower base tracking speed
     ORANGE_TRACKER_POINTS = 50  # Points when destroyed with torpedo
     ORANGE_TRACKER_COLOR = (255, 165, 0)  # Orange color RGB
-    ORANGE_TRACKER_SPAWN_SECTOR = 1  # Starts appearing from sector 12
-    ORANGE_TRACKER_SPAWN_CHANCE = 0.8  # 8% chance to spawn orange tracker
+    ORANGE_TRACKER_SPAWN_SECTOR = 12  # Starts appearing from sector 12
+    ORANGE_TRACKER_SPAWN_CHANCE = 0.08  # 8% chance to spawn orange tracker
     ORANGE_TRACKER_CHANGE_DIRECTION_INTERVAL = 90  # Frames between direction changes
 
     # Tracker course change limits based on sector
     ORANGE_TRACKER_BASE_COURSE_CHANGES = 1  # Base number of course changes allowed
     ORANGE_TRACKER_COURSE_CHANGE_INCREASE_SECTOR = 5  # Every X sectors, add 1 more course change
 
-    # Blue charger specific constants - UPDATED speeds
+    # Blue charger specific constants
     BLUE_CHARGER_SPEED = 1.1  # Slower base speed
     BLUE_CHARGER_POINTS = 30  # Points when destroyed
     BLUE_CHARGER_COLOR = (0, 0, 255)  # Blue color RGB
@@ -167,7 +167,7 @@ class BeamRiderConstants(NamedTuple):
     BLUE_CHARGER_LINGER_TIME = 180  # Frames to stay at bottom (3 seconds at 60fps)
     BLUE_CHARGER_DEFLECT_SPEED = -2.0  # Speed when deflected upward by laser
 
-    # Brown debris specific constants - UPDATED speeds
+    # Brown debris specific constants
     BROWN_DEBRIS_SPEED = 1.0  # Slower base speed
     BROWN_DEBRIS_POINTS = 25  # Bonus points when destroyed with torpedo
     BROWN_DEBRIS_COLOR = (139, 69, 19)  # Brown color RGB
@@ -203,10 +203,6 @@ class BeamRiderConstants(NamedTuple):
     GREEN_BOUNCE_COLOR = (0, 200, 0)  # Slightly different green than blockers
     GREEN_BOUNCE_SPAWN_SECTOR = 7  # Starts appearing from sector 7
     GREEN_BOUNCE_SPAWN_CHANCE = 0.08  # 8% chance to spawn green bounce craft
-    GREEN_BOUNCE_MAX_BOUNCES = 2  # Maximum number of bounces before disappearing
-    # Enemy types (add this new type after ENEMY_TYPE_SENTINEL_SHIP = 7)
-    ENEMY_TYPE_YELLOW_REJUVENATOR = 8  # NEW: Yellow rejuvenator
-    ENEMY_TYPE_REJUVENATOR_DEBRIS = 9  # NEW: Explosive debris from shot rejuvenators
 
     # Yellow rejuvenator specific constants
     YELLOW_REJUVENATOR_SPEED = 0.5  # Slow float speed
@@ -2832,17 +2828,6 @@ class BeamRiderEnv(JaxEnvironment[BeamRiderState, BeamRiderObservation, BeamRide
             tracker_y  # Stay at same Y during horizontal phase
         )
 
-        # Apply beam curve when moving vertically and aligned with beam
-        tracker_beam_idx = jnp.clip(new_target_beam_tracker, 0, self.constants.NUM_BEAMS - 1)
-        tracker_curved_x = self._beam_curve_x(tracker_new_y, tracker_beam_idx, self.constants.ENEMY_WIDTH)
-
-        # Use curved position only when in vertical phase and at target beam
-        tracker_new_x = jnp.where(
-            in_vertical_phase & at_target_beam & (new_target_beam_tracker >= 0),
-            tracker_curved_x,
-            tracker_new_x
-        )
-
         # Check if tracker has reached bottom (they should disappear here)
         tracker_at_bottom = tracker_new_y >= self.constants.SCREEN_HEIGHT
 
@@ -3122,6 +3107,7 @@ class BeamRiderEnv(JaxEnvironment[BeamRiderState, BeamRiderObservation, BeamRide
         )
 
         return state.replace(enemies=enemies)
+
     @partial(jax.jit, static_argnums=(0,))
     def _check_collisions(self, state: BeamRiderState) -> BeamRiderState:
         """Check for collisions between projectiles and enemies"""
@@ -3216,22 +3202,28 @@ class BeamRiderEnv(JaxEnvironment[BeamRiderState, BeamRiderObservation, BeamRide
         torpedo_y = torpedo_projectiles[:, 1:2]
         enemy_vulnerable_to_torpedoes = ~white_saucer_protected
 
+        enemy_left = enemy_x - enemy_width[None, :] / 2
+        enemy_top = enemy_y - enemy_height[None, :] / 2
+
         # Torpedoes can hit all enemy types EXCEPT protected white saucers at horizon
         torpedo_collisions = (
-                (torpedo_x < enemy_x + enemy_width[None, :]) &
-                (torpedo_x + self.constants.TORPEDO_WIDTH > enemy_x) &
-                (torpedo_y < enemy_y + enemy_height[None, :]) &
-                (torpedo_y + self.constants.TORPEDO_HEIGHT > enemy_y) &
+                (torpedo_x < enemy_left + enemy_width[None, :]) &
+                (torpedo_x + self.constants.TORPEDO_WIDTH > enemy_left) &
+                (torpedo_y < enemy_top + enemy_height[None, :]) &
+                (torpedo_y + self.constants.TORPEDO_HEIGHT > enemy_top) &
                 torpedo_active[:, None] &
                 enemy_active[None, :] &
-                enemy_vulnerable_to_torpedoes[None, :]  # ADDED: Check if enemy can be hit by torpedoes
+                enemy_vulnerable_to_torpedoes[None, :]
         )
         # Find collisions for torpedo projectiles
         torpedo_proj_hits = jnp.any(torpedo_collisions, axis=1)
         torpedo_enemy_hits = jnp.any(torpedo_collisions, axis=0)
 
-        # Handle sentinel ship health reduction
+        # Handle sentinel ship health reduction - FIXED LOGIC
         sentinel_torpedo_hits = torpedo_enemy_hits & (enemies[:, 5] == self.constants.ENEMY_TYPE_SENTINEL_SHIP)
+
+        # Store original health before reduction for proper destruction check
+        original_sentinel_health = enemies[:, 11]
 
         # Reduce sentinel health when hit by torpedo
         enemies = enemies.at[:, 11].set(  # health column
@@ -3242,13 +3234,13 @@ class BeamRiderEnv(JaxEnvironment[BeamRiderState, BeamRiderObservation, BeamRide
             )
         )
 
-        # Only destroy sentinels when health reaches 0
-        sentinel_destroyed = sentinel_torpedo_hits & (enemies[:, 11] <= 1)  # Will be 0 after reduction
+        # Only destroy sentinels when health reaches 0 after reduction
+        sentinel_destroyed = sentinel_torpedo_hits & (enemies[:, 11] == 0)
 
         # Update torpedo hits to only include destroyed sentinels
         torpedo_enemy_hits = jnp.where(
             enemies[:, 5] == self.constants.ENEMY_TYPE_SENTINEL_SHIP,
-            sentinel_destroyed,  # Only destroy if health will reach 0
+            sentinel_destroyed,  # Only destroy if health reached 0
             torpedo_enemy_hits  # Normal destruction for other enemies
         )
 
@@ -3267,8 +3259,9 @@ class BeamRiderEnv(JaxEnvironment[BeamRiderState, BeamRiderObservation, BeamRide
                                             5] == self.constants.ENEMY_TYPE_YELLOW_CHIRPER)) * self.constants.YELLOW_CHIRPER_POINTS
         )
 
-        sentinels_destroyed_count = jnp.sum(torpedo_enemy_hits & (enemies[:, 5] == self.constants.ENEMY_TYPE_SENTINEL_SHIP))
-        sentinel_life_bonus = sentinels_destroyed_count * (state.lives * 100)
+        # FIXED: Award points for sentinel hits even if not destroyed
+        sentinels_hit_count = jnp.sum(sentinel_torpedo_hits)
+        sentinel_life_bonus = sentinels_hit_count * (state.lives * 100)
 
         torpedo_score = (
                 jnp.sum(torpedo_enemy_hits & (enemies[:,
@@ -3369,7 +3362,6 @@ class BeamRiderEnv(JaxEnvironment[BeamRiderState, BeamRiderObservation, BeamRide
             lives=lives,
             enemies_killed_this_sector=state.enemies_killed_this_sector + enemies_killed_this_frame
         )
-
     @partial(jax.jit, static_argnums=(0,))
     def _check_rejuvenator_interactions(self, state: BeamRiderState) -> BeamRiderState:
         """Handle yellow rejuvenator collection and shooting interactions"""
@@ -3911,24 +3903,24 @@ class BeamRiderRenderer(JAXGameRenderer):
 
         # Yellow chirper sprite - closed mouth frame
         self.yellow_chirper_closed = jnp.array([
-            [0, 0, 0, 1, 1, 1, 0, 0, 0],
-            [0, 0, 1, 1, 1, 1, 1, 0, 0],
-            [0, 1, 1, 1, 1, 1, 1, 1, 0],
-            [1, 1, 1, 1, 1, 1, 1, 1, 1],
-            [0, 1, 1, 1, 1, 1, 1, 1, 0],
-            [0, 0, 1, 1, 1, 1, 1, 0, 0],
-            [0, 0, 0, 1, 1, 1, 0, 0, 0],
+            [0, 0, 0, 1, 1, 0, 0, 0],
+            [0, 0, 1, 1, 1, 1, 0, 0],
+            [0, 1, 1, 1, 1, 1, 1, 0],
+            [1, 1, 1, 1, 1, 1, 1, 1],
+            [0, 1, 1, 1, 1, 1, 1, 0],
+            [0, 0, 1, 1, 1, 1, 0, 0],
+            [0, 0, 0, 1, 1, 0, 0, 0],
         ], dtype=jnp.uint8)
 
         # Yellow chirper sprite - open mouth frame
         self.yellow_chirper_open = jnp.array([
-            [0, 0, 0, 1, 1, 1, 0, 0, 0],
-            [0, 0, 1, 1, 1, 1, 1, 0, 0],
-            [0, 1, 1, 1, 0, 1, 1, 1, 0],
-            [1, 1, 1, 0, 0, 0, 1, 1, 1],
-            [0, 1, 1, 1, 0, 1, 1, 1, 0],
-            [0, 0, 1, 1, 1, 1, 1, 0, 0],
-            [0, 0, 0, 1, 1, 1, 0, 0, 0],
+            [0, 0, 0, 1, 1, 0, 0, 0],
+            [0, 0, 1, 1, 1, 1, 0, 0],
+            [0, 1, 0, 0, 0, 0, 1, 0],
+            [1, 0, 0, 0, 0, 0, 0, 1],
+            [0, 1, 0, 0, 0, 0, 1, 0],
+            [0, 0, 1, 1, 1, 1, 0, 0],
+            [0, 0, 0, 1, 1, 0, 0, 0],
         ], dtype=jnp.uint8)
 
         # JAX rendering components
@@ -4641,7 +4633,8 @@ class BeamRiderRenderer(JAXGameRenderer):
             side_spawner = (
                     (enemy_type == self.constants.ENEMY_TYPE_YELLOW_CHIRPER) |
                     (enemy_type == self.constants.ENEMY_TYPE_GREEN_BLOCKER) |
-                    (enemy_type == self.constants.ENEMY_TYPE_GREEN_BOUNCE)
+                    (enemy_type == self.constants.ENEMY_TYPE_GREEN_BOUNCE) |
+                    (enemy_type == self.constants.ENEMY_TYPE_ORANGE_TRACKER)
             )
             no_scaling = sentinel_ship | side_spawner
             is_white_saucer = enemy_type == self.constants.ENEMY_TYPE_WHITE_SAUCER
