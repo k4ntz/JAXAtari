@@ -136,7 +136,9 @@ ENCODED_WORD_LIST_5 = jnp.stack([_encode_word(w, 6) for w in WORD_LIST_5])  # (7
 ENCODED_WORD_LIST_6 = jnp.stack([_encode_word(w, 6) for w in WORD_LIST_6])  # (7, 6)
 
 def _pick_bank(level_len: chex.Array) -> chex.Array:
-    # Map 4->0, 5->1, else 6->2 without Python indexing
+    """
+    select encoded word list based on level
+    """
     idx = jnp.where(level_len == 4, 0, jnp.where(level_len == 5, 1, 2))
     return jax.lax.switch(
         idx,
@@ -147,15 +149,13 @@ def _pick_bank(level_len: chex.Array) -> chex.Array:
         ),
     )
 
-
-
-
-def _encode_word(word, max_len=6):
-    vals = [ord(c) - 65 for c in word] + [-1] * (max_len - len(word))
-    return jnp.array(vals, dtype=jnp.int32)
-
-ENCODED_WORD_LIST = jnp.stack([_encode_word(w) for w in WORD_LIST])   # TODO dont directly use WORD_LIST, pass it as arg
-WORD_COUNT = ENCODED_WORD_LIST.shape[0]
+@jax.jit
+def _choose_target_word(rng_key: jax.random.PRNGKey, level_len: chex.Array) -> tuple[chex.Array, jax.random.PRNGKey]:
+    bank = _pick_bank(level_len)            # (7, 6)
+    n = bank.shape[0]                       # 7 (static)
+    rng_key, sub = jax.random.split(rng_key)
+    idx = jax.random.randint(sub, (), 0, n, dtype=jnp.int32)
+    return bank[idx], rng_key               # (6,), padded with -1s
 
 
 STATE_TRANSLATOR: dict = {
@@ -401,21 +401,6 @@ def load_sprites():
     YELLOW_LETTERS_OFFSETS,
     LETTERS_OFFSETS,
     ) = load_sprites()
-
-@jax.jit
-def _choose_target_word(rng_key: jax.random.PRNGKey, level_len: chex.Array) -> tuple[chex.Array, jax.random.PRNGKey]:
-    bank = _pick_bank(level_len)            # (7, 6)
-    n = bank.shape[0]                       # 7 (static)
-    rng_key, sub = jax.random.split(rng_key)
-    idx = jax.random.randint(sub, (), 0, n, dtype=jnp.int32)
-    return bank[idx], rng_key               # (6,), padded with -1s
-
-
-@jax.jit
-def _word_length_from_encoded(encoded: chex.Array) -> chex.Array:
-    # Count non-negative entries in 6-slot padded vector
-    return jnp.sum(encoded >= 0).astype(jnp.int32)
-
 
 
 @jax.jit
@@ -949,18 +934,10 @@ class JaxWordZapper(JaxEnvironment[WordZapperState, WordZapperObservation, WordZ
         self.obs_size = 3*4 + 1 + 1
         self.consts = consts or WordZapperConstants()
 
-    # --- public wrapper for randomness ---
-    # def reset_with_random_seed(self) -> Tuple[WordZapperObservation, WordZapperState]:
-    #     seed = int.from_bytes(os.urandom(4), byteorder="little", signed=False)
-    #     key = jax.random.PRNGKey(seed)
-    #     return self.reset(key)
-
     @partial(jax.jit, static_argnums=(0,))
     def reset(self, key: jax.random.PRNGKey = jax.random.PRNGKey(42)) -> Tuple[WordZapperObservation, WordZapperState]:
-        key = jax.random.PRNGKey(int(time.time() * 1000) % (2**32 - 1))
-        key, sub_word, next_key = jax.random.split(key, 3)
-        level_idx_init = jnp.array(0, dtype=jnp.int32)
-        level_len_init = jnp.array(WordZapperConstants.LEVEL_WORD_LENGTHS[0], dtype=jnp.int32)
+        key, next_key = jax.random.split(key, 2)
+        level_len_init = jnp.array(self.consts.LEVEL_WORD_LENGTHS[0], dtype=jnp.int32)
         encoded, next_key = _choose_target_word(next_key, level_len_init)
 
         enemy_positions_init = jnp.zeros((self.consts.MAX_ENEMIES, 5), dtype=jnp.float32)
@@ -1004,7 +981,7 @@ class JaxWordZapper(JaxEnvironment[WordZapperState, WordZapperObservation, WordZ
             current_word=jnp.array([0, 1, 2, 3, 4]),
             current_letter_index=jnp.array(0),
 
-            level_idx=level_idx_init,
+            level_idx=jnp.array(0, dtype=jnp.int32),
             level_len=level_len_init,
             waiting_for_special=jnp.array(0, dtype=jnp.int32),
 
@@ -1113,8 +1090,8 @@ class JaxWordZapper(JaxEnvironment[WordZapperState, WordZapperObservation, WordZ
     @partial(jax.jit, static_argnums=(0,))
     def _get_done(self, state: WordZapperState) -> bool:
         """Check if the game should end due to timer expiring."""
-        MAX_TIME = 60 * self.consts.TIME  # 90 seconds at 60 FPS
-        return state.timer == 0 
+        return state.timer == 0
+    
     def flatten_entity_position(self, entity: EntityPosition) -> jnp.ndarray:
         return jnp.concatenate([
             jnp.array([entity.x]),
@@ -1393,12 +1370,6 @@ class JaxWordZapper(JaxEnvironment[WordZapperState, WordZapperObservation, WordZ
             player_missile_position,
             self.consts
         )
-
-        # Reveal letters as they are shot in order
-        # --- inside _normal_game_step, replace your block from
-        # current_letter_index = state.current_letter_index
-        # ... through the final `return state._replace(...)`
-        # with the following ---
 
         current_letter_index = state.current_letter_index
         target_word = state.target_word
