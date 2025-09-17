@@ -15,7 +15,6 @@ import jaxatari.spaces as spaces
 
 """TODOS:
 - make game more 3D --> might be done(ask supervisor)
-- sentinel hit not always registering
 For later:
 - Documentation"""
 
@@ -5245,8 +5244,8 @@ class BeamRiderRenderer(JAXGameRenderer):
     # PYGAME DISPLAY METHODS (moved from BeamRiderPygameRenderer)
     # ============================================================================
 
-    def run_game(self):
-        """Main game loop with torpedo support - requires pygame to be enabled"""
+    """def run_game(self):
+        Main game loop with torpedo support - requires pygame to be enabled
         if not self.enable_pygame:
             raise RuntimeError("pygame must be enabled to run the game. Initialize with enable_pygame=True")
 
@@ -5309,7 +5308,7 @@ class BeamRiderRenderer(JAXGameRenderer):
         sys.exit()
 
     def _show_sector_complete(self, state):
-        """Show sector completion message (called when sector advances)"""
+        Show sector completion message (called when sector advances)
         if hasattr(self, '_last_sector') and state.current_sector > self._last_sector:
             # Sector just advanced - show visual feedback
 
@@ -5350,7 +5349,7 @@ class BeamRiderRenderer(JAXGameRenderer):
         self.pygame_screen.blit(pause_text, rect)
 
     def _draw_screen(self, screen_buffer, state):
-        """Draws the game screen buffer and overlays the ship sprite"""
+       Draws the game screen buffer and overlays the ship sprite
         screen_np = np.array(screen_buffer)
         scaled_screen = np.repeat(np.repeat(screen_np, self.scale, axis=0), self.scale, axis=1)
 
@@ -5363,7 +5362,7 @@ class BeamRiderRenderer(JAXGameRenderer):
         self.pygame_screen.blit(self.ship_sprite_surface, (ship_x, ship_y))
 
     def _draw_ui_overlay(self, state):
-        """Draw centered Score and Level UI - UPDATED: shows sentinel ship info"""
+       Draw centered Score and Level UI - UPDATED: shows sentinel ship info
         # Enemies left number (top-left)
         enemies_left = 15 - state.enemies_killed_this_sector
         enemies_text = self.font.render(str(enemies_left), True, (255, 0, 0))  # red number
@@ -5400,7 +5399,7 @@ class BeamRiderRenderer(JAXGameRenderer):
             self.pygame_screen.blit(scaled_ship, (x, y))
 
     def _show_game_over(self, state):
-        """Show Game Over screen"""
+        Show Game Over screen
         overlay = pygame.Surface((self.pygame_screen_width, self.pygame_screen_height))
         overlay.set_alpha(128)
         overlay.fill((0, 0, 0))
@@ -5423,4 +5422,4 @@ class BeamRiderRenderer(JAXGameRenderer):
 
 if __name__ == "__main__":
     game = BeamRiderRenderer(enable_pygame=True)
-    game.run_game()
+    game.run_game()"""
