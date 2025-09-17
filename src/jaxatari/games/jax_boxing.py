@@ -220,6 +220,29 @@ class JaxBoxing(JaxEnvironment[BoxingState, BoxingObservation, BoxingInfo, Boxin
 
             enemy_hit_left = jnp.where(fire, hit_alignment_right, state.enemy_hit_left)
 
+            def check_collision(hit_direction):
+                def hit_collision_left_swing():
+                    hit_x = state.enemy_x - 18
+                    hit_y = state.enemy_y + 15
+                    jax.debug.print("hit_x - player_x:{}", hit_x - state.player_x)
+                    jax.debug.print("hit_y - player_y:{}", hit_y - state.player_y)
+                    hit = (jnp.abs(hit_x - state.player_x) < 10) & (jnp.abs(hit_y - state.player_y) < 8)
+                    return hit
+
+                def hit_collision_right_swing():
+                    hit_x = state.enemy_x - 18
+                    hit_y = state.enemy_y - 15
+                    hit = (jnp.abs(hit_x - state.player_y) < 10) & (jnp.abs(hit_y - state.player_y) < 8)
+                    return hit
+
+                return jax.lax.cond(hit_direction, hit_collision_left_swing, hit_collision_right_swing)
+
+            check_at_correct_punch_point = enemy_punch_timer == 10
+            hit = jnp.where(check_at_correct_punch_point, check_collision(enemy_hit_left), False)
+
+            new_enemy_score = jnp.where(hit, state.enemy_score + 1, state.enemy_score)
+
+
 
             # Condition to return to align mode
             back_to_align = ((jnp.abs(dy) > 20) & (dx > 20)) | dx > 0
@@ -232,7 +255,8 @@ class JaxBoxing(JaxEnvironment[BoxingState, BoxingObservation, BoxingInfo, Boxin
                                   enemy_dir_y=new_enemy_dir_y,
                                   enemy_hit_left=enemy_hit_left,
                                   enemy_punch_timer=enemy_punch_timer,
-                                  enemy_punch_cooldown=cooldown_timer,)
+                                  enemy_punch_cooldown=cooldown_timer,
+                                  enemy_score=new_enemy_score)
         rng_key = rng_key or jax.random.PRNGKey(state.step_counter)
         state = jax.lax.cond(state.enemy_mode == 0,lambda _: chase_mode(state), lambda _: attack_mode(state, rng_key),operand=None)
         return state
