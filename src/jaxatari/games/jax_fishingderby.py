@@ -33,17 +33,21 @@ class GameConfig:
     RESET: int = 18
 
     # Player and Rod/Hook
-    P1_START_X: int = 20
-    P2_START_X: int = 124
-    PLAYER_Y: int = 34
-    ROD_Y: int = 44  # Y position where rod extends horizontally
+    P1_START_X: int = 9
+    P2_START_X: int = 135
+    PLAYER_Y: int = 23
+    ROD_Y: int = 38  # Y position where rod extends horizontally
 
     # Rod mechanics
-    MIN_ROD_LENGTH: int = 10  # Minimum rod extension
-    START_ROD_LENGTH: int = 20  # Starting rod length for natural default position
-    MAX_ROD_LENGTH: int = 50  # Maximum rod extension
-    ROD_SPEED: float = 1.5  # Speed of rod extension/retraction
+    MIN_ROD_LENGTH_X: int = 20  # Minimum horizontal rod extension
+    START_ROD_LENGTH_X: int = 20  # Starting horizontal rod length
+    MAX_ROD_LENGTH_X: int = 65  # Maximum horizontal extension
 
+    MIN_HOOK_DEPTH_Y: int = 0  # Minimum vertical hook depth
+    START_HOOK_DEPTH_Y: int = 20  # Starting vertical hook depth
+    MAX_HOOK_DEPTH_Y: int = 125  # Maximum vertical extension to reach bottom fish
+
+    ROD_SPEED: float = 1.8
     # Fish death line - how far below the rod the fish must be brought to score
     FISH_DEATH_LINE_OFFSET: int = 15  # Increase this to lower the death line
 
@@ -51,7 +55,7 @@ class GameConfig:
     HOOK_HEIGHT: int = 5
     HOOK_SPEED_V: float = 1.0
     REEL_SLOW_SPEED: float = 0.5
-    REEL_FAST_SPEED: float = 1.5
+    REEL_FAST_SPEED: float = 1.6
     LINE_Y_START: int = 48
     LINE_Y_END: int = 160
     AUTO_LOWER_SPEED: float = 2.0
@@ -68,15 +72,15 @@ class GameConfig:
     FISH_HEIGHT: int = 7
     FISH_SPEED: float = 0.8
     NUM_FISH: int = 6
-    FISH_ROW_YS: Tuple[int] = (85, 101, 117, 133, 149, 165)
+    FISH_ROW_YS: Tuple[int] = (95, 111, 127, 143, 159, 175)
     FISH_ROW_SCORES: Tuple[int] = (2, 2, 4, 4, 6, 6)
 
     # Shark
     SHARK_WIDTH: int = 16
     SHARK_HEIGHT: int = 7
-    SHARK_SPEED: float = 1.0
-    SHARK_Y: int = 68
-    SHARK_BURST_SPEED: float = 2
+    SHARK_SPEED: float = 0.7
+    SHARK_Y: int = 78
+    SHARK_BURST_SPEED: float = 1.8
     SHARK_BURST_DURATION: int = 240 # Frames
     SHARK_BURST_CHANCE: float = 0.005 # percentage
 
@@ -159,9 +163,8 @@ class FishingDerby(JaxEnvironment):
         key, fish_key = jax.random.split(key)
 
         p1_state = PlayerState(
-            rod_length=jnp.array(float(self.config.START_ROD_LENGTH)),
-            # Start hook in the water: at water surface relative to rod
-            hook_y=jnp.array(float(self.config.WATER_Y_START - self.config.ROD_Y)),
+            rod_length=jnp.array(float(self.config.START_ROD_LENGTH_X)),  # Use X value
+            hook_y=jnp.array(float(self.config.START_HOOK_DEPTH_Y)),  # Use Y value
             score=jnp.array(0),
             hook_state=jnp.array(0),
             hooked_fish_idx=jnp.array(-1, dtype=jnp.int32),
@@ -170,7 +173,7 @@ class FishingDerby(JaxEnvironment):
         )
 
         p2_state = PlayerState(
-            rod_length=jnp.array(float(self.config.START_ROD_LENGTH)),
+            rod_length=jnp.array(float(self.config.START_ROD_LENGTH_X)),
             hook_y=jnp.array(float(self.config.WATER_Y_START - self.config.ROD_Y)),
             score=jnp.array(0),
             hook_state=jnp.array(0),
@@ -179,8 +182,8 @@ class FishingDerby(JaxEnvironment):
             hook_x_offset=jnp.array(0.0)
         )
 
-        fish_x = jax.random.uniform(fish_key, (self.config.NUM_FISH,), minval=10.0,
-                                    maxval=self.config.SCREEN_WIDTH - 20.0)
+        fish_x = jax.random.uniform(fish_key, (self.config.NUM_FISH,), minval=self.config.LEFT_BOUNDARY,
+                                    maxval=self.config.RIGHT_BOUNDARY)
         fish_y = jnp.array(self.config.FISH_ROW_YS, dtype=jnp.float32)
 
         state = GameState(
@@ -329,11 +332,13 @@ class FishingDerby(JaxEnvironment):
             new_fish_x = state.fish_positions[:, 0] + state.fish_directions * cfg.FISH_SPEED
 
             # Direction changes: either from hitting boundaries OR random changes
-            hit_boundary = (new_fish_x < 0) | (new_fish_x > cfg.SCREEN_WIDTH - cfg.FISH_WIDTH)
+            # Use same boundaries as shark instead of screen edges
+            hit_boundary = (new_fish_x <= cfg.LEFT_BOUNDARY) | (new_fish_x >= cfg.RIGHT_BOUNDARY)
             change_dir = hit_boundary | should_change_dir
 
             new_fish_dirs = jnp.where(change_dir, -state.fish_directions, state.fish_directions)
-            new_fish_x = jnp.clip(new_fish_x, 0, cfg.SCREEN_WIDTH - cfg.FISH_WIDTH)
+            # Clip fish positions to shark boundaries
+            new_fish_x = jnp.clip(new_fish_x, cfg.LEFT_BOUNDARY, cfg.RIGHT_BOUNDARY)
             new_fish_pos = state.fish_positions.at[:, 0].set(new_fish_x)
 
             # Shark movement
@@ -393,8 +398,8 @@ class FishingDerby(JaxEnvironment):
 
             new_rod_length = jnp.clip(
                 p1.rod_length + rod_change,
-                cfg.MIN_ROD_LENGTH,
-                cfg.MAX_ROD_LENGTH
+                cfg.MIN_ROD_LENGTH_X,
+                cfg.MAX_ROD_LENGTH_X
             )
 
             # Calculate horizontal rod movement for water resistance
@@ -443,9 +448,9 @@ class FishingDerby(JaxEnvironment):
                 # Update hook velocity with damping
                 new_vel_y = p1.hook_velocity_y * cfg.Damping + change
 
-                # Calculate hook position limits
-                min_y = 0.0  # At rod level
-                max_y = cfg.LINE_Y_END - cfg.ROD_Y  # Maximum depth
+                # Calculate hook position limits using separate Y max
+                min_y = float(cfg.MIN_HOOK_DEPTH_Y)  # At rod level
+                max_y = float(cfg.MAX_HOOK_DEPTH_Y)  # Maximum depth to reach bottom fish
 
                 # Update hook position
                 new_y = jnp.clip(
@@ -542,7 +547,8 @@ class FishingDerby(JaxEnvironment):
             # Fish respawn logic - simpler version
             def respawn_fish(all_pos, all_dirs, idx, key):
                 kx, kdir = jax.random.split(key)
-                new_x = jax.random.uniform(kx, minval=10.0, maxval=cfg.SCREEN_WIDTH - cfg.FISH_WIDTH)
+                # Use shark boundaries for fish respawn instead of screen width
+                new_x = jax.random.uniform(kx, minval=cfg.LEFT_BOUNDARY, maxval=cfg.RIGHT_BOUNDARY)
                 new_y = jnp.array(cfg.FISH_ROW_YS, dtype=jnp.float32)[idx]
                 new_pos = all_pos.at[idx].set(jnp.array([new_x, new_y]))
                 new_dir = all_dirs.at[idx].set(jax.random.choice(kdir, jnp.array([-1.0, 1.0])))
@@ -614,7 +620,7 @@ def normalize_frame(frame: chex.Array, target_shape: Tuple[int, int, int]) -> ch
         frame,
         ((0, pad_h), (0, pad_w), (0, 0)),
         mode="constant",
-        constant_values=255
+        constant_values=0
     )
     return frame
 
@@ -629,8 +635,9 @@ def load_sprites():
         'shark1': os.path.join(MODULE_DIR, "sprites/fishingderby/shark_new_1.npy"),
         'shark2': os.path.join(MODULE_DIR, "sprites/fishingderby/shark_new_2.npy"),
         'fish1': os.path.join(MODULE_DIR, "sprites/fishingderby/fish1.npy"),
-        'fish2': os.path.join(MODULE_DIR, "sprites/fishingderby/fish2.npy"),
+        'fish2': os.path.join(MODULE_DIR, "sprites/fishingderby/fish3.npy"),
         'sky': os.path.join(MODULE_DIR, "sprites/fishingderby/sky.npy"),
+        'pier': os.path.join(MODULE_DIR, "sprites/fishingderby/pier.npy"),
         **{f"score_{i}": os.path.join(MODULE_DIR, f"sprites/fishingderby/score_{i}.npy") for i in range(10)}
     }
 
@@ -669,7 +676,7 @@ def load_sprites():
     return (
         sprites['background'], sprites['player1'], sprites['player2'],
         sprites['shark1'], sprites['shark2'], sprites['fish1'], sprites['fish2'],
-        sprites['sky'], score_digits
+        sprites['sky'], score_digits, sprites['pier']
     )
 
 
@@ -680,7 +687,7 @@ class FishingDerbyRenderer(JAXGameRenderer):
         (
             self.SPRITE_BG, self.SPRITE_PLAYER1, self.SPRITE_PLAYER2,
             self.SPRITE_SHARK1, self.SPRITE_SHARK2, self.SPRITE_FISH1,
-            self.SPRITE_FISH2, self.SPRITE_SKY, self.SPRITE_SCORE_DIGITS
+            self.SPRITE_FISH2, self.SPRITE_SKY, self.SPRITE_SCORE_DIGITS, self.SPRITE_PIER
         ) = load_sprites()
 
     def _get_hook_position(self, player_x: float, player_state: PlayerState) -> Tuple[float, float]:
@@ -712,8 +719,8 @@ class FishingDerbyRenderer(JAXGameRenderer):
         hook_x, hook_y = self._get_hook_position(cfg.P1_START_X, state.p1)
 
         # Draw horizontal part of the rod
-        raster = self._render_line(raster, cfg.P1_START_X + 10, cfg.ROD_Y, p1_rod_end_x, cfg.ROD_Y,
-                                   color=(139, 69, 19))  # Brown rod
+        raster = self._render_line(raster, cfg.P1_START_X + 7, cfg.ROD_Y, p1_rod_end_x, cfg.ROD_Y,
+                                   color=(0, 0, 0))  # Black rod
 
         # Water resistance sag - only applies when hook is in water and below surface
         in_water = state.p1.hook_y > (cfg.WATER_Y_START - cfg.ROD_Y)
@@ -783,8 +790,11 @@ class FishingDerbyRenderer(JAXGameRenderer):
         should_draw_hooked = (state.p1.hook_state > 0) & (state.p1.hooked_fish_idx >= 0) & (state.p1.hook_state != 3)
         raster = jax.lax.cond(should_draw_hooked, draw_hooked_p1, lambda r: r, raster)
 
-        raster = self._render_score(raster, state.p1.score, 50, 20)
-        raster = self._render_score(raster, state.p2.score, 100, 20)
+        raster = self._render_score(raster, state.p1.score, 50, 10)
+        raster = self._render_score(raster, state.p2.score, 100, 10)
+
+        # Draw pier sprite on top of everything else (rendered last so it appears above all other elements)
+        raster = self._render_at(raster, 0, 0, self.SPRITE_PIER)
 
         return raster
 
