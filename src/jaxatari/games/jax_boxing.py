@@ -35,8 +35,12 @@ class BoxingState(NamedTuple):
     enemy_target_timer: chex.Array
     step_counter: chex.Array
     enemy_dir: chex.Array
+    enemy_dir_x: chex.Array
+    enemy_dir_y: chex.Array
     enemy_knockback_timer: chex.Array
     enemy_mode: chex.Array
+    enemy_direction_timer: chex.Array
+    enemy_punch_cooldown: chex.Array
 
 
 class EntityPositions(NamedTuple):
@@ -95,7 +99,10 @@ class JaxBoxing(JaxEnvironment[BoxingState, BoxingObservation, BoxingInfo, Boxin
             enemy_dir=jnp.array(1),
             enemy_knockback_timer=jnp.array(0),
             enemy_mode=jnp.array(0),
-
+            enemy_direction_timer=jnp.array(0),
+            enemy_dir_x=jnp.array(0),
+            enemy_dir_y=jnp.array(0),
+            enemy_punch_cooldown=jnp.array(0),
         )
 
         initial_obs = self._get_observation(state)
@@ -159,7 +166,7 @@ class JaxBoxing(JaxEnvironment[BoxingState, BoxingObservation, BoxingInfo, Boxin
     def enemy_step(self, state, rng_key=None):
         step_size = 1
 
-        def align_mode(state):
+        def chase_mode(state):
             # Move toward player to align
             dy = state.player_y - state.enemy_y
             step_y = jnp.clip(jnp.sign(dy) * step_size, -step_size, step_size)
@@ -174,7 +181,7 @@ class JaxBoxing(JaxEnvironment[BoxingState, BoxingObservation, BoxingInfo, Boxin
                                    self.consts.x_boundaries[1])
 
             # Condition to switch into attack mode
-            switch_to_attack = (jnp.abs(dx) < 30) & (jnp.abs(dy) < 10)
+            switch_to_attack = (dx < 0) & (jnp.abs(dy) < 22) & (jnp.abs(dx) <= 30)
             new_mode = jnp.where(switch_to_attack, 1, state.enemy_mode)
 
             return state._replace(enemy_x=new_enemy_x,
@@ -182,53 +189,52 @@ class JaxBoxing(JaxEnvironment[BoxingState, BoxingObservation, BoxingInfo, Boxin
                                   enemy_mode=new_mode)
 
         def attack_mode(state, rng_key):
-            dx = state.player_x - state.enemy_x
             dy = state.player_y - state.enemy_y
-            dist_x = jnp.abs(dx)
-            dist_y = jnp.abs(dy)
+            dx = state.player_x - state.enemy_x
+            box_y = (jnp.maximum(state.player_y - 20,self.consts.y_boundaries[0]), jnp.minimum(state.player_y + 20, self.consts.y_boundaries[1]))
+            box_x = (jnp.maximum(state.player_x + 15,self.consts.x_boundaries[0]), jnp.minimum(state.player_x + 30, self.consts.x_boundaries[1]))
+            enemy_jitter_timer = jnp.maximum(state.enemy_direction_timer - 1, 0)
+            direction_choice_x = jax.random.choice(rng_key, jnp.array([-1,0,1]), p=jnp.array([0.4, 0.2, 0.4]))
+            direction_choice_y = jax.random.choice(rng_key, jnp.array([-1,0,1]), p=jnp.array([0.4, 0.2, 0.4]))
+            do_direction_change = (enemy_jitter_timer == 0)
+            new_enemy_dir_x = jnp.where(do_direction_change, direction_choice_x, state.enemy_dir_x)
+            new_enemy_dir_y = jnp.where(do_direction_change, direction_choice_y, state.enemy_dir_y)
+            enemy_jitter_timer = jnp.where(do_direction_change, jax.random.randint(rng_key, (), 5, 20), enemy_jitter_timer)
+            step_x = new_enemy_dir_x * step_size
+            step_y = new_enemy_dir_y * step_size
+            new_enemy_x = jnp.clip(state.enemy_x + step_x,box_x[0], box_x[1])
+            new_enemy_y = jnp.clip(state.enemy_y + step_y, box_y[0], box_y[1])
+            hit_alignment_x = (dx >= -20) & (dx <= -16)
+            hit_alignment_left = hit_alignment_x & ((state.enemy_y - 17 <= state.player_y) & (state.player_y <= state.enemy_y - 13))
+            hit_alignment_right = hit_alignment_x & ((state.enemy_y + 13 <= state.player_y) & (state.player_y <= state.enemy_y + 17))
 
-            # Random jitter to avoid being static
-            rng_x, rng_y = jax.random.split(rng_key)
-            jitter_x = jax.random.randint(rng_x, (), -2, 3)
-            jitter_y = jax.random.randint(rng_y, (), -2, 3)
+            fire = hit_alignment_left | hit_alignment_right
 
-            # Maintain ~10px safe horizontal distance
-            target_x = jnp.where(dist_x > 10,
-                                 state.enemy_x + jnp.sign(dx) * step_size,
-                                 jnp.where(dist_x < 8,
-                                           state.enemy_x - jnp.sign(dx) * step_size,
-                                           state.enemy_x + jitter_x))
-
-            # Y alignment with some jitter
-            target_y = state.player_y + jitter_y
-
-            new_enemy_x = jnp.clip(target_x, self.consts.x_boundaries[0], self.consts.x_boundaries[1])
-            new_enemy_y = jnp.clip(target_y, self.consts.y_boundaries[0], self.consts.y_boundaries[1])
-
-            # Punch logic: only if within safe distance
             enemy_punch_timer = jnp.maximum(state.enemy_punch_timer - 1, 0)
-            in_punch_range = (dist_x <= 12) & (dist_y < 15)
-            enemy_punch_timer = jnp.where((enemy_punch_timer == 0) & in_punch_range, 20, enemy_punch_timer)
+            cooldown_timer = jnp.maximum(state.enemy_punch_cooldown - 1, 0)
 
-            # Pick hit direction
-            left_hit = new_enemy_y - 15
-            right_hit = new_enemy_y + 15
-            dist_left = jnp.abs(left_hit - state.player_y)
-            dist_right = jnp.abs(right_hit - state.player_y)
-            chosen_hit_left = dist_left < dist_right
-            new_enemy_hit_left = jnp.where(enemy_punch_timer == 20, chosen_hit_left, state.enemy_hit_left)
+            can_start_punch = fire & (cooldown_timer == 0) & (enemy_punch_timer == 0)
+
+            enemy_punch_timer = jnp.where(can_start_punch, 20, enemy_punch_timer)
+            cooldown_timer = jnp.where(can_start_punch, 75, cooldown_timer)
+
+            enemy_hit_left = jnp.where(fire, hit_alignment_right, state.enemy_hit_left)
+
 
             # Condition to return to align mode
-            back_to_align = (jnp.abs(dy) > 20) | (dx > 0)
+            back_to_align = ((jnp.abs(dy) > 20) & (dx > 20)) | dx > 0
             new_mode = jnp.where(back_to_align, 0, state.enemy_mode)
-
             return state._replace(enemy_x=new_enemy_x,
                                   enemy_y=new_enemy_y,
+                                  enemy_mode=new_mode,
+                                  enemy_direction_timer = enemy_jitter_timer,
+                                  enemy_dir_x=new_enemy_dir_x,
+                                  enemy_dir_y=new_enemy_dir_y,
+                                  enemy_hit_left=enemy_hit_left,
                                   enemy_punch_timer=enemy_punch_timer,
-                                  enemy_hit_left=new_enemy_hit_left,
-                                  enemy_mode=new_mode)
-        rng_key = rng_key or jax.random.PRNGKey(0)
-        state = jax.lax.cond(state.enemy_mode == 0,lambda _: align_mode(state), lambda _: attack_mode(state, rng_key),operand=None)
+                                  enemy_punch_cooldown=cooldown_timer,)
+        rng_key = rng_key or jax.random.PRNGKey(state.step_counter)
+        state = jax.lax.cond(state.enemy_mode == 0,lambda _: chase_mode(state), lambda _: attack_mode(state, rng_key),operand=None)
         return state
 
 
@@ -254,7 +260,11 @@ class JaxBoxing(JaxEnvironment[BoxingState, BoxingObservation, BoxingInfo, Boxin
                                 step_counter=state.step_counter + 1,
                                 enemy_dir = state.enemy_dir,
                                 enemy_knockback_timer=state.enemy_knockback_timer,
-                                enemy_mode=state.enemy_mode
+                                enemy_mode=state.enemy_mode,
+                                enemy_direction_timer=state.enemy_direction_timer,
+                                enemy_dir_y=state.enemy_dir_y,
+                                enemy_dir_x=state.enemy_dir_x,
+                                enemy_punch_cooldown=state.enemy_punch_cooldown,
                                 )
         done = self._get_done(new_state)
         env_reward = self._get_reward(state, new_state)
