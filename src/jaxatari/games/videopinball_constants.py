@@ -102,10 +102,13 @@ class EntityState(NamedTuple):
 
 class VideoPinballObservation(NamedTuple):
     ball: EntityState
-    flippers: tuple[EntityState, EntityState]
+    spinners: chex.Array
+    flippers: chex.Array
     plunger: EntityState
-    targets: tuple[EntityState, EntityState, EntityState, EntityState]
-    tilt_mode_hole_plugs: tuple[EntityState, EntityState]
+    targets: chex.Array
+    bumpers: chex.Array
+    rollovers: chex.Array
+    tilt_mode_hole_plugs: chex.Array
     score: chex.Array
     lives: chex.Array
     atari_symbols: chex.Array

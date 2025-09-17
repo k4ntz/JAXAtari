@@ -467,7 +467,18 @@ class JaxVideoPinball(
             active=jnp.array(1),
         )
 
+        flippers = jnp.array([
+            jnp.array([
+                entity.x,
+                entity.y,
+                entity.w,
+                entity.h,
+                entity.active,
+            ]) for entity in [left_flipper, right_flipper]
+        ])
         plunger = ...
+        spinners = ...
+        targets = ...
         special_lit_up_target = ...
         left_lit_up_target = ...
         middle_lit_up_target = ...
@@ -480,7 +491,7 @@ class JaxVideoPinball(
             flippers=(left_flipper, right_flipper),
             plunger=plunger,
             targets=(special_lit_up_target, left_lit_up_target, middle_lit_up_target, right_lit_up_target),
-            tilt_mode_hold_plugs=(left_tilt_mode_hole_plug, right_tilt_mode_hole_plug),
+            tilt_mode_hole_plugs=(left_tilt_mode_hole_plug, right_tilt_mode_hole_plug),
             score=state.score,
             lives=state.lives,
             atari_symbols=state.atari_symbols,
