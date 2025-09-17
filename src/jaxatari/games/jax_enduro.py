@@ -451,34 +451,34 @@ class JaxEnduro(JaxEnvironment[EnduroGameState, EnduroObservation, EnduroInfo, E
                 low=-1,
                 high=self.config.screen_width,
                 shape=(7, 2),
-                dtype=jnp.float32  
+                dtype=jnp.float32
             ),
 
             # Game objectives
-            "cars_to_overtake": spaces.Box(low=0, high=500, shape=(1,), dtype=jnp.float32),  
+            "cars_to_overtake": spaces.Box(low=0, high=500, shape=(1,), dtype=jnp.float32),
             "distance": spaces.Box(low=0.0, high=self.config.max_track_length, shape=(1,), dtype=jnp.float32),
-            "level": spaces.Box(low=1, high=self.config.max_level, shape=(1,), dtype=jnp.float32),  
-            "level_passed": spaces.Box(low=0, high=1, shape=(1,), dtype=jnp.float32),  
+            "level": spaces.Box(low=1, high=self.config.max_level, shape=(1,), dtype=jnp.float32),
+            "level_passed": spaces.Box(low=0, high=1, shape=(1,), dtype=jnp.float32),
 
             # Track boundaries (can be -1 for fogged areas)
             "track_left_xs": spaces.Box(
                 low=-1,
                 high=self.config.screen_width,
                 shape=(self.config.track_height,),
-                dtype=jnp.float32  
+                dtype=jnp.float32
             ),
             "track_right_xs": spaces.Box(
                 low=-1,
                 high=self.config.screen_width,
                 shape=(self.config.track_height,),
-                dtype=jnp.float32  
+                dtype=jnp.float32
             ),
-            "curvature": spaces.Box(low=-1, high=1, shape=(1,), dtype=jnp.float32),  
+            "curvature": spaces.Box(low=-1, high=1, shape=(1,), dtype=jnp.float32),
 
             # Environmental state
             "cooldown": spaces.Box(low=0, high=self.config.car_crash_cooldown_frames, shape=(1,), dtype=jnp.float32),
             "weather_index": spaces.Box(low=0, high=len(self.config.weather_starts_s) - 1, shape=(1,),
-                                        dtype=jnp.float32),  
+                                        dtype=jnp.float32),
         })
 
     def obs_to_flat_array(self, obs: EnduroObservation) -> jnp.ndarray:
@@ -609,87 +609,12 @@ class JaxEnduro(JaxEnvironment[EnduroGameState, EnduroObservation, EnduroInfo, E
             cycled_time,
             side='right')
 
-        def regular_handling() -> Tuple[jnp.ndarray, jnp.ndarray, jnp.ndarray]:
-            # ====== GAS ======
-            is_gas = jnp.isin(action, jnp.array([
-                Action.FIRE,
-                Action.LEFTFIRE,
-                Action.RIGHTFIRE,
-                Action.DOWNFIRE  # explicitly included, as it implies FIRE
-            ]))
-
-            # ====== BRAKE (only when DOWN) ======
-            is_brake = (action == Action.DOWN)
-
-            # Final speed delta
-            speed_delta = jnp.where(
-                is_gas,
-                # accelerate according to the current speed
-                jnp.where(
-                    state.player_speed < self.config.acceleration_slow_down_threshold,
-                    self.config.acceleration_per_frame,
-                    self.config.slower_acceleration_per_frame
-                )
-                ,
-                jnp.where(is_brake, -self.config.breaking_per_frame, 0.0)
-            )
-
-            speed = jnp.clip(state.player_speed + speed_delta, self.config.min_speed, self.config.max_speed)
-
-            # ====== STEERING ======
-            # Determine if action is a left-turn
-            is_left = jnp.logical_or(action == Action.LEFT, action == Action.LEFTFIRE)
-            # Determine if action is a right-turn
-            is_right = jnp.logical_or(action == Action.RIGHT, action == Action.RIGHTFIRE)
-
-            # calculate the time it should take to steer from left to right (seconds) based on the current speed
-            time_from_left_to_right = jnp.clip(
-                jnp.where(
-                    speed > self.config.sensitivity_change_speed,
-                    self.config.slow_base_sensitivity + self.config.slow_steering_sensitivity_per_speed_unit * speed,
-                    self.config.fast_base_sensitivity + self.config.fast_steering_sensitivity_per_speed_unit * speed,
-                ),
-                self.config.minimum_steering_sensitivity  # never let the sensitivity go below a threshold
-            )
-            # add the snow effects when applicable
-            time_from_left_to_right = time_from_left_to_right * jnp.where(
-                new_weather_index == self.config.snow_weather_index,
-                self.config.steering_snow_factor,
-                1)
-
-            # calculate the final steering sensitivity
-            current_steering_sensitivity = (self.config.steering_range_in_pixels /
-                                            time_from_left_to_right / self.config.frame_rate)
-            # calculate the steering delta based on sensitivity and player input
-            steering_delta = jnp.where(is_left, -1 * current_steering_sensitivity,
-                                       jnp.where(is_right, current_steering_sensitivity, 0.0))
-
-            # ====== DRIFT ======
-            drift_delta = -curvature * self.config.drift_per_frame  # drift opposes curve
-
-            # Combine steering and drift
-            total_delta_x = steering_delta + drift_delta
-            x_abs = state.player_x_abs_position + total_delta_x
-
-            # ====== Car y-Position ======
-            # move one pixel forward for every 5th speed increase
-            y_abs = jnp.subtract(self.config.player_y_start, jnp.floor_divide(speed, self.config.max_speed / 10))
-
-            return speed, x_abs, y_abs.astype(jnp.int32)
-
-        def cooldown_handling() -> Tuple[jnp.ndarray, jnp.ndarray, jnp.ndarray]:
-            new_x = state.player_x_abs_position + state.cooldown_drift_direction * self.config.crash_kickback_speed_per_frame
-            return (
-                jnp.array(self.config.min_speed, dtype=jnp.float32),
-                jnp.array(new_x, dtype=jnp.float32),
-                jnp.array(self.config.player_y_start, dtype=jnp.int32)
-            )
-
-        new_speed, new_x_abs, new_y_abs = lax.cond(
-            is_cooldown_active,
-            lambda _: cooldown_handling(),
-            lambda _: regular_handling(),
-            None
+        # ===== CAR HANDLING =====
+        new_speed, new_x_abs, new_y_abs = self._step_car_handling(
+            state=state,
+            action=action,
+            new_weather_index=new_weather_index,
+            curvature=curvature
         )
 
         # ====== TRACK ======
@@ -710,7 +635,7 @@ class JaxEnduro(JaxEnvironment[EnduroGameState, EnduroObservation, EnduroInfo, E
         # At min_speed (6): multiplier = 1 (current rate)
         # At max_speed (120): multiplier = 30 (30x faster)
         speed_multiplier = 1 + (new_speed - self.config.min_speed) / (
-                    self.config.max_speed - self.config.min_speed) * 29
+                self.config.max_speed - self.config.min_speed) * 29
         speed_adjusted_curve_rate = self.config.curve_rate * speed_multiplier
         offset_change = jnp.clip(current_offset, -speed_adjusted_curve_rate, speed_adjusted_curve_rate)
 
@@ -923,6 +848,238 @@ class JaxEnduro(JaxEnvironment[EnduroGameState, EnduroObservation, EnduroInfo, E
         info = self._get_info(new_state, all_rewards)
 
         return obs, new_state, reward, done, info
+
+    @partial(jax.jit, static_argnums=(0,))
+    def _step_car_handling(self, state: EnduroGameState, action: int, new_weather_index: jnp.ndarray,
+                           curvature: jnp.ndarray) -> Tuple[jnp.ndarray, jnp.ndarray, jnp.ndarray]:
+        """
+        Handles car movement including speed, steering, and position updates.
+
+        Args:
+            state: Current game state
+            action: Player action input
+            new_weather_index: Current weather condition index
+            curvature: Current track curvature value
+
+        Returns:
+            Tuple of (new_speed, new_x_abs, new_y_abs)
+        """
+        is_cooldown_active = state.cooldown > 0
+
+        def regular_handling() -> Tuple[jnp.ndarray, jnp.ndarray, jnp.ndarray]:
+            # ====== GAS ======
+            is_gas = jnp.isin(action, jnp.array([
+                Action.FIRE,
+                Action.LEFTFIRE,
+                Action.RIGHTFIRE,
+                Action.DOWNFIRE  # explicitly included, as it implies FIRE
+            ]))
+
+            # ====== BRAKE (only when DOWN) ======
+            is_brake = (action == Action.DOWN)
+
+            # Final speed delta
+            speed_delta = jnp.where(
+                is_gas,
+                # accelerate according to the current speed
+                jnp.where(
+                    state.player_speed < self.config.acceleration_slow_down_threshold,
+                    self.config.acceleration_per_frame,
+                    self.config.slower_acceleration_per_frame
+                ),
+                jnp.where(is_brake, -self.config.breaking_per_frame, 0.0)
+            )
+
+            speed = jnp.clip(state.player_speed + speed_delta, self.config.min_speed, self.config.max_speed)
+
+            # ====== STEERING ======
+            # Determine if action is a left-turn
+            is_left = jnp.logical_or(action == Action.LEFT, action == Action.LEFTFIRE)
+            # Determine if action is a right-turn
+            is_right = jnp.logical_or(action == Action.RIGHT, action == Action.RIGHTFIRE)
+
+            # calculate the time it should take to steer from left to right (seconds) based on the current speed
+            time_from_left_to_right = jnp.clip(
+                jnp.where(
+                    speed > self.config.sensitivity_change_speed,
+                    self.config.slow_base_sensitivity + self.config.slow_steering_sensitivity_per_speed_unit * speed,
+                    self.config.fast_base_sensitivity + self.config.fast_steering_sensitivity_per_speed_unit * speed,
+                ),
+                self.config.minimum_steering_sensitivity  # never let the sensitivity go below a threshold
+            )
+            # add the snow effects when applicable
+            time_from_left_to_right = time_from_left_to_right * jnp.where(
+                new_weather_index == self.config.snow_weather_index,
+                self.config.steering_snow_factor,
+                1)
+
+            # calculate the final steering sensitivity
+            current_steering_sensitivity = (self.config.steering_range_in_pixels /
+                                            time_from_left_to_right / self.config.frame_rate)
+            # calculate the steering delta based on sensitivity and player input
+            steering_delta = jnp.where(is_left, -1 * current_steering_sensitivity,
+                                       jnp.where(is_right, current_steering_sensitivity, 0.0))
+
+            # ====== DRIFT ======
+            drift_delta = -curvature * self.config.drift_per_frame  # drift opposes curve
+
+            # Combine steering and drift
+            total_delta_x = steering_delta + drift_delta
+            x_abs = state.player_x_abs_position + total_delta_x
+
+            # ====== Car y-Position ======
+            # move one pixel forward for every 5th speed increase
+            y_abs = jnp.subtract(self.config.player_y_start, jnp.floor_divide(speed, self.config.max_speed / 10))
+
+            return speed, x_abs, y_abs.astype(jnp.int32)
+
+        def cooldown_handling() -> Tuple[jnp.ndarray, jnp.ndarray, jnp.ndarray]:
+            new_x = state.player_x_abs_position + state.cooldown_drift_direction * self.config.crash_kickback_speed_per_frame
+            return (
+                jnp.array(self.config.min_speed, dtype=jnp.float32),
+                jnp.array(new_x, dtype=jnp.float32),
+                jnp.array(self.config.player_y_start, dtype=jnp.int32)
+            )
+
+        new_speed, new_x_abs, new_y_abs = lax.cond(
+            is_cooldown_active,
+            lambda _: cooldown_handling(),
+            lambda _: regular_handling(),
+            None
+        )
+
+        return new_speed, new_x_abs, new_y_abs
+
+    @partial(jax.jit, static_argnums=(0,))
+    def _step_track_handling(self, state: EnduroGameState, new_speed: jnp.ndarray, new_x_abs: jnp.ndarray,
+                             new_y_abs: jnp.ndarray, curvature: float, is_cooldown_active: bool) -> Tuple[
+        jnp.ndarray,  # updated_speed
+        jnp.ndarray,  # updated_x_abs
+        jnp.ndarray,  # new_cooldown_drift_direction
+        jnp.ndarray,  # new_left_xs
+        jnp.ndarray,  # new_right_xs
+        jnp.ndarray,  # logical_left_xs
+        jnp.ndarray,  # logical_right_xs
+        jnp.ndarray,  # new_track_top_x
+        jnp.ndarray  # new_top_x_curve_offset
+    ]:
+        """
+        Handles track generation, positioning, and collision detection with the player car.
+
+        This function manages:
+        - Track positioning and curve offset calculations based on car movement
+        - Generation of visible track boundaries (left and right sides)
+        - Addition of track bumpers for visual representation
+        - Collision detection between player car and track boundaries
+        - Speed reduction and kickback mechanics when collisions occur
+        - Cooldown drift direction updates during track collisions
+
+        Args:
+            state: Current game state
+            new_speed: Car's current speed
+            new_x_abs: Car's current absolute X position
+            new_y_abs: Car's current absolute Y position
+            curvature: Current track curvature value
+            is_cooldown_active: Whether collision cooldown is currently active
+
+        Returns:
+            Tuple containing:
+            - updated_speed: Speed after collision penalties
+            - updated_x_abs: X position after kickback effects
+            - new_cooldown_drift_direction: Updated drift direction for cooldown
+            - new_left_xs: Left track boundaries with bumpers
+            - new_right_xs: Right track boundaries with bumpers
+            - logical_left_xs: Left track boundaries without bumpers (for opponents)
+            - logical_right_xs: Right track boundaries without bumpers (for opponents)
+            - new_track_top_x: Updated track top X position
+            - new_top_x_curve_offset: Updated curve offset value
+        """
+
+        # ====== TRACK ======
+        # 1. Draw the top of the track based on the car position.
+        #    The track moves in the opposite position of the car.
+        new_track_top_x = (self.config.track_x_start + self.config.player_x_start - new_x_abs).astype(jnp.int32)
+
+        # 2. Define the target offset based on the curvature.
+        #    This is the value we want to eventually reach when the curve is fully curved.
+        target_offset = curvature * self.config.track_max_top_x_offset  # e.g., -1 * 50 = -50, or 0 * 50 = 0
+
+        # 3. Calculate the difference (the "offset") between where we are and where we want to be in terms of curvature
+        current_offset = target_offset - state.track_top_x_curve_offset
+
+        # 4. Limit the change per step. The change cannot be faster than curve_rate.
+        #    jnp.clip is perfect here. This lets the offset move towards the target without overshooting.
+        # Calculate speed-dependent curve rate multiplier
+        # At min_speed (6): multiplier = 1 (current rate)
+        # At max_speed (120): multiplier = 30 (30x faster)
+        speed_multiplier = 1 + (new_speed - self.config.min_speed) / (
+                self.config.max_speed - self.config.min_speed) * 29
+        speed_adjusted_curve_rate = self.config.curve_rate * speed_multiplier
+        offset_change = jnp.clip(current_offset, -speed_adjusted_curve_rate, speed_adjusted_curve_rate)
+
+        # 5. Apply the calculated change to the current offset.
+        new_top_x_curve_offset = state.track_top_x_curve_offset + offset_change
+
+        # 6. Generate the new track with the top_x of the track and its offset
+        # They do not have the bumpers yet, but we also need the logical track boundaries for opponent spawning later
+        logical_left_xs, logical_right_xs = self._generate_viewable_track(new_track_top_x, new_top_x_curve_offset)
+
+        # 7. Add bumpers to the track
+        new_left_xs = self._add_track_bumpers(logical_left_xs, state, is_left_side=True)
+        new_right_xs = self._add_track_bumpers(logical_right_xs, state, is_left_side=False)
+
+        # ====== TRACK COLLISION ======
+        # 1. Check whether the player car collided with the track
+        collision_side = self._check_car_track_collision(
+            car_x_abs=new_x_abs.astype(jnp.int32),
+            car_y_abs=new_y_abs.astype(jnp.int32),
+            left_track_xs=new_left_xs,
+            right_track_xs=new_right_xs
+        )
+        collided_track = (collision_side != 0)
+
+        # 2. Calculate the speed with collision penalty.
+        updated_speed = jnp.where(
+            collided_track,
+            # If collided, reduce speed.
+            new_speed - self.config.track_collision_speed_reduction_per_speed_unit * new_speed,
+            new_speed  # If not, keep the new speed.
+        )
+        # Ensure speed does not drop below the minimum value
+        updated_speed = jnp.maximum(1.0, updated_speed)  # Use maximum() to enforce a floor.
+
+        # 3. Kickback
+        # The kickback direction is simply the inverse of `collision_side`.
+        track_kickback_direction = -collision_side
+        # add a special treatment for cooldown where kickback is minimal
+        kickback_pixels = jnp.where(is_cooldown_active, 1, self.config.track_collision_kickback_pixels)
+
+        updated_x_abs = jnp.where(
+            collided_track,
+            # Apply the kickback based on the actual collision side.
+            new_x_abs + (kickback_pixels * track_kickback_direction),
+            new_x_abs  # If not collided, do nothing.
+        )
+
+        # 4. Handle cooldowns
+        new_cooldown_drift_direction = jnp.where(
+            collided_track,
+            # Change the cooldown drift direction if the car crashes into the track while in cooldown
+            state.cooldown_drift_direction * -1,
+            state.cooldown_drift_direction
+        )
+
+        return (
+            updated_speed,
+            updated_x_abs,
+            new_cooldown_drift_direction,
+            new_left_xs,
+            new_right_xs,
+            logical_left_xs,
+            logical_right_xs,
+            new_track_top_x,
+            new_top_x_curve_offset
+        )
 
     @partial(jax.jit, static_argnums=(0,))
     def _get_observation(self, state: EnduroGameState):
@@ -2926,13 +3083,3 @@ class EnduroDebugRenderer:
 if __name__ == '__main__':
     # For debugging and development
     EnduroDebugRenderer().play_enduro(debug_mode=True)
-
-TODOS = """
-Steering:
-- Drift speed based?
-
-Rendering:
-- wheel animation speed
-
-
-"""
