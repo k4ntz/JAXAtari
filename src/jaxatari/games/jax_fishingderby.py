@@ -72,7 +72,9 @@ class GameConfig:
     SHARK_HEIGHT: int = 7
     SHARK_SPEED: float = 1.0
     SHARK_Y: int = 68
-
+    SHARK_BURST_SPEED: float = 2
+    SHARK_BURST_DURATION: int = 240 # Frames
+    SHARK_BURST_CHANCE: float = 0.005 # percentage
 
 class PlayerState(NamedTuple):
     rod_length: chex.Array  # Length of horizontal rod extension
@@ -92,6 +94,7 @@ class GameState(NamedTuple):
     fish_active: chex.Array
     shark_x: chex.Array
     shark_dir: chex.Array
+    shark_burst_timer: chex.Array
     reeling_priority: chex.Array
     time: chex.Array
     game_over: chex.Array
@@ -183,6 +186,7 @@ class FishingDerby(JaxEnvironment):
             fish_active=jnp.ones(self.config.NUM_FISH, dtype=jnp.bool_),
             shark_x=jnp.array(self.config.SCREEN_WIDTH / 2.0),
             shark_dir=jnp.array(1.0),
+            shark_burst_timer=jnp.array(0),
             reeling_priority=jnp.array(-1),
             time=jnp.array(0),
             game_over=jnp.array(False),
@@ -329,13 +333,33 @@ class FishingDerby(JaxEnvironment):
             new_fish_pos = state.fish_positions.at[:, 0].set(new_fish_x)
 
             # Shark movement
-            new_shark_x = state.shark_x + state.shark_dir * cfg.SHARK_SPEED
-            new_shark_dir = jnp.where(
-                (new_shark_x < 0) | (new_shark_x > cfg.SCREEN_WIDTH - cfg.SHARK_WIDTH),
-                -state.shark_dir,
-                state.shark_dir
-            )
-            new_shark_x = jnp.clip(new_shark_x, 0, cfg.SCREEN_WIDTH - cfg.SHARK_WIDTH)
+            key, shark_key = jax.random.split(key)
+
+            # Check for random speed burst initiation
+            should_start_burst = (state.shark_burst_timer == 0) & (
+                    jax.random.uniform(shark_key) < cfg.SHARK_BURST_CHANCE)
+            new_burst_timer = jnp.where(should_start_burst, cfg.SHARK_BURST_DURATION, state.shark_burst_timer)
+
+            # Determine current shark speed
+            is_bursting = new_burst_timer > 0
+            current_shark_speed = jnp.where(is_bursting, cfg.SHARK_BURST_SPEED, cfg.SHARK_SPEED)
+
+            # Move shark with current speed
+            potential_shark_x = state.shark_x + state.shark_dir * current_shark_speed
+
+            # Handle boundary collisions BEFORE clamping
+            hit_left_boundary = potential_shark_x <= 0
+            hit_right_boundary = potential_shark_x >= cfg.SCREEN_WIDTH - cfg.SHARK_WIDTH
+            hit_any_boundary = hit_left_boundary | hit_right_boundary
+
+            # Update direction when hitting boundaries
+            new_shark_dir = jnp.where(hit_any_boundary, -state.shark_dir, state.shark_dir)
+
+            # Apply the new position with clamping
+            new_shark_x = jnp.clip(potential_shark_x, 0, cfg.SCREEN_WIDTH - cfg.SHARK_WIDTH)
+
+            # Update burst timer (decrement if active)
+            new_burst_timer = jnp.where(new_burst_timer > 0, new_burst_timer - 1, 0)
 
             # Player 1 Rod and Hook Logic
             p1 = state.p1
@@ -549,6 +573,7 @@ class FishingDerby(JaxEnvironment):
                 fish_active=fish_active,
                 shark_x=new_shark_x,
                 shark_dir=new_shark_dir,
+                shark_burst_timer=new_burst_timer,
                 reeling_priority=reeling_priority,
                 time=state.time + 1,
                 game_over=game_over,
