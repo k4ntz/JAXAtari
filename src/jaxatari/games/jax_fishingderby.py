@@ -59,6 +59,10 @@ class GameConfig:
     Acceleration: float = 0.2
     Damping: float = 0.85
 
+    # Boundaries
+    LEFT_BOUNDARY: float = 10
+    RIGHT_BOUNDARY: float = 115
+
     # Fish
     FISH_WIDTH: int = 8
     FISH_HEIGHT: int = 7
@@ -344,19 +348,29 @@ class FishingDerby(JaxEnvironment):
             is_bursting = new_burst_timer > 0
             current_shark_speed = jnp.where(is_bursting, cfg.SHARK_BURST_SPEED, cfg.SHARK_SPEED)
 
-            # Move shark with current speed
+            # Random direction changes
+            key, shark_dir_key = jax.random.split(key)
+            change_direction_prob = 0.005  # Chance to turn direction randomly
+            should_change_dir = jax.random.uniform(shark_dir_key) < change_direction_prob
+
+            # Calculate where shark would move
             potential_shark_x = state.shark_x + state.shark_dir * current_shark_speed
 
-            # Handle boundary collisions BEFORE clamping
-            hit_left_boundary = potential_shark_x <= 0
-            hit_right_boundary = potential_shark_x >= cfg.SCREEN_WIDTH - cfg.SHARK_WIDTH
-            hit_any_boundary = hit_left_boundary | hit_right_boundary
+            # Check boundaries and random direction changes
+            would_hit_left = potential_shark_x <= cfg.LEFT_BOUNDARY
+            would_hit_right = potential_shark_x >= cfg.RIGHT_BOUNDARY
+            would_hit_boundary = would_hit_left | would_hit_right
 
-            # Update direction when hitting boundaries
-            new_shark_dir = jnp.where(hit_any_boundary, -state.shark_dir, state.shark_dir)
+            # Change direction for either boundary hit OR random change
+            should_change_direction = would_hit_boundary | should_change_dir
+            new_shark_dir = jnp.where(should_change_direction, -state.shark_dir, state.shark_dir)
 
-            # Apply the new position with clamping
-            new_shark_x = jnp.clip(potential_shark_x, 0, cfg.SCREEN_WIDTH - cfg.SHARK_WIDTH)
+            # Move with new direction if direction changed, otherwise use original movement
+            new_shark_x = jnp.where(
+                should_change_direction,
+                jnp.clip(state.shark_x + new_shark_dir * current_shark_speed, cfg.LEFT_BOUNDARY, cfg.RIGHT_BOUNDARY),
+                jnp.clip(potential_shark_x, cfg.LEFT_BOUNDARY, cfg.RIGHT_BOUNDARY)
+            )
 
             # Update burst timer (decrement if active)
             new_burst_timer = jnp.where(new_burst_timer > 0, new_burst_timer - 1, 0)
@@ -747,11 +761,11 @@ class FishingDerbyRenderer(JAXGameRenderer):
                                    cfg.ROD_Y + state.p2.hook_y)
 
         # Draw shark
-        shark_frame = jax.lax.cond((state.time // 8) % 2 == 0, lambda: self.SPRITE_SHARK1, lambda: self.SPRITE_SHARK2)
+        shark_frame = jax.lax.cond((state.time // 4) % 2 == 0, lambda: self.SPRITE_SHARK1, lambda: self.SPRITE_SHARK2)
         raster = self._render_at(raster, state.shark_x, cfg.SHARK_Y, shark_frame, flip_h=state.shark_dir < 0)
 
         # Draw fish
-        fish_frame = jax.lax.cond((state.time // 10) % 2 == 0, lambda: self.SPRITE_FISH1, lambda: self.SPRITE_FISH2)
+        fish_frame = jax.lax.cond((state.time // 5) % 2 == 0, lambda: self.SPRITE_FISH1, lambda: self.SPRITE_FISH2)
 
         def draw_one_fish(i, r):
             pos, direction, active = state.fish_positions[i], state.fish_directions[i], state.fish_active[i]
