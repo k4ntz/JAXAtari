@@ -45,7 +45,7 @@ class GameConfig:
 
     MIN_HOOK_DEPTH_Y: int = 0  # Minimum vertical hook depth
     START_HOOK_DEPTH_Y: int = 20  # Starting vertical hook depth
-    MAX_HOOK_DEPTH_Y: int = 125  # Maximum vertical extension to reach bottom fish
+    MAX_HOOK_DEPTH_Y: int = 140  # Maximum vertical extension to reach bottom fish
 
     ROD_SPEED: float = 1.8
     # Fish death line - how far below the rod the fish must be brought to score
@@ -92,6 +92,8 @@ class PlayerState(NamedTuple):
     hooked_fish_idx: chex.Array
     hook_velocity_y: chex.Array  # Vertical velocity
     hook_x_offset: chex.Array  # Horizontal offset from rod end due to water resistance
+    display_score: chex.Array  # animated display score
+    score_animation_timer: chex.Array  # control animation timing
 
 
 class GameState(NamedTuple):
@@ -163,13 +165,15 @@ class FishingDerby(JaxEnvironment):
         key, fish_key = jax.random.split(key)
 
         p1_state = PlayerState(
-            rod_length=jnp.array(float(self.config.START_ROD_LENGTH_X)),  # Use X value
-            hook_y=jnp.array(float(self.config.START_HOOK_DEPTH_Y)),  # Use Y value
+            rod_length=jnp.array(float(self.config.START_ROD_LENGTH_X)),
+            hook_y=jnp.array(float(self.config.START_HOOK_DEPTH_Y)),
             score=jnp.array(0),
             hook_state=jnp.array(0),
             hooked_fish_idx=jnp.array(-1, dtype=jnp.int32),
             hook_velocity_y=jnp.array(0.0),
-            hook_x_offset=jnp.array(0.0)
+            hook_x_offset=jnp.array(0.0),
+            display_score=jnp.array(0),  # Add this
+            score_animation_timer=jnp.array(0)  # Add this
         )
 
         p2_state = PlayerState(
@@ -179,7 +183,9 @@ class FishingDerby(JaxEnvironment):
             hook_state=jnp.array(0),
             hooked_fish_idx=jnp.array(-1, dtype=jnp.int32),
             hook_velocity_y=jnp.array(0.0),
-            hook_x_offset=jnp.array(0.0)
+            hook_x_offset=jnp.array(0.0),
+            display_score=jnp.array(0),  # Add this
+            score_animation_timer=jnp.array(0)  # Add this
         )
 
         fish_x = jax.random.uniform(fish_key, (self.config.NUM_FISH,), minval=self.config.LEFT_BOUNDARY,
@@ -484,7 +490,9 @@ class FishingDerby(JaxEnvironment):
                 hook_state=p1_hook_state,
                 hooked_fish_idx=p1.hooked_fish_idx,
                 hook_velocity_y=new_hook_velocity_y,
-                hook_x_offset=new_hook_x_offset
+                hook_x_offset=new_hook_x_offset,
+                display_score=p1.display_score,
+                score_animation_timer=p1.score_animation_timer
             ))
 
             # Collision and Game Logic
@@ -524,7 +532,9 @@ class FishingDerby(JaxEnvironment):
                 hook_state=p1_hook_state,
                 hooked_fish_idx=p1_hooked_fish_idx,
                 hook_velocity_y=new_hook_velocity_y,
-                hook_x_offset=new_hook_x_offset
+                hook_x_offset=new_hook_x_offset,
+                display_score=p1.display_score,
+                score_animation_timer=p1.score_animation_timer
             ))
 
             # Hooked fish follows the hook
@@ -543,6 +553,21 @@ class FishingDerby(JaxEnvironment):
             prev_idx = p1_hooked_fish_idx
             fish_scores = jnp.array(cfg.FISH_ROW_SCORES)
             p1_score += jnp.where(scored_fish, fish_scores[p1_hooked_fish_idx], 0)
+
+            animation_speed = 2  # Frames between score increments
+
+            # Check if score changed (fish was caught)
+            score_increased = scored_fish
+            new_animation_timer = jnp.where(score_increased, animation_speed,
+                                            jnp.where(p1.score_animation_timer > 0, p1.score_animation_timer - 1, 0))
+
+            # Update display score when timer reaches 0 and display_score < actual_score
+            should_increment_display = (new_animation_timer == 0) & (p1.display_score < p1_score)
+            new_display_score = jnp.where(should_increment_display, p1.display_score + 1, p1.display_score)
+
+            # Reset timer for next increment if we still need to catch up
+            new_animation_timer = jnp.where(should_increment_display & (new_display_score < p1_score),
+                                            animation_speed, new_animation_timer)
 
             # Fish respawn logic - simpler version
             def respawn_fish(all_pos, all_dirs, idx, key):
@@ -585,7 +610,9 @@ class FishingDerby(JaxEnvironment):
                     hook_state=p1_hook_state,
                     hooked_fish_idx=p1_hooked_fish_idx,
                     hook_velocity_y=new_hook_velocity_y,
-                    hook_x_offset=new_hook_x_offset
+                    hook_x_offset=new_hook_x_offset,
+                    display_score=new_display_score,
+                    score_animation_timer=new_animation_timer
                 ),
                 p2=state.p2,
                 fish_positions=new_fish_pos,
@@ -790,16 +817,16 @@ class FishingDerbyRenderer(JAXGameRenderer):
         should_draw_hooked = (state.p1.hook_state > 0) & (state.p1.hooked_fish_idx >= 0) & (state.p1.hook_state != 3)
         raster = jax.lax.cond(should_draw_hooked, draw_hooked_p1, lambda r: r, raster)
 
-        raster = self._render_score(raster, state.p1.score, 50, 10)
-        raster = self._render_score(raster, state.p2.score, 100, 10)
+        raster = self._render_score(raster, state.p1.display_score, 50, 10)
+        raster = self._render_score(raster, state.p2.display_score, 100, 10)
 
         # Draw pier sprite on top of everything else (rendered last so it appears above all other elements)
         raster = self._render_at(raster, 0, 0, self.SPRITE_PIER)
 
         return raster
 
-    def _render_score(self, raster, score, x, y):
-        s1, s0 = score // 10, score % 10
+    def _render_score(self, raster, display_score, x, y):
+        s1, s0 = display_score // 10, display_score % 10
         digit1_sprite, digit0_sprite = self.SPRITE_SCORE_DIGITS[s1], self.SPRITE_SCORE_DIGITS[s0]
         raster = self._render_at(raster, x, y, digit1_sprite)
         raster = self._render_at(raster, x + 7, y, digit0_sprite)
