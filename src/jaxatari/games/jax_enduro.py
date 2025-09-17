@@ -427,7 +427,74 @@ class JaxEnduro(JaxEnvironment[EnduroGameState, EnduroObservation, EnduroInfo, E
         ]
 
         self.renderer = EnduroRenderer()
-        self.track_generator = TrackGenerator(self.config)
+
+        # Precompute all possible track curves during initialization
+        self._precomputed_left_curves, self._precomputed_right_curves = self.precompute_all_track_curves()
+        # Store the offset for array indexing (to handle negative offsets)
+        self._curve_offset_base = int(self.config.track_max_top_x_offset)  # e.g., 50
+
+
+    def precompute_all_track_curves(self) -> tuple[jnp.ndarray, jnp.ndarray]:
+        """
+        Precomputes all possible track curves using integer offsets.
+
+        Args:
+            config: Game configuration containing track parameters
+
+        Returns:
+            tuple containing:
+            - precomputed_left_curves: Array of shape (num_offsets, track_height)
+            - precomputed_right_curves: Array of shape (num_offsets, track_height)
+        """
+
+        # Calculate the range of possible integer offsets
+        max_offset = int(self.config.track_max_top_x_offset)  # e.g., 50
+        offset_range = range(-max_offset, max_offset + 1)  # -50 to +50 = 101 values
+        num_offsets = len(offset_range)
+
+        # Pre-calculate static components that are the same for all curves
+        i = jnp.arange(self.config.track_height)
+        perspective_offsets = jnp.where(i < 2, 0, (i - 1) // 2)
+        depth_ratio = (self.config.track_height - i) / self.config.track_height
+        curved_depth_ratio = jnp.power(depth_ratio, 3.0)
+
+        # Pre-calculate track spaces (width at each row)
+        track_spaces = jnp.where(i < 2, -1, jnp.minimum(i - 2, self.config.track_width)).astype(jnp.int32)
+
+        # Storage for all precomputed curves
+        all_left_curves = []
+        all_right_curves = []
+
+        print(f"Precomputing {num_offsets} track curves...")
+
+        # Generate a curve for each possible integer offset
+        for offset in offset_range:
+            # Calculate curve shifts for this specific integer offset
+            curve_shifts = jnp.floor(offset * curved_depth_ratio).astype(jnp.int32)
+
+            # Generate left track (relative to top_x=0)
+            base_left_xs = -perspective_offsets  # Start from 0 instead of top_x
+            final_left_xs = base_left_xs + curve_shifts
+            final_left_xs = final_left_xs.at[-1].set(final_left_xs[-2])  # Straighten end
+
+            # Generate right track
+            final_right_xs = jnp.where(
+                track_spaces == -1,
+                final_left_xs,
+                final_left_xs + track_spaces + 1
+            )
+            final_right_xs = final_right_xs.at[-1].set(final_right_xs[-2])
+
+            all_left_curves.append(final_left_xs.astype(jnp.int32))
+            all_right_curves.append(final_right_xs.astype(jnp.int32))
+
+        # Convert to JAX arrays
+        precomputed_left_curves = jnp.array(all_left_curves)  # Shape: (101, track_height)
+        precomputed_right_curves = jnp.array(all_right_curves)  # Shape: (101, track_height)
+
+        print(f"Precomputed curves shape: {precomputed_left_curves.shape}")
+
+        return precomputed_left_curves, precomputed_right_curves
 
     def action_space(self) -> spaces.Discrete:
         return spaces.Discrete(len(self.action_set))
@@ -1351,6 +1418,44 @@ class JaxEnduro(JaxEnvironment[EnduroGameState, EnduroObservation, EnduroInfo, E
     @partial(jax.jit, static_argnums=(0,))
     def _get_done(self, state: EnduroGameState) -> jnp.array(bool):
         return state.game_over
+
+    @partial(jax.jit, static_argnums=(0,))
+    def _generate_viewable_track_lookup(
+            self,
+            top_x: jnp.int32,
+            top_x_curve_offset: jnp.float32
+    ) -> tuple[jnp.ndarray, jnp.ndarray]:
+        """
+        Ultra-fast track generation using precomputed curve lookup with integer truncation.
+
+        Args:
+            top_x: Horizontal position where track should be drawn
+            top_x_curve_offset: Curve intensity (will be truncated to integer for lookup)
+
+        Returns:
+            Left and right track boundary coordinates
+        """
+
+        # Convert float offset to integer for lookup (simple truncation)
+        offset_int = jnp.clip(
+            jnp.floor(top_x_curve_offset).astype(jnp.int32),  # Just truncate to integer
+            -self._curve_offset_base,
+            self._curve_offset_base
+        )
+
+        # Convert to array index (offset + base to handle negative values)
+        # e.g., offset -50 becomes index 0, offset 0 becomes index 50, offset +50 becomes index 100
+        curve_index = offset_int + self._curve_offset_base
+
+        # Lookup precomputed curve (ultra-fast array access!)
+        base_left_curve = self._precomputed_left_curves[curve_index]
+        base_right_curve = self._precomputed_right_curves[curve_index]
+
+        # Apply horizontal offset (simple addition!)
+        final_left_xs = base_left_curve + top_x
+        final_right_xs = base_right_curve + top_x
+
+        return final_left_xs, final_right_xs
 
     @partial(jax.jit, static_argnums=(0,))
     def _generate_viewable_track(
