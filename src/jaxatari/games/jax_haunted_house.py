@@ -98,7 +98,7 @@ class HauntedHouseConstants(NamedTuple):
 
     UP_STAIRS: chex.Array = jnp.array([7, 8, 16, 17, 19, 26, 29, 31])
     DOWN_STAIRS: chex.Array = jnp.array([15, 18, 27, 28, 30, 38, 39, 40])
-    ROOMS: chex.Array = jnp.array([1,2,3,4,5,6,9,10,11,12,13,14,20,21,22,23,24,25,32,33,34,35,36,37])
+    ROOMS: chex.Array = jnp.array([1,2,3,5,6,9,10,11,12,13,14,20,21,22,23,24,25,32,33,34,35,36,37])
     STAIR_TRANSITIONS: chex. Array = jnp.array([0,0,0,0,0,0,0,15,18,0,0, #0-10
                                                 0,0,0,0,7,27,28,8,30,0,  #11-20
                                                 0,0,0,0,0,38,16,17,39,19, #21-30
@@ -374,44 +374,31 @@ class JaxHauntedHouse(JaxEnvironment[HauntedHouseState, HauntedHouseObservation,
 
         return jnp.any(jnp.logical_and(entity1_room, entity2_room))
 
-
-
     @partial(jax.jit, static_argnums=(0,))
     def random_spawns(self, key):
-        random_room_ghost = jax.random.choice(key, self.consts.ROOMS)
-        ghost = self.consts.LOCATIONS[random_room_ghost]
-        key, _ = jax.random.split(key, 2)
-        random_room_spider = jax.random.choice(key, self.consts.ROOMS)
-        spider = self.consts.LOCATIONS[random_room_spider]
-        key, _ = jax.random.split(key, 2)
-        random_room_bat = jax.random.choice(key, self.consts.ROOMS)
-        bat = self.consts.LOCATIONS[random_room_bat]
+        # The 'replace=False' argument guarantees the indices are not repeated.
+        random_rooms = jax.random.choice(key, self.consts.ROOMS, shape=(3,), replace=False)
 
-        current_nodes = jnp.array([random_room_ghost, random_room_spider, random_room_bat])
-        previous_nodes = jnp.array([0,0,0])
+        ghost = self.consts.LOCATIONS[random_rooms[0]]
+        spider = self.consts.LOCATIONS[random_rooms[1]]
+        bat = self.consts.LOCATIONS[random_rooms[2]]
+
+        current_nodes = random_rooms
+        previous_nodes = jnp.zeros(3, dtype=jnp.int32)
 
         return ghost, spider, bat, current_nodes, previous_nodes
 
     @partial(jax.jit, static_argnums=(0,))
     def random_item_spawns(self, key):
-        random_room_scepter = jax.random.choice(key, self.consts.ROOMS)
-        scepter = self.consts.LOCATIONS[random_room_scepter]
-        key, _ = jax.random.split(key, 2)
-        random_room_urn_left = jax.random.choice(key, self.consts.ROOMS)
-        urn_left = self.consts.LOCATIONS[random_room_urn_left]
-        key, _ = jax.random.split(key, 2)
-        random_room_urn_middle = jax.random.choice(key, self.consts.ROOMS)
-        urn_middle = self.consts.LOCATIONS[random_room_urn_middle]
-        key, _ = jax.random.split(key, 2)
-        random_room_urn_right = jax.random.choice(key, self.consts.ROOMS)
-        urn_right = self.consts.LOCATIONS[random_room_urn_right]
+        # The 'replace=False' argument prevents the items from spawning on top of each other.
+        random_rooms = jax.random.choice(key, self.consts.ROOMS, shape=(4,), replace=False)
 
-
+        scepter = self.consts.LOCATIONS[random_rooms[0]]
+        urn_left = self.consts.LOCATIONS[random_rooms[1]]
+        urn_middle = self.consts.LOCATIONS[random_rooms[2]]
+        urn_right = self.consts.LOCATIONS[random_rooms[3]]
 
         return scepter, urn_left, urn_middle, urn_right
-
-
-
 
 
 
