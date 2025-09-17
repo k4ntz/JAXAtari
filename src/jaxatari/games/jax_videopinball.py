@@ -1171,7 +1171,6 @@ def _check_obstacle_hits(
 
     return hit_point, scoring_list, velocity_factor, velocity_addition
 
-MAX_REFLECTIONS = 10  # max collisions to process per timestep
 
 @jax.jit
 def _calc_ball_collision_loop(state: VideoPinballState, ball_movement: BallMovement, action: chex.Array):
@@ -1322,7 +1321,7 @@ def _calc_ball_collision_loop(state: VideoPinballState, ball_movement: BallMovem
         True,                                 # compute_flag
     )
 
-    carry = jax.lax.fori_loop(0, MAX_REFLECTIONS, _fori_body, carry)
+    carry = jax.lax.fori_loop(0, MAX_REFLECTIONS_PER_GAMESTEP, _fori_body, carry)
 
     (
         old_ball_x,
@@ -2636,8 +2635,6 @@ class VideoPinballRenderer(JAXGameRenderer):
         Returns:
             A new JAX array with the scene object boundaries drawn onto it.
         """
-
-        BOUNDARY_COLOR = 0, 255, 0
         # Use vmap to apply the rendering function to all objects in the list.
         # The `in_axes=(None, 0)` tells vmap to not vectorize the `raster` argument
         # and to vectorize the `scene_object` argument.

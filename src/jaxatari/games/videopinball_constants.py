@@ -148,6 +148,7 @@ HEIGHT = 210
 GRAVITY = 0.03  # 0.12
 VELOCITY_DAMPENING_VALUE = 0.075  # 24
 VELOCITY_ACCELERATION_VALUE = 0.125
+MAX_REFLECTIONS_PER_GAMESTEP = 10  # max collisions to process per timestep
 BALL_MAX_SPEED = 3.5
 BALL_MIN_SPEED = 0.35
 NUDGE_EFFECT_INTERVAL = 1  # Num steps in between nudge changing 
@@ -184,6 +185,7 @@ INVISIBLE_BLOCK_MEAN_REFLECTION_FACTOR = (
 BG_COLOR = 0, 0, 0
 TILT_MODE_COLOR = 167, 26, 26
 BACKGROUND_COLOR = jnp.array([0, 0, 0], dtype=jnp.uint8)
+BOUNDARY_COLOR = 0, 255, 0
 WALL_COLOR = jnp.array([104, 72, 198], dtype=jnp.uint8)
 GROUP3_COLOR = jnp.array([187, 159, 71], dtype=jnp.uint8)
 GROUP4_COLOR = jnp.array([210, 164, 74], dtype=jnp.uint8)
