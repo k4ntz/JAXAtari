@@ -5243,6 +5243,7 @@ class BeamRiderRenderer(JAXGameRenderer):
         self.pygame_screen.blit(sector_text, sector_rect)
 
 
+
 if __name__ == "__main__":
     game = BeamRiderRenderer(enable_pygame=True)
     game.run_game()
