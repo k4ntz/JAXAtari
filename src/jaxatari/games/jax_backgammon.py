@@ -50,7 +50,8 @@ class BackgammonState(NamedTuple):
 
 class BackgammonInfo(NamedTuple):
     """Contains auxiliary information about the environment (e.g., timing or metadata)."""
-    time: jnp.ndarray
+    player: jnp.ndarray
+    dice: jnp.ndarray
     all_rewards: chex.Array
 
 
@@ -587,11 +588,14 @@ class JaxBackgammonEnv(JaxEnvironment[BackgammonState, jnp.ndarray, dict, Backga
             home_counts=jnp.array([state.board[0, 25], state.board[1, 25]], dtype=jnp.int32)  # home counts
         )
 
-    @staticmethod
-    @jax.jit
-    def _get_info(state: BackgammonState, all_rewards: chex.Array = None) -> dict:
-        """Return auxiliary information about the environment."""
-        return {"player": state.current_player, "dice": state.dice}
+    @partial(jax.jit, static_argnums=(0,))
+    def _get_info(self, state: BackgammonState, all_rewards: chex.Array = None) -> BackgammonInfo:
+        """Extract info from state"""
+        return BackgammonInfo(
+            player=state.current_player,
+            dice=state.dice,
+        all_rewards = all_rewards
+        )
 
     @staticmethod
     @jax.jit
