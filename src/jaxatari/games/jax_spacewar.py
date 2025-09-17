@@ -694,21 +694,21 @@ class JaxSpaceWar(JaxEnvironment[SpaceWarState, SpaceWarObservation, SpaceWarInf
 
         def entity_pos_to_flat_array(obj: EntityPosition):
             return jnp.concatenate([
-                jnp.atleast_1d(obj.player.x),
-                jnp.atleast_1d(obj.player.y),
-                jnp.atleast_1d(obj.player.width),
-                jnp.atleast_1d(obj.player.height),
-                jnp.atleast_1d(obj.player.rotation),
-                jnp.atleast_1d(obj.player.active)
+                jnp.atleast_1d(obj.x),
+                jnp.atleast_1d(obj.y),
+                jnp.atleast_1d(obj.width),
+                jnp.atleast_1d(obj.height),
+                jnp.atleast_1d(obj.rotation),
+                jnp.atleast_1d(obj.active)
             ])
         
         def missile_pos_to_flat_array(obj: MissilePosition):
             return jnp.concatenate([
-                jnp.atleast_1d(obj.player.x),
-                jnp.atleast_1d(obj.player.y),
-                jnp.atleast_1d(obj.player.width),
-                jnp.atleast_1d(obj.player.height),
-                jnp.atleast_1d(obj.player.active)
+                jnp.atleast_1d(obj.x),
+                jnp.atleast_1d(obj.y),
+                jnp.atleast_1d(obj.width),
+                jnp.atleast_1d(obj.height),
+                jnp.atleast_1d(obj.active)
             ])
 
         return jnp.concatenate([
