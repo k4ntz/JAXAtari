@@ -3,6 +3,7 @@ import chex
 
 from typing import NamedTuple
 
+
 @chex.dataclass
 class BallMovement:
     old_ball_x: chex.Array
@@ -22,7 +23,10 @@ class SceneObject:
         chex.Array
     )  # 0: no score, 1: Bumper, 2: Spinner, 3: Left Rollover, 4: Atari Rollover, 5: Special Lit Up Target,
     # 6: Left Lit Up Target, 7:Middle Lit Up Target, 8: Right Lit Up Target, 9: Left Flipper, 10: Right Flipper, 11: Tilt Mode Hole Plug
-    variant: chex.Array  # a more general property: Used along with score_type to identify the exact SceneObject for a specific game state.
+    variant: (
+        chex.Array
+    )  # a more general property: Used along with score_type to identify the exact SceneObject for a specific game state.
+
 
 # Todo: Switch to a data class
 @chex.dataclass
@@ -31,15 +35,18 @@ class HitPoint:
     x: chex.Array
     y: chex.Array
 
+
 # TODO will have to bring this into VideoPinballConstants or refactor another way.
 class HitPointSelector(NamedTuple):
     # Hit point properties
     T_ENTRY: int = 0  # time at which the ball intersects with the scene object
-    X: int = 1  # x position of the point where the ball intersects with the scene object
+    X: int = (
+        1  # x position of the point where the ball intersects with the scene object
+    )
     Y: int = 2  # y position
     RX: int = 3  # reflected ball x position
     RY: int = 4  # reflected ball y position
-    OBJECT_WIDTH: int = 5 # Scene Object properties (of the object that was hit)
+    OBJECT_WIDTH: int = 5  # Scene Object properties (of the object that was hit)
     OBJECT_HEIGHT: int = 6
     OBJECT_X: int = 7
     OBJECT_Y: int = 8
@@ -75,7 +82,9 @@ class VideoPinballState(NamedTuple):
     score: chex.Array
     lives: chex.Array
     bumper_multiplier: chex.Array
-    active_targets: chex.Array  # Left diamond, Middle diamond, Right diamond, Special target
+    active_targets: (
+        chex.Array
+    )  # Left diamond, Middle diamond, Right diamond, Special target
     target_cooldown: chex.Array
     special_target_cooldown: chex.Array
     atari_symbols: chex.Array
@@ -102,20 +111,20 @@ class EntityState(NamedTuple):
 
 class VideoPinballObservation(NamedTuple):
     ball: EntityState
-    spinners: chex.Array
-    flippers: chex.Array
+    spinners: jnp.ndarray
+    flippers: jnp.ndarray
     plunger: EntityState
-    targets: chex.Array
-    bumpers: chex.Array
-    rollovers: chex.Array
-    tilt_mode_hole_plugs: chex.Array
-    score: chex.Array
-    lives: chex.Array
-    atari_symbols: chex.Array
-    bumper_multiplier: chex.Array
-    rollover_counter: chex.Array
-    color_cycling: chex.Array
-    tilt_mode_active: chex.Array
+    targets: jnp.ndarray
+    bumpers: jnp.ndarray
+    rollovers: jnp.ndarray
+    tilt_mode_hole_plugs: jnp.ndarray
+    score: jnp.ndarray
+    lives: jnp.ndarray
+    atari_symbols: jnp.ndarray
+    bumper_multiplier: jnp.ndarray
+    rollover_counter: jnp.ndarray
+    color_cycling: jnp.ndarray
+    tilt_mode_active: jnp.ndarray
 
 
 class VideoPinballInfo(NamedTuple):

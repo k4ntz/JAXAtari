@@ -476,9 +476,16 @@ class JaxVideoPinball(
                 entity.active,
             ]) for entity in [left_flipper, right_flipper]
         ])
-        plunger = ...
+
+        plunger = EntityState(
+        )
+        
+        left_target = EntityState(
+        )
+            
         spinners = ...
         targets = ...
+        bumpers = 
         special_lit_up_target = ...
         left_lit_up_target = ...
         middle_lit_up_target = ...
@@ -488,9 +495,11 @@ class JaxVideoPinball(
 
         return VideoPinballObservation(
             ball=ball,
-            flippers=(left_flipper, right_flipper),
+            spinners=spinners,
+            flippers=flippers,
             plunger=plunger,
-            targets=(special_lit_up_target, left_lit_up_target, middle_lit_up_target, right_lit_up_target),
+            targets=targets,
+            bumpers=bumpers,
             tilt_mode_hole_plugs=(left_tilt_mode_hole_plug, right_tilt_mode_hole_plug),
             score=state.score,
             lives=state.lives,
