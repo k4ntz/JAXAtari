@@ -5,9 +5,11 @@ import jax
 import jax.numpy as jnp
 import chex
 from gymnax.environments import spaces
+from numpy.ma.core import logical_not
+
 from jaxatari.renderers import JAXGameRenderer
 from jaxatari.rendering import jax_rendering_utils as jr
-from jaxatari.environment import JaxEnvironment, JAXAtariAction as Action, EnvState, EnvObs, EnvInfo
+from jaxatari.environment import JaxEnvironment, JAXAtariAction as Action
 
 # Constants for the game environment
 class HumanCannonballConstants(NamedTuple):
@@ -76,6 +78,10 @@ class HumanCannonballConstants(NamedTuple):
     MPH_Y: int = 20
     ANGLE_Y: int = 35
 
+    # Animation constants
+    ANIMATION_MISS_LENGTH: int = 124
+    ANIMATION_HIT_LENGTH: int = 96
+
 # Define the positions of the state information
 STATE_TRANSLATOR: dict = {
     0: "human_x",
@@ -91,7 +97,9 @@ STATE_TRANSLATOR: dict = {
     10: "score",
     11: "misses",
     12: "step_counter",
-    13: "rng_key"
+    13: "rng_key",
+    14: "animation_running",
+    15: "animation_counter"
 }
 
 
@@ -111,6 +119,8 @@ class HumanCannonballState(NamedTuple):
     misses: chex.Array
     step_counter: chex.Array
     rng_key: chex.PRNGKey
+    animation_running: chex.Array
+    animation_counter: chex.Array
 
 
 # Position of the human and the water tower
@@ -164,6 +174,10 @@ def load_sprites():
     water_tower_sprites, water_tower_offsets = jr.pad_to_match([water_tower, water_tower_human1, water_tower_human2])
     water_tower_offsets = jnp.array(water_tower_offsets)
 
+    # Pad sprites with human inside the water tower to match each other
+    water_tower_human_sprites, water_tower_human_offsets = jr.pad_to_match([water_tower_human1, water_tower_human2])
+    water_tower_human_offsets = jnp.array(water_tower_offsets)
+
     # Background sprite
     SPRITE_BG = jnp.expand_dims(bg, axis=0)
 
@@ -176,6 +190,9 @@ def load_sprites():
     # Water tower sprites
     SPRITE_WATER_TOWER = jnp.stack(water_tower_sprites, axis=0)
 
+    # Human in water tower sprites
+    SPRITE_WATER_TOWER_HUMAN = jnp.stack(water_tower_human_sprites, axis=0)
+
     # Digits sprites
     DIGITS = jr.load_and_pad_digits(os.path.join(MODULE_DIR, "./sprites/human_cannonball/digits/score_{}.npy"))
 
@@ -184,10 +201,12 @@ def load_sprites():
         SPRITE_CANNON,
         SPRITE_HUMAN,
         SPRITE_WATER_TOWER,
+        SPRITE_WATER_TOWER_HUMAN,
         DIGITS,
         cannon_offsets,
         human_offsets,
-        water_tower_offsets
+        water_tower_offsets,
+        water_tower_human_offsets
     )
 
 # Load sprites once at module level
@@ -196,10 +215,12 @@ def load_sprites():
         SPRITE_CANNON,
         SPRITE_HUMAN,
         SPRITE_WATER_TOWER,
+        SPRITE_WATER_TOWER_HUMAN,
         DIGITS,
         CANNON_OFFSETS,
         HUMAN_OFFSETS,
-        WATER_TOWER_OFFSETS
+        WATER_TOWER_OFFSETS,
+        WATER_TOWER_HUMAN_OFFSETS
     ) = load_sprites()
 
 class JaxHumanCannonball(JaxEnvironment[HumanCannonballState, HumanCannonballObservation, HumanCannonballInfo, HumanCannonballConstants]):
@@ -325,8 +346,11 @@ class JaxHumanCannonball(JaxEnvironment[HumanCannonballState, HumanCannonballObs
     # Check if the player has scored
     @partial(jax.jit, static_argnums=(0,))
     def check_water_collision(
-            self, state_human_x, state_human_y, state_water_tower_x
+            self, state_human_x, state_human_y, state_water_tower_x, state_animation_running
     ):
+        # If there is an animation running, return false
+        animation = jnp.logical_not(state_animation_running)
+
         # Define bounding boxes for the human and water tower
         water_surface_x1 = state_water_tower_x + 1
         water_surface_y1 = self.consts.WATER_TOWER_Y - self.consts.WATER_TOWER_WALL_HEIGHT
@@ -342,14 +366,15 @@ class JaxHumanCannonball(JaxEnvironment[HumanCannonballState, HumanCannonballObs
         collision_x = jnp.logical_and(human_x1 < water_surface_x2, human_x2 > water_surface_x1)
         collision_y = jnp.logical_and(human_y1 < water_surface_y2, human_y2 > water_surface_y1)
 
-        return jnp.logical_and(collision_x, collision_y)
+        return jnp.logical_and(jnp.logical_and(collision_x, collision_y), animation)
 
     # Check if the player has missed
     @partial(jax.jit, static_argnums=(0,))
     def check_ground_collision(
-            self, state_human_y
+            self, state_human_y, state_animation_running
     ):
-        return state_human_y + self.consts.HUMAN_SIZE[1] >= self.consts.GROUND_LEVEL
+        ground_colision = state_human_y + self.consts.HUMAN_SIZE[1] >= self.consts.GROUND_LEVEL
+        return jnp.logical_and(ground_colision, jnp.logical_not(state_animation_running))
 
     # Check if the human has hit the water tower wall
     @partial(jax.jit, static_argnums=(0,))
@@ -523,51 +548,76 @@ class JaxHumanCannonball(JaxEnvironment[HumanCannonballState, HumanCannonballObs
         )
 
         # Step 4: Check if the player has scored
-        new_score = jax.lax.cond(
+        new_score, new_animation_counter, new_animation_running = jax.lax.cond(
             self.check_water_collision(
                 new_human_x,
                 new_human_y,
-                state.water_tower_x
+                state.water_tower_x,
+                state.animation_running
             ),
-            lambda _: state.score + 1,
-            lambda _: state.score,
+            lambda _: (state.score + 1, self.consts.ANIMATION_MISS_LENGTH, True), # Increment score and start hit animation
+            lambda _: (state.score, state.animation_counter, state.animation_running), # Else, leave unchanged
             operand=None
         )
 
         # Step 5: Check if the player has missed
-        new_misses = jax.lax.cond(
+        new_misses, new_animation_counter, new_animation_running = jax.lax.cond(
             self.check_ground_collision(
-                state.human_y
+                state.human_y,
+                state.animation_running
             ),
-            lambda _: state.misses + 1,
-            lambda _: state.misses,
+            lambda _: (state.misses + 1, self.consts.ANIMATION_MISS_LENGTH, True), # Increment misses and start miss animation
+            lambda _: (state.misses, state.animation_counter, state.animation_running), # Else, leave unchanged
             operand=None
         )
 
-        # Step 6: Reset the round if there was a score or miss this step
-        round_reset = jnp.logical_or(
-            state.score < new_score,
-            state.misses < new_misses
+        # Check if animation started this step
+        just_started = jnp.logical_and(
+            jnp.not_equal(state.animation_running, new_animation_running),
+            jnp.equal(new_animation_running, True)
         )
 
-        current_values = (
-            new_human_x,
-            new_human_y,
-            new_human_x_vel,
-            new_human_y_vel,
-            human_launched,
-            new_water_tower_x,
-            tower_wall_hit,
-            state.mph_values,
-            state.rng_key
+        # Check if round should reset
+        round_reset = jnp.equal(1, new_animation_counter)
+
+        # Step 6: Decrement animation counter if animation is happening
+        new_animation_counter = jax.lax.cond(
+            jnp.not_equal(new_animation_counter, 0),
+            lambda x: x - 1,
+            lambda x: x,
+            operand=new_animation_counter
         )
 
+        # Step 7: Reset the round when the animation finishes this step
+
+        # Freeze old values in case of an animation running and decrement animation counter
         (new_human_x, new_human_y, new_human_x_vel, new_human_y_vel, human_launched, new_water_tower_x,
-         tower_wall_hit, new_mph_values, new_rng_key) = jax.lax.cond(
+         tower_wall_hit, new_animation_running, new_animation_counter, new_score, new_misses) = jax.lax.cond(
+            jnp.logical_and(
+                jnp.logical_not(round_reset),       # If there is no reset this step and
+                jnp.logical_and(
+                    new_animation_running,          # there is an animation happening
+                    jnp.logical_not(just_started)   # that didn't just start (so that scores are updated)
+                )
+            ),
+            lambda _: (state.human_x, state.human_y, state.human_x_vel, state.human_y_vel,  # Freeze all values not related to the animation
+                       state.human_launched, state.water_tower_x,state.tower_wall_hit,
+                       new_animation_running, new_animation_counter, state.score, state.misses),
+            lambda _: (new_human_x, new_human_y, new_human_x_vel, new_human_y_vel,          # Else, update normally
+                       human_launched, new_water_tower_x,tower_wall_hit,
+                       new_animation_running, new_animation_counter, new_score, new_misses),
+            operand=None
+        )
+
+        # On round reset, reset values, else, apply this step's changes
+        (new_human_x, new_human_y, new_human_x_vel, new_human_y_vel, human_launched, new_water_tower_x,
+         tower_wall_hit, new_mph_values, new_rng_key, new_animation_running, new_animation_counter) = jax.lax.cond(
             round_reset,
             lambda _: self.reset_round(state.rng_key, state.human_x, state.angle),
-            lambda x: x,
-            operand=current_values
+            lambda _: (new_human_x, new_human_y, new_human_x_vel, new_human_y_vel,
+                       human_launched, new_water_tower_x, tower_wall_hit, state.mph_values,
+                       state.rng_key, new_animation_running, new_animation_counter),
+            operand=None
         )
 
         # Step 7: Create the new state
@@ -585,7 +635,9 @@ class JaxHumanCannonball(JaxEnvironment[HumanCannonballState, HumanCannonballObs
             score=new_score,
             misses=new_misses,
             step_counter=state.step_counter + 1,
-            rng_key=new_rng_key
+            rng_key=new_rng_key,
+            animation_running=new_animation_running,
+            animation_counter=new_animation_counter
         )
 
         done = self._get_done(new_state)
@@ -610,12 +662,15 @@ class JaxHumanCannonball(JaxEnvironment[HumanCannonballState, HumanCannonballObs
         tower_wall_hit = False
         # Change the rng_key and generate a new mph_value
         rng_key, subkey = jax.random.split(key)
-        # Add pseudorandomness to mph generation by integrating human x pos and angle
+        # Add pseudo-randomness to mph generation by integrating human x pos and angle
         subkey = jax.random.fold_in(subkey, current_human_x)
         subkey = jax.random.fold_in(subkey, current_angle)
         mph_values = jax.random.randint(subkey, (), self.consts.MPH_MIN, self.consts.MPH_MAX + 1)
+        # Reset the animation status
+        animation_running = False
+        animation_counter = 0
 
-        return human_x, human_y, human_x_vel, human_y_vel, human_launched, water_tower_x, tower_wall_hit, mph_values, rng_key
+        return human_x, human_y, human_x_vel, human_y_vel, human_launched, water_tower_x, tower_wall_hit, mph_values, rng_key, animation_running, animation_counter
 
     def reset(
             self, key: jax.random.PRNGKey = jax.random.PRNGKey(42)
@@ -639,7 +694,9 @@ class JaxHumanCannonball(JaxEnvironment[HumanCannonballState, HumanCannonballObs
             score = jnp.array(0).astype(jnp.int32),
             misses = jnp.array(0).astype(jnp.int32),
             step_counter = jnp.array(0).astype(jnp.int32),
-            rng_key=key
+            rng_key=key,
+            animation_running = jnp.array(False),
+            animation_counter = jnp.array(0).astype(jnp.int32)
         )
         initial_obs = self._get_observation(state)
 
@@ -659,16 +716,16 @@ class JaxHumanCannonball(JaxEnvironment[HumanCannonballState, HumanCannonballObs
         )
 
         # Create water tower
-        human_cannonball = EntityPosition(
+        water_tower = EntityPosition(
             x=state.water_tower_x,
-            y=self.consts.WATER_TOWER_Y,
+            y=jnp.array(self.consts.WATER_TOWER_Y),
             width=jnp.array(self.consts.WATER_TOWER_WIDTH),
             height=jnp.array(self.consts.WATER_TOWER_WALL_HEIGHT - 1),
         )
 
         return HumanCannonballObservation(
             human=human_cannonball,
-            water_tower=human_cannonball,
+            water_tower=water_tower,
             angle=state.angle,
             mph=state.mph_values,
             score=state.score,
@@ -741,6 +798,7 @@ class HumanCannonballRenderer(JAXGameRenderer):
         self.cannon_offset_length = len(CANNON_OFFSETS)
         self.human_offset_length = len(HUMAN_OFFSETS)
         self.water_tower_offset_length = len(WATER_TOWER_OFFSETS)
+        self.water_tower_human_offset = len(WATER_TOWER_HUMAN_OFFSETS)
         self.consts = consts or HumanCannonballConstants()
 
     @partial(jax.jit, static_argnums=(0,))
@@ -771,7 +829,7 @@ class HumanCannonballRenderer(JAXGameRenderer):
 
         cannon_sprite_idx, cannon_offset = jax.lax.cond(
             state.angle < self.consts.ANGLE_LOW_THRESHOLD,  # If angle under LOW_THRESHOLD
-            lambda _: (2, 0),  # Render low sprite
+            lambda _: (2,0),  # Render low sprite
             lambda _: (cannon_sprite_idx, cannon_offset),  # Else, keep the sprite
             operand=None
         )
@@ -787,20 +845,32 @@ class HumanCannonballRenderer(JAXGameRenderer):
 
         FLYING_ANGLE_THRESHOLD = 45
 
-        human_sprite_idx, human_offset = jax.lax.cond(
+        human_offset_x = 0
+
+        human_sprite_idx, human_offset_y = jax.lax.cond(
             flying_angle > FLYING_ANGLE_THRESHOLD,  # If ascension angle is > 45 degrees
-            lambda _: (0, 3),   # Use up sprite
-            lambda _: (1, 0),   # Else, use straight sprite
+            lambda _: (0,3),   # Use up sprite
+            lambda _: (1,0),   # Else, use straight sprite
             operand=None
         )
 
-        human_sprite_idx, human_offset = jax.lax.cond(
+        human_sprite_idx, human_offset_y = jax.lax.cond(
             jnp.logical_or( # If ascension angle is < -45 degrees or the tower has been hit
                 flying_angle < -FLYING_ANGLE_THRESHOLD,
                 state.tower_wall_hit
             ),
-            lambda _: (2, 2),  # Use down sprite
-            lambda _: (human_sprite_idx, human_offset),  # Else, keep the sprite
+            lambda _: (2,2),  # Use down sprite
+            lambda _: (human_sprite_idx, human_offset_y),  # Else, keep the sprite
+            operand=None
+        )
+
+        human_sprite_idx, human_offset_x, human_offset_y = jax.lax.cond(
+            jnp.logical_and(
+                state.animation_running,
+                jnp.less(state.human_y, self.consts.GROUND_LEVEL - 2)
+            ),  # If human is on the ground
+            lambda _: (3, 2, 5),  # Use ground sprite
+            lambda _: (human_sprite_idx, human_offset_x, human_offset_y),  # Else, keep the sprite
             operand=None
         )
 
@@ -808,7 +878,7 @@ class HumanCannonballRenderer(JAXGameRenderer):
         frame_human = jr.get_sprite_frame(SPRITE_HUMAN, human_sprite_idx)
         raster = jax.lax.cond(  # Only render when launched
             state.human_launched,
-            lambda r: jr.render_at(r, state.human_x, state.human_y - human_offset, frame_human),
+            lambda r: jr.render_at(r, state.human_x - human_offset_x, state.human_y - human_offset_y, frame_human),
             lambda r: r,
             operand=raster
         )
