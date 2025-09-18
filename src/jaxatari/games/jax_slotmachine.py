@@ -940,7 +940,7 @@ class JaxSlotMachine(JaxEnvironment[SlotMachineState, SlotMachineObservation, Sl
             credits=state.credits,
             current_wager=state.current_wager,
             reel_symbols=reel_symbols,
-            is_spinning=jnp.any(state.reel_spinning),
+            is_spinning=jnp.array(jnp.any(state.reel_spinning), dtype=jnp.int32),
             last_payout=state.last_payout,
             last_reward=state.last_reward,
         )
@@ -989,10 +989,52 @@ class JaxSlotMachine(JaxEnvironment[SlotMachineState, SlotMachineObservation, Sl
                 shape=(cfg.num_reels, cfg.symbols_per_reel),
                 dtype=jnp.int32
             ),
-            'is_spinning': spaces.Box(low=0, high=1, shape=(), dtype=jnp.bool_),
+            'is_spinning': spaces.Box(low=0, high=1, shape=(), dtype=jnp.int32),
             'last_payout': spaces.Box(low=0, high=1000, shape=(), dtype=jnp.int32),
             'last_reward': spaces.Box(low=0.0, high=1000.0, shape=(), dtype=jnp.float32),
         })
+
+    def image_space(self) -> spaces.Space:
+        """Image space describing rendered RGB frames."""
+        cfg = self.config
+        return spaces.Box(
+            low=0,
+            high=255,
+            shape=(cfg.screen_height, cfg.screen_width, 3),
+            dtype=jnp.uint8,
+        )
+
+    @partial(jax.jit, static_argnums=(0,))
+    def obs_to_flat_array(self, obs: SlotMachineObservation) -> jnp.ndarray:
+        """Flatten the structured observation into a 1-D array."""
+        components = [
+            jnp.atleast_1d(obs.credits).astype(jnp.float32),
+            jnp.atleast_1d(obs.current_wager).astype(jnp.float32),
+            obs.reel_symbols.astype(jnp.float32).ravel(),
+            jnp.atleast_1d(obs.is_spinning).astype(jnp.float32),
+            jnp.atleast_1d(obs.last_payout).astype(jnp.float32),
+            jnp.atleast_1d(obs.last_reward).astype(jnp.float32),
+        ]
+        return jnp.concatenate(components, axis=0)
+
+    def _get_info(self, state: SlotMachineState) -> SlotMachineInfo:
+
+        return SlotMachineInfo(
+            total_winnings=state.total_winnings,
+            spins_played=state.spins_played,
+        )
+
+    def _get_reward(self, previous_state: SlotMachineState, state: SlotMachineState) -> float:
+        """Return the associated reward. """
+        return float(jnp.asarray(state.last_reward))
+
+    def _get_done(self, state: SlotMachineState) -> bool:
+        """Check if the player can no longer place the minimum wager, or reached the max credits"""
+        cfg = self.config
+        credits = int(jnp.asarray(state.credits))
+        spinning = bool(jnp.asarray(jnp.any(state.reel_spinning)))
+        max_credits_reached = credits >= 999
+        return ((credits < cfg.min_wager) and (not spinning)) or max_credits_reached
 
 
 def main():
