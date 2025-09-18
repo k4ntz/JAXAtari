@@ -617,7 +617,7 @@ class JaxSpaceInvaders(JaxEnvironment[SpaceInvadersState, SpaceInvadersObservati
         )   
 
         done = self._get_done(new_state)
-        env_reward = self._get_env_reward(state, new_state)
+        env_reward = self._get_reward(state, new_state)
         all_rewards = self._get_all_reward(state, new_state)
         info = self._get_info(new_state, all_rewards)
         observation = self._get_observation(new_state)
@@ -747,7 +747,7 @@ class JaxSpaceInvaders(JaxEnvironment[SpaceInvadersState, SpaceInvadersObservati
         return SpaceInvadersInfo(time=state.step_counter, all_rewards=all_rewards)
 
     @partial(jax.jit, static_argnums=(0,))
-    def _get_env_reward(self, previous_state: SpaceInvadersState, state: SpaceInvadersState):
+    def _get_reward(self, previous_state: SpaceInvadersState, state: SpaceInvadersState):
         return state.player_score - previous_state.player_score
 
     @partial(jax.jit, static_argnums=(0,))
