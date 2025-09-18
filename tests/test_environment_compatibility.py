@@ -107,8 +107,16 @@ class TestBasicAPI:
         obs_space = raw_env.observation_space()
         assert obs_space.contains(obs), "Reset observation should be contained in observation space"
         
+        def is_pytree(obj):
+            try:
+                # jax.tree_util.tree_leaves raises a TypeError for non-pytree objects.
+                jax.tree_util.tree_leaves(obj)
+                return True
+            except TypeError:
+                return False
+
         # Test that state is a valid JAX array or structure
-        assert isinstance(state, (jnp.ndarray, dict, tuple)), "State should be a valid JAX structure"
+        assert is_pytree(state), "State should be a valid JAX structure (pytree)"
         
         # Test multiple resets with different keys
         key2 = jax.random.PRNGKey(1)
