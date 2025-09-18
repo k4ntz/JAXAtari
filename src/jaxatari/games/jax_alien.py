@@ -919,7 +919,6 @@ class JaxAlien(JaxEnvironment[AlienState, AlienObservation, AlienInfo, AlienCons
             lambda x: x,
             state.level.lifes
         )
-
         new_death_frame_counter = jax.lax.cond(
             jnp.logical_and(check_for_player_enemy_collision(self.consts, state, [new_player_state.x, new_player_state.y]),
                             jnp.logical_not(state.level.death_frame_counter)),
@@ -932,7 +931,6 @@ class JaxAlien(JaxEnvironment[AlienState, AlienObservation, AlienInfo, AlienCons
             lambda x: x,
             state.level.death_frame_counter
         )
-        
         new_kill_score_flag = jnp.where(state.enemies.multiple_enemies.enemy_death_frame > 0, 0, state.enemies.multiple_enemies.kill_score_flag)
         score_interation = 2 - jnp.sum(new_kill_score_flag[:3])
         score_increase_kill = jnp.sum((state.enemies.multiple_enemies.kill_score_flag * self.consts.ENEMY_KILL_SCORE[score_interation])*(state.enemies.multiple_enemies.enemy_death_frame > 0)).astype(jnp.uint16)
@@ -942,7 +940,6 @@ class JaxAlien(JaxEnvironment[AlienState, AlienObservation, AlienInfo, AlienCons
                 death_frame_counter=new_death_frame_counter,
                 score=new_score_kill
         )
-        
         new_enemies: EnemiesState = self.multiple_enemies_step(state)
         freeze_multiple_enemies = state.enemies.multiple_enemies._replace(
                     x=new_enemies.multiple_enemies.x,
