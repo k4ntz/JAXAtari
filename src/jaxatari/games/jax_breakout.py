@@ -581,7 +581,7 @@ class JaxBreakout(JaxEnvironment[BreakoutState, BreakoutObservation, BreakoutInf
         )
 
     @partial(jax.jit, static_argnums=(0,))
-    def reset(self, key = None) -> tuple[BreakoutObservation, BreakoutState]:
+    def reset(self, key: chex.PRNGKey = None) -> tuple[BreakoutObservation, BreakoutState]:
         """Initialize game state"""
         init_speed_idx = 0
         init_direction_idx = 0
@@ -824,12 +824,12 @@ class BreakoutRenderer(JAXGameRenderer):
         super().__init__()
         self.consts = consts or BreakoutConstants()
         self.SPRITE_BG, self.SPRITE_PLAYER, self.SPRITE_BALL, self.DIGIT_SPRITES = self.load_sprites()
-        self.BLOCK_COLORS = [jnp.array(color, dtype=jnp.uint8) for color in self.consts.BLOCK_COLORS]
+        self.BLOCK_COLORS = jnp.array(self.consts.BLOCK_COLORS, dtype=jnp.uint8)
 
         self.BLOCK_SIZE = (self.consts.BLOCK_SIZE[0], self.consts.BLOCK_SIZE[1])
 
-        # Pre-compute the raster layers for every possible block position.
-        self.ALL_POSSIBLE_BLOCK_RASTERS = self._precompute_block_rasters()
+        # Pre-compute the monochrome masks. Keep color adjustable
+        self.ALL_POSSIBLE_BLOCK_MASKS = self._precompute_block_masks()
 
     def load_sprites(self):
         """Load all sprites required for Pong rendering."""
@@ -860,19 +860,19 @@ class BreakoutRenderer(JAXGameRenderer):
         )
     
     
-    def _precompute_block_rasters(self):
+    def _precompute_block_masks(self):
         """
-        Calculates a stack of rasters, one for each possible block position.
-        This is done once at initialization to speed up the main render loop.
+        Calculates a stack of MONOCHROME MASKS, one for each possible block position.
         """
-        # Helper function to draw a single block on a blank canvas of fixed size.
-        def draw_single_block(x, y, color):
-            # Frame shape should be (Height, Width, Channels) = (210, 160, 3)
-            blank_raster = jr.create_initial_frame(width=160, height=210)
-            patch = jnp.full((self.BLOCK_SIZE[1], self.BLOCK_SIZE[0], 3), color, dtype=jnp.uint8)
-            return jax.lax.dynamic_update_slice(blank_raster, patch, (y, x, 0))
+        # This helper function now draws a block of 1s on a background of 0s.
+        def draw_single_mask(x, y):
+            # Canvas shape is now (Height, Width)
+            blank_raster = jnp.zeros((210, 160), dtype=jnp.uint8)
+            # Patch is now a monochrome block of 1s
+            patch = jnp.ones(self.BLOCK_SIZE[::-1], dtype=jnp.uint8) # Use [::-1] for (H, W)
+            return jax.lax.dynamic_update_slice(blank_raster, patch, (y, x))
 
-        # Generate coordinates and colors for ALL possible block positions.
+        # Generate coordinates for ALL possible block positions (colors no longer needed here)
         rows_grid, cols_grid = jnp.meshgrid(
             jnp.arange(self.consts.NUM_ROWS, dtype=jnp.int32),
             jnp.arange(self.consts.BLOCKS_PER_ROW, dtype=jnp.int32),
@@ -880,15 +880,11 @@ class BreakoutRenderer(JAXGameRenderer):
         )
         all_xs = (self.consts.BLOCK_START_X + cols_grid * self.BLOCK_SIZE[0]).flatten()
         all_ys = (self.consts.BLOCK_START_Y + rows_grid * self.BLOCK_SIZE[1]).flatten()
-        
-        # Convert JAX array to regular Python array for indexing (should be fine since we only call this during init?)
-        rows_flat = rows_grid.flatten()
-        all_colors = jnp.array([self.BLOCK_COLORS[int(row)] for row in rows_flat])
 
         # Vectorize the drawing function over all possible blocks.
-        # This produces a stack of rasters, one for each potential block position.
-        # Shape: (NUM_BLOCKS, WIDTH, HEIGHT, 3)
-        return jax.vmap(draw_single_block, in_axes=(0, 0, 0))(all_xs, all_ys, all_colors)
+        # The output is now a stack of masks.
+        # Shape: (NUM_BLOCKS, HEIGHT, WIDTH)
+        return jax.vmap(draw_single_mask, in_axes=(0, 0))(all_xs, all_ys)
 
 
     @partial(jax.jit, static_argnums=(0,))
@@ -922,15 +918,28 @@ class BreakoutRenderer(JAXGameRenderer):
         raster = jr.render_at(raster, ball_x, ball_y, frame_ball)
 
         # 1. Create a mask for currently active blocks from the game state.
-        active_mask = (state.blocks == 1).flatten()
+        active_mask = (state.blocks == 1).flatten().astype(jnp.float32)
 
         # 2. Apply the mask to the pre-computed rasters to zero out inactive blocks.
         # The mask is reshaped to allow broadcasting across the raster dimensions.
-        masked_rasters = self.ALL_POSSIBLE_BLOCK_RASTERS * active_mask[:, None, None, None]
+        rows_grid, _ = jnp.meshgrid(
+            jnp.arange(self.consts.NUM_ROWS),
+            jnp.arange(self.consts.BLOCKS_PER_ROW),
+            indexing='ij'
+        )
+        all_colors = self.BLOCK_COLORS[rows_grid.flatten()]
 
-        # 3. Sum the masked rasters to create a single layer with all active blocks.
-        # Summation works because non-overlapping blocks were drawn on zeroed backgrounds.
-        blocks_layer = jnp.sum(masked_rasters, axis=0, dtype=jnp.uint8)
+        # 3. Combine masks, colors, and the active_mask to create the final layer.
+        # `einsum` provides a clean way to multiply and sum along the correct axes.
+        # 'b' = block, 'h' = height, 'w' = width, 'c' = channel
+        # This multiplies each block's mask (bhw) by its color (bc) and the
+        # activity scalar (b), then sums along the 'b' axis.
+        blocks_layer = jnp.einsum(
+            'b,bhw,bc->hwc',
+            active_mask,
+            self.ALL_POSSIBLE_BLOCK_MASKS,
+            all_colors
+        )
 
         # 4. Add the block layer onto the main raster.
         raster += blocks_layer
