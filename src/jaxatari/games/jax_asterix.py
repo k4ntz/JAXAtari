@@ -68,7 +68,7 @@ class AsterixConstants(NamedTuple):
     num_lives: int = 3 # Anzahl der Leben
     entity_base_speed : float = 0.5 # Base Speed der Gegner und Collectibles
     entity_character_speed_factor : float = 0.5 # Speed-Faktor pro Charakterstufe (Asterix=0, Obelix=1)
-    ASTERIX_ITEM_POINTS = jnp.array([50, 100, 200, 300], dtype=jnp.int32)  # Cauldron, Helmet, Shield, Lamp
+    ASTERIX_ITEM_POINTS = jnp.array([50, 100, 200, 300, 0], dtype=jnp.int32)  # Cauldron, Helmet, Shield, Lamp
     OBELIX_ITEM_POINTS = jnp.array([400, 500, 500, 500, 500], dtype=jnp.int32)  # Apple, Fish, Wild Boar Leg, Mug, Cauldron
 
     stage_positions = [
@@ -417,44 +417,60 @@ class JaxAsterix(JaxEnvironment[AsterixState, AsterixObservation, AsterixInfo, A
         any_collision_enemy = jnp.any(collisions_enemy)
         enemies = enemies._replace(alive=jnp.where(collisions_enemy, False, enemies.alive))
 
-        # Collectible-Kollision -> Punkte
-        collisions_item = check_collision(new_player_x, new_y, self.consts.player_width, self.consts.player_height,
-                                          collectibles.x, collectibles.y, item_w, item_h) & collectibles.alive
+        # --- Collectible-Kollision & Punkte (NEU) ---
+
+        # Kollisionen mit Collectibles
+        collisions_item = check_collision(
+            new_player_x, new_y,
+            self.consts.player_width, self.consts.player_height,
+            collectibles.x, collectibles.y, item_w, item_h
+        ) & collectibles.alive
+
         hit_items_count = jnp.sum(collisions_item).astype(jnp.int32)
-        collectibles = collectibles._replace(alive=jnp.where(collisions_item, False, collectibles.alive))
 
-        # Punktewert des aktuellen Item-Typs (abhängig von Charakter)
-        def points_for(char_id, idx):
-            return jax.lax.switch(char_id,
-                                  [lambda i: self.consts.ASTERIX_ITEM_POINTS[i],
-                                   lambda i: self.consts.OBELIX_ITEM_POINTS[i]],
-                                  idx)
+        # Getroffene deaktivieren
+        collectibles = collectibles._replace(
+            alive=jnp.where(collisions_item, False, collectibles.alive)
+        )
 
-        cur_item_points = points_for(state.character_id, state.collect_type_index)
-        added_points = (hit_items_count * cur_item_points).astype(jnp.int32)
-        new_score = state.score + added_points
+        char_id = state.character_id
+        start_type_idx = state.collect_type_index  # aktueller Typ
+        start_type_count = state.collect_type_count  # 0..49 innerhalb des Typs
 
-        # Item-Progression im aktuellen Set: nach je 50 Treffern zum nächsten Typ
-        pre_count = state.collect_type_count + hit_items_count
+        # Anzahl gültiger Typen (Asterix 4, Obelix 5)
+        types_count = jnp.where(char_id == 0, jnp.int32(4), jnp.int32(5))
 
-        def num_types_for(char_id):
-            return jax.lax.switch(char_id,
-                                  [lambda _: jnp.int32(4),
-                                   lambda _: jnp.int32(5)],
-                                  operand=None)
+        # Punkte-Array auswählen (beide Länge 5, letzter Eintrag bei Asterix unbenutzt)
+        points_array = jnp.where(char_id == 0,
+                                 self.consts.ASTERIX_ITEM_POINTS,
+                                 self.consts.OBELIX_ITEM_POINTS)
 
-        types_count = num_types_for(state.character_id)
-        advance = pre_count // 50
-        new_collect_type_index_pre = (state.collect_type_index + advance) % types_count
-        new_collect_type_count_pre = pre_count % 50
+        def per_item_body(i, carry):
+            total_points, type_idx, in_type_count = carry
+            # Punkte für aktuelles Item (aktueller Typ)
+            total_points = total_points + points_array[type_idx]
+            in_type_count = in_type_count + 1
+            reached = (in_type_count == 50)
+            type_idx = jnp.where(reached, (type_idx + 1) % types_count, type_idx)
+            in_type_count = jnp.where(reached, 0, in_type_count)
+            return total_points, type_idx, in_type_count
+
+        init = (jnp.int32(0), start_type_idx, start_type_count)
+        total_points, end_type_idx, end_type_count = jax.lax.fori_loop(
+            0, hit_items_count, per_item_body, init
+        )
+
+        new_score = state.score + total_points
+
+        jax.debug.print("hit={} type_idx_start={} -> end={} added_points={}", hit_items_count, start_type_idx, end_type_idx, total_points)
+
 
         # Charakterwechsel bei Score >= 32_500 -> auf Obelix umschalten und Progression zurücksetzen
         switch_to_obelix = (state.character_id == 0) & (new_score >= jnp.int32(32500)) & (
                     state.score < jnp.int32(32500))
         new_character_id = jnp.where(switch_to_obelix, jnp.int32(1), state.character_id)
-        new_collect_type_index = jnp.where(switch_to_obelix, jnp.int32(0), new_collect_type_index_pre)
-        new_collect_type_count = jnp.where(switch_to_obelix, jnp.int32(0), new_collect_type_count_pre)
-
+        new_collect_type_index = jnp.where(switch_to_obelix, jnp.int32(0), end_type_idx)
+        new_collect_type_count = jnp.where(switch_to_obelix, jnp.int32(0), end_type_count)
 
         bonus_thresholds = jnp.array([10_000, 30_000, 50_000, 80_000, 110_000], dtype=jnp.int32)
         bonus_interval = 40_000
