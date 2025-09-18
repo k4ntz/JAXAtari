@@ -470,6 +470,7 @@ def update_bullets(bullets: Bullet) -> Bullet:
     new_x = bullets.x + bullets.vel_x
     new_y = bullets.y + bullets.vel_y
     new_lifetime = bullets.lifetime - 1
+    new_lifetime = jnp.maximum(new_lifetime, 0.0)
     
     # Deactivate bullets that go out of bounds or expire
     out_of_bounds = jnp.logical_or(
@@ -1204,24 +1205,12 @@ class JaxBattleZone(JaxEnvironment[BattleZoneState, BattleZoneObservation, chex.
         return spaces.Discrete(len(self.action_set))
 
     def observation_space(self) -> Space:
-        """Observation space (callable) using numpy dtypes.
-
-        Tests and wrappers expect numpy dtypes (np.float32 / np.int32).
-        """
-        # Constants referenced below exist earlier in the file (MAX_BULLETS, MAX_OBSTACLES, etc.)
-        MAX_BULLETS = getattr(self, 'MAX_BULLETS', 32)
-        MAX_OBSTACLES = getattr(self, 'MAX_OBSTACLES', 32)
-        BOUNDARY_MIN = getattr(self, 'WORLD_MIN', -1000.0)
-        BOUNDARY_MAX = getattr(self, 'WORLD_MAX', 1000.0)
-        BULLET_LIFETIME = getattr(self, 'BULLET_LIFETIME', 120)
-        ENEMY_FIRE_COOLDOWN = getattr(self, 'ENEMY_FIRE_COOLDOWN', 60)
-        ENEMY_SPAWN_COOLDOWN = getattr(self, 'ENEMY_SPAWN_COOLDOWN', 180)
-
+        # Use module-level constants directly to avoid mismatches
         player_space = spaces.Dict({
             "x": spaces.Box(low=BOUNDARY_MIN, high=BOUNDARY_MAX, shape=(), dtype=np.float32),
             "y": spaces.Box(low=BOUNDARY_MIN, high=BOUNDARY_MAX, shape=(), dtype=np.float32),
             "angle": spaces.Box(low=-math.pi, high=math.pi, shape=(), dtype=np.float32),
-            "alive": spaces.Box(low=0, high=1, shape=(), dtype=np.int32),
+            "alive": spaces.Box(low=0, high=1, shape=(), dtype=np.float32),
         })
 
         bullets_space = spaces.Dict({
@@ -1230,32 +1219,33 @@ class JaxBattleZone(JaxEnvironment[BattleZoneState, BattleZoneObservation, chex.
             "z": spaces.Box(low=0.0, high=1000.0, shape=(MAX_BULLETS,), dtype=np.float32),
             "vel_x": spaces.Box(low=-1000.0, high=1000.0, shape=(MAX_BULLETS,), dtype=np.float32),
             "vel_y": spaces.Box(low=-1000.0, high=1000.0, shape=(MAX_BULLETS,), dtype=np.float32),
-            "active": spaces.Box(low=0, high=1, shape=(MAX_BULLETS,), dtype=np.int32),
-            "lifetime": spaces.Box(low=0, high=BULLET_LIFETIME, shape=(MAX_BULLETS,), dtype=np.int32),
-            "owner": spaces.Box(low=0, high=MAX_BULLETS, shape=(MAX_BULLETS,), dtype=np.int32),
+            "active": spaces.Box(low=0, high=1, shape=(MAX_BULLETS,), dtype=np.float32),
+            # keep >=0 since we’ll clamp lifetime to 0 below
+            "lifetime": spaces.Box(low=0, high=BULLET_LIFETIME, shape=(MAX_BULLETS,), dtype=np.float32),
+            "owner": spaces.Box(low=0, high=MAX_BULLETS, shape=(MAX_BULLETS,), dtype=np.float32),
         })
 
         obstacles_space = spaces.Dict({
             "x": spaces.Box(low=BOUNDARY_MIN, high=BOUNDARY_MAX, shape=(MAX_OBSTACLES,), dtype=np.float32),
             "y": spaces.Box(low=BOUNDARY_MIN, high=BOUNDARY_MAX, shape=(MAX_OBSTACLES,), dtype=np.float32),
-            "obstacle_type": spaces.Box(low=0, high=10, shape=(MAX_OBSTACLES,), dtype=np.int32),
-            "enemy_subtype": spaces.Box(low=-1, high=10, shape=(MAX_OBSTACLES,), dtype=np.int32),
+            "obstacle_type": spaces.Box(low=0, high=10, shape=(MAX_OBSTACLES,), dtype=np.float32),
+            "enemy_subtype": spaces.Box(low=-1, high=10, shape=(MAX_OBSTACLES,), dtype=np.float32),
             "angle": spaces.Box(low=-math.pi, high=math.pi, shape=(MAX_OBSTACLES,), dtype=np.float32),
-            "alive": spaces.Box(low=0, high=1, shape=(MAX_OBSTACLES,), dtype=np.int32),
-            "fire_cooldown": spaces.Box(low=0, high=ENEMY_FIRE_COOLDOWN * 4, shape=(MAX_OBSTACLES,), dtype=np.int32),
-            "ai_state": spaces.Box(low=0, high=10, shape=(MAX_OBSTACLES,), dtype=np.int32),
+            "alive": spaces.Box(low=0, high=1, shape=(MAX_OBSTACLES,), dtype=np.float32),
+            "fire_cooldown": spaces.Box(low=0, high=ENEMY_FIRE_COOLDOWN * 4, shape=(MAX_OBSTACLES,), dtype=np.float32),
+            "ai_state": spaces.Box(low=0, high=10, shape=(MAX_OBSTACLES,), dtype=np.float32),
             "target_angle": spaces.Box(low=-math.pi, high=math.pi, shape=(MAX_OBSTACLES,), dtype=np.float32),
-            "state_timer": spaces.Box(low=0, high=ENEMY_SPAWN_COOLDOWN * 4, shape=(MAX_OBSTACLES,), dtype=np.int32),
+            "state_timer": spaces.Box(low=0, high=ENEMY_SPAWN_COOLDOWN * 4, shape=(MAX_OBSTACLES,), dtype=np.float32),
         })
 
         return spaces.Dict({
             "player_tank": player_space,
             "bullets": bullets_space,
             "obstacles": obstacles_space,
-            "step_counter": spaces.Box(low=0, high=INT32_MAX, shape=(), dtype=np.int32),
-            "spawn_timer": spaces.Box(low=0, high=ENEMY_SPAWN_COOLDOWN * 4, shape=(), dtype=np.int32),
-            "player_score": spaces.Box(low=0, high=INT32_MAX, shape=(), dtype=np.int32),
-            "player_lives": spaces.Box(low=0, high=99, shape=(), dtype=np.int32),
+            "step_counter": spaces.Box(low=0, high=INT32_MAX, shape=(), dtype=np.float32),
+            "spawn_timer": spaces.Box(low=0, high=ENEMY_SPAWN_COOLDOWN * 4, shape=(), dtype=np.float32),
+            "player_score": spaces.Box(low=0, high=INT32_MAX, shape=(), dtype=np.float32),
+            "player_lives": spaces.Box(low=0, high=99, shape=(), dtype=np.float32),
         })
 
     @partial(jax.jit, static_argnums=(0,))
@@ -1300,8 +1290,11 @@ class JaxBattleZone(JaxEnvironment[BattleZoneState, BattleZoneObservation, chex.
             jnp.ravel(o.target_angle.astype(jnp.float32)),
             jnp.ravel(o.state_timer.astype(jnp.float32)),
         ])
+        scalars = jnp.array([
+            obs.step_counter, obs.spawn_timer, obs.player_score, obs.player_lives
+        ], dtype=jnp.float32)
 
-        return jnp.concatenate([player_flat, bullets_flat, obstacles_flat]).astype(jnp.float32)
+        return jnp.concatenate([player_flat, bullets_flat, obstacles_flat, scalars]).astype(jnp.float32)
 
     @partial(jax.jit, static_argnums=(0,))
     def render(self, state: EnvState) -> Tuple[jnp.ndarray]:
