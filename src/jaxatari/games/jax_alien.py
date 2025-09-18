@@ -1557,74 +1557,76 @@ class JaxAlien(JaxEnvironment[AlienState, AlienObservation, AlienInfo, AlienCons
         
         # maps the action onto the relevant movement-actions
         moving_action = jax.lax.cond(jnp.greater(action,9),
-                                      lambda _: jnp.mod(action,10)+2,
-                                      lambda _: action,
-                                      operand=None)
+                                      lambda ac: jnp.mod(ac,10)+2,
+                                      lambda ac: ac,
+                                      operand=action)
         
         # decides orientation based on the imput
+        # TODO: THIS IS VERY BAD
+        
         state_player_orientation = jax.lax.switch(moving_action, [
-                lambda x: state_player_orientation,
-                lambda x: state_player_orientation,
-                lambda x: jax.lax.cond(self.other_slightly_weirder_check_for_player_collision(state, 0, -velocity_vertical),
+                lambda x, vel_v, vel_h: x.player.orientation,
+                lambda x, vel_v, vel_h: x.player.orientation,
+                lambda x, vel_v, vel_h: jax.lax.cond(self.other_slightly_weirder_check_for_player_collision(x, 0, -vel_v),
                                        lambda x: JAXAtariAction.UP, 
                                        lambda x: x,
-                                       state_player_orientation),   # UP
+                                       x.player.orientation),   # UP
                 
-                lambda x: jax.lax.cond(self.other_slightly_weirder_check_for_player_collision(state, velocity_horizontal, 0),
+                lambda x, vel_v, vel_h: jax.lax.cond(self.other_slightly_weirder_check_for_player_collision(x, vel_h, 0),
                                        lambda x: JAXAtariAction.RIGHT, 
                                        lambda x: x,
-                                       state_player_orientation),   # RIGHT
+                                       x.player.orientation),   # RIGHT
                 
-                lambda x: jax.lax.cond(self.other_slightly_weirder_check_for_player_collision(state, -velocity_horizontal, 0),
+                lambda x, vel_v, vel_h: jax.lax.cond(self.other_slightly_weirder_check_for_player_collision(x, -vel_h, 0),
                                        lambda x: JAXAtariAction.LEFT, 
                                        lambda x: x,
-                                       state_player_orientation),   # LEFT
+                                       x.player.orientation),   # LEFT
 
-                lambda x: jax.lax.cond(self.other_slightly_weirder_check_for_player_collision(state, 0, velocity_vertical),
+                lambda x, vel_v, vel_h: jax.lax.cond(self.other_slightly_weirder_check_for_player_collision(x, 0, vel_v),
                                        lambda x: JAXAtariAction.DOWN, 
                                        lambda x: x,
-                                       state_player_orientation),   # DOWN
+                                       x.player.orientation),   # DOWN
                 
-                lambda x: jax.lax.cond(jnp.logical_and(self.other_slightly_weirder_check_for_player_collision(state, velocity_horizontal, 0),jnp.not_equal(state_player_orientation,JAXAtariAction.RIGHT)),
-                                       lambda x: JAXAtariAction.RIGHT, 
-                                       lambda x: jax.lax.cond(self.other_slightly_weirder_check_for_player_collision(state, 0, -velocity_vertical),
+                lambda x, vel_v, vel_h: jax.lax.cond(jnp.logical_and(self.other_slightly_weirder_check_for_player_collision(x, vel_h, 0),jnp.not_equal(x.player.orientation,JAXAtariAction.RIGHT)),
+                                       lambda x, y: JAXAtariAction.RIGHT, 
+                                       lambda x, y: jax.lax.cond(self.other_slightly_weirder_check_for_player_collision(x, 0, -y),
                                                               lambda x: JAXAtariAction.UP,
-                                                              lambda x: state_player_orientation,
-                                                              state_player_orientation),
-                                       state_player_orientation),   # UPRIGHT 
+                                                              lambda x: x,
+                                                              x.player.orientation),
+                                       x, vel_v),   # UPRIGHT 
                 
-                lambda x: jax.lax.cond(jnp.logical_and(self.other_slightly_weirder_check_for_player_collision(state, 0, -velocity_vertical),jnp.not_equal(state_player_orientation,JAXAtariAction.UP)),
-                                       lambda x: JAXAtariAction.UP, 
-                                       lambda x: jax.lax.cond(self.other_slightly_weirder_check_for_player_collision(state, -velocity_horizontal, 0),
+                lambda x, vel_v, vel_h: jax.lax.cond(jnp.logical_and(self.other_slightly_weirder_check_for_player_collision(x, 0, -vel_v),jnp.not_equal(x.player.orientation,JAXAtariAction.UP)),
+                                       lambda x, y: JAXAtariAction.UP, 
+                                       lambda x, y: jax.lax.cond(self.other_slightly_weirder_check_for_player_collision(x, -y, 0),
                                                               lambda x: JAXAtariAction.LEFT,
-                                                              lambda x: state_player_orientation,
-                                                              state_player_orientation),
-                                       state_player_orientation),   # UPLEFT 
+                                                              lambda x: x,
+                                                              x.player.orientation),
+                                       x, vel_h),   # UPLEFT 
                 
-                lambda x: jax.lax.cond(jnp.logical_and(self.other_slightly_weirder_check_for_player_collision(state, 0, velocity_vertical),jnp.not_equal(state_player_orientation,JAXAtariAction.DOWN)),
-                                       lambda x: JAXAtariAction.DOWN, 
-                                       lambda x: jax.lax.cond(self.other_slightly_weirder_check_for_player_collision(state, velocity_horizontal, 0),
+                lambda x, vel_v, vel_h: jax.lax.cond(jnp.logical_and(self.other_slightly_weirder_check_for_player_collision(x, 0, vel_v),jnp.not_equal(x.player.orientation,JAXAtariAction.DOWN)),
+                                       lambda x, y: JAXAtariAction.DOWN, 
+                                       lambda x, y: jax.lax.cond(self.other_slightly_weirder_check_for_player_collision(x, y, 0),
                                                               lambda x: JAXAtariAction.RIGHT,
-                                                              lambda x: state_player_orientation,
-                                                              state_player_orientation),
-                                       state_player_orientation),   #DOWNRIGHT
+                                                              lambda x: x,
+                                                              x.player.orientation),
+                                       x, vel_h),   #DOWNRIGHT
 
-                lambda x: jax.lax.cond(jnp.logical_and(self.other_slightly_weirder_check_for_player_collision(state, -velocity_horizontal, 0),jnp.not_equal(state_player_orientation,JAXAtariAction.LEFT)),
-                                       lambda x: JAXAtariAction.LEFT,
-                                       lambda x: jax.lax.cond(self.other_slightly_weirder_check_for_player_collision(state, 0, velocity_vertical),
+                lambda x, vel_v, vel_h: jax.lax.cond(jnp.logical_and(self.other_slightly_weirder_check_for_player_collision(x, -vel_h, 0),jnp.not_equal(x.player.orientation,JAXAtariAction.LEFT)),
+                                       lambda x, y: JAXAtariAction.LEFT,
+                                       lambda x, y: jax.lax.cond(self.other_slightly_weirder_check_for_player_collision(x, 0, y),
                                                               lambda x: JAXAtariAction.DOWN,
-                                                              lambda x: state_player_orientation,
-                                                              state_player_orientation),
-                                       state_player_orientation), #DOWNLEFT  
+                                                              lambda x: x,
+                                                              x.player.orientation),
+                                       x, vel_v), #DOWNLEFT  
                               
-            ], state_player_orientation)
+            ], state, velocity_vertical, velocity_horizontal)
         #Determine last horizontal orientation, this is necessary for correctly displaying the player sprite
         
         last_horizontal_orientation = jax.lax.cond(
             jnp.logical_or(state_player_orientation == JAXAtariAction.LEFT, state_player_orientation == JAXAtariAction.RIGHT),
-            lambda _: state_player_orientation,
-            lambda _: state.player.last_horizontal_orientation,
-            operand=None
+            lambda spo, lho: spo,
+            lambda spo, lho: lho,
+            state_player_orientation, state.player.last_horizontal_orientation
         )
 
         # Handle movement at this point:
@@ -1662,9 +1664,9 @@ class JaxAlien(JaxEnvironment[AlienState, AlienObservation, AlienInfo, AlienCons
         new_flame_counter = state.player.flame.flame_counter - new_flame_flag
         
         new_flame_x = jax.lax.cond(jnp.equal(state.player.last_horizontal_orientation,JAXAtariAction.LEFT),
-                                   lambda _: new_position[0] - 6,
-                                   lambda _: new_position[0] + 10,
-                                   operand=None)
+                                   lambda np: np[0] - 6,
+                                   lambda np: np[0] + 10,
+                                   new_position)
         
         new_flame = state.player.flame._replace(
             x=jnp.array(new_flame_x).astype(jnp.int32),
@@ -1759,9 +1761,9 @@ def enemy_step(enemy: SingleEnemyState, state: AlienState, cnsts: AlienConstants
                 random_value = jax.random.uniform(enemy.key, shape=(), minval=0, maxval=1)
                 return jax.lax.cond(
                     jnp.less(random_value, enemy.mode_constants.mode_change_probability),  # Probability
-                    lambda _: (0, enemy.mode_constants.chase_duration),  # Chase mode
-                    lambda _: (1, enemy.mode_constants.scatter_duration),  # Scatter mode
-                    operand=None
+                    lambda en: (0, en.mode_constants.chase_duration),  # Chase mode
+                    lambda en: (1, en.mode_constants.scatter_duration),  # Scatter mode
+                    enemy
                     )
     
             def check_wall_collison(new_pos):
@@ -1795,9 +1797,9 @@ def enemy_step(enemy: SingleEnemyState, state: AlienState, cnsts: AlienConstants
         
             allowed_directions_no_opp = jax.lax.cond(
                 jnp.logical_and(jnp.equal(enemy.mode_type, 0), jnp.equal(enemy.mode_duration, enemy.mode_constants.chase_duration)),
-                lambda _: allowed_directions,
-                lambda _: allowed_directions_no_opp,
-                None
+                lambda a, b: a,
+                lambda a, b: b,
+                allowed_directions, allowed_directions_no_opp
             )
     
             new_mode_type, new_mode_duration = jax.lax.cond(
@@ -1825,11 +1827,11 @@ def enemy_step(enemy: SingleEnemyState, state: AlienState, cnsts: AlienConstants
             )
             
             new_direction = jax.lax.switch(new_mode_type,[
-                lambda _: chase_point(state.player.x, state.player.y, allowed_directions_no_opp, steps_in_all_directions), # Chase mode
-                lambda _: chase_point(enemy.mode_constants.scatter_point_x, enemy.mode_constants.scatter_point_y, allowed_directions_no_opp, steps_in_all_directions), # Scatter mode
-                lambda _: frightend(state.player.x, state.player.y, allowed_directions_no_opp), # Frightened mode item  
-                lambda _: frightend(state.player.x, state.player.y, allowed_directions) # Frightened mode flame                   
-            ], None)
+                lambda _state, _enemy, _dir, _dir_noop, _all_dir: chase_point(_state.player.x, _state.player.y, _dir_noop, _all_dir), # Chase mode
+                lambda _state, _enemy, _dir, _dir_noop, _all_dir: chase_point(_enemy.mode_constants.scatter_point_x, _enemy.mode_constants.scatter_point_y, _dir_noop, _all_dir), # Scatter mode
+                lambda _state, _enemy, _dir, _dir_noop, _all_dir: frightend(_state.player.x, _state.player.y, _dir_noop), # Frightened mode item  
+                lambda _state, _enemy, _dir, _dir_noop, _all_dir: frightend(_state.player.x, _state.player.y, _dir) # Frightened mode flame                   
+            ], state, enemy, allowed_directions, allowed_directions_no_opp, steps_in_all_directions)
    
             # if velocity = 1 new_direction=new_direction
             # if velocity = 0 new_direction=current_orientation
@@ -1842,9 +1844,9 @@ def enemy_step(enemy: SingleEnemyState, state: AlienState, cnsts: AlienConstants
     
             new_last_horizontal_orientation = jax.lax.cond(
                 jnp.logical_or(enemy.orientation == JAXAtariAction.LEFT, enemy.orientation == JAXAtariAction.RIGHT),
-                lambda _: enemy.orientation,
-                lambda _: enemy.last_horizontal_orientation,
-                operand=None
+                lambda _enemy: _enemy.orientation,
+                lambda _enemy: _enemy.last_horizontal_orientation,
+                enemy
             )
     
             position = teleport_object(position, enemy.orientation, new_direction)
@@ -1855,11 +1857,11 @@ def enemy_step(enemy: SingleEnemyState, state: AlienState, cnsts: AlienConstants
             velocity_vertical = jax.lax.min(jnp.round(((117*2*slowness/249) + state.level.difficulty_stage.astype(jnp.int32)/10)*(state.level.frame_count)).astype(jnp.int32) - jnp.round(((117*2*slowness/249) + state.level.difficulty_stage.astype(jnp.int32)/10)*(state.level.frame_count - 1)).astype(jnp.int32),1)
 
             new_position = jax.lax.switch(jnp.subtract(new_direction, 2), [
-                lambda x: x.at[1].subtract(velocity_vertical),  # UP
-                lambda x: x.at[0].add(velocity_horizontal),      # RIGHT
-                lambda x: x.at[0].subtract(velocity_horizontal), # LEFT
-                lambda x: x.at[1].add(velocity_vertical)       # DOWN
-            ], position)
+                lambda x, vel_v, vel_h: x.at[1].subtract(vel_v),  # UP
+                lambda x, vel_v, vel_h: x.at[0].add(vel_h),      # RIGHT
+                lambda x, vel_v, vel_h: x.at[0].subtract(vel_h), # LEFT
+                lambda x, vel_v, vel_h: x.at[1].add(vel_v)       # DOWN
+            ], position, velocity_vertical, velocity_horizontal)
 
             def check_for_enemy_player_collision(state: AlienState, new_position: jnp.ndarray) -> jnp.ndarray:
                 """A wrapper for collision_check_between_two_objects containing the player and enemy
