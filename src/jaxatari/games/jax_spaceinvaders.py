@@ -132,6 +132,7 @@ class JaxSpaceInvaders(JaxEnvironment[SpaceInvadersState, SpaceInvadersObservati
     def __init__(self, consts: SpaceInvadersConstants = None, reward_funcs: list[callable] = None):
         consts = consts or SpaceInvadersConstants()
         super().__init__(consts)
+        self.renderer = SpaceInvadersRenderer(self.consts)
         self.frame_stack_size = 4
         if reward_funcs is not None:
             reward_funcs = tuple(reward_funcs)
@@ -653,6 +654,9 @@ class JaxSpaceInvaders(JaxEnvironment[SpaceInvadersState, SpaceInvadersObservati
             "score_player": spaces.Box(low=0, high=jnp.iinfo(jnp.int32).max, shape=(), dtype=jnp.int32),
             "lives": spaces.Box(low=0, high=self.consts.INITIAL_LIVES, shape=(), dtype=jnp.int32),
         })
+    
+    def render(self, state: SpaceInvadersState) -> jnp.ndarray:
+        return self.renderer.render(state)
 
     @partial(jax.jit, static_argnums=(0,))
     def _get_observation(self, state: SpaceInvadersState):
@@ -719,6 +723,14 @@ class JaxSpaceInvaders(JaxEnvironment[SpaceInvadersState, SpaceInvadersObservati
         
     def action_space(self) -> spaces.Discrete:
         return spaces.Discrete(len(self.action_set))
+
+    def image_space(self) -> spaces.Box:
+        return spaces.Box(
+            low=0,
+            high=255,
+            shape=(self.consts.HEIGHT, self.consts.WIDTH, 3),
+            dtype=jnp.uint8
+        )
 
     @partial(jax.jit, static_argnums=(0,))
     def _get_info(self, state: SpaceInvadersState, all_rewards: chex.Array) -> SpaceInvadersInfo:
