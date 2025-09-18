@@ -377,6 +377,12 @@ class JaxKangaroo(JaxEnvironment[KangarooState, KangarooObservation, KangarooInf
         jump_counter = state.player.jump_counter
         is_jumping = state.player.is_jumping
 
+        # If a jump is initiated from a crouch, we must calculate the jump_base_y
+        # from the position the kangaroo WOULD BE IN after standing up.
+        is_crouch_jumping = state.player.is_crouching & jump_pressed
+        crouch_height_adjustment = self.consts.PLAYER_HEIGHT - 16 # Crouch height is 16
+        player_y_for_jump = jnp.where(is_crouch_jumping, player_y - crouch_height_adjustment, player_y)
+
         cooldown_condition = state.player.cooldown_counter > 0
         jump_start = (
             jump_pressed
@@ -390,7 +396,7 @@ class JaxKangaroo(JaxEnvironment[KangarooState, KangarooObservation, KangarooInf
         jump_orientation = jnp.where(
             jump_start, state.player.orientation, state.player.jump_orientation
         )
-        jump_base_y = jnp.where(jump_start, player_y, state.player.jump_base_y)
+        jump_base_y = jnp.where(jump_start, player_y_for_jump, state.player.jump_base_y)
         new_landing_base_y = jump_base_y
 
         platform_y_below_player = self._get_y_of_platform_below_player(state)
@@ -903,6 +909,9 @@ class JaxKangaroo(JaxEnvironment[KangarooState, KangarooObservation, KangarooInf
 
         vel_x = jnp.where(stop_in_air, 0, candidate_vel_x)
 
+        # Detect if a crouch-jump was just initiated.
+        did_crouch_jump = state.player.is_crouching & press_up & ~state.player.is_jumping
+
         new_player_height = self._player_height_controller(
             is_jumping=new_is_jumping,
             jump_counter=new_jump_counter,
@@ -913,7 +922,10 @@ class JaxKangaroo(JaxEnvironment[KangarooState, KangarooObservation, KangarooInf
             self.consts.PLAYER_HEIGHT,
             new_player_height,
         )
-        dy = old_height - new_player_height
+        # If we just performed a crouch-jump, the jump controller already handled
+        # the y-position adjustment. We set dy to 0 to prevent a double correction.
+        effective_old_height = jnp.where(did_crouch_jump, new_player_height, old_height)
+        dy = effective_old_height - new_player_height
         new_y = new_y + dy
 
         # x-axis movement
@@ -1581,28 +1593,28 @@ class JaxKangaroo(JaxEnvironment[KangarooState, KangarooObservation, KangarooInf
                 "player_y": spaces.Box(low=0, high=210, shape=(), dtype=jnp.int32),
                 "player_o": spaces.Box(low=-1, high=1, shape=(), dtype=jnp.int32),
                 "platform_positions": spaces.Box(
-                    low=0, high=160, shape=(20, 2), dtype=jnp.int32
+                    low=-1, high=210, shape=(20, 2), dtype=jnp.int32
                 ),
                 "ladder_positions": spaces.Box(
-                    low=0, high=160, shape=(20, 2), dtype=jnp.int32
+                    low=-1, high=210, shape=(20, 2), dtype=jnp.int32
                 ),
                 "fruit_positions": spaces.Box(
-                    low=0, high=160, shape=(3, 2), dtype=jnp.int32
+                    low=-1, high=160, shape=(3, 2), dtype=jnp.int32
                 ),
                 "bell_position": spaces.Box(
-                    low=0, high=160, shape=(2,), dtype=jnp.int32
+                    low=-1, high=160, shape=(2,), dtype=jnp.int32
                 ),
                 "child_position": spaces.Box(
                     low=0, high=160, shape=(2,), dtype=jnp.int32
                 ),
                 "falling_coco_position": spaces.Box(
-                    low=0, high=160, shape=(2,), dtype=jnp.int32
+                    low=-1, high=160, shape=(2,), dtype=jnp.int32
                 ),
                 "monkey_positions": spaces.Box(
-                    low=0, high=160, shape=(4, 2), dtype=jnp.int32
+                    low=-1, high=160, shape=(4, 2), dtype=jnp.int32
                 ),
                 "coco_positions": spaces.Box(
-                    low=0, high=160, shape=(4, 2), dtype=jnp.int32
+                    low=-1, high=160, shape=(4, 2), dtype=jnp.int32
                 ),
             }
         )
@@ -1899,7 +1911,7 @@ class JaxKangaroo(JaxEnvironment[KangarooState, KangarooObservation, KangarooInf
             ),
         )
         done = self._get_done(new_state)
-        env_reward = self._get_env_reward(state, new_state)
+        env_reward = self._get_reward(state, new_state)
         all_rewards = self._get_all_rewards(state, new_state)
         info = self._get_info(new_state, all_rewards)
 
@@ -1914,7 +1926,7 @@ class JaxKangaroo(JaxEnvironment[KangarooState, KangarooObservation, KangarooInf
             fruit_mask, state.level.fruit_positions, jnp.array([-1, -1])
         )
 
-        bell_mask = state.level.bell_position[jnp.newaxis, :]
+        bell_mask = jnp.any(state.level.bell_position != jnp.array([-1, -1]))
         bell_position = jnp.where(
             bell_mask, state.level.bell_position, jnp.array([-1, -1])
         )
@@ -1949,7 +1961,7 @@ class JaxKangaroo(JaxEnvironment[KangarooState, KangarooObservation, KangarooInf
         )
 
     @partial(jax.jit, static_argnums=(0,))
-    def _get_info(self, state: KangarooState, all_rewards: chex.Array) -> KangarooInfo:
+    def _get_info(self, state: KangarooState, all_rewards: chex.Array = None) -> KangarooInfo:
         return KangarooInfo(
             score=state.score,
             level=state.current_level,
@@ -1957,7 +1969,7 @@ class JaxKangaroo(JaxEnvironment[KangarooState, KangarooObservation, KangarooInf
         )
 
     @partial(jax.jit, static_argnums=(0,))
-    def _get_env_reward(
+    def _get_reward(
         self, previous_state: KangarooState, state: KangarooState
     ) -> float:
         return state.score - previous_state.score
