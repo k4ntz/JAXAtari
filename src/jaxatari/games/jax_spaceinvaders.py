@@ -146,6 +146,13 @@ class JaxSpaceInvaders(JaxEnvironment[SpaceInvadersState, SpaceInvadersObservati
             Action.LEFTFIRE,
         ]
         self.obs_size = 3 * 4 + 1 + 1
+        self.renderer = SpaceInvadersRenderer(consts)
+
+    def render(self, state):
+        return self.renderer.render(state)
+    
+    def image_space(self):
+        return spaces.Box(low=0, high=255, shape=(self.consts.HEIGHT, self.consts.WIDTH, 3), dtype=jnp.uint8)
 
     @partial(jax.jit, static_argnums=(0,))
     def flatten_entity_position(self, entity: EntityPosition) -> jnp.ndarray:
@@ -216,7 +223,10 @@ class JaxSpaceInvaders(JaxEnvironment[SpaceInvadersState, SpaceInvadersObservati
             )
             
             new_destroyed = jnp.where((state.destroyed[i] == 0) & collision, 1, state.destroyed[i])
-            score_contrib = jnp.where(collision, 10, 0)
+
+            score = (self.consts.ENEMY_ROWS - row) * 5
+            score_contrib = jnp.where(collision, score, 0)
+
             bullet_hit = collision
             
             # Returns if destroyed, the contribution to the score and if the bullet hit 
@@ -733,7 +743,7 @@ class JaxSpaceInvaders(JaxEnvironment[SpaceInvadersState, SpaceInvadersObservati
         )
 
     @partial(jax.jit, static_argnums=(0,))
-    def _get_info(self, state: SpaceInvadersState, all_rewards: chex.Array) -> SpaceInvadersInfo:
+    def _get_info(self, state: SpaceInvadersState, all_rewards: chex.Array = None) -> SpaceInvadersInfo:
         return SpaceInvadersInfo(time=state.step_counter, all_rewards=all_rewards)
 
     @partial(jax.jit, static_argnums=(0,))
