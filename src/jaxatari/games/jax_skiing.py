@@ -410,7 +410,7 @@ class JaxSkiing(JaxEnvironment[GameState, SkiingObservation, SkiingInfo, SkiingC
         new_skier_x_speed_nom = jax.lax.select(
             in_recovery,
             jnp.array(0.0, dtype=jnp.float32),
-            state.skier_x_speed + ((dx_target - state.skier_x_speed) * jnp.array(0.1, jnp.float32)),
+            dx_target * jnp.array(0.3, jnp.float32),  # no acceleration; slightly slower lateral speed
         )
         new_skier_y_speed_nom = state.skier_y_speed + ((dy_target - state.skier_y_speed) * jnp.array(0.05, jnp.float32))
 
