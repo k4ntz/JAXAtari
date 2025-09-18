@@ -33,7 +33,7 @@ class HumanCannonballConstants(NamedTuple):
     MPH_MAX: int = 45
 
     # Angle constants
-    ANGLE_START: int = 30
+    ANGLE_START: int = 75
     ANGLE_MAX: int = 80
     ANGLE_MIN: int = 20
 
@@ -79,8 +79,8 @@ class HumanCannonballConstants(NamedTuple):
     ANGLE_Y: int = 35
 
     # Animation constants
-    ANIMATION_MISS_LENGTH: int = 124
-    ANIMATION_HIT_LENGTH: int = 96
+    ANIMATION_MISS_LENGTH: int = 128
+    ANIMATION_HIT_LENGTH: int = 248
 
 # Define the positions of the state information
 STATE_TRANSLATOR: dict = {
@@ -159,8 +159,9 @@ def load_sprites():
     human_down = jr.loadFrame(os.path.join(MODULE_DIR, "sprites/human_cannonball/human_down.npy"))
     human_ground = jr.loadFrame(os.path.join(MODULE_DIR, "sprites/human_cannonball/human_ground.npy"))
     water_tower = jr.loadFrame(os.path.join(MODULE_DIR, "sprites/human_cannonball/water_tower.npy"))
-    water_tower_human1 = jr.loadFrame(os.path.join(MODULE_DIR, "sprites/human_cannonball/water_tower_human1.npy"))
-    water_tower_human2 = jr.loadFrame(os.path.join(MODULE_DIR, "sprites/human_cannonball/water_tower_human2.npy"))
+    water_tower_human_right = jr.loadFrame(os.path.join(MODULE_DIR, "sprites/human_cannonball/water_tower_human1.npy"))
+    water_tower_human_left = jr.loadFrame(os.path.join(MODULE_DIR, "sprites/human_cannonball/water_tower_human2.npy"))
+    water_tower_overlap = jr.loadFrame(os.path.join(MODULE_DIR, "sprites/human_cannonball/water_tower_overlap.npy"))
 
     # Pad cannon sprites to match each other
     cannon_sprites, cannon_offsets = jr.pad_to_match([cannon_high, cannon_med, cannon_low])
@@ -171,12 +172,8 @@ def load_sprites():
     human_offsets = jnp.array(human_offsets)
 
     # Pad water tower sprites to match each other
-    water_tower_sprites, water_tower_offsets = jr.pad_to_match([water_tower, water_tower_human1, water_tower_human2])
+    water_tower_sprites, water_tower_offsets = jr.pad_to_match([water_tower, water_tower_overlap, water_tower_human_right, water_tower_human_left])
     water_tower_offsets = jnp.array(water_tower_offsets)
-
-    # Pad sprites with human inside the water tower to match each other
-    water_tower_human_sprites, water_tower_human_offsets = jr.pad_to_match([water_tower_human1, water_tower_human2])
-    water_tower_human_offsets = jnp.array(water_tower_offsets)
 
     # Background sprite
     SPRITE_BG = jnp.expand_dims(bg, axis=0)
@@ -190,9 +187,6 @@ def load_sprites():
     # Water tower sprites
     SPRITE_WATER_TOWER = jnp.stack(water_tower_sprites, axis=0)
 
-    # Human in water tower sprites
-    SPRITE_WATER_TOWER_HUMAN = jnp.stack(water_tower_human_sprites, axis=0)
-
     # Digits sprites
     DIGITS = jr.load_and_pad_digits(os.path.join(MODULE_DIR, "./sprites/human_cannonball/digits/score_{}.npy"))
 
@@ -201,12 +195,10 @@ def load_sprites():
         SPRITE_CANNON,
         SPRITE_HUMAN,
         SPRITE_WATER_TOWER,
-        SPRITE_WATER_TOWER_HUMAN,
         DIGITS,
         cannon_offsets,
         human_offsets,
-        water_tower_offsets,
-        water_tower_human_offsets
+        water_tower_offsets
     )
 
 # Load sprites once at module level
@@ -215,12 +207,10 @@ def load_sprites():
         SPRITE_CANNON,
         SPRITE_HUMAN,
         SPRITE_WATER_TOWER,
-        SPRITE_WATER_TOWER_HUMAN,
         DIGITS,
         CANNON_OFFSETS,
         HUMAN_OFFSETS,
-        WATER_TOWER_OFFSETS,
-        WATER_TOWER_HUMAN_OFFSETS
+        WATER_TOWER_OFFSETS
     ) = load_sprites()
 
 class JaxHumanCannonball(JaxEnvironment[HumanCannonballState, HumanCannonballObservation, HumanCannonballInfo, HumanCannonballConstants]):
@@ -348,33 +338,36 @@ class JaxHumanCannonball(JaxEnvironment[HumanCannonballState, HumanCannonballObs
     def check_water_collision(
             self, state_human_x, state_human_y, state_water_tower_x, state_animation_running
     ):
-        # If there is an animation running, return false
-        animation = jnp.logical_not(state_animation_running)
-
         # Define bounding boxes for the human and water tower
         water_surface_x1 = state_water_tower_x + 1
         water_surface_y1 = self.consts.WATER_TOWER_Y - self.consts.WATER_TOWER_WALL_HEIGHT
         water_surface_x2 = water_surface_x1 + self.consts.WATER_SIZE[0]
         water_surface_y2 = water_surface_y1 + self.consts.WATER_SIZE[1]
 
-        human_x1 = state_human_x
-        human_y1 = state_human_y
-        human_x2 = human_x1 + self.consts.HUMAN_SIZE[0]
-        human_y2 = human_y1 + self.consts.HUMAN_SIZE[1]
+        # Only count hits with the center of the human sprite
+        human_center_x = state_human_x + self.consts.HUMAN_SIZE[0] / 2
+        human_center_y = state_human_y + self.consts.HUMAN_SIZE[1] / 2
+
+        human_x1 = human_center_x
+        human_y1 = human_center_y
+        human_x2 = human_center_x + 1
+        human_y2 = human_center_y + 1
 
         # AABB collision detection
         collision_x = jnp.logical_and(human_x1 < water_surface_x2, human_x2 > water_surface_x1)
         collision_y = jnp.logical_and(human_y1 < water_surface_y2, human_y2 > water_surface_y1)
 
-        return jnp.logical_and(jnp.logical_and(collision_x, collision_y), animation)
+        water_collision = jnp.logical_and(collision_x, collision_y)
+
+        return jnp.logical_and(water_collision, jnp.logical_not(state_animation_running))
 
     # Check if the player has missed
     @partial(jax.jit, static_argnums=(0,))
     def check_ground_collision(
             self, state_human_y, state_animation_running
     ):
-        ground_colision = state_human_y + self.consts.HUMAN_SIZE[1] >= self.consts.GROUND_LEVEL
-        return jnp.logical_and(ground_colision, jnp.logical_not(state_animation_running))
+        ground_collision = state_human_y + self.consts.HUMAN_SIZE[1] >= self.consts.GROUND_LEVEL
+        return jnp.logical_and(ground_collision, jnp.logical_not(state_animation_running))
 
     # Check if the human has hit the water tower wall
     @partial(jax.jit, static_argnums=(0,))
@@ -555,19 +548,19 @@ class JaxHumanCannonball(JaxEnvironment[HumanCannonballState, HumanCannonballObs
                 state.water_tower_x,
                 state.animation_running
             ),
-            lambda _: (state.score + 1, self.consts.ANIMATION_MISS_LENGTH, True), # Increment score and start hit animation
+            lambda _: (state.score + 1, self.consts.ANIMATION_HIT_LENGTH, True), # Increment score and start hit animation
             lambda _: (state.score, state.animation_counter, state.animation_running), # Else, leave unchanged
             operand=None
         )
 
         # Step 5: Check if the player has missed
-        new_misses, new_animation_counter, new_animation_running = jax.lax.cond(
+        new_misses, new_animation_counter, new_animation_running, new_human_y = jax.lax.cond( # Need to set human_y to make sure the miss animation sprite is loaded on the ground
             self.check_ground_collision(
                 state.human_y,
                 state.animation_running
             ),
-            lambda _: (state.misses + 1, self.consts.ANIMATION_MISS_LENGTH, True), # Increment misses and start miss animation
-            lambda _: (state.misses, state.animation_counter, state.animation_running), # Else, leave unchanged
+            lambda _: (state.misses + 1, self.consts.ANIMATION_MISS_LENGTH, True, 0.0 + self.consts.GROUND_LEVEL - self.consts.HUMAN_SIZE[1] + 1), # Increment misses and start miss animation
+            lambda _: (state.misses, new_animation_counter, new_animation_running, new_human_y), # Else, leave unchanged
             operand=None
         )
 
@@ -588,6 +581,9 @@ class JaxHumanCannonball(JaxEnvironment[HumanCannonballState, HumanCannonballObs
             operand=new_animation_counter
         )
 
+        # Safe new human positions and velocities in case of hit animation
+        (hit_human_x, hit_human_y, hit_human_x_vel, hit_human_y_vel) = (new_human_x, new_human_y, new_human_x_vel, new_human_y_vel)
+
         # Step 7: Reset the round when the animation finishes this step
 
         # Freeze old values in case of an animation running and decrement animation counter
@@ -606,6 +602,14 @@ class JaxHumanCannonball(JaxEnvironment[HumanCannonballState, HumanCannonballObs
             lambda _: (new_human_x, new_human_y, new_human_x_vel, new_human_y_vel,          # Else, update normally
                        human_launched, new_water_tower_x,tower_wall_hit,
                        new_animation_running, new_animation_counter, new_score, new_misses),
+            operand=None
+        )
+
+        # For the first 10 steps of the hit animation, continue the human's trajectory
+        (new_human_x, new_human_y, new_human_x_vel, new_human_y_vel) = jax.lax.cond(
+            jnp.greater(new_animation_counter, self.consts.ANIMATION_HIT_LENGTH - 10),
+            lambda _: (hit_human_x, hit_human_y, hit_human_x_vel, hit_human_y_vel),
+            lambda _: (new_human_x, new_human_y, new_human_x_vel, new_human_y_vel),
             operand=None
         )
 
@@ -795,10 +799,6 @@ class HumanCannonballRenderer(JAXGameRenderer):
     """JAX-based HumanCannonball game renderer, optimized with JIT compilation."""
     def __init__(self, consts: HumanCannonballConstants = None):
         super().__init__()
-        self.cannon_offset_length = len(CANNON_OFFSETS)
-        self.human_offset_length = len(HUMAN_OFFSETS)
-        self.water_tower_offset_length = len(WATER_TOWER_OFFSETS)
-        self.water_tower_human_offset = len(WATER_TOWER_HUMAN_OFFSETS)
         self.consts = consts or HumanCannonballConstants()
 
     @partial(jax.jit, static_argnums=(0,))
@@ -864,28 +864,90 @@ class HumanCannonballRenderer(JAXGameRenderer):
             operand=None
         )
 
-        human_sprite_idx, human_offset_x, human_offset_y = jax.lax.cond(
-            jnp.logical_and(
+        # Determine if there is an animation running
+        miss_animation = jnp.logical_and(
                 state.animation_running,
-                jnp.less(state.human_y, self.consts.GROUND_LEVEL - 2)
-            ),  # If human is on the ground
-            lambda _: (3, 2, 5),  # Use ground sprite
+                jnp.less(self.consts.GROUND_LEVEL - 5, state.human_y)
+        )
+
+        hit_animation = jnp.logical_and(
+                state.animation_running,
+                jnp.greater(self.consts.GROUND_LEVEL - 5, state.human_y)
+        )
+
+        human_sprite_idx, human_offset_x, human_offset_y = jax.lax.cond(
+            miss_animation,  # If human is on the ground
+            lambda _: (3, 2, 6),  # Use ground sprite
             lambda _: (human_sprite_idx, human_offset_x, human_offset_y),  # Else, keep the sprite
             operand=None
         )
 
+        # Render the human for the first 10 frames of the hit animation
+        human_overlap = jnp.logical_and(hit_animation,
+                                        jnp.greater(state.animation_counter, self.consts.ANIMATION_HIT_LENGTH - 10))
+
         # 2. Render the human sprite
         frame_human = jr.get_sprite_frame(SPRITE_HUMAN, human_sprite_idx)
-        raster = jax.lax.cond(  # Only render when launched
-            state.human_launched,
+        raster = jax.lax.cond(  # Only render when launched and there is no hit animation going on
+            jnp.logical_and(state.human_launched, jnp.logical_or(jnp.logical_not(hit_animation), human_overlap)),
             lambda r: jr.render_at(r, state.human_x - human_offset_x, state.human_y - human_offset_y, frame_human),
             lambda r: r,
             operand=raster
         )
 
         # Render the water tower
-        frame_water_tower = jr.get_sprite_frame(SPRITE_WATER_TOWER, 0)     #TODO: For now, no score animation
-        raster = jr.render_at(raster, state.water_tower_x, self.consts.WATER_TOWER_Y - self.consts.WATER_TOWER_WALL_HEIGHT + 1, frame_water_tower)
+        # 1. Determine which sprite to load
+        water_tower_sprite_idx, water_tower_offset_x, water_tower_offset_y = jax.lax.cond(
+            jnp.logical_not(hit_animation),  # If there is no hit animation going on
+            lambda _: (0, 0, 0),  # Use normal sprite
+            lambda _: (1, 7, 0),  # Else, use overlap spirite
+            operand=None
+        )
+
+        water_tower_sprite_idx, water_tower_offset_x, water_tower_offset_y = jax.lax.cond(
+            jnp.logical_and(hit_animation,      # For the first 36 frames of the second half of the animation
+                            jnp.logical_and(
+                                jnp.less(state.animation_counter,
+                                         self.consts.ANIMATION_HIT_LENGTH / 2),
+                                jnp.greater(state.animation_counter,
+                                            self.consts.ANIMATION_HIT_LENGTH / 2 - 36)
+                            )
+            ),
+            lambda _: (2, 0, 4),  # Use water tower human right sprite
+            lambda _: (water_tower_sprite_idx, water_tower_offset_x, water_tower_offset_y),  # Else, keep sprites
+            operand=None
+        )
+
+        water_tower_sprite_idx, water_tower_offset_x, water_tower_offset_y = jax.lax.cond(
+            jnp.logical_and(hit_animation,  # For the next 39 frames of the second half of the animation
+                            jnp.logical_and(
+                                jnp.less(state.animation_counter,
+                                         self.consts.ANIMATION_HIT_LENGTH / 2 - 36),
+                                jnp.greater(state.animation_counter,
+                                            self.consts.ANIMATION_HIT_LENGTH / 2 - 36 - 39)
+                            )
+                            ),
+            lambda _: (3, 0, 4),  # Use water tower human left sprite
+            lambda _: (water_tower_sprite_idx, water_tower_offset_x, water_tower_offset_y),  # Else, keep sprites
+            operand=None
+        )
+
+        water_tower_sprite_idx, water_tower_offset_x, water_tower_offset_y = jax.lax.cond(
+            jnp.logical_and(hit_animation,  # For the first rest of the frames of the second half of the animation
+                            jnp.less(state.animation_counter,
+                                     self.consts.ANIMATION_HIT_LENGTH / 2 - 36 - 39),
+                            ),  # For second half of the animation
+            lambda _: (2, 0, 4),  # Use water tower human right sprite
+            lambda _: (water_tower_sprite_idx, water_tower_offset_x, water_tower_offset_y),  # Else, keep sprites
+            operand=None
+        )
+
+        # 2. Render the water tower
+        frame_water_tower = jr.get_sprite_frame(SPRITE_WATER_TOWER, water_tower_sprite_idx)
+        raster = jr.render_at(raster,
+                              state.water_tower_x - water_tower_offset_x,
+                              self.consts.WATER_TOWER_Y - self.consts.WATER_TOWER_WALL_HEIGHT + 1 - water_tower_offset_y,
+                              frame_water_tower)
 
         # Get the score and misses
         score_digits = jr.int_to_digits(state.score, max_digits=1)
