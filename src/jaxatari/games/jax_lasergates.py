@@ -4,7 +4,6 @@ Lukas Bergholz, Linus Orlob, Vincent Jahn
 
 """
 import os
-import time
 from functools import partial
 from typing import Tuple, NamedTuple, Callable
 import chex
@@ -16,9 +15,9 @@ from jaxatari.environment import JaxEnvironment, JAXAtariAction as Action, JAXAt
 from jaxatari.renderers import JAXGameRenderer
 
 # -------- Game constants --------
-class LaserGatesConstants(NamedTuple):
+class LaserGatesConstants:
     WIDTH = 160
-    HEIGHT = 210
+    HEIGHT = 250
     SCALING_FACTOR = 5
 
     SCROLL_SPEED = 1  # Normal scroll speed
@@ -43,7 +42,7 @@ class LaserGatesConstants(NamedTuple):
 
     # -------- Player constants --------
     PLAYER_SIZE = (8, 6)  # Width, Height
-    PLAYER_NORMAL_COLOR = (85, 92, 197, 255)  # Normal color of the player
+    PLAYER_NORMAL_COLOR = (99, 138, 196, 255)  # Normal color of the player
     PLAYER_COLLISION_COLOR = (137, 81, 26,255)  # Players color for PLAYER_COLOR_CHANGE_DURATION frames after a collision
     PLAYER_COLOR_CHANGE_DURATION = 10  # How long (in frames) the player changes its color to PLAYER_COLLISION_COLOR if a collision occurs
 
@@ -70,7 +69,7 @@ class LaserGatesConstants(NamedTuple):
     PLAYER_MISSILE_BASE_COLOR = (140, 79, 24, 255)  # Initial color of player missile. Every value except for transparency is incremented by the missiles velocity * PLAYER_MISSILE_COLOR_CHANGE_SPEED
     PLAYER_MISSILE_COLOR_CHANGE_SPEED = 10  # Defines how fast the player missile changes its color towards white.
 
-    PLAYER_MISSILE_INITIAL_VELOCITY = 2.5  # Starting speed of player missile
+    PLAYER_MISSILE_INITIAL_VELOCITY = 4  # Starting speed of player missile
     PLAYER_MISSILE_VELOCITY_MULTIPLIER = 1.1  # Multiply the current speed at a given moment of the player missile by this number
 
     # -------- Entity constants (constants that apply to all entity types --------
@@ -104,12 +103,14 @@ class LaserGatesConstants(NamedTuple):
 
     BYTE_BAT_UPPER_BORDER_Y = UPPER_MOUNTAINS_Y + MOUNTAIN_SIZE[1] + 2  # Upper border where byte bat inverts direction
     BYTE_BAT_BOTTOM_BORDER_Y = LOWER_MOUNTAINS_Y - MOUNTAIN_SIZE[1]  # Lower border where byte bat inverts direction
+    BYTE_BAT_SUBTRACT_FROM_BORDER = 20
+    BYTE_BAT_PLAYER_DIST_TRIGGER = 50
 
-    BYTE_BAT_SPAWN_X = WIDTH  # Spawn barely outside of screen
+    BYTE_BAT_SPAWN_X = WIDTH  # Spawn barely outside screen
     BYTE_BAT_SPAWN_Y = BYTE_BAT_UPPER_BORDER_Y + 1
 
-    BYTE_BAT_X_SPEED = 0.7  # Speed of byte bat in x direction
-    BYTE_BAT_Y_SPEED = 1  # Speed of byte bat in y direction
+    BYTE_BAT_X_SPEED = 1  # Speed of byte bat in x direction
+    BYTE_BAT_Y_SPEED = 1.8  # Speed of byte bat in y direction
 
     # -------- Rock muncher constants --------
     ROCK_MUNCHER_SIZE = (8, 11)  # Width, Height
@@ -142,15 +143,15 @@ class LaserGatesConstants(NamedTuple):
 
     FORCEFIELD_IS_WIDE_PROBABILITY = 0.2  # Probability that a forcefield is wide
 
-    FORCEFIELD_FLASHING_SPACING = 40  # x spacing between the forcefields when in flashing mode
+    FORCEFIELD_FLASHING_SPACING = 32  # x spacing between the forcefields when in flashing mode
     FORCEFIELD_FLASHING_SPEED = 35  # Forcefield changes state from on to off or from off to on every FORCEFIELD_FLASHING_SPEED frames
 
-    FORCEFIELD_FLEXING_SPACING = 50  # x spacing between the forcefields when in flexing mode
+    FORCEFIELD_FLEXING_SPACING = 64  # x spacing between the forcefields when in flexing mode
     FORCEFIELD_FLEXING_SPEED = 0.6  # Flexing (Crushing motion) speed
     FORCEFIELD_FLEXING_MINIMUM_DISTANCE = 2  # Minimum y distance between the upper and lower forcefields when flexing
     FORCEFIELD_FLEXING_MAXIMUM_DISTANCE = 25  # Maximum y distance between the upper and lower forcefields when flexing
 
-    FORCEFIELD_FIXED_SPACING = 50  # x spacing between the forcefields when in fixed mode
+    FORCEFIELD_FIXED_SPACING = 64  # x spacing between the forcefields when in fixed mode
     FORCEFIELD_FIXED_SPEED = 0.3  # Fixed (up and down movement) speed
     FORCEFIELD_FIXED_UPPER_BOUND = -FORCEFIELD_SIZE[1] + 33  # Highest allowed y position for forcefields while fixed
     FORCEFIELD_FIXED_LOWER_BOUND = -FORCEFIELD_SIZE[1] + 68  # Lowest allowed y position for forcefields while fixed
@@ -164,7 +165,7 @@ class LaserGatesConstants(NamedTuple):
     DENSEPACK_IS_WIDE_PROBABILITY = 0.4  # Probability that a spawned densepack is wide
 
     # -------- Detonator constants --------
-    DETONATOR_SIZE = (8, 73)  # TODO this is the whole sprite, hitbox of non pin dentonator is smaller
+    DETONATOR_SIZE = (8, 73)
     DETONATOR_COLOR = (142, 142, 142, 255)
 
     # -------- Energy pod constants --------
@@ -174,7 +175,7 @@ class LaserGatesConstants(NamedTuple):
 
     ENERGY_POD_ANIMATION_SPEED = 16  # Higher is slower
 
-    # -------- GUI constants --------
+    # -------- GUI/instrument panel constants --------
     GUI_COLORED_BACKGROUND_SIZE = (128, 12)  # Width, Height of colored background of black rectangle background
     GUI_BLACK_BACKGROUND_SIZE = (56, 10)  # Width, Height of black background of text
     GUI_TEXT_SCORE_SIZE = (21, 7)  # Width, Height of "Score" text
@@ -190,15 +191,15 @@ class LaserGatesConstants(NamedTuple):
     GUI_TEXT_COLOR_BEIGE = (160, 107, 50, 255)
 
     GUI_BLACK_BACKGROUND_X_OFFSET = 36
-    GUI_Y_SPACE_BETWEEN_PLAYING_FIELD = 10
-    GUI_Y_SPACE_BETWEEN_BACKGROUNDS = 10
+    GUI_Y_BASE = 117
+    GUI_X_BASE = 16
+    GUI_Y_SPACE_BETWEEN_PANELS = 21
 
-    # -------- Instrument panel constants --------
     INSTRUMENT_PANEL_ANIMATION_SPEED = 14 # Blinking speed when energy, shields or dtime is low. Lower is faster. Should ideally be an even number.
 
     ENERGY_START_BLINKING_PERCENTAGE = 0.2 # see below
     SHIELDS_START_BLINKING_PERCENTAGE = 0.2 # see below
-    DTIME_START_BLINKING_PERCENTAGE = 0.2 # Field in instrument panel starts blinking when current value is smaller than VALUE_START_BLINKING_PERCENTAGE * MAX_VALUE.
+    DTIME_START_BLINKING_PERCENTAGE = 0.2 # Field in instrument panel starts blinking when the current value is smaller than VALUE_START_BLINKING_PERCENTAGE * MAX_VALUE.
 
     SHIELD_LOSS_COL_SMALL = 1 # see is_big_collision entry in CollisionPropertiesState for extensive explanation. This constant defines the shield points to lose
     SHIELD_LOSS_COL_BIG = 6
@@ -572,6 +573,12 @@ def load_sprites():
 # -------- Game Logic --------
 
 class JaxLaserGates(JaxEnvironment[LaserGatesState, LaserGatesObservation, LaserGatesInfo, LaserGatesConstants]):
+
+    @partial(jax.jit, static_argnums=(0,))
+    def render(self, state: LaserGatesState) -> jnp.ndarray:
+        """Render the game state to a raster image."""
+        return self.renderer.render(state)
+
     def __init__(self, consts: LaserGatesConstants = None, frameskip: int = 1, reward_funcs: list[Callable] =None):
         consts = consts or LaserGatesConstants()
         super().__init__(consts)
@@ -622,7 +629,6 @@ class JaxLaserGates(JaxEnvironment[LaserGatesState, LaserGatesObservation, Laser
         ])
         active_event = jnp.any(all_is_in_current_event_flags) # If there is an entity that is in the current event
 
-        @jax.jit
         def initialize_radar_mortar(entities):
             top_or_bot = jax.random.bernoulli(key_intern)
 
@@ -638,7 +644,6 @@ class JaxLaserGates(JaxEnvironment[LaserGatesState, LaserGatesObservation, Laser
             )
             return entities._replace(radar_mortar_state=new_radar_mortar_state)
 
-        @jax.jit
         def initialize_byte_bat(entities):
             initial_direction_is_up = jnp.bool(self.consts.BYTE_BAT_SPAWN_Y < self.consts.BYTE_BAT_UPPER_BORDER_Y)
             new_byte_bat_state = ByteBatState(
@@ -651,7 +656,6 @@ class JaxLaserGates(JaxEnvironment[LaserGatesState, LaserGatesObservation, Laser
             )
             return entities._replace(byte_bat_state=new_byte_bat_state)
 
-        @jax.jit
         def initialize_rock_muncher(entities):
             initial_direction_is_up = jnp.bool(self.consts.ROCK_MUNCHER_SPAWN_Y < self.consts.ROCK_MUNCHER_UPPER_BORDER_Y)
             new_rock_muncher_state = RockMuncherState(
@@ -666,7 +670,6 @@ class JaxLaserGates(JaxEnvironment[LaserGatesState, LaserGatesObservation, Laser
             )
             return entities._replace(rock_muncher_state=new_rock_muncher_state)
 
-        @jax.jit
         def initialize_homing_missile(entities):
             initial_y_position = jax.random.randint(key_intern, (), self.consts.HOMING_MISSILE_Y_BOUNDS[0], self.consts.HOMING_MISSILE_Y_BOUNDS[1])
             new_homing_missile_state = HomingMissileState(
@@ -678,7 +681,6 @@ class JaxLaserGates(JaxEnvironment[LaserGatesState, LaserGatesObservation, Laser
             )
             return entities._replace(homing_missile_state=new_homing_missile_state)
 
-        @jax.jit
         def initialize_forcefield(entities):
             key_num_of_ff, key_type_of_ff, key_is_wide = jax.random.split(key_intern, 3)
             number_of_forcefields = jax.random.randint(key_num_of_ff, (), minval=1, maxval=5) # Spawn 1 to 4 forcefields at a time.
@@ -717,7 +719,6 @@ class JaxLaserGates(JaxEnvironment[LaserGatesState, LaserGatesObservation, Laser
             )
             return entities._replace(forcefield_state=new_forcefield_state)
 
-        @jax.jit
         def initialize_densepack(entities):
             initial_is_wide = jax.random.bernoulli(key_intern, p=self.consts.DENSEPACK_IS_WIDE_PROBABILITY)
 
@@ -732,7 +733,6 @@ class JaxLaserGates(JaxEnvironment[LaserGatesState, LaserGatesObservation, Laser
             )
             return entities._replace(dense_pack_state=new_densepack_state)
 
-        @jax.jit
         def initialize_detonator(entities):
             new_detonator_state = entities.detonator_state._replace(
                 is_in_current_event=jnp.bool(True),
@@ -743,7 +743,6 @@ class JaxLaserGates(JaxEnvironment[LaserGatesState, LaserGatesObservation, Laser
             )
             return entities._replace(detonator_state=new_detonator_state)
 
-        @jax.jit
         def initialize_energy_pod(entities):
             new_energy_pod_state = entities.energy_pod_state._replace(
                 is_in_current_event=jnp.bool(True),
@@ -765,7 +764,6 @@ class JaxLaserGates(JaxEnvironment[LaserGatesState, LaserGatesObservation, Laser
             initialize_energy_pod,
         ] # All initialize functions of all entity types
 
-        @jax.jit
         def initialize_random_entity(_):
             key_normal_index, key_energy_pod, key_detonator, key_edge_case = jax.random.split(key_pick_type, 4)
 
@@ -979,18 +977,41 @@ class JaxLaserGates(JaxEnvironment[LaserGatesState, LaserGatesObservation, Laser
         def byte_bat_step(state: LaserGatesState) -> tuple[ByteBatState, CollisionPropertiesState]:
             bb = state.entities.byte_bat_state
 
-            # If one of the y borders are hit, only register if alive
-            y_border_hit = jnp.logical_and(bb.is_alive,
-                                           jnp.logical_or(bb.y <= self.consts.BYTE_BAT_UPPER_BORDER_Y, bb.y >= self.consts.BYTE_BAT_BOTTOM_BORDER_Y)
-                                           )
+            # x distance to player and flags
+            distance = jnp.abs(bb.x - state.player_x)
+            near_player = distance < self.consts.BYTE_BAT_PLAYER_DIST_TRIGGER
+            player_is_in_bottom_half = state.player_y > (
+                        self.consts.PLAYER_BOUNDS[1][0] + self.consts.PLAYER_BOUNDS[1][1]) // 2
 
-            # If player is left of the byte bat, update only if hitting border
+            # Calculate borders and corridor
+            upper_base = self.consts.BYTE_BAT_UPPER_BORDER_Y
+            bottom_base = self.consts.BYTE_BAT_BOTTOM_BORDER_Y
+            corridor_h = bottom_base - upper_base
+
+            # maximum allowed shrinking on one side
+            max_single_side_shrink = jnp.maximum(0, corridor_h - 1)
+            shrink_amount = jnp.minimum(self.consts.BYTE_BAT_SUBTRACT_FROM_BORDER, max_single_side_shrink)
+
+            shrink_top = jnp.where(jnp.logical_and(near_player, player_is_in_bottom_half), shrink_amount, 0)
+            shrink_bottom = jnp.where(jnp.logical_and(near_player, jnp.logical_not(player_is_in_bottom_half)),
+                                      shrink_amount, 0)
+
+            upper_border = upper_base + shrink_top
+            bottom_border = bottom_base - shrink_bottom
+
+            # Border hit - only if moving in the respective direction
+            hit_top = jnp.logical_and(bb.direction_is_up, bb.y <= upper_border)
+            hit_bottom = jnp.logical_and(jnp.logical_not(bb.direction_is_up), bb.y >= bottom_border)
+
+            y_border_hit = jnp.logical_and(bb.is_alive, jnp.logical_or(hit_top, hit_bottom))
+
+            # Only update flag if border is hit
             new_direction_is_left = jnp.where(
                 y_border_hit,
                 state.player_x + self.consts.PLAYER_SIZE[0] < bb.x,
                 bb.direction_is_left
             )
-            # Invert y direction if one of the two y borders is hit
+
             new_direction_is_up = jnp.where(
                 y_border_hit,
                 jnp.logical_not(bb.direction_is_up),
@@ -998,11 +1019,14 @@ class JaxLaserGates(JaxEnvironment[LaserGatesState, LaserGatesObservation, Laser
             )
 
             # Update positions
-            moved_x = jnp.where(new_direction_is_left, bb.x - self.consts.BYTE_BAT_X_SPEED, bb.x + self.consts.BYTE_BAT_X_SPEED)
+            moved_x = jnp.where(new_direction_is_left, bb.x - self.consts.BYTE_BAT_X_SPEED,
+                                bb.x + self.consts.BYTE_BAT_X_SPEED)
+            # Freeze x if player is at right border
             moved_x = jnp.where(state.player_x == self.consts.PLAYER_BOUNDS[0][1], bb.x, moved_x)
-            moved_y = jnp.where(new_direction_is_up, bb.y - self.consts.BYTE_BAT_Y_SPEED, bb.y + self.consts.BYTE_BAT_Y_SPEED)
 
-            # Only apply position when alive
+            moved_y = jnp.where(new_direction_is_up, bb.y - self.consts.BYTE_BAT_Y_SPEED,
+                                bb.y + self.consts.BYTE_BAT_Y_SPEED)
+
             new_x = jnp.where(bb.is_alive, moved_x, bb.x)
             new_y = jnp.where(bb.is_alive, moved_y, bb.y)
 
@@ -1105,7 +1129,7 @@ class JaxLaserGates(JaxEnvironment[LaserGatesState, LaserGatesObservation, Laser
             rm_missile_collision_with_player = jnp.where(
                 state.entities.collision_properties_state.death_timer == self.consts.ENTITY_DEATH_ANIMATION_TIMER,
                 self.check_collision_single((state.player_x, state.player_y), self.consts.PLAYER_SIZE, (rm.missile_x, rm.missile_y), self.consts.ENTITY_MISSILE_SIZE),
-                jnp.bool(False) #TODO: Currently, the missile is still updated after death of rock muncher. You can not be hit by it.  Find out if you can be hit by the missile in the real game after the rock muncher is already dead, or if it is even there.
+                jnp.bool(False)
             )
 
             # Is still alive if was already alive and no collision occurred
@@ -1497,7 +1521,7 @@ class JaxLaserGates(JaxEnvironment[LaserGatesState, LaserGatesObservation, Laser
             )
             collision_player_missile_detonator = jnp.where(
                 state.entities.collision_properties_state.death_timer == self.consts.ENTITY_DEATH_ANIMATION_TIMER,
-                self.check_collision_single((state.player_missile.x, state.player_missile.y), self.consts.PLAYER_MISSILE_SIZE, (base_x, y), self.consts.DETONATOR_SIZE),
+                self.check_collision_single((state.player_missile.x, state.player_missile.y), self.consts.PLAYER_MISSILE_SIZE, (base_x - 2, y), self.consts.DETONATOR_SIZE), # Subtract two to account for missile hitbox
                 jnp.bool(False)
             )
 
@@ -2003,7 +2027,7 @@ class JaxLaserGates(JaxEnvironment[LaserGatesState, LaserGatesObservation, Laser
         return state.shields <= 0
 
     @partial(jax.jit, static_argnums=(0, ))
-    def reset(self, key = 42) -> Tuple[LaserGatesObservation, LaserGatesState]:
+    def reset(self, key = jax.random.PRNGKey(42)) -> Tuple[LaserGatesObservation, LaserGatesState]:
         """Initialize game state"""
 
         initial_lower_mountains = MountainState(
@@ -2064,28 +2088,28 @@ class JaxLaserGates(JaxEnvironment[LaserGatesState, LaserGatesObservation, Laser
                 is_tracking_player=jnp.bool(False),
             ),
             forcefield_state=ForceFieldState(
-                is_in_current_event=jnp.bool(False),
-                is_alive=jnp.bool(False),
-                x0=jnp.array(0, dtype=jnp.float32),
-                y0=jnp.array(0, dtype=jnp.float32),
-                x1=jnp.array(0, dtype=jnp.float32),
-                y1=jnp.array(0, dtype=jnp.float32),
-                x2=jnp.array(0, dtype=jnp.float32),
-                y2=jnp.array(0, dtype=jnp.float32),
-                x3=jnp.array(0, dtype=jnp.float32),
-                y3=jnp.array(0, dtype=jnp.float32),
-                x4=jnp.array(0, dtype=jnp.float32),
-                y4=jnp.array(0, dtype=jnp.float32),
-                x5=jnp.array(0, dtype=jnp.float32),
-                y5=jnp.array(0, dtype=jnp.float32),
-                rightmost_x=jnp.array(0, dtype=jnp.float32),
-                num_of_forcefields=jnp.array(0),
-                is_wide=jnp.bool(False),
-                is_flexing=jnp.bool(False),
-                is_fixed=jnp.bool(False),
-                flash_on=jnp.bool(False),
-                flex_upper_direction_is_up=jnp.bool(False),
-                fixed_upper_direction_is_up=jnp.bool(False),
+                is_in_current_event=jnp.bool(True),
+                is_alive=jnp.bool(True),
+                x0=jnp.array(self.consts.WIDTH, dtype=jnp.float32),
+                y0=jnp.array(-17).astype(jnp.float32),
+                x1=jnp.array(self.consts.WIDTH, dtype=jnp.float32),
+                y1=jnp.array(56).astype(jnp.float32),
+                x2=jnp.array(self.consts.WIDTH, dtype=jnp.float32),
+                y2=jnp.array(-17).astype(jnp.float32),
+                x3=jnp.array(self.consts.WIDTH, dtype=jnp.float32),
+                y3=jnp.array(56).astype(jnp.float32),
+                x4=jnp.array(self.consts.WIDTH, dtype=jnp.float32),
+                y4=jnp.array(-17).astype(jnp.float32),
+                x5=jnp.array(self.consts.WIDTH, dtype=jnp.float32),
+                y5=jnp.array(56).astype(jnp.float32),
+                rightmost_x=jnp.array(self.consts.WIDTH, dtype=jnp.float32),
+                num_of_forcefields=jnp.array(2),
+                is_wide=False,
+                is_flexing=False,
+                is_fixed=False,
+                flash_on=jnp.array(True),
+                flex_upper_direction_is_up=jnp.array(True),
+                fixed_upper_direction_is_up=jnp.array(True),
             ),
             dense_pack_state=DensepackState(
                 is_in_current_event=jnp.bool(False),
@@ -2122,8 +2146,54 @@ class JaxLaserGates(JaxEnvironment[LaserGatesState, LaserGatesObservation, Laser
             )
         )
 
-        key = jax.random.PRNGKey(time.time_ns() % (2**32)) # Pseudo random number generator seed key, based on current system time.
-        new_key0, key0 = jax.random.split(key, 2)
+        """
+        EXPLANATION BELOW
+        """
+
+        """
+        initial_entities = initial_entities._replace(
+            forcefield_state=ForceFieldState(
+            is_in_current_event=jnp.bool(False),
+            is_alive=jnp.bool(False),
+            x0=jnp.array(0, dtype=jnp.float32),
+            y0=jnp.array(0, dtype=jnp.float32),
+            x1=jnp.array(0, dtype=jnp.float32),
+            y1=jnp.array(0, dtype=jnp.float32),
+            x2=jnp.array(0, dtype=jnp.float32),
+            y2=jnp.array(0, dtype=jnp.float32),
+            x3=jnp.array(0, dtype=jnp.float32),
+            y3=jnp.array(0, dtype=jnp.float32),
+            x4=jnp.array(0, dtype=jnp.float32),
+            y4=jnp.array(0, dtype=jnp.float32),
+            x5=jnp.array(0, dtype=jnp.float32),
+            y5=jnp.array(0, dtype=jnp.float32),
+            rightmost_x=jnp.array(0, dtype=jnp.float32),
+            num_of_forcefields=jnp.array(0),
+            is_wide=jnp.bool(False),
+            is_flexing=jnp.bool(False),
+            is_fixed=jnp.bool(False),
+            flash_on=jnp.bool(False),
+            flex_upper_direction_is_up=jnp.bool(False),
+            fixed_upper_direction_is_up=jnp.bool(False),
+            )
+        )
+        import time
+        key = jax.random.PRNGKey(time.time_ns() % (2**31)) # Pseudo random number generator seed key, based on current system time.
+        """
+
+
+        """
+        EXPLANATION:
+        
+        In the original game (and in our implementation), the first entity is always a
+        flashing two-column forcefield. All subsequent spawns are deterministic as well, however only the first spawn is equivalent to the original.
+        
+        To ensure reproducibility, we use a constant RNG key by default. If you run two
+        instances and don’t move, the spawns will match.
+        
+        If the function is called with a different RNG key, the spawn sequence after the first (forcefields) entity changes. 
+        For non-reproducible (random) spawns, uncomment the snippet above to generate a fresh key and fresh first spawn each run.
+        """
 
         reset_state = LaserGatesState(
             player_x=jnp.array(self.consts.PLAYER_START_X).astype(jnp.float32),
@@ -2139,7 +2209,7 @@ class JaxLaserGates(JaxEnvironment[LaserGatesState, LaserGatesObservation, Laser
             shields=jnp.array(self.consts.MAX_SHIELDS), # As the manual says, the Dante Dart starts with 24 shield units
             dtime=jnp.array(self.consts.MAX_DTIME), # Same idea as energy.
             scroll_speed=jnp.array(self.consts.SCROLL_SPEED),
-            rng_key=new_key0, # Pseudo random number generator seed key, based on current time and initial key used.
+            rng_key=key, # Pseudo random number generator seed key, based on current time and initial key used.
             step_counter=jnp.array(0),
         )
 
@@ -2188,10 +2258,10 @@ class JaxLaserGates(JaxEnvironment[LaserGatesState, LaserGatesObservation, Laser
         # -------- Kill missile --------
         kill_missile = jnp.logical_or(player_missile_collision, new_entities.collision_properties_state.collision_with_player_missile)
         new_player_missile_state = PlayerMissileState(
-                                             x=jnp.where(kill_missile, jnp.array(0).astype(new_player_missile_state.x.dtype), new_player_missile_state.x),
-                                             y=jnp.where(kill_missile, jnp.array(0), new_player_missile_state.y),
-                                             direction=jnp.where(kill_missile, jnp.array(0).astype(new_player_missile_state.direction.dtype), new_player_missile_state.direction),
-                                             velocity=jnp.where(kill_missile, jnp.array(0).astype(new_player_missile_state.velocity.dtype), new_player_missile_state.velocity)
+                                             x=jnp.where(kill_missile, jnp.array(0).astype(new_player_missile_state.x.dtype), new_player_missile_state.x).astype(jnp.int32),
+                                             y=jnp.where(kill_missile, jnp.array(0), new_player_missile_state.y).astype(jnp.int32),
+                                             direction=jnp.where(kill_missile, jnp.array(0).astype(new_player_missile_state.direction.dtype), new_player_missile_state.direction).astype(jnp.int32),
+                                             velocity=jnp.where(kill_missile, jnp.array(0).astype(new_player_missile_state.velocity.dtype), new_player_missile_state.velocity).astype(jnp.int32),
                                              )
         # Register player missile collision with detonator pin for restoring dtime
         player_missile_collision_detonator_pin = jnp.logical_and(new_entities.collision_properties_state.collision_with_player_missile, new_entities.detonator_state.collision_is_pin)
@@ -2239,21 +2309,33 @@ class JaxLaserGates(JaxEnvironment[LaserGatesState, LaserGatesObservation, Laser
         new_rng_key, new_key = jax.random.split(state.rng_key)
 
         return_state = state._replace(
-            player_x=new_player_x,
-            player_y=new_player_y,
+            player_x=new_player_x.astype(jnp.float32),
+            player_y=new_player_y.astype(jnp.float32),
             player_facing_direction=new_player_facing_direction,
             animation_timer=new_player_animation_timer,
             player_missile=new_player_missile_state,
             entities=new_entities,
             lower_mountains=new_lower_mountains_state,
             upper_mountains=new_upper_mountains_state,
-            scroll_speed=new_scroll_speed,
+            scroll_speed=new_scroll_speed.astype(jnp.int32),
             score=new_score,
             energy=new_energy,
             shields=new_shields,
             dtime=new_dtime,
             rng_key=new_rng_key,
             step_counter=state.step_counter + 1
+        )
+
+        def get_reset_state() -> LaserGatesState:
+            _, reset_state = self.reset()
+            return reset_state
+
+        # Reset if no shields, dtime or energy
+        return_state = jax.lax.cond(
+            jnp.logical_or(new_shields <= 0, jnp.logical_or(new_dtime <= 0, new_energy <= 0)),
+            lambda _: get_reset_state(),
+            lambda _: return_state,
+            operand=None
         )
 
         obs = self._get_observation(return_state)
@@ -2268,7 +2350,7 @@ class LaserGatesRenderer(JAXGameRenderer):
         self.consts = consts or LaserGatesConstants()
 
     @partial(jax.jit, static_argnums=(0,))
-    def render(self, state):
+    def render(self, state: LaserGatesState):
         raster = jnp.zeros((self.consts.HEIGHT, self.consts.WIDTH, 3))
 
         def recolor_sprite(
@@ -2875,41 +2957,42 @@ class LaserGatesRenderer(JAXGameRenderer):
 
         # Colored backgrounds ---------------
 
+
         # Colored background for score
-        score_col_bg_y = 111 + self.consts.GUI_Y_SPACE_BETWEEN_PLAYING_FIELD
+        score_col_bg_y = self.consts.GUI_Y_BASE
         raster = jru.render_at(
             raster,
-            16,
+            self.consts.GUI_X_BASE,
             score_col_bg_y,
             sprite_gui_colored_background_blue,
         )
 
         # Colored background for energy
-        energy_col_bg_y = 111 + self.consts.GUI_Y_SPACE_BETWEEN_PLAYING_FIELD + self.consts.GUI_COLORED_BACKGROUND_SIZE[1] + self.consts.GUI_Y_SPACE_BETWEEN_BACKGROUNDS
+        energy_col_bg_y = self.consts.GUI_Y_BASE + self.consts.GUI_COLORED_BACKGROUND_SIZE[1] + self.consts.GUI_Y_SPACE_BETWEEN_PANELS
         low_energy = state.energy < (0.2 * self.consts.MAX_ENERGY)
         raster = jru.render_at(
             raster,
-            16,
+            self.consts.GUI_X_BASE,
             energy_col_bg_y,
             jnp.where(low_energy, blinking_sprite_gui_colored_background, sprite_gui_colored_background_green),
         )
 
         # Colored background for shields
-        shields_col_bg_y = 111 + self.consts.GUI_Y_SPACE_BETWEEN_PLAYING_FIELD + 2 * self.consts.GUI_COLORED_BACKGROUND_SIZE[1] + 2 * self.consts.GUI_Y_SPACE_BETWEEN_BACKGROUNDS
+        shields_col_bg_y = self.consts.GUI_Y_BASE + 2 * self.consts.GUI_COLORED_BACKGROUND_SIZE[1] + 2 * self.consts.GUI_Y_SPACE_BETWEEN_PANELS
         low_shields = state.shields < (0.2 * self.consts.MAX_SHIELDS)
         raster = jru.render_at(
             raster,
-            16,
+            self.consts.GUI_X_BASE,
             shields_col_bg_y,
             jnp.where(low_shields, blinking_sprite_gui_colored_background, sprite_gui_colored_background_green),
         )
 
         # Colored background for d-time
-        dtime_col_bg_y = 111 + self.consts.GUI_Y_SPACE_BETWEEN_PLAYING_FIELD + 3 * self.consts.GUI_COLORED_BACKGROUND_SIZE[1] + 3 * self.consts.GUI_Y_SPACE_BETWEEN_BACKGROUNDS
+        dtime_col_bg_y = self.consts.GUI_Y_BASE + 3 * self.consts.GUI_COLORED_BACKGROUND_SIZE[1] + 3 * self.consts.GUI_Y_SPACE_BETWEEN_PANELS
         low_dtime = state.dtime < (0.2 * self.consts.MAX_DTIME)
         raster = jru.render_at(
             raster,
-            16,
+            self.consts.GUI_X_BASE,
             dtime_col_bg_y,
             jnp.where(low_dtime, blinking_sprite_gui_colored_background, sprite_gui_colored_background_green),
         )
@@ -2919,7 +3002,7 @@ class LaserGatesRenderer(JAXGameRenderer):
         # Black background for score
         raster = jru.render_at(
             raster,
-            16 + self.consts.GUI_BLACK_BACKGROUND_X_OFFSET,
+            self.consts.GUI_X_BASE + self.consts.GUI_BLACK_BACKGROUND_X_OFFSET,
             score_col_bg_y + 1,
             SPRITE_GUI_BLACK_BACKGROUND,
         )
@@ -2927,7 +3010,7 @@ class LaserGatesRenderer(JAXGameRenderer):
         # Black background for energy
         raster = jru.render_at(
             raster,
-            16 + self.consts.GUI_BLACK_BACKGROUND_X_OFFSET,
+            self.consts.GUI_X_BASE + self.consts.GUI_BLACK_BACKGROUND_X_OFFSET,
             energy_col_bg_y + 1,
             SPRITE_GUI_BLACK_BACKGROUND,
         )
@@ -2935,7 +3018,7 @@ class LaserGatesRenderer(JAXGameRenderer):
         # Black background for shields
         raster = jru.render_at(
             raster,
-            16 + self.consts.GUI_BLACK_BACKGROUND_X_OFFSET,
+            self.consts.GUI_X_BASE + self.consts.GUI_BLACK_BACKGROUND_X_OFFSET,
             shields_col_bg_y + 1,
             SPRITE_GUI_BLACK_BACKGROUND,
         )
@@ -2943,7 +3026,7 @@ class LaserGatesRenderer(JAXGameRenderer):
         # Black background for d-time
         raster = jru.render_at(
             raster,
-            16 + self.consts.GUI_BLACK_BACKGROUND_X_OFFSET,
+            self.consts.GUI_X_BASE + self.consts.GUI_BLACK_BACKGROUND_X_OFFSET,
             dtime_col_bg_y + 1,
             SPRITE_GUI_BLACK_BACKGROUND,
         )
@@ -2954,7 +3037,7 @@ class LaserGatesRenderer(JAXGameRenderer):
         required_text_and_bar_color = jnp.where(jnp.array(True), jnp.array(self.consts.GUI_TEXT_COLOR_GRAY), jnp.array(self.consts.GUI_TEXT_COLOR_BEIGE))
         raster = jru.render_at(
             raster,
-            16 + self.consts.GUI_BLACK_BACKGROUND_X_OFFSET + 5,
+            self.consts.GUI_X_BASE + self.consts.GUI_BLACK_BACKGROUND_X_OFFSET + 5,
             score_col_bg_y + 2,
             recolor_sprite(SPRITE_GUI_TEXT_SCORE, required_text_and_bar_color),
         )
@@ -2962,7 +3045,7 @@ class LaserGatesRenderer(JAXGameRenderer):
         # energy text
         raster = jru.render_at(
             raster,
-            16 + self.consts.GUI_BLACK_BACKGROUND_X_OFFSET + 5,
+            self.consts.GUI_X_BASE + self.consts.GUI_BLACK_BACKGROUND_X_OFFSET + 5,
             energy_col_bg_y + 2,
             recolor_sprite(SPRITE_GUI_TEXT_ENERGY, required_text_and_bar_color),
         )
@@ -2970,7 +3053,7 @@ class LaserGatesRenderer(JAXGameRenderer):
         # shields text
         raster = jru.render_at(
             raster,
-            16 + self.consts.GUI_BLACK_BACKGROUND_X_OFFSET + 5,
+            self.consts.GUI_X_BASE + self.consts.GUI_BLACK_BACKGROUND_X_OFFSET + 5,
             shields_col_bg_y + 2,
             recolor_sprite(SPRITE_GUI_TEXT_SHIELDS, required_text_and_bar_color),
         )
@@ -2978,7 +3061,7 @@ class LaserGatesRenderer(JAXGameRenderer):
         # d-time text
         raster = jru.render_at(
             raster,
-            16 + self.consts.GUI_BLACK_BACKGROUND_X_OFFSET + 5,
+            self.consts.GUI_X_BASE + self.consts.GUI_BLACK_BACKGROUND_X_OFFSET + 5,
             dtime_col_bg_y + 2,
             recolor_sprite(SPRITE_GUI_TEXT_DTIME, required_text_and_bar_color),
         )
@@ -2988,7 +3071,7 @@ class LaserGatesRenderer(JAXGameRenderer):
         # energy bar
         raster = jru.render_bar(
             raster, # raster
-            16 + self.consts.GUI_BLACK_BACKGROUND_X_OFFSET + 4, # x pos
+            self.consts.GUI_X_BASE + self.consts.GUI_BLACK_BACKGROUND_X_OFFSET + 4, # x pos
             energy_col_bg_y + 8, # y pos
             state.energy, # current value
             self.consts.MAX_ENERGY, # maximum value
@@ -3001,7 +3084,7 @@ class LaserGatesRenderer(JAXGameRenderer):
         # shields bar
         raster = jru.render_bar(
             raster, # raster
-            16 + self.consts.GUI_BLACK_BACKGROUND_X_OFFSET + 4, # x pos
+            self.consts.GUI_X_BASE + self.consts.GUI_BLACK_BACKGROUND_X_OFFSET + 4, # x pos
             shields_col_bg_y + 8, # y pos
             state.shields, # current value
             self.consts.MAX_SHIELDS, # maximum value
@@ -3011,10 +3094,10 @@ class LaserGatesRenderer(JAXGameRenderer):
             jnp.array((0, 0, 0, 0)) # color of unfilled part
         )
 
-        # d-time bar TODO: Implement correct color picking
+        # d-time bar
         raster = jru.render_bar(
             raster, # raster
-            16 + self.consts.GUI_BLACK_BACKGROUND_X_OFFSET + 4, # x pos
+            self.consts.GUI_X_BASE + self.consts.GUI_BLACK_BACKGROUND_X_OFFSET + 4, # x pos
             dtime_col_bg_y + 8, # y pos
             state.dtime, # current value
             self.consts.MAX_DTIME, # maximum value
@@ -3034,7 +3117,7 @@ class LaserGatesRenderer(JAXGameRenderer):
 
         first_non_zero = jnp.argmax(score_array != 0) # Index of first element in score_array that is not zero
         num_to_render = score_array.shape[0] - first_non_zero # number of digits we have to render
-        base_x = 16 + self.consts.GUI_BLACK_BACKGROUND_X_OFFSET + 52 # base x position
+        base_x = self.consts.GUI_X_BASE + self.consts.GUI_BLACK_BACKGROUND_X_OFFSET + 52 # base x position
         number_spacing = 4 # Spacing of digits (including digit itself)
         score_numbers_x = base_x - number_spacing * num_to_render # Subtracting offset of x position, since we want the score to be right-aligned
 
