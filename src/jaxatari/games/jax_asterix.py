@@ -9,7 +9,42 @@ from jaxatari.environment import JaxEnvironment, JAXAtariAction as Action
 import jaxatari.spaces as spaces
 from jaxatari.renderers import JAXGameRenderer
 import jaxatari.rendering.jax_rendering_utils as jr
+"""
+def wave_pattern_count() -> int:
+    return 4  # Anzahl der Wellenmuster
 
+def wave_pattern(wave_id: jnp.ndarray, num_platforms: int) -> jnp.ndarray:
+    
+    #Liefert ein Array der Länge num_platforms mit Einträgen in {-1, 1}.
+    #-1: von links spawnen, bewegt sich nach rechts
+    # 1: von rechts spawnen, bewegt sich nach links
+    
+    def pattern_0(n):
+        # Erste Welle: oben links -> rechts, dann abwechselns (links, rechts, links, rechts,..)
+        idx = jnp.arange(n)
+        return jnp.where(idx % 2 == 0, jnp.int32(-1), jnp.int32(1))
+
+    def pattern_1(n):
+        # Zweite Welle: oben rechts -> links, dann abwechselns (rechts, links, rechts, links,..)
+        idx = jnp.arange(n)
+        return jnp.where(idx % 2 == 0, jnp.int32(1), jnp.int32(-1))
+
+    def pattern_2(n):
+        # Dritte Welle: alle von links -> rechts
+        return jnp.full((n,), -1, dtype=jnp.int32)
+
+    def pattern_3(n):
+        # Vierte Welle: alle von rechts -> links
+        return jnp.full((n,), 1, dtype=jnp.int32)
+
+    patterns = [pattern_0, pattern_1, pattern_2, pattern_3]
+
+    return jax.lax.switch(
+        (wave_id % wave_pattern_count()).astype(jnp.int32),
+        patterns,
+        num_platforms
+    )
+"""
 
 def min_delay(level, base_min=30, spawn_accel=2, min_delay_clamp=20, max_delay_clamp=120):
     return jnp.clip(base_min - level * spawn_accel, min_delay_clamp, max_delay_clamp)
@@ -17,18 +52,6 @@ def min_delay(level, base_min=30, spawn_accel=2, min_delay_clamp=20, max_delay_c
 
 def max_delay(level, base_max=60, spawn_accel=2, min_delay_clamp=20, max_delay_clamp=120):
     return jnp.clip(base_max - level * spawn_accel, min_delay_clamp, max_delay_clamp)
-
-
-def spawn_enemy(rng, level, platformY, screen_width, enemy_width, base_speed=1.0, speed_factor=0.1, lyre_height=8):
-    rng_side, rng_platform = jax.random.split(rng)
-    num_platforms = len(platformY) - 1
-    platform = jax.random.randint(rng_platform, (), 0, num_platforms)
-    y_center = (platformY[platform] + platformY[platform + 1]) // 2
-    y = y_center - (lyre_height // 2)  # Korrigiert: Sprite mittig platzieren
-    x = jax.lax.select(jax.random.bernoulli(rng_side), screen_width + enemy_width, -enemy_width)
-    speed = base_speed + level * speed_factor
-    vx = speed * jax.lax.select(x > 0, -1.0, 1.0)
-    return Enemy(x, y, vx, True)
 
 
 class AsterixConstants(NamedTuple):
@@ -43,7 +66,10 @@ class AsterixConstants(NamedTuple):
     bottom_border: int = 8 * stage_spacing + top_border
     cooldown_frames: int = 8 # Cooldown frames for lane changes
     num_lives: int = 3 # Anzahl der Leben
-
+    entity_base_speed : float = 0.5 # Base Speed der Gegner und Collectibles
+    entity_character_speed_factor : float = 0.5 # Speed-Faktor pro Charakterstufe (Asterix=0, Obelix=1)
+    ASTERIX_ITEM_POINTS = jnp.array([50, 100, 200, 300], dtype=jnp.int32)  # Cauldron, Helmet, Shield, Lamp
+    OBELIX_ITEM_POINTS = jnp.array([400, 500, 500, 500, 500], dtype=jnp.int32)  # Apple, Fish, Wild Boar Leg, Mug, Cauldron
 
     stage_positions = [
         top_border, # TOP
@@ -57,6 +83,12 @@ class AsterixConstants(NamedTuple):
         8 * stage_spacing + top_border,  # BOTTOM
     ]
 
+class CollectibleEnt(NamedTuple):
+    x: jnp.ndarray
+    y: jnp.ndarray
+    vx: jnp.ndarray
+    alive: jnp.ndarray
+
 class Enemy(NamedTuple):
     x: jnp.ndarray
     y: jnp.ndarray
@@ -64,20 +96,26 @@ class Enemy(NamedTuple):
     alive: jnp.ndarray
 
 
+
 class AsterixState(NamedTuple):
     """Represents the current state of the game"""
-    player_x: chex.Array
-    player_y: chex.Array
-    score: chex.Array
-    lives: chex.Array
-    game_over: chex.Array
-    stage_cooldown: chex.Array
-    bonus_life_stage: chex.Array
-    player_direction: chex.Array
-    enemies: Enemy
-    spawn_timer: jnp.ndarray
-    rng: jax.random.PRNGKey
-
+    player_x: chex.Array # X-Position des Spielers
+    player_y: chex.Array # Y-Position des Spielers
+    score: chex.Array # Punktestand
+    lives: chex.Array # Anzahl der Leben
+    game_over: chex.Array # True, wenn keine Leben mehr übrig sind
+    stage_cooldown: chex.Array # Cooldown für Lane-Wechsel
+    bonus_life_stage: chex.Array # Stage für das nächste Bonusleben
+    player_direction: chex.Array # 1 = left, 2 = right
+    enemies: Enemy # Enemy Entities
+    spawn_timer: jnp.ndarray # Timer für das Spawnen von Enemies
+    rng: jax.random.PRNGKey # Random number generator state
+    #wave_id: chex.Array
+    character_id: chex.Array # 0 = Asterix, 1 = Obelix
+    collect_type_index: chex.Array # Index im aktuellen Set
+    collect_type_count: chex.Array # Anzahl eingesammelt vom aktuellen Typ (0..49)
+    collectibles: CollectibleEnt # Collectible Entities
+    collect_spawn_timer: jnp.ndarray # Timer für das Spawnen von Collectibles
 
 
 class EntityPosition(NamedTuple):
@@ -87,8 +125,6 @@ class EntityPosition(NamedTuple):
     height: jnp.ndarray
 
 
-
-
 class AsterixObservation(NamedTuple):
     player: EntityPosition
     score: jnp.ndarray
@@ -96,6 +132,8 @@ class AsterixObservation(NamedTuple):
 
 class AsterixInfo(NamedTuple):
     all_rewards: jnp.ndarray
+
+
 
 
 class JaxAsterix(JaxEnvironment[AsterixState, AsterixObservation, AsterixInfo, AsterixConstants]):
@@ -118,8 +156,8 @@ class JaxAsterix(JaxEnvironment[AsterixState, AsterixObservation, AsterixInfo, A
 
         if key is None:
             key = jax.random.PRNGKey(0)
-        platformY = jnp.array(self.consts.stage_positions[1:-1], dtype=jnp.int32)
         max_enemies = 32
+        max_collectibles = 32
         spawn_rng, timer_rng, state_rng = jax.random.split(key, 3)
         spawn_timer = jax.random.randint(timer_rng, (), min_delay(1), max_delay(1) + 1)
         enemies = Enemy(
@@ -128,6 +166,13 @@ class JaxAsterix(JaxEnvironment[AsterixState, AsterixObservation, AsterixInfo, A
             vx=jnp.zeros((max_enemies,)),
             alive=jnp.zeros((max_enemies,), dtype=bool)
         )
+        collectibles = CollectibleEnt(
+            x=jnp.full((max_collectibles,), -9999.0),
+            y=jnp.full((max_collectibles,), -9999.0),
+            vx=jnp.zeros((max_collectibles,)),
+            alive=jnp.zeros((max_collectibles,), dtype=bool)
+        )
+        collect_spawn_timer = jax.random.randint(timer_rng, (), min_delay(1), max_delay(1) + 1)
 
         state = AsterixState(
             player_x =jnp.array(player_x, dtype=jnp.int32),
@@ -140,7 +185,13 @@ class JaxAsterix(JaxEnvironment[AsterixState, AsterixObservation, AsterixInfo, A
             player_direction=jnp.array(1, dtype=jnp.int32),  # Initial direction (1=links)
             enemies=enemies,
             spawn_timer=spawn_timer,
-            rng=state_rng
+            rng=state_rng,
+            # wave_id = jnp.array(0, dtype=jnp.int32),
+            character_id=jnp.array(0, dtype=jnp.int32),  # Asterix
+            collect_type_index=jnp.array(0, dtype=jnp.int32),  # erster Typ
+            collect_type_count=jnp.array(0, dtype=jnp.int32),
+            collectibles=collectibles,
+            collect_spawn_timer=collect_spawn_timer,
         )
 
         return self._get_observation(state), state
@@ -151,91 +202,109 @@ class JaxAsterix(JaxEnvironment[AsterixState, AsterixObservation, AsterixInfo, A
         """Take a step in the game given an action"""
         player_height = self.consts.player_height
 
-        cooldown_frames = self.consts.cooldown_frames  # Cooldown frames for lane changes
+        cooldown_frames = self.consts.cooldown_frames
         can_switch_stage = state.stage_cooldown <= 0
 
         stage_borders = jnp.array(self.consts.stage_positions, dtype=jnp.int32)
         num_stage = stage_borders.shape[0]
 
+        # Aktuelle Stage bestimmen (zentral zu den Lane-Grenzen)
         stage_diffs = jnp.abs(stage_borders - state.player_y)
         current_stage = jnp.argmin(stage_diffs)
 
-        new_stage = jnp.where(
-            can_switch_stage & (action == Action.UP),
-            jnp.maximum(current_stage - 1, 0),
-            jnp.where(
-                can_switch_stage & (action == Action.DOWN),
-                jnp.minimum(current_stage + 1, num_stage - 2),
-                current_stage
-            )
-        )
+        # Eingehende Actions auf beabsichtigte Indizes remappen (fix für vertauschte Pfeiltasten)
+        # Mapping:
+        action = jnp.asarray(action, dtype=jnp.int32)
+        remap = jnp.array([0, 0, 1, 2, 3, 4, 5, 6, 7, 8], dtype=jnp.int32)
+        mapped = remap[action]
+
+
+        # action -> (dx, dy)
+        # dx: -1=LEFT, +1=RIGHT; dy: -1=UP, +1=DOWN; 0=keine Bewegung in der Achse
+        dx_table = jnp.array([0, 0, 1, -1, 0, 1, -1, 1, -1], dtype=jnp.int32)
+        dy_table = jnp.array([0, -1, 0, 0, 1, -1, -1, 1, 1], dtype=jnp.int32)
+        dx = dx_table[mapped]
+        dy = dy_table[mapped]
+
+        jax.debug.print("step debug: action={} mapped={} dx={} dy={}", action, mapped, dx, dy)
+        action = mapped
+
+
+
+        # Lane-Wechsel nur, wenn Cooldown abgelaufen und dy != 0
+        stage_move = jnp.where(dy < 0, -1, jnp.where(dy > 0, 1, 0))
+        tentative_stage = current_stage + jnp.where(can_switch_stage, stage_move, 0)
+        new_stage = jnp.clip(tentative_stage, 0, num_stage - 2)
+
         new_y = ((stage_borders[new_stage] + stage_borders[new_stage + 1]) // 2) - (player_height // 2)
 
+        changed_stage = (stage_move != 0) & can_switch_stage
         new_cooldown = jnp.where(
-            can_switch_stage & ((action == Action.UP) | (action == Action.DOWN)),
+            changed_stage,
             cooldown_frames,
             jnp.maximum(state.stage_cooldown - 1, 0)
         )
 
+        # Seitliche Begrenzung durch Stage-Grafik
         stage_left_x = (self.consts.screen_width - self.renderer.sprites['STAGE'][0].shape[1]) // 2
         stage_right_x = stage_left_x + self.renderer.sprites['STAGE'][0].shape[1]
 
-        dy = jnp.where(action == Action.UP, -1.0, jnp.where(action == Action.DOWN, 1.0, 0.0))
-        dx = jnp.where(action == Action.LEFT, -1.0, jnp.where(action == Action.RIGHT, 1.0, 0.0))
-
         new_player_x = jnp.clip(
-            state.player_x + dx.astype(jnp.int32),
+            state.player_x + dx,
             stage_left_x,
             stage_right_x - self.consts.player_width,
         ).astype(jnp.int32)
 
+        # Blickrichtung: links=1, rechts=2, sonst unverändert
         new_player_direction = jnp.where(
-            dx < 0, 1,  # links
-            jnp.where(dx > 0, 2, state.player_direction)  # rechts oder idle: behalte alte Richtung
+            dx < 0, 1,
+            jnp.where(dx > 0, 2, state.player_direction)
         )
 
         new_score = state.score
 
-        bonus_thresholds = jnp.array([10_000, 30_000, 50_000, 80_000, 110_000], dtype=jnp.int32)
-        bonus_interval = 40_000
 
-        # Berechne, wie viele Bonusleben der Score verdient
-        def calc_bonus_stage(score):
-            # Zähle, wie viele Schwellen überschritten wurden
-            below = jnp.sum(score >= bonus_thresholds)
-            # Danach alle 40.000
-            above = jnp.maximum(score - 110_000, 0) // bonus_interval
-            return below + above
-
-        new_bonus_stage = calc_bonus_stage(new_score)
-        bonus_lives_gained = new_bonus_stage - state.bonus_life_stage
-        new_lives = state.lives + bonus_lives_gained # TODO füge ein jnp.where hinzu um leben zu verlieren; dafür ist noch eine Kollisionserkennung notwendig
-
-
-        # Check game over
-        game_over = jnp.where(
-            new_lives <= 0,
-            jnp.array(True),
-            state.game_over,
-        )
-
-        platformY = jnp.array(self.consts.stage_positions[1:-1], dtype=jnp.int32)
+        platformY = jnp.array(self.consts.stage_positions, dtype=jnp.int32)
+        item_w = 8
+        item_h = 8
+        collect_spawn_timer = state.collect_spawn_timer - 1
         enemy_width = 8
         screen_width = self.consts.screen_width
-        level = 1  # oder aus Score ableiten
+        level = 1
 
-        # --- Feind-Spawn- und Update-Logik ---
-        rng, rng_spawn, rng_delay = jax.random.split(state.rng, 3)
+        #rng, rng_spawn, rng_delay = jax.random.split(state.rng, 3)
+        # RNG für Gegner & Collectibles
+        rng_enemy_spawn, rng_enemy_delay, rng_col_spawn, rng_col_delay, rng_next = jax.random.split(state.rng, 5)
+
         spawn_timer = state.spawn_timer - 1
 
+        def spawn_enemy(rng, level, platformY, screen_width, enemy_width, lyre_height=8):
+            rng_side, rng_platform = jax.random.split(rng)
+            num_platforms = len(platformY) - 1
+            platform = jax.random.randint(rng_platform, (), 0, num_platforms)
+            y_center = (platformY[platform] + platformY[platform + 1]) // 2
+            y = y_center - (lyre_height // 2)  # Korrigiert: Sprite mittig platzieren
+            x = jax.lax.select(jax.random.bernoulli(rng_side), screen_width + enemy_width, -enemy_width)
+            speed = self.consts.entity_base_speed + state.character_id * self.consts.entity_character_speed_factor
+            vx = speed * jax.lax.select(x > 0, -1.0, 1.0)
+            return Enemy(x, y, vx, True)
+
+        def spawn_collectible(rng, level, platformY, screen_width, item_width):
+            rng_side, rng_platform = jax.random.split(rng)
+            num_platforms = len(platformY) - 1
+            platform = jax.random.randint(rng_platform, (), 0, num_platforms)
+            y_center = (platformY[platform] + platformY[platform + 1]) // 2
+            y = y_center - (item_width // 2)
+            x = jax.lax.select(jax.random.bernoulli(rng_side), screen_width + item_width, -item_width)
+            speed = self.consts.entity_base_speed + state.character_id * self.consts.entity_character_speed_factor
+            vx = speed * jax.lax.select(x > 0, -1.0, 1.0)  # von außen zur Mitte
+            return CollectibleEnt(x, y, vx, True)
 
         def spawn_fn(args):
-            enemies, rng_spawn, level = args
-            new_enemy = spawn_enemy(rng_spawn, level, platformY, screen_width, enemy_width)
-            # Prüfe, ob auf dieser Ebene schon ein Lyre aktiv ist
+            enemies, rng_enemy_spawn, level = args
+            new_enemy = spawn_enemy(rng_enemy_spawn, level, platformY, screen_width, enemy_width)
             already_exists = jnp.any((enemies.y == new_enemy.y) & enemies.alive)
 
-            # Nur spawnen, wenn noch keiner auf dieser Ebene ist
             def do_spawn():
                 idx = jnp.argmax(~enemies.alive)
                 return enemies._replace(
@@ -247,18 +316,45 @@ class JaxAsterix(JaxEnvironment[AsterixState, AsterixObservation, AsterixInfo, A
 
             return jax.lax.cond(already_exists, lambda: enemies, do_spawn)
 
+        def spawn_collectibles_fn(args):
+            collectibles, rng_col, level = args
+            new_item = spawn_collectible(rng_col, level, platformY, self.consts.screen_width, item_w)
+            # optional: nicht doppelt auf gleicher Lane
+            already_exists = jnp.any((collectibles.y == new_item.y) & collectibles.alive)
+
+            def do_spawn():
+                idx = jnp.argmax(~collectibles.alive)
+                return collectibles._replace(
+                    x=collectibles.x.at[idx].set(new_item.x),
+                    y=collectibles.y.at[idx].set(new_item.y),
+                    vx=collectibles.vx.at[idx].set(new_item.vx),
+                    alive=collectibles.alive.at[idx].set(True)
+                )
+
+            return jax.lax.cond(already_exists, lambda: collectibles, do_spawn)
+
         should_spawn = spawn_timer <= 0
+        should_spawn_col = collect_spawn_timer <= 0
+
         enemies = jax.lax.cond(
             should_spawn,
             spawn_fn,
             lambda args: args[0],
-            (state.enemies, rng_spawn, level)
+            (state.enemies, rng_enemy_spawn, level)
+        )
+
+
+        collectibles = jax.lax.cond(
+            should_spawn_col,
+            spawn_collectibles_fn,
+            lambda args: args[0],
+            (state.collectibles, rng_col_spawn, level)
         )
 
         def new_timer_fn(_):
             minD = min_delay(level)
             maxD = max_delay(level)
-            return jax.random.randint(rng_delay, (), minD, maxD + 1)
+            return jax.random.randint(rng_enemy_delay, (), minD, maxD + 1)
 
         spawn_timer = jax.lax.cond(
             should_spawn,
@@ -267,12 +363,30 @@ class JaxAsterix(JaxEnvironment[AsterixState, AsterixObservation, AsterixInfo, A
             operand=None
         )
 
-        # Feinde bewegen und entfernen
+        def new_collect_timer_fn(_):
+            minD = min_delay(level)
+            maxD = max_delay(level)
+            return jax.random.randint(rng_col_delay, (), minD, maxD + 1)
+
+        collect_spawn_timer = jax.lax.cond(
+            should_spawn_col,
+            new_collect_timer_fn,
+            lambda _: collect_spawn_timer,
+            operand=None
+        )
+
+        player_w = self.consts.player_width
+        player_h = self.consts.player_height
+        enemy_w = 8
+        enemy_h = 8
         new_enemy_x = enemies.x + enemies.vx
         alive = (new_enemy_x >= -enemy_width) & (new_enemy_x <= screen_width + enemy_width) & enemies.alive
         enemies = enemies._replace(x=new_enemy_x, alive=alive)
 
-        # --- Kollisionserkennung Spieler <-> Gegner ---
+        new_item_x = collectibles.x + collectibles.vx
+        alive_items = (new_item_x >= -item_w) & (new_item_x <= self.consts.screen_width + item_w) & collectibles.alive
+        collectibles = collectibles._replace(x=new_item_x, alive=alive_items)
+        """"
         def check_collision(player_x, player_y, player_w, player_h, enemy_x, enemy_y, enemy_w, enemy_h):
             return (
                     (player_x < enemy_x + enemy_w) &
@@ -281,11 +395,6 @@ class JaxAsterix(JaxEnvironment[AsterixState, AsterixObservation, AsterixInfo, A
                     (player_y + player_h > enemy_y)
             )
 
-        player_w = self.consts.player_width
-        player_h = self.consts.player_height
-        enemy_w = 8  # ggf. anpassen
-        enemy_h = 8  # ggf. anpassen
-
         collisions = check_collision(
             new_player_x, new_y, player_w, player_h,
             enemies.x, enemies.y, enemy_w, enemy_h
@@ -293,11 +402,75 @@ class JaxAsterix(JaxEnvironment[AsterixState, AsterixObservation, AsterixInfo, A
 
         any_collision = jnp.any(collisions)
 
-        # Leben abziehen und Gegner deaktivieren, falls Kollision
-        new_lives = jnp.where(any_collision, new_lives - 1, new_lives)
-        game_over = jnp.where(new_lives <= 0, True, game_over)
         enemies = enemies._replace(
             alive=jnp.where(collisions, False, enemies.alive)
+        )
+        """
+
+        # --- Kollisionen ---
+        def check_collision(px, py, pw, ph, ex, ey, ew, eh):
+            return ((px < ex + ew) & (px + pw > ex) & (py < ey + eh) & (py + ph > ey))
+
+        # Gegner-Kollision (unverändert)
+        collisions_enemy = check_collision(new_player_x, new_y, self.consts.player_width, self.consts.player_height,
+                                           enemies.x, enemies.y, enemy_w, enemy_h) & enemies.alive
+        any_collision_enemy = jnp.any(collisions_enemy)
+        enemies = enemies._replace(alive=jnp.where(collisions_enemy, False, enemies.alive))
+
+        # Collectible-Kollision -> Punkte
+        collisions_item = check_collision(new_player_x, new_y, self.consts.player_width, self.consts.player_height,
+                                          collectibles.x, collectibles.y, item_w, item_h) & collectibles.alive
+        hit_items_count = jnp.sum(collisions_item).astype(jnp.int32)
+        collectibles = collectibles._replace(alive=jnp.where(collisions_item, False, collectibles.alive))
+
+        # Punktewert des aktuellen Item-Typs (abhängig von Charakter)
+        def points_for(char_id, idx):
+            return jax.lax.switch(char_id,
+                                  [lambda i: self.consts.ASTERIX_ITEM_POINTS[i],
+                                   lambda i: self.consts.OBELIX_ITEM_POINTS[i]],
+                                  idx)
+
+        cur_item_points = points_for(state.character_id, state.collect_type_index)
+        added_points = (hit_items_count * cur_item_points).astype(jnp.int32)
+        new_score = state.score + added_points
+
+        # Item-Progression im aktuellen Set: nach je 50 Treffern zum nächsten Typ
+        pre_count = state.collect_type_count + hit_items_count
+
+        def num_types_for(char_id):
+            return jax.lax.switch(char_id,
+                                  [lambda _: jnp.int32(4),
+                                   lambda _: jnp.int32(5)],
+                                  operand=None)
+
+        types_count = num_types_for(state.character_id)
+        advance = pre_count // 50
+        new_collect_type_index_pre = (state.collect_type_index + advance) % types_count
+        new_collect_type_count_pre = pre_count % 50
+
+        # Charakterwechsel bei Score >= 32_500 -> auf Obelix umschalten und Progression zurücksetzen
+        switch_to_obelix = (state.character_id == 0) & (new_score >= jnp.int32(32500)) & (
+                    state.score < jnp.int32(32500))
+        new_character_id = jnp.where(switch_to_obelix, jnp.int32(1), state.character_id)
+        new_collect_type_index = jnp.where(switch_to_obelix, jnp.int32(0), new_collect_type_index_pre)
+        new_collect_type_count = jnp.where(switch_to_obelix, jnp.int32(0), new_collect_type_count_pre)
+
+
+        bonus_thresholds = jnp.array([10_000, 30_000, 50_000, 80_000, 110_000], dtype=jnp.int32)
+        bonus_interval = 40_000
+
+        def calc_bonus_stage(score):
+            below = jnp.sum(score >= bonus_thresholds)
+            above = jnp.maximum(score - 110_000, 0) // bonus_interval
+            return below + above
+
+        new_bonus_stage = calc_bonus_stage(new_score)
+        new_lives = jnp.where(any_collision_enemy, state.lives - 1, state.lives)
+
+        game_over = jnp.where(
+            new_lives <= 0,
+            jnp.array(True),
+            state.game_over,
         )
 
         new_state = AsterixState(
@@ -311,7 +484,12 @@ class JaxAsterix(JaxEnvironment[AsterixState, AsterixObservation, AsterixInfo, A
             player_direction=new_player_direction,
             enemies=enemies,
             spawn_timer=spawn_timer,
-            rng=rng,  # Update the RNG for the next step
+            rng=rng_next,
+            character_id=new_character_id,
+            collect_type_index=new_collect_type_index,
+            collect_type_count=new_collect_type_count,
+            collectibles=collectibles,
+            collect_spawn_timer=collect_spawn_timer,
         )
         done = self._get_done(new_state)
         env_reward = self._get_reward(state, new_state)
@@ -363,8 +541,12 @@ class JaxAsterix(JaxEnvironment[AsterixState, AsterixObservation, AsterixInfo, A
         2: RIGHTS
         3: LEFT
         4: DOWN
+        5: UPRIGHT
+        6: UPLEFT
+        7: DOWNRIGHT
+        8: DOWNLEFT
         """
-        return spaces.Discrete(5)
+        return spaces.Discrete(9)
 
     def observation_space(self) -> spaces.Dict: # TODO kann entfernt werden? wird nicht verwendet / benötigt
         """Returns the observation space for Asterix.
@@ -438,13 +620,25 @@ class AsterixRenderer(JAXGameRenderer):
             return frame.astype(jnp.uint8)
 
         sprite_names = [
-            'ASTERIX_LEFT', 'ASTERIX_RIGHT', 'ASTERIX_LEFT_HIT', 'ASTERIX_RIGHT_HIT','OBELIX', 'STAGE', 'TOP', 'BOTTOM', 'LYRE_LEFT', 'LYRE_RIGHT',
+            'ASTERIX_LEFT', 'ASTERIX_RIGHT', 'ASTERIX_LEFT_HIT', 'ASTERIX_RIGHT_HIT','OBELIX', 'STAGE', 'TOP', 'BOTTOM', 'LYRE_LEFT', 'LYRE_RIGHT', 'OBELIX',
         ]
 
-        for name in sprite_names:
+        asterix_item_names = ['CAULDRON', 'HELMET', 'SHIELD', 'LAMP']
+        obelix_item_names = ['APPLE', 'FISH', 'WILD_BOAR_LEG', 'MUG', 'CAULDRON']
+
+        blank8 = jnp.zeros((8, 8, 3), dtype=jnp.uint8)
+
+        for name in sprite_names + asterix_item_names + obelix_item_names:
             loaded_sprite = _load_sprite_frame(name)
             if loaded_sprite is not None:
                 sprites[name] = loaded_sprite
+
+
+        # Platzhalter für fehlende Item-Sprites eintragen
+        for name in asterix_item_names + obelix_item_names:
+            if name not in sprites:
+                sprites[name] = blank8
+
 
         # pad the player sprites since they are used interchangably
         player_sprites, player_offsets = jr.pad_to_match([
@@ -465,6 +659,7 @@ class AsterixRenderer(JAXGameRenderer):
                 sprites[key] = [jnp.expand_dims(sprite, axis=0) for sprite in sprites[key]]
             else:
                 sprites[key] = jnp.expand_dims(sprites[key], axis=0)
+
 
         return sprites, offsets
 
@@ -567,6 +762,58 @@ class AsterixRenderer(JAXGameRenderer):
             return raster_out
 
         raster = render_lyres(raster)
+
+        # ----------- COLLECTIBLES -------------
+        asterix_item_names = ['CAULDRON', 'HELMET', 'SHIELD', 'LAMP']
+        obelix_item_names = ['APPLE', 'FISH', 'WILD_BOAR_LEG', 'MUG', 'CAULDRON']
+
+        ax_sprites = [jr.get_sprite_frame(self.sprites[name], 0) for name in asterix_item_names]
+        ob_sprites = [jr.get_sprite_frame(self.sprites[name], 0) for name in obelix_item_names]
+
+        def render_collectibles(raster_to_update):
+            def render_one(i, r_in):
+                is_alive = state.collectibles.alive[i]
+                x = state.collectibles.x[i].astype(jnp.int32)
+                y = state.collectibles.y[i].astype(jnp.int32)
+
+                def render_for_char(_):
+                    # Asterix: 4 Typen
+                    def render_ax(_2):
+                        return jax.lax.switch(
+                            state.collect_type_index,
+                            [
+                                lambda __: jr.render_at(r_in, x, y, ax_sprites[0]),
+                                lambda __: jr.render_at(r_in, x, y, ax_sprites[1]),
+                                lambda __: jr.render_at(r_in, x, y, ax_sprites[2]),
+                                lambda __: jr.render_at(r_in, x, y, ax_sprites[3]),
+                            ],
+                            operand=None
+                        )
+
+                    # Obelix: 5 Typen
+                    def render_ob(_2):
+                        return jax.lax.switch(
+                            state.collect_type_index,
+                            [
+                                lambda __: jr.render_at(r_in, x, y, ob_sprites[0]),
+                                lambda __: jr.render_at(r_in, x, y, ob_sprites[1]),
+                                lambda __: jr.render_at(r_in, x, y, ob_sprites[2]),
+                                lambda __: jr.render_at(r_in, x, y, ob_sprites[3]),
+                                lambda __: jr.render_at(r_in, x, y, ob_sprites[4]),
+                            ],
+                            operand=None
+                        )
+
+                    return jax.lax.switch(state.character_id, [render_ax, render_ob], operand=None)
+
+                return jax.lax.cond(is_alive, render_for_char, lambda _: r_in, operand=None)
+
+            r_out = raster_to_update
+            for i in range(state.collectibles.x.shape[0]):
+                r_out = render_one(i, r_out)
+            return r_out
+
+        raster = render_collectibles(raster)
 
 
 
