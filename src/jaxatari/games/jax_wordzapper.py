@@ -888,6 +888,12 @@ class JaxWordZapper(JaxEnvironment[WordZapperState, WordZapperObservation, WordZ
         self.frame_stack_size = 4
         self.obs_size = 3*4 + 1 + 1
         self.consts = consts or WordZapperConstants()
+        self.renderer = WordZapperRenderer(self.consts)
+
+    @partial(jax.jit, static_argnums=(0,))
+    def render(self, state: WordZapperState) -> jnp.ndarray:
+        """Render the game state to a raster image."""
+        return self.renderer.render(state)
 
     @partial(jax.jit, static_argnums=(0,))
     def reset(self, key: jax.random.PRNGKey = jax.random.PRNGKey(42)) -> Tuple[WordZapperObservation, WordZapperState]:
