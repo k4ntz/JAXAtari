@@ -14,7 +14,6 @@ from functools import partial
 from typing import NamedTuple, Tuple, Any, Callable, Dict
 import jax.numpy as jnp
 import chex
-import pygame
 from jaxatari.renderers import JAXGameRenderer
 from gymnax.environments import spaces
 import jaxatari.spaces as spaces
@@ -22,6 +21,7 @@ from jaxatari.rendering import jax_rendering_utils as jr
 from jaxatari.environment import JaxEnvironment, JAXAtariAction
 import jax
 import numpy as np
+from jax import Array as jArray
 
 
 class AlienObservation(NamedTuple):
@@ -336,56 +336,6 @@ def loadFramAddAlpha(fileName, transpose=True, add_alpha: bool = False, add_blac
     frame = frame.astype(jnp.uint8)
     return jnp.transpose(frame, (1, 0, 2)) if transpose else frame
 
-# Action space
-def get_human_action() -> chex.Array:
-    """
-    Records if UP or DOWN is being pressed and returns the corresponding action.
-
-    Returns:
-        action: int, action taken by the player (LEFT, RIGHT, FIRE, LEFTFIRE, RIGHTFIRE, NOOP).
-    """
-    keys = pygame.key.get_pressed()
-    if keys[pygame.K_s] and keys[pygame.K_a] and keys[pygame.K_SPACE]:
-        return jnp.array(JAXAtariAction.DOWNLEFTFIRE)
-    elif keys[pygame.K_s] and keys[pygame.K_d] and keys[pygame.K_SPACE]:
-        return jnp.array(JAXAtariAction.DOWNRIGHTFIRE)
-    elif keys[pygame.K_w] and keys[pygame.K_a] and keys[pygame.K_SPACE]:
-        return jnp.array(JAXAtariAction.UPLEFTFIRE)
-    elif keys[pygame.K_w] and keys[pygame.K_d] and keys[pygame.K_SPACE]:
-        return jnp.array(JAXAtariAction.UPRIGHTFIRE)
-    
-    elif keys[pygame.K_s] and keys[pygame.K_SPACE]:
-        return jnp.array(JAXAtariAction.DOWNFIRE)
-    elif keys[pygame.K_a] and keys[pygame.K_SPACE]:
-        return jnp.array(JAXAtariAction.LEFTFIRE)
-    elif keys[pygame.K_d] and keys[pygame.K_SPACE]:
-        return jnp.array(JAXAtariAction.RIGHTFIRE)
-    elif keys[pygame.K_w] and keys[pygame.K_SPACE]:
-        return jnp.array(JAXAtariAction.UPFIRE)
-    
-    elif keys[pygame.K_s] and keys[pygame.K_a]:
-        return jnp.array(JAXAtariAction.DOWNLEFT)
-    elif keys[pygame.K_s] and keys[pygame.K_d]:
-        return jnp.array(JAXAtariAction.DOWNRIGHT)
-    elif keys[pygame.K_w] and keys[pygame.K_a]:
-        return jnp.array(JAXAtariAction.UPLEFT)
-    elif keys[pygame.K_w] and keys[pygame.K_d]:
-        return jnp.array(JAXAtariAction.UPRIGHT)
-    
-    elif keys[pygame.K_s]:
-        return jnp.array(JAXAtariAction.DOWN)
-    elif keys[pygame.K_a]:
-        return jnp.array(JAXAtariAction.LEFT)
-    elif keys[pygame.K_d]:
-        return jnp.array(JAXAtariAction.RIGHT)
-    elif keys[pygame.K_w]:
-        return jnp.array(JAXAtariAction.UP)
-    
-    elif keys[pygame.K_SPACE]:
-        return jnp.array(JAXAtariAction.FIRE)
-    
-    else:
-        return jnp.array(JAXAtariAction.NOOP)
 
 @jax.jit
 def check_for_wall_collision(moving_object: jnp.ndarray, background: jnp.ndarray, old_position: jnp.ndarray, new_position: jnp.ndarray) -> jnp.ndarray:
@@ -529,11 +479,11 @@ class JaxAlien(JaxEnvironment[AlienState, AlienObservation, AlienInfo, AlienCons
         return self.renderer.render(state)
     def action_space(self) -> spaces.Discrete:
         return spaces.Discrete(len(self.action_set))
-    def reset(self) -> Tuple[AlienObservation, AlienState]:
+    def reset(self, rng_key: jArray) -> Tuple[AlienObservation, AlienState]:
         """
         Resets the game state to the initial state.
         """
-        key: jax.random.PRNGKey = jax.random.PRNGKey(self.consts.SEED)
+        key: jax.random.PRNGKey = rng_key
         keys = jax.random.split(key, self.consts.ENEMY_AMOUNT_BONUS_STAGE + 1)
         main_key = keys[0]
         subkeys = keys[1:]
@@ -648,7 +598,7 @@ class JaxAlien(JaxEnvironment[AlienState, AlienObservation, AlienInfo, AlienCons
             Returns:
                 AlienState: the next game frame
             """
-            _, new_state = self.reset()
+            _, new_state = self.reset(state.enemies.rng_key)
             
             new_player_state = new_state.player._replace(
                 x=jnp.array(self.consts.PLAYER_X).astype(jnp.int32),
@@ -706,7 +656,7 @@ class JaxAlien(JaxEnvironment[AlienState, AlienObservation, AlienInfo, AlienCons
             Returns:
                 AlienState: the next game frame
             """
-            _, reset_state = self.reset()
+            _, reset_state = self.reset(state.enemies.rng_key)
             
             new_level_state = reset_state.level._replace(
                 lifes=state.level.lifes,
@@ -958,7 +908,7 @@ class JaxAlien(JaxEnvironment[AlienState, AlienObservation, AlienInfo, AlienCons
                     level=freeze_level_state
                     )
                 
-                _, reset_state = self.reset()
+                _, reset_state = self.reset(state.enemies.rng_key)
                 
                 soft_reset_multiple_enemies = reset_state.enemies.multiple_enemies._replace(
                     kill_score_flag=state.enemies.multiple_enemies.kill_score_flag
@@ -1023,7 +973,7 @@ class JaxAlien(JaxEnvironment[AlienState, AlienObservation, AlienInfo, AlienCons
                     level=freeze_level_state
                     )
                 
-                _, reset_state = self.reset()
+                _, reset_state = self.reset(state.enemies.rng_key)
 
                 hard_reset_enemies = reset_state.enemies._replace(
                     rng_key=state.enemies.rng_key
@@ -1349,7 +1299,7 @@ class JaxAlien(JaxEnvironment[AlienState, AlienObservation, AlienInfo, AlienCons
         Returns:
             bool: done
         """
-        return state.level.lifes <= 0
+        return state.level.lifes <= -1
 
     @partial(jax.jit, static_argnums=(0,))
     def egg_step(self, player_x: jnp.ndarray, player_y: jnp.ndarray, egg_state:jnp.ndarray,
@@ -2930,118 +2880,3 @@ def traverse_multiple_enemy(enemy_state: MultipleEnemiesState, fun: Callable[[Si
     else:
         ret = jax.vmap(wrapper_function, in_axes=in_axes_tuple, out_axes=(0))(inputs)
         return ret
-    
-def update_pygame(pygame_screen, raster, SCALING_FACTOR=3, WIDTH=400, HEIGHT=300):
-    """Updates the Pygame display with the rendered raster.
-
-    Args:
-        pygame_screen: The Pygame screen surface.
-        raster: JAX array of shape (Height, Width, 3/4) containing the image data.
-        SCALING_FACTOR: Factor to scale the raster for display.
-        WIDTH: Expected width of the input raster (used for scaling calculation).
-        HEIGHT: Expected height of the input raster (used for scaling calculation).
-    """
-    pygame_screen.fill((0, 0, 0))
-
-    # Convert JAX array (H, W, C) to NumPy (H, W, C)
-    raster_np = np.array(raster)
-    raster_np = raster_np.astype(np.uint8)
-
-    # Pygame surface needs (W, H). make_surface expects (W, H, C) correctly.
-    # Transpose from (H, W, C) to (W, H, C) for pygame
-    frame_surface = pygame.surfarray.make_surface(raster_np.transpose(1, 0, 2))
-
-    # Pygame scale expects target (width, height)
-    # Note: raster_np is (H, W, C), so shape[1] is width and shape[0] is height
-    target_width_px = int(raster_np.shape[1] * SCALING_FACTOR)
-    target_height_px = int(raster_np.shape[0] * SCALING_FACTOR)
-
-
-    frame_surface_scaled = pygame.transform.scale(
-        frame_surface, (target_width_px, target_height_px)
-    )
-
-    pygame_screen.blit(frame_surface_scaled, (0, 0))
-    pygame.display.flip()
-if __name__ == "__main__":
-    # Initialize Pygamepython
-
-    game = JaxAlien()
-    renderer = AlienRenderer()
-
-    _, state = game.reset()
-
-    pygame.init()
-    pygame.display.set_caption(f"JAXAtari Game MontezumaRevenge")
-    env_render_shape = game.render(state).shape[:2]
-    consts = AlienConstants()
-    window = pygame.display.set_mode((consts.WIDTH * consts.RENDER_SCALE_FACTOR, consts.HEIGHT * consts.RENDER_SCALE_FACTOR))
-    clock = pygame.time.Clock()
-
-
-
-    action_space = game.action_space()
-
-    save_keys = {}
-    running = True
-    pause = False
-    frame_by_frame = False
-    frame_rate = 30
-    next_frame_asked = False
-    total_return = 0
-    rops, _ = game.reset()
-    obs = game._get_observation(state)
-    flops = game.obs_to_flat_array(obs)
-
-    # display the first frame (reset frame) -> purely for aesthetics
-    image = game.render(state)
-    update_pygame(window, image, consts.RENDER_SCALE_FACTOR, 160, 210)
-    clock.tick(frame_rate)
-
-
-    # Game loop
-    while running:
-        # check for external actions
-        for event in pygame.event.get():
-            if event.type == pygame.QUIT:
-                running = False
-                continue
-            elif event.type == pygame.KEYDOWN:
-                if event.key == pygame.K_p:  # pause
-                    pause = not pause
-                elif event.key == pygame.K_r:  # reset
-                    obs, state = game.reset()
-                elif event.key == pygame.K_f:
-                    frame_by_frame = not frame_by_frame
-                elif event.key == pygame.K_n:
-                    next_frame_asked = True
-        if pause or (frame_by_frame and not next_frame_asked):
-            image = game.render(state)
-            update_pygame(window, image, consts.RENDER_SCALE_FACTOR, 160, 210)
-            clock.tick(frame_rate)
-            continue
-
-        action = get_human_action()
-
-        if not frame_by_frame or next_frame_asked:
-            action = get_human_action()
-            obs, state, reward, done, info = game.step(state, action)
-
-            total_return += reward
-            if next_frame_asked:
-                next_frame_asked = False
-
-        if done:
-            print(f"Done. Total return {total_return}")
-            total_return = 0
-            obs, state = game.reset()
-
-        # Render the environment
-
-        image = game.render(state)
-
-        update_pygame(window, image, consts.RENDER_SCALE_FACTOR, 160, 210)
-
-        clock.tick(frame_rate)
-
-    pygame.quit()
