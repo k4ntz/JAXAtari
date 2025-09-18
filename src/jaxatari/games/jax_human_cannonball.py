@@ -4,9 +4,8 @@ from typing import NamedTuple, Tuple
 import jax
 import jax.numpy as jnp
 import chex
-from gymnax.environments import spaces
-from numpy.ma.core import logical_not
 
+import jaxatari.spaces as spaces
 from jaxatari.renderers import JAXGameRenderer
 from jaxatari.rendering import jax_rendering_utils as jr
 from jaxatari.environment import JaxEnvironment, JAXAtariAction as Action
@@ -44,9 +43,9 @@ class HumanCannonballConstants(NamedTuple):
     ANGLE_BUFFER: int = 16   # Only update the angle if the action is held for this many steps
 
     # Starting positions of the human
-    HUMAN_START_LOW: Tuple[float, float] = (84.0, 128.0)
-    HUMAN_START_MED: Tuple[float, float] = (84.0, 121.0)
-    HUMAN_START_HIGH: Tuple[float, float] = (80.0, 118.0)
+    HUMAN_START_LOW: chex.Array = jnp.array([84.0, 128.0], dtype=jnp.float32)
+    HUMAN_START_MED: chex.Array = jnp.array([84.0, 121.0], dtype=jnp.float32)
+    HUMAN_START_HIGH: chex.Array = jnp.array([80.0, 118.0], dtype=jnp.float32)
 
     # Top left corner of the low-aiming cannon
     CANNON_X: int = 68
@@ -230,7 +229,7 @@ class JaxHumanCannonball(JaxEnvironment[HumanCannonballState, HumanCannonballObs
             Action.UP,
             Action.DOWN,
         ]
-        self.obs_size = 2*4+1+1+1+1 #TODO: Implement this correctly?
+        self.obs_size = 4+4+1+1+1+1 #TODO: Implement this correctly?
 
     # Determines the starting position of the human based on the angle
     @partial(jax.jit, static_argnums=(0,))
@@ -247,7 +246,7 @@ class JaxHumanCannonball(JaxEnvironment[HumanCannonballState, HumanCannonballObs
         start_x, start_y = jax.lax.cond(
             state_angle < self.consts.ANGLE_LOW_THRESHOLD,  # If angle under LOW_THRESHOLD
             lambda _: self.consts.HUMAN_START_LOW,  # Get low start pos
-            lambda _: (start_x, start_y),  # Else, leave unchanged
+            lambda _: jnp.array([start_x, start_y], dtype=jnp.float32),  # Else, leave unchanged
             operand=None
         )
 
@@ -270,28 +269,28 @@ class JaxHumanCannonball(JaxEnvironment[HumanCannonballState, HumanCannonballObs
         x_vel = jax.lax.cond(
             state_human_launched,  # If human is already launched
             lambda _: state_human_x_vel,  # Keep the old velocity
-            lambda _: jnp.cos(rad_angle) * mph_speed * HORIZONTAL_SPEED_SCALE,  # Else, calculate the initial velocity
+            lambda _: (jnp.cos(rad_angle) * mph_speed * HORIZONTAL_SPEED_SCALE).astype(jnp.float32),  # Else, calculate the initial velocity
             operand=None
         )
 
         y_vel = jax.lax.cond(
             state_human_launched,  # If human is already launched
-            lambda _: state_human_y_vel + self.consts.GRAVITY * t,  # Update the old velocity
-            lambda _: -jnp.sin(rad_angle) * mph_speed,  # Else, calculate the initial velocity
+            lambda _: (state_human_y_vel + self.consts.GRAVITY * t).astype(jnp.float32),  # Update the old velocity
+            lambda _: (-jnp.sin(rad_angle) * mph_speed).astype(jnp.float32),  # Else, calculate the initial velocity
             operand=None
         )
 
         # 2. Compute candidate new positions
         human_x = jax.lax.cond(
             state_human_launched,  # If human is already launched
-            lambda x: x + x_vel * t,  # Update the old position
+            lambda x: (x + x_vel * t).astype(jnp.float32),  # Update the old position
             lambda x: self.get_human_start(state_angle)[0],  # Else, set the initial position, depending on the angle
             operand=state_human_x
         )
 
         human_y = jax.lax.cond(
             state_human_launched,  # If human is already launched
-            lambda y: y + y_vel * t + 0.5 * self.consts.GRAVITY * t ** 2,  # Update the old position, account for gravity
+            lambda y: (y + y_vel * t + 0.5 * self.consts.GRAVITY * t ** 2).astype(jnp.float32),  # Update the old position, account for gravity
             lambda y: self.get_human_start(state_angle)[1],  # Else, set the initial position, depending on the angle
             operand=state_human_y
         )
@@ -308,7 +307,7 @@ class JaxHumanCannonball(JaxEnvironment[HumanCannonballState, HumanCannonballObs
         # 4. Reflect and dampen the velocity if there is a collision with the left wall
         x_vel = jax.lax.cond(
             coll_left,
-            lambda x: -x * self.consts.WALL_RESTITUTION,
+            lambda x: (-x * self.consts.WALL_RESTITUTION).astype(jnp.float32),
             lambda x: x,
             operand=x_vel
         )
@@ -316,14 +315,14 @@ class JaxHumanCannonball(JaxEnvironment[HumanCannonballState, HumanCannonballObs
         # 5. Clamp x so human sits just left/right of the wall in case of collision
         human_x = jax.lax.cond(
             coll_left,
-            lambda _: jnp.array(state_water_tower_x - self.consts.HUMAN_SIZE[0], dtype=state_human_x.dtype),
+            lambda _: (state_water_tower_x - self.consts.HUMAN_SIZE[0]).astype(jnp.float32),
             lambda x: x,
             operand=human_x
         )
 
         human_x = jax.lax.cond(
             coll_right,
-            lambda _: jnp.array(state_water_tower_x + self.consts.WATER_TOWER_WIDTH, dtype=state_human_x.dtype),
+            lambda _: (state_water_tower_x + self.consts.WATER_TOWER_WIDTH).astype(jnp.float32),
             lambda x: x,
             operand=human_x
         )
@@ -335,7 +334,7 @@ class JaxHumanCannonball(JaxEnvironment[HumanCannonballState, HumanCannonballObs
         coll = jax.lax.cond(
             jnp.logical_or(  # If the collision happened this step or some step before (human bounced off the wall)
                 coll_left,
-                x_vel <= 0.0
+                x_vel <= jnp.array(0).astype(jnp.float32)
             ),
             lambda _: True,  # Set collision status to True
             lambda _: False,  # Else, set it to False
@@ -591,7 +590,8 @@ class JaxHumanCannonball(JaxEnvironment[HumanCannonballState, HumanCannonballObs
                 state.human_y,
                 state.animation_running
             ),
-            lambda _: (state.misses + 1, self.consts.ANIMATION_MISS_LENGTH, True, 0.0 + self.consts.GROUND_LEVEL - self.consts.HUMAN_SIZE[1] + 1), # Increment misses and start miss animation
+            lambda _: (state.misses + 1, self.consts.ANIMATION_MISS_LENGTH, True,
+                       jnp.array(self.consts.GROUND_LEVEL - self.consts.HUMAN_SIZE[1] + 1).astype(jnp.float32)), # Increment misses and start miss animation
             lambda _: (state.misses, new_animation_counter, new_animation_running, new_human_y), # Else, leave unchanged
             operand=None
         )
@@ -677,7 +677,7 @@ class JaxHumanCannonball(JaxEnvironment[HumanCannonballState, HumanCannonballObs
         )
 
         done = self._get_done(new_state)
-        env_reward = self._get_env_reward(state, new_state)
+        env_reward = self._get_reward(state, new_state)
         all_rewards = self._get_all_reward(state, new_state)
         info = self._get_info(new_state, all_rewards)
         observation = self._get_observation(new_state)
@@ -689,22 +689,22 @@ class JaxHumanCannonball(JaxEnvironment[HumanCannonballState, HumanCannonballObs
     def reset_round(
             self, key, current_human_x, current_angle
     ):
-        human_x = 0.0
-        human_y = 0.0
-        human_x_vel = 0.0
-        human_y_vel = 0.0
-        human_launched = False
-        water_tower_x = self.consts.WATER_TOWER_X
-        tower_wall_hit = False
+        human_x = jnp.array(0).astype(jnp.float32)
+        human_y = jnp.array(0).astype(jnp.float32)
+        human_x_vel = jnp.array(0).astype(jnp.float32)
+        human_y_vel = jnp.array(0).astype(jnp.float32)
+        human_launched = jnp.array(False)
+        water_tower_x = jnp.array(self.consts.WATER_TOWER_X).astype(jnp.int32)
+        tower_wall_hit = jnp.array(False)
         # Change the rng_key and generate a new mph_value
         rng_key, subkey = jax.random.split(key)
         # Add pseudo-randomness to mph generation by integrating human x pos and angle
         subkey = jax.random.fold_in(subkey, current_human_x)
         subkey = jax.random.fold_in(subkey, current_angle)
-        mph_values = jax.random.randint(subkey, (), self.consts.MPH_MIN, self.consts.MPH_MAX + 1)
+        mph_values = jax.random.randint(key=subkey, shape=(), minval=self.consts.MPH_MIN, maxval=self.consts.MPH_MAX + 1, dtype=jnp.int32)
         # Reset the animation status
-        animation_running = False
-        animation_counter = 0
+        animation_running = jnp.array(False)
+        animation_counter = jnp.array(0).astype(jnp.int32)
 
         return human_x, human_y, human_x_vel, human_y_vel, human_launched, water_tower_x, tower_wall_hit, mph_values, rng_key, animation_running, animation_counter
 
@@ -742,7 +742,7 @@ class JaxHumanCannonball(JaxEnvironment[HumanCannonballState, HumanCannonballObs
         return self.renderer.render(state)
 
     @partial(jax.jit, static_argnums=(0,))
-    def _get_observation(self, state: HumanCannonballState):
+    def _get_observation(self, state: HumanCannonballState) -> HumanCannonballObservation:
         # Create human projectile
         human_cannonball = EntityPosition(
             x=state.human_x,
@@ -786,25 +786,42 @@ class JaxHumanCannonball(JaxEnvironment[HumanCannonballState, HumanCannonballObs
         ])
 
     def action_space(self) -> spaces.Discrete:
-        return spaces.Discrete(len(self.action_set))
+        return spaces.Discrete(6)
 
-    def get_action_space(self) -> jnp.ndarray:
-        return jnp.array(self.action_set)
+    def observation_space(self) -> spaces:
+        return spaces.Dict({
+            "human": spaces.Dict({
+                "x": spaces.Box(low=0, high=160, shape=()),
+                "y": spaces.Box(low=0, high=210, shape=()),
+                "width": spaces.Box(low=0, high=160, shape=()),
+                "height": spaces.Box(low=0, high=210, shape=()),
+            }),
+            "water_tower": spaces.Dict({
+                "x": spaces.Box(low=0, high=160, shape=()),
+                "y": spaces.Box(low=0, high=210, shape=()),
+                "width": spaces.Box(low=0, high=160, shape=()),
+                "height": spaces.Box(low=0, high=210, shape=()),
+            }),
+            "angle": spaces.Box(low=20, high=80, shape=()),
+            "mph": spaces.Box(low=28, high=45, shape=()),
+            "score": spaces.Box(low=0, high=7, shape=()),
+            "misses": spaces.Box(low=0, high=7, shape=()),
+        })
 
-    def observation_space(self) -> spaces.Box:
+    def image_space(self) -> spaces.Box:
         return spaces.Box(
             low=0,
             high=255,
-            shape=None,
-            dtype=jnp.uint8,
+            shape=(210, 160, 3),
+            dtype=jnp.uint8
         )
 
     @partial(jax.jit, static_argnums=(0,))
-    def _get_info(self, state: HumanCannonballState, all_rewards: chex.Array) -> HumanCannonballInfo:
+    def _get_info(self, state: HumanCannonballState, all_rewards: chex.Array = None) -> HumanCannonballInfo:
         return HumanCannonballInfo(time=state.step_counter, all_rewards=all_rewards)
 
     @partial(jax.jit, static_argnums=(0,))
-    def _get_env_reward(self, previous_state: HumanCannonballState, state: HumanCannonballState):
+    def _get_reward(self, previous_state: HumanCannonballState, state: HumanCannonballState):
         return (state.score - state.misses) - (
                 previous_state.score - previous_state.misses
         )
