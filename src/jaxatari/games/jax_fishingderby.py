@@ -55,8 +55,8 @@ class GameConfig:
     HOOK_WIDTH: int = 3
     HOOK_HEIGHT: int = 5
     HOOK_SPEED_V: float = 1.0
-    REEL_SLOW_SPEED: float = 0.5
-    REEL_FAST_SPEED: float = 1.6
+    REEL_SLOW_SPEED: float = 1
+    REEL_FAST_SPEED: float = 2
     LINE_Y_START: int = 48
     LINE_Y_END: int = 160
     AUTO_LOWER_SPEED: float = 2.0
@@ -76,13 +76,14 @@ class GameConfig:
     FISH_ROW_YS: Tuple[int] = (95, 111, 127, 143, 159, 175)
     FISH_ROW_SCORES: Tuple[int] = (2, 2, 4, 4, 6, 6)
 
+
     # Shark
     SHARK_WIDTH: int = 16
     SHARK_HEIGHT: int = 7
     SHARK_SPEED: float = 0.7
     SHARK_Y: int = 78
     SHARK_BURST_SPEED: float = 1.8
-    SHARK_BURST_DURATION: int = 240 # Frames
+    SHARK_BURST_DURATION: int = 150 # Frames
     SHARK_BURST_CHANCE: float = 0.005 # percentage
 
 class PlayerState(NamedTuple):
@@ -327,16 +328,40 @@ class FishingDerby(JaxEnvironment):
             return jax.lax.cond(pred, do_set, lambda a: a, arr)
 
         def game_branch(_):
+            # Player 1 state reference
+            p1 = state.p1
+
             # Fish movement with random direction changes
             key = state.key
             key, fish_key = jax.random.split(key)
-            change_direction_prob = 0.01  # 1% chance per frame to change direction
+
+            # Base direction change probability
+            base_change_prob = 0.01  # 1% chance per frame to change direction
+
+            # Check which fish is hooked (if any)
+            hooked_fish_idx = jnp.where((p1.hook_state > 0) & (p1.hooked_fish_idx >= 0), p1.hooked_fish_idx, -1)
+
+            # Create direction change probabilities - higher for hooked fish
+            change_probs = jnp.full(cfg.NUM_FISH, base_change_prob)
+            change_probs = jnp.where(
+                jnp.arange(cfg.NUM_FISH) == hooked_fish_idx,
+                0.08,  # 8% chance for hooked fish (8x more likely to turn)
+                change_probs
+            )
 
             # Check for random direction changes
-            should_change_dir = jax.random.uniform(fish_key, (cfg.NUM_FISH,)) < change_direction_prob
+            should_change_dir = jax.random.uniform(fish_key, (cfg.NUM_FISH,)) < change_probs
 
-            # Fish movement
-            new_fish_x = state.fish_positions[:, 0] + state.fish_directions * cfg.FISH_SPEED
+            # Fish speeds - faster for hooked fish
+            fish_speeds = jnp.full(cfg.NUM_FISH, cfg.FISH_SPEED)
+            fish_speeds = jnp.where(
+                jnp.arange(cfg.NUM_FISH) == hooked_fish_idx,
+                cfg.FISH_SPEED * 1.5,  # 50% faster when hooked
+                fish_speeds
+            )
+
+            # Fish movement with individual speeds
+            new_fish_x = state.fish_positions[:, 0] + state.fish_directions * fish_speeds
 
             # Direction changes: either from hitting boundaries OR random changes
             # Use same boundaries as shark instead of screen edges
@@ -390,9 +415,6 @@ class FishingDerby(JaxEnvironment):
             # Player 1 Rod and Hook Logic
             p1 = state.p1
 
-            # Track previous rod length to detect horizontal movement
-            prev_rod_length = p1.rod_length
-
             # Define hook position limits that will be used throughout
             min_hook_y = 0.0  # At rod level
             max_hook_y = cfg.LINE_Y_END - cfg.ROD_Y  # Maximum depth
@@ -409,29 +431,42 @@ class FishingDerby(JaxEnvironment):
                 cfg.MAX_ROD_LENGTH_X
             )
 
-            # Calculate horizontal rod movement for water resistance
-            rod_velocity_x = new_rod_length - prev_rod_length
+            # Water resistance physics for horizontal hook movement
+            # Check if hook is in water
+            in_water = p1.hook_y > (cfg.WATER_Y_START - cfg.ROD_Y)
 
-            # Water resistance physics for hook horizontal offset
-            # When hook is in water (hook_y > 0), apply water resistance
-            in_water = p1.hook_y > 0.0
-            # Stronger resistance produces more noticeable trailing/bend
-            water_resistance_factor = jnp.where(in_water, 1.6, 0.0)
+            # Calculate water resistance effect on hook horizontal position
+            # When rod moves horizontally, hook lags behind due to water resistance
+            rod_end_x = cfg.P1_START_X + new_rod_length
+            target_hook_x = rod_end_x  # Where hook "wants" to be
+            current_hook_x = cfg.P1_START_X + p1.rod_length + p1.hook_x_offset
 
-            # Hook follows rod movement with delay due to water resistance
-            # The deeper the hook, the more resistance
-            depth_factor = jnp.clip(p1.hook_y / (cfg.LINE_Y_END - cfg.ROD_Y), 0.0, 1.0)
-            resistance_multiplier = 1.0 + depth_factor * 4.0
+            # Water resistance parameters
+            water_resistance_factor = 0.15  # How much the hook resists movement in water
+            air_recovery_factor = 0.3      # How quickly hook returns to rod when above water
 
-            # Calculate target horizontal offset based on rod movement
-            target_offset = -rod_velocity_x * water_resistance_factor * resistance_multiplier
+            # Calculate resistance based on rod movement and water depth
+            rod_velocity = rod_change  # How fast the rod is moving horizontally
+            depth_factor = jnp.clip((p1.hook_y - (cfg.WATER_Y_START - cfg.ROD_Y)) / cfg.MAX_HOOK_DEPTH_Y, 0.0, 1.0)
+            resistance_multiplier = 1.0 + depth_factor * 2.0  # More resistance at deeper depths
 
-            # Hook offset follows target with damping (creates lag effect)
-            offset_damping = 0.75  # less damping -> larger, quicker offsets
-            new_hook_x_offset = p1.hook_x_offset * offset_damping + target_offset * (1.0 - offset_damping)
+            # Apply water resistance when in water, or recovery when above water
+            def apply_water_resistance():
+                # In water: hook lags behind rod movement
+                resistance = water_resistance_factor * resistance_multiplier
+                target_offset = target_hook_x - rod_end_x  # Should be 0 normally
+                current_offset = p1.hook_x_offset
+                # Move towards target offset, but slowly due to resistance
+                new_offset = current_offset + (target_offset - current_offset) * resistance
+                # Add extra lag when rod is moving fast
+                movement_lag = -rod_velocity * 0.8 * resistance_multiplier
+                return new_offset + movement_lag
 
-            # When not in water, offset decays back to 0 faster
-            new_hook_x_offset = jnp.where(in_water, new_hook_x_offset, p1.hook_x_offset * 0.6)
+            def apply_air_recovery():
+                # Above water: hook quickly returns to directly below rod
+                return p1.hook_x_offset * (1.0 - air_recovery_factor)
+
+            new_hook_x_offset = jax.lax.cond(in_water, apply_water_resistance, apply_air_recovery)
 
             # Hook vertical movement and auto-lowering logic
             def auto_lower_hook(_):
@@ -546,10 +581,28 @@ class FishingDerby(JaxEnvironment):
                 score_animation_timer=p1.score_animation_timer
             ))
 
-            # Hooked fish follows the hook
-            hooked_fish_pos = jnp.array([hook_x, hook_y])
+            # Hooked fish continues swimming normally, hook follows fish
             has_hook = (p1_hook_state > 0) & (p1_hooked_fish_idx >= 0)
-            new_fish_pos = safe_set_at(new_fish_pos, p1_hooked_fish_idx, hooked_fish_pos, has_hook)
+
+            def update_hook_position(pos):
+                # Make hook follow the fish's x position with some offset based on fish direction
+                fish_x = new_fish_pos[p1_hooked_fish_idx, 0]
+                fish_dir = new_fish_dirs[p1_hooked_fish_idx]
+                # Add slight offset in fish's movement direction to show pulling
+                offset = fish_dir * 5.0  # Offset by 5 pixels in fish's direction
+                new_offset = (fish_x + offset) - (cfg.P1_START_X + new_rod_length)
+                return new_offset
+
+            # Update hook x offset to follow fish
+            new_hook_x_offset = jax.lax.cond(
+                has_hook,
+                update_hook_position,
+                lambda _: new_hook_x_offset,
+                operand=None
+            )
+
+            # Remove the old fish position update since fish moves normally
+            # The hook will now follow the fish instead
 
             # Scoring and collision detection
             p1_score, key = p1.score, state.key
@@ -748,54 +801,40 @@ class FishingDerbyRenderer(JAXGameRenderer):
         raster = self._render_at(raster, cfg.P1_START_X, cfg.PLAYER_Y, self.SPRITE_PLAYER1)
         raster = self._render_at(raster, cfg.P2_START_X, cfg.PLAYER_Y, self.SPRITE_PLAYER2)
 
-        # Draw fishing line with water resistance physics
+        # Draw fishing line
         p1_rod_end_x = cfg.P1_START_X + state.p1.rod_length
-
-        # Get actual hook position including water resistance offset
         hook_x, hook_y = self._get_hook_position(cfg.P1_START_X, state.p1)
 
         # Draw horizontal part of the rod
         raster = self._render_line(raster, cfg.P1_START_X + 7, cfg.ROD_Y, p1_rod_end_x, cfg.ROD_Y,
                                    color=(0, 0, 0))  # Black rod
 
-        # Water resistance sag - only applies when hook is in water and below surface
+        # Check if hook is in water
         in_water = state.p1.hook_y > (cfg.WATER_Y_START - cfg.ROD_Y)
 
-        # Only apply horizontal movement sag when there's recent horizontal movement AND in water
-        has_horizontal_movement = jnp.abs(state.p1.hook_x_offset) > 0.1
-        offset_sag = jnp.where(in_water & has_horizontal_movement,
-                               jnp.abs(state.p1.hook_x_offset) * 1.0,
-                               0.0)
-
-        # Vertical movement sag (normal gravity sag) - only when in water
-        max_hook_y = cfg.LINE_Y_END - cfg.ROD_Y
-        water_depth_ratio = jnp.clip((state.p1.hook_y - (cfg.WATER_Y_START - cfg.ROD_Y)) / max_hook_y, 0.0, 1.0)
-
-        # Apply gravity sag only to underwater portion
-        gravity_sag_base = 6.0 * jnp.exp(-2.0 * water_depth_ratio)
-        gravity_sag = jnp.where(in_water & has_horizontal_movement,
-                                gravity_sag_base,
-                                jnp.where(in_water, gravity_sag_base * 0.2, 0.0))
-
-        # Combine both types of sag - only when in water
-        total_sag = jnp.where(in_water, gravity_sag + offset_sag, 0.0)
-
-        # Reduce sag when reeling (line is under tension)
+        # Only apply sag when:
+        # 1. Hook is in water
+        # 2. No fish is hooked (line is slack)
+        # 3. Hook is moving down (not being reeled)
         is_reeling = state.p1.hook_state > 0
-        tension_multiplier = jnp.where(is_reeling, 0.2, 1.0)
-        final_sag = total_sag * tension_multiplier
+        apply_sag = in_water & ~is_reeling & (state.p1.hook_velocity_y > 0)
 
-        # Define start and end points for the line
+        # Calculate sag amount based on depth
+        water_depth_ratio = jnp.clip((state.p1.hook_y - (cfg.WATER_Y_START - cfg.ROD_Y)) /
+                                     (cfg.MAX_HOOK_DEPTH_Y), 0.0, 1.0)
+        sag_amount = jnp.where(apply_sag, 3.0 + water_depth_ratio * 3.0, 0.0)
+
+        # Define line points
         line_start = jnp.array([p1_rod_end_x, cfg.ROD_Y])
         line_end = jnp.array([hook_x, hook_y])
 
-        # Draw straight line if above water, saggy line if in water
+        # Draw line - straight when reeling or above water, saggy when fishing
         raster = jax.lax.cond(
-            in_water,
-            lambda r: self._render_saggy_line(r, line_start, line_end, final_sag, color=(200, 200, 200),
-                                              num_segments=12),
-            lambda r: self._render_line(r, line_start[0], line_start[1], line_end[0], line_end[1],
-                                        color=(200, 200, 200)),
+            apply_sag,
+            lambda r: self._render_saggy_line(r, line_start, line_end, sag_amount,
+                                              color=(200, 200, 200), num_segments=8),
+            lambda r: self._render_line(r, line_start[0], line_start[1],
+                                        line_end[0], line_end[1], color=(200, 200, 200)),
             raster
         )
 
