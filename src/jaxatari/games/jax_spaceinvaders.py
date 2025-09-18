@@ -145,6 +145,13 @@ class JaxSpaceInvaders(JaxEnvironment[SpaceInvadersState, SpaceInvadersObservati
             Action.LEFTFIRE,
         ]
         self.obs_size = 3 * 4 + 1 + 1
+        self.renderer = SpaceInvadersRenderer(consts)
+
+    def render(self, state):
+        return self.renderer.render(state)
+    
+    def image_space(self):
+        return spaces.Box(low=0, high=255, shape=(self.consts.HEIGHT, self.consts.WIDTH, 3), dtype=jnp.uint8)
 
     @partial(jax.jit, static_argnums=(0,))
     def flatten_entity_position(self, entity: EntityPosition) -> jnp.ndarray:
