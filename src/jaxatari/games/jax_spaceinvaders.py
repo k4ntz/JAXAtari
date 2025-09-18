@@ -731,7 +731,7 @@ class JaxSpaceInvaders(JaxEnvironment[SpaceInvadersState, SpaceInvadersObservati
         return spaces.Discrete(len(self.action_set))
 
     @partial(jax.jit, static_argnums=(0,))
-    def _get_info(self, state: SpaceInvadersState, all_rewards: chex.Array) -> SpaceInvadersInfo:
+    def _get_info(self, state: SpaceInvadersState, all_rewards: chex.Array = None) -> SpaceInvadersInfo:
         return SpaceInvadersInfo(time=state.step_counter, all_rewards=all_rewards)
 
     @partial(jax.jit, static_argnums=(0,))
