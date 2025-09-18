@@ -9,42 +9,7 @@ from jaxatari.environment import JaxEnvironment, JAXAtariAction as Action
 import jaxatari.spaces as spaces
 from jaxatari.renderers import JAXGameRenderer
 import jaxatari.rendering.jax_rendering_utils as jr
-"""
-def wave_pattern_count() -> int:
-    return 4  # Anzahl der Wellenmuster
 
-def wave_pattern(wave_id: jnp.ndarray, num_platforms: int) -> jnp.ndarray:
-    
-    #Liefert ein Array der Länge num_platforms mit Einträgen in {-1, 1}.
-    #-1: von links spawnen, bewegt sich nach rechts
-    # 1: von rechts spawnen, bewegt sich nach links
-    
-    def pattern_0(n):
-        # Erste Welle: oben links -> rechts, dann abwechselns (links, rechts, links, rechts,..)
-        idx = jnp.arange(n)
-        return jnp.where(idx % 2 == 0, jnp.int32(-1), jnp.int32(1))
-
-    def pattern_1(n):
-        # Zweite Welle: oben rechts -> links, dann abwechselns (rechts, links, rechts, links,..)
-        idx = jnp.arange(n)
-        return jnp.where(idx % 2 == 0, jnp.int32(1), jnp.int32(-1))
-
-    def pattern_2(n):
-        # Dritte Welle: alle von links -> rechts
-        return jnp.full((n,), -1, dtype=jnp.int32)
-
-    def pattern_3(n):
-        # Vierte Welle: alle von rechts -> links
-        return jnp.full((n,), 1, dtype=jnp.int32)
-
-    patterns = [pattern_0, pattern_1, pattern_2, pattern_3]
-
-    return jax.lax.switch(
-        (wave_id % wave_pattern_count()).astype(jnp.int32),
-        patterns,
-        num_platforms
-    )
-"""
 
 def min_delay(level, base_min=30, spawn_accel=2, min_delay_clamp=20, max_delay_clamp=120):
     return jnp.clip(base_min - level * spawn_accel, min_delay_clamp, max_delay_clamp)
@@ -65,8 +30,9 @@ class AsterixConstants(NamedTuple):
     top_border: int = 23 # oberer Rand des Spielfelds
     bottom_border: int = 8 * stage_spacing + top_border
     cooldown_frames: int = 8 # Cooldown frames for lane changes
+    hit_frames: int = 30 # Anzahl Frames, die das Hit-Sprite angezeigt wird
     num_lives: int = 3 # Anzahl der Leben
-    max_digits_score: int = 7 # Maximal anzuzeigende Ziffern im Score
+    max_digits_score: int = 6 # Maximal anzuzeigende Ziffern im Score
     entity_base_speed : float = 0.5 # Base Speed der Gegner und Collectibles
     entity_character_speed_factor : float = 0.5 # Speed-Faktor pro Charakterstufe (Asterix=0, Obelix=1)
     ASTERIX_ITEM_POINTS = jnp.array([50, 100, 200, 300, 0], dtype=jnp.int32)  # Cauldron, Helmet, Shield, Lamp
@@ -97,7 +63,6 @@ class Enemy(NamedTuple):
     alive: jnp.ndarray
 
 
-
 class AsterixState(NamedTuple):
     """Represents the current state of the game"""
     player_x: chex.Array # X-Position des Spielers
@@ -117,6 +82,7 @@ class AsterixState(NamedTuple):
     collect_type_count: chex.Array # Anzahl eingesammelt vom aktuellen Typ (0..49)
     collectibles: CollectibleEnt # Collectible Entities
     collect_spawn_timer: jnp.ndarray # Timer für das Spawnen von Collectibles
+    hit_timer: chex.Array # Zählt Frames herunter, in denen Hit-Sprite angezeigt wird
 
 
 class EntityPosition(NamedTuple):
@@ -189,10 +155,11 @@ class JaxAsterix(JaxEnvironment[AsterixState, AsterixObservation, AsterixInfo, A
             rng=state_rng,
             # wave_id = jnp.array(0, dtype=jnp.int32),
             character_id=jnp.array(0, dtype=jnp.int32),  # Asterix
-            collect_type_index=jnp.array(0, dtype=jnp.int32),  # erster Typ
+            collect_type_index=jnp.array(0, dtype=jnp.int32),  # erster collectable Typ
             collect_type_count=jnp.array(0, dtype=jnp.int32),
             collectibles=collectibles,
             collect_spawn_timer=collect_spawn_timer,
+            hit_timer=jnp.array(0, dtype=jnp.int32),
         )
 
         return self._get_observation(state), state
@@ -213,7 +180,7 @@ class JaxAsterix(JaxEnvironment[AsterixState, AsterixObservation, AsterixInfo, A
         stage_diffs = jnp.abs(stage_borders - state.player_y)
         current_stage = jnp.argmin(stage_diffs)
 
-        # Eingehende Actions auf beabsichtigte Indizes remappen (fix für vertauschte Pfeiltasten)
+
         # Mapping:
         action = jnp.asarray(action, dtype=jnp.int32)
         remap = jnp.array([0, 0, 1, 2, 3, 4, 5, 6, 7, 8], dtype=jnp.int32)
@@ -229,8 +196,6 @@ class JaxAsterix(JaxEnvironment[AsterixState, AsterixObservation, AsterixInfo, A
 
         jax.debug.print("step debug: action={} mapped={} dx={} dy={}", action, mapped, dx, dy)
         action = mapped
-
-
 
         # Lane-Wechsel nur, wenn Cooldown abgelaufen und dy != 0
         stage_move = jnp.where(dy < 0, -1, jnp.where(dy > 0, 1, 0))
@@ -262,8 +227,6 @@ class JaxAsterix(JaxEnvironment[AsterixState, AsterixObservation, AsterixInfo, A
             jnp.where(dx > 0, 2, state.player_direction)
         )
 
-        new_score = state.score
-
 
         platformY = jnp.array(self.consts.stage_positions, dtype=jnp.int32)
         item_w = 8
@@ -273,7 +236,7 @@ class JaxAsterix(JaxEnvironment[AsterixState, AsterixObservation, AsterixInfo, A
         screen_width = self.consts.screen_width
         level = 1
 
-        #rng, rng_spawn, rng_delay = jax.random.split(state.rng, 3)
+
         # RNG für Gegner & Collectibles
         rng_enemy_spawn, rng_enemy_delay, rng_col_spawn, rng_col_delay, rng_next = jax.random.split(state.rng, 5)
 
@@ -302,9 +265,11 @@ class JaxAsterix(JaxEnvironment[AsterixState, AsterixObservation, AsterixInfo, A
             return CollectibleEnt(x, y, vx, True)
 
         def spawn_fn(args):
-            enemies, rng_enemy_spawn, level = args
+            enemies, collectibles, rng_enemy_spawn, level = args
             new_enemy = spawn_enemy(rng_enemy_spawn, level, platformY, screen_width, enemy_width)
-            already_exists = jnp.any((enemies.y == new_enemy.y) & enemies.alive)
+            # Lane schon durch Enemy oder Collectible belegt?
+            occupied = jnp.any(((enemies.y == new_enemy.y) & enemies.alive) |
+                               ((collectibles.y == new_enemy.y) & collectibles.alive))
 
             def do_spawn():
                 idx = jnp.argmax(~enemies.alive)
@@ -315,13 +280,13 @@ class JaxAsterix(JaxEnvironment[AsterixState, AsterixObservation, AsterixInfo, A
                     alive=enemies.alive.at[idx].set(True)
                 )
 
-            return jax.lax.cond(already_exists, lambda: enemies, do_spawn)
+            return jax.lax.cond(occupied, lambda: enemies, do_spawn)
 
         def spawn_collectibles_fn(args):
-            collectibles, rng_col, level = args
+            enemies, collectibles, rng_col, level = args
             new_item = spawn_collectible(rng_col, level, platformY, self.consts.screen_width, item_w)
-            # optional: nicht doppelt auf gleicher Lane
-            already_exists = jnp.any((collectibles.y == new_item.y) & collectibles.alive)
+            occupied = jnp.any(((collectibles.y == new_item.y) & collectibles.alive) |
+                               ((enemies.y == new_item.y) & enemies.alive))
 
             def do_spawn():
                 idx = jnp.argmax(~collectibles.alive)
@@ -332,7 +297,7 @@ class JaxAsterix(JaxEnvironment[AsterixState, AsterixObservation, AsterixInfo, A
                     alive=collectibles.alive.at[idx].set(True)
                 )
 
-            return jax.lax.cond(already_exists, lambda: collectibles, do_spawn)
+            return jax.lax.cond(occupied, lambda: collectibles, do_spawn)
 
         should_spawn = spawn_timer <= 0
         should_spawn_col = collect_spawn_timer <= 0
@@ -341,15 +306,14 @@ class JaxAsterix(JaxEnvironment[AsterixState, AsterixObservation, AsterixInfo, A
             should_spawn,
             spawn_fn,
             lambda args: args[0],
-            (state.enemies, rng_enemy_spawn, level)
+            (state.enemies, state.collectibles, rng_enemy_spawn, level)
         )
-
 
         collectibles = jax.lax.cond(
             should_spawn_col,
             spawn_collectibles_fn,
-            lambda args: args[0],
-            (state.collectibles, rng_col_spawn, level)
+            lambda args: args[1],
+            (state.enemies, state.collectibles, rng_col_spawn, level)
         )
 
         def new_timer_fn(_):
@@ -387,26 +351,7 @@ class JaxAsterix(JaxEnvironment[AsterixState, AsterixObservation, AsterixInfo, A
         new_item_x = collectibles.x + collectibles.vx
         alive_items = (new_item_x >= -item_w) & (new_item_x <= self.consts.screen_width + item_w) & collectibles.alive
         collectibles = collectibles._replace(x=new_item_x, alive=alive_items)
-        """"
-        def check_collision(player_x, player_y, player_w, player_h, enemy_x, enemy_y, enemy_w, enemy_h):
-            return (
-                    (player_x < enemy_x + enemy_w) &
-                    (player_x + player_w > enemy_x) &
-                    (player_y < enemy_y + enemy_h) &
-                    (player_y + player_h > enemy_y)
-            )
 
-        collisions = check_collision(
-            new_player_x, new_y, player_w, player_h,
-            enemies.x, enemies.y, enemy_w, enemy_h
-        ) & enemies.alive
-
-        any_collision = jnp.any(collisions)
-
-        enemies = enemies._replace(
-            alive=jnp.where(collisions, False, enemies.alive)
-        )
-        """
 
         # --- Kollisionen ---
         def check_collision(px, py, pw, ph, ex, ey, ew, eh):
@@ -429,7 +374,7 @@ class JaxAsterix(JaxEnvironment[AsterixState, AsterixObservation, AsterixInfo, A
 
         hit_items_count = jnp.sum(collisions_item).astype(jnp.int32)
 
-        # Getroffene deaktivieren
+        # Getroffene Gegner deaktivieren
         collectibles = collectibles._replace(
             alive=jnp.where(collisions_item, False, collectibles.alive)
         )
@@ -473,7 +418,7 @@ class JaxAsterix(JaxEnvironment[AsterixState, AsterixObservation, AsterixInfo, A
         new_collect_type_index = jnp.where(switch_to_obelix, jnp.int32(0), end_type_idx)
         new_collect_type_count = jnp.where(switch_to_obelix, jnp.int32(0), end_type_count)
 
-        bonus_thresholds = jnp.array([10_000, 30_000, 50_000, 80_000, 110_000], dtype=jnp.int32)
+        bonus_thresholds = jnp.array([10_000, 30_000, 50_000, 80_000, 110_000], dtype=jnp.int32) # TODO Bonus nochmal überprüfen
         bonus_interval = 40_000
 
         def calc_bonus_stage(score):
@@ -483,6 +428,12 @@ class JaxAsterix(JaxEnvironment[AsterixState, AsterixObservation, AsterixInfo, A
 
         new_bonus_stage = calc_bonus_stage(new_score)
         new_lives = jnp.where(any_collision_enemy, state.lives - 1, state.lives)
+
+        new_hit_timer = jnp.where(
+            any_collision_enemy,
+            jnp.array(self.consts.hit_frames, dtype=jnp.int32),
+            jnp.maximum(state.hit_timer - 1, 0),
+        )
 
         game_over = jnp.where(
             new_lives <= 0,
@@ -507,6 +458,8 @@ class JaxAsterix(JaxEnvironment[AsterixState, AsterixObservation, AsterixInfo, A
             collect_type_count=new_collect_type_count,
             collectibles=collectibles,
             collect_spawn_timer=collect_spawn_timer,
+            hit_timer=new_hit_timer,
+
         )
         done = self._get_done(new_state)
         env_reward = self._get_reward(state, new_state)
@@ -525,7 +478,6 @@ class JaxAsterix(JaxEnvironment[AsterixState, AsterixObservation, AsterixInfo, A
             width=jnp.array(self.consts.player_width, dtype=jnp.int32),
             height=jnp.array(self.consts.player_height, dtype=jnp.int32),
         )
-
 
         return AsterixObservation(player=player, score=state.score)
 
@@ -847,15 +799,18 @@ class AsterixRenderer(JAXGameRenderer):
         def render_scores(raster_to_update):
             score = state.score.astype(jnp.int32)
 
-            # Ziffernanzahl robust (Score==0 -> 1)
-            num_digits = jnp.where(
-                score == 0,
-                jnp.int32(1),
-                (jnp.floor(jnp.log10(score.astype(jnp.float32))) + 1).astype(jnp.int32)
-            )
-            num_digits = jnp.minimum(num_digits, max_digits)
+            # Stellenanzahl ohne Floating-Point (vermeidet log10-Grenzfall bei 100, 1000, ...)
+            def count_digits(n):
+                return jnp.where(n < 10, 1,
+                                 jnp.where(n < 100, 2,
+                                           jnp.where(n < 1000, 3,
+                                                     jnp.where(n < 10_000, 4,
+                                                               jnp.where(n < 100_000, 5, 6)))))
 
-            # Digits-Array (rechts ausgerichtet) füllen
+            num_digits = count_digits(score)
+            #num_digits = jnp.minimum(num_digits, max_digits)
+
+            # Digits von rechts nach links einfüllen
             def fill_body(i, carry):
                 n, digits = carry
                 digit = n % 10
@@ -867,7 +822,6 @@ class AsterixRenderer(JAXGameRenderer):
             init = (score, jnp.zeros((max_digits,), dtype=jnp.int32))
             _, digits_full = jax.lax.fori_loop(0, max_digits, fill_body, init)
 
-            # Startindex des anzuzeigenden Abschnitts
             start_idx = max_digits - num_digits
 
             score_spacing = 8
@@ -878,13 +832,12 @@ class AsterixRenderer(JAXGameRenderer):
                 raster_to_update,
                 score_x,
                 score_y,
-                digits_full,  # vollständiges Array
-                digit_sprites[0],  # Sprite-Sheet
-                start_idx,  # dynamischer Start
-                num_digits,  # Anzahl zu rendernder Ziffern
+                digits_full,
+                digit_sprites[0],
+                start_idx,
+                num_digits,
                 spacing=score_spacing
             )
-
 
         # Render scores conditionally
         raster = jax.lax.cond(
