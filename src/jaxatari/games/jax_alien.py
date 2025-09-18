@@ -577,19 +577,10 @@ class JaxAlien(JaxEnvironment[AlienState, AlienObservation, AlienInfo, AlienCons
         
         initial_obs = self._get_observation(reset_state)
         return initial_obs, reset_state
-
-    @partial(jax.jit, static_argnums=(0,))
-    def step(self, state: AlienState, action: chex.Array) -> Tuple[AlienObservation, AlienState,float, bool,  AlienInfo]:
-        """the main step function for transitioning to a new state
-
-        Args:
-            state (AlienState): Current state of the game
-            action (chex.Array): player action
-
-        Returns:
-            Tuple[AlienObservation, AlienState,float, bool,  AlienInfo]: New state, observation and info
-        """
-        def start_bonus_stage(state: AlienState) -> AlienState:
+    
+    
+    @partial(jax.jit, static_argnums=(0))
+    def start_bonus_stage(self, state: AlienState) -> AlienState:
             """initiates the bonus stage
 
             Args:
@@ -647,7 +638,8 @@ class JaxAlien(JaxEnvironment[AlienState, AlienObservation, AlienInfo, AlienCons
             
             return new_state
         
-        def start_primary_stage(state: AlienState) -> AlienState:
+    @partial(jax.jit, static_argnums=(0))
+    def start_primary_stage(self, state: AlienState) -> AlienState:
             """initiates the primary stage
 
             Args:
@@ -672,19 +664,9 @@ class JaxAlien(JaxEnvironment[AlienState, AlienObservation, AlienInfo, AlienCons
             new_state = reset_state._replace(level=new_level_state, enemies=new_enemies_state)
 
             return new_state
-                
-        def primary_step(state: AlienState, action: chex.Array) -> AlienState:
-            """step funtion for the primary stage
-
-            Args:
-                state (AlienState): Current state of the game 
-                action (chex.Array): player action
-
-            Returns:
-                AlienState: the next game frame
-            """
         
-            def normal_game_step(state: AlienState, action: chex.Array) -> Tuple[AlienState, AlienObservation, AlienInfo]:
+    @partial(jax.jit, static_argnums=(0))
+    def normal_game_step(self, state: AlienState, action: chex.Array) -> Tuple[AlienState, AlienObservation, AlienInfo]:
                 """Normal game step. This is the function that is called when the game is running normally.
 
                 Args:
@@ -752,141 +734,8 @@ class JaxAlien(JaxEnvironment[AlienState, AlienObservation, AlienInfo, AlienCons
                 )
                 
                 return new_state
-
-            def kill_item_step(state: AlienState) -> Tuple[AlienState, AlienObservation, AlienInfo]:
-                """handle behavior related to the kill item
-
-                Args:
-                    state (AlienState): Current State of the Game
-
-                Returns:
-                    Tuple[AlienState, AlienObservation, AlienInfo]: New state, observation and info
-                """
-                new_player_state =  self.player_step(state, action)
-                new_life = jax.lax.cond(
-                    jnp.logical_and(check_for_player_enemy_collision(self.consts, state, [new_player_state.x, new_player_state.y]),jnp.logical_not(state.level.death_frame_counter)),
-                    lambda x: jnp.subtract(x, 1),
-                    lambda x: x,
-                    state.level.lifes
-                )
-
-                new_death_frame_counter = jax.lax.cond(
-                    jnp.logical_and(check_for_player_enemy_collision(self.consts, state, [new_player_state.x, new_player_state.y]),jnp.logical_not(state.level.death_frame_counter)),
-                    lambda x: jax.lax.cond(
-                        jnp.less(new_life, 0),
-                        lambda y: jnp.subtract(y, 40),
-                        lambda y: jnp.add(y, 40),
-                        x
-                    ),
-                    lambda x: x,
-                    state.level.death_frame_counter
-                )
-                
-                new_kill_score_flag = jnp.where(state.enemies.multiple_enemies.enemy_death_frame > 0, 0, state.enemies.multiple_enemies.kill_score_flag)
-                score_interation = 2 - jnp.sum(new_kill_score_flag[:3])
-
-                score_increase_kill = jnp.sum((state.enemies.multiple_enemies.kill_score_flag * self.consts.ENEMY_KILL_SCORE[score_interation])*(state.enemies.multiple_enemies.enemy_death_frame > 0)).astype(jnp.uint16)
-                new_score_kill = state.level.score + score_increase_kill
-
-                freeze_level_state = state.level._replace(
-                        lifes=new_life,
-                        death_frame_counter=new_death_frame_counter,
-                        score=new_score_kill
-                )
-                
-                new_enemies = self.multiple_enemies_step(state)
-
-                freeze_multiple_enemies = state.enemies.multiple_enemies._replace(
-                            x=new_enemies.multiple_enemies.x,
-                            y=new_enemies.multiple_enemies.y,
-                            orientation=new_enemies.multiple_enemies.orientation,
-                            enemy_spawn_frame=new_enemies.multiple_enemies.enemy_spawn_frame,
-                            enemy_death_frame=new_enemies.multiple_enemies.enemy_death_frame,
-                            blink=jnp.zeros((self.consts.ENEMY_AMOUNT_BONUS_STAGE,), dtype=jnp.int32),
-                            killable=new_enemies.multiple_enemies.killable,
-                            has_been_killed=new_enemies.multiple_enemies.has_been_killed,
-                            existence=new_enemies.multiple_enemies.existence,
-                            position_at_death_x=new_enemies.multiple_enemies.position_at_death_x,
-                            position_at_death_y=new_enemies.multiple_enemies.position_at_death_y,
-                            kill_score_flag=new_kill_score_flag
-                        )
-                
-                freeze_player_state = new_player_state._replace(
-                    x=state.player.x,
-                    y=state.player.y
-                )
-                
-                freeze_enemies = state.enemies._replace(
-                        multiple_enemies=freeze_multiple_enemies
-                )
-
-                freeze_state = state._replace(
-                    player=freeze_player_state,
-                    enemies=freeze_enemies,
-                    level=freeze_level_state,
-                )
-                
-                kill_multiple_enemies = new_enemies.multiple_enemies._replace(
-                        blink=jnp.zeros((self.consts.ENEMY_AMOUNT_BONUS_STAGE,), dtype=jnp.int32),
-                        position_at_death_x= new_enemies.multiple_enemies.position_at_death_x,
-                        position_at_death_y=new_enemies.multiple_enemies.position_at_death_y
-                    )
-
-                kill_enemies = new_enemies._replace(
-                        multiple_enemies=kill_multiple_enemies
-                    )
-
-
-                new_egg_state, new_score = self.egg_step(
-                        new_player_state.x,
-                        new_player_state.y,
-                        state.eggs,
-                        state.level.score,
-                        self.consts.EGG_SCORE_MULTIPLYER
-                        )
-
-                new_items, new_score, new_current_active_item_index, new_evil_item_frame_counter, new_spawn_score_item_flag_1, new_spawn_score_item_flag_2, new_score_item_counter = self.item_step(
-                    player_x=new_player_state.x,
-                    player_y=new_player_state.y,
-                    score=new_score,
-                    state=state
-                )
-
-                level_state = state.level._replace(
-                        score=new_score,
-                        lifes=new_life,
-                        death_frame_counter=new_death_frame_counter,
-                        evil_item_frame_counter=jnp.add(new_evil_item_frame_counter, -1),
-                        current_active_item_index= new_current_active_item_index,
-                        blink_evil_item=state.level.blink_evil_item,
-                        blink_current_active_item=state.level.blink_current_active_item,
-                        spawn_score_item_flag_1=new_spawn_score_item_flag_1,
-                        spawn_score_item_flag_2=new_spawn_score_item_flag_2,
-                        score_item_counter=new_score_item_counter
-                        )
-
-                kill_state = state._replace(
-                        player=new_player_state,
-                        enemies=kill_enemies,
-                        level=level_state,
-                        eggs=new_egg_state,
-                        items=new_items
-                        )
-                
-                new_state = jax.lax.cond(jnp.not_equal(new_death_frame_counter, 0),
-                                         lambda x: jax.lax.cond(jnp.greater(new_death_frame_counter, 0),
-                                                                lambda y: death(y),
-                                                                lambda y: game_over(y),
-                                                                freeze_state),
-                                         lambda x: jax.lax.cond(
-                                             jnp.equal(jnp.sum(state.enemies.multiple_enemies.enemy_death_frame), 0),
-                                             lambda y: kill_state,
-                                             lambda y: freeze_state,
-                                             None),None)
-
-                return new_state
-
-            def death(state: AlienState) -> Tuple[AlienState, AlienObservation, AlienInfo]:
+    @partial(jax.jit, static_argnums=(0)) 
+    def death(self, state: AlienState) -> Tuple[AlienState, AlienObservation, AlienInfo]:
                 """initaiates the soft reset when loosing a life
 
                 Args:
@@ -952,8 +801,9 @@ class JaxAlien(JaxEnvironment[AlienState, AlienObservation, AlienInfo, AlienCons
 
                 return new_state
 
-            #step for death animation with hard reset
-            def game_over(state: AlienState) -> Tuple[AlienState, AlienObservation, AlienInfo]:
+    #step for death animation with hard reset
+    @partial(jax.jit, static_argnums=(0))
+    def game_over(self, state: AlienState) -> Tuple[AlienState, AlienObservation, AlienInfo]:
                 """handles game over
 
                 Returns:
@@ -985,17 +835,35 @@ class JaxAlien(JaxEnvironment[AlienState, AlienObservation, AlienInfo, AlienCons
 
                 new_state = jax.lax.cond(jnp.equal(state.level.death_frame_counter, -1), lambda x: hard_reset_state, lambda x: freeze_state, 0)
                 return new_state
+            
+    @partial(jax.jit, static_argnums=(0))
+    def primary_step(self, state: AlienState, action: chex.Array) -> AlienState:
+            """step funtion for the primary stage
+
+            Args:
+                state (AlienState): Current state of the game 
+                action (chex.Array): player action
+
+            Returns:
+                AlienState: the next game frame
+            """
+        
+            
+
+            
+            
+            
 
             #initial state for cond
             new_state = state
             #cond for checking for normal game step or death or game over
             new_state = jax.lax.cond(jnp.greater(state.level.evil_item_frame_counter, 0),
-                                        lambda x: kill_item_step(x),
+                                        lambda x: self.kill_item_step(x, action),
                                         lambda x:  jax.lax.cond(jnp.equal(state.level.death_frame_counter, 0),
-                                            lambda y: normal_game_step(y, action),
+                                            lambda y: self.normal_game_step(y, action),
                                             lambda y: jax.lax.cond(jnp.greater(state.level.death_frame_counter, 0),
-                                                            lambda z: death(z),
-                                                            lambda z: game_over(z),
+                                                            lambda z: self.death(z),
+                                                            lambda z: self.game_over(z),
                                                             y
                                                             ),
                                         x
@@ -1005,7 +873,7 @@ class JaxAlien(JaxEnvironment[AlienState, AlienObservation, AlienInfo, AlienCons
 
             new_state = jax.lax.cond(
                     jnp.sum(state.eggs[:, :, 2]) == 0,
-                    lambda x: start_bonus_stage(x),
+                    lambda x: self.start_bonus_stage(x),
                     lambda x: x,
                     new_state
                 )
@@ -1013,27 +881,130 @@ class JaxAlien(JaxEnvironment[AlienState, AlienObservation, AlienInfo, AlienCons
             # Only the state_update is currently implemented. We need to handle score & observation still!!
             return new_state
         
-        def bonus_step(state: AlienState, action: chex.Array) -> AlienState:
-            """step funtion for the bonus stage
-
-            Args:
-                state (AlienState): Current state of the game 
-                action (chex.Array): player action
-
-            Returns:
-                AlienState: the next game frame
-            """
-            
-            def normal_bonus_step(state: AlienState, action: chex.Array) -> AlienState:
-                """Normal bonus room game step.
-                Args:
-                    state (AlienState): Current state of the game
-                    action (chex.Array): player action
-
-                Returns:
-                    AlienState: the next game frame
-                """
-                def bonus_room_player_step(state: AlienState, action: chex.Array) -> PlayerState:
+        
+        
+    @partial(jax.jit, static_argnums=(0))
+    def kill_item_step(self, state: AlienState, action: jArray) -> Tuple[AlienState, AlienObservation, AlienInfo]:
+        """handle behavior related to the kill item
+        Args:
+            state (AlienState): Current State of the Game
+        Returns:
+            Tuple[AlienState, AlienObservation, AlienInfo]: New state, observation and info
+        """
+        new_player_state: PlayerState =  self.player_step(state, action)
+        new_life = jax.lax.cond(
+            jnp.logical_and(check_for_player_enemy_collision(self.consts, state, [new_player_state.x, new_player_state.y]),jnp.logical_not(state.level.death_frame_counter)),
+            lambda x: jnp.subtract(x, 1),
+            lambda x: x,
+            state.level.lifes
+        )
+        new_death_frame_counter = jax.lax.cond(
+            jnp.logical_and(check_for_player_enemy_collision(self.consts, state, [new_player_state.x, new_player_state.y]),jnp.logical_not(state.level.death_frame_counter)),
+            lambda x: jax.lax.cond(
+                jnp.less(new_life, 0),
+                lambda y: jnp.subtract(y, 40),
+                lambda y: jnp.add(y, 40),
+                x
+            ),
+            lambda x: x,
+            state.level.death_frame_counter
+        )
+        
+        new_kill_score_flag = jnp.where(state.enemies.multiple_enemies.enemy_death_frame > 0, 0, state.enemies.multiple_enemies.kill_score_flag)
+        score_interation = 2 - jnp.sum(new_kill_score_flag[:3])
+        score_increase_kill = jnp.sum((state.enemies.multiple_enemies.kill_score_flag * self.consts.ENEMY_KILL_SCORE[score_interation])*(state.enemies.multiple_enemies.enemy_death_frame > 0)).astype(jnp.uint16)
+        new_score_kill = state.level.score + score_increase_kill
+        freeze_level_state = state.level._replace(
+                lifes=new_life,
+                death_frame_counter=new_death_frame_counter,
+                score=new_score_kill
+        )
+        
+        new_enemies: EnemiesState = self.multiple_enemies_step(state)
+        freeze_multiple_enemies = state.enemies.multiple_enemies._replace(
+                    x=new_enemies.multiple_enemies.x,
+                    y=new_enemies.multiple_enemies.y,
+                    orientation=new_enemies.multiple_enemies.orientation,
+                    enemy_spawn_frame=new_enemies.multiple_enemies.enemy_spawn_frame,
+                    enemy_death_frame=new_enemies.multiple_enemies.enemy_death_frame,
+                    blink=jnp.zeros((self.consts.ENEMY_AMOUNT_BONUS_STAGE,), dtype=jnp.int32),
+                    killable=new_enemies.multiple_enemies.killable,
+                    has_been_killed=new_enemies.multiple_enemies.has_been_killed,
+                    existence=new_enemies.multiple_enemies.existence,
+                    position_at_death_x=new_enemies.multiple_enemies.position_at_death_x,
+                    position_at_death_y=new_enemies.multiple_enemies.position_at_death_y,
+                    kill_score_flag=new_kill_score_flag
+                )
+        
+        freeze_player_state = new_player_state._replace(
+            x=state.player.x,
+            y=state.player.y
+        )
+        
+        freeze_enemies = state.enemies._replace(
+                multiple_enemies=freeze_multiple_enemies
+        )
+        freeze_state = state._replace(
+            player=freeze_player_state,
+            enemies=freeze_enemies,
+            level=freeze_level_state,
+        )
+        
+        kill_multiple_enemies = new_enemies.multiple_enemies._replace(
+                blink=jnp.zeros((self.consts.ENEMY_AMOUNT_BONUS_STAGE,), dtype=jnp.int32),
+                position_at_death_x= new_enemies.multiple_enemies.position_at_death_x,
+                position_at_death_y=new_enemies.multiple_enemies.position_at_death_y
+            )
+        kill_enemies = new_enemies._replace(
+                multiple_enemies=kill_multiple_enemies
+            )
+        new_egg_state, new_score = self.egg_step(
+                new_player_state.x,
+                new_player_state.y,
+                state.eggs,
+                state.level.score,
+                self.consts.EGG_SCORE_MULTIPLYER
+                )
+        new_items, new_score, new_current_active_item_index, new_evil_item_frame_counter, new_spawn_score_item_flag_1, new_spawn_score_item_flag_2, new_score_item_counter = self.item_step(
+            player_x=new_player_state.x,
+            player_y=new_player_state.y,
+            score=new_score,
+            state=state
+        )
+        level_state = state.level._replace(
+                score=new_score,
+                lifes=new_life,
+                death_frame_counter=new_death_frame_counter,
+                evil_item_frame_counter=jnp.add(new_evil_item_frame_counter, -1),
+                current_active_item_index= new_current_active_item_index,
+                blink_evil_item=state.level.blink_evil_item,
+                blink_current_active_item=state.level.blink_current_active_item,
+                spawn_score_item_flag_1=new_spawn_score_item_flag_1,
+                spawn_score_item_flag_2=new_spawn_score_item_flag_2,
+                score_item_counter=new_score_item_counter
+                )
+        kill_state = state._replace(
+                player=new_player_state,
+                enemies=kill_enemies,
+                level=level_state,
+                eggs=new_egg_state,
+                items=new_items
+                )
+        
+        new_state = jax.lax.cond(jnp.not_equal(new_death_frame_counter, 0),
+                                 lambda x: jax.lax.cond(jnp.greater(new_death_frame_counter, 0),
+                                                        lambda y: self.death(y),
+                                                        lambda y: self.game_over(y),
+                                                        freeze_state),
+                                 lambda x: jax.lax.cond(
+                                     jnp.equal(jnp.sum(state.enemies.multiple_enemies.enemy_death_frame), 0),
+                                     lambda y: kill_state,
+                                     lambda y: freeze_state,
+                                     None),None)
+        return new_state
+    
+    @partial(jax.jit, static_argnums=(0))
+    def bonus_room_player_step(self, state: AlienState, action: chex.Array) -> PlayerState:
                     """player step funtion in the bonus stage
 
                     Args:
@@ -1072,7 +1043,8 @@ class JaxAlien(JaxEnvironment[AlienState, AlienObservation, AlienInfo, AlienCons
                     
                     return new_player_state
 
-                def multiple_enemies_step(state: AlienState) -> EnemiesState:
+    @partial(jax.jit, static_argnums=(0))
+    def multiple_enemies_step(self, state: AlienState) -> EnemiesState:
                     """sets the velocity for the aliens this frame
 
                     Args:
@@ -1087,9 +1059,49 @@ class JaxAlien(JaxEnvironment[AlienState, AlienObservation, AlienInfo, AlienCons
                     new_enemies = state.enemies._replace(velocity=new_enemy_velocity_this_frame)
 
                     return new_enemies._replace(multiple_enemies=self.enemy_step_bonus(state.enemies.multiple_enemies, state))
+
+
+    @partial(jax.jit, static_argnums=(0))
+    def bonus_step_freeze(self, state: AlienState) -> AlienState:
+                """step funtion to handle an game freeze on death in the bonus stage
+
+                Args:
+                    state (AlienState): Current State of the Game
+
+                Returns:
+                    AlienState: the next game frame
+                """
+
+                new_death_frame_counter = jnp.clip(state.level.death_frame_counter - 1, 0, None)
+                new_freeze_counter = jnp.clip(state.level.evil_item_frame_counter - 1, 0, None)
+
+                new_level = state.level._replace(death_frame_counter=new_death_frame_counter)
+                new_level = new_level._replace(evil_item_frame_counter=new_freeze_counter)
+                new_state = state._replace(level=new_level)
                 
-                new_enemies_state = multiple_enemies_step(state)
-                new_player_state = bonus_room_player_step(state, action)
+                return jax.lax.cond(
+                    jnp.logical_or(
+                        jnp.logical_and(new_level.death_frame_counter == 0,state.level.death_frame_counter == 1),
+                        jnp.logical_and(new_level.evil_item_frame_counter == 0,state.level.evil_item_frame_counter == 1)
+                        ),
+                    lambda _: self.start_primary_stage(new_state),
+                    lambda _: new_state,
+                    None
+                )
+
+    @partial(jax.jit, static_argnums=(0))
+    def normal_bonus_step(self, state: AlienState, action: chex.Array) -> AlienState:
+                """Normal bonus room game step.
+                Args:
+                    state (AlienState): Current state of the game
+                    action (chex.Array): player action
+
+                Returns:
+                    AlienState: the next game frame
+                """
+                                
+                new_enemies_state = self.multiple_enemies_step(state)
+                new_player_state = self.bonus_room_player_step(state, action)
                 
                 dead_or_alive = jnp.max(jnp.array([
                         (jnp.sum(state.enemies.multiple_enemies.enemy_death_frame) > 0)*2,
@@ -1113,51 +1125,61 @@ class JaxAlien(JaxEnvironment[AlienState, AlienObservation, AlienInfo, AlienCons
                 
                 return new_state
 
-            def bonus_step_freeze(state: AlienState) -> AlienState:
-                """step funtion to handle an game freeze on death in the bonus stage
+            
+            
+            
+    @partial(jax.jit, static_argnums=(0))      
+    def bonus_step(self, state: AlienState, action: chex.Array) -> AlienState:
+            """step funtion for the bonus stage
 
-                Args:
-                    state (AlienState): Current State of the Game
+            Args:
+                state (AlienState): Current state of the game 
+                action (chex.Array): player action
 
-                Returns:
-                    AlienState: the next game frame
-                """
+            Returns:
+                AlienState: the next game frame
+            """
+            
+            
 
-                new_death_frame_counter = jnp.clip(state.level.death_frame_counter - 1, 0, None)
-                new_freeze_counter = jnp.clip(state.level.evil_item_frame_counter - 1, 0, None)
-
-                new_level = state.level._replace(death_frame_counter=new_death_frame_counter)
-                new_level = new_level._replace(evil_item_frame_counter=new_freeze_counter)
-                new_state = state._replace(level=new_level)
-                
-                return jax.lax.cond(
-                    jnp.logical_or(
-                        jnp.logical_and(new_level.death_frame_counter == 0,state.level.death_frame_counter == 1),
-                        jnp.logical_and(new_level.evil_item_frame_counter == 0,state.level.evil_item_frame_counter == 1)
-                        ),
-                    lambda _: start_primary_stage(new_state),
-                    lambda _: new_state,
-                    None
-                )
             
             return jax.lax.cond(jnp.logical_and(state.level.death_frame_counter == 0, state.level.evil_item_frame_counter == 0),
-                                    lambda _: normal_bonus_step(state, action),
-                                    lambda _: bonus_step_freeze(state),
-                                    None
-                                    )
+                                        lambda x, y: self.normal_bonus_step(x, y),
+                                        lambda x, y: self.bonus_step_freeze(x),
+                                        state, action
+                                        )
+            
 
+
+
+    @partial(jax.jit, static_argnums=(0,))
+    def step(self, state: AlienState, action: chex.Array) -> Tuple[AlienObservation, AlienState,float, bool,  AlienInfo]:
+        """the main step function for transitioning to a new state
+
+        Args:
+            state (AlienState): Current state of the game
+            action (chex.Array): player action
+
+        Returns:
+            Tuple[AlienObservation, AlienState,float, bool,  AlienInfo]: New state, observation and info
+        """
+        observation = self._get_observation(state)
+        env_reward = self._get_env_reward(state,state)
+        all_reward = self._get_all_rewards(state,state)
+        done = self._get_done(state)
+        alieninfo = self._get_info(state,all_reward)
         new_state = jax.lax.cond(
-            state.level.bonus_flag,
-            lambda x: bonus_step(x, action),
-            lambda x: jax.lax.cond(
-                jnp.less_equal(x.level.frame_count, 50),
-                lambda y: state,
-                lambda y: primary_step(x, action),
-                x
-                ),
-            state
-            )
-
+        state.level.bonus_flag,
+        lambda x: self.bonus_step(x, action),
+        lambda x: jax.lax.cond(
+            jnp.less_equal(x.level.frame_count, 50),
+            lambda y: state,
+            lambda y: self.primary_step(x, action),
+            x
+            ),
+        state
+        )
+    
         new_level_state = new_state.level._replace(frame_count=new_state.level.frame_count + 1)
         new_state = new_state._replace(level=new_level_state,
                                        step_counter= jnp.add(state.step_counter,1))
@@ -1167,8 +1189,15 @@ class JaxAlien(JaxEnvironment[AlienState, AlienObservation, AlienInfo, AlienCons
         all_reward = self._get_all_rewards(state,new_state)
         done = self._get_done(new_state)
         alieninfo = self._get_info(new_state,all_reward)
-        
+                
         return   (observation, new_state, env_reward, done, alieninfo)
+        
+        
+        
+                
+        
+        
+        
 
     def get_action_space(self) -> jnp.ndarray:
         return jnp.array(self.action_set)
