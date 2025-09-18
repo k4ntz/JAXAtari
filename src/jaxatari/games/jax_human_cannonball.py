@@ -296,23 +296,34 @@ class JaxHumanCannonball(JaxEnvironment[HumanCannonballState, HumanCannonballObs
             operand=state_human_y
         )
 
-        # 3. Detect collision with tower wall
-        coll = self.check_water_tower_wall_collision(
+        # 3. Detect collision with tower walls
+        coll_left = self.check_water_tower_wall_collision_left(
             human_x, human_y, state_water_tower_x
         )
 
-        # 4. Reflect and dampen the velocity if there is a collision
+        coll_right = self.check_water_tower_wall_collision_right(
+            human_x, human_y, state_water_tower_x
+        )
+
+        # 4. Reflect and dampen the velocity if there is a collision with the left wall
         x_vel = jax.lax.cond(
-            coll,
+            coll_left,
             lambda x: -x * self.consts.WALL_RESTITUTION,
             lambda x: x,
             operand=x_vel
         )
 
-        # 5. Clamp x so human sits just left of the wall
+        # 5. Clamp x so human sits just left/right of the wall in case of collision
         human_x = jax.lax.cond(
-            coll,
+            coll_left,
             lambda _: jnp.array(state_water_tower_x - self.consts.HUMAN_SIZE[0], dtype=state_human_x.dtype),
+            lambda x: x,
+            operand=human_x
+        )
+
+        human_x = jax.lax.cond(
+            coll_right,
+            lambda _: jnp.array(state_water_tower_x + self.consts.WATER_TOWER_WIDTH, dtype=state_human_x.dtype),
             lambda x: x,
             operand=human_x
         )
@@ -320,10 +331,10 @@ class JaxHumanCannonball(JaxEnvironment[HumanCannonballState, HumanCannonballObs
         # 6. Set the launch status to True for subsequent steps
         human_launched = True
 
-        # 7. Set collision status to True for steps after the wall hit
+        # 7. Set collision status to True for steps after the left wall has been hit
         coll = jax.lax.cond(
             jnp.logical_or(  # If the collision happened this step or some step before (human bounced off the wall)
-                coll,
+                coll_left,
                 x_vel <= 0.0
             ),
             lambda _: True,  # Set collision status to True
@@ -369,13 +380,35 @@ class JaxHumanCannonball(JaxEnvironment[HumanCannonballState, HumanCannonballObs
         ground_collision = state_human_y + self.consts.HUMAN_SIZE[1] >= self.consts.GROUND_LEVEL
         return jnp.logical_and(ground_collision, jnp.logical_not(state_animation_running))
 
-    # Check if the human has hit the water tower wall
+    # Check if the human has hit the left water tower wall
     @partial(jax.jit, static_argnums=(0,))
-    def check_water_tower_wall_collision(
+    def check_water_tower_wall_collision_left(
             self, state_human_x, state_human_y, state_water_tower_x
     ):
         # Define bounding boxes for the water tower wall and the human
         wall_x1 = state_water_tower_x
+        wall_y1 = self.consts.WATER_TOWER_Y - self.consts.WATER_TOWER_WALL_HEIGHT
+        wall_x2 = wall_x1 + 1
+        wall_y2 = wall_y1 + self.consts.WATER_TOWER_WALL_HEIGHT
+
+        human_x1 = state_human_x + self.consts.HUMAN_SIZE[0]  # Only check for back half of the human
+        human_y1 = state_human_y
+        human_x2 = human_x1 + self.consts.HUMAN_SIZE[0] / 2
+        human_y2 = human_y1 + self.consts.HUMAN_SIZE[1]
+
+        # AABB collision detection
+        collision_x = jnp.logical_and(human_x1 < wall_x2, human_x2 > wall_x1)
+        collision_y = jnp.logical_and(human_y1 < wall_y2, human_y2 > wall_y1)
+
+        return jnp.logical_and(collision_x, collision_y)
+
+    # Check if the human has hit the right water tower wall
+    @partial(jax.jit, static_argnums=(0,))
+    def check_water_tower_wall_collision_right(
+            self, state_human_x, state_human_y, state_water_tower_x
+    ):
+        # Define bounding boxes for the water tower wall and the human
+        wall_x1 = state_water_tower_x + self.consts.WATER_TOWER_WIDTH
         wall_y1 = self.consts.WATER_TOWER_Y - self.consts.WATER_TOWER_WALL_HEIGHT
         wall_x2 = wall_x1 + 1
         wall_y2 = wall_y1 + self.consts.WATER_TOWER_WALL_HEIGHT
@@ -390,7 +423,6 @@ class JaxHumanCannonball(JaxEnvironment[HumanCannonballState, HumanCannonballObs
         collision_y = jnp.logical_and(human_y1 < wall_y2, human_y2 > wall_y1)
 
         return jnp.logical_and(collision_x, collision_y)
-
     # Determines the new angle of the cannon based on the action
     @partial(jax.jit, static_argnums=(0,))
     def angle_step(
