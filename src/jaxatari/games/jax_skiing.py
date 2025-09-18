@@ -161,7 +161,9 @@ class JaxSkiing(JaxEnvironment[GameState, SkiingObservation, SkiingInfo, SkiingC
             jnp.full((c.max_num_flags,), float(c.flag_height), dtype=jnp.float32)
         ], axis=1)
 
+        
         # Trees
+        # Enforce min horizontal separation and no overlap among trees on spawn
         trees_x = jax.random.randint(
             k_trees, (c.max_num_trees,),
             minval=int(c.tree_width),
@@ -172,11 +174,25 @@ class JaxSkiing(JaxEnvironment[GameState, SkiingObservation, SkiingInfo, SkiingC
             minval=int(c.tree_height),
             maxval=int(c.screen_height - c.tree_height) + 1
         ).astype(jnp.float32)
+
+        min_sep_tree = (jnp.float32(c.tree_width) + jnp.float32(c.tree_width)) * 0.5 + jnp.float32(8.0)
+        xmin = jnp.float32(c.tree_width)
+        xmax = jnp.float32(c.screen_width - c.tree_width)
+
+        def adj_tree_i(i, tx):
+            x0 = tx[i]
+            x_adj = _enforce_min_sep_x(x0, tx, min_sep_tree, xmin, xmax, n_valid=jnp.array(i, dtype=jnp.int32))
+            return tx.at[i].set(x_adj)
+
+        trees_x = jax.lax.fori_loop(0, c.max_num_trees, adj_tree_i, trees_x)
+
         trees = jnp.stack([
             trees_x, trees_y,
             jnp.full((c.max_num_trees,), float(c.tree_width),  dtype=jnp.float32),
             jnp.full((c.max_num_trees,), float(c.tree_height), dtype=jnp.float32)
         ], axis=1)
+
+
 
         # Rocks
         rocks_x = jax.random.randint(
@@ -189,11 +205,31 @@ class JaxSkiing(JaxEnvironment[GameState, SkiingObservation, SkiingInfo, SkiingC
             minval=int(c.rock_height),
             maxval=int(c.screen_height - c.rock_height) + 1
         ).astype(jnp.float32)
+
+        # Enforce separation from trees and already placed rocks
+        min_sep_rock_tree = (jnp.float32(c.rock_width) + jnp.float32(c.tree_width)) * 0.5 + jnp.float32(8.0)
+        min_sep_rock_rock = (jnp.float32(c.rock_width) + jnp.float32(c.rock_width)) * 0.5 + jnp.float32(8.0)
+        xmin_r = jnp.float32(c.rock_width)
+        xmax_r = jnp.float32(c.screen_width - c.rock_width)
+
+        tree_xs_fixed = trees[:, 0]
+
+        def adj_rock_i(i, rx):
+            x0 = rx[i]
+            # push from all trees (all are valid)
+            x1 = _enforce_min_sep_x(x0, tree_xs_fixed, min_sep_rock_tree, xmin_r, xmax_r, n_valid=jnp.array(tree_xs_fixed.shape[0], dtype=jnp.int32))
+            # then from previously placed rocks (indices < i)
+            x2 = _enforce_min_sep_x(x1, rx, min_sep_rock_rock, xmin_r, xmax_r, n_valid=jnp.array(i, dtype=jnp.int32))
+            return rx.at[i].set(x2)
+
+        rocks_x = jax.lax.fori_loop(0, c.max_num_rocks, adj_rock_i, rocks_x)
+
         rocks = jnp.stack([
             rocks_x, rocks_y,
             jnp.full((c.max_num_rocks,), float(c.rock_width),  dtype=jnp.float32),
             jnp.full((c.max_num_rocks,), float(c.rock_height), dtype=jnp.float32)
         ], axis=1)
+
 
         state = GameState(
             skier_x=jnp.array(76.0),
@@ -261,6 +297,16 @@ class JaxSkiing(JaxEnvironment[GameState, SkiingObservation, SkiingInfo, SkiingC
             ).astype(jnp.float32)
             y = (jnp.max(new_flags[:, 1]) + jnp.float32(self.config.gate_vertical_spacing) / 2.0)
 
+            # Enforce min separation from existing trees and rocks on respawn
+            min_sep_tree_tree = (jnp.float32(self.config.tree_width) + jnp.float32(self.config.tree_width)) * 0.5 + jnp.float32(8.0)
+            min_sep_tree_rock = (jnp.float32(self.config.tree_width) + jnp.float32(self.config.rock_width)) * 0.5 + jnp.float32(8.0)
+            xmin_t = jnp.float32(self.config.tree_width)
+            xmax_t = jnp.float32(self.config.screen_width - self.config.tree_width)
+            taken_from_trees = trees[:, 0]
+            taken_from_rocks = new_rocks[:, 0]
+            x_tree = _enforce_min_sep_x(x_tree, taken_from_trees, min_sep_tree_tree, xmin_t, xmax_t, n_valid=jnp.array(i, dtype=jnp.int32))
+            x_tree = _enforce_min_sep_x(x_tree, taken_from_rocks, min_sep_tree_rock, xmin_t, xmax_t, n_valid=jnp.array(taken_from_rocks.shape[0], dtype=jnp.int32))
+
             row_old = trees.at[i].get()
             row_new = row_old.at[0].set(x_tree).at[1].set(y)
 
@@ -281,6 +327,16 @@ class JaxSkiing(JaxEnvironment[GameState, SkiingObservation, SkiingInfo, SkiingC
                 self.config.screen_width - self.config.rock_width
             ).astype(jnp.float32)
             y = (jnp.max(new_flags[:, 1]) + jnp.float32(self.config.gate_vertical_spacing) / 2.0)
+
+            # Enforce min separation from existing rocks and trees on respawn
+            min_sep_rock_rock = (jnp.float32(self.config.rock_width) + jnp.float32(self.config.rock_width)) * 0.5 + jnp.float32(8.0)
+            min_sep_rock_tree = (jnp.float32(self.config.rock_width) + jnp.float32(self.config.tree_width)) * 0.5 + jnp.float32(8.0)
+            xmin_r = jnp.float32(self.config.rock_width)
+            xmax_r = jnp.float32(self.config.screen_width - self.config.rock_width)
+            taken_from_rocks = rocks[:, 0]
+            taken_from_trees = new_trees[:, 0]
+            x_rock = _enforce_min_sep_x(x_rock, taken_from_rocks, min_sep_rock_rock, xmin_r, xmax_r, n_valid=jnp.array(taken_from_rocks.shape[0], dtype=jnp.int32))
+            x_rock = _enforce_min_sep_x(x_rock, taken_from_trees, min_sep_rock_tree, xmin_r, xmax_r, n_valid=jnp.array(taken_from_trees.shape[0], dtype=jnp.int32))
 
             row_old = rocks.at[i].get()
             row_new = row_old.at[0].set(x_rock).at[1].set(y)
@@ -751,6 +807,39 @@ def _scan_blit(dst: jnp.ndarray, sprites: jnp.ndarray, centers_xy: jnp.ndarray) 
         return frame, None
     out, _ = jax.lax.scan(body, dst, (sprites, centers_xy))
     return out
+
+
+def _enforce_min_sep_x(x_init: jnp.ndarray, taken_xs: jnp.ndarray, min_sep: jnp.ndarray, xmin: jnp.ndarray, xmax: jnp.ndarray, n_valid: jnp.ndarray) -> jnp.ndarray:
+    """Shift x_init away from up to the first `n_valid` entries in taken_xs so that |x - taken_x| >= min_sep.
+    Uses fixed-size fori_loop (JAX-friendly)."""
+    def body(j, x_curr):
+        tx = taken_xs[j]
+        dx = x_curr - tx
+        too_close = jnp.abs(dx) < min_sep
+        apply = jnp.less(j, n_valid)
+        direction = jnp.where(dx >= 0.0, 1.0, -1.0)
+        candidate = jnp.clip(tx + direction * min_sep, xmin, xmax)
+        x_next = jnp.where(jnp.logical_and(apply, too_close), candidate, x_curr)
+        return x_next
+    x = jax.lax.fori_loop(0, taken_xs.shape[0], body, x_init)
+    return jnp.clip(x, xmin, xmax)
+
+
+    def body(i, x_curr):
+        tx = taken_xs[i]
+        dx = x_curr - tx
+        too_close = jnp.abs(dx) < min_sep
+        # Push to the side where we already are farther, default to right if exactly equal
+        direction = jnp.where(dx >= 0.0, 1.0, -1.0)
+        candidate = tx + direction * min_sep
+        # Clamp to bounds
+        candidate = jnp.clip(candidate, xmin, xmax)
+        return jnp.where(too_close, candidate, x_curr)
+
+    x = jax.lax.fori_loop(0, n, body, x)
+    # final clamp
+    x = jnp.clip(x, xmin, xmax)
+    return x
 
 # ---- Pure JAX Renderer -----------------------------------------------------------
 
