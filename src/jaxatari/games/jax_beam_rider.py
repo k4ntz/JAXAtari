@@ -4651,47 +4651,45 @@ class BeamRiderRenderer(JAXGameRenderer):
 
     @partial(jax.jit, static_argnums=(0,))
     def _draw_enemies(self, screen: chex.Array, enemies: chex.Array, state: BeamRiderState) -> chex.Array:
-        """Draw all active enemies with perspective scaling and sprites for white saucers and brown debris"""
+        """Draw enemies - OPTIMIZED with vmap for calculations, loop for sprite rendering"""
 
-        def draw_single_enemy(i, screen):
-            x, y = enemies[i, 0], enemies[i, 1]
-            active = enemies[i, 3] == 1
-            enemy_type = enemies[i, 5].astype(int)
+        # Pre-calculate coordinate grids once
+        y_indices = jnp.arange(self.constants.SCREEN_HEIGHT)
+        x_indices = jnp.arange(self.constants.SCREEN_WIDTH)
+        y_grid, x_grid = jnp.meshgrid(y_indices, x_indices, indexing='ij')
 
-            # Check enemy types
-            sentinel_ship = enemy_type == self.constants.ENEMY_TYPE_SENTINEL_SHIP
-            side_spawner = (
+        # Vectorized calculation of enemy properties
+        def calculate_enemy_properties(enemy):
+            x, y = enemy[0], enemy[1]
+            active = enemy[3] == 1
+            enemy_type = enemy[5].astype(int)
+
+            # Check enemy type categories
+            is_sentinel = enemy_type == self.constants.ENEMY_TYPE_SENTINEL_SHIP
+            is_side_spawner = (
                     (enemy_type == self.constants.ENEMY_TYPE_YELLOW_CHIRPER) |
                     (enemy_type == self.constants.ENEMY_TYPE_GREEN_BLOCKER) |
                     (enemy_type == self.constants.ENEMY_TYPE_GREEN_BOUNCE) |
                     (enemy_type == self.constants.ENEMY_TYPE_ORANGE_TRACKER)
             )
-            no_scaling = sentinel_ship | side_spawner
-            is_white_saucer = enemy_type == self.constants.ENEMY_TYPE_WHITE_SAUCER
-            is_brown_debris = enemy_type == self.constants.ENEMY_TYPE_BROWN_DEBRIS
-            is_green_blocker = enemy_type == self.constants.ENEMY_TYPE_GREEN_BLOCKER
-            is_green_bounce = enemy_type == self.constants.ENEMY_TYPE_GREEN_BOUNCE
-            is_blue_charger = enemy_type == self.constants.ENEMY_TYPE_BLUE_CHARGER
-            is_orange_tracker = enemy_type == self.constants.ENEMY_TYPE_ORANGE_TRACKER
-            is_yellow_rejuv = enemy_type == self.constants.ENEMY_TYPE_YELLOW_REJUVENATOR
-            is_sentinel = enemy_type == self.constants.ENEMY_TYPE_SENTINEL_SHIP
-            is_yellow_debris = enemy_type == self.constants.ENEMY_TYPE_REJUVENATOR_DEBRIS
-            is_yellow_chirper = enemy_type == self.constants.ENEMY_TYPE_YELLOW_CHIRPER
-            # Get base enemy dimensions
+            no_scaling = is_sentinel | is_side_spawner
+
+            # Get base dimensions
             base_width = jnp.where(
-                sentinel_ship,
+                is_sentinel,
                 self.constants.SENTINEL_SHIP_WIDTH,
                 self.constants.ENEMY_WIDTH
             )
             base_height = jnp.where(
-                sentinel_ship,
+                is_sentinel,
                 self.constants.SENTINEL_SHIP_HEIGHT,
                 self.constants.ENEMY_HEIGHT
             )
 
-            # Apply scaling
-            scale_factor = jnp.where(no_scaling, 1.0, self._get_enemy_scale(y))
+            # Calculate scale - ensure it's always a JAX array
+            scale_factor = jnp.where(no_scaling, jnp.array(1.0), self._get_enemy_scale(y))
 
+            # Calculate scaled dimensions
             scaled_width = jnp.where(
                 no_scaling,
                 base_width.astype(int),
@@ -4703,38 +4701,14 @@ class BeamRiderRenderer(JAXGameRenderer):
                 jnp.maximum(1, (base_height * scale_factor).astype(int))
             )
 
-            # Determine if should render as dot
-            is_dot = (~no_scaling) & (scale_factor < 0.25)
-
-            # Use sprites for white saucers and brown debris with sufficient scale
-            use_white_saucer_sprite = is_white_saucer & (scale_factor >= 0.4) & active & ~is_dot
-            use_brown_debris_sprite = is_brown_debris & (scale_factor >= 0.4) & active & ~is_dot
-            use_green_blocker_sprite = is_green_blocker & active  # Green blockers don't scale, always use sprite
-            use_green_bounce_sprite = is_green_bounce & active
-            use_blue_charger_sprite = is_blue_charger & active
-            use_orange_tracker_sprite = is_orange_tracker & active
-            use_yellow_rejuv_sprite = is_yellow_rejuv & active
-            use_sentinel_sprite = is_sentinel & active
-            use_yellow_debris_sprite = is_yellow_debris & active
-            use_yellow_chirper_sprite = is_yellow_chirper & active
-
-            use_any_sprite = (use_white_saucer_sprite | use_brown_debris_sprite | use_green_blocker_sprite |
-                              use_green_bounce_sprite | use_blue_charger_sprite | use_orange_tracker_sprite |
-                              use_yellow_rejuv_sprite | use_sentinel_sprite | use_yellow_debris_sprite |
-                              use_yellow_chirper_sprite)
-            # Center the scaled enemy at its position
+            # Calculate centering offsets
             x_offset = ((base_width - scaled_width) / 2).astype(int)
             y_offset = ((base_height - scaled_height) / 2).astype(int)
 
             draw_x = (x + x_offset).astype(int)
             draw_y = (y + y_offset).astype(int)
 
-            # Create coordinate grids
-            y_indices = jnp.arange(self.constants.SCREEN_HEIGHT)
-            x_indices = jnp.arange(self.constants.SCREEN_WIDTH)
-            y_grid, x_grid = jnp.meshgrid(y_indices, x_indices, indexing='ij')
-
-            # Check if enemy is at least partially visible
+            # Check visibility
             partially_visible = (
                     (draw_x < self.constants.SCREEN_WIDTH) &
                     (draw_x + scaled_width > 0) &
@@ -4742,218 +4716,255 @@ class BeamRiderRenderer(JAXGameRenderer):
                     (draw_y + scaled_height > 0)
             )
 
-            # Generic sprite drawing function
-            def draw_enemy_sprite(sprite, color):
-                sprite_h, sprite_w = sprite.shape
+            # Determine rendering type
+            is_dot = (~no_scaling) & (scale_factor < 0.25)
 
-                # Calculate scaled sprite dimensions
-                sprite_scaled_w = jnp.maximum(1, (sprite_w * scale_factor).astype(int))
-                sprite_scaled_h = jnp.maximum(1, (sprite_h * scale_factor).astype(int))
+            # Determine which sprite to use (if any)
+            use_sprite = active & partially_visible & (
+                    ((enemy_type == self.constants.ENEMY_TYPE_WHITE_SAUCER) & (scale_factor >= 0.4)) |
+                    ((enemy_type == self.constants.ENEMY_TYPE_BROWN_DEBRIS) & (scale_factor >= 0.4)) |
+                    (enemy_type == self.constants.ENEMY_TYPE_GREEN_BLOCKER) |
+                    (enemy_type == self.constants.ENEMY_TYPE_GREEN_BOUNCE) |
+                    (enemy_type == self.constants.ENEMY_TYPE_BLUE_CHARGER) |
+                    (enemy_type == self.constants.ENEMY_TYPE_ORANGE_TRACKER) |
+                    (enemy_type == self.constants.ENEMY_TYPE_YELLOW_REJUVENATOR) |
+                    (enemy_type == self.constants.ENEMY_TYPE_SENTINEL_SHIP) |
+                    (enemy_type == self.constants.ENEMY_TYPE_REJUVENATOR_DEBRIS) |
+                    (enemy_type == self.constants.ENEMY_TYPE_YELLOW_CHIRPER)
+            )
 
-                # Center sprite at enemy position
-                sprite_x = (x - sprite_scaled_w // 2).astype(int)
-                sprite_y = (y - sprite_scaled_h // 2).astype(int)
+            return {
+                'x': x.astype(int),
+                'y': y.astype(int),
+                'draw_x': draw_x,
+                'draw_y': draw_y,
+                'active': active,
+                'enemy_type': enemy_type,
+                'scale_factor': scale_factor,  # Now guaranteed to be a JAX array
+                'scaled_width': scaled_width,
+                'scaled_height': scaled_height,
+                'partially_visible': partially_visible,
+                'is_dot': is_dot,
+                'use_sprite': use_sprite
+            }
 
-                # Create sprite mask using nearest-neighbor scaling
-                sprite_mask = jnp.zeros((self.constants.SCREEN_HEIGHT, self.constants.SCREEN_WIDTH), dtype=bool)
+        # Use vmap to calculate all enemy properties at once
+        enemy_props = jax.vmap(calculate_enemy_properties)(enemies)
 
-                def set_pixel(py, sprite_mask_inner):
-                    def set_pixel_x(px, sprite_mask_inner2):
-                        # Map screen pixel to sprite pixel
-                        sprite_px = ((px - sprite_x) * sprite_w / sprite_scaled_w).astype(int)
-                        sprite_py = ((py - sprite_y) * sprite_h / sprite_scaled_h).astype(int)
+        # Helper function for sprite rendering
+        def render_sprite(screen, sprite, x, y, scale_factor, color):
+            """Generic sprite rendering with scaling"""
+            sprite_h, sprite_w = sprite.shape
 
-                        # Check if within sprite bounds
-                        in_sprite = (
-                                (px >= sprite_x) & (px < sprite_x + sprite_scaled_w) &
-                                (py >= sprite_y) & (py < sprite_y + sprite_scaled_h) &
-                                (sprite_px >= 0) & (sprite_px < sprite_w) &
-                                (sprite_py >= 0) & (sprite_py < sprite_h) &
-                                (px >= 0) & (px < self.constants.SCREEN_WIDTH) &
-                                (py >= 0) & (py < self.constants.SCREEN_HEIGHT)
-                        )
+            # Ensure scale_factor is a JAX array
+            scale_factor = jnp.asarray(scale_factor)
 
-                        # Get sprite value
-                        sprite_val = jnp.where(
-                            in_sprite,
-                            sprite[sprite_py, sprite_px],
-                            0
-                        )
+            # Calculate scaled dimensions
+            sprite_scaled_w = jnp.maximum(1, (sprite_w * scale_factor).astype(int))
+            sprite_scaled_h = jnp.maximum(1, (sprite_h * scale_factor).astype(int))
 
-                        # Set pixel if sprite has value 1
-                        sprite_mask_inner2 = sprite_mask_inner2.at[py, px].set(
-                            sprite_mask_inner2[py, px] | ((sprite_val == 1) & in_sprite)
-                        )
-                        return sprite_mask_inner2
+            # Center sprite at position
+            sprite_x = (x - sprite_scaled_w // 2).astype(int)
+            sprite_y = (y - sprite_scaled_h // 2).astype(int)
 
-                    return jax.lax.fori_loop(0, self.constants.SCREEN_WIDTH, set_pixel_x, sprite_mask_inner)
+            # Create sprite mask using nearest-neighbor scaling
+            sprite_mask = jnp.zeros((self.constants.SCREEN_HEIGHT, self.constants.SCREEN_WIDTH), dtype=bool)
 
-                sprite_mask = jax.lax.fori_loop(0, self.constants.SCREEN_HEIGHT, set_pixel, sprite_mask)
+            def set_pixel(py, mask_inner):
+                def set_pixel_x(px, mask_inner2):
+                    # Map screen pixel to sprite pixel
+                    sprite_px = ((px - sprite_x) * sprite_w / sprite_scaled_w).astype(int)
+                    sprite_py = ((py - sprite_y) * sprite_h / sprite_scaled_h).astype(int)
 
-                # Apply color for sprite
-                return jnp.where(
-                    sprite_mask[..., None] & active & partially_visible,
-                    color,
-                    screen
-                )
+                    # Check bounds
+                    in_bounds = (
+                            (px >= sprite_x) & (px < sprite_x + sprite_scaled_w) &
+                            (py >= sprite_y) & (py < sprite_y + sprite_scaled_h) &
+                            (sprite_px >= 0) & (sprite_px < sprite_w) &
+                            (sprite_py >= 0) & (sprite_py < sprite_h) &
+                            (px >= 0) & (px < self.constants.SCREEN_WIDTH) &
+                            (py >= 0) & (py < self.constants.SCREEN_HEIGHT)
+                    )
 
-            # Draw white saucer sprite
+                    # Get sprite value
+                    sprite_val = jnp.where(
+                        in_bounds,
+                        sprite[sprite_py, sprite_px],
+                        0
+                    )
+
+                    # Set mask
+                    mask_inner2 = mask_inner2.at[py, px].set(
+                        mask_inner2[py, px] | ((sprite_val == 1) & in_bounds)
+                    )
+                    return mask_inner2
+
+                return jax.lax.fori_loop(0, self.constants.SCREEN_WIDTH, set_pixel_x, mask_inner)
+
+            sprite_mask = jax.lax.fori_loop(0, self.constants.SCREEN_HEIGHT, set_pixel, sprite_mask)
+
+            return jnp.where(sprite_mask[..., None], color, screen)
+
+        # Process sprites using a loop (since each needs different handling)
+        def draw_single_enemy(i, screen):
+            # Use jax.tree.map instead of jax.tree_map (fix deprecation)
+            props = jax.tree.map(lambda x: x[i], enemy_props)
+
+            # Draw sprite-based enemies
             screen = jax.lax.cond(
-                use_white_saucer_sprite,
-                lambda s: draw_enemy_sprite(self.white_saucer_sprite, jnp.array(self.constants.WHITE, dtype=jnp.uint8)),
+                props['use_sprite'] & (props['enemy_type'] == self.constants.ENEMY_TYPE_WHITE_SAUCER),
+                lambda s: render_sprite(s, self.white_saucer_sprite, props['x'], props['y'],
+                                        props['scale_factor'], jnp.array(self.constants.WHITE, dtype=jnp.uint8)),
                 lambda s: s,
                 screen
             )
 
-            # Draw brown debris sprite
             screen = jax.lax.cond(
-                use_brown_debris_sprite,
-                lambda s: draw_enemy_sprite(self.brown_debris_sprite,
-                                            jnp.array(self.constants.BROWN_DEBRIS_COLOR, dtype=jnp.uint8)),
+                props['use_sprite'] & (props['enemy_type'] == self.constants.ENEMY_TYPE_BROWN_DEBRIS),
+                lambda s: render_sprite(s, self.brown_debris_sprite, props['x'], props['y'],
+                                        props['scale_factor'],
+                                        jnp.array(self.constants.BROWN_DEBRIS_COLOR, dtype=jnp.uint8)),
                 lambda s: s,
                 screen
             )
-            #Draw green blocker sprite
+
             screen = jax.lax.cond(
-                use_green_blocker_sprite,
-                lambda s: draw_enemy_sprite(self.green_blocker_sprite,
-                                            jnp.array(self.constants.GREEN_BLOCKER_COLOR, dtype=jnp.uint8)),
+                props['use_sprite'] & (props['enemy_type'] == self.constants.ENEMY_TYPE_GREEN_BLOCKER),
+                lambda s: render_sprite(s, self.green_blocker_sprite, props['x'], props['y'],
+                                        props['scale_factor'],
+                                        jnp.array(self.constants.GREEN_BLOCKER_COLOR, dtype=jnp.uint8)),
                 lambda s: s,
                 screen
             )
-            #Draw green bounce sprite
+
             screen = jax.lax.cond(
-                use_green_bounce_sprite,
-                lambda s: draw_enemy_sprite(self.green_bounce_sprite,
-                                            jnp.array(self.constants.GREEN_BOUNCE_COLOR, dtype=jnp.uint8)),
+                props['use_sprite'] & (props['enemy_type'] == self.constants.ENEMY_TYPE_GREEN_BOUNCE),
+                lambda s: render_sprite(s, self.green_bounce_sprite, props['x'], props['y'],
+                                        props['scale_factor'],
+                                        jnp.array(self.constants.GREEN_BOUNCE_COLOR, dtype=jnp.uint8)),
                 lambda s: s,
                 screen
             )
-            #Draw blue charger sprite
+
             screen = jax.lax.cond(
-                use_blue_charger_sprite,
-                lambda s: draw_enemy_sprite(self.blue_charger_sprite,
-                                            jnp.array(self.constants.BLUE_CHARGER_COLOR, dtype=jnp.uint8)),
+                props['use_sprite'] & (props['enemy_type'] == self.constants.ENEMY_TYPE_BLUE_CHARGER),
+                lambda s: render_sprite(s, self.blue_charger_sprite, props['x'], props['y'],
+                                        props['scale_factor'],
+                                        jnp.array(self.constants.BLUE_CHARGER_COLOR, dtype=jnp.uint8)),
                 lambda s: s,
                 screen
             )
-            #Draw orange tracker sprite
+
             screen = jax.lax.cond(
-                use_orange_tracker_sprite,
-                lambda s: draw_enemy_sprite(self.orange_tracker_sprite,
-                                            jnp.array(self.constants.ORANGE_TRACKER_COLOR, dtype=jnp.uint8)),
+                props['use_sprite'] & (props['enemy_type'] == self.constants.ENEMY_TYPE_ORANGE_TRACKER),
+                lambda s: render_sprite(s, self.orange_tracker_sprite, props['x'], props['y'],
+                                        props['scale_factor'],
+                                        jnp.array(self.constants.ORANGE_TRACKER_COLOR, dtype=jnp.uint8)),
                 lambda s: s,
                 screen
             )
-            # Draw yellow rejuvenator sprite
+
             screen = jax.lax.cond(
-                use_yellow_rejuv_sprite,
-                lambda s: draw_enemy_sprite(self.yellow_rejuv,
-                                            jnp.array(self.constants.YELLOW_REJUVENATOR_COLOR, dtype=jnp.uint8)),
+                props['use_sprite'] & (props['enemy_type'] == self.constants.ENEMY_TYPE_YELLOW_REJUVENATOR),
+                lambda s: render_sprite(s, self.yellow_rejuv, props['x'], props['y'],
+                                        props['scale_factor'],
+                                        jnp.array(self.constants.YELLOW_REJUVENATOR_COLOR, dtype=jnp.uint8)),
                 lambda s: s,
                 screen
             )
-            # Draw sentinel sprite
+
             screen = jax.lax.cond(
-                use_sentinel_sprite,
-                lambda s: self._draw_sentinel_sprite(s, x.astype(int), y.astype(int), 1.0),
+                props['use_sprite'] & (props['enemy_type'] == self.constants.ENEMY_TYPE_SENTINEL_SHIP),
+                lambda s: self._draw_sentinel_sprite(s, props['x'], props['y'], props['scale_factor']),
                 lambda s: s,
                 screen
             )
+
             screen = jax.lax.cond(
-                use_yellow_debris_sprite,
-                lambda s: draw_enemy_sprite(self.debris_sprite,
-                                            jnp.array(self.constants.REJUVENATOR_DEBRIS_COLOR, dtype=jnp.uint8)),
+                props['use_sprite'] & (props['enemy_type'] == self.constants.ENEMY_TYPE_REJUVENATOR_DEBRIS),
+                lambda s: render_sprite(s, self.debris_sprite, props['x'], props['y'],
+                                        props['scale_factor'],
+                                        jnp.array(self.constants.REJUVENATOR_DEBRIS_COLOR, dtype=jnp.uint8)),
                 lambda s: s,
                 screen
             )
+
             screen = jax.lax.cond(
-                use_yellow_chirper_sprite,
-                lambda s: self._draw_animated_chirper_sprite(s, x.astype(int), y.astype(int), 1.0,
+                props['use_sprite'] & (props['enemy_type'] == self.constants.ENEMY_TYPE_YELLOW_CHIRPER),
+                lambda s: self._draw_animated_chirper_sprite(s, props['x'], props['y'], props['scale_factor'],
                                                              jnp.array(self.constants.YELLOW_CHIRPER_COLOR,
                                                                        dtype=jnp.uint8),
-                                                             state.frame_count),  # Pass frame_count for animation
+                                                             state.frame_count),
                 lambda s: s,
                 screen
             )
-            # For very small enemies (dots)
+
+            # Draw non-sprite enemies (rectangles or dots)
+            # Create masks for dots and regular rectangles
             dot_mask = (
-                    is_dot &
-                    (x_grid == jnp.clip(draw_x + scaled_width // 2, 0, self.constants.SCREEN_WIDTH - 1)) &
-                    (y_grid == jnp.clip(draw_y + scaled_height // 2, 0, self.constants.SCREEN_HEIGHT - 1)) &
-                    active &
-                    partially_visible
+                    props['is_dot'] &
+                    props['active'] &
+                    props['partially_visible'] &
+                    ~props['use_sprite'] &
+                    (x_grid == jnp.clip(props['draw_x'] + props['scaled_width'] // 2, 0,
+                                        self.constants.SCREEN_WIDTH - 1)) &
+                    (y_grid == jnp.clip(props['draw_y'] + props['scaled_height'] // 2, 0,
+                                        self.constants.SCREEN_HEIGHT - 1))
             )
 
-            # Regular enemy mask for larger enemies (excluding enemies with sprites)
-            regular_mask = (
-                    ~is_dot &
-                    ~use_any_sprite &  # Don't draw rectangle if using any sprite
-                    (x_grid >= draw_x) &
-                    (x_grid < draw_x + scaled_width) &
-                    (y_grid >= draw_y) &
-                    (y_grid < draw_y + scaled_height) &
+            rect_mask = (
+                    ~props['is_dot'] &
+                    ~props['use_sprite'] &
+                    props['active'] &
+                    props['partially_visible'] &
+                    (x_grid >= props['draw_x']) &
+                    (x_grid < props['draw_x'] + props['scaled_width']) &
+                    (y_grid >= props['draw_y']) &
+                    (y_grid < props['draw_y'] + props['scaled_height']) &
                     (x_grid >= 0) & (x_grid < self.constants.SCREEN_WIDTH) &
-                    (y_grid >= 0) & (y_grid < self.constants.SCREEN_HEIGHT) &
-                    active &
-                    partially_visible
+                    (y_grid >= 0) & (y_grid < self.constants.SCREEN_HEIGHT)
             )
 
-            # Combine both masks
-            enemy_mask = dot_mask | regular_mask
+            enemy_mask = dot_mask | rect_mask
 
-            # Select enemy color based on type (for non-sprite enemies)
-            enemy_color = jnp.where(
-                enemy_type == self.constants.ENEMY_TYPE_BROWN_DEBRIS,
-                jnp.array(self.constants.BROWN_DEBRIS_COLOR, dtype=jnp.uint8),
-                jnp.where(
-                    enemy_type == self.constants.ENEMY_TYPE_YELLOW_CHIRPER,
+            # Get color for non-sprite enemies
+            enemy_color = jnp.select(
+                [
+                    props['enemy_type'] == self.constants.ENEMY_TYPE_WHITE_SAUCER,
+                    props['enemy_type'] == self.constants.ENEMY_TYPE_BROWN_DEBRIS,
+                    props['enemy_type'] == self.constants.ENEMY_TYPE_YELLOW_CHIRPER,
+                    props['enemy_type'] == self.constants.ENEMY_TYPE_BLUE_CHARGER,
+                    props['enemy_type'] == self.constants.ENEMY_TYPE_GREEN_BOUNCE,
+                    props['enemy_type'] == self.constants.ENEMY_TYPE_ORANGE_TRACKER,
+                    props['enemy_type'] == self.constants.ENEMY_TYPE_GREEN_BLOCKER,
+                    props['enemy_type'] == self.constants.ENEMY_TYPE_SENTINEL_SHIP,
+                    props['enemy_type'] == self.constants.ENEMY_TYPE_YELLOW_REJUVENATOR,
+                    props['enemy_type'] == self.constants.ENEMY_TYPE_REJUVENATOR_DEBRIS,
+                ],
+                [
+                    jnp.array(self.constants.WHITE, dtype=jnp.uint8),
+                    jnp.array(self.constants.BROWN_DEBRIS_COLOR, dtype=jnp.uint8),
                     jnp.array(self.constants.YELLOW_CHIRPER_COLOR, dtype=jnp.uint8),
-                    jnp.where(
-                        enemy_type == self.constants.ENEMY_TYPE_GREEN_BLOCKER,
-                        jnp.array(self.constants.GREEN_BLOCKER_COLOR, dtype=jnp.uint8),
-                        jnp.where(
-                            enemy_type == self.constants.ENEMY_TYPE_GREEN_BOUNCE,
-                            jnp.array(self.constants.GREEN_BOUNCE_COLOR, dtype=jnp.uint8),
-                            jnp.where(
-                                enemy_type == self.constants.ENEMY_TYPE_BLUE_CHARGER,
-                                jnp.array(self.constants.BLUE_CHARGER_COLOR, dtype=jnp.uint8),
-                                jnp.where(
-                                    enemy_type == self.constants.ENEMY_TYPE_ORANGE_TRACKER,
-                                    jnp.array(self.constants.ORANGE_TRACKER_COLOR, dtype=jnp.uint8),
-                                    jnp.where(
-                                        enemy_type == self.constants.ENEMY_TYPE_YELLOW_REJUVENATOR,
-                                        jnp.array(self.constants.YELLOW_REJUVENATOR_COLOR, dtype=jnp.uint8),
-                                        jnp.where(
-                                            enemy_type == self.constants.ENEMY_TYPE_REJUVENATOR_DEBRIS,
-                                            jnp.array(self.constants.REJUVENATOR_DEBRIS_COLOR, dtype=jnp.uint8),
-                                            jnp.where(
-                                                enemy_type == self.constants.ENEMY_TYPE_SENTINEL_SHIP,
-                                                jnp.array(self.constants.RED, dtype=jnp.uint8),
-                                                jnp.array(self.constants.WHITE, dtype=jnp.uint8)
-                                            )
-                                        )
-                                    )
-                                )
-                            )
-                        )
-                    )
-                )
+                    jnp.array(self.constants.BLUE_CHARGER_COLOR, dtype=jnp.uint8),
+                    jnp.array(self.constants.GREEN_BOUNCE_COLOR, dtype=jnp.uint8),
+                    jnp.array(self.constants.ORANGE_TRACKER_COLOR, dtype=jnp.uint8),
+                    jnp.array(self.constants.GREEN_BLOCKER_COLOR, dtype=jnp.uint8),
+                    jnp.array(self.constants.SENTINEL_SHIP_COLOR, dtype=jnp.uint8),
+                    jnp.array(self.constants.YELLOW_REJUVENATOR_COLOR, dtype=jnp.uint8),
+                    jnp.array(self.constants.REJUVENATOR_DEBRIS_COLOR, dtype=jnp.uint8),
+                ],
+                default=jnp.array(self.constants.WHITE, dtype=jnp.uint8)
             )
 
-            # Apply enemy color where mask is True (for non-sprite enemies)
-            screen = jnp.where(
-                enemy_mask[..., None],
-                enemy_color,
-                screen
-            ).astype(jnp.uint8)
+            # Apply color for non-sprite enemies
+            screen = jnp.where(enemy_mask[..., None], enemy_color, screen)
 
-            return screen
+            return screen.astype(jnp.uint8)
 
-        # Apply to all enemies
+        # Process all enemies with the loop
         screen = jax.lax.fori_loop(0, self.constants.MAX_ENEMIES, draw_single_enemy, screen)
-        return screen
 
+        return screen
     @partial(jax.jit, static_argnums=(0,))
     def _draw_ui(self, screen: chex.Array, state) -> chex.Array:
         """
