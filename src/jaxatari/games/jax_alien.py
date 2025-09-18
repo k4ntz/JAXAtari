@@ -1009,26 +1009,22 @@ class JaxAlien(JaxEnvironment[AlienState, AlienObservation, AlienInfo, AlienCons
             PlayerState: player information
         """
         moving_action = jax.lax.cond(jnp.greater(action,9),
-                                      lambda _: jnp.mod(action,10)+2,
-                                      lambda _: action,
-                                      None
+                                      lambda ac: jnp.mod(ac,10)+2,
+                                      lambda ac: ac,
+                                      action
                                       )
         
         position = jnp.array([state.player.x, state.player.y])
         
         velocity_vertical = jax.lax.min(jnp.round((((117*2)/249))*(state.level.frame_count)).astype(jnp.int32) - jnp.round(((117*2/249))*(state.level.frame_count - 1)).astype(jnp.int32),1)
         
-        new_position = jax.lax.cond(
-            jnp.equal(moving_action, JAXAtariAction.UP),
-            lambda x: x.at[1].subtract(velocity_vertical),
-            lambda x: jax.lax.cond(
-                jnp.equal(moving_action, JAXAtariAction.DOWN),
-                lambda y: y.at[1].add(velocity_vertical),
-                lambda y: y,
-                x
-            ),
-            position
-        )
+        new_y_position: jArray = jnp.multiply(jnp.equal(moving_action, JAXAtariAction.UP), position[1]-velocity_vertical) + jnp.multiply(
+            jnp.equal(moving_action, JAXAtariAction.DOWN), position[1] + velocity_vertical
+        ) + jnp.multiply((1 - jnp.logical_or(jnp.equal(moving_action, JAXAtariAction.UP), jnp.equal(moving_action, JAXAtariAction.DOWN))), 
+                         position[1])
+
+        new_position = position.at[1].set(new_y_position)
+
         
         max_y = self.consts.ENEMY_START_Y + 20
         bounded_y = jnp.clip(new_position[1], None, max_y)
@@ -1038,7 +1034,7 @@ class JaxAlien(JaxEnvironment[AlienState, AlienObservation, AlienInfo, AlienCons
         return new_player_state
 
     @partial(jax.jit, static_argnums=(0))
-    def multiple_enemies_step(self, state: AlienState) -> EnemiesState:
+    def multiple_enemies_step_bonus(self, state: AlienState) -> EnemiesState:
         """sets the velocity for the aliens this frame
         Args:
             state (AlienState): Current State of the Game
@@ -1071,9 +1067,9 @@ class JaxAlien(JaxEnvironment[AlienState, AlienObservation, AlienInfo, AlienCons
                 jnp.logical_and(new_level.death_frame_counter == 0,state.level.death_frame_counter == 1),
                 jnp.logical_and(new_level.evil_item_frame_counter == 0,state.level.evil_item_frame_counter == 1)
                 ),
-            lambda _: self.start_primary_stage(new_state),
-            lambda _: new_state,
-            None
+            self.start_primary_stage,
+            lambda x: x,
+            new_state
         )
 
     @partial(jax.jit, static_argnums=(0))
@@ -1086,7 +1082,7 @@ class JaxAlien(JaxEnvironment[AlienState, AlienObservation, AlienInfo, AlienCons
             AlienState: the next game frame
         """
                         
-        new_enemies_state = self.multiple_enemies_step(state)
+        new_enemies_state = self.multiple_enemies_step_bonus(state)
         new_player_state = self.bonus_room_player_step(state, action)
         
         dead_or_alive = jnp.max(jnp.array([
@@ -1146,17 +1142,35 @@ class JaxAlien(JaxEnvironment[AlienState, AlienObservation, AlienInfo, AlienCons
         all_reward = self._get_all_rewards(state,state)
         done = self._get_done(state)
         alieninfo = self._get_info(state,all_reward)
-        new_state = jax.lax.cond(
-        state.level.bonus_flag,
-        lambda x: self.bonus_step(x, action),
-        lambda x: jax.lax.cond(
-            jnp.less_equal(x.level.frame_count, 50),
-            lambda y: state,
-            lambda y: self.primary_step(x, action),
-            x
-            ),
-        state
-        )
+        
+        
+        # Choose Step here:
+        is_in_bonus: jArray = state.level.bonus_flag
+        is_in_regular: jArray = jnp.logical_and(1 - state.level.bonus_flag, jnp.greater(state.level.frame_count, 50))
+        is_still_frozen: jArray = jnp.logical_and(1 - state.level.bonus_flag, jnp.less_equal(state.level.frame_count, 50))
+        # Compute selected: 
+        # 0 - Doesn't happen unless error
+        # 1 - in bonus
+        # 2 - in regular
+        # 3 - still frozen
+        choice_index: jArray = jnp.max(jnp.array([is_in_bonus*1, is_in_regular*2, is_still_frozen*3], jnp.int32), keepdims=False)
+        new_state: AlienState = jax.lax.switch(choice_index, 
+                    [lambda x, y: x, 
+                     self.bonus_step, 
+                     self.primary_step, 
+                     lambda x, y: x], 
+                    state, action)
+        #new_state = jax.lax.cond(
+        #state.level.bonus_flag,
+        #lambda x: self.bonus_step(x, action),
+        #lambda x: jax.lax.cond(
+        #    jnp.less_equal(x.level.frame_count, 50),
+        #    lambda y: state,
+        #    lambda y: self.primary_step(x, action),
+        #    x
+        #    ),
+        #state
+        #)
     
         new_level_state = new_state.level._replace(frame_count=new_state.level.frame_count + 1)
         new_state = new_state._replace(level=new_level_state,
@@ -1370,7 +1384,46 @@ class JaxAlien(JaxEnvironment[AlienState, AlienObservation, AlienInfo, AlienCons
         new_score = new_score.astype(jnp.uint16)
 
         return egg_state, new_score
+    @partial(jax.jit, static_argnums=(0, ))
+    def check_item_player_collision(self, i, batched_val: Tuple[Any]):
+        """checks for collision between an item and the player
+        Args:
+            i (_type_): index
+            single_item_col_map (_type_): collision map for a single item
+        Returns:
+            _type_: augmented collision map for a single item
+        """
+        single_item_col_map: jArray = None 
+        state: AlienState = None 
+        player_x: jArray = None 
+        player_y: jArray = None
+        
+        single_item_col_map, state, player_x, player_y = batched_val
+        x_lower: jnp.ndarray = player_x
+        x_higher: jnp.ndarray = jnp.add(player_x, self.consts.PLAYER_WIDTH)
+        y_lower: jnp.ndarray = player_y
+        y_higher: jnp.ndarray = jnp.add(player_y, self.consts.PLAYER_HEIGHT)
+        has_collision = jnp.logical_and(state.items[i, 0]>= x_lower,
+                                        jnp.logical_and(state.items[i, 0] < x_higher,
+                                                        jnp.logical_and(state.items[i, 1] >= y_lower,
+                                                                        state.items[i, 1] < y_higher)))
+        has_collision = jnp.logical_and(has_collision, state.items[i, 2] == 1)#only check for collision if item is active
+        has_collision = jnp.logical_and(has_collision, 1 - jnp.logical_and(state.items[i, 3] == 0 ,state.player.flame.flame_flag))#disable collision for evil item when flamethrower is active
+        single_item_col_map = single_item_col_map.at[i].set(has_collision.astype(np.uint8))
+        return (single_item_col_map, state, player_x, player_y)
 
+    def spawn_score_item(self, items, state: AlienState):
+        """sets items on the field
+        Args:
+            items (_type_):
+        Returns:
+            _type_: augmented items, new_spawn_score_item_flag, new_score_item_counter
+        """
+        difficulty_stage = jnp.astype(state.level.difficulty_stage, jnp.int32)
+        new_items = items.at[3, 2:].set(jnp.array([1, jnp.clip(difficulty_stage + 1, 1, 6)]))
+        
+        return new_items, 0, 0
+    
     @partial(jax.jit, static_argnums=(0,))
     def item_step(self, player_x: jnp.ndarray, player_y: jnp.ndarray, score: jnp.ndarray, state: AlienState):
         """handles everything item related
@@ -1386,33 +1439,11 @@ class JaxAlien(JaxEnvironment[AlienState, AlienObservation, AlienInfo, AlienCons
         """
         item_collision_map: jnp.ndarray = jnp.zeros((state.items.shape[0]))
         # Determine coord range occupied by the player
-        x_lower: jnp.ndarray = player_x
-        x_higher: jnp.ndarray = jnp.add(player_x, self.consts.PLAYER_WIDTH)
-        y_lower: jnp.ndarray = player_y
-        y_higher: jnp.ndarray = jnp.add(player_y, self.consts.PLAYER_HEIGHT)
-
-
-        def check_item_player_collision(i, single_item_col_map):
-            """checks for collision between an item and the player
-
-            Args:
-                i (_type_): index
-                single_item_col_map (_type_): collision map for a single item
-
-            Returns:
-                _type_: augmented collision map for a single item
-            """
-            has_collision = jnp.logical_and(state.items[i, 0]>= x_lower,
-                                            jnp.logical_and(state.items[i, 0] < x_higher,
-                                                            jnp.logical_and(state.items[i, 1] >= y_lower,
-                                                                            state.items[i, 1] < y_higher)))
-            has_collision = jnp.logical_and(has_collision, state.items[i, 2] == 1)#only check for collision if item is active
-            has_collision = jnp.logical_and(has_collision, 1 - jnp.logical_and(state.items[i, 3] == 0 ,state.player.flame.flame_flag))#disable collision for evil item when flamethrower is active
-            single_item_col_map = single_item_col_map.at[i].set(has_collision.astype(np.uint8))
-
-            return single_item_col_map
         
-        item_collision_map = jax.lax.fori_loop(0, state.items.shape[0], check_item_player_collision, item_collision_map)
+
+        
+        
+        item_collision_map, _, _, _ = jax.lax.fori_loop(0, state.items.shape[0], self.check_item_player_collision, (item_collision_map, state, player_x, player_y))
 
         # Berechne Score-Erhöhung basierend auf Item-Typ
         score_increases = jnp.multiply(
@@ -1424,59 +1455,47 @@ class JaxAlien(JaxEnvironment[AlienState, AlienObservation, AlienInfo, AlienCons
         )
         
         new_evil_item_frame_counter= jax.lax.cond(jnp.logical_and(jnp.equal(item_collision_map[state.level.current_active_item_index], 1), jnp.less(state.level.current_active_item_index,3)),
-                                                  lambda _: jnp.array(state.level.evil_item_duration).astype(jnp.int32),
-                                                  lambda _: state.level.evil_item_frame_counter,
-                                                  operand=None
+                                                  lambda x, y: jnp.array(y).astype(jnp.int32),
+                                                  lambda x, y: x,
+                                                  state.level.evil_item_frame_counter, state.level.evil_item_duration
                                                   )
 
         new_items = jax.lax.cond(
-            jnp.logical_and(jnp.equal(item_collision_map[state.level.current_active_item_index], 1),jnp.less(state.level.current_active_item_index, 2)),
-            lambda x: x.at[state.level.current_active_item_index+1, 2].set(1),
-            lambda x: x,
-            operand=state.items
+            jnp.logical_and(jnp.equal(item_collision_map[state.level.current_active_item_index], 1),
+                            jnp.less(state.level.current_active_item_index, 2)),
+            lambda x, y: x.at[y, 2].set(1),
+            lambda x, y: x,
+            state.items, state.level.current_active_item_index+1
         )
 
         new_current_active_item_index = jax.lax.cond(
             jnp.equal(jnp.equal(item_collision_map[state.level.current_active_item_index], 1),jnp.less(state.level.current_active_item_index, 3)),
-            lambda x: jnp.add(state.level.current_active_item_index, 1),  # Wenn Item aktiv ist, gehe zum nächsten Item
-            lambda x: state.level.current_active_item_index,  # Wenn Item nicht aktiv ist, behalte den aktuellen Index bei
+            lambda x: jnp.add(x, 1),  # Wenn Item aktiv ist, gehe zum nächsten Item
+            lambda x: x,  # Wenn Item nicht aktiv ist, behalte den aktuellen Index bei
             operand=state.level.current_active_item_index
         )
 
-        def spawn_score_item(items):
-            """sets items on the field
-
-            Args:
-                items (_type_):
-
-            Returns:
-                _type_: augmented items, new_spawn_score_item_flag, new_score_item_counter
-            """
-            difficulty_stage = jnp.astype(state.level.difficulty_stage, jnp.int32)
-            new_items = items.at[3, 2:].set(jnp.array([1, jnp.clip(difficulty_stage + 1, 1, 6)]))
-            
-            return new_items, 0, 0
+        
         
         new_score_item_counter = state.level.score_item_counter + 1
 
         new_items, new_spawn_score_item_flag_1, new_score_item_counter = jax.lax.cond(
             jnp.logical_and(
-                (106 - jnp.sum(state.eggs[:, :, 2])) == 41,
+                (106 - jnp.sum(state.eggs[:, :, 2])) == 41, #41,
                 state.level.spawn_score_item_flag_1
                 ),
-            lambda x: spawn_score_item(x),
-            lambda x: (x, state.level.spawn_score_item_flag_1, new_score_item_counter),
-            new_items
+            lambda items, state, _: self.spawn_score_item(items, state),
+            lambda items, state, sc: (items, state.level.spawn_score_item_flag_1, sc),
+            new_items, state, new_score_item_counter
         )
-
         new_items, new_spawn_score_item_flag_2, new_score_item_counter = jax.lax.cond(
             jnp.logical_and(
-                (106 - jnp.sum(state.eggs[:, :, 2])) == 82,
+                (106 - jnp.sum(state.eggs[:, :, 2])) == 82, #82,
                 state.level.spawn_score_item_flag_2
                 ),
-            lambda x: spawn_score_item(x),
-            lambda x: (x, state.level.spawn_score_item_flag_2, new_score_item_counter),
-            new_items
+            lambda items, state, _: self.spawn_score_item(items, state),
+            lambda items, state, sc: (items, state.level.spawn_score_item_flag_2, sc),
+            new_items, state, new_score_item_counter
         )
         
         new_items = jax.lax.cond(
@@ -1495,7 +1514,7 @@ class JaxAlien(JaxEnvironment[AlienState, AlienObservation, AlienInfo, AlienCons
         new_score = jnp.add(score, score_increase).astype(jnp.uint16)
 
         return new_items, new_score, new_current_active_item_index, new_evil_item_frame_counter, new_spawn_score_item_flag_1, new_spawn_score_item_flag_2, new_score_item_counter
-
+    
     @partial(jax.jit, static_argnums=(0,))
     def modify_wall_collision(self, new_position: jnp.ndarray):
         """Collision handling for game-field bounds.
