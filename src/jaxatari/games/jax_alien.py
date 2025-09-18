@@ -418,11 +418,14 @@ def teleport_object(position: jnp.ndarray, orientation: JAXAtariAction, action: 
     Returns:
         _type_: new position
     """
+    # TODO: Change to switch
     return jax.lax.cond(
-        jnp.logical_or(jnp.logical_and(position[0] >= 127, orientation == JAXAtariAction.RIGHT), jnp.logical_and(action == JAXAtariAction.RIGHT, position[0] >= 127)),
+        jnp.logical_or(jnp.logical_and(position[0] >= 127, orientation == JAXAtariAction.RIGHT), 
+                       jnp.logical_and(action == JAXAtariAction.RIGHT, position[0] >= 127)),
         lambda x: x.at[0].set(7),
         lambda x: jax.lax.cond(
-            jnp.logical_or(jnp.logical_and(position[0] <= 7,orientation == JAXAtariAction.LEFT),jnp.logical_and(action == JAXAtariAction.LEFT, position[0] <= 7)),
+            jnp.logical_or(jnp.logical_and(position[0] <= 7,orientation == JAXAtariAction.LEFT),
+                           jnp.logical_and(action == JAXAtariAction.LEFT, position[0] <= 7)),
             lambda x: x.at[0].set(127),
             lambda x:x,
             position
@@ -673,13 +676,15 @@ class JaxAlien(JaxEnvironment[AlienState, AlienObservation, AlienInfo, AlienCons
             self.consts.EGG_SCORE_MULTIPLYER
         )
         new_life = jax.lax.cond(
-            jnp.logical_and(check_for_player_enemy_collision(self.consts, state, [new_player_state.x, new_player_state.y]),jnp.equal(state.level.death_frame_counter, 0)),
+            jnp.logical_and(check_for_player_enemy_collision(self.consts, state, [new_player_state.x, new_player_state.y]),
+                            jnp.equal(state.level.death_frame_counter, 0)),
             lambda x: jnp.add(x, -1),
             lambda x: x,
             state.level.lifes
         )
         new_death_frame_counter = jax.lax.cond(
-            jnp.logical_and(check_for_player_enemy_collision(self.consts, state, [new_player_state.x, new_player_state.y]),jnp.equal(state.level.death_frame_counter, 0)),
+            jnp.logical_and(check_for_player_enemy_collision(self.consts, state, [new_player_state.x, new_player_state.y]),
+                            jnp.equal(state.level.death_frame_counter, 0)),
             lambda x: jax.lax.cond(
                 jnp.less(new_life, 0),
                 lambda y: jnp.add(y, -40),
@@ -768,11 +773,13 @@ class JaxAlien(JaxEnvironment[AlienState, AlienObservation, AlienInfo, AlienCons
             eggs=state.eggs,
             items=items_keep_evil_reset_score
             )
+        #new_state = jax.lax.select(jnp.equal(state.level.death_frame_counter, 1), 
+        #                           soft_reset_state, freeze_state)
         new_state = jax.lax.cond(
             jnp.equal(state.level.death_frame_counter, 1),
-            lambda x: soft_reset_state,
-            lambda x: freeze_state,
-            0
+            lambda x, y: x,
+            lambda x, y: y,
+            soft_reset_state, freeze_state
         )
         return new_state
 
@@ -803,9 +810,36 @@ class JaxAlien(JaxEnvironment[AlienState, AlienObservation, AlienInfo, AlienCons
         hard_reset_state = reset_state._replace(
             enemies=hard_reset_enemies,
         )
-        new_state = jax.lax.cond(jnp.equal(state.level.death_frame_counter, -1), lambda x: hard_reset_state, lambda x: freeze_state, 0)
+        new_state = jax.lax.cond(jnp.equal(state.level.death_frame_counter, -1), 
+                                 lambda x, y: x , lambda x, y: y , 
+                                 hard_reset_state, freeze_state)
         return new_state
             
+    
+    @partial(jax.jit, static_argnums=(0))
+    def _choose_gamestep_besides_kill_item_step(self, state: AlienState, action: chex.Array):
+        is_alive: jArray = jnp.equal(state.level.death_frame_counter, 0)
+        is_normal_death: jArray = jnp.greater(state.level.death_frame_counter, 0)
+        is_game_over: jArray = jnp.less(state.level.death_frame_counter, 0)
+        choice_array: jArray = jnp.array([1*is_alive, 2*is_normal_death, 3*is_game_over], jnp.int32)
+        actul_choice: jArray = jnp.max(choice_array, keepdims=False)
+        new_state: AlienState = jax.lax.switch(actul_choice, 
+                                               [lambda x, y : x, 
+                                                self.normal_game_step, 
+                                                lambda x, y: self.death(x), 
+                                                lambda x, y: self.game_over(x)], 
+                                               state, action)
+        
+        return new_state
+        #lambda x:  jax.lax.cond(jnp.equal(state.level.death_frame_counter, 0),
+        #                                    lambda y: self.normal_game_step(y, action),
+        #                                    lambda y: jax.lax.cond(jnp.greater(state.level.death_frame_counter, 0),
+        #                                                    lambda z: self.death(z),
+        #                                                    lambda z: self.game_over(z),
+        #                                                    y
+        #                                                    ),
+        #                                x
+        #                                )
     @partial(jax.jit, static_argnums=(0))
     def primary_step(self, state: AlienState, action: chex.Array) -> AlienState:
         """step funtion for the primary stage
@@ -819,17 +853,9 @@ class JaxAlien(JaxEnvironment[AlienState, AlienObservation, AlienInfo, AlienCons
         new_state = state
         #cond for checking for normal game step or death or game over
         new_state = jax.lax.cond(jnp.greater(state.level.evil_item_frame_counter, 0),
-                                    lambda x: self.kill_item_step(x, action),
-                                    lambda x:  jax.lax.cond(jnp.equal(state.level.death_frame_counter, 0),
-                                        lambda y: self.normal_game_step(y, action),
-                                        lambda y: jax.lax.cond(jnp.greater(state.level.death_frame_counter, 0),
-                                                        lambda z: self.death(z),
-                                                        lambda z: self.game_over(z),
-                                                        y
-                                                        ),
-                                    x
-                                    ),
-                                new_state
+                                    lambda x, y: self.kill_item_step(x, y),
+                                    self._choose_gamestep_besides_kill_item_step,
+                                new_state, action
                                 )
         new_state = jax.lax.cond(
                 jnp.sum(state.eggs[:, :, 2]) == 0,
@@ -841,6 +867,7 @@ class JaxAlien(JaxEnvironment[AlienState, AlienObservation, AlienInfo, AlienCons
         return new_state
         
         
+
         
     @partial(jax.jit, static_argnums=(0))
     def kill_item_step(self, state: AlienState, action: jArray) -> Tuple[AlienState, AlienObservation, AlienInfo]:
@@ -852,13 +879,15 @@ class JaxAlien(JaxEnvironment[AlienState, AlienObservation, AlienInfo, AlienCons
         """
         new_player_state: PlayerState =  self.player_step(state, action)
         new_life = jax.lax.cond(
-            jnp.logical_and(check_for_player_enemy_collision(self.consts, state, [new_player_state.x, new_player_state.y]),jnp.logical_not(state.level.death_frame_counter)),
+            jnp.logical_and(check_for_player_enemy_collision(self.consts, state, [new_player_state.x, new_player_state.y]),
+                            jnp.logical_not(state.level.death_frame_counter)),
             lambda x: jnp.subtract(x, 1),
             lambda x: x,
             state.level.lifes
         )
         new_death_frame_counter = jax.lax.cond(
-            jnp.logical_and(check_for_player_enemy_collision(self.consts, state, [new_player_state.x, new_player_state.y]),jnp.logical_not(state.level.death_frame_counter)),
+            jnp.logical_and(check_for_player_enemy_collision(self.consts, state, [new_player_state.x, new_player_state.y]),
+                            jnp.logical_not(state.level.death_frame_counter)),
             lambda x: jax.lax.cond(
                 jnp.less(new_life, 0),
                 lambda y: jnp.subtract(y, 40),
@@ -949,18 +978,26 @@ class JaxAlien(JaxEnvironment[AlienState, AlienObservation, AlienInfo, AlienCons
                 eggs=new_egg_state,
                 items=new_items
                 )
+        is_player_dead: jArray = jnp.not_equal(new_death_frame_counter, 0)
+        is_game_over: jArray = jnp.less(new_death_frame_counter, 0)
         
-        new_state = jax.lax.cond(jnp.not_equal(new_death_frame_counter, 0),
-                                 lambda x: jax.lax.cond(jnp.greater(new_death_frame_counter, 0),
-                                                        lambda y: self.death(y),
-                                                        lambda y: self.game_over(y),
-                                                        freeze_state),
-                                 lambda x: jax.lax.cond(
-                                     jnp.equal(jnp.sum(state.enemies.multiple_enemies.enemy_death_frame), 0),
-                                     lambda y: kill_state,
-                                     lambda y: freeze_state,
-                                     None),None)
+        # Handle player death here!
+        death_index: jArray = 0 + is_player_dead + is_game_over
+        # If 0: player is still alive
+        # If 1: player is dead but game is not over
+        # If 2: Player is dead but game is over!
+        new_state = jax.lax.switch(death_index, 
+                                   [lambda x: x, 
+                                    self.death, 
+                                    self.game_over], 
+                                   freeze_state)
+        # Now Handle the game freeze for when enemies dies
+        needs_to_enter_kill_state: jArray = jnp.multiply(jnp.equal(new_death_frame_counter, 0),
+                                                         jnp.equal(jnp.sum(state.enemies.multiple_enemies.enemy_death_frame), 0)) 
+        new_state = jax.lax.cond(needs_to_enter_kill_state, lambda x, y : y, lambda x, y: x, new_state, kill_state)
+        
         return new_state
+ 
     
     @partial(jax.jit, static_argnums=(0))
     def bonus_room_player_step(self, state: AlienState, action: chex.Array) -> PlayerState:
