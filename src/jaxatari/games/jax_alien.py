@@ -444,10 +444,10 @@ class JaxAlien(JaxEnvironment[AlienState, AlienObservation, AlienInfo, AlienCons
             reward_funcs = tuple(reward_funcs) 
         self.reward_funcs = reward_funcs
 
-        traverse_enemy_step = lambda x, y: traverse_multiple_enemy(x, partial(enemy_step, cnsts=consts), True, 1, y)
+        traverse_enemy_step = traverse_multiple_enemy_(partial(enemy_step, cnsts=consts), 1)
         self.enemy_step = jax.jit(traverse_enemy_step)
         
-        traverse_enemy_step_bonus = lambda x, y: traverse_multiple_enemy(x, partial(enemy_step_bonus, cnsts=consts), True, 1, y)
+        traverse_enemy_step_bonus =  traverse_multiple_enemy_(partial(enemy_step_bonus, cnsts=consts), 1)
         self.enemy_step_bonus = jax.jit(traverse_enemy_step_bonus)
         
         self.sprite_path: str = os.path.join(self.consts.MODULE_DIR, "sprites", "alien")
@@ -2851,8 +2851,8 @@ class AlienRenderer(JAXGameRenderer):
             operand=None
         )
 
-def traverse_multiple_enemy(enemy_state: MultipleEnemiesState, fun: Callable[[SingleEnemyState], Any],
-                            returns_enemies_state: bool = False, number_of_non_traversed_args: int = 0, *args):
+
+def traverse_multiple_enemy_(fun: Callable[[SingleEnemyState], Any], number_of_non_traversed_args: int = 0):
     """the broken hopes and dreams of a dynamic enemy count
 
     Args:
@@ -2867,44 +2867,40 @@ def traverse_multiple_enemy(enemy_state: MultipleEnemiesState, fun: Callable[[Si
    
     fields = list(SingleEnemyState._fields)
     fields.sort()
-    if returns_enemies_state:
-        def wrapper_function(*args):
-            k_dict: Dict[str, jnp.ndarray] = {}
-            for i, f in enumerate(fields):
-                k_dict[f] = args[i]
-            oof = SingleEnemyState(**k_dict)
-            res: SingleEnemyState = fun(oof, *args[len(fields):])
-            ret_tup: Tuple[jnp.ndarray] = ()
-            for f in fields:
-                ret_tup = (*ret_tup, getattr(res, f))
-            return ret_tup
+    def wrapper_function(*args):
+        k_dict: Dict[str, jnp.ndarray] = {}
+        for i, f in enumerate(fields):
+            k_dict[f] = args[i]
+        oof = SingleEnemyState(**k_dict)
+        res: SingleEnemyState = fun(oof, *args[len(fields):])
+        ret_tup: Tuple[jnp.ndarray] = ()
+        for f in fields:
+            ret_tup = (*ret_tup, getattr(res, f))
+        return ret_tup
 
-    else:
-        def wrapper_function(*args):
-            k_dict: Dict[str, jnp.ndarray] = {}
-            for i, f in enumerate(fields):
-                k_dict[f] = args[i]
-            oof = SingleEnemyState(**k_dict)
-            
-            res = fun(oof, *args[len(fields):])
-            return res
     state_axes = (0, )*len(fields)
     if number_of_non_traversed_args>0:
         n_s = (None, )*number_of_non_traversed_args
         in_axes_tuple = (*state_axes,*n_s)
     else:
         in_axes_tuple = state_axes
-    inputs = ()
-    for f in fields:
-        inputs = (*inputs, getattr(enemy_state, f))
-    inputs = (*inputs, *args)
-    if returns_enemies_state:
-        r_args = jax.vmap(wrapper_function, in_axes=in_axes_tuple, out_axes=state_axes)(*inputs)
+    
+    def my_return_function(*args, enemy_fields, vmapped_function):
+        enemy_state: SingleEnemyState = args[0]
+        inputs = ()
+        for f in enemy_fields:
+            inputs = (*inputs, getattr(enemy_state, f))
+        inputs = (*inputs, *args[1:])
+        r_args = vmapped_function(*inputs)
         m_args = {}
-        for i, f in enumerate(fields):
+        for i, f in enumerate(enemy_fields):
             m_args[f] = r_args[i]            
         ret = MultipleEnemiesState(**m_args)
         return ret
-    else:
-        ret = jax.vmap(wrapper_function, in_axes=in_axes_tuple, out_axes=(0))(inputs)
-        return ret
+    v_func = jax.vmap(wrapper_function, in_axes=in_axes_tuple, out_axes=state_axes)
+    return partial(
+        my_return_function, 
+        enemy_fields=fields, 
+        vmapped_function=v_func
+    )
+    
