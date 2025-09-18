@@ -66,6 +66,7 @@ class AsterixConstants(NamedTuple):
     bottom_border: int = 8 * stage_spacing + top_border
     cooldown_frames: int = 8 # Cooldown frames for lane changes
     num_lives: int = 3 # Anzahl der Leben
+    max_digits_score: int = 7 # Maximal anzuzeigende Ziffern im Score
     entity_base_speed : float = 0.5 # Base Speed der Gegner und Collectibles
     entity_character_speed_factor : float = 0.5 # Speed-Faktor pro Charakterstufe (Asterix=0, Obelix=1)
     ASTERIX_ITEM_POINTS = jnp.array([50, 100, 200, 300, 0], dtype=jnp.int32)  # Cauldron, Helmet, Shield, Lamp
@@ -840,26 +841,50 @@ class AsterixRenderer(JAXGameRenderer):
 
         # Get digit sprites
         digit_sprites = self.sprites.get('digit', None)
+        max_digits = self.consts.max_digits_score
 
         # Define the function to render scores if sprites are available
         def render_scores(raster_to_update):
-            player_score_digits_indices = jr.int_to_digits(state.score, max_digits=max_score_digits)
-            num_digits = jnp.maximum(1, jnp.floor(jnp.log10(jnp.maximum(state.score, 1))) + 1).astype(jnp.int32)
-            digit_height = digit_sprites[0].shape[0]
+            score = state.score.astype(jnp.int32)
+
+            # Ziffernanzahl robust (Score==0 -> 1)
+            num_digits = jnp.where(
+                score == 0,
+                jnp.int32(1),
+                (jnp.floor(jnp.log10(score.astype(jnp.float32))) + 1).astype(jnp.int32)
+            )
+            num_digits = jnp.minimum(num_digits, max_digits)
+
+            # Digits-Array (rechts ausgerichtet) füllen
+            def fill_body(i, carry):
+                n, digits = carry
+                digit = n % 10
+                pos = max_digits - 1 - i
+                digits = digits.at[pos].set(digit)
+                n = n // 10
+                return (n, digits)
+
+            init = (score, jnp.zeros((max_digits,), dtype=jnp.int32))
+            _, digits_full = jax.lax.fori_loop(0, max_digits, fill_body, init)
+
+            # Startindex des anzuzeigenden Abschnitts
+            start_idx = max_digits - num_digits
+
             score_spacing = 8
             score_x = ((self.consts.screen_width - (num_digits * score_spacing)) // 2) + 20
             score_y = bottom_y + bottom_sprite.shape[0] + jr.get_sprite_frame(self.sprites['ASTERIX'], 0).shape[0] + 6
-            raster_updated = jr.render_label_selective(
+
+            return jr.render_label_selective(
                 raster_to_update,
                 score_x,
                 score_y,
-                player_score_digits_indices,
-                digit_sprites[0],
-                0,
-                num_digits,
+                digits_full,  # vollständiges Array
+                digit_sprites[0],  # Sprite-Sheet
+                start_idx,  # dynamischer Start
+                num_digits,  # Anzahl zu rendernder Ziffern
                 spacing=score_spacing
             )
-            return raster_updated
+
 
         # Render scores conditionally
         raster = jax.lax.cond(
