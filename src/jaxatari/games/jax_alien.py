@@ -359,6 +359,24 @@ def check_for_wall_collision(moving_object: jnp.ndarray, background: jnp.ndarray
     ret_v = jax.lax.cond(has_collision, lambda x: old_position, lambda x: new_position, 0)
     return ret_v
 
+def check_collision_between_two_sprites(sprite1, pos1_x, pos1_y, sprite2, pos2_x, pos2_y):
+        r1x = pos1_x
+        r1w = jnp.shape(sprite1)[0]
+        r2x = pos2_x
+        r2w = jnp.shape(sprite2)[0]
+
+        r1y = pos1_y
+        r1h = jnp.shape(sprite1)[1]
+        r2y = pos2_y
+        r2h = jnp.shape(sprite2)[1]
+        return (
+            (r1x + r1w >= r2x) &
+            (r1x <= r2x + r2w) &
+            (r1y + r1h >= r2y) &
+            (r1y <= r2y + r2h)
+        )
+
+
 def collision_check_between_two_objects(obj1_map: jnp.ndarray, obj2_map: jnp.ndarray, obj1_position: jnp.ndarray, obj2_position: jnp.ndarray, background_map: jnp.ndarray) -> jnp.ndarray:
     """checks the collision between two potentialy moving objects
 
@@ -397,11 +415,23 @@ def check_for_player_enemy_collision(cnsts: AlienConstants, state: AlienState, n
     player_enemy_collision: jnp.ndarray = PLAYER_COLLISION_MAP_FOR_ENEMY_COLLISION_CHECK
     background_map: jnp.ndarray = BACKGROUND_COLLISION_MAP
     # Check if player sprite crosses a certian point in enemy sprite
-    has_collision_enemy0 = jnp.logical_and(collision_check_between_two_objects(player_enemy_collision,player_enemy_collision,new_position,jnp.array([state.enemies.multiple_enemies.x[0],state.enemies.multiple_enemies.y[0]]),background_map), jnp.logical_and(jnp.equal(state.enemies.multiple_enemies.killable[0], 0), jnp.equal(state.enemies.multiple_enemies.enemy_spawn_frame[0],0)))
+    enemy_0_collides = check_collision_between_two_sprites(sprite1=player_enemy_collision, pos1_x=state.enemies.multiple_enemies.x[0], 
+                                                           pos1_y=state.enemies.multiple_enemies.y[0], 
+                                                           sprite2=player_enemy_collision, pos2_x=new_position[0], 
+                                                           pos2_y=new_position[1])
+    enemy_1_collides = check_collision_between_two_sprites(sprite1=player_enemy_collision, pos1_x=state.enemies.multiple_enemies.x[1], 
+                                                           pos1_y=state.enemies.multiple_enemies.y[1], 
+                                                           sprite2=player_enemy_collision, pos2_x=new_position[0], 
+                                                           pos2_y=new_position[1])
+    enemy_2_collides = check_collision_between_two_sprites(sprite1=player_enemy_collision, pos1_x=state.enemies.multiple_enemies.x[2], 
+                                                           pos1_y=state.enemies.multiple_enemies.y[2], 
+                                                           sprite2=player_enemy_collision, pos2_x=new_position[0], 
+                                                           pos2_y=new_position[1])
+    has_collision_enemy0 = jnp.logical_and(enemy_0_collides, jnp.logical_and(jnp.equal(state.enemies.multiple_enemies.killable[0], 0), jnp.equal(state.enemies.multiple_enemies.enemy_spawn_frame[0],0)))
 
-    has_collision_enemy1 = jnp.logical_and(collision_check_between_two_objects(player_enemy_collision,player_enemy_collision,new_position,jnp.array([state.enemies.multiple_enemies.x[1],state.enemies.multiple_enemies.y[1]]),background_map), jnp.logical_and(jnp.equal(state.enemies.multiple_enemies.killable[1], 0), jnp.equal(state.enemies.multiple_enemies.enemy_spawn_frame[1],0)))
+    has_collision_enemy1 = jnp.logical_and(enemy_1_collides, jnp.logical_and(jnp.equal(state.enemies.multiple_enemies.killable[1], 0), jnp.equal(state.enemies.multiple_enemies.enemy_spawn_frame[1],0)))
 
-    has_collision_enemy2 =jnp.logical_and(collision_check_between_two_objects(player_enemy_collision,player_enemy_collision,new_position,jnp.array([state.enemies.multiple_enemies.x[2],state.enemies.multiple_enemies.y[2]]),background_map), jnp.logical_and(jnp.equal(state.enemies.multiple_enemies.killable[2], 0), jnp.equal(state.enemies.multiple_enemies.enemy_spawn_frame[2],0)))
+    has_collision_enemy2 =jnp.logical_and(enemy_2_collides, jnp.logical_and(jnp.equal(state.enemies.multiple_enemies.killable[2], 0), jnp.equal(state.enemies.multiple_enemies.enemy_spawn_frame[2],0)))
 
     return jnp.logical_or(has_collision_enemy0, jnp.logical_or(has_collision_enemy1, has_collision_enemy2))
 
@@ -851,7 +881,9 @@ class JaxAlien(JaxEnvironment[AlienState, AlienObservation, AlienInfo, AlienCons
         """
         #initial state for cond
         new_state = state
+        
         #cond for checking for normal game step or death or game over
+
         new_state = jax.lax.cond(jnp.greater(state.level.evil_item_frame_counter, 0),
                                     lambda x, y: self.kill_item_step(x, y),
                                     self._choose_gamestep_besides_kill_item_step,
@@ -877,7 +909,9 @@ class JaxAlien(JaxEnvironment[AlienState, AlienObservation, AlienInfo, AlienCons
         Returns:
             Tuple[AlienState, AlienObservation, AlienInfo]: New state, observation and info
         """
+
         new_player_state: PlayerState =  self.player_step(state, action)
+        
         new_life = jax.lax.cond(
             jnp.logical_and(check_for_player_enemy_collision(self.consts, state, [new_player_state.x, new_player_state.y]),
                             jnp.logical_not(state.level.death_frame_counter)),
@@ -885,6 +919,7 @@ class JaxAlien(JaxEnvironment[AlienState, AlienObservation, AlienInfo, AlienCons
             lambda x: x,
             state.level.lifes
         )
+
         new_death_frame_counter = jax.lax.cond(
             jnp.logical_and(check_for_player_enemy_collision(self.consts, state, [new_player_state.x, new_player_state.y]),
                             jnp.logical_not(state.level.death_frame_counter)),
@@ -1083,6 +1118,7 @@ class JaxAlien(JaxEnvironment[AlienState, AlienObservation, AlienInfo, AlienCons
         """
                         
         new_enemies_state = self.multiple_enemies_step_bonus(state)
+        #new_enemies_state = state.enemies
         new_player_state = self.bonus_room_player_step(state, action)
         
         dead_or_alive = jnp.max(jnp.array([
@@ -1581,7 +1617,7 @@ class JaxAlien(JaxEnvironment[AlienState, AlienObservation, AlienInfo, AlienCons
                                        lambda x: JAXAtariAction.LEFT, 
                                        lambda x: x,
                                        x.player.orientation),   # LEFT
-
+        
                 lambda x, vel_v, vel_h: jax.lax.cond(self.other_slightly_weirder_check_for_player_collision(x, 0, vel_v),
                                        lambda x: JAXAtariAction.DOWN, 
                                        lambda x: x,
@@ -1610,7 +1646,7 @@ class JaxAlien(JaxEnvironment[AlienState, AlienObservation, AlienInfo, AlienCons
                                                               lambda x: x,
                                                               x.player.orientation),
                                        x, vel_h),   #DOWNRIGHT
-
+                
                 lambda x, vel_v, vel_h: jax.lax.cond(jnp.logical_and(self.other_slightly_weirder_check_for_player_collision(x, -vel_h, 0),jnp.not_equal(x.player.orientation,JAXAtariAction.LEFT)),
                                        lambda x, y: JAXAtariAction.LEFT,
                                        lambda x, y: jax.lax.cond(self.other_slightly_weirder_check_for_player_collision(x, 0, y),
@@ -1873,12 +1909,13 @@ def enemy_step(enemy: SingleEnemyState, state: AlienState, cnsts: AlienConstants
                 Returns:
                     jnp.ndarray: bolean value for collision
                 """
+                has_collision = check_collision_between_two_sprites(sprite1=PLAYER_COLLISION_MAP_FOR_ENEMY_COLLISION_CHECK, 
+                                                                    pos1_x=new_position[0], 
+                                                                    pos1_y=new_position[1], 
+                                                                    sprite2=PLAYER_COLLISION_MAP_FOR_ENEMY_COLLISION_CHECK, 
+                                                                    pos2_x=state.player.x, pos2_y=state.player.y)
                 has_collision = jnp.logical_and(
-                    collision_check_between_two_objects(
-                        PLAYER_COLLISION_MAP_FOR_ENEMY_COLLISION_CHECK,PLAYER_COLLISION_MAP_FOR_ENEMY_COLLISION_CHECK,
-                        new_position,jnp.array([state.player.x,state.player.y]),
-                        BACKGROUND_COLLISION_MAP
-                        ),
+                    has_collision,
                     jnp.equal(enemy.enemy_spawn_frame,0)
                     )
                 
@@ -2059,15 +2096,17 @@ def enemy_step_bonus(enemy: SingleEnemyState, state: AlienState, cnsts: AlienCon
     shadow_position = jnp.array([new_x - 35*(2 * (enemy.last_horizontal_orientation % 2) - 1), enemy.y])
     
     player_positon = jnp.array([state.player.x, state.player.y])
-    
+    collides_1 = check_collision_between_two_sprites(sprite1=state.enemies.collision_map, pos1_x=position[0], pos1_y=position[1], 
+                                            sprite2=state.player.collision_map, pos2_x=player_positon[0], pos2_y=player_positon[1])
+    collides_2 = check_collision_between_two_sprites(sprite1=state.enemies.collision_map, pos1_x=shadow_position[0], pos1_y=shadow_position[1], 
+                                            sprite2=state.player.collision_map, pos2_x=player_positon[0], pos2_y=player_positon[1])
     new_enemy_death_frame = jax.lax.cond(
         jnp.logical_or(
-            collision_check_between_two_objects(obj1_map=state.enemies.collision_map, obj2_map=state.player.collision_map, obj1_position=position, obj2_position=player_positon, background_map=state.level.collision_map),
-            collision_check_between_two_objects(obj1_map=state.enemies.collision_map, obj2_map=state.player.collision_map, obj1_position=shadow_position, obj2_position=player_positon, background_map=state.level.collision_map)
+            collides_1, collides_2
         ),
-        lambda _:  jnp.array(1),
-        lambda _: enemy.enemy_death_frame,
-        None
+        lambda en:  jnp.array(1),
+        lambda en: en.enemy_death_frame,
+        enemy
         )
 
     new_enemy = enemy._replace(
