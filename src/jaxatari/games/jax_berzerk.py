@@ -1611,69 +1611,67 @@ class BerzerkRenderer(JAXGameRenderer):
             raster = jax.lax.cond(cond, draw_bullet, lambda r: r, raster)
 
 
-        # Draw player animation
         def get_player_sprite():
             def death_animation():
-                return jax.lax.switch(
-                    (state.player.death_timer - 1) % 8,
-                        [lambda: self.sprites['player_idle']] * 4 +
-                        [lambda: self.sprites['player_death']] * 4
-                )
+                idx = (state.player.death_timer - 1) % 8
+                return jnp.where(idx < 4, self.sprites['player_idle'], self.sprites['player_death'])
+
             dir = state.player.last_dir
 
-            return jax.lax.cond(
-                death_anim,
-                death_animation,
-                lambda: jax.lax.cond(
+            shoot_idx = jnp.select(
+                [
+                    (dir[0] == 0) & (dir[1] == -1),     # up
+                    (dir[0] == 1) & (dir[1] == -1),     # upright
+                    (dir[0] == 1) & (dir[1] == 0),      # right
+                    (dir[0] == 1) & (dir[1] == 1),      # downright
+                    (dir[0] == 0) & (dir[1] == 1),      # down
+                    (dir[0] == -1) & (dir[1] == 1),     # downleft
+                    (dir[0] == -1) & (dir[1] == 0),     # left
+                    (dir[0] == -1) & (dir[1] == -1),    # upleft
+                ],
+                jnp.arange(8),
+                default=2
+            )
+
+            shoot_frames = [
+                lambda: self.sprites['player_shoot_up'],
+                lambda: self.sprites['player_shoot_up'],
+                lambda: self.sprites['player_shoot_right'],
+                lambda: self.sprites['player_shoot_down'],
+                lambda: self.sprites['player_shoot_down'],
+                lambda: self.sprites['player_shoot_down_left'],
+                lambda: self.sprites['player_shoot_left'],
+                lambda: self.sprites['player_shoot_up_left'],
+            ]
+
+            move_frames = [
+                lambda: self.sprites['player_move_1'],
+                lambda: self.sprites['player_move_1'],
+                lambda: self.sprites['player_move_1'],
+                lambda: self.sprites['player_move_1'],
+                lambda: self.sprites['player_move_2'],
+                lambda: self.sprites['player_move_2'],
+                lambda: self.sprites['player_move_2'],
+                lambda: self.sprites['player_move_2'],
+                lambda: self.sprites['player_idle'],
+                lambda: self.sprites['player_idle'],
+                lambda: self.sprites['player_idle'],
+                lambda: self.sprites['player_idle'],
+            ]
+
+            def normal_or_shoot():
+                return jax.lax.cond(
                     state.player.is_firing,
-                    lambda: jax.lax.switch(
-                        jnp.select(
-                            [
-                                (dir[0] == 0) & (dir[1] == -1),     # up
-                                (dir[0] == 1) & (dir[1] == -1),     # upright
-                                (dir[0] == 1) & (dir[1] == 0),      # right
-                                (dir[0] == 1) & (dir[1] == 1),      # downright
-                                (dir[0] == 0) & (dir[1] == 1),      # down
-                                (dir[0] == -1) & (dir[1] == 1),     # downleft
-                                (dir[0] == -1) & (dir[1] == 0),     # left
-                                (dir[0] == -1) & (dir[1] == -1),    # upleft
-                            ],
-                            jnp.arange(8),
-                            default=2  # fallback = right
-                        ),
-                        [
-                            lambda: self.sprites['player_shoot_up'],
-                            lambda: self.sprites['player_shoot_up'],
-                            lambda: self.sprites['player_shoot_right'],
-                            lambda: self.sprites['player_shoot_down'],
-                            lambda: self.sprites['player_shoot_down'],
-                            lambda: self.sprites["player_shoot_down_left"],
-                            lambda: self.sprites["player_shoot_left"],
-                            lambda: self.sprites["player_shoot_up_left"],
-                        ]
-                    ),
+                    lambda: jax.lax.switch(shoot_idx, shoot_frames),
                     lambda: jax.lax.cond(
                         state.player.animation_counter > 0,
-                        lambda: jax.lax.switch((state.player.animation_counter - 1) % 12,
-                        [
-                            lambda: self.sprites['player_move_1'],
-                            lambda: self.sprites['player_move_1'],
-                            lambda: self.sprites['player_move_1'],
-                            lambda: self.sprites['player_move_1'],
-                            lambda: self.sprites['player_move_2'],
-                            lambda: self.sprites['player_move_2'],
-                            lambda: self.sprites['player_move_2'],
-                            lambda: self.sprites['player_move_2'],
-                            lambda: self.sprites['player_idle'],
-                            lambda: self.sprites['player_idle'],
-                            lambda: self.sprites['player_idle'],
-                            lambda: self.sprites['player_idle'],
-                        ]
-                    ),
-                    lambda: self.sprites['player_idle']
+                        lambda: jax.lax.switch((state.player.animation_counter - 1) % 12, move_frames),
+                        lambda: self.sprites['player_idle']
+                    )
                 )
-            )
-        )
+
+            return jax.lax.cond(death_anim, death_animation, normal_or_shoot)
+
 
         player_sprite = get_player_sprite()
 
@@ -1734,58 +1732,71 @@ class BerzerkRenderer(JAXGameRenderer):
                 lambda: recolor_sprite(sprite, color_idx, original_color)
             )
 
-        # enemy color: yellow (only 1x) -> orange -> white -> green -> red -> other yellow -> pink -> yellow -> ...
         def get_enemy_sprite(i):
             counter = state.enemy.animation_counter[i]
             axis = state.enemy.move_axis[i]
             death_timer = state.enemy.death_timer[i]
-            
+
             color_idx = get_enemy_color_index(state.room_counter)
 
             def recolor(name: str):
                 original_color = jnp.array([210, 210, 64, 255], dtype=jnp.uint8)
                 return maybe_recolor(self.sprites[name], color_idx, original_color)
 
+            # Death Animation Frames
+            death_sprites = (
+                [recolor("enemy_death_3")] * 8 +
+                [recolor("enemy_death_2")] * 4 +
+                [recolor("enemy_death_1")] * 4
+            )
+            death_frames = [lambda sprite=s: sprite for s in death_sprites]
+
+            # Normal Animation Frames
+            idle_sprites = (
+                [recolor("enemy_idle_1")] * 8 +
+                [recolor("enemy_idle_2")] * 8 +
+                [recolor("enemy_idle_3")] * 8 +
+                [recolor("enemy_idle_4")] * 8 +
+                [recolor("enemy_idle_5")] * 8 +
+                [recolor("enemy_idle_6")] * 8 +
+                [recolor("enemy_idle_7")] * 8 +
+                [recolor("enemy_idle_8")] * 8
+            )
+            idle_frames = [lambda sprite=s: sprite for s in idle_sprites]
+
+            move_horizontal_sprites = (
+                [recolor("enemy_move_horizontal_1")] * 14 +
+                [recolor("enemy_move_horizontal_2")] * 14
+            )
+            move_horizontal_frames = [lambda sprite=s: sprite for s in move_horizontal_sprites]
+
+            move_vertical_sprites = (
+                [recolor("enemy_move_vertical_1")] * 12 +
+                [recolor("enemy_move_vertical_2")] * 12 +
+                [recolor("enemy_move_vertical_1")] * 12 +
+                [recolor("enemy_move_vertical_3")] * 12
+            )
+            move_vertical_frames = [lambda sprite=s: sprite for s in move_vertical_sprites]
+
+            # Animation functions
             def death_animation():
-                return jax.lax.switch(
-                    (death_timer - 1) % 16,
-                    [lambda: recolor("enemy_death_3")] * 8 +
-                    [lambda: recolor("enemy_death_2")] * 4 + 
-                    [lambda: recolor("enemy_death_1")] * 4
-                )
+                idx = (death_timer - 1) % 16
+                return jax.lax.switch(idx, death_frames)
 
             def normal_animation():
+                axis_idx = jnp.clip(axis + 1, 0, 2)  # 0=idle, 1=horizontal, 2=vertical
                 return jax.lax.switch(
-                    jnp.clip(axis + 1, 0, 2),
+                    axis_idx,
                     [
-                        lambda: jax.lax.switch(
-                            (counter - 1) % 64,
-                            [lambda: recolor("enemy_idle_1")] * 8 +
-                            [lambda: recolor("enemy_idle_2")] * 8 +
-                            [lambda: recolor("enemy_idle_3")] * 8 +
-                            [lambda: recolor("enemy_idle_4")] * 8 +
-                            [lambda: recolor("enemy_idle_5")] * 8 +
-                            [lambda: recolor("enemy_idle_6")] * 8 +
-                            [lambda: recolor("enemy_idle_7")] * 8 +
-                            [lambda: recolor("enemy_idle_8")] * 8
-                        ),
-                        lambda: jax.lax.switch(
-                            (counter - 1) % 28,
-                            [lambda: recolor("enemy_move_horizontal_1")] * 14 +
-                            [lambda: recolor("enemy_move_horizontal_2")] * 14
-                        ),
-                        lambda: jax.lax.switch(
-                            (counter - 1) % 48,
-                            [lambda: recolor("enemy_move_vertical_1")] * 12 +
-                            [lambda: recolor("enemy_move_vertical_2")] * 12 +
-                            [lambda: recolor("enemy_move_vertical_1")] * 12 +
-                            [lambda: recolor("enemy_move_vertical_3")] * 12
-                        ),
+                        lambda: jax.lax.switch((counter - 1) % 64, idle_frames),
+                        lambda: jax.lax.switch((counter - 1) % 28, move_horizontal_frames),
+                        lambda: jax.lax.switch((counter - 1) % 48, move_vertical_frames),
                     ]
                 )
 
+            # decide if death or normal animation
             return jax.lax.cond(death_timer > 0, death_animation, normal_animation)
-        
+
         for i in range(state.enemy.pos.shape[0]):
             is_dying = state.enemy.death_timer[i] > 0
             pos = jax.lax.cond(is_dying, lambda: state.enemy.death_pos[i], lambda: state.enemy.pos[i])
