@@ -324,14 +324,14 @@ class DonkeyKongObservation(NamedTuple):
     level: jnp.ndarray
 
     # Player / Mario Position
-    mario_position: EntityPosition # [x, y]
-    mario_view_direction: jnp.ndarray # left and right
-    mario_jumping: jnp.ndarray
-    mario_climbing: jnp.ndarray
+    # mario_position: EntityPosition # [x, y]
+    # mario_view_direction: jnp.ndarray # left and right
+    # mario_jumping: jnp.ndarray
+    # mario_climbing: jnp.ndarray
     
-    # Hammer
-    hammer_position: EntityPosition
-    hammer_can_destroy_enemy: jnp.ndarray
+    # # Hammer
+    # hammer_position: EntityPosition
+    # hammer_can_destroy_enemy: jnp.ndarray
 
     # # Enemy
     # barrels: EntityPosition
@@ -1289,7 +1289,7 @@ class JaxDonkeyKong(JaxEnvironment[DonkeyKongState, DonkeyKongObservation, Donke
         # change mario position in x direction if Action.right is chosen
         def mario_walking_to_right(state):
             last_mario_move_was_not_moving_to_right = state.mario_view_direction != self.consts.MOVING_RIGHT
-            new_mario_x = jnp.round(self.bar_linear_equation(state.mario_stage, state.mario_y, state.level) - self.consts.MARIO_HIT_BOX_X) - 2
+            new_mario_x = jnp.round(self.bar_linear_equation(state.mario_stage, state.mario_y, state.level) - self.consts.MARIO_HIT_BOX_X).astype(jnp.float32) - 2
             
             # only difference here between two state
             # if last_mario_move_was_not_moving_to_right=True mario_walk_frame_counter = 0 --> this is needed to animate Mario sprites
@@ -2138,19 +2138,19 @@ class JaxDonkeyKong(JaxEnvironment[DonkeyKongState, DonkeyKongObservation, Donke
     
     @partial(jax.jit, static_argnums=(0,))
     def _get_observation(self, state: DonkeyKongState):
-        mario_position = EntityPosition(
-            x = state.mario_x,
-            y = state.mario_y,
-            width = self.consts.MARIO_HIT_BOX_Y,
-            height = self.consts.MARIO_HIT_BOX_X
-        )
-        mario_jumping = jnp.logical_or(state.mario_jumping, state.mario_jumping_wide)
-        hammer_position = EntityPosition(
-            x = state.hammer_x,
-            y = state.hammer_y,
-            width = self.consts.HAMMER_HIT_BOX_Y,
-            height = self.consts.HAMMER_HIT_BOX_X,
-        )
+        # mario_position = EntityPosition(
+        #     x = state.mario_x,
+        #     y = state.mario_y,
+        #     width = self.consts.MARIO_HIT_BOX_Y,
+        #     height = self.consts.MARIO_HIT_BOX_X
+        # )
+        # mario_jumping = jnp.logical_or(state.mario_jumping, state.mario_jumping_wide)
+        # hammer_position = EntityPosition(
+        #     x = state.hammer_x,
+        #     y = state.hammer_y,
+        #     width = self.consts.HAMMER_HIT_BOX_Y,
+        #     height = self.consts.HAMMER_HIT_BOX_X,
+        # )
         # nums_barrels = state.barrels.barrel_x.shape[0]
         # barrels = EntityPosition(
         #     x = state.barrels.barrel_x,
@@ -2190,12 +2190,12 @@ class JaxDonkeyKong(JaxEnvironment[DonkeyKongState, DonkeyKongObservation, Donke
             mario_lives = state.mario_life_counter, 
             goal_reached = state.mario_reached_goal,
             level = state.level,
-            mario_position = mario_position,
-            mario_view_direction = state.mario_view_direction,
-            mario_jumping = mario_jumping,
-            mario_climbing = state.mario_climbing,
-            hammer_position = hammer_position,
-            hammer_can_destroy_enemy = state.hammer_can_hit,
+            # mario_position = mario_position,
+            # mario_view_direction = state.mario_view_direction,
+            # mario_jumping = mario_jumping,
+            # mario_climbing = state.mario_climbing,
+            # hammer_position = hammer_position,
+            # hammer_can_destroy_enemy = state.hammer_can_hit,
             # barrels = barrels,
             # barrel_mask = barrel_mask,
             # fires = fires,
@@ -2219,20 +2219,20 @@ class JaxDonkeyKong(JaxEnvironment[DonkeyKongState, DonkeyKongObservation, Donke
             obs.level.flatten(),
 
             # --- Mario ---
-            obs.mario_position.x.flatten(),
-            obs.mario_position.y.flatten(),
-            obs.mario_position.width.flatten(),
-            obs.mario_position.height.flatten(),
-            obs.mario_view_direction.flatten(),
-            obs.mario_jumping.flatten(),
-            obs.mario_climbing.flatten(),
+            # obs.mario_position.x.flatten(),
+            # obs.mario_position.y.flatten(),
+            # obs.mario_position.width.flatten(),
+            # obs.mario_position.height.flatten(),
+            # obs.mario_view_direction.flatten(),
+            # obs.mario_jumping.flatten(),
+            # obs.mario_climbing.flatten(),
 
-            # --- Hammer ---
-            obs.hammer_position.x.flatten(),
-            obs.hammer_position.y.flatten(),
-            obs.hammer_position.width.flatten(),
-            obs.hammer_position.height.flatten(),
-            obs.hammer_can_destroy_enemy.flatten(),
+            # # --- Hammer ---
+            # obs.hammer_position.x.flatten(),
+            # obs.hammer_position.y.flatten(),
+            # obs.hammer_position.width.flatten(),
+            # obs.hammer_position.height.flatten(),
+            # obs.hammer_can_destroy_enemy.flatten(),
 
             # --- Barrels ---
             # obs.barrels.x.flatten(),
@@ -2280,24 +2280,24 @@ class JaxDonkeyKong(JaxEnvironment[DonkeyKongState, DonkeyKongObservation, Donke
             "level": spaces.Discrete(2), 
 
             # Mario
-            "mario_position": spaces.Dict({
-                "x": spaces.Box(low=0, high=210, shape=(), dtype=jnp.float32),
-                "y": spaces.Box(low=0, high=160, shape=(), dtype=jnp.float32),    
-                "width": spaces.Box(low=0, high=160, shape=(), dtype=jnp.int32),
-                "height": spaces.Box(low=0, high=210, shape=(), dtype=jnp.int32),
-            }),
-            "mario_view_direction": spaces.Box(low=-1, high=1, shape=(), dtype=jnp.int32),
-            "mario_jumping": spaces.Box(low=0, high=1, shape=(), dtype=jnp.int32),
-            "mario_climbing": spaces.Box(low=0, high=1, shape=(), dtype=jnp.int32),
+            # "mario_position": spaces.Dict({
+            #     "x": spaces.Box(low=0, high=210, shape=(), dtype=jnp.float32),
+            #     "y": spaces.Box(low=0, high=160, shape=(), dtype=jnp.float32),    
+            #     "width": spaces.Box(low=0, high=160, shape=(), dtype=jnp.int32),
+            #     "height": spaces.Box(low=0, high=210, shape=(), dtype=jnp.int32),
+            # }),
+            # "mario_view_direction": spaces.Box(low=-1, high=1, shape=(), dtype=jnp.int32),
+            # "mario_jumping": spaces.Box(low=0, high=1, shape=(), dtype=jnp.int32),
+            # "mario_climbing": spaces.Box(low=0, high=1, shape=(), dtype=jnp.int32),
 
-            # Hammer
-            "hammer_position": spaces.Dict({
-                "x": spaces.Box(low=0, high=210, shape=(), dtype=jnp.int32),
-                "y": spaces.Box(low=0, high=160, shape=(), dtype=jnp.int32),    
-                "width": spaces.Box(low=0, high=160, shape=(), dtype=jnp.int32),
-                "height": spaces.Box(low=0, high=210, shape=(), dtype=jnp.int32),
-            }),
-            "hammer_can_destroy_enemy": spaces.Box(low=0, high=1, shape=(), dtype=jnp.int32),
+            # # Hammer
+            # "hammer_position": spaces.Dict({
+            #     "x": spaces.Box(low=0, high=210, shape=(), dtype=jnp.int32),
+            #     "y": spaces.Box(low=0, high=160, shape=(), dtype=jnp.int32),    
+            #     "width": spaces.Box(low=0, high=160, shape=(), dtype=jnp.int32),
+            #     "height": spaces.Box(low=0, high=210, shape=(), dtype=jnp.int32),
+            # }),
+            # "hammer_can_destroy_enemy": spaces.Box(low=0, high=1, shape=(), dtype=jnp.int32),
 
             # Barrels
             # "barrels": spaces.Dict({
