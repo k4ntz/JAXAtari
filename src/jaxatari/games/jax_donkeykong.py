@@ -1042,7 +1042,7 @@ class JaxDonkeyKong(JaxEnvironment[DonkeyKongState, DonkeyKongObservation, Donke
                 mario_jumping_wide = True,
                 mario_view_direction = self.consts.MOVING_RIGHT,
                 mario_x = (state.mario_x - self.consts.MARIO_JUMPING_HEIGHT).astype(jnp.float32),
-                mario_y = (state.mario_y + self.consts.MARIO_MOVING_SPEED).astype(float32)
+                mario_y = (state.mario_y + self.consts.MARIO_MOVING_SPEED).astype(jnp.float32)
             )
             new_mario_x = jnp.round(self.bar_linear_equation(state.mario_stage, state.mario_y, state.level) - self.consts.MARIO_HIT_BOX_X) - 2
             new_state_already_jumping = state._replace(
