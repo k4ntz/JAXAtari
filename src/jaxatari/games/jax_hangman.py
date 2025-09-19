@@ -687,29 +687,27 @@ class JaxHangman(JaxEnvironment[HangmanState, HangmanObservation, HangmanInfo, A
                     key=s2.key, word=s2.word, length=s2.length,
                     mask=mask_final, guessed=guessed, misses=misses, lives=lives,
                     cursor_idx=cursor,
-                    done=jnp.array(False),                        # never signal done
+                    done=jnp.array(False),                        
                     reward=step_reward,
                     step_counter=s2.step_counter + 1,
-                    score=new_score,                              # updated score
-                    round_no=new_roundno,                         # updated round counter
+                    score=new_score,                              
+                    round_no=new_roundno,                         
                     time_left_steps=jnp.array(
                         self.timer_steps if self.timed == 1 else 0, dtype=jnp.int32
                     ),
-                    cpu_score=cpu_new,                            # updated cpu score
+                    cpu_score=cpu_new,                            
                     timer_max_steps=s2.timer_max_steps,
                     last_commit=commit,
                 )
 
-                # If the round ended, immediately start the next one but keep scores
                 return lax.cond(
                     (round_ended == 1),
-                    _new_round_from,              # starts a new word using base.state
-                    lambda s_: s_,                # keep base if round not ended
+                    _new_round_from,              
+                    lambda s_: s_,                
                     base
                 )
 
             def no_commit(s2: HangmanState) -> HangmanState:
-                #gate the timer with "round is active"
                 active    = (self.timed == 1)
                 t0        = s2.time_left_steps
                 t1        = jnp.where(active, jnp.maximum(t0 - 1, 0), t0)
@@ -845,9 +843,8 @@ class JaxHangman(JaxEnvironment[HangmanState, HangmanObservation, HangmanInfo, A
     def render(self, state: HangmanState) -> jnp.ndarray:
         return self.renderer.render(state)
 
-    @partial(jax.jit, static_argnums=(0,))
-    def _get_info(self, state: HangmanState, all_rewards: chex.Array) -> HangmanInfo:
-        return HangmanInfo(
-            time=state.step_counter,
-            all_rewards=all_rewards,
-        )
+    def _get_info(self, state: HangmanState, all_rewards: Optional[chex.Array] = None) -> HangmanInfo:
+        if all_rewards is None:
+            n = 1 if self.reward_funcs is None else len(self.reward_funcs)
+            all_rewards = jnp.zeros((n,), dtype=jnp.float32)
+        return HangmanInfo(time=state.step_counter, all_rewards=all_rewards)
