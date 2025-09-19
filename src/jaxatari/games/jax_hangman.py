@@ -586,8 +586,27 @@ class JaxHangman(JaxEnvironment[HangmanState, HangmanObservation, HangmanInfo, A
     def step(self, state: HangmanState, action: chex.Array) -> Tuple[HangmanObservation, HangmanState, float, bool, HangmanInfo]:
         commit = _action_commit(action).astype(jnp.int32)
         delta  = _action_delta_cursor(action)
-        start_new_round = jnp.logical_and(state.done,
-                          jnp.logical_and(commit == 1, state.last_commit == 0))
+        def _new_round_from(s: HangmanState) -> HangmanState:
+            key, word, length = _sample_word(s.key)
+            time0 = jnp.array(self.timer_steps if self.timed == 1 else 0, dtype=jnp.int32)
+            tmax  = jnp.array(self.timer_steps if self.timed == 1 else 0, dtype=jnp.int32)
+            return HangmanState(
+                key=key, word=word, length=length,
+                mask=jnp.zeros((L_MAX,), dtype=jnp.int32),
+                guessed=jnp.zeros((ALPHABET_SIZE,), dtype=jnp.int32),
+                misses=jnp.array(0, dtype=jnp.int32),
+                lives=jnp.array(self.max_misses, dtype=jnp.int32),
+                cursor_idx=jnp.array(0, dtype=jnp.int32),
+                done=jnp.array(False),                     
+                reward=s.reward,                           
+                step_counter=s.step_counter,
+                score=s.score,                             
+                round_no=s.round_no,                       
+                time_left_steps=time0,
+                timer_max_steps=tmax,
+                cpu_score=s.cpu_score,                     
+                last_commit=jnp.array(0, dtype=jnp.int32),
+            )
 
 
 
@@ -642,7 +661,7 @@ class JaxHangman(JaxEnvironment[HangmanState, HangmanObservation, HangmanInfo, A
                 lives   = s2.lives  - wrong.astype(jnp.int32)
 
                 #win
-                n_revealed   = jnp.sum(jnp.where(within, mask, 0))           
+                n_revealed   = jnp.sum(jnp.where(within, mask, 0))
                 all_revealed = (n_revealed == s2.length)
 
                 #loss check
@@ -660,29 +679,34 @@ class JaxHangman(JaxEnvironment[HangmanState, HangmanObservation, HangmanInfo, A
                 lost_i32     = lost.astype(jnp.int32)
                 round_ended  = jnp.logical_or(all_revealed, lost).astype(jnp.int32)
 
-                new_score    = (s2.score + won).astype(jnp.int32)        
-                cpu_new      = (s2.cpu_score + lost_i32).astype(jnp.int32)  
+                new_score    = (s2.score + won).astype(jnp.int32)
+                cpu_new      = (s2.cpu_score + lost_i32).astype(jnp.int32)
                 new_roundno  = (s2.round_no + round_ended).astype(jnp.int32)
 
-                new_time = jnp.array(self.timer_steps if self.timed == 1 else 0, dtype=jnp.int32)
-
-                return HangmanState(
+                base = HangmanState(
                     key=s2.key, word=s2.word, length=s2.length,
                     mask=mask_final, guessed=guessed, misses=misses, lives=lives,
                     cursor_idx=cursor,
-                    done=(round_ended == 1),                 
+                    done=jnp.array(False),                        # never signal done
                     reward=step_reward,
                     step_counter=s2.step_counter + 1,
-                    score=new_score,                         
-                    round_no=new_roundno,                    
-                    time_left_steps=new_time,                
-                    cpu_score=cpu_new,                       
+                    score=new_score,                              # updated score
+                    round_no=new_roundno,                         # updated round counter
+                    time_left_steps=jnp.array(
+                        self.timer_steps if self.timed == 1 else 0, dtype=jnp.int32
+                    ),
+                    cpu_score=cpu_new,                            # updated cpu score
                     timer_max_steps=s2.timer_max_steps,
                     last_commit=commit,
                 )
 
-
-
+                # If the round ended, immediately start the next one but keep scores
+                return lax.cond(
+                    (round_ended == 1),
+                    _new_round_from,              # starts a new word using base.state
+                    lambda s_: s_,                # keep base if round not ended
+                    base
+                )
 
             def no_commit(s2: HangmanState) -> HangmanState:
                 #gate the timer with "round is active"
@@ -710,23 +734,28 @@ class JaxHangman(JaxEnvironment[HangmanState, HangmanObservation, HangmanInfo, A
                 round_ended = lost.astype(jnp.int32)
                 new_roundno = s2.round_no + round_ended
 
-                return HangmanState(
+                base = HangmanState(
                     key=s2.key, word=s2.word, length=s2.length,
                     mask=mask_final, guessed=s2.guessed, misses=misses, lives=lives,
                     cursor_idx=cursor,
-                    done=jnp.logical_or(s2.done, lost),
+                    done=jnp.array(False),                        # never signal done
                     reward=jnp.where(lost, jnp.array(-1.0, dtype=jnp.float32),
-                                    jnp.array(self.step_penalty, dtype=jnp.float32)),
+                                     jnp.array(self.step_penalty, dtype=jnp.float32)),
                     step_counter=s2.step_counter + 1,
                     score=s2.score,
-                    round_no=new_roundno,          
+                    round_no=new_roundno,
                     time_left_steps=t_next,
-                    cpu_score=cpu_new,             
+                    cpu_score=cpu_new,
                     timer_max_steps=s2.timer_max_steps,
                     last_commit=commit,
                 )
 
-
+                return lax.cond(
+                    (round_ended == 1),
+                    _new_round_from,
+                    lambda s_: s_,
+                    base
+                )
 
             return lax.cond(commit, on_commit, no_commit, s)
 
@@ -745,19 +774,14 @@ class JaxHangman(JaxEnvironment[HangmanState, HangmanObservation, HangmanInfo, A
                 last_commit=commit,                         
             )
 
-        next_state = lax.cond(
-            start_new_round,
-            _new_round,
-            lambda s: lax.cond(s.done, _freeze, _continue_round, s),
-            state,
-        )
+        next_state = _continue_round(state)
 
-        done = self._get_done(next_state)
-        env_reward = self._get_reward(state, next_state)
-        _ = self._get_all_rewards(state, next_state)
+        done = self._get_done(next_state)                 # stays False
+        env_reward = self._get_env_reward(state, next_state)
+        all_rewards = self._get_all_rewards(state, next_state)
 
         obs = self._get_observation(next_state)
-        info = self._get_info(next_state)
+        info = self._get_info(next_state, all_rewards)
         return obs, next_state, env_reward, done, info
 
     def action_space(self) -> spaces.Discrete:
@@ -817,14 +841,13 @@ class JaxHangman(JaxEnvironment[HangmanState, HangmanObservation, HangmanInfo, A
     def _get_done(self, state: HangmanState) -> bool:
         return state.done
 
-
     # @partial(jax.jit, static_argnums=(0,))
     def render(self, state: HangmanState) -> jnp.ndarray:
         return self.renderer.render(state)
 
     @partial(jax.jit, static_argnums=(0,))
-    def _get_info(self, state: HangmanState) -> HangmanInfo:
+    def _get_info(self, state: HangmanState, all_rewards: chex.Array) -> HangmanInfo:
         return HangmanInfo(
             time=state.step_counter,
-            all_rewards=jnp.zeros(1, dtype=jnp.float32),
+            all_rewards=all_rewards,
         )
