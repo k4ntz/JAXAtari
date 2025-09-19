@@ -2303,8 +2303,8 @@ class JaxDonkeyKong(JaxEnvironment[DonkeyKongState, DonkeyKongObservation, Donke
 
             # Barrels
             "barrels": spaces.Dict({
-                "x": spaces.Box(low=0, high=210, shape=(MAX_BARRELS,), dtype=jnp.int32),
-                "y": spaces.Box(low=0, high=160, shape=(MAX_BARRELS, ), dtype=jnp.int32),    
+                "x": spaces.Box(low=-1, high=210, shape=(MAX_BARRELS,), dtype=jnp.int32),
+                "y": spaces.Box(low=-1, high=160, shape=(MAX_BARRELS, ), dtype=jnp.int32),    
                 "width": spaces.Box(low=0, high=160, shape=(MAX_BARRELS, ), dtype=jnp.int32),
                 "height": spaces.Box(low=0, high=210, shape=(MAX_BARRELS, ), dtype=jnp.int32),
             }),
