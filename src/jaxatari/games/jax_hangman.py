@@ -538,8 +538,14 @@ class JaxHangman(JaxEnvironment[HangmanState, HangmanObservation, HangmanInfo, A
         self._rng_key = jrandom.PRNGKey(0)
 
         
-    def seed(self, seed: int) -> None:
-        self._rng_key = jrandom.PRNGKey(int(seed))
+    def seed(self, seed: int | chex.Array) -> chex.Array:
+        if isinstance(seed, int):
+            return jrandom.PRNGKey(int(seed))
+        arr = jnp.asarray(seed)
+        if arr.shape == (2,):
+            return arr
+        return jrandom.PRNGKey(int(jnp.uint32(jnp.sum(arr))))
+
 
 
 
@@ -748,8 +754,9 @@ class JaxHangman(JaxEnvironment[HangmanState, HangmanObservation, HangmanInfo, A
         )
 
         done = self._get_done(next_state)
-        env_reward = self._get_env_reward(state, next_state)
-        all_rewards = self._get_all_reward(state, next_state)
+        env_reward = self._get_reward(state, next_state)
+        all_rewards = self._get_all_rewards(state, next_state)
+
         obs = self._get_observation(next_state)
         info = self._get_info(next_state, all_rewards)
         return obs, next_state, env_reward, done, info
@@ -790,6 +797,12 @@ class JaxHangman(JaxEnvironment[HangmanState, HangmanObservation, HangmanInfo, A
             obs.cursor_idx.reshape((1,)).astype(jnp.int32),
         ])
 
+
+    @partial(jax.jit, static_argnums=(0,))
+    def _get_reward(self, previous_state: HangmanState, state: HangmanState):
+        # single scalar float32
+        return jnp.asarray(state.reward, dtype=jnp.float32)
+
     @partial(jax.jit, static_argnums=(0,))
     def _get_env_reward(self, previous_state: HangmanState, state: HangmanState):
         #return the reward 
@@ -811,11 +824,6 @@ class JaxHangman(JaxEnvironment[HangmanState, HangmanObservation, HangmanInfo, A
     def render(self, state: HangmanState) -> jnp.ndarray:
         return self.renderer.render(state)
 
-    def _get_info(
-        self,
-        state: HangmanState,
-        all_rewards: Optional[chex.Array] = None,
-    ) -> HangmanInfo:
-        if all_rewards is None:
-            all_rewards = jnp.zeros(1, dtype=jnp.float32)
+    @partial(jax.jit, static_argnums=(0,))
+    def _get_info(self, state: HangmanState, all_rewards: chex.Array) -> HangmanInfo:
         return HangmanInfo(time=state.step_counter, all_rewards=all_rewards)
