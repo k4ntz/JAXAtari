@@ -520,7 +520,7 @@ class JaxHangman(JaxEnvironment[HangmanState, HangmanObservation, HangmanInfo, A
     def __init__(self, reward_funcs: Optional[list] = None, *,
                  max_misses: int = MAX_MISSES,
                  step_penalty: float = STEP_PENALTY,
-                 difficulty_mode: str = "B",          
+                 difficulty_mode: str = "B",
                  timer_seconds: int = 20,
                  steps_per_second: int = 30):
         super().__init__()
@@ -528,7 +528,6 @@ class JaxHangman(JaxEnvironment[HangmanState, HangmanObservation, HangmanInfo, A
         self.max_misses = int(max_misses)
         self.step_penalty = float(step_penalty)
 
-        # difficulty / timer config 
         self.timed = 1 if str(difficulty_mode).upper() == "A" else 0
         self.timer_steps = int(timer_seconds * steps_per_second)
 
@@ -536,23 +535,22 @@ class JaxHangman(JaxEnvironment[HangmanState, HangmanObservation, HangmanInfo, A
         self.obs_size = L_MAX + L_MAX + ALPHABET_SIZE + 3
         self.reward_funcs = tuple(reward_funcs) if reward_funcs is not None else None
 
-        self._seed = 0
-        self._rng_key = jrandom.PRNGKey(self._seed)
+        self._rng_key = jrandom.PRNGKey(0)
+
         
-    def seed(self, seed: Optional[int] = None) -> None:
-        if seed is None:
-            return
-        self._seed = int(seed)
-        self._rng_key = jrandom.PRNGKey(self._seed)
+    def seed(self, seed: int) -> None:
+        self._rng_key = jrandom.PRNGKey(int(seed))
+
 
 
     @partial(jax.jit, static_argnums=(0,))
     def reset(self, key=None) -> Tuple[HangmanObservation, HangmanState]:
         if key is None:
-            self._rng_key, key = jrandom.split(self._rng_key)
+            key = self._rng_key
 
         key, word, length = _sample_word(key)
 
+        self._rng_key = key
         # init round timer 
         time0 = jnp.array(self.timer_steps if self.timed == 1 else 0, dtype=jnp.int32)
         tmax  = jnp.array(self.timer_steps if self.timed == 1 else 0, dtype=jnp.int32)
