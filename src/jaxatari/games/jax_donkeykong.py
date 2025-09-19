@@ -2139,8 +2139,10 @@ class JaxDonkeyKong(JaxEnvironment[DonkeyKongState, DonkeyKongObservation, Donke
     @partial(jax.jit, static_argnums=(0,))
     def _get_observation(self, state: DonkeyKongState):
         mario_position = EntityPosition(
-            x = (state.mario_x).astype(jnp.float32),
-            y = (state.mario_y).astype(jnp.float32),
+            x = jnp.round(state.mario_x).astype(jnp.int32),
+            y = jnp.round(state.mario_y).astype(jnp.int32),
+            # x = (state.mario_x).astype(jnp.float32),
+            # y = (state.mario_y).astype(jnp.float32),
             width = self.consts.MARIO_HIT_BOX_Y,
             height = self.consts.MARIO_HIT_BOX_X
         )
@@ -2266,7 +2268,7 @@ class JaxDonkeyKong(JaxEnvironment[DonkeyKongState, DonkeyKongObservation, Donke
     def action_space(self) -> spaces.Discrete:
         return spaces.Discrete(8)
 
-    def observation_space(self) -> spaces.Dict:
+    def observation_space(self) -> spaces.Box:
         MAX_BARRELS = self.consts.MAX_BARRELS
         MAX_FIRES = self.consts.MAX_FIRES
         MAX_TRAPS = self.consts.MAX_TRAPS
@@ -2281,8 +2283,8 @@ class JaxDonkeyKong(JaxEnvironment[DonkeyKongState, DonkeyKongObservation, Donke
 
             # Mario
             "mario_position": spaces.Dict({
-                "x": spaces.Box(low=0, high=210, shape=(), dtype=jnp.float32),
-                "y": spaces.Box(low=0, high=160, shape=(), dtype=jnp.float32),    
+                "x": spaces.Box(low=0, high=210, shape=(), dtype=jnp.int32),
+                "y": spaces.Box(low=0, high=160, shape=(), dtype=jnp.int32),    
                 "width": spaces.Box(low=0, high=160, shape=(), dtype=jnp.int32),
                 "height": spaces.Box(low=0, high=210, shape=(), dtype=jnp.int32),
             }),
