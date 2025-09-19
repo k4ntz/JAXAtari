@@ -33,9 +33,9 @@ class HumanCannonballConstants(NamedTuple):
     MPH_START: int = 43
 
     # Angle constants
-    ANGLE_START: int = 20
+    ANGLE_START: int = 30
     ANGLE_MAX: int = 80
-    ANGLE_MIN: int = 30
+    ANGLE_MIN: int = 20
 
     # The cannon aims low if angle <37, medium if 37 <= angle < 59, and high if angle >= 59
     ANGLE_LOW_THRESHOLD: int = 37
