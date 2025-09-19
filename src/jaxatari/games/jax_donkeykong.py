@@ -2230,11 +2230,11 @@ class JaxDonkeyKong(JaxEnvironment[DonkeyKongState, DonkeyKongObservation, Donke
             hammer_can_destroy_enemy = state.hammer_can_hit,
             barrels = barrels,
             barrel_mask = barrel_mask,
-            fires = fires,
-            fire_mask = fire_mask,
-            traps = traps,
-            ladders = ladders,
-            ladder_mask = ladder_mask,
+            # fires = fires,
+            # fire_mask = fire_mask,
+            # traps = traps,
+            # ladders = ladders,
+            # ladder_mask = ladder_mask,
         )
 
     def render(self, state: DonkeyKongState) -> jnp.ndarray:
