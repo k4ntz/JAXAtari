@@ -4123,7 +4123,7 @@ class BeamRiderRenderer(JAXGameRenderer):
         screen = self._draw_torpedo_projectiles(screen, state.torpedo_projectiles)
 
         # Render sentinel projectiles
-        screen = self._draw_sentinel_projectiles(screen, state.sentinel_projectiles)
+        screen = self._draw_white_saucer_projectiles(screen, state.sentinel_projectiles)
 
         # Render enemies
         screen = self._draw_enemies(screen, state.enemies, state)
@@ -4379,7 +4379,7 @@ class BeamRiderRenderer(JAXGameRenderer):
 
     @partial(jax.jit, static_argnums=(0,))
     def _draw_torpedo_projectiles(self, screen: chex.Array, torpedo_projectiles: chex.Array) -> chex.Array:
-        """Draw all active torpedo projectiles — vectorized with vmap + OR-reduction."""
+        """Draw all active torpedo projectiles"""
 
         H, W = self.constants.SCREEN_HEIGHT, self.constants.SCREEN_WIDTH
         y_idx = jnp.arange(H)
@@ -4413,43 +4413,34 @@ class BeamRiderRenderer(JAXGameRenderer):
         screen = jnp.where(any_mask[..., None], torpedo_color, screen).astype(jnp.uint8)
         return screen
     @partial(jax.jit, static_argnums=(0,))
-    def _draw_sentinel_projectiles(self, screen: chex.Array, sentinel_projectiles: chex.Array) -> chex.Array:
-        """Draw all active sentinel projectiles - vectorized for JIT"""
+    def _draw_white_saucer_projectiles(self, screen: chex.Array, sentinel_projectiles: chex.Array) -> chex.Array:
+        """Draw all active sentinel projectiles"""
+        H, W = self.constants.SCREEN_HEIGHT, self.constants.SCREEN_WIDTH
+        y_idx = jnp.arange(H)
+        x_idx = jnp.arange(W)
+        y_grid, x_grid = jnp.meshgrid(y_idx, x_idx, indexing='ij')
 
-        # Vectorized drawing function
-        def draw_single_sentinel_projectile(i, screen):
-            x, y = sentinel_projectiles[i, 0].astype(int), sentinel_projectiles[i, 1].astype(int)
-            active = sentinel_projectiles[i, 2] == 1
+        p_w = self.constants.PROJECTILE_WIDTH
+        p_h = self.constants.PROJECTILE_HEIGHT
+        projectile_color = jnp.array(self.constants.RED, dtype=jnp.uint8)
 
-            # Create coordinate grids
-            y_indices = jnp.arange(self.constants.SCREEN_HEIGHT)
-            x_indices = jnp.arange(self.constants.SCREEN_WIDTH)
-            y_grid, x_grid = jnp.meshgrid(y_indices, x_indices, indexing='ij')
+        # Per-projectile (H, W) mask
+        def single_mask(proj):
+            x0 = proj[0].astype(jnp.int32)
+            y0 = proj[1].astype(jnp.int32)
+            active = (proj[2] == 1)
 
-            # Create mask for sentinel projectile pixels
-            projectile_mask = (
-                    (x_grid >= x) &
-                    (x_grid < x + self.constants.PROJECTILE_WIDTH) &
-                    (y_grid >= y) &
-                    (y_grid < y + self.constants.PROJECTILE_HEIGHT) &
-                    active &
-                    (x >= 0) & (x < self.constants.SCREEN_WIDTH) &
-                    (y >= 0) & (y < self.constants.SCREEN_HEIGHT)
+            valid = active & (x0 >= 0) & (x0 < W) & (y0 >= 0) & (y0 < H)
+            rect = (
+                    (x_grid >= x0) & (x_grid < x0 + p_w) &
+                    (y_grid >= y0) & (y_grid < y0 + p_h)
             )
+            return rect & valid
 
-            # Apply sentinel projectile color (RED to distinguish from player projectiles)
-            projectile_color = jnp.array(self.constants.RED, dtype=jnp.uint8)
-            screen = jnp.where(
-                projectile_mask[..., None],  # Add dimension for RGB
-                projectile_color,
-                screen
-            ).astype(jnp.uint8)
+        masks = jax.vmap(single_mask)(sentinel_projectiles)  # (N, H, W)
+        any_mask = jnp.any(masks, axis=0)  # (H, W)
 
-            return screen
-
-        # Apply to all sentinel projectiles
-        screen = jax.lax.fori_loop(0, self.constants.MAX_PROJECTILES, draw_single_sentinel_projectile, screen)
-        return screen
+        return jnp.where(any_mask[..., None], projectile_color, screen).astype(jnp.uint8)
 
     @partial(jax.jit, static_argnums=(0,))
     def _draw_ship(self, screen: chex.Array, ship: Ship) -> chex.Array:
