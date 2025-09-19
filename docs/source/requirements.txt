@@ -46,7 +46,7 @@ scikit-image==0.25.2
 scikit-learn==1.6.1
 scipy==1.15.2
 seaborn==0.13.2
-setuptools==78.1.1
+setuptools==78.1.0
 six==1.17.0
 termcolor==2.5.0
 threadpoolctl==3.6.0
