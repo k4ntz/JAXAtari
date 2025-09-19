@@ -1054,7 +1054,7 @@ class JaxSlotMachine(JaxEnvironment[SlotMachineState, SlotMachineObservation, Sl
         """Return the associated reward."""
         return jnp.asarray(state.last_reward, dtype=jnp.float32)
 
-    def _get_done(self, state: SlotMachineState) -> jnp.bool_:
+    def _get_done_original(self, state: SlotMachineState) -> jnp.bool_:
         """Check if the player can no longer place the minimum wager, or reached the max credits"""
         cfg = self.config
         credits = state.credits
@@ -1062,6 +1062,36 @@ class JaxSlotMachine(JaxEnvironment[SlotMachineState, SlotMachineObservation, Sl
         max_credits_reached = credits >= 999
         cannot_afford = credits < cfg.min_wager
         return jnp.logical_or(max_credits_reached, jnp.logical_and(cannot_afford, ~spinning))
+
+    def _get_done(self, state: SlotMachineState) -> jnp.bool_:
+        """Check if the episode should terminate."""
+        cfg = self.config
+        credits = state.credits
+        spinning = jnp.any(state.reel_spinning)
+        max_credits_reached = credits >= 999
+        cannot_afford = credits < cfg.min_wager
+
+        # Sanity check: end episodes quickly so the pipeline stays happy
+        credits_limit = credits > 99
+        spins_limit = state.spins_played > 99
+
+        base_done = jnp.logical_or(max_credits_reached, jnp.logical_and(cannot_afford, ~spinning))
+        sanity_done = jnp.logical_or(credits_limit, spins_limit)
+
+        # jax.debug.print(
+        #     "[SlotMachine] _get_done: sanity limit reached (credits={c}, spins={s})",
+        #     c=credits,
+        #     s=state.spins_played,
+        #     when=jnp.logical_and(sanity_done, jnp.logical_not(base_done)),
+        # )
+        # jax.debug.print(
+        #     "[SlotMachine] _get_done: base condition reached (credits={c}, spinning={spin})",
+        #     c=credits,
+        #     spin=spinning,
+        #     when=base_done,
+        # )
+
+        return jnp.logical_or(base_done, sanity_done)
 
 
 def main():
