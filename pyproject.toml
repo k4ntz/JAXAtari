@@ -17,8 +17,7 @@ dependencies = [
     "opt-einsum==3.4.0",
     "scipy==1.15.3",
     "toolz==1.0.0",
-    "typing-extensions==4.14.0",
-    "pytest"
+    "typing-extensions==4.14.0"
 ]
 
 [build-system]
