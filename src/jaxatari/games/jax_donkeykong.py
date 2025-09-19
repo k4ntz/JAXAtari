@@ -2,6 +2,7 @@ import os
 from functools import partial
 from typing import NamedTuple, Tuple
 import jax.lax
+
 import jax.numpy as jnp
 import chex
 import pygame
@@ -401,10 +402,10 @@ class JaxDonkeyKong(JaxEnvironment[DonkeyKongState, DonkeyKongObservation, Donke
         branches = [lambda _, v=val: jnp.array(v) for val in x_2_values]
         x_2 = jax.lax.switch(index, branches, operand=None)
 
-        m = (x_2 - x_1) / (y_2 - y_1)
-        b = x_1 - m * y_1
+        m = ((x_2 - x_1) / (y_2 - y_1)).astype(jnp.float32)
+        b = (x_1 - m * y_1).astype(jnp.float32)
 
-        x = m * y + b
+        x = (m * y + b).astype(jnp.float32)
         return x
 
     @partial(jax.jit, static_argnums=(0,))
@@ -617,7 +618,7 @@ class JaxDonkeyKong(JaxEnvironment[DonkeyKongState, DonkeyKongObservation, Donke
 
                 # use the propability to change the direction
                 # if a fire forced to change his direction --> direction_change_prob == 1.0
-                def should_change(key, direction_change_prob: float) -> bool:
+                def should_change(key, direction_change_prob) -> bool:
                     rnd = jax.random.uniform(key, shape=())
                     return rnd < direction_change_prob
                 key = jax.random.PRNGKey(jnp.round(state.fires.fire_x[i]).astype(jnp.int32) + jnp.round(state.fires.fire_y[i]).astype(jnp.int32) + state.fires.stage[i] + state.step_counter)
