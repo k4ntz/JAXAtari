@@ -94,7 +94,7 @@ class TronConstants(NamedTuple):
     enemy_firing_cooldown: int = 100  # frames until the enemy can fire again
 
     # gameplay
-    wave_timeout: int = 100  # frames between enemy waves
+    wave_timeout: int = 40  # frames between enemy waves
 
     # Colors (RGBA, 0–255 each)
     rgba_purple: Tuple[int, int, int, int] = (93, 61, 191, 255)  # Border color
@@ -125,7 +125,7 @@ class TronConstants(NamedTuple):
         (0, 128, 255, 255),  # blue
         (255, 255, 255, 255),  # white
         (255, 255, 0, 255),  # yellow
-        (16, 16, 16, 255),  # black (near-black so it's visible)
+        (16, 16, 16, 255),  # black
         (220, 20, 60, 255),  # red (crimson)
         (255, 215, 0, 255),  # gold
     )
@@ -512,6 +512,12 @@ class _ArenaOps:
             pair=to_i32(pairs),
         )
 
+    @staticmethod
+    @jit
+    def tick_door_lockdown(doors: Doors) -> Doors:
+        """Decrement per-door spawn cooldown timers (floored at 0)."""
+        return doors._replace(spawn_lockdown=jnp.maximum(doors.spawn_lockdown - 1, 0))
+
 
 Actor = TypeVar("Actor", Player, Discs)
 
@@ -690,7 +696,10 @@ class TronRenderer(JAXGameRenderer):
 
         raster = jax.lax.fori_loop(0, self.consts.max_discs, render_disc, raster)
 
-        enemy_color = jnp.array([255, 0, 0, 255], dtype=jnp.uint8)
+        # enemy_color = jnp.array([255, 0, 0, 255], dtype=jnp.uint8)
+        wave_colors = jnp.asarray(self.consts.wave_enemy_colors_rgba, dtype=jnp.uint8)
+        widx = jnp.clip(state.wave_index, 0, jnp.int32(self.consts.num_waves - 1))
+        enemy_color = wave_colors[widx]
         enemy_sprite = jnp.broadcast_to(
             enemy_color, (self.consts.player_height, self.consts.player_width, 4)
         )
@@ -905,12 +914,6 @@ def _select_door_for_spawn(
 
 
 @jit
-def _tick_door_lockdown(doors: Doors) -> Doors:
-    """Decrement per-door spawn cooldown timers (floored at 0)."""
-    return doors._replace(spawn_lockdown=jnp.maximum(doors.spawn_lockdown - 1, 0))
-
-
-@jit
 def _mark_door_used_for_spawn(
     doors: Doors, door_index: Array, cooldown_frames: int
 ) -> Doors:
@@ -1033,14 +1036,14 @@ class JaxTron(JaxEnvironment[TronState, TronObservation, TronInfo, TronConstants
             enemies_alive_last=jnp.zeros((), dtype=jnp.int32),
             rng_key=key,
             frame_idx=jnp.zeros((), dtype=jnp.int32),
+            wave_index=jnp.zeros((), dtype=jnp.int32),
         )
         obs = self._get_observation(new_state)
         return obs, new_state
 
     @partial(jax.jit, static_argnums=(0,))
     def _cooldown_finished(self, state: TronState) -> Array:
-        # TODO: Change later to ==
-        return state.wave_end_cooldown_remaining != 0
+        return state.wave_end_cooldown_remaining == 0
 
     @partial(jit, static_argnums=(0,))
     def _player_step(self, state: TronState, action: UserAction) -> TronState:
@@ -1701,11 +1704,19 @@ class JaxTron(JaxEnvironment[TronState, TronObservation, TronInfo, TronConstants
 
             # Enemy i is hit if any disc j overlaps it.
             enemy_hit = jnp.any(pair_hits, axis=1)  # (E,)
+            kills = jnp.sum(enemy_hit.astype(jnp.int32))
 
             # Kill enemies on hit; discs remain unchanged.
             new_alive = e2.alive & (~enemy_hit)
             e3 = e2._replace(alive=new_alive)
-            return s._replace(enemies=e3)
+
+            # wave points
+            wave_pts_tbl = jnp.asarray(self.consts.wave_points, dtype=jnp.int32)
+            widx = jnp.clip(s.wave_index, 0, jnp.int32(self.consts.num_waves - 1))
+            pts_per = wave_pts_tbl[widx]
+            new_score = s.score + pts_per * kills
+            debug.print("score {s}", s=new_score)
+            return s._replace(enemies=e3, score=new_score)
 
         return jax.lax.cond(do_check, _check_and_kill, _no_hit, operand=state)
 
@@ -1728,7 +1739,7 @@ class JaxTron(JaxEnvironment[TronState, TronObservation, TronInfo, TronConstants
         )
 
     @partial(jit, static_argnums=(0,))
-    def _maybe_respawn(self, state: TronState) -> TronState:
+    def _maybe_respawn_enemy(self, state: TronState) -> TronState:
         alive_now = jnp.sum(state.enemies.alive.astype(jnp.int32))
         any_dead = alive_now < jnp.int32(self.consts.max_enemies)
 
@@ -1930,6 +1941,31 @@ class JaxTron(JaxEnvironment[TronState, TronObservation, TronInfo, TronConstants
         return jax.lax.cond(has, do_tp, lambda s: s, state)
 
     @partial(jit, static_argnums=(0,))
+    def _maybe_start_wave_pause(self, state: TronState) -> TronState:
+        alive_now = jnp.sum(state.enemies.alive.astype(jnp.int32))
+
+        # claer the wave before raspawn happens -> start pause + advance wave
+        start_pause = (
+            (alive_now == jnp.int32(0))
+            & state.game_started
+            & (state.wave_end_cooldown_remaining == jnp.int32(0))
+            & (state.inwave_spawn_cd > jnp.int32(0))
+        )
+
+        def on(s: TronState) -> TronState:
+            next_idx = jnp.minimum(
+                s.wave_index + jnp.int32(1), jnp.int32(self.consts.num_waves - 1)
+            )
+            debug.print("Wave index {i}", i=next_idx)
+            return s._replace(
+                wave_end_cooldown_remaining=jnp.int32(self.consts.wave_timeout),
+                inwave_spawn_cd=jnp.int32(0),  # freeze in-wave respawns during pause
+                wave_index=next_idx,  # advance color/points (saturates at GOLD)
+            )
+
+        return jax.lax.cond(start_pause, on, lambda s: s, state)
+
+    @partial(jit, static_argnums=(0,))
     def step(
         self, state: TronState, action: Array
     ) -> Tuple[TronObservation, TronState, float, bool, TronInfo]:
@@ -1950,55 +1986,29 @@ class JaxTron(JaxEnvironment[TronState, TronObservation, TronInfo, TronConstants
         # Advance global frame counter (used to throttle enemy movement)
         state = state._replace(frame_idx=state.frame_idx + jnp.int32(1))
 
-        def _pause_step(s: TronState) -> TronState:
-            # TODO: Activate later
-            # s: TronState = s._replace(
-            #    wave_end_cooldown_remaining=jnp.maximum(
-            #        s.wave_end_cooldown_remaining - 1, 0
-            #    )
-            # )
-            # s = self.move_discs(s)
-
-            # Was there a player-owned active disc BEFORE changing s?
-            # we cannot pass the same pressed_fire_change to both spawn and move disc
-            # because it would immediately recall the just spawned disc
-            had_player_disc_before = jnp.any(
-                (s.discs.owner == jnp.int32(0)) & (s.discs.phase > jnp.int32(0))
-            )
-            # move the player
-            s: TronState = self._player_step(s, user_action)
-            s: TronState = self._teleport_player_if_door(s)
-            s: TronState = self._spawn_disc(s, pressed_fire_changed)
-
-            # Only recall if a player-owned disc existed before this step
-            recall_edge = pressed_fire_changed & had_player_disc_before
-            s: TronState = self._lock_doors_from_disc_hits(s)
-            s: TronState = self._move_discs(s, recall_edge)
-            return s
-
-        def _wave_step(s: TronState) -> TronState:
-            # Was there a player-owned active disc BEFORE changing s?
-            # we cannot pass the same pressed_fire_change to both spawn and move disc
-            # because it would immediately recall the just spawned disc
-            had_player_disc_before = jnp.any(
-                (s.discs.owner == jnp.int32(0)) & (s.discs.phase > jnp.int32(0))
-            )
-            s: TronState = self._player_step(s, user_action)
-            s: TronState = self._teleport_player_if_door(s)
-            s: TronState = self._spawn_disc(s, pressed_fire_changed)
-            # Only recall if a player-owned disc existed before this step
-            recall_edge = pressed_fire_changed & had_player_disc_before
-            s: TronState = self._lock_doors_from_disc_hits(s)
-            s: TronState = self._move_discs(s, recall_edge)
-            return s
-
-        state = jax.lax.cond(
-            self._cooldown_finished(state), _wave_step, _pause_step, state
+        # Was there a player-owned active disc BEFORE changing s?
+        # we cannot pass the same pressed_fire_change to both spawn and move disc
+        # because it would immediately recall the just spawned disc
+        had_player_disc_before = jnp.any(
+            (state.discs.owner == jnp.int32(0)) & (state.discs.phase > jnp.int32(0))
         )
+
+        # move the player
+        state: TronState = self._player_step(state, user_action)
+        # teleport player through doors
+        state: TronState = self._teleport_player_if_door(state)
+        # Spawn discs TODO: Maybe change later for enemy discs
+        state: TronState = self._spawn_disc(state, pressed_fire_changed)
+
+        # Only recall if a player-owned disc existed before this step
+        recall_edge = pressed_fire_changed & had_player_disc_before
+        state: TronState = self._lock_doors_from_disc_hits(state)
+        state: TronState = self._move_discs(state, recall_edge)
+
         state = state._replace(fire_down_prev=user_action.fire)
 
         # tick door cooldowns so used doors eventually become available again
-        state = state._replace(doors=_tick_door_lockdown(state.doors))
+        state = state._replace(doors=_ArenaOps.tick_door_lockdown(state.doors))
 
         # on the first input movement, spawn up to max_enemies once
         def _spawn_initial_wave(s: TronState) -> TronState:
@@ -2018,10 +2028,62 @@ class JaxTron(JaxEnvironment[TronState, TronObservation, TronInfo, TronConstants
             state,
         )
 
-        state = self._move_enemies(state)
-        state = self._disc_enemy_collisions(state)
-        state = self._update_respawn_cooldown_on_kills(state)
-        state = self._maybe_respawn(state)
+        def _pause_step(s: TronState) -> TronState:
+            # TODO: Activate later
+            # s: TronState = s._replace(
+            #    wave_end_cooldown_remaining=jnp.maximum(
+            #        s.wave_end_cooldown_remaining - 1, 0
+            #    )
+            # )
+            # s = self.move_discs(s)
+            rem = jnp.maximum(
+                s.wave_end_cooldown_remaining - jnp.int32(1), jnp.int32(0)
+            )
+            return s._replace(wave_end_cooldown_remaining=rem)
+            return s
+
+        def _wave_step(s: TronState) -> TronState:
+            # If we just finished the pause and there are no enemies, spawn a fresh wave
+            def spawn_new_if_needed(s0: TronState) -> TronState:
+                alive_now = jnp.sum(s0.enemies.alive.astype(jnp.int32))
+                need_spawn = (
+                    (alive_now == jnp.int32(0))
+                    & (s0.wave_end_cooldown_remaining == jnp.int32(0))
+                    & s0.game_started
+                )
+
+                def do_spawn(ss: TronState) -> TronState:
+                    s2 = self._spawn_enemies_up_to(
+                        ss, jnp.int32(self.consts.max_enemies), jnp.float32(0.4)
+                    )
+                    return s2._replace(
+                        inwave_spawn_cd=jnp.int32(self.consts.enemy_respawn_timer)
+                    )
+
+                return jax.lax.cond(need_spawn, do_spawn, lambda ss: ss, s0)
+
+            s = spawn_new_if_needed(s)
+            s = self._move_enemies(s)
+            s = self._disc_enemy_collisions(s)
+            s = self._update_respawn_cooldown_on_kills(s)
+            # if the arena was cleared before the respawn, pause and skip respawns this frame
+            s = self._maybe_start_wave_pause(s)
+
+            # Only allow in-wave respawns if we're not in a between-wave pause
+            def do_respawn(ss: TronState) -> TronState:
+                return self._maybe_respawn_enemy(ss)
+
+            s = jax.lax.cond(
+                s.wave_end_cooldown_remaining > jnp.int32(0),
+                lambda ss: ss,  # in pause: no respawns
+                do_respawn,
+                s,
+            )
+            return s
+
+        state = jax.lax.cond(
+            self._cooldown_finished(state), _wave_step, _pause_step, state
+        )
 
         obs: TronObservation = self._get_observation(state)
         env_reward: float = self._get_reward(state, state)
