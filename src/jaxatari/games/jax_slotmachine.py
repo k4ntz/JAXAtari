@@ -96,10 +96,13 @@ class SlotMachineConfig:
     max_spin_duration: int = 120
     reel_stop_delay: int = 30
 
-    # Symbol probability weights (higher = more common)
-    # Symbols mapping ("Cactus", "Table", "Bar", "TV", "Bell", "Car")
-    symbol_weights: jnp.ndarray = field(
-        default_factory=lambda: jnp.array([2, 3, 2, 3, 2, 1], dtype=jnp.float32)
+    # Tuned reel strips after ten thousand simulations to keep the bankroll drifting downward on the long run.
+    reel_layouts: jnp.ndarray = field(
+        default_factory=lambda: jnp.array([
+            [0, 1, 3, 4, 0, 2, 3, 4, 1, 3, 4, 2, 3, 4, 1, 3, 5, 1, 3, 4],
+            [0, 2, 3, 1, 5, 0, 2, 3, 1, 5, 0, 2, 3, 5, 5, 0, 2, 3, 4, 5],
+            [0, 0, 3, 4, 5, 0, 0, 1, 4, 5, 0, 0, 1, 4, 5, 0, 2, 3, 4, 5],
+        ], dtype=jnp.int32)
     )
 
     # Reel positions - UI layout coordinates
@@ -125,6 +128,7 @@ class SlotMachineState(NamedTuple):
     reel_spinning: chex.Array
     spin_timers: chex.Array
     reel_speeds: chex.Array
+    reel_layouts: chex.Array
 
     # Input handling with a button debouncing feature so that we ignore repeated presses
     spin_button_prev: chex.Array
@@ -333,7 +337,7 @@ class SlotMachineRenderer(JAXGameRenderer):
                 # Calculate which symbol to show at this position
                 # This math wraps around the 20-symbol cycle as in the original game
                 symbol_index = (reel_pos + symbol_slot) % cfg.total_symbols_per_reel
-                symbol_type = symbol_index % cfg.num_symbol_types
+                symbol_type = state.reel_layouts[reel_idx, symbol_index]
 
                 # Get the sprite for this symbol type
                 symbol_sprite = self._get_symbol_sprite(symbol_type)
@@ -558,10 +562,20 @@ class JaxSlotMachine(JaxEnvironment[SlotMachineState, SlotMachineObservation, Sl
 
         # Initialize reels to random positions to prevent every fresh game from starting with the same symbols showing
         key, *reel_keys = jax.random.split(key, cfg.num_reels + 1)
-        initial_positions = jnp.array([
-            jax.random.randint(reel_key, (), 0, cfg.total_symbols_per_reel)
-            for reel_key in reel_keys
-        ])
+        layout_list = []
+        position_list = []
+        base_layouts = cfg.reel_layouts
+        for i, reel_key in enumerate(reel_keys):
+            layout_key, pos_key = jax.random.split(reel_key)
+            perm = jax.random.permutation(layout_key, cfg.total_symbols_per_reel)
+            base_layout = base_layouts[i % base_layouts.shape[0]]
+            layout_list.append(base_layout[perm])
+            position_list.append(
+                jax.random.randint(pos_key, (), 0, cfg.total_symbols_per_reel)
+            )
+
+        initial_layouts = jnp.stack(layout_list)
+        initial_positions = jnp.array(position_list)
 
         # Create completely fresh initial state
         initial_state = SlotMachineState(
@@ -578,6 +592,7 @@ class JaxSlotMachine(JaxEnvironment[SlotMachineState, SlotMachineObservation, Sl
             reel_spinning=jnp.zeros(cfg.num_reels, dtype=jnp.bool_),  # All reels stopped
             spin_timers=jnp.zeros(cfg.num_reels, dtype=jnp.int32),    # No active timers
             reel_speeds=jnp.ones(cfg.num_reels, dtype=jnp.int32),     # Default speed
+            reel_layouts=initial_layouts,
 
             # Input state - no buttons pressed, no cooldowns
             spin_button_prev=jnp.array(False, dtype=jnp.bool_),       # FIRE not pressed
@@ -711,26 +726,39 @@ class JaxSlotMachine(JaxEnvironment[SlotMachineState, SlotMachineObservation, Sl
         # Use provided key instead of state.rng to prevents reusing the same key pattern
         key, *reel_keys = jax.random.split(key, cfg.num_reels + 1)
 
-        # Generate random spin durations with sequential stopping. Each reel stops progressively later for a
-        # dramatic effect
-        spin_durations = jnp.array([
-            jax.random.randint(
-                reel_key, (),
-                cfg.min_spin_duration + i * cfg.reel_stop_delay,
-                cfg.max_spin_duration + i * cfg.reel_stop_delay
-            )
-            for i, reel_key in enumerate(reel_keys)
-        ])
+        spin_duration_list = []
+        layout_list = []
+        position_list = []
+        base_layouts = cfg.reel_layouts
 
-        # Generate random final positions using probability weights
-        final_positions = jnp.array([
-            jax.random.choice(
-                reel_key,
-                jnp.arange(cfg.total_symbols_per_reel),
-                p=self._get_symbol_probabilities()
+        for i, reel_key in enumerate(reel_keys):
+            layout_key, rest_key = jax.random.split(reel_key)
+            duration_key, pos_key = jax.random.split(rest_key)
+
+            perm = jax.random.permutation(layout_key, cfg.total_symbols_per_reel)
+            base_layout = base_layouts[i % base_layouts.shape[0]]
+            layout = base_layout[perm]
+            layout_list.append(layout)
+
+            duration = jax.random.randint(
+                duration_key,
+                (),
+                cfg.min_spin_duration + i * cfg.reel_stop_delay,
+                cfg.max_spin_duration + i * cfg.reel_stop_delay,
             )
-            for reel_key in reel_keys
-        ])
+            spin_duration_list.append(duration)
+
+            position = jax.random.randint(
+                pos_key,
+                (),
+                0,
+                cfg.total_symbols_per_reel,
+            )
+            position_list.append(position)
+
+        spin_durations = jnp.array(spin_duration_list)
+        final_positions = jnp.array(position_list)
+        new_layouts = jnp.stack(layout_list)
 
         return state._replace(
             # Economic state
@@ -741,6 +769,7 @@ class JaxSlotMachine(JaxEnvironment[SlotMachineState, SlotMachineObservation, Sl
             reel_spinning=jnp.ones(cfg.num_reels, dtype=jnp.bool_), # All reels spinning
             spin_timers=spin_durations,                              # Countdown timers
             reel_positions=final_positions,                          # Final outcomes (hidden)
+            reel_layouts=new_layouts,
 
             # Control state
             spin_cooldown=jnp.array(10, dtype=jnp.int32),           # Brief cooldown
@@ -749,33 +778,6 @@ class JaxSlotMachine(JaxEnvironment[SlotMachineState, SlotMachineObservation, Sl
             last_payout=jnp.array(0, dtype=jnp.int32),              # Clear old payout
             last_reward=jnp.array(0.0, dtype=jnp.float32),          # Clear old reward
         )
-
-    def _get_symbol_probabilities(self) -> jnp.ndarray:
-        """
-        Get normalized probabilities for symbol selection. Creates a probability distribution that makes rare symbols
-        actually rare. This is what gives the slot machine its house edge and authentic feel.
-
-        Probability Math:
-        - Each symbol type appears multiple times in the 20-position reel
-        - Symbol weights determine relative frequency
-        - For example TV is 3x (weight 3)  more likely than car (weight 1)
-        - Creates realistic slot machine odds
-
-        """
-        cfg = self.config
-
-        # Create probability array for all 20 positions on the reel
-        probs = jnp.zeros(cfg.total_symbols_per_reel)
-
-        # Assign weights to each symbol type
-        for symbol_type in range(cfg.num_symbol_types):
-            # Each symbol type appears at regular intervals on the reel
-            # e.g., Cactus at positions 0, 6, 12, 18 for 6 symbol types
-            symbol_positions = jnp.arange(symbol_type, cfg.total_symbols_per_reel, cfg.num_symbol_types)
-            probs = probs.at[symbol_positions].set(cfg.symbol_weights[symbol_type])
-
-        # Normalize to create valid probability distribution
-        return probs / jnp.sum(probs)
 
     def _update_reels(self, state: SlotMachineState) -> SlotMachineState:
         """
@@ -843,7 +845,7 @@ class JaxSlotMachine(JaxEnvironment[SlotMachineState, SlotMachineObservation, Sl
 
             # Get the center symbol from each reel (the payline)
             center_symbols = jnp.array([
-                (s.reel_positions[i] + 1) % cfg.total_symbols_per_reel % cfg.num_symbol_types
+                s.reel_layouts[i, (s.reel_positions[i] + 1) % cfg.total_symbols_per_reel]
                 for i in range(cfg.num_reels)
             ])
 
@@ -925,15 +927,13 @@ class JaxSlotMachine(JaxEnvironment[SlotMachineState, SlotMachineObservation, Sl
 
         cfg = self.config
 
-        # Get currently visible symbols for each reel
+        # Get currently visible symbols for each reel from static layout
         reel_symbols = jnp.zeros((cfg.num_reels, cfg.symbols_per_reel), dtype=jnp.int32)
 
-        # Build the symbol grid that matches what's visually displayed
         for reel_idx in range(cfg.num_reels):
             for symbol_slot in range(cfg.symbols_per_reel):
-                # Calculate which symbol appears at this visual position
                 symbol_index = (state.reel_positions[reel_idx] + symbol_slot) % cfg.total_symbols_per_reel
-                symbol_type = symbol_index % cfg.num_symbol_types
+                symbol_type = state.reel_layouts[reel_idx, symbol_index]
                 reel_symbols = reel_symbols.at[reel_idx, symbol_slot].set(symbol_type)
 
         return SlotMachineObservation(
