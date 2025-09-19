@@ -18,7 +18,7 @@ There are currently two tabs one at the top of the third reel and one at the bot
 - The upper right tab shows credit
 - The lower right tab shows wager
 
-How to play ?
+How to play ? (Run command: python scripts/play.py --game slotmachine)
 - SPACE to turn on the reels
 - UP to increase wager
 - DOWN to decrease wager
@@ -166,6 +166,9 @@ class SlotMachineInfo(NamedTuple):
 
     # Total number of spins altogether, not currently needed. Introduced for debug and win statistics.
     spins_played: jnp.ndarray
+
+    # Keeps track of rewards for use by external api
+    all_rewards: Optional[jnp.ndarray] = None
 
 
 class SlotMachineConstants(NamedTuple):
@@ -630,6 +633,7 @@ class JaxSlotMachine(JaxEnvironment[SlotMachineState, SlotMachineObservation, Sl
 
         """
         cfg = self.config
+        previous_state = state
 
         # Update RNG key EVERY step, not just during spins
         step_key, new_rng = jax.random.split(state.rng)
@@ -705,10 +709,8 @@ class JaxSlotMachine(JaxEnvironment[SlotMachineState, SlotMachineObservation, Sl
         done = (new_state.credits < cfg.min_wager) & (~jnp.any(new_state.reel_spinning))
 
         obs = self._get_observation(new_state)
-        info = SlotMachineInfo(
-            total_winnings=new_state.total_winnings,
-            spins_played=new_state.spins_played
-        )
+        all_rewards = self._get_all_reward(previous_state, new_state)
+        info = self._get_info(new_state, all_rewards)
 
         return obs, new_state, reward, done, info
 
@@ -980,18 +982,19 @@ class JaxSlotMachine(JaxEnvironment[SlotMachineState, SlotMachineObservation, Sl
         - Payouts/rewards (Integer to keep track of payouts. Important for debugging.)
         """
         cfg = self.config
+        box_dtype = jnp.float32
         return spaces.Dict({
-            'credits': spaces.Box(low=0, high=9999, shape=(), dtype=jnp.int32),
-            'current_wager': spaces.Box(low=cfg.min_wager, high=cfg.max_wager, shape=(), dtype=jnp.int32),
+            'credits': spaces.Box(low=0, high=9999, shape=(), dtype=box_dtype),
+            'current_wager': spaces.Box(low=cfg.min_wager, high=cfg.max_wager, shape=(), dtype=box_dtype),
             'reel_symbols': spaces.Box(
                 low=0,
                 high=cfg.num_symbol_types - 1,
                 shape=(cfg.num_reels, cfg.symbols_per_reel),
-                dtype=jnp.int32
+                dtype=box_dtype
             ),
-            'is_spinning': spaces.Box(low=0, high=1, shape=(), dtype=jnp.int32),
-            'last_payout': spaces.Box(low=0, high=1000, shape=(), dtype=jnp.int32),
-            'last_reward': spaces.Box(low=0.0, high=1000.0, shape=(), dtype=jnp.float32),
+            'is_spinning': spaces.Box(low=0, high=1, shape=(), dtype=box_dtype),
+            'last_payout': spaces.Box(low=0, high=1000, shape=(), dtype=box_dtype),
+            'last_reward': spaces.Box(low=0.0, high=1000.0, shape=(), dtype=box_dtype),
         })
 
     def image_space(self) -> spaces.Space:
@@ -1017,24 +1020,48 @@ class JaxSlotMachine(JaxEnvironment[SlotMachineState, SlotMachineObservation, Sl
         ]
         return jnp.concatenate(components, axis=0)
 
-    def _get_info(self, state: SlotMachineState) -> SlotMachineInfo:
+    @partial(jax.jit, static_argnums=(0,))
+    def _get_all_reward(
+        self,
+        previous_state: SlotMachineState,
+        state: SlotMachineState,
+    ) -> jnp.ndarray:
+        if self.reward_funcs is None:
+            return jnp.zeros(1, dtype=jnp.float32)
+        rewards = jnp.array(
+            [reward_func(previous_state, state) for reward_func in self.reward_funcs],
+            dtype=jnp.float32,
+        )
+        return rewards
+
+    def _get_info(
+        self,
+        state: SlotMachineState,
+        all_rewards: Optional[jnp.ndarray] = None,
+    ) -> SlotMachineInfo:
 
         return SlotMachineInfo(
             total_winnings=state.total_winnings,
             spins_played=state.spins_played,
+            all_rewards=all_rewards,
         )
 
-    def _get_reward(self, previous_state: SlotMachineState, state: SlotMachineState) -> float:
-        """Return the associated reward. """
-        return float(jnp.asarray(state.last_reward))
+    def _get_reward(
+        self,
+        previous_state: SlotMachineState,
+        state: SlotMachineState,
+    ) -> jnp.ndarray:
+        """Return the associated reward."""
+        return jnp.asarray(state.last_reward, dtype=jnp.float32)
 
-    def _get_done(self, state: SlotMachineState) -> bool:
+    def _get_done(self, state: SlotMachineState) -> jnp.bool_:
         """Check if the player can no longer place the minimum wager, or reached the max credits"""
         cfg = self.config
-        credits = int(jnp.asarray(state.credits))
-        spinning = bool(jnp.asarray(jnp.any(state.reel_spinning)))
+        credits = state.credits
+        spinning = jnp.any(state.reel_spinning)
         max_credits_reached = credits >= 999
-        return ((credits < cfg.min_wager) and (not spinning)) or max_credits_reached
+        cannot_afford = credits < cfg.min_wager
+        return jnp.logical_or(max_credits_reached, jnp.logical_and(cannot_afford, ~spinning))
 
 
 def main():
