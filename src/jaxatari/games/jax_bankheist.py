@@ -6,7 +6,7 @@ import jax.lax
 import jax.numpy as jnp
 import chex
 import pygame
-from gymnax.environments import spaces
+import jaxatari.spaces as spaces
 
 from jaxatari.rendering import jax_rendering_utils as aj
 from jaxatari.environment import JaxEnvironment
@@ -206,9 +206,18 @@ class BankHeistConstants(NamedTuple):
     DYNAMITE_EXPLOSION_DELAY: int = DYNAMITE_EXPLOSION_DELAY
 
 class Entity(NamedTuple):
-    position: chex.Array
-    direction: chex.Array
-    visibility: chex.Array
+    position: jnp.ndarray
+    direction: jnp.ndarray
+    visibility: jnp.ndarray
+
+class FlatEntity(NamedTuple):
+    x: jnp.ndarray
+    y: jnp.ndarray
+    direction: jnp.ndarray
+    visibility: jnp.ndarray
+
+def flat_entity(entity: Entity):
+    return FlatEntity(entity.position[0], entity.position[1], entity.direction, entity.visibility)
 
 class BankHeistState(NamedTuple):
     level: chex.Array
@@ -240,15 +249,15 @@ class BankHeistState(NamedTuple):
 
 #TODO: Add Background collision Map, Fuel, Fuel Refill and others
 class BankHeistObservation(NamedTuple):
-    player: Entity
+    player: FlatEntity
     lives: jnp.ndarray
     score: jnp.ndarray
-    enemies: chex.Array
-    banks: chex.Array
+    enemies: jnp.ndarray
+    banks: jnp.ndarray
 
 class BankHeistInfo(NamedTuple):
     time: jnp.ndarray
-    all_rewards: chex.Array
+    all_rewards: jnp.ndarray
 
 class JaxBankHeist(JaxEnvironment[BankHeistState, BankHeistObservation, BankHeistInfo, BankHeistConstants]):
     
@@ -258,6 +267,7 @@ class JaxBankHeist(JaxEnvironment[BankHeistState, BankHeistObservation, BankHeis
         self.frame_stack_size = 4
         self.action_set = {NOOP, FIRE, RIGHT, LEFT, UP, DOWN}
         self.reward_funcs = None
+        self.renderer = Renderer_AtraBankisHeist()
     
     def action_space(self) -> spaces.Discrete:
         """
@@ -265,18 +275,44 @@ class JaxBankHeist(JaxEnvironment[BankHeistState, BankHeistObservation, BankHeis
         """
         return spaces.Discrete(len(self.action_set))
     
-    def observation_space(self) -> spaces.Box:
+    def observation_space(self) -> spaces:
         """
         Returns the observation space of the environment.
         """
         # Return a box space representing the stacked frames
+        return spaces.Dict({
+            "player": spaces.Dict({
+                "x": spaces.Box(low=0, high=WIDTH, shape=(), dtype=jnp.int32),
+                "y": spaces.Box(low=0, high=HEIGHT, shape=(), dtype=jnp.int32),
+                "direction": spaces.Box(low=0, high=4, shape=(), dtype=jnp.int32),
+                "visibility": spaces.Box(low=0, high=1, shape=(), dtype=jnp.int32)
+            }),
+            "lives": spaces.Box(low=0, high=MAX_LIVES, shape=(), dtype=jnp.int32),
+            "score": spaces.Box(low=0, high=jnp.iinfo(jnp.int32).max, shape=(), dtype=jnp.int32),
+            "enemies": spaces.Box(low=0, high=210, shape=(4, 4), dtype=jnp.int32),
+            "banks": spaces.Box(low=0, high=210, shape=(4, 4), dtype=jnp.int32)
+        })
+    
+    def image_space(self) -> spaces.Box:
+        """Returns the image space for Freeway.
+        The image is a RGB image with shape (210, 160, 3).
+        """
         return spaces.Box(
-            low=0, 
-            high=255, 
-            shape=(self.frame_stack_size, WIDTH, HEIGHT, 3), 
+            low=0,
+            high=255,
+            shape=(210, 160, 3),
             dtype=jnp.uint8
         )
     
+    def obs_to_flat_array(self, obs: BankHeistObservation) -> jnp.ndarray:
+        """Convert observation to a flat array."""
+        player_array = jnp.concatenate([obs.player.x.reshape(-1), obs.player.y.reshape(-1), obs.player.direction.reshape(-1), obs.player.visibility.reshape(-1)])
+        banks_flat = obs.banks.reshape(-1)
+        police_flat = obs.enemies.reshape(-1)
+        flat_array = jnp.concatenate([player_array, obs.lives.reshape(-1), obs.score.reshape(-1), banks_flat, police_flat]) 
+        return flat_array
+    
+
     def reset(self, key: chex.PRNGKey) -> BankHeistState:
         # Minimal state initialization
         state = BankHeistState(
@@ -286,7 +322,7 @@ class JaxBankHeist(JaxEnvironment[BankHeistState, BankHeistObservation, BankHeis
             player=Entity(
                 position=jnp.array([12, 78]).astype(jnp.int32),
                 direction=jnp.array(4).astype(jnp.int32),
-                visibility=jnp.array([1]).astype(jnp.int32)
+                visibility=jnp.array(1).astype(jnp.int32)
             ),
             dynamite_position=jnp.array([-1, -1]).astype(jnp.int32),  # Inactive at [-1, -1]
             enemy_positions=init_banks_or_police(),
@@ -316,7 +352,7 @@ class JaxBankHeist(JaxEnvironment[BankHeistState, BankHeistObservation, BankHeis
             return jnp.concatenate([x_expanded] * self.frame_stack_size, axis=0)
         obs_stack = jax.tree.map(expand_and_copy, obs)
         state = state._replace(obs_stack=obs_stack)
-        return  obs_stack, state
+        return  obs, state
     
     @partial(jax.jit, static_argnums=(0,))
     def validate_input(self, state: BankHeistState, player: Entity, input: jnp.ndarray) -> Entity:
@@ -1037,7 +1073,7 @@ class JaxBankHeist(JaxEnvironment[BankHeistState, BankHeistObservation, BankHeis
             all_rewards=jnp.array([reward])
         )
         
-        return new_state.obs_stack, new_state, reward, done, info
+        return self._get_observation(new_state), new_state, reward, done, info
 
     @partial(jax.jit, static_argnums=(0,))
     def player_step(self, state: BankHeistState, action: chex.Array) -> BankHeistState:
@@ -1157,13 +1193,32 @@ class JaxBankHeist(JaxEnvironment[BankHeistState, BankHeistObservation, BankHeis
 
     @partial(jax.jit, static_argnums=(0,))
     def _get_observation(self, state: BankHeistState) -> BankHeistObservation:
+        police = jnp.zeros((4, 4), dtype=jnp.int32)
+        banks = jnp.zeros((4, 4), dtype=jnp.int32)
+        for i in range(state.enemy_positions.position.shape[0]):
+            police = police.at[i].set(
+                jnp.array([state.enemy_positions.position[i][0] * state.enemy_positions.visibility[i], 
+                           state.enemy_positions.position[i][1] * state.enemy_positions.visibility[i], 
+                           state.enemy_positions.direction[i] * state.enemy_positions.visibility[i], 
+                           state.enemy_positions.visibility[i]])
+            )
+            banks = banks.at[i].set(
+                jnp.array([state.bank_positions.position[i][0] * state.bank_positions.visibility[i], 
+                           state.bank_positions.position[i][1] * state.bank_positions.visibility[i], 
+                           state.bank_positions.direction[i] * state.bank_positions.visibility[i], 
+                           state.bank_positions.visibility[i]])
+            )
         return BankHeistObservation(
-            player=state.player,
+            player=flat_entity(state.player),
             lives=state.player_lives,
             score=state.money,
-            enemies=state.enemy_positions,
-            banks=state.bank_positions,
+            enemies=police,
+            banks=banks,
             )
+
+    def render(self, state: BankHeistState) -> jnp.ndarray:
+        """Render the game state to a raster image."""
+        return self.renderer.render(state)
 
 
 def load_bankheist_sprites():
