@@ -2267,11 +2267,19 @@ class JaxDonkeyKong(JaxEnvironment[DonkeyKongState, DonkeyKongObservation, Donke
             obs.hammer_can_destroy_enemy.flatten(),
 
             # --- Barrels ---
-            obs.barrels.x,
-            obs.barrels.y,
-            obs.barrels.width,
-            obs.barrels.height,
-            obs.barrel_mask,
+            
+            jnp.sum(obs.barrel_mask).reshape(-1),  # Anzahl der Barrels
+            jnp.mean(obs.barrels.x).reshape(-1),   # Mittelwert X
+            jnp.mean(obs.barrels.y).reshape(-1),   # Mittelwert Y
+            jnp.mean(obs.barrels.width).reshape(-1),   # Mittelwert Width
+            jnp.mean(obs.barrels.height).reshape(-1), 
+            
+            
+            # obs.barrels.x,
+            # obs.barrels.y,
+            # obs.barrels.width,
+            # obs.barrels.height,
+            # obs.barrel_mask,
 
             # --- Fires ---
             # obs.fires.x.flatten(),
