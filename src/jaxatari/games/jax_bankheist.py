@@ -245,7 +245,8 @@ class BankHeistState(NamedTuple):
     game_paused: chex.Array  # Game paused state Is set at beginning and after life was lost
     bank_heists: chex.Array  # number of bank heists completed in the current level
     pending_police_bank_indices: chex.Array  # Bank indices where police should spawn
-    random_key: chex.PRNGKey  # Persistent random key that advances each step  
+    random_key: chex.PRNGKey  # Persistent random key that advances each step
+    time: chex.Array
 
 #TODO: Add Background collision Map, Fuel, Fuel Refill and others
 class BankHeistObservation(NamedTuple):
@@ -344,7 +345,8 @@ class JaxBankHeist(JaxEnvironment[BankHeistState, BankHeistObservation, BankHeis
             pending_police_bank_indices=jnp.array([-1, -1, -1]).astype(jnp.int32),  # Bank indices for pending spawns
             game_paused=jnp.array(False).astype(jnp.bool_),
             bank_heists=jnp.array(0).astype(jnp.int32),
-            random_key=key  # Use the provided random key
+            random_key=key,  # Use the provided random key
+            time=jnp.array(0, dtype=jnp.int32),
         )
         obs = self._get_observation(state)
         def expand_and_copy(x):
@@ -1047,7 +1049,7 @@ class JaxBankHeist(JaxEnvironment[BankHeistState, BankHeistObservation, BankHeis
             lambda: self.fuel_step(new_state)
         )
 
-        reward = 0.0
+        
         # Game is done when player runs out of lives
         done = new_state.player_lives < 0
         
@@ -1066,12 +1068,16 @@ class JaxBankHeist(JaxEnvironment[BankHeistState, BankHeistObservation, BankHeis
             
             new_obs_stack = jax.tree.map(shift_and_add, old_stack, obs)
             new_state = new_state._replace(obs_stack=new_obs_stack)
-        
+        reward = new_state.money - state.money
+        new_time = (state.time + 1).astype(jnp.int32)
+        new_state = new_state._replace(time=new_time)
+
         # Create info
         info = BankHeistInfo(
-            time=jnp.array(0),  # You can add proper time tracking if needed
+            time=new_state.time,
             all_rewards=jnp.array([reward])
         )
+
         
         return self._get_observation(new_state), new_state, reward, done, info
 
@@ -1219,7 +1225,18 @@ class JaxBankHeist(JaxEnvironment[BankHeistState, BankHeistObservation, BankHeis
     def render(self, state: BankHeistState) -> jnp.ndarray:
         """Render the game state to a raster image."""
         return self.renderer.render(state)
-
+    
+    @partial(jax.jit, static_argnums=(0,))
+    def _get_info(self, state: BankHeistInfo, all_rewards: chex.Array = None) -> BankHeistInfo:
+        return BankHeistInfo(time=state.time, all_rewards=all_rewards)
+    
+    @partial(jax.jit, static_argnums=(0,))
+    def _get_reward(self, previous_state: BankHeistState, current_state: BankHeistState) -> chex.Array:
+        return current_state.money - previous_state.money
+    
+    @partial(jax.jit, static_argnums=(0,))
+    def _get_done(self, state: BankHeistState) -> bool:
+        return state.player_lives < 0
 
 def load_bankheist_sprites():
     cities = [aj.loadFrame(os.path.join(SPRITES_DIR, f"map_{i+1}.npy"), transpose=False) for i in range(8)]
