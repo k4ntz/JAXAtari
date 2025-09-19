@@ -328,22 +328,22 @@ class DonkeyKongObservation(NamedTuple):
     mario_jumping: jnp.ndarray
     mario_climbing: jnp.ndarray
     
-    # # Hammer
+    # Hammer
     hammer_position: EntityPosition
     hammer_can_destroy_enemy: jnp.ndarray
 
     # # Enemy
-    barrels: EntityPosition
-    barrel_mask: jnp.ndarray # 0 = inactive barrels, 1 = active barrels
-    fires: EntityPosition
-    fire_mask: jnp.ndarray  
+    # barrels: EntityPosition
+    # barrel_mask: jnp.ndarray # 0 = inactive barrels, 1 = active barrels
+    # fires: EntityPosition
+    # fire_mask: jnp.ndarray  
 
     # # Traps
-    traps: EntityPositionTrap
+    # traps: EntityPositionTrap
 
     # # Ladders
-    ladders: EntityPositionLadder
-    ladder_mask: jnp.ndarray # 0 for some ladders for level 1 which are no ladders, its only a place holder because JAX needs consistent array sizes
+    # ladders: EntityPositionLadder
+    # ladder_mask: jnp.ndarray # 0 for some ladders for level 1 which are no ladders, its only a place holder because JAX needs consistent array sizes
                              # ladder_mask do NOT implie if those ladders are climbable or not
 
 class DonkeyKongInfo(NamedTuple):
@@ -2150,38 +2150,38 @@ class JaxDonkeyKong(JaxEnvironment[DonkeyKongState, DonkeyKongObservation, Donke
             width = self.consts.HAMMER_HIT_BOX_Y,
             height = self.consts.HAMMER_HIT_BOX_X,
         )
-        nums_barrels = state.barrels.barrel_x.shape[0]
-        barrels = EntityPosition(
-            x = state.barrels.barrel_x,
-            y = state.barrels.barrel_y,
-            width = jnp.full((nums_barrels,), self.consts.BARREL_HIT_BOX_Y),
-            height = jnp.full((nums_barrels,), self.consts.BARREL_HIT_BOX_X),
-        )
-        barrel_mask = jnp.where(state.barrels.reached_the_end, 0, 1)
-        nums_fires = state.fires.fire_x.shape[0]
-        fires = EntityPosition(
-            x = state.fires.fire_x,
-            y = state.fires.fire_y,
-            width = jnp.full((nums_fires,), self.consts.FIRE_HIT_BOX_Y),
-            height = jnp.full((nums_fires,), self.consts.FIRE_HIT_BOX_X),
-        )
-        fire_mask = jnp.where(state.fires.destroyed, 0, 1)
-        nums_traps = state.traps.trap_x.shape[0]
-        traps = EntityPositionTrap(
-            x = state.traps.trap_x,
-            y = state.traps.trap_y,
-            width = jnp.full((nums_traps,), self.consts.TRAP_WIDTH),
-            triggered = state.traps.triggered,
-        )
-        nums_ladders = state.ladders.start_x.shape[0]
-        ladders = EntityPositionLadder(
-            start_x = state.ladders.start_x,
-            start_y = state.ladders.start_y,
-            end_x = state.ladders.end_x,
-            end_y = state.ladders.end_y,
-            width = jnp.full((nums_ladders,), self.consts.LADDER_WIDTH),
-        )
-        ladder_mask = jnp.where(state.ladders.start_x != -1, 1, 0)
+        # nums_barrels = state.barrels.barrel_x.shape[0]
+        # barrels = EntityPosition(
+        #     x = state.barrels.barrel_x,
+        #     y = state.barrels.barrel_y,
+        #     width = jnp.full((nums_barrels,), self.consts.BARREL_HIT_BOX_Y),
+        #     height = jnp.full((nums_barrels,), self.consts.BARREL_HIT_BOX_X),
+        # )
+        # barrel_mask = jnp.where(state.barrels.reached_the_end, 0, 1)
+        # nums_fires = state.fires.fire_x.shape[0]
+        # fires = EntityPosition(
+        #     x = state.fires.fire_x,
+        #     y = state.fires.fire_y,
+        #     width = jnp.full((nums_fires,), self.consts.FIRE_HIT_BOX_Y),
+        #     height = jnp.full((nums_fires,), self.consts.FIRE_HIT_BOX_X),
+        # )
+        # fire_mask = jnp.where(state.fires.destroyed, 0, 1)
+        # nums_traps = state.traps.trap_x.shape[0]
+        # traps = EntityPositionTrap(
+        #     x = state.traps.trap_x,
+        #     y = state.traps.trap_y,
+        #     width = jnp.full((nums_traps,), self.consts.TRAP_WIDTH),
+        #     triggered = state.traps.triggered,
+        # )
+        # nums_ladders = state.ladders.start_x.shape[0]
+        # ladders = EntityPositionLadder(
+        #     start_x = state.ladders.start_x,
+        #     start_y = state.ladders.start_y,
+        #     end_x = state.ladders.end_x,
+        #     end_y = state.ladders.end_y,
+        #     width = jnp.full((nums_ladders,), self.consts.LADDER_WIDTH),
+        # )
+        # ladder_mask = jnp.where(state.ladders.start_x != -1, 1, 0)
         
         return DonkeyKongObservation(
             total_score = state.game_score,
@@ -2195,13 +2195,13 @@ class JaxDonkeyKong(JaxEnvironment[DonkeyKongState, DonkeyKongObservation, Donke
             mario_climbing = state.mario_climbing,
             hammer_position = hammer_position,
             hammer_can_destroy_enemy = state.hammer_can_hit,
-            barrels = barrels,
-            barrel_mask = barrel_mask,
-            fires = fires,
-            fire_mask = fire_mask,
-            traps = traps,
-            ladders = ladders,
-            ladder_mask = ladder_mask,
+            # barrels = barrels,
+            # barrel_mask = barrel_mask,
+            # fires = fires,
+            # fire_mask = fire_mask,
+            # traps = traps,
+            # ladders = ladders,
+            # ladder_mask = ladder_mask,
         )
 
     def render(self, state: DonkeyKongState) -> jnp.ndarray:
