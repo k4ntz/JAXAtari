@@ -837,7 +837,8 @@ class FishingDerbyRenderer(JAXGameRenderer):
         # 2. No fish is hooked (line is slack)
         # 3. Hook is moving down (not being reeled)
         is_reeling = state.p1.hook_state > 0
-        apply_sag = in_water & ~is_reeling & (state.p1.hook_velocity_y > 0)
+        has_horizontal_offset = jnp.abs(state.p1.hook_x_offset) > 0.5
+        apply_sag = in_water & ~is_reeling & has_horizontal_offset
 
         # Calculate sag amount based on depth
         water_depth_ratio = jnp.clip((state.p1.hook_y - (cfg.WATER_Y_START - cfg.ROD_Y)) /
