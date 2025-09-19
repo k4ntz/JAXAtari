@@ -2139,8 +2139,8 @@ class JaxDonkeyKong(JaxEnvironment[DonkeyKongState, DonkeyKongObservation, Donke
     @partial(jax.jit, static_argnums=(0,))
     def _get_observation(self, state: DonkeyKongState):
         mario_position = EntityPosition(
-            x = state.mario_x,
-            y = state.mario_y,
+            x = (state.mario_x).astype(jnp.float32),
+            y = (state.mario_y).astype(jnp.float32),
             width = self.consts.MARIO_HIT_BOX_Y,
             height = self.consts.MARIO_HIT_BOX_X
         )
