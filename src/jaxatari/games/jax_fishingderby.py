@@ -63,6 +63,15 @@ class GameConfig:
     # Physics
     Acceleration: float = 0.2
     Damping: float = 0.85
+    SLOW_REEL_PERIOD: int = 4  # slow reel: 1 px every 4 frames
+    MAX_HOOKED_WOBBLE_DX: float = 0.9  # max extra sideways dx per frame when hooked
+    WOBBLE_FREQ_BASE: float = 0.10  # base wobble frequency
+    WOBBLE_FREQ_RANGE: float = 0.06  # extra freq added with depth
+    WOBBLE_AMP_BASE: float = 0.05  # base wobble dx (px/frame)
+    WOBBLE_AMP_RANGE: float = 0.20  # extra wobble dx with depth
+
+    # Occasional downward tugs by row (px/frame) when you’re NOT reeling on this frame
+    FISH_PULL_PER_ROW: Tuple[float, ...] = (0.10, 0.12, 0.14, 0.16, 0.18, 0.20)
 
     # Boundaries
     LEFT_BOUNDARY: float = 10
@@ -621,16 +630,18 @@ class FishingDerby(JaxEnvironment):
             reel_speed = jnp.where(p1_hook_state == 2, cfg.REEL_FAST_SPEED, cfg.REEL_SLOW_SPEED)
 
             # Calculate the minimum Y position for reeling (scoring line relative to rod)
-            scoring_hook_y = cfg.FISH_SCORING_Y - cfg.ROD_Y  # Convert scoring Y to hook coordinate system
+            scoring_hook_y = cfg.FISH_SCORING_Y - cfg.ROD_Y  # min Y while reeling
+            can_reel = p1_hooked_fish_idx >= 0  # only if a fish is actually hooked
 
-            # Only allow reeling if a fish is hooked (hooked_fish_idx >= 0)
-            can_reel = p1.hooked_fish_idx >= 0
+            tick_slow = (jnp.bitwise_and(state.time, cfg.SLOW_REEL_PERIOD - 1) == 0)
+            reel_tick = jnp.where(p1_hook_state == 2, True, tick_slow)  # fast reel ticks every frame
+            reel_step = jnp.where(p1_hook_state > 0, 1.0, 0.0)  # 1 px per tick
 
-            new_hook_y = jnp.where(p1_hook_state > 0,
-                                   jnp.where(can_reel,
-                                             jnp.clip(new_hook_y - reel_speed, scoring_hook_y, max_hook_y),
-                                             new_hook_y),  # Don't move hook if no fish hooked
-                                   new_hook_y)
+            new_hook_y = jnp.where(
+                (reel_tick & can_reel),
+                jnp.clip(new_hook_y - reel_step, scoring_hook_y, max_hook_y),
+                new_hook_y
+            )
 
             # Update hook position after reeling
             hook_x, hook_y = self._get_hook_position(cfg.P1_START_X, PlayerState(
@@ -650,60 +661,28 @@ class FishingDerby(JaxEnvironment):
             has_hook = (p1_hook_state > 0) & (p1_hooked_fish_idx >= 0)
 
             def update_hooked_fish_and_hook():
-                # Get current fish position and hook depth
                 fish_idx = p1_hooked_fish_idx
                 fish_x = new_fish_pos[fish_idx, 0]
                 fish_y = new_fish_pos[fish_idx, 1]
 
-                # Calculate depth ratio (0.0 at surface, 1.0 at bottom)
+                # Depth ratio: 0 at surface, 1 at bottom
                 depth_ratio = jnp.clip((fish_y - cfg.WATER_Y_START) /
                                        (cfg.LINE_Y_END - cfg.WATER_Y_START), 0.0, 1.0)
 
-                # Use a smoother falloff curve for more natural transition
-                # Replace cubic with quadratic for smoother falloff
-                depth_effect = depth_ratio * depth_ratio  # Quadratic falloff
+                # Small per-frame sideways wobble (dx), stronger + a bit slower deeper down
+                wobble_freq = cfg.WOBBLE_FREQ_BASE + depth_ratio * cfg.WOBBLE_FREQ_RANGE
+                wobble_amp = cfg.WOBBLE_AMP_BASE + depth_ratio * cfg.WOBBLE_AMP_RANGE
+                wobble_dx = jnp.sin(state.time * wobble_freq) * wobble_amp
 
-                # More reasonable amplitude values
-                max_amplitude = 15.0  # Reduced maximum pixels of movement
-                min_amplitude = 1.0  # Minimum movement near surface
+                # Keep the base swim while hooked, but modest
+                base_dx = new_fish_dirs[fish_idx] * (cfg.FISH_SPEED * cfg.HOOKED_FISH_SPEED_MULTIPLIER)
 
-                # Smoother transition near surface
-                surface_threshold = 0.1
-                extra_reduction = jnp.where(depth_ratio < surface_threshold,
-                                            jnp.sqrt(depth_ratio / surface_threshold) * 0.7,
-                                            1.0)
+                # Total per-frame dx, tightly capped
+                total_dx = jnp.clip(base_dx + wobble_dx, -cfg.MAX_HOOKED_WOBBLE_DX, cfg.MAX_HOOKED_WOBBLE_DX)
+                new_x = jnp.clip(fish_x + total_dx, cfg.LEFT_BOUNDARY, cfg.RIGHT_BOUNDARY)
 
-                # Apply all scaling factors to get final amplitude
-                struggle_amplitude = min_amplitude + depth_effect * extra_reduction * (max_amplitude - min_amplitude)
-
-                # Lower frequency for smoother movement
-                # Reduce frequency at deeper depths (fish struggle more slowly when deep)
-                base_frequency = 0.08 + depth_ratio * 0.04  # 0.08-0.12 range
-                panic_factor = (1.0 - depth_ratio) * 0.15  # Reduced panic factor
-                frequency = base_frequency + panic_factor
-
-                # Simplified oscillation pattern with less secondary influence
-                primary_time_factor = state.time * frequency
-                secondary_time_factor = state.time * frequency * 1.7  # Less extreme secondary frequency
-
-                # More primary wave influence (90%) with less secondary influence (10%)
-                struggle_offset = (jnp.sin(primary_time_factor) * 0.9 +
-                                   jnp.sin(secondary_time_factor) * 0.1) * struggle_amplitude
-
-                # Determine fish direction based on movement direction
-                # But only change direction when crossing zero point for smoother transitions
-                new_fish_dir = jnp.sign(struggle_offset)
-                new_fish_dir = jnp.where(new_fish_dir == 0.0, 1.0, new_fish_dir)
-
-                # Rest of function remains the same...
-                # Update fish position with struggling movement
-                new_x = fish_x + struggle_offset
-
-                # Keep fish within boundaries
-                new_x = jnp.clip(new_x, cfg.LEFT_BOUNDARY, cfg.RIGHT_BOUNDARY)
-
-                # Get current hook position
-                hook_x, hook_y = self._get_hook_position(cfg.P1_START_X, PlayerState(
+                # Hook position at this moment (for Y follow + hook lerp to fish X)
+                hx, hy = self._get_hook_position(cfg.P1_START_X, PlayerState(
                     rod_length=new_rod_length,
                     hook_y=new_hook_y,
                     score=p1.score,
@@ -716,35 +695,43 @@ class FishingDerby(JaxEnvironment):
                     line_segments_x=p1.line_segments_x
                 ))
 
-                # Set fish y-position to match hook y-position with a small offset
-                # for visual clarity (slightly below the hook)
-                visual_offset = 2.0  # pixels below hook
-                new_y = hook_y + visual_offset
+                # Fish visually sits just below the hook
+                visual_offset = 2.0
+                new_y = hy + visual_offset
 
-                # Update fish position in the array (both x and y)
+                # Write back fish position (X and Y)
                 updated_pos = new_fish_pos.at[fish_idx, 0].set(new_x)
                 updated_pos = updated_pos.at[fish_idx, 1].set(new_y)
 
-                # Update fish direction in the array
-                updated_dirs = new_fish_dirs.at[fish_idx].set(new_fish_dir)
+                # Do NOT force direction to sign(wobble); keep new_fish_dirs as computed
+                updated_dirs = new_fish_dirs
 
-                # Calculate hook position to follow fish (with slight lag)
+                # Hook follows fish X with a small lerp (keeps line taut-ish)
                 hook_target_x = new_x
                 current_x = cfg.P1_START_X + new_rod_length + new_hook_x_offset
-                lerp_factor = 0.2  # Faster following (20% of the way there each frame)
+                lerp_factor = 0.2
                 new_hook_x = current_x + (hook_target_x - current_x) * lerp_factor
-
-                # Convert to offset relative to rod end
                 new_offset = new_hook_x - (cfg.P1_START_X + new_rod_length)
 
-                return updated_pos, updated_dirs, new_offset
+                # Occasional downward tug when NOT reeling on this frame
+                row_idx = jnp.clip(fish_idx, 0, len(cfg.FISH_PULL_PER_ROW) - 1).astype(jnp.int32)
+                fish_pull = jnp.array(cfg.FISH_PULL_PER_ROW)[row_idx]
+                tug_key = jax.random.fold_in(state.key, state.time * 31 + fish_idx)
+                do_tug = (jax.random.uniform(tug_key) < (0.08 + 0.04 * depth_ratio)) & (~reel_tick)
+                tug_amount = jnp.where(do_tug, fish_pull, 0.0)
 
-            new_fish_pos, new_fish_dirs, new_hook_x_offset = jax.lax.cond(
+                return updated_pos, updated_dirs, new_offset, tug_amount
+
+            tug_amount = jnp.array(0.0)
+            new_fish_pos, new_fish_dirs, new_hook_x_offset, tug_amount = jax.lax.cond(
                 has_hook,
                 lambda _: update_hooked_fish_and_hook(),
-                lambda _: (new_fish_pos, new_fish_dirs, new_hook_x_offset),
+                lambda _: (new_fish_pos, new_fish_dirs, new_hook_x_offset, jnp.array(0.0)),
                 operand=None
             )
+
+            # Apply tug (down) but never below max depth
+            new_hook_y = jnp.clip(new_hook_y + tug_amount, 0.0, max_hook_y)
 
             # Scoring and collision detection
             p1_score, key = p1.score, state.key
