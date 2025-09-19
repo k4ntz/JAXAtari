@@ -1023,7 +1023,7 @@ class JaxDonkeyKong(JaxEnvironment[DonkeyKongState, DonkeyKongObservation, Donke
             new_state = new_state._replace(
                 start_frame_when_mario_jumped=start_frame_when_mario_jumped,
                 mario_jumping=mario_jumping,
-                mario_x=mario_x,
+                mario_x=mario_x.astype(jnp.float32),
             )
 
             return jax.lax.cond(
@@ -1041,13 +1041,13 @@ class JaxDonkeyKong(JaxEnvironment[DonkeyKongState, DonkeyKongObservation, Donke
                 start_frame_when_mario_jumped = state.step_counter,
                 mario_jumping_wide = True,
                 mario_view_direction = self.consts.MOVING_RIGHT,
-                mario_x = state.mario_x - self.consts.MARIO_JUMPING_HEIGHT,
-                mario_y = state.mario_y + self.consts.MARIO_MOVING_SPEED
+                mario_x = (state.mario_x - self.consts.MARIO_JUMPING_HEIGHT).astype(jnp.float32),
+                mario_y = (state.mario_y + self.consts.MARIO_MOVING_SPEED).astype(float32)
             )
             new_mario_x = jnp.round(self.bar_linear_equation(state.mario_stage, state.mario_y, state.level) - self.consts.MARIO_HIT_BOX_X) - 2
             new_state_already_jumping = state._replace(
-                mario_y = state.mario_y + self.consts.MARIO_MOVING_SPEED,
-                mario_x = new_mario_x - self.consts.MARIO_JUMPING_HEIGHT,
+                mario_y = (state.mario_y + self.consts.MARIO_MOVING_SPEED).astype(jnp.float32),
+                mario_x = (new_mario_x - self.consts.MARIO_JUMPING_HEIGHT).astype(jnp.float32),
             )
             return jax.lax.cond(
                 jnp.logical_and(action == Action.RIGHTFIRE, jnp.logical_and(jnp.logical_and(jnp.logical_and(state.mario_climbing == False, state.mario_jumping_wide == False), state.mario_jumping == False), jnp.logical_and(state.block_jumping_and_climbing == False, state.mario_reached_goal == False))),
@@ -1068,13 +1068,13 @@ class JaxDonkeyKong(JaxEnvironment[DonkeyKongState, DonkeyKongObservation, Donke
                 start_frame_when_mario_jumped = state.step_counter,
                 mario_jumping_wide = True,
                 mario_view_direction = self.consts.MOVING_LEFT,
-                mario_x = state.mario_x - self.consts.MARIO_JUMPING_HEIGHT,
-                mario_y = state.mario_y - self.consts.MARIO_MOVING_SPEED
+                mario_x = (state.mario_x - self.consts.MARIO_JUMPING_HEIGHT).astype(jnp.float32),
+                mario_y = (state.mario_y - self.consts.MARIO_MOVING_SPEED).astype(jnp.float32)
             )
             new_mario_x = jnp.round(self.bar_linear_equation(state.mario_stage, state.mario_y, state.level) - self.consts.MARIO_HIT_BOX_X) - 2
             new_state_already_jumping = state._replace(
-                mario_y = state.mario_y - self.consts.MARIO_MOVING_SPEED,
-                mario_x = new_mario_x - self.consts.MARIO_JUMPING_HEIGHT,
+                mario_y = (state.mario_y - self.consts.MARIO_MOVING_SPEED).astype(jnp.float32),
+                mario_x = (new_mario_x - self.consts.MARIO_JUMPING_HEIGHT).astype(jnp.float32),
             )
             return jax.lax.cond(
                 jnp.logical_and(action == Action.LEFTFIRE, jnp.logical_and(jnp.logical_and(jnp.logical_and(jnp.logical_and(state.mario_climbing == False, state.mario_jumping_wide == False), state.mario_jumping == False), state.block_jumping_and_climbing == False), state.mario_reached_goal == False)),
@@ -1142,13 +1142,13 @@ class JaxDonkeyKong(JaxEnvironment[DonkeyKongState, DonkeyKongObservation, Donke
                 lambda _: jax.lax.cond(
                     state.mario_climb_sprite == self.consts.MARIO_CLIMB_SPRITE_0,
                     lambda _: state._replace(
-                        mario_x=state.mario_x - self.consts.MARIO_CLIMBING_SPEED,
+                        mario_x=(state.mario_x - self.consts.MARIO_CLIMBING_SPEED).astype(jnp.float32),
                         mario_climb_frame_counter= state.mario_climb_frame_counter + 1,
                         mario_climb_sprite=self.consts.MARIO_CLIMB_SPRITE_1,
                         donkey_kong_sprite=self.consts.DONKEY_KONG_SPRITE_0,
                     ),
                     lambda _: state._replace(
-                        mario_x=state.mario_x - self.consts.MARIO_CLIMBING_SPEED,
+                        mario_x=(state.mario_x - self.consts.MARIO_CLIMBING_SPEED).astype(jnp.float32),
                         mario_climb_frame_counter= state.mario_climb_frame_counter + 1,
                         mario_climb_sprite=self.consts.MARIO_CLIMB_SPRITE_0,
                         donkey_kong_sprite=self.consts.DONKEY_KONG_SPRITE_1,
@@ -1156,7 +1156,7 @@ class JaxDonkeyKong(JaxEnvironment[DonkeyKongState, DonkeyKongObservation, Donke
                     operand=None
                 ),
                 lambda _: state._replace(
-                    mario_x=state.mario_x - self.consts.MARIO_CLIMBING_SPEED,
+                    mario_x=(state.mario_x - self.consts.MARIO_CLIMBING_SPEED).astype(jnp.float32),
                     mario_climb_frame_counter= state.mario_climb_frame_counter + 1,
                 ),
                 operand=None
@@ -1167,7 +1167,7 @@ class JaxDonkeyKong(JaxEnvironment[DonkeyKongState, DonkeyKongObservation, Donke
             new_state_climbing_upwards = jax.lax.cond(
                 reached_top,
                 lambda _: state._replace(
-                    mario_x = state.mario_x - 2,
+                    mario_x = (state.mario_x - 2).astype(jnp.float32),
                     mario_climb_frame_counter= 0,
                     mario_view_direction = self.consts.MOVING_RIGHT,
                     mario_climbing = False,
@@ -1186,13 +1186,13 @@ class JaxDonkeyKong(JaxEnvironment[DonkeyKongState, DonkeyKongObservation, Donke
                 lambda _: jax.lax.cond(
                     state.mario_climb_sprite == self.consts.MARIO_CLIMB_SPRITE_0,
                     lambda _: state._replace(
-                        mario_x=state.mario_x + self.consts.MARIO_CLIMBING_SPEED,
+                        mario_x=(state.mario_x + self.consts.MARIO_CLIMBING_SPEED).astype(jnp.float32),
                         mario_climb_frame_counter= state.mario_climb_frame_counter + 1,
                         mario_climb_sprite=self.consts.MARIO_CLIMB_SPRITE_1,
                         donkey_kong_sprite=self.consts.DONKEY_KONG_SPRITE_0,
                     ),
                     lambda _: state._replace(
-                        mario_x=state.mario_x + self.consts.MARIO_CLIMBING_SPEED,
+                        mario_x=(state.mario_x + self.consts.MARIO_CLIMBING_SPEED).astype(jnp.float32),
                         mario_climb_frame_counter= state.mario_climb_frame_counter + 1,
                         mario_climb_sprite=self.consts.MARIO_CLIMB_SPRITE_0,
                         donkey_kong_sprite=self.consts.DONKEY_KONG_SPRITE_1,
@@ -1200,7 +1200,7 @@ class JaxDonkeyKong(JaxEnvironment[DonkeyKongState, DonkeyKongObservation, Donke
                     operand=None
                 ),
                 lambda _: state._replace(
-                    mario_x=state.mario_x + self.consts.MARIO_CLIMBING_SPEED,
+                    mario_x=(state.mario_x + self.consts.MARIO_CLIMBING_SPEED).astype(jnp.float32),
                     mario_climb_frame_counter= state.mario_climb_frame_counter + 1,
                 ),
                 operand=None
@@ -1211,7 +1211,7 @@ class JaxDonkeyKong(JaxEnvironment[DonkeyKongState, DonkeyKongObservation, Donke
             new_state_climbing_downwards = jax.lax.cond(
                 reached_bottom,
                 lambda _: state._replace(
-                    mario_x = state.mario_x - 2,
+                    mario_x = (state.mario_x - 2).astype(jnp.float32),
                     mario_climb_frame_counter= 0,
                     mario_view_direction = self.consts.MOVING_RIGHT,
                     mario_climbing = False,
@@ -1240,14 +1240,14 @@ class JaxDonkeyKong(JaxEnvironment[DonkeyKongState, DonkeyKongObservation, Donke
         def mario_starts_climbing(state):
             new_state_climbing_upwards = state._replace(
                 mario_view_direction=self.consts.MOVING_UP,
-                mario_x=state.mario_x + 1,
+                mario_x=(state.mario_x + 1).astype(jnp.float32),
                 mario_climbing=True,
                 mario_climb_frame_counter=0,
             )
             new_state_climbing_downwards = state._replace(
                 mario_view_direction=self.consts.MOVING_UP,
                 mario_stage = state.mario_stage - 1,
-                mario_x=state.mario_x + 3,
+                mario_x=(state.mario_x + 3).astype(jnp.float32),
                 mario_climbing=True,
                 mario_climb_frame_counter=0,
             )
@@ -1296,15 +1296,15 @@ class JaxDonkeyKong(JaxEnvironment[DonkeyKongState, DonkeyKongObservation, Donke
             new_state = jax.lax.cond(
                 last_mario_move_was_not_moving_to_right,
                 lambda _: state._replace(
-                    mario_x = new_mario_x,
-                    mario_y=state.mario_y + self.consts.MARIO_MOVING_SPEED,
+                    mario_x = (new_mario_x).astype(jnp.float32),
+                    mario_y=(state.mario_y + self.consts.MARIO_MOVING_SPEED).astype(jnp.float32),
                     mario_view_direction=self.consts.MOVING_RIGHT,
                     mario_walk_frame_counter=0,
                     mario_climbing_delay = False,
                 ),
                 lambda _:state._replace(
-                    mario_x = new_mario_x,
-                    mario_y=state.mario_y + self.consts.MARIO_MOVING_SPEED,
+                    mario_x = (new_mario_x).astype(jnp.float32),
+                    mario_y=(state.mario_y + self.consts.MARIO_MOVING_SPEED).astype(jnp.float32),
                     mario_view_direction=self.consts.MOVING_RIGHT,
                     mario_walk_frame_counter=state.mario_walk_frame_counter + 1,
                     mario_climbing_delay = False,
@@ -1359,15 +1359,15 @@ class JaxDonkeyKong(JaxEnvironment[DonkeyKongState, DonkeyKongObservation, Donke
             new_state = jax.lax.cond(
                 last_mario_move_was_not_moving_to_left,
                 lambda _:  state._replace(
-                    mario_x = new_mario_x,
-                    mario_y=state.mario_y - self.consts.MARIO_MOVING_SPEED,
+                    mario_x = new_mario_x.astype(jnp.float32),
+                    mario_y=(state.mario_y - self.consts.MARIO_MOVING_SPEED).astype(jnp.float32),
                     mario_view_direction=self.consts.MOVING_LEFT,
                     mario_walk_frame_counter=0,
                     mario_climbing_delay = False,
                 ),
                 lambda _:state._replace(
-                    mario_x = new_mario_x,
-                    mario_y=state.mario_y - self.consts.MARIO_MOVING_SPEED,
+                    mario_x = new_mario_x.astype(jnp.float32),
+                    mario_y=(state.mario_y - self.consts.MARIO_MOVING_SPEED).astype(jnp.float32),
                     mario_view_direction=self.consts.MOVING_LEFT,
                     mario_walk_frame_counter=state.mario_walk_frame_counter + 1,
                     mario_climbing_delay = False,
@@ -1432,12 +1432,12 @@ class JaxDonkeyKong(JaxEnvironment[DonkeyKongState, DonkeyKongObservation, Donke
 
             new_state_right_wall = state._replace(
                 mario_walk_sprite = self.consts.MARIO_WALK_SPRITE_0,
-                mario_y = state.mario_y - self.consts.MARIO_MOVING_SPEED
+                mario_y = (state.mario_y - self.consts.MARIO_MOVING_SPEED).astype(jnp.float32)
             )
 
             new_state_left_wall = state._replace(
                 mario_walk_sprite = self.consts.MARIO_WALK_SPRITE_0,
-                mario_y = state.mario_y + self.consts.MARIO_MOVING_SPEED
+                mario_y = (state.mario_y + self.consts.MARIO_MOVING_SPEED).astype(jnp.float32)
             )
 
             return jax.lax.cond(
@@ -1516,7 +1516,7 @@ class JaxDonkeyKong(JaxEnvironment[DonkeyKongState, DonkeyKongObservation, Donke
             new_state = state._replace(
                 mario_jumping = False,
                 mario_jumping_wide = False,
-                mario_x = new_mario_x,
+                mario_x = new_mario_x.astype(jnp.float32),
                 mario_climbing_delay = False,
             )
 
@@ -1652,8 +1652,8 @@ class JaxDonkeyKong(JaxEnvironment[DonkeyKongState, DonkeyKongObservation, Donke
                 level = state.level,
                 ladders = ladder,
                 invisible_wall_each_stage = invisible_wall,
-                mario_x = mario_x,
-                mario_y = mario_y,
+                mario_x = mario_x.astype(jnp.float32),
+                mario_y = mario_y.astype(jnp.float32),
                 hammer_x = hammer_x,
                 hammer_y = hammer_y,
             )
@@ -1720,8 +1720,8 @@ class JaxDonkeyKong(JaxEnvironment[DonkeyKongState, DonkeyKongObservation, Donke
                 level=level,
                 ladders=ladder,
                 invisible_wall_each_stage=invisible_wall,
-                mario_x = mario_x,
-                mario_y = mario_y,
+                mario_x = mario_x.astype(jnp.float32),
+                mario_y = mario_y.astype(jnp.float32),
                 hammer_x = hammer_x,
                 hammer_y = hammer_y,
                 game_score = game_score,
