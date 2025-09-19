@@ -2300,40 +2300,40 @@ class JaxDonkeyKong(JaxEnvironment[DonkeyKongState, DonkeyKongObservation, Donke
             "hammer_can_destroy_enemy": spaces.Box(low=0, high=1, shape=(), dtype=jnp.int32),
 
             # Barrels
-            "barrels": spaces.Dict({
-                "x": spaces.Box(low=0, high=210, shape=(MAX_BARRELS,), dtype=jnp.int32),
-                "y": spaces.Box(low=0, high=160, shape=(MAX_BARRELS, ), dtype=jnp.int32),    
-                "width": spaces.Box(low=0, high=160, shape=(MAX_BARRELS, ), dtype=jnp.int32),
-                "height": spaces.Box(low=0, high=210, shape=(MAX_BARRELS, ), dtype=jnp.int32),
-            }),
-            "barrel_mask": spaces.Box(low=0, high=1, shape=(MAX_BARRELS,), dtype=jnp.int32),
+            # "barrels": spaces.Dict({
+            #     "x": spaces.Box(low=0, high=210, shape=(MAX_BARRELS,), dtype=jnp.int32),
+            #     "y": spaces.Box(low=0, high=160, shape=(MAX_BARRELS, ), dtype=jnp.int32),    
+            #     "width": spaces.Box(low=0, high=160, shape=(MAX_BARRELS, ), dtype=jnp.int32),
+            #     "height": spaces.Box(low=0, high=210, shape=(MAX_BARRELS, ), dtype=jnp.int32),
+            # }),
+            # "barrel_mask": spaces.Box(low=0, high=1, shape=(MAX_BARRELS,), dtype=jnp.int32),
 
-            # Fire
-            "fires": spaces.Dict({
-                "x": spaces.Box(low=0, high=210, shape=(MAX_FIRES,), dtype=jnp.int32),
-                "y": spaces.Box(low=0, high=160, shape=(MAX_FIRES, ), dtype=jnp.int32),    
-                "width": spaces.Box(low=0, high=160, shape=(MAX_FIRES, ), dtype=jnp.int32),
-                "height": spaces.Box(low=0, high=210, shape=(MAX_FIRES, ), dtype=jnp.int32),
-            }),
-            "fire_mask": spaces.Box(low=0, high=1, shape=(MAX_BARRELS,), dtype=jnp.int32),
+            # # Fire
+            # "fires": spaces.Dict({
+            #     "x": spaces.Box(low=0, high=210, shape=(MAX_FIRES,), dtype=jnp.int32),
+            #     "y": spaces.Box(low=0, high=160, shape=(MAX_FIRES, ), dtype=jnp.int32),    
+            #     "width": spaces.Box(low=0, high=160, shape=(MAX_FIRES, ), dtype=jnp.int32),
+            #     "height": spaces.Box(low=0, high=210, shape=(MAX_FIRES, ), dtype=jnp.int32),
+            # }),
+            # "fire_mask": spaces.Box(low=0, high=1, shape=(MAX_BARRELS,), dtype=jnp.int32),
 
-            # Traps
-            "traps": spaces.Dict({
-                "x": spaces.Box(low=0, high=210, shape=(MAX_TRAPS,), dtype=jnp.int32),
-                "y": spaces.Box(low=0, high=160, shape=(MAX_TRAPS,), dtype=jnp.int32),
-                "width": spaces.Box(low=0, high=160, shape=(MAX_TRAPS,), dtype=jnp.int32),
-                "triggered": spaces.Box(low=0, high=1, shape=(MAX_TRAPS,), dtype=jnp.int32),
-            }),
+            # # Traps
+            # "traps": spaces.Dict({
+            #     "x": spaces.Box(low=0, high=210, shape=(MAX_TRAPS,), dtype=jnp.int32),
+            #     "y": spaces.Box(low=0, high=160, shape=(MAX_TRAPS,), dtype=jnp.int32),
+            #     "width": spaces.Box(low=0, high=160, shape=(MAX_TRAPS,), dtype=jnp.int32),
+            #     "triggered": spaces.Box(low=0, high=1, shape=(MAX_TRAPS,), dtype=jnp.int32),
+            # }),
 
-            # Ladders
-            "ladders": spaces.Dict({
-                "start_x": spaces.Box(low=0, high=210, shape=(MAX_LADDERS,), dtype=jnp.int32),
-                "start_y": spaces.Box(low=0, high=160, shape=(MAX_LADDERS,), dtype=jnp.int32),
-                "end_x": spaces.Box(low=0, high=210, shape=(MAX_LADDERS,), dtype=jnp.int32),
-                "end_y": spaces.Box(low=0, high=160, shape=(MAX_LADDERS,), dtype=jnp.int32),
-                "width": spaces.Box(low=0, high=160, shape=(MAX_LADDERS,), dtype=jnp.int32),
-            }),
-            "ladder_mask": spaces.Box(low=0, high=1, shape=(MAX_LADDERS,), dtype=jnp.int32),
+            # # Ladders
+            # "ladders": spaces.Dict({
+            #     "start_x": spaces.Box(low=0, high=210, shape=(MAX_LADDERS,), dtype=jnp.int32),
+            #     "start_y": spaces.Box(low=0, high=160, shape=(MAX_LADDERS,), dtype=jnp.int32),
+            #     "end_x": spaces.Box(low=0, high=210, shape=(MAX_LADDERS,), dtype=jnp.int32),
+            #     "end_y": spaces.Box(low=0, high=160, shape=(MAX_LADDERS,), dtype=jnp.int32),
+            #     "width": spaces.Box(low=0, high=160, shape=(MAX_LADDERS,), dtype=jnp.int32),
+            # }),
+            # "ladder_mask": spaces.Box(low=0, high=1, shape=(MAX_LADDERS,), dtype=jnp.int32),
         })
 
     def image_space(self) -> spaces.Box:
