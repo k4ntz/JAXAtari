@@ -4379,43 +4379,39 @@ class BeamRiderRenderer(JAXGameRenderer):
 
     @partial(jax.jit, static_argnums=(0,))
     def _draw_torpedo_projectiles(self, screen: chex.Array, torpedo_projectiles: chex.Array) -> chex.Array:
-        """Draw all active torpedo projectiles - vectorized for JIT"""
+        """Draw all active torpedo projectiles — vectorized with vmap + OR-reduction."""
 
-        # Vectorized drawing function
-        def draw_single_torpedo(i, screen):
-            x, y = torpedo_projectiles[i, 0].astype(int), torpedo_projectiles[i, 1].astype(int)
-            active = torpedo_projectiles[i, 2] == 1
+        H, W = self.constants.SCREEN_HEIGHT, self.constants.SCREEN_WIDTH
+        y_idx = jnp.arange(H)
+        x_idx = jnp.arange(W)
+        y_grid, x_grid = jnp.meshgrid(y_idx, x_idx, indexing='ij')
 
-            # Create coordinate grids
-            y_indices = jnp.arange(self.constants.SCREEN_HEIGHT)
-            x_indices = jnp.arange(self.constants.SCREEN_WIDTH)
-            y_grid, x_grid = jnp.meshgrid(y_indices, x_indices, indexing='ij')
+        t_w = self.constants.TORPEDO_WIDTH
+        t_h = self.constants.TORPEDO_HEIGHT
+        torpedo_color = jnp.array(self.constants.WHITE, dtype=jnp.uint8)
 
-            # Create mask for torpedo pixels (slightly larger than regular projectiles)
-            torpedo_mask = (
-                    (x_grid >= x) &
-                    (x_grid < x + self.constants.TORPEDO_WIDTH) &
-                    (y_grid >= y) &
-                    (y_grid < y + self.constants.TORPEDO_HEIGHT) &
-                    active &
-                    (x >= 0) & (x < self.constants.SCREEN_WIDTH) &
-                    (y >= 0) & (y < self.constants.SCREEN_HEIGHT)
+        # Returns an (H, W) bool mask for a single projectile
+        def single_torpedo_mask(proj):
+            x = proj[0].astype(int)
+            y = proj[1].astype(int)
+            active = (proj[2] == 1)
+
+            # Match original semantics: only draw if top-left is within the screen
+            valid = active & (x >= 0) & (x < W) & (y >= 0) & (y < H)
+
+            rect = (
+                    (x_grid >= x) & (x_grid < x + t_w) &
+                    (y_grid >= y) & (y_grid < y + t_h)
             )
+            return rect & valid
 
-            # Apply torpedo color where mask is True (WHITE for torpedoes vs YELLOW for lasers)
-            torpedo_color = jnp.array(self.constants.WHITE, dtype=jnp.uint8)
-            screen = jnp.where(
-                torpedo_mask[..., None],  # Add dimension for RGB
-                torpedo_color,
-                screen
-            ).astype(jnp.uint8)
+        # (N, H, W) -> (H, W) by logical OR across torpedoes
+        masks = jax.vmap(single_torpedo_mask)(torpedo_projectiles)
+        any_mask = jnp.any(masks, axis=0)
 
-            return screen
-
-        # Apply to all torpedo projectiles
-        screen = jax.lax.fori_loop(0, self.constants.MAX_PROJECTILES, draw_single_torpedo, screen)
+        # Single write to the screen buffer
+        screen = jnp.where(any_mask[..., None], torpedo_color, screen).astype(jnp.uint8)
         return screen
-
     @partial(jax.jit, static_argnums=(0,))
     def _draw_sentinel_projectiles(self, screen: chex.Array, sentinel_projectiles: chex.Array) -> chex.Array:
         """Draw all active sentinel projectiles - vectorized for JIT"""
