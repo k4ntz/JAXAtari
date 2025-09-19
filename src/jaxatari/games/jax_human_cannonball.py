@@ -24,15 +24,16 @@ class HumanCannonballConstants(NamedTuple):
 
     # Game physics constants    # TODO: These values may need some tweaking
     DT: float = 1.0 / 15.0  # time step between frames
-    GRAVITY: float = 9.8
+    GRAVITY: float = 10.5
     WALL_RESTITUTION: float = 0.3  # Coefficient of restitution for the wall collision
 
     # MPH constraints
     MPH_MIN: int = 28
     MPH_MAX: int = 45
+    MPH_START: int = 28
 
     # Angle constants
-    ANGLE_START: int = 75
+    ANGLE_START: int = 38
     ANGLE_MAX: int = 80
     ANGLE_MIN: int = 20
 
@@ -229,7 +230,7 @@ class JaxHumanCannonball(JaxEnvironment[HumanCannonballState, HumanCannonballObs
             Action.UP,
             Action.DOWN,
         ]
-        self.obs_size = 4+4+1+1+1+1 #TODO: Implement this correctly?
+        self.obs_size = 4+4+1+1+1+1
 
     # Determines the starting position of the human based on the angle
     @partial(jax.jit, static_argnums=(0,))
@@ -723,7 +724,7 @@ class JaxHumanCannonball(JaxEnvironment[HumanCannonballState, HumanCannonballObs
             human_y_vel = jnp.array(0).astype(jnp.float32),
             human_launched = jnp.array(False),
             water_tower_x = jnp.array(self.consts.WATER_TOWER_X).astype(jnp.int32),
-            mph_values = jnp.array(43).astype(jnp.int32),
+            mph_values = jnp.array(self.consts.MPH_START).astype(jnp.int32),
             tower_wall_hit = jnp.array(False),
             angle = jnp.array(self.consts.ANGLE_START).astype(jnp.int32),
             angle_counter = jnp.array(0).astype(jnp.int32),
@@ -892,7 +893,7 @@ class HumanCannonballRenderer(JAXGameRenderer):
         flying_angle_rad = jnp.arctan2(-state.human_y_vel, state.human_x_vel)
         flying_angle = jnp.rad2deg(flying_angle_rad)
 
-        FLYING_ANGLE_THRESHOLD = 45
+        FLYING_ANGLE_THRESHOLD = 35
 
         human_offset_x = 0
 
