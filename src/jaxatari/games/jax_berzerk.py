@@ -702,6 +702,10 @@ class JaxBerzerk(JaxEnvironment[BerzerkState, BerzerkObservation, BerzerkInfo, B
         )
 
 
+    def render(self, state: BerzerkState) -> jnp.ndarray:
+        return self.renderer.render(state)
+
+
     @partial(jax.jit, static_argnums=(0,))
     def reset(self, rng: chex.PRNGKey = jax.random.PRNGKey(42)) -> Tuple[BerzerkObservation, BerzerkState]:
         # --- Player init ---
@@ -1489,7 +1493,7 @@ class BerzerkRenderer(JAXGameRenderer):
 
 
     @partial(jax.jit, static_argnums=(0,))
-    def render(self, state):
+    def render(self, state: BerzerkState) -> chex.Array:
         death_anim = state.player.death_timer > 0
         room_transition_anim = state.room_transition_timer > 0
         game_over_anim = state.game_over_timer > 0
