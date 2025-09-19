@@ -333,9 +333,9 @@ class DonkeyKongObservation(NamedTuple):
     hammer_position: EntityPosition
     hammer_can_destroy_enemy: jnp.ndarray
 
-    # # Enemy
-    # barrels: EntityPosition
-    # barrel_mask: jnp.ndarray # 0 = inactive barrels, 1 = active barrels
+    # Enemy
+    barrels: EntityPosition
+    barrel_mask: jnp.ndarray # 0 = inactive barrels, 1 = active barrels
     # fires: EntityPosition
     # fire_mask: jnp.ndarray  
 
@@ -2151,14 +2151,14 @@ class JaxDonkeyKong(JaxEnvironment[DonkeyKongState, DonkeyKongObservation, Donke
             width = self.consts.HAMMER_HIT_BOX_Y,
             height = self.consts.HAMMER_HIT_BOX_X,
         )
-        # nums_barrels = state.barrels.barrel_x.shape[0]
-        # barrels = EntityPosition(
-        #     x = state.barrels.barrel_x,
-        #     y = state.barrels.barrel_y,
-        #     width = jnp.full((nums_barrels,), self.consts.BARREL_HIT_BOX_Y),
-        #     height = jnp.full((nums_barrels,), self.consts.BARREL_HIT_BOX_X),
-        # )
-        # barrel_mask = jnp.where(state.barrels.reached_the_end, 0, 1)
+        nums_barrels = state.barrels.barrel_x.shape[0]
+        barrels = EntityPosition(
+            x = state.barrels.barrel_x,
+            y = state.barrels.barrel_y,
+            width = jnp.full((nums_barrels,), self.consts.BARREL_HIT_BOX_Y),
+            height = jnp.full((nums_barrels,), self.consts.BARREL_HIT_BOX_X),
+        )
+        barrel_mask = jnp.where(state.barrels.reached_the_end, 0, 1)
         # nums_fires = state.fires.fire_x.shape[0]
         # fires = EntityPosition(
         #     x = state.fires.fire_x,
@@ -2196,8 +2196,8 @@ class JaxDonkeyKong(JaxEnvironment[DonkeyKongState, DonkeyKongObservation, Donke
             mario_climbing = state.mario_climbing,
             hammer_position = hammer_position,
             hammer_can_destroy_enemy = state.hammer_can_hit,
-            # barrels = barrels,
-            # barrel_mask = barrel_mask,
+            barrels = barrels,
+            barrel_mask = barrel_mask,
             # fires = fires,
             # fire_mask = fire_mask,
             # traps = traps,
@@ -2235,11 +2235,11 @@ class JaxDonkeyKong(JaxEnvironment[DonkeyKongState, DonkeyKongObservation, Donke
             obs.hammer_can_destroy_enemy.flatten(),
 
             # --- Barrels ---
-            # obs.barrels.x.flatten(),
-            # obs.barrels.y.flatten(),
-            # obs.barrels.width.flatten(),
-            # obs.barrels.height.flatten(),
-            # obs.barrel_mask.flatten(),
+            obs.barrels.x.flatten(),
+            obs.barrels.y.flatten(),
+            obs.barrels.width.flatten(),
+            obs.barrels.height.flatten(),
+            obs.barrel_mask.flatten(),
 
             # # --- Fires ---
             # obs.fires.x.flatten(),
@@ -2300,13 +2300,13 @@ class JaxDonkeyKong(JaxEnvironment[DonkeyKongState, DonkeyKongObservation, Donke
             "hammer_can_destroy_enemy": spaces.Box(low=0, high=1, shape=(), dtype=jnp.int32),
 
             # Barrels
-            # "barrels": spaces.Dict({
-            #     "x": spaces.Box(low=0, high=210, shape=(MAX_BARRELS,), dtype=jnp.int32),
-            #     "y": spaces.Box(low=0, high=160, shape=(MAX_BARRELS, ), dtype=jnp.int32),    
-            #     "width": spaces.Box(low=0, high=160, shape=(MAX_BARRELS, ), dtype=jnp.int32),
-            #     "height": spaces.Box(low=0, high=210, shape=(MAX_BARRELS, ), dtype=jnp.int32),
-            # }),
-            # "barrel_mask": spaces.Box(low=0, high=1, shape=(MAX_BARRELS,), dtype=jnp.int32),
+            "barrels": spaces.Dict({
+                "x": spaces.Box(low=0, high=210, shape=(MAX_BARRELS,), dtype=jnp.int32),
+                "y": spaces.Box(low=0, high=160, shape=(MAX_BARRELS, ), dtype=jnp.int32),    
+                "width": spaces.Box(low=0, high=160, shape=(MAX_BARRELS, ), dtype=jnp.int32),
+                "height": spaces.Box(low=0, high=210, shape=(MAX_BARRELS, ), dtype=jnp.int32),
+            }),
+            "barrel_mask": spaces.Box(low=0, high=1, shape=(MAX_BARRELS,), dtype=jnp.int32),
 
             # # Fire
             # "fires": spaces.Dict({
