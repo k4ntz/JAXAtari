@@ -7,7 +7,7 @@ import chex
 import pygame
 import enum
 import time
-from gymnax.environments import spaces
+import jaxatari.spaces as spaces
 
 from jaxatari.renderers import JAXGameRenderer
 from jaxatari.rendering import jax_rendering_utils as jr

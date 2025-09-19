@@ -38,7 +38,7 @@ jobs:
           # echo $CHANGED_GAMES # debug
           # echo "matrix=$CHANGED_GAMES" >> $GITHUB_OUTPUT
 
-          CHANGED_GAMES='["donkeykong"]'
+          CHANGED_GAMES='["donkeykong", "othello"]'
           echo $CHANGED_GAMES # debug
           echo "matrix=$CHANGED_GAMES" >> $GITHUB_OUTPUT
         shell: bash
