@@ -63,6 +63,7 @@ class TurmoilState(NamedTuple):
     bullet: chex.Array # x, y, active, direction
 
     enemy: chex.Array # (7, 6) 7 lanes; 6 -> type (see constants), x, y, active, speed, direction
+    enemy_spawn_timer: chex.Array # delay spawning
 
     step_counter: chex.Array
     rng_key: chex.PRNGKey
@@ -369,6 +370,7 @@ class JaxTurmoil(JaxEnvironment[TurmoilState, TurmoilObservation, TurmoilInfo, T
             bullet=jnp.zeros(4),
 
             enemy=jnp.zeros((7, 6)),
+            enemy_spawn_timer=jnp.array(0),
 
             step_counter=jnp.array(0),
             rng_key=key,
@@ -688,7 +690,20 @@ class JaxTurmoil(JaxEnvironment[TurmoilState, TurmoilObservation, TurmoilInfo, T
             (state, enemy_type, lane, direction, speed)
         )
 
-        return rng_rest, new_enemy
+        # spawn timer
+        new_enemy = jnp.where(
+            state.enemy_spawn_timer == 0,
+            new_enemy,
+            state.enemy
+        )
+
+        new_enemy_spawn_timer = jnp.where(
+            state.enemy_spawn_timer == 0,
+            20,
+            state.enemy_spawn_timer - 1
+        )
+
+        return rng_rest, new_enemy, new_enemy_spawn_timer
 
 
     @partial(jax.jit, static_argnums=(0,))
@@ -716,7 +731,23 @@ class JaxTurmoil(JaxEnvironment[TurmoilState, TurmoilObservation, TurmoilInfo, T
 
         return new_enemy
 
+    def update_score(self, state: TurmoilState, enemy_type) :
+        new_score = jax.lax.switch(
+            enemy_type,
+            [
+                lambda : state.score + 10, # lines
+                lambda : state.score + 100, # arrow
+                lambda : state.score + 50, # tank
+                lambda : state.score + 40, # L
+                lambda : state.score + 60, # T
+                lambda : state.score + 30, # rocket
+                lambda : state.score + 10, # triangle_hollow
+                lambda : state.score + 20, # x_shape
+                lambda : state.score + 100, # sonic_boom
+            ]
+        )
 
+        return new_score
 
     def bullet_enemy_collision_step(self, state: TurmoilState):
         """
@@ -750,7 +781,14 @@ class JaxTurmoil(JaxEnvironment[TurmoilState, TurmoilObservation, TurmoilInfo, T
             state.bullet
         )
 
-        return new_bullet, new_enemy
+        # if any enemy hit then update score (assumption only 1 enemy shot at a time)
+        new_score = jax.lax.cond(
+            jnp.any(hit),
+            lambda : self.update_score(state, 0),
+            lambda : state.score,
+        )
+
+        return new_bullet, new_enemy, new_score
 
     @partial(jax.jit, static_argnums=(0, ))
     def step(
@@ -785,13 +823,14 @@ class JaxTurmoil(JaxEnvironment[TurmoilState, TurmoilObservation, TurmoilInfo, T
             )
 
             # bullet enemy collision
-            new_bullet, new_enemy = self.bullet_enemy_collision_step(
+            new_bullet, new_enemy, new_score = self.bullet_enemy_collision_step(
                 new_state
             )
             
             new_state = new_state._replace(
                 bullet=new_bullet,
-                enemy=new_enemy
+                enemy=new_enemy,
+                score=new_score
             )
 
             # enemy
@@ -804,15 +843,17 @@ class JaxTurmoil(JaxEnvironment[TurmoilState, TurmoilObservation, TurmoilInfo, T
             )
 
             # spawn enemies
-            new_rng, new_enemy = self.enemy_spawn_step(
+            new_rng, new_enemy, new_enemy_spawn_timer = self.enemy_spawn_step(
                 new_state
             )
 
             new_state = new_state._replace(
                 enemy=new_enemy,
-                rng_key=new_rng
+                rng_key=new_rng,
+                enemy_spawn_timer=new_enemy_spawn_timer,
             )
 
+            # increment step_counter
             new_step_counter = jnp.where(
                 new_state.step_counter == 1024,
                 jnp.array(0),
