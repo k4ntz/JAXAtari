@@ -336,15 +336,15 @@ class DonkeyKongObservation(NamedTuple):
     # Enemy
     barrels: EntityPosition
     barrel_mask: jnp.ndarray # 0 = inactive barrels, 1 = active barrels
-    # fires: EntityPosition
-    # fire_mask: jnp.ndarray  
+    fires: EntityPosition
+    fire_mask: jnp.ndarray  
 
-    # # Traps
-    # traps: EntityPositionTrap
+    # Traps
+    traps: EntityPositionTrap
 
-    # # Ladders
-    # ladders: EntityPositionLadder
-    # ladder_mask: jnp.ndarray # 0 for some ladders for level 1 which are no ladders, its only a place holder because JAX needs consistent array sizes
+    # Ladders
+    ladders: EntityPositionLadder
+    ladder_mask: jnp.ndarray # 0 for some ladders for level 1 which are no ladders, its only a place holder because JAX needs consistent array sizes
                             # ladder_mask do NOT implie if those ladders are climbable or not
 
 class DonkeyKongInfo(NamedTuple):
@@ -2159,30 +2159,30 @@ class JaxDonkeyKong(JaxEnvironment[DonkeyKongState, DonkeyKongObservation, Donke
             height = jnp.full((nums_barrels,), self.consts.BARREL_HIT_BOX_X),
         )
         barrel_mask = jnp.where(state.barrels.reached_the_end, 0, 1)
-        # nums_fires = state.fires.fire_x.shape[0]
-        # fires = EntityPosition(
-        #     x = state.fires.fire_x,
-        #     y = state.fires.fire_y,
-        #     width = jnp.full((nums_fires,), self.consts.FIRE_HIT_BOX_Y),
-        #     height = jnp.full((nums_fires,), self.consts.FIRE_HIT_BOX_X),
-        # )
-        # fire_mask = jnp.where(state.fires.destroyed, 0, 1)
-        # nums_traps = state.traps.trap_x.shape[0]
-        # traps = EntityPositionTrap(
-        #     x = state.traps.trap_x,
-        #     y = state.traps.trap_y,
-        #     width = jnp.full((nums_traps,), self.consts.TRAP_WIDTH),
-        #     triggered = state.traps.triggered,
-        # )
-        # nums_ladders = state.ladders.start_x.shape[0]
-        # ladders = EntityPositionLadder(
-        #     start_x = state.ladders.start_x,
-        #     start_y = state.ladders.start_y,
-        #     end_x = state.ladders.end_x,
-        #     end_y = state.ladders.end_y,
-        #     width = jnp.full((nums_ladders,), self.consts.LADDER_WIDTH),
-        # )
-        # ladder_mask = jnp.where(state.ladders.start_x != -1, 1, 0)
+        nums_fires = state.fires.fire_x.shape[0]
+        fires = EntityPosition(
+            x = state.fires.fire_x,
+            y = state.fires.fire_y,
+            width = jnp.full((nums_fires,), self.consts.FIRE_HIT_BOX_Y),
+            height = jnp.full((nums_fires,), self.consts.FIRE_HIT_BOX_X),
+        )
+        fire_mask = jnp.where(state.fires.destroyed, 0, 1)
+        nums_traps = state.traps.trap_x.shape[0]
+        traps = EntityPositionTrap(
+            x = state.traps.trap_x,
+            y = state.traps.trap_y,
+            width = jnp.full((nums_traps,), self.consts.TRAP_WIDTH),
+            triggered = state.traps.triggered,
+        )
+        nums_ladders = state.ladders.start_x.shape[0]
+        ladders = EntityPositionLadder(
+            start_x = state.ladders.start_x,
+            start_y = state.ladders.start_y,
+            end_x = state.ladders.end_x,
+            end_y = state.ladders.end_y,
+            width = jnp.full((nums_ladders,), self.consts.LADDER_WIDTH),
+        )
+        ladder_mask = jnp.where(state.ladders.start_x != -1, 1, 0)
         
         return DonkeyKongObservation(
             total_score = state.game_score,
@@ -2198,11 +2198,11 @@ class JaxDonkeyKong(JaxEnvironment[DonkeyKongState, DonkeyKongObservation, Donke
             hammer_can_destroy_enemy = state.hammer_can_hit,
             barrels = barrels,
             barrel_mask = barrel_mask,
-            # fires = fires,
-            # fire_mask = fire_mask,
-            # traps = traps,
-            # ladders = ladders,
-            # ladder_mask = ladder_mask,
+            fires = fires,
+            fire_mask = fire_mask,
+            traps = traps,
+            ladders = ladders,
+            ladder_mask = ladder_mask,
         )
 
     def render(self, state: DonkeyKongState) -> jnp.ndarray:
@@ -2241,26 +2241,26 @@ class JaxDonkeyKong(JaxEnvironment[DonkeyKongState, DonkeyKongObservation, Donke
             obs.barrels.height.flatten(),
             obs.barrel_mask.flatten(),
 
-            # # --- Fires ---
-            # obs.fires.x.flatten(),
-            # obs.fires.y.flatten(),
-            # obs.fires.width.flatten(),
-            # obs.fires.height.flatten(),
-            # obs.fire_mask.flatten(),
+            # --- Fires ---
+            obs.fires.x.flatten(),
+            obs.fires.y.flatten(),
+            obs.fires.width.flatten(),
+            obs.fires.height.flatten(),
+            obs.fire_mask.flatten(),
 
-            # # --- Traps ---
-            # obs.traps.x.flatten(),
-            # obs.traps.y.flatten(),
-            # obs.traps.width.flatten(),
-            # obs.traps.triggered.flatten(),
+            # --- Traps ---
+            obs.traps.x.flatten(),
+            obs.traps.y.flatten(),
+            obs.traps.width.flatten(),
+            obs.traps.triggered.flatten(),
 
-            # # --- Ladders ---
-            # obs.ladders.start_x.flatten(),
-            # obs.ladders.start_y.flatten(),
-            # obs.ladders.end_x.flatten(),
-            # obs.ladders.end_y.flatten(),
-            # obs.ladders.width.flatten(),
-            # obs.ladder_mask.flatten(),
+            # --- Ladders ---
+            obs.ladders.start_x.flatten(),
+            obs.ladders.start_y.flatten(),
+            obs.ladders.end_x.flatten(),
+            obs.ladders.end_y.flatten(),
+            obs.ladders.width.flatten(),
+            obs.ladder_mask.flatten(),
         ])
 
     def action_space(self) -> spaces.Discrete:
@@ -2308,32 +2308,32 @@ class JaxDonkeyKong(JaxEnvironment[DonkeyKongState, DonkeyKongObservation, Donke
             }),
             "barrel_mask": spaces.Box(low=0, high=1, shape=(MAX_BARRELS,), dtype=jnp.int32),
 
-            # # Fire
-            # "fires": spaces.Dict({
-            #     "x": spaces.Box(low=0, high=210, shape=(MAX_FIRES,), dtype=jnp.int32),
-            #     "y": spaces.Box(low=0, high=160, shape=(MAX_FIRES, ), dtype=jnp.int32),    
-            #     "width": spaces.Box(low=0, high=160, shape=(MAX_FIRES, ), dtype=jnp.int32),
-            #     "height": spaces.Box(low=0, high=210, shape=(MAX_FIRES, ), dtype=jnp.int32),
-            # }),
-            # "fire_mask": spaces.Box(low=0, high=1, shape=(MAX_BARRELS,), dtype=jnp.int32),
+            # Fire
+            "fires": spaces.Dict({
+                "x": spaces.Box(low=0, high=210, shape=(MAX_FIRES,), dtype=jnp.int32),
+                "y": spaces.Box(low=0, high=160, shape=(MAX_FIRES, ), dtype=jnp.int32),    
+                "width": spaces.Box(low=0, high=160, shape=(MAX_FIRES, ), dtype=jnp.int32),
+                "height": spaces.Box(low=0, high=210, shape=(MAX_FIRES, ), dtype=jnp.int32),
+            }),
+            "fire_mask": spaces.Box(low=0, high=1, shape=(MAX_BARRELS,), dtype=jnp.int32),
 
-            # # Traps
-            # "traps": spaces.Dict({
-            #     "x": spaces.Box(low=0, high=210, shape=(MAX_TRAPS,), dtype=jnp.int32),
-            #     "y": spaces.Box(low=0, high=160, shape=(MAX_TRAPS,), dtype=jnp.int32),
-            #     "width": spaces.Box(low=0, high=160, shape=(MAX_TRAPS,), dtype=jnp.int32),
-            #     "triggered": spaces.Box(low=0, high=1, shape=(MAX_TRAPS,), dtype=jnp.int32),
-            # }),
+            # Traps
+            "traps": spaces.Dict({
+                "x": spaces.Box(low=0, high=210, shape=(MAX_TRAPS,), dtype=jnp.int32),
+                "y": spaces.Box(low=0, high=160, shape=(MAX_TRAPS,), dtype=jnp.int32),
+                "width": spaces.Box(low=0, high=160, shape=(MAX_TRAPS,), dtype=jnp.int32),
+                "triggered": spaces.Box(low=0, high=1, shape=(MAX_TRAPS,), dtype=jnp.int32),
+            }),
 
-            # # Ladders
-            # "ladders": spaces.Dict({
-            #     "start_x": spaces.Box(low=0, high=210, shape=(MAX_LADDERS,), dtype=jnp.int32),
-            #     "start_y": spaces.Box(low=0, high=160, shape=(MAX_LADDERS,), dtype=jnp.int32),
-            #     "end_x": spaces.Box(low=0, high=210, shape=(MAX_LADDERS,), dtype=jnp.int32),
-            #     "end_y": spaces.Box(low=0, high=160, shape=(MAX_LADDERS,), dtype=jnp.int32),
-            #     "width": spaces.Box(low=0, high=160, shape=(MAX_LADDERS,), dtype=jnp.int32),
-            # }),
-            # "ladder_mask": spaces.Box(low=0, high=1, shape=(MAX_LADDERS,), dtype=jnp.int32),
+            # Ladders
+            "ladders": spaces.Dict({
+                "start_x": spaces.Box(low=0, high=210, shape=(MAX_LADDERS,), dtype=jnp.int32),
+                "start_y": spaces.Box(low=0, high=160, shape=(MAX_LADDERS,), dtype=jnp.int32),
+                "end_x": spaces.Box(low=0, high=210, shape=(MAX_LADDERS,), dtype=jnp.int32),
+                "end_y": spaces.Box(low=0, high=160, shape=(MAX_LADDERS,), dtype=jnp.int32),
+                "width": spaces.Box(low=0, high=160, shape=(MAX_LADDERS,), dtype=jnp.int32),
+            }),
+            "ladder_mask": spaces.Box(low=0, high=1, shape=(MAX_LADDERS,), dtype=jnp.int32),
         })
 
     def image_space(self) -> spaces.Box:
