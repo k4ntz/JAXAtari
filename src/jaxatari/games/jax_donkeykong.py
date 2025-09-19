@@ -2156,8 +2156,8 @@ class JaxDonkeyKong(JaxEnvironment[DonkeyKongState, DonkeyKongObservation, Donke
         barrels = EntityPosition(
             x = state.barrels.barrel_x,
             y = state.barrels.barrel_y,
-            width = jnp.full((nums_barrels,), self.consts.BARREL_HIT_BOX_Y),
-            height = jnp.full((nums_barrels,), self.consts.BARREL_HIT_BOX_X),
+            width = jnp.full((4,), self.consts.BARREL_HIT_BOX_Y),
+            height = jnp.full((4,), self.consts.BARREL_HIT_BOX_X),
         )
         barrel_mask = jnp.where(state.barrels.reached_the_end, 0, 1)
         
