@@ -536,11 +536,21 @@ class JaxHangman(JaxEnvironment[HangmanState, HangmanObservation, HangmanInfo, A
         self.obs_size = L_MAX + L_MAX + ALPHABET_SIZE + 3
         self.reward_funcs = tuple(reward_funcs) if reward_funcs is not None else None
 
+        self._seed = 0
+        self._rng_key = jrandom.PRNGKey(self._seed)
+        
+    def seed(self, seed: Optional[int] = None) -> None:
+        if seed is None:
+            return
+        self._seed = int(seed)
+        self._rng_key = jrandom.PRNGKey(self._seed)
+
 
     @partial(jax.jit, static_argnums=(0,))
     def reset(self, key=None) -> Tuple[HangmanObservation, HangmanState]:
         if key is None:
-            key = jrandom.PRNGKey(0)
+            self._rng_key, key = jrandom.split(self._rng_key)
+
         key, word, length = _sample_word(key)
 
         # init round timer 
