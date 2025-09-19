@@ -2332,13 +2332,13 @@ class JaxDonkeyKong(JaxEnvironment[DonkeyKongState, DonkeyKongObservation, Donke
             "hammer_can_destroy_enemy": spaces.Box(low=0, high=1, shape=(), dtype=jnp.int32),
 
             # Barrels
-            "barrels": spaces.Dict({
-                "x": spaces.Box(low=0, high=210, shape=(MAX_BARRELS,), dtype=jnp.int32),
-                "y": spaces.Box(low=0, high=160, shape=(MAX_BARRELS, ), dtype=jnp.int32),    
-                "width": spaces.Box(low=0, high=160, shape=(MAX_BARRELS, ), dtype=jnp.int32),
-                "height": spaces.Box(low=0, high=210, shape=(MAX_BARRELS, ), dtype=jnp.int32),
-            }),
-            "barrel_mask": spaces.Box(low=0, high=1, shape=(MAX_BARRELS,), dtype=jnp.int32),
+            # "barrels": spaces.Dict({
+            #     "x": spaces.Box(low=0, high=210, shape=(MAX_BARRELS,), dtype=jnp.int32),
+            #     "y": spaces.Box(low=0, high=160, shape=(MAX_BARRELS, ), dtype=jnp.int32),    
+            #     "width": spaces.Box(low=0, high=160, shape=(MAX_BARRELS, ), dtype=jnp.int32),
+            #     "height": spaces.Box(low=0, high=210, shape=(MAX_BARRELS, ), dtype=jnp.int32),
+            # }),
+            # "barrel_mask": spaces.Box(low=0, high=1, shape=(MAX_BARRELS,), dtype=jnp.int32),
 
             # # Fire
             # "fires": spaces.Dict({
