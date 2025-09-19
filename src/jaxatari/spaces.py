@@ -33,12 +33,12 @@ class Space:
     def contains(self, x: jax.Array) -> Any:
         raise NotImplementedError
     
-    '''
-    Returns the range of the space with the first value being the minimum and the second value being the maximum.
-    Only implemented for numerically bounded spaces.
-    '''
     def range(self):
         raise NotImplementedError
+    
+    def __eq__(self, other: object) -> bool:
+        """Check for equality between two Space objects."""
+        return isinstance(other, self.__class__)
 
 
 class Discrete(Space):
@@ -64,6 +64,14 @@ class Discrete(Space):
     
     def range(self) -> tuple[float, float]:
         return 0, self.n - 1
+    
+    def __eq__(self, other):
+        # Make sure this uses 'and', not 'or'
+        return super().__eq__(other) and self.n == other.n
+    
+    def __hash__(self):
+        """Returns the hash of the discrete space."""
+        return hash(self.n)
 
 
 class Box(Space):
@@ -166,6 +174,20 @@ class Box(Space):
     def range(self) -> tuple[jnp.ndarray, jnp.ndarray]:
         """Returns the lower and upper bounds of the space."""
         return self.low, self.high
+    
+    def __eq__(self, other):
+        return (
+            super().__eq__(other)
+            and self.shape == other.shape
+            and self.dtype == other.dtype
+            and jnp.all(self.low == other.low)
+            and jnp.all(self.high == other.high)
+        )
+    
+    def __hash__(self):
+        """Returns the hash of the box space."""
+        # We hash a tuple of immutable properties, converting arrays to bytes
+        return hash((self.shape, self.dtype, self.low.tobytes(), self.high.tobytes()))
 
 
 class Dict(Space):
@@ -199,6 +221,17 @@ class Dict(Space):
     def __repr__(self) -> str:
         return "Dict(" + ", ".join([f"{k}: {s}" for k, s in self.spaces.items()]) + ")"
 
+    def __iter__(self):
+        """Iterate over the keys of the contained spaces."""
+        yield from self.spaces
+
+    def __eq__(self, other):
+        return super().__eq__(other) and self.spaces == other.spaces
+
+    def __hash__(self):
+        """Returns the hash of the dict space."""
+        # Hash a tuple of items since dicts are not hashable
+        return hash(tuple(self.spaces.items()))
 
 # Register Dict as a Pytree node for JAX utilities
 register_pytree_node(
@@ -244,6 +277,28 @@ class Tuple(Space):
 
     def __repr__(self) -> str:
         return "Tuple(" + ", ".join([str(s) for s in self.spaces]) + ")"
+    
+    def __getitem__(self, index):
+        """Allows accessing subspaces by index or slice."""
+        if isinstance(index, slice):
+            return Tuple(self.spaces[index])
+        return self.spaces[index]
+    
+    def __len__(self):
+        return self.num_spaces
+
+    def __iter__(self):
+        """Iterate over the contained spaces."""
+        yield from self.spaces
+        
+    def __eq__(self, other):
+        return super().__eq__(other) and self.spaces == other.spaces
+    
+    def __hash__(self):
+        """Returns the hash of the tuple space."""
+        # Tuples of hashable objects are hashable
+        return hash(self.spaces)
+
 
 # Register Tuple as a Pytree node for JAX utilities
 register_pytree_node(

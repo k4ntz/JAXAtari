@@ -3,12 +3,60 @@ name: Fork PR Tests
 
 on:
   pull_request_target:
-    branches-ignore:
-      - master
     types: [opened, synchronize, reopened, edited]
 
-
 jobs:
+  branch:
+    if: github.event.pull_request.head.repo.full_name != github.repository
+    runs-on: ubuntu-latest
+    outputs:
+      result: ${{ steps.check_branch.outputs.result }}
+    steps:
+      - name: Check if base branch is dev
+        id: check_branch
+        run: |
+          if [[ "${{ github.event.pull_request.base.ref }}" != "dev" ]]; then
+            echo "Base branch is not 'dev'. Exiting."
+            echo "result=failure" >> $GITHUB_OUTPUT
+            exit 1
+          else
+            echo "result=success" >> $GITHUB_OUTPUT
+          fi
+        shell: bash
+
+  changed-files:
+    if: github.event.pull_request.head.repo.full_name != github.repository
+    runs-on: ubuntu-latest
+    outputs:
+      result: ${{ steps.check_files.outputs.result }}
+      forbidden_changes: ${{ steps.check_files.outputs.forbidden_changes }}
+    steps:
+      - name: Check out code
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.base.sha }}
+          fetch-depth: 0
+
+      - name: Check if files are changed that should not be changed
+        id: check_files
+        run: |
+          git fetch origin pull/${{ github.event.pull_request.number }}/head:pr_head
+          CHANGED_FILES=$(git diff --name-only ${{ github.event.pull_request.base.sha }}...pr_head || true)
+          echo "$CHANGED_FILES" # debug
+          FORBIDDEN_CHANGES=$(echo "$CHANGED_FILES" | grep -v '^src/jaxatari/games/' || true)
+          if [[ -n "$FORBIDDEN_CHANGES" ]]; then
+            echo "The following files were changed but should not be changed in a game update PR:"
+            echo "$FORBIDDEN_CHANGES"
+            echo "result=failure" >> $GITHUB_OUTPUT
+            FORBIDDEN_CHANGES_B64=$(echo "$FORBIDDEN_CHANGES" | base64 -w 0)
+            echo "forbidden_changes=$FORBIDDEN_CHANGES_B64" >> $GITHUB_OUTPUT
+            exit 1
+          else
+            echo "result=success" >> $GITHUB_OUTPUT
+            echo "forbidden_changes=" >> $GITHUB_OUTPUT
+          fi
+        shell: bash
+
   prepare-matrix:
     if: github.event.pull_request.head.repo.full_name != github.repository
     runs-on: ubuntu-latest
@@ -43,3 +91,82 @@ jobs:
     with:
       game_matrix: ${{ needs.prepare-matrix.outputs.matrix }}
       pr_head_sha: ${{ needs.prepare-matrix.outputs.pr_head_sha }}
+
+  report:
+    permissions:
+      contents: read
+      pull-requests: write
+    needs: [branch, changed-files, trigger]
+    if: always() && (github.event.pull_request.head.repo.full_name != github.repository)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.base.ref }}
+          fetch-depth: 0
+
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: pytest-report-*
+          merge-multiple: true
+          path: reports
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: "3.10"
+
+      - name: Install Jinja2
+        run: pip install jinja2
+
+      - name: Generate markdown report
+        env:
+          TEST_OUTCOMES: ${{ needs.trigger.outputs.test_outcomes }}
+          GITHUB_ACTION_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          BRANCH_RESULT: ${{ needs.branch.outputs.result }}
+          BRANCH_ACTUAL: ${{ github.event.pull_request.base.ref }}
+          BRANCH_TARGET: "dev"
+          FILES_RESULT: "${{ needs.changed-files.outputs.result }}"
+          FORBIDDEN_CHANGES_B64: "${{ needs.changed-files.outputs.forbidden_changes }}"
+        run: |
+          python scripts/generate_test_report.py
+          cat ci-report.md >> ${GITHUB_STEP_SUMMARY}
+        shell: bash
+
+      - name: Collapse previous CI comments
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const {owner, repo} = context.repo;
+            const issue_number = context.payload.pull_request.number;
+            const ciTag = '<!-- CI-TEST-RESULTS -->';
+
+            const comments = await github.paginate(
+              github.rest.issues.listComments,
+              { owner, repo, issue_number, per_page: 100 }
+            );
+
+            const matches = comments.filter(c =>
+              c.user?.login === 'github-actions[bot]' &&
+              c.body?.includes(ciTag)
+            );
+
+            for (const c of matches) {
+              if (c.body.includes('data-ci-archived="true"')) continue;
+
+              const newBody =
+                `<details data-ci-archived="true">\n` +
+                `<summary>📁 Previous CI results (run #${context.runId})</summary>\n\n` +
+                `${c.body}\n\n` +
+                `</details>`;
+
+              await github.rest.issues.updateComment({
+                owner, repo, comment_id: c.id, body: newBody
+              });
+            }
+
+      - name: Create new PR comment
+        uses: peter-evans/create-or-update-comment@v4
+        with:
+          issue-number: ${{ github.event.pull_request.number }}
+          body-path: ./ci-report.md

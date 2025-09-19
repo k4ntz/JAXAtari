@@ -723,7 +723,8 @@ class MultiRewardLogWrapper(JaxatariWrapper):
         obs, atari_state = self._env.reset(key)
         # Dummy step to get info structure
         _, _, _, _, dummy_info = self._env.step(atari_state, 0)
-        episode_returns_init = jnp.zeros_like(dummy_info["all_rewards"])
+        rewards_shape_provider = dummy_info.get("all_rewards", jnp.zeros(1))
+        episode_returns_init = jnp.zeros_like(rewards_shape_provider)
         state = MultiRewardLogState(atari_state, 0.0, episode_returns_init, 0, 0.0, episode_returns_init, 0)
         return obs, state
 
@@ -735,7 +736,9 @@ class MultiRewardLogWrapper(JaxatariWrapper):
     ) -> Tuple[chex.Array, MultiRewardLogState, float, bool, Dict[Any, Any]]:
         obs, atari_state, reward, done, info = self._env.step(state.atari_state, action)
         new_episode_return_env = state.episode_returns_env + reward
-        new_episode_return = state.episode_returns + info["all_rewards"]
+        # Safely get all_rewards, defaulting to a zero array that matches the shape of our tracker.
+        all_rewards_step = info.get("all_rewards", jnp.zeros_like(state.episode_returns))
+        new_episode_return = state.episode_returns + all_rewards_step
         new_episode_length = state.episode_lengths + 1
         state = MultiRewardLogState(
             atari_state=atari_state,

@@ -1,3 +1,5 @@
+import copy
+import pickle
 import pytest
 import jax
 import jax.numpy as jnp
@@ -263,6 +265,134 @@ def test_game_names_are_valid():
         
         # Check that game name contains only alphanumeric characters and underscores
         assert game_name.replace('_', '').isalnum(), f"Game name '{game_name}' should contain only alphanumeric characters and underscores"
+
+
+def test_space_enhancements():
+    """Tests the new Pythonic features: equality, iteration, and slicing."""
+    
+    # --- 1. Test __eq__ (Equality) ---
+    # Discrete
+    assert spaces.Discrete(5) == spaces.Discrete(5)
+    assert spaces.Discrete(5) != spaces.Discrete(6)
+    assert spaces.Discrete(5) != spaces.Box(low=0, high=1, shape=())
+
+    # Box
+    base_box = spaces.Box(low=0, high=1, shape=(2, 2), dtype=jnp.float32)
+    assert base_box == spaces.Box(low=0, high=1, shape=(2, 2), dtype=jnp.float32)
+    assert base_box != spaces.Box(low=0, high=2, shape=(2, 2))  # Different high
+    assert base_box != spaces.Box(low=0, high=1, shape=(3, 3))  # Different shape
+    assert base_box != spaces.Box(low=0, high=1, shape=(2, 2), dtype=jnp.int32)  # Different dtype
+    
+    # Tuple
+    base_tuple = spaces.Tuple([spaces.Discrete(5), base_box])
+    assert base_tuple == spaces.Tuple([spaces.Discrete(5), base_box])
+    assert base_tuple != spaces.Tuple([spaces.Discrete(6), base_box]) # Different content
+    assert base_tuple != spaces.Tuple([base_box, spaces.Discrete(5)]) # Different order
+
+    # Dict
+    base_dict = spaces.Dict(collections.OrderedDict([
+        ("d", spaces.Discrete(5)),
+        ("b", base_box)
+    ]))
+    assert base_dict == spaces.Dict(collections.OrderedDict([
+        ("d", spaces.Discrete(5)),
+        ("b", base_box)
+    ]))
+    assert base_dict != spaces.Dict(collections.OrderedDict([
+        ("d", spaces.Discrete(6)), # Different content
+        ("b", base_box)
+    ]))
+    assert base_dict != spaces.Dict(collections.OrderedDict([
+        ("b", base_box), # Different order
+        ("d", spaces.Discrete(5))
+    ]))
+
+    # --- 2. Test Container Methods (__len__, __iter__, __getitem__) ---
+    s1 = spaces.Box(0, 1)
+    s2 = spaces.Discrete(10)
+    tuple_space = spaces.Tuple([s1, s2])
+
+    # Test __len__
+    assert len(tuple_space) == 2
+
+    # Test __iter__ for Tuple
+    subspaces = [s for s in tuple_space]
+    assert subspaces[0] == s1
+    assert subspaces[1] == s2
+    assert len(subspaces) == 2
+
+    # Test slicing for Tuple
+    sliced_space = tuple_space[0:1]
+    assert isinstance(sliced_space, spaces.Tuple)
+    assert len(sliced_space) == 1
+    assert sliced_space[0] == s1
+    assert sliced_space == spaces.Tuple([s1])
+
+    # Test __iter__ for Dict
+    dict_space = spaces.Dict(collections.OrderedDict([("box", s1), ("discrete", s2)]))
+    keys = [k for k in dict_space]
+    assert keys == ["box", "discrete"]
+
+
+def test_space_serialization():
+    """Tests that all space objects can be pickled and unpickled correctly."""
+    # 1. Create a list of diverse space objects to test
+    original_spaces = [
+        spaces.Discrete(10),
+        spaces.Box(low=-1.0, high=1.0, shape=(3, 4), dtype=jnp.float32),
+        spaces.Box(low=0, high=255, shape=(2,), dtype=jnp.uint8),
+        spaces.Tuple([
+            spaces.Discrete(5),
+            spaces.Box(low=0, high=1, shape=(2,))
+        ]),
+        spaces.Dict(collections.OrderedDict([
+            ('position', spaces.Box(low=-1, high=1, shape=(2,))),
+            ('type', spaces.Discrete(3))
+        ]))
+    ]
+
+    # 2. For each space, pickle it, then unpickle it
+    for original_space in original_spaces:
+        # Serialize the object to a byte string
+        pickled_space = pickle.dumps(original_space)
+        # Deserialize the byte string back into an object
+        unpickled_space = pickle.loads(pickled_space)
+
+        # 3. Assert that the restored object is equal to the original
+        assert original_space == unpickled_space
+        # As a bonus, check that their hashes are also identical
+        assert hash(original_space) == hash(unpickled_space)
+
+
+def test_space_copying():
+    """Tests that all space objects can be shallow and deep copied correctly."""
+    # Create a complex, nested space to test both copy types
+    original_space = spaces.Tuple([
+        spaces.Discrete(5),
+        spaces.Box(low=0, high=1, shape=(2,))
+    ])
+
+    # 1. Test shallow copy
+    shallow_copy = copy.copy(original_space)
+
+    # The new object should be equal in value to the original
+    assert shallow_copy == original_space
+    # But it should be a different object in memory
+    assert shallow_copy is not original_space
+    # In a shallow copy, the inner list/tuple of subspaces is the *same* object
+    assert shallow_copy.spaces is original_space.spaces
+
+
+    # 2. Test deep copy
+    deep_copy = copy.deepcopy(original_space)
+
+    # The new object should be equal in value to the original
+    assert deep_copy == original_space
+    # And it should be a different object in memory
+    assert deep_copy is not original_space
+    # In a deep copy, the inner list/tuple of subspaces is a *different* object
+    assert deep_copy.spaces is not original_space.spaces
+
 
 if __name__ == "__main__":
     pytest.main([__file__]) 

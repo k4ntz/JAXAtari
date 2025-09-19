@@ -2440,7 +2440,7 @@ class JaxSeaquest(JaxEnvironment[SeaquestState, SeaquestObservation, SeaquestInf
         )
 
     @partial(jax.jit, static_argnums=(0,))
-    def _get_info(self, state: SeaquestState, all_rewards: jnp.ndarray) -> SeaquestInfo:
+    def _get_info(self, state: SeaquestState, all_rewards: jnp.ndarray = None) -> SeaquestInfo:
         return SeaquestInfo(
             successful_rescues=state.successful_rescues,
             difficulty=state.spawn_state.difficulty,
@@ -2449,7 +2449,7 @@ class JaxSeaquest(JaxEnvironment[SeaquestState, SeaquestObservation, SeaquestInf
         )
 
     @partial(jax.jit, static_argnums=(0,))
-    def _get_env_reward(self, previous_state: SeaquestState, state: SeaquestState):
+    def _get_reward(self, previous_state: SeaquestState, state: SeaquestState):
         return state.score - previous_state.score
 
     @partial(jax.jit, static_argnums=(0,))
@@ -2879,7 +2879,7 @@ class JaxSeaquest(JaxEnvironment[SeaquestState, SeaquestObservation, SeaquestInf
         observation = self._get_observation(return_state)
 
         done = self._get_done(return_state)
-        env_reward = self._get_env_reward(previous_state, return_state)
+        env_reward = self._get_reward(previous_state, return_state)
         all_rewards = self._get_all_rewards(previous_state, return_state)
         info = self._get_info(return_state, all_rewards)
 
