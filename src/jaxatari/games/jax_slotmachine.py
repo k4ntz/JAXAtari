@@ -1178,7 +1178,7 @@ def main():
         action = Action.NOOP
 
     pygame.quit()
-    print("Game ended. Use scripts/play.py for full gameplay!")
+    print("Game ended. Use scripts/play.py for full gameplay !")
 
 
 if __name__ == "__main__":
