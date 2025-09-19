@@ -81,16 +81,16 @@ class TronConstants(NamedTuple):
     # enemies
     max_enemies: int = 3  # simultaneously there can only be three enemies in the arena
     enemy_spawn_offset: int = 3  # distance in pixels from when spawning
-    enemy_respawn_timer: int = 100  # time in frames until the next enemy spawns
+    enemy_respawn_timer: int = 450  # time in frames until the next enemy spawns
     enemy_recalc_target: Tuple[int, int] = (
-        24,
-        50,
+        350,
+        650,
     )  # After how many frames should the target be recalculated? min,max
     enemy_speed: int = 8  # inversed: move envery third frame
     enemy_target_radius: int = (
         80  # radius (px) around player to sample target (where to walk)
     )
-    enemy_min_dist: int = 12  # min distance between the enemies
+    enemy_min_dist: int = 32  # min distance between the enemies
     enemy_firing_cooldown: int = 100  # frames until the enemy can fire again
 
     # gameplay
@@ -112,6 +112,23 @@ class TronConstants(NamedTuple):
         67,
         255,
     )  # locked open (teleportable)
+
+    # waves
+    num_waves: int = 8  # How many distinct waves/colors exist
+    wave_points: Tuple[int, ...] = (10, 20, 40, 75, 150, 300, 500, 800)
+    # Enemy tint per wave/color (RGBA)
+    #  LIGHT GREEN,  DARK GREEN,     BLUE,           WHITE,
+    #  YELLOW,       BLACK,          RED,            GOLD
+    wave_enemy_colors_rgba: Tuple[Tuple[int, int, int, int], ...] = (
+        (144, 238, 144, 255),  # light green
+        (0, 100, 0, 255),  # dark  green
+        (0, 128, 255, 255),  # blue
+        (255, 255, 255, 255),  # white
+        (255, 255, 0, 255),  # yellow
+        (16, 16, 16, 255),  # black (near-black so it's visible)
+        (220, 20, 60, 255),  # red (crimson)
+        (255, 215, 0, 255),  # gold
+    )
 
 
 class Rect(NamedTuple):
@@ -192,6 +209,7 @@ class TronState(NamedTuple):
     )
     rng_key: random.PRNGKey
     frame_idx: Array  # int32: frame counter
+    wave_index: Array  # int32: which wave/color is active (0..num_waves -1)
 
 
 class EntityPosition(NamedTuple):
@@ -1366,10 +1384,6 @@ class JaxTron(JaxEnvironment[TronState, TronObservation, TronInfo, TronConstants
             en = s.enemies
             N = self.consts.max_enemies
 
-            # -------------------------------
-            # Small helpers (pure, JAX-traceable)
-            # -------------------------------
-
             def step_gate(frame_idx: Array, frames_per_step: int) -> Array:
                 """Return 0/1 mask: 1 only on frames that are allowed to move."""
                 period = jnp.maximum(jnp.int32(frames_per_step), jnp.int32(1))
@@ -1636,6 +1650,286 @@ class JaxTron(JaxEnvironment[TronState, TronObservation, TronInfo, TronConstants
         return jax.lax.cond(any_alive, _do_move, _no_op, operand=state)
 
     @partial(jit, static_argnums=(0,))
+    def _disc_enemy_collisions(self, state: TronState) -> TronState:
+        """
+        Kill enemies hit by *player-owned, outbound* discs.
+        - Discs do NOT despawn on hit (they keep flying).
+        - Returning player discs (phase==2) do NOT kill.
+        - Enemy-owned discs are ignored here.
+        """
+        e, d = state.enemies, state.discs
+
+        # Consider only player discs that are actively flying outward.
+        #   owner == 0 → player
+        #   phase == 1 → outbound (NOT returning)
+        disc_is_player_outbound = (d.owner == jnp.int32(0)) & (d.phase == jnp.int32(1))
+
+        # Quick exit if nobody is alive or no relevant discs.
+        any_alive = jnp.any(e.alive)
+        any_disc = jnp.any(disc_is_player_outbound)
+        do_check = any_alive & any_disc
+
+        def _no_hit(s):
+            return s
+
+        def _check_and_kill(s: TronState) -> TronState:
+            e2, d2 = s.enemies, s.discs
+
+            # Broadcast rectangles to (E,D) for overlap checks.
+            # Enemy bounds: [ex0, ex1) × [ey0, ey1)
+            ex0 = e2.x[:, None]
+            ey0 = e2.y[:, None]
+            ex1 = ex0 + e2.w[:, None]
+            ey1 = ey0 + e2.h[:, None]
+
+            # Disc bounds: [dx0, dx1) × [dy0, dy1)
+            dx0 = d2.x[None, :]
+            dy0 = d2.y[None, :]
+            dx1 = dx0 + d2.w[None, :]
+            dy1 = dy0 + d2.h[None, :]
+
+            # AABB overlap per pair (enemy i, disc j)
+            x_overlap = (ex0 < dx1) & (ex1 > dx0)
+            y_overlap = (ey0 < dy1) & (ey1 > dy0)
+
+            pair_overlap = x_overlap & y_overlap
+
+            # Only count hits where the enemy is alive AND the disc is player+outbound.
+            mask_alive = e2.alive[:, None]
+            mask_disc = disc_is_player_outbound[None, :]
+            pair_hits = pair_overlap & mask_alive & mask_disc
+
+            # Enemy i is hit if any disc j overlaps it.
+            enemy_hit = jnp.any(pair_hits, axis=1)  # (E,)
+
+            # Kill enemies on hit; discs remain unchanged.
+            new_alive = e2.alive & (~enemy_hit)
+            e3 = e2._replace(alive=new_alive)
+            return s._replace(enemies=e3)
+
+        return jax.lax.cond(do_check, _check_and_kill, _no_hit, operand=state)
+
+    @partial(jit, static_argnums=(0,))
+    def _update_respawn_cooldown_on_kills(self, state: TronState) -> TronState:
+        alive_now = jnp.sum(state.enemies.alive.astype(jnp.int32))
+        alive_prev = state.enemies_alive_last
+        died_now = alive_now < alive_prev  # someone just died this frame?
+
+        # Arm the cooldown only if we're not already counting down.
+        start_cd = died_now & (state.inwave_spawn_cd == jnp.int32(0))
+
+        new_cd = jnp.where(
+            start_cd, jnp.int32(self.consts.enemy_respawn_timer), state.inwave_spawn_cd
+        )
+
+        return state._replace(
+            inwave_spawn_cd=new_cd,
+            enemies_alive_last=alive_now,  # keep this updated every frame
+        )
+
+    @partial(jit, static_argnums=(0,))
+    def _maybe_respawn(self, state: TronState) -> TronState:
+        alive_now = jnp.sum(state.enemies.alive.astype(jnp.int32))
+        any_dead = alive_now < jnp.int32(self.consts.max_enemies)
+
+        # Only tick down while there's a deficit; otherwise freeze the value.
+        cd_next = jnp.where(
+            any_dead,
+            jnp.maximum(state.inwave_spawn_cd - jnp.int32(1), jnp.int32(0)),
+            state.inwave_spawn_cd,
+        )
+
+        can_spawn = state.game_started & any_dead & (cd_next == jnp.int32(0))
+
+        def _spawn_one(s: TronState) -> TronState:
+            s2 = self._spawn_enemies_up_to(s, jnp.int32(1), jnp.float32(0.4))
+            alive_after = jnp.sum(s2.enemies.alive.astype(jnp.int32))
+            still_deficit = alive_after < jnp.int32(self.consts.max_enemies)
+            # If there are still dead slots, start the next timer; else leave at 0.
+            next_cd = jax.lax.select(
+                still_deficit,
+                jnp.int32(self.consts.enemy_respawn_timer),
+                jnp.int32(0),
+            )
+            return s2._replace(inwave_spawn_cd=next_cd)
+
+        def _no_spawn(s: TronState) -> TronState:
+            return s._replace(inwave_spawn_cd=cd_next)
+
+        return jax.lax.cond(can_spawn, _spawn_one, _no_spawn, state)
+
+    @partial(jit, static_argnums=(0,))
+    def _lock_doors_from_disc_hits(self, state: TronState) -> TronState:
+        """
+        If a player-owned, outbound disc tries to cross the inner wall this frame AND
+        its span aligns with a visible door on that side, lock that door open.
+
+        Note: discs stay inside the inner play area, so we detect hits by
+        'next-step wall contact' + alignment with the door slot along that wall.
+        """
+        d, doors = state.discs, state.doors
+
+        # Only player, outbound discs can lock doors
+        disc_relevant = (d.owner == jnp.int32(0)) & (d.phase == jnp.int32(1))
+
+        # Next-step bounds
+        nx = d.x + d.vx
+        ny = d.y + d.vy
+
+        hit_left = nx < self.inner_min_x
+        hit_right = (nx + d.w) > self.inner_max_x
+        hit_top = ny < self.inner_min_y
+        hit_bottom = (ny + d.h) > self.inner_max_y
+
+        disc_top = disc_relevant & hit_top
+        disc_bottom = disc_relevant & hit_bottom
+        disc_left = disc_relevant & hit_left
+        disc_right = disc_relevant & hit_right
+
+        any_disc_might_hit = jnp.any(disc_top | disc_bottom | disc_left | disc_right)
+
+        def _no_lock(s: TronState):
+            return s
+
+        def _do_lock(s: TronState) -> TronState:
+            d2, doors2 = s.discs, s.doors
+
+            # Disc spans
+            dx0 = d2.x[None, :]
+            dx1 = dx0 + d2.w[None, :]
+            dy0 = d2.y[None, :]
+            dy1 = dy0 + d2.h[None, :]
+
+            # Door spans (broadcast along discs)
+            tx0 = doors2.x[:, None]
+            tx1 = tx0 + doors2.w[:, None]
+            ty0 = doors2.y[:, None]
+            ty1 = ty0 + doors2.h[:, None]
+
+            # Alignment (AABB overlap on the axis parallel to door slot)
+            x_overlap = (tx0 < dx1) & (tx1 > dx0)  # for top/bottom
+            y_overlap = (ty0 < dy1) & (ty1 > dy0)  # for left/right
+
+            # Door eligibility: must be visible (spawned) and not already locked
+            visible_and_unlock = doors2.is_spawned & (~doors2.is_locked_open)
+
+            # Side masks
+            side_top = doors2.side == jnp.int32(SIDE_TOP)
+            side_bottom = doors2.side == jnp.int32(SIDE_BOTTOM)
+            side_left = doors2.side == jnp.int32(SIDE_LEFT)
+            side_right = doors2.side == jnp.int32(SIDE_RIGHT)
+
+            # Combine: per-door if ANY disc aligns & hits that wall this frame
+            hit_top_any = jnp.any(
+                x_overlap
+                & side_top[:, None]
+                & visible_and_unlock[:, None]
+                & disc_top[None, :],
+                axis=1,
+            )
+            hit_bot_any = jnp.any(
+                x_overlap
+                & side_bottom[:, None]
+                & visible_and_unlock[:, None]
+                & disc_bottom[None, :],
+                axis=1,
+            )
+            hit_lft_any = jnp.any(
+                y_overlap
+                & side_left[:, None]
+                & visible_and_unlock[:, None]
+                & disc_left[None, :],
+                axis=1,
+            )
+            hit_rgt_any = jnp.any(
+                y_overlap
+                & side_right[:, None]
+                & visible_and_unlock[:, None]
+                & disc_right[None, :],
+                axis=1,
+            )
+
+            lock_hit = hit_top_any | hit_bot_any | hit_lft_any | hit_rgt_any
+
+            new_doors = doors2._replace(
+                is_locked_open=(doors2.is_locked_open | lock_hit)
+            )
+            return s._replace(doors=new_doors)
+
+        return jax.lax.cond(any_disc_might_hit, _do_lock, _no_lock, state)
+
+    @partial(jit, static_argnums=(0,))
+    def _teleport_player_if_door(self, state: TronState) -> TronState:
+        """
+        If the player tries to move through a wall segment that has a visible, locked door
+        and the *paired* door is also visible+locked, teleport to the paired door.
+        The entry door becomes deactivated+unlocked; the exit door remains unchanged.
+        """
+        p, d = state.player, state.doors
+
+        # Player box (positions are length-1 arrays; velocities may be 0-D scalars)
+        px0, py0 = p.x[0], p.y[0]
+        pw, ph = p.w[0], p.h[0]
+        px1, py1 = px0 + pw, py0 + ph
+
+        # IMPORTANT: vx/vy may be 0-D arrays; do NOT index them
+        vx, vy = p.vx, p.vy
+
+        # Intent to push into a wall from the current clamped position
+        up_intent = (vy < 0) & (py0 == self.inner_min_y)
+        down_intent = (vy > 0) & (py0 == self.inner_max_y - ph)
+        left_intent = (vx < 0) & (px0 == self.inner_min_x)
+        right_intent = (vx > 0) & (px0 == self.inner_max_x - pw)
+
+        # Local door must be visible+locked AND its pair must also be visible+locked
+        local_ok = d.is_spawned & d.is_locked_open
+        pair_ok = local_ok[d.pair]
+        both_locked = local_ok & pair_ok
+
+        # Overlap between player's span and a door slot on the relevant axis
+        x_overlap = (d.x < px1) & ((d.x + d.w) > px0)  # for top/bottom doors
+        y_overlap = (d.y < py1) & ((d.y + d.h) > py0)  # for left/right doors
+
+        m_top = both_locked & (d.side == jnp.int32(SIDE_TOP)) & x_overlap & up_intent
+        m_bottom = (
+            both_locked & (d.side == jnp.int32(SIDE_BOTTOM)) & x_overlap & down_intent
+        )
+        m_left = (
+            both_locked & (d.side == jnp.int32(SIDE_LEFT)) & y_overlap & left_intent
+        )
+        m_right = (
+            both_locked & (d.side == jnp.int32(SIDE_RIGHT)) & y_overlap & right_intent
+        )
+
+        m_any = m_top | m_bottom | m_left | m_right
+        has, idx = _find_first_true(m_any)
+
+        def do_tp(s: TronState) -> TronState:
+            doors2, player2 = s.doors, s.player
+
+            # Exit is the paired door; place player just inside arena at that door
+            exit_idx = doors2.pair[idx]
+            ex, ey = self._spawn_pos_from_door(
+                doors2, exit_idx, player2.w[0], player2.h[0]
+            )
+
+            # Move player
+            player3 = player2._replace(
+                x=player2.x.at[0].set(ex),
+                y=player2.y.at[0].set(ey),
+            )
+
+            # Consume the entry door: deactivate and unlock it
+            doors3 = doors2._replace(
+                is_spawned=doors2.is_spawned.at[idx].set(False),
+                is_locked_open=doors2.is_locked_open.at[idx].set(False),
+            )
+
+            return s._replace(player=player3, doors=doors3)
+
+        return jax.lax.cond(has, do_tp, lambda s: s, state)
+
+    @partial(jit, static_argnums=(0,))
     def step(
         self, state: TronState, action: Array
     ) -> Tuple[TronObservation, TronState, float, bool, TronInfo]:
@@ -1673,10 +1967,12 @@ class JaxTron(JaxEnvironment[TronState, TronObservation, TronInfo, TronConstants
             )
             # move the player
             s: TronState = self._player_step(s, user_action)
+            s: TronState = self._teleport_player_if_door(s)
             s: TronState = self._spawn_disc(s, pressed_fire_changed)
 
             # Only recall if a player-owned disc existed before this step
             recall_edge = pressed_fire_changed & had_player_disc_before
+            s: TronState = self._lock_doors_from_disc_hits(s)
             s: TronState = self._move_discs(s, recall_edge)
             return s
 
@@ -1688,9 +1984,11 @@ class JaxTron(JaxEnvironment[TronState, TronObservation, TronInfo, TronConstants
                 (s.discs.owner == jnp.int32(0)) & (s.discs.phase > jnp.int32(0))
             )
             s: TronState = self._player_step(s, user_action)
+            s: TronState = self._teleport_player_if_door(s)
             s: TronState = self._spawn_disc(s, pressed_fire_changed)
             # Only recall if a player-owned disc existed before this step
             recall_edge = pressed_fire_changed & had_player_disc_before
+            s: TronState = self._lock_doors_from_disc_hits(s)
             s: TronState = self._move_discs(s, recall_edge)
             return s
 
@@ -1708,7 +2006,10 @@ class JaxTron(JaxEnvironment[TronState, TronObservation, TronInfo, TronConstants
             alive_now = jnp.sum(s.enemies.alive.astype(jnp.int32))
             need = jnp.maximum(jnp.int32(self.consts.max_enemies) - alive_now, 0)
             s2 = self._spawn_enemies_up_to(s, need, jnp.float32(0.4))
-            return s2._replace(game_started=jnp.array(True))
+            return s2._replace(
+                game_started=jnp.array(True),
+                inwave_spawn_cd=jnp.int32(self.consts.enemy_respawn_timer),
+            )
 
         state = jax.lax.cond(
             ~state.game_started & user_action.moved,
@@ -1718,6 +2019,9 @@ class JaxTron(JaxEnvironment[TronState, TronObservation, TronInfo, TronConstants
         )
 
         state = self._move_enemies(state)
+        state = self._disc_enemy_collisions(state)
+        state = self._update_respawn_cooldown_on_kills(state)
+        state = self._maybe_respawn(state)
 
         obs: TronObservation = self._get_observation(state)
         env_reward: float = self._get_reward(state, state)
