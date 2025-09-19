@@ -2235,11 +2235,11 @@ class JaxDonkeyKong(JaxEnvironment[DonkeyKongState, DonkeyKongObservation, Donke
             obs.hammer_can_destroy_enemy.flatten(),
 
             # --- Barrels ---
-            obs.barrels.x.flatten(),
-            obs.barrels.y.flatten(),
-            obs.barrels.width.flatten(),
-            obs.barrels.height.flatten(),
-            obs.barrel_mask.flatten(),
+            obs.barrels.x,
+            obs.barrels.y,
+            obs.barrels.width,
+            obs.barrels.height,
+            obs.barrel_mask,
 
             # --- Fires ---
             obs.fires.x.flatten(),
