@@ -226,3 +226,4 @@ def load_game_mod(game: str, mod: str) -> JaxEnvironment:
 
     raise ImportError(f"No class found in {mod_file_path} that inherits from JaxatariWrapper")
 
+
