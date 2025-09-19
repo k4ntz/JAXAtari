@@ -4139,11 +4139,11 @@ class BeamRiderRenderer(JAXGameRenderer):
 
         height = self.constants.SCREEN_HEIGHT
         width = self.constants.SCREEN_WIDTH
-        line_color = jnp.array([64, 64, 255], dtype=jnp.uint8)  # Blueish grid color
+        line_color = jnp.array([64, 64, 255], dtype=jnp.uint8)
 
         # === Margins ===
-        top_margin = int(height * 0.12)  # Reserved space for HUD
-        bottom_margin = int(height * 0.14)  # Reserved space below ship
+        top_margin = int(height * 0.12)
+        bottom_margin = int(height * 0.14)
         grid_height = height - top_margin - bottom_margin
 
         # Generate mesh grid for pixel coordinates
@@ -4152,67 +4152,86 @@ class BeamRiderRenderer(JAXGameRenderer):
         y_grid, x_grid = jnp.meshgrid(y_indices, x_indices, indexing="ij")
 
         # === Horizontal Lines ===
-        num_hlines = 7  # Number of animated lines
-        speed = 1  # Pixels per frame (for timing)
-        spacing = grid_height // (num_hlines + 1)
-        phase = (frame_count * 0.006) % 1.0  # Smooth looping animation phase
+        num_hlines = 7
+        phase = (frame_count * 0.006) % 1.0
 
-        def draw_hline(i, scr):
-            # Animate line position using easing (t^3 curve)
+        # Vectorized calculation of all horizontal line positions
+        def calculate_hline_y(i):
             t = (phase + i / num_hlines) % 1.0
             y = jnp.round((t ** 3.0) * grid_height).astype(int) + top_margin
-            y = jnp.clip(y, 0, height - 1)
-            mask = y_grid == y
-            return jnp.where(mask[..., None], line_color, scr)
+            return jnp.clip(y, 0, height - 1)
 
-        # Draw each horizontal line
-        screen = jax.lax.fori_loop(0, num_hlines, draw_hline, screen)
+        # Calculate all line positions at once
+        hline_indices = jnp.arange(num_hlines)
+        hline_y_positions = jax.vmap(calculate_hline_y)(hline_indices)
 
-        # === Vertical Lines (5 beams) ===
-        # Use the actual beam positions for drawing the grid
+        # Create combined mask for all horizontal lines
+        hlines_mask = jnp.any(y_grid[None, :, :] == hline_y_positions[:, None, None], axis=0)
+
+        # Apply horizontal lines to screen
+        screen = jnp.where(hlines_mask[..., None], line_color, screen)
+
+        # === Vertical Lines ===
         beam_positions = self.beam_positions
         center_x = width / 2
-        y0 = height - bottom_margin  # Line starts here (bottom)
-        y1 = -height * 0.7  # Line vanishes toward horizon (off-screen)
+        y0 = height - bottom_margin
+        y1 = -height * 0.7
 
-        def draw_vline(i, scr):
-            # Starting x position at bottom
-            x0 = beam_positions[i]
-            # Ending x position at top (converge toward center for 3D effect)
-            x1 = center_x + (x0 - center_x) * 0.05  # Converge partially toward center
+        # Scale y range
+        t_top = jnp.clip((top_margin - y0) / (y1 - y0), 0.0, 1.0)
 
-            # Scale y range so lines fade before reaching top_margin
-            t_top = (top_margin - y0) / (y1 - y0)
-            t_top = jnp.clip(t_top, 0.0, 1.0)
+        num_steps = 200
+        dot_spacing = 25
 
-            num_steps = 200
-            dot_spacing = 25  # Only draw dots every N steps for stylized effect
+        # Vectorized calculation of all dot positions for all beams
+        def calculate_beam_dots(beam_idx):
+            x0 = beam_positions[beam_idx]
+            x1 = center_x + (x0 - center_x) * 0.05
 
-            def body_fn(j, scr_inner):
-                # Parametric interpolation along line
-                t = j / (num_steps - 1)
-                t_clipped = t * t_top
+            # Calculate all dot positions for this beam
+            t_values = jnp.arange(num_steps) / (num_steps - 1)
+            t_clipped = t_values * t_top
 
-                y = y0 + (y1 - y0) * t_clipped
-                x = x0 + (x1 - x0) * t_clipped
+            y_positions = y0 + (y1 - y0) * t_clipped
+            x_positions = x0 + (x1 - x0) * t_clipped
 
-                xi = jnp.clip(jnp.round(x).astype(int), 0, width - 1)
-                yi = jnp.clip(jnp.round(y).astype(int), 0, height - 1)
+            # Only keep every dot_spacing-th dot
+            dot_mask = (jnp.arange(num_steps) % dot_spacing) == 0
+
+            # Clip positions
+            x_positions = jnp.clip(jnp.round(x_positions).astype(int), 0, width - 1)
+            y_positions = jnp.clip(jnp.round(y_positions).astype(int), 0, height - 1)
+
+            return x_positions, y_positions, dot_mask
+
+        # Calculate all beam dots at once
+        beam_indices = jnp.arange(self.constants.NUM_BEAMS)
+        all_x, all_y, all_masks = jax.vmap(calculate_beam_dots)(beam_indices)
+
+        # Apply dots using a loop (still needed for sequential screen updates)
+        def apply_beam_dots(beam_idx, scr):
+            x_positions = all_x[beam_idx]
+            y_positions = all_y[beam_idx]
+            dot_mask = all_masks[beam_idx]
+
+            def apply_single_dot(step_idx, scr_inner):
+                should_draw = dot_mask[step_idx]
+                xi = x_positions[step_idx]
+                yi = y_positions[step_idx]
 
                 return jax.lax.cond(
-                    j % dot_spacing == 0,  # Place dot only at intervals
-                    lambda s: s.at[yi, xi].set(line_color),  # Set pixel color
-                    lambda s: s,  # Else do nothing
+                    should_draw,
+                    lambda s: s.at[yi, xi].set(line_color),
+                    lambda s: s,
                     scr_inner
                 )
 
-            return jax.lax.fori_loop(0, num_steps, body_fn, scr)
+            return jax.lax.fori_loop(0, num_steps, apply_single_dot, scr)
 
-        # Draw all 5 vertical beam lines
-        screen = jax.lax.fori_loop(0, self.constants.NUM_BEAMS, draw_vline, screen)
+        # Apply all beams
+        screen = jax.lax.fori_loop(0, self.constants.NUM_BEAMS, apply_beam_dots, screen)
 
         return screen
-
     """More 3d version
         @partial(jax.jit, static_argnums=(0,))
         def _draw_3d_grid(self, screen: chex.Array, frame_count: int) -> chex.Array:
