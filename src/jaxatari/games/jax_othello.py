@@ -128,6 +128,7 @@ class JaxOthello(JaxEnvironment[OthelloState, OthelloObservation, OthelloInfo, O
     def __init__(self, consts: OthelloConstants = None, frameskip: int = 0, reward_funcs: list[callable]=None):
         consts = consts or OthelloConstants()
         super().__init__(consts)
+        self.renderer = OthelloRenderer(self.consts)
         self.frameskip = frameskip + 1
         self.frame_stack_size = 4
         
@@ -2811,6 +2812,9 @@ class JaxOthello(JaxEnvironment[OthelloState, OthelloObservation, OthelloInfo, O
             player_score=state.player_score,
             field_choice_player=state.field_choice_player
         )
+    
+    def render(self, state: OthelloState) -> jnp.ndarray:
+        return self.renderer.render(state)
 
     @partial(jax.jit, static_argnums=(0,))
     def _get_all_reward(self, previous_state: OthelloState, state: OthelloState):
