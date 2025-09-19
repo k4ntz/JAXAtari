@@ -75,6 +75,12 @@ class GameConfig:
     NUM_FISH: int = 6
     FISH_ROW_YS: Tuple[int] = (95, 111, 127, 143, 159, 175)
     FISH_ROW_SCORES: Tuple[int] = (2, 2, 4, 4, 6, 6)
+    # When hooked
+    HOOKED_FISH_SPEED_MULTIPLIER: float = 2.0  # Fish moves twice as fast when hooked
+    HOOKED_FISH_TURN_PROBABILITY: float = 0.12  # 12% chance to change direction
+
+    # Normal swimming
+    FISH_BASE_TURN_PROBABILITY: float = 0.01  # 1% chance to change direction
 
 
     # Shark
@@ -336,17 +342,24 @@ class FishingDerby(JaxEnvironment):
             key, fish_key = jax.random.split(key)
 
             # Base direction change probability
-            base_change_prob = 0.01  # 1% chance per frame to change direction
+            base_change_prob = cfg.FISH_BASE_TURN_PROBABILITY
 
-            # Check which fish is hooked (if any)
-            hooked_fish_idx = jnp.where((p1.hook_state > 0) & (p1.hooked_fish_idx >= 0), p1.hooked_fish_idx, -1)
+            hooked_fish_idx = state.p1.hooked_fish_idx
 
             # Create direction change probabilities - higher for hooked fish
             change_probs = jnp.full(cfg.NUM_FISH, base_change_prob)
             change_probs = jnp.where(
                 jnp.arange(cfg.NUM_FISH) == hooked_fish_idx,
-                0.08,  # 8% chance for hooked fish (8x more likely to turn)
+                cfg.HOOKED_FISH_TURN_PROBABILITY,  # Higher chance for hooked fish
                 change_probs
+            )
+
+            # Fish speeds - faster for hooked fish
+            fish_speeds = jnp.full(cfg.NUM_FISH, cfg.FISH_SPEED)
+            fish_speeds = jnp.where(
+                jnp.arange(cfg.NUM_FISH) == hooked_fish_idx,
+                cfg.FISH_SPEED * cfg.HOOKED_FISH_SPEED_MULTIPLIER,  # Faster when hooked
+                fish_speeds
             )
 
             # Check for random direction changes
@@ -446,7 +459,8 @@ class FishingDerby(JaxEnvironment):
             air_recovery_factor = 0.3      # How quickly hook returns to rod when above water
 
             # Calculate resistance based on rod movement and water depth
-            rod_velocity = rod_change  # How fast the rod is moving horizontally
+            actual_rod_change = new_rod_length - p1.rod_length  # Only consider actual movement
+            rod_velocity = actual_rod_change  # Use actual movement for physics calculations
             depth_factor = jnp.clip((p1.hook_y - (cfg.WATER_Y_START - cfg.ROD_Y)) / cfg.MAX_HOOK_DEPTH_Y, 0.0, 1.0)
             resistance_multiplier = 1.0 + depth_factor * 2.0  # More resistance at deeper depths
 
@@ -585,13 +599,19 @@ class FishingDerby(JaxEnvironment):
             has_hook = (p1_hook_state > 0) & (p1_hooked_fish_idx >= 0)
 
             def update_hook_position(pos):
-                # Make hook follow the fish's x position with some offset based on fish direction
+                # Make hook follow the fish's x position with smooth interpolation
                 fish_x = new_fish_pos[p1_hooked_fish_idx, 0]
                 fish_dir = new_fish_dirs[p1_hooked_fish_idx]
                 # Add slight offset in fish's movement direction to show pulling
                 offset = fish_dir * 5.0  # Offset by 5 pixels in fish's direction
-                new_offset = (fish_x + offset) - (cfg.P1_START_X + new_rod_length)
-                return new_offset
+                target_x = fish_x + offset
+                current_x = cfg.P1_START_X + new_rod_length + new_hook_x_offset
+                # Smooth interpolation factor (0.1 = 10% of the way there each frame)
+                lerp_factor = 0.1
+                # Calculate new position with smooth interpolation
+                new_x = current_x + (target_x - current_x) * lerp_factor
+                # Convert to offset relative to rod end
+                return new_x - (cfg.P1_START_X + new_rod_length)
 
             # Update hook x offset to follow fish
             new_hook_x_offset = jax.lax.cond(
