@@ -803,6 +803,11 @@ class JaxHangman(JaxEnvironment[HangmanState, HangmanObservation, HangmanInfo, A
     def render(self, state: HangmanState) -> jnp.ndarray:
         return self.renderer.render(state)
 
-    @partial(jax.jit, static_argnums=(0,))
-    def _get_info(self, state: HangmanState, all_rewards: chex.Array) -> HangmanInfo:
+    def _get_info(
+        self,
+        state: HangmanState,
+        all_rewards: Optional[chex.Array] = None,
+    ) -> HangmanInfo:
+        if all_rewards is None:
+            all_rewards = jnp.zeros(1, dtype=jnp.float32)
         return HangmanInfo(time=state.step_counter, all_rewards=all_rewards)
