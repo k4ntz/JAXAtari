@@ -435,8 +435,21 @@ class FishingDerby(JaxEnvironment):
 
             # Rod length control (horizontal extension)
             rod_change = 0.0
+            # Basic left/right movement
             rod_change = jnp.where(p1_action == Action.RIGHT, +cfg.ROD_SPEED, rod_change)
             rod_change = jnp.where(p1_action == Action.LEFT, -cfg.ROD_SPEED, rod_change)
+
+            # Add support for diagonal movement (also change rod horizontally when diagonal actions are used)
+            rod_change = jnp.where(p1_action == Action.UPRIGHT, +cfg.ROD_SPEED, rod_change)
+            rod_change = jnp.where(p1_action == Action.DOWNRIGHT, +cfg.ROD_SPEED, rod_change)
+            rod_change = jnp.where(p1_action == Action.UPLEFT, -cfg.ROD_SPEED, rod_change)
+            rod_change = jnp.where(p1_action == Action.DOWNLEFT, -cfg.ROD_SPEED, rod_change)
+
+            # Fire button diagonal variants
+            rod_change = jnp.where(p1_action == Action.UPRIGHTFIRE, +cfg.ROD_SPEED, rod_change)
+            rod_change = jnp.where(p1_action == Action.DOWNRIGHTFIRE, +cfg.ROD_SPEED, rod_change)
+            rod_change = jnp.where(p1_action == Action.UPLEFTFIRE, -cfg.ROD_SPEED, rod_change)
+            rod_change = jnp.where(p1_action == Action.DOWNLEFTFIRE, -cfg.ROD_SPEED, rod_change)
 
             new_rod_length = jnp.clip(
                 p1.rod_length + rod_change,
@@ -473,7 +486,8 @@ class FishingDerby(JaxEnvironment):
                 # Move towards target offset, but slowly due to resistance
                 new_offset = current_offset + (target_offset - current_offset) * resistance
                 # Add extra lag when rod is moving fast
-                movement_lag = -rod_velocity * 0.8 * resistance_multiplier
+                # Only apply lag if there's actual horizontal movement
+                movement_lag = jnp.where(jnp.abs(actual_rod_change) > 0.01, -rod_velocity * 0.8 * resistance_multiplier, 0.0)
                 return new_offset + movement_lag
 
             def apply_air_recovery():
@@ -498,8 +512,16 @@ class FishingDerby(JaxEnvironment):
             def normal_hook_movement(_):
                 # Normal hook movement (only when free - hook_state == 0)
                 can_move_vertically = (p1.hook_state == 0)
+
+                # Handle basic up/down movement
                 change = jnp.where(can_move_vertically & (p1_action == Action.DOWN), +cfg.Acceleration, 0.0)
                 change = jnp.where(can_move_vertically & (p1_action == Action.UP), -cfg.Acceleration, change)
+
+                # Handle diagonal movements with same vertical component
+                change = jnp.where(can_move_vertically & ((p1_action == Action.DOWNLEFT) |
+                                                         (p1_action == Action.DOWNRIGHT)), +cfg.Acceleration, change)
+                change = jnp.where(can_move_vertically & ((p1_action == Action.UPLEFT) |
+                                                         (p1_action == Action.UPRIGHT)), -cfg.Acceleration, change)
 
                 # Update hook velocity with damping
                 new_vel_y = p1.hook_velocity_y * cfg.Damping + change
@@ -1021,11 +1043,19 @@ def get_human_action() -> chex.Array:
     if reset:
         return jnp.array(GameConfig.RESET)
 
-    # Map keyboard inputs to Atari actions
-    is_up = up and not down
-    is_down = down and not up
-    is_left = left and not right
-    is_right = right and not left
+    # Simplified input detection that allows diagonal movement
+    # No exclusion between directions, allowing simultaneous presses
+    is_up = up
+    is_down = down
+    is_left = left
+    is_right = right
+
+    # Prevent conflicting directions (up+down or left+right)
+    # If both opposing directions are pressed, neither takes effect
+    if is_up and is_down:
+        is_up = is_down = False
+    if is_left and is_right:
+        is_left = is_right = False
 
     if fire:
         if is_up and is_left: return jnp.array(Action.UPLEFTFIRE)
