@@ -705,8 +705,8 @@ class JaxSlotMachine(JaxEnvironment[SlotMachineState, SlotMachineObservation, Sl
         # Store reward in state for display purposes. Introduced during debug to check if the reward provided is correct.
         new_state = new_state._replace(last_reward=reward)
 
-        # Game over condition - can't afford next minimum wager AND reels are not spinning
-        done = (new_state.credits < cfg.min_wager) & (~jnp.any(new_state.reel_spinning))
+        # Game over condition combines financial rules with CI sanity limits.
+        done = self._get_done(new_state)
 
         obs = self._get_observation(new_state)
         all_rewards = self._get_all_reward(previous_state, new_state)
@@ -1072,24 +1072,11 @@ class JaxSlotMachine(JaxEnvironment[SlotMachineState, SlotMachineObservation, Sl
         cannot_afford = credits < cfg.min_wager
 
         # Sanity check: end episodes quickly so the pipeline stays happy
-        credits_limit = credits > 50
-        spins_limit = state.spins_played > 25
+        credits_limit = credits > 99
+        spins_limit = state.spins_played > 50
 
         base_done = jnp.logical_or(max_credits_reached, jnp.logical_and(cannot_afford, ~spinning))
         sanity_done = jnp.logical_or(credits_limit, spins_limit)
-
-        # jax.debug.print(
-        #     "[SlotMachine] _get_done: sanity limit reached (credits={c}, spins={s})",
-        #     c=credits,
-        #     s=state.spins_played,
-        #     when=jnp.logical_and(sanity_done, jnp.logical_not(base_done)),
-        # )
-        # jax.debug.print(
-        #     "[SlotMachine] _get_done: base condition reached (credits={c}, spinning={spin})",
-        #     c=credits,
-        #     spin=spinning,
-        #     when=base_done,
-        # )
 
         return jnp.logical_or(base_done, sanity_done)
 
