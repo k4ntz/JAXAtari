@@ -98,6 +98,7 @@ class Enemy(NamedTuple):
     enemy_vel: jnp.ndarray  # shape (N,2): x/y velocities
     enemy_platform_idx: jnp.ndarray  # shape (N,): index of current platform the enemy is on
     enemy_timer: jnp.ndarray  # shape (N,): frame count until next patrol/teleport decision
+    enemy_weak_timer: jnp.ndarray  # shape (N,): frames remaining while weak (counts down from 776)
     enemy_initial_sides: jnp.ndarray  # shape (N,): 0=spawned on left, 1=spawned on right
     enemy_active: jnp.ndarray  # shape (N,), int32: 1=active/spawned, 0=inactive slot
     enemy_init_positions: jnp.ndarray  # shape (N,2): prototype spawn positions for enemies (use [0]=right, [1]=left)
@@ -750,7 +751,7 @@ class MarioBrosRenderer(JAXGameRenderer):
                 def skip_draw(_):
                     return img
 
-                return lax.cond(active_i != 0, do_draw, skip_draw, operand=None)
+                return lax.cond(state.game.enemy.enemy_active[i] == 1, do_draw, skip_draw, operand=None)
 
             image = lax.fori_loop(0, state.game.enemy.enemy_pos.shape[0], draw_enemy, image)
 
@@ -882,6 +883,7 @@ class JaxMarioBros(JaxEnvironment[
                     enemy_vel=jnp.array([[0.5, 0.0], [-0.5, 0.0], [0.5, 0.0]]),
                     enemy_platform_idx=jnp.array([1, 2, 1]),
                     enemy_timer=jnp.array([0, 0, 0]),
+                    enemy_weak_timer=jnp.array([0, 0, 0]),  # keep zeros for each enemy at start
                     enemy_initial_sides=jnp.array([0, 1, 0]),
                     enemy_active=jnp.array([1, 0, 0], dtype=jnp.int32),  # only first enemy active at start
                     enemy_init_positions=jnp.array([enemy1_pos, enemy2_pos, enemy1_pos]),
@@ -1027,8 +1029,11 @@ class JaxMarioBros(JaxEnvironment[
                 # active==1 means fully active; 2 means pending (spawned this frame, not yet occupying for checks); 0 means free
                 active_now = (enemy.enemy_active == 1)
 
-                TOP_PLATFORM_IDX = jnp.int32(1)
-                is_on_top = jnp.logical_and(enemy.enemy_platform_idx == TOP_PLATFORM_IDX, active_now)
+                TOP_PLATFORM_IDX = jnp.array([1, 2], dtype=jnp.int32)
+                is_on_top = jnp.logical_and(
+                    jnp.isin(enemy.enemy_platform_idx, TOP_PLATFORM_IDX),
+                    active_now
+                )
                 top_present = jnp.any(is_on_top)
 
                 # find first free slot (enemy_active == 0)
@@ -1046,7 +1051,7 @@ class JaxMarioBros(JaxEnvironment[
                 def do_spawn(ep, ev, pidx, timer, init_sides, active_arr, status, next_side):
                     ep2 = ep.at[idx_to_spawn].set(spawn_pos)
                     ev2 = ev.at[idx_to_spawn].set(spawn_vel)
-                    pidx2 = pidx.at[idx_to_spawn].set(TOP_PLATFORM_IDX)
+                    pidx2 = pidx.at[idx_to_spawn].set(1)
                     timer2 = timer.at[idx_to_spawn].set(0)
                     init_sides2 = init_sides.at[idx_to_spawn].set(spawn_side)
                     # mark pending (2) — not drawn / not counted as occupying top
@@ -1058,7 +1063,15 @@ class JaxMarioBros(JaxEnvironment[
                 def no_spawn(ep, ev, pidx, timer, init_sides, active_arr, status, next_side):
                     return ep, ev, pidx, timer, init_sides, active_arr, status, next_side
 
-                spawn_cond = jnp.logical_and(jnp.logical_not(top_present), any_free)
+                # don't spawn if there's any active or pending enemy on top
+                pending_mask = (enemy.enemy_active == 2)
+                top_pending = jnp.any(
+                    jnp.logical_and(
+                        jnp.isin(enemy.enemy_platform_idx, TOP_PLATFORM_IDX),
+                        pending_mask
+                    )
+                )
+                spawn_cond = jnp.logical_and(jnp.logical_not(jnp.logical_or(top_present, top_pending)), any_free)
 
                 (ep2, ev2, pidx2, timer2, init_sides2, active2, status2, next_spawn_side) = jax.lax.cond(
                     spawn_cond,
@@ -1073,11 +1086,6 @@ class JaxMarioBros(JaxEnvironment[
                 # enemy_step expects mask==True for INACTIVE slots (legacy). Pass True where slot is inactive (active2 == 0).
                 mask_for_step = (active2 == 1)
 
-                jax.debug.print("DBG-BEFORE ep2.x = {}", ep2[:, 0])
-                jax.debug.print("DBG-BEFORE ep2.y = {}", ep2[:, 1])
-                jax.debug.print("DBG-BEFORE mask_for_step = {}", mask_for_step)
-                jax.debug.print("DBG-BEFORE status2 = {}", status2)
-
                 ep, ev, idx, timer, sides, status = enemy_step(
                     ep2, ev2, pidx2, timer2,
                     PLATFORMS,
@@ -1087,21 +1095,21 @@ class JaxMarioBros(JaxEnvironment[
                     status2
                 )
 
-                jax.debug.print("DBG-AFTER ep.x = {}", ep[:, 0])
-                jax.debug.print("DBG-AFTER ev.x = {}", ev[:, 0])
-                jax.debug.print("DBG-AFTER idx = {}", idx)
-                jax.debug.print("DBG-AFTER moved = {}", ep[:, 0] - ep2[:, 0])
-
                 # If we spawned this frame, preserve spawn position/platform for this frame (prevent repeated spawning)
-                idx = jax.lax.cond(spawn_cond, lambda arr: arr.at[idx_to_spawn].set(TOP_PLATFORM_IDX), lambda arr: arr,
-                                   idx)
+                idx = jax.lax.cond(spawn_cond, lambda arr: arr.at[idx_to_spawn].set(1), lambda arr: arr, idx)
 
                 # Maintain 0=free,1=active,2=pending semantics
                 new_enemy_active = active2
 
-                # Promote pending(2) -> active(1) only if after enemy_step there is still NO fully-active enemy on top
-                top_present_after = jnp.any(jnp.logical_and(idx == TOP_PLATFORM_IDX, new_enemy_active == 1))
-                promote_mask = jnp.logical_and(new_enemy_active == 2, jnp.logical_not(top_present_after))
+                # Promote pending (2) -> active (1) only when no *other* enemy (active or pending) is on top.
+                idx_top_mask = jnp.logical_and(
+                    jnp.isin(idx, TOP_PLATFORM_IDX),
+                    new_enemy_active != 0
+                )
+                total_top = jnp.sum(idx_top_mask.astype(jnp.int32))
+                self_on_top = idx_top_mask.astype(jnp.int32)
+                others_on_top = total_top - self_on_top
+                promote_mask = jnp.logical_and(new_enemy_active == 2, others_on_top == 0)
                 new_enemy_active = jnp.where(promote_mask, jnp.int32(1), new_enemy_active)
 
                 # Deactivate permanently-dead enemies (status == 3)
@@ -1151,6 +1159,29 @@ class JaxMarioBros(JaxEnvironment[
                     new_enemy_status
                 )
 
+                # --- Weak-state countdown logic (start/reset when enemy becomes weak, count down while weak) ---
+                # prev_weak / prev_status are from the previous frame (before this frame's toggles/hits)
+                prev_weak = enemy.enemy_weak_timer
+                prev_status = enemy.enemy_status
+
+                # Use the *final* status for this frame (after bump/toggle/hit) to decide timer behavior.
+                final_status = enemy_status_after_hit
+
+                # If an enemy just became weak this frame (was not 1, now 1), set timer to 776.
+                start_weak_mask = (prev_status != 1) & (final_status == 1)
+                weak_timer = jnp.where(start_weak_mask, jnp.array(776, dtype=jnp.int32), prev_weak)
+
+                # For enemies already weak, decrement timer each frame (clamp at 0).
+                weak_timer = jnp.where(final_status == 1, jnp.maximum(weak_timer - 1, 0), weak_timer)
+
+                # If timer reached 0 while still weak, revert to strong (status==2).
+                revert_mask = (final_status == 1) & (weak_timer == 0)
+                final_status = jnp.where(revert_mask, jnp.array(2, dtype=jnp.int32), final_status)
+
+                # Replace enemy_status_after_hit with the possibly-updated final_status
+                enemy_status_after_hit = final_status
+                # -------------------------------------------------------------------------------
+
                 # --- Score tracking: reward for defeating weak enemies ---
                 was_weak = (collided_mask) & (new_enemy_status == 1)
                 now_dead = (collided_mask) & (enemy_status_after_hit == 3)
@@ -1170,6 +1201,7 @@ class JaxMarioBros(JaxEnvironment[
                     enemy_vel=ev,
                     enemy_platform_idx=idx,
                     enemy_timer=timer,
+                    enemy_weak_timer=weak_timer,
                     enemy_initial_sides=sides,
                     enemy_active=new_enemy_active,
                     enemy_init_positions=state.game.enemy.enemy_init_positions,
@@ -1227,6 +1259,3 @@ if __name__ == "__main__":
         clock.tick(60)
 
     pygame.quit()
-
-
-

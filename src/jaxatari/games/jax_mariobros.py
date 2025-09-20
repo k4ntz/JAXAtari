@@ -21,6 +21,8 @@ MOVE_SPEED = 0.5
 ASCEND_VY = -1.0  # ↑ 2 px / frame
 DESCEND_VY = 1.0  # ↓ 2 px / frame
 ASCEND_FRAMES = 21 * 2  # 42 px tall jump (21 × 2)
+# Enemy horizontal speed in pixels per frame (1 px every 8 frames = 0.125 px/frame)
+ENEMY_MOVE_SPEED = 0.125
 
 # -------- Movement params ----------------------------------
 movement_pattern = jnp.array([1, 1, 0, 1, 0, 1, 1, 0, 1, 1, 0], dtype=jnp.float32)
@@ -97,6 +99,7 @@ class Enemy(NamedTuple):
     enemy_vel: jnp.ndarray  # shape (N,2): x/y velocities
     enemy_platform_idx: jnp.ndarray  # shape (N,): index of current platform the enemy is on
     enemy_timer: jnp.ndarray  # shape (N,): frame count until next patrol/teleport decision
+    enemy_weak_timer: jnp.ndarray  # shape (N,): frames remaining while weak (counts down from 776)
     enemy_initial_sides: jnp.ndarray  # shape (N,): 0=spawned on left, 1=spawned on right
     enemy_active: jnp.ndarray  # shape (N,), int32: 1=active/spawned, 0=inactive slot
     enemy_init_positions: jnp.ndarray  # shape (N,2): prototype spawn positions for enemies (use [0]=right, [1]=left)
@@ -321,7 +324,11 @@ def enemy_step(
 
         # Fix: If recovering from weak state (status == 2), resume movement
         recovering = status == 2
-        vx = jnp.where(recovering & (vx == 0.0), jnp.where(side == 1, -0.5, 0.5), vx)
+        vx = jnp.where(
+            recovering & (vx == 0.0),
+            jnp.where(side == 1, -ENEMY_MOVE_SPEED, ENEMY_MOVE_SPEED),
+            vx
+        )
 
         plat = platforms[p_idx]
         plat_x, plat_y, plat_w, plat_h = plat
@@ -867,9 +874,10 @@ class JaxMarioBros(JaxEnvironment[
             game=GameState(
                 enemy=Enemy(
                     enemy_pos=jnp.array([enemy1_pos, enemy2_pos, enemy1_pos]),  # 3rd enemy uses enemy1 prototype
-                    enemy_vel=jnp.array([[0.5, 0.0], [-0.5, 0.0], [0.5, 0.0]]),
+                    enemy_vel=jnp.array([[ENEMY_MOVE_SPEED, 0.0], [-ENEMY_MOVE_SPEED, 0.0], [ENEMY_MOVE_SPEED, 0.0]]),
                     enemy_platform_idx=jnp.array([1, 2, 1]),
                     enemy_timer=jnp.array([0, 0, 0]),
+                    enemy_weak_timer=jnp.array([0, 0, 0]),  # keep zeros for each enemy at start
                     enemy_initial_sides=jnp.array([0, 1, 0]),
                     enemy_active=jnp.array([1, 0, 0], dtype=jnp.int32),  # only first enemy active at start
                     enemy_init_positions=jnp.array([enemy1_pos, enemy2_pos, enemy1_pos]),
@@ -1026,7 +1034,9 @@ class JaxMarioBros(JaxEnvironment[
 
                 spawn_side = state.game.next_spawn_side
                 spawn_pos = jnp.where(spawn_side == 1, right_proto, left_proto)
-                spawn_vel = jnp.where(spawn_side == 1, jnp.array([0.5, 0.0]), jnp.array([-0.5, 0.0]))
+                spawn_vel = jnp.where(spawn_side == 1,
+                                      jnp.array([ENEMY_MOVE_SPEED, 0.0]),
+                                      jnp.array([-ENEMY_MOVE_SPEED, 0.0]))
 
                 def do_spawn(ep, ev, pidx, timer, init_sides, active_arr, status, next_side):
                     ep2 = ep.at[idx_to_spawn].set(spawn_pos)
@@ -1142,6 +1152,29 @@ class JaxMarioBros(JaxEnvironment[
                     new_enemy_status
                 )
 
+                # --- Weak-state countdown logic (start/reset when enemy becomes weak, count down while weak) ---
+                # prev_weak / prev_status are from the previous frame (before this frame's toggles/hits)
+                prev_weak = enemy.enemy_weak_timer
+                prev_status = enemy.enemy_status
+
+                # Use the *final* status for this frame (after bump/toggle/hit) to decide timer behavior.
+                final_status = enemy_status_after_hit
+
+                # If an enemy just became weak this frame (was not 1, now 1), set timer to 776.
+                start_weak_mask = (prev_status != 1) & (final_status == 1)
+                weak_timer = jnp.where(start_weak_mask, jnp.array(776, dtype=jnp.int32), prev_weak)
+
+                # For enemies already weak, decrement timer each frame (clamp at 0).
+                weak_timer = jnp.where(final_status == 1, jnp.maximum(weak_timer - 1, 0), weak_timer)
+
+                # If timer reached 0 while still weak, revert to strong (status==2).
+                revert_mask = (final_status == 1) & (weak_timer == 0)
+                final_status = jnp.where(revert_mask, jnp.array(2, dtype=jnp.int32), final_status)
+
+                # Replace enemy_status_after_hit with the possibly-updated final_status
+                enemy_status_after_hit = final_status
+                # -------------------------------------------------------------------------------
+
                 # --- Score tracking: reward for defeating weak enemies ---
                 was_weak = (collided_mask) & (new_enemy_status == 1)
                 now_dead = (collided_mask) & (enemy_status_after_hit == 3)
@@ -1161,6 +1194,7 @@ class JaxMarioBros(JaxEnvironment[
                     enemy_vel=ev,
                     enemy_platform_idx=idx,
                     enemy_timer=timer,
+                    enemy_weak_timer=weak_timer,
                     enemy_initial_sides=sides,
                     enemy_active=new_enemy_active,
                     enemy_init_positions=state.game.enemy.enemy_init_positions,
