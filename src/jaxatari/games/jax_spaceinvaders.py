@@ -75,7 +75,7 @@ class SpaceInvadersConstants(NamedTuple):
     UFO_SCORE: int = 200
     UFO_Y: int = 11
     UFO_START: int = 960
-    UFO_MOVEMENT_RATE: int = 1
+    UFO_MOVEMENT_RATE: int = 4
     UFO_SIZE: Tuple[int, int] = (7, 8)
 
     PLAYER_Y: int = HEIGHT - PLAYER_SIZE[1] - BACKGROUND_SIZE[1]
@@ -601,7 +601,7 @@ class JaxSpaceInvaders(JaxEnvironment[SpaceInvadersState, SpaceInvadersObservati
         dir_random = jax.random.choice(key, jnp.array([1, -1]))
 
         new_ufo_state, new_ufo_dir, new_ufo_x = jax.lax.cond(
-            state.step_counter % 300 == 0,
+            state.step_counter % self.consts.UFO_START == 0,
             lambda: (1, dir_random, jnp.argmax(jnp.array([0, dir_random * (-1)])) * self.consts.WIDTH),
             lambda: (
                 jax.lax.cond(
