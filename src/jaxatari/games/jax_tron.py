@@ -2958,8 +2958,11 @@ class JaxTron(JaxEnvironment[TronState, TronObservation, TronInfo, TronConstants
         player_h_max = int(self.player_h)
         enemy_w_max = int(self.enemy_w)  # enemies use player-sized boxes for now
         enemy_h_max = int(self.enemy_h)
-        disc_w_max = int(c.disc_size)
-        disc_h_max = int(c.disc_size)
+        out_w, out_h = c.disc_size_out
+        ret_w, ret_h = c.disc_size_ret
+        disc_w_max = int(max(out_w, ret_w))
+        disc_h_max = int(max(out_h, ret_h))
+
         door_w_max = int(c.door_w)
         door_h_max = int(c.door_h)
 
