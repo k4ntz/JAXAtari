@@ -12,7 +12,6 @@ from jaxatari.environment import JaxEnvironment, JAXAtariAction as Action
 
 # Constants for the game environment
 class HumanCannonballConstants(NamedTuple):
-    #SCALING_FACTOR = 3  # Not used currently
     WIDTH: int = 160
     HEIGHT: int = 210
 
@@ -213,6 +212,8 @@ class JaxHumanCannonball(JaxEnvironment[HumanCannonballState, HumanCannonballObs
             Action.LEFT,
             Action.UP,
             Action.DOWN,
+            Action.UPLEFT,
+            Action.DOWNLEFT
         ]
         self.obs_size = 4+4+1+1+1+1
 
@@ -411,6 +412,34 @@ class JaxHumanCannonball(JaxEnvironment[HumanCannonballState, HumanCannonballObs
             operand=new_angle,
         )
 
+        new_angle = jax.lax.cond(
+            jnp.logical_and(
+                jnp.logical_and(
+                    # If the human is not launched and the action 'UPLEFT' has been held for ANGLE_BUFFER steps
+                    jnp.logical_not(state_human_launched),
+                    action == Action.UPLEFT
+                ),
+                angle_counter >= self.consts.ANGLE_BUFFER
+            ),
+            lambda s: s + 10,  # Increment the angle by 10
+            lambda s: s,  # Else, leave it unchanged
+            operand=new_angle,
+        )
+
+        new_angle = jax.lax.cond(
+            jnp.logical_and(
+                jnp.logical_and(
+                    # If the human is not launched and the action 'DOWNLEFT' has been held for ANGLE_BUFFER steps
+                    jnp.logical_not(state_human_launched),
+                    action == Action.DOWNLEFT
+                ),
+                angle_counter >= self.consts.ANGLE_BUFFER
+            ),
+            lambda s: s - 10,  # Decrement the angle by 10
+            lambda s: s,  # Else, leave it unchanged
+            operand=new_angle,
+        )
+
         # Ensure the angle is within the valid range
         new_angle = jnp.clip(new_angle, self.consts.ANGLE_MIN, self.consts.ANGLE_MAX)
 
@@ -465,9 +494,14 @@ class JaxHumanCannonball(JaxEnvironment[HumanCannonballState, HumanCannonballObs
 
         # Step 1: Update the angle of the cannon
         new_angle_counter = jax.lax.cond(
-            jnp.logical_or(  # If the action is UP or DOWN
-                action == Action.UP,
-                action == Action.DOWN
+            jnp.logical_or(         # If the action is UP, DOWN, UPLEFT or DOWNLEFT
+                jnp.logical_or(
+                    action == Action.UP,
+                    action == Action.DOWN),
+                jnp.logical_or(
+                    action == Action.UPLEFT,
+                    action == Action.DOWNLEFT
+                )
             ),
             lambda s: s + 1,  # Increment the angle counter
             lambda _: 0,  # Else, reset it
@@ -749,7 +783,7 @@ class JaxHumanCannonball(JaxEnvironment[HumanCannonballState, HumanCannonballObs
         ])
 
     def action_space(self) -> spaces.Discrete:
-        return spaces.Discrete(6)
+        return spaces.Discrete(len(self.action_set))
 
     def observation_space(self) -> spaces:
         return spaces.Dict({
