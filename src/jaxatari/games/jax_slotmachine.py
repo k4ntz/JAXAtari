@@ -1072,8 +1072,8 @@ class JaxSlotMachine(JaxEnvironment[SlotMachineState, SlotMachineObservation, Sl
         cannot_afford = credits < cfg.min_wager
 
         # Sanity check: end episodes quickly so the pipeline stays happy
-        credits_limit = credits > 99
-        spins_limit = state.spins_played > 50
+        credits_limit = credits > 50
+        spins_limit = state.spins_played > 25
 
         base_done = jnp.logical_or(max_credits_reached, jnp.logical_and(cannot_afford, ~spinning))
         sanity_done = jnp.logical_or(credits_limit, spins_limit)
