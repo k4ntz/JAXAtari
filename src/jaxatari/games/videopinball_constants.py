@@ -152,7 +152,6 @@ class VideoPinballConstants(NamedTuple):
     WIDTH = 160
     HEIGHT = 210
 
-
     # Physics constants
     # TODO: check if these are correct
     GRAVITY = 0.03  # 0.12
@@ -161,9 +160,13 @@ class VideoPinballConstants(NamedTuple):
     MAX_REFLECTIONS_PER_GAMESTEP = 10  # max collisions to process per timestep
     BALL_MAX_SPEED = 3.5
     BALL_MIN_SPEED = 0.35
-    NUDGE_EFFECT_INTERVAL = 1  # Num steps in between nudge changing 
-    NUDGE_EFFECT_AMOUNT = jnp.array(0.3).astype(jnp.float32)  # Amount of nudge effect applied to the ball's velocity
-    TILT_COUNT_INCREASE_INTERVAL = jnp.array(4).astype(jnp.int32)  # Number of steps after which the tilt counter increases
+    NUDGE_EFFECT_INTERVAL = 1  # Num steps in between nudge changing
+    NUDGE_EFFECT_AMOUNT = jnp.array(0.3).astype(
+        jnp.float32
+    )  # Amount of nudge effect applied to the ball's velocity
+    TILT_COUNT_INCREASE_INTERVAL = jnp.array(4).astype(
+        jnp.int32
+    )  # Number of steps after which the tilt counter increases
     TILT_COUNT_DECREASE_INTERVAL = TILT_COUNT_INCREASE_INTERVAL
     TILT_COUNT_TILT_MODE_ACTIVE = jnp.array(512).astype(jnp.int32)
     FLIPPER_MAX_ANGLE = 3
@@ -178,18 +181,6 @@ class VideoPinballConstants(NamedTuple):
     TARGET_RESPAWN_COOLDOWN = 16
     SPECIAL_TARGET_ACTIVE_DURATION = 257
     SPECIAL_TARGET_INACTIVE_DURATION = 787
-
-    # Game layout constants
-    # TODO: check if these are correct
-    BALL_SIZE = (2, 4)
-    FLIPPER_LEFT_POS = (30, 180)
-    FLIPPER_RIGHT_POS = (110, 180)
-    PLUNGER_POS = (150, 120)
-    PLUNGER_MAX_HEIGHT = 20  # Taken from RAM values (67-87)
-    INVISIBLE_BLOCK_MEAN_REFLECTION_FACTOR = (
-        0.001  # 8 times the plunger power is added to ball_vel_x
-    )
-
 
     # Background color and object colors
     BG_COLOR = 0, 0, 0
@@ -384,15 +375,13 @@ class VideoPinballConstants(NamedTuple):
     # GROUP5_COLOR_CYCLING = jnp.array([(214, 214, 214), (192, 192, 192), (170, 170, 170), (142, 142, 142),
     #                                   (111, 111, 111), (74, 74, 74), (0, 0, 0), (252, 252, 84)])
 
-
     # Pygame window dimensions
     WINDOW_WIDTH = 160 * 3
     WINDOW_HEIGHT = 210 * 3
 
-
     # Outer objects (walls etc.) Positions/dimensions
-    BALL_START_X = jnp.array(149.0) # jnp.array(70.)# 
-    BALL_START_Y = jnp.array(129.0) # jnp.array(180.)# 
+    BALL_START_X = jnp.array(149.0)  # jnp.array(70.)#
+    BALL_START_Y = jnp.array(129.0)  # jnp.array(180.)#
     BALL_START_DIRECTION = jnp.array(0)
 
     GAME_BOTTOM_Y = 191
@@ -459,7 +448,7 @@ class VideoPinballConstants(NamedTuple):
     FLIPPER_LEFT_PIVOT_X = jnp.array(64)
     FLIPPER_RIGHT_PIVOT_X = jnp.array(96)  # pixel + 1 to not leave a gap
     FLIPPER_PIVOT_Y_TOP = jnp.array(184)
-    FLIPPER_PIVOT_Y_BOT = jnp.array(190)  # pixel + 1 
+    FLIPPER_PIVOT_Y_BOT = jnp.array(190)  # pixel + 1
 
     FLIPPER_00_TOP_END_Y = jnp.array(190)
     FLIPPER_00_BOT_END_Y = jnp.array(192)  # pixel + 1
@@ -470,9 +459,13 @@ class VideoPinballConstants(NamedTuple):
     FLIPPER_48_TOP_END_Y = jnp.array(177)
     FLIPPER_48_BOT_END_Y = jnp.array(179)  # pixel + 1
 
-    FLIPPER_LEFT_00_END_X = FLIPPER_LEFT_16_END_X = FLIPPER_LEFT_32_END_X = jnp.array(77)  # pixel + 1
+    FLIPPER_LEFT_00_END_X = FLIPPER_LEFT_16_END_X = FLIPPER_LEFT_32_END_X = jnp.array(
+        77
+    )  # pixel + 1
     FLIPPER_LEFT_48_END_X = jnp.array(76)  # pixel + 1
-    FLIPPER_RIGHT_00_END_X = FLIPPER_RIGHT_16_END_X = FLIPPER_RIGHT_32_END_X = jnp.array(83)
+    FLIPPER_RIGHT_00_END_X = FLIPPER_RIGHT_16_END_X = FLIPPER_RIGHT_32_END_X = (
+        jnp.array(83)
+    )
     FLIPPER_RIGHT_48_END_X = jnp.array(84)
 
     # Spinner Bounding Boxes
@@ -1382,7 +1375,6 @@ class VideoPinballConstants(NamedTuple):
         variant=jnp.array(7),
     )
 
-
     RIGHT_FLIPPER_00_BOT_SCENE_OBJECT = SceneObject(
         hit_box_height=FLIPPER_PIVOT_Y_BOT - FLIPPER_00_BOT_END_Y,
         hit_box_width=FLIPPER_RIGHT_PIVOT_X - FLIPPER_RIGHT_00_END_X,
@@ -1581,57 +1573,62 @@ class VideoPinballConstants(NamedTuple):
                     scene_object.score_type,
                     scene_object.variant,
                 ],
-                dtype=jnp.int32
+                dtype=jnp.int32,
             )
             for scene_object in ALL_SCENE_OBJECTS_LIST
-           if scene_object.reflecting == 1
+            if scene_object.reflecting == 1
         ]
     ).squeeze()
     NON_REFLECTING_SCENE_OBJECTS = jnp.stack(
-       [
-           jnp.array([
-               scene_object.hit_box_width,
-               scene_object.hit_box_height,
-               scene_object.hit_box_x_offset,
-               scene_object.hit_box_y_offset,
-               scene_object.reflecting,
-               scene_object.score_type,
-               scene_object.variant,
-           ], dtype=jnp.int32) for scene_object in ALL_SCENE_OBJECTS_LIST
-           if scene_object.reflecting == 0
-       ]
+        [
+            jnp.array(
+                [
+                    scene_object.hit_box_width,
+                    scene_object.hit_box_height,
+                    scene_object.hit_box_x_offset,
+                    scene_object.hit_box_y_offset,
+                    scene_object.reflecting,
+                    scene_object.score_type,
+                    scene_object.variant,
+                ],
+                dtype=jnp.int32,
+            )
+            for scene_object in ALL_SCENE_OBJECTS_LIST
+            if scene_object.reflecting == 0
+        ]
     ).squeeze()
     _FLIPPERS_SORTED = [
         LEFT_FLIPPER_00_BOT_SCENE_OBJECT,
         LEFT_FLIPPER_16_BOT_SCENE_OBJECT,
         LEFT_FLIPPER_32_BOT_SCENE_OBJECT,
         LEFT_FLIPPER_48_BOT_SCENE_OBJECT,
-
         LEFT_FLIPPER_00_TOP_SCENE_OBJECT,
         LEFT_FLIPPER_16_TOP_SCENE_OBJECT,
         LEFT_FLIPPER_32_TOP_SCENE_OBJECT,
         LEFT_FLIPPER_48_TOP_SCENE_OBJECT,
-
         RIGHT_FLIPPER_00_BOT_SCENE_OBJECT,
         RIGHT_FLIPPER_16_BOT_SCENE_OBJECT,
         RIGHT_FLIPPER_32_BOT_SCENE_OBJECT,
         RIGHT_FLIPPER_48_BOT_SCENE_OBJECT,
-
         RIGHT_FLIPPER_00_TOP_SCENE_OBJECT,
         RIGHT_FLIPPER_16_TOP_SCENE_OBJECT,
         RIGHT_FLIPPER_32_TOP_SCENE_OBJECT,
         RIGHT_FLIPPER_48_TOP_SCENE_OBJECT,
     ]
     FLIPPERS = jnp.stack(
-       [
-           jnp.array([
-               scene_object.hit_box_width,
-               scene_object.hit_box_height,
-               scene_object.hit_box_x_offset,
-               scene_object.hit_box_y_offset,
-               scene_object.reflecting,
-               scene_object.score_type,
-               scene_object.variant,
-           ], dtype=jnp.int32) for scene_object in _FLIPPERS_SORTED
-       ]
+        [
+            jnp.array(
+                [
+                    scene_object.hit_box_width,
+                    scene_object.hit_box_height,
+                    scene_object.hit_box_x_offset,
+                    scene_object.hit_box_y_offset,
+                    scene_object.reflecting,
+                    scene_object.score_type,
+                    scene_object.variant,
+                ],
+                dtype=jnp.int32,
+            )
+            for scene_object in _FLIPPERS_SORTED
+        ]
     ).squeeze()

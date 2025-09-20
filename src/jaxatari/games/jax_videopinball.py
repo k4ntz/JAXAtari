@@ -425,32 +425,86 @@ class JaxVideoPinball(
 
         # There are two scene objects for every flipper angle
         left_flipper_bounding_boxes = (
-            self.consts.FLIPPERS[state.left_flipper_angle], self.consts.FLIPPERS[state.left_flipper_angle + 4]
+            self.consts.FLIPPERS[state.left_flipper_angle],
+            self.consts.FLIPPERS[state.left_flipper_angle + 4],
         )
         right_flipper_bounding_boxes = (
-            self.consts.FLIPPERS[state.right_flipper_angle + 8], self.consts.FLIPPERS[state.right_flipper_angle + 12]
+            self.consts.FLIPPERS[state.right_flipper_angle + 8],
+            self.consts.FLIPPERS[state.right_flipper_angle + 12],
         )
-        left_flipper_x = jnp.min(jnp.array([left_flipper_bounding_boxes[0][2], left_flipper_bounding_boxes[1][2]]))
-        left_flipper_w = jnp.max(jnp.array([
-            left_flipper_bounding_boxes[0][2] + left_flipper_bounding_boxes[0][0],
-            left_flipper_bounding_boxes[1][2] + left_flipper_bounding_boxes[1][0],
-        ])) - left_flipper_x
-        left_flipper_y = jnp.min(jnp.array([left_flipper_bounding_boxes[0][3], left_flipper_bounding_boxes[1][3]]))
-        left_flipper_h = jnp.max(jnp.array([
-            left_flipper_bounding_boxes[0][3] + left_flipper_bounding_boxes[0][1],
-            left_flipper_bounding_boxes[1][3] + left_flipper_bounding_boxes[1][1],
-        ])) - left_flipper_y
+        left_flipper_x = jnp.min(
+            jnp.array(
+                [left_flipper_bounding_boxes[0][2], left_flipper_bounding_boxes[1][2]]
+            )
+        )
+        left_flipper_w = (
+            jnp.max(
+                jnp.array(
+                    [
+                        left_flipper_bounding_boxes[0][2]
+                        + left_flipper_bounding_boxes[0][0],
+                        left_flipper_bounding_boxes[1][2]
+                        + left_flipper_bounding_boxes[1][0],
+                    ]
+                )
+            )
+            - left_flipper_x
+        )
+        left_flipper_y = jnp.min(
+            jnp.array(
+                [left_flipper_bounding_boxes[0][3], left_flipper_bounding_boxes[1][3]]
+            )
+        )
+        left_flipper_h = (
+            jnp.max(
+                jnp.array(
+                    [
+                        left_flipper_bounding_boxes[0][3]
+                        + left_flipper_bounding_boxes[0][1],
+                        left_flipper_bounding_boxes[1][3]
+                        + left_flipper_bounding_boxes[1][1],
+                    ]
+                )
+            )
+            - left_flipper_y
+        )
 
-        right_flipper_x = jnp.min(jnp.array([right_flipper_bounding_boxes[0][2], right_flipper_bounding_boxes[1][2]]))
-        right_flipper_w = jnp.max(jnp.array([
-            right_flipper_bounding_boxes[0][2] + right_flipper_bounding_boxes[0][0],
-            right_flipper_bounding_boxes[1][2] + right_flipper_bounding_boxes[1][0],
-        ])) - right_flipper_x
-        right_flipper_y = jnp.min(jnp.array([right_flipper_bounding_boxes[0][3], right_flipper_bounding_boxes[1][3]]))
-        right_flipper_h = jnp.max(jnp.array([
-            right_flipper_bounding_boxes[0][3] + right_flipper_bounding_boxes[0][1],
-            right_flipper_bounding_boxes[1][3] + right_flipper_bounding_boxes[1][1],
-        ])) - right_flipper_y
+        right_flipper_x = jnp.min(
+            jnp.array(
+                [right_flipper_bounding_boxes[0][2], right_flipper_bounding_boxes[1][2]]
+            )
+        )
+        right_flipper_w = (
+            jnp.max(
+                jnp.array(
+                    [
+                        right_flipper_bounding_boxes[0][2]
+                        + right_flipper_bounding_boxes[0][0],
+                        right_flipper_bounding_boxes[1][2]
+                        + right_flipper_bounding_boxes[1][0],
+                    ]
+                )
+            )
+            - right_flipper_x
+        )
+        right_flipper_y = jnp.min(
+            jnp.array(
+                [right_flipper_bounding_boxes[0][3], right_flipper_bounding_boxes[1][3]]
+            )
+        )
+        right_flipper_h = (
+            jnp.max(
+                jnp.array(
+                    [
+                        right_flipper_bounding_boxes[0][3]
+                        + right_flipper_bounding_boxes[0][1],
+                        right_flipper_bounding_boxes[1][3]
+                        + right_flipper_bounding_boxes[1][1],
+                    ]
+                )
+            )
+            - right_flipper_y
+        )
 
         left_flipper = EntityState(
             x=left_flipper_x,
@@ -467,18 +521,23 @@ class JaxVideoPinball(
             active=jnp.array(1),
         )
 
-        flippers = jnp.array([
-            jnp.array([
-                entity.x,
-                entity.y,
-                entity.w,
-                entity.h,
-                entity.active,
-            ]) for entity in [left_flipper, right_flipper]
-        ])
+        flippers = jnp.array(
+            [
+                jnp.array(
+                    [
+                        entity.x,
+                        entity.y,
+                        entity.w,
+                        entity.h,
+                        entity.active,
+                    ]
+                )
+                for entity in [left_flipper, right_flipper]
+            ]
+        )
 
         # Left, Middle, Right Diamonds / Lit up Targets
-        
+
         # Left Target
         left_target = EntityState(
             x=self.consts.LEFT_LIT_UP_TARGET_LARGE_HORIZONTAL_SCENE_OBJECT.hit_box_x_offset,
@@ -514,33 +573,176 @@ class JaxVideoPinball(
             active=state.active_targets[3].astype(jnp.int32),
         )
 
-        targets = jnp.array([
-            jnp.array([
-                entity.x,
-                entity.y,
-                entity.w,
-                entity.h,
-                entity.active,
-            ]) for entity in [left_target, middle_target, right_target, special_target]
-        ])
-        
+        targets = jnp.array(
+            [
+                jnp.array(
+                    [
+                        entity.x,
+                        entity.y,
+                        entity.w,
+                        entity.h,
+                        entity.active,
+                    ]
+                )
+                for entity in [left_target, middle_target, right_target, special_target]
+            ]
+        )
+
         # Spinners
         # Left Spinner
         left_spinner = EntityState(
-            x=self.consts.LEFT_SPINNER_SCENE_OBJECT.hit_box_x_offset,
-
-            
-        spinners = ...
-        bumpers = 
-        special_lit_up_target = ...
-        left_lit_up_target = ...
-        middle_lit_up_target = ...
-        right_lit_up_target = ...
-        left_tilt_mode_hole_plug = ...
-        right_tilt_mode_hole_plug = ...
-        plunger = EntityState(
+            x=self.consts.LEFT_SPINNER_LEFT_POSITION_JOINED_PART_SCENE_OBJECT.hit_box_x_offset,
+            y=self.consts.LEFT_SPINNER_TOP_POSITION_JOINED_PART_SCENE_OBJECT.hit_box_y_offset,
+            w=self.consts.LEFT_SPINNER_RIGHT_POSITION_JOINED_PART_SCENE_OBJECT.hit_box_x_offset
+            + self.consts.LEFT_SPINNER_RIGHT_POSITION_JOINED_PART_SCENE_OBJECT.hit_box_width
+            - self.consts.LEFT_SPINNER_LEFT_POSITION_JOINED_PART_SCENE_OBJECT.hit_box_x_offset,
+            h=self.consts.LEFT_SPINNER_BOTTOM_POSITION_JOINED_PART_SCENE_OBJECT.hit_box_y_offset
+            + self.consts.LEFT_SPINNER_BOTTOM_POSITION_JOINED_PART_SCENE_OBJECT.hit_box_height
+            - self.consts.LEFT_SPINNER_TOP_POSITION_JOINED_PART_SCENE_OBJECT.hit_box_y_offset,
+            active=jnp.array(1),
         )
-        
+
+        # Right Spinner
+        right_spinner = EntityState(
+            x=self.consts.RIGHT_SPINNER_LEFT_POSITION_JOINED_PART_SCENE_OBJECT.hit_box_x_offset,
+            y=self.consts.RIGHT_SPINNER_TOP_POSITION_JOINED_PART_SCENE_OBJECT.hit_box_y_offset,
+            w=self.consts.RIGHT_SPINNER_RIGHT_POSITION_JOINED_PART_SCENE_OBJECT.hit_box_x_offset
+            + self.consts.RIGHT_SPINNER_RIGHT_POSITION_JOINED_PART_SCENE_OBJECT.hit_box_width
+            - self.consts.RIGHT_SPINNER_LEFT_POSITION_JOINED_PART_SCENE_OBJECT.hit_box_x_offset,
+            h=self.consts.RIGHT_SPINNER_BOTTOM_POSITION_JOINED_PART_SCENE_OBJECT.hit_box_y_offset
+            + self.consts.RIGHT_SPINNER_BOTTOM_POSITION_JOINED_PART_SCENE_OBJECT.hit_box_height
+            - self.consts.RIGHT_SPINNER_TOP_POSITION_JOINED_PART_SCENE_OBJECT.hit_box_y_offset,
+            active=jnp.array(1),
+        )
+
+        spinners = jnp.array(
+            [
+                jnp.array(
+                    [
+                        entity.x,
+                        entity.y,
+                        entity.w,
+                        entity.h,
+                        entity.active,
+                    ]
+                )
+                for entity in [left_spinner, right_spinner]
+            ]
+        )
+
+        # Bumpers
+        # Left Bumper
+        left_bumper = EntityState(
+            x=self.consts.LEFT_BUMPER_SCENE_OBJECT.hit_box_x_offset,
+            y=self.consts.LEFT_BUMPER_SCENE_OBJECT.hit_box_y_offset,
+            w=self.consts.LEFT_BUMPER_SCENE_OBJECT.hit_box_width,
+            h=self.consts.LEFT_BUMPER_SCENE_OBJECT.hit_box_height,
+            active=jnp.array(1),
+        )
+
+        # Top Bumper
+        top_bumper = EntityState(
+            x=self.consts.TOP_BUMPER_SCENE_OBJECT.hit_box_x_offset,
+            y=self.consts.TOP_BUMPER_SCENE_OBJECT.hit_box_y_offset,
+            w=self.consts.TOP_BUMPER_SCENE_OBJECT.hit_box_width,
+            h=self.consts.TOP_BUMPER_SCENE_OBJECT.hit_box_height,
+            active=jnp.array(1),
+        )
+
+        # Right Bumper
+        right_bumper = EntityState(
+            x=self.consts.RIGHT_BUMPER_SCENE_OBJECT.hit_box_x_offset,
+            y=self.consts.RIGHT_BUMPER_SCENE_OBJECT.hit_box_y_offset,
+            w=self.consts.RIGHT_BUMPER_SCENE_OBJECT.hit_box_width,
+            h=self.consts.RIGHT_BUMPER_SCENE_OBJECT.hit_box_height,
+            active=jnp.array(1),
+        )
+
+        bumpers = jnp.array(
+            [
+                jnp.array(
+                    [
+                        entity.x,
+                        entity.y,
+                        entity.w,
+                        entity.h,
+                        entity.active,
+                    ]
+                )
+                for entity in [left_bumper, top_bumper, right_bumper]
+            ]
+        )
+
+        left_tilt_mode_hole_plug = EntityState(
+            x=self.consts.TILT_MODE_HOLE_PLUG_LEFT.hit_box_x_offset,
+            y=self.consts.TILT_MODE_HOLE_PLUG_LEFT.hit_box_y_offset,
+            w=self.consts.TILT_MODE_HOLE_PLUG_LEFT.hit_box_width,
+            h=self.consts.TILT_MODE_HOLE_PLUG_LEFT.hit_box_height,
+            active=jnp.array(1),
+        )
+        right_tilt_mode_hole_plug = EntityState(
+            x=self.consts.TILT_MODE_HOLE_PLUG_RIGHT.hit_box_x_offset,
+            y=self.consts.TILT_MODE_HOLE_PLUG_RIGHT.hit_box_y_offset,
+            w=self.consts.TILT_MODE_HOLE_PLUG_RIGHT.hit_box_width,
+            h=self.consts.TILT_MODE_HOLE_PLUG_RIGHT.hit_box_height,
+            active=jnp.array(1),
+        )
+
+        tilt_mode_hole_plugs = jnp.array(
+            [
+                jnp.array(
+                    [
+                        entity.x,
+                        entity.y,
+                        entity.w,
+                        entity.h,
+                        entity.active,
+                    ]
+                )
+                for entity in [left_tilt_mode_hole_plug, right_tilt_mode_hole_plug]
+            ]
+        )
+
+        # Rollovers
+        # Left Rollover
+        left_rollover = EntityState(
+            x=self.consts.LEFT_ROLLOVER_SCENE_OBJECT.hit_box_x_offset,
+            y=self.consts.LEFT_ROLLOVER_SCENE_OBJECT.hit_box_y_offset,
+            w=self.consts.LEFT_ROLLOVER_SCENE_OBJECT.hit_box_width,
+            h=self.consts.LEFT_ROLLOVER_SCENE_OBJECT.hit_box_height,
+            active=jnp.array(1),
+        )
+
+        # Atari Rollover
+        atari_rollover = EntityState(
+            x=self.consts.ATARI_ROLLOVER_SCENE_OBJECT.hit_box_x_offset,
+            y=self.consts.ATARI_ROLLOVER_SCENE_OBJECT.hit_box_y_offset,
+            w=self.consts.ATARI_ROLLOVER_SCENE_OBJECT.hit_box_width,
+            h=self.consts.ATARI_ROLLOVER_SCENE_OBJECT.hit_box_height,
+            active=jnp.array(1),
+        )
+
+        rollovers = jnp.array(
+            [
+                jnp.array(
+                    [
+                        entity.x,
+                        entity.y,
+                        entity.w,
+                        entity.h,
+                        entity.active,
+                    ]
+                )
+                for entity in [left_rollover, atari_rollover]
+            ]
+        )
+        plunger = EntityState(
+            x=jnp.array(149),
+            y=jnp.array(134),
+            w=jnp.array(2),
+            h=jnp.array(2 * state.plunger_position + 1),
+            active=jnp.array(1),
+        )
 
         return VideoPinballObservation(
             ball=ball,
@@ -549,7 +751,8 @@ class JaxVideoPinball(
             plunger=plunger,
             targets=targets,
             bumpers=bumpers,
-            tilt_mode_hole_plugs=(left_tilt_mode_hole_plug, right_tilt_mode_hole_plug),
+            rollovers=rollovers,
+            tilt_mode_hole_plugs=tilt_mode_hole_plugs,
             score=state.score,
             lives=state.lives,
             atari_symbols=state.atari_symbols,
@@ -560,23 +763,31 @@ class JaxVideoPinball(
         )
 
     @partial(jax.jit, static_argnums=(0,))
+    def flatten_entity_state(self, entity: EntityState):
+        return (
+            entity.x.flatten(),
+            entity.y.flatten(),
+            entity.w.flatten(),
+            entity.h.flatten(),
+            entity.active.flatten(),
+        )
+
+    @partial(jax.jit, static_argnums=(0,))
     def obs_to_flat_array(self, obs: VideoPinballObservation) -> jnp.ndarray:
         return jnp.concatenate(
             [
-                obs.ball.pos_x.flatten(),
-                obs.ball.pos_y.flatten(),
-                obs.ball.vel_x.flatten(),
-                obs.ball.vel_y.flatten(),
-                obs.ball.direction.flatten(),
-                obs.flipper_states.left_flipper_state.flatten(),
-                obs.flipper_states.right_flipper_state.flatten(),
-                obs.spinner_states.flatten(),
-                obs.plunger_position.flatten(),
+                self.flatten_entity_state(obs.ball),
+                self.flatten_entity_state(obs.spinners),
+                self.flatten_entity_state(obs.flippers),
+                self.flatten_entity_state(obs.plunger),
+                self.flatten_entity_state(obs.targets),
+                self.flatten_entity_state(obs.bumpers),
+                self.flatten_entity_state(obs.rollovers),
+                self.flatten_entity_state(obs.tilt_mode_hole_plugs),
                 obs.score.flatten(),
                 obs.lives.flatten(),
-                obs.bumper_multiplier.flatten(),
-                obs.active_targets.flatten(),
                 obs.atari_symbols.flatten(),
+                obs.bumper_multiplier.flatten(),
                 obs.rollover_counter.flatten(),
                 obs.color_cycling.flatten(),
                 obs.tilt_mode_active.flatten(),
@@ -600,68 +811,42 @@ class JaxVideoPinball(
             {
                 "ball": spaces.Dict(
                     {
-                        "x": spaces.Box(
-                            low=0, high=160, shape=(), dtype=jnp.int32
-                        ),
-                        "y": spaces.Box(
-                            low=0, high=210, shape=(), dtype=jnp.int32
-                        ),
-                        "w": spaces.Box(
-                            low=0, high=160, shape=(), dtype=jnp.int32
-                        ),
-                        "h": spaces.Box(
-                            low=0, high=210, shape=(), dtype=jnp.int32
-                        ),
-                        "active": spaces.Box(
-                            low=0, high=1, shape=(), dtype=jnp.int32
-                        ),
+                        "x": spaces.Box(low=0, high=160, shape=(), dtype=jnp.int32),
+                        "y": spaces.Box(low=0, high=210, shape=(), dtype=jnp.int32),
+                        "w": spaces.Box(low=0, high=160, shape=(), dtype=jnp.int32),
+                        "h": spaces.Box(low=0, high=210, shape=(), dtype=jnp.int32),
+                        "active": spaces.Box(low=0, high=1, shape=(), dtype=jnp.int32),
                     }
                 ),
                 "flippers": spaces.Box(low=0, high=210, shape=(2, 5), dtype=jnp.int32),
                 "plunger": spaces.Dict(
                     {
-                        "x": spaces.Box(
-                            low=0, high=160, shape=(), dtype=jnp.int32
-                        ),
-                        "y": spaces.Box(
-                            low=0, high=210, shape=(), dtype=jnp.int32
-                        ),
-                        "w": spaces.Box(
-                            low=0, high=160, shape=(), dtype=jnp.int32
-                        ),
-                        "h": spaces.Box(
-                            low=0, high=210, shape=(), dtype=jnp.int32
-                        ),
-                        "active": spaces.Box(
-                            low=0, high=1, shape=(), dtype=jnp.int32
-                        ),
+                        "x": spaces.Box(low=0, high=160, shape=(), dtype=jnp.int32),
+                        "y": spaces.Box(low=0, high=210, shape=(), dtype=jnp.int32),
+                        "w": spaces.Box(low=0, high=160, shape=(), dtype=jnp.int32),
+                        "h": spaces.Box(low=0, high=210, shape=(), dtype=jnp.int32),
+                        "active": spaces.Box(low=0, high=1, shape=(), dtype=jnp.int32),
                     }
                 ),
                 "targets": spaces.Box(low=0, high=210, shape=(4, 5), dtype=jnp.int32),
-                "title_mode_hole_plugs": spaces.Box(low=0, high=210, shape=(2, 5), dtype=jnp.int32),
-                "score": spaces.Box(
-                    low=0, high=999999, shape=(), dtype=jnp.int32
+                "title_mode_hole_plugs": spaces.Box(
+                    low=0, high=210, shape=(2, 5), dtype=jnp.int32
                 ),
-                "lives": spaces.Box(
-                    low=0, high=4, shape=(), dtype=jnp.int32
-                ),
-                "atari_symbols": spaces.Box(
-                    low=0, high=4, shape=(), dtype=jnp.int32
-                ),
+                "score": spaces.Box(low=0, high=999999, shape=(), dtype=jnp.int32),
+                "lives": spaces.Box(low=0, high=4, shape=(), dtype=jnp.int32),
+                "atari_symbols": spaces.Box(low=0, high=4, shape=(), dtype=jnp.int32),
                 "bumper_multiplier": spaces.Box(
                     low=0, high=9, shape=(), dtype=jnp.int32
                 ),
                 "rollover_counter": spaces.Box(
                     low=0, high=9, shape=(), dtype=jnp.int32
                 ),
-                "color_cycling": spaces.Box(
-                    low=0, high=30, shape=(), dtype=jnp.int32
-                ),
+                "color_cycling": spaces.Box(low=0, high=30, shape=(), dtype=jnp.int32),
                 "tilt_mode_active": spaces.Box(
                     low=0, high=1, shape=(), dtype=jnp.int32
                 ),
             }
-        )    
+        )
 
     def image_space(self) -> spaces.Box:
         return spaces.Box(low=0, high=255, shape=(210, 160, 3), dtype=jnp.uint8)
