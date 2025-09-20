@@ -33,9 +33,214 @@ BRAKE_TOTAL_DISTANCE = 7.0 * 2# in Pixels
 BRAKE_SPEED = jnp.array(BRAKE_TOTAL_DISTANCE / BRAKE_DURATION, dtype=jnp.float32)  # ≈ 0.7 px/frame
 
 # --- Player params ---------------
-PLAYER_SIZE = (9, 21)  # w, h
+PLAYER_SIZE = (9, 23)  # w, h
 PLAYER_START_X, PLAYER_START_Y = 15, 140
 PLAYER_RESPWAN_XY = jnp.array([78, 36], dtype=jnp.float32)
+PALETTE = jnp.array([
+    [0, 0, 0],        # black
+    [104, 72, 198],   # blue
+    [252, 188, 116],  # yellow
+    [181, 83, 40],    # orange
+    [134, 106, 38],   # green
+], dtype=jnp.uint8)
+
+PLAYER_STANDING_RIGHT= jnp.array([
+    [0,0,0,1,1,0,0,0], 
+    [0,0,1,1,1,0,0,0], 
+    [0,1,1,1,1,1,1,0], 
+    [0,0,0,2,2,0,0,0], 
+    [0,2,0,2,0,0,0,0], 
+    [0,2,0,2,2,2,2,0], 
+    [0,2,0,2,0,2,2,2], 
+    [0,2,2,2,0,0,0,0], 
+    [0,2,2,2,2,2,2,0], 
+    [0,0,2,2,2,2,0,0], 
+    [0,0,0,2,2,0,0,0], 
+    [0,0,3,3,3,3,0,0], 
+    [0,3,3,3,3,3,0,3], 
+    [3,3,0,3,3,3,3,3], 
+    [3,3,0,3,3,3,3,0], 
+    [0,0,1,1,1,1,1,0], 
+    [0,0,1,1,1,1,1,0], 
+    [0,0,1,1,1,1,1,0], 
+    [0,0,1,1,1,1,1,0], 
+    [0,0,1,1,0,1,1,0], 
+    [0,0,1,1,0,1,1,0], 
+    [0,0,4,4,0,4,4,0], 
+    [0,0,4,4,4,0,4,4],  
+], dtype=jnp.uint8)
+
+PLAYER_STANDING_LEFT = jnp.array([
+    [0,0,0,1,1,0,0,0],
+    [0,0,0,1,1,1,0,0],
+    [0,1,1,1,1,1,1,0],
+    [0,0,0,2,2,0,0,0],
+    [0,0,0,0,2,0,2,0],
+    [0,2,2,2,2,0,2,0],
+    [2,2,2,0,2,0,2,0],
+    [0,0,0,0,2,2,2,0],
+    [0,2,2,2,2,2,2,0],
+    [0,0,2,2,2,2,0,0],
+    [0,0,0,2,2,0,0,0],
+    [0,0,3,3,3,3,0,0],
+    [3,0,3,3,3,3,3,0],
+    [3,3,3,3,3,0,3,3],
+    [0,3,3,3,3,0,3,3],
+    [0,1,1,1,1,1,0,0],
+    [0,1,1,1,1,1,0,0],
+    [0,1,1,1,1,1,0,0],
+    [0,1,1,1,1,1,0,0],
+    [0,1,1,0,1,1,0,0],
+    [0,1,1,0,1,1,0,0],
+    [0,4,4,0,4,4,0,0],
+    [4,4,0,4,4,4,0,0],
+], dtype=jnp.uint8)
+
+PLAYER_WALK_RIGHT_1 = jnp.array([
+    [0, 0, 0, 1, 1, 0, 0, 0],
+    [0, 0, 1, 1, 1, 0, 0, 0],
+    [0, 1, 1, 1, 1, 1, 1, 0],
+    [0, 0, 0, 2, 2, 0, 0, 0],
+    [0, 2, 0, 2, 0, 0, 0, 0],
+    [0, 2, 0, 2, 2, 2, 2, 0],
+    [0, 2, 0, 2, 0, 2, 2, 2],
+    [0, 2, 2, 2, 0, 0, 0, 0],
+    [0, 2, 2, 2, 2, 2, 2, 0],
+    [0, 0, 2, 2, 2, 2, 0, 0],
+    [0, 0, 0, 2, 2, 0, 0, 0],
+    [0, 0, 3, 3, 3, 3, 0, 0],
+    [0, 3, 3, 3, 3, 3, 0, 3],
+    [0, 3, 3, 0, 3, 3, 3, 3],
+    [0, 0, 0, 0, 1, 1, 1, 0],
+    [0, 0, 1, 1, 1, 1, 0, 0],
+    [0, 0, 1, 1, 1, 1, 0, 1],
+    [1, 1, 1, 1, 1, 1, 1, 1],
+    [1, 1, 1, 0, 0, 1, 1, 1],
+    [1, 0, 0, 0, 0, 0, 0, 0],
+    [4, 0, 0, 0, 0, 0, 0, 0]
+], dtype=jnp.uint8)
+
+PLAYER_WALK_RIGHT_2= jnp.array([
+    [0, 0, 1, 1, 0, 0, 0, 0],
+    [0, 1, 1, 1, 0, 0, 0, 0],
+    [1, 1, 1, 1, 1, 1, 0, 0],
+    [0, 0, 2, 2, 0, 0, 0, 0],
+    [2, 0, 2, 0, 0, 0, 0, 0],
+    [2, 0, 2, 2, 2, 2, 0, 0],
+    [2, 0, 2, 0, 2, 2, 2, 0],
+    [2, 2, 2, 0, 0, 0, 0, 0],
+    [2, 2, 2, 2, 2, 2, 0, 0],
+    [0, 2, 2, 2, 2, 0, 0, 0],
+    [0, 0, 2, 2, 0, 0, 0, 0],
+    [0, 3, 3, 3, 3, 0, 0, 0],
+    [3, 3, 3, 3, 3, 0, 0, 0],
+    [3, 3, 0, 3, 3, 3, 0, 0],
+    [0, 0, 1, 1, 1, 1, 0, 0],
+    [0, 0, 0, 1, 1, 1, 0, 0],
+    [0, 0, 0, 0, 1, 1, 1, 0],
+    [0, 0, 0, 0, 0, 1, 1, 0],
+    [0, 4, 0, 0, 0, 4, 4, 0],
+    [0, 0, 0, 4, 0, 4, 4, 4]
+], dtype=jnp.uint8)
+
+PLAYER_WALK_LEFT_1 = jnp.array([
+    [0, 0, 0, 1, 1, 0, 0, 0],
+    [0, 0, 0, 1, 1, 1, 0, 0],
+    [0, 1, 1, 1, 1, 1, 1, 0],
+    [0, 0, 0, 2, 2, 0, 0, 0],
+    [0, 0, 0, 0, 2, 0, 2, 0],
+    [0, 2, 2, 2, 2, 0, 2, 0],
+    [2, 2, 2, 0, 2, 0, 2, 0],
+    [0, 0, 0, 0, 2, 2, 2, 0],
+    [0, 2, 2, 2, 2, 2, 2, 0],
+    [0, 0, 2, 2, 2, 2, 0, 0],
+    [0, 0, 0, 2, 2, 0, 0, 0],
+    [0, 0, 3, 3, 3, 3, 0, 0],
+    [3, 0, 3, 3, 3, 3, 3, 0],
+    [3, 3, 3, 3, 0, 3, 3, 0],
+    [3, 3, 3, 3, 0, 3, 3, 0],
+    [0, 1, 1, 1, 0, 0, 0, 0],
+    [0, 0, 1, 1, 1, 1, 0, 0],
+    [1, 0, 1, 1, 1, 1, 0, 0],
+    [1, 1, 1, 1, 1, 1, 1, 1],
+    [1, 1, 1, 0, 0, 1, 1, 1],
+    [0, 0, 0, 0, 0, 0, 0, 1],
+    [0, 0, 0, 0, 0, 0, 0, 4],
+], dtype=jnp.uint8)
+
+PLAYER_WALK_LEFT_2 = jnp.array([
+    [0, 0, 0, 1, 1, 0, 0],
+    [0, 0, 0, 1, 1, 1, 0],
+    [0, 1, 1, 1, 1, 1, 1],
+    [0, 0, 0, 2, 2, 0, 0],
+    [0, 0, 0, 0, 2, 0, 2],
+    [0, 2, 2, 2, 2, 0, 2],
+    [2, 2, 2, 0, 2, 0, 2],
+    [0, 0, 0, 0, 2, 2, 2],
+    [0, 2, 2, 2, 2, 2, 2],
+    [0, 0, 2, 2, 2, 2, 0],
+    [0, 0, 0, 2, 2, 0, 0],
+    [0, 0, 3, 3, 3, 3, 0],
+    [0, 0, 3, 3, 3, 3, 3],
+    [0, 3, 3, 3, 0, 3, 3],
+    [0, 3, 3, 3, 0, 3, 3],
+    [0, 1, 1, 1, 1, 0, 0],
+    [0, 1, 1, 1, 1, 0, 0],
+    [0, 1, 1, 1, 1, 0, 0],
+    [0, 1, 1, 1, 0, 0, 0],
+    [1, 1, 1, 0, 0, 0, 0],
+    [1, 1, 0, 0, 0, 0, 0],
+    [4, 4, 0, 0, 0, 4, 0],
+], dtype=jnp.uint8)
+
+PLAYER_JUMP_LEFT = jnp.array([
+    [0, 0, 0, 0, 1, 1, 0, 0],
+    [0, 0, 0, 0, 1, 1, 1, 0],
+    [0, 0, 1, 1, 1, 1, 1, 1],
+    [0, 0, 0, 2, 2, 0, 0, 0],
+    [0, 0, 0, 0, 2, 0, 2, 0],
+    [0, 2, 2, 2, 2, 0, 2, 0],
+    [2, 2, 2, 0, 2, 0, 2, 0],
+    [0, 0, 0, 0, 2, 2, 2, 0],
+    [0, 2, 2, 2, 2, 2, 2, 0],
+    [2, 0, 2, 2, 2, 2, 0, 0],
+    [2, 0, 0, 2, 2, 0, 0, 0],
+    [3, 3, 3, 3, 3, 3, 3, 0],
+    [0, 3, 3, 3, 3, 3, 3, 3],
+    [0, 0, 3, 3, 3, 0, 3, 3],
+    [3, 0, 3, 3, 3, 0, 3, 3],
+    [1, 0, 1, 1, 1, 1, 0, 0],
+    [1, 1, 0, 1, 1, 1, 0, 0],
+    [1, 1, 1, 1, 1, 1, 1, 1],
+    [0, 0, 0, 0, 1, 1, 1, 1],
+    [0, 0, 0, 0, 0, 0, 0, 1],
+    [0, 0, 0, 0, 0, 0, 0, 1],
+], dtype=jnp.uint8)
+
+PLAYER_JUMP_RIGHT = jnp.array([
+    [0, 0, 1, 1, 0, 0, 0, 0],
+    [0, 1, 1, 1, 0, 0, 0, 0],
+    [1, 1, 1, 1, 1, 1, 0, 0],
+    [0, 0, 0, 2, 2, 0, 0, 0],
+    [0, 2, 0, 2, 0, 0, 0, 0],
+    [0, 2, 0, 2, 2, 2, 2, 0],
+    [0, 2, 0, 2, 0, 2, 2, 2],
+    [0, 2, 2, 2, 0, 0, 0, 0],
+    [0, 2, 2, 2, 2, 2, 2, 0],
+    [0, 0, 2, 2, 2, 2, 0, 2],
+    [0, 0, 0, 2, 2, 0, 0, 2],
+    [0, 3, 3, 3, 3, 3, 3, 3],
+    [3, 3, 3, 3, 3, 3, 3, 0],
+    [3, 3, 0, 3, 3, 3, 0, 0],
+    [3, 3, 0, 3, 3, 3, 0, 3],
+    [0, 0, 1, 1, 1, 1, 0, 1],
+    [0, 0, 1, 1, 1, 0, 1, 1],
+    [1, 1, 1, 1, 1, 1, 1, 1],
+    [1, 1, 1, 1, 0, 0, 0, 0],
+    [1, 0, 0, 0, 0, 0, 0, 0],
+], dtype=jnp.uint8)
+
+
 
 # --- Enemies params ---
 ENEMY_SIZE = (8, 8)  # w, h
@@ -124,6 +329,8 @@ class PlayerState(NamedTuple):  # Player movement
     idx_right: chex.Array
     idx_left: chex.Array
     jump: chex.Array
+    walk_anim: chex.Array
+    is_walking: chex.Array
     move: chex.Array
     jumpL: chex.Array
     jumpR: chex.Array
@@ -132,6 +339,7 @@ class PlayerState(NamedTuple):  # Player movement
     bumped_idx: chex.Array
     pow_bumped: chex.Array
     safe: bool
+
 
 
 class MarioBrosState(NamedTuple):
@@ -170,11 +378,19 @@ def check_collision(pos: jnp.ndarray, vel: jnp.ndarray, platforms: jnp.ndarray, 
     overlap_y = (bottom > p_top) & (top < p_bottom)
     collided = overlap_x & overlap_y
 
+    prev_bottom = bottom - vy
+    next_bottom = bottom
+
     landed = collided & (vy > 0) & (bottom - vy <= p_top)
+    landing_cross = overlap_x & (vy > 0) & (prev_bottom <= p_top) & (next_bottom >= p_top)
+    EPS = 1.0
+    resting_touch = overlap_x & (vy == 0) & (jnp.abs(bottom - p_top) <= EPS)
+    on_platform_mask = landing_cross | resting_touch
+    on_platform = jnp.any(on_platform_mask)
     bumped = collided & (vy < 0) & (top - vy >= p_bottom)
 
     # Landing and bump height adjustments
-    landing_y = jnp.where(landed, p_top - h, jnp.inf)
+    landing_y = jnp.where(on_platform_mask, p_top - h, jnp.inf)
     bumping_y = jnp.where(bumped, p_bottom, -jnp.inf)
     new_y_land = jnp.min(landing_y)
     new_y_bump = jnp.max(bumping_y)
@@ -211,7 +427,8 @@ def check_collision(pos: jnp.ndarray, vel: jnp.ndarray, platforms: jnp.ndarray, 
     min_idx = jnp.min(bumped_indices)
     bumped_idx = jnp.where(min_idx == 1_000_000, -1, min_idx)
 
-    return (jnp.any(landed),
+    return (jnp.any(on_platform),
+            jnp.any(landed),
             jnp.any(bumped | pow_bumped),
             new_y_land,
             jnp.maximum(new_y_bump, pow_y_new),
@@ -502,10 +719,10 @@ def movement(state: PlayerState, game_state:GameState) -> PlayerState:    # Calc
         # integrate position
         new_pos = state.pos + jnp.array([vx, vy])
 
-        landed, bumped, y_land, y_bump, pow_bumped, bumped_idx = check_collision(new_pos, jnp.array([vx, vy]), PLATFORMS,
+        on_platform, landed, bumped, y_land, y_bump, pow_bumped, bumped_idx = check_collision(new_pos, jnp.array([vx, vy]), PLATFORMS,
                                                                                 POW_BLOCK, game_state.pow_block_counter)
 
-        new_y = jnp.where(landed, y_land,
+        new_y = jnp.where(on_platform, y_land,
                         jnp.where(bumped, y_bump, new_pos[1]))
 
         # ---------- update phases after collision & time -------------
@@ -517,10 +734,10 @@ def movement(state: PlayerState, game_state:GameState) -> PlayerState:    # Calc
         jump_phase = jnp.where(bumped & (vy < 0), 2, jump_phase)
         asc_left = jnp.where(bumped & (vy < 0), 0, asc_left)
         # landing → reset
-        jump_phase = jnp.where(landed, 0, jump_phase)
-        asc_left = jnp.where(landed, 0, asc_left)
+        jump_phase = jnp.where(on_platform, 0, jump_phase)
+        asc_left = jnp.where(on_platform, 0, asc_left)
         # walked off ledge → fall
-        jump_phase = jnp.where((jump_phase == 0) & (~landed), 2, jump_phase)
+        jump_phase = jnp.where((jump_phase == 0) & (~on_platform), 2, jump_phase)
 
         vy_final = jnp.where(
             jump_phase == 1, ASCEND_VY,
@@ -535,12 +752,14 @@ def movement(state: PlayerState, game_state:GameState) -> PlayerState:    # Calc
         return PlayerState(
             pos=jnp.array([new_x, new_y]),
             vel=jnp.array([vx, vy_final]),
-            on_ground=landed,
+            on_ground=on_platform,
             jump_phase=jump_phase.astype(jnp.int32),
             ascend_frames=asc_left.astype(jnp.int32),
             idx_right=state.idx_right,
             idx_left=state.idx_left,
             jump=state.jump,
+            walk_anim=state.walk_anim,
+            is_walking=state.is_walking,
             move=state.move,
             jumpL=state.jumpL,
             jumpR=state.jumpR,
@@ -628,7 +847,7 @@ def player_step(state: PlayerState, action: chex.Array, game_state: GameState) -
             # apply brake
             def br(ss):
                 ss2 = ss._replace(
-                    brake_frames_left=jnp.where((ss.last_dir != 0) & (ss.brake_frames_left == 0),
+                    brake_frames_left=jnp.where((jnp.abs(ss.move) > 0) & (ss.brake_frames_left == 0),
                                                 BRAKE_DURATION, ss.brake_frames_left)
                 )
 
@@ -637,7 +856,7 @@ def player_step(state: PlayerState, action: chex.Array, game_state: GameState) -
                     return x._replace(
                         move=x.last_dir * BRAKE_SPEED,
                         brake_frames_left=nb,
-                        last_dir=jnp.where(nb == 0, 0, x.last_dir)
+                        last_dir=x.last_dir
                     )
 
                 return lax.cond(ss2.brake_frames_left > 0, do_brake, lambda x: x._replace(move=0.0), ss2)
@@ -654,7 +873,7 @@ def player_step(state: PlayerState, action: chex.Array, game_state: GameState) -
                     idx_left=0,
                     jumpR=True,
                     brake_frames_left=0,
-                    last_dir=0
+                    last_dir=1
                 )
 
             def jl(ss):
@@ -664,7 +883,7 @@ def player_step(state: PlayerState, action: chex.Array, game_state: GameState) -
                     idx_right=0,
                     jumpL=True,
                     brake_frames_left=0,
-                    last_dir=0
+                    last_dir=-1
                 )
 
             def js(ss):
@@ -672,7 +891,7 @@ def player_step(state: PlayerState, action: chex.Array, game_state: GameState) -
                     idx_left=0,
                     idx_right=0,
                     brake_frames_left=0,
-                    last_dir=0
+                    last_dir=ss.last_dir
                 )
 
             condR = press_right | s.jumpR
@@ -683,7 +902,14 @@ def player_step(state: PlayerState, action: chex.Array, game_state: GameState) -
         state2 = lax.cond(state1.jump == 0, walk_or_brake, jump_move, state1)
 
         # 5) apply physics
-        new_state = movement(state2, game_state)
+        s_phys = movement(state2, game_state)
+
+        # 6) stable walk animation state
+        walking_intent = (press_left | press_right | (s_phys.brake_frames_left > 0))
+        is_walking = walking_intent & s_phys.on_ground & (s_phys.jump == 0)
+        next_walk_anim = jnp.where(is_walking, (state.walk_anim + 1) % 8, jnp.int32(0))
+
+        new_state = s_phys._replace(walk_anim=next_walk_anim, is_walking=is_walking)
         return new_state
     cond = state.safe & jnp.any(state.pos != PLAYER_RESPWAN_XY)
     return lax.cond(cond, death_step, step, state)
@@ -728,8 +954,150 @@ def draw_digit(img, digit, x, y, size=6, color=(255, 255, 255)):
         )
     return img
 
+
+def indices_to_rgb_and_mask(idx, palette):
+    # idx: (H, W) uint8, 0=transparent
+    mask = idx != 0
+    clamped = jnp.clip(idx, 0, palette.shape[0] - 1)
+    rgb = palette[clamped]            # (H, W, 3)
+    return rgb, mask
+
+import jax.numpy as jnp
+from jax import lax
+
+def draw_sprite_rgb(img, x, y, sprite_rgb, sprite_mask):
+    """
+    Blit a colored sprite with transparency.
+    img: (H,W,3) uint8
+    x,y: top-left screen coords (floats ok)
+    sprite_rgb: (h,w,3) uint8
+    sprite_mask: (h,w) bool
+    """
+    H, W, _ = img.shape
+    h, w, _ = sprite_rgb.shape
+
+    # integer destination box (still traced scalars)
+    x0 = jnp.clip(jnp.floor(x), 0, W - 1).astype(jnp.int32)
+    y0 = jnp.clip(jnp.floor(y), 0, H - 1).astype(jnp.int32)
+    x1 = jnp.clip(jnp.floor(x) + w, 0, W).astype(jnp.int32)
+    y1 = jnp.clip(jnp.floor(y) + h, 0, H).astype(jnp.int32)
+
+    # traced boolean, OK for lax.cond (but not for Python if/or)
+    valid = (x1 > x0) & (y1 > y0)
+
+    def do_draw(im):
+        yy = jnp.arange(H)[:, None]
+        xx = jnp.arange(W)[None, :]
+
+        in_x = (xx >= x0) & (xx < x1)
+        in_y = (yy >= y0) & (yy < y1)
+        in_box = in_x & in_y
+
+        # map dest → source indices
+        src_x = (xx - x0).clip(0, w - 1)
+        src_y = (yy - y0).clip(0, h - 1)
+
+        src_rgb = sprite_rgb[src_y, src_x]
+        src_a = sprite_mask[src_y, src_x]  # bool
+
+        m = in_box & src_a
+        return jnp.where(m[:, :, None], src_rgb, im)
+
+    # if not valid, return img unchanged — but do it with JAX
+    return lax.cond(valid, do_draw, lambda im: im, img)
+
+PLAYER_STANDING_RIGHT_RGB, PLAYER_STANDING_RIGHT_MASK = indices_to_rgb_and_mask(PLAYER_STANDING_RIGHT, PALETTE)
+PLAYER_STANDING_LEFT_RGB, PLAYER_STANDING_LEFT_MASK = indices_to_rgb_and_mask(PLAYER_STANDING_LEFT, PALETTE)
+PLAYER_WALK_RIGHT_1_RGB, PLAYER_WALK_RIGHT_1_MASK = indices_to_rgb_and_mask(PLAYER_WALK_RIGHT_1, PALETTE)
+PLAYER_WALK_RIGHT_2_RGB, PLAYER_WALK_RIGHT_2_MASK = indices_to_rgb_and_mask(PLAYER_WALK_RIGHT_2, PALETTE)
+PLAYER_WALK_LEFT_1_RGB, PLAYER_WALK_LEFT_1_MASK = indices_to_rgb_and_mask(PLAYER_WALK_LEFT_1, PALETTE)
+PLAYER_WALK_LEFT_2_RGB, PLAYER_WALK_LEFT_2_MASK = indices_to_rgb_and_mask(PLAYER_WALK_LEFT_2, PALETTE)
+PLAYER_JUMP_LEFT_RGB, PLAYER_JUMP_LEFT_MASK = indices_to_rgb_and_mask(PLAYER_JUMP_LEFT, PALETTE)
+PLAYER_JUMP_RIGHT_RGB, PLAYER_JUMP_RIGHT_MASK = indices_to_rgb_and_mask(PLAYER_JUMP_RIGHT, PALETTE)
+
+import jax.numpy as jnp
+from jax import lax
+
+
 import jaxatari.rendering.jax_rendering_utils as ru
 from jaxatari.renderers import JAXGameRenderer
+
+import jax.numpy as jnp
+from jax import lax
+
+# Tunables
+WALK_HOLD = jnp.int32(5)   # frames one walking frame is held
+
+def draw_player_by_state(image, p, px, py):
+    """
+    Show standing/ walking / jumping::
+    - Holding RIGHT/LEFT: walk right/left,
+    - Jump + RIGHT/LEFT held: use jump sprite for that side.
+    - Jump without side held: use jump sprite based on previous standing direction (last_dir).
+    - After moving right/left and stopping: show standing_right/standing_left respectively.
+    """
+    # --- phases ---
+    jumping   = (p.jump_phase != 0) & (~p.on_ground)      # in-air state
+    walking   = p.is_walking & (~jumping)  
+    standing  = (~jumping) & (~walking) & p.on_ground
+
+    # --- interchanging walk frames ---
+    walk_frame_is_1 = ((p.walk_anim // WALK_HOLD) % 2) == 0 
+
+    # --- directions ---
+    # Use last_dir as primary facing
+    vx = p.vel[0]
+    vel_sign = jnp.sign(vx).astype(jnp.int32)       # -1, 0, +1
+    base_dir = jnp.where(p.last_dir != 0, p.last_dir, vel_sign)
+
+    # Jump direction
+    jump_right = p.jumpR | ((~p.jumpR) & (~p.jumpL) & (base_dir == 1))
+    jump_left  = p.jumpL | ((~p.jumpR) & (~p.jumpL) & (base_dir == -1))
+
+    # Standing direction
+    stand_right = (base_dir != -1)  # right if base_dir==1 or 0
+    stand_left  = (base_dir == -1)
+
+    # Walking direction: use last_dir (how you set it on key press)
+    walk_right_dir = (base_dir == 1)
+    walk_left_dir  = (base_dir == -1)
+
+    # --- sprite branches ---
+    def stand_r(im): return draw_sprite_rgb(im, px, py, PLAYER_STANDING_RIGHT_RGB, PLAYER_STANDING_RIGHT_MASK)
+    def stand_l(im): return draw_sprite_rgb(im, px, py, PLAYER_STANDING_LEFT_RGB,  PLAYER_STANDING_LEFT_MASK)
+
+    def walk_r1(im): return draw_sprite_rgb(im, px, py, PLAYER_WALK_RIGHT_1_RGB,   PLAYER_WALK_RIGHT_1_MASK)
+    def walk_r2(im): return draw_sprite_rgb(im, px, py, PLAYER_WALK_RIGHT_2_RGB,   PLAYER_WALK_RIGHT_2_MASK)
+    def walk_l1(im): return draw_sprite_rgb(im, px, py, PLAYER_WALK_LEFT_1_RGB,    PLAYER_WALK_LEFT_1_MASK)
+    def walk_l2(im): return draw_sprite_rgb(im, px, py, PLAYER_WALK_LEFT_2_RGB,    PLAYER_WALK_LEFT_2_MASK)
+
+    def jump_r(im): return draw_sprite_rgb(im, px, py, PLAYER_JUMP_RIGHT_RGB,      PLAYER_JUMP_RIGHT_MASK)
+    def jump_l(im): return draw_sprite_rgb(im, px, py, PLAYER_JUMP_LEFT_RGB,       PLAYER_JUMP_LEFT_MASK)
+
+    # --- phase dispatch ---
+    def draw_jump(im):
+        return lax.cond(jump_right, jump_r,
+                        lambda im2: lax.cond(jump_left, jump_l, jump_r, im2),
+                        im)
+
+    def draw_walk(im):
+        def walk_right(im2):
+            return lax.cond(walk_frame_is_1, walk_r1, walk_r2, im2)
+        def walk_left(im2):
+            return lax.cond(walk_frame_is_1, walk_l1, walk_l2, im2)
+        return lax.cond(walk_right_dir, walk_right,
+                        lambda im3: lax.cond(walk_left_dir, walk_left,
+                                             lambda im4: lax.cond(stand_right, stand_r, stand_l, im4),
+                                             im3),
+                        im)
+
+    def draw_stand(im):
+        return lax.cond(stand_right, stand_r, stand_l, im)
+    # draw jump if jumping, else walk if walking, else stand
+    return lax.cond(jumping, draw_jump,
+                    lambda im: lax.cond(walking, draw_walk, draw_stand, im),
+                    image)
+
 
 
 class MarioBrosRenderer(JAXGameRenderer):
@@ -750,7 +1118,9 @@ class MarioBrosRenderer(JAXGameRenderer):
                 lambda _: PLAYER_COLOR,
                 operand=None
             )
-            image = draw_rect(image, px, py, *PLAYER_SIZE, player_color)
+
+            image = draw_player_by_state(image, state.player, px, py)
+
 
             # --- Draw enemies ---
             def draw_enemy(i, img):
@@ -880,6 +1250,8 @@ class JaxMarioBros(JaxEnvironment[
                 idx_right=jnp.int32(0),
                 idx_left=jnp.int32(0),
                 jump=jnp.int32(0),
+                walk_anim=jnp.int32(0),
+                is_walking=False,
                 move=jnp.array(0.0, dtype=jnp.float32),
                 jumpL=False,
                 jumpR=False,
