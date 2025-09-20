@@ -474,7 +474,7 @@ def scrolling_letters(state: WordZapperState, consts: WordZapperConstants) -> ch
     # Track which letters are being reset (scrolled off screen)
     just_reset = (new_letters_x < consts.LETTER_RESET_X)
 
-    # Only allow letters to reappear if they are being reset (i.e., after full alphabet cycle)
+    # Letters reappear as soon as they are fully off screen and cooldown is over
     new_letters_alive = state.letters_alive
     # Decrement cooldown for all letters
     new_letters_alive = new_letters_alive.at[:, 1].set(
@@ -484,10 +484,12 @@ def scrolling_letters(state: WordZapperState, consts: WordZapperConstants) -> ch
             new_letters_alive[:, 1]
         )
     )
-    # Only revive letters that are being reset and cooldown is 0
+    # Revive letters that are being reset to the rightmost position (i.e., when a new alphabet sequence starts)
+    # Only revive if the letter is currently not alive (was shot)
+    just_reset = (new_letters_x < consts.LETTER_RESET_X)
     new_letters_alive = new_letters_alive.at[:, 0].set(
         jnp.where(
-            just_reset & (new_letters_alive[:, 1] <= 0),
+            just_reset & (new_letters_alive[:, 0] == 0),
             1,
             new_letters_alive[:, 0]
         )
@@ -506,7 +508,7 @@ def scrolling_letters(state: WordZapperState, consts: WordZapperConstants) -> ch
     
     # Improved: Only zap if zapper is within the bounds of a letter (not just closest)
     zapper_x = state.player_zapper_position[5]
-    letter_half_width = consts.LETTER_SIZE[0] / 2
+    letter_half_width = consts.LETTER_SIZE[0]
     letter_lefts = state.letters_x - letter_half_width
     letter_rights = state.letters_x + letter_half_width
     # Find all letters where zapper_x is within bounds
