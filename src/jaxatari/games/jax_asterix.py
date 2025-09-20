@@ -30,7 +30,8 @@ class AsterixConstants(NamedTuple):
     top_border: int = 23 # oberer Rand des Spielfelds
     bottom_border: int = 8 * stage_spacing + top_border
     cooldown_frames: int = 8 # Cooldown frames for lane changes
-    hit_frames: int = 30 # Anzahl Frames, die das Hit-Sprite angezeigt wird
+    hit_frames: int = 100 # Anzahl Frames, die das Hit-Sprite angezeigt wird
+    respawn_frames: int = 240 # Anzahl Frames, bis der Spieler nach einem hit respawned wird.
     num_lives: int = 3 # Anzahl der Leben
     max_digits_score: int = 6 # Maximal anzuzeigende Ziffern im Score
     entity_base_speed : float = 0.5 # Base Speed der Gegner und Collectibles
@@ -83,6 +84,7 @@ class AsterixState(NamedTuple):
     collectibles: CollectibleEnt # Collectible Entities
     collect_spawn_timer: jnp.ndarray # Timer für das Spawnen von Collectibles
     hit_timer: chex.Array # Zählt Frames herunter, in denen Hit-Sprite angezeigt wird
+    respawn_timer: chex.Array # Zählt Frames herunter, bis Respawn nach Hit erfolgt
 
 
 class EntityPosition(NamedTuple):
@@ -119,7 +121,7 @@ class JaxAsterix(JaxEnvironment[AsterixState, AsterixObservation, AsterixInfo, A
         """Initialize a new game state"""
         stage_borders = jnp.array(self.consts.stage_positions, dtype=jnp.int32)
         player_x = self.consts.screen_width // 2
-        player_y = (stage_borders[-2] + stage_borders[-1]) // 2
+        player_y = (stage_borders[3] + stage_borders[4]) // 2 - (self.consts.player_height // 2)
 
         if key is None:
             key = jax.random.PRNGKey(0)
@@ -160,6 +162,7 @@ class JaxAsterix(JaxEnvironment[AsterixState, AsterixObservation, AsterixInfo, A
             collectibles=collectibles,
             collect_spawn_timer=collect_spawn_timer,
             hit_timer=jnp.array(0, dtype=jnp.int32),
+            respawn_timer = jnp.array(0, dtype=jnp.int32),
         )
 
         return self._get_observation(state), state
@@ -197,9 +200,12 @@ class JaxAsterix(JaxEnvironment[AsterixState, AsterixObservation, AsterixInfo, A
         jax.debug.print("step debug: action={} mapped={} dx={} dy={}", action, mapped, dx, dy)
         action = mapped
 
+        # Pause-Status
+        paused = state.respawn_timer > 0
+
         # Lane-Wechsel nur, wenn Cooldown abgelaufen und dy != 0
         stage_move = jnp.where(dy < 0, -1, jnp.where(dy > 0, 1, 0))
-        tentative_stage = current_stage + jnp.where(can_switch_stage, stage_move, 0)
+        tentative_stage = current_stage + jnp.where(~paused & can_switch_stage, stage_move, 0)
         new_stage = jnp.clip(tentative_stage, 0, num_stage - 2)
 
         new_y = ((stage_borders[new_stage] + stage_borders[new_stage + 1]) // 2) - (player_height // 2)
@@ -677,16 +683,17 @@ class AsterixRenderer(JAXGameRenderer):
 
 
         # ----------- PLAYER -------------
-        player_sprite = jr.get_sprite_frame(self.sprites['ASTERIX'], 0)
-        player_hit_sprite = jr.get_sprite_frame(self.sprites['ASTERIX'], 0)
-        player_sprite_offset = self.offsets['ASTERIX']
-        player_hit_sprite_offset = self.offsets['ASTERIX']
+        #player_sprite = jr.get_sprite_frame(self.sprites['ASTERIX'], 0)
+        #player_hit_sprite = jr.get_sprite_frame(self.sprites['ASTERIX'], 0)
+        #player_sprite_offset = self.offsets['ASTERIX']
+        #player_hit_sprite_offset = self.offsets['ASTERIX']
 
         asterix_sprite_left =  jr.get_sprite_frame(self.sprites['ASTERIX_LEFT'], 0)
         asterix_sprite_right = jr.get_sprite_frame(self.sprites['ASTERIX_RIGHT'], 0)
         asterix_hit_sprite_left = jr.get_sprite_frame(self.sprites['ASTERIX_LEFT_HIT'], 0)
         asterix_hit_sprite_right = jr.get_sprite_frame(self.sprites['ASTERIX_RIGHT_HIT'], 0)
-        asterix_sprites = jr.pad_to_match(asterix_sprite_left, asterix_sprite_right, asterix_hit_sprite_left, asterix_hit_sprite_right)
+        #asterix_sprites = jr.pad_to_match(asterix_sprite_left, asterix_sprite_right, asterix_hit_sprite_left, asterix_hit_sprite_right)
+        asterix_sprites, _ = jr.pad_to_match([asterix_sprite_left, asterix_sprite_right, asterix_hit_sprite_left, asterix_hit_sprite_right])
 
         direction = state.player_direction
 
