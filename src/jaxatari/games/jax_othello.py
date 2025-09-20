@@ -2686,7 +2686,7 @@ class JaxOthello(JaxEnvironment[OthelloState, OthelloObservation, OthelloInfo, O
         return (array_of_tiles, touple, custom_iterator)
 
 
-    def reset(self, key = [0,0]) -> Tuple[OthelloObservation, OthelloState]:
+    def reset(self, key = jnp.array([0,0])) -> Tuple[OthelloObservation, OthelloState]:
         """ Reset the game state to the initial state """
         field_color_init = jnp.full((8, 8), FieldColor.EMPTY.value, dtype=jnp.int32)
         field_color_init = field_color_init.at[3,3].set(FieldColor.BLACK.value)
@@ -2705,8 +2705,8 @@ class JaxOthello(JaxEnvironment[OthelloState, OthelloObservation, OthelloInfo, O
             ),
             field_choice_player = jnp.array([7, 7], dtype=jnp.int32),
             difficulty = jnp.array(1).astype(jnp.int32), #set to 1, since jaxAtari doesnt support different difficulties yet
-            end_of_game_reached = False,
-            random_key = jax.random.PRNGKey(key[0])
+            end_of_game_reached = jnp.array(0).astype(jnp.int32),
+            random_key = jax.random.PRNGKey(key[0]).astype(jnp.int32)
         )
         initial_obs = self._get_observation(state)
         return initial_obs, state
@@ -2804,10 +2804,16 @@ class JaxOthello(JaxEnvironment[OthelloState, OthelloObservation, OthelloInfo, O
     @partial(jax.jit, static_argnums=(0,))
     def _get_observation(self, state: OthelloState):
         return OthelloObservation(
-            field=state.field,
-            enemy_score=state.enemy_score,
             player_score=state.player_score,
-            field_choice_player=state.field_choice_player
+            enemy_score=state.enemy_score,
+            step_counter=state.step_counter,
+            field=Field(
+                field_id = state.field.field_id, #richtig? da ja eigentich array und nicht konkreter wert
+                field_color = state.field.fieldColor,                
+            ),
+            field_choice_player=state.field_choice_player[0]*8+state.field_choice_player, #nutze 1d representation der Feldkoordinate
+            difficulty=state.difficulty,
+            random_key=state.random_key,
         )
     
     def render(self, state: OthelloState) -> jnp.ndarray:
@@ -2831,22 +2837,16 @@ class JaxOthello(JaxEnvironment[OthelloState, OthelloObservation, OthelloInfo, O
 
     def observation_space(self) -> spaces.Box:
         return spaces.Dict({
-            "score_player": spaces.Box(low=0, high=64, shape=(), dtype=jnp.int32),
-            "score_enemy": spaces.Box(low=0, high=64, shape=(), dtype=jnp.int32),
+            "player_score": spaces.Box(low=0, high=64, shape=(), dtype=jnp.int32),
+            "enemy_score": spaces.Box(low=0, high=64, shape=(), dtype=jnp.int32),
             "step_counter": spaces.Box(low=0, high=2147483647, shape=(), dtype=jnp.int32),
             "field": spaces.Dict({
-                "field_id": spaces.Box(low=0, high=63, shape=(), dtype=jnp.int32),
+                "field_id": spaces.Box(low=0, high=63, shape=(), dtype=jnp.int32), #richtig?, da ja eigentlich array und kein konkreter wert?
                 "field_color": spaces.Box(low=0, high=2, shape=(), dtype=jnp.int32),
             }),
-            "field_choice_player":  spaces.Dict({
-                "y": spaces.Box(low=0, high=7, shape=(), dtype=jnp.int32),
-                "x": spaces.Box(low=0, high=7, shape=(), dtype=jnp.int32),
-            }),  
+            "field_choice_player":  spaces.Box(low=0, high=63, shape=(), dtype=jnp.int32), #zu 0d array mit index 0-63 array konvertiert
             "difficulty": spaces.Box(low=1, high=3, shape=(), dtype=jnp.int32),
             "random_key": spaces.Box(low=0, high=2147483647, shape=(), dtype=jnp.int32),
-
-
-
         })
 
     def image_space(self) -> spaces.Box:
