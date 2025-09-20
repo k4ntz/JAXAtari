@@ -70,9 +70,9 @@ class PlayerState(NamedTuple):
     last_dir: chex.Array                # (2,)
     animation_counter: chex.Array       # (1,)
     is_firing: chex.Array               # (1,)
-    bullets: chex.Array                 # (MAX_BULLETS, 2)
-    bullet_dirs: chex.Array             # (MAX_BULLETS, 2)
-    bullet_active: chex.Array           # (MAX_BULLETS,)
+    bullet: chex.Array                 # (2,)
+    bullet_dir: chex.Array             # (2,)
+    bullet_active: chex.Array           # (1,)
     death_timer: chex.Array
 
 class EnemyState(NamedTuple):
@@ -113,8 +113,8 @@ class BerzerkState(NamedTuple):
 
 class BerzerkObservation(NamedTuple):
     player: chex.Array
-    bullets: chex.Array
-    bullet_dirs: chex.Array
+    bullet: chex.Array
+    bullet_dir: chex.Array
     bullet_active: chex.Array
 
 class BerzerkInfo(NamedTuple):
@@ -328,19 +328,17 @@ class JaxBerzerk(JaxEnvironment[BerzerkState, BerzerkObservation, BerzerkInfo, B
         offset = jnp.select(conds, offsets, default_offset)
 
         spawn_pos = player_pos + offset
-        def try_spawn(i, carry):
-            bullets, directions, active = carry
-            return jax.lax.cond(
-                ~active[i],
-                lambda _: (
-                    bullets.at[i].set(spawn_pos),
-                    directions.at[i].set(player_move_dir),
-                    active.at[i].set(True),
-                ),
-                lambda _: (bullets, directions, active),
-                operand=None
-            )
-        return jax.lax.fori_loop(0, self.consts.MAX_BULLETS, try_spawn, (state.player.bullets, state.player.bullet_dirs, state.player.bullet_active))
+        
+        return jax.lax.cond(
+            ~state.player.bullet_active[0],
+            lambda _: (
+                state.player.bullet.at[0].set(spawn_pos),
+                state.player.bullet_dir.at[0].set(player_move_dir),
+                state.player.bullet_active.at[0].set(True),
+            ),
+            lambda _: (state.player.bullet, state.player.bullet_dir, state.player.bullet_active),
+            operand=None
+        )
 
 
     @partial(jax.jit, static_argnums=(0, ))
@@ -684,8 +682,8 @@ class JaxBerzerk(JaxEnvironment[BerzerkState, BerzerkObservation, BerzerkInfo, B
     def _get_observation(self, state: BerzerkState) -> BerzerkObservation:
         return BerzerkObservation(
             player=state.player.pos,
-            bullets=state.player.bullets,
-            bullet_dirs=state.player.bullet_dirs, 
+            bullet=state.player.bullet,
+            bullet_dir=state.player.bullet_dir, 
             bullet_active=state.player.bullet_active
         )
     
@@ -714,9 +712,9 @@ class JaxBerzerk(JaxEnvironment[BerzerkState, BerzerkObservation, BerzerkInfo, B
             self.consts.PLAYER_BOUNDS[1][1] // 2
         ], dtype=jnp.float32)
         last_dir = jnp.array([0.0, -1.0])  # default = up
-        bullets = jnp.zeros((self.consts.MAX_BULLETS, 2), dtype=jnp.float32)
-        bullet_dirs = jnp.zeros((self.consts.MAX_BULLETS, 2), dtype=jnp.float32)
-        bullet_active = jnp.zeros((self.consts.MAX_BULLETS,), dtype=bool)
+        bullets = jnp.zeros((1, 2), dtype=jnp.float32)
+        bullet_dirs = jnp.zeros((1, 2), dtype=jnp.float32)
+        bullet_active = jnp.zeros((1,), dtype=bool)
         animation_counter = jnp.array(0, dtype=jnp.int32)
         death_timer = jnp.array(0, dtype=jnp.int32)
         player_is_firing = jnp.array(False)
@@ -726,8 +724,8 @@ class JaxBerzerk(JaxEnvironment[BerzerkState, BerzerkObservation, BerzerkInfo, B
             last_dir=last_dir,
             animation_counter=animation_counter,
             is_firing=player_is_firing,
-            bullets=bullets,
-            bullet_dirs=bullet_dirs,
+            bullet=bullets,
+            bullet_dir=bullet_dirs,
             bullet_active=bullet_active,
             death_timer=death_timer,
         )
@@ -736,10 +734,10 @@ class JaxBerzerk(JaxEnvironment[BerzerkState, BerzerkObservation, BerzerkInfo, B
         enemy_pos = jnp.full((self.consts.MAX_NUM_ENEMIES, 2), -100.0, dtype=jnp.float32)
         enemy_move_axis = -jnp.ones((self.consts.MAX_NUM_ENEMIES,), dtype=jnp.int32)
         enemy_move_dir = jnp.zeros((self.consts.MAX_NUM_ENEMIES,), dtype=jnp.int32)
-        enemy_alive = jnp.ones((self.consts.MAX_NUM_ENEMIES,), dtype=bool)
+        enemy_alive = jnp.ones((self.consts.MAX_NUM_ENEMIES,), dtype=jnp.bool_)
         enemy_bullets = jnp.zeros((self.consts.MAX_NUM_ENEMIES, 2), dtype=jnp.float32)
         enemy_bullet_dirs = jnp.zeros((self.consts.MAX_NUM_ENEMIES, 2), dtype=jnp.float32)
-        enemy_bullet_active = jnp.zeros((self.consts.MAX_NUM_ENEMIES,), dtype=bool)
+        enemy_bullet_active = jnp.zeros((self.consts.MAX_NUM_ENEMIES,), dtype=jnp.bool_)
         enemy_move_prob = jnp.full((self.consts.MAX_NUM_ENEMIES,), self.consts.MOVEMENT_PROB, dtype=jnp.float32)
         enemy_clear_bonus_given = jnp.array(False)
         enemy_death_timer = jnp.zeros((self.consts.MAX_NUM_ENEMIES,), dtype=jnp.int32)
@@ -984,7 +982,7 @@ class JaxBerzerk(JaxEnvironment[BerzerkState, BerzerkObservation, BerzerkInfo, B
             player_bullet, player_bullet_dir, player_bullet_active = jax.lax.cond(
                 is_shooting,
                 lambda _: self.shoot_bullet(state, new_player_pos, move_dir),
-                lambda _: (state.player.bullets, state.player.bullet_dirs, state.player.bullet_active),
+                lambda _: (state.player.bullet, state.player.bullet_dir, state.player.bullet_active),
                 operand=None
             )
 
@@ -1298,8 +1296,8 @@ class JaxBerzerk(JaxEnvironment[BerzerkState, BerzerkObservation, BerzerkInfo, B
                     last_dir=move_dir,
                     animation_counter=animation_counter,
                     is_firing=player_is_firing,
-                    bullets=player_bullet,
-                    bullet_dirs=player_bullet_dir,
+                    bullet=player_bullet,
+                    bullet_dir=player_bullet_dir,
                     bullet_active=player_bullet_active,
                     death_timer=death_timer,
                 ),
@@ -1375,8 +1373,8 @@ class JaxBerzerk(JaxEnvironment[BerzerkState, BerzerkObservation, BerzerkInfo, B
          return spaces.Dict(
             {
             "player": spaces.Box(0, 255, (2,), jnp.float32),
-            "bullets": spaces.Box(0, 255, (self.consts.MAX_BULLETS, 2), jnp.float32),
-            "bullet_active": spaces.Box(0, 1, (self.consts.MAX_BULLETS,), jnp.bool_),
+            "bullets": spaces.Box(0, 255, (2,), jnp.float32),
+            "bullet_active": spaces.Box(0, 1, (1,), jnp.bool_),
             }
         )
 
@@ -1586,33 +1584,32 @@ class BerzerkRenderer(JAXGameRenderer):
         raster = draw_enemy_wall_lines(raster, state)
 
 
-        # Draw bullets
-        for i in range(state.player.bullets.shape[0]):
-            is_active = state.player.bullet_active[i]
-            bullet_pos = state.player.bullets[i]
-            bullet_dir = state.player.bullet_dirs[i]
+        # Draw player bullet
+        is_active = state.player.bullet_active[0]
+        bullet_pos = state.player.bullet[0]
+        bullet_dir = state.player.bullet_dir[0]
 
-            def draw_bullet(raster):
-                dx = bullet_dir[0]
+        def draw_bullet(raster):
+            dx = bullet_dir[0]
 
-                type_idx = jax.lax.select(dx != 0, 0, 1)  # 0=horizontal, 1=vertical
+            type_idx = jax.lax.select(dx != 0, 0, 1)  # 0=horizontal, 1=vertical
 
-                def render_horizontal(r):
-                    sprite = jr.get_sprite_frame(self.sprites['bullet_horizontal'], 0)
-                    return jr.render_at(r, bullet_pos[0], bullet_pos[1], sprite)
+            def render_horizontal(r):
+                sprite = jr.get_sprite_frame(self.sprites['bullet_horizontal'], 0)
+                return jr.render_at(r, bullet_pos[0], bullet_pos[1], sprite)
 
-                def render_vertical(r):
-                    sprite = jr.get_sprite_frame(self.sprites['bullet_vertical'], 0)
-                    return jr.render_at(r, bullet_pos[0], bullet_pos[1], sprite)
+            def render_vertical(r):
+                sprite = jr.get_sprite_frame(self.sprites['bullet_vertical'], 0)
+                return jr.render_at(r, bullet_pos[0], bullet_pos[1], sprite)
 
-                return jax.lax.switch(
-                    type_idx,
-                    [render_horizontal, render_vertical],
-                    raster
-                )
+            return jax.lax.switch(
+                type_idx,
+                [render_horizontal, render_vertical],
+                raster
+            )
 
-            cond = jnp.logical_and(is_active, jnp.logical_not(room_transition_anim))
-            raster = jax.lax.cond(cond, draw_bullet, lambda r: r, raster)
+        cond = jnp.logical_and(is_active, jnp.logical_not(room_transition_anim))
+        raster = jax.lax.cond(cond, draw_bullet, lambda r: r, raster)
 
 
         def get_player_sprite():
