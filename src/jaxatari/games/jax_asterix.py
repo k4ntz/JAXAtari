@@ -682,22 +682,43 @@ class AsterixRenderer(JAXGameRenderer):
         player_sprite_offset = self.offsets['ASTERIX']
         player_hit_sprite_offset = self.offsets['ASTERIX']
 
+        asterix_sprite_left =  jr.get_sprite_frame(self.sprites['ASTERIX_LEFT'], 0)
+        asterix_sprite_right = jr.get_sprite_frame(self.sprites['ASTERIX_RIGHT'], 0)
+        asterix_hit_sprite_left = jr.get_sprite_frame(self.sprites['ASTERIX_LEFT_HIT'], 0)
+        asterix_hit_sprite_right = jr.get_sprite_frame(self.sprites['ASTERIX_RIGHT_HIT'], 0)
+        asterix_sprites = jr.pad_to_match(asterix_sprite_left, asterix_sprite_right, asterix_hit_sprite_left, asterix_hit_sprite_right)
+
         direction = state.player_direction
-        player_sprite = jax.lax.switch(
-            direction - 1,  # 1=links, 2=rechts → 0/1 für switch
-            [
-                lambda _: jr.get_sprite_frame(self.sprites['ASTERIX_LEFT'], 0),  # 1: links
-                lambda _: jr.get_sprite_frame(self.sprites['ASTERIX_RIGHT'], 0),  # 2: rechts
-            ],
-            None  # Dummy-Argument, wird von den Lambdas ignoriert
-        )
+
+        # Hit-/Normal-Sprite abhängig vom Timer wählen
+        def pick_normal(_):
+            return jax.lax.switch(
+                direction - 1,
+                [
+                    lambda _: asterix_sprites[0],
+                    lambda _: asterix_sprites[1],
+                ],
+                None
+            )
+
+        def pick_hit(_):
+            return jax.lax.switch(
+                direction - 1,
+                [
+                    lambda _: asterix_sprites[2],
+                    lambda _: asterix_sprites[3],
+                ],
+                None
+            )
+
+        player_sprite = jax.lax.cond(state.hit_timer > 0, pick_hit, pick_normal, operand=None)
 
         raster = jr.render_at(
             raster,
             state.player_x,
             state.player_y,
             player_sprite,
-            flip_offset=player_sprite_offset
+            flip_offset=self.offsets.get('ASTERIX', None)
         )
 
         # ----------- LYRES -------------
