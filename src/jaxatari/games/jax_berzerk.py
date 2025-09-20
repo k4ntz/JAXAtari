@@ -806,57 +806,6 @@ class JaxBerzerk(JaxEnvironment[BerzerkState, BerzerkObservation, BerzerkInfo, B
     
     @partial(jax.jit, static_argnums=0)
     def step(self, state: BerzerkState, action: chex.Array) -> Tuple[BerzerkObservation, BerzerkState, float, bool, BerzerkInfo]:
-        # Handle death animation phase
-        is_dead = state.player.death_timer > 0
-        death_timer = jnp.maximum(state.player.death_timer - 1, 0)
-
-        def handle_death(_):
-            new_state = state._replace(
-                player=state.player._replace(death_timer=death_timer)
-            )
-
-            lives_after = jnp.where(death_timer == 0, state.lives - 1, state.lives)
-            score_after = jnp.where(lives_after == -1, 0, state.score)
-
-            # state update after death
-            base_state = state._replace(
-                player=state.player._replace(death_timer=death_timer),
-                lives=lives_after,
-                score=score_after,
-                entry_direction=3,
-            )
-
-            # repeat state during death animation
-            still_dying = death_timer > 0
-            def during_death():
-                return (
-                    self._get_observation(new_state),
-                    new_state,
-                    0.0,
-                    False,
-                    self._get_info(new_state)
-                )
-
-            # once death animation is over: decide if game over or transition
-            def after_death():
-                base_state_with_timer = jax.lax.cond(
-                    lives_after == -1,
-                    # game over
-                    lambda: base_state._replace(game_over_timer=self.consts.GAME_OVER_FRAMES),
-                    # normal room-transition
-                    lambda: base_state._replace(room_transition_timer=self.consts.TRANSITION_ANIMATION_FRAMES)
-                )
-                return (
-                    self._get_observation(base_state_with_timer),
-                    base_state_with_timer,
-                    0.0,
-                    False,
-                    self._get_info(base_state_with_timer)
-                )
-
-            return jax.lax.cond(still_dying, during_death, after_death)
-
-
         # Handle game over animation phase
         game_over_active = state.game_over_timer > 0
         game_over_timer = jnp.maximum(state.game_over_timer - 1, 0)
@@ -952,14 +901,21 @@ class JaxBerzerk(JaxEnvironment[BerzerkState, BerzerkObservation, BerzerkInfo, B
             # 1. Update Player
             #######################################################
 
-            player_x, player_y, move_dir = self.player_step(state, action)
+            player_alive = state.player.death_timer == 0
+            # forbid movement during death animation
+            player_x, player_y, move_dir = jax.lax.cond(
+                player_alive,
+                lambda _: self.player_step(state, action),
+                lambda _: (state.player.pos[0], state.player.pos[1], state.player.last_dir),
+                operand=None
+            )
 
             new_player_pos = jnp.array([player_x, player_y])
 
             moving = self.is_moving_action(action)
 
             animation_counter = jnp.where(
-                moving,
+                player_alive & moving,
                 state.player.animation_counter + 1,
                 0
             )
@@ -976,6 +932,7 @@ class JaxBerzerk(JaxEnvironment[BerzerkState, BerzerkObservation, BerzerkInfo, B
                 action == Action.LEFTFIRE,
                 action == Action.UPFIRE,
             ]))
+            is_shooting = player_alive & is_shooting
 
             player_is_firing = is_shooting.astype(jnp.bool_)
 
@@ -1232,7 +1189,8 @@ class JaxBerzerk(JaxEnvironment[BerzerkState, BerzerkObservation, BerzerkInfo, B
 
             # player death
             hit_something = player_hit_by_enemy | player_hit_wall | player_hit_by_enemy_bullet | otto_hits_player
-            death_timer = jnp.where(hit_something, self.consts.DEATH_ANIMATION_FRAMES, state.player.death_timer)
+            death_timer = jnp.where(hit_something & (state.player.death_timer == 0), self.consts.DEATH_ANIMATION_FRAMES + 1, state.player.death_timer)
+            death_timer = jnp.maximum(death_timer - 1, 0)
 
             # enemy death
             enemy_alive = (
@@ -1274,7 +1232,24 @@ class JaxBerzerk(JaxEnvironment[BerzerkState, BerzerkObservation, BerzerkInfo, B
             enemy_clear_bonus_given = state.enemy.clear_bonus_given | give_bonus
 
             # Handle live logic
-            lives_after = state.lives
+            lives_after = jnp.where((death_timer == 0) & hit_something, state.lives - 1, state.lives)
+            score_after = jnp.where(lives_after == -1, 0, score_after)
+
+            # Trigger Room Transition oder Game Over automatisch
+            transition_timer = jax.lax.cond(
+                (death_timer == 0) & hit_something,
+                lambda: jax.lax.cond(
+                    lives_after == -1,
+                    lambda: jnp.array(self.consts.GAME_OVER_FRAMES, dtype=jnp.int32),
+                    lambda: jnp.array(self.consts.TRANSITION_ANIMATION_FRAMES, dtype=jnp.int32)
+                ),
+                lambda: state.room_transition_timer
+            )
+            game_over_timer = jax.lax.cond(
+                (death_timer == 0) & hit_something & (lives_after == -1),
+                lambda: self.consts.GAME_OVER_FRAMES,
+                lambda: state.game_over_timer
+            )
 
             extra_lives_given_last_score = state.extra_life_counter * self.consts.EXTRA_LIFE_AT
             give_extra_life = score_after >= extra_lives_given_last_score + self.consts.EXTRA_LIFE_AT
@@ -1287,7 +1262,7 @@ class JaxBerzerk(JaxEnvironment[BerzerkState, BerzerkObservation, BerzerkInfo, B
             # 5. Update State
             #######################################################
 
-            transition_timer = jnp.where(player_hit_exit, self.consts.TRANSITION_ANIMATION_FRAMES, state.room_transition_timer)
+            transition_timer = jnp.where(player_hit_exit, self.consts.TRANSITION_ANIMATION_FRAMES, transition_timer)
             entry_direction = jnp.where(player_hit_exit, self.get_exit_direction(new_player_pos), state.entry_direction)
 
             new_state = BerzerkState(
@@ -1351,14 +1326,9 @@ class JaxBerzerk(JaxEnvironment[BerzerkState, BerzerkObservation, BerzerkInfo, B
             game_over_active,
             handle_game_over,
             lambda _: jax.lax.cond(
-                is_dead,
-                handle_death,
-                lambda _: jax.lax.cond(
-                    room_transition_active,
-                    handle_room_transition,
-                    handle_normal,
-                    operand=None
-                ),
+                room_transition_active,
+                handle_room_transition,
+                handle_normal,
                 operand=None
             ),
             operand=None
