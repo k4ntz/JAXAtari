@@ -11,7 +11,6 @@ GAME_MODULES = {
     "kangaroo": "jaxatari.games.jax_kangaroo",
     "freeway": "jaxatari.games.jax_freeway",
     "breakout": "jaxatari.games.jax_breakout",
-    "backgammon": "jaxatari.games.jax_backgammon",
 }
 
 def list_available_games() -> list[str]:
