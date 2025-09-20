@@ -27,7 +27,6 @@ ENEMY_MOVE_SPEED = 0.125
 # -------- Movement params ----------------------------------
 movement_pattern = jnp.array([1, 1, 0, 1, 0, 1, 1, 0, 1, 1, 0], dtype=jnp.float32)
 pat_len = movement_pattern.shape[0]
-
 # -------- Break params ----------------------------------
 BRAKE_DURATION = 10 * 2# in Frames
 BRAKE_TOTAL_DISTANCE = 7.0 * 2# in Pixels
@@ -47,7 +46,9 @@ FIREBALL_MOVEMENT_Start = jnp.array([32, 32, 32, 24], dtype=jnp.float32)
 FIREBALL_MOVEMENT = jnp.array([4, 6, 6], dtype=jnp.float32)
 FIREBALL_RESTART = 120
 FIREBALL_Y = jnp.array([175 - 28, 135 - 28, 95 - 28, 57 - 28])
-FIREBALL_INIT_XY = jnp.array([145, FIREBALL_Y[1]])
+FIREBALL_X = jnp.array([4, 142])
+FIREBALL_INIT_XY = jnp.array([FIREBALL_X[1], FIREBALL_Y[1]])
+FIREBALL_DIR = jnp.array([1, -1])
 # --- Object Colors ---
 PLAYER_COLOR = jnp.array([0, 255, 0], dtype=jnp.uint8)
 ENEMY_COLOR = jnp.array([255, 0, 0], dtype=jnp.uint8)
@@ -93,6 +94,7 @@ class Fireball(NamedTuple):
     count: chex.Array
     state: chex.Array
     dir: chex.Array
+    rnd: chex.Array
 
 class Enemy(NamedTuple):
     enemy_pos: jnp.ndarray  # shape (N,2): x/y positions
@@ -228,6 +230,13 @@ def check_enemy_collision(player_pos, enemy_pos):
     overlap_y = (py < ey + eh) & (py + ph > ey)
     return jnp.any(overlap_x & overlap_y)
 
+def fireball_new_start_pos(rng):
+    rng, subkey1 = jax.random.split(rng)
+    height = jax.random.randint(subkey1, (), 0, 4)
+
+    rng, subkey2 = jax.random.split(rng)
+    side = jax.random.randint(subkey2, (), 0, 2)
+    return jnp.array([FIREBALL_X[side], FIREBALL_Y[height]]), FIREBALL_DIR[side], rng
 
 def fireball_step(fb:Fireball):
     def start(f: Fireball):
@@ -246,7 +255,8 @@ def fireball_step(fb:Fireball):
             move_pat= f.move_pat,
             count= f.count,
             state= new_state,
-            dir= f.dir
+            dir= f.dir,
+            rnd= f.rnd
         )
         
     def move(f: Fireball):
@@ -257,7 +267,11 @@ def fireball_step(fb:Fireball):
         last_is_zero = arr[first_nonzero_index] == 0
         
         new_pos= jnp.array([jnp.where(arr[first_nonzero_index] == 0, new_x, f.pos[0]), f.pos[1]])
-        new_state= jnp.where(new_pos[0]<4, 2, 1)
+        new_state = jnp.where(
+            (new_pos[0] < 4) | (new_pos[0] > SCREEN_WIDTH - 18),
+            2,  # despawn
+            1   # bewegen
+        )
         new_move_pat= jnp.where(last_is_zero, FIREBALL_MOVEMENT, arr)
         return Fireball(
             pos= new_pos,
@@ -265,7 +279,8 @@ def fireball_step(fb:Fireball):
             move_pat= new_move_pat,
             count= f.count,
             state= new_state,
-            dir= f.dir
+            dir= f.dir,
+            rnd= f.rnd
         )
     def wait(f: Fireball):
         def stay(ff: Fireball):
@@ -275,16 +290,19 @@ def fireball_step(fb:Fireball):
             move_pat= ff.move_pat,
             count= ff.count - 1,
             state= ff.state,
-            dir= ff.dir
+            dir= ff.dir,
+            rnd= ff.rnd
         )
         def end(ff: Fireball):
+            new_pos, new_dir, rng = fireball_new_start_pos(ff.rnd)
             return Fireball(
-            pos= FIREBALL_INIT_XY,
+            pos= new_pos,
             start_pat= ff.start_pat,
             move_pat= ff.move_pat,
             count= 60,
             state= 0,
-            dir= ff.dir
+            dir= new_dir,
+            rnd= rng
         )
         return lax.cond(f.count > 0, stay, end, f)
     return lax.switch(fb.state, [start, move, wait], fb)
@@ -891,7 +909,8 @@ class JaxMarioBros(JaxEnvironment[
                     move_pat= FIREBALL_MOVEMENT,
                     count= FIREBALL_RESTART,
                     state= 0,
-                    dir= -1
+                    dir= -1,
+                    rnd= jax.random.PRNGKey(0)
                 ),
                 game_over= False,
                 next_spawn_side=jnp.int32(1),
@@ -1108,7 +1127,6 @@ class JaxMarioBros(JaxEnvironment[
 
                 # 4) Update fireball AFTER enemy_step
                 new_fireball = fireball_step(state.game.fireball)
-
 
 
                 # 5) POW hit logic and platform bump detection (unchanged)
