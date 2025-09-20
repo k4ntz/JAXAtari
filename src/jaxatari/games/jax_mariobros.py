@@ -1009,8 +1009,11 @@ class JaxMarioBros(JaxEnvironment[
                 # active==1 means fully active; 2 means pending (spawned this frame, not yet occupying for checks); 0 means free
                 active_now = (enemy.enemy_active == 1)
 
-                TOP_PLATFORM_IDX = jnp.int32(1)
-                is_on_top = jnp.logical_and(enemy.enemy_platform_idx == TOP_PLATFORM_IDX, active_now)
+                TOP_PLATFORM_IDX = jnp.array([1, 2], dtype=jnp.int32)
+                is_on_top = jnp.logical_and(
+                    jnp.isin(enemy.enemy_platform_idx, TOP_PLATFORM_IDX),
+                    active_now
+                )
                 top_present = jnp.any(is_on_top)
 
                 # find first free slot (enemy_active == 0)
@@ -1028,7 +1031,7 @@ class JaxMarioBros(JaxEnvironment[
                 def do_spawn(ep, ev, pidx, timer, init_sides, active_arr, status, next_side):
                     ep2 = ep.at[idx_to_spawn].set(spawn_pos)
                     ev2 = ev.at[idx_to_spawn].set(spawn_vel)
-                    pidx2 = pidx.at[idx_to_spawn].set(TOP_PLATFORM_IDX)
+                    pidx2 = pidx.at[idx_to_spawn].set(1)
                     timer2 = timer.at[idx_to_spawn].set(0)
                     init_sides2 = init_sides.at[idx_to_spawn].set(spawn_side)
                     # mark pending (2) — not drawn / not counted as occupying top
@@ -1042,7 +1045,12 @@ class JaxMarioBros(JaxEnvironment[
 
                 # don't spawn if there's any active or pending enemy on top
                 pending_mask = (enemy.enemy_active == 2)
-                top_pending = jnp.any(jnp.logical_and(enemy.enemy_platform_idx == TOP_PLATFORM_IDX, pending_mask))
+                top_pending = jnp.any(
+                    jnp.logical_and(
+                        jnp.isin(enemy.enemy_platform_idx, TOP_PLATFORM_IDX),
+                        pending_mask
+                    )
+                )
                 spawn_cond = jnp.logical_and(jnp.logical_not(jnp.logical_or(top_present, top_pending)), any_free)
 
                 (ep2, ev2, pidx2, timer2, init_sides2, active2, status2, next_spawn_side) = jax.lax.cond(
@@ -1068,14 +1076,17 @@ class JaxMarioBros(JaxEnvironment[
                 )
 
                 # If we spawned this frame, preserve spawn position/platform for this frame (prevent repeated spawning)
-                idx = jax.lax.cond(spawn_cond, lambda arr: arr.at[idx_to_spawn].set(TOP_PLATFORM_IDX), lambda arr: arr, idx)
+                idx = jax.lax.cond(spawn_cond, lambda arr: arr.at[idx_to_spawn].set(1), lambda arr: arr, idx)
 
 
                 # Maintain 0=free,1=active,2=pending semantics
                 new_enemy_active = active2
 
                 # Promote pending (2) -> active (1) only when no *other* enemy (active or pending) is on top.
-                idx_top_mask = jnp.logical_and(idx == TOP_PLATFORM_IDX, new_enemy_active != 0)
+                idx_top_mask = jnp.logical_and(
+                    jnp.isin(idx, TOP_PLATFORM_IDX),
+                    new_enemy_active != 0
+                )
                 total_top = jnp.sum(idx_top_mask.astype(jnp.int32))
                 self_on_top = idx_top_mask.astype(jnp.int32)
                 others_on_top = total_top - self_on_top
