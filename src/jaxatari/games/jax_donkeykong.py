@@ -2310,8 +2310,8 @@ class JaxDonkeyKong(JaxEnvironment[DonkeyKongState, DonkeyKongObservation, Donke
 
             # Fire
             "fires": spaces.Dict({
-                "x": spaces.Box(low=0, high=210, shape=(MAX_FIRES,), dtype=jnp.int32),
-                "y": spaces.Box(low=0, high=160, shape=(MAX_FIRES, ), dtype=jnp.int32),    
+                "x": spaces.Box(low=-1, high=210, shape=(MAX_FIRES,), dtype=jnp.int32),
+                "y": spaces.Box(low=-1, high=160, shape=(MAX_FIRES, ), dtype=jnp.int32),    
                 "width": spaces.Box(low=0, high=160, shape=(MAX_FIRES, ), dtype=jnp.int32),
                 "height": spaces.Box(low=0, high=210, shape=(MAX_FIRES, ), dtype=jnp.int32),
             }),
@@ -2327,10 +2327,10 @@ class JaxDonkeyKong(JaxEnvironment[DonkeyKongState, DonkeyKongObservation, Donke
 
             # Ladders
             "ladders": spaces.Dict({
-                "start_x": spaces.Box(low=0, high=210, shape=(MAX_LADDERS,), dtype=jnp.int32),
-                "start_y": spaces.Box(low=0, high=160, shape=(MAX_LADDERS,), dtype=jnp.int32),
-                "end_x": spaces.Box(low=0, high=210, shape=(MAX_LADDERS,), dtype=jnp.int32),
-                "end_y": spaces.Box(low=0, high=160, shape=(MAX_LADDERS,), dtype=jnp.int32),
+                "start_x": spaces.Box(low=-1, high=210, shape=(MAX_LADDERS,), dtype=jnp.int32),
+                "start_y": spaces.Box(low=-1, high=160, shape=(MAX_LADDERS,), dtype=jnp.int32),
+                "end_x": spaces.Box(low=-1, high=210, shape=(MAX_LADDERS,), dtype=jnp.int32),
+                "end_y": spaces.Box(low=-1, high=160, shape=(MAX_LADDERS,), dtype=jnp.int32),
                 "width": spaces.Box(low=0, high=160, shape=(MAX_LADDERS,), dtype=jnp.int32),
             }),
             "ladder_mask": spaces.Box(low=0, high=1, shape=(MAX_LADDERS,), dtype=jnp.int32),
