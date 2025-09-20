@@ -2161,8 +2161,8 @@ class JaxDonkeyKong(JaxEnvironment[DonkeyKongState, DonkeyKongObservation, Donke
         barrel_mask = jnp.where(state.barrels.reached_the_end, 0, 1)
         nums_fires = self.consts.MAX_FIRES
         fires = EntityPosition(
-            x = state.fires.fire_x,
-            y = state.fires.fire_y,
+            x = jnp.round(state.fires.fire_x).astype(jnp.int32),
+            y = jnp.round(state.fires.fire_y).astype(jnp.int32),
             width = jnp.full((nums_fires,), self.consts.FIRE_HIT_BOX_Y),
             height = jnp.full((nums_fires,), self.consts.FIRE_HIT_BOX_X),
         )
@@ -2310,8 +2310,8 @@ class JaxDonkeyKong(JaxEnvironment[DonkeyKongState, DonkeyKongObservation, Donke
 
             # Fire
             "fires": spaces.Dict({
-                "x": spaces.Box(low=-1, high=210, shape=(MAX_FIRES,), dtype=jnp.float32),
-                "y": spaces.Box(low=-1, high=160, shape=(MAX_FIRES, ), dtype=jnp.float32),    
+                "x": spaces.Box(low=-1, high=210, shape=(MAX_FIRES,), dtype=jnp.int32),
+                "y": spaces.Box(low=-1, high=160, shape=(MAX_FIRES, ), dtype=jnp.int32),    
                 "width": spaces.Box(low=0, high=160, shape=(MAX_FIRES, ), dtype=jnp.int32),
                 "height": spaces.Box(low=0, high=210, shape=(MAX_FIRES, ), dtype=jnp.int32),
             }),
