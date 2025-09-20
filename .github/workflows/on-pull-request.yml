@@ -21,25 +21,21 @@ jobs:
       - name: Generate matrix
         id: set-matrix
         run: |
-          # # Scenario 1: PR to the default branch (run all tests)
-          # if [[ "${{ github.base_ref }}" == "${{ github.event.repository.default_branch }}" ]]; then
-          #   echo "PR is to the default branch. Testing all games."
-          #   cd src/jaxatari/games/
-          #   CHANGED_GAMES=$(find . -type f -name "jax_*.py" -printf "%f\n" | sed -e 's/^jax_//' | sed -e 's/\.py//' | jq -R . | jq -cs .)
-          # # Scenario 2: PR to a non-default branch (run changed tests)
-          # else
-          #   echo "PR is to a non-default branch. Testing changed games."
-          #   CHANGED_GAME_FILES=$(git diff --name-only ${{ github.event.pull_request.base.sha }}...${{ github.event.pull_request.head.sha }} | grep 'src/jaxatari/games/jax_.*\.py' || true)
-          #   if [[ -n "$CHANGED_GAME_FILES" ]]; then
-          #     CHANGED_GAMES=$(echo "$CHANGED_GAME_FILES" | sed -e 's|src/jaxatari/games/jax_||' | sed -e 's|\.py||' | jq -R . | jq -cs .)
-          #   else
-          #     CHANGED_GAMES="[]"
-          #   fi
-          # fi
-          # echo $CHANGED_GAMES # debug
-          # echo "matrix=$CHANGED_GAMES" >> $GITHUB_OUTPUT
-
-          CHANGED_GAMES='["donkeykong"]'
+          # Scenario 1: PR to the default branch (run all tests)
+          if [[ "${{ github.base_ref }}" == "${{ github.event.repository.default_branch }}" ]]; then
+            echo "PR is to the default branch. Testing all games."
+            cd src/jaxatari/games/
+            CHANGED_GAMES=$(find . -type f -name "jax_*.py" -printf "%f\n" | sed -e 's/^jax_//' | sed -e 's/\.py//' | jq -R . | jq -cs .)
+          # Scenario 2: PR to a non-default branch (run changed tests)
+          else
+            echo "PR is to a non-default branch. Testing changed games."
+            CHANGED_GAME_FILES=$(git diff --name-only ${{ github.event.pull_request.base.sha }}...${{ github.event.pull_request.head.sha }} | grep 'src/jaxatari/games/jax_.*\.py' || true)
+            if [[ -n "$CHANGED_GAME_FILES" ]]; then
+              CHANGED_GAMES=$(echo "$CHANGED_GAME_FILES" | sed -e 's|src/jaxatari/games/jax_||' | sed -e 's|\.py||' | jq -R . | jq -cs .)
+            else
+              CHANGED_GAMES="[]"
+            fi
+          fi
           echo $CHANGED_GAMES # debug
           echo "matrix=$CHANGED_GAMES" >> $GITHUB_OUTPUT
         shell: bash
