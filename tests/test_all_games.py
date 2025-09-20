@@ -16,6 +16,7 @@ ALE_GAME_MAP = {
     #"breakout": "Breakout-v5", TODO: commented out because of the action space mismatch
     "seaquest": "Seaquest-v5",
     "kangaroo": "Kangaroo-v5",
+    "galaxian": "Galaxian-v5",
     # Add more mappings as needed
 }
 
