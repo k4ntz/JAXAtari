@@ -2830,11 +2830,31 @@ class JaxOthello(JaxEnvironment[OthelloState, OthelloObservation, OthelloInfo, O
         return jnp.array(len(self.action_set))
 
     def observation_space(self) -> spaces.Box:
+        return spaces.Dict({
+            "score_player": spaces.Box(low=0, high=64, shape=(), dtype=jnp.int32),
+            "score_enemy": spaces.Box(low=0, high=64, shape=(), dtype=jnp.int32),
+            "step_counter": spaces.Box(low=0, high=2147483647, shape=(), dtype=jnp.int32),
+            "field": spaces.Dict({
+                "field_id": spaces.Box(low=0, high=63, shape=(), dtype=jnp.int32),
+                "field_color": spaces.Box(low=0, high=2, shape=(), dtype=jnp.int32),
+            }),
+            "field_choice_player":  spaces.Dict({
+                "y": spaces.Box(low=0, high=7, shape=(), dtype=jnp.int32),
+                "x": spaces.Box(low=0, high=7, shape=(), dtype=jnp.int32),
+            }),  
+            "difficulty": spaces.Box(low=1, high=3, shape=(), dtype=jnp.int32),
+            "random_key": spaces.Box(low=0, high=2147483647, shape=(), dtype=jnp.int32),
+
+
+
+        })
+
+    def image_space(self) -> spaces.Box:
         return spaces.Box(
             low=0,
-            high=2,
-            shape=(self.consts.FIELD_HEIGHT, self.consts.FIELD_WIDTH),
-            dtype=jnp.uint8,
+            high=255,
+            shape=(210, 160, 3),
+            dtype=jnp.uint8
         )
 
 
