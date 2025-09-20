@@ -7,7 +7,7 @@ import chex
 import pygame
 import enum
 import time
-from gymnax.environments import spaces
+import jaxatari.spaces as spaces
 
 from jaxatari.renderers import JAXGameRenderer
 from jaxatari.rendering import jax_rendering_utils as jr
@@ -119,9 +119,6 @@ class OthelloObservation(NamedTuple):
 class OthelloInfo(NamedTuple):
     time: jnp.ndarray
     all_rewards: chex.Array
-
-
-
 
 
 class JaxOthello(JaxEnvironment[OthelloState, OthelloObservation, OthelloInfo, OthelloConstants ]):
@@ -2689,7 +2686,7 @@ class JaxOthello(JaxEnvironment[OthelloState, OthelloObservation, OthelloInfo, O
         return (array_of_tiles, touple, custom_iterator)
 
 
-    def reset(self, key = [0,0]) -> OthelloState:
+    def reset(self, key = [0,0]) -> Tuple[OthelloObservation, OthelloState]:
         """ Reset the game state to the initial state """
         field_color_init = jnp.full((8, 8), FieldColor.EMPTY.value, dtype=jnp.int32)
         field_color_init = field_color_init.at[3,3].set(FieldColor.BLACK.value)

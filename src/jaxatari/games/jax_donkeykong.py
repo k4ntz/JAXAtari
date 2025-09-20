@@ -2,11 +2,12 @@ import os
 from functools import partial
 from typing import NamedTuple, Tuple
 import jax.lax
+
 import jax.numpy as jnp
 import chex
 import pygame
-from gymnax.environments import spaces
 
+import jaxatari.spaces as spaces
 from jaxatari.renderers import JAXGameRenderer
 from jaxatari.rendering import jax_rendering_utils as aj
 from jaxatari.environment import JaxEnvironment, JAXAtariAction as Action
@@ -72,15 +73,15 @@ class DonkeyKongConstants(NamedTuple):
     NUMBER_OF_DIGITS_FOR_TIMER_SCORE: int = 4
 
     # Mario movement and physics
-    LEVEL_1_MARIO_START_X: float = 176.0
-    LEVEL_1_MARIO_START_Y: float = 45.0
-    LEVEL_2_MARIO_START_X: float = 155.0
-    LEVEL_2_MARIO_START_Y: float = 32.0
-    MARIO_JUMPING_HEIGHT: float = 5.0
+    LEVEL_1_MARIO_START_X = jnp.float32(176.0)
+    LEVEL_1_MARIO_START_Y = jnp.float32(45.0)
+    LEVEL_2_MARIO_START_X = jnp.float32(155.0)
+    LEVEL_2_MARIO_START_Y = jnp.float32(32.0)
+    MARIO_JUMPING_HEIGHT = jnp.float32(5.0)
     MARIO_JUMPING_FRAME_DURATION: int = 33
-    MARIO_MOVING_SPEED: float = 0.335  # pixels per frame
+    MARIO_MOVING_SPEED = jnp.float32(0.335)  # pixels per frame
     MARIO_WALKING_ANIMATION_CHANGE_DURATION: int = 5
-    MARIO_CLIMBING_SPEED: float = 0.333
+    MARIO_CLIMBING_SPEED = jnp.float32(0.333)
     MARIO_CLIMBING_ANIMATION_CHANGE_DURATION: int = 12
 
     # Game freeze duration if mario got hit by enemy
@@ -111,11 +112,11 @@ class DonkeyKongConstants(NamedTuple):
     BARREL_SPRITE_LEFT: int = 2
 
     # Barrel rolling probability
-    BASE_PROBABILITY_BARREL_ROLLING_A_LADDER_DOWN_ROUND_1: float = 0.14
-    BASE_PROBABILITY_BARREL_ROLLING_A_LADDER_DOWN_ROUND_2: float = 0.36
-    BASE_PROBABILITY_BARREL_ROLLING_A_LADDER_DOWN_ROUND_3: float = 0.34
-    BASE_PROBABILITY_BARREL_ROLLING_A_LADDER_DOWN_ROUND_4: float = 0.34
-    BASE_PROBABILITY_BARREL_ROLLING_A_LADDER_DOWN_ROUND_5: float = 0.5
+    BASE_PROBABILITY_BARREL_ROLLING_A_LADDER_DOWN_ROUND_1 = jnp.float32(0.14)
+    BASE_PROBABILITY_BARREL_ROLLING_A_LADDER_DOWN_ROUND_2 = jnp.float32(0.36)
+    BASE_PROBABILITY_BARREL_ROLLING_A_LADDER_DOWN_ROUND_3 = jnp.float32(0.34)
+    BASE_PROBABILITY_BARREL_ROLLING_A_LADDER_DOWN_ROUND_4 = jnp.float32(0.34)
+    BASE_PROBABILITY_BARREL_ROLLING_A_LADDER_DOWN_ROUND_5 = jnp.float32(0.5)
     BARREL_MOVING_SPEED: int = 1 # moving 1 pixel per frame
 
     # Hit boxes
@@ -127,19 +128,19 @@ class DonkeyKongConstants(NamedTuple):
     FIRE_HIT_BOX_Y: int = 8
 
     # Fire
-    FIRE_MOVING_SPEED: float = 0.49
+    FIRE_MOVING_SPEED = jnp.float32(0.49)
     FIRE_START_Y: int = 60
-    FIRE_CHANGING_DIRECTION_PROB = 0.008
+    FIRE_CHANGING_DIRECTION_PROB = jnp.float32(0.008)
 
-    STAGE_2_FIRE_CHANGING_DIRECTION_DEFAULT_PROB: float = 0.0
-    STAGE_3_FIRE_CHANGING_DIRECTION_DEFAULT_PROB: float = 0.17
-    STAGE_4_FIRE_CHANGING_DIRECTION_DEFAULT_PROB: float = 0.0
-    STAGE_5_FIRE_CHANGING_DIRECTION_DEFAULT_PROB: float = 0.21
+    STAGE_2_FIRE_CHANGING_DIRECTION_DEFAULT_PROB = jnp.float32(0.0)
+    STAGE_3_FIRE_CHANGING_DIRECTION_DEFAULT_PROB = jnp.float32(0.17)
+    STAGE_4_FIRE_CHANGING_DIRECTION_DEFAULT_PROB = jnp.float32(0.0)
+    STAGE_5_FIRE_CHANGING_DIRECTION_DEFAULT_PROB = jnp.float32(0.21)
 
-    STAGE_2_FIRE_CHANGING_DIRECTION_INC_PROB: float = 0.008
-    STAGE_3_FIRE_CHANGING_DIRECTION_INC_PROB: float = 0.061
-    STAGE_4_FIRE_CHANGING_DIRECTION_INC_PROB: float = 0.011
-    STAGE_5_FIRE_CHANGING_DIRECTION_INC_PROB: float = 0.049
+    STAGE_2_FIRE_CHANGING_DIRECTION_INC_PROB = jnp.float32(0.008)
+    STAGE_3_FIRE_CHANGING_DIRECTION_INC_PROB = jnp.float32(0.061)
+    STAGE_4_FIRE_CHANGING_DIRECTION_INC_PROB = jnp.float32(0.011)
+    STAGE_5_FIRE_CHANGING_DIRECTION_INC_PROB = jnp.float32(0.049)
 
     # Movement directions
     MOVING_UP: int = 0
@@ -332,19 +333,19 @@ class DonkeyKongObservation(NamedTuple):
     hammer_position: EntityPosition
     hammer_can_destroy_enemy: jnp.ndarray
 
-    # # Enemy
-    # barrels: EntityPosition
-    # barrel_mask: jnp.ndarray # 0 = inactive barrels, 1 = active barrels
-    # fires: EntityPosition
-    # fire_mask: jnp.ndarray  
+    # Enemy
+    barrels: EntityPosition
+    barrel_mask: jnp.ndarray # 0 = inactive barrels, 1 = active barrels
+    fires: EntityPosition
+    fire_mask: jnp.ndarray  
 
-    # # Traps
-    # traps: EntityPositionTrap
+    # Traps
+    traps: EntityPositionTrap
 
-    # # Ladders
-    # ladders: EntityPositionLadder
-    # ladder_mask: jnp.ndarray # 0 for some ladders for level 1 which are no ladders, its only a place holder because JAX needs consistent array sizes
-                             # ladder_mask do NOT implie if those ladders are climbable or not
+    # Ladders
+    ladders: EntityPositionLadder
+    ladder_mask: jnp.ndarray # 0 for some ladders for level 1 which are no ladders, its only a place holder because JAX needs consistent array sizes
+                            # ladder_mask do NOT implie if those ladders are climbable or not
 
 class DonkeyKongInfo(NamedTuple):
     time: jnp.ndarray
@@ -401,10 +402,10 @@ class JaxDonkeyKong(JaxEnvironment[DonkeyKongState, DonkeyKongObservation, Donke
         branches = [lambda _, v=val: jnp.array(v) for val in x_2_values]
         x_2 = jax.lax.switch(index, branches, operand=None)
 
-        m = (x_2 - x_1) / (y_2 - y_1)
-        b = x_1 - m * y_1
+        m = ((x_2 - x_1) / (y_2 - y_1)).astype(jnp.float32)
+        b = (x_1 - m * y_1).astype(jnp.float32)
 
-        x = m * y + b
+        x = (m * y + b).astype(jnp.float32)
         return x
 
     @partial(jax.jit, static_argnums=(0,))
@@ -617,7 +618,7 @@ class JaxDonkeyKong(JaxEnvironment[DonkeyKongState, DonkeyKongObservation, Donke
 
                 # use the propability to change the direction
                 # if a fire forced to change his direction --> direction_change_prob == 1.0
-                def should_change(key, direction_change_prob: float) -> bool:
+                def should_change(key, direction_change_prob) -> bool:
                     rnd = jax.random.uniform(key, shape=())
                     return rnd < direction_change_prob
                 key = jax.random.PRNGKey(jnp.round(state.fires.fire_x[i]).astype(jnp.int32) + jnp.round(state.fires.fire_y[i]).astype(jnp.int32) + state.fires.stage[i] + state.step_counter)
@@ -1007,7 +1008,7 @@ class JaxDonkeyKong(JaxEnvironment[DonkeyKongState, DonkeyKongObservation, Donke
     @partial(jax.jit, static_argnums=(0,))
     def _mario_step(self, state, action: chex.Array):    
         # there are multiple action which mario/player can execute
- 
+
         # Jumping with Action.FIRE --> actually on the spot, there is a second function where Mario can jump wise (Action.LEFT/RIGHTFIRE)
         # several things needs to be considered --> While mario is jumping --> Action.FIRE does nothing
         # Mario is climbing --> Action.FIRE does nothing
@@ -1022,7 +1023,7 @@ class JaxDonkeyKong(JaxEnvironment[DonkeyKongState, DonkeyKongObservation, Donke
             new_state = new_state._replace(
                 start_frame_when_mario_jumped=start_frame_when_mario_jumped,
                 mario_jumping=mario_jumping,
-                mario_x=mario_x,
+                mario_x=mario_x.astype(jnp.float32),
             )
 
             return jax.lax.cond(
@@ -1040,13 +1041,13 @@ class JaxDonkeyKong(JaxEnvironment[DonkeyKongState, DonkeyKongObservation, Donke
                 start_frame_when_mario_jumped = state.step_counter,
                 mario_jumping_wide = True,
                 mario_view_direction = self.consts.MOVING_RIGHT,
-                mario_x = state.mario_x - self.consts.MARIO_JUMPING_HEIGHT,
-                mario_y = state.mario_y + self.consts.MARIO_MOVING_SPEED
+                mario_x = (state.mario_x - self.consts.MARIO_JUMPING_HEIGHT).astype(jnp.float32),
+                mario_y = (state.mario_y + self.consts.MARIO_MOVING_SPEED).astype(jnp.float32)
             )
             new_mario_x = jnp.round(self.bar_linear_equation(state.mario_stage, state.mario_y, state.level) - self.consts.MARIO_HIT_BOX_X) - 2
             new_state_already_jumping = state._replace(
-                mario_y = state.mario_y + self.consts.MARIO_MOVING_SPEED,
-                mario_x = new_mario_x - self.consts.MARIO_JUMPING_HEIGHT,
+                mario_y = (state.mario_y + self.consts.MARIO_MOVING_SPEED).astype(jnp.float32),
+                mario_x = (new_mario_x - self.consts.MARIO_JUMPING_HEIGHT).astype(jnp.float32),
             )
             return jax.lax.cond(
                 jnp.logical_and(action == Action.RIGHTFIRE, jnp.logical_and(jnp.logical_and(jnp.logical_and(state.mario_climbing == False, state.mario_jumping_wide == False), state.mario_jumping == False), jnp.logical_and(state.block_jumping_and_climbing == False, state.mario_reached_goal == False))),
@@ -1067,13 +1068,13 @@ class JaxDonkeyKong(JaxEnvironment[DonkeyKongState, DonkeyKongObservation, Donke
                 start_frame_when_mario_jumped = state.step_counter,
                 mario_jumping_wide = True,
                 mario_view_direction = self.consts.MOVING_LEFT,
-                mario_x = state.mario_x - self.consts.MARIO_JUMPING_HEIGHT,
-                mario_y = state.mario_y - self.consts.MARIO_MOVING_SPEED
+                mario_x = (state.mario_x - self.consts.MARIO_JUMPING_HEIGHT).astype(jnp.float32),
+                mario_y = (state.mario_y - self.consts.MARIO_MOVING_SPEED).astype(jnp.float32)
             )
             new_mario_x = jnp.round(self.bar_linear_equation(state.mario_stage, state.mario_y, state.level) - self.consts.MARIO_HIT_BOX_X) - 2
             new_state_already_jumping = state._replace(
-                mario_y = state.mario_y - self.consts.MARIO_MOVING_SPEED,
-                mario_x = new_mario_x - self.consts.MARIO_JUMPING_HEIGHT,
+                mario_y = (state.mario_y - self.consts.MARIO_MOVING_SPEED).astype(jnp.float32),
+                mario_x = (new_mario_x - self.consts.MARIO_JUMPING_HEIGHT).astype(jnp.float32),
             )
             return jax.lax.cond(
                 jnp.logical_and(action == Action.LEFTFIRE, jnp.logical_and(jnp.logical_and(jnp.logical_and(jnp.logical_and(state.mario_climbing == False, state.mario_jumping_wide == False), state.mario_jumping == False), state.block_jumping_and_climbing == False), state.mario_reached_goal == False)),
@@ -1141,13 +1142,13 @@ class JaxDonkeyKong(JaxEnvironment[DonkeyKongState, DonkeyKongObservation, Donke
                 lambda _: jax.lax.cond(
                     state.mario_climb_sprite == self.consts.MARIO_CLIMB_SPRITE_0,
                     lambda _: state._replace(
-                        mario_x=state.mario_x - self.consts.MARIO_CLIMBING_SPEED,
+                        mario_x=(state.mario_x - self.consts.MARIO_CLIMBING_SPEED).astype(jnp.float32),
                         mario_climb_frame_counter= state.mario_climb_frame_counter + 1,
                         mario_climb_sprite=self.consts.MARIO_CLIMB_SPRITE_1,
                         donkey_kong_sprite=self.consts.DONKEY_KONG_SPRITE_0,
                     ),
                     lambda _: state._replace(
-                        mario_x=state.mario_x - self.consts.MARIO_CLIMBING_SPEED,
+                        mario_x=(state.mario_x - self.consts.MARIO_CLIMBING_SPEED).astype(jnp.float32),
                         mario_climb_frame_counter= state.mario_climb_frame_counter + 1,
                         mario_climb_sprite=self.consts.MARIO_CLIMB_SPRITE_0,
                         donkey_kong_sprite=self.consts.DONKEY_KONG_SPRITE_1,
@@ -1155,7 +1156,7 @@ class JaxDonkeyKong(JaxEnvironment[DonkeyKongState, DonkeyKongObservation, Donke
                     operand=None
                 ),
                 lambda _: state._replace(
-                    mario_x=state.mario_x - self.consts.MARIO_CLIMBING_SPEED,
+                    mario_x=(state.mario_x - self.consts.MARIO_CLIMBING_SPEED).astype(jnp.float32),
                     mario_climb_frame_counter= state.mario_climb_frame_counter + 1,
                 ),
                 operand=None
@@ -1166,7 +1167,7 @@ class JaxDonkeyKong(JaxEnvironment[DonkeyKongState, DonkeyKongObservation, Donke
             new_state_climbing_upwards = jax.lax.cond(
                 reached_top,
                 lambda _: state._replace(
-                    mario_x = state.mario_x - 2,
+                    mario_x = (state.mario_x - 2).astype(jnp.float32),
                     mario_climb_frame_counter= 0,
                     mario_view_direction = self.consts.MOVING_RIGHT,
                     mario_climbing = False,
@@ -1185,13 +1186,13 @@ class JaxDonkeyKong(JaxEnvironment[DonkeyKongState, DonkeyKongObservation, Donke
                 lambda _: jax.lax.cond(
                     state.mario_climb_sprite == self.consts.MARIO_CLIMB_SPRITE_0,
                     lambda _: state._replace(
-                        mario_x=state.mario_x + self.consts.MARIO_CLIMBING_SPEED,
+                        mario_x=(state.mario_x + self.consts.MARIO_CLIMBING_SPEED).astype(jnp.float32),
                         mario_climb_frame_counter= state.mario_climb_frame_counter + 1,
                         mario_climb_sprite=self.consts.MARIO_CLIMB_SPRITE_1,
                         donkey_kong_sprite=self.consts.DONKEY_KONG_SPRITE_0,
                     ),
                     lambda _: state._replace(
-                        mario_x=state.mario_x + self.consts.MARIO_CLIMBING_SPEED,
+                        mario_x=(state.mario_x + self.consts.MARIO_CLIMBING_SPEED).astype(jnp.float32),
                         mario_climb_frame_counter= state.mario_climb_frame_counter + 1,
                         mario_climb_sprite=self.consts.MARIO_CLIMB_SPRITE_0,
                         donkey_kong_sprite=self.consts.DONKEY_KONG_SPRITE_1,
@@ -1199,7 +1200,7 @@ class JaxDonkeyKong(JaxEnvironment[DonkeyKongState, DonkeyKongObservation, Donke
                     operand=None
                 ),
                 lambda _: state._replace(
-                    mario_x=state.mario_x + self.consts.MARIO_CLIMBING_SPEED,
+                    mario_x=(state.mario_x + self.consts.MARIO_CLIMBING_SPEED).astype(jnp.float32),
                     mario_climb_frame_counter= state.mario_climb_frame_counter + 1,
                 ),
                 operand=None
@@ -1210,7 +1211,7 @@ class JaxDonkeyKong(JaxEnvironment[DonkeyKongState, DonkeyKongObservation, Donke
             new_state_climbing_downwards = jax.lax.cond(
                 reached_bottom,
                 lambda _: state._replace(
-                    mario_x = state.mario_x - 2,
+                    mario_x = (state.mario_x - 2).astype(jnp.float32),
                     mario_climb_frame_counter= 0,
                     mario_view_direction = self.consts.MOVING_RIGHT,
                     mario_climbing = False,
@@ -1239,14 +1240,14 @@ class JaxDonkeyKong(JaxEnvironment[DonkeyKongState, DonkeyKongObservation, Donke
         def mario_starts_climbing(state):
             new_state_climbing_upwards = state._replace(
                 mario_view_direction=self.consts.MOVING_UP,
-                mario_x=state.mario_x + 1,
+                mario_x=(state.mario_x + 1).astype(jnp.float32),
                 mario_climbing=True,
                 mario_climb_frame_counter=0,
             )
             new_state_climbing_downwards = state._replace(
                 mario_view_direction=self.consts.MOVING_UP,
                 mario_stage = state.mario_stage - 1,
-                mario_x=state.mario_x + 3,
+                mario_x=(state.mario_x + 3).astype(jnp.float32),
                 mario_climbing=True,
                 mario_climb_frame_counter=0,
             )
@@ -1288,22 +1289,22 @@ class JaxDonkeyKong(JaxEnvironment[DonkeyKongState, DonkeyKongObservation, Donke
         # change mario position in x direction if Action.right is chosen
         def mario_walking_to_right(state):
             last_mario_move_was_not_moving_to_right = state.mario_view_direction != self.consts.MOVING_RIGHT
-            new_mario_x = jnp.round(self.bar_linear_equation(state.mario_stage, state.mario_y, state.level) - self.consts.MARIO_HIT_BOX_X) - 2
+            new_mario_x = jnp.round(self.bar_linear_equation(state.mario_stage, state.mario_y, state.level) - self.consts.MARIO_HIT_BOX_X).astype(jnp.float32) - 2
             
             # only difference here between two state
             # if last_mario_move_was_not_moving_to_right=True mario_walk_frame_counter = 0 --> this is needed to animate Mario sprites
             new_state = jax.lax.cond(
                 last_mario_move_was_not_moving_to_right,
                 lambda _: state._replace(
-                    mario_x = new_mario_x,
-                    mario_y=state.mario_y + self.consts.MARIO_MOVING_SPEED,
+                    mario_x = (new_mario_x).astype(jnp.float32),
+                    mario_y=(state.mario_y + self.consts.MARIO_MOVING_SPEED).astype(jnp.float32),
                     mario_view_direction=self.consts.MOVING_RIGHT,
                     mario_walk_frame_counter=0,
                     mario_climbing_delay = False,
                 ),
                 lambda _:state._replace(
-                    mario_x = new_mario_x,
-                    mario_y=state.mario_y + self.consts.MARIO_MOVING_SPEED,
+                    mario_x = (new_mario_x).astype(jnp.float32),
+                    mario_y=(state.mario_y + self.consts.MARIO_MOVING_SPEED).astype(jnp.float32),
                     mario_view_direction=self.consts.MOVING_RIGHT,
                     mario_walk_frame_counter=state.mario_walk_frame_counter + 1,
                     mario_climbing_delay = False,
@@ -1358,15 +1359,15 @@ class JaxDonkeyKong(JaxEnvironment[DonkeyKongState, DonkeyKongObservation, Donke
             new_state = jax.lax.cond(
                 last_mario_move_was_not_moving_to_left,
                 lambda _:  state._replace(
-                    mario_x = new_mario_x,
-                    mario_y=state.mario_y - self.consts.MARIO_MOVING_SPEED,
+                    mario_x = new_mario_x.astype(jnp.float32),
+                    mario_y=(state.mario_y - self.consts.MARIO_MOVING_SPEED).astype(jnp.float32),
                     mario_view_direction=self.consts.MOVING_LEFT,
                     mario_walk_frame_counter=0,
                     mario_climbing_delay = False,
                 ),
                 lambda _:state._replace(
-                    mario_x = new_mario_x,
-                    mario_y=state.mario_y - self.consts.MARIO_MOVING_SPEED,
+                    mario_x = new_mario_x.astype(jnp.float32),
+                    mario_y=(state.mario_y - self.consts.MARIO_MOVING_SPEED).astype(jnp.float32),
                     mario_view_direction=self.consts.MOVING_LEFT,
                     mario_walk_frame_counter=state.mario_walk_frame_counter + 1,
                     mario_climbing_delay = False,
@@ -1431,12 +1432,12 @@ class JaxDonkeyKong(JaxEnvironment[DonkeyKongState, DonkeyKongObservation, Donke
 
             new_state_right_wall = state._replace(
                 mario_walk_sprite = self.consts.MARIO_WALK_SPRITE_0,
-                mario_y = state.mario_y - self.consts.MARIO_MOVING_SPEED
+                mario_y = (state.mario_y - self.consts.MARIO_MOVING_SPEED).astype(jnp.float32)
             )
 
             new_state_left_wall = state._replace(
                 mario_walk_sprite = self.consts.MARIO_WALK_SPRITE_0,
-                mario_y = state.mario_y + self.consts.MARIO_MOVING_SPEED
+                mario_y = (state.mario_y + self.consts.MARIO_MOVING_SPEED).astype(jnp.float32)
             )
 
             return jax.lax.cond(
@@ -1515,7 +1516,7 @@ class JaxDonkeyKong(JaxEnvironment[DonkeyKongState, DonkeyKongObservation, Donke
             new_state = state._replace(
                 mario_jumping = False,
                 mario_jumping_wide = False,
-                mario_x = new_mario_x,
+                mario_x = new_mario_x.astype(jnp.float32),
                 mario_climbing_delay = False,
             )
 
@@ -1651,8 +1652,8 @@ class JaxDonkeyKong(JaxEnvironment[DonkeyKongState, DonkeyKongObservation, Donke
                 level = state.level,
                 ladders = ladder,
                 invisible_wall_each_stage = invisible_wall,
-                mario_x = mario_x,
-                mario_y = mario_y,
+                mario_x = mario_x.astype(jnp.float32),
+                mario_y = mario_y.astype(jnp.float32),
                 hammer_x = hammer_x,
                 hammer_y = hammer_y,
             )
@@ -1719,8 +1720,8 @@ class JaxDonkeyKong(JaxEnvironment[DonkeyKongState, DonkeyKongObservation, Donke
                 level=level,
                 ladders=ladder,
                 invisible_wall_each_stage=invisible_wall,
-                mario_x = mario_x,
-                mario_y = mario_y,
+                mario_x = mario_x.astype(jnp.float32),
+                mario_y = mario_y.astype(jnp.float32),
                 hammer_x = hammer_x,
                 hammer_y = hammer_y,
                 game_score = game_score,
@@ -1862,7 +1863,7 @@ class JaxDonkeyKong(JaxEnvironment[DonkeyKongState, DonkeyKongObservation, Donke
 
             # if there is a collision between the hammer and Mario -> Hammer can be taken
             collision_mario_hammer = JaxDonkeyKong._collision_between_two_objects(state.mario_x, state.mario_y, self.consts.MARIO_HIT_BOX_X, self.consts.MARIO_HIT_BOX_Y, 
-                                                                                  state.hammer_x, state.hammer_y, self.consts.HAMMER_HIT_BOX_X, self.consts.HAMMER_HIT_BOX_Y)
+                                                                                state.hammer_x, state.hammer_y, self.consts.HAMMER_HIT_BOX_X, self.consts.HAMMER_HIT_BOX_Y)
 
             new_state = calculate_hammer_pos_relative_to_mario(new_state)
 
@@ -2056,7 +2057,7 @@ class JaxDonkeyKong(JaxEnvironment[DonkeyKongState, DonkeyKongObservation, Donke
         # If there is no colision: game will continue
         # enemy_step --> maybe later write a enemy_step function which calls eighter barrel_step oder fire_step
         new_state = self._enemy_step(new_state)
-  
+
         # mario step / player step
         new_state = self._mario_step(new_state, action)
 
@@ -2138,8 +2139,8 @@ class JaxDonkeyKong(JaxEnvironment[DonkeyKongState, DonkeyKongObservation, Donke
     @partial(jax.jit, static_argnums=(0,))
     def _get_observation(self, state: DonkeyKongState):
         mario_position = EntityPosition(
-            x = state.mario_x,
-            y = state.mario_y,
+            x = jnp.round(state.mario_x).astype(jnp.int32),
+            y = jnp.round(state.mario_y).astype(jnp.int32),
             width = self.consts.MARIO_HIT_BOX_Y,
             height = self.consts.MARIO_HIT_BOX_X
         )
@@ -2150,38 +2151,38 @@ class JaxDonkeyKong(JaxEnvironment[DonkeyKongState, DonkeyKongObservation, Donke
             width = self.consts.HAMMER_HIT_BOX_Y,
             height = self.consts.HAMMER_HIT_BOX_X,
         )
-        # nums_barrels = state.barrels.barrel_x.shape[0]
-        # barrels = EntityPosition(
-        #     x = state.barrels.barrel_x,
-        #     y = state.barrels.barrel_y,
-        #     width = jnp.full((nums_barrels,), self.consts.BARREL_HIT_BOX_Y),
-        #     height = jnp.full((nums_barrels,), self.consts.BARREL_HIT_BOX_X),
-        # )
-        # barrel_mask = jnp.where(state.barrels.reached_the_end, 0, 1)
-        # nums_fires = state.fires.fire_x.shape[0]
-        # fires = EntityPosition(
-        #     x = state.fires.fire_x,
-        #     y = state.fires.fire_y,
-        #     width = jnp.full((nums_fires,), self.consts.FIRE_HIT_BOX_Y),
-        #     height = jnp.full((nums_fires,), self.consts.FIRE_HIT_BOX_X),
-        # )
-        # fire_mask = jnp.where(state.fires.destroyed, 0, 1)
-        # nums_traps = state.traps.trap_x.shape[0]
-        # traps = EntityPositionTrap(
-        #     x = state.traps.trap_x,
-        #     y = state.traps.trap_y,
-        #     width = jnp.full((nums_traps,), self.consts.TRAP_WIDTH),
-        #     triggered = state.traps.triggered,
-        # )
-        # nums_ladders = state.ladders.start_x.shape[0]
-        # ladders = EntityPositionLadder(
-        #     start_x = state.ladders.start_x,
-        #     start_y = state.ladders.start_y,
-        #     end_x = state.ladders.end_x,
-        #     end_y = state.ladders.end_y,
-        #     width = jnp.full((nums_ladders,), self.consts.LADDER_WIDTH),
-        # )
-        # ladder_mask = jnp.where(state.ladders.start_x != -1, 1, 0)
+        nums_barrels = self.consts.MAX_BARRELS
+        barrels = EntityPosition(
+            x = state.barrels.barrel_x,
+            y = state.barrels.barrel_y,
+            width = jnp.full((nums_barrels,), self.consts.BARREL_HIT_BOX_Y),
+            height = jnp.full((nums_barrels,), self.consts.BARREL_HIT_BOX_X),
+        )
+        barrel_mask = jnp.where(state.barrels.reached_the_end, 0, 1)
+        nums_fires = self.consts.MAX_FIRES
+        fires = EntityPosition(
+            x = jnp.round(state.fires.fire_x).astype(jnp.int32),
+            y = jnp.round(state.fires.fire_y).astype(jnp.int32),
+            width = jnp.full((nums_fires,), self.consts.FIRE_HIT_BOX_Y),
+            height = jnp.full((nums_fires,), self.consts.FIRE_HIT_BOX_X),
+        )
+        fire_mask = jnp.where(state.fires.destroyed, 0, 1)
+        nums_traps = self.consts.MAX_TRAPS
+        traps = EntityPositionTrap(
+            x = state.traps.trap_x,
+            y = state.traps.trap_y,
+            width = jnp.full((nums_traps,), self.consts.TRAP_WIDTH),
+            triggered = state.traps.triggered,
+        )
+        nums_ladders = self.consts.MAX_LADDERS
+        ladders = EntityPositionLadder(
+            start_x = state.ladders.start_x,
+            start_y = state.ladders.start_y,
+            end_x = state.ladders.end_x,
+            end_y = state.ladders.end_y,
+            width = jnp.full((nums_ladders,), self.consts.LADDER_WIDTH),
+        )
+        ladder_mask = jnp.where(state.ladders.start_x != -1, 1, 0)
         
         return DonkeyKongObservation(
             total_score = state.game_score,
@@ -2195,13 +2196,13 @@ class JaxDonkeyKong(JaxEnvironment[DonkeyKongState, DonkeyKongObservation, Donke
             mario_climbing = state.mario_climbing,
             hammer_position = hammer_position,
             hammer_can_destroy_enemy = state.hammer_can_hit,
-            # barrels = barrels,
-            # barrel_mask = barrel_mask,
-            # fires = fires,
-            # fire_mask = fire_mask,
-            # traps = traps,
-            # ladders = ladders,
-            # ladder_mask = ladder_mask,
+            barrels = barrels,
+            barrel_mask = barrel_mask,
+            fires = fires,
+            fire_mask = fire_mask,
+            traps = traps,
+            ladders = ladders,
+            ladder_mask = ladder_mask,
         )
 
     def render(self, state: DonkeyKongState) -> jnp.ndarray:
@@ -2233,39 +2234,39 @@ class JaxDonkeyKong(JaxEnvironment[DonkeyKongState, DonkeyKongObservation, Donke
             obs.hammer_position.height.flatten(),
             obs.hammer_can_destroy_enemy.flatten(),
 
-            # --- Barrels ---
-            # obs.barrels.x.flatten(),
-            # obs.barrels.y.flatten(),
-            # obs.barrels.width.flatten(),
-            # obs.barrels.height.flatten(),
-            # obs.barrel_mask.flatten(),
+            # --- Barrels ---         
+            obs.barrels.x,
+            obs.barrels.y,
+            obs.barrels.width,
+            obs.barrels.height,
+            obs.barrel_mask,
 
-            # # --- Fires ---
-            # obs.fires.x.flatten(),
-            # obs.fires.y.flatten(),
-            # obs.fires.width.flatten(),
-            # obs.fires.height.flatten(),
-            # obs.fire_mask.flatten(),
+            # --- Fires ---
+            obs.fires.x,
+            obs.fires.y,
+            obs.fires.width,
+            obs.fires.height,
+            obs.fire_mask,
 
-            # # --- Traps ---
-            # obs.traps.x.flatten(),
-            # obs.traps.y.flatten(),
-            # obs.traps.width.flatten(),
-            # obs.traps.triggered.flatten(),
+            # --- Traps ---
+            obs.traps.x,
+            obs.traps.y,
+            obs.traps.width,
+            obs.traps.triggered,
 
-            # # --- Ladders ---
-            # obs.ladders.start_x.flatten(),
-            # obs.ladders.start_y.flatten(),
-            # obs.ladders.end_x.flatten(),
-            # obs.ladders.end_y.flatten(),
-            # obs.ladders.width.flatten(),
-            # obs.ladder_mask.flatten(),
+            # --- Ladders ---
+            obs.ladders.start_x,
+            obs.ladders.start_y,
+            obs.ladders.end_x,
+            obs.ladders.end_y,
+            obs.ladders.width,
+            obs.ladder_mask,
         ])
 
     def action_space(self) -> spaces.Discrete:
         return spaces.Discrete(8)
 
-    def observation_space(self) -> spaces.Dict:
+    def observation_space(self) -> spaces.Box:
         MAX_BARRELS = self.consts.MAX_BARRELS
         MAX_FIRES = self.consts.MAX_FIRES
         MAX_TRAPS = self.consts.MAX_TRAPS
@@ -2299,40 +2300,40 @@ class JaxDonkeyKong(JaxEnvironment[DonkeyKongState, DonkeyKongObservation, Donke
             "hammer_can_destroy_enemy": spaces.Box(low=0, high=1, shape=(), dtype=jnp.int32),
 
             # Barrels
-            # "barrels": spaces.Dict({
-            #     "x": spaces.Box(low=0, high=210, shape=(MAX_BARRELS,), dtype=jnp.int32),
-            #     "y": spaces.Box(low=0, high=160, shape=(MAX_BARRELS, ), dtype=jnp.int32),    
-            #     "width": spaces.Box(low=0, high=160, shape=(MAX_BARRELS, ), dtype=jnp.int32),
-            #     "height": spaces.Box(low=0, high=210, shape=(MAX_BARRELS, ), dtype=jnp.int32),
-            # }),
-            # "barrel_mask": spaces.Box(low=0, high=1, shape=(MAX_BARRELS,), dtype=jnp.int32),
+            "barrels": spaces.Dict({
+                "x": spaces.Box(low=-1, high=210, shape=(MAX_BARRELS,), dtype=jnp.int32),
+                "y": spaces.Box(low=-1, high=160, shape=(MAX_BARRELS, ), dtype=jnp.int32),    
+                "width": spaces.Box(low=0, high=160, shape=(MAX_BARRELS, ), dtype=jnp.int32),
+                "height": spaces.Box(low=0, high=210, shape=(MAX_BARRELS, ), dtype=jnp.int32),
+            }),
+            "barrel_mask": spaces.Box(low=0, high=1, shape=(MAX_BARRELS,), dtype=jnp.int32),
 
-            # # Fire
-            # "fires": spaces.Dict({
-            #     "x": spaces.Box(low=0, high=210, shape=(MAX_FIRES,), dtype=jnp.int32),
-            #     "y": spaces.Box(low=0, high=160, shape=(MAX_FIRES, ), dtype=jnp.int32),    
-            #     "width": spaces.Box(low=0, high=160, shape=(MAX_FIRES, ), dtype=jnp.int32),
-            #     "height": spaces.Box(low=0, high=210, shape=(MAX_FIRES, ), dtype=jnp.int32),
-            # }),
-            # "fire_mask": spaces.Box(low=0, high=1, shape=(MAX_BARRELS,), dtype=jnp.int32),
+            # Fire
+            "fires": spaces.Dict({
+                "x": spaces.Box(low=-1, high=210, shape=(MAX_FIRES,), dtype=jnp.int32),
+                "y": spaces.Box(low=-1, high=160, shape=(MAX_FIRES, ), dtype=jnp.int32),    
+                "width": spaces.Box(low=0, high=160, shape=(MAX_FIRES, ), dtype=jnp.int32),
+                "height": spaces.Box(low=0, high=210, shape=(MAX_FIRES, ), dtype=jnp.int32),
+            }),
+            "fire_mask": spaces.Box(low=0, high=1, shape=(MAX_BARRELS,), dtype=jnp.int32),
 
-            # # Traps
-            # "traps": spaces.Dict({
-            #     "x": spaces.Box(low=0, high=210, shape=(MAX_TRAPS,), dtype=jnp.int32),
-            #     "y": spaces.Box(low=0, high=160, shape=(MAX_TRAPS,), dtype=jnp.int32),
-            #     "width": spaces.Box(low=0, high=160, shape=(MAX_TRAPS,), dtype=jnp.int32),
-            #     "triggered": spaces.Box(low=0, high=1, shape=(MAX_TRAPS,), dtype=jnp.int32),
-            # }),
+            # Traps
+            "traps": spaces.Dict({
+                "x": spaces.Box(low=0, high=210, shape=(MAX_TRAPS,), dtype=jnp.int32),
+                "y": spaces.Box(low=0, high=160, shape=(MAX_TRAPS,), dtype=jnp.int32),
+                "width": spaces.Box(low=0, high=160, shape=(MAX_TRAPS,), dtype=jnp.int32),
+                "triggered": spaces.Box(low=0, high=1, shape=(MAX_TRAPS,), dtype=jnp.int32),
+            }),
 
-            # # Ladders
-            # "ladders": spaces.Dict({
-            #     "start_x": spaces.Box(low=0, high=210, shape=(MAX_LADDERS,), dtype=jnp.int32),
-            #     "start_y": spaces.Box(low=0, high=160, shape=(MAX_LADDERS,), dtype=jnp.int32),
-            #     "end_x": spaces.Box(low=0, high=210, shape=(MAX_LADDERS,), dtype=jnp.int32),
-            #     "end_y": spaces.Box(low=0, high=160, shape=(MAX_LADDERS,), dtype=jnp.int32),
-            #     "width": spaces.Box(low=0, high=160, shape=(MAX_LADDERS,), dtype=jnp.int32),
-            # }),
-            # "ladder_mask": spaces.Box(low=0, high=1, shape=(MAX_LADDERS,), dtype=jnp.int32),
+            # Ladders
+            "ladders": spaces.Dict({
+                "start_x": spaces.Box(low=-1, high=210, shape=(MAX_LADDERS,), dtype=jnp.int32),
+                "start_y": spaces.Box(low=-1, high=160, shape=(MAX_LADDERS,), dtype=jnp.int32),
+                "end_x": spaces.Box(low=-1, high=210, shape=(MAX_LADDERS,), dtype=jnp.int32),
+                "end_y": spaces.Box(low=-1, high=160, shape=(MAX_LADDERS,), dtype=jnp.int32),
+                "width": spaces.Box(low=0, high=160, shape=(MAX_LADDERS,), dtype=jnp.int32),
+            }),
+            "ladder_mask": spaces.Box(low=0, high=1, shape=(MAX_LADDERS,), dtype=jnp.int32),
         })
 
     def image_space(self) -> spaces.Box:
