@@ -72,6 +72,12 @@ class SpaceInvadersConstants(NamedTuple):
     OPPONENT_VERTICAL_STEP_SIZE : int = 10 # vertical moving distance of opponents
     OFFSET_OPPONENT: Tuple[int, int] = (8, 8)
 
+    UFO_SCORE: int = 200
+    UFO_Y: int = 11
+    UFO_START: int = 960
+    UFO_MOVEMENT_RATE: int = 1
+    UFO_SIZE: Tuple[int, int] = (7, 8)
+
     PLAYER_Y: int = HEIGHT - PLAYER_SIZE[1] - BACKGROUND_SIZE[1]
 
 C = SpaceInvadersConstants()
@@ -102,6 +108,9 @@ class SpaceInvadersState(NamedTuple):
     opponent_current_y: int
     opponent_bounding_rect: NamedTuple
     opponent_direction: int
+    ufo_x: int
+    ufo_state: int # 0 = not visible, 1 = alive, 2-UFO_EXPLOSION_DURATION = explosion, UFO_EXPLOSION_DURATION + 1 = dead
+    ufo_dir: int
     bullet_active: chex.Array
     bullet_x: chex.Array
     bullet_y: chex.Array
@@ -240,15 +249,24 @@ class JaxSpaceInvaders(JaxEnvironment[SpaceInvadersState, SpaceInvadersObservati
             # Update destroyed states (handle explosion animation)
             destroyed_updated = jnp.where(state.destroyed != 0, jnp.minimum(state.destroyed + 1, 29), 0)
             final_destroyed = jnp.where(destroyed_vals > state.destroyed, destroyed_vals, destroyed_updated)
-            
+
             total_score = state.player_score + jnp.sum(score_contribs)
-            bullet_active = jnp.logical_not(jnp.any(bullet_hits))
+
+            # check possible ufo collision
+            ufo_collision = self._check_collision(state.bullet_x, state.bullet_y, state.ufo_x, self.consts.UFO_Y, self.consts.UFO_SIZE[0], self.consts.UFO_SIZE[1])
+            total_score, new_ufo_state = jax.lax.cond(
+                ufo_collision,
+                lambda: (total_score + self.consts.UFO_SCORE, 2),
+                lambda: (total_score, state.ufo_state)
+            )
             
-            return final_destroyed, total_score, bullet_active
+            bullet_active = jnp.logical_not(jnp.logical_or(jnp.any(bullet_hits), ufo_collision))
+            
+            return final_destroyed, total_score, bullet_active, new_ufo_state
 
         def no_bullet():
             destroyed = jnp.where(state.destroyed != 0, jnp.minimum(state.destroyed + 1, 29), 0)
-            return destroyed, state.player_score, state.bullet_active
+            return destroyed, state.player_score, state.bullet_active, state.ufo_state
 
         return jax.lax.cond(
             state.bullet_active,
@@ -441,6 +459,9 @@ class JaxSpaceInvaders(JaxEnvironment[SpaceInvadersState, SpaceInvadersObservati
             opponent_current_y=self.consts.OPPONENT_LIMIT_Y[0],
             opponent_bounding_rect=(opponent_rect_width, opponent_rect_height),
             opponent_direction=self.consts.INITIAL_OPPONENT_DIRECTION,
+            ufo_x = 0,
+            ufo_state = 0,
+            ufo_dir = 1,
             bullet_active=jnp.array(0).astype(jnp.int32),
             bullet_x=jnp.array(self.consts.INITIAL_BULLET_POS).astype(jnp.int32),
             bullet_y=jnp.array(self.consts.INITIAL_BULLET_POS).astype(jnp.int32),
@@ -458,7 +479,7 @@ class JaxSpaceInvaders(JaxEnvironment[SpaceInvadersState, SpaceInvadersObservati
             player_x = jnp.array(self.consts.INITIAL_PLAYER_X).astype(jnp.int32),
             player_speed = jnp.array(0.0).astype(jnp.int32),
             player_dead = state.player_dead,
-            step_counter = state.step_counter,
+            step_counter = 0,
             player_score = state.player_score,
             player_lives = state.player_lives,
             destroyed = jnp.zeros((self.consts.ENEMY_ROWS * self.consts.ENEMY_COLS,), dtype=jnp.int32),
@@ -466,6 +487,9 @@ class JaxSpaceInvaders(JaxEnvironment[SpaceInvadersState, SpaceInvadersObservati
             opponent_current_y = self.consts.OPPONENT_LIMIT_Y[0],
             opponent_bounding_rect = state.opponent_bounding_rect,
             opponent_direction = self.consts.INITIAL_OPPONENT_DIRECTION,
+            ufo_x = 0,
+            ufo_state = 0,
+            ufo_dir = 1,
             bullet_active = jnp.array(0).astype(jnp.int32),
             bullet_x = jnp.array(self.consts.INITIAL_BULLET_POS).astype(jnp.int32),
             bullet_y = jnp.array(self.consts.INITIAL_BULLET_POS).astype(jnp.int32),
@@ -495,7 +519,7 @@ class JaxSpaceInvaders(JaxEnvironment[SpaceInvadersState, SpaceInvadersObservati
 
         return state
     
-    def step_running(self, state: SpaceInvadersState, action: chex.Array, key=None) -> SpaceInvadersState:
+    def step_running(self, state: SpaceInvadersState, action: chex.Array, key) -> SpaceInvadersState:
         new_player_x, new_player_speed = self._player_step(state.player_x, state.player_speed, action)
 
         new_player_x, new_player_speed = jax.lax.cond(
@@ -512,7 +536,7 @@ class JaxSpaceInvaders(JaxEnvironment[SpaceInvadersState, SpaceInvadersObservati
             bullet_x=new_bullet_x,
             bullet_y=new_bullet_y
         )
-        new_destroyed, new_score, final_bullet_active = self._check_bullet_enemy_collisions(new_bullet_state)
+        new_destroyed, new_score, final_bullet_active, new_ufo_state = self._check_bullet_enemy_collisions(new_bullet_state)
 
         enemy_bullets_active, enemy_bullets_x, enemy_bullets_y, enemy_fire_cooldown = self._update_enemy_bullets(
             state._replace(
@@ -573,6 +597,40 @@ class JaxSpaceInvaders(JaxEnvironment[SpaceInvadersState, SpaceInvadersObservati
             lambda: (state.opponent_direction, state.opponent_current_x, state.opponent_current_y)
         )
 
+        # Ufo Controlling
+        dir_random = jax.random.choice(key, jnp.array([1, -1]))
+
+        new_ufo_state, new_ufo_dir, new_ufo_x = jax.lax.cond(
+            state.step_counter % 300 == 0,
+            lambda: (1, dir_random, jnp.argmax(jnp.array([0, dir_random * (-1)])) * self.consts.WIDTH),
+            lambda: (
+                jax.lax.cond(
+                    new_ufo_state > 1,
+                    lambda: new_ufo_state + 1,
+                    lambda: new_ufo_state
+                ),
+                state.ufo_dir,
+                state.ufo_x
+            )
+        )
+
+        new_ufo_x, new_ufo_state = jax.lax.cond(
+            jnp.any(jnp.array([new_ufo_x < 0, new_ufo_x > self.consts.WIDTH, new_ufo_state > self.consts.EXPLOSION_FRAMES[3]])),
+            lambda: (0, 0),
+            lambda: (new_ufo_x, new_ufo_state)
+        )
+
+        new_ufo_x = jax.lax.cond(
+            jnp.logical_and(
+                new_ufo_state == 1,
+                state.step_counter % self.consts.UFO_MOVEMENT_RATE == 0
+            ),
+            lambda x: x + new_ufo_dir,
+            lambda x: x,
+            new_ufo_x
+        )
+
+        # State Update
         new_state = SpaceInvadersState(
             player_x=new_player_x,
             player_speed=new_player_speed,
@@ -585,6 +643,9 @@ class JaxSpaceInvaders(JaxEnvironment[SpaceInvadersState, SpaceInvadersObservati
             opponent_current_y=new_position_y,
             opponent_bounding_rect=state.opponent_bounding_rect,
             opponent_direction=direction,
+            ufo_x = new_ufo_x,
+            ufo_state = new_ufo_state,
+            ufo_dir = new_ufo_dir,
             bullet_active=final_bullet_active.astype(jnp.int32),
             bullet_x=new_bullet_x,
             bullet_y=new_bullet_y,
@@ -601,13 +662,7 @@ class JaxSpaceInvaders(JaxEnvironment[SpaceInvadersState, SpaceInvadersObservati
         if key is None:
             key = jax.random.PRNGKey(state.step_counter)
 
-        new_step_counter = jax.lax.cond(
-            state.step_counter > 255,
-            lambda _: jnp.array(0),
-            lambda s: s + 1,
-            operand=state.step_counter,
-        )
-
+        new_step_counter = state.step_counter + 1
         state = state._replace(step_counter = new_step_counter)
 
         new_state: SpaceInvadersState = jax.lax.cond(
@@ -805,6 +860,9 @@ def load_sprites():
     opponents["opponent_3_b"] = jax.numpy.pad(opponents["opponent_3_b"], ((0,0), (0,1), (0,0), (0,0)))
     opponents["opponent_4_b"] = jax.numpy.pad(opponents["opponent_4_b"], ((0,0), (0,1), (0,0), (0,0)))
 
+    ufo = aj.loadFrame(os.path.join(SPRITES_DIR, f"opponents/ufo.npy"))
+    SPRITE_UFO = jnp.expand_dims(ufo, axis=0)
+
     # Bullet
     bullet = aj.loadFrame(os.path.join(SPRITES_DIR, "bullet.npy"))
     SPRITE_BULLET = jnp.expand_dims(bullet, axis=0)
@@ -812,7 +870,7 @@ def load_sprites():
     # Explosions
     explosions = {}
     explosion_files = [
-        "explosion_1", "explosion_2", "explosion_3", "explosion_4", "explosion_purple_a", "explosion_purple_b", "exp_player_1", "exp_player_2"
+        "explosion_1", "explosion_2", "explosion_3", "explosion_4", "exp_ufo_1", "exp_ufo_2", "exp_player_1", "exp_player_2"
     ]
 
     for name in explosion_files:
@@ -827,7 +885,7 @@ def load_sprites():
         sprite = aj.loadFrame(os.path.join(SPRITES_DIR, f"lifes/{name}.npy"))
         lifes[name] = jnp.expand_dims(sprite, axis=0)
 
-    return (SPRITE_BACKGROUND, SPRITE_PLAYER, SPRITE_PLAYER_INVISIBLE, SPRITE_BULLET, *green_numbers, SPRITE_ZERO_YELLOW, SPRITE_DEFENSE, *opponents.values(), *explosions.values(), *lifes.values())
+    return (SPRITE_BACKGROUND, SPRITE_PLAYER, SPRITE_PLAYER_INVISIBLE, SPRITE_BULLET, *green_numbers, SPRITE_ZERO_YELLOW, SPRITE_DEFENSE, *opponents.values(), *explosions.values(), *lifes.values(), SPRITE_UFO)
 
 (
     SPRITE_BACKGROUND, SPRITE_PLAYER, SPRITE_PLAYER_INVISIBLE, SPRITE_BULLET,
@@ -839,21 +897,46 @@ def load_sprites():
     SPRITE_OPPONENT_5, SPRITE_OPPONENT_6_A, SPRITE_OPPONENT_6_B, SPRITE_EXPLOSION_1, 
     SPRITE_EXPLOSION_2, SPRITE_EXPLOSION_3, SPRITE_EXPLOSION_4, 
     SPRITE_EXPLOSION_PURPLE_A, SPRITE_EXPLOSION_PURPLE_B, PLAYER_EXPLOSION_A, PLAYER_EXPLOSION_B,
-    LIFE_1, LIFE_2, LIFE_3
+    LIFE_1, LIFE_2, LIFE_3, SPRITE_UFO
 ) = load_sprites()
 
 class SpaceInvadersRenderer(JAXGameRenderer):
-    life_sprites: chex.Array
-
     def __init__(self, consts: SpaceInvadersConstants = None):
         super().__init__()
         self.consts = consts or SpaceInvadersConstants()
         self.SPRITE_PLAYER = SPRITE_PLAYER
 
-        self.init_sprites()
+        # Background Sprite
+        self.background = aj.get_sprite_frame(SPRITE_BACKGROUND, 0)
 
-    def init_sprites(self):
+        # Life Sprites
         self.life_sprites = jnp.array([aj.get_sprite_frame(LIFE_1, 0), aj.get_sprite_frame(LIFE_2, 0), aj.get_sprite_frame(LIFE_3, 0)])
+
+        # Score Sprites
+        self.green_sprites = jnp.array([
+            aj.get_sprite_frame(s, 0) for s in [
+                SPRITE_ZERO_GREEN, SPRITE_ONE_GREEN, SPRITE_TWO_GREEN, SPRITE_THREE_GREEN, SPRITE_FOUR_GREEN,
+                SPRITE_FIVE_GREEN, SPRITE_SIX_GREEN, SPRITE_SEVEN_GREEN, SPRITE_EIGHT_GREEN, SPRITE_NINE_GREEN
+            ]
+        ])
+
+        # Opponent Sprites
+        self.ufo_sprite = aj.get_sprite_frame(SPRITE_UFO, 0)
+
+        self.opponent_sprites_a = [SPRITE_OPPONENT_1_A, SPRITE_OPPONENT_2_A, SPRITE_OPPONENT_3_A, SPRITE_OPPONENT_4_A, SPRITE_OPPONENT_5, SPRITE_OPPONENT_6_A]
+        self.opponent_sprites_b = [SPRITE_OPPONENT_1_B, SPRITE_OPPONENT_2_B, SPRITE_OPPONENT_3_B, SPRITE_OPPONENT_4_B, SPRITE_OPPONENT_5, SPRITE_OPPONENT_6_B]
+
+        # Explosion Sprites
+        exp_sprites = [SPRITE_EXPLOSION_1, SPRITE_EXPLOSION_2, SPRITE_EXPLOSION_3, SPRITE_EXPLOSION_4]
+        ufo_sprites = [SPRITE_EXPLOSION_PURPLE_A, SPRITE_EXPLOSION_PURPLE_B, SPRITE_EXPLOSION_PURPLE_A, SPRITE_EXPLOSION_PURPLE_B]
+        self.explosion_player_sprites = [PLAYER_EXPLOSION_A, PLAYER_EXPLOSION_B]
+
+        self.explosion_sprites = jnp.array([aj.get_sprite_frame(s, 0) for s in exp_sprites])
+        self.ufo_explosion_sprites = jnp.array([aj.get_sprite_frame(s, 0) for s in ufo_sprites])
+
+        # Bullet Sprite
+        self.bullet_sprite = aj.get_sprite_frame(SPRITE_BULLET, 0)
+
 
     def get_player_sprite(self, state: SpaceInvadersState):
         return jax.lax.cond(
@@ -868,17 +951,114 @@ class SpaceInvadersRenderer(JAXGameRenderer):
         raster = aj.render_at(raster, self.consts.POSITION_LIFE_X, self.consts.PLAYER_Y, sprite)
 
         return raster
+    
+    def render_score(self, state: SpaceInvadersState, raster):
+        # Convert to 4-Digits
+        score = state.player_score
+        digits = [
+            (score // 1000) % 10,
+            (score // 100) % 10,
+            (score // 10) % 10,
+            score % 10
+        ]
+
+        # Rendering
+        score_pos_x = [3, 6, 9, 12]
+        score_pos_y = [9, 10, 10, 9]
+        for i in range(4):
+            raster = aj.render_at(raster, score_pos_x[i] + i * self.consts.NUMBER_SIZE[0], score_pos_y[i], self.green_sprites[digits[i]])
+
+        frame_zero_yellow = aj.get_sprite_frame(SPRITE_ZERO_YELLOW, 0)
+        for i in range(4):
+            raster = aj.render_at(raster, self.consts.NUMBER_YELLOW_OFFSET + score_pos_x[i] + i * self.consts.NUMBER_SIZE[0], score_pos_y[i], frame_zero_yellow)
+
+        return raster
+    
+    def render_defense(self, state: SpaceInvadersState, raster):
+        frame_defense = aj.get_sprite_frame(SPRITE_DEFENSE, 0)
+        defense_pos_x = [41, 73, 105]
+        for x_pos in defense_pos_x:
+            raster = aj.render_at(raster, x_pos, self.consts.HEIGHT - 53, frame_defense)
+
+        return raster
+        
+    def render_explosion(self, state: SpaceInvadersState, raster, x, y, frame_id, sprites, indexes):
+        sprite_id = jnp.argmax(frame_id < indexes)
+        sprite = sprites[sprite_id]
+
+        raster = aj.render_at(raster, x, y, sprite, False)
+        return raster
+
+    def render_enemies(self, state: SpaceInvadersState, raster):
+        # Load Opponent Sprites
+        flip = jax.lax.cond(
+            state.player_dead != 0,
+            lambda: False,
+            lambda: jax.numpy.floor(state.step_counter / self.consts.MOVEMENT_RATE) % 2 == 1
+        )
+
+        sprites_to_render = jax.lax.cond(
+            flip,
+            lambda: jnp.stack([aj.get_sprite_frame(s, 0) for s in self.opponent_sprites_b]),
+            lambda: jnp.stack([aj.get_sprite_frame(s, 0) for s in self.opponent_sprites_a])
+        )
+
+        def render_col(i, raster):
+            base_x = state.opponent_current_x + i * (self.consts.OFFSET_OPPONENT[0] + self.consts.OPPONENT_SIZE[0])
+
+            def render_row(j, raster):
+                idx = j * self.consts.ENEMY_COLS + i
+                y_pos = state.opponent_current_y + j * (self.consts.OFFSET_OPPONENT[1] + self.consts.OPPONENT_SIZE[1])
+                sprite = sprites_to_render[j]
+                
+                is_alive = jnp.logical_not(state.destroyed[idx])
+                raster = jax.lax.cond(
+                    jnp.logical_and(state.destroyed[idx] != 0, state.destroyed[idx] < 29), # Starting with the 29th frame the explosion animation is finished and doesnt need to be shown anymore 
+                    lambda: self.render_explosion(state, raster, base_x, y_pos, state.destroyed[idx], self.explosion_sprites, self.consts.EXPLOSION_FRAMES),
+                    lambda: raster
+                )
+                
+                # Special flip logic for opponent 5
+                do_flip = jnp.where(j == 4, flip, False)
+
+                return jax.lax.cond(
+                    is_alive,
+                    lambda: aj.render_at(raster, base_x, y_pos, sprite, do_flip),
+                    lambda: raster
+                )
+
+            return jax.lax.fori_loop(0, self.consts.ENEMY_ROWS, render_row, raster)
+        return jax.lax.fori_loop(0, self.consts.ENEMY_COLS, render_col, raster)
+
+    def render_ufo(self, state: SpaceInvadersState, raster):
+        raster = jax.lax.cond(
+            state.ufo_state == 1,
+            lambda: aj.render_at(raster, state.ufo_x, self.consts.UFO_Y, self.ufo_sprite),
+            lambda: self.render_explosion(state, raster, state.ufo_x, self.consts.UFO_Y, state.ufo_state, self.ufo_explosion_sprites, self.consts.EXPLOSION_FRAMES)
+        )
+        
+        return raster
+    
+    def render_bullets(self, state: SpaceInvadersState, raster):
+        def render_enemy_bullet_body(i, current_raster):
+            should_render = state.enemy_bullets_active[i] & (state.step_counter % 2 == 0)
+            return jax.lax.cond(
+                should_render,
+                lambda r: aj.render_at(r, state.enemy_bullets_x[i], state.enemy_bullets_y[i], self.bullet_sprite),
+                lambda r: r,
+                current_raster
+            )
+        
+        return jax.lax.fori_loop(0, self.consts.MAX_ENEMY_BULLETS, render_enemy_bullet_body, raster)
 
     @partial(jax.jit, static_argnums=(0,))
     def render(self, state: SpaceInvadersState) -> chex.Array:
         raster = aj.create_initial_frame(width=self.consts.WIDTH, height=self.consts.HEIGHT)
 
-        # Load Background
-        background = aj.get_sprite_frame(SPRITE_BACKGROUND, 0)
-        raster = aj.render_at(raster, 0, self.consts.HEIGHT - self.consts.BACKGROUND_SIZE[1], background)
+        # Render Background
+        raster = aj.render_at(raster, 0, self.consts.HEIGHT - self.consts.BACKGROUND_SIZE[1], self.background)
 
-        # Load Player
-        sprite_player = self.get_player_sprite(state)
+        # Render Player
         sprite_player = jax.lax.cond(
             state.player_dead == 0,
             lambda _: self.SPRITE_PLAYER,
@@ -889,6 +1069,7 @@ class SpaceInvadersRenderer(JAXGameRenderer):
         frame_player = aj.get_sprite_frame(sprite_player, 0)
         raster = aj.render_at(raster, state.player_x - self.consts.PLAYER_SIZE[0], self.consts.PLAYER_Y, frame_player)
 
+        # Render Life Counter
         raster = jax.lax.cond(
             state.player_dead > self.consts.PLAYER_EXPLOSION_DURATION + 1,
             lambda r: self.render_life(state, r),
@@ -905,114 +1086,27 @@ class SpaceInvadersRenderer(JAXGameRenderer):
             raster
         )
 
-        # Render Score - Convert score to 4 digits
-        score = state.player_score
-        digits = [
-            (score // 1000) % 10,
-            (score // 100) % 10,
-            (score // 10) % 10,
-            score % 10
-        ]
-        
-        green_sprites = jnp.array([
-            aj.get_sprite_frame(s, 0) for s in [
-                SPRITE_ZERO_GREEN, SPRITE_ONE_GREEN, SPRITE_TWO_GREEN, SPRITE_THREE_GREEN, SPRITE_FOUR_GREEN,
-                SPRITE_FIVE_GREEN, SPRITE_SIX_GREEN, SPRITE_SEVEN_GREEN, SPRITE_EIGHT_GREEN, SPRITE_NINE_GREEN
-            ]
-        ])
-
-        # Load Initial Score
-        score_pos_x = [3, 6, 9, 12]
-        score_pos_y = [9, 10, 10, 9]
-        for i in range(4):
-            raster = aj.render_at(raster, score_pos_x[i] + i * self.consts.NUMBER_SIZE[0], score_pos_y[i], green_sprites[digits[i]])
-
-        frame_zero_yellow = aj.get_sprite_frame(SPRITE_ZERO_YELLOW, 0)
-        for i in range(4):
-            raster = aj.render_at(raster, self.consts.NUMBER_YELLOW_OFFSET + score_pos_x[i] + i * self.consts.NUMBER_SIZE[0], score_pos_y[i], frame_zero_yellow)
-
-        # Load Defense Object
-        frame_defense = aj.get_sprite_frame(SPRITE_DEFENSE, 0)
-        defense_pos_x = [41, 73, 105]
-        for x_pos in defense_pos_x:
-            raster = aj.render_at(raster, x_pos, self.consts.HEIGHT - 53, frame_defense)
-
-        # Load Opponent Sprites
-        flip = jax.lax.cond(
-            state.player_dead != 0,
-            lambda: False,
-            lambda: jax.numpy.floor(state.step_counter / self.consts.MOVEMENT_RATE) % 2 == 1
+        # Render Score
+        raster = jax.lax.cond(
+            state.ufo_state == 0,
+            lambda: self.render_score(state, raster),
+            lambda: raster
         )
 
-        opponent_sprites_a = [SPRITE_OPPONENT_1_A, SPRITE_OPPONENT_2_A, SPRITE_OPPONENT_3_A, SPRITE_OPPONENT_4_A, SPRITE_OPPONENT_5, SPRITE_OPPONENT_6_A]
-        opponent_sprites_b = [SPRITE_OPPONENT_1_B, SPRITE_OPPONENT_2_B, SPRITE_OPPONENT_3_B, SPRITE_OPPONENT_4_B, SPRITE_OPPONENT_5, SPRITE_OPPONENT_6_B]
-        
-        sprites_to_render = jax.lax.cond(
-            flip,
-            lambda: jnp.stack([aj.get_sprite_frame(s, 0) for s in opponent_sprites_b]),
-            lambda: jnp.stack([aj.get_sprite_frame(s, 0) for s in opponent_sprites_a])
+        # Render Defense Object
+        raster = self.render_defense(state, raster)
+
+        raster = self.render_enemies(state, raster)
+
+        # Render UFO
+        raster = jax.lax.cond(
+            state.ufo_state == 0,
+            lambda: raster,
+            lambda: self.render_ufo(state, raster)
         )
 
-        explosion_sprites = [SPRITE_EXPLOSION_1, SPRITE_EXPLOSION_2, SPRITE_EXPLOSION_3, SPRITE_EXPLOSION_4]
-        explosion_purple_sprites = [SPRITE_EXPLOSION_PURPLE_A, SPRITE_EXPLOSION_PURPLE_B]
-        explosion_player_sprites = [PLAYER_EXPLOSION_A, PLAYER_EXPLOSION_B]
+        # Render Enemy Bullets
+        raster = self.render_bullets(state, raster)
 
-        explosion_sprites = jnp.array([aj.get_sprite_frame(s, 0) for s in explosion_sprites])
-
-        def render_explosion(idx, raster, x, y):
-            destroyed_frame = state.destroyed[idx] # value between [1;28]
-
-            #TODO state._replace(exploded_frames=frames)
-
-            sprite_id = jnp.argmax(destroyed_frame < self.consts.EXPLOSION_FRAMES)
-            sprite = explosion_sprites[sprite_id]
-
-            raster = aj.render_at(raster, x, y, sprite, False)
-            #jax.debug.print("Drawing Explosion at x: {x}, y: {y} with Frame: {frame} and Sprite: {sprite} for IDX: {idx}", x=x, y=y, frame=frames[idx], sprite=sprite_id, idx=idx)
-
-            return raster
-
-
-        def render_enemies(i, raster):
-            base_x = state.opponent_current_x + i * (self.consts.OFFSET_OPPONENT[0] + self.consts.OPPONENT_SIZE[0])
-            
-            def render_row(j, raster):
-                idx = j * self.consts.ENEMY_COLS + i
-                y_pos = state.opponent_current_y + j * (self.consts.OFFSET_OPPONENT[1] + self.consts.OPPONENT_SIZE[1])
-                sprite = sprites_to_render[j]
-                
-                is_alive = jnp.logical_not(state.destroyed[idx])
-                raster = jax.lax.cond(
-                    jnp.logical_and(state.destroyed[idx] != 0, state.destroyed[idx] < 29), # Starting with the 29th frame the explosion animation is finished and doesnt need to be shown anymore 
-                    lambda r: render_explosion(idx, r, base_x, y_pos),
-                    lambda r: r,
-                    raster
-                )
-                
-                # Special flip logic for opponent 5
-                do_flip = jnp.where(j == 4, flip, False)
-
-                return jax.lax.cond(
-                    is_alive,
-                    lambda r: aj.render_at(r, base_x, y_pos, sprite, do_flip),
-                    lambda r: r,
-                    raster
-                )
-            
-            raster = jax.lax.fori_loop(0, self.consts.ENEMY_ROWS, render_row, raster)
-            return raster
-        
-        raster = jax.lax.fori_loop(0, self.consts.ENEMY_COLS, render_enemies, raster)
-
-        frame_enemy_bullet = aj.get_sprite_frame(SPRITE_BULLET, 0)
-        def render_enemy_bullet_body(i, current_raster):
-            should_render = state.enemy_bullets_active[i] & (state.step_counter % 2 == 0)
-            return jax.lax.cond(
-                should_render,
-                lambda r: aj.render_at(r, state.enemy_bullets_x[i], state.enemy_bullets_y[i], frame_enemy_bullet),
-                lambda r: r,
-                current_raster
-            )
-        raster = jax.lax.fori_loop(0, self.consts.MAX_ENEMY_BULLETS, render_enemy_bullet_body, raster)
         return raster
 
