@@ -141,7 +141,7 @@ class WordZapperState(NamedTuple):
     letters_x: chex.Array # letters at the top
     letters_y: chex.Array
     letters_char: chex.Array
-    letters_alive: chex.Array # (1, 2) -> # letter_is_alive, letter_cooldown
+    letters_alive: chex.Array # (27, 2) -> # letter_is_alive, letter_cooldown
     letters_speed: chex.Array
     letters_positions: chex.Array
 
@@ -872,8 +872,10 @@ def handle_player_enemy_collisions(
     return new_player_x, new_enemy_active
 
 class JaxWordZapper(JaxEnvironment[WordZapperState, WordZapperObservation, WordZapperInfo, WordZapperConstants]) :
-    def __init__(self, consts: WordZapperConstants = None, reward_funcs: list[callable] =None):
-        super().__init__()
+    def __init__(self, consts: WordZapperConstants = None, frameskip: int = 1, reward_funcs: list[callable] = None):
+        super().__init__(consts)
+        self.consts = consts or WordZapperConstants()
+
         if reward_funcs is not None:
             reward_funcs = tuple(reward_funcs)
         self.reward_funcs = reward_funcs
@@ -897,8 +899,8 @@ class JaxWordZapper(JaxEnvironment[WordZapperState, WordZapperObservation, WordZ
             Action.DOWNRIGHTFIRE,
             Action.DOWNLEFTFIRE
         ]
-        self.frame_stack_size = 4
-        self.consts = consts or WordZapperConstants()
+        self.frameskip = frameskip
+        self.frame_stack_size = 4  # Standard 
         self.obs_size = 6 + 5 + 6 + 27 * 6 + 1 + 6 +  self.consts.MAX_ENEMIES * 5 + 1 + 1 + 1 + 1 
         self.renderer = WordZapperRenderer(self.consts)
 
@@ -986,7 +988,7 @@ class JaxWordZapper(JaxEnvironment[WordZapperState, WordZapperObservation, WordZ
             "player": spaces.Dict({
                 "x": spaces.Box(low=0, high=160, shape=(), dtype=jnp.int32),
                 "y": spaces.Box(low=0, high=210, shape=(), dtype=jnp.int32),
-                "direction": spaces.Box(low=0, high=1, shape=(), dtype=jnp.int32),
+                "direction": spaces.Box(low=-1, high=1, shape=(), dtype=jnp.int32),
                 "width": spaces.Box(low=0, high=160, shape=(), dtype=jnp.int32),
                 "height": spaces.Box(low=0, high=210, shape=(), dtype=jnp.int32),
                 "active": spaces.Box(low=0, high=1, shape=(), dtype=jnp.int32),
@@ -999,9 +1001,9 @@ class JaxWordZapper(JaxEnvironment[WordZapperState, WordZapperObservation, WordZ
                 "active": spaces.Box(low=0, high=1, shape=(), dtype=jnp.int32),
             }),
             "player_zapper": spaces.Box(low=0, high=255, shape=(6,), dtype=jnp.int32),
-            "letters": spaces.Box(low=0, high=255, shape=(27, 6), dtype=jnp.int32),
+            "letters": spaces.Box(low=0, high=400, shape=(27, 6), dtype=jnp.int32),
             "current_letter_index": spaces.Box(low=0, high=5, shape=(), dtype=jnp.int32),
-            "target_word": spaces.Box(low=0, high=27, shape=(6,), dtype=jnp.int32),
+            "target_word": spaces.Box(low=-1, high=27, shape=(6,), dtype=jnp.int32),
             "enemies": spaces.Box(low=0, high=255, shape=(self.consts.MAX_ENEMIES, 5), dtype=jnp.int32),
             "score": spaces.Box(low=0, high=999999, shape=(), dtype=jnp.int32),
             "game_phase": spaces.Box(low=0, high=2, shape=(), dtype=jnp.int32),
