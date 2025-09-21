@@ -830,12 +830,8 @@ class SpaceWarRenderer(JAXGameRenderer):
         # (and jax enforces same sizes)
         player_sprites, _ = jr.pad_to_match(player_sprites)
 
-        for i in range(16):
-            sprites[f'player_pos{i}'] = player_sprites[i]
-        for i in range(16, 20):
-            sprites[f'playerdeath_pos{i-14}'] = player_sprites[i]
-        for i in range(20, 24):
-            sprites[f'playerdeath_pos{i-10}'] = player_sprites[i]
+        sprites['player_pos'] = player_sprites[:16]
+        sprites['playerdeath_pos'] = player_sprites[:2] + player_sprites[16:20] + player_sprites[6:10] + player_sprites[20:24] + player_sprites[14:16]
 
         # enemy (including death animation)
         enemy_sprites = []
@@ -846,8 +842,7 @@ class SpaceWarRenderer(JAXGameRenderer):
         # (and jax enforces same sizes)
         enemy_sprites, _ = jr.pad_to_match(enemy_sprites)
 
-        for i in range(16):
-            sprites[f'enemy_pos{i}'] = enemy_sprites[i]
+        sprites['enemy_pos'] = [enemy_sprites[i] for i in [0]+list(range(15, 0, -1))]
 
         # missile
         sprites['missile'] = _load_sprite_frame('missile')
@@ -868,7 +863,7 @@ class SpaceWarRenderer(JAXGameRenderer):
         # expand all sprites
         for key, value in sprites.items():
             if isinstance(value, (list, tuple)):
-                sprites[key] = [jnp.expand_dims(sprite, axis=0) for sprite in value]
+                sprites[key] = jnp.array([jnp.expand_dims(sprite, axis=0) for sprite in value])
             else:
                 sprites[key] = jnp.expand_dims(value, axis=0)
 
@@ -908,48 +903,8 @@ class SpaceWarRenderer(JAXGameRenderer):
         # set player sprite (normal sprite if player is alive, otherwise sprite of death animation)
         player_sprite = jax.lax.cond(
             state.player_death_timer <= 0,
-            lambda: jax.lax.switch(
-                state.player_state[4],
-                [
-                    lambda: self.sprites['player_pos0'],
-                    lambda: self.sprites['player_pos1'],
-                    lambda: self.sprites['player_pos2'],
-                    lambda: self.sprites['player_pos3'],
-                    lambda: self.sprites['player_pos4'],
-                    lambda: self.sprites['player_pos5'],
-                    lambda: self.sprites['player_pos6'],
-                    lambda: self.sprites['player_pos7'],
-                    lambda: self.sprites['player_pos8'],
-                    lambda: self.sprites['player_pos9'],
-                    lambda: self.sprites['player_pos10'],
-                    lambda: self.sprites['player_pos11'],
-                    lambda: self.sprites['player_pos12'],
-                    lambda: self.sprites['player_pos13'],
-                    lambda: self.sprites['player_pos14'],
-                    lambda: self.sprites['player_pos15']
-                ]
-            ),
-            lambda: jax.lax.switch(
-                state.player_state[4],
-                [
-                    lambda: self.sprites['player_pos0'],
-                    lambda: self.sprites['player_pos1'],
-                    lambda: self.sprites['playerdeath_pos2'],
-                    lambda: self.sprites['playerdeath_pos3'],
-                    lambda: self.sprites['playerdeath_pos4'],
-                    lambda: self.sprites['playerdeath_pos5'],
-                    lambda: self.sprites['player_pos6'],
-                    lambda: self.sprites['player_pos7'],
-                    lambda: self.sprites['player_pos8'],
-                    lambda: self.sprites['player_pos9'],
-                    lambda: self.sprites['playerdeath_pos10'],
-                    lambda: self.sprites['playerdeath_pos11'],
-                    lambda: self.sprites['playerdeath_pos12'],
-                    lambda: self.sprites['playerdeath_pos13'],
-                    lambda: self.sprites['player_pos14'],
-                    lambda: self.sprites['player_pos15']
-                ]
-            )
+            lambda: self.sprites['player_pos'][state.player_state[4]],
+            lambda: self.sprites['playerdeath_pos'][state.player_state[4]]
         )
 
         frame_player = jr.get_sprite_frame(player_sprite, state.step_counter)
@@ -966,28 +921,7 @@ class SpaceWarRenderer(JAXGameRenderer):
 
         # enemy
         # set enemy sprite
-        enemy_sprite = jax.lax.switch(
-            state.enemy_death_timer%16,
-            [   
-                lambda: self.sprites['enemy_pos0'],
-                lambda: self.sprites['enemy_pos15'],
-                lambda: self.sprites['enemy_pos14'],
-                lambda: self.sprites['enemy_pos13'],
-                lambda: self.sprites['enemy_pos12'],
-                lambda: self.sprites['enemy_pos11'],
-                lambda: self.sprites['enemy_pos10'],
-                lambda: self.sprites['enemy_pos9'],
-                lambda: self.sprites['enemy_pos8'],
-                lambda: self.sprites['enemy_pos7'],
-                lambda: self.sprites['enemy_pos6'],
-                lambda: self.sprites['enemy_pos5'],
-                lambda: self.sprites['enemy_pos4'],
-                lambda: self.sprites['enemy_pos3'],
-                lambda: self.sprites['enemy_pos2'],
-                lambda: self.sprites['enemy_pos1']
-            ]
-        )
-
+        enemy_sprite = self.sprites['enemy_pos'][state.enemy_death_timer%16]
         frame_enemy = jr.get_sprite_frame(enemy_sprite, state.step_counter)
         raster = jr.render_at(raster, self.consts.ENEMY_X, self.consts.ENEMY_Y, frame_enemy)
 
