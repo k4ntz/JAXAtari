@@ -54,7 +54,7 @@ class WordZapperConstants(NamedTuple) :
     ENEMY_Y_MIN_SEPARATION = 16
 
     ENEMY_GAME_SPEED = 0.7
-    LEVEL_PAUSE_FRAMES = 4 * 60
+    LEVEL_PAUSE_FRAMES = 3 * 60
 
     # zapper
     ZAPPER_COLOR = (252,252,84,255)
@@ -527,9 +527,19 @@ def scrolling_letters(state: WordZapperState, consts: WordZapperConstants) -> ch
     # Find all letters where zapper_x is within bounds
     in_bounds_mask = jnp.logical_and(zapper_x >= letter_lefts, zapper_x < letter_rights)
 
+    zapper_in_bounds = jnp.logical_and(
+        state.player_zapper_position[0] >= consts.ZAPPING_BOUNDS[0],
+        state.player_zapper_position[0] <= consts.ZAPPING_BOUNDS[1],
+    )
+
     # Only consider letters that are visible
-    visible_mask = jnp.logical_and(state.letters_x >= consts.LETTER_VISIBLE_MIN_X, state.letters_x < consts.LETTER_VISIBLE_MAX_X)
-    valid_mask = jnp.logical_and(in_bounds_mask, visible_mask)
+    visible_mask = jnp.logical_and(
+        state.letters_x > consts.LETTER_VISIBLE_MIN_X,
+        state.letters_x < consts.LETTER_VISIBLE_MAX_X - consts.LETTER_SIZE[0]
+    )
+
+    valid_mask = jnp.logical_and(jnp.logical_and(in_bounds_mask, visible_mask), zapper_in_bounds)
+
     any_in_bounds = jnp.any(valid_mask)
 
     def get_first_in_bounds():
