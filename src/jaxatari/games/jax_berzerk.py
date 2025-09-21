@@ -705,23 +705,23 @@ class JaxBerzerk(JaxEnvironment[BerzerkState, BerzerkObservation, BerzerkInfo, B
         # Player
         player_pos = state.player.pos.astype(jnp.float32)
         player_dir = state.player.last_dir.astype(jnp.float32)
-        player_is_firing = jnp.array([state.player.is_firing], dtype=jnp.float32)
+        player_is_firing = jnp.array([state.player.is_firing], dtype=jnp.int32)
         player_bullet = state.player.bullet.astype(jnp.float32)
         player_bullet_dir = state.player.bullet_dir.astype(jnp.float32)
-        player_bullet_active = jnp.array([state.player.bullet_active], dtype=jnp.float32)
+        player_bullet_active = jnp.array([state.player.bullet_active], dtype=jnp.int32)
 
         # Enemies (pad/truncate to NUM_ENEMIES)
         enemy_pos = jnp.full((NUM_ENEMIES, 2), -100.0, dtype=jnp.float32)
         enemy_bullets = jnp.full((NUM_ENEMIES, 2), -100.0, dtype=jnp.float32)
         enemy_bullet_dirs = jnp.zeros((NUM_ENEMIES, 2), dtype=jnp.float32)
-        enemy_bullet_active = jnp.zeros((NUM_ENEMIES,), dtype=jnp.float32)
+        enemy_bullet_active = jnp.zeros((NUM_ENEMIES,), dtype=jnp.int32)
 
         # state.enemy.pos etc. have shape (num_enemies,2)
         n_state_enemies = min(NUM_ENEMIES, state.enemy.pos.shape[0])
         enemy_pos = enemy_pos.at[:n_state_enemies].set(state.enemy.pos[:n_state_enemies].astype(jnp.float32))
         enemy_bullets = enemy_bullets.at[:n_state_enemies].set(state.enemy.bullets[:n_state_enemies].astype(jnp.float32))
         enemy_bullet_dirs = enemy_bullet_dirs.at[:n_state_enemies].set(state.enemy.bullet_dirs[:n_state_enemies].astype(jnp.float32))
-        enemy_bullet_active = enemy_bullet_active.at[:n_state_enemies].set(state.enemy.bullet_active[:n_state_enemies].astype(jnp.float32))
+        enemy_bullet_active = enemy_bullet_active.at[:n_state_enemies].set(state.enemy.bullet_active[:n_state_enemies].astype(jnp.int32))
 
         # Otto
         otto_pos = state.otto.pos.astype(jnp.float32)
@@ -1291,7 +1291,7 @@ class JaxBerzerk(JaxEnvironment[BerzerkState, BerzerkObservation, BerzerkInfo, B
             otto_pos = jax.lax.cond(
                 otto_removed,
                 lambda _: jnp.array([-100.0, -100.0], dtype=jnp.float32),
-                lambda _: otto_pos,
+                lambda _: state.otto.pos.astype(jnp.float32),
                 operand=None
             )
 
@@ -1449,36 +1449,29 @@ class JaxBerzerk(JaxEnvironment[BerzerkState, BerzerkObservation, BerzerkInfo, B
 
     def observation_space(self) -> spaces.Dict:
         """Returns the simplified observation space for the agent."""
-        NUM = int(self.consts.MAX_NUM_ENEMIES)
-        # allow -100 sentinel for "invisible" / teleported entities
-        POS_LOW = -100.0
-        POS_HIGH = 255.0
-
         return spaces.Dict({
             # Player
-            "player_pos": spaces.Box(POS_LOW, POS_HIGH, (2,), jnp.float32),
-            "player_dir": spaces.Box(-1.0, 1.0, (2,), jnp.float32),
-            "player_is_firing": spaces.Box(0.0, 1.0, (1,), jnp.float32),
-            "player_bullet": spaces.Box(POS_LOW, POS_HIGH, (2,), jnp.float32),
-            "player_bullet_dir": spaces.Box(-1.0, 1.0, (2,), jnp.float32),
-            "player_bullet_active": spaces.Box(0.0, 1.0, (1,), jnp.float32),
+            "player_pos": spaces.Box(0, 255, (2,), jnp.float32),
+            "player_dir": spaces.Box(-1, 1, (2,), jnp.float32),
+            "player_is_firing": spaces.Box(0, 1, (1,), jnp.int32),
+            "player_bullet": spaces.Box(0, 255, (2,), jnp.float32),
+            "player_bullet_dir": spaces.Box(-1, 1, (2,), jnp.float32),
+            "player_bullet_active": spaces.Box(0, 1, (1,), jnp.int32),
 
             # Enemies
-            "enemy_pos": spaces.Box(POS_LOW, POS_HIGH, (NUM, 2), jnp.float32),
-            # if you don't track enemy_alive keep bullets entries (they can be -100 when unused)
-            "enemy_bullets": spaces.Box(POS_LOW, POS_HIGH, (NUM, 2), jnp.float32),
-            "enemy_bullet_dirs": spaces.Box(-1.0, 1.0, (NUM, 2), jnp.float32),
-            "enemy_bullet_active": spaces.Box(0.0, 1.0, (NUM,), jnp.float32),
+            "enemy_pos": spaces.Box(-100, 255, (self.consts.MAX_NUM_ENEMIES, 2), jnp.float32),
+            "enemy_bullets": spaces.Box(-100, 255, (self.consts.MAX_NUM_ENEMIES, 2), jnp.float32),
+            "enemy_bullet_dirs": spaces.Box(-1, 1, (self.consts.MAX_NUM_ENEMIES, 2), jnp.float32),
+            "enemy_bullet_active": spaces.Box(0, 1, (self.consts.MAX_NUM_ENEMIES,), jnp.int32),
 
-            # Otto (can be teleported off-screen -> -100)
-            "otto_pos": spaces.Box(POS_LOW, POS_HIGH, (2,), jnp.float32),
+            # Otto
+            "otto_pos": spaces.Box(-100, 255, (2,), jnp.float32),
 
             # Game-level
-            "score": spaces.Box(0.0, 1e6, (1,), jnp.float32),
-            "lives": spaces.Box(0.0, 10.0, (1,), jnp.float32),  # lives small; float for compat
+            "score": spaces.Box(0, 999999, (1,), jnp.float32),
+            "lives": spaces.Box(0, 3, (1,), jnp.int32),
         })
 
-    
 
     def image_space(self) -> spaces.Box:
         """
