@@ -993,7 +993,7 @@ class JaxSlotMachine(JaxEnvironment[SlotMachineState, SlotMachineObservation, Sl
         """Return the associated reward."""
         return jnp.asarray(state.last_reward, dtype=jnp.float32)
 
-    def _get_done_original(self, state: SlotMachineState) -> jnp.bool_:
+    def _get_done(self, state: SlotMachineState) -> jnp.bool_:
         """Check if the player can no longer place the minimum wager, or reached the max credits"""
         cfg = self.config
         credits = state.credits
@@ -1002,7 +1002,7 @@ class JaxSlotMachine(JaxEnvironment[SlotMachineState, SlotMachineObservation, Sl
         cannot_afford = credits < cfg.min_wager
         return jnp.logical_or(max_credits_reached, jnp.logical_and(cannot_afford, ~spinning))
 
-    def _get_done(self, state: SlotMachineState) -> jnp.bool_:
+    def _get_done_extended(self, state: SlotMachineState) -> jnp.bool_:
         """Check if the episode should terminate. TODO after debug is completed change this function with _get_done_original"""
         cfg = self.config
         credits = state.credits
