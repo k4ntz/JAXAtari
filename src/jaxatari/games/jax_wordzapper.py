@@ -634,24 +634,32 @@ def scrolling_letters(state: WordZapperState, consts: WordZapperConstants) -> ch
 def player_missile_step(
     state: WordZapperState, action: chex.Array, consts: WordZapperConstants
 ) -> chex.Array:
-    fire = jnp.any(
+    left = jnp.any(
         jnp.array(
             [
-                action == Action.UPRIGHTFIRE,
-                action == Action.UPLEFTFIRE,
-                action == Action.DOWNRIGHTFIRE,
-                action == Action.DOWNLEFTFIRE,
-                action == Action.RIGHTFIRE,
                 action == Action.LEFTFIRE,
+                action == Action.UPLEFTFIRE,
+                action == Action.DOWNLEFTFIRE,
             ]
         )
     )
+    right = jnp.any(
+        jnp.array(
+            [
+                action == Action.RIGHTFIRE,
+                action == Action.UPRIGHTFIRE,
+                action == Action.DOWNRIGHTFIRE,
+            ]
+        )
+    )
+    fire = jnp.any(jnp.array([left, right]))
+
 
     # if player fired and there is no active missile, create on in player_direction
     new_missile = jnp.where(
         jnp.logical_and(fire, jnp.logical_not(state.player_missile_position[2])),
         jnp.where(
-            state.player_direction == -1,
+            left,
             jnp.array([
                 state.player_x - consts.MISSILE_SIZE[0], # x, y, active, direction
                 state.player_y + consts.PLAYER_SIZE[1] / 2,
