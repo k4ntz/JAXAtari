@@ -8,33 +8,6 @@ Authors:
     - Jonas Neumann <jonas.neumann@stud.tu-darmstadt.de>
     - Yuddhish Chooah <yuddhish.chooah@stud.tu-darmstadt.de>
 
-
-Implemented features:
-- Plunger and Flipper movement logic
-- Plunger physics
-- Jit-compatible rendering
-- Special object logic (like yellow targets, rollovers, etc.)
-- Scoring
-- Ball respawning upon hitting the gutter and life counter
-- Basic collisions and ball physics
-
-Why the ball physics are not yet perfect:
-Video Pinball has extremely complicated ball physics. Launch angles when hitting (close to) corners are
-seemingly random and velocity calculation has a variety of strange quirks like strong spontaneous acceleration
-when a slow balls hit walls at certain angles, etc...
-These properties are impossible to read from the RAM state and need to be investigated
-frame by frame in various scenarios. Thus, the physics are far from perfect.
-Collisions are mostly implemented apart from the flippers but non-reflective collisions
-such as when hitting a target are still missing, even though the logic for these objects such as the targets
-(like increasing bumper multiplier and respawn cooldown etc.) are already implemented so the game
-is a little more complete than it seems.
-
-Additional notes:
-The renderer requires a custom function that was implemented in atraJaxis.py
-We were not working on the game for almost 2 months as most of the team debated whether they
-should quit the project or not, which is why the game is still in such an incomplete state.
-However, we are now determined to continue.
-
 """
 
 import os
@@ -240,12 +213,6 @@ class JaxVideoPinball(
             ball_step_key,
         )
 
-        # ball_x = jnp.where(test_flippers, 83, ball_x)
-        # ball_y = jnp.where(test_flippers, 170, ball_y)
-        # ball_direction = jnp.where(test_flippers, 1, ball_direction)
-        # ball_vel_x = jnp.where(test_flippers, 3., ball_vel_x)
-        # ball_vel_y = jnp.where(test_flippers, 3., ball_vel_y)
-
         # Step 3: Check if ball is in the gutter or in plunger hole
         ball_in_gutter = ball_y > 192
         ball_reset = jnp.logical_or(
@@ -388,27 +355,6 @@ class JaxVideoPinball(
         all_rewards = self._get_all_reward(state, new_state)
         info = self._get_info(new_state, all_rewards)
         observation = self._get_observation(new_state)
-        # stack the new observation, remove the oldest one
-        # observation = jax.tree.map(
-        #     lambda stack, obs: jnp.concatenate(
-        #         [stack[1:], jnp.expand_dims(obs, axis=0)], axis=0
-        #     ),
-        #     new_state.obs_stack,
-        #     observation,
-        # )
-        # new_state = new_state._replace(obs_stack=observation)
-        # jax.debug.print("------------------------------------------")
-
-        # Check if all lives are lost and the game should reset (not fully)
-        # observation, new_state = jax.lax.cond(
-        #     jnp.logical_and(lives > 3, respawn_timer == 0),
-        #     lambda ob, ns: self.reset(
-        #         jrandom.PRNGKey(score + special_target_cooldown + env_reward)
-        #     ),
-        #     lambda ob, ns: (ob, ns),
-        #     observation,
-        #     new_state,
-        # )
 
         return observation, new_state, env_reward, done, info
 
@@ -2217,40 +2163,6 @@ class JaxVideoPinball(
 
         scoring_list = jnp.stack(deconstructed_scoring_list, axis=0)
 
-        # jax.debug.print(
-        #    "Hit Point:\n\t"
-        #    "T_ENTRY: {}\n\t"
-        #    "X: {}\n\t"
-        #    "Y: {}\n\t"
-        #    "RX: {}\n\t"
-        #    "RY: {}\n\t"
-        #    "OBJECT_WIDTH: {}\n\t"
-        #    "OBJECT_HEIGHT: {}\n\t"
-        #    "OBJECT_X: {}\n\t"
-        #    "OBJECT_Y: {}\n\t"
-        #    "OBJECT_REFLECTING: {}\n\t"
-        #    "OBJECT_SCORE_TYPE: {}\n\t"
-        #    "OBJECT_VARIANT: {}\n"
-        #    "Pre-Collision Movement:\n\t"
-        #    "OLD_Y: {}\n\t"
-        #    "OLD_X: {}\n\t"
-        #    "NEW_Y: {}\n\t"
-        #    "NEW_X: {}\n",
-        #    hit_point[HitPointSelector.T_ENTRY],
-        #    hit_point[HitPointSelector.X],
-        #    hit_point[HitPointSelector.Y],
-        #    hit_point[HitPointSelector.RX],
-        #    hit_point[HitPointSelector.RY],
-        #    hit_point[HitPointSelector.OBJECT_WIDTH],
-        #    hit_point[HitPointSelector.OBJECT_HEIGHT],
-        #    hit_point[HitPointSelector.OBJECT_X],
-        #    hit_point[HitPointSelector.OBJECT_Y],
-        #    hit_point[HitPointSelector.OBJECT_REFLECTING],
-        #    hit_point[HitPointSelector.OBJECT_SCORE_TYPE],
-        #    hit_point[HitPointSelector.OBJECT_VARIANT],
-        #    ball_movement.old_ball_x, ball_movement.old_ball_y, ball_movement.new_ball_x, ball_movement.new_ball_y,
-        # )
-
         return hit_point, scoring_list, velocity_factor, velocity_addition
 
     @partial(jax.jit, static_argnums=(0,))
@@ -3187,13 +3099,6 @@ class VideoPinballRenderer(JAXGameRenderer):
             os.path.join(SPRITES_BASE_DIR, "YellowDiamondTop.npy")
         )
 
-        # sprite_wall_bottom_left_square = jr.loadFrame(os.path.join(SPRITES_BASE_DIR, "WallBottomLeftSquare.npy"), transpose=True)
-        # sprite_wall_bumper = jr.loadFrame(os.path.join(SPRITES_BASE_DIR, "WallBumper.npy"), transpose=True)
-        # sprite_wall_rollover = jr.loadFrame(os.path.join(SPRITES_BASE_DIR, "Wallrollover.npy"), transpose=True)
-        # sprite_wall_left_l = jr.loadFrame(os.path.join(SPRITES_BASE_DIR, "WallLeftL.npy"), transpose=True)
-        # sprite_wall_outer = jr.loadFrame(os.path.join(SPRITES_BASE_DIR, "WallOuter.npy"), transpose=True)
-        # sprite_wall_right_l = jr.loadFrame(os.path.join(SPRITES_BASE_DIR, "WallRightL.npy"), transpose=True)
-        # sprite_wall_small_horizontal = jr.loadFrame(os.path.join(SPRITES_BASE_DIR, "WallSmallHorizontal.npy"), transpose=True)
         sprite_walls = jr.loadFrame(os.path.join(SPRITES_BASE_DIR, "Walls.npy"))
 
         # Animated sprites
@@ -3357,13 +3262,6 @@ class VideoPinballRenderer(JAXGameRenderer):
             ]
         )
 
-        # sprites_flipper_left = jnp.concatenate([
-        #     jnp.repeat(sprites_flipper_left[0][None], 2, axis=0),
-        #     jnp.repeat(sprites_flipper_left[1][None], 2, axis=0),
-        #     jnp.repeat(sprites_flipper_left[2][None], 2, axis=0),
-        #     jnp.repeat(sprites_flipper_left[3][None], 2, axis=0)
-        # ])
-
         sprites_flipper_right, _ = jr.pad_to_match(
             [
                 sprite_flipper_right0,
@@ -3372,13 +3270,6 @@ class VideoPinballRenderer(JAXGameRenderer):
                 sprite_flipper_right3,
             ]
         )
-
-        # sprites_flipper_right = jnp.concatenate([
-        #     jnp.repeat(sprites_flipper_right[0][None], 2, axis=0),
-        #     jnp.repeat(sprites_flipper_right[1][None], 2, axis=0),
-        #     jnp.repeat(sprites_flipper_right[2][None], 2, axis=0),
-        #     jnp.repeat(sprites_flipper_right[3][None], 2, axis=0)
-        # ])
 
         sprites_plunger = jnp.stack(sprites_plunger, axis=0)
         sprites_flipper_left = jnp.stack(sprites_flipper_left, axis=0)
