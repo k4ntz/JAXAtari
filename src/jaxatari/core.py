@@ -35,21 +35,21 @@ def make(game_name: str, mode: int = 0, difficulty: int = 0) -> JaxEnvironment:
         raise NotImplementedError(
             f"The game '{game_name}' does not exist. Available games: {list_available_games()}"
         )
-
+    
     try:
         # 1. Dynamically load the module
         module = importlib.import_module(GAME_MODULES[game_name])
-
+        
         # 2. Find the correct environment class within the module
         env_class = None
         for _, obj in inspect.getmembers(module):
             if inspect.isclass(obj) and issubclass(obj, JaxEnvironment) and obj is not JaxEnvironment:
                 env_class = obj
                 break # Found it
-
+        
         if env_class is None:
             raise ImportError(f"No JaxEnvironment subclass found in {GAME_MODULES[game_name]}")
-
+        
         # 3. Instantiate the class, passing along the arguments, and return it
         # TODO: none of our environments use mode / difficulty yet, but we might want to add it here and in the single envs
         return env_class()
