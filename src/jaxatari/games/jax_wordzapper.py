@@ -1009,7 +1009,7 @@ class JaxWordZapper(JaxEnvironment[WordZapperState, WordZapperObservation, WordZ
                 "active": spaces.Box(low=0, high=1, shape=(), dtype=jnp.int32),
             }),
             "player_zapper": spaces.Box(low=0, high=255, shape=(6,), dtype=jnp.int32),
-            "letters": spaces.Box(low=0, high=400, shape=(27, 6), dtype=jnp.int32),
+            "letters": spaces.Box(low=0, high=self.consts.LETTER_RESET_X+27*(self.consts.LETTER_SIZE[0]+self.consts.LETTERS_DISTANCE)+10, shape=(27, 6), dtype=jnp.int32),
             "current_letter_index": spaces.Box(low=0, high=5, shape=(), dtype=jnp.int32),
             "target_word": spaces.Box(low=-1, high=27, shape=(6,), dtype=jnp.int32),
             "enemies": spaces.Box(low=0, high=255, shape=(self.consts.MAX_ENEMIES, 5), dtype=jnp.int32),
