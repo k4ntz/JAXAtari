@@ -4,9 +4,8 @@ import jax
 import jax.numpy as jnp
 import chex
 from jaxatari.environment import JaxEnvironment, JAXAtariAction as Action
-from gymnax.environments import spaces
+import jaxatari.spaces as spaces
 import os
-import time
 from jaxatari.renderers import JAXGameRenderer
 import jaxatari.rendering.jax_rendering_utils as jr
 
@@ -20,7 +19,7 @@ class BerzerkConstants(NamedTuple):
     SCALING_FACTOR = 3
 
     PLAYER_SIZE = (6, 20)
-    PLAYER_SPEED = 0.2
+    PLAYER_SPEED = 0.4
 
     EXTRA_LIFE_AT = 1000
 
@@ -28,13 +27,13 @@ class BerzerkConstants(NamedTuple):
     MAX_NUM_ENEMIES = 7
     MIN_NUM_ENEMIES = 5
     MOVEMENT_PROB = 0.0025  # probability for enemy to move
-    ENEMY_SPEED = 0.05
+    ENEMY_SPEED = 0.1
     ENEMY_SHOOT_PROB = 0.005
-    ENEMY_BULLET_SPEED = 0.235
+    ENEMY_BULLET_SPEED = 0.47
 
     BULLET_SIZE_HORIZONTAL = (4, 2)
     BULLET_SIZE_VERTICAL = (1, 6)
-    BULLET_SPEED = 1
+    BULLET_SPEED = 2
     MAX_BULLETS = 1
 
     WALL_THICKNESS = 4
@@ -42,12 +41,12 @@ class BerzerkConstants(NamedTuple):
     EXIT_WIDTH = 40
     EXIT_HEIGHT = 64
 
-    DEATH_ANIMATION_FRAMES = 256
-    ENEMY_DEATH_ANIMATION_FRAMES = 16
+    DEATH_ANIMATION_FRAMES = 128
+    ENEMY_DEATH_ANIMATION_FRAMES = 8
     
-    TRANSITION_ANIMATION_FRAMES = 128
+    TRANSITION_ANIMATION_FRAMES = 64
 
-    GAME_OVER_FRAMES = 64
+    GAME_OVER_FRAMES = 32
 
     SCORE_OFFSET_X = WIDTH - 58 - 6  # window width - distance to the right - digit width 
     SCORE_OFFSET_Y = HEIGHT - 20 - 7  # window height - distance to the bottom - digit height 
@@ -59,11 +58,11 @@ class BerzerkConstants(NamedTuple):
     )
 
     # Variations Evil Otto 
-    ENABLE_EVIL_OTTO = True     # Variation 1: enable immortal evil otto
+    ENABLE_EVIL_OTTO = False     # Variation 1: enable immortal evil otto
     MORTAL_EVIL_OTTO = False    # Variation 2: enable mortal evil otto (ENABLE_EVIL_OTTO has to be True)
     EVIL_OTTO_SIZE = (8, 7)
-    EVIL_OTTO_SPEED = 0.2
-    EVIL_OTTO_DELAY = 900
+    EVIL_OTTO_SPEED = 0.4
+    EVIL_OTTO_DELAY = 450
     
 class PlayerState(NamedTuple):
     pos: chex.Array                     # (2,)
@@ -342,18 +341,20 @@ class JaxBerzerk(JaxEnvironment[BerzerkState, BerzerkObservation, BerzerkInfo, B
 
 
     @partial(jax.jit, static_argnums=(0, ))
-    def object_hits_wall(self, object_pos, object_size, room_counter, entry_direction, num_points_per_side=10):
+    def object_hits_wall(self, object_pos, object_size, room_counter, entry_direction, num_points_per_side=3):
         # get current room id (0–3 → mid_walls_1 to _4)
         room_idx = JaxBerzerk.get_room_index(room_counter)
 
         # get respective wall mask (True = collision)
         def load_mask(idx):
-            return jax.lax.switch(idx, [
-                lambda: self.renderer.room_collision_masks['mid_walls_1'],
-                lambda: self.renderer.room_collision_masks['mid_walls_2'],
-                lambda: self.renderer.room_collision_masks['mid_walls_3'],
-                lambda: self.renderer.room_collision_masks['mid_walls_4'],
+            masks = jnp.array([
+                self.renderer.room_collision_masks['mid_walls_1'],
+                self.renderer.room_collision_masks['mid_walls_2'],
+                self.renderer.room_collision_masks['mid_walls_3'],
+                self.renderer.room_collision_masks['mid_walls_4'],
             ])
+            return masks[idx]
+
         mid_mask = load_mask(room_idx)
         outer_mask = self.renderer.room_collision_masks['level_outer_walls']
 
@@ -636,7 +637,7 @@ class JaxBerzerk(JaxEnvironment[BerzerkState, BerzerkObservation, BerzerkInfo, B
                 jax.vmap(lambda enemy_position: self.rects_overlap(
                     pos, self.consts.ENEMY_SIZE, enemy_position, self.consts.ENEMY_SIZE))(placed))
             invalid = in_wall | on_player | overlap_enemy
-            return jnp.logical_and(invalid, attempts < 200)
+            return jnp.logical_and(invalid, attempts < 2)
 
         def body2(carry2):
             _, rng2, attempts, placed = carry2
@@ -669,10 +670,10 @@ class JaxBerzerk(JaxEnvironment[BerzerkState, BerzerkObservation, BerzerkInfo, B
                 otto_animation_counter += 1
 
                 # jump animation for otto (best-guess-estimate of true values)
-                jump_phase = (otto_animation_counter // 18) % 6
-                jump_offset = jnp.where(jump_phase == 0, 0.5, 
-                                        jnp.where(jump_phase == 5, 0.8, 
-                                                  jnp.where(jump_phase == 1, -0.7, -0.2)))
+                jump_phase = (otto_animation_counter // 15) % 5
+                jump_offset = jnp.where(jump_phase == 0, 0.5,
+                                        jnp.where(jump_phase == 4, 0.8, 
+                                                  jnp.where(jump_phase == 1, -0.7, -0.3)))
                 otto_pos_with_jump = new_otto_pos.at[1].add(jump_offset)
 
                 return otto_pos_with_jump
@@ -810,7 +811,7 @@ class JaxBerzerk(JaxEnvironment[BerzerkState, BerzerkObservation, BerzerkInfo, B
         game_over_active = state.game_over_timer > 0
         game_over_timer = jnp.maximum(state.game_over_timer - 1, 0)
 
-        def handle_game_over(_):
+        def handle_game_over():
             new_state = state._replace(game_over_timer=game_over_timer)
             return (
                 self._get_observation(new_state),
@@ -825,7 +826,7 @@ class JaxBerzerk(JaxEnvironment[BerzerkState, BerzerkObservation, BerzerkInfo, B
         room_transition_active = state.room_transition_timer > 0
         transition_timer = jnp.maximum(state.room_transition_timer - 1, 0)
 
-        def handle_room_transition(_):
+        def handle_room_transition():
             new_state = state._replace(room_transition_timer=transition_timer)
 
             def finished_transition():
@@ -896,7 +897,7 @@ class JaxBerzerk(JaxEnvironment[BerzerkState, BerzerkObservation, BerzerkInfo, B
 
 
         # Handle normal gameplay
-        def handle_normal(_):
+        def handle_normal():
             #######################################################
             # 1. Update Player
             #######################################################
@@ -1067,7 +1068,6 @@ class JaxBerzerk(JaxEnvironment[BerzerkState, BerzerkObservation, BerzerkInfo, B
                           & ~jnp.all(target_pos == shooter_pos)
                 )(updated_enemy_pos)
             )(enemy_bullets, enemy_bullet_sizes, updated_enemy_pos, enemy_bullet_active)
-            enemy_hit_by_friendly_fire = jnp.any(enemy_friendly_fire_hits, axis=0)
 
             enemy_touch_hits = jax.vmap(
                 lambda pos_a, alive_a: jax.vmap(
@@ -1189,40 +1189,33 @@ class JaxBerzerk(JaxEnvironment[BerzerkState, BerzerkObservation, BerzerkInfo, B
 
             # player death
             hit_something = player_hit_by_enemy | player_hit_wall | player_hit_by_enemy_bullet | otto_hits_player
-            death_timer = jnp.where(hit_something & (state.player.death_timer == 0), self.consts.DEATH_ANIMATION_FRAMES + 1, state.player.death_timer)
+            death_timer = jnp.where(hit_something & (state.player.death_timer == 0), self.consts.DEATH_ANIMATION_FRAMES + 2, state.player.death_timer)
             death_timer = jnp.maximum(death_timer - 1, 0)
 
             # enemy death
-            enemy_alive = (
-                state.enemy.alive
-                & ~enemy_hit_by_player_bullet
-                & ~enemy_hits_wall
-                & ~enemy_hit_by_friendly_fire
-                & ~enemy_hit_enemy
+            enemy_kill_events = (
+                enemy_hit_by_player_bullet |
+                enemy_hits_wall |
+                enemy_hit_enemy |
+                enemy_bullet_hit_enemy |
+                player_hits_enemy
             )
+
+            enemy_dies = state.enemy.alive & enemy_kill_events
+
+            enemy_alive = state.enemy.alive & ~enemy_dies
+
+            updated_enemy_axis = jnp.where(enemy_alive, updated_enemy_axis, 0)
+            new_enemy_death_timer = jnp.where(enemy_dies, self.consts.ENEMY_DEATH_ANIMATION_FRAMES + 2, state.enemy.death_timer)
+            new_enemy_death_pos = jnp.where(enemy_dies[:, None], updated_enemy_pos, state.enemy.death_pos)
+            
+            enemy_death_timer_next = jnp.maximum(new_enemy_death_timer - 1, 0)
 
             invisible = jnp.array([-100.0, -100.0])     # teleport dead enemies out of view
             updated_enemy_pos = jnp.where(enemy_alive[:, None], updated_enemy_pos, invisible)
 
-            updated_enemy_axis = jnp.where(enemy_alive, updated_enemy_axis, 0)
-            enemy_dies = enemy_hit_by_player_bullet | enemy_hits_wall | enemy_hit_by_friendly_fire | enemy_hit_enemy
-            new_enemy_death_timer = jnp.where(enemy_dies, self.consts.ENEMY_DEATH_ANIMATION_FRAMES, state.enemy.death_timer)
-            new_enemy_death_pos = jnp.where(enemy_dies[:, None], updated_enemy_pos, state.enemy.death_pos)
-
-            # Timer herunterzählen
-            enemy_death_timer_next = jnp.maximum(new_enemy_death_timer - 1, 0)
-
-            # mask of all dead enemies in current frame
-            enemy_dies_mask = (
-                enemy_hit_by_player_bullet |
-                enemy_hits_wall |
-                enemy_bullet_hit_enemy |
-                player_hits_enemy |
-                enemy_hit_enemy
-            )
-
             # calculate score: 50 points per dead enemy
-            score_after = state.score + jnp.sum(enemy_dies_mask) * 50
+            score_after = state.score + jnp.sum(enemy_dies) * 50
 
             # bonus score for killing all enemies in level
             give_bonus = (~jnp.any(enemy_alive)) & (~state.enemy.clear_bonus_given)
@@ -1237,7 +1230,7 @@ class JaxBerzerk(JaxEnvironment[BerzerkState, BerzerkObservation, BerzerkInfo, B
 
             # Trigger Room Transition oder Game Over automatisch
             transition_timer = jax.lax.cond(
-                (death_timer == 0) & hit_something,
+                death_timer == 1,
                 lambda: jax.lax.cond(
                     lives_after == -1,
                     lambda: jnp.array(self.consts.GAME_OVER_FRAMES, dtype=jnp.int32),
@@ -1246,7 +1239,7 @@ class JaxBerzerk(JaxEnvironment[BerzerkState, BerzerkObservation, BerzerkInfo, B
                 lambda: state.room_transition_timer
             )
             game_over_timer = jax.lax.cond(
-                (death_timer == 0) & hit_something & (lives_after == -1),
+                (death_timer == 1) & (lives_after == -1),
                 lambda: self.consts.GAME_OVER_FRAMES,
                 lambda: state.game_over_timer
             )
@@ -1324,11 +1317,11 @@ class JaxBerzerk(JaxEnvironment[BerzerkState, BerzerkObservation, BerzerkInfo, B
         # call appropriate step handler for current frame
         return jax.lax.cond(
             game_over_active,
-            handle_game_over,
+            lambda _: handle_game_over(),
             lambda _: jax.lax.cond(
                 room_transition_active,
-                handle_room_transition,
-                handle_normal,
+                lambda _: handle_room_transition(),
+                lambda _: handle_normal(),
                 operand=None
             ),
             operand=None
@@ -1584,8 +1577,8 @@ class BerzerkRenderer(JAXGameRenderer):
 
         def get_player_sprite():
             def death_animation():
-                idx = (state.player.death_timer - 1) % 8
-                return jnp.where(idx < 4, self.sprites['player_idle'], self.sprites['player_death'])
+                idx = (state.player.death_timer - 1) % 4
+                return jnp.where(idx < 2, self.sprites['player_idle'], self.sprites['player_death'])
 
             dir = state.player.last_dir
 
@@ -1618,14 +1611,8 @@ class BerzerkRenderer(JAXGameRenderer):
             move_frames = [
                 lambda: self.sprites['player_move_1'],
                 lambda: self.sprites['player_move_1'],
-                lambda: self.sprites['player_move_1'],
-                lambda: self.sprites['player_move_1'],
                 lambda: self.sprites['player_move_2'],
                 lambda: self.sprites['player_move_2'],
-                lambda: self.sprites['player_move_2'],
-                lambda: self.sprites['player_move_2'],
-                lambda: self.sprites['player_idle'],
-                lambda: self.sprites['player_idle'],
                 lambda: self.sprites['player_idle'],
                 lambda: self.sprites['player_idle'],
             ]
@@ -1636,7 +1623,7 @@ class BerzerkRenderer(JAXGameRenderer):
                     lambda: jax.lax.switch(shoot_idx, shoot_frames),
                     lambda: jax.lax.cond(
                         state.player.animation_counter > 0,
-                        lambda: jax.lax.switch((state.player.animation_counter - 1) % 12, move_frames),
+                        lambda: jax.lax.switch((state.player.animation_counter - 1) % 6, move_frames),
                         lambda: self.sprites['player_idle']
                     )
                 )
@@ -1716,42 +1703,42 @@ class BerzerkRenderer(JAXGameRenderer):
 
             # Death Animation Frames
             death_sprites = (
-                [recolor("enemy_death_3")] * 8 +
-                [recolor("enemy_death_2")] * 4 +
-                [recolor("enemy_death_1")] * 4
+                [recolor("enemy_death_3")] * 4 +
+                [recolor("enemy_death_2")] * 2 +
+                [recolor("enemy_death_1")] * 2
             )
             death_frames = [lambda sprite=s: sprite for s in death_sprites]
 
             # Normal Animation Frames
             idle_sprites = (
-                [recolor("enemy_idle_1")] * 8 +
-                [recolor("enemy_idle_2")] * 8 +
-                [recolor("enemy_idle_3")] * 8 +
-                [recolor("enemy_idle_4")] * 8 +
-                [recolor("enemy_idle_5")] * 8 +
-                [recolor("enemy_idle_6")] * 8 +
-                [recolor("enemy_idle_7")] * 8 +
-                [recolor("enemy_idle_8")] * 8
+                [recolor("enemy_idle_1")] * 4 +
+                [recolor("enemy_idle_2")] * 4 +
+                [recolor("enemy_idle_3")] * 4 +
+                [recolor("enemy_idle_4")] * 4 +
+                [recolor("enemy_idle_5")] * 4 +
+                [recolor("enemy_idle_6")] * 4 +
+                [recolor("enemy_idle_7")] * 4 +
+                [recolor("enemy_idle_8")] * 4
             )
             idle_frames = [lambda sprite=s: sprite for s in idle_sprites]
 
             move_horizontal_sprites = (
-                [recolor("enemy_move_horizontal_1")] * 14 +
-                [recolor("enemy_move_horizontal_2")] * 14
+                [recolor("enemy_move_horizontal_1")] * 7 +
+                [recolor("enemy_move_horizontal_2")] * 7
             )
             move_horizontal_frames = [lambda sprite=s: sprite for s in move_horizontal_sprites]
 
             move_vertical_sprites = (
-                [recolor("enemy_move_vertical_1")] * 12 +
-                [recolor("enemy_move_vertical_2")] * 12 +
-                [recolor("enemy_move_vertical_1")] * 12 +
-                [recolor("enemy_move_vertical_3")] * 12
+                [recolor("enemy_move_vertical_1")] * 6 +
+                [recolor("enemy_move_vertical_2")] * 6 +
+                [recolor("enemy_move_vertical_1")] * 6 +
+                [recolor("enemy_move_vertical_3")] * 6
             )
             move_vertical_frames = [lambda sprite=s: sprite for s in move_vertical_sprites]
 
             # Animation functions
             def death_animation():
-                idx = (death_timer - 1) % 16
+                idx = (death_timer - 1) % 8
                 return jax.lax.switch(idx, death_frames)
 
             def normal_animation():
@@ -1759,9 +1746,9 @@ class BerzerkRenderer(JAXGameRenderer):
                 return jax.lax.switch(
                     axis_idx,
                     [
-                        lambda: jax.lax.switch((counter - 1) % 64, idle_frames),
-                        lambda: jax.lax.switch((counter - 1) % 28, move_horizontal_frames),
-                        lambda: jax.lax.switch((counter - 1) % 48, move_vertical_frames),
+                        lambda: jax.lax.switch((counter - 1) % 32, idle_frames),
+                        lambda: jax.lax.switch((counter - 1) % 14, move_horizontal_frames),
+                        lambda: jax.lax.switch((counter - 1) % 24, move_vertical_frames),
                     ]
                 )
 
@@ -1818,7 +1805,7 @@ class BerzerkRenderer(JAXGameRenderer):
 
         otto_sprites = self.sprites.get('evil_otto')
         otto_sprites = jax.lax.cond(
-            (state.otto.anim_counter // 18) % 6,
+            (state.otto.anim_counter // 15) % 5,
             lambda s: s.get('evil_otto'), 
             lambda s: s.get('evil_otto_2'),
             self.sprites)
