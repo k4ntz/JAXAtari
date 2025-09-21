@@ -240,7 +240,23 @@ PLAYER_JUMP_RIGHT = jnp.array([
     [1, 0, 0, 0, 0, 0, 0, 0],
 ], dtype=jnp.uint8)
 
+FIREBALL_1 = jnp.array([
+    [0,0,3,3,3,0,0],
+    [0,3,3,3,3,3,0],
+    [3,3,3,3,3,3,3],
+    [3,3,3,3,3,3,3],
+    [0,3,3,3,3,3,0],
+    [0,0,3,3,3,0,0],
+], dtype=jnp.uint8)
 
+FIREBALL_2 = jnp.array([
+    [0,0,3,3,0,0,0],
+    [0,3,3,3,3,0,0],
+    [3,3,3,3,3,3,0],
+    [0,3,3,3,3,3,3],
+    [0,0,3,3,3,3,0],
+    [0,0,0,3,3,0,0],
+], dtype=jnp.uint8)
 
 # --- Enemies params ---
 ENEMY_SIZE = (8, 8)  # w, h
@@ -300,6 +316,7 @@ class Fireball(NamedTuple):
     state: chex.Array
     dir: chex.Array
     rnd: chex.Array
+    ani: chex.Array
 
 class Enemy(NamedTuple):
     enemy_pos: jnp.ndarray  # shape (N,2): x/y positions
@@ -473,7 +490,8 @@ def fireball_step(fb:Fireball):
             count= f.count,
             state= new_state,
             dir= f.dir,
-            rnd= f.rnd
+            rnd= f.rnd,
+            ani= f.ani
         )
         
     def move(f: Fireball):
@@ -497,7 +515,8 @@ def fireball_step(fb:Fireball):
             count= f.count,
             state= new_state,
             dir= f.dir,
-            rnd= f.rnd
+            rnd= f.rnd,
+            ani = jnp.where(f.ani == 1, 2, 1)
         )
     def wait(f: Fireball):
         def stay(ff: Fireball):
@@ -508,7 +527,8 @@ def fireball_step(fb:Fireball):
             count= ff.count - 1,
             state= ff.state,
             dir= ff.dir,
-            rnd= ff.rnd
+            rnd= ff.rnd,
+            ani= ff.ani
         )
         def end(ff: Fireball):
             new_pos, new_dir, rng = fireball_new_start_pos(ff.rnd)
@@ -519,7 +539,8 @@ def fireball_step(fb:Fireball):
             count= 60,
             state= 0,
             dir= new_dir,
-            rnd= rng
+            rnd= rng,
+            ani= ff.ani
         )
         return lax.cond(f.count > 0, stay, end, f)
     return lax.switch(fb.state, [start, move, wait], fb)
@@ -1014,6 +1035,8 @@ PLAYER_WALK_LEFT_1_RGB, PLAYER_WALK_LEFT_1_MASK = indices_to_rgb_and_mask(PLAYER
 PLAYER_WALK_LEFT_2_RGB, PLAYER_WALK_LEFT_2_MASK = indices_to_rgb_and_mask(PLAYER_WALK_LEFT_2, PALETTE)
 PLAYER_JUMP_LEFT_RGB, PLAYER_JUMP_LEFT_MASK = indices_to_rgb_and_mask(PLAYER_JUMP_LEFT, PALETTE)
 PLAYER_JUMP_RIGHT_RGB, PLAYER_JUMP_RIGHT_MASK = indices_to_rgb_and_mask(PLAYER_JUMP_RIGHT, PALETTE)
+FIREBALL_1_RGB, FIREBALL_1_MASK = indices_to_rgb_and_mask(FIREBALL_1, PALETTE)
+FIREBALL_2_RGB, FIREBALL_2_MASK = indices_to_rgb_and_mask(FIREBALL_2, PALETTE)
 
 import jax.numpy as jnp
 from jax import lax
@@ -1098,7 +1121,11 @@ def draw_player_by_state(image, p, px, py):
                     lambda im: lax.cond(walking, draw_walk, draw_stand, im),
                     image)
 
+def draw_fireball(image, f, fx, fy):
 
+    def fireball_1(im): return draw_sprite_rgb(im, fx, fy, FIREBALL_1_RGB, FIREBALL_1_MASK)
+    def fireball_2(im): return draw_sprite_rgb(im, fx, fy, FIREBALL_2_RGB, FIREBALL_2_MASK)
+    return lax.cond(f.ani == 1, fireball_1, fireball_2, image)
 
 class MarioBrosRenderer(JAXGameRenderer):
     def __init__(self):
@@ -1139,7 +1166,7 @@ class MarioBrosRenderer(JAXGameRenderer):
 
             # --- Draw fireball ---
             fx, fy = state.game.fireball.pos
-            image = draw_rect(image, fx, fy, *FIREBALL_SIZE, FIREBALL_COLOR)
+            image = draw_fireball(image, state.game.fireball, fx, fy)
             # --- Draw platforms ---
             def draw_platform(i, img):
                 plat = PLATFORMS[i]
@@ -1282,7 +1309,8 @@ class JaxMarioBros(JaxEnvironment[
                     count= FIREBALL_RESTART,
                     state= 0,
                     dir= -1,
-                    rnd= jax.random.PRNGKey(0)
+                    rnd= jax.random.PRNGKey(0),
+                    ani= 1
                 ),
                 game_over= False,
                 next_spawn_side=jnp.int32(1),
