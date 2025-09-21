@@ -423,6 +423,8 @@ class JaxVideoPinball(
             active=jnp.array(1),
         )
 
+        ball = jnp.array([ball.x, ball.y, ball.w, ball.h, ball.active])
+
         # There are two scene objects for every flipper angle
         left_flipper_bounding_boxes = (
             self.consts.FLIPPERS[state.left_flipper_angle],
@@ -736,6 +738,7 @@ class JaxVideoPinball(
                 for entity in [left_rollover, atari_rollover]
             ]
         )
+
         plunger = EntityState(
             x=jnp.array(149),
             y=jnp.array(134),
@@ -744,46 +747,40 @@ class JaxVideoPinball(
             active=jnp.array(1),
         )
 
-        return VideoPinballObservation(
-            ball=ball,
-            spinners=spinners,
-            flippers=flippers,
-            plunger=plunger,
-            targets=targets,
-            bumpers=bumpers,
-            rollovers=rollovers,
-            tilt_mode_hole_plugs=tilt_mode_hole_plugs,
-            score=state.score,
-            lives=state.lives,
-            atari_symbols=state.atari_symbols,
-            bumper_multiplier=state.bumper_multiplier,
-            rollover_counter=state.rollover_counter,
-            color_cycling=state.color_cycling,
-            tilt_mode_active=state.tilt_mode_active,
+        plunger = jnp.array(
+            [plunger.x, plunger.y, plunger.w, plunger.h, plunger.active]
         )
 
-    @partial(jax.jit, static_argnums=(0,))
-    def flatten_entity_state(self, entity: EntityState):
-        return (
-            entity.x.flatten(),
-            entity.y.flatten(),
-            entity.w.flatten(),
-            entity.h.flatten(),
-            entity.active.flatten(),
+        return VideoPinballObservation(
+            ball=ball.astype(jnp.int32),
+            spinners=spinners.astype(jnp.int32),
+            flippers=flippers.astype(jnp.int32),
+            plunger=plunger.astype(jnp.int32),
+            targets=targets.astype(jnp.int32),
+            bumpers=bumpers.astype(jnp.int32),
+            rollovers=rollovers.astype(jnp.int32),
+            tilt_mode_hole_plugs=tilt_mode_hole_plugs.astype(jnp.int32),
+            score=state.score.astype(jnp.int32),
+            lives=state.lives.astype(jnp.int32),
+            atari_symbols=state.atari_symbols.astype(jnp.int32),
+            bumper_multiplier=state.bumper_multiplier.astype(jnp.int32),
+            rollover_counter=state.rollover_counter.astype(jnp.int32),
+            color_cycling=state.color_cycling.astype(jnp.int32),
+            tilt_mode_active=state.tilt_mode_active.astype(jnp.int32),
         )
 
     @partial(jax.jit, static_argnums=(0,))
     def obs_to_flat_array(self, obs: VideoPinballObservation) -> jnp.ndarray:
         return jnp.concatenate(
             [
-                self.flatten_entity_state(obs.ball),
-                self.flatten_entity_state(obs.spinners),
-                self.flatten_entity_state(obs.flippers),
-                self.flatten_entity_state(obs.plunger),
-                self.flatten_entity_state(obs.targets),
-                self.flatten_entity_state(obs.bumpers),
-                self.flatten_entity_state(obs.rollovers),
-                self.flatten_entity_state(obs.tilt_mode_hole_plugs),
+                obs.ball.flatten(),
+                obs.spinners.flatten(),
+                obs.flippers.flatten(),
+                obs.plunger.flatten(),
+                obs.targets.flatten(),
+                obs.bumpers.flatten(),
+                obs.rollovers.flatten(),
+                obs.tilt_mode_hole_plugs.flatten(),
                 obs.score.flatten(),
                 obs.lives.flatten(),
                 obs.atari_symbols.flatten(),
@@ -809,32 +806,19 @@ class JaxVideoPinball(
     def observation_space(self) -> spaces.Dict:
         return spaces.Dict(
             {
-                "ball": spaces.Dict(
-                    {
-                        "x": spaces.Box(low=0, high=160, shape=(), dtype=jnp.int32),
-                        "y": spaces.Box(low=0, high=210, shape=(), dtype=jnp.int32),
-                        "w": spaces.Box(low=0, high=160, shape=(), dtype=jnp.int32),
-                        "h": spaces.Box(low=0, high=210, shape=(), dtype=jnp.int32),
-                        "active": spaces.Box(low=0, high=1, shape=(), dtype=jnp.int32),
-                    }
-                ),
+                "ball": spaces.Box(low=0, high=210, shape=(5,), dtype=jnp.int32),
+                "spinners": spaces.Box(low=0, high=210, shape=(2, 5), dtype=jnp.int32),
                 "flippers": spaces.Box(low=0, high=210, shape=(2, 5), dtype=jnp.int32),
-                "plunger": spaces.Dict(
-                    {
-                        "x": spaces.Box(low=0, high=160, shape=(), dtype=jnp.int32),
-                        "y": spaces.Box(low=0, high=210, shape=(), dtype=jnp.int32),
-                        "w": spaces.Box(low=0, high=160, shape=(), dtype=jnp.int32),
-                        "h": spaces.Box(low=0, high=210, shape=(), dtype=jnp.int32),
-                        "active": spaces.Box(low=0, high=1, shape=(), dtype=jnp.int32),
-                    }
-                ),
+                "plunger": spaces.Box(low=0, high=210, shape=(5,), dtype=jnp.int32),
                 "targets": spaces.Box(low=0, high=210, shape=(4, 5), dtype=jnp.int32),
-                "title_mode_hole_plugs": spaces.Box(
+                "bumpers": spaces.Box(low=0, high=210, shape=(3, 5), dtype=jnp.int32),
+                "rollovers": spaces.Box(low=0, high=210, shape=(2, 5), dtype=jnp.int32),
+                "tilt_mode_hole_plugs": spaces.Box(
                     low=0, high=210, shape=(2, 5), dtype=jnp.int32
                 ),
                 "score": spaces.Box(low=0, high=999999, shape=(), dtype=jnp.int32),
-                "lives": spaces.Box(low=0, high=4, shape=(), dtype=jnp.int32),
-                "atari_symbols": spaces.Box(low=0, high=4, shape=(), dtype=jnp.int32),
+                "lives": spaces.Box(low=0, high=3, shape=(), dtype=jnp.int32),
+                "atari_symbols": spaces.Box(low=0, high=3, shape=(), dtype=jnp.int32),
                 "bumper_multiplier": spaces.Box(
                     low=0, high=9, shape=(), dtype=jnp.int32
                 ),

@@ -110,10 +110,10 @@ class EntityState(NamedTuple):
 
 
 class VideoPinballObservation(NamedTuple):
-    ball: EntityState
+    ball: jnp.ndarray
     spinners: jnp.ndarray
     flippers: jnp.ndarray
-    plunger: EntityState
+    plunger: jnp.ndarray
     targets: jnp.ndarray
     bumpers: jnp.ndarray
     rollovers: jnp.ndarray
