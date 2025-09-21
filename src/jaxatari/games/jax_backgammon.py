@@ -514,24 +514,30 @@ class JaxBackgammonEnv(JaxEnvironment[BackgammonState, jnp.ndarray, dict, Backga
 
         return obs, new_state, reward, done, info, new_key
 
-    def step(self, state: BackgammonState, action: jnp.ndarray) -> Tuple[jnp.ndarray, BackgammonState, float, bool, dict]:
+    def step(self, state: BackgammonState, action: jnp.ndarray):
         """Perform a step in the environment using a scalar action index."""
+
         def do_roll(_):
             dice, key = self.roll_dice(state.key)
             new_state = state._replace(dice=dice, key=key)
+
+            # match move-path structure/dtypes
+            all_rewards = self._get_all_reward(state, new_state)
+            info = self._get_info(new_state, all_rewards)
+
             return (
                 self._get_observation(new_state),
                 new_state,
-                0.0,
-                False,
-                self._get_info(new_state)
+                jnp.asarray(0.0, dtype=jnp.float32),  # not a Python float
+                jnp.asarray(False),  # not a Python bool
+                info,
             )
 
         def do_move(act):
             move = tuple(self._action_pairs[act])
             obs, new_state, reward, done, info, new_key = self.step_impl(state, move, state.key)
             new_state = new_state._replace(key=new_key)
-            return obs, new_state, reward, done, info
+            return (obs, new_state, reward, done, info)
 
         return jax.lax.cond(
             action == self._roll_action_index,
@@ -629,11 +635,15 @@ class JaxBackgammonEnv(JaxEnvironment[BackgammonState, jnp.ndarray, dict, Backga
 
     @partial(jax.jit, static_argnums=(0,))
     def _get_info(self, state: BackgammonState, all_rewards: chex.Array = None) -> BackgammonInfo:
-        """Extract info from state"""
+        """Extract info from state with consistent JAX types."""
+        if all_rewards is None:
+            # keep shape stable across the codebase (1,) float32 by default
+            all_rewards = jnp.zeros((1,), dtype=jnp.float32)
+
         return BackgammonInfo(
-            player=state.current_player,
-            dice=state.dice,
-        all_rewards = all_rewards
+            player=jnp.asarray(state.current_player, dtype=jnp.int32),
+            dice=jnp.asarray(state.dice, dtype=jnp.int32),
+            all_rewards=jnp.asarray(all_rewards, dtype=jnp.float32),
         )
 
     @staticmethod
