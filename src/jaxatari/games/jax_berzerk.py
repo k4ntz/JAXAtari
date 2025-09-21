@@ -1189,40 +1189,33 @@ class JaxBerzerk(JaxEnvironment[BerzerkState, BerzerkObservation, BerzerkInfo, B
 
             # player death
             hit_something = player_hit_by_enemy | player_hit_wall | player_hit_by_enemy_bullet | otto_hits_player
-            death_timer = jnp.where(hit_something & (state.player.death_timer == 0), self.consts.DEATH_ANIMATION_FRAMES + 1, state.player.death_timer)
+            death_timer = jnp.where(hit_something & (state.player.death_timer == 0), self.consts.DEATH_ANIMATION_FRAMES + 2, state.player.death_timer)
             death_timer = jnp.maximum(death_timer - 1, 0)
 
             # enemy death
-            enemy_alive = (
-                state.enemy.alive
-                & ~enemy_hit_by_player_bullet
-                & ~enemy_hits_wall
-                & ~enemy_hit_by_friendly_fire
-                & ~enemy_hit_enemy
+            enemy_kill_events = (
+                enemy_hit_by_player_bullet |
+                enemy_hits_wall |
+                enemy_hit_enemy |
+                enemy_bullet_hit_enemy |
+                player_hits_enemy
             )
+
+            enemy_dies = state.enemy.alive & enemy_kill_events
+
+            enemy_alive = state.enemy.alive & ~enemy_dies
+
+            updated_enemy_axis = jnp.where(enemy_alive, updated_enemy_axis, 0)
+            new_enemy_death_timer = jnp.where(enemy_dies, self.consts.ENEMY_DEATH_ANIMATION_FRAMES + 2, state.enemy.death_timer)
+            new_enemy_death_pos = jnp.where(enemy_dies[:, None], updated_enemy_pos, state.enemy.death_pos)
+            
+            enemy_death_timer_next = jnp.maximum(new_enemy_death_timer - 1, 0)
 
             invisible = jnp.array([-100.0, -100.0])     # teleport dead enemies out of view
             updated_enemy_pos = jnp.where(enemy_alive[:, None], updated_enemy_pos, invisible)
 
-            updated_enemy_axis = jnp.where(enemy_alive, updated_enemy_axis, 0)
-            enemy_dies = enemy_hit_by_player_bullet | enemy_hits_wall | enemy_hit_by_friendly_fire | enemy_hit_enemy
-            new_enemy_death_timer = jnp.where(enemy_dies, self.consts.ENEMY_DEATH_ANIMATION_FRAMES, state.enemy.death_timer)
-            new_enemy_death_pos = jnp.where(enemy_dies[:, None], updated_enemy_pos, state.enemy.death_pos)
-
-            # Timer herunterzählen
-            enemy_death_timer_next = jnp.maximum(new_enemy_death_timer - 1, 0)
-
-            # mask of all dead enemies in current frame
-            enemy_dies_mask = (
-                enemy_hit_by_player_bullet |
-                enemy_hits_wall |
-                enemy_bullet_hit_enemy |
-                player_hits_enemy |
-                enemy_hit_enemy
-            )
-
             # calculate score: 50 points per dead enemy
-            score_after = state.score + jnp.sum(enemy_dies_mask) * 50
+            score_after = state.score + jnp.sum(enemy_dies) * 50
 
             # bonus score for killing all enemies in level
             give_bonus = (~jnp.any(enemy_alive)) & (~state.enemy.clear_bonus_given)
@@ -1237,7 +1230,7 @@ class JaxBerzerk(JaxEnvironment[BerzerkState, BerzerkObservation, BerzerkInfo, B
 
             # Trigger Room Transition oder Game Over automatisch
             transition_timer = jax.lax.cond(
-                (death_timer == 0) & hit_something,
+                death_timer == 1,
                 lambda: jax.lax.cond(
                     lives_after == -1,
                     lambda: jnp.array(self.consts.GAME_OVER_FRAMES, dtype=jnp.int32),
@@ -1246,7 +1239,7 @@ class JaxBerzerk(JaxEnvironment[BerzerkState, BerzerkObservation, BerzerkInfo, B
                 lambda: state.room_transition_timer
             )
             game_over_timer = jax.lax.cond(
-                (death_timer == 0) & hit_something & (lives_after == -1),
+                (death_timer == 1) & (lives_after == -1),
                 lambda: self.consts.GAME_OVER_FRAMES,
                 lambda: state.game_over_timer
             )
