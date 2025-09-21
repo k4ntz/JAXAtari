@@ -1133,35 +1133,50 @@ class JaxWordZapper(JaxEnvironment[WordZapperState, WordZapperObservation, WordZ
         """
         next_lvl_word_len = state.level_word_len + 1
 
-        tw, rng2 = choose_target_word(state.rng_key, next_lvl_word_len)
+        next_target_word, rng_rest = choose_target_word(state.rng_key, next_lvl_word_len)
+
+        letters_x = jnp.linspace(self.consts.LETTER_VISIBLE_MIN_X, self.consts.LETTERS_END, 27)
+        letters_y = jnp.full((27,), 30)
 
         # reset state for new level
         return state._replace(
-            level_word_len=next_lvl_word_len,
-            target_word=tw,
-            current_letter_index=jnp.array(0, dtype=jnp.int32),
-            waiting_for_special=jnp.array(0, dtype=jnp.int32),
+            player_x=jnp.array(self.consts.PLAYER_START_X),
+            player_y=jnp.array(self.consts.PLAYER_START_Y),
+            player_speed=jnp.array(0),
+            player_direction=jnp.array(0),
 
-            letters_alive=jnp.stack([jnp.zeros((27,), dtype=jnp.int32), jnp.zeros((27,), dtype=jnp.int32)], axis=1),
+            enemy_positions=jnp.zeros((self.consts.MAX_ENEMIES, 5), dtype=jnp.float32),
+            enemy_active=jnp.zeros((self.consts.MAX_ENEMIES,), jnp.int32),
+
+            player_missile_position=jnp.zeros(4),
+            player_zapper_position=jnp.zeros(7),
+
+            letters_x=letters_x,
+            letters_y=letters_y,
+            letters_char=jnp.arange(27),
+            letters_alive=jnp.stack([jnp.ones((27,), dtype=jnp.int32), jnp.zeros((27,), dtype=jnp.int32)], axis=1),
+            letters_speed=jnp.ones((27,)) * self.consts.LETTER_SCROLLING_SPEED,
+            letters_positions=jnp.stack([letters_x, letters_y], axis=1),
+            current_letter_index=jnp.array(0),
+
+            level_word_len=next_lvl_word_len,
+            waiting_for_special=jnp.array(0, dtype=jnp.int32),
+            target_word=next_target_word,
+
+            game_phase=jnp.array(0, dtype=jnp.int32),
+            phase_timer=jnp.array(0, dtype=jnp.int32),
+
+            enemy_explosion_frame=jnp.zeros((self.consts.MAX_ENEMIES,), dtype=jnp.int32),
+            enemy_explosion_timer=jnp.zeros((self.consts.MAX_ENEMIES,), dtype=jnp.int32),
+            enemy_explosion_frame_timer=jnp.zeros((self.consts.MAX_ENEMIES,), dtype=jnp.int32),
+            enemy_explosion_pos=jnp.zeros((self.consts.MAX_ENEMIES, 2)),
+
             letter_explosion_frame=jnp.zeros((27,), dtype=jnp.int32),
             letter_explosion_timer=jnp.zeros((27,), dtype=jnp.int32),
             letter_explosion_frame_timer=jnp.zeros((27,), dtype=jnp.int32),
             letter_explosion_pos=jnp.zeros((27, 2)),
 
-            enemy_positions=jnp.zeros_like(state.enemy_positions),
-            enemy_active=jnp.zeros_like(state.enemy_active),
-            enemy_explosion_frame=jnp.zeros_like(state.enemy_explosion_frame),
-            enemy_explosion_timer=jnp.zeros_like(state.enemy_explosion_timer),
-            enemy_explosion_frame_timer=jnp.zeros_like(state.enemy_explosion_frame_timer),
-            enemy_explosion_pos=jnp.zeros_like(state.enemy_explosion_pos),
-
-            player_missile_position=jnp.zeros_like(state.player_missile_position),
-            player_zapper_position=jnp.zeros_like(state.player_zapper_position),
-
-            game_phase=jnp.array(0, dtype=jnp.int32),
-            phase_timer=jnp.array(0, dtype=jnp.int32),
-
-            rng_key=rng2,
+            rng_key=rng_rest,
         )
 
 
