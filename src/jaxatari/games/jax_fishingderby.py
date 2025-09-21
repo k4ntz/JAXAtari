@@ -46,7 +46,7 @@ class GameConfig:
 
     MIN_HOOK_DEPTH_Y: int = 0  # Minimum vertical hook depth
     START_HOOK_DEPTH_Y: int = 30  # Starting vertical hook depth
-    MAX_HOOK_DEPTH_Y: int = 140  # Maximum vertical extension to reach bottom fish
+    MAX_HOOK_DEPTH_Y: int = 160  # Maximum vertical extension to reach bottom fish
 
     ROD_SPEED: float = 1.8
     # Fish death line - how far below the rod the fish must be brought to score
@@ -58,7 +58,7 @@ class GameConfig:
     REEL_SLOW_SPEED: float = 1
     REEL_FAST_SPEED: float = 2
     LINE_Y_START: int = 48
-    LINE_Y_END: int = 160
+    LINE_Y_END: int = 180
     AUTO_LOWER_SPEED: float = 2.0
     # Physics
     Acceleration: float = 0.2
@@ -86,7 +86,9 @@ class GameConfig:
     FISH_ROW_SCORES: Tuple[int] = (2, 2, 4, 4, 6, 6)
     # When hooked
     HOOKED_FISH_SPEED_MULTIPLIER: float = 2.0
-    HOOKED_FISH_TURN_PROBABILITY: float = 0.05
+    HOOKED_FISH_TURN_PROBABILITY: float = 0.03
+    HOOKED_FISH_BOUNDARY_ENABLED: bool = True
+    HOOKED_FISH_BOUNDARY_PADDING: int = 15  # Max distance from line
 
     # Normal swimming
     FISH_BASE_TURN_PROBABILITY: float = 0.01  # 1% chance to change direction
@@ -735,30 +737,41 @@ class FishingDerby(JaxEnvironment):
             new_hook_y = jnp.clip(new_hook_y + tug_amount, 0.0, max_hook_y)
 
             # Scoring and collision detection
-            # Scoring and collision detection
             p1_score, key = p1.score, state.key
 
             # Get the correct position of the hooked fish for collision detection
             has_hooked_fish = (p1_hook_state > 0) & (p1_hooked_fish_idx >= 0)
             fish_idx = p1_hooked_fish_idx
 
-            # Use fish position for collision detection instead of hook position
+            # Use updated fish position for collision detection
             def get_fish_position():
-                # Get the actual fish position from new_fish_pos
-                fish_x = new_fish_pos[fish_idx, 0]
-                fish_y = new_fish_pos[fish_idx, 1]
-                return fish_x, fish_y
+                return new_fish_pos[fish_idx, 0], new_fish_pos[fish_idx, 1]
 
             fish_x, fish_y = jax.lax.cond(
                 has_hooked_fish,
-                lambda _: get_fish_position(),
-                lambda _: (hook_x, hook_y),  # Fallback to hook position if no fish (shouldn't matter)
-                operand=None
+                get_fish_position,
+                lambda: (0.0, 0.0)
             )
 
-            # Proper AABB collision check between shark and hooked fish
-            collides_x = jnp.abs(fish_x - new_shark_x) < (cfg.FISH_WIDTH + cfg.SHARK_WIDTH) / 2
-            collides_y = jnp.abs(fish_y - cfg.SHARK_Y) < (cfg.FISH_HEIGHT + cfg.SHARK_HEIGHT) / 2
+            # More robust AABB collision check between shark and hooked fish
+            # Expand collision boxes slightly to prevent fish slipping through
+            collision_padding = 2.0
+            fish_half_width = (cfg.FISH_WIDTH + collision_padding) / 2
+            fish_half_height = (cfg.FISH_HEIGHT + collision_padding) / 2
+            shark_half_width = (cfg.SHARK_WIDTH + collision_padding) / 2
+            shark_half_height = (cfg.SHARK_HEIGHT + collision_padding) / 2
+
+            # Calculate fish center
+            fish_center_x = fish_x + cfg.FISH_WIDTH / 2
+            fish_center_y = fish_y + cfg.FISH_HEIGHT / 2
+
+            # Calculate shark center
+            shark_center_x = new_shark_x + cfg.SHARK_WIDTH / 2
+            shark_center_y = cfg.SHARK_Y + cfg.SHARK_HEIGHT / 2
+
+            # AABB collision with expanded boundaries
+            collides_x = jnp.abs(fish_center_x - shark_center_x) < (fish_half_width + shark_half_width)
+            collides_y = jnp.abs(fish_center_y - shark_center_y) < (fish_half_height + shark_half_height)
             shark_collides = has_hooked_fish & collides_x & collides_y
 
             scored_fish = (p1_hook_state > 0) & (hook_y <= cfg.FISH_SCORING_Y)  # Fish reaches near the rod
