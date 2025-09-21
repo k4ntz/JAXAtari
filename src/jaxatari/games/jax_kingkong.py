@@ -31,7 +31,7 @@ class KingKongConstants(NamedTuple):
 	PLAYER_SUCCESS_LOCATION: chex.Array = jnp.array([]) # TODO 
 
 	# Level 
-	LEVEL_LOCATION: chex.Array = jnp.array([7, 39])
+	LEVEL_LOCATION: chex.Array = jnp.array([8, 39])
 	
 	# bounding boxes (x1, y1, x2, y2) - x1,y1 is top left 
 	HOLE_LOCATIONS: chex.Array = jnp.array([
@@ -82,7 +82,7 @@ class KingKongConstants(NamedTuple):
 	# Entities 
 	KONG_START_LOCATION: chex.Array = jnp.array([31, 228])
 	PRINCESS_START_LOCATION: chex.Array = jnp.array([93, 37])
-	PRINCESS_RESPAWN_LOCATION: chex.Array = jnp.array([77, 36]) # at the start the princess teleports to the left, this al 
+	PRINCESS_RESPAWN_LOCATION: chex.Array = jnp.array([77, 37]) # at the start the princess teleports to the left, this al 
 	PRINCESS_SUCCESS_LOCATION: chex.Array = jnp.array([]) # TODO 
 
 	### Gameplay 
@@ -158,11 +158,11 @@ class KingKongConstants(NamedTuple):
 
 	# Define the idle stage
 	DUR_IDLE: int = 130 
+	SEQ_IDLE_KINGKONG_SPAWN: int = 0 # as soon as this stage is reached kong spawns 
 
 	###################################################################
 	# Define the startup stage 
 	DUR_STARTUP: int = 255 
-	SEQ_STARTUP_KINGKONG_SPAWN: int = 0 # as soon as this stage is reached kong spawns at KONG_START_LOCATION and jumps up 
 	SEQ_STARTUP_PRINCESS_SPAWN: int = 226 # Here the princess spawns in at PRINCESS_START_LOCATION  
 	
 	# First do 15 diagonal up jumps, then one to the left/right, then 3 diagonal down 
@@ -238,6 +238,7 @@ class KingKongState(NamedTuple):
 	gamestate: chex.Array # Current game stage
 	stage_steps: chex.Array # Steps within current stage
 	step_counter: chex.Array # Global step counter
+	rng_key: chex.PRNGKey
 	
 	# Player state
 	player_x: chex.Array
@@ -251,7 +252,6 @@ class KingKongState(NamedTuple):
 	kong_y: chex.Array
 	kong_visible: chex.Array
 	kong_jump_counter: chex.Array
-	kong_jump_phase: chex.Array # For startup animation
 	
 	# Princess state
 	princess_x: chex.Array
@@ -305,12 +305,15 @@ class JaxKingKong(JaxEnvironment[KingKongState, KingKongObservation, KingKongInf
 		self.obs_size = 5 + 3 * 5 + 1 + 1 #TODO
 
 	def reset(self, key=None) -> Tuple[KingKongObservation, KingKongState]:
-		"""Reset the environment to initial state"""
+		if key is None:
+			key = jax.random.PRNGKey(42) # some default seed if none given
+
 		state = KingKongState(
 			# Game state
 			gamestate=jnp.array(self.consts.GAMESTATE_IDLE).astype(jnp.int32),
 			stage_steps=jnp.array(0).astype(jnp.int32),
 			step_counter=jnp.array(0).astype(jnp.int32),
+			rng_key=key,
 			
 			# Player state
 			player_x=self.consts.PLAYER_RESPAWN_LOCATION[0].astype(jnp.int32),
@@ -324,7 +327,6 @@ class JaxKingKong(JaxEnvironment[KingKongState, KingKongObservation, KingKongInf
 			kong_y=jnp.array(0).astype(jnp.int32),
 			kong_visible=jnp.array(0).astype(jnp.int32),
 			kong_jump_counter=jnp.array(0).astype(jnp.int32),
-			kong_jump_phase=jnp.array(1).astype(jnp.int32),
 			
 			# Princess state
 			princess_x=jnp.array(0).astype(jnp.int32),
@@ -385,6 +387,24 @@ class JaxKingKong(JaxEnvironment[KingKongState, KingKongObservation, KingKongInf
 
 	def _step_idle(self, state: KingKongState, action: chex.Array) -> KingKongState:
 		should_transition = state.stage_steps >= self.consts.DUR_IDLE
+
+		# Kong visibility
+		kong_visible = jax.lax.cond(
+			state.stage_steps == self.consts.SEQ_IDLE_KINGKONG_SPAWN,
+			lambda: 1,
+			lambda: state.kong_visible
+		)
+		# Kong spawn position
+		kong_x = jax.lax.cond(
+			state.stage_steps == self.consts.SEQ_IDLE_KINGKONG_SPAWN,
+			lambda: self.consts.KONG_START_LOCATION[0],
+			lambda: state.kong_x
+		)
+		kong_y = jax.lax.cond(
+			state.stage_steps == self.consts.SEQ_IDLE_KINGKONG_SPAWN,
+			lambda: self.consts.KONG_START_LOCATION[1],
+			lambda: state.kong_y
+		)
 		
 		new_gamestate = jax.lax.cond(
 			should_transition,
@@ -400,6 +420,9 @@ class JaxKingKong(JaxEnvironment[KingKongState, KingKongObservation, KingKongInf
 		
 		return state._replace(
 			gamestate=new_gamestate,
+			kong_visible=kong_visible,
+			kong_x=kong_x,
+			kong_y=kong_y,
 			stage_steps=final_stage_steps
 		)
 	
@@ -414,63 +437,47 @@ class JaxKingKong(JaxEnvironment[KingKongState, KingKongObservation, KingKongInf
 			)
 
 		def do_normal_step(_):
-			# Kong visibility
-			kong_visible = jax.lax.cond(
-				state.stage_steps == self.consts.SEQ_STARTUP_KINGKONG_SPAWN,
-				lambda: 1,
-				lambda: state.kong_visible
-			)
-
-			# Kong spawn position
-			kong_x = jax.lax.cond(
-				state.stage_steps == self.consts.SEQ_STARTUP_KINGKONG_SPAWN,
-				lambda: self.consts.KONG_START_LOCATION[0],
-				lambda: state.kong_x
-			)
-			kong_y = jax.lax.cond(
-				state.stage_steps == self.consts.SEQ_STARTUP_KINGKONG_SPAWN,
-				lambda: self.consts.KONG_START_LOCATION[1],
-				lambda: state.kong_y
-			)
-			jax.debug.print("KONG x={x}, y={y}, new_x={nx}", nx=kong_x, x=state.kong_x, y=state.kong_y)
-
 			# Zigzag movement
-			def move_kong(_):
+			def move_kong(state: KingKongState):
+				# Stop if we've reached the total jump limit
 				total_jumps_per_cycle = self.consts.KONG_JUMPS_UP + self.consts.KONG_JUMPS_SIDE + self.consts.KONG_JUMPS_DOWN
 				max_jump_counter = self.consts.KONG_TOTAL_JUMPS * total_jumps_per_cycle
+				
+				# If we've exceeded total jumps, don't move
 				should_continue = state.kong_jump_counter < max_jump_counter
-
-				def do_jump(_):
+				
+				def do_jump(state: KingKongState):
+					# Determine which full zigzag phase we are in
 					phase = state.kong_jump_counter // total_jumps_per_cycle
-					dir_lr = jnp.where(phase % 2 == 0, 1, -1)
+					dir_lr = jnp.where(phase % 2 == 0, 1, -1)  # even phase: right, odd: left
 					step_in_phase = state.kong_jump_counter % total_jumps_per_cycle
-
+					
 					new_x, new_y = jax.lax.cond(
-						step_in_phase < self.consts.KONG_JUMPS_UP,
+						step_in_phase < self.consts.KONG_JUMPS_UP,  # diagonal up
 						lambda _: (state.kong_x + dir_lr, state.kong_y - 2),
 						lambda _: jax.lax.cond(
-							step_in_phase < self.consts.KONG_JUMPS_UP + self.consts.KONG_JUMPS_SIDE,
+							step_in_phase < self.consts.KONG_JUMPS_UP + self.consts.KONG_JUMPS_SIDE,  # side step
 							lambda _: (state.kong_x + dir_lr, state.kong_y),
-							lambda _: (state.kong_x + dir_lr, state.kong_y + 2),
+							lambda _: (state.kong_x + dir_lr, state.kong_y + 2),  # diagonal down
 							operand=None
 						),
 						operand=None
 					)
 					return new_x, new_y, state.kong_jump_counter + 1
-
+				
 				return jax.lax.cond(
 					should_continue,
 					do_jump,
-					lambda _: (state.kong_x, state.kong_y, state.kong_jump_counter),
-					operand=None
+					lambda _: (state.kong_x, state.kong_y, state.kong_jump_counter),  # Don't increment counter when stopped
+					operand=state
 				)
-
+			
 			do_move = state.stage_steps % 2 == 0
 			kong_x, kong_y, kong_jump_counter = jax.lax.cond(
-				do_move,
-				move_kong,
-				lambda _: (state.kong_x, state.kong_y, state.kong_jump_counter),
-				operand=None
+				do_move, 
+				move_kong, 
+				lambda _: (state.kong_x, state.kong_y, state.kong_jump_counter), 
+				operand=state
 			)
 
 			# Princess
@@ -494,7 +501,6 @@ class JaxKingKong(JaxEnvironment[KingKongState, KingKongObservation, KingKongInf
 
 			return state._replace(
 				stage_steps=final_stage_steps,
-				kong_visible=kong_visible,
 				kong_x=kong_x,
 				kong_y=kong_y,
 				kong_jump_counter=kong_jump_counter,
@@ -507,67 +513,46 @@ class JaxKingKong(JaxEnvironment[KingKongState, KingKongObservation, KingKongInf
 		
 	def _step_respawn(self, state: KingKongState, action: chex.Array) -> KingKongState:
 		should_transition = state.stage_steps >= self.consts.DUR_RESPAWN
-		
-		# Princess teleports at specific intervals
-		should_teleport0 = state.stage_steps == self.consts.SEQ_RESPAWN_PRINCESS_TELEPORT0
-		should_teleport1 = state.stage_steps == self.consts.SEQ_RESPAWN_PRINCESS_TELEPORT1
-		should_teleport2 = state.stage_steps == self.consts.SEQ_RESPAWN_PRINCESS_TELEPORT2
-		teleport = should_teleport0 | should_teleport1 | should_teleport2
 
-		princess_x = jax.lax.cond(
-			teleport,
-			lambda _: self.consts.PRINCESS_RESPAWN_LOCATION[0],
-			lambda _: state.princess_x,
-			operand=None
-		)
-		
-		princess_y = jax.lax.cond(
-			jnp.logical_or(should_teleport1, should_teleport2),
-			lambda: self.consts.PRINCESS_RESPAWN_LOCATION[1],
-			lambda: state.princess_y
-		)
-		
-		# Transition to gameplay
-		new_gamestate = jax.lax.cond(
-			should_transition,
-			lambda: self.consts.GAMESTATE_GAMEPLAY,
-			lambda: state.gamestate
-		)
-		
-		final_stage_steps = jax.lax.cond(
-			should_transition,
-			lambda: 0,
-			lambda: state.stage_steps + 1
-		)
-		
-		# Reset player position
-		player_x = jax.lax.cond(
-			should_transition,
-			lambda: self.consts.PLAYER_RESPAWN_LOCATION[0],
-			lambda: state.player_x
-		)
-		
-		player_y = jax.lax.cond(
-			should_transition,
-			lambda: self.consts.PLAYER_RESPAWN_LOCATION[1],
-			lambda: state.player_y
-		)
-		
-		player_floor = jax.lax.cond(
-			should_transition,
-			lambda: 0, # Ground floor
-			lambda: state.player_floor
-		)
-		
-		return state._replace(
-			gamestate=new_gamestate,
-			stage_steps=final_stage_steps,
-			princess_x=princess_x,
-			princess_y=princess_y,
-			player_x=player_x,
-			player_y=player_y,
-			player_floor=player_floor
-		)
+		def do_transition(_):
+			return state._replace(
+				gamestate=self.consts.GAMESTATE_GAMEPLAY,
+				stage_steps=0,
+				player_x=self.consts.PLAYER_RESPAWN_LOCATION[0],
+				player_y=self.consts.PLAYER_RESPAWN_LOCATION[1],
+				player_floor=0,
+			)
+
+		def do_normal_step(_):
+			# Princess teleports at specific intervals
+			should_teleport0 = state.stage_steps == self.consts.SEQ_RESPAWN_PRINCESS_TELEPORT0
+			should_teleport1 = state.stage_steps == self.consts.SEQ_RESPAWN_PRINCESS_TELEPORT1
+			should_teleport2 = state.stage_steps == self.consts.SEQ_RESPAWN_PRINCESS_TELEPORT2
+			teleport = should_teleport0 | should_teleport1 | should_teleport2
+
+			princess_x = jax.lax.cond(
+				teleport,
+				lambda _: self.consts.PRINCESS_RESPAWN_LOCATION[0],
+				lambda _: state.princess_x,
+				operand=None
+			)
+
+			princess_y = jax.lax.cond(
+				jnp.logical_or(should_teleport1, should_teleport2),
+				lambda _: self.consts.PRINCESS_RESPAWN_LOCATION[1],
+				lambda _: state.princess_y,
+				operand=None
+			)
+
+			final_stage_steps = state.stage_steps + 1
+
+			return state._replace(
+				stage_steps=final_stage_steps,
+				princess_x=princess_x,
+				princess_y=princess_y
+			)
+
+		return jax.lax.cond(should_transition, do_transition, do_normal_step, operand=None)
 	
 	def _step_gameplay(self, state: KingKongState, action: chex.Array) -> KingKongState:
 		"""Handle main gameplay"""
@@ -1036,6 +1021,10 @@ class KingKongRenderer(JAXGameRenderer):
 			self.SPRITE_PLAYER_MOVE1,
 			self.SPRITE_PLAYER_MOVE2,
 			self.SPRITE_PLAYER_DEAD,
+			self.SPRITE_PLAYER_JUMP,
+			self.SPRITE_PLAYER_FALL,
+			self.SPRITE_PLAYER_CLIMB1,
+			self.SPRITE_PLAYER_CLIMB2,
 			self.SPRITE_KONG,
 			self.SPRITE_LIFE,
 			self.SPRITE_BOMB,
@@ -1054,6 +1043,11 @@ class KingKongRenderer(JAXGameRenderer):
 		player_move1 = jr.loadFrame(os.path.join(MODULE_DIR, "sprites/kingkong/player_move1.npy"))
 		player_move2 = jr.loadFrame(os.path.join(MODULE_DIR, "sprites/kingkong/player_move2.npy"))
 		player_dead = jr.loadFrame(os.path.join(MODULE_DIR, "sprites/kingkong/player_dead.npy"))
+		player_jump = jr.loadFrame(os.path.join(MODULE_DIR, "sprites/kingkong/player_jump.npy"))
+		player_fall = jr.loadFrame(os.path.join(MODULE_DIR, "sprites/kingkong/player_fall.npy"))
+		player_climb1 = jr.loadFrame(os.path.join(MODULE_DIR, "sprites/kingkong/player_climb1.npy"))
+		player_climb2 = jr.loadFrame(os.path.join(MODULE_DIR, "sprites/kingkong/player_climb2.npy"))
+
 		kong = jr.loadFrame(os.path.join(MODULE_DIR, "sprites/kingkong/kingkong_idle.npy"))
 		bomb = jr.loadFrame(os.path.join(MODULE_DIR, "sprites/kingkong/bomb.npy"))
 		magic_bomb = jr.loadFrame(os.path.join(MODULE_DIR, "sprites/kingkong/magic_bomb.npy"))
@@ -1086,7 +1080,11 @@ class KingKongRenderer(JAXGameRenderer):
 		player_move1 = pad_to_exact_size(player_move1, player_target_height, player_target_width)
 		player_move2 = pad_to_exact_size(player_move2, player_target_height, player_target_width)
 		player_dead = pad_to_exact_size(player_dead, player_target_height, player_target_width)
-		
+		player_jump = pad_to_exact_size(player_jump, player_target_height, player_target_width)
+		player_fall = pad_to_exact_size(player_fall, player_target_height, player_target_width)
+		player_climb1 = pad_to_exact_size(player_climb1, player_target_height, player_target_width)
+		player_climb1 = pad_to_exact_size(player_climb1, player_target_height, player_target_width)
+
 		# Pad bomb sprites to same dimensions 
 		bomb_sprites = [bomb, magic_bomb]
 		bomb_max_height = max(sprite.shape[0] for sprite in bomb_sprites)
@@ -1118,6 +1116,10 @@ class KingKongRenderer(JAXGameRenderer):
 		SPRITE_PLAYER_MOVE1 = jnp.expand_dims(player_move1, axis=0)
 		SPRITE_PLAYER_MOVE2 = jnp.expand_dims(player_move2, axis=0)
 		SPRITE_PLAYER_DEAD = jnp.expand_dims(player_dead, axis=0)
+		SPRITE_PLAYER_JUMP = jnp.expand_dims(player_jump, axis=0)
+		SPRITE_PLAYER_FALL = jnp.expand_dims(player_fall, axis=0)
+		SPRITE_PLAYER_CLIMB1 = jnp.expand_dims(player_climb1, axis=0)
+		SPRITE_PLAYER_CLIMB2 = jnp.expand_dims(player_climb2, axis=0)
 		SPRITE_KONG = jnp.expand_dims(kong, axis=0)
 		SPRITE_LIFE = jnp.expand_dims(life, axis=0)
 		SPRITE_BOMB = jnp.expand_dims(bomb, axis=0)
@@ -1130,8 +1132,10 @@ class KingKongRenderer(JAXGameRenderer):
 		
 		return (
 			SPRITE_LEVEL, SPRITE_PLAYER_IDLE, SPRITE_PLAYER_MOVE1, SPRITE_PLAYER_MOVE2,
-			SPRITE_PLAYER_DEAD, SPRITE_KONG, SPRITE_LIFE, SPRITE_BOMB, SPRITE_MAGIC_BOMB,
-			SPRITE_PRINCESS_CLOSED, SPRITE_PRINCESS_OPEN, SPRITE_NUMBERS
+			SPRITE_PLAYER_DEAD, SPRITE_PLAYER_JUMP, SPRITE_PLAYER_FALL,
+			SPRITE_PLAYER_CLIMB1, SPRITE_PLAYER_CLIMB2, SPRITE_KONG,
+			SPRITE_LIFE, SPRITE_BOMB, SPRITE_MAGIC_BOMB, SPRITE_PRINCESS_CLOSED,
+			SPRITE_PRINCESS_OPEN, SPRITE_NUMBERS
 		)
 
 	def render(self, state: KingKongState) -> jnp.ndarray:
@@ -1216,21 +1220,23 @@ class KingKongRenderer(JAXGameRenderer):
 			operand=raster
 		)
 		
-		# Render princess if visible
 		def render_princess(raster_in):
-			# Alternate between closed and open sprites for animation
-			princess_sprite = jax.lax.cond(
+			def closed(): return self.SPRITE_PRINCESS_CLOSED, 0
+			def open(): return self.SPRITE_PRINCESS_OPEN, 1  # offset x by 1
+
+			princess_sprite, x_offset = jax.lax.cond(
 				(state.step_counter // 30) % 2 == 0,
-				lambda: self.SPRITE_PRINCESS_CLOSED,
-				lambda: self.SPRITE_PRINCESS_OPEN
+				closed,
+				open
 			)
+
 			return jr.render_at(
 				raster_in,
-				state.princess_x,
+				state.princess_x - x_offset,
 				state.princess_y - self.consts.PRINCESS_SIZE[1],
 				jr.get_sprite_frame(princess_sprite, 0)
 			)
-		
+
 		raster = jax.lax.cond(
 			state.princess_visible != 0,
 			render_princess,
