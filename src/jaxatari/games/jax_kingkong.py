@@ -44,31 +44,32 @@ class KingKongConstants(NamedTuple):
 	])
 	# bounding boxes (x1, y1, x2, y2)
 	LADDER_LOCATIONS: chex.Array = jnp.array([
-		[76, 39, 83, 58],
-		[20, 59, 27, 83], 
-		[132, 59, 139, 82],
-		[76, 83, 83, 106],
-		[12, 107, 19, 130],
-		[140, 107, 147, 130],
-		[76, 131, 83, 154],
-		[12, 155, 19, 178],
-		[140, 155, 147, 178],
-		[76, 179, 83, 202],
-		[12, 203, 19, 226],
-		[140, 203, 147, 226]
+		[23, 200, 48, 229],
+		[76, 39, 83, 60],
+		[20, 59, 27, 85],
+		[132, 59, 139, 84],
+		[76, 83, 83, 108],
+		[12, 107, 19, 132],
+		[140, 107, 147, 132],
+		[76, 131, 83, 156],
+		[12, 155, 19, 180],
+		[140, 155, 147, 180],
+		[76, 179, 83, 204],
+		[12, 203, 19, 228],
+		[140, 203, 147, 228]
 	])
 	FLOOR_BOUNDS: chex.Array = jnp.array([
-		[12, 147], # Ground floor 
-		[12, 147], # First floor
-		[12, 147], # Second floor 
-		[12, 147], # Third floor 
-		[12, 147], # Fourth floor 
-		[12, 147], # Fifth floor 
-		[16, 147], # Sixth floor
-		[20, 139], # Seventh floor 
-		[12, 147], # Princess floor - no bounds required bc goal reached 
+		[12, 150], # Ground floor 
+		[12, 150], # First floor
+		[12, 150], # Second floor 
+		[12, 150], # Third floor 
+		[12, 150], # Fourth floor 
+		[12, 150], # Fifth floor 
+		[16, 150], # Sixth floor
+		[20, 142], # Seventh floor 
+		[12, 150], # Princess floor - no bounds required bc goal reached 
 	]) # floor bounds by floor (min_x, min_y) - y is always the same (see FLOOR_LOCATIONS)
-	FLOOR_LOCATIONS: chex.Array = jnp.array([226, 202, 178, 154, 130, 106, 82, 58, 38]) # y corrdinate
+	FLOOR_LOCATIONS: chex.Array = jnp.array([228, 204, 180, 156, 132, 108, 84, 60, 40]) # y corrdinate
 
 	PRINCESS_MOVEMENT_BOUNDS: chex.Array = jnp.array([77, 113])
 
@@ -84,6 +85,7 @@ class KingKongConstants(NamedTuple):
 	# Entities 
 	KONG_START_LOCATION: chex.Array = jnp.array([31, 228])
 	KONG_LOWER_LOCATION: chex.Array = KONG_START_LOCATION
+	KONG_UPPER_LOCATION: chex.Array = jnp.array([31, 84])
 	PRINCESS_START_LOCATION: chex.Array = jnp.array([93, 37])
 	PRINCESS_RESPAWN_LOCATION: chex.Array = jnp.array([77, 37]) # at the start the princess teleports to the left, this al 
 	PRINCESS_SUCCESS_LOCATION: chex.Array = jnp.array([]) # TODO 
@@ -140,7 +142,7 @@ class KingKongConstants(NamedTuple):
 	# - SEQ: When (step count) something starts  
 	# - DUR: How long (step count) something takes 
 
-	# Define the gamestates 
+	# Define the gamestates/stages
 	GAMESTATE_IDLE: int = 0 
 	GAMESTATE_STARTUP: int = 1
 	GAMESTATE_RESPAWN: int = 2 
@@ -181,6 +183,7 @@ class KingKongConstants(NamedTuple):
 	# The princess moves around at the top seemingly randomly (either wait, left or right) within her bounds
 	# but she gets teleported back three times (the thrid time on the first frame of gameplay). 
 	DUR_RESPAWN: int = 192 
+	SEQ_RESPAWN_KONG_TELEPORT: int = 0 # also teleport kong to the top again if it was at the bottom 
 	SEQ_RESPAWN_PRINCESS_TELEPORT0: int = 0 # every 64 frame she is tp'd back in this stage for some reason 
 	SEQ_RESPAWN_PRINCESS_TELEPORT1: int = 64 
 	SEQ_RESPAWN_PRINCESS_TELEPORT2: int = 128 
@@ -326,7 +329,7 @@ class JaxKingKong(JaxEnvironment[KingKongState, KingKongObservation, KingKongInf
 
 		state = KingKongState(
 			# Game state
-			gamestate=jnp.array(self.consts.GAMESTATE_GAMEPLAY).astype(jnp.int32),
+			gamestate=jnp.array(self.consts.GAMESTATE_IDLE).astype(jnp.int32),
 			stage_steps=jnp.array(0).astype(jnp.int32),
 			step_counter=jnp.array(0).astype(jnp.int32),
 			rng_key=key,
@@ -609,6 +612,8 @@ class JaxKingKong(JaxEnvironment[KingKongState, KingKongObservation, KingKongInf
 				player_x=self.consts.PLAYER_RESPAWN_LOCATION[0],
 				player_y=self.consts.PLAYER_RESPAWN_LOCATION[1],
 				player_floor=0,
+				kong_x=self.consts.KONG_UPPER_LOCATION[0],
+				kong_y=self.consts.KONG_UPPER_LOCATION[1],
 			)
 
 		def do_normal_step(_):
@@ -616,10 +621,10 @@ class JaxKingKong(JaxEnvironment[KingKongState, KingKongObservation, KingKongInf
 			should_teleport0 = state.stage_steps == self.consts.SEQ_RESPAWN_PRINCESS_TELEPORT0
 			should_teleport1 = state.stage_steps == self.consts.SEQ_RESPAWN_PRINCESS_TELEPORT1
 			should_teleport2 = state.stage_steps == self.consts.SEQ_RESPAWN_PRINCESS_TELEPORT2
-			teleport = should_teleport0 | should_teleport1 | should_teleport2
+			teleport_princess = should_teleport0 | should_teleport1 | should_teleport2
 
 			princess_x = jax.lax.cond(
-				teleport,
+				teleport_princess,
 				lambda _: self.consts.PRINCESS_RESPAWN_LOCATION[0],
 				lambda _: state.princess_x,
 				operand=None
@@ -632,15 +637,32 @@ class JaxKingKong(JaxEnvironment[KingKongState, KingKongObservation, KingKongInf
 				operand=None
 			)
 
+			should_teleport_kong = state.stage_steps == self.consts.SEQ_RESPAWN_KONG_TELEPORT
+			kong_x = jax.lax.cond(
+				should_teleport_kong,
+				lambda _: self.consts.KONG_UPPER_LOCATION[0],
+				lambda _: state.kong_x,
+				operand=None
+			)
+			kong_y = jax.lax.cond(
+				should_teleport_kong,
+				lambda _: self.consts.KONG_UPPER_LOCATION[1],
+				lambda _: state.kong_y,
+				operand=None
+			)
+
 			final_stage_steps = state.stage_steps + 1
 
 			return state._replace(
 				stage_steps=final_stage_steps,
 				princess_x=princess_x,
-				princess_y=princess_y
+				princess_y=princess_y,
+				kong_x=kong_x,
+				kong_y=kong_y
 			)
 
 		return jax.lax.cond(should_transition, do_transition, do_normal_step, operand=None)
+
 	
 	def _step_gameplay(self, state: KingKongState, action: chex.Array) -> KingKongState:
 		player_reached_top = state.player_floor >= 8
@@ -758,6 +780,8 @@ class JaxKingKong(JaxEnvironment[KingKongState, KingKongObservation, KingKongInf
 		
 		# Handle ladder climbing
 		on_ladder = self._check_on_ladder(new_player_x, state.player_y)
+
+		jax.debug.print("{x}ladder", x=on_ladder)
 		
 		new_player_floor = state.player_floor
 		new_player_y = state.player_y
@@ -845,18 +869,27 @@ class JaxKingKong(JaxEnvironment[KingKongState, KingKongObservation, KingKongInf
 			player_state=new_player_state
 		)
 
-	
 	def _check_on_ladder(self, player_x, player_y):
 		ladder_x1 = self.consts.LADDER_LOCATIONS[:, 0]
 		ladder_y1 = self.consts.LADDER_LOCATIONS[:, 1]
-		ladder_x2 = self.consts.LADDER_LOCATIONS[:, 2]
-		ladder_y2 = self.consts.LADDER_LOCATIONS[:, 3]
+		ladder_x2 = self.consts.LADDER_LOCATIONS[:, 2] 
+		ladder_y2 = self.consts.LADDER_LOCATIONS[:, 3] 
 
 		on_ladders = jnp.logical_and(
 			jnp.logical_and(player_x >= ladder_x1, player_x <= ladder_x2),
 			jnp.logical_and(player_y >= ladder_y1, player_y <= ladder_y2)
 		)
-		return jnp.any(on_ladders)
+		result = jnp.any(on_ladders)
+
+		# Debug: print player coords, ladder coords, and result
+		jax.debug.print(
+			"check_on_ladder: player=({x}, {y}), ladders=({x1},{y1},{x2},{y2}), result={res}",
+			x=player_x, y=player_y,
+			x1=ladder_x1, y1=ladder_y1, x2=ladder_x2, y2=ladder_y2,
+			res=result
+		)
+
+		return result
 
 	def _update_bombs(self, state: KingKongState) -> KingKongState:
 		should_spawn = jnp.logical_and(
@@ -1039,37 +1072,30 @@ class JaxKingKong(JaxEnvironment[KingKongState, KingKongObservation, KingKongInf
 	def _step_success(self, state: KingKongState, action: chex.Array) -> KingKongState:
 		should_transition = state.stage_steps >= self.consts.DUR_SUCCESS
 
-		new_gamestate = jax.lax.cond(
-			should_transition,
-			lambda: self.consts.GAMESTATE_STARTUP,
-			lambda: state.gamestate
-		)
+		def do_transition(_):
+			return state._replace(
+				gamestate=self.consts.GAMESTATE_RESPAWN,
+				stage_steps=0,
+				player_x=self.consts.PLAYER_RESPAWN_LOCATION[0],
+				player_y=self.consts.PLAYER_RESPAWN_LOCATION[1],
+				player_floor=0,
+				princess_x=self.consts.PRINCESS_RESPAWN_LOCATION[0],
+				princess_y=self.consts.PRINCESS_RESPAWN_LOCATION[1],
+				princess_visible=0
+			)
 
-		final_stage_steps = jax.lax.cond(
-			should_transition,
-			lambda: 0,
-			lambda: state.stage_steps + 1
-		)
+		def do_normal_step(_):
+			return state._replace(
+				stage_steps=state.stage_steps + 1,
+				player_x=state.player_x,
+				player_y=state.player_y,
+				player_floor=state.player_floor,
+				princess_x=state.princess_x,
+				princess_y=state.princess_y,
+				princess_visible=state.princess_visible
+			)
 
-		# Reset player and princess for next loop
-		player_x = jax.lax.cond(should_transition, lambda: self.consts.PLAYER_RESPAWN_LOCATION[0], lambda: state.player_x)
-		player_y = jax.lax.cond(should_transition, lambda: self.consts.PLAYER_RESPAWN_LOCATION[1], lambda: state.player_y)
-		player_floor = jax.lax.cond(should_transition, lambda: 0, lambda: state.player_floor)
-
-		princess_x = jax.lax.cond(should_transition, lambda: self.consts.PRINCESS_RESPAWN_LOCATION[0], lambda: state.princess_x)
-		princess_y = jax.lax.cond(should_transition, lambda: self.consts.PRINCESS_RESPAWN_LOCATION[1], lambda: state.princess_y)
-		princess_visible = jax.lax.cond(should_transition, lambda: 0, lambda: state.princess_visible)
-
-		return state._replace(
-			gamestate=new_gamestate,
-			stage_steps=final_stage_steps,
-			player_x=player_x,
-			player_y=player_y,
-			player_floor=player_floor,
-			princess_x=princess_x,
-			princess_y=princess_y,
-			princess_visible=princess_visible
-		)
+		return jax.lax.cond(should_transition, do_transition, do_normal_step, operand=None)
 
 
 	def render(self, state: KingKongState) -> jnp.ndarray:
@@ -1129,9 +1155,12 @@ class KingKongRenderer(JAXGameRenderer):
 		self.consts = consts
 		(
 			self.SPRITE_LEVEL,
-			self.SPRITE_PLAYER_IDLE,
-			self.SPRITE_PLAYER_MOVE1,
-			self.SPRITE_PLAYER_MOVE2,
+			self.SPRITE_PLAYER_IDLE_RIGHT,
+			self.SPRITE_PLAYER_IDLE_LEFT,
+			self.SPRITE_PLAYER_MOVE1_RIGHT,
+			self.SPRITE_PLAYER_MOVE1_LEFT,
+			self.SPRITE_PLAYER_MOVE2_RIGHT,
+			self.SPRITE_PLAYER_MOVE2_LEFT,
 			self.SPRITE_PLAYER_DEAD,
 			self.SPRITE_PLAYER_JUMP,
 			self.SPRITE_PLAYER_FALL,
@@ -1148,12 +1177,20 @@ class KingKongRenderer(JAXGameRenderer):
 
 	def load_sprites(self):
 		MODULE_DIR = os.path.dirname(os.path.abspath(__file__))
-		
-		# Load all sprites first
+
+		# Load sprites
 		level = jr.loadFrame(os.path.join(MODULE_DIR, "sprites/kingkong/level.npy"))
 		player_idle = jr.loadFrame(os.path.join(MODULE_DIR, "sprites/kingkong/player_idle.npy"))
+		player_idle_left = player_idle[:, ::-1, :]
+		player_idle_right = player_idle
+
 		player_move1 = jr.loadFrame(os.path.join(MODULE_DIR, "sprites/kingkong/player_move1.npy"))
 		player_move2 = jr.loadFrame(os.path.join(MODULE_DIR, "sprites/kingkong/player_move2.npy"))
+		player_move1_left = player_move1[:, ::-1, :]
+		player_move2_left = player_move2[:, ::-1, :]
+		player_move1_right = player_move1
+		player_move2_right = player_move2
+
 		player_dead = jr.loadFrame(os.path.join(MODULE_DIR, "sprites/kingkong/player_dead.npy"))
 		player_jump = jr.loadFrame(os.path.join(MODULE_DIR, "sprites/kingkong/player_jump.npy"))
 		player_fall = jr.loadFrame(os.path.join(MODULE_DIR, "sprites/kingkong/player_fall.npy"))
@@ -1165,85 +1202,78 @@ class KingKongRenderer(JAXGameRenderer):
 		magic_bomb = jr.loadFrame(os.path.join(MODULE_DIR, "sprites/kingkong/magic_bomb.npy"))
 		princess_closed = jr.loadFrame(os.path.join(MODULE_DIR, "sprites/kingkong/princess_closed.npy"))
 		princess_open = jr.loadFrame(os.path.join(MODULE_DIR, "sprites/kingkong/princess_open.npy"))
-		
-		# Load number sprites (0-9)
-		numbers = {}
-		for i in range(10):
-			numbers[i] = jr.loadFrame(os.path.join(MODULE_DIR, f"sprites/kingkong/{i}.npy"))
-		
-		# Universal padding function
-		def pad_to_exact_size(sprite, target_h, target_w):
-			current_h, current_w = sprite.shape[0], sprite.shape[1]
-			pad_h = max(0, target_h - current_h)
-			pad_w = max(0, target_w - current_w)
-			return jnp.pad(sprite, ((0, pad_h), (0, pad_w), (0, 0)), mode="constant")
-		
-		# Find maximum dimensions for player sprites (used in conditionals)
-		all_player_sprites = [player_idle, player_move1, player_move2, player_dead]
-		player_max_height = max(sprite.shape[0] for sprite in all_player_sprites)
-		player_max_width = max(sprite.shape[1] for sprite in all_player_sprites)
-		
-		# Ensure minimum dimensions based on constants
-		player_target_height = max(player_max_height, 16)
-		player_target_width = max(player_max_width, 8)
-		
-		# Pad all player sprites to exact same dimensions
-		player_idle = pad_to_exact_size(player_idle, player_target_height, player_target_width)
-		player_move1 = pad_to_exact_size(player_move1, player_target_height, player_target_width)
-		player_move2 = pad_to_exact_size(player_move2, player_target_height, player_target_width)
-		player_dead = pad_to_exact_size(player_dead, player_target_height, player_target_width)
-		player_jump = pad_to_exact_size(player_jump, player_target_height, player_target_width)
-		player_fall = pad_to_exact_size(player_fall, player_target_height, player_target_width)
-		player_climb1 = pad_to_exact_size(player_climb1, player_target_height, player_target_width)
-		player_climb1 = pad_to_exact_size(player_climb1, player_target_height, player_target_width)
 
-		# Pad bomb sprites to same dimensions 
+		numbers = {i: jr.loadFrame(os.path.join(MODULE_DIR, f"sprites/kingkong/{i}.npy")) for i in range(10)}
+
+		# Padding function
+		def pad(sprite, target_h, target_w):
+			h, w, c = sprite.shape
+			return jnp.pad(sprite, ((0, target_h - h), (0, target_w - w), (0,0)), mode="constant")
+
+		# Compute target dimensions for player sprites
+		all_player_sprites = [
+			player_idle_right, player_idle_left,
+			player_move1_right, player_move1_left,
+			player_move2_right, player_move2_left,
+			player_dead
+		]
+		player_target_height = max(max(sprite.shape[0] for sprite in all_player_sprites), 16)
+		player_target_width  = max(max(sprite.shape[1] for sprite in all_player_sprites), 8)
+
+		# Pad all player sprites
+		player_idle_right  = pad(player_idle_right,  player_target_height, player_target_width)
+		player_idle_left   = pad(player_idle_left,   player_target_height, player_target_width)
+		player_move1_right = pad(player_move1_right, player_target_height, player_target_width)
+		player_move1_left  = pad(player_move1_left,  player_target_height, player_target_width)
+		player_move2_right = pad(player_move2_right, player_target_height, player_target_width)
+		player_move2_left  = pad(player_move2_left,  player_target_height, player_target_width)
+		player_dead        = pad(player_dead,        player_target_height, player_target_width)
+		player_jump        = pad(player_jump,        player_target_height, player_target_width)
+		player_fall        = pad(player_fall,        player_target_height, player_target_width)
+		player_climb1      = pad(player_climb1,      player_target_height, player_target_width)
+		player_climb2      = pad(player_climb2,      player_target_height, player_target_width)
+
+		# Pad bomb sprites
 		bomb_sprites = [bomb, magic_bomb]
-		bomb_max_height = max(sprite.shape[0] for sprite in bomb_sprites)
-		bomb_max_width = max(sprite.shape[1] for sprite in bomb_sprites)
-		
-		bomb_target_height = max(bomb_max_height, 14)
-		bomb_target_width = max(bomb_max_width, 8)
-		
-		bomb = pad_to_exact_size(bomb, bomb_target_height, bomb_target_width)
-		magic_bomb = pad_to_exact_size(magic_bomb, bomb_target_height, bomb_target_width)
-		
-		# Pad princess sprites to same dimensions
+		bomb_target_height = max(max(sprite.shape[0] for sprite in bomb_sprites), 14)
+		bomb_target_width  = max(max(sprite.shape[1] for sprite in bomb_sprites), 8)
+		bomb = pad(bomb, bomb_target_height, bomb_target_width)
+		magic_bomb = pad(magic_bomb, bomb_target_height, bomb_target_width)
+
+		# Pad princess sprites
 		princess_sprites = [princess_closed, princess_open]
-		princess_max_height = max(sprite.shape[0] for sprite in princess_sprites)
-		princess_max_width = max(sprite.shape[1] for sprite in princess_sprites)
-		
-		princess_target_height = max(princess_max_height, 17)
-		princess_target_width = max(princess_max_width, 8)
-		
-		princess_closed = pad_to_exact_size(princess_closed, princess_target_height, princess_target_width)
-		princess_open = pad_to_exact_size(princess_open, princess_target_height, princess_target_width)
-		
-		# Use padded player sprite for life display
-		life = player_move2.copy()
-		
-		# Expand dimensions for sprites
-		SPRITE_LEVEL = jnp.expand_dims(level, axis=0)
-		SPRITE_PLAYER_IDLE = jnp.expand_dims(player_idle, axis=0)
-		SPRITE_PLAYER_MOVE1 = jnp.expand_dims(player_move1, axis=0)
-		SPRITE_PLAYER_MOVE2 = jnp.expand_dims(player_move2, axis=0)
-		SPRITE_PLAYER_DEAD = jnp.expand_dims(player_dead, axis=0)
-		SPRITE_PLAYER_JUMP = jnp.expand_dims(player_jump, axis=0)
-		SPRITE_PLAYER_FALL = jnp.expand_dims(player_fall, axis=0)
-		SPRITE_PLAYER_CLIMB1 = jnp.expand_dims(player_climb1, axis=0)
-		SPRITE_PLAYER_CLIMB2 = jnp.expand_dims(player_climb2, axis=0)
-		SPRITE_KONG = jnp.expand_dims(kong, axis=0)
-		SPRITE_LIFE = jnp.expand_dims(life, axis=0)
-		SPRITE_BOMB = jnp.expand_dims(bomb, axis=0)
-		SPRITE_MAGIC_BOMB = jnp.expand_dims(magic_bomb, axis=0)
-		SPRITE_PRINCESS_CLOSED = jnp.expand_dims(princess_closed, axis=0)
-		SPRITE_PRINCESS_OPEN = jnp.expand_dims(princess_open, axis=0)
-		
-		# Create number sprites array
-		SPRITE_NUMBERS = jnp.stack([jnp.expand_dims(numbers[i], axis=0) for i in range(10)], axis=0)
-		
+		princess_target_height = max(max(sprite.shape[0] for sprite in princess_sprites), 17)
+		princess_target_width  = max(max(sprite.shape[1] for sprite in princess_sprites), 8)
+		princess_closed = pad(princess_closed, princess_target_height, princess_target_width)
+		princess_open   = pad(princess_open,   princess_target_height, princess_target_width)
+
+		life = player_move2_right.copy()
+
+		# Expand dimensions
+		SPRITE_LEVEL             = jnp.expand_dims(level, axis=0)
+		SPRITE_PLAYER_IDLE_RIGHT = jnp.expand_dims(player_idle_right, axis=0)
+		SPRITE_PLAYER_IDLE_LEFT  = jnp.expand_dims(player_idle_left, axis=0)
+		SPRITE_PLAYER_MOVE1_RIGHT = jnp.expand_dims(player_move1_right, axis=0)
+		SPRITE_PLAYER_MOVE1_LEFT  = jnp.expand_dims(player_move1_left, axis=0)
+		SPRITE_PLAYER_MOVE2_RIGHT = jnp.expand_dims(player_move2_right, axis=0)
+		SPRITE_PLAYER_MOVE2_LEFT  = jnp.expand_dims(player_move2_left, axis=0)
+		SPRITE_PLAYER_DEAD        = jnp.expand_dims(player_dead, axis=0)
+		SPRITE_PLAYER_JUMP        = jnp.expand_dims(player_jump, axis=0)
+		SPRITE_PLAYER_FALL        = jnp.expand_dims(player_fall, axis=0)
+		SPRITE_PLAYER_CLIMB1      = jnp.expand_dims(player_climb1, axis=0)
+		SPRITE_PLAYER_CLIMB2      = jnp.expand_dims(player_climb2, axis=0)
+		SPRITE_KONG               = jnp.expand_dims(kong, axis=0)
+		SPRITE_LIFE               = jnp.expand_dims(life, axis=0)
+		SPRITE_BOMB               = jnp.expand_dims(bomb, axis=0)
+		SPRITE_MAGIC_BOMB         = jnp.expand_dims(magic_bomb, axis=0)
+		SPRITE_PRINCESS_CLOSED    = jnp.expand_dims(princess_closed, axis=0)
+		SPRITE_PRINCESS_OPEN      = jnp.expand_dims(princess_open, axis=0)
+		SPRITE_NUMBERS            = jnp.stack([jnp.expand_dims(numbers[i], axis=0) for i in range(10)], axis=0)
+
 		return (
-			SPRITE_LEVEL, SPRITE_PLAYER_IDLE, SPRITE_PLAYER_MOVE1, SPRITE_PLAYER_MOVE2,
+			SPRITE_LEVEL, SPRITE_PLAYER_IDLE_RIGHT, SPRITE_PLAYER_IDLE_LEFT,
+			SPRITE_PLAYER_MOVE1_RIGHT, SPRITE_PLAYER_MOVE1_LEFT,
+			SPRITE_PLAYER_MOVE2_RIGHT, SPRITE_PLAYER_MOVE2_LEFT,
 			SPRITE_PLAYER_DEAD, SPRITE_PLAYER_JUMP, SPRITE_PLAYER_FALL,
 			SPRITE_PLAYER_CLIMB1, SPRITE_PLAYER_CLIMB2, SPRITE_KONG,
 			SPRITE_LIFE, SPRITE_BOMB, SPRITE_MAGIC_BOMB, SPRITE_PRINCESS_CLOSED,
@@ -1272,19 +1302,42 @@ class KingKongRenderer(JAXGameRenderer):
 
 			def walk_cycle():
 				frame = ((state.step_counter - 1) // 4) % 4
-				return jax.lax.switch(
-					frame,
-					[
-						lambda: self.SPRITE_PLAYER_IDLE,
-						lambda: self.SPRITE_PLAYER_MOVE1,
-						lambda: self.SPRITE_PLAYER_MOVE2,
-						lambda: self.SPRITE_PLAYER_MOVE1,
-					]
+				def right_frames():
+					return jax.lax.switch(
+						frame,
+						[
+							lambda: self.SPRITE_PLAYER_MOVE1_RIGHT,
+							lambda: self.SPRITE_PLAYER_MOVE2_RIGHT,
+							lambda: self.SPRITE_PLAYER_MOVE1_RIGHT,
+							lambda: self.SPRITE_PLAYER_IDLE_RIGHT
+						]
+					)
+				def left_frames():
+					return jax.lax.switch(
+						frame,
+						[
+							lambda: self.SPRITE_PLAYER_MOVE1_LEFT,
+							lambda: self.SPRITE_PLAYER_MOVE2_LEFT,
+							lambda: self.SPRITE_PLAYER_MOVE1_LEFT,
+							lambda: self.SPRITE_PLAYER_IDLE_LEFT
+						]
+					)
+				return jax.lax.cond(
+					jnp.logical_or(
+						state.player_state == self.consts.PLAYER_MOVE_LEFT,
+						state.player_state == self.consts.PLAYER_IDLE_LEFT
+					),
+					left_frames,
+					right_frames
 				)
 
 			sprite = jax.lax.cond(
 				is_idle_state(),
-				lambda: self.SPRITE_PLAYER_IDLE,
+				lambda: jax.lax.cond(
+					state.player_state == self.consts.PLAYER_IDLE_LEFT,
+					lambda: self.SPRITE_PLAYER_IDLE_LEFT,
+					lambda: self.SPRITE_PLAYER_IDLE_RIGHT
+				),
 				lambda: jax.lax.cond(
 					is_dead_or_fall(),
 					lambda: self.SPRITE_PLAYER_DEAD,
@@ -1292,18 +1345,8 @@ class KingKongRenderer(JAXGameRenderer):
 				)
 			)
 
-			should_mirror = jnp.logical_or(
-				state.player_state == self.consts.PLAYER_IDLE_LEFT,
-				state.player_state == self.consts.PLAYER_MOVE_LEFT
-			)
+			return sprite
 
-			return jax.lax.cond(
-				should_mirror,
-				lambda s: s[:, :, ::-1],
-				lambda s: s,
-				operand=sprite
-			)
-			
 		# Render player
 		player_sprite = get_player_sprite()
 
