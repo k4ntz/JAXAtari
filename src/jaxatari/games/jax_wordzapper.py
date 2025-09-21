@@ -54,7 +54,7 @@ class WordZapperConstants(NamedTuple) :
     ENEMY_Y_MIN_SEPARATION = 16
 
     ENEMY_GAME_SPEED = 0.7
-    LEVEL_PAUSE_FRAMES = 60
+    LEVEL_PAUSE_FRAMES = 4 * 60
 
     # zapper
     ZAPPER_COLOR = (252,252,84,255)
@@ -518,21 +518,26 @@ def scrolling_letters(state: WordZapperState, consts: WordZapperConstants) -> ch
         )
     )
     
-    # Improved: Only zap if zapper is within the bounds of a letter (not just closest)
+    # zap if zapper is within the bounds of a letter
     zapper_x = state.player_zapper_position[5]
     letter_half_width = consts.LETTER_SIZE[0]
     letter_lefts = state.letters_x - letter_half_width
     letter_rights = state.letters_x + letter_half_width
+
     # Find all letters where zapper_x is within bounds
     in_bounds_mask = jnp.logical_and(zapper_x >= letter_lefts, zapper_x < letter_rights)
+
     # Only consider letters that are visible
     visible_mask = jnp.logical_and(state.letters_x >= consts.LETTER_VISIBLE_MIN_X, state.letters_x < consts.LETTER_VISIBLE_MAX_X)
     valid_mask = jnp.logical_and(in_bounds_mask, visible_mask)
     any_in_bounds = jnp.any(valid_mask)
+
     def get_first_in_bounds():
         return jnp.argmax(valid_mask)
+    
     def get_invalid():
         return -1
+    
     target_letter_id = jax.lax.cond(any_in_bounds, get_first_in_bounds, get_invalid)
 
     def zap_letter(args):
