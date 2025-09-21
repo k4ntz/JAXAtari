@@ -1167,7 +1167,7 @@ class JaxWordZapper(JaxEnvironment[WordZapperState, WordZapperObservation, WordZ
         return rewards
 
     @partial(jax.jit, static_argnums=(0,))
-    def _get_info(self, state: WordZapperState, all_rewards: jnp.ndarray) -> WordZapperInfo:
+    def _get_info(self, state: WordZapperState, all_rewards: jnp.ndarray = None) -> WordZapperInfo:
         return WordZapperInfo(
             score=state.score,
             step_counter=state.step_counter,
