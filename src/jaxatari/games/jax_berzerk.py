@@ -727,8 +727,8 @@ class JaxBerzerk(JaxEnvironment[BerzerkState, BerzerkObservation, BerzerkInfo, B
         otto_pos = state.otto.pos.astype(jnp.float32)
 
         # Game-level
-        score = jnp.array([state.score], dtype=jnp.float32)
-        lives = jnp.array([state.lives], dtype=jnp.float32)
+        score = jnp.array([state.score], dtype=jnp.int32)
+        lives = jnp.array([state.lives], dtype=jnp.int32)
 
         return BerzerkObservation(
             player_pos=player_pos,
@@ -1468,7 +1468,7 @@ class JaxBerzerk(JaxEnvironment[BerzerkState, BerzerkObservation, BerzerkInfo, B
             "otto_pos": spaces.Box(-100, 255, (2,), jnp.float32),
 
             # Game-level
-            "score": spaces.Box(0, 999999, (1,), jnp.float32),
+            "score": spaces.Box(0, 999999, (1,), jnp.int32),
             "lives": spaces.Box(0, 3, (1,), jnp.int32),
         })
 
