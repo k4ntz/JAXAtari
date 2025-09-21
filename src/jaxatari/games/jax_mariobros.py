@@ -241,21 +241,63 @@ PLAYER_JUMP_RIGHT = jnp.array([
 ], dtype=jnp.uint8)
 
 FIREBALL_1 = jnp.array([
-    [0,0,3,3,3,0,0],
+    [0,0,0,3,3,0,0],
+    [0,0,0,0,0,3,0],
+    [0,3,3,3,0,0,0],
+    [0,3,3,3,0,3,3],
+    [3,3,3,3,3,0,0],
+    [3,3,3,3,3,0,3],
+    [3,3,3,3,3,0,3],
+    [3,3,3,3,0,3,3],
+    [3,3,3,3,3,3,3],
     [0,3,3,3,3,3,0],
-    [3,3,3,3,3,3,3],
-    [3,3,3,3,3,3,3],
     [0,3,3,3,3,3,0],
     [0,0,3,3,3,0,0],
 ], dtype=jnp.uint8)
 
 FIREBALL_2 = jnp.array([
-    [0,0,3,3,0,0,0],
-    [0,3,3,3,3,0,0],
-    [3,3,3,3,3,3,0],
-    [0,3,3,3,3,3,3],
-    [0,0,3,3,3,3,0],
+    [0,0,3,3,0,0,0,0],
+    [0,3,3,3,3,0,0,0],
+    [3,3,3,3,3,0,0,0],
+    [3,3,3,3,3,3,0,0],
+    [3,3,3,3,3,3,0,3],
+    [3,3,3,3,3,3,0,0],
+    [3,3,3,3,3,3,0,0],
+    [3,3,3,3,3,3,0,3],
+    [3,3,0,3,3,0,0,3],
+    [0,3,3,0,0,0,3,0],
+    [0,3,3,3,3,3,3,0],
+    [0,0,3,3,3,0,0,0],
+], dtype=jnp.uint8)
+
+FIREBALL_3 = jnp.array([
+    [0,0,3,3,3,3,0,0],
+    [0,3,3,0,3,3,3,0],
+    [0,0,0,0,0,3,3,0],
+    [3,0,0,0,0,0,3,3],
+    [3,0,0,3,3,0,3,3],
+    [0,0,3,3,3,3,0,3],
+    [3,0,3,3,3,3,3,3],
+    [0,0,3,3,3,3,3,3],
+    [0,0,3,3,3,3,3,3],
+    [0,0,3,3,3,3,3,0],
+    [0,0,3,3,3,3,3,0],
+    [0,0,0,3,3,3,0,0],
+], dtype=jnp.uint8)
+
+FIREBALL_4 = jnp.array([
     [0,0,0,3,3,0,0],
+    [0,3,3,3,3,3,0],
+    [0,3,3,3,3,3,0],
+    [0,3,0,3,3,3,3],
+    [3,3,0,3,3,3,3],
+    [3,0,3,3,3,3,3],
+    [3,0,3,3,3,3,3],
+    [3,0,3,3,3,3,3],
+    [3,3,0,3,3,3,0],
+    [0,3,0,0,0,0,0],
+    [0,3,3,3,0,0,0],
+    [0,0,0,3,3,3,0],
 ], dtype=jnp.uint8)
 
 # --- Enemies params ---
@@ -508,6 +550,7 @@ def fireball_step(fb:Fireball):
             1   # bewegen
         )
         new_move_pat= jnp.where(last_is_zero, FIREBALL_MOVEMENT, arr)
+        changed = jnp.any(f.pos != new_pos)
         return Fireball(
             pos= new_pos,
             start_pat= f.start_pat,
@@ -516,7 +559,7 @@ def fireball_step(fb:Fireball):
             state= new_state,
             dir= f.dir,
             rnd= f.rnd,
-            ani = jnp.where(f.ani == 1, 2, 1)
+            ani= lax.cond(changed, lambda _: (f.ani % 3) + 1, lambda _: f.ani, operand=None)
         )
     def wait(f: Fireball):
         def stay(ff: Fireball):
@@ -1037,6 +1080,8 @@ PLAYER_JUMP_LEFT_RGB, PLAYER_JUMP_LEFT_MASK = indices_to_rgb_and_mask(PLAYER_JUM
 PLAYER_JUMP_RIGHT_RGB, PLAYER_JUMP_RIGHT_MASK = indices_to_rgb_and_mask(PLAYER_JUMP_RIGHT, PALETTE)
 FIREBALL_1_RGB, FIREBALL_1_MASK = indices_to_rgb_and_mask(FIREBALL_1, PALETTE)
 FIREBALL_2_RGB, FIREBALL_2_MASK = indices_to_rgb_and_mask(FIREBALL_2, PALETTE)
+FIREBALL_3_RGB, FIREBALL_3_MASK = indices_to_rgb_and_mask(FIREBALL_3, PALETTE)
+FIREBALL_4_RGB, FIREBALL_4_MASK = indices_to_rgb_and_mask(FIREBALL_4, PALETTE)
 
 import jax.numpy as jnp
 from jax import lax
@@ -1125,7 +1170,9 @@ def draw_fireball(image, f, fx, fy):
 
     def fireball_1(im): return draw_sprite_rgb(im, fx, fy, FIREBALL_1_RGB, FIREBALL_1_MASK)
     def fireball_2(im): return draw_sprite_rgb(im, fx, fy, FIREBALL_2_RGB, FIREBALL_2_MASK)
-    return lax.cond(f.ani == 1, fireball_1, fireball_2, image)
+    def fireball_3(im): return draw_sprite_rgb(im, fx, fy, FIREBALL_3_RGB, FIREBALL_3_MASK)
+    def fireball_4(im): return draw_sprite_rgb(im, fx, fy, FIREBALL_4_RGB, FIREBALL_4_MASK)
+    return lax.switch(f.ani - 1, [fireball_1, fireball_2, fireball_3, fireball_4], image)
 
 class MarioBrosRenderer(JAXGameRenderer):
     def __init__(self):
