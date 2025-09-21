@@ -4,7 +4,7 @@ from typing import NamedTuple, Tuple
 import jax
 import jax.numpy as jnp
 import chex
-#from gymnax.environments import spaces
+
 import jaxatari.spaces as spaces
 from jaxatari.environment import JaxEnvironment, JAXAtariAction as Action
 from jaxatari.renderers import JAXGameRenderer
@@ -39,7 +39,7 @@ class WordZapperConstants(NamedTuple) :
     LETTER_VISIBLE_MIN_X = 36   # Letters become visible at
     LETTER_VISIBLE_MAX_X = 124  # Letters disappear at
     LETTER_RESET_X = 5 # at this coordinate letters reset back to right ! only coordinates change not real reset
-    LETTERS_DISTANCE = 14 # spacing between letters
+    LETTERS_DISTANCE = 17 # spacing between letters
     LETTERS_END = LETTER_VISIBLE_MIN_X + 26 * LETTERS_DISTANCE # 27 symbols (letters + special) but 26 gaps
     LETTER_COOLDOWN = 200 # cooldown after letters zapperd till they reappear
     LETTER_SCROLLING_SPEED = 1 # speed at which letters move left
@@ -54,7 +54,7 @@ class WordZapperConstants(NamedTuple) :
     ENEMY_Y_MIN_SEPARATION = 16
 
     ENEMY_GAME_SPEED = 0.7
-    LEVEL_PAUSE_FRAMES = 5 * 60
+    LEVEL_PAUSE_FRAMES = 3 * 60
 
     # zapper
     ZAPPER_COLOR = (252,252,84,255)
@@ -483,76 +483,94 @@ def scrolling_letters(state: WordZapperState, consts: WordZapperConstants) -> ch
 
     reset_x = jnp.max(new_letters_x) + consts.LETTERS_DISTANCE
 
+    # Track which letters are being reset (scrolled off screen)
+    just_reset = (new_letters_x < consts.LETTER_RESET_X)
+
+    # Letters reappear as soon as they are fully off screen and cooldown is over
+    new_letters_alive = state.letters_alive
+    # Decrement cooldown for all letters
+    new_letters_alive = new_letters_alive.at[:, 1].set(
+        jnp.where(
+            new_letters_alive[:, 1] > 0,
+            new_letters_alive[:, 1] - 1,
+            new_letters_alive[:, 1]
+        )
+    )
+    # Revive letters that are being reset to the rightmost position (i.e., when a new alphabet sequence starts)
+    # Only revive if the letter is currently not alive (was shot)
+    just_reset = (new_letters_x < consts.LETTER_RESET_X)
+    new_letters_alive = new_letters_alive.at[:, 0].set(
+        jnp.where(
+            just_reset & (new_letters_alive[:, 0] == 0),
+            1,
+            new_letters_alive[:, 0]
+        )
+    )
+
+    # Actually reset the x position for letters that scrolled off
     new_letters_x = jnp.where(
         state.player_zapper_position[2], # if zapper active
         state.letters_x,
         jnp.where(
-            new_letters_x < consts.LETTER_RESET_X,
+            just_reset,
             reset_x,
             new_letters_x
         )
     )
-
-    # cooldown for letters
-    new_letters_alive = state.letters_alive.at[:, 1].set(
-        jnp.where(
-                state.letters_alive[:, 1] > 0,
-                state.letters_alive[:, 1] - 1,
-                state.letters_alive[:, 1]
-        )
-    )
-
-    # if cooldown is 0, letters reapper
-    new_letters_alive = new_letters_alive.at[:, 0].set(
-        jnp.where(
-            new_letters_alive[:, 1] <= 0,
-            1,
-            0
-        )
-    )
     
-    # TODO this is temp solution it could be more accurate 
-    # zapping letters and triggering explosion
-    closest_letter_id = jnp.argmin(jnp.abs(state.letters_x - state.player_zapper_position[5]))
+    # zap if zapper is within the bounds of a letter
+    zapper_x = state.player_zapper_position[5]
+    letter_half_width = consts.LETTER_SIZE[0]
+    letter_lefts = state.letters_x - letter_half_width
+    letter_rights = state.letters_x + letter_half_width
 
-    # Only allow zapping if zapper is within bounds AND the closest letter is visible
+    # Find all letters where zapper_x is within bounds
+    in_bounds_mask = jnp.logical_and(zapper_x >= letter_lefts, zapper_x < letter_rights)
+
     zapper_in_bounds = jnp.logical_and(
         state.player_zapper_position[0] >= consts.ZAPPING_BOUNDS[0],
         state.player_zapper_position[0] <= consts.ZAPPING_BOUNDS[1],
     )
 
-    letter_in_bounds = jnp.logical_and(
-        state.letters_x[closest_letter_id] >= consts.LETTER_VISIBLE_MIN_X,
-        state.letters_x[closest_letter_id] < consts.LETTER_VISIBLE_MAX_X,
+    # Only consider letters that are visible
+    visible_mask = jnp.logical_and(
+        state.letters_x > consts.LETTER_VISIBLE_MIN_X,
+        state.letters_x < consts.LETTER_VISIBLE_MAX_X - consts.LETTER_SIZE[0]
     )
 
-    within_zapping_bounds = jnp.logical_and(zapper_in_bounds, letter_in_bounds)
+    valid_mask = jnp.logical_and(jnp.logical_and(in_bounds_mask, visible_mask), zapper_in_bounds)
 
+    any_in_bounds = jnp.any(valid_mask)
+
+    def get_first_in_bounds():
+        return jnp.argmax(valid_mask)
+    
+    def get_invalid():
+        return -1
+    
+    target_letter_id = jax.lax.cond(any_in_bounds, get_first_in_bounds, get_invalid)
 
     def zap_letter(args):
         l, frame, timer, frame_timer, pos = args
-        # Set letter as not alive and start explosion
-        l = l.at[closest_letter_id].set(jnp.array([0, consts.LETTER_COOLDOWN], dtype=jnp.int32))
-        frame = frame.at[closest_letter_id].set(1)
-        timer = timer.at[closest_letter_id].set(consts.LETTER_EXPLOSION_FRAMES)
-        frame_timer = frame_timer.at[closest_letter_id].set(consts.LETTER_EXPLOSION_FRAME_DURATION)
-        pos = pos.at[closest_letter_id].set(jnp.array([state.letters_x[closest_letter_id], state.letters_y[closest_letter_id]]))
+        l = l.at[target_letter_id].set(jnp.array([0, consts.LETTER_COOLDOWN], dtype=jnp.int32))
+        frame = frame.at[target_letter_id].set(1)
+        timer = timer.at[target_letter_id].set(consts.LETTER_EXPLOSION_FRAMES)
+        frame_timer = frame_timer.at[target_letter_id].set(consts.LETTER_EXPLOSION_FRAME_DURATION)
+        pos = pos.at[target_letter_id].set(jnp.array([state.letters_x[target_letter_id], state.letters_y[target_letter_id]]))
         return l, frame, timer, frame_timer, pos
 
     def no_zap(args):
         l, frame, timer, frame_timer, pos = args
         return l, frame, timer, frame_timer, pos
 
-    # zap if zapper active and within bounds
-    zap_condition = jnp.logical_and(state.player_zapper_position[2], within_zapping_bounds)
 
+    # Only allow zapping if the letter is alive (not already shot/disappeared)
+    is_letter_alive = jnp.where(target_letter_id != -1, state.letters_alive[target_letter_id, 0] == 1, False)
+    zap_condition = jnp.logical_and(state.player_zapper_position[2], jnp.logical_and(target_letter_id != -1, is_letter_alive))
 
-    # Only trigger explosion on rising edge, but do NOT reset animation if zapper stays active
     def safe_zap_letter(args):
         l, frame, timer, frame_timer, pos = args
-        # Only start explosion if not already active for this letter
-        already_exploding = frame[closest_letter_id] > 0
-        
+        already_exploding = frame[target_letter_id] > 0
         return jax.lax.cond(already_exploding, no_zap, zap_letter, (l, frame, timer, frame_timer, pos))
     
     (
@@ -1001,7 +1019,7 @@ class JaxWordZapper(JaxEnvironment[WordZapperState, WordZapperObservation, WordZ
                 "active": spaces.Box(low=0, high=1, shape=(), dtype=jnp.int32),
             }),
             "player_zapper": spaces.Box(low=0, high=255, shape=(6,), dtype=jnp.int32),
-            "letters": spaces.Box(low=0, high=400, shape=(27, 6), dtype=jnp.int32),
+            "letters": spaces.Box(low=0, high=self.consts.LETTER_RESET_X+27*(self.consts.LETTER_SIZE[0]+self.consts.LETTERS_DISTANCE)+10, shape=(27, 6), dtype=jnp.int32),
             "current_letter_index": spaces.Box(low=0, high=5, shape=(), dtype=jnp.int32),
             "target_word": spaces.Box(low=-1, high=27, shape=(6,), dtype=jnp.int32),
             "enemies": spaces.Box(low=0, high=255, shape=(self.consts.MAX_ENEMIES, 5), dtype=jnp.int32),
@@ -1683,7 +1701,13 @@ class WordZapperRenderer(JAXGameRenderer):
                     explosion_sequence[explosion_frame - 1],
                     0
                 )
-                return jr.render_at(r, explosion_pos[0], explosion_pos[1], LETTER_EXPLOSION_SPRITES[idx])
+                sprite = LETTER_EXPLOSION_SPRITES[idx]
+                sprite_h, sprite_w = sprite.shape[:2]
+                sprite_xs = explosion_pos[0] + jnp.arange(sprite_w)
+                x_mask = jnp.logical_and((sprite_xs >= self.consts.LETTER_VISIBLE_MIN_X), (sprite_xs < self.consts.LETTER_VISIBLE_MAX_X)).astype(sprite.dtype)
+                x_mask = x_mask[None, :, None]  # (1, W, 1)
+                masked_sprite = sprite * x_mask
+                return jr.render_at(r, explosion_pos[0], explosion_pos[1], masked_sprite)
 
             # If explosion is active, render explosion
             raster = jax.lax.cond(explosion_frame > 0, render_explosion, lambda r: r, raster)
