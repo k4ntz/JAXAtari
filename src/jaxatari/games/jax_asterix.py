@@ -105,7 +105,6 @@ class EntityPosition(NamedTuple):
 
 class AsterixObservation(NamedTuple):
     player: EntityPosition
-    score: jnp.ndarray
 
 
 class AsterixInfo(NamedTuple):
@@ -565,7 +564,7 @@ class JaxAsterix(JaxEnvironment[AsterixState, AsterixObservation, AsterixInfo, A
 
     @partial(jax.jit, static_argnums=(0,))
     def _get_observation(self, state: AsterixState):
-        # create chicken
+        # create player
         player = EntityPosition(
             x=state.player_x,
             y=state.player_y,
@@ -573,7 +572,7 @@ class JaxAsterix(JaxEnvironment[AsterixState, AsterixObservation, AsterixInfo, A
             height=jnp.array(self.consts.player_height, dtype=jnp.int32),
         )
 
-        return AsterixObservation(player=player, score=state.score)
+        return AsterixObservation(player=player)
 
     @partial(jax.jit, static_argnums=(0,))
     def _get_info(self, state: AsterixState, all_rewards: chex.Array = None) -> AsterixInfo:
@@ -644,24 +643,13 @@ class JaxAsterix(JaxEnvironment[AsterixState, AsterixObservation, AsterixInfo, A
         return self.renderer.render(state)
 
     def obs_to_flat_array(self, obs: AsterixObservation) -> jnp.ndarray: # TODO kann entfernt werden? wird nicht verwendet / benötigt
-        """Convert observation to a flat array."""
-        # Flatten chicken position and dimensions
-        chicken_flat = jnp.concatenate([
-            obs.player.x.reshape(-1),
-            obs.player.y.reshape(-1),
-            obs.player.width.reshape(-1),
-            obs.player.height.reshape(-1)
-        ])
-
-        # Flatten car positions and dimensions
-        #cars_flat = obs.car.reshape(-1)
-
-        # Flatten score
-        score_flat = obs.score.reshape(-1)
-
-        # Concatenate all components
-        return jnp.concatenate([chicken_flat, score_flat]).astype(jnp.int32) #TODO add cars_flat back an zweiter stelle when implemented
-
+        """Convert the observation to a flat array."""
+        return jnp.array([
+            obs.player.x,
+            obs.player.y,
+            obs.player.width,
+            obs.player.height,
+        ], dtype=jnp.int32)
 
 class AsterixRenderer(JAXGameRenderer):
     def __init__(self, consts: AsterixConstants = None):
