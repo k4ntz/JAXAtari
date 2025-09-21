@@ -2543,7 +2543,7 @@ class JaxVideoPinball(
                 tilt_counter_inc, self.consts.TILT_COUNT_TILT_MODE_ACTIVE
             )
 
-            # adjust horizontal velocity depending on nudge direction
+            # adjust horizontal location depending on nudge direction
             ball_x_new = jax.lax.cond(
                 jnp.logical_and(
                     jnp.equal(action, Action.RIGHTFIRE),

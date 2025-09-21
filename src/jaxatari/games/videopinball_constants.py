@@ -149,17 +149,22 @@ class VideoPinballConstants(NamedTuple):
     WIDTH = jnp.array(160)
     HEIGHT = jnp.array(210)
 
-
     # Physics constants
     GRAVITY = jnp.array(0.03)
     VELOCITY_DAMPENING_VALUE = jnp.array(0.075)  # 24
     VELOCITY_ACCELERATION_VALUE = jnp.array(0.125)
-    MAX_REFLECTIONS_PER_GAMESTEP = jnp.array(10)  # max collisions to process per timestep
+    MAX_REFLECTIONS_PER_GAMESTEP = jnp.array(
+        10
+    )  # max collisions to process per timestep
     BALL_MAX_SPEED = jnp.array(3.5)
     BALL_MIN_SPEED = jnp.array(0.35)
-    NUDGE_EFFECT_INTERVAL = jnp.array(1)  # Num steps in between nudge changing 
-    NUDGE_EFFECT_AMOUNT = jnp.array(0.3)  # Amount of nudge effect applied to the ball's velocity
-    TILT_COUNT_INCREASE_INTERVAL = jnp.array(4)  # Number of steps after which the tilt counter increases
+    NUDGE_EFFECT_INTERVAL = jnp.array(2)  # Num steps in between nudge changing
+    NUDGE_EFFECT_AMOUNT = jnp.array(
+        0.1
+    )  # Amount of nudge effect applied to the ball's velocity
+    TILT_COUNT_INCREASE_INTERVAL = jnp.array(
+        4
+    )  # Number of steps after which the tilt counter increases
     TILT_COUNT_DECREASE_INTERVAL = jnp.array(4)
     TILT_COUNT_TILT_MODE_ACTIVE = jnp.array(512)
     FLIPPER_MAX_ANGLE = jnp.array(3)
@@ -181,9 +186,9 @@ class VideoPinballConstants(NamedTuple):
     FLIPPER_RIGHT_POS = jnp.array([110, 180])
     PLUNGER_POS = jnp.array([150, 120])
     PLUNGER_MAX_HEIGHT = jnp.array(20)  # Taken from RAM values (67-87)
-    INVISIBLE_BLOCK_MEAN_REFLECTION_FACTOR = (
-        jnp.array(0.001)  # 8 times the plunger power is added to ball_vel_x
-    )
+    INVISIBLE_BLOCK_MEAN_REFLECTION_FACTOR = jnp.array(
+        0.001
+    )  # 8 times the plunger power is added to ball_vel_x
 
     # Background color and object colors
     BG_COLOR = jnp.array([0, 0, 0], dtype=jnp.uint8)
@@ -270,7 +275,6 @@ class VideoPinballConstants(NamedTuple):
     WINDOW_WIDTH = jnp.array(160) * 3
     WINDOW_HEIGHT = jnp.array(210) * 3
 
-
     # Objects (walls etc.) Positions/dimensions
     BALL_START_X = jnp.array(149.0)
     BALL_START_Y = jnp.array(129.0)
@@ -317,7 +321,9 @@ class VideoPinballConstants(NamedTuple):
     VERTICAL_BAR_HEIGHT = jnp.array(32)
     VERTICAL_BAR_WIDTH = jnp.array(4)
 
-    ROLLOVER_BAR_DISTANCE = jnp.array(12)  # Distance between the left and right rollover bar
+    ROLLOVER_BAR_DISTANCE = jnp.array(
+        12
+    )  # Distance between the left and right rollover bar
 
     BUMPER_WIDTH = jnp.array(16)
     BUMPER_HEIGHT = jnp.array(32)
@@ -1467,22 +1473,26 @@ class VideoPinballConstants(NamedTuple):
                 dtype=jnp.int32,
             )
             for scene_object in _ALL_SCENE_OBJECTS_LIST
-           if scene_object.reflecting == 1
+            if scene_object.reflecting == 1
         ]
     ).squeeze()
     NON_REFLECTING_SCENE_OBJECTS = jnp.stack(
-       [
-           jnp.array([
-               scene_object.hit_box_width,
-               scene_object.hit_box_height,
-               scene_object.hit_box_x_offset,
-               scene_object.hit_box_y_offset,
-               scene_object.reflecting,
-               scene_object.score_type,
-               scene_object.variant,
-           ], dtype=jnp.int32) for scene_object in _ALL_SCENE_OBJECTS_LIST
-           if scene_object.reflecting == 0
-       ]
+        [
+            jnp.array(
+                [
+                    scene_object.hit_box_width,
+                    scene_object.hit_box_height,
+                    scene_object.hit_box_x_offset,
+                    scene_object.hit_box_y_offset,
+                    scene_object.reflecting,
+                    scene_object.score_type,
+                    scene_object.variant,
+                ],
+                dtype=jnp.int32,
+            )
+            for scene_object in _ALL_SCENE_OBJECTS_LIST
+            if scene_object.reflecting == 0
+        ]
     ).squeeze()
     _FLIPPERS_SORTED = [
         # sorted in a way that allows finding/identifying
