@@ -168,13 +168,10 @@ class JaxBackgammonEnv(JaxEnvironment[BackgammonState, jnp.ndarray, dict, Backga
         )
 
     def reset(self, key: jax.random.PRNGKey = None) -> Tuple[jnp.ndarray, BackgammonState]:
-        print(key)
-        key = jax.lax.cond(
-            key is None,
-            lambda _: jax.random.PRNGKey(0),
-            lambda _: key,
-            operand=None
-        )
+        """Reset the environment with proper key handling."""
+        if key is None:
+            key = jax.random.PRNGKey(0)
+
         state = self.init_state(key)
         dice, key = self.roll_dice(key)
         state = state._replace(dice=dice, key=key)
@@ -673,14 +670,15 @@ class JaxBackgammonEnv(JaxEnvironment[BackgammonState, jnp.ndarray, dict, Backga
         valid_moves_array = self._action_pairs[valid_mask]
         return [tuple(map(int, move)) for move in valid_moves_array]
 
-    def render(self, state: BackgammonState) -> Tuple[jnp.ndarray]:
+    def render(self, state: BackgammonState) -> jnp.ndarray:
         return self.renderer.render(state)
 
 
 class BackgammonRenderer(JAXGameRenderer):
     def __init__(self, env=None):
-        super().__init__(env)
-
+        super().__init__()
+        self.env = env
+        # Initialize all rendering parameters
         self.frame_height = 210
         self.frame_width = 160
         self.color_background      = jnp.array([0, 0, 0], dtype=jnp.uint8)      # black background
