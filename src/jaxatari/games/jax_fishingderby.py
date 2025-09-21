@@ -86,9 +86,9 @@ class GameConfig:
     FISH_ROW_SCORES: Tuple[int] = (2, 2, 4, 4, 6, 6)
     # When hooked
     HOOKED_FISH_SPEED_MULTIPLIER: float = 2.0
-    HOOKED_FISH_TURN_PROBABILITY: float = 0.03
+    HOOKED_FISH_TURN_PROBABILITY: float = 0.05
     HOOKED_FISH_BOUNDARY_ENABLED: bool = True
-    HOOKED_FISH_BOUNDARY_PADDING: int = 15  # Max distance from line
+    HOOKED_FISH_BOUNDARY_PADDING: int = 9 # Max distance from line
 
     # Normal swimming
     FISH_BASE_TURN_PROBABILITY: float = 0.01  # 1% chance to change direction
@@ -663,55 +663,96 @@ class FishingDerby(JaxEnvironment):
 
             def update_hooked_fish_and_hook():
                 fish_idx = p1_hooked_fish_idx
-                fish_x = new_fish_pos[fish_idx, 0]
-                fish_y = new_fish_pos[fish_idx, 1]
-
-                # Depth ratio: 0 at surface, 1 at bottom
-                depth_ratio = jnp.clip((fish_y - cfg.WATER_Y_START) /
-                                       (cfg.LINE_Y_END - cfg.WATER_Y_START), 0.0, 1.0)
-
-                # Small per-frame sideways wobble (dx), stronger + a bit slower deeper down
-                wobble_freq = cfg.WOBBLE_FREQ_BASE + depth_ratio * cfg.WOBBLE_FREQ_RANGE
-                wobble_amp = cfg.WOBBLE_AMP_BASE + depth_ratio * cfg.WOBBLE_AMP_RANGE
-                wobble_dx = jnp.sin(state.time * wobble_freq) * wobble_amp
-
-                # Keep the base swim while hooked, but modest
-                base_dx = new_fish_dirs[fish_idx] * (cfg.FISH_SPEED * cfg.HOOKED_FISH_SPEED_MULTIPLIER)
-
-                # Total per-frame dx, tightly capped
-                total_dx = jnp.clip(base_dx + wobble_dx, -cfg.MAX_HOOKED_WOBBLE_DX, cfg.MAX_HOOKED_WOBBLE_DX)
-                new_x = jnp.clip(fish_x + total_dx, cfg.LEFT_BOUNDARY, cfg.RIGHT_BOUNDARY)
+                fish_x, fish_y = new_fish_pos[fish_idx, 0], new_fish_pos[fish_idx, 1]
+                fish_dir = new_fish_dirs[fish_idx]
 
                 # Hook position at this moment (for Y follow + hook lerp to fish X)
                 hx, hy = self._get_hook_position(cfg.P1_START_X, PlayerState(
-                    rod_length=new_rod_length,
-                    hook_y=new_hook_y,
-                    score=p1.score,
-                    hook_state=p1_hook_state,
-                    hooked_fish_idx=p1_hooked_fish_idx,
-                    hook_velocity_y=new_hook_velocity_y,
-                    hook_x_offset=new_hook_x_offset,
-                    display_score=p1.display_score,
-                    score_animation_timer=p1.score_animation_timer,
-                    line_segments_x=p1.line_segments_x
+                    rod_length=new_rod_length, hook_y=new_hook_y, hook_x_offset=new_hook_x_offset,
+                    score=0, hook_state=0, hooked_fish_idx=-1, hook_velocity_y=0, display_score=0,
+                    score_animation_timer=0, line_segments_x=jnp.zeros(8)
                 ))
 
-                # Fish's vertical position is now relative to the hook's Y.
-                # The hook should be at the vertical middle of the fish sprite.
+                # Fish movement logic (wobble, etc.)
+                depth_ratio = jnp.clip((hy - cfg.WATER_Y_START) / (cfg.MAX_HOOK_DEPTH_Y), 0.0, 1.0)
+                wobble_freq = cfg.WOBBLE_FREQ_BASE + depth_ratio * cfg.WOBBLE_FREQ_RANGE
+                wobble_amp = cfg.WOBBLE_AMP_BASE + depth_ratio * cfg.WOBBLE_AMP_RANGE
+                wobble_dx = jnp.sin(state.time * wobble_freq) * wobble_amp
+                base_dx = fish_dir * cfg.FISH_SPEED * cfg.HOOKED_FISH_SPEED_MULTIPLIER
+
+                # Total per-frame dx, tightly capped
+                total_dx = jnp.clip(base_dx + wobble_dx, -cfg.MAX_HOOKED_WOBBLE_DX, cfg.MAX_HOOKED_WOBBLE_DX)
+                potential_new_x = fish_x + total_dx
+
+                # Calculate boundaries based on hook position and configuration
+                boundary_min = hx - cfg.HOOKED_FISH_BOUNDARY_PADDING
+                boundary_max = hx + cfg.HOOKED_FISH_BOUNDARY_PADDING
+
+                # Also respect global boundaries
+                boundary_min = jnp.maximum(boundary_min, cfg.LEFT_BOUNDARY)
+                boundary_max = jnp.minimum(boundary_max, cfg.RIGHT_BOUNDARY)
+
+                # Smooth boundary handling with elastic collision
+                def apply_hooked_boundaries():
+                    # Check if fish is approaching boundaries
+                    distance_to_left = potential_new_x - boundary_min
+                    distance_to_right = boundary_max - potential_new_x
+
+                    # Smooth bounce zone - fish slows down and bounces as it approaches boundary
+                    bounce_zone = 2.0  # pixels from boundary where bounce effect starts
+
+                    # Calculate bounce effects
+                    left_bounce_factor = jnp.where(distance_to_left < bounce_zone,
+                                                   jnp.clip(distance_to_left / bounce_zone, 0.0, 1.0), 1.0)
+                    right_bounce_factor = jnp.where(distance_to_right < bounce_zone,
+                                                    jnp.clip(distance_to_right / bounce_zone, 0.0, 1.0), 1.0)
+
+                    # Apply boundary effects
+                    would_hit_left = potential_new_x <= boundary_min
+                    would_hit_right = potential_new_x >= boundary_max
+
+                    # Smooth direction change with dampening near boundaries
+                    direction_factor = left_bounce_factor * right_bounce_factor
+                    new_direction = jnp.where(would_hit_left | would_hit_right, -fish_dir, fish_dir)
+
+                    # Constrain position with slight elastic effect
+                    constrained_x = jnp.clip(potential_new_x, boundary_min, boundary_max)
+
+                    # Add small elastic push back from boundaries for smoother movement
+                    elastic_push = 0.0
+                    elastic_push = jnp.where(would_hit_left, 0.5, elastic_push)
+                    elastic_push = jnp.where(would_hit_right, -0.5, elastic_push)
+
+                    final_x = constrained_x + elastic_push
+
+                    return final_x, new_direction
+
+                def apply_global_boundaries():
+                    # Use original global boundary logic with smooth bouncing
+                    would_hit_left = potential_new_x <= cfg.LEFT_BOUNDARY
+                    would_hit_right = potential_new_x >= cfg.RIGHT_BOUNDARY
+
+                    constrained_x = jnp.clip(potential_new_x, cfg.LEFT_BOUNDARY, cfg.RIGHT_BOUNDARY)
+                    new_direction = jnp.where(would_hit_left | would_hit_right, -fish_dir, fish_dir)
+
+                    return constrained_x, new_direction
+
+                new_x, new_fish_direction = jax.lax.cond(
+                    cfg.HOOKED_FISH_BOUNDARY_ENABLED,
+                    apply_hooked_boundaries,
+                    apply_global_boundaries
+                )
+
+                # Fish's vertical position is now relative to the hook's Y
                 new_y = hy - (cfg.FISH_HEIGHT / 2.0)
 
-                # Write back fish position (X and Y)
+                # Write back fish position and direction
                 updated_pos = new_fish_pos.at[fish_idx, 0].set(new_x)
                 updated_pos = updated_pos.at[fish_idx, 1].set(new_y)
+                updated_dirs = new_fish_dirs.at[fish_idx].set(new_fish_direction)
 
-                # Do NOT force direction to sign(wobble); keep new_fish_dirs as computed
-                updated_dirs = new_fish_dirs
-
-                # Hook's target X should be the fish's mouth.
-                # This depends on the direction the fish is facing.
-                # fish_dir < 0: facing left, mouth is at fish_x
-                # fish_dir > 0: facing right, mouth is at fish_x + FISH_WIDTH
-                is_facing_right = new_fish_dirs[fish_idx] > 0
+                # Hook's target X should be the fish's mouth
+                is_facing_right = new_fish_direction > 0
                 mouth_x_offset = jnp.where(is_facing_right, cfg.FISH_WIDTH, 0.0)
                 hook_target_x = new_x + mouth_x_offset
                 new_offset = hook_target_x - (cfg.P1_START_X + new_rod_length)
