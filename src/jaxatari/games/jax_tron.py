@@ -234,6 +234,7 @@ class TronState(NamedTuple):
     wave_end_cooldown_remaining: Array
     aim_dx: Array  # remember last movement direction in X-dir
     aim_dy: Array  # remember last movement direction in Y-dir
+    facing_dx: Array  # () int32, -1 = left, +1 = right
     discs: Discs
     fire_down_prev: Array  # shape (), bool
     doors: Doors
@@ -977,8 +978,26 @@ class TronRenderer(JAXGameRenderer):
                 jnp.int32(0),
             )
 
-            sprite = self.player_frames_by_color[color_idx, fidx]
-            return jr.render_at(r, state.player.x[0], state.player.y[0], sprite)
+            base_sprite = self.player_frames_by_color[color_idx, fidx]
+
+            # mirror if the player walks left
+            face_left = state.facing_dx < jnp.int32(0)
+
+            def draw_normal(rr):
+                return jr.render_at(
+                    rr, state.player.x[0], state.player.y[0], base_sprite
+                )
+
+            def draw_flipped(rr):
+                # horizontal mirror over width axis (H, W, 4) -> axis=1
+                return jr.render_at(
+                    rr,
+                    state.player.x[0],
+                    state.player.y[0],
+                    jnp.flip(base_sprite, axis=1),
+                )
+
+            return jax.lax.cond(face_left, draw_flipped, draw_normal, r)
 
         raster = jax.lax.cond(state.player_gone, lambda r: r, draw_player, raster)
 
@@ -1295,6 +1314,7 @@ class JaxTron(JaxEnvironment[TronState, TronObservation, TronInfo, TronConstants
             wave_end_cooldown_remaining=jnp.zeros((), dtype=jnp.int32),
             aim_dx=jnp.zeros((), dtype=jnp.int32),
             aim_dy=jnp.zeros((), dtype=jnp.int32),
+            facing_dx=jnp.int32(1),
             discs=_get_empty_discs(self.consts),
             fire_down_prev=jnp.array(False),
             doors=self.initial_doors,
@@ -1365,6 +1385,13 @@ class JaxTron(JaxEnvironment[TronState, TronObservation, TronInfo, TronConstants
             vx_int = jnp.full_like(s.player.vx, raw_dx_i)
             vy_int = jnp.full_like(s.player.vy, raw_dy_i)
 
+            # remember last aim direction from raw input
+            aim_dx = jnp.where(action.moved, raw_dx_i, s.aim_dx)
+            aim_dy = jnp.where(action.moved, raw_dy_i, s.aim_dy)
+
+            # remember last non-zero horizontal input for sprite facing
+            facing_dx = jnp.where(raw_dx_i != 0, raw_dx_i, s.facing_dx)
+
             player2 = s.player._replace(
                 x=s.player.x.at[0].set(x_next),
                 y=s.player.y.at[0].set(y_next),
@@ -1374,10 +1401,9 @@ class JaxTron(JaxEnvironment[TronState, TronObservation, TronInfo, TronConstants
                 fy=s.player.fy.at[0].set(fy_next),
             )
 
-            # remember last aim direction from raw input
-            aim_dx = jnp.where(action.moved, raw_dx_i, s.aim_dx)
-            aim_dy = jnp.where(action.moved, raw_dy_i, s.aim_dy)
-            return s._replace(player=player2, aim_dx=aim_dx, aim_dy=aim_dy)
+            return s._replace(
+                player=player2, aim_dx=aim_dx, aim_dy=aim_dy, facing_dx=facing_dx
+            )
 
         return jax.lax.cond(active, do_move, lambda s: s, state)
 
