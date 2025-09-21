@@ -1060,8 +1060,19 @@ class FishingDerbyRenderer(JAXGameRenderer):
 
         def draw_one_fish(i, r):
             pos, direction, active = state.fish_positions[i], state.fish_directions[i], state.fish_active[i]
+            # Check if this fish is hooked by either player
+            is_hooked_p1 = (state.p1.hooked_fish_idx == i) & (state.p1.hook_state > 0)
+            is_hooked_p2 = (state.p2.hooked_fish_idx == i) & (state.p2.hook_state > 0)
+            is_hooked = is_hooked_p1 | is_hooked_p2
+
+            # Use faster animation timing for hooked fish (animate twice as fast)
+            hooked_fish_frame = jax.lax.cond((state.time // 2) % 2 == 0, lambda: self.SPRITE_FISH1, lambda: self.SPRITE_FISH2)
+
+            # Select the appropriate frame based on whether fish is hooked
+            frame_to_use = jax.lax.cond(is_hooked, lambda: hooked_fish_frame, lambda: fish_frame)
+
             return jax.lax.cond(active,
-                                lambda r_in: self._render_at(r_in, pos[0], pos[1], fish_frame, flip_h=direction > 0),
+                                lambda r_in: self._render_at(r_in, pos[0], pos[1], frame_to_use, flip_h=direction > 0),
                                 lambda r_in: r_in, r)
 
         raster = jax.lax.fori_loop(0, cfg.NUM_FISH, draw_one_fish, raster)
@@ -1078,7 +1089,8 @@ class FishingDerbyRenderer(JAXGameRenderer):
             # We need to flip the sprite when fish_dir > 0 (facing right)
             flip_sprite = fish_dir > 0
 
-            fish_frame = jax.lax.cond((state.time // 5) % 2 == 0,
+            # Use faster animation timing for hooked fish (animate twice as fast)
+            fish_frame = jax.lax.cond((state.time // 2) % 2 == 0,
                                       lambda: self.SPRITE_FISH1,
                                       lambda: self.SPRITE_FISH2)
 
