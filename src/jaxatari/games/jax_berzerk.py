@@ -20,7 +20,7 @@ class BerzerkConstants(NamedTuple):
     SCALING_FACTOR = 3
 
     PLAYER_SIZE = (6, 20)
-    PLAYER_SPEED = 0.2
+    PLAYER_SPEED = 0.4
 
     EXTRA_LIFE_AT = 1000
 
@@ -28,13 +28,13 @@ class BerzerkConstants(NamedTuple):
     MAX_NUM_ENEMIES = 7
     MIN_NUM_ENEMIES = 5
     MOVEMENT_PROB = 0.0025  # probability for enemy to move
-    ENEMY_SPEED = 0.05
+    ENEMY_SPEED = 0.1
     ENEMY_SHOOT_PROB = 0.005
-    ENEMY_BULLET_SPEED = 0.235
+    ENEMY_BULLET_SPEED = 0.47
 
     BULLET_SIZE_HORIZONTAL = (4, 2)
     BULLET_SIZE_VERTICAL = (1, 6)
-    BULLET_SPEED = 1
+    BULLET_SPEED = 2
     MAX_BULLETS = 1
 
     WALL_THICKNESS = 4
@@ -42,12 +42,12 @@ class BerzerkConstants(NamedTuple):
     EXIT_WIDTH = 40
     EXIT_HEIGHT = 64
 
-    DEATH_ANIMATION_FRAMES = 256
-    ENEMY_DEATH_ANIMATION_FRAMES = 16
+    DEATH_ANIMATION_FRAMES = 128
+    ENEMY_DEATH_ANIMATION_FRAMES = 8
     
-    TRANSITION_ANIMATION_FRAMES = 128
+    TRANSITION_ANIMATION_FRAMES = 64
 
-    GAME_OVER_FRAMES = 64
+    GAME_OVER_FRAMES = 32
 
     SCORE_OFFSET_X = WIDTH - 58 - 6  # window width - distance to the right - digit width 
     SCORE_OFFSET_Y = HEIGHT - 20 - 7  # window height - distance to the bottom - digit height 
@@ -62,8 +62,8 @@ class BerzerkConstants(NamedTuple):
     ENABLE_EVIL_OTTO = True     # Variation 1: enable immortal evil otto
     MORTAL_EVIL_OTTO = False    # Variation 2: enable mortal evil otto (ENABLE_EVIL_OTTO has to be True)
     EVIL_OTTO_SIZE = (8, 7)
-    EVIL_OTTO_SPEED = 0.2
-    EVIL_OTTO_DELAY = 900
+    EVIL_OTTO_SPEED = 0.4
+    EVIL_OTTO_DELAY = 200
     
 class PlayerState(NamedTuple):
     pos: chex.Array                     # (2,)
@@ -669,10 +669,10 @@ class JaxBerzerk(JaxEnvironment[BerzerkState, BerzerkObservation, BerzerkInfo, B
                 otto_animation_counter += 1
 
                 # jump animation for otto (best-guess-estimate of true values)
-                jump_phase = (otto_animation_counter // 18) % 6
-                jump_offset = jnp.where(jump_phase == 0, 0.5, 
-                                        jnp.where(jump_phase == 5, 0.8, 
-                                                  jnp.where(jump_phase == 1, -0.7, -0.2)))
+                jump_phase = (otto_animation_counter // 15) % 5
+                jump_offset = jnp.where(jump_phase == 0, 0.5,
+                                        jnp.where(jump_phase == 4, 0.8, 
+                                                  jnp.where(jump_phase == 1, -0.7, -0.3)))
                 otto_pos_with_jump = new_otto_pos.at[1].add(jump_offset)
 
                 return otto_pos_with_jump
@@ -1577,8 +1577,8 @@ class BerzerkRenderer(JAXGameRenderer):
 
         def get_player_sprite():
             def death_animation():
-                idx = (state.player.death_timer - 1) % 8
-                return jnp.where(idx < 4, self.sprites['player_idle'], self.sprites['player_death'])
+                idx = (state.player.death_timer - 1) % 4
+                return jnp.where(idx < 2, self.sprites['player_idle'], self.sprites['player_death'])
 
             dir = state.player.last_dir
 
@@ -1611,14 +1611,8 @@ class BerzerkRenderer(JAXGameRenderer):
             move_frames = [
                 lambda: self.sprites['player_move_1'],
                 lambda: self.sprites['player_move_1'],
-                lambda: self.sprites['player_move_1'],
-                lambda: self.sprites['player_move_1'],
                 lambda: self.sprites['player_move_2'],
                 lambda: self.sprites['player_move_2'],
-                lambda: self.sprites['player_move_2'],
-                lambda: self.sprites['player_move_2'],
-                lambda: self.sprites['player_idle'],
-                lambda: self.sprites['player_idle'],
                 lambda: self.sprites['player_idle'],
                 lambda: self.sprites['player_idle'],
             ]
@@ -1629,7 +1623,7 @@ class BerzerkRenderer(JAXGameRenderer):
                     lambda: jax.lax.switch(shoot_idx, shoot_frames),
                     lambda: jax.lax.cond(
                         state.player.animation_counter > 0,
-                        lambda: jax.lax.switch((state.player.animation_counter - 1) % 12, move_frames),
+                        lambda: jax.lax.switch((state.player.animation_counter - 1) % 6, move_frames),
                         lambda: self.sprites['player_idle']
                     )
                 )
@@ -1709,42 +1703,42 @@ class BerzerkRenderer(JAXGameRenderer):
 
             # Death Animation Frames
             death_sprites = (
-                [recolor("enemy_death_3")] * 8 +
-                [recolor("enemy_death_2")] * 4 +
-                [recolor("enemy_death_1")] * 4
+                [recolor("enemy_death_3")] * 4 +
+                [recolor("enemy_death_2")] * 2 +
+                [recolor("enemy_death_1")] * 2
             )
             death_frames = [lambda sprite=s: sprite for s in death_sprites]
 
             # Normal Animation Frames
             idle_sprites = (
-                [recolor("enemy_idle_1")] * 8 +
-                [recolor("enemy_idle_2")] * 8 +
-                [recolor("enemy_idle_3")] * 8 +
-                [recolor("enemy_idle_4")] * 8 +
-                [recolor("enemy_idle_5")] * 8 +
-                [recolor("enemy_idle_6")] * 8 +
-                [recolor("enemy_idle_7")] * 8 +
-                [recolor("enemy_idle_8")] * 8
+                [recolor("enemy_idle_1")] * 4 +
+                [recolor("enemy_idle_2")] * 4 +
+                [recolor("enemy_idle_3")] * 4 +
+                [recolor("enemy_idle_4")] * 4 +
+                [recolor("enemy_idle_5")] * 4 +
+                [recolor("enemy_idle_6")] * 4 +
+                [recolor("enemy_idle_7")] * 4 +
+                [recolor("enemy_idle_8")] * 4
             )
             idle_frames = [lambda sprite=s: sprite for s in idle_sprites]
 
             move_horizontal_sprites = (
-                [recolor("enemy_move_horizontal_1")] * 14 +
-                [recolor("enemy_move_horizontal_2")] * 14
+                [recolor("enemy_move_horizontal_1")] * 7 +
+                [recolor("enemy_move_horizontal_2")] * 7
             )
             move_horizontal_frames = [lambda sprite=s: sprite for s in move_horizontal_sprites]
 
             move_vertical_sprites = (
-                [recolor("enemy_move_vertical_1")] * 12 +
-                [recolor("enemy_move_vertical_2")] * 12 +
-                [recolor("enemy_move_vertical_1")] * 12 +
-                [recolor("enemy_move_vertical_3")] * 12
+                [recolor("enemy_move_vertical_1")] * 6 +
+                [recolor("enemy_move_vertical_2")] * 6 +
+                [recolor("enemy_move_vertical_1")] * 6 +
+                [recolor("enemy_move_vertical_3")] * 6
             )
             move_vertical_frames = [lambda sprite=s: sprite for s in move_vertical_sprites]
 
             # Animation functions
             def death_animation():
-                idx = (death_timer - 1) % 16
+                idx = (death_timer - 1) % 8
                 return jax.lax.switch(idx, death_frames)
 
             def normal_animation():
@@ -1752,9 +1746,9 @@ class BerzerkRenderer(JAXGameRenderer):
                 return jax.lax.switch(
                     axis_idx,
                     [
-                        lambda: jax.lax.switch((counter - 1) % 64, idle_frames),
-                        lambda: jax.lax.switch((counter - 1) % 28, move_horizontal_frames),
-                        lambda: jax.lax.switch((counter - 1) % 48, move_vertical_frames),
+                        lambda: jax.lax.switch((counter - 1) % 32, idle_frames),
+                        lambda: jax.lax.switch((counter - 1) % 14, move_horizontal_frames),
+                        lambda: jax.lax.switch((counter - 1) % 24, move_vertical_frames),
                     ]
                 )
 
@@ -1811,7 +1805,7 @@ class BerzerkRenderer(JAXGameRenderer):
 
         otto_sprites = self.sprites.get('evil_otto')
         otto_sprites = jax.lax.cond(
-            (state.otto.anim_counter // 18) % 6,
+            (state.otto.anim_counter // 15) % 5,
             lambda s: s.get('evil_otto'), 
             lambda s: s.get('evil_otto_2'),
             self.sprites)
