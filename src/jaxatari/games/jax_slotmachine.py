@@ -1002,24 +1002,6 @@ class JaxSlotMachine(JaxEnvironment[SlotMachineState, SlotMachineObservation, Sl
         cannot_afford = credits < cfg.min_wager
         return jnp.logical_or(max_credits_reached, jnp.logical_and(cannot_afford, ~spinning))
 
-    def _get_done_extended(self, state: SlotMachineState) -> jnp.bool_:
-        """Check if the episode should terminate. TODO after debug is completed change this function with _get_done_original"""
-        cfg = self.config
-        credits = state.credits
-        spinning = jnp.any(state.reel_spinning)
-        max_credits_reached = credits >= 999
-        cannot_afford = credits < cfg.min_wager
-
-        # Sanity check: end episodes quickly so the pipeline stays happy
-        credits_limit = credits > 50
-        spins_limit = state.spins_played > 25
-
-        base_done = jnp.logical_or(max_credits_reached, jnp.logical_and(cannot_afford, ~spinning))
-        sanity_done = jnp.logical_or(credits_limit, spins_limit)
-
-        return jnp.logical_or(base_done, sanity_done)
-
-
 def main():
     """
     Simple test function to run the slot machine game with proper randomness.
