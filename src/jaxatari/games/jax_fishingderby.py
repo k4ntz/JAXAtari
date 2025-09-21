@@ -695,9 +695,9 @@ class FishingDerby(JaxEnvironment):
                     line_segments_x=p1.line_segments_x
                 ))
 
-                # Fish visually sits just below the hook
-                visual_offset = 2.0
-                new_y = hy + visual_offset
+                # Fish's vertical position is now relative to the hook's Y.
+                # The hook should be at the vertical middle of the fish sprite.
+                new_y = hy - (cfg.FISH_HEIGHT / 2.0)
 
                 # Write back fish position (X and Y)
                 updated_pos = new_fish_pos.at[fish_idx, 0].set(new_x)
@@ -706,12 +706,14 @@ class FishingDerby(JaxEnvironment):
                 # Do NOT force direction to sign(wobble); keep new_fish_dirs as computed
                 updated_dirs = new_fish_dirs
 
-                # Hook follows fish X with a small lerp (keeps line taut-ish)
-                hook_target_x = new_x
-                current_x = cfg.P1_START_X + new_rod_length + new_hook_x_offset
-                lerp_factor = 0.2
-                new_hook_x = current_x + (hook_target_x - current_x) * lerp_factor
-                new_offset = new_hook_x - (cfg.P1_START_X + new_rod_length)
+                # Hook's target X should be the fish's mouth.
+                # This depends on the direction the fish is facing.
+                # fish_dir < 0: facing left, mouth is at fish_x
+                # fish_dir > 0: facing right, mouth is at fish_x + FISH_WIDTH
+                is_facing_right = new_fish_dirs[fish_idx] > 0
+                mouth_x_offset = jnp.where(is_facing_right, cfg.FISH_WIDTH, 0.0)
+                hook_target_x = new_x + mouth_x_offset
+                new_offset = hook_target_x - (cfg.P1_START_X + new_rod_length)
 
                 # Occasional downward tug when NOT reeling on this frame
                 row_idx = jnp.clip(fish_idx, 0, len(cfg.FISH_PULL_PER_ROW) - 1).astype(jnp.int32)
