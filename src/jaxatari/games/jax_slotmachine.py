@@ -265,13 +265,14 @@ class SlotMachineRenderer(JAXGameRenderer):
         bg = jnp.zeros((h, w, 4), dtype=jnp.uint8)
 
         # Fill entire background with greenish tint
-        bg = bg.at[:, :, :3].set(jnp.array([140, 208, 140], dtype=jnp.uint8))
-        bg = bg.at[:, :, 3].set(jnp.uint8(255))
-
-        # Add blue border padding with 15 pixel in upper and lower corners, and 3 pixel left and right corner.
-        # Since our game is in Portrait mode, this is exactly the opposite in real game.
+        green_color = jnp.array([140, 208, 140], dtype=jnp.uint8)
+        alpha_value = jnp.uint8(255)
         border_color = jnp.array([70, 82, 184], dtype=jnp.uint8)
 
+        bg = bg.at[:, :, :3].set(green_color)
+        bg = bg.at[:, :, 3].set(alpha_value)
+
+        # Add borders
         bg = bg.at[:15, :, :3].set(border_color)
         bg = bg.at[-15:, :, :3].set(border_color)
         bg = bg.at[:, :3, :3].set(border_color)
@@ -280,13 +281,12 @@ class SlotMachineRenderer(JAXGameRenderer):
         return bg
 
     def _create_reel_frame(self) -> jnp.ndarray:
-        # Exact reel size
+        """Create reel frame """
         h, w = self.config.reel_height, self.config.reel_width
         frame = jnp.zeros((h, w, 4), dtype=jnp.uint8)
 
-        # Plain filled interior
-        light_blue = jnp.array([70, 82, 184], dtype=jnp.uint8)  # RGB
-        alpha = jnp.uint8(255)  # opaque; lower for translucency if desired
+        light_blue = jnp.array([70, 82, 184], dtype=jnp.uint8)
+        alpha = jnp.uint8(255)
 
         frame = frame.at[..., :3].set(light_blue)
         frame = frame.at[..., 3].set(alpha)
@@ -428,66 +428,56 @@ class SlotMachineRenderer(JAXGameRenderer):
 
     def _render_colored_digit(self, raster: jnp.ndarray, digit: int, x: int, y: int, color: jnp.ndarray) -> jnp.ndarray:
 
-        # # Pre-define all digit patterns as a JAX array
-
+        # Pre-define digit patterns
         digit_patterns = jnp.array([
-            # 0
-            [[0,1,1,1,1,0], [1,1,0,0,1,1], [1,1,0,0,1,1], [1,1,0,0,1,1], [1,1,0,0,1,1], [1,1,0,0,1,1], [1,1,0,0,1,1], [0,1,1,1,1,0]],
-            # 1
-            [[0,0,1,1,0,0], [0,1,1,1,0,0], [1,1,1,1,0,0], [0,0,1,1,0,0], [0,0,1,1,0,0], [0,0,1,1,0,0], [0,0,1,1,0,0], [1,1,1,1,1,1]],
-            # 2
-            [[1,1,1,1,1,0], [1,1,0,0,1,1], [0,0,0,0,1,1], [0,0,1,1,1,0], [0,1,1,0,0,0], [1,1,0,0,0,0], [1,1,0,0,0,0], [1,1,1,1,1,1]],
-            # 3
-            [[1,1,1,1,1,0], [0,0,0,0,1,1], [0,0,0,0,1,1], [0,1,1,1,1,0], [0,0,0,0,1,1], [0,0,0,0,1,1], [0,0,0,0,1,1], [1,1,1,1,1,0]],
-            # 4
-            [[1,1,0,0,1,1], [1,1,0,0,1,1], [1,1,0,0,1,1], [1,1,1,1,1,1], [0,0,0,0,1,1], [0,0,0,0,1,1], [0,0,0,0,1,1], [0,0,0,0,1,1]],
-            # 5
-            [[1,1,1,1,1,1], [1,1,0,0,0,0], [1,1,0,0,0,0], [1,1,1,1,1,0], [0,0,0,0,1,1], [0,0,0,0,1,1], [0,0,0,0,1,1], [1,1,1,1,1,0]],
-            # 6
-            [[0,1,1,1,1,0], [1,1,0,0,0,0], [1,1,0,0,0,0], [1,1,1,1,1,0], [1,1,0,0,1,1], [1,1,0,0,1,1], [1,1,0,0,1,1], [0,1,1,1,1,0]],
-            # 7
-            [[1,1,1,1,1,1], [0,0,0,0,1,1], [0,0,0,1,1,0], [0,0,1,1,0,0], [0,1,1,0,0,0], [0,1,1,0,0,0], [0,1,1,0,0,0], [0,1,1,0,0,0]],
-            # 8
-            [[0,1,1,1,1,0], [1,1,0,0,1,1], [1,1,0,0,1,1], [0,1,1,1,1,0], [1,1,0,0,1,1], [1,1,0,0,1,1], [1,1,0,0,1,1], [0,1,1,1,1,0]],
-            # 9
-            [[0,1,1,1,1,0], [1,1,0,0,1,1], [1,1,0,0,1,1], [1,1,0,0,1,1], [0,1,1,1,1,1], [0,0,0,0,1,1], [0,0,0,0,1,1], [0,1,1,1,1,0]],
+            [[0, 1, 1, 1, 1, 0], [1, 1, 0, 0, 1, 1], [1, 1, 0, 0, 1, 1], [1, 1, 0, 0, 1, 1], [1, 1, 0, 0, 1, 1],
+             [1, 1, 0, 0, 1, 1], [1, 1, 0, 0, 1, 1], [0, 1, 1, 1, 1, 0]],
+            [[0, 0, 1, 1, 0, 0], [0, 1, 1, 1, 0, 0], [1, 1, 1, 1, 0, 0], [0, 0, 1, 1, 0, 0], [0, 0, 1, 1, 0, 0],
+             [0, 0, 1, 1, 0, 0], [0, 0, 1, 1, 0, 0], [1, 1, 1, 1, 1, 1]],
+            [[1, 1, 1, 1, 1, 0], [1, 1, 0, 0, 1, 1], [0, 0, 0, 0, 1, 1], [0, 1, 1, 1, 1, 0], [1, 1, 0, 0, 0, 0],
+             [1, 1, 0, 0, 0, 0], [1, 1, 0, 0, 0, 0], [1, 1, 1, 1, 1, 1]],
+            [[1, 1, 1, 1, 1, 0], [0, 0, 0, 0, 1, 1], [0, 0, 0, 0, 1, 1], [0, 1, 1, 1, 1, 0], [0, 0, 0, 0, 1, 1],
+             [0, 0, 0, 0, 1, 1], [0, 0, 0, 0, 1, 1], [1, 1, 1, 1, 1, 0]],
+            [[1, 1, 0, 0, 1, 1], [1, 1, 0, 0, 1, 1], [1, 1, 0, 0, 1, 1], [1, 1, 1, 1, 1, 1], [0, 0, 0, 0, 1, 1],
+             [0, 0, 0, 0, 1, 1], [0, 0, 0, 0, 1, 1], [0, 0, 0, 0, 1, 1]],
+            [[1, 1, 1, 1, 1, 1], [1, 1, 0, 0, 0, 0], [1, 1, 0, 0, 0, 0], [1, 1, 1, 1, 1, 0], [0, 0, 0, 0, 1, 1],
+             [0, 0, 0, 0, 1, 1], [0, 0, 0, 0, 1, 1], [1, 1, 1, 1, 1, 0]],
+            [[0, 1, 1, 1, 1, 0], [1, 1, 0, 0, 0, 0], [1, 1, 0, 0, 0, 0], [1, 1, 1, 1, 1, 0], [1, 1, 0, 0, 1, 1],
+             [1, 1, 0, 0, 1, 1], [1, 1, 0, 0, 1, 1], [0, 1, 1, 1, 1, 0]],
+            [[1, 1, 1, 1, 1, 1], [0, 0, 0, 0, 1, 1], [0, 0, 0, 1, 1, 0], [0, 0, 1, 1, 0, 0], [0, 1, 1, 0, 0, 0],
+             [0, 1, 1, 0, 0, 0], [0, 1, 1, 0, 0, 0], [0, 1, 1, 0, 0, 0]],
+            [[0, 1, 1, 1, 1, 0], [1, 1, 0, 0, 1, 1], [1, 1, 0, 0, 1, 1], [0, 1, 1, 1, 1, 0], [1, 1, 0, 0, 1, 1],
+             [1, 1, 0, 0, 1, 1], [1, 1, 0, 0, 1, 1], [0, 1, 1, 1, 1, 0]],
+            [[0, 1, 1, 1, 1, 0], [1, 1, 0, 0, 1, 1], [1, 1, 0, 0, 1, 1], [1, 1, 0, 0, 1, 1], [0, 1, 1, 1, 1, 1],
+             [0, 0, 0, 0, 1, 1], [0, 0, 0, 0, 1, 1], [0, 1, 1, 1, 1, 0]],
         ], dtype=jnp.int32)
 
-        # Get the pattern for a certain digit
         pattern = digit_patterns[digit]
+        digit_h, digit_w = pattern.shape
 
-        # Create coordinate grids
-        rows, cols = jnp.ogrid[0:8, 0:6]
-        pixel_y = y + rows
-        pixel_x = x + cols
+        # Bounds checking
+        valid_x = (x >= 0) & (x + digit_w <= raster.shape[1])
+        valid_y = (y >= 0) & (y + digit_h <= raster.shape[0])
+        valid_render = valid_x & valid_y
 
-        # Create masks for bounds checking and pixel values
-        in_bounds_y = (pixel_y >= 0) & (pixel_y < raster.shape[0])
-        in_bounds_x = (pixel_x >= 0) & (pixel_x < raster.shape[1])
-        in_bounds = in_bounds_y & in_bounds_x
-        should_draw = (pattern > 0) & in_bounds
-
-        # Create indices for valid pixels
-        valid_indices = jnp.where(should_draw, 1, 0)
-
-        def update_pixel(i, raster_state):
-            row_i = i // 6
-            col_i = i % 6
-            py = y + row_i
-            px = x + col_i
-
-            # Check if this pixel should be drawn
-            should_update = (pattern[row_i, col_i] > 0) & (py >= 0) & (py < raster.shape[0]) & (px >= 0) & (px < raster.shape[1])
-
-            return jax.lax.cond(
-                should_update,
-                lambda r: r.at[py, px, :].set(color),
-                lambda r: r,
-                raster_state
+        def render_digit():
+            # Get the region where the digits should be rendered
+            target_region = raster[y:y+digit_h, x:x+digit_w, :]
+            
+            # Oonly render visible pixels
+            digit_mask = pattern > 0
+            
+            # Only update pixels where the pattern is > 0, leave others unchanged (transparent)
+            new_region = jnp.where(
+                digit_mask[..., None],
+                color[None, None, :],
+                target_region
             )
+            
+            # Update only the digit region
+            return raster.at[y:y+digit_h, x:x+digit_w, :].set(new_region)
 
-        # Apply updates using JAX scan
-        return jax.lax.fori_loop(0, 8 * 6, update_pixel, raster)
+        return jax.lax.cond(valid_render, render_digit, lambda: raster)
 
     def _draw_colored_box(self, raster: jnp.ndarray, x: int, y: int, width: int, height: int, color: jnp.ndarray) -> jnp.ndarray:
         """Fill a rectangle and clamp edges so we do not paint off-screen."""
@@ -544,71 +534,57 @@ class JaxSlotMachine(JaxEnvironment[SlotMachineState, SlotMachineObservation, Sl
             Action.DOWN,
         ]
 
-    def reset(
-            self, key: jax.random.PRNGKey = None
-    ) -> Tuple[SlotMachineObservation, SlotMachineState]:
+    def reset(self, key: jax.random.PRNGKey = None) -> Tuple[SlotMachineObservation, SlotMachineState]:
         """
         Reset the environment to initial state for a new game.
 
         Creates a fresh game state with starting credits and random reel positions.
         This is called at the beginning of each episode for RL training,
         or when the player runs out of credits.
+
         """
+
         cfg = self.config
 
-        # Generate a truly random key if none provided.
-        # I would be interested to know if in the future, after millions of epoch, the RL Agent finds a pattern to when
-        # the game is run. Please keep me posted.
         if key is None:
             import time
-            key = jax.random.PRNGKey(int(time.time() * 1000000) % (2**31))
+            key = jax.random.PRNGKey(int(time.time() * 1000000) % (2 ** 31))
 
-        # Initialize reels to random positions to prevent every fresh game from starting with the same symbols showing
-        key, *reel_keys = jax.random.split(key, cfg.num_reels + 1)
-        layout_list = []
-        position_list = []
+        key, layout_key, pos_key = jax.random.split(key, 3)
+
+        # Use JAX's optimized shuffle instead of manual permutation
+        def shuffle_reel(reel_key, base_layout):
+            return jax.random.permutation(reel_key, base_layout)
+
+        layout_keys = jax.random.split(layout_key, cfg.num_reels)
         base_layouts = cfg.reel_layouts
-        for i, reel_key in enumerate(reel_keys):
-            layout_key, pos_key = jax.random.split(reel_key)
-            perm = jax.random.permutation(layout_key, cfg.total_symbols_per_reel)
-            base_layout = base_layouts[i % base_layouts.shape[0]]
-            layout_list.append(base_layout[perm])
-            position_list.append(
-                jax.random.randint(pos_key, (), 0, cfg.total_symbols_per_reel)
-            )
 
-        initial_layouts = jnp.stack(layout_list)
-        initial_positions = jnp.array(position_list)
+        # Vectorized shuffle for all reels
+        initial_layouts = jax.vmap(shuffle_reel)(layout_keys, base_layouts)
 
-        # Create completely fresh initial state
+        # Random initial positions
+        pos_keys = jax.random.split(pos_key, cfg.num_reels)
+        initial_positions = jax.vmap(
+            lambda k: jax.random.randint(k, (), 0, cfg.total_symbols_per_reel)
+        )(pos_keys)
+
         initial_state = SlotMachineState(
-            # Economic state at start
-            credits=jnp.array(cfg.starting_credits, dtype=jnp.int32), # Start with 25
+            credits=jnp.array(cfg.starting_credits, dtype=jnp.int32),
             total_winnings=jnp.array(0, dtype=jnp.int32),
             spins_played=jnp.array(0, dtype=jnp.int32),
-
-            # Betting state
-            current_wager=jnp.array(cfg.min_wager, dtype=jnp.int32),   # Start with 1
-
-            # Reel state - random positions, everything stopped
-            reel_positions=initial_positions,                          # Random start positions
-            reel_spinning=jnp.zeros(cfg.num_reels, dtype=jnp.bool_),  # All reels stopped
-            spin_timers=jnp.zeros(cfg.num_reels, dtype=jnp.int32),    # No active timers
-            reel_speeds=jnp.ones(cfg.num_reels, dtype=jnp.int32),     # Default speed
+            current_wager=jnp.array(cfg.min_wager, dtype=jnp.int32),
+            reel_positions=initial_positions,
+            reel_spinning=jnp.zeros(cfg.num_reels, dtype=jnp.bool_),
+            spin_timers=jnp.zeros(cfg.num_reels, dtype=jnp.int32),
+            reel_speeds=jnp.ones(cfg.num_reels, dtype=jnp.int32),
             reel_layouts=initial_layouts,
-
-            # Input state - no buttons pressed, no cooldowns
-            spin_button_prev=jnp.array(False, dtype=jnp.bool_),       # FIRE not pressed
-            up_button_prev=jnp.array(False, dtype=jnp.bool_),         # UP not pressed
-            down_button_prev=jnp.array(False, dtype=jnp.bool_),       # DOWN not pressed
-            spin_cooldown=jnp.array(0, dtype=jnp.int32),              # No cooldown
-
-            # Visual effects state - clean slate
-            win_flash_timer=jnp.array(0, dtype=jnp.int32),            # No win flash
-            last_payout=jnp.array(0, dtype=jnp.int32),                # No recent payout
-            last_reward=jnp.array(0.0, dtype=jnp.float32),            # No recent reward
-
-            # Randomness state
+            spin_button_prev=jnp.array(False, dtype=jnp.bool_),
+            up_button_prev=jnp.array(False, dtype=jnp.bool_),
+            down_button_prev=jnp.array(False, dtype=jnp.bool_),
+            spin_cooldown=jnp.array(0, dtype=jnp.int32),
+            win_flash_timer=jnp.array(0, dtype=jnp.int32),
+            last_payout=jnp.array(0, dtype=jnp.int32),
+            last_reward=jnp.array(0.0, dtype=jnp.float32),
             rng=key,
         )
 
@@ -721,64 +697,48 @@ class JaxSlotMachine(JaxEnvironment[SlotMachineState, SlotMachineObservation, Sl
         """
         cfg = self.config
 
-        # Deduct the wager immediately
         new_credits = state.credits - state.current_wager
         new_spins = state.spins_played + 1
 
-        # Use provided key instead of state.rng to prevents reusing the same key pattern
         key, *reel_keys = jax.random.split(key, cfg.num_reels + 1)
 
-        spin_duration_list = []
-        layout_list = []
-        position_list = []
+        # Instead of full permutation, just shuffle positions
+        def generate_reel_data(reel_key, base_layout):
+            duration_key, pos_key = jax.random.split(reel_key)
+
+            # Simple shuffle is more efficient than full permutation
+            layout = jax.random.permutation(duration_key, base_layout)
+
+            # Generate other parameters
+            duration = jax.random.randint(
+                duration_key, (),
+                cfg.min_spin_duration,
+                cfg.max_spin_duration
+            )
+            position = jax.random.randint(pos_key, (), 0, cfg.total_symbols_per_reel)
+
+            return layout, duration, position
+
+        # Vectorize across all reels
+        reel_keys_array = jnp.array(reel_keys)
         base_layouts = cfg.reel_layouts
 
-        for i, reel_key in enumerate(reel_keys):
-            layout_key, rest_key = jax.random.split(reel_key)
-            duration_key, pos_key = jax.random.split(rest_key)
+        layouts, durations, positions = jax.vmap(generate_reel_data)(reel_keys_array, base_layouts)
 
-            perm = jax.random.permutation(layout_key, cfg.total_symbols_per_reel)
-            base_layout = base_layouts[i % base_layouts.shape[0]]
-            layout = base_layout[perm]
-            layout_list.append(layout)
-
-            duration = jax.random.randint(
-                duration_key,
-                (),
-                cfg.min_spin_duration + i * cfg.reel_stop_delay,
-                cfg.max_spin_duration + i * cfg.reel_stop_delay,
-            )
-            spin_duration_list.append(duration)
-
-            position = jax.random.randint(
-                pos_key,
-                (),
-                0,
-                cfg.total_symbols_per_reel,
-            )
-            position_list.append(position)
-
-        spin_durations = jnp.array(spin_duration_list)
-        final_positions = jnp.array(position_list)
-        new_layouts = jnp.stack(layout_list)
+        # Add staggered delays for realistic reel stopping
+        stagger_delays = jnp.arange(cfg.num_reels) * cfg.reel_stop_delay
+        final_durations = durations + stagger_delays
 
         return state._replace(
-            # Economic state
-            credits=new_credits,                                     # Wager deducted
-            spins_played=new_spins,                                  # Increment spin counter
-
-            # Reel state - everything starts spinning
-            reel_spinning=jnp.ones(cfg.num_reels, dtype=jnp.bool_), # All reels spinning
-            spin_timers=spin_durations,                              # Countdown timers
-            reel_positions=final_positions,                          # Final outcomes (hidden)
-            reel_layouts=new_layouts,
-
-            # Control state
-            spin_cooldown=jnp.array(10, dtype=jnp.int32),           # Brief cooldown
-
-            # Reset displays to build suspense
-            last_payout=jnp.array(0, dtype=jnp.int32),              # Clear old payout
-            last_reward=jnp.array(0.0, dtype=jnp.float32),          # Clear old reward
+            credits=new_credits,
+            spins_played=new_spins,
+            reel_spinning=jnp.ones(cfg.num_reels, dtype=jnp.bool_),
+            spin_timers=final_durations,
+            reel_positions=positions,
+            reel_layouts=layouts,
+            spin_cooldown=jnp.array(10, dtype=jnp.int32),
+            last_payout=jnp.array(0, dtype=jnp.int32),
+            last_reward=jnp.array(0.0, dtype=jnp.float32),
         )
 
     def _update_reels(self, state: SlotMachineState) -> SlotMachineState:
@@ -834,74 +794,55 @@ class JaxSlotMachine(JaxEnvironment[SlotMachineState, SlotMachineObservation, Sl
         """
         cfg = self.config
 
-        # Only check for wins when all reels have stopped, and we haven't already processed a win
-        # And we have actually played at least one spin to prevent initial state reward
         all_stopped = ~jnp.any(state.reel_spinning)
         has_spun = state.spins_played > 0
         should_check_win = all_stopped & (state.last_payout == 0) & has_spun
 
-        def _process_win(s: SlotMachineState) -> SlotMachineState:
+        def process_win_vectorized(s: SlotMachineState) -> SlotMachineState:
             """
             Helper function to process win calculation with reward system.
             """
 
-            # Get the center symbol from each reel (the payline)
-            center_symbols = jnp.array([
-                s.reel_layouts[i, (s.reel_positions[i] + 1) % cfg.total_symbols_per_reel]
-                for i in range(cfg.num_reels)
+            center_indices = (s.reel_positions + 1) % cfg.total_symbols_per_reel
+            center_symbols = s.reel_layouts[jnp.arange(cfg.num_reels), center_indices]
+
+            s0, s1, s2 = center_symbols[0], center_symbols[1], center_symbols[2]
+
+            # Vectorized win condition evaluation
+            win_conditions = jnp.array([
+                jnp.all(center_symbols == 5),  # Three Cars - 200x
+                jnp.all(center_symbols == 2),  # Three Bars - 100x
+                jnp.all(center_symbols == 4),  # Three Bells - 18x
+                (s0 == 4) & (s1 == 4) & (s2 == 2),  # Two Bells + Bar - 18x
+                jnp.all(center_symbols == 3),  # Three TVs - 14x
+                (s0 == 3) & (s1 == 3) & (s2 == 2),  # Two TVs + Bar - 14x
+                jnp.all(center_symbols == 1),  # Three Tables - 10x
+                (s0 == 1) & (s1 == 1) & (s2 == 2),  # Two Tables + Bar - 10x
+                (s0 == 0) & (s1 == 0),  # Cactus on reels 1 & 2 - 5x
+                (s0 == 0) & (s1 != 0) & (s2 != 0),  # Cactus on reel 1 only - 2x
             ])
 
-            reel0, reel1, reel2 = center_symbols
+            multipliers = jnp.array([200, 100, 18, 18, 14, 14, 10, 10, 5, 2])
 
-            payout = jnp.select([
-                jnp.all(center_symbols == 5),
-                jnp.all(center_symbols == 2),
-                jnp.all(center_symbols == 4),
-                (reel0 == 4) & (reel1 == 4) & (reel2 == 2),
-                jnp.all(center_symbols == 3),
-                (reel0 == 3) & (reel1 == 3) & (reel2 == 2),
-                jnp.all(center_symbols == 1),
-                (reel0 == 1) & (reel1 == 1) & (reel2 == 2),
-                (reel0 == 0) & (reel1 == 0) & (reel2 != 0),
-                (reel0 == 0) & (reel1 != 0) & (reel2 != 0),
+            # Find first winning condition (highest priority)
+            win_indices = jnp.where(win_conditions, jnp.arange(len(win_conditions)), len(win_conditions))
+            first_win = jnp.min(win_indices)
+            has_win = first_win < len(win_conditions)
 
-            ], [
-                200 * s.current_wager,  # Three Cars - Ultimate Jackpot
-                100 * s.current_wager,  # Three Bars - Special Jackpot
-                18 * s.current_wager,   # Three Bells
-                18 * s.current_wager,   # Two Bells + One Bar
-                14 * s.current_wager,   # Three TVs
-                14 * s.current_wager,   # Two TVs + One Bar
-                10 * s.current_wager,   # Three Tables
-                10 * s.current_wager,   # Two Tables + One Bar
-                5 * s.current_wager,    # Cactus on reels 1 & 2
-                2 * s.current_wager,    # One Cactus on first reel only
-            ],
-            default=0)  # No payout for other combinations
-
-            """
-            Reward System: (More info under https://www.atarimania.com/game-atari-2600-vcs-slot-machine_8212.html)
-            """
-
-            # Update game state with winnings
-            new_credits = s.credits + payout
-            new_winnings = s.total_winnings + payout
-            new_flash_timer = jnp.where(payout > 0, 60, 0)  # 1 second flash at 60fps
-
-            return s._replace(
-                credits=new_credits,
-                total_winnings=new_winnings,
-                last_payout=payout,
-                win_flash_timer=new_flash_timer,
+            payout = jax.lax.cond(
+                has_win,
+                lambda: multipliers[first_win] * s.current_wager,
+                lambda: 0
             )
 
-        # Process wins when appropriate
-        return jax.lax.cond(
-            should_check_win,
-            _process_win,
-            lambda s: s,
-            state
-        )
+            return s._replace(
+                credits=s.credits + payout,
+                total_winnings=s.total_winnings + payout,
+                last_payout=payout,
+                win_flash_timer=jnp.where(payout > 0, 60, 0),
+            )
+
+        return jax.lax.cond(should_check_win, process_win_vectorized, lambda s: s, state)
 
     def _update_timers(self, state: SlotMachineState) -> SlotMachineState:
         """
@@ -930,13 +871,12 @@ class JaxSlotMachine(JaxEnvironment[SlotMachineState, SlotMachineObservation, Sl
         cfg = self.config
 
         # Get currently visible symbols for each reel from static layout
-        reel_symbols = jnp.zeros((cfg.num_reels, cfg.symbols_per_reel), dtype=jnp.int32)
+        reel_indices = jnp.arange(cfg.num_reels)[:, None]
+        slot_indices = jnp.arange(cfg.symbols_per_reel)[None, :]
 
-        for reel_idx in range(cfg.num_reels):
-            for symbol_slot in range(cfg.symbols_per_reel):
-                symbol_index = (state.reel_positions[reel_idx] + symbol_slot) % cfg.total_symbols_per_reel
-                symbol_type = state.reel_layouts[reel_idx, symbol_index]
-                reel_symbols = reel_symbols.at[reel_idx, symbol_slot].set(symbol_type)
+        # Compute all symbol indices at once
+        symbol_indices = (state.reel_positions[:, None] + slot_indices) % cfg.total_symbols_per_reel
+        reel_symbols = state.reel_layouts[reel_indices, symbol_indices]
 
         return SlotMachineObservation(
             credits=state.credits,
@@ -982,19 +922,18 @@ class JaxSlotMachine(JaxEnvironment[SlotMachineState, SlotMachineObservation, Sl
         - Payouts/rewards (Integer to keep track of payouts. Important for debugging.)
         """
         cfg = self.config
-        box_dtype = jnp.float32
+
         return spaces.Dict({
-            'credits': spaces.Box(low=0, high=9999, shape=(), dtype=box_dtype),
-            'current_wager': spaces.Box(low=cfg.min_wager, high=cfg.max_wager, shape=(), dtype=box_dtype),
+            'credits': spaces.Box(low=0, high=9999, shape=(), dtype=jnp.float32),
+            'current_wager': spaces.Box(low=cfg.min_wager, high=cfg.max_wager, shape=(), dtype=jnp.float32),
             'reel_symbols': spaces.Box(
-                low=0,
-                high=cfg.num_symbol_types - 1,
+                low=0, high=cfg.num_symbol_types - 1,
                 shape=(cfg.num_reels, cfg.symbols_per_reel),
-                dtype=box_dtype
+                dtype=jnp.float32  # Changed from box_dtype variable
             ),
-            'is_spinning': spaces.Box(low=0, high=1, shape=(), dtype=box_dtype),
-            'last_payout': spaces.Box(low=0, high=1000, shape=(), dtype=box_dtype),
-            'last_reward': spaces.Box(low=0.0, high=1000.0, shape=(), dtype=box_dtype),
+            'is_spinning': spaces.Box(low=0, high=1, shape=(), dtype=jnp.float32),
+            'last_payout': spaces.Box(low=0, high=1000, shape=(), dtype=jnp.float32),
+            'last_reward': spaces.Box(low=0.0, high=1000.0, shape=(), dtype=jnp.float32),
         })
 
     def image_space(self) -> spaces.Space:
@@ -1064,7 +1003,7 @@ class JaxSlotMachine(JaxEnvironment[SlotMachineState, SlotMachineObservation, Sl
         return jnp.logical_or(max_credits_reached, jnp.logical_and(cannot_afford, ~spinning))
 
     def _get_done(self, state: SlotMachineState) -> jnp.bool_:
-        """Check if the episode should terminate."""
+        """Check if the episode should terminate. TODO after debug is completed change this function with _get_done_original"""
         cfg = self.config
         credits = state.credits
         spinning = jnp.any(state.reel_spinning)
