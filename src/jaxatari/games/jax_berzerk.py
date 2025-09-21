@@ -4,9 +4,8 @@ import jax
 import jax.numpy as jnp
 import chex
 from jaxatari.environment import JaxEnvironment, JAXAtariAction as Action
-from gymnax.environments import spaces
+import jaxatari.spaces as spaces
 import os
-import time
 from jaxatari.renderers import JAXGameRenderer
 import jaxatari.rendering.jax_rendering_utils as jr
 
@@ -59,7 +58,7 @@ class BerzerkConstants(NamedTuple):
     )
 
     # Variations Evil Otto 
-    ENABLE_EVIL_OTTO = True     # Variation 1: enable immortal evil otto
+    ENABLE_EVIL_OTTO = False     # Variation 1: enable immortal evil otto
     MORTAL_EVIL_OTTO = False    # Variation 2: enable mortal evil otto (ENABLE_EVIL_OTTO has to be True)
     EVIL_OTTO_SIZE = (8, 7)
     EVIL_OTTO_SPEED = 0.4
@@ -342,18 +341,20 @@ class JaxBerzerk(JaxEnvironment[BerzerkState, BerzerkObservation, BerzerkInfo, B
 
 
     @partial(jax.jit, static_argnums=(0, ))
-    def object_hits_wall(self, object_pos, object_size, room_counter, entry_direction, num_points_per_side=10):
+    def object_hits_wall(self, object_pos, object_size, room_counter, entry_direction, num_points_per_side=3):
         # get current room id (0–3 → mid_walls_1 to _4)
         room_idx = JaxBerzerk.get_room_index(room_counter)
 
         # get respective wall mask (True = collision)
         def load_mask(idx):
-            return jax.lax.switch(idx, [
-                lambda: self.renderer.room_collision_masks['mid_walls_1'],
-                lambda: self.renderer.room_collision_masks['mid_walls_2'],
-                lambda: self.renderer.room_collision_masks['mid_walls_3'],
-                lambda: self.renderer.room_collision_masks['mid_walls_4'],
+            masks = jnp.array([
+                self.renderer.room_collision_masks['mid_walls_1'],
+                self.renderer.room_collision_masks['mid_walls_2'],
+                self.renderer.room_collision_masks['mid_walls_3'],
+                self.renderer.room_collision_masks['mid_walls_4'],
             ])
+            return masks[idx]
+
         mid_mask = load_mask(room_idx)
         outer_mask = self.renderer.room_collision_masks['level_outer_walls']
 
@@ -636,7 +637,7 @@ class JaxBerzerk(JaxEnvironment[BerzerkState, BerzerkObservation, BerzerkInfo, B
                 jax.vmap(lambda enemy_position: self.rects_overlap(
                     pos, self.consts.ENEMY_SIZE, enemy_position, self.consts.ENEMY_SIZE))(placed))
             invalid = in_wall | on_player | overlap_enemy
-            return jnp.logical_and(invalid, attempts < 200)
+            return jnp.logical_and(invalid, attempts < 2)
 
         def body2(carry2):
             _, rng2, attempts, placed = carry2
@@ -810,7 +811,7 @@ class JaxBerzerk(JaxEnvironment[BerzerkState, BerzerkObservation, BerzerkInfo, B
         game_over_active = state.game_over_timer > 0
         game_over_timer = jnp.maximum(state.game_over_timer - 1, 0)
 
-        def handle_game_over(_):
+        def handle_game_over():
             new_state = state._replace(game_over_timer=game_over_timer)
             return (
                 self._get_observation(new_state),
@@ -825,7 +826,7 @@ class JaxBerzerk(JaxEnvironment[BerzerkState, BerzerkObservation, BerzerkInfo, B
         room_transition_active = state.room_transition_timer > 0
         transition_timer = jnp.maximum(state.room_transition_timer - 1, 0)
 
-        def handle_room_transition(_):
+        def handle_room_transition():
             new_state = state._replace(room_transition_timer=transition_timer)
 
             def finished_transition():
@@ -896,7 +897,7 @@ class JaxBerzerk(JaxEnvironment[BerzerkState, BerzerkObservation, BerzerkInfo, B
 
 
         # Handle normal gameplay
-        def handle_normal(_):
+        def handle_normal():
             #######################################################
             # 1. Update Player
             #######################################################
@@ -1067,7 +1068,6 @@ class JaxBerzerk(JaxEnvironment[BerzerkState, BerzerkObservation, BerzerkInfo, B
                           & ~jnp.all(target_pos == shooter_pos)
                 )(updated_enemy_pos)
             )(enemy_bullets, enemy_bullet_sizes, updated_enemy_pos, enemy_bullet_active)
-            enemy_hit_by_friendly_fire = jnp.any(enemy_friendly_fire_hits, axis=0)
 
             enemy_touch_hits = jax.vmap(
                 lambda pos_a, alive_a: jax.vmap(
@@ -1317,11 +1317,11 @@ class JaxBerzerk(JaxEnvironment[BerzerkState, BerzerkObservation, BerzerkInfo, B
         # call appropriate step handler for current frame
         return jax.lax.cond(
             game_over_active,
-            handle_game_over,
+            lambda _: handle_game_over(),
             lambda _: jax.lax.cond(
                 room_transition_active,
-                handle_room_transition,
-                handle_normal,
+                lambda _: handle_room_transition(),
+                lambda _: handle_normal(),
                 operand=None
             ),
             operand=None
