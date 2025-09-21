@@ -3,6 +3,7 @@ import inspect
 
 from jaxatari.environment import JaxEnvironment
 
+
 # Map of game names to their module paths
 GAME_MODULES = {
     "pong": "jaxatari.games.jax_pong",
@@ -13,11 +14,9 @@ GAME_MODULES = {
     # Add new games here
 }
 
-
 def list_available_games() -> list[str]:
     """Lists all available, registered games."""
     return list(GAME_MODULES.keys())
-
 
 def make(game_name: str, mode: int = 0, difficulty: int = 0) -> JaxEnvironment:
     """
@@ -46,7 +45,7 @@ def make(game_name: str, mode: int = 0, difficulty: int = 0) -> JaxEnvironment:
         for _, obj in inspect.getmembers(module):
             if inspect.isclass(obj) and issubclass(obj, JaxEnvironment) and obj is not JaxEnvironment:
                 env_class = obj
-                break  # Found it
+                break # Found it
 
         if env_class is None:
             raise ImportError(f"No JaxEnvironment subclass found in {GAME_MODULES[game_name]}")
