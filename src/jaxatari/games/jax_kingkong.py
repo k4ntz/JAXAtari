@@ -83,6 +83,7 @@ class KingKongConstants(NamedTuple):
 
 	# Entities 
 	KONG_START_LOCATION: chex.Array = jnp.array([31, 228])
+	KONG_LOWER_LOCATION: chex.Array = KONG_START_LOCATION
 	PRINCESS_START_LOCATION: chex.Array = jnp.array([93, 37])
 	PRINCESS_RESPAWN_LOCATION: chex.Array = jnp.array([77, 37]) # at the start the princess teleports to the left, this al 
 	PRINCESS_SUCCESS_LOCATION: chex.Array = jnp.array([]) # TODO 
@@ -187,7 +188,8 @@ class KingKongConstants(NamedTuple):
 
 	###################################################################
 	# Define gameplay stage
-	DUR_GAMEPLAY: int = 99 * FPS # 990 / 10 = 99 seconds, in steps 
+	# unused bc we have bonus_timer but could technically replace with this 
+	# DUR_GAMEPLAY: int = 99 * FPS # 990 / 10 = 99 seconds, in steps 
 	SEQ_GAMEPLAY_PRINCESS_TELEPORT: int = 0  
 	###################################################################
 
@@ -219,6 +221,8 @@ class KingKongConstants(NamedTuple):
 	### Game logic constants 
 	BONUS_START: int = 990
 	BONUS_DECREMENT: int = 10 # per second 
+
+	FLOOR_KONG_MOVE_DOWN: int = 4 # fifth floor (start count at 0)
 
 	PRINCESS_MOVE_OPTIONS: chex.Array = jnp.array([0, 0, 0, 0, 3, -3, 6, -6]) 
 
@@ -322,7 +326,7 @@ class JaxKingKong(JaxEnvironment[KingKongState, KingKongObservation, KingKongInf
 
 		state = KingKongState(
 			# Game state
-			gamestate=jnp.array(self.consts.GAMESTATE_IDLE).astype(jnp.int32),
+			gamestate=jnp.array(self.consts.GAMESTATE_GAMEPLAY).astype(jnp.int32),
 			stage_steps=jnp.array(0).astype(jnp.int32),
 			step_counter=jnp.array(0).astype(jnp.int32),
 			rng_key=key,
@@ -470,7 +474,6 @@ class JaxKingKong(JaxEnvironment[KingKongState, KingKongObservation, KingKongInf
 			)
 
 		return jax.lax.cond(state.stage_steps % 4 == 0, do_normal_step, lambda _: state, operand=None)
-
 
 	def _step_idle(self, state: KingKongState, action: chex.Array) -> KingKongState:
 		should_transition = state.stage_steps >= self.consts.DUR_IDLE
@@ -640,59 +643,71 @@ class JaxKingKong(JaxEnvironment[KingKongState, KingKongObservation, KingKongInf
 		return jax.lax.cond(should_transition, do_transition, do_normal_step, operand=None)
 	
 	def _step_gameplay(self, state: KingKongState, action: chex.Array) -> KingKongState:
-		# Determine if we should transition immediately (success, death or timer expired)
 		player_reached_top = state.player_floor >= 8
 		timer_expired = state.bonus_timer <= 0
 		should_die = jnp.logical_or(timer_expired, state.death_type != self.consts.DEATH_TYPE_NONE)
 		should_transition = jnp.logical_or(player_reached_top, should_die)
 
+		final_stage_steps = state.stage_steps + 1
+
 		def do_transition(_):
 			new_gamestate = jax.lax.cond(
 				player_reached_top,
-				lambda: self.consts.GAMESTATE_SUCCESS,
-				lambda: self.consts.GAMESTATE_DEATH
+				lambda _: self.consts.GAMESTATE_SUCCESS,
+				lambda _: self.consts.GAMESTATE_DEATH,
+				operand=None
 			)
 			return state._replace(
 				gamestate=new_gamestate,
 				stage_steps=0,
 				death_type=jax.lax.cond(
 					jnp.logical_and(timer_expired, state.death_type == self.consts.DEATH_TYPE_NONE),
-					lambda: self.consts.DEATH_TYPE_BOMB_EXPLODE,
-					lambda: state.death_type
+					lambda _: self.consts.DEATH_TYPE_BOMB_EXPLODE,
+					lambda _: state.death_type,
+					operand=None
 				)
 			)
 
 		def do_normal_step(_):
-			# Princess teleport at start
+			# princess teleport
 			princess_x = jax.lax.cond(
-				state.stage_steps == self.consts.SEQ_GAMEPLAY_PRINCESS_TELEPORT,
-				lambda: self.consts.PRINCESS_RESPAWN_LOCATION[0],
-				lambda: state.princess_x
+			(state.stage_steps == self.consts.SEQ_GAMEPLAY_PRINCESS_TELEPORT),
+				lambda _: self.consts.PRINCESS_RESPAWN_LOCATION[0],
+				lambda _: state.princess_x,
+				operand=None
 			)
 
-			# Update bonus timer
+			# bonus timer ticks once per second
 			new_bonus_timer = jax.lax.cond(
 				jnp.logical_and(state.stage_steps % self.consts.FPS == 0, state.bonus_timer > 0),
-				lambda: jnp.maximum(0, state.bonus_timer - self.consts.BONUS_DECREMENT),
-				lambda: state.bonus_timer
+				lambda _: jnp.maximum(0, state.bonus_timer - self.consts.BONUS_DECREMENT),
+				lambda _: state.bonus_timer,
+				operand=None
 			)
 
-			# Handle player movement
-			new_state = self._update_player_gameplay(state, action)
+			# player update every 4 steps
+			new_state: KingKongState = jax.lax.cond(
+				(state.stage_steps % 4) == 0,
+				lambda _: self._update_player_gameplay(state, action),
+				lambda _: state,
+				operand=None
+			)
+
 			new_state = new_state._replace(
 				bonus_timer=new_bonus_timer,
 				princess_x=princess_x,
 				stage_steps=state.stage_steps
 			)
 
-			# Update bombs and collisions
-			new_state = self._update_bombs(new_state)
-			new_state = self._check_collisions(new_state)
+			# bombs/kong/collisions every 2 steps
+			new_state = jax.lax.cond(
+				(state.stage_steps % 2) == 0,
+				lambda _: self._check_collisions(self._update_kong(self._update_bombs(new_state))),
+				lambda _: new_state,
+				operand=None
+			)
 
-			# Increment stage steps
-			new_state = new_state._replace(stage_steps=state.stage_steps + 1)
-
-			return new_state
+			return new_state._replace(stage_steps=final_stage_steps)
 
 		return jax.lax.cond(should_transition, do_transition, do_normal_step, operand=None)
 
@@ -709,7 +724,7 @@ class JaxKingKong(JaxEnvironment[KingKongState, KingKongObservation, KingKongInf
 		# Get current floor bounds
 		current_floor_bounds = self.consts.FLOOR_BOUNDS[state.player_floor]
 		min_x = current_floor_bounds[0]
-		max_x = current_floor_bounds[1]
+		max_x = current_floor_bounds[1] - self.consts.PLAYER_SIZE[0]
 		
 		# Handle horizontal movement
 		new_player_x = state.player_x
@@ -964,6 +979,26 @@ class JaxKingKong(JaxEnvironment[KingKongState, KingKongObservation, KingKongInf
 		return state._replace(
 			death_type=death_type,
 			score=new_score
+		)
+	
+	def _update_kong(self, state: KingKongState) -> KingKongState:
+		# Move Kong down when player reaches threshold floor
+		# TODO animate 
+		new_kong_y = jax.lax.cond(
+			state.player_floor >= self.consts.FLOOR_KONG_MOVE_DOWN,
+			lambda: self.consts.KONG_LOWER_LOCATION[1],
+			lambda: state.kong_y
+		)
+
+		new_kong_x = jax.lax.cond(
+			state.player_floor >= self.consts.FLOOR_KONG_MOVE_DOWN,
+			lambda: self.consts.KONG_LOWER_LOCATION[0],
+			lambda: state.kong_x
+		)
+
+		return state._replace(
+			kong_x=new_kong_x,
+			kong_y=new_kong_y,
 		)
 
 	def _step_death(self, state: KingKongState, action: chex.Array) -> KingKongState:
@@ -1223,33 +1258,45 @@ class KingKongRenderer(JAXGameRenderer):
 		
 		# Render player based on state
 		def get_player_sprite():
-			# Simplified sprite selection using direct conditionals
-			sprite = jax.lax.cond(
-				jnp.logical_or(
+			def is_idle_state():
+				return jnp.logical_or(
 					state.player_state == self.consts.PLAYER_IDLE_LEFT,
 					state.player_state == self.consts.PLAYER_IDLE_RIGHT
-				),
+				)
+
+			def is_dead_or_fall():
+				return jnp.logical_or(
+					state.player_state == self.consts.PLAYER_FALL,
+					state.player_state == self.consts.PLAYER_DEAD
+				)
+
+			def walk_cycle():
+				frame = ((state.step_counter - 1) // 4) % 4
+				return jax.lax.switch(
+					frame,
+					[
+						lambda: self.SPRITE_PLAYER_IDLE,
+						lambda: self.SPRITE_PLAYER_MOVE1,
+						lambda: self.SPRITE_PLAYER_MOVE2,
+						lambda: self.SPRITE_PLAYER_MOVE1,
+					]
+				)
+
+			sprite = jax.lax.cond(
+				is_idle_state(),
 				lambda: self.SPRITE_PLAYER_IDLE,
 				lambda: jax.lax.cond(
-					jnp.logical_or(
-						state.player_state == self.consts.PLAYER_FALL,
-						state.player_state == self.consts.PLAYER_DEAD
-					),
+					is_dead_or_fall(),
 					lambda: self.SPRITE_PLAYER_DEAD,
-					lambda: jax.lax.cond(
-						state.step_counter % 6 < 3,
-						lambda: self.SPRITE_PLAYER_MOVE1,
-						lambda: self.SPRITE_PLAYER_MOVE2
-					)
+					walk_cycle
 				)
 			)
-			
-			# Mirror sprite if facing left
+
 			should_mirror = jnp.logical_or(
 				state.player_state == self.consts.PLAYER_IDLE_LEFT,
 				state.player_state == self.consts.PLAYER_MOVE_LEFT
 			)
-			
+
 			return jax.lax.cond(
 				should_mirror,
 				lambda s: s[:, :, ::-1],
