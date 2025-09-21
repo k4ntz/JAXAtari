@@ -151,6 +151,7 @@ def get_sprite_frame(frames, frame_idx, loop=True):
         lambda: blank_frame,
     )
 
+
 @jax.jit
 def render_at(raster, x, y, sprite_frame, 
               flip_horizontal=False, 
