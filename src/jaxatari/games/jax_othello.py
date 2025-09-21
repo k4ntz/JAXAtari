@@ -2772,7 +2772,7 @@ class JaxOthello(JaxEnvironment[OthelloState, OthelloObservation, OthelloInfo, O
         final__step_state = final__step_state._replace(end_of_game_reached=has_game_ended.astype(jnp.int32))
 
         done = self._get_done(final__step_state)
-        env_reward = self._get_env_reward(state, final__step_state)
+        env_reward = self._get_reward(state, final__step_state)
         all_rewards = self._get_all_reward(state, final__step_state)
         info = self._get_info(new_state, all_rewards)
         observation = self._get_observation(final__step_state)
@@ -2780,11 +2780,11 @@ class JaxOthello(JaxEnvironment[OthelloState, OthelloObservation, OthelloInfo, O
         return observation, final__step_state, env_reward, done, info        
 
     @partial(jax.jit, static_argnums=(0,))
-    def _get_info(self, state: OthelloState, all_rewards: chex.Array) -> OthelloInfo:
+    def _get_info(self, state: OthelloState, all_rewards: chex.Array = None) -> OthelloInfo:
         return OthelloInfo(time=state.step_counter, all_rewards=all_rewards)
 
     @partial(jax.jit, static_argnums=(0,))
-    def _get_env_reward(self, previous_state: OthelloState, state: OthelloState):
+    def _get_reward(self, previous_state: OthelloState, state: OthelloState):
         return (state.player_score - state.enemy_score) - (
             previous_state.player_score - previous_state.enemy_score
         )
