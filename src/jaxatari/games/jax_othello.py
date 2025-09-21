@@ -75,18 +75,6 @@ class OthelloConstants(NamedTuple):
     WINDOW_HEIGHT = 210 * 3
     WINDOW_WIDTH = 160 * 3
 
-    # Actions constants
-    NOOP = Action.NOOP
-    UP = Action.UP
-    DOWN = Action.DOWN
-    LEFT = Action.LEFT
-    RIGHT = Action.RIGHT
-    UPRIGHT = Action.UPRIGHT
-    UPLEFT = Action.UPLEFT
-    DOWNRIGHT = Action.DOWNRIGHT
-    DOWNLEFT = Action.DOWNLEFT
-    PLACE = Action.FIRE
-
 
 # Describes the possible configurations of one individual field (Not Taken, Player and Enemy)
 class FieldColor(enum.IntEnum):
@@ -133,16 +121,16 @@ class JaxOthello(JaxEnvironment[OthelloState, OthelloObservation, OthelloInfo, O
             reward_funcs = tuple(reward_funcs)
         self.reward_funcs = reward_funcs
         self.action_set = self.action_set = [
-            self.consts.NOOP,
-            self.consts.PLACE,
-            self.consts.RIGHT,
-            self.consts.LEFT,
-            self.consts.UP,
-            self.consts.DOWN,
-            self.consts.UPLEFT,
-            self.consts.UPRIGHT,
-            self.consts.DOWNLEFT,
-            self.consts.DOWNRIGHT
+            Action.NOOP,
+            Action.FIRE,
+            Action.RIGHT,
+            Action.LEFT,
+            Action.UP,
+            Action.DOWN,
+            Action.UPLEFT,
+            Action.UPRIGHT,
+            Action.DOWNLEFT,
+            Action.DOWNRIGHT
         ]
         self.obs_size = 130
 
@@ -183,15 +171,15 @@ class JaxOthello(JaxEnvironment[OthelloState, OthelloObservation, OthelloInfo, O
                     If PLACE was chosen, this is the confirmed field position.
         """
         # Determine the type of action taken by the player
-        is_place = jnp.equal(action, self.consts.PLACE)
-        is_up = jnp.equal(action, self.consts.UP)
-        is_right = jnp.equal(action, self.consts.RIGHT)
-        is_down = jnp.equal(action, self.consts.DOWN)
-        is_left = jnp.equal(action, self.consts.LEFT)
-        is_upleft = jnp.equal(action, self.consts.UPLEFT)
-        is_upright = jnp.equal(action, self.consts.UPRIGHT)
-        is_downleft = jnp.equal(action, self.consts.DOWNLEFT)
-        is_downright = jnp.equal(action, self.consts.DOWNRIGHT)
+        is_place = jnp.equal(action, Action.FIRE)
+        is_up = jnp.equal(action, Action.UP)
+        is_right = jnp.equal(action, Action.RIGHT)
+        is_down = jnp.equal(action, Action.DOWN)
+        is_left = jnp.equal(action, Action.LEFT)
+        is_upleft = jnp.equal(action, Action.UPLEFT)
+        is_upright = jnp.equal(action, Action.UPRIGHT)
+        is_downleft = jnp.equal(action, Action.DOWNLEFT)
+        is_downright = jnp.equal(action, Action.DOWNRIGHT)
 
         # handle placement action
         def place_disc(field_choice_player):
@@ -2841,7 +2829,7 @@ class JaxOthello(JaxEnvironment[OthelloState, OthelloObservation, OthelloInfo, O
         return state.end_of_game_reached
 
     def action_space(self) -> spaces.Discrete:
-        return jnp.array(len(self.action_set))
+        return spaces.Discrete(9)
 
     def observation_space(self) -> spaces.Dict:
         return spaces.Dict({
