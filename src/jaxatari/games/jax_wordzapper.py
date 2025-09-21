@@ -1,15 +1,14 @@
 import os
-import time
 from functools import partial
 from typing import NamedTuple, Tuple
 import jax
 import jax.numpy as jnp
 import chex
-from gymnax.environments import spaces
-
+#from gymnax.environments import spaces
+import jaxatari.spaces as spaces
+from jaxatari.environment import JaxEnvironment, JAXAtariAction as Action
 from jaxatari.renderers import JAXGameRenderer
 import jaxatari.rendering.jax_rendering_utils as jr
-from jaxatari.environment import JaxEnvironment, JAXAtariAction as Action
 
 
 class WordZapperConstants(NamedTuple) :
