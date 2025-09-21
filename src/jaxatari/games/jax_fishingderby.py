@@ -481,8 +481,8 @@ class FishingDerby(JaxEnvironment):
 
             # Water resistance parameters
             water_resistance_factor = 0.15  # How much the hook resists movement in water
-            air_recovery_factor = 0.3      # How quickly hook returns to rod when above water
-            smooth_recovery_factor = 0.08   # New parameter for smooth transition to straight line
+            air_recovery_factor = 0.3  # How quickly hook returns to rod when above water
+            smooth_recovery_factor = 0.08  # New parameter for smooth transition to straight line
 
             # Calculate resistance based on rod movement and water depth
             actual_rod_change = new_rod_length - p1.rod_length  # Only consider actual movement
@@ -515,7 +515,7 @@ class FishingDerby(JaxEnvironment):
                 lag_magnitude = jnp.abs(rod_velocity) * 0.8 * resistance_multiplier
                 # Negative lag when moving right, positive lag when moving left
                 directional_lag = jnp.where(rod_moving_right, -lag_magnitude,
-                                           jnp.where(rod_moving_left, lag_magnitude, 0.0))
+                                            jnp.where(rod_moving_left, lag_magnitude, 0.0))
 
                 moving_result = moving_offset + directional_lag
 
@@ -530,7 +530,6 @@ class FishingDerby(JaxEnvironment):
                 return p1.hook_x_offset * (1.0 - air_recovery_factor)
 
             new_hook_x_offset = jax.lax.cond(in_water, apply_water_resistance, apply_air_recovery)
-
 
             # Hook vertical movement and auto-lowering logic
             def auto_lower_hook(_):
@@ -555,9 +554,9 @@ class FishingDerby(JaxEnvironment):
 
                 # Handle diagonal movements with same vertical component
                 change = jnp.where(can_move_vertically & ((p1_action == Action.DOWNLEFT) |
-                                                         (p1_action == Action.DOWNRIGHT)), +cfg.Acceleration, change)
+                                                          (p1_action == Action.DOWNRIGHT)), +cfg.Acceleration, change)
                 change = jnp.where(can_move_vertically & ((p1_action == Action.UPLEFT) |
-                                                         (p1_action == Action.UPRIGHT)), -cfg.Acceleration, change)
+                                                          (p1_action == Action.UPRIGHT)), -cfg.Acceleration, change)
 
                 # Update hook velocity with damping
                 new_vel_y = p1.hook_velocity_y * cfg.Damping + change
@@ -736,9 +735,32 @@ class FishingDerby(JaxEnvironment):
             new_hook_y = jnp.clip(new_hook_y + tug_amount, 0.0, max_hook_y)
 
             # Scoring and collision detection
+            # Scoring and collision detection
             p1_score, key = p1.score, state.key
-            shark_collides = (p1_hook_state > 0) & (jnp.abs(hook_x - new_shark_x) < cfg.SHARK_WIDTH) & (
-                    jnp.abs(hook_y - cfg.SHARK_Y) < cfg.SHARK_HEIGHT)
+
+            # Get the correct position of the hooked fish for collision detection
+            has_hooked_fish = (p1_hook_state > 0) & (p1_hooked_fish_idx >= 0)
+            fish_idx = p1_hooked_fish_idx
+
+            # Use fish position for collision detection instead of hook position
+            def get_fish_position():
+                # Get the actual fish position from new_fish_pos
+                fish_x = new_fish_pos[fish_idx, 0]
+                fish_y = new_fish_pos[fish_idx, 1]
+                return fish_x, fish_y
+
+            fish_x, fish_y = jax.lax.cond(
+                has_hooked_fish,
+                lambda _: get_fish_position(),
+                lambda _: (hook_x, hook_y),  # Fallback to hook position if no fish (shouldn't matter)
+                operand=None
+            )
+
+            # Proper AABB collision check between shark and hooked fish
+            collides_x = jnp.abs(fish_x - new_shark_x) < (cfg.FISH_WIDTH + cfg.SHARK_WIDTH) / 2
+            collides_y = jnp.abs(fish_y - cfg.SHARK_Y) < (cfg.FISH_HEIGHT + cfg.SHARK_HEIGHT) / 2
+            shark_collides = has_hooked_fish & collides_x & collides_y
+
             scored_fish = (p1_hook_state > 0) & (hook_y <= cfg.FISH_SCORING_Y)  # Fish reaches near the rod
             reset_hook = shark_collides | scored_fish
 
