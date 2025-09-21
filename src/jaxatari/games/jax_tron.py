@@ -96,7 +96,7 @@ class TronConstants(NamedTuple):
     door_h: int = 16  # door height (matches top/bottom bar height)
     door_respawn_cooldown: int = 120  # frames until a closed door may spawn again
     create_new_door_prob: float = (
-        0.2  # probability that a new door gets created on spawn
+        0.5  # probability that a new door gets created on spawn
     )
 
     # enemies
@@ -104,24 +104,24 @@ class TronConstants(NamedTuple):
     enemy_spawn_offset: int = 3  # distance in pixels from when spawning
     enemy_respawn_timer: int = 200  # time in frames until the next enemy spawns
     enemy_recalc_target: Tuple[int, int] = (
+        200,
         350,
-        650,
     )  # After how many frames should the target be recalculated? min,max
     enemy_speed: int = 3  # inversed: move envery third frame
     enemy_target_radius: int = (
-        80  # radius (px) around player to sample target (where to walk)
+        50  # radius (px) around player to sample target (where to walk)
     )
     enemy_min_dist: int = 32  # min distance between the enemies
     enemy_firing_cooldown_range: Tuple[int, int] = (
-        40,
-        130,
+        30,
+        60,
     )  # frames until the enemy can fire again
     enemy_animation_steps: int = (
         6  # interval for changing the animation-sprite of walking enemies
     )
 
     # gameplay
-    wave_timeout: int = 40  # frames between enemy waves
+    wave_timeout: int = 200  # frames between enemy waves
 
     # Colors (RGBA, 0–255 each)
     rgba_purple: Tuple[int, int, int, int] = (93, 61, 191, 255)  # Border color
@@ -673,13 +673,8 @@ def parse_action(action: Array) -> UserAction:
     )
 
 
-@jit
-def _color_rgba(rgba: Tuple[int, int, int, int]) -> Array:
-    return jnp.asarray(rgba, dtype=jnp.uint8)
-
-
 def _solid_sprite(h: int, w: int, rgba: Tuple[int, int, int, int]) -> Array:
-    return jnp.broadcast_to(_color_rgba(rgba), (h, w, 4))
+    return jnp.broadcast_to(jnp.asarray(rgba, dtype=jnp.uint8), (h, w, 4))
 
 
 class TronRenderer(JAXGameRenderer):
@@ -814,11 +809,12 @@ class TronRenderer(JAXGameRenderer):
         """
         Build one solid color sprite per color.
         """
-        return jax.vmap(lambda col: jnp.broadcast_to(col[None, None, :], (h, w, 4)))(
-            colors
-        )
+        return jnp.broadcast_to(colors[:, None, None, :], (colors.shape[0], h, w, 4))
+        # return jax.vmap(lambda col: jnp.broadcast_to(col[None, None, :], (h, w, 4)))(
+        #     colors
+        # )
 
-    def _normalize_rgba_any(self, arr: jnp.ndarray) -> jnp.ndarray:
+    def _normalize_rgba(self, arr: jnp.ndarray) -> jnp.ndarray:
         """Convert an image array to RGBA uint8. Accepts grayscale, RGB, or RGBA input;
         for grayscale/RGB, alpha is 255 where pixels (or any channel) are > 0, otherwise 0.
         """
@@ -841,7 +837,7 @@ class TronRenderer(JAXGameRenderer):
             frame = jr.loadFrame(path)
             if not isinstance(frame, jnp.ndarray):
                 raise FileNotFoundError(path)
-            frames.append(self._normalize_rgba_any(frame))
+            frames.append(self._normalize_rgba(frame))
         arr = jnp.stack(frames, axis=0)  # (10, H, W, 4)
         H = int(arr.shape[1])
         W = int(arr.shape[2])
@@ -850,15 +846,6 @@ class TronRenderer(JAXGameRenderer):
     def _load_sprites(self) -> Dict[str, Any]:
         sprites: Dict[str, Any] = {}
 
-        def _normalize_rgba(arr: jnp.ndarray) -> jnp.ndarray:
-            if arr.ndim == 2:
-                mask = (arr > 0).astype(jnp.uint8)
-                return jnp.stack([arr, arr, arr, mask * 255], axis=-1).astype(jnp.uint8)
-            if arr.shape[-1] == 3:
-                a = (jnp.max(arr, axis=-1, keepdims=True) > 0).astype(jnp.uint8) * 255
-                return jnp.concatenate([arr, a], axis=-1).astype(jnp.uint8)
-            return arr.astype(jnp.uint8)
-
         def _load_seq(prefix: str) -> jnp.ndarray:
             frames = []
             for i in range(1, 5):
@@ -866,7 +853,7 @@ class TronRenderer(JAXGameRenderer):
                 frame = jr.loadFrame(path)
                 if not isinstance(frame, jnp.ndarray):
                     raise FileNotFoundError(path)
-                frames.append(_normalize_rgba(frame))
+                frames.append(self._normalize_rgba(frame))
             return jnp.stack(frames, axis=0)
 
         sprites["player_seq"] = _load_seq("player")
@@ -972,20 +959,11 @@ class TronRenderer(JAXGameRenderer):
         ###########
 
         def draw_player(r):
-            # Map lives to color index
-            # - while alive (lives > 0): index increases with number of hits (0..4)
-            # - when dead (lives == 0): blink by alternating between indices 5 and 4
-            max_lives = jnp.int32(c.player_lives)
-            hits = jnp.clip(max_lives - state.player.lives[0], 0, jnp.int32(5))
-            base_idx = jnp.clip(hits, 0, jnp.int32(4))
-
-            # Compute blink toggle: every player_blink_period_frames frames flip 0/1
-            period = jnp.int32(c.player_blink_period_frames)
-            toggle = jnp.mod(state.player_blink_ticks_remaining // period, 2)
-            color_idx = jax.lax.select(
-                state.player.lives[0] == 0,  # if dead, use blink pair (5,4)
-                jax.lax.select(toggle == 0, jnp.int32(5), jnp.int32(4)),
-                base_idx,
+            color_idx = player_color_index(
+                state.player.lives[0],
+                c.player_lives,
+                state.player_blink_ticks_remaining,
+                c.player_blink_period_frames,
             )
 
             # Choose animation frame:
@@ -1008,18 +986,11 @@ class TronRenderer(JAXGameRenderer):
         # Discs
         ###########
 
-        # Compute the players current color index for discs:
-        # - While alive: color progresses with number of hits: (0..4)
-        # - When lives == 0, blink by alternating between indices 5 and 4
-        max_lives = jnp.int32(c.player_lives)
-        hits = jnp.clip(max_lives - state.player.lives[0], 0, jnp.int32(5))
-        base_idx = jnp.clip(hits, 0, jnp.int32(4))
-        period = jnp.int32(c.player_blink_period_frames)
-        toggle = jnp.mod(state.player_blink_ticks_remaining // period, 2)
-        player_color_idx = jax.lax.select(
-            state.player.lives[0] == 0,
-            jax.lax.select(toggle == 0, jnp.int32(5), jnp.int32(4)),
-            base_idx,
+        player_color_idx = player_color_index(
+            state.player.lives[0],
+            c.player_lives,
+            state.player_blink_ticks_remaining,
+            c.player_blink_period_frames,
         )
 
         # Clamp the wave index to a valid range (0..num_waves-1) for enemy tint selection.
@@ -1089,28 +1060,6 @@ class TronRenderer(JAXGameRenderer):
 # Helper functions
 ####
 @jit
-def set_velocity(actors: Actor, vx: Array, vy: Array) -> Actor:
-    """Returns a new Actors instanc ce with updated velocity"""
-    return actors._replace(vx=vx, vy=vy)
-
-
-@jit
-def move(actors: Actor) -> Actor:
-    """Returns a new Actors instance with positions updated by velocity"""
-    return actors._replace(x=actors.x + actors.vx, y=actors.y + actors.vy)
-
-
-@jit
-def clamp_actor_to_bounds(
-    actors: Actor, min_x: int, min_y: int, max_x: int, max_y: int
-) -> Actor:
-    """Clamps positions according to the given max_x and max_y"""
-    new_x = jnp.clip(actors.x, min_x, max_x - actors.w)
-    new_y = jnp.clip(actors.y, min_y, max_y - actors.h)
-    return actors._replace(x=new_x, y=new_y)
-
-
-@jit
 def rect_center(x, y, w, h) -> Tuple[Array, Array]:
     """Calculates the center of a rectangle"""
     return x + jnp.floor_divide(w, 2), y + jnp.floor_divide(h, 2)
@@ -1125,169 +1074,101 @@ def _find_first_true(mask: Array) -> Tuple[Array, Array]:
 
 
 @jit
-def _get_quadrant_index(
-    object_center_x: Array,
-    object_center_y: Array,
-    play_area_center_x: Array,
-    play_area_center_y: Array,
-) -> Array:
-    """
-    Map a point to a quadrant of the inner play area
-    Encoding:
-        0 = top-left
-        1 = top-right
-        2 = bottom-left
-        3 = bottom-right
-    """
-    is_right = (object_center_x >= play_area_center_x).astype(jnp.int32)
-    is_bottom = (object_center_y >= play_area_center_y).astype(jnp.int32)
-    return (is_bottom << 1) | is_right
+def player_color_index(
+    lives,  # () int32
+    max_lives,  # python int or () int32
+    blink_ticks_remaining,  # () int32
+    blink_period_frames,  # python int or () int32
+):
+    # Map lives to color index
+    # - while alive (lives > 0): index increases with number of hits (0..4)
+    # - when dead (lives == 0): blink by alternating between indices 5 and 4
+    max_lives = jnp.int32(max_lives)
+    hits = jnp.clip(max_lives - lives, 0, jnp.int32(5))
+    base_idx = jnp.clip(hits, 0, jnp.int32(4))
 
+    # Compute blink toggle: every player_blink_period_frames frames flip 0/1
+    period = jnp.int32(blink_period_frames)
+    toggle = jnp.mod(blink_ticks_remaining // period, 2)
 
-@jit
-def _door_quadrants(
-    doors: Doors,
-    play_area_center_x: Array,
-    play_area_center_y: Array,
-) -> Array:
-    """
-    Quadrant index (0..3) for each door, computed from the door's rectangle center
-    """
-    door_center_x, door_center_y = rect_center(doors.x, doors.y, doors.w, doors.h)
-    return _get_quadrant_index(
-        door_center_x, door_center_y, play_area_center_x, play_area_center_y
+    return jax.lax.select(
+        lives == jnp.int32(0),  # dead → blink 5/4
+        jax.lax.select(toggle == 0, jnp.int32(5), jnp.int32(4)),
+        base_idx,  # alive → 0..4
     )
 
 
 @jit
-def _enemy_quadrants(
-    enemies: Enemies,
-    play_area_center_x: Array,
-    play_area_center_y: Array,
-) -> Array:
-    """
-    Quadrant index (0..3) for each enemy, computed from the enemy's rectangle center
-    """
-    enemy_center_x, enemy_center_y = rect_center(
-        enemies.x, enemies.y, enemies.w, enemies.h
-    )
-    return _get_quadrant_index(
-        enemy_center_x, enemy_center_y, play_area_center_x, play_area_center_y
-    )
-
-
-@jit
-def get_user_disc_center(state: Actor) -> Tuple[Array, Array]:
-    """
-    Per-disc top-left (px, py) that would place each disc centered inside the player
-    Returns:
-        px, py: Arrays of shape (D,), D == number of disc slots.
-        For slot i, setting discs.x[i]=px[i] and discs.y[i]=py[i]
-        places that disc visually centered within the player's rectangle
-    """
-    p: Player = state.player
-    d: Discs = state.discs
-    px = p.x[0] + jnp.floor_divide(p.w[0] - d.w, 2)
-    py = p.y[0] + jnp.floor_divide(p.h[0] - d.h, 2)
-    return px.astype(jnp.int32), py.astype(jnp.int32)
+def tick_cd(x: Array) -> Array:
+    # Decrement by 1 but never below 0, preserving dtype
+    one = jnp.asarray(1, dtype=x.dtype)
+    zero = jnp.asarray(0, dtype=x.dtype)
+    return jnp.maximum(x - one, zero)
 
 
 @jit
 def _select_door_for_spawn(
     doors: Doors,
-    enemies: Enemies,
-    player_center_x: Array,
-    player_center_y: Array,
-    inner_min_x: Array,
-    inner_min_y: Array,
-    inner_max_x: Array,
-    inner_max_y: Array,
     rng_key: random.PRNGKey,
     prefer_new_prob: float,
 ) -> Tuple[Array, Array, Doors, random.PRNGKey]:
     """
     Choose a door index to spawn an enemy from:
-      - quadrant must be free of the player and any alive enemy
       - prefer reusing an existing spawned door
-      - otherwise, try to spawn (make visible) a new door in a free quadrant
+      - otherwise, try to spawn (make visible) a new door
       - fallback: any spawned & unlocked door if all quadrants are busy
       - when BOTH reuse and new are available, pick NEW with probability `prefer_new_prob`
 
     Returns (has_choice, door_index, updated_doors, next_rng_key).
     """
-    # Get center of the play-area inside the purple borders
-    play_area_center_x = (inner_min_x + inner_max_x) // 2
-    play_area_center_y = (inner_min_y + inner_max_y) // 2
-
-    # The entire play_area can be split into 4 quadrants. Each of them has 3 doors
-    door_quadrant = _door_quadrants(doors, play_area_center_x, play_area_center_y)
-
-    # Get current quadrant of player
-    player_quadrant = _get_quadrant_index(
-        player_center_x, player_center_y, play_area_center_x, play_area_center_y
-    )
-
-    # Get quadrant of all the enemies
-    enemy_quadrant = _enemy_quadrants(enemies, play_area_center_x, play_area_center_y)
-
-    # For each door, is its quadrant occupied by any alive enemy?
-    enemy_same_quad = (door_quadrant[:, None] == enemy_quadrant[None, :]) & (
-        enemies.alive[None, :]
-    )
-    occupied_by_enemies = jnp.any(enemy_same_quad, axis=1)
-    occupied_by_player = door_quadrant == player_quadrant
-    # Check if a quadrant is free
-    quadrant_is_free = ~occupied_by_enemies & ~occupied_by_player
+    # total number of doors
+    n_doors = doors.x.shape[0]
 
     # All doors have a lockdown, between spawning enemies
     # Select only those, with a lockdown of 0
     door_unlocked = doors.spawn_lockdown == jnp.int32(0)
 
-    # Select doors, that are already spawned, have a cooldown of 0 and a free quadrant
-    prefer_reuse = doors.is_spawned & door_unlocked & quadrant_is_free
-    # Select doors, that are not yet spawned, have a cooldown of 0 and a free quadrant
-    try_new = (~doors.is_spawned) & door_unlocked & quadrant_is_free
+    # Select doors, that are already spawned, have a cooldown of 0
+    reuse_mask = doors.is_spawned & door_unlocked
+    # Select doors, that are not yet spawned, have a cooldown of 0
+    new_mask = (~doors.is_spawned) & door_unlocked
 
-    has_reuse, idx_reuse = _find_first_true(prefer_reuse)
-    has_new, idx_new = _find_first_true(try_new)
+    reuse_cnt = jnp.sum(reuse_mask.astype(jnp.int32))
+    new_cnt = jnp.sum(new_mask.astype(jnp.int32))
 
-    # RNG for tie-break when both reuse and new are possible
-    rng_key, sample_key = random.split(rng_key)
-    p = jnp.float32(prefer_new_prob)
-    pick_new_sample = random.bernoulli(sample_key, p=p)  # True means "choose new"
+    has_reuse = reuse_cnt > 0
+    has_new = new_cnt > 0
+
+    rng_key, k_pick_set, k_pick_new, k_pick_reuse = random.split(rng_key, 4)
+    pick_new_sample = random.bernoulli(k_pick_set, p=jnp.float32(prefer_new_prob))
 
     choose_new = has_new & (~has_reuse | pick_new_sample)
     choose_reuse = has_reuse & (~has_new | (~pick_new_sample))
 
+    def _sample(mask, count, key):
+        idx_pad = jnp.nonzero(mask, size=n_doors)[0]
+        pos = random.randint(key, (), 0, jnp.maximum(count, 1), dtype=jnp.int32)
+        return idx_pad[pos]
+
     def _pick_reuse(_):
-        return True, idx_reuse, doors, rng_key
+        idx = _sample(reuse_mask, reuse_cnt, k_pick_reuse)
+        return True, idx, doors, rng_key
 
     def _pick_new(_):
-        updated = doors._replace(is_spawned=doors.is_spawned.at[idx_new].set(True))
-        return True, idx_new, updated, rng_key
+        idx = _sample(new_mask, new_cnt, k_pick_new)
+        upd = doors._replace(is_spawned=doors.is_spawned.at[idx].set(True))
+        return True, idx, upd, rng_key
 
     def _fallback(_):
-        mask = doors.is_spawned & door_unlocked
-        has_fb, idx_fb = _find_first_true(mask)
-        return has_fb, idx_fb, doors, rng_key
+        # reuse_mask==spawned&unlocked, and we already know has_reuse==False here,
+        # so return (False,0,…) to signal no choice.
+        return False, jnp.int32(0), doors, rng_key
 
     return jax.lax.cond(
         choose_new,
         _pick_new,
         lambda _: jax.lax.cond(choose_reuse, _pick_reuse, _fallback, operand=None),
         operand=None,
-    )
-
-
-@jit
-def _mark_door_used_for_spawn(
-    doors: Doors, door_index: Array, cooldown_frames: int
-) -> Doors:
-    """When a door is used to spawn, start its spawn cooldown."""
-    return doors._replace(
-        spawn_lockdown=doors.spawn_lockdown.at[door_index].set(
-            jnp.int32(cooldown_frames)
-        )
     )
 
 
@@ -1433,10 +1314,6 @@ class JaxTron(JaxEnvironment[TronState, TronObservation, TronInfo, TronConstants
         obs = self._get_observation(new_state)
         return obs, new_state
 
-    @partial(jax.jit, static_argnums=(0,))
-    def _cooldown_finished(self, state: TronState) -> Array:
-        return state.wave_end_cooldown_remaining == 0
-
     @partial(jit, static_argnums=(0,))
     def _player_step(self, state: TronState, action: UserAction) -> TronState:
         player = state.player
@@ -1528,7 +1405,13 @@ class JaxTron(JaxEnvironment[TronState, TronObservation, TronInfo, TronConstants
             free_indices: Array = jnp.nonzero(s.discs.phase == 0, size=1)[0][0]
 
             # Center the discs in the player-box
-            px_all, py_all = get_user_disc_center(s)
+            px_all = (
+                s.player.x[0] + jnp.floor_divide(s.player.w[0] - s.discs.w, 2)
+            ).astype(jnp.int32)
+            py_all = (
+                s.player.y[0] + jnp.floor_divide(s.player.h[0] - s.discs.h, 2)
+            ).astype(jnp.int32)
+
             px, py = px_all[free_indices], py_all[free_indices]
 
             # float, normalized outbound velocity for player discs
@@ -1561,7 +1444,7 @@ class JaxTron(JaxEnvironment[TronState, TronObservation, TronInfo, TronConstants
 
         return jax.lax.cond(can_spawn, do_spawn, no_spawn, state)
 
-    @partial(jit, static_argnums=(0,))
+    @partial(jit, static_argnums=(0,), donate_argnums=(1,))
     def _move_discs(self, state: TronState, fire_pressed: Array) -> TronState:
         discs = state.discs
 
@@ -1709,14 +1592,6 @@ class JaxTron(JaxEnvironment[TronState, TronObservation, TronInfo, TronConstants
         # We'll never spawn more than there are free slots.
         to_spawn = jnp.minimum(max_new, free_count)
 
-        # Player center (used by the door selector to keep quadrants safe)
-        player_cx, player_cy = rect_center(
-            state.player.x[0],
-            state.player.y[0],
-            state.player.w[0],
-            state.player.h[0],
-        )
-
         def place_one(carry_state):
             """
             Spawn exactly one enemy if a valid door is available.
@@ -1727,13 +1602,6 @@ class JaxTron(JaxEnvironment[TronState, TronObservation, TronInfo, TronConstants
             # Choose a door (handles reuse/new preference and returns next RNG key)
             has, door_idx, doors2, key2 = _select_door_for_spawn(
                 s.doors,
-                s.enemies,
-                player_cx,
-                player_cy,
-                self.inner_min_x,
-                self.inner_min_y,
-                self.inner_max_x,
-                self.inner_max_y,
                 s.rng_key,
                 prefer_new_prob=prefer_new_prob,  # ensure proper dtype
             )
@@ -1763,8 +1631,10 @@ class JaxTron(JaxEnvironment[TronState, TronObservation, TronInfo, TronConstants
                 )
 
                 # Start cooldown on the used door
-                doors3 = _mark_door_used_for_spawn(
-                    doors2, door_idx, self.consts.door_respawn_cooldown
+                doors3 = doors2._replace(
+                    spawn_lockdown=doors2.spawn_lockdown.at[door_idx].set(
+                        jnp.int32(self.consts.door_respawn_cooldown)
+                    )
                 )
 
                 return s_in._replace(enemies=enemies2, doors=doors3)
@@ -1782,7 +1652,7 @@ class JaxTron(JaxEnvironment[TronState, TronObservation, TronInfo, TronConstants
         # Upper bound = max_enemies is safe and static. Prevents overwork
         return jax.lax.fori_loop(0, self.consts.max_enemies, loop_body, state)
 
-    @partial(jit, static_argnums=(0,))
+    @partial(jit, static_argnums=(0,), donate_argnums=(1,))
     def _move_enemies(self, state: TronState) -> TronState:
         """
         Move all alive enemies with a chunky, throttled pursuit of per-enemy goals
@@ -2161,7 +2031,7 @@ class JaxTron(JaxEnvironment[TronState, TronObservation, TronInfo, TronConstants
         should_tick = any_dead & (alive_now > jnp.int32(0))
         cd_next = jnp.where(
             should_tick,
-            jnp.maximum(state.inwave_spawn_cd - jnp.int32(1), jnp.int32(0)),
+            tick_cd(state.inwave_spawn_cd),
             state.inwave_spawn_cd,
         )
 
@@ -2199,8 +2069,13 @@ class JaxTron(JaxEnvironment[TronState, TronObservation, TronInfo, TronConstants
         disc_relevant = (d.owner == jnp.int32(0)) & (d.phase == jnp.int32(1))
 
         # Next-step bounds
-        nx = d.x + d.vx
-        ny = d.y + d.vy
+        is_out = d.phase == jnp.int32(1)
+        nx_out = jnp.round(d.fx + d.fvx).astype(jnp.int32)
+        ny_out = jnp.round(d.fy + d.fvy).astype(jnp.int32)
+        nx_std = d.x + d.vx
+        ny_std = d.y + d.vy
+        nx = jnp.where(is_out, nx_out, nx_std)
+        ny = jnp.where(is_out, ny_out, ny_std)
 
         hit_left = nx < self.inner_min_x
         hit_right = (nx + d.w) > self.inner_max_x
@@ -2298,8 +2173,8 @@ class JaxTron(JaxEnvironment[TronState, TronObservation, TronInfo, TronConstants
         pw, ph = p.w[0], p.h[0]
         px1, py1 = px0 + pw, py0 + ph
 
-        # IMPORTANT: vx/vy may be 0-D arrays; do NOT index them
-        vx, vy = p.vx, p.vy
+        vx = jnp.squeeze(p.vx)
+        vy = jnp.squeeze(p.vy)
 
         # Intent to push into a wall from the current clamped position
         up_intent = (vy < 0) & (py0 == self.inner_min_y)
@@ -2343,6 +2218,10 @@ class JaxTron(JaxEnvironment[TronState, TronObservation, TronInfo, TronConstants
             player3 = player2._replace(
                 x=player2.x.at[0].set(ex),
                 y=player2.y.at[0].set(ey),
+                fx=player2.fx.at[0].set(ex.astype(jnp.float32)),
+                fy=player2.fy.at[0].set(ey.astype(jnp.float32)),
+                vx=player2.vx.at[0].set(jnp.int32(0)),
+                vy=player2.vy.at[0].set(jnp.int32(0)),
             )
 
             # Consume the entry door: deactivate and unlock it
@@ -2364,7 +2243,7 @@ class JaxTron(JaxEnvironment[TronState, TronObservation, TronInfo, TronConstants
             (state.discs.owner == jnp.int32(1)) & (state.discs.phase == jnp.int32(1))
         )
 
-        # claer the wave before raspawn happens -> start pause + advance wave
+        # clear the wave before respawn happens -> start pause + advance wave
         start_pause = (
             (alive_now == jnp.int32(0))
             & state.game_started
@@ -2486,13 +2365,8 @@ class JaxTron(JaxEnvironment[TronState, TronObservation, TronInfo, TronConstants
         # skip the check entirely if there are not active enemy discs
         return jax.lax.cond(any_enemy_disc, _check, _no, state)
 
-    def _spawn_enemy_discs(self, state: TronState) -> TronState:
-        # no enemy disc logic during the between-wave pause
-        in_pause = state.wave_end_cooldown_remaining > jnp.int32(0)
-        return jax.lax.cond(in_pause, lambda s: s, self._spawn_enemy_discs_alive, state)
-
     @partial(jit, static_argnums=(0,))
-    def _spawn_enemy_discs_alive(self, state: TronState) -> TronState:
+    def _spawn_enemy_discs(self, state: TronState) -> TronState:
         """
         One and only one enemy disc can exist at once.
 
@@ -2557,14 +2431,9 @@ class JaxTron(JaxEnvironment[TronState, TronObservation, TronInfo, TronConstants
         # If a bullet just ended, start cooldown and choose next shooter.
         state = jax.lax.cond(just_ended, start_cd_and_pick_shooter, lambda s: s, state)
 
-        # If no bullet active and cooldown > 0, tick it down by 1.
-        def tick_cd(s: TronState) -> TronState:
-            new_cd = jnp.maximum(s.enemy_global_fire_cd - jnp.int32(1), jnp.int32(0))
-            return s._replace(enemy_global_fire_cd=new_cd)
-
         state = jax.lax.cond(
             (~enemy_active_now) & (state.enemy_global_fire_cd > jnp.int32(0)),
-            tick_cd,
+            lambda s: s._replace(enemy_global_fire_cd=tick_cd(s.enemy_global_fire_cd)),
             lambda s: s,
             state,
         )
@@ -2695,7 +2564,6 @@ class JaxTron(JaxEnvironment[TronState, TronObservation, TronInfo, TronConstants
 
                 # We only get here if there's a free disc slot (checked outside).
                 # If at least one enemy is alive, spawn the disc; otherwise return the state unchanged
-                # while still threading the RNG key
                 return jax.lax.cond(
                     alive_any, really_spawn, return_without_spawning, ss
                 )
@@ -2713,7 +2581,7 @@ class JaxTron(JaxEnvironment[TronState, TronObservation, TronInfo, TronConstants
 
         return state._replace(enemy_disc_active_prev=enemy_active_now)
 
-    @partial(jit, static_argnums=(0,))
+    @partial(jit, static_argnums=(0,), donate_argnums=(1,))
     def step(
         self, state: TronState, action: Array
     ) -> Tuple[TronObservation, TronState, float, bool, TronInfo]:
@@ -2777,10 +2645,9 @@ class JaxTron(JaxEnvironment[TronState, TronObservation, TronInfo, TronConstants
         )
 
         def _pause_step(s: TronState) -> TronState:
-            rem = jnp.maximum(
-                s.wave_end_cooldown_remaining - jnp.int32(1), jnp.int32(0)
+            return s._replace(
+                wave_end_cooldown_remaining=tick_cd(s.wave_end_cooldown_remaining)
             )
-            return s._replace(wave_end_cooldown_remaining=rem)
 
         def _wave_step(s: TronState) -> TronState:
             # If we just finished the pause and there are no enemies, spawn a fresh wave
@@ -2828,7 +2695,12 @@ class JaxTron(JaxEnvironment[TronState, TronObservation, TronInfo, TronConstants
             s = self._update_respawn_cooldown_on_kills(s)
 
             # Tick enemy fire CDs and fire if ready (no-op during pause)
-            s = self._spawn_enemy_discs(s)
+            s = jax.lax.cond(
+                state.wave_end_cooldown_remaining > jnp.int32(0),
+                lambda s: s,
+                self._spawn_enemy_discs,
+                s,
+            )
 
             # Only allow in-wave respawns if we're not in a between-wave pause
             def do_respawn(ss: TronState) -> TronState:
@@ -2843,7 +2715,7 @@ class JaxTron(JaxEnvironment[TronState, TronObservation, TronInfo, TronConstants
             return s
 
         state = jax.lax.cond(
-            self._cooldown_finished(state), _wave_step, _pause_step, state
+            state.wave_end_cooldown_remaining == 0, _wave_step, _pause_step, state
         )
 
         # Death blink countdown → disappear when finished
