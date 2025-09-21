@@ -26,7 +26,7 @@ class ChopperCommandConstants:
     DEATH_PAUSE_FRAMES = 60
 
     WIDTH = 160
-    HEIGHT = 192
+    HEIGHT = 210
     SCALING_FACTOR = 4
 
     # difficulty
@@ -463,10 +463,10 @@ class JaxChopperCommand(JaxEnvironment[ChopperCommandState, ChopperCommandObserv
                 "height": spaces.Box(low=0, high=210, shape=(), dtype=jnp.int32),
                 "active": spaces.Box(low=0, high=1, shape=(), dtype=jnp.int32),
             }),
-            "trucks": spaces.Box(low=0, high=160, shape=(self.consts.MAX_TRUCKS, 4), dtype=jnp.int32),
-            "jets": spaces.Box(low=0, high=160, shape=(self.consts.MAX_JETS, 4), dtype=jnp.int32),
-            "choppers": spaces.Box(low=0, high=160, shape=(self.consts.MAX_CHOPPERS, 4), dtype=jnp.int32),
-            "enemy_missiles": spaces.Box(low=0, high=160, shape=(self.consts.MAX_ENEMY_MISSILES, 4), dtype=jnp.int32),
+            "trucks": spaces.Box(low=0, high=160, shape=(self.consts.MAX_TRUCKS, 5), dtype=jnp.int32),
+            "jets": spaces.Box(low=0, high=160, shape=(self.consts.MAX_JETS, 5), dtype=jnp.int32),
+            "choppers": spaces.Box(low=0, high=160, shape=(self.consts.MAX_CHOPPERS, 5), dtype=jnp.int32),
+            "enemy_missiles": spaces.Box(low=0, high=160, shape=(self.consts.MAX_ENEMY_MISSILES, 5), dtype=jnp.int32),
             "player_missile": spaces.Dict({
                 "x": spaces.Box(low=0, high=160, shape=(), dtype=jnp.int32),
                 "y": spaces.Box(low=0, high=210, shape=(), dtype=jnp.int32),
@@ -474,7 +474,6 @@ class JaxChopperCommand(JaxEnvironment[ChopperCommandState, ChopperCommandObserv
                 "height": spaces.Box(low=0, high=210, shape=(), dtype=jnp.int32),
                 "active": spaces.Box(low=0, high=1, shape=(), dtype=jnp.int32),
             }),
-            "collected_divers": spaces.Box(low=0, high=6, shape=(), dtype=jnp.int32),
             "player_score": spaces.Box(low=0, high=999999, shape=(), dtype=jnp.int32),
             "lives": spaces.Box(low=0, high=3, shape=(), dtype=jnp.int32),
         })
@@ -486,7 +485,7 @@ class JaxChopperCommand(JaxEnvironment[ChopperCommandState, ChopperCommandObserv
         return spaces.Box(
             low=0,
             high=255,
-            shape=(160, 210, 3),
+            shape=(210, 160, 3),
             dtype=jnp.uint8,
         )
 
@@ -557,7 +556,7 @@ class JaxChopperCommand(JaxEnvironment[ChopperCommandState, ChopperCommandObserv
         )
 
     @partial(jax.jit, static_argnums=(0,))
-    def _get_info(self, state: ChopperCommandState, all_rewards: jnp.ndarray) -> ChopperCommandInfo:
+    def _get_info(self, state: ChopperCommandState, all_rewards: jnp.ndarray = None) -> ChopperCommandInfo:
         return ChopperCommandInfo(
             step_counter=state.step_counter,
             all_rewards=all_rewards,
