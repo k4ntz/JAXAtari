@@ -1470,7 +1470,7 @@ class JaxTron(JaxEnvironment[TronState, TronObservation, TronInfo, TronConstants
 
         return jax.lax.cond(can_spawn, do_spawn, no_spawn, state)
 
-    @partial(jit, static_argnums=(0,), donate_argnums=(1,))
+    @partial(jit, static_argnums=(0,))
     def _move_discs(self, state: TronState, fire_pressed: Array) -> TronState:
         discs = state.discs
 
@@ -1678,7 +1678,7 @@ class JaxTron(JaxEnvironment[TronState, TronObservation, TronInfo, TronConstants
         # Upper bound = max_enemies is safe and static. Prevents overwork
         return jax.lax.fori_loop(0, self.consts.max_enemies, loop_body, state)
 
-    @partial(jit, static_argnums=(0,), donate_argnums=(1,))
+    @partial(jit, static_argnums=(0,))
     def _move_enemies(self, state: TronState) -> TronState:
         """
         Move all alive enemies with a chunky, throttled pursuit of per-enemy goals
@@ -2607,7 +2607,7 @@ class JaxTron(JaxEnvironment[TronState, TronObservation, TronInfo, TronConstants
 
         return state._replace(enemy_disc_active_prev=enemy_active_now)
 
-    @partial(jit, static_argnums=(0,), donate_argnums=(1,))
+    @partial(jit, static_argnums=(0,))
     def step(
         self, state: TronState, action: Array
     ) -> Tuple[TronObservation, TronState, float, bool, TronInfo]:
