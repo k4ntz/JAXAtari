@@ -37,7 +37,7 @@ class GameConfig:
     P2_START_X: int = 135
     PLAYER_Y: int = 23
     ROD_Y: int = 38  # Y position where rod extends horizontally
-    FISH_SCORING_Y: int = 70
+    FISH_SCORING_Y: int = 78
 
     # Rod mechanics
     MIN_ROD_LENGTH_X: int = 20  # Minimum horizontal rod extension
@@ -45,12 +45,12 @@ class GameConfig:
     MAX_ROD_LENGTH_X: int = 65  # Maximum horizontal extension
 
     MIN_HOOK_DEPTH_Y: int = 0  # Minimum vertical hook depth
-    START_HOOK_DEPTH_Y: int = 30  # Starting vertical hook depth
+    START_HOOK_DEPTH_Y: int = 40  # Starting vertical hook depth
     MAX_HOOK_DEPTH_Y: int = 160  # Maximum vertical extension to reach bottom fish
 
     ROD_SPEED: float = 1.8
     # Fish death line - how far below the rod the fish must be brought to score
-    FISH_DEATH_LINE_OFFSET: int = 15  # Increase this to lower the death line
+    FISH_DEATH_LINE_OFFSET: int = 20  # Increase this to lower the death line
 
     HOOK_WIDTH: int = 3
     HOOK_HEIGHT: int = 5
@@ -85,13 +85,16 @@ class GameConfig:
     FISH_ROW_YS: Tuple[int] = (95, 111, 127, 143, 159, 175)
     FISH_ROW_SCORES: Tuple[int] = (2, 2, 4, 4, 6, 6)
     # When hooked
-    HOOKED_FISH_SPEED_MULTIPLIER: float = 2.0
-    HOOKED_FISH_TURN_PROBABILITY: float = 0.05
+    HOOKED_FISH_SPEED_MULTIPLIER: float = 1.5
+    HOOKED_FISH_TURN_PROBABILITY: float = 0.04
     HOOKED_FISH_BOUNDARY_ENABLED: bool = True
-    HOOKED_FISH_BOUNDARY_PADDING: int = 9 # Max distance from line
+    HOOKED_FISH_BOUNDARY_PADDING: int = 20 # Max distance from line
 
     # Normal swimming
     FISH_BASE_TURN_PROBABILITY: float = 0.01  # 1% chance to change direction
+
+    # Turning cooldown for hooked fish
+    HOOKED_FISH_TURNING_COOLDOWN: int = 30  # frames before hooked fish can turn again
 
 
     # Shark
@@ -122,6 +125,7 @@ class GameState(NamedTuple):
     fish_positions: chex.Array
     fish_directions: chex.Array
     fish_active: chex.Array
+    fish_turn_cooldowns: chex.Array  # Per-fish turning cooldown timers
     shark_x: chex.Array
     shark_dir: chex.Array
     shark_burst_timer: chex.Array
@@ -219,6 +223,7 @@ class FishingDerby(JaxEnvironment):
             fish_positions=jnp.stack([fish_x, fish_y], axis=1),
             fish_directions=jax.random.choice(key, jnp.array([-1.0, 1.0]), (self.config.NUM_FISH,)),
             fish_active=jnp.ones(self.config.NUM_FISH, dtype=jnp.bool_),
+            fish_turn_cooldowns=jnp.zeros(self.config.NUM_FISH, dtype=jnp.int32),  # Initialize cooldowns
             shark_x=jnp.array(self.config.SCREEN_WIDTH / 2.0),
             shark_dir=jnp.array(1.0),
             shark_burst_timer=jnp.array(0),
@@ -376,24 +381,35 @@ class FishingDerby(JaxEnvironment):
                 fish_speeds
             )
 
-            # Check for random direction changes
-            should_change_dir = jax.random.uniform(fish_key, (cfg.NUM_FISH,)) < change_probs
-
-            # Fish speeds - faster for hooked fish
-            fish_speeds = jnp.full(cfg.NUM_FISH, cfg.FISH_SPEED)
-            fish_speeds = jnp.where(
-                jnp.arange(cfg.NUM_FISH) == hooked_fish_idx,
-                cfg.FISH_SPEED * 1.5,  # 50% faster when hooked
-                fish_speeds
-            )
-
             # Fish movement with individual speeds
             new_fish_x = state.fish_positions[:, 0] + state.fish_directions * fish_speeds
 
-            # Direction changes: either from hitting boundaries OR random changes
+            # Direction changes: either from hitting boundaries OR random changes with cooldowns
             # Use same boundaries as shark instead of screen edges
             hit_boundary = (new_fish_x <= cfg.LEFT_BOUNDARY) | (new_fish_x >= cfg.RIGHT_BOUNDARY)
-            change_dir = hit_boundary | should_change_dir
+
+            # Check for random direction changes with cooldown enforcement
+            should_change_dir_random = jax.random.uniform(fish_key, (cfg.NUM_FISH,)) < change_probs
+
+            # Apply cooldown logic: fish can only turn if cooldown is 0 OR they hit boundary
+            can_turn_due_to_cooldown = state.fish_turn_cooldowns <= 0
+
+            # Fish can turn if: (cooldown expired AND wants to turn randomly) OR hits boundary
+            should_change_dir = (can_turn_due_to_cooldown & should_change_dir_random) | hit_boundary
+
+            # Update cooldowns: reset to HOOKED_FISH_TURNING_COOLDOWN when turning, otherwise decrement
+            new_cooldowns = jnp.where(
+                should_change_dir,
+                jnp.where(
+                    jnp.arange(cfg.NUM_FISH) == hooked_fish_idx,
+                    cfg.HOOKED_FISH_TURNING_COOLDOWN,  # Reset cooldown for hooked fish that turn
+                    0  # No cooldown for normal fish after boundary collision
+                ),
+                jnp.maximum(0, state.fish_turn_cooldowns - 1)  # Decrement cooldowns
+            )
+
+            # Final direction change decision using the cooldown-aware logic
+            change_dir = should_change_dir
 
             new_fish_dirs = jnp.where(change_dir, -state.fish_directions, state.fish_directions)
             # Clip fish positions to shark boundaries
@@ -685,8 +701,9 @@ class FishingDerby(JaxEnvironment):
                 potential_new_x = fish_x + total_dx
 
                 # Calculate boundaries based on hook position and configuration
-                boundary_min = hx - cfg.HOOKED_FISH_BOUNDARY_PADDING
-                boundary_max = hx + cfg.HOOKED_FISH_BOUNDARY_PADDING
+                rod_end_x = cfg.P1_START_X + new_rod_length  # Use rod end, not hook position
+                boundary_min = rod_end_x - cfg.HOOKED_FISH_BOUNDARY_PADDING
+                boundary_max = rod_end_x + cfg.HOOKED_FISH_BOUNDARY_PADDING
 
                 # Also respect global boundaries
                 boundary_min = jnp.maximum(boundary_min, cfg.LEFT_BOUNDARY)
@@ -888,6 +905,7 @@ class FishingDerby(JaxEnvironment):
                 fish_positions=new_fish_pos,
                 fish_directions=new_fish_dirs,
                 fish_active=fish_active,
+                fish_turn_cooldowns=new_cooldowns,  # Include the updated cooldowns
                 shark_x=new_shark_x,
                 shark_dir=new_shark_dir,
                 shark_burst_timer=new_burst_timer,
@@ -932,7 +950,7 @@ def load_sprites():
         'shark1': os.path.join(MODULE_DIR, "sprites/fishingderby/shark_new_1.npy"),
         'shark2': os.path.join(MODULE_DIR, "sprites/fishingderby/shark_new_2.npy"),
         'fish1': os.path.join(MODULE_DIR, "sprites/fishingderby/fish1.npy"),
-        'fish2': os.path.join(MODULE_DIR, "sprites/fishingderby/fish3.npy"),
+        'fish2': os.path.join(MODULE_DIR, "sprites/fishingderby/fish4.npy"),
         'sky': os.path.join(MODULE_DIR, "sprites/fishingderby/sky.npy"),
         'pier': os.path.join(MODULE_DIR, "sprites/fishingderby/pier.npy"),
         **{f"score_{i}": os.path.join(MODULE_DIR, f"sprites/fishingderby/score_{i}.npy") for i in range(10)}
@@ -1066,7 +1084,7 @@ class FishingDerbyRenderer(JAXGameRenderer):
             is_hooked = is_hooked_p1 | is_hooked_p2
 
             # Use faster animation timing for hooked fish (animate twice as fast)
-            hooked_fish_frame = jax.lax.cond((state.time // 2) % 2 == 0, lambda: self.SPRITE_FISH1, lambda: self.SPRITE_FISH2)
+            hooked_fish_frame = jax.lax.cond((state.time // 6) % 2 == 0, lambda: self.SPRITE_FISH1, lambda: self.SPRITE_FISH2)
 
             # Select the appropriate frame based on whether fish is hooked
             frame_to_use = jax.lax.cond(is_hooked, lambda: hooked_fish_frame, lambda: fish_frame)
