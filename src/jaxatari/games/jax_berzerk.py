@@ -58,7 +58,7 @@ class BerzerkConstants(NamedTuple):
     )
 
     # Variations Evil Otto 
-    ENABLE_EVIL_OTTO = False     # Variation 1: enable immortal evil otto
+    ENABLE_EVIL_OTTO = False    # Variation 1: enable immortal evil otto
     MORTAL_EVIL_OTTO = False    # Variation 2: enable mortal evil otto (ENABLE_EVIL_OTTO has to be True)
     EVIL_OTTO_SIZE = (8, 7)
     EVIL_OTTO_SPEED = 0.4
@@ -769,7 +769,6 @@ class JaxBerzerk(JaxEnvironment[BerzerkState, BerzerkObservation, BerzerkInfo, B
             # Rewards
             all_rewards = self._get_all_rewards(previous_state, state)
 
-            # Anzahl Gegner, die von alive -> dead gewechselt sind
             prev_alive = jnp.array(previous_state.enemy_alive, dtype=jnp.int32)
             curr_alive = jnp.array(state.enemy_alive, dtype=jnp.int32)
             enemies_killed = jnp.sum(prev_alive - curr_alive)
@@ -781,7 +780,6 @@ class JaxBerzerk(JaxEnvironment[BerzerkState, BerzerkObservation, BerzerkInfo, B
             enemies_killed=enemies_killed,
             level_cleared=level_cleared
         )
-
 
 
     @partial(jax.jit, static_argnums=(0,))
@@ -832,7 +830,7 @@ class JaxBerzerk(JaxEnvironment[BerzerkState, BerzerkObservation, BerzerkInfo, B
         last_dir = jnp.array([0.0, -1.0])  # default = up
         bullets = jnp.zeros((1, 2), dtype=jnp.float32)
         bullet_dirs = jnp.zeros((1, 2), dtype=jnp.float32)
-        bullet_active = jnp.zeros((1,), dtype=jnp.int32)
+        bullet_active = jnp.zeros((1,), dtype=jnp.bool_)
         animation_counter = jnp.array(0, dtype=jnp.int32)
         death_timer = jnp.array(0, dtype=jnp.int32)
         player_is_firing = jnp.array(False)
