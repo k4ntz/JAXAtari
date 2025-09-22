@@ -379,10 +379,9 @@ def load_sprites():
 ) = load_sprites()
 
 class JaxChopperCommand(JaxEnvironment[ChopperCommandState, ChopperCommandObservation, ChopperCommandInfo, ChopperCommandConstants]):
-    def __init__(self, consts: ChopperCommandConstants = None, frameskip: int = 1, reward_funcs: list[Callable] =None):
+    def __init__(self, consts: ChopperCommandConstants = None, reward_funcs: list[callable] = None):
         consts = consts or ChopperCommandConstants()
         super().__init__(consts)
-        self.frameskip = frameskip
         if reward_funcs is not None:
             reward_funcs = tuple(reward_funcs)
         self.reward_funcs = reward_funcs
@@ -407,66 +406,74 @@ class JaxChopperCommand(JaxEnvironment[ChopperCommandState, ChopperCommandObserv
             Action.DOWNLEFTFIRE
         ]
         self.frame_stack_size = 4
-        self.obs_size = 5 + self.consts.MAX_JETS * 5 + self.consts.MAX_CHOPPERS * 5 + self.consts.MAX_PLAYER_MISSILES * 5 + 5 + 5
-        self.renderer = ChopperCommandRenderer()
+        self.obs_size = 6 + 12 * 5 + 12 * 5 + 12 * 5 + 8 * 5 + 5 + 1 + 1
+        self.renderer = ChopperCommandRenderer(self.consts)
 
+    @partial(jax.jit, static_argnums=(0,))
     def render(self, state: ChopperCommandState) -> jnp.ndarray:
         """Render the game state to a raster image."""
         return self.renderer.render(state)
 
     def flatten_entity_position(self, entity: EntityPosition) -> jnp.ndarray:
-        return jnp.concatenate([entity.x, entity.y, entity.width, entity.height, entity.active])
+        return jnp.concatenate([
+            jnp.array([entity.x], dtype=jnp.int32),
+            jnp.array([entity.y], dtype=jnp.int32),
+            jnp.array([entity.width], dtype=jnp.int32),
+            jnp.array([entity.height], dtype=jnp.int32),
+            jnp.array([entity.active], dtype=jnp.int32)
+        ])
 
     def flatten_player_entity(self, entity: PlayerEntity) -> jnp.ndarray:
-        return jnp.concatenate([jnp.array([entity.x]), jnp.array([entity.y]), jnp.array([entity.o]), jnp.array([entity.width]), jnp.array([entity.height]), jnp.array([entity.active])])
+        return jnp.concatenate([
+            jnp.array([entity.x], dtype=jnp.int32),
+            jnp.array([entity.y], dtype=jnp.int32),
+            jnp.array([entity.o], dtype=jnp.int32),
+            jnp.array([entity.width], dtype=jnp.int32),
+            jnp.array([entity.height], dtype=jnp.int32),
+            jnp.array([entity.active], dtype=jnp.int32)
+        ])
 
     @partial(jax.jit, static_argnums=(0,))
     def obs_to_flat_array(self, obs: ChopperCommandObservation) -> jnp.ndarray:
         return jnp.concatenate([
             self.flatten_player_entity(obs.player),
-            obs.trucks.flatten(),
-            obs.jets.flatten(),
-            obs.choppers.flatten(),
-            obs.enemy_missiles.flatten(),
+            obs.trucks.flatten().astype(jnp.int32),
+            obs.jets.flatten().astype(jnp.int32),
+            obs.choppers.flatten().astype(jnp.int32),
+            obs.enemy_missiles.flatten().astype(jnp.int32),
             self.flatten_entity_position(obs.player_missile),
-            obs.player_score.flatten(),
-            obs.lives.flatten(),
+            obs.player_score.flatten().astype(jnp.int32),
+            obs.lives.flatten().astype(jnp.int32),
         ])
 
     def action_space(self) -> spaces.Discrete:
         return spaces.Discrete(len(self.action_set))
 
-    # def get_action_space(self) -> jnp.ndarray: # deprecated
-    #     return jnp.array(self.action_set)
-
     def observation_space(self) -> spaces.Dict:
-        """Returns the observation space for Seaquest.
+        """Returns the observation space for ChopperCommand.
         The observation contains:
         - player: PlayerEntity (x, y, o, width, height, active)
-        - sharks: array of shape (12, 5) with x,y,width,height,active for each shark
-        - submarines: array of shape (12, 5) with x,y,width,height,active for each submarine
-        - divers: array of shape (4, 5) with x,y,width,height,active for each diver
-        - enemy_missiles: array of shape (4, 5) with x,y,width,height,active for each missile
-        - surface_submarine: EntityPosition (x, y, width, height, active)
+        - trucks: array of shape (12, 5) with x,y,width,height,active for each truck
+        - jets: array of shape (12, 5) with x,y,width,height,active for each jet
+        - choppers: array of shape (12, 5) with x,y,width,height,active for each chopper
+        - enemy_missiles: array of shape (8, 5) with x,y,width,height,active for each missile
         - player_missile: EntityPosition (x, y, width, height, active)
-        - collected_divers: int (0-6)
         - player_score: int (0-999999)
         - lives: int (0-3)
-        - oxygen_level: int (0-255)
         """
         return spaces.Dict({
             "player": spaces.Dict({
                 "x": spaces.Box(low=0, high=160, shape=(), dtype=jnp.int32),
                 "y": spaces.Box(low=0, high=210, shape=(), dtype=jnp.int32),
-                "o": spaces.Box(low=0, high=1, shape=(), dtype=jnp.int32),
+                "o": spaces.Box(low=-1, high=1, shape=(), dtype=jnp.int32),
                 "width": spaces.Box(low=0, high=160, shape=(), dtype=jnp.int32),
                 "height": spaces.Box(low=0, high=210, shape=(), dtype=jnp.int32),
                 "active": spaces.Box(low=0, high=1, shape=(), dtype=jnp.int32),
             }),
-            "trucks": spaces.Box(low=0, high=160, shape=(self.consts.MAX_TRUCKS, 5), dtype=jnp.int32),
-            "jets": spaces.Box(low=0, high=160, shape=(self.consts.MAX_JETS, 5), dtype=jnp.int32),
-            "choppers": spaces.Box(low=0, high=160, shape=(self.consts.MAX_CHOPPERS, 5), dtype=jnp.int32),
-            "enemy_missiles": spaces.Box(low=0, high=160, shape=(self.consts.MAX_ENEMY_MISSILES, 5), dtype=jnp.int32),
+            "trucks": spaces.Box(low=0, high=160, shape=(12, 5), dtype=jnp.int32),
+            "jets": spaces.Box(low=0, high=160, shape=(12, 5), dtype=jnp.int32),
+            "choppers": spaces.Box(low=0, high=160, shape=(12, 5), dtype=jnp.int32),
+            "enemy_missiles": spaces.Box(low=0, high=160, shape=(8, 5), dtype=jnp.int32),
             "player_missile": spaces.Dict({
                 "x": spaces.Box(low=0, high=160, shape=(), dtype=jnp.int32),
                 "y": spaces.Box(low=0, high=210, shape=(), dtype=jnp.int32),
@@ -480,22 +487,22 @@ class JaxChopperCommand(JaxEnvironment[ChopperCommandState, ChopperCommandObserv
 
     def image_space(self) -> spaces.Box:
         """Returns the image space for ChopperCommand.
-        The image is a RGB image with shape (160, 210, 3).
+        The image is a RGB image with shape (210, 160, 3).
         """
         return spaces.Box(
             low=0,
             high=255,
             shape=(210, 160, 3),
-            dtype=jnp.uint8,
+            dtype=jnp.uint8
         )
 
-    @partial(jax.jit, static_argnums=(0, ))
+    @partial(jax.jit, static_argnums=(0,))
     def _get_observation(self, state: ChopperCommandState) -> ChopperCommandObservation:
         # Create player (already scalar, no need for vectorization)
         player = PlayerEntity(
             x=state.player_x,
             y=state.player_y,
-            o=state.player_velocity_x,
+            o=state.player_facing_direction,
             width=jnp.array(self.consts.PLAYER_SIZE[0]),
             height=jnp.array(self.consts.PLAYER_SIZE[1]),
             active=jnp.array(1),  # Player is always active
@@ -503,44 +510,55 @@ class JaxChopperCommand(JaxEnvironment[ChopperCommandState, ChopperCommandObserv
 
         # Define a function to convert enemy positions to entity format
         def convert_to_entity(pos, size):
+            active = jnp.where((pos[2] != 0) & (pos[3] == 0), 1, 0)
             return jnp.array([
                 pos[0],  # x position
                 pos[1],  # y position
                 size[0],  # width
                 size[1],  # height
-                pos[2] != 0,  # active flag
+                active,  # active flag
+            ])
+
+        def convert_missile(pos, size):
+            active = jnp.where(pos[2] != 0, 1, 0)
+            return jnp.array([
+                pos[0],  # x position
+                pos[1],  # y position
+                size[0],  # width
+                size[1],  # height
+                active,  # active flag
             ])
 
         # Apply conversion to each type of entity using vmap
 
-        # Friendly trucks
+        # Trucks
         trucks = jax.vmap(lambda pos: convert_to_entity(pos, self.consts.TRUCK_SIZE))(
             state.truck_positions
         )
 
-        # Enemy jets
+        # Jets
         jets = jax.vmap(lambda pos: convert_to_entity(pos, self.consts.JET_SIZE))(
             state.jet_positions
         )
 
-        # Enemy choppers
+        # Choppers
         choppers = jax.vmap(lambda pos: convert_to_entity(pos, self.consts.CHOPPER_SIZE))(
             state.chopper_positions
         )
 
         # Enemy missiles
-        enemy_missiles = jax.vmap(lambda pos: convert_to_entity(pos, self.consts.ENEMY_MISSILE_SIZE))(
+        enemy_missiles = jax.vmap(lambda pos: convert_missile(pos, self.consts.ENEMY_MISSILE_SIZE))(
             state.enemy_missile_positions
         )
 
-        # Player missile (scalar)
-        missile_pos = state.player_missile_positions
+        # Player missile (select the first one, assuming single or primary missile)
+        missile_pos = state.player_missile_positions[0]  # Assuming first is the primary
         player_missile = EntityPosition(
             x=missile_pos[0],
             y=missile_pos[1],
             width=jnp.array(self.consts.PLAYER_MISSILE_SIZE[0]),
             height=jnp.array(self.consts.PLAYER_MISSILE_SIZE[1]),
-            active=jnp.array(missile_pos[2] != 0),
+            active=jnp.where(missile_pos[2] != 0, 1, 0),
         )
 
         # Return observation
@@ -563,7 +581,7 @@ class JaxChopperCommand(JaxEnvironment[ChopperCommandState, ChopperCommandObserv
         )
 
     @partial(jax.jit, static_argnums=(0,))
-    def _get_env_reward(self, previous_state: ChopperCommandState, state: ChopperCommandState):
+    def _get_reward(self, previous_state: ChopperCommandState, state: ChopperCommandState):
         return state.score - previous_state.score
 
     @partial(jax.jit, static_argnums=(0,))
@@ -1946,7 +1964,7 @@ class JaxChopperCommand(JaxEnvironment[ChopperCommandState, ChopperCommandObserv
         # Obs/Reward/Done/Info + stack
         observation = self._get_observation(step_state)
         done        = self._get_done(step_state)
-        env_reward  = self._get_env_reward(prev, step_state)
+        reward  = self._get_reward(prev, step_state)
         all_rewards = self._get_all_rewards(prev, step_state)
         info        = self._get_info(step_state, all_rewards)
 
@@ -1957,7 +1975,7 @@ class JaxChopperCommand(JaxEnvironment[ChopperCommandState, ChopperCommandObserv
         step_state = step_state._replace(obs_stack=new_obs_stack)
 
         # Return matching your caller (obs, state, reward, done, info)
-        return new_obs_stack, step_state, env_reward, done, info
+        return new_obs_stack, step_state, reward, done, info
 
 
 class ChopperCommandRenderer(JAXGameRenderer):
