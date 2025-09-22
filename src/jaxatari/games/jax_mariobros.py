@@ -1488,18 +1488,13 @@ class JaxMarioBros(JaxEnvironment[
             info: MarioBrosInfo.
         """
 
-        def game_over(_) -> MarioBrosState:
-            jax.debug.print("Game Over")
-            def restart():
-                obs, state = self.reset()
-                info = self._get_info(state)
-                return obs, state, 0.0, False, info
-            def wait():
-                obs = self._get_observation(state)
-                info = self._get_info(state)
-                return obs, state, 0.0, False, info
-            cond = (action == Action.FIRE) | (action == Action.LEFTFIRE) | (action == Action.RIGHTFIRE) | (action == Action.RIGHT) | (action == Action.RIGHTFIRE) | (action == Action.LEFT) | (action == Action.LEFTFIRE)
-            return lax.cond(cond, restart, wait)
+        def game_over(state: MarioBrosState) -> MarioBrosState:
+            obs, new_state = self.reset()
+            obs = self._get_observation(state)
+            info = self._get_info(state)
+            reward = self._get_reward(state, new_state)
+            return obs, new_state, reward, True, info
+           
 
         def step(_) -> MarioBrosState:
             # 1) Advance player state given action
@@ -1555,8 +1550,9 @@ class JaxMarioBros(JaxEnvironment[
                 # Beobachtung und Info aus dem endgültigen Zustand holen
                 obs = self._get_observation(new_state)
                 info = self._get_info(new_state)
-                
-                return obs, new_state, 0.0, False, info
+                reward = self._get_reward(state, new_state)
+                done = self._get_done(new_state)
+                return obs, new_state, reward, done, info
 
             # --- No strong enemy collision: normal game progress ---
             def on_no_hit(_):
@@ -1766,13 +1762,14 @@ class JaxMarioBros(JaxEnvironment[
                 )
 
                 obs = self._get_observation(new_state)
-
-                return obs, new_state, 0.0, False, self._get_info(new_state)
+                reward = self._get_reward(state, new_state)
+                done = self._get_done(new_state)
+                return obs, new_state, reward, done, self._get_info(new_state)
 
             # 10) Return based on whether strong enemy was hit
             cond = (strong_enemy_hit | fireball_hit) & jnp.logical_not(new_player.safe)
             return jax.lax.cond(cond, on_hit, on_no_hit, new_player)
-        return lax.cond(state.game.game_over, game_over, step, state)
+        return lax.cond(self._get_done(state), game_over, step, state)
 
 
 # run game with: python scripts\play.py --game mariobros
