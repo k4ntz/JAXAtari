@@ -11,7 +11,7 @@ from jaxatari.rendering import jax_rendering_utils as jr
 from jaxatari.environment import JaxEnvironment, JAXAtariAction as Action
 # NA HÖÖÖR MAAAAL so
 # Kong # imaging whatever  finali cant believe ita
-# SOOOOOOO bread
+# SOOOOOOO bread ungabuinga
 # jetztz könnte es oiserst wild werden :D
 # if thiu
 class PongConstants(NamedTuple):
