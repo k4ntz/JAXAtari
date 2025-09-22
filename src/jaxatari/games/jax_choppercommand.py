@@ -421,7 +421,7 @@ class JaxChopperCommand(JaxEnvironment[ChopperCommandState, ChopperCommandObserv
             jnp.array([entity.width], dtype=jnp.int32),
             jnp.array([entity.height], dtype=jnp.int32),
             jnp.array([entity.active], dtype=jnp.int32)
-        ])
+        ]).flatten()
 
     def flatten_player_entity(self, entity: PlayerEntity) -> jnp.ndarray:
         return jnp.concatenate([
@@ -431,7 +431,7 @@ class JaxChopperCommand(JaxEnvironment[ChopperCommandState, ChopperCommandObserv
             jnp.array([entity.width], dtype=jnp.int32),
             jnp.array([entity.height], dtype=jnp.int32),
             jnp.array([entity.active], dtype=jnp.int32)
-        ])
+        ]).flatten()
 
     @partial(jax.jit, static_argnums=(0,))
     def obs_to_flat_array(self, obs: ChopperCommandObservation) -> jnp.ndarray:
