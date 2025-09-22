@@ -38,7 +38,7 @@ class KlaxConstants(NamedTuple):
     PLAYER_WIDTH: int = 7
     PLAYER_HEIGHT: int = 4
     PLAYER_Y: int = DESPAWN_Y + 6
-    RESPONSIVENESS: int = 2             # can be tuned; pixels per step when player moving left/right
+    RESPONSIVENESS: int = 1            # can be tuned; pixels per step when player moving left/right
     PLAYER_BACKPACK_MAX: int = 5
 
     # Waves
@@ -507,6 +507,10 @@ class JaxKlax(JaxEnvironment[KlaxState, KlaxObservation, KlaxInfo, KlaxConstants
 
         step_counter = state.step_counter + 1
 
+        # --- per-wave speed multiplier ---
+        s_num = jnp.int32(10) + state.wave_idx
+        s_den = jnp.int32(10)
+
         # --- speed-up when down-key is pressed ---
         speed_pressed = (
                 (action == Action.DOWN) |
@@ -534,10 +538,11 @@ class JaxKlax(JaxEnvironment[KlaxState, KlaxObservation, KlaxInfo, KlaxConstants
         den = jnp.int32(self.consts.FALL_DURATION_SECONDS * self.consts.STEPS_PER_SECOND)
 
         # add "progress units" proportional to speed; convert to whole pixels
-        add_units = speed_mul * dist
+        add_units = speed_mul * dist * s_num
+        den_scaled = den * s_den
         accum_new = tiles_progress_accum + add_units
-        delta_px = accum_new // den
-        accum_new = accum_new % den
+        delta_px = accum_new // den_scaled
+        accum_new = accum_new % den_scaled
 
         y_after = jnp.minimum(jnp.int32(self.consts.DESPAWN_Y), state.tiles_y + delta_px)
 
@@ -593,15 +598,16 @@ class JaxKlax(JaxEnvironment[KlaxState, KlaxObservation, KlaxInfo, KlaxConstants
         spawn_den = jnp.int32(self.consts.SPAWN_INTERVAL_SECONDS * self.consts.STEPS_PER_SECOND)
         spawn_accum_prev = state.spawn_progress_accum
 
-        spawn_accum_next = spawn_accum_prev + speed_mul
+        spawn_accum_next = spawn_accum_prev + speed_mul * s_num
 
         # propose a spawn whenever the accumulator crosses the threshold
-        spawn_proposed = spawn_accum_next >= spawn_den
+        spawn_den_scaled = spawn_den * s_den
+        spawn_proposed = spawn_accum_next >= spawn_den_scaled
         free_mask = (tiles_active == 0)
         has_free = jnp.any(free_mask)
         spawn_ok = spawn_proposed & has_free & (state.wave_active == 1)
         # only consume accumulator when a spawn actually happens; otherwise keep the credit
-        spawn_accum_after = jax.lax.select(spawn_ok, spawn_accum_next - spawn_den, spawn_accum_next)
+        spawn_accum_after = jax.lax.select(spawn_ok, spawn_accum_next - spawn_den_scaled, spawn_accum_next)
 
         col = jax.random.randint(k_spawn_col, (), 0, self.consts.BOARD_COLS)
         color_idx = jax.random.randint(k_spawn_color, (), 0, self.consts.N_TILE_TYPES)
