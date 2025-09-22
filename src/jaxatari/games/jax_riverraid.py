@@ -8,7 +8,7 @@ from functools import partial
 from jax import lax
 import jax.lax
 
-from gymnax.environments import spaces
+import jaxatari.spaces as spaces
 
 from jaxatari.environment import JaxEnvironment, JAXAtariAction as Action
 from jaxatari.renderers import JAXGameRenderer
@@ -1337,6 +1337,14 @@ class JaxRiverraid(JaxEnvironment):
             fuel_state=state.fuel_state,
         )
 
+    def image_space(self) -> spaces.Box:
+        return spaces.Box(
+            low=0,
+            high=255,
+            shape=(SCREEN_HEIGHT, SCREEN_WIDTH, 3),
+            dtype=jnp.uint8
+        )
+
     def reset(self, key=None) -> Tuple[RiverraidObservation, RiverraidState]:
         river_start_x = (SCREEN_WIDTH - DEFAULT_RIVER_WIDTH) // 2
         river_end_x = river_start_x + DEFAULT_RIVER_WIDTH
@@ -1572,7 +1580,6 @@ class JaxRiverraid(JaxEnvironment):
                 obs.fuel_x.flatten(),
                 obs.fuel_y.flatten(),
                 obs.fuel_state.flatten(),
-                obs.damage_position.flatten(),
             ]
         )
 
