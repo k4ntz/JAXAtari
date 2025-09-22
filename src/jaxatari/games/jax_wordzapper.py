@@ -482,10 +482,9 @@ def scrolling_letters(state: WordZapperState, consts: WordZapperConstants) -> ch
 
     reset_x = jnp.max(new_letters_x) + consts.LETTERS_DISTANCE
 
-    # Track which letters are being reset (scrolled off screen)
+    # Track which letters are being reset
     just_reset = (new_letters_x < consts.LETTER_RESET_X)
 
-    # Letters reappear as soon as they are fully off screen and cooldown is over
     new_letters_alive = state.letters_alive
     # Decrement cooldown for all letters
     new_letters_alive = new_letters_alive.at[:, 1].set(
@@ -495,8 +494,8 @@ def scrolling_letters(state: WordZapperState, consts: WordZapperConstants) -> ch
             new_letters_alive[:, 1]
         )
     )
-    # Revive letters that are being reset to the rightmost position (i.e., when a new alphabet sequence starts)
-    # Only revive if the letter is currently not alive (was shot)
+    # Revive letters that are being reset to the rightmost position
+    # Only revive if the letter is currently not alive
     just_reset = (new_letters_x < consts.LETTER_RESET_X)
     new_letters_alive = new_letters_alive.at[:, 0].set(
         jnp.where(
@@ -572,7 +571,7 @@ def scrolling_letters(state: WordZapperState, consts: WordZapperConstants) -> ch
         return l, frame, timer, frame_timer, pos
 
 
-    # Only allow zapping if the letter is alive (not already shot/disappeared)
+    # Only allow zapping if the letter is alive
     is_letter_alive = jnp.where(target_letter_id != -1, state.letters_alive[target_letter_id, 0] == 1, False)
     zap_condition = jnp.logical_and(state.player_zapper_position[2], jnp.logical_and(target_letter_id != -1, is_letter_alive))
 
@@ -600,7 +599,7 @@ def scrolling_letters(state: WordZapperState, consts: WordZapperConstants) -> ch
         )
     )
 
-    # Custom explosion animation sequence (independent of PLAYER_ZAPPER_COOLDOWN_TIME)
+    # Explosion animation sequence
     explosion_sequence = jnp.array([
         [0, 1],  # 1.npy - 1 frame
         [1, 2],  # 2.npy - 2 frames
@@ -684,7 +683,8 @@ def player_missile_step(
         state.player_missile_position,
     )
     
-    # if a missile is in frame and exists, we move the missile further in the specified direction (5 per tick), also always put the missile at the current player y position
+    # if a missile is in frame and exists, we move the missile further in the specified direction
+    # also always put the missile at the current player y position
     new_missile = jnp.where(
         state.player_missile_position[2],
         jnp.array([
@@ -736,6 +736,7 @@ def enemy_spawn_step(
                 is_free = lane_free_mask[lane]
                 return jnp.where((chosen == -1) & is_free, lane, chosen)
             lane_idx = jax.lax.fori_loop(0, 4, pick_lane, -1)
+            # i swear this is not ai
             final_y = jnp.where(lane_idx == -1, -9999, lanes[0])
             enemy_type = jax.random.randint(sk_type, (), 0, 2)
             new_enemy = jnp.where(lane_idx == -1,
@@ -1135,7 +1136,7 @@ class JaxWordZapper(JaxEnvironment[WordZapperState, WordZapperObservation, WordZ
 
         # Player zapper: shape (7,) -> x, y, active, cooldown, pulse, initial_x, block_zapper
         zapper_pos = state.player_zapper_position
-        # Keep only x, y, width, height, active, cooldown (6 fields)
+        # Keep only x, y, width, height, active, cooldown
         player_zapper = jnp.array([
             zapper_pos[0],  # x
             zapper_pos[1],  # y
@@ -1202,7 +1203,7 @@ class JaxWordZapper(JaxEnvironment[WordZapperState, WordZapperObservation, WordZ
 
     @partial(jax.jit, static_argnums=(0,))
     def _get_done(self, state: WordZapperState) -> bool:
-        """Check if the game should end due to timer expiring."""
+        """Check if the game should end due to countdown expiring."""
         return jnp.logical_or(state.timer == 0, state.finised_level_count == 3)
     
     def flatten_entity_position(self, entity: EntityPosition) -> jnp.ndarray:
@@ -1242,7 +1243,7 @@ class JaxWordZapper(JaxEnvironment[WordZapperState, WordZapperObservation, WordZ
 
     @partial(jax.jit, static_argnums=(0,))
     def _get_env_reward(self, previous_state: WordZapperState, state: WordZapperState):
-        # Reward is score difference (if score field exists)
+        # Reward is score difference
         return state.score - previous_state.score
 
     @partial(jax.jit, static_argnums=(0,))
@@ -1617,7 +1618,7 @@ class JaxWordZapper(JaxEnvironment[WordZapperState, WordZapperObservation, WordZ
                 i, zapped_letters[i], state.letters_char, new_current_letter_index, target_word
             )
 
-        # Word length & special-gate logic
+        # Word length and special-gate logic
         word_len = jnp.sum(target_word >= 0).astype(jnp.int32)
         now_waiting_for_special = (new_current_letter_index >= word_len).astype(jnp.int32)
 
@@ -1767,7 +1768,7 @@ class WordZapperRenderer(JAXGameRenderer):
                 flip_horizontal=state.player_direction == self.consts.FACE_LEFT,
             )
 
-            # missile (if any)
+            # missile
             raster = jax.lax.cond(
                 state.player_missile_position[2],
                 lambda r: jr.render_at(
@@ -1937,7 +1938,7 @@ class WordZapperRenderer(JAXGameRenderer):
                 return jnp.sum(cols).astype(jnp.int32)
             
             def layout_params(word_arr, gap_px=10, baseline_shift=22):
-                # Count real letters (>=0)
+                # Count real letters
                 n_letters = jnp.sum(word_arr >= 0)
                 letter_idxs = jnp.arange(26, dtype=jnp.int32)
                 letter_ws = jax.vmap(measure_letter_width)(letter_idxs)
@@ -1945,7 +1946,7 @@ class WordZapperRenderer(JAXGameRenderer):
                 q_w = measure_qmark_width()
                 cell_w = jnp.maximum(max_letter_w, q_w)
 
-                # Total width = n * cell + gaps
+                # Total width calculation
                 total_w = n_letters * cell_w + jnp.maximum(n_letters - 1, 0) * gap_px
                 start_x = (self.consts.WIDTH - total_w) // 2
 
