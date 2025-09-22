@@ -416,22 +416,22 @@ class JaxChopperCommand(JaxEnvironment[ChopperCommandState, ChopperCommandObserv
 
     def flatten_entity_position(self, entity: EntityPosition) -> jnp.ndarray:
         return jnp.concatenate([
-            jnp.array([entity.x], dtype=jnp.int32),
-            jnp.array([entity.y], dtype=jnp.int32),
-            jnp.array([entity.width], dtype=jnp.int32),
-            jnp.array([entity.height], dtype=jnp.int32),
-            jnp.array([entity.active], dtype=jnp.int32)
-        ]).flatten()
+            jnp.array([entity.x], dtype=jnp.int32).flatten(),
+            jnp.array([entity.y], dtype=jnp.int32).flatten(),
+            jnp.array([entity.width], dtype=jnp.int32).flatten(),
+            jnp.array([entity.height], dtype=jnp.int32).flatten(),
+            jnp.array([entity.active], dtype=jnp.int32).flatten()
+        ])
 
     def flatten_player_entity(self, entity: PlayerEntity) -> jnp.ndarray:
         return jnp.concatenate([
-            jnp.array([entity.x], dtype=jnp.int32),
-            jnp.array([entity.y], dtype=jnp.int32),
-            jnp.array([entity.o], dtype=jnp.int32),
-            jnp.array([entity.width], dtype=jnp.int32),
-            jnp.array([entity.height], dtype=jnp.int32),
-            jnp.array([entity.active], dtype=jnp.int32)
-        ]).flatten()
+            jnp.array([entity.x], dtype=jnp.int32).flatten(),
+            jnp.array([entity.y], dtype=jnp.int32).flatten(),
+            jnp.array([entity.o], dtype=jnp.int32).flatten(),
+            jnp.array([entity.width], dtype=jnp.int32).flatten(),
+            jnp.array([entity.height], dtype=jnp.int32).flatten(),
+            jnp.array([entity.active], dtype=jnp.int32).flatten()
+        ])
 
     @partial(jax.jit, static_argnums=(0,))
     def obs_to_flat_array(self, obs: ChopperCommandObservation) -> jnp.ndarray:
