@@ -9,7 +9,11 @@ import jaxatari.spaces as spaces
 from jaxatari.renderers import JAXGameRenderer
 from jaxatari.rendering import jax_rendering_utils as jr
 from jaxatari.environment import JaxEnvironment, JAXAtariAction as Action
-
+# NA HÖÖÖR MAAAAL so
+# Kong # imaging whatever  finali cant believe ita
+# SOOOOOOO bread ungabuinga
+# jetztz könnte es oiserst wild werden :D
+# if thiu
 class PongConstants(NamedTuple):
     MAX_SPEED: int = 12
     BALL_SPEED: chex.Array = jnp.array([-1, 1])
@@ -440,10 +444,10 @@ class JaxPong(JaxEnvironment[PongState, PongObservation, PongInfo, PongConstants
         observation = self._get_observation(new_state)
 
         return observation, new_state, env_reward, done, info
+#ye
 
-
-    def render(self, state: PongState) -> jnp.ndarray:
-        return self.renderer.render(state)
+    # def render(self, state: PongState) -> jnp.ndarray:
+    #     return self.renderer.render(state)
 
     @partial(jax.jit, static_argnums=(0,))
     def _get_observation(self, state: PongState):
