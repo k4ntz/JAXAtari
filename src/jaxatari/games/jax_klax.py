@@ -22,6 +22,7 @@ class KlaxConstants(NamedTuple):
     STEPS_PER_SECOND: int = 60
     SPAWN_INTERVAL_SECONDS: int = 6
     FALL_DURATION_SECONDS: int = 9
+    SPEED_FACTOR: int = 10  # speed factor if down key is pressed
 
     SPAWN_START_Y: int = 44
     SHOOT_UP_Y: int = 62
@@ -29,7 +30,7 @@ class KlaxConstants(NamedTuple):
 
     BOARD_ROWS: int = 5
     BOARD_COLS: int = 5
-    BOARD_BOTTOM_Y: int = 177
+    BOARD_BOTTOM_Y: int = 179
     BOARD_GAP: int = 1
     COLUMN_START_X: int = 60
     COLUMN_STEP_X: int = 8
@@ -231,8 +232,19 @@ class KlaxState(NamedTuple):
     wave_active: chex.Array
     wave_cooldown_until: chex.Array
 
+    # progresses; needed for action down
+    tiles_progress_accum: chex.Array
+    spawn_progress_accum: chex.Array
+
 
 class JaxKlax(JaxEnvironment[KlaxState, KlaxObservation, KlaxInfo, KlaxConstants]):
+    # --- Orientation codes ---
+    ORIENT_H: int = 0     # horizontal
+    ORIENT_V: int = 1     # vertical
+    ORIENT_D1: int = 2    # diagonal down-right
+    ORIENT_D2: int = 3    # diagonal up-right
+
+
     def __init__(self, consts: KlaxConstants = None, reward_funcs: list[callable]=None):
         consts = consts or KlaxConstants()
         super().__init__(consts)
@@ -261,10 +273,162 @@ class JaxKlax(JaxEnvironment[KlaxState, KlaxObservation, KlaxInfo, KlaxConstants
             Action.RIGHT,
             Action.UP,
             Action.FIRE,
+            Action.DOWN,
         ]
+
+        self._kernels = {
+            3: (jnp.ones((1, 3), dtype=jnp.int32), jnp.ones((3, 1), dtype=jnp.int32),
+                jnp.eye(3, dtype=jnp.int32), jnp.fliplr(jnp.eye(3, dtype=jnp.int32))),
+            4: (jnp.ones((1, 4), dtype=jnp.int32), jnp.ones((4, 1), dtype=jnp.int32),
+                jnp.eye(4, dtype=jnp.int32), jnp.fliplr(jnp.eye(4, dtype=jnp.int32))),
+            5: (jnp.ones((1, 5), dtype=jnp.int32), jnp.ones((5, 1), dtype=jnp.int32),
+                jnp.eye(5, dtype=jnp.int32), jnp.fliplr(jnp.eye(5, dtype=jnp.int32))),
+        }
+
+    @partial(jax.jit, static_argnums=(0,))
+    def _conv2d_valid(self, x_2d: chex.Array, k_2d: chex.Array) -> chex.Array:
+        # x: [H,W], k: [Kh, Kw]  ->  y: [H-Kh+1, W-Kw+1]
+        x4 = x_2d[None, None, ...].astype(jnp.int32)
+        k4 = k_2d[None, None, ...].astype(jnp.int32)
+        y4 = jax.lax.conv_general_dilated(
+            x4, k4,
+            window_strides=(1, 1),
+            padding='VALID',
+            dimension_numbers=('NCHW', 'OIHW', 'NCHW'),
+        )
+        return y4[0, 0]
+
+    @partial(jax.jit, static_argnums=(0,))
+    def _conv2d_full(self, x_valid: chex.Array, k_2d: chex.Array) -> chex.Array:
+        # emulate "full" by padding so output is board-size
+        Kh, Kw = int(k_2d.shape[0]), int(k_2d.shape[1])
+        x4 = x_valid[None, None, ...].astype(jnp.int32)
+        k4 = k_2d[None, None, ...].astype(jnp.int32)
+        pad = ((Kh - 1, Kh - 1), (Kw - 1, Kw - 1))
+        y4 = jax.lax.conv_general_dilated(
+            x4, k4,
+            window_strides=(1, 1),
+            padding=pad,
+            dimension_numbers=('NCHW', 'OIHW', 'NCHW'),
+        )
+        return y4[0, 0]
+
+    @partial(jax.jit, static_argnums=(0, 2))
+    def _match_one_orientation_conv(
+            self,
+            board: chex.Array,
+            orientation_code: int,
+            points_tuple: tuple[int, int, int],  # (p3, p4, p5)
+    ) -> tuple[chex.Array, chex.Array, chex.Array]:
+        R, C = self.consts.BOARD_ROWS, self.consts.BOARD_COLS
+        p3, p4, p5 = (jnp.int32(points_tuple[0]),
+                      jnp.int32(points_tuple[1]),
+                      jnp.int32(points_tuple[2]))
+
+        remove_mask = jnp.zeros((R, C), dtype=jnp.bool_)
+        score_add = jnp.int32(0)
+        klax_add = jnp.int32(0)
+
+        # Unrolled 5 -> 4 -> 3 (keeps tracing simple & predictable)
+        def run_length(L, pts, remove_mask, score_add, klax_add):
+            Kh, Kv, Kd1, Kd2 = self._kernels[L]
+            # orientation_code is static -> compile-time branch (OK)
+            if orientation_code == self.ORIENT_H:
+                K = Kh
+            elif orientation_code == self.ORIENT_V:
+                K = Kv
+            elif orientation_code == self.ORIENT_D1:
+                K = Kd1
+            else:
+                K = Kd2
+
+            def per_color(c_idx):
+                color_val = jnp.int32(c_idx + 1)
+                color_mask = (board == color_val) & (~remove_mask)  # don't reuse cells already marked
+                wins = (self._conv2d_valid(color_mask, K) == L)  # [H-Kh+1, W-Kw+1] boolean
+                covered = self._conv2d_full(wins.astype(jnp.int32), K) > 0  # [H, W] "paint back"
+                return wins, covered
+
+            wins_c, covered_c = jax.vmap(per_color)(jnp.arange(self.consts.N_TILE_TYPES))
+            wins_any = jnp.any(wins_c, axis=0)  # windows map
+            covered_any = jnp.any(covered_c, axis=0)  # board map
+
+            k_len = wins_any.sum(dtype=jnp.int32)
+            score_add = score_add + k_len * pts
+            klax_add = klax_add + k_len
+            remove_mask = remove_mask | covered_any
+            return remove_mask, score_add, klax_add
+
+        remove_mask, score_add, klax_add = run_length(5, p5, remove_mask, score_add, klax_add)
+        remove_mask, score_add, klax_add = run_length(4, p4, remove_mask, score_add, klax_add)
+        remove_mask, score_add, klax_add = run_length(3, p3, remove_mask, score_add, klax_add)
+
+        return remove_mask, score_add, klax_add
+
+    @partial(jax.jit, static_argnums=(0,))
+    def _apply_matches_and_gravity(self, board: chex.Array):
+        """
+        Computes all orientations, removes matches, applies gravity.
+
+        Returns:
+          board_after (int32 [R,C])
+          score_add (int32)
+          total_klax_add (int32)
+          horiz_klax_add (int32)
+          diag_klax_add (int32)
+        """
+        # vertical: (3,4,5) -> 50, 1000, 1500
+        rm_v, sc_v, k_v    = self._match_one_orientation_conv(board, self.ORIENT_V,  (50, 1000, 1500))
+        # horizontal: 100, 500, 1000
+        rm_h, sc_h, k_h    = self._match_one_orientation_conv(board, self.ORIENT_H,  (100, 500, 1000))
+        # diag down-right: 500, 1000, 1500
+        rm_d1, sc_d1, k_d1 = self._match_one_orientation_conv(board, self.ORIENT_D1, (500, 1000, 1500))
+        # diag up-right:   500, 1000, 1500
+        rm_d2, sc_d2, k_d2 = self._match_one_orientation_conv(board, self.ORIENT_D2, (500, 1000, 1500))
+
+        remove_mask = rm_v | rm_h | rm_d1 | rm_d2
+        board_cleared = jnp.where(remove_mask, jnp.int32(0), board)
+
+        board_after = self._compact_board_columns(board_cleared)
+
+        score_add       = sc_v + sc_h + sc_d1 + sc_d2
+        total_klax_add  = k_v + k_h + k_d1 + k_d2
+        horiz_klax_add  = k_h
+        diag_klax_add   = k_d1 + k_d2
+        return board_after, score_add, total_klax_add, horiz_klax_add, diag_klax_add
+
+    @partial(jax.jit, static_argnums=(0,))
+    def _compact_board_columns(self, board: chex.Array) -> chex.Array:
+        """
+        Stable 'gravity' packing towards row 0 (bottom),
+        preserving the original bottom-to-top order.
+        Vectorized across columns with vmap; tiny fori over rows inside.
+        """
+        R = self.consts.BOARD_ROWS
+
+        def pack_col(col: chex.Array) -> chex.Array:
+            def body(r, carry):
+                out, w = carry
+                val = col[r]
+                is_tile = (val > 0)
+                out = jax.lax.cond(is_tile,
+                                   lambda a: a.at[w].set(val),
+                                   lambda a: a,
+                                   out)
+                w = jax.lax.select(is_tile, w + 1, w)
+                return (out, w)
+
+            out0 = jnp.zeros_like(col), jnp.int32(0)
+            newcol, _ = jax.lax.fori_loop(0, R, body, out0)
+            return newcol
+
+        # board shape: (R, C); vmap over columns (axis=1)
+        return jax.vmap(pack_col, in_axes=1, out_axes=1)(board)
 
     def get_human_action(self) -> chex.Array:
         keys = pygame.key.get_pressed()
+        if keys[pygame.K_s] or keys[pygame.K_DOWN]:
+            return jnp.array(Action.DOWN)
         if keys[pygame.K_a] or keys[pygame.K_LEFT]:
             return jnp.array(Action.LEFT)
         if keys[pygame.K_d] or keys[pygame.K_RIGHT]:
@@ -314,6 +478,9 @@ class JaxKlax(JaxEnvironment[KlaxState, KlaxObservation, KlaxInfo, KlaxConstants
             wave_score_base=jnp.int32(0),
             wave_active=jnp.int32(1 if self._n_waves > 0 else 0),
             wave_cooldown_until=jnp.int32(0),
+
+            tiles_progress_accum=jnp.zeros((self.consts.MAX_TILES,), dtype=jnp.int32),
+            spawn_progress_accum=jnp.int32(0),
         )
         return self._get_observation(state), state
 
@@ -348,6 +515,12 @@ class JaxKlax(JaxEnvironment[KlaxState, KlaxObservation, KlaxInfo, KlaxConstants
 
         step_counter = state.step_counter + 1
 
+        # --- speed-up when down-key is pressed ---
+        speed_pressed = (action == jnp.array(Action.DOWN)).astype(jnp.int32)
+        speed_mul = jnp.where(speed_pressed == 1,
+                              jnp.int32(self.consts.SPEED_FACTOR),
+                              jnp.int32(1))
+
         k_spawn_col, k_spawn_color, k_after = jax.random.split(state.rng_key, 3)
 
         # ---- tiles fall ----
@@ -356,22 +529,28 @@ class JaxKlax(JaxEnvironment[KlaxState, KlaxObservation, KlaxInfo, KlaxConstants
         tiles_active = state.tiles_active
         tiles_col = state.tiles_col
         tiles_spawn_step = state.tiles_spawn_step
+        tiles_progress_accum = state.tiles_progress_accum
 
         dist = jnp.int32(self.consts.DESPAWN_Y - self.consts.SPAWN_START_Y)
         den = jnp.int32(self.consts.FALL_DURATION_SECONDS * self.consts.STEPS_PER_SECOND)
 
-        elapsed = jnp.maximum(jnp.int32(0), step_counter - tiles_spawn_step)  # steps since tile spawn
-        progress = (elapsed * dist) // den
-        computed_y = jnp.int32(self.consts.SPAWN_START_Y) + progress
-        computed_y = jnp.minimum(computed_y, jnp.int32(self.consts.DESPAWN_Y))
+        # add "progress units" proportional to speed; convert to whole pixels
+        add_units = speed_mul * dist
+        accum_new = tiles_progress_accum + add_units
+        delta_px = accum_new // den
+        accum_new = accum_new % den
 
-        tiles_y = jnp.where(tiles_active == 1, computed_y, state.tiles_y)
+        y_after = jnp.minimum(jnp.int32(self.consts.DESPAWN_Y), state.tiles_y + delta_px)
+
+        # only update active tiles
+        tiles_y = jnp.where(tiles_active == 1, y_after, state.tiles_y)
+        tiles_progress_accum = jnp.where(tiles_active == 1, accum_new, tiles_progress_accum)
 
         # ---- capture / vanish at DESPAWN_Y ----
         reached = (tiles_y >= jnp.int32(self.consts.DESPAWN_Y)) & (tiles_active == 1)
 
         def capture_body(i, carry):
-            bp_colors, bp_count, t_active, t_y, t_spawn, miss_count, cap_score = carry
+            (bp_colors, bp_count, t_active, t_y, t_spawn, t_accum, miss_count, cap_score) = carry
             match = reached[i] & (tiles_col[i] == state.player_col) & (
                     bp_count < jnp.int32(self.consts.PLAYER_BACKPACK_MAX)
             )
@@ -391,8 +570,9 @@ class JaxKlax(JaxEnvironment[KlaxState, KlaxObservation, KlaxInfo, KlaxConstants
             t_active = jax.lax.cond(reached[i], lambda a: a.at[i].set(jnp.int32(0)), lambda a: a, t_active)
             t_y = jax.lax.cond(reached[i], lambda y: y.at[i].set(jnp.int32(0)), lambda y: y, t_y)
             t_spawn = jax.lax.cond(reached[i], lambda s: s.at[i].set(jnp.int32(0)), lambda s: s, t_spawn)
+            t_accum = jax.lax.cond(reached[i], lambda a: a.at[i].set(jnp.int32(0)), lambda a: a, t_accum)
 
-            return (bp_colors, bp_count, t_active, t_y, t_spawn, miss_count, cap_score)
+            return (bp_colors, bp_count, t_active, t_y, t_spawn, t_accum, miss_count, cap_score)
 
         bp_init = (
             state.player_backpack_colors,
@@ -400,22 +580,30 @@ class JaxKlax(JaxEnvironment[KlaxState, KlaxObservation, KlaxInfo, KlaxConstants
             tiles_active,
             tiles_y,
             tiles_spawn_step,
+            tiles_progress_accum,
             jnp.int32(0),
             jnp.int32(0),
         )
 
-        (player_backpack_colors, player_backpack_count, tiles_active, tiles_y, tiles_spawn_step,miss_count,
-            cap_score_add) = jax.lax.fori_loop(0, self.consts.MAX_TILES, capture_body, bp_init)
+        (player_backpack_colors, player_backpack_count, tiles_active, tiles_y, tiles_spawn_step, tiles_progress_accum,
+         miss_count, cap_score_add) = jax.lax.fori_loop(0, self.consts.MAX_TILES, capture_body, bp_init)
 
         new_lives = jnp.maximum(jnp.int32(0), state.lives - miss_count)  # lives update
 
         # ---- spawn ----
-        spawn_interval_steps = jnp.int32(self.consts.SPAWN_INTERVAL_SECONDS * self.consts.STEPS_PER_SECOND)
-        spawn_due = (step_counter == jnp.int32(1)) | (((step_counter - jnp.int32(1)) % spawn_interval_steps) == 0)
+        spawn_den = jnp.int32(self.consts.SPAWN_INTERVAL_SECONDS * self.consts.STEPS_PER_SECOND)
+        spawn_accum_prev = state.spawn_progress_accum
 
+        # add speed_mul time-units per frame
+        spawn_accum_next = spawn_accum_prev + speed_mul
+
+        # propose a spawn whenever the accumulator crosses the threshold
+        spawn_proposed = spawn_accum_next >= spawn_den
         free_mask = (tiles_active == 0)
         has_free = jnp.any(free_mask)
-        spawn_ok = spawn_due & has_free & (state.wave_active == 1)
+        spawn_ok = spawn_proposed & has_free & (state.wave_active == 1)
+        # only consume accumulator when a spawn actually happens; otherwise keep the credit
+        spawn_accum_after = jax.lax.select(spawn_ok, spawn_accum_next - spawn_den, spawn_accum_next)
 
         col = jax.random.randint(k_spawn_col, (), 0, self.consts.BOARD_COLS)
         color_idx = jax.random.randint(k_spawn_color, (), 0, self.consts.N_TILE_TYPES)
@@ -424,18 +612,19 @@ class JaxKlax(JaxEnvironment[KlaxState, KlaxObservation, KlaxInfo, KlaxConstants
         first_free = jnp.argmax(free_mask.astype(jnp.int32))
 
         def do_spawn(vals):
-            tiles_x, tiles_y, tiles_color, tiles_active, tiles_col, tiles_spawn_step = vals
+            tiles_x, tiles_y, tiles_color, tiles_active, tiles_col, tiles_spawn_step, tiles_progress_accum = vals
             tiles_x = tiles_x.at[first_free].set(spawn_x)
             tiles_y = tiles_y.at[first_free].set(jnp.int32(self.consts.SPAWN_START_Y))
             tiles_color = tiles_color.at[first_free].set(color_idx)
             tiles_active = tiles_active.at[first_free].set(jnp.int32(1))
             tiles_col = tiles_col.at[first_free].set(col)
             tiles_spawn_step = tiles_spawn_step.at[first_free].set(step_counter)
-            return tiles_x, tiles_y, tiles_color, tiles_active, tiles_col, tiles_spawn_step
+            tiles_progress_accum = tiles_progress_accum.at[first_free].set(jnp.int32(0))
+            return tiles_x, tiles_y, tiles_color, tiles_active, tiles_col, tiles_spawn_step, tiles_progress_accum
 
-        (tiles_x, tiles_y, tiles_color, tiles_active, tiles_col, tiles_spawn_step) = jax.lax.cond(
+        (tiles_x, tiles_y, tiles_color, tiles_active, tiles_col, tiles_spawn_step, tiles_progress_accum) = jax.lax.cond(
             spawn_ok, do_spawn, lambda v: v,
-            (tiles_x, tiles_y, tiles_color, tiles_active, tiles_col, tiles_spawn_step))
+            (tiles_x, tiles_y, tiles_color, tiles_active, tiles_col, tiles_spawn_step, tiles_progress_accum))
 
         # ---- player movement ----
         def col_left_x(c):
@@ -500,7 +689,7 @@ class JaxKlax(JaxEnvironment[KlaxState, KlaxObservation, KlaxInfo, KlaxConstants
 
         def do_up(vals):
             (tiles_x, tiles_y, tiles_color, tiles_active, tiles_col, tiles_spawn_step,
-             bp_colors, bp_count) = vals
+             tiles_progress_accum, bp_colors, bp_count) = vals
 
             color_top = bp_colors[bp_count - 1]  # LIFO
 
@@ -515,134 +704,26 @@ class JaxKlax(JaxEnvironment[KlaxState, KlaxObservation, KlaxInfo, KlaxConstants
             dist_local = jnp.int32(self.consts.DESPAWN_Y - self.consts.SPAWN_START_Y)
             den_local = jnp.int32(self.consts.FALL_DURATION_SECONDS * self.consts.STEPS_PER_SECOND)
             delta_y = jnp.int32(self.consts.SHOOT_UP_Y - self.consts.SPAWN_START_Y)
-            elapsed_needed = (delta_y * den_local + dist_local - 1) // dist_local
-            tiles_spawn_step = tiles_spawn_step.at[up_first_free].set(step_counter - elapsed_needed)
+            tiles_spawn_step = tiles_spawn_step.at[up_first_free].set(step_counter)
+            tiles_progress_accum = tiles_progress_accum.at[up_first_free].set(jnp.int32(0))
 
             bp_count = bp_count - 1
             return (tiles_x, tiles_y, tiles_color, tiles_active, tiles_col, tiles_spawn_step,
-                    bp_colors, bp_count)
+                    tiles_progress_accum, bp_colors, bp_count)
 
         (tiles_x, tiles_y, tiles_color, tiles_active, tiles_col, tiles_spawn_step,
-         player_backpack_colors, player_backpack_count) = jax.lax.cond(
+         tiles_progress_accum, player_backpack_colors, player_backpack_count) = jax.lax.cond(
             up_can_spawn,
             do_up,
             lambda v: v,
             (tiles_x, tiles_y, tiles_color, tiles_active, tiles_col, tiles_spawn_step,
-             player_backpack_colors, player_backpack_count),
+             tiles_progress_accum, player_backpack_colors, player_backpack_count),
         )
 
-        # ---- match detection on 5x5 board (>=3; horizontal / vertical / diagonal) ----
-        R = self.consts.BOARD_ROWS
-        C = self.consts.BOARD_COLS
+        # ---- match detection + gravity ----
+        board_after, score_add, total_klax_add, horiz_klax_add, diag_klax_add = \
+            self._apply_matches_and_gravity(board)
 
-        def scan_orientation(board_in, dr: int, dc: int,
-                             p3: int, p4: int, p5: int,
-                             k3: int, k4: int, k5: int):
-            """finds max. neighbors (5,4,3)"""
-            occ = jnp.zeros((R, C), dtype=jnp.bool_)
-            mark = jnp.zeros((R, C), dtype=jnp.bool_)
-            score_add = jnp.int32(0)
-            klax_add = jnp.int32(0)
-
-            def run_length(L, pts, klx, carry):
-                occ_, mark_, sc_, kx_ = carry
-
-                def start_bounds(dim, L, step):
-                    lo = 0 if step >= 0 else L - 1
-                    hi = dim - L + 1 if step > 0 else dim
-                    return lo, hi
-
-                r_lo, r_hi = start_bounds(R, L, dr)
-                c_lo, c_hi = start_bounds(C, L, dc)
-
-                num_r = r_hi - r_lo
-                num_c = c_hi - c_lo
-                total = num_r * num_c
-
-                def body(idx, inner_carry):
-                    occ2, mark2, sc2, kx2 = inner_carry
-                    r = jnp.int32(r_lo) + (idx // jnp.int32(num_c))
-                    c = jnp.int32(c_lo) + (idx % jnp.int32(num_c))
-
-                    v0 = board_in[r, c]
-                    ok0 = (v0 != 0)
-
-                    def eq_body(k, ok):
-                        rr = r + jnp.int32(k * dr)
-                        cc = c + jnp.int32(k * dc)
-                        return ok & (board_in[rr, cc] == v0)
-
-                    ok = jax.lax.fori_loop(1, L, eq_body, ok0)
-
-                    def free_body(k, ok2):
-                        rr = r + jnp.int32(k * dr)
-                        cc = c + jnp.int32(k * dc)
-                        return ok2 & (~occ2[rr, cc])
-
-                    ok = jax.lax.fori_loop(0, L, free_body, ok)
-
-                    def on_match(carry2):
-                        occ3, mark3, sc3, kx3 = carry2
-
-                        def set_mask(k, m):
-                            rr = r + jnp.int32(k * dr)
-                            cc = c + jnp.int32(k * dc)
-                            return m.at[rr, cc].set(True)
-
-                        mark3 = jax.lax.fori_loop(0, L, set_mask, mark3)
-                        occ3 = jax.lax.fori_loop(0, L, set_mask, occ3)
-                        sc3 = sc3 + jnp.int32(pts)
-                        kx3 = kx3 + jnp.int32(klx)
-                        return (occ3, mark3, sc3, kx3)
-
-                    occ2, mark2, sc2, kx2 = jax.lax.cond(ok, on_match, lambda x: x, (occ2, mark2, sc2, kx2))
-                    return (occ2, mark2, sc2, kx2)
-
-                occ, mark, score_add, klax_add = jax.lax.fori_loop(
-                    0, jnp.int32(total), body, (occ_, mark_, sc_, kx_)
-                )
-                return (occ, mark, score_add, klax_add)
-
-            carry0 = (occ, mark, score_add, klax_add)
-            occ, mark, score_add, klax_add = run_length(5, p5, k5, carry0)
-            occ, mark, score_add, klax_add = run_length(4, p4, k4, (occ, mark, score_add, klax_add))
-            occ, mark, score_add, klax_add = run_length(3, p3, k3, (occ, mark, score_add, klax_add))
-            return mark, score_add, klax_add
-
-        # calculata points/klax
-        # vertical
-        mark_v, add_v, k_v = scan_orientation(board, 1, 0, 50, 1000, 1500, 1, 2, 3)
-        # horizontal
-        mark_h, add_h, k_h = scan_orientation(board, 0, 1, 100, 500, 1000, 1, 2, 3)
-        # diagonal down-right
-        mark_d1, add_d1, k_d1 = scan_orientation(board, 1, 1, 500, 1000, 1500, 1, 2, 3)
-        # diagonal up-right
-        mark_d2, add_d2, k_d2 = scan_orientation(board, -1, 1, 500, 1000, 1500, 1, 2, 3)
-
-        remove_mask = mark_v | mark_h | mark_d1 | mark_d2
-        board_cleared = jnp.where(remove_mask, jnp.int32(0), board)
-
-        # gravity
-        def compact_col(c, b):
-            colvec = b[:, c]
-
-            def body(r, carry):
-                out, widx = carry
-                val = colvec[r]
-                cond = (val > 0)
-                out = jax.lax.cond(cond, lambda arr: arr.at[widx].set(val), lambda arr: arr, out)
-                widx = jax.lax.select(cond, widx + 1, widx)
-                return (out, widx)
-
-            out_init = (jnp.zeros((R,), dtype=jnp.int32), jnp.int32(0))
-            newcol, _ = jax.lax.fori_loop(0, R, body, out_init)
-            return b.at[:, c].set(newcol)
-
-        board_after = jax.lax.fori_loop(0, C, compact_col, board_cleared)
-
-        # score + klax
-        score_add = add_v + add_h + add_d1 + add_d2
-        klax_add = k_v + k_h + k_d1 + k_d2
         new_score = state.score + score_add + cap_score_add
 
         # --- bonuses ---
@@ -655,9 +736,6 @@ class JaxKlax(JaxEnvironment[KlaxState, KlaxObservation, KlaxInfo, KlaxConstants
         empty_bonus_raw = (total_cells - n_on_board) * jnp.int32(100)
 
         # --- progress per task ---
-        total_klax_add = klax_add
-        diag_klax_add = k_d1 + k_d2
-        horiz_klax_add = k_h
         tile_spawn_add = jnp.int32(spawn_ok)
         wave_points_progress_now = new_score - state.wave_score_base
 
@@ -690,9 +768,8 @@ class JaxKlax(JaxEnvironment[KlaxState, KlaxObservation, KlaxInfo, KlaxConstants
 
         # remove all tiles, set cooldown, increase wave index
         def on_wave_done(vals):
-            (tiles_x, tiles_y, tiles_color, tiles_active, tiles_col, tiles_spawn_step,
-             board, player_backpack_colors, player_backpack_count, step_counter,
-             wave_idx) = vals
+            (tiles_x, tiles_y, tiles_color, tiles_active, tiles_col, tiles_spawn_step, tiles_progress_accum_in,
+             board, player_backpack_colors, player_backpack_count, step_counter, wave_idx) = vals
 
             # remove all tiles
             tiles_x = jnp.zeros_like(tiles_x)
@@ -701,25 +778,29 @@ class JaxKlax(JaxEnvironment[KlaxState, KlaxObservation, KlaxInfo, KlaxConstants
             tiles_active = jnp.zeros_like(tiles_active)
             tiles_col = jnp.zeros_like(tiles_col)
             tiles_spawn_step = jnp.zeros_like(tiles_spawn_step)
+
             board = jnp.zeros_like(board)
             player_backpack_colors = jnp.zeros_like(player_backpack_colors)
             player_backpack_count = jnp.int32(0)
 
             cooldown_steps = jnp.int32(self.consts.WAVES_COOLDOWN_SECONDS * self.consts.STEPS_PER_SECOND)
 
-            return (tiles_x, tiles_y, tiles_color, tiles_active, tiles_col, tiles_spawn_step,
+            tiles_progress_accum_out = jnp.zeros_like(tiles_progress_accum_in)
+            spawn_progress_accum_out = jnp.int32(0)
+
+            return (tiles_x, tiles_y, tiles_color, tiles_active, tiles_col,
+                    tiles_spawn_step, tiles_progress_accum_out,
                     board, player_backpack_colors, player_backpack_count,
                     step_counter + cooldown_steps, wave_idx + 1)
 
-        (tiles_x, tiles_y, tiles_color, tiles_active, tiles_col, tiles_spawn_step,
+        (tiles_x, tiles_y, tiles_color, tiles_active, tiles_col, tiles_spawn_step, tiles_progress_accum,
          board, player_backpack_colors, player_backpack_count,
          cooldown_until_new, wave_idx_after) = jax.lax.cond(
             wave_done_now,
             on_wave_done,
             lambda v: v,
-            (tiles_x, tiles_y, tiles_color, tiles_active, tiles_col, tiles_spawn_step,
-             board, player_backpack_colors, player_backpack_count,
-             state.wave_cooldown_until, state.wave_idx)
+            (tiles_x, tiles_y, tiles_color, tiles_active, tiles_col, tiles_spawn_step, tiles_progress_accum,
+             board, player_backpack_colors, player_backpack_count, state.wave_cooldown_until, state.wave_idx)
         )
         board_after = jax.lax.select(wave_done_now, jnp.zeros_like(board_after), board_after)
 
@@ -748,6 +829,7 @@ class JaxKlax(JaxEnvironment[KlaxState, KlaxObservation, KlaxInfo, KlaxConstants
         wave_progress_final = jax.lax.select(started == 1, progress_new, wave_progress_final)
         wave_score_base_next = jax.lax.select(started == 1, score_base_new, state.wave_score_base)
         wave_idx_final = wave_idx_after
+        spawn_accum_final = jax.lax.select(wave_done_now, jnp.int32(0), spawn_accum_after)
 
         return state._replace(
             step_counter=step_counter, rng_key=k_after, tiles_x=tiles_x, tiles_y=tiles_y, tiles_color=tiles_color,
@@ -762,6 +844,8 @@ class JaxKlax(JaxEnvironment[KlaxState, KlaxObservation, KlaxInfo, KlaxConstants
             wave_score_base=wave_score_base_next,
             wave_active=wave_active_next,
             wave_cooldown_until=cooldown_until_new,
+            tiles_progress_accum=tiles_progress_accum,
+            spawn_progress_accum=spawn_accum_final,
         )
 
     @partial(jax.jit, static_argnums=(0,))

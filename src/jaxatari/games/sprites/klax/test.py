@@ -40,7 +40,11 @@ Nächste ToDos:
 ✓ Sprites für Anzeige Wave task
 ✓ Sprites für Gesamtpunktzahl
 ✓ Sprites einbinden
-- git pull
+✓ git pull
+
+- Performance issues
+- down key macht schneller
+
 - Waves speed
 - Tiles erscheinen erst in späteren waves
         level 1: orange, yellow, red, green tiles (✓)
