@@ -99,9 +99,9 @@ class OthelloState(NamedTuple):
     random_key: chex.Array #Stores a random key for random decision used as 0d int
 
 class OthelloObservation(NamedTuple):
-    field: Field
     player_score: jnp.ndarray
     enemy_score: jnp.ndarray
+    field: Field
     field_choice_player: jnp.ndarray
 
 class OthelloInfo(NamedTuple):
@@ -2791,11 +2791,11 @@ class JaxOthello(JaxEnvironment[OthelloState, OthelloObservation, OthelloInfo, O
 
     @partial(jax.jit, static_argnums=(0,))
     def _get_observation(self, state: OthelloState):
-        return OthelloObservation(
+        return  OthelloObservation(
             player_score=state.player_score,
             enemy_score=state.enemy_score,
             field=Field(
-                field_id = state.field.field_id, #richtig? da ja eigentich array und nicht konkreter wert
+                field_id = state.field.field_id, 
                 field_color = state.field.field_color,                
             ),
             field_choice_player=state.field_choice_player,
@@ -2836,10 +2836,10 @@ class JaxOthello(JaxEnvironment[OthelloState, OthelloObservation, OthelloInfo, O
             "player_score": spaces.Box(low=0, high=64, shape=(), dtype=jnp.int32),
             "enemy_score": spaces.Box(low=0, high=64, shape=(), dtype=jnp.int32),
             "field": spaces.Dict({
-                "field_id": spaces.Box(low=0, high=63, shape=(8,8), dtype=jnp.int32), #richtig?, da ja eigentlich array und kein konkreter wert?
+                "field_id": spaces.Box(low=0, high=63, shape=(8,8), dtype=jnp.int32), 
                 "field_color": spaces.Box(low=0, high=2, shape=(8,8), dtype=jnp.int32),
             }),
-            "field_choice_player":  spaces.Box(low=0, high=63, shape=(2,), dtype=jnp.int32), 
+            "field_choice_player":  spaces.Box(low=0, high=7, shape=(2,), dtype=jnp.int32), 
         })
 
     def image_space(self) -> spaces.Box:
