@@ -341,7 +341,13 @@ class AtariPlayer:
                 return False  # Signal to stop the game loop
 
             # --- MOUSE (Keep existing logic if needed) ---
-            # ...
+            elif event.type == pygame.MOUSEBUTTONDOWN:
+                if event.button == 1:  # Left mouse button
+                    # Click handling logic can be added here
+                    pass
+                elif event.button == 2:
+                    # TODO: here you can put ram manipulations to get the sprites faster (for example increasing the score manually)
+                    self.env.unwrapped.ale.setRAM(103, self.env.unwrapped.ale.getRAM()[103] + 1)
 
             # --- KEY DOWN ---
             elif event.type == pygame.KEYDOWN:
@@ -464,7 +470,7 @@ class AtariPlayer:
 # --- Main Execution (Unchanged) ---
 def main():
     parser = argparse.ArgumentParser(description='Play Atari games using Gymnasium')
-    parser.add_argument('-g', '--game', type=str, default='Pong', help='Name of the Atari game ROM (e.g., Pong, Breakout)')
+    parser.add_argument('-g', '--game', type=str, default='DonkeyKong', help='Name of the Atari game ROM (e.g., Pong, Breakout)')
     parser.add_argument('--scale', type=int, default=4, help='Scale factor for the display window')
     parser.add_argument('--fps', type=int, default=30, help='Target frames per second')
     parser.add_argument('--screenshot-dir', type=str, default=None, help='Directory to save screenshots as .npy files (optional)')
