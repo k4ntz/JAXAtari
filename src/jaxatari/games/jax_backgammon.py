@@ -46,6 +46,9 @@ class BackgammonState(NamedTuple):
     key: jax.random.PRNGKey
     last_move: Tuple[int, int] = (-1, -1)
     last_dice: int = -1
+    cursor_position: int = 0
+    picked_checker_from: int = -1
+    game_phase: int = 0  # 0=WAITING_FOR_ROLL, 1=SELECTING_CHECKER, 2=MOVING_CHECKER
 
 class BackgammonInfo(NamedTuple):
     """Contains auxiliary information about the environment (e.g., timing or metadata)."""
@@ -85,21 +88,96 @@ class JaxBackgammonEnv(JaxEnvironment[BackgammonState, jnp.ndarray, dict, Backga
     JAX-based backgammon environment supporting JIT compilation and vectorized operations.
     Provides functionality for state initialization, step transitions, valid move evaluation, and observation generation.
     """
-    
+
     def __init__(self, consts: BackgammonConstants = None, reward_funcs: list[callable] = None):
         consts = consts or BackgammonConstants()
         super().__init__(consts)
 
-        # Pre-compute all possible moves (indexed as a scalar in the framework)
+        # Pre-compute all possible moves
         self._action_pairs = jnp.array([(i, j) for i in range(26) for j in range(26)], dtype=jnp.int32)
-        
-        # Reserve one extra action index for "roll dice"
+
+        # Special action indices for interactive play
         self._roll_action_index = self._action_pairs.shape[0]
 
         self.renderer = BackgammonRenderer(self)
         if reward_funcs is not None:
             reward_funcs = tuple(reward_funcs)
         self.reward_funcs = reward_funcs
+
+        # Define action set for jaxatari compatibility
+        self.action_set = [
+            Action.UP,  # Move cursor left
+            Action.DOWN,  # Move cursor right
+            Action.FIRE  # Space (select/drop/roll)
+        ]
+
+    @partial(jax.jit, static_argnums=(0,))
+    def init_state(self, key) -> BackgammonState:
+        board = jnp.zeros((2, 26), dtype=jnp.int32)
+        # White (player 0)
+        board = board.at[0, 0].set(2)  # point 24
+        board = board.at[0, 11].set(5)  # point 13
+        board = board.at[0, 16].set(3)  # point 8
+        board = board.at[0, 18].set(5)  # point 6
+
+        # Black (player 1)
+        board = board.at[1, 23].set(2)  # point 1
+        board = board.at[1, 12].set(5)  # point 12
+        board = board.at[1, 7].set(3)  # point 17
+        board = board.at[1, 5].set(5)  # point 19
+
+        dice = jnp.zeros(4, dtype=jnp.int32)
+
+        # The condition for the while loop
+        def cond_fun(carry):
+            white_roll, black_roll, key = carry
+            return white_roll == black_roll
+
+        # The code to be run in the while loop
+        def body_fun(carry):
+            _, _, key = carry
+            key, subkey1, subkey2 = jax.random.split(key, 3)
+            white_roll = jax.random.randint(subkey1, (), 1, 7)
+            black_roll = jax.random.randint(subkey2, (), 1, 7)
+            return (white_roll, black_roll, key)
+
+        # Generate the first dice throw
+        key, subkey1, subkey2 = jax.random.split(key, 3)
+        white_roll = jax.random.randint(subkey1, (), 1, 7)
+        black_roll = jax.random.randint(subkey2, (), 1, 7)
+        carry = (white_roll, black_roll, key)
+
+        white_roll, black_roll, key = jax.lax.while_loop(cond_fun, body_fun, carry)
+
+        # Set the player who rolled higher
+        current_player = jax.lax.cond(
+            white_roll > black_roll,
+            lambda _: self.consts.WHITE,
+            lambda _: self.consts.BLACK,
+            operand=None
+        )
+
+        # Start with empty dice (waiting for roll)
+        dice = jnp.zeros(4, dtype=jnp.int32)
+
+        # Set initial cursor position based on player
+        initial_cursor = jax.lax.cond(
+            current_player == self.consts.WHITE,
+            lambda _: 0,
+            lambda _: 23,
+            operand=None
+        )
+
+        return BackgammonState(
+            board=board,
+            dice=dice,
+            current_player=current_player,
+            is_game_over=False,
+            key=key,
+            cursor_position=initial_cursor,
+            picked_checker_from=-1,
+            game_phase=0  # Start in WAITING_FOR_ROLL
+        )
 
     @partial(jax.jit, static_argnums=(0,))
     def init_state(self, key) -> BackgammonState:
@@ -512,35 +590,145 @@ class JaxBackgammonEnv(JaxEnvironment[BackgammonState, jnp.ndarray, dict, Backga
         return obs, new_state, reward, done, info, new_key
 
     def step(self, state: BackgammonState, action: jnp.ndarray):
-        """Perform a step in the environment using a scalar action index."""
+        """Handle interactive actions from play.py script."""
 
-        def do_roll(_):
-            dice, key = self.roll_dice(state.key)
-            new_state = state._replace(dice=dice, key=key)
+        # Map jaxatari actions to our internal actions
+        # Action.UP (2) = cursor left
+        # Action.DOWN (3) = cursor right
+        # Action.FIRE (1) = space (select/drop/roll)
 
-            # match move-path structure/dtypes
-            all_rewards = self._get_all_reward(state, new_state)
-            info = self._get_info(new_state, all_rewards)
+        def handle_cursor_move(state, direction):
+            """Move cursor left or right."""
+            # Only allow cursor movement in selecting/moving phases
+            can_move = (state.game_phase == 1) | (state.game_phase == 2)
 
-            return (
-                self._get_observation(new_state),
-                new_state,
-                jnp.asarray(0.0, dtype=jnp.float32),  # not a Python float
-                jnp.asarray(False),  # not a Python bool
-                info,
+            # Calculate new cursor position
+            new_pos = state.cursor_position + direction
+            # Clamp to valid range (0-25 for points + bar + home)
+            new_pos = jnp.clip(new_pos, 0, 25)
+
+            new_cursor = jax.lax.cond(
+                can_move,
+                lambda _: new_pos,
+                lambda _: state.cursor_position,
+                operand=None
             )
 
-        def do_move(act):
-            move = tuple(self._action_pairs[act])
-            obs, new_state, reward, done, info, new_key = self.step_impl(state, move, state.key)
-            new_state = new_state._replace(key=new_key)
-            return (obs, new_state, reward, done, info)
+            new_state = state._replace(cursor_position=new_cursor)
+            return self._get_observation(new_state), new_state, 0.0, False, self._get_info(new_state)
+
+        def handle_space(state):
+            """Handle space key based on game phase."""
+
+            def do_roll(state):
+                """Roll dice and move to selecting phase."""
+                dice, key = self.roll_dice(state.key)
+                new_state = state._replace(
+                    dice=dice,
+                    key=key,
+                    game_phase=1  # Move to SELECTING_CHECKER
+                )
+                return self._get_observation(new_state), new_state, 0.0, False, self._get_info(new_state)
+
+            def do_select(state):
+                """Try to pick up a checker."""
+                player_idx = self.get_player_index(state.current_player)
+                pos = state.cursor_position
+
+                # Check if there's a checker at cursor position
+                has_checker = state.board[player_idx, pos] > 0
+
+                new_state = jax.lax.cond(
+                    has_checker,
+                    lambda s: s._replace(
+                        picked_checker_from=pos,
+                        game_phase=2  # Move to MOVING_CHECKER
+                    ),
+                    lambda s: s,  # Stay in selecting
+                    operand=state
+                )
+
+                return self._get_observation(new_state), new_state, 0.0, False, self._get_info(new_state)
+
+            def do_drop(state):
+                """Try to drop the checker."""
+                move = (state.picked_checker_from, state.cursor_position)
+                is_valid = self.is_valid_move(state, move)
+
+                def execute_valid_move(s):
+                    # Execute the move
+                    obs, new_s, reward, done, info, key = self.step_impl(s, move, s.key)
+
+                    # Check if turn ended (all dice used)
+                    all_dice_used = jnp.all(new_s.dice == 0)
+
+                    # Update phase and cursor
+                    next_phase = jax.lax.cond(
+                        all_dice_used,
+                        lambda _: 0,  # Back to WAITING_FOR_ROLL
+                        lambda _: 1,  # Back to SELECTING_CHECKER
+                        operand=None
+                    )
+
+                    # Reset cursor position for new player if turn changed
+                    next_cursor = jax.lax.cond(
+                        new_s.current_player != s.current_player,
+                        lambda _: jax.lax.cond(
+                            new_s.current_player == self.consts.WHITE,
+                            lambda _: 0,
+                            lambda _: 23,
+                            operand=None
+                        ),
+                        lambda _: s.cursor_position,
+                        operand=None
+                    )
+
+                    final_state = new_s._replace(
+                        picked_checker_from=-1,
+                        game_phase=next_phase,
+                        cursor_position=next_cursor,
+                        key=key
+                    )
+
+                    return self._get_observation(final_state), final_state, reward, done, info
+
+                def cancel_move(s):
+                    # Invalid move - go back to selecting
+                    new_s = s._replace(
+                        picked_checker_from=-1,
+                        game_phase=1
+                    )
+                    return self._get_observation(new_s), new_s, 0.0, False, self._get_info(new_s)
+
+                return jax.lax.cond(is_valid, execute_valid_move, cancel_move, operand=state)
+
+            # Route to appropriate handler based on game phase
+            return jax.lax.switch(
+                state.game_phase,
+                [do_roll, do_select, do_drop],
+                operand=state
+            )
+
+        # Main action routing
+        is_cursor_left = action == Action.UP
+        is_cursor_right = action == Action.DOWN
+        is_space = action == Action.FIRE
 
         return jax.lax.cond(
-            action == self._roll_action_index,
-            do_roll,
-            do_move,
-            operand=action
+            is_cursor_left,
+            lambda s: handle_cursor_move(s, -1),
+            lambda s: jax.lax.cond(
+                is_cursor_right,
+                lambda s2: handle_cursor_move(s2, 1),
+                lambda s2: jax.lax.cond(
+                    is_space,
+                    handle_space,
+                    lambda s3: (self._get_observation(s3), s3, 0.0, False, self._get_info(s3)),  # No-op
+                    operand=s2
+                ),
+                operand=s
+            ),
+            operand=state
         )
 
     @partial(jax.jit, static_argnums=(0,))
@@ -983,22 +1171,121 @@ class BackgammonRenderer(JAXGameRenderer):
         frame = self._draw_board_outline(frame)
         frame = self._draw_triangles(frame)
 
+        # Draw cursor highlight if in selecting/moving phase
+        def draw_cursor_highlight(f):
+            pos = state.cursor_position
+            highlight_color = jnp.array([255, 255, 0], dtype=jnp.uint8)  # Yellow
+
+            # Only highlight in phases 1 and 2
+            should_highlight = (state.game_phase == 1) | (state.game_phase == 2)
+
+            def add_highlight(frame):
+                return jax.lax.cond(
+                    pos < 24,
+                    lambda fr: self._draw_triangle(
+                        fr,
+                        self.triangle_positions[pos][0],
+                        self.triangle_positions[pos][1],
+                        self.triangle_length,
+                        self.triangle_thickness,
+                        highlight_color,
+                        self.triangle_positions[pos][0] == self.board_margin
+                    ),
+                    lambda fr: jax.lax.cond(
+                        pos == 24,
+                        lambda fr2: self._draw_rectangle(
+                            fr2, self.bar_x, self.bar_y,
+                            self.bar_width, self.bar_thickness,
+                            highlight_color
+                        ),
+                        lambda fr2: fr2,  # pos == 25 (home)
+                        operand=fr
+                    ),
+                    operand=frame
+                )
+
+            return jax.lax.cond(should_highlight, add_highlight, lambda f: f, operand=f)
+
+        frame = draw_cursor_highlight(frame)
+
+        # Draw checkers (with one removed if picked)
         def draw_point_checkers(point_idx, fr):
-            white_count = jnp.maximum(state.board[0, point_idx], 0)
-            black_count = jnp.maximum(state.board[1, point_idx], 0)
+            player_idx = self.get_player_index(state.current_player)
+            white_count = state.board[0, point_idx]
+            black_count = state.board[1, point_idx]
+
+            # Subtract one from picked position if in moving phase
+            white_count = jax.lax.cond(
+                (state.game_phase == 2) & (state.picked_checker_from == point_idx) & (player_idx == 0),
+                lambda c: jnp.maximum(c - 1, 0),
+                lambda c: c,
+                operand=white_count
+            )
+
+            black_count = jax.lax.cond(
+                (state.game_phase == 2) & (state.picked_checker_from == point_idx) & (player_idx == 1),
+                lambda c: jnp.maximum(c - 1, 0),
+                lambda c: c,
+                operand=black_count
+            )
+
             return self._draw_checkers_on_point(fr, point_idx, white_count, black_count)
 
         frame = jax.lax.fori_loop(0, 24, draw_point_checkers, frame)
 
         # Bar and home stacks
-        frame = self._draw_bar_checkers(frame, jnp.maximum(state.board[0, 24], 0), jnp.maximum(state.board[1, 24], 0))
-        frame = self._draw_home_checkers(frame, jnp.maximum(state.board[0, 25], 0), jnp.maximum(state.board[1, 25], 0))
+        frame = self._draw_bar_checkers(frame,
+                                        jnp.maximum(state.board[0, 24], 0),
+                                        jnp.maximum(state.board[1, 24], 0))
+        frame = self._draw_home_checkers(frame,
+                                         jnp.maximum(state.board[0, 25], 0),
+                                         jnp.maximum(state.board[1, 25], 0))
 
         # Dice
         frame = self._draw_dice(frame, state.dice)
 
-        return frame
+        # Draw floating checker if in moving phase
+        def draw_floating_checker(f):
+            player_idx = self.get_player_index(state.current_player)
+            color = jax.lax.cond(
+                player_idx == 0,
+                lambda _: self.color_white_checker,
+                lambda _: self.color_black_checker,
+                operand=None
+            )
 
+            # Calculate position based on cursor
+            pos = state.cursor_position
+            cx = jax.lax.cond(
+                pos < 24,
+                lambda _: self.triangle_positions[pos][0] + self.triangle_length // 2,
+                lambda _: self.frame_width // 2,
+                operand=None
+            )
+            cy = jax.lax.cond(
+                pos < 24,
+                lambda _: self.triangle_positions[pos][1] + self.triangle_thickness // 2,
+                lambda _: self.bar_y + self.bar_thickness // 2,
+                operand=None
+            )
+
+            return self._draw_rectangle(
+                f,
+                cx - self.checker_width // 2,
+                cy - self.checker_height // 2,
+                self.checker_width,
+                self.checker_height,
+                color
+            )
+
+        frame = jax.lax.cond(
+            state.game_phase == 2,  # Only in MOVING_CHECKER phase
+            draw_floating_checker,
+            lambda f: f,
+            operand=frame
+        )
+
+        return frame
 
 class BackgammonInteractiveWrapper:
     """
