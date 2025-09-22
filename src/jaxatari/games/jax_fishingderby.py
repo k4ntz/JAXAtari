@@ -1071,6 +1071,9 @@ class FishingDerbyRenderer(JAXGameRenderer):
         raster = raster.at[:cfg.WATER_Y_START, :, :].set(jnp.array(cfg.SKY_COLOR, dtype=jnp.uint8))
         raster = raster.at[cfg.WATER_Y_START:, :, :].set(jnp.array(cfg.WATER_COLOR, dtype=jnp.uint8))
 
+        # Draw pier on top of water
+        raster = self._render_at(raster, 0, cfg.WATER_Y_START - 10, self.SPRITE_PIER)
+
         # Draw players
         raster = self._render_at(raster, cfg.P1_START_X, cfg.PLAYER_Y, self.SPRITE_PLAYER1)
         raster = self._render_at(raster, cfg.P2_START_X, cfg.PLAYER_Y, self.SPRITE_PLAYER2)
@@ -1082,7 +1085,7 @@ class FishingDerbyRenderer(JAXGameRenderer):
         # Draw horizontal part of Player 1 rod
         raster = self._render_line(raster, cfg.P1_START_X + 7, cfg.ROD_Y, p1_rod_end_x, cfg.ROD_Y, (0, 0, 0))
 
-        # Player 1 line rendering logic (existing code)
+        # Player 1 line rendering logic
         in_water = state.p1.hook_y > (cfg.WATER_Y_START - cfg.ROD_Y)
         is_reeling = state.p1.hook_state > 0
         has_horizontal_offset = jnp.abs(state.p1.hook_x_offset) > 0.5
@@ -1109,7 +1112,7 @@ class FishingDerbyRenderer(JAXGameRenderer):
         # Draw horizontal part of Player 2 rod (extends leftward)
         raster = self._render_line(raster, cfg.P2_START_X + 2, cfg.ROD_Y, p2_rod_end_x, cfg.ROD_Y, (0, 0, 0))
 
-        # Player 2 line rendering logic (similar to Player 1)
+        # Player 2 line rendering logic
         p2_in_water = state.p2.hook_y > (cfg.WATER_Y_START - cfg.ROD_Y)
         p2_is_reeling = state.p2.hook_state > 0
         p2_has_horizontal_offset = jnp.abs(state.p2.hook_x_offset) > 0.5
@@ -1124,7 +1127,6 @@ class FishingDerbyRenderer(JAXGameRenderer):
 
         raster = jax.lax.cond(
             p2_apply_sag,
-            # Fishing line color
             lambda r: self._render_saggy_line(r, p2_line_start, p2_line_end, p2_sag_amount, (0, 0, 0)),
             lambda r: self._render_line(r, p2_line_start[0], p2_line_start[1], p2_line_end[0], p2_line_end[1],
                                         (0, 0, 0)),
@@ -1135,21 +1137,39 @@ class FishingDerbyRenderer(JAXGameRenderer):
         shark_frame = jax.lax.cond((state.time // 4) % 2 == 0, lambda: self.SPRITE_SHARK1, lambda: self.SPRITE_SHARK2)
         raster = self._render_at(raster, state.shark_x, cfg.SHARK_Y, shark_frame, flip_h=state.shark_dir < 0)
 
-        # Draw fish
+        # Draw fish - fix sprite flipping to ensure hook appears at mouth
         fish_frame = jax.lax.cond((state.time // 5) % 2 == 0, lambda: self.SPRITE_FISH1, lambda: self.SPRITE_FISH2)
 
         def draw_one_fish(i, r):
-            active = state.fish_active[i]
-            x, y = state.fish_positions[i, 0], state.fish_positions[i, 1]
-            flip = state.fish_directions[i] > 0
-            return jax.lax.cond(active, lambda r: self._render_at(r, x, y, fish_frame, flip_h=flip), lambda r: r, r)
+            pos, direction, active = state.fish_positions[i], state.fish_directions[i], state.fish_active[i]
+            is_hooked_p1 = (state.p1.hooked_fish_idx == i) & (state.p1.hook_state > 0)
+            is_hooked_p2 = (state.p2.hooked_fish_idx == i) & (state.p2.hook_state > 0)
+            is_hooked = is_hooked_p1 | is_hooked_p2
+
+            hooked_fish_frame = jax.lax.cond((state.time // 6) % 2 == 0, lambda: self.SPRITE_FISH1,
+                                             lambda: self.SPRITE_FISH2)
+            frame_to_use = jax.lax.cond(is_hooked, lambda: hooked_fish_frame, lambda: fish_frame)
+
+            # Fix flipping: fish should face direction of travel, flip when direction > 0 (moving right)
+            flip_sprite = direction > 0
+
+            return jax.lax.cond(active,
+                                lambda r_in: self._render_at(r_in, pos[0], pos[1], frame_to_use, flip_h=flip_sprite),
+                                lambda r_in: r_in, r)
 
         raster = jax.lax.fori_loop(0, cfg.NUM_FISH, draw_one_fish, raster)
 
         # Draw hooked fish for Player 1
         def draw_hooked_p1(r):
             fish_idx = state.p1.hooked_fish_idx
-            return self._render_at(r, hook_x, hook_y, fish_frame, flip_h=state.fish_directions[fish_idx] > 0)
+            fish_pos = state.fish_positions[fish_idx]
+            fish_dir = state.fish_directions[fish_idx]
+
+            # Fix flipping: fish should face direction of travel, flip when direction > 0 (moving right)
+            flip_sprite = fish_dir > 0
+
+            fish_frame = jax.lax.cond((state.time // 2) % 2 == 0, lambda: self.SPRITE_FISH1, lambda: self.SPRITE_FISH2)
+            return self._render_at(r, fish_pos[0], fish_pos[1], fish_frame, flip_h=flip_sprite)
 
         should_draw_hooked_p1 = (state.p1.hook_state > 0) & (state.p1.hooked_fish_idx >= 0) & (state.p1.hook_state != 3)
         raster = jax.lax.cond(should_draw_hooked_p1, draw_hooked_p1, lambda r: r, raster)
@@ -1157,16 +1177,27 @@ class FishingDerbyRenderer(JAXGameRenderer):
         # Draw hooked fish for Player 2
         def draw_hooked_p2(r):
             fish_idx = state.p2.hooked_fish_idx
-            return self._render_at(r, p2_hook_x, p2_hook_y, fish_frame, flip_h=state.fish_directions[fish_idx] > 0)
+            fish_pos = state.fish_positions[fish_idx]
+            fish_dir = state.fish_directions[fish_idx]
+
+            # Fix flipping: fish should face direction of travel, flip when direction > 0 (moving right)
+            flip_sprite = fish_dir > 0
+
+            fish_frame = jax.lax.cond((state.time // 2) % 2 == 0, lambda: self.SPRITE_FISH1, lambda: self.SPRITE_FISH2)
+            return self._render_at(r, fish_pos[0], fish_pos[1], fish_frame, flip_h=flip_sprite)
 
         should_draw_hooked_p2 = (state.p2.hook_state > 0) & (state.p2.hooked_fish_idx >= 0) & (state.p2.hook_state != 3)
         raster = jax.lax.cond(should_draw_hooked_p2, draw_hooked_p2, lambda r: r, raster)
 
-        raster = self._render_score(raster, state.p1.display_score, 50, 10)
-        raster = self._render_score(raster, state.p2.display_score, 100, 10)
+        # Draw hooks
+        raster = self._render_at(raster, hook_x - cfg.HOOK_WIDTH // 2, hook_y - cfg.HOOK_HEIGHT // 2,
+                                 jnp.array([[[255, 255, 255]]], dtype=jnp.uint8))
+        raster = self._render_at(raster, p2_hook_x - cfg.HOOK_WIDTH // 2, p2_hook_y - cfg.HOOK_HEIGHT // 2,
+                                 jnp.array([[[255, 255, 255]]], dtype=jnp.uint8))
 
-        # Draw pier sprite on top of everything else
-        raster = self._render_at(raster, 0, 0, self.SPRITE_PIER)
+        # Draw scores
+        raster = self._render_score(raster, state.p1.display_score, 10, 10)
+        raster = self._render_score(raster, state.p2.display_score, cfg.SCREEN_WIDTH - 30, 10)
 
         return raster
 
