@@ -102,7 +102,6 @@ class RiverraidObservation(NamedTuple):
 # then also shrink - straight - river shrink
 @jax.jit
 def generate_altering_river(state: RiverraidState) -> RiverraidState:
-    jax.debug.print("ALTERING RIVER IS BEING CALLED AAA")
     key = state.master_key
     key, alter_check_key, alter_select_key, alter_length_key = jax.random.split(key, 4)
 
@@ -135,7 +134,6 @@ def generate_altering_river(state: RiverraidState) -> RiverraidState:
     )
 
     # alternation length is set here AND whenever an island spawns or despawns (due to the need for hard coding the segment)
-    #jax.debug.print("Riverraid: new_river_state: {new_river_state}", new_river_state=new_river_state)
     new_alternation_length = jax.lax.cond(state.river_alternation_length <= 0,
                                           lambda state: jax.random.randint(alter_length_key, (), 1, 8),
                                           lambda state: state.river_alternation_length - 1,
@@ -160,14 +158,12 @@ def generate_altering_river(state: RiverraidState) -> RiverraidState:
         new_river_right = state.river_right.at[0].set(state.river_right[1])
         new_river_inner_left = state.river_inner_left.at[0].set(state.river_inner_left[1])
         new_river_inner_right = state.river_inner_right.at[0].set(state.river_inner_right[1])
-        #jax.debug.print("straight state: {state}", state=state.river_state)
         return state._replace(river_left=new_river_left,
                               river_right=new_river_right,
                               river_inner_left=new_river_inner_left,
                               river_inner_right=new_river_inner_right)
 
     def no_island_branch(state: RiverraidState) -> RiverraidState:
-        #jax.debug.print("NO ISLAND BRANCH")
         def expanse(state: RiverraidState) -> RiverraidState:
             new_river_left = state.river_left.at[0].set(state.river_left[1] - 3)
             new_river_right = state.river_right.at[0].set(state.river_right[1] + 3)
@@ -195,9 +191,7 @@ def generate_altering_river(state: RiverraidState) -> RiverraidState:
 
 
     def island_branch(state: RiverraidState):
-        #jax.debug.print("YES ISLAND BRANCH")
         def expanse(state: RiverraidState) -> RiverraidState:
-            #jax.debug.print("EXPANDING ISLAND")
             new_river_inner_left = state.river_inner_left.at[0].set(state.river_inner_left[1] - 3)
             new_river_inner_right = state.river_inner_right.at[0].set(state.river_inner_right[1] + 3)
             new_left = state.river_left.at[0].set(state.river_left[1])
@@ -208,7 +202,6 @@ def generate_altering_river(state: RiverraidState) -> RiverraidState:
                                   river_right=new_right)
 
         def shrink(state: RiverraidState) -> RiverraidState:
-            #jax.debug.print("SHRINKING ISLAND")
             proposed_inner_left = state.river_inner_left[1] + 3
             proposed_inner_right = state.river_inner_right[1] - 3
             new_river_inner_left, new_river_inner_right, new_island_present = jax.lax.cond(
@@ -235,8 +228,6 @@ def generate_altering_river(state: RiverraidState) -> RiverraidState:
                                   river_right=new_right,
                                   river_island_present=new_island_present
             )
-
-        #jax.debug.print("YES ISLAND RIVER STATE {state}", state=state.river_state)
         return lax.switch(
             state.river_state,
             [straight, expanse, shrink],
@@ -245,9 +236,7 @@ def generate_altering_river(state: RiverraidState) -> RiverraidState:
 
 
     def island_transition(state: RiverraidState) -> RiverraidState:
-        #jax.debug.print("ISLAND TRANSITION BRANCH")
         def spawn_island(state: RiverraidState) -> RiverraidState:
-            #jax.debug.print("SPAWNING ISLAND")
             def straight(state: RiverraidState) -> RiverraidState:
                 new_river_left = state.river_left.at[0].set(state.river_left[1])
                 new_river_right = state.river_right.at[0].set(state.river_right[1])
@@ -271,14 +260,12 @@ def generate_altering_river(state: RiverraidState) -> RiverraidState:
                         ],
                         state
                     ))
-                #jax.debug.print("straight vor ISLAND {state}", state=new_island_transition_state)
                 return state._replace(river_left=new_river_left,
                                       river_right=new_river_right,
                                       river_alternation_length= new_alternation_length,
                                       island_transition_state=new_island_transition_state)
 
             def initiate_split(state: RiverraidState) -> RiverraidState:
-                #jax.debug.print("INIT SPLIIIIIIIIIIIIIIIIT")
                 new_river_inner_left = state.river_inner_left.at[0].set(SCREEN_WIDTH // 2 - 1)
                 new_river_inner_right = state.river_inner_right.at[0].set(SCREEN_WIDTH // 2 + 1)
                 new_river_left = state.river_left.at[0].set(state.river_left[1])
@@ -306,7 +293,6 @@ def generate_altering_river(state: RiverraidState) -> RiverraidState:
 
         def terminate_island(state: RiverraidState) -> RiverraidState:
             def remove_island(state: RiverraidState) -> RiverraidState:
-                #jax.debug.print("REMOVING ISLAND")
                 new_river_inner_left = state.river_inner_left.at[0].set(state.river_inner_left[1] + 3)
                 new_river_inner_right = state.river_inner_right.at[0].set(state.river_inner_right[1] - 3)
                 new_left = state.river_left.at[0].set(state.river_left[1])
@@ -331,11 +317,9 @@ def generate_altering_river(state: RiverraidState) -> RiverraidState:
                 )
 
             def straight(state: RiverraidState) -> RiverraidState:
-                #jax.debug.print("STRAIGHT AFTER REMOVAL")
                 new_river_left = state.river_left.at[0].set(state.river_left[1])
                 new_river_right = state.river_right.at[0].set(state.river_right[1])
 
-                #jax.debug.print("alternation length: {length}", length=state.river_alternation_length)
                 new_river_state, new_island_transition_state, new_island_present = (
                                                 jax.lax.cond(state.river_alternation_length <= 1,
                                                 lambda _: (jnp.array(2), jnp.array(0), jnp.array(0)),
@@ -357,7 +341,6 @@ def generate_altering_river(state: RiverraidState) -> RiverraidState:
                                       river_state=new_river_state,
                                       river_island_present=new_island_present)
 
-            #jax.debug.print("YEEEEEEEEEEEEEEEEEEETING ISLAND")
             return jax.lax.cond(
                 state.island_transition_state == 4,
                 lambda state: straight(state),
@@ -369,9 +352,7 @@ def generate_altering_river(state: RiverraidState) -> RiverraidState:
                         lambda state: spawn_island(state),
                         lambda state: terminate_island(state),
                         operand=state)
-        #return spawn_island(state)
 
-   # jax.debug.print("Riverraid: river_island_present: {island}", island=state.river_island_present)
     new_river_island_present = jax.lax.cond(
         jnp.logical_and(
             state.river_island_present >= 2,
@@ -499,7 +480,6 @@ def generate_straight_river(state: RiverraidState) -> RiverraidState:
 
 @jax.jit
 def generate_segment_transition(state: RiverraidState) -> RiverraidState:
-    #jax.debug.print("TRANSITIONING SEGMENT")
     def scroll_empty_island(state: RiverraidState) -> RiverraidState:
         scrolled_inner_left = jnp.roll(state.river_inner_left, 1)
         scrolled_inner_right = jnp.roll(state.river_inner_right, 1)
@@ -527,7 +507,6 @@ def generate_segment_transition(state: RiverraidState) -> RiverraidState:
     def shrink_to_damsize(state: RiverraidState) -> RiverraidState:
         scrolled_left = jnp.roll(state.river_left, 1)
         scrolled_right = jnp.roll(state.river_right, 1)
-        #jax.debug.print("SHRINKING TO DAM SIZE")
 
         new_river_left = scrolled_left.at[0].set(scrolled_left[1] + 3)
         new_river_right = scrolled_right.at[0].set(scrolled_right[1] - 3)
@@ -559,9 +538,6 @@ def generate_segment_transition(state: RiverraidState) -> RiverraidState:
                               segment_transition_state=new_transition_state)
 
     def dam_into_new_segment(state: RiverraidState) -> RiverraidState:
-        #jax.debug.print("SETTING DAM")
-        #scrolled_left = jnp.roll(state.river_left, 1)
-        #scrolled_right = jnp.roll(state.river_right, 1)
         new_state = scroll_empty_island(state)
         new_segment_straight_counter = jnp.array(8)
         dam_position = state.dam_position.at[0].set(1)
@@ -581,8 +557,6 @@ def generate_segment_transition(state: RiverraidState) -> RiverraidState:
                               dam_explosion_cooldown=jnp.array(15)
                               )
 
-
-    #jax.debug.print("Riverraid: segment_transition_state: {segment_transition_state}", segment_transition_state=state.segment_transition_state)
     return jax.lax.switch(state.segment_transition_state,[first_call,
                                                                 remove_island,
                                                                 shrink_to_damsize,
@@ -599,7 +573,6 @@ def update_river_banks(state: RiverraidState) -> RiverraidState:
         lambda state: state.segment_state,
         operand=state
     )
-    jax.debug.print("Riverraid: segment_state: {segment_state}", segment_state=new_segment_state)
     state = state._replace(segment_state=new_segment_state % 4)
     return jax.lax.switch(state.segment_state, [lambda state: generate_altering_river(state),
                                                 lambda state: generate_segment_transition(state),
@@ -644,7 +617,6 @@ def handle_dam(state: RiverraidState) -> RiverraidState:
         lambda state: new_dam_position,
         operand=state
     )
-    jax.debug.print("dam position: {dam_position}", dam_position=new_dam_position)
     return state._replace(
         dam_position=new_dam_position,
         player_bullet_x=new_bullet_x,
@@ -925,7 +897,6 @@ def spawn_entities(state: RiverraidState) -> RiverraidState:
         )
     # only spawn if no dam in the top 10 rows
     dam_at_top = jnp.any(state.dam_position[:50] >= 1)
-    jax.debug.print("dam at top: {dam_at_top}", dam_at_top=dam_at_top)
     spawn_new_entity = jnp.logical_and(
         jax.random.bernoulli(subkey1, 0.09), # TODO balance
         ~dam_at_top
@@ -1133,7 +1104,6 @@ def handle_animations(state: RiverraidState) -> RiverraidState:
         lambda: state.dam_explosion_cooldown - 1,
         lambda: state.dam_explosion_cooldown
     )
-    jax.debug.print("dam explosion cooldown: {dam_explosion_cooldown}", dam_explosion_cooldown=new_dam_explosion_cooldown)
     return state._replace(dam_explosion_cooldown=new_dam_explosion_cooldown)
 
 
@@ -1185,7 +1155,6 @@ def handle_fuel(state: RiverraidState) -> RiverraidState:
         ),
         operand=state
     )
-    jax.debug.print("Riverraid: player_fuel: {player_fuel}", player_fuel=new_player_fuel)
 
     return state._replace(
         fuel_state=new_fuel_state,
@@ -1284,8 +1253,6 @@ def handle_housetree(state: RiverraidState) -> RiverraidState:
             lambda _: jnp.array(2),
             operand=None
         )
-        jax.debug.print("side: {side}", side=new_housetree_side)
-        jax.debug.print("direction: {direction}", direction=new_housetree_direction)
         new_housetree_direction = state.housetree_direction.at[0].set(new_housetree_direction)
         return state._replace(housetree_position=new_housetree_position,
                               housetree_side=new_housetree_side,
@@ -1400,7 +1367,6 @@ class JaxRiverraid(JaxEnvironment):
             new_state = enemy_movement(new_state)
             new_state = handle_fuel(new_state)
             new_state = handle_housetree(new_state)
-            jax.debug.print("SCORE: {player_state}", player_state=new_state.player_score)
             return new_state
 
         def respawn(state: RiverraidState) -> RiverraidState:
