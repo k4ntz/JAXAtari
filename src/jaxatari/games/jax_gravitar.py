@@ -971,9 +971,9 @@ def ship_step(state: ShipState,
     left = jnp.isin(action, rotate_left_actions)
 
     # In a Y-down coordinate system:
-    # Turn left (counter-clockwise) -> decrease angle value
+    # Turn left -> decrease angle value
     angle = jnp.where(left, state.angle - rotation_speed, state.angle)
-    # Turn right (clockwise) -> increase angle value
+    # Turn right -> increase angle value
     angle = jnp.where(right, angle + rotation_speed, angle)
 
     # --- 3. Thrust Calculation ---
@@ -1455,7 +1455,7 @@ def step_map(env_state: EnvState, action: int):
     final_level_id = jnp.where(reset_signal_from_crash, -2, level_id)
 
     obs_vector = jnp.array([new_env.state.x, new_env.state.y, new_env.state.vx, new_env.state.vy, new_env.state.angle])
-    obs = {'vector': obs_vector}  # <--- 包装成字典
+    obs = {'vector': obs_vector}  
 
     reward_saucer = jnp.where(just_died, jnp.float32(300.0), jnp.float32(0.0))
     reward_penalty = jnp.where(start_crash & ~hit_obstacle, -10.0, 0.0)
@@ -1464,7 +1464,6 @@ def step_map(env_state: EnvState, action: int):
         "crash": start_crash,
         "hit_by_bullet": hit_ship_by_bullet,
         "reactor_crash_exit": jnp.array(False),
-        # 将 all_rewards 修改为 JAX 数组
         "all_rewards": jnp.array([
             jnp.float32(0.0),  # enemies
             jnp.float32(0.0),  # reactor
@@ -1793,7 +1792,6 @@ def _step_level_core(env_state: EnvState, action: int):
     )
 
     obs_vector = jnp.array([state.x, state.y, state.vx, state.vy, state.angle])
-    # 包装成字典
     obs = {'vector': obs_vector}
 
     crash_animation_finished = (state_after_ufo.crash_timer == 1)
@@ -1804,7 +1802,6 @@ def _step_level_core(env_state: EnvState, action: int):
         "crash": start_crash,
         "hit_by_bullet": hit_by_enemy_bullet | hit_by_ufo_bullet,
         "reactor_crash_exit": reset_from_reactor_crash,
-        # 将 all_rewards 修改为 JAX 数组
         "all_rewards": jnp.array([
             score_from_enemies,
             score_from_reactor,
@@ -1817,8 +1814,6 @@ def _step_level_core(env_state: EnvState, action: int):
 
     return obs, final_env_state, reward, game_over, info, reset, jnp.int32(-1)
 
-
-# Note: For radius, the same value is passed to each call.
 batched_terrain_hit = jax.vmap(terrain_hit, in_axes=(None, 0, 0, None))
 
 
@@ -1906,14 +1901,12 @@ def step_arena(env_state: EnvState, action: int):
     # --- 6. Assemble and Return ---
     obs_vector = jnp.array(
         [ship_after_move.x, ship_after_move.y, ship_after_move.vx, ship_after_move.vy, ship_after_move.angle])
-    # 包装成字典
     obs = {'vector': obs_vector}
     reward = jnp.where(just_died, 300.0, 0.0)
     info = {
         "crash": start_crash,
         "hit_by_bullet": hit_ship_by_bullet,
         "reactor_crash_exit": jnp.array(False),
-        # 将 all_rewards 修改为 JAX 数组
         "all_rewards": jnp.array([
             jnp.float32(0.0),  # enemies
             jnp.float32(0.0),  # reactor
@@ -2105,7 +2098,6 @@ def step_core(env_state: EnvState, action: int):
             "hit_by_bullet": jnp.array(False),
             "reactor_crash_exit": jnp.array(False),
 
-            # 将 all_rewards 修改为 JAX 数组，以匹配另一个分支
             "all_rewards": jnp.array([
                 jnp.float32(0.0),  # enemies
                 jnp.float32(0.0),  # reactor
@@ -2118,7 +2110,6 @@ def step_core(env_state: EnvState, action: int):
 
         # 2. Return a tuple with the same pytree structure as the other branch.
         obs_vector = jnp.array([state.state.x, state.state.y, state.state.vx, state.state.vy, state.state.angle])
-        # 包装成字典
         obs = {'vector': obs_vector}
 
         return obs, state, 0.0, True, info, False, -1
@@ -2128,7 +2119,7 @@ def step_core(env_state: EnvState, action: int):
         # step function based on the game mode (0: map, 1: level, 2: arena).
         return jax.lax.switch(
             jnp.clip(state.mode, 0, 2),
-            [step_map, _step_level_core, step_arena],  # <--- 确保这里是 _step_level_core
+            [step_map, _step_level_core, step_arena],  
             state,
             act
         )
@@ -2303,7 +2294,6 @@ def get_action_from_key():
     # If no key is pressed, return NOOP (No Operation)
     return 0
 
-
 class JaxGravitar(JaxEnvironment):
     def __init__(self):
         super().__init__()
@@ -2346,9 +2336,9 @@ class JaxGravitar(JaxEnvironment):
                                                                                   spr.get_height()) * MAP_SCALE * HITBOX_SCALE
             else:
                 r = 4
-            px.append(cx);
-            py.append(cy);
-            pr.append(r);
+            px.append(cx)
+            py.append(cy)
+            pr.append(r)
             pi.append(int(idx))
         self.planets = (np.array(px, dtype=np.float32), np.array(py, dtype=np.float32), np.array(pr, dtype=np.float32),
                         np.array(pi, dtype=np.int32))
@@ -2396,11 +2386,9 @@ class JaxGravitar(JaxEnvironment):
 
         # ---- JIT Helper Initialization ----
         dummy_key = jax.random.PRNGKey(0)
-        # self.reset() 现在也返回一个字典，所以我们需要正确地解包它
         _obs_dummy, dummy_state = self.reset(dummy_key)
         tmp_obs, tmp_state = self.reset_level(dummy_key, jnp.int32(0), dummy_state)
 
-        # 使用 tree_map 来处理字典结构的 tmp_obs
         obs_struct = jax.tree_util.tree_map(
             lambda x: jax.ShapeDtypeStruct(x.shape, x.dtype),
             tmp_obs
@@ -2421,11 +2409,8 @@ class JaxGravitar(JaxEnvironment):
 
         Returns: The reward for the last transition.
         """
-        # 奖励就是分数的变化量
         reward = state.score - previous_state.score
         return reward
-
-        # 在 class JaxGravitar 中:
 
     def _get_done(self, state: EnvState) -> jnp.ndarray:
         """
@@ -2445,13 +2430,11 @@ class JaxGravitar(JaxEnvironment):
 
         Returns: A dictionary containing the vector observation.
         """
-        # 提取智能体状态（位置、速度、角度）
         ship = state.state
         obs_vector = jnp.array([
             ship.x, ship.y, ship.vx, ship.vy, ship.angle
         ], dtype=jnp.float32)
 
-        # 以结构化的字典形式返回
         return {'vector': obs_vector}
 
     def _get_info(self, state: EnvState, all_rewards: Optional[jnp.ndarray] = None) -> Dict[str, Any]:
@@ -2463,7 +2446,6 @@ class JaxGravitar(JaxEnvironment):
 
         Returns: A dictionary of information.
         """
-        # 我们可以返回一些通用的、总是有用的信息
         info = {
             "lives": state.lives,
             "score": state.score,
@@ -2473,20 +2455,18 @@ class JaxGravitar(JaxEnvironment):
             "current_level": state.current_level,
         }
 
-        # 如果提供了 all_rewards (通常在 step 之后)，我们也把它包含进来
         if all_rewards is not None:
             reward_names = [
                 "enemies", "reactor", "ufo", "tanks",
                 "saucer_kill", "penalty"
             ]
             for i, name in enumerate(reward_names):
-                # 确保 all_rewards 是一个 JAX 数组
                 if i < len(all_rewards):
                     info[f"reward_{name}"] = all_rewards[i]
 
         return info
 
-    # === Core Fix 1: Implement all required abstract methods ===
+    # === Implement all required abstract methods ===
     def reset(self, key: jnp.ndarray) -> tuple[dict[str, Array], EnvState]:
         """Implements the main reset entry point of the environment."""
         return self.reset_map(key)
@@ -2510,33 +2490,26 @@ class JaxGravitar(JaxEnvironment):
     def action_space(self) -> spaces.Discrete:
         return spaces.Discrete(self.num_actions)
 
-    def observation_space(self) -> spaces.Dict:  # <-- 修改返回类型提示
+    def observation_space(self) -> spaces.Dict: 
         low = jnp.array([0.0, 0.0, -10.0, -10.0, -jnp.pi], dtype=jnp.float32)
         high = jnp.array([float(WINDOW_WIDTH), float(WINDOW_HEIGHT), 10.0, 10.0, jnp.pi], dtype=jnp.float32)
 
-        # 创建原始的 Box 空间
         vector_space = spaces.Box(low=low, high=high, shape=self.obs_shape, dtype=jnp.float32)
 
-        # 将它包装在一个字典里并返回
         return spaces.Dict({'vector': vector_space})
 
     def image_space(self) -> spaces.Box:
         return spaces.Box(low=0, high=255, shape=(WINDOW_HEIGHT, WINDOW_WIDTH, 3), dtype=jnp.uint8)
 
     def obs_to_flat_array(self, obs: Any) -> jnp.ndarray:
-        """
-        将任何形式的观测值（简单数组、元组或字典）扁平化为一个一维数组。
-        """
+
         if isinstance(obs, dict):
-            # 如果是字典，将其所有值展平并连接
             leaves, _ = jax.tree_util.tree_flatten(obs)
             return jnp.concatenate([leaf.flatten() for leaf in leaves])
         elif isinstance(obs, tuple):
-            # 如果是元组，也将其所有元素展平并连接
             leaves, _ = jax.tree_util.tree_flatten(obs)
             return jnp.concatenate([leaf.flatten() for leaf in leaves])
         else:
-            # 对于其他类型（如单个数组），直接展平
             return obs.flatten()
 
     def get_ram(self, state: EnvState) -> jnp.ndarray:
@@ -2550,8 +2523,7 @@ class JaxGravitar(JaxEnvironment):
         frame = self.renderer.render(env_state)
         return frame
 
-    # === Core Fix 2: Ensure all reset functions return JAX arrays ===
-
+    # ===  Ensure all reset functions return JAX arrays ===
     def reset_map(self, key: jnp.ndarray,
                   lives: Optional[int] = None,
                   score: Optional[float] = None,
@@ -2763,7 +2735,7 @@ class GravitarRenderer(JAXGameRenderer):
             max_w = max(s.shape[1] for s in [idle_sprite, crash_sprite, thrust_sprite])
 
             def pad_sprite(sprite, h, w):
-                pad_h = (h - sprite.shape[0]) // 2;
+                pad_h = (h - sprite.shape[0]) // 2
                 pad_w = (w - sprite.shape[1]) // 2
                 return jnp.pad(sprite,
                                ((pad_h, h - sprite.shape[0] - pad_h), (pad_w, w - sprite.shape[1] - pad_w), (0, 0)))
@@ -2956,7 +2928,7 @@ class GravitarRenderer(JAXGameRenderer):
 
         # Blit the rotated ship onto the frame
         ship_h, ship_w, _ = rotated_ship_rgba.shape
-        ship_rgb = rotated_ship_rgba[..., :3];
+        ship_rgb = rotated_ship_rgba[..., :3]
         ship_alpha = (rotated_ship_rgba[..., 3] / 255.0)[..., None]
 
         start_x = jnp.round(ship_state.x - ship_w / 2).astype(jnp.int32)
