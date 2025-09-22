@@ -4931,15 +4931,15 @@ class BeamRiderRenderer(JAXGameRenderer):
         # ===== CONFIG / SIZES ====
         # =========================
         SCALE_SCORE = 1
-        SCALE_ENEMIES = 1
+        SCALE_ENEMIES = 2
         SCALE_TORPS = 1
         SCALE_LIVES = 1
 
         spacing = 1
 
         # Enemies (middle-left) - GREEN COLOR, MIDDLE POSITION
-        MARGIN_ENEMIES_X = 6
-        MARGIN_ENEMIES_Y = 70  # Middle-left position
+        MARGIN_ENEMIES_X = 10
+        MARGIN_ENEMIES_Y = 10  # Middle-left position
 
         # Score & Sector (center top)
         MARGIN_SCORE_Y = 4
