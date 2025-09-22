@@ -405,8 +405,22 @@ class JaxKeystoneKapers(JaxEnvironment[GameState, KeystoneKapersObservation, Key
             jnp.where(move_right, self.consts.PLAYER_SPEED, 0)
         )
 
-        # Update X position with wrapping at building edges
+        # Update X position with clipping to visible screen bounds
         new_x = player.x + vel_x
+        
+        # Calculate current section and position within section
+        current_section = new_x // self.consts.SECTION_WIDTH
+        section_start = current_section * self.consts.SECTION_WIDTH
+        position_in_section = new_x - section_start
+        
+        # Clamp position within visible game area (not full section width)
+        max_position_in_section = self.consts.GAME_AREA_WIDTH - self.consts.PLAYER_WIDTH
+        clamped_position_in_section = jnp.clip(position_in_section, 0, max_position_in_section)
+        
+        # Reconstruct final position
+        new_x = section_start + clamped_position_in_section
+        
+        # Also ensure we don't go beyond the total building
         new_x = jnp.clip(new_x, 0, self.consts.TOTAL_BUILDING_WIDTH - self.consts.PLAYER_WIDTH)
 
         # Jumping mechanics with gravity
@@ -1507,7 +1521,7 @@ class KeystoneKapersRenderer(JAXGameRenderer):
 
         # Draw player with camera adjustment
         player_screen_x = building_to_screen_x(state.player.x)
-        player_visible = (player_screen_x >= -self.consts.PLAYER_WIDTH) & (player_screen_x < self.consts.GAME_AREA_WIDTH)
+        player_visible = (player_screen_x >= 0) & (player_screen_x <= self.consts.GAME_AREA_WIDTH - self.consts.PLAYER_WIDTH)
 
         player_color = jnp.array([0, 255, 0], dtype=jnp.uint8)  # Green player
         game_area = jnp.where(
@@ -1519,7 +1533,7 @@ class KeystoneKapersRenderer(JAXGameRenderer):
 
         # Draw thief with camera adjustment (only if not escaped)
         thief_screen_x = building_to_screen_x(state.thief.x)
-        thief_visible = (thief_screen_x >= -self.consts.THIEF_WIDTH) & (thief_screen_x < self.consts.GAME_AREA_WIDTH) & jnp.logical_not(state.thief.escaped)
+        thief_visible = (thief_screen_x >= 0) & (thief_screen_x <= self.consts.GAME_AREA_WIDTH - self.consts.THIEF_WIDTH) & jnp.logical_not(state.thief.escaped)
 
         thief_color = jnp.array([255, 0, 0], dtype=jnp.uint8)  # Red thief
         game_area = jnp.where(
