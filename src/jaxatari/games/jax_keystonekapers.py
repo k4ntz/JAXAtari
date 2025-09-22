@@ -43,6 +43,11 @@ class KeystoneKapersConstants(NamedTuple):
     SCREEN_WIDTH: int = 160
     SCREEN_HEIGHT: int = 210
     
+    # Building structure - 7 sections of horizontal scrolling
+    BUILDING_SECTIONS: int = 7
+    SECTION_WIDTH: int = 160  # Each section is one screen width
+    TOTAL_BUILDING_WIDTH: int = 7 * 160  # 1120 pixels total width
+    
     # Floor positions (Y coordinates) - 3 playable floors + roof
     FLOOR_1_Y: int = 180  # Ground floor
     FLOOR_2_Y: int = 130  # Middle floor
@@ -50,23 +55,30 @@ class KeystoneKapersConstants(NamedTuple):
     ROOF_Y: int = 30      # Roof (escape zone)
     FLOOR_HEIGHT: int = 20
     
-    # Escalator positions (X coordinates)
-    ESCALATOR_1_X: int = 40
-    ESCALATOR_2_X: int = 120
+    # Escalator positions (relative to each section, 2 per section)
+    ESCALATOR_1_OFFSET: int = 40   # Left escalator in each section
+    ESCALATOR_2_OFFSET: int = 120  # Right escalator in each section
     ESCALATOR_WIDTH: int = 16
     
-    # Elevator configuration
-    ELEVATOR_X: int = 80
+    # Elevator configuration (positioned in middle of entire building)
+    ELEVATOR_BUILDING_X: int = 560  # Middle of 1120px building (3.5 * 160)
     ELEVATOR_WIDTH: int = 16
-    ELEVATOR_CYCLE_TIME: int = 360  # ~6 seconds at 60fps
-    ELEVATOR_OPEN_TIME: int = 90    # ~1.5 seconds
+    ELEVATOR_MOVE_TIME: int = 120   # 2 seconds to move between floors
+    ELEVATOR_DOOR_TIME: int = 60    # 1 second for doors to open/close
+    ELEVATOR_WAIT_TIME: int = 180   # 3 seconds doors stay open
     
     # Player configuration
     PLAYER_WIDTH: int = 8
     PLAYER_HEIGHT: int = 16
+    PLAYER_CROUCH_HEIGHT: int = 8  # Half height when crouching
     PLAYER_SPEED: int = 2
     JUMP_HEIGHT: int = 12
     JUMP_DURATION: int = 20
+    JUMP_GRAVITY: float = 0.8
+    
+    # Camera/Viewport system for scrolling
+    # Camera system - section-based (not smooth following)
+    CAMERA_SECTION_THRESHOLD: int = 20  # How close to edge before switching sections
     
     # Thief configuration
     THIEF_WIDTH: int = 8
@@ -131,15 +143,18 @@ class KeystoneKapersConstants(NamedTuple):
 
 class PlayerState(NamedTuple):
     """Player state including position, movement, and actions."""
-    x: chex.Array
-    y: chex.Array
-    floor: chex.Array  # Current floor (0=ground, 1=middle, 2=top, 3=roof)
+    x: chex.Array           # Absolute X position in building (0 to TOTAL_BUILDING_WIDTH)
+    y: chex.Array           # Y position on screen
+    floor: chex.Array       # Current floor (0=ground, 1=middle, 2=top, 3=roof)
     vel_x: chex.Array
     vel_y: chex.Array
     is_jumping: chex.Array
+    is_crouching: chex.Array
     jump_timer: chex.Array
+    jump_start_y: chex.Array  # Y position when jump started
     is_on_elevator: chex.Array
     is_on_escalator: chex.Array
+    in_elevator: chex.Array   # Actually inside elevator car
 
 
 class ThiefState(NamedTuple):
@@ -179,10 +194,11 @@ class ObstacleState(NamedTuple):
 
 class ElevatorState(NamedTuple):
     """Elevator state machine."""
-    position: chex.Array    # 0=floor1, 1=floor2, 2=floor3
-    timer: chex.Array
-    is_open: chex.Array
-    moving_up: chex.Array
+    floor: chex.Array       # Current floor (0=ground, 1=middle, 2=top)
+    state: chex.Array       # 0=IdleOpen, 1=Closing, 2=Moving, 3=Opening
+    timer: chex.Array       # Timer for current state
+    target_floor: chex.Array # Target floor when moving
+    has_player: chex.Array  # Whether player is inside elevator
 
 
 class GameState(NamedTuple):
@@ -191,6 +207,9 @@ class GameState(NamedTuple):
     thief: ThiefState
     obstacles: ObstacleState
     elevator: ElevatorState
+    
+    # Camera system for scrolling
+    camera_x: chex.Array    # Camera X position in building coordinates
     
     # Game state
     score: chex.Array
@@ -293,29 +312,33 @@ class JaxKeystoneKapers(JaxEnvironment[GameState, KeystoneKapersObservation, Key
     @partial(jax.jit, static_argnums=(0,))
     def _is_on_escalator(self, x: chex.Array, floor: chex.Array) -> chex.Array:
         """Check if position is on an escalator."""
+        # Convert absolute building position to section-relative position
+        section_x = x % self.consts.SECTION_WIDTH
+        
         on_esc1 = jnp.logical_and(
-            x >= self.consts.ESCALATOR_1_X,
-            x <= self.consts.ESCALATOR_1_X + self.consts.ESCALATOR_WIDTH
+            section_x >= self.consts.ESCALATOR_1_OFFSET,
+            section_x <= self.consts.ESCALATOR_1_OFFSET + self.consts.ESCALATOR_WIDTH
         )
         on_esc2 = jnp.logical_and(
-            x >= self.consts.ESCALATOR_2_X,
-            x <= self.consts.ESCALATOR_2_X + self.consts.ESCALATOR_WIDTH
+            section_x >= self.consts.ESCALATOR_2_OFFSET,
+            section_x <= self.consts.ESCALATOR_2_OFFSET + self.consts.ESCALATOR_WIDTH
         )
         # Escalators don't connect to roof
         has_escalator = floor < 3
         return jnp.logical_and(jnp.logical_or(on_esc1, on_esc2), has_escalator)
 
     @partial(jax.jit, static_argnums=(0,))
-    def _is_on_elevator(self, x: chex.Array, floor: chex.Array, elevator_pos: chex.Array, elevator_open: chex.Array) -> chex.Array:
-        """Check if position is on an open elevator at current floor."""
+    def _is_on_elevator(self, x: chex.Array, floor: chex.Array, elevator: ElevatorState) -> chex.Array:
+        """Check if position is on elevator at current floor."""
         on_elevator_x = jnp.logical_and(
-            x >= self.consts.ELEVATOR_X,
-            x <= self.consts.ELEVATOR_X + self.consts.ELEVATOR_WIDTH
+            x >= self.consts.ELEVATOR_BUILDING_X,
+            x <= self.consts.ELEVATOR_BUILDING_X + self.consts.ELEVATOR_WIDTH
         )
-        elevator_at_floor = elevator_pos == floor
+        elevator_at_floor = elevator.floor == floor
+        elevator_doors_open = elevator.state == 0  # IdleOpen state
         return jnp.logical_and(
             jnp.logical_and(on_elevator_x, elevator_at_floor),
-            elevator_open
+            elevator_doors_open
         )
 
     @partial(jax.jit, static_argnums=(0,))
@@ -332,42 +355,152 @@ class JaxKeystoneKapers(JaxEnvironment[GameState, KeystoneKapersObservation, Key
         """Update player state based on action."""
         player = state.player
         
-        # Extract action components
+        # Handle both scalar actions (from JAX environment) and array actions
+        # Convert scalar action to movement flags
+        action_int = jnp.asarray(action, dtype=jnp.int32)
+        
+        # Extract action components - handle both scalar and array inputs
         move_left = jnp.logical_or(
-            jnp.logical_or(action == Action.LEFT, action == Action.UPLEFT),
-            jnp.logical_or(action == Action.DOWNLEFT, action == Action.LEFTFIRE)
+            jnp.logical_or(action_int == Action.LEFT, action_int == Action.UPLEFT),
+            jnp.logical_or(action_int == Action.DOWNLEFT, action_int == Action.LEFTFIRE)
         )
         move_right = jnp.logical_or(
-            jnp.logical_or(action == Action.RIGHT, action == Action.UPRIGHT),
-            jnp.logical_or(action == Action.DOWNRIGHT, action == Action.RIGHTFIRE)
+            jnp.logical_or(action_int == Action.RIGHT, action_int == Action.UPRIGHT),
+            jnp.logical_or(action_int == Action.DOWNRIGHT, action_int == Action.RIGHTFIRE)
         )
         move_up = jnp.logical_or(
-            jnp.logical_or(action == Action.UP, action == Action.UPLEFT),
-            action == Action.UPRIGHT
+            jnp.logical_or(action_int == Action.UP, action_int == Action.UPLEFT),
+            action_int == Action.UPRIGHT
         )
         move_down = jnp.logical_or(
-            jnp.logical_or(action == Action.DOWN, action == Action.DOWNLEFT),
-            action == Action.DOWNRIGHT
+            jnp.logical_or(action_int == Action.DOWN, action_int == Action.DOWNLEFT),
+            action_int == Action.DOWNRIGHT
         )
         jump = jnp.logical_or(
-            jnp.logical_or(action == Action.FIRE, action == Action.LEFTFIRE),
-            action == Action.RIGHTFIRE
+            jnp.logical_or(action_int == Action.FIRE, action_int == Action.LEFTFIRE),
+            action_int == Action.RIGHTFIRE
         )
+        crouch = move_down  # Crouch is triggered by down input when not moving vertically
         
-        # Horizontal movement
-        vel_x = jax.lax.select(
+        # Horizontal movement with building traversal
+        vel_x = jnp.where(
             move_left, -self.consts.PLAYER_SPEED,
-            jax.lax.select(move_right, self.consts.PLAYER_SPEED, 0)
+            jnp.where(move_right, self.consts.PLAYER_SPEED, 0)
         )
         
-        new_x = jnp.clip(
-            player.x + vel_x,
-            0,
-            self.consts.SCREEN_WIDTH - self.consts.PLAYER_WIDTH
-        )
+        # Update X position with wrapping at building edges
+        new_x = player.x + vel_x
+        new_x = jnp.clip(new_x, 0, self.consts.TOTAL_BUILDING_WIDTH - self.consts.PLAYER_WIDTH)
         
-        # Jumping logic
+        # Jumping mechanics with gravity
         start_jump = jnp.logical_and(jump, jnp.logical_not(player.is_jumping))
+        continue_jump = jnp.logical_and(player.is_jumping, player.jump_timer > 0)
+        
+        # Jump physics - parabolic arc
+        jump_progress = (self.consts.JUMP_DURATION - player.jump_timer) / self.consts.JUMP_DURATION
+        jump_height = self.consts.JUMP_HEIGHT * jnp.sin(jnp.pi * jump_progress)
+        
+        new_jump_timer = jnp.where(
+            start_jump, self.consts.JUMP_DURATION,
+            jnp.where(continue_jump, player.jump_timer - 1, 0)
+        )
+        new_is_jumping = new_jump_timer > 0
+        
+        new_jump_start_y = jnp.where(
+            start_jump, player.y,
+            player.jump_start_y
+        )
+        
+        # Y position with jumping
+        floor_y = self._floor_y_position(player.floor)
+        jump_y = jnp.where(
+            new_is_jumping,
+            new_jump_start_y - jump_height,
+            floor_y
+        )
+        
+        # Crouching (only when not jumping and not in elevator)
+        can_crouch = jnp.logical_and(
+            jnp.logical_not(new_is_jumping),
+            jnp.logical_not(player.in_elevator)
+        )
+        new_is_crouching = jnp.logical_and(crouch, can_crouch)
+        
+        # Elevator interaction
+        on_elevator = self._is_on_elevator(new_x, player.floor, state.elevator)
+        
+        # Enter elevator only if player presses UP and doors are open
+        wants_elevator = move_up  # Only UP to enter
+        elevator_available = jnp.logical_and(state.elevator.state == 0, on_elevator)  # IdleOpen and on platform
+        enter_elevator = jnp.logical_and(
+            jnp.logical_and(wants_elevator, elevator_available),
+            jnp.logical_and(jnp.logical_not(player.in_elevator), jnp.logical_not(new_is_jumping))
+        )
+        new_in_elevator = jnp.logical_or(player.in_elevator, enter_elevator)
+        
+        # Exit elevator if doors are open and player presses DOWN
+        exit_elevator = jnp.logical_and(
+            jnp.logical_and(player.in_elevator, state.elevator.state == 0),  # IdleOpen
+            move_down
+        )
+        new_in_elevator = jnp.logical_and(new_in_elevator, jnp.logical_not(exit_elevator))
+        
+        # If in elevator, follow elevator position
+        elevator_x = self.consts.ELEVATOR_BUILDING_X + self.consts.ELEVATOR_WIDTH // 2
+        final_x = jnp.where(new_in_elevator, elevator_x, new_x)
+        
+        # Escalator movement (only when not jumping and not in elevator)
+        current_floor = player.floor
+        on_escalator = self._is_on_escalator(final_x, current_floor)
+        can_use_escalator = jnp.logical_and(
+            jnp.logical_and(on_escalator, jnp.logical_not(new_is_jumping)),
+            jnp.logical_not(new_in_elevator)
+        )
+        
+        escalator_up = jnp.logical_and(
+            jnp.logical_and(can_use_escalator, move_up),
+            current_floor < 2  # Can't go above floor 3 via escalator
+        )
+        escalator_down = jnp.logical_and(
+            jnp.logical_and(can_use_escalator, move_down),
+            current_floor > 0  # Can't go below ground floor
+        )
+        
+        # Elevator floor changes (when elevator moves)
+        elevator_floor_change = jnp.logical_and(
+            new_in_elevator,
+            state.elevator.floor != player.floor
+        )
+        
+        # Update floor
+        new_floor = jax.lax.select(
+            elevator_floor_change, state.elevator.floor,
+            jax.lax.select(
+                escalator_up, current_floor + 1,
+                jax.lax.select(escalator_down, current_floor - 1, current_floor)
+            )
+        )
+        
+        # Update Y position based on final floor
+        final_y = jnp.where(
+            new_is_jumping, jump_y,
+            self._floor_y_position(new_floor)
+        )
+        
+        return PlayerState(
+            x=final_x,
+            y=final_y,
+            floor=new_floor,
+            vel_x=vel_x,
+            vel_y=0,
+            is_jumping=new_is_jumping,
+            is_crouching=new_is_crouching,
+            jump_timer=new_jump_timer,
+            jump_start_y=new_jump_start_y,
+            is_on_elevator=on_elevator,
+            is_on_escalator=on_escalator,
+            in_elevator=new_in_elevator
+        )
         jump_timer = jax.lax.select(
             start_jump, self.consts.JUMP_DURATION,
             jax.lax.select(
@@ -433,8 +566,9 @@ class JaxKeystoneKapers(JaxEnvironment[GameState, KeystoneKapersObservation, Key
         )
 
     @partial(jax.jit, static_argnums=(0,))
+    @partial(jax.jit, static_argnums=(0,))
     def _update_thief(self, state: GameState) -> ThiefState:
-        """Update thief state with AI behavior."""
+        """Update thief state with AI behavior for building traversal."""
         thief = state.thief
         
         # Level-scaled speed
@@ -443,27 +577,62 @@ class JaxKeystoneKapers(JaxEnvironment[GameState, KeystoneKapersObservation, Key
         )
         level_speed = jnp.minimum(level_speed, self.consts.THIEF_MAX_SPEED)
         
+        # Thief AI: Move horizontally across building, then up via escalator
+        # Pattern: left->right->left->escalator up->repeat
+        
         # Move horizontally
         new_x = thief.x + level_speed * thief.direction
         
-        # Check for escalator usage (thief AI)
-        at_escalator = self._is_on_escalator(new_x, thief.floor)
+        # Check for wrapping at building edges
+        hit_left_edge = new_x <= 0
+        hit_right_edge = new_x >= self.consts.TOTAL_BUILDING_WIDTH - self.consts.THIEF_WIDTH
+        
+        # Reverse direction at edges
+        new_direction = jax.lax.select(
+            jnp.logical_or(hit_left_edge, hit_right_edge),
+            -thief.direction,
+            thief.direction
+        )
+        
+        # Clamp position within building
+        new_x = jnp.clip(new_x, 0, self.consts.TOTAL_BUILDING_WIDTH - self.consts.THIEF_WIDTH)
+        
+        # Check for escalator usage (randomly use escalators when encountered)
+        # Only use escalators when moving in certain direction
+        section_x = new_x % self.consts.SECTION_WIDTH
+        on_escalator_1 = jnp.logical_and(
+            section_x >= self.consts.ESCALATOR_1_OFFSET,
+            section_x <= self.consts.ESCALATOR_1_OFFSET + self.consts.ESCALATOR_WIDTH
+        )
+        on_escalator_2 = jnp.logical_and(
+            section_x >= self.consts.ESCALATOR_2_OFFSET,
+            section_x <= self.consts.ESCALATOR_2_OFFSET + self.consts.ESCALATOR_WIDTH
+        )
+        on_escalator = jnp.logical_or(on_escalator_1, on_escalator_2)
+        
+        # Use escalator with some probability when moving right and can go up
         should_use_escalator = jnp.logical_and(
-            at_escalator,
-            jnp.logical_and(thief.direction > 0, thief.floor < 2)  # Moving right and can go up
+            jnp.logical_and(on_escalator, new_direction > 0),
+            jnp.logical_and(thief.floor < 2, state.step_counter % 120 == 0)  # Every 2 seconds
         )
         
         # Check escape condition (reached roof)
         escaped = thief.floor >= 3
         
-        # Update floor if using escalator
-        new_floor = jax.lax.select(should_use_escalator, thief.floor + 1, thief.floor)
+        # Try to reach roof via escalator when on top floor (but only at building edges)
+        at_building_edge = jnp.logical_or(
+            new_x <= self.consts.THIEF_WIDTH,  # Left edge
+            new_x >= self.consts.TOTAL_BUILDING_WIDTH - 2 * self.consts.THIEF_WIDTH  # Right edge
+        )
+        try_escape = jnp.logical_and(
+            jnp.logical_and(thief.floor == 2, at_building_edge),
+            jnp.logical_and(on_escalator, state.step_counter % 240 == 0)  # Only every 4 seconds
+        )
         
-        # Wrap around screen edges
-        new_x = jnp.where(
-            new_x > self.consts.SCREEN_WIDTH,
-            -self.consts.THIEF_WIDTH,
-            jnp.where(new_x < -self.consts.THIEF_WIDTH, self.consts.SCREEN_WIDTH, new_x)
+        # Update floor if using escalator
+        new_floor = jax.lax.select(
+            try_escape, 3,  # Go to roof (escape)
+            jax.lax.select(should_use_escalator, thief.floor + 1, thief.floor)
         )
         
         # Update Y position based on floor
@@ -474,27 +643,113 @@ class JaxKeystoneKapers(JaxEnvironment[GameState, KeystoneKapersObservation, Key
             y=new_y,
             floor=new_floor,
             speed=level_speed,
-            direction=thief.direction,
+            direction=new_direction,
             escaped=escaped
         )
 
     @partial(jax.jit, static_argnums=(0,))
-    def _update_elevator(self, state: GameState) -> ElevatorState:
-        """Update elevator state machine."""
+    def _update_elevator(self, state: GameState, action: chex.Array) -> ElevatorState:
+        """Update autonomous elevator state machine that cycles between floors automatically."""
         elevator = state.elevator
+        player = state.player
         
-        # Cycle through positions with timing
-        cycle_position = (elevator.timer // (self.consts.ELEVATOR_CYCLE_TIME // 3)) % 3
+        # Elevator state machine:
+        # 0 = IdleOpen (doors open, waiting)
+        # 1 = Closing (doors closing)
+        # 2 = Moving (between floors)  
+        # 3 = Opening (doors opening at destination)
         
-        # Elevator is open for a portion of each cycle
-        cycle_phase = elevator.timer % (self.consts.ELEVATOR_CYCLE_TIME // 3)
-        is_open = cycle_phase < self.consts.ELEVATOR_OPEN_TIME
+        # Autonomous elevator logic - cycles between floors automatically
+        # Determine next target floor in cycle (0 -> 1 -> 2 -> 1 -> 0 -> repeat)
+        at_top = elevator.floor == 2
+        at_bottom = elevator.floor == 0
+        going_up = elevator.target_floor > elevator.floor
+        going_down = elevator.target_floor < elevator.floor
+        
+        # Auto-determine next target floor
+        auto_target_floor = jnp.where(
+            at_top, elevator.floor - 1,  # At top, go down
+            jnp.where(
+                at_bottom, elevator.floor + 1,  # At bottom, go up
+                jnp.where(
+                    going_up, jnp.minimum(elevator.floor + 1, 2),  # Continue up
+                    jnp.maximum(elevator.floor - 1, 0)  # Continue down
+                )
+            )
+        )
+        
+        # Always want to move (autonomous operation)
+        elevator_wants_move = True
+        
+        # Determine target floor
+        target_floor = auto_target_floor
+        
+        # State transitions with automatic timing
+        new_timer = elevator.timer + 1
+        
+        # IdleOpen -> Closing (after waiting time)
+        close_doors = jnp.logical_and(
+            elevator.state == 0,
+            elevator.timer >= self.consts.ELEVATOR_DOOR_TIME
+        )
+        
+        # Closing -> Moving (after door close time)
+        start_moving = jnp.logical_and(
+            elevator.state == 1,
+            elevator.timer >= self.consts.ELEVATOR_DOOR_TIME
+        )
+        
+        # Moving -> Opening (after move time)
+        arrive_at_floor = jnp.logical_and(
+            elevator.state == 2,
+            elevator.timer >= self.consts.ELEVATOR_MOVE_TIME
+        )
+        
+        # Opening -> IdleOpen (after door open time)
+        finish_opening = jnp.logical_and(
+            elevator.state == 3,
+            elevator.timer >= self.consts.ELEVATOR_DOOR_TIME
+        )
+        
+        # Update state - autonomous operation, no idle timeout
+        new_state = jax.lax.select(
+            close_doors, 1,  # Start closing
+            jax.lax.select(
+                start_moving, 2,  # Start moving
+                jax.lax.select(
+                    arrive_at_floor, 3,  # Start opening
+                    jax.lax.select(
+                        finish_opening, 0,  # Back to idle open
+                        elevator.state  # No change
+                    )
+                )
+            )
+        )
+        
+        # Reset timer on state changes
+        new_timer = jax.lax.select(
+            new_state != elevator.state, 0, new_timer
+        )
+        
+        # Update floor when moving completes
+        new_floor = jax.lax.select(
+            arrive_at_floor, elevator.target_floor, elevator.floor
+        )
+        
+        # Update target floor when starting to move
+        new_target_floor = jax.lax.select(
+            close_doors, target_floor, elevator.target_floor
+        )
+        
+        # Update player presence
+        new_has_player = player.in_elevator
         
         return ElevatorState(
-            position=cycle_position,
-            timer=elevator.timer + 1,
-            is_open=is_open,
-            moving_up=elevator.moving_up  # Not used in simple implementation
+            floor=new_floor,
+            state=new_state,
+            timer=new_timer,
+            target_floor=new_target_floor,
+            has_player=new_has_player
         )
 
     @partial(jax.jit, static_argnums=(0,))
@@ -607,47 +862,54 @@ class JaxKeystoneKapers(JaxEnvironment[GameState, KeystoneKapersObservation, Key
 
     @partial(jax.jit, static_argnums=(0,))
     def _check_collisions(self, state: GameState) -> Tuple[bool, bool, int]:
-        """Check all collision types. Returns (player_hit_obstacle, player_caught_thief, items_collected)."""
+        """Check all collision types with proper hitbox handling for jump/crouch."""
         player = state.player
+        
+        # Player hitbox depends on crouching state
+        player_height = jax.lax.select(
+            player.is_crouching,
+            self.consts.PLAYER_CROUCH_HEIGHT,
+            self.consts.PLAYER_HEIGHT
+        )
         
         # Player-thief collision
         thief_collision = self._entities_collide(
-            player.x, player.y, self.consts.PLAYER_WIDTH, self.consts.PLAYER_HEIGHT,
+            player.x, player.y, self.consts.PLAYER_WIDTH, player_height,
             state.thief.x, state.thief.y, self.consts.THIEF_WIDTH, self.consts.THIEF_HEIGHT
         )
         thief_caught = jnp.logical_and(thief_collision, player.floor == state.thief.floor)
         
-        # Player-obstacle collisions (only if not jumping)
-        # Check cart collisions
+        # Player-obstacle collisions with jump/crouch mechanics
+        # Check cart collisions (ground level, can crouch under)
         cart_collisions = jax.vmap(
             lambda i: jnp.logical_and(
                 state.obstacles.cart_active[i],
                 self._entities_collide(
-                    player.x, player.y, self.consts.PLAYER_WIDTH, self.consts.PLAYER_HEIGHT,
+                    player.x, player.y, self.consts.PLAYER_WIDTH, player_height,
                     state.obstacles.cart_x[i], state.obstacles.cart_y[i],
                     self.consts.CART_WIDTH, self.consts.CART_HEIGHT
                 )
             )
         )(jnp.arange(self.consts.MAX_OBSTACLES))
         
-        # Check ball collisions
+        # Check ball collisions (can jump over)
         ball_collisions = jax.vmap(
             lambda i: jnp.logical_and(
                 state.obstacles.ball_active[i],
                 self._entities_collide(
-                    player.x, player.y, self.consts.PLAYER_WIDTH, self.consts.PLAYER_HEIGHT,
+                    player.x, player.y, self.consts.PLAYER_WIDTH, player_height,
                     state.obstacles.ball_x[i], state.obstacles.ball_y[i],
                     self.consts.BALL_WIDTH, self.consts.BALL_HEIGHT
                 )
             )
         )(jnp.arange(self.consts.MAX_OBSTACLES))
         
-        # Check plane collisions
+        # Check plane collisions (fly overhead, can crouch under)
         plane_collisions = jax.vmap(
             lambda i: jnp.logical_and(
                 state.obstacles.plane_active[i],
                 self._entities_collide(
-                    player.x, player.y, self.consts.PLAYER_WIDTH, self.consts.PLAYER_HEIGHT,
+                    player.x, player.y, self.consts.PLAYER_WIDTH, player_height,
                     state.obstacles.plane_x[i], state.obstacles.plane_y[i],
                     self.consts.PLANE_WIDTH, self.consts.PLANE_HEIGHT
                 )
@@ -660,7 +922,8 @@ class JaxKeystoneKapers(JaxEnvironment[GameState, KeystoneKapersObservation, Key
             jnp.logical_or(jnp.any(ball_collisions), jnp.any(plane_collisions))
         )
         
-        # Only count obstacle hits if player is not jumping
+        # Only count obstacle hits if player is not jumping (jumping avoids most obstacles)
+        # Exception: planes can still hit if player jumps too high
         obstacle_hit = jnp.logical_and(jnp.logical_not(player.is_jumping), all_obstacle_collisions)
         
         # Item collection
@@ -680,26 +943,31 @@ class JaxKeystoneKapers(JaxEnvironment[GameState, KeystoneKapersObservation, Key
 
     @partial(jax.jit, static_argnums=(0,))
     def reset(self, key: chex.PRNGKey = None) -> Tuple[KeystoneKapersObservation, GameState]:
-        """Reset the game to initial state."""
+        """Reset the game to initial state with building traversal setup."""
         if key is None:
             key = jrandom.PRNGKey(0)
         
-        # Initialize player at ground floor, left side
+        # Initialize player at rightmost section of ground floor (as per original game)
+        player_start_x = self.consts.TOTAL_BUILDING_WIDTH - 100  # Near right edge
         player = PlayerState(
-            x=jnp.array(20),
+            x=jnp.array(player_start_x),
             y=jnp.array(self.consts.FLOOR_1_Y),
             floor=jnp.array(0),
             vel_x=jnp.array(0),
             vel_y=jnp.array(0),
             is_jumping=jnp.array(False),
+            is_crouching=jnp.array(False),
             jump_timer=jnp.array(0),
+            jump_start_y=jnp.array(self.consts.FLOOR_1_Y),
             is_on_elevator=jnp.array(False),
-            is_on_escalator=jnp.array(False)
+            is_on_escalator=jnp.array(False),
+            in_elevator=jnp.array(False)
         )
         
-        # Initialize thief at top floor, right side
+        # Initialize thief at leftmost section of top floor  
+        thief_start_x = 50  # Near left edge of building
         thief = ThiefState(
-            x=jnp.array(self.consts.SCREEN_WIDTH - 30),
+            x=jnp.array(thief_start_x),
             y=jnp.array(self.consts.FLOOR_3_Y),
             floor=jnp.array(2),
             speed=jnp.array(self.consts.THIEF_BASE_SPEED),
@@ -729,13 +997,18 @@ class JaxKeystoneKapers(JaxEnvironment[GameState, KeystoneKapersObservation, Key
             plane_spawn_timer=jnp.array(180)  # 3 seconds
         )
         
-        # Initialize elevator
+        # Initialize elevator with new state machine
         elevator = ElevatorState(
-            position=jnp.array(0),  # Start at ground floor
+            floor=jnp.array(0),         # Start at ground floor
+            state=jnp.array(0),         # IdleOpen
             timer=jnp.array(0),
-            is_open=jnp.array(True),
-            moving_up=jnp.array(True)
+            target_floor=jnp.array(0),
+            has_player=jnp.array(False)
         )
+        
+        # Initialize camera to show player's current section
+        player_section = player_start_x // self.consts.SECTION_WIDTH
+        camera_x = player_section * self.consts.SECTION_WIDTH
         
         # Initialize game state
         state = GameState(
@@ -743,6 +1016,9 @@ class JaxKeystoneKapers(JaxEnvironment[GameState, KeystoneKapersObservation, Key
             thief=thief,
             obstacles=obstacles,
             elevator=elevator,
+            
+            # Camera system for scrolling
+            camera_x=jnp.array(camera_x),
             
             score=jnp.array(0),
             lives=jnp.array(3),
@@ -765,15 +1041,36 @@ class JaxKeystoneKapers(JaxEnvironment[GameState, KeystoneKapersObservation, Key
 
     @partial(jax.jit, static_argnums=(0,))
     def step(self, state: GameState, action: chex.Array) -> Tuple[KeystoneKapersObservation, GameState, float, bool, KeystoneKapersInfo]:
-        """Step the environment forward by one frame."""
+        """Step the environment forward by one frame with camera updates."""
         # Generate random key for this step
         step_key = jrandom.PRNGKey(state.step_counter)
         
         # Update all game components
         new_player = self._update_player(state, action)
         new_thief = self._update_thief(state)
-        new_elevator = self._update_elevator(state)
+        new_elevator = self._update_elevator(state, action)
         new_obstacles = self._update_obstacles(state, step_key)
+        
+        # Section-based camera system - snap to sections, not smooth following
+        player_section = new_player.x // self.consts.SECTION_WIDTH
+        current_camera_section = state.camera_x // self.consts.SECTION_WIDTH
+        
+        # Check if player is at edge of current section
+        player_offset_in_section = new_player.x % self.consts.SECTION_WIDTH
+        at_left_edge = player_offset_in_section < self.consts.CAMERA_SECTION_THRESHOLD
+        at_right_edge = player_offset_in_section > (self.consts.SECTION_WIDTH - self.consts.CAMERA_SECTION_THRESHOLD)
+        
+        # Switch camera section if player crosses threshold
+        should_switch_left = jnp.logical_and(at_left_edge, player_section < current_camera_section)
+        should_switch_right = jnp.logical_and(at_right_edge, player_section > current_camera_section)
+        should_switch = jnp.logical_or(should_switch_left, should_switch_right)
+        
+        # Set camera to player's section if switching, otherwise keep current
+        new_camera_section = jnp.where(should_switch, player_section, current_camera_section)
+        new_camera_x = new_camera_section * self.consts.SECTION_WIDTH
+        
+        # Clamp camera to building bounds
+        new_camera_x = jnp.clip(new_camera_x, 0, self.consts.TOTAL_BUILDING_WIDTH - self.consts.SECTION_WIDTH)
         
         # Check collisions
         obstacle_hit, thief_caught, items_collected = self._check_collisions(state._replace(
@@ -818,12 +1115,15 @@ class JaxKeystoneKapers(JaxEnvironment[GameState, KeystoneKapersObservation, Key
         # Deactivate collected items
         new_item_active = state.item_active  # TODO: Implement item collection logic
         
-        # Create new state
+        # Create new state with camera update
         new_state = GameState(
             player=new_player,
             thief=new_thief,
             obstacles=new_obstacles,
             elevator=new_elevator,
+            
+            # Update camera position
+            camera_x=new_camera_x,
             
             score=new_score,
             lives=new_lives,
@@ -881,8 +1181,8 @@ class JaxKeystoneKapers(JaxEnvironment[GameState, KeystoneKapersObservation, Key
             timer=state.timer,
             level=state.level,
             lives=state.lives,
-            elevator_position=state.elevator.position,
-            elevator_is_open=state.elevator.is_open
+            elevator_position=state.elevator.floor,
+            elevator_is_open=(state.elevator.state == 0)  # IdleOpen state
         )
 
     @partial(jax.jit, static_argnums=(0,))
@@ -1028,178 +1328,161 @@ class KeystoneKapersRenderer(JAXGameRenderer):
 
     @partial(jax.jit, static_argnums=(0,))
     def render(self, state: GameState) -> jnp.ndarray:
-        """Render the game state to an image array."""
+        """Render the game state with camera system - simplified for JAX compatibility."""
         # Create background
         frame = jnp.ones(
             (self.consts.SCREEN_HEIGHT, self.consts.SCREEN_WIDTH, 3),
             dtype=jnp.uint8
         ) * jnp.array(self.consts.BACKGROUND_COLOR, dtype=jnp.uint8)
         
-        # Helper function to draw a rectangle using dynamic updates
-        def draw_rectangle(frame, x, y, width, height, color):
-            """Draw a rectangle on the frame using JAX-compatible operations."""
-            # Create rectangle patch
-            rect = jnp.ones((height, width, 3), dtype=jnp.uint8) * color
-            
-            # Ensure coordinates are within bounds
-            x = jnp.clip(x, 0, self.consts.SCREEN_WIDTH - width)
-            y = jnp.clip(y, 0, self.consts.SCREEN_HEIGHT - height)
-            
-            # Use dynamic_update_slice for JAX compatibility
-            return jax.lax.dynamic_update_slice(frame, rect, (y, x, 0))
+        # Helper function to convert building coordinates to screen coordinates
+        def building_to_screen_x(building_x):
+            """Convert building coordinate to screen coordinate using camera."""
+            return building_x - state.camera_x
         
-        # Draw floors (static positions)
+        # Simple helper to draw a filled rectangle (fixed size for JAX compatibility)
+        def draw_rectangle_simple(frame, x, y, width, height, color):
+            """Draw a rectangle with static dimensions."""
+            # Ensure parameters are integers and arrays
+            x = jnp.clip(jnp.asarray(x, dtype=jnp.int32), 0, self.consts.SCREEN_WIDTH - 1)
+            y = jnp.clip(jnp.asarray(y, dtype=jnp.int32), 0, self.consts.SCREEN_HEIGHT - 1)
+            width = jnp.clip(jnp.asarray(width, dtype=jnp.int32), 1, self.consts.SCREEN_WIDTH - x)
+            height = jnp.clip(jnp.asarray(height, dtype=jnp.int32), 1, self.consts.SCREEN_HEIGHT - y)
+            
+            # Create indices for the rectangle area
+            y_indices = jnp.arange(self.consts.SCREEN_HEIGHT)[:, None]
+            x_indices = jnp.arange(self.consts.SCREEN_WIDTH)[None, :]
+            
+            # Create mask for the rectangle
+            mask = ((y_indices >= y) & (y_indices < y + height) & 
+                   (x_indices >= x) & (x_indices < x + width))
+            
+            # Apply color where mask is True
+            return jnp.where(mask[:, :, None], color, frame)
+        
+        # Draw floors (simplified - just draw visible screen width)
         floor_color = jnp.array(self.consts.FLOOR_COLOR, dtype=jnp.uint8)
         floor_thickness = 4
         
         # Floor 1
-        frame = draw_rectangle(
-            frame,
-            0, self.consts.FLOOR_1_Y + self.consts.FLOOR_HEIGHT - floor_thickness,
-            self.consts.SCREEN_WIDTH, floor_thickness,
-            floor_color
+        frame = draw_rectangle_simple(
+            frame, 0, self.consts.FLOOR_1_Y + self.consts.FLOOR_HEIGHT - floor_thickness,
+            self.consts.SCREEN_WIDTH, floor_thickness, floor_color
         )
         
-        # Floor 2  
-        frame = draw_rectangle(
-            frame,
-            0, self.consts.FLOOR_2_Y + self.consts.FLOOR_HEIGHT - floor_thickness,
-            self.consts.SCREEN_WIDTH, floor_thickness,
-            floor_color
+        # Floor 2
+        frame = draw_rectangle_simple(
+            frame, 0, self.consts.FLOOR_2_Y + self.consts.FLOOR_HEIGHT - floor_thickness,
+            self.consts.SCREEN_WIDTH, floor_thickness, floor_color
         )
         
         # Floor 3
-        frame = draw_rectangle(
-            frame,
-            0, self.consts.FLOOR_3_Y + self.consts.FLOOR_HEIGHT - floor_thickness,
-            self.consts.SCREEN_WIDTH, floor_thickness,
-            floor_color
+        frame = draw_rectangle_simple(
+            frame, 0, self.consts.FLOOR_3_Y + self.consts.FLOOR_HEIGHT - floor_thickness,
+            self.consts.SCREEN_WIDTH, floor_thickness, floor_color
         )
         
-        # Draw escalators (static positions)
+        # Draw escalators (only those visible on screen)
         escalator_color = jnp.array(self.consts.ESCALATOR_COLOR, dtype=jnp.uint8)
         
-        # Escalator 1 - Floor 1 to 2
-        frame = draw_rectangle(
-            frame,
-            self.consts.ESCALATOR_1_X, self.consts.FLOOR_2_Y,
-            self.consts.ESCALATOR_WIDTH, self.consts.FLOOR_HEIGHT,
-            escalator_color
+        # Check if escalators are visible and draw them
+        escalator_1_screen_x = building_to_screen_x(self.consts.ESCALATOR_1_OFFSET)
+        escalator_1_visible = (escalator_1_screen_x >= -self.consts.ESCALATOR_WIDTH) & (escalator_1_screen_x < self.consts.SCREEN_WIDTH)
+        
+        # Draw escalator 1 if visible
+        frame = jnp.where(
+            escalator_1_visible,
+            draw_rectangle_simple(frame, escalator_1_screen_x, self.consts.FLOOR_2_Y, 
+                                self.consts.ESCALATOR_WIDTH, self.consts.FLOOR_HEIGHT, escalator_color),
+            frame
+        )
+        frame = jnp.where(
+            escalator_1_visible,
+            draw_rectangle_simple(frame, escalator_1_screen_x, self.consts.FLOOR_3_Y, 
+                                self.consts.ESCALATOR_WIDTH, self.consts.FLOOR_HEIGHT, escalator_color),
+            frame
         )
         
-        # Escalator 1 - Floor 2 to 3
-        frame = draw_rectangle(
-            frame,
-            self.consts.ESCALATOR_1_X, self.consts.FLOOR_3_Y,
-            self.consts.ESCALATOR_WIDTH, self.consts.FLOOR_HEIGHT,
-            escalator_color
+        escalator_2_screen_x = building_to_screen_x(self.consts.ESCALATOR_2_OFFSET)
+        escalator_2_visible = (escalator_2_screen_x >= -self.consts.ESCALATOR_WIDTH) & (escalator_2_screen_x < self.consts.SCREEN_WIDTH)
+        
+        # Draw escalator 2 if visible  
+        frame = jnp.where(
+            escalator_2_visible,
+            draw_rectangle_simple(frame, escalator_2_screen_x, self.consts.FLOOR_2_Y, 
+                                self.consts.ESCALATOR_WIDTH, self.consts.FLOOR_HEIGHT, escalator_color),
+            frame
+        )
+        frame = jnp.where(
+            escalator_2_visible,
+            draw_rectangle_simple(frame, escalator_2_screen_x, self.consts.FLOOR_3_Y, 
+                                self.consts.ESCALATOR_WIDTH, self.consts.FLOOR_HEIGHT, escalator_color),
+            frame
         )
         
-        # Escalator 2 - Floor 1 to 2
-        frame = draw_rectangle(
-            frame,
-            self.consts.ESCALATOR_2_X, self.consts.FLOOR_2_Y,
-            self.consts.ESCALATOR_WIDTH, self.consts.FLOOR_HEIGHT,
-            escalator_color
-        )
-        
-        # Escalator 2 - Floor 2 to 3
-        frame = draw_rectangle(
-            frame,
-            self.consts.ESCALATOR_2_X, self.consts.FLOOR_3_Y,
-            self.consts.ESCALATOR_WIDTH, self.consts.FLOOR_HEIGHT,
-            escalator_color
-        )
-        
-        # Draw elevator (dynamic position)
-        elevator_color = jax.lax.select(
-            state.elevator.is_open,
+        # Draw elevator at its current position
+        elevator_color = jnp.where(
+            state.elevator.state == 0,  # IdleOpen
             jnp.array(self.consts.ELEVATOR_COLOR, dtype=jnp.uint8),
-            jnp.array([32, 32, 32], dtype=jnp.uint8)  # Darker when closed
+            jnp.array([32, 32, 32], dtype=jnp.uint8)  # Darker when not open
         )
         
-        elevator_floor_y = jax.lax.select(
-            state.elevator.position == 0, self.consts.FLOOR_1_Y,
-            jax.lax.select(
-                state.elevator.position == 1, self.consts.FLOOR_2_Y,
+        elevator_floor_y = jnp.where(
+            state.elevator.floor == 0, self.consts.FLOOR_1_Y,
+            jnp.where(
+                state.elevator.floor == 1, self.consts.FLOOR_2_Y,
                 self.consts.FLOOR_3_Y
             )
         )
         
-        frame = draw_rectangle(
-            frame,
-            self.consts.ELEVATOR_X, elevator_floor_y,
-            self.consts.ELEVATOR_WIDTH, self.consts.FLOOR_HEIGHT,
-            elevator_color
+        # Elevator is in section 3 (middle of building)
+        elevator_building_x = self.consts.ELEVATOR_BUILDING_X
+        elevator_screen_x = building_to_screen_x(elevator_building_x)
+        
+        frame = draw_rectangle_simple(
+            frame, elevator_screen_x, elevator_floor_y,
+            self.consts.ELEVATOR_WIDTH, self.consts.FLOOR_HEIGHT, elevator_color
         )
         
-        # Draw player
-        player_sprite = self.sprites['player']
-        player_x = jnp.clip(state.player.x.astype(jnp.int32), 0, self.consts.SCREEN_WIDTH - self.consts.PLAYER_WIDTH)
-        player_y = jnp.clip(state.player.y.astype(jnp.int32), 0, self.consts.SCREEN_HEIGHT - self.consts.PLAYER_HEIGHT)
+        # Draw player with camera adjustment
+        player_screen_x = building_to_screen_x(state.player.x)
+        player_visible = (player_screen_x >= -self.consts.PLAYER_WIDTH) & (player_screen_x < self.consts.SCREEN_WIDTH)
         
-        frame = jax.lax.dynamic_update_slice(
-            frame, player_sprite, 
-            (player_y, player_x, 0)
-        )
-        
-        # Draw thief (only if not escaped)
-        thief_sprite = self.sprites['thief']
-        thief_x = jnp.clip(state.thief.x.astype(jnp.int32), 0, self.consts.SCREEN_WIDTH - self.consts.THIEF_WIDTH)
-        thief_y = jnp.clip(state.thief.y.astype(jnp.int32), 0, self.consts.SCREEN_HEIGHT - self.consts.THIEF_HEIGHT)
-        
-        # Use conditional rendering for thief
-        frame = jax.lax.cond(
-            jnp.logical_not(state.thief.escaped),
-            lambda frame: jax.lax.dynamic_update_slice(frame, thief_sprite, (thief_y, thief_x, 0)),
-            lambda frame: frame,
+        player_color = jnp.array([0, 255, 0], dtype=jnp.uint8)  # Green player
+        frame = jnp.where(
+            player_visible,
+            draw_rectangle_simple(frame, player_screen_x, state.player.y, 
+                                self.consts.PLAYER_WIDTH, self.consts.PLAYER_HEIGHT, player_color),
             frame
         )
         
-        # For obstacles, use a simplified approach with basic rectangles instead of individual sprites
-        # Draw active shopping carts (simplified as red rectangles)
-        cart_color = jnp.array(self.consts.CART_COLOR, dtype=jnp.uint8)
-        cart_positions = jnp.where(
-            state.obstacles.cart_active,
-            jnp.clip(state.obstacles.cart_x.astype(jnp.int32), -self.consts.CART_WIDTH, self.consts.SCREEN_WIDTH),
-            -100  # Off-screen position for inactive carts
+        # Draw thief with camera adjustment (only if not escaped)
+        thief_screen_x = building_to_screen_x(state.thief.x)
+        thief_visible = (thief_screen_x >= -self.consts.THIEF_WIDTH) & (thief_screen_x < self.consts.SCREEN_WIDTH) & jnp.logical_not(state.thief.escaped)
+        
+        thief_color = jnp.array([255, 0, 0], dtype=jnp.uint8)  # Red thief
+        frame = jnp.where(
+            thief_visible,
+            draw_rectangle_simple(frame, thief_screen_x, state.thief.y, 
+                                self.consts.THIEF_WIDTH, self.consts.THIEF_HEIGHT, thief_color),
+            frame
         )
         
-        # Draw active bouncing balls (simplified as white rectangles)
-        ball_color = jnp.array(self.consts.BALL_COLOR, dtype=jnp.uint8)
-        ball_x_pos = jnp.where(
-            state.obstacles.ball_active,
-            jnp.clip(state.obstacles.ball_x.astype(jnp.int32), -self.consts.BALL_WIDTH, self.consts.SCREEN_WIDTH),
-            -100
-        )
-        ball_y_pos = jnp.where(
-            state.obstacles.ball_active,
-            jnp.clip(state.obstacles.ball_y.astype(jnp.int32), 0, self.consts.SCREEN_HEIGHT - self.consts.BALL_HEIGHT),
-            -100
-        )
+        # Draw simple UI elements
+        ui_color = jnp.array([255, 255, 255], dtype=jnp.uint8)  # White UI
         
-        # Draw active toy planes (simplified as orange rectangles)
-        plane_color = jnp.array(self.consts.PLANE_COLOR, dtype=jnp.uint8)
-        plane_positions = jnp.where(
-            state.obstacles.plane_active,
-            jnp.clip(state.obstacles.plane_x.astype(jnp.int32), -self.consts.PLANE_WIDTH, self.consts.SCREEN_WIDTH),
-            -100
-        )
+        # Score indicator (top left)
+        frame = draw_rectangle_simple(frame, 10, 10, 30, 8, ui_color)
         
-        # Draw active items (simplified as magenta rectangles)
-        item_color = jnp.array(self.consts.ITEM_COLOR, dtype=jnp.uint8)
-        item_x_pos = jnp.where(
-            state.item_active,
-            jnp.clip(state.item_x.astype(jnp.int32), 0, self.consts.SCREEN_WIDTH - self.consts.ITEM_WIDTH),
-            -100
-        )
-        item_y_pos = jnp.where(
-            state.item_active,
-            jnp.clip(state.item_y.astype(jnp.int32), 0, self.consts.SCREEN_HEIGHT - self.consts.ITEM_HEIGHT),
-            -100
-        )
+        # Lives indicator (top center)
+        frame = draw_rectangle_simple(frame, self.consts.SCREEN_WIDTH // 2 - 15, 10, 30, 8, ui_color)
         
-        # Note: For full obstacle rendering, we'd need to use vectorized operations
-        # This simplified version provides basic visual feedback for the game
+        # Timer indicator (top right)
+        frame = draw_rectangle_simple(frame, self.consts.SCREEN_WIDTH - 40, 10, 30, 8, ui_color)
+        
+        # Camera position indicator (bottom)
+        camera_indicator_x = (state.camera_x / self.consts.TOTAL_BUILDING_WIDTH * self.consts.SCREEN_WIDTH)
+        frame = draw_rectangle_simple(frame, camera_indicator_x, self.consts.SCREEN_HEIGHT - 10, 20, 5, 
+                                    jnp.array([255, 255, 0], dtype=jnp.uint8))  # Yellow camera indicator
         
         return frame
