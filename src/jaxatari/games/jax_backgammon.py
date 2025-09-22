@@ -1210,7 +1210,7 @@ class BackgammonRenderer(JAXGameRenderer):
 
         # Draw checkers (with one removed if picked)
         def draw_point_checkers(point_idx, fr):
-            player_idx = self.get_player_index(state.current_player)
+            player_idx = self.env.get_player_index(state.current_player)
             white_count = state.board[0, point_idx]
             black_count = state.board[1, point_idx]
 
@@ -1246,7 +1246,7 @@ class BackgammonRenderer(JAXGameRenderer):
 
         # Draw floating checker if in moving phase
         def draw_floating_checker(f):
-            player_idx = self.get_player_index(state.current_player)
+            player_idx = self.env.get_player_index(state.current_player)
             color = jax.lax.cond(
                 player_idx == 0,
                 lambda _: self.color_white_checker,
