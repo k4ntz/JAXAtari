@@ -91,6 +91,25 @@ class RiverraidInfo(NamedTuple):
 
 class RiverraidObservation(NamedTuple):
     player_x: chex.Array
+    player_y: chex.Array
+    player_direction: chex.Array
+    player_velocity: chex.Array
+    player_fuel: chex.Array
+    player_lives: chex.Array
+    player_score: chex.Array
+    river_left: chex.Array
+    river_right: chex.Array
+    river_inner_left: chex.Array
+    river_inner_right: chex.Array
+    dam_position: chex.Array
+    enemy_x: chex.Array
+    enemy_y: chex.Array
+    enemy_type: chex.Array
+    enemy_state: chex.Array
+    enemy_direction: chex.Array
+    fuel_x: chex.Array
+    fuel_y: chex.Array
+    fuel_state: chex.Array
 
 
 # logic sperated into 3 branches: island, no_island, island_transition
@@ -1287,11 +1306,36 @@ class JaxRiverraid(JaxEnvironment):
             Action.RIGHTFIRE,
             Action.LEFTFIRE
         }
-        self.obs_size = 420
+        self.renderer = RiverraidRenderer()
+        #self.obs_size = 420
 
+    def render(self, state: RiverraidState) -> jnp.ndarray:
+        return self.renderer.render(state)
+
+    @partial(jax.jit, static_argnums=(0,))
     def _get_observation(self, state: RiverraidState) -> RiverraidObservation:
-        observation = RiverraidObservation(player_x=state.player_x)
-        return observation
+        return RiverraidObservation(
+            player_x=state.player_x,
+            player_y=state.player_y,
+            player_direction=state.player_direction,
+            player_velocity=state.player_velocity,
+            player_fuel=state.player_fuel,
+            player_lives=state.player_lives,
+            player_score=state.player_score,
+            river_left=state.river_left,
+            river_right=state.river_right,
+            river_inner_left=state.river_inner_left,
+            river_inner_right=state.river_inner_right,
+            dam_position=state.dam_position,
+            enemy_x=state.enemy_x,
+            enemy_y=state.enemy_y,
+            enemy_type=state.enemy_type,
+            enemy_state=state.enemy_state,
+            enemy_direction=state.enemy_direction,
+            fuel_x=state.fuel_x,
+            fuel_y=state.fuel_y,
+            fuel_state=state.fuel_state,
+        )
 
     def reset(self, key=None) -> Tuple[RiverraidObservation, RiverraidState]:
         river_start_x = (SCREEN_WIDTH - DEFAULT_RIVER_WIDTH) // 2
@@ -1456,16 +1500,39 @@ class JaxRiverraid(JaxEnvironment):
         observation = self._get_observation(new_state)
         reward = self._get_env_reward(state, new_state)
         done = self._get_done(new_state)
+        jax.debug.print("done: {done}\n", done=done)
         info = self._get_info(new_state, jnp.zeros(1))
 
         return observation, new_state, reward, done, info
 
-    def observation_space(self) -> spaces.Box:
-        return spaces.Box(
-            low=0,
-            high=255,
-            shape=None,
-            dtype=jnp.uint8,
+    @partial(jax.jit, static_argnums=(0,))
+    def _get_done(self, state: RiverraidState) -> bool:
+        return True
+
+    def observation_space(self) -> spaces.Dict:
+        return spaces.Dict(
+            {
+                "player_x": spaces.Box(low=0, high=SCREEN_WIDTH, shape=(), dtype=jnp.float32),
+                "player_y": spaces.Box(low=0, high=SCREEN_HEIGHT, shape=(), dtype=jnp.float32),
+                "player_direction": spaces.Box(low=0, high=2, shape=(), dtype=jnp.int32),
+                "player_velocity": spaces.Box(low=-3.0, high=3.0, shape=(), dtype=jnp.float32),
+                "player_fuel": spaces.Box(low=0, high=MAX_FUEL, shape=(), dtype=jnp.int32),
+                "player_lives": spaces.Box(low=0, high=jnp.iinfo(jnp.int32).max, shape=(), dtype=jnp.int32),
+                "player_score": spaces.Box(low=0, high=jnp.iinfo(jnp.int32).max, shape=(), dtype=jnp.int32),
+                "river_left": spaces.Box(low=0, high=SCREEN_WIDTH, shape=(SCREEN_HEIGHT,), dtype=jnp.int32),
+                "river_right": spaces.Box(low=0, high=SCREEN_WIDTH, shape=(SCREEN_HEIGHT,), dtype=jnp.int32),
+                "river_inner_left": spaces.Box(low=-1, high=SCREEN_WIDTH, shape=(SCREEN_HEIGHT,), dtype=jnp.int32),
+                "river_inner_right": spaces.Box(low=-1, high=SCREEN_WIDTH, shape=(SCREEN_HEIGHT,), dtype=jnp.int32),
+                "dam_position": spaces.Box(low=-1, high=2, shape=(SCREEN_HEIGHT,), dtype=jnp.int32),
+                "enemy_x": spaces.Box(low=-10, high=SCREEN_WIDTH + 10, shape=(MAX_ENEMIES,), dtype=jnp.float32),
+                "enemy_y": spaces.Box(low=0, high=SCREEN_HEIGHT + 1, shape=(MAX_ENEMIES,), dtype=jnp.float32),
+                "enemy_type": spaces.Box(low=0, high=2, shape=(MAX_ENEMIES,), dtype=jnp.int32),
+                "enemy_state": spaces.Box(low=0, high=4, shape=(MAX_ENEMIES,), dtype=jnp.int32),
+                "enemy_direction": spaces.Box(low=0, high=3, shape=(MAX_ENEMIES,), dtype=jnp.int32),
+                "fuel_x": spaces.Box(low=-1, high=SCREEN_WIDTH, shape=(MAX_ENEMIES,), dtype=jnp.float32),
+                "fuel_y": spaces.Box(low=0, high=SCREEN_HEIGHT + 1, shape=(MAX_ENEMIES,), dtype=jnp.float32),
+                "fuel_state": spaces.Box(low=0, high=4, shape=(MAX_ENEMIES,), dtype=jnp.int32),
+            }
         )
 
     @partial(jax.jit, static_argnums=(0,))
@@ -1482,8 +1549,33 @@ class JaxRiverraid(JaxEnvironment):
         return rewards
 
     @partial(jax.jit, static_argnums=(0,))
-    def _get_done(self, state: RiverraidState) -> bool:
-        return jax.lax.cond(state.player_lives < 0, lambda _: True, lambda _: False, operand=None)
+    def obs_to_flat_array(self, obs: RiverraidObservation) -> chex.Array:
+        return jnp.concatenate(
+            [
+                obs.player_x.flatten(),
+                obs.player_y.flatten(),
+                obs.player_direction.flatten(),
+                obs.player_velocity.flatten(),
+                obs.player_fuel.flatten(),
+                obs.player_lives.flatten(),
+                obs.player_score.flatten(),
+                obs.river_left.flatten(),
+                obs.river_right.flatten(),
+                obs.river_inner_left.flatten(),
+                obs.river_inner_right.flatten(),
+                obs.dam_position.flatten(),
+                obs.enemy_x.flatten(),
+                obs.enemy_y.flatten(),
+                obs.enemy_type.flatten(),
+                obs.enemy_state.flatten(),
+                obs.enemy_direction.flatten(),
+                obs.fuel_x.flatten(),
+                obs.fuel_y.flatten(),
+                obs.fuel_state.flatten(),
+                obs.damage_position.flatten(),
+            ]
+        )
+
 
     @partial(jax.jit, static_argnums=(0,))
     def _get_info(self, state: RiverraidState, all_rewards: chex.Array) -> RiverraidInfo:
@@ -1914,41 +2006,3 @@ class RiverraidRenderer(JAXGameRenderer):
         return raster
 
 
-
-if __name__ == "__main__":
-    pygame.init()
-    font = pygame.font.Font(None, 24)
-
-    game = JaxRiverraid(frameskip=1)
-    renderer = RiverraidRenderer()
-
-    jitted_reset = jax.jit(game.reset)
-    jitted_step = jax.jit(game.step)
-    jitted_render = jax.jit(renderer.render)
-
-    initial_key = jax.random.PRNGKey(4)
-    initial_observation, state = jitted_reset()
-    state = state._replace(master_key=initial_key)
-
-    screen = pygame.display.set_mode((SCREEN_WIDTH, SCREEN_HEIGHT))
-    pygame.display.set_caption("Riverraid")
-    clock = pygame.time.Clock()
-
-    running = True
-    while running:
-        for event in pygame.event.get():
-            if event.type == pygame.QUIT:
-                running = False
-
-        action = get_action_from_keyboard(state)
-        observation, state, reward, done, info = jitted_step(state, action)
-
-        render_output = jitted_render(state)
-        aj.update_pygame(screen, render_output, 1, SCREEN_WIDTH, SCREEN_HEIGHT)
-
-        pygame.display.flip()
-        clock.tick(60)
-        if state.player_lives < 0:
-            running = False
-
-    pygame.quit()
