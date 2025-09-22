@@ -7,45 +7,57 @@ from gymnax.environments import spaces
 from jaxatari.rendering import atraJaxis as aj
 from jaxatari.environment import JaxEnvironment
 
-# Constants for game environment
+# Constants for authentic Atari 2600 Kaboom
 WIDTH = 160
 HEIGHT = 210
-MAX_BOMBS = 8  # Maximum number of active bombs
-MAX_STEPS = 10000
+MAX_BOMBS = 8  # Maximum number of active bombs per group
+MAX_STEPS = 20000  # Longer games with 8 bomb groups
 
-# Player (bucket) settings
-BUCKET_WIDTH = 8
-BUCKET_HEIGHT = 6
+# Authentic Atari 2600 Bomb Group System (from manual)
+BOMB_GROUPS = [
+    {"count": 10, "points": 1},   # Group 1: 10 bombs worth 1 point each
+    {"count": 20, "points": 2},   # Group 2: 20 bombs worth 2 points each  
+    {"count": 30, "points": 3},   # Group 3: 30 bombs worth 3 points each
+    {"count": 40, "points": 4},   # Group 4: 40 bombs worth 4 points each
+    {"count": 50, "points": 5},   # Group 5: 50 bombs worth 5 points each
+    {"count": 75, "points": 6},   # Group 6: 75 bombs worth 6 points each
+    {"count": 100, "points": 7},  # Group 7: 100 bombs worth 7 points each
+    {"count": 150, "points": 8},  # Group 8: 150 bombs worth 8 points each
+]
+
+# Player (bucket) settings - authentic Atari dimensions
+BUCKET_WIDTH_NORMAL = 16  # Normal difficulty bucket width
+BUCKET_WIDTH_ADVANCED = 8  # Advanced difficulty bucket width (smaller)
+BUCKET_HEIGHT = 8
 BUCKET_START_X = WIDTH // 2
-BUCKET_START_Y = HEIGHT - 30  # Changed from HEIGHT - 70 to HEIGHT - 30
-BUCKET_SPEED = 4
+BUCKET_START_Y = HEIGHT - 20
+BUCKET_SPEED = 3
 
 # Bomber (mad bomber) settings
 BOMBER_WIDTH = 8
 BOMBER_HEIGHT = 8
 BOMBER_START_X = WIDTH // 2
-BOMBER_START_Y = 30
-BOMBER_MIN_X = 20
-BOMBER_MAX_X = WIDTH - 20
-BOMBER_SPEED = 2
+BOMBER_START_Y = 25
+BOMBER_MIN_X = 15
+BOMBER_MAX_X = WIDTH - 15
+BOMBER_SPEED = 1
 
-# Bomb settings
+# Bomb settings - authentic Atari timing
 BOMB_WIDTH = 4
-BOMB_HEIGHT = 4
-BOMB_SPEED_INITIAL = 1
-BOMB_SPEED_MAX = 4
-BOMB_SPEED_INCREMENT = 0.1  # Speed increases as game progresses
+BOMB_HEIGHT = 6
+BOMB_SPEED = 2
+BOMB_DROP_TIMING_SLOW = 12  # Initial timing - every 12 frames
+BOMB_DROP_TIMING_FAST = 3   # Final timing - every 3 frames
 
 # Game settings
 INITIAL_LIVES = 3
-POINTS_PER_CATCH = 10
 
-# Colors
-BACKGROUND_COLOR = (0, 0, 0)
-BUCKET_COLOR = (255, 255, 0)  # Yellow
-BOMBER_COLOR = (255, 0, 0)    # Red
-BOMB_COLOR = (255, 165, 0)    # Orange
-TEXT_COLOR = (255, 255, 255)  # White
+# Colors - simple colored rectangles as requested
+BACKGROUND_COLOR = (0, 0, 0)      # Black
+BUCKET_COLOR = (255, 255, 0)      # Yellow
+BOMBER_COLOR = (255, 0, 0)        # Red  
+BOMB_COLOR = (255, 165, 0)        # Orange
+TEXT_COLOR = (255, 255, 255)      # White
 
 # Action constants
 NOOP = 0
