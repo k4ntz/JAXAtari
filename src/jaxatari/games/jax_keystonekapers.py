@@ -78,7 +78,7 @@ class KeystoneKapersConstants(NamedTuple):
     ESCALATOR_WIDTH: int = 16
 
     # Elevator configuration (positioned in middle of entire building)
-    ELEVATOR_BUILDING_X: int = 560  # Middle of 1120px building (3.5 * 160)
+    ELEVATOR_BUILDING_X: int = 520  # Middle of 1064px building (3.5 * 152) - adjusted for new section width
     ELEVATOR_WIDTH: int = 16
     ELEVATOR_MOVE_TIME: int = 120   # 2 seconds to move between floors
     ELEVATOR_DOOR_TIME: int = 60    # 1 second for doors to open/close
