@@ -883,13 +883,14 @@ class JaxVenture(JaxEnvironment[GameState, VentureObservation, VentureInfo, Vent
             ),
             state
         )
-        reward = (new_state.score - previous_score).astype(jnp.float32)
+
+        env_reward = self._get_reward(state, new_state)
 
         done = self._get_done(new_state)
-        info = self._get_info(new_state, all_rewards=jnp.array([reward]))
+        info = self._get_info(new_state, all_rewards=jnp.array([env_reward]))
         obs = self._get_observation(new_state)
 
-        return obs, new_state, reward, done, info
+        return obs, new_state, env_reward, done, info
 
     def _perform_world_switch(self, state: GameState) -> GameState:
         """Transitions the game state to the next world, resetting level-specific entities."""
@@ -1458,9 +1459,26 @@ class JaxVenture(JaxEnvironment[GameState, VentureObservation, VentureInfo, Vent
 
         return VentureObservation(player=player, monsters=monsters, game_over=game_over_flag)
 
-    def _get_reward(self, previous_state: GameState, state: GameState) -> float:
-        """Calculates the reward for the current step."""
-        return 0.0
+    def _get_reward(self, previous_state: GameState, state: GameState) -> Array | ndarray[Any, dtype[Any]]:
+        """
+        Calculates the reward for the current step.
+        - Normally, the reward is the score gained in the step.
+        - On the final step when all lives are lost, the reward is a large penalty
+          equal to the negative of the total accumulated score.
+        """
+        normal_reward = (state.score - previous_state.score).astype(jnp.float32)
+
+        game_over_penalty = -state.score.astype(jnp.float32)
+
+        is_done = self._get_done(state)
+
+        final_reward = jnp.where(
+            is_done,
+            game_over_penalty,
+            normal_reward
+        )
+
+        return final_reward
 
     def _get_done(self, state: GameState) -> bool:
         """Determines if the episode has ended."""
@@ -1688,7 +1706,7 @@ class VentureRenderer(JAXGameRenderer):
             x_pos = 8 + (5 - i) * 6  # Position for a 6-digit score.
             y_pos = 10
             new_canvas = jr.render_at(canvas, x_pos, y_pos, digit_sprite)
-            return (new_canvas, score_val)
+            return new_canvas, score_val
 
         initial_tuple = (canvas, state.score)
         canvas, _ = jax.lax.fori_loop(0, 6, draw_score_digit, initial_tuple)
