@@ -109,19 +109,17 @@ class SlotMachineConfig:
     bet_amount: int = 1
     min_wager: int = 1
     max_wager: int = 5
-    #max_wager: int = 500 # For debug only. TODO Remove later
 
     # Reel timing
     min_spin_duration: int = 60
     max_spin_duration: int = 120
     reel_stop_delay: int = 30
 
-    # Tuned reel strips after ten thousand simulations to keep the bankroll drifting downward on the long run.
     reel_layouts: jnp.ndarray = field(
         default_factory=lambda: jnp.array([
-            [0, 1, 3, 4, 0, 2, 3, 4, 1, 3, 4, 2, 3, 4, 1, 3, 5, 1, 3, 4],
-            [0, 2, 3, 1, 5, 0, 2, 3, 1, 5, 0, 2, 3, 5, 5, 0, 2, 3, 4, 5],
-            [0, 0, 3, 4, 5, 0, 0, 1, 4, 5, 0, 0, 1, 4, 5, 0, 2, 3, 4, 5],
+            [0, 1, 2, 3, 4, 5, 0, 1, 2, 3, 4, 5, 0, 1, 2, 3, 4, 5, 0, 1],
+            [0, 1, 2, 3, 4, 5, 0, 1, 2, 3, 4, 5, 0, 1, 2, 3, 4, 5, 0, 1],
+            [0, 1, 2, 3, 4, 5, 0, 1, 2, 3, 4, 5, 0, 1, 2, 3, 4, 5, 0, 1],
         ], dtype=jnp.int32)
     )
 
