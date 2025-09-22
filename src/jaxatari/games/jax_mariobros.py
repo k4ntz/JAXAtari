@@ -1236,7 +1236,7 @@ def draw_player_by_state(image, p, px, py):
     def stand_l(im): return draw_sprite_rgb(im, px, py, PLAYER_STANDING_LEFT_RGB,  PLAYER_STANDING_LEFT_MASK)
 
     def walk_r1(im): return draw_sprite_rgb(im, px, py, PLAYER_WALK_RIGHT_1_RGB,   PLAYER_WALK_RIGHT_1_MASK)
-    def walk_r2(im): return draw_sprite_rgb(im, px, py, PLAYER_WALK_RIGHT_2_RGB,   PLAYER_WALK_RIGHT_2_MASK)
+    def walk_r2(im): return draw_sprite_rgb(im, px+1, py, PLAYER_WALK_RIGHT_2_RGB,   PLAYER_WALK_RIGHT_2_MASK)
     def walk_l1(im): return draw_sprite_rgb(im, px, py, PLAYER_WALK_LEFT_1_RGB,    PLAYER_WALK_LEFT_1_MASK)
     def walk_l2(im): return draw_sprite_rgb(im, px, py, PLAYER_WALK_LEFT_2_RGB,    PLAYER_WALK_LEFT_2_MASK)
 
