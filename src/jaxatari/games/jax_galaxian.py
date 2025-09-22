@@ -7,7 +7,7 @@ from functools import partial
 from jax import lax
 import jax.lax
 
-from gymnax.environments import spaces
+import jaxatari.spaces as spaces
 
 from jaxatari.environment import JaxEnvironment, JAXAtariAction as Action
 from jaxatari.renderers import JAXGameRenderer
@@ -320,7 +320,7 @@ def update_enemy_attack(state: GalaxianState) -> GalaxianState:
 
             # Richtung
             new_enemy_attack_direction = jnp.where(state.player_x < new_attack_x, -1.0, 1.0)
-            new_attack_turning = state.enemy_attack_turning.at[diver_idx].set(vNO_TURNING)
+            new_attack_turning = state.enemy_attack_turning.at[diver_idx].set(GalaxianConstants.NO_TURNING)
             new_attack_turn_step = state.enemy_attack_turn_step.at[diver_idx].set(0)
 
             # timer
@@ -1108,12 +1108,15 @@ class GalaxianObservation(NamedTuple):
     enemy_attack_pos: chex.Array
     enemy_attack_x: chex.Array
     enemy_attack_y: chex.Array
+    enemy_support_pos: chex.Array
+    enemy_support_x: chex.Array
+    enemy_support_y: chex.Array
 
 class GalaxianInfo(NamedTuple):
     time: jnp.ndarray
     all_rewards: chex.Array
 
-class JaxGalaxian(JaxEnvironment[GalaxianState, GalaxianObservation, GalaxianInfo]):
+class JaxGalaxian(JaxEnvironment[GalaxianState, GalaxianObservation, GalaxianInfo, GalaxianConstants]):
     def __init__(self, frameskip: int = 0, reward_funcs: list[callable]=None):
         super().__init__()
         self.frameskip = frameskip + 1  # den stuff kp hab copy paste aus pong
@@ -1121,6 +1124,7 @@ class JaxGalaxian(JaxEnvironment[GalaxianState, GalaxianObservation, GalaxianInf
         if reward_funcs is not None:
             reward_funcs = tuple(reward_funcs)
         self.reward_funcs = reward_funcs
+        self.renderer = GalaxianRenderer()
         self.action_set = {
             Action.NOOP,
             Action.FIRE,
@@ -1135,7 +1139,7 @@ class JaxGalaxian(JaxEnvironment[GalaxianState, GalaxianObservation, GalaxianInf
         # +1 ein extra wert für den score
         # sind erstmal nur temporary values
 
-    def reset(self, key = None) -> Tuple[GalaxianObservation, GalaxianState]:
+    def reset(self, key: jax.random.PRNGKey = None) -> Tuple[GalaxianObservation, GalaxianState]:
         grid_rows = GalaxianConstants.GRID_ROWS
         grid_cols = GalaxianConstants.GRID_COLS
         enemy_spacing_x = GalaxianConstants.ENEMY_SPACING_X
@@ -1214,6 +1218,9 @@ class JaxGalaxian(JaxEnvironment[GalaxianState, GalaxianObservation, GalaxianInf
             enemy_attack_pos=state.enemy_attack_pos,
             enemy_attack_x=state.enemy_attack_x,
             enemy_attack_y=state.enemy_attack_y,
+            enemy_support_pos=state.enemy_support_pos,
+            enemy_support_x=state.enemy_support_x,
+            enemy_support_y=state.enemy_support_y,
         )
 
     @partial(jax.jit, static_argnums=(0,))
@@ -1224,12 +1231,52 @@ class JaxGalaxian(JaxEnvironment[GalaxianState, GalaxianObservation, GalaxianInf
     def action_space(self) -> spaces.Discrete:
         return spaces.Discrete(len(self.action_set))
 
-    def observation_space(self) -> spaces.Box:
+    def observation_space(self) -> spaces.Dict:
+        return spaces.Dict(
+            {
+                "player_x": spaces.Box(low=0, high=GalaxianConstants.NATIVE_GAME_WIDTH, shape=(), dtype=jnp.float32),
+                "player_y": spaces.Box(low=0, high=GalaxianConstants.NATIVE_GAME_HEIGHT, shape=(), dtype=jnp.float32),
+                "bullet_x": spaces.Box(low=GalaxianConstants.ERROR_VALUE, high=GalaxianConstants.NATIVE_GAME_WIDTH, shape=(), dtype=jnp.float32),
+                "bullet_y": spaces.Box(low=GalaxianConstants.ERROR_VALUE, high=GalaxianConstants.NATIVE_GAME_HEIGHT, shape=(), dtype=jnp.float32),
+                "enemy_grid_x": spaces.Box(low=0, high=GalaxianConstants.NATIVE_GAME_WIDTH, shape=(GalaxianConstants.GRID_ROWS, GalaxianConstants.GRID_COLS), dtype=jnp.float32),
+                "enemy_grid_y": spaces.Box(low=0, high=GalaxianConstants.NATIVE_GAME_HEIGHT, shape=(GalaxianConstants.GRID_ROWS, GalaxianConstants.GRID_COLS), dtype=jnp.float32),
+                "enemy_grid_state": spaces.Box(low=0, high=2, shape=(GalaxianConstants.GRID_ROWS, GalaxianConstants.GRID_COLS), dtype=jnp.int32),
+                "enemy_attack_pos": spaces.Box(low=GalaxianConstants.ERROR_VALUE, high=max(GalaxianConstants.GRID_ROWS, GalaxianConstants.GRID_COLS), shape=(GalaxianConstants.MAX_DIVERS, 2), dtype=jnp.int32),
+                "enemy_attack_x": spaces.Box(low=GalaxianConstants.ERROR_VALUE, high=GalaxianConstants.NATIVE_GAME_WIDTH, shape=(GalaxianConstants.MAX_DIVERS,), dtype=jnp.float32),
+                "enemy_attack_y": spaces.Box(low=GalaxianConstants.ERROR_VALUE, high=GalaxianConstants.NATIVE_GAME_HEIGHT, shape=(GalaxianConstants.MAX_DIVERS,), dtype=jnp.float32),
+                "enemy_support_pos": spaces.Box(low=GalaxianConstants.ERROR_VALUE, high=max(GalaxianConstants.GRID_ROWS, GalaxianConstants.GRID_COLS), shape=(GalaxianConstants.MAX_SUPPORTERS, 2), dtype=jnp.int32),
+                "enemy_support_x": spaces.Box(low=GalaxianConstants.ERROR_VALUE, high=GalaxianConstants.NATIVE_GAME_WIDTH, shape=(GalaxianConstants.MAX_SUPPORTERS,), dtype=jnp.float32),
+                "enemy_support_y": spaces.Box(low=GalaxianConstants.ERROR_VALUE, high=GalaxianConstants.NATIVE_GAME_HEIGHT, shape=(GalaxianConstants.MAX_SUPPORTERS,), dtype=jnp.float32),
+            }
+        )
+
+    def image_space(self) -> spaces.Box:
         return spaces.Box(
             low=0,
             high=255,
-            shape=None,
-            dtype=jnp.uint8,
+            shape=(210, 160, 3),
+            dtype=jnp.uint8
+        )
+
+    @partial(jax.jit, static_argnums=(0,))
+    def obs_to_flat_array(self, obs: GalaxianObservation) -> chex.Array:
+        """Converts the observation to a flat array."""
+        return jnp.concatenate(
+            [
+                obs.player_x.flatten(),
+                obs.player_y.flatten(),
+                obs.bullet_x.flatten(),
+                obs.bullet_y.flatten(),
+                obs.enemy_grid_x.flatten(),
+                obs.enemy_grid_y.flatten(),
+                obs.enemy_grid_state.flatten(),
+                obs.enemy_attack_pos.flatten(),
+                obs.enemy_attack_x.flatten(),
+                obs.enemy_attack_y.flatten(),
+                obs.enemy_support_pos.flatten(),
+                obs.enemy_support_x.flatten(),
+                obs.enemy_support_y.flatten(),
+            ]
         )
 
     @partial(jax.jit, static_argnums=(0,))
@@ -1300,6 +1347,10 @@ class JaxGalaxian(JaxEnvironment[GalaxianState, GalaxianObservation, GalaxianInf
     @partial(jax.jit, static_argnums=(0,))
     def _get_info(self, state: GalaxianState, all_rewards: chex.Array) -> GalaxianInfo:
         return GalaxianInfo(time=state.turn_step, all_rewards=all_rewards)
+
+    def render(self, state: GalaxianState) -> jnp.ndarray:
+        return self.renderer.render(state)
+
 
 # helper function to normalize frame dimensions to a target shape
 def normalize_frame(frame: jnp.ndarray, target_shape: Tuple[int, int, int]) -> jnp.ndarray:
@@ -1422,7 +1473,9 @@ def load_sprites():
     )
 
 class GalaxianRenderer(JAXGameRenderer):
-    def __init__(self):
+    def __init__(self, consts: GalaxianConstants = None):
+        super().__init__()
+        self.consts = consts or GalaxianConstants()
         (
             self.SPRITE_BG,
             self.SPRITE_PLAYER,
@@ -1449,12 +1502,12 @@ class GalaxianRenderer(JAXGameRenderer):
     @partial(jax.jit, static_argnums=(0,))
     def render(self, state: GalaxianState):
         # Hintergrund
-        raster = jnp.zeros((GalaxianConstants.NATIVE_GAME_WIDTH, GalaxianConstants.NATIVE_GAME_HEIGHT, 3), dtype=jnp.uint8)
-        bg_frame = jr.jr.get_sprite_frame(self.SPRITE_BG, 0)
+        raster = jnp.zeros((GalaxianConstants.NATIVE_GAME_HEIGHT, GalaxianConstants.NATIVE_GAME_WIDTH, 3), dtype=jnp.uint8)
+        bg_frame = jr.get_sprite_frame(self.SPRITE_BG, 0)
         raster = jr.render_at(raster, 0, 0, bg_frame)
 
         # Spieler
-        player_frame = jr.jr.get_sprite_frame(self.SPRITE_PLAYER, 0)
+        player_frame = jr.get_sprite_frame(self.SPRITE_PLAYER, 0)
         px = jnp.round(state.player_x).astype(jnp.int32)
         py = jnp.round(state.player_y).astype(jnp.int32)
         raster = jnp.where(
@@ -1523,7 +1576,7 @@ class GalaxianRenderer(JAXGameRenderer):
                 def down(r):
                     ex = jnp.round(state.enemy_attack_x[i]).astype(jnp.int32)
                     ey = jnp.round(state.enemy_attack_y[i]).astype(jnp.int32)
-                    sprite = jr.jr.get_sprite_frame(self.SPRITE_ENEMY_DOWN, row)
+                    sprite = jr.get_sprite_frame(self.SPRITE_ENEMY_DOWN, row)
 
                     return jr.render_at(r, ex, ey, sprite)
 
@@ -1649,7 +1702,7 @@ class GalaxianRenderer(JAXGameRenderer):
         raster = lax.fori_loop(0, GalaxianConstants.GRID_ROWS, row_body, raster)
 
         # Lebens-Icons unten rechts
-        life_sprite = jr.jr.get_sprite_frame(self.SPRITE_LIFE, 0)
+        life_sprite = jr.get_sprite_frame(self.SPRITE_LIFE, 0)
         def life_loop_body(i, r_acc):
             # nur zeichnen, wenn Leben vorhanden
             def draw(r0):
@@ -1676,73 +1729,73 @@ class GalaxianRenderer(JAXGameRenderer):
                 y0 = jnp.int32(
                     5
                 )
-                return jr.render_at(r0, x0, y0, jr.jr.get_sprite_frame(self.SPRITE_DIGIT, get_digit(i, state.score)))
+                return jr.render_at(r0, x0, y0, jr.get_sprite_frame(self.SPRITE_DIGIT, get_digit(i, state.score)))
             return lax.cond(i < 5, draw, lambda r0: r0, r_acc)
         raster = lax.fori_loop(0,5,score_loop_body,raster)
 
         return raster
 
-# run with: python -m jaxatari.games.jax_galaxian
-# run with: python scripts/play.py --game src/jaxatari/games/jax_galaxian.py --record my_record_file.npz
-if __name__ == "__main__":
-    pygame.init()
-    font = pygame.font.Font(None, 24)
-
-    game = JaxGalaxian(frameskip=1)
-    jitted_step = jax.jit(game.step)
-    jitted_reset = jax.jit(game.reset)
-    initial_observation, state  = jitted_reset()
-
-    screen = pygame.display.set_mode((GalaxianConstants.PYGAME_WINDOW_WIDTH, GalaxianConstants.PYGAME_WINDOW_HEIGHT))
-    pygame.display.set_caption("Galaxian")
-    clock = pygame.time.Clock()
-
-    renderer = GalaxianRenderer()
-
-    initial_observation, state = jax.jit(game.reset)()
-
-    jitted_step = game.step
-
-    running = True
-    while running:
-        action_int = Action.NOOP
-        for event in pygame.event.get():
-            if event.type == pygame.QUIT:
-                running = False
-        screen.fill((0, 0, 0))
-        pygame.display.flip()
-        action = get_action_from_keyboard()
-        observation, state, reward, done, info = jitted_step(state, action)
-
-        render_output = renderer.render(state)
-        jr.update_pygame(screen, render_output, GalaxianConstants.PYGAME_SCALE_FACTOR, GalaxianConstants.NATIVE_GAME_WIDTH,
-                         GalaxianConstants.NATIVE_GAME_HEIGHT)
-        score_surf = font.render(f"Score: {int(state.score)}", True, (255, 255, 255))
-        screen.blit(score_surf, (10, 10))
-
-        font = pygame.font.Font(None, 24)
-
-        # Score
-        score_surf = font.render(f"Score: {int(state.score)}", True, (255, 255, 255))
-        screen.blit(score_surf, (10, 10))
-
-        pygame.display.flip()
-        if done:
-            # Win vs. Game Over
-            if int(state.lives) > 0:
-                text = "You Win!"
-            else:
-                text = "Game Over!"
-            msg = font.render(text, True, (255, 255, 255))
-            x = (GalaxianConstants.PYGAME_WINDOW_WIDTH - msg.get_width()) // 2
-            y = (GalaxianConstants.PYGAME_WINDOW_HEIGHT - msg.get_height()) // 2
-            screen.blit(msg, (x, y))
-            pygame.display.flip()
-            pygame.time.wait(2000)
-            break
-        clock.tick(30)
-
-    pygame.quit()
+# # run with: python -m jaxatari.games.jax_galaxian
+# # run with: python scripts/play.py --game src/jaxatari/games/jax_galaxian.py --record my_record_file.npz
+# if __name__ == "__main__":
+#     pygame.init()
+#     font = pygame.font.Font(None, 24)
+#
+#     game = JaxGalaxian(frameskip=1)
+#     jitted_step = jax.jit(game.step)
+#     jitted_reset = jax.jit(game.reset)
+#     initial_observation, state  = jitted_reset()
+#
+#     screen = pygame.display.set_mode((GalaxianConstants.PYGAME_WINDOW_WIDTH, GalaxianConstants.PYGAME_WINDOW_HEIGHT))
+#     pygame.display.set_caption("Galaxian")
+#     clock = pygame.time.Clock()
+#
+#     renderer = GalaxianRenderer()
+#
+#     initial_observation, state = jax.jit(game.reset)()
+#
+#     jitted_step = game.step
+#
+#     running = True
+#     while running:
+#         action_int = Action.NOOP
+#         for event in pygame.event.get():
+#             if event.type == pygame.QUIT:
+#                 running = False
+#         screen.fill((0, 0, 0))
+#         pygame.display.flip()
+#         action = get_action_from_keyboard()
+#         observation, state, reward, done, info = jitted_step(state, action)
+#
+#         render_output = renderer.render(state)
+#         jr.update_pygame(screen, render_output, GalaxianConstants.PYGAME_SCALE_FACTOR, GalaxianConstants.NATIVE_GAME_WIDTH,
+#                          GalaxianConstants.NATIVE_GAME_HEIGHT)
+#         score_surf = font.render(f"Score: {int(state.score)}", True, (255, 255, 255))
+#         screen.blit(score_surf, (10, 10))
+#
+#         font = pygame.font.Font(None, 24)
+#
+#         # Score
+#         score_surf = font.render(f"Score: {int(state.score)}", True, (255, 255, 255))
+#         screen.blit(score_surf, (10, 10))
+#
+#         pygame.display.flip()
+#         if done:
+#             # Win vs. Game Over
+#             if int(state.lives) > 0:
+#                 text = "You Win!"
+#             else:
+#                 text = "Game Over!"
+#             msg = font.render(text, True, (255, 255, 255))
+#             x = (GalaxianConstants.PYGAME_WINDOW_WIDTH - msg.get_width()) // 2
+#             y = (GalaxianConstants.PYGAME_WINDOW_HEIGHT - msg.get_height()) // 2
+#             screen.blit(msg, (x, y))
+#             pygame.display.flip()
+#             pygame.time.wait(2000)
+#             break
+#         clock.tick(30)
+#
+#     pygame.quit()
 
 
 
