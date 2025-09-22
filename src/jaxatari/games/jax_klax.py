@@ -3,7 +3,6 @@ from typing import NamedTuple, Tuple
 import jax
 import jax.numpy as jnp
 import chex
-import pygame
 import os
 import jaxatari.spaces as spaces
 from jaxatari.environment import JaxEnvironment, JAXAtariAction as Action
@@ -39,7 +38,7 @@ class KlaxConstants(NamedTuple):
     PLAYER_WIDTH: int = 7
     PLAYER_HEIGHT: int = 4
     PLAYER_Y: int = DESPAWN_Y + 6
-    RESPONSIVENESS: int = 1             # can be tuned; pixels per step when player moving left/right
+    RESPONSIVENESS: int = 2             # can be tuned; pixels per step when player moving left/right
     PLAYER_BACKPACK_MAX: int = 5
 
     # Waves
@@ -269,11 +268,23 @@ class JaxKlax(JaxEnvironment[KlaxState, KlaxObservation, KlaxInfo, KlaxConstants
 
         self.action_set = [
             Action.NOOP,
-            Action.LEFT,
-            Action.RIGHT,
-            Action.UP,
             Action.FIRE,
+            Action.UP,
+            Action.RIGHT,
+            Action.LEFT,
             Action.DOWN,
+            Action.UPRIGHT,
+            Action.UPLEFT,
+            Action.DOWNRIGHT,
+            Action.DOWNLEFT,
+            Action.UPFIRE,
+            Action.RIGHTFIRE,
+            Action.LEFTFIRE,
+            Action.DOWNFIRE,
+            Action.UPRIGHTFIRE,
+            Action.UPLEFTFIRE,
+            Action.DOWNRIGHTFIRE,
+            Action.DOWNLEFTFIRE,
         ]
 
         self._kernels = {
@@ -287,7 +298,6 @@ class JaxKlax(JaxEnvironment[KlaxState, KlaxObservation, KlaxInfo, KlaxConstants
 
     @partial(jax.jit, static_argnums=(0,))
     def _conv2d_valid(self, x_2d: chex.Array, k_2d: chex.Array) -> chex.Array:
-        # x: [H,W], k: [Kh, Kw]  ->  y: [H-Kh+1, W-Kw+1]
         x4 = x_2d[None, None, ...].astype(jnp.int32)
         k4 = k_2d[None, None, ...].astype(jnp.int32)
         y4 = jax.lax.conv_general_dilated(
@@ -300,7 +310,6 @@ class JaxKlax(JaxEnvironment[KlaxState, KlaxObservation, KlaxInfo, KlaxConstants
 
     @partial(jax.jit, static_argnums=(0,))
     def _conv2d_full(self, x_valid: chex.Array, k_2d: chex.Array) -> chex.Array:
-        # emulate "full" by padding so output is board-size
         Kh, Kw = int(k_2d.shape[0]), int(k_2d.shape[1])
         x4 = x_valid[None, None, ...].astype(jnp.int32)
         k4 = k_2d[None, None, ...].astype(jnp.int32)
@@ -329,10 +338,8 @@ class JaxKlax(JaxEnvironment[KlaxState, KlaxObservation, KlaxInfo, KlaxConstants
         score_add = jnp.int32(0)
         klax_add = jnp.int32(0)
 
-        # Unrolled 5 -> 4 -> 3 (keeps tracing simple & predictable)
         def run_length(L, pts, remove_mask, score_add, klax_add):
             Kh, Kv, Kd1, Kd2 = self._kernels[L]
-            # orientation_code is static -> compile-time branch (OK)
             if orientation_code == self.ORIENT_H:
                 K = Kh
             elif orientation_code == self.ORIENT_V:
@@ -344,14 +351,14 @@ class JaxKlax(JaxEnvironment[KlaxState, KlaxObservation, KlaxInfo, KlaxConstants
 
             def per_color(c_idx):
                 color_val = jnp.int32(c_idx + 1)
-                color_mask = (board == color_val) & (~remove_mask)  # don't reuse cells already marked
-                wins = (self._conv2d_valid(color_mask, K) == L)  # [H-Kh+1, W-Kw+1] boolean
-                covered = self._conv2d_full(wins.astype(jnp.int32), K) > 0  # [H, W] "paint back"
+                color_mask = (board == color_val) & (~remove_mask)
+                wins = (self._conv2d_valid(color_mask, K) == L)
+                covered = self._conv2d_full(wins.astype(jnp.int32), K) > 0
                 return wins, covered
 
             wins_c, covered_c = jax.vmap(per_color)(jnp.arange(self.consts.N_TILE_TYPES))
-            wins_any = jnp.any(wins_c, axis=0)  # windows map
-            covered_any = jnp.any(covered_c, axis=0)  # board map
+            wins_any = jnp.any(wins_c, axis=0)
+            covered_any = jnp.any(covered_c, axis=0)
 
             k_len = wins_any.sum(dtype=jnp.int32)
             score_add = score_add + k_len * pts
@@ -377,13 +384,13 @@ class JaxKlax(JaxEnvironment[KlaxState, KlaxObservation, KlaxInfo, KlaxConstants
           horiz_klax_add (int32)
           diag_klax_add (int32)
         """
-        # vertical: (3,4,5) -> 50, 1000, 1500
+        # points for vertical (3,4,5): 50, 1000, 1500
         rm_v, sc_v, k_v    = self._match_one_orientation_conv(board, self.ORIENT_V,  (50, 1000, 1500))
-        # horizontal: 100, 500, 1000
+        # points for horizontal: 100, 500, 1000
         rm_h, sc_h, k_h    = self._match_one_orientation_conv(board, self.ORIENT_H,  (100, 500, 1000))
-        # diag down-right: 500, 1000, 1500
+        # points for diag down-right: 500, 1000, 1500
         rm_d1, sc_d1, k_d1 = self._match_one_orientation_conv(board, self.ORIENT_D1, (500, 1000, 1500))
-        # diag up-right:   500, 1000, 1500
+        # points for diag up-right:   500, 1000, 1500
         rm_d2, sc_d2, k_d2 = self._match_one_orientation_conv(board, self.ORIENT_D2, (500, 1000, 1500))
 
         remove_mask = rm_v | rm_h | rm_d1 | rm_d2
@@ -422,22 +429,7 @@ class JaxKlax(JaxEnvironment[KlaxState, KlaxObservation, KlaxInfo, KlaxConstants
             newcol, _ = jax.lax.fori_loop(0, R, body, out0)
             return newcol
 
-        # board shape: (R, C); vmap over columns (axis=1)
         return jax.vmap(pack_col, in_axes=1, out_axes=1)(board)
-
-    def get_human_action(self) -> chex.Array:
-        keys = pygame.key.get_pressed()
-        if keys[pygame.K_s] or keys[pygame.K_DOWN]:
-            return jnp.array(Action.DOWN)
-        if keys[pygame.K_a] or keys[pygame.K_LEFT]:
-            return jnp.array(Action.LEFT)
-        if keys[pygame.K_d] or keys[pygame.K_RIGHT]:
-            return jnp.array(Action.RIGHT)
-        if keys[pygame.K_w] or keys[pygame.K_UP]:
-            return jnp.array(Action.UP)
-        if keys[pygame.K_SPACE] or keys[pygame.K_f]:
-            return jnp.array(Action.FIRE)
-        return jnp.array(Action.NOOP)
 
     def reset(self, key: jax.random.PRNGKey = jax.random.PRNGKey(42)) -> tuple[KlaxObservation, KlaxState]:
         _, key = jax.random.split(key)
@@ -516,8 +508,15 @@ class JaxKlax(JaxEnvironment[KlaxState, KlaxObservation, KlaxInfo, KlaxConstants
         step_counter = state.step_counter + 1
 
         # --- speed-up when down-key is pressed ---
-        speed_pressed = (action == jnp.array(Action.DOWN)).astype(jnp.int32)
-        speed_mul = jnp.where(speed_pressed == 1,
+        speed_pressed = (
+                (action == Action.DOWN) |
+                (action == Action.DOWNFIRE) |
+                (action == Action.DOWNRIGHT) |
+                (action == Action.DOWNRIGHTFIRE) |
+                (action == Action.DOWNLEFT) |
+                (action == Action.DOWNLEFTFIRE)
+        )
+        speed_mul = jnp.where(speed_pressed,
                               jnp.int32(self.consts.SPEED_FACTOR),
                               jnp.int32(1))
 
@@ -594,7 +593,6 @@ class JaxKlax(JaxEnvironment[KlaxState, KlaxObservation, KlaxInfo, KlaxConstants
         spawn_den = jnp.int32(self.consts.SPAWN_INTERVAL_SECONDS * self.consts.STEPS_PER_SECOND)
         spawn_accum_prev = state.spawn_progress_accum
 
-        # add speed_mul time-units per frame
         spawn_accum_next = spawn_accum_prev + speed_mul
 
         # propose a spawn whenever the accumulator crosses the threshold
@@ -636,9 +634,23 @@ class JaxKlax(JaxEnvironment[KlaxState, KlaxObservation, KlaxInfo, KlaxConstants
 
         at_center = (px == col_left_x(player_col)) & (player_col == target_col)
 
-        move_right = (action == jnp.array(Action.RIGHT)).astype(jnp.int32)
-        move_left = (action == jnp.array(Action.LEFT)).astype(jnp.int32)
-        dcol_input = move_right - move_left
+        move_right = (
+                (action == Action.RIGHT) |
+                (action == Action.RIGHTFIRE) |
+                (action == Action.UPRIGHT) |
+                (action == Action.UPRIGHTFIRE) |
+                (action == Action.DOWNRIGHT) |
+                (action == Action.DOWNRIGHTFIRE)
+        )
+        move_left = (
+                (action == Action.LEFT) |
+                (action == Action.LEFTFIRE) |
+                (action == Action.UPLEFT) |
+                (action == Action.UPLEFTFIRE) |
+                (action == Action.DOWNLEFT) |
+                (action == Action.DOWNLEFTFIRE)
+        )
+        dcol_input = move_right.astype(jnp.int32) - move_left.astype(jnp.int32)
 
         target_col_new = jax.lax.cond(
             at_center & (dcol_input != 0),
@@ -658,7 +670,13 @@ class JaxKlax(JaxEnvironment[KlaxState, KlaxObservation, KlaxInfo, KlaxConstants
 
         # ---- FIRE ----
         board = state.board
-        is_fire = (action == jnp.array(Action.FIRE)).astype(jnp.int32)
+        is_fire = (
+                (action == Action.FIRE) |
+                (action == Action.RIGHTFIRE) | (action == Action.LEFTFIRE) |
+                (action == Action.UPFIRE) | (action == Action.DOWNFIRE) |
+                (action == Action.UPRIGHTFIRE) | (action == Action.UPLEFTFIRE) |
+                (action == Action.DOWNRIGHTFIRE) | (action == Action.DOWNLEFTFIRE)
+        ).astype(jnp.int32)
         col_occ = jnp.sum((board[:, player_col_next] > 0).astype(jnp.int32))
         can_fire, fire_lock_next = press_once(is_fire, state.fire_lock)
 
@@ -678,8 +696,12 @@ class JaxKlax(JaxEnvironment[KlaxState, KlaxObservation, KlaxInfo, KlaxConstants
         )
 
         # ---- UP key: shoot tile up ----
-        is_up = (action == jnp.array(Action.UP)).astype(jnp.int32)
-        can_up, up_lock_next = press_once(is_up, state.up_lock)
+        is_up = (
+                (action == Action.UP) | (action == Action.UPFIRE) |
+                (action == Action.UPRIGHT) | (action == Action.UPRIGHTFIRE) |
+                (action == Action.UPLEFT) | (action == Action.UPLEFTFIRE)
+        )
+        can_up, up_lock_next = press_once(is_up.astype(jnp.int32), state.up_lock)
 
         up_free_mask = (tiles_active == 0)
         up_has_free = jnp.any(up_free_mask)
@@ -700,10 +722,6 @@ class JaxKlax(JaxEnvironment[KlaxState, KlaxObservation, KlaxInfo, KlaxConstants
             tiles_color = tiles_color.at[up_first_free].set(color_top)
             tiles_active = tiles_active.at[up_first_free].set(jnp.int32(1))
             tiles_col = tiles_col.at[up_first_free].set(player_col_next)
-
-            dist_local = jnp.int32(self.consts.DESPAWN_Y - self.consts.SPAWN_START_Y)
-            den_local = jnp.int32(self.consts.FALL_DURATION_SECONDS * self.consts.STEPS_PER_SECOND)
-            delta_y = jnp.int32(self.consts.SHOOT_UP_Y - self.consts.SPAWN_START_Y)
             tiles_spawn_step = tiles_spawn_step.at[up_first_free].set(step_counter)
             tiles_progress_accum = tiles_progress_accum.at[up_first_free].set(jnp.int32(0))
 
