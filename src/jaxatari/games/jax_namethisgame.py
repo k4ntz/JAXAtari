@@ -3,6 +3,8 @@ from dataclasses import dataclass, field
 from functools import partial
 from typing import Dict, Any, Optional, NamedTuple, Tuple
 
+import numpy as np
+
 import jax
 import jax.numpy as jnp
 import jax.lax
@@ -24,24 +26,22 @@ class NameThisGameConfig:
     # Diver (player)
     diver_width: int = 16
     diver_height: int = 13
-    diver_y_floor: int = 180  # fixed y-coordinate for diver (sea floor)
+    diver_y_floor: int = 173  # fixed y-coordinate for diver (sea floor)
     diver_speed_px: int = 2
     # Spear properties
     spear_width: int = 1
     spear_height: int = 1
     spear_dy: int = -3  # vertical speed (negative = upward)
-    fire_cooldown_frames: int = 9  # frames delay between shots
     # Shark (enemy) lanes and speed
-    shark_lanes_y: jnp.ndarray = field(default_factory=lambda: jnp.array([40, 70, 100, 130, 160], dtype=jnp.int32))
+    shark_lanes_y: jnp.ndarray = field(default_factory=lambda: jnp.array([69, 83, 97, 111, 123, 137, 151], dtype=jnp.int32))
     shark_base_speed: int = 1
-    lane_speed_boost: int = 1  # additional speed per lane down
-    shark_width: int = 14
-    shark_height: int = 8
+    shark_width: int = 15
+    shark_height: int = 12
     # Tentacles (octopus arms)
     max_tentacles: int = 8
-    tentacle_base_x: jnp.ndarray = field(default_factory=lambda: jnp.array([30, 40, 50, 60, 100, 110, 120, 130], dtype=jnp.int32))
-    tentacle_width: int = 3
-    tentacle_amplitude: int = 6        # horizontal swing amplitude (px)
+    tentacle_base_x: jnp.ndarray = field(default_factory=lambda: jnp.array([24, 38, 54, 70, 86, 102, 118, 134], dtype=jnp.int32))
+    tentacle_width: int = 4
+    tentacle_amplitude: int = 12        # horizontal swing amplitude (px)
     tentacle_phase_speed: float = 0.2  # phase increment (rad/frame)
     tentacle_extend_speed: int = 1     # extension speed (px/frame)
     tentacle_tip_hitbox_h: int = 4     # height of tip region for collisions
@@ -53,10 +53,6 @@ class NameThisGameConfig:
     oxygen_drop_min_interval: int = 240     # minimum frames between oxygen line drops
     oxygen_drop_max_interval: int = 480     # maximum frames between oxygen line drops
     oxygen_line_width: int = 2
-    # Treasure zone (for losing condition when shark reaches bottom)
-    treasure_x: int = 70
-    treasure_w: int = 20
-    treasure_y: int = 180  # typically same as diver_y_floor
     # Round progression
     round_clear_shark_resets: int = 3
     speed_increase_per_round_shark: int = 1
@@ -84,7 +80,6 @@ class NameThisGameState(NamedTuple):
     diver_x: chex.Array           # diver's x position (int32)
     diver_y: chex.Array           # diver's y position (int32, constant = floor)
     diver_alive: chex.Array       # diver alive flag (bool)
-    fire_cooldown: chex.Array     # frames remaining for next shot (int32)
     fire_button_prev: chex.Array  # whether fire was pressed in previous frame (bool)
 
     # Shark (enemy)
@@ -187,12 +182,9 @@ class Renderer_NameThisGame(JAXGameRenderer):
         W, H = cfg.screen_width, cfg.screen_height
 
         # Background
+        raster = jnp.zeros((H, W, 3), dtype=jnp.uint8)
         if "background" in self.sprites:
-            bg_sprite = self.sprites["background"]
-            raster = aj.render_at(jnp.zeros_like(bg_sprite[..., :3]), 0, 0, bg_sprite)
-        else:
-            # Fallback: solid black background
-            raster = jnp.zeros((H, W, 3), dtype=jnp.uint8)
+            raster = aj.render_at(raster, 0, 0, self.sprites["background"])
 
         # Draw diver (only if alive)
         if "diver" in self.sprites:
@@ -302,7 +294,7 @@ class JaxNameThisGame(JaxEnvironment[NameThisGameState, NameThisGameObservation,
     - Above, an octopus extends tentacles downward. You must shoot the tip of each tentacle to destroy it (earn points) before it reaches you.
     - The diver has a limited oxygen supply (represented by a decreasing counter). Periodically, an oxygen line drops from a boat at the surface; moving under it replenishes oxygen to full.
     - The game is organized in rounds: once you destroy all tentacles and have shot the shark a required number of times, a new round begins with increased difficulty (shark moves faster, tentacles extend faster, oxygen lines appear less frequently).
-    - Game ends (done) if you run out of oxygen, if a tentacle tip touches the diver, or if the shark reaches the treasure zone at the bottom.
+    - Game ends (done) if you run out of oxygen, if a tentacle tip touches the diver, or if the shark reaches the diver lane at the bottom.
 
     Technical Features:
     - Uses JAX for vectorized, functional style updates.
@@ -333,8 +325,8 @@ class JaxNameThisGame(JaxEnvironment[NameThisGameState, NameThisGameObservation,
         cfg = self.config
         # Split PRNG for different initial randomizations
         key, sub_key_dir, sub_key_oxy, sub_key_phase = jax.random.split(key, 4)
-        # Initial diver position (start near treasure)
-        init_diver_x = jnp.array(cfg.treasure_x, dtype=jnp.int32)
+        # Initial diver position
+        init_diver_x = jnp.array(cfg.screen_width//2, dtype=jnp.int32)
         init_diver_y = jnp.array(cfg.diver_y_floor, dtype=jnp.int32)
         # Choose initial shark direction randomly (True = from left to right, False = from right to left)
         go_left = jax.random.bernoulli(sub_key_dir)  # bool
@@ -371,7 +363,6 @@ class JaxNameThisGame(JaxEnvironment[NameThisGameState, NameThisGameObservation,
             diver_x=init_diver_x,
             diver_y=init_diver_y,
             diver_alive=jnp.array(True, dtype=jnp.bool_),
-            fire_cooldown=jnp.array(0, dtype=jnp.int32),
             fire_button_prev=jnp.array(False, dtype=jnp.bool_),
             shark_x=init_shark_x.astype(jnp.int32),
             shark_y=init_shark_y.astype(jnp.int32),
@@ -560,14 +551,6 @@ class JaxNameThisGame(JaxEnvironment[NameThisGameState, NameThisGameObservation,
         return state._replace(diver_x=new_x)
 
     @partial(jax.jit, static_argnums=(0,))
-    def _update_fire_cooldown(self, state: NameThisGameState, fire_pressed: chex.Array, just_shot: chex.Array) -> NameThisGameState:
-        """Update fire cooldown timer and previous button state."""
-        cfg = self.config
-        # Reset cooldown if a shot was just fired, otherwise decrement if >0
-        new_cd = jnp.where(just_shot, jnp.array(cfg.fire_cooldown_frames, dtype=jnp.int32), jnp.maximum(state.fire_cooldown - 1, 0))
-        return state._replace(fire_cooldown=new_cd, fire_button_prev=fire_pressed)
-
-    @partial(jax.jit, static_argnums=(0,))
     def _move_spear(self, state: NameThisGameState) -> NameThisGameState:
         cfg = self.config
         def _step(s):
@@ -581,35 +564,34 @@ class JaxNameThisGame(JaxEnvironment[NameThisGameState, NameThisGameObservation,
 
     @partial(jax.jit, static_argnums=(0,))
     def _move_shark(self, state: NameThisGameState) -> NameThisGameState:
-        """Move the shark horizontally, and handle lane drops or reset conditions."""
         cfg = self.config
         x = state.shark_x
         dx = state.shark_dx
-        lane = state.shark_lane
-        # Compute new position
         new_x = x + dx
-        # Check if shark exits the screen (fully off left or right)
+
         off_right = (dx > 0) & (new_x >= cfg.screen_width)
         off_left = (dx < 0) & ((new_x + cfg.shark_width) <= 0)
-        # Helper: advance to next lane if possible
+
         def _drop_lane(s: NameThisGameState, going_left: bool) -> NameThisGameState:
             new_lane = s.shark_lane + 1
-            # If next lane exists, spawn from opposite side with increased speed
+            last_idx = cfg.shark_lanes_y.shape[0] - 1
+
             def _lane_exists(st: NameThisGameState) -> NameThisGameState:
-                # Determine new direction: flip horizontal direction for next run
-                new_y = cfg.shark_lanes_y[new_lane]
+                # Safe index even if compiled with out-of-range values
+                safe_idx = jnp.clip(new_lane, 0, last_idx)
+                new_y = jnp.take(cfg.shark_lanes_y, safe_idx, mode="clip")
                 base_speed = cfg.shark_base_speed + st.round * cfg.speed_increase_per_round_shark
-                # Increase speed by lane index
-                speed = base_speed + new_lane * cfg.lane_speed_boost
+                speed = jnp.where(s.shark_lane>2, base_speed*2, base_speed)
                 new_dx_val = jnp.where(going_left, jnp.array(speed, jnp.int32), -jnp.array(speed, jnp.int32))
                 new_x_val = jnp.where(going_left, -cfg.shark_width, cfg.screen_width)
                 return st._replace(shark_x=new_x_val, shark_y=new_y, shark_dx=new_dx_val, shark_lane=new_lane)
-            # If no more lanes (shark reached bottom and left screen), mark shark as gone (this triggers game over condition)
+
             def _no_lane(st: NameThisGameState) -> NameThisGameState:
                 return st._replace(shark_alive=jnp.array(False, dtype=jnp.bool_))
-            has_lane = new_lane < cfg.shark_lanes_y.shape[0]
+
+            has_lane = new_lane < (last_idx + 1)
             return jax.lax.cond(has_lane, _lane_exists, _no_lane, s)
-        # Apply movement and lane transitions
+
         state = state._replace(shark_x=new_x)
         state = jax.lax.cond(off_right, lambda s: _drop_lane(s, going_left=False), lambda s: s, state)
         state = jax.lax.cond(off_left, lambda s: _drop_lane(s, going_left=True), lambda s: s, state)
@@ -791,17 +773,17 @@ class JaxNameThisGame(JaxEnvironment[NameThisGameState, NameThisGameObservation,
         # Round clears when all tentacles are destroyed and shark has been reset required times
         round_clear = (~jnp.any(state.tentacle_active)) & (state.shark_resets_this_round >= cfg.round_clear_shark_resets)
         def _new_round(s: NameThisGameState) -> NameThisGameState:
+            rng_off, rng_phase = jax.random.split(s.rng)
             new_round_idx = s.round + 1
             # Reset tentacles for new round (all active, height 0, randomize phase and possibly base positions)
             new_active = jnp.ones_like(s.tentacle_active)
             new_height = jnp.zeros_like(s.tentacle_height)
             # Optionally randomize base X positions within a small range
-            offset = jax.random.randint(s.rng, s.tentacle_base_x.shape, -5, 6, dtype=jnp.int32)
+            offset = jax.random.randint(rng_off, s.tentacle_base_x.shape, -5, 6, dtype=jnp.int32)
             new_base_x = jnp.clip(cfg.tentacle_base_x + offset, 1, cfg.screen_width - cfg.tentacle_width - 1)
             # Update shark speed for new round (current dx sign * increased base speed)
             current_sign = jnp.where(s.shark_dx < 0, -1, 1)
-            base_speed_new = cfg.shark_base_speed + new_round_idx * cfg.speed_increase_per_round_shark
-            new_shark_speed = base_speed_new + s.shark_lane * cfg.lane_speed_boost
+            new_shark_speed = cfg.shark_base_speed + new_round_idx * cfg.speed_increase_per_round_shark
             new_shark_dx = current_sign * jnp.array(new_shark_speed, dtype=jnp.int32)
             return s._replace(
                 round=new_round_idx,
@@ -823,13 +805,9 @@ class JaxNameThisGame(JaxEnvironment[NameThisGameState, NameThisGameObservation,
         oxygen_out = state.oxygen_frames_remaining <= 0
         # Condition 2: Diver dead (tentacle got him)
         diver_dead = ~state.diver_alive
-        # Condition 3: Shark reached treasure zone on bottom lane
-        shark_zone = (state.shark_lane == (cfg.shark_lanes_y.shape[0] - 1)) & \
-                    (state.shark_x < (cfg.treasure_x + cfg.treasure_w)) & \
-                    ((state.shark_x + cfg.shark_width) > cfg.treasure_x)
-        # Condition 4: Shark escaped (left bottom without being shot)
-        shark_escaped = ~state.shark_alive
-        done = oxygen_out | diver_dead | shark_zone | shark_escaped
+        # Condition 3: Shark reached the diver (left bottom without being shot)
+        shark_reached_diver = ~state.shark_alive
+        done = oxygen_out | diver_dead | shark_reached_diver
         return done
 
     @partial(jax.jit, static_argnums=(0,))
@@ -840,13 +818,11 @@ class JaxNameThisGame(JaxEnvironment[NameThisGameState, NameThisGameObservation,
         move_dir, fire_pressed = self._interpret_action(state, action)
         # Move diver
         state = self._move_diver(state, move_dir)
-        # Check if we can shoot this frame: just pressed fire & cooldown ready
+        # Check if we can shoot this frame: just pressed fire
         just_pressed = fire_pressed & (~state.fire_button_prev)
-        can_shoot = (state.fire_cooldown == 0) & just_pressed & state.diver_alive
+        can_shoot = just_pressed & state.diver_alive
         # Spawn spear if allowed
         state = jax.lax.cond(can_shoot, lambda s: self._spawn_spear(s), lambda s: s, state)
-        # Update fire cooldown and remember fire button state
-        state = self._update_fire_cooldown(state, fire_pressed, can_shoot)
         # Handle oxygen line spawns
         state = self._spawn_or_update_oxygen_line(state)
         # Move spear
@@ -916,17 +892,17 @@ def main():
                 # advance one frame in frame-by-frame mode
                 action = get_human_action()
                 obs, state, reward, done, info = jitted_step(state, action)
-                if done:
+                if bool(jax.device_get(done)):
                     running = False
         if not frame_by_frame:
             action = get_human_action()
             obs, state, reward, done, info = jitted_step(state, action)
-            if done:
+            if bool(jax.device_get(done)):
                 running = False
         # Render game state to screen
         raster = renderer.render(state)
-        frame = jnp.array(raster, dtype=jnp.uint8)  # bring back to host if needed
-        frame_np = jnp.transpose(frame, (1, 0, 2))  # JAX image is (H,W,3), Pygame expects (W,H,3)
+        frame_np = np.array(jax.device_get(raster), dtype=np.uint8)  # (H,W,3)
+        frame_np = np.transpose(frame_np, (1, 0, 2))  # (W,H,3) for pygame
         surface = pygame.surfarray.make_surface(frame_np)
         if config.scaling_factor != 1:
             surface = pygame.transform.scale(surface, (config.screen_width * config.scaling_factor, config.screen_height * config.scaling_factor))
