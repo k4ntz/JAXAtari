@@ -62,7 +62,6 @@ class NameThisGameConfig:
     tentacle_square_h: int = 6
     tentacle_width: int = 4  # kept for obs space compatibility
     tentacle_base_growth_p: float = 0.01       # baseline prob to GROW (vs move)
-    tentacle_growth_wave_coeff: float = 0.01 # additional prob as waves increase (scaled 0..1)
     tentacle_destroy_points: int = 50
     # Oxygen supply line
     oxygen_full: int = 1200                 # full oxygen frames (~20 seconds at 60 FPS)
@@ -75,10 +74,11 @@ class NameThisGameConfig:
     oxygen_contact_every_n_frames: int = 3
     oxygen_contact_points: int = 10
     # Round progression
+    speed_progression_start_lane_for_2: int = 3  # wave 1: lanes >=3 are 2px/frame
     round_clear_shark_resets: int = 3
-    speed_increase_per_round_shark: int = 1
-    speed_increase_per_round_tentacle: int = 1
-    oxygen_interval_multiplier_per_round: float = 1.2
+    oxy_frames_speedup_per_round: int = 30
+    oxy_min_shrink_interval: int = 20
+    tentacle_growth_round_coeff: float = 0.01
     # Lives / treasure
     lives_max: int = 3
     treasure_ui_x: int = 72
@@ -105,6 +105,7 @@ class NameThisGameState(NamedTuple):
     oxy_bar_px: chex.Array        # current orange bar width (px) [0..hud_bar_initial_px]
     wave_bar_px: chex.Array       # current green bar width (px) [0..hud_bar_initial_px]
     bar_frame_counter: chex.Array # frames since the last shrink tick
+    oxy_frame_counter: chex.Array
 
     # Rest state flag
     resting: chex.Array           # bool; when True, tentacles freeze, no oxygen decay/drop; boat+shark still move (lane 0)
@@ -462,8 +463,8 @@ class JaxNameThisGame(JaxEnvironment[NameThisGameState, NameThisGameObservation,
         init_shark_lane = jnp.array(0, dtype=jnp.int32)
         init_shark_y = cfg.shark_lanes_y[init_shark_lane]
         init_shark_x = jnp.where(go_left, -cfg.shark_width, cfg.screen_width)
-        base_speed = cfg.shark_base_speed
-        init_shark_dx = jnp.where(go_left, base_speed, -base_speed).astype(jnp.int32)
+        init_shark_speed = self._shark_speed_for_lane(jnp.array(0, jnp.int32), init_shark_lane)
+        init_shark_dx = jnp.where(go_left, init_shark_speed, -init_shark_speed).astype(jnp.int32)
 
         # Tentacles: empty stacks to start
         tentacle_len = jnp.zeros((T,), dtype=jnp.int32)
@@ -479,9 +480,8 @@ class JaxNameThisGame(JaxEnvironment[NameThisGameState, NameThisGameObservation,
         init_oxygen = jnp.array(cfg.oxygen_full, dtype=jnp.int32)
         init_oxygen_line_active = jnp.array(False, dtype=jnp.bool_)
         init_oxygen_line_x = jnp.array(-1, dtype=jnp.int32)
-        oxygen_interval_factor = cfg.oxygen_interval_multiplier_per_round ** 0
-        min_int = int(cfg.oxygen_drop_min_interval * oxygen_interval_factor)
-        max_int = int(cfg.oxygen_drop_max_interval * oxygen_interval_factor)
+        min_int = int(cfg.oxygen_drop_min_interval)
+        max_int = int(cfg.oxygen_drop_max_interval)
         init_drop_timer = jax.random.randint(sub_key_oxy, (), min_int, max_int + 1, dtype=jnp.int32)
 
         state = NameThisGameState(
@@ -492,7 +492,8 @@ class JaxNameThisGame(JaxEnvironment[NameThisGameState, NameThisGameObservation,
 
             oxy_bar_px=jnp.array(cfg.hud_bar_initial_px, dtype=jnp.int32),
             wave_bar_px=jnp.array(cfg.hud_bar_initial_px, dtype=jnp.int32),
-            bar_frame_counter=jnp.array(0, dtype=jnp.int32),
+            bar_frame_counter=jnp.array(0, jnp.int32),
+            oxy_frame_counter=jnp.array(0, jnp.int32),
 
             resting=jnp.array(True, dtype=jnp.bool_),
 
@@ -715,21 +716,33 @@ class JaxNameThisGame(JaxEnvironment[NameThisGameState, NameThisGameObservation,
             return s
 
         def _if_active(s: NameThisGameState) -> NameThisGameState:
-            cnt = s.bar_frame_counter + 1
-            tick = cnt >= cfg.hud_bar_step_frames
+            # --- wave bar cadence (constant) ---
+            wave_cnt = s.bar_frame_counter + 1
+            wave_tick = wave_cnt >= jnp.array(cfg.hud_bar_step_frames, jnp.int32)
 
-            def _do_tick(st: NameThisGameState) -> NameThisGameState:
-                dec = jnp.array(cfg.hud_bar_shrink_px_per_step_total, jnp.int32)
-                new_oxy  = jnp.maximum(st.oxy_bar_px  - dec, 0)
-                new_wave = jnp.maximum(st.wave_bar_px - dec, 0)
-                return st._replace(oxy_bar_px=new_oxy, wave_bar_px=new_wave, bar_frame_counter=jnp.array(0, jnp.int32))
+            # --- oxygen bar cadence (speeds up per wave) ---
+            r_eff = jnp.maximum(s.round, jnp.array(1, jnp.int32))  # wave 1 => 250, wave 2 => 220, ...
+            oxy_interval = (
+                    jnp.array(cfg.hud_bar_step_frames, jnp.int32)
+                    - jnp.array(cfg.oxy_frames_speedup_per_round, jnp.int32) * (r_eff - 1)
+            )
+            oxy_interval = jnp.maximum(oxy_interval, jnp.array(cfg.oxy_min_shrink_interval, jnp.int32))
 
-            def _no_tick(st: NameThisGameState) -> NameThisGameState:
-                return st._replace(bar_frame_counter=cnt)
+            oxy_cnt = s.oxy_frame_counter + 1
+            oxy_tick = oxy_cnt >= oxy_interval
 
-            s2 = jax.lax.cond(tick, _do_tick, _no_tick, s)
+            dec = jnp.array(cfg.hud_bar_shrink_px_per_step_total, jnp.int32)
+            new_wave = jnp.maximum(s.wave_bar_px - jnp.where(wave_tick, dec, 0), 0)
+            new_oxy = jnp.maximum(s.oxy_bar_px - jnp.where(oxy_tick, dec, 0), 0)
 
-            # If wave bar hits 0 -> enter REST
+            s2 = s._replace(
+                wave_bar_px=new_wave,
+                oxy_bar_px=new_oxy,
+                bar_frame_counter=jnp.where(wave_tick, jnp.array(0, jnp.int32), wave_cnt),
+                oxy_frame_counter=jnp.where(oxy_tick, jnp.array(0, jnp.int32), oxy_cnt),
+            )
+
+            # If wave bar hits 0 -> enter REST (as before)
             def _enter_rest(st: NameThisGameState) -> NameThisGameState:
                 zeros_T = jnp.zeros_like(st.tentacle_len)
                 return st._replace(
@@ -740,7 +753,7 @@ class JaxNameThisGame(JaxEnvironment[NameThisGameState, NameThisGameObservation,
                     oxygen_line_x=jnp.array(-1, jnp.int32),
                     oxygen_line_ttl=jnp.array(0, jnp.int32),
                     oxy_bar_px=jnp.array(cfg.hud_bar_initial_px, jnp.int32),
-                    oxygen_frames_remaining=jnp.array(cfg.hud_bar_initial_px, jnp.int32),  # keep coherent for 'done'
+                    oxygen_frames_remaining=jnp.array(cfg.hud_bar_initial_px, jnp.int32),
                     shark_lane=jnp.array(0, jnp.int32),
                     shark_y=cfg.shark_lanes_y[0],
                     shark_alive=jnp.array(True, jnp.bool_),
@@ -832,9 +845,8 @@ class JaxNameThisGame(JaxEnvironment[NameThisGameState, NameThisGameObservation,
                 def _lane_exists(tt: NameThisGameState) -> NameThisGameState:
                     safe_idx = jnp.clip(new_lane, 0, last_idx)
                     new_y = jnp.take(cfg.shark_lanes_y, safe_idx, mode="clip")
-                    base_speed = cfg.shark_base_speed + tt.round * cfg.speed_increase_per_round_shark
-                    speed = jnp.where(st.shark_lane > 2, base_speed*2, base_speed)
-                    new_dx_val = jnp.where(going_left, jnp.array(speed, jnp.int32), -jnp.array(speed, jnp.int32))
+                    speed_abs = self._shark_speed_for_lane(tt.round, safe_idx)
+                    new_dx_val = jnp.where(going_left, speed_abs, -speed_abs)
                     new_x_val = jnp.where(going_left, -cfg.shark_width, cfg.screen_width)
                     return tt._replace(shark_x=new_x_val, shark_y=new_y, shark_dx=new_dx_val, shark_lane=new_lane)
 
@@ -868,9 +880,9 @@ class JaxNameThisGame(JaxEnvironment[NameThisGameState, NameThisGameObservation,
             i = s0.tentacle_turn % T
             rng_choice, rng_after = jax.random.split(s0.rng)
 
-            # growth probability increases as waves increase (wave bar shrinks)
-            wave_factor = (cfg.hud_bar_initial_px - s0.wave_bar_px).astype(jnp.float32) / float(cfg.hud_bar_initial_px)
-            p_grow = jnp.clip(cfg.tentacle_base_growth_p + cfg.tentacle_growth_wave_coeff * wave_factor, 0.0, 0.95)
+            # growth probability increases with round
+            r_float = s0.round.astype(jnp.float32)
+            p_grow = jnp.clip(cfg.tentacle_base_growth_p + cfg.tentacle_growth_round_coeff * r_float, 0.0, 0.95)
             do_grow = jax.random.bernoulli(rng_choice, p_grow)
 
             # Helpers to read/write the i-th tentacle
@@ -1025,8 +1037,8 @@ class JaxNameThisGame(JaxEnvironment[NameThisGameState, NameThisGameObservation,
             go_left = jax.random.bernoulli(rng_side)
             reset_lane = jnp.array(0, jnp.int32)
             reset_y = cfg.shark_lanes_y[reset_lane]
-            base_speed = cfg.shark_base_speed + s.round * cfg.speed_increase_per_round_shark
-            reset_dx = jnp.where(go_left, base_speed, -base_speed).astype(jnp.int32)
+            reset_speed = self._shark_speed_for_lane(s.round, reset_lane)
+            reset_dx = jnp.where(go_left, reset_speed, -reset_speed).astype(jnp.int32)
             reset_x = jnp.where(go_left, -cfg.shark_width, cfg.screen_width)
             return s._replace(
                 score=s.score + points,
@@ -1153,9 +1165,8 @@ class JaxNameThisGame(JaxEnvironment[NameThisGameState, NameThisGameObservation,
             new_ttl = jnp.maximum(s.oxygen_line_ttl - 1, 0)
             def _expire(st: NameThisGameState) -> NameThisGameState:
                 # Schedule next random interval on expiry
-                factor = cfg.oxygen_interval_multiplier_per_round ** (st.round.astype(jnp.float32))
-                min_int = (cfg.oxygen_drop_min_interval * factor).astype(jnp.int32)
-                max_int = (cfg.oxygen_drop_max_interval * factor).astype(jnp.int32)
+                min_int = cfg.oxygen_drop_min_interval
+                max_int = cfg.oxygen_drop_max_interval
                 next_timer = jax.random.randint(rng_interval, (), min_int, max_int + 1, dtype=jnp.int32)
                 return st._replace(
                     oxygen_line_active=jnp.array(False, dtype=jnp.bool_),
@@ -1206,9 +1217,8 @@ class JaxNameThisGame(JaxEnvironment[NameThisGameState, NameThisGameObservation,
         cfg = self.config
         # Re-seed next oxygen drop timer for current round difficulty
         rng1, rng2 = jax.random.split(state.rng)
-        factor = cfg.oxygen_interval_multiplier_per_round ** (state.round.astype(jnp.float32))
-        min_int = (cfg.oxygen_drop_min_interval * factor).astype(jnp.int32)
-        max_int = (cfg.oxygen_drop_max_interval * factor).astype(jnp.int32)
+        min_int = cfg.oxygen_drop_min_interval
+        max_int = cfg.oxygen_drop_max_interval
         next_timer = jax.random.randint(rng2, (), min_int, max_int + 1, dtype=jnp.int32)
 
         zeros_T = jnp.zeros_like(state.tentacle_len)
@@ -1217,6 +1227,7 @@ class JaxNameThisGame(JaxEnvironment[NameThisGameState, NameThisGameObservation,
             wave_bar_px=jnp.array(cfg.hud_bar_initial_px, jnp.int32),
             oxy_bar_px=jnp.array(cfg.hud_bar_initial_px, jnp.int32),
             bar_frame_counter=jnp.array(0, jnp.int32),
+            oxy_frame_counter=jnp.array(0, jnp.int32),
 
             # Diver back to center, alive, spear cleared
             diver_x=jnp.array(cfg.screen_width // 2, jnp.int32),
@@ -1296,6 +1307,57 @@ class JaxNameThisGame(JaxEnvironment[NameThisGameState, NameThisGameObservation,
             )
         state = jax.lax.cond(round_clear, _new_round, lambda s: s, state)
         return state
+
+    @partial(jax.jit, static_argnums=(0,))
+    def _shark_speed_for_lane(self, round_idx: chex.Array, lane: chex.Array) -> chex.Array:
+        """Absolute shark speed (px/frame) per wave & lane.
+
+        Pattern:
+          - r = 0: all lanes 1 px/frame.
+          - r >= 1: lanes at/under `speed_progression_start_lane_for_2` (and deeper) are 2 px.
+            Each next wave shifts that 2 px boundary one lane earlier (toward the surface).
+          - After all lanes are 2 px (at r = 1 + start_lane_for_2), every wave promotes
+            one additional *bottom-most* lane to the next tier (3, then 4, then 5, ...).
+            After `nlanes` waves, *all* lanes have that higher tier, then the process repeats
+            for the next tier, with no upper cap.
+        """
+        cfg = self.config
+        # ints for JAX
+        nlanes_i = jnp.array(cfg.shark_lanes_y.shape[0], jnp.int32)
+        r = jnp.maximum(round_idx, jnp.array(0, jnp.int32))
+        lane_i = lane.astype(jnp.int32)
+
+        # Rank from bottom: b=0 bottom lane, b=nlanes-1 top lane
+        b = (nlanes_i - jnp.array(1, jnp.int32)) - lane_i
+
+        # --- Phase 1: reach 2 px everywhere ---
+        # How many bottom lanes are already at least 2 px in this wave?
+        # r=0 -> 0 lanes; r=1 -> (nlanes - start2) lanes; then +1 lane per wave until all lanes.
+        start2 = jnp.array(cfg.speed_progression_start_lane_for_2, jnp.int32)
+        k2 = jnp.where(
+            r == 0,
+            jnp.array(0, jnp.int32),
+            jnp.clip(nlanes_i - start2 + (r - jnp.array(1, jnp.int32)), 0, nlanes_i),
+        )
+        is_ge2 = (b < k2).astype(jnp.int32)
+
+        # Wave at which all lanes reached 2 px
+        r_all2 = jnp.array(1, jnp.int32) + start2  # e.g., start2=3 -> r_all2=4
+
+        # --- Phase 2+: add tiers above 2, bottom-up, one lane per wave, repeating every nlanes ---
+        # Number of waves since all lanes reached 2
+        t = r - r_all2  # can be negative
+        # For a given lane rank b, number of *extra* tiers above 2 it has received:
+        # extra = max(0, floor((t - 1 - b)/nlanes) + 1)
+        extra = jnp.maximum(
+            jnp.array(0, jnp.int32),
+            jnp.floor_divide(t - jnp.array(1, jnp.int32) - b, nlanes_i) + jnp.array(1, jnp.int32)
+        )
+
+        # Final multiplier: 1 + (1 if >=2 else 0) + extra tiers above 2
+        mult = jnp.array(1, jnp.int32) + is_ge2 + extra
+
+        return (mult * jnp.array(cfg.shark_base_speed, jnp.int32)).astype(jnp.int32)
 
     @partial(jax.jit, static_argnums=(0,))
     def _get_done(self, state: NameThisGameState) -> jnp.bool_:
