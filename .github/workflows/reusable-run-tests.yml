@@ -71,6 +71,7 @@ jobs:
         shell: bash
 
       - name: Run core and wrapper tests
+        if: always()
         id: core_wrapper_tests
         run: |
           set -o pipefail
@@ -81,6 +82,7 @@ jobs:
         shell: bash
 
       - name: Run env compatability tests
+        if: always()
         id: env_compat_tests
         run: |
           set -o pipefail
@@ -91,6 +93,7 @@ jobs:
         shell: bash
 
       - name: Run funcenv adapter tests
+        if: always()
         id: funcenv_adapter_tests
         run: |
           set -o pipefail
@@ -101,6 +104,7 @@ jobs:
         shell: bash
 
       - name: Run spaces tests
+        if: always()
         id: spaces_tests
         run: |
           set -o pipefail
