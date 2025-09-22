@@ -6,7 +6,6 @@ from typing import NamedTuple, Tuple
 import jax
 import jax.numpy as jnp
 import chex
-import pygame
 from jax import lax, debug
 from gymnax.environments import spaces
 from jaxatari.environment import JaxEnvironment, JAXAtariAction as Action
@@ -408,8 +407,18 @@ class MarioBrosState(NamedTuple):
 
 
 class MarioBrosObservation(NamedTuple):  # Copied from jax_kangaroo.py ln.166-168
-    player_x: chex.Array
-    player_y: chex.Array
+    player_pos: chex.Array
+    player_on_ground: chex.Array
+    player_brake_frames_left: chex.Array
+    player_lives: chex.Array
+    enemy_active: chex.Array
+    enemy_pos: chex.Array
+    enemy_state: chex.Array
+    fireball_pos: chex.Array
+    fireball_dir: chex.Array
+    pow_block_counter: chex.Array
+    pow_block_pos: chex.Array
+    plattforms_pos: chex.Array
 
 
 class MarioBrosInfo(NamedTuple):  # Copied from jax_kangaroo.py ln.186-187
@@ -1174,9 +1183,128 @@ def draw_fireball(image, f, fx, fy):
     def fireball_4(im): return draw_sprite_rgb(im, fx, fy, FIREBALL_4_RGB, FIREBALL_4_MASK)
     return lax.switch(f.ani - 1, [fireball_1, fireball_2, fireball_3, fireball_4], image)
 
-class MarioBrosRenderer(JAXGameRenderer):
+
+
+class JaxMarioBros(JaxEnvironment[
+                       MarioBrosState, MarioBrosObservation, MarioBrosInfo, MarioBrosConstants]):  # copied and adapted from jax_kangaroo.py ln.1671
+    # holds reset and main step function
+
     def __init__(self):
-        pass
+        self.action_set = [
+            Action.NOOP,
+            Action.FIRE,
+            Action.UP,
+            Action.RIGHT,
+            Action.LEFT,
+            Action.DOWN,
+            Action.UPRIGHT,
+            Action.UPLEFT,
+            Action.DOWNRIGHT,
+            Action.DOWNLEFT,
+            Action.UPFIRE,
+            Action.RIGHTFIRE,
+            Action.LEFTFIRE,
+            Action.DOWNFIRE,
+            Action.UPRIGHTFIRE,
+            Action.UPLEFTFIRE,
+            Action.DOWNRIGHTFIRE,
+            Action.DOWNLEFTFIRE
+        ]
+
+    def action_space(self) -> spaces.Discrete:
+        return spaces.Discrete(len(self.action_set))
+
+    def get_action_space(self) -> jnp.ndarray:
+        return jnp.array(self.action_set)
+
+    def _get_observation(self, state: MarioBrosState) -> MarioBrosObservation:
+        obs = MarioBrosObservation(
+            player_pos= state.player.pos,
+            player_on_ground= state.player.on_ground,
+            player_brake_frames_left= state.player.brake_frames_left,
+            player_lives= state.lives,
+            enemy_active= state.game.enemy.enemy_active,
+            enemy_pos= state.game.enemy.enemy_pos,
+            enemy_state= state.game.enemy.enemy_status,
+            fireball_pos= state.game.fireball.pos,
+            fireball_dir= state.game.fireball.dir,
+            pow_block_counter= state.game.pow_block_counter,
+            pow_block_pos= POW_BLOCK,
+            plattforms_pos= PLATFORMS
+        )
+        return obs
+
+    def _get_info(self, state: MarioBrosState) -> MarioBrosInfo:
+        return MarioBrosInfo(
+            score=0
+        )
+
+    def reset(self, key=None) -> Tuple[MarioBrosObservation, MarioBrosState]:
+        game = self.reset_game(key)
+        obs = self._get_observation(game)
+        return obs, game
+
+    def reset_game(self, key) -> MarioBrosState:
+        p1_y = PLATFORMS[1, 1]
+        p2_y = PLATFORMS[2, 1]
+        enemy_status = jnp.array([2, 2, 2])
+
+        # Enemy 1 position (used also for enemy 3)
+        enemy1_pos = jnp.array([5.0, p1_y - ENEMY_SIZE[1]])
+        enemy2_pos = jnp.array([130.0, p2_y - ENEMY_SIZE[1]])
+
+        new_state = MarioBrosState(
+            player=PlayerState(
+                pos=jnp.array([PLAYER_START_X, PLAYER_START_Y], dtype=jnp.float32),
+                vel=jnp.array([0.0, 0.0]),
+                on_ground=False,
+                jump_phase=jnp.int32(0),
+                ascend_frames=jnp.int32(0),
+                idx_right=jnp.int32(0),
+                idx_left=jnp.int32(0),
+                jump=jnp.int32(0),
+                walk_anim=jnp.int32(0),
+                is_walking=False,
+                move=jnp.array(0.0, dtype=jnp.float32),
+                jumpL=False,
+                jumpR=False,
+                last_dir=jnp.int32(0),
+                brake_frames_left=jnp.int32(0),
+                bumped_idx=0,
+                pow_bumped=False,
+                safe= False
+            ),
+            game=GameState(
+                enemy=Enemy(
+                    enemy_pos=jnp.array([enemy1_pos, enemy2_pos, enemy1_pos]),  # 3rd enemy uses enemy1 prototype
+                    enemy_vel=jnp.array([[ENEMY_MOVE_SPEED, 0.0], [-ENEMY_MOVE_SPEED, 0.0], [ENEMY_MOVE_SPEED, 0.0]]),
+                    enemy_platform_idx=jnp.array([1, 2, 1]),
+                    enemy_timer=jnp.array([0, 0, 0]),
+                    enemy_weak_timer=jnp.array([0, 0, 0]),  # keep zeros for each enemy at start
+                    enemy_initial_sides=jnp.array([0, 1, 0]),
+                    enemy_active=jnp.array([1, 0, 0], dtype=jnp.int32),  # only first enemy active at start
+                    enemy_init_positions=jnp.array([enemy1_pos, enemy2_pos, enemy1_pos]),
+                    enemy_status=enemy_status
+                ),
+                pow_block_counter=jnp.int32(3),
+                score = jnp.int32(0),
+                fireball=Fireball(
+                    pos= jnp.array(FIREBALL_INIT_XY),
+                    start_pat= FIREBALL_MOVEMENT_Start,
+                    move_pat= FIREBALL_MOVEMENT,
+                    count= FIREBALL_RESTART,
+                    state= 0,
+                    dir= -1,
+                    rnd= key,
+                    ani= 1
+                ),
+                game_over= False,
+                next_spawn_side=jnp.int32(1),
+        ),
+            lives=jnp.int32(4)
+        )
+
+        return new_state
 
     def render(self, state: MarioBrosState) -> jnp.ndarray:
         def white_screen(_: any) -> jnp.ndarray:
@@ -1254,118 +1382,6 @@ class MarioBrosRenderer(JAXGameRenderer):
             return image
         
         return lax.cond(state.game.game_over, white_screen, continue_render, operand=None)
-
-
-
-class JaxMarioBros(JaxEnvironment[
-                       MarioBrosState, MarioBrosObservation, MarioBrosInfo, MarioBrosConstants]):  # copied and adapted from jax_kangaroo.py ln.1671
-    # holds reset and main step function
-
-    def __init__(self):
-        self.action_set = [
-            Action.NOOP,
-            Action.FIRE,
-            Action.UP,
-            Action.RIGHT,
-            Action.LEFT,
-            Action.DOWN,
-            Action.UPRIGHT,
-            Action.UPLEFT,
-            Action.DOWNRIGHT,
-            Action.DOWNLEFT,
-            Action.UPFIRE,
-            Action.RIGHTFIRE,
-            Action.LEFTFIRE,
-            Action.DOWNFIRE,
-            Action.UPRIGHTFIRE,
-            Action.UPLEFTFIRE,
-            Action.DOWNRIGHTFIRE,
-            Action.DOWNLEFTFIRE
-        ]
-
-    def action_space(self) -> spaces.Discrete:
-        return spaces.Discrete(len(self.action_set))
-
-    def get_action_space(self) -> jnp.ndarray:
-        return jnp.array(self.action_set)
-
-    def _get_observation(self, state: MarioBrosState) -> MarioBrosObservation:
-        return MarioBrosObservation(
-            player_x=state.player.pos[0],
-            player_y=state.player.pos[1]
-        )
-
-    def _get_info(self, state: MarioBrosState) -> MarioBrosInfo:
-        return MarioBrosInfo(
-            score=0
-        )
-
-    def reset(self, key=None) -> Tuple[MarioBrosObservation, MarioBrosState]:
-        game = self.reset_game()
-        obs = self._get_observation(game)
-        return obs, game
-
-    def reset_game(self) -> MarioBrosState:
-        p1_y = PLATFORMS[1, 1]
-        p2_y = PLATFORMS[2, 1]
-        enemy_status = jnp.array([2, 2, 2])
-
-        # Enemy 1 position (used also for enemy 3)
-        enemy1_pos = jnp.array([5.0, p1_y - ENEMY_SIZE[1]])
-        enemy2_pos = jnp.array([130.0, p2_y - ENEMY_SIZE[1]])
-
-        new_state = MarioBrosState(
-            player=PlayerState(
-                pos=jnp.array([PLAYER_START_X, PLAYER_START_Y], dtype=jnp.float32),
-                vel=jnp.array([0.0, 0.0]),
-                on_ground=False,
-                jump_phase=jnp.int32(0),
-                ascend_frames=jnp.int32(0),
-                idx_right=jnp.int32(0),
-                idx_left=jnp.int32(0),
-                jump=jnp.int32(0),
-                walk_anim=jnp.int32(0),
-                is_walking=False,
-                move=jnp.array(0.0, dtype=jnp.float32),
-                jumpL=False,
-                jumpR=False,
-                last_dir=jnp.int32(0),
-                brake_frames_left=jnp.int32(0),
-                bumped_idx=0,
-                pow_bumped=False,
-                safe= False
-            ),
-            game=GameState(
-                enemy=Enemy(
-                    enemy_pos=jnp.array([enemy1_pos, enemy2_pos, enemy1_pos]),  # 3rd enemy uses enemy1 prototype
-                    enemy_vel=jnp.array([[ENEMY_MOVE_SPEED, 0.0], [-ENEMY_MOVE_SPEED, 0.0], [ENEMY_MOVE_SPEED, 0.0]]),
-                    enemy_platform_idx=jnp.array([1, 2, 1]),
-                    enemy_timer=jnp.array([0, 0, 0]),
-                    enemy_weak_timer=jnp.array([0, 0, 0]),  # keep zeros for each enemy at start
-                    enemy_initial_sides=jnp.array([0, 1, 0]),
-                    enemy_active=jnp.array([1, 0, 0], dtype=jnp.int32),  # only first enemy active at start
-                    enemy_init_positions=jnp.array([enemy1_pos, enemy2_pos, enemy1_pos]),
-                    enemy_status=enemy_status
-                ),
-                pow_block_counter=jnp.int32(3),
-                score = jnp.int32(0),
-                fireball=Fireball(
-                    pos= jnp.array(FIREBALL_INIT_XY),
-                    start_pat= FIREBALL_MOVEMENT_Start,
-                    move_pat= FIREBALL_MOVEMENT,
-                    count= FIREBALL_RESTART,
-                    state= 0,
-                    dir= -1,
-                    rnd= jax.random.PRNGKey(0),
-                    ani= 1
-                ),
-                game_over= False,
-                next_spawn_side=jnp.int32(1),
-        ),
-            lives=jnp.int32(4)
-        )
-
-        return new_state
 
     def old_step(self, state: MarioBrosState, action: chex.Array) -> Tuple[
         MarioBrosObservation, MarioBrosState, float, bool, MarioBrosInfo]:
@@ -1682,10 +1698,7 @@ class JaxMarioBros(JaxEnvironment[
                     lives=state.lives
                 )
 
-                obs = MarioBrosObservation(
-                    player_x=new_player.pos[0],
-                    player_y=new_player.pos[1]
-                )
+                obs = self._get_observation(new_state)
 
                 return obs, new_state, 0.0, False, self._get_info(new_state)
 
@@ -1697,22 +1710,4 @@ class JaxMarioBros(JaxEnvironment[
 
 # run game with: python scripts\play.py --game mariobros
 if __name__ == "__main__":
-    pygame.init()
-    screen = pygame.display.set_mode(
-        (SCREEN_WIDTH * WINDOW_SCALE, SCREEN_HEIGHT * WINDOW_SCALE)
-    )
-    pygame.display.set_caption("JAX Mario Bros Prototype")
-    clock = pygame.time.Clock()
-    game = JaxMarioBros()
-    renderer = MarioBrosRenderer()
-
-    _, state = game.reset()
-    running = True
-
-    while running:
-        #    _,state,_,_,_ = game.step(state, )
-        renderer.render(state)
-
-        clock.tick(60)
-
-    pygame.quit()
+    pass
