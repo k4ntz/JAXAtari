@@ -1307,7 +1307,6 @@ class JaxRiverraid(JaxEnvironment):
             Action.LEFTFIRE
         }
         self.renderer = RiverraidRenderer()
-        #self.obs_size = 420
 
     def render(self, state: RiverraidState) -> jnp.ndarray:
         return self.renderer.render(state)
