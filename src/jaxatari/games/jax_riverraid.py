@@ -1405,6 +1405,7 @@ class JaxRiverraid(JaxEnvironment):
     def action_space(self) -> spaces.Discrete:
         return spaces.Discrete(len(self.action_set))
 
+    @partial(jax.jit, static_argnums=(0,))
     def step(self, state: RiverraidState, action: Action) -> Tuple[RiverraidObservation, RiverraidState, RiverraidInfo]:
         def player_alive(state: RiverraidState) -> RiverraidState:
             new_state = handle_dam(state)
@@ -1515,7 +1516,7 @@ class JaxRiverraid(JaxEnvironment):
 
     @partial(jax.jit, static_argnums=(0,))
     def _get_done(self, state: RiverraidState) -> bool:
-        return True
+        return state.player_lives <= 0
 
     def observation_space(self) -> spaces.Dict:
         return spaces.Dict(
