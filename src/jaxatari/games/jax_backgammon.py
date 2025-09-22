@@ -10,7 +10,7 @@ from pathlib import Path
 from enum import IntEnum
 
 # Project imports
-from jaxatari.environment import JaxEnvironment
+from jaxatari.environment import JaxEnvironment, JAXAtariAction
 from jaxatari.renderers import JAXGameRenderer
 from jaxatari.rendering import jax_rendering_utils as jr
 import jaxatari.spaces as spaces
@@ -106,9 +106,9 @@ class JaxBackgammonEnv(JaxEnvironment[BackgammonState, jnp.ndarray, dict, Backga
 
         # Define action set for jaxatari compatibility
         self.action_set = [
-            Action.UP,  # Move cursor left
-            Action.DOWN,  # Move cursor right
-            Action.FIRE  # Space (select/drop/roll)
+            JAXAtariAction.LEFT,  # Move cursor left
+            JAXAtariAction.RIGHT,  # Move cursor right
+            JAXAtariAction.FIRE  # Space (select/drop/roll)
         ]
 
     @partial(jax.jit, static_argnums=(0,))
@@ -245,7 +245,7 @@ class JaxBackgammonEnv(JaxEnvironment[BackgammonState, jnp.ndarray, dict, Backga
             key=key
         )
 
-    def reset(self, key: jax.random.PRNGKey = None) -> Tuple[jnp.ndarray, BackgammonState]:
+    def reset(self, key: jax.random.PRNGKey = None) -> Tuple[BackgammonObservation, BackgammonState]:
         """Reset the environment with proper key handling."""
         if key is None:
             key = jax.random.PRNGKey(0)
@@ -253,7 +253,7 @@ class JaxBackgammonEnv(JaxEnvironment[BackgammonState, jnp.ndarray, dict, Backga
         state = self.init_state(key)
         dice, key = self.roll_dice(key)
         state = state._replace(dice=dice, key=key)
-        return self._get_observation(state), state
+        return self._get_observation(state)
 
     @staticmethod
     @jax.jit
@@ -710,9 +710,9 @@ class JaxBackgammonEnv(JaxEnvironment[BackgammonState, jnp.ndarray, dict, Backga
             )
 
         # Main action routing
-        is_cursor_left = action == Action.UP
-        is_cursor_right = action == Action.DOWN
-        is_space = action == Action.FIRE
+        is_cursor_left = action == JAXAtariAction.LEFT
+        is_cursor_right = action == JAXAtariAction.RIGHT
+        is_space = action == JAXAtariAction.FIRE
 
         return jax.lax.cond(
             is_cursor_left,
