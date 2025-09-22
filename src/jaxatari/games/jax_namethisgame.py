@@ -10,7 +10,7 @@ import jax.numpy as jnp
 import jax.lax
 import chex
 
-import pygame  # used only for human control in main loop
+import pygame
 from jaxatari.rendering import jax_rendering_utils as aj
 from jaxatari.renderers import JAXGameRenderer
 from jaxatari.environment import JaxEnvironment, JAXAtariAction as Action, EnvObs
@@ -29,8 +29,8 @@ class NameThisGameConfig:
     hud_bar_shrink_px_per_step_total: int = 8   # 4 from each side => width - 8
     bar_green_height: int = 4
     bar_orange_height: int = 12
-    bars_gap_px: int = 2
-    bars_bottom_margin_px: int = 8
+    bars_gap_px: int = 0
+    bars_bottom_margin_px: int = 25
     # Kraken location
     kraken_x: int = 16
     kraken_y: int = 63
@@ -55,14 +55,15 @@ class NameThisGameConfig:
     # Tentacles
     max_tentacles: int = 8
     tentacle_base_x: jnp.ndarray = field(default_factory=lambda: jnp.array([24, 38, 54, 70, 86, 102, 118, 134], dtype=jnp.int32))
-    tentacle_ys: jnp.ndarray = field(default_factory = lambda: jnp.array([97, 104, 111, 118, 125, 132, 139, 146, 153, 160],dtype=jnp.int32))
-    tentacle_width: int = 4
-    tentacle_amplitude: int = 12        # horizontal swing amplitude (px)
-    tentacle_phase_speed: float = 0.2  # phase increment (rad/frame)
-    tentacle_extend_speed: int = 1     # extension speed (px/frame)
-    tentacle_tip_hitbox_h: int = 4     # height of tip region for collisions
-    tentacle_max_length_px: int = 110  # maximum extension length (px)
-    tentacle_destroy_points: int = 500
+    tentacle_ys: jnp.ndarray = field(default_factory=lambda: jnp.array([97, 104, 111, 118, 125, 132, 139, 146, 153, 160], dtype=jnp.int32))
+    tentacle_num_cols: int = 4
+    tentacle_col_width: int = 4
+    tentacle_square_w: int = 4
+    tentacle_square_h: int = 6
+    tentacle_width: int = 4  # kept for obs space compatibility
+    tentacle_base_growth_p: float = 0.01       # baseline prob to GROW (vs move)
+    tentacle_growth_wave_coeff: float = 0.01 # additional prob as waves increase (scaled 0..1)
+    tentacle_destroy_points: int = 50
     # Oxygen supply line
     oxygen_full: int = 1200                 # full oxygen frames (~20 seconds at 60 FPS)
     oxygen_pickup_radius: int = 4           # horizontal radius for diver to grab oxygen line (px)
@@ -72,12 +73,16 @@ class NameThisGameConfig:
     oxygen_y: int = 57
     oxygen_line_ttl_frames: int = 100
     oxygen_contact_every_n_frames: int = 3
-    oxygen_contact_points: int = 25
+    oxygen_contact_points: int = 10
     # Round progression
     round_clear_shark_resets: int = 3
     speed_increase_per_round_shark: int = 1
     speed_increase_per_round_tentacle: int = 1
     oxygen_interval_multiplier_per_round: float = 1.2
+    # Lives / treasure
+    lives_max: int = 3
+    treasure_ui_x: int = 72
+    treasure_ui_y: int = 197
     # Score display
     max_digits_for_score: int = 9  # maximum digits to display for score (like Atari scoreboard)
 
@@ -124,11 +129,13 @@ class NameThisGameState(NamedTuple):
     shark_alive: chex.Array       # shark alive/active flag (bool)
 
     # Tentacles (octopus arms)
-    tentacle_base_x: chex.Array   # base x positions for tentacles (int32, shape (max_tentacles,))
-    tentacle_height: chex.Array   # current extension length of each tentacle (int32, shape (max_tentacles,))
-    tentacle_phase: chex.Array    # current phase angle for each tentacle's oscillation (float32, shape (max_tentacles,))
-    tentacle_active: chex.Array   # tentacle active (not destroyed) flags (bool, shape (max_tentacles,))
-
+    tentacle_base_x: chex.Array  # (T,)
+    tentacle_len: chex.Array  # (T,) number of blocks currently present
+    tentacle_cols: chex.Array  # (T, L) per-depth column index (0..3); only first len rows valid
+    tentacle_dir: chex.Array  # (T,) -1 or +1 (shared across the whole stack)
+    tentacle_edge_wait: chex.Array  # (T,) 0 or 1; 1 = waited one move at edge, next move flips dir
+    tentacle_active: chex.Array
+    tentacle_turn: chex.Array                   # scalar index 0..T-1
     # Spear
     spear: chex.Array  # shape (4,) -> [x, y, dx, dy] int32
     spear_alive: chex.Array  # bool
@@ -140,6 +147,9 @@ class NameThisGameState(NamedTuple):
     oxygen_drop_timer: chex.Array       # frames until next oxygen line drop (int32)
     oxygen_line_ttl: chex.Array         # frames remaining while the line is active (int32)
     oxygen_contact_counter: chex.Array  # counts consecutive contact frames with diver (int32)
+
+    # Lives
+    lives_remaining: chex.Array  # int32 in [0..lives_max]
 
     rng: chex.Array               # PRNG state (JAX key, shape (2,))
 
@@ -166,6 +176,7 @@ class NameThisGameInfo(NamedTuple):
     oxygen_frames_remaining: jnp.ndarray
     oxygen_line_active: jnp.ndarray
     diver_alive: jnp.ndarray
+    lives_remaining: jnp.ndarray
     all_rewards: jnp.ndarray         # vector of all rewards if using custom reward functions
 
 class NameThisGameConstants(NamedTuple):
@@ -196,7 +207,7 @@ class Renderer_NameThisGame(JAXGameRenderer):
             return None
 
         # Attempt to load relevant sprites
-        sprite_names = ["diver", "shark", "tentacle", "oxygen_line", "background", "kraken", "boat"]
+        sprite_names = ["diver", "shark", "tentacle", "oxygen_line", "background", "kraken", "boat",  "treasure1", "treasure2", "treasure3"]
         for name in sprite_names:
             spr = _load_sprite_frame(name)
             if spr is not None:
@@ -301,31 +312,28 @@ class Renderer_NameThisGame(JAXGameRenderer):
             raster,
         )
 
-        # Draw tentacles (vertical pillars for each active tentacle)
-        # Use purple color for tentacles
-        tent_color = (180, 0, 255)
-        # Pre-compute a full-length sprite template for tentacles
-        full_tentacle_rgb = jnp.broadcast_to(jnp.array(tent_color, dtype=jnp.uint8), (cfg.tentacle_max_length_px, cfg.tentacle_width, 3))
-        idx_array = jnp.arange(cfg.tentacle_max_length_px)[:, None]  # shape (max_length, 1)
-        def _draw_tentacle(i, ras):
-            active = state.tentacle_active[i]
-            # Compute current tentacle X (left coordinate) from base + sinusoidal offset
-            base = state.tentacle_base_x[i]
-            phase = state.tentacle_phase[i]
-            x_center = base + jnp.rint(jnp.sin(phase) * cfg.tentacle_amplitude).astype(jnp.int32)
-            left_x = x_center - (cfg.tentacle_width // 2)
-            tip_length = state.tentacle_height[i].astype(jnp.int32)
+        # Draw tentacles: stacks of 4x6 purple squares at discrete y's and 4 columns
+        T = self.config.max_tentacles
+        L = int(self.config.tentacle_ys.shape[0])
+        col_w = self.config.tentacle_col_width
+        sq_w = self.config.tentacle_square_w
+        sq_h = self.config.tentacle_square_h
+        tent_color = (0, 0, 0)
 
-            def _do_draw(r):
-                alpha_mask = (idx_array < tip_length)  # (max_len, 1)
-                # broadcast across tentacle width and add channel dim
-                alpha_mask = jnp.broadcast_to(alpha_mask,
-                                              (cfg.tentacle_max_length_px, cfg.tentacle_width))
-                alpha = jnp.where(alpha_mask, 255, 0).astype(jnp.uint8)[..., None]  # (max_len, width, 1)
-                tent_rgba = jnp.concatenate([full_tentacle_rgb, alpha], axis=-1)  # (max_len, width, 4)
-                return aj.render_at(r, left_x, cfg.tentacle_ys[0], tent_rgba)
-            return jax.lax.cond(active, _do_draw, lambda r: r, ras)
-        raster = jax.lax.fori_loop(0, cfg.max_tentacles, _draw_tentacle, raster)
+        square_rgba = _solid_sprite(sq_w, sq_h, tent_color)
+        def _draw_one_tentacle(i, ras):
+            length = state.tentacle_len[i]
+            base_x = state.tentacle_base_x[i]
+            def _draw_k(k, r2):
+                # draw only while k < length
+                def _place(rr):
+                    col = state.tentacle_cols[i, k]
+                    x = base_x + col * col_w
+                    y = self.config.tentacle_ys[k]
+                    return aj.render_at(rr, x, y, square_rgba)
+                return jax.lax.cond(k < length, _place, lambda rr: rr, r2)
+            return jax.lax.fori_loop(0, L, _draw_k, ras)
+        raster = jax.lax.fori_loop(0, T, _draw_one_tentacle, raster)
 
         # Draw oxygen line (if active)
         if "oxygen_line" in self.sprites:
@@ -339,6 +347,36 @@ class Renderer_NameThisGame(JAXGameRenderer):
             lambda r: r,
             raster,
         )
+
+        if all(k in self.sprites for k in ("treasure1", "treasure2", "treasure3")):
+            idx = jnp.clip(state.lives_remaining, 0, 3).astype(jnp.int32)
+
+            def draw_none(r):
+                return r
+
+            def draw_t1(r):
+                return aj.render_at(r, self.config.treasure_ui_x, self.config.treasure_ui_y, self.sprites["treasure1"])
+
+            def draw_t2(r):
+                return aj.render_at(r, self.config.treasure_ui_x, self.config.treasure_ui_y, self.sprites["treasure2"])
+
+            def draw_t3(r):
+                return aj.render_at(r, self.config.treasure_ui_x, self.config.treasure_ui_y, self.sprites["treasure3"])
+
+            raster = jax.lax.switch(idx, (draw_none, draw_t1, draw_t2, draw_t3), raster)
+        else:
+            # Fallback: draw up to 3 tiny white squares
+            lives = jnp.clip(state.lives_remaining, 0, 3)
+            sq = jnp.concatenate([
+                jnp.full((6, 6, 3), 255, jnp.uint8), jnp.full((6, 6, 1), 255, jnp.uint8)
+            ], axis=-1)
+
+            def maybe_draw(i, ras):
+                def draw(rr): return aj.render_at(rr, self.config.treasure_ui_x + 8 * i, self.config.treasure_ui_y, sq)
+
+                return jax.lax.cond(lives > i, draw, lambda rr: rr, ras)
+
+            raster = jax.lax.fori_loop(0, 3, maybe_draw, raster)
 
         # Render score (centered at top)
         if self.score_digit_sprites is not None:
@@ -403,81 +441,100 @@ class JaxNameThisGame(JaxEnvironment[NameThisGameState, NameThisGameObservation,
         ]
 
     def reset(self, key: jax.random.PRNGKey = jax.random.PRNGKey(0)) -> Tuple[NameThisGameObservation, NameThisGameState]:
-        """Start a new game. Returns initial observation and state."""
         cfg = self.config
-        # Split PRNG for different initial randomizations
-        key, sub_key_dir, sub_key_oxy, sub_key_phase = jax.random.split(key, 4)
-        # Boat starts centered, moving right
+        T = cfg.max_tentacles
+        L = int(cfg.tentacle_ys.shape[0])
+
+        # PRNG splits
+        key, sub_key_dir, sub_key_oxy = jax.random.split(key, 3)
+
+        # Boat
         init_boat_x = jnp.array(cfg.screen_width // 2 - cfg.boat_width // 2, dtype=jnp.int32)
-        init_boat_dx = jnp.array(1, dtype=jnp.int32)   # +1 = right, -1 = left
+        init_boat_dx = jnp.array(1, dtype=jnp.int32)
         init_boat_counter = jnp.array(0, dtype=jnp.int32)
-        # Initial diver position
-        init_diver_x = jnp.array(cfg.screen_width//2, dtype=jnp.int32)
+
+        # Diver
+        init_diver_x = jnp.array(cfg.screen_width // 2, dtype=jnp.int32)
         init_diver_y = jnp.array(cfg.diver_y_floor, dtype=jnp.int32)
-        # Choose initial shark direction randomly (True = from left to right, False = from right to left)
-        go_left = jax.random.bernoulli(sub_key_dir)  # bool
+
+        # Shark
+        go_left = jax.random.bernoulli(sub_key_dir)
         init_shark_lane = jnp.array(0, dtype=jnp.int32)
         init_shark_y = cfg.shark_lanes_y[init_shark_lane]
         init_shark_x = jnp.where(go_left, -cfg.shark_width, cfg.screen_width)
-        init_shark_speed = cfg.shark_base_speed  # base speed for lane 0
-        init_shark_dx = jnp.where(go_left, init_shark_speed, -init_shark_speed)
-        # Tentacles: start all active, no extension
-        init_tent_height = jnp.zeros((cfg.max_tentacles,), dtype=jnp.int32)
-        # Random initial phase for oscillation of each tentacle
-        init_tent_phase = jax.random.uniform(sub_key_phase, (cfg.max_tentacles,), minval=0.0, maxval=2*jnp.pi, dtype=jnp.float32)
-        # Base X positions (could randomize slightly if desired, but use defaults for initial round)
-        init_tent_base_x = cfg.tentacle_base_x
-        init_tent_active = jnp.ones((cfg.max_tentacles,), dtype=jnp.bool_)
+        base_speed = cfg.shark_base_speed
+        init_shark_dx = jnp.where(go_left, base_speed, -base_speed).astype(jnp.int32)
+
+        # Tentacles: empty stacks to start
+        tentacle_len = jnp.zeros((T,), dtype=jnp.int32)
+        tentacle_cols = jnp.zeros((T, L), dtype=jnp.int32)  # values don't matter until len>0
+        tentacle_dir = jnp.ones((T,), dtype=jnp.int32)  # start moving right
+        tentacle_edge_wait = jnp.zeros((T,), dtype=jnp.int32)
+        tentacle_active = (tentacle_len > 0)
+
+        # Spear
         empty_spear = jnp.array([0, 0, 0, 0], dtype=jnp.int32)
-        # Oxygen: full at start, no line active
+
+        # Oxygen
         init_oxygen = jnp.array(cfg.oxygen_full, dtype=jnp.int32)
         init_oxygen_line_active = jnp.array(False, dtype=jnp.bool_)
         init_oxygen_line_x = jnp.array(-1, dtype=jnp.int32)
-        # Schedule first oxygen drop after random interval
-        # Draw random frames until next drop
-        oxygen_interval_factor = cfg.oxygen_interval_multiplier_per_round ** 0  # round 0 factor = 1.0
+        oxygen_interval_factor = cfg.oxygen_interval_multiplier_per_round ** 0
         min_int = int(cfg.oxygen_drop_min_interval * oxygen_interval_factor)
         max_int = int(cfg.oxygen_drop_max_interval * oxygen_interval_factor)
         init_drop_timer = jax.random.randint(sub_key_oxy, (), min_int, max_int + 1, dtype=jnp.int32)
 
-        # Assemble initial state
         state = NameThisGameState(
             score=jnp.array(0, dtype=jnp.int32),
             reward=jnp.array(0, dtype=jnp.int32),
             round=jnp.array(0, dtype=jnp.int32),
             shark_resets_this_round=jnp.array(0, dtype=jnp.int32),
-            oxy_bar_px=jnp.array(self.config.hud_bar_initial_px, dtype=jnp.int32),
-            wave_bar_px=jnp.array(self.config.hud_bar_initial_px, dtype=jnp.int32),
+
+            oxy_bar_px=jnp.array(cfg.hud_bar_initial_px, dtype=jnp.int32),
+            wave_bar_px=jnp.array(cfg.hud_bar_initial_px, dtype=jnp.int32),
             bar_frame_counter=jnp.array(0, dtype=jnp.int32),
+
             resting=jnp.array(True, dtype=jnp.bool_),
+
             boat_x=init_boat_x,
             boat_dx=init_boat_dx,
             boat_move_counter=init_boat_counter,
+
             diver_x=init_diver_x,
             diver_y=init_diver_y,
             diver_alive=jnp.array(True, dtype=jnp.bool_),
             diver_dir=jnp.array(1, dtype=jnp.int32),
             fire_button_prev=jnp.array(False, dtype=jnp.bool_),
+
             shark_x=init_shark_x.astype(jnp.int32),
             shark_y=init_shark_y.astype(jnp.int32),
-            shark_dx=jnp.array(init_shark_dx, dtype=jnp.int32),
+            shark_dx=init_shark_dx,
             shark_lane=init_shark_lane,
             shark_alive=jnp.array(True, dtype=jnp.bool_),
-            tentacle_base_x=init_tent_base_x,
-            tentacle_height=init_tent_height,
-            tentacle_phase=init_tent_phase,
-            tentacle_active=init_tent_active,
+
+            tentacle_base_x=cfg.tentacle_base_x,
+            tentacle_len=tentacle_len,
+            tentacle_cols=tentacle_cols,
+            tentacle_dir=tentacle_dir,
+            tentacle_edge_wait=tentacle_edge_wait,
+            tentacle_active=tentacle_active,
+
             spear=empty_spear,
             spear_alive=jnp.array(False, dtype=jnp.bool_),
+
             oxygen_frames_remaining=init_oxygen,
             oxygen_line_active=init_oxygen_line_active,
             oxygen_line_x=init_oxygen_line_x,
             oxygen_drop_timer=init_drop_timer,
-            oxygen_line_ttl=jnp.array(0, dtype=jnp.int32),  # <—
-            oxygen_contact_counter=jnp.array(0, dtype=jnp.int32),  # <—
-            rng=key,  # carry the remaining RNG key
+            oxygen_line_ttl=jnp.array(0, dtype=jnp.int32),
+            oxygen_contact_counter=jnp.array(0, dtype=jnp.int32),
+
+            tentacle_turn=jnp.array(0, dtype=jnp.int32),
+
+            lives_remaining=jnp.array(cfg.lives_max, dtype=jnp.int32),
+
+            rng=key,
         )
-        # Create initial observation from state
         obs = self._get_observation(state)
         return obs, state
 
@@ -497,12 +554,13 @@ class JaxNameThisGame(JaxEnvironment[NameThisGameState, NameThisGameObservation,
                 "height": spaces.Box(low=0, high=h_max, shape=(n,), dtype=jnp.int32),
                 "alive": spaces.Box(low=0, high=1, shape=(n,), dtype=jnp.int32),
             })
+        tentacle_h_max = int(cfg.tentacle_ys[-1] - cfg.tentacle_ys[0] + cfg.tentacle_square_h)
         return spaces.Dict({
             "score": spaces.Box(low=0, high=(10**cfg.max_digits_for_score) - 1, shape=(), dtype=jnp.int32),
             "diver": entity_space(n=1, w_max=cfg.diver_width, h_max=cfg.diver_height),
             "shark": entity_space(n=1, w_max=cfg.shark_width, h_max=cfg.shark_height),
             "spear": entity_space(n=1, w_max=cfg.spear_width, h_max=cfg.spear_height),
-            "tentacles": entity_space(n=cfg.max_tentacles, w_max=cfg.tentacle_width, h_max=cfg.tentacle_max_length_px),
+            "tentacles": entity_space(n=cfg.max_tentacles, w_max=cfg.tentacle_width, h_max=tentacle_h_max),
             "oxygen_frames_remaining": spaces.Box(low=0, high=cfg.oxygen_full, shape=(), dtype=jnp.int32),
             "oxygen_line_active": spaces.Box(low=0, high=1, shape=(), dtype=jnp.int32),
             "oxygen_line_x": spaces.Box(low=-cfg.oxygen_line_width, high=cfg.screen_width, shape=(), dtype=jnp.int32),
@@ -539,9 +597,8 @@ class JaxNameThisGame(JaxEnvironment[NameThisGameState, NameThisGameObservation,
 
     @partial(jax.jit, static_argnums=(0,))
     def _get_observation(self, state: NameThisGameState) -> NameThisGameObservation:
-        """Construct an observation NamedTuple from the game state."""
         cfg = self.config
-        # Diver entity (single)
+        # Diver
         diver_alive = state.diver_alive.astype(jnp.int32)
         diver_pos = EntityPosition(
             x=jnp.atleast_1d(state.diver_x),
@@ -550,7 +607,7 @@ class JaxNameThisGame(JaxEnvironment[NameThisGameState, NameThisGameObservation,
             height=jnp.atleast_1d(jnp.array(cfg.diver_height, dtype=jnp.int32)),
             alive=jnp.atleast_1d(diver_alive),
         )
-        # Shark entity (single)
+        # Shark
         shark_alive = state.shark_alive.astype(jnp.int32)
         shark_pos = EntityPosition(
             x=jnp.atleast_1d(state.shark_x),
@@ -559,7 +616,7 @@ class JaxNameThisGame(JaxEnvironment[NameThisGameState, NameThisGameObservation,
             height=jnp.atleast_1d(jnp.array(cfg.shark_height, dtype=jnp.int32)),
             alive=jnp.atleast_1d(shark_alive),
         )
-        # Spear entity (single)
+        # Spear
         spear_alive = state.spear_alive.astype(jnp.int32)
         spear_pos = EntityPosition(
             x=jnp.atleast_1d(state.spear[0]),
@@ -568,16 +625,38 @@ class JaxNameThisGame(JaxEnvironment[NameThisGameState, NameThisGameObservation,
             height=jnp.atleast_1d(jnp.array(cfg.spear_height, dtype=jnp.int32)),
             alive=jnp.atleast_1d(spear_alive),
         )
-        # Tentacles entities
-        tent_alive = state.tentacle_active.astype(jnp.int32)
-        # Tentacle x position (left coordinate) and dimensions for observation
-        # Represent each tentacle as the column from top (y=0) down to current tip
-        tentacle_x_center = state.tentacle_base_x + jnp.rint(jnp.sin(state.tentacle_phase) * cfg.tentacle_amplitude).astype(jnp.int32)
-        tentacle_left = tentacle_x_center - 1  # left edge given width=3
-        tentacle_y = jnp.where(state.tentacle_active, jnp.zeros_like(state.tentacle_height), -1)  # top of tentacle (0 if active, -1 if not)
-        tentacle_w = jnp.where(state.tentacle_active, jnp.full((cfg.max_tentacles,), cfg.tentacle_width, dtype=jnp.int32), 0)
-        tentacle_h = jnp.where(state.tentacle_active, state.tentacle_height, 0)
-        tentacle_pos = EntityPosition(tentacle_left, tentacle_y, tentacle_w, tentacle_h, tent_alive)
+        # Tentacles => bounding boxes for each stack (keeps your original Obs shape)
+        T = cfg.max_tentacles
+        L = int(cfg.tentacle_ys.shape[0])
+        len_vec = state.tentacle_len  # (T,)
+        alive_vec = (len_vec > 0).astype(jnp.int32)
+
+        # leftmost col across existing blocks; if none -> -1
+        # For simplicity, use the top block's column as left; stacks are narrow anyway.
+        top_cols = jnp.where(len_vec > 0, state.tentacle_cols[:, 0], jnp.array(0, jnp.int32))
+        tentacle_left_x = jnp.where(
+            len_vec > 0,
+            state.tentacle_base_x + top_cols * cfg.tentacle_col_width,
+            jnp.array(-1, jnp.int32)
+        )
+        tentacle_y_top = jnp.where(len_vec > 0, jnp.full((T,), cfg.tentacle_ys[0], dtype=jnp.int32),
+                                   jnp.array(-1, jnp.int32))
+        # height in pixels: from y[0] to y[len-1] + block_h
+        last_y = jnp.take_along_axis(cfg.tentacle_ys[None, :].repeat(T, axis=0),
+                                     jnp.clip((len_vec - 1)[:, None], 0, L - 1), axis=1).squeeze(1)
+        tentacle_height_px = jnp.where(len_vec > 0, last_y - cfg.tentacle_ys[0] + cfg.tentacle_square_h,
+                                       jnp.array(0, jnp.int32))
+        tentacle_width_px = jnp.where(len_vec > 0, jnp.full((T,), cfg.tentacle_width, dtype=jnp.int32),
+                                      jnp.array(0, jnp.int32))
+
+        tentacle_pos = EntityPosition(
+            x=tentacle_left_x,
+            y=tentacle_y_top,
+            width=tentacle_width_px,
+            height=tentacle_height_px,
+            alive=alive_vec,
+        )
+
         return NameThisGameObservation(
             score=state.score,
             diver=diver_pos,
@@ -603,6 +682,7 @@ class JaxNameThisGame(JaxEnvironment[NameThisGameState, NameThisGameObservation,
             oxygen_frames_remaining=state.oxygen_frames_remaining,
             oxygen_line_active=state.oxygen_line_active.astype(jnp.int32),
             diver_alive=state.diver_alive.astype(jnp.int32),
+            lives_remaining=state.lives_remaining,   # NEW
             all_rewards=(all_rewards if all_rewards is not None else jnp.zeros(1, dtype=jnp.float32)),
         )
 
@@ -651,20 +731,21 @@ class JaxNameThisGame(JaxEnvironment[NameThisGameState, NameThisGameObservation,
 
             # If wave bar hits 0 -> enter REST
             def _enter_rest(st: NameThisGameState) -> NameThisGameState:
-                zeros = jnp.zeros_like(st.tentacle_height)
-                top_lane = jnp.array(0, jnp.int32)
+                zeros_T = jnp.zeros_like(st.tentacle_len)
                 return st._replace(
                     resting=jnp.array(True, jnp.bool_),
-                    tentacle_height=zeros,
+                    tentacle_len=zeros_T,
+                    tentacle_active=zeros_T.astype(jnp.bool_),
                     oxygen_line_active=jnp.array(False, jnp.bool_),
                     oxygen_line_x=jnp.array(-1, jnp.int32),
                     oxygen_line_ttl=jnp.array(0, jnp.int32),
                     oxy_bar_px=jnp.array(cfg.hud_bar_initial_px, jnp.int32),
                     oxygen_frames_remaining=jnp.array(cfg.hud_bar_initial_px, jnp.int32),  # keep coherent for 'done'
-                    shark_lane=top_lane,
-                    shark_y=cfg.shark_lanes_y[top_lane],
+                    shark_lane=jnp.array(0, jnp.int32),
+                    shark_y=cfg.shark_lanes_y[0],
                     shark_alive=jnp.array(True, jnp.bool_),
                 )
+
             return jax.lax.cond(s2.wave_bar_px <= 0, _enter_rest, lambda z: z, s2)
 
         return jax.lax.cond(state.resting, _if_rest, _if_active, state)
@@ -771,18 +852,154 @@ class JaxNameThisGame(JaxEnvironment[NameThisGameState, NameThisGameObservation,
         return jax.lax.cond(state.resting, _resting_move, _normal_move, state)
 
     @partial(jax.jit, static_argnums=(0,))
-    def _move_tentacles(self, state: NameThisGameState) -> NameThisGameState:
-        """Extend tentacles downward and oscillate their horizontal position."""
+    def _update_one_tentacle(self, state: NameThisGameState) -> NameThisGameState:
+        """Round-robin: on each frame update exactly one tentacle: MOVE (more likely) or GROW.
+        JAX-safe: no dynamic slicing and loops have static bounds."""
         cfg = self.config
-        # Compute current extension speed based on round (increases by 1 each round)
-        extend_speed = cfg.tentacle_extend_speed + state.round * cfg.speed_increase_per_round_tentacle
-        # Update phase for all tentacles (even if inactive, phase can freeze but it won't matter)
-        new_phase = (state.tentacle_phase + cfg.tentacle_phase_speed) % (2 * jnp.pi)
-        # Increase height for active tentacles, capped at max length
-        current_height = state.tentacle_height
-        target_height = jnp.minimum(current_height + extend_speed, jnp.array(cfg.tentacle_max_length_px, dtype=jnp.int32))
-        new_height = jnp.where(state.tentacle_active, target_height, current_height)
-        return state._replace(tentacle_phase=new_phase, tentacle_height=new_height)
+        T = cfg.max_tentacles
+        L = int(cfg.tentacle_ys.shape[0])
+        max_col = cfg.tentacle_num_cols - 1
+
+        # Freeze updates during rest
+        def _no_update(s: NameThisGameState) -> NameThisGameState:
+            return s
+
+        def _active_update(s0: NameThisGameState) -> NameThisGameState:
+            i = s0.tentacle_turn % T
+            rng_choice, rng_after = jax.random.split(s0.rng)
+
+            # growth probability increases as waves increase (wave bar shrinks)
+            wave_factor = (cfg.hud_bar_initial_px - s0.wave_bar_px).astype(jnp.float32) / float(cfg.hud_bar_initial_px)
+            p_grow = jnp.clip(cfg.tentacle_base_growth_p + cfg.tentacle_growth_wave_coeff * wave_factor, 0.0, 0.95)
+            do_grow = jax.random.bernoulli(rng_choice, p_grow)
+
+            # Helpers to read/write the i-th tentacle
+            def get_row(arr): return arr[i]
+
+            def set_row(arr, val): return arr.at[i].set(val)
+
+            def set_row2d(arr, val): return arr.at[i, :].set(val)
+
+            cols_i = get_row(s0.tentacle_cols)
+            len_i = get_row(s0.tentacle_len)
+            dir_i = get_row(s0.tentacle_dir)
+            wait_i = get_row(s0.tentacle_edge_wait)
+
+            # ----- GROW -----
+            def _grow(s: NameThisGameState) -> NameThisGameState:
+                l = len_i
+                cols = cols_i
+
+                def _when_empty():
+                    start_col = jnp.array(1, dtype=jnp.int32)
+                    new_cols = cols.at[:].set(0)
+                    new_cols = new_cols.at[0].set(start_col)
+                    new_len = jnp.minimum(l + 1, L)
+                    return new_cols, new_len
+
+                def _when_non_empty():
+                    prev_top = cols[0]
+                    # Static-length "shift down by 1" for indices 0..l
+                    idx = jnp.arange(L, dtype=jnp.int32)
+                    prevs = jnp.concatenate([jnp.array([prev_top], jnp.int32), cols[:-1]])
+                    # mask for positions we update: 0..l
+                    # (clamp l to L-1 so mask is well-formed)
+                    l_clamped = jnp.minimum(l, jnp.array(L - 1, jnp.int32))
+                    mask = idx <= l_clamped
+                    new_cols = jnp.where(mask, prevs, cols)
+                    new_len = jnp.minimum(l + 1, L)
+                    return new_cols, new_len
+
+                new_cols, new_len = jax.lax.cond(l == 0, _when_empty, _when_non_empty)
+                s = s._replace(
+                    tentacle_cols=set_row2d(s0.tentacle_cols, new_cols),
+                    tentacle_len=set_row(s0.tentacle_len, new_len),
+                    tentacle_active=set_row(s0.tentacle_active, new_len > 0),
+                )
+                return s
+
+            # ----- MOVE (all blocks advance together, adjacency <= 1, edge wait + flip) -----
+            def _move(s: NameThisGameState) -> NameThisGameState:
+                cols = cols_i
+                l = len_i
+                d = dir_i
+                w = wait_i
+
+                def _nothing(st):  # empty stack
+                    return st
+
+                def _do_move(st: NameThisGameState) -> NameThisGameState:
+                    at_left = (cols[0] == 0)
+                    at_right = (cols[0] == max_col)
+                    blocked = jnp.where(d < 0, at_left, at_right)
+                    idx = jnp.arange(L, dtype=jnp.int32)
+                    stacked = jnp.all((cols == cols[0]) | (idx >= l))
+                    def _perform_move(cur_cols, direction):
+                        top_new = jnp.clip(cur_cols[0] + direction, 0, max_col)
+
+                        def body(k, acc):
+                            # only update rows < l
+                            def do_step(a):
+                                # k == 0 => set top
+                                def first(a2):
+                                    return a2.at[0].set(top_new)
+
+                                # k > 0 => constrain to adjacency of previous new row
+                                def rest(a2):
+                                    prev_new = a2[k - 1]
+                                    desired = jnp.clip(cur_cols[k] + direction, 0, max_col)
+                                    low = jnp.maximum(prev_new - 1, 0)
+                                    high = jnp.minimum(prev_new + 1, max_col)
+                                    newk = jnp.clip(desired, low, high)
+                                    return a2.at[k].set(newk)
+
+                                return jax.lax.cond(k == 0, first, rest, a)
+
+                            return jax.lax.cond(k < l, do_step, lambda a: a, acc)
+
+                        out = jax.lax.fori_loop(0, L, body, cur_cols)
+                        return out
+
+                        # Note: L is static, so the loop bound is static. We guard with k < l.
+
+                    def _edge_logic(st2: NameThisGameState) -> NameThisGameState:
+                        # If blocked & stacked: first wait one move, next time flip and move.
+                        def _first_wait():
+                            return st2._replace(
+                                tentacle_edge_wait=set_row(s0.tentacle_edge_wait, jnp.array(1, jnp.int32)))
+
+                        def _flip_and_move():
+                            new_dir = -d
+                            moved = _perform_move(cols, new_dir)
+                            return st2._replace(
+                                tentacle_dir=set_row(s0.tentacle_dir, new_dir),
+                                tentacle_cols=set_row2d(s0.tentacle_cols, moved),
+                                tentacle_edge_wait=set_row(s0.tentacle_edge_wait, jnp.array(0, jnp.int32)),
+                            )
+
+                        return jax.lax.cond((w == 0), _first_wait, _flip_and_move)
+
+                    def _normal_move(st2: NameThisGameState) -> NameThisGameState:
+                        moved = _perform_move(cols, d)
+                        return st2._replace(
+                            tentacle_cols=set_row2d(s0.tentacle_cols, moved),
+                            tentacle_edge_wait=set_row(s0.tentacle_edge_wait, jnp.array(0, jnp.int32)),
+                        )
+
+                    return jax.lax.cond((blocked & stacked), _edge_logic, _normal_move, st)
+
+                return jax.lax.cond(l == 0, _nothing, _do_move, s)
+
+            s1 = jax.lax.cond(do_grow, _grow, _move, s0)
+
+            # Advance round-robin index and RNG
+            next_turn = (s1.tentacle_turn + 1) % T
+            s1 = s1._replace(tentacle_turn=next_turn, rng=rng_after)
+            # Keep tentacle_active coherent with len>0
+            s1 = s1._replace(tentacle_active=(s1.tentacle_len > 0))
+            return s1
+
+        return jax.lax.cond(state.resting, _no_update, _active_update, state)
 
     @partial(jax.jit, static_argnums=(0,))
     def _check_spear_shark_collision(self, state: NameThisGameState) -> NameThisGameState:
@@ -828,57 +1045,58 @@ class JaxNameThisGame(JaxEnvironment[NameThisGameState, NameThisGameObservation,
     @partial(jax.jit, static_argnums=(0,))
     def _check_spear_tentacle_collision(self, state: NameThisGameState) -> NameThisGameState:
         cfg = self.config
+        T = cfg.max_tentacles
+        L = int(cfg.tentacle_ys.shape[0])
 
-        # spear rect (scalars)
+        # spear rect
         sl = state.spear[0]
         sr = state.spear[0] + cfg.spear_width
         st = state.spear[1]
         sb = state.spear[1] + cfg.spear_height
 
-        # tentacle tip regions (vectors length max_tentacles)
-        x_center = state.tentacle_base_x + jnp.rint(jnp.sin(state.tentacle_phase) * cfg.tentacle_amplitude).astype(
-            jnp.int32)
-        tl = x_center - 1
-        tr = tl + cfg.tentacle_width
-        tip_y = state.tentacle_height
-        tt = tip_y - cfg.tentacle_tip_hitbox_h
-        tb = tip_y
+        lens = state.tentacle_len  # (T,)
+        has_tip = lens > 0
+        tip_idx = jnp.maximum(lens - 1, 0)  # (T,)
 
-        # vectorized overlap against all tentacles
-        over_x = (sl < tr) & (sr > tl)
-        over_y = (st < tb) & (sb > tt)
-        hit_vec = state.spear_alive & state.tentacle_active & over_x & over_y  # (max_tentacles,)
+        # gather per-tentacle tip column
+        tip_cols = jnp.take_along_axis(state.tentacle_cols, tip_idx[:, None], axis=1).squeeze(axis=1)  # (T,)
 
-        # per-tentacle deactivation + points
-        points = jnp.sum(jnp.where(hit_vec, jnp.array(cfg.tentacle_destroy_points, jnp.int32), 0))
-        new_score = state.score + points
-        new_tent_active = jnp.logical_and(state.tentacle_active, jnp.logical_not(hit_vec))
+        x_lefts = state.tentacle_base_x + tip_cols * cfg.tentacle_col_width
+        x_rights = x_lefts + cfg.tentacle_square_w
+        y_tops = jnp.take(cfg.tentacle_ys, tip_idx)  # (T,)
+        y_bottoms = y_tops + cfg.tentacle_square_h
 
-        # spear is consumed if it hit any tentacle
-        spear_hit_any = jnp.any(hit_vec)
-        new_spear_alive = jnp.logical_and(state.spear_alive, jnp.logical_not(spear_hit_any))
+        over_x = (sl < x_rights) & (sr > x_lefts)
+        over_y = (st < y_bottoms) & (sb > y_tops)
+        hits = state.spear_alive & has_tip & over_x & over_y  # (T,)
+
+        num_hits = jnp.sum(hits.astype(jnp.int32))
+        gained = num_hits * jnp.array(cfg.tentacle_destroy_points, jnp.int32)
+
+        # For hit tentacles: zero their stacks; reset dir to +1, wait=0
+        new_len = jnp.where(hits, jnp.array(0, jnp.int32), state.tentacle_len)
+        new_cols = state.tentacle_cols  # contents irrelevant if len=0
+        new_dir = jnp.where(hits, jnp.array(1, jnp.int32), state.tentacle_dir)
+        new_wait = jnp.where(hits, jnp.array(0, jnp.int32), state.tentacle_edge_wait)
+
+        spear_alive_next = jnp.logical_and(state.spear_alive, jnp.logical_not(jnp.any(hits)))
 
         return state._replace(
-            score=new_score,
-            tentacle_active=new_tent_active,
-            spear_alive=new_spear_alive,
+            score=state.score + gained,
+            tentacle_len=new_len,
+            tentacle_cols=new_cols,
+            tentacle_dir=new_dir,
+            tentacle_edge_wait=new_wait,
+            tentacle_active=(new_len > 0),
+            spear_alive=spear_alive_next,
         )
+
     @partial(jax.jit, static_argnums=(0,))
     def _check_diver_hazard(self, state: NameThisGameState) -> NameThisGameState:
-        """Check if diver is hit by a tentacle tip. If so, mark diver as dead."""
-        cfg = self.config
-        # Compute horizontal overlap of diver with each tentacle tip
-        diver_left = state.diver_x
-        diver_right = state.diver_x + cfg.diver_width
-        tentacle_x_center = state.tentacle_base_x + jnp.rint(jnp.sin(state.tentacle_phase) * cfg.tentacle_amplitude).astype(jnp.int32)
-        tentacle_left = tentacle_x_center - 1
-        tentacle_right = tentacle_left + cfg.tentacle_width
-        overlap_x = (diver_left < tentacle_right) & (diver_right > tentacle_left)
-        # Check if any active tentacle tip has reached diver's level or beyond and overlaps horizontally
-        tip_reached = state.tentacle_height >= cfg.diver_y_floor
-        hazard = jnp.any(state.tentacle_active & tip_reached & overlap_x)
-        # If hazard, diver dies
-        return state._replace(diver_alive=jnp.where(hazard, jnp.array(False, dtype=jnp.bool_), state.diver_alive))
+        """Diver dies if any tentacle has a block at the last y position (i.e., length == L)."""
+        L = int(self.config.tentacle_ys.shape[0])
+        reached = jnp.any(state.tentacle_len >= L)
+        return state._replace(diver_alive=jnp.where(reached, jnp.array(False, dtype=jnp.bool_), state.diver_alive))
 
     @partial(jax.jit, static_argnums=(0,))
     def _move_boat(self, state: NameThisGameState) -> NameThisGameState:
@@ -983,48 +1201,106 @@ class JaxNameThisGame(JaxEnvironment[NameThisGameState, NameThisGameObservation,
         return jax.lax.cond(state.resting, _rest, _active, state)
 
     @partial(jax.jit, static_argnums=(0,))
+    def _life_loss_reset(self, state: NameThisGameState) -> NameThisGameState:
+        """Soft reset after a death: go to REST, refill bars/oxygen, clear hazards, keep score/round."""
+        cfg = self.config
+        # Re-seed next oxygen drop timer for current round difficulty
+        rng1, rng2 = jax.random.split(state.rng)
+        factor = cfg.oxygen_interval_multiplier_per_round ** (state.round.astype(jnp.float32))
+        min_int = (cfg.oxygen_drop_min_interval * factor).astype(jnp.int32)
+        max_int = (cfg.oxygen_drop_max_interval * factor).astype(jnp.int32)
+        next_timer = jax.random.randint(rng2, (), min_int, max_int + 1, dtype=jnp.int32)
+
+        zeros_T = jnp.zeros_like(state.tentacle_len)
+        return state._replace(
+            resting=jnp.array(True, jnp.bool_),
+            wave_bar_px=jnp.array(cfg.hud_bar_initial_px, jnp.int32),
+            oxy_bar_px=jnp.array(cfg.hud_bar_initial_px, jnp.int32),
+            bar_frame_counter=jnp.array(0, jnp.int32),
+
+            # Diver back to center, alive, spear cleared
+            diver_x=jnp.array(cfg.screen_width // 2, jnp.int32),
+            diver_dir=jnp.array(1, jnp.int32),
+            diver_alive=jnp.array(True, jnp.bool_),
+            spear_alive=jnp.array(False, jnp.bool_),
+            spear=jnp.array([0, 0, 0, 0], jnp.int32),
+
+            # Tentacles cleared/frozen
+            tentacle_len=zeros_T,
+            tentacle_active=zeros_T.astype(jnp.bool_),
+            tentacle_edge_wait=zeros_T,
+            tentacle_dir=jnp.ones_like(zeros_T),
+
+            # Oxygen system reset & disabled during rest
+            oxygen_frames_remaining=jnp.array(cfg.hud_bar_initial_px, jnp.int32),
+            oxygen_line_active=jnp.array(False, jnp.bool_),
+            oxygen_line_x=jnp.array(-1, jnp.int32),
+            oxygen_drop_timer=next_timer,
+            oxygen_line_ttl=jnp.array(0, jnp.int32),
+            oxygen_contact_counter=jnp.array(0, jnp.int32),
+
+            # Shark reset to top lane and alive
+            shark_lane=jnp.array(0, jnp.int32),
+            shark_y=self.config.shark_lanes_y[0],
+            shark_alive=jnp.array(True, jnp.bool_),
+
+            rng=rng1,
+        )
+
+    @partial(jax.jit, static_argnums=(0,))
+    def _check_and_consume_life(self, state: NameThisGameState) -> Tuple[NameThisGameState, chex.Array]:
+        """If a death condition happened this frame, consume a life.
+           If lives remain, soft reset to REST; else it's game over.
+           Returns (possibly-updated state, game_over_flag)."""
+        # Original death conditions (before lives)
+        oxygen_out = state.oxygen_frames_remaining <= 0
+        diver_dead = ~state.diver_alive
+        shark_reached_diver = ~state.shark_alive
+        death_now = oxygen_out | diver_dead | shark_reached_diver
+
+        def on_death(s):
+            remaining = s.lives_remaining - jnp.array(1, jnp.int32)
+
+            def game_over(st):
+                return st._replace(lives_remaining=jnp.array(0, jnp.int32)), jnp.array(True, jnp.bool_)
+
+            def lose_life(st):
+                st2 = self._life_loss_reset(st)
+                return st2._replace(lives_remaining=remaining), jnp.array(False, jnp.bool_)
+
+            return jax.lax.cond(remaining <= 0, game_over, lose_life, s)
+
+        def no_death(s):
+            return s, jnp.array(False, jnp.bool_)
+
+        return jax.lax.cond(death_now, on_death, no_death, state)
+
+    @partial(jax.jit, static_argnums=(0,))
     def _update_round(self, state: NameThisGameState) -> NameThisGameState:
         """Check conditions to advance to the next round and apply difficulty scaling."""
         cfg = self.config
         # Round clears when all tentacles are destroyed and shark has been reset required times
         round_clear = (~jnp.any(state.tentacle_active)) & (state.shark_resets_this_round >= cfg.round_clear_shark_resets)
         def _new_round(s: NameThisGameState) -> NameThisGameState:
-            rng_off, rng_phase = jax.random.split(s.rng)
             new_round_idx = s.round + 1
-            # Reset tentacles for new round (all active, height 0, randomize phase and possibly base positions)
-            new_active = jnp.ones_like(s.tentacle_active)
-            new_height = jnp.zeros_like(s.tentacle_height)
-            # Optionally randomize base X positions within a small range
-            offset = jax.random.randint(rng_off, s.tentacle_base_x.shape, -5, 6, dtype=jnp.int32)
-            new_base_x = jnp.clip(cfg.tentacle_base_x + offset, 1, cfg.screen_width - cfg.tentacle_width - 1)
-            # Update shark speed for new round (current dx sign * increased base speed)
-            current_sign = jnp.where(s.shark_dx < 0, -1, 1)
-            new_shark_speed = cfg.shark_base_speed + new_round_idx * cfg.speed_increase_per_round_shark
-            new_shark_dx = current_sign * jnp.array(new_shark_speed, dtype=jnp.int32)
+            T = self.config.max_tentacles
+            zeros_T = jnp.zeros((T,), dtype=jnp.int32)
+            # keep dirs positive; stacks empty
             return s._replace(
                 round=new_round_idx,
                 shark_resets_this_round=jnp.array(0, dtype=jnp.int32),
-                tentacle_active=new_active,
-                tentacle_height=new_height,
-                tentacle_phase=jax.random.uniform(s.rng, s.tentacle_phase.shape, minval=0.0, maxval=2*jnp.pi, dtype=jnp.float32),
-                tentacle_base_x=new_base_x,
-                shark_dx=new_shark_dx
+                tentacle_len=zeros_T,
+                tentacle_active=zeros_T.astype(jnp.bool_),
+                tentacle_edge_wait=zeros_T,
+                tentacle_dir=jnp.ones_like(zeros_T),
             )
         state = jax.lax.cond(round_clear, _new_round, lambda s: s, state)
         return state
 
     @partial(jax.jit, static_argnums=(0,))
     def _get_done(self, state: NameThisGameState) -> jnp.bool_:
-        """Determine if the game is over (terminal state)."""
-        cfg = self.config
-        # Condition 1: Oxygen depleted
-        oxygen_out = state.oxygen_frames_remaining <= 0
-        # Condition 2: Diver dead (tentacle got him)
-        diver_dead = ~state.diver_alive
-        # Condition 3: Shark reached the diver (left bottom without being shot)
-        shark_reached_diver = ~state.shark_alive
-        done = oxygen_out | diver_dead | shark_reached_diver
-        return done
+        """Game ends only when you have no lives left."""
+        return state.lives_remaining <= 0
 
     @partial(jax.jit, static_argnums=(0,))
     def step(self, state: NameThisGameState, action: chex.Array) -> Tuple[NameThisGameObservation, NameThisGameState, float, bool, NameThisGameInfo]:
@@ -1049,8 +1325,8 @@ class JaxNameThisGame(JaxEnvironment[NameThisGameState, NameThisGameObservation,
         state = self._move_spear(state)
         # Move shark and possibly drop lane or mark escaped
         state = self._move_shark(state)
-        # Move tentacles (extend and wave)
-        state = self._move_tentacles(state)
+        # Move tentacles (discrete update: grow or move exactly one tentacle)
+        state = self._update_one_tentacle(state)
         # Handle collisions
         state = self._check_spear_shark_collision(state)
         state = self._check_spear_tentacle_collision(state)
@@ -1059,6 +1335,11 @@ class JaxNameThisGame(JaxEnvironment[NameThisGameState, NameThisGameObservation,
         state = self._update_oxygen(state)
         # Check round progression and update difficulty if needed
         state = self._update_round(state)
+        # Handle life loss & soft reset if we died this frame
+        state, game_over = self._check_and_consume_life(state)
+        # Compute observation, reward, done, and info
+        observation = self._get_observation(state)
+        done = game_over
         # Compute observation, reward, done, and info
         observation = self._get_observation(state)
         done = self._get_done(state)
