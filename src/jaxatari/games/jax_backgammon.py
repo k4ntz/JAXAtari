@@ -245,7 +245,7 @@ class JaxBackgammonEnv(JaxEnvironment[BackgammonState, jnp.ndarray, dict, Backga
             key=key
         )
 
-    def reset(self, key: jax.random.PRNGKey = None) -> Tuple[BackgammonObservation, BackgammonState]:
+    def reset(self, key: jax.random.PRNGKey = None) -> Tuple[jnp.ndarray, BackgammonState]:
         """Reset the environment with proper key handling."""
         if key is None:
             key = jax.random.PRNGKey(0)
@@ -253,7 +253,7 @@ class JaxBackgammonEnv(JaxEnvironment[BackgammonState, jnp.ndarray, dict, Backga
         state = self.init_state(key)
         dice, key = self.roll_dice(key)
         state = state._replace(dice=dice, key=key)
-        return self._get_observation(state)
+        return self._get_observation(state), state
 
     @staticmethod
     @jax.jit
