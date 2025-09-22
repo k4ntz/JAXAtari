@@ -189,7 +189,6 @@ class ChopperCommandState(NamedTuple):
     player_collision: chex.Array            # boolean flag indicating whether the player has collided this frame
     step_counter: chex.Array                # total number of game ticks/frames elapsed so far
     pause_timer: chex.Array                 # counter for how many frames remain in the game pause before respawning; 0 = fully dead, respawn initiated, 1 = either no lives left, infinite pause or ->, 1 - DEATH_PAUSE_FRAMES: counting down for the duration of pause, DEATH_PAUSE_FRAMES + 1 = death_pause, DEATH_PAUSE_FRAMES + 2 = no_move_pause
-    obs_stack: chex.ArrayTree               # stacked sequence of past observations (for frame‐stacking in the agent)
     rng_key: chex.PRNGKey                   # current PRNG key for any stochastic operations (e.g., random enemy spawns)
     difficulty: chex.Array                  # states the difficulty which can be either 1 or 2
     enemy_speed: chex.Array                 # states the speed of the enemies e.g. all enemies are killed
@@ -416,21 +415,21 @@ class JaxChopperCommand(JaxEnvironment[ChopperCommandState, ChopperCommandObserv
 
     def flatten_entity_position(self, entity: EntityPosition) -> jnp.ndarray:
         return jnp.concatenate([
-            jnp.array([entity.x], dtype=jnp.int32).flatten(),
-            jnp.array([entity.y], dtype=jnp.int32).flatten(),
-            jnp.array([entity.width], dtype=jnp.int32).flatten(),
-            jnp.array([entity.height], dtype=jnp.int32).flatten(),
-            jnp.array([entity.active], dtype=jnp.int32).flatten()
+            jnp.array([entity.x], dtype=jnp.int32),
+            jnp.array([entity.y], dtype=jnp.int32),
+            jnp.array([entity.width], dtype=jnp.int32),
+            jnp.array([entity.height], dtype=jnp.int32),
+            jnp.array([entity.active], dtype=jnp.int32)
         ])
 
     def flatten_player_entity(self, entity: PlayerEntity) -> jnp.ndarray:
         return jnp.concatenate([
-            jnp.array([entity.x], dtype=jnp.int32).flatten(),
-            jnp.array([entity.y], dtype=jnp.int32).flatten(),
-            jnp.array([entity.o], dtype=jnp.int32).flatten(),
-            jnp.array([entity.width], dtype=jnp.int32).flatten(),
-            jnp.array([entity.height], dtype=jnp.int32).flatten(),
-            jnp.array([entity.active], dtype=jnp.int32).flatten()
+            jnp.array([entity.x], dtype=jnp.int32),
+            jnp.array([entity.y], dtype=jnp.int32),
+            jnp.array([entity.o], dtype=jnp.int32),
+            jnp.array([entity.width], dtype=jnp.int32),
+            jnp.array([entity.height], dtype=jnp.int32),
+            jnp.array([entity.active], dtype=jnp.int32)
         ])
 
     @partial(jax.jit, static_argnums=(0,))
@@ -1637,19 +1636,11 @@ class JaxChopperCommand(JaxEnvironment[ChopperCommandState, ChopperCommandObserv
             step_counter=jnp.array(0).astype(jnp.int32),                                    # Frame counter starts from 0.
             pause_timer=jnp.array(self.consts.DEATH_PAUSE_FRAMES + 2).astype(jnp.int32),    # The game starts in the no_move_pause (DEATH_PAUSE_FRAMES + 2) to allow for visual startup or intro.
             rng_key=new_key0,                                                               # Pseudo random number generator seed key, based on current time and initial key used.
-            obs_stack=jnp.zeros((self.frame_stack_size, self.obs_size)),                    # Observation stack starts empty (zeros). Used for agent state.
             difficulty=jnp.array(self.consts.GAME_DIFFICULTY).astype(jnp.float32),          # difficulty of game
             enemy_speed=jnp.array(0).astype(jnp.float32),                                   # enemy_speed which is 0 on start
         )
 
         initial_obs = self._get_observation(reset_state)
-
-        def expand_and_copy(x):
-            x_expanded = jnp.expand_dims(x, axis=0)
-            return jnp.concatenate([x_expanded] * self.frame_stack_size, axis=0)
-
-        initial_obs = jax.tree.map(expand_and_copy, initial_obs)
-        reset_state = reset_state._replace(obs_stack=initial_obs)
         return initial_obs, reset_state
 
 
@@ -1963,19 +1954,14 @@ class JaxChopperCommand(JaxEnvironment[ChopperCommandState, ChopperCommandObserv
 
         # Obs/Reward/Done/Info + stack
         observation = self._get_observation(step_state)
+
         done        = self._get_done(step_state)
-        reward  = self._get_reward(prev, step_state)
+        env_reward  = self._get_reward(prev, step_state)
         all_rewards = self._get_all_rewards(prev, step_state)
         info        = self._get_info(step_state, all_rewards)
 
-        new_obs_stack = jax.tree.map(
-            lambda stack, o: jnp.concatenate([stack[1:], jnp.expand_dims(o, 0)], axis=0),
-            step_state.obs_stack, observation
-        )
-        step_state = step_state._replace(obs_stack=new_obs_stack)
-
         # Return matching your caller (obs, state, reward, done, info)
-        return new_obs_stack, step_state, reward, done, info
+        return observation, step_state, env_reward, done, info
 
 
 class ChopperCommandRenderer(JAXGameRenderer):
