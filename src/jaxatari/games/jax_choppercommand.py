@@ -27,6 +27,7 @@ class ChopperCommandConstants:
 
     WIDTH = 160
     HEIGHT = 210
+    HEIGHT_ONLY_PLAYING_FIELD = 192
     SCALING_FACTOR = 4
 
     # difficulty
@@ -146,7 +147,7 @@ class ChopperCommandConstants:
     MINIMAP_RENDER_TRUCK_REFRESH_RATE = 8 # Higher is slower (Does not fully work yet)
 
     DOWNSCALING_FACTOR_WIDTH = WIDTH // MINIMAP_WIDTH
-    DOWNSCALING_FACTOR_HEIGHT = HEIGHT // MINIMAP_HEIGHT
+    DOWNSCALING_FACTOR_HEIGHT = HEIGHT_ONLY_PLAYING_FIELD // MINIMAP_HEIGHT
 
     #Object rendering
     TRUCK_SPAWN_DISTANCE = 248 # distance 240px + truck width
@@ -886,7 +887,7 @@ class JaxChopperCommand(JaxEnvironment[ChopperCommandState, ChopperCommandObserv
         fleet_count = 4
         units_per_fleet = 3
         vertical_spacing = 30
-        y_start = self.consts.HEIGHT // 2 - (units_per_fleet // 2) * vertical_spacing
+        y_start = self.consts.HEIGHT_ONLY_PLAYING_FIELD // 2 - (units_per_fleet // 2) * vertical_spacing
 
         # RNG
         key0, key1, key2 = jax.random.split(init_rng, 3)
@@ -1980,7 +1981,7 @@ class ChopperCommandRenderer(JAXGameRenderer):
         static_center_x_truck = (self.consts.WIDTH // 2) + state.local_player_offset - (self.consts.TRUCK_SIZE[0] // 2)
 
         #Initialisierung
-        raster = jnp.zeros((self.consts.HEIGHT, self.consts.WIDTH,  3))
+        raster = jnp.zeros((self.consts.HEIGHT, self.consts.WIDTH, 3))
 
         # Render Background
         frame_idx = jnp.asarray(state.local_player_offset + (-state.player_x % self.consts.WIDTH), dtype=jnp.int32) #local_player_offset = ob Heli links oder rechts auf Bildschirm ist, -state.player_x % WIDTH = Scrollen vom Hintergrund
@@ -2456,7 +2457,7 @@ class ChopperCommandRenderer(JAXGameRenderer):
         raster = jru.render_at(
             raster,
             self.consts.MINIMAP_POSITION_X + (self.consts.MINIMAP_WIDTH - 32) // 2,
-            self.consts.HEIGHT - 7 - 1, #7 = Sprite Height 1=One pixel headroom
+            self.consts.HEIGHT_ONLY_PLAYING_FIELD - 7 - 1, #7 = Sprite Height 1=One pixel headroom
             MINIMAP_ACTIVISION_LOGO,
         )
 
