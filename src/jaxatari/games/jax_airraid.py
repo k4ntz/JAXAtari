@@ -896,7 +896,7 @@ class JaxAirRaid(JaxEnvironment[AirRaidState, AirRaidObservation, AirRaidInfo, A
         )
 
     @partial(jax.jit, static_argnums=(0,))
-    def _get_info(self, state: AirRaidState, all_rewards: chex.Array) -> AirRaidInfo:
+    def _get_info(self, state: AirRaidState, all_rewards: chex.Array = None) -> AirRaidInfo:
 
         return AirRaidInfo(time=state.step_counter, all_rewards=all_rewards)
 
