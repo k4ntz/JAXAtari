@@ -1196,8 +1196,8 @@ class FishingDerbyRenderer(JAXGameRenderer):
                                  jnp.array([[[255, 255, 255]]], dtype=jnp.uint8))
 
         # Draw scores
-        raster = self._render_score(raster, state.p1.display_score, 20, 10)
-        raster = self._render_score(raster, state.p2.display_score, cfg.SCREEN_WIDTH - 40, 10)
+        raster = self._render_score(raster, state.p1.display_score, 50, 10)
+        raster = self._render_score(raster, state.p2.display_score, 100, 10)
 
         return raster
 
