@@ -877,7 +877,6 @@ class FishingDerby(JaxEnvironment):
             # Reset hook state and fish activity when hook is reset
             p1_hook_state = jnp.where(reset_hook, 3, p1_hook_state)  # Set to auto-lowering state
             p1_hooked_fish_idx = jnp.where(reset_hook, -1, p1_hooked_fish_idx)  # Clear hooked fish
-            new_hook_x_offset = jnp.where(reset_hook, 0.0, new_hook_x_offset)
 
             # CRITICAL FIX: Reactivate the fish when it's scored/eaten by shark
             fish_active = jnp.where(
