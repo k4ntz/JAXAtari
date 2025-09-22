@@ -73,7 +73,7 @@ class WordZapperConstants(NamedTuple) :
     ZAPPER_SPR_HEIGHT = ZAPPER_SIZE[1] # we assume this max zapper height
     ZAPPING_BOUNDS = (LETTER_VISIBLE_MIN_X, LETTER_VISIBLE_MAX_X - ZAPPER_SPR_WIDTH) # min x, max x
     PLAYER_ZAPPER_COOLDOWN_TIME = 32 # amount letters stop moving and zapper is active
-    ZAPPER_BLOCK_TIME = 50 # dont allow zapper action during this time
+    ZAPPER_BLOCK_TIME = 40 # dont allow zapper action during this time
 
 
     # level
