@@ -26,6 +26,10 @@ class NameThisGameConfig:
     # Kraken location
     kraken_x: int = 16
     kraken_y: int = 63
+    # Boat (at the surface)
+    boat_width: int = 16             # used for bounds and oxygen drop alignment
+    boat_speed_px: int = 1            # pixels per movement
+    boat_move_every_n_frames: int = 4 # move once every N frames
     # Diver (player)
     diver_width: int = 16
     diver_height: int = 13
@@ -57,7 +61,10 @@ class NameThisGameConfig:
     oxygen_drop_min_interval: int = 240     # minimum frames between oxygen line drops
     oxygen_drop_max_interval: int = 480     # maximum frames between oxygen line drops
     oxygen_line_width: int = 1
-    oxygen_y = 57
+    oxygen_y: int = 57
+    oxygen_line_ttl_frames: int = 100
+    oxygen_contact_every_n_frames: int = 3
+    oxygen_contact_points: int = 25
     # Round progression
     round_clear_shark_resets: int = 3
     speed_increase_per_round_shark: int = 1
@@ -80,6 +87,11 @@ class NameThisGameState(NamedTuple):
     reward: chex.Array            # reward earned in last step (int32 or float)
     round: chex.Array             # current round index (int32)
     shark_resets_this_round: chex.Array  # how many times shark reset (shot) in the current round (int32)
+
+    # Boat
+    boat_x: chex.Array           # boat's left x position (int32)
+    boat_dx: chex.Array          # boat's horizontal direction/speed sign (-1 or +1) (int32)
+    boat_move_counter: chex.Array  # counts frames; boat moves when counter % N == 0 (int32)
 
     # Diver (player)
     diver_x: chex.Array           # diver's x position (int32)
@@ -109,6 +121,8 @@ class NameThisGameState(NamedTuple):
     oxygen_line_active: chex.Array       # whether oxygen line is currently dropped (bool)
     oxygen_line_x: chex.Array            # x position of the dropped oxygen line (int32)
     oxygen_drop_timer: chex.Array       # frames until next oxygen line drop (int32)
+    oxygen_line_ttl: chex.Array         # frames remaining while the line is active (int32)
+    oxygen_contact_counter: chex.Array  # counts consecutive contact frames with diver (int32)
 
     rng: chex.Array               # PRNG state (JAX key, shape (2,))
 
@@ -191,9 +205,25 @@ class Renderer_NameThisGame(JAXGameRenderer):
         if "background" in self.sprites:
             raster = aj.render_at(raster, 0, 0, self.sprites["background"])
 
-        #draw kraken (octopus)
+        # draw kraken (octopus)
         if "kraken" in self.sprites:
             raster = aj.render_at(raster, cfg.kraken_x, cfg.kraken_y, self.sprites["kraken"])
+
+        # draw boat at the surface (bottom of boat aligned to oxygen_y)
+        if "boat" in self.sprites:
+            boat_sprite = self.sprites["boat"]
+            boat_h = int(boat_sprite.shape[0])  # height in pixels
+        else:
+            boat_h = 8
+            boat_sprite = _solid_sprite(cfg.boat_width, boat_h, (200, 200, 200))
+
+        # pre-flip boat sprite based on direction; default sprite assumed facing right
+        def _flip(spr):  # horizontal mirror
+            return jnp.flip(spr, axis=1)
+
+        boat_y = jnp.maximum(0, cfg.oxygen_y - boat_h)
+        boat_flipped = jax.lax.cond(state.boat_dx < 0, _flip, lambda spr: spr, boat_sprite)
+        raster = aj.render_at(raster, state.boat_x, boat_y, boat_flipped)
 
         # Draw diver (only if alive)
         if "diver" in self.sprites:
@@ -334,6 +364,10 @@ class JaxNameThisGame(JaxEnvironment[NameThisGameState, NameThisGameObservation,
         cfg = self.config
         # Split PRNG for different initial randomizations
         key, sub_key_dir, sub_key_oxy, sub_key_phase = jax.random.split(key, 4)
+        # Boat starts centered, moving right
+        init_boat_x = jnp.array(cfg.screen_width // 2 - cfg.boat_width // 2, dtype=jnp.int32)
+        init_boat_dx = jnp.array(1, dtype=jnp.int32)   # +1 = right, -1 = left
+        init_boat_counter = jnp.array(0, dtype=jnp.int32)
         # Initial diver position
         init_diver_x = jnp.array(cfg.screen_width//2, dtype=jnp.int32)
         init_diver_y = jnp.array(cfg.diver_y_floor, dtype=jnp.int32)
@@ -369,6 +403,9 @@ class JaxNameThisGame(JaxEnvironment[NameThisGameState, NameThisGameObservation,
             reward=jnp.array(0, dtype=jnp.int32),
             round=jnp.array(0, dtype=jnp.int32),
             shark_resets_this_round=jnp.array(0, dtype=jnp.int32),
+            boat_x=init_boat_x,
+            boat_dx=init_boat_dx,
+            boat_move_counter=init_boat_counter,
             diver_x=init_diver_x,
             diver_y=init_diver_y,
             diver_alive=jnp.array(True, dtype=jnp.bool_),
@@ -388,6 +425,8 @@ class JaxNameThisGame(JaxEnvironment[NameThisGameState, NameThisGameObservation,
             oxygen_line_active=init_oxygen_line_active,
             oxygen_line_x=init_oxygen_line_x,
             oxygen_drop_timer=init_drop_timer,
+            oxygen_line_ttl=jnp.array(0, dtype=jnp.int32),  # <—
+            oxygen_contact_counter=jnp.array(0, dtype=jnp.int32),  # <—
             rng=key,  # carry the remaining RNG key
         )
         # Create initial observation from state
@@ -717,63 +756,117 @@ class JaxNameThisGame(JaxEnvironment[NameThisGameState, NameThisGameObservation,
         return state._replace(diver_alive=jnp.where(hazard, jnp.array(False, dtype=jnp.bool_), state.diver_alive))
 
     @partial(jax.jit, static_argnums=(0,))
+    def _move_boat(self, state: NameThisGameState) -> NameThisGameState:
+        cfg = self.config
+        counter = state.boat_move_counter + 1
+        move_now = (state.boat_move_counter % cfg.boat_move_every_n_frames) == 0
+
+        def _do_move(s: NameThisGameState) -> NameThisGameState:
+            new_x = s.boat_x + s.boat_dx * cfg.boat_speed_px
+
+            hit_left = new_x <= 0
+            hit_right = (new_x + cfg.boat_width) >= cfg.screen_width
+            hit_edge = hit_left | hit_right
+
+            # reflect direction on edge hit
+            new_dx = jnp.where(hit_edge, -s.boat_dx, s.boat_dx)
+
+            # clamp x inside bounds after move
+            clamped_x = jnp.where(
+                hit_left, 0,
+                jnp.where(hit_right, cfg.screen_width - cfg.boat_width, new_x)
+            )
+
+            return s._replace(boat_x=clamped_x, boat_dx=new_dx, boat_move_counter=counter)
+
+        # if not time to move, just bump the counter
+        return jax.lax.cond(move_now, _do_move, lambda s: s._replace(boat_move_counter=counter), state)
+
+    @partial(jax.jit, static_argnums=(0,))
     def _spawn_or_update_oxygen_line(self, state: NameThisGameState) -> NameThisGameState:
-        """Handle oxygen line drop timing and spawning from the boat."""
+        """Spawn under the boat when timer hits 0; keep it for TTL frames, following the boat;
+        when TTL expires, despawn and schedule the next drop."""
         cfg = self.config
         rng_line, rng_interval, rng_after = jax.random.split(state.rng, 3)
-        # Only drop new line if none active
         def _no_line(s: NameThisGameState) -> NameThisGameState:
-            # Decrement timer
             new_timer = jnp.maximum(s.oxygen_drop_timer - 1, 0)
-            # If timer reaches 0, spawn a new oxygen line
             def _spawn_line(st: NameThisGameState) -> NameThisGameState:
-                # Choose random x position for line drop (uniform across screen width)
-                new_x = jax.random.randint(rng_line, (), 0, cfg.screen_width, dtype=jnp.int32)
-                # Activate line, set drop timer to 0 (will reset on pickup)
-                return st._replace(oxygen_line_active=jnp.array(True, dtype=jnp.bool_), oxygen_line_x=new_x, oxygen_drop_timer=jnp.array(0, dtype=jnp.int32))
+                new_x = s.boat_x + (cfg.boat_width - cfg.oxygen_line_width) // 2
+                new_x = jnp.clip(new_x, 0, cfg.screen_width - cfg.oxygen_line_width).astype(jnp.int32)
+                return st._replace(
+                    oxygen_line_active=jnp.array(True, dtype=jnp.bool_),
+                    oxygen_line_x=new_x,
+                    oxygen_drop_timer=jnp.array(0, dtype=jnp.int32),
+                    oxygen_line_ttl=jnp.array(cfg.oxygen_line_ttl_frames, dtype=jnp.int32),
+                    oxygen_contact_counter=jnp.array(0, dtype=jnp.int32),
+                )
             def _no_spawn(st: NameThisGameState) -> NameThisGameState:
                 return st._replace(oxygen_drop_timer=new_timer)
             return jax.lax.cond(new_timer <= 0, _spawn_line, _no_spawn, s)
-        # If a line is currently active, do nothing (line stays until picked)
         def _line_active(s: NameThisGameState) -> NameThisGameState:
-            return s
+            # Follow boat horizontally and age TTL
+            new_x = s.boat_x + (cfg.boat_width - cfg.oxygen_line_width) // 2
+            new_x = jnp.clip(new_x, 0, cfg.screen_width - cfg.oxygen_line_width).astype(jnp.int32)
+            new_ttl = jnp.maximum(s.oxygen_line_ttl - 1, 0)
+            def _expire(st: NameThisGameState) -> NameThisGameState:
+                # Schedule next random interval on expiry
+                factor = cfg.oxygen_interval_multiplier_per_round ** (st.round.astype(jnp.float32))
+                min_int = (cfg.oxygen_drop_min_interval * factor).astype(jnp.int32)
+                max_int = (cfg.oxygen_drop_max_interval * factor).astype(jnp.int32)
+                next_timer = jax.random.randint(rng_interval, (), min_int, max_int + 1, dtype=jnp.int32)
+                return st._replace(
+                    oxygen_line_active=jnp.array(False, dtype=jnp.bool_),
+                    oxygen_line_x=jnp.array(-1, dtype=jnp.int32),
+                    oxygen_drop_timer=next_timer,
+                    oxygen_line_ttl=jnp.array(0, dtype=jnp.int32),
+                    oxygen_contact_counter=jnp.array(0, dtype=jnp.int32),
+                )
+            def _still(st: NameThisGameState) -> NameThisGameState:
+                return st._replace(oxygen_line_x=new_x, oxygen_line_ttl=new_ttl)
+            return jax.lax.cond(new_ttl <= 0, _expire, _still, s)
         state = jax.lax.cond(state.oxygen_line_active, _line_active, _no_line, state)
-        # Always advance RNG
-        state = state._replace(rng=rng_after)
-        return state
+        return state._replace(rng=rng_after)
 
     @partial(jax.jit, static_argnums=(0,))
     def _update_oxygen(self, state: NameThisGameState) -> NameThisGameState:
-        """Update oxygen supply: decrement each frame and refill if diver picks up the oxygen line."""
+        """While under the line: every N contact frames either refill to full, or if already full, add points.
+        Oxygen does not drain while under the line; otherwise it drains by 1 per frame."""
         cfg = self.config
-        rng_newtimer, rng_after = jax.random.split(state.rng, 2)
-        # Compute if diver is under the oxygen line (within pickup radius)
+        full_oxy = jnp.array(cfg.oxygen_full, dtype=jnp.int32)
+
+        # Is diver under the active oxygen line?
         diver_center = state.diver_x + (cfg.diver_width // 2)
         line_center = state.oxygen_line_x + (cfg.oxygen_line_width // 2)
         diver_under_line = state.oxygen_line_active & (jnp.abs(diver_center - line_center) <= cfg.oxygen_pickup_radius)
-        # Apply oxygen pickup if applicable
-        def _refill(s: NameThisGameState) -> NameThisGameState:
-            # Refill oxygen and deactivate line
-            full_oxy = jnp.array(cfg.oxygen_full, dtype=jnp.int32)
-            # Schedule next oxygen drop interval based on current round difficulty
-            factor = cfg.oxygen_interval_multiplier_per_round ** (s.round.astype(jnp.float32))
-            min_int = (cfg.oxygen_drop_min_interval * factor).astype(jnp.int32)
-            max_int = (cfg.oxygen_drop_max_interval * factor).astype(jnp.int32)
-            next_timer = jax.random.randint(rng_newtimer, (), min_int, max_int + 1, dtype=jnp.int32)
-            return s._replace(
-                oxygen_frames_remaining=full_oxy,
-                oxygen_line_active=jnp.array(False, dtype=jnp.bool_),
-                oxygen_line_x=jnp.array(-1, dtype=jnp.int32),
-                oxygen_drop_timer=next_timer
-            )
-        def _no_refill(s: NameThisGameState) -> NameThisGameState:
-            # Decrement oxygen if not already zero
-            new_oxy = jnp.maximum(s.oxygen_frames_remaining - 1, 0)
-            return s._replace(oxygen_frames_remaining=new_oxy)
-        state = jax.lax.cond(diver_under_line, _refill, _no_refill, state)
-        # Advance RNG regardless
-        state = state._replace(rng=rng_after)
-        return state
+
+        # Count consecutive contact frames; apply effect every K frames
+        cnt_next = jnp.where(diver_under_line, state.oxygen_contact_counter + 1, jnp.array(0, dtype=jnp.int32))
+        apply_effect = diver_under_line & ((cnt_next % cfg.oxygen_contact_every_n_frames) == 0)
+
+        oxygen_not_full = state.oxygen_frames_remaining < full_oxy
+        # Refill to full iff effect triggers and oxygen wasn't full
+        oxy_after_effect = jnp.where(apply_effect & oxygen_not_full, full_oxy, state.oxygen_frames_remaining)
+
+        # Award points iff effect triggers and oxygen already full
+        add_points = jnp.where(
+            apply_effect & (~oxygen_not_full),
+            jnp.array(cfg.oxygen_contact_points, dtype=jnp.int32),
+            jnp.array(0, dtype=jnp.int32),
+        )
+        new_score = state.score + add_points
+
+        # No drain while under the line; otherwise drain by 1
+        new_oxy = jnp.where(
+            diver_under_line,
+            oxy_after_effect,
+            jnp.maximum(oxy_after_effect - 1, 0),
+        )
+
+        return state._replace(
+            oxygen_frames_remaining=new_oxy,
+            oxygen_contact_counter=cnt_next,
+            score=new_score,
+        )
 
     @partial(jax.jit, static_argnums=(0,))
     def _update_round(self, state: NameThisGameState) -> NameThisGameState:
@@ -832,6 +925,8 @@ class JaxNameThisGame(JaxEnvironment[NameThisGameState, NameThisGameObservation,
         can_shoot = just_pressed & state.diver_alive
         # Spawn spear if allowed
         state = jax.lax.cond(can_shoot, lambda s: self._spawn_spear(s), lambda s: s, state)
+        # Move boat (every N frames, bounce at edges)
+        state = self._move_boat(state)
         # Handle oxygen line spawns
         state = self._spawn_or_update_oxygen_line(state)
         # Move spear
