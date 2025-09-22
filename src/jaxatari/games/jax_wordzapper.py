@@ -52,6 +52,7 @@ class WordZapperConstants(NamedTuple) :
     ENEMY_Y_MAX = 133
     ENEMY_ANIM_SWITCH_RATE = 2
     ENEMY_Y_MIN_SEPARATION = 16
+    ENEMY_VISIBLE_X = (8, 151) # (min, max)
 
     ENEMY_GAME_SPEED = 0.7
     LEVEL_PAUSE_FRAMES = 3 * 60
@@ -1768,9 +1769,23 @@ class WordZapperRenderer(JAXGameRenderer):
                 y = jnp.where(is_exploding, state.enemy_explosion_pos[i, 1], state.enemy_positions[i, 1])
                 enemy_type = state.enemy_positions[i, 2].astype(jnp.int32)
 
-                def render_explosion(rr):
+                def render_visible(r, sprite):
+                    sprite_h, sprite_w = sprite.shape[:2]
+                    sprite_xs = x + jnp.arange(sprite_w)
+
+                    x_mask = jnp.logical_and(
+                        sprite_xs >= self.consts.ENEMY_VISIBLE_X[0],
+                        sprite_xs <= self.consts.ENEMY_VISIBLE_X[1]
+                    ).astype(sprite.dtype)
+
+                    x_mask = x_mask[None, :, None]  # (1, W, 1)
+                    masked_sprite = sprite * x_mask
+
+                    return jr.render_at(r, x, y, masked_sprite)
+
+                def render_explosion(r):
                     idx = jnp.clip(explosion_frame - 1, 0, 3)
-                    return jr.render_at(rr, x, y, ENEMY_EXPLOSION_SPRITES[idx])
+                    return render_visible(r, ENEMY_EXPLOSION_SPRITES[idx])
 
                 raster_inner = jax.lax.cond(
                     explosion_frame > 0,
@@ -1779,8 +1794,8 @@ class WordZapperRenderer(JAXGameRenderer):
                         should_render_enemy,
                         lambda r: jax.lax.cond(
                             enemy_type == 0,
-                            lambda r: jr.render_at(r, x, y, frame_bonker),
-                            lambda r: jr.render_at(r, x, y, frame_zonker),
+                            lambda r: render_visible(r, frame_bonker),
+                            lambda r: render_visible(r, frame_zonker),
                             r
                         ),
                         lambda r: r,
@@ -1898,7 +1913,7 @@ class WordZapperRenderer(JAXGameRenderer):
             ras_final, _ = jax.lax.fori_loop(0, word_arr.shape[0], body_fn, carry0)
             return ras_final
 
-        def _draw_progress_word_fixed6(raster, word_arr, current_letter_index):
+        def _draw_progress_word(raster, word_arr, current_letter_index):
             # Always render 6 slots centered; revealed letters fill left->right
             GAP_PX = 10
             BASELINE_SHIFT = 22
@@ -1959,7 +1974,8 @@ class WordZapperRenderer(JAXGameRenderer):
             state.game_phase,
             [ 
                 lambda ras: _draw_word(ras, state.target_word), 
-                lambda ras: _draw_progress_word_fixed6(ras, state.target_word, state.current_letter_index),
+                lambda ras: _draw_progress_word(ras, state.target_word, state.current_letter_index),
+                lambda ras: ras
             ],
             raster,
         )
