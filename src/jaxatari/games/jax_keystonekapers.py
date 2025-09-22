@@ -42,31 +42,35 @@ class KeystoneKapersConstants(NamedTuple):
     # Screen dimensions - Match original Atari Keystone Kapers (250x160)
     TOTAL_SCREEN_WIDTH: int = 160   # Original Atari width
     TOTAL_SCREEN_HEIGHT: int = 250  # Original Atari height (much taller)
-    
-    # Game area dimensions (adjusted for bigger borders, especially bottom)
+
+    # Game area dimensions (includes minimap within the area)
     GAME_AREA_WIDTH: int = 152      # Slightly smaller for left border
-    GAME_AREA_HEIGHT: int = 190     # Reduced to make room for larger bottom border
-    
+    GAME_AREA_HEIGHT: int = 175     # Reduced to end right after minimap area
+
     # Border offsets to match original layout
     GAME_AREA_OFFSET_X: int = 8     # Left border (keep same)
-    GAME_AREA_OFFSET_Y: int = 25    # Top border (slightly bigger than before)
-    # Bottom border will be: 250 - 25 - 190 = 35 pixels (much bigger for minimap)
-    
+    GAME_AREA_OFFSET_Y: int = 30    # Top border (keep same)
+    # Bottom border will be: 250 - 30 - 175 = 45 pixels (bigger bottom border)
+
     # Legacy constants for compatibility
     SCREEN_WIDTH: int = 152         # Match game area
-    SCREEN_HEIGHT: int = 190        # Match game area
+    SCREEN_HEIGHT: int = 175        # Match game area
 
     # Building structure - 7 sections of horizontal scrolling
     BUILDING_SECTIONS: int = 7
     SECTION_WIDTH: int = 160  # Each section is one screen width
     TOTAL_BUILDING_WIDTH: int = 7 * 160  # 1120 pixels total width
 
-    # Floor positions (Y coordinates) - adjusted for 190 height game area  
-    FLOOR_1_Y: int = 165  # Ground floor (180 * 190/210 = 163, rounded to 165)
-    FLOOR_2_Y: int = 118  # Middle floor (130 * 190/210 = 118)
-    FLOOR_3_Y: int = 72   # Top floor (80 * 190/210 = 72)
-    ROOF_Y: int = 27      # Roof (30 * 190/210 = 27)
+    # Floor positions (Y coordinates) - shifted up further to eliminate blue gap above minimap
+    FLOOR_1_Y: int = 135  # Ground floor (was 140, shifted up by 5 more to close gap)
+    FLOOR_2_Y: int = 105   # Middle floor (was 100, shifted up by 5)
+    FLOOR_3_Y: int = 70   # Top floor (was 60, shifted up by 5)
+    ROOF_Y: int = 50      # Roof (was 19, shifted up by 4)
     FLOOR_HEIGHT: int = 20
+
+    # Minimap area configuration (at bottom of game area)
+    MINIMAP_HEIGHT: int = 20
+    MINIMAP_COLOR: tuple = (151, 151, 151)  # #979797 in RGB
 
     # Escalator positions (relative to each section, 2 per section)
     ESCALATOR_1_OFFSET: int = 40   # Left escalator in each section
@@ -1352,7 +1356,7 @@ class KeystoneKapersRenderer(JAXGameRenderer):
             (self.consts.TOTAL_SCREEN_HEIGHT, self.consts.TOTAL_SCREEN_WIDTH, 3),
             dtype=jnp.uint8
         )
-        
+
         # Create game area background
         game_area = jnp.ones(
             (self.consts.GAME_AREA_HEIGHT, self.consts.GAME_AREA_WIDTH, 3),
@@ -1531,10 +1535,19 @@ class KeystoneKapersRenderer(JAXGameRenderer):
         # Timer indicator (top right)
         game_area = draw_rectangle_simple(game_area, self.consts.GAME_AREA_WIDTH - 40, 10, 30, 8, ui_color)
 
-        # Camera position indicator (bottom)
+        # Camera position indicator (above minimap)
         camera_indicator_x = (state.camera_x / self.consts.TOTAL_BUILDING_WIDTH * self.consts.GAME_AREA_WIDTH)
-        game_area = draw_rectangle_simple(game_area, camera_indicator_x, self.consts.GAME_AREA_HEIGHT - 10, 20, 5,
+        game_area = draw_rectangle_simple(game_area, camera_indicator_x, self.consts.FLOOR_1_Y + self.consts.FLOOR_HEIGHT + 5, 20, 5,
                                         jnp.array([255, 255, 0], dtype=jnp.uint8))  # Yellow camera indicator
+
+        # Add minimap area right after floor 1 (eliminate blue gap)
+        minimap_y_start = self.consts.FLOOR_1_Y + self.consts.FLOOR_HEIGHT  # Position right after floor 1
+        minimap_color = jnp.array(self.consts.MINIMAP_COLOR, dtype=jnp.uint8)
+
+        # Draw minimap background directly in game area
+        game_area = draw_rectangle_simple(game_area, 0, minimap_y_start,
+                                        self.consts.GAME_AREA_WIDTH, self.consts.MINIMAP_HEIGHT,
+                                        minimap_color)
 
         # Place game area into the bordered frame at offset position
         frame = frame.at[
