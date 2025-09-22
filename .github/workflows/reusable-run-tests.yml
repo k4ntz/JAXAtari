@@ -70,14 +70,44 @@ jobs:
           pip install -e ".[gh_ci]"
         shell: bash
 
-      - name: Run tests
-        id: run_tests
+      - name: Run core and wrapper tests
+        id: core_wrapper_tests
         run: |
           set -o pipefail
           echo "Running tests for game: ${{ matrix.game }}"
 
           . .venv/bin/activate
-          pytest --game ${{ matrix.game }} --snapshot-warn-unused --tb=line -ra --color=yes 2>&1 | tee pytest_output_with_color.txt
+          pytest --game ${{ matrix.game }} --snapshot-warn-unused --tb=line -ra --color=yes tests/test_core_and_wrappers.py 2>&1 | tee pytest_output_with_color.txt
+        shell: bash
+
+      - name: Run env compatability tests
+        id: env_compat_tests
+        run: |
+          set -o pipefail
+          echo "Running tests for game: ${{ matrix.game }}"
+
+          . .venv/bin/activate
+          pytest --game ${{ matrix.game }} --snapshot-warn-unused --tb=line -ra --color=yes tests/test_environment_compatibility.py 2>&1 | tee -a pytest_output_with_color.txt
+        shell: bash
+
+      - name: Run funcenv adapter tests
+        id: funcenv_adapter_tests
+        run: |
+          set -o pipefail
+          echo "Running tests for game: ${{ matrix.game }}"
+
+          . .venv/bin/activate
+          pytest --game ${{ matrix.game }} --snapshot-warn-unused --tb=line -ra --color=yes tests/test_funcenv_adapter.py 2>&1 | tee -a pytest_output_with_color.txt
+        shell: bash
+
+      - name: Run spaces tests
+        id: spaces_tests
+        run: |
+          set -o pipefail
+          echo "Running tests for game: ${{ matrix.game }}"
+
+          . .venv/bin/activate
+          pytest --game ${{ matrix.game }} --snapshot-warn-unused --tb=line -ra --color=yes tests/test_spaces.py 2>&1 | tee -a pytest_output_with_color.txt
         shell: bash
 
       - name: Get pytest output
@@ -87,6 +117,19 @@ jobs:
           sed -r "s/\x1B\[[0-9;]*[mK]//g" pytest_output_with_color.txt > pytest_output_${{ matrix.game }}.txt
         shell: bash
 
+      - name: Determine overall test outcome
+        id: test_status
+        if: always()
+        run: |
+          if [[ "${{ steps.core_wrapper_tests.outcome }}" == "failure" || \
+                "${{ steps.env_compat_tests.outcome }}" == "failure" || \
+                "${{ steps.funcenv_adapter_tests.outcome }}" == "failure" || \
+                "${{ steps.spaces_tests.outcome }}" == "failure" ]]; then
+            echo "outcome=failure" >> $GITHUB_OUTPUT
+          else
+            echo "outcome=success" >> $GITHUB_OUTPUT
+          fi
+
       - uses: cloudposse/github-action-matrix-outputs-write@v1
         id: out
         if: always() && (github.event.pull_request.head.repo.full_name != github.repository)
@@ -94,8 +137,8 @@ jobs:
           matrix-step-name: ${{ github.job }}
           matrix-key: ${{ matrix.game }}
           outputs: |-
-            test_outcome: ${{ steps.run_tests.outcome }}
-      
+            test_outcome: ${{ steps.test_status.outputs.outcome }}
+
       - name: Upload report artifact
         if: always()
         uses: actions/upload-artifact@v4
