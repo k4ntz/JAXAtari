@@ -4,68 +4,143 @@ import jax
 import jax.numpy as jnp
 import chex
 from gymnax.environments import spaces
-from jaxatari.rendering import atraJaxis as aj
+from jaxatari.rendering import jax_rendering_utils as aj
 from jaxatari.environment import JaxEnvironment
+from jaxatari.renderers import JAXGameRenderer
 
-# Constants for authentic Atari 2600 Kaboom
+# Screen dimensions - MUST BE FIRST
 WIDTH = 160
 HEIGHT = 210
-MAX_BOMBS = 8  # Maximum number of active bombs per group
-MAX_STEPS = 20000  # Longer games with 8 bomb groups
+MAX_BOMBS = 8  # Maximum number of active bombs
+MAX_STEPS = 10000
 
-# Authentic Atari 2600 Bomb Group System (from manual)
+class KaboomConstants(NamedTuple):
+    # Screen dimensions
+    WIDTH: int = WIDTH
+    HEIGHT: int = HEIGHT
+    MAX_BOMBS: int = MAX_BOMBS
+    MAX_STEPS: int = MAX_STEPS
+
+    # Player (bucket) settings
+    BUCKET_WIDTH: int = 8
+    BUCKET_HEIGHT: int = 6
+    BUCKET_SPEED: int = 3
+
+# Bucket position constants
+BUCKET_START_X: int = WIDTH // 2
+BUCKET_START_Y: int = HEIGHT - 30
+
+# Bomber (mad bomber) settings
+BOMBER_WIDTH: int = 8
+BOMBER_HEIGHT: int = 8
+BOMBER_START_X: int = WIDTH // 2
+BOMBER_START_Y: int = 30
+BOMBER_MIN_X: int = 20
+BOMBER_MAX_X: int = WIDTH - 20
+BOMBER_SPEED: int = 2
+
+# Bomb settings
+BOMB_WIDTH: int = 4
+BOMB_HEIGHT: int = 4
+BOMB_SPEED_INITIAL: int = 1
+BOMB_SPEED_MAX: int = 4
+BOMB_SPEED_INCREMENT: float = 0.1
+
+# Game settings
+INITIAL_LIVES: int = 3
+POINTS_PER_CATCH: int = 10
+MAX_SCORE: int = 999999  # Maximum score as per original Atari Kaboom
+
+# Difficulty settings (Authentic Atari Kaboom)
+DIFFICULTY_NORMAL: int = 0  # Full-size buckets (b position)
+DIFFICULTY_ADVANCED: int = 1  # Half-size buckets (a position)
+
+# Bomb Group System (Authentic Atari Kaboom)
 BOMB_GROUPS = [
-    {"count": 10, "points": 1},   # Group 1: 10 bombs worth 1 point each
-    {"count": 20, "points": 2},   # Group 2: 20 bombs worth 2 points each  
-    {"count": 30, "points": 3},   # Group 3: 30 bombs worth 3 points each
-    {"count": 40, "points": 4},   # Group 4: 40 bombs worth 4 points each
-    {"count": 50, "points": 5},   # Group 5: 50 bombs worth 5 points each
-    {"count": 75, "points": 6},   # Group 6: 75 bombs worth 6 points each
-    {"count": 100, "points": 7},  # Group 7: 100 bombs worth 7 points each
-    {"count": 150, "points": 8},  # Group 8: 150 bombs worth 8 points each
+    # Group, NumBombs, PointValue, GroupTotal, CumulativeScore
+    (1, 10, 1, 10, 10),
+    (2, 20, 2, 40, 50),
+    (3, 30, 3, 90, 140),
+    (4, 40, 4, 160, 300),
+    (5, 50, 5, 250, 550),
+    (6, 75, 6, 450, 1000),
+    (7, 100, 7, 700, 1700),
+    (8, 150, 8, 1200, 2900)
 ]
 
-# Player (bucket) settings - authentic Atari dimensions
-BUCKET_WIDTH_NORMAL = 16  # Normal difficulty bucket width
-BUCKET_WIDTH_ADVANCED = 8  # Advanced difficulty bucket width (smaller)
-BUCKET_HEIGHT = 8
+# Extract convenient lookup arrays
+GROUP_BOMB_COUNTS = jnp.array([group[1] for group in BOMB_GROUPS])  # [10, 20, 30, ...]
+GROUP_POINT_VALUES = jnp.array([group[2] for group in BOMB_GROUPS])  # [1, 2, 3, ...]
+GROUP_CUMULATIVE_SCORES = jnp.array([group[4] for group in BOMB_GROUPS])  # [10, 50, 140, ...]
+
+# Speed multipliers for each group (authentic Atari progression)
+GROUP_SPEED_MULTIPLIERS = jnp.array([1.0, 1.1, 1.25, 1.4, 1.6, 1.8, 2.0, 2.0])
+
+# Colors
+BACKGROUND_COLOR: Tuple[int, int, int] = (0, 0, 0)
+BUCKET_COLOR: Tuple[int, int, int] = (255, 255, 0)  # Yellow
+BOMBER_COLOR: Tuple[int, int, int] = (255, 0, 0)    # Red
+BOMB_COLOR: Tuple[int, int, int] = (255, 165, 0)    # Orange
+TEXT_COLOR: Tuple[int, int, int] = (255, 255, 255)  # White
+
+# Action constants
+NOOP: int = 0
+FIRE: int = 1
+RIGHT: int = 2
+LEFT: int = 3
+RIGHTFIRE: int = 4
+LEFTFIRE: int = 5
+
+# Constants for game environment
+WIDTH = 160
+HEIGHT = 210
+MAX_BOMBS = 8  # Maximum number of active bombs
+MAX_STEPS = 10000
+
+# Player (bucket) settings
+BUCKET_WIDTH = 8
+BUCKET_HEIGHT = 6
 BUCKET_START_X = WIDTH // 2
-BUCKET_START_Y = HEIGHT - 20
-BUCKET_SPEED = 3
+BUCKET_START_Y = HEIGHT - 30  # Changed from HEIGHT - 70 to HEIGHT - 30
+BUCKET_SPEED = 4
 
 # Bomber (mad bomber) settings
 BOMBER_WIDTH = 8
 BOMBER_HEIGHT = 8
 BOMBER_START_X = WIDTH // 2
-BOMBER_START_Y = 25
-BOMBER_MIN_X = 15
-BOMBER_MAX_X = WIDTH - 15
-BOMBER_SPEED = 1
+BOMBER_START_Y = 30
+BOMBER_MIN_X = 20
+BOMBER_MAX_X = WIDTH - 20
+BOMBER_SPEED = 2
 
-# Bomb settings - authentic Atari timing
+# Bomb settings
 BOMB_WIDTH = 4
-BOMB_HEIGHT = 6
-BOMB_SPEED = 2
-BOMB_DROP_TIMING_SLOW = 12  # Initial timing - every 12 frames
-BOMB_DROP_TIMING_FAST = 3   # Final timing - every 3 frames
+BOMB_HEIGHT = 4
+BOMB_SPEED_INITIAL = 3  # Authentic Atari speed (3 pixels per frame)
+BOMB_SPEED_MAX = 6  # Maximum speed in later groups
+BOMB_SPEED_INCREMENT = 0.1  # Speed increases as game progresses
 
 # Game settings
 INITIAL_LIVES = 3
+POINTS_PER_CATCH = 10
+GROUP_TRANSITION_PAUSE = 120  # Frames to pause when advancing to next group (2 seconds at 60fps)
 
-# Colors - simple colored rectangles as requested
-BACKGROUND_COLOR = (0, 0, 0)      # Black
-BUCKET_COLOR = (255, 255, 0)      # Yellow
-BOMBER_COLOR = (255, 0, 0)        # Red  
-BOMB_COLOR = (255, 165, 0)        # Orange
-TEXT_COLOR = (255, 255, 255)      # White
+# Colors
+BACKGROUND_COLOR = (0, 0, 0)
+BUCKET_COLOR = (255, 255, 0)  # Yellow
+BOMBER_COLOR = (255, 0, 0)    # Red
+BOMB_COLOR = (255, 165, 0)    # Orange
+TEXT_COLOR = (255, 255, 255)  # White
 
-# Action constants
+# Action constants (using JAXAtari standard)
 NOOP = 0
 FIRE = 1
-RIGHT = 2
-LEFT = 3
-RIGHTFIRE = 4
-LEFTFIRE = 5
+UP = 2
+RIGHT = 3
+LEFT = 4
+DOWN = 5
+RIGHTFIRE = 11
+LEFTFIRE = 12
 
 # State translator for debugging and visualization
 STATE_TRANSLATOR: Dict[int, str] = {
@@ -88,20 +163,8 @@ for i in range(MAX_BOMBS):
     STATE_TRANSLATOR[base_idx + 2] = f"bomb_{i}_y"
     STATE_TRANSLATOR[base_idx + 3] = f"bomb_{i}_speed"
 
-# Bomb group constants
-BOMB_GROUPS = [
-    {"count": 10, "points": 1, "drop_interval": 25, "speed_multiplier": 1.0},    # Group 1: 10 bombs, 1 point each
-    {"count": 20, "points": 2, "drop_interval": 22, "speed_multiplier": 1.2},    # Group 2: 20 bombs, 2 points each
-    {"count": 30, "points": 3, "drop_interval": 19, "speed_multiplier": 1.4},    # Group 3: 30 bombs, 3 points each
-    {"count": 40, "points": 4, "drop_interval": 17, "speed_multiplier": 1.6},    # Group 4: 40 bombs, 4 points each
-    {"count": 50, "points": 5, "drop_interval": 15, "speed_multiplier": 1.8},    # Group 5: 50 bombs, 5 points each
-    {"count": 75, "points": 6, "drop_interval": 13, "speed_multiplier": 2.0},    # Group 6: 75 bombs, 6 points each
-    {"count": 100, "points": 7, "drop_interval": 11, "speed_multiplier": 2.2},   # Group 7: 100 bombs, 7 points each
-    {"count": 150, "points": 8, "drop_interval": 9, "speed_multiplier": 2.5},    # Group 8: 150 bombs, 8 points each
-]
-
 # Calculate cumulative bombs to reach each group
-BOMB_GROUP_THRESHOLDS = jnp.array([0] + [sum(group["count"] for group in BOMB_GROUPS[:i]) for i in range(1, len(BOMB_GROUPS) + 1)])
+BOMB_GROUP_THRESHOLDS = jnp.array([0] + [sum(GROUP_BOMB_COUNTS[:i]) for i in range(1, len(GROUP_BOMB_COUNTS) + 1)])
 
 # Immutable state container
 class KaboomState(NamedTuple):
@@ -121,6 +184,8 @@ class KaboomState(NamedTuple):
     bombs_caught: chex.Array      # Total bombs caught
     bomb_group: chex.Array        # Current bomb group (0-7)
     bombs_in_group: chex.Array    # Bombs caught in current group
+    difficulty: chex.Array        # Difficulty setting (0=normal, 1=advanced)
+    group_transition_timer: chex.Array  # Timer for group transition pause
 
 class EntityPosition(NamedTuple):
     x: jnp.ndarray
@@ -233,25 +298,20 @@ def drop_bomb(
     will_drop = jnp.logical_and(should_drop, can_drop)
     
     # Create arrays of drop intervals and speed multipliers from BOMB_GROUPS
-    # This is JAX-friendly - avoiding direct indexing with traced values
-    drop_intervals = jnp.array([group["drop_interval"] for group in BOMB_GROUPS])
-    speed_multipliers = jnp.array([group["speed_multiplier"] for group in BOMB_GROUPS])
-    
+    # Calculate bomb speed and drop timer based on current bomb group
     # Use safe indexing with jnp.clip to ensure we stay within bounds
-    safe_group_idx = jnp.clip(bomb_group, 0, len(BOMB_GROUPS) - 1)
+    safe_group_idx = jnp.clip(bomb_group, 0, len(GROUP_SPEED_MULTIPLIERS) - 1)
     
-    # Get the drop interval and speed multiplier using JAX indexing
-    current_drop_interval = jnp.where(
-        bomb_group < len(BOMB_GROUPS),
-        drop_intervals[safe_group_idx],
-        drop_intervals[-1]  # Last group for higher groups
-    )
-    
+    # Get the speed multiplier for current bomb group
     current_speed_multiplier = jnp.where(
-        bomb_group < len(BOMB_GROUPS),
-        speed_multipliers[safe_group_idx],
-        speed_multipliers[-1]  # Last group for higher groups
+        bomb_group < len(GROUP_SPEED_MULTIPLIERS),
+        GROUP_SPEED_MULTIPLIERS[safe_group_idx],
+        GROUP_SPEED_MULTIPLIERS[-1]  # Max speed (Group 8) for higher groups
     )
+    
+    # Calculate drop interval - faster dropping as groups advance
+    # Authentic Atari Kaboom speeds: Start with 12 frames, reduce by 1 frame per group (minimum 3 frames)
+    current_drop_interval = jnp.maximum(12 - bomb_group, 3)
     
     # Reset timer if dropping
     new_drop_timer = jnp.where(
@@ -298,6 +358,7 @@ def update_bombs(
     bombs_caught: chex.Array,
     bomb_group: chex.Array,
     bombs_in_group: chex.Array,
+    difficulty: chex.Array,
 ) -> Tuple[chex.Array, chex.Array, chex.Array, chex.Array, chex.Array, chex.Array, chex.Array, chex.Array, chex.Array, chex.Array]:
     """Update positions of active bombs and check for catches/misses."""
     
@@ -308,50 +369,48 @@ def update_bombs(
         bomb_y
     )
     
-    # Common bucket properties for all buckets (same width and horizontal position)
+    # Calculate effective bucket width based on difficulty
+    # Normal difficulty (0): full-size buckets, Advanced difficulty (1): half-size buckets
+    effective_bucket_width = jnp.where(
+        difficulty == DIFFICULTY_ADVANCED,
+        BUCKET_WIDTH // 2,  # Half-size for advanced
+        BUCKET_WIDTH        # Full-size for normal
+    )
+    
+    # Common bucket properties for all buckets
     bucket_left = bucket_x
-    bucket_right = bucket_x + BUCKET_WIDTH
+    bucket_right = bucket_x + effective_bucket_width
     
     # Initialize a tensor to track if each bomb is caught by any bucket
     caught = jnp.zeros_like(bomb_active, dtype=jnp.bool_)
     
     # Check for catches with each visible bucket (player bucket + extra life buckets)
     def check_bucket_collision(bucket_index, caught_bombs):
-        # Calculate the Y position of this bucket
-        # bucket_index 0 = player bucket, 1 = first extra bucket, 2 = second extra bucket
-        spacing = 5
-        
-        # For player bucket (index 0), use BUCKET_START_Y
-        # For life buckets (1 and 2), calculate position below player bucket
-        is_player_bucket = bucket_index == 0
-        
-        bucket_top = jnp.where(
-            is_player_bucket,
-            BUCKET_START_Y,
-            BUCKET_START_Y + BUCKET_HEIGHT + spacing + ((bucket_index - 1) * (BUCKET_HEIGHT + spacing))
-        )
-        
-        bucket_bottom = bucket_top + BUCKET_HEIGHT
-        
+        # Simplified: Only check the main player bucket (index 0)
+        if bucket_index != 0:
+            return caught_bombs
+            
         # Only check collision if this bucket should be visible
-        # Player bucket (0) is visible if lives >= 1
-        # First extra bucket (1) is visible if lives >= 2
-        # Second extra bucket (2) is visible if lives >= 3
         bucket_visible = bucket_index < lives
         
-        # Check collision with this bucket
+        # Simple collision check for player bucket at main position
+        bucket_top = BUCKET_START_Y
+        bucket_bottom = bucket_top + BUCKET_HEIGHT
+        
+        # Check collision with this bucket - make it more forgiving
+        bomb_in_bucket_x = jnp.logical_and(
+            bomb_x + BOMB_WIDTH >= bucket_left - 5,  # More forgiving left edge
+            bomb_x <= bucket_right + 5               # More forgiving right edge
+        )
+        
+        bomb_in_bucket_y = jnp.logical_and(
+            new_bomb_y + BOMB_HEIGHT >= bucket_top - 3,  # More forgiving top
+            new_bomb_y <= bucket_bottom + 3              # More forgiving bottom
+        )
+        
         bucket_collision = jnp.logical_and(
             bomb_active == 1,
-            jnp.logical_and(
-                jnp.logical_and(
-                    new_bomb_y + BOMB_HEIGHT >= bucket_top,
-                    new_bomb_y <= bucket_bottom
-                ),
-                jnp.logical_and(
-                    bomb_x + BOMB_WIDTH >= bucket_left,
-                    bomb_x <= bucket_right
-                )
-            )
+            jnp.logical_and(bomb_in_bucket_x, bomb_in_bucket_y)
         )
         
         # Only count catches for buckets that should be visible
@@ -360,8 +419,8 @@ def update_bombs(
         # Update the caught bombs array
         return jnp.logical_or(caught_bombs, valid_catches)
     
-    # Check collisions with all possible buckets (player + up to 2 life buckets)
-    caught = jax.lax.fori_loop(0, INITIAL_LIVES, check_bucket_collision, caught)
+    # Check collisions with player bucket only (simplified)
+    caught = check_bucket_collision(0, caught)
     
     # Check for misses - bombs that fall off screen
     missed = jnp.logical_and(
@@ -369,36 +428,38 @@ def update_bombs(
         new_bomb_y > HEIGHT
     )
     
-    # Update bomb active status (deactivate caught or missed bombs)
+    # Authentic Kaboom mechanic: if any bomb is missed, ALL bombs explode and player loses a life
+    any_bomb_missed = jnp.any(missed)
+    
+    # When a bomb is missed, all active bombs explode (deactivated)
     new_bomb_active = jnp.where(
-        jnp.logical_or(caught, missed),
-        0,
-        bomb_active
+        any_bomb_missed,
+        jnp.zeros_like(bomb_active),  # All bombs explode
+        jnp.where(caught, 0, bomb_active)  # Only caught bombs deactivated if no miss
     )
+    
+    # Update lives - lose one life if any bomb was missed
+    new_lives = jnp.where(any_bomb_missed, lives - 1, lives)
     
     # Get number of bombs caught this step
     catches = jnp.sum(caught)
     
-    # Create arrays of point values and bomb counts from BOMB_GROUPS
-    # This is JAX-friendly - avoiding direct indexing with traced values
-    points_per_group = jnp.array([group["points"] for group in BOMB_GROUPS])
-    count_per_group = jnp.array([group["count"] for group in BOMB_GROUPS])
-    
-    # Use safe indexing with jnp.clip to ensure we stay within bounds
-    safe_group_idx = jnp.clip(bomb_group, 0, len(BOMB_GROUPS) - 1)
+    # Use our pre-defined JAX arrays for bomb group data
+    # Safe indexing with jnp.clip to ensure we stay within bounds
+    safe_group_idx = jnp.clip(bomb_group, 0, len(GROUP_POINT_VALUES) - 1)
     
     # Calculate current points per bomb based on group
     current_points_per_bomb = jnp.where(
-        bomb_group < len(BOMB_GROUPS),
-        points_per_group[safe_group_idx],
-        points_per_group[-1]  # Max points for groups beyond the defined ones
+        bomb_group < len(GROUP_POINT_VALUES),
+        GROUP_POINT_VALUES[safe_group_idx],
+        GROUP_POINT_VALUES[-1]  # Max points (8) for groups beyond the defined ones
     )
     
     # Calculate points earned this step
     points_earned = catches * current_points_per_bomb
     
-    # Update score
-    new_score = score + points_earned
+    # Update score with maximum cap (999,999 points)
+    new_score = jnp.minimum(score + points_earned, MAX_SCORE)
     
     # Update bombs caught
     new_bombs_caught = bombs_caught + catches
@@ -408,8 +469,8 @@ def update_bombs(
     
     # Check if we should advance to next bomb group
     current_group_bomb_limit = jnp.where(
-        bomb_group < len(BOMB_GROUPS),
-        count_per_group[safe_group_idx],
+        bomb_group < len(GROUP_BOMB_COUNTS),
+        GROUP_BOMB_COUNTS[safe_group_idx],
         jnp.inf  # No limit for the final group
     )
     
@@ -429,13 +490,16 @@ def update_bombs(
         new_bombs_in_group
     )
     
-    # Update lives based on misses
-    misses = jnp.sum(missed)
-    new_lives = lives - misses
+    # Set group transition timer when advancing to create a pause
+    new_group_transition_timer = jnp.where(
+        advance_group,
+        GROUP_TRANSITION_PAUSE,
+        0  # No timer if not advancing
+    )
     
-    # If any bomb was missed, reset scoring to beginning of current group
-    # This matches the original game behavior
-    any_missed = misses > 0
+    # Authentic Kaboom mechanic: missing any bomb causes loss of exactly one life
+    # (already handled above in bomb explosion logic)
+    # new_lives was already calculated when any_bomb_missed was detected
     
     # Update level based on score milestones
     new_level = jnp.floor(new_score / 100) + 1
@@ -450,7 +514,8 @@ def update_bombs(
         new_level, 
         new_bombs_caught, 
         new_bomb_group, 
-        new_bombs_in_group
+        new_bombs_in_group,
+        new_group_transition_timer
     )
 
 @jax.jit
@@ -472,10 +537,10 @@ def step_fn(key: chex.PRNGKey, state: KaboomState, action: chex.Array) -> Tuple[
     )
     
     # Update all active bombs and check for catches/misses
-    new_bomb_active, new_bomb_x, new_bomb_y, new_bomb_speed, new_score, new_lives, new_level, new_bombs_caught, new_bomb_group, new_bombs_in_group = update_bombs(
+    new_bomb_active, new_bomb_x, new_bomb_y, new_bomb_speed, new_score, new_lives, new_level, new_bombs_caught, new_bomb_group, new_bombs_in_group, new_group_transition_timer = update_bombs(
         new_bomb_active, new_bomb_x, new_bomb_y, new_bomb_speed,
         new_bucket_x, state.score, state.lives, state.level,
-        state.bombs_caught, state.bomb_group, state.bombs_in_group
+        state.bombs_caught, state.bomb_group, state.bombs_in_group, state.difficulty
     )
     
     # Calculate reward (points gained in this step)
@@ -501,7 +566,9 @@ def step_fn(key: chex.PRNGKey, state: KaboomState, action: chex.Array) -> Tuple[
         obs_stack=state.obs_stack,  # Will be updated in the environment class
         bombs_caught=new_bombs_caught,
         bomb_group=new_bomb_group,
-        bombs_in_group=new_bombs_in_group
+        bombs_in_group=new_bombs_in_group,
+        difficulty=state.difficulty,  # Difficulty doesn't change during gameplay
+        group_transition_timer=new_group_transition_timer
     )
     
     # Create info struct
@@ -545,20 +612,23 @@ def reset_fn(key: chex.PRNGKey) -> KaboomState:
         bomb_x=bomb_x,
         bomb_y=bomb_y,
         bomb_speed=bomb_speed,
-        drop_timer=jnp.array(BOMB_GROUPS[0]["drop_interval"], dtype=jnp.int32),  # Initial timer based on group 1
+        drop_timer=jnp.array(12, dtype=jnp.int32),  # Authentic Atari initial drop speed
         obs_stack=None,  # Will be initialized in the environment class
         bombs_caught=jnp.array(0, dtype=jnp.int32),
         bomb_group=jnp.array(0, dtype=jnp.int32),  # Start at group 0 (first group)
-        bombs_in_group=jnp.array(0, dtype=jnp.int32)  # Start with 0 bombs in group
+        bombs_in_group=jnp.array(0, dtype=jnp.int32),  # Start with 0 bombs caught in current group
+        difficulty=jnp.array(DIFFICULTY_NORMAL, dtype=jnp.int32),  # Start with normal difficulty
+        group_transition_timer=jnp.array(0, dtype=jnp.int32)  # Timer for group transition pause
     )
     
     return state
 
-class JaxKaboom(JaxEnvironment[KaboomState, KaboomObservation, KaboomInfo]):
+class JaxKaboom(JaxEnvironment[KaboomState, KaboomObservation, KaboomInfo, KaboomConstants]):
     """JAX implementation of the Kaboom game environment."""
     
-    def __init__(self):
-        super().__init__()
+    def __init__(self, consts: KaboomConstants = None):
+        consts = consts or KaboomConstants()
+        super().__init__(consts)
     
     @property
     def default_state(self) -> KaboomState:
@@ -577,14 +647,38 @@ class JaxKaboom(JaxEnvironment[KaboomState, KaboomObservation, KaboomInfo]):
         key, subkey = jax.random.split(key)
         next_state = reset_fn(subkey)
         return key, next_state
+
+    def reset(self, key: chex.PRNGKey = None) -> Tuple[KaboomObservation, KaboomState]:
+        """Reset the environment to initial state."""
+        if key is None:
+            key = jax.random.PRNGKey(0)
+        # Use the provided key directly
+        reset_key, state = self.reset_env(key)
+        obs = self.get_obs(state)
+        return obs, state
+
+    def step(self, state: KaboomState, action: chex.Array) -> Tuple[KaboomObservation, KaboomState, float, bool, KaboomInfo]:
+        """Take a step in the environment."""
+        # Use the step counter as a simple way to generate unique keys
+        step_key = jax.random.PRNGKey(state.step_counter)
+        step_key, next_state, reward, done, info = self.step_env(step_key, state, action)
+        obs = self.get_obs(next_state)
+        return obs, next_state, reward, done, info
     
     def get_obs(self, state: KaboomState) -> KaboomObservation:
         """Get observation from state."""
+        # Calculate effective bucket width based on difficulty
+        effective_bucket_width = jnp.where(
+            state.difficulty == DIFFICULTY_ADVANCED,
+            BUCKET_WIDTH // 2,  # Half-size for advanced
+            BUCKET_WIDTH        # Full-size for normal
+        )
+        
         # Convert state to observation
         bucket = EntityPosition(
             x=state.bucket_x,
             y=jnp.array(BUCKET_START_Y, dtype=jnp.float32),
-            width=jnp.array(BUCKET_WIDTH, dtype=jnp.float32),
+            width=effective_bucket_width,
             height=jnp.array(BUCKET_HEIGHT, dtype=jnp.float32)
         )
         
@@ -635,70 +729,7 @@ class JaxKaboom(JaxEnvironment[KaboomState, KaboomObservation, KaboomInfo]):
 
     def render(self, state: KaboomState) -> jnp.ndarray:
         """Render the current state as an RGB array."""
-        # Create empty frame
-        frame = jnp.zeros((HEIGHT, WIDTH, 3), dtype=jnp.uint8)
-        
-        # Draw bucket
-        bucket_slice = jax.lax.dynamic_slice(
-            frame,
-            (int(BUCKET_START_Y), int(state.bucket_x), 0),
-            (BUCKET_HEIGHT, BUCKET_WIDTH, 3)
-        )
-        bucket_color = jnp.array(BUCKET_COLOR, dtype=jnp.uint8)
-        bucket_colored = jnp.ones_like(bucket_slice) * bucket_color
-        frame = frame.at[
-            BUCKET_START_Y:BUCKET_START_Y+BUCKET_HEIGHT,
-            int(state.bucket_x):int(state.bucket_x)+BUCKET_WIDTH
-        ].set(bucket_colored)
-        
-        # Draw bomber
-        bomber_slice = jax.lax.dynamic_slice(
-            frame,
-            (BOMBER_START_Y, int(state.bomber_x), 0),
-            (BOMBER_HEIGHT, BOMBER_WIDTH, 3)
-        )
-        bomber_color = jnp.array(BOMBER_COLOR, dtype=jnp.uint8)
-        bomber_colored = jnp.ones_like(bomber_slice) * bomber_color
-        frame = frame.at[
-            BOMBER_START_Y:BOMBER_START_Y+BOMBER_HEIGHT,
-            int(state.bomber_x):int(state.bomber_x)+BOMBER_WIDTH
-        ].set(bomber_colored)
-        
-        # Draw active bombs
-        def draw_bomb(frame, i):
-            is_active = state.bomb_active[i] == 1
-            bomb_x = int(state.bomb_x[i])
-            bomb_y = int(state.bomb_y[i])
-            
-            # Only draw if bomb is active and within screen bounds
-            valid_coords = (
-                is_active &
-                (bomb_x >= 0) &
-                (bomb_x + BOMB_WIDTH <= WIDTH) &
-                (bomb_y >= 0) &
-                (bomb_y + BOMB_HEIGHT <= HEIGHT)
-            )
-            
-            # Use lax.cond for conditional rendering
-            frame = jax.lax.cond(
-                valid_coords,
-                lambda f: f.at[
-                    bomb_y:bomb_y+BOMB_HEIGHT,
-                    bomb_x:bomb_x+BOMB_WIDTH
-                ].set(jnp.ones((BOMB_HEIGHT, BOMB_WIDTH, 3), dtype=jnp.uint8) * jnp.array(BOMB_COLOR, dtype=jnp.uint8)),
-                lambda f: f,
-                frame
-            )
-            
-            return frame
-        
-        # Draw all bombs using fori_loop instead of python for-loop
-        frame = jax.lax.fori_loop(0, MAX_BOMBS, lambda i, f: draw_bomb(f, i), frame)
-        
-        # Draw score and lives (simplified - would be enhanced in a real implementation)
-        # In a complete implementation, you would render text for score, lives, and level
-        
-        return frame
+        return render_frame(state)
 
 @jax.jit
 def render_frame(state: KaboomState) -> jnp.ndarray:
@@ -710,13 +741,13 @@ def render_frame(state: KaboomState) -> jnp.ndarray:
     bucket_x = state.bucket_x.astype(jnp.int32)
     bucket_y = BUCKET_START_Y
     
-    # Create a colored rectangle for the bucket
+    # Draw bucket using colored rectangle
     bucket_rect = jnp.ones((BUCKET_HEIGHT, BUCKET_WIDTH, 3), dtype=jnp.uint8) * jnp.array(BUCKET_COLOR, dtype=jnp.uint8)
     
     # Use dynamic_update_slice to place the bucket on the frame
     frame = jax.lax.dynamic_update_slice(frame, bucket_rect, (bucket_y, bucket_x, 0))
     
-    # Draw bomber using dynamic_update_slice
+    # Draw bomber using colored rectangle
     bomber_x = state.bomber_x.astype(jnp.int32)
     bomber_y = BOMBER_START_Y
     
@@ -726,14 +757,26 @@ def render_frame(state: KaboomState) -> jnp.ndarray:
     # Use dynamic_update_slice to place the bomber on the frame
     frame = jax.lax.dynamic_update_slice(frame, bomber_rect, (bomber_y, bomber_x, 0))
     
-    # Draw bombs using fori_loop and dynamic_update_slice
+    # Draw bombs using fori_loop and dynamic_update_slice with sprite animation
     def draw_bomb(i, f):
         bomb_x = state.bomb_x[i].astype(jnp.int32)
         bomb_y = state.bomb_y[i].astype(jnp.int32)
         is_active = state.bomb_active[i] == 1
         
-        # Create colored rectangle for the bomb
-        bomb_rect = jnp.ones((BOMB_HEIGHT, BOMB_WIDTH, 3), dtype=jnp.uint8) * jnp.array(BOMB_COLOR, dtype=jnp.uint8)
+        # Animate between bomb0 and bomb1 sprites based on position
+        # Use bomb_y to determine which sprite to show for animation
+        use_bomb1 = (bomb_y // 8) % 2 == 1  # Switch every 8 pixels
+        
+        # Create colored rectangle for bombs
+        # For active bomb types, we use the same color but could differentiate in the future
+        bomb_sprite_1 = jnp.ones((BOMB_HEIGHT, BOMB_WIDTH, 3), dtype=jnp.uint8) * jnp.array(BOMB_COLOR, dtype=jnp.uint8)
+        bomb_sprite_0 = jnp.ones((BOMB_HEIGHT, BOMB_WIDTH, 3), dtype=jnp.uint8) * jnp.array(BOMB_COLOR, dtype=jnp.uint8)
+        
+        bomb_sprite = jax.lax.cond(
+            use_bomb1,
+            lambda: bomb_sprite_1,
+            lambda: bomb_sprite_0
+        )
         
         # Only draw if bomb is active and within screen bounds
         valid_coords = (
@@ -747,7 +790,7 @@ def render_frame(state: KaboomState) -> jnp.ndarray:
         # Use lax.cond for conditional rendering
         f = jax.lax.cond(
             valid_coords,
-            lambda _: jax.lax.dynamic_update_slice(f, bomb_rect, (bomb_y, bomb_x, 0)),
+            lambda _: jax.lax.dynamic_update_slice(f, bomb_sprite, (bomb_y, bomb_x, 0)),
             lambda _: f,
             operand=None
         )
@@ -835,7 +878,7 @@ def display_game(screen, state, fps_clock=None):
     
     # Add bomb group information - this function is NOT jitted so we can use regular Python indexing
     group_idx = min(int(state.bomb_group), len(BOMB_GROUPS) - 1)
-    points_per_bomb = BOMB_GROUPS[group_idx]["points"]
+    points_per_bomb = BOMB_GROUPS[group_idx][2]  # Point value is the 3rd element in tuple (index 2)
     bombs_text = font.render(f"Bombs: {int(state.bombs_caught)}", True, TEXT_COLOR)
     group_text = font.render(f"Group: {int(state.bomb_group)+1} ({points_per_bomb} pts/bomb)", True, TEXT_COLOR)
     
@@ -870,69 +913,16 @@ def get_human_action() -> chex.Array:
     else:
         return NOOP
 
-class Renderer_AtraJaxisKaboom:
-    """Renderer for the Kaboom game using AtraJaxis."""
+class KaboomRenderer(JAXGameRenderer):
+    """Renderer for the Kaboom game."""
     
-    def __init__(self):
-        # Fix the renderer initialization - use correct class name from the module
-        self.aJ = aj.AtariJax(WIDTH, HEIGHT, 3)  # Changed from AtraJaxis to AtariJax
-        self.score_font = None
+    def __init__(self, consts: KaboomConstants = None):
+        super().__init__(consts)
     
-    def render(self, state: KaboomState):
+    @partial(jax.jit, static_argnums=(0,))
+    def render(self, state: KaboomState) -> jnp.ndarray:
         """Render the game state."""
-        self.aJ.fill(BACKGROUND_COLOR)
-        
-        # Draw bucket
-        self.aJ.rect(
-            int(state.bucket_x),
-            BUCKET_START_Y,
-            BUCKET_WIDTH,
-            BUCKET_HEIGHT,
-            BUCKET_COLOR
-        )
-        
-        # Draw bomber
-        self.aJ.rect(
-            int(state.bomber_x),
-            BOMBER_START_Y,
-            BOMBER_WIDTH,
-            BOMBER_HEIGHT,
-            BOMBER_COLOR
-        )
-        
-        # Draw active bombs
-        for i in range(MAX_BOMBS):
-            if state.bomb_active[i] == 1:
-                self.aJ.rect(
-                    int(state.bomb_x[i]),
-                    int(state.bomb_y[i]),
-                    BOMB_WIDTH,
-                    BOMB_HEIGHT,
-                    BOMB_COLOR
-                )
-        
-        # Draw score
-        self.aJ.text(
-            f"Score: {int(state.score)}",
-            10, 10,
-            TEXT_COLOR
-        )
-        
-        # Draw lives
-        self.aJ.text(
-            f"Lives: {int(state.lives)}",
-            WIDTH - 60, 10,
-            TEXT_COLOR
-        )
-        
-        # Draw level
-        self.aJ.text(
-            f"Level: {int(state.level)}",
-            WIDTH // 2 - 20, 10,
-            TEXT_COLOR
-        )
-        
-        self.aJ.update()
+        return render_frame(state)
 
 if __name__ == "__main__":
     import pygame
