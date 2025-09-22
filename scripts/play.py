@@ -64,7 +64,7 @@ def main():
     parser.add_argument(
         "--fps",
         type=int,
-        default=60,
+        default=30,
         help="Frame rate for the game.",
     )
     parser.add_argument(
@@ -93,13 +93,19 @@ def main():
         sys.exit(1)
 
     # Initialize the environment
-    key = jrandom.PRNGKey(args.seed)
+    master_key = jrandom.PRNGKey(args.seed)
+    reset_counter = 0
     jitted_reset = jax.jit(env.reset)
     jitted_step = jax.jit(env.step)
-    jitted_render = jax.jit(renderer.render)
+    jitted_render = jax.jit(env.render)
 
-    # initialize the environment
-    obs, state = jitted_reset(key)
+    # initialize the environment with the first reset key
+    reset_key = jrandom.fold_in(master_key, reset_counter)
+    obs, state = jitted_reset(reset_key)
+    reset_counter += 1
+    
+    # For random actions, we need a separate key stream
+    action_key = jrandom.fold_in(master_key, 1000000)  # Use a large offset to avoid collision
 
     # setup pygame if we are rendering
     if not execute_without_rendering:
@@ -132,9 +138,10 @@ def main():
 
             frame_rate = loaded_frame_rate
 
-            # Reset environment with the saved seed
-            key = jrandom.PRNGKey(seed)
-            obs, state = jitted_reset(key)
+            # Reset environment with the saved seed using the same approach
+            master_key = jrandom.PRNGKey(seed)
+            reset_key = jrandom.fold_in(master_key, 0)  # Use first reset key
+            obs, state = jitted_reset(reset_key)
 
         # loop over all the actions and play the game
         for action in actions_array:
@@ -159,6 +166,11 @@ def main():
         pygame.quit()
         sys.exit(0)
 
+    # display the first frame (reset frame) -> purely for aesthetics
+    image = jitted_render(state)
+    update_pygame(window, image, UPSCALE_FACTOR, 160, 210)
+    clock.tick(frame_rate)
+
     # main game loop
     while running:
         # check for external actions
@@ -170,17 +182,22 @@ def main():
                 if event.key == pygame.K_p:  # pause
                     pause = not pause
                 elif event.key == pygame.K_r:  # reset
-                    obs, state = jitted_reset(key)
+                    reset_key = jrandom.fold_in(master_key, reset_counter)
+                    obs, state = jitted_reset(reset_key)
+                    reset_counter += 1
                 elif event.key == pygame.K_f:
                     frame_by_frame = not frame_by_frame
                 elif event.key == pygame.K_n:
                     next_frame_asked = True
         if pause or (frame_by_frame and not next_frame_asked):
+            image = jitted_render(state)
+            update_pygame(window, image, UPSCALE_FACTOR, 160, 210)
+            clock.tick(frame_rate)
             continue
         if args.random:
             # sample an action from the action space array
-            action = action_space.sample(key)
-            key, subkey = jax.random.split(key)
+            action = action_space.sample(action_key)
+            action_key, _ = jax.random.split(action_key)
         else:
             # get the pressed keys
             action = get_human_action()
@@ -200,7 +217,9 @@ def main():
         if done:
             print(f"Done. Total return {total_return}")
             total_return = 0
-            obs, state = jitted_reset(key)
+            reset_key = jrandom.fold_in(master_key, reset_counter)
+            obs, state = jitted_reset(reset_key)
+            reset_counter += 1
 
         # Render the environment
         if not execute_without_rendering:
