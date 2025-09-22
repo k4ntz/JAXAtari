@@ -27,13 +27,19 @@ How to play ? (Run command: python scripts/play.py --game slotmachine)
 - Player 1: ARROWDOWN / ARROWUP to decrease/increase wager
 - Player 2: ARROWRIGHT /ARROWLEFT to decrease/increase wager
 
+Game addons:
+
+- UPLEFT arrow for jackpot mode. Can be enabled/disabled before the game is started.
+ (HINT: UPLEFT Arrow may result in wager being increased, please check wager before hitting spin. Currently not so many
+ options within ALE's action space )
+
 Game End Conditions:
 - Either player reaches 0 credits (other player wins)
 - Either player reaches more than 999 credits (that player wins)
 
 Reward System: (More information under https://www.atarimania.com/game-atari-2600-vcs-slot-machine_8212.html)
 
-The payline (from left to right) pays as follows for both players:
+The payline (from left to right) pays as follows for both players in normal mode (payout):
 
 - Cactus on reel 1 only -> 2x wager
 - Cactus on reels 1 & 2 -> 5x wager
@@ -43,6 +49,12 @@ The payline (from left to right) pays as follows for both players:
 - TV, TV, TV            -> 14x wager
 - Bell, Bell, Bar       -> 18x wager
 - Bell, Bell, Bell      -> 18x wager
+- Bar, Bar, Bar         -> 100x wager
+- Car, Car, Car         -> 200x wager
+
+The payline (from left to right) pays as follows for both players jackpot mode:
+
+- Any three reels       -> 20x wager
 - Bar, Bar, Bar         -> 100x wager
 - Car, Car, Car         -> 200x wager
 
@@ -93,7 +105,7 @@ class SlotMachineConfig:
     symbol_width: int = 28
 
     # Game start finances
-    starting_credits: int = 25
+    starting_credits: int = 1
     bet_amount: int = 1
     min_wager: int = 1
     max_wager: int = 5
@@ -110,6 +122,14 @@ class SlotMachineConfig:
             [0, 1, 3, 4, 0, 2, 3, 4, 1, 3, 4, 2, 3, 4, 1, 3, 5, 1, 3, 4],
             [0, 2, 3, 1, 5, 0, 2, 3, 1, 5, 0, 2, 3, 5, 5, 0, 2, 3, 4, 5],
             [0, 0, 3, 4, 5, 0, 0, 1, 4, 5, 0, 0, 1, 4, 5, 0, 2, 3, 4, 5],
+        ], dtype=jnp.int32)
+    )
+
+    reel_layouts_jackpot: jnp.ndarray = field(
+        default_factory=lambda: jnp.array([
+            [0, 1, 2, 3, 4, 5, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6],
+            [0, 1, 2, 3, 4, 5, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6],
+            [0, 1, 2, 3, 4, 5, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6],
         ], dtype=jnp.int32)
     )
 
@@ -148,7 +168,12 @@ class SlotMachineState(NamedTuple):
     down_button_prev: chex.Array
     left_button_prev: chex.Array
     right_button_prev: chex.Array
+    jackpot_button_prev: chex.Array  # For jackpot mode toggle
     spin_cooldown: chex.Array
+
+    # Jackpot mode
+    jackpot_mode: chex.Array
+    jackpot_message_timer: chex.Array
 
     # Visual effects
     win_flash_timer: chex.Array
@@ -179,6 +204,7 @@ class SlotMachineObservation(NamedTuple):
     last_payout_p2: jnp.ndarray      # Last win amount for player 2
     last_reward_p1: jnp.ndarray      # Last reward for player 1
     last_reward_p2: jnp.ndarray      # Last reward for player 2
+    jackpot_mode: jnp.ndarray     # Is jackpot mode enabled?
     game_over: jnp.ndarray        # Is the game over?
     winner: jnp.ndarray           # Who won (0=none, 1=player1, 2=player2)
 
@@ -205,7 +231,7 @@ class SlotMachineConstants(NamedTuple):
     Game constants and symbol definitions.
     """
 
-    symbol_names: tuple = ("Cactus", "Table", "Bar", "TV", "Bell", "Car")
+    symbol_names: tuple = ("Cactus", "Table", "Bar", "TV", "Bell", "Car", "Empty")
 
 
 class SlotMachineRenderer(JAXGameRenderer):
@@ -244,7 +270,7 @@ class SlotMachineRenderer(JAXGameRenderer):
         scale_factor = 0.7
 
         # Symbol names mapping
-        symbol_names = ["Cactus", "Table", "Bar", "TV", "Bell", "Car"]
+        symbol_names = ["Cactus", "Table", "Bar", "TV", "Bell", "Car", "Empty"]
 
         for i, symbol_name in enumerate(symbol_names):
             npy_file = f"{sprite_dir}/{symbol_name}.npy"
@@ -323,7 +349,7 @@ class SlotMachineRenderer(JAXGameRenderer):
 
     def _get_symbol_sprite(self, symbol_type: chex.Array) -> jnp.ndarray:
         """Fetch the sprite that corresponds to ``symbol_type``."""
-        symbol_names = ["Cactus", "Table", "Bar", "TV", "Bell", "Car"]
+        symbol_names = ["Cactus", "Table", "Bar", "TV", "Bell", "Car", "Empty"]
 
         symbol_sprites = jnp.stack([
             self.sprites[name] for name in symbol_names
@@ -408,7 +434,7 @@ class SlotMachineRenderer(JAXGameRenderer):
         
         # Message position (center of screen)
         msg_x = cfg.screen_width // 2 - 50  # Increased space for longer messages
-        msg_y = cfg.screen_height // 2 - 10
+        msg_y = cfg.screen_height // 2 + 1
 
         # Background box for message
         box_color = jnp.array([70, 82, 184], dtype=jnp.uint8)
@@ -425,7 +451,7 @@ class SlotMachineRenderer(JAXGameRenderer):
             return r
         
         def render_game_over(r):
-            r = self._render_simple_text(r, "GAME OVER", msg_x + 10, msg_y, text_color)
+            r = self._render_simple_text(r, "GAME OVER", msg_x + 35, msg_y, text_color)
             return r
 
         # Conditional rendering based on winner value
@@ -457,6 +483,16 @@ class SlotMachineRenderer(JAXGameRenderer):
             'I': [[1,1,1], [0,1,0], [0,1,0], [0,1,0], [0,1,0], [1,1,1]],
             'N': [[1,0,0,1], [1,1,0,1], [1,0,1,1], [1,0,0,1], [1,0,0,1], [1,0,0,1]],
             'S': [[0,1,1,1], [1,0,0,0], [0,1,1,0], [0,0,0,1], [0,0,0,1], [1,1,1,0]],
+            'O': [[0,1,1,0], [1,0,0,1], [1,0,0,1], [1,0,0,1], [1,0,0,1], [0,1,1,0]],
+            'T': [[1,1,1,1,1], [0,0,1,0,0], [0,0,1,0,0], [0,0,1,0,0], [0,0,1,0,0], [0,0,1,0,0]],
+            'C': [[0,1,1,1], [1,0,0,0], [1,0,0,0], [1,0,0,0], [1,0,0,0], [0,1,1,1]],
+            'K': [[1,0,0,1], [1,0,1,0], [1,1,0,0], [1,1,0,0], [1,0,1,0], [1,0,0,1]],
+            'J': [[0,0,0,1], [0,0,0,1], [0,0,0,1], [0,0,0,1], [1,0,0,1], [0,1,1,0]],
+            'M': [[1,0,0,0,1], [1,1,0,1,1], [1,0,1,0,1], [1,0,0,0,1], [1,0,0,0,1], [1,0,0,0,1]],
+            'D': [[1,1,1,0], [1,0,0,1], [1,0,0,1], [1,0,0,1], [1,0,0,1], [1,1,1,0]],
+            'F': [[1,1,1,1], [1,0,0,0], [1,1,1,0], [1,0,0,0], [1,0,0,0], [1,0,0,0]],
+            'G': [[0,1,1,1], [1,0,0,0], [1,0,1,1], [1,0,0,1], [1,0,0,1], [0,1,1,0]],
+            'V': [[1,0,0,0,1], [1,0,0,0,1], [1,0,0,0,1], [0,1,0,1,0], [0,1,0,1,0], [0,0,1,0,0]],
             ' ': [[0,0], [0,0], [0,0], [0,0], [0,0], [0,0]]  # Space character
         }
         
@@ -523,6 +559,14 @@ class SlotMachineRenderer(JAXGameRenderer):
         wager_digits_p2 = aj.int_to_digits(state.player2_wager, max_digits=2)
         raster = self._render_colored_number(raster, wager_digits_p2, first_reel_x + 12, wager_y, number_color)
 
+        # Render jackpot mode message if timer is active
+        raster = jax.lax.cond(
+            state.jackpot_message_timer > 0,
+            lambda r: self._render_jackpot_message(r, state.jackpot_mode),
+            lambda r: r,
+            raster
+        )
+
         # Check if game is over, reels have stopped, and display winner message
         raster = jax.lax.cond(
             state.game_over & (state.win_display_timer > 0) & (~jnp.any(state.reel_spinning)),
@@ -531,6 +575,37 @@ class SlotMachineRenderer(JAXGameRenderer):
             raster
         )
 
+        return raster
+
+    def _render_jackpot_message(self, raster: jnp.ndarray, jackpot_mode: chex.Array) -> jnp.ndarray:
+        """Render jackpot mode toggle message."""
+        cfg = self.config
+        
+        # Message position (center of screen)
+        msg_x = cfg.screen_width // 2 - 59
+        msg_y = cfg.screen_height // 2 + 1
+        
+        # Background box for message
+        box_color = jnp.array([70, 82, 184], dtype=jnp.uint8)
+        text_color = jnp.array([255, 255, 255], dtype=jnp.uint8)
+        
+        # Draw background box
+        raster = self._draw_colored_box(raster, msg_x - 10, msg_y - 5, 140, 20, box_color)
+        
+        # Render message based on jackpot mode state
+        def render_jackpot_on(r):
+            return self._render_simple_text(r, "JACKPOT MODE ON", msg_x, msg_y, text_color)
+            
+        def render_jackpot_off(r):
+            return self._render_simple_text(r, "JACKPOT MODE OFF", msg_x, msg_y, text_color)
+        
+        raster = jax.lax.cond(
+            jackpot_mode,
+            render_jackpot_on,
+            render_jackpot_off,
+            raster
+        )
+        
         return raster
 
     def _render_colored_number(self, raster: jnp.ndarray, digits: jnp.ndarray, x: int, y: int, color: jnp.ndarray) -> jnp.ndarray:
@@ -661,6 +736,7 @@ class JaxSlotMachine(JaxEnvironment[SlotMachineState, SlotMachineObservation, Sl
             Action.DOWN,  # Player 2 decrease wager
             Action.LEFT,  # Player 1 decrease wager
             Action.RIGHT, # Player 1 increase wager
+            Action.UPLEFT, # Toggle jackpot mode
         ]
 
     def reset(self, key: jax.random.PRNGKey = None) -> Tuple[SlotMachineObservation, SlotMachineState]:
@@ -716,7 +792,10 @@ class JaxSlotMachine(JaxEnvironment[SlotMachineState, SlotMachineObservation, Sl
             down_button_prev=jnp.array(False, dtype=jnp.bool_),
             left_button_prev=jnp.array(False, dtype=jnp.bool_),
             right_button_prev=jnp.array(False, dtype=jnp.bool_),
+            jackpot_button_prev=jnp.array(False, dtype=jnp.bool_),
             spin_cooldown=jnp.array(0, dtype=jnp.int32),
+            jackpot_mode=jnp.array(False, dtype=jnp.bool_),
+            jackpot_message_timer=jnp.array(0, dtype=jnp.int32),
             win_flash_timer=jnp.array(0, dtype=jnp.int32),
             last_payout_p1=jnp.array(0, dtype=jnp.int32),
             last_payout_p2=jnp.array(0, dtype=jnp.int32),
@@ -770,6 +849,7 @@ class JaxSlotMachine(JaxEnvironment[SlotMachineState, SlotMachineObservation, Sl
             down_pressed = (action == Action.DOWN)    # Player 2 decrease wager
             left_pressed = (action == Action.LEFT)    # Player 1 decrease wager
             right_pressed = (action == Action.RIGHT)  # Player 1 increase wager
+            j_pressed = (action == Action.UPLEFT)     # Jackpot mode toggle
 
             # Detect "just pressed" events to prevent button mashing
             fire_just_pressed = fire_pressed & (~state.spin_button_prev)
@@ -777,6 +857,26 @@ class JaxSlotMachine(JaxEnvironment[SlotMachineState, SlotMachineObservation, Sl
             down_just_pressed = down_pressed & (~state.down_button_prev)
             left_just_pressed = left_pressed & (~state.left_button_prev)
             right_just_pressed = right_pressed & (~state.right_button_prev)
+            j_just_pressed = j_pressed & (~state.jackpot_button_prev)
+
+            # Handle jackpot mode toggle (only when no spins have been played)
+            spins_played = state.player1_spins_played + state.player2_spins_played
+            can_toggle_jackpot = (spins_played == 0) & (~jnp.any(state.reel_spinning)) & j_just_pressed
+            
+            new_jackpot_mode = jax.lax.cond(
+                can_toggle_jackpot,
+                lambda jm: ~jm,  # Toggle jackpot mode
+                lambda jm: jm,   # Keep current state
+                state.jackpot_mode
+            )
+            
+            # Set message timer when toggling jackpot mode
+            new_jackpot_message_timer = jax.lax.cond(
+                can_toggle_jackpot,
+                lambda _: jnp.array(120, dtype=jnp.int32),  # Show message for 2 seconds at 60fps
+                lambda _: state.jackpot_message_timer,
+                None
+            )
 
             # Determine if players can spin (both players need enough credits)
             can_spin = (state.spin_cooldown == 0) & fire_just_pressed
@@ -821,8 +921,11 @@ class JaxSlotMachine(JaxEnvironment[SlotMachineState, SlotMachineObservation, Sl
                 down_button_prev=down_pressed,
                 left_button_prev=left_pressed,
                 right_button_prev=right_pressed,
+                jackpot_button_prev=j_pressed,
                 player1_wager=new_p1_wager,
                 player2_wager=new_p2_wager,
+                jackpot_mode=new_jackpot_mode,
+                jackpot_message_timer=new_jackpot_message_timer,
                 rng=new_rng
             )
 
@@ -925,7 +1028,13 @@ class JaxSlotMachine(JaxEnvironment[SlotMachineState, SlotMachineObservation, Sl
 
         # Vectorize across all reels
         reel_keys_array = jnp.array(reel_keys)
-        base_layouts = cfg.reel_layouts
+        
+        # Use jackpot layouts if jackpot mode is enabled, otherwise use normal layouts
+        base_layouts = jax.lax.cond(
+            state.jackpot_mode,
+            lambda: cfg.reel_layouts_jackpot,
+            lambda: cfg.reel_layouts
+        )
 
         layouts, durations, positions = jax.vmap(generate_reel_data)(reel_keys_array, base_layouts)
 
@@ -1016,37 +1125,83 @@ class JaxSlotMachine(JaxEnvironment[SlotMachineState, SlotMachineObservation, Sl
 
             s0, s1, s2 = center_symbols[0], center_symbols[1], center_symbols[2]
 
-            #  Win condition evaluation
-            win_conditions = jnp.array([
-                jnp.all(center_symbols == 5),  # Three Cars - 200x
-                jnp.all(center_symbols == 2),  # Three Bars - 100x
-                jnp.all(center_symbols == 4),  # Three Bells - 18x
-                (s0 == 4) & (s1 == 4) & (s2 == 2),  # Two Bells + Bar - 18x
-                jnp.all(center_symbols == 3),  # Three TVs - 14x
-                (s0 == 3) & (s1 == 3) & (s2 == 2),  # Two TVs + Bar - 14x
-                jnp.all(center_symbols == 1),  # Three Tables - 10x
-                (s0 == 1) & (s1 == 1) & (s2 == 2),  # Two Tables + Bar - 10x
-                (s0 == 0) & (s1 == 0),  # Cactus on reels 1 & 2 - 5x
-                (s0 == 0) & (s1 != 0) & (s2 != 0),  # Cactus on reel 1 only - 2x
-            ])
+            # Calculate winnings for payout mode
+            def payout_mode_winnings():
+                #  Win condition evaluation for normal mode
+                win_conditions = jnp.array([
+                    jnp.all(center_symbols == 5),  # Three Cars - 200x
+                    jnp.all(center_symbols == 2),  # Three Bars - 100x
+                    jnp.all(center_symbols == 4),  # Three Bells - 18x
+                    (s0 == 4) & (s1 == 4) & (s2 == 2),  # Two Bells + Bar - 18x
+                    jnp.all(center_symbols == 3),  # Three TVs - 14x
+                    (s0 == 3) & (s1 == 3) & (s2 == 2),  # Two TVs + Bar - 14x
+                    jnp.all(center_symbols == 1),  # Three Tables - 10x
+                    (s0 == 1) & (s1 == 1) & (s2 == 2),  # Two Tables + Bar - 10x
+                    (s0 == 0) & (s1 == 0),  # Cactus on reels 1 & 2 - 5x
+                    (s0 == 0) & (s1 != 0) & (s2 != 0),  # Cactus on reel 1 only - 2x
+                ])
 
-            multipliers = jnp.array([200, 100, 18, 18, 14, 14, 10, 10, 5, 2])
+                multipliers = jnp.array([200, 100, 18, 18, 14, 14, 10, 10, 5, 2])
+                
+                # Find first winning condition (highest priority)
+                win_indices = jnp.where(win_conditions, jnp.arange(len(win_conditions)), len(win_conditions))
+                first_win = jnp.min(win_indices)
+                has_win = first_win < len(win_conditions)
+                
+                return has_win, jax.lax.cond(has_win, lambda: multipliers[first_win], lambda: 0)
 
-            # Find first winning condition (highest priority)
-            win_indices = jnp.where(win_conditions, jnp.arange(len(win_conditions)), len(win_conditions))
-            first_win = jnp.min(win_indices)
-            has_win = first_win < len(win_conditions)
+            # Calculate winnings for payout mode
+            def jackpot_mode_winnings():
+                # Jackpot mode payout rules:
+                # - Three cars (all matching) -> 200x 
+                # - Three bars (all matching) -> 100x
+                # - Any three symbols on center line (not empty) -> 20x
+                
+                # Check if all center symbols are non-empty
+                all_non_empty = jnp.all(center_symbols != 6)
+                
+                # Check for specific high-value combinations
+                three_cars = jnp.all(center_symbols == 5)
+                three_bars = jnp.all(center_symbols == 2)
+                
+                # Determine multiplier with priority order
+                def determine_multiplier():
+                    return jax.lax.cond(
+                        three_cars,
+                        lambda: 200,  # Three cars gets highest priority
+                        lambda: jax.lax.cond(
+                            three_bars,
+                            lambda: 100,  # Three bars gets second priority
+                            lambda: 20    # Any other three non-empty symbols get 20x
+                        )
+                    )
+                
+                # Calculate final multiplier
+                multiplier = jax.lax.cond(
+                    all_non_empty,
+                    determine_multiplier,
+                    lambda: 0  # If any symbol is empty, no payout
+                )
+                
+                return all_non_empty, multiplier
+
+            # Use appropriate payout calculation based on jackpot mode
+            has_win, multiplier = jax.lax.cond(
+                s.jackpot_mode,
+                jackpot_mode_winnings,
+                payout_mode_winnings
+            )
 
             # Calculate payouts for both players
             payout_p1 = jax.lax.cond(
                 has_win,
-                lambda: multipliers[first_win] * s.player1_wager,
+                lambda: multiplier * s.player1_wager,
                 lambda: 0
             )
             
             payout_p2 = jax.lax.cond(
                 has_win,
-                lambda: multipliers[first_win] * s.player2_wager,
+                lambda: multiplier * s.player2_wager,
                 lambda: 0
             )
 
@@ -1073,6 +1228,7 @@ class JaxSlotMachine(JaxEnvironment[SlotMachineState, SlotMachineObservation, Sl
         - Spin cooldown: Prevents accidental double-spins
         - Win flash: Controls celebration effect duration
         - Win display: Controls how long winner message is shown
+        - Jackpot message: Controls how long jackpot mode message is shown
 
         All timers count down to 0 and stop there (no negative values).
 
@@ -1080,11 +1236,13 @@ class JaxSlotMachine(JaxEnvironment[SlotMachineState, SlotMachineObservation, Sl
         new_cooldown = jnp.maximum(state.spin_cooldown - 1, 0)
         new_flash_timer = jnp.maximum(state.win_flash_timer - 1, 0)
         new_win_display_timer = jnp.maximum(state.win_display_timer - 1, 0)
+        new_jackpot_message_timer = jnp.maximum(state.jackpot_message_timer - 1, 0)
 
         return state._replace(
             spin_cooldown=new_cooldown,
             win_flash_timer=new_flash_timer,
             win_display_timer=new_win_display_timer,
+            jackpot_message_timer=new_jackpot_message_timer,
         )
 
     def _check_game_over(self, state: SlotMachineState) -> SlotMachineState:
@@ -1103,8 +1261,8 @@ class JaxSlotMachine(JaxEnvironment[SlotMachineState, SlotMachineObservation, Sl
         reels_stopped = ~jnp.any(state.reel_spinning)
         
         # Check bankruptcy conditions - player must not afford their next wager
-        p1_broke = (state.player1_credits < state.player1_wager) & reels_stopped
-        p2_broke = (state.player2_credits < state.player2_wager) & reels_stopped
+        p1_broke = (state.player1_credits < 1) & reels_stopped
+        p2_broke = (state.player2_credits < 1) & reels_stopped
         
         # Check win conditions - over 999 credits
         p1_rich = (state.player1_credits > 999) & reels_stopped
@@ -1113,7 +1271,7 @@ class JaxSlotMachine(JaxEnvironment[SlotMachineState, SlotMachineObservation, Sl
         should_end = p1_broke | p2_broke | p1_rich | p2_rich
         
         # Determine winner
-        # Priority: Rich > not broke
+        # Priority: Rich > not broke, but if both broke = game over (no winner)
         winner = jax.lax.cond(
             should_end,
             lambda: jax.lax.cond(
@@ -1123,12 +1281,16 @@ class JaxSlotMachine(JaxEnvironment[SlotMachineState, SlotMachineObservation, Sl
                     p2_rich,
                     lambda: 2,  # Player 2 wins (got rich)
                     lambda: jax.lax.cond(
-                        p1_broke,
-                        lambda: 2,  # Player 2 wins (Player 1 broke)
+                        p1_broke & p2_broke,
+                        lambda: 0,  # Both players broke - game over, no winner
                         lambda: jax.lax.cond(
-                            p2_broke,
-                            lambda: 1,  # Player 1 wins (Player 2 broke)
-                            lambda: 0   # No winner yet
+                            p1_broke,
+                            lambda: 2,  # Player 2 wins (Player 1 broke)
+                            lambda: jax.lax.cond(
+                                p2_broke,
+                                lambda: 1,  # Player 1 wins (Player 2 broke)
+                                lambda: 0   # No winner yet
+                            )
                         )
                     )
                 )
@@ -1175,6 +1337,7 @@ class JaxSlotMachine(JaxEnvironment[SlotMachineState, SlotMachineObservation, Sl
             last_payout_p2=state.last_payout_p2,
             last_reward_p1=state.last_reward_p1,
             last_reward_p2=state.last_reward_p2,
+            jackpot_mode=state.jackpot_mode,
             game_over=state.game_over,
             winner=state.winner,
         )
@@ -1210,6 +1373,7 @@ class JaxSlotMachine(JaxEnvironment[SlotMachineState, SlotMachineObservation, Sl
          ( 0 => "Cactus", 1 => "Table", 2 => "Bar", 3 => "TV", 4 => "Bell", 5 => "Car")
         - Spinning: boolean (machine status)
         - Payouts/rewards (Integer to keep track of payouts for both players)
+        - Jackpot mode: boolean (is jackpot mode enabled)
         - Game over and winner status
         """
         cfg = self.config
@@ -1229,6 +1393,7 @@ class JaxSlotMachine(JaxEnvironment[SlotMachineState, SlotMachineObservation, Sl
             'last_payout_p2': spaces.Box(low=0, high=999, shape=(), dtype=jnp.float32),
             'last_reward_p1': spaces.Box(low=0.0, high=999.0, shape=(), dtype=jnp.float32),
             'last_reward_p2': spaces.Box(low=0.0, high=999.0, shape=(), dtype=jnp.float32),
+            'jackpot_mode': spaces.Box(low=0, high=1, shape=(), dtype=jnp.float32),
             'game_over': spaces.Box(low=0, high=1, shape=(), dtype=jnp.float32),
             'winner': spaces.Box(low=0, high=2, shape=(), dtype=jnp.float32),
         })
@@ -1257,6 +1422,7 @@ class JaxSlotMachine(JaxEnvironment[SlotMachineState, SlotMachineObservation, Sl
             jnp.atleast_1d(obs.last_payout_p2).astype(jnp.float32),
             jnp.atleast_1d(obs.last_reward_p1).astype(jnp.float32),
             jnp.atleast_1d(obs.last_reward_p2).astype(jnp.float32),
+            jnp.atleast_1d(obs.jackpot_mode).astype(jnp.float32),
             jnp.atleast_1d(obs.game_over).astype(jnp.float32),
             jnp.atleast_1d(obs.winner).astype(jnp.float32),
         ]
@@ -1342,6 +1508,7 @@ def main():
     print("  SPACE = Spin (both players)")
     print("  Player 2: LEFT/RIGHT = Decrease/Increase wager")
     print("  Player 1: DOWN/UP = Decrease/Increase wager")
+    print("  J = Toggle Jackpot Mode (before any spins)")
     print("  ESC = Quit")
     print("For full gameplay, use: python scripts/play.py --game slotmachine")
 
@@ -1366,6 +1533,8 @@ def main():
                     action = Action.LEFT    # Player 2 increase wager (W key)
                 elif event.key == pygame.K_RIGHT:
                     action = Action.RIGHT   # Player 2 decrease wager (S key)
+                elif event.key == pygame.K_j:
+                    action = 7              # J key for jackpot mode toggle in pygame, UPLEFT in scripts/play.py
                 else:
                     action = Action.NOOP
             elif event.type == pygame.KEYUP:
