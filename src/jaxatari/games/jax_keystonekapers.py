@@ -480,22 +480,14 @@ class JaxKeystoneKapers(JaxEnvironment[GameState, KeystoneKapersObservation, Key
         elevator_x = self.consts.ELEVATOR_BUILDING_X + self.consts.ELEVATOR_WIDTH // 2
         final_x = jnp.where(new_in_elevator, elevator_x, new_x)
 
-        # Escalator movement (only when not jumping and not in elevator)
+        # Escalator movement (DISABLED - escalators not implemented)
+        # Players should only move between floors via elevators
         current_floor = player.floor
-        on_escalator = self._is_on_escalator(final_x, current_floor)
-        can_use_escalator = jnp.logical_and(
-            jnp.logical_and(on_escalator, jnp.logical_not(new_is_jumping)),
-            jnp.logical_not(new_in_elevator)
-        )
+        on_escalator = False  # Completely disable escalator detection
+        can_use_escalator = False
 
-        escalator_up = jnp.logical_and(
-            jnp.logical_and(can_use_escalator, move_up),
-            current_floor < 2  # Can't go above floor 3 via escalator
-        )
-        escalator_down = jnp.logical_and(
-            jnp.logical_and(can_use_escalator, move_down),
-            current_floor > 0  # Can't go below ground floor
-        )
+        escalator_up = False
+        escalator_down = False
 
         # Elevator floor changes (when elevator moves)
         elevator_floor_change = jnp.logical_and(
@@ -544,18 +536,12 @@ class JaxKeystoneKapers(JaxEnvironment[GameState, KeystoneKapersObservation, Key
         # Vertical movement (escalator/elevator)
         current_floor = player.floor
 
-        # Check escalator usage
-        on_escalator = self._is_on_escalator(new_x, current_floor)
-        can_use_escalator = jnp.logical_and(on_escalator, jnp.logical_not(is_jumping))
+        # Check escalator usage (DISABLED - escalators not implemented)
+        on_escalator = False
+        can_use_escalator = False
 
-        escalator_up = jnp.logical_and(
-            jnp.logical_and(can_use_escalator, move_up),
-            current_floor < 2  # Can't go above floor 2 via escalator
-        )
-        escalator_down = jnp.logical_and(
-            jnp.logical_and(can_use_escalator, move_down),
-            current_floor > 0  # Can't go below floor 0
-        )
+        escalator_up = False
+        escalator_down = False
 
         # Check elevator usage
         on_elevator = self._is_on_elevator(
