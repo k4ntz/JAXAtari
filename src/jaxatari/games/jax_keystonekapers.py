@@ -39,20 +39,33 @@ import jaxatari.spaces as spaces
 class KeystoneKapersConstants(NamedTuple):
     """Game constants and configuration parameters."""
 
-    # Screen dimensions
-    SCREEN_WIDTH: int = 160
-    SCREEN_HEIGHT: int = 210
+    # Screen dimensions - Match original Atari Keystone Kapers (250x160)
+    TOTAL_SCREEN_WIDTH: int = 160   # Original Atari width
+    TOTAL_SCREEN_HEIGHT: int = 250  # Original Atari height (much taller)
+    
+    # Game area dimensions (adjusted for bigger borders, especially bottom)
+    GAME_AREA_WIDTH: int = 152      # Slightly smaller for left border
+    GAME_AREA_HEIGHT: int = 190     # Reduced to make room for larger bottom border
+    
+    # Border offsets to match original layout
+    GAME_AREA_OFFSET_X: int = 8     # Left border (keep same)
+    GAME_AREA_OFFSET_Y: int = 25    # Top border (slightly bigger than before)
+    # Bottom border will be: 250 - 25 - 190 = 35 pixels (much bigger for minimap)
+    
+    # Legacy constants for compatibility
+    SCREEN_WIDTH: int = 152         # Match game area
+    SCREEN_HEIGHT: int = 190        # Match game area
 
     # Building structure - 7 sections of horizontal scrolling
     BUILDING_SECTIONS: int = 7
     SECTION_WIDTH: int = 160  # Each section is one screen width
     TOTAL_BUILDING_WIDTH: int = 7 * 160  # 1120 pixels total width
 
-    # Floor positions (Y coordinates) - 3 playable floors + roof
-    FLOOR_1_Y: int = 180  # Ground floor
-    FLOOR_2_Y: int = 130  # Middle floor
-    FLOOR_3_Y: int = 80   # Top floor
-    ROOF_Y: int = 30      # Roof (escape zone)
+    # Floor positions (Y coordinates) - adjusted for 190 height game area  
+    FLOOR_1_Y: int = 165  # Ground floor (180 * 190/210 = 163, rounded to 165)
+    FLOOR_2_Y: int = 118  # Middle floor (130 * 190/210 = 118)
+    FLOOR_3_Y: int = 72   # Top floor (80 * 190/210 = 72)
+    ROOF_Y: int = 27      # Roof (30 * 190/210 = 27)
     FLOOR_HEIGHT: int = 20
 
     # Escalator positions (relative to each section, 2 per section)
@@ -1244,7 +1257,7 @@ class JaxKeystoneKapers(JaxEnvironment[GameState, KeystoneKapersObservation, Key
         return spaces.Box(
             low=0,
             high=255,
-            shape=(self.consts.SCREEN_HEIGHT, self.consts.SCREEN_WIDTH, 3),
+            shape=(self.consts.TOTAL_SCREEN_HEIGHT, self.consts.TOTAL_SCREEN_WIDTH, 3),
             dtype=jnp.uint8
         )
 
@@ -1333,10 +1346,16 @@ class KeystoneKapersRenderer(JAXGameRenderer):
 
     @partial(jax.jit, static_argnums=(0,))
     def render(self, state: GameState) -> jnp.ndarray:
-        """Render the game state with camera system - simplified for JAX compatibility."""
-        # Create background
-        frame = jnp.ones(
-            (self.consts.SCREEN_HEIGHT, self.consts.SCREEN_WIDTH, 3),
+        """Render the game state with Atari-style black borders."""
+        # Create full screen with black borders
+        frame = jnp.zeros(
+            (self.consts.TOTAL_SCREEN_HEIGHT, self.consts.TOTAL_SCREEN_WIDTH, 3),
+            dtype=jnp.uint8
+        )
+        
+        # Create game area background
+        game_area = jnp.ones(
+            (self.consts.GAME_AREA_HEIGHT, self.consts.GAME_AREA_WIDTH, 3),
             dtype=jnp.uint8
         ) * jnp.array(self.consts.BACKGROUND_COLOR, dtype=jnp.uint8)
 
@@ -1346,45 +1365,45 @@ class KeystoneKapersRenderer(JAXGameRenderer):
             return building_x - state.camera_x
 
         # Simple helper to draw a filled rectangle (fixed size for JAX compatibility)
-        def draw_rectangle_simple(frame, x, y, width, height, color):
-            """Draw a rectangle with static dimensions."""
+        def draw_rectangle_simple(game_area, x, y, width, height, color):
+            """Draw a rectangle with static dimensions in game area."""
             # Ensure parameters are integers and arrays
-            x = jnp.clip(jnp.asarray(x, dtype=jnp.int32), 0, self.consts.SCREEN_WIDTH - 1)
-            y = jnp.clip(jnp.asarray(y, dtype=jnp.int32), 0, self.consts.SCREEN_HEIGHT - 1)
-            width = jnp.clip(jnp.asarray(width, dtype=jnp.int32), 1, self.consts.SCREEN_WIDTH - x)
-            height = jnp.clip(jnp.asarray(height, dtype=jnp.int32), 1, self.consts.SCREEN_HEIGHT - y)
+            x = jnp.clip(jnp.asarray(x, dtype=jnp.int32), 0, self.consts.GAME_AREA_WIDTH - 1)
+            y = jnp.clip(jnp.asarray(y, dtype=jnp.int32), 0, self.consts.GAME_AREA_HEIGHT - 1)
+            width = jnp.clip(jnp.asarray(width, dtype=jnp.int32), 1, self.consts.GAME_AREA_WIDTH - x)
+            height = jnp.clip(jnp.asarray(height, dtype=jnp.int32), 1, self.consts.GAME_AREA_HEIGHT - y)
 
             # Create indices for the rectangle area
-            y_indices = jnp.arange(self.consts.SCREEN_HEIGHT)[:, None]
-            x_indices = jnp.arange(self.consts.SCREEN_WIDTH)[None, :]
+            y_indices = jnp.arange(self.consts.GAME_AREA_HEIGHT)[:, None]
+            x_indices = jnp.arange(self.consts.GAME_AREA_WIDTH)[None, :]
 
             # Create mask for the rectangle
             mask = ((y_indices >= y) & (y_indices < y + height) &
                    (x_indices >= x) & (x_indices < x + width))
 
             # Apply color where mask is True
-            return jnp.where(mask[:, :, None], color, frame)
+            return jnp.where(mask[:, :, None], color, game_area)
 
-        # Draw floors (simplified - just draw visible screen width)
+        # Draw floors (simplified - just draw visible game area width)
         floor_color = jnp.array(self.consts.FLOOR_COLOR, dtype=jnp.uint8)
         floor_thickness = 4
 
         # Floor 1
-        frame = draw_rectangle_simple(
-            frame, 0, self.consts.FLOOR_1_Y + self.consts.FLOOR_HEIGHT - floor_thickness,
-            self.consts.SCREEN_WIDTH, floor_thickness, floor_color
+        game_area = draw_rectangle_simple(
+            game_area, 0, self.consts.FLOOR_1_Y + self.consts.FLOOR_HEIGHT - floor_thickness,
+            self.consts.GAME_AREA_WIDTH, floor_thickness, floor_color
         )
 
         # Floor 2
-        frame = draw_rectangle_simple(
-            frame, 0, self.consts.FLOOR_2_Y + self.consts.FLOOR_HEIGHT - floor_thickness,
-            self.consts.SCREEN_WIDTH, floor_thickness, floor_color
+        game_area = draw_rectangle_simple(
+            game_area, 0, self.consts.FLOOR_2_Y + self.consts.FLOOR_HEIGHT - floor_thickness,
+            self.consts.GAME_AREA_WIDTH, floor_thickness, floor_color
         )
 
         # Floor 3
-        frame = draw_rectangle_simple(
-            frame, 0, self.consts.FLOOR_3_Y + self.consts.FLOOR_HEIGHT - floor_thickness,
-            self.consts.SCREEN_WIDTH, floor_thickness, floor_color
+        game_area = draw_rectangle_simple(
+            game_area, 0, self.consts.FLOOR_3_Y + self.consts.FLOOR_HEIGHT - floor_thickness,
+            self.consts.GAME_AREA_WIDTH, floor_thickness, floor_color
         )
 
         # Draw escalators (only those visible on screen)
@@ -1392,69 +1411,69 @@ class KeystoneKapersRenderer(JAXGameRenderer):
 
         # Check if escalators are visible and draw them
         escalator_1_screen_x = building_to_screen_x(self.consts.ESCALATOR_1_OFFSET)
-        escalator_1_visible = (escalator_1_screen_x >= -self.consts.ESCALATOR_WIDTH) & (escalator_1_screen_x < self.consts.SCREEN_WIDTH)
+        escalator_1_visible = (escalator_1_screen_x >= -self.consts.ESCALATOR_WIDTH) & (escalator_1_screen_x < self.consts.GAME_AREA_WIDTH)
 
         # Draw escalator 1 if visible
-        frame = jnp.where(
+        game_area = jnp.where(
             escalator_1_visible,
-            draw_rectangle_simple(frame, escalator_1_screen_x, self.consts.FLOOR_2_Y,
+            draw_rectangle_simple(game_area, escalator_1_screen_x, self.consts.FLOOR_2_Y,
                                 self.consts.ESCALATOR_WIDTH, self.consts.FLOOR_HEIGHT, escalator_color),
-            frame
+            game_area
         )
-        frame = jnp.where(
+        game_area = jnp.where(
             escalator_1_visible,
-            draw_rectangle_simple(frame, escalator_1_screen_x, self.consts.FLOOR_3_Y,
+            draw_rectangle_simple(game_area, escalator_1_screen_x, self.consts.FLOOR_3_Y,
                                 self.consts.ESCALATOR_WIDTH, self.consts.FLOOR_HEIGHT, escalator_color),
-            frame
+            game_area
         )
 
         escalator_2_screen_x = building_to_screen_x(self.consts.ESCALATOR_2_OFFSET)
-        escalator_2_visible = (escalator_2_screen_x >= -self.consts.ESCALATOR_WIDTH) & (escalator_2_screen_x < self.consts.SCREEN_WIDTH)
+        escalator_2_visible = (escalator_2_screen_x >= -self.consts.ESCALATOR_WIDTH) & (escalator_2_screen_x < self.consts.GAME_AREA_WIDTH)
 
         # Draw escalator 2 if visible
-        frame = jnp.where(
+        game_area = jnp.where(
             escalator_2_visible,
-            draw_rectangle_simple(frame, escalator_2_screen_x, self.consts.FLOOR_2_Y,
+            draw_rectangle_simple(game_area, escalator_2_screen_x, self.consts.FLOOR_2_Y,
                                 self.consts.ESCALATOR_WIDTH, self.consts.FLOOR_HEIGHT, escalator_color),
-            frame
+            game_area
         )
-        frame = jnp.where(
+        game_area = jnp.where(
             escalator_2_visible,
-            draw_rectangle_simple(frame, escalator_2_screen_x, self.consts.FLOOR_3_Y,
+            draw_rectangle_simple(game_area, escalator_2_screen_x, self.consts.FLOOR_3_Y,
                                 self.consts.ESCALATOR_WIDTH, self.consts.FLOOR_HEIGHT, escalator_color),
-            frame
+            game_area
         )
 
         # Draw elevator shaft and doors on all floors
         elevator_building_x = self.consts.ELEVATOR_BUILDING_X
         elevator_screen_x = building_to_screen_x(elevator_building_x)
-        elevator_visible = (elevator_screen_x >= -self.consts.ELEVATOR_WIDTH) & (elevator_screen_x < self.consts.SCREEN_WIDTH)
+        elevator_visible = (elevator_screen_x >= -self.consts.ELEVATOR_WIDTH) & (elevator_screen_x < self.consts.GAME_AREA_WIDTH)
 
         # Elevator shaft background (dark blue/purple) on all floors
         shaft_color = jnp.array([64, 64, 128], dtype=jnp.uint8)  # Dark blue shaft
 
         # Draw shaft on floor 1 (ground)
-        frame = jnp.where(
+        game_area = jnp.where(
             elevator_visible,
-            draw_rectangle_simple(frame, elevator_screen_x, self.consts.FLOOR_1_Y,
+            draw_rectangle_simple(game_area, elevator_screen_x, self.consts.FLOOR_1_Y,
                                 self.consts.ELEVATOR_WIDTH, self.consts.FLOOR_HEIGHT, shaft_color),
-            frame
+            game_area
         )
 
         # Draw shaft on floor 2 (middle)
-        frame = jnp.where(
+        game_area = jnp.where(
             elevator_visible,
-            draw_rectangle_simple(frame, elevator_screen_x, self.consts.FLOOR_2_Y,
+            draw_rectangle_simple(game_area, elevator_screen_x, self.consts.FLOOR_2_Y,
                                 self.consts.ELEVATOR_WIDTH, self.consts.FLOOR_HEIGHT, shaft_color),
-            frame
+            game_area
         )
 
         # Draw shaft on floor 3 (top)
-        frame = jnp.where(
+        game_area = jnp.where(
             elevator_visible,
-            draw_rectangle_simple(frame, elevator_screen_x, self.consts.FLOOR_3_Y,
+            draw_rectangle_simple(game_area, elevator_screen_x, self.consts.FLOOR_3_Y,
                                 self.consts.ELEVATOR_WIDTH, self.consts.FLOOR_HEIGHT, shaft_color),
-            frame
+            game_area
         )
 
         # Draw elevator car only at its current floor
@@ -1469,52 +1488,58 @@ class KeystoneKapersRenderer(JAXGameRenderer):
 
         # Only draw elevator car when doors are not fully open
         show_car = state.elevator.state != 0  # Not IdleOpen
-        frame = jnp.where(
+        game_area = jnp.where(
             jnp.logical_and(elevator_visible, show_car),
-            draw_rectangle_simple(frame, elevator_screen_x, elevator_floor_y,
+            draw_rectangle_simple(game_area, elevator_screen_x, elevator_floor_y,
                                 self.consts.ELEVATOR_WIDTH, self.consts.FLOOR_HEIGHT, elevator_car_color),
-            frame
+            game_area
         )
 
         # Draw player with camera adjustment
         player_screen_x = building_to_screen_x(state.player.x)
-        player_visible = (player_screen_x >= -self.consts.PLAYER_WIDTH) & (player_screen_x < self.consts.SCREEN_WIDTH)
+        player_visible = (player_screen_x >= -self.consts.PLAYER_WIDTH) & (player_screen_x < self.consts.GAME_AREA_WIDTH)
 
         player_color = jnp.array([0, 255, 0], dtype=jnp.uint8)  # Green player
-        frame = jnp.where(
+        game_area = jnp.where(
             player_visible,
-            draw_rectangle_simple(frame, player_screen_x, state.player.y,
+            draw_rectangle_simple(game_area, player_screen_x, state.player.y,
                                 self.consts.PLAYER_WIDTH, self.consts.PLAYER_HEIGHT, player_color),
-            frame
+            game_area
         )
 
         # Draw thief with camera adjustment (only if not escaped)
         thief_screen_x = building_to_screen_x(state.thief.x)
-        thief_visible = (thief_screen_x >= -self.consts.THIEF_WIDTH) & (thief_screen_x < self.consts.SCREEN_WIDTH) & jnp.logical_not(state.thief.escaped)
+        thief_visible = (thief_screen_x >= -self.consts.THIEF_WIDTH) & (thief_screen_x < self.consts.GAME_AREA_WIDTH) & jnp.logical_not(state.thief.escaped)
 
         thief_color = jnp.array([255, 0, 0], dtype=jnp.uint8)  # Red thief
-        frame = jnp.where(
+        game_area = jnp.where(
             thief_visible,
-            draw_rectangle_simple(frame, thief_screen_x, state.thief.y,
+            draw_rectangle_simple(game_area, thief_screen_x, state.thief.y,
                                 self.consts.THIEF_WIDTH, self.consts.THIEF_HEIGHT, thief_color),
-            frame
+            game_area
         )
 
-        # Draw simple UI elements
+        # Draw simple UI elements on game area
         ui_color = jnp.array([255, 255, 255], dtype=jnp.uint8)  # White UI
 
         # Score indicator (top left)
-        frame = draw_rectangle_simple(frame, 10, 10, 30, 8, ui_color)
+        game_area = draw_rectangle_simple(game_area, 10, 10, 30, 8, ui_color)
 
         # Lives indicator (top center)
-        frame = draw_rectangle_simple(frame, self.consts.SCREEN_WIDTH // 2 - 15, 10, 30, 8, ui_color)
+        game_area = draw_rectangle_simple(game_area, self.consts.GAME_AREA_WIDTH // 2 - 15, 10, 30, 8, ui_color)
 
         # Timer indicator (top right)
-        frame = draw_rectangle_simple(frame, self.consts.SCREEN_WIDTH - 40, 10, 30, 8, ui_color)
+        game_area = draw_rectangle_simple(game_area, self.consts.GAME_AREA_WIDTH - 40, 10, 30, 8, ui_color)
 
         # Camera position indicator (bottom)
-        camera_indicator_x = (state.camera_x / self.consts.TOTAL_BUILDING_WIDTH * self.consts.SCREEN_WIDTH)
-        frame = draw_rectangle_simple(frame, camera_indicator_x, self.consts.SCREEN_HEIGHT - 10, 20, 5,
-                                    jnp.array([255, 255, 0], dtype=jnp.uint8))  # Yellow camera indicator
+        camera_indicator_x = (state.camera_x / self.consts.TOTAL_BUILDING_WIDTH * self.consts.GAME_AREA_WIDTH)
+        game_area = draw_rectangle_simple(game_area, camera_indicator_x, self.consts.GAME_AREA_HEIGHT - 10, 20, 5,
+                                        jnp.array([255, 255, 0], dtype=jnp.uint8))  # Yellow camera indicator
+
+        # Place game area into the bordered frame at offset position
+        frame = frame.at[
+            self.consts.GAME_AREA_OFFSET_Y:self.consts.GAME_AREA_OFFSET_Y + self.consts.GAME_AREA_HEIGHT,
+            self.consts.GAME_AREA_OFFSET_X:self.consts.GAME_AREA_OFFSET_X + self.consts.GAME_AREA_WIDTH
+        ].set(game_area)
 
         return frame
