@@ -685,7 +685,6 @@ class JaxKeystoneKapers(JaxEnvironment[GameState, KeystoneKapersObservation, Key
         )
 
     @partial(jax.jit, static_argnums=(0,))
-    @partial(jax.jit, static_argnums=(0,))
     def _update_thief(self, state: GameState) -> ThiefState:
         """Update thief state with AI behavior for building traversal."""
         thief = state.thief
@@ -696,65 +695,36 @@ class JaxKeystoneKapers(JaxEnvironment[GameState, KeystoneKapersObservation, Key
         )
         level_speed = jnp.minimum(level_speed, self.consts.THIEF_MAX_SPEED)
 
-        # Thief AI: Move horizontally across building, then up via escalator
-        # Pattern: left->right->left->escalator up->repeat
+        # Thief AI: Real game behavior - moves horizontally, teleports up at building edges
+        # Pattern: right->up->left->up->repeat (no escalator usage)
 
-        # Move horizontally
+        # Move horizontally in current direction
         new_x = thief.x + level_speed * thief.direction
 
-        # Check for wrapping at building edges
+        # Check if reached building edges
         hit_left_edge = new_x <= 0
         hit_right_edge = new_x >= self.consts.TOTAL_BUILDING_WIDTH - self.consts.THIEF_WIDTH
+        hit_edge = jnp.logical_or(hit_left_edge, hit_right_edge)
 
-        # Reverse direction at edges
-        new_direction = jax.lax.select(
-            jnp.logical_or(hit_left_edge, hit_right_edge),
-            -thief.direction,
+        # Check escape condition BEFORE updating floor (if already on roof and hit edge)
+        escaped = jnp.logical_and(thief.floor >= 3, hit_edge)
+        
+        # When hitting edge: teleport up one floor and reverse direction (unless escaping)
+        new_floor = jnp.where(
+            jnp.logical_and(hit_edge, jnp.logical_not(escaped)),
+            jnp.minimum(thief.floor + 1, 3),  # Go up one floor, max is roof (floor 3)
+            thief.floor
+        )
+        
+        # Reverse direction when hitting edge (unless escaping)
+        new_direction = jnp.where(
+            jnp.logical_and(hit_edge, jnp.logical_not(escaped)),
+            -thief.direction,  # Reverse direction
             thief.direction
         )
-
-        # Clamp position within building
-        new_x = jnp.clip(new_x, 0, self.consts.TOTAL_BUILDING_WIDTH - self.consts.THIEF_WIDTH)
-
-        # Check for escalator usage (randomly use escalators when encountered)
-        # Only use escalators when moving in certain direction
-        section_x = new_x % self.consts.SECTION_WIDTH
-        on_escalator_1 = jnp.logical_and(
-            section_x >= self.consts.ESCALATOR_1_OFFSET,
-            section_x <= self.consts.ESCALATOR_1_OFFSET + self.consts.ESCALATOR_WIDTH
-        )
-        on_escalator_2 = jnp.logical_and(
-            section_x >= self.consts.ESCALATOR_2_OFFSET,
-            section_x <= self.consts.ESCALATOR_2_OFFSET + self.consts.ESCALATOR_WIDTH
-        )
-        on_escalator = jnp.logical_or(on_escalator_1, on_escalator_2)
-
-        # Use escalator with some probability when moving right and can go up
-        should_use_escalator = jnp.logical_and(
-            jnp.logical_and(on_escalator, new_direction > 0),
-            jnp.logical_and(thief.floor < 2, state.step_counter % 120 == 0)  # Every 2 seconds
-        )
-
-        # Check escape condition (reached roof)
-        escaped = thief.floor >= 3
-
-        # Try to reach roof via escalator when on top floor (but only at building edges)
-        at_building_edge = jnp.logical_or(
-            new_x <= self.consts.THIEF_WIDTH,  # Left edge
-            new_x >= self.consts.TOTAL_BUILDING_WIDTH - 2 * self.consts.THIEF_WIDTH  # Right edge
-        )
-        try_escape = jnp.logical_and(
-            jnp.logical_and(thief.floor == 2, at_building_edge),
-            jnp.logical_and(on_escalator, state.step_counter % 240 == 0)  # Only every 4 seconds
-        )
-
-        # Update floor if using escalator
-        new_floor = jax.lax.select(
-            try_escape, 3,  # Go to roof (escape)
-            jax.lax.select(should_use_escalator, thief.floor + 1, thief.floor)
-        )
-
-        # Update Y position based on floor
+        
+        # Clamp position within building boundaries
+        new_x = jnp.clip(new_x, 0, self.consts.TOTAL_BUILDING_WIDTH - self.consts.THIEF_WIDTH)        # Update Y position based on floor
         new_y = self._floor_y_position(new_floor)
 
         return ThiefState(
@@ -1096,12 +1066,12 @@ class JaxKeystoneKapers(JaxEnvironment[GameState, KeystoneKapersObservation, Key
             in_elevator=jnp.array(False)
         )
 
-        # Initialize thief at leftmost section of top floor
-        thief_start_x = 50  # Near left edge of building
+        # Initialize thief at elevator position on floor 1 (middle floor), moving right initially
+        thief_start_x = self.consts.ELEVATOR_BUILDING_X + self.consts.ELEVATOR_WIDTH // 2
         thief = ThiefState(
             x=jnp.array(thief_start_x),
-            y=jnp.array(self.consts.FLOOR_3_Y),
-            floor=jnp.array(2),
+            y=jnp.array(self.consts.FLOOR_2_Y),
+            floor=jnp.array(1),  # Floor 1 = middle floor in this numbering system
             speed=jnp.array(self.consts.THIEF_BASE_SPEED),
             direction=jnp.array(1),  # Moving right initially
             escaped=jnp.array(False)
