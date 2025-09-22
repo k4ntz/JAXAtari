@@ -35,7 +35,7 @@ class AsterixConstants(NamedTuple):
     num_lives: int = 3 # Anzahl der Leben
     max_digits_score: int = 6 # Maximal anzuzeigende Ziffern im Score
     entity_base_speed : float = 0.5 # Base Speed der Gegner und Collectibles
-    entity_character_speed_factor : float = 0.5 # Speed-Faktor pro Charakterstufe (Asterix=0, Obelix=1)
+    entity_character_speed_factor : float = 0.7 # Speed-Faktor pro Charakterstufe (Asterix=0, Obelix=1)
     ASTERIX_ITEM_POINTS = jnp.array([50, 100, 200, 300, 0], dtype=jnp.int32)  # Cauldron, Helmet, Shield, Lamp
     OBELIX_ITEM_POINTS = jnp.array([400, 500, 500, 500, 500], dtype=jnp.int32)  # Apple, Fish, Wild Boar Leg, Mug, Cauldron
 
