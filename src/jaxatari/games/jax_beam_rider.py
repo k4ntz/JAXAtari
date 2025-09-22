@@ -4136,104 +4136,77 @@ class BeamRiderRenderer(JAXGameRenderer):
 
     @partial(jax.jit, static_argnums=(0,))
     def _draw_3d_grid(self, screen: chex.Array, frame_count: int) -> chex.Array:
-        """Draw 3D grid with animated horizontal lines and 5 vertical beam positions"""
+        """Optimized 3D grid drawing"""
 
         height = self.constants.SCREEN_HEIGHT
         width = self.constants.SCREEN_WIDTH
         line_color = jnp.array([64, 64, 255], dtype=jnp.uint8)
 
-        # === Margins ===
         top_margin = int(height * 0.12)
         bottom_margin = int(height * 0.14)
         grid_height = height - top_margin - bottom_margin
 
-        # Generate mesh grid for pixel coordinates
-        y_indices = jnp.arange(height)
-        x_indices = jnp.arange(width)
-        y_grid, x_grid = jnp.meshgrid(y_indices, x_indices, indexing="ij")
-
-        # === Horizontal Lines ===
+        # === Horizontal Lines - Batch computation ===
         num_hlines = 7
         phase = (frame_count * 0.006) % 1.0
 
-        # Vectorized calculation of all horizontal line positions
-        def calculate_hline_y(i):
-            t = (phase + i / num_hlines) % 1.0
-            y = jnp.round((t ** 3.0) * grid_height).astype(int) + top_margin
-            return jnp.clip(y, 0, height - 1)
-
         # Calculate all line positions at once
-        hline_indices = jnp.arange(num_hlines)
-        hline_y_positions = jax.vmap(calculate_hline_y)(hline_indices)
+        line_indices = jnp.arange(num_hlines)
+        t_values = (phase + line_indices / num_hlines) % 1.0
+        y_positions = jnp.round((t_values ** 3.0) * grid_height).astype(int) + top_margin
+        y_positions = jnp.clip(y_positions, 0, height - 1)
 
-        # Create combined mask for all horizontal lines
-        hlines_mask = jnp.any(y_grid[None, :, :] == hline_y_positions[:, None, None], axis=0)
+        # Draw all horizontal lines using vectorized operations
+        def draw_hline(i, scr):
+            y = y_positions[i]
+            valid = (y >= 0) & (y < height)
+            return jax.lax.cond(
+                valid,
+                lambda s: s.at[y, :].set(line_color),
+                lambda s: s,
+                scr
+            )
 
-        # Apply horizontal lines to screen
-        screen = jnp.where(hlines_mask[..., None], line_color, screen)
+        screen = jax.lax.fori_loop(0, num_hlines, draw_hline, screen)
 
-        # === Vertical Lines ===
+        # === Vertical Dotted Lines - Reduce dot count ===
         beam_positions = self.beam_positions
         center_x = width / 2
         y0 = height - bottom_margin
         y1 = -height * 0.7
 
-        # Scale y range
+        # Pre-calculate dot positions for all beams
+        num_dots_per_beam = 12  # Reduced from 200/25
         t_top = jnp.clip((top_margin - y0) / (y1 - y0), 0.0, 1.0)
 
-        num_steps = 200
-        dot_spacing = 25
-
-        # Vectorized calculation of all dot positions for all beams
-        def calculate_beam_dots(beam_idx):
+        def draw_beam(beam_idx, scr):
             x0 = beam_positions[beam_idx]
             x1 = center_x + (x0 - center_x) * 0.05
 
-            # Calculate all dot positions for this beam
-            t_values = jnp.arange(num_steps) / (num_steps - 1)
-            t_clipped = t_values * t_top
+            # Calculate dot positions
+            dot_ts = jnp.linspace(0, t_top, num_dots_per_beam)
 
-            y_positions = y0 + (y1 - y0) * t_clipped
-            x_positions = x0 + (x1 - x0) * t_clipped
+            def draw_dot(dot_idx, scr_inner):
+                t = dot_ts[dot_idx]
+                y = jnp.round(y0 + (y1 - y0) * t).astype(int)
+                x = jnp.round(x0 + (x1 - x0) * t).astype(int)
 
-            # Only keep every dot_spacing-th dot
-            dot_mask = (jnp.arange(num_steps) % dot_spacing) == 0
-
-            # Clip positions
-            x_positions = jnp.clip(jnp.round(x_positions).astype(int), 0, width - 1)
-            y_positions = jnp.clip(jnp.round(y_positions).astype(int), 0, height - 1)
-
-            return x_positions, y_positions, dot_mask
-
-        # Calculate all beam dots at once
-        beam_indices = jnp.arange(self.constants.NUM_BEAMS)
-        all_x, all_y, all_masks = jax.vmap(calculate_beam_dots)(beam_indices)
-
-        # Apply dots using a loop (still needed for sequential screen updates)
-        def apply_beam_dots(beam_idx, scr):
-            x_positions = all_x[beam_idx]
-            y_positions = all_y[beam_idx]
-            dot_mask = all_masks[beam_idx]
-
-            def apply_single_dot(step_idx, scr_inner):
-                should_draw = dot_mask[step_idx]
-                xi = x_positions[step_idx]
-                yi = y_positions[step_idx]
+                valid = (x >= 0) & (x < width) & (y >= 0) & (y < height)
 
                 return jax.lax.cond(
-                    should_draw,
-                    lambda s: s.at[yi, xi].set(line_color),
+                    valid,
+                    lambda s: s.at[y, x].set(line_color),
                     lambda s: s,
                     scr_inner
                 )
 
-            return jax.lax.fori_loop(0, num_steps, apply_single_dot, scr)
+            return jax.lax.fori_loop(0, num_dots_per_beam, draw_dot, scr)
 
-        # Apply all beams
-        screen = jax.lax.fori_loop(0, self.constants.NUM_BEAMS, apply_beam_dots, screen)
+        screen = jax.lax.fori_loop(0, self.constants.NUM_BEAMS, draw_beam, screen)
 
         return screen
-    """More 3d version
+
+        """More 3d version
         @partial(jax.jit, static_argnums=(0,))
         def _draw_3d_grid(self, screen: chex.Array, frame_count: int) -> chex.Array:
             #Draw 3D grid with animated horizontal lines and 5 vertical dotted beam positions
@@ -4584,46 +4557,39 @@ class BeamRiderRenderer(JAXGameRenderer):
         )
 
         return scale_factor
+
     @partial(jax.jit, static_argnums=(0,))
     def _draw_scaled_enemy_sprite(self, screen: chex.Array, x: int, y: int, sprite: chex.Array,
                                   scale: float, color: chex.Array) -> chex.Array:
-        """Draw an enemy sprite with scaling"""
+        """Simplified sprite rendering using full screen masking"""
         sprite_height, sprite_width = sprite.shape
-
-        # Calculate scaled dimensions
         scaled_width = jnp.maximum(1, (sprite_width * scale).astype(jnp.int32))
         scaled_height = jnp.maximum(1, (sprite_height * scale).astype(jnp.int32))
 
-        # For very small scales (dots at horizon), just draw a single pixel
         is_dot = scale < 0.3
 
+        # For very small sprites, just draw a dot
         def draw_dot():
-            # Create coordinate grids
-            y_indices = jnp.arange(self.constants.SCREEN_HEIGHT)
-            x_indices = jnp.arange(self.constants.SCREEN_WIDTH)
-            y_grid, x_grid = jnp.meshgrid(y_indices, x_indices, indexing='ij')
-
-            # Single pixel mask
-            dot_mask = (x_grid == x) & (y_grid == y) & (x >= 0) & (x < self.constants.SCREEN_WIDTH) & (y >= 0) & (
-                        y < self.constants.SCREEN_HEIGHT)
-
-            return jnp.where(
-                dot_mask[..., None],
-                color,
+            valid = (x >= 0) & (x < self.constants.SCREEN_WIDTH) & \
+                    (y >= 0) & (y < self.constants.SCREEN_HEIGHT)
+            return jax.lax.cond(
+                valid,
+                lambda s: s.at[y, x].set(color),
+                lambda s: s,
                 screen
-            ).astype(jnp.uint8)
+            )
 
         def draw_scaled_sprite():
-            # Create coordinate grids
+            # Create coordinate grids for entire screen (fixed size)
             y_indices = jnp.arange(self.constants.SCREEN_HEIGHT)
             x_indices = jnp.arange(self.constants.SCREEN_WIDTH)
             y_grid, x_grid = jnp.meshgrid(y_indices, x_indices, indexing='ij')
 
-            # Center the scaled sprite
+            # Calculate sprite boundaries
             start_x = x - scaled_width // 2
             start_y = y - scaled_height // 2
 
-            # Create mask for scaled sprite area
+            # Create mask for sprite area
             sprite_mask = (
                     (x_grid >= start_x) &
                     (x_grid < start_x + scaled_width) &
@@ -4633,11 +4599,11 @@ class BeamRiderRenderer(JAXGameRenderer):
                     (start_y >= 0) & (start_y + scaled_height <= self.constants.SCREEN_HEIGHT)
             )
 
-            # Map screen coordinates to original sprite coordinates
+            # Map screen coordinates to sprite coordinates
             sprite_x_coords = ((x_grid - start_x) * sprite_width / scaled_width).astype(jnp.int32)
             sprite_y_coords = ((y_grid - start_y) * sprite_height / scaled_height).astype(jnp.int32)
 
-            # Clamp coordinates to sprite bounds
+            # Clip to sprite bounds
             sprite_x_coords = jnp.clip(sprite_x_coords, 0, sprite_width - 1)
             sprite_y_coords = jnp.clip(sprite_y_coords, 0, sprite_height - 1)
 
@@ -4653,12 +4619,10 @@ class BeamRiderRenderer(JAXGameRenderer):
                 screen
             ).astype(jnp.uint8)
 
-        # Choose between dot or scaled sprite based on scale
         return jax.lax.cond(is_dot, draw_dot, draw_scaled_sprite)
-
     @partial(jax.jit, static_argnums=(0,))
     def _draw_enemies(self, screen: chex.Array, enemies: chex.Array, state: BeamRiderState) -> chex.Array:
-        """Draw enemies - OPTIMIZED with vmap for calculations, loop for sprite rendering"""
+        """Optimized enemy drawing - removes the nested loop bottleneck"""
 
         # Pre-calculate coordinate grids once
         y_indices = jnp.arange(self.constants.SCREEN_HEIGHT)
@@ -4693,7 +4657,7 @@ class BeamRiderRenderer(JAXGameRenderer):
                 self.constants.ENEMY_HEIGHT
             )
 
-            # Calculate scale - ensure it's always a JAX array
+            # Calculate scale
             scale_factor = jnp.where(no_scaling, jnp.array(1.0), self._get_enemy_scale(y))
 
             # Calculate scaled dimensions
@@ -4726,7 +4690,7 @@ class BeamRiderRenderer(JAXGameRenderer):
             # Determine rendering type
             is_dot = (~no_scaling) & (scale_factor < 0.25)
 
-            # Determine which sprite to use (if any)
+            # Determine which sprite to use
             use_sprite = active & partially_visible & (
                     ((enemy_type == self.constants.ENEMY_TYPE_WHITE_SAUCER) & (scale_factor >= 0.4)) |
                     ((enemy_type == self.constants.ENEMY_TYPE_BROWN_DEBRIS) & (scale_factor >= 0.4)) |
@@ -4747,7 +4711,7 @@ class BeamRiderRenderer(JAXGameRenderer):
                 'draw_y': draw_y,
                 'active': active,
                 'enemy_type': enemy_type,
-                'scale_factor': scale_factor,  # Now guaranteed to be a JAX array
+                'scale_factor': scale_factor,
                 'scaled_width': scaled_width,
                 'scaled_height': scaled_height,
                 'partially_visible': partially_visible,
@@ -4758,128 +4722,102 @@ class BeamRiderRenderer(JAXGameRenderer):
         # Use vmap to calculate all enemy properties at once
         enemy_props = jax.vmap(calculate_enemy_properties)(enemies)
 
-        # Helper function for sprite rendering
-        def render_sprite(screen, sprite, x, y, scale_factor, color):
-            """Generic sprite rendering with scaling"""
-            sprite_h, sprite_w = sprite.shape
-
-            # Ensure scale_factor is a JAX array
-            scale_factor = jnp.asarray(scale_factor)
-
-            # Calculate scaled dimensions
-            sprite_scaled_w = jnp.maximum(1, (sprite_w * scale_factor).astype(int))
-            sprite_scaled_h = jnp.maximum(1, (sprite_h * scale_factor).astype(int))
-
-            # Center sprite at position
-            sprite_x = (x - sprite_scaled_w // 2).astype(int)
-            sprite_y = (y - sprite_scaled_h // 2).astype(int)
-
-            # Create sprite mask using nearest-neighbor scaling
-            sprite_mask = jnp.zeros((self.constants.SCREEN_HEIGHT, self.constants.SCREEN_WIDTH), dtype=bool)
-
-            def set_pixel(py, mask_inner):
-                def set_pixel_x(px, mask_inner2):
-                    # Map screen pixel to sprite pixel
-                    sprite_px = ((px - sprite_x) * sprite_w / sprite_scaled_w).astype(int)
-                    sprite_py = ((py - sprite_y) * sprite_h / sprite_scaled_h).astype(int)
-
-                    # Check bounds
-                    in_bounds = (
-                            (px >= sprite_x) & (px < sprite_x + sprite_scaled_w) &
-                            (py >= sprite_y) & (py < sprite_y + sprite_scaled_h) &
-                            (sprite_px >= 0) & (sprite_px < sprite_w) &
-                            (sprite_py >= 0) & (sprite_py < sprite_h) &
-                            (px >= 0) & (px < self.constants.SCREEN_WIDTH) &
-                            (py >= 0) & (py < self.constants.SCREEN_HEIGHT)
-                    )
-
-                    # Get sprite value
-                    sprite_val = jnp.where(
-                        in_bounds,
-                        sprite[sprite_py, sprite_px],
-                        0
-                    )
-
-                    # Set mask
-                    mask_inner2 = mask_inner2.at[py, px].set(
-                        mask_inner2[py, px] | ((sprite_val == 1) & in_bounds)
-                    )
-                    return mask_inner2
-
-                return jax.lax.fori_loop(0, self.constants.SCREEN_WIDTH, set_pixel_x, mask_inner)
-
-            sprite_mask = jax.lax.fori_loop(0, self.constants.SCREEN_HEIGHT, set_pixel, sprite_mask)
-
-            return jnp.where(sprite_mask[..., None], color, screen)
-
-        # Process sprites using a loop (since each needs different handling)
+        # Process sprites using a loop
         def draw_single_enemy(i, screen):
-            # Use jax.tree.map instead of jax.tree_map (fix deprecation)
             props = jax.tree.map(lambda x: x[i], enemy_props)
 
-            # Draw sprite-based enemies
+            # WHITE_SAUCER - use optimized sprite drawing
             screen = jax.lax.cond(
                 props['use_sprite'] & (props['enemy_type'] == self.constants.ENEMY_TYPE_WHITE_SAUCER),
-                lambda s: render_sprite(s, self.white_saucer_sprite, props['x'], props['y'],
-                                        props['scale_factor'], jnp.array(self.constants.WHITE, dtype=jnp.uint8)),
+                lambda s: self._draw_scaled_enemy_sprite(
+                    s, props['x'], props['y'],
+                    self.white_saucer_sprite,
+                    props['scale_factor'],
+                    jnp.array(self.constants.WHITE, dtype=jnp.uint8)
+                ),
                 lambda s: s,
                 screen
             )
 
+            # BROWN_DEBRIS
             screen = jax.lax.cond(
                 props['use_sprite'] & (props['enemy_type'] == self.constants.ENEMY_TYPE_BROWN_DEBRIS),
-                lambda s: render_sprite(s, self.brown_debris_sprite, props['x'], props['y'],
-                                        props['scale_factor'],
-                                        jnp.array(self.constants.BROWN_DEBRIS_COLOR, dtype=jnp.uint8)),
+                lambda s: self._draw_scaled_enemy_sprite(
+                    s, props['x'], props['y'],
+                    self.brown_debris_sprite,
+                    props['scale_factor'],
+                    jnp.array(self.constants.BROWN_DEBRIS_COLOR, dtype=jnp.uint8)
+                ),
                 lambda s: s,
                 screen
             )
 
+            # GREEN_BLOCKER
             screen = jax.lax.cond(
                 props['use_sprite'] & (props['enemy_type'] == self.constants.ENEMY_TYPE_GREEN_BLOCKER),
-                lambda s: render_sprite(s, self.green_blocker_sprite, props['x'], props['y'],
-                                        props['scale_factor'],
-                                        jnp.array(self.constants.GREEN_BLOCKER_COLOR, dtype=jnp.uint8)),
+                lambda s: self._draw_scaled_enemy_sprite(
+                    s, props['x'], props['y'],
+                    self.green_blocker_sprite,
+                    props['scale_factor'],
+                    jnp.array(self.constants.GREEN_BLOCKER_COLOR, dtype=jnp.uint8)
+                ),
                 lambda s: s,
                 screen
             )
 
+            # GREEN_BOUNCE
             screen = jax.lax.cond(
                 props['use_sprite'] & (props['enemy_type'] == self.constants.ENEMY_TYPE_GREEN_BOUNCE),
-                lambda s: render_sprite(s, self.green_bounce_sprite, props['x'], props['y'],
-                                        props['scale_factor'],
-                                        jnp.array(self.constants.GREEN_BOUNCE_COLOR, dtype=jnp.uint8)),
+                lambda s: self._draw_scaled_enemy_sprite(
+                    s, props['x'], props['y'],
+                    self.green_bounce_sprite,
+                    props['scale_factor'],
+                    jnp.array(self.constants.GREEN_BOUNCE_COLOR, dtype=jnp.uint8)
+                ),
                 lambda s: s,
                 screen
             )
 
+            # BLUE_CHARGER
             screen = jax.lax.cond(
                 props['use_sprite'] & (props['enemy_type'] == self.constants.ENEMY_TYPE_BLUE_CHARGER),
-                lambda s: render_sprite(s, self.blue_charger_sprite, props['x'], props['y'],
-                                        props['scale_factor'],
-                                        jnp.array(self.constants.BLUE_CHARGER_COLOR, dtype=jnp.uint8)),
+                lambda s: self._draw_scaled_enemy_sprite(
+                    s, props['x'], props['y'],
+                    self.blue_charger_sprite,
+                    props['scale_factor'],
+                    jnp.array(self.constants.BLUE_CHARGER_COLOR, dtype=jnp.uint8)
+                ),
                 lambda s: s,
                 screen
             )
 
+            # ORANGE_TRACKER
             screen = jax.lax.cond(
                 props['use_sprite'] & (props['enemy_type'] == self.constants.ENEMY_TYPE_ORANGE_TRACKER),
-                lambda s: render_sprite(s, self.orange_tracker_sprite, props['x'], props['y'],
-                                        props['scale_factor'],
-                                        jnp.array(self.constants.ORANGE_TRACKER_COLOR, dtype=jnp.uint8)),
+                lambda s: self._draw_scaled_enemy_sprite(
+                    s, props['x'], props['y'],
+                    self.orange_tracker_sprite,
+                    props['scale_factor'],
+                    jnp.array(self.constants.ORANGE_TRACKER_COLOR, dtype=jnp.uint8)
+                ),
                 lambda s: s,
                 screen
             )
 
+            # YELLOW_REJUVENATOR
             screen = jax.lax.cond(
                 props['use_sprite'] & (props['enemy_type'] == self.constants.ENEMY_TYPE_YELLOW_REJUVENATOR),
-                lambda s: render_sprite(s, self.yellow_rejuv, props['x'], props['y'],
-                                        props['scale_factor'],
-                                        jnp.array(self.constants.YELLOW_REJUVENATOR_COLOR, dtype=jnp.uint8)),
+                lambda s: self._draw_scaled_enemy_sprite(
+                    s, props['x'], props['y'],
+                    self.yellow_rejuv,
+                    props['scale_factor'],
+                    jnp.array(self.constants.YELLOW_REJUVENATOR_COLOR, dtype=jnp.uint8)
+                ),
                 lambda s: s,
                 screen
             )
 
+            # SENTINEL_SHIP
             screen = jax.lax.cond(
                 props['use_sprite'] & (props['enemy_type'] == self.constants.ENEMY_TYPE_SENTINEL_SHIP),
                 lambda s: self._draw_sentinel_sprite(s, props['x'], props['y'], props['scale_factor']),
@@ -4887,27 +4825,33 @@ class BeamRiderRenderer(JAXGameRenderer):
                 screen
             )
 
+            # REJUVENATOR_DEBRIS
             screen = jax.lax.cond(
                 props['use_sprite'] & (props['enemy_type'] == self.constants.ENEMY_TYPE_REJUVENATOR_DEBRIS),
-                lambda s: render_sprite(s, self.debris_sprite, props['x'], props['y'],
-                                        props['scale_factor'],
-                                        jnp.array(self.constants.REJUVENATOR_DEBRIS_COLOR, dtype=jnp.uint8)),
+                lambda s: self._draw_scaled_enemy_sprite(
+                    s, props['x'], props['y'],
+                    self.debris_sprite,
+                    props['scale_factor'],
+                    jnp.array(self.constants.REJUVENATOR_DEBRIS_COLOR, dtype=jnp.uint8)
+                ),
                 lambda s: s,
                 screen
             )
 
+            # YELLOW_CHIRPER
             screen = jax.lax.cond(
                 props['use_sprite'] & (props['enemy_type'] == self.constants.ENEMY_TYPE_YELLOW_CHIRPER),
-                lambda s: self._draw_animated_chirper_sprite(s, props['x'], props['y'], props['scale_factor'],
-                                                             jnp.array(self.constants.YELLOW_CHIRPER_COLOR,
-                                                                       dtype=jnp.uint8),
-                                                             state.frame_count),
+                lambda s: self._draw_animated_chirper_sprite(
+                    s, props['x'], props['y'],
+                    props['scale_factor'],
+                    jnp.array(self.constants.YELLOW_CHIRPER_COLOR, dtype=jnp.uint8),
+                    state.frame_count
+                ),
                 lambda s: s,
                 screen
             )
 
             # Draw non-sprite enemies (rectangles or dots)
-            # Create masks for dots and regular rectangles
             dot_mask = (
                     props['is_dot'] &
                     props['active'] &
@@ -4972,6 +4916,7 @@ class BeamRiderRenderer(JAXGameRenderer):
         screen = jax.lax.fori_loop(0, self.constants.MAX_ENEMIES, draw_single_enemy, screen)
 
         return screen
+
     @partial(jax.jit, static_argnums=(0,))
     def _draw_ui(self, screen: chex.Array, state) -> chex.Array:
         """
