@@ -52,6 +52,7 @@ class NameThisGameConfig:
     shark_base_speed: int = 1
     shark_width: int = 15
     shark_height: int = 12
+    shark_points: jnp.ndarray = field(default_factory = lambda: jnp.array([10, 20, 30, 40, 50, 80, 100], dtype=jnp.int32))
     # Tentacles
     max_tentacles: int = 8
     tentacle_base_x: jnp.ndarray = field(default_factory=lambda: jnp.array([24, 38, 54, 70, 86, 102, 118, 134], dtype=jnp.int32))
@@ -78,7 +79,7 @@ class NameThisGameConfig:
     round_clear_shark_resets: int = 3
     oxy_frames_speedup_per_round: int = 30
     oxy_min_shrink_interval: int = 20
-    tentacle_growth_round_coeff: float = 0.01
+    tentacle_growth_round_coeff: float = 0.005
     # Lives / treasure
     lives_max: int = 3
     treasure_ui_x: int = 72
@@ -1033,7 +1034,9 @@ class JaxNameThisGame(JaxEnvironment[NameThisGameState, NameThisGameObservation,
               (spear_top < shark_bottom) & (spear_bottom > shark_top)
 
         def _on_hit(s):
-            points = jnp.array(100, jnp.int32) * (s.shark_lane + 1)
+            lane_points = cfg.shark_points
+            idx = jnp.clip(s.shark_lane, 0, lane_points.shape[0] - 1)
+            points = jnp.take(lane_points, idx, mode="clip")
             go_left = jax.random.bernoulli(rng_side)
             reset_lane = jnp.array(0, jnp.int32)
             reset_y = cfg.shark_lanes_y[reset_lane]
@@ -1190,23 +1193,34 @@ class JaxNameThisGame(JaxEnvironment[NameThisGameState, NameThisGameObservation,
             return s._replace(oxygen_frames_remaining=s.oxy_bar_px)  # keep coherent
 
         def _active(s: NameThisGameState) -> NameThisGameState:
-            # Are we under the oxygen line?
             diver_center = s.diver_x + (cfg.diver_width // 2)
-            line_center  = s.oxygen_line_x + (cfg.oxygen_line_width // 2)
+            line_center = s.oxygen_line_x + (cfg.oxygen_line_width // 2)
             under = s.oxygen_line_active & (jnp.abs(diver_center - line_center) <= cfg.oxygen_pickup_radius)
 
-            # Count contact frames and apply +4 px every K frames
+            # every K contact frames we receive one "unit" of air
             contact_frames_needed = cfg.oxygen_contact_every_n_frames
             cnt_next = jnp.where(under, s.oxygen_contact_counter + 1, jnp.array(0, jnp.int32))
             tick = under & (cnt_next % contact_frames_needed == 0) & (cnt_next > 0)
 
-            inc = jnp.where(tick, jnp.array(cfg.hud_bar_shrink_px_per_step_total, jnp.int32), jnp.array(0, jnp.int32))
-            new_oxy_bar = jnp.minimum(s.oxy_bar_px + inc, jnp.array(cfg.hud_bar_initial_px, jnp.int32))
+            max_px = jnp.array(cfg.hud_bar_initial_px, jnp.int32)
+            full_before = s.oxy_bar_px >= max_px
+
+            # if not full, increase bar; if full, add points
+            inc_bar = jnp.where(tick & (~full_before),
+                                jnp.array(cfg.hud_bar_shrink_px_per_step_total, jnp.int32),
+                                jnp.array(0, jnp.int32))
+            new_oxy_bar = jnp.minimum(s.oxy_bar_px + inc_bar, max_px)
+
+            add_points = jnp.where(tick & full_before,
+                                   jnp.array(cfg.oxygen_contact_points, jnp.int32),
+                                   jnp.array(0, jnp.int32))
+            new_score = s.score + add_points
 
             return s._replace(
                 oxy_bar_px=new_oxy_bar,
                 oxygen_contact_counter=cnt_next,
-                oxygen_frames_remaining=new_oxy_bar,  # keep a simple proxy in 'frames' slot
+                oxygen_frames_remaining=new_oxy_bar,
+                score=new_score,
             )
 
         return jax.lax.cond(state.resting, _rest, _active, state)
@@ -1407,7 +1421,7 @@ class JaxNameThisGame(JaxEnvironment[NameThisGameState, NameThisGameObservation,
         done = self._get_done(state)
         # Calculate reward as score gain in this step
         new_reward = (state.score - prev_state.score).astype(jnp.float32)
-        state = state._replace(reward=new_reward)
+        state = state._replace(reward=new_reward, fire_button_prev=fire_pressed)
         all_rewards = self._get_all_reward(prev_state, state)
         info = self._get_info(state, all_rewards)
         return observation, state, state.reward.astype(jnp.float32), done, info
