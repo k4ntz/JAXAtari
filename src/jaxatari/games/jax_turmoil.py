@@ -48,9 +48,6 @@ class TurmoilConstants(NamedTuple):
         "boom" : 8
     }
 
-class SpawnState(NamedTuple):
-    pass
-
 # Game state container
 class TurmoilState(NamedTuple):
     player_x: chex.Array
