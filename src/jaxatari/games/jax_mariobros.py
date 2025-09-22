@@ -37,11 +37,13 @@ PLAYER_SIZE = (9, 23)  # w, h
 PLAYER_START_X, PLAYER_START_Y = 15, 140
 PLAYER_RESPWAN_XY = jnp.array([78, 36], dtype=jnp.float32)
 PALETTE = jnp.array([
-    [0, 0, 0],        # black
-    [104, 72, 198],   # blue
-    [252, 188, 116],  # yellow
-    [181, 83, 40],    # orange
-    [134, 106, 38],   # green
+    [0, 0, 0],        # 0: transparent
+    [104, 72, 198],   # 1: blue, mario hat
+    [252, 188, 116],  # 2: skin
+    [181, 83, 40],    # 3: brown, mario overalls
+    [134, 106, 38],   # 4: green mario shoes
+    [152, 163, 74],   # 5: enemy olive
+    [227, 151, 89],   # 6: fireball orange
 ], dtype=jnp.uint8)
 
 PLAYER_STANDING_RIGHT= jnp.array([
@@ -241,67 +243,146 @@ PLAYER_JUMP_RIGHT = jnp.array([
 ], dtype=jnp.uint8)
 
 FIREBALL_1 = jnp.array([
-    [0,0,0,3,3,0,0],
-    [0,0,0,0,0,3,0],
-    [0,3,3,3,0,0,0],
-    [0,3,3,3,0,3,3],
-    [3,3,3,3,3,0,0],
-    [3,3,3,3,3,0,3],
-    [3,3,3,3,3,0,3],
-    [3,3,3,3,0,3,3],
-    [3,3,3,3,3,3,3],
-    [0,3,3,3,3,3,0],
-    [0,3,3,3,3,3,0],
-    [0,0,3,3,3,0,0],
+    [0,0,0,6,6,0,0],
+    [0,0,0,0,0,6,0],
+    [0,6,6,6,0,0,0],
+    [0,6,6,6,0,6,6],
+    [6,6,6,6,6,0,0],
+    [6,6,6,6,6,0,6],
+    [6,6,6,6,6,0,6],
+    [6,6,6,6,0,6,6],
+    [6,6,6,6,6,6,6],
+    [0,6,6,6,6,6,0],
+    [0,6,6,6,6,6,0],
+    [0,0,6,6,6,0,0],
 ], dtype=jnp.uint8)
 
 FIREBALL_2 = jnp.array([
-    [0,0,3,3,0,0,0,0],
-    [0,3,3,3,3,0,0,0],
-    [3,3,3,3,3,0,0,0],
-    [3,3,3,3,3,3,0,0],
-    [3,3,3,3,3,3,0,3],
-    [3,3,3,3,3,3,0,0],
-    [3,3,3,3,3,3,0,0],
-    [3,3,3,3,3,3,0,3],
-    [3,3,0,3,3,0,0,3],
-    [0,3,3,0,0,0,3,0],
-    [0,3,3,3,3,3,3,0],
-    [0,0,3,3,3,0,0,0],
+    [0,0,6,6,0,0,0,0],
+    [0,6,6,6,6,0,0,0],
+    [6,6,6,6,6,0,0,0],
+    [6,6,6,6,6,6,0,0],
+    [6,6,6,6,6,6,0,6],
+    [6,6,6,6,6,6,0,0],
+    [6,6,6,6,6,6,0,0],
+    [6,6,6,6,6,6,0,6],
+    [6,6,0,6,6,0,0,6],
+    [0,6,6,0,0,0,6,0],
+    [0,6,6,6,6,6,6,0],
+    [0,0,6,6,6,0,0,0],
 ], dtype=jnp.uint8)
 
 FIREBALL_3 = jnp.array([
-    [0,0,3,3,3,3,0,0],
-    [0,3,3,0,3,3,3,0],
-    [0,0,0,0,0,3,3,0],
-    [3,0,0,0,0,0,3,3],
-    [3,0,0,3,3,0,3,3],
-    [0,0,3,3,3,3,0,3],
-    [3,0,3,3,3,3,3,3],
-    [0,0,3,3,3,3,3,3],
-    [0,0,3,3,3,3,3,3],
-    [0,0,3,3,3,3,3,0],
-    [0,0,3,3,3,3,3,0],
-    [0,0,0,3,3,3,0,0],
+    [0,0,6,6,6,6,0,0],
+    [0,6,6,0,6,6,6,0],
+    [0,0,0,0,0,6,6,0],
+    [6,0,0,0,0,0,6,6],
+    [6,0,0,6,6,0,6,6],
+    [0,0,6,6,6,6,0,6],
+    [6,0,6,6,6,6,6,6],
+    [0,0,6,6,6,6,6,6],
+    [0,0,6,6,6,6,6,6],
+    [0,0,6,6,6,6,6,0],
+    [0,0,6,6,6,6,6,0],
+    [0,0,0,6,6,6,0,0],
 ], dtype=jnp.uint8)
 
 FIREBALL_4 = jnp.array([
-    [0,0,0,3,3,0,0],
-    [0,3,3,3,3,3,0],
-    [0,3,3,3,3,3,0],
-    [0,3,0,3,3,3,3],
-    [3,3,0,3,3,3,3],
-    [3,0,3,3,3,3,3],
-    [3,0,3,3,3,3,3],
-    [3,0,3,3,3,3,3],
-    [3,3,0,3,3,3,0],
-    [0,3,0,0,0,0,0],
-    [0,3,3,3,0,0,0],
-    [0,0,0,3,3,3,0],
+    [0,0,0,6,6,0,0],
+    [0,6,6,6,6,6,0],
+    [0,6,6,6,6,6,0],
+    [0,6,0,6,6,6,6],
+    [6,6,0,6,6,6,6],
+    [6,0,6,6,6,6,6],
+    [6,0,6,6,6,6,6],
+    [6,0,6,6,6,6,6],
+    [6,6,0,6,6,6,0],
+    [0,6,0,0,0,0,0],
+    [0,6,6,6,0,0,0],
+    [0,0,0,6,6,6,0],
 ], dtype=jnp.uint8)
+
 
 # --- Enemies params ---
 ENEMY_SIZE = (8, 8)  # w, h
+ENEMY_HOLD    = jnp.int32(16) # number of frames to hold each enemy walking frame
+
+ENEMY_WALK_RIGHT_1= jnp.array([
+    [0,0,0,0,0,0,5,0],
+    [0,0,0,0,0,5,0,5],
+    [0,0,0,0,0,5,5,0],
+    [0,0,0,0,0,0,5,5],
+    [0,0,5,5,0,0,5,0],
+    [0,5,5,5,5,0,5,0],
+    [5,5,5,5,5,5,5,0],
+    [5,5,5,5,5,5,0,0],
+    [0,5,0,0,5,0,0,0],
+    [0,5,0,0,5,0,0,0],
+], dtype=jnp.uint8)
+
+ENEMY_WALK_RIGHT_2 = jnp.array([
+    [0,0,0,0,0,0,5,0],
+    [0,0,0,0,0,5,0,5],
+    [0,0,5,5,0,5,5,5],
+    [0,5,5,5,5,0,5,0],
+    [5,5,5,5,5,5,0,0],
+    [5,5,5,5,5,5,0,0],
+    [0,5,5,5,5,0,0,0],
+    [0,5,0,0,5,0,0,0],
+    [5,0,0,5,0,0,0,0],
+], dtype=jnp.uint8)
+
+ENEMY_WALK_LEFT_1 = jnp.array([
+    [0,5,0,0,0,0,0,0],
+    [5,0,5,0,0,0,0,0],
+    [0, 5, 5, 0, 0, 0, 0, 0],
+    [5, 5, 0, 0, 0, 0, 0, 0],
+    [0, 5, 0, 0, 5, 5, 0, 0],
+    [0, 5, 0, 5, 5, 5, 5, 0],
+    [0, 5, 5, 5, 5, 5, 5, 5],
+    [0, 0, 5, 5, 5, 5, 5, 5],
+    [0, 0, 0, 5, 0, 0, 5, 0],
+    [0, 0, 0, 5, 0, 0, 5, 0]], jnp.uint8)
+
+ENEMY_WALK_LEFT_2 = jnp.array([
+    [0, 5, 0, 0, 0, 0, 0, 0],
+       [5, 0, 5, 0, 0, 0, 0, 0],
+       [5, 5, 5, 0, 5, 5, 0, 0],
+       [0, 5, 0, 5, 5, 5, 5, 0],
+       [0, 0, 5, 5, 5, 5, 5, 5],
+       [0, 0, 5, 5, 5, 5, 5, 5],
+       [0, 0, 0, 5, 5, 5, 5, 0],
+       [0, 0, 0, 5, 0, 0, 5, 0],
+       [0, 0, 0, 0, 5, 0, 0, 5]], jnp.uint8)
+
+ENEMY_STUNNED_1 = jnp.array([
+    [0,0,0,0,5,0,0,0],
+    [0,0,0,0,5,0,0,0],
+    [0,5,0,0,5,0,0,0],
+    [0,5,0,0,5,0,0,0],
+    [0,5,0,5,5,0,5,5],
+    [0,5,5,5,5,5,5,0],
+    [5,5,5,5,0,5,0,5],
+    [5,5,5,5,5,0,5,0],
+    [5,5,5,5,5,0,0,0],
+    [0,5,5,5,0,0,0,0],
+], dtype=jnp.uint8)
+
+ENEMY_STUNNED_2 = jnp.array([
+    [0,0,5,5,5,0,0,0],
+    [0,0,5,0,5,0,0,0],
+    [0,0,0,5,0,0,0,0],
+    [5,0,0,5,0,0,5,0],
+    [0,0,5,5,5,0,0,0],
+    [0,5,5,5,5,5,0,0],
+    [0,5,5,5,5,5,0,0],
+    [0,5,5,5,5,5,0,0],
+    [0,0,5,5,5,0,0,0],
+    [0,0,5,0,5,0,0,0],
+    [0,0,5,0,5,0,0,0],
+    [0,5,5,0,5,5,0,0],
+], dtype=jnp.uint8)
+
 
 # --- Fireball params ---
 FIREBALL_SIZE = (9, 14)
@@ -312,6 +393,8 @@ FIREBALL_Y = jnp.array([175 - 28, 135 - 28, 95 - 28, 57 - 28])
 FIREBALL_X = jnp.array([4, 142])
 FIREBALL_INIT_XY = jnp.array([FIREBALL_X[1], FIREBALL_Y[1]])
 FIREBALL_DIR = jnp.array([1, -1])
+FIREBALL_HOLD = jnp.int32(4)  # change to taste
+
 # --- Object Colors ---
 PLAYER_COLOR = jnp.array([0, 255, 0], dtype=jnp.uint8)
 ENEMY_COLOR = jnp.array([255, 0, 0], dtype=jnp.uint8)
@@ -1082,6 +1165,15 @@ FIREBALL_1_RGB, FIREBALL_1_MASK = indices_to_rgb_and_mask(FIREBALL_1, PALETTE)
 FIREBALL_2_RGB, FIREBALL_2_MASK = indices_to_rgb_and_mask(FIREBALL_2, PALETTE)
 FIREBALL_3_RGB, FIREBALL_3_MASK = indices_to_rgb_and_mask(FIREBALL_3, PALETTE)
 FIREBALL_4_RGB, FIREBALL_4_MASK = indices_to_rgb_and_mask(FIREBALL_4, PALETTE)
+ENEMY_WALK_RIGHT_1_RGB, ENEMY_WALK_RIGHT_1_MASK = indices_to_rgb_and_mask(ENEMY_WALK_RIGHT_1, PALETTE)
+ENEMY_WALK_RIGHT_2_RGB, ENEMY_WALK_RIGHT_2_MASK = indices_to_rgb_and_mask(ENEMY_WALK_RIGHT_2, PALETTE)
+ENEMY_WALK_LEFT_1_RGB, ENEMY_WALK_LEFT_1_MASK = indices_to_rgb_and_mask(ENEMY_WALK_LEFT_1, PALETTE)
+ENEMY_WALK_LEFT_2_RGB, ENEMY_WALK_LEFT_2_MASK = indices_to_rgb_and_mask(ENEMY_WALK_LEFT_2, PALETTE)
+ENEMY_STUNNED_1_RGB, ENEMY_STUNNED_1_MASK = indices_to_rgb_and_mask(ENEMY_STUNNED_1, PALETTE)
+ENEMY_STUNNED_2_RGB, ENEMY_STUNNED_2_MASK = indices_to_rgb_and_mask(ENEMY_STUNNED_2, PALETTE)
+
+
+
 
 import jax.numpy as jnp
 from jax import lax
@@ -1166,6 +1258,42 @@ def draw_player_by_state(image, p, px, py):
                     lambda im: lax.cond(walking, draw_walk, draw_stand, im),
                     image)
 
+ENEMY_WEAK_TOTAL = jnp.int32(776)
+
+def draw_enemy_by_state(image, ex, ey, vx, timer, status, weak_timer):
+    """
+    - status: 1=weak(stunned), 2=strong/recovering, 3=dead
+    - weak_timer: frames remaining in weak state (counts down from 776)
+    If stunned: show STUNNED_1 for first half, STUNNED_2 for second half.
+    Else: animate walk based on horizontal direction.
+    """
+    # enemy stunned
+    def draw_stunned(im):
+        first_half = weak_timer > (ENEMY_WEAK_TOTAL // 2)
+        def s1(ii): return draw_sprite_rgb(ii, ex, ey, ENEMY_STUNNED_1_RGB, ENEMY_STUNNED_1_MASK)
+        def s2(ii): return draw_sprite_rgb(ii, ex, ey-2, ENEMY_STUNNED_2_RGB, ENEMY_STUNNED_2_MASK) # second frame is a bit larger (ey-2)
+        return lax.cond(first_half, s1, s2, im)
+
+    # enemy is walking
+    frame1 = ((timer // ENEMY_HOLD) % 2) == 0
+
+    def r1(im): return draw_sprite_rgb(im, ex, ey, ENEMY_WALK_RIGHT_1_RGB, ENEMY_WALK_RIGHT_1_MASK)
+    def r2(im): return draw_sprite_rgb(im, ex, ey, ENEMY_WALK_RIGHT_2_RGB, ENEMY_WALK_RIGHT_2_MASK)
+    def l1(im): return draw_sprite_rgb(im, ex, ey, ENEMY_WALK_LEFT_1_RGB,  ENEMY_WALK_LEFT_1_MASK)
+    def l2(im): return draw_sprite_rgb(im, ex, ey, ENEMY_WALK_LEFT_2_RGB,  ENEMY_WALK_LEFT_2_MASK)
+
+    def draw_right(im): return lax.cond(frame1, r1, r2, im)
+    def draw_left(im):  return lax.cond(frame1, l1, l2, im)
+
+    dir_right = vx >= 0.0
+
+    def draw_walk(im):
+        return lax.cond(dir_right, draw_right, draw_left, im)
+
+    is_stunned = (status == 1)
+    return lax.cond(is_stunned, draw_stunned, draw_walk, image)
+
+
 def draw_fireball(image, f, fx, fy):
 
     def fireball_1(im): return draw_sprite_rgb(im, fx, fy, FIREBALL_1_RGB, FIREBALL_1_MASK)
@@ -1202,7 +1330,11 @@ class MarioBrosRenderer(JAXGameRenderer):
 
                 def do_draw(_):
                     ex, ey = state.game.enemy.enemy_pos[i]
-                    return draw_rect(img, ex, ey, *ENEMY_SIZE, ENEMY_COLOR)
+                    vx, vy = state.game.enemy.enemy_vel[i]
+                    timer  = state.game.enemy.enemy_timer[i]
+                    status = state.game.enemy.enemy_status[i]
+                    wtime  = state.game.enemy.enemy_weak_timer[i]
+                    return draw_enemy_by_state(img, ex, ey-2, vx, timer, status, wtime)
 
                 def skip_draw(_):
                     return img
