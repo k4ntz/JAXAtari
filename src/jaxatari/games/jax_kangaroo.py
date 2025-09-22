@@ -1911,7 +1911,7 @@ class JaxKangaroo(JaxEnvironment[KangarooState, KangarooObservation, KangarooInf
             ),
         )
         done = self._get_done(new_state)
-        env_reward = self._get_env_reward(state, new_state)
+        env_reward = self._get_reward(state, new_state)
         all_rewards = self._get_all_rewards(state, new_state)
         info = self._get_info(new_state, all_rewards)
 
@@ -1961,7 +1961,7 @@ class JaxKangaroo(JaxEnvironment[KangarooState, KangarooObservation, KangarooInf
         )
 
     @partial(jax.jit, static_argnums=(0,))
-    def _get_info(self, state: KangarooState, all_rewards: chex.Array) -> KangarooInfo:
+    def _get_info(self, state: KangarooState, all_rewards: chex.Array = None) -> KangarooInfo:
         return KangarooInfo(
             score=state.score,
             level=state.current_level,
@@ -1969,7 +1969,7 @@ class JaxKangaroo(JaxEnvironment[KangarooState, KangarooObservation, KangarooInf
         )
 
     @partial(jax.jit, static_argnums=(0,))
-    def _get_env_reward(
+    def _get_reward(
         self, previous_state: KangarooState, state: KangarooState
     ) -> float:
         return state.score - previous_state.score

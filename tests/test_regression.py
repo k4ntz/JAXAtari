@@ -1,6 +1,7 @@
 import pytest
 import jax
 
+@pytest.mark.requires_snapshot
 class TestRegression:
     """
     A test suite for regression testing using snapshots.
@@ -8,7 +9,7 @@ class TestRegression:
     Make sure that syrupy is installed (TODO: add it to requirements if everything works as intended)
     """
 
-    def test_trajectory_snapshot(self, wrapped_env, snapshot):
+    def test_trajectory_snapshot(self, wrapped_env, snapshot, game_name):
         """
         Verifies the exact final game state after a fixed sequence of actions.
         The action sequence is deterministically generated based on the environment's
