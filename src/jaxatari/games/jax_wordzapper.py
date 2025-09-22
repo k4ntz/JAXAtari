@@ -78,6 +78,10 @@ class WordZapperConstants(NamedTuple) :
     LETTER_EXPLOSION_FRAME_DURATION = 8
     LETTER_EXPLOSION_FRAMES = 4
 
+    # level complete animation
+    LVL_COMPL_ANIM_TIME = 250
+    LVL_COMPL_ANIM_X_BOUNDS = (X_BOUNDS[0], X_BOUNDS[1])
+
 
 WORD_LIST = [
     ["WAVE", "BYTE", "NODE", "BEAM", "SHIP", "CODE", "GRID"],
@@ -180,6 +184,9 @@ class WordZapperState(NamedTuple):
     waiting_for_special: chex.Array  # 1 once all letters collected; then require shooting special
 
     finised_level_count: chex.Array 
+
+    # Animation for post-word-completion
+    word_complete_animation: chex.Array  # 0: off, 1: animating
 
 class EntityPosition(NamedTuple):
     x: jnp.ndarray
@@ -987,6 +994,7 @@ class JaxWordZapper(JaxEnvironment[WordZapperState, WordZapperObservation, WordZ
             rng_key=next_key,
             score=jnp.array(0),
             finised_level_count=jnp.array(0),
+            word_complete_animation=jnp.array(0),
         )
 
         initial_obs = self._get_observation(reset_state)
@@ -1210,20 +1218,33 @@ class JaxWordZapper(JaxEnvironment[WordZapperState, WordZapperObservation, WordZ
         def stay():
             return phase, timer
 
+        def to_pause():
+            return (
+                jnp.array(0),
+                jnp.array(0),
+            )
+
         def to_game():
             return (
                 jnp.array(1),
                 jnp.array(0),
             )
-
+        
+        def to_animation() :
+            return (
+                jnp.array(2),
+                jnp.array(0),
+            )
+        
         return jax.lax.switch(
             phase,
             [
                 # 0: pause, show word -> gameplay after pause frames
                 lambda: jax.lax.cond(timer >= self.consts.LEVEL_PAUSE_FRAMES, to_game, stay),
-                # 1: gameplay stays
-                stay,
-                # 2: animation
+                # 1: game
+                lambda: jax.lax.cond(state.word_complete_animation == 1, to_animation, stay),
+                # 2: animation for word completion
+                lambda: jax.lax.cond(timer >= self.consts.LVL_COMPL_ANIM_TIME, to_pause, stay),
             ],
         )
 
@@ -1251,6 +1272,103 @@ class JaxWordZapper(JaxEnvironment[WordZapperState, WordZapperObservation, WordZ
 
         return state
     
+    @partial(jax.jit, static_argnums=(0,))
+    def _level_finish_animation(self, state: WordZapperState, action: chex.Array):
+        """
+        animation after ending the level, either by shooting all letters or timer runs out
+        """
+        def player_cycle_movement(state: WordZapperState) :
+            # move player right and left
+            new_player_x = state.player_x + state.player_direction * 3
+
+            # change direction if past the animaiton bounds
+            new_player_direction = jnp.where(
+                jnp.logical_or(
+                    new_player_x <= self.consts.LVL_COMPL_ANIM_X_BOUNDS[0],
+                    new_player_x >= self.consts.LVL_COMPL_ANIM_X_BOUNDS[1]
+                ),
+                jnp.where(
+                    state.player_direction == 1,
+                    -1,
+                    1
+                ),
+                state.player_direction
+            )
+
+            return new_player_x, state.player_y, new_player_direction
+
+        def player_down_movement(state: WordZapperState) :
+            # find direction of start position
+            new_player_direction = jnp.where(
+                state.player_x > self.consts.PLAYER_START_X,
+                -1,
+                1
+            )
+
+            # go to start postion
+            new_player_x = jnp.where(
+                state.player_x != self.consts.PLAYER_START_X,
+                state.player_x + state.player_direction,
+                state.player_x
+            )
+
+            # go down if at start x position
+            new_player_y = jnp.where(
+                state.player_x == self.consts.PLAYER_START_X,
+                jnp.where(
+                    state.player_y < self.consts.PLAYER_START_Y,
+                    state.player_y + 2,
+                    jnp.where(
+                        state.player_y > self.consts.PLAYER_START_Y,
+                        self.consts.PLAYER_START_Y,
+                        state.player_y
+                    )
+                ),
+                state.player_y
+            )
+
+            return new_player_x, new_player_y, new_player_direction
+
+        # if 40% animation time done move down
+        new_player_x, new_player_y, new_player_direction = jax.lax.cond(
+            state.phase_timer <= 0.4 * self.consts.LVL_COMPL_ANIM_TIME,
+            player_cycle_movement,
+            player_down_movement,
+            state
+        )
+
+        new_step_counter = jnp.where(
+            state.step_counter == 1023,
+            jnp.array(0),
+            state.step_counter + 1
+        )
+
+        state = state._replace(
+            step_counter=new_step_counter,
+            player_x=new_player_x,
+            player_y=new_player_y,
+            player_direction=new_player_direction
+        )
+        
+        # Advance/carry phase-related state (start -> play -> animation)
+        new_phase, new_phase_timer = self._advance_phase(state)
+
+        state = state._replace(
+            game_phase=new_phase,
+            phase_timer=new_phase_timer
+
+        )
+        
+        # if level cleared and it is not final level move to next level
+        state = jax.lax.cond(
+            state.game_phase == 0,
+            self.next_level,
+            lambda s: s,
+            state
+        )
+
+        return state
+
     @partial(jax.jit, static_argnums=(0,))
     def next_level(self, state: WordZapperState):
         """
@@ -1301,6 +1419,8 @@ class JaxWordZapper(JaxEnvironment[WordZapperState, WordZapperObservation, WordZ
             letter_explosion_pos=jnp.zeros((27, 2)),
 
             rng_key=rng_rest,
+
+            word_complete_animation=jnp.array(0),
         )
 
 
@@ -1463,14 +1583,17 @@ class JaxWordZapper(JaxEnvironment[WordZapperState, WordZapperObservation, WordZ
 
         level_cleared = ((now_waiting_for_special & special_was_zapped) & allow_progress).astype(jnp.int32)
 
-        
-        # Advance/carry phase-related state (start -> play -> animation)
-        phase, p_timer = self._advance_phase(state)
-
         new_finised_level_count = jnp.where(
             level_cleared,
             state.finised_level_count + 1,
             state.finised_level_count
+        )
+
+        # activate animation and set timer
+        new_word_complete_animation = jnp.where(
+            level_cleared,
+            1,
+            state.word_complete_animation
         )
 
         updated_state = state._replace(
@@ -1497,20 +1620,19 @@ class JaxWordZapper(JaxEnvironment[WordZapperState, WordZapperObservation, WordZ
             letter_explosion_pos=new_letter_explosion_pos,
             current_letter_index=new_current_letter_index,
             waiting_for_special=now_waiting_for_special,
-            game_phase=phase,
-            phase_timer=p_timer,
-            finised_level_count=new_finised_level_count
+            finised_level_count=new_finised_level_count,
+            word_complete_animation=new_word_complete_animation,
         )
 
-        # if level cleared and it is not final level move to next level
-        out_state = jax.lax.cond(
-            jnp.logical_and(level_cleared == 1, state.finised_level_count != 3),
-            self.next_level,
-            lambda s: s,
-            updated_state
+        # Advance/carry phase-related state (start -> play -> animation)
+        new_phase, new_phase_timer = self._advance_phase(updated_state)
+
+        updated_state = updated_state._replace(
+            game_phase=new_phase,
+            phase_timer=new_phase_timer,
         )
 
-        return out_state
+        return updated_state
 
     @partial(jax.jit, static_argnums=(0,))
     def step(
@@ -1531,6 +1653,7 @@ class JaxWordZapper(JaxEnvironment[WordZapperState, WordZapperObservation, WordZ
             [
                 lambda s: self._game_start_step(s, action),
                 lambda s: self._normal_game_step(s, action),
+                lambda s: self._level_finish_animation(s, action),
             ],
             state,
         )
