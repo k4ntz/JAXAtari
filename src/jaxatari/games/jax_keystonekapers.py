@@ -72,10 +72,24 @@ class KeystoneKapersConstants(NamedTuple):
     MINIMAP_HEIGHT: int = 20
     MINIMAP_COLOR: tuple = (151, 151, 151)  # #979797 in RGB
 
-    # Escalator positions (relative to each section, 2 per section)
+    # Escalator positions and configuration
     ESCALATOR_1_OFFSET: int = 40   # Left escalator in each section
     ESCALATOR_2_OFFSET: int = 120  # Right escalator in each section
     ESCALATOR_WIDTH: int = 16
+    ESCALATOR_HEIGHT: int = 25     # Diagonal length
+    ESCALATOR_COLOR: Tuple[int, int, int] = (52, 0, 128)  # Purple #340080
+    ESCALATOR_STEP_COLOR: Tuple[int, int, int] = (255, 255, 255)  # White steps
+    ESCALATOR_ANIMATION_SPEED: int = 8  # Frames per step animation cycle
+
+    # Three specific escalators in the middle of the last section (absolute positions)
+    # ESCALATOR_FLOOR1_X: int = 988   # Floor 1: middle of last section (6*152 + 76 = 988)
+    # ESCALATOR_FLOOR2_X: int = 988   # Floor 2: middle of last section
+    # ESCALATOR_FLOOR3_X: int = 988   # Floor 3: middle of last section
+
+    # # Three specific escalators at the ends of the building (absolute positions)
+    ESCALATOR_FLOOR1_X: int = 20    # Floor 1: leftmost position in building
+    ESCALATOR_FLOOR2_X: int = 1040  # Floor 2: rightmost position in building (1064 - 24)
+    ESCALATOR_FLOOR3_X: int = 20    # Floor 3: leftmost position in building
 
     # Elevator configuration (positioned in middle of entire building)
     ELEVATOR_BUILDING_X: int = 520  # Middle of 1064px building (3.5 * 152) - adjusted for new section width
@@ -169,8 +183,11 @@ class PlayerState(NamedTuple):
     is_crouching: chex.Array
     jump_timer: chex.Array
     jump_start_y: chex.Array  # Y position when jump started
+    # Escalator state
+    on_escalator: chex.Array    # Which escalator (0=none, 1=floor1, 2=floor2, 3=floor3)
+    escalator_progress: chex.Array  # Progress along escalator (0.0 to 1.0)
+    # Elevator state
     is_on_elevator: chex.Array
-    is_on_escalator: chex.Array
     in_elevator: chex.Array   # Actually inside elevator car
 
 
@@ -234,6 +251,9 @@ class GameState(NamedTuple):
     level: chex.Array
     timer: chex.Array
     step_counter: chex.Array
+
+    # Escalator animation frame
+    escalator_frame: chex.Array  # Animation frame for moving steps
 
     # Items and collectibles
     item_x: chex.Array          # Shape: (MAX_ITEMS,)
@@ -464,16 +484,87 @@ class JaxKeystoneKapers(JaxEnvironment[GameState, KeystoneKapersObservation, Key
 
         # If in elevator, follow elevator position
         elevator_x = self.consts.ELEVATOR_BUILDING_X + self.consts.ELEVATOR_WIDTH // 2
-        final_x = jnp.where(new_in_elevator, elevator_x, new_x)
 
-        # Escalator movement (DISABLED - escalators not implemented)
-        # Players should only move between floors via elevators
+        # Escalator system - three specific escalators
         current_floor = player.floor
-        on_escalator = False  # Completely disable escalator detection
-        can_use_escalator = False
 
-        escalator_up = False
-        escalator_down = False
+        # Floor 1 escalator: leftmost, going up diagonally left (use absolute building coordinates)
+        on_escalator_1 = jnp.logical_and(
+            jnp.logical_and(current_floor == 0, new_x >= self.consts.ESCALATOR_FLOOR1_X - 5),
+            new_x <= self.consts.ESCALATOR_FLOOR1_X + self.consts.ESCALATOR_WIDTH + 5
+        )
+
+        # Floor 2 escalator: rightmost, going up diagonally right (use absolute building coordinates)
+        on_escalator_2 = jnp.logical_and(
+            jnp.logical_and(current_floor == 1, new_x >= self.consts.ESCALATOR_FLOOR2_X - 5),
+            new_x <= self.consts.ESCALATOR_FLOOR2_X + self.consts.ESCALATOR_WIDTH + 5
+        )
+
+        # Floor 3 escalator: leftmost, going up diagonally left (use absolute building coordinates)
+        on_escalator_3 = jnp.logical_and(
+            jnp.logical_and(current_floor == 2, new_x >= self.consts.ESCALATOR_FLOOR3_X - 5),
+            new_x <= self.consts.ESCALATOR_FLOOR3_X + self.consts.ESCALATOR_WIDTH + 5
+        )
+
+        # Determine if player is starting escalator ride
+        starting_escalator = jnp.logical_and(
+            player.on_escalator == 0,  # Not already on escalator
+            jnp.logical_or(jnp.logical_or(on_escalator_1, on_escalator_2), on_escalator_3)
+        )
+
+        # Determine escalator number (1, 2, 3, or 0 for none)
+        new_escalator_num = jnp.where(
+            on_escalator_1, 1,
+            jnp.where(on_escalator_2, 2, jnp.where(on_escalator_3, 3, 0))
+        )
+
+        # Update escalator state
+        new_on_escalator = jnp.where(
+            starting_escalator, new_escalator_num,
+            jnp.where(player.escalator_progress >= 1.0, 0, player.on_escalator)  # Reset when complete
+        )
+
+        # Escalator progress and movement speed
+        escalator_speed = 0.05  # Speed of escalator movement
+        new_escalator_progress = jnp.where(
+            new_on_escalator > 0,
+            jnp.minimum(player.escalator_progress + escalator_speed, 1.0),
+            0.0
+        )
+
+        # When on escalator, override player movement
+        escalator_active = new_on_escalator > 0
+
+        # Calculate escalator diagonal movement (horizontal and vertical)
+        escalator_start_x = jnp.where(
+            new_on_escalator == 1, self.consts.ESCALATOR_FLOOR1_X,
+            jnp.where(new_on_escalator == 2, self.consts.ESCALATOR_FLOOR2_X,
+                     jnp.where(new_on_escalator == 3, self.consts.ESCALATOR_FLOOR3_X, new_x))
+        )
+
+        # Move horizontally along escalator (diagonal up-right movement)
+        escalator_x_offset = new_escalator_progress * (self.consts.ESCALATOR_WIDTH)
+        escalator_x = escalator_start_x + escalator_x_offset
+
+        # Final X position: elevator overrides escalator, escalator overrides normal movement
+        final_x = jnp.where(
+            new_in_elevator, elevator_x,
+            jnp.where(escalator_active, escalator_x, new_x)
+        )
+
+        # Calculate escalator movement
+        escalator_start_floor = jnp.where(
+            new_on_escalator == 1, 0,  # Floor 1 escalator starts at ground
+            jnp.where(new_on_escalator == 2, 1, 2)  # Floor 2->3, Floor 3->roof
+        )
+        escalator_end_floor = escalator_start_floor + 1
+
+        # Interpolate position during escalator ride
+        escalator_floor = escalator_start_floor + new_escalator_progress
+
+        # Override movement when on escalator
+        escalator_up = jnp.logical_and(escalator_active, new_escalator_progress >= 1.0)
+        escalator_down = False  # These escalators only go up
 
         # Elevator floor changes (when elevator moves)
         elevator_floor_change = jnp.logical_and(
@@ -490,10 +581,24 @@ class JaxKeystoneKapers(JaxEnvironment[GameState, KeystoneKapersObservation, Key
             )
         )
 
-        # Update Y position based on final floor
+        # Update Y position based on final floor and escalator movement
+        escalator_start_y = jnp.where(
+            new_on_escalator == 1, self.consts.FLOOR_1_Y,
+            jnp.where(new_on_escalator == 2, self.consts.FLOOR_2_Y,
+                     jnp.where(new_on_escalator == 3, self.consts.FLOOR_3_Y, 0))
+        )
+        escalator_end_y = jnp.where(
+            new_on_escalator == 1, self.consts.FLOOR_2_Y,
+            jnp.where(new_on_escalator == 2, self.consts.FLOOR_3_Y,
+                     jnp.where(new_on_escalator == 3, self.consts.ROOF_Y, 0))
+        )
+
+        # Interpolate Y position along escalator diagonal
+        escalator_y = escalator_start_y + (escalator_end_y - escalator_start_y) * new_escalator_progress
+
         final_y = jnp.where(
             new_is_jumping, jump_y,
-            self._floor_y_position(new_floor)
+            jnp.where(escalator_active, escalator_y, self._floor_y_position(new_floor))
         )
 
         return PlayerState(
@@ -506,8 +611,9 @@ class JaxKeystoneKapers(JaxEnvironment[GameState, KeystoneKapersObservation, Key
             is_crouching=new_is_crouching,
             jump_timer=new_jump_timer,
             jump_start_y=new_jump_start_y,
-            is_on_elevator=on_elevator,
-            is_on_escalator=on_escalator,
+            on_escalator=new_on_escalator,
+            escalator_progress=new_escalator_progress,
+            is_on_elevator=state.player.is_on_elevator,
             in_elevator=new_in_elevator
         )
         jump_timer = jax.lax.select(
@@ -563,9 +669,13 @@ class JaxKeystoneKapers(JaxEnvironment[GameState, KeystoneKapersObservation, Key
             vel_x=vel_x,
             vel_y=0,  # Simplified for now
             is_jumping=is_jumping,
+            is_crouching=state.player.is_crouching,
             jump_timer=jump_timer,
+            jump_start_y=state.player.jump_start_y,
+            on_escalator=jnp.array(0),
+            escalator_progress=jnp.array(0.0),
             is_on_elevator=on_elevator,
-            is_on_escalator=on_escalator
+            in_elevator=state.player.in_elevator
         )
 
     @partial(jax.jit, static_argnums=(0,))
@@ -974,8 +1084,9 @@ class JaxKeystoneKapers(JaxEnvironment[GameState, KeystoneKapersObservation, Key
             is_crouching=jnp.array(False),
             jump_timer=jnp.array(0),
             jump_start_y=jnp.array(self.consts.FLOOR_1_Y),
+            on_escalator=jnp.array(0),  # 0 = not on escalator
+            escalator_progress=jnp.array(0.0),
             is_on_elevator=jnp.array(False),
-            is_on_escalator=jnp.array(False),
             in_elevator=jnp.array(False)
         )
 
@@ -1040,6 +1151,7 @@ class JaxKeystoneKapers(JaxEnvironment[GameState, KeystoneKapersObservation, Key
             level=jnp.array(1),
             timer=jnp.array(self.consts.BASE_TIMER),
             step_counter=jnp.array(0),
+            escalator_frame=jnp.array(0),  # Animation frame for escalator steps
 
             item_x=jnp.zeros(self.consts.MAX_ITEMS),
             item_y=jnp.zeros(self.consts.MAX_ITEMS),
@@ -1143,6 +1255,9 @@ class JaxKeystoneKapers(JaxEnvironment[GameState, KeystoneKapersObservation, Key
             item_y=state.item_y,
             item_active=new_item_active,
             item_type=state.item_type,
+
+            # Update escalator animation frame
+            escalator_frame=(state.escalator_frame + 1) % self.consts.ESCALATOR_ANIMATION_SPEED,
 
             game_over=game_over,
             thief_caught=thief_caught,
@@ -1402,43 +1517,53 @@ class KeystoneKapersRenderer(JAXGameRenderer):
             self.consts.GAME_AREA_WIDTH, floor_thickness, floor_color
         )
 
-        # Draw escalators (only those visible on screen)
+        # Draw escalators as diagonal purple lines (not ladder-style)
         escalator_color = jnp.array(self.consts.ESCALATOR_COLOR, dtype=jnp.uint8)
 
-        # Check if escalators are visible and draw them
-        escalator_1_screen_x = building_to_screen_x(self.consts.ESCALATOR_1_OFFSET)
+        # Escalator 1: Floor 1 diagonal going down-left to Floor 2 (leftmost, flipped)
+        escalator_1_screen_x = building_to_screen_x(self.consts.ESCALATOR_FLOOR1_X)
         escalator_1_visible = (escalator_1_screen_x >= -self.consts.ESCALATOR_WIDTH) & (escalator_1_screen_x < self.consts.GAME_AREA_WIDTH)
 
-        # Draw escalator 1 if visible
-        game_area = jnp.where(
-            escalator_1_visible,
-            draw_rectangle_simple(game_area, escalator_1_screen_x, self.consts.FLOOR_2_Y,
-                                self.consts.ESCALATOR_WIDTH, self.consts.FLOOR_HEIGHT, escalator_color),
-            game_area
-        )
-        game_area = jnp.where(
-            escalator_1_visible,
-            draw_rectangle_simple(game_area, escalator_1_screen_x, self.consts.FLOOR_3_Y,
-                                self.consts.ESCALATOR_WIDTH, self.consts.FLOOR_HEIGHT, escalator_color),
-            game_area
-        )
+        # Draw escalator 1 as diagonal line if visible (flipped vertically)
+        for i in range(self.consts.ESCALATOR_WIDTH):
+            step_x = escalator_1_screen_x + i
+            step_y = self.consts.FLOOR_1_Y + (i * 2)  # Diagonal down-left (flipped)
+            pixel_visible = escalator_1_visible & (step_x >= 0) & (step_x < self.consts.GAME_AREA_WIDTH) & (step_y >= self.consts.FLOOR_1_Y) & (step_y < self.consts.FLOOR_1_Y + self.consts.FLOOR_HEIGHT)
+            game_area = jnp.where(
+                pixel_visible,
+                draw_rectangle_simple(game_area, step_x, step_y, 2, 2, escalator_color),
+                game_area
+            )
 
-        escalator_2_screen_x = building_to_screen_x(self.consts.ESCALATOR_2_OFFSET)
+        # Escalator 2: Floor 2 diagonal going up-right to Floor 3
+        escalator_2_screen_x = building_to_screen_x(self.consts.ESCALATOR_FLOOR2_X)
         escalator_2_visible = (escalator_2_screen_x >= -self.consts.ESCALATOR_WIDTH) & (escalator_2_screen_x < self.consts.GAME_AREA_WIDTH)
 
-        # Draw escalator 2 if visible
-        game_area = jnp.where(
-            escalator_2_visible,
-            draw_rectangle_simple(game_area, escalator_2_screen_x, self.consts.FLOOR_2_Y,
-                                self.consts.ESCALATOR_WIDTH, self.consts.FLOOR_HEIGHT, escalator_color),
-            game_area
-        )
-        game_area = jnp.where(
-            escalator_2_visible,
-            draw_rectangle_simple(game_area, escalator_2_screen_x, self.consts.FLOOR_3_Y,
-                                self.consts.ESCALATOR_WIDTH, self.consts.FLOOR_HEIGHT, escalator_color),
-            game_area
-        )
+        # Draw escalator 2 as diagonal line if visible
+        for i in range(self.consts.ESCALATOR_WIDTH):
+            step_x = escalator_2_screen_x + i
+            step_y = self.consts.FLOOR_2_Y + self.consts.FLOOR_HEIGHT - (i * 2)  # Diagonal up-right
+            pixel_visible = escalator_2_visible & (step_x >= 0) & (step_x < self.consts.GAME_AREA_WIDTH) & (step_y >= self.consts.FLOOR_2_Y) & (step_y < self.consts.FLOOR_2_Y + self.consts.FLOOR_HEIGHT)
+            game_area = jnp.where(
+                pixel_visible,
+                draw_rectangle_simple(game_area, step_x, step_y, 2, 2, escalator_color),
+                game_area
+            )
+
+        # Escalator 3: Floor 3 diagonal going down-left to Roof (leftmost, flipped)
+        escalator_3_screen_x = building_to_screen_x(self.consts.ESCALATOR_FLOOR3_X)
+        escalator_3_visible = (escalator_3_screen_x >= -self.consts.ESCALATOR_WIDTH) & (escalator_3_screen_x < self.consts.GAME_AREA_WIDTH)
+
+        # Draw escalator 3 as diagonal line if visible (flipped vertically)
+        for i in range(self.consts.ESCALATOR_WIDTH):
+            step_x = escalator_3_screen_x + i
+            step_y = self.consts.FLOOR_3_Y + (i * 2)  # Diagonal down-left (flipped)
+            pixel_visible = escalator_3_visible & (step_x >= 0) & (step_x < self.consts.GAME_AREA_WIDTH) & (step_y >= self.consts.FLOOR_3_Y) & (step_y < self.consts.FLOOR_3_Y + self.consts.FLOOR_HEIGHT)
+            game_area = jnp.where(
+                pixel_visible,
+                draw_rectangle_simple(game_area, step_x, step_y, 2, 2, escalator_color),
+                game_area
+            )
 
         # Draw elevator shaft and doors on all floors
         elevator_building_x = self.consts.ELEVATOR_BUILDING_X
@@ -1567,24 +1692,24 @@ class KeystoneKapersRenderer(JAXGameRenderer):
         # Draw escalators (diagonal staircase sprites in black)
         escalator_color = jnp.array([0, 0, 0], dtype=jnp.uint8)  # Black
 
-        # Floor 1: leftmost escalator (diagonal staircase)
+        # Floor 1: escalator in middle of last section (all escalators in same position)
         floor1_y = floor_to_minimap_y(0)
-        escalator_x = 2  # Leftmost position
-        # Draw diagonal staircase pattern
+        escalator_x = minimap_width - 8  # Middle of last section
+        # Draw diagonal line pattern
         for i in range(3):
             game_area = draw_rectangle_simple(game_area, escalator_x + i, floor1_y - 1 + i, 1, 1, escalator_color)
 
-        # Floor 2: rightmost escalator (diagonal staircase - flipped vertically)
+        # Floor 2: escalator in middle of last section (same position)
         floor2_y = floor_to_minimap_y(1)
-        escalator_x = minimap_width - 5  # Rightmost position
-        # Draw diagonal staircase pattern (flipped vertically)
+        escalator_x = minimap_width - 8  # Middle of last section
+        # Draw diagonal line pattern
         for i in range(3):
-            game_area = draw_rectangle_simple(game_area, escalator_x + i, floor2_y + 1 - i, 1, 1, escalator_color)
+            game_area = draw_rectangle_simple(game_area, escalator_x + i, floor2_y - 1 + i, 1, 1, escalator_color)
 
-        # Floor 3: leftmost escalator (diagonal staircase)
+        # Floor 3: escalator in middle of last section (same position)
         floor3_y = floor_to_minimap_y(2)
-        escalator_x = 2  # Leftmost position
-        # Draw diagonal staircase pattern
+        escalator_x = minimap_width - 8  # Middle of last section
+        # Draw diagonal line pattern
         for i in range(3):
             game_area = draw_rectangle_simple(game_area, escalator_x + i, floor3_y - 1 + i, 1, 1, escalator_color)
 
