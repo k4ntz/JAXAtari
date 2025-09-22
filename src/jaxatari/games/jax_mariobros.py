@@ -6,7 +6,6 @@ from typing import NamedTuple, Tuple
 import jax
 import jax.numpy as jnp
 import chex
-import pygame
 from jax import lax, debug
 from gymnax.environments import spaces
 from jaxatari.environment import JaxEnvironment, JAXAtariAction as Action
@@ -491,8 +490,18 @@ class MarioBrosState(NamedTuple):
 
 
 class MarioBrosObservation(NamedTuple):  # Copied from jax_kangaroo.py ln.166-168
-    player_x: chex.Array
-    player_y: chex.Array
+    player_pos: chex.Array
+    player_on_ground: chex.Array
+    player_brake_frames_left: chex.Array
+    player_lives: chex.Array
+    enemy_active: chex.Array
+    enemy_pos: chex.Array
+    enemy_state: chex.Array
+    fireball_pos: chex.Array
+    fireball_dir: chex.Array
+    pow_block_counter: chex.Array
+    pow_block_pos: chex.Array
+    plattforms_pos: chex.Array
 
 
 class MarioBrosInfo(NamedTuple):  # Copied from jax_kangaroo.py ln.186-187
@@ -1387,13 +1396,12 @@ class MarioBrosRenderer(JAXGameRenderer):
         
         return lax.cond(state.game.game_over, white_screen, continue_render, operand=None)
 
-
-
 class JaxMarioBros(JaxEnvironment[
                        MarioBrosState, MarioBrosObservation, MarioBrosInfo, MarioBrosConstants]):  # copied and adapted from jax_kangaroo.py ln.1671
     # holds reset and main step function
 
     def __init__(self):
+        self.renderer = MarioBrosRenderer()
         self.action_set = [
             Action.NOOP,
             Action.FIRE,
@@ -1422,15 +1430,88 @@ class JaxMarioBros(JaxEnvironment[
         return jnp.array(self.action_set)
 
     def _get_observation(self, state: MarioBrosState) -> MarioBrosObservation:
-        return MarioBrosObservation(
-            player_x=state.player.pos[0],
-            player_y=state.player.pos[1]
+        obs = MarioBrosObservation(
+            player_pos= state.player.pos,
+            player_on_ground= state.player.on_ground,
+            player_brake_frames_left= state.player.brake_frames_left,
+            player_lives= state.lives,
+            enemy_active= state.game.enemy.enemy_active,
+            enemy_pos= state.game.enemy.enemy_pos,
+            enemy_state= state.game.enemy.enemy_status,
+            fireball_pos= state.game.fireball.pos,
+            fireball_dir= state.game.fireball.dir,
+            pow_block_counter= state.game.pow_block_counter,
+            pow_block_pos= POW_BLOCK,
+            plattforms_pos= PLATFORMS
+        )
+        return obs
+
+    def obs_to_flat_array(self, obs: MarioBrosObservation) -> chex.Array:
+        return jnp.concatenate(
+            [
+            obs.plattforms_pos.flatten(),
+            obs.player_on_ground.flatten(),
+            obs.player_brake_frames_left.flatten(),
+            obs.player_lives.flatten(),
+            obs.enemy_active.flatten(),
+            obs.enemy_pos.flatten(),
+            obs.enemy_state.flatten(),
+            obs.fireball_pos.flatten(),
+            obs.fireball_dir.flatten(),
+            obs.pow_block_counter.flatten(),
+            obs.pow_block_pos.flatten(),
+            obs.plattforms_pos.flatten(),
+            ]
+        )
+
+    def observation_space(self) -> spaces.Dict:
+        return spaces.Dict({
+        # --- Player ---
+        "player_pos": spaces.Box(low=0, high=jnp.array([SCREEN_WIDTH, SCREEN_HEIGHT]), shape=(2,), dtype=jnp.float32),
+        "player_on_ground": spaces.Discrete(2),  # 0=False, 1=True
+        "player_brake_frames_left": spaces.Box(low=0, high=20, shape=(), dtype=jnp.int32),  # max Brake Frames ggf. anpassen
+        "player_lives": spaces.Box(low=0, high=4, shape=(), dtype=jnp.int32),
+
+        # --- Enemy ---
+        "enemy_active": spaces.Box(low=0, high=2, shape=(3,), dtype=jnp.int32),  # 0=inactive,1=active,2=pending
+        "enemy_pos": spaces.Box(low=0, high=jnp.array([SCREEN_WIDTH, SCREEN_HEIGHT]), shape=(3, 2), dtype=jnp.float32),
+        "enemy_state": spaces.Box(low=1, high=3, shape=(3,), dtype=jnp.int32),  # 1=weak,2=strong,3=dead
+
+        # --- Fireball ---
+        "fireball_pos": spaces.Box(low=0, high=jnp.array([SCREEN_WIDTH, SCREEN_HEIGHT]), shape=(2,), dtype=jnp.float32),
+        "fireball_dir": spaces.Box(low=-1, high=1, shape=(), dtype=jnp.int32),
+
+        # --- POW block ---
+        "pow_block_counter": spaces.Box(low=0, high=3, shape=(), dtype=jnp.int32),
+        "pow_block_pos": spaces.Box(low=0, high=jnp.array([SCREEN_WIDTH, SCREEN_HEIGHT]), shape=(1, 4), dtype=jnp.int32),
+
+        # --- Platforms ---
+        "plattforms_pos": spaces.Box(low=0, high=jnp.array([SCREEN_WIDTH, SCREEN_HEIGHT]), shape=(PLATFORMS.shape[0], 4), dtype=jnp.int32),
+    })
+
+    def image_space(self) -> spaces.Box:
+        return spaces.Box(
+            low=0,
+            high=255,
+            shape=(210, 160, 3),
+            dtype=jnp.uint8
         )
 
     def _get_info(self, state: MarioBrosState) -> MarioBrosInfo:
         return MarioBrosInfo(
             score=0
         )
+
+    def _get_reward(
+        self, previous_state: MarioBrosState, state: MarioBrosState
+    ) -> float:
+        return state.game.score - previous_state.game.score
+    
+    def _get_done(self, state: MarioBrosState) -> bool:
+        return jnp.logical_or(state.lives < 0, state.game.score > 9999)
+
+    def render(self, state: MarioBrosState) -> jnp.ndarray:
+        return self.renderer.render(state)
 
     def reset(self, key=None) -> Tuple[MarioBrosObservation, MarioBrosState]:
         game = self.reset_game()
@@ -1499,6 +1580,8 @@ class JaxMarioBros(JaxEnvironment[
 
         return new_state
 
+    
+
     def old_step(self, state: MarioBrosState, action: chex.Array) -> Tuple[
         MarioBrosObservation, MarioBrosState, float, bool, MarioBrosInfo]:
         # calls player_step function and check for collision with enemy
@@ -1537,18 +1620,13 @@ class JaxMarioBros(JaxEnvironment[
             info: MarioBrosInfo.
         """
 
-        def game_over(_) -> MarioBrosState:
-            jax.debug.print("Game Over")
-            def restart():
-                obs, state = self.reset()
-                info = self._get_info(state)
-                return obs, state, 0.0, False, info
-            def wait():
-                obs = self._get_observation(state)
-                info = self._get_info(state)
-                return obs, state, 0.0, False, info
-            cond = (action == Action.FIRE) | (action == Action.LEFTFIRE) | (action == Action.RIGHTFIRE) | (action == Action.RIGHT) | (action == Action.RIGHTFIRE) | (action == Action.LEFT) | (action == Action.LEFTFIRE)
-            return lax.cond(cond, restart, wait)
+        def game_over(state: MarioBrosState) -> MarioBrosState:
+            obs, new_state = self.reset()
+            obs = self._get_observation(state)
+            info = self._get_info(state)
+            reward = self._get_reward(state, new_state)
+            return obs, new_state, reward, True, info
+           
 
         def step(_) -> MarioBrosState:
             # 1) Advance player state given action
@@ -1604,8 +1682,9 @@ class JaxMarioBros(JaxEnvironment[
                 # Beobachtung und Info aus dem endgültigen Zustand holen
                 obs = self._get_observation(new_state)
                 info = self._get_info(new_state)
-                
-                return obs, new_state, 0.0, False, info
+                reward = self._get_reward(state, new_state)
+                done = self._get_done(new_state)
+                return obs, new_state, reward, done, info
 
             # --- No strong enemy collision: normal game progress ---
             def on_no_hit(_):
@@ -1814,37 +1893,17 @@ class JaxMarioBros(JaxEnvironment[
                     lives=state.lives
                 )
 
-                obs = MarioBrosObservation(
-                    player_x=new_player.pos[0],
-                    player_y=new_player.pos[1]
-                )
-
-                return obs, new_state, 0.0, False, self._get_info(new_state)
+                obs = self._get_observation(new_state)
+                reward = self._get_reward(state, new_state)
+                done = self._get_done(new_state)
+                return obs, new_state, reward, done, self._get_info(new_state)
 
             # 10) Return based on whether strong enemy was hit
             cond = (strong_enemy_hit | fireball_hit) & jnp.logical_not(new_player.safe)
             return jax.lax.cond(cond, on_hit, on_no_hit, new_player)
-        return lax.cond(state.game.game_over, game_over, step, state)
+        return lax.cond(self._get_done(state), game_over, step, state)
 
 
 # run game with: python scripts\play.py --game mariobros
 if __name__ == "__main__":
-    pygame.init()
-    screen = pygame.display.set_mode(
-        (SCREEN_WIDTH * WINDOW_SCALE, SCREEN_HEIGHT * WINDOW_SCALE)
-    )
-    pygame.display.set_caption("JAX Mario Bros Prototype")
-    clock = pygame.time.Clock()
-    game = JaxMarioBros()
-    renderer = MarioBrosRenderer()
-
-    _, state = game.reset()
-    running = True
-
-    while running:
-        #    _,state,_,_,_ = game.step(state, )
-        renderer.render(state)
-
-        clock.tick(60)
-
-    pygame.quit()
+    pass
