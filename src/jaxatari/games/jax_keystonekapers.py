@@ -542,8 +542,14 @@ class JaxKeystoneKapers(JaxEnvironment[GameState, KeystoneKapersObservation, Key
                      jnp.where(new_on_escalator == 3, self.consts.ESCALATOR_FLOOR3_X, new_x))
         )
 
-        # Move horizontally along escalator (diagonal up-right movement)
-        escalator_x_offset = new_escalator_progress * (self.consts.ESCALATOR_WIDTH)
+        # Move horizontally along escalator (different directions for different escalators)
+        # Escalators 1 & 3 (floors 1 & 3): right-to-left movement (negative)
+        # Escalator 2 (floor 2): left-to-right movement (positive)
+        escalator_x_direction = jnp.where(
+            jnp.logical_or(new_on_escalator == 1, new_on_escalator == 3), -1.0,  # Right-to-left
+            1.0  # Left-to-right for escalator 2
+        )
+        escalator_x_offset = new_escalator_progress * (self.consts.ESCALATOR_WIDTH) * escalator_x_direction
         escalator_x = escalator_start_x + escalator_x_offset
 
         # Final X position: elevator overrides escalator, escalator overrides normal movement
