@@ -123,6 +123,7 @@ class JaxAsterix(JaxEnvironment[AsterixState, AsterixObservation, AsterixInfo, A
         self.reward_funcs = reward_funcs
         self.state = self.reset()
         self.renderer = AsterixRenderer()
+        self.obs_type = "rgb"  # "rgb", "ram", "grayscale"
 
 
     def reset(self, key: jax.random.PRNGKey = None) -> Tuple[AsterixObservation, AsterixState]:
@@ -164,7 +165,7 @@ class JaxAsterix(JaxEnvironment[AsterixState, AsterixObservation, AsterixInfo, A
         state = AsterixState(
             player_x =jnp.array(player_x, dtype=jnp.int32),
             player_y=jnp.array(player_y, dtype=jnp.int32),
-            score=jnp.array(0, dtype=jnp.int32), # Start with 0 points
+            score=jnp.array(31500, dtype=jnp.int32), # Start with 0 points
             lives=jnp.array(self.consts.num_lives, dtype=jnp.int32),  # 3 Leben
             game_over=jnp.array(False, dtype=jnp.bool_),
             stage_cooldown = jnp.array(self.consts.cooldown_frames, dtype=jnp.int32), # Cooldown initial 0
@@ -458,7 +459,8 @@ class JaxAsterix(JaxEnvironment[AsterixState, AsterixObservation, AsterixInfo, A
             return below + above
 
         new_bonus_stage = jnp.where(paused, state.bonus_life_stage, calc_bonus_stage(new_score))
-        new_lives = jnp.where(any_collision_enemy, state.lives - 1, state.lives)
+        bonus_lives_gained = jnp.maximum(new_bonus_stage - state.bonus_life_stage, 0)
+        new_lives = jnp.where(any_collision_enemy, state.lives - 1, state.lives + bonus_lives_gained)
 
         # Respawn-/Hit-Timer
         rt_prev = state.respawn_timer
@@ -610,11 +612,22 @@ class JaxAsterix(JaxEnvironment[AsterixState, AsterixObservation, AsterixInfo, A
         return spaces.Discrete(9)
 
     def observation_space(self) -> spaces.Dict: # TODO kann entfernt werden? wird nicht verwendet / benötigt
-        """Returns the observation space for Asterix.
-        The observation contains:
-        - player: EntityPosition (x, y, width, height)
-        - score: int (0-99)
-        """
+        #Returns the observation space for Asterix.
+        if self.obs_type == "rgb":
+            return spaces.Box(low=0, high=255, shape=(210, 160, 3), dtype=jnp.uint8)
+        elif self.obs_type == "ram":
+            return spaces.Box(low=0, high=255, shape=(128,), dtype=jnp.uint8)
+        elif self.obs_type == "grayscale":
+            return spaces.Box(low=0, high=255, shape=(210, 160), dtype=jnp.uint8)
+        else:
+            raise ValueError(f"Unknown obs_type: {self.obs_type}")
+
+    """
+        def observation_space(self) -> spaces.Dict: # TODO kann entfernt werden? wird nicht verwendet / benötigt
+        #Returns the observation space for Asterix.
+        #The observation contains:
+        #- player: EntityPosition (x, y, width, height)
+        #- score: int (0-99)
         return spaces.Dict({
             "player": spaces.Dict({
                 "x": spaces.Box(low=0, high=160, shape=(), dtype=jnp.int32),
@@ -625,6 +638,7 @@ class JaxAsterix(JaxEnvironment[AsterixState, AsterixObservation, AsterixInfo, A
             #"car": spaces.Box(low=0, high=160, shape=(10, 4), dtype=jnp.int32),
             #"score": spaces.Box(low=0, high=99, shape=(), dtype=jnp.int32),
         })
+    """
 
     def image_space(self) -> spaces.Box: # TODO kann entfernt werden? wird nicht verwendet / benötigt
         """Returns the image space for Asterix.
@@ -909,19 +923,43 @@ class AsterixRenderer(JAXGameRenderer):
         asterix_sprite_right = jr.get_sprite_frame(self.sprites['ASTERIX_RIGHT'], 0)
         asterix_hit_sprite_left = jr.get_sprite_frame(self.sprites['ASTERIX_LEFT_HIT'], 0)
         asterix_hit_sprite_right = jr.get_sprite_frame(self.sprites['ASTERIX_RIGHT_HIT'], 0)
-        # asterix_sprites = jr.pad_to_match(asterix_sprite_left, asterix_sprite_right, asterix_hit_sprite_left, asterix_hit_sprite_right)
-        asterix_sprites, _ = jr.pad_to_match(
-            [asterix_sprite_left, asterix_sprite_right, asterix_hit_sprite_left, asterix_hit_sprite_right])
+
+        obelix_sprite_left = jr.get_sprite_frame(self.sprites['OBELIX_LEFT'], 0)
+        obelix_sprite_right = jr.get_sprite_frame(self.sprites['OBELIX_RIGHT'], 0)
+        obelix_hit_sprite_left = jr.get_sprite_frame(self.sprites['OBELIX_LEFT_HIT'], 0)
+        obelix_hit_sprite_right = obelix_sprite_left  # TODO noch kein separates Hit-Sprite für Obelix
+
+        asterix_sprites, _ = jr.pad_to_match([
+            self.sprites['ASTERIX_LEFT'], self.sprites['ASTERIX_RIGHT'],
+            self.sprites['ASTERIX_LEFT_HIT'], self.sprites['ASTERIX_RIGHT_HIT']
+        ])
+        obelix_sprites, _ = jr.pad_to_match([
+            self.sprites['OBELIX_LEFT'], self.sprites['OBELIX_RIGHT'],
+            self.sprites['OBELIX_LEFT_HIT'], self.sprites['OBELIX_LEFT']  # Falls kein separates Hit-Sprite
+        ])
+
+        sprites['ASTERIX_SPRITES'] = asterix_sprites  # [left, right, hit_left, hit_right]
+        sprites['OBELIX_SPRITES'] = obelix_sprites
+
+        # Sprites je nach Charakter wählen
+        player_sprites = jax.lax.switch(
+            state.character_id,
+            [
+                lambda _: sprites['ASTERIX_SPRITES'],
+                lambda _: sprites['OBELIX_SPRITES'],
+            ],
+            None
+        )
+
 
         direction = state.player_direction
 
-        # Hit-/Normal-Sprite abhängig vom Timer wählen
         def pick_normal(_):
             return jax.lax.switch(
                 direction - 1,
                 [
-                    lambda _: asterix_sprites[0],
-                    lambda _: asterix_sprites[1],
+                    lambda _: player_sprites[0],
+                    lambda _: player_sprites[1],
                 ],
                 None
             )
@@ -930,8 +968,8 @@ class AsterixRenderer(JAXGameRenderer):
             return jax.lax.switch(
                 direction - 1,
                 [
-                    lambda _: asterix_sprites[2],
-                    lambda _: asterix_sprites[3],
+                    lambda _: player_sprites[2],
+                    lambda _: player_sprites[3],
                 ],
                 None
             )
