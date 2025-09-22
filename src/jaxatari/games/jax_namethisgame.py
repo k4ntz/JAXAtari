@@ -23,6 +23,9 @@ class NameThisGameConfig:
     screen_width: int = 160
     screen_height: int = 250
     scaling_factor: int = 3
+    # Kraken location
+    kraken_x: int = 16
+    kraken_y: int = 63
     # Diver (player)
     diver_width: int = 16
     diver_height: int = 13
@@ -37,9 +40,10 @@ class NameThisGameConfig:
     shark_base_speed: int = 1
     shark_width: int = 15
     shark_height: int = 12
-    # Tentacles (octopus arms)
+    # Tentacles
     max_tentacles: int = 8
     tentacle_base_x: jnp.ndarray = field(default_factory=lambda: jnp.array([24, 38, 54, 70, 86, 102, 118, 134], dtype=jnp.int32))
+    tentacle_ys: jnp.ndarray = field(default_factory = lambda: jnp.array([97, 104, 111, 118, 125, 132, 139, 146, 153, 160],dtype=jnp.int32))
     tentacle_width: int = 4
     tentacle_amplitude: int = 12        # horizontal swing amplitude (px)
     tentacle_phase_speed: float = 0.2  # phase increment (rad/frame)
@@ -52,7 +56,8 @@ class NameThisGameConfig:
     oxygen_pickup_radius: int = 4           # horizontal radius for diver to grab oxygen line (px)
     oxygen_drop_min_interval: int = 240     # minimum frames between oxygen line drops
     oxygen_drop_max_interval: int = 480     # maximum frames between oxygen line drops
-    oxygen_line_width: int = 2
+    oxygen_line_width: int = 1
+    oxygen_y = 57
     # Round progression
     round_clear_shark_resets: int = 3
     speed_increase_per_round_shark: int = 1
@@ -160,7 +165,7 @@ class Renderer_NameThisGame(JAXGameRenderer):
             return None
 
         # Attempt to load relevant sprites
-        sprite_names = ["diver", "shark", "tentacle", "oxygen_line", "background"]
+        sprite_names = ["diver", "shark", "tentacle", "oxygen_line", "background", "kraken", "boat"]
         for name in sprite_names:
             spr = _load_sprite_frame(name)
             if spr is not None:
@@ -185,6 +190,10 @@ class Renderer_NameThisGame(JAXGameRenderer):
         raster = jnp.zeros((H, W, 3), dtype=jnp.uint8)
         if "background" in self.sprites:
             raster = aj.render_at(raster, 0, 0, self.sprites["background"])
+
+        #draw kraken (octopus)
+        if "kraken" in self.sprites:
+            raster = aj.render_at(raster, cfg.kraken_x, cfg.kraken_y, self.sprites["kraken"])
 
         # Draw diver (only if alive)
         if "diver" in self.sprites:
@@ -241,7 +250,7 @@ class Renderer_NameThisGame(JAXGameRenderer):
                                               (cfg.tentacle_max_length_px, cfg.tentacle_width))
                 alpha = jnp.where(alpha_mask, 255, 0).astype(jnp.uint8)[..., None]  # (max_len, width, 1)
                 tent_rgba = jnp.concatenate([full_tentacle_rgb, alpha], axis=-1)  # (max_len, width, 4)
-                return aj.render_at(r, left_x, 0, tent_rgba)
+                return aj.render_at(r, left_x, cfg.tentacle_ys[0], tent_rgba)
             return jax.lax.cond(active, _do_draw, lambda r: r, ras)
         raster = jax.lax.fori_loop(0, cfg.max_tentacles, _draw_tentacle, raster)
 
@@ -253,7 +262,7 @@ class Renderer_NameThisGame(JAXGameRenderer):
             oxy_sprite = _solid_sprite(cfg.oxygen_line_width, cfg.diver_y_floor, (255, 255, 255))
         raster = jax.lax.cond(
             state.oxygen_line_active,
-            lambda r: aj.render_at(r, state.oxygen_line_x, 0, oxy_sprite),
+            lambda r: aj.render_at(r, state.oxygen_line_x, cfg.oxygen_y, oxy_sprite),
             lambda r: r,
             raster,
         )
