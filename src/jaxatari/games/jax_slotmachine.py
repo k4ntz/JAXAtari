@@ -105,7 +105,7 @@ class SlotMachineConfig:
     symbol_width: int = 28
 
     # Game start finances
-    starting_credits: int = 1
+    starting_credits: int = 25
     bet_amount: int = 1
     min_wager: int = 1
     max_wager: int = 5
