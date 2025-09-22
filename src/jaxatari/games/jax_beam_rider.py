@@ -4921,46 +4921,43 @@ class BeamRiderRenderer(JAXGameRenderer):
     def _draw_ui(self, screen: chex.Array, state) -> chex.Array:
         """
         HUD with per-component scales and margins:
-          - enemies-left (top-left)
+          - enemies-left (middle-left, green)
           - SCORE / SECTOR (centered)
           - torpedo boxes (top-right)
-          - lives as mini ship icons (bottom-left)
-
+          - lives as yellow rejuvenator sprites (bottom-left)
         """
 
         # =========================
         # ===== CONFIG / SIZES ====
         # =========================
-        # Individual scales (integers ≥ 1)
         SCALE_SCORE = 1
         SCALE_ENEMIES = 1
         SCALE_TORPS = 1
         SCALE_LIVES = 1
 
-        # Per-component margins / spacing (pixels)
-        spacing = 1  # glyph horizontal spacing (pre-scale)
-        # Enemies (top-left)
-        MARGIN_ENEMIES_X = 6
-        MARGIN_ENEMIES_Y = 6
-        # Score & Sector (center top)
-        MARGIN_SCORE_Y = 4  # y of SCORE line (smaller => higher)
-        LINE_GAP_SCORE = 2  # vertical gap between SCORE and SECTOR (pixels)
-        # Torpedoes (top-right)
-        MARGIN_TORPS_X = 0  # right margin
-        MARGIN_TORPS_Y = 8  # top margin
-        # Lives (bottom-left)
-        MARGIN_LIVES_X = 5  # left margin
-        MARGIN_LIVES_Y = 1  # bottom margin
+        spacing = 1
 
-        # Screen size
+        # Enemies (middle-left) - GREEN COLOR, MIDDLE POSITION
+        MARGIN_ENEMIES_X = 6
+        MARGIN_ENEMIES_Y = 70  # Middle-left position
+
+        # Score & Sector (center top)
+        MARGIN_SCORE_Y = 4
+        LINE_GAP_SCORE = 2
+        # Torpedoes (top-right)
+        MARGIN_TORPS_X = 0
+        MARGIN_TORPS_Y = 8
+        # Lives (bottom-left)
+        MARGIN_LIVES_X = 5
+        MARGIN_LIVES_Y = 1
+
         H = self.constants.SCREEN_HEIGHT
         W = self.constants.SCREEN_WIDTH
 
-        # Colors
-        RED = (255, 0, 0)
+        # Colors - GREEN for enemies left
+        GREEN = (0, 255, 0)  # GREEN for enemies counter
         GOLD = (255, 220, 100)
         PURP = (160, 32, 240)
-        PURP_RGB = (160, 32, 240)
         YELL_RGB = (255, 255, 0)
 
         # =========================
@@ -4992,21 +4989,20 @@ class BeamRiderRenderer(JAXGameRenderer):
         # ======= HELPERS =========
         # =========================
         def draw_rect(scr, x0, y0, w, h, color_rgb):
-            x0 = jnp.clip(x0, 0, W - 1);
+            x0 = jnp.clip(x0, 0, W - 1)
             y0 = jnp.clip(y0, 0, H - 1)
-            x1 = jnp.clip(x0 + w, 0, W);
+            x1 = jnp.clip(x0 + w, 0, W)
             y1 = jnp.clip(y0 + h, 0, H)
-            ys = jnp.arange(H)[:, None];
+            ys = jnp.arange(H)[:, None]
             xs = jnp.arange(W)[None, :]
             mask = (ys >= y0) & (ys < y1) & (xs >= x0) & (xs < x1)
             color = jnp.array(color_rgb, dtype=jnp.uint8)
             return jnp.where(mask[..., None], color, scr)
 
         def draw_bitmap(scr, x, y, bitmap, color_rgb, scale):
-            # integer nearest-neighbor scaling
             bmp = jnp.kron(bitmap, jnp.ones((scale, scale), dtype=jnp.uint8))
             h, w = bmp.shape
-            x = jnp.clip(x, 0, W - w);
+            x = jnp.clip(x, 0, W - w)
             y = jnp.clip(y, 0, H - h)
             pad = ((0, H - h), (0, W - w))
             bmp_padded = jnp.pad(bmp, pad)
@@ -5018,18 +5014,7 @@ class BeamRiderRenderer(JAXGameRenderer):
             bmp = DIGITS[jnp.clip(d, 0, 9)]
             return draw_bitmap(scr, x, y, bmp, color_rgb, scale)
 
-        def draw_label(scr, x, y, text, color_rgb, scale, spacing_):
-            cur_x = x
-            for ch in text:  # static Python literal
-                if ch == ' ':
-                    cur_x += (3 * scale + spacing_)
-                else:
-                    scr = draw_bitmap(scr, cur_x, y, FONT[ch], color_rgb, scale)
-                    cur_x += (3 * scale + spacing_)
-            return scr
-
         def draw_number(scr, x, y, value, width, color_rgb, scale, spacing_):
-            """Draw non-negative integer `value` as zero-padded number of length `width`."""
             value = jnp.maximum(jnp.asarray(value, jnp.int32), 0)
 
             def body(i, carry):
@@ -5047,40 +5032,30 @@ class BeamRiderRenderer(JAXGameRenderer):
 
             return lax.fori_loop(0, width, lambda i, scr_: draw_i(i, scr_), scr)
 
-        # Mini ship icon (6x8) — purple tip + yellow body
-        PURPLE_TIP = jnp.array([
-            [0, 0, 0, 1, 1, 0, 0, 0],
-            [0, 0, 0, 0, 0, 0, 0, 0],
-            [0, 0, 0, 0, 0, 0, 0, 0],
-            [0, 0, 0, 0, 0, 0, 0, 0],
-            [0, 0, 0, 0, 0, 0, 0, 0],
-            [0, 0, 0, 0, 0, 0, 0, 0],
-        ], dtype=jnp.uint8)
-
-        YELLOW_BODY = jnp.array([
-            [0, 0, 0, 0, 0, 0, 0, 0],
-            [0, 0, 1, 1, 1, 1, 0, 0],  # row 1: 2..5
-            [0, 1, 1, 1, 1, 1, 1, 0],  # row 2: 1..6
-            [1, 1, 1, 1, 1, 1, 1, 1],  # row 3: 0..7
-            [1, 1, 1, 0, 0, 1, 1, 1],  # row 4: 0..2 & 5..7
-            [1, 1, 0, 0, 0, 0, 1, 1],  # row 5: 0..1 & 6..7
-        ], dtype=jnp.uint8)
-
-        def draw_ship_icon(scr, x, y, scale):
-            scr = draw_bitmap(scr, x, y, PURPLE_TIP, PURP_RGB, scale)
-            scr = draw_bitmap(scr, x, y, YELLOW_BODY, YELL_RGB, scale)
+        def draw_label(scr, x, y, text, color_rgb, scale, spacing_):
+            cur_x = x
+            for ch in text:
+                if ch == ' ':
+                    cur_x += (3 * scale + spacing_)
+                else:
+                    scr = draw_bitmap(scr, cur_x, y, FONT[ch], color_rgb, scale)
+                    cur_x += (3 * scale + spacing_)
             return scr
+
+        # YELLOW REJUVENATOR SPRITE for lives
+        def draw_rejuvenator_sprite(scr, x, y, scale):
+            return draw_bitmap(scr, x, y, self.yellow_rejuv, YELL_RGB, scale)
 
         # =========================
         # ======== CONTENT ========
         # =========================
 
-        # Enemies left
+        # Enemies left (middle-left, GREEN color)
         ENEMIES_PER_SECTOR = getattr(self.constants, "ENEMIES_PER_SECTOR", 15)
         enemies_left = jnp.maximum(0, ENEMIES_PER_SECTOR - jnp.asarray(state.enemies_killed_this_sector, jnp.int32))
         screen = draw_number(
             screen, MARGIN_ENEMIES_X, MARGIN_ENEMIES_Y,
-            enemies_left, width=2, color_rgb=RED, scale=SCALE_ENEMIES, spacing_=spacing
+            enemies_left, width=2, color_rgb=GREEN, scale=SCALE_ENEMIES, spacing_=spacing
         )
 
         # SCORE (centered)
@@ -5092,15 +5067,9 @@ class BeamRiderRenderer(JAXGameRenderer):
         score_x = (W - score_total_px) // 2
         score_y = MARGIN_SCORE_Y
 
-        screen = draw_label(
-            screen, score_x, score_y, label_score, GOLD,
-            scale=SCALE_SCORE, spacing_=spacing
-        )
-        screen = draw_number(
-            screen, score_x + score_label_px, score_y,
-            jnp.asarray(state.score, jnp.int32), width=6,
-            color_rgb=GOLD, scale=SCALE_SCORE, spacing_=spacing
-        )
+        screen = draw_label(screen, score_x, score_y, label_score, GOLD, scale=SCALE_SCORE, spacing_=spacing)
+        screen = draw_number(screen, score_x + score_label_px, score_y, jnp.asarray(state.score, jnp.int32),
+                             width=6, color_rgb=GOLD, scale=SCALE_SCORE, spacing_=spacing)
 
         # SECTOR (centered below SCORE)
         label_sector = "SECTOR "
@@ -5110,17 +5079,11 @@ class BeamRiderRenderer(JAXGameRenderer):
         sector_x = (W - sector_total_px) // 2
         sector_y = score_y + (5 * SCALE_SCORE) + LINE_GAP_SCORE
 
-        screen = draw_label(
-            screen, sector_x, sector_y, label_sector, GOLD,
-            scale=SCALE_SCORE, spacing_=spacing
-        )
-        screen = draw_number(
-            screen, sector_x + sector_label_px, sector_y,
-            jnp.asarray(state.level, jnp.int32), width=2,
-            color_rgb=GOLD, scale=SCALE_SCORE, spacing_=spacing
-        )
+        screen = draw_label(screen, sector_x, sector_y, label_sector, GOLD, scale=SCALE_SCORE, spacing_=spacing)
+        screen = draw_number(screen, sector_x + sector_label_px, sector_y, jnp.asarray(state.level, jnp.int32),
+                             width=2, color_rgb=GOLD, scale=SCALE_SCORE, spacing_=spacing)
 
-        # Torpedoes (top-right) — static loop masked by count
+        # Torpedoes (top-right)
         torps = jnp.asarray(state.torpedoes_remaining, jnp.int32)
         TORP_MAX = 8
         TORP_SIZE = 5 * SCALE_TORPS
@@ -5135,26 +5098,25 @@ class BeamRiderRenderer(JAXGameRenderer):
 
         screen = lax.fori_loop(0, TORP_MAX, torp_body, screen)
 
-        # Lives (bottom-left) — mini ships
+        # Lives (bottom-left) – YELLOW REJUVENATOR SPRITES
         lives = jnp.asarray(state.lives, jnp.int32)
         LIVES_MAX = 6
-        ICON_W = 8 * SCALE_LIVES
-        ICON_H = 6 * SCALE_LIVES
-        ICON_GAP = int(6 * SCALE_LIVES)
+        REJUV_W = 9 * SCALE_LIVES  # Width of rejuvenator sprite
+        REJUV_H = 7 * SCALE_LIVES  # Height of rejuvenator sprite
+        ICON_GAP = 2 * SCALE_LIVES  # Gap between sprites
         BASE_X = MARGIN_LIVES_X
-        BASE_Y = H - ICON_H - MARGIN_LIVES_Y
+        BASE_Y = H - REJUV_H - MARGIN_LIVES_Y
 
         def lives_body(i, scr_):
             draw_it = i < jnp.clip(lives, 0, LIVES_MAX)
-            x = BASE_X + i * (ICON_W + ICON_GAP)
+            x = BASE_X + i * (REJUV_W + ICON_GAP)
             y = BASE_Y
-            scr2 = draw_ship_icon(scr_, x, y, SCALE_LIVES)
+            scr2 = draw_rejuvenator_sprite(scr_, x, y, SCALE_LIVES)
             return jnp.where(draw_it, scr2, scr_)
 
         screen = lax.fori_loop(0, LIVES_MAX, lives_body, screen)
 
         return screen
-
     # PYGAME DISPLAY METHODS (moved from BeamRiderPygameRenderer)
     # ============================================================================
 
