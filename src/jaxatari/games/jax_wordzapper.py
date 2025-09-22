@@ -83,6 +83,11 @@ class WordZapperConstants(NamedTuple) :
     LVL_COMPL_ANIM_TIME = 250
     LVL_COMPL_ANIM_X_BOUNDS = (X_BOUNDS[0], X_BOUNDS[1])
 
+    # scores
+    SCORE_CORRECT_LETTER = 10
+    SCORE_LVL_CLEARED = 100
+    SCORE_EARLY_SPECIAL_PENALTY = -10000
+
 
 WORD_LIST = [
     ["WAVE", "BYTE", "NODE", "BEAM", "SHIP", "CODE", "GRID"],
@@ -1435,6 +1440,34 @@ class JaxWordZapper(JaxEnvironment[WordZapperState, WordZapperObservation, WordZ
             word_complete_animation=jnp.array(0),
         )
 
+    @partial(jax.jit, static_argnums=(0,))
+    def update_score(self, state: WordZapperState, new_current_letter_index, level_cleared, new_special_shot_early):
+        """
+        update score based on changes
+        """
+        # if 1 correct letter was shot
+        new_score = jnp.where(
+            new_current_letter_index > state.current_letter_index,
+            state.score + self.consts.SCORE_CORRECT_LETTER,
+            state.score
+        )
+
+        # if special was shot and level cleared
+        new_score = jnp.where(
+            level_cleared,
+            new_score + self.consts.SCORE_LVL_CLEARED,
+            new_score
+        )         
+
+        # penalty for shooting special early
+        new_score = jnp.where(
+            new_special_shot_early,
+            new_score + self.consts.SCORE_EARLY_SPECIAL_PENALTY,
+            new_score
+        )   
+
+        return new_score
+    
 
     @partial(jax.jit, static_argnums=(0,))
     def _normal_game_step(self, state: WordZapperState, action: chex.Array):
@@ -1602,10 +1635,19 @@ class JaxWordZapper(JaxEnvironment[WordZapperState, WordZapperObservation, WordZ
             state.special_shot_early
         )
 
+        # increment finished level count
         new_finised_level_count = jnp.where(
             level_cleared,
             state.finised_level_count + 1,
             state.finised_level_count
+        )
+
+        # update score
+        new_score = self.update_score(
+            state,
+            new_current_letter_index,
+            level_cleared,
+            new_special_shot_early
         )
 
         # activate animation and set timer
@@ -1642,6 +1684,7 @@ class JaxWordZapper(JaxEnvironment[WordZapperState, WordZapperObservation, WordZ
             finised_level_count=new_finised_level_count,
             word_complete_animation=new_word_complete_animation,
             special_shot_early=new_special_shot_early,
+            score=new_score,
         )
 
         # Advance/carry phase-related state (start -> play -> animation)
