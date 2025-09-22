@@ -23,6 +23,14 @@ class NameThisGameConfig:
     screen_width: int = 160
     screen_height: int = 250
     scaling_factor: int = 3
+    # -------- HUD bars (bottom) --------
+    hud_bar_initial_px: int = 128               # initial length of both bars
+    hud_bar_step_frames: int = 250              # shrink cadence for both bars
+    hud_bar_shrink_px_per_step_total: int = 8   # 4 from each side => width - 8
+    bar_green_height: int = 4
+    bar_orange_height: int = 12
+    bars_gap_px: int = 2
+    bars_bottom_margin_px: int = 8
     # Kraken location
     kraken_x: int = 16
     kraken_y: int = 63
@@ -34,7 +42,7 @@ class NameThisGameConfig:
     diver_width: int = 16
     diver_height: int = 13
     diver_y_floor: int = 173  # fixed y-coordinate for diver (sea floor)
-    diver_speed_px: int = 2
+    diver_speed_px: int = 1
     # Spear properties
     spear_width: int = 1
     spear_height: int = 1
@@ -87,6 +95,14 @@ class NameThisGameState(NamedTuple):
     reward: chex.Array            # reward earned in last step (int32 or float)
     round: chex.Array             # current round index (int32)
     shark_resets_this_round: chex.Array  # how many times shark reset (shot) in the current round (int32)
+
+    # HUD bars
+    oxy_bar_px: chex.Array        # current orange bar width (px) [0..hud_bar_initial_px]
+    wave_bar_px: chex.Array       # current green bar width (px) [0..hud_bar_initial_px]
+    bar_frame_counter: chex.Array # frames since the last shrink tick
+
+    # Rest state flag
+    resting: chex.Array           # bool; when True, tentacles freeze, no oxygen decay/drop; boat+shark still move (lane 0)
 
     # Boat
     boat_x: chex.Array           # boat's left x position (int32)
@@ -204,6 +220,31 @@ class Renderer_NameThisGame(JAXGameRenderer):
         raster = jnp.zeros((H, W, 3), dtype=jnp.uint8)
         if "background" in self.sprites:
             raster = aj.render_at(raster, 0, 0, self.sprites["background"])
+
+        # Bottom HUD bars
+        def _draw_hbar(ras, width_px: chex.Array, height_px: int, y_px: int, rgb: tuple[int, int, int]):
+            # clamp desired visible width to [0, max]
+            w = jnp.clip(width_px, 0, jnp.array(cfg.hud_bar_initial_px, jnp.int32))
+
+            # Build a fixed-size RGBA sprite (height x max_width) and mask columns >= w
+            rgb_arr = jnp.broadcast_to(
+                jnp.array(rgb, dtype=jnp.uint8),
+                (height_px, cfg.hud_bar_initial_px, 3)
+            )
+            cols = jnp.arange(cfg.hud_bar_initial_px, dtype=jnp.int32)  # (max_w,)
+            alpha_row = jnp.where(cols < w, 255, 0).astype(jnp.uint8)  # (max_w,)
+            alpha = jnp.broadcast_to(alpha_row[None, :, None],
+                                     (height_px, cfg.hud_bar_initial_px, 1))
+            spr = jnp.concatenate([rgb_arr, alpha], axis=-1)  # (h, max_w, 4)
+
+            # center the *visible* part
+            x_left = (cfg.screen_width - w) // 2
+            return aj.render_at(ras, x_left, y_px, spr)
+
+        orange_y = cfg.screen_height - cfg.bars_bottom_margin_px - cfg.bar_orange_height
+        green_y = orange_y - cfg.bars_gap_px - cfg.bar_green_height
+        raster = _draw_hbar(raster, state.oxy_bar_px, cfg.bar_orange_height, orange_y, (195, 102, 52))
+        raster = _draw_hbar(raster, state.wave_bar_px, cfg.bar_green_height, green_y, (27, 121, 38))
 
         # draw kraken (octopus)
         if "kraken" in self.sprites:
@@ -364,6 +405,11 @@ class JaxNameThisGame(JaxEnvironment[NameThisGameState, NameThisGameObservation,
         cfg = self.config
         # Split PRNG for different initial randomizations
         key, sub_key_dir, sub_key_oxy, sub_key_phase = jax.random.split(key, 4)
+        # HUD bars
+        oxy_bar_px = jnp.array(self.config.hud_bar_initial_px, dtype=jnp.int32),
+        wave_bar_px = jnp.array(self.config.hud_bar_initial_px, dtype=jnp.int32),
+        bar_frame_counter = jnp.array(0, dtype=jnp.int32),
+        resting = jnp.array(False, dtype=jnp.bool_),
         # Boat starts centered, moving right
         init_boat_x = jnp.array(cfg.screen_width // 2 - cfg.boat_width // 2, dtype=jnp.int32)
         init_boat_dx = jnp.array(1, dtype=jnp.int32)   # +1 = right, -1 = left
@@ -403,6 +449,10 @@ class JaxNameThisGame(JaxEnvironment[NameThisGameState, NameThisGameObservation,
             reward=jnp.array(0, dtype=jnp.int32),
             round=jnp.array(0, dtype=jnp.int32),
             shark_resets_this_round=jnp.array(0, dtype=jnp.int32),
+            oxy_bar_px=jnp.array(self.config.hud_bar_initial_px, dtype=jnp.int32),
+            wave_bar_px=jnp.array(self.config.hud_bar_initial_px, dtype=jnp.int32),
+            bar_frame_counter=jnp.array(0, dtype=jnp.int32),
+            resting=jnp.array(False, dtype=jnp.bool_),
             boat_x=init_boat_x,
             boat_dx=init_boat_dx,
             boat_move_counter=init_boat_counter,
@@ -567,6 +617,61 @@ class JaxNameThisGame(JaxEnvironment[NameThisGameState, NameThisGameObservation,
         return rewards
 
     @partial(jax.jit, static_argnums=(0,))
+    def _update_bars_and_rest(self, state: NameThisGameState, just_pressed: chex.Array) -> NameThisGameState:
+        cfg = self.config
+
+        # Exit rest when the player fires a spear
+        def _exit_rest(s: NameThisGameState) -> NameThisGameState:
+            return s._replace(
+                resting=jnp.array(False, jnp.bool_),
+                wave_bar_px=jnp.array(cfg.hud_bar_initial_px, jnp.int32),
+                bar_frame_counter=jnp.array(0, jnp.int32),
+                # Optional: bump difficulty using your built-in round scaling.
+                round=s.round + 1,
+            )
+
+        state = jax.lax.cond(state.resting & just_pressed, _exit_rest, lambda q: q, state)
+
+        # While resting => freeze counters/bars
+        def _if_rest(s: NameThisGameState) -> NameThisGameState:
+            return s
+
+        def _if_active(s: NameThisGameState) -> NameThisGameState:
+            cnt = s.bar_frame_counter + 1
+            tick = cnt >= cfg.hud_bar_step_frames
+
+            def _do_tick(st: NameThisGameState) -> NameThisGameState:
+                dec = jnp.array(cfg.hud_bar_shrink_px_per_step_total, jnp.int32)
+                new_oxy  = jnp.maximum(st.oxy_bar_px  - dec, 0)
+                new_wave = jnp.maximum(st.wave_bar_px - dec, 0)
+                return st._replace(oxy_bar_px=new_oxy, wave_bar_px=new_wave, bar_frame_counter=jnp.array(0, jnp.int32))
+
+            def _no_tick(st: NameThisGameState) -> NameThisGameState:
+                return st._replace(bar_frame_counter=cnt)
+
+            s2 = jax.lax.cond(tick, _do_tick, _no_tick, s)
+
+            # If wave bar hits 0 -> enter REST
+            def _enter_rest(st: NameThisGameState) -> NameThisGameState:
+                zeros = jnp.zeros_like(st.tentacle_height)
+                top_lane = jnp.array(0, jnp.int32)
+                return st._replace(
+                    resting=jnp.array(True, jnp.bool_),
+                    tentacle_height=zeros,
+                    oxygen_line_active=jnp.array(False, jnp.bool_),
+                    oxygen_line_x=jnp.array(-1, jnp.int32),
+                    oxygen_line_ttl=jnp.array(0, jnp.int32),
+                    oxy_bar_px=jnp.array(cfg.hud_bar_initial_px, jnp.int32),
+                    oxygen_frames_remaining=jnp.array(cfg.hud_bar_initial_px, jnp.int32),  # keep coherent for 'done'
+                    shark_lane=top_lane,
+                    shark_y=cfg.shark_lanes_y[top_lane],
+                    shark_alive=jnp.array(True, jnp.bool_),
+                )
+            return jax.lax.cond(s2.wave_bar_px <= 0, _enter_rest, lambda z: z, s2)
+
+        return jax.lax.cond(state.resting, _if_rest, _if_active, state)
+
+    @partial(jax.jit, static_argnums=(0,))
     def _interpret_action(self, state: NameThisGameState, action: chex.Array) -> Tuple[chex.Array, chex.Array]:
         """Decode the input action into movement direction and fire button press."""
         # Determine horizontal movement: -1 for left, +1 for right, 0 for none
@@ -613,37 +718,59 @@ class JaxNameThisGame(JaxEnvironment[NameThisGameState, NameThisGameObservation,
     @partial(jax.jit, static_argnums=(0,))
     def _move_shark(self, state: NameThisGameState) -> NameThisGameState:
         cfg = self.config
-        x = state.shark_x
-        dx = state.shark_dx
-        new_x = x + dx
+        x = state.shark_x + state.shark_dx
 
-        off_right = (dx > 0) & (new_x >= cfg.screen_width)
-        off_left = (dx < 0) & ((new_x + cfg.shark_width) <= 0)
+        def _resting_move(s: NameThisGameState) -> NameThisGameState:
+            # Keep shark on lane 0, wrap horizontally instead of dropping lanes
+            off_right = (s.shark_dx > 0) & (x >= cfg.screen_width)
+            off_left  = (s.shark_dx < 0) & ((x + cfg.shark_width) <= 0)
 
-        def _drop_lane(s: NameThisGameState, going_left: bool) -> NameThisGameState:
-            new_lane = s.shark_lane + 1
-            last_idx = cfg.shark_lanes_y.shape[0] - 1
+            def _wrap_right(st):  # moving right, wrap to left
+                return st._replace(shark_x=jnp.array(-cfg.shark_width, jnp.int32))
+            def _wrap_left(st):   # moving left, wrap to right
+                return st._replace(shark_x=jnp.array(cfg.screen_width, jnp.int32))
 
-            def _lane_exists(st: NameThisGameState) -> NameThisGameState:
-                # Safe index even if compiled with out-of-range values
-                safe_idx = jnp.clip(new_lane, 0, last_idx)
-                new_y = jnp.take(cfg.shark_lanes_y, safe_idx, mode="clip")
-                base_speed = cfg.shark_base_speed + st.round * cfg.speed_increase_per_round_shark
-                speed = jnp.where(s.shark_lane>2, base_speed*2, base_speed)
-                new_dx_val = jnp.where(going_left, jnp.array(speed, jnp.int32), -jnp.array(speed, jnp.int32))
-                new_x_val = jnp.where(going_left, -cfg.shark_width, cfg.screen_width)
-                return st._replace(shark_x=new_x_val, shark_y=new_y, shark_dx=new_dx_val, shark_lane=new_lane)
+            st = s._replace(
+                shark_x=x,
+                shark_lane=jnp.array(0, jnp.int32),
+                shark_y=cfg.shark_lanes_y[0],
+                shark_alive=jnp.array(True, jnp.bool_),
+            )
+            st = jax.lax.cond(off_right, _wrap_right, lambda q: q, st)
+            st = jax.lax.cond(off_left,  _wrap_left,  lambda q: q, st)
+            return st
 
-            def _no_lane(st: NameThisGameState) -> NameThisGameState:
-                return st._replace(shark_alive=jnp.array(False, dtype=jnp.bool_))
+        def _normal_move(s: NameThisGameState) -> NameThisGameState:
+            new_x = x
+            dx = s.shark_dx
+            off_right = (dx > 0) & (new_x >= cfg.screen_width)
+            off_left  = (dx < 0) & ((new_x + cfg.shark_width) <= 0)
 
-            has_lane = new_lane < (last_idx + 1)
-            return jax.lax.cond(has_lane, _lane_exists, _no_lane, s)
+            def _drop_lane(st: NameThisGameState, going_left: bool) -> NameThisGameState:
+                new_lane = st.shark_lane + 1
+                last_idx = cfg.shark_lanes_y.shape[0] - 1
 
-        state = state._replace(shark_x=new_x)
-        state = jax.lax.cond(off_right, lambda s: _drop_lane(s, going_left=False), lambda s: s, state)
-        state = jax.lax.cond(off_left, lambda s: _drop_lane(s, going_left=True), lambda s: s, state)
-        return state
+                def _lane_exists(tt: NameThisGameState) -> NameThisGameState:
+                    safe_idx = jnp.clip(new_lane, 0, last_idx)
+                    new_y = jnp.take(cfg.shark_lanes_y, safe_idx, mode="clip")
+                    base_speed = cfg.shark_base_speed + tt.round * cfg.speed_increase_per_round_shark
+                    speed = jnp.where(st.shark_lane > 2, base_speed*2, base_speed)
+                    new_dx_val = jnp.where(going_left, jnp.array(speed, jnp.int32), -jnp.array(speed, jnp.int32))
+                    new_x_val = jnp.where(going_left, -cfg.shark_width, cfg.screen_width)
+                    return tt._replace(shark_x=new_x_val, shark_y=new_y, shark_dx=new_dx_val, shark_lane=new_lane)
+
+                def _no_lane(tt: NameThisGameState) -> NameThisGameState:
+                    return tt._replace(shark_alive=jnp.array(False, dtype=jnp.bool_))
+
+                has_lane = new_lane < (last_idx + 1)
+                return jax.lax.cond(has_lane, _lane_exists, _no_lane, st)
+
+            st = s._replace(shark_x=new_x)
+            st = jax.lax.cond(off_right, lambda u: _drop_lane(u, going_left=False), lambda u: u, st)
+            st = jax.lax.cond(off_left,  lambda u: _drop_lane(u, going_left=True),  lambda u: u, st)
+            return st
+
+        return jax.lax.cond(state.resting, _resting_move, _normal_move, state)
 
     @partial(jax.jit, static_argnums=(0,))
     def _move_tentacles(self, state: NameThisGameState) -> NameThisGameState:
@@ -829,44 +956,33 @@ class JaxNameThisGame(JaxEnvironment[NameThisGameState, NameThisGameObservation,
 
     @partial(jax.jit, static_argnums=(0,))
     def _update_oxygen(self, state: NameThisGameState) -> NameThisGameState:
-        """While under the line: every N contact frames either refill to full, or if already full, add points.
-        Oxygen does not drain while under the line; otherwise it drains by 1 per frame."""
         cfg = self.config
-        full_oxy = jnp.array(cfg.oxygen_full, dtype=jnp.int32)
 
-        # Is diver under the active oxygen line?
-        diver_center = state.diver_x + (cfg.diver_width // 2)
-        line_center = state.oxygen_line_x + (cfg.oxygen_line_width // 2)
-        diver_under_line = state.oxygen_line_active & (jnp.abs(diver_center - line_center) <= cfg.oxygen_pickup_radius)
+        # Freeze in rest state (no drain, no refill)
+        def _rest(s: NameThisGameState) -> NameThisGameState:
+            return s._replace(oxygen_frames_remaining=s.oxy_bar_px)  # keep coherent
 
-        # Count consecutive contact frames; apply effect every K frames
-        cnt_next = jnp.where(diver_under_line, state.oxygen_contact_counter + 1, jnp.array(0, dtype=jnp.int32))
-        apply_effect = diver_under_line & ((cnt_next % cfg.oxygen_contact_every_n_frames) == 0)
+        def _active(s: NameThisGameState) -> NameThisGameState:
+            # Are we under the oxygen line?
+            diver_center = s.diver_x + (cfg.diver_width // 2)
+            line_center  = s.oxygen_line_x + (cfg.oxygen_line_width // 2)
+            under = s.oxygen_line_active & (jnp.abs(diver_center - line_center) <= cfg.oxygen_pickup_radius)
 
-        oxygen_not_full = state.oxygen_frames_remaining < full_oxy
-        # Refill to full iff effect triggers and oxygen wasn't full
-        oxy_after_effect = jnp.where(apply_effect & oxygen_not_full, full_oxy, state.oxygen_frames_remaining)
+            # Count contact frames and apply +4 px every K frames
+            contact_frames_needed = cfg.oxygen_contact_every_n_frames
+            cnt_next = jnp.where(under, s.oxygen_contact_counter + 1, jnp.array(0, jnp.int32))
+            tick = under & (cnt_next % contact_frames_needed == 0) & (cnt_next > 0)
 
-        # Award points iff effect triggers and oxygen already full
-        add_points = jnp.where(
-            apply_effect & (~oxygen_not_full),
-            jnp.array(cfg.oxygen_contact_points, dtype=jnp.int32),
-            jnp.array(0, dtype=jnp.int32),
-        )
-        new_score = state.score + add_points
+            inc = jnp.where(tick, jnp.array(cfg.hud_bar_shrink_px_per_step_total, jnp.int32), jnp.array(0, jnp.int32))
+            new_oxy_bar = jnp.minimum(s.oxy_bar_px + inc, jnp.array(cfg.hud_bar_initial_px, jnp.int32))
 
-        # No drain while under the line; otherwise drain by 1
-        new_oxy = jnp.where(
-            diver_under_line,
-            oxy_after_effect,
-            jnp.maximum(oxy_after_effect - 1, 0),
-        )
+            return s._replace(
+                oxy_bar_px=new_oxy_bar,
+                oxygen_contact_counter=cnt_next,
+                oxygen_frames_remaining=new_oxy_bar,  # keep a simple proxy in 'frames' slot
+            )
 
-        return state._replace(
-            oxygen_frames_remaining=new_oxy,
-            oxygen_contact_counter=cnt_next,
-            score=new_score,
-        )
+        return jax.lax.cond(state.resting, _rest, _active, state)
 
     @partial(jax.jit, static_argnums=(0,))
     def _update_round(self, state: NameThisGameState) -> NameThisGameState:
@@ -927,6 +1043,8 @@ class JaxNameThisGame(JaxEnvironment[NameThisGameState, NameThisGameObservation,
         state = jax.lax.cond(can_shoot, lambda s: self._spawn_spear(s), lambda s: s, state)
         # Move boat (every N frames, bounce at edges)
         state = self._move_boat(state)
+        # Update the HUD bars
+        state = self._update_bars_and_rest(state, just_pressed)
         # Handle oxygen line spawns
         state = self._spawn_or_update_oxygen_line(state)
         # Move spear
