@@ -1,8 +1,1 @@
-# JAXAtari Games Module
-# This module contains all JAX-based Atari game implementations
-
-from .jax_keystonekapers import JaxKeystoneKapers
-
-__all__ = [
-    'JaxKeystoneKapers',
-]
+from jaxatari.core import make, list_available_games
