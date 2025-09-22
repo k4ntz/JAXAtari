@@ -1460,8 +1460,25 @@ class JaxVenture(JaxEnvironment[GameState, VentureObservation, VentureInfo, Vent
         return VentureObservation(player=player, monsters=monsters, game_over=game_over_flag)
 
     def _get_reward(self, previous_state: GameState, state: GameState) -> Array | ndarray[Any, dtype[Any]]:
-        """Calculates the reward for the current step."""
-        return (state.score - previous_state.score).astype(jnp.float32)
+        """
+        Calculates the reward for the current step.
+        - Normally, the reward is the score gained in the step.
+        - On the final step when all lives are lost, the reward is a large penalty
+          equal to the negative of the total accumulated score.
+        """
+        normal_reward = (state.score - previous_state.score).astype(jnp.float32)
+
+        game_over_penalty = -state.score.astype(jnp.float32)
+
+        is_done = self._get_done(state)
+
+        final_reward = jnp.where(
+            is_done,
+            game_over_penalty,
+            normal_reward
+        )
+
+        return final_reward
 
     def _get_done(self, state: GameState) -> bool:
         """Determines if the episode has ended."""
