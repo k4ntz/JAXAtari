@@ -12,20 +12,19 @@ import jaxatari.rendering.jax_rendering_utils as jr
 
 
 class WordZapperConstants(NamedTuple) :
-    # define object orientations
-    FACE_LEFT = -1
-    FACE_RIGHT = 1
-
-    # Player 
-    PLAYER_START_X = 36
-    PLAYER_START_Y = 135
-    
-    # Pygame window dimensions
+    # game consts
     WIDTH = 160
     HEIGHT = 210
 
     X_BOUNDS = (10, 134) # (min X, max X)
     Y_BOUNDS = (56, 135)
+
+    FPS = 60
+    TIME = 99
+
+    # define object orientations
+    FACE_LEFT = -1
+    FACE_RIGHT = 1
 
     # Object sizes (width, height)
     PLAYER_SIZE = (16, 12)
@@ -35,7 +34,11 @@ class WordZapperConstants(NamedTuple) :
     BONKER_SIZE = (5, 5)
     ZONKER_SIZE = (7, 10)
 
-    # letters to apper and disapper
+    # Player 
+    PLAYER_START_X = 36
+    PLAYER_START_Y = 135
+    
+    # letters 
     LETTER_VISIBLE_MIN_X = 36   # Letters become visible at
     LETTER_VISIBLE_MAX_X = 124  # Letters disappear at
     LETTER_RESET_X = 5 # at this coordinate letters reset back to right ! only coordinates change not real reset
@@ -43,6 +46,11 @@ class WordZapperConstants(NamedTuple) :
     LETTERS_END = LETTER_VISIBLE_MIN_X + 26 * LETTERS_DISTANCE # 27 symbols (letters + special) but 26 gaps
     LETTER_COOLDOWN = 200 # cooldown after letters zapperd till they reappear
     LETTER_SCROLLING_SPEED = 1 # speed at which letters move left
+
+    LETTER_EXPLOSION_FRAME_DURATION = 8
+    LETTER_EXPLOSION_FRAMES = 4
+
+    SPECIAL_CHAR_INDEX = 26
 
     # Enemies
     MAX_ENEMIES = 6
@@ -53,95 +61,41 @@ class WordZapperConstants(NamedTuple) :
     ENEMY_ANIM_SWITCH_RATE = 2
     ENEMY_Y_MIN_SEPARATION = 16
     ENEMY_VISIBLE_X = (8, 151) # (min, max)
-
     ENEMY_GAME_SPEED = 0.7
-    LEVEL_PAUSE_FRAMES = 3 * 60
+
+    ENEMY_EXPLOSION_FRAME_DURATION = 8  # Number of ticks per explosion frame
+    ENEMY_EXPLOSION_FRAMES = 4          # number of explosion frames/sprites
 
     # zapper
     ZAPPER_COLOR = (252,252,84,255)
     MAX_ZAPPER_POS = 49
     ZAPPER_SPR_WIDTH = ZAPPER_SIZE[0]
     ZAPPER_SPR_HEIGHT = ZAPPER_SIZE[1] # we assume this max zapper height
-    
     ZAPPING_BOUNDS = (LETTER_VISIBLE_MIN_X, LETTER_VISIBLE_MAX_X - ZAPPER_SPR_WIDTH) # min x, max x
-    
     PLAYER_ZAPPER_COOLDOWN_TIME = 32 # amount letters stop moving and zapper is active
     ZAPPER_BLOCK_TIME = 50 # dont allow zapper action during this time
 
+
+    # level
+    LEVEL_PAUSE_FRAMES = 3 * FPS
     LEVEL_WORD_LENGTHS = (4, 5, 6)
-    SPECIAL_CHAR_INDEX = 26
-    
-    TIME = 99
-
-    ENEMY_EXPLOSION_FRAME_DURATION = 8  # Number of ticks per explosion frame
-    ENEMY_EXPLOSION_FRAMES = 4          # NEW: number of explosion frames/sprites
-    # Letter explosion animation
-    LETTER_EXPLOSION_FRAME_DURATION = 8
-    LETTER_EXPLOSION_FRAMES = 4
-
-    # level complete animation
-    LVL_COMPL_ANIM_TIME = 250
+    LVL_COMPL_ANIM_TIME = 250  # level complete animation
     LVL_COMPL_ANIM_X_BOUNDS = (X_BOUNDS[0], X_BOUNDS[1])
-
+    
     # scores
     SCORE_CORRECT_LETTER = 10
     SCORE_LVL_CLEARED = 100
     SCORE_EARLY_SPECIAL_PENALTY = -10000
 
 
-WORD_LIST = [
-    ["WAVE", "BYTE", "NODE", "BEAM", "SHIP", "CODE", "GRID"],
-    ["PIXEL", "ROBOT", "LASER", "POWER", "SMART", "INPUT", "GHOST"],
-    ["BONKER","ZONKER", "ROCKET", "PLAYER", "VECTOR", "BINARY", "MATRIX"]
-]
-
-def _encode_word(word, max_len=6):
-    vals = [ord(c) - 65 for c in word] + [-1] * (max_len - len(word))
-    return jnp.array(vals, dtype=jnp.int32)
-
-# Encode each bank to a fixed (7, 6) array (padded to 6 with -1s)
-ENCODED_WORD_LIST_4 = jnp.stack([_encode_word(w, 6) for w in WORD_LIST[0]])
-ENCODED_WORD_LIST_5 = jnp.stack([_encode_word(w, 6) for w in WORD_LIST[1]])
-ENCODED_WORD_LIST_6 = jnp.stack([_encode_word(w, 6) for w in WORD_LIST[2]])
-
-@jax.jit
-def choose_target_word(rng_key: jax.random.PRNGKey, lvl_word_len: chex.Array) -> tuple[chex.Array, jax.random.PRNGKey]:
-    def pick_bank(lvl_word_len: chex.Array) -> chex.Array:
-        """
-        select encoded word list based on level
-        """
-        idx = jnp.where(lvl_word_len == 4, 0, jnp.where(lvl_word_len == 5, 1, 2))
-        return jax.lax.switch(
-            idx,
-            (
-                lambda: ENCODED_WORD_LIST_4,  # (7, 6)
-                lambda: ENCODED_WORD_LIST_5,  # (7, 6)
-                lambda: ENCODED_WORD_LIST_6,  # (7, 6)
-            ),
-        )
-
-    bank = pick_bank(lvl_word_len)
-    n = bank.shape[0]
-    rng_key, sub = jax.random.split(rng_key)
-    idx = jax.random.randint(sub, (), 0, n, dtype=jnp.int32)
-
-    return bank[idx], rng_key
 
 
-STATE_TRANSLATOR: dict = {
-    0: "player_x",
-    1: "player_y",
-    2: "letters_x",
-    3: "letters_y",
-    4: "letters_char",
-    5: "letters_alive",
-    6: "letters_speed",
-    7: "current_letter_index",
-    8: "player_score",
-    9: "timer",
-    10: "step_counter",
-    11: "buffer",
-}
+WORD_LIST = (
+    ("WAVE", "BYTE", "NODE", "BEAM", "SHIP", "CODE", "GRID"),
+    ("PIXEL", "ROBOT", "LASER", "POWER", "SMART", "INPUT", "GHOST"),
+    ("BONKER","ZONKER", "ROCKET", "PLAYER", "VECTOR", "BINARY", "MATRIX")
+)
+
 
 class WordZapperState(NamedTuple):
     player_x: chex.Array
@@ -192,7 +146,6 @@ class WordZapperState(NamedTuple):
 
     finised_level_count: chex.Array 
 
-    # Animation for post-word-completion
     word_complete_animation: chex.Array  # 0: off, 1: animating
 
 class EntityPosition(NamedTuple):
@@ -267,7 +220,7 @@ def load_sprites():
     digits = jr.load_and_pad_digits(os.path.join(MODULE_DIR, "sprites/wordzapper/digits/{}.npy"))    
  
     # Letters above 
-    letters = [jr.loadFrame(os.path.join(MODULE_DIR, f"sprites/wordzapper/letters/normal_letters/{chr(i)}.npy")) for i in range(ord('a'), ord('z') + 1)] # MAYBE SPECIAL CHAR MISSING
+    letters = [jr.loadFrame(os.path.join(MODULE_DIR, f"sprites/wordzapper/letters/normal_letters/{chr(i)}.npy")) for i in range(ord('a'), ord('z') + 1)]
     
     special = jr.loadFrame(os.path.join(MODULE_DIR, "sprites/wordzapper/letters/normal_letters/1special_symbol.npy"))
     letters.append(special)
@@ -382,6 +335,38 @@ def load_sprites():
     YELLOW_LETTERS_OFFSETS,
     LETTERS_OFFSETS,
     ) = load_sprites()
+
+
+@jax.jit
+def choose_target_word(rng_key: jax.random.PRNGKey, lvl_word_len: chex.Array) -> tuple[chex.Array, jax.random.PRNGKey]:
+    """
+    choose a word based on level with given word_list
+    """
+    def _encode_word(word, max_len=6):
+        vals = [ord(c) - 65 for c in word] + [-1] * (max_len - len(word))
+        return jnp.array(vals, dtype=jnp.int32)
+
+
+    def pick_bank(lvl_word_len: chex.Array) -> chex.Array:
+        """
+        select encoded word list based on level
+        """
+        idx = jnp.where(lvl_word_len == 4, 0, jnp.where(lvl_word_len == 5, 1, 2))
+        return jax.lax.switch(
+            idx,
+            (
+                lambda: jnp.stack([_encode_word(w, 6) for w in WORD_LIST[0]]),  # (7, 6)
+                lambda: jnp.stack([_encode_word(w, 6) for w in WORD_LIST[1]]),  # (7, 6)
+                lambda: jnp.stack([_encode_word(w, 6) for w in WORD_LIST[2]]),  # (7, 6)
+            ),
+        )
+
+    bank = pick_bank(lvl_word_len)
+    n = bank.shape[0]
+    rng_key, sub = jax.random.split(rng_key)
+    idx = jax.random.randint(sub, (), 0, n, dtype=jnp.int32)
+
+    return bank[idx], rng_key
 
 
 @jax.jit
@@ -723,6 +708,58 @@ def player_missile_step(
     )
 
     return new_missile
+
+
+@jax.jit
+def enemy_spawn_step(
+    state: WordZapperState, consts: WordZapperConstants, new_enemy_positions, new_enemy_active
+) -> chex.Array :
+        """
+        spawn enemy
+        """
+        new_enemy_global_spawn_timer = jnp.maximum(state.enemy_global_spawn_timer - 1, 0)
+        has_free_slot = jnp.any(new_enemy_active == 0)
+        spawn_cond = (new_enemy_global_spawn_timer == 0) & has_free_slot
+
+        def spawn_one_enemy_fn(rng_key_in, existing_pos, existing_act):
+            rng_key_out, sk_dir, sk_lane, sk_type = jax.random.split(rng_key_in, 4)
+            direction = jnp.where(jax.random.bernoulli(sk_dir),  1.0, -1.0)
+            vx = direction * consts.ENEMY_GAME_SPEED
+            x_pos = jnp.where(direction == 1.0, consts.ENEMY_MIN_X, consts.ENEMY_MAX_X)
+            lanes = jnp.linspace(consts.ENEMY_Y_MIN, consts.ENEMY_Y_MAX, 4)
+            def lane_is_free(lane_y):
+                return jnp.all(jnp.logical_or((existing_act == 0), (jnp.abs(existing_pos[:, 1] - lane_y) > 1e-3)))
+            lane_free_mask = jax.vmap(lane_is_free)(lanes)
+            perm = jax.random.permutation(sk_lane, 4)
+            def pick_lane(i, chosen):
+                lane = perm[i]
+                is_free = lane_free_mask[lane]
+                return jnp.where((chosen == -1) & is_free, lane, chosen)
+            lane_idx = jax.lax.fori_loop(0, 4, pick_lane, -1)
+            final_y = jnp.where(lane_idx == -1, -9999, lanes[0])
+            enemy_type = jax.random.randint(sk_type, (), 0, 2)
+            new_enemy = jnp.where(lane_idx == -1,
+                                  jnp.array([x_pos, final_y, enemy_type, vx, 0.0]),
+                                  jnp.array([x_pos, lanes[lane_idx], enemy_type, vx, 1.0]))
+            return new_enemy, rng_key_out
+
+        def spawn_enemy_branch(carry):
+            pos, act, g_timer, rng_key_inner = carry
+            free_idx = jnp.argmax(act == 0)
+            new_enemy, rng_key_out = spawn_one_enemy_fn(rng_key_inner, pos, act)
+            pos = pos.at[free_idx].set(new_enemy)
+            act = act.at[free_idx].set(1)
+            g_timer = jax.random.randint(rng_key_out, (), 30, 70)
+            return pos, act, g_timer, rng_key_out
+
+        new_enemy_positions, new_enemy_active, new_enemy_global_spawn_timer, new_rng_key = jax.lax.cond(
+            spawn_cond,
+            spawn_enemy_branch,
+            lambda i: i,
+            (new_enemy_positions, new_enemy_active, new_enemy_global_spawn_timer, state.rng_key),
+        )
+
+        return new_enemy_positions, new_enemy_active, new_enemy_global_spawn_timer, new_rng_key
 
 
 @jax.jit
@@ -1492,7 +1529,7 @@ class JaxWordZapper(JaxEnvironment[WordZapperState, WordZapperObservation, WordZ
         )
 
         new_timer = jnp.where(
-            (new_step_counter % 60 == 0) & (state.timer > 0),
+            (new_step_counter % self.consts.FPS == 0) & (state.timer > 0),
             state.timer - 1,
             state.timer,
         )
@@ -1523,58 +1560,21 @@ class JaxWordZapper(JaxEnvironment[WordZapperState, WordZapperObservation, WordZ
         )
 
 
-        new_enemy_global_spawn_timer = jnp.maximum(state.enemy_global_spawn_timer - 1, 0)
-        has_free_slot = jnp.any(new_enemy_active == 0)
-        spawn_cond = (new_enemy_global_spawn_timer == 0) & has_free_slot
-
-        def spawn_one_enemy_fn(rng_key_in, existing_pos, existing_act):
-            rng_key_out, sk_dir, sk_lane, sk_type = jax.random.split(rng_key_in, 4)
-            direction = jnp.where(jax.random.bernoulli(sk_dir),  1.0, -1.0)
-            vx = direction * self.consts.ENEMY_GAME_SPEED
-            x_pos = jnp.where(direction == 1.0, self.consts.ENEMY_MIN_X, self.consts.ENEMY_MAX_X)
-            lanes = jnp.linspace(self.consts.ENEMY_Y_MIN, self.consts.ENEMY_Y_MAX, 4)
-            def lane_is_free(lane_y):
-                return jnp.all(jnp.logical_or((existing_act == 0), (jnp.abs(existing_pos[:, 1] - lane_y) > 1e-3)))
-            lane_free_mask = jax.vmap(lane_is_free)(lanes)
-            perm = jax.random.permutation(sk_lane, 4)
-            def pick_lane(i, chosen):
-                lane = perm[i]
-                is_free = lane_free_mask[lane]
-                return jnp.where((chosen == -1) & is_free, lane, chosen)
-            lane_idx = jax.lax.fori_loop(0, 4, pick_lane, -1)
-            final_y = jnp.where(lane_idx == -1, -9999, lanes[0])
-            enemy_type = jax.random.randint(sk_type, (), 0, 2)
-            new_enemy = jnp.where(lane_idx == -1,
-                                  jnp.array([x_pos, final_y, enemy_type, vx, 0.0]),
-                                  jnp.array([x_pos, lanes[lane_idx], enemy_type, vx, 1.0]))
-            return new_enemy, rng_key_out
-
-        def spawn_enemy_branch(carry):
-            pos, act, g_timer, rng_key_inner = carry
-            free_idx = jnp.argmax(act == 0)
-            new_enemy, rng_key_out = spawn_one_enemy_fn(rng_key_inner, pos, act)
-            pos = pos.at[free_idx].set(new_enemy)
-            act = act.at[free_idx].set(1)
-            g_timer = jax.random.randint(rng_key_out, (), 30, 70)
-            return pos, act, g_timer, rng_key_out
-
-        def no_spawn_branch(carry):
-            return carry
-
-        positions, active, global_timer, rng_key = jax.lax.cond(
-            spawn_cond,
-            spawn_enemy_branch,
-            no_spawn_branch,
-            (new_enemy_positions, new_enemy_active, new_enemy_global_spawn_timer, state.rng_key),
+        new_enemy_positions, new_enemy_active, new_enemy_global_spawn_timer, new_rng_key = enemy_spawn_step(
+            state,
+            self.consts,
+            new_enemy_positions,
+            new_enemy_active,
         )
+
 
         # Integrated Player-Enemy Collision Logic
         new_player_x, new_enemy_active = handle_player_enemy_collisions(
             new_player_x,
             new_player_y,
             new_player_direction,
-            positions,
-            active,
+            new_enemy_positions,
+            new_enemy_active,
             self.consts
         )
 
@@ -1588,7 +1588,7 @@ class JaxWordZapper(JaxEnvironment[WordZapperState, WordZapperObservation, WordZ
             player_missile_position,
         ) = handle_missile_enemy_explosions(
             state,
-            positions,
+            new_enemy_positions,
             new_enemy_active,
             player_missile_position,
             self.consts
@@ -1663,14 +1663,14 @@ class JaxWordZapper(JaxEnvironment[WordZapperState, WordZapperObservation, WordZ
             player_direction=new_player_direction,
             player_missile_position=player_missile_position,
             player_zapper_position=player_zapper_position,
-            enemy_positions=positions,
+            enemy_positions=new_enemy_positions,
             enemy_active=new_enemy_active,
-            enemy_global_spawn_timer=global_timer,
+            enemy_global_spawn_timer=new_enemy_global_spawn_timer,
             letters_x=new_letters_x,
             letters_alive=new_letters_alive,
             step_counter=new_step_counter,
             timer=new_timer,
-            rng_key=rng_key,
+            rng_key=new_rng_key,
             enemy_explosion_frame=new_enemy_explosion_frame,
             enemy_explosion_timer=new_enemy_explosion_timer,
             enemy_explosion_frame_timer=new_enemy_explosion_frame_timer,
