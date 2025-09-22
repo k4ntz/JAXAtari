@@ -58,8 +58,8 @@ class KeystoneKapersConstants(NamedTuple):
 
     # Building structure - 7 sections of horizontal scrolling
     BUILDING_SECTIONS: int = 7
-    SECTION_WIDTH: int = 160  # Each section is one screen width
-    TOTAL_BUILDING_WIDTH: int = 7 * 160  # 1120 pixels total width
+    SECTION_WIDTH: int = 152  # Match game area width to prevent disappearing
+    TOTAL_BUILDING_WIDTH: int = 7 * 152  # 1064 pixels total width
 
     # Floor positions (Y coordinates) - shifted up further to eliminate blue gap above minimap
     FLOOR_1_Y: int = 135  # Ground floor (was 140, shifted up by 5 more to close gap)
@@ -405,22 +405,8 @@ class JaxKeystoneKapers(JaxEnvironment[GameState, KeystoneKapersObservation, Key
             jnp.where(move_right, self.consts.PLAYER_SPEED, 0)
         )
 
-        # Update X position with clipping to visible screen bounds
+        # Update X position - simple boundary checking
         new_x = player.x + vel_x
-        
-        # Calculate current section and position within section
-        current_section = new_x // self.consts.SECTION_WIDTH
-        section_start = current_section * self.consts.SECTION_WIDTH
-        position_in_section = new_x - section_start
-        
-        # Clamp position within visible game area (not full section width)
-        max_position_in_section = self.consts.GAME_AREA_WIDTH - self.consts.PLAYER_WIDTH
-        clamped_position_in_section = jnp.clip(position_in_section, 0, max_position_in_section)
-        
-        # Reconstruct final position
-        new_x = section_start + clamped_position_in_section
-        
-        # Also ensure we don't go beyond the total building
         new_x = jnp.clip(new_x, 0, self.consts.TOTAL_BUILDING_WIDTH - self.consts.PLAYER_WIDTH)
 
         # Jumping mechanics with gravity
