@@ -154,7 +154,7 @@ class VideoPinballConstants(NamedTuple):
     VELOCITY_DAMPENING_VALUE = jnp.array(0.075)  # 24
     VELOCITY_ACCELERATION_VALUE = jnp.array(0.125)
     MAX_REFLECTIONS_PER_GAMESTEP = jnp.array(
-        10
+        3
     )  # max collisions to process per timestep
     BALL_MAX_SPEED = jnp.array(3.5)
     BALL_MIN_SPEED = jnp.array(0.35)
@@ -1201,148 +1201,148 @@ class VideoPinballConstants(NamedTuple):
     )
 
     LEFT_FLIPPER_00_BOT_SCENE_OBJECT = SceneObject(
-        hit_box_height=FLIPPER_PIVOT_Y_BOT - FLIPPER_00_BOT_END_Y,
-        hit_box_width=FLIPPER_LEFT_00_END_X - FLIPPER_LEFT_PIVOT_X,
+        hit_box_height=jnp.abs(FLIPPER_PIVOT_Y_BOT - FLIPPER_00_BOT_END_Y),
+        hit_box_width=jnp.abs(FLIPPER_LEFT_00_END_X - FLIPPER_LEFT_PIVOT_X),
         hit_box_x_offset=FLIPPER_LEFT_PIVOT_X,
-        hit_box_y_offset=FLIPPER_00_BOT_END_Y,
+        hit_box_y_offset=jnp.min(jnp.array([FLIPPER_PIVOT_Y_BOT, FLIPPER_00_BOT_END_Y])),
         reflecting=jnp.array(1),
         score_type=jnp.array(9),
         variant=jnp.array(0),
     )
     LEFT_FLIPPER_16_BOT_SCENE_OBJECT = SceneObject(
-        hit_box_height=FLIPPER_PIVOT_Y_BOT - FLIPPER_16_BOT_END_Y,
-        hit_box_width=FLIPPER_LEFT_16_END_X - FLIPPER_LEFT_PIVOT_X,
+        hit_box_height=jnp.abs(FLIPPER_PIVOT_Y_BOT - FLIPPER_16_BOT_END_Y),
+        hit_box_width=jnp.abs(FLIPPER_LEFT_16_END_X - FLIPPER_LEFT_PIVOT_X),
         hit_box_x_offset=FLIPPER_LEFT_PIVOT_X,
-        hit_box_y_offset=FLIPPER_16_BOT_END_Y,
+        hit_box_y_offset=jnp.min(jnp.array([FLIPPER_PIVOT_Y_BOT, FLIPPER_16_BOT_END_Y])),
         reflecting=jnp.array(1),
         score_type=jnp.array(9),
         variant=jnp.array(1),
     )
     LEFT_FLIPPER_32_BOT_SCENE_OBJECT = SceneObject(
-        hit_box_height=FLIPPER_PIVOT_Y_BOT - FLIPPER_32_BOT_END_Y,
-        hit_box_width=FLIPPER_LEFT_32_END_X - FLIPPER_LEFT_PIVOT_X,
+        hit_box_height=jnp.abs(FLIPPER_PIVOT_Y_BOT - FLIPPER_32_BOT_END_Y),
+        hit_box_width=jnp.abs(FLIPPER_LEFT_32_END_X - FLIPPER_LEFT_PIVOT_X),
         hit_box_x_offset=FLIPPER_LEFT_PIVOT_X,
-        hit_box_y_offset=FLIPPER_32_BOT_END_Y,
+        hit_box_y_offset=jnp.min(jnp.array([FLIPPER_PIVOT_Y_BOT, FLIPPER_32_BOT_END_Y])),
         reflecting=jnp.array(1),
         score_type=jnp.array(9),
         variant=jnp.array(2),
     )
     LEFT_FLIPPER_48_BOT_SCENE_OBJECT = SceneObject(
-        hit_box_height=FLIPPER_PIVOT_Y_BOT - FLIPPER_48_BOT_END_Y,
-        hit_box_width=FLIPPER_LEFT_48_END_X - FLIPPER_LEFT_PIVOT_X,
+        hit_box_height=jnp.abs(FLIPPER_PIVOT_Y_BOT - FLIPPER_48_BOT_END_Y),
+        hit_box_width=jnp.abs(FLIPPER_LEFT_48_END_X - FLIPPER_LEFT_PIVOT_X),
         hit_box_x_offset=FLIPPER_LEFT_PIVOT_X,
-        hit_box_y_offset=FLIPPER_48_BOT_END_Y,
+        hit_box_y_offset=jnp.min(jnp.array([FLIPPER_PIVOT_Y_BOT, FLIPPER_48_BOT_END_Y])),
         reflecting=jnp.array(1),
         score_type=jnp.array(9),
         variant=jnp.array(3),
     )
 
     LEFT_FLIPPER_00_TOP_SCENE_OBJECT = SceneObject(
-        hit_box_height=FLIPPER_PIVOT_Y_TOP - FLIPPER_00_TOP_END_Y,
-        hit_box_width=FLIPPER_LEFT_00_END_X - FLIPPER_LEFT_PIVOT_X,
+        hit_box_height=jnp.abs(FLIPPER_PIVOT_Y_TOP - FLIPPER_00_TOP_END_Y),
+        hit_box_width=jnp.abs(FLIPPER_LEFT_00_END_X - FLIPPER_LEFT_PIVOT_X),
         hit_box_x_offset=FLIPPER_LEFT_PIVOT_X,
-        hit_box_y_offset=FLIPPER_00_TOP_END_Y,
+        hit_box_y_offset=jnp.min(jnp.array([FLIPPER_PIVOT_Y_TOP, FLIPPER_00_TOP_END_Y])),
         reflecting=jnp.array(1),
         score_type=jnp.array(9),
         variant=jnp.array(4),
     )
     LEFT_FLIPPER_16_TOP_SCENE_OBJECT = SceneObject(
-        hit_box_height=FLIPPER_PIVOT_Y_TOP - FLIPPER_16_TOP_END_Y,
-        hit_box_width=FLIPPER_LEFT_16_END_X - FLIPPER_LEFT_PIVOT_X,
+        hit_box_height=jnp.abs(FLIPPER_PIVOT_Y_TOP - FLIPPER_16_TOP_END_Y),
+        hit_box_width=jnp.abs(FLIPPER_LEFT_16_END_X - FLIPPER_LEFT_PIVOT_X),
         hit_box_x_offset=FLIPPER_LEFT_PIVOT_X,
-        hit_box_y_offset=FLIPPER_16_TOP_END_Y,
+        hit_box_y_offset=jnp.min(jnp.array([FLIPPER_PIVOT_Y_TOP, FLIPPER_16_TOP_END_Y])),
         reflecting=jnp.array(1),
         score_type=jnp.array(9),
         variant=jnp.array(5),
     )
     LEFT_FLIPPER_32_TOP_SCENE_OBJECT = SceneObject(
-        hit_box_height=FLIPPER_PIVOT_Y_TOP - FLIPPER_32_TOP_END_Y,
-        hit_box_width=FLIPPER_LEFT_32_END_X - FLIPPER_LEFT_PIVOT_X,
+        hit_box_height=jnp.abs(FLIPPER_PIVOT_Y_TOP - FLIPPER_32_TOP_END_Y),
+        hit_box_width=jnp.abs(FLIPPER_LEFT_32_END_X - FLIPPER_LEFT_PIVOT_X),
         hit_box_x_offset=FLIPPER_LEFT_PIVOT_X,
-        hit_box_y_offset=FLIPPER_32_TOP_END_Y,
+        hit_box_y_offset=jnp.min(jnp.array([FLIPPER_PIVOT_Y_TOP, FLIPPER_32_TOP_END_Y])),
         reflecting=jnp.array(1),
         score_type=jnp.array(9),
         variant=jnp.array(6),
     )
     LEFT_FLIPPER_48_TOP_SCENE_OBJECT = SceneObject(
-        hit_box_height=FLIPPER_PIVOT_Y_TOP - FLIPPER_48_TOP_END_Y,
-        hit_box_width=FLIPPER_LEFT_48_END_X - FLIPPER_LEFT_PIVOT_X,
+        hit_box_height=jnp.abs(FLIPPER_PIVOT_Y_TOP - FLIPPER_48_TOP_END_Y),
+        hit_box_width=jnp.abs(FLIPPER_LEFT_48_END_X - FLIPPER_LEFT_PIVOT_X),
         hit_box_x_offset=FLIPPER_LEFT_PIVOT_X,
-        hit_box_y_offset=FLIPPER_48_TOP_END_Y,
+        hit_box_y_offset=jnp.min(jnp.array([FLIPPER_PIVOT_Y_TOP, FLIPPER_48_TOP_END_Y])),
         reflecting=jnp.array(1),
         score_type=jnp.array(9),
         variant=jnp.array(7),
     )
 
     RIGHT_FLIPPER_00_BOT_SCENE_OBJECT = SceneObject(
-        hit_box_height=FLIPPER_PIVOT_Y_BOT - FLIPPER_00_BOT_END_Y,
-        hit_box_width=FLIPPER_RIGHT_PIVOT_X - FLIPPER_RIGHT_00_END_X,
-        hit_box_x_offset=FLIPPER_RIGHT_00_END_X,
-        hit_box_y_offset=FLIPPER_00_BOT_END_Y,
+        hit_box_height=jnp.abs(FLIPPER_PIVOT_Y_BOT - FLIPPER_00_BOT_END_Y),
+        hit_box_width=jnp.abs(FLIPPER_RIGHT_PIVOT_X - FLIPPER_RIGHT_00_END_X),
+        hit_box_x_offset=jnp.min(jnp.array([FLIPPER_RIGHT_PIVOT_X, FLIPPER_RIGHT_00_END_X])),
+        hit_box_y_offset=jnp.min(jnp.array([FLIPPER_PIVOT_Y_BOT, FLIPPER_00_BOT_END_Y])),
         reflecting=jnp.array(1),
         score_type=jnp.array(10),
         variant=jnp.array(8),
     )
     RIGHT_FLIPPER_16_BOT_SCENE_OBJECT = SceneObject(
-        hit_box_height=FLIPPER_PIVOT_Y_BOT - FLIPPER_16_BOT_END_Y,
-        hit_box_width=FLIPPER_RIGHT_PIVOT_X - FLIPPER_RIGHT_16_END_X,
-        hit_box_x_offset=FLIPPER_RIGHT_16_END_X,
-        hit_box_y_offset=FLIPPER_16_BOT_END_Y,
+        hit_box_height=jnp.abs(FLIPPER_PIVOT_Y_BOT - FLIPPER_16_BOT_END_Y),
+        hit_box_width=jnp.abs(FLIPPER_RIGHT_PIVOT_X - FLIPPER_RIGHT_16_END_X),
+        hit_box_x_offset=jnp.min(jnp.array([FLIPPER_RIGHT_PIVOT_X, FLIPPER_RIGHT_16_END_X])),
+        hit_box_y_offset=jnp.min(jnp.array([FLIPPER_PIVOT_Y_BOT, FLIPPER_16_BOT_END_Y])),
         reflecting=jnp.array(1),
         score_type=jnp.array(10),
         variant=jnp.array(9),
     )
     RIGHT_FLIPPER_32_BOT_SCENE_OBJECT = SceneObject(
-        hit_box_height=FLIPPER_PIVOT_Y_BOT - FLIPPER_32_BOT_END_Y,
-        hit_box_width=FLIPPER_RIGHT_PIVOT_X - FLIPPER_RIGHT_32_END_X,
-        hit_box_x_offset=FLIPPER_RIGHT_32_END_X,
-        hit_box_y_offset=FLIPPER_32_BOT_END_Y,
+        hit_box_height=jnp.abs(FLIPPER_PIVOT_Y_BOT - FLIPPER_32_BOT_END_Y),
+        hit_box_width=jnp.abs(FLIPPER_RIGHT_PIVOT_X - FLIPPER_RIGHT_32_END_X),
+        hit_box_x_offset=jnp.min(jnp.array([FLIPPER_RIGHT_PIVOT_X, FLIPPER_RIGHT_32_END_X])),
+        hit_box_y_offset=jnp.min(jnp.array([FLIPPER_PIVOT_Y_BOT, FLIPPER_32_BOT_END_Y])),
         reflecting=jnp.array(1),
         score_type=jnp.array(10),
         variant=jnp.array(10),
     )
     RIGHT_FLIPPER_48_BOT_SCENE_OBJECT = SceneObject(
-        hit_box_height=FLIPPER_PIVOT_Y_BOT - FLIPPER_48_BOT_END_Y,
-        hit_box_width=FLIPPER_RIGHT_PIVOT_X - FLIPPER_RIGHT_48_END_X,
-        hit_box_x_offset=FLIPPER_RIGHT_48_END_X,
-        hit_box_y_offset=FLIPPER_48_BOT_END_Y,
+        hit_box_height=jnp.abs(FLIPPER_PIVOT_Y_BOT - FLIPPER_48_BOT_END_Y),
+        hit_box_width=jnp.abs(FLIPPER_RIGHT_PIVOT_X - FLIPPER_RIGHT_48_END_X),
+        hit_box_x_offset=jnp.min(jnp.array([FLIPPER_RIGHT_PIVOT_X, FLIPPER_RIGHT_48_END_X])),
+        hit_box_y_offset=jnp.min(jnp.array([FLIPPER_PIVOT_Y_BOT, FLIPPER_48_BOT_END_Y])),
         reflecting=jnp.array(1),
         score_type=jnp.array(10),
         variant=jnp.array(11),
     )
 
     RIGHT_FLIPPER_00_TOP_SCENE_OBJECT = SceneObject(
-        hit_box_height=FLIPPER_PIVOT_Y_TOP - FLIPPER_00_TOP_END_Y,
-        hit_box_width=FLIPPER_RIGHT_PIVOT_X - FLIPPER_RIGHT_00_END_X,
-        hit_box_x_offset=FLIPPER_RIGHT_00_END_X,
-        hit_box_y_offset=FLIPPER_00_TOP_END_Y,
+        hit_box_height=jnp.abs(FLIPPER_PIVOT_Y_TOP - FLIPPER_00_TOP_END_Y),
+        hit_box_width=jnp.abs(FLIPPER_RIGHT_PIVOT_X - FLIPPER_RIGHT_00_END_X),
+        hit_box_x_offset=jnp.min(jnp.array([FLIPPER_RIGHT_PIVOT_X, FLIPPER_RIGHT_00_END_X])),
+        hit_box_y_offset=jnp.min(jnp.array([FLIPPER_PIVOT_Y_TOP, FLIPPER_00_TOP_END_Y])),
         reflecting=jnp.array(1),
         score_type=jnp.array(10),
         variant=jnp.array(12),
     )
     RIGHT_FLIPPER_16_TOP_SCENE_OBJECT = SceneObject(
-        hit_box_height=FLIPPER_PIVOT_Y_TOP - FLIPPER_16_TOP_END_Y,
-        hit_box_width=FLIPPER_RIGHT_PIVOT_X - FLIPPER_RIGHT_16_END_X,
-        hit_box_x_offset=FLIPPER_RIGHT_16_END_X,
-        hit_box_y_offset=FLIPPER_16_TOP_END_Y,
+        hit_box_height=jnp.abs(FLIPPER_PIVOT_Y_TOP - FLIPPER_16_TOP_END_Y),
+        hit_box_width=jnp.abs(FLIPPER_RIGHT_PIVOT_X - FLIPPER_RIGHT_16_END_X),
+        hit_box_x_offset=jnp.min(jnp.array([FLIPPER_RIGHT_PIVOT_X, FLIPPER_RIGHT_16_END_X])),
+        hit_box_y_offset=jnp.min(jnp.array([FLIPPER_PIVOT_Y_TOP, FLIPPER_16_TOP_END_Y])),
         reflecting=jnp.array(1),
         score_type=jnp.array(10),
         variant=jnp.array(13),
     )
     RIGHT_FLIPPER_32_TOP_SCENE_OBJECT = SceneObject(
-        hit_box_height=FLIPPER_PIVOT_Y_TOP - FLIPPER_32_TOP_END_Y,
-        hit_box_width=FLIPPER_RIGHT_PIVOT_X - FLIPPER_RIGHT_32_END_X,
-        hit_box_x_offset=FLIPPER_RIGHT_32_END_X,
-        hit_box_y_offset=FLIPPER_32_TOP_END_Y,
+        hit_box_height=jnp.abs(FLIPPER_PIVOT_Y_TOP - FLIPPER_32_TOP_END_Y),
+        hit_box_width=jnp.abs(FLIPPER_RIGHT_PIVOT_X - FLIPPER_RIGHT_32_END_X),
+        hit_box_x_offset=jnp.min(jnp.array([FLIPPER_RIGHT_PIVOT_X, FLIPPER_RIGHT_32_END_X])),
+        hit_box_y_offset=jnp.min(jnp.array([FLIPPER_PIVOT_Y_TOP, FLIPPER_32_TOP_END_Y])),
         reflecting=jnp.array(1),
         score_type=jnp.array(10),
         variant=jnp.array(14),
     )
     RIGHT_FLIPPER_48_TOP_SCENE_OBJECT = SceneObject(
-        hit_box_height=FLIPPER_PIVOT_Y_TOP - FLIPPER_48_TOP_END_Y,
-        hit_box_width=FLIPPER_RIGHT_PIVOT_X - FLIPPER_RIGHT_48_END_X,
-        hit_box_x_offset=FLIPPER_RIGHT_48_END_X,
-        hit_box_y_offset=FLIPPER_48_TOP_END_Y,
+        hit_box_height=jnp.abs(FLIPPER_PIVOT_Y_TOP - FLIPPER_48_TOP_END_Y),
+        hit_box_width=jnp.abs(FLIPPER_RIGHT_PIVOT_X - FLIPPER_RIGHT_48_END_X),
+        hit_box_x_offset=jnp.min(jnp.array([FLIPPER_RIGHT_PIVOT_X, FLIPPER_RIGHT_48_END_X])),
+        hit_box_y_offset=jnp.min(jnp.array([FLIPPER_PIVOT_Y_TOP, FLIPPER_48_TOP_END_Y])),
         reflecting=jnp.array(1),
         score_type=jnp.array(10),
         variant=jnp.array(15),
@@ -1494,7 +1494,7 @@ class VideoPinballConstants(NamedTuple):
             if scene_object.reflecting == 0
         ]
     ).squeeze()
-    _FLIPPERS_SORTED = [
+    _FLIPPERS_SORTED = (
         # sorted in a way that allows finding/identifying
         # the corresponding scene object by index
         LEFT_FLIPPER_00_BOT_SCENE_OBJECT,
@@ -1513,7 +1513,27 @@ class VideoPinballConstants(NamedTuple):
         RIGHT_FLIPPER_16_TOP_SCENE_OBJECT,
         RIGHT_FLIPPER_32_TOP_SCENE_OBJECT,
         RIGHT_FLIPPER_48_TOP_SCENE_OBJECT,
-    ]
+    )
+    FLIPPER_SEGMENTS_SORTED = jnp.array([
+        # (px, py), (ex, ey)
+        [[FLIPPER_LEFT_PIVOT_X, FLIPPER_PIVOT_Y_BOT], [FLIPPER_LEFT_00_END_X, FLIPPER_00_BOT_END_Y]],
+        [[FLIPPER_LEFT_PIVOT_X, FLIPPER_PIVOT_Y_BOT], [FLIPPER_LEFT_16_END_X, FLIPPER_16_BOT_END_Y]],
+        [[FLIPPER_LEFT_PIVOT_X, FLIPPER_PIVOT_Y_BOT], [FLIPPER_LEFT_32_END_X, FLIPPER_32_BOT_END_Y]],
+        [[FLIPPER_LEFT_PIVOT_X, FLIPPER_PIVOT_Y_BOT], [FLIPPER_LEFT_48_END_X, FLIPPER_48_BOT_END_Y]],
+        [[FLIPPER_LEFT_PIVOT_X, FLIPPER_PIVOT_Y_TOP], [FLIPPER_LEFT_00_END_X, FLIPPER_00_TOP_END_Y]],
+        [[FLIPPER_LEFT_PIVOT_X, FLIPPER_PIVOT_Y_TOP], [FLIPPER_LEFT_16_END_X, FLIPPER_16_TOP_END_Y]],
+        [[FLIPPER_LEFT_PIVOT_X, FLIPPER_PIVOT_Y_TOP], [FLIPPER_LEFT_32_END_X, FLIPPER_32_TOP_END_Y]],
+        [[FLIPPER_LEFT_PIVOT_X, FLIPPER_PIVOT_Y_TOP], [FLIPPER_LEFT_48_END_X, FLIPPER_48_TOP_END_Y]],
+        
+        [[FLIPPER_RIGHT_PIVOT_X, FLIPPER_PIVOT_Y_BOT], [FLIPPER_RIGHT_00_END_X, FLIPPER_00_BOT_END_Y]],
+        [[FLIPPER_RIGHT_PIVOT_X, FLIPPER_PIVOT_Y_BOT], [FLIPPER_RIGHT_16_END_X, FLIPPER_16_BOT_END_Y]],
+        [[FLIPPER_RIGHT_PIVOT_X, FLIPPER_PIVOT_Y_BOT], [FLIPPER_RIGHT_32_END_X, FLIPPER_32_BOT_END_Y]],
+        [[FLIPPER_RIGHT_PIVOT_X, FLIPPER_PIVOT_Y_BOT], [FLIPPER_RIGHT_48_END_X, FLIPPER_48_BOT_END_Y]],
+        [[FLIPPER_RIGHT_PIVOT_X, FLIPPER_PIVOT_Y_TOP], [FLIPPER_RIGHT_00_END_X, FLIPPER_00_TOP_END_Y]],
+        [[FLIPPER_RIGHT_PIVOT_X, FLIPPER_PIVOT_Y_TOP], [FLIPPER_RIGHT_16_END_X, FLIPPER_16_TOP_END_Y]],
+        [[FLIPPER_RIGHT_PIVOT_X, FLIPPER_PIVOT_Y_TOP], [FLIPPER_RIGHT_32_END_X, FLIPPER_32_TOP_END_Y]],
+        [[FLIPPER_RIGHT_PIVOT_X, FLIPPER_PIVOT_Y_TOP], [FLIPPER_RIGHT_48_END_X, FLIPPER_48_TOP_END_Y]],
+    ])
     FLIPPERS = jnp.stack(
         [
             jnp.array(

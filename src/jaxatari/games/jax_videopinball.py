@@ -984,50 +984,6 @@ class JaxVideoPinball(
         )
 
     @partial(jax.jit, static_argnums=(0,))
-    def _default_triangle_collision_branch(
-        self,
-        ball_movement,
-        scene_object,  # only used for returning hit_point
-        action,
-        ax,
-        ay,
-        bx,
-        by,
-        cx,
-        cy,
-    ):
-        """
-        Compute first intersection of the segment (old -> new) with triangle ABC.
-        Returns a hit_point array in the same format your slab routine returns:
-          [t_entry, hit_x, hit_y, new_ball_x, new_ball_y, <scene_object...>]
-        If no collision, returns _dummy_calc_hit_point(scene_object)[-1] (keeps same behavior).
-        """
-        hit_point_ab = self._calc_segment_hit_point(
-            ball_movement, scene_object, action, ax, ay, bx, by
-        )
-        hit_point_bc = self._calc_segment_hit_point(
-            ball_movement, scene_object, action, bx, by, cx, cy
-        )
-        hit_point_ca = self._calc_segment_hit_point(
-            ball_movement, scene_object, action, cx, cy, ax, ay
-        )
-
-        argmin = jnp.argmin(
-            jnp.array(
-                [
-                    hit_point_ab[HitPointSelector.T_ENTRY],
-                    hit_point_bc[HitPointSelector.T_ENTRY],
-                    hit_point_ca[HitPointSelector.T_ENTRY],
-                ]
-            )
-        )
-        hit_points = jnp.stack([hit_point_ab, hit_point_bc, hit_point_ca])
-
-        hit_point = hit_points[argmin]
-
-        return hit_point
-
-    @partial(jax.jit, static_argnums=(0,))
     def _cross2(self, ax_, ay_, bx_, by_):
         """2D cross product of vectors a and b."""
         return ax_ * by_ - ay_ * bx_
@@ -1198,170 +1154,169 @@ class JaxVideoPinball(
         return self._default_slab_collision_branch(ball_movement, scene_object, action)
 
     @partial(jax.jit, static_argnums=(0,))
-    def _skip_ball_movement_collision_branch(
+    def _calc_swept_collision(
         self,
+        t_entry: chex.Array,
         ball_movement: BallMovement,
         scene_object: chex.Array,
-        action: chex.Array,
+        px: chex.Array,
+        py: chex.Array,
         ax: chex.Array,
         ay: chex.Array,
         bx: chex.Array,
         by: chex.Array,
-        cx: chex.Array,
-        cy: chex.Array,
     ):
-        # calculate closest hit point on upper edge (a -> c)
         eps = 1e-8
-        vx, vy = jnp.subtract(cx, ax), jnp.subtract(cy, ay)
-        wx, wy = jnp.subtract(ball_movement.new_ball_x, ax), jnp.subtract(
-            ball_movement.new_ball_y, ay
-        )
-        vv = vx * vx + vy * vy + eps
-        t = (vx * wx + vy * wy) / vv
-        t_clamped = jnp.clip(t, 0.0, 1.0)
-        hx = ax + t_clamped * vx
-        hy = ay + t_clamped * vy
 
-        cvx, cvy = jnp.subtract(cx, ax), jnp.subtract(cy, ay)
-        nx, ny = -cvy, cvx
-        nlen = jnp.sqrt(nx * nx + ny * ny) + eps
-        nx, ny = nx / nlen, ny / nlen
+        # Ball trajectory
+        trajectory_x = ball_movement.new_ball_x - ball_movement.old_ball_x
+        trajectory_y = ball_movement.new_ball_y - ball_movement.old_ball_y
 
-        # orient normal away from triangle
-        centroid_x, centroid_y = jnp.divide(
-            jnp.add(ax, jnp.add(bx, cx)), 3.0
-        ), jnp.divide(jnp.add(ay, jnp.add(by, cy)), 3.0)
-        inward_dot = nx * (centroid_x - hx) + ny * (centroid_y - hy)
-        nx, ny = jnp.where(inward_dot > 0.0, -nx, nx), jnp.where(
-            inward_dot > 0.0, -ny, ny
-        )
+        # Collision position
+        hit_x = ball_movement.old_ball_x + t_entry * trajectory_x
+        hit_y = ball_movement.old_ball_y + t_entry * trajectory_y
 
-        # Do a small correction so that the new ball movement begins outside of the triangle
-        hx, hy = hx + nx * 0.1, hy + ny * 0.1
+        # Vector pivot → collision
+        r_x = hit_x - px
+        r_y = hit_y - py
+        d_r = jnp.sqrt(r_x**2 + r_y**2) + eps
 
-        traj_x = jnp.subtract(ball_movement.new_ball_x, ball_movement.old_ball_x)
-        traj_y = jnp.subtract(ball_movement.new_ball_y, ball_movement.old_ball_y)
+        # Sweep direction (screen-space orientation)
+        # 1 is up, -1 down (with flipped coordinate system)
+        # if a is larger than b the sweep moves up
+        sweep_dir = jnp.sign(ay - by)
 
-        traj_x = jnp.where(jnp.abs(traj_x) < 1e-8, 1e-8, traj_x)
-        traj_y = jnp.where(jnp.abs(traj_y) < 1e-8, 1e-8, traj_y)
+        # Collision normal
+        # Tangential direction at hit point (perpendicular to r)
+        # Clockwise tangent in screen-space
+        n_x = r_y
+        n_y = -r_x
+        n_len = jnp.sqrt(n_x**2 + n_y**2) + eps
+        n_x /= n_len
+        n_y /= n_len
 
-        vel_dot = traj_x * nx + traj_y * ny
-        reflected_x = traj_x - 2.0 * vel_dot * nx
-        reflected_y = traj_y - 2.0 * vel_dot * ny
+        # accounting for sweeping direction
+        # the surface normal needs to point in the direction
+        # of the half space where the reflection takes place.
+        # This is only determined by the sweeping direction
+        # as this function is only called if the collision is
+        # already known to be a swept collision, i.e. moving
+        # object - moving target collision so that the surface
+        # normal is always in the direction of the obstacle
+        # movement
+        n_x = n_x * sweep_dir
+        n_y = n_y * sweep_dir
 
-        d_traj = jnp.sqrt(traj_x * traj_x + traj_y * traj_y) + eps
-        rlen = jnp.sqrt(reflected_x * reflected_x + reflected_y * reflected_y) + eps
+        angular_velocity = self.consts.VELOCITY_ACCELERATION_VALUE
+        # Tangential velocity of moving surface
+        u_x = sweep_dir * angular_velocity * n_x * d_r
+        u_y = sweep_dir * angular_velocity * n_y * d_r
 
-        reflected_x = reflected_x / rlen * d_traj
-        reflected_y = reflected_y / rlen * d_traj
-        new_ball_x, new_ball_y = hx + reflected_x, hy + reflected_y
+        # Relative velocity
+        v_rel_x = trajectory_x - u_x
+        v_rel_y = trajectory_y - u_y
 
+        # Reflect relative velocity
+        dot_vn = v_rel_x * n_x + v_rel_y * n_y
+        rv_rel_x = v_rel_x - 2.0 * dot_vn * n_x
+        rv_rel_y = v_rel_y - 2.0 * dot_vn * n_y
+
+        # Transform back to world (screen) frame
+        rvx = rv_rel_x + u_x
+        rvy = rv_rel_y + u_y
+
+        # New ball position after reflection
+        travel_remaining = 1.0 - t_entry
+        new_ball_x = hit_x + travel_remaining * rvx
+        new_ball_y = hit_y + travel_remaining * rvy
+
+        # Hit point info
         hit_point = jnp.concatenate(
-            [jnp.stack([0.0, hx, hy, new_ball_x, new_ball_y], axis=0), scene_object],
-            axis=0,
+            [
+                jnp.stack([t_entry, hit_x, hit_y, new_ball_x, new_ball_y], axis=0),
+                scene_object,
+            ],
+            axis=0
         )
 
         return hit_point
-
+    
     @partial(jax.jit, static_argnums=(0,))
-    def _rewind_ball_movement_collision_branch(
+    def _calc_swept_hit_point(
         self,
         ball_movement: BallMovement,
         scene_object: chex.Array,
         action: chex.Array,
+        px: chex.Array,
+        py: chex.Array,
         ax: chex.Array,
         ay: chex.Array,
         bx: chex.Array,
         by: chex.Array,
-        cx: chex.Array,
-        cy: chex.Array,
     ):
-        dx = jnp.subtract(ball_movement.new_ball_x, ball_movement.old_ball_x)
-        dy = jnp.subtract(ball_movement.new_ball_y, ball_movement.old_ball_y)
-
-        dx = jnp.where(jnp.abs(dx) < 1e-8, 1e-8, dx)
-        dy = jnp.where(jnp.abs(dy) < 1e-8, 1e-8, dy)
-
-        # Make a fake ball movement with reversed direction
-        reversed_movement = BallMovement(
-            old_ball_x=ball_movement.old_ball_x,
-            old_ball_y=ball_movement.old_ball_y,
-            new_ball_x=ball_movement.old_ball_x - dx,
-            new_ball_y=ball_movement.old_ball_y - dy,
+        """
+        Computes the hit point for a swept circle segment given by a pivot point
+        (px, py) and two end points (ax, ay), (bx, by). The sweep is assumed to go
+        A -> B which can be either clock wise or counter clock wise.
+        This is done by examining the three cases in which the ball can collide with
+        the triangle spanned by (P, A, B):
+         - the ball can be inside of the triangle
+         - the ball can collide with the edges PA, PB
+         - the ball can collide with the circle line segment spanned by the angle of the
+           triangle at the pivot point
+        The latter case we approximate by computing the potential collision with the
+        edge AB. The final collision is then either a standard line-segment collision or
+        a swept arc collision, where the reflection is determined by the vector going
+        from P to the ball position at collision time.
+        """
+        # if ball is inside, also do a swept collision
+        is_inside = self._is_inside_triangle(
+            ball_movement,
+            px,
+            py,
+            ax,
+            ay,
+            bx,
+            by,
         )
+        inside_t_entry = jnp.where(is_inside, 0., self.consts.T_ENTRY_NO_COLLISION)
 
-        # Find intersection with each triangle edge
-        t_ab, valid_ab = self._intersect_edge(
-            reversed_movement, ax, ay, jnp.subtract(bx, ax), jnp.subtract(by, ay)
-        )
-        t_bc, valid_bc = self._intersect_edge(
-            reversed_movement, bx, by, jnp.subtract(cx, bx), jnp.subtract(cy, by)
-        )
-        t_ca, valid_ca = self._intersect_edge(
-            reversed_movement, cx, cy, jnp.subtract(ax, cx), jnp.subtract(ay, cy)
-        )
+        # most of the time, the ball does not collide with he flippers, so instead of
+        # calculating a full hit point for each of these cases, this will suffice:
+        # Arc collision (approximated by edge AB)
+        a_to_b_x = bx - ax
+        a_to_b_y = by - ay
+        arc_t_entry, arc_valid = self._intersect_edge(ball_movement, ax, ay, a_to_b_x, a_to_b_y)
+        arc_t_entry = jnp.where(arc_valid, arc_t_entry, self.consts.T_ENTRY_NO_COLLISION)
 
-        ts = jnp.stack(
-            [
-                jnp.where(valid_ab, t_ab, jnp.inf),
-                jnp.where(valid_bc, t_bc, jnp.inf),
-                jnp.where(valid_ca, t_ca, jnp.inf),
-            ]
-        )
+        # edge PA collision
+        p_to_a_x = ax - px
+        p_to_a_y = ay - py
+        pa_t_entry, pa_valid = self._intersect_edge(ball_movement, px, py, p_to_a_x, p_to_a_y)
+        pa_t_entry = jnp.where(pa_valid, pa_t_entry, self.consts.T_ENTRY_NO_COLLISION)
 
-        t_exit = jnp.min(ts)  # first boundary crossing
+        # edge PB collision
+        p_to_b_x = bx - px
+        p_to_b_y = by - py
+        pb_t_entry, pb_valid = self._intersect_edge(ball_movement, px, py, p_to_b_x, p_to_b_y)
+        pb_t_entry = jnp.where(pb_valid, pb_t_entry, self.consts.T_ENTRY_NO_COLLISION)
 
-        # Now compute the rewind step
-        old_x = ball_movement.old_ball_x - t_exit * dx
-        old_y = ball_movement.old_ball_y - t_exit * dy
-        new_x = old_x + dx
-        new_y = old_y + dy
+        intersects_t_entry = jnp.array([inside_t_entry, arc_t_entry, pa_t_entry, pb_t_entry])
 
-        ball_movement = BallMovement(
-            old_ball_x=old_x, old_ball_y=old_y, new_ball_x=new_x, new_ball_y=new_y
-        )
-
-        return self._default_triangle_collision_branch(
-            ball_movement, scene_object, action, ax, ay, bx, by, cx, cy
-        )
-
-    @partial(jax.jit, static_argnums=(0,))
-    def _inside_triangle_collision_branch(
-        self,
-        ball_movement: BallMovement,
-        scene_object: chex.Array,
-        action: chex.Array,
-        ax: chex.Array,
-        ay: chex.Array,
-        bx: chex.Array,
-        by: chex.Array,
-        cx: chex.Array,
-        cy: chex.Array,
-        flipper_up: chex.Array,
-        flipper_down: chex.Array,
-    ):
-        trajectory_x = jnp.subtract(ball_movement.new_ball_x, ball_movement.old_ball_x)
-        trajectory_y = jnp.subtract(ball_movement.new_ball_y, ball_movement.old_ball_y)
-        ball_direction = self._get_ball_direction(trajectory_x, trajectory_y)
-
-        movement_up = jnp.logical_or(ball_direction == 2, ball_direction == 0)
-
-        up_up = jnp.logical_and(movement_up, flipper_up)
-        down_down = jnp.logical_and(jnp.logical_not(movement_up), flipper_down)
-
-        # if the flipper moves in the same direction as the ball, we reflect the ball at the point closest
-        # to the upper edge of the triangle (in the direction of the flipper movement).
-        # if the flipper and ball move in opposite directions, we rewind the ball movement until it is outside
-        # of the triangle and reflect it in the default way
         return jax.lax.cond(
-            jnp.logical_or(up_up, down_down),
-            lambda: self._skip_ball_movement_collision_branch(
-                ball_movement, scene_object, action, ax, ay, bx, by, cx, cy
-            ),
-            lambda: self._rewind_ball_movement_collision_branch(
-                ball_movement, scene_object, action, ax, ay, bx, by, cx, cy
-            ),
+            jnp.all(intersects_t_entry == self.consts.T_ENTRY_NO_COLLISION),
+            lambda: self._dummy_calc_hit_point(scene_object)[-1],
+            lambda: jax.lax.switch(
+                jnp.argmin(intersects_t_entry),
+                [
+                    lambda: self._calc_swept_collision(intersects_t_entry[0], ball_movement, scene_object, px, py, ax, ay, bx, by),
+                    lambda: self._calc_swept_collision(intersects_t_entry[1], ball_movement, scene_object, px, py, ax, ay, bx, by),
+                    lambda: self._calc_segment_hit_point(ball_movement, scene_object, action, px, py, ax, ay),
+                    lambda: self._calc_segment_hit_point(ball_movement, scene_object, action, px, py, bx, by)
+                ]
+            )
         )
+
 
     @partial(jax.jit, static_argnums=(0,))
     def _default_slab_collision_branch(
@@ -1570,41 +1525,6 @@ class JaxVideoPinball(
         return inside
 
     @partial(jax.jit, static_argnums=(0,))
-    def _calc_triangle_hit_point(
-        self,
-        ball_movement: BallMovement,
-        scene_object: chex.Array,
-        action: chex.Array,
-        ax: chex.Array,
-        ay: chex.Array,
-        bx: chex.Array,
-        by: chex.Array,
-        cx: chex.Array,
-        cy: chex.Array,
-        flipper_up: chex.Array,
-        flipper_down: chex.Array,
-    ):
-        return jax.lax.cond(
-            self._is_inside_triangle(ball_movement, ax, ay, bx, by, cx, cy),
-            lambda: self._inside_triangle_collision_branch(
-                ball_movement,
-                scene_object,
-                action,
-                ax,
-                ay,
-                bx,
-                by,
-                cx,
-                cy,
-                flipper_up,
-                flipper_down,
-            ),
-            lambda: self._default_triangle_collision_branch(
-                ball_movement, scene_object, action, ax, ay, bx, by, cx, cy
-            ),
-        )
-
-    @partial(jax.jit, static_argnums=(0,))
     def _calc_flipper_hit_point(
         self,
         ball_movement: BallMovement,
@@ -1617,6 +1537,7 @@ class JaxVideoPinball(
         right_flipper_up = jnp.logical_or(action == Action.RIGHT, action == Action.UP)
         flipper_at_max_pos = scene_object[6] % 4 == 3
         flipper_at_min_pos = scene_object[6] % 4 == 0
+        is_bottom_segment = scene_object[6] % 8 < 4
 
         is_left_flipper_and_up = jnp.logical_and(
             jnp.logical_and(is_left_flipper, left_flipper_up),
@@ -1642,56 +1563,48 @@ class JaxVideoPinball(
 
         # left flipper -> bottom left corner
         # right flipper -> bottom right corner
-        px = jnp.where(
-            is_left_flipper, scene_object[2], scene_object[2] + scene_object[0]
-        )
-        py = scene_object[3] + scene_object[1]
-
-        # left flipper -> top right corner
-        # right flipper -> top left corner
-        endx = jnp.where(
-            is_left_flipper, scene_object[2] + scene_object[0], scene_object[2]
-        )
-        endy = scene_object[3]
-        L = jnp.sqrt(
-            scene_object[0] ** 2 + scene_object[1] ** 2
-        )  # length of the line segment
+        (px, py), (endx, endy) = self.consts.FLIPPER_SEGMENTS_SORTED[scene_object[6]]
 
         # next flipper position:
-        next_pos_scene_object = jax.lax.cond(  # new angle of the line segment
+        (_, _), (next_pos_endx, next_pos_endy) = jax.lax.cond(  # new angle of the line segment
             flipper_down,
-            lambda: self.consts.FLIPPERS[scene_object[6] - 1],
+            lambda: self.consts.FLIPPER_SEGMENTS_SORTED[scene_object[6] - 1],
             lambda: jax.lax.cond(
                 flipper_up,
-                lambda: self.consts.FLIPPERS[scene_object[6] + 1],
-                lambda: self.consts.FLIPPERS[scene_object[6]],
+                lambda: self.consts.FLIPPER_SEGMENTS_SORTED[scene_object[6] + 1],
+                lambda: self.consts.FLIPPER_SEGMENTS_SORTED[scene_object[6]],
             ),
         )
 
-        next_pos_endx = jnp.where(
-            is_left_flipper,
-            next_pos_scene_object[2] + next_pos_scene_object[0],
-            next_pos_scene_object[2],
+        # each flipper position consists of 2 line segments: One for the bottom side, one for the top.
+        # We have to ensure that nothing weird happens inside of the flipper/at the edges
+        (_, _), (other_endx, other_endy) = jax.lax.cond(
+            is_bottom_segment,
+            lambda: self.consts.FLIPPER_SEGMENTS_SORTED[scene_object[6] + 4],
+            lambda: self.consts.FLIPPER_SEGMENTS_SORTED[scene_object[6] - 4],
         )
-        next_pos_endy = next_pos_scene_object[3]
-
-        other_side_scene_object = jax.lax.cond(
-            scene_object[6] % 8 < 4,
-            lambda: self.consts.FLIPPERS[scene_object[6] + 4],
-            lambda: self.consts.FLIPPERS[scene_object[6] - 4],
-        )
-        other_px = jnp.where(
-            is_left_flipper,
-            other_side_scene_object[2],
-            other_side_scene_object[2] + scene_object[0],
-        )
-        other_py = other_side_scene_object[3] + other_side_scene_object[1]
 
         flipper_moves = jnp.logical_or(flipper_up, flipper_down)
 
+        @jax.jit
+        def select_segment_hit_point(ball_movement, scene_object, action, ax, ay, bx, by, cx, cy, dx, dy):
+            """
+            There is a small gap between the top and bottom line segment of the flippers (rounded tips).
+            So we have to select the appropriate hit_point since the ball can hit the flipper in that gap.
+            """
+            ab_hit_point = self._calc_segment_hit_point(ball_movement, scene_object, action, ax, ay, bx, by)
+            cd_hit_point = self._calc_segment_hit_point(ball_movement, scene_object, action, cx, cy, dx, dy)
+
+            return jax.lax.cond(
+                ab_hit_point[HitPointSelector.T_ENTRY] < cd_hit_point[HitPointSelector.T_ENTRY],
+                lambda: ab_hit_point,
+                lambda: cd_hit_point,
+            )
+
+
         hit_point = jax.lax.cond(
             flipper_moves,
-            lambda: self._calc_triangle_hit_point(
+            lambda: self._calc_swept_hit_point(
                 ball_movement,
                 scene_object,
                 action,
@@ -1701,29 +1614,9 @@ class JaxVideoPinball(
                 endy,
                 next_pos_endx,
                 next_pos_endy,
-                flipper_up,
-                flipper_down,
             ),
-            lambda: jax.lax.cond(
-                self._is_inside_triangle(
-                    ball_movement, px, py, endx, endy, other_px, other_py
-                ),
-                lambda: self._calc_triangle_hit_point(
-                    ball_movement,
-                    scene_object,
-                    action,
-                    px,
-                    py,
-                    endx,
-                    endy,
-                    next_pos_endx,
-                    next_pos_endy,
-                    flipper_up,
-                    flipper_down,
-                ),
-                lambda: self._calc_segment_hit_point(
-                    ball_movement, scene_object, action, px, py, endx, endy
-                ),
+            lambda: select_segment_hit_point(
+                ball_movement, scene_object, action, px, py, endx, endy, endx, endy, other_endx, other_endy
             ),
         )
 
@@ -1735,10 +1628,10 @@ class JaxVideoPinball(
             jnp.sqrt(
                 (hit_point[HitPointSelector.X] - px) ** 2
                 + (hit_point[HitPointSelector.Y] - py) ** 2
-            )
-            / L
-            * 0.5
-            + 0.5
+            ) / jnp.sqrt(
+                (endx - px) ** 2
+                + (endy - py) ** 2
+            ) * 0.5 + 0.5
         )
         velocity_addition = jnp.where(
             flipper_moves,
@@ -2197,6 +2090,40 @@ class JaxVideoPinball(
             deconstructed_scoring_list.append(scoring_list_i)
 
         scoring_list = jnp.stack(deconstructed_scoring_list, axis=0)
+
+        jax.debug.print(
+           "Hit Point:\n\t"
+           "T_ENTRY: {}\n\t"
+           "X: {}\n\t"
+           "Y: {}\n\t"
+           "RX: {}\n\t"
+           "RY: {}\n\t"
+           "OBJECT_WIDTH: {}\n\t"
+           "OBJECT_HEIGHT: {}\n\t"
+           "OBJECT_X: {}\n\t"
+           "OBJECT_Y: {}\n\t"
+           "OBJECT_REFLECTING: {}\n\t"
+           "OBJECT_SCORE_TYPE: {}\n\t"
+           "OBJECT_VARIANT: {}\n"
+           "Pre-Collision Movement:\n\t"
+           "OLD_X: {}\n\t"
+           "OLD_Y: {}\n\t"
+           "NEW_X: {}\n\t"
+           "NEW_Y: {}\n",
+           hit_point[HitPointSelector.T_ENTRY],
+           hit_point[HitPointSelector.X],
+           hit_point[HitPointSelector.Y],
+           hit_point[HitPointSelector.RX],
+           hit_point[HitPointSelector.RY],
+           hit_point[HitPointSelector.OBJECT_WIDTH],
+           hit_point[HitPointSelector.OBJECT_HEIGHT],
+           hit_point[HitPointSelector.OBJECT_X],
+           hit_point[HitPointSelector.OBJECT_Y],
+           hit_point[HitPointSelector.OBJECT_REFLECTING],
+           hit_point[HitPointSelector.OBJECT_SCORE_TYPE],
+           hit_point[HitPointSelector.OBJECT_VARIANT],
+           ball_movement.old_ball_x, ball_movement.old_ball_y, ball_movement.new_ball_x, ball_movement.new_ball_y,
+        )
 
         return hit_point, scoring_list, velocity_factor, velocity_addition
 
