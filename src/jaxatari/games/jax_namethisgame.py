@@ -23,7 +23,7 @@ class NameThisGameConfig:
     screen_width: int = 160
     screen_height: int = 250
     scaling_factor: int = 3
-    # -------- HUD bars (bottom) --------
+    # HUD bars
     hud_bar_initial_px: int = 128               # initial length of both bars
     hud_bar_step_frames: int = 250              # shrink cadence for both bars
     hud_bar_shrink_px_per_step_total: int = 8   # 4 from each side => width - 8
@@ -113,6 +113,7 @@ class NameThisGameState(NamedTuple):
     diver_x: chex.Array           # diver's x position (int32)
     diver_y: chex.Array           # diver's y position (int32, constant = floor)
     diver_alive: chex.Array       # diver alive flag (bool)
+    diver_dir: chex.Array         # Diver facing: -1 = left, +1 = right
     fire_button_prev: chex.Array  # whether fire was pressed in previous frame (bool)
 
     # Shark (enemy)
@@ -270,10 +271,11 @@ class Renderer_NameThisGame(JAXGameRenderer):
         if "diver" in self.sprites:
             diver_sprite = self.sprites["diver"]
         else:
-            diver_sprite = _solid_sprite(cfg.diver_width, cfg.diver_height, (0, 255, 0))  # green diver
+            diver_sprite = _solid_sprite(cfg.diver_width, cfg.diver_height, (0, 255, 0))
+        diver_to_draw = jax.lax.cond(state.diver_dir > 0, _flip, lambda spr: spr, diver_sprite)
         raster = jax.lax.cond(
             state.diver_alive,
-            lambda r: aj.render_at(r, state.diver_x, state.diver_y, diver_sprite),
+            lambda r: aj.render_at(r, state.diver_x, state.diver_y, diver_to_draw),
             lambda r: r,
             raster,
         )
@@ -405,11 +407,6 @@ class JaxNameThisGame(JaxEnvironment[NameThisGameState, NameThisGameObservation,
         cfg = self.config
         # Split PRNG for different initial randomizations
         key, sub_key_dir, sub_key_oxy, sub_key_phase = jax.random.split(key, 4)
-        # HUD bars
-        oxy_bar_px = jnp.array(self.config.hud_bar_initial_px, dtype=jnp.int32),
-        wave_bar_px = jnp.array(self.config.hud_bar_initial_px, dtype=jnp.int32),
-        bar_frame_counter = jnp.array(0, dtype=jnp.int32),
-        resting = jnp.array(False, dtype=jnp.bool_),
         # Boat starts centered, moving right
         init_boat_x = jnp.array(cfg.screen_width // 2 - cfg.boat_width // 2, dtype=jnp.int32)
         init_boat_dx = jnp.array(1, dtype=jnp.int32)   # +1 = right, -1 = left
@@ -452,13 +449,14 @@ class JaxNameThisGame(JaxEnvironment[NameThisGameState, NameThisGameObservation,
             oxy_bar_px=jnp.array(self.config.hud_bar_initial_px, dtype=jnp.int32),
             wave_bar_px=jnp.array(self.config.hud_bar_initial_px, dtype=jnp.int32),
             bar_frame_counter=jnp.array(0, dtype=jnp.int32),
-            resting=jnp.array(False, dtype=jnp.bool_),
+            resting=jnp.array(True, dtype=jnp.bool_),
             boat_x=init_boat_x,
             boat_dx=init_boat_dx,
             boat_move_counter=init_boat_counter,
             diver_x=init_diver_x,
             diver_y=init_diver_y,
             diver_alive=jnp.array(True, dtype=jnp.bool_),
+            diver_dir=jnp.array(1, dtype=jnp.int32),
             fire_button_prev=jnp.array(False, dtype=jnp.bool_),
             shark_x=init_shark_x.astype(jnp.int32),
             shark_y=init_shark_y.astype(jnp.int32),
@@ -698,10 +696,10 @@ class JaxNameThisGame(JaxEnvironment[NameThisGameState, NameThisGameObservation,
 
     @partial(jax.jit, static_argnums=(0,))
     def _move_diver(self, state: NameThisGameState, move_dir: chex.Array) -> NameThisGameState:
-        """Update diver's horizontal position based on move_dir (-1, 0, +1)."""
         cfg = self.config
         new_x = jnp.clip(state.diver_x + move_dir * cfg.diver_speed_px, 0, cfg.screen_width - cfg.diver_width)
-        return state._replace(diver_x=new_x)
+        new_dir = jnp.where(move_dir != 0, move_dir.astype(jnp.int32), state.diver_dir)
+        return state._replace(diver_x=new_x, diver_dir=new_dir)
 
     @partial(jax.jit, static_argnums=(0,))
     def _move_spear(self, state: NameThisGameState) -> NameThisGameState:
