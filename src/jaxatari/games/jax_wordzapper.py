@@ -183,6 +183,7 @@ class WordZapperState(NamedTuple):
     letter_explosion_pos: chex.Array  # shape (27, 2)
     level_word_len: chex.Array       # 4/5/6 letters
     waiting_for_special: chex.Array  # 1 once all letters collected; then require shooting special
+    special_shot_early: chex.Array # if 1 special shot while letters remained
 
     finised_level_count: chex.Array 
 
@@ -512,6 +513,15 @@ def scrolling_letters(state: WordZapperState, consts: WordZapperConstants) -> ch
             just_reset & (new_letters_alive[:, 0] == 0),
             1,
             new_letters_alive[:, 0]
+        )
+    )
+    
+    # if special char was shot early, set it back to disabled so it does not reappear
+    new_letters_alive = new_letters_alive.at[consts.SPECIAL_CHAR_INDEX, 0].set(
+        jnp.where(
+            state.special_shot_early,
+            0,
+            new_letters_alive[consts.SPECIAL_CHAR_INDEX, 0]
         )
     )
 
@@ -974,6 +984,7 @@ class JaxWordZapper(JaxEnvironment[WordZapperState, WordZapperObservation, WordZ
 
             level_word_len=level_len_init,
             waiting_for_special=jnp.array(0, dtype=jnp.int32),
+            special_shot_early=jnp.array(0),
 
             timer=jnp.array(self.consts.TIME),
             target_word=encoded,
@@ -1584,6 +1595,13 @@ class JaxWordZapper(JaxEnvironment[WordZapperState, WordZapperObservation, WordZ
 
         level_cleared = ((now_waiting_for_special & special_was_zapped) & allow_progress).astype(jnp.int32)
 
+        # check if special char was shot early
+        new_special_shot_early = jnp.where(
+            jnp.logical_and(jnp.logical_not(now_waiting_for_special), special_was_zapped),
+            1,
+            state.special_shot_early
+        )
+
         new_finised_level_count = jnp.where(
             level_cleared,
             state.finised_level_count + 1,
@@ -1623,6 +1641,7 @@ class JaxWordZapper(JaxEnvironment[WordZapperState, WordZapperObservation, WordZ
             waiting_for_special=now_waiting_for_special,
             finised_level_count=new_finised_level_count,
             word_complete_animation=new_word_complete_animation,
+            special_shot_early=new_special_shot_early,
         )
 
         # Advance/carry phase-related state (start -> play -> animation)
