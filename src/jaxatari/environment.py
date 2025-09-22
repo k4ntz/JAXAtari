@@ -130,7 +130,7 @@ class JaxEnvironment(Generic[EnvState, EnvObs, EnvInfo, EnvConstants]):
         """
         raise NotImplementedError("Abstract method")
 
-    def _get_info(self, state: EnvState) -> EnvInfo:
+    def _get_info(self, state: EnvState, all_rewards: jnp.array = None) -> EnvInfo:
         """
         Extracts information from the environment state that is not relevant for the agent.
         Args:
