@@ -1,9 +1,9 @@
 """
-JAX Slot Machine - A classic slot machine implementation for JAXAtari.
+JAX Slot Machine - A two-player competitive slot machine implementation for JAXAtari.
 
-This module implements a traditional three-reel slot machine game using JAX for GPU acceleration
+This module implements a traditional three-reel slot machine Atari 2600 game using JAX for GPU acceleration
 and JIT compilation. The game features authentic slot machine mechanics with spinning reels,
-various symbols, and a payout system.
+various symbols, and a payout system. Two players compete against each other until one of them goes broke.
 
 Author: Ashish Bhandari, ashish.bhandari@stud.tu-darmstadt.de, https://github.com/zatakashish
 
@@ -13,19 +13,27 @@ License: TU Darmstadt, All rights reserved.
                                                 GAMEPLAY MECHANICS
 ========================================================================================================================
 
-There are currently two tabs one at the top of the third reel and one at the bottom.
+Two players compete with separate credit pools and wagers displayed on opposite sides of the screen until one of them
+runs out of credit.
 
-- The upper right tab shows credit
-- The lower right tab shows wager
+- Player 1: Credits and wager displayed on the right side (above and below reel 3)
+The player 1 is the main human player.
+
+- Player 2: Credits and wager displayed on the left side (above and below reel 1)
+The player 2 is the Computer or the second human player.
 
 How to play ? (Run command: python scripts/play.py --game slotmachine)
-- SPACE to turn on the reels
-- UP to increase wager
-- DOWN to decrease wager
+- SPACE to spin the reels (both players participate)
+- Player 1: ARROWDOWN / ARROWUP to decrease/increase wager
+- Player 2: ARROWRIGHT /ARROWLEFT to decrease/increase wager
+
+Game End Conditions:
+- Either player reaches 0 credits (other player wins)
+- Either player reaches more than 999 credits (that player wins)
 
 Reward System: (More information under https://www.atarimania.com/game-atari-2600-vcs-slot-machine_8212.html)
 
-The payline (from left to right) pays as follows:
+The payline (from left to right) pays as follows for both players:
 
 - Cactus on reel 1 only -> 2x wager
 - Cactus on reels 1 & 2 -> 5x wager
@@ -115,13 +123,17 @@ class SlotMachineState(NamedTuple):
     Complete immutable game state for Slot Machine.
     """
 
-    # Core game progression state
-    credits: chex.Array
-    total_winnings: chex.Array
-    spins_played: chex.Array
+    # Core game progression state - Player 1
+    player1_credits: chex.Array
+    player1_total_winnings: chex.Array
+    player1_spins_played: chex.Array
+    player1_wager: chex.Array
 
-    # Betting system
-    current_wager: chex.Array
+    # Core game progression state - Player 2
+    player2_credits: chex.Array
+    player2_total_winnings: chex.Array
+    player2_spins_played: chex.Array
+    player2_wager: chex.Array
 
     # Reel mechanics
     reel_positions: chex.Array
@@ -134,12 +146,21 @@ class SlotMachineState(NamedTuple):
     spin_button_prev: chex.Array
     up_button_prev: chex.Array
     down_button_prev: chex.Array
+    left_button_prev: chex.Array
+    right_button_prev: chex.Array
     spin_cooldown: chex.Array
 
     # Visual effects
     win_flash_timer: chex.Array
-    last_payout: chex.Array
-    last_reward: chex.Array
+    last_payout_p1: chex.Array
+    last_payout_p2: chex.Array
+    last_reward_p1: chex.Array
+    last_reward_p2: chex.Array
+
+    # Game end state
+    game_over: chex.Array
+    winner: chex.Array  # 0 = no winner, 1 = player1, 2 = player2
+    win_display_timer: chex.Array
 
     # RNG key that keeps the spins honest
     rng: chex.Array
@@ -148,12 +169,18 @@ class SlotMachineState(NamedTuple):
 class SlotMachineObservation(NamedTuple):
     """Observation returned to the agent each step."""
 
-    credits: jnp.ndarray          # Current credits
-    current_wager: jnp.ndarray    # Current bet amount
+    player1_credits: jnp.ndarray          # Player 1 current credits
+    player1_wager: jnp.ndarray           # Player 1 current bet amount
+    player2_credits: jnp.ndarray          # Player 2 current credits
+    player2_wager: jnp.ndarray           # Player 2 current bet amount
     reel_symbols: jnp.ndarray     # Visible symbols (shape: num_reels × symbols_per_reel)
     is_spinning: jnp.ndarray      # Is the machine currently spinning?
-    last_payout: jnp.ndarray      # Last win amount
-    last_reward: jnp.ndarray      # Last reward
+    last_payout_p1: jnp.ndarray      # Last win amount for player 1
+    last_payout_p2: jnp.ndarray      # Last win amount for player 2
+    last_reward_p1: jnp.ndarray      # Last reward for player 1
+    last_reward_p2: jnp.ndarray      # Last reward for player 2
+    game_over: jnp.ndarray        # Is the game over?
+    winner: jnp.ndarray           # Who won (0=none, 1=player1, 2=player2)
 
 
 class SlotMachineInfo(NamedTuple):
@@ -161,11 +188,13 @@ class SlotMachineInfo(NamedTuple):
     Information about the game state.
     """
 
-    # Saves total winnings
-    total_winnings: jnp.ndarray
+    # Saves total winnings for both players
+    player1_total_winnings: jnp.ndarray
+    player2_total_winnings: jnp.ndarray
 
     # Total number of spins altogether, not currently needed. Introduced for debug and win statistics.
-    spins_played: jnp.ndarray
+    player1_spins_played: jnp.ndarray
+    player2_spins_played: jnp.ndarray
 
     # Keeps track of rewards for use by external api
     all_rewards: Optional[jnp.ndarray] = None
@@ -361,7 +390,7 @@ class SlotMachineRenderer(JAXGameRenderer):
                 raster = aj.render_at(raster, centered_x, centered_y, sprite_to_render)
 
         # Render UI elements
-        raster = self._render_credits_display(raster, state.credits, state.current_wager, state)
+        raster = self._render_credits_display(raster, state)
 
         # Apply win flash effect if we hit a win
         raster = jax.lax.cond(
@@ -373,36 +402,134 @@ class SlotMachineRenderer(JAXGameRenderer):
 
         return raster
 
-    def _render_credits_display(self, raster: jnp.ndarray, credits: chex.Array, wager: chex.Array, state: SlotMachineState) -> jnp.ndarray:
-        """Draw the credits and wager box."""
-        raster = self._render_text_labels(raster, credits, wager)
+    def _render_winner_message(self, raster: jnp.ndarray, winner: chex.Array) -> jnp.ndarray:
+        """Render winner message in the center of the screen."""
+        cfg = self.config
+        
+        # Message position (center of screen)
+        msg_x = cfg.screen_width // 2 - 50  # Increased space for longer messages
+        msg_y = cfg.screen_height // 2 - 10
+
+        # Background box for message
+        box_color = jnp.array([70, 82, 184], dtype=jnp.uint8)
+        text_color = jnp.array([255, 255, 255], dtype=jnp.uint8)
+
+        # Draw background box (made wider for "GAME OVER")
+        raster = self._draw_colored_box(raster, msg_x - 15, msg_y - 5, 130, 20, box_color)
+
+        # Handle different winner cases
+        def render_player_wins(r, player_num):
+            r = self._render_simple_text(r, "PLAYER ", msg_x, msg_y, text_color)
+            r = self._render_colored_digit(r, player_num, msg_x + 42, msg_y, text_color)
+            r = self._render_simple_text(r, " WINS", msg_x + 52, msg_y, text_color)
+            return r
+        
+        def render_game_over(r):
+            r = self._render_simple_text(r, "GAME OVER", msg_x + 10, msg_y, text_color)
+            return r
+
+        # Conditional rendering based on winner value
+        raster = jax.lax.cond(
+            winner == 1,
+            lambda r: render_player_wins(r, 1),
+            lambda r: jax.lax.cond(
+                winner == 2,
+                lambda r: render_player_wins(r, 2),
+                lambda r: render_game_over(r),  # For winner == 0 or any other case
+                r
+            ),
+            raster
+        )
 
         return raster
 
-    def _render_text_labels(self, raster: jnp.ndarray, credits: chex.Array, wager: chex.Array) -> jnp.ndarray:
-        """Helper function to draw the HUD plates and insert the credit and wager.
+    def _render_simple_text(self, raster: jnp.ndarray, text: str, x: int, y: int, color: jnp.ndarray) -> jnp.ndarray:
+        """Render simple text using a basic bitmap font."""
+        # Simple character patterns for basic text rendering
+        char_patterns = {
+            'P': [[1,1,1,1], [1,0,0,1], [1,1,1,1], [1,0,0,0], [1,0,0,0], [1,0,0,0]],
+            'L': [[1,0,0,0], [1,0,0,0], [1,0,0,0], [1,0,0,0], [1,0,0,0], [1,1,1,1]],
+            'A': [[0,1,1,0], [1,0,0,1], [1,0,0,1], [1,1,1,1], [1,0,0,1], [1,0,0,1]],
+            'Y': [[1,0,0,1], [1,0,0,1], [0,1,1,0], [0,1,1,0], [0,1,1,0], [0,1,1,0]],
+            'E': [[1,1,1,1], [1,0,0,0], [1,1,1,0], [1,0,0,0], [1,0,0,0], [1,1,1,1]],
+            'R': [[1,1,1,0], [1,0,0,1], [1,1,1,0], [1,1,0,0], [1,0,1,0], [1,0,0,1]],
+            'W': [[1,0,0,1], [1,0,0,1], [1,0,0,1], [1,0,1,1], [1,1,0,1], [1,0,0,1]],
+            'I': [[1,1,1], [0,1,0], [0,1,0], [0,1,0], [0,1,0], [1,1,1]],
+            'N': [[1,0,0,1], [1,1,0,1], [1,0,1,1], [1,0,0,1], [1,0,0,1], [1,0,0,1]],
+            'S': [[0,1,1,1], [1,0,0,0], [0,1,1,0], [0,0,0,1], [0,0,0,1], [1,1,1,0]],
+            ' ': [[0,0], [0,0], [0,0], [0,0], [0,0], [0,0]]  # Space character
+        }
+        
+        current_x = x
+        for char in text.upper():
+            if char in char_patterns:
+                pattern = char_patterns[char]
+                char_width = len(pattern[0])
+                char_height = len(pattern)
+                
+                # Render this character
+                for row in range(char_height):
+                    for col in range(char_width):
+                        if pattern[row][col] == 1:
+                            pixel_x = current_x + col
+                            pixel_y = y + row
+                            if 0 <= pixel_x < raster.shape[1] and 0 <= pixel_y < raster.shape[0]:
+                                raster = raster.at[pixel_y, pixel_x, :].set(color)
+                
+                current_x += char_width + 1  # Add 1 pixel spacing between characters
+        
+        return raster
+
+    def _render_credits_display(self, raster: jnp.ndarray, state: SlotMachineState) -> jnp.ndarray:
+        """Draw the credits and wager boxes for both players."""
+        raster = self._render_text_labels(raster, state)
+        return raster
+
+    def _render_text_labels(self, raster: jnp.ndarray, state: SlotMachineState) -> jnp.ndarray:
+        """Helper function to draw the HUD plates and insert credits and wagers for both players.
         """
         cfg = self.config
 
-        # Calculate third reel position
+        # Calculate reel positions
+        first_reel_x = cfg.reel_start_x
         third_reel_x = cfg.reel_start_x + 2 * (cfg.reel_width + cfg.reel_spacing)
-        third_reel_y = cfg.reel_start_y
+        reel_y = cfg.reel_start_y
 
         # Colors
         box_color = jnp.array([70, 82, 184], dtype=jnp.uint8)
         number_color = jnp.array([194, 67, 115], dtype=jnp.uint8)
 
-        # UI for credits
-        credits_y = third_reel_y - 22
+        # Player 1 (right side)
+        # UI for player 1 credits
+        credits_y = reel_y - 22
         raster = self._draw_colored_box(raster, third_reel_x - 3, credits_y - 2, 47, 16, box_color)
-        credits_digits = aj.int_to_digits(credits, max_digits=4)
+        credits_digits = aj.int_to_digits(state.player1_credits, max_digits=4)
         raster = self._render_colored_number(raster, credits_digits, third_reel_x + 2, credits_y + 2, number_color)
 
-        # UI for wager
-        wager_y = third_reel_y + cfg.reel_height + 10
+        # UI for player 1 wager
+        wager_y = reel_y + cfg.reel_height + 10
         raster = self._draw_colored_box(raster, third_reel_x + 7, wager_y - 4, 27, 16, box_color)
-        wager_digits = aj.int_to_digits(wager, max_digits=2)
+        wager_digits = aj.int_to_digits(state.player1_wager, max_digits=2)
         raster = self._render_colored_number(raster, wager_digits, third_reel_x + 12, wager_y, number_color)
+
+        # Player 2 (left side)
+        # UI for player 2 credits (above first reel)
+        raster = self._draw_colored_box(raster, first_reel_x - 3, credits_y - 2, 47, 16, box_color)
+        credits_digits_p2 = aj.int_to_digits(state.player2_credits, max_digits=4)
+        raster = self._render_colored_number(raster, credits_digits_p2, first_reel_x + 2, credits_y + 2, number_color)
+
+        # UI for player 2 wager (below first reel)
+        raster = self._draw_colored_box(raster, first_reel_x + 7, wager_y - 4, 27, 16, box_color)
+        wager_digits_p2 = aj.int_to_digits(state.player2_wager, max_digits=2)
+        raster = self._render_colored_number(raster, wager_digits_p2, first_reel_x + 12, wager_y, number_color)
+
+        # Check if game is over, reels have stopped, and display winner message
+        raster = jax.lax.cond(
+            state.game_over & (state.win_display_timer > 0) & (~jnp.any(state.reel_spinning)),
+            lambda r: self._render_winner_message(r, state.winner),
+            lambda r: r,
+            raster
+        )
 
         return raster
 
@@ -530,8 +657,10 @@ class JaxSlotMachine(JaxEnvironment[SlotMachineState, SlotMachineObservation, Sl
         self.action_set = [
             Action.NOOP,
             Action.FIRE,
-            Action.UP,
-            Action.DOWN,
+            Action.UP,    # Player 2 increase wager
+            Action.DOWN,  # Player 2 decrease wager
+            Action.LEFT,  # Player 1 decrease wager
+            Action.RIGHT, # Player 1 increase wager
         ]
 
     def reset(self, key: jax.random.PRNGKey = None) -> Tuple[SlotMachineObservation, SlotMachineState]:
@@ -569,10 +698,14 @@ class JaxSlotMachine(JaxEnvironment[SlotMachineState, SlotMachineObservation, Sl
         )(pos_keys)
 
         initial_state = SlotMachineState(
-            credits=jnp.array(cfg.starting_credits, dtype=jnp.int32),
-            total_winnings=jnp.array(0, dtype=jnp.int32),
-            spins_played=jnp.array(0, dtype=jnp.int32),
-            current_wager=jnp.array(cfg.min_wager, dtype=jnp.int32),
+            player1_credits=jnp.array(cfg.starting_credits, dtype=jnp.int32),
+            player1_total_winnings=jnp.array(0, dtype=jnp.int32),
+            player1_spins_played=jnp.array(0, dtype=jnp.int32),
+            player1_wager=jnp.array(cfg.min_wager, dtype=jnp.int32),
+            player2_credits=jnp.array(cfg.starting_credits, dtype=jnp.int32),
+            player2_total_winnings=jnp.array(0, dtype=jnp.int32),
+            player2_spins_played=jnp.array(0, dtype=jnp.int32),
+            player2_wager=jnp.array(cfg.min_wager, dtype=jnp.int32),
             reel_positions=initial_positions,
             reel_spinning=jnp.zeros(cfg.num_reels, dtype=jnp.bool_),
             spin_timers=jnp.zeros(cfg.num_reels, dtype=jnp.int32),
@@ -581,10 +714,17 @@ class JaxSlotMachine(JaxEnvironment[SlotMachineState, SlotMachineObservation, Sl
             spin_button_prev=jnp.array(False, dtype=jnp.bool_),
             up_button_prev=jnp.array(False, dtype=jnp.bool_),
             down_button_prev=jnp.array(False, dtype=jnp.bool_),
+            left_button_prev=jnp.array(False, dtype=jnp.bool_),
+            right_button_prev=jnp.array(False, dtype=jnp.bool_),
             spin_cooldown=jnp.array(0, dtype=jnp.int32),
             win_flash_timer=jnp.array(0, dtype=jnp.int32),
-            last_payout=jnp.array(0, dtype=jnp.int32),
-            last_reward=jnp.array(0.0, dtype=jnp.float32),
+            last_payout_p1=jnp.array(0, dtype=jnp.int32),
+            last_payout_p2=jnp.array(0, dtype=jnp.int32),
+            last_reward_p1=jnp.array(0.0, dtype=jnp.float32),
+            last_reward_p2=jnp.array(0.0, dtype=jnp.float32),
+            game_over=jnp.array(False, dtype=jnp.bool_),
+            winner=jnp.array(0, dtype=jnp.int32),
+            win_display_timer=jnp.array(0, dtype=jnp.int32),
             rng=key,
         )
 
@@ -599,11 +739,11 @@ class JaxSlotMachine(JaxEnvironment[SlotMachineState, SlotMachineObservation, Sl
         player input and update the game state.
 
         Processing Pipeline:
-        1. Process player input (button presses)
-        2. Handle wager adjustments
-        3. Start new spins if requested
+        1. Process player input (button presses for both players)
+        2. Handle wager adjustments for both players
+        3. Start new spins if requested (shared reels)
         4. Update reel animations
-        5. Check for wins when reels stop
+        5. Check for wins when reels stop (both players can win)
         6. Update timers and effects
         7. Calculate rewards and check game over
 
@@ -611,94 +751,158 @@ class JaxSlotMachine(JaxEnvironment[SlotMachineState, SlotMachineObservation, Sl
         cfg = self.config
         previous_state = state
 
-        # Update RNG key EVERY step, not just during spins
-        step_key, new_rng = jax.random.split(state.rng)
+        # Check if game is already over and display timer has expired
+        game_completely_over = state.game_over & (state.win_display_timer <= 0)
+        
+        def early_return():
+            obs = self._get_observation(state)
+            all_rewards = self._get_all_reward(previous_state, state)
+            info = self._get_info(state, all_rewards)
+            return obs, state, 0.0, True, info
+            
+        def continue_game():
+            # Update RNG key EVERY step
+            step_key, new_rng = jax.random.split(state.rng)
 
-        # Process player input
-        fire_pressed = (action == Action.FIRE)
-        up_pressed = (action == Action.UP)
-        down_pressed = (action == Action.DOWN)
+            # Process player input
+            fire_pressed = (action == Action.FIRE)
+            up_pressed = (action == Action.UP)        # Player 2 increase wager
+            down_pressed = (action == Action.DOWN)    # Player 2 decrease wager
+            left_pressed = (action == Action.LEFT)    # Player 1 decrease wager
+            right_pressed = (action == Action.RIGHT)  # Player 1 increase wager
 
-        # Detect "just pressed" events to prevent button mashing
-        fire_just_pressed = fire_pressed & (~state.spin_button_prev)
-        up_just_pressed = up_pressed & (~state.up_button_prev)
-        down_just_pressed = down_pressed & (~state.down_button_prev)
+            # Detect "just pressed" events to prevent button mashing
+            fire_just_pressed = fire_pressed & (~state.spin_button_prev)
+            up_just_pressed = up_pressed & (~state.up_button_prev)
+            down_just_pressed = down_pressed & (~state.down_button_prev)
+            left_just_pressed = left_pressed & (~state.left_button_prev)
+            right_just_pressed = right_pressed & (~state.right_button_prev)
 
-        # Determine if player can spin
-        # Need: no cooldown, button just pressed, enough credits, reels not spinning
-        can_spin = (state.spin_cooldown == 0) & fire_just_pressed & (state.credits >= state.current_wager)
-        can_spin = can_spin & (~jnp.any(state.reel_spinning))
+            # Determine if players can spin (both players need enough credits)
+            can_spin = (state.spin_cooldown == 0) & fire_just_pressed
+            can_spin = can_spin & (state.player1_credits >= state.player1_wager)
+            can_spin = can_spin & (state.player2_credits >= state.player2_wager)
+            can_spin = can_spin & (~jnp.any(state.reel_spinning))
+            can_spin = can_spin & (~state.game_over)
 
-        # Handle wager changes (only when machine is idle)
-        can_change_wager = ~jnp.any(state.reel_spinning) & (state.spin_cooldown == 0)
+            # Handle wager changes (only when machine is idle)
+            can_change_wager = ~jnp.any(state.reel_spinning) & (state.spin_cooldown == 0) & (~state.game_over)
 
-        # Wager adjustment logic
-        new_wager = jax.lax.cond(
-            can_change_wager & up_just_pressed,
-            lambda w: jnp.minimum(w + 1, cfg.max_wager),
-            lambda w: jax.lax.cond(
-                can_change_wager & down_just_pressed,
-                lambda w: jnp.maximum(w - 1, cfg.min_wager),
-                lambda w: w,
-                w
-            ),
-            state.current_wager
+            # Player 1 wager adjustment logic
+            new_p1_wager = jax.lax.cond(
+                can_change_wager & up_just_pressed,
+                lambda w: jnp.minimum(w + 1, cfg.max_wager),
+                lambda w: jax.lax.cond(
+                    can_change_wager & down_just_pressed,
+                    lambda w: jnp.maximum(w - 1, cfg.min_wager),
+                    lambda w: w,
+                    w
+                ),
+                state.player1_wager
+            )
+
+            # Player 2 wager adjustment logic
+            new_p2_wager = jax.lax.cond(
+                can_change_wager & right_just_pressed,
+                lambda w: jnp.minimum(w + 1, cfg.max_wager),
+                lambda w: jax.lax.cond(
+                    can_change_wager & left_just_pressed,
+                    lambda w: jnp.maximum(w - 1, cfg.min_wager),
+                    lambda w: w,
+                    w
+                ),
+                state.player2_wager
+            )
+
+            # Update state with input tracking, wager changes and new RNG
+            new_state = state._replace(
+                spin_button_prev=fire_pressed,
+                up_button_prev=up_pressed,
+                down_button_prev=down_pressed,
+                left_button_prev=left_pressed,
+                right_button_prev=right_pressed,
+                player1_wager=new_p1_wager,
+                player2_wager=new_p2_wager,
+                rng=new_rng
+            )
+
+            # Start spin if conditions are met
+            new_state = jax.lax.cond(
+                can_spin,
+                lambda s: self._start_spin(s, step_key),
+                lambda s: s,
+                new_state
+            )
+
+            # Update reel animations and physics
+            new_state = self._update_reels(new_state)
+
+            # Check for wins when all reels have stopped
+            new_state = self._check_for_wins(new_state)
+
+            # Update various timers and cooldowns
+            new_state = self._update_timers(new_state)
+
+            # Check game over conditions and set winner
+            new_state = self._check_game_over(new_state)
+
+            # Calculate combined reward for this step
+            reward = jnp.where(
+                (new_state.last_payout_p1 > 0) & (state.last_payout_p1 == 0),
+                new_state.last_payout_p1.astype(jnp.float32),
+                0.0
+            ) + jnp.where(
+                (new_state.last_payout_p2 > 0) & (state.last_payout_p2 == 0),
+                new_state.last_payout_p2.astype(jnp.float32),
+                0.0
+            )
+
+            # Update reward in state for display purposes
+            new_state = new_state._replace(
+                last_reward_p1=jnp.where(
+                    (new_state.last_payout_p1 > 0) & (state.last_payout_p1 == 0),
+                    new_state.last_payout_p1.astype(jnp.float32),
+                    0.0
+                ),
+                last_reward_p2=jnp.where(
+                    (new_state.last_payout_p2 > 0) & (state.last_payout_p2 == 0),
+                    new_state.last_payout_p2.astype(jnp.float32),
+                    0.0
+                )
+            )
+
+            # Game over condition
+            done = self._get_done(new_state)
+
+            obs = self._get_observation(new_state)
+            all_rewards = self._get_all_reward(previous_state, new_state)
+            info = self._get_info(new_state, all_rewards)
+
+            return obs, new_state, reward, done, info
+        
+        # Use jax.lax.cond for the conditional logic
+        return jax.lax.cond(
+            game_completely_over,
+            lambda _: early_return(),
+            lambda _: continue_game(),
+            None
         )
 
-        # Update state with input tracking, wager changes and most importantly new RNG
-        new_state = state._replace(
-            spin_button_prev=fire_pressed,
-            up_button_prev=up_pressed,
-            down_button_prev=down_pressed,
-            current_wager=new_wager,
-            rng=new_rng
-        )
 
-        # Start spin if conditions are met
-        new_state = jax.lax.cond(
-            can_spin,
-            lambda s: self._start_spin(s, step_key),
-            lambda s: s,
-            new_state
-        )
-
-        # Update reel animations and physics
-        new_state = self._update_reels(new_state)
-
-        # Check for wins when all reels have stopped
-        new_state = self._check_for_wins(new_state)
-
-        # Update various timers and cooldowns
-        new_state = self._update_timers(new_state)
-
-        # Calculate reward for this step
-        reward = jnp.where(
-            (new_state.last_payout > 0) & (state.last_payout == 0),
-            new_state.last_payout.astype(jnp.float32),
-            0.0
-        )
-
-        # Store reward in state for display purposes. Introduced during debug to check if the reward provided is correct.
-        new_state = new_state._replace(last_reward=reward)
-
-        # Game over condition combines financial rules with CI sanity limits.
-        done = self._get_done(new_state)
-
-        obs = self._get_observation(new_state)
-        all_rewards = self._get_all_reward(previous_state, new_state)
-        info = self._get_info(new_state, all_rewards)
-
-        return obs, new_state, reward, done, info
 
     def _start_spin(self, state: SlotMachineState, key: jax.random.PRNGKey) -> SlotMachineState:
         """
         Start spinning the reels using provided RNG key. This function sets up a new spin: deducts credits,
-        generates random outcomes, and starts the reel animations.
+        generates random outcomes, and starts the reel animations for both players.
         """
         cfg = self.config
 
-        new_credits = state.credits - state.current_wager
-        new_spins = state.spins_played + 1
+        # Deduct wagers from both players
+        new_p1_credits = state.player1_credits - state.player1_wager
+        new_p2_credits = state.player2_credits - state.player2_wager
+        
+        new_p1_spins = state.player1_spins_played + 1
+        new_p2_spins = state.player2_spins_played + 1
 
         key, *reel_keys = jax.random.split(key, cfg.num_reels + 1)
 
@@ -730,15 +934,19 @@ class JaxSlotMachine(JaxEnvironment[SlotMachineState, SlotMachineObservation, Sl
         final_durations = durations + stagger_delays
 
         return state._replace(
-            credits=new_credits,
-            spins_played=new_spins,
+            player1_credits=new_p1_credits,
+            player2_credits=new_p2_credits,
+            player1_spins_played=new_p1_spins,
+            player2_spins_played=new_p2_spins,
             reel_spinning=jnp.ones(cfg.num_reels, dtype=jnp.bool_),
             spin_timers=final_durations,
             reel_positions=positions,
             reel_layouts=layouts,
             spin_cooldown=jnp.array(10, dtype=jnp.int32),
-            last_payout=jnp.array(0, dtype=jnp.int32),
-            last_reward=jnp.array(0.0, dtype=jnp.float32),
+            last_payout_p1=jnp.array(0, dtype=jnp.int32),
+            last_payout_p2=jnp.array(0, dtype=jnp.int32),
+            last_reward_p1=jnp.array(0.0, dtype=jnp.float32),
+            last_reward_p2=jnp.array(0.0, dtype=jnp.float32),
         )
 
     def _update_reels(self, state: SlotMachineState) -> SlotMachineState:
@@ -776,7 +984,7 @@ class JaxSlotMachine(JaxEnvironment[SlotMachineState, SlotMachineObservation, Sl
 
     def _check_for_wins(self, state: SlotMachineState) -> SlotMachineState:
         """
-        Check for winning combinations after all reels have stopped.
+        Check for winning combinations after all reels have stopped for both players.
 
         The payline (from left to right) pays as follows:
 
@@ -795,12 +1003,12 @@ class JaxSlotMachine(JaxEnvironment[SlotMachineState, SlotMachineObservation, Sl
         cfg = self.config
 
         all_stopped = ~jnp.any(state.reel_spinning)
-        has_spun = state.spins_played > 0
-        should_check_win = all_stopped & (state.last_payout == 0) & has_spun
+        has_spun = (state.player1_spins_played > 0) | (state.player2_spins_played > 0)
+        should_check_win = all_stopped & (state.last_payout_p1 == 0) & (state.last_payout_p2 == 0) & has_spun
 
         def process_win_vectorized(s: SlotMachineState) -> SlotMachineState:
             """
-            Helper function to process win calculation with reward system.
+            Helper function to process win calculation with reward system for both players.
             """
 
             center_indices = (s.reel_positions + 1) % cfg.total_symbols_per_reel
@@ -808,7 +1016,7 @@ class JaxSlotMachine(JaxEnvironment[SlotMachineState, SlotMachineObservation, Sl
 
             s0, s1, s2 = center_symbols[0], center_symbols[1], center_symbols[2]
 
-            # Vectorized win condition evaluation
+            #  Win condition evaluation
             win_conditions = jnp.array([
                 jnp.all(center_symbols == 5),  # Three Cars - 200x
                 jnp.all(center_symbols == 2),  # Three Bars - 100x
@@ -829,17 +1037,30 @@ class JaxSlotMachine(JaxEnvironment[SlotMachineState, SlotMachineObservation, Sl
             first_win = jnp.min(win_indices)
             has_win = first_win < len(win_conditions)
 
-            payout = jax.lax.cond(
+            # Calculate payouts for both players
+            payout_p1 = jax.lax.cond(
                 has_win,
-                lambda: multipliers[first_win] * s.current_wager,
+                lambda: multipliers[first_win] * s.player1_wager,
+                lambda: 0
+            )
+            
+            payout_p2 = jax.lax.cond(
+                has_win,
+                lambda: multipliers[first_win] * s.player2_wager,
                 lambda: 0
             )
 
+            # Determine flash timer - flash if either player wins
+            flash_timer = jnp.where((payout_p1 > 0) | (payout_p2 > 0), 60, 0)
+
             return s._replace(
-                credits=s.credits + payout,
-                total_winnings=s.total_winnings + payout,
-                last_payout=payout,
-                win_flash_timer=jnp.where(payout > 0, 60, 0),
+                player1_credits=s.player1_credits + payout_p1,
+                player2_credits=s.player2_credits + payout_p2,
+                player1_total_winnings=s.player1_total_winnings + payout_p1,
+                player2_total_winnings=s.player2_total_winnings + payout_p2,
+                last_payout_p1=payout_p1,
+                last_payout_p2=payout_p2,
+                win_flash_timer=flash_timer,
             )
 
         return jax.lax.cond(should_check_win, process_win_vectorized, lambda s: s, state)
@@ -851,16 +1072,81 @@ class JaxSlotMachine(JaxEnvironment[SlotMachineState, SlotMachineObservation, Sl
         Timer Types:
         - Spin cooldown: Prevents accidental double-spins
         - Win flash: Controls celebration effect duration
+        - Win display: Controls how long winner message is shown
 
         All timers count down to 0 and stop there (no negative values).
 
         """
         new_cooldown = jnp.maximum(state.spin_cooldown - 1, 0)
         new_flash_timer = jnp.maximum(state.win_flash_timer - 1, 0)
+        new_win_display_timer = jnp.maximum(state.win_display_timer - 1, 0)
 
         return state._replace(
             spin_cooldown=new_cooldown,
             win_flash_timer=new_flash_timer,
+            win_display_timer=new_win_display_timer,
+        )
+
+    def _check_game_over(self, state: SlotMachineState) -> SlotMachineState:
+        """
+        Check game over conditions and determine winner.
+        Game ends when:
+        1. Either player reaches 0 credits AND cannot afford their current wager
+        2. Either player reaches more than 999 credits
+        
+        Important: Game should only end AFTER reels stop and final payouts are processed
+        """
+        cfg = self.config
+
+        # Check if game should end - but only when reels are not spinning
+        # This ensures final spins complete and payouts are processed
+        reels_stopped = ~jnp.any(state.reel_spinning)
+        
+        # Check bankruptcy conditions - player must not afford their next wager
+        p1_broke = (state.player1_credits < state.player1_wager) & reels_stopped
+        p2_broke = (state.player2_credits < state.player2_wager) & reels_stopped
+        
+        # Check win conditions - over 999 credits
+        p1_rich = (state.player1_credits > 999) & reels_stopped
+        p2_rich = (state.player2_credits > 999) & reels_stopped
+
+        should_end = p1_broke | p2_broke | p1_rich | p2_rich
+        
+        # Determine winner
+        # Priority: Rich > not broke
+        winner = jax.lax.cond(
+            should_end,
+            lambda: jax.lax.cond(
+                p1_rich,
+                lambda: 1,  # Player 1 wins (got rich)
+                lambda: jax.lax.cond(
+                    p2_rich,
+                    lambda: 2,  # Player 2 wins (got rich)
+                    lambda: jax.lax.cond(
+                        p1_broke,
+                        lambda: 2,  # Player 2 wins (Player 1 broke)
+                        lambda: jax.lax.cond(
+                            p2_broke,
+                            lambda: 1,  # Player 1 wins (Player 2 broke)
+                            lambda: 0   # No winner yet
+                        )
+                    )
+                )
+            ),
+            lambda: 0  # Game continues
+        )
+        
+        # Set display timer when game just ended
+        display_timer = jax.lax.cond(
+            should_end & (~state.game_over),
+            lambda: 60,  # Show winner for 1 second (60 frames)
+            lambda: state.win_display_timer
+        )
+        
+        return state._replace(
+            game_over=should_end,
+            winner=winner,
+            win_display_timer=display_timer
         )
 
     def _get_observation(self, state: SlotMachineState) -> SlotMachineObservation:
@@ -879,12 +1165,18 @@ class JaxSlotMachine(JaxEnvironment[SlotMachineState, SlotMachineObservation, Sl
         reel_symbols = state.reel_layouts[reel_indices, symbol_indices]
 
         return SlotMachineObservation(
-            credits=state.credits,
-            current_wager=state.current_wager,
+            player1_credits=state.player1_credits,
+            player1_wager=state.player1_wager,
+            player2_credits=state.player2_credits,
+            player2_wager=state.player2_wager,
             reel_symbols=reel_symbols,
             is_spinning=jnp.array(jnp.any(state.reel_spinning), dtype=jnp.int32),
-            last_payout=state.last_payout,
-            last_reward=state.last_reward,
+            last_payout_p1=state.last_payout_p1,
+            last_payout_p2=state.last_payout_p2,
+            last_reward_p1=state.last_reward_p1,
+            last_reward_p2=state.last_reward_p2,
+            game_over=state.game_over,
+            winner=state.winner,
         )
 
     def render(self, state: SlotMachineState) -> chex.Array:
@@ -900,8 +1192,10 @@ class JaxSlotMachine(JaxEnvironment[SlotMachineState, SlotMachineObservation, Sl
         Action Mapping:
         0 = NOOP (wait/observe)
         1 = FIRE (spin reels)
-        2 = UP (increase wager)
-        3 = DOWN (decrease wager)
+        2 = UP (Player 1 increase wager)
+        3 = DOWN (Player 1 decrease wager)
+        4 = LEFT (Player 2 decrease wager)
+        5 = RIGHT (Player 2 increase wager)
         """
         return spaces.Discrete(len(self.action_set))
 
@@ -910,30 +1204,33 @@ class JaxSlotMachine(JaxEnvironment[SlotMachineState, SlotMachineObservation, Sl
         Get the observation space for this environment. Defines the structure and bounds of observations.
 
         Space Design:
-        - Credits: 0-9999
-
-        - Wager: min_wager to max_wager for configurable betting range. (0-5)
-
+        - Player 1 & 2 Credits: 0-9999
+        - Player 1 & 2 Wager: min_wager to max_wager for configurable betting range. (0-5)
         - Reel symbols: 0 to num_symbol_types-1.  Symbol type indices currently
          ( 0 => "Cactus", 1 => "Table", 2 => "Bar", 3 => "TV", 4 => "Bell", 5 => "Car")
-
         - Spinning: boolean (machine status)
-
-        - Payouts/rewards (Integer to keep track of payouts. Important for debugging.)
+        - Payouts/rewards (Integer to keep track of payouts for both players)
+        - Game over and winner status
         """
         cfg = self.config
 
         return spaces.Dict({
-            'credits': spaces.Box(low=0, high=9999, shape=(), dtype=jnp.float32),
-            'current_wager': spaces.Box(low=cfg.min_wager, high=cfg.max_wager, shape=(), dtype=jnp.float32),
+            'player1_credits': spaces.Box(low=0, high=9999, shape=(), dtype=jnp.float32),
+            'player1_wager': spaces.Box(low=cfg.min_wager, high=cfg.max_wager, shape=(), dtype=jnp.float32),
+            'player2_credits': spaces.Box(low=0, high=9999, shape=(), dtype=jnp.float32),
+            'player2_wager': spaces.Box(low=cfg.min_wager, high=cfg.max_wager, shape=(), dtype=jnp.float32),
             'reel_symbols': spaces.Box(
                 low=0, high=cfg.num_symbol_types - 1,
                 shape=(cfg.num_reels, cfg.symbols_per_reel),
-                dtype=jnp.float32  # Changed from box_dtype variable
+                dtype=jnp.float32
             ),
             'is_spinning': spaces.Box(low=0, high=1, shape=(), dtype=jnp.float32),
-            'last_payout': spaces.Box(low=0, high=1000, shape=(), dtype=jnp.float32),
-            'last_reward': spaces.Box(low=0.0, high=1000.0, shape=(), dtype=jnp.float32),
+            'last_payout_p1': spaces.Box(low=0, high=999, shape=(), dtype=jnp.float32),
+            'last_payout_p2': spaces.Box(low=0, high=999, shape=(), dtype=jnp.float32),
+            'last_reward_p1': spaces.Box(low=0.0, high=999.0, shape=(), dtype=jnp.float32),
+            'last_reward_p2': spaces.Box(low=0.0, high=999.0, shape=(), dtype=jnp.float32),
+            'game_over': spaces.Box(low=0, high=1, shape=(), dtype=jnp.float32),
+            'winner': spaces.Box(low=0, high=2, shape=(), dtype=jnp.float32),
         })
 
     def image_space(self) -> spaces.Space:
@@ -950,12 +1247,18 @@ class JaxSlotMachine(JaxEnvironment[SlotMachineState, SlotMachineObservation, Sl
     def obs_to_flat_array(self, obs: SlotMachineObservation) -> jnp.ndarray:
         """Flatten the structured observation into a 1-D array."""
         components = [
-            jnp.atleast_1d(obs.credits).astype(jnp.float32),
-            jnp.atleast_1d(obs.current_wager).astype(jnp.float32),
+            jnp.atleast_1d(obs.player1_credits).astype(jnp.float32),
+            jnp.atleast_1d(obs.player1_wager).astype(jnp.float32),
+            jnp.atleast_1d(obs.player2_credits).astype(jnp.float32),
+            jnp.atleast_1d(obs.player2_wager).astype(jnp.float32),
             obs.reel_symbols.astype(jnp.float32).ravel(),
             jnp.atleast_1d(obs.is_spinning).astype(jnp.float32),
-            jnp.atleast_1d(obs.last_payout).astype(jnp.float32),
-            jnp.atleast_1d(obs.last_reward).astype(jnp.float32),
+            jnp.atleast_1d(obs.last_payout_p1).astype(jnp.float32),
+            jnp.atleast_1d(obs.last_payout_p2).astype(jnp.float32),
+            jnp.atleast_1d(obs.last_reward_p1).astype(jnp.float32),
+            jnp.atleast_1d(obs.last_reward_p2).astype(jnp.float32),
+            jnp.atleast_1d(obs.game_over).astype(jnp.float32),
+            jnp.atleast_1d(obs.winner).astype(jnp.float32),
         ]
         return jnp.concatenate(components, axis=0)
 
@@ -980,8 +1283,10 @@ class JaxSlotMachine(JaxEnvironment[SlotMachineState, SlotMachineObservation, Sl
     ) -> SlotMachineInfo:
 
         return SlotMachineInfo(
-            total_winnings=state.total_winnings,
-            spins_played=state.spins_played,
+            player1_total_winnings=state.player1_total_winnings,
+            player2_total_winnings=state.player2_total_winnings,
+            player1_spins_played=state.player1_spins_played,
+            player2_spins_played=state.player2_spins_played,
             all_rewards=all_rewards,
         )
 
@@ -990,17 +1295,14 @@ class JaxSlotMachine(JaxEnvironment[SlotMachineState, SlotMachineObservation, Sl
         previous_state: SlotMachineState,
         state: SlotMachineState,
     ) -> jnp.ndarray:
-        """Return the associated reward."""
-        return jnp.asarray(state.last_reward, dtype=jnp.float32)
+        """Return the associated reward (combined for both players)."""
+        reward_p1 = jnp.asarray(state.last_reward_p1, dtype=jnp.float32)
+        reward_p2 = jnp.asarray(state.last_reward_p2, dtype=jnp.float32)
+        return reward_p1 + reward_p2
 
     def _get_done(self, state: SlotMachineState) -> jnp.bool_:
-        """Check if the player can no longer place the minimum wager, or reached the max credits"""
-        cfg = self.config
-        credits = state.credits
-        spinning = jnp.any(state.reel_spinning)
-        max_credits_reached = credits >= 999
-        cannot_afford = credits < cfg.min_wager
-        return jnp.logical_or(max_credits_reached, jnp.logical_and(cannot_afford, ~spinning))
+        """Check if the game is over and display timer has expired"""
+        return state.game_over & (state.win_display_timer <= 0)
 
 def main():
     """
@@ -1034,9 +1336,13 @@ def main():
     pygame.display.set_caption("JAX Slot Machine")
     clock = pygame.time.Clock()
 
-    print(" JAX SLOT MACHINE")
+    print(" JAX SLOT MACHINE - TWO PLAYER")
     print(f"Random seed: {random_seed}")
-    print("Controls: SPACE=Spin, UP/DOWN=Wager, ESC=Quit")
+    print("Controls:")
+    print("  SPACE = Spin (both players)")
+    print("  Player 2: LEFT/RIGHT = Decrease/Increase wager")
+    print("  Player 1: DOWN/UP = Decrease/Increase wager")
+    print("  ESC = Quit")
     print("For full gameplay, use: python scripts/play.py --game slotmachine")
 
     # Game loop
@@ -1053,9 +1359,13 @@ def main():
                 elif event.key == pygame.K_SPACE:
                     action = Action.FIRE
                 elif event.key == pygame.K_UP:
-                    action = Action.UP
+                    action = Action.UP      # Player 1 increase wager
                 elif event.key == pygame.K_DOWN:
-                    action = Action.DOWN
+                    action = Action.DOWN    # Player 1 decrease wager
+                elif event.key == pygame.K_LEFT:
+                    action = Action.LEFT    # Player 2 increase wager (W key)
+                elif event.key == pygame.K_RIGHT:
+                    action = Action.RIGHT   # Player 2 decrease wager (S key)
                 else:
                     action = Action.NOOP
             elif event.type == pygame.KEYUP:
@@ -1077,20 +1387,15 @@ def main():
                 center_symbols.append(symbol_names[symbol_type])
 
 
-            # Debug statement to see if the reward mechanism is working. The debug works only when ran  directly
-            # via python and not play.py
-
-
-            # print(
-            #     "[DEBUG] Reward: {:.0f} | Center symbols: {} | Reel positions: {}".format(
-            #         reward_value,
-            #         ", ".join(center_symbols),
-            #         ", ".join(str(p) for p in center_positions),
-            #     )
-            # )
-
         if done:
-            print("You're out of credits. Thanks for playing!")
+            # Check who won
+            winner = int(np.array(state.winner))
+            if winner == 1:
+                print("Player 1 wins! Thanks for playing!")
+            elif winner == 2:
+                print("Player 2 wins! Thanks for playing!")
+            else:
+                print("Game over! Thanks for playing!")
             running = False
 
         if not running:
@@ -1116,7 +1421,7 @@ def main():
         action = Action.NOOP
 
     pygame.quit()
-    print("Game ended. Use scripts/play.py for full gameplay !")
+    print("Game ended. Use 'python scripts/play.py --game slotmachine' for full gameplay !")
 
 
 if __name__ == "__main__":
