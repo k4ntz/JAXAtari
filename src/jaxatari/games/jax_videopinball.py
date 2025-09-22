@@ -2091,39 +2091,39 @@ class JaxVideoPinball(
 
         scoring_list = jnp.stack(deconstructed_scoring_list, axis=0)
 
-        jax.debug.print(
-           "Hit Point:\n\t"
-           "T_ENTRY: {}\n\t"
-           "X: {}\n\t"
-           "Y: {}\n\t"
-           "RX: {}\n\t"
-           "RY: {}\n\t"
-           "OBJECT_WIDTH: {}\n\t"
-           "OBJECT_HEIGHT: {}\n\t"
-           "OBJECT_X: {}\n\t"
-           "OBJECT_Y: {}\n\t"
-           "OBJECT_REFLECTING: {}\n\t"
-           "OBJECT_SCORE_TYPE: {}\n\t"
-           "OBJECT_VARIANT: {}\n"
-           "Pre-Collision Movement:\n\t"
-           "OLD_X: {}\n\t"
-           "OLD_Y: {}\n\t"
-           "NEW_X: {}\n\t"
-           "NEW_Y: {}\n",
-           hit_point[HitPointSelector.T_ENTRY],
-           hit_point[HitPointSelector.X],
-           hit_point[HitPointSelector.Y],
-           hit_point[HitPointSelector.RX],
-           hit_point[HitPointSelector.RY],
-           hit_point[HitPointSelector.OBJECT_WIDTH],
-           hit_point[HitPointSelector.OBJECT_HEIGHT],
-           hit_point[HitPointSelector.OBJECT_X],
-           hit_point[HitPointSelector.OBJECT_Y],
-           hit_point[HitPointSelector.OBJECT_REFLECTING],
-           hit_point[HitPointSelector.OBJECT_SCORE_TYPE],
-           hit_point[HitPointSelector.OBJECT_VARIANT],
-           ball_movement.old_ball_x, ball_movement.old_ball_y, ball_movement.new_ball_x, ball_movement.new_ball_y,
-        )
+        # jax.debug.print(
+        #    "Hit Point:\n\t"
+        #    "T_ENTRY: {}\n\t"
+        #    "X: {}\n\t"
+        #    "Y: {}\n\t"
+        #    "RX: {}\n\t"
+        #    "RY: {}\n\t"
+        #    "OBJECT_WIDTH: {}\n\t"
+        #    "OBJECT_HEIGHT: {}\n\t"
+        #    "OBJECT_X: {}\n\t"
+        #    "OBJECT_Y: {}\n\t"
+        #    "OBJECT_REFLECTING: {}\n\t"
+        #    "OBJECT_SCORE_TYPE: {}\n\t"
+        #    "OBJECT_VARIANT: {}\n"
+        #    "Pre-Collision Movement:\n\t"
+        #    "OLD_X: {}\n\t"
+        #    "OLD_Y: {}\n\t"
+        #    "NEW_X: {}\n\t"
+        #    "NEW_Y: {}\n",
+        #    hit_point[HitPointSelector.T_ENTRY],
+        #    hit_point[HitPointSelector.X],
+        #    hit_point[HitPointSelector.Y],
+        #    hit_point[HitPointSelector.RX],
+        #    hit_point[HitPointSelector.RY],
+        #    hit_point[HitPointSelector.OBJECT_WIDTH],
+        #    hit_point[HitPointSelector.OBJECT_HEIGHT],
+        #    hit_point[HitPointSelector.OBJECT_X],
+        #    hit_point[HitPointSelector.OBJECT_Y],
+        #    hit_point[HitPointSelector.OBJECT_REFLECTING],
+        #    hit_point[HitPointSelector.OBJECT_SCORE_TYPE],
+        #    hit_point[HitPointSelector.OBJECT_VARIANT],
+        #    ball_movement.old_ball_x, ball_movement.old_ball_y, ball_movement.new_ball_x, ball_movement.new_ball_y,
+        # )
 
         return hit_point, scoring_list, velocity_factor, velocity_addition
 
