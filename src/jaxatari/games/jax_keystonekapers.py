@@ -78,7 +78,7 @@ class KeystoneKapersConstants(NamedTuple):
 
     # Camera/Viewport system for scrolling
     # Camera system - section-based (not smooth following)
-    CAMERA_SECTION_THRESHOLD: int = 20  # How close to edge before switching sections
+    # Camera jumps to show the section the player is currently in
 
     # Thief configuration
     THIEF_WIDTH: int = 8
@@ -661,19 +661,19 @@ class JaxKeystoneKapers(JaxEnvironment[GameState, KeystoneKapersObservation, Key
 
         # Autonomous elevator logic - move one floor at a time in sequence 0->1->2->1->0
         # Use step counter to determine which phase of the cycle we're in
-        
+
         at_target = elevator.floor == elevator.target_floor
         doors_open = elevator.state == 0  # IdleOpen
         ready_to_move = jnp.logical_and(at_target, doors_open)
-        
+
         # Simple cycle using step counter to avoid direction confusion
         # Each complete cycle takes about 20 seconds (4 moves * 5 seconds each)
         cycle_step = (state.step_counter // 300) % 4  # 5 second phases
-        
+
         # Define the sequence: step 0->1, step 1->2, step 2->1, step 3->0
         target_sequence = jnp.array([1, 2, 1, 0])
         time_based_target = target_sequence[cycle_step]
-        
+
         # Only change target when ready to move and target would be adjacent
         next_target = jnp.where(
             ready_to_move,
@@ -687,7 +687,7 @@ class JaxKeystoneKapers(JaxEnvironment[GameState, KeystoneKapersObservation, Key
             ),
             elevator.target_floor  # Keep current target if not ready
         )
-        
+
         auto_target_floor = next_target
 
         # Always want to move (autonomous operation)
@@ -1063,26 +1063,19 @@ class JaxKeystoneKapers(JaxEnvironment[GameState, KeystoneKapersObservation, Key
         new_elevator = self._update_elevator(state, action)
         new_obstacles = self._update_obstacles(state, step_key)
 
-        # Section-based camera system - snap to sections, not smooth following
+        # True section-based camera system
+        # Camera always shows the section that the player is currently in
+        # Section boundaries are exact: 0-159 = section 0, 160-319 = section 1, etc.
+
+        # Calculate which section the player is currently in
         player_section = new_player.x // self.consts.SECTION_WIDTH
-        current_camera_section = state.camera_x // self.consts.SECTION_WIDTH
 
-        # Check if player is at edge of current section
-        player_offset_in_section = new_player.x % self.consts.SECTION_WIDTH
-        at_left_edge = player_offset_in_section < self.consts.CAMERA_SECTION_THRESHOLD
-        at_right_edge = player_offset_in_section > (self.consts.SECTION_WIDTH - self.consts.CAMERA_SECTION_THRESHOLD)
+        # Camera always shows the player's current section (no thresholds, no delays)
+        new_camera_x = player_section * self.consts.SECTION_WIDTH
 
-        # Switch camera section if player crosses threshold
-        should_switch_left = jnp.logical_and(at_left_edge, player_section < current_camera_section)
-        should_switch_right = jnp.logical_and(at_right_edge, player_section > current_camera_section)
-        should_switch = jnp.logical_or(should_switch_left, should_switch_right)
-
-        # Set camera to player's section if switching, otherwise keep current
-        new_camera_section = jnp.where(should_switch, player_section, current_camera_section)
-        new_camera_x = new_camera_section * self.consts.SECTION_WIDTH
-
-        # Clamp camera to building bounds
-        new_camera_x = jnp.clip(new_camera_x, 0, self.consts.TOTAL_BUILDING_WIDTH - self.consts.SECTION_WIDTH)
+        # Clamp camera to valid building bounds
+        max_camera_x = self.consts.TOTAL_BUILDING_WIDTH - self.consts.SECTION_WIDTH
+        new_camera_x = jnp.clip(new_camera_x, 0, max_camera_x)
 
         # Check collisions
         obstacle_hit, thief_caught, items_collected = self._check_collisions(state._replace(
@@ -1436,10 +1429,10 @@ class KeystoneKapersRenderer(JAXGameRenderer):
         elevator_building_x = self.consts.ELEVATOR_BUILDING_X
         elevator_screen_x = building_to_screen_x(elevator_building_x)
         elevator_visible = (elevator_screen_x >= -self.consts.ELEVATOR_WIDTH) & (elevator_screen_x < self.consts.SCREEN_WIDTH)
-        
+
         # Elevator shaft background (dark blue/purple) on all floors
         shaft_color = jnp.array([64, 64, 128], dtype=jnp.uint8)  # Dark blue shaft
-        
+
         # Draw shaft on floor 1 (ground)
         frame = jnp.where(
             elevator_visible,
@@ -1447,7 +1440,7 @@ class KeystoneKapersRenderer(JAXGameRenderer):
                                 self.consts.ELEVATOR_WIDTH, self.consts.FLOOR_HEIGHT, shaft_color),
             frame
         )
-        
+
         # Draw shaft on floor 2 (middle)
         frame = jnp.where(
             elevator_visible,
@@ -1455,7 +1448,7 @@ class KeystoneKapersRenderer(JAXGameRenderer):
                                 self.consts.ELEVATOR_WIDTH, self.consts.FLOOR_HEIGHT, shaft_color),
             frame
         )
-        
+
         # Draw shaft on floor 3 (top)
         frame = jnp.where(
             elevator_visible,
@@ -1463,7 +1456,7 @@ class KeystoneKapersRenderer(JAXGameRenderer):
                                 self.consts.ELEVATOR_WIDTH, self.consts.FLOOR_HEIGHT, shaft_color),
             frame
         )
-        
+
         # Draw elevator car only at its current floor
         elevator_car_color = jnp.array([96, 96, 196], dtype=jnp.uint8)  # Lighter blue for car
         elevator_floor_y = jnp.where(
@@ -1473,7 +1466,7 @@ class KeystoneKapersRenderer(JAXGameRenderer):
                 self.consts.FLOOR_3_Y
             )
         )
-        
+
         # Only draw elevator car when doors are not fully open
         show_car = state.elevator.state != 0  # Not IdleOpen
         frame = jnp.where(
