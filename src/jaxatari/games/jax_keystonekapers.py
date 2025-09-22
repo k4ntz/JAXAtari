@@ -1541,6 +1541,73 @@ class KeystoneKapersRenderer(JAXGameRenderer):
                                         self.consts.GAME_AREA_WIDTH, self.consts.MINIMAP_HEIGHT,
                                         minimap_color)
 
+        # MINIMAP IMPLEMENTATION - Compact overview of entire building
+        minimap_width = self.consts.GAME_AREA_WIDTH
+        minimap_height = self.consts.MINIMAP_HEIGHT
+        floors_count = 4  # Ground, Floor 2, Floor 3, Roof
+        floor_stripe_height = minimap_height // floors_count  # Height of each floor stripe
+        
+        def world_to_minimap_x(world_x):
+            """Convert world X coordinate to minimap X coordinate"""
+            return jnp.clip(
+                jnp.floor(world_x * minimap_width / self.consts.TOTAL_BUILDING_WIDTH).astype(jnp.int32),
+                0, minimap_width - 1
+            )
+        
+        def floor_to_minimap_y(floor_index):
+            """Convert floor index to minimap Y coordinate (roof=0, ground=3)"""
+            return minimap_y_start + (3 - floor_index) * floor_stripe_height + floor_stripe_height // 2
+        
+        # Draw floor separation lines
+        for floor in range(1, floors_count):
+            y_line = minimap_y_start + floor * floor_stripe_height
+            game_area = draw_rectangle_simple(game_area, 0, y_line, minimap_width, 1,
+                                            jnp.array([64, 64, 64], dtype=jnp.uint8))  # Dark grey lines
+        
+        # Draw escalators (diagonal staircase sprites in black)
+        escalator_color = jnp.array([0, 0, 0], dtype=jnp.uint8)  # Black
+        
+        # Floor 1: leftmost escalator (diagonal staircase)
+        floor1_y = floor_to_minimap_y(0)
+        escalator_x = 2  # Leftmost position
+        # Draw diagonal staircase pattern
+        for i in range(3):
+            game_area = draw_rectangle_simple(game_area, escalator_x + i, floor1_y - 1 + i, 1, 1, escalator_color)
+        
+        # Floor 2: rightmost escalator (diagonal staircase - flipped vertically) 
+        floor2_y = floor_to_minimap_y(1)
+        escalator_x = minimap_width - 5  # Rightmost position
+        # Draw diagonal staircase pattern (flipped vertically)
+        for i in range(3):
+            game_area = draw_rectangle_simple(game_area, escalator_x + i, floor2_y + 1 - i, 1, 1, escalator_color)
+        
+        # Floor 3: leftmost escalator (diagonal staircase)
+        floor3_y = floor_to_minimap_y(2)
+        escalator_x = 2  # Leftmost position
+        # Draw diagonal staircase pattern
+        for i in range(3):
+            game_area = draw_rectangle_simple(game_area, escalator_x + i, floor3_y - 1 + i, 1, 1, escalator_color)
+        
+        # Draw elevator (black vertical line at center, moving between floors)
+        elevator_world_x = self.consts.ELEVATOR_BUILDING_X + self.consts.ELEVATOR_WIDTH // 2
+        elevator_minimap_x = world_to_minimap_x(elevator_world_x)
+        elevator_floor_y = floor_to_minimap_y(state.elevator.floor)
+        elevator_color = jnp.array([0, 0, 0], dtype=jnp.uint8)  # Black
+        # Vertical line for elevator
+        game_area = draw_rectangle_simple(game_area, elevator_minimap_x, elevator_floor_y - 2, 2, 4, elevator_color)
+        
+        # Draw cop (black marker)
+        cop_minimap_x = world_to_minimap_x(state.player.x)
+        cop_floor_y = floor_to_minimap_y(state.player.floor)
+        cop_color = jnp.array([0, 0, 0], dtype=jnp.uint8)  # Black
+        game_area = draw_rectangle_simple(game_area, cop_minimap_x, cop_floor_y - 1, 2, 2, cop_color)
+        
+        # Draw robber (white marker)
+        robber_minimap_x = world_to_minimap_x(state.thief.x)
+        robber_floor_y = floor_to_minimap_y(state.thief.floor)
+        robber_color = jnp.array([255, 255, 255], dtype=jnp.uint8)  # White
+        game_area = draw_rectangle_simple(game_area, robber_minimap_x, robber_floor_y - 1, 2, 2, robber_color)
+
         # Place game area into the bordered frame at offset position
         frame = frame.at[
             self.consts.GAME_AREA_OFFSET_Y:self.consts.GAME_AREA_OFFSET_Y + self.consts.GAME_AREA_HEIGHT,
