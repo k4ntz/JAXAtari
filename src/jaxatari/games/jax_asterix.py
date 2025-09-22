@@ -208,7 +208,6 @@ class JaxAsterix(JaxEnvironment[AsterixState, AsterixObservation, AsterixInfo, A
         dy_table = jnp.array([0, -1, 0, 0, 1, -1, -1, 1, 1], dtype=jnp.int32)
         dx = dx_table[mapped]
         dy = dy_table[mapped]
-        jax.debug.print("step debug: action={} mapped={} dx={} dy={}", action, mapped, dx, dy)
         action = mapped
 
         # Pause-Status
