@@ -65,7 +65,7 @@ class KeystoneKapersConstants(NamedTuple):
     FLOOR_1_Y: int = 135  # Ground floor (was 140, shifted up by 5 more to close gap)
     FLOOR_2_Y: int = 105   # Middle floor (was 100, shifted up by 5)
     FLOOR_3_Y: int = 70   # Top floor (was 60, shifted up by 5)
-    ROOF_Y: int = 50      # Roof (was 19, shifted up by 4)
+    ROOF_Y: int = 40      # Roof (was 19, shifted up by 4)
     FLOOR_HEIGHT: int = 20
 
     # Minimap area configuration (at bottom of game area)
@@ -1410,6 +1410,12 @@ class KeystoneKapersRenderer(JAXGameRenderer):
             self.consts.GAME_AREA_WIDTH, floor_thickness, floor_color
         )
 
+        # Roof (4th level)
+        game_area = draw_rectangle_simple(
+            game_area, 0, self.consts.ROOF_Y + self.consts.FLOOR_HEIGHT - floor_thickness,
+            self.consts.GAME_AREA_WIDTH, floor_thickness, floor_color
+        )
+
         # Draw escalators (only those visible on screen)
         escalator_color = jnp.array(self.consts.ESCALATOR_COLOR, dtype=jnp.uint8)
 
@@ -1480,13 +1486,24 @@ class KeystoneKapersRenderer(JAXGameRenderer):
             game_area
         )
 
+        # Draw shaft on roof
+        game_area = jnp.where(
+            elevator_visible,
+            draw_rectangle_simple(game_area, elevator_screen_x, self.consts.ROOF_Y,
+                                self.consts.ELEVATOR_WIDTH, self.consts.FLOOR_HEIGHT, shaft_color),
+            game_area
+        )
+
         # Draw elevator car only at its current floor
         elevator_car_color = jnp.array([96, 96, 196], dtype=jnp.uint8)  # Lighter blue for car
         elevator_floor_y = jnp.where(
             state.elevator.floor == 0, self.consts.FLOOR_1_Y,
             jnp.where(
                 state.elevator.floor == 1, self.consts.FLOOR_2_Y,
-                self.consts.FLOOR_3_Y
+                jnp.where(
+                    state.elevator.floor == 2, self.consts.FLOOR_3_Y,
+                    self.consts.ROOF_Y  # floor == 3 (roof)
+                )
             )
         )
 
