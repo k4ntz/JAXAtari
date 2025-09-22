@@ -165,7 +165,7 @@ class JaxAsterix(JaxEnvironment[AsterixState, AsterixObservation, AsterixInfo, A
         state = AsterixState(
             player_x =jnp.array(player_x, dtype=jnp.int32),
             player_y=jnp.array(player_y, dtype=jnp.int32),
-            score=jnp.array(31500, dtype=jnp.int32), # Start with 0 points
+            score=jnp.array(29900, dtype=jnp.int32), # Start with 0 points
             lives=jnp.array(self.consts.num_lives, dtype=jnp.int32),  # 3 Leben
             game_over=jnp.array(False, dtype=jnp.bool_),
             stage_cooldown = jnp.array(self.consts.cooldown_frames, dtype=jnp.int32), # Cooldown initial 0
@@ -670,8 +670,8 @@ class AsterixRenderer(JAXGameRenderer):
         self.consts = consts or AsterixConstants()
         self.sprites, self.offsets = self._load_sprites()
 
+
     def _load_sprites(self):
-        """Load all sprites required for Asterix rendering."""
         MODULE_DIR = os.path.dirname(os.path.abspath(__file__))
         sprite_path = os.path.join(MODULE_DIR, "sprites/asterix/")
 
@@ -684,62 +684,72 @@ class AsterixRenderer(JAXGameRenderer):
             return frame.astype(jnp.uint8)
 
         sprite_names = [
-            'ASTERIX_LEFT', 'ASTERIX_RIGHT', 'ASTERIX_LEFT_HIT', 'ASTERIX_RIGHT_HIT', 'STAGE', 'TOP', 'BOTTOM', 'LYRE_LEFT', 'LYRE_RIGHT', 'OBELIX_LEFT', 'OBELIX_RIGHT', 'OBELIX_LEFT_HIT',
+            'ASTERIX_LEFT', 'ASTERIX_RIGHT', 'ASTERIX_LEFT_HIT', 'ASTERIX_RIGHT_HIT',
+            'STAGE', 'TOP', 'BOTTOM', 'LYRE_LEFT', 'LYRE_RIGHT',
+            'OBELIX_LEFT', 'OBELIX_RIGHT', 'OBELIX_LEFT_HIT',
         ]
-
         asterix_item_names = ['CAULDRON', 'HELMET', 'SHIELD', 'LAMP']
         obelix_item_names = ['APPLE', 'FISH', 'WILD_BOAR_LEG', 'MUG', 'CAULDRON']
-
         blank8 = jnp.zeros((8, 8, 3), dtype=jnp.uint8)
 
         for name in sprite_names + asterix_item_names + obelix_item_names:
             loaded_sprite = _load_sprite_frame(name)
             if loaded_sprite is not None:
+                if loaded_sprite.ndim == 2:
+                    loaded_sprite = loaded_sprite[..., None]
+                    loaded_sprite = jnp.repeat(loaded_sprite, 3, axis=2)
                 sprites[name] = loaded_sprite
 
-
-        # Platzhalter für fehlende Item-Sprites eintragen
         for name in asterix_item_names + obelix_item_names:
             if name not in sprites:
                 sprites[name] = blank8
 
+        # Player-Sprites padden und als Array speichern
+        asterix_sprites_list = [
+            sprites['ASTERIX_LEFT'], sprites['ASTERIX_RIGHT'],
+            sprites['ASTERIX_LEFT_HIT'], sprites['ASTERIX_RIGHT_HIT']
+        ]
+        obelix_sprites_list = [
+            sprites['OBELIX_LEFT'], sprites['OBELIX_RIGHT'],
+            sprites['OBELIX_LEFT_HIT'], sprites['OBELIX_LEFT']
+        ]
 
-        # pad the player sprites since they are used interchangably
-        player_sprites, player_offsets = jr.pad_to_match([
-            sprites['ASTERIX_LEFT_HIT'], sprites['ASTERIX_LEFT'] # first: player_hit, second: player_idle
-        ])
-        sprites['ASTERIX'] = player_sprites[0] # player_hit sprite
-        sprites['ASTERIX'] = player_sprites[1] # player_idle sprite
-        offsets['ASTERIX'] = player_offsets[0] # player_hit sprite offset
-        offsets['ASTERIX'] = player_offsets[1] # player_idle sprite offset
+        # Gemeinsames Padding für beide Sprite-Listen
+        all_player_sprites = asterix_sprites_list + obelix_sprites_list
+        all_padded, _ = jr.pad_to_match(all_player_sprites)
 
-        # --- Load Digit Sprites ---
+        # Aufteilen in die jeweiligen Gruppen
+        sprites['ASTERIX_SPRITES'] = all_padded[:4]
+        sprites['OBELIX_SPRITES'] = all_padded[4:]
+
+        # Digit-Sprites laden
         digit_path = os.path.join(sprite_path, 'DIGIT_{}.npy')
         digits = jr.load_and_pad_digits(digit_path, num_chars=10)
+        # Fälle abdecken: (10,H,W) -> (10,H,W,3); (10,H,W,1) -> (10,H,W,3)
+        if digits.ndim == 3:  # (10, H, W)
+            digits = digits[..., None]
+        if digits.shape[-1] == 1:  # (10, H, W, 1)
+            digits = jnp.repeat(digits, 3, axis=3)
         sprites['digit'] = digits
 
-        for key in sprites.keys():
-            if isinstance(sprites[key], (list, tuple)):
-                sprites[key] = [jnp.expand_dims(sprite, axis=0) for sprite in sprites[key]]
-            else:
-                sprites[key] = jnp.expand_dims(sprites[key], axis=0)
-
-        # --- Load Collectible Points Sprites ---
+        # Punktesprites laden und padden
         points_names = ['POINTS50', 'POINTS100', 'POINTS200', 'POINTS300', 'POINTS400', 'POINTS500']
         point_frames = []
         for name in points_names:
             frame = _load_sprite_frame(name)
             if frame is None:
-                # Fallback: falls noch kein Frame existiert, nutze 8x8x4; sonst Form des ersten bekannten Frames
                 frame = point_frames[0] if point_frames else jnp.zeros((8, 8, 4), dtype=jnp.uint8)
             point_frames.append(frame)
-
-        # Alle Punktesprites auf gleiche (H,W,C) padden
         point_frames_padded, _ = jr.pad_to_match(point_frames)
-
-        # Als 4D [N,H,W,C] speichern
         for name, frame in zip(points_names, point_frames_padded):
             sprites[name] = jnp.expand_dims(frame, axis=0)
+
+        # Alle Sprites auf 4D bringen (Batch-Dim)
+        import numpy as np
+        for key in sprites.keys():
+            value = sprites[key]
+            if isinstance(value, (jnp.ndarray, np.ndarray)) and value.ndim == 3:
+                sprites[key] = jnp.expand_dims(value, axis=0)
 
         return sprites, offsets
 
@@ -919,39 +929,14 @@ class AsterixRenderer(JAXGameRenderer):
         raster = render_score_popups(raster)
 
         # ----------- PLAYER -------------
-        asterix_sprite_left = jr.get_sprite_frame(self.sprites['ASTERIX_LEFT'], 0)
-        asterix_sprite_right = jr.get_sprite_frame(self.sprites['ASTERIX_RIGHT'], 0)
-        asterix_hit_sprite_left = jr.get_sprite_frame(self.sprites['ASTERIX_LEFT_HIT'], 0)
-        asterix_hit_sprite_right = jr.get_sprite_frame(self.sprites['ASTERIX_RIGHT_HIT'], 0)
-
-        obelix_sprite_left = jr.get_sprite_frame(self.sprites['OBELIX_LEFT'], 0)
-        obelix_sprite_right = jr.get_sprite_frame(self.sprites['OBELIX_RIGHT'], 0)
-        obelix_hit_sprite_left = jr.get_sprite_frame(self.sprites['OBELIX_LEFT_HIT'], 0)
-        obelix_hit_sprite_right = obelix_sprite_left  # TODO noch kein separates Hit-Sprite für Obelix
-
-        asterix_sprites, _ = jr.pad_to_match([
-            self.sprites['ASTERIX_LEFT'], self.sprites['ASTERIX_RIGHT'],
-            self.sprites['ASTERIX_LEFT_HIT'], self.sprites['ASTERIX_RIGHT_HIT']
-        ])
-        obelix_sprites, _ = jr.pad_to_match([
-            self.sprites['OBELIX_LEFT'], self.sprites['OBELIX_RIGHT'],
-            self.sprites['OBELIX_LEFT_HIT'], self.sprites['OBELIX_LEFT']  # Falls kein separates Hit-Sprite
-        ])
-
-        sprites['ASTERIX_SPRITES'] = asterix_sprites  # [left, right, hit_left, hit_right]
-        sprites['OBELIX_SPRITES'] = obelix_sprites
-
-        # Sprites je nach Charakter wählen
         player_sprites = jax.lax.switch(
             state.character_id,
             [
-                lambda _: sprites['ASTERIX_SPRITES'],
-                lambda _: sprites['OBELIX_SPRITES'],
+                lambda _: self.sprites['ASTERIX_SPRITES'],
+                lambda _: self.sprites['OBELIX_SPRITES'],
             ],
             None
         )
-
-
         direction = state.player_direction
 
         def pick_normal(_):
@@ -963,6 +948,9 @@ class AsterixRenderer(JAXGameRenderer):
                 ],
                 None
             )
+
+
+        direction = state.player_direction
 
         def pick_hit(_):
             return jax.lax.switch(
@@ -976,12 +964,14 @@ class AsterixRenderer(JAXGameRenderer):
 
         player_sprite = jax.lax.cond(state.hit_timer > 0, pick_hit, pick_normal, operand=None)
 
+        offset = self.offsets.get('ASTERIX', (0, 0))
+
         raster = jr.render_at(
             raster,
             state.player_x,
             state.player_y,
             player_sprite,
-            flip_offset=self.offsets.get('ASTERIX', None)
+            flip_offset=offset
         )
 
         # ----------- SCORE -------------
@@ -1024,14 +1014,14 @@ class AsterixRenderer(JAXGameRenderer):
 
             score_spacing = 8
             score_x = ((self.consts.screen_width - (num_digits * score_spacing)) // 2) + 20
-            score_y = bottom_y + bottom_sprite.shape[0] + jr.get_sprite_frame(self.sprites['ASTERIX'], 0).shape[0] + 6
+            score_y = bottom_y + bottom_sprite.shape[0] + jr.get_sprite_frame(self.sprites['ASTERIX_LEFT'], 0).shape[0] + 6
 
             return jr.render_label_selective(
                 raster_to_update,
                 score_x,
                 score_y,
                 digits_full,
-                digit_sprites[0],
+                digit_sprites,
                 start_idx,
                 num_digits,
                 spacing=score_spacing
