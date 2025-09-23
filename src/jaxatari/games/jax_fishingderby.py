@@ -44,7 +44,7 @@ class GameConfig:
     START_ROD_LENGTH_X: int = 23  # Starting horizontal rod length
     MAX_ROD_LENGTH_X: int = 65  # Maximum horizontal extension
     P2_MIN_ROD_LENGTH_X: int = 7  # Reduce this to allow less leftward extension
-    P2_MAX_ROD_LENGTH_X: int = 49  # Increase this to allow more rightward extension
+    P2_MAX_ROD_LENGTH_X: int = 46  # Increase this to allow more rightward extension
     MIN_HOOK_DEPTH_Y: int = 0  # Minimum vertical hook depth
     START_HOOK_DEPTH_Y: int = 40  # Starting vertical hook depth
     MAX_HOOK_DEPTH_Y: int = 160  # Maximum vertical extension to reach bottom fish
@@ -292,46 +292,82 @@ class FishingDerby(JaxEnvironment):
             fish_pos = state.fish_positions
             fish_active = state.fish_active
 
-            # 1. Fish Targeting
-            # Find the first active fish on the right side (x > 80).
-            is_on_right_side = (fish_pos[:, 0] > 80) & fish_active
+            # Target the last row fish (index 5, y=175)
+            target_fish_idx = 5
+            target_fish_y = cfg.FISH_ROW_YS[target_fish_idx]  # y=175
+            target_fish_x = fish_pos[target_fish_idx, 0]
 
-            # Find the index of the first fish that meets the condition.
-            # jnp.argmax returns the first True index. If none, it returns 0.
-            target_idx = jnp.argmax(is_on_right_side)
-
-            # If no fish is on the right, default to fish 1.
-            # We check if any fish is on the right side. If not, set target to 1.
-            target_idx = jnp.where(jnp.any(is_on_right_side), target_idx, 1)
-
-            target_fish_y = fish_pos[target_idx, 1]
             _, p2_hook_y = self._get_hook_position_p2(cfg.P2_START_X, p2_state)
 
-            # 2. Vertical Movement & 3. Horizontal Movement
-            # The AI decides its action based on its current state (hooked or not).
+            # Rod position relative to P2 start
+            current_rod_length = p2_state.rod_length
+
+            # Define phases based on hook depth and rod position
+            is_going_down = p2_hook_y < target_fish_y  # Still need to go deeper
+            is_at_target_depth = jnp.abs(p2_hook_y - target_fish_y) <= 15  # Near target depth
+
+            # Check if rod needs more extension to reach fish
+            rod_end_x = cfg.P2_START_X - current_rod_length
+            fish_distance_from_p2_start = jnp.abs(target_fish_x - cfg.P2_START_X)
+            needed_rod_length = fish_distance_from_p2_start  # Extra margin
+            needs_more_extension = current_rod_length < jnp.minimum(needed_rod_length, cfg.P2_MAX_ROD_LENGTH_X - 2)
+
+            is_rod_fully_extended = current_rod_length >= cfg.P2_MAX_ROD_LENGTH_X - 3
+            is_rod_retracted = current_rod_length <= cfg.P2_MIN_ROD_LENGTH_X + 5
+
             def fishing_action():
-                # Move hook vertically to match the target fish's depth.
-                # The AI only moves on certain frames to simulate reaction time.
-                frame_check = (state.time & 1) == 0
+                # Phase 1: Going down and extending rod to reach fish
+                phase1_action = jnp.where(
+                    is_going_down & needs_more_extension,
+                    Action.DOWNLEFT,  # Go down and extend rod
+                    jnp.where(
+                        is_going_down & ~needs_more_extension,
+                        Action.DOWN,  # Just go down when rod is positioned
+                        jnp.where(
+                            ~is_going_down & needs_more_extension,
+                            Action.LEFT,  # Just extend rod if not going down
+                            Action.NOOP
+                        )
+                    )
+                )
 
-                action_up = (p2_hook_y > target_fish_y) & frame_check
-                action_down = (p2_hook_y < target_fish_y) & frame_check
+                # Phase 2: At target depth - retract rod and immediately go back up
+                phase2_action = jnp.where(
+                    is_at_target_depth & ~is_rod_retracted,
+                    Action.UPRIGHT,  # Go up and retract rod simultaneously
+                    jnp.where(
+                        is_at_target_depth & is_rod_retracted,
+                        Action.UP,  # Just go up when rod is retracted
+                        Action.NOOP
+                    )
+                )
 
-                # Default to NOOP, then check for UP/DOWN.
-                return jnp.where(action_up, Action.UP, jnp.where(action_down, Action.DOWN, Action.NOOP))
+                # Phase 3: Continue going up until back at surface, then restart cycle
+                phase3_action = jnp.where(
+                    p2_hook_y <= cfg.WATER_Y_START - cfg.ROD_Y ,  # Near surface
+                    Action.NOOP,  # Brief pause at surface before restarting
+                    Action.UP  # Continue going up
+                )
+
+                # Priority: Phase 1 > Phase 2 > Phase 3
+                return jnp.where(
+                    is_going_down | needs_more_extension,
+                    phase1_action,
+                    jnp.where(
+                        is_at_target_depth,
+                        phase2_action,
+                        phase3_action
+                    )
+                )
 
             def reeling_action():
-                # 4. Action Button Simulation (Fast Reeling)
-                # Press FIRE if the shark is on the left side of the screen.
+                # When fish is hooked - move right and use fire for fast reeling
                 is_shark_on_left = state.shark_x < (cfg.SCREEN_WIDTH / 2)
-
-                # Always move RIGHT while reeling, and add FIRE if the shark is on the left.
                 return jnp.where(is_shark_on_left, Action.RIGHTFIRE, Action.RIGHT)
 
-            # Choose action based on whether a fish is hooked.
+            # Choose action based on whether a fish is hooked
             ai_action = jnp.where(p2_state.hooked_fish_idx >= 0, reeling_action(), fishing_action())
             return ai_action
-
         # Player 2 is always controlled by the AI.
         p2_action = strategic_p2_ai()
         state = state._replace(key=key)
@@ -555,8 +591,9 @@ class FishingDerby(JaxEnvironment):
 
             # ======== P2: Wasserwiderstand Hook-X-Offset (spiegeln) =============================
             p2_in_water = p2.hook_y > (cfg.WATER_Y_START - cfg.ROD_Y)
-            rod_end_x_p2 = 155
+            rod_end_x_p2 = cfg.P2_START_X - p2_new_rod_length
             target_hook_x_p2 = rod_end_x_p2
+
             current_hook_x_p2 = cfg.P2_START_X - p2.rod_length + p2.hook_x_offset
             actual_rod_change_p2 = p2_new_rod_length - p2.rod_length
             depth_factor_p2 = jnp.clip((p2.hook_y - (cfg.WATER_Y_START - cfg.ROD_Y)) / cfg.MAX_HOOK_DEPTH_Y, 0.0, 1.0)
