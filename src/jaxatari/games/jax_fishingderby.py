@@ -28,7 +28,7 @@ class GameConfig:
     SCREEN_WIDTH: int = 160
     SCREEN_HEIGHT: int = 210
     SKY_COLOR: Tuple[int, int, int] = (100, 149, 237)
-    WATER_COLOR: Tuple[int, int, int] = (60, 60, 160)
+    WATER_COLOR: Tuple[int, int, int] = (24, 26, 167)
     WATER_Y_START: int = 64
     RESET: int = 18
 
@@ -278,16 +278,55 @@ class FishingDerby(JaxEnvironment):
             all_rewards=self._get_all_rewards(state, state)  # Use _get_all_rewards for info
         )
 
+
     @partial(jax.jit, static_argnums=(0,))
     def step(self, state: GameState, action: int, p2_action: int = -1) -> Tuple[
         FishingDerbyObservation, GameState, chex.Array, bool, FishingDerbyInfo]:
         """Processes one frame of the game and returns the full tuple."""
 
-        # Simple P2 AI: random action if none provided
         key, p2_key = jax.random.split(state.key)
+
+        def strategic_p2_ai():
+            # Get P2's current state
+            p2_hook_x, p2_hook_y = self._get_hook_position_p2(GameConfig.P2_START_X, state.p2)
+            water_surface_y = GameConfig.WATER_Y_START
+            max_depth_y = GameConfig.ROD_Y + GameConfig.MAX_HOOK_DEPTH_Y
+
+            # Check conditions
+            at_max_depth = p2_hook_y >= (max_depth_y - 5)
+            in_water = p2_hook_y > water_surface_y
+            rod_at_max = state.p2.rod_length >= (GameConfig.MAX_ROD_LENGTH_X - 5)
+
+            # Priority conditions
+            go_down = (state.p2.hook_state == 0) & (~at_max_depth) & in_water
+            extend_rod = at_max_depth & (~rod_at_max) & (state.p2.hook_state == 0)
+            rise_slowly = at_max_depth & rod_at_max & (state.p2.hook_state == 0)
+            reel_fish = state.p2.hook_state > 0
+
+            # Action selection with nested jnp.where
+            action = jnp.where(
+                reel_fish,
+                Action.FIRE,  # Fast reel when fish is hooked
+                jnp.where(
+                    go_down,
+                    Action.DOWN,  # Lower hook to bottom
+                    jnp.where(
+                        extend_rod,
+                        Action.LEFT,  # Extend rod left for P2
+                        jnp.where(
+                            rise_slowly,
+                            Action.UP,  # Slowly rise up
+                            Action.NOOP  # Default action
+                        )
+                    )
+                )
+            )
+            return action
+
+        # Use strategic AI instead of random actions
         p2_action = jax.lax.cond(
             p2_action == -1,
-            lambda: jax.random.choice(p2_key, jnp.array([Action.LEFT, Action.RIGHT, Action.NOOP])),
+            strategic_p2_ai,
             lambda: p2_action,
         )
         state = state._replace(key=key)
@@ -358,6 +397,20 @@ class FishingDerby(JaxEnvironment):
             jnp.array([obs.shark_x, obs.score])  # 2 values: shark x, score
         ])
 
+    def _is_fire_action(self, a: int) -> chex.Array:
+        """True for FIRE and any directional FIRE combo (e.g., UPFIRE, RIGHTFIRE...)."""
+        return (
+                (a == Action.FIRE)
+                | (a == Action.UPFIRE)
+                | (a == Action.DOWNFIRE)
+                | (a == Action.LEFTFIRE)
+                | (a == Action.RIGHTFIRE)
+                | (a == Action.UPLEFTFIRE)
+                | (a == Action.UPRIGHTFIRE)
+                | (a == Action.DOWNLEFTFIRE)
+                | (a == Action.DOWNRIGHTFIRE)
+        )
+
     def _step_logic(self, state: GameState, p1_action: int, p2_action: int) -> GameState:
         """The core logic for a single game step, returning only the new state."""
         cfg = self.config
@@ -373,294 +426,201 @@ class FishingDerby(JaxEnvironment):
             return jax.lax.cond(pred, do_set, lambda a: a, arr)
 
         def game_branch(_):
-            # Player 1 state reference
+            # Shorthand
             p1 = state.p1
             p2 = state.p2
 
-            # Fish movement with random direction changes
+            # RNG
             key = state.key
             key, fish_key = jax.random.split(key)
 
-            # Base direction change probability
+            # ==== Fish movement (unverändert zu vorher) =========================================
             base_change_prob = cfg.FISH_BASE_TURN_PROBABILITY
-
-            hooked_fish_idx = state.p1.hooked_fish_idx
-
-            # Create direction change probabilities - higher for hooked fish
+            p1_hooked_idx = state.p1.hooked_fish_idx
             change_probs = jnp.full(cfg.NUM_FISH, base_change_prob)
             change_probs = jnp.where(
-                jnp.arange(cfg.NUM_FISH) == hooked_fish_idx,
-                cfg.HOOKED_FISH_TURN_PROBABILITY,  # Higher chance for hooked fish
+                jnp.arange(cfg.NUM_FISH) == p1_hooked_idx,
+                cfg.HOOKED_FISH_TURN_PROBABILITY,
                 change_probs
             )
-
-            # Fish speeds - faster for hooked fish
             fish_speeds = jnp.full(cfg.NUM_FISH, cfg.FISH_SPEED)
             fish_speeds = jnp.where(
-                jnp.arange(cfg.NUM_FISH) == hooked_fish_idx,
-                cfg.FISH_SPEED * cfg.HOOKED_FISH_SPEED_MULTIPLIER,  # Faster when hooked
+                jnp.arange(cfg.NUM_FISH) == p1_hooked_idx,
+                cfg.FISH_SPEED * cfg.HOOKED_FISH_SPEED_MULTIPLIER,
                 fish_speeds
             )
-
-            # Fish movement with individual speeds
             new_fish_x = state.fish_positions[:, 0] + state.fish_directions * fish_speeds
-
-            # Direction changes: either from hitting boundaries OR random changes with cooldowns
-            # Use same boundaries as shark instead of screen edges
             hit_boundary = (new_fish_x <= cfg.LEFT_BOUNDARY) | (new_fish_x >= cfg.RIGHT_BOUNDARY)
-
-            # Check for random direction changes with cooldown enforcement
             should_change_dir_random = jax.random.uniform(fish_key, (cfg.NUM_FISH,)) < change_probs
-
-            # Apply cooldown logic: fish can only turn if cooldown is 0 OR they hit boundary
             can_turn_due_to_cooldown = state.fish_turn_cooldowns <= 0
-
-            # Fish can turn if: (cooldown expired AND wants to turn randomly) OR hits boundary
             should_change_dir = (can_turn_due_to_cooldown & should_change_dir_random) | hit_boundary
-
-            # Update cooldowns: reset to HOOKED_FISH_TURNING_COOLDOWN when turning, otherwise decrement
             new_cooldowns = jnp.where(
                 should_change_dir,
-                jnp.where(
-                    jnp.arange(cfg.NUM_FISH) == hooked_fish_idx,
-                    cfg.HOOKED_FISH_TURNING_COOLDOWN,  # Reset cooldown for hooked fish that turn
-                    0  # No cooldown for normal fish after boundary collision
-                ),
-                jnp.maximum(0, state.fish_turn_cooldowns - 1)  # Decrement cooldowns
+                jnp.where(jnp.arange(cfg.NUM_FISH) == p1_hooked_idx, cfg.HOOKED_FISH_TURNING_COOLDOWN, 0),
+                jnp.maximum(0, state.fish_turn_cooldowns - 1)
             )
-
-            # Final direction change decision using the cooldown-aware logic
-            change_dir = should_change_dir
-
-            new_fish_dirs = jnp.where(change_dir, -state.fish_directions, state.fish_directions)
-            # Clip fish positions to shark boundaries
+            new_fish_dirs = jnp.where(should_change_dir, -state.fish_directions, state.fish_directions)
             new_fish_x = jnp.clip(new_fish_x, cfg.LEFT_BOUNDARY, cfg.RIGHT_BOUNDARY)
             new_fish_pos = state.fish_positions.at[:, 0].set(new_fish_x)
 
-            # Shark movement
+            # ==== Shark movement (unverändert zu vorher) ========================================
             key, shark_key = jax.random.split(key)
-
-            # Check for random speed burst initiation
             should_start_burst = (state.shark_burst_timer == 0) & (
-                    jax.random.uniform(shark_key) < cfg.SHARK_BURST_CHANCE)
+                        jax.random.uniform(shark_key) < cfg.SHARK_BURST_CHANCE)
             new_burst_timer = jnp.where(should_start_burst, cfg.SHARK_BURST_DURATION, state.shark_burst_timer)
-
-            # Determine current shark speed
             is_bursting = new_burst_timer > 0
             current_shark_speed = jnp.where(is_bursting, cfg.SHARK_BURST_SPEED, cfg.SHARK_SPEED)
-
-            # Random direction changes
             key, shark_dir_key = jax.random.split(key)
-            change_direction_prob = 0.005  # Chance to turn direction randomly
+            change_direction_prob = 0.005
             should_change_dir = jax.random.uniform(shark_dir_key) < change_direction_prob
-
-            # Calculate where shark would move
             potential_shark_x = state.shark_x + state.shark_dir * current_shark_speed
-
-            # Check boundaries and random direction changes
             would_hit_left = potential_shark_x <= cfg.LEFT_BOUNDARY
             would_hit_right = potential_shark_x >= cfg.RIGHT_BOUNDARY
             would_hit_boundary = would_hit_left | would_hit_right
-
-            # Change direction for either boundary hit OR random change
             should_change_direction = would_hit_boundary | should_change_dir
             new_shark_dir = jnp.where(should_change_direction, -state.shark_dir, state.shark_dir)
-
-            # Move with new direction if direction changed, otherwise use original movement
             new_shark_x = jnp.where(
                 should_change_direction,
                 jnp.clip(state.shark_x + new_shark_dir * current_shark_speed, cfg.LEFT_BOUNDARY, cfg.RIGHT_BOUNDARY),
                 jnp.clip(potential_shark_x, cfg.LEFT_BOUNDARY, cfg.RIGHT_BOUNDARY)
             )
-
-            # Update burst timer (decrement if active)
             new_burst_timer = jnp.where(new_burst_timer > 0, new_burst_timer - 1, 0)
 
-            # Player 1 Rod and Hook Logic
-            p1 = state.p1
+            # ======== Gemeinsame Konstanten ======================================================
 
-            # Define hook position limits that will be used throughout
-            min_hook_y = 0.0  # At rod level
-            max_hook_y = cfg.LINE_Y_END - cfg.ROD_Y  # Maximum depth
-            water_surface_hook_y = float(cfg.WATER_Y_START - cfg.ROD_Y)  # Water surface level
+            min_hook_y = 0.0
+            max_hook_y = cfg.LINE_Y_END - cfg.ROD_Y
+            water_surface_hook_y = float(cfg.WATER_Y_START - cfg.ROD_Y)
 
-            # Rod length control (horizontal extension)
+            scoring_hook_y = float(cfg.FISH_SCORING_Y - cfg.ROD_Y)
+
+            # ======== P1: Rod horizontal =========================================================
             rod_change = 0.0
-            # Basic left/right movement
             rod_change = jnp.where(p1_action == Action.RIGHT, +cfg.ROD_SPEED, rod_change)
             rod_change = jnp.where(p1_action == Action.LEFT, -cfg.ROD_SPEED, rod_change)
-
-            # Add support for diagonal movement (also change rod horizontally when diagonal actions are used)
             rod_change = jnp.where(p1_action == Action.UPRIGHT, +cfg.ROD_SPEED, rod_change)
             rod_change = jnp.where(p1_action == Action.DOWNRIGHT, +cfg.ROD_SPEED, rod_change)
             rod_change = jnp.where(p1_action == Action.UPLEFT, -cfg.ROD_SPEED, rod_change)
             rod_change = jnp.where(p1_action == Action.DOWNLEFT, -cfg.ROD_SPEED, rod_change)
-
-            # Fire button diagonal variants
             rod_change = jnp.where(p1_action == Action.UPRIGHTFIRE, +cfg.ROD_SPEED, rod_change)
             rod_change = jnp.where(p1_action == Action.DOWNRIGHTFIRE, +cfg.ROD_SPEED, rod_change)
             rod_change = jnp.where(p1_action == Action.UPLEFTFIRE, -cfg.ROD_SPEED, rod_change)
             rod_change = jnp.where(p1_action == Action.DOWNLEFTFIRE, -cfg.ROD_SPEED, rod_change)
+            new_rod_length = jnp.clip(p1.rod_length + rod_change, cfg.MIN_ROD_LENGTH_X, cfg.MAX_ROD_LENGTH_X)
 
-            new_rod_length = jnp.clip(
-                p1.rod_length + rod_change,
-                cfg.MIN_ROD_LENGTH_X,
-                cfg.MAX_ROD_LENGTH_X
-            )
-
-            # Player 2 Rod Logic
+            # ======== P2: Rod horizontal (spiegelverkehrt) ======================================
             p2_rod_change = 0.0
             p2_rod_change = jnp.where(p2_action == Action.LEFT, +cfg.ROD_SPEED, p2_rod_change)
             p2_rod_change = jnp.where(p2_action == Action.RIGHT, -cfg.ROD_SPEED, p2_rod_change)
-            p2_new_rod_length = jnp.clip(
-                p2.rod_length + p2_rod_change,
-                cfg.MIN_ROD_LENGTH_X,
-                cfg.MAX_ROD_LENGTH_X
-            )
+            p2_new_rod_length = jnp.clip(p2.rod_length + p2_rod_change, cfg.MIN_ROD_LENGTH_X, cfg.MAX_ROD_LENGTH_X)
 
-            # Water resistance physics for horizontal hook movement
-            # Check if hook is in water
-            in_water = p1.hook_y > (cfg.WATER_Y_START - cfg.ROD_Y)
+            # ======== P1: Wasserwiderstand Hook-X-Offset ========================================
+            p1_in_water = p1.hook_y > (cfg.WATER_Y_START - cfg.ROD_Y)
+            rod_end_x_p1 = cfg.P1_START_X + new_rod_length
+            target_hook_x_p1 = rod_end_x_p1
+            current_hook_x_p1 = cfg.P1_START_X + p1.rod_length + p1.hook_x_offset
+            water_resistance_factor = 0.15
+            air_recovery_factor = 0.3
+            smooth_recovery_factor = 0.08
+            actual_rod_change_p1 = new_rod_length - p1.rod_length
+            depth_factor_p1 = jnp.clip((p1.hook_y - (cfg.WATER_Y_START - cfg.ROD_Y)) / cfg.MAX_HOOK_DEPTH_Y, 0.0, 1.0)
+            resistance_multiplier_p1 = 1.0 + depth_factor_p1 * 2.0
 
-            # Calculate water resistance effect on hook horizontal position
-            # When rod moves horizontally, hook lags behind due to water resistance
-            rod_end_x = cfg.P1_START_X + new_rod_length
-            target_hook_x = rod_end_x  # Where hook "wants" to be
-            current_hook_x = cfg.P1_START_X + p1.rod_length + p1.hook_x_offset
-
-            # Water resistance parameters
-            water_resistance_factor = 0.15  # How much the hook resists movement in water
-            air_recovery_factor = 0.3  # How quickly hook returns to rod when above water
-            smooth_recovery_factor = 0.08  # New parameter for smooth transition to straight line
-
-            # Calculate resistance based on rod movement and water depth
-            actual_rod_change = new_rod_length - p1.rod_length  # Only consider actual movement
-            rod_velocity = actual_rod_change  # Use actual movement for physics calculations
-            depth_factor = jnp.clip((p1.hook_y - (cfg.WATER_Y_START - cfg.ROD_Y)) / cfg.MAX_HOOK_DEPTH_Y, 0.0, 1.0)
-            resistance_multiplier = 1.0 + depth_factor * 2.0  # More resistance at deeper depths
-
-            # Apply water resistance when in water, or recovery when above water
-            def apply_water_resistance():
-                # In water: hook lags behind rod movement
-                resistance = water_resistance_factor * resistance_multiplier
-                target_offset = target_hook_x - rod_end_x  # Should be 0 normally
+            def p1_apply_water_resistance():
+                resistance = water_resistance_factor * resistance_multiplier_p1
+                target_offset = target_hook_x_p1 - rod_end_x_p1
                 current_offset = p1.hook_x_offset
-
-                # Is the rod currently moving?
-                is_moving = jnp.abs(actual_rod_change) > 0.01
-
-                # When moving: use normal water resistance physics with lag
-                # When stopped: gradually return to neutral position for smooth transition
-
-                # Calculate new offset for when rod is moving
-                # Direction-aware lag effect for more symmetrical behavior
+                is_moving = jnp.abs(actual_rod_change_p1) > 0.01
                 moving_offset = current_offset + (target_offset - current_offset) * resistance
-                # Determine lag direction and magnitude based on rod movement direction
-                # Ensure lag is symmetric regardless of movement direction
-                rod_moving_right = actual_rod_change > 0
-                rod_moving_left = actual_rod_change < 0
-
-                # Apply consistent lag effect regardless of direction
-                lag_magnitude = jnp.abs(rod_velocity) * 0.8 * resistance_multiplier
-                # Negative lag when moving right, positive lag when moving left
+                rod_moving_right = actual_rod_change_p1 > 0
+                rod_moving_left = actual_rod_change_p1 < 0
+                lag_magnitude = jnp.abs(actual_rod_change_p1) * 0.8 * resistance_multiplier_p1
                 directional_lag = jnp.where(rod_moving_right, -lag_magnitude,
-                                            jnp.where(rod_moving_left, lag_magnitude, 0.0))
-
+                                            jnp.where(rod_moving_left, +lag_magnitude, 0.0))
                 moving_result = moving_offset + directional_lag
-
-                # Calculate new offset for when rod is stationary
                 stationary_result = current_offset * (1.0 - smooth_recovery_factor)
-
-                # Use JAX's where instead of Python if/else
                 return jnp.where(is_moving, moving_result, stationary_result)
 
-            def apply_air_recovery():
-                # Above water: hook quickly returns to directly below rod
+            def p1_apply_air_recovery():
                 return p1.hook_x_offset * (1.0 - air_recovery_factor)
 
-            new_hook_x_offset = jax.lax.cond(in_water, apply_water_resistance, apply_air_recovery)
+            new_hook_x_offset = jax.lax.cond(p1_in_water, p1_apply_water_resistance, p1_apply_air_recovery)
 
-            # Hook vertical movement and auto-lowering logic
-            def auto_lower_hook(_):
-                # Move hook down towards water surface
+            # ======== P2: Wasserwiderstand Hook-X-Offset (spiegeln) =============================
+            p2_in_water = p2.hook_y > (cfg.WATER_Y_START - cfg.ROD_Y)
+            rod_end_x_p2 = cfg.P2_START_X - p2_new_rod_length
+            target_hook_x_p2 = rod_end_x_p2
+            current_hook_x_p2 = cfg.P2_START_X - p2.rod_length + p2.hook_x_offset
+            actual_rod_change_p2 = p2_new_rod_length - p2.rod_length
+            depth_factor_p2 = jnp.clip((p2.hook_y - (cfg.WATER_Y_START - cfg.ROD_Y)) / cfg.MAX_HOOK_DEPTH_Y, 0.0, 1.0)
+            resistance_multiplier_p2 = 1.0 + depth_factor_p2 * 2.0
+
+            def p2_apply_water_resistance():
+                resistance = water_resistance_factor * resistance_multiplier_p2
+                target_offset = target_hook_x_p2 - rod_end_x_p2
+                current_offset = p2.hook_x_offset
+                is_moving = jnp.abs(actual_rod_change_p2) > 0.01
+                moving_offset = current_offset + (target_offset - current_offset) * resistance
+                # Wichtig: Längen-Änderung >0 bedeutet bei P2, dass der Stab NACH LINKS fährt
+                rod_moving_left = actual_rod_change_p2 > 0
+                rod_moving_right = actual_rod_change_p2 < 0
+                lag_magnitude = jnp.abs(actual_rod_change_p2) * 0.8 * resistance_multiplier_p2
+                directional_lag = jnp.where(rod_moving_right, -lag_magnitude,
+                                            jnp.where(rod_moving_left, +lag_magnitude, 0.0))
+                moving_result = moving_offset + directional_lag
+                stationary_result = current_offset * (1.0 - smooth_recovery_factor)
+                return jnp.where(is_moving, moving_result, stationary_result)
+
+            def p2_apply_air_recovery():
+                return p2.hook_x_offset * (1.0 - air_recovery_factor)
+
+            p2_new_hook_x_offset = jax.lax.cond(p2_in_water, p2_apply_water_resistance, p2_apply_air_recovery)
+
+            # ======== P1: Vertikale Hook-Bewegung + Auto-Lower ==================================
+            def p1_auto_lower(_):
                 new_y = p1.hook_y + cfg.AUTO_LOWER_SPEED
-                new_vel_y = 0.0  # Override velocity during auto-lowering
-
-                # Check if hook reached water surface
+                new_vel_y = 0.0
                 hook_reached_water = new_y >= water_surface_hook_y
-                final_state = jnp.where(hook_reached_water, 0, p1.hook_state)  # Return to free state
+                final_state = jnp.where(hook_reached_water, 0, p1.hook_state)
                 final_y = jnp.where(hook_reached_water, water_surface_hook_y, new_y)
-
                 return final_y, new_vel_y, final_state
 
-            def normal_hook_movement(_):
-                # Normal hook movement (only when free - hook_state == 0)
+            def p1_normal(_):
                 can_move_vertically = (p1.hook_state == 0)
-
-                # Handle basic up/down movement
                 change = jnp.where(can_move_vertically & (p1_action == Action.DOWN), +cfg.Acceleration, 0.0)
                 change = jnp.where(can_move_vertically & (p1_action == Action.UP), -cfg.Acceleration, change)
-
-                # Handle diagonal movements with same vertical component
                 change = jnp.where(can_move_vertically & ((p1_action == Action.DOWNLEFT) |
                                                           (p1_action == Action.DOWNRIGHT)), +cfg.Acceleration, change)
                 change = jnp.where(can_move_vertically & ((p1_action == Action.UPLEFT) |
                                                           (p1_action == Action.UPRIGHT)), -cfg.Acceleration, change)
-
-                # Update hook velocity with damping
                 new_vel_y = p1.hook_velocity_y * cfg.Damping + change
-
-                # Calculate hook position limits - prevent going above water surface
-                min_y = float(cfg.START_HOOK_DEPTH_Y)  # Water surface level, not rod level
-                max_y = float(cfg.MAX_HOOK_DEPTH_Y)  # Maximum depth to reach bottom fish
-
-                # Update hook position
-                new_y = jnp.clip(
-                    p1.hook_y + new_vel_y,
-                    min_y,
-                    max_y
-                )
-
-                # Kill velocity if hitting bounds
-                final_vel_y = jnp.where(
-                    (new_y == min_y) | (new_y == max_y),
-                    0.0,
-                    new_vel_y
-                )
-
+                min_y = float(cfg.START_HOOK_DEPTH_Y)
+                max_y = float(cfg.MAX_HOOK_DEPTH_Y)
+                new_y = jnp.clip(p1.hook_y + new_vel_y, min_y, max_y)
+                final_vel_y = jnp.where((new_y == min_y) | (new_y == max_y), 0.0, new_vel_y)
                 return new_y, final_vel_y, p1.hook_state
 
-            # Choose between auto-lowering and normal movement
             new_hook_y, new_hook_velocity_y, p1_hook_state = jax.lax.cond(
-                p1.hook_state == 3,
-                auto_lower_hook,
-                normal_hook_movement,
-                operand=None
+                p1.hook_state == 3, p1_auto_lower, p1_normal, operand=None
             )
 
-            # Get actual hook position in world coordinates
+            # P1 Hook-Position (Weltkoordinaten)
             hook_x, hook_y = self._get_hook_position(cfg.P1_START_X, PlayerState(
-                rod_length=new_rod_length,
-                hook_y=new_hook_y,
-                score=p1.score,
-                hook_state=p1_hook_state,
-                hooked_fish_idx=p1.hooked_fish_idx,
-                hook_velocity_y=new_hook_velocity_y,
+                rod_length=new_rod_length, hook_y=new_hook_y, score=p1.score, hook_state=p1_hook_state,
+                hooked_fish_idx=p1.hooked_fish_idx, hook_velocity_y=new_hook_velocity_y,
                 hook_x_offset=new_hook_x_offset,
-                display_score=p1.display_score,
-                score_animation_timer=p1.score_animation_timer,
+                display_score=p1.display_score, score_animation_timer=p1.score_animation_timer,
                 line_segments_x=p1.line_segments_x
             ))
 
-            # Collision and Game Logic
-            fish_active, reeling_priority = state.fish_active, state.reeling_priority
-            can_hook = (p1_hook_state == 0)  # Use updated hook state
-            hook_collides_fish = (jnp.abs(new_fish_pos[:, 0] - hook_x) < cfg.FISH_WIDTH) & (
-                    jnp.abs(new_fish_pos[:, 1] - hook_y) < cfg.FISH_HEIGHT)
+            # ======== Kollisionslogik / Einhaken P1 =============================================
+            fish_active = state.fish_active
+            reeling_priority = state.reeling_priority
+            can_hook = (p1_hook_state == 0)
+            hook_collides_fish = (jnp.abs(new_fish_pos[:, 0] - hook_x) < cfg.FISH_WIDTH) & \
+                                 (jnp.abs(new_fish_pos[:, 1] - hook_y) < cfg.FISH_HEIGHT)
             valid_hook_targets = can_hook & fish_active & hook_collides_fish
-
             hooked_fish_idx, did_hook_fish = jnp.argmax(valid_hook_targets), jnp.any(valid_hook_targets)
-
             p1_hook_state = jnp.where(did_hook_fish, 1, p1_hook_state)
             p1_hooked_fish_idx = jnp.where(did_hook_fish, hooked_fish_idx, p1.hooked_fish_idx)
             fish_active = fish_active.at[hooked_fish_idx].set(
@@ -668,264 +628,337 @@ class FishingDerby(JaxEnvironment):
             )
             reeling_priority = jnp.where(did_hook_fish & (reeling_priority == -1), 0, reeling_priority)
 
-            # Fast reel with FIRE button
-            can_reel_fast = (p1_action == Action.FIRE) & (p1_hook_state == 1) & (
-                    (reeling_priority == -1) | (reeling_priority == 0))
+            # P1 Fast Reel
+            p1_fire_pressed = self._is_fire_action(p1_action)
+            can_reel_fast = (p1_fire_pressed) & (p1_hook_state >= 1) & (
+                    (reeling_priority == -1) | (reeling_priority == 0)
+            )
             p1_hook_state = jnp.where(can_reel_fast, 2, p1_hook_state)
             reeling_priority = jnp.where(can_reel_fast, 0, reeling_priority)
 
-            # Reeling mechanics (moves hook upward toward rod)
-            reel_speed = jnp.where(p1_hook_state == 2, cfg.REEL_FAST_SPEED, cfg.REEL_SLOW_SPEED)
-
-            # Calculate the minimum Y position for reeling (scoring line relative to rod)
-            scoring_hook_y = cfg.FISH_SCORING_Y - cfg.ROD_Y  # min Y while reeling
-            can_reel = p1_hooked_fish_idx >= 0  # only if a fish is actually hooked
-
+            # Reeling mechanics
             tick_slow = (jnp.bitwise_and(state.time, cfg.SLOW_REEL_PERIOD - 1) == 0)
-            reel_tick = jnp.where(p1_hook_state == 2, True, tick_slow)  # fast reel ticks every frame
-            reel_step = jnp.where(p1_hook_state > 0, 1.0, 0.0)  # 1 px per tick
-
+            reel_tick = jnp.where(p1_hook_state == 2, True, tick_slow)  # fast: jedes Frame
+            reel_step = jnp.where(p1_hook_state == 2, cfg.REEL_FAST_SPEED, cfg.REEL_SLOW_SPEED)
             new_hook_y = jnp.where(
-                (reel_tick & can_reel),
+                (reel_tick & (p1_hooked_fish_idx >= 0) & (p1_hook_state > 0)),
                 jnp.clip(new_hook_y - reel_step, scoring_hook_y, max_hook_y),
                 new_hook_y
             )
-
-            # Update hook position after reeling
+            # Aktualisierte P1-Hook-Position
             hook_x, hook_y = self._get_hook_position(cfg.P1_START_X, PlayerState(
-                rod_length=new_rod_length,
-                hook_y=new_hook_y,
-                score=p1.score,
-                hook_state=p1_hook_state,
-                hooked_fish_idx=p1_hooked_fish_idx,
-                hook_velocity_y=new_hook_velocity_y,
+                rod_length=new_rod_length, hook_y=new_hook_y, score=p1.score, hook_state=p1_hook_state,
+                hooked_fish_idx=p1_hooked_fish_idx, hook_velocity_y=new_hook_velocity_y,
                 hook_x_offset=new_hook_x_offset,
-                display_score=p1.display_score,
-                score_animation_timer=p1.score_animation_timer,
-                line_segments_x=p1.line_segments_x  # Add missing field
+                display_score=p1.display_score, score_animation_timer=p1.score_animation_timer,
+                line_segments_x=p1.line_segments_x
             ))
 
-            # Hooked fish continues swimming normally, hook follows fish
+            # ======== Wenn P1 eine Fisch hat: Fisch folgt / Grenzen / Wobble ====================
             has_hook = (p1_hook_state > 0) & (p1_hooked_fish_idx >= 0)
 
-            def update_hooked_fish_and_hook():
+            def p1_update_hooked():
                 fish_idx = p1_hooked_fish_idx
                 fish_x, fish_y = new_fish_pos[fish_idx, 0], new_fish_pos[fish_idx, 1]
                 fish_dir = new_fish_dirs[fish_idx]
-
-                # Hook position at this moment (for Y follow + hook lerp to fish X)
                 hx, hy = self._get_hook_position(cfg.P1_START_X, PlayerState(
-                    rod_length=new_rod_length, hook_y=new_hook_y, hook_x_offset=new_hook_x_offset,
-                    score=0, hook_state=0, hooked_fish_idx=-1, hook_velocity_y=0, display_score=0,
-                    score_animation_timer=0, line_segments_x=jnp.zeros(8)
+                    rod_length=new_rod_length, hook_y=new_hook_y, score=0, hook_state=0, hooked_fish_idx=-1,
+                    hook_velocity_y=0, hook_x_offset=new_hook_x_offset, display_score=0, score_animation_timer=0,
+                    line_segments_x=jnp.zeros(8)
                 ))
-
-                # Fish movement logic (wobble, etc.)
                 depth_ratio = jnp.clip((hy - cfg.WATER_Y_START) / (cfg.MAX_HOOK_DEPTH_Y), 0.0, 1.0)
                 wobble_freq = cfg.WOBBLE_FREQ_BASE + depth_ratio * cfg.WOBBLE_FREQ_RANGE
                 wobble_amp = cfg.WOBBLE_AMP_BASE + depth_ratio * cfg.WOBBLE_AMP_RANGE
                 wobble_dx = jnp.sin(state.time * wobble_freq) * wobble_amp
                 base_dx = fish_dir * cfg.FISH_SPEED * cfg.HOOKED_FISH_SPEED_MULTIPLIER
-
-                # Total per-frame dx, tightly capped
                 total_dx = jnp.clip(base_dx + wobble_dx, -cfg.MAX_HOOKED_WOBBLE_DX, cfg.MAX_HOOKED_WOBBLE_DX)
                 potential_new_x = fish_x + total_dx
+                rod_end_x_local = cfg.P1_START_X + new_rod_length
+                boundary_min = jnp.maximum(rod_end_x_local - cfg.HOOKED_FISH_BOUNDARY_PADDING, cfg.LEFT_BOUNDARY)
+                boundary_max = jnp.minimum(rod_end_x_local + cfg.HOOKED_FISH_BOUNDARY_PADDING, cfg.RIGHT_BOUNDARY)
 
-                # Calculate boundaries based on hook position and configuration
-                rod_end_x = cfg.P1_START_X + new_rod_length  # Use rod end, not hook position
-                boundary_min = rod_end_x - cfg.HOOKED_FISH_BOUNDARY_PADDING
-                boundary_max = rod_end_x + cfg.HOOKED_FISH_BOUNDARY_PADDING
-
-                # Also respect global boundaries
-                boundary_min = jnp.maximum(boundary_min, cfg.LEFT_BOUNDARY)
-                boundary_max = jnp.minimum(boundary_max, cfg.RIGHT_BOUNDARY)
-
-                # Smooth boundary handling with elastic collision
                 def apply_hooked_boundaries():
-                    # Check if fish is approaching boundaries
-                    distance_to_left = potential_new_x - boundary_min
-                    distance_to_right = boundary_max - potential_new_x
-
-                    # Smooth bounce zone - fish slows down and bounces as it approaches boundary
-                    bounce_zone = 2.0  # pixels from boundary where bounce effect starts
-
-                    # Calculate bounce effects
-                    left_bounce_factor = jnp.where(distance_to_left < bounce_zone,
-                                                   (distance_to_left / bounce_zone) * 0.5 + 0.5, 1.0)
-                    right_bounce_factor = jnp.where(distance_to_right < bounce_zone,
-                                                    (distance_to_right / bounce_zone) * 0.5 + 0.5, 1.0)
-
-                    # Apply boundary effects
                     would_hit_left = potential_new_x <= boundary_min
                     would_hit_right = potential_new_x >= boundary_max
-
-                    # Smooth direction change with dampening near boundaries
-                    direction_factor = left_bounce_factor * right_bounce_factor
-                    new_direction = jnp.where(would_hit_left | would_hit_right, -fish_dir, fish_dir)
-
-                    # Constrain position with slight elastic effect
                     constrained_x = jnp.clip(potential_new_x, boundary_min, boundary_max)
-
-                    # Add small elastic push back from boundaries for smoother movement
-                    elastic_push = 0.0
-                    elastic_push = jnp.where(would_hit_left, 0.5, elastic_push)
-                    elastic_push = jnp.where(would_hit_right, -0.5, elastic_push)
-
-                    final_x = constrained_x + elastic_push
-
-                    return final_x, new_direction
+                    new_direction = jnp.where(would_hit_left | would_hit_right, -fish_dir, fish_dir)
+                    elastic_push = jnp.where(would_hit_left, 0.5, jnp.where(would_hit_right, -0.5, 0.0))
+                    return constrained_x + elastic_push, new_direction
 
                 def apply_global_boundaries():
-                    # Use original global boundary logic with smooth bouncing
                     would_hit_left = potential_new_x <= cfg.LEFT_BOUNDARY
                     would_hit_right = potential_new_x >= cfg.RIGHT_BOUNDARY
-
                     constrained_x = jnp.clip(potential_new_x, cfg.LEFT_BOUNDARY, cfg.RIGHT_BOUNDARY)
                     new_direction = jnp.where(would_hit_left | would_hit_right, -fish_dir, fish_dir)
-
                     return constrained_x, new_direction
 
                 new_x, new_fish_direction = jax.lax.cond(
-                    cfg.HOOKED_FISH_BOUNDARY_ENABLED,
-                    apply_hooked_boundaries,
-                    apply_global_boundaries
+                    cfg.HOOKED_FISH_BOUNDARY_ENABLED, apply_hooked_boundaries, apply_global_boundaries
                 )
-
-                # Fish's vertical position is now relative to the hook's Y
-                new_y = hy - (cfg.FISH_HEIGHT / 2.0)
-
-                # Write back fish position and direction
                 updated_pos = new_fish_pos.at[fish_idx, 0].set(new_x)
                 updated_pos = updated_pos.at[fish_idx, 1].set(hy - cfg.FISH_HEIGHT / 2.0)
                 updated_dirs = new_fish_dirs.at[fish_idx].set(new_fish_direction)
 
-                # Hook's target X should be the fish's mouth
                 is_facing_right = new_fish_direction > 0
                 mouth_x_offset = jnp.where(is_facing_right, cfg.FISH_WIDTH, 0.0)
                 hook_target_x = new_x + mouth_x_offset
+                rod_end_x_local = cfg.P1_START_X + new_rod_length
+                new_offset = hook_target_x - rod_end_x_local
 
-                # Calculate the rod end position correctly
-                rod_end_x = cfg.P1_START_X + new_rod_length
-                new_offset = hook_target_x - rod_end_x
-
-                # Position fish so hook appears at its mouth
-                # Fish sprite position should be offset so hook aligns with mouth
-                fish_mouth_y_offset = cfg.FISH_HEIGHT / 2.0  # Middle of fish vertically
-
-
-                # Occasional downward tug when NOT reeling on this frame
                 row_idx = jnp.clip(fish_idx, 0, len(cfg.FISH_PULL_PER_ROW) - 1).astype(jnp.int32)
                 fish_pull = jnp.array(cfg.FISH_PULL_PER_ROW)[row_idx]
                 tug_key = jax.random.fold_in(state.key, state.time * 31 + fish_idx)
                 do_tug = (jax.random.uniform(tug_key) < (0.08 + 0.04 * depth_ratio)) & (~reel_tick)
                 tug_amount = jnp.where(do_tug, fish_pull, 0.0)
-
                 return updated_pos, updated_dirs, new_offset, tug_amount
 
-            tug_amount = jnp.array(0.0)
-            new_fish_pos, new_fish_dirs, new_hook_x_offset, tug_amount = jax.lax.cond(
-                has_hook,
-                lambda _: update_hooked_fish_and_hook(),
-                lambda _: (new_fish_pos, new_fish_dirs, new_hook_x_offset, jnp.array(0.0)),
+            tug_amount_p1 = jnp.array(0.0)
+            new_fish_pos, new_fish_dirs, new_hook_x_offset, tug_amount_p1 = jax.lax.cond(
+                has_hook, lambda _: p1_update_hooked(), lambda _: (new_fish_pos, new_fish_dirs, new_hook_x_offset, 0.0),
                 operand=None
             )
+            new_hook_y = jnp.clip(new_hook_y + tug_amount_p1, 0.0, max_hook_y)
 
-            # Apply tug (down) but never below max depth
-            new_hook_y = jnp.clip(new_hook_y + tug_amount, 0.0, max_hook_y)
-
-            # Scoring and collision detection
-            p1_score, key = p1.score, state.key
-
-            # Get the correct position of the hooked fish for collision detection
+            # ======== P1 Scoring / Shark-Kollision ==============================================
+            p1_score = p1.score
             has_hooked_fish = (p1_hook_state > 0) & (p1_hooked_fish_idx >= 0)
-            fish_idx = p1_hooked_fish_idx
 
-            # Use updated fish position for collision detection
-            def get_fish_position():
-                return new_fish_pos[fish_idx, 0], new_fish_pos[fish_idx, 1]
+            def p1_fpos():
+                return new_fish_pos[p1_hooked_fish_idx, 0], new_fish_pos[p1_hooked_fish_idx, 1]
 
-            fish_x, fish_y = jax.lax.cond(
-                has_hooked_fish,
-                get_fish_position,
-                lambda: (0.0, 0.0)
-            )
-
-            # More robust AABB collision check between shark and hooked fish
-            # Expand collision boxes slightly to prevent fish slipping through
+            fish_x_p1, fish_y_p1 = jax.lax.cond(has_hooked_fish, p1_fpos, lambda: (0.0, 0.0))
             collision_padding = 2.0
-            fish_half_width = (cfg.FISH_WIDTH + collision_padding) / 2
-            fish_half_height = (cfg.FISH_HEIGHT + collision_padding) / 2
-            shark_half_width = (cfg.SHARK_WIDTH + collision_padding) / 2
-            shark_half_height = (cfg.SHARK_HEIGHT + collision_padding) / 2
-
-            # Calculate fish center
-            fish_center_x = fish_x + cfg.FISH_WIDTH / 2
-            fish_center_y = fish_y + cfg.FISH_HEIGHT / 2
-
-            # Calculate shark center
+            fish_half_w = (cfg.FISH_WIDTH + collision_padding) / 2
+            fish_half_h = (cfg.FISH_HEIGHT + collision_padding) / 2
+            shark_half_w = (cfg.SHARK_WIDTH + collision_padding) / 2
+            shark_half_h = (cfg.SHARK_HEIGHT + collision_padding) / 2
+            fish_center_x = fish_x_p1 + cfg.FISH_WIDTH / 2
+            fish_center_y = fish_y_p1 + cfg.FISH_HEIGHT / 2
             shark_center_x = new_shark_x + cfg.SHARK_WIDTH / 2
             shark_center_y = cfg.SHARK_Y + cfg.SHARK_HEIGHT / 2
+            collides_x = jnp.abs(fish_center_x - shark_center_x) < (fish_half_w + shark_half_w)
+            collides_y = jnp.abs(fish_center_y - shark_center_y) < (fish_half_h + shark_half_h)
+            shark_collides_p1 = has_hooked_fish & collides_x & collides_y
 
-            # AABB collision with expanded boundaries
-            collides_x = jnp.abs(fish_center_x - shark_center_x) < (fish_half_width + shark_half_width)
-            collides_y = jnp.abs(fish_center_y - shark_center_y) < (fish_half_height + shark_half_height)
-            shark_collides = has_hooked_fish & collides_x & collides_y
+            scored_fish_p1 = (p1_hook_state > 0) & (hook_y <= cfg.FISH_SCORING_Y)
+            reset_hook_p1 = shark_collides_p1 | scored_fish_p1
 
-            scored_fish = (p1_hook_state > 0) & (hook_y <= cfg.FISH_SCORING_Y)  # Fish reaches near the rod
-            reset_hook = shark_collides | scored_fish
-
-            # Handle scoring and update fish state
-            prev_idx = p1_hooked_fish_idx
+            prev_idx_p1 = p1_hooked_fish_idx
             fish_scores = jnp.array(cfg.FISH_ROW_SCORES)
-            p1_score += jnp.where(scored_fish, fish_scores[p1_hooked_fish_idx], 0)
+            p1_score += jnp.where(scored_fish_p1, fish_scores[p1_hooked_fish_idx], 0)
+            animation_speed = 2
+            score_increased_p1 = scored_fish_p1
+            new_animation_timer_p1 = jnp.where(score_increased_p1, animation_speed,
+                                               jnp.where(p1.score_animation_timer > 0, p1.score_animation_timer - 1, 0))
+            should_inc_disp_p1 = (new_animation_timer_p1 == 0) & (p1.display_score < p1_score)
+            new_display_score_p1 = jnp.where(should_inc_disp_p1, p1.display_score + 1, p1.display_score)
+            new_animation_timer_p1 = jnp.where(should_inc_disp_p1 & (new_display_score_p1 < p1_score),
+                                               animation_speed, new_animation_timer_p1)
 
-            animation_speed = 2  # Frames between score increments
-
-            # Check if score changed (fish was caught)
-            score_increased = scored_fish
-            new_animation_timer = jnp.where(score_increased, animation_speed,
-                                            jnp.where(p1.score_animation_timer > 0, p1.score_animation_timer - 1, 0))
-
-            # Update display score when timer reaches 0 and display_score < actual_score
-            should_increment_display = (new_animation_timer == 0) & (p1.display_score < p1_score)
-            new_display_score = jnp.where(should_increment_display, p1.display_score + 1, p1.display_score)
-
-            # Reset timer for next increment if we still need to catch up
-            new_animation_timer = jnp.where(should_increment_display & (new_display_score < p1_score),
-                                            animation_speed, new_animation_timer)
-
-            # Fish respawn logic - simpler version
-            def respawn_fish(all_pos, all_dirs, idx, key):
-                kx, kdir = jax.random.split(key)
-                # Use shark boundaries for fish respawn instead of screen width
+            def respawn_fish(all_pos, all_dirs, idx, key_local):
+                kx, kdir = jax.random.split(key_local)
                 new_x = jax.random.uniform(kx, minval=cfg.LEFT_BOUNDARY, maxval=cfg.RIGHT_BOUNDARY)
                 new_y = jnp.array(cfg.FISH_ROW_YS, dtype=jnp.float32)[idx]
                 new_pos = all_pos.at[idx].set(jnp.array([new_x, new_y]))
                 new_dir = all_dirs.at[idx].set(jax.random.choice(kdir, jnp.array([-1.0, 1.0])))
                 return new_pos, new_dir
 
-            key, respawn_key = jax.random.split(key)
-            do_respawn = reset_hook & (prev_idx >= 0)
+            key, respawn_key_p1 = jax.random.split(key)
+            do_respawn_p1 = reset_hook_p1 & (prev_idx_p1 >= 0)
             new_fish_pos, new_fish_dirs = jax.lax.cond(
-                do_respawn,
-                lambda _: respawn_fish(new_fish_pos, new_fish_dirs, prev_idx, respawn_key),
+                do_respawn_p1,
+                lambda _: respawn_fish(new_fish_pos, new_fish_dirs, prev_idx_p1, respawn_key_p1),
                 lambda _: (new_fish_pos, new_fish_dirs),
                 operand=None
             )
+            p1_hook_state = jnp.where(reset_hook_p1, 3, p1_hook_state)
+            p1_hooked_fish_idx = jnp.where(reset_hook_p1, -1, p1_hooked_fish_idx)
+            fish_active = jnp.where(do_respawn_p1, fish_active.at[prev_idx_p1].set(True), fish_active)
 
-            # Reset hook state and fish activity when hook is reset
-            p1_hook_state = jnp.where(reset_hook, 3, p1_hook_state)  # Set to auto-lowering state
-            p1_hooked_fish_idx = jnp.where(reset_hook, -1, p1_hooked_fish_idx)  # Clear hooked fish
+            # ======== P2: Vertikale Hook-Bewegung + Auto-Lower ==================================
+            def p2_auto_lower(_):
+                new_y = p2.hook_y + cfg.AUTO_LOWER_SPEED
+                new_vel_y = 0.0
+                hook_reached_water = new_y >= water_surface_hook_y
+                final_state = jnp.where(hook_reached_water, 0, p2.hook_state)
+                final_y = jnp.where(hook_reached_water, water_surface_hook_y, new_y)
+                return final_y, new_vel_y, final_state
 
-            # CRITICAL FIX: Reactivate the fish when it's scored/eaten by shark
-            fish_active = jnp.where(
-                do_respawn,
-                fish_active.at[prev_idx].set(True),
-                fish_active
+            def p2_normal(_):
+                can_move_vertically = (p2.hook_state == 0)
+                change = jnp.where(can_move_vertically & (p2_action == Action.DOWN), +cfg.Acceleration, 0.0)
+                change = jnp.where(can_move_vertically & (p2_action == Action.UP), -cfg.Acceleration, change)
+                change = jnp.where(can_move_vertically & ((p2_action == Action.DOWNLEFT) |
+                                                          (p2_action == Action.DOWNRIGHT)), +cfg.Acceleration, change)
+                change = jnp.where(can_move_vertically & ((p2_action == Action.UPLEFT) |
+                                                          (p2_action == Action.UPRIGHT)), -cfg.Acceleration, change)
+                new_vel_y = p2.hook_velocity_y * cfg.Damping + change
+                min_y = float(cfg.START_HOOK_DEPTH_Y)
+                max_y = float(cfg.MAX_HOOK_DEPTH_Y)
+                new_y = jnp.clip(p2.hook_y + new_vel_y, min_y, max_y)
+                final_vel_y = jnp.where((new_y == min_y) | (new_y == max_y), 0.0, new_vel_y)
+                return new_y, final_vel_y, p2.hook_state
+
+            p2_new_hook_y, p2_new_hook_velocity_y, p2_hook_state = jax.lax.cond(
+                p2.hook_state == 3, p2_auto_lower, p2_normal, operand=None
             )
 
-            game_over = (p1_score >= 99) | (state.p2.score >= 99)
+            # P2 Hook-Position
+            p2_hook_x, p2_hook_y = self._get_hook_position_p2(cfg.P2_START_X, PlayerState(
+                rod_length=p2_new_rod_length, hook_y=p2_new_hook_y, score=p2.score, hook_state=p2_hook_state,
+                hooked_fish_idx=p2.hooked_fish_idx, hook_velocity_y=p2_new_hook_velocity_y,
+                hook_x_offset=p2_new_hook_x_offset, display_score=p2.display_score,
+                score_animation_timer=p2.score_animation_timer, line_segments_x=p2.line_segments_x
+            ))
 
+            # ======== P2: Kollisionslogik / Einhaken ============================================
+            can_hook_p2 = (p2_hook_state == 0)
+            hook_collides_fish_p2 = (jnp.abs(new_fish_pos[:, 0] - p2_hook_x) < cfg.FISH_WIDTH) & \
+                                    (jnp.abs(new_fish_pos[:, 1] - p2_hook_y) < cfg.FISH_HEIGHT)
+            valid_targets_p2 = can_hook_p2 & fish_active & hook_collides_fish_p2
+            p2_hooked_idx, p2_did_hook = jnp.argmax(valid_targets_p2), jnp.any(valid_targets_p2)
+            p2_hook_state = jnp.where(p2_did_hook, 1, p2_hook_state)
+            p2_hooked_fish_idx = jnp.where(p2_did_hook, p2_hooked_idx, p2.hooked_fish_idx)
+            fish_active = fish_active.at[p2_hooked_idx].set(
+                jnp.where(p2_did_hook, False, fish_active[p2_hooked_idx])
+            )
+            reeling_priority = jnp.where(p2_did_hook & (reeling_priority == -1), 1, reeling_priority)
+
+            # P2 Fast Reel
+            p2_fire_pressed = self._is_fire_action(p2_action)
+            can_reel_fast_p2 = (p2_fire_pressed) & (p2_hook_state == 1) & (
+                    (reeling_priority == -1) | (reeling_priority == 1)
+            )
+            p2_hook_state = jnp.where(can_reel_fast_p2, 2, p2_hook_state)
+            reeling_priority = jnp.where(can_reel_fast_p2, 1, reeling_priority)
+
+            # P2 Einholen
+            tick_slow_p2 = (jnp.bitwise_and(state.time, cfg.SLOW_REEL_PERIOD - 1) == 0)
+            reel_tick_p2 = jnp.where(p2_hook_state == 2, True, tick_slow_p2)
+            reel_step_p2 = jnp.where(p2_hook_state > 0, 1.0, 0.0)
+            p2_new_hook_y = jnp.where(
+                (reel_tick_p2 & (p2_hooked_fish_idx >= 0)),
+                jnp.clip(p2_new_hook_y - reel_step_p2, scoring_hook_y, max_hook_y),
+                p2_new_hook_y
+            )
+            # Aktualisierte P2-Hook-Position
+            p2_hook_x, p2_hook_y = self._get_hook_position_p2(cfg.P2_START_X, PlayerState(
+                rod_length=p2_new_rod_length, hook_y=p2_new_hook_y, score=p2.score, hook_state=p2_hook_state,
+                hooked_fish_idx=p2_hooked_fish_idx, hook_velocity_y=p2_new_hook_velocity_y,
+                hook_x_offset=p2_new_hook_x_offset, display_score=p2.display_score,
+                score_animation_timer=p2.score_animation_timer, line_segments_x=p2.line_segments_x
+            ))
+
+            # ======== Wenn P2 eine Fisch hat: Fisch folgt =======================================
+            p2_has_hook = (p2_hook_state > 0) & (p2_hooked_fish_idx >= 0)
+
+            def p2_update_hooked():
+                fish_idx = p2_hooked_fish_idx
+                fish_x, fish_y = new_fish_pos[fish_idx, 0], new_fish_pos[fish_idx, 1]
+                fish_dir = new_fish_dirs[fish_idx]
+                hx, hy = self._get_hook_position_p2(cfg.P2_START_X, PlayerState(
+                    rod_length=p2_new_rod_length, hook_y=p2_new_hook_y, score=0, hook_state=0, hooked_fish_idx=-1,
+                    hook_velocity_y=0, hook_x_offset=p2_new_hook_x_offset, display_score=0, score_animation_timer=0,
+                    line_segments_x=jnp.zeros(8)
+                ))
+                depth_ratio = jnp.clip((hy - cfg.WATER_Y_START) / (cfg.MAX_HOOK_DEPTH_Y), 0.0, 1.0)
+                wobble_freq = cfg.WOBBLE_FREQ_BASE + depth_ratio * cfg.WOBBLE_FREQ_RANGE
+                wobble_amp = cfg.WOBBLE_AMP_BASE + depth_ratio * cfg.WOBBLE_AMP_RANGE
+                wobble_dx = jnp.sin(state.time * wobble_freq) * wobble_amp
+                base_dx = fish_dir * cfg.FISH_SPEED * cfg.HOOKED_FISH_SPEED_MULTIPLIER
+                total_dx = jnp.clip(base_dx + wobble_dx, -cfg.MAX_HOOKED_WOBBLE_DX, cfg.MAX_HOOKED_WOBBLE_DX)
+                potential_new_x = fish_x + total_dx
+                rod_end_x_local = cfg.P2_START_X - p2_new_rod_length
+                boundary_min = jnp.maximum(rod_end_x_local - cfg.HOOKED_FISH_BOUNDARY_PADDING, cfg.LEFT_BOUNDARY)
+                boundary_max = jnp.minimum(rod_end_x_local + cfg.HOOKED_FISH_BOUNDARY_PADDING, cfg.RIGHT_BOUNDARY)
+
+                def apply_hooked_boundaries():
+                    would_hit_left = potential_new_x <= boundary_min
+                    would_hit_right = potential_new_x >= boundary_max
+                    constrained_x = jnp.clip(potential_new_x, boundary_min, boundary_max)
+                    new_direction = jnp.where(would_hit_left | would_hit_right, -fish_dir, fish_dir)
+                    elastic_push = jnp.where(would_hit_left, 0.5, jnp.where(would_hit_right, -0.5, 0.0))
+                    return constrained_x + elastic_push, new_direction
+
+                def apply_global_boundaries():
+                    would_hit_left = potential_new_x <= cfg.LEFT_BOUNDARY
+                    would_hit_right = potential_new_x >= cfg.RIGHT_BOUNDARY
+                    constrained_x = jnp.clip(potential_new_x, cfg.LEFT_BOUNDARY, cfg.RIGHT_BOUNDARY)
+                    new_direction = jnp.where(would_hit_left | would_hit_right, -fish_dir, fish_dir)
+                    return constrained_x, new_direction
+
+                new_x, new_fish_direction = jax.lax.cond(
+                    cfg.HOOKED_FISH_BOUNDARY_ENABLED, apply_hooked_boundaries, apply_global_boundaries
+                )
+                updated_pos = new_fish_pos.at[fish_idx, 0].set(new_x)
+                updated_pos = updated_pos.at[fish_idx, 1].set(hy - cfg.FISH_HEIGHT / 2.0)
+                updated_dirs = new_fish_dirs.at[fish_idx].set(new_fish_direction)
+
+                is_facing_right = new_fish_direction > 0
+                mouth_x_offset = jnp.where(is_facing_right, cfg.FISH_WIDTH, 0.0)
+                hook_target_x = new_x + mouth_x_offset
+                rod_end_x_local = cfg.P2_START_X - p2_new_rod_length
+                new_offset = hook_target_x - rod_end_x_local
+
+                row_idx = jnp.clip(fish_idx, 0, len(cfg.FISH_PULL_PER_ROW) - 1).astype(jnp.int32)
+                fish_pull = jnp.array(cfg.FISH_PULL_PER_ROW)[row_idx]
+                tug_key = jax.random.fold_in(state.key, state.time * 37 + 100 + fish_idx)
+                do_tug = (jax.random.uniform(tug_key) < (0.08 + 0.04 * depth_ratio)) & (~reel_tick_p2)
+                tug_amount = jnp.where(do_tug, fish_pull, 0.0)
+                return updated_pos, updated_dirs, new_offset, tug_amount
+
+            tug_amount_p2 = jnp.array(0.0)
+            new_fish_pos, new_fish_dirs, p2_new_hook_x_offset, tug_amount_p2 = jax.lax.cond(
+                p2_has_hook, lambda _: p2_update_hooked(),
+                lambda _: (new_fish_pos, new_fish_dirs, p2_new_hook_x_offset, 0.0),
+                operand=None
+            )
+            p2_new_hook_y = jnp.clip(p2_new_hook_y + tug_amount_p2, 0.0, max_hook_y)
+
+            # ======== P2 Scoring / Shark-Kollision ==============================================
+            p2_score = p2.score
+            p2_has_hooked_fish = (p2_hook_state > 0) & (p2_hooked_fish_idx >= 0)
+
+            def p2_fpos():
+                return new_fish_pos[p2_hooked_fish_idx, 0], new_fish_pos[p2_hooked_fish_idx, 1]
+
+            fish_x_p2, fish_y_p2 = jax.lax.cond(p2_has_hooked_fish, p2_fpos, lambda: (0.0, 0.0))
+            fish_center_x_2 = fish_x_p2 + cfg.FISH_WIDTH / 2
+            fish_center_y_2 = fish_y_p2 + cfg.FISH_HEIGHT / 2
+            collides_x_2 = jnp.abs(fish_center_x_2 - shark_center_x) < (fish_half_w + shark_half_w)
+            collides_y_2 = jnp.abs(fish_center_y_2 - shark_center_y) < (fish_half_h + shark_half_h)
+            shark_collides_p2 = p2_has_hooked_fish & collides_x_2 & collides_y_2
+
+            scored_fish_p2 = (p2_hook_state > 0) & (p2_hook_y <= cfg.FISH_SCORING_Y)
+            reset_hook_p2 = shark_collides_p2 | scored_fish_p2
+
+            prev_idx_p2 = p2_hooked_fish_idx
+            p2_score += jnp.where(scored_fish_p2, fish_scores[p2_hooked_fish_idx], 0)
+
+            score_increased_p2 = scored_fish_p2
+            new_animation_timer_p2 = jnp.where(score_increased_p2, animation_speed,
+                                               jnp.where(p2.score_animation_timer > 0, p2.score_animation_timer - 1, 0))
+            should_inc_disp_p2 = (new_animation_timer_p2 == 0) & (p2.display_score < p2_score)
+            new_display_score_p2 = jnp.where(should_inc_disp_p2, p2.display_score + 1, p2.display_score)
+            new_animation_timer_p2 = jnp.where(should_inc_disp_p2 & (new_display_score_p2 < p2_score),
+                                               animation_speed, new_animation_timer_p2)
+
+            key, respawn_key_p2 = jax.random.split(key)
+            do_respawn_p2 = reset_hook_p2 & (prev_idx_p2 >= 0)
+            new_fish_pos, new_fish_dirs = jax.lax.cond(
+                do_respawn_p2,
+                lambda _: respawn_fish(new_fish_pos, new_fish_dirs, prev_idx_p2, respawn_key_p2),
+                lambda _: (new_fish_pos, new_fish_dirs),
+                operand=None
+            )
+            p2_hook_state = jnp.where(reset_hook_p2, 3, p2_hook_state)
+            p2_hooked_fish_idx = jnp.where(reset_hook_p2, -1, p2_hooked_fish_idx)
+            fish_active = jnp.where(do_respawn_p2, fish_active.at[prev_idx_p2].set(True), fish_active)
+
+            # ======== Game Over =================================================================
+            game_over = (p1_score >= 99) | (p2_score >= 99)
+
+            # ======== Neuen State zusammenbauen =================================================
             return GameState(
                 p1=PlayerState(
                     rod_length=new_rod_length,
@@ -935,11 +968,22 @@ class FishingDerby(JaxEnvironment):
                     hooked_fish_idx=p1_hooked_fish_idx,
                     hook_velocity_y=new_hook_velocity_y,
                     hook_x_offset=new_hook_x_offset,
-                    display_score=new_display_score,
-                    score_animation_timer=new_animation_timer,
+                    display_score=new_display_score_p1,
+                    score_animation_timer=new_animation_timer_p1,
                     line_segments_x=p1.line_segments_x
                 ),
-                p2=p2._replace(rod_length=p2_new_rod_length),
+                p2=PlayerState(
+                    rod_length=p2_new_rod_length,
+                    hook_y=p2_new_hook_y,
+                    score=p2_score,
+                    hook_state=p2_hook_state,
+                    hooked_fish_idx=p2_hooked_fish_idx,
+                    hook_velocity_y=p2_new_hook_velocity_y,
+                    hook_x_offset=p2_new_hook_x_offset,
+                    display_score=new_display_score_p2,
+                    score_animation_timer=new_animation_timer_p2,
+                    line_segments_x=p2.line_segments_x
+                ),
                 fish_positions=new_fish_pos,
                 fish_directions=new_fish_dirs,
                 fish_active=fish_active,
@@ -1053,7 +1097,6 @@ class FishingDerbyRenderer(JAXGameRenderer):
         return hook_x, hook_y
 
     def _get_hook_position_p2(self, player_x: float, player_state: PlayerState) -> Tuple[float, float]:
-        """Calculate the actual hook position for Player 2 based on rod length and hook depth."""
         cfg = self.config
         # Player 2's rod extends leftward, so subtract rod length from starting position
         rod_end_x = player_x - player_state.rod_length
@@ -1071,8 +1114,7 @@ class FishingDerbyRenderer(JAXGameRenderer):
         raster = raster.at[:cfg.WATER_Y_START, :, :].set(jnp.array(cfg.SKY_COLOR, dtype=jnp.uint8))
         raster = raster.at[cfg.WATER_Y_START:, :, :].set(jnp.array(cfg.WATER_COLOR, dtype=jnp.uint8))
 
-        # Draw pier on top of water
-        raster = self._render_at(raster, 0, cfg.WATER_Y_START - 10, self.SPRITE_PIER)
+
 
         # Draw players
         raster = self._render_at(raster, cfg.P1_START_X, cfg.PLAYER_Y, self.SPRITE_PLAYER1)
@@ -1084,6 +1126,8 @@ class FishingDerbyRenderer(JAXGameRenderer):
 
         # Draw horizontal part of Player 1 rod
         raster = self._render_line(raster, cfg.P1_START_X + 7, cfg.ROD_Y, p1_rod_end_x, cfg.ROD_Y, (0, 0, 0))
+
+
 
         # Player 1 line rendering logic
         in_water = state.p1.hook_y > (cfg.WATER_Y_START - cfg.ROD_Y)
@@ -1100,31 +1144,26 @@ class FishingDerbyRenderer(JAXGameRenderer):
 
         raster = jax.lax.cond(
             apply_sag,
-            lambda r: self._render_saggy_line(r, line_start, line_end, sag_amount, (255, 255, 255)),
-            lambda r: self._render_line(r, line_start[0], line_start[1], line_end[0], line_end[1], (255, 255, 255)),
+            lambda r: self._render_saggy_line(r, line_start, line_end, sag_amount, (255, 255, 0)),
+            lambda r: self._render_line(r, line_start[0], line_start[1], line_end[0], line_end[1], (255, 255, 0)),
             raster
         )
 
         # Draw Player 2 fishing line
         p2_rod_end_x = cfg.P2_START_X - state.p2.rod_length
         p2_hook_x, p2_hook_y = self._get_hook_position_p2(cfg.P2_START_X, state.p2)
-
         # Draw horizontal part of Player 2 rod (extends leftward)
         raster = self._render_line(raster, cfg.P2_START_X + 2, cfg.ROD_Y, p2_rod_end_x, cfg.ROD_Y, (0, 0, 0))
-
         # Player 2 line rendering logic
         p2_in_water = state.p2.hook_y > (cfg.WATER_Y_START - cfg.ROD_Y)
         p2_is_reeling = state.p2.hook_state > 0
         p2_has_horizontal_offset = jnp.abs(state.p2.hook_x_offset) > 0.5
         p2_apply_sag = p2_in_water & ~p2_is_reeling & p2_has_horizontal_offset
-
         p2_water_depth_ratio = jnp.clip((state.p2.hook_y - (cfg.WATER_Y_START - cfg.ROD_Y)) / cfg.MAX_HOOK_DEPTH_Y, 0.0,
                                         1.0)
         p2_sag_amount = jnp.where(p2_apply_sag, 3.0 + p2_water_depth_ratio * 3.0, 0.0)
-
         p2_line_start = jnp.array([p2_rod_end_x, cfg.ROD_Y])
         p2_line_end = jnp.array([p2_hook_x, p2_hook_y])
-
         raster = jax.lax.cond(
             p2_apply_sag,
             lambda r: self._render_saggy_line(r, p2_line_start, p2_line_end, p2_sag_amount, (0, 0, 0)),
@@ -1198,6 +1237,9 @@ class FishingDerbyRenderer(JAXGameRenderer):
         # Draw scores
         raster = self._render_score(raster, state.p1.display_score, 50, 10)
         raster = self._render_score(raster, state.p2.display_score, 100, 10)
+
+        # Draw pier on top
+        raster = self._render_at(raster, 0, cfg.WATER_Y_START - 10, self.SPRITE_PIER)
 
         return raster
 
