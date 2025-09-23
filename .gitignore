@@ -9,3 +9,6 @@ results/
 .DS_Store
 docs/build/
 
+venv/
+__pycache__/
+*.pyc
