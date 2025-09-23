@@ -1496,6 +1496,20 @@ class JaxNameThisGame(
         return state.lives_remaining <= 0
 
     @partial(jax.jit, static_argnums=(0,))
+    def _get_reward(
+        self,
+        previous_state: NameThisGameState,
+        state: NameThisGameState,
+    ) -> jnp.float32:
+        """Gym wrapper hook: scalar reward for the transition.
+
+        We define reward as the change in score across the step, which matches
+        what `_step_once` computes internally. Returning it here ensures the
+        Gymnasium functional wrapper (which computes reward separately) agrees.
+        """
+        return (state.score - previous_state.score).astype(jnp.float32)
+
+    @partial(jax.jit, static_argnums=(0,))
     def render(self, state: NameThisGameState) -> chex.Array:
         """Render the given state to an HxWx3 uint8 RGB image.
 
