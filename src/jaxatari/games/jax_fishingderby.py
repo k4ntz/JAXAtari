@@ -63,7 +63,7 @@ class GameConfig:
     # Physics
     Acceleration: float = 0.2
     Damping: float = 0.85
-    SLOW_REEL_PERIOD: int = 4  # slow reel: 1 px every 4 frames
+    SLOW_REEL_PERIOD: int = 6  # slow reel: 1 px every 4 frames
     MAX_HOOKED_WOBBLE_DX: float = 0.9  # max extra sideways dx per frame when hooked
     WOBBLE_FREQ_BASE: float = 0.10  # base wobble frequency
     WOBBLE_FREQ_RANGE: float = 0.06  # extra freq added with depth
@@ -287,48 +287,56 @@ class FishingDerby(JaxEnvironment):
         key, p2_key = jax.random.split(state.key)
 
         def strategic_p2_ai():
-            # Get P2's current state
-            p2_hook_x, p2_hook_y = self._get_hook_position_p2(GameConfig.P2_START_X, state.p2)
-            water_surface_y = GameConfig.WATER_Y_START
-            max_depth_y = GameConfig.ROD_Y + GameConfig.MAX_HOOK_DEPTH_Y
+            cfg = self.config
+            p2_state = state.p2
+            fish_pos = state.fish_positions
+            fish_active = state.fish_active
 
-            # Check conditions
-            at_max_depth = p2_hook_y >= (max_depth_y - 5)
-            in_water = p2_hook_y > water_surface_y
-            rod_at_max = state.p2.rod_length >= (GameConfig.MAX_ROD_LENGTH_X - 5)
+            # 1. Fish Targeting
+            # Find the first active fish on the right side (x > 80).
+            is_on_right_side = (fish_pos[:, 0] > 80) & fish_active
 
-            # Priority conditions
-            go_down = (state.p2.hook_state == 0) & (~at_max_depth) & in_water
-            extend_rod = at_max_depth & (~rod_at_max) & (state.p2.hook_state == 0)
-            rise_slowly = at_max_depth & rod_at_max & (state.p2.hook_state == 0)
-            reel_fish = state.p2.hook_state > 0
+            # Find the index of the first fish that meets the condition.
+            # jnp.argmax returns the first True index. If none, it returns 0.
+            target_idx = jnp.argmax(is_on_right_side)
 
-            # Action selection with nested jnp.where
-            action = jnp.where(
-                reel_fish,
-                Action.FIRE,  # Fast reel when fish is hooked
-                jnp.where(
-                    go_down,
-                    Action.DOWN,  # Lower hook to bottom
-                    jnp.where(
-                        extend_rod,
-                        Action.LEFT,  # Extend rod left for P2
-                        jnp.where(
-                            rise_slowly,
-                            Action.UP,  # Slowly rise up
-                            Action.NOOP  # Default action
-                        )
-                    )
-                )
-            )
-            return action
+            # If no fish is on the right, default to fish 1.
+            # We check if any fish is on the right side. If not, set target to 1.
+            target_idx = jnp.where(jnp.any(is_on_right_side), target_idx, 1)
 
-        # Use strategic AI instead of random actions
-        p2_action = jax.lax.cond(
-            p2_action == -1,
-            strategic_p2_ai,
-            lambda: p2_action,
-        )
+            target_fish_y = fish_pos[target_idx, 1]
+            _, p2_hook_y = self._get_hook_position_p2(cfg.P2_START_X, p2_state)
+
+            # 2. Vertical Movement & 3. Horizontal Movement
+            # The AI decides its action based on its current state (hooked or not).
+            def fishing_action():
+                # Move hook vertically to match the target fish's depth.
+                # The AI only moves on certain frames to simulate reaction time.
+                frame_check = (state.time & 1) == 0
+
+                action_up = (p2_hook_y > target_fish_y) & frame_check
+                action_down = (p2_hook_y < target_fish_y) & frame_check
+
+                # Default to NOOP, then check for UP/DOWN.
+                return jnp.where(action_up, Action.UP, jnp.where(action_down, Action.DOWN, Action.NOOP))
+
+            def reeling_action():
+                # 4. Action Button Simulation (Fast Reeling)
+                # Press FIRE if bit 6 of the shark's x-position is set.
+                # This is a quirky condition from the original game's AI.
+                shark_x_int = jnp.floor(state.shark_x).astype(jnp.int32)
+                press_fire = (jnp.bitwise_and(shark_x_int, 64)) != 0
+
+                # 3. Horizontal Movement (Reel In)
+                # Always move RIGHT while reeling, and add FIRE if condition is met.
+                return jnp.where(press_fire, Action.RIGHTFIRE, Action.RIGHT)
+
+            # Choose action based on whether a fish is hooked.
+            ai_action = jnp.where(p2_state.hooked_fish_idx >= 0, reeling_action(), fishing_action())
+            return ai_action
+
+        # Player 2 is always controlled by the AI.
+        p2_action = strategic_p2_ai()
         state = state._replace(key=key)
 
         new_state = self._step_logic(state, action, p2_action)
@@ -548,7 +556,7 @@ class FishingDerby(JaxEnvironment):
 
             # ======== P2: Wasserwiderstand Hook-X-Offset (spiegeln) =============================
             p2_in_water = p2.hook_y > (cfg.WATER_Y_START - cfg.ROD_Y)
-            rod_end_x_p2 = cfg.P2_START_X - p2_new_rod_length
+            rod_end_x_p2 = 155
             target_hook_x_p2 = rod_end_x_p2
             current_hook_x_p2 = cfg.P2_START_X - p2.rod_length + p2.hook_x_offset
             actual_rod_change_p2 = p2_new_rod_length - p2.rod_length
@@ -1105,8 +1113,6 @@ class FishingDerbyRenderer(JAXGameRenderer):
         raster = raster.at[:cfg.WATER_Y_START, :, :].set(jnp.array(cfg.SKY_COLOR, dtype=jnp.uint8))
         raster = raster.at[cfg.WATER_Y_START:, :, :].set(jnp.array(cfg.WATER_COLOR, dtype=jnp.uint8))
 
-
-
         # Draw players
         raster = self._render_at(raster, cfg.P1_START_X, cfg.PLAYER_Y, self.SPRITE_PLAYER1)
         raster = self._render_at(raster, cfg.P2_START_X, cfg.PLAYER_Y, self.SPRITE_PLAYER2)
@@ -1117,7 +1123,6 @@ class FishingDerbyRenderer(JAXGameRenderer):
 
         # Draw horizontal part of Player 1 rod
         raster = self._render_line(raster, cfg.P1_START_X + 7, cfg.ROD_Y, p1_rod_end_x, cfg.ROD_Y, (0, 0, 0))
-
 
 
         # Player 1 line rendering logic
@@ -1144,7 +1149,7 @@ class FishingDerbyRenderer(JAXGameRenderer):
         p2_rod_end_x = cfg.P2_START_X - state.p2.rod_length
         p2_hook_x, p2_hook_y = self._get_hook_position_p2(cfg.P2_START_X, state.p2)
         # Draw horizontal part of Player 2 rod (extends leftward)
-        raster = self._render_line(raster, cfg.P2_START_X + 2, cfg.ROD_Y, p2_rod_end_x, cfg.ROD_Y, (0, 0, 0))
+        raster = self._render_line(raster, cfg.P2_START_X + 8, cfg.ROD_Y, p2_rod_end_x, cfg.ROD_Y, (0, 0, 0))
         # Player 2 line rendering logic
         p2_in_water = state.p2.hook_y > (cfg.WATER_Y_START - cfg.ROD_Y)
         p2_is_reeling = state.p2.hook_state > 0
