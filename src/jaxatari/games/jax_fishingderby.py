@@ -43,7 +43,8 @@ class GameConfig:
     MIN_ROD_LENGTH_X: int = 20  # Minimum horizontal rod extension
     START_ROD_LENGTH_X: int = 20  # Starting horizontal rod length
     MAX_ROD_LENGTH_X: int = 65  # Maximum horizontal extension
-
+    P2_MIN_ROD_LENGTH_X: int = 5  # Reduce this to allow less leftward extension
+    P2_MAX_ROD_LENGTH_X: int = 50  # Increase this to allow more rightward extension
     MIN_HOOK_DEPTH_Y: int = 0  # Minimum vertical hook depth
     START_HOOK_DEPTH_Y: int = 40  # Starting vertical hook depth
     MAX_HOOK_DEPTH_Y: int = 160  # Maximum vertical extension to reach bottom fish
@@ -520,7 +521,7 @@ class FishingDerby(JaxEnvironment):
             p2_rod_change = 0.0
             p2_rod_change = jnp.where(p2_action == Action.LEFT, +cfg.ROD_SPEED, p2_rod_change)
             p2_rod_change = jnp.where(p2_action == Action.RIGHT, -cfg.ROD_SPEED, p2_rod_change)
-            p2_new_rod_length = jnp.clip(p2.rod_length + p2_rod_change, cfg.MIN_ROD_LENGTH_X, cfg.MAX_ROD_LENGTH_X)
+            p2_new_rod_length = jnp.clip(p2.rod_length + p2_rod_change, cfg.P2_MIN_ROD_LENGTH_X,cfg.P2_MAX_ROD_LENGTH_X)
 
             # ======== P1: Wasserwiderstand Hook-X-Offset ========================================
             p1_in_water = p1.hook_y > (cfg.WATER_Y_START - cfg.ROD_Y)
