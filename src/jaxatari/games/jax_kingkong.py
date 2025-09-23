@@ -43,7 +43,7 @@ class KingKongConstants(NamedTuple):
 		[100, 179, 103, 180]
 	])
 	LADDER_LOCATIONS: chex.Array = jnp.array([
-		[76, 41, 84, 60],
+		[76, 41, 84, 60], # Topmost ladder, bombs can't take this one 
 		[20, 61, 28, 85],
 		[132, 61, 140, 84],
 		[76, 85, 84, 108],
@@ -624,9 +624,8 @@ class JaxKingKong(JaxEnvironment[KingKongState, KingKongObservation, KingKongInf
 				player_x=self.consts.PLAYER_RESPAWN_LOCATION[0],
 				player_y=self.consts.PLAYER_RESPAWN_LOCATION[1],
 				player_floor=0,
-				death_type=self.consts.DEATH_TYPE_NONE,
 				kong_x=self.consts.KONG_UPPER_LOCATION[0],
-				kong_y=self.consts.KONG_UPPER_LOCATION[1],
+				kong_y=self.consts.KONG_UPPER_LOCATION[1]
 			)
 
 		def do_normal_step(_):
@@ -1095,7 +1094,7 @@ class JaxKingKong(JaxEnvironment[KingKongState, KingKongObservation, KingKongInf
 
 		# Update bomb movement for all active bombs
 		updated_bombs = self._update_all_bomb_movement(
-			new_bomb_x, new_bomb_y, new_bomb_active, new_bomb_dir_x, new_bomb_dir_y, new_bomb_floor, new_bomb_is_magic, bomb_key
+			state, new_bomb_x, new_bomb_y, new_bomb_active, new_bomb_dir_x, new_bomb_dir_y, new_bomb_floor, new_bomb_is_magic, bomb_key
 		)
 		
 		new_bomb_x, new_bomb_y, new_bomb_active, new_bomb_dir_x, new_bomb_dir_y, new_bomb_floor = updated_bombs
@@ -1133,7 +1132,7 @@ class JaxKingKong(JaxEnvironment[KingKongState, KingKongObservation, KingKongInf
 		floor_distances = jnp.abs(self.consts.FLOOR_LOCATIONS - state.kong_y)
 		return jnp.argmin(floor_distances)
 
-	def _update_all_bomb_movement(self, bomb_x, bomb_y, bomb_active, bomb_dir_x, bomb_dir_y, bomb_floor, bomb_magic, rng_key):
+	def _update_all_bomb_movement(self, state, bomb_x, bomb_y, bomb_active, bomb_dir_x, bomb_dir_y, bomb_floor, bomb_magic, rng_key):
 		def update_single_bomb(i, carry):
 			bomb_x, bomb_y, bomb_active, bomb_dir_x, bomb_dir_y, bomb_floor, bomb_magic, key = carry
 			key, subkey = jax.random.split(key)
@@ -1152,7 +1151,7 @@ class JaxKingKong(JaxEnvironment[KingKongState, KingKongObservation, KingKongInf
 			# Update bomb position and direction
 			new_x, new_y, new_dir_x, new_dir_y, new_floor = jax.lax.cond(
 				is_active,#only update if active / spawned 
-				lambda: self._move_single_bomb(current_x, current_y, current_dir_x, current_dir_y, current_floor, current_maigc, subkey),
+				lambda: self._move_single_bomb(state, current_x, current_y, current_dir_x, current_dir_y, current_floor, current_maigc, subkey),
 				lambda: (current_x, current_y, current_dir_x, current_dir_y, current_floor)
 			)
 			
@@ -1163,7 +1162,7 @@ class JaxKingKong(JaxEnvironment[KingKongState, KingKongObservation, KingKongInf
 			bomb_dir_y = bomb_dir_y.at[i].set(new_dir_y)
 			bomb_floor = bomb_floor.at[i].set(new_floor)
 			
-			return (bomb_x, bomb_y, bomb_active, bomb_dir_x, bomb_dir_y, bomb_floor, bomb_magic, key)
+			return (bomb_x, bomb_y, bomb_active, bomb_dir_x, bomb_dir_y, bomb_floor, bomb_magic, rng_key)
 		
 		# Process all bombs
 		carry = (bomb_x, bomb_y, bomb_active, bomb_dir_x, bomb_dir_y, bomb_floor, bomb_magic, rng_key)
@@ -1171,23 +1170,26 @@ class JaxKingKong(JaxEnvironment[KingKongState, KingKongObservation, KingKongInf
 		
 		return final_carry[:6] # only relevant attribs
 
-	def _move_single_bomb(self, x, y, dir_x, dir_y, floor, is_magic, rng_key):
-		key1, key2, key3 = jax.random.split(rng_key, 3)
+	def _move_single_bomb(self, state: KingKongState, x, y, dir_x, dir_y, floor, is_magic, rng_key):
+		key1, key2, key3 = jax.random.split(state.rng_key, 3)
 		
 		# Basic movement speed
 		move_speed = 1
+
+		# If PLAYER floor less than 4, go down - otherwise go up 
+		go_down = state.player_floor < 4
 		
 		# Get current floor Y position
 		current_floor_y = self.consts.FLOOR_LOCATIONS[floor]
 		
-		# Check if bomb is perfectly on a ladder (more restrictive)
-		ladder_check_y = jax.lax.cond(
-			dir_y > 0,  # Moving down
-			lambda: y + 2,  # Check 2 pixels below
-			lambda: y       # Check current position
-		)
-		on_ladder = self._check_bomb_on_ladder_strict(x, ladder_check_y, is_magic)
-				
+		bomb_width = self.consts.BOMB_SIZE[0]
+		bomb_height = self.consts.BOMB_SIZE[1]
+
+		# Check if bomb is perfectly on a ladder
+		on_ladder_below = go_down & self._check_bomb_on_ladder_strict(x, y + bomb_height + 2)
+		on_ladder_above = ~go_down & self._check_bomb_on_ladder_strict(x, y)
+		on_ladder = on_ladder_below | on_ladder_above
+
 		# If moving horizontally
 		def do_horizontal_movement():
 			# Take ladder if perfectly aligned (75% chance)
@@ -1202,7 +1204,6 @@ class JaxKingKong(JaxEnvironment[KingKongState, KingKongObservation, KingKongInf
 				move_x = x + dir_x * move_speed
 
 				left_bound = self.consts.FLOOR_BOUNDS[floor, 0] 
-				bomb_width = self.consts.BOMB_SIZE[0]
 				right_bound = self.consts.FLOOR_BOUNDS[floor, 1] - (bomb_width + 2)
 
 				# Bounce off walls
@@ -1220,7 +1221,7 @@ class JaxKingKong(JaxEnvironment[KingKongState, KingKongObservation, KingKongInf
 
 			# Determine vertical direction if taking ladder
 			ladder_dir = jax.lax.cond(
-				floor > 4,  # Upper floors go down
+				go_down,  # Upper floors go down
 				lambda: 1,   # Positive = down
 				lambda: -1   # Lower floors go up
 			)
@@ -1305,11 +1306,11 @@ class JaxKingKong(JaxEnvironment[KingKongState, KingKongObservation, KingKongInf
 		)
 		
 		# Handle hole falling (only when moving horizontally)
-		over_hole = self._check_bomb_over_hole(new_x, new_y, is_magic)
+		over_hole = self._check_bomb_over_hole(new_x, new_y)
 		should_start_falling = jnp.logical_and(
 			jnp.logical_and(
 				jnp.logical_and(over_hole, new_dir_y == 0),  # Horizontal movement over hole
-				dir_y >= 0  # Can't fall through holes when moving up
+				go_down  # Can't fall through holes when moving up
 			),
 			jax.random.bernoulli(key1, p=0.5)  # 50% chance
 		)
@@ -1324,18 +1325,18 @@ class JaxKingKong(JaxEnvironment[KingKongState, KingKongObservation, KingKongInf
 		
 		return new_x, new_y, new_dir_x, final_dir_y, final_floor
 	
-	def _check_bomb_on_ladder_strict(self, bomb_x, bomb_y, is_magic):
+	def _check_bomb_on_ladder_strict(self, bomb_x, bomb_y):
 		size_x = self.consts.BOMB_SIZE[0]
 		size_y = self.consts.BOMB_SIZE[1]
 
-		ladder_x1 = self.consts.LADDER_LOCATIONS[:, 0]
-		ladder_y1 = self.consts.LADDER_LOCATIONS[:, 1]
-		ladder_x2 = self.consts.LADDER_LOCATIONS[:, 2]
-		ladder_y2 = self.consts.LADDER_LOCATIONS[:, 3]
+		ladder_x1 = self.consts.LADDER_LOCATIONS[1:, 0] # bombs cant take the ladder with index 0 
+		ladder_y1 = self.consts.LADDER_LOCATIONS[1:, 1]
+		ladder_x2 = self.consts.LADDER_LOCATIONS[1:, 2]
+		ladder_y2 = self.consts.LADDER_LOCATIONS[1:, 3]
 
 		bomb_x1 = bomb_x 
 		bomb_x2 = bomb_x + size_x
-		bomb_y1 = bomb_y
+		bomb_y1 = bomb_y 
 		bomb_y2 = bomb_y - size_y
 
 		on_ladders = jnp.logical_and(
@@ -1353,7 +1354,7 @@ class JaxKingKong(JaxEnvironment[KingKongState, KingKongObservation, KingKongInf
 
 		return jnp.any(on_ladders)
 	
-	def _check_bomb_over_hole(self, bomb_x, bomb_y, is_magic):
+	def _check_bomb_over_hole(self, bomb_x, bomb_y):
 		size_x = self.consts.BOMB_SIZE[0]
 
 		hole_rects = self.consts.HOLE_LOCATIONS
@@ -1477,8 +1478,18 @@ class JaxKingKong(JaxEnvironment[KingKongState, KingKongObservation, KingKongInf
 			return state._replace(
 				gamestate=self.consts.GAMESTATE_RESPAWN,
 				stage_steps=0,
+				death_type=self.consts.DEATH_TYPE_NONE, #reset death type
 				death_target_y=-1, # reset death target
-				lives=state.lives - 1  # Decrease life on death
+				lives=state.lives - 1,  # Decrease life on death
+				# Reset bombs
+				bomb_positions_x=jnp.zeros(self.consts.MAX_BOMBS).astype(jnp.int32),
+				bomb_positions_y=jnp.zeros(self.consts.MAX_BOMBS).astype(jnp.int32),
+				bomb_active=jnp.zeros(self.consts.MAX_BOMBS).astype(jnp.int32),
+				bomb_is_magic=jnp.zeros(self.consts.MAX_BOMBS).astype(jnp.int32),
+				bomb_directions_x=jnp.zeros(self.consts.MAX_BOMBS).astype(jnp.int32),
+				bomb_directions_y=jnp.zeros(self.consts.MAX_BOMBS).astype(jnp.int32),
+				bomb_floor=jnp.zeros(self.consts.MAX_BOMBS).astype(jnp.int32)
+
 			)
 
 		def do_normal_step(_):
