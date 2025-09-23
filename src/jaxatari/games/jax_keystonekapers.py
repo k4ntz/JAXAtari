@@ -1443,17 +1443,17 @@ class KeystoneKapersRenderer(JAXGameRenderer):
         try:
             kop_life_sprite_path = os.path.join(os.path.dirname(__file__), 'sprites', 'keystonekapers', 'kop_life.npy')
             kop_life_sprite_rgba = jr.loadFrame(kop_life_sprite_path)
-            
+
             # Handle RGBA properly - use alpha channel for transparency
             rgb_data = kop_life_sprite_rgba[:, :, :3]
             alpha_data = kop_life_sprite_rgba[:, :, 3:4]
-            
+
             # Convert to RGB, handling transparency by using alpha blending with white background
             # Where alpha is 0 (transparent), use white; where alpha is 255, use the RGB color
             alpha_normalized = alpha_data.astype(jnp.float32) / 255.0
             white_background = jnp.ones_like(rgb_data) * 255
-            
-            sprites['kop_life'] = (rgb_data.astype(jnp.float32) * alpha_normalized + 
+
+            sprites['kop_life'] = (rgb_data.astype(jnp.float32) * alpha_normalized +
                                  white_background * (1 - alpha_normalized)).astype(jnp.uint8)
         except Exception as e:
             # Fallback to simple green rectangle if sprite loading fails
@@ -1513,23 +1513,23 @@ class KeystoneKapersRenderer(JAXGameRenderer):
         def draw_sprite(game_area, sprite, x, y):
             """Draw a sprite at the given position in the game area."""
             sprite_height, sprite_width = sprite.shape[:2]
-            
+
             # Ensure coordinates are within bounds
             x = jnp.clip(x, 0, self.consts.GAME_AREA_WIDTH - sprite_width)
             y = jnp.clip(y, 0, self.consts.GAME_AREA_HEIGHT - sprite_height)
-            
+
             # Create indices for positioning
             y_indices = jnp.arange(self.consts.GAME_AREA_HEIGHT)[:, None]
             x_indices = jnp.arange(self.consts.GAME_AREA_WIDTH)[None, :]
-            
+
             # Create mask for sprite placement
             mask = ((y_indices >= y) & (y_indices < y + sprite_height) &
                    (x_indices >= x) & (x_indices < x + sprite_width))
-            
+
             # Apply sprite where mask is True
             sprite_indices_y = jnp.clip(y_indices - y, 0, sprite_height - 1)
             sprite_indices_x = jnp.clip(x_indices - x, 0, sprite_width - 1)
-            
+
             return jnp.where(
                 mask[:, :, None],
                 sprite[sprite_indices_y, sprite_indices_x, :],
@@ -1539,35 +1539,35 @@ class KeystoneKapersRenderer(JAXGameRenderer):
         # Draw sky and buildings sprite above the roof level (covering all green background)
         sky_sprite = self.sprites['sky']
         sky_height, sky_width = sky_sprite.shape[:2]
-        
+
         # Position sky to cover from top of game area down to roof floor
         roof_floor_top = self.consts.ROOF_Y + self.consts.FLOOR_HEIGHT
         sky_bottom = 0  # Start from very top of game area
         sky_visible_height = roof_floor_top - sky_bottom
-        
+
         if sky_visible_height > 0:
             # Tile the sky sprite horizontally to cover the game area width
             tiles_needed = (self.consts.GAME_AREA_WIDTH + sky_width - 1) // sky_width
-            
+
             # Create horizontal tiling of sky sprite
             tiled_sky = jnp.tile(sky_sprite, (1, tiles_needed, 1))
             # Crop to exact game area width
             tiled_sky = tiled_sky[:, :self.consts.GAME_AREA_WIDTH, :]
-            
+
             # If sky sprite is smaller than needed height, tile it vertically too
             if sky_height < sky_visible_height:
                 vertical_tiles_needed = (sky_visible_height + sky_height - 1) // sky_height
                 tiled_sky = jnp.tile(tiled_sky, (vertical_tiles_needed, 1, 1))
-            
+
             # Take only the portion that fits in the visible area
             sky_to_draw = tiled_sky[:sky_visible_height, :, :]
-            
+
             # Create mask for sky area (from top down to roof floor)
             y_indices = jnp.arange(self.consts.GAME_AREA_HEIGHT)[:, None]
             x_indices = jnp.arange(self.consts.GAME_AREA_WIDTH)[None, :]
-            sky_mask = ((y_indices >= sky_bottom) & (y_indices < roof_floor_top) & 
+            sky_mask = ((y_indices >= sky_bottom) & (y_indices < roof_floor_top) &
                        (x_indices >= 0) & (x_indices < self.consts.GAME_AREA_WIDTH))
-            
+
             # Apply sky sprite to game area
             game_area = jnp.where(
                 sky_mask[:, :, None],
@@ -1750,11 +1750,11 @@ class KeystoneKapersRenderer(JAXGameRenderer):
         # Lives indicator (top left) - 3 kop life sprites next to each other
         kop_life_sprite = self.sprites['kop_life']
         life_sprite_width = kop_life_sprite.shape[1]
-        
+
         # Draw 3 life sprites horizontally on the left side
         life_start_x = 10  # Start from the left edge
-        life_y = 10  # Top of the screen
-        
+        life_y = 15  # Top of the screen
+
         # Draw each life sprite using JAX where for conditional drawing
         for i in range(3):
             life_x = life_start_x + (i * (life_sprite_width + 2))  # 2 pixel spacing
