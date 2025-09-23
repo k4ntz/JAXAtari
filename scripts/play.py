@@ -103,7 +103,7 @@ def main():
     reset_key = jrandom.fold_in(master_key, reset_counter)
     obs, state = jitted_reset(reset_key)
     reset_counter += 1
-
+    
     # For random actions, we need a separate key stream
     action_key = jrandom.fold_in(master_key, 1000000)  # Use a large offset to avoid collision
 
