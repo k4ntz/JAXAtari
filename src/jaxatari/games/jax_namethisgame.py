@@ -1,3 +1,27 @@
+"""JAX + pygame implementation of the Atari-like game *Name This Game*.
+
+Structure
+---------
+- `NameThisGameConfig`: Tunable constants and UI layout.
+- `NameThisGameState`: Pure, JIT-friendly game state (NamedTuple of arrays).
+- `Renderer_NameThisGame`: Sprite/solid renderer producing RGBA frames with JAX.
+- `JaxNameThisGame`: Environment with reset/step and object-centric observations.
+
+Design notes
+------------
+- All state transitions are functional and JIT-able. Avoid Python side effects.
+- Most integers are pixels; timers are in frames.
+- Oxygen logic uses HUD *pixels*. `oxygen_frames_remaining` mirrors `oxy_bar_px`.
+- The "REST" phase refills HUD bars and pauses hazards until the player fires.
+
+Controls
+--------
+- Left/Right: `A`/`D` or arrow keys
+- Fire: `Space`
+- Toggle frame-by-frame: `F`
+- Step when frame-by-frame is on: `N`
+"""
+
 import os
 from dataclasses import dataclass, field
 from functools import partial
@@ -22,11 +46,16 @@ import jaxatari.spaces as spaces
 
 @dataclass(frozen=True)
 class NameThisGameConfig:
-    """All tunable parameters for NameThisGame.
+    """All tunable parameters for *Name This Game*.
 
-    NOTE: Oxygen logic uses HUD *pixels* (not frames). `oxygen_full` is kept for
-    backward-compatibility of the observation space but the runtime oxygen value
-    mirrors the orange bar pixels (``oxy_bar_px``).
+    Units & conventions
+    - Positions/sizes are in pixels.
+    - Timers are in frames.
+    - Oxygen logic uses HUD *pixels* (not time). `oxygen_full` remains for the
+      observation space upper-bound but runtime oxygen mirrors `oxy_bar_px`.
+
+    This config is treated as static for JIT; avoid mutating or capturing large
+    dynamic arrays inside it.
     """
     # Screen & scaling
     screen_width: int = 160
@@ -119,6 +148,11 @@ class NameThisGameConfig:
 # ------------------------------------------------------------
 
 class EntityPosition(NamedTuple):
+    """Axis-aligned bounding boxes for N entities.
+
+    All fields are `int32` arrays of shape `(n,)`.
+    `alive` is 1 or 0 (int32) for compatibility with common spaces.
+    """
     x: jnp.ndarray
     y: jnp.ndarray
     width: jnp.ndarray
@@ -127,6 +161,16 @@ class EntityPosition(NamedTuple):
 
 
 class NameThisGameState(NamedTuple):
+    """Complete, immutable game state used by the environment and renderer.
+
+    Notes
+    -----
+    - Booleans are stored as `jnp.bool_` for JAX; observations cast to `int32`.
+    - `oxygen_frames_remaining` is the integer mirror of `oxy_bar_px`.
+    - `resting=True` freezes hazards and refills bars; it ends on a fire press.
+    - RNG: carry a single key (`rng`) and split inside update functions to keep
+      determinism and make step order explicit.
+    """
     # Score & wave
     score: chex.Array
     reward: chex.Array
@@ -188,6 +232,11 @@ class NameThisGameState(NamedTuple):
 
 
 class NameThisGameObservation(NamedTuple):
+    """Object-centric observation returned to agents.
+
+    Contains scalar score/round and per-entity AABBs (diver, shark, spear,
+    tentacles) with narrow tentacle boxes for compatibility.
+    """
     score: jnp.ndarray
     diver: EntityPosition
     shark: EntityPosition
@@ -200,6 +249,10 @@ class NameThisGameObservation(NamedTuple):
 
 
 class NameThisGameInfo(NamedTuple):
+    """Diagnostics and shaping hooks returned via the `info` dict.
+
+    `all_rewards` can aggregate auxiliary reward terms if provided at init time.
+    """
     score: jnp.ndarray
     round: jnp.ndarray
     shark_lane: jnp.ndarray
@@ -214,7 +267,7 @@ class NameThisGameInfo(NamedTuple):
 
 
 class NameThisGameConstants(NamedTuple):
-    """Placeholder to satisfy interface (no dynamic constants)."""
+    """Kept for interface compatibility; currently unused."""
     pass
 
 
@@ -223,7 +276,11 @@ class NameThisGameConstants(NamedTuple):
 # ------------------------------------------------------------
 
 class Renderer_NameThisGame(JAXGameRenderer):
-    """Sprite-based renderer with solid-color fallbacks."""
+    """Sprite-based renderer with solid-color fallbacks.
+
+    Loads sprites from `<repo>/sprites/namethisgame`. If a sprite is missing, a
+    solid RGBA block is drawn instead so rendering remains robust under JIT.
+    """
 
     sprites: Dict[str, Any]
 
@@ -235,6 +292,11 @@ class Renderer_NameThisGame(JAXGameRenderer):
         self.score_digit_sprites = self.sprites.get("score_digit_sprites")
 
     def _load_sprites(self) -> Dict[str, Any]:
+        """Load per-object sprites from disk and return a name->array dict.
+
+        Each sprite is a `uint8` RGBA or RGB array. Score digits are loaded as a packed
+        sprite sheet and padded for fixed-width rendering.
+        """
         sprites: Dict[str, Any] = {}
 
         def _load_sprite_frame(name: str) -> Optional[chex.Array]:
@@ -267,6 +329,11 @@ class Renderer_NameThisGame(JAXGameRenderer):
 
     @partial(jax.jit, static_argnums=(0,))
     def render(self, state: NameThisGameState) -> chex.Array:
+        """Render the current state to an HxWx3 uint8 RGB image.
+
+        Order: background → HUD bars (centered shrink) → kraken → boat → diver → shark
+        → spear → tentacles → oxygen line → lives → score.
+        """
         cfg = self.config
         W, H = cfg.screen_width, cfg.screen_height
 
@@ -280,6 +347,9 @@ class Renderer_NameThisGame(JAXGameRenderer):
             raster = aj.render_at(raster, 0, 0, self.sprites["background"])
 
         # HUD bars -----------------------------------------------------------
+        # Draw a centered horizontal bar by rendering a full-width sprite and masking
+        # its right side to leave exactly `visible_px` columns; then offset so the
+        # visible portion remains horizontally centered.
         def _draw_hbar(ras, visible_px: chex.Array, h_px: int, y_px: int, rgb: tuple[int, int, int]):
             max_w = cfg.hud_bar_initial_px
             w = jnp.clip(visible_px, 0, jnp.array(max_w, jnp.int32))
@@ -303,6 +373,7 @@ class Renderer_NameThisGame(JAXGameRenderer):
             raster = aj.render_at(raster, cfg.kraken_x, cfg.kraken_y, self.sprites["kraken"])
 
         # Boat ---------------------------------------------------------------
+        # Attach the boat to the top of the oxygen line baseline and clamp to screen.
         if "boat" in self.sprites:
             boat_sprite = self.sprites["boat"]
             boat_h = int(boat_sprite.shape[0])
@@ -346,7 +417,9 @@ class Renderer_NameThisGame(JAXGameRenderer):
             raster,
         )
 
-        # Tentacles (draw small black blocks)
+        # Tentacles -----------------------------------------------------------
+        # Tentacles are drawn as a vertical stack of small squares; lateral position
+        # comes from per-row column indices in `state.tentacle_cols[i, k]`.
         T = self.config.max_tentacles
         L = int(self.config.tentacle_ys.shape[0])
         col_w = self.config.tentacle_col_width
@@ -420,7 +493,7 @@ class Renderer_NameThisGame(JAXGameRenderer):
             digit_w = 8
             total_w = digit_w * num_digits
             score_x = (cfg.screen_width - total_w) // 2
-            score_y = 5
+            score_y = 215
             raster = aj.render_label_selective(
                 raster,
                 score_x,
@@ -500,12 +573,19 @@ class JaxNameThisGame(
         return spaces.Box(low=0, high=255, shape=(cfg.screen_height, cfg.screen_width, 3), dtype=jnp.uint8)
 
     # -------------------------- Reset --------------------------------------
+    @partial(jax.jit, static_argnums=(0,))
     def reset(self, key: jax.random.PRNGKey = jax.random.PRNGKey(0)) -> Tuple[NameThisGameObservation, NameThisGameState]:
+        """Create an initial state and observation.
+
+        - Starts in REST with full bars and hazards reset.
+        - Shark direction is randomized; oxygen drop timer is randomized in range.
+        - Returns `(obs, state)` to match the environment interface.
+        """
         cfg = self.config
         T = cfg.max_tentacles
         L = int(cfg.tentacle_ys.shape[0])
 
-        key, sub_key_dir, sub_key_oxy = jax.random.split(key, 3)
+        rng, rng_dir, rng_oxy = jax.random.split(key, 3)
 
         # Boat
         init_boat_x = jnp.array(cfg.screen_width // 2 - cfg.boat_width // 2, jnp.int32)
@@ -517,7 +597,7 @@ class JaxNameThisGame(
         init_diver_y = jnp.array(cfg.diver_y_floor, jnp.int32)
 
         # Shark
-        go_left = jax.random.bernoulli(sub_key_dir)
+        go_left = jax.random.bernoulli(rng_dir)
         init_shark_lane = jnp.array(0, jnp.int32)
         init_shark_y = cfg.shark_lanes_y[init_shark_lane]
         init_shark_x = jnp.where(go_left, -cfg.shark_width, cfg.screen_width)
@@ -538,7 +618,7 @@ class JaxNameThisGame(
         init_oxygen_bar = jnp.array(cfg.hud_bar_initial_px, jnp.int32)
         min_int = int(cfg.oxygen_drop_min_interval)
         max_int = int(cfg.oxygen_drop_max_interval)
-        init_drop_timer = jax.random.randint(sub_key_oxy, (), min_int, max_int + 1, dtype=jnp.int32)
+        init_drop_timer = jax.random.randint(rng_oxy, (), min_int, max_int + 1, dtype=jnp.int32)
 
         state = NameThisGameState(
             score=jnp.array(0, jnp.int32),
@@ -588,7 +668,7 @@ class JaxNameThisGame(
 
             lives_remaining=jnp.array(cfg.lives_max, jnp.int32),
 
-            rng=key,
+            rng=rng,
         )
         obs = self._get_observation(state)
         return obs, state
@@ -597,6 +677,11 @@ class JaxNameThisGame(
 
     @partial(jax.jit, static_argnums=(0,))
     def obs_to_flat_array(self, obs: EnvObs) -> jnp.ndarray:
+        """Flatten a structured observation into a single int32 vector.
+
+        Useful for simple agents or logging. Field order matches the concatenation
+        order below.
+        """
         def _flat(ep: EntityPosition) -> jnp.ndarray:
             return jnp.concatenate(
                 [
@@ -626,6 +711,12 @@ class JaxNameThisGame(
 
     @partial(jax.jit, static_argnums=(0,))
     def _get_observation(self, state: NameThisGameState) -> NameThisGameObservation:
+        """Build the object-centric observation from the current state.
+
+        Tentacle boxes are narrow one-column rectangles that span from the top segment
+        to the current tip, for compatibility with older consumers.
+        """
+
         cfg = self.config
         diver_pos = EntityPosition(
             x=jnp.atleast_1d(state.diver_x),
@@ -687,6 +778,8 @@ class JaxNameThisGame(
 
     @partial(jax.jit, static_argnums=(0,))
     def _get_info(self, state: NameThisGameState, all_rewards: chex.Array = None) -> NameThisGameInfo:
+        """Assemble auxiliary info (diagnostics and optional shaping rewards)."""
+
         return NameThisGameInfo(
             score=state.score,
             round=state.round,
@@ -710,6 +803,14 @@ class JaxNameThisGame(
 
     @partial(jax.jit, static_argnums=(0,))
     def _get_all_reward(self, prev_state: NameThisGameState, state: NameThisGameState) -> chex.Array:
+        """Compute auxiliary reward components.
+
+        Notes
+        -----
+        `self.reward_funcs` must be a static tuple of callables for JIT stability.
+        Each callable has signature `(prev_state, state) -> float`.
+        """
+
         if self.reward_funcs is None:
             return jnp.zeros((1,), jnp.float32)
         # Python-side list comp is fine under jit if reward_funcs is static
@@ -720,6 +821,14 @@ class JaxNameThisGame(
 
     @partial(jax.jit, static_argnums=(0,))
     def _update_bars_and_rest(self, state: NameThisGameState, just_pressed: chex.Array) -> NameThisGameState:
+        """Update wave/oxygen bars and handle REST transitions.
+
+        - While active: both bars tick down on separate cadences.
+        - When the wave bar hits zero: enter REST, increment `round`, clear hazards,
+          refill bars, and reset certain shark fields.
+        - REST ends on a new fire press.
+        """
+
         cfg = self.config
 
         # Exit REST on fire
@@ -740,6 +849,7 @@ class JaxNameThisGame(
             wave_cnt = s.bar_frame_counter + 1
             wave_tick = wave_cnt >= jnp.array(cfg.hud_bar_step_frames, jnp.int32)
 
+            # Oxygen bar shrinks faster each round, but never below `oxy_min_shrink_interval`.
             r_eff = jnp.maximum(s.round, jnp.array(1, jnp.int32))
             oxy_interval = jnp.array(cfg.hud_bar_step_frames, jnp.int32) - jnp.array(cfg.oxy_frames_speedup_per_round, jnp.int32) * (r_eff - 1)
             oxy_interval = jnp.maximum(oxy_interval, jnp.array(cfg.oxy_min_shrink_interval, jnp.int32))
@@ -781,12 +891,22 @@ class JaxNameThisGame(
 
     @partial(jax.jit, static_argnums=(0,))
     def _interpret_action(self, state: NameThisGameState, action: chex.Array) -> Tuple[chex.Array, chex.Array]:
+        """Decode discrete action into `(move_dir, fire_pressed)`.
+
+        `move_dir` ∈ {-1, 0, +1}. `fire_pressed` is a boolean.
+        """
+
         move_dir = jnp.where((action == Action.LEFT) | (action == Action.LEFTFIRE), -1, jnp.where((action == Action.RIGHT) | (action == Action.RIGHTFIRE), 1, 0))
         fire_pressed = (action == Action.FIRE) | (action == Action.LEFTFIRE) | (action == Action.RIGHTFIRE)
         return move_dir, fire_pressed
 
     @partial(jax.jit, static_argnums=(0,))
     def _spawn_spear(self, state: NameThisGameState) -> NameThisGameState:
+        """Spawn a spear from the diver tip if no spear is currently alive.
+
+        The spear travels vertically with fixed dy.
+        """
+
         cfg = self.config
 
         def _spawn(s):
@@ -799,6 +919,8 @@ class JaxNameThisGame(
 
     @partial(jax.jit, static_argnums=(0,))
     def _move_diver(self, state: NameThisGameState, move_dir: chex.Array) -> NameThisGameState:
+        """Move the diver horizontally, clamp to screen, and update facing."""
+
         cfg = self.config
         new_x = jnp.clip(state.diver_x + move_dir * cfg.diver_speed_px, 0, cfg.screen_width - cfg.diver_width)
         new_dir = jnp.where(move_dir != 0, move_dir.astype(jnp.int32), state.diver_dir)
@@ -806,6 +928,8 @@ class JaxNameThisGame(
 
     @partial(jax.jit, static_argnums=(0,))
     def _move_spear(self, state: NameThisGameState) -> NameThisGameState:
+        """Advance the spear by its velocity; kill it when it leaves the screen."""
+
         cfg = self.config
 
         def _step(s):
@@ -819,6 +943,13 @@ class JaxNameThisGame(
 
     @partial(jax.jit, static_argnums=(0,))
     def _move_shark(self, state: NameThisGameState) -> NameThisGameState:
+        """Move shark horizontally; when fully off-screen, drop one lane.
+
+        - In REST: shark paces and bounces within the screen.
+        - Active: moving off the left/right edge respawns at the opposite side one
+          lane lower; when no more lanes remain, the shark is marked not alive.
+        """
+
         cfg = self.config
         x_next = state.shark_x + state.shark_dx
 
@@ -833,6 +964,7 @@ class JaxNameThisGame(
         def _normal_move(s: NameThisGameState) -> NameThisGameState:
             new_x = x_next
             dx = s.shark_dx
+            # When the shark fully exits the screen, respawn one lane lower from the opposite side.
             off_right = (dx > 0) & (new_x >= cfg.screen_width)
             off_left = (dx < 0) & ((new_x + cfg.shark_width) <= 0)
 
@@ -863,6 +995,16 @@ class JaxNameThisGame(
 
     @partial(jax.jit, static_argnums=(0,))
     def _update_one_tentacle(self, state: NameThisGameState) -> NameThisGameState:
+        """Update exactly one tentacle per frame in round-robin order.
+
+        Two behaviors:
+        - GROW: Increase length by one, shifting previous columns downward.
+        - MOVE: Slide laterally by `dir` unless blocked; if the tip is blocked and the
+          body is stacked, wait one tick then flip direction and move.
+
+        `tentacle_edge_wait` implements the one-tick hesitation at edges.
+        """
+
         cfg = self.config
         T = cfg.max_tentacles
         L = int(cfg.tentacle_ys.shape[0])
@@ -993,6 +1135,12 @@ class JaxNameThisGame(
 
     @partial(jax.jit, static_argnums=(0,))
     def _check_spear_shark_collision(self, state: NameThisGameState) -> NameThisGameState:
+        """Award points and reset the shark when hit by the spear.
+
+        Points depend on the current lane. The shark respawns at lane 0 heading in a
+        random horizontal direction; the spear is consumed.
+        """
+
         cfg = self.config
         rng_side, rng_after = jax.random.split(state.rng)
 
@@ -1036,6 +1184,12 @@ class JaxNameThisGame(
 
     @partial(jax.jit, static_argnums=(0,))
     def _check_spear_tentacle_collision(self, state: NameThisGameState) -> NameThisGameState:
+        """Destroy tentacle tips hit by the spear and award points.
+
+        If any tentacle is hit this frame, the spear is consumed; otherwise it continues
+        moving. Multiple tips can be hit simultaneously.
+        """
+
         cfg = self.config
         T = cfg.max_tentacles
         L = int(cfg.tentacle_ys.shape[0])
@@ -1079,12 +1233,16 @@ class JaxNameThisGame(
 
     @partial(jax.jit, static_argnums=(0,))
     def _check_diver_hazard(self, state: NameThisGameState) -> NameThisGameState:
+        """Kill the diver if any tentacle has reached the bottom row."""
+
         L = int(self.config.tentacle_ys.shape[0])
         reached = jnp.any(state.tentacle_len >= L)
         return state._replace(diver_alive=jnp.where(reached, jnp.array(False, jnp.bool_), state.diver_alive))
 
     @partial(jax.jit, static_argnums=(0,))
     def _move_boat(self, state: NameThisGameState) -> NameThisGameState:
+        """Move the boat with a fixed cadence and bounce at screen edges."""
+
         cfg = self.config
         next_counter = state.boat_move_counter + 1
         move_now = (state.boat_move_counter % cfg.boat_move_every_n_frames) == 0
@@ -1103,6 +1261,13 @@ class JaxNameThisGame(
 
     @partial(jax.jit, static_argnums=(0,))
     def _spawn_or_update_oxygen_line(self, state: NameThisGameState) -> NameThisGameState:
+        """Handle oxygen line spawning, following the boat while active, and expiry.
+
+        - When inactive: a countdown spawns a new line centered under the boat.
+        - While active: the line follows the boat and decrements a TTL.
+        - On expiry: disable the line and schedule the next drop with a random delay.
+        """
+
         cfg = self.config
 
         def _rest(s: NameThisGameState) -> NameThisGameState:
@@ -1160,7 +1325,13 @@ class JaxNameThisGame(
 
     @partial(jax.jit, static_argnums=(0,))
     def _update_oxygen(self, state: NameThisGameState) -> NameThisGameState:
-        """Drain/refill orange bar; score drip when full under the line. Mirrors oxy_bar_px."""
+        """Drain/refill the orange oxygen bar and drip points when full.
+
+        - When the diver is horizontally under the line, every K frames we either:
+          * refill the bar by a fixed pixel amount until full, OR
+          * if already full, award small points at the same cadence.
+        - `oxygen_frames_remaining` mirrors `oxy_bar_px` for integer-safe logic.
+        """
         cfg = self.config
 
         def _rest(s: NameThisGameState) -> NameThisGameState:
@@ -1173,6 +1344,7 @@ class JaxNameThisGame(
             under_line = s.oxygen_line_active & (jnp.abs(diver_center - line_center) <= cfg.oxygen_pickup_radius)
 
             cnt_next = jnp.where(under_line, s.oxygen_contact_counter + 1, jnp.array(0, jnp.int32))
+            # Only count contact every K frames to create a steady refill/drip cadence.
             k = jnp.array(cfg.oxygen_contact_every_n_frames, jnp.int32)
             tick = under_line & (cnt_next % k == 0) & (cnt_next > 0)
 
@@ -1196,7 +1368,7 @@ class JaxNameThisGame(
 
     @partial(jax.jit, static_argnums=(0,))
     def _life_loss_reset(self, state: NameThisGameState) -> NameThisGameState:
-        """Consume one life; soft reset into REST. Keeps score/round."""
+        """Consume one life and soft-reset into REST (score/round are preserved)."""
         cfg = self.config
         rng1, rng2 = jax.random.split(state.rng)
         next_timer = jax.random.randint(
@@ -1238,7 +1410,12 @@ class JaxNameThisGame(
 
     @partial(jax.jit, static_argnums=(0,))
     def _check_and_consume_life(self, state: NameThisGameState) -> Tuple[NameThisGameState, chex.Array]:
-        """If a death condition triggered, decrement life and soft reset or end game."""
+        """Detect death conditions and decrement lives.
+
+        Death occurs if oxygen is empty, the diver is dead, or the shark 'reaches' the
+        diver (represented as `shark_alive == False`). When lives reach zero, the
+        episode is done; otherwise perform a soft reset.
+        """
         oxygen_out = state.oxygen_frames_remaining <= 0
         diver_dead = ~state.diver_alive
         shark_reached_diver = ~state.shark_alive
@@ -1262,18 +1439,24 @@ class JaxNameThisGame(
         return jax.lax.cond(death_now, on_death, no_death, state)
 
     @partial(jax.jit, static_argnums=(0,))
-    def _update_round(self, state: NameThisGameState) -> NameThisGameState:
-        """Round progression handled by wave timeout; kept for API symmetry."""
-        return state
-
-    @partial(jax.jit, static_argnums=(0,))
     def _shark_speed_for_lane(self, round_idx: chex.Array, lane: chex.Array) -> chex.Array:
-        """Absolute shark speed per wave & lane.
+        """Absolute shark speed (px/frame) as a function of round and lane.
 
-        r=0: all lanes 1 px/frame.
-        r>=1: a 2 px boundary rises one lane per wave until all lanes are >=2.
-        After that, bottom-up lane promotions add +1 px every nlanes rounds repeatedly.
+        Rules
+        -----
+        - Round 0: all lanes move at 1 px/frame.
+        - From round 1: a 2 px/frame boundary rises one lane per wave until all lanes
+          are ≥ 2.
+        - After all lanes are at least 2, bottom-up promotions add +1 every `nlanes`
+          rounds repeatedly (i.e., a staircase by lane rank).
+
+        Example
+        -------
+        If there are 7 lanes (0=top, 6=bottom) and `speed_progression_start_lane_for_2`
+        is 4, the bottom lanes reach 2 px/frame first and the faster band grows upward
+        each round.
         """
+
         cfg = self.config
         nlanes_i = jnp.array(cfg.shark_lanes_y.shape[0], jnp.int32)
         r = jnp.maximum(round_idx + jnp.array(1, jnp.int32), jnp.array(0, jnp.int32))
@@ -1302,7 +1485,7 @@ class JaxNameThisGame(
 
     @partial(jax.jit, static_argnums=(0,))
     def _get_done(self, state: NameThisGameState) -> jnp.bool_:
-        """Episode ends only when lives are exhausted."""
+        """Episode ends only when `lives_remaining` reaches zero."""
         return state.lives_remaining <= 0
 
     # -------------------------- Step API -----------------------------------
@@ -1311,6 +1494,11 @@ class JaxNameThisGame(
     def _step_once(
         self, state: NameThisGameState, action: chex.Array
     ) -> Tuple[NameThisGameObservation, NameThisGameState, jnp.float32, jnp.bool_, NameThisGameInfo]:
+        """Single-frame update: interpret input, update systems, collisions, scoring.
+
+        Returns `(obs, state, reward, done, info)`. Reward is the score delta.
+        """
+
         prev_state = state
 
         # Inputs -> intents
@@ -1337,7 +1525,7 @@ class JaxNameThisGame(
 
         # Oxygen
         state = self._update_oxygen(state)
-        state = self._update_round(state)
+
 
         # Lives / soft reset on death
         state, _ = self._check_and_consume_life(state)
@@ -1357,7 +1545,8 @@ class JaxNameThisGame(
     def step(
         self, state: NameThisGameState, action: chex.Array
     ) -> Tuple[NameThisGameObservation, NameThisGameState, jnp.float32, jnp.bool_, NameThisGameInfo]:
-        """Frameskip wrapper over `_step_once`."""
+        """Frameskip wrapper over `_step_once` that accumulates reward within a macro-step."""
+
         def body(i, carry):
             st, total_r, done_flag = carry
 
@@ -1382,6 +1571,8 @@ class JaxNameThisGame(
 # -------------------------- Human control (optional) -----------------------
 
 def get_human_action() -> chex.Array:
+    """Poll keyboard and return a discrete action as an int array."""
+
     keys = pygame.key.get_pressed()
     left = keys[pygame.K_a] or keys[pygame.K_LEFT]
     right = keys[pygame.K_d] or keys[pygame.K_RIGHT]
@@ -1400,6 +1591,13 @@ def get_human_action() -> chex.Array:
 
 
 def main():
+    """Run a human-playable loop with pygame.
+
+    Controls:
+    - A/Left ←, D/Right →, Space = Fire
+    - F toggles frame-by-frame mode; when on, press N to step one frame.
+    """
+
     config = NameThisGameConfig()
     pygame.init()
     screen = pygame.display.set_mode(
@@ -1410,10 +1608,9 @@ def main():
     game = JaxNameThisGame(config=config)
     renderer = Renderer_NameThisGame(config=config)
 
-    jitted_reset = jax.jit(game.reset)
+    obs, state = game.reset(jax.random.PRNGKey(0))
     jitted_step = game.step
 
-    obs, state = jitted_reset()
     running = True
     frame_by_frame = False
 
