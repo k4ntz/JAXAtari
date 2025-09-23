@@ -90,6 +90,7 @@ class NameThisGameConfig:
     spear_width: int = 1
     spear_height: int = 1
     spear_dy: int = -3
+    spear_ceiling_y: int = 63
 
     # Shark
     shark_lanes_y: jnp.ndarray = field(
@@ -928,16 +929,22 @@ class JaxNameThisGame(
 
     @partial(jax.jit, static_argnums=(0,))
     def _move_spear(self, state: NameThisGameState) -> NameThisGameState:
-        """Advance the spear by its velocity; kill it when it leaves the screen."""
-
+        """Advance the spear by its velocity; despawn when it crosses the ceiling."""
         cfg = self.config
 
         def _step(s):
+            # Compute next position (x, y) and write it back.
             pos_xy = s.spear[:2] + s.spear[2:4]
             s2 = s._replace(spear=s.spear.at[:2].set(pos_xy))
             x, y = pos_xy[0], pos_xy[1]
-            in_bounds = (x >= 0) & (x < cfg.screen_width) & (y >= 0) & (y < cfg.screen_height)
-            return s2._replace(spear_alive=jnp.logical_and(s.spear_alive, in_bounds))
+
+            # Alive if on-screen and still below the ceiling line.
+            in_x = (x >= 0) & (x < cfg.screen_width)
+            in_y = (y >= 0) & (y < cfg.screen_height)
+            below_ceiling = y > cfg.spear_ceiling_y   # despawn at/above the ceiling (<= becomes dead)
+            alive_next = jnp.logical_and(s.spear_alive, in_x & in_y & below_ceiling)
+
+            return s2._replace(spear_alive=alive_next)
 
         return jax.lax.cond(state.spear_alive, _step, lambda s: s, state)
 
