@@ -54,7 +54,7 @@ class LaserGatesConstants:
     PLAYER_VELOCITY_Y = 1.5  # Y Velocity of player
     PLAYER_VELOCITY_X = 1.3  # X Velocity of player
 
-    MAX_ENERGY = 5100  # As the manual says, energy is consumed at a regular pace. We use 5100 for the initial value and subtract one for every frame to match the timing of the real game. (It takes 85 seconds for the energy to run out. 85 * 60 (fps) = 5100
+    MAX_ENERGY = 5100  # As the manual says, energy is consumed at a regular pace. We use 5100 for the initial value and subtract one for every frame to match the timing of the real game. (It takes 85 seconds for the energy to run out. 85 * 60 (fps) = 5100)
     MAX_SHIELDS = 24  # As the manual says, the Dante Dart starts with 24 shield units
     MAX_DTIME = 10200  # Same idea as energy.
 
@@ -93,7 +93,7 @@ class LaserGatesConstants:
     RADAR_MORTAR_MISSILE_COLOR = (85, 92, 197, 255)
     RADAR_MORTAR_MISSILE_SPAWN_EVERY = 100  # A missile is spawned every RADAR_MORTAR_MISSILE_SPAWN_EVERY-th frame.
     RADAR_MORTAR_MISSILE_SPEED = 3  # Speed of radar mortar missile
-    RADAR_MORTAR_MISSILE_SHOOT_NUMBER = 3  # How often missile gets teleported back before final shot (exept when shooting up or down)
+    RADAR_MORTAR_MISSILE_SHOOT_NUMBER = 3  # How often the missile gets teleported back before final shot (exept when shooting up or down)
     RADAR_MORTAR_MISSILE_SMALL_OUT_OF_BOUNDS_THRESHOLD = 50  # How far the missile needs to be away from the radar mortar (vertically or/and horizontally) for the missile to be teleported back to the mortar (to be shot again)
     RADAR_MORTAR_SHOOT_STRAIGHT_THRESHOLD = 10  # This defines how far the player needs to be away from the radar mortar (vertically or/and horizontally) for the missile to be shot diagonally
 
@@ -101,8 +101,8 @@ class LaserGatesConstants:
     BYTE_BAT_SIZE = (7, 8)  # Width, Height
     BYTE_BAT_COLOR = (90, 169, 99, 255)
 
-    BYTE_BAT_UPPER_BORDER_Y = UPPER_MOUNTAINS_Y + MOUNTAIN_SIZE[1] + 2  # Upper border where byte bat inverts direction
-    BYTE_BAT_BOTTOM_BORDER_Y = LOWER_MOUNTAINS_Y - MOUNTAIN_SIZE[1]  # Lower border where byte bat inverts direction
+    BYTE_BAT_UPPER_BORDER_Y = UPPER_MOUNTAINS_Y + MOUNTAIN_SIZE[1] + 2  # Upper border where byte bat inverts the direction
+    BYTE_BAT_BOTTOM_BORDER_Y = LOWER_MOUNTAINS_Y - MOUNTAIN_SIZE[1]  # Lower border where byte bat inverts the direction
     BYTE_BAT_SUBTRACT_FROM_BORDER = 20
     BYTE_BAT_PLAYER_DIST_TRIGGER = 50
 
@@ -115,8 +115,8 @@ class LaserGatesConstants:
     # -------- Rock muncher constants --------
     ROCK_MUNCHER_SIZE = (8, 11)  # Width, Height
 
-    ROCK_MUNCHER_UPPER_BORDER_Y = UPPER_MOUNTAINS_Y + MOUNTAIN_SIZE[1] + 5 + 10  # Upper border where rock muncher inverts direction
-    ROCK_MUNCHER_BOTTOM_BORDER_Y = LOWER_MOUNTAINS_Y - MOUNTAIN_SIZE[1] - 3  # Lower border where rock muncher inverts direction
+    ROCK_MUNCHER_UPPER_BORDER_Y = UPPER_MOUNTAINS_Y + MOUNTAIN_SIZE[1] + 5 + 10  # Upper border where rock muncher inverts the direction
+    ROCK_MUNCHER_BOTTOM_BORDER_Y = LOWER_MOUNTAINS_Y - MOUNTAIN_SIZE[1] - 3  # Lower border where rock muncher inverts the direction
 
     ROCK_MUNCHER_SPAWN_X = WIDTH  # Spawn barely outside of screen
     ROCK_MUNCHER_SPAWN_Y = ROCK_MUNCHER_UPPER_BORDER_Y + 1
@@ -177,7 +177,7 @@ class LaserGatesConstants:
 
     # -------- GUI/instrument panel constants --------
     GUI_COLORED_BACKGROUND_SIZE = (128, 12)  # Width, Height of colored background of black rectangle background
-    GUI_BLACK_BACKGROUND_SIZE = (56, 10)  # Width, Height of black background of text
+    GUI_BLACK_BACKGROUND_SIZE = (56, 10)  # Width, Height of black background of the text
     GUI_TEXT_SCORE_SIZE = (21, 7)  # Width, Height of "Score" text
     GUI_TEXT_ENERGY_SIZE = (23, 5)  # Width, Height of "Energy" text
     GUI_TEXT_SHIELDS_SIZE = (23, 5)  # Width, Height of "Shields" text
@@ -199,9 +199,9 @@ class LaserGatesConstants:
 
     ENERGY_START_BLINKING_PERCENTAGE = 0.2 # see below
     SHIELDS_START_BLINKING_PERCENTAGE = 0.2 # see below
-    DTIME_START_BLINKING_PERCENTAGE = 0.2 # Field in instrument panel starts blinking when the current value is smaller than VALUE_START_BLINKING_PERCENTAGE * MAX_VALUE.
+    DTIME_START_BLINKING_PERCENTAGE = 0.2 # The Field in the instrument panel starts blinking when the current value is smaller than VALUE_START_BLINKING_PERCENTAGE * MAX_VALUE.
 
-    SHIELD_LOSS_COL_SMALL = 1 # see is_big_collision entry in CollisionPropertiesState for extensive explanation. This constant defines the shield points to lose
+    SHIELD_LOSS_COL_SMALL = 1 # See is_big_collision entry in CollisionPropertiesState for extensive explanation. This constant defines the shield points to lose
     SHIELD_LOSS_COL_BIG = 6
 
     # -------- Debug constants --------
@@ -300,7 +300,7 @@ class CollisionPropertiesState(NamedTuple):
     is_energy_pod: jnp.bool                     # If entity is energy pod
     is_detonator: jnp.bool                      # If entity is detonator
     is_ff_or_dp: jnp.bool                       # If entity is forcefield or densepack
-    score_to_add: chex.Array                    # Score to add to current score at collision. Radar Mortar: 115, Rock Muncher: 325, Byte Bat: 330, Pass Forcefield: 400, Homing Missile: 525, Detonator: 6507
+    score_to_add: chex.Array                    # Score to add to the current score at collision. Radar Mortar: 115, Rock Muncher: 325, Byte Bat: 330, Pass Forcefield: 400, Homing Missile: 525, Detonator: 6507
     death_timer: chex.Array                     # Animation timer used for entity death animations. Change the speed with ENTITY_DEATH_ANIMATION_TIMER
 
 class EntitiesState(NamedTuple):
@@ -376,6 +376,14 @@ class LaserGatesObservation(NamedTuple):
     densepack: EntityPosition
     detonator: EntityPosition
     energy_pod: EntityPosition
+
+    # Mountains (3 top, 3 bottom)
+    upper_mountain_0: EntityPosition
+    upper_mountain_1: EntityPosition
+    upper_mountain_2: EntityPosition
+    lower_mountain_0: EntityPosition
+    lower_mountain_1: EntityPosition
+    lower_mountain_2: EntityPosition
 
 
 class LaserGatesInfo(NamedTuple):
@@ -621,10 +629,10 @@ class JaxLaserGates(JaxEnvironment[LaserGatesState, LaserGatesObservation, Laser
             Action.DOWNLEFTFIRE
         ]
         self.frame_stack_size = 4
-        self.num_obs_slots = 17
+        self.num_obs_slots = 23
         self.features_per_slot = 5  # x, y, w, h, active
         self.obs_size = self.num_obs_slots * self.features_per_slot
-        self.renderer = LaserGatesRenderer()
+        self.renderer = LaserGatesRenderer(self.consts)
 
     @partial(jax.jit, static_argnums=(0,))
     def render(self, state: LaserGatesState) -> jnp.ndarray:
@@ -801,7 +809,7 @@ class JaxLaserGates(JaxEnvironment[LaserGatesState, LaserGatesObservation, Laser
             # Detonator:        minval=6, maxval=7
             # Energy pod:       minval=7, maxval=8
 
-            # Allow spawning of detonator or energy pod, if values in state are low enough
+            # Allow spawning of detonator or energy pod if values in the state are low enough
             allow_spawn_detonator = state.dtime < (self.consts.ALLOW_DETONATOR_PERCENTAGE * self.consts.MAX_DTIME)
             allow_spawn_energy_pod = state.energy < (self.consts.ALLOW_ENERGY_POD_PERCENTAGE * self.consts.MAX_ENERGY)
             # Spawn detonator or energy pod if is allowed and probability is hit
@@ -840,7 +848,7 @@ class JaxLaserGates(JaxEnvironment[LaserGatesState, LaserGatesObservation, Laser
         new_x2 = jnp.where(update_tick, mountain_state.x2 - self.consts.UPDATE_EVERY * state.scroll_speed, mountain_state.x2)
         new_x3 = jnp.where(update_tick, mountain_state.x3 - self.consts.UPDATE_EVERY * state.scroll_speed, mountain_state.x3)
 
-        # If completely behind left border, set x position to the right again
+        # If completely behind the left border, set x position to the right again
         new_x1 = jnp.where(new_x1 < 0 - self.consts.MOUNTAIN_SIZE[0], new_x3 + self.consts.MOUNTAIN_SIZE[0] + self.consts.MOUNTAINS_DISTANCE, new_x1)
         new_x2 = jnp.where(new_x2 < 0 - self.consts.MOUNTAIN_SIZE[0], new_x1 + self.consts.MOUNTAIN_SIZE[0] + self.consts.MOUNTAINS_DISTANCE, new_x2)
         new_x3 = jnp.where(new_x3 < 0 - self.consts.MOUNTAIN_SIZE[0], new_x2 + self.consts.MOUNTAIN_SIZE[0] + self.consts.MOUNTAINS_DISTANCE, new_x3)
@@ -895,7 +903,7 @@ class JaxLaserGates(JaxEnvironment[LaserGatesState, LaserGatesObservation, Laser
                 jnp.all(dir_to_player == jnp.array([0, -1]))
             )
 
-            # Only start repeat fire when a fresh spawn occurred and is alive
+            # Only start repeat fire when fresh spawn occurred and is alive
             fresh_spawn = jnp.logical_and(jnp.logical_and(missile_dead, spawn_trigger), rm.is_alive)
 
             # Decide new timer value
@@ -914,10 +922,10 @@ class JaxLaserGates(JaxEnvironment[LaserGatesState, LaserGatesObservation, Laser
                 jnp.logical_and(new_timer > 0, small_oob)
             )
 
-            # Base position & direction: either spawn or keep old
+            # Base position and direction: either spawn or keep old
             base_x = jnp.where(in_spawn_phase, spawn_x, rm.missile_x)
             base_y = jnp.where(in_spawn_phase, spawn_y, rm.missile_y)
-            # Keep original direction until timer runs out
+            # Keep the original direction until the timer runs out
             base_dir = jnp.where(fresh_spawn, dir_to_player, rm.missile_direction)
 
             # Kill only if timer == 0 and fully out_of_bounds
@@ -2097,7 +2105,7 @@ class JaxLaserGates(JaxEnvironment[LaserGatesState, LaserGatesObservation, Laser
             hm.x, hm.y, c.HOMING_MISSILE_SIZE[0], c.HOMING_MISSILE_SIZE[1], hm_active
         )
 
-        # --- Forcefields (bis zu 3 Paare upper/lower) ---
+        # --- Forcefields (up to 3 pairs (upper and lower, so 6 in total)) ---
         ff = state.entities.forcefield_state
         ff_base_active = jnp.logical_and(ff.is_in_current_event, ff.is_alive)
         is_flashing = jnp.logical_and(jnp.logical_not(ff.is_flexing), jnp.logical_not(ff.is_fixed))
@@ -2118,7 +2126,7 @@ class JaxLaserGates(JaxEnvironment[LaserGatesState, LaserGatesObservation, Laser
         ff2_u = self._masked_ep(ff.x4, ff.y4, ff_w, ff_h, ff_col_active(ff.num_of_forcefields > 2))
         ff2_l = self._masked_ep(ff.x5, ff.y5, ff_w, ff_h, ff_col_active(ff.num_of_forcefields > 2))
 
-        # --- Densepack ---
+        # --- Densepack (not every single part of the densepack is returned here, since there are a lot) ---
         dp = state.entities.dense_pack_state
         dp_active = jnp.logical_and(dp.is_in_current_event, dp.is_alive)
         dp_w = jnp.where(dp.is_wide, c.DENSEPACK_WIDE_PART_SIZE[0], c.DENSEPACK_NORMAL_PART_SIZE[0])
@@ -2134,6 +2142,21 @@ class JaxLaserGates(JaxEnvironment[LaserGatesState, LaserGatesObservation, Laser
         ep = state.entities.energy_pod_state
         ep_active = jnp.logical_and(ep.is_in_current_event, ep.is_alive)
         energy_pod = self._masked_ep(ep.x, ep.y, c.ENERGY_POD_SIZE[0], c.ENERGY_POD_SIZE[1], ep_active)
+
+        # --- Mountains ---
+        mw, mh = c.MOUNTAIN_SIZE
+
+        def mountain_visible(x):
+            # only active if bounding box cuts screen
+            return jnp.logical_and(x + mw > 0, x < c.WIDTH)
+
+        um0 = self._masked_ep(state.upper_mountains.x1, state.upper_mountains.y, mw, mh, mountain_visible(state.upper_mountains.x1))
+        um1 = self._masked_ep(state.upper_mountains.x2, state.upper_mountains.y, mw, mh, mountain_visible(state.upper_mountains.x2))
+        um2 = self._masked_ep(state.upper_mountains.x3, state.upper_mountains.y, mw, mh, mountain_visible(state.upper_mountains.x3))
+
+        lm0 = self._masked_ep(state.lower_mountains.x1, state.lower_mountains.y, mw, mh, mountain_visible(state.lower_mountains.x1))
+        lm1 = self._masked_ep(state.lower_mountains.x2, state.lower_mountains.y, mw, mh, mountain_visible(state.lower_mountains.x2))
+        lm2 = self._masked_ep(state.lower_mountains.x3, state.lower_mountains.y, mw, mh, mountain_visible(state.lower_mountains.x3))
 
         return LaserGatesObservation(
             player=player,
@@ -2153,12 +2176,15 @@ class JaxLaserGates(JaxEnvironment[LaserGatesState, LaserGatesObservation, Laser
             densepack=densepack,
             detonator=detonator,
             energy_pod=energy_pod,
+            upper_mountain_0=um0,
+            upper_mountain_1=um1,
+            upper_mountain_2=um2,
+            lower_mountain_0=lm0,
+            lower_mountain_1=lm1,
+            lower_mountain_2=lm2,
         )
 
     def _get_info(self, state: LaserGatesState, all_rewards: jnp.ndarray | None = None) -> LaserGatesInfo:
-        if all_rewards is None:
-            n = 0 if self.reward_funcs is None else len(self.reward_funcs)
-            all_rewards = jnp.zeros((n,), dtype=jnp.float32)
         return LaserGatesInfo(
             step_counter=state.step_counter,
             all_rewards=all_rewards,
@@ -2176,19 +2202,23 @@ class JaxLaserGates(JaxEnvironment[LaserGatesState, LaserGatesObservation, Laser
         return rewards
 
     @partial(jax.jit, static_argnums=(0,))
-    def _get_done(self, state: LaserGatesState) -> bool:
-        return state.shields <= 0
+    def _get_done(self, state: LaserGatesState) -> chex.Array:
+        return (
+                (state.shields <= 0)
+                | (state.dtime <= 0)
+                | (state.energy <= 0)
+        )
 
     def image_space(self) -> spaces.Box:
         return spaces.Box(
             low=0,
             high=255,
             shape=(self.consts.HEIGHT, self.consts.WIDTH, 3),
-            dtype=jnp.uint8,
+            dtype=jnp.uint8
         )
 
     def _scalar_box(self, low, high):
-        # Skalar-Box (shape=()) für Dict-Blätter, float32
+        # Scalar-Box (shape=()) for dict leaves, float32
         return spaces.Box(
             low=jnp.array(low, dtype=jnp.float32),
             high=jnp.array(high, dtype=jnp.float32),
@@ -2197,8 +2227,8 @@ class JaxLaserGates(JaxEnvironment[LaserGatesState, LaserGatesObservation, Laser
         )
 
     def _entity_space(self) -> spaces.Dict:
-        # Grenzen großzügig wählen: x,y dürfen <0 sein (Offscreen), active ∈ [0,1]
-        x_box = self._scalar_box(-self.consts.WIDTH, 2 * self.consts.WIDTH)
+        # Choose bounds generously:
+        x_box = self._scalar_box(-self.consts.WIDTH, 4 * self.consts.WIDTH)
         y_box = self._scalar_box(-self.consts.HEIGHT, 2 * self.consts.HEIGHT)
         w_box = self._scalar_box(0.0, float(self.consts.WIDTH))
         h_box = self._scalar_box(0.0, float(self.consts.HEIGHT))
@@ -2226,12 +2256,17 @@ class JaxLaserGates(JaxEnvironment[LaserGatesState, LaserGatesObservation, Laser
             "densepack": self._entity_space(),
             "detonator": self._entity_space(),
             "energy_pod": self._entity_space(),
+            "upper_mountain_0": self._entity_space(),
+            "upper_mountain_1": self._entity_space(),
+            "upper_mountain_2": self._entity_space(),
+            "lower_mountain_0": self._entity_space(),
+            "lower_mountain_1": self._entity_space(),
+            "lower_mountain_2": self._entity_space(),
         })
 
     @partial(jax.jit, static_argnums=(0,))
     def obs_to_array(self, obs: LaserGatesObservation) -> jnp.ndarray:
         def row(ep: EntityPosition):
-            # Alle Felder sind bereits float32 in _make_ep/_masked_ep
             return jnp.array([ep.x, ep.y, ep.width, ep.height, ep.active], dtype=jnp.float32)
 
         rows = jnp.stack([
@@ -2252,13 +2287,19 @@ class JaxLaserGates(JaxEnvironment[LaserGatesState, LaserGatesObservation, Laser
             row(obs.densepack),
             row(obs.detonator),
             row(obs.energy_pod),
+            row(obs.upper_mountain_0),
+            row(obs.upper_mountain_1),
+            row(obs.upper_mountain_2),
+            row(obs.lower_mountain_0),
+            row(obs.lower_mountain_1),
+            row(obs.lower_mountain_2),
         ], axis=0)  # (num_slots, 5)
         return rows
 
     @partial(jax.jit, static_argnums=(0,))
     def obs_to_flat_array(self, obs: LaserGatesObservation) -> jnp.ndarray:
         mat = self.obs_to_array(obs)  # (num_slots, 5)
-        return jnp.reshape(mat, (self.obs_size,))  # float32-Vektor
+        return jnp.reshape(mat, (self.obs_size,))  # float32-Vector
 
     @partial(jax.jit, static_argnums=(0, ))
     def reset(self, key = jax.random.PRNGKey(42)) -> Tuple[LaserGatesObservation, LaserGatesState]:
