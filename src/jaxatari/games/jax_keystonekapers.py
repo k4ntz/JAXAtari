@@ -1426,8 +1426,18 @@ class KeystoneKapersRenderer(JAXGameRenderer):
         self.sprites = self._create_simple_sprites()
 
     def _create_simple_sprites(self) -> Dict[str, Any]:
-        """Create simple colored rectangle sprites."""
+        """Create simple colored rectangle sprites and load sky sprite."""
         sprites = {}
+
+        # Load the sky and buildings sprite
+        try:
+            sky_sprite_path = os.path.join(os.path.dirname(__file__), 'sprites', 'keystonekapers', 'sky_and_buildings.npy')
+            sky_sprite_rgba = jr.loadFrame(sky_sprite_path)
+            # Convert RGBA to RGB by taking first 3 channels
+            sprites['sky'] = sky_sprite_rgba[:, :, :3].astype(jnp.uint8)
+        except:
+            # Fallback to simple blue rectangle if sprite loading fails
+            sprites['sky'] = jnp.ones((40, 152, 3), dtype=jnp.uint8) * jnp.array([135, 206, 235], dtype=jnp.uint8)  # Sky blue
 
         # Create simple colored rectangles for each entity
         sprites['player'] = jnp.ones((self.consts.PLAYER_HEIGHT, self.consts.PLAYER_WIDTH, 3), dtype=jnp.uint8) * jnp.array(self.consts.PLAYER_COLOR, dtype=jnp.uint8)
@@ -1478,6 +1488,45 @@ class KeystoneKapersRenderer(JAXGameRenderer):
 
             # Apply color where mask is True
             return jnp.where(mask[:, :, None], color, game_area)
+
+        # Draw sky and buildings sprite above the roof level (covering all green background)
+        sky_sprite = self.sprites['sky']
+        sky_height, sky_width = sky_sprite.shape[:2]
+        
+        # Position sky to cover from top of game area down to roof floor
+        roof_floor_top = self.consts.ROOF_Y + self.consts.FLOOR_HEIGHT
+        sky_bottom = 0  # Start from very top of game area
+        sky_visible_height = roof_floor_top - sky_bottom
+        
+        if sky_visible_height > 0:
+            # Tile the sky sprite horizontally to cover the game area width
+            tiles_needed = (self.consts.GAME_AREA_WIDTH + sky_width - 1) // sky_width
+            
+            # Create horizontal tiling of sky sprite
+            tiled_sky = jnp.tile(sky_sprite, (1, tiles_needed, 1))
+            # Crop to exact game area width
+            tiled_sky = tiled_sky[:, :self.consts.GAME_AREA_WIDTH, :]
+            
+            # If sky sprite is smaller than needed height, tile it vertically too
+            if sky_height < sky_visible_height:
+                vertical_tiles_needed = (sky_visible_height + sky_height - 1) // sky_height
+                tiled_sky = jnp.tile(tiled_sky, (vertical_tiles_needed, 1, 1))
+            
+            # Take only the portion that fits in the visible area
+            sky_to_draw = tiled_sky[:sky_visible_height, :, :]
+            
+            # Create mask for sky area (from top down to roof floor)
+            y_indices = jnp.arange(self.consts.GAME_AREA_HEIGHT)[:, None]
+            x_indices = jnp.arange(self.consts.GAME_AREA_WIDTH)[None, :]
+            sky_mask = ((y_indices >= sky_bottom) & (y_indices < roof_floor_top) & 
+                       (x_indices >= 0) & (x_indices < self.consts.GAME_AREA_WIDTH))
+            
+            # Apply sky sprite to game area
+            game_area = jnp.where(
+                sky_mask[:, :, None],
+                sky_to_draw[y_indices - sky_bottom, x_indices, :],
+                game_area
+            )
 
         # Draw floors with tan and yellow layers (like minimap)
         floor_tan_color = jnp.array(self.consts.FLOOR_TAN_COLOR, dtype=jnp.uint8)
