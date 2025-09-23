@@ -486,7 +486,7 @@ def update_bombs(
     # new_lives was already calculated when any_bomb_missed was detected
     
     # Update level based on score milestones
-    new_level = jnp.floor(new_score / 100) + 1
+    new_level = (jnp.floor(new_score / 100) + 1).astype(jnp.int32)
     
     return (
         new_bomb_active, 
