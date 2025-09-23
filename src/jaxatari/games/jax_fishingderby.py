@@ -40,11 +40,11 @@ class GameConfig:
     FISH_SCORING_Y: int = 78
 
     # Rod mechanics
-    MIN_ROD_LENGTH_X: int = 20  # Minimum horizontal rod extension
-    START_ROD_LENGTH_X: int = 20  # Starting horizontal rod length
+    MIN_ROD_LENGTH_X: int = 23  # Minimum horizontal rod extension
+    START_ROD_LENGTH_X: int = 23  # Starting horizontal rod length
     MAX_ROD_LENGTH_X: int = 65  # Maximum horizontal extension
-    P2_MIN_ROD_LENGTH_X: int = 5  # Reduce this to allow less leftward extension
-    P2_MAX_ROD_LENGTH_X: int = 80  # Increase this to allow more rightward extension
+    P2_MIN_ROD_LENGTH_X: int = 7  # Reduce this to allow less leftward extension
+    P2_MAX_ROD_LENGTH_X: int = 49  # Increase this to allow more rightward extension
     MIN_HOOK_DEPTH_Y: int = 0  # Minimum vertical hook depth
     START_HOOK_DEPTH_Y: int = 40  # Starting vertical hook depth
     MAX_HOOK_DEPTH_Y: int = 160  # Maximum vertical extension to reach bottom fish
@@ -322,14 +322,11 @@ class FishingDerby(JaxEnvironment):
 
             def reeling_action():
                 # 4. Action Button Simulation (Fast Reeling)
-                # Press FIRE if bit 6 of the shark's x-position is set.
-                # This is a quirky condition from the original game's AI.
-                shark_x_int = jnp.floor(state.shark_x).astype(jnp.int32)
-                press_fire = (jnp.bitwise_and(shark_x_int, 64)) != 0
+                # Press FIRE if the shark is on the left side of the screen.
+                is_shark_on_left = state.shark_x < (cfg.SCREEN_WIDTH / 2)
 
-                # 3. Horizontal Movement (Reel In)
-                # Always move RIGHT while reeling, and add FIRE if condition is met.
-                return jnp.where(press_fire, Action.RIGHTFIRE, Action.RIGHT)
+                # Always move RIGHT while reeling, and add FIRE if the shark is on the left.
+                return jnp.where(is_shark_on_left, Action.RIGHTFIRE, Action.RIGHT)
 
             # Choose action based on whether a fish is hooked.
             ai_action = jnp.where(p2_state.hooked_fish_idx >= 0, reeling_action(), fishing_action())
