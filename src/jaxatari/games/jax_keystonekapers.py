@@ -1685,10 +1685,10 @@ class KeystoneKapersRenderer(JAXGameRenderer):
             floor_y = minimap_display_y + visual_floor_idx * floor_stripe_height
 
             if visual_floor_idx == 0:  # Roof (top of minimap) - only 2 layers (tan, yellow)
-                layer_height = max(1, floor_stripe_height // 2)
-                # Draw layers from top to bottom: tan first, then yellow
+                layer_height = max(1, floor_stripe_height // 4)  # Same layer height as regular floors
+                # Draw layers shifted down by 2 pixels to eliminate gap
                 for layer_idx in range(2):
-                    layer_y = floor_y + layer_idx * layer_height
+                    layer_y = floor_y + layer_idx * layer_height + 2  # Shift down by 2 pixels
                     game_area = draw_rectangle_simple(game_area, minimap_display_x, layer_y,
                                                     minimap_width, layer_height,
                                                     roof_colors[layer_idx])
