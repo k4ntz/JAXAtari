@@ -288,7 +288,7 @@ class VideoPinballConstants(NamedTuple):
     BOTTOM_WALL_LEFT_X_OFFSET = jnp.array(12)
     BOTTOM_WALL_TOP_Y_OFFSET = jnp.array(184)
 
-    INVISIBLE_BLOCK_LEFT_X_OFFSET = jnp.array(149)
+    INVISIBLE_BLOCK_LEFT_X_OFFSET = jnp.array(129)
     INVISIBLE_BLOCK_TOP_Y_OFFSET = jnp.array(36)
 
     INNER_WALL_TOP_Y_OFFSET = jnp.array(56)
@@ -387,7 +387,7 @@ class VideoPinballConstants(NamedTuple):
     # Instantiate a SceneObject like this:
     INVISIBLE_BLOCK_SCENE_OBJECT = SceneObject(
         hit_box_height=jnp.array(2),  # type: ignore
-        hit_box_width=jnp.array(INNER_WALL_THICKNESS),  # type: ignore
+        hit_box_width=jnp.array(INNER_WALL_THICKNESS + 20),  # type: ignore
         hit_box_x_offset=jnp.array(INVISIBLE_BLOCK_LEFT_X_OFFSET),  # type: ignore
         hit_box_y_offset=jnp.array(INVISIBLE_BLOCK_TOP_Y_OFFSET),  # type: ignore
         reflecting=jnp.array(1),  # type: ignore

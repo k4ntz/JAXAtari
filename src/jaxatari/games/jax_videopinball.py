@@ -892,7 +892,7 @@ class JaxVideoPinball(
 
         plunger_position, plunger_power = jax.lax.cond(
             state.ball_in_play,
-            lambda: (state.plunger_position, state.plunger_power),
+            lambda: (jnp.array(0), jnp.array(0.)),
             lambda: (plunger_position, plunger_power)
         )
 
@@ -2862,13 +2862,14 @@ class JaxVideoPinball(
 
             # adjust horizontal location depending on nudge direction
             ball_x_new = jax.lax.cond(
-                jnp.logical_and(
-                    jnp.equal(action, Action.RIGHTFIRE),
-                    jnp.remainder(state.step_counter, self.consts.NUDGE_EFFECT_INTERVAL)
-                    == 0,
+                state.step_counter % self.consts.NUDGE_EFFECT_INTERVAL == 0,
+                lambda bv: jax.lax.cond(
+                    action == Action.RIGHTFIRE,
+                    lambda bv: bv + self.consts.NUDGE_EFFECT_AMOUNT,
+                    lambda bv: bv - self.consts.NUDGE_EFFECT_AMOUNT,
+                    bv
                 ),
-                lambda bv: bv + self.consts.NUDGE_EFFECT_AMOUNT,
-                lambda bv: bv - self.consts.NUDGE_EFFECT_AMOUNT,
+                lambda bv: bv,
                 ball_x,
             )
 
@@ -3074,7 +3075,6 @@ class JaxVideoPinball(
         ball_vel_x, ball_vel_y, ball_direction = self._apply_gravity(
             ball_x, ball_vel_x, ball_vel_y, ball_direction
         )
-
         """
         Nudge effect calculation and tilt counter update
         """
