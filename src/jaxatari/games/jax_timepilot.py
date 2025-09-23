@@ -165,6 +165,7 @@ class TimePilotObservation(NamedTuple):
     player_missile: EntityPosition  # (x, y, width, height, rotation, active)
     enemies: jnp.ndarray # shape (4, 6) - 4 enemies, each with (x, y, width, height, rotation, active)
     level_boss: EntityPosition # (x, y, width, height, rotation, active)
+    enemy_missiles: EntityPosition  # shape (2, 6) - 4 enemy missiles, each with (x, y, width, height, rotation, active)
 
     level: jnp.ndarray
     score: jnp.ndarray
@@ -198,7 +199,7 @@ class JaxTimePilot(JaxEnvironment[TimePilotState, TimePilotObservation, TimePilo
             Action.RIGHTFIRE,
             Action.LEFTFIRE
         ])
-        self.obs_size = 3*6 + self.consts.MAX_NUMBER_OF_ENEMIES*6 + 4
+        self.obs_size = 3*6 + self.consts.MAX_NUMBER_OF_ENEMIES*6 + self.consts.MAX_ENEMY_MISSILES*6 + 4
         self.renderer = TimePilotRenderer(consts)
 
     @partial(jax.jit, static_argnums=(0,))
@@ -1189,11 +1190,27 @@ class JaxTimePilot(JaxEnvironment[TimePilotState, TimePilotObservation, TimePilo
             )
         )
 
+        # enemy missiles
+        def convert_enemy_missile_state_to_entity(enemy_missile_state):
+            return jnp.array([
+                enemy_missile_state[0], # x position
+                enemy_missile_state[1], # y position
+                jnp.array(self.consts.MISSILE_SIZE[0]),
+                jnp.array(self.consts.MISSILE_SIZE[1]),
+                enemy_missile_state[2], # rotation
+                enemy_missile_state[3] # active flag
+            ])
+
+        enemy_missiles = jax.vmap(convert_enemy_missile_state_to_entity)(
+            state.enemy_missile_states
+        )
+
         return TimePilotObservation(
             player=player,
             player_missile=player_missile,
             enemies=enemies,
             level_boss=level_boss,
+            enemy_missiles=enemy_missiles,
             level=state.level,
             score=state.score,
             lives=state.lives,
@@ -1218,6 +1235,7 @@ class JaxTimePilot(JaxEnvironment[TimePilotState, TimePilotObservation, TimePilo
             entity_pos_to_flat_array(obs.player_missile),
             obs.enemies.flatten(),
             entity_pos_to_flat_array(obs.level_boss),
+            obs.enemy_missiles.flatten(),
 
             obs.level.flatten(),
             obs.score.flatten(),
@@ -1235,6 +1253,7 @@ class JaxTimePilot(JaxEnvironment[TimePilotState, TimePilotObservation, TimePilo
         - player_missile: EntityPosition (x, y, width, height, rotation, active)
         - enemies: array of shape (4, 6) with (x, y, width, height, rotation, active)
         - level_boss: EntityPosition (x, y, width, height, rotation, active)
+        - enemy_missiles: array of shape (2, 6) with (x, y, width, height, rotation, active)
         - level: int (1-5)
         - score: int (0-999900)
         - lives: int (0-5)
@@ -1250,25 +1269,26 @@ class JaxTimePilot(JaxEnvironment[TimePilotState, TimePilotObservation, TimePilo
                 "active": spaces.Box(low=0, high=1, shape=(), dtype=jnp.int32),
             }),
             "player_missile": spaces.Dict({
-                "x": spaces.Box(low=0, high=160, shape=(), dtype=jnp.int32),
-                "y": spaces.Box(low=0, high=210, shape=(), dtype=jnp.int32),
+                "x": spaces.Box(low=-8, high=168, shape=(), dtype=jnp.int32),# TODO
+                "y": spaces.Box(low=25, high=188, shape=(), dtype=jnp.int32),
                 "width": spaces.Box(low=0, high=160, shape=(), dtype=jnp.int32),
                 "height": spaces.Box(low=0, high=210, shape=(), dtype=jnp.int32),
                 "rotation": spaces.Box(low=0, high=8, shape=(), dtype=jnp.int32),
                 "active": spaces.Box(low=0, high=1, shape=(), dtype=jnp.int32),
             }),
-            "enemies": spaces.Box(low=0, high=160, shape=(self.consts.MAX_NUMBER_OF_ENEMIES, 6), dtype=jnp.int32),
+            "enemies": spaces.Box(low=-50, high=226, shape=(self.consts.MAX_NUMBER_OF_ENEMIES, 6), dtype=jnp.int32),
             "level_boss": spaces.Dict({
-                "x": spaces.Box(low=0, high=160, shape=(), dtype=jnp.int32),
-                "y": spaces.Box(low=0, high=210, shape=(), dtype=jnp.int32),
+                "x": spaces.Box(low=-50, high=210, shape=(), dtype=jnp.int32),
+                "y": spaces.Box(low=-17, high=226, shape=(), dtype=jnp.int32),
                 "width": spaces.Box(low=0, high=160, shape=(), dtype=jnp.int32),
                 "height": spaces.Box(low=0, high=210, shape=(), dtype=jnp.int32),
                 "rotation": spaces.Box(low=0, high=8, shape=(), dtype=jnp.int32),
                 "active": spaces.Box(low=0, high=1, shape=(), dtype=jnp.int32),
             }),
+            "enemy_missiles": spaces.Box(low=-4, high=180, shape=(self.consts.MAX_ENEMY_MISSILES, 6), dtype=jnp.int32), # TODO
             "level": spaces.Box(low=1, high=5, shape=(), dtype=jnp.int32),
             "score": spaces.Box(low=0, high=self.consts.MAX_SCORE, shape=(), dtype=jnp.int32),
-            "lives": spaces.Box(low=0, high=5, shape=(), dtype=jnp.int32),
+            "lives": spaces.Box(low=0, high=self.consts.MAX_LIVES, shape=(), dtype=jnp.int32),
             "enemies_remaining": spaces.Box(low=0, high=self.consts.INITIAL_ENEMIES_REMAINING, shape=(), dtype=jnp.int32)
         })
 
