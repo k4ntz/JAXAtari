@@ -1426,7 +1426,7 @@ class KeystoneKapersRenderer(JAXGameRenderer):
         self.sprites = self._create_simple_sprites()
 
     def _create_simple_sprites(self) -> Dict[str, Any]:
-        """Create simple colored rectangle sprites and load sky sprite."""
+        """Create simple colored rectangle sprites and load actual sprites."""
         sprites = {}
 
         # Load the sky and buildings sprite
@@ -1438,6 +1438,26 @@ class KeystoneKapersRenderer(JAXGameRenderer):
         except:
             # Fallback to simple blue rectangle if sprite loading fails
             sprites['sky'] = jnp.ones((40, 152, 3), dtype=jnp.uint8) * jnp.array([135, 206, 235], dtype=jnp.uint8)  # Sky blue
+
+        # Load the kop life sprite
+        try:
+            kop_life_sprite_path = os.path.join(os.path.dirname(__file__), 'sprites', 'keystonekapers', 'kop_life.npy')
+            kop_life_sprite_rgba = jr.loadFrame(kop_life_sprite_path)
+            
+            # Handle RGBA properly - use alpha channel for transparency
+            rgb_data = kop_life_sprite_rgba[:, :, :3]
+            alpha_data = kop_life_sprite_rgba[:, :, 3:4]
+            
+            # Convert to RGB, handling transparency by using alpha blending with white background
+            # Where alpha is 0 (transparent), use white; where alpha is 255, use the RGB color
+            alpha_normalized = alpha_data.astype(jnp.float32) / 255.0
+            white_background = jnp.ones_like(rgb_data) * 255
+            
+            sprites['kop_life'] = (rgb_data.astype(jnp.float32) * alpha_normalized + 
+                                 white_background * (1 - alpha_normalized)).astype(jnp.uint8)
+        except Exception as e:
+            # Fallback to simple green rectangle if sprite loading fails
+            sprites['kop_life'] = jnp.ones((8, 10, 3), dtype=jnp.uint8) * jnp.array([0, 255, 0], dtype=jnp.uint8)  # Green
 
         # Create simple colored rectangles for each entity
         sprites['player'] = jnp.ones((self.consts.PLAYER_HEIGHT, self.consts.PLAYER_WIDTH, 3), dtype=jnp.uint8) * jnp.array(self.consts.PLAYER_COLOR, dtype=jnp.uint8)
@@ -1488,6 +1508,33 @@ class KeystoneKapersRenderer(JAXGameRenderer):
 
             # Apply color where mask is True
             return jnp.where(mask[:, :, None], color, game_area)
+
+        # Helper function to draw a sprite at a specific position
+        def draw_sprite(game_area, sprite, x, y):
+            """Draw a sprite at the given position in the game area."""
+            sprite_height, sprite_width = sprite.shape[:2]
+            
+            # Ensure coordinates are within bounds
+            x = jnp.clip(x, 0, self.consts.GAME_AREA_WIDTH - sprite_width)
+            y = jnp.clip(y, 0, self.consts.GAME_AREA_HEIGHT - sprite_height)
+            
+            # Create indices for positioning
+            y_indices = jnp.arange(self.consts.GAME_AREA_HEIGHT)[:, None]
+            x_indices = jnp.arange(self.consts.GAME_AREA_WIDTH)[None, :]
+            
+            # Create mask for sprite placement
+            mask = ((y_indices >= y) & (y_indices < y + sprite_height) &
+                   (x_indices >= x) & (x_indices < x + sprite_width))
+            
+            # Apply sprite where mask is True
+            sprite_indices_y = jnp.clip(y_indices - y, 0, sprite_height - 1)
+            sprite_indices_x = jnp.clip(x_indices - x, 0, sprite_width - 1)
+            
+            return jnp.where(
+                mask[:, :, None],
+                sprite[sprite_indices_y, sprite_indices_x, :],
+                game_area
+            )
 
         # Draw sky and buildings sprite above the roof level (covering all green background)
         sky_sprite = self.sprites['sky']
@@ -1700,14 +1747,26 @@ class KeystoneKapersRenderer(JAXGameRenderer):
         # Draw simple UI elements on game area
         ui_color = jnp.array([255, 255, 255], dtype=jnp.uint8)  # White UI
 
-        # Score indicator (top left)
-        game_area = draw_rectangle_simple(game_area, 10, 10, 30, 8, ui_color)
+        # Lives indicator (top left) - 3 kop life sprites next to each other
+        kop_life_sprite = self.sprites['kop_life']
+        life_sprite_width = kop_life_sprite.shape[1]
+        
+        # Draw 3 life sprites horizontally on the left side
+        life_start_x = 10  # Start from the left edge
+        life_y = 10  # Top of the screen
+        
+        # Draw each life sprite using JAX where for conditional drawing
+        for i in range(3):
+            life_x = life_start_x + (i * (life_sprite_width + 2))  # 2 pixel spacing
+            # Use JAX where instead of Python if
+            should_draw_life = state.lives > i
+            game_area = jnp.where(
+                should_draw_life,
+                draw_sprite(game_area, kop_life_sprite, life_x, life_y),
+                game_area
+            )
 
-        # Lives indicator (top center)
-        game_area = draw_rectangle_simple(game_area, self.consts.GAME_AREA_WIDTH // 2 - 15, 10, 30, 8, ui_color)
-
-        # Timer indicator (top right)
-        game_area = draw_rectangle_simple(game_area, self.consts.GAME_AREA_WIDTH - 40, 10, 30, 8, ui_color)
+        # Timer indicator (top right) - removed white bar, can add actual timer display later if needed
 
         # Camera position indicator (above minimap)
         # camera_indicator_x = (state.camera_x / self.consts.TOTAL_BUILDING_WIDTH * self.consts.GAME_AREA_WIDTH)
