@@ -1270,7 +1270,7 @@ class JaxTimePilot(JaxEnvironment[TimePilotState, TimePilotObservation, TimePilo
             }),
             "player_missile": spaces.Dict({
                 "x": spaces.Box(low=-8, high=168, shape=(), dtype=jnp.int32),
-                "y": spaces.Box(low=25, high=188, shape=(), dtype=jnp.int32),
+                "y": spaces.Box(low=0, high=188, shape=(), dtype=jnp.int32),
                 "width": spaces.Box(low=0, high=160, shape=(), dtype=jnp.int32),
                 "height": spaces.Box(low=0, high=210, shape=(), dtype=jnp.int32),
                 "rotation": spaces.Box(low=0, high=8, shape=(), dtype=jnp.int32),
