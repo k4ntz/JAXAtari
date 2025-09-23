@@ -3,7 +3,7 @@ from enum import Enum
 import jax.numpy as jnp
 from jax import Array as jArray
 import os
-from jaxatari.games.jax_montezuma_utils import SANTAH
+from jaxatari.games.jax_mzuma_utils import SANTAH
 
 class GlobalLadderBehavior:
     TELEPORT_ONTO_LADDER_FROM_HORIZONTAL_DISTANCE = jnp.array([5], jnp.uint32) 
@@ -547,6 +547,9 @@ class Layouts(Enum):
     demo_layout = "demo_layout"
     difficulty_1 = "difficulty_1"
     difficulty_2 = "difficulty_2"
+    difficulty_3 = "difficulty_3"
+    difficulty_1_2 = "difficulty_1_2"
+    difficulty_1_2_3 = "difficulty_1_2_3"
     
 class MontezumaStateFields(Enum):
     room_state = "room_state"   

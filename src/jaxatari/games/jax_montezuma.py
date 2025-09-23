@@ -38,9 +38,9 @@ import jaxatari.spaces as spaces
 
 np.set_printoptions(threshold=np.inf)
 from jax import random, Array
-from jaxatari.games.jax_montezuma_utils import SANTAH, Room, PyramidLayout, RoomConnectionDirections, NamedTupleFieldType, loadFrameAddAlpha, load_collision_map
-from jaxatari.games.jax_montezuma_enums_and_nts import *
-from jaxatari.games.jax_montezuma_layouts import *
+from jaxatari.games.jax_mzuma_utils import SANTAH, Room, PyramidLayout, RoomConnectionDirections, NamedTupleFieldType, loadFrameAddAlpha, load_collision_map
+from jaxatari.games.jax_mzuma_enums_and_nts import *
+from jaxatari.games.jax_mzuma_layouts import *
 
 
 # Named Tuple defining behavior for all enemies of type "rolling skull"
@@ -109,33 +109,7 @@ class MontezumaConstants(NamedTuple):
     JUMP_FRAMES:int = 20 # How long a jump lasts
     JUMP_Y_OFFSETS = jnp.array([3, 3, 3, 2, 2, 2, 1, 1, 0, 0, 0, 0, -1, -1, -2, -2, -2, -3, -3, -3]) 
     # The jump pattern of the player. Positive numbers mean, that the player goes up.
-    SPRITE__F_DICT = { # Deprecated (hopefully)
-        "player": "player_sprite.npy", 
-        "player_collision": "player_collision_map.npy",
-        "gem": "gem.npy",
-        "hammer": "hammer.npy",
-        "key": "key.npy",
-        "sword": "sword.npy",
-        "torch_1": "torch_1.npy",
-        "torch_2": "torch_2.npy",
-        "life_sprite": "life_sprite.npy",
-        "0": "0.npy",
-        "door":"door.npy",
-        "other_dropout_floor":"other_dropout_floor.npy",
-        "pitroom_dropout_floor":"pitroom_dropout_floor.npy",
-        "conveyor_belt":"conveyor_belt.npy",
-        "digit_none":"none.npy",
-        "digit_0":"0.npy",
-        "digit_1":"1.npy",
-        "digit_2":"2.npy",
-        "digit_3":"3.npy",
-        "digit_4":"4.npy",
-        "digit_5":"5.npy",
-        "digit_6":"6.npy",
-        "digit_7":"7.npy",
-        "digit_8":"8.npy",
-        "digit_9":"9.npy"
-            }
+    
     MODULE_DIR = os.path.dirname(os.path.abspath(__file__))
     LAZER_BARRIER_STRIPE_DISTANCE = 4 # Distance between horizontal stripes in lazer barrier
     LAZER_BARRIER_SCROLL_STEP = 2 # Step width with which the lazer barrier scrolls
@@ -475,6 +449,8 @@ def colorize_sprite(sprite: jnp.ndarray, color: jnp.ndarray) -> jnp.ndarray:
     
     return jnp.concatenate([new_rgb, alpha], axis=-1).astype(jnp.uint8)
 
+        
+        
 
 class JaxMontezuma(JaxEnvironment[MontezumaState, MontezumaObservation, MontezumaInfo, MontezumaConstants]):
     def __init__(self, consts: MontezumaConstants = None,
@@ -564,7 +540,7 @@ class JaxMontezuma(JaxEnvironment[MontezumaState, MontezumaObservation, Montezum
         self.WRITE_PROTO_ROOM_TO_PERSISTENCE = None
         
         
-        self.player_col_map: jnp.ndarray = load_collision_map(fileName=os.path.join(self.sprite_path, self.consts.SPRITE__F_DICT["player_collision"]), 
+        self.player_col_map: jnp.ndarray = load_collision_map(fileName=os.path.join(self.sprite_path,"player_collision_map.npy"), 
                                                                        transpose=True)
         self.initial_persistence_state: jnp.ndarray = None
         self.__make_room_infra_ready()
@@ -816,10 +792,10 @@ class JaxMontezuma(JaxEnvironment[MontezumaState, MontezumaObservation, Montezum
                 sprite_index = dropout_floor.sprite_index
                 # Use different sprites for ladder vs pit-room room dropout floors.
                 if sprite_index == Dropout_Floor_Sprites.LADDER_FLOOR.value:
-                    sprite_name = "other_dropout_floor"
+                    sprite_name = "other_dropout_floor.npy"
                 else:
-                    sprite_name = "pitroom_dropout_floor"
-                dropout_floor_sprite = loadFrameAddAlpha(fileName=os.path.join(self.sprite_path, self.consts.SPRITE__F_DICT[sprite_name]),
+                    sprite_name = "pitroom_dropout_floor.npy"
+                dropout_floor_sprite = loadFrameAddAlpha(fileName=os.path.join(self.sprite_path, sprite_name),
                                                          add_alpha=True, add_black_as_transparent=True, transpose=True).astype(jnp.uint8)
                 compete_dropout_floor = jnp.zeros(shape=(dropout_floor.sprite_width_amount[0]*dropout_floor_sprite.shape[0],
                                                          dropout_floor.sprite_height_amount[0]*dropout_floor_sprite.shape[1],
@@ -851,10 +827,10 @@ class JaxMontezuma(JaxEnvironment[MontezumaState, MontezumaObservation, Montezum
                 dropout_floor_arr: jArray = dropout_floor_information.dropout_floors[df_ind, ...]
                 dropout_floor: DropoutFloor = SANTAH.full_deserializations[DropoutFloor](dropout_floor_arr)
                 if dropout_floor.sprite_index == Dropout_Floor_Sprites.LADDER_FLOOR.value:
-                    sprite_name = "other_dropout_floor"
+                    sprite_name = "other_dropout_floor.npy"
                 else:
-                    sprite_name = "pitroom_dropout_floor"
-                dropout_floor_sprite = loadFrameAddAlpha(fileName=os.path.join(self.sprite_path, self.consts.SPRITE__F_DICT[sprite_name]),
+                    sprite_name = "pitroom_dropout_floor.npy"
+                dropout_floor_sprite = loadFrameAddAlpha(fileName=os.path.join(self.sprite_path,sprite_name),
                                                          add_alpha=True, add_black_as_transparent=True, transpose=True).astype(jnp.uint8)
                 compete_dropout_floor_collision = jnp.ones(shape=(dropout_floor.sprite_width_amount[0]*dropout_floor_sprite.shape[0],
                                                          dropout_floor.sprite_height_amount[0]*dropout_floor_sprite.shape[1]+dropout_floor.collision_padding_top[0]), dtype=jnp.uint8)
@@ -982,7 +958,7 @@ class JaxMontezuma(JaxEnvironment[MontezumaState, MontezumaObservation, Montezum
             conveyor_belt: ConveyorBelt = SANTAH.full_deserializations[ConveyorBelt](conveyor_belt_arr)
             
             # Use the sprites to determine the size of the collision map for the conveyor belts.
-            conveyor_belt_sprite = loadFrameAddAlpha(fileName=os.path.join(self.sprite_path, self.consts.SPRITE__F_DICT["conveyor_belt"]),
+            conveyor_belt_sprite = loadFrameAddAlpha(fileName=os.path.join(self.sprite_path,"conveyor_belt.npy"),
                                                          add_alpha=True, add_black_as_transparent=True, transpose=True).astype(jnp.uint8)
             conveyor_belt_collision_map = jnp.ones(shape=(conveyor_belt_sprite.shape[0], conveyor_belt_sprite.shape[1]),dtype=jnp.uint8)
             
@@ -1003,7 +979,7 @@ class JaxMontezuma(JaxEnvironment[MontezumaState, MontezumaObservation, Montezum
                 conveyor_belt_arr: jArray = conveyor_belt_information.conveyor_belts[cb_ind, ...]
                 conveyor_belt: ConveyorBelt = SANTAH.full_deserializations[ConveyorBelt](conveyor_belt_arr)
                 # Conveyor belts right now have fixed size, but it would be easy to adapt them to a flexible shape.
-                conveyor_belt_sprite = loadFrameAddAlpha(fileName=os.path.join(self.sprite_path, self.consts.SPRITE__F_DICT["conveyor_belt"]),
+                conveyor_belt_sprite = loadFrameAddAlpha(fileName=os.path.join(self.sprite_path,"conveyor_belt.npy"),
                                                          add_alpha=True, add_black_as_transparent=True, transpose=True).astype(jnp.uint8)
                 conveyor_belt_sprite = colorize_sprite(conveyor_belt_sprite,self.consts.OBSTACLE_COLORS[conveyor_belt.color[0]])
                 
@@ -1090,10 +1066,6 @@ class JaxMontezuma(JaxEnvironment[MontezumaState, MontezumaObservation, Montezum
     
     def __init_room(self):
         
-        MODULE_DIR = os.path.dirname(os.path.abspath(__file__))
-        SPRITE_PATH: str = os.path.join(MODULE_DIR, "sprites", "montezuma")
-        SPRITE_PATH_BACKGROUND: str = os.path.join(SPRITE_PATH, "backgrounds")
-        
         global LAYOUT 
         LAYOUT = PyramidLayout()
         
@@ -1104,6 +1076,12 @@ class JaxMontezuma(JaxEnvironment[MontezumaState, MontezumaObservation, Montezum
             LAYOUT = make_difficulty_1(LAYOUT, self.consts)
         elif self.consts.LAYOUT == Layouts.difficulty_2.value:
             LAYOUT = make_difficulty_2(LAYOUT, self.consts)
+        elif self.consts.LAYOUT == Layouts.difficulty_3.value:
+            LAYOUT = make_difficulty_3(LAYOUT, self.consts)
+        elif self.consts.LAYOUT == Layouts.difficulty_1_2.value:
+            LAYOUT = make_difficulty_1_2(LAYOUT, self.consts)
+        elif self.consts.LAYOUT == Layouts.difficulty_1_2_3.value:
+            LAYOUT = make_difficulty_1_2_3(LAYOUT, self.consts)
         else:
             LAYOUT = make_layout_test(LAYOUT, self.consts)
         
@@ -1345,7 +1323,9 @@ class JaxMontezuma(JaxEnvironment[MontezumaState, MontezumaObservation, Montezum
                 
                 state = SANTAH.attribute_setters[MontezumaState][MontezumaStateFields.augmented_collision_map.value](state, new_collision_map)
                 return doors, state
-            
+            #
+            # This call cannot be replaced with a vmap, as the function writes onto a shared collision map.
+            #
             _, state = jax.lax.fori_loop(lower=0,upper=jnp.shape(door_attrs[0])[0],body_fun=single_door_collision_addition,init_val=(door_attrs, montezuma_state))
             return state, room_state
         else:
@@ -1644,7 +1624,12 @@ class JaxMontezuma(JaxEnvironment[MontezumaState, MontezumaObservation, Montezum
                                             operand=(items, state))
                                 
                 return items, state
-            
+            #
+            # The called function does not require heavy computation & is only called for relatively few items.
+            # We could have split this function up into a vmapped part for collision detection 
+            # and a for-i loop that handles actual item pickups (needed to preserve the ability to pick up multiple items at a time)
+            # but we didn't think this was likely to result in meaningful performance gains.
+            #
             items, state = jax.lax.fori_loop(lower=0,upper=jnp.shape(item_attrs[0])[0],body_fun=single_item_check,init_val=(item_attrs,montezuma_state))
             room = SANTAH.write_back_tag_information_to_room[room_type][RoomTags.ITEMS](room_state,items)
         
@@ -1892,6 +1877,10 @@ class JaxMontezuma(JaxEnvironment[MontezumaState, MontezumaObservation, Montezum
             
             
             enemies: jArray = None
+            #
+            # Most rooms only have a single enemy, 
+            # so using VMAP does not make sense due to the overhead.
+            #
             enemies, montezuma_state = jax.lax.fori_loop(lower=0,upper=jnp.shape(enemies_attr.enemies)[0],body_fun=single_enemy_check,
                                                init_val=(enemies_attr.enemies, montezuma_state))
             enemies_attr = SANTAH.attribute_setters[RoomTags.ENEMIES.value][RoomTagsNames.ENEMIES.value.enemies.value](enemies_attr, enemies)
@@ -4103,30 +4092,33 @@ class MontezumaRenderer(JAXGameRenderer):
         super().__init__()
         gc.collect()
         self.consts = consts or MontezumaConstants()
+
+        SPRITE_PATH: str = os.path.join(self.consts.MODULE_DIR, "sprites", "montezuma")
+        PLAYER_SPRITE_PATH: str = os.path.join(SPRITE_PATH, "player")
+        DIGIT_SPRITE_PATH: str = os.path.join(SPRITE_PATH, "digits")
+        ITEM_SPRITE_PATH: str = os.path.join(SPRITE_PATH, "items")
+        ENEMY_SPRITE_PATH = os.path.join(SPRITE_PATH, "enemies")
+        SKULL_SPRITE_PATH = os.path.join(ENEMY_SPRITE_PATH, "skull_cycle")
         
-        self.sprite_path: str = os.path.join(self.consts.MODULE_DIR, "sprites", "montezuma")
-        self.sprite_f_dict: Dict[str, str] = self.consts.SPRITE__F_DICT
-        self.player_sprite: jnp.ndarray =  loadFrameAddAlpha(fileName=os.path.join(self.sprite_path, self.consts.SPRITE__F_DICT["player"]), 
+        self.player_sprite: jnp.ndarray =  loadFrameAddAlpha(fileName=os.path.join(PLAYER_SPRITE_PATH, "player_sprite.npy"), 
                                                             add_alpha=True, add_black_as_transparent=True, transpose=True)
-        self.life_sprite: jnp.ndarray = loadFrameAddAlpha(fileName=os.path.join(self.sprite_path, self.consts.SPRITE__F_DICT["life_sprite"])
+        self.life_sprite: jnp.ndarray = loadFrameAddAlpha(fileName=os.path.join(SPRITE_PATH, "life_sprite.npy")
                                                           ,add_alpha=True, add_black_as_transparent=True, transpose=True)
-        self.zero: jnp.ndarray = loadFrameAddAlpha(fileName=os.path.join(self.sprite_path, self.consts.SPRITE__F_DICT["0"])
-                                                          ,add_alpha=True, add_black_as_transparent=True, transpose=True)
-        self.door_sprite: jnp.ndarray = loadFrameAddAlpha(fileName=os.path.join(self.sprite_path, self.consts.SPRITE__F_DICT["door"])
+        self.door_sprite: jnp.ndarray = loadFrameAddAlpha(fileName=os.path.join(SPRITE_PATH, "door.npy")
                                                           ,add_alpha=True, add_black_as_transparent=True, transpose=True)
         
         self.item_sprites: jnp.ndarray = jnp.zeros(shape=(6, 7, 15, 4),dtype=jnp.int32)
-        self.item_sprites = self.item_sprites.at[Item_Sprites.GEM.value, ...].set(loadFrameAddAlpha(fileName=os.path.join(self.sprite_path, self.consts.SPRITE__F_DICT["gem"]),
+        self.item_sprites = self.item_sprites.at[Item_Sprites.GEM.value, ...].set(loadFrameAddAlpha(fileName=os.path.join(ITEM_SPRITE_PATH,"gem.npy"),
                                                                       add_alpha=True, add_black_as_transparent=True, transpose=True))
-        self.item_sprites = self.item_sprites.at[Item_Sprites.HAMMER.value, ...].set(loadFrameAddAlpha(fileName=os.path.join(self.sprite_path, self.consts.SPRITE__F_DICT["hammer"]),
+        self.item_sprites = self.item_sprites.at[Item_Sprites.HAMMER.value, ...].set(loadFrameAddAlpha(fileName=os.path.join(ITEM_SPRITE_PATH, "hammer.npy"),
                                                                       add_alpha=True, add_black_as_transparent=True, transpose=True))
-        self.item_sprites = self.item_sprites.at[Item_Sprites.KEY.value, ...].set(loadFrameAddAlpha(fileName=os.path.join(self.sprite_path, self.consts.SPRITE__F_DICT["key"]),
+        self.item_sprites = self.item_sprites.at[Item_Sprites.KEY.value, ...].set(loadFrameAddAlpha(fileName=os.path.join(ITEM_SPRITE_PATH, "key.npy"),
                                                                       add_alpha=True, add_black_as_transparent=True, transpose=True))
-        self.item_sprites = self.item_sprites.at[Item_Sprites.SWORD.value, ...].set(loadFrameAddAlpha(fileName=os.path.join(self.sprite_path, self.consts.SPRITE__F_DICT["sword"]),
+        self.item_sprites = self.item_sprites.at[Item_Sprites.SWORD.value, ...].set(loadFrameAddAlpha(fileName=os.path.join(ITEM_SPRITE_PATH, "sword.npy"),
                                                                       add_alpha=True, add_black_as_transparent=True, transpose=True))
-        self.item_sprites = self.item_sprites.at[Item_Sprites.TORCH.value, ...].set(loadFrameAddAlpha(fileName=os.path.join(self.sprite_path, self.consts.SPRITE__F_DICT["torch_1"]),
+        self.item_sprites = self.item_sprites.at[Item_Sprites.TORCH.value, ...].set(loadFrameAddAlpha(fileName=os.path.join(ITEM_SPRITE_PATH, "torch_1.npy"),
                                                                       add_alpha=True, add_black_as_transparent=True, transpose=True))
-        self.item_sprites = self.item_sprites.at[Item_Sprites.TORCH_FRAME_2.value, ...].set(loadFrameAddAlpha(fileName=os.path.join(self.sprite_path, self.consts.SPRITE__F_DICT["torch_2"]),
+        self.item_sprites = self.item_sprites.at[Item_Sprites.TORCH_FRAME_2.value, ...].set(loadFrameAddAlpha(fileName=os.path.join(ITEM_SPRITE_PATH, "torch_2.npy"),
                                                                       add_alpha=True, add_black_as_transparent=True, transpose=True))
         self.item_sprites_color: jnp.ndarray = jnp.zeros(shape=(6,3),dtype=jnp.int32)
         self.item_sprites_color = self.item_sprites_color.at[Item_Sprites.GEM.value, ...].set(self.consts.GEM_COLOR)
@@ -4136,82 +4128,31 @@ class MontezumaRenderer(JAXGameRenderer):
         self.item_sprites_color = self.item_sprites_color.at[Item_Sprites.TORCH.value, ...].set(self.consts.TORCH_COLOR)
         self.item_sprites_color = self.item_sprites_color.at[Item_Sprites.TORCH_FRAME_2.value, ...].set(self.consts.TORCH_COLOR)
         
-        digit_none = loadFrameAddAlpha(fileName=os.path.join(self.sprite_path, self.consts.SPRITE__F_DICT["digit_none"])
+        digit_none = loadFrameAddAlpha(fileName=os.path.join(DIGIT_SPRITE_PATH, "digit_none.npy")
                                                           ,add_alpha=True, add_black_as_transparent=True, transpose=True) 
-        digit_0 = loadFrameAddAlpha(fileName=os.path.join(self.sprite_path, self.consts.SPRITE__F_DICT["digit_0"])
+        digit_0 = loadFrameAddAlpha(fileName=os.path.join(DIGIT_SPRITE_PATH, "digit_0.npy")
                                                           ,add_alpha=True, add_black_as_transparent=True, transpose=True) 
-        digit_1 = loadFrameAddAlpha(fileName=os.path.join(self.sprite_path, self.consts.SPRITE__F_DICT["digit_1"])
+        digit_1 = loadFrameAddAlpha(fileName=os.path.join(DIGIT_SPRITE_PATH, "digit_1.npy")
                                                           ,add_alpha=True, add_black_as_transparent=True, transpose=True) 
-        digit_2 = loadFrameAddAlpha(fileName=os.path.join(self.sprite_path, self.consts.SPRITE__F_DICT["digit_2"])
+        digit_2 = loadFrameAddAlpha(fileName=os.path.join(DIGIT_SPRITE_PATH, "digit_2.npy")
                                                           ,add_alpha=True, add_black_as_transparent=True, transpose=True) 
-        digit_3 = loadFrameAddAlpha(fileName=os.path.join(self.sprite_path, self.consts.SPRITE__F_DICT["digit_3"])
+        digit_3 = loadFrameAddAlpha(fileName=os.path.join(DIGIT_SPRITE_PATH, "digit_3.npy")
                                                           ,add_alpha=True, add_black_as_transparent=True, transpose=True) 
-        digit_4 = loadFrameAddAlpha(fileName=os.path.join(self.sprite_path, self.consts.SPRITE__F_DICT["digit_4"])
+        digit_4 = loadFrameAddAlpha(fileName=os.path.join(DIGIT_SPRITE_PATH, "digit_4.npy")
                                                           ,add_alpha=True, add_black_as_transparent=True, transpose=True) 
-        digit_5 = loadFrameAddAlpha(fileName=os.path.join(self.sprite_path, self.consts.SPRITE__F_DICT["digit_5"])
+        digit_5 = loadFrameAddAlpha(fileName=os.path.join(DIGIT_SPRITE_PATH, "digit_5.npy")
                                                           ,add_alpha=True, add_black_as_transparent=True, transpose=True) 
-        digit_6 = loadFrameAddAlpha(fileName=os.path.join(self.sprite_path, self.consts.SPRITE__F_DICT["digit_6"])
+        digit_6 = loadFrameAddAlpha(fileName=os.path.join(DIGIT_SPRITE_PATH, "digit_6.npy")
                                                           ,add_alpha=True, add_black_as_transparent=True, transpose=True) 
-        digit_7 = loadFrameAddAlpha(fileName=os.path.join(self.sprite_path, self.consts.SPRITE__F_DICT["digit_7"])
+        digit_7 = loadFrameAddAlpha(fileName=os.path.join(DIGIT_SPRITE_PATH, "digit_7.npy")
                                                           ,add_alpha=True, add_black_as_transparent=True, transpose=True) 
-        digit_8 = loadFrameAddAlpha(fileName=os.path.join(self.sprite_path, self.consts.SPRITE__F_DICT["digit_8"])
+        digit_8 = loadFrameAddAlpha(fileName=os.path.join(DIGIT_SPRITE_PATH, "digit_8.npy")
                                                           ,add_alpha=True, add_black_as_transparent=True, transpose=True) 
-        digit_9 = loadFrameAddAlpha(fileName=os.path.join(self.sprite_path, self.consts.SPRITE__F_DICT["digit_9"])
+        digit_9 = loadFrameAddAlpha(fileName=os.path.join(DIGIT_SPRITE_PATH, "digit_9.npy")
                                                           ,add_alpha=True, add_black_as_transparent=True, transpose=True) 
         
         self.digit_sprite = jnp.stack([digit_none, digit_0, digit_1, digit_2, digit_3, digit_4, digit_5, digit_6, digit_7, digit_8, digit_9])
 
-
-
-        
-        
-        
-        
-        
-        #
-        # All the infrastructure functions that utilize the Proto ROOM class.
-        #
-        self.PROTO_ROOM_LOADER: Callable[[int, jnp.ndarray], Room] = None
-        # A loader that loads a Proto Room object from the persistence storage. 
-        # This loader is save to be used in functions that are non-static with the ROOM ID
-        
-        self.WRITE_PROTO_ROOM_TO_PERSISTENCE: Callable[[int, Room, jnp.ndarray], jnp.ndarray] = None
-        # A writer that writes the fields from the proto room to persistence. 
-        # Again, save to be used in non-static functions
-        
-        
-        
-        
-        
-        # All wrapped render functions.
-        self.RENDER_LAZER_WALLS_WRAPPED: Callable[[MontezumaState], MontezumaState] = LAYOUT._wrap_lowered_function(lowered_function=self.render_lazer_walls, 
-                                                                            montezuma_state_type=MontezumaState)
-        self.RENDER_ITEMS_ONTO_CANVAS_WRAPPED:Callable[[MontezumaState], MontezumaState] = LAYOUT._wrap_lowered_function(lowered_function=self.render_items_onto_canvas,
-                                                                            montezuma_state_type=MontezumaState)
-        self.RENDER_ROPES_ONTO_CANVAS_WRAPPED: Callable[[MontezumaState], MontezumaState] = LAYOUT._wrap_lowered_function(lowered_function=self.render_ropez,
-                                                                            montezuma_state_type=MontezumaState)
-        self.RENDER_DOORS_ONTO_CANVAS_WRAPPED: Callable[[MontezumaState], MontezumaState] = LAYOUT._wrap_lowered_function(lowered_function=self.render_doors_onto_canvas,
-                                                                            montezuma_state_type=MontezumaState)
-        self.RENDER_DROPOUT_FLOORS_ONTO_CANVAS_WRAPPED: Callable[[MontezumaState], MontezumaState] = LAYOUT._wrap_lowered_function(lowered_function=self.render_dropout_floors_onto_canvas,
-                                                                            montezuma_state_type=MontezumaState)
-        self.RENDER_SARLACC_PIT_ONTO_CANVAS_WRAPPED: Callable[[MontezumaState], MontezumaState] = LAYOUT._wrap_lowered_function(lowered_function=self.render_sarlacc_pit_onto_canvas,
-                                                                            montezuma_state_type=MontezumaState)
-        self.RENDER_SIDE_WALLS_ONTO_CANVAS_WRAPPED: Callable[[MontezumaState], MontezumaState] = LAYOUT._wrap_lowered_function(lowered_function=self.render_side_walls_onto_canvas,
-                                                                            montezuma_state_type=MontezumaState)
-        self.RENDER_LADDERS_ONTO_CANVAS_WRAPPED: Callable[[MontezumaState], MontezumaState] = LAYOUT._wrap_lowered_function(lowered_function=self.render_ladders_onto_canvas, 
-                                                                                                                                      montezuma_state_type=MontezumaState)
-        self.RENDER_ENEMIES_ONTO_CANVAS_WRAPPED: Callable[[MontezumaState], MontezumaState] = LAYOUT._wrap_lowered_function(lowered_function=self.render_enemies_onto_canva, 
-                                                                                                                                      montezuma_state_type=MontezumaState)
-        self.RENDER_CONVEYOR_BELTS_ONTO_CANVAS_WRAPPED: Callable[[MontezumaState], MontezumaState] = LAYOUT._wrap_lowered_function(lowered_function=self.render_conveyor_belts_onto_canvas,
-                                                                            montezuma_state_type=MontezumaState)
-        self.WRAPPED_RENDER_ROOM_SPRITE_ONTO_CANVAS = LAYOUT._wrap_lowered_function(lowered_function=self.render_room_sprite_onto_canvas, 
-                                                                        montezuma_state_type=MontezumaState)
-        
-        self.WRAPPED_RENDER_INITIAL_BLANK_CANVAS = LAYOUT._wrap_lowered_function(lowered_function=self.render_initial_blank_canvas, 
-                                                                        montezuma_state_type=MontezumaState)
-        self.lazer_wall_background: jArray = self.generate_lazer_wall_background()
-        MY_SPRITE_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "sprites", "montezuma")
-        SKULL_SPRITE_PATH = os.path.join(MY_SPRITE_PATH, "skull_cycle")
         # Load the skull animation here.
         skull_1 = loadFrameAddAlpha(os.path.join(SKULL_SPRITE_PATH, "skull_1.npy"), transpose=True, 
                                     add_alpha=False)
@@ -4251,58 +4192,103 @@ class MontezumaRenderer(JAXGameRenderer):
                                    skull_15, skull_16], axis=0)
         skull_sprites = jnp.flip(skull_sprites, axis=0)
         self.skull_sprites: jArray = skull_sprites
-        self.bounce_skull_sprite = loadFrameAddAlpha(os.path.join(MY_SPRITE_PATH, "bounce_skull.npy"), transpose=True, 
+        self.bounce_skull_sprite = loadFrameAddAlpha(os.path.join(ENEMY_SPRITE_PATH, "bounce_skull.npy"), transpose=True, 
                                     add_alpha=True, add_black_as_transparent=True)
-        self.spider_sprite: jArray = loadFrameAddAlpha(os.path.join(MY_SPRITE_PATH, "spidder.npy"), transpose=True, 
+        self.spider_sprite: jArray = loadFrameAddAlpha(os.path.join(ENEMY_SPRITE_PATH, "spidder.npy"), transpose=True, 
                                     add_alpha=True, add_black_as_transparent=True)
-        snake_0 = loadFrameAddAlpha(os.path.join(MY_SPRITE_PATH, "snake_0.npy"), transpose=True, 
+        snake_0 = loadFrameAddAlpha(os.path.join(ENEMY_SPRITE_PATH, "snake_0.npy"), transpose=True, 
                                     add_alpha=True, add_black_as_transparent=True)
-        snake_1 = loadFrameAddAlpha(os.path.join(MY_SPRITE_PATH, "snake_1.npy"), transpose=True, 
+        snake_1 = loadFrameAddAlpha(os.path.join(ENEMY_SPRITE_PATH, "snake_1.npy"), transpose=True, 
                                     add_alpha=True, add_black_as_transparent=True)
         self.snake_sprites: jArray = jnp.stack([snake_0, snake_1], axis=0)
-        ladder_climb_0 = loadFrameAddAlpha(os.path.join(MY_SPRITE_PATH, "ladder_climb1.npy"), transpose=True, 
+        ladder_climb_0 = loadFrameAddAlpha(os.path.join(PLAYER_SPRITE_PATH, "ladder_climb1.npy"), transpose=True, 
                                     add_alpha=True, add_black_as_transparent=True)
-        ladder_climb_1 = loadFrameAddAlpha(os.path.join(MY_SPRITE_PATH, "ladder_climb2.npy"), transpose=True, 
+        ladder_climb_1 = loadFrameAddAlpha(os.path.join(PLAYER_SPRITE_PATH, "ladder_climb2.npy"), transpose=True, 
                                     add_alpha=True, add_black_as_transparent=True)
         self.ladder_climb_sprites: jArray = jnp.stack([ladder_climb_0, ladder_climb_1], 
                                                       axis=0)
         self.ladder_climb_sprite_size: Tuple[int, int] = (7, 19)
         
-        rope_climb_0 = loadFrameAddAlpha(os.path.join(MY_SPRITE_PATH, "rope_climb_0.npy"), transpose=True, 
+        rope_climb_0 = loadFrameAddAlpha(os.path.join(PLAYER_SPRITE_PATH, "rope_climb_0.npy"), transpose=True, 
                                     add_alpha=True, add_black_as_transparent=True)
-        rope_climb_1 = loadFrameAddAlpha(os.path.join(MY_SPRITE_PATH, "rope_climb_1.npy"), transpose=True, 
+        rope_climb_1 = loadFrameAddAlpha(os.path.join(PLAYER_SPRITE_PATH, "rope_climb_1.npy"), transpose=True, 
                                     add_alpha=True, add_black_as_transparent=True)
         self.rope_climb_sprites: jArray = jnp.stack([rope_climb_0, rope_climb_1], axis=0)
         self.rope_climb_sprite_size: Tuple[int, int] = (7, 20) 
         
-        walk_0 = loadFrameAddAlpha(os.path.join(MY_SPRITE_PATH, "walking_0.npy"), transpose=True, 
+        walk_0 = loadFrameAddAlpha(os.path.join(PLAYER_SPRITE_PATH, "walking_0.npy"), transpose=True, 
                                     add_alpha=True, add_black_as_transparent=True)
-        walk_1 = loadFrameAddAlpha(os.path.join(MY_SPRITE_PATH, "walking_1.npy"), transpose=True, 
+        walk_1 = loadFrameAddAlpha(os.path.join(PLAYER_SPRITE_PATH, "walking_1.npy"), transpose=True, 
                                     add_alpha=True, add_black_as_transparent=True)
         self.walking_sprites: jArray = jnp.stack([walk_0, walk_1], axis=0)
         
-        self.player_jump_frame: jArray = loadFrameAddAlpha(os.path.join(MY_SPRITE_PATH, "player_jump.npy"), transpose=True, 
+        self.player_jump_frame: jArray = loadFrameAddAlpha(os.path.join(PLAYER_SPRITE_PATH, "player_jump.npy"), transpose=True, 
                                     add_alpha=True, add_black_as_transparent=True)
         self.player_jump_size: Tuple[int, int] = (8, 20)
         
-        player_splosh_on_floor_0 = loadFrameAddAlpha(os.path.join(MY_SPRITE_PATH, "player_splosh_0.npy"), transpose=True, 
+        player_splosh_on_floor_0 = loadFrameAddAlpha(os.path.join(PLAYER_SPRITE_PATH, "player_splosh_0.npy"), transpose=True, 
                                     add_alpha=True, add_black_as_transparent=True)
-        player_splosh_on_floor_1 = loadFrameAddAlpha(os.path.join(MY_SPRITE_PATH, "player_splosh_1.npy"), transpose=True, 
+        player_splosh_on_floor_1 = loadFrameAddAlpha(os.path.join(PLAYER_SPRITE_PATH, "player_splosh_1.npy"), transpose=True, 
                                     add_alpha=True, add_black_as_transparent=True)
         self.player_fall_damage_sprites: jArray = jnp.stack([player_splosh_on_floor_0, player_splosh_on_floor_1], axis=0)
         
-        splutter_0 = loadFrameAddAlpha(os.path.join(MY_SPRITE_PATH, "splutter_0.npy"), transpose=True, 
+        splutter_0 = loadFrameAddAlpha(os.path.join(PLAYER_SPRITE_PATH, "splutter_0.npy"), transpose=True, 
                                     add_alpha=True, add_black_as_transparent=True)
-        splutter_1 = loadFrameAddAlpha(os.path.join(MY_SPRITE_PATH, "splutter_1.npy"), transpose=True, 
+        splutter_1 = loadFrameAddAlpha(os.path.join(PLAYER_SPRITE_PATH, "splutter_1.npy"), transpose=True, 
                                     add_alpha=True, add_black_as_transparent=True)
         self.enemy_splutter: jArray = jnp.stack([splutter_0, splutter_1], axis=0)
-        sarlacc_death_0 = loadFrameAddAlpha(os.path.join(MY_SPRITE_PATH, "sarlacc_death_0.npy"), transpose=True, 
+        sarlacc_death_0 = loadFrameAddAlpha(os.path.join(PLAYER_SPRITE_PATH, "sarlacc_death_0.npy"), transpose=True, 
                                     add_alpha=True, add_black_as_transparent=True) 
-        sarlacc_death_1 = loadFrameAddAlpha(os.path.join(MY_SPRITE_PATH, "sarlacc_death_1.npy"), transpose=True, 
+        sarlacc_death_1 = loadFrameAddAlpha(os.path.join(PLAYER_SPRITE_PATH, "sarlacc_death_1.npy"), transpose=True, 
                                     add_alpha=True, add_black_as_transparent=True) 
-        sarlacc_death_2 = loadFrameAddAlpha(os.path.join(MY_SPRITE_PATH, "sarlacc_death_2.npy"), transpose=True, 
+        sarlacc_death_2 = loadFrameAddAlpha(os.path.join(PLAYER_SPRITE_PATH, "sarlacc_death_2.npy"), transpose=True, 
                                     add_alpha=True, add_black_as_transparent=True) 
         self.sarlacc_death: jArray = jnp.stack([sarlacc_death_0, sarlacc_death_1, sarlacc_death_2], axis=0)
+        
+        
+        
+        #
+        # All the infrastructure functions that utilize the Proto ROOM class.
+        #
+        self.PROTO_ROOM_LOADER: Callable[[int, jnp.ndarray], Room] = None
+        # A loader that loads a Proto Room object from the persistence storage. 
+        # This loader is save to be used in functions that are non-static with the ROOM ID
+        
+        self.WRITE_PROTO_ROOM_TO_PERSISTENCE: Callable[[int, Room, jnp.ndarray], jnp.ndarray] = None
+        # A writer that writes the fields from the proto room to persistence. 
+        # Again, save to be used in non-static functions
+        
+        
+        
+        # All wrapped render functions.
+        self.RENDER_LAZER_WALLS_WRAPPED: Callable[[MontezumaState], MontezumaState] = LAYOUT._wrap_lowered_function(lowered_function=self.render_lazer_walls, 
+                                                                            montezuma_state_type=MontezumaState)
+        self.RENDER_ITEMS_ONTO_CANVAS_WRAPPED:Callable[[MontezumaState], MontezumaState] = LAYOUT._wrap_lowered_function(lowered_function=self.render_items_onto_canvas,
+                                                                            montezuma_state_type=MontezumaState)
+        self.RENDER_ROPES_ONTO_CANVAS_WRAPPED: Callable[[MontezumaState], MontezumaState] = LAYOUT._wrap_lowered_function(lowered_function=self.render_ropez,
+                                                                            montezuma_state_type=MontezumaState)
+        self.RENDER_DOORS_ONTO_CANVAS_WRAPPED: Callable[[MontezumaState], MontezumaState] = LAYOUT._wrap_lowered_function(lowered_function=self.render_doors_onto_canvas,
+                                                                            montezuma_state_type=MontezumaState)
+        self.RENDER_DROPOUT_FLOORS_ONTO_CANVAS_WRAPPED: Callable[[MontezumaState], MontezumaState] = LAYOUT._wrap_lowered_function(lowered_function=self.render_dropout_floors_onto_canvas,
+                                                                            montezuma_state_type=MontezumaState)
+        self.RENDER_SARLACC_PIT_ONTO_CANVAS_WRAPPED: Callable[[MontezumaState], MontezumaState] = LAYOUT._wrap_lowered_function(lowered_function=self.render_sarlacc_pit_onto_canvas,
+                                                                            montezuma_state_type=MontezumaState)
+        self.RENDER_SIDE_WALLS_ONTO_CANVAS_WRAPPED: Callable[[MontezumaState], MontezumaState] = LAYOUT._wrap_lowered_function(lowered_function=self.render_side_walls_onto_canvas,
+                                                                            montezuma_state_type=MontezumaState)
+        self.RENDER_LADDERS_ONTO_CANVAS_WRAPPED: Callable[[MontezumaState], MontezumaState] = LAYOUT._wrap_lowered_function(lowered_function=self.render_ladders_onto_canvas, 
+                                                                                                                                      montezuma_state_type=MontezumaState)
+        self.RENDER_ENEMIES_ONTO_CANVAS_WRAPPED: Callable[[MontezumaState], MontezumaState] = LAYOUT._wrap_lowered_function(lowered_function=self.render_enemies_onto_canva, 
+                                                                                                                                      montezuma_state_type=MontezumaState)
+        self.RENDER_CONVEYOR_BELTS_ONTO_CANVAS_WRAPPED: Callable[[MontezumaState], MontezumaState] = LAYOUT._wrap_lowered_function(lowered_function=self.render_conveyor_belts_onto_canvas,
+                                                                            montezuma_state_type=MontezumaState)
+        self.WRAPPED_RENDER_ROOM_SPRITE_ONTO_CANVAS = LAYOUT._wrap_lowered_function(lowered_function=self.render_room_sprite_onto_canvas, 
+                                                                        montezuma_state_type=MontezumaState)
+        
+        self.WRAPPED_RENDER_INITIAL_BLANK_CANVAS = LAYOUT._wrap_lowered_function(lowered_function=self.render_initial_blank_canvas, 
+                                                                        montezuma_state_type=MontezumaState)
+        self.lazer_wall_background: jArray = self.generate_lazer_wall_background()
+        
+
             
     
     @partial(jax.jit, static_argnums=(0))
@@ -4902,3 +4888,4 @@ class MontezumaRenderer(JAXGameRenderer):
         
         return canvas[..., 0:3]
         
+
