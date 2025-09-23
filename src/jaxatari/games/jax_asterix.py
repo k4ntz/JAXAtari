@@ -617,6 +617,15 @@ class JaxAsterix(JaxEnvironment[AsterixState, AsterixObservation, AsterixInfo, A
 
     @partial(jax.jit, static_argnums=(0,))
     def _get_observation(self, state: AsterixState):
+        player = EntityPosition(
+            x=state.player_x.astype(jnp.int32),
+            y=state.player_y.astype(jnp.int32),
+            width=jnp.array(self.consts.player_width, dtype=jnp.int32),
+            height=jnp.array(self.consts.player_height, dtype=jnp.int32),
+        )
+        return AsterixObservation(player=player)
+
+        """
         if self.obs_type == "object":
             player = EntityPosition(
                 x=state.player_x.astype(jnp.int32),
@@ -625,7 +634,7 @@ class JaxAsterix(JaxEnvironment[AsterixState, AsterixObservation, AsterixInfo, A
                 height=jnp.array(self.consts.player_height, dtype=jnp.int32),
             )
             return AsterixObservation(player=player)
-
+        
         # Pixelvarianten
         if self.obs_type == "rgb":
             return self.renderer.render(state)
@@ -638,6 +647,7 @@ class JaxAsterix(JaxEnvironment[AsterixState, AsterixObservation, AsterixInfo, A
         else:
             # Fallback: wie rgb
             return self.renderer.render(state)
+        """
 
     @partial(jax.jit, static_argnums=(0,))
     def _get_info(self, state: AsterixState, all_rewards: chex.Array = None) -> AsterixInfo:
@@ -675,7 +685,23 @@ class JaxAsterix(JaxEnvironment[AsterixState, AsterixObservation, AsterixInfo, A
         """
         return spaces.Discrete(9)
 
-    def observation_space(self) -> spaces.Dict: # TODO kann entfernt werden? wird nicht verwendet / benötigt
+    def observation_space(self) -> spaces.Dict:
+        # Returns the observation space for Asterix.
+        # The observation contains:
+        # - player: EntityPosition (x, y, width, height)
+        # - score: int (0-99)
+        return spaces.Dict({
+            "player": spaces.Dict({
+                "x": spaces.Box(low=0, high=160, shape=(), dtype=jnp.int32),
+                "y": spaces.Box(low=0, high=210, shape=(), dtype=jnp.int32),
+                "width": spaces.Box(low=0, high=160, shape=(), dtype=jnp.int32),
+                "height": spaces.Box(low=0, high=210, shape=(), dtype=jnp.int32),
+            }),
+            # "car": spaces.Box(low=0, high=160, shape=(10, 4), dtype=jnp.int32),
+            # "score": spaces.Box(low=0, high=99, shape=(), dtype=jnp.int32),
+        })
+
+        """
         # Objektzentrierter Space als Dict
         if self.obs_type == "object":
             return spaces.Dict({
@@ -696,6 +722,7 @@ class JaxAsterix(JaxEnvironment[AsterixState, AsterixObservation, AsterixInfo, A
             return spaces.Box(low=0, high=255, shape=(128,), dtype=jnp.uint8)
         else:
             return spaces.Box(low=0, high=255, shape=(210, 160, 3), dtype=jnp.uint8)
+        """
 
     """
         def observation_space(self) -> spaces.Dict: # TODO kann entfernt werden? wird nicht verwendet / benötigt
@@ -715,7 +742,7 @@ class JaxAsterix(JaxEnvironment[AsterixState, AsterixObservation, AsterixInfo, A
         })
     """
 
-    def image_space(self) -> spaces.Box: # TODO kann entfernt werden? wird nicht verwendet / benötigt
+    def image_space(self) -> spaces.Box:
         """Returns the image space for Asterix.
         The image is a RGB image with shape (210, 160, 3).
         """
@@ -730,7 +757,14 @@ class JaxAsterix(JaxEnvironment[AsterixState, AsterixObservation, AsterixInfo, A
         """Render the game state to a raster image."""
         return self.renderer.render(state)
 
-    def obs_to_flat_array(self, obs: AsterixObservation) -> jnp.ndarray: # TODO kann entfernt werden? wird nicht verwendet / benötigt
+    def obs_to_flat_array(self, obs: AsterixObservation) -> jnp.ndarray:
+        return jnp.concatenate([
+            obs.player.x.flatten(),
+            obs.player.y.flatten(),
+            obs.player.width.flatten(),
+            obs.player.height.flatten(),
+        ])
+        """
         # Flacht Pixelbeobachtungen ab; bei objektzentriert auf Vektor der Player-Attribute abbilden
         if isinstance(obs, jnp.ndarray):
             return jnp.reshape(obs, (-1,))
@@ -741,6 +775,7 @@ class JaxAsterix(JaxEnvironment[AsterixState, AsterixObservation, AsterixInfo, A
             return jnp.reshape(jnp.asarray(obs), (-1,))
         except Exception:
             return jnp.zeros((0,), dtype=jnp.int32)
+        """
 
         """ OLD
         return jnp.array([
