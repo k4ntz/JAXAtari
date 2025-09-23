@@ -3,34 +3,28 @@ from typing import NamedTuple, Tuple, Dict, List
 import jax
 import jax.numpy as jnp
 import chex
-from gymnax.environments import spaces
-from jaxatari.rendering import jax_rendering_utils as aj
-from jaxatari.environment import JaxEnvironment
+import jaxatari.spaces as spaces
+from jaxatari.environment import JaxEnvironment, JAXAtariAction as Action
 from jaxatari.renderers import JAXGameRenderer
 
-# Screen dimensions - MUST BE FIRST
 WIDTH = 160
 HEIGHT = 210
-MAX_BOMBS = 8  # Maximum number of active bombs
+MAX_BOMBS = 8
 MAX_STEPS = 10000
 
 class KaboomConstants(NamedTuple):
-    # Screen dimensions
     WIDTH: int = WIDTH
     HEIGHT: int = HEIGHT
     MAX_BOMBS: int = MAX_BOMBS
     MAX_STEPS: int = MAX_STEPS
 
-    # Player (bucket) settings
     BUCKET_WIDTH: int = 8
     BUCKET_HEIGHT: int = 6
     BUCKET_SPEED: int = 3
 
-# Bucket position constants
 BUCKET_START_X: int = WIDTH // 2
 BUCKET_START_Y: int = HEIGHT - 30
 
-# Bomber (mad bomber) settings
 BOMBER_WIDTH: int = 8
 BOMBER_HEIGHT: int = 8
 BOMBER_START_X: int = WIDTH // 2
@@ -39,25 +33,20 @@ BOMBER_MIN_X: int = 20
 BOMBER_MAX_X: int = WIDTH - 20
 BOMBER_SPEED: int = 2
 
-# Bomb settings
 BOMB_WIDTH: int = 4
 BOMB_HEIGHT: int = 4
 BOMB_SPEED_INITIAL: int = 1
 BOMB_SPEED_MAX: int = 4
 BOMB_SPEED_INCREMENT: float = 0.1
 
-# Game settings
 INITIAL_LIVES: int = 3
 POINTS_PER_CATCH: int = 10
 MAX_SCORE: int = 999999  # Maximum score as per original Atari Kaboom
 
-# Difficulty settings (Authentic Atari Kaboom)
 DIFFICULTY_NORMAL: int = 0  # Full-size buckets (b position)
 DIFFICULTY_ADVANCED: int = 1  # Half-size buckets (a position)
 
-# Bomb Group System (Authentic Atari Kaboom)
 BOMB_GROUPS = [
-    # Group, NumBombs, PointValue, GroupTotal, CumulativeScore
     (1, 10, 1, 10, 10),
     (2, 20, 2, 40, 50),
     (3, 30, 3, 90, 140),
@@ -68,12 +57,10 @@ BOMB_GROUPS = [
     (8, 150, 8, 1200, 2900)
 ]
 
-# Extract convenient lookup arrays
-GROUP_BOMB_COUNTS = jnp.array([group[1] for group in BOMB_GROUPS])  # [10, 20, 30, ...]
-GROUP_POINT_VALUES = jnp.array([group[2] for group in BOMB_GROUPS])  # [1, 2, 3, ...]
-GROUP_CUMULATIVE_SCORES = jnp.array([group[4] for group in BOMB_GROUPS])  # [10, 50, 140, ...]
+GROUP_BOMB_COUNTS = jnp.array([group[1] for group in BOMB_GROUPS])
+GROUP_POINT_VALUES = jnp.array([group[2] for group in BOMB_GROUPS])
+GROUP_CUMULATIVE_SCORES = jnp.array([group[4] for group in BOMB_GROUPS])
 
-# Speed multipliers for each group (authentic Atari progression)
 GROUP_SPEED_MULTIPLIERS = jnp.array([1.0, 1.1, 1.25, 1.4, 1.6, 1.8, 2.0, 2.0])
 
 # Colors
@@ -91,20 +78,23 @@ LEFT: int = 3
 RIGHTFIRE: int = 4
 LEFTFIRE: int = 5
 
-# Constants for game environment
+"""
+Note: Avoid duplicated constants. Keep a single source of truth below.
+Speeds chosen to match original Kaboom pacing (slower than a previous edit).
+"""
+
+# Core geometry and limits (single definition)
 WIDTH = 160
 HEIGHT = 210
-MAX_BOMBS = 8  # Maximum number of active bombs
+MAX_BOMBS = 8
 MAX_STEPS = 10000
 
-# Player (bucket) settings
 BUCKET_WIDTH = 8
 BUCKET_HEIGHT = 6
 BUCKET_START_X = WIDTH // 2
-BUCKET_START_Y = HEIGHT - 30  # Changed from HEIGHT - 70 to HEIGHT - 30
-BUCKET_SPEED = 4
+BUCKET_START_Y = HEIGHT - 30
+BUCKET_SPEED = 3  # restore original slower bucket speed
 
-# Bomber (mad bomber) settings
 BOMBER_WIDTH = 8
 BOMBER_HEIGHT = 8
 BOMBER_START_X = WIDTH // 2
@@ -113,36 +103,24 @@ BOMBER_MIN_X = 20
 BOMBER_MAX_X = WIDTH - 20
 BOMBER_SPEED = 2
 
-# Bomb settings
 BOMB_WIDTH = 4
 BOMB_HEIGHT = 4
-BOMB_SPEED_INITIAL = 3  # Authentic Atari speed (3 pixels per frame)
-BOMB_SPEED_MAX = 6  # Maximum speed in later groups
-BOMB_SPEED_INCREMENT = 0.1  # Speed increases as game progresses
+BOMB_SPEED_INITIAL = 1  # slower initial fall speed
+BOMB_SPEED_MAX = 4      # slower max fall speed
+BOMB_SPEED_INCREMENT = 0.1
 
-# Game settings
 INITIAL_LIVES = 3
 POINTS_PER_CATCH = 10
-GROUP_TRANSITION_PAUSE = 120  # Frames to pause when advancing to next group (2 seconds at 60fps)
+GROUP_TRANSITION_PAUSE = 120
 
-# Colors
 BACKGROUND_COLOR = (0, 0, 0)
 BUCKET_COLOR = (255, 255, 0)  # Yellow
 BOMBER_COLOR = (255, 0, 0)    # Red
 BOMB_COLOR = (255, 165, 0)    # Orange
 TEXT_COLOR = (255, 255, 255)  # White
 
-# Action constants (using JAXAtari standard)
-NOOP = 0
-FIRE = 1
-UP = 2
-RIGHT = 3
-LEFT = 4
-DOWN = 5
-RIGHTFIRE = 11
-LEFTFIRE = 12
+# No local action constants; use JAXAtariAction (imported as Action)
 
-# State translator for debugging and visualization
 STATE_TRANSLATOR: Dict[int, str] = {
     0: "bucket_x",
     1: "bomber_x",
@@ -151,11 +129,8 @@ STATE_TRANSLATOR: Dict[int, str] = {
     4: "lives",
     5: "level",
     6: "step_counter",
-    # For each possible bomb (up to MAX_BOMBS):
-    # active, x, y, speed
 }
 
-# Dynamically add bomb state entries to STATE_TRANSLATOR
 for i in range(MAX_BOMBS):
     base_idx = 7 + i * 4
     STATE_TRANSLATOR[base_idx] = f"bomb_{i}_active"
@@ -168,26 +143,33 @@ BOMB_GROUP_THRESHOLDS = jnp.array([0] + [sum(GROUP_BOMB_COUNTS[:i]) for i in ran
 
 # Immutable state container
 class KaboomState(NamedTuple):
-    bucket_x: chex.Array          # Bucket x-position
-    bomber_x: chex.Array          # Bomber x-position
-    bomber_direction: chex.Array  # Direction bomber is moving (-1: left, 1: right)
-    score: chex.Array             # Current score
-    lives: chex.Array             # Remaining lives
-    level: chex.Array             # Current level (difficulty increases with level)
-    step_counter: chex.Array      # Current step count
-    bomb_active: chex.Array       # Boolean array tracking which bombs are active
-    bomb_x: chex.Array            # X positions of all bombs
-    bomb_y: chex.Array            # Y positions of all bombs
-    bomb_speed: chex.Array        # Speed of each bomb
-    drop_timer: chex.Array        # Timer for dropping new bombs
-    obs_stack: chex.ArrayTree     # Observation stack for rendering
-    bombs_caught: chex.Array      # Total bombs caught
-    bomb_group: chex.Array        # Current bomb group (0-7)
-    bombs_in_group: chex.Array    # Bombs caught in current group
-    difficulty: chex.Array        # Difficulty setting (0=normal, 1=advanced)
-    group_transition_timer: chex.Array  # Timer for group transition pause
+    bucket_x: chex.Array
+    bomber_x: chex.Array
+    bomber_direction: chex.Array
+    score: chex.Array
+    lives: chex.Array
+    level: chex.Array
+    step_counter: chex.Array
+    bomb_active: chex.Array
+    bomb_x: chex.Array
+    bomb_y: chex.Array
+    bomb_speed: chex.Array
+    drop_timer: chex.Array
+    obs_stack: chex.ArrayTree
+    bombs_caught: chex.Array
+    bomb_group: chex.Array
+    bombs_in_group: chex.Array
+    difficulty: chex.Array
+    group_transition_timer: chex.Array
 
 class EntityPosition(NamedTuple):
+    x: jnp.ndarray
+    y: jnp.ndarray
+    width: jnp.ndarray
+    height: jnp.ndarray
+
+class BombsObservation(NamedTuple):
+    active: jnp.ndarray
     x: jnp.ndarray
     y: jnp.ndarray
     width: jnp.ndarray
@@ -196,7 +178,7 @@ class EntityPosition(NamedTuple):
 class KaboomObservation(NamedTuple):
     bucket: EntityPosition
     bomber: EntityPosition
-    bombs: List[EntityPosition]
+    bombs: BombsObservation
     score: jnp.ndarray
     lives: jnp.ndarray
     level: jnp.ndarray
@@ -216,14 +198,14 @@ def bucket_step(bucket_x: chex.Array, action: chex.Array) -> chex.Array:
     """Update bucket position based on action."""
     # Moving left
     bucket_x = jnp.where(
-        jnp.logical_or(action == LEFT, action == LEFTFIRE),
+        jnp.logical_or(action == Action.LEFT, action == Action.LEFTFIRE),
         bucket_x - BUCKET_SPEED,
         bucket_x
     )
     
     # Moving right
     bucket_x = jnp.where(
-        jnp.logical_or(action == RIGHT, action == RIGHTFIRE),
+        jnp.logical_or(action == Action.RIGHT, action == Action.RIGHTFIRE),
         bucket_x + BUCKET_SPEED,
         bucket_x
     )
@@ -281,13 +263,15 @@ def drop_bomb(
     level: chex.Array,
     drop_timer: chex.Array,
     bomb_group: chex.Array,
+    pause_dropping: chex.Array,
 ) -> Tuple[chex.Array, chex.Array, chex.Array, chex.Array, chex.Array]:
     """Potentially drop a new bomb."""
     # Decrement drop timer
-    new_drop_timer = drop_timer - 1
+    # If we are in a transition pause, do not decrement or drop
+    new_drop_timer = jnp.where(pause_dropping > 0, drop_timer, drop_timer - 1)
     
     # Check if it's time to drop a bomb
-    should_drop = new_drop_timer <= 0
+    should_drop = jnp.logical_and(new_drop_timer <= 0, pause_dropping <= 0)
     
     # Find first inactive bomb slot
     inactive_slots = jnp.where(bomb_active == 0, 1, 0)
@@ -310,8 +294,8 @@ def drop_bomb(
     )
     
     # Calculate drop interval - faster dropping as groups advance
-    # Authentic Atari Kaboom speeds: Start with 12 frames, reduce by 1 frame per group (minimum 3 frames)
-    current_drop_interval = jnp.maximum(12 - bomb_group, 3)
+    # Start slower and clamp to a minimum to avoid frantic bomb spam
+    current_drop_interval = jnp.maximum(18 - bomb_group, 5)
     
     # Reset timer if dropping
     new_drop_timer = jnp.where(
@@ -322,9 +306,9 @@ def drop_bomb(
     
     # Calculate base speed based on group
     base_speed = BOMB_SPEED_INITIAL * current_speed_multiplier
-    
-    # Speed still increases slightly with level within each group
-    adjusted_speed = jnp.minimum(base_speed + level * 0.05, BOMB_SPEED_MAX)
+
+    # Speed still increases slightly with level within each group, but keep gentle
+    adjusted_speed = jnp.minimum(base_speed + level * 0.03, BOMB_SPEED_MAX)
     
     # Update bomb arrays if dropping
     new_bomb_active = bomb_active.at[first_inactive].set(
@@ -533,7 +517,8 @@ def step_fn(key: chex.PRNGKey, state: KaboomState, action: chex.Array) -> Tuple[
     # Try dropping a new bomb
     new_bomb_active, new_bomb_x, new_bomb_y, new_bomb_speed, new_drop_timer = drop_bomb(
         state.bomb_active, state.bomb_x, state.bomb_y, state.bomb_speed,
-        new_bomber_x, state.level, state.drop_timer, state.bomb_group
+        new_bomber_x, state.level, state.drop_timer, state.bomb_group,
+        state.group_transition_timer
     )
     
     # Update all active bombs and check for catches/misses
@@ -550,6 +535,9 @@ def step_fn(key: chex.PRNGKey, state: KaboomState, action: chex.Array) -> Tuple[
     done = new_lives <= 0
     
     # Create updated state
+    # Decrement group transition timer if active
+    dec_group_transition_timer = jnp.maximum(state.group_transition_timer - 1, 0)
+
     new_state = KaboomState(
         bucket_x=new_bucket_x,
         bomber_x=new_bomber_x,
@@ -568,7 +556,7 @@ def step_fn(key: chex.PRNGKey, state: KaboomState, action: chex.Array) -> Tuple[
         bomb_group=new_bomb_group,
         bombs_in_group=new_bombs_in_group,
         difficulty=state.difficulty,  # Difficulty doesn't change during gameplay
-        group_transition_timer=new_group_transition_timer
+        group_transition_timer=jnp.maximum(new_group_transition_timer, dec_group_transition_timer)
     )
     
     # Create info struct
@@ -652,59 +640,55 @@ class JaxKaboom(JaxEnvironment[KaboomState, KaboomObservation, KaboomInfo, Kaboo
         """Reset the environment to initial state."""
         if key is None:
             key = jax.random.PRNGKey(0)
-        # Use the provided key directly
         reset_key, state = self.reset_env(key)
-        obs = self.get_obs(state)
+        obs = self._get_observation(state)
         return obs, state
 
     def step(self, state: KaboomState, action: chex.Array) -> Tuple[KaboomObservation, KaboomState, float, bool, KaboomInfo]:
         """Take a step in the environment."""
-        # Use the step counter as a simple way to generate unique keys
         step_key = jax.random.PRNGKey(state.step_counter)
         step_key, next_state, reward, done, info = self.step_env(step_key, state, action)
-        obs = self.get_obs(next_state)
+        obs = self._get_observation(next_state)
         return obs, next_state, reward, done, info
-    
-    def get_obs(self, state: KaboomState) -> KaboomObservation:
-        """Get observation from state."""
-        # Calculate effective bucket width based on difficulty
+
+    @partial(jax.jit, static_argnums=(0,))
+    def _get_observation(self, state: KaboomState) -> KaboomObservation:
+        """Convert state to structured observation."""
         effective_bucket_width = jnp.where(
             state.difficulty == DIFFICULTY_ADVANCED,
-            BUCKET_WIDTH // 2,  # Half-size for advanced
-            BUCKET_WIDTH        # Full-size for normal
-        )
-        
-        # Convert state to observation
+            BUCKET_WIDTH // 2,
+            BUCKET_WIDTH
+        ).astype(jnp.int32)
+
         bucket = EntityPosition(
-            x=state.bucket_x,
-            y=jnp.array(BUCKET_START_Y, dtype=jnp.float32),
+            x=state.bucket_x.astype(jnp.int32),
+            y=jnp.array(BUCKET_START_Y, dtype=jnp.int32),
             width=effective_bucket_width,
-            height=jnp.array(BUCKET_HEIGHT, dtype=jnp.float32)
+            height=jnp.array(BUCKET_HEIGHT, dtype=jnp.int32)
         )
-        
+
         bomber = EntityPosition(
-            x=state.bomber_x,
-            y=jnp.array(BOMBER_START_Y, dtype=jnp.float32),
-            width=jnp.array(BOMBER_WIDTH, dtype=jnp.float32),
-            height=jnp.array(BOMBER_HEIGHT, dtype=jnp.float32)
+            x=state.bomber_x.astype(jnp.int32),
+            y=jnp.array(BOMBER_START_Y, dtype=jnp.int32),
+            width=jnp.array(BOMBER_WIDTH, dtype=jnp.int32),
+            height=jnp.array(BOMBER_HEIGHT, dtype=jnp.int32)
         )
-        
-        bombs = []
-        for i in range(MAX_BOMBS):
-            bombs.append(EntityPosition(
-                x=state.bomb_x[i],
-                y=state.bomb_y[i],
-                width=jnp.array(BOMB_WIDTH, dtype=jnp.float32),
-                height=jnp.array(BOMB_HEIGHT, dtype=jnp.float32)
-            ))
-        
+
+        bombs = BombsObservation(
+            active=state.bomb_active.astype(jnp.int32),
+            x=state.bomb_x.astype(jnp.int32),
+            y=state.bomb_y.astype(jnp.int32),
+            width=jnp.ones((MAX_BOMBS,), dtype=jnp.int32) * BOMB_WIDTH,
+            height=jnp.ones((MAX_BOMBS,), dtype=jnp.int32) * BOMB_HEIGHT,
+        )
+
         return KaboomObservation(
             bucket=bucket,
             bomber=bomber,
             bombs=bombs,
-            score=state.score,
-            lives=state.lives,
-            level=state.level
+            score=state.score.astype(jnp.int32),
+            lives=state.lives.astype(jnp.int32),
+            level=state.level.astype(jnp.int32)
         )
     
     @property
@@ -716,8 +700,35 @@ class JaxKaboom(JaxEnvironment[KaboomState, KaboomObservation, KaboomInfo, Kaboo
         """Action space definition."""
         return spaces.Discrete(self.num_actions)
     
-    def observation_space(self) -> spaces.Box:
-        """Observation space definition."""
+    def observation_space(self) -> spaces.Dict:
+        """Structured observation space definition."""
+        return spaces.Dict({
+            "bucket": spaces.Dict({
+                "x": spaces.Box(low=0, high=WIDTH, shape=(), dtype=jnp.int32),
+                "y": spaces.Box(low=0, high=HEIGHT, shape=(), dtype=jnp.int32),
+                "width": spaces.Box(low=0, high=WIDTH, shape=(), dtype=jnp.int32),
+                "height": spaces.Box(low=0, high=HEIGHT, shape=(), dtype=jnp.int32),
+            }),
+            "bomber": spaces.Dict({
+                "x": spaces.Box(low=0, high=WIDTH, shape=(), dtype=jnp.int32),
+                "y": spaces.Box(low=0, high=HEIGHT, shape=(), dtype=jnp.int32),
+                "width": spaces.Box(low=0, high=WIDTH, shape=(), dtype=jnp.int32),
+                "height": spaces.Box(low=0, high=HEIGHT, shape=(), dtype=jnp.int32),
+            }),
+            "bombs": spaces.Dict({
+                "active": spaces.Box(low=0, high=1, shape=(MAX_BOMBS,), dtype=jnp.int32),
+                "x": spaces.Box(low=0, high=WIDTH, shape=(MAX_BOMBS,), dtype=jnp.int32),
+                "y": spaces.Box(low=0, high=HEIGHT, shape=(MAX_BOMBS,), dtype=jnp.int32),
+                "width": spaces.Box(low=0, high=WIDTH, shape=(MAX_BOMBS,), dtype=jnp.int32),
+                "height": spaces.Box(low=0, high=HEIGHT, shape=(MAX_BOMBS,), dtype=jnp.int32),
+            }),
+            "score": spaces.Box(low=0, high=MAX_SCORE, shape=(), dtype=jnp.int32),
+            "lives": spaces.Box(low=0, high=INITIAL_LIVES, shape=(), dtype=jnp.int32),
+            "level": spaces.Box(low=0, high=10000, shape=(), dtype=jnp.int32),
+        })
+
+    def image_space(self) -> spaces.Box:
+        """Image space definition."""
         return spaces.Box(0, 255, (HEIGHT, WIDTH, 3), dtype=jnp.uint8)
     
     def is_terminal(self, state: KaboomState) -> chex.Array:
@@ -730,6 +741,37 @@ class JaxKaboom(JaxEnvironment[KaboomState, KaboomObservation, KaboomInfo, Kaboo
     def render(self, state: KaboomState) -> jnp.ndarray:
         """Render the current state as an RGB array."""
         return render_frame(state)
+
+    @partial(jax.jit, static_argnums=(0,))
+    def obs_to_flat_array(self, obs: KaboomObservation) -> jnp.ndarray:
+        """Flatten structured observation into a 1D array."""
+        return jnp.concatenate([
+            obs.bucket.x.flatten(), obs.bucket.y.flatten(), obs.bucket.width.flatten(), obs.bucket.height.flatten(),
+            obs.bomber.x.flatten(), obs.bomber.y.flatten(), obs.bomber.width.flatten(), obs.bomber.height.flatten(),
+            obs.bombs.active.flatten(), obs.bombs.x.flatten(), obs.bombs.y.flatten(), obs.bombs.width.flatten(), obs.bombs.height.flatten(),
+            obs.score.flatten(), obs.lives.flatten(), obs.level.flatten()
+        ])
+
+    @partial(jax.jit, static_argnums=(0,))
+    def _get_info(self, state: KaboomState, all_rewards: chex.Array = None) -> KaboomInfo:
+        return KaboomInfo(
+            time=state.step_counter,
+            all_rewards=jnp.array([0.0]) if all_rewards is None else all_rewards,
+            lives=state.lives,
+            score=state.score,
+            level=state.level,
+            bombs_caught=state.bombs_caught,
+            bomb_group=state.bomb_group,
+            bombs_in_group=state.bombs_in_group,
+        )
+
+    @partial(jax.jit, static_argnums=(0,))
+    def _get_reward(self, previous_state: KaboomState, state: KaboomState) -> float:
+        return (state.score - previous_state.score).astype(jnp.int32)
+
+    @partial(jax.jit, static_argnums=(0,))
+    def _get_done(self, state: KaboomState) -> bool:
+        return jnp.logical_or(state.lives <= 0, state.step_counter >= MAX_STEPS)
 
 @jax.jit
 def render_frame(state: KaboomState) -> jnp.ndarray:
@@ -901,17 +943,17 @@ def get_human_action() -> chex.Array:
     
     keys = pygame.key.get_pressed()
     if keys[pygame.K_LEFT] and keys[pygame.K_SPACE]:
-        return LEFTFIRE
+        return Action.LEFTFIRE
     elif keys[pygame.K_RIGHT] and keys[pygame.K_SPACE]:
-        return RIGHTFIRE
+        return Action.RIGHTFIRE
     elif keys[pygame.K_LEFT]:
-        return LEFT
+        return Action.LEFT
     elif keys[pygame.K_RIGHT]:
-        return RIGHT
+        return Action.RIGHT
     elif keys[pygame.K_SPACE]:
-        return FIRE
+        return Action.FIRE
     else:
-        return NOOP
+        return Action.NOOP
 
 class KaboomRenderer(JAXGameRenderer):
     """Renderer for the Kaboom game."""
