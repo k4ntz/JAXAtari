@@ -1062,7 +1062,8 @@ class JaxKeystoneKapers(JaxEnvironment[GameState, KeystoneKapersObservation, Key
             key = jrandom.PRNGKey(0)
 
         # Initialize player at rightmost section of ground floor (as per original game)
-        player_start_x = self.consts.TOTAL_BUILDING_WIDTH - 100  # Near right edge
+        # player_start_x = 76  # Center of first section (0 + 152/2 = 76)
+        player_start_x = self.consts.TOTAL_BUILDING_WIDTH - 78  # Near right edge
         player = PlayerState(
             x=jnp.array(player_start_x),
             y=jnp.array(self.consts.FLOOR_1_Y),
