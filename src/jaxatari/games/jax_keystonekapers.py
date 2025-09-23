@@ -69,8 +69,20 @@ class KeystoneKapersConstants(NamedTuple):
     FLOOR_HEIGHT: int = 20
 
     # Minimap area configuration (at bottom of game area)
-    MINIMAP_HEIGHT: int = 20
+    MINIMAP_HEIGHT: int = 20  # Grey area height (reverted)
     MINIMAP_COLOR: tuple = (151, 151, 151)  # #979797 in RGB
+
+    # Actual minimap display area (within grey area)
+    MINIMAP_DISPLAY_WIDTH: int = 100  # Actual minimap width
+    MINIMAP_DISPLAY_HEIGHT: int = 16   # Actual minimap height (increased for better layer visibility)
+    MINIMAP_DISPLAY_OFFSET_X: int = 26  # Center within grey area
+    MINIMAP_DISPLAY_OFFSET_Y: int = 2   # Vertical offset within grey area (adjusted)
+
+    # Minimap floor layer colors
+    MINIMAP_TAN: tuple = (190, 156, 72)    # Tan #be9c48
+    MINIMAP_YELLOW: tuple = (207, 175, 92)  # Yellow #cfaf5c
+    MINIMAP_DARK_TAN: tuple = (171, 135, 50)  # Dark tan #ab8732
+    MINIMAP_GREEN: tuple = (50, 152, 82)   # Green #329852
 
     # Escalator positions and configuration
     ESCALATOR_1_OFFSET: int = 40   # Left escalator in each section
@@ -708,21 +720,21 @@ class JaxKeystoneKapers(JaxEnvironment[GameState, KeystoneKapersObservation, Key
 
         # Check escape condition BEFORE updating floor (if already on roof and hit edge)
         escaped = jnp.logical_and(thief.floor >= 3, hit_edge)
-        
+
         # When hitting edge: teleport up one floor and reverse direction (unless escaping)
         new_floor = jnp.where(
             jnp.logical_and(hit_edge, jnp.logical_not(escaped)),
             jnp.minimum(thief.floor + 1, 3),  # Go up one floor, max is roof (floor 3)
             thief.floor
         )
-        
+
         # Reverse direction when hitting edge (unless escaping)
         new_direction = jnp.where(
             jnp.logical_and(hit_edge, jnp.logical_not(escaped)),
             -thief.direction,  # Reverse direction
             thief.direction
         )
-        
+
         # Clamp position within building boundaries
         new_x = jnp.clip(new_x, 0, self.consts.TOTAL_BUILDING_WIDTH - self.consts.THIEF_WIDTH)        # Update Y position based on floor
         new_y = self._floor_y_position(new_floor)
@@ -1629,41 +1641,76 @@ class KeystoneKapersRenderer(JAXGameRenderer):
         game_area = draw_rectangle_simple(game_area, self.consts.GAME_AREA_WIDTH - 40, 10, 30, 8, ui_color)
 
         # Camera position indicator (above minimap)
-        camera_indicator_x = (state.camera_x / self.consts.TOTAL_BUILDING_WIDTH * self.consts.GAME_AREA_WIDTH)
-        game_area = draw_rectangle_simple(game_area, camera_indicator_x, self.consts.FLOOR_1_Y + self.consts.FLOOR_HEIGHT + 5, 20, 5,
-                                        jnp.array([255, 255, 0], dtype=jnp.uint8))  # Yellow camera indicator
+        # camera_indicator_x = (state.camera_x / self.consts.TOTAL_BUILDING_WIDTH * self.consts.GAME_AREA_WIDTH)
+        # game_area = draw_rectangle_simple(game_area, camera_indicator_x, self.consts.FLOOR_1_Y + self.consts.FLOOR_HEIGHT + 5, 20, 5,
+        #                                 jnp.array([255, 255, 0], dtype=jnp.uint8))  # Yellow camera indicator
 
         # Add minimap area right after floor 1 (eliminate blue gap)
         minimap_y_start = self.consts.FLOOR_1_Y + self.consts.FLOOR_HEIGHT  # Position right after floor 1
         minimap_color = jnp.array(self.consts.MINIMAP_COLOR, dtype=jnp.uint8)
 
-        # Draw minimap background directly in game area
+        # Draw grey minimap background directly in game area (full width)
         game_area = draw_rectangle_simple(game_area, 0, minimap_y_start,
                                         self.consts.GAME_AREA_WIDTH, self.consts.MINIMAP_HEIGHT,
                                         minimap_color)
 
         # MINIMAP IMPLEMENTATION - Compact overview of entire building
-        minimap_width = self.consts.GAME_AREA_WIDTH
-        minimap_height = self.consts.MINIMAP_HEIGHT
+        # Draw colored minimap area within grey background
+        minimap_display_x = self.consts.MINIMAP_DISPLAY_OFFSET_X
+        minimap_display_y = minimap_y_start + self.consts.MINIMAP_DISPLAY_OFFSET_Y
+        minimap_width = self.consts.MINIMAP_DISPLAY_WIDTH
+        minimap_height = self.consts.MINIMAP_DISPLAY_HEIGHT
+
+        # Draw detailed floor layers
         floors_count = 4  # Ground, Floor 2, Floor 3, Roof
-        floor_stripe_height = minimap_height // floors_count  # Height of each floor stripe
+        floor_stripe_height = minimap_height // floors_count  # Should be 4 pixels per floor with 16px total
+
+        # Floor layer colors in corrected order: tan, yellow, dark_tan, green
+        floor_colors = [
+            jnp.array(self.consts.MINIMAP_GREEN, dtype=jnp.uint8),
+            jnp.array(self.consts.MINIMAP_DARK_TAN, dtype=jnp.uint8),
+            jnp.array(self.consts.MINIMAP_YELLOW, dtype=jnp.uint8),
+            jnp.array(self.consts.MINIMAP_TAN, dtype=jnp.uint8)
+        ]
+
+        # Roof colors (only tan and yellow)
+        roof_colors = [
+            jnp.array(self.consts.MINIMAP_TAN, dtype=jnp.uint8),
+            jnp.array(self.consts.MINIMAP_YELLOW, dtype=jnp.uint8)
+        ]
+
+        # Draw floors in reverse order to match visual layout (roof at top, ground at bottom)
+        # Visual layout: floor_idx 0=roof(top), 1=top_floor, 2=middle_floor, 3=ground(bottom)
+        for visual_floor_idx in range(floors_count):
+            floor_y = minimap_display_y + visual_floor_idx * floor_stripe_height
+
+            if visual_floor_idx == 0:  # Roof (top of minimap) - only 2 layers (tan, yellow)
+                layer_height = max(1, floor_stripe_height // 2)
+                # Draw layers from top to bottom: tan first, then yellow
+                for layer_idx in range(2):
+                    layer_y = floor_y + layer_idx * layer_height
+                    game_area = draw_rectangle_simple(game_area, minimap_display_x, layer_y,
+                                                    minimap_width, layer_height,
+                                                    roof_colors[layer_idx])
+            else:  # Regular floors (1,2,3) - ALL get 4 layers each (tan, yellow, dark_tan, green)
+                layer_height = max(1, floor_stripe_height // 4)
+                # Draw layers from top to bottom: tan, yellow, dark_tan, green
+                for layer_idx in range(4):
+                    layer_y = floor_y + layer_idx * layer_height
+                    game_area = draw_rectangle_simple(game_area, minimap_display_x, layer_y,
+                                                    minimap_width, layer_height,
+                                                    floor_colors[layer_idx])
 
         def world_to_minimap_x(world_x):
             """Convert world X coordinate to minimap X coordinate"""
             return jnp.clip(
-                jnp.floor(world_x * minimap_width / self.consts.TOTAL_BUILDING_WIDTH).astype(jnp.int32),
-                0, minimap_width - 1
+                jnp.floor(world_x * minimap_width / self.consts.TOTAL_BUILDING_WIDTH).astype(jnp.int32) + minimap_display_x,
+                minimap_display_x, minimap_display_x + minimap_width - 1
             )
 
         def floor_to_minimap_y(floor_index):
             """Convert floor index to minimap Y coordinate (roof=0, ground=3)"""
-            return minimap_y_start + (3 - floor_index) * floor_stripe_height + floor_stripe_height // 2
-
-        # Draw floor separation lines
-        for floor in range(1, floors_count):
-            y_line = minimap_y_start + floor * floor_stripe_height
-            game_area = draw_rectangle_simple(game_area, 0, y_line, minimap_width, 1,
-                                            jnp.array([64, 64, 64], dtype=jnp.uint8))  # Dark grey lines
+            return minimap_display_y + (3 - floor_index) * floor_stripe_height + floor_stripe_height // 2
 
         # Draw escalators (diagonal staircase sprites in black)
         escalator_color = jnp.array([0, 0, 0], dtype=jnp.uint8)  # Black
