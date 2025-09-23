@@ -304,7 +304,7 @@ class FishingDerby(JaxEnvironment):
 
             # Define phases based on hook depth and rod position
             is_going_down = p2_hook_y < target_fish_y  # Still need to go deeper
-            is_at_target_depth = jnp.abs(p2_hook_y - target_fish_y) <= 15  # Near target depth
+            is_at_target_depth = jnp.abs(p2_hook_y - target_fish_y) <= 5  # Near target depth
 
             # Check if rod needs more extension to reach fish
             rod_end_x = cfg.P2_START_X - current_rod_length
@@ -319,13 +319,14 @@ class FishingDerby(JaxEnvironment):
                 # Phase 1: Going down and extending rod to reach fish
                 phase1_action = jnp.where(
                     is_going_down & needs_more_extension,
-                    Action.DOWNLEFT,  # Go down and extend rod
+                    Action.DOWNRIGHT,
+                # Go down and extend rod
                     jnp.where(
                         is_going_down & ~needs_more_extension,
                         Action.DOWN,  # Just go down when rod is positioned
                         jnp.where(
                             ~is_going_down & needs_more_extension,
-                            Action.LEFT,  # Just extend rod if not going down
+                            Action.UPRIGHT,  # Just extend rod if not going down
                             Action.NOOP
                         )
                     )
@@ -344,7 +345,7 @@ class FishingDerby(JaxEnvironment):
 
                 # Phase 3: Continue going up until back at surface, then restart cycle
                 phase3_action = jnp.where(
-                    p2_hook_y <= cfg.WATER_Y_START - cfg.ROD_Y ,  # Near surface
+                    p2_hook_y <= cfg.WATER_Y_START - cfg.ROD_Y + 5,  # Near surface
                     Action.NOOP,  # Brief pause at surface before restarting
                     Action.UP  # Continue going up
                 )
