@@ -1507,7 +1507,7 @@ class JaxRiverraid(JaxEnvironment):
         )
 
         observation = self._get_observation(new_state)
-        env_reward = self._get_env_reward(state, new_state)
+        env_reward = self._get_reward(state, new_state)
         all_rewards = self._get_all_reward(state, new_state)
         done = self._get_done(new_state)
         jax.debug.print("done: {done}\n", done=done)
@@ -1546,7 +1546,7 @@ class JaxRiverraid(JaxEnvironment):
         )
 
     @partial(jax.jit, static_argnums=(0,))
-    def _get_env_reward(self, previous_state: RiverraidState, state: RiverraidState):
+    def _get_reward(self, previous_state: RiverraidState, state: RiverraidState):
         return state.player_score - previous_state.player_score
 
     @partial(jax.jit, static_argnums=(0,))
