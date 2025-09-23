@@ -98,10 +98,10 @@ class KeystoneKapersConstants(NamedTuple):
     # ESCALATOR_FLOOR2_X: int = 988   # Floor 2: middle of last section
     # ESCALATOR_FLOOR3_X: int = 988   # Floor 3: middle of last section
 
-    # # Three specific escalators at the ends of the building (absolute positions)
-    ESCALATOR_FLOOR1_X: int = 20    # Floor 1: leftmost position in building
-    ESCALATOR_FLOOR2_X: int = 1040  # Floor 2: rightmost position in building (1064 - 24)
-    ESCALATOR_FLOOR3_X: int = 20    # Floor 3: leftmost position in building
+    # Three specific escalators in the middle of first and last sections (absolute positions)
+    ESCALATOR_FLOOR1_X: int = 76    # Floor 1: middle of first section (0 + 76 = 76)
+    ESCALATOR_FLOOR2_X: int = 988   # Floor 2: middle of last section (6*152 + 76 = 988)
+    ESCALATOR_FLOOR3_X: int = 76    # Floor 3: middle of first section (0 + 76 = 76)
 
     # Elevator configuration (positioned in middle of entire building)
     ELEVATOR_BUILDING_X: int = 520  # Middle of 1064px building (3.5 * 152) - adjusted for new section width
