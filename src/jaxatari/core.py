@@ -12,7 +12,6 @@ GAME_MODULES = {
     "freeway": "jaxatari.games.jax_freeway",
     "breakout": "jaxatari.games.jax_breakout",
     # Add new games here
-    "enduro": "jaxatari.games.jax_enduro",
 }
 
 def list_available_games() -> list[str]:
