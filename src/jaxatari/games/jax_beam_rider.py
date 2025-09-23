@@ -14,9 +14,13 @@ from jaxatari.renderers import JAXGameRenderer
 import jaxatari.spaces as spaces
 
 """TODOS:
-- make game more 3D --> might be done(ask supervisor)
-For later:
-- Documentation"""
+- Change Player ship sprite(add Animation that tip is changing colors from red to purple --> see ALE Gameplay)
+- Change Background
+- Adjust the colors a bit
+- make the Torpedo counter more rectangle than square
+--> all-in-all adjust the rendering so that it Looks like the ALE version
+- Documentation(most of it should be done, just need to make sure it sounds less AI)
+"""
 
 
 class BeamRiderConstants(NamedTuple):
