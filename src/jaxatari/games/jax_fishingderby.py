@@ -44,7 +44,7 @@ class GameConfig:
     START_ROD_LENGTH_X: int = 20  # Starting horizontal rod length
     MAX_ROD_LENGTH_X: int = 65  # Maximum horizontal extension
     P2_MIN_ROD_LENGTH_X: int = 5  # Reduce this to allow less leftward extension
-    P2_MAX_ROD_LENGTH_X: int = 50  # Increase this to allow more rightward extension
+    P2_MAX_ROD_LENGTH_X: int = 80  # Increase this to allow more rightward extension
     MIN_HOOK_DEPTH_Y: int = 0  # Minimum vertical hook depth
     START_HOOK_DEPTH_Y: int = 40  # Starting vertical hook depth
     MAX_HOOK_DEPTH_Y: int = 160  # Maximum vertical extension to reach bottom fish
@@ -77,7 +77,6 @@ class GameConfig:
     # Boundaries
     LEFT_BOUNDARY: float = 10
     RIGHT_BOUNDARY: float = 115
-
     # Fish
     FISH_WIDTH: int = 8
     FISH_HEIGHT: int = 7
@@ -459,17 +458,19 @@ class FishingDerby(JaxEnvironment):
                 fish_speeds
             )
             new_fish_x = state.fish_positions[:, 0] + state.fish_directions * fish_speeds
-            hit_boundary = (new_fish_x <= cfg.LEFT_BOUNDARY) | (new_fish_x >= cfg.RIGHT_BOUNDARY)
+            # Adjust boundary check to allow fish to move further right
+            effective_right_boundary = cfg.RIGHT_BOUNDARY + 24
+            hit_boundary = (new_fish_x <= cfg.LEFT_BOUNDARY) | (new_fish_x >= effective_right_boundary)
             should_change_dir_random = jax.random.uniform(fish_key, (cfg.NUM_FISH,)) < change_probs
             can_turn_due_to_cooldown = state.fish_turn_cooldowns <= 0
             should_change_dir = (can_turn_due_to_cooldown & should_change_dir_random) | hit_boundary
             new_cooldowns = jnp.where(
                 should_change_dir,
-                jnp.where(jnp.arange(cfg.NUM_FISH) == p1_hooked_idx, cfg.HOOKED_FISH_TURNING_COOLDOWN, 0),
+                cfg.HOOKED_FISH_TURNING_COOLDOWN,
                 jnp.maximum(0, state.fish_turn_cooldowns - 1)
             )
             new_fish_dirs = jnp.where(should_change_dir, -state.fish_directions, state.fish_directions)
-            new_fish_x = jnp.clip(new_fish_x, cfg.LEFT_BOUNDARY, cfg.RIGHT_BOUNDARY)
+            new_fish_x = jnp.clip(new_fish_x, cfg.LEFT_BOUNDARY, effective_right_boundary)
             new_fish_pos = state.fish_positions.at[:, 0].set(new_fish_x)
 
             # ==== Shark movement (unverändert zu vorher) ========================================
@@ -869,8 +870,9 @@ class FishingDerby(JaxEnvironment):
                 total_dx = jnp.clip(base_dx + wobble_dx, -cfg.MAX_HOOKED_WOBBLE_DX, cfg.MAX_HOOKED_WOBBLE_DX)
                 potential_new_x = fish_x + total_dx
                 rod_end_x_local = cfg.P2_START_X - p2_new_rod_length
+                effective_right_boundary = cfg.RIGHT_BOUNDARY + 24
                 boundary_min = jnp.maximum(rod_end_x_local - cfg.HOOKED_FISH_BOUNDARY_PADDING, cfg.LEFT_BOUNDARY)
-                boundary_max = jnp.minimum(rod_end_x_local + cfg.HOOKED_FISH_BOUNDARY_PADDING, cfg.RIGHT_BOUNDARY)
+                boundary_max = jnp.minimum(rod_end_x_local + cfg.HOOKED_FISH_BOUNDARY_PADDING, effective_right_boundary)
 
                 def apply_hooked_boundaries():
                     would_hit_left = potential_new_x <= boundary_min
@@ -882,8 +884,8 @@ class FishingDerby(JaxEnvironment):
 
                 def apply_global_boundaries():
                     would_hit_left = potential_new_x <= cfg.LEFT_BOUNDARY
-                    would_hit_right = potential_new_x >= cfg.RIGHT_BOUNDARY
-                    constrained_x = jnp.clip(potential_new_x, cfg.LEFT_BOUNDARY, cfg.RIGHT_BOUNDARY)
+                    would_hit_right = potential_new_x >= effective_right_boundary
+                    constrained_x = jnp.clip(potential_new_x, cfg.LEFT_BOUNDARY, effective_right_boundary)
                     new_direction = jnp.where(would_hit_left | would_hit_right, -fish_dir, fish_dir)
                     return constrained_x, new_direction
 
