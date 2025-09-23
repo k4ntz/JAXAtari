@@ -614,13 +614,15 @@ class FishingDerby(JaxEnvironment):
             ))
 
             # ======== Kollisionslogik / Einhaken P1 =============================================
-            fish_active = state.fish_active
-            reeling_priority = state.reeling_priority
-            can_hook = (p1_hook_state == 0)
-            hook_collides_fish = (jnp.abs(new_fish_pos[:, 0] - hook_x) < cfg.FISH_WIDTH) & \
-                                 (jnp.abs(new_fish_pos[:, 1] - hook_y) < cfg.FISH_HEIGHT)
+            # Collision and Game Logic
+            fish_active, reeling_priority = state.fish_active, state.reeling_priority
+            can_hook = (p1_hook_state == 0)  # Use updated hook state
+            hook_collides_fish = (jnp.abs(new_fish_pos[:, 0] - hook_x) < cfg.FISH_WIDTH) & (
+                    jnp.abs(new_fish_pos[:, 1] - hook_y) < cfg.FISH_HEIGHT)
             valid_hook_targets = can_hook & fish_active & hook_collides_fish
+
             hooked_fish_idx, did_hook_fish = jnp.argmax(valid_hook_targets), jnp.any(valid_hook_targets)
+
             p1_hook_state = jnp.where(did_hook_fish, 1, p1_hook_state)
             p1_hooked_fish_idx = jnp.where(did_hook_fish, hooked_fish_idx, p1.hooked_fish_idx)
             fish_active = fish_active.at[hooked_fish_idx].set(
@@ -628,31 +630,22 @@ class FishingDerby(JaxEnvironment):
             )
             reeling_priority = jnp.where(did_hook_fish & (reeling_priority == -1), 0, reeling_priority)
 
-            # P1 Fast Reel
-            p1_fire_pressed = self._is_fire_action(p1_action)
-            can_reel_fast = (p1_fire_pressed) & (p1_hook_state >= 1) & (
-                    (reeling_priority == -1) | (reeling_priority == 0)
-            )
-            p1_hook_state = jnp.where(can_reel_fast, 2, p1_hook_state)
-            reeling_priority = jnp.where(can_reel_fast, 0, reeling_priority)
+            # Fast reel with FIRE button
+            is_fire_pressed_p1 = self._is_fire_action(p1_action)
+            is_reeling_fast_p1 = (p1_hook_state == 1) & is_fire_pressed_p1
 
-            # Reeling mechanics
+            # Fast reel is every frame, slow reel is every cfg.SLOW_REEL_PERIOD frames
             tick_slow = (jnp.bitwise_and(state.time, cfg.SLOW_REEL_PERIOD - 1) == 0)
-            reel_tick = jnp.where(p1_hook_state == 2, True, tick_slow)  # fast: jedes Frame
-            reel_step = jnp.where(p1_hook_state == 2, cfg.REEL_FAST_SPEED, cfg.REEL_SLOW_SPEED)
+            reel_tick = jnp.where(is_reeling_fast_p1, True, tick_slow)
+
+            reel_step = jnp.where(p1_hook_state > 0, 1.0, 0.0)  # 1 px per tick
+            can_reel = p1_hooked_fish_idx >= 0
+
             new_hook_y = jnp.where(
-                (reel_tick & (p1_hooked_fish_idx >= 0) & (p1_hook_state > 0)),
+                (reel_tick & can_reel),
                 jnp.clip(new_hook_y - reel_step, scoring_hook_y, max_hook_y),
                 new_hook_y
             )
-            # Aktualisierte P1-Hook-Position
-            hook_x, hook_y = self._get_hook_position(cfg.P1_START_X, PlayerState(
-                rod_length=new_rod_length, hook_y=new_hook_y, score=p1.score, hook_state=p1_hook_state,
-                hooked_fish_idx=p1_hooked_fish_idx, hook_velocity_y=new_hook_velocity_y,
-                hook_x_offset=new_hook_x_offset,
-                display_score=p1.display_score, score_animation_timer=p1.score_animation_timer,
-                line_segments_x=p1.line_segments_x
-            ))
 
             # ======== Wenn P1 eine Fisch hat: Fisch folgt / Grenzen / Wobble ====================
             has_hook = (p1_hook_state > 0) & (p1_hooked_fish_idx >= 0)
@@ -825,19 +818,17 @@ class FishingDerby(JaxEnvironment):
             reeling_priority = jnp.where(p2_did_hook & (reeling_priority == -1), 1, reeling_priority)
 
             # P2 Fast Reel
-            p2_fire_pressed = self._is_fire_action(p2_action)
-            can_reel_fast_p2 = (p2_fire_pressed) & (p2_hook_state == 1) & (
-                    (reeling_priority == -1) | (reeling_priority == 1)
-            )
-            p2_hook_state = jnp.where(can_reel_fast_p2, 2, p2_hook_state)
-            reeling_priority = jnp.where(can_reel_fast_p2, 1, reeling_priority)
+            is_fire_pressed_p2 = self._is_fire_action(p2_action)
+            is_reeling_fast_p2 = (p2_hook_state == 1) & is_fire_pressed_p2
 
-            # P2 Einholen
             tick_slow_p2 = (jnp.bitwise_and(state.time, cfg.SLOW_REEL_PERIOD - 1) == 0)
-            reel_tick_p2 = jnp.where(p2_hook_state == 2, True, tick_slow_p2)
+            reel_tick_p2 = jnp.where(is_reeling_fast_p2, True, tick_slow_p2)
+
             reel_step_p2 = jnp.where(p2_hook_state > 0, 1.0, 0.0)
+            can_reel_p2 = p2_hooked_fish_idx >= 0
+
             p2_new_hook_y = jnp.where(
-                (reel_tick_p2 & (p2_hooked_fish_idx >= 0)),
+                (reel_tick_p2 & can_reel_p2),
                 jnp.clip(p2_new_hook_y - reel_step_p2, scoring_hook_y, max_hook_y),
                 p2_new_hook_y
             )
