@@ -1459,6 +1459,28 @@ class KeystoneKapersRenderer(JAXGameRenderer):
             # Fallback to simple green rectangle if sprite loading fails
             sprites['kop_life'] = jnp.ones((8, 10, 3), dtype=jnp.uint8) * jnp.array([0, 255, 0], dtype=jnp.uint8)  # Green
 
+        # Load black digit sprites for countdown timer (all digits 0-9)
+        black_digits = {}
+        
+        for digit in range(10):  # Load all digits 0-9
+            try:
+                digit_sprite_path = os.path.join(os.path.dirname(__file__), 'sprites', 'keystonekapers', f'black_{digit}.npy')
+                digit_sprite_rgba = jr.loadFrame(digit_sprite_path)
+                
+                # Handle RGBA properly with alpha blending
+                rgb_data = digit_sprite_rgba[:, :, :3]
+                alpha_data = digit_sprite_rgba[:, :, 3:4]
+                alpha_normalized = alpha_data.astype(jnp.float32) / 255.0
+                white_background = jnp.ones_like(rgb_data) * 255
+                
+                black_digits[digit] = (rgb_data.astype(jnp.float32) * alpha_normalized +
+                                     white_background * (1 - alpha_normalized)).astype(jnp.uint8)
+            except:
+                # Fallback to simple black rectangle for missing digits
+                black_digits[digit] = jnp.ones((8, 6, 3), dtype=jnp.uint8) * jnp.array([0, 0, 0], dtype=jnp.uint8)
+        
+        sprites['black_digits'] = black_digits
+
         # Create simple colored rectangles for each entity
         sprites['player'] = jnp.ones((self.consts.PLAYER_HEIGHT, self.consts.PLAYER_WIDTH, 3), dtype=jnp.uint8) * jnp.array(self.consts.PLAYER_COLOR, dtype=jnp.uint8)
         sprites['thief'] = jnp.ones((self.consts.THIEF_HEIGHT, self.consts.THIEF_WIDTH, 3), dtype=jnp.uint8) * jnp.array(self.consts.THIEF_COLOR, dtype=jnp.uint8)
@@ -1765,6 +1787,53 @@ class KeystoneKapersRenderer(JAXGameRenderer):
                 draw_sprite(game_area, kop_life_sprite, life_x, life_y),
                 game_area
             )
+
+        # Countdown timer (to the right of lives) - black digits counting down from 50 to 0
+        black_digits = self.sprites['black_digits']
+
+        # Calculate timer value - show countdown from 50 to 0 regardless of actual timer value
+        timer_seconds = jnp.maximum(0, state.timer // 60)  # Convert frames to seconds
+
+        # Map the timer to a 50-second countdown (assuming timer starts at 60 seconds)
+        # If timer is 60 seconds, show 50; if timer is 10 seconds, show 0
+        max_display_time = 50
+        timer_range = 60  # Assuming game timer starts at 60 seconds
+
+        # Calculate display timer: starts at 50, ends at 0
+        current_timer = jnp.maximum(0, jnp.minimum(max_display_time,
+                                                  (timer_seconds * max_display_time) // timer_range))
+
+        # Convert timer to tens and units digits
+        tens_digit = current_timer // 10
+        units_digit = current_timer % 10
+
+        # Position timer to the right of lives
+        timer_start_x = life_start_x + (3 * (life_sprite_width + 2)) + 10  # After lives + spacing
+        timer_y = life_y
+
+        # Helper function to draw digit sprite (all digits 0-9 available)
+        def draw_digit_sprite(game_area, digit_value, x, y):
+            # Use JAX select to choose appropriate sprite for each digit 0-9
+            result_game_area = game_area
+
+            # Check each digit 0-9 and draw if it matches
+            for digit in range(10):
+                digit_matches = digit_value == digit
+                digit_sprite = black_digits[digit]
+                result_game_area = jnp.where(
+                    digit_matches,
+                    draw_sprite(result_game_area, digit_sprite, x, y),
+                    result_game_area
+                )
+
+            return result_game_area
+
+        # Draw tens digit
+        game_area = draw_digit_sprite(game_area, tens_digit, timer_start_x, timer_y)
+
+        # Draw units digit
+        digit_width = 6  # Approximate digit width
+        game_area = draw_digit_sprite(game_area, units_digit, timer_start_x + digit_width + 1, timer_y)
 
         # Timer indicator (top right) - removed white bar, can add actual timer display later if needed
 
