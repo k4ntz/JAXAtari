@@ -11,12 +11,12 @@ from jaxatari.renderers import JAXGameRenderer
 import jaxatari.rendering.jax_rendering_utils as jr
 
 
-def min_delay(level, base_min=30, spawn_accel=2, min_delay_clamp=20, max_delay_clamp=120):
-    return jnp.clip(base_min - level * spawn_accel, min_delay_clamp, max_delay_clamp)
+def min_delay(base_min=30, spawn_accel=2, min_delay_clamp=20, max_delay_clamp=120):
+    return jnp.clip(base_min - spawn_accel, min_delay_clamp, max_delay_clamp)
 
 
-def max_delay(level, base_max=60, spawn_accel=2, min_delay_clamp=20, max_delay_clamp=120):
-    return jnp.clip(base_max - level * spawn_accel, min_delay_clamp, max_delay_clamp)
+def max_delay(base_max=60, spawn_accel=2, min_delay_clamp=20, max_delay_clamp=120):
+    return jnp.clip(base_max - spawn_accel, min_delay_clamp, max_delay_clamp)
 
 
 class AsterixConstants(NamedTuple):
@@ -87,7 +87,6 @@ class AsterixState(NamedTuple):
     enemies: Enemy # Enemy Entities
     spawn_timer: jnp.ndarray # Timer für das Spawnen von Enemies
     rng: jax.random.PRNGKey # Random number generator state
-    #wave_id: chex.Array
     character_id: chex.Array # 0 = Asterix, 1 = Obelix
     collect_type_index: chex.Array # Index im aktuellen Set
     collect_type_count: chex.Array # Anzahl eingesammelt vom aktuellen Typ (0..49)
@@ -122,10 +121,7 @@ class JaxAsterix(JaxEnvironment[AsterixState, AsterixObservation, AsterixInfo, A
         if reward_funcs is not None:
             reward_funcs = tuple(reward_funcs)
         self.reward_funcs = reward_funcs
-        # self.state = self.reset() OLD
-
         self.renderer = AsterixRenderer()
-        #self.obs_type = obs_type  # "rgb", "ram", "grayscale", 'object'
 
         _, self.state = self.reset()  # Initial state
 
@@ -169,7 +165,7 @@ class JaxAsterix(JaxEnvironment[AsterixState, AsterixObservation, AsterixInfo, A
         state = AsterixState(
             player_x =jnp.array(player_x, dtype=jnp.int32),
             player_y=jnp.array(player_y, dtype=jnp.int32),
-            score=jnp.array(32400, dtype=jnp.int32), # Start with 0 points
+            score=jnp.array(32400, dtype=jnp.int32), # Start with 0 points # TODO Wieder auf 0 ändern
             lives=jnp.array(self.consts.num_lives, dtype=jnp.int32),  # 3 Leben
             game_over=jnp.array(False, dtype=jnp.bool_),
             stage_cooldown = jnp.array(self.consts.cooldown_frames, dtype=jnp.int32), # Cooldown initial 0
@@ -178,7 +174,6 @@ class JaxAsterix(JaxEnvironment[AsterixState, AsterixObservation, AsterixInfo, A
             enemies=enemies,
             spawn_timer=spawn_timer,
             rng=state_rng,
-            # wave_id = jnp.array(0, dtype=jnp.int32),
             character_id=jnp.array(0, dtype=jnp.int32),  # Asterix
             collect_type_index=jnp.array(0, dtype=jnp.int32),  # erster collectable Typ
             collect_type_count=jnp.array(0, dtype=jnp.int32),
@@ -273,14 +268,13 @@ class JaxAsterix(JaxEnvironment[AsterixState, AsterixObservation, AsterixInfo, A
         enemy_w = 8
         enemy_h = 8
         screen_width = self.consts.screen_width
-        level = 1
 
         rng_enemy_spawn, rng_enemy_delay, rng_col_spawn, rng_col_delay, rng_next = jax.random.split(state.rng, 5)
 
         spawn_timer = jnp.where(paused, state.spawn_timer, state.spawn_timer - 1)
         collect_spawn_timer = jnp.where(paused, state.collect_spawn_timer, state.collect_spawn_timer - 1)
 
-        def spawn_enemy(rng, level, platformY, screen_width, enemy_width, lyre_height=8):
+        def spawn_enemy(rng, platformY, screen_width, enemy_width, lyre_height=8):
             rng_side, rng_platform = jax.random.split(rng)
             num_platforms = len(platformY) - 1
             platform = jax.random.randint(rng_platform, (), 0, num_platforms)
@@ -291,7 +285,7 @@ class JaxAsterix(JaxEnvironment[AsterixState, AsterixObservation, AsterixInfo, A
             vx = speed * jax.lax.select(x > 0, -1.0, 1.0)
             return Enemy(x, y, vx, True)
 
-        def spawn_collectible(rng, level, platformY, screen_width, item_width):
+        def spawn_collectible(rng, platformY, screen_width, item_width):
             rng_side, rng_platform = jax.random.split(rng)
             num_platforms = len(platformY) - 1
             platform = jax.random.randint(rng_platform, (), 0, num_platforms)
@@ -303,8 +297,8 @@ class JaxAsterix(JaxEnvironment[AsterixState, AsterixObservation, AsterixInfo, A
             return CollectibleEnt(x, y, vx, True, jnp.int32(0))
 
         def spawn_fn(args):
-            enemies, collectibles, rng_enemy_spawn, level = args
-            new_enemy = spawn_enemy(rng_enemy_spawn, level, platformY, screen_width, enemy_width)
+            enemies, collectibles, rng_enemy_spawn = args
+            new_enemy = spawn_enemy(rng_enemy_spawn, platformY, screen_width, enemy_width)
             occupied = jnp.any(((enemies.y == new_enemy.y) & enemies.alive) |
                                ((collectibles.y == new_enemy.y) & collectibles.alive))
 
@@ -320,8 +314,8 @@ class JaxAsterix(JaxEnvironment[AsterixState, AsterixObservation, AsterixInfo, A
             return jax.lax.cond(occupied, lambda: enemies, do_spawn)
 
         def spawn_collectibles_fn(args):
-            enemies, collectibles, rng_col, level = args
-            new_item = spawn_collectible(rng_col, level, platformY, self.consts.screen_width, item_w)
+            enemies, collectibles, rng_col = args
+            new_item = spawn_collectible(rng_col, platformY, self.consts.screen_width, item_w)
             occupied = jnp.any(((collectibles.y == new_item.y) & collectibles.alive) |
                                ((enemies.y == new_item.y) & enemies.alive))
 
@@ -344,19 +338,19 @@ class JaxAsterix(JaxEnvironment[AsterixState, AsterixObservation, AsterixInfo, A
             should_spawn,
             spawn_fn,
             lambda args: args[0],
-            (state.enemies, state.collectibles, rng_enemy_spawn, level)
+            (state.enemies, state.collectibles, rng_enemy_spawn)
         )
 
         collectibles = jax.lax.cond(
             should_spawn_col,
             spawn_collectibles_fn,
             lambda args: args[1],
-            (state.enemies, state.collectibles, rng_col_spawn, level)
+            (state.enemies, state.collectibles, rng_col_spawn)
         )
 
         def new_timer_fn(_):
-            minD = min_delay(level)
-            maxD = max_delay(level)
+            minD = min_delay()
+            maxD = max_delay()
             return jax.random.randint(rng_enemy_delay, (), minD, maxD + 1)
 
         spawn_timer = jax.lax.cond(
@@ -367,8 +361,8 @@ class JaxAsterix(JaxEnvironment[AsterixState, AsterixObservation, AsterixInfo, A
         )
 
         def new_collect_timer_fn(_):
-            minD = min_delay(level)
-            maxD = max_delay(level)
+            minD = min_delay()
+            maxD = max_delay()
             return jax.random.randint(rng_col_delay, (), minD, maxD + 1)
 
         collect_spawn_timer = jax.lax.cond(
