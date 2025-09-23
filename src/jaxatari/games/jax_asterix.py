@@ -165,7 +165,7 @@ class JaxAsterix(JaxEnvironment[AsterixState, AsterixObservation, AsterixInfo, A
         state = AsterixState(
             player_x =jnp.array(player_x, dtype=jnp.int32),
             player_y=jnp.array(player_y, dtype=jnp.int32),
-            score=jnp.array(29900, dtype=jnp.int32), # Start with 0 points
+            score=jnp.array(0, dtype=jnp.int32), # Start with 0 points
             lives=jnp.array(self.consts.num_lives, dtype=jnp.int32),  # 3 Leben
             game_over=jnp.array(False, dtype=jnp.bool_),
             stage_cooldown = jnp.array(self.consts.cooldown_frames, dtype=jnp.int32), # Cooldown initial 0
@@ -1037,7 +1037,7 @@ class AsterixRenderer(JAXGameRenderer):
 
 
         # ----------- LIVES -------------
-        num_lives = jnp.maximum(state.lives, 0).astype(jnp.int32) - 1
+        num_lives_to_draw = jnp.maximum(state.lives - 1, 0).astype(jnp.int32)
         life_sprite = jax.lax.switch(
             state.player_direction - 1,
             [
@@ -1049,7 +1049,11 @@ class AsterixRenderer(JAXGameRenderer):
         life_width = life_sprite.shape[1]
         life_height = life_sprite.shape[0]
         lives_spacing = 8  # Abstand zwischen den Leben
-        total_lives_width = num_lives * life_width + (num_lives - 1) * lives_spacing
+        total_lives_width = jnp.where(
+            num_lives_to_draw > 0,
+            num_lives_to_draw * life_width + (num_lives_to_draw - 1) * lives_spacing,
+            0
+        )
         lives_start_x = (self.consts.screen_width - total_lives_width) // 2
         lives_y = bottom_y + bottom_sprite.shape[0] + 3  # 3 Pixel unter Bottom
 
@@ -1065,11 +1069,10 @@ class AsterixRenderer(JAXGameRenderer):
         def render_lives(raster_to_update):
             def body_fun(i, r):
                 return render_life(i, r)
-
-            return jax.lax.fori_loop(0, num_lives, body_fun, raster_to_update)
+            return jax.lax.fori_loop(0, num_lives_to_draw, body_fun, raster_to_update)
 
         raster = jax.lax.cond(
-            num_lives > 0,
+            num_lives_to_draw > 0,
             render_lives,
             lambda r: r,
             raster
