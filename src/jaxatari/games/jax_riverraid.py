@@ -30,6 +30,7 @@ DAM_OFFSET = 25
 PLAYER_WIDTH = 7
 PLAYER_HEIGHT = 14
 DEATH_COOLDOWN = 50 # longer in real game
+BUFFER = 50
 
 
 class RiverraidState(NamedTuple):
@@ -1367,7 +1368,7 @@ class JaxRiverraid(JaxEnvironment):
                                segment_straigt_counter=jnp.array(8),
                                dam_position= jnp.full((SCREEN_HEIGHT,), -1, dtype=jnp.int32),
                                player_x= jnp.array(SCREEN_WIDTH // 2 - 2, dtype=jnp.float32),
-                               player_y=jnp.array(SCREEN_HEIGHT - 20 - UI_HEIGHT),
+                               player_y=jnp.array(SCREEN_HEIGHT - 20 - UI_HEIGHT, dtype=jnp.float32),
                                player_velocity=jnp.array(0, dtype=jnp.float32),
                                player_direction=jnp.array(1),
                                player_state= jnp.array(0),
@@ -1444,7 +1445,7 @@ class JaxRiverraid(JaxEnvironment):
                                    segment_straigt_counter=jnp.array(8),
                                    dam_position=jnp.full((SCREEN_HEIGHT,), -1, dtype=jnp.int32),
                                    player_x=jnp.array(SCREEN_WIDTH // 2 - 2, dtype=jnp.float32),
-                                   player_y=jnp.array(SCREEN_HEIGHT - 20 - UI_HEIGHT),
+                                   player_y=jnp.array(SCREEN_HEIGHT - 20 - UI_HEIGHT, dtype=jnp.float32),
                                    player_velocity=jnp.array(0, dtype=jnp.float32),
                                    player_direction=jnp.array(1),
                                    player_state=jnp.array(0),
@@ -1506,12 +1507,13 @@ class JaxRiverraid(JaxEnvironment):
         )
 
         observation = self._get_observation(new_state)
-        reward = self._get_env_reward(state, new_state)
+        env_reward = self._get_env_reward(state, new_state)
+        all_rewards = self._get_all_reward(state, new_state)
         done = self._get_done(new_state)
         jax.debug.print("done: {done}\n", done=done)
-        info = self._get_info(new_state, jnp.zeros(1))
+        info = self._get_info(new_state, all_rewards)
 
-        return observation, new_state, reward, done, info
+        return observation, new_state, env_reward, done, info
 
     @partial(jax.jit, static_argnums=(0,))
     def _get_done(self, state: RiverraidState) -> bool:
@@ -1520,26 +1522,26 @@ class JaxRiverraid(JaxEnvironment):
     def observation_space(self) -> spaces.Dict:
         return spaces.Dict(
             {
-                "player_x": spaces.Box(low=0, high=SCREEN_WIDTH, shape=(), dtype=jnp.float32),
-                "player_y": spaces.Box(low=0, high=SCREEN_HEIGHT, shape=(), dtype=jnp.float32),
-                "player_direction": spaces.Box(low=0, high=2, shape=(), dtype=jnp.int32),
-                "player_velocity": spaces.Box(low=-3.0, high=3.0, shape=(), dtype=jnp.float32),
-                "player_fuel": spaces.Box(low=0, high=MAX_FUEL, shape=(), dtype=jnp.int32),
-                "player_lives": spaces.Box(low=0, high=jnp.iinfo(jnp.int32).max, shape=(), dtype=jnp.int32),
-                "player_score": spaces.Box(low=0, high=jnp.iinfo(jnp.int32).max, shape=(), dtype=jnp.int32),
-                "river_left": spaces.Box(low=0, high=SCREEN_WIDTH, shape=(SCREEN_HEIGHT,), dtype=jnp.int32),
-                "river_right": spaces.Box(low=0, high=SCREEN_WIDTH, shape=(SCREEN_HEIGHT,), dtype=jnp.int32),
-                "river_inner_left": spaces.Box(low=-1, high=SCREEN_WIDTH, shape=(SCREEN_HEIGHT,), dtype=jnp.int32),
-                "river_inner_right": spaces.Box(low=-1, high=SCREEN_WIDTH, shape=(SCREEN_HEIGHT,), dtype=jnp.int32),
-                "dam_position": spaces.Box(low=-1, high=2, shape=(SCREEN_HEIGHT,), dtype=jnp.int32),
-                "enemy_x": spaces.Box(low=-10, high=SCREEN_WIDTH + 10, shape=(MAX_ENEMIES,), dtype=jnp.float32),
-                "enemy_y": spaces.Box(low=0, high=SCREEN_HEIGHT + 1, shape=(MAX_ENEMIES,), dtype=jnp.float32),
-                "enemy_type": spaces.Box(low=0, high=2, shape=(MAX_ENEMIES,), dtype=jnp.int32),
-                "enemy_state": spaces.Box(low=0, high=4, shape=(MAX_ENEMIES,), dtype=jnp.int32),
-                "enemy_direction": spaces.Box(low=0, high=3, shape=(MAX_ENEMIES,), dtype=jnp.int32),
-                "fuel_x": spaces.Box(low=-1, high=SCREEN_WIDTH, shape=(MAX_ENEMIES,), dtype=jnp.float32),
-                "fuel_y": spaces.Box(low=0, high=SCREEN_HEIGHT + 1, shape=(MAX_ENEMIES,), dtype=jnp.float32),
-                "fuel_state": spaces.Box(low=0, high=4, shape=(MAX_ENEMIES,), dtype=jnp.int32),
+                "player_x": spaces.Box(low=0 - BUFFER, high=SCREEN_WIDTH + BUFFER, shape=(), dtype=jnp.float32),
+                "player_y": spaces.Box(low=0 - BUFFER, high=SCREEN_HEIGHT + BUFFER, shape=(), dtype=jnp.float32),
+                "player_direction": spaces.Box(low=0 - BUFFER, high=2 + BUFFER, shape=(), dtype=jnp.int32),
+                "player_velocity": spaces.Box(low=-3.0 - BUFFER, high=3.0 + BUFFER, shape=(), dtype=jnp.float32),
+                "player_fuel": spaces.Box(low=0 - BUFFER, high=MAX_FUEL + BUFFER, shape=(), dtype=jnp.int32),
+                "player_lives": spaces.Box(low=0 - BUFFER, high=jnp.iinfo(jnp.int32).max, shape=(), dtype=jnp.int32),
+                "player_score": spaces.Box(low=0 - BUFFER, high=jnp.iinfo(jnp.int32).max, shape=(), dtype=jnp.int32),
+                "river_left": spaces.Box(low=0 - BUFFER, high=SCREEN_WIDTH + BUFFER, shape=(SCREEN_HEIGHT,), dtype=jnp.int32),
+                "river_right": spaces.Box(low=0 - BUFFER, high=SCREEN_WIDTH + BUFFER, shape=(SCREEN_HEIGHT,), dtype=jnp.int32),
+                "river_inner_left": spaces.Box(low=-1 - BUFFER, high=SCREEN_WIDTH + BUFFER, shape=(SCREEN_HEIGHT,), dtype=jnp.int32),
+                "river_inner_right": spaces.Box(low=-1 - BUFFER, high=SCREEN_WIDTH + BUFFER, shape=(SCREEN_HEIGHT,), dtype=jnp.int32),
+                "dam_position": spaces.Box(low=-1 - BUFFER, high=2 + BUFFER, shape=(SCREEN_HEIGHT,), dtype=jnp.int32),
+                "enemy_x": spaces.Box(low=-10 - BUFFER, high=SCREEN_WIDTH + 10 + BUFFER, shape=(MAX_ENEMIES,), dtype=jnp.float32),
+                "enemy_y": spaces.Box(low=0 - BUFFER, high=SCREEN_HEIGHT + 1 + BUFFER, shape=(MAX_ENEMIES,), dtype=jnp.float32),
+                "enemy_type": spaces.Box(low=0 - BUFFER, high=2 + BUFFER, shape=(MAX_ENEMIES,), dtype=jnp.int32),
+                "enemy_state": spaces.Box(low=0 - BUFFER, high=4 + BUFFER, shape=(MAX_ENEMIES,), dtype=jnp.int32),
+                "enemy_direction": spaces.Box(low=0 - BUFFER, high=3 + BUFFER, shape=(MAX_ENEMIES,), dtype=jnp.int32),
+                "fuel_x": spaces.Box(low=-1 - BUFFER, high=SCREEN_WIDTH + BUFFER, shape=(MAX_ENEMIES,), dtype=jnp.float32),
+                "fuel_y": spaces.Box(low=0 - BUFFER, high=SCREEN_HEIGHT + 1 + BUFFER, shape=(MAX_ENEMIES,), dtype=jnp.float32),
+                "fuel_state": spaces.Box(low=0 - BUFFER, high=4 + BUFFER, shape=(MAX_ENEMIES,), dtype=jnp.int32),
             }
         )
 
@@ -1583,9 +1585,21 @@ class JaxRiverraid(JaxEnvironment):
             ]
         )
 
-
     @partial(jax.jit, static_argnums=(0,))
-    def _get_info(self, state: RiverraidState, all_rewards: chex.Array) -> RiverraidInfo:
+    def _get_info(self, state: RiverraidState, all_rewards: chex.Array = None) -> RiverraidInfo:
+        """
+        Creates the info object. The all_rewards argument is optional to handle
+        the case where this is called during a reset() by the Gymnasium wrapper,
+        where no rewards have been computed yet.
+        """
+        if all_rewards is None:
+            # If no reward functions are defined, default to a single zero reward.
+            if self.reward_funcs is None:
+                all_rewards = jnp.zeros(1)
+            # Otherwise, create a zero array matching the number of reward functions.
+            else:
+                all_rewards = jnp.zeros(len(self.reward_funcs))
+
         return RiverraidInfo(time=state.turn_step_linear, all_rewards=all_rewards)
 
 
