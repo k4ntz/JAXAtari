@@ -577,7 +577,7 @@ class JaxChopperCommand(JaxEnvironment[ChopperCommandState, ChopperCommandObserv
 
     @partial(jax.jit, static_argnums=(0,))
     def _get_done(self, state: ChopperCommandState) -> bool:
-        return state.lives < 0
+        return state.lives <= 0
 
     @partial(jax.jit, static_argnums=(0,))
     def check_collision_single(
