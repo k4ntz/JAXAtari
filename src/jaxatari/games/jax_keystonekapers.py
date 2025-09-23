@@ -1715,26 +1715,26 @@ class KeystoneKapersRenderer(JAXGameRenderer):
         # Draw escalators (diagonal staircase sprites in black)
         escalator_color = jnp.array([0, 0, 0], dtype=jnp.uint8)  # Black
 
-        # Floor 1: escalator in middle of last section (all escalators in same position)
+        # Floor 1: escalator on leftmost side
         floor1_y = floor_to_minimap_y(0)
-        escalator_x = minimap_width - 8  # Middle of last section
-        # Draw diagonal line pattern
+        escalator_x_left = minimap_display_x + 2  # Leftmost position
+        # Draw diagonal line pattern (going up-right)
         for i in range(3):
-            game_area = draw_rectangle_simple(game_area, escalator_x + i, floor1_y - 1 + i, 1, 1, escalator_color)
+            game_area = draw_rectangle_simple(game_area, escalator_x_left + i, floor1_y - 1 + i, 1, 1, escalator_color)
 
-        # Floor 2: escalator in middle of last section (same position)
+        # Floor 2: escalator on rightmost side (flipped vertically)
         floor2_y = floor_to_minimap_y(1)
-        escalator_x = minimap_width - 8  # Middle of last section
-        # Draw diagonal line pattern
+        escalator_x_right = minimap_display_x + minimap_width - 5  # Rightmost position
+        # Draw diagonal line pattern (going down-right, flipped vertically)
         for i in range(3):
-            game_area = draw_rectangle_simple(game_area, escalator_x + i, floor2_y - 1 + i, 1, 1, escalator_color)
+            game_area = draw_rectangle_simple(game_area, escalator_x_right + i, floor2_y + 1 - i, 1, 1, escalator_color)
 
-        # Floor 3: escalator in middle of last section (same position)
+        # Floor 3: escalator on leftmost side
         floor3_y = floor_to_minimap_y(2)
-        escalator_x = minimap_width - 8  # Middle of last section
-        # Draw diagonal line pattern
+        escalator_x_left = minimap_display_x + 2  # Leftmost position
+        # Draw diagonal line pattern (going up-right)
         for i in range(3):
-            game_area = draw_rectangle_simple(game_area, escalator_x + i, floor3_y - 1 + i, 1, 1, escalator_color)
+            game_area = draw_rectangle_simple(game_area, escalator_x_left + i, floor3_y - 1 + i, 1, 1, escalator_color)
 
         # Draw elevator (black vertical line at center, moving between floors)
         elevator_world_x = self.consts.ELEVATOR_BUILDING_X + self.consts.ELEVATOR_WIDTH // 2
