@@ -117,7 +117,7 @@ class AsterixInfo(NamedTuple):
 
 
 class JaxAsterix(JaxEnvironment[AsterixState, AsterixObservation, AsterixInfo, AsterixConstants]):
-    def __init__(self, consts: AsterixConstants = None, reward_funcs: list[callable] = None, obts_type: str = "rgb"):
+    def __init__(self, consts: AsterixConstants = None, reward_funcs: list[callable] = None, obs_type: str = "rgb"):
         if consts is None:
             consts = AsterixConstants()
         super().__init__(consts)
