@@ -27,8 +27,8 @@ class KingKongConstants(NamedTuple):
 	### Locations & Bounds
 
 	# Player 
-	PLAYER_RESPAWN_LOCATION: chex.Array = jnp.array([130, 180]) # jnp.array([77, 228])
-	PLAYER_SUCCESS_LOCATION: chex.Array = jnp.array([]) # TODO 
+	PLAYER_RESPAWN_LOCATION: chex.Array = jnp.array([77, 228])
+	PLAYER_SUCCESS_LOCATION: chex.Array = jnp.array([]) # TODO here the player tp's after success to greet the princess  
 
 	# Level 
 	LEVEL_LOCATION: chex.Array = jnp.array([8, 39])
@@ -335,7 +335,7 @@ class JaxKingKong(JaxEnvironment[KingKongState, KingKongObservation, KingKongInf
 
 		state = KingKongState(
 			# Game state
-			gamestate=jnp.array(self.consts.GAMESTATE_GAMEPLAY).astype(jnp.int32),
+			gamestate=jnp.array(self.consts.GAMESTATE_IDLE).astype(jnp.int32),
 			stage_steps=jnp.array(0).astype(jnp.int32),
 			step_counter=jnp.array(0).astype(jnp.int32),
 			rng_key=key,
