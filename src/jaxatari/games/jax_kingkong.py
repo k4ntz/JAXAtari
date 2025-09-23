@@ -15,6 +15,7 @@ class KingKongConstants(NamedTuple):
 	WIDTH: int = 160
 	HEIGHT: int = 250
 	FPS: int = 30 # Can this be read dynamically? 
+	DEBUG_RENDER: int = 1 # Render some debug helper
 
 	### Sizes
 	PLAYER_SIZE: chex.Array = jnp.array([5, 16])
@@ -43,7 +44,6 @@ class KingKongConstants(NamedTuple):
 		[100, 179, 103, 180]
 	])
 	LADDER_LOCATIONS: chex.Array = jnp.array([
-		[23, 202, 48, 229],
 		[76, 41, 83, 60],
 		[20, 61, 27, 85],
 		[132, 61, 139, 84],
@@ -58,15 +58,15 @@ class KingKongConstants(NamedTuple):
 		[140, 205, 147, 228]
 	])
 	FLOOR_BOUNDS: chex.Array = jnp.array([
-		[12, 150], # Ground floor 
-		[12, 150], # First floor
-		[12, 150], # Second floor 
-		[12, 150], # Third floor 
-		[12, 150], # Fourth floor 
-		[12, 150], # Fifth floor 
-		[16, 150], # Sixth floor
-		[20, 142], # Seventh floor 
-		[12, 150], # Princess floor - no bounds required bc goal reached 
+		[12, 152], # Ground floor 
+		[12, 152], # First floor
+		[12, 152], # Second floor 
+		[12, 152], # Third floor 
+		[12, 152], # Fourth floor 
+		[12, 152], # Fifth floor 
+		[16, 152], # Sixth floor
+		[20, 144], # Seventh floor 
+		[12, 152], # Princess floor - no bounds required bc goal reached 
 	]) # floor bounds by floor (min_x, min_y) - y is always the same (see FLOOR_LOCATIONS)
 	FLOOR_LOCATIONS: chex.Array = jnp.array([228, 204, 180, 156, 132, 108, 84, 60, 40]) # y corrdinate
 
@@ -243,8 +243,8 @@ class KingKongConstants(NamedTuple):
 	PLAYER_IDLE_RIGHT = 2
 	PLAYER_MOVE_LEFT = 3
 	PLAYER_MOVE_RIGHT = 4
-	PLAYER_RUNNING_JUMP = 5
-	PLAYER_JUMP = 6
+	PLAYER_JUMP_LEFT = 5 
+	PLAYER_JUMP_RIGHT = 6
 	PLAYER_CLIMB_UP = 7
 	PLAYER_CLIMB_DOWN = 8
 	PLAYER_CLIMB_IDLE = 42 
@@ -265,6 +265,7 @@ class KingKongState(NamedTuple):
 	player_state: chex.Array # PLAYER_IDLE_LEFT, PLAYER_MOVE_LEFT, etc.
 	player_floor: chex.Array # Current floor (0-8)
 	player_jump_counter: chex.Array  # For jump animation
+	player_dir: chex.Array  # (-1, 0, or 1)
 
 	# Kong state
 	kong_x: chex.Array
@@ -301,7 +302,7 @@ class KingKongState(NamedTuple):
 	# Death state info
 	death_type: chex.Array
 	death_flash_counter: chex.Array
-	
+		
 class KingKongObservation(NamedTuple):
 	pass 
 class KingKongInfo(NamedTuple):
@@ -323,6 +324,8 @@ class JaxKingKong(JaxEnvironment[KingKongState, KingKongObservation, KingKongInf
 			Action.UP,
 			Action.DOWN,
 			Action.FIRE, # Fire is jump 
+			Action.LEFTFIRE, # running jumps, this is missing in the reference
+			Action.RIGHTFIRE
 		]
 		self.obs_size = 5 + 3 * 5 + 1 + 1 #TODO
 
@@ -343,6 +346,7 @@ class JaxKingKong(JaxEnvironment[KingKongState, KingKongObservation, KingKongInf
 			player_state=jnp.array(self.consts.PLAYER_IDLE_RIGHT).astype(jnp.int32),
 			player_floor=jnp.array(0).astype(jnp.int32), # Ground floor
 			player_jump_counter=jnp.array(0).astype(jnp.int32),
+			player_dir=jnp.array(0).astype(jnp.int32),
 			
 			# Kong state
 			kong_x=jnp.array(self.consts.KONG_START_LOCATION[0]).astype(jnp.int32),
@@ -746,12 +750,11 @@ class JaxKingKong(JaxEnvironment[KingKongState, KingKongObservation, KingKongInf
 
 	def _update_player_gameplay(self, state: KingKongState, action: chex.Array) -> KingKongState:
 		# Intentions
-		move_left = action == Action.LEFT
-		move_right = action == Action.RIGHT
+		move_left = jnp.logical_or(action == Action.LEFT, action == Action.LEFTFIRE)
+		move_right = jnp.logical_or(action == Action.RIGHT, action == Action.RIGHTFIRE)
 		move_up = action == Action.UP
 		move_down = action == Action.DOWN
-		jump = action == Action.FIRE
-		running_jump = jnp.logical_and(jump, jnp.logical_or(move_left, move_right))
+		jump = (action == Action.FIRE) | (action == Action.LEFTFIRE) | (action == Action.RIGHTFIRE)
 
 		# Get floor bounds
 		current_floor_bounds = self.consts.FLOOR_BOUNDS[state.player_floor]
@@ -762,22 +765,85 @@ class JaxKingKong(JaxEnvironment[KingKongState, KingKongObservation, KingKongInf
 		new_player_y = state.player_y
 		new_player_floor = state.player_floor
 		new_player_state = state.player_state
+		new_player_jump_counter = state.player_jump_counter
+		new_player_dir = state.player_dir
 
 		at_floor_bottom = state.player_y == self.consts.FLOOR_LOCATIONS[state.player_floor]
 
 		# State flags
 		is_climbing = (state.player_state == self.consts.PLAYER_CLIMB_UP) | (state.player_state == self.consts.PLAYER_CLIMB_DOWN) | (state.player_state == self.consts.PLAYER_CLIMB_IDLE)
-		is_jumping = state.player_state == self.consts.PLAYER_JUMP
+		is_jumping = (state.player_state == self.consts.PLAYER_JUMP_LEFT) | (state.player_state == self.consts.PLAYER_JUMP_RIGHT)
 
-		# --- Horizontal movement (allowed only at floor bottom if on ladder) ---
+		# --- Handle jumping physics first if already jumping ---
+		# NOTE: Since running jumps do not work in the reference, I did not know exactly 
+		# how far these can go. If you want to change this in the future it can be done below. 
+		# I used this for reference: https://www.youtube.com/watch?v=UX6vvr7iplY&t=370s
+		def update_jump_physics():
+			jump_peak = self.consts.PLAYER_JUMP_HEIGHT // 2
+
+			at_peak = state.player_jump_counter == jump_peak
+			ascending = state.player_jump_counter < jump_peak
+
+			dy = jax.lax.cond(
+				at_peak,
+				lambda: 0,  # pause at peak
+				lambda: jax.lax.cond(
+					ascending,
+					lambda: -2,
+					lambda: 2
+				)
+			)
+
+			# Use stored jump direction for horizontal movement
+			dx = state.player_dir
+
+			new_x = jnp.clip(state.player_x + dx, min_x, max_x)
+			new_y = state.player_y + dy
+
+			target_floor_y = self.consts.FLOOR_LOCATIONS[state.player_floor]
+
+			jump_complete = (state.player_jump_counter + 1) >= self.consts.PLAYER_JUMP_HEIGHT 
+			landed = (new_y >= target_floor_y) & jump_complete
+
+			final_y = jax.lax.cond(landed, lambda: target_floor_y, lambda: new_y)
+
+			final_jump_counter = jax.lax.cond(
+				landed,
+				lambda: 0,
+				lambda: state.player_jump_counter + 1
+			)
+
+			# Reset jump_dx when landing and determine idle state based on jump direction
+			final_jump_dx = jax.lax.cond(landed, lambda: 0, lambda: state.player_dir)
+			
+			final_state = jax.lax.cond(
+				landed,
+				lambda: jax.lax.cond(
+					state.player_dir < 0,  # Was jumping left
+					lambda: self.consts.PLAYER_IDLE_LEFT,
+					lambda: self.consts.PLAYER_IDLE_RIGHT
+				),
+				lambda: state.player_state
+			)
+
+			return new_x, final_y, final_jump_counter, final_state, final_jump_dx
+				
+		# Apply jump physics if currently jumping
+		new_player_x, new_player_y, new_player_jump_counter, new_player_state, new_player_dir = jax.lax.cond(
+			is_jumping,
+			update_jump_physics,
+			lambda: (new_player_x, new_player_y, new_player_jump_counter, new_player_state, new_player_dir)
+		)
+
+		# --- Horizontal movement (allowed only at floor bottom if not jumping) ---
 		can_move_horiz = jnp.logical_and(
 			at_floor_bottom,
 			jnp.logical_not(is_jumping)
 		)
-		jax.debug.print("move_left={x}, can_move_horiz={y}, at_floor_bottom={f}, floor_bottom={z}", z=self.consts.FLOOR_LOCATIONS[state.player_floor], f=at_floor_bottom, y=can_move_horiz, x=move_left)
+		
 		new_player_x = jax.lax.cond(
-			jnp.logical_and(can_move_horiz, move_left & (state.player_x > min_x)),
-			lambda: state.player_x - 1,
+			jnp.logical_and(can_move_horiz, move_left & (new_player_x > min_x)),
+			lambda: new_player_x - 1,
 			lambda: new_player_x
 		)
 		new_player_state = jax.lax.cond(
@@ -786,8 +852,8 @@ class JaxKingKong(JaxEnvironment[KingKongState, KingKongObservation, KingKongInf
 			lambda: new_player_state
 		)
 		new_player_x = jax.lax.cond(
-			jnp.logical_and(can_move_horiz, move_right & (state.player_x < max_x)),
-			lambda: state.player_x + 1,
+			jnp.logical_and(can_move_horiz, move_right & (new_player_x < max_x)),
+			lambda: new_player_x + 1,
 			lambda: new_player_x
 		)
 		new_player_state = jax.lax.cond(
@@ -798,37 +864,41 @@ class JaxKingKong(JaxEnvironment[KingKongState, KingKongObservation, KingKongInf
 
 		# --- Ladder climbing (disabled if jumping) ---
 		can_climb = jnp.logical_not(is_jumping)
-		on_ladder = self._check_on_ladder(new_player_x, state.player_y)
-		ladder_below = self._check_on_ladder(new_player_x, state.player_y + 2)
+		on_ladder = self._check_on_ladder(new_player_x, new_player_y)
+		ladder_below = self._check_on_ladder(new_player_x, new_player_y + 2)
 		apply_climb = (state.stage_steps % 8) == 0
 
 		# --- Climb Up ---
-		at_top_floor = state.player_floor >= 8
+		at_ladder_top = ladder_below
+		at_top_floor = state.player_floor == 8
 		can_climb_up = jnp.logical_and(can_climb, jnp.logical_and(on_ladder, jnp.logical_not(at_top_floor)))
 		do_climb_up = jnp.logical_and(move_up, can_climb_up) & apply_climb
 
-		new_player_y = jax.lax.cond(do_climb_up, lambda: state.player_y - 2, lambda: new_player_y)
+		new_player_y = jax.lax.cond(do_climb_up, lambda: new_player_y - 2, lambda: new_player_y)
 		new_player_state = jax.lax.cond(do_climb_up, lambda: self.consts.PLAYER_CLIMB_UP, lambda: new_player_state)
 
 		# --- Climb Down ---
-		at_floor_0_bottom = jnp.logical_and(state.player_floor == 0, at_floor_bottom)
-		can_climb_down = jnp.logical_and(can_climb, jnp.logical_and(jnp.logical_or(on_ladder, ladder_below),
-																jnp.logical_not(at_floor_0_bottom)))
-		do_climb_down = jnp.logical_and(move_down, can_climb_down) & apply_climb
+		at_ladder_bottom = at_floor_bottom
+		can_climb_down = can_climb & (
+			jnp.logical_or(
+				jnp.logical_and(on_ladder, jnp.logical_not(at_ladder_bottom)),  # on ladder but not at bottom
+				ladder_below  # ladder below allows climb down
+			)
+		)
+		do_climb_down = move_down & can_climb_down & apply_climb
 
 		# Update y-coordinate first
 		target_floor = jax.lax.cond(
-			state.player_y < self.consts.FLOOR_LOCATIONS[state.player_floor],
+			new_player_y < self.consts.FLOOR_LOCATIONS[state.player_floor],
 			lambda: state.player_floor,
 			lambda: jnp.maximum(state.player_floor - 1, 0)
 		)
 
 		new_player_y = jax.lax.cond(
 			do_climb_down,
-			lambda: jnp.minimum(state.player_y + 2, self.consts.FLOOR_LOCATIONS[target_floor]),
+			lambda: jnp.minimum(new_player_y + 2, self.consts.FLOOR_LOCATIONS[target_floor]),
 			lambda: new_player_y
 		)
-
 
 		# Update state: idle if at bottom, otherwise climbing down
 		new_player_state = jax.lax.cond(
@@ -837,22 +907,61 @@ class JaxKingKong(JaxEnvironment[KingKongState, KingKongObservation, KingKongInf
 			lambda: new_player_state
 		)
 
-		# --- Jumping (disabled if climbing) ---
-		can_jump = jnp.logical_and(jump, jnp.logical_and(state.player_floor < 8, jnp.logical_not(is_climbing)))
+		# --- Jumping (disabled if climbing or already jumping) ---
+		can_jump = jnp.logical_and(jump, jnp.logical_and(state.player_floor < 8, jnp.logical_and(jnp.logical_not(is_climbing), jnp.logical_not(is_jumping))))
+		
+		# Initialize jump
 		new_player_state = jax.lax.cond(
 			can_jump,
-			lambda: self.consts.PLAYER_JUMP,
+			lambda: jax.lax.cond(
+				move_left,
+				lambda: self.consts.PLAYER_JUMP_LEFT,
+				lambda: jax.lax.cond(
+					move_right,
+					lambda: self.consts.PLAYER_JUMP_RIGHT,
+					lambda: jax.lax.cond(
+						state.player_state == self.consts.PLAYER_IDLE_LEFT,
+						lambda: self.consts.PLAYER_JUMP_LEFT,
+						lambda: self.consts.PLAYER_JUMP_RIGHT  # Default to right if idle right or other states
+					)
+				)
+			),
 			lambda: new_player_state
-		)		
+		)
+		
+		# Only update direction when moving horizontally and not jumping or climbing
+		can_update_dir = jnp.logical_and(
+			is_jumping == False,
+			is_climbing == False
+		)
+
+		new_player_dir = jax.lax.cond(
+			can_update_dir & move_left,
+			lambda: -1,
+			lambda: jax.lax.cond(
+				can_update_dir & move_right,
+				lambda: 1,
+				lambda: new_player_dir  # keep previous if not moving
+			)
+		)
+
+		new_player_jump_counter = jax.lax.cond(
+			can_jump,
+			lambda: 0,  # Reset jump counter when starting new jump
+			lambda: new_player_jump_counter
+		)
 		
 		# Determine the new floor based on new_player_y
 		new_player_floor = jnp.argmin(new_player_y <= self.consts.FLOOR_LOCATIONS) - 1
-		jax.debug.print("new_player_floor={x}", x=new_player_floor)
 
 		# Determine if climbing but not actively moving
-		is_climbing_idle = jnp.logical_and(
-			is_climbing,
-			jnp.logical_not(jnp.logical_or(move_up, move_down))
+		is_climbing_idle = (
+			is_climbing &
+			(
+				jnp.logical_not(jnp.logical_or(move_up, move_down)) |  # no up/down pressed
+				(move_down & at_ladder_bottom) | # pressing down but already at bottom
+				(move_up & at_ladder_top) # same for top
+			)
 		)
 
 		no_movement = jnp.logical_and(
@@ -864,11 +973,7 @@ class JaxKingKong(JaxEnvironment[KingKongState, KingKongObservation, KingKongInf
 
 		new_player_state = jax.lax.cond(
 			is_climbing_idle & state_unchanged,
-			lambda: jax.lax.cond(
-				at_floor_bottom,
-				lambda: self.consts.PLAYER_IDLE_LEFT,
-				lambda: self.consts.PLAYER_CLIMB_IDLE
-			),
+			lambda: self.consts.PLAYER_CLIMB_IDLE,
 			lambda: jax.lax.cond(
 				no_movement,
 				lambda: jax.lax.cond(
@@ -891,26 +996,29 @@ class JaxKingKong(JaxEnvironment[KingKongState, KingKongObservation, KingKongInf
 			)
 		)
 
-		jax.debug.print("player: x={x} y={y} floor={f} state={st}", 
-			x=new_player_x, y=new_player_y, f=new_player_floor, st=new_player_state)
+		jax.debug.print("player: x={x} y={y} floor={f} state={st} jump_counter={jc} jump_dx={jdx}, at_floor_bottom={fb}, is_climbing_idle={cbmi}",
+			fb=at_floor_bottom, cbmi=is_climbing_idle,
+			x=new_player_x, y=new_player_y, f=new_player_floor, st=new_player_state, jc=new_player_jump_counter, jdx=new_player_dir)
 
 		return state._replace(
 			player_x=new_player_x,
 			player_y=new_player_y,
 			player_floor=new_player_floor,
-			player_state=new_player_state
+			player_state=new_player_state,
+			player_jump_counter=new_player_jump_counter,
+			player_dir=new_player_dir
 		)
 
-	def _check_on_ladder(self, player_x, player_y):
-		ladder_x1 = self.consts.LADDER_LOCATIONS[:, 0]
-		ladder_y1 = self.consts.LADDER_LOCATIONS[:, 1]
-		ladder_x2 = self.consts.LADDER_LOCATIONS[:, 2]
-		ladder_y2 = self.consts.LADDER_LOCATIONS[:, 3]
+	def _check_on_ladder(self, player_x, player_y, inset_x: int = 2, inset_y: int = 0): #inset 2 seems to be whats used in the original
+		ladder_x1 = self.consts.LADDER_LOCATIONS[:, 0] + inset_x
+		ladder_y1 = self.consts.LADDER_LOCATIONS[:, 1] + inset_y
+		ladder_x2 = self.consts.LADDER_LOCATIONS[:, 2] - inset_x
+		ladder_y2 = self.consts.LADDER_LOCATIONS[:, 3] - inset_y
 
 		player_w, player_h = self.consts.PLAYER_SIZE
 
 		on_ladders = jnp.logical_and(
-			jnp.logical_and(player_x >= ladder_x1, player_x + player_w <= ladder_x2),
+			jnp.logical_and(player_x >= ladder_x1, player_x <= ladder_x2),
 			jnp.logical_and(player_y >= ladder_y1, player_y <= ladder_y2)
 		)
 		result = jnp.any(on_ladders)
@@ -923,6 +1031,7 @@ class JaxKingKong(JaxEnvironment[KingKongState, KingKongObservation, KingKongInf
 		)
 
 		return result
+
 
 	def _update_bombs(self, state: KingKongState) -> KingKongState:
 		should_spawn = jnp.logical_and(
@@ -1022,7 +1131,7 @@ class JaxKingKong(JaxEnvironment[KingKongState, KingKongObservation, KingKongInf
 		bombs_xy = jnp.stack([state.bomb_positions_x, state.bomb_positions_y], axis=1)
 		collisions = jax.vmap(bomb_collision)(bombs_xy, bomb_active)
 
-		is_jumping = state.player_state == self.consts.PLAYER_JUMP
+		is_jumping = (state.player_state == self.consts.PLAYER_JUMP_LEFT) | (	state.player_state == self.consts.PLAYER_JUMP_RIGHT) 
 
 		# Bombs jumped on
 		jumped_bombs = collisions & is_jumping
@@ -1195,7 +1304,8 @@ class KingKongRenderer(JAXGameRenderer):
 			self.SPRITE_PLAYER_MOVE2_RIGHT,
 			self.SPRITE_PLAYER_MOVE2_LEFT,
 			self.SPRITE_PLAYER_DEAD,
-			self.SPRITE_PLAYER_JUMP,
+			self.SPRITE_PLAYER_JUMP_LEFT,
+			self.SPRITE_PLAYER_JUMP_RIGHT,
 			self.SPRITE_PLAYER_FALL,
 			self.SPRITE_PLAYER_CLIMB1,
 			self.SPRITE_PLAYER_CLIMB2,
@@ -1226,6 +1336,8 @@ class KingKongRenderer(JAXGameRenderer):
 
 		player_dead = jr.loadFrame(os.path.join(MODULE_DIR, "sprites/kingkong/player_dead.npy"))
 		player_jump = jr.loadFrame(os.path.join(MODULE_DIR, "sprites/kingkong/player_jump.npy"))
+		player_jump_left = player_jump[:, ::-1, :]
+		player_jump_right = player_jump
 		player_fall = jr.loadFrame(os.path.join(MODULE_DIR, "sprites/kingkong/player_fall.npy"))
 		player_climb1 = jr.loadFrame(os.path.join(MODULE_DIR, "sprites/kingkong/player_climb1.npy"))
 		player_climb2 = jr.loadFrame(os.path.join(MODULE_DIR, "sprites/kingkong/player_climb2.npy"))
@@ -1239,10 +1351,14 @@ class KingKongRenderer(JAXGameRenderer):
 		numbers = {i: jr.loadFrame(os.path.join(MODULE_DIR, f"sprites/kingkong/{i}.npy")) for i in range(10)}
 
 		# Padding function
-		def pad(sprite, target_h, target_w):
+		def pad(sprite, target_h, target_w, side="right"):
 			h, w, c = sprite.shape
-			return jnp.pad(sprite, ((0, target_h - h), (0, target_w - w), (0,0)), mode="constant")
+			if side == "right":
+				return jnp.pad(sprite, ((0, target_h - h), (0, target_w - w), (0,0)), mode="constant")
+			if side == "left":
+				return jnp.pad(sprite, ((0, target_h - h), (target_w - w, 0), (0,0)), mode="constant")
 
+				
 		# Compute target dimensions for player sprites
 		all_player_sprites = [
 			player_idle_right, player_idle_left,
@@ -1255,16 +1371,16 @@ class KingKongRenderer(JAXGameRenderer):
 
 		# Pad all player sprites
 		player_idle_right  = pad(player_idle_right,  player_target_height, player_target_width)
-		player_idle_left   = pad(player_idle_left,   player_target_height, player_target_width)
+		player_idle_left   = pad(player_idle_left,   player_target_height, player_target_width, side="left")
 		player_move1_right = pad(player_move1_right, player_target_height, player_target_width)
-		player_move1_left  = pad(player_move1_left,  player_target_height, player_target_width)
+		player_move1_left  = pad(player_move1_left,  player_target_height, player_target_width, side="left")
 		player_move2_right = pad(player_move2_right, player_target_height, player_target_width)
-		player_move2_left  = pad(player_move2_left,  player_target_height, player_target_width)
+		player_move2_left  = pad(player_move2_left,  player_target_height, player_target_width, side="left")
 		player_dead        = pad(player_dead,        player_target_height, player_target_width)
 		player_jump        = pad(player_jump,        player_target_height, player_target_width)
 		player_fall        = pad(player_fall,        player_target_height, player_target_width)
-		player_climb1      = pad(player_climb1,      player_target_height, player_target_width)
-		player_climb2      = pad(player_climb2,      player_target_height, player_target_width)
+		player_climb1      = pad(player_climb1,      player_target_height, player_target_width, side="left")
+		player_climb2      = pad(player_climb2,      player_target_height, player_target_width, side="right")
 
 		# Pad bomb sprites
 		bomb_sprites = [bomb, magic_bomb]
@@ -1291,7 +1407,8 @@ class KingKongRenderer(JAXGameRenderer):
 		SPRITE_PLAYER_MOVE2_RIGHT = jnp.expand_dims(player_move2_right, axis=0)
 		SPRITE_PLAYER_MOVE2_LEFT  = jnp.expand_dims(player_move2_left, axis=0)
 		SPRITE_PLAYER_DEAD        = jnp.expand_dims(player_dead, axis=0)
-		SPRITE_PLAYER_JUMP        = jnp.expand_dims(player_jump, axis=0)
+		SPRITE_PLAYER_JUMP_LEFT   = jnp.expand_dims(player_jump_left, axis=0)
+		SPRITE_PLAYER_JUMP_RIGHT  = jnp.expand_dims(player_jump_right, axis=0)
 		SPRITE_PLAYER_FALL        = jnp.expand_dims(player_fall, axis=0)
 		SPRITE_PLAYER_CLIMB1      = jnp.expand_dims(player_climb1, axis=0)
 		SPRITE_PLAYER_CLIMB2      = jnp.expand_dims(player_climb2, axis=0)
@@ -1307,7 +1424,7 @@ class KingKongRenderer(JAXGameRenderer):
 			SPRITE_LEVEL, SPRITE_PLAYER_IDLE_RIGHT, SPRITE_PLAYER_IDLE_LEFT,
 			SPRITE_PLAYER_MOVE1_RIGHT, SPRITE_PLAYER_MOVE1_LEFT,
 			SPRITE_PLAYER_MOVE2_RIGHT, SPRITE_PLAYER_MOVE2_LEFT,
-			SPRITE_PLAYER_DEAD, SPRITE_PLAYER_JUMP, SPRITE_PLAYER_FALL,
+			SPRITE_PLAYER_DEAD, SPRITE_PLAYER_JUMP_LEFT, SPRITE_PLAYER_JUMP_RIGHT, SPRITE_PLAYER_FALL,
 			SPRITE_PLAYER_CLIMB1, SPRITE_PLAYER_CLIMB2, SPRITE_KONG,
 			SPRITE_LIFE, SPRITE_BOMB, SPRITE_MAGIC_BOMB, SPRITE_PRINCESS_CLOSED,
 			SPRITE_PRINCESS_OPEN, SPRITE_NUMBERS
@@ -1318,13 +1435,19 @@ class KingKongRenderer(JAXGameRenderer):
 		
 		frame_level = jr.get_sprite_frame(self.SPRITE_LEVEL, 0)
 		raster = jr.render_at(raster, *self.consts.LEVEL_LOCATION, frame_level)
-		
+					
 		# Render player based on state
 		def get_player_sprite():
 			def is_idle_state():
 				return jnp.logical_or(
 					state.player_state == self.consts.PLAYER_IDLE_LEFT,
 					state.player_state == self.consts.PLAYER_IDLE_RIGHT
+				)
+
+			def is_jumping_state():
+				return jnp.logical_or(
+					state.player_state == self.consts.PLAYER_JUMP_LEFT,
+					state.player_state == self.consts.PLAYER_JUMP_RIGHT
 				)
 
 			def is_dead_or_fall():
@@ -1341,6 +1464,12 @@ class KingKongRenderer(JAXGameRenderer):
 
 			def is_climb_idle():
 				return state.player_state == self.consts.PLAYER_CLIMB_IDLE
+
+			def is_moving():
+				return jnp.logical_or(
+					state.player_state == self.consts.PLAYER_MOVE_LEFT,
+					state.player_state == self.consts.PLAYER_MOVE_RIGHT
+				)
 
 			def walk_cycle():
 				frame = ((state.stage_steps - 1) // 4) % 4
@@ -1381,37 +1510,58 @@ class KingKongRenderer(JAXGameRenderer):
 					lambda: self.SPRITE_PLAYER_CLIMB2
 				)
 
+			# Main sprite selection logic
 			sprite = jax.lax.cond(
-				is_idle_state(),
+				is_jumping_state(),
 				lambda: jax.lax.cond(
-					state.player_state == self.consts.PLAYER_IDLE_LEFT,
-					lambda: self.SPRITE_PLAYER_IDLE_LEFT,
-					lambda: self.SPRITE_PLAYER_IDLE_RIGHT
-				),
+					state.player_state == self.consts.PLAYER_JUMP_LEFT,
+					lambda: self.SPRITE_PLAYER_JUMP_LEFT,
+					lambda: self.SPRITE_PLAYER_JUMP_RIGHT
+				),  # Jump sprite takes priority
 				lambda: jax.lax.cond(
-					is_dead_or_fall(),
-					lambda: self.SPRITE_PLAYER_DEAD,
+					is_idle_state(),
 					lambda: jax.lax.cond(
-						is_climb_idle(),
-						lambda: self.SPRITE_PLAYER_CLIMB2, # freeze on last climb frame
+						state.player_state == self.consts.PLAYER_IDLE_LEFT,
+						lambda: self.SPRITE_PLAYER_IDLE_LEFT,
+						lambda: self.SPRITE_PLAYER_IDLE_RIGHT
+					),
+					lambda: jax.lax.cond(
+						is_dead_or_fall(),
+						lambda: self.SPRITE_PLAYER_DEAD,
 						lambda: jax.lax.cond(
-							is_climbing(),
-							climb_cycle,
-							walk_cycle
+							is_climb_idle(),
+							lambda: self.SPRITE_PLAYER_CLIMB2, # freeze on last climb frame
+							lambda: jax.lax.cond(
+								is_climbing(),
+								climb_cycle,
+								lambda: jax.lax.cond(
+									is_moving(),
+									walk_cycle,
+									lambda: self.SPRITE_PLAYER_IDLE_RIGHT  # fallback
+								)
+							)
 						)
 					)
 				)
 			)
 
 			return sprite
-
 		# Render player
 		player_sprite = get_player_sprite()
 
 		def render_player(raster_in):
+			def offset():
+				return jax.lax.cond(
+					(state.player_state == self.consts.PLAYER_IDLE_RIGHT) |
+					(state.player_state == self.consts.PLAYER_MOVE_RIGHT) |
+					(state.player_state == self.consts.PLAYER_JUMP_RIGHT),
+					lambda: -2,
+					lambda: -5
+				)
+
 			return jr.render_at(
 				raster_in,
-				state.player_x,
+				state.player_x + offset(),
 				state.player_y - self.consts.PLAYER_SIZE[1],
 				jr.get_sprite_frame(player_sprite, 0)
 			)
@@ -1558,5 +1708,52 @@ class KingKongRenderer(JAXGameRenderer):
 			return draw_timer_digits(raster_in)
 		
 		raster = render_bonus_timer(raster)
-		
+
+		# Render debug info
+		if self.consts.DEBUG_RENDER:
+			red_pixel = jnp.array([[[255, 0, 0, 255]]], dtype=jnp.uint8)
+			blue_pixel = jnp.array([[[0, 0, 255, 255]]], dtype=jnp.uint8)
+			white_pixel = jnp.array([[[255, 255, 255, 255]]], dtype=jnp.uint8)
+
+			def render_bbox_points(raster, bbox, pixel):
+				x1, y1, x2, y2 = bbox
+				points = jnp.array([
+					[x1, y1],
+					[x2, y1],
+					[x1, y2],
+					[x2, y2]
+				])
+				def body(i, r):
+					x, y = points[i]
+					return jr.render_at(r, x, y, pixel)
+				return jax.lax.fori_loop(0, points.shape[0], body, raster)
+
+			def render_all_ladder_points(raster, ladder_locations, pixel):
+				def body(i, r):
+					return render_bbox_points(r, ladder_locations[i], pixel)
+				return jax.lax.fori_loop(0, ladder_locations.shape[0], body, raster)
+
+			raster = render_all_ladder_points(raster, self.consts.LADDER_LOCATIONS, red_pixel)
+
+			# Compute player bounding box
+			player_width, player_height = self.consts.PLAYER_SIZE
+			player_bbox = jnp.array([
+				state.player_x,
+				state.player_y - player_height,
+				state.player_x + player_width,
+				state.player_y
+			])
+			raster = render_bbox_points(raster, player_bbox, white_pixel)
+
+			# Render player bounding box points
+			raster = render_bbox_points(raster, player_bbox, white_pixel)
+
+			def render_floor_points(raster, floor_locations, pixel):
+				def body(i, r):
+					y = floor_locations[i]
+					return jr.render_at(r, 0, y, pixel)
+				return jax.lax.fori_loop(0, floor_locations.shape[0], body, raster)
+
+			raster = render_floor_points(raster, self.consts.FLOOR_LOCATIONS, blue_pixel)
+				
 		return raster
