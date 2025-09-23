@@ -780,17 +780,38 @@ class JaxCrazyClimber(JaxEnvironment):
         """Get observation from state."""
         return self._get_observation(state)
     
-    def _get_reward(self, state, new_state, action):
-        """Get reward for this step."""
-        height_change = state.player_y - new_state.player_y
+    def _get_reward(self, previous_state, state):
+        """Calculate reward for this step."""
+        height_change = previous_state.player_y - state.player_y
         height_reward = jnp.where(height_change > 0, 1.0, 0.0)
-        win_reward = jnp.where(new_state.game_won, 100.0, 0.0)
+        win_reward = jnp.where(state.game_won, 100.0, 0.0)
         return height_reward + win_reward
     
     def _get_all_rewards(self, state, new_state, action):
         """Get all reward components for this step."""
-        reward = self._get_reward(state, new_state, action)
+        reward = self._get_reward(state, new_state)
         return jnp.array([reward])
+    
+    def image_space(self) -> spaces:
+        """Returns the image space of the environment."""
+        return spaces.Box(
+            low=0, 
+            high=255, 
+            shape=(self.consts.HEIGHT, self.consts.WIDTH, 3), 
+            dtype=jnp.uint8
+        )
+    
+    def _get_info(self, state, all_rewards=None):
+        """Extracts information from the environment state."""
+        return CrazyClimberInfo(
+            time=state.step_counter,
+            all_rewards=all_rewards if all_rewards is not None else jnp.array([0.0])
+        )
+    
+    def _get_done(self, state):
+        """Determines if the environment state is terminal."""
+        # Game is done if no lives left or game is won
+        return jnp.logical_or(state.player_lives <= 0, state.game_won)
     
 class CrazyClimberRenderer(JAXGameRenderer):
     def __init__(self, consts: CrazyClimberConstants = None):
