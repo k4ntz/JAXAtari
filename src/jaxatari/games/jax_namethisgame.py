@@ -76,7 +76,7 @@ class NameThisGameConfig:
     # Tentacles (octopus arms)
     max_tentacles: int = 8
     tentacle_base_x: jnp.ndarray = field(
-        default_factory=lambda: jnp.array([24, 38, 54, 70, 86, 102, 118, 134], dtype=jnp.int32)
+        default_factory=lambda: jnp.array([16, 32, 48, 64, 80, 96, 112, 128], dtype=jnp.int32)
     )
     tentacle_ys: jnp.ndarray = field(
         default_factory=lambda: jnp.array([97, 104, 111, 118, 125, 132, 139, 146, 153, 160], dtype=jnp.int32)
@@ -937,31 +937,24 @@ class JaxNameThisGame(
                     at_left = (cols[0] == 0)
                     at_right = (cols[0] == max_col)
                     blocked = jnp.where(d < 0, at_left, at_right)
-                    idx = jnp.arange(L, dtype=jnp.int32)
-                    stacked = jnp.all((cols == cols[0]) | (idx >= l))
+                    stacked = jnp.where(l <= 1, True, cols[1] == cols[0])
 
                     def _perform_move(cur_cols, direction):
-                        top_new = jnp.clip(cur_cols[0] + direction, 0, max_col)
+                        tip_new = jnp.clip(cur_cols[0] + direction, 0, max_col)
 
                         def body(k, acc):
-                            def do_step(a):
-                                def first(a2):
-                                    return a2.at[0].set(top_new)
+                            def first(a):
+                                # set new tip
+                                return a.at[0].set(tip_new)
 
-                                def rest(a2):
-                                    prev_new = a2[k - 1]
-                                    desired = jnp.clip(cur_cols[k] + direction, 0, max_col)
-                                    low = jnp.maximum(prev_new - 1, 0)
-                                    high = jnp.minimum(prev_new + 1, max_col)
-                                    newk = jnp.clip(desired, low, high)
-                                    return a2.at[k].set(newk)
+                            def rest(a):
+                                return a.at[k].set(cur_cols[k - 1])
 
-                                return jax.lax.cond(k == 0, first, rest, a)
+                            return jax.lax.cond(k == 0, first, rest, acc)
 
-                            return jax.lax.cond(k < l, do_step, lambda a: a, acc)
-
-                        out = jax.lax.fori_loop(0, L, body, cur_cols)
-                        return out
+                        return jax.lax.fori_loop(0, L,
+                                                 lambda k, a: jax.lax.cond(k < l, lambda x: body(k, x), lambda x: x, a),
+                                                 cur_cols)
 
                     def _edge_logic(st2: NameThisGameState) -> NameThisGameState:
                         def _first_wait():
