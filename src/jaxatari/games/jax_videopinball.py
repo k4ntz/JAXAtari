@@ -890,6 +890,12 @@ class JaxVideoPinball(
             plunger_power > 0, lambda p: 0, lambda p: p, operand=plunger_position
         )
 
+        plunger_position, plunger_power = jax.lax.cond(
+            state.ball_in_play,
+            lambda: (state.plunger_position, state.plunger_power),
+            lambda: (plunger_position, plunger_power)
+        )
+
         return plunger_position, plunger_power
 
     @partial(jax.jit, static_argnums=(0,))
@@ -984,12 +990,98 @@ class JaxVideoPinball(
         )
 
     @partial(jax.jit, static_argnums=(0,))
-    def _cross2(self, ax_, ay_, bx_, by_):
-        """2D cross product of vectors a and b."""
-        return ax_ * by_ - ay_ * bx_
+    def _cross2(self, ax: chex.Array, ay: chex.Array, bx: chex.Array, by: chex.Array) -> chex.Array:
+        """
+        Compute the 2D cross product (determinant) of two vectors.
+
+        Given vectors:
+            A = (ax, ay)
+            B = (bx, by)
+
+        The scalar cross product is defined as:
+            cross(A, B) = ax * by - ay * bx
+
+        This quantity is useful for:
+            - Determining orientation (clockwise/counterclockwise turn).
+            - Computing intersection of line segments.
+            - Measuring the "signed area" spanned by two vectors.
+
+        Parameters
+        ----------
+        ax : chex.Array
+            x-component of vector A.
+        ay : chex.Array
+            y-component of vector A.
+        bx : chex.Array
+            x-component of vector B.
+        by : chex.Array
+            y-component of vector B.
+
+        Returns
+        -------
+        chex.Array
+            Scalar value of the 2D cross product (signed area).
+        """
+        return ax * by - ay * bx
 
     @partial(jax.jit, static_argnums=(0,))
-    def _intersect_edge(self, ball_movement, ax, ay, a_to_b_x, a_to_b_y):
+    def _intersect_edge(
+        self,
+        ball_movement: BallMovement,
+        ax: chex.Array,
+        ay: chex.Array,
+        a_to_b_x: chex.Array,
+        a_to_b_y: chex.Array,
+    ) -> tuple[chex.Array, chex.Array]:
+        """
+        Compute the intersection between a moving ball's trajectory and a line segment.
+
+        The function determines:
+          1. The normalized time `t` at which the ball intersects the line segment,
+             relative to its current timestep.
+          2. Whether this intersection is valid, i.e., occurs within the timestep and
+             lies within the finite edge segment.
+
+        Intersection is found by solving:
+            ball_position(t) = edge_point(s)
+        where:
+            ball_position(t) = old_ball + t * trajectory
+            edge_point(s) = (ax, ay) + s * (a_to_b_x, a_to_b_y)
+
+        Parameters
+        ----------
+        ball_movement : BallMovement
+            An object with attributes:
+                - old_ball_x, old_ball_y : float
+                  The starting position of the ball.
+                - new_ball_x, new_ball_y : float
+                  The position of the ball at the end of the timestep.
+        ax : chex.Array
+            x-coordinate of the start of the edge (point A).
+        ay : chex.Array
+            y-coordinate of the start of the edge (point A).
+        a_to_b_x : chex.Array
+            x-component of the edge vector (B - A).
+        a_to_b_y : chex.Array
+            y-component of the edge vector (B - A).
+
+        Returns
+        -------
+        t : chex.Array
+            Normalized intersection time (0 ≤ t ≤ 1).
+            If no valid collision, returns `self.consts.T_ENTRY_NO_COLLISION`.
+        valid : chex.Array
+            Whether the intersection is valid:
+                - Ball trajectory intersects the finite edge segment.
+                - Collision occurs within the timestep.
+
+        Notes
+        -----
+        - Uses cross products to solve the intersection in 2D.
+        - If the trajectory and edge are parallel (denominator ~ 0), 
+          no unique intersection is reported.
+        - The method can be extended to handle collinear overlap cases.
+        """
         eps = 1e-8
 
         # Ball trajectory
@@ -1026,8 +1118,81 @@ class JaxVideoPinball(
 
     @partial(jax.jit, static_argnums=(0,))
     def _calc_segment_hit_point(
-        self, ball_movement, scene_object, action, ax, ay, bx, by
-    ):
+        self,
+        ball_movement: BallMovement,
+        scene_object: chex.Array,
+        action: chex.Array,
+        ax: chex.Array,
+        ay: chex.Array,
+        bx: chex.Array,
+        by: chex.Array,
+    ) -> chex.Array:
+        """
+        Calculate the collision point and reflection of a moving ball against a line segment.
+
+        This function determines:
+          1. If and when the ball collides with the line segment AB.
+          2. The collision point on the segment.
+          3. The surface normal of the edge at the point of contact.
+          4. The new reflected ball position after the bounce.
+          5. A "hit point" record combining collision and scene data.
+
+        Parameters
+        ----------
+        ball_movement : BallMovement
+            An object with attributes:
+                - old_ball_x, old_ball_y : float
+                  Starting position of the ball at the beginning of the timestep.
+                - new_ball_x, new_ball_y : float
+                  Intended end position of the ball at the end of the timestep.
+        scene_object : chex.Array
+            Encoded scene object data (e.g., type, ID, metadata) that will be concatenated
+            with the computed hit point for downstream processing.
+        action : chex.Array
+            (Currently unused in this method) — may represent player or system action
+            influencing collision handling.
+        ax, ay : chex.Array
+            Coordinates of the first endpoint of the edge (point A).
+        bx, by : chex.Array
+            Coordinates of the second endpoint of the edge (point B).
+
+        Returns
+        -------
+        hit_point : jax.numpy.ndarray
+            A concatenated array of the form:
+                [t, hit_x, hit_y, new_ball_x, new_ball_y, ...scene_object]
+            where:
+                t : chex.Array
+                    Normalized collision time (0 ≤ t ≤ 1), or sentinel if no collision.
+                hit_x, hit_y : chex.Array
+                    Coordinates of the collision point on the edge.
+                new_ball_x, new_ball_y : chex.Array
+                    The ball’s next position after reflection.
+                ...scene_object : chex.Array
+                    The original scene object data concatenated to the collision record.
+
+        Notes
+        -----
+        - Uses `_intersect_edge` to determine if and when the ball intersects the edge.
+        - Reflection is computed using the surface normal of the edge.
+        - If the edge is degenerate (very short), a fallback normal perpendicular to the
+          trajectory is used.
+        - A small correction (`+0.1 * normal`) shifts the hit point slightly inward to avoid
+          immediate re-detection of the same collision.
+        - If no collision occurs, returns a dummy hit point via `_dummy_calc_hit_point`.
+
+        Steps
+        -----
+        1. Compute ball trajectory and edge vector AB.
+        2. Check for intersection with the edge using `_intersect_edge`.
+        3. If valid, compute:
+            - Collision point (hit_x, hit_y).
+            - Surface normal (perpendicular to AB), oriented against trajectory.
+            - Reflected trajectory vector scaled by remaining distance.
+            - New ball position after bounce.
+        4. Assemble hit point array with collision data + scene object data.
+        5. If invalid, return a dummy hit point.
+        """
         eps = 1e-8
 
         # Trajectory vector
@@ -1120,7 +1285,37 @@ class JaxVideoPinball(
         ball_movement: BallMovement,
         scene_object: chex.Array,
         action: chex.Array,
-    ):
+    ) -> chex.Array:
+        """
+        Handle ball-slab collision when the ball starts *inside* the rectangle.
+
+        The ball is "rewound" step by step until it lies just outside the rectangle,
+        then `_default_slab_collision_branch` is used to compute the actual collision.
+
+        Parameters
+        ----------
+        ball_movement : BallMovement
+            Object with old and new ball positions.
+        scene_object : chex.Array
+            Encoded axis-aligned rectangle [width, height, x_min, y_min, ...metadata].
+        action : chex.Array
+            Additional input, passed along for consistency.
+
+        Returns
+        -------
+        hit_point : chex.Array
+            Collision record, as returned by `_default_slab_collision_branch`.
+
+        Notes
+        -----
+        - Prevents degenerate cases (division by zero) by clamping dx, dy with `1e-8`.
+        - Rewind logic:
+            - Compute factors `k` such that old position minus `k * (dx, dy)`
+              is just outside the rectangle.
+            - Update `BallMovement` with rewound old/new positions.
+        - Ensures inside-starting collisions are handled consistently with outside-starting ones.
+        """
+        
         dx = jnp.subtract(ball_movement.new_ball_x, ball_movement.old_ball_x)
         dy = jnp.subtract(ball_movement.new_ball_y, ball_movement.old_ball_y)
 
@@ -1154,177 +1349,61 @@ class JaxVideoPinball(
         return self._default_slab_collision_branch(ball_movement, scene_object, action)
 
     @partial(jax.jit, static_argnums=(0,))
-    def _calc_swept_collision(
-        self,
-        t_entry: chex.Array,
-        ball_movement: BallMovement,
-        scene_object: chex.Array,
-        px: chex.Array,
-        py: chex.Array,
-        ax: chex.Array,
-        ay: chex.Array,
-        bx: chex.Array,
-        by: chex.Array,
-    ):
-        eps = 1e-8
-
-        # Ball trajectory
-        trajectory_x = ball_movement.new_ball_x - ball_movement.old_ball_x
-        trajectory_y = ball_movement.new_ball_y - ball_movement.old_ball_y
-
-        # Collision position
-        hit_x = ball_movement.old_ball_x + t_entry * trajectory_x
-        hit_y = ball_movement.old_ball_y + t_entry * trajectory_y
-
-        # Vector pivot → collision
-        r_x = hit_x - px
-        r_y = hit_y - py
-        d_r = jnp.sqrt(r_x**2 + r_y**2) + eps
-
-        # Sweep direction (screen-space orientation)
-        # 1 is up, -1 down (with flipped coordinate system)
-        # if a is larger than b the sweep moves up
-        sweep_dir = jnp.sign(ay - by)
-
-        # Collision normal
-        # Tangential direction at hit point (perpendicular to r)
-        # Clockwise tangent in screen-space
-        n_x = r_y
-        n_y = -r_x
-        n_len = jnp.sqrt(n_x**2 + n_y**2) + eps
-        n_x /= n_len
-        n_y /= n_len
-
-        # accounting for sweeping direction
-        # the surface normal needs to point in the direction
-        # of the half space where the reflection takes place.
-        # This is only determined by the sweeping direction
-        # as this function is only called if the collision is
-        # already known to be a swept collision, i.e. moving
-        # object - moving target collision so that the surface
-        # normal is always in the direction of the obstacle
-        # movement
-        n_x = n_x * sweep_dir
-        n_y = n_y * sweep_dir
-
-        angular_velocity = self.consts.VELOCITY_ACCELERATION_VALUE
-        # Tangential velocity of moving surface
-        u_x = sweep_dir * angular_velocity * n_x * d_r
-        u_y = sweep_dir * angular_velocity * n_y * d_r
-
-        # Relative velocity
-        v_rel_x = trajectory_x - u_x
-        v_rel_y = trajectory_y - u_y
-
-        # Reflect relative velocity
-        dot_vn = v_rel_x * n_x + v_rel_y * n_y
-        rv_rel_x = v_rel_x - 2.0 * dot_vn * n_x
-        rv_rel_y = v_rel_y - 2.0 * dot_vn * n_y
-
-        # Transform back to world (screen) frame
-        rvx = rv_rel_x + u_x
-        rvy = rv_rel_y + u_y
-
-        # New ball position after reflection
-        travel_remaining = 1.0 - t_entry
-        new_ball_x = hit_x + travel_remaining * rvx
-        new_ball_y = hit_y + travel_remaining * rvy
-
-        # Hit point info
-        hit_point = jnp.concatenate(
-            [
-                jnp.stack([t_entry, hit_x, hit_y, new_ball_x, new_ball_y], axis=0),
-                scene_object,
-            ],
-            axis=0
-        )
-
-        return hit_point
-    
-    @partial(jax.jit, static_argnums=(0,))
-    def _calc_swept_hit_point(
-        self,
-        ball_movement: BallMovement,
-        scene_object: chex.Array,
-        action: chex.Array,
-        px: chex.Array,
-        py: chex.Array,
-        ax: chex.Array,
-        ay: chex.Array,
-        bx: chex.Array,
-        by: chex.Array,
-    ):
-        """
-        Computes the hit point for a swept circle segment given by a pivot point
-        (px, py) and two end points (ax, ay), (bx, by). The sweep is assumed to go
-        A -> B which can be either clock wise or counter clock wise.
-        This is done by examining the three cases in which the ball can collide with
-        the triangle spanned by (P, A, B):
-         - the ball can be inside of the triangle
-         - the ball can collide with the edges PA, PB
-         - the ball can collide with the circle line segment spanned by the angle of the
-           triangle at the pivot point
-        The latter case we approximate by computing the potential collision with the
-        edge AB. The final collision is then either a standard line-segment collision or
-        a swept arc collision, where the reflection is determined by the vector going
-        from P to the ball position at collision time.
-        """
-        # if ball is inside, also do a swept collision
-        is_inside = self._is_inside_triangle(
-            ball_movement,
-            px,
-            py,
-            ax,
-            ay,
-            bx,
-            by,
-        )
-        inside_t_entry = jnp.where(is_inside, 0., self.consts.T_ENTRY_NO_COLLISION)
-
-        # most of the time, the ball does not collide with he flippers, so instead of
-        # calculating a full hit point for each of these cases, this will suffice:
-        # Arc collision (approximated by edge AB)
-        a_to_b_x = bx - ax
-        a_to_b_y = by - ay
-        arc_t_entry, arc_valid = self._intersect_edge(ball_movement, ax, ay, a_to_b_x, a_to_b_y)
-        arc_t_entry = jnp.where(arc_valid, arc_t_entry, self.consts.T_ENTRY_NO_COLLISION)
-
-        # edge PA collision
-        p_to_a_x = ax - px
-        p_to_a_y = ay - py
-        pa_t_entry, pa_valid = self._intersect_edge(ball_movement, px, py, p_to_a_x, p_to_a_y)
-        pa_t_entry = jnp.where(pa_valid, pa_t_entry, self.consts.T_ENTRY_NO_COLLISION)
-
-        # edge PB collision
-        p_to_b_x = bx - px
-        p_to_b_y = by - py
-        pb_t_entry, pb_valid = self._intersect_edge(ball_movement, px, py, p_to_b_x, p_to_b_y)
-        pb_t_entry = jnp.where(pb_valid, pb_t_entry, self.consts.T_ENTRY_NO_COLLISION)
-
-        intersects_t_entry = jnp.array([inside_t_entry, arc_t_entry, pa_t_entry, pb_t_entry])
-
-        return jax.lax.cond(
-            jnp.all(intersects_t_entry == self.consts.T_ENTRY_NO_COLLISION),
-            lambda: self._dummy_calc_hit_point(scene_object)[-1],
-            lambda: jax.lax.switch(
-                jnp.argmin(intersects_t_entry),
-                [
-                    lambda: self._calc_swept_collision(intersects_t_entry[0], ball_movement, scene_object, px, py, ax, ay, bx, by),
-                    lambda: self._calc_swept_collision(intersects_t_entry[1], ball_movement, scene_object, px, py, ax, ay, bx, by),
-                    lambda: self._calc_segment_hit_point(ball_movement, scene_object, action, px, py, ax, ay),
-                    lambda: self._calc_segment_hit_point(ball_movement, scene_object, action, px, py, bx, by)
-                ]
-            )
-        )
-
-
-    @partial(jax.jit, static_argnums=(0,))
     def _default_slab_collision_branch(
         self,
         ball_movement: BallMovement,
         scene_object: chex.Array,
         action: chex.Array,
-    ):
+    ) -> chex.Array:
+        """
+        Handle ball-axis-aligned rectangle (slab) collision when the ball starts outside.
+
+        This method uses the *slab intersection algorithm* to:
+          1. Compute entry/exit times for the ball’s trajectory along x and y.
+          2. Determine if a collision occurs within the current timestep.
+          3. Find the hit point on the rectangle boundary.
+          4. Compute a reflection vector based on the surface normal of the side/corner hit.
+          5. Produce a collision record containing hit data and the scene object.
+
+        Parameters
+        ----------
+        ball_movement : BallMovement
+            Object with attributes:
+                - old_ball_x, old_ball_y : float
+                  Ball position at start of timestep.
+                - new_ball_x, new_ball_y : float
+                  Ball position at end of timestep.
+        scene_object : chex.Array
+            Encoded axis-aligned rectangle of the form:
+                [width, height, x_min, y_min, ...metadata].
+        action : chex.Array
+            Unused here but passed for compatibility with other collision functions.
+
+        Returns
+        -------
+        hit_point : chex.Array
+            Concatenated array:
+                [t_entry, hit_x, hit_y, new_ball_x, new_ball_y, ...scene_object]
+            where:
+                t_entry : chex.Array
+                    Normalized time of collision (0 ≤ t ≤ 1), sentinel if none.
+                hit_x, hit_y : chex.Array
+                    Collision coordinates on the rectangle boundary.
+                new_ball_x, new_ball_y : chex.Array
+                    Position after reflection.
+                ...scene_object : chex.Array
+                    Original scene object metadata.
+
+        Notes
+        -----
+        - If no collision is detected (miss, outside timestep, or already past obstacle),
+          returns a dummy hit point via `_dummy_calc_hit_point`.
+        - Reflection logic distinguishes between:
+            - Horizontal edge hit
+            - Vertical edge hit
+            - Corner hit (special case: normal aligned with trajectory).
+        - Small epsilon (`1e-8`) prevents division by zero when computing times.
+        """
         # Calculate trajectory of the ball in x and y direction
         trajectory_x = jnp.subtract(ball_movement.new_ball_x, ball_movement.old_ball_x)
         trajectory_y = jnp.subtract(ball_movement.new_ball_y, ball_movement.old_ball_y)
@@ -1448,7 +1527,33 @@ class JaxVideoPinball(
         ball_movement: BallMovement,
         scene_object: chex.Array,
         action: chex.Array,
-    ):
+    ) -> chex.Array:
+        """
+        Compute the collision between the ball and an axis-aligned rectangle (slab).
+
+        Decides between two cases:
+          1. **Inside collision**: The ball starts inside the rectangle.
+          2. **Default collision**: The ball starts outside and may hit the rectangle.
+
+        Parameters
+        ----------
+        ball_movement : BallMovement
+            Object with old and new ball positions.
+        scene_object : chex.Array
+            Encoded axis-aligned rectangle [width, height, x_min, y_min, ...metadata].
+        action : chex.Array
+            Additional input passed down to branch functions.
+
+        Returns
+        -------
+        hit_point : chex.Array
+            Collision record as produced by `_default_slab_collision_branch`
+            or `_inside_slab_collision_branch`.
+
+        Notes
+        -----
+        - Inside case rewinds the ball outside the rectangle and reuses the default logic.
+        """
         inside_x = jnp.logical_and(
             ball_movement.old_ball_x > scene_object[2],
             ball_movement.old_ball_x < scene_object[2] + scene_object[0],
@@ -1478,7 +1583,28 @@ class JaxVideoPinball(
         by: chex.Array,
         cx: chex.Array,
         cy: chex.Array,
-    ):
+    ) -> chex.Array:
+        """
+        Determines whether the ball's position lies inside the triangle defined by points
+        (A, B, C). This is useful for detecting swept collisions with flippers, where the
+        flipper motion sweeps out a triangular region.
+
+        Method:
+        - Computes the signed area of the triangle to reject degenerate cases.
+        - Uses cross products (AB x AP, BC x BP, CA x CP) to determine if the ball lies
+          consistently on the same side of all edges.
+        - Allows a small epsilon tolerance to handle numerical stability.
+
+        Args:
+            ball_movement: The ball's motion, storing old and new positions.
+            ax, ay: Coordinates of triangle vertex A.
+            bx, by: Coordinates of triangle vertex B.
+            cx, cy: Coordinates of triangle vertex C.
+
+        Returns:
+            Boolean array (chex.Array): True if the ball's position is inside the triangle
+            (and the triangle is non-degenerate), False otherwise.
+        """
         eps = 1e-8
 
         # signed area of triangle (A,B,C)
@@ -1523,6 +1649,207 @@ class JaxVideoPinball(
         inside = (all_non_neg | all_non_pos) & non_degenerate
 
         return inside
+    
+    @partial(jax.jit, static_argnums=(0,))
+    def _calc_swept_collision(
+        self,
+        t_entry: chex.Array,
+        ball_movement: BallMovement,
+        scene_object: chex.Array,
+        px: chex.Array,
+        py: chex.Array,
+        ax: chex.Array,
+        ay: chex.Array,
+        bx: chex.Array,
+        by: chex.Array,
+    ) -> chex.Array:
+        """
+        Calculates the collision response when the ball collides with a flipper that is
+        currently sweeping (i.e., rotating about a pivot). This function accounts for the
+        angular velocity of the moving flipper surface.
+
+        Method:
+        - Computes the ball's hit position at time `t_entry`.
+        - Derives the vector from the pivot point to the hit position.
+        - Determines the sweep direction (up or down) based on flipper endpoints.
+        - Computes the surface normal at the hit point, adjusted by sweep direction.
+        - Incorporates tangential velocity of the moving flipper edge.
+        - Reflects the relative velocity of the ball against the moving surface.
+        - Computes the ball's new world velocity and position after reflection.
+
+        Args:
+            t_entry: Normalized collision time (0-1 of trajectory).
+            ball_movement: The ball's old and new positions.
+            scene_object: Encoded flipper geometry/state.
+            px, py: Pivot point of the flipper.
+            ax, ay: First endpoint of the flipper segment.
+            bx, by: Second endpoint of the flipper segment.
+
+        Returns:
+            chex.Array: Hit point vector containing:
+                [t_entry, hit_x, hit_y, new_ball_x, new_ball_y, scene_object...].
+        """
+        eps = 1e-8
+
+        # Ball trajectory
+        trajectory_x = ball_movement.new_ball_x - ball_movement.old_ball_x
+        trajectory_y = ball_movement.new_ball_y - ball_movement.old_ball_y
+
+        # Collision position
+        hit_x = ball_movement.old_ball_x + t_entry * trajectory_x
+        hit_y = ball_movement.old_ball_y + t_entry * trajectory_y
+
+        # Vector pivot → collision
+        r_x = hit_x - px
+        r_y = hit_y - py
+        d_r = jnp.sqrt(r_x**2 + r_y**2) + eps
+
+        # Sweep direction (screen-space orientation)
+        # 1 is up, -1 down (with flipped coordinate system)
+        # if a is larger than b the sweep moves up
+        sweep_dir = jnp.sign(ay - by)
+
+        # Collision normal
+        # Tangential direction at hit point (perpendicular to r)
+        # Clockwise tangent in screen-space
+        n_x = r_y
+        n_y = -r_x
+        n_len = jnp.sqrt(n_x**2 + n_y**2) + eps
+        n_x /= n_len
+        n_y /= n_len
+
+        # accounting for sweeping direction
+        # the surface normal needs to point in the direction
+        # of the half space where the reflection takes place.
+        # This is only determined by the sweeping direction
+        # as this function is only called if the collision is
+        # already known to be a swept collision, i.e. moving
+        # object - moving target collision so that the surface
+        # normal is always in the direction of the obstacle
+        # movement
+        n_x = n_x * sweep_dir
+        n_y = n_y * sweep_dir
+
+        angular_velocity = self.consts.VELOCITY_ACCELERATION_VALUE
+        # Tangential velocity of moving surface
+        u_x = sweep_dir * angular_velocity * n_x * d_r
+        u_y = sweep_dir * angular_velocity * n_y * d_r
+
+        # Relative velocity
+        v_rel_x = trajectory_x - u_x
+        v_rel_y = trajectory_y - u_y
+
+        # Reflect relative velocity
+        dot_vn = v_rel_x * n_x + v_rel_y * n_y
+        rv_rel_x = v_rel_x - 2.0 * dot_vn * n_x
+        rv_rel_y = v_rel_y - 2.0 * dot_vn * n_y
+
+        # Transform back to world (screen) frame
+        rvx = rv_rel_x + u_x
+        rvy = rv_rel_y + u_y
+
+        # New ball position after reflection
+        travel_remaining = 1.0 - t_entry
+        new_ball_x = hit_x + travel_remaining * rvx
+        new_ball_y = hit_y + travel_remaining * rvy
+
+        # Hit point info
+        hit_point = jnp.concatenate(
+            [
+                jnp.stack([t_entry, hit_x, hit_y, new_ball_x, new_ball_y], axis=0),
+                scene_object,
+            ],
+            axis=0
+        )
+
+        return hit_point
+    
+    @partial(jax.jit, static_argnums=(0,))
+    def _calc_swept_hit_point(
+        self,
+        ball_movement: BallMovement,
+        scene_object: chex.Array,
+        action: chex.Array,
+        px: chex.Array,
+        py: chex.Array,
+        ax: chex.Array,
+        ay: chex.Array,
+        bx: chex.Array,
+        by: chex.Array,
+    ):
+        """
+        Computes the collision hit point between the ball and a swept flipper arc,
+        represented by pivot P (px, py) and arc endpoints A(ax, ay), B(bx, by).
+
+        Cases considered:
+        1. The ball lies inside triangle (P, A, B) → swept collision.
+        2. Ball collides with arc AB (approximated as edge AB).
+        3. Ball collides with edges PA or PB.
+        4. No collision → return dummy hit point.
+
+        The function selects the earliest valid collision among the above and delegates
+        to `_calc_swept_collision` (for swept arcs) or `_calc_segment_hit_point` (for
+        static edges).
+
+        Args:
+            ball_movement: The ball's old and new positions.
+            scene_object: Encoded flipper geometry/state.
+            action: Current player action (affects flipper state).
+            px, py: Pivot point of the flipper.
+            ax, ay: Flipper arc endpoint A.
+            bx, by: Flipper arc endpoint B.
+
+        Returns:
+            chex.Array: Hit point vector with collision data, or dummy if no collision.
+        """
+        # if ball is inside, also do a swept collision
+        is_inside = self._is_inside_triangle(
+            ball_movement,
+            px,
+            py,
+            ax,
+            ay,
+            bx,
+            by,
+        )
+        inside_t_entry = jnp.where(is_inside, 0., self.consts.T_ENTRY_NO_COLLISION)
+
+        # most of the time, the ball does not collide with he flippers, so instead of
+        # calculating a full hit point for each of these cases, this will suffice:
+        # Arc collision (approximated by edge AB)
+        a_to_b_x = bx - ax
+        a_to_b_y = by - ay
+        arc_t_entry, arc_valid = self._intersect_edge(ball_movement, ax, ay, a_to_b_x, a_to_b_y)
+        arc_t_entry = jnp.where(arc_valid, arc_t_entry, self.consts.T_ENTRY_NO_COLLISION)
+
+        # edge PA collision
+        p_to_a_x = ax - px
+        p_to_a_y = ay - py
+        pa_t_entry, pa_valid = self._intersect_edge(ball_movement, px, py, p_to_a_x, p_to_a_y)
+        pa_t_entry = jnp.where(pa_valid, pa_t_entry, self.consts.T_ENTRY_NO_COLLISION)
+
+        # edge PB collision
+        p_to_b_x = bx - px
+        p_to_b_y = by - py
+        pb_t_entry, pb_valid = self._intersect_edge(ball_movement, px, py, p_to_b_x, p_to_b_y)
+        pb_t_entry = jnp.where(pb_valid, pb_t_entry, self.consts.T_ENTRY_NO_COLLISION)
+
+        intersects_t_entry = jnp.array([inside_t_entry, arc_t_entry, pa_t_entry, pb_t_entry])
+
+        return jax.lax.cond(
+            jnp.all(intersects_t_entry == self.consts.T_ENTRY_NO_COLLISION),
+            lambda: self._dummy_calc_hit_point(scene_object)[-1],
+            lambda: jax.lax.switch(
+                jnp.argmin(intersects_t_entry),
+                [
+                    lambda: self._calc_swept_collision(intersects_t_entry[0], ball_movement, scene_object, px, py, ax, ay, bx, by),
+                    lambda: self._calc_swept_collision(intersects_t_entry[1], ball_movement, scene_object, px, py, ax, ay, bx, by),
+                    lambda: self._calc_segment_hit_point(ball_movement, scene_object, action, px, py, ax, ay),
+                    lambda: self._calc_segment_hit_point(ball_movement, scene_object, action, px, py, bx, by)
+                ]
+            )
+        )
+
 
     @partial(jax.jit, static_argnums=(0,))
     def _calc_flipper_hit_point(
@@ -1531,6 +1858,31 @@ class JaxVideoPinball(
         scene_object: chex.Array,
         action: chex.Array,
     ):
+        """
+        Calculates ball-flipper collisions, handling both static and moving flipper states.
+
+        Method:
+        - Determines flipper identity (left/right) and current motion (up/down/neutral).
+        - Selects the correct pivot and flipper endpoints based on discrete flipper
+          position (indexed by scene_object).
+        - If the flipper is moving, delegates to `_calc_swept_hit_point`.
+        - If static, computes segment collision with `_calc_segment_hit_point`, resolving
+          the top vs. bottom flipper segments if necessary.
+        - Applies velocity scaling (dampening when static, amplification when moving).
+        - Adds an angular velocity factor depending on collision location along the
+          flipper length.
+
+        Args:
+            ball_movement: The ball's old and new positions.
+            scene_object: Flipper object encoding position, type, and segment index.
+            action: Current player action (used to determine flipper movement).
+
+        Returns:
+            Tuple:
+              - velocity_factor (float): Scales post-collision velocity.
+              - velocity_addition (float): Adds spin/boost based on flipper movement.
+              - hit_point (chex.Array): Detailed collision data.
+        """
         is_left_flipper = scene_object[5] == 9
         is_right_flipper = scene_object[5] == 10
         left_flipper_up = jnp.logical_or(action == Action.LEFT, action == Action.UP)
@@ -1649,12 +2001,29 @@ class JaxVideoPinball(
         action: chex.Array,
     ):
         """
-        Calculates collisions with spinners.
-        Uses the usual slab method for hit_point calculation, then adds angular velocity.
-        After adding angular velocity, it has to be ensured that the ball is flying in a
-        clear trajectory from hit_point to new ball position, i.e. the ball may not collide
-        with the same spinner object when adding the angular velocity.
+        Calculates collisions with spinner objects.
 
+        Method:
+        - Uses the standard slab method to find the hit point.
+        - Determines the spinner center (left or right side).
+        - Computes ball reflection vector from slab collision.
+        - Adds angular velocity from spinner rotation (ω = π/2 per time step).
+        - Normalizes and scales angular contribution by a constant acceleration factor.
+        - Clips resulting velocity to the ball's maximum speed.
+        - Adjusts the hit point so that the ball emerges outside the spinner bounding box
+          (avoiding immediate re-collision).
+        - Returns updated hit point and a velocity addition term (speed delta).
+
+        Args:
+            ball_movement: The ball's old and new positions.
+            scene_object: Spinner geometry/state.
+            action: Current player action (unused, kept for consistency).
+
+        Returns:
+            Tuple:
+              - scalar velocity factor (float, always 1.0 here),
+              - velocity_addition (float, delta in ball speed due to angular boost),
+              - hit_point (chex.Array): Updated collision data with corrected ball position.
         """
         hit_point = self._calc_slab_hit_point(ball_movement, scene_object, action)
 
@@ -1755,10 +2124,30 @@ class JaxVideoPinball(
         scene_object: chex.Array,
     ) -> chex.Array:
         """
-        Empty hit point for no collision cases.
-        This is necessary to keep the shape of the hit point array constant.
-        """
+        Returns a dummy (sentinel) hit point when no collision occurs.
 
+        This is used as a fallback in functions like `_calc_segment_hit_point` or
+        `_calc_swept_hit_point`, where the collision test determines that the
+        trajectory does not intersect with the object.
+
+        Method:
+        - Returns a fixed hit point with:
+            - `T_ENTRY_NO_COLLISION` as the entry time,
+            - coordinates set to `-1.0` (invalid),
+            - new ball positions set to `-1.0` (invalid),
+            - and appends the original scene_object for compatibility.
+
+        Args:
+            scene_object: Encoded scene object properties, preserved for downstream logic.
+
+        Returns:
+            chex.Array containing the dummy hit point:
+                [
+                    T_ENTRY_NO_COLLISION,  # indicates no collision
+                    -1.0, -1.0, -1.0, -1.0,  # invalid hit and reflection coordinates
+                    ...scene_object          # appended for structural consistency
+                ]
+        """
         return (
             0.0,
             0.0,
@@ -1788,38 +2177,66 @@ class JaxVideoPinball(
         action: chex.Array,
     ) -> chex.Array:
         """
-        Calculate the hit point of the ball with the bounding box.
-        Uses the slab method also known as ray AABB collision or swept arc collision (for flippers).
+        Dispatches hit point calculation for the ball against a scene object, based on its type.
 
-        scene_object is an array of the form
-        [
-            SceneObject.hit_box_width,
-            SceneObject.hit_box_height,
-            SceneObject.hit_box_x_offset,
-            SceneObject.hit_box_y_offset,
-            SceneObject.reflecting,
-            SceneObject.score_type,
-            SceneObject.variant
-        ]
+        The method interprets the `scene_object[5]` (score_type) field and selects the
+        appropriate collision handler:
+          - Most objects (bumpers, targets, rollovers, holes) use the slab method
+            (`_calc_slab_hit_point`).
+          - Spinners use `_calc_spinner_hit_point` (adds angular velocity).
+          - Flippers use `_calc_flipper_hit_point` (handles sweeping motion).
+          - Passive objects return dampened velocities.
+
+        Velocity dampening or addition is also applied depending on the type of object.
+
+        Scene object format:
+            [
+                hit_box_width,    # 0
+                hit_box_height,   # 1
+                hit_box_x_offset, # 2
+                hit_box_y_offset, # 3
+                reflecting,       # 4
+                score_type,       # 5 (dispatch key)
+                variant           # 6
+            ]
+
+        Score type values (scene_object[5]):
+            0  → Neutral obstacle (no score, dampened slab collision)
+            1  → Bumper (slab collision, adds acceleration)
+            2  → Spinner (custom collision with angular boost)
+            3  → Left rollover (slab collision)
+            4  → Atari rollover (slab collision)
+            5  → Special lit-up target (slab collision)
+            6  → Left lit-up target (slab collision)
+            7  → Middle lit-up target (slab collision)
+            8  → Right lit-up target (slab collision)
+            9  → Left flipper (swept/flipper collision)
+            10 → Right flipper (swept/flipper collision)
+            11 → Tilt mode hole plug (slab collision)
+
+        Args:
+            ball_movement: The ball's trajectory (old → new position).
+            scene_object: Encoded object data determining geometry, type, and behavior.
+            action: Current player input, relevant for flipper collisions.
 
         Returns:
-            hit_point: jnp.ndarray, the time and hit point of the ball with the bounding box.
-            hit_point[0]: jnp.ndarray, the time of entry
-            hit_point[1]: jnp.ndarray, the x position of the hit point
-            hit_point[2]: jnp.ndarray, the y position of the hit point
-            hit_point[3]: jnp.ndarray, whether the obstacle was hit horizontally
-            hit_point[4]: jnp.ndarray, whether the obstacle was hit vertically
-            hit_point[5:]: scene_object properties:
-               hit_point[5]: hit_box_width
-               hit_point[6]: hit_box_height
-               hit_point[7]: hit_box_x_offset
-               hit_point[8]: hit_box_y_offset
-               hit_point[9]: reflecting
-               hit_point[10]: score_type
-               hit_point[11]: variant
+            chex.Array structured as:
+                [
+                    velocity_factor,   # scaling applied to ball velocity
+                    velocity_addition, # extra velocity contribution (e.g. flippers, bumpers)
+                    hit_point_data     # computed hit point (from the chosen method)
+                ]
+
+            The hit_point_data itself encodes:
+                hit_point[0]: time of entry (t_entry)
+                hit_point[1]: x position of collision
+                hit_point[2]: y position of collision
+                hit_point[3]: new_ball_x after reflection
+                hit_point[4]: new_ball_y after reflection
+                hit_point[5:]: scene_object properties
 
         Hint:
-            Use HitPointSelector to access the hit_point indices
+            Use the `HitPointSelector` enum to safely access hit point indices.
         """
         # 0: no score, 1: Bumper, 2: Spinner, 3: Left Rollover, 4: Atari Rollover, 5: Special Lit Up Target,
         # 6: Left Lit Up Target, 7:Middle Lit Up Target, 8: Right Lit Up Target, 9: Left Flipper, 10: Right Flipper, 11: Tilt Mode Hole Plug
